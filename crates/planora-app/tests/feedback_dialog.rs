@@ -13,8 +13,8 @@ mod common;
 use eframe::App as _;
 use egui::{Event, Key, Modifiers, OutputCommand, PointerButton, Pos2, Rect, Vec2, vec2};
 use planora_app::app::{
-    FAQ_ENTRY, FEEDBACK_ENTRY, HELP_MENU, MenuRequest, PlanoraApp, SETTINGS_ENTRY,
-    VIEW_SHORTCUTS_ENTRY,
+    MenuRequest, PlanoraApp, faq_entry, feedback_entry, help_menu_title, settings_entry,
+    view_shortcuts_entry,
 };
 use planora_app::build_info::{BuildInfo, GpuInfo};
 use planora_app::create_dialog::CreateDialog;
@@ -405,30 +405,30 @@ fn open_previews(ctx: &egui::Context) {
 
 #[test]
 fn help_menu_has_feedback_faq_and_about_and_file_menu_no_longer_has_about() {
-    assert_eq!(HELP_MENU, "Hilfe");
-    assert_eq!(FEEDBACK_ENTRY, "Rückmeldung …");
-    assert_eq!(FAQ_ENTRY, "Häufige Probleme");
+    assert_eq!(help_menu_title(), "Hilfe");
+    assert_eq!(feedback_entry(), "Rückmeldung …");
+    assert_eq!(faq_entry(), "Häufige Probleme");
     let mut r = Rig::new("planora-fb-menu");
     // „Hilfe“ steht in der Leiste rechts neben „Ansicht“.
     let ansicht = r.find("Ansicht");
-    let hilfe = r.find(HELP_MENU);
+    let hilfe = r.find(&help_menu_title());
     assert!(
         (hilfe.center().y - ansicht.center().y).abs() < 2.0 && hilfe.left() > ansicht.right(),
         "Hilfe nach Ansicht: {ansicht:?} {hilfe:?}"
     );
 
-    r.open_menu(HELP_MENU);
+    r.open_menu(&help_menu_title());
     for t in [
-        FEEDBACK_ENTRY,
-        FAQ_ENTRY,
+        feedback_entry().as_str(),
+        faq_entry().as_str(),
         about_dialog::TITLE,
         "Strg+Umschalt+R",
     ] {
         assert!(r.sees(t), "„{t}“ fehlt: {:?}", r.texts());
     }
     let (fb, faq, about) = (
-        r.find(FEEDBACK_ENTRY),
-        r.find(FAQ_ENTRY),
+        r.find(&feedback_entry()),
+        r.find(&faq_entry()),
         r.find(about_dialog::TITLE),
     );
     assert!(
@@ -438,24 +438,25 @@ fn help_menu_has_feedback_faq_and_about_and_file_menu_no_longer_has_about() {
     let keys = r.find("Strg+Umschalt+R");
     assert!(
         (keys.center().y - fb.center().y).abs() < 4.0 && keys.left() > fb.right(),
-        "Kürzel in der Zeile von „{FEEDBACK_ENTRY}“"
+        "Kürzel in der Zeile von „{}“",
+        feedback_entry()
     );
 
     // Häufige Probleme öffnet die Seite im Browser.
-    r.click(FAQ_ENTRY);
+    r.click(&faq_entry());
     assert_eq!(r.urls(), [feedback::faq_url()]);
     assert!(!r.fb().open);
 
     // Rückmeldung … öffnet das Fenster.
-    r.open_menu(HELP_MENU);
-    r.click(FEEDBACK_ENTRY);
+    r.open_menu(&help_menu_title());
+    r.click(&feedback_entry());
     assert!(r.fb().open, "Rückmeldung offen");
     assert!(r.sees(TITLE), "{:?}", r.texts());
     r.click(CANCEL);
     assert!(!r.fb().open);
 
     // Über PlanoraCAD öffnet den Über-Dialog.
-    r.open_menu(HELP_MENU);
+    r.open_menu(&help_menu_title());
     r.click(about_dialog::TITLE);
     assert!(r.app.ws_mut().about_open, "Über offen");
     r.app.ws_mut().about_open = false;
@@ -463,7 +464,7 @@ fn help_menu_has_feedback_faq_and_about_and_file_menu_no_longer_has_about() {
 
     // Im Menü „Datei“ steht „Über“ nicht mehr.
     r.open_menu("Datei");
-    assert!(r.sees(SETTINGS_ENTRY), "Datei offen: {:?}", r.texts());
+    assert!(r.sees(&settings_entry()), "Datei offen: {:?}", r.texts());
     assert!(!r.sees(about_dialog::TITLE), "kein Über im Menü Datei");
     assert_eq!(r.urls().len(), 1, "sonst nichts im Browser");
 }
@@ -533,7 +534,7 @@ fn shortcut_is_listed_and_rebindable() {
     // Die Übersicht zeigt die Aktion.
     let mut r = Rig::new("planora-fb-uebersicht");
     r.open_menu("Ansicht");
-    r.click(VIEW_SHORTCUTS_ENTRY);
+    r.click(&view_shortcuts_entry());
     assert!(r.app.overview_mut().open);
     r.app.overview_mut().filter = "Rückmeldung".into();
     r.settle();
@@ -553,7 +554,7 @@ fn shortcut_is_listed_and_rebindable() {
     r.press(Key::K, CTRL_SHIFT);
     assert!(r.fb().open, "neue Belegung öffnet");
     r.click(CANCEL);
-    r.open_menu(HELP_MENU);
+    r.open_menu(&help_menu_title());
     assert!(r.sees("Strg+Umschalt+K"), "{:?}", r.texts());
     // Gespeichert unter der festen Id.
     let saved = Config::load_from(&r.data.join("config.json"));
@@ -1063,7 +1064,7 @@ fn window_rules_like_the_overview() {
     assert!(r.fb().open);
     assert!(!r.app.ws_mut().about_open, "Über schließt");
     // „Über“ öffnet sich über der Rückmeldung (das zuletzt geöffnete Fenster gewinnt).
-    r.open_menu(HELP_MENU);
+    r.open_menu(&help_menu_title());
     r.click(about_dialog::TITLE);
     assert!(r.app.ws_mut().about_open);
     assert!(!r.fb().open, "Rückmeldung tritt zurück");
@@ -1072,15 +1073,15 @@ fn window_rules_like_the_overview() {
 
     // Über die Übersicht der Tastenkürzel.
     r.open_menu("Ansicht");
-    r.click(VIEW_SHORTCUTS_ENTRY);
+    r.click(&view_shortcuts_entry());
     assert!(r.app.overview_mut().open);
-    r.open_menu(HELP_MENU);
-    r.click(FEEDBACK_ENTRY);
+    r.open_menu(&help_menu_title());
+    r.click(&feedback_entry());
     assert!(r.fb().open);
     assert!(!r.app.overview_mut().open, "Übersicht schließt");
     // Die Übersicht danach schließt die Rückmeldung.
     r.open_menu("Ansicht");
-    r.click(VIEW_SHORTCUTS_ENTRY);
+    r.click(&view_shortcuts_entry());
     assert!(r.app.overview_mut().open);
     assert!(!r.fb().open);
     r.app.overview_mut().close();
@@ -1089,7 +1090,7 @@ fn window_rules_like_the_overview() {
     // Einstellungen schließen sie ebenso.
     r.open_with_context();
     r.open_menu("Datei");
-    r.click(SETTINGS_ENTRY);
+    r.click(&settings_entry());
     assert!(r.app.windows_mut().2.is_open());
     assert!(!r.fb().open, "Einstellungen gewinnen");
     r.app.windows_mut().2.close();

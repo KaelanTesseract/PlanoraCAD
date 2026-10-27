@@ -30,12 +30,12 @@ pub enum Area {
 
 impl Area {
     /// Anzeigename für Einstellungen und Übersicht.
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Area::All => "Überall",
-            Area::Model => "Modell",
-            Area::Sketch => "Skizze",
-            Area::Drawing => "Zeichnung",
+            Area::All => planora_i18n::tr!("area-all"),
+            Area::Model => planora_i18n::tr!("area-model"),
+            Area::Sketch => planora_i18n::tr!("area-sketch"),
+            Area::Drawing => planora_i18n::tr!("area-drawing"),
         }
     }
 }
@@ -247,21 +247,25 @@ impl Keymap {
         let mut wanted: Vec<Option<(Vec<Binding>, bool)>> = vec![None; Action::ALL.len()];
         for (id, texts) in overrides {
             let Some(a) = Action::from_id(id) else {
-                notes.push(format!("Unbekannte Aktion „{id}“ übergangen."));
+                notes.push(planora_i18n::tr!("keymap-note-unknown-action", id = id));
                 continue;
             };
             let mut list = Vec::new();
             for t in texts {
                 match text::parse_binding(t) {
-                    Some(b) if Keymap::fixed_key_text(a, &b).is_some() => notes.push(format!(
-                        "„{t}“ bei „{}“ übergangen: {}",
-                        a.label(),
-                        Keymap::fixed_key_text(a, &b).unwrap_or_default()
-                    )),
+                    Some(b) if Keymap::fixed_key_text(a, &b).is_some() => {
+                        notes.push(planora_i18n::tr!(
+                            "keymap-note-fixed",
+                            binding = t,
+                            action = a.label(),
+                            reason = Keymap::fixed_key_text(a, &b).unwrap_or_default()
+                        ))
+                    }
                     Some(b) => list.push(b),
-                    None => notes.push(format!(
-                        "Ungültige Belegung „{t}“ bei „{}“ übergangen.",
-                        a.label()
+                    None => notes.push(planora_i18n::tr!(
+                        "keymap-note-invalid",
+                        binding = t,
+                        action = a.label()
                     )),
                 }
             }
@@ -279,11 +283,11 @@ impl Keymap {
             };
             for b in list {
                 if let Some(o) = km.conflict_for(a, b) {
-                    notes.push(format!(
-                        "„{}“ bei „{}“ übergangen: schon für „{}“ belegt.",
-                        text::binding_text(b),
-                        a.label(),
-                        o.label()
+                    notes.push(planora_i18n::tr!(
+                        "keymap-note-taken",
+                        binding = text::binding_text(b),
+                        action = a.label(),
+                        other = o.label()
                     ));
                 } else if !km.map[a.index()].contains(b) {
                     // Zweimal dieselbe Belegung bei einer Aktion schadet nicht: still einmal.
@@ -299,11 +303,11 @@ impl Keymap {
             }
             for b in a.default_bindings() {
                 match km.conflict_for(a, b) {
-                    Some(o) => notes.push(format!(
-                        "„{}“ gilt nicht mehr für „{}“: in der Datei für „{}“ belegt.",
-                        text::binding_text(b),
-                        a.label(),
-                        o.label()
+                    Some(o) => notes.push(planora_i18n::tr!(
+                        "keymap-note-default-lost",
+                        binding = text::binding_text(b),
+                        action = a.label(),
+                        other = o.label()
                     )),
                     None => km.map[a.index()].push(*b),
                 }
@@ -324,15 +328,17 @@ impl Keymap {
         let name = text::key_name(c.key);
         let plain = !c.ctrl && !c.alt;
         let place = match (c.key, a.area()) {
-            (egui::Key::Enter | egui::Key::Delete, Area::Sketch) => "in der Skizze",
-            (egui::Key::Delete, Area::Drawing) => "in der Zeichnung",
-            (egui::Key::Tab, _) if plain => "für den Wechsel zwischen Bedienelementen",
+            (egui::Key::Enter | egui::Key::Delete, Area::Sketch) => {
+                planora_i18n::tr!("keymap-fixed-sketch")
+            }
+            (egui::Key::Delete, Area::Drawing) => planora_i18n::tr!("keymap-fixed-drawing"),
+            (egui::Key::Tab, _) if plain => planora_i18n::tr!("keymap-fixed-tab"),
             (egui::Key::ArrowLeft | egui::Key::ArrowRight, Area::Model) if plain && !c.shift => {
-                "an der Verlaufsleiste"
+                planora_i18n::tr!("keymap-fixed-history-bar")
             }
             _ => return None,
         };
-        Some(format!("„{name}“ ist {place} fest belegt."))
+        Some(planora_i18n::tr!("keymap-fixed", key = name, place = place))
     }
 
     /// Abweichungen von der Voreinstellung für die Konfiguration (Id → Texte); eine Aktion ohne
@@ -342,7 +348,7 @@ impl Keymap {
             .iter()
             .filter(|&&a| !self.is_default(a))
             .map(|&a| {
-                let texts = self.bindings(a).iter().map(text::binding_text).collect();
+                let texts = self.bindings(a).iter().map(text::stored_text).collect();
                 (a.id().to_string(), texts)
             })
             .collect()
@@ -352,7 +358,7 @@ impl Keymap {
     pub fn text(&self, a: Action) -> String {
         let list = self.bindings(a);
         if list.is_empty() {
-            return "–".to_string();
+            return planora_i18n::tr!("keymap-unbound-dash");
         }
         list.iter()
             .map(text::binding_text)
@@ -370,7 +376,7 @@ fn cap_notes(notes: &mut Vec<String>) {
     if notes.len() > MAX_NOTES {
         let more = notes.len() - MAX_NOTES;
         notes.truncate(MAX_NOTES);
-        notes.push(format!("… und {more} weitere"));
+        notes.push(planora_i18n::tr!("keymap-notes-more", count = more));
     }
 }
 

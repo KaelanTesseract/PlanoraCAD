@@ -8,7 +8,7 @@ mod common;
 
 use eframe::App as _;
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, Vec2, vec2};
-use planora_app::app::{PARAMETERS_ENTRY, PlanoraApp};
+use planora_app::app::{PlanoraApp, parameters_entry};
 use planora_app::feature_dialog::FeatureDialog;
 use planora_app::formula_field::*;
 use planora_app::icons::{self, Icon};
@@ -466,7 +466,7 @@ fn menu_opens_window() {
         .center();
     rig.click(bar);
     let seen = rig.settle();
-    let entry = find(&seen, PARAMETERS_ENTRY).expect("Eintrag „Parameter …“");
+    let entry = find(&seen, &parameters_entry()).expect("Eintrag „Parameter …“");
     let glyph = icons::glyph(Icon::Parameters).to_string();
     assert_eq!(icons::glyph(Icon::Parameters), '\u{ebe4}');
     assert_eq!(icons::phosphor_name(Icon::Parameters), "function");
@@ -528,7 +528,7 @@ fn menu_entry_locked_while_sketch_open() {
         .center();
     rig.click(bar);
     let seen = rig.settle();
-    let p = find(&seen, PARAMETERS_ENTRY)
+    let p = find(&seen, &parameters_entry())
         .expect("Eintrag")
         .rect
         .center();

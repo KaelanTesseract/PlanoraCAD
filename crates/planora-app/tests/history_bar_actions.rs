@@ -358,11 +358,11 @@ fn extruding_a_sketch_of_a_rolled_back_body_is_refused() {
     s.selected_feature = Some(sk);
     assert_eq!(
         app::create_blocked(&ws, CreateKind::Extrusion),
-        Some(LOCK_HINT)
+        Some(LOCK_HINT.to_string())
     );
     assert_eq!(
         app::create_blocked(&ws, CreateKind::Revolution),
-        Some(LOCK_HINT)
+        Some(LOCK_HINT.to_string())
     );
     assert_eq!(app::create_blocked(&ws, CreateKind::Box), None);
     // Der Körper der Extrusion selbst ist sichtbar und gesperrt.

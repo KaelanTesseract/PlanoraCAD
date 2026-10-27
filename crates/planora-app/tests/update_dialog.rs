@@ -828,7 +828,7 @@ fn feedback_button_keeps_notice_while_an_export_is_writing() {
     h.frame(vec![button(false)]);
     assert_eq!(
         h.app.ws_mut().active_tab().state.message.as_deref(),
-        Some(planora_app::app::EXPORT_BUSY),
+        Some(planora_app::app::export_busy().as_str()),
         "der Knopf wurde gedrückt, die Rückmeldung wartet auf den Export"
     );
     assert!(

@@ -19,17 +19,28 @@
 
 use super::settings_ui::{chip, column};
 use super::{Action, Keymap, search, text};
-use crate::dialog::{CLOSE_LABEL, Dialog, DialogSize};
+use crate::dialog::{Dialog, DialogSize, close_label};
 use crate::theme;
 use crate::workspace::Workspace;
+use planora_i18n::tr;
 
-pub const TITLE: &str = "Tastenkürzel";
-pub const SEARCH_HINT: &str = "Suchen: Aktion oder Taste";
-pub const NOTHING_FOUND: &str = "Keine Kürzel gefunden.";
+pub fn title() -> String {
+    tr!("shortcuts-title")
+}
+pub fn search_hint() -> String {
+    tr!("shortcuts-search-hint")
+}
+pub fn nothing_found() -> String {
+    tr!("shortcuts-nothing-found")
+}
 /// Knopf in der Fußzeile: schließt die Übersicht und öffnet die Einstellungen.
-pub const TO_SETTINGS: &str = "In den Einstellungen ändern";
+pub fn to_settings() -> String {
+    tr!("shortcuts-to-settings")
+}
 /// Statt einer Belegung, wenn die Aktion keine hat (blass).
-pub const UNBOUND: &str = "–";
+pub fn unbound() -> String {
+    planora_i18n::tr!("keymap-unbound-dash")
+}
 /// Größte Höhe der Liste; darüber rollt sie (Suchfeld und Fußzeile bleiben stehen).
 pub const LIST_MAX_H: f32 = 720.0;
 /// So viel Fensterhöhe bleibt für Kopfzeile, Suchfeld, Fußzeile und Rand.
@@ -123,7 +134,7 @@ pub fn show(ctx: &egui::Context, ws: &Workspace, state: &mut OverviewState) -> O
     }
     let (mut open, mut close, mut to_settings) = (true, false, false);
     let km = &ws.keymap;
-    Dialog::new(TITLE, DialogSize::Wide)
+    Dialog::new(title(), DialogSize::Wide)
         .id(egui::Id::new(WINDOW_ID))
         .center_on_open()
         .open(&mut open)
@@ -134,7 +145,7 @@ pub fn show(ctx: &egui::Context, ws: &Workspace, state: &mut OverviewState) -> O
                     ui,
                     egui::TextEdit::singleline(&mut state.filter)
                         .id(search_id())
-                        .hint_text(SEARCH_HINT)
+                        .hint_text(search_hint())
                         .desired_width(320.0),
                 );
                 if state.focus_search {
@@ -152,7 +163,7 @@ pub fn show(ctx: &egui::Context, ws: &Workspace, state: &mut OverviewState) -> O
                         .max_height(list_height(ctx)),
                     |ui| {
                         if shown.is_empty() {
-                            ui.label(NOTHING_FOUND);
+                            ui.label(nothing_found());
                         }
                         let mut area = None;
                         for &a in &shown {
@@ -160,7 +171,7 @@ pub fn show(ctx: &egui::Context, ws: &Workspace, state: &mut OverviewState) -> O
                                 if area.is_some() {
                                     ui.add_space(theme::SPACE_2);
                                 }
-                                theme::section_header(ui, a.area().label(), theme::SUB_HEADER_H);
+                                theme::section_header(ui, &a.area().label(), theme::SUB_HEADER_H);
                                 area = Some(a.area());
                             }
                             row(ui, km, a);
@@ -170,8 +181,8 @@ pub fn show(ctx: &egui::Context, ws: &Workspace, state: &mut OverviewState) -> O
             },
             |ui| {
                 ui.horizontal(|ui| {
-                    to_settings = ui.button(TO_SETTINGS).clicked();
-                    close = ui.button(CLOSE_LABEL).clicked();
+                    to_settings = ui.button(crate::keymap::overview::to_settings()).clicked();
+                    close = ui.button(close_label()).clicked();
                 });
             },
         );
@@ -202,7 +213,7 @@ fn row(ui: &mut egui::Ui, km: &Keymap, a: Action) {
             });
             ui.horizontal_wrapped(|ui| {
                 if list.is_empty() {
-                    chip(ui, UNBOUND, Some(muted));
+                    chip(ui, &unbound(), Some(muted));
                 }
                 for b in list {
                     chip(ui, &text::binding_text(b), None);

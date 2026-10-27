@@ -9,7 +9,7 @@ use eframe::App as _;
 use egui::epaint::Shape;
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, Vec2, vec2};
 use planora_app::app::PlanoraApp;
-use planora_app::dialog::{CLOSE_LABEL, DialogSize};
+use planora_app::dialog::{DialogSize, close_label};
 use planora_app::icons::{self, Icon};
 use planora_app::workspace::Workspace;
 use planora_app::{about_dialog, fonts, logo, shell_panels, theme};
@@ -130,7 +130,9 @@ fn field(c: &egui::Context, name: &str) -> Rect {
 /// Menü „Hilfe“ öffnen und „Über PlanoraCAD“ wählen; liefert das Bild danach.
 fn open_about(c: &egui::Context, app: &mut PlanoraApp, size: Vec2) -> Shot {
     let shot = settle(c, app, size);
-    let hilfe = shot.rect(planora_app::app::HELP_MENU).expect("Menü Hilfe");
+    let hilfe = shot
+        .rect(&planora_app::app::help_menu_title())
+        .expect("Menü Hilfe");
     let shot = click(c, app, size, hilfe.center());
     let entry = shot
         .rect(about_dialog::TITLE)
@@ -215,7 +217,7 @@ fn hilfe_menu_opens_the_about_dialog_and_it_closes() {
         .next_back()
         .expect("Schließen-Symbol");
     let shot = click(&c, &mut app, BIG, close.center());
-    assert!(!app.ws_mut().about_open, "{CLOSE_LABEL} schließt");
+    assert!(!app.ws_mut().about_open, "{} schließt", close_label());
     assert!(!shot.has(about_dialog::NAME), "Dialog ist weg");
 }
 
@@ -405,7 +407,9 @@ fn top_field_keeps_its_width_rules_with_the_icon() {
     // Das letzte Menü ist „Hilfe“.
     let menu_right = {
         let shot = settle(&c, &mut app, SMALL);
-        shot.rect(planora_app::app::HELP_MENU).unwrap().right()
+        shot.rect(&planora_app::app::help_menu_title())
+            .unwrap()
+            .right()
     };
     // Menü samt Zeichen und einem Rest für Tabs (mindestens 120 Punkte) passen hinein.
     assert!(

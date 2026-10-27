@@ -4,7 +4,7 @@
 
 use egui::epaint::Shape;
 use egui::{Color32, Context, Event, Id, Modifiers, PointerButton, Pos2, Rect, vec2};
-use planora_app::dialog::{CLOSE_LABEL, Dialog, DialogSize, limits};
+use planora_app::dialog::{Dialog, DialogSize, close_label, limits};
 use planora_app::icons::{self, Icon};
 use planora_app::shell::SHELL_INSET;
 use planora_app::{fonts, theme};
@@ -289,9 +289,14 @@ fn panel_frame_heading_and_close_icon() {
         let f = hn.click(g, &mut c);
         let hit = f.events.iter().any(|e| {
             matches!(e, egui::output::OutputEvent::Clicked(i)
-                if i.label.as_deref() == Some(CLOSE_LABEL))
+                if i.label.as_deref() == Some(&close_label()))
         });
-        assert!(hit, "kein Klick „{CLOSE_LABEL}“ gemeldet: {:?}", f.events);
+        assert!(
+            hit,
+            "kein Klick „{}“ gemeldet: {:?}",
+            close_label(),
+            f.events
+        );
         assert!(!hn.open);
         let f = hn.run(vec![], &mut c);
         assert!(!has(&f, TITLE) && !has(&f, "Inhalt"), "Dialog noch da");

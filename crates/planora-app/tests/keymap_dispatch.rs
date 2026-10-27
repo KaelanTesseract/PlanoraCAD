@@ -727,5 +727,5 @@ fn prompt_hint_uses_the_current_projects_key() {
     let km = keymap_from(&[("datei.projekte", &[])]);
     let hint = prompts::no_project_hint(&km);
     assert!(!hint.contains("Strg"), "{hint}");
-    assert!(hint.contains(app::PROJECTS_ENTRY), "{hint}");
+    assert!(hint.contains(&app::projects_entry()), "{hint}");
 }

@@ -591,7 +591,7 @@ fn a_favorite_added_in_the_settings_chooser_is_written_to_the_config_file() {
     a.w.open(false);
     a.click(CHANGE_DIRECTORY);
     a.click_with("Teile", PointerButton::Secondary);
-    a.click(places::ADD_FAVORITE);
+    a.click(&places::add_favorite_label());
     let disk = Config::read_from(&a.e.cfg).unwrap();
     assert_eq!(disk.favorites.len(), 1, "{disk:?}");
     assert!(places::same_dir(

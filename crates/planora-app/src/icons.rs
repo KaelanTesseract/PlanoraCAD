@@ -666,8 +666,12 @@ impl FeatureIcon {
 }
 
 /// Einträge Verrunden und Fase für Menü und Befehlsfeld: Beschriftung, Symbol, `chamfer`.
-pub fn blend_entries() -> [(&'static str, IconSource, bool); 2] {
-    [("Verrunden …", false), ("Fase …", true)].map(|(label, chamfer)| {
+pub fn blend_entries() -> [(String, IconSource, bool); 2] {
+    [
+        (planora_i18n::tr!("menu-blend-fillet"), false),
+        (planora_i18n::tr!("menu-blend-chamfer"), true),
+    ]
+    .map(|(label, chamfer)| {
         (
             label,
             IconSource::Feature(FeatureIcon::for_blend(chamfer)),

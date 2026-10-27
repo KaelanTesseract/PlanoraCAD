@@ -12,7 +12,7 @@ use eframe::App as _;
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, Vec2, ViewportCommand, ViewportId, vec2};
 use planora_app::app::{PlanoraApp, RestartPhase};
 use planora_app::install_mode::InstallMode;
-use planora_app::prompts::{SAVE_FOR_UPDATE_TITLE, save_for_update_text};
+use planora_app::prompts::{save_for_update_text, save_for_update_title};
 use planora_app::update_dialog::{
     CANCEL, CLOSE, FAILED_TITLE, INSTALL_NOW, InstallView, LATER, NOTES_ON_GITHUB, OK, RETRY, SKIP,
 };
@@ -566,7 +566,7 @@ fn prompt_for_unsaved_work_before_restart_and_cancel_aborts_the_update_and_delet
         Some(Prompt::SaveChanges { .. })
     ));
     // Die Rückfrage sagt, dass für das Update neu gestartet wird.
-    assert!(h.sees(SAVE_FOR_UPDATE_TITLE), "{:?}", h.texts());
+    assert!(h.sees(&save_for_update_title()), "{:?}", h.texts());
     assert!(!h.sees("Änderungen speichern?"), "{:?}", h.texts());
     // Gefragt wird zuerst nach dem ersten geänderten Tab.
     let name = h.app.ws_mut().tabs[0].title();
@@ -606,7 +606,7 @@ fn prompt_for_unsaved_work_before_restart_and_cancel_aborts_the_update_and_delet
     h.frame_close();
     h.settle();
     assert!(h.sees("Änderungen speichern?"), "{:?}", h.texts());
-    assert!(!h.sees(SAVE_FOR_UPDATE_TITLE));
+    assert!(!h.sees(&save_for_update_title()));
 }
 
 #[test]

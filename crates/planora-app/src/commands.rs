@@ -19,13 +19,20 @@ use crate::keymap::{Action, Area};
 use crate::state::AppState;
 use crate::workspace::{DocTab, Workspace};
 use planora_feature::{FeatureId, FeatureKind};
+use planora_i18n::tr;
 
 /// Hinweis, wenn „Skizze extrudieren“ über die Taste keine passende Skizze findet.
-pub const NEED_SKETCH: &str = "Zuerst eine Skizze mit geschlossenem Profil wählen.";
+pub fn need_sketch() -> String {
+    tr!("cmd-need-sketch")
+}
 /// Hinweis, wenn „Sichtbarkeit umschalten“ keinen gewählten Körper findet.
-pub const NEED_BODY: &str = "Zuerst einen Körper wählen.";
+pub fn need_body() -> String {
+    tr!("cmd-need-body")
+}
 /// Hinweis, wenn „Löschen“ nichts Gewähltes findet.
-pub const NEED_SELECTION: &str = "Zuerst einen Körper oder Schritt wählen.";
+pub fn need_selection() -> String {
+    tr!("cmd-need-selection")
+}
 
 /// Der zuletzt abgeschlossene wiederholbare Befehl und der gerade laufende (Fenster offen),
 /// getrennt davon das zuletzt benutzte Skizzenwerkzeug.
@@ -91,7 +98,7 @@ impl LastCommand {
 /// Im ausführlichen Protokoll ([`crate::diag::detail`]) steht danach eine Zeile mit dem festen
 /// Namen der Aktion und der Dauer (`Befehl Rückgängig: 3 ms`), nie Projektinhalt.
 pub fn run_action(ws: &mut Workspace, a: Action) -> MenuRequest {
-    timed(a.label(), || run_action_inner(ws, a))
+    timed(&a.label(), || run_action_inner(ws, a))
 }
 
 /// Führt `f` aus und schreibt danach die Detailzeile `Befehl <name>: <n> ms` ins ausführliche
@@ -127,7 +134,7 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
     // „Speichern“ wird erst ein Schritt, wenn wirklich gespeichert wurde (`Workspace`); ein
     // abgebrochenes „Speichern unter“ soll in den letzten Schritten nicht stehen.
     if a != Action::Save {
-        crate::diag::step(a.label());
+        crate::diag::step(&a.label());
     }
     match a {
         Action::ShowShortcuts | Action::SketchShowShortcuts => return MenuRequest::Shortcuts,
@@ -151,7 +158,7 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
             // die Sperre durch einen zurückgesetzten Körper meldet `do_create` selbst.
             match app::create_blocked(ws, CreateKind::Extrusion) {
                 Some(why) if why != crate::history_bar::LOCK_HINT => {
-                    hint(&mut ws.active_tab_mut().state, why);
+                    hint(&mut ws.active_tab_mut().state, &why);
                 }
                 _ => {
                     app::do_create(ws, CreateKind::Extrusion);
@@ -212,7 +219,7 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
 pub fn run_key(ws: &mut Workspace, a: Action) -> MenuRequest {
     let tab = ws.active_tab_mut();
     if a == Action::ExtrudeSketch && !tab.read_only && !selected_sketch_has_profile(&tab.state) {
-        hint(&mut tab.state, NEED_SKETCH);
+        hint(&mut tab.state, &need_sketch());
         return MenuRequest::None;
     }
     run_action(ws, a)
@@ -239,7 +246,7 @@ fn toggle_visibility(state: &mut AppState) {
             let hidden = state.is_body_hidden(j);
             state.set_body_hidden(j, !hidden);
         }
-        None => hint(state, NEED_BODY),
+        None => hint(state, &need_body()),
     }
 }
 
@@ -256,7 +263,7 @@ fn delete_selection(state: &mut AppState) {
         });
     match target {
         Some(id) => crate::browser::request_delete(state, id),
-        None => hint(state, NEED_SELECTION),
+        None => hint(state, &need_selection()),
     }
 }
 

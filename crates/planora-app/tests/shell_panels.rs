@@ -1165,7 +1165,7 @@ fn sketch_status_is_short_and_keys_are_in_the_hover() {
     assert!(
         shot.texts
             .iter()
-            .any(|t| t.text == shell_panels::SKETCH_KEYS_HINT),
+            .any(|t| t.text == shell_panels::sketch_keys_hint()),
         "Hover zeigt den Tastenhinweis"
     );
     assert_eq!(count(&shot), 1, "genau einmal sichtbar");
@@ -1307,7 +1307,7 @@ fn sketch_status_label_for_screen_readers_contains_the_hint() {
     }
     let want = format!(
         "Skizzen-Modus: Skizze 1. {}",
-        shell_panels::SKETCH_KEYS_HINT
+        shell_panels::sketch_keys_hint()
     );
     assert!(labels.contains(&want), "{labels:?}");
 }

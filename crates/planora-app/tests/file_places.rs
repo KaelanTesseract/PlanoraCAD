@@ -98,7 +98,7 @@ fn places_are_known_then_project_then_drives_then_favorites() {
         got,
         [
             (PlaceKind::Documents, "Dokumente"),
-            (PlaceKind::Project, PROJECT_LABEL),
+            (PlaceKind::Project, &project_label()),
             (PlaceKind::Drive, "C:"),
             (PlaceKind::Drive, "D:"),
             (PlaceKind::Favorite, "Teile"),
@@ -259,7 +259,7 @@ fn at_most_24_favorites() {
     assert_eq!(MAX_FAVORITES, 24);
     assert_eq!(
         add_favorite(&mut f, Path::new("D:\\Noch einer")),
-        Err(FAVORITES_FULL)
+        Err(favorites_full())
     );
     assert_eq!(f.len(), MAX_FAVORITES);
     // Ein vorhandener ist auch bei voller Liste kein Fehler.
@@ -272,7 +272,7 @@ fn at_most_24_favorites() {
         ..Places::default()
     };
     c.apply_menu(&RowMenu::AddFavorite(d.join("x")), &mut shared);
-    assert_eq!(c.error.as_deref(), Some(FAVORITES_FULL));
+    assert_eq!(c.error.as_deref(), Some(favorites_full().as_str()));
     assert!(!shared.changed());
     let _ = fs::remove_dir_all(&d);
 }
@@ -484,7 +484,7 @@ fn a_full_list_on_disk_reports_instead_of_dropping_silently() {
     );
     // Die nächste Dateiauswahl zeigt die Meldung.
     let mut shared = a.places();
-    assert_eq!(shared.notice, Some(FAVORITES_FULL));
+    assert_eq!(shared.notice, Some(favorites_full()));
     let mut c = FileChooser::open(d.clone(), vec!["stl"]);
     let ctx = egui::Context::default();
     ctx.set_fonts(planora_app::fonts::definitions());
@@ -492,7 +492,7 @@ fn a_full_list_on_disk_reports_instead_of_dropping_silently() {
         c.show_with(ui, &mut shared);
     })
     .drop_without_applying_deltas();
-    assert_eq!(c.error.as_deref(), Some(FAVORITES_FULL));
+    assert_eq!(c.error.as_deref(), Some(favorites_full().as_str()));
     assert_eq!(shared.notice, None, "übernommen");
     // Danach verschwindet sie aus dem Arbeitsbereich.
     a.save_places(shared);
@@ -606,7 +606,7 @@ fn a_place_changes_the_folder_or_reports_a_missing_one() {
     assert_eq!(c.dir(), d.join("Teile").as_path(), "bleibt im Ordner");
     assert_eq!(c.error.as_deref(), Some("Diesen Ordner gibt es nicht."));
     assert!(!c.go_to_place(&to(PlaceKind::Favorite, d.join("fehlt"))));
-    assert_eq!(c.error.as_deref(), Some(FAVORITE_MISSING));
+    assert_eq!(c.error.as_deref(), Some(favorite_missing().as_str()));
     let _ = fs::remove_dir_all(&d);
 }
 
@@ -733,7 +733,7 @@ fn clicking_a_place_button_enters_its_folder() {
     let mut drv = Driver::new();
     drv.frame(&mut c, &mut shared, vec![]);
     let seen = drv.frame(&mut c, &mut shared, vec![]);
-    let at = pos_of(&seen, PROJECT_LABEL).expect("Knopf „Projekte“");
+    let at = pos_of(&seen, &project_label()).expect("Knopf „Projekte“");
     drv.click(&mut c, &mut shared, at, egui::PointerButton::Primary);
     assert_eq!(c.dir(), root.as_path());
     let _ = fs::remove_dir_all(&d);
@@ -754,7 +754,7 @@ fn right_click_on_a_folder_offers_favorites_but_not_on_a_file() {
     let at = pos_of(&seen, "teil.stl").expect("Datei");
     drv.click(&mut c, &mut shared, at, egui::PointerButton::Secondary);
     let seen = drv.frame(&mut c, &mut shared, vec![]);
-    assert!(!has(&seen, ADD_FAVORITE), "kein Menü an Dateien");
+    assert!(!has(&seen, &add_favorite_label()), "kein Menü an Dateien");
     assert_eq!(c.file_name, "", "Rechtsklick wählt keine Datei");
     // Menü schließen (Escape gibt es nicht im Treiber: Klick ins Leere).
     drv.click(
@@ -769,7 +769,7 @@ fn right_click_on_a_folder_offers_favorites_but_not_on_a_file() {
     let at = pos_of(&seen, "Teile").expect("Ordner");
     drv.click(&mut c, &mut shared, at, egui::PointerButton::Secondary);
     let seen = drv.frame(&mut c, &mut shared, vec![]);
-    let item = pos_of(&seen, ADD_FAVORITE).expect("Menüeintrag");
+    let item = pos_of(&seen, &add_favorite_label()).expect("Menüeintrag");
     drv.click(&mut c, &mut shared, item, egui::PointerButton::Primary);
     assert_eq!(shared.favorites, [d.join("Teile")]);
     assert!(shared.changed());
@@ -822,13 +822,13 @@ fn both_import_dialogs_show_the_shared_places() {
     let seen = texts(&mut |ctx| {
         mesh.show_in(ctx, &mut s, &mut last, &mut shared);
     });
-    assert!(seen.contains(PROJECT_LABEL), "{seen}");
+    assert!(seen.contains(&project_label()), "{seen}");
     assert!(seen.contains("Lieblingsordner"), "{seen}");
     let mut step = StepImportDialog::new(d.clone());
     let seen = texts(&mut |ctx| {
         step.show_in(ctx, &mut s, &mut last, &mut shared);
     });
-    assert!(seen.contains(PROJECT_LABEL), "{seen}");
+    assert!(seen.contains(&project_label()), "{seen}");
     assert!(seen.contains("Lieblingsordner"), "{seen}");
     let _ = fs::remove_dir_all(&d);
 }

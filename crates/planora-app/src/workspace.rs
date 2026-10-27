@@ -553,7 +553,7 @@ pub struct Workspace {
     pub favorites_pending: Vec<FavoriteChange>,
     /// Meldung aus dem letzten Speichern der Favoriten (z. B. Liste auf der Platte voll); geht
     /// über [`Workspace::places`] an die nächste gezeichnete Dateiauswahl.
-    pub favorites_notice: Option<&'static str>,
+    pub favorites_notice: Option<String>,
     /// Die Durchsichtigkeit in `config.panel_transparency` konnte noch nicht gespeichert werden;
     /// sie wird beim nächsten gelungenen Schreiben ([`Workspace::try_persist_config`]) mit
     /// geschrieben.
@@ -1719,7 +1719,7 @@ impl Workspace {
             ),
             changes: Vec::new(),
             drives: None,
-            notice: self.favorites_notice,
+            notice: self.favorites_notice.clone(),
         }
     }
 
@@ -1733,7 +1733,7 @@ impl Workspace {
     /// ([`Workspace::favorites_pending`]) und werden beim nächsten gelungenen Schreiben mit
     /// angewandt, sonst gelten sie bis Programmende. Ist die Liste auf der Platte schon voll
     /// (eine andere Instanz), fehlt der neue Favorit danach und die Auswahl meldet
-    /// [`crate::places::FAVORITES_FULL`].
+    /// [`crate::places::favorites_full`].
     pub fn save_places(&mut self, places: Places) -> bool {
         // Die Meldung des letzten Speicherns hat eine Auswahl übernommen (Feld geleert).
         if places.notice.is_none() {
@@ -1860,7 +1860,7 @@ impl UpdateSettings {
 }
 
 /// Wendet Favoriten-Änderungen der Reihe nach an; die erste Meldung (volle Liste) oder `None`.
-fn apply_changes(changes: &[FavoriteChange], favorites: &mut Vec<PathBuf>) -> Option<&'static str> {
+fn apply_changes(changes: &[FavoriteChange], favorites: &mut Vec<PathBuf>) -> Option<String> {
     let mut first = None;
     for ch in changes {
         if let Err(e) = ch.apply(favorites) {

@@ -27,6 +27,7 @@ use crate::keymap::{self, Action};
 use crate::shell::{self, RightTab, ShellMode, ShellRects};
 use crate::state::AppState;
 use crate::{browser, history_bar, icons, logo, properties, tabs, theme, versions_panel, viewport};
+use planora_i18n::tr;
 use planora_kernel::BoolOp;
 
 /// Breite, bis zu der die Tab-Leiste nicht umbricht (sie rollt waagerecht statt dessen).
@@ -97,7 +98,9 @@ pub(crate) fn drawing_tool_width_key() -> egui::Id {
 }
 
 /// Hinweis zu den Tasten im Skizzenmodus; steht nur beim Überfahren der Statuszeile da.
-pub const SKETCH_KEYS_HINT: &str = "Esc bricht ab, Eingabe beendet, Entf löscht, mittlere Maustaste oder Umschalt + Ziehen verschiebt";
+pub fn sketch_keys_hint() -> String {
+    tr!("shell-sketch-keys-hint")
+}
 
 /// Gemerkte Wunschbreite des Fußfelds (Hinweis, Status, „Skizze beenden“, Rand).
 pub(crate) fn sketch_foot_width_key() -> egui::Id {
@@ -296,12 +299,7 @@ fn text_field(
     min_h: f32,
     (grow_up, rows): (bool, usize),
     dark: bool,
-    (text, color, hover, extra): (
-        String,
-        egui::Color32,
-        Option<&'static str>,
-        Option<StatusExtra>,
-    ),
+    (text, color, hover, extra): (String, egui::Color32, Option<String>, Option<StatusExtra>),
 ) -> bool {
     let frame = bar_frame(dark, min_h);
     let margin = frame.total_margin().sum();
@@ -337,7 +335,7 @@ fn text_field(
             let enabled = ui.is_enabled();
             // Der Tastenhinweis steht auch im Namen für die Bedienhilfe, der sichtbare Text bleibt kurz.
             let label = match hover {
-                Some(h) => format!("{text}. {h}"),
+                Some(ref h) => format!("{text}. {h}"),
                 None => text.clone(),
             };
             response.widget_info(|| {
@@ -530,7 +528,7 @@ pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
     let (rects, status, dark) = layout(app);
     let hover = (mode_of(&app.ws.active_tab().state) == ShellMode::Sketch
         && app.ws.active_tab().state.message.is_none())
-    .then_some(SKETCH_KEYS_HINT);
+    .then_some(sketch_keys_hint());
     let extra = status_extra(app);
     if text_field(
         ctx,
@@ -626,18 +624,18 @@ fn history_buttons(ui: &mut egui::Ui, ws: &mut crate::workspace::Workspace, dark
     let entries = [
         (
             icons::Icon::Undo,
-            "Rückgängig",
+            crate::keymap::Action::Undo.label(),
             hint(crate::keymap::Action::Undo, &undo_text),
             undo_text,
-            tab.undo_blocked(),
+            tab.undo_blocked().map(String::from),
             true,
         ),
         (
             icons::Icon::Redo,
-            "Wiederholen",
+            crate::keymap::Action::Redo.label(),
             hint(crate::keymap::Action::Redo, &redo_text),
             redo_text,
-            tab.redo_blocked(),
+            tab.redo_blocked().map(String::from),
             false,
         ),
     ];
@@ -649,20 +647,20 @@ fn history_buttons(ui: &mut egui::Ui, ws: &mut crate::workspace::Workspace, dark
         ui.spacing_mut().item_spacing.x = theme::SPACE_1;
         ui.spacing_mut().button_padding.x = HISTORY_PAD;
         for (icon, label, hover, text, own, undo) in entries {
-            let reason = lock.or(own);
+            let reason = lock.clone().or(own);
             let r = ui
                 .add_enabled_ui(reason.is_none(), |ui| {
                     icons::source_icon_button(ui, icons::IconSource::Font(icon), &text, dark)
                 })
                 .inner;
             let r = match reason {
-                Some(why) => explain(r, label, why),
+                Some(why) => explain(r, &label, &why),
                 None => r.on_hover_text(hover),
             };
             if r.clicked() {
                 step = Some(undo);
             }
-            seen.push((label.to_owned(), r.rect));
+            seen.push((label.clone(), r.rect));
         }
     });
     ui.ctx().data_mut(|d| d.insert_temp(history_key(), seen));
@@ -841,8 +839,8 @@ fn right_contents(ui: &mut egui::Ui, app: &mut PlanoraApp, enabled: bool) {
         ui.horizontal(|ui| {
             theme::frameless(ui.style_mut());
             for (which, label) in [
-                (RightTab::Properties, "Eigenschaften"),
-                (RightTab::Versions, "Versionen"),
+                (RightTab::Properties, tr!("tab-properties")),
+                (RightTab::Versions, tr!("tab-versions")),
             ] {
                 let r = ui.selectable_label(tab == which, label);
                 theme::focus_ring(ui, &r);
@@ -886,12 +884,12 @@ enum Command {
 }
 
 /// Warum Befehlsfeld und Knöpfe Rückgängig/Wiederholen gerade gesperrt sind (wie das Menü).
-fn edit_lock(ws: &crate::workspace::Workspace) -> Option<&'static str> {
+fn edit_lock(ws: &crate::workspace::Workspace) -> Option<String> {
     let tab = ws.active_tab();
     if ws.prompt.is_some() {
-        Some("Zuerst die offene Rückfrage beantworten.")
+        Some(tr!("menu-answer-prompt-first"))
     } else if tab.read_only {
-        Some("In einer alten Version lässt sich nichts ändern.")
+        Some(tr!("shell-old-version-readonly"))
     } else {
         None
     }
@@ -946,7 +944,7 @@ fn chip(
 }
 
 /// Gesperrter Knopf: Beschriftung und Grund beim Überfahren.
-fn explain(response: egui::Response, label: &str, reason: &'static str) -> egui::Response {
+fn explain(response: egui::Response, label: &str, reason: &str) -> egui::Response {
     response.on_disabled_hover_ui(|ui| {
         ui.strong(label);
         ui.label(reason);
@@ -965,8 +963,13 @@ fn bottom_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
     let inner = inner_size(&frame, rects.bottom.size());
     let margin = frame.total_margin().sum().x;
     let lock = edit_lock(&app.ws);
-    let boolean_blocked = app.ws.active_tab().state.boolean_blocked();
-    let blend_blocked = app.ws.active_tab().state.blend_blocked();
+    let boolean_blocked = app
+        .ws
+        .active_tab()
+        .state
+        .boolean_blocked()
+        .map(String::from);
+    let blend_blocked = app.ws.active_tab().state.blend_blocked().map(String::from);
     let mut command = None;
     let mut seen: Vec<(String, egui::Rect)> = Vec::new();
     let mut chips_end = 0.0;
@@ -986,16 +989,16 @@ fn bottom_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
                 let start = ui.cursor().left();
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     for (label, op, colors) in [
-                        ("Vereinigen", BoolOp::Union, p.chip_bridge),
-                        ("Abziehen", BoolOp::Difference, p.chip_split),
-                        ("Schneiden", BoolOp::Intersection, p.chip_boolean),
+                        (tr!("chip-union"), BoolOp::Union, p.chip_bridge),
+                        (tr!("chip-subtract"), BoolOp::Difference, p.chip_split),
+                        (tr!("chip-intersect"), BoolOp::Intersection, p.chip_boolean),
                     ] {
-                        let reason = lock.or(boolean_blocked);
+                        let reason = lock.clone().or(boolean_blocked.clone());
                         let r = ui
-                            .add_enabled_ui(reason.is_none(), |ui| chip(ui, label, colors))
+                            .add_enabled_ui(reason.is_none(), |ui| chip(ui, &label, colors))
                             .inner;
                         let r = match reason {
-                            Some(why) => explain(r, label, why),
+                            Some(why) => explain(r, &label, &why),
                             None => r.on_hover_text(format!("{label} …")),
                         };
                         if r.clicked() {
@@ -1006,10 +1009,10 @@ fn bottom_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
                     ui.separator();
                     chips_end = ui.cursor().left() - start;
                     type Item = (
-                        &'static str,
+                        String,
                         icons::IconSource,
                         Command,
-                        Option<&'static str>,
+                        Option<String>,
                         Option<Action>,
                     );
                     let mut items: Vec<Item> = CreateKind::ALL
@@ -1025,7 +1028,7 @@ fn bottom_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
                             label,
                             source,
                             Command::Blend(chamfer),
-                            blend_blocked,
+                            blend_blocked.clone(),
                             action,
                         ));
                     }
@@ -1033,19 +1036,19 @@ fn bottom_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
                         if i == CreateKind::ALL.len() {
                             ui.separator();
                         }
-                        let reason = lock.or(own);
+                        let reason = lock.clone().or(own);
                         let r = ui
                             .add_enabled_ui(reason.is_none(), |ui| {
-                                icons::source_icon_button(ui, source, label, dark)
+                                icons::source_icon_button(ui, source, &label, dark)
                             })
                             .inner;
                         // Tooltip mit der Taste aus der Tastenbelegung (etwa „Verrunden … (F)“).
                         let tip = match action {
-                            Some(a) => keymap::with_hint(&app.ws.keymap, a, label),
-                            None => label.to_owned(),
+                            Some(a) => keymap::with_hint(&app.ws.keymap, a, &label),
+                            None => label.clone(),
                         };
                         let r = match reason {
-                            Some(why) => explain(r, &tip, why),
+                            Some(why) => explain(r, &tip, &why),
                             None => r.on_hover_text(tip),
                         };
                         if r.clicked() {
@@ -1075,7 +1078,12 @@ fn history_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) 
         return;
     };
     let lock = edit_lock(&app.ws);
-    history_bar::show_with(ctx, &mut app.ws.active_tab_mut().state, rect, lock);
+    history_bar::show_with(
+        ctx,
+        &mut app.ws.active_tab_mut().state,
+        rect,
+        lock.as_deref(),
+    );
 }
 
 /// Text und Farbe der Statuszeile. Vorrang: letzte Meldung (Fehlerfarbe), Hinweis `info`
@@ -1089,7 +1097,11 @@ fn status_line(state: &AppState, dark: bool) -> (String, egui::Color32) {
     {
         return match state.session_sketch() {
             Some(sk) => (
-                format!("Skizzen-Modus: {} · {info}", sk.name),
+                tr!(
+                    "shell-sketch-mode-info",
+                    name = sk.name.as_str(),
+                    info = info.as_str()
+                ),
                 p.text_secondary,
             ),
             None => (info.clone(), p.text_secondary),
@@ -1101,11 +1113,20 @@ fn status_line(state: &AppState, dark: bool) -> (String, egui::Color32) {
         browser::status_text(state),
     ) {
         (Some(m), _, _) => (m.clone(), p.error),
-        (None, Some(sk), _) => (format!("Skizzen-Modus: {}", sk.name), p.text_secondary),
+        (None, Some(sk), _) => (
+            tr!("shell-sketch-mode", name = sk.name.as_str()),
+            p.text_secondary,
+        ),
         (None, None, Some(e)) => (e, p.error),
         (None, None, None) => match state.mesh_note() {
-            Some(note) => (format!("{} Körper – {note}", state.bodies.len()), p.warning),
-            None => (format!("{} Körper", state.bodies.len()), p.text_secondary),
+            Some(note) => (
+                tr!("shell-bodies-note", count = state.bodies.len(), note = note),
+                p.warning,
+            ),
+            None => (
+                tr!("shell-bodies", count = state.bodies.len()),
+                p.text_secondary,
+            ),
         },
     }
 }
@@ -1119,9 +1140,7 @@ fn banner_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
     };
     let dark = tab.state.dark;
     let n = tab.based_on.unwrap_or_default();
-    let text = format!(
-        "Alte Version v{n} – schreibgeschützt. Im Bereich „Versionen“ lässt sie sich wiederherstellen oder abzweigen."
-    );
+    let text = tr!("shell-old-version-banner", n = n);
     let color = theme::palette(dark).warning;
     text_field(
         ctx,

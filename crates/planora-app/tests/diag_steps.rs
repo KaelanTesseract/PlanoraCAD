@@ -87,7 +87,7 @@ fn blocked_model_action_in_old_version_records_nothing() {
     assert!(w.active_tab().read_only);
     // Nur dieser Test löst „Skizze extrudieren“ aus; die Liste darf den Namen nie enthalten.
     commands::run_action(&mut w, Action::ExtrudeSketch);
-    assert!(!has(Action::ExtrudeSketch.label()));
+    assert!(!has(&Action::ExtrudeSketch.label()));
 }
 
 #[test]
@@ -193,5 +193,5 @@ fn opening_the_feedback_window_is_not_a_step() {
     assert_eq!(req, planora_app::app::MenuRequest::Feedback);
     let last = diag::recent_steps().into_iter().last().unwrap();
     assert_ne!(last.label, Action::FeedbackOpen.label());
-    assert!(!has(Action::FeedbackOpen.label()));
+    assert!(!has(&Action::FeedbackOpen.label()));
 }

@@ -842,7 +842,7 @@ fn menu_clicks_and_keys_each_log_one_detail_line() {
     assert_eq!(command_lines("Quader anlegen"), before + 1);
     // Menü „Datei → Schließen“ (Aktion der Tastenbelegung): genau eine Zeile.
     let name = Action::Close.label();
-    let before = command_lines(name);
+    let before = command_lines(&name);
     let (s, _) = shot_with(&c, vec![], |ui| {
         app::file_menu(ui, &mut ws);
     });
@@ -851,10 +851,10 @@ fn menu_clicks_and_keys_each_log_one_detail_line() {
         app::file_menu(ui, &mut ws);
         false
     });
-    assert_eq!(command_lines(name), before + 1);
+    assert_eq!(command_lines(&name), before + 1);
     // Taste: ebenfalls genau eine.
-    let before = command_lines(name);
+    let before = command_lines(&name);
     commands::run_key(&mut ws, Action::Close);
-    assert_eq!(command_lines(name), before + 1);
+    assert_eq!(command_lines(&name), before + 1);
     diag::set_verbose(false);
 }

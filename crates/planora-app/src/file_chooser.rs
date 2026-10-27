@@ -112,10 +112,10 @@ pub enum RowMenu {
 }
 
 impl RowMenu {
-    pub fn label(&self) -> &'static str {
+    pub fn label(&self) -> String {
         match self {
-            RowMenu::AddFavorite(_) => places::ADD_FAVORITE,
-            RowMenu::RemoveFavorite(_) => places::REMOVE_FAVORITE,
+            RowMenu::AddFavorite(_) => places::add_favorite_label(),
+            RowMenu::RemoveFavorite(_) => places::remove_favorite_label(),
         }
     }
 }
@@ -358,7 +358,7 @@ impl FileChooser {
         self.dir_text = place.path.display().to_string();
         let ok = self.go_to_text();
         if !ok && place.kind == PlaceKind::Favorite {
-            self.error = Some(places::FAVORITE_MISSING.into());
+            self.error = Some(places::favorite_missing());
         }
         ok
     }
@@ -368,7 +368,7 @@ impl FileChooser {
         match menu {
             RowMenu::AddFavorite(p) => {
                 if let Err(e) = shared.add_favorite(p) {
-                    self.error = Some(e.into());
+                    self.error = Some(e);
                 }
             }
             RowMenu::RemoveFavorite(p) => shared.remove_favorite(p),
@@ -590,7 +590,7 @@ impl FileChooser {
     /// Speichern (`shared.notice`) wird übernommen und angezeigt.
     pub fn show_body(&mut self, ui: &mut egui::Ui, shared: &mut Places) -> ChooserAction {
         if let Some(notice) = shared.notice.take() {
-            self.error = Some(notice.into());
+            self.error = Some(notice);
         }
         let mut action = ChooserAction::None;
         ui.horizontal(|ui| {

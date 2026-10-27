@@ -11,7 +11,7 @@
 //! [`Workspace::persist_config`] (nur `root` wird geschrieben, Favoriten bleiben). Nichts wird
 //! verschoben, kopiert oder gelöscht.
 
-use crate::dialog::{CLOSE_LABEL, Dialog, DialogSize};
+use crate::dialog::{Dialog, DialogSize, close_label};
 use crate::file_chooser::{self, ChooserAction, FileChooser, display_path};
 use crate::keymap::settings_ui::{self, CaptureState};
 use crate::places::{self, Places};
@@ -521,7 +521,7 @@ impl SettingsWindow {
                         footer_action = ui.add_enabled_ui(!locked, |ui| c.show_footer(ui)).inner
                     }
                     None => {
-                        if ui.button(CLOSE_LABEL).clicked() {
+                        if ui.button(close_label()).clicked() {
                             close = true;
                         }
                     }

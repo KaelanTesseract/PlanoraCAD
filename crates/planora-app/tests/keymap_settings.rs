@@ -273,31 +273,31 @@ fn rig() -> Rig {
 #[test]
 fn section_lists_every_action_with_current_keys() {
     let mut r = rig();
-    assert!(r.sees(SECTION), "{:?}", r.texts());
-    assert!(r.sees(RESET_ALL));
-    assert!(r.sees(COLUMN_ACTION) && r.sees(COLUMN_AREA) && r.sees(COLUMN_BINDINGS));
+    assert!(r.sees(&section()), "{:?}", r.texts());
+    assert!(r.sees(&reset_all()));
+    assert!(r.sees(&column_action()) && r.sees(&column_area()) && r.sees(&column_bindings()));
     // „Schließen“ bleibt bei 1920 × 1080 zu sehen, das Fenster passt.
-    assert!(r.sees(planora_app::dialog::CLOSE_LABEL));
+    assert!(r.sees(&planora_app::dialog::close_label()));
     let window = r.app.windows_mut().2.last_rect.unwrap();
     assert!(
         Rect::from_min_size(Pos2::ZERO, SIZE).contains_rect(window),
         "{window:?}"
     );
     // Ohne Suche zeigt die Tabelle die ersten Aktionen in Tabellenreihenfolge.
-    let new = r.find(Action::New.label(), 0);
-    let save = r.find(Action::Save.label(), 0);
+    let new = r.find(&Action::New.label(), 0);
+    let save = r.find(&Action::Save.label(), 0);
     assert!(new.y < save.y);
     // Jede Aktion mit Bereich und allen Belegungen (über die Suche nach ihrem Namen sichtbar).
     for &a in Action::ALL {
-        r.filter(a.label());
-        assert!(r.sees(a.label()), "{a:?}: {:?}", r.texts());
-        assert!(r.sees(a.area().label()), "{a:?}");
+        r.filter(&a.label());
+        assert!(r.sees(&a.label()), "{a:?}: {:?}", r.texts());
+        assert!(r.sees(&a.area().label()), "{a:?}");
         for b in Keymap::defaults().bindings(a) {
             assert!(r.sees(&binding_text(b)), "{a:?}: {}", binding_text(b));
         }
-        let changes = r.seen.iter().filter(|s| s.text == CHANGE).count();
+        let changes = r.seen.iter().filter(|s| s.text == change()).count();
         assert!(changes >= a.default_bindings().len(), "{a:?}");
-        assert!(r.sees(ADD) && r.sees(RESET), "{a:?}");
+        assert!(r.sees(&add()) && r.sees(&reset()), "{a:?}");
     }
 }
 
@@ -327,26 +327,26 @@ fn search_filters_by_name_area_and_key_text() {
     // In der Oberfläche.
     let mut r = rig();
     r.filter("strg+s");
-    assert!(r.sees(Action::Save.label()));
-    assert!(!r.sees(Action::Undo.label()));
+    assert!(r.sees(&Action::Save.label()));
+    assert!(!r.sees(&Action::Undo.label()));
     r.filter("Zeichnung");
-    assert!(r.sees(Action::DrawingDimension.label()) && r.sees(Action::DrawingBalloon.label()));
-    assert!(!r.sees(Action::Save.label()));
+    assert!(r.sees(&Action::DrawingDimension.label()) && r.sees(&Action::DrawingBalloon.label()));
+    assert!(!r.sees(&Action::Save.label()));
     r.filter("gibt es nicht");
-    assert!(r.sees(NOTHING_FOUND));
+    assert!(r.sees(&nothing_found()));
 }
 
 #[test]
 fn capturing_a_key_sets_it_and_frees_the_old_one() {
     let mut r = rig();
-    r.filter(Action::Save.label());
-    r.click(CHANGE, 0);
-    assert!(r.sees(PRESS_KEY), "{:?}", r.texts());
+    r.filter(&Action::Save.label());
+    r.click(&change(), 0);
+    assert!(r.sees(&press_key()), "{:?}", r.texts());
     assert_eq!(r.state().capturing, Some((Action::Save, 0)));
     // Eine Umschalttaste allein tut nichts.
     r.press(Key::ShiftLeft, Modifiers::SHIFT);
     r.press(Key::ControlLeft, CTRL);
-    assert!(r.sees(PRESS_KEY));
+    assert!(r.sees(&press_key()));
     // Die nächste Taste mit den gehaltenen Umschalttasten wird die Belegung.
     let alt_shift = Modifiers {
         alt: true,
@@ -354,7 +354,7 @@ fn capturing_a_key_sets_it_and_frees_the_old_one() {
         ..NONE
     };
     r.press(Key::K, alt_shift);
-    assert!(!r.sees(PRESS_KEY));
+    assert!(!r.sees(&press_key()));
     let new = chord(Key::K, false, true, true);
     assert_eq!(r.km().bindings(Action::Save), &[new]);
     assert!(r.sees("Umschalt+Alt+K"), "{:?}", r.texts());
@@ -366,8 +366,8 @@ fn capturing_a_key_sets_it_and_frees_the_old_one() {
         BTreeMap::from([("datei.speichern".into(), vec!["Umschalt+Alt+K".into()])])
     );
     // Hinzufügen hängt eine zweite Belegung an.
-    r.click(ADD, 0);
-    assert!(r.sees(PRESS_KEY));
+    r.click(&add(), 0);
+    assert!(r.sees(&press_key()));
     r.press(Key::F5, NONE);
     assert_eq!(
         r.km().bindings(Action::Save),
@@ -391,8 +391,8 @@ fn capturing_a_key_sets_it_and_frees_the_old_one() {
 fn capturing_does_not_trigger_the_captured_key() {
     let mut r = rig();
     let tabs = r.tabs();
-    r.filter(Action::Save.label());
-    r.click(CHANGE, 0);
+    r.filter(&Action::Save.label());
+    r.click(&change(), 0);
     assert!(viewport_typing(&r));
     // Strg+N gehört „Neues Dokument“ (Überall, wirkt auch bei offenem Fenster): beim Erfassen
     // öffnet es keinen Tab, sondern wird als Doppelbelegung gemeldet.
@@ -407,7 +407,7 @@ fn capturing_does_not_trigger_the_captured_key() {
     )));
     // Kein Erfassen mehr: die Sperre ist weg, Strg+N wirkt wieder.
     assert!(!viewport_typing(&r));
-    r.click(CANCEL, 0);
+    r.click(&cancel(), 0);
     r.press(Key::N, CTRL);
     assert_eq!(r.tabs(), tabs + 1);
 }
@@ -419,14 +419,14 @@ fn viewport_typing(r: &Rig) -> bool {
 #[test]
 fn esc_cancels_capturing() {
     let mut r = rig();
-    r.filter(Action::Save.label());
-    r.click(CHANGE, 0);
-    assert!(r.sees(PRESS_KEY));
+    r.filter(&Action::Save.label());
+    r.click(&change(), 0);
+    assert!(r.sees(&press_key()));
     r.frame_with(vec![key_event(Key::Escape, NONE)], NONE);
     assert!(!r.left_over);
     r.frame(vec![release_event(Key::Escape, NONE)]);
     r.settle();
-    assert!(!r.sees(PRESS_KEY));
+    assert!(!r.sees(&press_key()));
     assert_eq!(r.state().capturing, None);
     assert_eq!(r.km(), Keymap::defaults());
     assert!(
@@ -435,17 +435,17 @@ fn esc_cancels_capturing() {
     );
     assert!(!viewport_typing(&r));
     // Auch „Abbrechen“ neben der Aufforderung bricht ab.
-    r.click(CHANGE, 0);
-    r.click(CANCEL, 0);
-    assert!(!r.sees(PRESS_KEY));
+    r.click(&change(), 0);
+    r.click(&cancel(), 0);
+    assert!(!r.sees(&press_key()));
     assert_eq!(r.km(), Keymap::defaults());
 }
 
 #[test]
 fn conflict_shows_swap_or_cancel() {
     let mut r = rig();
-    r.filter(Action::Save.label());
-    r.click(CHANGE, 0);
+    r.filter(&Action::Save.label());
+    r.click(&change(), 0);
     r.press(Key::N, CTRL);
     let n = chord(Key::N, true, false, false);
     assert!(r.sees(&conflict_text(&n, Action::New)), "{:?}", r.texts());
@@ -453,35 +453,35 @@ fn conflict_shows_swap_or_cancel() {
         conflict_text(&n, Action::New),
         "Strg+N ist schon für „Neues Dokument“ belegt."
     );
-    assert!(r.sees(SWAP) && r.sees(CANCEL));
+    assert!(r.sees(&swap()) && r.sees(&cancel()));
     // Noch nichts geändert.
     assert_eq!(r.km(), Keymap::defaults());
-    r.click(CANCEL, 0);
-    assert!(!r.sees(SWAP));
+    r.click(&cancel(), 0);
+    assert!(!r.sees(&swap()));
     assert_eq!(r.km(), Keymap::defaults());
     assert_eq!(r.state().pending_conflict, None);
     // Auch zwischen Modell und „Überall“ (Festlegung 6): Tauschen wird angeboten.
-    r.filter(Action::Fillet.label());
-    r.click(CHANGE, 0);
+    r.filter(&Action::Fillet.label());
+    r.click(&change(), 0);
     r.press(Key::S, CTRL);
     assert!(r.sees(&conflict_text(
         &chord(Key::S, true, false, false),
         Action::Save
     )));
-    assert!(r.sees(SWAP));
+    assert!(r.sees(&swap()));
 }
 
 #[test]
 fn swap_moves_the_key() {
     let mut r = rig();
-    r.filter(Action::Save.label());
-    r.click(CHANGE, 0);
+    r.filter(&Action::Save.label());
+    r.click(&change(), 0);
     r.press(Key::N, CTRL);
-    r.click(SWAP, 0);
+    r.click(&swap(), 0);
     let n = chord(Key::N, true, false, false);
     assert_eq!(r.km().bindings(Action::Save), &[n]);
     assert!(r.km().bindings(Action::New).is_empty());
-    assert!(!r.sees(SWAP));
+    assert!(!r.sees(&swap()));
     assert_eq!(
         r.saved_keys(),
         BTreeMap::from([
@@ -491,10 +491,10 @@ fn swap_moves_the_key() {
     );
     // „Überall“ gegen Modell: Verrunden bekommt Strg+S, Speichern verliert es nicht (es hat es
     // nicht mehr), Rückgängig gibt Strg+Z ab.
-    r.filter(Action::Fillet.label());
-    r.click(CHANGE, 0);
+    r.filter(&Action::Fillet.label());
+    r.click(&change(), 0);
     r.press(Key::Z, CTRL);
-    r.click(SWAP, 0);
+    r.click(&swap(), 0);
     assert_eq!(
         r.km().bindings(Action::Fillet),
         &[chord(Key::Z, true, false, false)]
@@ -505,10 +505,10 @@ fn swap_moves_the_key() {
 #[test]
 fn capturing_a_mouse_gesture_needs_a_drag_or_wheel_not_a_click() {
     let mut r = rig();
-    r.filter(Action::ViewPan.label());
-    r.click(CHANGE, 0);
-    assert!(r.sees(DRAG_NOW), "{:?}", r.texts());
-    let at = r.find(SECTION, 0);
+    r.filter(&Action::ViewPan.label());
+    r.click(&change(), 0);
+    assert!(r.sees(&drag_now()), "{:?}", r.texts());
+    let at = r.find(&section(), 0);
     // Ein bloßer Klick (auch mit der rechten Taste) ist keine Geste, eine Taste auch nicht.
     r.frame(vec![Event::PointerMoved(at)]);
     r.frame(vec![button(at, PointerButton::Secondary, true, NONE)]);
@@ -522,7 +522,7 @@ fn capturing_a_mouse_gesture_needs_a_drag_or_wheel_not_a_click() {
         phase: egui::TouchPhase::Move,
     }]);
     r.settle();
-    assert!(r.sees(DRAG_NOW));
+    assert!(r.sees(&drag_now()));
     assert_eq!(r.km(), Keymap::defaults());
     // Gedrückt halten, 3 Pixel: noch nichts; ab 4 Pixel die Geste mit den gehaltenen Tasten.
     r.frame_with(vec![button(at, PointerButton::Secondary, true, CTRL)], CTRL);
@@ -545,14 +545,14 @@ fn capturing_a_mouse_gesture_needs_a_drag_or_wheel_not_a_click() {
     assert!(r.sees("Strg + Rechte Taste ziehen"), "{:?}", r.texts());
 
     // Zoomen: nur das Rad, mit den Umschalttasten des Radereignisses.
-    r.filter(Action::ViewZoom.label());
-    r.click(CHANGE, 0);
-    assert!(r.sees(WHEEL_NOW));
+    r.filter(&Action::ViewZoom.label());
+    r.click(&change(), 0);
+    assert!(r.sees(&wheel_now()));
     r.frame(vec![button(at, PointerButton::Middle, true, NONE)]);
     r.frame(vec![Event::PointerMoved(at + vec2(20.0, 0.0))]);
     r.frame(vec![button(at, PointerButton::Middle, false, NONE)]);
     r.settle();
-    assert!(r.sees(WHEEL_NOW));
+    assert!(r.sees(&wheel_now()));
     let alt = Modifiers { alt: true, ..NONE };
     r.frame_with(
         vec![Event::MouseWheel {
@@ -572,7 +572,7 @@ fn capturing_a_mouse_gesture_needs_a_drag_or_wheel_not_a_click() {
             alt: true
         })
     );
-    assert!(!r.sees(WHEEL_NOW));
+    assert!(!r.sees(&wheel_now()));
 }
 
 #[test]
@@ -582,11 +582,11 @@ fn reset_row_and_reset_all() {
     km.swap(Action::Save, 0, chord(Key::F5, false, false, false));
     km.swap(Action::Fillet, 0, chord(Key::G, false, false, false));
     assert!(r.ws().set_keymap(km));
-    r.filter(Action::Save.label());
-    r.click(RESET, 0);
+    r.filter(&Action::Save.label());
+    r.click(&reset(), 0);
     assert!(r.km().is_default(Action::Save));
     assert!(!r.km().is_default(Action::Fillet));
-    r.click(RESET_ALL, 0);
+    r.click(&reset_all(), 0);
     assert_eq!(r.km(), Keymap::defaults());
     assert!(r.saved_keys().is_empty());
     // Zurücksetzen holt eine weggegebene Voreinstellung zurück; die andere Aktion verliert sie
@@ -595,8 +595,8 @@ fn reset_row_and_reset_all() {
     km.swap(Action::Export, 1, chord(Key::S, true, false, false));
     assert!(km.bindings(Action::Save).is_empty());
     assert!(r.ws().set_keymap(km));
-    r.filter(Action::Save.label());
-    r.click(RESET, 0);
+    r.filter(&Action::Save.label());
+    r.click(&reset(), 0);
     assert!(r.km().is_default(Action::Save));
     assert!(r.km().is_default(Action::Export));
     assert!(
@@ -617,8 +617,8 @@ fn save_failure_keeps_the_value_and_shows_a_hint() {
     std::fs::write(&blocker, b"x").unwrap();
     w.config_path = blocker.join("config.json");
     let mut r = Rig::new(w);
-    r.filter(Action::Save.label());
-    r.click(CHANGE, 0);
+    r.filter(&Action::Save.label());
+    r.click(&change(), 0);
     r.press(Key::F5, NONE);
     assert_eq!(
         r.km().bindings(Action::Save),
@@ -627,14 +627,14 @@ fn save_failure_keeps_the_value_and_shows_a_hint() {
     assert!(r.ws().keys_pending);
     assert_eq!(
         r.state().message,
-        Some(RootMessage::Warning(KEYS_NOT_SAVED.into()))
+        Some(RootMessage::Warning(keys_not_saved()))
     );
-    assert!(r.sees(KEYS_NOT_SAVED), "{:?}", r.texts());
+    assert!(r.sees(&keys_not_saved()), "{:?}", r.texts());
     // Gelingt das nächste Speichern, ist der Hinweis weg.
     r.ws().config_path = tmp.join("config.json");
-    r.click(ADD, 0);
+    r.click(&add(), 0);
     r.press(Key::F6, NONE);
-    assert!(!r.sees(KEYS_NOT_SAVED));
+    assert!(!r.sees(&keys_not_saved()));
     assert!(!r.ws().keys_pending);
 }
 
@@ -651,17 +651,17 @@ fn load_notes_are_shown() {
     assert_eq!(w.key_notes.len(), 2, "{:?}", w.key_notes);
     let notes = w.key_notes.clone();
     let mut r = Rig::new(w);
-    assert!(r.sees(NOTES_HEADING), "{:?}", r.texts());
+    assert!(r.sees(&notes_heading()), "{:?}", r.texts());
     for n in &notes {
         assert!(r.sees(n), "{n}");
     }
     // Nach einer gespeicherten Änderung steht nur noch die neue Belegung in der Datei: die
     // Hinweise sind erledigt.
-    r.filter(Action::Fillet.label());
-    r.click(CHANGE, 0);
+    r.filter(&Action::Fillet.label());
+    r.click(&change(), 0);
     r.press(Key::G, NONE);
     assert!(r.ws().key_notes.is_empty());
-    assert!(!r.sees(NOTES_HEADING));
+    assert!(!r.sees(&notes_heading()));
     assert!(!r.saved_keys().contains_key("gibt.es.nicht"));
 
     // Höchstens 20 Hinweise und „… und N weitere“.
@@ -676,18 +676,18 @@ fn load_notes_are_shown() {
 #[test]
 fn removing_the_last_binding_keeps_the_action_listed_as_unbound() {
     let mut r = rig();
-    r.filter(Action::Redo.label());
+    r.filter(&Action::Redo.label());
     // Wiederholen hat zwei Belegungen: die zweite entfernen, die erste bleibt.
-    r.click(REMOVE, 1);
+    r.click(&remove(), 1);
     assert_eq!(
         r.km().bindings(Action::Redo),
         &[chord(Key::Y, true, false, false)]
     );
-    r.click(REMOVE, 0);
+    r.click(&remove(), 0);
     assert!(r.km().bindings(Action::Redo).is_empty());
-    assert!(r.sees(Action::Redo.label()));
-    assert!(r.sees(UNBOUND), "{:?}", r.texts());
-    assert!(r.sees(ADD));
+    assert!(r.sees(&Action::Redo.label()));
+    assert!(r.sees(&unbound()), "{:?}", r.texts());
+    assert!(r.sees(&add()));
     assert_eq!(
         r.saved_keys(),
         BTreeMap::from([("bearbeiten.wiederholen".into(), vec![])])
@@ -714,8 +714,8 @@ fn holding_the_captured_key_does_not_fire_it_until_released() {
     let mut r = rig();
     let tabs = r.tabs();
     // „Neues Dokument“ bekommt F5; F5 bleibt gehalten: die Wiederholungen öffnen keinen Tab.
-    r.filter(Action::New.label());
-    r.click(CHANGE, 0);
+    r.filter(&Action::New.label());
+    r.click(&change(), 0);
     r.frame(vec![key_event(Key::F5, NONE)]);
     assert_eq!(
         r.km().bindings(Action::New),
@@ -735,8 +735,8 @@ fn holding_the_captured_key_does_not_fire_it_until_released() {
     r.press(Key::F5, NONE);
     assert_eq!(r.tabs(), tabs + 1);
     // Auch nach einer Doppelbelegung bleibt die gehaltene Taste gesperrt.
-    r.filter(Action::Save.label());
-    r.click(CHANGE, 0);
+    r.filter(&Action::Save.label());
+    r.click(&change(), 0);
     r.frame_with(vec![key_event(Key::N, CTRL)], CTRL);
     for _ in 0..5 {
         r.frame_with(vec![repeat_event(Key::N, CTRL)], CTRL);
@@ -749,8 +749,8 @@ fn holding_the_captured_key_does_not_fire_it_until_released() {
 
 /// Beginnt das Erfassen bei „Speichern“.
 fn start_capture(r: &mut Rig) {
-    r.filter(Action::Save.label());
-    r.click(CHANGE, 0);
+    r.filter(&Action::Save.label());
+    r.click(&change(), 0);
     assert!(r.state().capturing.is_some());
     assert!(viewport_typing(r));
 }
@@ -783,7 +783,7 @@ fn closing_the_window_while_capturing_frees_the_shortcuts() {
     let at = r
         .seen
         .iter()
-        .filter(|s| s.text == planora_app::dialog::CLOSE_LABEL)
+        .filter(|s| s.text == planora_app::dialog::close_label())
         .max_by(|a, b| a.rect.top().total_cmp(&b.rect.top()))
         .unwrap()
         .rect
@@ -832,10 +832,10 @@ fn closing_the_window_while_capturing_frees_the_shortcuts() {
 #[test]
 fn swap_names_the_action_that_lost_the_key() {
     let mut r = rig();
-    r.filter(Action::Save.label());
-    r.click(CHANGE, 0);
+    r.filter(&Action::Save.label());
+    r.click(&change(), 0);
     r.press(Key::N, CTRL);
-    r.click(SWAP, 0);
+    r.click(&swap(), 0);
     let n = chord(Key::N, true, false, false);
     assert_eq!(
         swapped_text(&n, Action::New),
@@ -850,10 +850,10 @@ fn a_click_elsewhere_ends_capturing() {
     let mut r = rig();
     start_capture(&mut r);
     // Das Suchfeld zeigt den Suchtext „Speichern“; der oberste Treffer ist das Feld.
-    let field = r.find(Action::Save.label(), 0);
+    let field = r.find(&Action::Save.label(), 0);
     r.click_at(field);
     assert_eq!(r.state().capturing, None);
-    assert!(!r.sees(PRESS_KEY));
+    assert!(!r.sees(&press_key()));
     assert_eq!(r.km(), Keymap::defaults());
 
     // „Projektverzeichnis ändern …“: Erfassen endet, die Auswahl öffnet.
@@ -866,10 +866,10 @@ fn a_click_elsewhere_ends_capturing() {
     // „Ändern“ einer anderen Zeile wechselt das Erfassen dorthin.
     let mut r = rig();
     r.filter("strg");
-    r.click(CHANGE, 0);
+    r.click(&change(), 0);
     assert_eq!(r.state().capturing, Some((Action::New, 0)));
     // Die erfassende Zeile zeigt kein „Ändern“: das erste ist jetzt das von „Projekte“.
-    r.click(CHANGE, 0);
+    r.click(&change(), 0);
     assert_eq!(r.state().capturing, Some((Action::Projects, 0)));
     // Klick außerhalb des Fensters (in die Ansicht).
     r.click_at(pos2(60.0, SIZE.y / 2.0));
@@ -881,19 +881,19 @@ fn a_click_elsewhere_ends_capturing() {
 fn changing_to_the_actions_own_default_key_is_no_conflict() {
     let mut r = rig();
     let cfg = r.ws().config_path.clone();
-    r.filter(Action::Save.label());
-    r.click(CHANGE, 0);
+    r.filter(&Action::Save.label());
+    r.click(&change(), 0);
     r.press(Key::S, CTRL);
-    assert!(!r.sees(SWAP), "keine Doppelbelegung mit sich selbst");
+    assert!(!r.sees(&swap()), "keine Doppelbelegung mit sich selbst");
     assert_eq!(r.state().pending_conflict, None);
     assert_eq!(r.km(), Keymap::defaults());
     assert!(!cfg.exists(), "nichts geschrieben");
     // Die zweite Belegung von „Wiederholen“ auf die erste (Strg+Y): keine Rückfrage, die
     // doppelte Zeile entfällt.
-    r.filter(Action::Redo.label());
-    r.click(CHANGE, 1);
+    r.filter(&Action::Redo.label());
+    r.click(&change(), 1);
     r.press(Key::Y, CTRL);
-    assert!(!r.sees(SWAP));
+    assert!(!r.sees(&swap()));
     assert_eq!(
         r.km().bindings(Action::Redo),
         &[chord(Key::Y, true, false, false)]
@@ -930,16 +930,16 @@ fn keys_the_views_need_cannot_be_bound() {
             "„Pfeil links“ ist an der Verlaufsleiste fest belegt.",
         ),
     ] {
-        r.filter(action.label());
-        r.click(CHANGE, 0);
+        r.filter(&action.label());
+        r.click(&change(), 0);
         r.press(key, NONE);
         assert_eq!(r.km(), Keymap::defaults(), "{action:?} {key:?}");
         assert_eq!(r.state().capturing, None);
         assert!(r.sees(text), "{text}: {:?}", r.texts());
     }
     // Eingabe in der Zeichnung ist dagegen frei, Entf im Modell auch.
-    r.filter(Action::DrawingBalloon.label());
-    r.click(CHANGE, 0);
+    r.filter(&Action::DrawingBalloon.label());
+    r.click(&change(), 0);
     r.press(Key::Enter, NONE);
     assert_eq!(
         r.km().bindings(Action::DrawingBalloon),
@@ -964,7 +964,7 @@ fn a_conflict_below_the_last_visible_row_is_scrolled_into_view() {
             let at = r
                 .seen
                 .iter()
-                .find(|s| s.text == CHANGE && s.visible())
+                .find(|s| s.text == change() && s.visible())
                 .expect("ein „Ändern“ zu sehen")
                 .rect
                 .center();
@@ -998,7 +998,7 @@ fn a_conflict_below_the_last_visible_row_is_scrolled_into_view() {
             prompt.rect,
             prompt.clip
         );
-        for b in [SWAP, CANCEL] {
+        for b in [swap(), cancel()] {
             let seen = r.seen.iter().find(|s| s.text == b).unwrap();
             assert!(seen.visible(), "{size:?}: „{b}“ zu sehen");
         }
@@ -1006,7 +1006,7 @@ fn a_conflict_below_the_last_visible_row_is_scrolled_into_view() {
         let swap = r
             .seen
             .iter()
-            .find(|s| s.text == SWAP)
+            .find(|s| s.text == swap())
             .unwrap()
             .rect
             .center();
@@ -1027,7 +1027,7 @@ fn bottom_key_row(r: &Rig) -> Option<(Action, Pos2)> {
     let change = r
         .seen
         .iter()
-        .filter(|s| s.text == CHANGE && s.visible())
+        .filter(|s| s.text == change() && s.visible())
         .max_by(|a, b| a.rect.top().total_cmp(&b.rect.top()))?;
     if change.clip.bottom() - change.rect.bottom() > 20.0 {
         return None;

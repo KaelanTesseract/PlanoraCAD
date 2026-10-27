@@ -112,7 +112,7 @@ fn a_favorite_added_in_the_import_window_is_written_to_the_config_file() {
     let mut ws = workspace_at(&file, Config::load_from(&file));
     ws.active_tab_mut().import_dialog = Some(ImportDialog::new(d.clone()));
     let mut drv = AppDriver::new();
-    context_click(&mut drv, &mut ws, "Teile", ADD_FAVORITE);
+    context_click(&mut drv, &mut ws, "Teile", &add_favorite_label());
     let disk = Config::load_from(&file);
     assert_eq!(disk.favorites, [d.join("Teile")], "gespeichert");
     assert_eq!(
@@ -122,7 +122,7 @@ fn a_favorite_added_in_the_import_window_is_written_to_the_config_file() {
     );
     assert_eq!(ws.config.favorites, [d.join("Teile")]);
     // Und wieder entfernen.
-    context_click(&mut drv, &mut ws, "Teile", REMOVE_FAVORITE);
+    context_click(&mut drv, &mut ws, "Teile", &remove_favorite_label());
     assert!(Config::load_from(&file).favorites.is_empty());
     let _ = fs::remove_dir_all(&d);
 }
@@ -136,7 +136,7 @@ fn an_unreadable_config_file_is_left_alone_by_the_app() {
     let mut ws = workspace_at(&file, Config::load_from(&file));
     ws.active_tab_mut().step_import_dialog = Some(StepImportDialog::new(d.clone()));
     let mut drv = AppDriver::new();
-    context_click(&mut drv, &mut ws, "Teile", ADD_FAVORITE);
+    context_click(&mut drv, &mut ws, "Teile", &add_favorite_label());
     assert_eq!(fs::read_to_string(&file).unwrap(), "{ kaputt");
     assert_eq!(
         ws.config.favorites,
@@ -171,7 +171,7 @@ fn the_export_window_shows_the_shared_favorites() {
     drv.frame(&mut ws, vec![]);
     let seen = drv.frame(&mut ws, vec![]);
     assert!(pos_of(&seen, "Lieblingsordner").is_some(), "{seen:?}");
-    assert!(pos_of(&seen, PROJECT_LABEL).is_some(), "{seen:?}");
+    assert!(pos_of(&seen, &project_label()).is_some(), "{seen:?}");
     assert!(!file.exists(), "ohne Änderung nichts geschrieben");
     let _ = fs::remove_dir_all(&d);
 }

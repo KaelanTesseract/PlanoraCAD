@@ -634,14 +634,20 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
     if let Some(region) = hovered_region
         && !cube_dragging
     {
-        cube_response.on_hover_text(format!("Ansicht: {}", region.name()));
+        cube_response.on_hover_text(planora_i18n::tr!("view-cube-hover", name = region.name()));
     }
     let home_response = ui.interact(
         home_rect(cube),
         ui.id().with("planora-view-home"),
         Sense::click_and_drag(),
     );
-    home_response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Home"));
+    home_response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            true,
+            planora_i18n::tr!("view-home-label"),
+        )
+    });
     if home_response.clicked() {
         state.camera.home();
         state.frame_all();
@@ -654,7 +660,7 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
             state.camera.zoom(scroll);
         }
     }
-    home_response.on_hover_text("Home: Grundansicht (Isometrisch)");
+    home_response.on_hover_text(planora_i18n::tr!("view-home-hint"));
 
     if !sketching {
         // Auswahl (nicht über dem Würfel; dort ist die Ansicht nicht „hovered“)

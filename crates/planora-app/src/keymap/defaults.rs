@@ -1,6 +1,7 @@
 //! Die Tabelle aller Aktionen mit ihrer Voreinstellung (Windows, wie Fusion; dazu die
 //! PlanoraCAD-eigenen Kürzel, die Fusion nicht widersprechen). Eine Zeile je Aktion:
-//! Variante, feste Id (Schlüssel in der Konfiguration, nie ändern), deutscher Anzeigename,
+//! Variante, feste Id (Schlüssel in der Konfiguration, nie ändern), Id des Anzeigenamens
+//! in den Sprachdateien,
 //! Bereich, Voreinstellung. Daraus entstehen [`Action`], [`Action::ALL`] und die
 //! Voreinstellung von [`super::Keymap::defaults`].
 
@@ -27,11 +28,16 @@ macro_rules! action_table {
                 }
             }
 
-            /// Deutscher Anzeigename.
-            pub fn label(self) -> &'static str {
+            /// Id des Anzeigenamens in den Sprachdateien (`action-…`).
+            fn label_id(self) -> &'static str {
                 match self {
                     $(Action::$variant => $label,)*
                 }
+            }
+
+            /// Anzeigename in der Sprache der Oberfläche.
+            pub fn label(self) -> String {
+                planora_i18n::t(self.label_id())
             }
 
             /// Bereich, in dem die Belegung gilt.
@@ -55,65 +61,65 @@ macro_rules! action_table {
 }
 
 action_table! {
-    New, "datei.neu", "Neues Dokument", All, [ctrl(Key::N)];
-    Projects, "datei.projekte", "Projekte", All, [ctrl(Key::O)];
-    Save, "datei.speichern", "Speichern", All, [ctrl(Key::S)];
-    Close, "datei.schliessen", "Dokument schließen", All, [ctrl(Key::W)];
+    New, "datei.neu", "action-new", All, [ctrl(Key::N)];
+    Projects, "datei.projekte", "action-projects", All, [ctrl(Key::O)];
+    Save, "datei.speichern", "action-save", All, [ctrl(Key::S)];
+    Close, "datei.schliessen", "action-close", All, [ctrl(Key::W)];
     /// PlanoraCAD-eigenes Kürzel (Fusion hat dafür keins).
-    Export, "datei.exportieren", "Exportieren", All, [ctrl_shift(Key::E)];
+    Export, "datei.exportieren", "action-export", All, [ctrl_shift(Key::E)];
     /// Öffnet das Fenster „Rückmeldung“ (wie „Hilfe → Rückmeldung …“). PlanoraCAD-eigenes
     /// Kürzel, „R“ wie Rückmeldung; Fusion hat dafür keins.
-    FeedbackOpen, "hilfe.rueckmeldung", "Rückmeldung geben", All, [ctrl_shift(Key::R)];
-    Undo, "bearbeiten.rueckgaengig", "Rückgängig", All, [ctrl(Key::Z)];
+    FeedbackOpen, "hilfe.rueckmeldung", "action-feedback", All, [ctrl_shift(Key::R)];
+    Undo, "bearbeiten.rueckgaengig", "action-undo", All, [ctrl(Key::Z)];
     /// Strg+Y wie Fusion, Strg+Umschalt+Z wie bisher.
-    Redo, "bearbeiten.wiederholen", "Wiederholen", All, [ctrl(Key::Y), ctrl_shift(Key::Z)];
+    Redo, "bearbeiten.wiederholen", "action-redo", All, [ctrl(Key::Y), ctrl_shift(Key::Z)];
     /// Mitte wie Fusion, Umschalt+links wie bisher.
-    ViewPan, "ansicht.schwenken", "Ansicht schwenken", All,
+    ViewPan, "ansicht.schwenken", "action-view-pan", All,
         [drag(MouseButton::Middle, false), drag(MouseButton::Left, true)];
     /// Umschalt+Mitte wie Fusion, links als Zusatz (wie bisher).
-    ViewOrbit, "ansicht.drehen", "Ansicht drehen", All,
+    ViewOrbit, "ansicht.drehen", "action-view-orbit", All,
         [drag(MouseButton::Middle, true), drag(MouseButton::Left, false)];
     /// Strg+Rad zusätzlich: so zoomt auch das Zusammenziehen auf Windows-Touchpads (kommt als
     /// Strg+Rad).
-    ViewZoom, "ansicht.zoomen", "Ansicht zoomen", All, [WHEEL, CTRL_WHEEL];
+    ViewZoom, "ansicht.zoomen", "action-view-zoom", All, [WHEEL, CTRL_WHEEL];
     /// Wie „Erzeugen → Skizze extrudieren …“; über die Taste nur mit einer gewählten Skizze,
     /// die ein geschlossenes Profil hat.
-    ExtrudeSketch, "modell.extrudieren", "Skizze extrudieren", Model, [key(Key::E)];
+    ExtrudeSketch, "modell.extrudieren", "action-extrude-sketch", Model, [key(Key::E)];
     /// Öffnet das Fenster Verrunden (wie „Bearbeiten → Verrunden …“).
-    Fillet, "modell.verrunden", "Verrunden", Model, [key(Key::F)];
+    Fillet, "modell.verrunden", "action-fillet", Model, [key(Key::F)];
     /// Das Auge des gewählten Körpers im Feature-Baum.
-    ToggleVisibility, "modell.sichtbarkeit", "Sichtbarkeit umschalten", Model, [key(Key::V)];
+    ToggleVisibility, "modell.sichtbarkeit", "action-toggle-visibility", Model, [key(Key::V)];
     /// Wie „Löschen“ im Kontextmenü des Baums (Rückfrage, wenn etwas davon abhängt).
-    DeleteSelection, "modell.loeschen", "Löschen", Model, [key(Key::Delete)];
+    DeleteSelection, "modell.loeschen", "action-delete", Model, [key(Key::Delete)];
     /// Startet den zuletzt abgeschlossenen wiederholbaren Befehl noch einmal.
-    RepeatLast, "modell.befehl_wiederholen", "Letzten Befehl wiederholen", Model, [key(Key::Space)];
+    RepeatLast, "modell.befehl_wiederholen", "action-repeat-last", Model, [key(Key::Space)];
     /// Öffnet das Fenster „Tastenkürzel“ mit aktivem Suchfeld (Fusion „Shortcuts“); wie
     /// „Ansicht → Tastenkürzel …“. In der Skizze gilt [`Action::SketchShowShortcuts`].
-    ShowShortcuts, "ansicht.tastenkuerzel", "Tastenkürzel anzeigen", Model, [key(Key::S)];
+    ShowShortcuts, "ansicht.tastenkuerzel", "action-show-shortcuts", Model, [key(Key::S)];
     // Skizze: nur Werkzeuge, die es gibt (wie der Klick auf den Knopf der Leiste). Versatz O,
     // Stutzen T und Skizzenbemaßung D kommen erst mit ihrer Funktion. Esc, Enter und Entf der
     // Skizze sind fest (`sketch_view`), nicht in der Tabelle.
-    SketchLine, "skizze.linie", "Linie", Sketch, [key(Key::L)];
-    SketchRectangle, "skizze.rechteck", "Rechteck", Sketch, [key(Key::R)];
-    SketchCircle, "skizze.kreis", "Kreis", Sketch, [key(Key::C)];
+    SketchLine, "skizze.linie", "action-sketch-line", Sketch, [key(Key::L)];
+    SketchRectangle, "skizze.rechteck", "action-sketch-rectangle", Sketch, [key(Key::R)];
+    SketchCircle, "skizze.kreis", "action-sketch-circle", Sketch, [key(Key::C)];
     /// Fusion „Projizieren“.
-    SketchProjectEdge, "skizze.projizieren", "Körperkante kopieren", Sketch, [key(Key::P)];
+    SketchProjectEdge, "skizze.projizieren", "action-sketch-project-edge", Sketch, [key(Key::P)];
     /// Wählt das zuletzt benutzte Skizzenwerkzeug wieder (eigenes Gedächtnis, siehe
     /// `commands::LastCommand`).
-    SketchRepeatLast, "skizze.werkzeug_wiederholen", "Letztes Skizzenwerkzeug wiederholen", Sketch,
+    SketchRepeatLast, "skizze.werkzeug_wiederholen", "action-sketch-repeat-last", Sketch,
         [key(Key::Space)];
     /// Wie der Knopf im Skizzenfeld (Fusion „Normal / Hilfslinie“): nur mit ausgewählten Kurven.
-    SketchConstruction, "skizze.konstruktion", "Konstruktion umschalten", Sketch, [key(Key::X)];
+    SketchConstruction, "skizze.konstruktion", "action-sketch-construction", Sketch, [key(Key::X)];
     /// Wie [`Action::ShowShortcuts`], in der offenen Skizze (eine Aktion hat nur einen Bereich).
-    SketchShowShortcuts, "skizze.tastenkuerzel", "Tastenkürzel in der Skizze anzeigen", Sketch,
+    SketchShowShortcuts, "skizze.tastenkuerzel", "action-sketch-show-shortcuts", Sketch,
         [key(Key::S)];
     // Zeichnung: die vorhandenen Werkzeuge (wie ihr Schalter). Mittelpunktmarke C, Verschieben
     // M, Projizierte Ansicht P und Text T kommen erst mit ihrer Funktion; Entf (Nummernkreis
     // löschen) ist fest (`drawing_view`).
     /// Werkzeug „Maß“ ein/aus (Fusion „Bemaßung“).
-    DrawingDimension, "zeichnung.mass", "Maß", Drawing, [key(Key::D)];
+    DrawingDimension, "zeichnung.mass", "action-drawing-dimension", Drawing, [key(Key::D)];
     /// Werkzeug „Position“ ein/aus (Fusion „Ballon“).
-    DrawingBalloon, "zeichnung.position", "Position", Drawing, [key(Key::B)];
+    DrawingBalloon, "zeichnung.position", "action-drawing-balloon", Drawing, [key(Key::B)];
 }
 
 impl Action {

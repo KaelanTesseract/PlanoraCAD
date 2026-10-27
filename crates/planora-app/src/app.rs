@@ -34,6 +34,7 @@ use crate::{
     sketch_panel, theme, viewport,
 };
 use planora_feature::SketchPlane;
+use planora_i18n::tr;
 use planora_kernel::BoolOp;
 use planora_project::config::WindowState;
 use planora_render::gpu::GpuScene;
@@ -57,19 +58,33 @@ const AUTOSAVE_REPAINT: Duration = Duration::from_secs(30);
 pub const EXIT_WAIT: Duration = Duration::from_secs(2);
 
 /// Menüeintrag „Datei → Projekte …“ (Kürzel [`Action::Projects`]).
-pub const PROJECTS_ENTRY: &str = "Projekte …";
+pub fn projects_entry() -> String {
+    tr!("menu-file-projects")
+}
 /// Hinweis, wenn Projekte oder Einstellungen nicht öffnen, weil gerade ein Export schreibt.
-pub const EXPORT_BUSY: &str = "Bitte erst den Export beenden.";
+pub fn export_busy() -> String {
+    tr!("menu-export-busy")
+}
 /// Menüeintrag „Datei → Einstellungen …“.
-pub const SETTINGS_ENTRY: &str = "Einstellungen …";
+pub fn settings_entry() -> String {
+    tr!("menu-file-settings")
+}
 /// Menüeintrag „Ansicht → Tastenkürzel …“ (Kürzel [`Action::ShowShortcuts`]).
-pub const VIEW_SHORTCUTS_ENTRY: &str = "Tastenkürzel …";
+pub fn view_shortcuts_entry() -> String {
+    tr!("menu-view-shortcuts")
+}
 /// Menü „Hilfe“ (nach „Ansicht“).
-pub const HELP_MENU: &str = "Hilfe";
+pub fn help_menu_title() -> String {
+    tr!("menu-help")
+}
 /// Menüeintrag „Hilfe → Rückmeldung …“ (Kürzel [`Action::FeedbackOpen`]).
-pub const FEEDBACK_ENTRY: &str = "Rückmeldung …";
+pub fn feedback_entry() -> String {
+    tr!("menu-help-feedback")
+}
 /// Menüeintrag „Hilfe → Häufige Probleme“ (öffnet [`crate::feedback::faq_url`] im Browser).
-pub const FAQ_ENTRY: &str = "Häufige Probleme";
+pub fn faq_entry() -> String {
+    tr!("menu-help-faq")
+}
 
 /// Was die Menüs außer ihren eigenen Aktionen verlangen: das Fenster „Projekte“,
 /// „Einstellungen“, „Tastenkürzel“ oder „Rückmeldung“ öffnen (die Fenster gehören der App, nicht
@@ -1275,9 +1290,9 @@ fn history_step(ws: &mut Workspace, undo: bool) {
     tab.state.message = None;
     tab.state.info = None;
     let (label, done, word) = if undo {
-        (tab.undo_label(), tab.undo(), "Rückgängig")
+        (tab.undo_label(), tab.undo(), Action::Undo.label())
     } else {
-        (tab.redo_label(), tab.redo(), "Wiederholen")
+        (tab.redo_label(), tab.redo(), Action::Redo.label())
     };
     // Landet der Sprung auf einem Stand mit fehlerhaftem Feature, zeigt die Statuszeile dessen
     // Fehler (Fehlerfarbe) statt des Hinweises; in der offenen Skizze steht der Hinweis hinter
@@ -1288,7 +1303,7 @@ fn history_step(ws: &mut Workspace, undo: bool) {
     if done.is_ok() && !shows_error {
         tab.state.info = Some(match label {
             Some(l) => format!("{word}: {l}"),
-            None => word.into(),
+            None => word,
         });
     }
 }
@@ -1364,7 +1379,7 @@ fn file_window_open(ws: &Workspace) -> bool {
 
 /// P10: schließt die Dateifenster des aktiven Tabs für Projekte oder Einstellungen. Ein
 /// schreibendes Exportfenster bleibt (sonst endete das Schreiben ohne Meldung); dann `false`,
-/// das andere Fenster öffnet nicht und die Statuszeile sagt warum ([`EXPORT_BUSY`]).
+/// das andere Fenster öffnet nicht und die Statuszeile sagt warum ([`export_busy()`]).
 fn close_file_windows(ws: &mut Workspace) -> bool {
     let tab = ws.active_tab_mut();
     if tab
@@ -1372,7 +1387,7 @@ fn close_file_windows(ws: &mut Workspace) -> bool {
         .as_ref()
         .is_some_and(|d| d.is_writing_file())
     {
-        tab.state.message = Some(EXPORT_BUSY.into());
+        tab.state.message = Some(export_busy());
         tab.state.info = None;
         return false;
     }
@@ -1425,7 +1440,7 @@ pub fn open_settings(
 /// Öffnet die Übersicht „Tastenkürzel“ (Menü Ansicht und Taste S) mit aktivem Suchfeld. Sie
 /// steht für sich wie Projekte und Einstellungen (P10): diese und die Dateifenster des aktiven
 /// Tabs schließen dabei (ein schreibendes Exportfenster bleibt, dann öffnet sie nicht,
-/// [`EXPORT_BUSY`]). Bei offener Rückfrage öffnet sie nicht (wie die Einstellungen).
+/// [`export_busy()`]). Bei offener Rückfrage öffnet sie nicht (wie die Einstellungen).
 pub fn open_overview(
     ws: &mut Workspace,
     projects: &mut ProjectsWindow,
@@ -1458,7 +1473,7 @@ pub fn enforce_overview_rules(
 /// `ctx_info` (Schnappschuss beim Öffnen, [`FeedbackDialog::open_fresh`]). Es steht für sich wie
 /// die Übersicht „Tastenkürzel“: Projekte, Einstellungen, die Übersicht, „Über“ und die
 /// Dateifenster des aktiven Tabs schließen dabei (ein schreibendes Exportfenster bleibt, dann
-/// öffnet es nicht, [`EXPORT_BUSY`]). Bei offener Rückfrage öffnet es nicht. Ist es schon offen,
+/// öffnet es nicht, [`export_busy()`]). Bei offener Rückfrage öffnet es nicht. Ist es schon offen,
 /// bleibt es, wie es ist (der getippte Text geht nicht verloren).
 pub fn open_feedback(
     ws: &mut Workspace,
@@ -1527,7 +1542,7 @@ fn open_release_page(ctx: &egui::Context, update: &Update) {
 /// Öffnet die Meldung „Neue Version verfügbar“ für `update` (Klick auf den Hinweis in der
 /// Statuszeile). Sie steht für sich wie die Übersicht der Tastenkürzel: Projekte, Einstellungen,
 /// die Übersicht und die Dateifenster des aktiven Tabs schließen dabei (ein schreibendes
-/// Exportfenster bleibt, dann öffnet sie nicht, [`EXPORT_BUSY`]). Bei offener Rückfrage öffnet
+/// Exportfenster bleibt, dann öffnet sie nicht, [`export_busy()`]). Bei offener Rückfrage öffnet
 /// sie nicht.
 pub fn open_update_notice(
     ws: &mut Workspace,
@@ -1671,23 +1686,23 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
         hint(ws, Action::Export),
         hint(ws, Action::Close),
     );
-    if shortcut_button(ui, true, Icon::New, "Neu", new_keys).clicked() {
+    if shortcut_button(ui, true, Icon::New, &tr!("menu-file-new"), new_keys).clicked() {
         commands::run_action(ws, Action::New);
         ui.close();
     }
-    if shortcut_button(ui, true, Icon::Projects, PROJECTS_ENTRY, projects_keys).clicked() {
+    if shortcut_button(ui, true, Icon::Projects, &projects_entry(), projects_keys).clicked() {
         request = MenuRequest::Projects;
         ui.close();
     }
     ui.separator();
-    if shortcut_button(ui, !read_only, Icon::Save, "Speichern", save_keys).clicked() {
+    if shortcut_button(ui, !read_only, Icon::Save, &tr!("common-save"), save_keys).clicked() {
         commands::run_action(ws, Action::Save);
         ui.close();
     }
     if entry(
         ui,
         !read_only,
-        icons::button(Icon::SaveAs, "Speichern unter …"),
+        icons::button(Icon::SaveAs, tr!("menu-file-save-as")),
     )
     .clicked()
     {
@@ -1696,8 +1711,8 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
     }
     ui.separator();
     let any = !ws.active_tab().state.bodies.is_empty();
-    if shortcut_button(ui, any, Icon::Export, "Exportieren …", export_keys)
-        .on_disabled_hover_text("Es gibt noch keinen Körper.")
+    if shortcut_button(ui, any, Icon::Export, &tr!("menu-file-export"), export_keys)
+        .on_disabled_hover_text(tr!("menu-file-export-disabled"))
         .clicked()
     {
         commands::run_action(ws, Action::Export);
@@ -1706,9 +1721,9 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
     if entry(
         ui,
         !read_only,
-        icons::button(Icon::Import, "Netz importieren …"),
+        icons::button(Icon::Import, tr!("menu-file-import-mesh")),
     )
-    .on_disabled_hover_text("In einer alten Version lässt sich nichts hinzufügen.")
+    .on_disabled_hover_text(tr!("menu-old-version-add"))
     .clicked()
     {
         commands::timed("Netz importieren", || open_import(ws));
@@ -1719,29 +1734,29 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
         !read_only,
         icons::button(Icon::Import, step_import_dialog::MENU_LABEL),
     )
-    .on_disabled_hover_text("In einer alten Version lässt sich nichts hinzufügen.")
+    .on_disabled_hover_text(tr!("menu-old-version-add"))
     .clicked()
     {
         commands::timed("STEP importieren", || open_step_import(ws));
         ui.close();
     }
     ui.separator();
-    if shortcut_button(ui, true, Icon::Close, "Schließen", close_keys).clicked() {
+    if shortcut_button(ui, true, Icon::Close, &tr!("menu-file-close"), close_keys).clicked() {
         commands::run_action(ws, Action::Close);
         ui.close();
     }
     if entry(
         ui,
         ws.prompt.is_none(),
-        icons::button(Icon::Settings, SETTINGS_ENTRY),
+        icons::button(Icon::Settings, settings_entry()),
     )
-    .on_disabled_hover_text("Zuerst die offene Rückfrage beantworten.")
+    .on_disabled_hover_text(tr!("menu-answer-prompt-first"))
     .clicked()
     {
         request = MenuRequest::Settings;
         ui.close();
     }
-    if entry(ui, true, icons::button(Icon::Quit, "Beenden")).clicked() {
+    if entry(ui, true, icons::button(Icon::Quit, tr!("menu-file-quit"))).clicked() {
         // Ist Beenden freigegeben, schickt `handle_close_request` im nächsten Bild `Close`.
         commands::timed("Beenden", || ws.request_quit());
         ui.close();
@@ -1756,11 +1771,11 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
 pub fn help_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
     let mut request = MenuRequest::None;
     let keys = keymap::shortcut_hint(&ws.keymap, Action::FeedbackOpen);
-    if shortcut_button(ui, true, Icon::Feedback, FEEDBACK_ENTRY, keys).clicked() {
+    if shortcut_button(ui, true, Icon::Feedback, &feedback_entry(), keys).clicked() {
         request = MenuRequest::Feedback;
         ui.close();
     }
-    if entry(ui, true, icons::button(Icon::Help, FAQ_ENTRY)).clicked() {
+    if entry(ui, true, icons::button(Icon::Help, faq_entry())).clicked() {
         ui.ctx()
             .open_url(egui::OpenUrl::new_tab(crate::feedback::faq_url()));
         ui.close();
@@ -1794,24 +1809,24 @@ pub(crate) fn menu_bar_measured(
         .config(egui::containers::menu::MenuConfig::new().style(theme::menu_style))
         .ui(ui, |ui| {
             let start = ui.cursor().left();
-            ui.menu_button("Datei", |ui| request = file_menu(ui, ws));
+            ui.menu_button(tr!("menu-file"), |ui| request = file_menu(ui, ws));
             ui.add_enabled_ui(!read_only, |ui| {
-                ui.menu_button("Erzeugen", |ui| create_menu(ui, ws));
+                ui.menu_button(tr!("menu-create"), |ui| create_menu(ui, ws));
             });
             // Zeichnungen lassen sich auch in alten Versionen öffnen, aber nicht anlegen.
-            ui.menu_button("Zeichnung", |ui| {
+            ui.menu_button(tr!("menu-drawing"), |ui| {
                 let tab = ws.active_tab_mut();
                 drawing_menu(ui, &mut tab.state, &mut tab.drawing_dialog, read_only);
             });
             ui.add_enabled_ui(!read_only, |ui| {
-                ui.menu_button("Bearbeiten", |ui| edit_menu(ui, ws));
+                ui.menu_button(tr!("menu-edit"), |ui| edit_menu(ui, ws));
             });
-            ui.menu_button("Ansicht", |ui| {
+            ui.menu_button(tr!("menu-view"), |ui| {
                 if view_menu(ui, ws, shell) {
                     request = MenuRequest::Shortcuts;
                 }
             });
-            ui.menu_button(HELP_MENU, |ui| {
+            ui.menu_button(help_menu_title(), |ui| {
                 let r = help_menu(ui, ws);
                 if r != MenuRequest::None {
                     request = r;
@@ -1829,7 +1844,7 @@ fn shell_toggles(ui: &mut egui::Ui, shell: &mut ShellState) {
     if ui
         .checkbox(
             &mut versions,
-            (icons::atom(Icon::PanelVersions), "Versionen"),
+            (icons::atom(Icon::PanelVersions), tr!("menu-view-versions")),
         )
         .changed()
     {
@@ -1859,14 +1874,14 @@ impl CreateKind {
     ];
 
     /// Beschriftung im Menü (und Hinweistext im Befehlsfeld).
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            CreateKind::Box => "Quader …",
-            CreateKind::Cylinder => "Zylinder …",
-            CreateKind::Sphere => "Kugel …",
-            CreateKind::Cone => "Kegel …",
-            CreateKind::Extrusion => "Skizze extrudieren …",
-            CreateKind::Revolution => "Skizze drehen …",
+            CreateKind::Box => tr!("menu-create-box"),
+            CreateKind::Cylinder => tr!("menu-create-cylinder"),
+            CreateKind::Sphere => tr!("menu-create-sphere"),
+            CreateKind::Cone => tr!("menu-create-cone"),
+            CreateKind::Extrusion => tr!("menu-create-extrude"),
+            CreateKind::Revolution => tr!("menu-create-revolve"),
         }
     }
 
@@ -1913,12 +1928,12 @@ fn sketch_target(state: &AppState) -> Option<planora_feature::FeatureId> {
 /// Grund, warum `kind` gerade nicht geht (Menü und Befehlsfeld); `None`: erlaubt.
 /// Körper aus der Skizze eines zurückgesetzten Körpers sind gesperrt
 /// ([`crate::history_bar::lock_reason`]); freistehende Grundkörper nie.
-pub fn create_blocked(ws: &Workspace, kind: CreateKind) -> Option<&'static str> {
+pub fn create_blocked(ws: &Workspace, kind: CreateKind) -> Option<String> {
     let state = &ws.active_tab().state;
     match kind {
         CreateKind::Extrusion | CreateKind::Revolution => match sketch_target(state) {
-            None => Some("Zuerst eine Skizze anlegen."),
-            Some(sketch) => crate::history_bar::lock_reason(state, &[sketch]),
+            None => Some(tr!("menu-create-need-sketch")),
+            Some(sketch) => crate::history_bar::lock_reason(state, &[sketch]).map(str::to_string),
         },
         _ => None,
     }
@@ -1929,8 +1944,8 @@ pub fn create_blocked(ws: &Workspace, kind: CreateKind) -> Option<&'static str> 
 /// Skizze offen und der Dialog entfällt. Ist `kind` gesperrt ([`create_blocked`], etwa die
 /// Skizze eines zurückgesetzten Körpers), steht der Grund in `message`.
 pub fn do_create(ws: &mut Workspace, kind: CreateKind) {
-    if let Some(why) = create_blocked(ws, kind).filter(|w| *w == crate::history_bar::LOCK_HINT) {
-        ws.active_tab_mut().state.message = Some(why.into());
+    if let Some(why) = create_blocked(ws, kind).filter(|w| w == crate::history_bar::LOCK_HINT) {
+        ws.active_tab_mut().state.message = Some(why);
         return;
     }
     let tab = ws.active_tab_mut();
@@ -2011,7 +2026,7 @@ pub fn open_blend(ws: &mut Workspace, chamfer: bool) {
 #[doc(hidden)]
 pub fn create_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     for kind in &CreateKind::ALL[..4] {
-        if icons::source_entry(ui, kind.icon(), kind.label(), true).clicked() {
+        if icons::source_entry(ui, kind.icon(), &kind.label(), true).clicked() {
             run_create(ws, *kind);
             ui.close();
         }
@@ -2024,7 +2039,7 @@ pub fn create_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
         let blocked = create_blocked(ws, *kind);
         let action = kind.action();
         let keys = action.map_or_else(String::new, |a| keymap::shortcut_hint(&ws.keymap, a));
-        if icons::source_entry_keys(ui, kind.icon(), kind.label(), &keys, blocked.is_none())
+        if icons::source_entry_keys(ui, kind.icon(), &kind.label(), &keys, blocked.is_none())
             .on_disabled_hover_text(blocked.unwrap_or_default())
             .clicked()
         {
@@ -2058,21 +2073,23 @@ pub(crate) fn run_blend(ws: &mut Workspace, chamfer: bool) {
 /// Schritt nur „Rückgängig“.
 pub fn undo_menu_text(label: Option<&str>) -> String {
     match label {
-        Some(l) => format!("Rückgängig: {l}"),
-        None => "Rückgängig".into(),
+        Some(l) => tr!("menu-undo-with", label = l),
+        None => Action::Undo.label(),
     }
 }
 
 /// Text des Menüeintrags „Wiederholen“ (wie [`undo_menu_text`]).
 pub fn redo_menu_text(label: Option<&str>) -> String {
     match label {
-        Some(l) => format!("Wiederholen: {l}"),
-        None => "Wiederholen".into(),
+        Some(l) => tr!("menu-redo-with", label = l),
+        None => Action::Redo.label(),
     }
 }
 
 /// Menüeintrag „Bearbeiten → Parameter …“.
-pub const PARAMETERS_ENTRY: &str = "Parameter …";
+pub fn parameters_entry() -> String {
+    tr!("menu-edit-parameters")
+}
 
 /// Menü „Bearbeiten“: Rückgängig, Wiederholen, Parameter, Boolesche Operationen, Verrunden und
 /// Fase (Verrunden mit seiner Taste), Zum Ende der Zeitleiste.
@@ -2107,7 +2124,7 @@ pub fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     if entry(
         ui,
         !sketch_open,
-        icons::button(Icon::Parameters, PARAMETERS_ENTRY),
+        icons::button(Icon::Parameters, parameters_entry()),
     )
     .on_disabled_hover_text(crate::state::SKETCH_OPEN_LOCK)
     .clicked()
@@ -2119,9 +2136,17 @@ pub fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     // Boolesche Operationen brauchen zwei gewöhnliche Körper; Netz-Körper sind gesperrt.
     let boolean = ws.active_tab().state.boolean_blocked();
     for (icon, label, op) in [
-        (Icon::Union, "Vereinigen …", BoolOp::Union),
-        (Icon::Subtract, "Abziehen …", BoolOp::Difference),
-        (Icon::Intersect, "Schneiden …", BoolOp::Intersection),
+        (Icon::Union, tr!("menu-bool-union"), BoolOp::Union),
+        (
+            Icon::Subtract,
+            tr!("menu-bool-subtract"),
+            BoolOp::Difference,
+        ),
+        (
+            Icon::Intersect,
+            tr!("menu-bool-intersect"),
+            BoolOp::Intersection,
+        ),
     ] {
         if entry(ui, boolean.is_none(), icons::button(icon, label))
             .on_disabled_hover_text(boolean.unwrap_or_default())
@@ -2139,7 +2164,7 @@ pub fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
         } else {
             keymap::shortcut_hint(&ws.keymap, Action::Fillet)
         };
-        if icons::source_entry_keys(ui, source, label, &keys, blend.is_none())
+        if icons::source_entry_keys(ui, source, &label, &keys, blend.is_none())
             .on_disabled_hover_text(blend.unwrap_or_default())
             .clicked()
         {
@@ -2153,9 +2178,9 @@ pub fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     if entry(
         ui,
         rolled_back,
-        icons::button(Icon::ToTimelineEnd, "Zum Ende der Zeitleiste"),
+        icons::button(Icon::ToTimelineEnd, tr!("menu-edit-to-end")),
     )
-    .on_disabled_hover_text("Es wird bereits die ganze Zeitleiste berechnet.")
+    .on_disabled_hover_text(tr!("menu-edit-to-end-disabled"))
     .clicked()
     {
         commands::timed("Zum Ende der Zeitleiste", || {
@@ -2176,29 +2201,35 @@ fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) -> b
             ui.close();
         }
     }
-    if entry(ui, true, icons::button(Icon::ViewIso, "Isometrisch")).clicked() {
+    if entry(ui, true, icons::button(Icon::ViewIso, tr!("menu-view-iso"))).clicked() {
         commands::timed("Isometrisch", || state.camera.set_iso_view());
         ui.close();
     }
     ui.separator();
-    if entry(ui, true, icons::button(Icon::FitAll, "Alles einpassen")).clicked() {
+    if entry(
+        ui,
+        true,
+        icons::button(Icon::FitAll, tr!("menu-view-fit-all")),
+    )
+    .clicked()
+    {
         commands::timed("Alles einpassen", || state.frame_all());
         ui.close();
     }
     ui.separator();
     let dark = state.dark;
     let (icon, label) = if dark {
-        (Icon::ThemeLight, "Helles Design")
+        (Icon::ThemeLight, tr!("menu-view-light"))
     } else {
-        (Icon::ThemeDark, "Dunkles Design")
+        (Icon::ThemeDark, tr!("menu-view-dark"))
     };
-    if entry(ui, true, icons::button(icon, label)).clicked() {
-        commands::timed(label, || ws.set_theme(!dark));
+    if entry(ui, true, icons::button(icon, label.as_str())).clicked() {
+        commands::timed(&label, || ws.set_theme(!dark));
         ui.close();
     }
     ui.separator();
     let keys = keymap::shortcut_hint(&ws.keymap, Action::ShowShortcuts);
-    if shortcut_button(ui, true, Icon::Keyboard, VIEW_SHORTCUTS_ENTRY, keys).clicked() {
+    if shortcut_button(ui, true, Icon::Keyboard, &view_shortcuts_entry(), keys).clicked() {
         shortcuts = true;
         ui.close();
     }
@@ -2211,12 +2242,12 @@ fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) -> b
 fn sketch_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     let state = &mut ws.active_tab_mut().state;
     for (label, plane) in [
-        ("Skizze auf XY-Ebene", StandardPlane::XY),
-        ("Skizze auf XZ-Ebene", StandardPlane::XZ),
-        ("Skizze auf YZ-Ebene", StandardPlane::YZ),
+        (tr!("menu-sketch-xy"), StandardPlane::XY),
+        (tr!("menu-sketch-xz"), StandardPlane::XZ),
+        (tr!("menu-sketch-yz"), StandardPlane::YZ),
     ] {
-        if entry(ui, true, icons::button(Icon::SketchOnPlane, label)).clicked() {
-            commands::timed(label, || {
+        if entry(ui, true, icons::button(Icon::SketchOnPlane, label.as_str())).clicked() {
+            commands::timed(&label, || {
                 if let Ok(id) = state.add_sketch(SketchPlane::Standard(plane)) {
                     let _ = state.open_sketch(id);
                 }
@@ -2237,7 +2268,7 @@ fn sketch_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     if entry(
         ui,
         blocked.is_none(),
-        icons::button(Icon::SketchOnFace, "Skizze auf gewählter Fläche"),
+        icons::button(Icon::SketchOnFace, tr!("menu-sketch-on-face")),
     )
     .on_disabled_hover_text(blocked.unwrap_or_default())
     .clicked()

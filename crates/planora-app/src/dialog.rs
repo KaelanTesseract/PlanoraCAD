@@ -7,9 +7,12 @@ use crate::icons::{self, Icon};
 use crate::shell::SHELL_INSET;
 use crate::theme::{self, SPACE_2};
 use egui::{Align, Align2, Layout};
+use planora_i18n::tr;
 
 /// Name des Schließen-Symbols (Tooltip und Bedienhilfe).
-pub const CLOSE_LABEL: &str = "Schließen";
+pub fn close_label() -> String {
+    tr!("dialog-close")
+}
 
 /// Größe des Schließen-Symbols in der Kopfzeile.
 const CLOSE_ICON_SIZE: f32 = 16.0;
@@ -289,12 +292,12 @@ fn header(ui: &mut egui::Ui, title: &str, closable: bool) -> bool {
                         CLOSE_ICON_SIZE,
                         egui::Color32::PLACEHOLDER,
                     )))
-                    .on_hover_text(CLOSE_LABEL);
+                    .on_hover_text(close_label());
                 // Der Knopf trägt nur ein Symbol aus der Symbolschrift; sein eigener Name wäre ein
                 // unlesbares Zeichen. Diese zweite Angabe ersetzt ihn durch „Schließen“ für
                 // Bildschirmleser.
                 response.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::WidgetType::Button, true, CLOSE_LABEL)
+                    egui::WidgetInfo::labeled(egui::WidgetType::Button, true, close_label())
                 });
                 theme::focus_ring(ui, &response);
                 close = response.clicked();

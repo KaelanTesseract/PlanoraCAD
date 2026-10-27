@@ -9,9 +9,9 @@ use eframe::App as _;
 use egui::epaint::Shape;
 use egui::{Event, FontFamily, Key, Modifiers, PointerButton, Pos2, Rect, Vec2, vec2};
 use planora_app::app::{
-    self, EXIT_WAIT, EXPORT_BUSY, MenuRequest, PROJECTS_ENTRY, PlanoraApp, SETTINGS_ENTRY,
+    self, EXIT_WAIT, MenuRequest, PlanoraApp, export_busy, projects_entry, settings_entry,
 };
-use planora_app::dialog::CLOSE_LABEL;
+use planora_app::dialog::close_label;
 use planora_app::export_dialog::{ExportDialog, ExportFormat};
 use planora_app::file_chooser::CHOOSE_FOLDER;
 use planora_app::icons::{self, Icon};
@@ -387,8 +387,8 @@ fn same_row(a: &Seen, b: &Seen) -> bool {
 
 #[test]
 fn the_file_menu_has_projects_with_ctrl_o_and_settings() {
-    assert_eq!(PROJECTS_ENTRY, "Projekte …");
-    assert_eq!(SETTINGS_ENTRY, "Einstellungen …");
+    assert_eq!(projects_entry(), "Projekte …");
+    assert_eq!(settings_entry(), "Einstellungen …");
     let ctx = egui::Context::default();
     ctx.set_fonts(fonts::definitions());
     theme::apply(&ctx, true);
@@ -409,7 +409,7 @@ fn the_file_menu_has_projects_with_ctrl_o_and_settings() {
         shot = Shot::of(&out);
         out.drop_without_applying_deltas();
     }
-    let projects = shot.all(PROJECTS_ENTRY)[0].clone();
+    let projects = shot.all(&projects_entry())[0].clone();
     let keys = shot.all("Strg+O")[0].clone();
     assert!(
         same_row(&projects, &keys),
@@ -417,7 +417,7 @@ fn the_file_menu_has_projects_with_ctrl_o_and_settings() {
     );
     assert!(keys.rect.left() > projects.rect.right());
     assert!(!shot.has("Öffnen …"), "kein Öffnen …: {}", shot.texts());
-    let settings = shot.all(SETTINGS_ENTRY)[0].clone();
+    let settings = shot.all(&settings_entry())[0].clone();
     // „Über PlanoraCAD“ steht im Menü „Hilfe“ (tests/feedback_dialog.rs).
     assert!(
         shot.all(about_dialog::TITLE).is_empty(),
@@ -440,8 +440,8 @@ fn the_file_menu_has_projects_with_ctrl_o_and_settings() {
 #[test]
 fn the_menu_bar_reports_projects_and_settings() {
     for (entry, want) in [
-        (PROJECTS_ENTRY, MenuRequest::Projects),
-        (SETTINGS_ENTRY, MenuRequest::Settings),
+        (projects_entry(), MenuRequest::Projects),
+        (settings_entry(), MenuRequest::Settings),
     ] {
         let ctx = egui::Context::default();
         ctx.set_fonts(fonts::definitions());
@@ -488,7 +488,7 @@ fn the_menu_bar_reports_projects_and_settings() {
         }
         let shot = run(vec![], &mut got);
         assert_eq!(got, MenuRequest::None, "Datei allein meldet nichts");
-        for ev in click(shot.all(entry)[0].rect.center()) {
+        for ev in click(shot.all(&entry)[0].rect.center()) {
             run(ev, &mut got);
         }
         run(vec![], &mut got);
@@ -577,12 +577,12 @@ fn settings_from_the_menu_open_without_way_back() {
     let mut rig = Rig::new(workspace());
     rig.ctrl(Key::O);
     assert!(rig.projects_open());
-    let shot = rig.menu("Datei", SETTINGS_ENTRY);
+    let shot = rig.menu("Datei", &settings_entry());
     assert!(rig.settings_open(), "Einstellungen offen");
     assert!(!rig.projects_open(), "Projekte schließt");
     assert!(shot.has(planora_app::settings_window::TITLE));
     let area = rig.settings_rect();
-    rig.click_in(CLOSE_LABEL, Some(area));
+    rig.click_in(&close_label(), Some(area));
     assert!(!rig.settings_open(), "Schließen schließt");
     assert!(!rig.projects_open(), "kein Rückweg aus dem Menü");
     rig.settle(3);
@@ -601,15 +601,15 @@ fn the_directory_button_goes_to_settings_and_back() {
     );
     assert!(!rig.projects_open(), "Projekte schließt dabei");
     let area = rig.settings_rect();
-    rig.click_in(CLOSE_LABEL, Some(area));
+    rig.click_in(&close_label(), Some(area));
     assert!(!rig.settings_open());
     assert!(rig.projects_open(), "Rückweg nach Projekte");
     // Der Rückweg gilt nur einmal: Projekte schließen, Einstellungen aus dem Menü, schließen.
     let shot = rig.settle(2);
     assert!(shot.has(planora_app::projects_window::TITLE));
-    rig.menu("Datei", SETTINGS_ENTRY);
+    rig.menu("Datei", &settings_entry());
     let area = rig.settings_rect();
-    rig.click_in(CLOSE_LABEL, Some(area));
+    rig.click_in(&close_label(), Some(area));
     assert!(!rig.projects_open(), "aus dem Menü kein Rückweg");
 }
 
@@ -620,7 +620,7 @@ fn a_favorite_added_in_the_settings_of_the_app_is_saved() {
     fs::create_dir_all(root.join("Teile")).unwrap();
     let cfg = ws.config_path.clone();
     let mut rig = Rig::new(ws);
-    rig.menu("Datei", SETTINGS_ENTRY);
+    rig.menu("Datei", &settings_entry());
     rig.click(CHANGE_DIRECTORY);
     // Rechtsklick auf den Ordner, dann „Zu Favoriten hinzufügen“.
     let shot = rig.pause();
@@ -635,7 +635,7 @@ fn a_favorite_added_in_the_settings_of_the_app_is_saved() {
         }]);
     }
     rig.settle(3);
-    rig.click(planora_app::places::ADD_FAVORITE);
+    rig.click(&planora_app::places::add_favorite_label());
     let disk = Config::read_from(&cfg).unwrap();
     assert_eq!(disk.favorites.len(), 1, "{disk:?}");
     assert_eq!(
@@ -695,7 +695,7 @@ fn change_directory_and_come_back(blocked: bool) {
         assert_eq!(message, None);
     }
     let area = rig.settings_rect();
-    rig.click_in(CLOSE_LABEL, Some(area));
+    rig.click_in(&close_label(), Some(area));
     assert!(rig.projects_open(), "Rückweg");
     let shot = rig.frames_until_tiles();
     assert_eq!(rig.tile_names(), ["B"]);
@@ -793,7 +793,7 @@ fn the_directory_cannot_be_changed_while_a_prompt_is_open() {
 
     // RV3: Einstellungen offen, Auswahl läuft; dann „Dokument gesperrt“ (Übernahme) als
     // Rückfrage: die Wahl ist gesperrt, bis die Rückfrage beantwortet ist.
-    rig.menu("Datei", SETTINGS_ENTRY);
+    rig.menu("Datei", &settings_entry());
     rig.click(CHANGE_DIRECTORY);
     rig.app
         .windows_mut()
@@ -867,7 +867,7 @@ fn the_settings_entry_is_disabled_while_a_prompt_is_open() {
         };
         run(vec![], &mut got);
         let shot = run(vec![], &mut got);
-        let at = shot.all(SETTINGS_ENTRY)[0].rect.center();
+        let at = shot.all(&settings_entry())[0].rect.center();
         let b = |pressed| Event::PointerButton {
             pos: at,
             button: PointerButton::Primary,
@@ -911,22 +911,22 @@ fn a_writing_export_explains_why_nothing_opens() {
     rig.settle(2);
     let shot = rig.ctrl(Key::O);
     assert!(!rig.projects_open());
-    assert_eq!(rig.state().message.as_deref(), Some(EXPORT_BUSY));
-    assert_eq!(EXPORT_BUSY, "Bitte erst den Export beenden.");
-    let shot = if shot.has(EXPORT_BUSY) {
+    assert_eq!(rig.state().message.as_deref(), Some(export_busy().as_str()));
+    assert_eq!(export_busy(), "Bitte erst den Export beenden.");
+    let shot = if shot.has(&export_busy()) {
         shot
     } else {
         rig.settle(2)
     };
     assert!(
-        shot.has(EXPORT_BUSY),
+        shot.has(&export_busy()),
         "in der Statuszeile: {}",
         shot.texts()
     );
     rig.state().message = None;
-    rig.menu("Datei", SETTINGS_ENTRY);
+    rig.menu("Datei", &settings_entry());
     assert!(!rig.settings_open());
-    assert_eq!(rig.state().message.as_deref(), Some(EXPORT_BUSY));
+    assert_eq!(rig.state().message.as_deref(), Some(export_busy().as_str()));
     rig.ws().active_tab_mut().export_dialog = None;
 }
 
@@ -997,7 +997,7 @@ fn opening_projects_closes_import_windows_but_never_a_writing_export() {
     );
     assert!(!rig.projects_open(), "Projekte bleibt zu");
     // Ebenso die Einstellungen aus dem Menü.
-    rig.menu("Datei", SETTINGS_ENTRY);
+    rig.menu("Datei", &settings_entry());
     assert!(!rig.settings_open(), "Einstellungen bleiben zu");
     rig.ws().active_tab_mut().export_dialog = None;
 }
@@ -1027,7 +1027,7 @@ fn a_file_window_of_the_active_tab_closes_projects_and_settings() {
             rig.ctrl(Key::O);
             assert!(rig.projects_open());
         } else {
-            rig.menu("Datei", SETTINGS_ENTRY);
+            rig.menu("Datei", &settings_entry());
             assert!(rig.settings_open());
         }
         rig.ws().activate(i);
@@ -1097,7 +1097,7 @@ fn save_as_points_to_the_projects_window() {
     // Der Rat führt zum Ziel: Abbrechen, dann Datei → Einstellungen ….
     rig.click("Abbrechen");
     assert!(rig.ws().prompt.is_none());
-    rig.menu("Datei", SETTINGS_ENTRY);
+    rig.menu("Datei", &settings_entry());
     assert!(rig.settings_open(), "Einstellungen öffnen");
 
     // Bibliothek ohne Projekt.
@@ -1209,7 +1209,7 @@ fn undo_is_blocked_while_the_settings_window_is_open() {
     let mut rig = Rig::new(workspace());
     rig.state().create_box(DVec3::splat(10.0)).unwrap();
     rig.settle(3);
-    rig.menu("Datei", SETTINGS_ENTRY);
+    rig.menu("Datei", &settings_entry());
     assert!(rig.settings_open());
     rig.ctrl(Key::Z);
     assert_eq!(bodies(&mut rig), 1, "Einstellungen offen: Strg+Z gesperrt");

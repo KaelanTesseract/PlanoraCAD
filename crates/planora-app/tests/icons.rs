@@ -359,7 +359,7 @@ fn blend_entries_use_chamfer_for_fase() {
     let entries = icons::blend_entries();
     assert_eq!(entries[0].0, "Verrunden …");
     assert_eq!(entries[1].0, "Fase …");
-    for (_, source, chamfer) in entries {
+    for (_, source, chamfer) in entries.iter().cloned() {
         assert_eq!(
             source,
             icons::IconSource::Feature(icons::FeatureIcon::for_blend(chamfer))

@@ -9,7 +9,7 @@ mod common;
 
 use eframe::App as _;
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, Vec2, vec2};
-use planora_app::app::{PlanoraApp, VIEW_SHORTCUTS_ENTRY, open_settings};
+use planora_app::app::{PlanoraApp, open_settings, view_shortcuts_entry};
 use planora_app::icons::{self, Icon};
 use planora_app::keymap::overview::*;
 use planora_app::keymap::{Action, Binding, KeyChord, Keymap, settings_ui, shortcut_hint};
@@ -200,7 +200,7 @@ impl Rig {
     /// Menü „Ansicht“ (der oberste Text „Ansicht“) → „Tastenkürzel …“.
     fn open_from_menu(&mut self) {
         self.open_view_menu();
-        self.click(VIEW_SHORTCUTS_ENTRY);
+        self.click(&view_shortcuts_entry());
     }
 
     fn open_view_menu(&mut self) {
@@ -275,15 +275,15 @@ fn chord(key: Key, ctrl: bool) -> Binding {
 fn view_menu_entry_opens_the_overview() {
     let mut r = rig();
     assert!(!r.is_open());
-    assert!(!r.sees(TITLE));
+    assert!(!r.sees(&title()));
     // Der Menüeintrag nennt die Taste aus der Belegung.
     assert_eq!(shortcut_hint(&r.ws().keymap, Action::ShowShortcuts), "S");
     r.open_view_menu();
-    assert!(r.sees(VIEW_SHORTCUTS_ENTRY), "{:?}", r.texts());
+    assert!(r.sees(&view_shortcuts_entry()), "{:?}", r.texts());
     assert!(r.sees("S"), "Taste im Menü: {:?}", r.texts());
-    r.click(VIEW_SHORTCUTS_ENTRY);
+    r.click(&view_shortcuts_entry());
     assert!(r.is_open());
-    assert!(r.sees(TITLE), "{:?}", r.texts());
+    assert!(r.sees(&title()), "{:?}", r.texts());
     assert!(r.search_has_focus(), "Suchfeld aktiv nach dem Menü");
     // Nach Bereich sortiert: Überall, Modell, Skizze, Zeichnung (je mit Überschrift).
     let km = r.ws().keymap.clone();
@@ -315,8 +315,8 @@ fn view_menu_entry_opens_the_overview() {
     r.set_filter("Maß");
     assert!(r.sees("D"), "{:?}", r.texts());
     assert!(top(&r, "Zeichnung") < top(&r, "Maß"));
-    assert!(r.sees(TO_SETTINGS));
-    r.click(TO_SETTINGS);
+    assert!(r.sees(&to_settings()));
+    r.click(&to_settings());
     assert!(
         !r.is_open(),
         "„In den Einstellungen ändern“ schließt die Übersicht"
@@ -363,7 +363,7 @@ fn s_opens_it_with_the_search_focused() {
     assert_eq!(r.ws().keymap, Keymap::defaults());
     r.app.windows_mut().2.open(false);
     r.settle();
-    let p = r.find_lowest(settings_ui::SEARCH_HINT);
+    let p = r.find_lowest(&settings_ui::search_hint());
     r.click_at(p);
     r.press(Key::S, NONE);
     assert!(!r.is_open(), "S tippt ins Suchfeld der Einstellungen");
@@ -377,7 +377,7 @@ fn search_finds_by_action_and_by_key_text_and_shows_empty_text() {
     r.set_filter("Extrudieren");
     assert!(r.sees("Skizze extrudieren"), "{:?}", r.texts());
     assert!(!r.sees("Speichern"));
-    assert!(!r.sees(NOTHING_FOUND));
+    assert!(!r.sees(&nothing_found()));
     r.set_filter("Strg+S");
     assert!(r.sees("Speichern"), "{:?}", r.texts());
     assert!(!r.sees("Skizze extrudieren"));
@@ -386,7 +386,7 @@ fn search_finds_by_action_and_by_key_text_and_shows_empty_text() {
     r.set_filter("E");
     assert!(r.sees("Skizze extrudieren"));
     r.set_filter("gibt es nicht");
-    assert!(r.sees(NOTHING_FOUND), "{:?}", r.texts());
+    assert!(r.sees(&nothing_found()), "{:?}", r.texts());
     assert!(!r.sees("Speichern"));
 }
 
@@ -421,14 +421,14 @@ fn shows_current_not_default_keys_after_a_change() {
     assert!(r.sees("Strg+K"), "{:?}", r.texts());
     assert!(!r.sees("Strg+S"));
     r.set_filter("Verrunden");
-    assert!(r.sees(UNBOUND), "ohne Belegung „–“: {:?}", r.texts());
+    assert!(r.sees(&unbound()), "ohne Belegung „–“: {:?}", r.texts());
     // Eine Änderung bei offenem Fenster zeigt es im nächsten Bild.
     let mut km = r.ws().keymap.clone();
     km.set(Action::Fillet, 0, chord(Key::G, false));
     r.ws().keymap = km;
     r.settle();
     assert!(r.sees("G"), "{:?}", r.texts());
-    assert!(!r.sees(UNBOUND));
+    assert!(!r.sees(&unbound()));
     // Eine geänderte Taste S öffnet nicht mehr, die neue schon.
     let mut km = r.ws().keymap.clone();
     km.set(Action::ShowShortcuts, 0, chord(Key::J, false));
@@ -448,7 +448,7 @@ fn view_menu_entry_shows_the_new_key_after_rebinding() {
     km.set(Action::ShowShortcuts, 0, chord(Key::J, false));
     r.ws().keymap = km;
     r.open_view_menu();
-    assert!(r.sees(VIEW_SHORTCUTS_ENTRY), "{:?}", r.texts());
+    assert!(r.sees(&view_shortcuts_entry()), "{:?}", r.texts());
     assert!(r.sees("J"), "neue Taste im Menü: {:?}", r.texts());
     assert!(!r.sees("S"), "alte Taste weg: {:?}", r.texts());
 }
@@ -473,7 +473,7 @@ fn overview_follows_window_exclusion_rules() {
     // Fenster, S noch einmal tut nichts.
     r.ov().open = true;
     r.settle();
-    assert!(r.sees(TITLE));
+    assert!(r.sees(&title()));
     assert!(!r.search_has_focus());
     r.press(Key::V, NONE);
     assert_eq!(r.info(), None, "V gesperrt bei offener Übersicht");

@@ -184,12 +184,7 @@ impl Bar {
 
 /// Zeichnet die Leiste in `rect`. `lock` (offene Rückfrage, alte Version; wie beim Befehlsfeld)
 /// sperrt alle Bedienelemente und hält das Abspielen an; beim Überfahren steht der Grund.
-pub fn show_with(
-    ctx: &egui::Context,
-    state: &mut AppState,
-    rect: Rect,
-    lock: Option<&'static str>,
-) {
+pub fn show_with(ctx: &egui::Context, state: &mut AppState, rect: Rect, lock: Option<&str>) {
     let dark = state.dark;
     let instance = state.instance;
     let bar = state.history_body().map(|tip| Bar {
@@ -255,7 +250,7 @@ pub fn show_with(
 /// ob es gerade abspielt, Sperrgrund.
 fn playback(
     ui: &mut egui::Ui,
-    (bar, playing, lock): (Option<&Bar>, bool, Option<&'static str>),
+    (bar, playing, lock): (Option<&Bar>, bool, Option<&str>),
     out: &mut BarRects,
     action: &mut Option<Action>,
 ) {
@@ -789,7 +784,7 @@ fn run(ctx: &egui::Context, state: &mut AppState, bar: &Bar, action: Action) {
 /// Abspielen: alle [`PLAY_INTERVAL`] Sekunden ein Schritt vor; hält am Ende (bei
 /// [`reachable_end`]), bei einem Fehler, einem anderen Körper oder Tab oder einer Sperre an. Nur
 /// solange es läuft, wird ein neues Bild angefordert.
-fn tick(ctx: &egui::Context, state: &mut AppState, lock: Option<&'static str>) {
+fn tick(ctx: &egui::Context, state: &mut AppState, lock: Option<&str>) {
     let Some(Playing {
         instance,
         tip,
