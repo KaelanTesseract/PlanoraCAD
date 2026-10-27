@@ -568,7 +568,7 @@ pub struct Workspace {
     /// `panel_transparency_pending`).
     pub keys_pending: bool,
     /// Die Update-Felder in `config` (Kanal, Prüfen beim Start, letzte Prüfung, übersprungene
-    /// Version, begonnenes Update) konnten noch nicht gespeichert werden; sie werden beim
+    /// Version, begonnenes Update, ausführliches Protokoll) konnten noch nicht gespeichert werden; sie werden beim
     /// nächsten gelungenen Schreiben der Konfiguration alle mit geschrieben (wie
     /// `keys_pending`).
     pub update_settings_pending: bool,
@@ -1524,6 +1524,20 @@ impl Workspace {
         self.save_update_field(|u, c| c.update_pending = u.pending)
     }
 
+    /// Ausführliches Protokoll an (Einstellungen → Hilfe)?
+    pub fn verbose_log(&self) -> bool {
+        self.config.verbose_log
+    }
+
+    /// Schaltet das ausführliche Protokoll; es wirkt sofort ([`crate::diag::set_verbose`]) und
+    /// wird gespeichert wie ein Update-Feld (misslingt das, gilt es für die Sitzung und kommt
+    /// beim nächsten gelungenen Schreiben mit). `true`, wenn geschrieben wurde.
+    pub fn set_verbose_log(&mut self, on: bool) -> bool {
+        self.config.verbose_log = on;
+        crate::diag::set_verbose(on);
+        self.save_update_field(|u, c| c.verbose_log = u.verbose)
+    }
+
     /// Das Fenster des begonnenen Updates, falls gemerkt.
     pub fn pending_window(&self) -> Option<WindowState> {
         self.config.update_pending.as_ref()?.window
@@ -1731,6 +1745,9 @@ struct UpdateSettings {
     last_check: Option<u64>,
     skipped: Option<String>,
     pending: Option<PendingUpdate>,
+    /// Ausführliches Protokoll (Einstellungen → Hilfe); fährt hier mit, damit es auf allen
+    /// Schreibwegen mitgeht wie die Update-Felder.
+    verbose: bool,
 }
 
 impl UpdateSettings {
@@ -1741,6 +1758,7 @@ impl UpdateSettings {
             last_check: c.last_update_check,
             skipped: c.skipped_version.clone(),
             pending: c.update_pending.clone(),
+            verbose: c.verbose_log,
         }
     }
 
@@ -1751,6 +1769,7 @@ impl UpdateSettings {
         c.last_update_check = self.last_check;
         c.skipped_version = self.skipped;
         c.update_pending = self.pending;
+        c.verbose_log = self.verbose;
     }
 }
 

@@ -341,6 +341,9 @@ impl PlanoraApp {
     }
 
     fn with_workspace(ws: Workspace, update_source: Arc<dyn ReleaseSource + Send + Sync>) -> Self {
+        // Der gespeicherte Schalter „Ausführliches Protokoll“ gilt ab dem Start (Umschalten:
+        // `Workspace::set_verbose_log`).
+        crate::diag::set_verbose(ws.verbose_log());
         Self {
             ws,
             shell: ShellState::default(),

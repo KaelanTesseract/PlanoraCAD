@@ -105,6 +105,15 @@ pub struct Config {
         deserialize_with = "lenient_theme"
     )]
     pub theme: Option<String>,
+    /// Ausführliches Protokoll (Einstellungen → Hilfe): mehr Zeilen in der Protokolldatei, etwa
+    /// jeder Befehl mit Dauer. Voreinstellung aus; nur „an“ wird geschrieben. Kein
+    /// Wahrheitswert → aus.
+    #[serde(
+        default,
+        skip_serializing_if = "is_false",
+        deserialize_with = "lenient_bool_false"
+    )]
+    pub verbose_log: bool,
 }
 
 /// Voreinstellung des Update-Kanals (Kennung).
@@ -212,6 +221,7 @@ impl Default for Config {
             skipped_version: None,
             update_pending: None,
             theme: None,
+            verbose_log: false,
         }
     }
 }
@@ -230,6 +240,17 @@ fn default_true() -> bool {
 
 fn is_true(b: &bool) -> bool {
     *b
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+/// Liest einen Schalter mit Voreinstellung „aus“ aus jedem JSON-Wert: kein Wahrheitswert → aus.
+fn lenient_bool_false<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<bool, D::Error> {
+    Ok(serde_json::Value::deserialize(d)?
+        .as_bool()
+        .unwrap_or(false))
 }
 
 /// Liest `update_channel` aus jedem JSON-Wert: nur eine bekannte Kennung in genauer

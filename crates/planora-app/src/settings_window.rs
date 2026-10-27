@@ -58,6 +58,12 @@ pub const NEVER_CHECKED: &str = "noch nie";
 /// Warnung, wenn eine Update-Einstellung gilt, aber nicht gespeichert werden konnte.
 pub const UPDATES_NOT_SAVED: &str =
     "Die Update-Einstellung gilt nur bis zum Programmende: sie konnte nicht gespeichert werden.";
+pub const SECTION_HELP: &str = "Hilfe";
+pub const VERBOSE_LABEL: &str = "Ausführliches Protokoll";
+/// Hinweis unter dem Schalter [`VERBOSE_LABEL`].
+pub const VERBOSE_NOTE: &str = "Schreibt mehr in die Protokolldatei auf deinem Rechner, zum Beispiel jeden Befehl und wie lange er dauert. Gesendet wird davon nichts.";
+/// Warnung, wenn der Schalter gilt, aber nicht gespeichert werden konnte.
+pub const VERBOSE_NOT_SAVED: &str = "Das ausführliche Protokoll gilt nur bis zum Programmende: die Einstellung konnte nicht gespeichert werden.";
 pub const SECTION_PROJECTS: &str = "Projekte";
 pub const DIRECTORY_LABEL: &str = "Projektverzeichnis";
 pub const CHANGE_DIRECTORY: &str = "Projektverzeichnis ändern …";
@@ -234,6 +240,8 @@ pub struct SettingsWindow {
     appearance_message: Option<RootMessage>,
     /// Hinweis im Abschnitt „Updates“ (nur [`UPDATES_NOT_SAVED`]).
     updates_message: Option<RootMessage>,
+    /// Hinweis im Abschnitt „Hilfe“ (nur [`VERBOSE_NOT_SAVED`]).
+    help_message: Option<RootMessage>,
     /// Zustand der Suche über den Knopf [`CHECK_NOW`].
     check_hint: Option<CheckHint>,
     /// Das Ergebnis in `check_hint` war schon einmal im offenen Fenster zu sehen (erst dann
@@ -263,6 +271,7 @@ impl SettingsWindow {
         self.message = None;
         self.appearance_message = None;
         self.updates_message = None;
+        self.help_message = None;
         // Eine noch laufende Suche bleibt sichtbar, ebenso ein Ergebnis, das noch nie zu sehen war
         // (das Fenster ging zu, während die Suche lief); ein schon gezeigtes Ergebnis nicht.
         if self.check_hint_shown && self.check_hint != Some(CheckHint::Running) {
@@ -320,6 +329,11 @@ impl SettingsWindow {
     /// Hinweis des Abschnitts „Updates“ (Speichern fehlgeschlagen).
     pub fn updates_message(&self) -> Option<&RootMessage> {
         self.updates_message.as_ref()
+    }
+
+    /// Hinweis des Abschnitts „Hilfe“ (Speichern fehlgeschlagen).
+    pub fn help_message(&self) -> Option<&RootMessage> {
+        self.help_message.as_ref()
     }
 
     /// Zustand der Suche über den Knopf [`CHECK_NOW`].
@@ -406,6 +420,8 @@ impl SettingsWindow {
         let message = self.message.clone();
         let appearance_message = self.appearance_message.clone();
         let updates_message = self.updates_message.clone();
+        let help_message = self.help_message.clone();
+        let mut verbose = ws.verbose_log();
         let check_hint = self.check_hint.clone();
         self.check_hint_shown = true;
         let mut check_now = false;
@@ -460,6 +476,8 @@ impl SettingsWindow {
                             },
                             updates_message.as_ref(),
                         );
+                        ui.add_space(theme::SPACE_4);
+                        show_help(ui, &mut verbose, help_message.as_ref());
                         ui.add_space(theme::SPACE_4);
                         theme::section_header(ui, SECTION_PROJECTS, theme::SUB_HEADER_H);
                         ui.add_space(theme::SPACE_2);
@@ -520,6 +538,10 @@ impl SettingsWindow {
         if !locked && check_on_start != ws.update_check_enabled() {
             let written = ws.set_update_check(check_on_start);
             self.note_updates_saved(written);
+        }
+        if !locked && verbose != ws.verbose_log() {
+            let written = ws.set_verbose_log(verbose);
+            self.help_message = (!written).then(|| RootMessage::Warning(VERBOSE_NOT_SAVED.into()));
         }
         for action in [body_action, footer_action] {
             let target = match action {
@@ -637,6 +659,20 @@ fn show_updates(
             *unskip = r.clicked();
         });
     }
+    if let Some(m) = message {
+        ui.colored_label(m.color(dark), m.text());
+    }
+}
+
+/// Abschnitt „Hilfe“: Schalter [`VERBOSE_LABEL`], darunter der Hinweis [`VERBOSE_NOTE`] und bei
+/// einem Schreibfehler [`VERBOSE_NOT_SAVED`].
+fn show_help(ui: &mut egui::Ui, verbose: &mut bool, message: Option<&RootMessage>) {
+    let dark = ui.visuals().dark_mode;
+    theme::section_header(ui, SECTION_HELP, theme::SUB_HEADER_H);
+    ui.add_space(theme::SPACE_2);
+    let r = ui.checkbox(verbose, VERBOSE_LABEL);
+    theme::focus_ring(ui, &r);
+    ui.add(egui::Label::new(egui::RichText::new(VERBOSE_NOTE).weak()).wrap());
     if let Some(m) = message {
         ui.colored_label(m.color(dark), m.text());
     }

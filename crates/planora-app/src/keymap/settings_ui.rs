@@ -67,14 +67,14 @@ pub const TABLE_MIN_H: f32 = 120.0;
 /// Größte Höhe der Tabelle; darüber rollt sie im Fenster.
 pub const TABLE_MAX_H: f32 = 800.0;
 /// Was neben der Tabelle Platz braucht: die übrigen Abschnitte des Einstellungsfensters mit Kopf
-/// und Fußzeile (rund 630 Pixel) und je rund 75 Pixel frei darüber und darunter. Das Fenster
-/// steht mittig, lässt so die Menüleiste (rund 50 Pixel) frei, auch mit einer zusätzlichen
-/// Hinweiszeile.
-pub const TABLE_RESERVED_H: f32 = 780.0;
+/// und Fußzeile (rund 735 Pixel, davon rund 105 für „Hilfe“) und je rund 75 Pixel frei darüber
+/// und darunter. Das Fenster steht mittig, lässt so die Menüleiste (rund 50 Pixel) frei, auch
+/// mit einer zusätzlichen Hinweiszeile.
+pub const TABLE_RESERVED_H: f32 = 885.0;
 
 /// Höhe der Tabelle im Fenster der Höhe `content_h`: was neben den übrigen Abschnitten frei ist
 /// ([`TABLE_RESERVED_H`]), zwischen [`TABLE_MIN_H`] und [`TABLE_MAX_H`]. Bei 1920 × 1080 sind
-/// das 300 Pixel; größere Fenster zeigen mehr Zeilen.
+/// das 195 Pixel; größere Fenster zeigen mehr Zeilen.
 pub fn table_max_height(content_h: f32) -> f32 {
     (content_h - TABLE_RESERVED_H).clamp(TABLE_MIN_H, TABLE_MAX_H)
 }

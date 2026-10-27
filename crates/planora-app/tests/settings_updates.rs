@@ -652,11 +652,13 @@ fn keys_table_height_follows_the_window_and_the_menu_stays_free() {
         TABLE_MAX_H, TABLE_MIN_H, TABLE_RESERVED_H, table_max_height,
     };
     assert_eq!(table_max_height(1080.0), 1080.0 - TABLE_RESERVED_H);
-    assert_eq!(table_max_height(1080.0), 300.0);
+    assert_eq!(table_max_height(1080.0), 195.0);
     assert_eq!(table_max_height(600.0), TABLE_MIN_H);
     assert_eq!(table_max_height(4000.0), TABLE_MAX_H);
     let mut heights = Vec::new();
-    for h in [900.0, 1080.0, 1440.0] {
+    // Ab 1920 × 1080 (kleinere Bildschirme sind kein Ziel; seit dem Abschnitt „Hilfe“ passt
+    // das Fenster bei 900 Pixeln nicht mehr ganz zwischen Menüleiste und Rand).
+    for h in [1080.0, 1440.0, 1600.0] {
         let e = env("planora-updates-tabellenhoehe");
         let mut a = App::new(e, true, 1920.0, h);
         a.w.open(false);

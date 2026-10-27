@@ -87,7 +87,21 @@ impl LastCommand {
 /// „Rückmeldung geben“ öffnen ein Fenster der App und kommen als [`MenuRequest`] zurück. Die
 /// Befehle des Modells tun in alten Versionen nichts (dort sind Menü und Befehlsfeld gesperrt);
 /// die Übersicht der Tastenkürzel ändert nichts und öffnet auch dort.
+///
+/// Im ausführlichen Protokoll ([`crate::diag::detail`]) steht danach eine Zeile mit dem festen
+/// Namen der Aktion und der Dauer (`Befehl Rückgängig: 3 ms`), nie Projektinhalt.
 pub fn run_action(ws: &mut Workspace, a: Action) -> MenuRequest {
+    let start = std::time::Instant::now();
+    let request = run_action_inner(ws, a);
+    crate::diag::detail(&format!(
+        "Befehl {}: {} ms",
+        a.label(),
+        start.elapsed().as_millis()
+    ));
+    request
+}
+
+fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
     if a.area() == Area::Model && a != Action::ShowShortcuts && ws.active_tab().read_only {
         return MenuRequest::None;
     }
