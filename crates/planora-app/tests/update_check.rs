@@ -19,7 +19,7 @@ use planora_app::{fonts, theme};
 use planora_project::config::Config;
 use planora_project::library::Library;
 use planora_update::check::{CheckOutcome, NetError, ReleaseSource};
-use planora_update::{Channel, EXE_NAME, REPO, SHA256_NAME, Version};
+use planora_update::{Channel, SETUP_NAME, REPO, SHA256_NAME, Version};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -47,7 +47,7 @@ fn newer_list() -> String {
     Value::Array(vec![json!({
         "tag_name": tag,
         "body": "Neu",
-        "assets": [asset(EXE_NAME), asset(SHA256_NAME)],
+        "assets": [asset(SETUP_NAME), asset(SHA256_NAME)],
     })])
     .to_string()
 }

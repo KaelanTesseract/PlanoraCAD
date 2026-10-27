@@ -1,11 +1,11 @@
-//! Update einspielen ohne Oberfläche: herunterladen ([`Downloader`], Kopierschleife
-//! [`copy_limited`] mit Größen-, Stillstands- und Abbruchgrenze), die Prüfsumme prüfen
-//! ([`verify_sha256`]), die Programmdatei austauschen ([`swap`]) und zurücklegen ([`rollback`]).
+//! Download und Prüfung des Installers ohne Oberfläche: herunterladen ([`Downloader`],
+//! Kopierschleife [`copy_limited`] mit Größen-, Stillstands- und Abbruchgrenze) und die
+//! Prüfsumme prüfen ([`verify_sha256`], [`file_matches_sha256`]).
 //!
-//! Alle Dateien liegen neben der laufenden exe ([`Paths`]); der Download geht nur nach
-//! `<exe>.new`. Ausgetauscht wird erst, wenn die Prüfsumme stimmt (das prüft der Aufrufer mit
-//! [`verify_sha256`] vor [`swap`]). Nur [`HttpDownloader`] geht ins Netz; Tests benutzen
-//! Nachbildungen und Temp-Ordner.
+//! Installer und Prüfsummen-Datei liegen in einem eigenen Ordner ([`DownloadPaths`], angelegt mit
+//! [`prepare_dir`], verworfen mit [`discard_download`]). Ausgetauscht wird hier nichts: die
+//! Installation übernimmt der Installer, den der Aufrufer erst startet, wenn die Prüfsumme
+//! stimmt. Nur [`HttpDownloader`] geht ins Netz; Tests benutzen Nachbildungen und Temp-Ordner.
 
 use std::fs::File;
 use std::io::{self, Read, Write};
@@ -13,18 +13,15 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use crate::release::REPO;
+use crate::release::{REPO, SETUP_NAME, SHA256_NAME};
 use crate::sha256::Sha256;
 
 pub use crate::net::HttpDownloader;
 
-/// Name der Datei, die eine neu gestartete Version neben die exe legt, sobald sie läuft.
-pub const OK_MARKER_NAME: &str = "planoracad.update-ok";
-
 /// Kommen so lange keine Daten, bricht der Download ab.
 pub const STALL_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Größte Programmdatei, die je geladen wird (200 MB), unabhängig von der Angabe im Release.
+/// Größte Datei, die je geladen wird (200 MB), unabhängig von der Angabe im Release.
 pub const MAX_DOWNLOAD_BYTES: u64 = 200 * 1024 * 1024;
 
 /// So viel darf eine Datei größer sein als im Release angegeben.
@@ -51,9 +48,7 @@ pub enum InstallError {
     TooLarge,
     /// Die Prüfsumme passt nicht oder die Prüfsummen-Datei ist unlesbar.
     Checksum,
-    /// Der Ordner der exe ist nicht beschreibbar.
-    NotWritable,
-    /// Lesen, Schreiben, Umbenennen gescheitert.
+    /// Ordner anlegen, Lesen oder Schreiben gescheitert.
     Io(String),
 }
 
@@ -66,19 +61,15 @@ impl InstallError {
                 "Die neue Version ließ sich nicht herunterladen ({detail}). Bitte später noch einmal versuchen."
             ),
             InstallError::TooLarge => {
-                "Die heruntergeladene Datei ist größer als erwartet. Es wurde nichts ausgetauscht."
+                "Die heruntergeladene Datei ist größer als erwartet. Es wurde nichts installiert."
                     .into()
             }
             InstallError::Checksum => {
-                "Die heruntergeladene Datei ist beschädigt (die Prüfsumme stimmt nicht). Es wurde nichts ausgetauscht."
-                    .into()
-            }
-            InstallError::NotWritable => {
-                "Das Programm liegt in einem geschützten Ordner. Lade die neue Version von GitHub herunter."
+                "Die heruntergeladene Datei ist beschädigt (die Prüfsumme stimmt nicht). Es wurde nichts installiert."
                     .into()
             }
             InstallError::Io(detail) => format!(
-                "Das Update ließ sich nicht einspielen ({detail}). Das Programm läuft in der bisherigen Version weiter."
+                "Das Update ließ sich nicht vorbereiten ({detail}). Das Programm läuft in der bisherigen Version weiter."
             ),
         }
     }
@@ -337,7 +328,8 @@ pub fn verify_sha256(
 }
 
 /// Stimmt die Prüfsumme von `file` mit `expected_hex` überein (Groß-/Kleinschreibung egal)?
-/// Sonst [`InstallError::Checksum`]. Für die zweite Prüfung unmittelbar vor dem Austausch.
+/// Sonst [`InstallError::Checksum`]. Für die zweite Prüfung unmittelbar vor dem Start des
+/// Installers.
 pub fn file_matches_sha256(file: &Path, expected_hex: &str) -> Result<(), InstallError> {
     let actual = file_sha256(file)?;
     if actual.eq_ignore_ascii_case(expected_hex) {
@@ -386,129 +378,38 @@ fn file_sha256(file: &Path) -> Result<String, InstallError> {
     Ok(h.hex())
 }
 
-/// Dateien eines Updates neben der laufenden exe.
+/// Dateien eines Downloads in einem eigenen Ordner.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Paths {
-    /// Die laufende Programmdatei.
-    pub running_exe: PathBuf,
-    /// Download: `<exe>.new`.
-    pub new_exe: PathBuf,
-    /// Sicherung der bisherigen Datei: `<exe>.old`.
-    pub old_exe: PathBuf,
-    /// [`OK_MARKER_NAME`] im Ordner der exe.
-    pub ok_marker: PathBuf,
+pub struct DownloadPaths {
+    /// Der Ordner des Downloads.
+    pub dir: PathBuf,
+    /// Der Installer: `dir/`[`SETUP_NAME`].
+    pub setup: PathBuf,
+    /// Die Prüfsummen-Datei: `dir/`[`SHA256_NAME`].
+    pub checksum: PathBuf,
 }
 
-impl Paths {
-    /// Die Pfade zur Programmdatei `exe`.
-    pub fn for_exe(exe: &Path) -> Paths {
-        let with = |ext: &str| {
-            let mut s = exe.as_os_str().to_owned();
-            s.push(ext);
-            PathBuf::from(s)
-        };
-        let dir = exe.parent().unwrap_or(Path::new("."));
-        Paths {
-            running_exe: exe.to_path_buf(),
-            new_exe: with(".new"),
-            old_exe: with(".old"),
-            ok_marker: dir.join(OK_MARKER_NAME),
+impl DownloadPaths {
+    /// Die Pfade im Ordner `dir`.
+    pub fn in_dir(dir: &Path) -> DownloadPaths {
+        DownloadPaths {
+            dir: dir.to_path_buf(),
+            setup: dir.join(SETUP_NAME),
+            checksum: dir.join(SHA256_NAME),
         }
     }
-
-    /// Geladene Prüfsummen-Datei: `<exe>.new.sha256` (nur kurz, bis sie gelesen ist).
-    pub fn checksum_file(&self) -> PathBuf {
-        let mut s = self.new_exe.as_os_str().to_owned();
-        s.push(".sha256");
-        PathBuf::from(s)
-    }
-
-    /// Ordner der exe.
-    pub fn dir(&self) -> &Path {
-        self.running_exe.parent().unwrap_or(Path::new("."))
-    }
 }
 
-/// Ergebnis eines gelungenen Austauschs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SwapState {
-    /// Ein `.old` eines früheren Updates lag noch da und wurde vorher gelöscht.
-    pub stale_old_removed: bool,
+/// Legt den Ordner des Downloads an (auch übergeordnete Ordner).
+pub fn prepare_dir(paths: &DownloadPaths) -> Result<(), InstallError> {
+    std::fs::create_dir_all(&paths.dir).map_err(|e| io_err("Ordner anlegen", &e))
 }
 
-/// Tauscht aus: die laufende exe wird zu `.old` (Windows erlaubt das Umbenennen einer laufenden
-/// Datei), dann `.new` an ihren Platz. Scheitert der zweite Schritt, wird `.old` zurückbenannt;
-/// danach ist alles wie vorher. Ein `.old` aus einem früheren Update wird vorher gelöscht; geht
-/// das nicht, wird nichts verändert.
-pub fn swap(paths: &Paths) -> Result<SwapState, InstallError> {
-    let stale_old_removed = paths.old_exe.exists();
-    if stale_old_removed {
-        std::fs::remove_file(&paths.old_exe).map_err(|e| io_err("alte Sicherung löschen", &e))?;
-    }
-    std::fs::rename(&paths.running_exe, &paths.old_exe)
-        .map_err(|e| io_err("Programmdatei beiseitelegen", &e))?;
-    if let Err(e) = std::fs::rename(&paths.new_exe, &paths.running_exe) {
-        let detail = match std::fs::rename(&paths.old_exe, &paths.running_exe) {
-            Ok(()) => format!("neue Programmdatei einsetzen: {e}"),
-            Err(back) => format!(
-                "neue Programmdatei einsetzen: {e}; Zurücklegen gescheitert: {back} (die bisherige Datei liegt als {})",
-                paths.old_exe.display()
-            ),
-        };
-        return Err(InstallError::Io(detail));
-    }
-    Ok(SwapState { stale_old_removed })
-}
-
-/// Legt den alten Stand zurück: die neue exe wird wieder zu `.new` (und dann, wenn möglich,
-/// gelöscht), `.old` kommt an ihren Platz. Ohne `.old` geschieht nichts (Fehler).
-pub fn rollback(paths: &Paths) -> Result<(), InstallError> {
-    if !paths.old_exe.is_file() {
-        return Err(InstallError::Io(
-            "keine Sicherung der bisherigen Version".into(),
-        ));
-    }
-    if paths.running_exe.exists() {
-        if paths.new_exe.exists() {
-            std::fs::remove_file(&paths.new_exe).map_err(|e| io_err("Download löschen", &e))?;
-        }
-        std::fs::rename(&paths.running_exe, &paths.new_exe)
-            .map_err(|e| io_err("neue Programmdatei beiseitelegen", &e))?;
-    }
-    if let Err(e) = std::fs::rename(&paths.old_exe, &paths.running_exe) {
-        // Die neue Datei wieder einsetzen, damit es überhaupt eine Programmdatei gibt.
-        let _ = std::fs::rename(&paths.new_exe, &paths.running_exe);
-        return Err(io_err("bisherige Programmdatei zurücklegen", &e));
-    }
-    // Läuft die neue Version noch, lässt sie sich nicht löschen; dann bleibt sie als `.new`.
-    let _ = std::fs::remove_file(&paths.new_exe);
-    Ok(())
-}
-
-/// Löscht `.old` eines früheren Updates; Fehler (etwa weil die alte Version noch läuft) werden
-/// übergangen, beim nächsten Start geht es wieder.
-pub fn cleanup_old(paths: &Paths) {
-    let _ = std::fs::remove_file(&paths.old_exe);
-}
-
-/// Verwirft einen Download (`.new` und die Prüfsummen-Datei); Fehler werden übergangen.
-pub fn discard_download(paths: &Paths) {
-    let _ = std::fs::remove_file(&paths.new_exe);
-    let _ = std::fs::remove_file(paths.checksum_file());
-}
-
-/// Lassen sich im Ordner `dir` Dateien anlegen und löschen? Probiert es mit einer kurzen
-/// Probedatei aus (ein Ordner unter „Programme“ ist ohne Administratorrechte nicht beschreibbar).
-pub fn exe_dir_writable(dir: &Path) -> bool {
-    if !dir.is_dir() {
-        return false;
-    }
-    let probe = dir.join(format!(".planoracad-probe-{}", std::process::id()));
-    let created = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&probe)
-        .and_then(|mut f| f.write_all(b"x"));
-    let removed = std::fs::remove_file(&probe);
-    created.is_ok() && removed.is_ok()
+/// Verwirft einen Download: Installer und Prüfsummen-Datei, danach den Ordner, aber nur, wenn
+/// er leer ist. Fehler werden übergangen.
+pub fn discard_download(paths: &DownloadPaths) {
+    let _ = std::fs::remove_file(&paths.setup);
+    let _ = std::fs::remove_file(&paths.checksum);
+    // `remove_dir` löscht nur leere Ordner; fremde Dateien bleiben samt Ordner.
+    let _ = std::fs::remove_dir(&paths.dir);
 }

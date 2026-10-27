@@ -1,6 +1,6 @@
 //! Echter Netzweg gegen eine lokale Test-Quelle (nur mit dem Schalter `update-test-source` und
 //! nur unter Windows, wo `ureq` mitgebaut wird): ein kleiner HTTP-Server auf 127.0.0.1 im Test
-//! liefert Release-Liste, Programmdatei und Prüfsumme; [`HttpSource`] und [`HttpDownloader`]
+//! liefert Release-Liste, Installer und Prüfsumme; [`HttpSource`] und [`HttpDownloader`]
 //! laufen dagegen wie im Programm. Ausführen mit
 //! `cargo test -p planora-update --features update-test-source`.
 
@@ -16,9 +16,9 @@ use planora_update::install::{
     verify_sha256,
 };
 use planora_update::sha256::hex_digest;
-use planora_update::{EXE_NAME, SHA256_NAME, Version, parse_releases};
+use planora_update::{SETUP_NAME, SHA256_NAME, Version, parse_releases};
 
-const EXE: &[u8] = b"lokale Testversion der Programmdatei";
+const SETUP: &[u8] = b"lokale Testversion des Installers";
 const TAG: &str = "v9.0.0-dev.1";
 
 /// Antworten nach Pfad: `(Status, Kopfzeilen, Inhalt)`.
@@ -36,20 +36,20 @@ fn answer(path: &str, port: u16) -> (u16, Vec<(String, String)>, Vec<u8>) {
             let body = serde_json::json!([{
                 "tag_name": TAG,
                 "body": "- Lokal",
-                "assets": [asset(EXE_NAME, EXE.len()), asset(SHA256_NAME, 100)],
+                "assets": [asset(SETUP_NAME, SETUP.len()), asset(SHA256_NAME, 100)],
             }])
             .to_string();
             (200, vec![], body.into_bytes())
         }
-        p if p == format!("/dl/{TAG}/{EXE_NAME}") => (200, vec![], EXE.to_vec()),
+        p if p == format!("/dl/{TAG}/{SETUP_NAME}") => (200, vec![], SETUP.to_vec()),
         p if p == format!("/dl/{TAG}/{SHA256_NAME}") => (
             200,
             vec![],
-            format!("{}  {EXE_NAME}\n", hex_digest(EXE)).into_bytes(),
+            format!("{}  {SETUP_NAME}\n", hex_digest(SETUP)).into_bytes(),
         ),
         "/umleitung" => (
             302,
-            vec![("Location".into(), format!("/dl/{TAG}/{EXE_NAME}"))],
+            vec![("Location".into(), format!("/dl/{TAG}/{SETUP_NAME}"))],
             vec![],
         ),
         "/fremd" => (
@@ -123,7 +123,7 @@ fn list_download_and_checksum_through_the_real_http_code() {
     let releases = parse_releases(&json).unwrap();
     assert_eq!(releases.len(), 1, "lokale Adressen werden angenommen");
     let release = &releases[0];
-    assert!(release_url_ok(&release.exe.url));
+    assert!(release_url_ok(&release.setup.url));
     assert!(release_url_ok(&release.sha256.url));
 
     let dir = temp("laden");
@@ -131,22 +131,22 @@ fn list_download_and_checksum_through_the_real_http_code() {
     let sha = dir.join("x.sha256");
     d.download(&release.sha256.url, &sha, 4096, &mut |_, _| true)
         .unwrap();
-    let new = dir.join("planoracad.exe.new");
+    let new = dir.join(SETUP_NAME);
     let mut last = 0;
     d.download(
-        &release.exe.url,
+        &release.setup.url,
         &new,
-        download_limit(release.exe.size).unwrap(),
+        download_limit(release.setup.size).unwrap(),
         &mut |done, _| {
             last = done;
             true
         },
     )
     .unwrap();
-    assert_eq!(last, EXE.len() as u64);
-    assert_eq!(std::fs::read(&new).unwrap(), EXE);
+    assert_eq!(last, SETUP.len() as u64);
+    assert_eq!(std::fs::read(&new).unwrap(), SETUP);
     let text = std::fs::read_to_string(&sha).unwrap();
-    assert_eq!(verify_sha256(&new, &text, EXE_NAME), Ok(()));
+    assert_eq!(verify_sha256(&new, &text, SETUP_NAME), Ok(()));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -165,7 +165,7 @@ fn local_redirects_stay_local() {
         &mut |_, _| true,
     )
     .unwrap();
-    assert_eq!(std::fs::read(&dest).unwrap(), EXE);
+    assert_eq!(std::fs::read(&dest).unwrap(), SETUP);
     // Zu einer fremden Adresse: abgelehnt, bevor dorthin verbunden wird.
     let dest = dir.join("b");
     let r = d.download(

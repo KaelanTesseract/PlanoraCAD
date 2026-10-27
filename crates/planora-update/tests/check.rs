@@ -7,7 +7,7 @@ use planora_update::check::{
     CHECK_INTERVAL_SECS, CheckOutcome, Checker, HttpSource, MAX_RESPONSE_BYTES, NetError,
     RELEASES_URL, ReleaseSource, TIMEOUT, due,
 };
-use planora_update::{Channel, EXE_NAME, REPO, SHA256_NAME, Version};
+use planora_update::{Channel, REPO, SETUP_NAME, SHA256_NAME, Version};
 use serde_json::{Value, json};
 
 fn v(s: &str) -> Version {
@@ -26,7 +26,7 @@ fn release_json(tag: &str) -> Value {
         "tag_name": tag,
         "draft": false,
         "body": format!("Notiz {tag}"),
-        "assets": [asset(EXE_NAME), asset(SHA256_NAME)],
+        "assets": [asset(SETUP_NAME), asset(SHA256_NAME)],
     })
 }
 
