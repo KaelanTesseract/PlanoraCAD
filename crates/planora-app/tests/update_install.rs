@@ -171,6 +171,8 @@ impl Downloader for FakeDownloader {
 /// Augenblick des Starts und antwortet mit `answer`. Startet nie etwas.
 struct FakeLauncher {
     calls: Mutex<Vec<(PathBuf, InstallMode, Vec<u8>)>>,
+    /// Ließ sich die Datei im Augenblick des Starts zum Schreiben öffnen?
+    writable: Mutex<Vec<bool>>,
     answer: Result<(), LaunchError>,
 }
 
@@ -182,6 +184,7 @@ impl FakeLauncher {
     fn answering(answer: Result<(), LaunchError>) -> Arc<FakeLauncher> {
         Arc::new(FakeLauncher {
             calls: Mutex::new(Vec::new()),
+            writable: Mutex::new(Vec::new()),
             answer,
         })
     }
@@ -189,6 +192,10 @@ impl FakeLauncher {
     fn calls(&self) -> Vec<(PathBuf, InstallMode)> {
         let calls = self.calls.lock().unwrap();
         calls.iter().map(|(p, m, _)| (p.clone(), *m)).collect()
+    }
+
+    fn writable(&self) -> Vec<bool> {
+        self.writable.lock().unwrap().clone()
     }
 
     fn contents(&self) -> Vec<Vec<u8>> {
@@ -200,6 +207,9 @@ impl FakeLauncher {
 impl SetupLauncher for FakeLauncher {
     fn launch(&self, setup: &Path, mode: InstallMode) -> Result<(), LaunchError> {
         let contents = std::fs::read(setup).unwrap_or_default();
+        // Nur öffnen, nichts ändern: ein anderes Programm versucht, die Datei umzuschreiben.
+        let writable = std::fs::OpenOptions::new().write(true).open(setup).is_ok();
+        self.writable.lock().unwrap().push(writable);
         self.calls
             .lock()
             .unwrap()
@@ -617,6 +627,15 @@ fn successful_flow_saves_pending_launches_setup_and_quits() {
         vec![(h.paths.dir.join(SETUP_NAME), InstallMode::User)]
     );
     assert_eq!(launcher.contents(), vec![NEW_SETUP.to_vec()]);
+    // Von der zweiten Prüfung bis nach dem Start ist der Installer unter Windows gesperrt
+    // (nur Lesen erlaubt); danach ist die Sperre wieder weg.
+    assert_eq!(launcher.writable(), vec![!cfg!(windows)]);
+    assert!(
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&h.paths.setup)
+            .is_ok()
+    );
     // Der Installer bleibt liegen (er braucht seine Datei noch); die neue Version räumt auf.
     assert_eq!(std::fs::read(&h.paths.setup).unwrap(), NEW_SETUP);
     // Vorgemerkt, auch auf der Platte, mit dem Fenster.
@@ -774,6 +793,90 @@ fn setup_changed_before_launch_is_not_started() {
     h.settle();
     assert!(!h.close_sent());
     assert_eq!(h.app.restart_phase(), RestartPhase::None);
+}
+
+/// Zweite Prüfung über den gehaltenen Griff: eine falsche Summe wird nicht gesperrt.
+#[test]
+fn lock_verified_rejects_a_wrong_sum() {
+    let dir = common::temp_root("planora-install-sperre-falsch");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join(SETUP_NAME);
+    std::fs::write(&file, NEW_SETUP).unwrap();
+    let wrong = hex_digest(b"etwas anderes");
+    assert_eq!(
+        lock_verified(&file, &wrong).err(),
+        Some(InstallError::Checksum)
+    );
+    assert!(lock_verified(&dir.join("fehlt.exe"), &wrong).is_err());
+    // Die Prüfung hält danach nichts fest.
+    std::fs::write(&file, b"neu").unwrap();
+}
+
+/// Solange der geprüfte Installer gesperrt ist, kann ihn unter Windows niemand umschreiben,
+/// umbenennen oder löschen; lesen geht. Der Start läuft über denselben Griff, danach ist die
+/// Sperre weg.
+#[test]
+fn locked_setup_cannot_be_changed_until_launched() {
+    let dir = common::temp_root("planora-install-sperre");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join(SETUP_NAME);
+    std::fs::write(&file, NEW_SETUP).unwrap();
+    let locked = lock_verified(&file, &hex_digest(NEW_SETUP)).unwrap();
+    assert_eq!(locked.path(), file.as_path());
+    assert_eq!(std::fs::read(&file).unwrap(), NEW_SETUP, "lesen geht");
+    if cfg!(windows) {
+        assert!(std::fs::write(&file, b"boese").is_err(), "umschreiben");
+        assert!(
+            std::fs::rename(&file, dir.join("weg.exe")).is_err(),
+            "umbenennen"
+        );
+        assert!(std::fs::remove_file(&file).is_err(), "löschen");
+    }
+    let launcher = FakeLauncher::ok();
+    assert_eq!(locked.launch(&*launcher, InstallMode::User), Ok(()));
+    assert_eq!(launcher.contents(), vec![NEW_SETUP.to_vec()]);
+    assert_eq!(launcher.writable(), vec![!cfg!(windows)]);
+    // Nach dem Start ist die Sperre weg.
+    std::fs::write(&file, b"neu").unwrap();
+    std::fs::remove_file(&file).unwrap();
+}
+
+/// Auch ein abgelehnter Start gibt die Sperre frei (danach wird der Download gelöscht).
+#[test]
+fn refused_launch_releases_the_lock() {
+    let dir = common::temp_root("planora-install-sperre-abgelehnt");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join(SETUP_NAME);
+    std::fs::write(&file, NEW_SETUP).unwrap();
+    let locked = lock_verified(&file, &hex_digest(NEW_SETUP)).unwrap();
+    let launcher = FakeLauncher::answering(Err(LaunchError::Cancelled));
+    assert_eq!(
+        locked.launch(&*launcher, InstallMode::User),
+        Err(LaunchError::Cancelled)
+    );
+    std::fs::remove_file(&file).unwrap();
+}
+
+/// Windows startet ein Programm, dessen Datei nur zum Lesen freigegeben gehalten wird
+/// (`CreateProcess` öffnet das Abbild nur zum Lesen und Ausführen). Probe mit einer Kopie dieses
+/// Testprogramms, das nur seine Tests auflistet.
+#[cfg(windows)]
+#[test]
+fn locked_setup_can_still_be_executed() {
+    let dir = common::temp_root("planora-install-sperre-start");
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = dir.join("probe.exe");
+    std::fs::copy(std::env::current_exe().unwrap(), &exe).unwrap();
+    let hex = hex_digest(&std::fs::read(&exe).unwrap());
+    let locked = lock_verified(&exe, &hex).unwrap();
+    let out = std::process::Command::new(locked.path())
+        .args(["--list", "--exact", "locked_setup_can_still_be_executed"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert!(std::fs::write(&exe, b"x").is_err(), "noch gesperrt");
+    drop(locked);
+    std::fs::remove_file(&exe).unwrap();
 }
 
 /// Nicht installiert (etwa aus dem Bauordner gestartet): die Meldung bietet nur die

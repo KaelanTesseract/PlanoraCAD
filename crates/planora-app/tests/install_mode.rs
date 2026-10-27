@@ -106,7 +106,9 @@ fn no_entries_means_not_installed() {
 
 #[test]
 fn setup_args_are_exact() {
-    let base = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS";
+    // Ohne /RESTARTAPPLICATIONS: Die App beendet sich selbst, den Neustart übernimmt `[Run]` mit
+    // /NACHUPDATE=1 (sonst liefe sie zweimal).
+    let base = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS";
     let log = Path::new("C:").join("Temp").join("planoracad-update.log");
     let log_text = log.to_string_lossy().into_owned();
     assert_eq!(
@@ -118,6 +120,7 @@ fn setup_args_are_exact() {
         format!("{base} /ALLUSERS /NACHUPDATE=1 /LOG={log_text}")
     );
     assert!(setup_args(InstallMode::User, &log).contains(SETUP_RESTART_PARAM));
+    assert!(!setup_args(InstallMode::AllUsers, &log).contains("/RESTARTAPPLICATIONS"));
 }
 
 /// Ein Temp-Ordner mit Leerzeichen (Benutzername „Max Muster“) steht in Anführungszeichen, damit

@@ -11,9 +11,10 @@
 //! dahin [`WAITING`]). Dann fragt die App wie beim Schließen nach ungespeicherter Arbeit
 //! (`Workspace::request_quit`); „Abbrechen“ dort bricht das Update ab und löscht den Download.
 //! Sonst: den Installer im Hintergrund noch einmal gegen die gemerkte Summe prüfen
-//! ([`reverify`]), `update_pending` samt Fenster speichern (gelingt das nicht, startet nichts:
-//! [`PENDING_NOT_SAVED`]), die Patchnotes hinterlegen und den Installer starten
-//! ([`SetupLauncher::launch`], still, mit [`setup_args`]). Startet er, beendet sich das Programm
+//! ([`reverify`]; ab da ist die Datei bis nach dem Start gesperrt, [`LockedSetup`]),
+//! `update_pending` samt Fenster speichern (gelingt das nicht, startet nichts:
+//! [`PENDING_NOT_SAVED`]), die Patchnotes hinterlegen und den Installer über die Sperre starten
+//! ([`LockedSetup::launch`], still, mit [`setup_args`]). Startet er, beendet sich das Programm
 //! ohne weitere Rückfrage (sauber, wie beim Schließen); der Installer wartet darauf, ersetzt die
 //! Dateien und startet die neue Version (nur mit [`SETUP_RESTART_PARAM`]). Lehnt jemand die
 //! Admin-Abfrage von Windows ab ([`UPDATE_CANCELLED`]) oder startet der Installer nicht
@@ -38,7 +39,7 @@ use crate::workspace::Workspace;
 use planora_project::config::{Config, WindowState};
 use planora_update::install::{
     DownloadPaths, Downloader, InstallError, MAX_CHECKSUM_BYTES, checksum_hex, discard_download,
-    download_limit, file_matches_sha256, prepare_dir, release_url_ok,
+    download_limit, file_matches_sha256, prepare_dir, reader_matches_sha256, release_url_ok,
 };
 use planora_update::{REPO, SETUP_NAME, Update, Version};
 
@@ -366,17 +367,71 @@ impl Installer {
     }
 }
 
-/// Zweite Prüfung des Installers gegen die beim Download geprüfte Summe, unmittelbar vor dem
-/// Start, in einem eigenen Thread (große Datei, die Oberfläche wartet nicht). Ein anderes
-/// Programm hätte die Datei inzwischen verändern können (etwa eine zweite Instanz, die selbst
-/// ein Update lädt). Ist ein Kontext da, meldet der Thread danach ein neues Bild. `gate` (nur in
-/// Tests): der Thread wartet vor der Prüfung, bis dort etwas ankommt oder es geschlossen wird.
+/// Der Installer nach der zweiten Prüfung, gesperrt bis nach seinem Start
+/// ([`LockedSetup::launch`]). Unter Windows hält er den Griff, über den die Summe geprüft wurde,
+/// mit Freigabe nur zum Lesen (`FILE_SHARE_READ`): Niemand kann die Datei zwischen Prüfung und
+/// Start umschreiben, umbenennen oder löschen; lesen und ausführen geht weiter (Windows öffnet
+/// ein Programm zum Start nur zum Lesen und Ausführen, der Installer liest sich selbst nur).
+/// Anderswo hält er nur eine offene Datei (dort startet ohnehin nichts).
+#[derive(Debug)]
+pub struct LockedSetup {
+    path: PathBuf,
+    _file: std::fs::File,
+}
+
+impl LockedSetup {
+    /// Die gesperrte Datei.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Startet den Installer über `launcher` und gibt die Sperre erst danach frei (auch wenn der
+    /// Start scheitert; dann kann der Download gelöscht werden).
+    pub fn launch(
+        self,
+        launcher: &dyn SetupLauncher,
+        mode: InstallMode,
+    ) -> Result<(), LaunchError> {
+        let result = launcher.launch(&self.path, mode);
+        drop(self);
+        result
+    }
+}
+
+/// Öffnet `file` gesperrt (siehe [`LockedSetup`]) und prüft die Summe über genau diesen Griff
+/// gegen `expected_hex`. Stimmt sie, bleibt die Sperre bis nach dem Start bestehen; so sind
+/// zweite Prüfung und Start ein Schritt. Hält ein anderes Programm die Datei schon zum
+/// Schreiben offen, scheitert schon das Öffnen.
+pub fn lock_verified(file: &Path, expected_hex: &str) -> Result<LockedSetup, InstallError> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.share_mode(windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ);
+    }
+    let mut f = options
+        .open(file)
+        .map_err(|e| InstallError::Io(format!("Datei lesen: {e}")))?;
+    reader_matches_sha256(&mut f, expected_hex)?;
+    Ok(LockedSetup {
+        path: file.to_path_buf(),
+        _file: f,
+    })
+}
+
+/// Zweite Prüfung des Installers gegen die beim Download geprüfte Summe ([`lock_verified`]),
+/// unmittelbar vor dem Start, in einem eigenen Thread (große Datei, die Oberfläche wartet
+/// nicht). Ein anderes Programm hätte die Datei inzwischen verändern können (etwa eine zweite
+/// Instanz, die selbst ein Update lädt); ab dieser Prüfung ist sie bis nach dem Start gesperrt.
+/// Ist ein Kontext da, meldet der Thread danach ein neues Bild. `gate` (nur in Tests): der
+/// Thread wartet vor der Prüfung, bis dort etwas ankommt oder es geschlossen wird.
 pub fn reverify(
     file: PathBuf,
     expected_hex: String,
     repaint: Option<egui::Context>,
     gate: Option<Receiver<()>>,
-) -> Receiver<Result<(), InstallError>> {
+) -> Receiver<Result<LockedSetup, InstallError>> {
     let (tx, rx) = mpsc::channel();
     let job_tx = tx.clone();
     let spawned = std::thread::Builder::new()
@@ -385,7 +440,7 @@ pub fn reverify(
             if let Some(gate) = gate {
                 let _ = gate.recv();
             }
-            let _ = job_tx.send(file_matches_sha256(&file, &expected_hex));
+            let _ = job_tx.send(lock_verified(&file, &expected_hex));
             if let Some(ctx) = repaint {
                 ctx.request_repaint();
             }
@@ -593,7 +648,6 @@ pub fn setup_args(mode: InstallMode, log: &Path) -> String {
         "/SUPPRESSMSGBOXES",
         "/NORESTART",
         "/CLOSEAPPLICATIONS",
-        "/RESTARTAPPLICATIONS",
         who,
         SETUP_RESTART_PARAM,
         &log,

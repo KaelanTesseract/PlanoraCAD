@@ -328,15 +328,10 @@ pub fn verify_sha256(
 }
 
 /// Stimmt die Prüfsumme von `file` mit `expected_hex` überein (Groß-/Kleinschreibung egal)?
-/// Sonst [`InstallError::Checksum`]. Für die zweite Prüfung unmittelbar vor dem Start des
-/// Installers.
+/// Sonst [`InstallError::Checksum`].
 pub fn file_matches_sha256(file: &Path, expected_hex: &str) -> Result<(), InstallError> {
-    let actual = file_sha256(file)?;
-    if actual.eq_ignore_ascii_case(expected_hex) {
-        Ok(())
-    } else {
-        Err(InstallError::Checksum)
-    }
+    let mut f = File::open(file).map_err(|e| io_err("Datei lesen", &e))?;
+    reader_matches_sha256(&mut f, expected_hex)
 }
 
 /// Die erwartete Prüfsumme (64 Hexziffern, klein) aus dem Inhalt der Prüfsummen-Datei, nach
@@ -363,8 +358,22 @@ pub fn checksum_hex(contents: &str, expected_name: &str) -> Result<String, Insta
     Ok(hex.to_ascii_lowercase())
 }
 
-fn file_sha256(file: &Path) -> Result<String, InstallError> {
-    let mut f = File::open(file).map_err(|e| io_err("Datei lesen", &e))?;
+/// Stimmt die Prüfsumme dessen, was `reader` bis zum Ende liefert, mit `expected_hex` überein
+/// (Groß-/Kleinschreibung egal)? Sonst [`InstallError::Checksum`]. Für die zweite Prüfung über
+/// einen gehaltenen, gesperrten Griff auf den Installer.
+pub fn reader_matches_sha256(
+    reader: &mut dyn Read,
+    expected_hex: &str,
+) -> Result<(), InstallError> {
+    let actual = reader_sha256(reader)?;
+    if actual.eq_ignore_ascii_case(expected_hex) {
+        Ok(())
+    } else {
+        Err(InstallError::Checksum)
+    }
+}
+
+fn reader_sha256(f: &mut dyn Read) -> Result<String, InstallError> {
     let mut h = Sha256::new();
     let mut buf = vec![0u8; 64 * 1024];
     loop {

@@ -24,8 +24,8 @@ use crate::step_import_dialog::{self, StepImportDialog};
 use crate::update_check::{self, CheckRequest, CheckResult, NoNetwork, UpdateChecker};
 use crate::update_dialog::{self, InstallView, UpdateAction, UpdateDialog};
 use crate::update_install::{
-    self, AfterUpdate, InstallDecision, InstallState, Installer, LaunchError, NoDownload, NoLaunch,
-    SetupLauncher, ShellLauncher,
+    self, AfterUpdate, InstallDecision, InstallState, Installer, LaunchError, LockedSetup,
+    NoDownload, NoLaunch, SetupLauncher, ShellLauncher,
 };
 use crate::versions_panel::VersionsUi;
 use crate::workspace::{Prompt, Workspace};
@@ -147,7 +147,7 @@ pub struct PlanoraApp {
     /// Hinweis „Aktualisiert auf Version X“ nach einem Update (einmal).
     after_update: Option<AfterUpdate>,
     /// Ergebnis der zweiten Prüfung des Installers ([`RestartPhase::Verifying`]).
-    reverify: Option<Receiver<Result<(), InstallError>>>,
+    reverify: Option<Receiver<Result<LockedSetup, InstallError>>>,
     /// Nur in Tests: die zweite Prüfung wartet, bis hier etwas ankommt
     /// ([`PlanoraApp::hold_reverify`]).
     reverify_gate: Option<Receiver<()>>,
@@ -594,10 +594,11 @@ impl PlanoraApp {
                 self.reverify = None;
                 match result {
                     // Inzwischen ist neue Arbeit entstanden (die Sperre hält das eigentlich
-                    // ab): noch ist nichts gestartet, also zurück zur Rückfrage.
-                    Ok(()) if self.unsaved_work() => self.restart = RestartPhase::None,
-                    Ok(()) => {
-                        self.restart_now(self.last_window);
+                    // ab): noch ist nichts gestartet, also zurück zur Rückfrage; der Installer
+                    // ist wieder frei.
+                    Ok(_) if self.unsaved_work() => self.restart = RestartPhase::None,
+                    Ok(locked) => {
+                        self.restart_now(locked, self.last_window);
                     }
                     Err(e) => {
                         self.restart = RestartPhase::None;
@@ -632,10 +633,10 @@ impl PlanoraApp {
 
     /// Nach der zweiten Prüfung: `update_pending` samt Fenster (`window`, für die neue Version)
     /// speichern (sonst nichts starten), Patchnotes für den Hinweis hinterlegen und den
-    /// Installer starten. Startet er, beendet sich das Programm ohne weitere Rückfrage
-    /// ([`RestartPhase::Exiting`]; `on_exit` räumt den Laufmarker wie immer weg, der Installer
-    /// startet die neue Version). Sonst ([`PlanoraApp::launch_refused`]) läuft es weiter.
-    fn restart_now(&mut self, window: Option<WindowState>) {
+    /// geprüften, bis dahin gesperrten Installer `locked` starten ([`LockedSetup::launch`]).
+    /// Startet er, beendet sich das Programm ohne weitere Rückfrage ([`RestartPhase::Exiting`];
+    /// `on_exit` räumt den Laufmarker wie immer weg, der Installer startet die neue Version). Sonst ([`PlanoraApp::launch_refused`]) läuft es weiter.
+    fn restart_now(&mut self, locked: LockedSetup, window: Option<WindowState>) {
         self.restart = RestartPhase::None;
         let (Some(paths), Some(to), Some(mode)) = (
             self.installer.paths().cloned(),
@@ -653,6 +654,7 @@ impl PlanoraApp {
             .set_pending_update_with_window(Some((from, to)), window)
         {
             let _ = self.ws.set_pending_update(None);
+            drop(locked);
             discard_download(&paths);
             self.installer.fail(update_install::PENDING_NOT_SAVED);
             return;
@@ -666,7 +668,7 @@ impl PlanoraApp {
                 &update.latest.notes,
             );
         }
-        match self.launcher.launch(&paths.setup, mode) {
+        match locked.launch(&*self.launcher, mode) {
             Ok(()) => {
                 crate::diag::info(&format!(
                     "Installer für Version {to} gestartet; sein Protokoll: {} im Temp-Ordner",

@@ -44,7 +44,9 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 CloseApplications=yes
-RestartApplications=yes
+; Kein Neustart ueber den Neustart-Manager: Beim Update beendet sich die App selbst und
+; startet ueber [Run] mit /NACHUPDATE=1 neu (sonst liefe sie zweimal).
+RestartApplications=no
 ShowLanguageDialog=no
 DisableProgramGroupPage=yes
 

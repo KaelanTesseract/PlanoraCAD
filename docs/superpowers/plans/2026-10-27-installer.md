@@ -17,7 +17,7 @@
 - Ziele: „nur für mich“ `%LOCALAPPDATA%\Programs\PlanoraCAD` ohne Admin, „für alle“ `C:\Program Files\PlanoraCAD` mit Admin (`{autopf}\PlanoraCAD`); Herausgeber „Dennis Guse“; installierte Programmdatei `PlanoraCAD.exe`.
 - Registry: `Software\PlanoraCAD`, Wert `InstallMode` = `user` (HKCU) bzw. `all` (HKLM), dazu `InstallPath` = `{app}` (Plan-Ergänzung, siehe Review Focus 2).
 - Feste `AppId` `{D42C66D0-6AB0-4D5C-A693-9616105847B8}` (nie ändern, sonst erkennt Windows Updates nicht als dieselbe App).
-- Stille Update-Parameter genau: `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS /CURRENTUSER|/ALLUSERS /NACHUPDATE=1`.
+- Stille Update-Parameter genau: `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /CURRENTUSER|/ALLUSERS /NACHUPDATE=1` (ohne `/RESTARTAPPLICATIONS`, siehe Abweichungen).
 - Daten bleiben bei der Deinstallation: `%APPDATA%\PlanoraCAD` und `Dokumente\PlanoraCAD` werden vom Installer nie angefasst.
 - Texte in einfacher Sprache, Du-Form, kein KI-Ton; Oberflächentexte als `pub const`/`pub fn` im Modul, von Tests geprüft. Installer-Texte nur aus den Inno-Sprachdateien (`Default.isl`, `Languages\German.isl`).
 - Keine neue Rust-Abhängigkeit. Erlaubt: zusätzliche Features für das vorhandene `windows-sys = "=0.61.2"`; danach `cargo deny check` grün mit unveränderter `deny.toml`.
@@ -50,7 +50,7 @@
 - ISCC-Defines vom Skript: `AppVersion` (z. B. `0.2.0-dev.1`), `AppVersionNumeric` (`0.2.0`), `SourceExe`, `LicensesFile`; Ausgabe per `/O<OutDir>`.
 
 - [ ] **Step 1: Test schreiben** (`installer_script.rs`, liest `installer/planoracad.iss` relativ zu `CARGO_MANIFEST_DIR/../..` wie `release_meta.rs`; Zeilen getrimmt, Vergleich ohne Groß-/Kleinschreibung der Schlüssel nur wo Inno sie ignoriert):
-  - `setup_section_has_the_fixed_values`: Zeilen `AppId={{D42C66D0-6AB0-4D5C-A693-9616105847B8}`, `AppName=PlanoraCAD`, `AppVersion={#AppVersion}`, `VersionInfoVersion={#AppVersionNumeric}`, `AppPublisher=Dennis Guse`, `DefaultDirName={autopf}\PlanoraCAD`, `PrivilegesRequired=lowest`, `PrivilegesRequiredOverridesAllowed=commandline dialog`, `ArchitecturesAllowed=x64compatible`, `ArchitecturesInstallIn64BitMode=x64compatible`, `LicenseFile=..\LICENSE`, `SetupIconFile=..\assets\logo\planoracad.ico`, `UninstallDisplayIcon={app}\PlanoraCAD.exe`, `OutputBaseFilename=planoracad-setup-x64`, `CloseApplications=yes`, `RestartApplications=yes`, `ShowLanguageDialog=no`, `DisableProgramGroupPage=yes`.
+  - `setup_section_has_the_fixed_values`: Zeilen `AppId={{D42C66D0-6AB0-4D5C-A693-9616105847B8}`, `AppName=PlanoraCAD`, `AppVersion={#AppVersion}`, `VersionInfoVersion={#AppVersionNumeric}`, `AppPublisher=Dennis Guse`, `DefaultDirName={autopf}\PlanoraCAD`, `PrivilegesRequired=lowest`, `PrivilegesRequiredOverridesAllowed=commandline dialog`, `ArchitecturesAllowed=x64compatible`, `ArchitecturesInstallIn64BitMode=x64compatible`, `LicenseFile=..\LICENSE`, `SetupIconFile=..\assets\logo\planoracad.ico`, `UninstallDisplayIcon={app}\PlanoraCAD.exe`, `OutputBaseFilename=planoracad-setup-x64`, `CloseApplications=yes`, `RestartApplications=no`, `ShowLanguageDialog=no`, `DisableProgramGroupPage=yes`.
   - `version_is_never_hard_coded`: keine Zeile `AppVersion=` mit Ziffer; `#ifndef AppVersion` mit `#error` vorhanden.
   - `languages_are_english_and_german`: `[Languages]` hat genau `en` (`compiler:Default.isl`, zuerst, gilt für alle anderen Windows-Sprachen) und `de` (`compiler:Languages\German.isl`).
   - `desktop_icon_task_is_on_by_default`: `[Tasks]` Eintrag `Name: "desktopicon"` ohne `unchecked`; `[Icons]` hat `{autoprograms}\PlanoraCAD` und `{autodesktop}\PlanoraCAD` mit `Tasks: desktopicon`.
@@ -201,3 +201,6 @@ Kein Agent. Vorher Dennis fragen und Zeitpunkt abstimmen; alles läuft unter sei
 ## Abweichungen
 
 Was vom Plan abgewichen ist und warum.
+
+- **Kein doppelter Neustart (Nacharbeit Tasks 3+4):** Ursprünglich `RestartApplications=yes` und `/RESTARTAPPLICATIONS`. Die App beendet sich beim Update aber selbst und wird über `[Run]` mit `/NACHUPDATE=1` neu gestartet; der Neustart-Manager hätte sie (falls er sie noch erfasst) ein zweites Mal gestartet. Jetzt `RestartApplications=no` und kein `/RESTARTAPPLICATIONS`; `CloseApplications=yes` und `/CLOSEAPPLICATIONS` bleiben als Sicherheitsnetz.
+- **Installer bis zum Start gesperrt (Nacharbeit Tasks 3+4):** Die zweite Prüfung öffnet den Installer mit Freigabe nur zum Lesen (`FILE_SHARE_READ`), prüft die Summe über diesen Griff und hält ihn bis nach `ShellExecuteExW` (`update_install::lock_verified`, `LockedSetup::launch`). So kann ihn zwischen Prüfung und Start niemand austauschen. Windows startet ein Programm trotz dieser Sperre (das Abbild wird nur zum Lesen und Ausführen geöffnet; Test `locked_setup_can_still_be_executed`), `FILE_SHARE_DELETE` ist daher nicht nötig. Unter Linux unverändert.

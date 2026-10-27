@@ -405,11 +405,16 @@ fn setup_name_must_match_exactly() {
     zipped["assets"][0]["browser_download_url"] =
         json!(url("v0.2.0-dev.2", "planoracad-setup-x64.exe.zip"));
 
+    // Name mit Anhang, die Adresse aber genau auf den Installer: der Name zählt auch allein.
+    let mut zipped_name = release_json("v0.2.0-dev.4", "");
+    zipped_name["assets"][0]["name"] = json!("planoracad-setup-x64.exe.zip");
+    zipped_name["assets"][0]["browser_download_url"] = json!(url("v0.2.0-dev.4", SETUP_NAME));
+
     let mut other_tag = release_json("v0.2.0-dev.3", "");
     other_tag["assets"][0]["browser_download_url"] = json!(url("v0.2.0-dev.9", SETUP_NAME));
 
     let good = release_json("v0.2.0-dev.5", "");
-    let list = parse(&[upper, zipped, other_tag, good]);
+    let list = parse(&[upper, zipped, zipped_name, other_tag, good]);
     let versions: Vec<String> = list.iter().map(|r| r.version.to_string()).collect();
     assert_eq!(versions, ["0.2.0-dev.5"]);
     assert_eq!(list[0].setup.name, SETUP_NAME);

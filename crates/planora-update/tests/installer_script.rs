@@ -74,7 +74,8 @@ fn setup_section_has_the_fixed_values() {
         r"UninstallDisplayIcon={app}\PlanoraCAD.exe",
         "OutputBaseFilename=planoracad-setup-x64",
         "CloseApplications=yes",
-        "RestartApplications=yes",
+        // Neustart nur über `[Run]` mit /NACHUPDATE=1, nicht zusätzlich über den Neustart-Manager.
+        "RestartApplications=no",
         "ShowLanguageDialog=no",
         "DisableProgramGroupPage=yes",
     ] {
