@@ -1531,6 +1531,8 @@ pub type WriteFn = fn(&Path, &SheetModel, DrawingFormat, &Progress) -> Result<u6
 /// Das Schreiben einer PDF-Datei aus Blättern mit Dokumenteigenschaften (austauschbar nur für
 /// Tests).
 pub type PdfWriteFn = fn(&Path, &[&SheetModel], &PdfMeta, &Progress) -> Result<u64, DrawError>;
+/// Die Prüfung vor dem STEP-Export (austauschbar nur für Tests).
+pub type StepPrepareFn = fn(&[ExportItem], &Progress) -> Result<StepPrepared, String>;
 /// Das Schreiben einer STEP-Datei (austauschbar nur für Tests).
 pub type StepWriteFn = fn(&Path, &StepPrepared, &Progress) -> Result<u64, StepError>;
 
@@ -1569,6 +1571,7 @@ pub struct ExportDialog {
     resolve: ResolveFn,
     writer: WriteFn,
     pdf_writer: PdfWriteFn,
+    step_prepare: StepPrepareFn,
     step_writer: StepWriteFn,
     written: Option<Result<(PathBuf, u64), String>>,
     /// Format, mit dem zuletzt geschrieben wurde; die Meldung gehört nur zu diesem Format.
@@ -1612,6 +1615,7 @@ impl ExportDialog {
             resolve: resolve_dimensions_in_worker,
             writer: export_drawing_file,
             pdf_writer: export_pdf_file,
+            step_prepare: prepare_step,
             step_writer: write_step_bodies,
             written: None,
             write_format: ExportFormat::Mesh(Format::Stl),
@@ -1688,6 +1692,13 @@ impl ExportDialog {
     #[doc(hidden)]
     pub fn set_pdf_writer(&mut self, f: PdfWriteFn) {
         self.pdf_writer = f;
+    }
+
+    /// Ersetzt die Prüfung vor dem STEP-Export (nur für Tests: Prüfung, die bis zum Abbrechen
+    /// läuft).
+    #[doc(hidden)]
+    pub fn set_step_prepare(&mut self, f: StepPrepareFn) {
+        self.step_prepare = f;
     }
 
     /// Ersetzt das Schreiben einer STEP-Datei (nur für Tests: Schreiben, das bis zum Abbrechen
@@ -2056,7 +2067,8 @@ impl ExportDialog {
             let running = self.step_job.as_ref().is_some_and(|(k, _)| *k == key);
             if !fresh && !running {
                 let items = self.items(state);
-                self.step_job = Some((key, Job::spawn(move |p| prepare_step(&items, p))));
+                let prepare = self.step_prepare;
+                self.step_job = Some((key, Job::spawn(move |p| prepare(&items, p))));
             }
             let finished = match &self.step_job {
                 Some((k, job)) => match job.fetch(block) {

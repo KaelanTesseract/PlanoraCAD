@@ -275,6 +275,14 @@ fn cancelling_step_writing_keeps_the_old_file() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Eine Prüfung, die erst mit dem Abbrechen endet (sonst kann sie vor `cancel` fertig sein).
+fn endless_step_check(_: &[ExportItem], p: &Progress) -> Result<StepPrepared, String> {
+    loop {
+        p.check().map_err(|e| e.to_string())?;
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
 #[test]
 fn cancelling_the_step_check_says_so_and_switching_back_keeps_the_mesh_result() {
     let s = mixed_state();
@@ -282,7 +290,9 @@ fn cancelling_the_step_check_says_so_and_switching_back_keeps_the_mesh_result() 
     d.tick(&s, true);
     assert!(matches!(d.status(&s), ExportStatus::Ready { .. }));
     d.format = ExportFormat::Step;
+    d.set_step_prepare(endless_step_check);
     d.tick(&s, false);
+    assert!(matches!(d.status(&s), ExportStatus::Computing(_)));
     d.cancel();
     assert_eq!(d.status(&s), ExportStatus::Failed("Abgebrochen".into()));
     d.format = ExportFormat::Mesh(Format::ThreeMf);
@@ -291,6 +301,7 @@ fn cancelling_the_step_check_says_so_and_switching_back_keeps_the_mesh_result() 
         "das Netz bleibt gültig"
     );
     d.format = ExportFormat::Step;
+    d.set_step_prepare(prepare_step);
     d.recompute();
     d.tick(&s, true);
     assert!(matches!(
