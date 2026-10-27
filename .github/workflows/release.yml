@@ -3,7 +3,8 @@
 # Auslöser:
 #   - Tag "v*" (zum Beispiel v0.2.0-dev.2): echtes Release.
 #   - Von Hand ("Run workflow", Trockenlauf): baut alles und legt die Dateien als Ergebnis des
-#     Laufs ab, legt aber KEIN Release an und braucht keinen Tag.
+#     Laufs ab (mit dem Installer planoracad-setup-x64.exe), legt aber KEIN Release an und
+#     braucht keinen Tag.
 #
 # Die vollen Tests laufen hier bewusst NICHT: Die volle Prüfung (ci.yml) wird vor dem Release
 # von Hand gestartet, und tools/release.ps1 verlangt dafür einen grünen Lauf auf genau diesem
@@ -76,18 +77,31 @@ jobs:
       - name: Programm bauen
         run: cargo build --release --locked -p planora-app
 
+      # Der Installer wird mit Inno Setup 6 gebaut. Auf dem Runner ist es meist schon da; sonst wird
+      # genau die Version 6.7.3 per Chocolatey installiert (keine ungepinnte Version).
+      - name: Inno Setup bereitstellen
+        shell: pwsh
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --version 6.7.3 -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'Inno Setup 6.7.3 konnte nicht installiert werden.' }
+          }
+          if (-not (Test-Path $iscc)) { throw 'ISCC.exe (Inno Setup 6) nicht gefunden.' }
+          Write-Output "Inno Setup: $iscc"
+
       - name: Dateien zusammenstellen
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path dist | Out-Null
-          Copy-Item target/release/planora-app.exe dist/planoracad-windows-x64.exe
           # Symboldatei (Zeilentabellen) für tools/symbolize.ps1: löst die Adressen eines
           # Absturzberichts zu Datei und Zeile auf. Die Update-Funktion lädt sie nie.
           Copy-Item target/release/planora_app.pdb dist/planoracad-windows-x64.pdb
-          $hash = (Get-FileHash -Algorithm SHA256 dist/planoracad-windows-x64.exe).Hash.ToLowerInvariant()
-          $utf8 = New-Object System.Text.UTF8Encoding($false)
-          [System.IO.File]::WriteAllText("$PWD/dist/planoracad-windows-x64.sha256", "$hash  planoracad-windows-x64.exe`n", $utf8)
           ./tools/third-party-licenses.ps1 -Output "$PWD/dist/THIRD-PARTY-LICENSES.txt"
+          # Installer und Prüfsumme (dist/planoracad-setup-x64.exe und .sha256)
+          $global:LASTEXITCODE = 0
+          ./tools/build-installer.ps1 -Exe target/release/planora-app.exe -Licenses "$PWD/dist/THIRD-PARTY-LICENSES.txt" -OutDir "$PWD/dist"
+          if ($LASTEXITCODE -ne 0) { throw 'tools/build-installer.ps1 ist fehlgeschlagen.' }
           Get-ChildItem dist | Format-Table Name, Length
 
           Move-Item release-notes.md dist/release-notes.md
@@ -124,8 +138,8 @@ jobs:
         shell: pwsh
         run: |
           $ghArgs = @('release', 'create', $env:REF_NAME,
-            'dist/planoracad-windows-x64.exe',
-            'dist/planoracad-windows-x64.sha256',
+            'dist/planoracad-setup-x64.exe',
+            'dist/planoracad-setup-x64.sha256',
             'dist/THIRD-PARTY-LICENSES.txt',
             'dist/planoracad-windows-x64.pdb',
             '--verify-tag',

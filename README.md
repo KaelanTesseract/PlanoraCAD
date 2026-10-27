@@ -40,26 +40,34 @@ Alles mit Einzelheiten, Bedienung und Grenzen steht unter [Funktionen im Detail]
 ## Herunterladen und starten
 
 1. Öffne die Seite mit den [Veröffentlichungen](https://github.com/KaelanTesseract/PlanoraCAD/releases).
-2. Such die neueste Version. Klick darunter im Bereich „Assets“ auf `planoracad-windows-x64.exe`. Die Datei wird heruntergeladen.
-3. Leg einen eigenen Ordner für das Programm an, zum Beispiel „PlanoraCAD-Programm“ auf dem Desktop. Verschieb die Datei dorthin. Nimm keinen Ordner unter „Programme“, sonst kann sich das Programm später nicht selbst aktualisieren.
-4. Doppelklick auf `planoracad-windows-x64.exe`.
-5. Beim ersten Start zeigt Windows wahrscheinlich ein blaues Fenster „Der Computer wurde durch Windows geschützt“. Klick dort auf „Weitere Informationen“ und dann auf „Trotzdem ausführen“. Die Warnung kommt, weil die Datei nicht digital signiert ist. Lade das Programm deshalb nur von der Seite der Veröffentlichungen hier im Repository.
-6. Das Programm startet. Installieren musst du nichts: Die eine Datei ist das ganze Programm.
+2. Such die neueste Version. Klick darunter im Bereich „Assets“ auf `planoracad-setup-x64.exe`. Die Datei wird heruntergeladen.
+3. Doppelklick auf `planoracad-setup-x64.exe`.
+4. Windows zeigt wahrscheinlich ein blaues Fenster „Der Computer wurde durch Windows geschützt“. Klick dort auf „Weitere Informationen“ und dann auf „Trotzdem ausführen“. Die Warnung kommt, weil die Datei nicht digital signiert ist. Lade das Programm deshalb nur von der Seite der Veröffentlichungen hier im Repository.
+5. Im Installer wählst du, für wen das Programm da sein soll: „Nur für mich“ (ohne Administratorrechte) oder „Für alle Benutzer“ (Windows fragt dann nach Administratorrechten).
+6. Setz bei Bedarf das Häkchen für die Verknüpfung auf dem Desktop.
+7. Klick dich bis „Fertigstellen“ durch. Das Programm steht danach im Startmenü und startet auf Wunsch gleich.
 
 Hält dein Virenprogramm die Datei fest oder startet etwas nicht, schau unter [Häufige Probleme](docs/haeufige-probleme.md).
+
+**Deinstallieren**
+
+1. Öffne die Windows-Einstellungen und geh auf „Apps“.
+2. Such „PlanoraCAD“ in der Liste und wähle „Deinstallieren“.
+3. Deine Projekte, Einstellungen und Protokolle bleiben dabei erhalten (siehe unten).
 
 **Wo deine Daten liegen**
 
 - **Projekte:** im Ordner `Dokumente\PlanoraCAD`. Einen anderen Ordner wählst du unter „Datei → Einstellungen …“ mit „Projektverzeichnis ändern …“.
 - **Einstellungen, Protokoll, Absturzberichte und Rückmeldungen:** im Ordner `%APPDATA%\PlanoraCAD`. Du erreichst ihn, wenn du `%APPDATA%\PlanoraCAD` oben in die Adresszeile des Explorers tippst.
 
-Zum Entfernen löschst du die Programmdatei. Brauchst du die Ordner oben nicht mehr, kannst du sie ebenfalls löschen.
+Brauchst du die Ordner oben nicht mehr, kannst du sie nach dem Deinstallieren selbst löschen.
 
 ## Updates
 
 - Beim Start schaut das Programm höchstens einmal am Tag nach, ob es eine neuere Version gibt. Zurzeit gibt es nur Entwicklerversionen (Kanal „Dev“).
-- Gibt es eine, zeigt es ein Fenster mit den Änderungen. Du wählst „Jetzt aktualisieren“, „Später“ oder „Diese Version überspringen“. Vor dem Neustart fragt das Programm, ob du ungespeicherte Arbeit speichern willst.
-- Klappt der Austausch nicht, bleibt die alte Version.
+- Gibt es eine, zeigt es ein Fenster mit den Änderungen. Du wählst „Jetzt aktualisieren“, „Später“ oder „Diese Version überspringen“.
+- Bei „Jetzt aktualisieren“ fragt das Programm, ob du ungespeicherte Arbeit speichern willst, lädt den neuen Installer und startet ihn im Hintergrund. Bei „Für alle Benutzer“ fragt Windows nach Administratorrechten.
+- Lehnst du das ab oder klappt etwas nicht, läuft die bisherige Version weiter. Hilfe steht unter [Häufige Probleme](docs/haeufige-probleme.md).
 - Abschalten oder von Hand suchen: „Datei → Einstellungen …“, Abschnitt „Updates“.
 - Was sich in jeder Version geändert hat, steht in [CHANGELOG.md](CHANGELOG.md). Einzelheiten zu den Updates: [Updates und Versionen](docs/funktionen.md#updates-und-versionen).
 
@@ -113,6 +121,8 @@ PlanoraCAD ist in Rust geschrieben, mit einem eigenen Geometrie-Kern.
 
     cargo run -p planora-app --release
 
+Den Installer baust du mit `tools\build-installer.ps1` (nach `cargo build --release -p planora-app`; braucht Inno Setup 6). Er landet im Ordner `dist`.
+
 Unter Linux werden zusätzlich die System-Bibliotheken aus `.github/workflows/ci.yml` benötigt.
 
 ### Entwicklung
@@ -124,7 +134,7 @@ Unter Linux werden zusätzlich die System-Bibliotheken aus `.github/workflows/ci
 
 ### Release und Absturzberichte
 
-- Eine neue Version entsteht mit `tools\release.ps1`, einem Abschnitt in `CHANGELOG.md`, einem grünen Lauf von `ci.yml` und einem Tag. Der Tag startet `.github/workflows/release.yml`; das baut die Windows-Version und legt das Release an (Programmdatei, Prüfsumme, `THIRD-PARTY-LICENSES.txt` und die Symboldatei `.pdb`).
+- Eine neue Version entsteht mit `tools\release.ps1`, einem Abschnitt in `CHANGELOG.md`, einem grünen Lauf von `ci.yml` und einem Tag. Der Tag startet `.github/workflows/release.yml`; das baut die Windows-Version samt Installer und legt das Release an (Installer `planoracad-setup-x64.exe`, Prüfsumme, `THIRD-PARTY-LICENSES.txt` und die Symboldatei `.pdb`).
 - Absturzberichte von Testern löst `tools\symbolize.ps1` mit der `.pdb` des Releases auf.
 - Alle Schritte: [Updates und Versionen](docs/funktionen.md#updates-und-versionen). Rückmeldungen und Protokoll: [Rückmeldung, Absturzberichte und Protokoll](docs/funktionen.md#rückmeldung-absturzberichte-und-protokoll).
 - Die Projekttafel einrichten: [Projekttafel einrichten](docs/projekttafel-einrichten.md).

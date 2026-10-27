@@ -4,8 +4,6 @@ Hier steht ausführlich, was PlanoraCAD kann, wie du es bedienst und wo die Gren
 
 Die Texte stammen aus der Entwicklung und sind entsprechend genau. Viele Abschnitte verweisen am Ende auf `docs/superpowers/offene-punkte.md`; dort stehen die offenen Punkte und Messwerte noch ausführlicher.
 
-Fusion 360 ist eine Marke von Autodesk. PlanoraCAD ist ein eigenständiges Projekt und hat mit Autodesk nichts zu tun. Wo der Name unten vorkommt, beschreibt er nur, wie die Tastenkürzel belegt sind oder in welchem Programm Dateien probeweise geöffnet wurden.
-
 ## Inhalt
 
 - [Grundkörper und Boolesche Operationen](#grundkörper-und-boolesche-operationen)
@@ -160,7 +158,7 @@ Körper lassen sich als STEP-Datei speichern. Andere CAD-Programme öffnen sie a
 
 **Grenzen**
 - In der Datei stehen nur Form, Namen und die Einheit Millimeter; keine Farben, Materialien oder Baugruppen. STEP-Dateien einlesen geht seit dem STEP-Import (nächster Abschnitt).
-- **Fusion 360:** Alle Beispieldateien lassen sich dort ohne Fehler öffnen; bei Kugel und Hohlkörper stimmen Volumen und Oberfläche mit den erwarteten Werten überein. Bei den übrigen wurden sie dort noch nicht verglichen. Beim Bauen prüft das Programm seine Dateien nur mit einem eigenen Leser und eigenen Formeln. Andere Programme können strenger sein als Fusion 360.
+- **In einem anderen CAD-Programm geprüft:** Alle Beispieldateien lassen sich dort ohne Fehler öffnen; bei Kugel und Hohlkörper stimmen Volumen und Oberfläche mit den erwarteten Werten überein. Bei den übrigen wurden sie dort noch nicht verglichen. Beim Bauen prüft das Programm seine Dateien nur mit einem eigenen Leser und eigenen Formeln. Andere Programme können strenger sein.
 - Beendet man das Programm oder schließt man den Tab, während eine STEP-Datei geschrieben wird, wird das Schreiben abgebrochen und die alte Datei bleibt unverändert (ohne Meldung).
 - Ringe aus einer Drehung, bei denen der Bogen die Drehachse berührt oder überschreitet (sogenannte Spindelringe), kann das Programm noch nicht als STEP ausgeben. Solche Körper werden ausgelassen und mit Grund genannt.
 - Kugeln und Kegelspitzen werden so geschrieben, wie es viele Programme tun: Der Pol ist ein Eckpunkt, die Naht läuft hin und zurück. Falls ein Programm das nicht mag, wird die Kugel später in zwei Hälften geteilt.
@@ -250,7 +248,7 @@ Aus den Körpern eines Dokuments entsteht eine technische Zeichnung: Menü „Ze
 - Kann das Programm bei einer Linie nicht sicher sagen, ob sie sichtbar oder verdeckt ist, steht an der Ansicht eine Meldung statt einer Zeichnung; es wird nichts geraten. Bei sehr vielen Flächen meldet es „zu aufwendig“ (höchstens 20 000 Linien je Ansicht).
 - An runden Teilen kann eine sehr knapp angeschnittene Abflachung oder Bohrung eine Doppellinie ergeben; auf Papier fällt das nicht auf, in einer DXF-Datei liegen dann zwei Linien übereinander.
 - Freiformflächen: Ein sehr kleiner, in sich geschlossener Umriss (kleiner als ein Bruchteil der Körpergröße) kann fehlen, ohne dass es gemeldet wird. Eine Freiform mit einem Pol (die Wand läuft in einer Spitze auf der Achse zusammen) wird in Seitenansichten abgelehnt. Ein ausgezogenes Spline-Profil, das man genau von der Seite sieht, kann eine Linie doppelt zeichnen. Bei einem schräg liegenden Ring, den man fast genau von der Seite seiner Ringebene sieht, meldet das Programm „Umriss zu stark gekrümmt“.
-- In Inkscape ist das Öffnen noch nicht von Hand geprüft (siehe „Handtest“ in den offenen Punkten). Beim Bauen prüft das Programm seine Dateien nur mit eigenen Lesern. In Fusion 360 haben SVG-Dateien und DXF-Dateien mit Linien, Kreisen, Bögen und Ellipsen gut funktioniert. Geschlossene Freiformkurven zeigt Fusion an, erkennt sie aber nicht als Fläche; das betrifft nur das Weiterverarbeiten dort, nicht das Ansehen oder Schneiden. Die neu erzeugten DXF-Proben Freiform, Zylinder, Torus und Rundung wurden dort erneut geprüft und lassen sich richtig einfügen; die übrigen Proben wurden nach den letzten Korrekturen nicht einzeln neu geprüft. In der DXF-Datei stehen die Ansichten als Blöcke; falls ein Programm sie nicht anzeigt, hilft es, die Blöcke aufzulösen.
+- In Inkscape ist das Öffnen noch nicht von Hand geprüft (siehe „Handtest“ in den offenen Punkten). Beim Bauen prüft das Programm seine Dateien nur mit eigenen Lesern. In einem anderen CAD-Programm haben SVG-Dateien und DXF-Dateien mit Linien, Kreisen, Bögen und Ellipsen gut funktioniert. Geschlossene Freiformkurven zeigt es an, erkennt sie aber nicht als Fläche; das betrifft nur das Weiterverarbeiten dort, nicht das Ansehen oder Schneiden. Die neu erzeugten DXF-Proben Freiform, Zylinder, Torus und Rundung wurden dort erneut geprüft und lassen sich richtig einfügen; die übrigen Proben wurden nach den letzten Korrekturen nicht einzeln neu geprüft. In der DXF-Datei stehen die Ansichten als Blöcke; falls ein Programm sie nicht anzeigt, hilft es, die Blöcke aufzulösen.
 - Das Schreiben der Datei lässt sich abbrechen; die alte Datei bleibt dann unverändert. Unter Windows reservierte Dateinamen (zum Beispiel „CON“) werden im Namensvorschlag nicht abgefangen.
 
 Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 11 – Zeichnungen (Ansichten)“.
@@ -280,7 +278,7 @@ Jede Zeichnung bekommt ein vollständiges Blatt, wie man es von technischen Zeic
 **Grenzen**
 - Das Datum ist der Tag nach Weltzeit (UTC). Kurz nach Mitternacht kann es deshalb der Vortag sein; es lässt sich ändern.
 - Wie breit ein Text auf dem Blatt wird, schätzt das Programm vorsichtig. Echte Schriften in anderen Programmen können etwas breiter laufen. Sehr breite Zeichen (zum Beispiel chinesische) werden unterschätzt. CAD-Programme schreiben Texte aus DXF-Dateien meist breiter; dort lässt das Programm deshalb mehr Luft, und ein langer Text kann in der DXF-Datei etwas kleiner oder früher gekürzt sein als im SVG.
-- In DXF-Dateien sind nur Zeichen aus dem üblichen Zeichensatz erlaubt; sonst nennt das Programm das Feld und die Nummer des Zeichens (zum Beispiel „U+1F600“ für ein Gesicht) und bricht den DXF-Export ab. SVG nimmt alles. Fusion 360 zeigt Texte aus DXF-Dateien nicht an (bekannt von den Maßen).
+- In DXF-Dateien sind nur Zeichen aus dem üblichen Zeichensatz erlaubt; sonst nennt das Programm das Feld und die Nummer des Zeichens (zum Beispiel „U+1F600“ für ein Gesicht) und bricht den DXF-Export ab. SVG nimmt alles. Das andere CAD-Programm zeigt Texte aus DXF-Dateien nicht an (bekannt von den Maßen).
 - Auf A4 ist die Schrift im Schriftfeld klein (siehe oben); gedruckt ist sie lesbar, liegt aber unter dem, was für technische Zeichnungen sonst üblich ist.
 - Zentriermarken und Raster folgen den Entwurfswerten (Marken 0,5 mm stark und 5 mm in den Rahmen hinein); ein öffentlich zugänglicher Auszug der Norm nennt 0,7 mm und 10 mm. Die Normtexte sind kostenpflichtig und lagen nicht vor, die Zahlen sind deshalb nicht endgültig bestätigt.
 - Das Projektionszeichen liegt in der DXF-Datei zusammen mit den Zentriermarken auf der Ebene „BLATT_MITTE“.
@@ -324,7 +322,7 @@ Eine Zeichnung mit mehreren Teilen bekommt eine Stückliste, und an den Teilen i
 - In der isometrischen Ansicht lassen sich Positionsnummern setzen; ihre Lage ist dort, wie die ganze Isometrie, nur bestmöglich.
 - Die Maße der Tabelle (Zeilenhöhe 7 mm, Schrift 3,5 mm, Spalten 12 / 78 / 15 / 45 / 30 mm) und des Kreises (Durchmesser 8 mm, Zahl 3,5 mm, Kreislinie 0,35 mm, Hinweislinie 0,25 mm, Punkt 1 mm) sind auf A3 bezogen und wachsen oder schrumpfen mit dem Papier wie das übrige Blatt, Linien nie unter 0,18 mm. Sie folgen der Praxis und sind nicht aus der Norm belegt (die Normen waren nicht verfügbar). Wer die Norm prüft, sagt, was abweicht.
 - Die Zahl im Kreis wird verkleinert, wenn sie nicht hineinpasst („200“ ist deutlich kleiner als „7“); in DXF mit dem Zuschlag für CAD-Schriften noch etwas mehr.
-- Fusion 360 zeigt DXF-Texte nicht an (Tabelle und Zahlen sind dort nur als Linien zu sehen); LibreCAD oder QCAD zeigen sie.
+- Das andere CAD-Programm zeigt DXF-Texte nicht an (Tabelle und Zahlen sind dort nur als Linien zu sehen); LibreCAD oder QCAD zeigen sie.
 - Die Folgeblätter übernehmen Papier und Ausrichtung des ersten Stücklistenblatts; ein eigenes Papier für ein Folgeblatt gibt es nicht. Eigene Blattangaben eines Folgeblatts (zum Beispiel ein eigener Titel bei „Stückliste (2)“) gehen verloren, wenn das Blatt verschwindet, weil es weniger Zeilen gibt; kommt es wieder, hat es neue, automatische Texte.
 - In DXF-Dateien kann ein Tabellentext mit „…“ gekürzt sein, ohne dass das Fenster davor warnt (die Warnung richtet sich nach SVG). Eine sehr lange Benennung mit vielen Umlauten (etwa ab 30 Zeichen) sperrt den DXF-Export mit einer Meldung, die das Feld nennt; dann die Benennung kürzen.
 - Ein Stücklistenblatt lässt sich in einem Dokument ohne feste Körper nicht ausgeben.
@@ -350,7 +348,7 @@ In einer Zeichnung lassen sich Maße setzen und Mittellinien zeigen. Die Maße h
 - Der Vorschlag setzt nur Grundmaße, keine vollständige Fertigungsbemaßung.
 - Passungen sind nur ein Text; es gibt keine Passungstabellen. In der DXF-Datei sind die Maße einfache Linien, Pfeile und Texte, keine echten CAD-Maße.
 - Wie breit ein Text wird, schätzt das Programm nur. Mit einer anderen Schrift kann er etwas breiter ausfallen.
-- Ob Fusion 360 die Maßtexte und Pfeile der DXF-Dateien richtig anzeigt, ist noch nicht von Hand geprüft.
+- Ob das andere CAD-Programm die Maßtexte und Pfeile der DXF-Dateien richtig anzeigt, ist noch nicht von Hand geprüft.
 - Nicht dabei: freie Texte. Schnitte, Schriftfeld, Stückliste und Positionsnummern gibt es inzwischen, siehe die Abschnitte davor und danach. Maße in Zeichnungen messen das Modell und rechnen nicht mit Parametern; Formeln gibt es nur im Modell und in den Maßen der Skizze (siehe „Parameter und Formeln“).
 
 Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 12 – Maße und Mittellinien“.
@@ -415,7 +413,7 @@ Ein Teil mit Bohrungen, Taschen oder einem Hohlraum zeigt in den normalen Ansich
 - Bei extrem großen Kreisen oder extrem welligen Kanten zeichnet das Programm die Kante der Schnittfläche etwas gröber als sonst. Das tritt in der Praxis nicht auf.
 - Die Schnittbuchstaben haben die Höhe des Maßtexts (3,5 mm) auf jedem Blatt; auf A0 wirken sie neben dem größeren Titel klein.
 - Der Knopf „Blattangaben“ im Werkzeugfeld der Zeichnung zeigt jetzt nur sein Symbol (der Name steht im Hinweis beim Darüberfahren und im Menü „Zeichnung“), damit „Schnitt“ bei 1100 × 700 noch in die Zeile passt.
-- Ob Inkscape, Fusion (DXF) und zwei PDF-Betrachter die Proben richtig zeigen, ist noch nicht von Hand geprüft.
+- Ob Inkscape, ein anderes CAD-Programm (DXF) und zwei PDF-Betrachter die Proben richtig zeigen, ist noch nicht von Hand geprüft.
 
 Einzelheiten und die Handliste: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 3d – Schnittansichten“.
 
@@ -652,14 +650,14 @@ Einzelheiten: `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt 13�
 
 ## Tastenkürzel und Maus
 
-Die Tasten sind ab Werk wie in Fusion: zum Beispiel E extrudiert, F rundet, V blendet einen Körper ein oder aus, Entf löscht, die Leertaste wiederholt den letzten Befehl; in der Skizze wählen L, R und C die Werkzeuge Linie, Rechteck und Kreis; in der Zeichnung setzen D ein Maß und B eine Position. Die bisherigen Kürzel für Dateien und Rückgängig gelten weiter.
+Die Tasten sind ab Werk wie in gängigen CAD-Programmen: zum Beispiel E extrudiert, F rundet, V blendet einen Körper ein oder aus, Entf löscht, die Leertaste wiederholt den letzten Befehl; in der Skizze wählen L, R und C die Werkzeuge Linie, Rechteck und Kreis; in der Zeichnung setzen D ein Maß und B eine Position. Die bisherigen Kürzel für Dateien und Rückgängig gelten weiter.
 
 - **Ändern:** Menü „Datei → Einstellungen …“, Abschnitt „Tastenkürzel“. In der Zeile „Ändern“ wählen, dann die neue Taste drücken. Ist die Taste schon vergeben, fragt das Programm, ob getauscht werden soll. „Zurücksetzen“ holt die Voreinstellung zurück.
 - **Nachschlagen:** „Ansicht → Tastenkürzel …“ oder die Taste S öffnet eine Übersicht mit Suchfeld. Man kann nach dem Namen oder nach der Taste suchen.
 - **Maus in der 3D-Ansicht:** Die mittlere Taste schwenkt, Umschalt und mittlere Taste drehen, das Rad zoomt. Die linke Taste dreht weiter (aber nicht mehr, wenn Strg oder Alt gehalten wird). Auch die Mausbewegungen lassen sich in den Einstellungen ändern.
 - Während du in ein Feld tippst oder ein Fenster offen ist, lösen die Tasten für Modell, Skizze und Zeichnung nichts aus.
 
-Welche Fusion-Kürzel noch fehlen, weil es die Funktion noch nicht gibt, steht in `docs/superpowers/offene-punkte.md`, Abschnitt „Tastenkürzel“.
+Welche üblichen Kürzel noch fehlen, weil es die Funktion noch nicht gibt, steht in `docs/superpowers/offene-punkte.md`, Abschnitt „Tastenkürzel“.
 
 ## Rückmeldung, Absturzberichte und Protokoll
 
@@ -677,7 +675,15 @@ Welche Fusion-Kürzel noch fehlen, weil es die Funktion noch nicht gibt, steht i
 
 ## Updates und Versionen
 
-Das Programm kann sich selbst aktualisieren (nur unter Windows). Beim Start fragt es im Hintergrund bei GitHub nach, ob es eine neuere Version gibt. Dabei wird nichts Persönliches gesendet. Gibt es eine, erscheint ein Fenster mit den Änderungen und drei Knöpfen: „Jetzt aktualisieren“, „Später“ (die Meldung kommt frühestens nach 24 Stunden wieder) und „Diese Version überspringen“. Die Meldung steht unten rechts, andere Fenster verdecken sie nicht. Vor dem Neustart fragt das Programm nach ungespeicherter Arbeit („Neustart für das Update“). Danach lässt es sich ein paar Sekunden nicht bedienen, bis die neue Version läuft; sie öffnet in derselben Fenstergröße. Das Herunterladen wird mit einer Prüfsumme kontrolliert. Klappt der Austausch nicht, bleibt die alte Version; die Meldung sagt das deutlich, und das Update lässt sich später noch einmal versuchen.
+**Installieren** (Schritt für Schritt steht es auch in der [README](../README.md#herunterladen-und-starten))
+- Du lädst `planoracad-setup-x64.exe` von der Seite der Veröffentlichungen und startest die Datei.
+- Im Installer wählst du „Nur für mich“ (ohne Administratorrechte) oder „Für alle Benutzer“ (Windows fragt nach Administratorrechten). Das Programm landet im Startmenü; ein Häkchen legt zusätzlich eine Verknüpfung auf den Desktop.
+- Deinstallieren geht über „Einstellungen → Apps“ in Windows. Deine Projekte, Einstellungen und Protokolle bleiben dabei erhalten.
+
+**Aktualisieren**
+- Das Programm kann sich selbst aktualisieren (nur unter Windows, nur wenn es mit dem Installer installiert wurde). Beim Start fragt es im Hintergrund bei GitHub nach, ob es eine neuere Version gibt. Dabei wird nichts Persönliches gesendet. Gibt es eine, erscheint ein Fenster mit den Änderungen und drei Knöpfen: „Jetzt aktualisieren“, „Später“ (die Meldung kommt frühestens nach 24 Stunden wieder) und „Diese Version überspringen“. Die Meldung steht unten rechts, andere Fenster verdecken sie nicht.
+- Bei „Jetzt aktualisieren“ lädt das Programm den neuen Installer herunter und prüft ihn mit einer Prüfsumme. Dann fragt es nach ungespeicherter Arbeit („Neustart für das Update“), beendet sich und startet den Installer im Hintergrund. Er nimmt dieselbe Installationsart wie bisher. Bei „Für alle Benutzer“ fragt Windows nach Administratorrechten; lehnst du ab, läuft die bisherige Version weiter. Danach öffnet sich die neue Version in derselben Fenstergröße.
+- Wurde das Programm nicht installiert, sondern aus dem Bauordner gestartet, zeigt es nur den Knopf „Download-Seite öffnen“.
 
 Unter „Datei → Einstellungen …“, Abschnitt „Updates“, lässt sich die Suche beim Start abschalten oder von Hand starten. Die Suche von Hand zeigt auch eine übersprungene Version wieder. Eine übersprungene Version steht dort mit dem Knopf „Doch wieder anzeigen“.
 
@@ -687,10 +693,9 @@ Unter „Datei → Einstellungen …“, Abschnitt „Updates“, lässt sich di
 - Wer die Suche abschaltet, bekommt keine Meldungen mehr und das Programm verbindet sich nie von selbst. Die Versionen stehen weiter auf der Seite der Veröffentlichungen im Repository.
 
 **Was nicht geht**
-- Die Programmdatei ist nicht signiert. Windows kann beim ersten Start eine Warnung zeigen („SmartScreen“). Die Prüfsumme schützt nur vor Fehlern bei der Übertragung, nicht davor, dass jemand die Veröffentlichung selbst austauscht.
+- Der Installer ist nicht signiert. Windows kann beim ersten Start eine Warnung zeigen („SmartScreen“). Die Prüfsumme schützt nur vor Fehlern bei der Übertragung, nicht davor, dass jemand die Veröffentlichung selbst austauscht.
 - Updates gibt es nur für Windows (64 Bit). Unter Linux und macOS fragt das Programm nicht bei GitHub nach und zeigt keine Meldung. Der Knopf „Jetzt nach Updates suchen“ antwortet dort: „Auf diesem System gibt es keine Aktualisierung über das Programm.“
-- Es gibt kein Zurück auf eine ältere Version. Das Programm bietet nur neuere Versionen an. Wer eine ältere braucht, lädt sie von Hand herunter und ersetzt damit die Programmdatei (meist `planoracad-windows-x64.exe`).
-- Liegt das Programm in einem geschützten Ordner (zum Beispiel unter „Programme“), kann es sich nicht selbst ersetzen. Es zeigt dann einen Knopf zur Download-Seite.
+- Es gibt kein Zurück auf eine ältere Version. Das Programm bietet nur neuere Versionen an. Wer eine ältere braucht, lädt deren Installer von der Seite der Veröffentlichungen und führt ihn aus.
 
 **Kanäle**
 - **Dev:** Entwicklerversionen, zum Beispiel `0.2.0-dev.1`. Sie sind noch nicht für den Alltag gedacht. Zurzeit gibt es nur diesen Kanal.
@@ -702,7 +707,7 @@ Unter „Datei → Einstellungen …“, Abschnitt „Updates“, lässt sich di
 3. Lokal prüfen und committen: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace --no-fail-fast`, `cargo deny check`; unter Linux (WSL) zusätzlich die Tests.
 4. Die volle Prüfung auf GitHub einmal von Hand starten (sie läuft nicht bei jedem Push): `gh workflow run ci.yml --ref <Zweig>`, dann `gh run watch`. Sie muss grün enden.
 5. `powershell -File tools\release.ps1` noch einmal starten. Es prüft Version, Changelog und dass es für genau diesen Commit einen grünen Lauf von `ci.yml` gibt. Ist alles in Ordnung, gibt es die zwei Befehle für den Tag aus (`git tag -a v0.2.0-dev.2 …` und `git push origin v0.2.0-dev.2`). Das Skript selbst setzt keinen Tag und pusht nichts.
-6. Der Tag startet `.github/workflows/release.yml`. Er prüft, dass die Version in `Cargo.toml` zum Tag passt und der Changelog-Abschnitt da ist, lässt `cargo deny check` laufen (die vollen Tests nicht, die hat `ci.yml` schon gemacht), baut die Windows-Version und legt das Release an. Es enthält `planoracad-windows-x64.exe`, `planoracad-windows-x64.sha256`, `THIRD-PARTY-LICENSES.txt` und die Symboldatei `planoracad-windows-x64.pdb` (nur zum Auflösen von Absturzberichten; die Update-Funktion lädt sie nie). Versionen mit `-dev` oder `-beta` sind als Vorabversion markiert.
+6. Der Tag startet `.github/workflows/release.yml`. Er prüft, dass die Version in `Cargo.toml` zum Tag passt und der Changelog-Abschnitt da ist, lässt `cargo deny check` laufen (die vollen Tests nicht, die hat `ci.yml` schon gemacht), baut die Windows-Version, packt sie mit Inno Setup 6 (`tools\build-installer.ps1`) zum Installer und legt das Release an. Es enthält `planoracad-setup-x64.exe`, `planoracad-setup-x64.sha256`, `THIRD-PARTY-LICENSES.txt` und die Symboldatei `planoracad-windows-x64.pdb` (nur zum Auflösen von Absturzberichten; die Update-Funktion lädt sie nie). Versionen mit `-dev` oder `-beta` sind als Vorabversion markiert.
 
 **Trockenlauf von `release.yml`:** Auf GitHub unter „Actions → Release → Run workflow“ (oder `gh workflow run release.yml --ref <Zweig>`). Ohne Tag baut der Ablauf alles wie beim echten Release, legt aber kein Release an. Die vier Dateien liegen danach drei Tage lang als Ergebnis des Laufs bereit und lassen sich prüfen.
 
@@ -710,4 +715,4 @@ Unter „Datei → Einstellungen …“, Abschnitt „Updates“, lässt sich di
 
 **Absturzbericht auflösen:** Die Windows-Version enthält keine Zeilenangaben; der „Ablauf (Backtrace)“ im Bericht eines Testers zeigt deshalb nur `<unknown>`. Am Ende steht aber der Abschnitt „Adressen (für Dennis)“: die Rücksprungadressen als `planoracad-windows-x64.exe+0x…` und die Bau-Kennung (PDB-GUID). `powershell -File tools\symbolize.ps1 -Report absturz-….txt -Version 0.2.0-dev.2` lädt die passende `.pdb` des Releases (nur lesen, mit `gh`) und zeigt je Rahmen Funktion, Datei und Zeile; mit `-Pdb <Pfad>` statt `-Version` nimmt es eine vorhandene `.pdb`. Es prüft, dass die PDB-GUID zum Bericht passt. Nötig ist nur Windows (die Auflösung nutzt die mitgelieferte `dbghelp.dll`) und für `-Version` die GitHub-Kommandozeile `gh`. Die geladene `.pdb` bleibt im Temp-Ordner liegen und kann dort gelöscht werden.
 
-**Wenn nach einem Update etwas nicht stimmt:** Die Programmdatei behält ihren Namen, meist `planoracad-windows-x64.exe` (so heißt sie im Release). Nach einem Austausch liegt daneben die bisherige Datei als `planoracad-windows-x64.exe.old`. Sie bleibt liegen, bis das Programm das nächste Mal ganz normal gestartet wird, und wird dann gelöscht. Startet die neue Version nicht, `planoracad-windows-x64.exe` löschen oder umbenennen und `planoracad-windows-x64.exe.old` wieder in `planoracad-windows-x64.exe` umbenennen. Die Projekte und Einstellungen liegen außerhalb der Programmdatei und bleiben unberührt.
+**Wenn nach einem Update etwas nicht stimmt:** Führ den Installer der gewünschten Version von der Seite der Veröffentlichungen noch einmal aus; er ersetzt die installierte Version. Das Programm schreibt den Verlauf des Updates in die Datei `planoracad-update.log` im Temp-Ordner (Windows-Taste + R, `%TEMP%` eintippen). Die Projekte und Einstellungen liegen außerhalb des Programmordners und bleiben unberührt.
