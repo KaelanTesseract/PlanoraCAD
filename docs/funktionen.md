@@ -698,7 +698,7 @@ Unter „Datei → Einstellungen …“, Abschnitt „Updates“, lässt sich di
 - Es gibt kein Zurück auf eine ältere Version. Das Programm bietet nur neuere Versionen an. Wer eine ältere braucht, lädt deren Installer von der Seite der Veröffentlichungen und führt ihn aus.
 
 **Kanäle**
-- **Dev:** Entwicklerversionen, zum Beispiel `0.2.0-dev.1`. Sie sind noch nicht für den Alltag gedacht. Zurzeit gibt es nur diesen Kanal.
+- **Dev:** Entwicklerversionen, zum Beispiel `0.0.2-dev.1`. Sie sind noch nicht für den Alltag gedacht. Zurzeit gibt es nur diesen Kanal.
 - **Beta** (`0.9.0-beta.1`) und **Stabil** (`1.0.0`) kommen später dazu. Wer Dev gewählt hat, bekommt auch Beta- und stabile Versionen, sofern sie neuer sind.
 
 **Wie eine Version entsteht**

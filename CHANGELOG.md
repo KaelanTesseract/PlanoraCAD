@@ -2,7 +2,7 @@
 
 Hier steht, was sich in jeder Version geändert hat. Die neueste Version steht oben.
 
-## 0.2.0-dev.1
+## 0.0.2-dev.1
 
 Das ist die erste Entwicklerversion mit Update-Funktion. Sie ist noch nicht für den Alltag gedacht.
 

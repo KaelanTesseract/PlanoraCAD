@@ -9,7 +9,7 @@
 
 PlanoraCAD ist ein kostenloses, quelloffenes Programm, mit dem du Bauteile am Computer in 3D konstruierst und technische Zeichnungen davon erstellst.
 
-> **Stand:** PlanoraCAD ist noch in einer frühen Entwicklung. Die erste Version zum Ausprobieren ist die Entwicklerversion `0.2.0-dev.1`, nur für Windows (64 Bit). Sie ist noch nicht für den Alltag gedacht. Rechne mit Fehlern und sichere wichtige Projekte zusätzlich.
+> **Stand:** PlanoraCAD ist noch in einer frühen Entwicklung. Die erste Version zum Ausprobieren ist die Entwicklerversion `0.0.2-dev.1`, nur für Windows (64 Bit). Sie ist noch nicht für den Alltag gedacht. Rechne mit Fehlern und sichere wichtige Projekte zusätzlich.
 
 ## Was du damit machen kannst
 
