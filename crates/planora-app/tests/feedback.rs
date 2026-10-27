@@ -915,3 +915,66 @@ fn cleanup_feedback_dirs_drops_old_then_keeps_ten_newest_and_only_own() {
     // Fehlender Ordner: kein Absturz.
     cleanup_feedback_dirs(&data.join("gibt-es-nicht"), now);
 }
+
+#[test]
+fn cleanup_feedback_dirs_only_touches_exact_own_names() {
+    let data = temp("aufraeumen-streng");
+    let base = data.join(FEEDBACK_DIR);
+    let now = chrono::NaiveDate::from_ymd_opt(2026, 10, 26)
+        .unwrap()
+        .and_hms_opt(12, 0, 0)
+        .unwrap();
+    let foreign = [
+        "2026-09-01_10-00-00_backup",
+        "2026-09-01_10-00-00_",
+        "2026-9-1_10-0-0",
+        "x2026-09-01_10-00-00",
+        "2026-09-01_10-00-00_007",
+        "2026-09-01_10-00-00_1",
+        "2026-09-01_10-00-00_2x",
+    ];
+    for f in foreign {
+        std::fs::create_dir_all(base.join(f)).unwrap();
+    }
+    let own_old = base.join("2026-09-01_10-00-00_2");
+    std::fs::create_dir_all(&own_old).unwrap();
+    cleanup_feedback_dirs(&base, now);
+    for f in foreign {
+        assert!(base.join(f).exists(), "fremd, bleibt: {f}");
+    }
+    assert!(!own_old.exists(), "eigener alter Ordner geht");
+}
+
+#[test]
+fn cleanup_feedback_dirs_treats_future_stamps_as_now() {
+    let data = temp("aufraeumen-zukunft");
+    let base = data.join(FEEDBACK_DIR);
+    let now = chrono::NaiveDate::from_ymd_opt(2026, 10, 26)
+        .unwrap()
+        .and_hms_opt(12, 0, 0)
+        .unwrap();
+    let mk = |name: &str| {
+        let d = base.join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    };
+    // Falsche Uhr: weit in der Zukunft. Zählt wie "jetzt": nicht sofort gelöscht,
+    // aber auch nicht vor frischen Ordnern gerettet, wenn mehr als zehn da sind.
+    let future = mk("2030-01-01_00-00-00");
+    let fresh: Vec<_> = (1..=10)
+        .map(|i| mk(&format!("2026-10-{:02}_10-00-00", i + 10)))
+        .collect();
+    cleanup_feedback_dirs(&base, now);
+    assert!(future.exists(), "nicht sofort gelöscht");
+    assert!(!fresh[0].exists(), "ältester Platz 11 geht");
+    for d in &fresh[1..] {
+        assert!(d.exists());
+    }
+    // Zeit holt den Stempel ein: dann altert er normal.
+    let later = chrono::NaiveDate::from_ymd_opt(2030, 3, 1)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap();
+    cleanup_feedback_dirs(&base, later);
+    assert!(!future.exists());
+}

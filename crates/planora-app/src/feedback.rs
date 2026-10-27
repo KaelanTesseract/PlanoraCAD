@@ -888,11 +888,29 @@ pub const FEEDBACK_KEEP_MAX: usize = 10;
 /// Zeitpunkt aus dem Ordnernamen `<Datum_Uhrzeit>` oder `<Datum_Uhrzeit>_<n>` (siehe
 /// [`bundle_dir`]) samt Zähler; fremde Namen ergeben `None`.
 fn bundle_stamp(name: &str) -> Option<(chrono::NaiveDateTime, u32)> {
-    let (stamp, n) = match name.get(19..) {
-        None | Some("") => (name, 1),
-        Some(rest) => (&name[..19], rest.strip_prefix('_')?.parse::<u32>().ok()?),
+    const SHAPE: &[u8; 19] = b"dddd-dd-dd_dd-dd-dd";
+    let b = name.as_bytes();
+    if b.len() < 19 {
+        return None;
+    }
+    let shaped = b[..19].iter().zip(SHAPE).all(|(c, s)| match s {
+        b'd' => c.is_ascii_digit(),
+        s => c == s,
+    });
+    if !shaped {
+        return None;
+    }
+    let n = if b.len() == 19 {
+        1
+    } else {
+        // Nur `_<n>` mit n >= 2, ohne führende Null (so legt `bundle_dir` sie an).
+        let digits = std::str::from_utf8(&b[19..]).ok()?.strip_prefix('_')?;
+        if digits.starts_with('0') || !digits.bytes().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        digits.parse::<u32>().ok().filter(|n| *n >= 2)?
     };
-    let t = chrono::NaiveDateTime::parse_from_str(stamp, "%Y-%m-%d_%H-%M-%S").ok()?;
+    let t = chrono::NaiveDateTime::parse_from_str(&name[..19], "%Y-%m-%d_%H-%M-%S").ok()?;
     Some((t, n))
 }
 
@@ -909,6 +927,11 @@ pub fn cleanup_feedback_dirs(base: &Path, now: chrono::NaiveDateTime) {
         .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
         .filter_map(|e| Some((bundle_stamp(e.file_name().to_str()?)?, e.path())))
         .collect();
+    // Ein Zeitstempel in der Zukunft (falsche Uhr) zählt wie "jetzt": Er altert erst, wenn die
+    // Zeit ihn eingeholt hat, und bleibt nicht ewig über allen anderen.
+    for (key, _) in &mut own {
+        key.0 = key.0.min(now);
+    }
     own.sort_by_key(|a| std::cmp::Reverse(a.0));
     let max_age = chrono::Duration::days(FEEDBACK_KEEP_DAYS);
     for (i, ((time, _), path)) in own.iter().enumerate() {
