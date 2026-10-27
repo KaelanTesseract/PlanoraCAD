@@ -69,6 +69,9 @@ pub struct Diag {
     pending: Vec<String>,
     /// So viele Zeilen noch überspringen, bevor erneut geschrieben wird.
     skip: u32,
+    /// So viele Zeilen noch nicht drehen (nach einem gescheiterten Drehen; geschrieben wird
+    /// weiter in die aktuelle Datei).
+    rotate_skip: u32,
     verbose: bool,
     file_error: bool,
     /// Pfad des aktiven Dokuments, nur für den Absturzbericht (nie ins Protokoll).
@@ -84,6 +87,7 @@ impl Diag {
             dir: None,
             pending: Vec::new(),
             skip: 0,
+            rotate_skip: 0,
             verbose: false,
             file_error: false,
             document: None,
@@ -140,7 +144,15 @@ impl Diag {
         let size = fs::metadata(&path).map_or(0, |m| m.len());
         let mut rotate_failed = false;
         if size > 0 && size + data.len() as u64 > MAX_LOG_BYTES {
-            rotate_failed = !rotate(&dir);
+            if self.rotate_skip > 0 {
+                self.rotate_skip -= 1;
+                rotate_failed = true;
+            } else if !rotate(&dir) {
+                // Nicht in jeder Zeile neu versuchen; bis dahin wächst die aktuelle Datei etwas
+                // über die Grenze.
+                rotate_failed = true;
+                self.rotate_skip = RETRY_AFTER;
+            }
         }
         let result = OpenOptions::new()
             .create(true)
@@ -224,6 +236,12 @@ impl Diag {
 
 /// `planora.log` → `.1.log` → `.2.log`; die älteste Datei fällt weg. Wahr, wenn die aktuelle
 /// Datei erfolgreich weggeschoben wurde.
+///
+/// Von der ältesten Datei her, und beim ersten Fehler ist Schluss: so bleibt nie eine Datei
+/// auf der Strecke, weil ein späterer Schritt scheiterte. Nachgerückt wird nur bis zum ersten
+/// freien Platz (ein früherer, gescheiterter Versuch hat `.1.log` schon frei gemacht); dann wird
+/// nur noch die aktuelle Datei verschoben, und wiederholte Versuche löschen keine älteren
+/// Dateien nach und nach.
 fn rotate(dir: &Path) -> bool {
     let name = |i: usize| {
         if i == 0 {
@@ -232,15 +250,24 @@ fn rotate(dir: &Path) -> bool {
             dir.join(format!("planora.{i}.log"))
         }
     };
-    let _ = fs::remove_file(name(LOG_FILES - 1));
-    let mut moved = true;
-    for i in (0..LOG_FILES - 1).rev() {
-        let r = fs::rename(name(i), name(i + 1));
-        if i == 0 {
-            moved = r.is_ok();
+    // Der erste freie Platz ab `.1.log`; fehlt einer, fällt die älteste Datei weg.
+    let exists = |i: usize| fs::symlink_metadata(name(i)).is_ok();
+    let free = match (1..LOG_FILES).find(|&i| !exists(i)) {
+        Some(k) => k,
+        None => {
+            if fs::remove_file(name(LOG_FILES - 1)).is_err() {
+                return false;
+            }
+            LOG_FILES - 1
+        }
+    };
+    // Nur die Dateien vor dem freien Platz rücken nach.
+    for i in (1..free).rev() {
+        if fs::rename(name(i), name(i + 1)).is_err() {
+            return false;
         }
     }
-    moved
+    fs::rename(name(0), name(1)).is_ok()
 }
 
 /// Steuerzeichen (auch Zeilentrenner) zu Leerzeichen; auf [`MAX_LINE_CHARS`] Zeichen gekürzt.

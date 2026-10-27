@@ -247,3 +247,112 @@ fn init_global_twice_keeps_lines_without_doubling() {
         1
     );
 }
+
+#[test]
+fn two_thousand_detail_lines_stay_quick() {
+    let dir = temp("tempo");
+    let mut d = Diag::with_dir(&dir);
+    d.set_verbose(true);
+    let start = std::time::Instant::now();
+    for i in 0..2000 {
+        d.log(Level::Detail, &format!("Befehl Rückgängig: {i} ms"));
+    }
+    let took = start.elapsed();
+    eprintln!("2000 Zeilen: {took:?}");
+    let text = std::fs::read_to_string(logs(&dir).join(LOG_NAME)).unwrap();
+    assert_eq!(text.lines().count(), 2000);
+    // Grob: im Mittel unter 1 ms je Zeile (im UI-Faden kaum spürbar).
+    assert!(took < std::time::Duration::from_secs(2), "{took:?}");
+}
+
+/// Schreibt `n` Zeilen zu je rund 1 kB (überschreitet bei 1100 Zeilen die Grenze).
+fn fill(d: &mut Diag, tag: &str, n: usize) {
+    for i in 0..n {
+        d.log(Level::Info, &format!("{tag} {i} {}", "z".repeat(1000)));
+    }
+}
+
+#[test]
+fn a_failed_rotation_keeps_older_files_and_pauses() {
+    let dir = temp("rot-fail");
+    let l = logs(&dir);
+    let mut d = Diag::with_dir(&dir);
+    std::fs::write(l.join("planora.1.log"), "eins-alt\n").unwrap();
+    // Die älteste Datei lässt sich nicht entfernen (ein Ordner mit Inhalt an ihrer Stelle):
+    // dann darf nichts weitergeschoben werden.
+    let oldest = l.join("planora.2.log");
+    std::fs::create_dir(&oldest).unwrap();
+    std::fs::write(oldest.join("drin"), "x").unwrap();
+    fill(&mut d, "a", 1100);
+    assert!(d.file_error(), "Drehen gescheitert wird gemeldet");
+    assert_eq!(
+        std::fs::read_to_string(l.join("planora.1.log")).unwrap(),
+        "eins-alt\n",
+        "ältere Datei bleibt"
+    );
+    let size = std::fs::metadata(l.join(LOG_NAME)).unwrap().len();
+    assert!(size > MAX_LOG_BYTES, "weiter in die aktuelle Datei");
+    // Hindernis weg: nicht gleich in der nächsten Zeile erneut versucht, erst nach einer Pause.
+    std::fs::remove_dir_all(&oldest).unwrap();
+    d.log(Level::Info, "gleich danach");
+    assert_eq!(
+        std::fs::read_to_string(l.join("planora.1.log")).unwrap(),
+        "eins-alt\n",
+        "kein erneuter Versuch in jeder Zeile"
+    );
+    fill(&mut d, "b", 60);
+    let one = std::fs::read_to_string(l.join("planora.1.log")).unwrap();
+    assert!(one.contains("gleich danach"), "nach der Pause gedreht");
+    assert_eq!(
+        std::fs::read_to_string(l.join("planora.2.log")).unwrap(),
+        "eins-alt\n"
+    );
+    assert!(!d.file_error());
+    let text = std::fs::read_to_string(l.join(LOG_NAME)).unwrap();
+    assert!(text.contains("b 59"));
+}
+
+/// Unter Windows: die aktuelle Datei ist offen ohne Erlaubnis zum Umbenennen (etwa ein
+/// Virenscanner); sie bleibt, wird weiter beschrieben, und die älteren Dateien gehen über
+/// wiederholte Versuche nicht nach und nach verloren.
+#[cfg(windows)]
+#[test]
+fn a_locked_current_file_never_eats_the_older_ones() {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_SHARE_READ: u32 = 1;
+    const FILE_SHARE_WRITE: u32 = 2;
+    let dir = temp("rot-lock");
+    let l = logs(&dir);
+    let mut d = Diag::with_dir(&dir);
+    d.log(Level::Info, "start");
+    std::fs::write(l.join("planora.1.log"), "eins-alt\n").unwrap();
+    std::fs::write(l.join("planora.2.log"), "zwei-alt\n").unwrap();
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .open(l.join(LOG_NAME))
+        .unwrap();
+    fill(&mut d, "a", 1100);
+    assert!(d.file_error());
+    // Viele weitere Versuche (je nach der Pause).
+    fill(&mut d, "b", 300);
+    let older: Vec<String> = ["planora.1.log", "planora.2.log"]
+        .iter()
+        .filter_map(|n| std::fs::read_to_string(l.join(n)).ok())
+        .collect();
+    assert!(
+        older.iter().any(|t| t == "eins-alt\n"),
+        "die jüngere ältere Datei bleibt: {:?}",
+        older.iter().map(|t| t.len()).collect::<Vec<_>>()
+    );
+    let text = std::fs::read_to_string(l.join(LOG_NAME)).unwrap();
+    assert!(text.contains("b 299"), "weiter geschrieben");
+    drop(held);
+    fill(&mut d, "c", 60);
+    assert!(!d.file_error());
+    assert!(
+        std::fs::read_to_string(l.join("planora.1.log"))
+            .unwrap()
+            .contains("b 299")
+    );
+}
