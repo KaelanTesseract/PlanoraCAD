@@ -48,7 +48,7 @@ PlanoraCAD ist seit 0.0.2-dev.1 öffentlich. Alle Texte im Programm sind fest au
 2. **Ablage:** Die Sprachdateien für Deutsch und Englisch werden ins Programm eingebaut (immer vorhanden, auch ohne Installer). Zusätzliche Sprachen liegen als `.ftl` in einem Ordner `languages` neben der exe (der Installer liefert ihn mit) und werden beim Start gelesen. Wie genau Ordner und Dateinamen heißen, entscheidet der Plan. (Meine Entscheidung.)
 3. **Rückfall:** Fehlt ein Text in einer Sprache, erscheint der englische. Fehlt er auch dort (Programmfehler), erscheint der Schlüssel; nie ein Absturz. Eine fehlerhafte Sprachdatei wird übergangen und im (englischen) Protokoll vermerkt.
 4. **Prüfungen:** Ein Test stellt sicher, dass Deutsch und Englisch dieselben Schlüssel haben, dass jeder im Code benutzte Schlüssel existiert und dass die Platzhalter übereinstimmen. Ein zweiter Test belegt Ziel 8 an Stichproben (bestehende Text-Tests bleiben deutsch und laufen weiter mit Sprache Deutsch).
-5. **Fehlermeldungen der Bibliotheks-Crates:** Die Crates außer `planora-app` bekommen keine Sprachdateien. Ihre Fehlertypen bleiben Daten; der Text für den Benutzer entsteht in `planora-app` über die Sprachdatei, der englische Text fürs Protokoll ebenso. Wie die Zuordnung technisch aussieht (z. B. Schlüssel je Fehlerfall, Platzhalter für Werte), entscheidet der Plan. (Meine Entscheidung.)
+5. **Fehlermeldungen der Bibliotheks-Crates:** Eine eigene kleine Crate `planora-i18n` ganz unten im Abhängigkeitsbaum hält die Sprachdateien und die aktuelle Sprache; alle Crates holen ihre Texte dort. Die englische Fassung fürs Protokoll entsteht, indem derselbe Text kurz in Englisch erzeugt wird. (Meine Entscheidung; geändert beim Planen am 2026-10-27: Die erste Fassung wollte alle rund 1000 Fehlertexte der Bibliotheken einzeln in `planora-app` zuordnen – doppelte Arbeit und doppelte Pflege.)
 6. **Englische Texte** schreibt Claude, in derselben einfachen Sprache wie die deutschen (kurze Sätze, Alltagswörter, „you“-Form). Fachwörter wie in gängigen englischen CAD-Programmen (Extrude, Revolve, Fillet, Chamfer, Sketch, Constraint), ohne Markennamen fremder Programme.
 7. **Breite:** Englische Texte sind oft anders lang. Das Layout muss bei 1920 × 1080 in beiden Sprachen ohne abgeschnittene oder überlappende Texte funktionieren; kleinere Fenster sind kein Ziel.
 
@@ -57,10 +57,10 @@ PlanoraCAD ist seit 0.0.2-dev.1 öffentlich. Alle Texte im Programm sind fest au
 In Etappen, jede mit Prüfung und Sichtprüfung im Fenster (nur mit Dennis' Go):
 
 1. Grundgerüst: Sprachdateien, Laden, Rückfall, Sprachwahl in den Einstellungen, Windows-Sprache beim ersten Start, Zahlenformat je Sprache, Eingabe mit Komma und Punkt.
-2. Texte von `planora-app` in die deutsche Datei umziehen (Deutsch sieht danach gleich aus), Bereich für Bereich.
+2. Texte von `planora-app` umziehen (Deutsch sieht danach gleich aus), Bereich für Bereich; die englischen Texte entstehen im selben Schritt (geändert beim Planen: sonst wäre die Vollständigkeitsprüfung bis zum Schluss rot).
 3. Fehlermeldungen der anderen Crates anbinden.
 4. Protokolle und Berichte auf Englisch, Rückmeldung je nach Sprache (Webformular, GitHub-Vorlagen).
-5. Englische Datei vollständig, Export-Sprache im Export-Fenster.
+5. Export-Sprache im Export-Fenster.
 6. Anleitung für Übersetzer, Installer liefert den Sprachordner mit, CHANGELOG, Wiki-Hinweis zur Sprachwahl.
 
 ## Prüfen
