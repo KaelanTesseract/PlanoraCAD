@@ -30,7 +30,8 @@ pub const AREAS: [&str; 6] = [
 
 /// Webformular auf dennis-guse.de: der Weg ohne GitHub-Konto (deutsch).
 pub const WEBFORM_URL: &str = "https://dennis-guse.de/planoracad/rueckmeldung.php";
-/// Dasselbe Formular auf Englisch (gleiche Felder).
+/// Dasselbe Formular auf Englisch (gleiche Felder); vorgehalten für eine spätere englische
+/// Oberfläche, derzeit ungenutzt.
 pub const WEBFORM_URL_EN: &str = "https://dennis-guse.de/en/planoracad/feedback.php";
 
 /// Die Adresse bleibt nach dem Kodieren kürzer als dieser Wert.
@@ -877,6 +878,44 @@ pub fn bundle_dir(data_dir: &Path, now: chrono::NaiveDateTime) -> PathBuf {
         .map(|i| base.join(format!("{stamp}_{i}")))
         .find(|p| !p.exists())
         .unwrap_or(first)
+}
+
+/// Wie lange ein Rückmeldungsordner höchstens bleibt (Tage), wie bei den Absturzberichten.
+pub const FEEDBACK_KEEP_DAYS: i64 = 30;
+/// So viele Rückmeldungsordner bleiben höchstens.
+pub const FEEDBACK_KEEP_MAX: usize = 10;
+
+/// Zeitpunkt aus dem Ordnernamen `<Datum_Uhrzeit>` oder `<Datum_Uhrzeit>_<n>` (siehe
+/// [`bundle_dir`]) samt Zähler; fremde Namen ergeben `None`.
+fn bundle_stamp(name: &str) -> Option<(chrono::NaiveDateTime, u32)> {
+    let (stamp, n) = match name.get(19..) {
+        None | Some("") => (name, 1),
+        Some(rest) => (&name[..19], rest.strip_prefix('_')?.parse::<u32>().ok()?),
+    };
+    let t = chrono::NaiveDateTime::parse_from_str(stamp, "%Y-%m-%d_%H-%M-%S").ok()?;
+    Some((t, n))
+}
+
+/// Räumt `<Datenordner>/rueckmeldungen` auf: Unterordner, die älter als [`FEEDBACK_KEEP_DAYS`]
+/// Tage sind, und danach alle bis auf die [`FEEDBACK_KEEP_MAX`] neuesten werden gelöscht. Das
+/// Alter steht im Ordnernamen. Nur eigene Ordner (Namensmuster von [`bundle_dir`]); Dateien und
+/// fremde Ordner bleiben, Fehler werden übergangen.
+pub fn cleanup_feedback_dirs(base: &Path, now: chrono::NaiveDateTime) {
+    let Ok(entries) = std::fs::read_dir(base) else {
+        return;
+    };
+    let mut own: Vec<((chrono::NaiveDateTime, u32), PathBuf)> = entries
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .filter_map(|e| Some((bundle_stamp(e.file_name().to_str()?)?, e.path())))
+        .collect();
+    own.sort_by_key(|a| std::cmp::Reverse(a.0));
+    let max_age = chrono::Duration::days(FEEDBACK_KEEP_DAYS);
+    for (i, ((time, _), path)) in own.iter().enumerate() {
+        if i >= FEEDBACK_KEEP_MAX || now.signed_duration_since(*time) > max_age {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
 }
 
 /// Legt den Ordner an und schreibt [`full_text`] nach `rueckmeldung.txt`.

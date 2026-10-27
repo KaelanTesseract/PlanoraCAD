@@ -587,7 +587,8 @@ fn list_reports(dir: &Path) -> Vec<(PathBuf, SystemTime)> {
     v
 }
 
-/// Beim Start (vor dem Fenster): räumt die Berichte auf ([`cleanup_reports`]), wertet
+/// Beim Start (vor dem Fenster): räumt die Berichte und alten Rückmeldungsordner auf
+/// ([`cleanup_reports`], [`crate::feedback::cleanup_feedback_dirs`]), wertet
 /// liegengebliebene Marker fremder Instanzen aus und legt den eigenen an. Ein gesperrter Marker
 /// gehört einer laufenden Instanz und zählt nicht. Ein liegengebliebener mit einem neueren
 /// Bericht ergibt [`StartFinding::Crashed`], ohne einen [`StartFinding::Unexpected`]; Berichte
@@ -597,6 +598,10 @@ pub fn start_run(data_dir: &Path, pid: u32) -> (Option<RunMarker>, StartFinding)
     let crash_dir = data_dir.join(CRASH_DIR);
     cleanup_reports(&crash_dir, SystemTime::now());
     cleanup_reports(&crash_dir.join(SENT_DIR), SystemTime::now());
+    crate::feedback::cleanup_feedback_dirs(
+        &data_dir.join(crate::feedback::FEEDBACK_DIR),
+        chrono::Local::now().naive_local(),
+    );
     let stale = take_stale_markers(data_dir);
     let reports = list_reports(&crash_dir);
     let finding = match stale {

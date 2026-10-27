@@ -1524,7 +1524,7 @@ impl Workspace {
         self.save_update_field(|u, c| c.update_pending = u.pending)
     }
 
-    /// Ausführliches Protokoll an (Einstellungen → Hilfe)?
+    /// Ausführliches Protokoll an (Einstellungen → Updates)?
     pub fn verbose_log(&self) -> bool {
         self.config.verbose_log
     }
@@ -1745,7 +1745,7 @@ struct UpdateSettings {
     last_check: Option<u64>,
     skipped: Option<String>,
     pending: Option<PendingUpdate>,
-    /// Ausführliches Protokoll (Einstellungen → Hilfe); fährt hier mit, damit es auf allen
+    /// Ausführliches Protokoll (Einstellungen → Updates); fährt hier mit, damit es auf allen
     /// Schreibwegen mitgeht wie die Update-Felder.
     verbose: bool,
 }

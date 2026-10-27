@@ -1238,7 +1238,7 @@ fn texts_are_plain_language() {
     );
     assert_eq!(
         PRIVACY_LINE,
-        "Es geht nichts weg, bevor du im Browser selbst auf den Knopf zum Absenden klickst."
+        "Die Angaben gehen erst mit dem Öffnen im Browser an GitHub oder das Formular. Gespeichert und gemeldet wird erst, wenn du dort absendest."
     );
     assert!(folder_hint(&["rueckmeldung.txt"]).contains("„rueckmeldung.txt“"));
     let all = [
@@ -1262,7 +1262,9 @@ fn texts_are_plain_language() {
         screen_line(1920, 1080),
     ];
     for t in &all {
-        assert!(t.chars().count() <= 90, "kurz genug: {t}");
+        // Der Datenschutz-Satz ist ehrlich und darum länger; er bricht im Fenster um.
+        let max = if t == PRIVACY_LINE { 140 } else { 90 };
+        assert!(t.chars().count() <= max, "kurz genug: {t}");
         for tech in ["URL", "Issue", "Parameter", "::", "Sie ", "Ihre"] {
             assert!(!t.contains(tech), "{t} enthält {tech}");
         }

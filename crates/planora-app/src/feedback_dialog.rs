@@ -7,8 +7,9 @@
 //!
 //! Das Fenster rechnet nichts selbst: Bereinigung, Adresse und Kürzung kommen aus
 //! [`crate::feedback`]. Was nach außen geht (Browser, Dateimanager, Zwischenablage), gibt es als
-//! [`FeedbackAction`] an die App, die es ausführt. Über das Netz geht nichts, bevor die
-//! Testerin im Browser selbst absendet.
+//! [`FeedbackAction`] an die App, die es ausführt. Die Angaben gehen erst mit
+//! dem Öffnen der Adresse im Browser an GitHub bzw. das Formular; gemeldet wird erst beim
+//! Absenden dort.
 //!
 //! Welche Fenster es schließt und welche es schließen, regelt die App (`app::open_feedback`,
 //! `app::enforce_feedback_rules`).
@@ -68,8 +69,7 @@ pub const COPIED: &str = "Kopiert.";
 /// Statt [`folder_hint`], wenn der Rückmeldungsordner nicht angelegt werden konnte.
 pub const NO_FILE: &str = "Die Datei ließ sich nicht anlegen. Die Meldung geht trotzdem.";
 /// Steht immer unten im Fenster.
-pub const PRIVACY_LINE: &str =
-    "Es geht nichts weg, bevor du im Browser selbst auf den Knopf zum Absenden klickst.";
+pub const PRIVACY_LINE: &str = "Die Angaben gehen erst mit dem Öffnen im Browser an GitHub oder das Formular. Gespeichert und gemeldet wird erst, wenn du dort absendest.";
 /// So viele letzte Protokollzeilen kommen in den Bestandteil „Protokollzeilen“.
 pub const LOG_LINES: usize = 100;
 /// Vorschau zum Bild, solange noch keins aufgenommen ist.

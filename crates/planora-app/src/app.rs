@@ -314,9 +314,10 @@ impl PlanoraApp {
                 }
             }
             Some(CrashAction::AsFeedback) => {
-                // Die angebotenen Berichte gelten als erledigt (nach `abstuerze/gesendet`).
-                let report = notice.mark_sent();
-                self.crash_notice = None;
+                // Erst das Fenster öffnen; nur wenn es wirklich offen ist, gelten die angebotenen
+                // Berichte als erledigt (nach `abstuerze/gesendet`). Sonst bleibt die Rückfrage
+                // stehen und die Berichte liegen. Das Fenster liest den Bericht beim Öffnen.
+                let report = notice.reports.first().cloned();
                 let mut info = self.feedback_context(ctx);
                 info.from_crash = report.is_some();
                 info.crash_report = report;
@@ -328,6 +329,11 @@ impl PlanoraApp {
                     &mut self.feedback,
                     info,
                 );
+                if self.feedback.open
+                    && let Some(n) = self.crash_notice.take()
+                {
+                    n.mark_sent();
+                }
             }
         }
     }

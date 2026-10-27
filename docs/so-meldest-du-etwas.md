@@ -6,7 +6,7 @@ Schau vorher kurz bei den [häufigen Problemen](haeufige-probleme.md). Vielleich
 
 ## Mit GitHub-Konto
 
-**Aus dem Programm:** Wähle „Hilfe“ und dann „Rückmeldung …“ (oder drücke Strg+Umschalt+R). Wähle, ob es ein Fehler, ein Wunsch oder eine Frage ist, und schreib zwei Sätze. Das Fenster zeigt dir genau den Text, der später in der Meldung steht. Du entscheidest mit Häkchen, was dazukommt. Danach öffnet sich dein Browser mit einem ausgefüllten Formular. Erst wenn du dort auf den grünen Knopf zum Absenden klickst (englisch „Submit new issue“), geht die Meldung ab.
+**Aus dem Programm:** Wähle „Hilfe“ und dann „Rückmeldung …“ (oder drücke Strg+Umschalt+R). Wähle, ob es ein Fehler, ein Wunsch oder eine Frage ist, und schreib zwei Sätze. Das Fenster zeigt dir genau den Text, der später in der Meldung steht. Du entscheidest mit Häkchen, was dazukommt. Danach öffnet sich dein Browser mit einem ausgefüllten Formular. Die Angaben stehen dabei in der Adresse und gehen schon mit dem Öffnen an GitHub. Gemeldet wird aber erst, wenn du dort auf den grünen Knopf zum Absenden klickst (englisch „Submit new issue“).
 
 **Direkt auf GitHub:** Geh auf die Seite [Neue Meldung](https://github.com/KaelanTesseract/PlanoraCAD/issues/new/choose) und wähle ein Formular:
 
@@ -30,7 +30,7 @@ Das Formular nimmt diese Dateien an: Bilder (PNG, JPG), Textdateien (`.txt`, `.l
 
 Dein Projekt legt das Programm als ZIP in den Ordner (nur nach einem Absturz und nur, wenn du das Häkchen setzt). Ist es zu groß für das Formular oder leer, nennt das Programm es nicht zum Hochladen. Schick die Meldung dann ohne Projekt. Dennis meldet sich, wenn er es braucht.
 
-Es geht nichts weg, bevor du im Formular auf „Absenden“ klickst.
+Die Angaben gehen schon mit dem Öffnen im Browser an GitHub oder das Formular, weil sie in der Adresse stehen. Gespeichert und gemeldet wird aber erst, wenn du dort auf „Absenden“ klickst.
 
 Klappt das nicht, zum Beispiel weil sich kein Browser öffnet, schreib eine Mail an `info@dennis-guse.de`.
 

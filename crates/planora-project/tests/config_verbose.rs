@@ -1,4 +1,4 @@
-//! Feld `verbose_log` der Konfiguration (Einstellungen → Hilfe → „Ausführliches Protokoll“):
+//! Feld `verbose_log` der Konfiguration (Einstellungen → Updates → „Ausführliches Protokoll“):
 //! fehlt es, ist es aus; ein falscher Wert gilt als aus und macht die Datei nicht unlesbar;
 //! geschrieben wird nur „an“. Nur mit eigenen Dateien im Temp-Ordner.
 

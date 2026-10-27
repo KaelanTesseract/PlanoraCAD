@@ -1932,6 +1932,9 @@ Stand nach Etappe 6 (Plan `docs/superpowers/plans/2026-10-26-rueckmeldungen.md`)
 - Abstürze ohne Rust-Meldung (hart beendet, Stromausfall, Absturz im Treiber) schreiben keinen Bericht. Das Programm weist beim nächsten Start nur darauf hin.
 - Die Mail an info@dennis-guse.de ist nur der Notweg; das Webformular ist der Weg ohne Konto. Es nimmt höchstens 10 Dateien (je 25 MB, zusammen 30 MB; PNG, JPG, TXT, LOG, ZIP).
 - Ein Link kann keine Dateien mitnehmen. Bild, Bericht und Projekt hängt der Anwender im Browser selbst an.
+- Das Projekt-ZIP für die Rückmeldung wird im Vordergrund geschrieben; bei großen Projekten friert das Fenster kurz ein.
+- Der Absturzbericht enthält Protokollzeilen und Schritte auch ohne das Häkchen „Protokoll“ (in der Vorschau sichtbar).
+- Windows-Abmelden oder Herunterfahren bei laufender App könnte beim nächsten Start „unerwartet beendet“ zeigen (nicht geprüft).
 - Die GitHub-Schritte von `release.yml` sind noch nie auf GitHub gelaufen (Trockenlauf steht aus); die `.pdb` (etwa 91 MB) ist dort noch nicht als Release-Datei geprüft.
 
 **Zurückgestellt (je ein Satz):**

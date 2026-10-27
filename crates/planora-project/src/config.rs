@@ -105,7 +105,7 @@ pub struct Config {
         deserialize_with = "lenient_theme"
     )]
     pub theme: Option<String>,
-    /// Ausführliches Protokoll (Einstellungen → Hilfe): mehr Zeilen in der Protokolldatei, etwa
+    /// Ausführliches Protokoll (Einstellungen → Updates): mehr Zeilen in der Protokolldatei, etwa
     /// jeder Befehl mit Dauer. Voreinstellung aus; nur „an“ wird geschrieben. Kein
     /// Wahrheitswert → aus.
     #[serde(

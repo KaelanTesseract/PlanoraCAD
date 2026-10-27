@@ -33,7 +33,7 @@ Die Update-Funktion ist schon gemergt (Merge 5c88844, noch nicht veröffentlicht
 
 ## Festlegungen
 
-1. **Datenschutz zuerst.** Jeder Bestandteil der Meldung steht im Fenster als Text und hat ein Häkchen. Standardmäßig an: Version, System, Grafikkarte, letzte Schritte. Standardmäßig aus: Protokollzeilen, Bild, Projektdatei. Es geht nichts über das Netz, außer der Tester klickt im Browser selbst auf „Absenden“. Die App öffnet nur eine Adresse.
+1. **Datenschutz zuerst.** Jeder Bestandteil der Meldung steht im Fenster als Text und hat ein Häkchen. Standardmäßig an: Version, System, Grafikkarte, letzte Schritte. Standardmäßig aus: Protokollzeilen, Bild, Projektdatei. Die App öffnet nur eine Adresse; die Angaben stehen darin und gehen mit dem Öffnen an GitHub bzw. dennis-guse.de (Server-Protokolle können sie enthalten). Gespeichert und gemeldet wird erst, wenn der Tester dort auf „Absenden“ klickt.
 2. **Bereinigung.** Vor der Anzeige ersetzt die App den Benutzernamen in Pfaden („C:\Users\<Name>\…“), kürzt Projektpfade auf den Dateinamen und entfernt Mailadressen aus Protokollzeilen. Der Tester sieht das Ergebnis.
 3. **Länge der Adresse.** Die Adresse bleibt unter 2000 Zeichen (nach dem Kodieren). Passt der Text nicht, kürzt die App in dieser Reihenfolge: Protokollzeilen, letzte Schritte, zuletzt die Beschreibung. Die Beschreibung bleibt so lange ganz, wie sie allein in die Adresse passt. Passt sie allein nicht, kürzt die App sie in der Adresse an einer Zeichengrenze und hängt einen Hinweis an; der volle Text steht in `rueckmeldung.txt` im Ordner, den die App öffnet. Die vollständigen Angaben liegen ebenfalls dort. Im Formular steht „Datei hier anhängen“.
 4. **Bilder und Dateien** gehen nicht über die Adresse. Die App legt das Bild (PNG) und, wenn gewünscht, die Projektdatei in einen Rückmeldungsordner (`%APPDATA%\PlanoraCAD\rueckmeldungen\<Datum-Uhrzeit>\`), öffnet ihn im Explorer und sagt, welche Datei der Tester ins Formular ziehen soll.
@@ -99,7 +99,7 @@ Vorgezogen: Etappe 4 wird gleich nach Task 8 gebaut, weil ein externer Tester di
 ### Etappe 6: Kleinkram
 
 - Nach einem Update zeigt „Aktualisiert auf Version X“ (vorhanden) zusätzlich den Satz „Etwas stimmt nicht? **Rückmeldung geben**“ mit Knopf.
-- Einstellungen → Hilfe: Schalter **Ausführliches Protokoll** (mehr `diag`-Zeilen: Befehle, Dateivorgänge, Zeiten; weiter ohne Projektinhalt) mit Hinweis, dass nichts gesendet wird. In der Config: `verbose_log` mit `serde(default)`, lenient gelesen, über alle vier Schreibwege mitgeführt (wie `update_*`).
+- Einstellungen → Updates: Schalter **Ausführliches Protokoll** (mehr `diag`-Zeilen: Befehle, Dateivorgänge, Zeiten; weiter ohne Projektinhalt) mit Hinweis, dass nichts gesendet wird. In der Config: `verbose_log` mit `serde(default)`, lenient gelesen, über alle vier Schreibwege mitgeführt (wie `update_*`).
 - `docs/haeufige-probleme.md` (leer-anfangs mit den bekannten Stolpersteinen aus `offene-punkte.md`: Windows-Warnung bei unsignierter Datei, Grafiktreiber, Antivirus). Link im Hilfe-Menü und in `config.yml`.
 - Release-Text (`CHANGELOG`/Release-Vorlage) endet mit „So meldest du etwas: <Link>“.
 

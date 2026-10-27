@@ -878,3 +878,40 @@ fn attach_hint_names_the_project_zip_when_it_goes_along() {
         );
     }
 }
+
+#[test]
+fn cleanup_feedback_dirs_drops_old_then_keeps_ten_newest_and_only_own() {
+    let data = temp("aufraeumen");
+    let base = data.join(FEEDBACK_DIR);
+    let now = chrono::NaiveDate::from_ymd_opt(2026, 10, 26)
+        .unwrap()
+        .and_hms_opt(12, 0, 0)
+        .unwrap();
+    let mk = |name: &str| {
+        let d = base.join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join(FEEDBACK_FILE), "x").unwrap();
+        d
+    };
+    // Zwei alte (über 30 Tage), zwölf frische, ein fremder Ordner, eine fremde Datei.
+    let old1 = mk("2026-09-01_10-00-00");
+    let old2 = mk("2026-09-01_10-00-00_2");
+    let fresh: Vec<_> = (1..=12)
+        .map(|i| mk(&format!("2026-10-{:02}_10-00-00", i + 10)))
+        .collect();
+    let foreign = mk("meine-sachen");
+    std::fs::write(base.join("2020-01-01_00-00-00"), "datei").unwrap();
+    cleanup_feedback_dirs(&base, now);
+    assert!(!old1.exists() && !old2.exists());
+    assert!(
+        !fresh[0].exists() && !fresh[1].exists(),
+        "zwei älteste über 10"
+    );
+    for d in &fresh[2..] {
+        assert!(d.exists(), "{d:?}");
+    }
+    assert!(foreign.exists());
+    assert!(base.join("2020-01-01_00-00-00").is_file());
+    // Fehlender Ordner: kein Absturz.
+    cleanup_feedback_dirs(&data.join("gibt-es-nicht"), now);
+}

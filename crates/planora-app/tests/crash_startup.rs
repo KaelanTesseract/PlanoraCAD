@@ -932,3 +932,28 @@ fn delete_and_cleanup_remove_the_companion_file_too() {
         "gesendet aufgeräumt"
     );
 }
+
+#[test]
+fn as_feedback_keeps_the_reports_when_the_feedback_window_does_not_open() {
+    let mut offered = Vec::new();
+    let mut r = Rig::with("planora-rueckfrage-blockiert", SIZE, |d| {
+        let a = report(d, "0.2.0-dev.1", None);
+        offered.push(a.clone());
+        StartFinding::Crashed(vec![a])
+    });
+    assert!(r.notice_shown());
+    // Etwas hält das Rückmeldungs-Fenster zurück (offene Rückfrage der App).
+    let tab = r.app.ws_mut().active_tab().id;
+    r.app.ws_mut().prompt = Some(planora_app::workspace::Prompt::AutosaveOffer { tab });
+    r.click(AS_FEEDBACK);
+    assert!(!r.app.feedback_mut().open, "Fenster blockiert");
+    assert!(offered[0].is_file(), "Bericht bleibt liegen");
+    let sent = r.crash_dir().join(crash::SENT_DIR);
+    assert!(!sent.join(offered[0].file_name().unwrap()).exists());
+    assert!(r.notice_shown(), "Rückfrage bleibt stehen");
+    // Ohne Hindernis klappt es beim nächsten Klick (der Klick kam also an).
+    r.app.ws_mut().prompt = None;
+    r.click(AS_FEEDBACK);
+    assert!(r.app.feedback_mut().open);
+    assert!(!offered[0].exists(), "jetzt verschoben");
+}
