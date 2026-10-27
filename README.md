@@ -643,6 +643,20 @@ Die Tasten sind ab Werk wie in Fusion: zum Beispiel E extrudiert, F rundet, V bl
 
 Welche Fusion-Kürzel noch fehlen, weil es die Funktion noch nicht gibt, steht in `docs/superpowers/offene-punkte.md`, Abschnitt „Tastenkürzel“.
 
+## Rückmeldung, Absturzberichte und Protokoll
+
+„Hilfe → Rückmeldung …“ (Strg+Umschalt+R) öffnet das Rückmeldungsfenster. Die Schritte für Anwender stehen in [So meldest du etwas](docs/so-meldest-du-etwas.md), die Lösungen für bekannte Fälle in [Häufige Probleme](docs/haeufige-probleme.md).
+
+**Zwei Wege.** „Im Browser öffnen“ füllt ein Formular auf GitHub aus (mit Konto). „Ohne GitHub-Konto senden“ füllt das Webformular auf dennis-guse.de aus (`/planoracad/rueckmeldung.php`, englisch `/en/planoracad/feedback.php`); die Mail an info@dennis-guse.de ist nur der Notweg, falls sich kein Browser öffnen lässt. In beiden Fällen geht nichts weg, bevor der Anwender im Browser selbst absendet. Bild und Dateien kann ein Link nicht mitnehmen; das Programm legt sie in einen Ordner und öffnet ihn.
+
+**Was mitgeht.** Version, System, Grafikkarte, die letzten Schritte, auf Wunsch Protokollzeilen und ein Bild vom Programmfenster. Jede Angabe lässt sich in der Vorschau abwählen. Benutzername, Projektpfade und Mailadressen werden vorher entfernt. Ein Bericht in GitHub ist öffentlich; das Webformular schickt an Dennis.
+
+**Absturzbericht.** Bei einem Rust-Absturz (Panic) schreibt das Programm einen Bericht in den Datenordner (ohne Benutzernamen), beim nächsten Start fragt es nach. Das Projekt kommt auf Wunsch als `.pcad.zip` dazu (Formular: höchstens 25 MB je Datei, 30 MB zusammen, 10 Dateien). Endet das Programm ohne Bericht (hart beendet, Stromausfall, Absturz außerhalb von Rust), kann es das nur beim nächsten Start melden. Wie ein Bericht mit der `.pdb` des Releases aufgelöst wird, steht unter „Absturzbericht auflösen“ in „Updates und Versionen“.
+
+**Ausführliches Protokoll.** Unter „Datei → Einstellungen …“, Abschnitt „Updates“, schreibt der Schalter „Ausführliches Protokoll“ mehr in `planora.log` (jeder Befehl mit Dauer, keine Projektinhalte). Die Datei dreht bei etwa 1 MB (`planora.log`, `planora.1.log`, `planora.2.log`) und bleibt auf dem Rechner.
+
+**Projekttafel.** Neue Meldungen landen von selbst auf der [Projekttafel](https://github.com/users/KaelanTesseract/projects/1); Dennis sortiert sie in „Geplant“, „In Arbeit“ und „Fertig“. Einrichtung: [Projekttafel einrichten](docs/projekttafel-einrichten.md).
+
 ## Updates und Versionen
 
 Das Programm kann sich selbst aktualisieren (nur unter Windows). Beim Start fragt es im Hintergrund bei GitHub nach, ob es eine neuere Version gibt. Dabei wird nichts Persönliches gesendet. Gibt es eine, erscheint ein Fenster mit den Änderungen und drei Knöpfen: „Jetzt aktualisieren“, „Später“ (die Meldung kommt frühestens nach 24 Stunden wieder) und „Diese Version überspringen“. Die Meldung steht unten rechts, andere Fenster verdecken sie nicht. Vor dem Neustart fragt das Programm nach ungespeicherter Arbeit („Neustart für das Update“). Danach lässt es sich ein paar Sekunden nicht bedienen, bis die neue Version läuft; sie öffnet in derselben Fenstergröße. Das Herunterladen wird mit einer Prüfsumme kontrolliert. Klappt der Austausch nicht, bleibt die alte Version; die Meldung sagt das deutlich, und das Update lässt sich später noch einmal versuchen.

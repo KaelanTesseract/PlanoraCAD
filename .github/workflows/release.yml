@@ -57,7 +57,7 @@ jobs:
             }
           }
           $global:LASTEXITCODE = 0
-          ./tools/changelog-section.ps1 -Version $version -OutFile "$env:RUNNER_TEMP/release-notes.md"
+          ./tools/changelog-section.ps1 -Version $version -Footer -OutFile "$env:RUNNER_TEMP/release-notes.md"
           if ($LASTEXITCODE -ne 0) { throw "CHANGELOG.md hat keinen Abschnitt '## $version'." }
           $pre = if ($version -match '-(dev|beta)\.') { 'true' } else { 'false' }
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
