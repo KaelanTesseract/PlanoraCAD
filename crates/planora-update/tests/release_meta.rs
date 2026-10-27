@@ -1,6 +1,6 @@
 //! Prüft die Veröffentlichungs-Angaben des Repositorys: die Versionsnummer in `Cargo.toml`
 //! und die Abschnitte in `CHANGELOG.md`. Beides muss zusammenpassen, sonst bricht
-//! `release.yml` ab (siehe README, Abschnitt „Updates und Versionen“).
+//! `release.yml` ab (siehe `docs/funktionen.md`, Abschnitt „Updates und Versionen“).
 
 use planora_update::Version;
 use std::path::PathBuf;
