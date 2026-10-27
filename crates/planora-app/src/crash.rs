@@ -471,8 +471,9 @@ pub fn marker_path(dir: &Path, pid: u32) -> PathBuf {
 
 /// Der Laufmarker dieser Instanz. Er bleibt offen, solange das Programm läuft; unter Windows
 /// ohne Mitbenutzung, so dass ein zweiter Start ihn als „gehört einer laufenden Instanz“
-/// erkennt (etwa die alte Version beim Update-Neustart). Nur [`RunMarker::finish`] löscht ihn;
-/// endet das Programm anders (Absturz, Abbruch), bleibt er liegen.
+/// erkennt (etwa die alte Version, solange der Installer sie beim Update schließt). Nur
+/// [`RunMarker::finish`] löscht ihn (beim sauberen Ende, auch dem für ein Update); endet das
+/// Programm anders (Absturz, Abbruch), bleibt er liegen.
 #[derive(Debug)]
 pub struct RunMarker {
     path: PathBuf,

@@ -1,32 +1,33 @@
-//! Update einspielen in der ganzen App: Download und Prüfung im Hintergrund, Rückfrage vor dem
-//! Neustart (wie beim Schließen), Austausch, Start der neuen Version und Warten auf ihre
-//! Rückmeldung, Rücksetzen, Start nach einem Update.
+//! Update einspielen in der ganzen App: Download und Prüfung des Installers im Hintergrund,
+//! Rückfrage vor dem Neustart (wie beim Schließen), zweite Prüfung, Start des Installers und
+//! Ende des Programms, Abbruch der Admin-Abfrage, Start nach einem Update.
 //!
 //! Mit echten Bildern der App (`logic` und `ui` wie in eframe) bei 1920 × 1080, Nachbildungen
-//! für Release-Liste, Download und Neustart; die „Programmdatei“ liegt in einem Temp-Ordner, nie
-//! wird die echte exe angefasst, nie geht etwas ins Netz.
+//! für Release-Liste, Download und Start des Installers; der Download liegt in einem Temp-Ordner,
+//! nie startet ein echter Installer, nie geht etwas ins Netz, nie wird die Registry angefasst.
 
 mod common;
 
 use eframe::App as _;
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, Vec2, ViewportCommand, ViewportId, vec2};
 use planora_app::app::{PlanoraApp, RestartPhase};
+use planora_app::install_mode::InstallMode;
 use planora_app::prompts::{SAVE_FOR_UPDATE_TITLE, save_for_update_text};
 use planora_app::update_dialog::{
-    CANCEL, CLOSE, FAILED_TITLE, INSTALL_NOW, InstallView, NOTES_ON_GITHUB, OK, RETRY,
+    CANCEL, CLOSE, FAILED_TITLE, INSTALL_NOW, InstallView, LATER, NOTES_ON_GITHUB, OK, RETRY, SKIP,
 };
 use planora_app::update_install::*;
 use planora_app::workspace::{Prompt, Workspace};
 use planora_app::{fonts, running_version, theme};
 use planora_math::DVec3;
-use planora_project::config::Config;
+use planora_project::config::{Config, PendingUpdate, WindowState};
 use planora_project::library::Library;
 use planora_update::check::{NetError, ReleaseSource};
 use planora_update::install::{
-    Downloader, InstallError, OK_MARKER_NAME, Paths, STALL_TIMEOUT, copy_limited,
+    DownloadPaths, Downloader, InstallError, STALL_TIMEOUT, copy_limited,
 };
 use planora_update::sha256::hex_digest;
-use planora_update::{EXE_NAME, REPO, SHA256_NAME, Version};
+use planora_update::{REPO, SETUP_NAME, SHA256_NAME, Version};
 use serde_json::{Value, json};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -35,7 +36,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 const SIZE: Vec2 = vec2(1920.0, 1080.0);
-const NEW_EXE: &[u8] = b"neue Programmdatei, Version 99";
+const NEW_SETUP: &[u8] = b"Installer der Version 99";
 const TARGET: &str = "99.0.0-dev.1";
 const TAG: &str = "v99.0.0-dev.1";
 
@@ -55,7 +56,7 @@ fn releases() -> String {
     Value::Array(vec![json!({
         "tag_name": TAG,
         "body": "- Schneller beim Öffnen",
-        "assets": [asset(EXE_NAME, NEW_EXE.len()), asset(SHA256_NAME, 100)],
+        "assets": [asset(SETUP_NAME, NEW_SETUP.len()), asset(SHA256_NAME, 100)],
     })])
     .to_string()
 }
@@ -91,17 +92,17 @@ impl Read for Chunks {
     }
 }
 
-/// Nachbildung des Downloads: liefert die Prüfsummen-Datei `checksum` und die Programmdatei
-/// [`NEW_EXE`] über die echte Kopierschleife; zählt die Aufrufe.
+/// Nachbildung des Downloads: liefert die Prüfsummen-Datei `checksum` und den Installer
+/// [`NEW_SETUP`] über die echte Kopierschleife; zählt die Aufrufe.
 struct FakeDownloader {
     checksum: String,
     calls: AtomicUsize,
-    /// Wird vor dem Laden der Programmdatei abgeholt: steuert, wann Stücke kommen.
+    /// Wird vor dem Laden des Installers abgeholt: steuert, wann Stücke kommen.
     gate: Mutex<Option<mpsc::Receiver<()>>>,
     step: usize,
-    /// Fehler beim Laden der Programmdatei, nachdem schon ein Teil geschrieben ist (etwa
+    /// Fehler beim Laden des Installers, nachdem schon ein Teil geschrieben ist (etwa
     /// „Speicherplatz voll“).
-    exe_error: Option<InstallError>,
+    setup_error: Option<InstallError>,
 }
 
 impl FakeDownloader {
@@ -111,22 +112,22 @@ impl FakeDownloader {
             calls: AtomicUsize::new(0),
             gate: Mutex::new(None),
             step: 7,
-            exe_error: None,
+            setup_error: None,
         })
     }
 
     fn failing(error: InstallError) -> Arc<FakeDownloader> {
         Arc::new(FakeDownloader {
-            checksum: format!("{}  {EXE_NAME}\n", hex_digest(NEW_EXE)),
+            checksum: format!("{}  {SETUP_NAME}\n", hex_digest(NEW_SETUP)),
             calls: AtomicUsize::new(0),
             gate: Mutex::new(None),
             step: 7,
-            exe_error: Some(error),
+            setup_error: Some(error),
         })
     }
 
     fn good() -> Arc<FakeDownloader> {
-        Self::new(format!("{}  {EXE_NAME}\n", hex_digest(NEW_EXE)))
+        Self::new(format!("{}  {SETUP_NAME}\n", hex_digest(NEW_SETUP)))
     }
 
     fn calls(&self) -> usize {
@@ -147,13 +148,13 @@ impl Downloader for FakeDownloader {
         let (data, gate) = if url.ends_with(SHA256_NAME) {
             (self.checksum.clone().into_bytes(), None)
         } else {
-            assert!(url.ends_with(EXE_NAME));
-            if let Some(e) = &self.exe_error {
+            assert!(url.ends_with(SETUP_NAME));
+            if let Some(e) = &self.setup_error {
                 // Ein Teil liegt schon auf der Platte, dann scheitert das Schreiben.
-                std::fs::write(dest, &NEW_EXE[..10]).unwrap();
+                std::fs::write(dest, &NEW_SETUP[..10]).unwrap();
                 return Err(e.clone());
             }
-            (NEW_EXE.to_vec(), self.gate.lock().unwrap().take())
+            (NEW_SETUP.to_vec(), self.gate.lock().unwrap().take())
         };
         let total = data.len() as u64;
         let reader = Chunks {
@@ -166,89 +167,44 @@ impl Downloader for FakeDownloader {
     }
 }
 
-/// Nachbildung des Neustarts: merkt sich die gestartete Datei; legt auf Wunsch die Rückmeldung
-/// ab wie eine neue Version, die gut startet.
-struct FakeRestarter {
-    started: Mutex<Vec<PathBuf>>,
-    /// Inhalt der Rückmeldung, die die „neue Version“ schreibt (`None`: keine).
-    answer: Option<String>,
-    fails: bool,
-    /// Die gestartete „neue Version“ endet gleich von selbst (ohne Rückmeldung).
-    exits: bool,
-    /// Je beendeter „neuer Version“ der Inhalt der Programmdatei im Augenblick des Beendens
-    /// (so lässt sich prüfen, ob vor oder nach dem Zurücklegen beendet wurde).
-    stopped: Arc<Mutex<Vec<Vec<u8>>>>,
+/// Nachbildung des Starts des Installers: merkt sich Datei, Modus und den Inhalt der Datei im
+/// Augenblick des Starts und antwortet mit `answer`. Startet nie etwas.
+struct FakeLauncher {
+    calls: Mutex<Vec<(PathBuf, InstallMode, Vec<u8>)>>,
+    answer: Result<(), LaunchError>,
 }
 
-impl FakeRestarter {
-    /// `answers`: schreibt die Rückmeldung mit der Zielversion.
-    fn new(answers: bool) -> Arc<FakeRestarter> {
-        Self::answering(answers.then(|| TARGET.to_string()))
+impl FakeLauncher {
+    fn ok() -> Arc<FakeLauncher> {
+        Self::answering(Ok(()))
     }
 
-    fn answering(answer: Option<String>) -> Arc<FakeRestarter> {
-        Arc::new(FakeRestarter {
-            started: Mutex::new(Vec::new()),
+    fn answering(answer: Result<(), LaunchError>) -> Arc<FakeLauncher> {
+        Arc::new(FakeLauncher {
+            calls: Mutex::new(Vec::new()),
             answer,
-            fails: false,
-            exits: false,
-            stopped: Arc::default(),
         })
     }
 
-    fn started(&self) -> Vec<PathBuf> {
-        self.started.lock().unwrap().clone()
+    fn calls(&self) -> Vec<(PathBuf, InstallMode)> {
+        let calls = self.calls.lock().unwrap();
+        calls.iter().map(|(p, m, _)| (p.clone(), *m)).collect()
     }
 
-    fn stopped(&self) -> Vec<Vec<u8>> {
-        self.stopped.lock().unwrap().clone()
-    }
-}
-
-/// Prozessnummer der „neuen Version“ der Nachbildung (gibt es nie wirklich).
-const NEW_PID: u32 = 4_000_000_009;
-
-/// Die „neue Version“ der Nachbildung: merkt sich, wann sie beendet wird.
-struct FakeProcess {
-    exe: PathBuf,
-    stopped: Arc<Mutex<Vec<Vec<u8>>>>,
-    exits: bool,
-}
-
-impl NewProcess for FakeProcess {
-    fn stop(&mut self) {
-        let now = std::fs::read(&self.exe).unwrap_or_default();
-        self.stopped.lock().unwrap().push(now);
-    }
-
-    fn exited(&mut self) -> bool {
-        self.exits
-    }
-
-    fn pid(&self) -> Option<u32> {
-        Some(NEW_PID)
+    fn contents(&self) -> Vec<Vec<u8>> {
+        let calls = self.calls.lock().unwrap();
+        calls.iter().map(|(_, _, c)| c.clone()).collect()
     }
 }
 
-impl Restarter for FakeRestarter {
-    fn start_new(&self, exe: &Path) -> Result<Box<dyn NewProcess>, String> {
-        self.started.lock().unwrap().push(exe.to_path_buf());
-        if self.fails {
-            return Err("geht nicht".into());
-        }
-        if let Some(answer) = &self.answer {
-            std::fs::write(exe.parent().unwrap().join(OK_MARKER_NAME), answer).unwrap();
-        }
-        // Die „neue Version“ legt wie die echte ihren Laufmarker im Datenordner an (neben der
-        // Konfiguration, eine Ebene über dem Programmordner).
-        if let Some(data) = exe.parent().and_then(Path::parent) {
-            std::fs::write(planora_app::crash::marker_path(data, NEW_PID), b"").unwrap();
-        }
-        Ok(Box::new(FakeProcess {
-            exe: exe.to_path_buf(),
-            stopped: Arc::clone(&self.stopped),
-            exits: self.exits,
-        }))
+impl SetupLauncher for FakeLauncher {
+    fn launch(&self, setup: &Path, mode: InstallMode) -> Result<(), LaunchError> {
+        let contents = std::fs::read(setup).unwrap_or_default();
+        self.calls
+            .lock()
+            .unwrap()
+            .push((setup.to_path_buf(), mode, contents));
+        self.answer.clone()
     }
 }
 
@@ -261,7 +217,7 @@ struct Harness {
     ctx: egui::Context,
     app: PlanoraApp,
     cfg: PathBuf,
-    paths: Paths,
+    paths: DownloadPaths,
     time: f64,
     seen: Vec<Seen>,
     commands: Vec<ViewportCommand>,
@@ -270,11 +226,11 @@ struct Harness {
     viewport: Option<egui::ViewportInfo>,
 }
 
-/// Arbeitsbereich mit Bibliothek und Konfiguration im Temp-Ordner und „Programmdatei“ in einem
-/// eigenen Ordner darin (Inhalt `alt`).
-fn workspace(prefix: &str) -> (Workspace, PathBuf, Paths) {
+/// Arbeitsbereich mit Bibliothek und Konfiguration im Temp-Ordner; der Download-Ordner liegt
+/// darin (`download`, noch nicht angelegt).
+fn workspace(prefix: &str) -> (Workspace, PathBuf, DownloadPaths) {
     let tmp = common::temp_root(prefix);
-    std::fs::create_dir_all(tmp.join("Programm")).unwrap();
+    std::fs::create_dir_all(&tmp).unwrap();
     let mut ws = Workspace::new(
         Some(Library::open(&tmp.join("Projekte")).unwrap()),
         Config::default(),
@@ -282,27 +238,50 @@ fn workspace(prefix: &str) -> (Workspace, PathBuf, Paths) {
     let cfg = tmp.join("config.json");
     ws.config_path = cfg.clone();
     assert_ne!(cfg, Config::config_path(), "nie die echte Datei");
-    let exe = tmp.join("Programm").join("planoracad.exe");
-    std::fs::write(&exe, "alt").unwrap();
-    (ws, cfg, Paths::for_exe(&exe))
+    (ws, cfg, DownloadPaths::in_dir(&tmp.join("download")))
+}
+
+/// Die Konfiguration liegt „in“ einer Datei: jedes Schreiben scheitert.
+fn unwritable_config(ws: &mut Workspace, cfg: &Path) {
+    let blocker = cfg.with_file_name("keine-mappe");
+    std::fs::write(&blocker, "x").unwrap();
+    ws.config_path = blocker.join("config.json");
 }
 
 impl Harness {
     fn new(
         prefix: &str,
         downloader: Arc<dyn Downloader + Send + Sync>,
-        restarter: Arc<dyn Restarter + Send + Sync>,
+        launcher: Arc<dyn SetupLauncher + Send + Sync>,
     ) -> Harness {
         let (ws, cfg, paths) = workspace(prefix);
-        Self::with(ws, cfg, paths, downloader, restarter)
+        Self::with(ws, cfg, paths, downloader, launcher)
     }
 
     fn with(
         ws: Workspace,
         cfg: PathBuf,
-        paths: Paths,
+        paths: DownloadPaths,
         downloader: Arc<dyn Downloader + Send + Sync>,
-        restarter: Arc<dyn Restarter + Send + Sync>,
+        launcher: Arc<dyn SetupLauncher + Send + Sync>,
+    ) -> Harness {
+        Self::with_mode(
+            ws,
+            cfg,
+            paths,
+            downloader,
+            launcher,
+            Some(InstallMode::User),
+        )
+    }
+
+    fn with_mode(
+        ws: Workspace,
+        cfg: PathBuf,
+        paths: DownloadPaths,
+        downloader: Arc<dyn Downloader + Send + Sync>,
+        launcher: Arc<dyn SetupLauncher + Send + Sync>,
+        mode: Option<InstallMode>,
     ) -> Harness {
         let ctx = egui::Context::default();
         ctx.set_fonts(fonts::definitions());
@@ -312,8 +291,9 @@ impl Harness {
             ws,
             Arc::new(Source),
             downloader,
-            restarter,
-            paths.running_exe.clone(),
+            launcher,
+            mode,
+            paths.dir.clone(),
         );
         // Den Ablauf auf jedem System prüfen (auch im Linux-Teil der CI); nur
         // `non_windows_shows_hint_and_opens_release_page` schaltet das ab.
@@ -335,13 +315,17 @@ impl Harness {
     fn offered(
         prefix: &str,
         downloader: Arc<dyn Downloader + Send + Sync>,
-        restarter: Arc<dyn Restarter + Send + Sync>,
+        launcher: Arc<dyn SetupLauncher + Send + Sync>,
     ) -> Harness {
-        let mut h = Self::new(prefix, downloader, restarter);
-        h.until(|a| a.pending_notice().is_some());
-        h.settle();
-        assert!(h.app.update_dialog_mut().open);
+        let mut h = Self::new(prefix, downloader, launcher);
+        h.until_offered();
         h
+    }
+
+    fn until_offered(&mut self) {
+        self.until(|a| a.pending_notice().is_some());
+        self.settle();
+        assert!(self.app.update_dialog_mut().open);
     }
 
     /// Ein Bild wie in eframe: erst `logic`, dann `ui`. Merkt Texte, Fensterbefehle und
@@ -477,8 +461,15 @@ impl Harness {
             .map(|p| (p.from, p.to))
     }
 
-    fn read_exe(&self) -> Vec<u8> {
-        std::fs::read(&self.paths.running_exe).unwrap()
+    fn notes_file(&self) -> PathBuf {
+        self.cfg.with_file_name(NOTES_FILE_NAME)
+    }
+
+    /// Hält die zweite Prüfung an, bis über den gelieferten Sender etwas kommt (oder er fällt).
+    fn hold_reverify(&mut self) -> mpsc::Sender<()> {
+        let (tx, rx) = mpsc::channel();
+        self.app.hold_reverify(rx);
+        tx
     }
 }
 
@@ -489,19 +480,36 @@ fn dirty(ws: &mut Workspace) {
         .unwrap();
 }
 
+/// Ein sichtbares Programmfenster, wie eframe es meldet.
+fn visible_window() -> egui::ViewportInfo {
+    egui::ViewportInfo {
+        inner_rect: Some(Rect::from_min_size(
+            Pos2::new(208.0, 131.0),
+            vec2(1500.0, 850.0),
+        )),
+        outer_rect: Some(Rect::from_min_size(
+            Pos2::new(200.0, 100.0),
+            vec2(1516.0, 889.0),
+        )),
+        minimized: Some(false),
+        maximized: Some(false),
+        ..Default::default()
+    }
+}
+
 #[test]
-fn wrong_checksum_never_swaps_and_shows_message() {
-    let restarter = FakeRestarter::new(true);
+fn wrong_checksum_never_launches_and_shows_message() {
+    let launcher = FakeLauncher::ok();
     for checksum in [
-        format!("{}  {EXE_NAME}", hex_digest(b"etwas anderes")),
-        format!("{}  andere.exe", hex_digest(NEW_EXE)),
+        format!("{}  {SETUP_NAME}", hex_digest(b"etwas anderes")),
+        format!("{}  andere.exe", hex_digest(NEW_SETUP)),
         "Not Found".to_string(),
     ] {
         let downloader = FakeDownloader::new(checksum);
         let mut h = Harness::offered(
             "planora-install-summe",
             downloader.clone(),
-            restarter.clone(),
+            launcher.clone(),
         );
         h.click(INSTALL_NOW);
         h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
@@ -513,12 +521,11 @@ fn wrong_checksum_never_swaps_and_shows_message() {
         h.settle();
         assert!(h.sees(&InstallError::Checksum.message()), "{:?}", h.texts());
         assert!(h.sees(OPEN_DOWNLOAD_PAGE));
-        // Nichts ausgetauscht, nichts liegen geblieben, nichts gestartet, nichts vorgemerkt.
-        assert_eq!(h.read_exe(), b"alt");
-        assert!(!h.paths.new_exe.exists());
-        assert!(!h.paths.checksum_file().exists());
-        assert!(!h.paths.old_exe.exists());
-        assert!(restarter.started().is_empty());
+        // Nichts gestartet, nichts liegen geblieben, nichts vorgemerkt.
+        assert!(!h.paths.setup.exists());
+        assert!(!h.paths.checksum.exists());
+        assert!(!h.paths.dir.exists(), "leerer Download-Ordner gelöscht");
+        assert!(launcher.calls().is_empty());
         assert_eq!(h.app.ws_mut().pending_update(), None);
         assert_eq!(h.app.restart_phase(), RestartPhase::None);
         assert!(!h.close_sent());
@@ -532,16 +539,15 @@ fn wrong_checksum_never_swaps_and_shows_message() {
 }
 
 #[test]
-fn prompt_for_unsaved_work_before_restart_and_cancel_aborts_the_update_and_deletes_new_file() {
-    let restarter = FakeRestarter::new(true);
+fn prompt_for_unsaved_work_before_restart_and_cancel_aborts_the_update_and_deletes_the_setup() {
+    let launcher = FakeLauncher::ok();
     let (mut ws, cfg, paths) = workspace("planora-install-rueckfrage");
     // Zwei Tabs mit ungespeicherten Änderungen.
     dirty(&mut ws);
     ws.new_tab();
     dirty(&mut ws);
-    let mut h = Harness::with(ws, cfg, paths, FakeDownloader::good(), restarter.clone());
-    h.until(|a| a.pending_notice().is_some());
-    h.settle();
+    let mut h = Harness::with(ws, cfg, paths, FakeDownloader::good(), launcher.clone());
+    h.until_offered();
     h.click(INSTALL_NOW);
     h.until(|a| a.restart_phase() == RestartPhase::AwaitingPrompt);
     h.settle();
@@ -563,7 +569,7 @@ fn prompt_for_unsaved_work_before_restart_and_cancel_aborts_the_update_and_delet
     // Auch die Meldung selbst zeigt „wartet“, nicht den Neustart.
     assert_eq!(h.app.notice_view(), InstallView::Waiting);
     assert_eq!(h.app.restart_phase(), RestartPhase::AwaitingPrompt);
-    assert!(h.paths.new_exe.exists(), "fertig geladen und geprüft");
+    assert_eq!(std::fs::read(&h.paths.setup).unwrap(), NEW_SETUP);
     // Erster Tab: Verwerfen; dann kommt der zweite.
     h.click("Verwerfen");
     assert!(matches!(
@@ -576,10 +582,9 @@ fn prompt_for_unsaved_work_before_restart_and_cancel_aborts_the_update_and_delet
     h.settle();
     assert_eq!(h.app.restart_phase(), RestartPhase::None);
     assert_eq!(h.state(), InstallState::Idle);
-    assert!(!h.paths.new_exe.exists(), ".new gelöscht");
-    assert_eq!(h.read_exe(), b"alt");
-    assert!(!h.paths.old_exe.exists());
-    assert!(restarter.started().is_empty());
+    assert!(!h.paths.setup.exists(), "Installer gelöscht");
+    assert!(!h.paths.dir.exists());
+    assert!(launcher.calls().is_empty());
     assert_eq!(h.app.ws_mut().pending_update(), None);
     assert_eq!(h.pending_on_disk(), None);
     assert!(!h.app.ws_mut().quit);
@@ -595,189 +600,216 @@ fn prompt_for_unsaved_work_before_restart_and_cancel_aborts_the_update_and_delet
 }
 
 #[test]
-fn successful_flow_sets_pending_swaps_and_requests_restart() {
-    let restarter = FakeRestarter::new(true);
+fn successful_flow_saves_pending_launches_setup_and_quits() {
+    let launcher = FakeLauncher::ok();
     let mut h = Harness::offered(
         "planora-install-gut",
         FakeDownloader::good(),
-        restarter.clone(),
+        launcher.clone(),
     );
+    h.viewport = Some(visible_window());
     h.click(INSTALL_NOW);
     h.until(|a| a.restart_phase() == RestartPhase::Exiting);
     h.settle();
-    // Vorgemerkt (auch auf der Platte), ausgetauscht, neu gestartet mit der neuen Datei.
+    // Einmal gestartet: der geladene Installer, „nur für mich“, mit dem geprüften Inhalt.
+    assert_eq!(
+        launcher.calls(),
+        vec![(h.paths.dir.join(SETUP_NAME), InstallMode::User)]
+    );
+    assert_eq!(launcher.contents(), vec![NEW_SETUP.to_vec()]);
+    // Der Installer bleibt liegen (er braucht seine Datei noch); die neue Version räumt auf.
+    assert_eq!(std::fs::read(&h.paths.setup).unwrap(), NEW_SETUP);
+    // Vorgemerkt, auch auf der Platte, mit dem Fenster.
     let running = running_version();
     assert_eq!(h.app.ws_mut().pending_update(), Some((running, v(TARGET))));
     assert_eq!(
         h.pending_on_disk(),
         Some((running.to_string(), TARGET.to_string()))
     );
-    assert_eq!(h.read_exe(), NEW_EXE);
-    assert_eq!(std::fs::read(&h.paths.old_exe).unwrap(), b"alt");
-    assert!(!h.paths.new_exe.exists());
-    assert_eq!(restarter.started(), vec![h.paths.running_exe.clone()]);
-    // Die neue Version läuft weiter.
-    assert!(restarter.stopped().is_empty());
-    // Die Rückmeldung ist abgeholt; das Programm beendet sich ohne weitere Rückfrage.
-    assert!(!h.paths.ok_marker.exists());
+    assert!(
+        Config::load_from(&h.cfg)
+            .update_pending
+            .and_then(|p| p.window)
+            .is_some(),
+        "Fenster gemerkt"
+    );
+    // Die Patchnotes liegen für den Hinweis der neuen Version bereit.
+    let notes = std::fs::read_to_string(h.notes_file()).unwrap();
+    assert_eq!(notes, format!("{TARGET}\n- Schneller beim Öffnen"));
+    // Das Programm beendet sich ohne weitere Rückfrage (sauber, über das Schließen).
+    assert_eq!(h.app.restart_phase(), RestartPhase::Exiting);
     assert!(h.app.ws_mut().quit);
     assert!(h.app.ws_mut().prompt.is_none());
     assert!(h.close_sent());
-    // Die Patchnotes liegen für den Hinweis der neuen Version bereit.
-    let notes = std::fs::read_to_string(h.cfg.with_file_name(NOTES_FILE_NAME)).unwrap();
-    assert_eq!(notes, format!("{TARGET}\n- Schneller beim Öffnen"));
-}
-
-#[test]
-fn pending_that_cannot_be_saved_aborts_before_swapping() {
-    let restarter = FakeRestarter::new(true);
-    let (mut ws, _cfg, paths) = workspace("planora-install-vormerken");
-    // Die Konfiguration liegt „in“ einer Datei: Schreiben scheitert immer.
-    let blocker = paths.dir().join("keine-mappe");
-    std::fs::write(&blocker, "x").unwrap();
-    let cfg = blocker.join("config.json");
-    ws.config_path = cfg.clone();
-    let mut h = Harness::with(ws, cfg, paths, FakeDownloader::good(), restarter.clone());
-    h.until(|a| a.pending_notice().is_some());
-    h.settle();
-    h.click(INSTALL_NOW);
-    h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
-    assert_eq!(h.state(), InstallState::Failed(PENDING_NOT_SAVED.into()));
-    assert_eq!(h.read_exe(), b"alt");
-    assert!(!h.paths.new_exe.exists());
-    assert!(!h.paths.old_exe.exists());
-    assert!(restarter.started().is_empty());
-    assert!(!h.app.ws_mut().quit);
-    h.settle();
-    assert!(!h.close_sent());
-}
-
-#[test]
-fn failing_start_of_the_new_version_rolls_back() {
-    let restarter = Arc::new(FakeRestarter {
-        started: Mutex::new(Vec::new()),
-        answer: None,
-        fails: true,
-        exits: false,
-        stopped: Arc::default(),
-    });
-    let mut h = Harness::offered(
-        "planora-install-startfehler",
-        FakeDownloader::good(),
-        restarter.clone(),
-    );
-    h.click(INSTALL_NOW);
-    h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
-    assert_eq!(h.read_exe(), b"alt");
-    assert!(!h.paths.old_exe.exists());
-    assert_eq!(h.app.ws_mut().pending_update(), None);
-    assert_eq!(restarter.started().len(), 1);
-    assert!(!h.app.ws_mut().quit);
-    h.settle();
-    assert!(!h.close_sent());
-}
-
-#[test]
-fn missing_ok_marker_triggers_rollback_and_keeps_offering_the_version() {
-    let restarter = FakeRestarter::new(false);
-    let mut h = Harness::offered(
-        "planora-install-keine-antwort",
-        FakeDownloader::good(),
-        restarter.clone(),
-    );
-    h.app.set_marker_wait(Duration::from_millis(300));
-    h.click(INSTALL_NOW);
-    h.until(|a| matches!(a.restart_phase(), RestartPhase::WaitingForMarker { .. }));
-    // Während des Wartens ist die neue Datei schon an ihrem Platz.
-    assert_eq!(h.read_exe(), NEW_EXE);
-    h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
-    h.settle();
     assert_eq!(
-        h.state(),
-        InstallState::Failed(not_started(&v(TARGET), &running_version()))
+        RESTART_BOX,
+        "PlanoraCAD wird für das Update beendet und startet danach von selbst neu."
     );
-    // Die zu spät oder gar nicht antwortende neue Version wird beendet, und zwar bevor der
-    // alte Stand zurückkommt (sonst liefe sie aus der umbenannten Datei parallel weiter).
-    assert_eq!(restarter.stopped(), vec![NEW_EXE.to_vec()]);
-    // Alter Stand zurück, Eintrag gelöscht, Programm läuft weiter. Die Version wird nicht
-    // übersprungen, sondern weiter angeboten.
-    assert_eq!(h.read_exe(), b"alt");
-    assert!(!h.paths.old_exe.exists());
-    assert_eq!(h.app.ws_mut().skipped_version(), None);
-    assert_eq!(Config::load_from(&h.cfg).skipped_version, None);
+}
+
+#[test]
+fn all_users_mode_hands_the_mode_to_the_launcher() {
+    let launcher = FakeLauncher::ok();
+    let (ws, cfg, paths) = workspace("planora-install-alle");
+    let mut h = Harness::with_mode(
+        ws,
+        cfg,
+        paths,
+        FakeDownloader::good(),
+        launcher.clone(),
+        Some(InstallMode::AllUsers),
+    );
+    h.until_offered();
+    h.click(INSTALL_NOW);
+    h.until(|a| a.restart_phase() == RestartPhase::Exiting);
+    assert_eq!(
+        launcher.calls(),
+        vec![(h.paths.setup.clone(), InstallMode::AllUsers)]
+    );
+}
+
+/// Gemeinsamer Teil der Fälle, in denen der Installer nicht startet: das Programm läuft weiter,
+/// nichts ist vorgemerkt, der Download ist weg, die Meldung zeigt den Fehler und bietet die
+/// Version weiter an (auch wenn sie inzwischen nicht mehr vorgemerkt war).
+fn launch_refused(prefix: &str, answer: LaunchError, message: &str) {
+    let launcher = FakeLauncher::answering(Err(answer));
+    let mut h = Harness::offered(prefix, FakeDownloader::good(), launcher.clone());
+    let gate = h.hold_reverify();
+    h.click(INSTALL_NOW);
+    h.until(|a| a.restart_phase() == RestartPhase::Verifying);
+    *h.app.pending_notice_mut() = None;
+    drop(gate);
+    h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
+    h.settle();
+    assert_eq!(h.state(), InstallState::Failed(message.to_string()));
+    assert_eq!(launcher.calls().len(), 1);
+    assert_eq!(h.app.restart_phase(), RestartPhase::None);
     assert_eq!(h.app.ws_mut().pending_update(), None);
     assert_eq!(h.pending_on_disk(), None);
+    assert!(
+        !h.notes_file().exists(),
+        "keine Patchnotes für eine neue Version"
+    );
+    assert!(!h.paths.setup.exists(), "Installer gelöscht");
+    assert!(!h.app.ws_mut().quit);
+    assert!(!h.close_sent());
+    assert_eq!(h.app.ws_mut().skipped_version(), None);
+    assert!(h.sees(FAILED_TITLE), "{:?}", h.texts());
+    assert!(h.sees(message), "{:?}", h.texts());
+    assert!(h.sees(RETRY), "{:?}", h.texts());
     assert_eq!(
         h.app.pending_notice().map(|u| u.latest.version),
         Some(v(TARGET))
     );
-    assert!(!h.app.ws_mut().quit);
-    assert!(!h.close_sent());
-    assert_eq!(h.app.restart_phase(), RestartPhase::None);
-    assert!(
-        h.sees(&not_started(&v(TARGET), &running_version())),
-        "{:?}",
-        h.texts()
-    );
-    assert_eq!(
-        not_started(&v("0.2.0-dev.2"), &v("0.2.0-dev.1")),
-        "Das Update auf Version 0.2.0-dev.2 hat nicht geklappt, du bleibst auf Version 0.2.0-dev.1. Du kannst es später erneut versuchen."
-    );
-    assert_eq!(MARKER_WAIT, Duration::from_secs(30));
     // „Schließen“: die Meldung ruht, die Statuszeile bietet die Version weiter an.
     h.click(CLOSE);
     assert!(h.sees(&planora_app::update_dialog::status_hint(&v(TARGET))));
 }
 
-/// Eine Rückmeldung, die schon vor dem Austausch daliegt (etwa von einem früheren Update), zählt
-/// nicht: sie wird vor dem Austausch gelöscht, die neue Version meldet sich nicht → zurück.
 #[test]
-fn stale_ok_marker_does_not_count() {
-    let mut h = Harness::offered(
-        "planora-install-alte-rueckmeldung",
-        FakeDownloader::good(),
-        FakeRestarter::new(false),
+fn declined_admin_prompt_keeps_running_with_cancel_hint() {
+    launch_refused(
+        "planora-install-admin-abgelehnt",
+        LaunchError::Cancelled,
+        UPDATE_CANCELLED,
     );
-    h.app.set_marker_wait(Duration::from_millis(300));
-    std::fs::write(&h.paths.ok_marker, TARGET).unwrap();
+    assert_eq!(
+        UPDATE_CANCELLED,
+        "Update abgebrochen. Ohne die Erlaubnis von Windows lässt sich PlanoraCAD nicht für alle Benutzer aktualisieren. Du arbeitest in der bisherigen Version weiter."
+    );
+}
+
+#[test]
+fn launch_error_keeps_running_with_message() {
+    launch_refused(
+        "planora-install-startfehler",
+        LaunchError::Failed("kaputt".into()),
+        &launch_failed("kaputt"),
+    );
+    assert_eq!(
+        launch_failed("kaputt"),
+        "Das Update ließ sich nicht starten (kaputt). Du arbeitest in der bisherigen Version weiter."
+    );
+}
+
+#[test]
+fn pending_that_cannot_be_saved_aborts_before_launch() {
+    let launcher = FakeLauncher::ok();
+    let (mut ws, cfg, paths) = workspace("planora-install-vormerken");
+    unwritable_config(&mut ws, &cfg);
+    let cfg = ws.config_path.clone();
+    let mut h = Harness::with(ws, cfg, paths, FakeDownloader::good(), launcher.clone());
+    h.until_offered();
     h.click(INSTALL_NOW);
-    h.until(|a| matches!(a.restart_phase(), RestartPhase::WaitingForMarker { .. }));
-    assert!(!h.paths.ok_marker.exists(), "vor dem Austausch gelöscht");
     h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
-    assert_eq!(h.read_exe(), b"alt");
-    assert_eq!(h.app.ws_mut().skipped_version(), None);
+    assert_eq!(h.state(), InstallState::Failed(PENDING_NOT_SAVED.into()));
+    assert!(!h.paths.setup.exists());
+    assert!(launcher.calls().is_empty());
     assert!(!h.app.ws_mut().quit);
     h.settle();
     assert!(!h.close_sent());
 }
 
-/// Eine Rückmeldung mit anderer Version (nicht die Zielversion) zählt nicht.
 #[test]
-fn ok_marker_with_wrong_version_does_not_count() {
-    let restarter = FakeRestarter::answering(Some("0.0.1".into()));
-    let mut h = Harness::offered(
-        "planora-install-falsche-rueckmeldung",
-        FakeDownloader::good(),
-        restarter.clone(),
-    );
-    h.app.set_marker_wait(Duration::from_millis(300));
+fn setup_changed_before_launch_is_not_started() {
+    let launcher = FakeLauncher::ok();
+    let (mut ws, cfg, paths) = workspace("planora-install-zweite-pruefung");
+    dirty(&mut ws);
+    let mut h = Harness::with(ws, cfg, paths, FakeDownloader::good(), launcher.clone());
+    h.until_offered();
     h.click(INSTALL_NOW);
+    h.until(|a| a.restart_phase() == RestartPhase::AwaitingPrompt);
+    // Während die Rückfrage steht, verändert ein anderes Programm den Installer.
+    std::fs::write(&h.paths.setup, b"halb geschrieben").unwrap();
+    h.click("Verwerfen");
     h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
-    assert_eq!(restarter.started().len(), 1);
-    assert_eq!(restarter.stopped().len(), 1, "falsche Antwort: beendet");
     assert_eq!(
         h.state(),
-        InstallState::Failed(not_started(&v(TARGET), &running_version()))
+        InstallState::Failed(InstallError::Checksum.message())
     );
-    assert_eq!(h.read_exe(), b"alt");
+    assert!(launcher.calls().is_empty(), "nichts gestartet");
+    assert!(!h.paths.setup.exists(), "Installer gelöscht");
+    assert_eq!(h.app.ws_mut().pending_update(), None);
     assert!(!h.app.ws_mut().quit);
     h.settle();
     assert!(!h.close_sent());
-    // Pure Prüfung: nur der genaue Inhalt zählt (Leerraum am Rand egal).
-    std::fs::write(&h.paths.ok_marker, format!(" {TARGET}\n")).unwrap();
-    assert!(ok_marker_for(&h.paths, &v(TARGET)));
-    std::fs::write(&h.paths.ok_marker, "99.0.0-dev.2").unwrap();
-    assert!(!ok_marker_for(&h.paths, &v(TARGET)));
+    assert_eq!(h.app.restart_phase(), RestartPhase::None);
+}
+
+/// Nicht installiert (etwa aus dem Bauordner gestartet): die Meldung bietet nur die
+/// Download-Seite, „Später“ und „Überspringen“; nichts wird geladen.
+#[test]
+fn not_installed_offers_only_the_download_page() {
+    assert_eq!(decide(true, None), InstallDecision::NotInstalled);
+    assert_eq!(
+        decide(true, Some(InstallMode::User)),
+        InstallDecision::Download
+    );
+    assert_eq!(
+        decide(true, Some(InstallMode::AllUsers)),
+        InstallDecision::Download
+    );
+    assert_eq!(
+        decide(false, Some(InstallMode::User)),
+        InstallDecision::OnlyWindows
+    );
+
+    let downloader = FakeDownloader::good();
+    let launcher = FakeLauncher::ok();
+    let (ws, cfg, paths) = workspace("planora-install-nicht-installiert");
+    let mut h = Harness::with_mode(ws, cfg, paths, downloader.clone(), launcher.clone(), None);
+    h.until_offered();
+    assert!(h.sees(NOT_INSTALLED_HINT), "{:?}", h.texts());
+    assert!(h.sees(OPEN_DOWNLOAD_PAGE), "{:?}", h.texts());
+    assert!(h.sees(LATER) && h.sees(SKIP), "{:?}", h.texts());
+    assert!(!h.sees(INSTALL_NOW), "{:?}", h.texts());
+    h.click(OPEN_DOWNLOAD_PAGE);
+    assert_eq!(h.urls, vec![release_page(TAG)]);
+    assert_eq!(h.state(), InstallState::Idle);
+    assert_eq!(downloader.calls(), 0);
+    assert!(!h.paths.dir.exists(), "kein Download");
+    assert!(launcher.calls().is_empty());
+    assert_eq!(h.app.restart_phase(), RestartPhase::None);
 }
 
 #[test]
@@ -785,79 +817,102 @@ fn startup_with_matching_pending_shows_notice_once_and_cleans_up() {
     let (mut ws, cfg, paths) = workspace("planora-install-start");
     let running = running_version();
     assert!(ws.set_pending_update(Some((v("0.0.1"), running))));
-    std::fs::write(&paths.old_exe, "alt").unwrap();
     write_notes(
         &cfg.with_file_name(NOTES_FILE_NAME),
         &running,
         "# Neu\n\n- Schneller beim Öffnen",
     );
+    // Der Installer der alten Version liegt noch da.
+    std::fs::create_dir_all(&paths.dir).unwrap();
+    std::fs::write(&paths.setup, NEW_SETUP).unwrap();
     let mut h = Harness::with(
         ws,
         cfg.clone(),
         paths.clone(),
         FakeDownloader::good(),
-        FakeRestarter::new(true),
+        FakeLauncher::ok(),
     );
-    h.app.run_update_startup(false);
-    // Eintrag gelöscht, `.old` weg, Ablage gelesen. Ohne `--nach-update` wartet keine alte
-    // Version: keine Rückmeldung.
-    assert!(!paths.ok_marker.exists());
+    h.app.run_update_startup();
+    // Eintrag gelöscht, Download weg, Ablage gelesen.
     assert_eq!(h.app.ws_mut().pending_update(), None);
     assert_eq!(h.pending_on_disk(), None);
-    assert!(!paths.old_exe.exists());
+    assert!(!paths.setup.exists());
+    assert!(!paths.dir.exists());
     assert!(!cfg.with_file_name(NOTES_FILE_NAME).exists());
     h.settle();
     assert!(h.sees(&updated_title(&running)), "{:?}", h.texts());
     assert!(h.sees("Schneller beim Öffnen"));
+    assert!(h.sees(planora_app::update_dialog::FEEDBACK_BUTTON));
     h.click(OK);
     assert!(h.app.after_update().is_none());
     assert!(!h.sees(&updated_title(&running)));
     // Einmal: beim nächsten Start kein Hinweis mehr.
-    h.app.run_update_startup(false);
+    h.app.run_update_startup();
     h.settle();
     assert!(h.app.after_update().is_none());
     assert!(!h.sees(&updated_title(&running)));
 
-    // Mit `--nach-update` ohne Eintrag und ohne Ablage: nur die Zeile.
-    let (ws, cfg, paths) = workspace("planora-install-start-arg");
-    std::fs::write(&paths.old_exe, "alt").unwrap();
+    // Ohne hinterlegte Patchnotes: nur die Zeile mit dem Hinweis auf GitHub.
+    let (mut ws, cfg, paths) = workspace("planora-install-start-ohne-notizen");
+    assert!(ws.set_pending_update(Some((v("0.0.1"), running))));
+    let mut h = Harness::with(ws, cfg, paths, FakeDownloader::good(), FakeLauncher::ok());
+    h.app.run_update_startup();
+    h.settle();
+    assert!(h.sees(&updated_title(&running)));
+    assert!(h.sees(NOTES_ON_GITHUB));
+}
+
+/// Ein liegengebliebener Download (etwa nach einem abgestürzten Lauf) wird beim Start
+/// weggeräumt, auch ohne vorgemerktes Update; einen Hinweis gibt es dann nicht.
+#[test]
+fn startup_removes_a_leftover_download() {
+    let (ws, cfg, paths) = workspace("planora-install-start-reste");
+    std::fs::create_dir_all(&paths.dir).unwrap();
+    std::fs::write(&paths.setup, NEW_SETUP).unwrap();
+    std::fs::write(&paths.checksum, "x").unwrap();
     let mut h = Harness::with(
         ws,
         cfg,
         paths.clone(),
         FakeDownloader::good(),
-        FakeRestarter::new(true),
+        FakeLauncher::ok(),
     );
-    h.app.run_update_startup(true);
-    // Die Rückmeldung kommt erst, wenn das erste Bild fertig gezeichnet ist: vorher könnte die
-    // neue Version noch beim Laden scheitern, und die alte muss dann zurücklegen können.
-    assert!(!paths.ok_marker.exists(), "noch kein Bild");
-    h.frame(vec![]);
-    assert!(!paths.ok_marker.exists(), "das erste Bild läuft noch");
-    h.frame(vec![]);
-    // `.old` bleibt bei diesem Start liegen (die alte Version braucht sie zum Zurücklegen); erst
-    // der nächste normale Start räumt sie weg.
-    assert!(
-        paths.old_exe.exists(),
-        ".old bleibt beim Start nach dem Update"
-    );
-    // Rückmeldung mit der laufenden Version als Inhalt.
+    h.app.run_update_startup();
+    assert!(!paths.setup.exists());
+    assert!(!paths.checksum.exists());
+    assert!(!paths.dir.exists());
+    assert!(h.app.after_update().is_none());
     assert_eq!(
-        std::fs::read_to_string(&paths.ok_marker).unwrap(),
-        running.to_string()
+        download_dir(),
+        std::env::temp_dir().join("PlanoraCAD-Update")
     );
-    assert!(ok_marker_for(&paths, &running));
-    h.settle();
-    assert!(h.sees(&updated_title(&running)));
-    assert!(h.sees(NOTES_ON_GITHUB));
-    assert_eq!(AFTER_UPDATE_ARG, "--nach-update");
-    // Nur einmal: weitere Bilder schreiben die Rückmeldung nicht neu.
-    std::fs::remove_file(&paths.ok_marker).unwrap();
-    h.settle();
-    assert!(!paths.ok_marker.exists());
-    // Der nächste normale Start räumt `.old` weg.
-    h.app.run_update_startup(false);
-    assert!(!paths.old_exe.exists());
+}
+
+#[test]
+fn window_for_start_only_for_the_target_version() {
+    let running = running_version();
+    let window = WindowState {
+        x: Some(200.0),
+        y: Some(100.0),
+        width: 1500.0,
+        height: 850.0,
+        maximized: true,
+    };
+    let config = |to: String| Config {
+        update_pending: Some(PendingUpdate {
+            from: "0.0.1".into(),
+            to,
+            window: Some(window),
+        }),
+        ..Config::default()
+    };
+    assert_eq!(
+        window_for_start(&config(running.to_string()), &running),
+        Some(window)
+    );
+    assert_eq!(window_for_start(&config(TARGET.into()), &running), None);
+    assert_eq!(window_for_start(&config("Unsinn".into()), &running), None);
+    assert_eq!(window_for_start(&Config::default(), &running), None);
 }
 
 /// Lassen sich die Einstellungen beim Start nach einem Update nicht schreiben, erscheint der
@@ -868,18 +923,16 @@ fn startup_notice_once_even_if_the_settings_cannot_be_written() {
     let (mut ws, cfg, paths) = workspace("planora-install-start-schreibfehler");
     let running = running_version();
     assert!(ws.set_pending_update(Some((v("0.0.1"), running))));
-    // Ab jetzt scheitert jedes Schreiben (die Konfiguration läge „in“ einer Datei).
-    let blocker = paths.dir().join("keine-mappe");
-    std::fs::write(&blocker, "x").unwrap();
-    ws.config_path = blocker.join("config.json");
+    // Ab jetzt scheitert jedes Schreiben.
+    unwritable_config(&mut ws, &cfg);
     let mut h = Harness::with(
         ws,
         cfg.clone(),
         paths,
         FakeDownloader::good(),
-        FakeRestarter::new(true),
+        FakeLauncher::ok(),
     );
-    h.app.run_update_startup(false);
+    h.app.run_update_startup();
     h.settle();
     assert!(h.sees(&updated_title(&running)), "{:?}", h.texts());
     h.click(OK);
@@ -888,7 +941,7 @@ fn startup_notice_once_even_if_the_settings_cannot_be_written() {
         h.pending_on_disk(),
         Some(("0.0.1".to_string(), running.to_string()))
     );
-    h.app.run_update_startup(false);
+    h.app.run_update_startup();
     h.settle();
     assert!(h.app.after_update().is_none());
     assert!(!h.sees(&updated_title(&running)));
@@ -898,64 +951,20 @@ fn startup_notice_once_even_if_the_settings_cannot_be_written() {
     assert_eq!(h.pending_on_disk(), None);
 }
 
-/// Neue ungespeicherte Arbeit, während die alte Version auf die Rückmeldung der neuen wartet
-/// (die Bedienung ist dann gesperrt, aber etwa ein Autosicherungs-Angebot oder ein Weg an der
-/// Sperre vorbei bleibt denkbar): Das Programm schließt sich nicht ohne Rückfrage. Es beendet
-/// die neue Version, legt den alten Stand zurück und läuft mit der Arbeit weiter.
-#[test]
-fn changes_while_waiting_for_the_new_version_never_close_without_asking() {
-    let restarter = FakeRestarter::new(false);
-    let mut h = Harness::offered(
-        "planora-install-aenderung-beim-warten",
-        FakeDownloader::good(),
-        restarter.clone(),
-    );
-    h.app.set_marker_wait(Duration::from_secs(60));
-    h.click(INSTALL_NOW);
-    h.until(|a| matches!(a.restart_phase(), RestartPhase::WaitingForMarker { .. }));
-    dirty(h.app.ws_mut());
-    // Die neue Version meldet sich.
-    std::fs::write(&h.paths.ok_marker, TARGET).unwrap();
-    h.settle();
-    h.settle();
-    assert!(!h.close_sent(), "nie ohne Rückfrage schließen");
-    assert!(!h.app.ws_mut().quit);
-    assert!(h.app.ws_mut().active_tab().is_dirty(), "Arbeit noch da");
-    assert_eq!(h.app.restart_phase(), RestartPhase::None);
-    // Keine zwei Programme: die neue Version ist beendet (vor dem Zurücklegen).
-    assert_eq!(restarter.stopped(), vec![NEW_EXE.to_vec()]);
-    assert_eq!(h.read_exe(), b"alt");
-    assert!(!h.paths.old_exe.exists());
-    assert_eq!(h.app.ws_mut().pending_update(), None);
-    assert_eq!(h.pending_on_disk(), None);
-    // Die Version wird nicht übersprungen; eine Meldung erklärt es.
-    assert_eq!(h.app.ws_mut().skipped_version(), None);
-    assert_eq!(h.state(), InstallState::Failed(RESTART_STOPPED.into()));
-    assert!(h.sees(RESTART_STOPPED), "{:?}", h.texts());
-    // Danach lässt sich das Fenster wie immer schließen: erst mit Rückfrage.
-    h.frame_close();
-    assert!(!h.app.ws_mut().quit);
-    assert!(matches!(
-        h.app.ws_mut().prompt,
-        Some(Prompt::SaveChanges { .. })
-    ));
-}
-
-/// Neue ungespeicherte Arbeit, während `.new` vor dem Austausch noch einmal geprüft wird: noch
-/// ist nichts ausgetauscht, also zurück zur Rückfrage wie beim Schließen.
+/// Neue ungespeicherte Arbeit, während der Installer vor dem Start noch einmal geprüft wird:
+/// noch ist nichts gestartet, also zurück zur Rückfrage wie beim Schließen.
 #[test]
 fn changes_while_checking_the_new_file_go_back_to_the_prompt() {
-    let restarter = FakeRestarter::new(true);
+    let launcher = FakeLauncher::ok();
     let (mut ws, cfg, paths) = workspace("planora-install-aenderung-beim-pruefen");
     dirty(&mut ws);
-    let mut h = Harness::with(ws, cfg, paths, FakeDownloader::good(), restarter.clone());
-    h.until(|a| a.pending_notice().is_some());
-    h.settle();
+    let mut h = Harness::with(ws, cfg, paths, FakeDownloader::good(), launcher.clone());
+    h.until_offered();
     h.click(INSTALL_NOW);
     h.until(|a| a.restart_phase() == RestartPhase::AwaitingPrompt);
     // „Verwerfen“ ohne Klick; gleich danach entsteht neue Arbeit (im Programm verhindert das die
     // Sperre). Die zweite Prüfung läuft trotzdem an; ist sie fertig, geht es zurück zur
-    // Rückfrage statt zum Austausch.
+    // Rückfrage statt zum Start.
     h.app.ws_mut().discard_and_continue();
     assert!(h.app.ws_mut().quit);
     dirty(h.app.ws_mut());
@@ -968,29 +977,29 @@ fn changes_while_checking_the_new_file_go_back_to_the_prompt() {
         h.app.ws_mut().prompt,
         Some(Prompt::SaveChanges { .. })
     ));
-    assert!(restarter.started().is_empty());
-    assert_eq!(h.read_exe(), b"alt");
-    assert!(h.paths.new_exe.exists(), "nicht verworfen");
+    assert!(launcher.calls().is_empty());
+    assert!(h.paths.setup.exists(), "nicht verworfen");
     assert!(!h.close_sent());
     // Beantwortet: weiter wie immer.
     h.click("Verwerfen");
     h.until(|a| a.restart_phase() == RestartPhase::Exiting);
-    assert_eq!(h.read_exe(), NEW_EXE);
+    assert_eq!(launcher.calls().len(), 1);
 }
 
-/// Solange die neue Version geprüft und gestartet wird, ist die Bedienung gesperrt: ein
-/// Schließen des Fensters wird zurückgehalten (das Programm beendet sich gleich selbst), es
-/// fragt nichts und setzt nichts in Gang.
+/// Solange der Installer geprüft und gestartet wird, ist die Bedienung gesperrt: ein Schließen
+/// des Fensters wird zurückgehalten (das Programm beendet sich gleich selbst), es fragt nichts
+/// und setzt nichts in Gang.
 #[test]
-fn closing_the_window_while_waiting_is_held_back() {
+fn closing_the_window_while_locked_is_held_back() {
+    let launcher = FakeLauncher::ok();
     let mut h = Harness::offered(
-        "planora-install-schliessen-beim-warten",
+        "planora-install-schliessen-gesperrt",
         FakeDownloader::good(),
-        FakeRestarter::new(false),
+        launcher.clone(),
     );
-    h.app.set_marker_wait(Duration::from_secs(60));
+    let gate = h.hold_reverify();
     h.click(INSTALL_NOW);
-    h.until(|a| matches!(a.restart_phase(), RestartPhase::WaitingForMarker { .. }));
+    h.until(|a| a.restart_phase() == RestartPhase::Verifying);
     h.commands.clear();
     h.frame_close();
     assert!(
@@ -1003,65 +1012,61 @@ fn closing_the_window_while_waiting_is_held_back() {
     assert!(!h.close_sent());
     assert!(!h.app.ws_mut().quit);
     assert!(h.app.ws_mut().prompt.is_none());
+    h.settle();
     assert!(h.sees(RESTARTING), "{:?}", h.texts());
-    // Die neue Version meldet sich: jetzt beendet sich das Programm.
-    std::fs::write(&h.paths.ok_marker, TARGET).unwrap();
+    assert!(launcher.calls().is_empty());
+    // Die Prüfung ist fertig: Installer gestartet, jetzt beendet sich das Programm.
+    drop(gate);
     h.until(|a| a.restart_phase() == RestartPhase::Exiting);
     h.settle();
+    assert_eq!(launcher.calls().len(), 1);
     assert!(h.close_sent());
 }
 
 #[test]
 fn startup_with_stale_pending_clears_it_and_does_not_retry() {
     let downloader = FakeDownloader::good();
-    let restarter = FakeRestarter::new(true);
+    let launcher = FakeLauncher::ok();
     let (mut ws, cfg, paths) = workspace("planora-install-alt-eintrag");
     let running = running_version();
+    // Das Update auf TARGET ist nicht durchgelaufen: es läuft noch die bisherige Version.
     assert!(ws.set_pending_update(Some((running, v(TARGET)))));
-    std::fs::write(&paths.old_exe, "uralt").unwrap();
-    let mut h = Harness::with(
-        ws,
-        cfg,
-        paths.clone(),
-        downloader.clone(),
-        restarter.clone(),
-    );
-    h.app.run_update_startup(false);
+    write_notes(&cfg.with_file_name(NOTES_FILE_NAME), &v(TARGET), "- Neu");
+    let mut h = Harness::with(ws, cfg, paths, downloader.clone(), launcher.clone());
+    h.app.run_update_startup();
     assert_eq!(h.app.ws_mut().pending_update(), None);
     assert_eq!(h.pending_on_disk(), None);
-    assert!(!paths.ok_marker.exists(), "keine Rückmeldung");
     assert!(h.app.after_update().is_none());
-    // `.old` wird trotzdem aufgeräumt.
-    assert!(!paths.old_exe.exists());
+    assert!(!h.notes_file().exists());
     h.until(|a| a.pending_notice().is_some());
     h.settle();
-    // Kein neuer Versuch von allein: nichts geladen, nichts getauscht, nichts gestartet.
+    // Kein neuer Versuch von allein: nichts geladen, nichts gestartet; die Version wird
+    // weiter angeboten.
     assert_eq!(downloader.calls(), 0);
     assert_eq!(h.state(), InstallState::Idle);
-    assert_eq!(h.read_exe(), b"alt");
-    assert!(restarter.started().is_empty());
+    assert!(launcher.calls().is_empty());
     assert!(!h.sees(&updated_title(&running)));
+    assert_eq!(
+        h.app.pending_notice().map(|u| u.latest.version),
+        Some(v(TARGET))
+    );
 }
 
 #[test]
 fn non_windows_shows_hint_and_opens_release_page() {
     // Die Entscheidung ohne `cfg`.
-    let dir = common::temp_root("planora-install-entscheidung");
-    std::fs::create_dir_all(&dir).unwrap();
-    let exe = dir.join("planoracad.exe");
-    assert_eq!(decide(false, Some(&exe)), InstallDecision::OnlyWindows);
-    assert_eq!(decide(true, None), InstallDecision::NoExe);
-    assert_eq!(decide(true, Some(&exe)), InstallDecision::Download);
+    assert_eq!(decide(false, None), InstallDecision::OnlyWindows);
     assert_eq!(
-        decide(true, Some(&dir.join("fehlt").join("planoracad.exe"))),
-        InstallDecision::ProtectedFolder
+        decide(false, Some(InstallMode::AllUsers)),
+        InstallDecision::OnlyWindows
     );
 
     let downloader = FakeDownloader::good();
+    let launcher = FakeLauncher::ok();
     let mut h = Harness::offered(
         "planora-install-nur-windows",
         downloader.clone(),
-        FakeRestarter::new(true),
+        launcher.clone(),
     );
     h.app.set_auto_install_supported(false);
     h.click(INSTALL_NOW);
@@ -1073,34 +1078,10 @@ fn non_windows_shows_hint_and_opens_release_page() {
     );
     assert_eq!(h.urls, vec![page.clone()]);
     assert_eq!(downloader.calls(), 0);
-    assert_eq!(h.read_exe(), b"alt");
-
-    // Geschützter Ordner: Meldung mit Knopf zur Download-Seite.
-    let (ws, cfg, _) = workspace("planora-install-geschuetzt");
-    let missing = Paths::for_exe(&cfg.with_file_name("fehlt").join("planoracad.exe"));
-    let mut h = Harness::with(
-        ws,
-        cfg,
-        missing,
-        downloader.clone(),
-        FakeRestarter::new(true),
-    );
-    h.until(|a| a.pending_notice().is_some());
-    h.settle();
-    h.click(INSTALL_NOW);
-    assert!(
-        h.sees(&InstallError::NotWritable.message()),
-        "{:?}",
-        h.texts()
-    );
-    assert_eq!(
-        InstallError::NotWritable.message(),
-        "Das Programm liegt in einem geschützten Ordner. Lade die neue Version von GitHub herunter."
-    );
-    assert!(h.urls.is_empty());
+    assert!(launcher.calls().is_empty());
+    // Der Knopf in der Fehlermeldung öffnet die Seite noch einmal.
     h.click(OPEN_DOWNLOAD_PAGE);
-    assert_eq!(h.urls, vec![page]);
-    assert_eq!(downloader.calls(), 0);
+    assert_eq!(h.urls, vec![page.clone(), page]);
 }
 
 #[test]
@@ -1108,10 +1089,11 @@ fn cancel_during_download_returns_to_idle() {
     let downloader = FakeDownloader::good();
     let (gate_tx, gate) = mpsc::channel();
     *downloader.gate.lock().unwrap() = Some(gate);
+    let launcher = FakeLauncher::ok();
     let mut h = Harness::offered(
         "planora-install-abbruch",
         downloader.clone(),
-        FakeRestarter::new(true),
+        launcher.clone(),
     );
     h.click(INSTALL_NOW);
     // Ein erstes Stück, dann steht der Download.
@@ -1121,7 +1103,7 @@ fn cancel_during_download_returns_to_idle() {
     );
     h.settle();
     assert!(h.sees(CANCEL), "{:?}", h.texts());
-    assert!(h.paths.new_exe.exists());
+    assert!(h.paths.setup.exists());
     h.click(CANCEL);
     assert_eq!(h.state(), InstallState::Idle);
     assert!(!h.app.update_dialog_mut().open);
@@ -1133,8 +1115,8 @@ fn cancel_during_download_returns_to_idle() {
         std::thread::sleep(Duration::from_millis(10));
     }
     drop(gate_tx);
-    assert!(!h.paths.new_exe.exists());
-    assert_eq!(h.read_exe(), b"alt");
+    assert!(!h.paths.setup.exists());
+    assert!(launcher.calls().is_empty());
     assert_eq!(h.app.restart_phase(), RestartPhase::None);
     assert!(!h.close_sent());
 }
@@ -1144,15 +1126,15 @@ fn ui_stays_responsive_state_machine_progress() {
     let downloader = FakeDownloader::good();
     let (gate_tx, gate) = mpsc::channel();
     *downloader.gate.lock().unwrap() = Some(gate);
-    let restarter = FakeRestarter::new(true);
+    let launcher = FakeLauncher::ok();
     let mut h = Harness::offered(
         "planora-install-fortschritt",
         downloader.clone(),
-        restarter.clone(),
+        launcher.clone(),
     );
     assert_eq!(h.state(), InstallState::Idle);
     h.click(INSTALL_NOW);
-    let total = NEW_EXE.len() as u64;
+    let total = NEW_SETUP.len() as u64;
     assert_eq!(
         h.state(),
         InstallState::Downloading { done: 0, total },
@@ -1195,11 +1177,10 @@ fn ui_stays_responsive_state_machine_progress() {
         "Statuszeile: {:?}",
         h.texts()
     );
-    // Der Rest kommt: geprüft, dann Neustart.
+    // Der Rest kommt: geprüft, dann der Start des Installers.
     drop(gate_tx_rest(gate_tx));
     h.until(|a| a.restart_phase() == RestartPhase::Exiting);
-    assert_eq!(h.read_exe(), NEW_EXE);
-    assert_eq!(restarter.started().len(), 1);
+    assert_eq!(launcher.calls().len(), 1);
     assert!(download_text(5, 10).ends_with("50 %"));
     assert_eq!(download_text(0, 0), "Wird heruntergeladen … 0,0 MB");
     assert_eq!(fraction(5, 10), 0.5);
@@ -1208,59 +1189,27 @@ fn ui_stays_responsive_state_machine_progress() {
 
 /// Gibt alle übrigen Stücke frei.
 fn gate_tx_rest(tx: mpsc::Sender<()>) -> mpsc::Sender<()> {
-    for _ in 0..NEW_EXE.len() {
+    for _ in 0..NEW_SETUP.len() {
         let _ = tx.send(());
     }
     tx
-}
-
-// ---- Nachbesserung: zweite Prüfung, Warten auf freie Bahn, Speicherplatz, Tabs ------------
-
-#[test]
-fn new_file_changed_before_swap_is_not_swapped() {
-    let restarter = FakeRestarter::new(true);
-    let (mut ws, cfg, paths) = workspace("planora-install-zweite-pruefung");
-    dirty(&mut ws);
-    let mut h = Harness::with(ws, cfg, paths, FakeDownloader::good(), restarter.clone());
-    h.until(|a| a.pending_notice().is_some());
-    h.settle();
-    h.click(INSTALL_NOW);
-    h.until(|a| a.restart_phase() == RestartPhase::AwaitingPrompt);
-    // Während die Rückfrage steht, verändert ein anderes Programm `.new`.
-    std::fs::write(&h.paths.new_exe, b"halb geschrieben").unwrap();
-    h.click("Verwerfen");
-    h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
-    assert_eq!(
-        h.state(),
-        InstallState::Failed(InstallError::Checksum.message())
-    );
-    assert_eq!(h.read_exe(), b"alt", "nicht ausgetauscht");
-    assert!(!h.paths.new_exe.exists(), ".new gelöscht");
-    assert!(!h.paths.old_exe.exists());
-    assert!(restarter.started().is_empty());
-    assert_eq!(h.app.ws_mut().pending_update(), None);
-    assert!(!h.app.ws_mut().quit);
-    h.settle();
-    assert!(!h.close_sent());
-    assert_eq!(h.app.restart_phase(), RestartPhase::None);
 }
 
 /// Lädt das Update hinter einem Tor, setzt dann `block`, gibt den Download frei und prüft, dass
 /// der Neustart wartet (sichtbar), bis `unblock` gilt; danach geht er von allein weiter.
 fn waits_until_free(
     prefix: &str,
-    ws: Option<(Workspace, PathBuf, Paths)>,
+    ws: Option<(Workspace, PathBuf, DownloadPaths)>,
     block: impl FnOnce(&mut PlanoraApp),
     unblock: impl FnOnce(&mut PlanoraApp),
-) -> Harness {
+) -> (Harness, Arc<FakeLauncher>) {
     let downloader = FakeDownloader::good();
     let (gate_tx, gate) = mpsc::channel();
     *downloader.gate.lock().unwrap() = Some(gate);
-    let restarter = FakeRestarter::new(true);
+    let launcher = FakeLauncher::ok();
     let (ws, cfg, paths) = ws.unwrap_or_else(|| workspace(prefix));
-    let mut h = Harness::with(ws, cfg, paths, downloader, restarter.clone());
-    h.until(|a| a.pending_notice().is_some());
-    h.settle();
+    let mut h = Harness::with(ws, cfg, paths, downloader, launcher.clone());
+    h.until_offered();
     h.click(INSTALL_NOW);
     block(&mut h.app);
     drop(gate_tx_rest(gate_tx));
@@ -1270,9 +1219,8 @@ fn waits_until_free(
     }
     assert_eq!(h.app.restart_phase(), RestartPhase::None, "wartet");
     assert_eq!(*h.app.installer().state(), InstallState::ReadyToRestart);
-    assert!(h.paths.new_exe.exists());
-    assert_eq!(h.read_exe(), b"alt");
-    assert!(restarter.started().is_empty());
+    assert!(h.paths.setup.exists());
+    assert!(launcher.calls().is_empty());
     assert!(!h.app.ws_mut().quit);
     assert!(
         h.sees_part("Update ist bereit"),
@@ -1281,32 +1229,32 @@ fn waits_until_free(
     );
     assert!(!h.close_sent());
     unblock(&mut h.app);
-    h
+    (h, launcher)
 }
 
 #[test]
 fn restart_waits_while_a_prompt_is_open() {
-    let mut h = waits_until_free(
+    let (mut h, launcher) = waits_until_free(
         "planora-install-warten-rueckfrage",
         None,
         |a| a.ws_mut().prompt = Some(Prompt::Notice("Hinweis".into())),
         |a| a.ws_mut().prompt = None,
     );
     h.until(|a| a.restart_phase() == RestartPhase::Exiting);
-    assert_eq!(h.read_exe(), NEW_EXE);
+    assert_eq!(launcher.calls().len(), 1);
     assert_eq!(WAITING, "Update ist bereit und wartet, bis du fertig bist.");
 }
 
 #[test]
 fn restart_waits_while_a_window_is_open() {
-    let mut h = waits_until_free(
+    let (mut h, launcher) = waits_until_free(
         "planora-install-warten-fenster",
         None,
         |a| a.ws_mut().about_open = true,
         |a| a.ws_mut().about_open = false,
     );
     h.until(|a| a.restart_phase() == RestartPhase::Exiting);
-    assert_eq!(h.read_exe(), NEW_EXE);
+    assert_eq!(launcher.calls().len(), 1);
 }
 
 fn slow_writer(
@@ -1326,6 +1274,7 @@ fn restart_waits_while_an_export_is_writing() {
     use planora_app::export_dialog::{ExportDialog, ExportFormat};
     use planora_drawing::{DrawingFormat, Paper, Placement, Projection, Scale, Sheet, ViewKind};
     let (mut ws, cfg, paths) = workspace("planora-install-warten-export");
+    let out_dir = cfg.parent().unwrap().to_path_buf();
     // Der Export schreibt in einem Tab, der nicht vorne ist.
     let tab = ws.active_tab_mut();
     tab.state.create_box(DVec3::new(30.0, 20.0, 10.0)).unwrap();
@@ -1353,21 +1302,21 @@ fn restart_waits_while_an_export_is_writing() {
     e.drawing = Some(d);
     e.tick(&tab.state, true);
     e.set_writer(slow_writer);
-    e.write_to(paths.dir().join("z.svg"), &tab.state);
+    e.write_to(out_dir.join("z.svg"), &tab.state);
     assert!(e.is_writing_file());
     tab.export_dialog = Some(e);
     ws.new_tab();
-    let mut h = waits_until_free(
+    let (mut h, launcher) = waits_until_free(
         "planora-install-warten-export",
         Some((ws, cfg, paths)),
         |_| {},
         |a| a.ws_mut().tabs[0].export_dialog = None,
     );
-    // Danach die Rückfrage für den geänderten ersten Tab, dann der Neustart.
+    // Danach die Rückfrage für den geänderten ersten Tab, dann der Start.
     h.until(|a| a.restart_phase() == RestartPhase::AwaitingPrompt);
     h.click("Verwerfen");
     h.until(|a| a.restart_phase() == RestartPhase::Exiting);
-    assert_eq!(h.read_exe(), NEW_EXE);
+    assert_eq!(launcher.calls().len(), 1);
 }
 
 fn autosave(ws: &Workspace, tab: usize) -> planora_project::docstore::Autosave {
@@ -1380,7 +1329,7 @@ fn autosave(ws: &Workspace, tab: usize) -> planora_project::docstore::Autosave {
 
 #[test]
 fn restart_waits_while_an_autosave_offer_is_pending() {
-    let mut h = waits_until_free(
+    let (mut h, launcher) = waits_until_free(
         "planora-install-warten-autosicherung",
         None,
         |a| {
@@ -1393,19 +1342,18 @@ fn restart_waits_while_an_autosave_offer_is_pending() {
         },
     );
     h.until(|a| a.restart_phase() == RestartPhase::Exiting);
-    assert_eq!(h.read_exe(), NEW_EXE);
+    assert_eq!(launcher.calls().len(), 1);
 }
 
 /// Kommt während der Rückfrage ein Autosicherungs-Angebot dazwischen, ist das kein „Abbrechen“:
 /// das Update wartet und fragt danach neu.
 #[test]
 fn autosave_offer_during_the_prompt_is_not_a_cancel() {
-    let restarter = FakeRestarter::new(true);
+    let launcher = FakeLauncher::ok();
     let (mut ws, cfg, paths) = workspace("planora-install-autosicherung-dazwischen");
     dirty(&mut ws);
-    let mut h = Harness::with(ws, cfg, paths, FakeDownloader::good(), restarter.clone());
-    h.until(|a| a.pending_notice().is_some());
-    h.settle();
+    let mut h = Harness::with(ws, cfg, paths, FakeDownloader::good(), launcher.clone());
+    h.until_offered();
     h.click(INSTALL_NOW);
     h.until(|a| a.restart_phase() == RestartPhase::AwaitingPrompt);
     // Das Angebot ersetzt die Rückfrage.
@@ -1415,50 +1363,49 @@ fn autosave_offer_during_the_prompt_is_not_a_cancel() {
     h.settle();
     assert_eq!(h.app.restart_phase(), RestartPhase::None, "wartet");
     assert_eq!(*h.app.installer().state(), InstallState::ReadyToRestart);
-    assert!(h.paths.new_exe.exists(), "nicht verworfen");
+    assert!(h.paths.setup.exists(), "nicht verworfen");
     assert!(matches!(
         h.app.ws_mut().prompt,
         Some(Prompt::AutosaveOffer { .. })
     ));
-    // Beantwortet: die Rückfrage kommt wieder, dann der Neustart.
+    // Beantwortet: die Rückfrage kommt wieder, dann der Start.
     h.app.ws_mut().tabs[0].pending_autosave = None;
     h.app.ws_mut().prompt = None;
     h.until(|a| a.restart_phase() == RestartPhase::AwaitingPrompt);
     h.click("Verwerfen");
     h.until(|a| a.restart_phase() == RestartPhase::Exiting);
-    assert_eq!(h.read_exe(), NEW_EXE);
-    assert_eq!(restarter.started().len(), 1);
+    assert_eq!(launcher.calls().len(), 1);
 }
 
 #[test]
 fn disk_full_during_download_shows_message_and_leaves_no_file() {
     let error = InstallError::Io("Auf dem Datenträger ist nicht genügend Speicherplatz".into());
+    let launcher = FakeLauncher::ok();
     let mut h = Harness::offered(
         "planora-install-platte-voll",
         FakeDownloader::failing(error.clone()),
-        FakeRestarter::new(true),
+        launcher.clone(),
     );
     h.click(INSTALL_NOW);
     h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
     assert_eq!(h.state(), InstallState::Failed(error.message()));
     h.settle();
     assert!(h.sees(&error.message()), "{:?}", h.texts());
-    assert!(!h.paths.new_exe.exists(), "Teil-Download gelöscht");
-    assert!(!h.paths.checksum_file().exists());
-    assert_eq!(h.read_exe(), b"alt");
+    assert!(!h.paths.setup.exists(), "Teil-Download gelöscht");
+    assert!(!h.paths.checksum.exists());
+    assert!(launcher.calls().is_empty());
     assert_eq!(h.app.restart_phase(), RestartPhase::None);
 }
 
 #[test]
 fn unsaved_tabs_discarded_then_restart_is_requested() {
-    let restarter = FakeRestarter::new(true);
+    let launcher = FakeLauncher::ok();
     let (mut ws, cfg, paths) = workspace("planora-install-verwerfen-alle");
     dirty(&mut ws);
     ws.new_tab();
     dirty(&mut ws);
-    let mut h = Harness::with(ws, cfg, paths, FakeDownloader::good(), restarter.clone());
-    h.until(|a| a.pending_notice().is_some());
-    h.settle();
+    let mut h = Harness::with(ws, cfg, paths, FakeDownloader::good(), launcher.clone());
+    h.until_offered();
     h.click(INSTALL_NOW);
     h.until(|a| a.restart_phase() == RestartPhase::AwaitingPrompt);
     h.click("Verwerfen");
@@ -1466,56 +1413,22 @@ fn unsaved_tabs_discarded_then_restart_is_requested() {
     h.click("Verwerfen");
     h.until(|a| a.restart_phase() == RestartPhase::Exiting);
     h.settle();
-    assert_eq!(h.read_exe(), NEW_EXE);
-    assert_eq!(restarter.started(), vec![h.paths.running_exe.clone()]);
-    assert!(h.close_sent());
-}
-
-/// Endet die gestartete neue Version von selbst, bevor sie sich meldet, wartet die alte nicht
-/// die ganze Frist: sie legt sofort zurück und zeigt die Meldung.
-#[test]
-fn new_version_that_ends_at_once_rolls_back_without_waiting() {
-    let restarter = Arc::new(FakeRestarter {
-        started: Mutex::new(Vec::new()),
-        answer: None,
-        fails: false,
-        exits: true,
-        stopped: Arc::default(),
-    });
-    let mut h = Harness::offered(
-        "planora-install-endet-sofort",
-        FakeDownloader::good(),
-        restarter.clone(),
-    );
-    // Die Frist ist lang; `until` gibt nach 10 s auf.
-    h.app.set_marker_wait(Duration::from_secs(600));
-    h.click(INSTALL_NOW);
-    let start = Instant::now();
-    h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
-    assert!(start.elapsed() < Duration::from_secs(5));
     assert_eq!(
-        h.state(),
-        InstallState::Failed(not_started(&v(TARGET), &running_version()))
+        launcher.calls(),
+        vec![(h.paths.setup.clone(), InstallMode::User)]
     );
-    assert_eq!(restarter.started().len(), 1);
-    assert_eq!(h.read_exe(), b"alt");
-    assert!(!h.paths.old_exe.exists());
-    assert_eq!(h.app.restart_phase(), RestartPhase::None);
-    assert_eq!(h.app.ws_mut().skipped_version(), None);
-    assert!(!h.app.ws_mut().quit);
-    h.settle();
-    assert!(!h.close_sent());
+    assert!(h.close_sent());
 }
 
 /// Ein Fehler steht deutlich da: eigener Titel, die Meldung über den Patchnotes (die weiter zu
 /// lesen sind) und „Erneut versuchen“, das den Download noch einmal startet.
 #[test]
 fn failure_has_its_own_title_message_on_top_and_retry() {
-    let downloader = FakeDownloader::new(format!("{}  {EXE_NAME}", hex_digest(b"falsch")));
+    let downloader = FakeDownloader::new(format!("{}  {SETUP_NAME}", hex_digest(b"falsch")));
     let mut h = Harness::offered(
         "planora-install-fehler-deutlich",
         downloader.clone(),
-        FakeRestarter::new(true),
+        FakeLauncher::ok(),
     );
     h.click(INSTALL_NOW);
     h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
@@ -1548,7 +1461,7 @@ fn failure_has_its_own_title_message_on_top_and_retry() {
     let mut h = Harness::offered(
         "planora-install-fehler-kein-erneut",
         FakeDownloader::good(),
-        FakeRestarter::new(true),
+        FakeLauncher::ok(),
     );
     h.app.set_auto_install_supported(false);
     h.click(INSTALL_NOW);
@@ -1558,23 +1471,24 @@ fn failure_has_its_own_title_message_on_top_and_retry() {
     assert!(!h.sees(RETRY), "{:?}", h.texts());
 }
 
-/// „Neustart …“ steht während des Wartens auf die neue Version nur einmal da (in der
-/// Statuszeile); der Kasten über allem erklärt es in einem Satz.
+/// „Neustart …“ steht während der Prüfung vor dem Start nur einmal da (in der Statuszeile); der
+/// Kasten über allem erklärt es in einem Satz.
 #[test]
 fn restart_text_appears_once_while_waiting() {
     let mut h = Harness::offered(
         "planora-install-neustart-einmal",
         FakeDownloader::good(),
-        FakeRestarter::new(false),
+        FakeLauncher::ok(),
     );
-    h.app.set_marker_wait(Duration::from_secs(60));
+    let gate = h.hold_reverify();
     h.click(INSTALL_NOW);
-    h.until(|a| matches!(a.restart_phase(), RestartPhase::WaitingForMarker { .. }));
+    h.until(|a| a.restart_phase() == RestartPhase::Verifying);
     h.settle();
     assert_eq!(h.app.notice_view(), InstallView::Restarting);
     let restarting = h.seen.iter().filter(|s| s.text == RESTARTING).count();
     assert_eq!(restarting, 1, "{:?}", h.texts());
     assert!(h.sees(RESTART_BOX), "{:?}", h.texts());
+    drop(gate);
 }
 
 /// Die Meldung steht fest unten rechts über der Verlaufsleiste; ein Fenster wie „Quader
@@ -1584,7 +1498,7 @@ fn notice_sits_bottom_right_and_dialogs_do_not_cover_it() {
     let mut h = Harness::offered(
         "planora-install-meldung-unten-rechts",
         FakeDownloader::good(),
-        FakeRestarter::new(true),
+        FakeLauncher::ok(),
     );
     let title = planora_app::update_dialog::title(&v(TARGET));
     let find = |h: &Harness, t: &str| {
@@ -1595,7 +1509,7 @@ fn notice_sits_bottom_right_and_dialogs_do_not_cover_it() {
             .rect
     };
     let notice = find(&h, &title);
-    let skip = find(&h, planora_app::update_dialog::SKIP);
+    let skip = find(&h, SKIP);
     // Rechts von jedem mittigen Fenster bis zur Breite „Wide“ (720) und über der Verlaufsleiste.
     let wide_right = SIZE.x / 2.0 + planora_app::dialog::DialogSize::Wide.width() / 2.0;
     assert!(notice.left() > wide_right, "{notice:?}");
@@ -1627,7 +1541,7 @@ fn window_state_goes_with_the_pending_update() {
     let mut h = Harness::offered(
         "planora-install-fenster",
         FakeDownloader::good(),
-        FakeRestarter::new(true),
+        FakeLauncher::ok(),
     );
     h.viewport = Some(egui::ViewportInfo {
         inner_rect: Some(Rect::from_min_size(Pos2::new(0.0, 23.0), SIZE)),
@@ -1640,8 +1554,10 @@ fn window_state_goes_with_the_pending_update() {
     });
     h.click(INSTALL_NOW);
     h.until(|a| a.restart_phase() == RestartPhase::Exiting);
-    let window = Config::load_from(&h.cfg)
+    let config = Config::load_from(&h.cfg);
+    let window = config
         .update_pending
+        .as_ref()
         .and_then(|p| p.window)
         .expect("Fenster gemerkt");
     assert_eq!(
@@ -1649,9 +1565,12 @@ fn window_state_goes_with_the_pending_update() {
         (Some(-8.0), Some(-8.0), SIZE.x, SIZE.y)
     );
     assert!(window.maximized);
+    // Die neue Version (Zielversion) bekommt dieses Fenster, die alte nicht.
+    assert_eq!(window_for_start(&config, &v(TARGET)), Some(window));
+    assert_eq!(window_for_start(&config, &running_version()), None);
     // Pure Prüfung: kein Fenster ohne Angaben, zu kleine Fenster auf die Mindestgröße.
     assert_eq!(window_state(&egui::ViewportInfo::default()), None);
-    let small = planora_project::config::WindowState {
+    let small = WindowState {
         x: Some(5.0),
         y: Some(6.0),
         width: 300.0,
@@ -1668,7 +1587,7 @@ fn window_state_goes_with_the_pending_update() {
 /// draußen weggelassen (das System setzt das Fenster dann selbst).
 #[test]
 fn restore_window_limits_size_and_drops_far_positions() {
-    let wild = planora_project::config::WindowState {
+    let wild = WindowState {
         x: Some(-32000.0),
         y: Some(-32000.0),
         width: 1e30,
@@ -1680,7 +1599,7 @@ fn restore_window_limits_size_and_drops_far_positions() {
     assert_eq!(b.inner_size, Some(vec2(max, max)));
     assert_eq!(b.position, None);
     // Unbrauchbare Maße: nichts übernommen, die Vorgabe des Programms bleibt.
-    let broken = planora_project::config::WindowState {
+    let broken = WindowState {
         width: f32::NAN,
         ..wild
     };
@@ -1708,21 +1627,9 @@ fn minimized_window_keeps_the_last_visible_state() {
     let mut h = Harness::offered(
         "planora-install-fenster-minimiert",
         FakeDownloader::good(),
-        FakeRestarter::new(true),
+        FakeLauncher::ok(),
     );
-    h.viewport = Some(egui::ViewportInfo {
-        inner_rect: Some(Rect::from_min_size(
-            Pos2::new(208.0, 131.0),
-            vec2(1500.0, 850.0),
-        )),
-        outer_rect: Some(Rect::from_min_size(
-            Pos2::new(200.0, 100.0),
-            vec2(1516.0, 889.0),
-        )),
-        minimized: Some(false),
-        maximized: Some(false),
-        ..Default::default()
-    });
+    h.viewport = Some(visible_window());
     h.settle();
     h.viewport = Some(minimized);
     // Die Meldung bleibt bedienbar; der Klick kommt beim „minimierten“ Fenster an.
@@ -1738,51 +1645,29 @@ fn minimized_window_keeps_the_last_visible_state() {
     );
 }
 
-/// War beim Rückfall kein Update mehr vorgemerkt, bietet die App das gewählte wieder an
-/// (Statuszeile und nächste Meldung).
+/// Nach dem Start des Installers endet die alte Version sauber (wie beim Schließen): `on_exit`
+/// löscht ihren Laufmarker, also meldet der nächste Start (die neue Version, vom Installer
+/// gestartet) kein „unerwartet beendet“.
 #[test]
-fn rollback_offers_the_chosen_update_again_even_without_a_pending_notice() {
+fn update_exit_leaves_no_run_marker() {
     let mut h = Harness::offered(
-        "planora-install-rueckfall-wieder-anbieten",
+        "planora-install-laufmarker",
         FakeDownloader::good(),
-        FakeRestarter::new(false),
+        FakeLauncher::ok(),
     );
-    h.app.set_marker_wait(Duration::from_millis(300));
-    h.click(INSTALL_NOW);
-    h.until(|a| matches!(a.restart_phase(), RestartPhase::WaitingForMarker { .. }));
-    *h.app.pending_notice_mut() = None;
-    h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
-    assert_eq!(
-        h.app.pending_notice().map(|u| u.latest.version),
-        Some(v(TARGET))
-    );
-    h.click(CLOSE);
-    assert!(h.sees(&planora_app::update_dialog::status_hint(&v(TARGET))));
-}
-
-/// Wird die neue Version nach einem abgebrochenen Update beendet, endet sie ohne `on_exit`: Ihr
-/// Laufmarker darf nicht liegen bleiben, sonst meldet der nächste Start „unerwartet beendet“.
-#[test]
-fn aborted_update_leaves_no_marker_of_the_new_version() {
-    let restarter = FakeRestarter::new(false);
-    let mut h = Harness::offered(
-        "planora-install-marker-neu",
-        FakeDownloader::good(),
-        restarter.clone(),
-    );
-    h.app.set_marker_wait(Duration::from_millis(300));
-    h.click(INSTALL_NOW);
-    h.until(|a| matches!(a.restart_phase(), RestartPhase::WaitingForMarker { .. }));
     let data = h.cfg.parent().unwrap().to_path_buf();
-    let marker = planora_app::crash::marker_path(&data, NEW_PID);
-    assert!(marker.exists(), "die neue Version läuft mit Marker");
-    h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
-    assert_eq!(restarter.stopped().len(), 1);
-    assert!(
-        !marker.exists(),
-        "Marker der beendeten neuen Version gelöscht"
-    );
-    let (own, finding) = planora_app::crash::start_run(&data, 4_000_000_010);
+    let (marker, finding) = planora_app::crash::start_run(&data, 4_000_000_011);
+    assert_eq!(finding, planora_app::crash::StartFinding::Clean);
+    h.app.set_run_marker(marker);
+    assert!(planora_app::crash::marker_path(&data, 4_000_000_011).exists());
+    h.click(INSTALL_NOW);
+    h.until(|a| a.restart_phase() == RestartPhase::Exiting);
+    h.settle();
+    assert!(h.close_sent());
+    // eframe ruft beim Schließen `on_exit`.
+    h.app.on_exit();
+    assert!(!planora_app::crash::marker_path(&data, 4_000_000_011).exists());
+    let (own, finding) = planora_app::crash::start_run(&data, 4_000_000_012);
     assert_eq!(finding, planora_app::crash::StartFinding::Clean);
     own.unwrap().finish();
 }

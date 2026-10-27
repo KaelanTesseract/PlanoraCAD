@@ -6,7 +6,9 @@
 mod common;
 
 use planora_app::install_mode::*;
-use planora_app::update_install::{SETUP_RESTART_PARAM, setup_args, setup_verb};
+use planora_app::update_install::{
+    SETUP_LOG_NAME, SETUP_RESTART_PARAM, setup_args, setup_log_path, setup_verb,
+};
 use std::path::{Path, PathBuf};
 
 fn entry(mode: &str, path: &Path) -> Option<RegEntry> {
@@ -60,6 +62,17 @@ fn both_entries_pick_the_one_of_the_running_exe() {
     assert_eq!(pick(&build, hkcu(), hklm()), None);
 }
 
+/// Stehen beide Einträge (HKCU „user“ und HKLM „all“) auf dem Ordner der laufenden exe, gilt
+/// „nur für mich“: HKCU wird zuerst geprüft (ein Update braucht dann keine Admin-Abfrage).
+#[test]
+fn both_entries_on_the_same_folder_pick_user() {
+    let (inst, _) = two_dirs("install-mode-same");
+    assert_eq!(
+        pick(&inst, entry("user", &inst), entry("all", &inst)),
+        Some(InstallMode::User)
+    );
+}
+
 #[test]
 fn folder_match_ignores_case_and_trailing_separator() {
     let (inst, other) = two_dirs("install-mode-case");
@@ -93,23 +106,35 @@ fn no_entries_means_not_installed() {
 
 #[test]
 fn setup_args_are_exact() {
-    let base = [
-        "/VERYSILENT",
-        "/SUPPRESSMSGBOXES",
-        "/NORESTART",
-        "/CLOSEAPPLICATIONS",
-        "/RESTARTAPPLICATIONS",
-    ];
-    let mut user = base.to_vec();
-    user.extend(["/CURRENTUSER", "/NACHUPDATE=1"]);
-    let mut all = base.to_vec();
-    all.extend(["/ALLUSERS", "/NACHUPDATE=1"]);
-    assert_eq!(setup_args(InstallMode::User), user);
-    assert_eq!(setup_args(InstallMode::AllUsers), all);
+    let base = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS";
+    let log = Path::new("C:").join("Temp").join("planoracad-update.log");
+    let log_text = log.to_string_lossy().into_owned();
     assert_eq!(
-        *setup_args(InstallMode::User).last().unwrap(),
-        SETUP_RESTART_PARAM
+        setup_args(InstallMode::User, &log),
+        format!("{base} /CURRENTUSER /NACHUPDATE=1 /LOG={log_text}")
     );
+    assert_eq!(
+        setup_args(InstallMode::AllUsers, &log),
+        format!("{base} /ALLUSERS /NACHUPDATE=1 /LOG={log_text}")
+    );
+    assert!(setup_args(InstallMode::User, &log).contains(SETUP_RESTART_PARAM));
+}
+
+/// Ein Temp-Ordner mit Leerzeichen (Benutzername „Max Muster“) steht in Anführungszeichen, damit
+/// der Installer den Pfad als Ganzes nimmt.
+#[test]
+fn setup_log_with_spaces_is_quoted() {
+    let log = Path::new("C:")
+        .join("Users")
+        .join("Max Muster")
+        .join("planoracad-update.log");
+    let args = setup_args(InstallMode::User, &log);
+    assert!(
+        args.ends_with(&format!("/LOG=\"{}\"", log.to_string_lossy())),
+        "{args}"
+    );
+    assert_eq!(SETUP_LOG_NAME, "planoracad-update.log");
+    assert_eq!(setup_log_path(), std::env::temp_dir().join(SETUP_LOG_NAME));
 }
 
 #[test]

@@ -20,7 +20,9 @@
 //! Neustarts bleibt die Fußzeile leer; dann sagt es der Kasten über allem. ✕ und Esc blenden
 //! sie während des Updates nur aus (der
 //! Download läuft weiter, die Statuszeile zeigt den Stand); nach einem Fehler schließen sie wie
-//! „Schließen“. Den Ablauf selbst führt [`crate::update_install`] mit der App aus. Nach dem
+//! „Schließen“. Ist diese Fassung nicht installiert (Entwicklung), steht statt „Jetzt
+//! aktualisieren“ ein Satz dazu ([`update_install::NOT_INSTALLED_HINT`]) und „Download-Seite
+//! öffnen“ ist der Hauptknopf. Den Ablauf selbst führt [`crate::update_install`] mit der App aus. Nach dem
 //! Neustart zeigt [`show_after_update`] einmal „Aktualisiert auf Version X“.
 //!
 //! **Lage.** Die Meldung steht fest unten rechts über der Verlaufsleiste ([`notice_area`]), so
@@ -263,12 +265,14 @@ pub fn notice_area(content: egui::Rect) -> egui::Rect {
 /// Zeichnet die Meldung, solange `state.open` gilt, und liefert die Wahl (✕ wie
 /// [`UpdateDialog::close_action`]). Ausgeführt wird sie hier schon, soweit sie die Meldung
 /// betrifft ([`UpdateDialog::apply`]). Nach „Jetzt aktualisieren“ stehen statt der Knöpfe
-/// Fortschritt oder Fehler (`install`).
+/// Fortschritt oder Fehler (`install`). Ohne `installable` (nicht installiert) bietet die
+/// Fußzeile nur „Download-Seite öffnen“ (Hauptknopf), „Später“ und „Überspringen“.
 pub fn show(
     ctx: &egui::Context,
     ws: &mut Workspace,
     state: &mut UpdateDialog,
     install: InstallView<'_>,
+    installable: bool,
 ) -> Option<UpdateAction> {
     if !state.open {
         return None;
@@ -325,9 +329,21 @@ pub fn show(
                     action = install_footer(ui, install, dark);
                     return;
                 }
+                if !installable {
+                    ui.add(egui::Label::new(update_install::NOT_INSTALLED_HINT).wrap());
+                    ui.add_space(theme::SPACE_2);
+                }
                 ui.horizontal(|ui| {
-                    if ui.add(theme::primary_button(INSTALL_NOW, dark)).clicked() {
-                        action = Some(UpdateAction::InstallNow);
+                    let main = if installable {
+                        (INSTALL_NOW, UpdateAction::InstallNow)
+                    } else {
+                        (
+                            update_install::OPEN_DOWNLOAD_PAGE,
+                            UpdateAction::OpenDownloadPage,
+                        )
+                    };
+                    if ui.add(theme::primary_button(main.0, dark)).clicked() {
+                        action = Some(main.1);
                     }
                     if ui.button(LATER).clicked() {
                         action = Some(UpdateAction::Later);
