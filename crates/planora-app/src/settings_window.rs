@@ -1,7 +1,8 @@
 //! Fenster „Einstellungen“ (Spec §5): Abschnitte untereinander mit Überschrift, damit später
 //! weitere dazukommen. Oben „Darstellung“ mit dem Regler „Durchsichtigkeit der Panels“ (wirkt
-//! sofort, wird gespeichert wie das Projektverzeichnis), darunter „Updates“ (laufende Version,
-//! Update-Kanal, Suchen beim Start, letzte Prüfung; gespeichert sofort; Knopf „Jetzt nach Updates
+//! sofort, wird gespeichert wie das Projektverzeichnis) und der Auswahl „Sprache“ (wirkt im
+//! nächsten Bild, gespeichert sofort), darunter „Updates“ (laufende Version, Update-Kanal,
+//! Suchen beim Start, letzte Prüfung; gespeichert sofort; Knopf „Jetzt nach Updates
 //! suchen“ mit Ergebnis und bei einem Fund „Meldung anzeigen“, die Suche selbst macht die App;
 //! eine übersprungene Version mit „Doch wieder anzeigen“), dann „Projekte“ mit dem
 //! Projektverzeichnis und zuletzt „Tastenkürzel“ ([`crate::keymap::settings_ui`]; zuletzt, weil
@@ -17,6 +18,7 @@ use crate::places::{self, Places};
 use crate::theme;
 use crate::workspace::{ROOT_LOCKED, Workspace};
 use crate::{local_time, running_version};
+use planora_i18n::{Lang, tr};
 use planora_project::config::{Config, MAX_PANEL_TRANSPARENCY, clamp_panel_transparency};
 use planora_project::library::{DOCUMENT_FILE, DOCUMENT_SUFFIX, PROJECT_FILE};
 use planora_update::{Channel, Version};
@@ -28,6 +30,14 @@ pub const SECTION_APPEARANCE: &str = "Darstellung";
 pub const TRANSPARENCY_LABEL: &str = "Durchsichtigkeit der Panels";
 /// Warnung, wenn die Durchsichtigkeit gilt, aber nicht gespeichert werden konnte.
 pub const TRANSPARENCY_NOT_SAVED: &str = "Die Durchsichtigkeit gilt nur bis zum Programmende: die Einstellung konnte nicht gespeichert werden.";
+/// Beschriftung der Auswahl „Sprache“ im Abschnitt „Darstellung“.
+pub fn section_language() -> String {
+    tr!("settings-language")
+}
+/// Warnung, wenn die Sprache gilt, aber nicht gespeichert werden konnte.
+pub fn language_not_saved() -> String {
+    tr!("settings-language-not-saved")
+}
 /// Breite der Schieberspur des Reglers.
 pub const SLIDER_WIDTH: f32 = 200.0;
 pub const SECTION_UPDATES: &str = "Updates";
@@ -430,6 +440,9 @@ impl SettingsWindow {
         let last_check = last_check_line(ws.last_update_check());
         let mut transparency = ws.panel_transparency();
         let (mut slid, mut released) = (false, false);
+        // Vorgewählt ist die Sprache, in der das Fenster gerade spricht.
+        let language = planora_i18n::current();
+        let mut chosen_language: Option<Lang> = None;
         let choosing = self.chooser.is_some();
         // Die Auswahl zeichnet oben (rollt) und in der Fußzeile (wählen, abbrechen).
         let chooser = RefCell::new(self.chooser.as_mut());
@@ -448,6 +461,7 @@ impl SettingsWindow {
                                 ui,
                                 &mut transparency,
                                 (&mut slid, &mut released),
+                                (&language, &mut chosen_language),
                                 appearance_message.as_ref(),
                             )
                         };
@@ -520,6 +534,15 @@ impl SettingsWindow {
         }
         if self.transparency_unsaved && released {
             self.save_transparency(ws);
+        }
+        // Die Sprache wirkt ab dem nächsten Bild und wird sofort gespeichert.
+        if let Some(lang) = chosen_language
+            && !locked
+            && lang.id() != language.id()
+        {
+            let written = ws.set_language(&lang);
+            self.appearance_message =
+                (!written).then(|| RootMessage::Warning(language_not_saved()));
         }
         if check_now && !locked {
             self.check_requested = true;
@@ -676,11 +699,13 @@ fn show_updates(
 }
 
 /// Abschnitt „Darstellung“: Regler der Durchsichtigkeit (`slid`: bewegt, `released`: nicht mehr
-/// gezogen) und ein Hinweis nach einem Schreibfehler.
+/// gezogen), Auswahl der Sprache (alle verfügbaren nach Eigenname, `current` vorgewählt; eine
+/// gewählte steht danach in `chosen`) und ein Hinweis nach einem Schreibfehler.
 fn show_appearance(
     ui: &mut egui::Ui,
     transparency: &mut u8,
     (slid, released): (&mut bool, &mut bool),
+    (current, chosen): (&Lang, &mut Option<Lang>),
     message: Option<&RootMessage>,
 ) {
     let dark = ui.visuals().dark_mode;
@@ -696,6 +721,22 @@ fn show_appearance(
     theme::focus_ring(ui, &r);
     *slid = r.changed();
     *released = !r.is_pointer_button_down_on() && !r.dragged();
+    // Beschriftung und Auswahl in einer Zeile, damit das Fenster bei 1400 × 900 nicht höher wird.
+    ui.add_space(theme::SPACE_1);
+    ui.horizontal(|ui| {
+        ui.strong(section_language());
+        let r = egui::ComboBox::from_id_salt("planora_settings_language")
+            .selected_text(current.name())
+            .show_ui(ui, |ui| {
+                for lang in planora_i18n::available() {
+                    let r = ui.selectable_label(lang.id() == current.id(), lang.name());
+                    if r.clicked() {
+                        *chosen = Some(lang);
+                    }
+                }
+            });
+        theme::focus_ring(ui, &r.response);
+    });
     if let Some(m) = message {
         ui.colored_label(m.color(dark), m.text());
     }

@@ -1441,13 +1441,13 @@ pub fn group_digits(n: u64) -> String {
     out
 }
 
-/// Größe in Megabyte mit Komma; unter 0,1 MB „unter 0,1 MB“.
+/// Größe in Megabyte mit dem Dezimaltrenner der Sprache; unter 0,1 MB „unter 0,1 MB“.
 pub fn mb_text(bytes: u64) -> String {
     let mb = bytes as f64 / BYTES_PER_MB;
     if mb < MIN_SHOWN_MB {
         "unter 0,1 MB".into()
     } else {
-        format!("{mb:.1} MB").replace('.', ",")
+        planora_i18n::localize_decimal(&format!("{mb:.1} MB"))
     }
 }
 

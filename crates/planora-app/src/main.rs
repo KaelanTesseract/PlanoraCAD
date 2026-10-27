@@ -14,6 +14,10 @@ fn main() -> eframe::Result {
         run = planora_app::crash::start_run(data_dir, std::process::id());
     }
     let (marker, finding) = run;
+    let config = planora_project::config::Config::load();
+    // Sprache vor dem ersten Text: zusätzliche Sprachdateien laden (Probleme ins Protokoll),
+    // dann die gespeicherte Wahl, sonst beim ersten Start die Sprache von Windows.
+    planora_app::system_language::apply_at_start(config.language.as_deref());
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("PlanoraCAD")
         .with_inner_size([1400.0, 900.0])
@@ -22,10 +26,9 @@ fn main() -> eframe::Result {
     // Nach einem Update öffnet das Fenster in Größe, Lage und Zustand der alten Version (sie hat
     // es mit dem begonnenen Update in die Konfiguration geschrieben; der Installer hat die neue
     // Version gestartet).
-    if let Some(window) = planora_app::update_install::window_for_start(
-        &planora_project::config::Config::load(),
-        &planora_app::running_version(),
-    ) {
+    if let Some(window) =
+        planora_app::update_install::window_for_start(&config, &planora_app::running_version())
+    {
         viewport = planora_app::update_install::restore_window(viewport, &window);
     }
     // Ohne lesbares Symbol bleibt das Standardsymbol des Systems.

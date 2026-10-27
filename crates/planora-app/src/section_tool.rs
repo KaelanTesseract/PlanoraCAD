@@ -375,11 +375,14 @@ pub fn set_scale(
         .map_err(feature_text)
 }
 
-/// Zahl für ein Eingabefeld: bis zu drei Nachkommastellen, ohne überflüssige Nullen, mit Komma.
+/// Zahl für ein Eingabefeld: bis zu drei Nachkommastellen, ohne überflüssige Nullen, mit dem
+/// Dezimaltrenner der Sprache.
 pub fn field_text(v: f64) -> String {
     let s = crate::sketch_view::format_number(v, 3);
-    if s.contains(',') {
-        s.trim_end_matches('0').trim_end_matches(',').to_string()
+    if s.contains([',', '.']) {
+        s.trim_end_matches('0')
+            .trim_end_matches([',', '.'])
+            .to_string()
     } else {
         s
     }

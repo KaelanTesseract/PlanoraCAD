@@ -34,6 +34,7 @@ planora-exchange.workspace = true
 planora-step.workspace = true
 planora-drawing.workspace = true
 planora-update.workspace = true
+planora-i18n.workspace = true
 glam.workspace = true
 eframe.workspace = true
 egui.workspace = true
@@ -47,10 +48,10 @@ chrono.workspace = true
 crc32fast = "=1.5.2"
 
 # Windows-Version über RtlGetVersion, Rücksprungadressen im Absturzbericht (crash_addr), Install-Modus
-# aus der Registry und Start des Installers (install_mode, update_install; windows-sys
-# ist über andere Pakete ohnehin im Baum).
+# aus der Registry, Start des Installers (install_mode, update_install) und Sprachen der
+# Oberfläche von Windows (system_language; windows-sys ist über andere Pakete ohnehin im Baum).
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "=0.61.2", features = ["Wdk_System_SystemServices", "Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_Storage_FileSystem", "Win32_System_SystemInformation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "=0.61.2", features = ["Wdk_System_SystemServices", "Win32_Foundation", "Win32_Globalization", "Win32_System_Diagnostics_Debug", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_Storage_FileSystem", "Win32_System_SystemInformation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
 # Zeichentabellen der Schriftdateien lesen (Zeichentest in tests/fonts.rs); skrifa zieht egui ohnehin.

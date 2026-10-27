@@ -143,11 +143,11 @@ pub fn min_size_for(solid: &Solid, variable: bool, tol: &Tolerance) -> f64 {
     min_blend_size_request(solid, &kind, tol)
 }
 
-/// Zahl für Meldungen: Komma, ohne überflüssige Nullen.
+/// Zahl für Meldungen: Dezimaltrenner der Sprache, ohne überflüssige Nullen.
 pub fn min_text(v: f64) -> String {
     let s = format!("{v:.6}");
     let s = s.trim_end_matches('0').trim_end_matches('.');
-    s.replace('.', ",")
+    planora_i18n::localize_decimal(s)
 }
 
 /// Prüft die Maße (Radien, Abstände) gegen das Mindestmaß des Kerns.

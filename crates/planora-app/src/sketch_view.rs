@@ -97,24 +97,16 @@ pub fn pick_radius_units(
 
 // ---- Zahlen und Namen ---------------------------------------------------------------------
 
-/// Zahl mit `decimals` Nachkommastellen und Komma als Dezimaltrenner (nur für die Anzeige).
+/// Zahl mit `decimals` Nachkommastellen und dem Dezimaltrenner der Sprache (nur für die
+/// Anzeige; ohne „-0,00“). Weiterleitung an [`planora_i18n::fmt_num`].
 pub fn format_number(v: f64, decimals: usize) -> String {
-    let s = format!("{v:.decimals$}");
-    // „-0,00“ wäre irritierend.
-    let s = match s.strip_prefix('-') {
-        Some(rest) if rest.chars().all(|c| c == '0' || c == '.') => rest.to_string(),
-        _ => s,
-    };
-    s.replace('.', ",")
+    planora_i18n::fmt_num(v, decimals)
 }
 
 /// Liest eine Zahl; Komma und Punkt gelten als Dezimaltrenner. Nicht endliche Werte sind ungültig.
+/// Weiterleitung an [`planora_i18n::parse_num`].
 pub fn parse_number(text: &str) -> Option<f64> {
-    text.trim()
-        .replace(',', ".")
-        .parse::<f64>()
-        .ok()
-        .filter(|v| v.is_finite())
+    planora_i18n::parse_num(text)
 }
 
 /// Länge mit Einheit, z. B. „40,00 mm“.

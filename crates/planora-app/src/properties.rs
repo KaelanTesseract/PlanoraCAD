@@ -42,8 +42,8 @@ const MESH_BODY_HINT: &str = concat!(
 /// Warnung bei STEP-Körpern mit grober Genauigkeit der Datei (gröber als 1e-5 mm), in Warnfarbe.
 pub const STEP_COARSE_HINT: &str = "Rechnen mit diesem Körper kann scheitern.";
 
-/// Genauigkeit in mm für die Anzeige: höchstens vier gültige Stellen, Komma, ohne überflüssige
-/// Nullen („0,001 mm“, „0,00000254 mm“), wie in den Meldungen des STEP-Lesers.
+/// Genauigkeit in mm für die Anzeige: höchstens vier gültige Stellen, Dezimaltrenner der Sprache,
+/// ohne überflüssige Nullen („0,001 mm“, „0,00000254 mm“), wie in den Meldungen des STEP-Lesers.
 fn tolerance_text(t: f64) -> String {
     if !t.is_finite() || t <= 0.0 {
         return "0 mm".into();
@@ -55,7 +55,7 @@ fn tolerance_text(t: f64) -> String {
     } else {
         s
     };
-    format!("{} mm", s.replace('.', ","))
+    format!("{} mm", planora_i18n::localize_decimal(&s))
 }
 
 /// Genauigkeit der Datei für die Anzeige; nennt die Datei keine, „unbekannt“ mit dem
@@ -747,13 +747,15 @@ fn mesh_fields(state: &AppState, index: usize) -> Vec<MeshField> {
 }
 
 /// Zahl für ein Formelfeld: verlustfrei, solange sie kurz ist, sonst auf vier Stellen gerundet
-/// (Nullen am Ende weg). Bleibt der Text unverändert, wird nichts übernommen.
+/// (Nullen am Ende weg). Wie [`number_text`] immer mit Komma, in jeder Sprache: Zahlen in
+/// Formelfeldern folgen der Schreibweise der Formeln. Bleibt der Text unverändert, wird nichts
+/// übernommen.
 fn field_text(v: f64) -> String {
     let exact = number_text(v);
     if exact.chars().count() <= 12 {
         return exact;
     }
-    let rounded = format_number(v, 4);
+    let rounded = format!("{v:.4}").replace('.', ",");
     let rounded = rounded.trim_end_matches('0').trim_end_matches(',');
     if rounded.is_empty() || rounded == "-" {
         "0".into()

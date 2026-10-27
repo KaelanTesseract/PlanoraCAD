@@ -2654,6 +2654,7 @@ dependencies = [
  "planora-drawing",
  "planora-exchange",
  "planora-feature",
+ "planora-i18n",
  "planora-kernel",
  "planora-math",
  "planora-mesh",

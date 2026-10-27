@@ -242,12 +242,12 @@ fn unit_short(unit: LengthUnit) -> String {
     }
 }
 
-/// Zahl mit höchstens einer Nachkommastelle und Komma, ohne „,0“.
+/// Zahl mit höchstens einer Nachkommastelle und dem Dezimaltrenner der Sprache, ohne „,0“.
 fn tenth(v: f64) -> String {
     let r = (v * 10.0).round() / 10.0;
     let r = if r == 0.0 { 0.0 } else { r };
     let s = format!("{r:.1}");
-    s.strip_suffix(".0").unwrap_or(&s).replace('.', ",")
+    planora_i18n::localize_decimal(s.strip_suffix(".0").unwrap_or(&s))
 }
 
 /// Maße der Hülle, auf 0,1 mm gerundet: „25,4 × 50,8 × 76,2 mm“; ohne Hülle „–“.

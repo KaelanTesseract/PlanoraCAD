@@ -564,10 +564,7 @@ pub fn download_text(done: u64, total: u64) -> String {
         Some(pct) => format!("Wird heruntergeladen … {pct} %"),
         None => {
             let mb = done as f64 / (1024.0 * 1024.0);
-            format!(
-                "Wird heruntergeladen … {} MB",
-                format!("{mb:.1}").replace('.', ",")
-            )
+            format!("Wird heruntergeladen … {} MB", planora_i18n::fmt_num(mb, 1))
         }
     }
 }

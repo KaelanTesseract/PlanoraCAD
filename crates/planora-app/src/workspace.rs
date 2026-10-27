@@ -575,6 +575,9 @@ pub struct Workspace {
     /// Das Design in `config.theme` konnte noch nicht gespeichert werden; es wird beim nächsten
     /// gelungenen Schreiben der Konfiguration mit geschrieben (wie `keys_pending`).
     pub theme_pending: bool,
+    /// Die Sprache in `config.language` konnte noch nicht gespeichert werden; sie wird beim
+    /// nächsten gelungenen Schreiben der Konfiguration mit geschrieben (wie `theme_pending`).
+    pub language_pending: bool,
     /// Für „Letzten Befehl wiederholen“ (Leertaste): der zuletzt abgeschlossene Befehl, über
     /// alle Tabs.
     pub last_command: crate::commands::LastCommand,
@@ -629,6 +632,7 @@ impl Workspace {
             keys_pending: false,
             update_settings_pending: false,
             theme_pending: false,
+            language_pending: false,
             last_command: Default::default(),
             prompt: None,
             quit: false,
@@ -1317,6 +1321,7 @@ impl Workspace {
         let keys = self.pending_keys();
         let updates = self.pending_update_settings();
         let theme = self.pending_theme();
+        let language = self.pending_language();
         let mut full = None;
         let written = Config::update_at(&self.config_path, |c| {
             c.root = root;
@@ -1333,6 +1338,9 @@ impl Workspace {
             if let Some(t) = theme {
                 c.theme = t;
             }
+            if let Some(l) = language {
+                c.language = l;
+            }
         });
         match written {
             Ok(disk) => {
@@ -1344,6 +1352,7 @@ impl Workspace {
                 self.keys_pending = false;
                 self.update_settings_pending = false;
                 self.theme_pending = false;
+                self.language_pending = false;
                 true
             }
             Err(_) => {
@@ -1355,6 +1364,7 @@ impl Workspace {
                     self.keys_pending = false;
                     self.update_settings_pending = false;
                     self.theme_pending = false;
+                    self.language_pending = false;
                 } else {
                     self.favorites_pending = pending;
                 }
@@ -1380,6 +1390,7 @@ impl Workspace {
         let keys = self.pending_keys();
         let updates = self.pending_update_settings();
         let theme = self.pending_theme();
+        let language = self.pending_language();
         let written = Config::update_at(&self.config_path, |c| {
             c.panel_transparency = percent;
             if let Some(k) = keys {
@@ -1391,6 +1402,9 @@ impl Workspace {
             if let Some(t) = theme {
                 c.theme = t;
             }
+            if let Some(l) = language {
+                c.language = l;
+            }
         })
         .is_ok();
         self.panel_transparency_pending = !written;
@@ -1398,6 +1412,7 @@ impl Workspace {
             self.keys_pending = false;
             self.update_settings_pending = false;
             self.theme_pending = false;
+            self.language_pending = false;
         }
         written
     }
@@ -1421,6 +1436,7 @@ impl Workspace {
             .then(|| self.panel_transparency());
         let keys = self.pending_keys();
         let updates = self.pending_update_settings();
+        let language = self.pending_language();
         let written = Config::update_at(&self.config_path, |c| {
             c.theme = Some(name.to_string());
             if let Some(t) = transparency {
@@ -1432,6 +1448,9 @@ impl Workspace {
             if let Some(u) = updates {
                 u.apply(c);
             }
+            if let Some(l) = language {
+                c.language = l;
+            }
         })
         .is_ok();
         self.theme_pending = !written;
@@ -1439,6 +1458,58 @@ impl Workspace {
             self.panel_transparency_pending = false;
             self.keys_pending = false;
             self.update_settings_pending = false;
+            self.language_pending = false;
+        }
+        written
+    }
+
+    /// Die Sprache, wenn sie zum Schreiben vorgemerkt ist.
+    fn pending_language(&self) -> Option<Option<String>> {
+        self.language_pending.then(|| self.config.language.clone())
+    }
+
+    /// Gespeicherte Wahl der Sprache (Id wie `en`); ohne Wahl keine.
+    pub fn language_id(&self) -> Option<&str> {
+        self.config.language.as_deref()
+    }
+
+    /// Wählt die Sprache (Einstellungen → Darstellung): wirkt sofort im ganzen Programm (globale
+    /// Sprache, nächstes Bild) und wird gleich in [`Workspace::config_path`] gespeichert (Feld
+    /// `language`); `true`, wenn geschrieben wurde. Sonst gilt die Wahl für die Sitzung und kommt
+    /// beim nächsten gelungenen Schreiben mit ([`Workspace::language_pending`]); die Datei bleibt
+    /// dann unangetastet. Wie [`Workspace::set_theme`].
+    pub fn set_language(&mut self, lang: &planora_i18n::Lang) -> bool {
+        planora_i18n::set_global(lang.clone());
+        let id = lang.id().to_string();
+        self.config.language = Some(id.clone());
+        let transparency = self
+            .panel_transparency_pending
+            .then(|| self.panel_transparency());
+        let keys = self.pending_keys();
+        let updates = self.pending_update_settings();
+        let theme = self.pending_theme();
+        let written = Config::update_at(&self.config_path, |c| {
+            c.language = Some(id);
+            if let Some(t) = transparency {
+                c.panel_transparency = t;
+            }
+            if let Some(k) = keys {
+                c.keys = k;
+            }
+            if let Some(u) = updates {
+                u.apply(c);
+            }
+            if let Some(t) = theme {
+                c.theme = t;
+            }
+        })
+        .is_ok();
+        self.language_pending = !written;
+        if written {
+            self.panel_transparency_pending = false;
+            self.keys_pending = false;
+            self.update_settings_pending = false;
+            self.theme_pending = false;
         }
         written
     }
@@ -1558,6 +1629,7 @@ impl Workspace {
             .then(|| self.panel_transparency());
         let keys = self.pending_keys();
         let theme = self.pending_theme();
+        let language = self.pending_language();
         let written = Config::update_at(&self.config_path, |c| {
             if all {
                 current.apply(c);
@@ -1573,11 +1645,15 @@ impl Workspace {
             if let Some(t) = theme {
                 c.theme = t;
             }
+            if let Some(l) = language {
+                c.language = l;
+            }
         })
         .is_ok();
         self.update_settings_pending = !written;
         if written {
             self.theme_pending = false;
+            self.language_pending = false;
             self.panel_transparency_pending = false;
             self.keys_pending = false;
         }
@@ -1602,6 +1678,7 @@ impl Workspace {
             .then(|| self.panel_transparency());
         let updates = self.pending_update_settings();
         let theme = self.pending_theme();
+        let language = self.pending_language();
         let written = Config::update_at(&self.config_path, |c| {
             c.keys = keys;
             if let Some(t) = transparency {
@@ -1613,6 +1690,9 @@ impl Workspace {
             if let Some(t) = theme {
                 c.theme = t;
             }
+            if let Some(l) = language {
+                c.language = l;
+            }
         })
         .is_ok();
         self.keys_pending = !written;
@@ -1620,6 +1700,7 @@ impl Workspace {
             self.panel_transparency_pending = false;
             self.update_settings_pending = false;
             self.theme_pending = false;
+            self.language_pending = false;
             self.key_notes.clear();
         }
         written
@@ -1672,6 +1753,7 @@ impl Workspace {
         let keys = self.pending_keys();
         let updates = self.pending_update_settings();
         let theme = self.pending_theme();
+        let language = self.pending_language();
         let written = Config::update_at(&self.config_path, |c| {
             full = apply_changes(&all, &mut c.favorites);
             if let Some(t) = transparency {
@@ -1686,6 +1768,9 @@ impl Workspace {
             if let Some(t) = theme {
                 c.theme = t;
             }
+            if let Some(l) = language {
+                c.language = l;
+            }
         });
         match written {
             Ok(disk) => {
@@ -1695,6 +1780,7 @@ impl Workspace {
                 self.keys_pending = false;
                 self.update_settings_pending = false;
                 self.theme_pending = false;
+                self.language_pending = false;
                 true
             }
             Err(_) => {

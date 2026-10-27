@@ -72,9 +72,9 @@ pub fn kind_label(kind: DimKind) -> &'static str {
     }
 }
 
-/// Zahl als Text mit deutschem Komma (verlustfrei, kürzeste Schreibweise).
+/// Zahl als Text mit dem Dezimaltrenner der Sprache (verlustfrei, kürzeste Schreibweise).
 fn number_text(v: f64) -> String {
-    format!("{v}").replace('.', ",")
+    planora_i18n::localize_decimal(&format!("{v}"))
 }
 
 /// Zahl aus einem Eingabefeld: deutsches Komma oder Punkt, `−` oder `-`.
