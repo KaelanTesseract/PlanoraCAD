@@ -34,6 +34,6 @@ Stand: 2026-10-27. Wunsch von Dennis: „Das Release sollte mit einem Installati
 
 ## Entschieden am 2026-10-27
 
-1. Inno Setup 6 darf auf Dennis' Rechner installiert werden (erledigt, 6.7.3, `%LOCALAPPDATA%ProgramsInno Setup 6ISCC.exe`).
+1. Inno Setup 6 darf auf Dennis' Rechner installiert werden (erledigt, 6.7.3, `%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe`).
 2. Echter Installationstest auf Dennis' Rechner in beiden Modi, danach wieder deinstallieren.
 3. Entscheidungen 3 und 4 (stiller Installer, kein `.old`-Rückfall) gelten als angenommen (Dennis hat nicht widersprochen; bei Einwand ändern).
