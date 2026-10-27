@@ -65,35 +65,54 @@ fn vars_of(p: &Pattern<&str>) -> BTreeSet<String> {
 }
 
 fn parse(name: &str, source: &'static str) -> Keys {
+    parse_with_duplicates(name, source).0
+}
+
+/// Wie [`parse`], dazu die mehrfach definierten Schlüssel (sonst überschriebe der letzte still).
+fn parse_with_duplicates(name: &str, source: &'static str) -> (Keys, Vec<String>) {
     let resource = parser::parse(source)
         .unwrap_or_else(|(_, errors)| panic!("{name} hat Syntaxfehler: {errors:?}"));
     let mut keys = Keys::new();
+    let mut duplicates = Vec::new();
+    let mut add = |key: String, vars: BTreeSet<String>| {
+        if keys.insert(key.clone(), vars).is_some() {
+            duplicates.push(key);
+        }
+    };
     for entry in &resource.body {
         match entry {
             Entry::Message(m) => {
-                let vars = m.value.as_ref().map(vars_of).unwrap_or_default();
-                keys.insert(m.id.name.to_string(), vars);
+                add(
+                    m.id.name.to_string(),
+                    m.value.as_ref().map(vars_of).unwrap_or_default(),
+                );
                 for a in &m.attributes {
-                    keys.insert(format!("{}.{}", m.id.name, a.id.name), vars_of(&a.value));
+                    add(format!("{}.{}", m.id.name, a.id.name), vars_of(&a.value));
                 }
             }
             Entry::Term(t) => {
-                keys.insert(format!("-{}", t.id.name), vars_of(&t.value));
+                add(format!("-{}", t.id.name), vars_of(&t.value));
                 for a in &t.attributes {
-                    keys.insert(format!("-{}.{}", t.id.name, a.id.name), vars_of(&a.value));
+                    add(format!("-{}.{}", t.id.name, a.id.name), vars_of(&a.value));
                 }
             }
             _ => {}
         }
     }
-    keys
+    (keys, duplicates)
 }
 
 #[test]
 fn german_and_english_have_the_same_keys() {
-    let de = parse("de.ftl", DE);
-    let en = parse("en.ftl", EN);
+    let (de, de_dups) = parse_with_duplicates("de.ftl", DE);
+    let (en, en_dups) = parse_with_duplicates("en.ftl", EN);
     let mut problems = Vec::new();
+    for k in de_dups {
+        problems.push(format!("  mehrfach in de.ftl: {k}"));
+    }
+    for k in en_dups {
+        problems.push(format!("  mehrfach in en.ftl: {k}"));
+    }
     for k in de.keys().filter(|k| !en.contains_key(*k)) {
         problems.push(format!("  fehlt in en.ftl: {k}"));
     }
@@ -154,30 +173,75 @@ fn is_id(s: &str) -> bool {
         })
 }
 
-/// Ids aus `tr!("…"`, `t("…"` und `t_args("…"` (mit Wortgrenze davor) in einer Zeile.
-fn ids_in_line(line: &str) -> Vec<String> {
+/// Ids aus `tr!("…"`, `t("…"` und `t_args("…"` im ganzen Text, mit Zeilennummer (ab 1).
+/// Zwischen `(` und `"` darf Leerraum samt Zeilenumbruch stehen (so bricht rustfmt lange Aufrufe um).
+/// Wortgrenze davor; Treffer in Zeilenkommentaren zählen nicht.
+fn ids_in_text(text: &str) -> Vec<(usize, String)> {
     let mut found = Vec::new();
-    for prefix in ["tr!(\"", "t(\"", "t_args(\""] {
+    for prefix in ["tr!(", "t(", "t_args("] {
         let mut from = 0;
-        while let Some(pos) = line[from..].find(prefix) {
+        while let Some(pos) = text[from..].find(prefix) {
             let start = from + pos;
             from = start + prefix.len();
-            let boundary = line[..start]
+            let boundary = text[..start]
                 .chars()
                 .next_back()
                 .is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
             if !boundary {
                 continue;
             }
-            if let Some(len) = line[from..].find('"') {
-                let id = &line[from..from + len];
+            let line_start = text[..start].rfind('\n').map_or(0, |i| i + 1);
+            if text[line_start..start].contains("//") {
+                continue;
+            }
+            let rest = text[from..].trim_start();
+            let Some(after_quote) = rest.strip_prefix('"') else {
+                continue;
+            };
+            if let Some(len) = after_quote.find('"') {
+                let id = &after_quote[..len];
                 if is_id(id) {
-                    found.push(id.to_string());
+                    let line = text[..start].matches('\n').count() + 1;
+                    found.push((line, id.to_string()));
                 }
             }
         }
     }
+    found.sort();
     found
+}
+
+#[test]
+fn scanner_finds_ids_in_all_call_forms() {
+    let sample = r#"
+let a = tr!("one-id");
+let b = tr!(
+    "wrapped-id",
+    name = value
+);
+let c = t_args(
+    "args-id",
+    &[],
+);
+let d = t("plain-id");
+let e = tr!("with-args", n = 1);
+print("not-an-id");
+let f = format("nope-x");
+let g = my_t("boundary-x");
+// tr!("commented-id")
+let h = x; // t("trailing-comment-id")
+let i = tr!("Not_An_Id");
+"#;
+    let ids: Vec<String> = ids_in_text(sample).into_iter().map(|(_, id)| id).collect();
+    assert_eq!(
+        ids,
+        vec!["one-id", "wrapped-id", "args-id", "plain-id", "with-args"]
+    );
+    let wrapped = ids_in_text(sample)
+        .into_iter()
+        .find(|(_, id)| id == "wrapped-id")
+        .unwrap();
+    assert_eq!(wrapped.0, 3, "Zeile des umbrochenen tr!(");
 }
 
 #[test]
@@ -204,22 +268,16 @@ fn every_key_used_in_code_exists() {
     let mut problems = Vec::new();
     let mut checked = 0usize;
     for file in &files {
-        let Ok(text) = std::fs::read_to_string(file) else {
-            continue;
-        };
-        for (n, line) in text.lines().enumerate() {
-            if line.trim_start().starts_with("//") {
-                continue;
+        let text = std::fs::read_to_string(file)
+            .unwrap_or_else(|e| panic!("{} nicht lesbar: {e}", file.display()));
+        let shown = file.strip_prefix(root).unwrap_or(file).display();
+        for (line, id) in ids_in_text(&text) {
+            checked += 1;
+            if !de.contains_key(&id) {
+                problems.push(format!("  {shown}:{line}: \"{id}\" fehlt in de.ftl"));
             }
-            for id in ids_in_line(line) {
-                checked += 1;
-                let shown = file.strip_prefix(root).unwrap_or(file).display();
-                if !de.contains_key(&id) {
-                    problems.push(format!("  {shown}:{}: \"{id}\" fehlt in de.ftl", n + 1));
-                }
-                if !en.contains_key(&id) {
-                    problems.push(format!("  {shown}:{}: \"{id}\" fehlt in en.ftl", n + 1));
-                }
+            if !en.contains_key(&id) {
+                problems.push(format!("  {shown}:{line}: \"{id}\" fehlt in en.ftl"));
             }
         }
     }
