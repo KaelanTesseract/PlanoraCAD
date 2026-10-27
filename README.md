@@ -11,7 +11,7 @@ Ein quelloffenes, parametrisches 3D-CAD in reinem Rust für Windows und Linux.
 
 Fehler gefunden oder einen Wunsch? Wie du etwas meldest, steht unter [So meldest du etwas](docs/so-meldest-du-etwas.md).
 
-Hilfe bei Problemen: [Häufige Probleme](docs/haeufige-probleme.md). Was geplant ist, siehst du auf der Projekttafel: [Was geplant ist]([Link zur Projekttafel – nach dem Anlegen eintragen]). Wie die Tafel eingerichtet wird: [Projekttafel einrichten](docs/projekttafel-einrichten.md).
+Hilfe bei Problemen: [Häufige Probleme](docs/haeufige-probleme.md). Was geplant ist, siehst du auf der Projekttafel: [Was geplant ist](https://github.com/users/KaelanTesseract/projects/1). Wie die Tafel eingerichtet wird: [Projekttafel einrichten](docs/projekttafel-einrichten.md).
 
 **Status:** frühe Entwicklung (Fundament, Kernel-Basis, Boolesche Operationen, Skizzen mit Constraint-Solver, Feature-Baum, Speichern mit Projekten und Versionen, Freiformflächen, Rundungen und Fasen, Netz-Austausch, STEP-Export, STEP-Import, Zeichnungen mit Ansichten, Zeichnungsblatt, Stückliste und Positionsnummern, PDF-Ausgabe, Schnittansichten, Rückgängig und Wiederholen, benannte Parameter mit Formeln).
 
