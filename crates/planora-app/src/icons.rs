@@ -180,6 +180,10 @@ pub enum Icon {
     Warning,
     /// Phosphor `keyboard` (Menüeintrag „Tastenkürzel …“).
     Keyboard,
+    /// Phosphor `chat-circle-text` (Menüeintrag „Rückmeldung …“).
+    Feedback,
+    /// Phosphor `question` (Menüeintrag „Häufige Probleme“).
+    Help,
 }
 
 /// Alle Einträge von [`Icon`].
@@ -268,6 +272,8 @@ pub const ALL: &[Icon] = &[
     Icon::HistoryForward,
     Icon::Warning,
     Icon::Keyboard,
+    Icon::Feedback,
+    Icon::Help,
 ];
 
 /// Symbol, Codepunkt in Phosphor-Light.ttf und Phosphor-Name (Quelle: Phosphor-Light-style.css).
@@ -356,6 +362,8 @@ const TABLE: &[(Icon, char, &str)] = &[
     (Icon::HistoryForward, '\u{e6a6}', "fast-forward"),
     (Icon::Warning, '\u{e4e0}', "warning"),
     (Icon::Keyboard, '\u{e2d8}', "keyboard"),
+    (Icon::Feedback, '\u{e16e}', "chat-circle-text"),
+    (Icon::Help, '\u{e3e8}', "question"),
 ];
 
 fn entry(icon: Icon) -> &'static (Icon, char, &'static str) {

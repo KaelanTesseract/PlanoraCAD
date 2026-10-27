@@ -350,3 +350,26 @@ fn notes_are_capped_at_20_releases_and_20000_chars_with_truncated_flag() {
     // Das Release selbst behält die vollständige Notiz.
     assert_eq!(update.latest.notes.len(), 50_000);
 }
+
+/// Die Symboldatei (`.pdb`, für `tools/symbolize.ps1`) liegt als weitere Datei im Release. Die
+/// Update-Funktion wählt nur nach exaktem Namen und lädt sie nie; ein Name, der nur ähnlich ist,
+/// zählt nicht als exe.
+#[test]
+fn pdb_asset_does_not_disturb_the_choice() {
+    let tag = "v0.2.0-dev.3";
+    let mut r = release_json(tag, "");
+    let assets = r["assets"].as_array_mut().unwrap();
+    assets.insert(0, asset(tag, "planoracad-windows-x64.pdb", 95_000_000));
+    assets.push(asset(tag, "planoracad-windows-x64.exe.pdb", 95_000_000));
+    let list = parse(&[r]);
+    assert_eq!(list.len(), 1);
+    let rel = &list[0];
+    assert_eq!(rel.exe.name, EXE_NAME);
+    assert_eq!(rel.exe.url, url(tag, EXE_NAME));
+    assert_eq!(rel.exe.size, 12_345_678);
+    assert_eq!(rel.sha256.name, SHA256_NAME);
+    assert_eq!(
+        rel.licenses.as_ref().map(|l| l.name.as_str()),
+        Some(LICENSES_NAME)
+    );
+}

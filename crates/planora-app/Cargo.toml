@@ -18,6 +18,9 @@ path = "src/main.rs"
 # Lokale Update-Quelle für die Echtprobe (siehe planora-update). Standardmäßig AUS; Release-Builds
 # dürfen ihn NIE einschalten.
 update-test-source = ["planora-update/update-test-source"]
+# Strg+Umschalt+Alt+F12 löst absichtlich eine Panik aus (Absturzbericht von Hand prüfen).
+# Standardmäßig AUS; Release-Builds dürfen ihn NIE einschalten.
+absturz-test = []
 
 [dependencies]
 planora-math.workspace = true
@@ -39,6 +42,14 @@ winit.workspace = true
 png = "0.18"
 # Ortszeit des Rechners für Zeitangaben (nur in local_time.rs benutzt).
 chrono.workspace = true
+# Prüfsumme der eigenen kleinen ZIP-Schreibfunktion (zip_store.rs, Projektdatei in der
+# Rückmeldung). Am 2026-10-26 geprüft: MIT OR Apache-2.0, über png/wgpu ohnehin im Baum.
+crc32fast = "=1.5.2"
+
+# Windows-Version über RtlGetVersion, Rücksprungadressen im Absturzbericht (crash_addr; windows-sys
+# ist über andere Pakete ohnehin im Baum).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Wdk_System_SystemServices", "Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_LibraryLoader", "Win32_System_SystemInformation"] }
 
 [dev-dependencies]
 # Zeichentabellen der Schriftdateien lesen (Zeichentest in tests/fonts.rs); skrifa zieht egui ohnehin.

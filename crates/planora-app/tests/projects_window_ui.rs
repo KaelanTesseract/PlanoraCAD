@@ -1602,3 +1602,35 @@ fn each_level_starts_at_the_top() {
         "neue Ebene oben: {top} / {grid:?}"
     );
 }
+
+// ---- Neuzeichnen nach dem Lesen --------------------------------------------------------------
+
+#[test]
+fn finishing_the_scan_requests_a_repaint_without_any_input() {
+    let ws = workspace();
+    for i in 0..3 {
+        let p = project(&ws, &format!("P{i}"));
+        empty_doc(&ws, &p, "Teil");
+    }
+    let mut h = H::new(ws);
+    h.w.set_scan_delay(Duration::from_millis(150));
+    let shot = h.settle(8);
+    assert!(shot.has(READING), "das Lesen läuft: {}", shot.texts());
+    assert!(h.w.scanning());
+    assert!(
+        !h.screen.ctx.has_requested_repaint(),
+        "Voraussetzung: nach dem Bild ist kein Neuzeichnen offen"
+    );
+    // ohne Eingabe und ohne weiteres Bild: das Ende des Lesens muss selbst ein Neuzeichnen auslösen
+    let start = Instant::now();
+    while !h.screen.ctx.has_requested_repaint() && start.elapsed() < Duration::from_secs(10) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        h.screen.ctx.has_requested_repaint(),
+        "nach dem Lesen wurde kein Neuzeichnen angefordert"
+    );
+    // und das nächste Bild zeigt das Ergebnis
+    let shot = h.settle(3);
+    assert!(!shot.has(READING), "{}", shot.texts());
+}

@@ -1,10 +1,14 @@
 use crate::blend_dialog::BlendDialog;
 use crate::boolean_dialog::BooleanDialog;
+use crate::crash::{RunMarker, StartFinding};
+use crate::crash_dialog::{self, CrashAction, CrashNotice};
 use crate::create_dialog::CreateDialog;
 use crate::drawing_dialog::drawing_menu;
 use crate::drawing_state::WorkArea;
 use crate::export_dialog::ExportDialog;
 use crate::feature_dialog::FeatureDialog;
+use crate::feedback::{ExplorerOpen, Personal, SystemOpen};
+use crate::feedback_dialog::{self, FeedbackAction, FeedbackContext, FeedbackDialog};
 use crate::file_chooser::default_dir;
 use crate::icons::{self, Icon};
 use crate::import_dialog::ImportDialog;
@@ -39,7 +43,7 @@ use planora_update::install::{
     Downloader, HttpDownloader, InstallError, Paths, discard_download, rollback, swap,
 };
 use planora_update::{Update, Version};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
@@ -59,10 +63,16 @@ pub const EXPORT_BUSY: &str = "Bitte erst den Export beenden.";
 pub const SETTINGS_ENTRY: &str = "Einstellungen …";
 /// Menüeintrag „Ansicht → Tastenkürzel …“ (Kürzel [`Action::ShowShortcuts`]).
 pub const VIEW_SHORTCUTS_ENTRY: &str = "Tastenkürzel …";
+/// Menü „Hilfe“ (nach „Ansicht“).
+pub const HELP_MENU: &str = "Hilfe";
+/// Menüeintrag „Hilfe → Rückmeldung …“ (Kürzel [`Action::FeedbackOpen`]).
+pub const FEEDBACK_ENTRY: &str = "Rückmeldung …";
+/// Menüeintrag „Hilfe → Häufige Probleme“ (öffnet [`crate::feedback::faq_url`] im Browser).
+pub const FAQ_ENTRY: &str = "Häufige Probleme";
 
 /// Was die Menüs außer ihren eigenen Aktionen verlangen: das Fenster „Projekte“,
-/// „Einstellungen“ oder „Tastenkürzel“ öffnen (die Fenster gehören der App, nicht dem
-/// Arbeitsbereich).
+/// „Einstellungen“, „Tastenkürzel“ oder „Rückmeldung“ öffnen (die Fenster gehören der App, nicht
+/// dem Arbeitsbereich).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MenuRequest {
     #[default]
@@ -70,6 +80,16 @@ pub enum MenuRequest {
     Projects,
     Settings,
     Shortcuts,
+    Feedback,
+}
+
+/// Öffnet keinen Ordner (Tests ohne eigene Nachbildung; im Programm [`ExplorerOpen`]).
+struct NoFolderOpen;
+
+impl SystemOpen for NoFolderOpen {
+    fn open_folder(&self, _dir: &Path) -> bool {
+        false
+    }
 }
 
 pub struct PlanoraApp {
@@ -83,8 +103,15 @@ pub struct PlanoraApp {
     pub(crate) settings: SettingsWindow,
     /// Fenster „Tastenkürzel“ (Übersicht, [`keymap::overview`]).
     pub(crate) overview: OverviewState,
+    /// Fenster „Rückmeldung“ ([`feedback_dialog`]).
+    pub(crate) feedback: FeedbackDialog,
+    /// Öffnet den Rückmeldungsordner: im Programm [`ExplorerOpen`], in Tests eine Nachbildung.
+    system_open: Box<dyn SystemOpen>,
     pub(crate) versions_ui: VersionsUi,
     applied_dark: Option<bool>,
+    /// Zuletzt an [`crate::diag::set_document`] gemeldeter Dokumentordner (für den Absturzbericht).
+    /// Außen `None`: noch nichts gemeldet.
+    reported_document: Option<Option<std::path::PathBuf>>,
     /// `ViewportCommand::Close` wurde nach freigegebenem Beenden schon geschickt.
     close_sent: bool,
     /// Quelle der Release-Liste: im Programm GitHub ([`HttpSource`]), in Tests eine Nachbildung.
@@ -131,6 +158,12 @@ pub struct PlanoraApp {
     /// (`egui::Context::cumulative_frame_nr`); ist die laufende Nummer größer, ist dieses Bild
     /// auch gezeichnet (eframe zeichnet nach dem Durchlauf, auch nach mehreren Durchgängen).
     first_frame: Option<u64>,
+    /// Rückfrage nach einem Absturz oder unerwarteten Ende beim letzten Lauf
+    /// ([`crash_dialog`]); wartet, bis nichts anderes ansteht ([`PlanoraApp::crash_notice_tick`]).
+    crash_notice: Option<CrashNotice>,
+    /// Laufmarker dieser Instanz ([`crate::crash::start_run`]); [`eframe::App::on_exit`] löscht
+    /// ihn.
+    run_marker: Option<RunMarker>,
 }
 
 /// Schritt des Neustarts nach einem fertig geladenen und geprüften Update.
@@ -150,9 +183,30 @@ pub enum RestartPhase {
 }
 
 impl PlanoraApp {
+    /// Meldet den Dokumentordner des aktiven Tabs für den Absturzbericht, nur bei Wechsel.
+    fn report_document(&mut self) {
+        let tab = self.ws.active_tab();
+        let doc = tab
+            .store
+            .as_ref()
+            .map(|s| s.dir().to_path_buf())
+            .or_else(|| tab.source_dir.clone());
+        if self.reported_document.as_ref() != Some(&doc) {
+            crate::diag::set_document(doc.clone());
+            self.reported_document = Some(doc);
+        }
+    }
+
     /// Das Programm. `after_update`: gestartet mit [`update_install::AFTER_UPDATE_ARG`] (von der
-    /// alten Version nach dem Austausch).
-    pub fn new(cc: &eframe::CreationContext<'_>, after_update: bool) -> Self {
+    /// alten Version nach dem Austausch). `marker` und `finding` aus [`crate::crash::start_run`]
+    /// (vor dem Fenster ermittelt).
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        after_update: bool,
+        marker: Option<RunMarker>,
+        finding: StartFinding,
+    ) -> Self {
+        crate::diag::info(&format!("Start PlanoraCAD {}", crate::RUNNING_VERSION));
         let render_state = cc
             .wgpu_render_state
             .as_ref()
@@ -160,6 +214,12 @@ impl PlanoraApp {
         cc.egui_ctx.set_fonts(fonts::definitions());
         Self::setup_context(&cc.egui_ctx);
         GpuScene::install(render_state);
+        crate::build_info::set_gpu(crate::build_info::gpu_from_adapter(
+            &render_state.adapter.get_info(),
+        ));
+        let bi = crate::build_info::build_info();
+        crate::diag::info(&bi.system_line().replacen(':', "", 1));
+        crate::diag::info(&format!("Grafikkarte {}", bi.gpu_line()));
         let running = crate::running_version();
         let exe_path = std::env::current_exe().ok();
 
@@ -177,12 +237,105 @@ impl PlanoraApp {
         let mut app = Self::with_workspace(ws, source);
         app.downloader = Arc::new(HttpDownloader::new(&running));
         app.restarter = Arc::new(ProcessRestarter);
+        app.system_open = Box::new(ExplorerOpen);
         app.exe_path = exe_path;
         // Nach einem Update meldet sich die neue Version erst nach ihrem ersten fertigen Bild bei
         // der alten (in `logic`); bis dahin kann die alte noch zurücklegen.
         app.ok_marker_due = after_update;
         app.finish_update_startup(after_update);
+        app.run_marker = marker;
+        app.set_start_finding(finding);
         app
+    }
+
+    /// Befund des Starts ([`crate::crash::start_run`]): bei einem Absturz oder unerwarteten Ende
+    /// steht die Rückfrage an (Berichte im Ordner `abstuerze` neben der Konfiguration).
+    #[doc(hidden)]
+    pub fn set_start_finding(&mut self, finding: StartFinding) {
+        let dir = self
+            .ws
+            .config_path
+            .parent()
+            .map(|d| d.join(crate::crash::CRASH_DIR))
+            .unwrap_or_default();
+        self.crash_notice = CrashNotice::from_finding(&finding, dir);
+    }
+
+    /// Setzt den Hinweis „Aktualisiert auf Version X“ (für Tests).
+    #[doc(hidden)]
+    pub fn set_after_update(&mut self, after: Option<AfterUpdate>) {
+        self.after_update = after;
+    }
+
+    /// Setzt den Schritt des Neustarts (für Tests).
+    #[doc(hidden)]
+    pub fn set_restart_phase(&mut self, phase: RestartPhase) {
+        self.restart = phase;
+    }
+
+    /// Zeigt die Absturz-Rückfrage, sobald das erste Bild vorbei ist und nichts anderes ansteht:
+    /// keine Rückfrage (die Autosicherungs-Frage kommt zuerst), kein Hinweis nach einem Update,
+    /// kein gesperrter Neustart, keine ausstehende Rückmeldung an die alte Version, kein anderes
+    /// Fenster. Danach zählt sie selbst als Fenster ([`PlanoraApp::other_windows_open`]) und
+    /// führt die Wahl aus.
+    fn crash_notice_tick(&mut self, ctx: &egui::Context, dark: bool) {
+        let Some(waiting) = self.crash_notice.as_ref().map(|n| !n.open) else {
+            return;
+        };
+        if waiting {
+            let free = self.first_frame.is_some()
+                && self.ws.prompt.is_none()
+                && self.after_update.is_none()
+                && !self.restart_locked()
+                && !self.ok_marker_due
+                && !self.windows_open()
+                && !self.projects.is_open();
+            if !free {
+                return;
+            }
+            if let Some(n) = self.crash_notice.as_mut() {
+                n.open = true;
+            }
+        }
+        let Some(notice) = self.crash_notice.as_mut() else {
+            return;
+        };
+        match crash_dialog::show(ctx, notice, dark) {
+            None | Some(CrashAction::View) => {}
+            Some(CrashAction::NotNow) => self.crash_notice = None,
+            Some(CrashAction::Delete) => {
+                notice.delete_reports();
+                self.crash_notice = None;
+            }
+            Some(CrashAction::OpenFolder) => {
+                let dir = notice.dir.clone();
+                if !self.system_open.open_folder(&dir) {
+                    crate::diag::warn("Ordner der Absturzberichte ließ sich nicht öffnen");
+                }
+            }
+            Some(CrashAction::AsFeedback) => {
+                // Erst das Fenster öffnen; nur wenn es wirklich offen ist, gelten die angebotenen
+                // Berichte als erledigt (nach `abstuerze/gesendet`). Sonst bleibt die Rückfrage
+                // stehen und die Berichte liegen. Das Fenster liest den Bericht beim Öffnen.
+                let report = notice.reports.first().cloned();
+                let mut info = self.feedback_context(ctx);
+                info.from_crash = report.is_some();
+                info.crash_report = report;
+                open_feedback(
+                    &mut self.ws,
+                    &mut self.projects,
+                    &mut self.settings,
+                    &mut self.overview,
+                    &mut self.feedback,
+                    info,
+                );
+                if self.feedback.open
+                    && let Some(n) = self.crash_notice.take()
+                {
+                    n.mark_sent();
+                }
+            }
+        }
     }
 
     /// Einstellungen des egui-Kontexts, die nicht vom Aussehen abhängen. Kein Tastatur-Zoom
@@ -194,14 +347,20 @@ impl PlanoraApp {
     }
 
     fn with_workspace(ws: Workspace, update_source: Arc<dyn ReleaseSource + Send + Sync>) -> Self {
+        // Der gespeicherte Schalter „Ausführliches Protokoll“ gilt ab dem Start (Umschalten:
+        // `Workspace::set_verbose_log`).
+        crate::diag::set_verbose(ws.verbose_log());
         Self {
             ws,
             shell: ShellState::default(),
             projects: ProjectsWindow::default(),
             settings: SettingsWindow::default(),
             overview: OverviewState::default(),
+            feedback: FeedbackDialog::default(),
+            system_open: Box::new(NoFolderOpen),
             versions_ui: VersionsUi::default(),
             applied_dark: None,
+            reported_document: None,
             close_sent: false,
             update_source,
             update_checker: UpdateChecker::default(),
@@ -222,6 +381,8 @@ impl PlanoraApp {
             last_window: None,
             ok_marker_due: false,
             first_frame: None,
+            crash_notice: None,
+            run_marker: None,
         }
     }
 
@@ -619,6 +780,19 @@ impl PlanoraApp {
     fn stop_new_process(&mut self) {
         if let Some(mut process) = self.new_process.take() {
             process.stop();
+            // Die beendete neue Version kam nicht mehr zu `on_exit`: ihren Laufmarker hier
+            // löschen, sonst meldet der nächste Start „unerwartet beendet“.
+            if let (Some(pid), Some(data)) = (process.pid(), self.ws.config_path.parent()) {
+                match std::fs::remove_file(crate::crash::marker_path(data, pid)) {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                        crate::diag::warn(&format!(
+                            "Laufmarker der neuen Version nicht gelöscht ({:?})",
+                            e.kind()
+                        ))
+                    }
+                    _ => {}
+                }
+            }
         }
     }
 
@@ -849,6 +1023,7 @@ impl PlanoraApp {
             &self.projects,
             &self.settings,
             &self.overview,
+            &self.feedback,
             &mut self.update_dialog,
         );
         self.auto_open_update_notice();
@@ -859,8 +1034,24 @@ impl PlanoraApp {
         {
             self.after_update_action(ctx, action);
         }
-        if self.ws.prompt.is_none() {
-            update_dialog::show_after_update(ctx, &mut self.after_update);
+        if self.ws.prompt.is_none()
+            && update_dialog::show_after_update(ctx, &mut self.after_update)
+                == Some(update_dialog::AfterUpdateAction::Feedback)
+        {
+            let info = self.feedback_context(ctx);
+            open_feedback(
+                &mut self.ws,
+                &mut self.projects,
+                &mut self.settings,
+                &mut self.overview,
+                &mut self.feedback,
+                info,
+            );
+            // Der Hinweis geht erst zu, wenn die Rückmeldung wirklich offen ist (etwa nicht,
+            // solange ein Export schreibt).
+            if self.feedback.open {
+                self.after_update = None;
+            }
         }
     }
 
@@ -895,8 +1086,21 @@ impl PlanoraApp {
         &mut self.shell
     }
 
-    /// Wunsch aus dem Menü „Datei“ ausführen.
-    pub(crate) fn apply_menu_request(&mut self, request: MenuRequest) {
+    /// Zustand des Fensters „Rückmeldung“ (für Tests).
+    #[doc(hidden)]
+    pub fn feedback_mut(&mut self) -> &mut FeedbackDialog {
+        &mut self.feedback
+    }
+
+    /// Ersetzt den Dateimanager für den Rückmeldungsordner (für Tests: eine Nachbildung).
+    #[doc(hidden)]
+    pub fn set_system_open(&mut self, open: Box<dyn SystemOpen>) {
+        self.system_open = open;
+    }
+
+    /// Wunsch aus einem Menü oder einer Taste ausführen.
+    #[doc(hidden)]
+    pub fn apply_menu_request(&mut self, ctx: &egui::Context, request: MenuRequest) {
         match request {
             MenuRequest::None => {}
             MenuRequest::Projects => {
@@ -911,6 +1115,103 @@ impl PlanoraApp {
                 &mut self.settings,
                 &mut self.overview,
             ),
+            MenuRequest::Feedback => {
+                let info = self.feedback_context(ctx);
+                open_feedback(
+                    &mut self.ws,
+                    &mut self.projects,
+                    &mut self.settings,
+                    &mut self.overview,
+                    &mut self.feedback,
+                    info,
+                );
+            }
+        }
+    }
+
+    /// Schnappschuss für das Fenster „Rückmeldung“: Version, System, Grafikkarte,
+    /// Bildschirmgröße (falls bekannt), die letzten Schritte und Protokollzeilen, was vor der
+    /// Anzeige zu entfernen ist (Benutzer, Ordner der offenen Dokumente) und der Datenordner
+    /// (Ordner der Konfigurationsdatei).
+    fn feedback_context(&self, ctx: &egui::Context) -> FeedbackContext {
+        let screen = ctx
+            .input(|i| {
+                let vp = i.viewport();
+                vp.monitor_size
+                    .map(|s| s * vp.native_pixels_per_point.unwrap_or(1.0))
+            })
+            .filter(|s| s.x >= 1.0 && s.y >= 1.0)
+            .map(|s| (s.x.round() as u32, s.y.round() as u32));
+        let mut documents: Vec<PathBuf> = Vec::new();
+        for tab in &self.ws.tabs {
+            let dirs = tab
+                .store
+                .as_ref()
+                .map(|s| s.dir().to_path_buf())
+                .into_iter()
+                .chain(tab.source_dir.clone());
+            for dir in dirs {
+                let shown = PathBuf::from(crate::file_chooser::display_path(&dir));
+                for p in [dir, shown] {
+                    if !documents.contains(&p) {
+                        documents.push(p);
+                    }
+                }
+            }
+        }
+        FeedbackContext {
+            info: crate::build_info::build_info(),
+            screen,
+            steps: crate::diag::recent_steps(),
+            log: crate::diag::recent_lines(feedback_dialog::LOG_LINES),
+            personal: Personal::from_env(documents),
+            data_dir: self
+                .ws
+                .config_path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_default(),
+            crash_report: None,
+            from_crash: false,
+        }
+    }
+
+    /// Bild vom Fenster für die Rückmeldung: anfordern, sobald das Fenster ein Bild lang weg
+    /// war, und das eigene Bild-Ereignis abholen (fremde bleiben unbeachtet).
+    fn feedback_shot(&mut self, ctx: &egui::Context) {
+        use crate::feedback_shot::{ShotStep, is_our_shot, shot_user_data};
+        let shots: Vec<_> = ctx.input(|i| {
+            i.raw
+                .events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::Screenshot {
+                        user_data, image, ..
+                    } if is_our_shot(user_data) => Some(image.clone()),
+                    _ => None,
+                })
+                .collect()
+        });
+        for img in shots {
+            self.feedback.shot_received(img);
+        }
+        if self.feedback.shot_tick(std::time::Instant::now()) == ShotStep::RequestScreenshot {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(shot_user_data()));
+        }
+    }
+
+    /// Führt eine Aktion des Fensters „Rückmeldung“ aus: Browser und Zwischenablage über egui,
+    /// den Ordner über den Dateimanager ([`SystemOpen`]).
+    fn feedback_action(&mut self, ctx: &egui::Context, action: FeedbackAction) {
+        match action {
+            FeedbackAction::OpenBrowser(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
+            FeedbackAction::OpenFolder(dir) => {
+                if !self.system_open.open_folder(&dir) {
+                    crate::diag::warn("Rückmeldungsordner ließ sich nicht öffnen");
+                }
+            }
+            FeedbackAction::Copy(text) => ctx.copy_text(text),
+            FeedbackAction::Close => {}
         }
     }
 
@@ -938,6 +1239,15 @@ impl PlanoraApp {
         if viewport::typing(ctx) || self.ws.prompt.is_some() || ctx.current_pass_index() != 0 {
             return;
         }
+        // Nur mit dem Feature `absturz-test` (nie in Release-Builds, nicht in der Übersicht der
+        // Tastenkürzel): Strg+Umschalt+Alt+F12 löst absichtlich eine Panik aus.
+        #[cfg(feature = "absturz-test")]
+        {
+            let mods = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT | egui::Modifiers::ALT;
+            if ctx.input_mut(|i| i.consume_key(mods, egui::Key::F12)) {
+                panic!("Absturz-Test: absichtlich ausgelöst");
+            }
+        }
         let area = keymap::dispatch::current_area(&self.ws.active_tab().state);
         let windows = self.windows_open() || self.projects.is_open();
         let pressed = keymap::dispatch::pressed_if(ctx, &self.ws.keymap, area, |a| {
@@ -945,11 +1255,11 @@ impl PlanoraApp {
         });
         for &a in Action::ALL.iter().filter(|a| pressed.contains(a)) {
             let request = commands::run_key(&mut self.ws, a);
-            if request == MenuRequest::Shortcuts {
-                // Sicherheitshalber: der Text der Taste S soll nicht im neuen Suchfeld landen.
+            if matches!(request, MenuRequest::Shortcuts | MenuRequest::Feedback) {
+                // Sicherheitshalber: der Text der Taste soll nicht im neuen Textfeld landen.
                 ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Text(_))));
             }
-            self.apply_menu_request(request);
+            self.apply_menu_request(ctx, request);
         }
         self.undo_keys(ctx);
     }
@@ -959,7 +1269,8 @@ impl PlanoraApp {
     /// Import), „Über“, ein Fenster der Aktionen im Fenster Projekte („Neues Projekt“,
     /// „Umbenennen“, „Löschen“, …), ein Fenster des Reiters Versionen, das Fenster Einstellungen
     /// (es ist wie die Dateifenster ein Fenster mit Dateiauswahl) oder die Übersicht
-    /// „Tastenkürzel“ (wie „Über“; S öffnet sie also nicht noch einmal). Das Fenster Projekte
+    /// „Tastenkürzel“ (wie „Über“; S öffnet sie also nicht noch einmal) oder das Fenster
+    /// „Rückmeldung“. Das Fenster Projekte
     /// selbst sperrt Rückgängig nicht (es ändert kein Dokument), wohl aber die Befehle der
     /// Bereiche (siehe [`PlanoraApp::shortcuts`]). Ebenso die Meldung „Neue Version verfügbar“.
     fn windows_open(&self) -> bool {
@@ -971,7 +1282,9 @@ impl PlanoraApp {
     fn other_windows_open(&self) -> bool {
         self.ws.about_open
             || self.overview.open
+            || self.feedback.open
             || self.after_update.is_some()
+            || self.crash_notice.as_ref().is_some_and(|n| n.open)
             || self.ws.active_tab().dialog_open()
             || crate::project_actions::dialog_open(&self.projects.ui)
             || self.settings.is_open()
@@ -1215,6 +1528,51 @@ pub fn enforce_overview_rules(
     }
 }
 
+/// Öffnet das Fenster „Rückmeldung“ (Menü Hilfe und Strg+Umschalt+R) mit den Angaben
+/// `ctx_info` (Schnappschuss beim Öffnen, [`FeedbackDialog::open_fresh`]). Es steht für sich wie
+/// die Übersicht „Tastenkürzel“: Projekte, Einstellungen, die Übersicht, „Über“ und die
+/// Dateifenster des aktiven Tabs schließen dabei (ein schreibendes Exportfenster bleibt, dann
+/// öffnet es nicht, [`EXPORT_BUSY`]). Bei offener Rückfrage öffnet es nicht. Ist es schon offen,
+/// bleibt es, wie es ist (der getippte Text geht nicht verloren).
+pub fn open_feedback(
+    ws: &mut Workspace,
+    projects: &mut ProjectsWindow,
+    settings: &mut SettingsWindow,
+    overview: &mut OverviewState,
+    feedback: &mut FeedbackDialog,
+    ctx_info: FeedbackContext,
+) {
+    if ws.prompt.is_some() || feedback.open || !close_file_windows(ws) {
+        return;
+    }
+    close_projects(projects);
+    settings.close();
+    overview.close();
+    ws.about_open = false;
+    feedback.open_fresh(ctx_info);
+}
+
+/// Das Fenster „Rückmeldung“ schließt, sobald Projekte, Einstellungen, die Übersicht
+/// „Tastenkürzel“, „Über“ oder ein Dateifenster des aktiven Tabs offen ist (das zuletzt
+/// geöffnete Fenster gewinnt; die Rückmeldung schließt sie selbst zu, [`open_feedback`]).
+pub fn enforce_feedback_rules(
+    ws: &Workspace,
+    projects: &ProjectsWindow,
+    settings: &SettingsWindow,
+    overview: &OverviewState,
+    feedback: &mut FeedbackDialog,
+) {
+    if feedback.open
+        && (file_window_open(ws)
+            || projects.is_open()
+            || settings.is_open()
+            || overview.open
+            || ws.about_open)
+    {
+        feedback.close();
+    }
+}
+
 /// Was die Meldung während eines Updates zeigt: während des gesperrten Neustarts (`locked`)
 /// nichts (der Kasten über allem sagt es), sonst den Stand des Downloads; ein Fehler mit „Erneut
 /// versuchen“, wenn das helfen kann (`retry`).
@@ -1272,6 +1630,7 @@ pub fn enforce_update_rules(
     projects: &ProjectsWindow,
     settings: &SettingsWindow,
     overview: &OverviewState,
+    feedback: &FeedbackDialog,
     notice: &mut UpdateDialog,
 ) {
     if notice.open
@@ -1279,7 +1638,8 @@ pub fn enforce_update_rules(
             || file_window_open(ws)
             || projects.is_open()
             || settings.is_open()
-            || overview.open)
+            || overview.open
+            || feedback.open)
     {
         notice.close();
     }
@@ -1405,7 +1765,7 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
     )
     .clicked()
     {
-        begin_save(ws, true);
+        commands::timed("Speichern unter", || begin_save(ws, true));
         ui.close();
     }
     ui.separator();
@@ -1425,7 +1785,7 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
     .on_disabled_hover_text("In einer alten Version lässt sich nichts hinzufügen.")
     .clicked()
     {
-        open_import(ws);
+        commands::timed("Netz importieren", || open_import(ws));
         ui.close();
     }
     if entry(
@@ -1436,7 +1796,7 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
     .on_disabled_hover_text("In einer alten Version lässt sich nichts hinzufügen.")
     .clicked()
     {
-        open_step_import(ws);
+        commands::timed("STEP importieren", || open_step_import(ws));
         ui.close();
     }
     ui.separator();
@@ -1455,20 +1815,40 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
         request = MenuRequest::Settings;
         ui.close();
     }
-    if entry(ui, true, icons::button(Icon::About, about_dialog::TITLE)).clicked() {
-        ws.about_open = true;
-        ui.close();
-    }
     if entry(ui, true, icons::button(Icon::Quit, "Beenden")).clicked() {
         // Ist Beenden freigegeben, schickt `handle_close_request` im nächsten Bild `Close`.
-        ws.request_quit();
+        commands::timed("Beenden", || ws.request_quit());
+        ui.close();
+    }
+    request
+}
+
+/// Menü „Hilfe“: „Rückmeldung …“ mit der Taste aus der Belegung (kommt als
+/// [`MenuRequest::Feedback`] zurück, der Aufrufer öffnet das Fenster, [`open_feedback`]),
+/// „Häufige Probleme“ (öffnet die Seite im Browser) und „Über PlanoraCAD“.
+#[doc(hidden)]
+pub fn help_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
+    let mut request = MenuRequest::None;
+    let keys = keymap::shortcut_hint(&ws.keymap, Action::FeedbackOpen);
+    if shortcut_button(ui, true, Icon::Feedback, FEEDBACK_ENTRY, keys).clicked() {
+        request = MenuRequest::Feedback;
+        ui.close();
+    }
+    if entry(ui, true, icons::button(Icon::Help, FAQ_ENTRY)).clicked() {
+        ui.ctx()
+            .open_url(egui::OpenUrl::new_tab(crate::feedback::faq_url()));
+        ui.close();
+    }
+    ui.separator();
+    if entry(ui, true, icons::button(Icon::About, about_dialog::TITLE)).clicked() {
+        commands::timed("Über PlanoraCAD", || ws.about_open = true);
         ui.close();
     }
     request
 }
 
 /// Menüleiste im oberen Feld; „Ansicht“ blendet Versionen über den [`ShellState`] ein und aus.
-/// Liefert den Wunsch aus „Datei“ ([`file_menu`]).
+/// Liefert den Wunsch aus „Datei“ ([`file_menu`]), „Ansicht“ und „Hilfe“ ([`help_menu`]).
 #[doc(hidden)]
 pub fn menu_bar(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) -> MenuRequest {
     menu_bar_measured(ui, ws, shell).0
@@ -1503,6 +1883,12 @@ pub(crate) fn menu_bar_measured(
             ui.menu_button("Ansicht", |ui| {
                 if view_menu(ui, ws, shell) {
                     request = MenuRequest::Shortcuts;
+                }
+            });
+            ui.menu_button(HELP_MENU, |ui| {
+                let r = help_menu(ui, ws);
+                if r != MenuRequest::None {
+                    request = r;
                 }
             });
             // Der Zeiger steht hinter dem letzten Knopf und einem Abstand.
@@ -1555,6 +1941,18 @@ impl CreateKind {
             CreateKind::Cone => "Kegel …",
             CreateKind::Extrusion => "Skizze extrudieren …",
             CreateKind::Revolution => "Skizze drehen …",
+        }
+    }
+
+    /// Fester Name im ausführlichen Protokoll („Befehl Quader anlegen: 2 ms“).
+    pub fn command_name(self) -> &'static str {
+        match self {
+            CreateKind::Box => "Quader anlegen",
+            CreateKind::Cylinder => "Zylinder anlegen",
+            CreateKind::Sphere => "Kugel anlegen",
+            CreateKind::Cone => "Kegel anlegen",
+            CreateKind::Extrusion => "Skizze extrudieren",
+            CreateKind::Revolution => "Skizze drehen",
         }
     }
 
@@ -1647,6 +2045,15 @@ pub fn do_create(ws: &mut Workspace, kind: CreateKind) {
 
 /// Öffnet den Dialog „Boolesche Operation“ mit vorgewählter Operation (Menü und Chips).
 pub fn open_boolean(ws: &mut Workspace, op: BoolOp) {
+    let name = match op {
+        BoolOp::Union => "Vereinigen",
+        BoolOp::Difference => "Abziehen",
+        BoolOp::Intersection => "Schneiden",
+    };
+    commands::timed(name, || open_boolean_inner(ws, op));
+}
+
+fn open_boolean_inner(ws: &mut Workspace, op: BoolOp) {
     let tab = ws.active_tab_mut();
     if let Some(why) = tab.state.chosen_lock() {
         tab.state.message = Some(why.into());
@@ -1679,7 +2086,7 @@ pub fn open_blend(ws: &mut Workspace, chamfer: bool) {
 pub fn create_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     for kind in &CreateKind::ALL[..4] {
         if icons::source_entry(ui, kind.icon(), kind.label(), true).clicked() {
-            do_create(ws, *kind);
+            run_create(ws, *kind);
             ui.close();
         }
     }
@@ -1708,14 +2115,14 @@ pub(crate) fn run_create(ws: &mut Workspace, kind: CreateKind) {
         Some(a) => {
             commands::run_action(ws, a);
         }
-        None => do_create(ws, kind),
+        None => commands::timed(kind.command_name(), || do_create(ws, kind)),
     }
 }
 
 /// Verrunden (über [`commands::run_action`]) oder Fase aus Menü oder Befehlsfeld.
 pub(crate) fn run_blend(ws: &mut Workspace, chamfer: bool) {
     if chamfer {
-        open_blend(ws, true);
+        commands::timed("Fase anlegen", || open_blend(ws, true));
     } else {
         commands::run_action(ws, Action::Fillet);
     }
@@ -1779,7 +2186,7 @@ pub fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     .on_disabled_hover_text(crate::state::SKETCH_OPEN_LOCK)
     .clicked()
     {
-        parameter_dialog::open(tab);
+        commands::timed("Parameter", || parameter_dialog::open(tab));
         ui.close();
     }
     ui.separator();
@@ -1825,7 +2232,9 @@ pub fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     .on_disabled_hover_text("Es wird bereits die ganze Zeitleiste berechnet.")
     .clicked()
     {
-        let _ = browser::roll_to_end(&mut tab.state);
+        commands::timed("Zum Ende der Zeitleiste", || {
+            let _ = browser::roll_to_end(&mut tab.state);
+        });
         ui.close();
     }
 }
@@ -1837,17 +2246,17 @@ fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) -> b
     let state = &mut ws.active_tab_mut().state;
     for face in ViewFace::ALL {
         if entry(ui, true, icons::button(Icon::ViewFace, face.label())).clicked() {
-            state.camera.set_view(face);
+            commands::timed(face.label(), || state.camera.set_view(face));
             ui.close();
         }
     }
     if entry(ui, true, icons::button(Icon::ViewIso, "Isometrisch")).clicked() {
-        state.camera.set_iso_view();
+        commands::timed("Isometrisch", || state.camera.set_iso_view());
         ui.close();
     }
     ui.separator();
     if entry(ui, true, icons::button(Icon::FitAll, "Alles einpassen")).clicked() {
-        state.frame_all();
+        commands::timed("Alles einpassen", || state.frame_all());
         ui.close();
     }
     ui.separator();
@@ -1858,7 +2267,7 @@ fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) -> b
         (Icon::ThemeDark, "Dunkles Design")
     };
     if entry(ui, true, icons::button(icon, label)).clicked() {
-        ws.set_dark(!dark);
+        commands::timed(label, || ws.set_theme(!dark));
         ui.close();
     }
     ui.separator();
@@ -1881,9 +2290,11 @@ fn sketch_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
         ("Skizze auf YZ-Ebene", StandardPlane::YZ),
     ] {
         if entry(ui, true, icons::button(Icon::SketchOnPlane, label)).clicked() {
-            if let Ok(id) = state.add_sketch(SketchPlane::Standard(plane)) {
-                let _ = state.open_sketch(id);
-            }
+            commands::timed(label, || {
+                if let Ok(id) = state.add_sketch(SketchPlane::Standard(plane)) {
+                    let _ = state.open_sketch(id);
+                }
+            });
             ui.close();
         }
     }
@@ -1985,6 +2396,10 @@ impl eframe::App for PlanoraApp {
     /// [`crate::thumbnail_worker::DROP_WAIT`].)
     fn on_exit(&mut self) {
         self.projects.shutdown(EXIT_WAIT);
+        // Sauberes Ende: der Laufmarker geht (ein Absturz lässt ihn liegen).
+        if let Some(marker) = self.run_marker.take() {
+            marker.finish();
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -1994,6 +2409,7 @@ impl eframe::App for PlanoraApp {
             theme::apply(&ctx, dark);
             self.applied_dark = Some(dark);
         }
+        self.report_document();
 
         self.update_tick(&ctx);
         // Schon vor der Statuszeile, damit sie im Bild, in dem die Meldung erscheint, nicht
@@ -2004,6 +2420,7 @@ impl eframe::App for PlanoraApp {
         }
         // Esc der Übersicht vor den Ansichten (weder Auswahl noch Skizze sollen es sehen).
         keymap::overview::take_escape(&ctx, &mut self.overview, self.ws.prompt.is_some());
+        feedback_dialog::take_escape(&ctx, &mut self.feedback, self.ws.prompt.is_some());
         // Esc der Meldung wirkt wie „Später“ (nie wie „Überspringen“), während eines Updates wie
         // ✕ ([`UpdateDialog::close_action`]).
         if update_dialog::take_escape(&ctx, &self.update_dialog, self.ws.prompt.is_some()) {
@@ -2142,10 +2559,25 @@ impl eframe::App for PlanoraApp {
         {
             open_settings(&mut self.ws, &mut self.projects, &mut self.settings, false);
         }
+        enforce_feedback_rules(
+            &self.ws,
+            &self.projects,
+            &self.settings,
+            &self.overview,
+            &mut self.feedback,
+        );
+        self.feedback_shot(&ctx);
+        if self.feedback.hides_for_shot() {
+            // Bild vom Fenster: das Fenster „Rückmeldung“ ist auf dem Bild nicht zu sehen.
+            ctx.request_repaint();
+        } else if let Some(action) = feedback_dialog::show(&ctx, &mut self.feedback, dark) {
+            self.feedback_action(&ctx, action);
+        }
         self.ws.refresh_prompts();
         // Nach `refresh_prompts`: eine gerade entstandene Rückfrage hält die Meldung schon in
         // diesem Bild zurück.
         self.show_update_notice(&ctx);
+        self.crash_notice_tick(&ctx, dark);
         about_dialog::show(&ctx, &mut self.ws.about_open);
         prompts::show(&ctx, &mut self.ws);
         if self.restart_locked() {

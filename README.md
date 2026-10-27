@@ -11,6 +11,8 @@ Ein quelloffenes, parametrisches 3D-CAD in reinem Rust für Windows und Linux.
 
 Fehler gefunden oder einen Wunsch? Wie du etwas meldest, steht unter [So meldest du etwas](docs/so-meldest-du-etwas.md).
 
+Hilfe bei Problemen: [Häufige Probleme](docs/haeufige-probleme.md). Was geplant ist, siehst du auf der Projekttafel: [Was geplant ist](https://github.com/users/KaelanTesseract/projects/1). Wie die Tafel eingerichtet wird: [Projekttafel einrichten](docs/projekttafel-einrichten.md).
+
 **Status:** frühe Entwicklung (Fundament, Kernel-Basis, Boolesche Operationen, Skizzen mit Constraint-Solver, Feature-Baum, Speichern mit Projekten und Versionen, Freiformflächen, Rundungen und Fasen, Netz-Austausch, STEP-Export, STEP-Import, Zeichnungen mit Ansichten, Zeichnungsblatt, Stückliste und Positionsnummern, PDF-Ausgabe, Schnittansichten, Rückgängig und Wiederholen, benannte Parameter mit Formeln).
 
 Erste Version: Quader, Zylinder, Kugel, Kegel, Extrusion und Rotation von Skizzen, 3D-Ansicht mit Auswahl, Körper verschieben (Feld „Position“) sowie Boolesche Operationen (Vereinigen, Abziehen, Schneiden) für Körper mit Flächen aus Ebenen, Zylindern, Kegeln, Kugeln und Tori (Stufe A) und für Körper mit Freiformflächen aus Ellipsen und Splines (siehe „Freiformflächen“).
@@ -577,7 +579,7 @@ Das Programm hat ein neues, ruhigeres Aussehen bekommen: dunkelgraue Flächen, d
 
 **Neuer Aufbau des Fensters (Modell-Ansicht):** Die Felder schweben jetzt frei über dem 3D-Bereich, der das ganze Fenster füllt.
 
-- Oben in der Mitte: das kleine Programmzeichen, das Menü und die Tabs. Unter „Datei“ → „Über PlanoraCAD“ stehen Version, Lizenz und die Herkunft der mitgelieferten Schriften und Symbole.
+- Oben in der Mitte: das kleine Programmzeichen, das Menü und die Tabs. Unter „Hilfe“ → „Über PlanoraCAD“ stehen Version, Lizenz und die Herkunft der mitgelieferten Schriften und Symbole.
 - Links: der Baum mit den Arbeitsschritten (deine Projekte stehen im Fenster „Projekte“, Strg+O).
 - Rechts: Eigenschaften und Versionen. Ein Umschalter im Feld wechselt zwischen beiden.
 - Unten: das Befehlsfeld mit Abkürzungen zu den Menüeinträgen, daneben Meldungen.
@@ -641,6 +643,20 @@ Die Tasten sind ab Werk wie in Fusion: zum Beispiel E extrudiert, F rundet, V bl
 
 Welche Fusion-Kürzel noch fehlen, weil es die Funktion noch nicht gibt, steht in `docs/superpowers/offene-punkte.md`, Abschnitt „Tastenkürzel“.
 
+## Rückmeldung, Absturzberichte und Protokoll
+
+„Hilfe → Rückmeldung …“ (Strg+Umschalt+R) öffnet das Rückmeldungsfenster. Die Schritte für Anwender stehen in [So meldest du etwas](docs/so-meldest-du-etwas.md), die Lösungen für bekannte Fälle in [Häufige Probleme](docs/haeufige-probleme.md).
+
+**Zwei Wege.** „Im Browser öffnen“ füllt ein Formular auf GitHub aus (mit Konto). „Ohne GitHub-Konto senden“ füllt das Webformular auf dennis-guse.de aus (`/planoracad/rueckmeldung.php`, englisch `/en/planoracad/feedback.php`); die Mail an info@dennis-guse.de ist nur der Notweg, falls sich kein Browser öffnen lässt. In beiden Fällen gehen die Angaben mit dem Öffnen der Adresse an GitHub bzw. dennis-guse.de (sie stehen in der Adresse; Server-Protokolle können sie enthalten); gemeldet wird erst, wenn der Anwender dort absendet. Bild und Dateien kann ein Link nicht mitnehmen; das Programm legt sie in einen Ordner und öffnet ihn.
+
+**Was mitgeht.** Version, System, Grafikkarte, die letzten Schritte, auf Wunsch Protokollzeilen und ein Bild vom Programmfenster. Jede Angabe lässt sich in der Vorschau abwählen. Benutzername, Projektpfade und Mailadressen werden vorher entfernt. Ein Bericht in GitHub ist öffentlich; das Webformular schickt an Dennis.
+
+**Absturzbericht.** Bei einem Rust-Absturz (Panic) schreibt das Programm einen Bericht in den Datenordner (ohne Benutzernamen), beim nächsten Start fragt es nach. Das Projekt kommt auf Wunsch als `.pcad.zip` dazu (Formular: höchstens 25 MB je Datei, 30 MB zusammen, 10 Dateien). Endet das Programm ohne Bericht (hart beendet, Stromausfall, Absturz außerhalb von Rust), kann es das nur beim nächsten Start melden. Wie ein Bericht mit der `.pdb` des Releases aufgelöst wird, steht unter „Absturzbericht auflösen“ in „Updates und Versionen“.
+
+**Ausführliches Protokoll.** Unter „Datei → Einstellungen …“, Abschnitt „Updates“, schreibt der Schalter „Ausführliches Protokoll“ mehr in `planora.log` (jeder Befehl mit Dauer, keine Projektinhalte). Die Datei dreht bei etwa 1 MB (`planora.log`, `planora.1.log`, `planora.2.log`) und bleibt auf dem Rechner.
+
+**Projekttafel.** Neue Meldungen landen von selbst auf der [Projekttafel](https://github.com/users/KaelanTesseract/projects/1); Dennis sortiert sie in „Geplant“, „In Arbeit“ und „Fertig“. Einrichtung: [Projekttafel einrichten](docs/projekttafel-einrichten.md).
+
 ## Updates und Versionen
 
 Das Programm kann sich selbst aktualisieren (nur unter Windows). Beim Start fragt es im Hintergrund bei GitHub nach, ob es eine neuere Version gibt. Dabei wird nichts Persönliches gesendet. Gibt es eine, erscheint ein Fenster mit den Änderungen und drei Knöpfen: „Jetzt aktualisieren“, „Später“ (die Meldung kommt frühestens nach 24 Stunden wieder) und „Diese Version überspringen“. Die Meldung steht unten rechts, andere Fenster verdecken sie nicht. Vor dem Neustart fragt das Programm nach ungespeicherter Arbeit („Neustart für das Update“). Danach lässt es sich ein paar Sekunden nicht bedienen, bis die neue Version läuft; sie öffnet in derselben Fenstergröße. Das Herunterladen wird mit einer Prüfsumme kontrolliert. Klappt der Austausch nicht, bleibt die alte Version; die Meldung sagt das deutlich, und das Update lässt sich später noch einmal versuchen.
@@ -668,11 +684,13 @@ Unter „Datei → Einstellungen …“, Abschnitt „Updates“, lässt sich di
 3. Lokal prüfen und committen: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace --no-fail-fast`, `cargo deny check`; unter Linux (WSL) zusätzlich die Tests.
 4. Die volle Prüfung auf GitHub einmal von Hand starten (sie läuft nicht bei jedem Push): `gh workflow run ci.yml --ref <Zweig>`, dann `gh run watch`. Sie muss grün enden.
 5. `powershell -File tools\release.ps1` noch einmal starten. Es prüft Version, Changelog und dass es für genau diesen Commit einen grünen Lauf von `ci.yml` gibt. Ist alles in Ordnung, gibt es die zwei Befehle für den Tag aus (`git tag -a v0.2.0-dev.2 …` und `git push origin v0.2.0-dev.2`). Das Skript selbst setzt keinen Tag und pusht nichts.
-6. Der Tag startet `.github/workflows/release.yml`. Er prüft, dass die Version in `Cargo.toml` zum Tag passt und der Changelog-Abschnitt da ist, lässt `cargo deny check` laufen (die vollen Tests nicht, die hat `ci.yml` schon gemacht), baut die Windows-Version und legt das Release an. Es enthält `planoracad-windows-x64.exe`, `planoracad-windows-x64.sha256` und `THIRD-PARTY-LICENSES.txt`. Versionen mit `-dev` oder `-beta` sind als Vorabversion markiert.
+6. Der Tag startet `.github/workflows/release.yml`. Er prüft, dass die Version in `Cargo.toml` zum Tag passt und der Changelog-Abschnitt da ist, lässt `cargo deny check` laufen (die vollen Tests nicht, die hat `ci.yml` schon gemacht), baut die Windows-Version und legt das Release an. Es enthält `planoracad-windows-x64.exe`, `planoracad-windows-x64.sha256`, `THIRD-PARTY-LICENSES.txt` und die Symboldatei `planoracad-windows-x64.pdb` (nur zum Auflösen von Absturzberichten; die Update-Funktion lädt sie nie). Versionen mit `-dev` oder `-beta` sind als Vorabversion markiert.
 
-**Trockenlauf von `release.yml`:** Auf GitHub unter „Actions → Release → Run workflow“ (oder `gh workflow run release.yml --ref <Zweig>`). Ohne Tag baut der Ablauf alles wie beim echten Release, legt aber kein Release an. Die drei Dateien liegen danach drei Tage lang als Ergebnis des Laufs bereit und lassen sich prüfen.
+**Trockenlauf von `release.yml`:** Auf GitHub unter „Actions → Release → Run workflow“ (oder `gh workflow run release.yml --ref <Zweig>`). Ohne Tag baut der Ablauf alles wie beim echten Release, legt aber kein Release an. Die vier Dateien liegen danach drei Tage lang als Ergebnis des Laufs bereit und lassen sich prüfen.
 
 **Lizenzdatei:** `powershell -File tools\third-party-licenses.ps1` erzeugt `THIRD-PARTY-LICENSES.txt` (alle Bibliotheken der Windows-Version und die Schriften, jeweils mit Lizenztext). Das ist die Datei, die am Release hängt; sie gehört nicht ins Repository.
+
+**Absturzbericht auflösen:** Die Windows-Version enthält keine Zeilenangaben; der „Ablauf (Backtrace)“ im Bericht eines Testers zeigt deshalb nur `<unknown>`. Am Ende steht aber der Abschnitt „Adressen (für Dennis)“: die Rücksprungadressen als `planoracad-windows-x64.exe+0x…` und die Bau-Kennung (PDB-GUID). `powershell -File tools\symbolize.ps1 -Report absturz-….txt -Version 0.2.0-dev.2` lädt die passende `.pdb` des Releases (nur lesen, mit `gh`) und zeigt je Rahmen Funktion, Datei und Zeile; mit `-Pdb <Pfad>` statt `-Version` nimmt es eine vorhandene `.pdb`. Es prüft, dass die PDB-GUID zum Bericht passt. Nötig ist nur Windows (die Auflösung nutzt die mitgelieferte `dbghelp.dll`) und für `-Version` die GitHub-Kommandozeile `gh`. Die geladene `.pdb` bleibt im Temp-Ordner liegen und kann dort gelöscht werden.
 
 **Wenn nach einem Update etwas nicht stimmt:** Die Programmdatei behält ihren Namen, meist `planoracad-windows-x64.exe` (so heißt sie im Release). Nach einem Austausch liegt daneben die bisherige Datei als `planoracad-windows-x64.exe.old`. Sie bleibt liegen, bis das Programm das nächste Mal ganz normal gestartet wird, und wird dann gelöscht. Startet die neue Version nicht, `planoracad-windows-x64.exe` löschen oder umbenennen und `planoracad-windows-x64.exe.old` wieder in `planoracad-windows-x64.exe` umbenennen. Die Projekte und Einstellungen liegen außerhalb der Programmdatei und bleiben unberührt.
 

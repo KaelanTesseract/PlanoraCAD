@@ -209,10 +209,17 @@ fn section_shows_version_channel_switch_and_note() {
         ] {
             find(&seen, t);
         }
-        // Reihenfolge: Darstellung, Updates (Version und letzte Prüfung, Kanal und Schalter,
-        // Hinweis, Knopf), Projekte.
+        // Reihenfolge: Darstellung neben Updates (ab 1600 Pixeln Breite), Updates (Version und
+        // letzte Prüfung, Kanal und Schalter, Hinweis, Knopf), Projekte.
+        let (look, upd) = (
+            find(&seen, SECTION_APPEARANCE),
+            find(&seen, SECTION_UPDATES),
+        );
+        assert!(
+            (look.rect.top() - upd.rect.top()).abs() < 1.0 && look.rect.right() < upd.rect.left(),
+            "dunkel {dark}: Darstellung neben Updates"
+        );
         let order = [
-            SECTION_APPEARANCE,
             SECTION_UPDATES,
             version_line.as_str(),
             CHANNEL_LABEL,
@@ -652,7 +659,12 @@ fn keys_table_height_follows_the_window_and_the_menu_stays_free() {
         TABLE_MAX_H, TABLE_MIN_H, TABLE_RESERVED_H, table_max_height,
     };
     assert_eq!(table_max_height(1080.0), 1080.0 - TABLE_RESERVED_H);
-    assert_eq!(table_max_height(1080.0), 300.0);
+    // Bei 1920 × 1080 mindestens 300 Pixel Tabelle.
+    assert!(
+        table_max_height(1080.0) >= 300.0,
+        "{}",
+        table_max_height(1080.0)
+    );
     assert_eq!(table_max_height(600.0), TABLE_MIN_H);
     assert_eq!(table_max_height(4000.0), TABLE_MAX_H);
     let mut heights = Vec::new();

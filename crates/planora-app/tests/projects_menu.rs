@@ -418,10 +418,10 @@ fn the_file_menu_has_projects_with_ctrl_o_and_settings() {
     assert!(keys.rect.left() > projects.rect.right());
     assert!(!shot.has("Öffnen …"), "kein Öffnen …: {}", shot.texts());
     let settings = shot.all(SETTINGS_ENTRY)[0].clone();
-    let about = shot.all(about_dialog::TITLE)[0].clone();
+    // „Über PlanoraCAD“ steht im Menü „Hilfe“ (tests/feedback_dialog.rs).
     assert!(
-        settings.rect.top() < about.rect.top(),
-        "Einstellungen vor Über"
+        shot.all(about_dialog::TITLE).is_empty(),
+        "kein Über im Menü Datei"
     );
     // Die Symbole links in der Zeile.
     for (row, icon) in [(&projects, Icon::Projects), (&settings, Icon::Settings)] {

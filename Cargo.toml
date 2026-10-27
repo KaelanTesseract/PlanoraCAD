@@ -53,3 +53,10 @@ ureq = { version = "3.5", default-features = false, features = ["native-tls-no-d
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+
+# Zeilennummern im Ablauf (Backtrace) des Absturzberichts: nur Zeilentabellen, keine vollen
+# Debug-Angaben. `strip` bleibt ausdrücklich aus, sonst wären sie wieder weg. Unter Windows
+# (MSVC) liegen die Angaben in der .pdb neben der .exe, nicht in der .exe selbst.
+[profile.release]
+debug = "line-tables-only"
+strip = "none"

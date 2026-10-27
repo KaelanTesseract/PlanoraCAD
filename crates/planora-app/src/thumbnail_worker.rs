@@ -344,7 +344,10 @@ fn run(
 
 /// Führt die Arbeit aus; eine Panik ergibt `Thumb::Failed` (nur im Speicher).
 fn guarded(work: &dyn Fn(&ThumbRequest) -> ThumbOutcome, req: &ThumbRequest) -> ThumbOutcome {
-    match catch_unwind(AssertUnwindSafe(|| work(req))) {
+    // Abgefangen: kein Absturzbericht (`crash::expected_panics`).
+    match catch_unwind(AssertUnwindSafe(|| {
+        crate::crash::expected_panics(|| work(req))
+    })) {
         Ok(o) => o,
         Err(_) => ThumbOutcome {
             thumb: Thumb::Failed("Beim Erstellen der Vorschau ist ein Fehler aufgetreten.".into()),

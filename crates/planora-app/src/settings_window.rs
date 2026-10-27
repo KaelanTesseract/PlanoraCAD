@@ -58,6 +58,12 @@ pub const NEVER_CHECKED: &str = "noch nie";
 /// Warnung, wenn eine Update-Einstellung gilt, aber nicht gespeichert werden konnte.
 pub const UPDATES_NOT_SAVED: &str =
     "Die Update-Einstellung gilt nur bis zum Programmende: sie konnte nicht gespeichert werden.";
+/// Schalter im Abschnitt „Updates“ unter [`CHECK_ON_START_LABEL`].
+pub const VERBOSE_LABEL: &str = "Ausführliches Protokoll";
+/// Hinweis unter dem Schalter [`VERBOSE_LABEL`] (schwache Zeile wie der Datenschutzhinweis darüber).
+pub const VERBOSE_NOTE: &str = "Schreibt mehr in die Protokolldatei auf deinem Rechner, zum Beispiel jeden Befehl und wie lange er dauert. Gesendet wird davon nichts.";
+/// Warnung, wenn der Schalter gilt, aber nicht gespeichert werden konnte.
+pub const VERBOSE_NOT_SAVED: &str = "Das ausführliche Protokoll gilt nur bis zum Programmende: die Einstellung konnte nicht gespeichert werden.";
 pub const SECTION_PROJECTS: &str = "Projekte";
 pub const DIRECTORY_LABEL: &str = "Projektverzeichnis";
 pub const CHANGE_DIRECTORY: &str = "Projektverzeichnis ändern …";
@@ -69,6 +75,12 @@ pub const UNREADABLE: &str = "Das Verzeichnis lässt sich nicht lesen.";
 pub const NESTED: &str = "Das ist selbst schon ein Projekt oder Dokument. Bitte den Ordner wählen, der deine Projekte enthält.";
 /// Warnung, wenn der Wechsel gilt, die Einstellung aber nicht gespeichert werden konnte.
 pub const NOT_SAVED: &str = "Das neue Projektverzeichnis gilt nur bis zum Programmende: die Einstellung konnte nicht gespeichert werden.";
+
+/// Ab dieser Breite des Programmfensters stehen „Darstellung“ und „Updates“ nebeneinander (so
+/// bleibt bei 1920 × 1080 Platz für die Tabelle der Tastenkürzel).
+pub const TWO_COLUMNS_FROM: f32 = 1600.0;
+/// Breite der Spalte „Darstellung“ neben „Updates“.
+const APPEARANCE_COLUMN_W: f32 = 280.0;
 
 /// Kennung des Fensters (unabhängig vom Titel).
 const WINDOW_ID: &str = "planora_settings_window";
@@ -406,6 +418,7 @@ impl SettingsWindow {
         let message = self.message.clone();
         let appearance_message = self.appearance_message.clone();
         let updates_message = self.updates_message.clone();
+        let mut verbose = ws.verbose_log();
         let check_hint = self.check_hint.clone();
         self.check_hint_shown = true;
         let mut check_now = false;
@@ -430,36 +443,44 @@ impl SettingsWindow {
                 |ui| {
                     ui.add_enabled_ui(!locked, |ui| {
                         let dark = ui.visuals().dark_mode;
-                        theme::section_header(ui, SECTION_APPEARANCE, theme::SUB_HEADER_H);
-                        ui.add_space(theme::SPACE_2);
-                        ui.strong(TRANSPARENCY_LABEL);
-                        ui.spacing_mut().slider_width = SLIDER_WIDTH;
-                        let r = ui.add(
-                            egui::Slider::new(&mut transparency, 0..=MAX_PANEL_TRANSPARENCY)
-                                .integer()
-                                .suffix(" %"),
-                        );
-                        theme::focus_ring(ui, &r);
-                        slid = r.changed();
-                        released = !r.is_pointer_button_down_on() && !r.dragged();
-                        if let Some(m) = &appearance_message {
-                            ui.colored_label(m.color(dark), m.text());
+                        let mut appearance = |ui: &mut egui::Ui| {
+                            show_appearance(
+                                ui,
+                                &mut transparency,
+                                (&mut slid, &mut released),
+                                appearance_message.as_ref(),
+                            )
+                        };
+                        let mut updates = |ui: &mut egui::Ui| {
+                            show_updates(
+                                ui,
+                                &mut chosen_channel,
+                                &mut check_on_start,
+                                &last_check,
+                                UpdateButtons {
+                                    hint: check_hint.as_ref(),
+                                    check_now: &mut check_now,
+                                    show_notice: &mut show_notice,
+                                    skipped,
+                                    unskip: &mut unskip,
+                                    verbose: &mut verbose,
+                                },
+                                updates_message.as_ref(),
+                            )
+                        };
+                        if ctx.content_rect().width() >= TWO_COLUMNS_FROM {
+                            // Nebeneinander; die Reihe ist so hoch wie die höhere Spalte.
+                            ui.horizontal_top(|ui| {
+                                column(ui, APPEARANCE_COLUMN_W, &mut appearance);
+                                ui.add_space(theme::SPACE_6);
+                                let rest = ui.available_width();
+                                column(ui, rest, &mut updates);
+                            });
+                        } else {
+                            appearance(ui);
+                            ui.add_space(theme::SPACE_4);
+                            updates(ui);
                         }
-                        ui.add_space(theme::SPACE_4);
-                        show_updates(
-                            ui,
-                            &mut chosen_channel,
-                            &mut check_on_start,
-                            &last_check,
-                            UpdateButtons {
-                                hint: check_hint.as_ref(),
-                                check_now: &mut check_now,
-                                show_notice: &mut show_notice,
-                                skipped,
-                                unskip: &mut unskip,
-                            },
-                            updates_message.as_ref(),
-                        );
                         ui.add_space(theme::SPACE_4);
                         theme::section_header(ui, SECTION_PROJECTS, theme::SUB_HEADER_H);
                         ui.add_space(theme::SPACE_2);
@@ -521,6 +542,11 @@ impl SettingsWindow {
             let written = ws.set_update_check(check_on_start);
             self.note_updates_saved(written);
         }
+        if !locked && verbose != ws.verbose_log() {
+            let written = ws.set_verbose_log(verbose);
+            self.updates_message =
+                (!written).then(|| RootMessage::Warning(VERBOSE_NOT_SAVED.into()));
+        }
         for action in [body_action, footer_action] {
             let target = match action {
                 ChooserAction::Chosen(p) => Some(p),
@@ -559,11 +585,13 @@ struct UpdateButtons<'a> {
     /// Übersprungene Version (dann [`skipped_line`] mit [`UNSKIP`]).
     skipped: Option<Version>,
     unskip: &'a mut bool,
+    /// Schalter [`VERBOSE_LABEL`].
+    verbose: &'a mut bool,
 }
 
 /// Abschnitt „Updates“: laufende Version und letzte Prüfung, Auswahl des Kanals (nur [`AVAILABLE_CHANNELS`]; ein
 /// anderer gespeicherter Kanal steht nur als Anzeige da), Schalter mit Hinweis zum Datenschutz,
-/// der Knopf [`CHECK_NOW`] mit dem Zustand der Suche daneben (aus, solange sie läuft; nach einem
+/// der Schalter [`VERBOSE_LABEL`] mit [`VERBOSE_NOTE`], der Knopf [`CHECK_NOW`] mit dem Zustand der Suche daneben (aus, solange sie läuft; nach einem
 /// Fund mit [`SHOW_NOTICE`]) und eine übersprungene Version mit [`UNSKIP`].
 fn show_updates(
     ui: &mut egui::Ui,
@@ -579,6 +607,7 @@ fn show_updates(
         show_notice,
         skipped,
         unskip,
+        verbose,
     } = buttons;
     let dark = ui.visuals().dark_mode;
     // Knapp gehalten (je Zeile zwei Angaben), damit das Fenster bei 1920 × 1080 nicht bis über
@@ -605,6 +634,10 @@ fn show_updates(
         theme::focus_ring(ui, &r);
     });
     ui.add(egui::Label::new(egui::RichText::new(PRIVACY_NOTE).weak()).wrap());
+    ui.add_space(theme::SPACE_1);
+    let r = ui.checkbox(verbose, VERBOSE_LABEL);
+    theme::focus_ring(ui, &r);
+    ui.add(egui::Label::new(egui::RichText::new(VERBOSE_NOTE).weak()).wrap());
     ui.add_space(theme::SPACE_1);
     // Das Ergebnis steht neben dem Knopf, damit der Abschnitt nicht höher wird.
     ui.horizontal(|ui| {
@@ -640,4 +673,42 @@ fn show_updates(
     if let Some(m) = message {
         ui.colored_label(m.color(dark), m.text());
     }
+}
+
+/// Abschnitt „Darstellung“: Regler der Durchsichtigkeit (`slid`: bewegt, `released`: nicht mehr
+/// gezogen) und ein Hinweis nach einem Schreibfehler.
+fn show_appearance(
+    ui: &mut egui::Ui,
+    transparency: &mut u8,
+    (slid, released): (&mut bool, &mut bool),
+    message: Option<&RootMessage>,
+) {
+    let dark = ui.visuals().dark_mode;
+    theme::section_header(ui, SECTION_APPEARANCE, theme::SUB_HEADER_H);
+    ui.add_space(theme::SPACE_2);
+    ui.strong(TRANSPARENCY_LABEL);
+    ui.spacing_mut().slider_width = SLIDER_WIDTH;
+    let r = ui.add(
+        egui::Slider::new(transparency, 0..=MAX_PANEL_TRANSPARENCY)
+            .integer()
+            .suffix(" %"),
+    );
+    theme::focus_ring(ui, &r);
+    *slid = r.changed();
+    *released = !r.is_pointer_button_down_on() && !r.dragged();
+    if let Some(m) = message {
+        ui.colored_label(m.color(dark), m.text());
+    }
+}
+
+/// Eine Spalte der Breite `width` (von oben nach unten).
+fn column(ui: &mut egui::Ui, width: f32, add: &mut dyn FnMut(&mut egui::Ui)) {
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, 0.0),
+        egui::Layout::top_down(egui::Align::Min),
+        |ui| {
+            ui.set_width(width);
+            add(ui);
+        },
+    );
 }

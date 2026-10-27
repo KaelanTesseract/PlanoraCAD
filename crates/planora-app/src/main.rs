@@ -4,6 +4,16 @@ use planora_app::app::PlanoraApp;
 use planora_render::gpu::MSAA_SAMPLES;
 
 fn main() -> eframe::Result {
+    // Protokoll im Datenordner (neben der Konfiguration), noch vor allem anderen.
+    let mut run = (None, planora_app::crash::StartFinding::Clean);
+    if let Some(data_dir) = planora_project::config::Config::config_path().parent() {
+        planora_app::diag::init_global(data_dir);
+        // Absturzbericht nach `abstuerze/`; der bisherige Hook läuft danach weiter.
+        planora_app::crash::install_hook(data_dir.join(planora_app::crash::CRASH_DIR));
+        // Laufmarker anlegen und nachsehen, wie der letzte Lauf endete (Rückfrage in der App).
+        run = planora_app::crash::start_run(data_dir, std::process::id());
+    }
+    let (marker, finding) = run;
     // Von der alten Version nach dem Austausch gestartet (siehe `update_install`).
     // `args_os`: ein Argument, das kein gültiges Unicode ist (etwa ein Dateipfad), bricht nicht ab.
     let after_update = std::env::args_os()
@@ -34,9 +44,22 @@ fn main() -> eframe::Result {
         depth_buffer: 32,
         ..Default::default()
     };
-    eframe::run_native(
+    let marker_file = marker.is_some().then(|| {
+        planora_project::config::Config::config_path()
+            .parent()
+            .map(|d| planora_app::crash::marker_path(d, std::process::id()))
+    });
+    let result = eframe::run_native(
         "PlanoraCAD",
         options,
-        Box::new(move |cc| Ok(Box::new(PlanoraApp::new(cc, after_update)))),
-    )
+        Box::new(move |cc| Ok(Box::new(PlanoraApp::new(cc, after_update, marker, finding)))),
+    );
+    // Start sichtbar gescheitert (etwa ohne Grafik): kein „unerwartet beendet“ beim nächsten
+    // Mal. Marker und App sind hier schon weg, die Datei ist also nicht mehr offen.
+    if result.is_err()
+        && let Some(Some(path)) = marker_file
+    {
+        let _ = std::fs::remove_file(path);
+    }
+    result
 }

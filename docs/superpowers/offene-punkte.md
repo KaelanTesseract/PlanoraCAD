@@ -1921,3 +1921,30 @@ Alles hier wurde bei den Prüfungen der Aufgaben 1 bis 5 gefunden, ist klein und
 
 **Beobachtungsliste `cargo deny`**
 - Die Hinweise zu doppelten Paketen `core-foundation`, `foreign-types` und `foreign-types-shared` stehen auf der Beobachtungsliste; die neuere Fassung von `core-foundation` kommt über `native-tls` (nur der macOS-Zweig, wird unter Windows nicht gebaut), die ältere über das Fenstersystem (`winit`). Bleibt liegen: nur Hinweise, keine Fehler; Lizenzen und Sicherheitsmeldungen sind in Ordnung. Bei jedem Update erneut ansehen (zusammen mit der zbus-Familie und `ttf-parser`).
+
+## Rückmeldungen
+
+Stand nach Etappe 6 (Plan `docs/superpowers/plans/2026-10-26-rueckmeldungen.md`).
+
+**Was geht:** Rückmeldung aus dem Programm (Hilfe → Rückmeldung …, Strg+Umschalt+R) mit Vorschau und Häkchen je Angabe, Bild vom Fenster, Weg über GitHub und Weg ohne Konto über das Webformular auf dennis-guse.de, Absturzbericht mit Rückfrage beim nächsten Start (ohne Benutzername, Projekt als `.pcad.zip`), auflösbarer Fehlerablauf mit `tools/symbolize.ps1` und der `.pdb` am Release, „Ausführliches Protokoll“ unter Einstellungen → Updates, Projekttafel mit Auto-Aufnahme: https://github.com/users/KaelanTesseract/projects/1.
+
+**Was nicht geht:**
+- Abstürze ohne Rust-Meldung (hart beendet, Stromausfall, Absturz im Treiber) schreiben keinen Bericht. Das Programm weist beim nächsten Start nur darauf hin.
+- Die Mail an info@dennis-guse.de ist nur der Notweg; das Webformular ist der Weg ohne Konto. Es nimmt höchstens 10 Dateien (je 25 MB, zusammen 30 MB; PNG, JPG, TXT, LOG, ZIP).
+- Ein Link kann keine Dateien mitnehmen. Bild, Bericht und Projekt hängt der Anwender im Browser selbst an.
+- Das Projekt-ZIP für die Rückmeldung wird im Vordergrund geschrieben; bei großen Projekten friert das Fenster kurz ein.
+- Der Absturzbericht enthält Protokollzeilen und Schritte auch ohne das Häkchen „Protokoll“ (in der Vorschau sichtbar).
+- Windows-Abmelden oder Herunterfahren bei laufender App könnte beim nächsten Start „unerwartet beendet“ zeigen (nicht geprüft).
+- Die GitHub-Schritte von `release.yml` sind noch nie auf GitHub gelaufen (Trockenlauf steht aus); die `.pdb` (etwa 91 MB) ist dort noch nicht als Release-Datei geprüft.
+
+**Zurückgestellt (je ein Satz):**
+- „Adresse anzeigen“ und „Text kopieren“ zeigen die GitHub-Adresse, auch wenn später das Webformular gewählt wird.
+- „Letzten Befehl wiederholen“ trägt zwei Schritte in den Ablauf ein; das ist als Zusammenhang gewollt.
+- Das Bild vom Fenster hat keine Vorschau als Bild, nur eine Zeile mit der Größe.
+- Laufen zwei Instanzen gleichzeitig, kann die Rotation des Protokolls eine alte Datei früher verlieren.
+- Im Absturz-Hook ist die Sperre gegen doppeltes Auslösen nicht testbar, das Dokument fehlt im Bericht, wenn das Protokoll gesperrt ist, der Pfad wird in jedem Bild einmal kopiert, und die Hook-Tests räumen nicht über einen Drop-Wächter auf.
+- Der Absturzbericht hat keine Tests für einen leeren Benutzernamen, Nicht-ASCII-Namen und für ein fehlgeschlagenes Verschieben der Begleitdatei; die ZIP-Ausgabe liest die ganze Datei in den Speicher.
+- Bei `tools/symbolize.ps1` ist die Begrenzung von `SizeOfImage` nicht getestet, die geladene `.pdb` bleibt im Temp-Ordner, und `release_meta.rs` liest nur die oberste Ebene von `src`.
+- Im Webformular-Knopf stehen noch wörtliche Zeilenumbrüche in Zeichenketten (`feedback.rs`), es fehlt ein Test für die letzte Rettung ohne Version und System und ein Grenztest nur für das Formular.
+- Die Schwellen für schmale Fenster liegen seit dem Menü „Hilfe“ 39 Pixel höher (von Dennis angenommen).
+- Die Feldfarben im hellen Aussehen sind nicht einzeln geprüft worden, sondern nur über Tests und die Gesamtprüfung von Etappe 3.

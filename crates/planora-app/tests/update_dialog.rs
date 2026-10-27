@@ -693,3 +693,135 @@ fn no_notice_when_the_check_found_nothing() {
         assert!(!h.texts().iter().any(|t| t.starts_with("Update verfügbar")));
     }
 }
+
+fn after_update_harness(prefix: &str) -> Harness {
+    let (ws, cfg) = workspace(prefix);
+    let mut h = Harness::new(ws, cfg, Fake::new(String::new()));
+    h.app
+        .set_after_update(Some(planora_app::update_install::AfterUpdate {
+            version: running_version(),
+            notes: None,
+        }));
+    h.settle();
+    h
+}
+
+#[test]
+fn after_update_notice_offers_feedback() {
+    let h = after_update_harness("planora-after-feedback");
+    assert!(h.sees(AFTER_UPDATE_FEEDBACK), "{:?}", h.texts());
+    assert!(h.sees(FEEDBACK_BUTTON), "{:?}", h.texts());
+    assert!(h.sees(OK));
+    assert_eq!(AFTER_UPDATE_FEEDBACK, "Etwas stimmt nicht?");
+    assert_eq!(FEEDBACK_BUTTON, "Rückmeldung geben");
+    // Die Version steht schon im Titel; keine eigene Zeile „Laufende Version“.
+    assert!(
+        !h.texts().iter().any(|t| t.contains("Laufende Version")),
+        "{:?}",
+        h.texts()
+    );
+}
+
+fn slow_writer(
+    _: &std::path::Path,
+    _: &planora_drawing::sheet::SheetModel,
+    _: planora_drawing::DrawingFormat,
+    p: &planora_exchange::Progress,
+) -> Result<u64, planora_drawing::DrawError> {
+    loop {
+        p.check()?;
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn feedback_button_keeps_notice_while_an_export_is_writing() {
+    use planora_app::export_dialog::{ExportDialog, ExportFormat};
+    use planora_drawing::{DrawingFormat, Paper, Placement, Projection, Scale, Sheet, ViewKind};
+    let mut h = after_update_harness("planora-after-feedback-export");
+    // Knopf drücken, dann beginnt ein Export zu schreiben, dann loslassen (sonst läge das
+    // Exportfenster über dem Knopf).
+    h.settle();
+    let at = h.find(FEEDBACK_BUTTON).rect.center();
+    let button = |pressed| Event::PointerButton {
+        pos: at,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    h.frame(vec![Event::PointerMoved(at)]);
+    h.frame(vec![button(true)]);
+    {
+        let tab = h.app.ws_mut().active_tab_mut();
+        tab.state
+            .create_box(planora_math::DVec3::new(100.0, 60.0, 40.0))
+            .unwrap();
+        let doc = &mut tab.state.document;
+        let sheet = Sheet {
+            paper: Paper::A4,
+            landscape: true,
+        };
+        let d = doc
+            .add_drawing("Blatt 1", sheet, Projection::First)
+            .unwrap();
+        doc.add_view(
+            d,
+            ViewKind::Front,
+            Scale { num: 1, den: 1 },
+            Placement::Free { x: 148.5, y: 105.0 },
+            None,
+        )
+        .unwrap();
+        let s = &tab.state;
+        let mut e = ExportDialog::new(s);
+        e.format = ExportFormat::Drawing(DrawingFormat::Svg);
+        e.drawing = Some(d);
+        e.tick(s, true);
+        e.set_writer(slow_writer);
+        let dir = common::temp_root("planora-after-feedback-export-ziel");
+        std::fs::create_dir_all(&dir).unwrap();
+        e.write_to(dir.join("z.svg"), s);
+        assert!(e.is_writing_file());
+        tab.export_dialog = Some(e);
+    }
+    h.frame(vec![button(false)]);
+    assert_eq!(
+        h.app.ws_mut().active_tab().state.message.as_deref(),
+        Some(planora_app::app::EXPORT_BUSY),
+        "der Knopf wurde gedrückt, die Rückmeldung wartet auf den Export"
+    );
+    assert!(
+        !h.app.feedback_mut().open,
+        "Export schreibt: keine Rückmeldung"
+    );
+    assert!(
+        h.app.after_update().is_some(),
+        "der Hinweis bleibt offen, solange sich die Rückmeldung nicht öffnet"
+    );
+    assert!(h.sees(FEEDBACK_BUTTON), "{:?}", h.texts());
+    if let Some(e) = h.app.ws_mut().active_tab_mut().export_dialog.as_mut() {
+        e.cancel_write();
+    }
+}
+
+#[test]
+fn feedback_button_closes_notice_and_opens_feedback_window() {
+    let mut h = after_update_harness("planora-after-feedback-click");
+    h.click(FEEDBACK_BUTTON);
+    assert!(h.app.after_update().is_none());
+    assert!(h.app.feedback_mut().open);
+    assert!(!h.sees(FEEDBACK_BUTTON));
+    assert!(
+        h.sees(planora_app::feedback_dialog::TITLE),
+        "{:?}",
+        h.texts()
+    );
+}
+
+#[test]
+fn ok_still_just_closes() {
+    let mut h = after_update_harness("planora-after-feedback-ok");
+    h.click(OK);
+    assert!(h.app.after_update().is_none());
+    assert!(!h.app.feedback_mut().open);
+}

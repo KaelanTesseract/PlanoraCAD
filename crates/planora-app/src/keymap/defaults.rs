@@ -61,6 +61,9 @@ action_table! {
     Close, "datei.schliessen", "Dokument schließen", All, [ctrl(Key::W)];
     /// PlanoraCAD-eigenes Kürzel (Fusion hat dafür keins).
     Export, "datei.exportieren", "Exportieren", All, [ctrl_shift(Key::E)];
+    /// Öffnet das Fenster „Rückmeldung“ (wie „Hilfe → Rückmeldung …“). PlanoraCAD-eigenes
+    /// Kürzel, „R“ wie Rückmeldung; Fusion hat dafür keins.
+    FeedbackOpen, "hilfe.rueckmeldung", "Rückmeldung geben", All, [ctrl_shift(Key::R)];
     Undo, "bearbeiten.rueckgaengig", "Rückgängig", All, [ctrl(Key::Z)];
     /// Strg+Y wie Fusion, Strg+Umschalt+Z wie bisher.
     Redo, "bearbeiten.wiederholen", "Wiederholen", All, [ctrl(Key::Y), ctrl_shift(Key::Z)];

@@ -16,7 +16,9 @@ use crate::state::{AppState, REDO_FAILED, UNDO_FAILED};
 use crate::step_import_dialog::StepImportDialog;
 use crate::undo_labels::describe_change;
 use planora_feature::Snapshot;
-use planora_project::config::{Config, PendingUpdate, WindowState, clamp_panel_transparency};
+use planora_project::config::{
+    Config, PendingUpdate, THEME_DARK, THEME_LIGHT, WindowState, clamp_panel_transparency,
+};
 use planora_project::docstore::{Autosave, DocStore, DocumentInfo, LockMode, peek, read_version};
 use planora_project::fsutil::validate_name;
 use planora_project::library::{DOCUMENT_SUFFIX, Library, NodePath};
@@ -30,6 +32,8 @@ pub const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(120);
 
 /// Meldung, wenn noch kein Projektverzeichnis gewählt ist.
 const NO_ROOT: &str = "Es ist noch kein Projektverzeichnis gewählt.";
+/// Schritt (Letzte Schritte) nach einem gelungenen Speichern; erst dann, nicht schon beim Befehl.
+const SAVE_STEP: &str = "Speichern";
 
 /// Ablehnung eines Dokumentnamens auf „.pcad“ (wie bei Ordnern; die Endung hängt das Programm
 /// selbst an).
@@ -231,6 +235,7 @@ impl DocTab {
             return;
         }
         let label = describe_change(self.history.current(), &after);
+        crate::diag::step(label);
         let bytes = snapshot_bytes(&after);
         self.history.record(after, bytes, label);
     }
@@ -563,10 +568,13 @@ pub struct Workspace {
     /// `panel_transparency_pending`).
     pub keys_pending: bool,
     /// Die Update-Felder in `config` (Kanal, Prüfen beim Start, letzte Prüfung, übersprungene
-    /// Version, begonnenes Update) konnten noch nicht gespeichert werden; sie werden beim
+    /// Version, begonnenes Update, ausführliches Protokoll) konnten noch nicht gespeichert werden; sie werden beim
     /// nächsten gelungenen Schreiben der Konfiguration alle mit geschrieben (wie
     /// `keys_pending`).
     pub update_settings_pending: bool,
+    /// Das Design in `config.theme` konnte noch nicht gespeichert werden; es wird beim nächsten
+    /// gelungenen Schreiben der Konfiguration mit geschrieben (wie `keys_pending`).
+    pub theme_pending: bool,
     /// Für „Letzten Befehl wiederholen“ (Leertaste): der zuletzt abgeschlossene Befehl, über
     /// alle Tabs.
     pub last_command: crate::commands::LastCommand,
@@ -620,6 +628,7 @@ impl Workspace {
             key_notes,
             keys_pending: false,
             update_settings_pending: false,
+            theme_pending: false,
             last_command: Default::default(),
             prompt: None,
             quit: false,
@@ -633,6 +642,9 @@ impl Workspace {
             untitled: 0,
         };
         w.new_tab();
+        if !w.config.dark() {
+            w.set_dark(false);
+        }
         w
     }
 
@@ -822,10 +834,15 @@ impl Workspace {
                 }
                 tab.based_on = Some(n);
                 tab.mark_clean();
+                crate::diag::step(SAVE_STEP);
+                crate::diag::info(&format!("Gespeichert: {} (Version {n})", tab.name));
                 Ok(SaveOutcome::Saved(n))
             }
             Err(ProjectError::NeedsBranch) => Ok(SaveOutcome::NeedsBranch),
-            Err(e) => Err(err(e)),
+            Err(e) => {
+                crate::diag::fehler(&format!("Speichern fehlgeschlagen: {}", tab.name));
+                Err(err(e))
+            }
         }
     }
 
@@ -874,6 +891,8 @@ impl Workspace {
         // ein Angebot des bisherigen Dokuments gilt nicht für das neue; seine Datei bleibt dort
         tab.pending_autosave = None;
         tab.keep_autosave = false;
+        crate::diag::step(SAVE_STEP);
+        crate::diag::info(&format!("Gespeichert: {} (Version 1)", tab.name));
         tab.mark_clean();
         self.library_revision += 1;
         self.content_revision += 1;
@@ -1022,6 +1041,7 @@ impl Workspace {
         tab.based_on = Some(v);
         tab.pending_autosave = autosave;
         tab.keep_autosave = keep_autosave;
+        crate::diag::info(&format!("Geöffnet: {} (Version {v})", display_name(path)));
         let i = self.push_tab(tab);
         // ein schon stehender Prompt (z. B. das Angebot eines anderen Dokuments) bleibt;
         // `refresh_prompts` bietet diese Sicherung danach an
@@ -1296,6 +1316,7 @@ impl Workspace {
             .then(|| self.panel_transparency());
         let keys = self.pending_keys();
         let updates = self.pending_update_settings();
+        let theme = self.pending_theme();
         let mut full = None;
         let written = Config::update_at(&self.config_path, |c| {
             c.root = root;
@@ -1309,6 +1330,9 @@ impl Workspace {
             if let Some(u) = updates {
                 u.apply(c);
             }
+            if let Some(t) = theme {
+                c.theme = t;
+            }
         });
         match written {
             Ok(disk) => {
@@ -1319,6 +1343,7 @@ impl Workspace {
                 self.panel_transparency_pending = false;
                 self.keys_pending = false;
                 self.update_settings_pending = false;
+                self.theme_pending = false;
                 true
             }
             Err(_) => {
@@ -1329,6 +1354,7 @@ impl Workspace {
                     self.panel_transparency_pending = false;
                     self.keys_pending = false;
                     self.update_settings_pending = false;
+                    self.theme_pending = false;
                 } else {
                     self.favorites_pending = pending;
                 }
@@ -1353,6 +1379,7 @@ impl Workspace {
         // Vorgemerkte Tasten und Update-Felder kommen mit (wie in `try_persist_config`).
         let keys = self.pending_keys();
         let updates = self.pending_update_settings();
+        let theme = self.pending_theme();
         let written = Config::update_at(&self.config_path, |c| {
             c.panel_transparency = percent;
             if let Some(k) = keys {
@@ -1361,10 +1388,55 @@ impl Workspace {
             if let Some(u) = updates {
                 u.apply(c);
             }
+            if let Some(t) = theme {
+                c.theme = t;
+            }
         })
         .is_ok();
         self.panel_transparency_pending = !written;
         if written {
+            self.keys_pending = false;
+            self.update_settings_pending = false;
+            self.theme_pending = false;
+        }
+        written
+    }
+
+    /// Das Design, wenn es zum Schreiben vorgemerkt ist.
+    fn pending_theme(&self) -> Option<Option<String>> {
+        self.theme_pending.then(|| self.config.theme.clone())
+    }
+
+    /// Wählt das helle oder dunkle Design (Ansicht-Menü): wirkt sofort in allen Tabs und wird
+    /// gleich in [`Workspace::config_path`] gespeichert (Feld `theme`); `true`, wenn geschrieben
+    /// wurde. Sonst gilt die Wahl für die Sitzung und kommt beim nächsten gelungenen Schreiben
+    /// mit ([`Workspace::theme_pending`]); die Datei bleibt dann unangetastet. Anders als
+    /// [`Workspace::set_dark`] berührt dies die Konfiguration.
+    pub fn set_theme(&mut self, dark: bool) -> bool {
+        self.set_dark(dark);
+        let name = if dark { THEME_DARK } else { THEME_LIGHT };
+        self.config.theme = Some(name.to_string());
+        let transparency = self
+            .panel_transparency_pending
+            .then(|| self.panel_transparency());
+        let keys = self.pending_keys();
+        let updates = self.pending_update_settings();
+        let written = Config::update_at(&self.config_path, |c| {
+            c.theme = Some(name.to_string());
+            if let Some(t) = transparency {
+                c.panel_transparency = t;
+            }
+            if let Some(k) = keys {
+                c.keys = k;
+            }
+            if let Some(u) = updates {
+                u.apply(c);
+            }
+        })
+        .is_ok();
+        self.theme_pending = !written;
+        if written {
+            self.panel_transparency_pending = false;
             self.keys_pending = false;
             self.update_settings_pending = false;
         }
@@ -1452,6 +1524,20 @@ impl Workspace {
         self.save_update_field(|u, c| c.update_pending = u.pending)
     }
 
+    /// Ausführliches Protokoll an (Einstellungen → Updates)?
+    pub fn verbose_log(&self) -> bool {
+        self.config.verbose_log
+    }
+
+    /// Schaltet das ausführliche Protokoll; es wirkt sofort ([`crate::diag::set_verbose`]) und
+    /// wird gespeichert wie ein Update-Feld (misslingt das, gilt es für die Sitzung und kommt
+    /// beim nächsten gelungenen Schreiben mit). `true`, wenn geschrieben wurde.
+    pub fn set_verbose_log(&mut self, on: bool) -> bool {
+        self.config.verbose_log = on;
+        crate::diag::set_verbose(on);
+        self.save_update_field(|u, c| c.verbose_log = u.verbose)
+    }
+
     /// Das Fenster des begonnenen Updates, falls gemerkt.
     pub fn pending_window(&self) -> Option<WindowState> {
         self.config.update_pending.as_ref()?.window
@@ -1471,6 +1557,7 @@ impl Workspace {
             .panel_transparency_pending
             .then(|| self.panel_transparency());
         let keys = self.pending_keys();
+        let theme = self.pending_theme();
         let written = Config::update_at(&self.config_path, |c| {
             if all {
                 current.apply(c);
@@ -1483,10 +1570,14 @@ impl Workspace {
             if let Some(k) = keys {
                 c.keys = k;
             }
+            if let Some(t) = theme {
+                c.theme = t;
+            }
         })
         .is_ok();
         self.update_settings_pending = !written;
         if written {
+            self.theme_pending = false;
             self.panel_transparency_pending = false;
             self.keys_pending = false;
         }
@@ -1510,6 +1601,7 @@ impl Workspace {
             .panel_transparency_pending
             .then(|| self.panel_transparency());
         let updates = self.pending_update_settings();
+        let theme = self.pending_theme();
         let written = Config::update_at(&self.config_path, |c| {
             c.keys = keys;
             if let Some(t) = transparency {
@@ -1518,12 +1610,16 @@ impl Workspace {
             if let Some(u) = updates {
                 u.apply(c);
             }
+            if let Some(t) = theme {
+                c.theme = t;
+            }
         })
         .is_ok();
         self.keys_pending = !written;
         if written {
             self.panel_transparency_pending = false;
             self.update_settings_pending = false;
+            self.theme_pending = false;
             self.key_notes.clear();
         }
         written
@@ -1575,6 +1671,7 @@ impl Workspace {
             .then(|| self.panel_transparency());
         let keys = self.pending_keys();
         let updates = self.pending_update_settings();
+        let theme = self.pending_theme();
         let written = Config::update_at(&self.config_path, |c| {
             full = apply_changes(&all, &mut c.favorites);
             if let Some(t) = transparency {
@@ -1586,6 +1683,9 @@ impl Workspace {
             if let Some(u) = updates {
                 u.apply(c);
             }
+            if let Some(t) = theme {
+                c.theme = t;
+            }
         });
         match written {
             Ok(disk) => {
@@ -1594,6 +1694,7 @@ impl Workspace {
                 self.panel_transparency_pending = false;
                 self.keys_pending = false;
                 self.update_settings_pending = false;
+                self.theme_pending = false;
                 true
             }
             Err(_) => {
@@ -1644,6 +1745,9 @@ struct UpdateSettings {
     last_check: Option<u64>,
     skipped: Option<String>,
     pending: Option<PendingUpdate>,
+    /// Ausführliches Protokoll (Einstellungen → Updates); fährt hier mit, damit es auf allen
+    /// Schreibwegen mitgeht wie die Update-Felder.
+    verbose: bool,
 }
 
 impl UpdateSettings {
@@ -1654,6 +1758,7 @@ impl UpdateSettings {
             last_check: c.last_update_check,
             skipped: c.skipped_version.clone(),
             pending: c.update_pending.clone(),
+            verbose: c.verbose_log,
         }
     }
 
@@ -1664,6 +1769,7 @@ impl UpdateSettings {
         c.last_update_check = self.last_check;
         c.skipped_version = self.skipped;
         c.update_pending = self.pending;
+        c.verbose_log = self.verbose;
     }
 }
 

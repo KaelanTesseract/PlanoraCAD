@@ -31,6 +31,11 @@ use std::time::Duration;
 
 const SIZE: Vec2 = vec2(1400.0, 900.0);
 const MID: Vec2 = vec2(1100.0, 700.0);
+/// Seit dem Menü „Hilfe“ ist die Menüleiste 39,4 px breiter (gemessen: 358,66 statt 319,25 px).
+/// Um so viel liegen die Grenzen unten höher als vorher: Das obere Feld passt erst ab etwa
+/// 1121 px zwischen die Spalten (vorher schon bei 1100). Bei 1139 × 700 ist die Tab-Leiste
+/// etwa so breit wie früher bei 1100 × 700 (100,34 statt 100,75 px).
+const MID_WIDE: Vec2 = vec2(1139.0, 700.0);
 const SMALL: Vec2 = vec2(800.0, 600.0);
 const UNDO: &str = "Rückgängig";
 const REDO: &str = "Wiederholen";
@@ -647,12 +652,21 @@ fn locked_while_exporting() {
 
 // ---- (d) ------------------------------------------------------------------------------------
 
-/// Bei 1100 × 700 und 800 × 600 stehen beide Knöpfe ganz im oberen Feld; bei 1100 (und 1400)
-/// bleibt das Feld zwischen den Spalten. Auch mit vielen Tabs: die Knöpfe bleiben stehen, der
-/// aktive Tab ist ganz zu sehen (die Tabs rollen hinter den Knöpfen).
+/// Bei 1139 × 700, 1100 × 700 und 800 × 600 stehen beide Knöpfe ganz im oberen Feld; bei 1139
+/// (und 1400) bleibt das Feld zwischen den Spalten, bei 1100 steht es seit dem Menü „Hilfe“ wie
+/// bei 800 über ihnen ([`MID_WIDE`]). Auch mit vielen Tabs: die Knöpfe bleiben stehen, der aktive Tab ist ganz
+/// zu sehen (die Tabs rollen hinter den Knöpfen).
 #[test]
-fn fits_at_1100_and_800_also_with_many_tabs() {
-    for (size, tabs) in [(MID, 1), (MID, 8), (SMALL, 1), (SMALL, 8), (SIZE, 8)] {
+fn fits_at_1139_1100_and_800_also_with_many_tabs() {
+    for (size, tabs) in [
+        (MID_WIDE, 1),
+        (MID_WIDE, 8),
+        (MID, 1),
+        (MID, 8),
+        (SMALL, 1),
+        (SMALL, 8),
+        (SIZE, 8),
+    ] {
         let mut w = with_box();
         for _ in 1..tabs {
             w.new_tab();
@@ -667,7 +681,7 @@ fn fits_at_1100_and_800_also_with_many_tabs() {
         let l = shell_panels::last_layout(&rig.ctx).unwrap();
         let screen = Rect::from_min_size(Pos2::ZERO, size);
         assert!(screen.contains_rect(l.top), "{size:?}: {:?}", l.top);
-        if size != SMALL {
+        if size != SMALL && size != MID {
             assert!(
                 l.top.width() <= shell::between_columns(size.x) + 0.5,
                 "{size:?}/{tabs}: {:?} über den Spalten",
@@ -901,25 +915,28 @@ fn strip(rig: &mut Rig) -> Strip {
     }
 }
 
-/// „Neu“ steht fest hinter der rollenden Tab-Leiste: immer ganz sichtbar und klickbar, bei 1100 ×
-/// 700 und 800 × 600 mit 1, 2 und 5 Tabs (geändert und ungeändert). Der aktive Tab ist ins Bild
-/// gerollt; die Knöpfe überdecken keinen Tab.
+/// „Neu“ steht fest hinter der rollenden Tab-Leiste: immer ganz sichtbar und klickbar, bei
+/// [`MID_WIDE`] und 800 × 600 mit 1, 2 und 5 Tabs (geändert und ungeändert). Der aktive Tab ist
+/// ins Bild gerollt; die Knöpfe überdecken keinen Tab.
 ///
-/// Gemessen bei 1100 × 700 (Feld 544 px = Rand 26 + Menü 319,25 + Knöpfe mit Abständen 60 + Tab-Leiste
-/// 100,75 + „Neu“ mit Abstand 38): Ein aktiver Tab samt Schließen-Symbol braucht etwa 127 px
-/// („Unbenannt n“) bzw. 136 px („Unbenannt n ●“). Deshalb (festgehalten, damit eine Änderung auffällt):
-/// - 1 Tab, ungeändert: Name ganz sichtbar, Schließen-Symbol ragt 17,8 px über den Rand;
+/// Gemessen bei 1100 × 700 vor dem Menü „Hilfe“ (Feld 544 px = Rand 26 + Menü 319,25 + Knöpfe
+/// mit Abständen 60 + Tab-Leiste 100,75 + „Neu“ mit Abstand 38), seitdem bei 1139 × 700 ebenso
+/// (Feld 583 px, Menü 358,66, Tab-Leiste 100,34; [`MID_WIDE`]): Ein aktiver Tab samt
+/// Schließen-Symbol braucht etwa 127 px („Unbenannt n“) bzw. 136 px („Unbenannt n ●“). Deshalb
+/// (festgehalten, damit eine Änderung auffällt):
+/// - 1 Tab, ungeändert: Name ganz sichtbar, Schließen-Symbol ragt 18,8 px über den Rand (bei
+///   1100 vor dem Menü „Hilfe“: 17,8 px);
 /// - 1 Tab geändert, oder 2/5 Tabs ungeändert: Name ganz sichtbar, Schließen-Symbol ganz außerhalb;
 /// - 2/5 Tabs, aktiver geändert: Name am Ende (Kennzeichen „●“) angeschnitten, Schließen-Symbol
 ///   ganz außerhalb.
 ///
 /// Das Schließen-Symbol ist nach Rollen erreichbar; Strg+W schließt den aktiven Tab (siehe
-/// `ctrl_w_closes_the_active_tab_at_1100`).
+/// `ctrl_w_closes_the_active_tab_at_1139`).
 ///
 /// Bei 800 × 600 steht das Feld wie bisher über den Spalten: Name und Schließen-Symbol ganz sichtbar.
 #[test]
 fn new_tab_pinned_and_active_tab_revealed() {
-    for size in [MID, SMALL] {
+    for size in [MID_WIDE, SMALL] {
         for n in [1, 2, 5] {
             for dirty in [false, true] {
                 let what = format!("{size:?}/{n} Tabs/geändert={dirty}");
@@ -959,11 +976,11 @@ fn new_tab_pinned_and_active_tab_revealed() {
                         "{what}: Leiste {}",
                         s.clip.width()
                     );
-                    // Festgehaltene Messung bei 1100 (siehe Doku oben).
+                    // Festgehaltene Messung bei MID_WIDE (siehe Doku oben).
                     if n == 1 && !dirty {
                         assert!(s.name_shown(), "{what}");
                         let h = s.close_hidden().expect("×");
-                        assert!((h - 17.8).abs() < 1.0, "{what}: × ragt {h}");
+                        assert!((h - 18.8).abs() < 1.0, "{what}: × ragt {h}");
                     } else {
                         assert_eq!(
                             s.name_shown(),
@@ -981,15 +998,16 @@ fn new_tab_pinned_and_active_tab_revealed() {
     }
 }
 
-/// Ab 1150 px Breite sind Name und Schließen-Symbol des aktiven Tabs ganz zu sehen (1 bis 9
-/// Tabs, geändert und ungeändert). Bei 1140 px gilt das für ungeänderte Tabs; bei einem
-/// geänderten aktiven Tab ragt das Schließen-Symbol je nach Breite der Tabnummer bis etwa 0,6 px
-/// hinaus (4, 7, 8, 9 Tabs; gemessen, festgehalten). Bei 1130 px (Leiste 130,75 px) ragt es bei
-/// einem geänderten Tab und 2 und mehr Tabs etwa 9,9 px hinaus (gemessen bei 2 und 5 Tabs).
+/// Ab 1189 px Breite (vor dem Menü „Hilfe“: ab 1150 px, [`MID_WIDE`]) sind Name und
+/// Schließen-Symbol des aktiven Tabs ganz zu sehen (1 bis 9 Tabs, geändert und ungeändert). Bei
+/// 1179 px gilt das für ungeänderte Tabs; bei einem geänderten aktiven Tab ragt das
+/// Schließen-Symbol je nach Breite der Tabnummer bis etwa 0,6 px hinaus (4, 8, 9 Tabs; gemessen,
+/// festgehalten). Bei 1169 px (Leiste 130,34 px) ragt es bei einem geänderten Tab und 2 und mehr
+/// Tabs etwa 9,9 px hinaus (gemessen bei 2 und 5 Tabs).
 #[test]
-fn active_tab_fully_visible_from_1150() {
-    for width in [1130.0, 1140.0, 1150.0, 1200.0, 1400.0] {
-        let counts: Vec<usize> = if width == 1130.0 {
+fn active_tab_fully_visible_from_1189() {
+    for width in [1169.0, 1179.0, 1189.0, 1239.0, 1400.0] {
+        let counts: Vec<usize> = if width == 1169.0 {
             vec![1, 2, 5]
         } else {
             (1..=9).collect()
@@ -1007,11 +1025,11 @@ fn active_tab_fully_visible_from_1150() {
                     // Gemessen 24,25 px (Innenabstände beider Symbole und ein Abstand).
                     assert!((gap - 24.25).abs() < 1.0, "{what}: Abstand × → Neu {gap}");
                 }
-                if width == 1130.0 && dirty && n > 1 {
+                if width == 1169.0 && dirty && n > 1 {
                     assert!(s.name_shown(), "{what}: Name");
                     let h = h.expect("×");
                     assert!((h - 9.9).abs() < 1.0, "{what}: × ragt {h}");
-                } else if width == 1140.0 && dirty && [4, 7, 8, 9].contains(&n) {
+                } else if width == 1179.0 && dirty && [4, 8, 9].contains(&n) {
                     assert!(s.name_shown(), "{what}: Name");
                     let h = h.expect("×");
                     assert!(h > 0.0 && h < 0.6, "{what}: × ragt {h}");
@@ -1027,11 +1045,11 @@ fn active_tab_fully_visible_from_1150() {
     }
 }
 
-/// Bei 1100 × 700 schließt Strg+W weiter den aktiven Tab (auch wenn sein Schließen-Symbol erst nach
+/// Bei 1139 × 700 schließt Strg+W weiter den aktiven Tab (auch wenn sein Schließen-Symbol erst nach
 /// Rollen zu sehen ist).
 #[test]
-fn ctrl_w_closes_the_active_tab_at_1100() {
-    let mut rig = Rig::with(tabs_ws(2, false), MID, true, true);
+fn ctrl_w_closes_the_active_tab_at_1139() {
+    let mut rig = Rig::with(tabs_ws(2, false), MID_WIDE, true, true);
     let s = strip(&mut rig);
     assert!(
         s.close_hidden().is_none_or(|h| h > 0.0),

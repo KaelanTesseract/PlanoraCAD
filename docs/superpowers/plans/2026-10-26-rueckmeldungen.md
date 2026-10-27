@@ -58,7 +58,7 @@
   - `config_disables_blank_issues_and_links_both_pages` (beide verlinkten Dateien existieren im Repo)
   - `ids_are_url_safe` (nur `a-z`, `-`)
 - [ ] **Step 2:** `cargo test -p planora-app --test issue_templates` → FAIL (Dateien fehlen).
-- [ ] **Step 3: Dateien schreiben.** Anleitung `so-meldest-du-etwas.md` in einfacher Sprache, Du-Form: mit Konto (aus der App: Hilfe → Rückmeldung …; oder direkt auf GitHub), ohne Konto (Platzhalter-Abschnitt „kommt mit Etappe 4“, wird dort durch den Mail-Weg ersetzt), was an wen geht (öffentlich sichtbares Issue), wie Bilder angehängt werden (Datei ins Feld ziehen), wie 👍 wirkt. `haeufige-probleme.md`: Windows-Warnung bei unsignierter Datei (SmartScreen: „Weitere Informationen → Trotzdem ausführen“), Grafiktreiber aktualisieren, Antivirus hält die Datei fest, Programm liegt unter „Programme“ und kann sich nicht aktualisieren (aus README/`docs/superpowers/offene-punkte.md` übernehmen, nichts erfinden). README-Verweis eine Zeile.
+- [ ] **Step 3: Dateien schreiben.** Anleitung `so-meldest-du-etwas.md` in einfacher Sprache, Du-Form: mit Konto (aus der App: Hilfe → Rückmeldung …; oder direkt auf GitHub), ohne Konto (Platzhalter-Abschnitt „kommt mit Etappe 4“, wird dort durch das Webformular ersetzt; Mail nur als Notweg), was an wen geht (öffentlich sichtbares Issue), wie Bilder angehängt werden (Datei ins Feld ziehen), wie 👍 wirkt. `haeufige-probleme.md`: Windows-Warnung bei unsignierter Datei (SmartScreen: „Weitere Informationen → Trotzdem ausführen“), Grafiktreiber aktualisieren, Antivirus hält die Datei fest, Programm liegt unter „Programme“ und kann sich nicht aktualisieren (aus README/`docs/superpowers/offene-punkte.md` übernehmen, nichts erfinden). README-Verweis eine Zeile.
 - [ ] **Step 4:** `cargo test -p planora-app --test issue_templates` → PASS. YAML mit einem echten Parser prüfen: `wsl -d Ubuntu -u root -- su - ci -c "cd ~/PlanoraCAD && python3 -c 'import sys,yaml; [yaml.safe_load(open(f)) for f in sys.argv[1:]]' .github/ISSUE_TEMPLATE/*.yml"` → keine Ausgabe, Exit 0 (fehlt PyYAML: anhalten, Controller fragen, nichts installieren). `powershell -File tools\labels.ps1 -Probelauf` → sieben `gh label create`-Zeilen, kein Netz.
 - [ ] **Step 5: Commit** `docs(rueckmeldung): Issue-Formulare, Anleitung, häufige Probleme, Label-Skript`.
 
@@ -257,27 +257,27 @@
 - [ ] Zwei Instanzen gleichzeitig: die zweite meldet nichts.
 - [ ] 1920 × 1080 Hell/Dunkel; 800 × 600 kein Absturz.
 
-## Etappe 4: Weg ohne GitHub-Konto
+## Etappe 4: Weg ohne GitHub-Konto (vorgezogen: nach Task 8, vor Etappe 3)
 
-### Task 13: Mail-Weg und Datenschutztext
+Reihenfolge geändert: Etappe 4 wird gleich nach Task 8 gebaut, weil ein externer Tester die App bekommt. Weg ohne Konto ist das Webformular auf dennis-guse.de, die Mail ist nur Notweg (Vorgabe: `.superpowers/sdd/2026-10-26-rueckmeldungen/webformular-vorgabe.md`).
+
+### Task 13: Webformular-Knopf, Notweg-Zeile und Datenschutztext
 
 **Files:**
-- Modify: `crates/planora-app/src/feedback.rs`, `crates/planora-app/src/feedback_dialog.rs`, `README.md` (neuer Abschnitt „Rückmeldungen und Datenschutz“ neben „Updates und Versionen“, gegenseitige Verweise), `docs/so-meldest-du-etwas.md` (Abschnitt „Ohne GitHub-Konto“ und Datenschutzhinweis), `CHANGELOG.md`
-- Test: `crates/planora-app/tests/feedback_mail.rs`
+- Modify: `crates/planora-app/src/feedback.rs`, `crates/planora-app/src/feedback_dialog.rs`, `README.md` (Abschnitt „Rückmeldungen und Datenschutz“ neben „Updates und Versionen“), `docs/so-meldest-du-etwas.md` (Abschnitt „Ohne GitHub-Konto“ und Datenschutzhinweis), `CHANGELOG.md`
+- Test: `crates/planora-app/tests/feedback.rs`, `crates/planora-app/tests/feedback_dialog.rs`
 
 **Interfaces (Produces):**
-- `pub const MAIL_TO: &str = "info@dennis-guse.de";` Tally und jeder andere Formular-Dienst sind abgelehnt: keine Formular-Adresse, keine Konstante dafür, kein `tally_url`.
-- `pub fn mail_url(report: &Report, with_file: bool) -> Built` (`mailto:info@dennis-guse.de?subject=…&body=…`, gleiche Kürzungsregeln und Grenze 2000 wie `issue_url`; `with_file` hängt den Ordner-Hinweis an).
-- Fenster: Knopf `MAIL_BUTTON = "Per E-Mail senden"` öffnet `mail_url` (Ordner mit Bild/Protokoll/`rueckmeldung.txt` wird wie beim GitHub-Weg angelegt und geöffnet); darunter immer `MAIL_LINE` als `pub fn mail_line() -> String` („Oder per Mail an info@dennis-guse.de“) mit Knopf „Adresse kopieren“ und dem Hinweis `MAIL_ATTACH_HINT = "Bilder und Dateien hängst du in der Mail selbst an. Sie liegen im geöffneten Ordner."`.
-- Datenschutztext (README und `docs/so-meldest-du-etwas.md`), nur sachliche Angaben: wer die Meldung bekommt (GitHub-Issue öffentlich sichtbar; Mail nur Dennis), wofür (Fehler nachstellen, Wünsche sortieren), Löschung auf Wunsch, Mailadresse freiwillig. Verantwortliche Stelle: „Dennis Guse, Fischbeker Str. 2a, 23869 Elmenhorst“ (kein Platzhalter mehr). Kein erfundener Rechtstext; „keine Rechtsberatung“ steht nicht im Anwendertext (nur in der Spec).
+- `pub const WEBFORM_URL`, `WEBFORM_URL_EN`; `pub fn webform_url(report: &Report, with_file: bool) -> Built` (gleiche Bereinigung, Kodierung und Kürzung wie `issue_url`, gemeinsamer Code; Parameter laut Vorgabe; Grenze 2000).
+- Fenster: `WEBFORM_BUTTON = "Ohne GitHub-Konto senden"`, `WEBFORM_HINT`, `MAIL_FALLBACK = "Klappt beides nicht? Schreib an info@dennis-guse.de."` (nach dem Senden).
+- Datenschutztext wie in der Spec (Verantwortliche Stelle: „Dennis Guse, Fischbeker Str. 2a, 23869 Elmenhorst“; kein erfundener Rechtstext; „keine Rechtsberatung“ nicht im Anwendertext).
 
-- [ ] **Step 1: Tests:** `mail_url_is_mailto_with_subject_and_body_under_2000` (Umlaute, Zeilenumbrüche, lange Beschreibung), `mail_button_opens_the_mail_url_and_writes_the_folder`, `mail_address_can_be_copied`, `no_form_service_is_referenced` (kein „tally“, keine Formular-Adresse in `src/` und Anleitungen, Groß/Klein egal), `readme_and_guide_have_privacy_section_with_responsible_party` (Text enthält „Dennis Guse, Fischbeker Str. 2a, 23869 Elmenhorst“ und `MAIL_TO`, nicht „Rechtsberatung“).
-- [ ] **Step 2:** FAIL. **Step 3:** Implementieren. **Step 4:** `cargo test -p planora-app --test feedback_mail --test feedback_dialog`, fmt, clippy.
-- [ ] **Step 5: Commit** `feat(rueckmeldung): Weg ohne GitHub-Konto per E-Mail`.
+- [x] **Teil A (gebaut):** `webform_url`, Knopf, Notweg-Zeile und Tests (Umlaute, `%0A`, `&`, `#`, `+`, art/bereich, Länge unter 2000, Reihenfolge beim Kürzen, Sperre, Ordner bei Bedarf). Commit `feat(rueckmeldung): Knopf „Ohne GitHub-Konto senden“`.
+- [ ] **Teil B (offen):** Datenschutzabschnitt in README und Anleitung, `CHANGELOG.md`; Tests `readme_and_guide_have_privacy_section_with_responsible_party` und `no_form_service_is_referenced` (kein „tally“ u. a.). Commit `docs(rueckmeldung): Datenschutzabschnitt`.
 
 ### Task 14: Sichtprüfung Etappe 4
 
-- [ ] 1920 × 1080: „Per E-Mail senden“ öffnet das Mailprogramm mit Betreff und Text (nicht absenden); „Adresse kopieren“ klappt; der Ordner mit Bild/Protokoll öffnet sich.
+- [ ] 1920 × 1080: „Ohne GitHub-Konto senden“ öffnet das Webformular im Browser, vorausgefüllt (nicht absenden); Umlaute, Zeilenumbrüche, `&` und `#` kommen richtig an; bei langem Text öffnet sich der Ordner mit `rueckmeldung.txt` und der Hinweis steht im Feld.
 - [ ] Dennis liest den Datenschutzabschnitt in README und Anleitung (Name und Anschrift stehen drin, keine Platzhalter).
 
 ## Etappe 5: Wünsche gewichten und Übersicht
@@ -340,3 +340,21 @@
 ## Abweichungen
 
 Was vom Plan abgewichen ist und warum.
+
+- Zurückgestellt (Etappe 2): „Adresse anzeigen“ und „Text kopieren“ zeigen vor dem Senden die GitHub-Adresse, auch wenn später das Webformular gewählt wird.
+- Zurückgestellt (Etappe 2): Laufen zwei Instanzen gleichzeitig, kann die Rotation eine alte Protokolldatei früher verlieren (Task 18).
+- Gewollt: Ein anderes Fenster zu öffnen schließt die Rückmeldung und leert den Text.
+- Zurückgestellt (Etappe 2): Das Bild vom Fenster hat keine Vorschau als Bild, nur eine Zeile mit der Größe.
+- Vorgezogen: Das Webformular auf dennis-guse.de kam als Etappe 4 direkt nach Task 8 (vor Etappe 3), statt „nur per Mail“. Die Mail an info@dennis-guse.de bleibt Notweg. Der Knopf „Ohne GitHub-Konto senden“ füllt das Formular über Adresse und gleiche Feldnamen aus; Dateien hängt der Anwender im Formular an.
+- Reihenfolge: Etappe 4 vor Etappe 3, damit der Tester sie im ersten Release hat. Das Webformular wurde nach den Rückmeldungen am Webformular um ZIP-Dateien und Größengrenzen (25 MB je Datei, 30 MB zusammen) ergänzt.
+- Task 8 hat der Controller selbst gebaut, nachdem drei Agenten ohne Änderung hängen blieben. Dabei: Das Bild bleibt bis zum Senden im Speicher und wird erst beim Senden in den Ordner geschrieben; die Aktion „Bild aufnehmen“ entfiel, weil das Fenster den Ablauf selbst startet; der App-Test liegt in `tests/feedback_dialog.rs`.
+- Task 7: Das Menü „Hilfe“ macht die Menüleiste 39 Pixel breiter, die Umschaltschwellen für schmale Fenster liegen dadurch bei 1121 und 1189 Pixeln. Die Schwellen in 13 Tests wurden angepasst; Dennis hat das angenommen (Vorgabe 1920 × 1080).
+- Nach der Sichtprüfung von Etappe 2 geändert: der Eingeklappt-Zustand der Abschnitte wird nicht mehr über die Sitzung hinaus mitgenommen, die Zeit der Schritte steht in Ortszeit, die Beschreibungstexte im hellen Aussehen sind kontrastreicher, und das Protokoll unterscheidet den Weg (GitHub oder Webformular).
+- Feldfarben: Im hellen Aussehen waren Eingaben in Feldern grau, weil das Design die Schriftfarbe für Beschriftungen grau setzt und Felder sie erbten. Alle Felder laufen jetzt über die Hilfen in `theme.rs` (aktiv und inaktiv Textfarbe stark); ein Wächtertest hält das fest. Nicht einzeln geprüft, sondern über die Gesamtprüfung von Etappe 3.
+- Nacharbeit nach der Sichtprüfung von Etappe 3: Der Bericht entsteht schon beim Schreiben ohne Benutzernamen; das Projekt wird als `.pcad.zip` statt als Ordner abgelegt (eigener „stored“-ZIP-Schreiber mit `crc32fast`, keine neue Bibliothek), weil ein Ordner im Formular nicht hochladbar ist und `.autosave.json` enthält; gesendete Berichte gelten als erledigt; Kleinkram (Knopf „Bericht ansehen“, Schritt „Speichern“).
+- Fehlerablauf: Der Backtrace wird mit `line-tables-only` gebaut. Weil das in der Release-Datei keine Zeilen liefert, enthält der Bericht Rücksprungadressen als Modul-Offsets, die `.pdb` hängt als vierte Release-Datei am Release (nicht vom Updater geladen), und `tools/symbolize.ps1` löst sie auf. Statt `llvm-symbolizer` nutzt es `dbghelp.dll` von Windows (Beleg: Auflösung auf `app.rs:1223`).
+- Nebenbefunde aus der Sichtprüfung von Etappe 3: Das Fenster „Projekte“ zeichnete sich erst nach einer Mausbewegung neu (jetzt `Job::spawn_notify`); das helle Design wurde nicht gemerkt (jetzt `Config.theme`, über alle Schreibwege).
+- Der Abschnitt „Hilfe“ der Einstellungen wurde nach „Updates“ verschoben (der Schalter „Ausführliches Protokoll“ steht dort); die Tabelle der Tastenkürzel behält ihre 300 Pixel bei 1080p.
+- Task 18 hat die zurückgestellten Punkte der Rotation übernommen: Eine fehlgeschlagene Umbenennung verliert keine älteren Dateien mehr und die Rotation pausiert nach einem Fehler. Zwei gleichzeitige Instanzen bleiben ein Randfall.
+- Task 16: Die Projekttafel wurde mit `gh` angelegt (öffentlich, mit dem Repository verknüpft). Spalten und die Auto-Aufnahme richtete Dennis im Browser ein; das lässt sich nicht per `gh` erledigen.
+- Task 19: `tools/changelog-section.ps1 -Footer` hängt den Hinweis „So meldest du etwas: …“ an; `release.yml` ruft es so auf. Die vollständige Liste der zurückgestellten Punkte steht in `docs/superpowers/offene-punkte.md`, Abschnitt „Rückmeldungen“.

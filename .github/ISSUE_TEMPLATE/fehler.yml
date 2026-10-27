@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Danke, dass du etwas meldest. Zwei Sätze reichen. Die Felder "Version" bis "Bild" füllt eine spätere Programmversion aus. Bis dahin kannst du sie leer lassen oder selbst ausfüllen.
+        Danke, dass du etwas meldest. Zwei Sätze reichen. Alles, was "Füllt das Programm aus." heißt, kannst du leer lassen, wenn du nicht aus dem Programm kommst.
         Bitte schreib keine Passwörter und keine privaten Angaben in die Meldung. Diese Seite ist öffentlich.
   - type: textarea
     id: ziel
@@ -45,27 +45,27 @@ body:
     id: version
     attributes:
       label: Version
-      description: Wird später vom Programm ausgefüllt; sonst bitte selbst eintragen oder leer lassen.
+      description: Füllt das Programm aus.
   - type: textarea
     id: system
     attributes:
       label: System
-      description: Wird später vom Programm ausgefüllt; sonst bitte selbst eintragen oder leer lassen.
+      description: Füllt das Programm aus.
   - type: textarea
     id: grafik
     attributes:
       label: Grafikkarte
-      description: Wird später vom Programm ausgefüllt; sonst bitte selbst eintragen oder leer lassen.
+      description: Füllt das Programm aus.
   - type: textarea
     id: schritte
     attributes:
       label: Letzte Schritte
-      description: Wird später vom Programm ausgefüllt; sonst bitte selbst eintragen oder leer lassen.
+      description: Füllt das Programm aus.
   - type: textarea
     id: protokoll
     attributes:
       label: Protokoll
-      description: Wird später vom Programm ausgefüllt; sonst bitte selbst eintragen oder leer lassen.
+      description: Füllt das Programm aus.
   - type: textarea
     id: bild
     attributes:

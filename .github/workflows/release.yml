@@ -57,7 +57,7 @@ jobs:
             }
           }
           $global:LASTEXITCODE = 0
-          ./tools/changelog-section.ps1 -Version $version -OutFile "$env:RUNNER_TEMP/release-notes.md"
+          ./tools/changelog-section.ps1 -Version $version -Footer -OutFile "$env:RUNNER_TEMP/release-notes.md"
           if ($LASTEXITCODE -ne 0) { throw "CHANGELOG.md hat keinen Abschnitt '## $version'." }
           $pre = if ($version -match '-(dev|beta)\.') { 'true' } else { 'false' }
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
@@ -71,7 +71,8 @@ jobs:
       - name: Lizenzen prüfen
         run: cargo install cargo-deny --locked && cargo deny check
 
-      # Ohne zusätzliche Funktionen: "update-test-source" (lokale Update-Quelle) darf nie hinein.
+      # Ohne zusätzliche Funktionen: "update-test-source" (lokale Update-Quelle) und "absturz-test"
+      # (Panik per Tastenkürzel) dürfen nie hinein.
       - name: Programm bauen
         run: cargo build --release --locked -p planora-app
 
@@ -80,6 +81,9 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path dist | Out-Null
           Copy-Item target/release/planora-app.exe dist/planoracad-windows-x64.exe
+          # Symboldatei (Zeilentabellen) für tools/symbolize.ps1: löst die Adressen eines
+          # Absturzberichts zu Datei und Zeile auf. Die Update-Funktion lädt sie nie.
+          Copy-Item target/release/planora_app.pdb dist/planoracad-windows-x64.pdb
           $hash = (Get-FileHash -Algorithm SHA256 dist/planoracad-windows-x64.exe).Hash.ToLowerInvariant()
           $utf8 = New-Object System.Text.UTF8Encoding($false)
           [System.IO.File]::WriteAllText("$PWD/dist/planoracad-windows-x64.sha256", "$hash  planoracad-windows-x64.exe`n", $utf8)
@@ -123,6 +127,7 @@ jobs:
             'dist/planoracad-windows-x64.exe',
             'dist/planoracad-windows-x64.sha256',
             'dist/THIRD-PARTY-LICENSES.txt',
+            'dist/planoracad-windows-x64.pdb',
             '--verify-tag',
             '--title', "PlanoraCAD $($env:VERSION)",
             '--notes-file', 'dist/release-notes.md')

@@ -1,5 +1,5 @@
 //! Programmlogo und Dialog „Über PlanoraCAD“: eingebettete Bilder lesbar, Fenstersymbol fällt bei
-//! einem Fehler still weg, Menüeintrag im Menü „Datei“, Inhalt des Dialogs, kleines Zeichen im
+//! einem Fehler still weg, Menüeintrag im Menü „Hilfe“, Inhalt des Dialogs, kleines Zeichen im
 //! oberen Feld (Größe, Lage, Feldbreite bei 800 × 600 und 1100 × 700). Ohne Fenster:
 //! Rohereignisse je Bild gegen einen egui-Kontext.
 
@@ -127,14 +127,14 @@ fn field(c: &egui::Context, name: &str) -> Rect {
         .1
 }
 
-/// Menü „Datei“ öffnen und „Über PlanoraCAD“ wählen; liefert das Bild danach.
+/// Menü „Hilfe“ öffnen und „Über PlanoraCAD“ wählen; liefert das Bild danach.
 fn open_about(c: &egui::Context, app: &mut PlanoraApp, size: Vec2) -> Shot {
     let shot = settle(c, app, size);
-    let datei = shot.rect("Datei").expect("Menü Datei");
-    let shot = click(c, app, size, datei.center());
+    let hilfe = shot.rect(planora_app::app::HELP_MENU).expect("Menü Hilfe");
+    let shot = click(c, app, size, hilfe.center());
     let entry = shot
         .rect(about_dialog::TITLE)
-        .expect("Eintrag im Menü Datei");
+        .expect("Eintrag im Menü Hilfe");
     click(c, app, size, entry.center())
 }
 
@@ -174,7 +174,7 @@ fn unreadable_icon_data_falls_back_without_panic() {
 }
 
 #[test]
-fn datei_menu_opens_the_about_dialog_and_it_closes() {
+fn hilfe_menu_opens_the_about_dialog_and_it_closes() {
     let c = context();
     let mut app = new_app();
     let shot = open_about(&c, &mut app, BIG);
@@ -217,6 +217,21 @@ fn datei_menu_opens_the_about_dialog_and_it_closes() {
     let shot = click(&c, &mut app, BIG, close.center());
     assert!(!app.ws_mut().about_open, "{CLOSE_LABEL} schließt");
     assert!(!shot.has(about_dialog::NAME), "Dialog ist weg");
+}
+
+#[test]
+fn about_shows_system_and_gpu_lines() {
+    let c = context();
+    let mut app = new_app();
+    let shot = open_about(&c, &mut app, BIG);
+    let shot = if shot.has(about_dialog::NAME) {
+        shot
+    } else {
+        settle(&c, &mut app, BIG)
+    };
+    let info = planora_app::build_info::build_info();
+    assert!(shot.has(&info.system_line()), "Systemzeile");
+    assert!(shot.has(&about_dialog::gpu_text(&info)), "Grafikzeile");
 }
 
 #[test]
@@ -349,10 +364,11 @@ fn icon_rule_is_consistent_around_the_threshold() {
 
     // Im Fenster: mit einem und mit mehreren Tabs. Ist das Zeichen da, rollt nichts; ist es
     // nicht da, ist das Feld wie ohne Logo. Mit mehr Tabs liegt die Grenze höher; je Tabzahl
-    // gibt es genau einen Übergang (erst ohne, dann mit Zeichen).
+    // gibt es genau einen Übergang (erst ohne, dann mit Zeichen). Bis 1800: mit dem Menü „Hilfe“
+    // liegt die Grenze bei vier Tabs über 1600.
     for tabs in [1usize, 2, 4] {
         let mut shown = Vec::new();
-        for w in (800..=1600).step_by(25) {
+        for w in (800..=1800).step_by(25) {
             let size = vec2(w as f32, 900.0);
             let c = context();
             let mut app = new_app();
@@ -369,7 +385,7 @@ fn icon_rule_is_consistent_around_the_threshold() {
         }
         let changes = shown.windows(2).filter(|p| p[0] != p[1]).count();
         assert!(!shown[0], "{tabs} Tabs: bei 800 kein Zeichen");
-        assert!(*shown.last().unwrap(), "{tabs} Tabs: bei 1600 ein Zeichen");
+        assert!(*shown.last().unwrap(), "{tabs} Tabs: bei 1800 ein Zeichen");
         assert_eq!(changes, 1, "{tabs} Tabs: ein Übergang: {shown:?}");
     }
 }
@@ -386,14 +402,15 @@ fn top_field_keeps_its_width_rules_with_the_icon() {
         top.width() <= SMALL.x - 2.0 * planora_app::shell::SHELL_INSET + 0.5,
         "{top:?}"
     );
-    let ansicht_right = {
+    // Das letzte Menü ist „Hilfe“.
+    let menu_right = {
         let shot = settle(&c, &mut app, SMALL);
-        shot.rect("Ansicht").unwrap().right()
+        shot.rect(planora_app::app::HELP_MENU).unwrap().right()
     };
     // Menü samt Zeichen und einem Rest für Tabs (mindestens 120 Punkte) passen hinein.
     assert!(
-        ansicht_right + 120.0 <= top.right() + 0.5,
-        "{ansicht_right} {top:?}"
+        menu_right + 120.0 <= top.right() + 0.5,
+        "{menu_right} {top:?}"
     );
     for (name, r) in shell_panels::field_rects(&c) {
         if name != "oben" {

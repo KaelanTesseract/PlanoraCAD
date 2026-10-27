@@ -29,6 +29,16 @@ impl<T: Send + 'static> Job<T> {
         progress: Arc<Progress>,
         work: impl FnOnce(&Progress) -> T + Send + 'static,
     ) -> Job<T> {
+        Job::spawn_notify(progress, || {}, work)
+    }
+
+    /// Wie [`Job::spawn_with`]; `done` läuft im Arbeitsthread, nachdem das Ergebnis abholbereit
+    /// ist (etwa um ein Neuzeichnen anzufordern).
+    pub fn spawn_notify(
+        progress: Arc<Progress>,
+        done: impl FnOnce() + Send + 'static,
+        work: impl FnOnce(&Progress) -> T + Send + 'static,
+    ) -> Job<T> {
         let (tx, rx) = mpsc::channel();
         let shared = Arc::clone(&progress);
         // Lässt sich kein Thread starten, ist der Sender schon fort: `poll` meldet `Lost`.
@@ -36,6 +46,7 @@ impl<T: Send + 'static> Job<T> {
             .name("planora-austausch".into())
             .spawn(move || {
                 let _ = tx.send(work(&shared));
+                done();
             });
         Job { rx, progress }
     }

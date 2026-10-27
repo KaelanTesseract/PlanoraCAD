@@ -10,11 +10,16 @@
 .EXAMPLE
   powershell -File tools\changelog-section.ps1 -Version 0.2.0-dev.1
   powershell -File tools\changelog-section.ps1 -Version 0.2.0-dev.1 -OutFile notes.md
+
+.EXAMPLE
+  powershell -File tools\changelog-section.ps1 -Version 0.2.0-dev.1 -Footer
+  Haengt eine Leerzeile und den Hinweis "So meldest du etwas: ..." an (fuer die Beschreibung des Releases).
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Version,
     [string]$Path = '',
-    [string]$OutFile = ''
+    [string]$OutFile = '',
+    [switch]$Footer
 )
 
 $ErrorActionPreference = 'Stop'
@@ -54,6 +59,10 @@ $body = ($collected -join "`n").Trim()
 if ($body.Length -eq 0) {
     [Console]::Error.WriteLine("Der Abschnitt '## $Version' in CHANGELOG.md ist leer.")
     exit 1
+}
+
+if ($Footer) {
+    $body = $body + "`n`nSo meldest du etwas: https://github.com/KaelanTesseract/PlanoraCAD/blob/master/docs/so-meldest-du-etwas.md"
 }
 
 if ($OutFile -ne '') {

@@ -2592,6 +2592,7 @@ name = "planora-app"
 version = "0.2.0-dev.1"
 dependencies = [
  "chrono",
+ "crc32fast",
  "eframe",
  "egui",
  "embed-resource",
@@ -2610,6 +2611,7 @@ dependencies = [
  "png",
  "serde_json",
  "skrifa",
+ "windows-sys 0.61.2",
  "winit",
 ]
 

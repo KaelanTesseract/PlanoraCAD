@@ -186,8 +186,9 @@ pub fn build_with(
     limits: &BuildLimits,
     after_step: &mut dyn FnMut(),
 ) -> Thumb {
+    // Abgefangen: kein Absturzbericht (`crash::expected_panics`).
     let run = catch_unwind(AssertUnwindSafe(|| {
-        build_unguarded(doc_dir, key, limits, after_step)
+        crate::crash::expected_panics(|| build_unguarded(doc_dir, key, limits, after_step))
     }));
     run.unwrap_or_else(|_| {
         Thumb::Failed("Beim Erstellen der Vorschau ist ein Fehler aufgetreten.".into())

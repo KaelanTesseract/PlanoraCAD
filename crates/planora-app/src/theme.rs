@@ -718,7 +718,8 @@ pub fn text_field_enabled(
 }
 
 /// Feld im Graphit-Stil: Zahlenfelder (`DragValue`) 26 px hoch mit mittigem Wert, vertiefte
-/// Fläche `bg_inset`, 2-px-Fokusring in Akzentfarbe. Textfelder über [`text_field`], das die
+/// Fläche `bg_inset`, 2-px-Fokusring in Akzentfarbe, Wert bzw. eingegebener Text in
+/// `text_primary` (Hinweistext schwach, gesperrte Felder gedämpft). Textfelder über [`text_field`], das die
 /// Höhe von 26 px am Feld selbst setzt (egui misst Textfelder nicht an `interact_size`).
 pub fn field(ui: &mut egui::Ui, widget: impl egui::Widget) -> egui::Response {
     field_enabled(ui, true, widget)
@@ -726,14 +727,21 @@ pub fn field(ui: &mut egui::Ui, widget: impl egui::Widget) -> egui::Response {
 
 fn field_enabled(ui: &mut egui::Ui, enabled: bool, widget: impl egui::Widget) -> egui::Response {
     let dark = ui.visuals().dark_mode;
-    let inset = palette(dark).bg_inset;
+    let p = palette(dark);
     // Stil nur für dieses Feld ändern, ohne eigenen Bereich (der bräche in umbrechenden Zeilen
     // nicht um).
     let saved = ui.style().clone();
     let s = ui.style_mut();
     s.spacing.interact_size.y = FIELD_H;
-    s.visuals.widgets.inactive.weak_bg_fill = inset;
-    s.visuals.extreme_bg_color = inset;
+    s.visuals.widgets.inactive.weak_bg_fill = p.bg_inset;
+    s.visuals.extreme_bg_color = p.bg_inset;
+    if enabled {
+        // Eingegebener Text und Werte in `text_primary`: egui malt Textfelder und Zahlenfelder in
+        // Ruhe in der Schriftfarbe `inactive`, die das Thema grau (`text_secondary`) setzt – im
+        // hellen Thema zu blass auf der Feldfläche. Hinweistext bleibt schwach (egui nimmt dafür
+        // `weak_text_color`, ausdrücklich `text_tertiary`); gesperrte Felder bleiben gedämpft.
+        s.visuals.widgets.inactive.fg_stroke.color = p.text_primary;
+    }
     let response = ui.add_enabled(enabled, widget);
     ui.set_style(saved);
     focus_ring(ui, &response);

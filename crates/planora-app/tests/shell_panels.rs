@@ -250,6 +250,10 @@ fn near(a: f32, b: f32) -> bool {
     (a - b).abs() < 0.5
 }
 
+/// Unter dieser Fensterbreite passt das obere Feld (Menü bis „Hilfe“, Knöpfe, ein Tab) nicht
+/// zwischen die Spalten; sie beginnen dann unter ihm (gemessen: ab 1120,7 px passt es).
+const COLUMNS_BELOW_TOP_UNDER: f32 = 1121.0;
+
 fn fields_of(shot: &Shot, dark: bool, size: Vec2) -> Fields {
     let all = shot.fields(dark);
     let pick = |what: &str, f: &dyn Fn(&Rect) -> bool| -> Rect {
@@ -258,6 +262,15 @@ fn fields_of(shot: &Shot, dark: bool, size: Vec2) -> Fields {
         *hits[0]
     };
     let w = size.x;
+    // Die Spalten beginnen oben; nur in Fenstern schmaler als [`COLUMNS_BELOW_TOP_UNDER`] (dort
+    // passt das obere Feld nicht zwischen sie) beginnen sie unter dem oberen Feld.
+    let col_top = |y: f32| {
+        if w < COLUMNS_BELOW_TOP_UNDER {
+            near(y, SHELL_INSET + shell::TOP_H + shell::GAP)
+        } else {
+            near(y, SHELL_INSET)
+        }
+    };
     Fields {
         top: pick("oberes Feld", &|r| {
             near(r.top(), SHELL_INSET) && near(r.center().x, w / 2.0)
@@ -265,10 +278,13 @@ fn fields_of(shot: &Shot, dark: bool, size: Vec2) -> Fields {
         // Im Skizzenmodus steht links die Werkzeugleiste.
         left: pick("linkes Feld", &|r| {
             near(r.left(), SHELL_INSET)
-                && (near(r.top(), SHELL_INSET) || near(r.width(), shell::STRIP_W))
+                && r.width() <= theme::PANEL_WIDTH + 0.5
+                && (col_top(r.top()) || near(r.width(), shell::STRIP_W))
         }),
         right: pick("rechtes Feld", &|r| {
-            near(r.right(), w - SHELL_INSET) && near(r.top(), SHELL_INSET)
+            near(r.right(), w - SHELL_INSET)
+                && r.width() <= theme::PANEL_WIDTH + 0.5
+                && col_top(r.top())
         }),
         status: pick("Statusfeld", &|r| {
             near(r.left(), SHELL_INSET) && near(r.bottom(), size.y - SHELL_INSET)
@@ -503,9 +519,10 @@ fn read_only_banner_text_and_colour() {
         let f = fields_of(&shot, dark, size);
         let all = shot.fields(dark);
         assert_eq!(all.len(), 7, "mit Hinweisfeld und Verlaufsleiste: {all:?}");
+        // Unter dem oberen Feld (stehen die Spalten darunter, beginnen sie auf gleicher Höhe).
         let banner = *all
             .iter()
-            .find(|r| near(r.top(), f.top.bottom() + shell::GAP))
+            .find(|r| near(r.top(), f.top.bottom() + shell::GAP) && **r != f.left && **r != f.right)
             .expect("Hinweisfeld unter dem oberen Feld");
         // Ganze Breite zwischen den Spalten.
         assert!(

@@ -256,6 +256,8 @@ pub struct ProjectsWindow {
     content_seen: Option<u64>,
     /// Pause nach jedem gelesenen Dokument (Tests: langsames Lesen).
     scan_delay: Duration,
+    /// Weckt die Oberfläche, wenn das Lesen fertig ist (gesetzt in `show`).
+    repaint: Option<egui::Context>,
     /// Miniatur-Arbeiter (beim ersten Bedarf gestartet).
     worker: Option<ThumbWorker>,
     /// Hell/Dunkel der Miniaturen (aktiver Tab).
@@ -486,15 +488,26 @@ impl ProjectsWindow {
             .is_some_and(|j| (j.revision, j.generation) == current);
         if self.ui.is_stale(ws) && !running {
             let delay = self.scan_delay;
+            let wake = self.repaint.clone();
             // ein überholtes Lesen bricht beim Fallenlassen ab
             self.job = Some(ScanJob {
-                job: Job::spawn(move |progress| {
-                    scan_library_with(&root, progress, |_| {
-                        if !delay.is_zero() {
-                            std::thread::sleep(delay);
+                job: Job::spawn_notify(
+                    Default::default(),
+                    // erst nach dem Senden des Ergebnisses; egui zeichnet sonst bis zur nächsten
+                    // Eingabe nicht neu und das „Wird gelesen“ bliebe stehen
+                    move || {
+                        if let Some(ctx) = wake {
+                            ctx.request_repaint();
                         }
-                    })
-                }),
+                    },
+                    move |progress| {
+                        scan_library_with(&root, progress, |_| {
+                            if !delay.is_zero() {
+                                std::thread::sleep(delay);
+                            }
+                        })
+                    },
+                ),
                 revision: current.0,
                 generation: current.1,
             });
@@ -864,6 +877,7 @@ impl ProjectsWindow {
             self.dark = dark;
             self.rebuild_sources();
         }
+        self.repaint = Some(ctx.clone());
         // vor dem Zeichnen: Klicks dieses Bilds gehören zu den Kacheln dieses Stands
         Self::update(self, ws);
         self.collect();

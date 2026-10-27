@@ -83,13 +83,51 @@ impl LastCommand {
     }
 }
 
-/// Führt `a` aus wie Menüeintrag oder Knopf. „Projekte“ und „Tastenkürzel anzeigen“ öffnen ein
-/// Fenster der App und kommen als [`MenuRequest`] zurück. Die Befehle des Modells tun in alten
-/// Versionen nichts (dort sind Menü und Befehlsfeld gesperrt); die Übersicht der Tastenkürzel
-/// ändert nichts und öffnet auch dort.
+/// Führt `a` aus wie Menüeintrag oder Knopf. „Projekte“, „Tastenkürzel anzeigen“ und
+/// „Rückmeldung geben“ öffnen ein Fenster der App und kommen als [`MenuRequest`] zurück. Die
+/// Befehle des Modells tun in alten Versionen nichts (dort sind Menü und Befehlsfeld gesperrt);
+/// die Übersicht der Tastenkürzel ändert nichts und öffnet auch dort.
+///
+/// Im ausführlichen Protokoll ([`crate::diag::detail`]) steht danach eine Zeile mit dem festen
+/// Namen der Aktion und der Dauer (`Befehl Rückgängig: 3 ms`), nie Projektinhalt.
 pub fn run_action(ws: &mut Workspace, a: Action) -> MenuRequest {
+    timed(a.label(), || run_action_inner(ws, a))
+}
+
+/// Führt `f` aus und schreibt danach die Detailzeile `Befehl <name>: <n> ms` ins ausführliche
+/// Protokoll. Die gemeinsame Stelle für Tasten, Menü und Werkzeugleiste: jede Aktion ruft sie
+/// genau einmal auf (Aktionen der Tastenbelegung über [`run_action`], die übrigen Einträge
+/// direkt). `name` ist ein fester Aktionsname, nie Projektinhalt.
+pub fn timed<R>(name: &str, f: impl FnOnce() -> R) -> R {
+    let start = std::time::Instant::now();
+    let result = f();
+    crate::diag::detail(&format!(
+        "Befehl {name}: {}",
+        duration_text(start.elapsed())
+    ));
+    result
+}
+
+/// Dauer für das Protokoll: ganze Millisekunden, unter einer Millisekunde „<1 ms“.
+pub fn duration_text(d: std::time::Duration) -> String {
+    match d.as_millis() {
+        0 => "<1 ms".into(),
+        n => format!("{n} ms"),
+    }
+}
+
+fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
     if a.area() == Area::Model && a != Action::ShowShortcuts && ws.active_tab().read_only {
         return MenuRequest::None;
+    }
+    // Das Öffnen der Rückmeldung ist kein Arbeitsschritt (das Menü legt auch keinen ab).
+    if a == Action::FeedbackOpen {
+        return MenuRequest::Feedback;
+    }
+    // „Speichern“ wird erst ein Schritt, wenn wirklich gespeichert wurde (`Workspace`); ein
+    // abgebrochenes „Speichern unter“ soll in den letzten Schritten nicht stehen.
+    if a != Action::Save {
+        crate::diag::step(a.label());
     }
     match a {
         Action::ShowShortcuts | Action::SketchShowShortcuts => return MenuRequest::Shortcuts,
@@ -97,6 +135,7 @@ pub fn run_action(ws: &mut Workspace, a: Action) -> MenuRequest {
             ws.new_tab();
         }
         Action::Projects => return MenuRequest::Projects,
+        Action::FeedbackOpen => return MenuRequest::Feedback,
         Action::Save => app::begin_save(ws, false),
         Action::Close => {
             let i = ws.active;
