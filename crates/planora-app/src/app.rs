@@ -1041,6 +1041,11 @@ impl PlanoraApp {
                 &mut self.feedback,
                 info,
             );
+            // Der Hinweis geht erst zu, wenn die Rückmeldung wirklich offen ist (etwa nicht,
+            // solange ein Export schreibt).
+            if self.feedback.open {
+                self.after_update = None;
+            }
         }
     }
 

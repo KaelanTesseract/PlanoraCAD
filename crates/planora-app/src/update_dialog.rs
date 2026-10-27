@@ -428,9 +428,10 @@ pub enum AfterUpdateAction {
 }
 
 /// Hinweis „Aktualisiert auf Version X“ nach einem Update, einmal: mit den Patchnotes dieser
-/// Version, sonst nur dem Verweis auf GitHub, dazu die laufende Version und der Knopf
-/// „Rückmeldung geben“. „OK“, ✕ und Esc schließen ihn (`after` wird leer); „Rückmeldung geben“
-/// schließt ihn auch und liefert [`AfterUpdateAction::Feedback`].
+/// Version, sonst nur dem Verweis auf GitHub, dazu der Knopf „Rückmeldung geben“ (die Version
+/// steht im Titel). „OK“, ✕ und Esc schließen ihn (`after` wird leer); „Rückmeldung geben“
+/// liefert [`AfterUpdateAction::Feedback`] und lässt ihn offen: der Aufrufer schließt ihn erst,
+/// wenn sich das Fenster „Rückmeldung“ wirklich geöffnet hat.
 pub fn show_after_update(
     ctx: &egui::Context,
     after: &mut Option<AfterUpdate>,
@@ -468,10 +469,6 @@ pub fn show_after_update(
                 );
             }
             ui.add_space(theme::SPACE_3);
-            ui.label(format!(
-                "Laufende Version: {}",
-                crate::build_info::build_info().version_line()
-            ));
             ui.label(
                 egui::RichText::new(AFTER_UPDATE_FEEDBACK)
                     .color(theme::palette(dark).text_secondary),
@@ -490,7 +487,7 @@ pub fn show_after_update(
     );
     let esc = !crate::viewport::typing(ctx)
         && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
-    if ok || feedback || !open || esc {
+    if ok || !open || esc {
         *after = None;
     }
     feedback.then_some(AfterUpdateAction::Feedback)
