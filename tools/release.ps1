@@ -3,7 +3,7 @@
   Hilfe fuer Dennis beim Veroeffentlichen. Setzt KEINEN Tag, pusht nichts, loest nichts auf GitHub aus.
 
 .DESCRIPTION
-  Ablauf (siehe README, Abschnitt "Updates und Versionen"):
+  Ablauf (siehe docs/funktionen.md, Abschnitt "Updates und Versionen"):
 
     1. Neue Version setzen:     tools\release.ps1 -NewVersion 0.2.0-dev.2
        (aendert workspace.package.version in Cargo.toml und Cargo.lock; danach CHANGELOG.md
