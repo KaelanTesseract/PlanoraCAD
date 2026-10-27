@@ -36,6 +36,7 @@ pub mod history;
 pub mod history_bar;
 pub mod icons;
 pub mod import_dialog;
+pub mod install_mode;
 pub mod jobs;
 pub mod keymap;
 pub mod local_time;

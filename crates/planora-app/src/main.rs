@@ -14,23 +14,18 @@ fn main() -> eframe::Result {
         run = planora_app::crash::start_run(data_dir, std::process::id());
     }
     let (marker, finding) = run;
-    // Von der alten Version nach dem Austausch gestartet (siehe `update_install`).
-    // `args_os`: ein Argument, das kein gültiges Unicode ist (etwa ein Dateipfad), bricht nicht ab.
-    let after_update = std::env::args_os()
-        .skip(1)
-        .any(|a| a == planora_app::update_install::AFTER_UPDATE_ARG);
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("PlanoraCAD")
         .with_inner_size([1400.0, 900.0])
         // Darunter überlappen sich die schwebenden Felder.
         .with_min_inner_size([800.0, 600.0]);
     // Nach einem Update öffnet das Fenster in Größe, Lage und Zustand der alten Version (sie hat
-    // es mit dem begonnenen Update in die Konfiguration geschrieben).
-    if after_update
-        && let Some(window) = planora_project::config::Config::load()
-            .update_pending
-            .and_then(|p| p.window)
-    {
+    // es mit dem begonnenen Update in die Konfiguration geschrieben; der Installer hat die neue
+    // Version gestartet).
+    if let Some(window) = planora_app::update_install::window_for_start(
+        &planora_project::config::Config::load(),
+        &planora_app::running_version(),
+    ) {
         viewport = planora_app::update_install::restore_window(viewport, &window);
     }
     // Ohne lesbares Symbol bleibt das Standardsymbol des Systems.
@@ -52,7 +47,7 @@ fn main() -> eframe::Result {
     let result = eframe::run_native(
         "PlanoraCAD",
         options,
-        Box::new(move |cc| Ok(Box::new(PlanoraApp::new(cc, after_update, marker, finding)))),
+        Box::new(move |cc| Ok(Box::new(PlanoraApp::new(cc, marker, finding)))),
     );
     // Start sichtbar gescheitert (etwa ohne Grafik): kein „unerwartet beendet“ beim nächsten
     // Mal. Marker und App sind hier schon weg, die Datei ist also nicht mehr offen.

@@ -20,7 +20,7 @@ use planora_app::{fonts, running_version, theme};
 use planora_project::config::Config;
 use planora_project::library::Library;
 use planora_update::check::{NetError, ReleaseSource};
-use planora_update::{EXE_NAME, REPO, SHA256_NAME, Version};
+use planora_update::{REPO, SETUP_NAME, SHA256_NAME, Version};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -49,7 +49,7 @@ fn list(entries: &[(&str, &str)]) -> String {
             json!({
                 "tag_name": tag,
                 "body": body,
-                "assets": [asset(EXE_NAME), asset(SHA256_NAME)],
+                "assets": [asset(SETUP_NAME), asset(SHA256_NAME)],
             })
         })
         .collect();
@@ -113,6 +113,8 @@ struct Seen {
     text: String,
     rect: Rect,
     sections: Vec<(String, egui::FontFamily, f32)>,
+    /// Farbe des ersten Abschnitts.
+    color: egui::Color32,
 }
 
 struct Harness {
@@ -173,10 +175,15 @@ impl Harness {
                             )
                         })
                         .collect();
+                    let color = job
+                        .sections
+                        .first()
+                        .map_or(egui::Color32::PLACEHOLDER, |s| s.format.color);
                     out.push(Seen {
                         text: t.galley.text().to_string(),
                         rect: Rect::from_min_size(t.pos, t.galley.size()),
                         sections,
+                        color,
                     });
                 }
                 _ => {}
@@ -644,9 +651,10 @@ fn window_exclusion_with_projects_and_settings() {
 
 #[test]
 fn install_now_keeps_the_notice_for_the_progress() {
-    // Ohne bekannte Programmdatei (Testaufbau) endet „Jetzt aktualisieren“ sofort mit einem
-    // Hinweis; Download und Austausch prüft `tests/update_install.rs`.
+    // Ohne Windows endet „Jetzt aktualisieren“ sofort mit einem Hinweis; Download und Start des
+    // Installers prüft `tests/update_install.rs`.
     let mut h = Harness::started("planora-meldung-jetzt", Fake::new(one_newer()));
+    h.app.set_auto_install_supported(false);
     assert!(h.notice_open());
     h.click(INSTALL_NOW);
     assert!(h.notice_open(), "bleibt offen für Fortschritt oder Hinweis");
@@ -658,12 +666,11 @@ fn install_now_keeps_the_notice_for_the_progress() {
         "das einzuspielende Update bleibt"
     );
     assert_eq!(d.snooze_until, None);
-    let expected = if cfg!(windows) {
-        planora_app::update_install::NO_EXE
-    } else {
-        planora_app::update_install::ONLY_WINDOWS
-    };
-    assert!(h.sees(expected), "{:?}", h.texts());
+    assert!(
+        h.sees(planora_app::update_install::ONLY_WINDOWS),
+        "{:?}",
+        h.texts()
+    );
     assert!(!h.sees(INSTALL_NOW), "statt der Knöpfe");
     assert!(!h.sees(&status_hint(&v("99.0.0-dev.1"))));
     assert_eq!(h.app.ws_mut().skipped_version(), None);
@@ -675,6 +682,40 @@ fn install_now_keeps_the_notice_for_the_progress() {
     h.settle();
     assert!(!h.notice_open());
     assert!(h.sees(&status_hint(&v("99.0.0-dev.1"))));
+}
+
+/// Nicht installiert (Entwicklung): die Meldung erklärt es in einem Satz, „Download-Seite
+/// öffnen“ ist der Hauptknopf (Akzentfarbe, vorne), daneben „Später“ und „Überspringen“; kein
+/// „Jetzt aktualisieren“. Bei 1920 × 1080 im hellen und im dunklen Aussehen.
+#[test]
+fn not_installable_notice_has_download_page_as_main_button() {
+    use planora_app::update_install::{NOT_INSTALLED_HINT, OPEN_DOWNLOAD_PAGE};
+    for dark in [false, true] {
+        let (mut ws, cfg) = workspace("planora-meldung-nicht-installiert");
+        ws.active_tab_mut().state.dark = dark;
+        let mut h = Harness::new(ws, cfg, Fake::new(one_newer()));
+        h.app.set_auto_install_supported(true);
+        h.app.set_install_mode(None);
+        h.until_idle();
+        assert!(h.notice_open());
+        assert!(h.sees(NOT_INSTALLED_HINT), "{:?}", h.texts());
+        assert!(!h.sees(INSTALL_NOW), "{:?}", h.texts());
+        let page = h.find(OPEN_DOWNLOAD_PAGE);
+        let later = h.find(LATER);
+        let skip = h.find(SKIP);
+        assert_eq!(page.color, theme::palette(dark).on_accent, "Hauptknopf");
+        assert_ne!(later.color, theme::palette(dark).on_accent);
+        assert!(page.rect.right() < later.rect.left(), "Hauptknopf vorne");
+        assert!(later.rect.right() < skip.rect.left());
+        // Alles innerhalb des Fensters.
+        for r in [page.rect, later.rect, skip.rect] {
+            assert!(r.right() <= SIZE.x && r.bottom() <= SIZE.y, "{r:?}");
+        }
+    }
+    assert_eq!(
+        NOT_INSTALLED_HINT,
+        "Diese Fassung von PlanoraCAD ist nicht installiert und kann sich nicht selbst aktualisieren. Lade die neue Version auf der Download-Seite herunter."
+    );
 }
 
 #[test]

@@ -2,7 +2,7 @@
 
 ## Windows zeigt beim ersten Start eine Warnung
 
-Die Programmdatei ist nicht signiert. Darum kann Windows beim ersten Start eine blaue Warnung zeigen („SmartScreen“). Klick auf „Weitere Informationen“ und dann auf „Trotzdem ausführen“.
+Der Installer ist nicht signiert. Darum kann Windows, wenn du `planoracad-setup-x64.exe` startest, eine blaue Warnung zeigen („SmartScreen“). Klick auf „Weitere Informationen“ und dann auf „Trotzdem ausführen“.
 
 Die Prüfsumme, mit der das Programm Updates kontrolliert, schützt nur vor Fehlern bei der Übertragung. Lade das Programm nur von der [Seite der Veröffentlichungen](https://github.com/KaelanTesseract/PlanoraCAD/releases) im Repo.
 
@@ -16,7 +16,9 @@ Manche Virenprogramme prüfen eine neue Programmdatei erst eine Weile oder halte
 
 ## Das Update klappt nicht
 
-Liegt das Programm in einem geschützten Ordner, zum Beispiel unter „Programme“, kann es sich nicht selbst ersetzen. Das Programm zeigt dann einen Knopf zur Download-Seite. Lade dort die neue Version herunter, oder verschieb das Programm in einen eigenen Ordner, zum Beispiel in deine Dokumente.
+1. Hast du die Frage von Windows nach Administratorrechten abgelehnt (bei „Für alle Benutzer“)? Dann läuft die bisherige Version einfach weiter. Starte das Update noch einmal und antworte mit „Ja“.
+2. Zeigt das Programm nur den Knopf „Download-Seite öffnen“? Dann wurde es nicht mit dem Installer installiert, zum Beispiel direkt aus dem Bauordner gestartet. Lade `planoracad-setup-x64.exe` von der [Seite der Veröffentlichungen](https://github.com/KaelanTesseract/PlanoraCAD/releases) und installiere es.
+3. Klappt es trotzdem nicht? Das Programm schreibt den Verlauf in die Datei `planoracad-update.log` im Temp-Ordner. Drück die Windows-Taste und R, tipp `%TEMP%` ein und such die Datei. Lade danach den neuen Installer von der Release-Seite und führ ihn selbst aus. Er ersetzt die alte Version; deine Projekte und Einstellungen bleiben erhalten.
 
 Unter Linux und macOS gibt es keine Updates über das Programm. Dort lädst du neue Versionen von Hand herunter.
 

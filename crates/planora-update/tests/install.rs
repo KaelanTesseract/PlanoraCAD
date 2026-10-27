@@ -1,4 +1,4 @@
-//! Herunterladen, Prüfen, Austauschen und Rücksetzen ohne Netz und ohne die echte Programmdatei:
+//! Herunterladen und Prüfen des Installers ohne Netz:
 //! alles in eigenen Temp-Ordnern, der Download über Nachbildungen von [`Downloader`] auf der
 //! gemeinsamen Kopierschleife [`copy_limited`].
 
@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use planora_update::install::*;
 use planora_update::sha256::{Sha256, hex_digest};
-use planora_update::{EXE_NAME, REPO};
+use planora_update::{REPO, SETUP_NAME, SHA256_NAME};
 
 /// Eigener Temp-Ordner je Test; wird am Ende gelöscht.
 struct TempDir(PathBuf);
@@ -43,27 +43,60 @@ fn read(p: &Path) -> String {
     std::fs::read_to_string(p).unwrap()
 }
 
-/// Ordner mit laufender „exe“ (Inhalt `alt`) und heruntergeladener `.new` (Inhalt `neu`).
-fn setup(prefix: &str) -> (TempDir, Paths) {
-    let dir = TempDir::new(prefix);
-    let paths = Paths::for_exe(&dir.path().join("planoracad.exe"));
-    std::fs::write(&paths.running_exe, "alt").unwrap();
-    std::fs::write(&paths.new_exe, "neu").unwrap();
-    (dir, paths)
+#[test]
+fn download_paths_sit_in_their_own_folder() {
+    // Pfade aus Teilen, damit der Test auf jedem System gilt.
+    let dir = Path::new("Temp").join("PlanoraCAD-Update");
+    let p = DownloadPaths::in_dir(&dir);
+    assert_eq!(p.dir, dir);
+    assert_eq!(p.setup, dir.join("planoracad-setup-x64.exe"));
+    assert_eq!(p.checksum, dir.join("planoracad-setup-x64.sha256"));
+    assert_eq!(p.setup, dir.join(SETUP_NAME));
+    assert_eq!(p.checksum, dir.join(SHA256_NAME));
 }
 
 #[test]
-fn paths_sit_next_to_the_exe() {
-    // Pfade aus Teilen, damit der Test auf jedem System gilt.
-    let dir = Path::new("Programm");
-    let p = Paths::for_exe(&dir.join("planoracad.exe"));
-    assert_eq!(p.running_exe, dir.join("planoracad.exe"));
-    assert_eq!(p.new_exe, dir.join("planoracad.exe.new"));
-    assert_eq!(p.old_exe, dir.join("planoracad.exe.old"));
-    assert_eq!(p.ok_marker, dir.join("planoracad.update-ok"));
-    assert_eq!(p.dir(), dir);
-    assert_eq!(OK_MARKER_NAME, "planoracad.update-ok");
-    assert_eq!(p.checksum_file(), dir.join("planoracad.exe.new.sha256"));
+fn prepare_dir_creates_the_folder() {
+    let dir = TempDir::new("vorbereiten");
+    let paths = DownloadPaths::in_dir(&dir.path().join("a").join("PlanoraCAD-Update"));
+    assert_eq!(prepare_dir(&paths), Ok(()));
+    assert!(paths.dir.is_dir());
+    // Schon da: kein Fehler.
+    assert_eq!(prepare_dir(&paths), Ok(()));
+    // An der Stelle liegt eine Datei: Dateifehler.
+    let file = dir.path().join("datei");
+    std::fs::write(&file, "x").unwrap();
+    assert!(matches!(
+        prepare_dir(&DownloadPaths::in_dir(&file)),
+        Err(InstallError::Io(_))
+    ));
+}
+
+#[test]
+fn discard_download_removes_files_and_the_empty_folder() {
+    let dir = TempDir::new("verwerfen");
+    let paths = DownloadPaths::in_dir(&dir.path().join("PlanoraCAD-Update"));
+    prepare_dir(&paths).unwrap();
+    std::fs::write(&paths.setup, "neu").unwrap();
+    std::fs::write(&paths.checksum, "x").unwrap();
+    discard_download(&paths);
+    assert!(!paths.setup.exists());
+    assert!(!paths.checksum.exists());
+    assert!(!paths.dir.exists());
+    // Nichts mehr da: kein Fehler, kein Absturz.
+    discard_download(&paths);
+}
+
+#[test]
+fn discard_download_keeps_a_folder_with_other_files() {
+    let dir = TempDir::new("verwerfen-fremd");
+    let paths = DownloadPaths::in_dir(&dir.path().join("PlanoraCAD-Update"));
+    prepare_dir(&paths).unwrap();
+    std::fs::write(&paths.setup, "neu").unwrap();
+    std::fs::write(paths.dir.join("fremd.txt"), "bleibt").unwrap();
+    discard_download(&paths);
+    assert!(!paths.setup.exists());
+    assert_eq!(read(&paths.dir.join("fremd.txt")), "bleibt");
 }
 
 #[test]
@@ -108,14 +141,14 @@ fn verify_accepts_matching_checksum_in_both_formats() {
     std::fs::write(&file, b"abc").unwrap();
     let hex = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
     for contents in [
-        format!("{hex}  {EXE_NAME}\n"),
-        format!("{hex} *{EXE_NAME}"),
-        format!("{}  {EXE_NAME}\r\n", hex.to_uppercase()),
+        format!("{hex}  {SETUP_NAME}\n"),
+        format!("{hex} *{SETUP_NAME}"),
+        format!("{}  {SETUP_NAME}\r\n", hex.to_uppercase()),
         format!("{hex}\n"),
         format!("  {}  ", hex.to_uppercase()),
     ] {
         assert_eq!(
-            verify_sha256(&file, &contents, EXE_NAME),
+            verify_sha256(&file, &contents, SETUP_NAME),
             Ok(()),
             "{contents:?}"
         );
@@ -128,7 +161,7 @@ fn expected_hex_is_kept_and_rechecked() {
     let file = dir.path().join("x.new");
     std::fs::write(&file, b"abc").unwrap();
     let hex = "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD";
-    let kept = checksum_hex(&format!("{hex}  {EXE_NAME}"), EXE_NAME).unwrap();
+    let kept = checksum_hex(&format!("{hex}  {SETUP_NAME}"), SETUP_NAME).unwrap();
     assert_eq!(kept, hex.to_ascii_lowercase());
     assert_eq!(file_matches_sha256(&file, &kept), Ok(()));
     // Danach verändert: die zweite Prüfung schlägt an.
@@ -137,7 +170,10 @@ fn expected_hex_is_kept_and_rechecked() {
         file_matches_sha256(&file, &kept),
         Err(InstallError::Checksum)
     );
-    assert_eq!(checksum_hex("Müll", EXE_NAME), Err(InstallError::Checksum));
+    assert_eq!(
+        checksum_hex("Müll", SETUP_NAME),
+        Err(InstallError::Checksum)
+    );
 }
 
 #[test]
@@ -148,10 +184,10 @@ fn verify_rejects_wrong_hash_wrong_name_and_garbage() {
     let good = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
     let wrong = "ca7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
     for contents in [
-        format!("{wrong}  {EXE_NAME}"),
+        format!("{wrong}  {SETUP_NAME}"),
         format!("{good}  andere.exe"),
-        format!("{good}  {EXE_NAME} mehr"),
-        format!("{good}  {EXE_NAME}\n{good}  {EXE_NAME}"),
+        format!("{good}  {SETUP_NAME} mehr"),
+        format!("{good}  {SETUP_NAME}\n{good}  {SETUP_NAME}"),
         good[..63].to_string(),
         format!("{good}0"),
         format!("{}g", &good[..63]),
@@ -160,125 +196,16 @@ fn verify_rejects_wrong_hash_wrong_name_and_garbage() {
         "<html>Fehler</html>".to_string(),
     ] {
         assert_eq!(
-            verify_sha256(&file, &contents, EXE_NAME),
+            verify_sha256(&file, &contents, SETUP_NAME),
             Err(InstallError::Checksum),
             "{contents:?}"
         );
     }
     // Fehlt die Datei, ist das kein Prüfsummen-, sondern ein Dateifehler.
     assert!(matches!(
-        verify_sha256(&dir.path().join("fehlt"), good, EXE_NAME),
+        verify_sha256(&dir.path().join("fehlt"), good, SETUP_NAME),
         Err(InstallError::Io(_))
     ));
-}
-
-#[test]
-fn swap_moves_old_aside_and_new_into_place() {
-    let (_dir, paths) = setup("tausch");
-    // Ein `.old` aus einem früheren Update stört nicht.
-    std::fs::write(&paths.old_exe, "uralt").unwrap();
-    let state = swap(&paths).unwrap();
-    assert!(state.stale_old_removed);
-    assert_eq!(read(&paths.running_exe), "neu");
-    assert_eq!(read(&paths.old_exe), "alt");
-    assert!(!paths.new_exe.exists());
-    let (_dir, paths) = setup("tausch-ohne-alt");
-    assert!(!swap(&paths).unwrap().stale_old_removed);
-}
-
-#[test]
-fn swap_rolls_back_when_second_step_fails() {
-    // Die neue Datei fehlt: Schritt 2 scheitert, die laufende Datei kommt zurück.
-    let (_dir, paths) = setup("tausch-zurueck");
-    std::fs::remove_file(&paths.new_exe).unwrap();
-    assert!(matches!(swap(&paths), Err(InstallError::Io(_))));
-    assert_eq!(read(&paths.running_exe), "alt");
-    assert!(!paths.old_exe.exists());
-
-    // Die neue Datei ist von einem anderen Vorgang ohne Freigabe geöffnet (Windows: kein
-    // Umbenennen möglich).
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        let (_dir, paths) = setup("tausch-gesperrt");
-        let lock = std::fs::OpenOptions::new()
-            .read(true)
-            .share_mode(0)
-            .open(&paths.new_exe)
-            .unwrap();
-        assert!(matches!(swap(&paths), Err(InstallError::Io(_))));
-        drop(lock);
-        assert_eq!(read(&paths.running_exe), "alt");
-        assert_eq!(read(&paths.new_exe), "neu");
-        assert!(!paths.old_exe.exists());
-    }
-}
-
-#[test]
-fn swap_without_running_exe_changes_nothing() {
-    let (_dir, paths) = setup("tausch-ohne-exe");
-    std::fs::remove_file(&paths.running_exe).unwrap();
-    assert!(swap(&paths).is_err());
-    assert_eq!(read(&paths.new_exe), "neu");
-    assert!(!paths.running_exe.exists());
-}
-
-#[test]
-fn rollback_restores_old() {
-    let (_dir, paths) = setup("zurueck");
-    swap(&paths).unwrap();
-    rollback(&paths).unwrap();
-    assert_eq!(read(&paths.running_exe), "alt");
-    assert!(!paths.old_exe.exists());
-    // Die zurückgenommene neue Datei ist weg (oder liegt höchstens als `.new` herum).
-    assert!(!paths.new_exe.exists() || read(&paths.new_exe) == "neu");
-    // Ohne Sicherung gibt es nichts zurückzulegen: Fehler, nichts verändert.
-    assert!(matches!(rollback(&paths), Err(InstallError::Io(_))));
-    assert_eq!(read(&paths.running_exe), "alt");
-}
-
-#[test]
-fn cleanup_old_ignores_errors() {
-    let (_dir, paths) = setup("aufraeumen");
-    std::fs::write(&paths.old_exe, "alt").unwrap();
-    cleanup_old(&paths);
-    assert!(!paths.old_exe.exists());
-    // Nichts da: kein Fehler, kein Absturz.
-    cleanup_old(&paths);
-    // Nicht löschbar (ein Ordner statt einer Datei): still übergangen.
-    std::fs::create_dir(&paths.old_exe).unwrap();
-    std::fs::write(paths.old_exe.join("drin"), "x").unwrap();
-    cleanup_old(&paths);
-    assert!(paths.old_exe.exists());
-    // Die laufende Datei bleibt immer.
-    assert_eq!(read(&paths.running_exe), "alt");
-}
-
-#[test]
-fn discard_download_removes_new_and_checksum_files() {
-    let (_dir, paths) = setup("verwerfen");
-    std::fs::write(paths.checksum_file(), "x").unwrap();
-    discard_download(&paths);
-    assert!(!paths.new_exe.exists());
-    assert!(!paths.checksum_file().exists());
-    assert_eq!(read(&paths.running_exe), "alt");
-    discard_download(&paths);
-}
-
-#[test]
-fn not_writable_dir_is_reported() {
-    let dir = TempDir::new("schreibbar");
-    assert!(exe_dir_writable(dir.path()));
-    // Keine Spur der Probe bleibt zurück.
-    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
-    assert!(!exe_dir_writable(&dir.path().join("gibt-es-nicht")));
-    let file = dir.path().join("datei");
-    std::fs::write(&file, "x").unwrap();
-    assert!(!exe_dir_writable(&file));
-    assert_eq!(
-        InstallError::NotWritable.message(),
-        "Das Programm liegt in einem geschützten Ordner. Lade die neue Version von GitHub herunter."
-    );
 }
 
 #[test]
@@ -288,16 +215,22 @@ fn errors_have_plain_german_messages() {
         InstallError::Network("keine Verbindung".into()),
         InstallError::TooLarge,
         InstallError::Checksum,
-        InstallError::NotWritable,
         InstallError::Io("Zugriff verweigert".into()),
     ] {
         let m = e.message();
         assert!(!m.is_empty() && m.ends_with('.'), "{m}");
     }
-    assert!(
-        InstallError::Checksum
-            .message()
-            .contains("nichts ausgetauscht")
+    assert_eq!(
+        InstallError::Checksum.message(),
+        "Die heruntergeladene Datei ist beschädigt (die Prüfsumme stimmt nicht). Es wurde nichts installiert."
+    );
+    assert_eq!(
+        InstallError::TooLarge.message(),
+        "Die heruntergeladene Datei ist größer als erwartet. Es wurde nichts installiert."
+    );
+    assert_eq!(
+        InstallError::Io("Zugriff verweigert".into()).message(),
+        "Das Update ließ sich nicht vorbereiten (Zugriff verweigert). Das Programm läuft in der bisherigen Version weiter."
     );
     assert!(
         InstallError::Network("keine Verbindung".into())
@@ -321,15 +254,15 @@ fn download_limit_follows_the_asset_size_with_a_hard_cap() {
 
 #[test]
 fn only_release_urls_and_github_redirects_are_allowed() {
-    let base = format!("https://github.com/{REPO}/releases/download/v0.2.0-dev.1/{EXE_NAME}");
+    let base = format!("https://github.com/{REPO}/releases/download/v0.2.0-dev.1/{SETUP_NAME}");
     assert!(release_url_ok(&base));
     for bad in [
-        format!("http://github.com/{REPO}/releases/download/v1/{EXE_NAME}"),
-        format!("https://github.com/andere/repo/releases/download/v1/{EXE_NAME}"),
-        format!("https://example.com/{REPO}/releases/download/v1/{EXE_NAME}"),
-        format!("https://github.com/{REPO}/releases/download/../../x/{EXE_NAME}"),
-        format!("https://github.com/{REPO}/releases/download/v1/{EXE_NAME}?x=1"),
-        format!("https://github.com.evil.com/{REPO}/releases/download/v1/{EXE_NAME}"),
+        format!("http://github.com/{REPO}/releases/download/v1/{SETUP_NAME}"),
+        format!("https://github.com/andere/repo/releases/download/v1/{SETUP_NAME}"),
+        format!("https://example.com/{REPO}/releases/download/v1/{SETUP_NAME}"),
+        format!("https://github.com/{REPO}/releases/download/../../x/{SETUP_NAME}"),
+        format!("https://github.com/{REPO}/releases/download/v1/{SETUP_NAME}?x=1"),
+        format!("https://github.com.evil.com/{REPO}/releases/download/v1/{SETUP_NAME}"),
     ] {
         assert!(!release_url_ok(&bad), "{bad}");
     }
@@ -424,7 +357,7 @@ impl<F: Fn() -> Box<dyn Read + Send> + Sync> Downloader for FakeDownloader<F> {
 }
 
 fn url() -> String {
-    format!("https://github.com/{REPO}/releases/download/v9.0.0/{EXE_NAME}")
+    format!("https://github.com/{REPO}/releases/download/v9.0.0/{SETUP_NAME}")
 }
 
 #[test]
@@ -567,12 +500,12 @@ fn http_downloader_is_built_but_never_used() {
 #[cfg(not(feature = "update-test-source"))]
 #[test]
 fn default_build_accepts_no_local_test_source() {
-    let local = format!("http://127.0.0.1:8080/dl/v9.0.0/{EXE_NAME}");
+    let local = format!("http://127.0.0.1:8080/dl/v9.0.0/{SETUP_NAME}");
     assert!(!local_test_url_ok(&local));
     assert!(!release_url_ok(&local));
     assert!(
         redirect_target(
-            &format!("https://github.com/{REPO}/releases/download/v9.0.0/{EXE_NAME}"),
+            &format!("https://github.com/{REPO}/releases/download/v9.0.0/{SETUP_NAME}"),
             &local
         )
         .is_err()
@@ -580,7 +513,7 @@ fn default_build_accepts_no_local_test_source() {
     let json = serde_json::json!([{
         "tag_name": "v9.0.0",
         "assets": [
-            {"name": EXE_NAME, "browser_download_url": local, "size": 10},
+            {"name": SETUP_NAME, "browser_download_url": local, "size": 10},
             {"name": planora_update::SHA256_NAME,
              "browser_download_url": format!("http://127.0.0.1:8080/dl/v9.0.0/{}", planora_update::SHA256_NAME),
              "size": 10},

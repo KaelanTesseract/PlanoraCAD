@@ -2,7 +2,7 @@
 
 Hier steht, was sich in jeder Version geändert hat. Die neueste Version steht oben.
 
-## 0.2.0-dev.1
+## 0.0.2-dev.1
 
 Das ist die erste Entwicklerversion mit Update-Funktion. Sie ist noch nicht für den Alltag gedacht.
 
@@ -10,10 +10,10 @@ Das ist die erste Entwicklerversion mit Update-Funktion. Sie ist noch nicht für
 - Das Programm kann sich selbst aktualisieren. Beim Start schaut es im Hintergrund nach, ob es eine neuere Version gibt, und zeigt dann ein Fenster mit den Änderungen. Du entscheidest, ob du jetzt aktualisierst, später erinnert werden willst oder diese Version überspringst. Vor dem Neustart fragt das Programm wie beim Schließen, ob ungespeicherte Arbeit gespeichert werden soll.
 - Unter „Datei → Einstellungen …“ gibt es einen Abschnitt für Updates. Dort lässt sich die Prüfung ausschalten oder von Hand starten.
 - Es gibt drei Kanäle: Dev, Beta und Stabil. Im Moment gibt es nur Dev-Versionen.
-- Der Download wird vor dem Austausch mit einer Prüfsumme kontrolliert. Geht beim Austausch etwas schief, legt das Programm die alte Version wieder zurück.
+- PlanoraCAD kommt jetzt als Installer (`planoracad-setup-x64.exe`). Du wählst „Nur für mich“ (ohne Administratorrechte) oder „Für alle Benutzer“, bekommst einen Eintrag im Startmenü und kannst eine Verknüpfung auf dem Desktop anlegen. Deinstallieren geht über „Einstellungen → Apps“ in Windows; deine Projekte, Einstellungen und Protokolle bleiben dabei erhalten. Ein Update lädt den neuen Installer, prüft ihn mit einer Prüfsumme und startet ihn im Hintergrund. Bei „Für alle Benutzer“ fragt Windows dabei nach Administratorrechten; lehnst du ab, läuft die bisherige Version weiter.
 - Zu jeder Veröffentlichung gehört eine Datei mit den Lizenzen aller verwendeten Bibliotheken und Schriften.
 - Verlaufsleiste unten im Fenster: Sie zeigt die Schritte des gewählten Körpers. Mit dem Marker lässt sich zu einem früheren Schritt zurückgehen, ohne etwas zu löschen.
-- Tastenkürzel wie in Fusion, zum Beispiel E zum Extrudieren, F zum Verrunden und V zum Ein- und Ausblenden. Alle Kürzel lassen sich in den Einstellungen ändern. „Ansicht → Tastenkürzel …“ zeigt eine Übersicht mit Suche.
+- Tastenkürzel wie in gängigen CAD-Programmen, zum Beispiel E zum Extrudieren, F zum Verrunden und V zum Ein- und Ausblenden. Alle Kürzel lassen sich in den Einstellungen ändern. „Ansicht → Tastenkürzel …“ zeigt eine Übersicht mit Suche.
 - Rückmeldung aus dem Programm: „Hilfe → Rückmeldung …“ (oder Strg+Umschalt+R) öffnet ein Fenster. Du wählst Fehler, Wunsch oder Frage und schreibst kurz, was passiert ist. Darunter steht jede Angabe, die das Programm dazulegt (Version, System, Grafikkarte, letzte Schritte, auf Wunsch Protokollzeilen und ein Bild vom Programmfenster), mit Häkchen und Vorschau; Benutzername, Projektpfade und Mailadressen sind schon entfernt. „Im Browser öffnen“ öffnet ein ausgefülltes Formular auf GitHub. Abgeschickt wird erst, wenn du dort selbst auf den Knopf klickst.
 - Rückmeldung ohne GitHub-Konto: Der Knopf „Ohne GitHub-Konto senden“ öffnet ein ausgefülltes Formular auf dennis-guse.de. Du brauchst dafür kein Konto. Die Angaben gehen mit dem Öffnen des Formulars an dennis-guse.de (sie stecken in der Adresse und können dort im Protokoll des Servers stehen); gemeldet wird aber erst, wenn du dort auf „Absenden“ klickst. Bilder und Dateien hängst du dort an; das Programm öffnet dafür einen Ordner mit den fertigen Dateien. Nur wenn der Browser sich gar nicht öffnen lässt, bleibt die Mail an info@dennis-guse.de.
 - Absturzbericht: Stürzt das Programm ab, schreibt es vorher einen kurzen Bericht. Der Bericht bleibt auf deinem Rechner und enthält deinen Benutzernamen nicht. Beim nächsten Start fragt das Programm, ob du ihn als Rückmeldung schicken möchtest. Du kannst ihn vorher ansehen, später entscheiden oder löschen. Auf Wunsch kommt eine Kopie des offenen Projekts als ZIP-Datei (`.pcad.zip`) mit in den Rückmeldungsordner; für das Formular darf sie höchstens 25 MB groß sein. Der Bericht enthält auch Adressen aus dem Programm, mit denen sich der Fehler später in der Programmdatei genau finden lässt. Alte Berichte räumt das Programm nach 30 Tagen selbst weg. Endet das Programm ohne Bericht unerwartet, weist es beim nächsten Start kurz darauf hin.

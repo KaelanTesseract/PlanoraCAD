@@ -1,5 +1,5 @@
 use planora_update::{
-    Channel, EXE_NAME, LICENSES_NAME, MAX_NOTES_CHARS, MAX_NOTES_RELEASES, REPO, Release,
+    Channel, LICENSES_NAME, MAX_NOTES_CHARS, MAX_NOTES_RELEASES, REPO, Release, SETUP_NAME,
     SHA256_NAME, Version, parse_releases, pick_update,
 };
 use serde_json::{Value, json};
@@ -24,7 +24,7 @@ fn release_json(tag: &str, body: &str) -> Value {
         "prerelease": tag.contains('-'),
         "body": body,
         "assets": [
-            asset(tag, EXE_NAME, 12_345_678),
+            asset(tag, SETUP_NAME, 12_345_678),
             asset(tag, SHA256_NAME, 64),
             asset(tag, LICENSES_NAME, 999),
         ],
@@ -64,9 +64,9 @@ fn parses_a_github_list() {
     assert_eq!(first.version, v("0.2.0-dev.1"));
     assert_eq!(first.tag, "v0.2.0-dev.1");
     assert_eq!(first.notes, "## Neu\n- Etwas");
-    assert_eq!(first.exe.name, EXE_NAME);
-    assert_eq!(first.exe.url, url("v0.2.0-dev.1", EXE_NAME));
-    assert_eq!(first.exe.size, 12_345_678);
+    assert_eq!(first.setup.name, SETUP_NAME);
+    assert_eq!(first.setup.url, url("v0.2.0-dev.1", SETUP_NAME));
+    assert_eq!(first.setup.size, 12_345_678);
     assert_eq!(first.sha256.name, SHA256_NAME);
     assert_eq!(first.sha256.size, 64);
     let licenses = first.licenses.as_ref().unwrap();
@@ -86,8 +86,8 @@ fn skips_drafts_missing_files_unknown_versions_and_foreign_urls() {
     let mut draft = release_json("v0.2.0-dev.2", "Entwurf");
     draft["draft"] = json!(true);
 
-    let mut no_exe = release_json("v0.2.0-dev.3", "");
-    no_exe["assets"].as_array_mut().unwrap().remove(0);
+    let mut no_setup = release_json("v0.2.0-dev.3", "");
+    no_setup["assets"].as_array_mut().unwrap().remove(0);
 
     let mut no_sha = release_json("v0.2.0-dev.4", "");
     no_sha["assets"].as_array_mut().unwrap().remove(1);
@@ -97,7 +97,7 @@ fn skips_drafts_missing_files_unknown_versions_and_foreign_urls() {
 
     let mut foreign = release_json("v0.2.0-dev.5", "");
     foreign["assets"][0]["browser_download_url"] = json!(format!(
-        "https://example.com/download/v0.2.0-dev.5/{EXE_NAME}"
+        "https://example.com/download/v0.2.0-dev.5/{SETUP_NAME}"
     ));
 
     let mut other_repo = release_json("v0.2.0-dev.6", "");
@@ -107,14 +107,14 @@ fn skips_drafts_missing_files_unknown_versions_and_foreign_urls() {
 
     let mut http = release_json("v0.2.0-dev.7", "");
     http["assets"][0]["browser_download_url"] = json!(format!(
-        "http://github.com/{REPO}/releases/download/v0.2.0-dev.7/{EXE_NAME}"
+        "http://github.com/{REPO}/releases/download/v0.2.0-dev.7/{SETUP_NAME}"
     ));
 
     let mut other_tag = release_json("v0.2.0-dev.8", "");
-    other_tag["assets"][0]["browser_download_url"] = json!(url("v0.1.0", EXE_NAME));
+    other_tag["assets"][0]["browser_download_url"] = json!(url("v0.1.0", SETUP_NAME));
 
     let mut wrong_case = release_json("v0.2.0-dev.9", "");
-    wrong_case["assets"][0]["name"] = json!("PlanoraCAD-windows-x64.exe");
+    wrong_case["assets"][0]["name"] = json!("PlanoraCAD-setup-x64.exe");
 
     let mut no_size = release_json("v0.2.0-dev.10", "");
     no_size["assets"][0].as_object_mut().unwrap().remove("size");
@@ -132,7 +132,7 @@ fn skips_drafts_missing_files_unknown_versions_and_foreign_urls() {
     let list = parse(&[
         good,
         draft,
-        no_exe,
+        no_setup,
         no_sha,
         rc,
         no_tag,
@@ -152,12 +152,12 @@ fn skips_drafts_missing_files_unknown_versions_and_foreign_urls() {
 }
 
 #[test]
-fn two_exe_assets_with_the_exact_name_are_ambiguous_and_skipped() {
-    let mut two_exe = release_json("v0.2.0-dev.1", "");
-    two_exe["assets"]
+fn two_setup_assets_with_the_exact_name_are_ambiguous_and_skipped() {
+    let mut two_setup = release_json("v0.2.0-dev.1", "");
+    two_setup["assets"]
         .as_array_mut()
         .unwrap()
-        .push(asset("v0.2.0-dev.1", EXE_NAME, 1));
+        .push(asset("v0.2.0-dev.1", SETUP_NAME, 1));
     let mut two_sha = release_json("v0.2.0-dev.2", "");
     two_sha["assets"]
         .as_array_mut()
@@ -169,7 +169,7 @@ fn two_exe_assets_with_the_exact_name_are_ambiguous_and_skipped() {
         .unwrap()
         .push(asset("v0.2.0-dev.3", LICENSES_NAME, 1));
 
-    let list = parse(&[two_exe, two_sha, two_licenses]);
+    let list = parse(&[two_setup, two_sha, two_licenses]);
     // Doppelte Programm- oder Prüfsummendatei: ausgelassen; doppelte Lizenzdatei: nur diese fehlt.
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].version, v("0.2.0-dev.3"));
@@ -353,7 +353,7 @@ fn notes_are_capped_at_20_releases_and_20000_chars_with_truncated_flag() {
 
 /// Die Symboldatei (`.pdb`, für `tools/symbolize.ps1`) liegt als weitere Datei im Release. Die
 /// Update-Funktion wählt nur nach exaktem Namen und lädt sie nie; ein Name, der nur ähnlich ist,
-/// zählt nicht als exe.
+/// zählt nicht als Installer.
 #[test]
 fn pdb_asset_does_not_disturb_the_choice() {
     let tag = "v0.2.0-dev.3";
@@ -364,12 +364,60 @@ fn pdb_asset_does_not_disturb_the_choice() {
     let list = parse(&[r]);
     assert_eq!(list.len(), 1);
     let rel = &list[0];
-    assert_eq!(rel.exe.name, EXE_NAME);
-    assert_eq!(rel.exe.url, url(tag, EXE_NAME));
-    assert_eq!(rel.exe.size, 12_345_678);
+    assert_eq!(rel.setup.name, SETUP_NAME);
+    assert_eq!(rel.setup.url, url(tag, SETUP_NAME));
+    assert_eq!(rel.setup.size, 12_345_678);
     assert_eq!(rel.sha256.name, SHA256_NAME);
     assert_eq!(
         rel.licenses.as_ref().map(|l| l.name.as_str()),
         Some(LICENSES_NAME)
     );
+}
+
+/// Releases aus der Zeit vor dem Installer haben nur die einzelne Programmdatei; sie sind kein
+/// Update mehr (die Update-Funktion lädt nur noch den Installer).
+#[test]
+fn old_single_exe_assets_are_not_an_update() {
+    let tag = "v0.2.0-dev.4";
+    let old = json!({
+        "tag_name": tag,
+        "draft": false,
+        "body": "",
+        "assets": [
+            asset(tag, "planoracad-windows-x64.exe", 12_345_678),
+            asset(tag, "planoracad-windows-x64.sha256", 64),
+        ],
+    });
+    assert!(parse(&[old]).is_empty());
+}
+
+/// Der Name des Installers muss genau stimmen; auch die richtige Datei unter einem fremden
+/// Tag-Ordner zählt nicht.
+#[test]
+fn setup_name_must_match_exactly() {
+    let mut upper = release_json("v0.2.0-dev.1", "");
+    upper["assets"][0]["name"] = json!("PlanoraCAD-setup-x64.exe");
+    upper["assets"][0]["browser_download_url"] =
+        json!(url("v0.2.0-dev.1", "PlanoraCAD-setup-x64.exe"));
+
+    let mut zipped = release_json("v0.2.0-dev.2", "");
+    zipped["assets"][0]["name"] = json!("planoracad-setup-x64.exe.zip");
+    zipped["assets"][0]["browser_download_url"] =
+        json!(url("v0.2.0-dev.2", "planoracad-setup-x64.exe.zip"));
+
+    // Name mit Anhang, die Adresse aber genau auf den Installer: der Name zählt auch allein.
+    let mut zipped_name = release_json("v0.2.0-dev.4", "");
+    zipped_name["assets"][0]["name"] = json!("planoracad-setup-x64.exe.zip");
+    zipped_name["assets"][0]["browser_download_url"] = json!(url("v0.2.0-dev.4", SETUP_NAME));
+
+    let mut other_tag = release_json("v0.2.0-dev.3", "");
+    other_tag["assets"][0]["browser_download_url"] = json!(url("v0.2.0-dev.9", SETUP_NAME));
+
+    let good = release_json("v0.2.0-dev.5", "");
+    let list = parse(&[upper, zipped, zipped_name, other_tag, good]);
+    let versions: Vec<String> = list.iter().map(|r| r.version.to_string()).collect();
+    assert_eq!(versions, ["0.2.0-dev.5"]);
+    assert_eq!(list[0].setup.name, SETUP_NAME);
+    assert_eq!(SETUP_NAME, "planoracad-setup-x64.exe");
+    assert_eq!(SHA256_NAME, "planoracad-setup-x64.sha256");
 }

@@ -1,57 +1,47 @@
-//! Update einspielen im Programm: Download und Prüfung im Hintergrund ([`Installer`]), Neustart
-//! über eine austauschbare Schnittstelle ([`Restarter`]) und was beim Start nach einem Update
-//! geschieht ([`startup`]).
+//! Update einspielen im Programm: Download und Prüfung des Installers im Hintergrund
+//! ([`Installer`]), Start des Installers über eine austauschbare Schnittstelle
+//! ([`SetupLauncher`]) und was beim Start nach einem Update geschieht ([`startup`]).
 //!
-//! **Ablauf.** „Jetzt aktualisieren“ → [`decide`] (nur Windows, Ordner beschreibbar) →
-//! [`Installer::start`]: ein eigener Thread lädt die Prüfsummen-Datei und die Programmdatei nach
-//! `<exe>.new` und prüft die Summe (`Downloading` → `ReadyToRestart`, sonst `Failed`); die
-//! erwartete Summe bleibt gemerkt. Der Neustart beginnt erst, wenn nichts mehr offen ist (keine
-//! Rückfrage, kein Fenster, kein schreibender Export, kein Autosicherungs-Angebot; bis dahin
-//! [`WAITING`]). Dann fragt die App wie beim Schließen nach ungespeicherter Arbeit
-//! (`Workspace::request_quit`); „Abbrechen“ dort bricht das Update ab und löscht `.new`. Sonst:
-//! `.new` im Hintergrund noch einmal gegen die gemerkte Summe prüfen, `update_pending`
-//! speichern (gelingt das nicht, wird nichts ausgetauscht), austauschen, die neue exe mit
-//! [`AFTER_UPDATE_ARG`] starten und bis zu [`MARKER_WAIT`] auf die Datei
-//! `planoracad.update-ok` mit der Zielversion als Inhalt warten. Kommt sie, beendet sich das
-//! Programm; endet die neue Version vorher von selbst ([`NewProcess::exited`]) oder läuft die
-//! Frist ab, beendet es die neue Version ([`NewProcess::stop`]), legt den alten Stand zurück und
-//! läuft weiter; die Version wird weiter angeboten (nicht übersprungen), die Meldung
-//! [`not_started`] erklärt es. Die App merkt sich laufend Größe, Lage und Zustand des sichtbaren
-//! Fensters ([`window_state`]) und schreibt sie mit `update_pending`; die neue Version öffnet ihr
-//! Fenster so ([`restore_window`]). Von der Prüfung bis zum Ende ist die Bedienung gesperrt.
-//! Entsteht trotzdem neue ungespeicherte Arbeit, geht es vor dem Austausch
-//! zurück zur Rückfrage; danach wird die neue Version beendet und der alte Stand zurückgelegt
-//! ([`RESTART_STOPPED`]), nie ohne Rückfrage geschlossen. Die Schritte nach dem Download stehen
-//! in [`crate::app`] (`PlanoraApp::install_tick`).
+//! **Ablauf.** „Jetzt aktualisieren“ → [`decide`] (nur Windows, nur eine installierte Fassung;
+//! eine nicht installierte bietet nur die Download-Seite, [`NOT_INSTALLED_HINT`]) →
+//! [`Installer::start`]: ein eigener Thread lädt die Prüfsummen-Datei und den Installer in den
+//! Ordner [`download_dir`] und prüft die Summe (`Downloading` → `ReadyToRestart`, sonst
+//! `Failed`); die erwartete Summe bleibt gemerkt. Weiter geht es erst, wenn nichts mehr offen ist
+//! (keine Rückfrage, kein Fenster, kein schreibender Export, kein Autosicherungs-Angebot; bis
+//! dahin [`WAITING`]). Dann fragt die App wie beim Schließen nach ungespeicherter Arbeit
+//! (`Workspace::request_quit`); „Abbrechen“ dort bricht das Update ab und löscht den Download.
+//! Sonst: den Installer im Hintergrund noch einmal gegen die gemerkte Summe prüfen
+//! ([`reverify`]; ab da ist die Datei bis nach dem Start gesperrt, [`LockedSetup`]),
+//! `update_pending` samt Fenster speichern (gelingt das nicht, startet nichts:
+//! [`PENDING_NOT_SAVED`]), die Patchnotes hinterlegen und den Installer über die Sperre starten
+//! ([`LockedSetup::launch`], still, mit [`setup_args`]). Startet er, beendet sich das Programm
+//! ohne weitere Rückfrage (sauber, wie beim Schließen); der Installer wartet darauf, ersetzt die
+//! Dateien und startet die neue Version (nur mit [`SETUP_RESTART_PARAM`]). Lehnt jemand die
+//! Admin-Abfrage von Windows ab ([`UPDATE_CANCELLED`]) oder startet der Installer nicht
+//! ([`launch_failed`]), läuft das Programm in der bisherigen Version weiter und bietet die
+//! Version weiter an. Von der zweiten Prüfung bis zum Ende ist die Bedienung gesperrt
+//! ([`RESTART_BOX`]). Die Schritte nach dem Download stehen in [`crate::app`]
+//! (`PlanoraApp::install_tick`).
 //!
-//! **Start.** Die neue Version schreibt die Rückmeldung, sobald ihr erstes Bild fertig
-//! gezeichnet ist ([`write_ok_marker`], in `PlanoraApp::logic` des zweiten Bildes). [`startup`]
-//! löscht `update_pending`, räumt bei einem normalen Start `.old` weg (nicht beim Start nach dem
-//! Austausch) und zeigt nach einem gelungenen Update einmal „Aktualisiert auf Version X“ (mit den
-//! Patchnotes aus der Zwischenablage [`NOTES_FILE_NAME`], die die alte Version vor dem Austausch
-//! schreibt).
+//! **Start.** [`startup`] löscht `update_pending` und einen liegengebliebenen Download und zeigt
+//! nach einem gelungenen Update (das Ziel in `update_pending` ist die laufende Version) einmal
+//! „Aktualisiert auf Version X“ mit den Patchnotes aus der Zwischenablage [`NOTES_FILE_NAME`].
+//! Das Fenster öffnet dann in Größe und Lage der alten Version ([`window_for_start`]).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread::JoinHandle;
-use std::time::Duration;
 
+use crate::install_mode::InstallMode;
 use crate::workspace::Workspace;
-use planora_project::config::WindowState;
+use planora_project::config::{Config, WindowState};
 use planora_update::install::{
-    Downloader, InstallError, MAX_CHECKSUM_BYTES, Paths, checksum_hex, cleanup_old,
-    discard_download, download_limit, exe_dir_writable, file_matches_sha256, release_url_ok,
+    DownloadPaths, Downloader, InstallError, MAX_CHECKSUM_BYTES, checksum_hex, discard_download,
+    download_limit, file_matches_sha256, prepare_dir, reader_matches_sha256, release_url_ok,
 };
-use planora_update::{EXE_NAME, REPO, Update, Version};
-
-/// Startargument der neu gestarteten Version nach einem Austausch.
-pub const AFTER_UPDATE_ARG: &str = "--nach-update";
-
-/// So lange wartet die alte Version auf die Rückmeldung der neuen. Großzügig, weil eine frisch
-/// geladene, unsignierte exe beim ersten Start vom Virenschutz geprüft werden kann.
-pub const MARKER_WAIT: Duration = Duration::from_secs(30);
+use planora_update::{REPO, SETUP_NAME, Update, Version};
 
 /// Statuszeile und Meldung, solange ein fertiges Update auf das Ende der laufenden Arbeit wartet.
 pub const WAITING: &str = "Update ist bereit und wartet, bis du fertig bist.";
@@ -63,40 +53,30 @@ pub const NOTES_FILE_NAME: &str = "planoracad-update-notes.md";
 /// Größte gelesene Zwischenablage der Patchnotes.
 const MAX_NOTES_BYTES: u64 = 64 * 1024;
 
+/// Name des Download-Ordners im Temp-Ordner.
+pub const DOWNLOAD_DIR_NAME: &str = "PlanoraCAD-Update";
+
+/// Name des Protokolls, das der Installer im Temp-Ordner schreibt.
+pub const SETUP_LOG_NAME: &str = "planoracad-update.log";
+
 /// Hinweis, wenn das Programm nicht unter Windows läuft.
 pub const ONLY_WINDOWS: &str = "Automatisches Aktualisieren gibt es nur unter Windows.";
-/// Knopf bei einem Fehler: öffnet die Release-Seite auf GitHub.
+/// Knopf: öffnet die Release-Seite auf GitHub.
 pub const OPEN_DOWNLOAD_PAGE: &str = "Download-Seite öffnen";
 /// Meldung, wenn `update_pending` nicht gespeichert werden kann.
-pub const PENDING_NOT_SAVED: &str = "Das Update ließ sich nicht vormerken, weil die Einstellungen nicht gespeichert werden können. Es wurde nichts ausgetauscht.";
-/// Meldung, wenn der Ort des Programms unbekannt ist.
-pub const NO_EXE: &str =
-    "Der Ort des Programms ist unbekannt. Lade die neue Version von GitHub herunter.";
+pub const PENDING_NOT_SAVED: &str = "Das Update ließ sich nicht vormerken, weil die Einstellungen nicht gespeichert werden können. Es wurde nichts installiert.";
 /// Meldung, solange ein abgebrochener Download noch endet.
 pub const STILL_STOPPING: &str =
     "Der abgebrochene Download endet gerade noch. Bitte gleich noch einmal versuchen.";
+/// Meldung, wenn die Admin-Abfrage von Windows abgelehnt wurde.
+pub const UPDATE_CANCELLED: &str = "Update abgebrochen. Ohne die Erlaubnis von Windows lässt sich PlanoraCAD nicht für alle Benutzer aktualisieren. Du arbeitest in der bisherigen Version weiter.";
+/// Hinweis in der Meldung, wenn diese Fassung nicht installiert ist (etwa aus dem Bauordner).
+pub const NOT_INSTALLED_HINT: &str = "Diese Fassung von PlanoraCAD ist nicht installiert und kann sich nicht selbst aktualisieren. Lade die neue Version auf der Download-Seite herunter.";
 
-/// Meldung, wenn während des Neustarts neue ungespeicherte Arbeit entstanden ist: Die neue
-/// Version wurde beendet, der alte Stand liegt zurück, die Version wird nicht übersprungen.
-pub const RESTART_STOPPED: &str = "Der Neustart wurde abgebrochen, weil es neue ungespeicherte Änderungen gibt. PlanoraCAD läuft in der bisherigen Version weiter. Du kannst das Update später noch einmal starten.";
-
-/// Meldung, wenn die neue Version `to` sich nicht zurückmeldet (oder gleich wieder endet) und der
-/// alte Stand `from` zurückliegt. Die Version wird weiter angeboten.
-pub fn not_started(to: &Version, from: &Version) -> String {
+/// Meldung, wenn der Installer nicht startet (`detail`: der Grund von Windows).
+pub fn launch_failed(detail: &str) -> String {
     format!(
-        "Das Update auf Version {to} hat nicht geklappt, du bleibst auf Version {from}. Du kannst es später erneut versuchen."
-    )
-}
-
-/// Meldung, wenn der alte Stand sich nicht zurücklegen lässt (dann fehlt womöglich die
-/// Programmdatei; die bisherige liegt noch als `.old` daneben).
-pub fn rollback_failed(e: &InstallError) -> String {
-    let detail = match e {
-        InstallError::Io(detail) => detail.clone(),
-        other => other.message(),
-    };
-    format!(
-        "Die bisherige Version ließ sich nicht zurücklegen ({detail}). Bitte lade PlanoraCAD neu von GitHub herunter."
+        "Das Update ließ sich nicht starten ({detail}). Du arbeitest in der bisherigen Version weiter."
     )
 }
 
@@ -110,14 +90,24 @@ pub fn release_page(tag: &str) -> String {
     format!("https://github.com/{REPO}/releases/tag/{tag}")
 }
 
+/// Ordner des Downloads: [`DOWNLOAD_DIR_NAME`] im Temp-Ordner des Benutzers.
+pub fn download_dir() -> PathBuf {
+    std::env::temp_dir().join(DOWNLOAD_DIR_NAME)
+}
+
+/// Ort des Protokolls des Installers: [`SETUP_LOG_NAME`] im Temp-Ordner des Benutzers.
+pub fn setup_log_path() -> PathBuf {
+    std::env::temp_dir().join(SETUP_LOG_NAME)
+}
+
 /// Zustand des Downloads.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InstallState {
     /// Nichts läuft.
     Idle,
-    /// Die Programmdatei wird geladen (Bytes geladen, gesamt).
+    /// Der Installer wird geladen (Bytes geladen, gesamt).
     Downloading { done: u64, total: u64 },
-    /// `.new` liegt da und die Prüfsumme stimmt; jetzt der Neustart.
+    /// Der Installer liegt da und die Prüfsumme stimmt; jetzt der Neustart.
     ReadyToRestart,
     /// Gescheitert; die Meldung in einfacher Sprache.
     Failed(String),
@@ -126,30 +116,22 @@ pub enum InstallState {
 /// Was „Jetzt aktualisieren“ tut.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InstallDecision {
-    /// Herunterladen und austauschen.
+    /// Den Installer laden und starten.
     Download,
     /// Nicht unter Windows: Hinweis [`ONLY_WINDOWS`] und die Release-Seite öffnen.
     OnlyWindows,
-    /// Ordner der exe nicht beschreibbar: Hinweis mit Knopf [`OPEN_DOWNLOAD_PAGE`].
-    ProtectedFolder,
-    /// Ort der exe unbekannt.
-    NoExe,
+    /// Nicht installiert (etwa aus dem Bauordner): die Meldung bietet nur
+    /// [`OPEN_DOWNLOAD_PAGE`] ([`NOT_INSTALLED_HINT`]).
+    NotInstalled,
 }
 
 /// Entscheidung zu „Jetzt aktualisieren“ ohne `cfg`: `auto_supported` ist im Programm
-/// `cfg!(windows)`.
-pub fn decide(auto_supported: bool, exe: Option<&Path>) -> InstallDecision {
-    if !auto_supported {
-        return InstallDecision::OnlyWindows;
-    }
-    let Some(exe) = exe else {
-        return InstallDecision::NoExe;
-    };
-    let dir = exe.parent().unwrap_or(Path::new("."));
-    if exe_dir_writable(dir) {
-        InstallDecision::Download
-    } else {
-        InstallDecision::ProtectedFolder
+/// `cfg!(windows)`, `mode` der Install-Modus aus [`crate::install_mode::detect`].
+pub fn decide(auto_supported: bool, mode: Option<InstallMode>) -> InstallDecision {
+    match (auto_supported, mode) {
+        (false, _) => InstallDecision::OnlyWindows,
+        (true, None) => InstallDecision::NotInstalled,
+        (true, Some(_)) => InstallDecision::Download,
     }
 }
 
@@ -167,9 +149,9 @@ pub struct Installer {
     cancel: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
     repaint: Option<egui::Context>,
-    paths: Option<Paths>,
+    paths: Option<DownloadPaths>,
     target: Option<Version>,
-    /// Die geprüfte Summe von `.new` (für die zweite Prüfung vor dem Austausch).
+    /// Die geprüfte Summe des Installers (für die zweite Prüfung vor dem Start).
     verified: Option<String>,
 }
 
@@ -199,7 +181,7 @@ impl Installer {
     }
 
     /// Pfade des laufenden oder fertigen Downloads.
-    pub fn paths(&self) -> Option<&Paths> {
+    pub fn paths(&self) -> Option<&DownloadPaths> {
         self.paths.as_ref()
     }
 
@@ -208,7 +190,7 @@ impl Installer {
         self.target
     }
 
-    /// Die beim Download geprüfte SHA-256 von `.new` (nur in `ReadyToRestart`).
+    /// Die beim Download geprüfte SHA-256 des Installers (nur in `ReadyToRestart`).
     pub fn verified_sha256(&self) -> Option<&str> {
         match self.state {
             InstallState::ReadyToRestart => self.verified.as_deref(),
@@ -233,14 +215,14 @@ impl Installer {
         }
     }
 
-    /// Startet Download und Prüfung von `update` nach `paths.new_exe` in einem eigenen Thread.
-    /// Vorher geprüft: Adressen aus dem Release, Größe ([`download_limit`]), beschreibbarer
-    /// Ordner; ein liegengebliebener Download wird verworfen. Läuft schon einer, bleibt es bei
-    /// ihm.
+    /// Startet Download und Prüfung des Installers von `update` nach `paths.setup` in einem
+    /// eigenen Thread. Vorher geprüft: Adressen aus dem Release und Größe ([`download_limit`]);
+    /// ein liegengebliebener Download wird verworfen, der Ordner angelegt ([`prepare_dir`]).
+    /// Läuft schon einer, bleibt es bei ihm.
     pub fn start(
         &mut self,
         update: &Update,
-        paths: Paths,
+        paths: DownloadPaths,
         downloader: Arc<dyn Downloader + Send + Sync>,
     ) {
         if matches!(self.state, InstallState::Downloading { .. }) {
@@ -251,25 +233,24 @@ impl Installer {
             return;
         }
         let release = &update.latest;
-        if !release_url_ok(&release.exe.url) || !release_url_ok(&release.sha256.url) {
+        if !release_url_ok(&release.setup.url) || !release_url_ok(&release.sha256.url) {
             self.fail(InstallError::Network("Adresse gehört nicht zum Release".into()).message());
             return;
         }
-        let limit = match download_limit(release.exe.size) {
+        let limit = match download_limit(release.setup.size) {
             Ok(limit) => limit,
             Err(e) => return self.fail(e.message()),
         };
-        if !exe_dir_writable(paths.dir()) {
-            self.fail(InstallError::NotWritable.message());
-            return;
-        }
         discard_download(&paths);
+        if let Err(e) = prepare_dir(&paths) {
+            return self.fail(e.message());
+        }
 
         let cancel = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::channel();
         let repaint = self.repaint.clone();
-        let size = release.exe.size;
-        let (exe_url, sha_url) = (release.exe.url.clone(), release.sha256.url.clone());
+        let size = release.setup.size;
+        let (setup_url, sha_url) = (release.setup.url.clone(), release.sha256.url.clone());
         let job_paths = paths.clone();
         let job_cancel = Arc::clone(&cancel);
         let spawned = std::thread::Builder::new()
@@ -283,16 +264,16 @@ impl Installer {
                     }
                 };
                 let result = (|| {
-                    let checksum = paths.checksum_file();
-                    downloader.download(&sha_url, &checksum, MAX_CHECKSUM_BYTES, &mut |_, _| {
+                    let checksum = &paths.checksum;
+                    downloader.download(&sha_url, checksum, MAX_CHECKSUM_BYTES, &mut |_, _| {
                         !cancel.load(Ordering::SeqCst)
                     })?;
                     let text =
-                        std::fs::read(&checksum).map_err(|e| InstallError::Io(e.to_string()))?;
-                    let _ = std::fs::remove_file(&checksum);
+                        std::fs::read(checksum).map_err(|e| InstallError::Io(e.to_string()))?;
+                    let _ = std::fs::remove_file(checksum);
                     let text = String::from_utf8(text).map_err(|_| InstallError::Checksum)?;
                     let mut last = None;
-                    downloader.download(&exe_url, &paths.new_exe, limit, &mut |done, total| {
+                    downloader.download(&setup_url, &paths.setup, limit, &mut |done, total| {
                         let total = if total > 0 { total } else { size };
                         if last != Some(done) {
                             last = Some(done);
@@ -301,8 +282,8 @@ impl Installer {
                         }
                         !cancel.load(Ordering::SeqCst)
                     })?;
-                    let expected = checksum_hex(&text, EXE_NAME)?;
-                    file_matches_sha256(&paths.new_exe, &expected)?;
+                    let expected = checksum_hex(&text, SETUP_NAME)?;
+                    file_matches_sha256(&paths.setup, &expected)?;
                     if cancel.load(Ordering::SeqCst) {
                         return Err(InstallError::Cancelled);
                     }
@@ -327,7 +308,10 @@ impl Installer {
                     total: size,
                 };
             }
-            Err(e) => self.fail(InstallError::Io(e.to_string()).message()),
+            Err(e) => {
+                discard_download(&paths);
+                self.fail(InstallError::Io(e.to_string()).message());
+            }
         }
     }
 
@@ -383,21 +367,80 @@ impl Installer {
     }
 }
 
-/// Zweite Prüfung von `.new` gegen die beim Download geprüfte Summe, unmittelbar vor dem
-/// Austausch, in einem eigenen Thread (große Datei, die Oberfläche wartet nicht). Ein anderes
-/// Programm hätte die Datei inzwischen verändern können (etwa eine zweite Instanz, die selbst
-/// ein Update lädt). Ist ein Kontext da, meldet der Thread danach ein neues Bild.
+/// Der Installer nach der zweiten Prüfung, gesperrt bis nach seinem Start
+/// ([`LockedSetup::launch`]). Unter Windows hält er den Griff, über den die Summe geprüft wurde,
+/// mit Freigabe nur zum Lesen (`FILE_SHARE_READ`): Niemand kann die Datei zwischen Prüfung und
+/// Start umschreiben, umbenennen oder löschen; lesen und ausführen geht weiter (Windows öffnet
+/// ein Programm zum Start nur zum Lesen und Ausführen, der Installer liest sich selbst nur).
+/// Anderswo hält er nur eine offene Datei (dort startet ohnehin nichts).
+#[derive(Debug)]
+pub struct LockedSetup {
+    path: PathBuf,
+    _file: std::fs::File,
+}
+
+impl LockedSetup {
+    /// Die gesperrte Datei.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Startet den Installer über `launcher` und gibt die Sperre erst danach frei (auch wenn der
+    /// Start scheitert; dann kann der Download gelöscht werden).
+    pub fn launch(
+        self,
+        launcher: &dyn SetupLauncher,
+        mode: InstallMode,
+    ) -> Result<(), LaunchError> {
+        let result = launcher.launch(&self.path, mode);
+        drop(self);
+        result
+    }
+}
+
+/// Öffnet `file` gesperrt (siehe [`LockedSetup`]) und prüft die Summe über genau diesen Griff
+/// gegen `expected_hex`. Stimmt sie, bleibt die Sperre bis nach dem Start bestehen; so sind
+/// zweite Prüfung und Start ein Schritt. Hält ein anderes Programm die Datei schon zum
+/// Schreiben offen, scheitert schon das Öffnen.
+pub fn lock_verified(file: &Path, expected_hex: &str) -> Result<LockedSetup, InstallError> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.share_mode(windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ);
+    }
+    let mut f = options
+        .open(file)
+        .map_err(|e| InstallError::Io(format!("Datei lesen: {e}")))?;
+    reader_matches_sha256(&mut f, expected_hex)?;
+    Ok(LockedSetup {
+        path: file.to_path_buf(),
+        _file: f,
+    })
+}
+
+/// Zweite Prüfung des Installers gegen die beim Download geprüfte Summe ([`lock_verified`]),
+/// unmittelbar vor dem Start, in einem eigenen Thread (große Datei, die Oberfläche wartet
+/// nicht). Ein anderes Programm hätte die Datei inzwischen verändern können (etwa eine zweite
+/// Instanz, die selbst ein Update lädt); ab dieser Prüfung ist sie bis nach dem Start gesperrt.
+/// Ist ein Kontext da, meldet der Thread danach ein neues Bild. `gate` (nur in Tests): der
+/// Thread wartet vor der Prüfung, bis dort etwas ankommt oder es geschlossen wird.
 pub fn reverify(
     file: PathBuf,
     expected_hex: String,
     repaint: Option<egui::Context>,
-) -> Receiver<Result<(), InstallError>> {
+    gate: Option<Receiver<()>>,
+) -> Receiver<Result<LockedSetup, InstallError>> {
     let (tx, rx) = mpsc::channel();
     let job_tx = tx.clone();
     let spawned = std::thread::Builder::new()
         .name("planora-update-pruefen".into())
         .spawn(move || {
-            let _ = job_tx.send(file_matches_sha256(&file, &expected_hex));
+            if let Some(gate) = gate {
+                let _ = gate.recv();
+            }
+            let _ = job_tx.send(lock_verified(&file, &expected_hex));
             if let Some(ctx) = repaint {
                 ctx.request_repaint();
             }
@@ -406,70 +449,6 @@ pub fn reverify(
         let _ = tx.send(Err(InstallError::Io(e.to_string())));
     }
     rx
-}
-
-/// Startet die neue Version nach dem Austausch. Im Programm [`ProcessRestarter`], in Tests eine
-/// Nachbildung.
-pub trait Restarter {
-    /// Startet `exe` mit [`AFTER_UPDATE_ARG`]; wartet nicht auf sie. Liefert einen Griff auf die
-    /// gestartete Version, mit dem die alte sie wieder beenden kann.
-    fn start_new(&self, exe: &Path) -> Result<Box<dyn NewProcess>, String>;
-}
-
-/// Die gestartete neue Version, solange die alte auf ihre Rückmeldung wartet.
-pub trait NewProcess {
-    /// Beendet die neue Version und wartet, bis sie weg ist (nur nötig, wenn sie sich nicht
-    /// rechtzeitig meldet oder der Neustart abgebrochen wird; sonst läuft sie weiter). Fehler,
-    /// etwa weil sie schon von selbst geendet hat, werden übergangen.
-    fn stop(&mut self);
-
-    /// Hat die neue Version schon von selbst geendet? Fragt nur nach, wartet nie.
-    fn exited(&mut self) -> bool;
-
-    /// Prozessnummer der neuen Version (für ihren Laufmarker, [`crate::crash::marker_path`]).
-    fn pid(&self) -> Option<u32>;
-}
-
-/// Startet die neue exe als eigenen Prozess (nur Windows; sonst Fehler).
-pub struct ProcessRestarter;
-
-impl Restarter for ProcessRestarter {
-    #[cfg(windows)]
-    fn start_new(&self, exe: &Path) -> Result<Box<dyn NewProcess>, String> {
-        std::process::Command::new(exe)
-            .arg(AFTER_UPDATE_ARG)
-            .spawn()
-            .map(|child| Box::new(ChildProcess(child)) as Box<dyn NewProcess>)
-            .map_err(|e| e.to_string())
-    }
-
-    #[cfg(not(windows))]
-    fn start_new(&self, _exe: &Path) -> Result<Box<dyn NewProcess>, String> {
-        Err(ONLY_WINDOWS.into())
-    }
-}
-
-/// Ein mit [`ProcessRestarter`] gestarteter Prozess. Wird der Griff nur fallen gelassen, läuft
-/// der Prozess weiter (so nach einer gelungenen Rückmeldung).
-#[cfg(windows)]
-struct ChildProcess(std::process::Child);
-
-#[cfg(windows)]
-impl NewProcess for ChildProcess {
-    fn stop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-
-    /// Ein Fehler beim Nachfragen zählt als „läuft noch“: dann gilt nur die Frist
-    /// ([`MARKER_WAIT`]); sicher, nur langsamer.
-    fn exited(&mut self) -> bool {
-        matches!(self.0.try_wait(), Ok(Some(_)))
-    }
-
-    fn pid(&self) -> Option<u32> {
-        Some(self.0.id())
-    }
 }
 
 /// Download ohne Netz für [`crate::app::PlanoraApp::for_tests`]: meldet immer „kein Netz“.
@@ -484,15 +463,6 @@ impl Downloader for NoDownload {
         _progress: &mut dyn FnMut(u64, u64) -> bool,
     ) -> Result<(), InstallError> {
         Err(InstallError::Network("keine Verbindung".into()))
-    }
-}
-
-/// Neustart, der nie etwas startet, für [`crate::app::PlanoraApp::for_tests`].
-pub struct NoRestart;
-
-impl Restarter for NoRestart {
-    fn start_new(&self, _exe: &Path) -> Result<Box<dyn NewProcess>, String> {
-        Err("in Tests nicht möglich".into())
     }
 }
 
@@ -529,47 +499,26 @@ fn take_notes(file: &Path, version: &Version) -> Option<String> {
     (Version::parse(first.trim()).ok()? == *version).then(|| notes.to_string())
 }
 
-/// Rückmeldung der neu gestarteten Version an die alte: die Datei `planoracad.update-ok` mit der
-/// laufenden Version als Inhalt. Nur mit [`AFTER_UPDATE_ARG`] und erst, wenn das erste Bild
-/// fertig gezeichnet ist (vorher könnte die neue Version noch scheitern, etwa beim Laden der
-/// Konfiguration); Fehler werden übergangen (dann legt die alte Version nach [`MARKER_WAIT`]
-/// zurück).
-pub fn write_ok_marker(paths: &Paths, running: &Version) {
-    let _ = std::fs::write(&paths.ok_marker, running.to_string());
-}
-
-/// Gilt die Rückmeldung für `to`? Nur, wenn die Datei da ist und genau diese Version enthält
-/// (eine liegengebliebene Datei eines früheren Updates zählt nicht).
-pub fn ok_marker_for(paths: &Paths, to: &Version) -> bool {
-    std::fs::read_to_string(&paths.ok_marker).is_ok_and(|c| c.trim() == to.to_string())
-}
-
 /// Beim Programmstart: Steht in der Konfiguration ein begonnenes Update (`update_pending`), wird
-/// es gelöscht; war sein Ziel nicht die laufende Version, ist der Austausch gescheitert und wird
-/// nicht wiederholt. Bei einem normalen Start (ohne [`AFTER_UPDATE_ARG`]) `.old` eines früheren
-/// Updates löschen (Fehler übergehen); beim Start nach dem Austausch bleibt sie, weil die alte
-/// Version sie zum Zurücklegen braucht, bis sie die Rückmeldung hat. Mit [`AFTER_UPDATE_ARG`]
-/// oder einem Ziel gleich der laufenden Version den Hinweis „Aktualisiert auf Version X“
-/// liefern. Die Rückmeldung an die alte Version schreibt [`write_ok_marker`] (später, nach dem
-/// ersten Bild, nicht hier).
+/// es gelöscht, ebenso ein liegengebliebener Download `download` (der Installer bleibt nach
+/// seinem Start liegen, weil er ihn selbst noch braucht; weg kommt er erst beim nächsten Start). War das Ziel des Updates die laufende
+/// Version, den Hinweis „Aktualisiert auf Version X“ liefern (mit den hinterlegten Patchnotes);
+/// sonst ist das Update nicht durchgelaufen und wird nicht wiederholt.
 pub fn startup(
     ws: &mut Workspace,
-    after_update_arg: bool,
-    paths: Option<&Paths>,
+    download: &DownloadPaths,
     running: &Version,
 ) -> Option<AfterUpdate> {
     let pending = ws.pending_update();
     let matched = pending.is_some_and(|(_, to)| to == *running);
     if pending.is_some() {
         // Misslingt das Speichern, kommt der Eintrag beim nächsten Start wieder; dann gilt
-        // dasselbe noch einmal (kein erneuter Austausch).
+        // dasselbe noch einmal (kein erneuter Versuch).
         let _ = ws.set_pending_update(None);
     }
-    if !after_update_arg && let Some(paths) = paths {
-        cleanup_old(paths);
-    }
+    discard_download(download);
     let notes_file = notes_file(ws);
-    if !after_update_arg && !matched {
+    if !matched {
         let _ = std::fs::remove_file(&notes_file);
         return None;
     }
@@ -577,6 +526,16 @@ pub fn startup(
         version: *running,
         notes: take_notes(&notes_file, running),
     })
+}
+
+/// Fenster für den Start: Größe, Lage und Zustand aus `update_pending`, aber nur, wenn das Ziel
+/// des Updates die laufende Version ist (so öffnet die neue Version wie die alte).
+pub fn window_for_start(config: &Config, running: &Version) -> Option<WindowState> {
+    let pending = config.update_pending.as_ref()?;
+    if Version::parse(&pending.to).ok()? != *running {
+        return None;
+    }
+    pending.window
 }
 
 /// Text der Statuszeile während eines Updates.
@@ -590,10 +549,12 @@ pub fn status_text(state: &InstallState, restarting: bool) -> String {
     }
 }
 
-/// Statuszeile, solange die neue Version gestartet wird.
+/// Statuszeile, solange der Installer geprüft und gestartet wird.
 pub const RESTARTING: &str = "Neustart …";
-/// Kasten über allem, solange die neue Version gestartet wird (die Bedienung ist gesperrt).
-pub const RESTART_BOX: &str = "PlanoraCAD startet für das Update neu. Bitte einen Moment warten.";
+/// Kasten über allem, solange der Installer geprüft und gestartet wird (die Bedienung ist
+/// gesperrt).
+pub const RESTART_BOX: &str =
+    "PlanoraCAD wird für das Update beendet und startet danach von selbst neu.";
 /// Statuszeile nach einem gescheiterten Update.
 pub const FAILED_SHORT: &str = "Update fehlgeschlagen";
 
@@ -644,9 +605,9 @@ pub fn window_state(info: &egui::ViewportInfo) -> Option<WindowState> {
 }
 
 /// Öffnet das Fenster in Größe, Lage und Zustand `w`; so übernimmt die neue Version nach einem
-/// Update das Fenster der alten. Geprüft mit [`WindowState::sanitized`]: Größe mindestens
-/// [`MIN_WINDOW`], höchstens `MAX_WINDOW_SIZE`; eine unplausible Lage bleibt weg (dann setzt das
-/// System das Fenster); ohne brauchbare Größe bleibt alles bei der Vorgabe.
+/// Update das Fenster der alten ([`window_for_start`]). Geprüft mit [`WindowState::sanitized`]:
+/// Größe mindestens [`MIN_WINDOW`], höchstens `MAX_WINDOW_SIZE`; eine unplausible Lage bleibt
+/// weg (dann setzt das System das Fenster); ohne brauchbare Größe bleibt alles bei der Vorgabe.
 pub fn restore_window(builder: egui::ViewportBuilder, w: &WindowState) -> egui::ViewportBuilder {
     let Some(w) = w.sanitized() else {
         return builder;
@@ -658,4 +619,124 @@ pub fn restore_window(builder: egui::ViewportBuilder, w: &WindowState) -> egui::
         builder = builder.with_position(egui::pos2(x, y));
     }
     builder
+}
+
+// ---------------------------------------------------------------------------------------------
+// Installer starten (Update über `planoracad-setup-x64.exe`)
+// ---------------------------------------------------------------------------------------------
+
+/// Parameter, an dem der Installer erkennt, dass er die App nach einem Update wieder starten soll
+/// (`{param:NACHUPDATE|0}` in `installer/planoracad.iss`).
+pub const SETUP_RESTART_PARAM: &str = "/NACHUPDATE=1";
+
+/// Parameter für den stillen Lauf des Installers im Modus `mode`, durch Leerzeichen getrennt,
+/// zuletzt das Protokoll nach `log` (`/LOG=…`, in Anführungszeichen, wenn der Pfad Leerzeichen
+/// enthält).
+pub fn setup_args(mode: InstallMode, log: &Path) -> String {
+    let who = match mode {
+        InstallMode::User => "/CURRENTUSER",
+        InstallMode::AllUsers => "/ALLUSERS",
+    };
+    let log = log.to_string_lossy();
+    let log = if log.contains(' ') {
+        format!("/LOG=\"{log}\"")
+    } else {
+        format!("/LOG={log}")
+    };
+    [
+        "/VERYSILENT",
+        "/SUPPRESSMSGBOXES",
+        "/NORESTART",
+        "/CLOSEAPPLICATIONS",
+        who,
+        SETUP_RESTART_PARAM,
+        &log,
+    ]
+    .join(" ")
+}
+
+/// Verb für `ShellExecuteExW`: `runas` (Admin-Abfrage) nur bei „für alle“.
+pub fn setup_verb(mode: InstallMode) -> &'static str {
+    match mode {
+        InstallMode::User => "open",
+        InstallMode::AllUsers => "runas",
+    }
+}
+
+/// Warum der Installer nicht gestartet ist.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LaunchError {
+    /// Die Admin-Abfrage wurde abgelehnt.
+    Cancelled,
+    /// Sonstiger Fehler (Text für die Meldung).
+    Failed(String),
+}
+
+/// Startet den heruntergeladenen Installer.
+pub trait SetupLauncher {
+    fn launch(&self, setup: &Path, mode: InstallMode) -> Result<(), LaunchError>;
+}
+
+/// Startet den Installer über `ShellExecuteExW` (nur Windows) mit [`setup_args`] und dem
+/// Protokoll [`setup_log_path`]. Läuft synchron im UI-Faden: Die Admin-Abfrage liegt auf dem
+/// sicheren Desktop; das kurze „Keine Rückmeldung“ ist hinnehmbar und spart einen COM-Faden.
+pub struct ShellLauncher;
+
+impl SetupLauncher for ShellLauncher {
+    #[cfg(windows)]
+    fn launch(&self, setup: &Path, mode: InstallMode) -> Result<(), LaunchError> {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Foundation::{ERROR_CANCELLED, GetLastError};
+        use windows_sys::Win32::UI::Shell::{
+            SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW, ShellExecuteExW,
+        };
+        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+        fn wide(s: &std::ffi::OsStr) -> Vec<u16> {
+            s.encode_wide().chain(std::iter::once(0)).collect()
+        }
+        let verb = wide(setup_verb(mode).as_ref());
+        let file = wide(setup.as_os_str());
+        let params = wide(setup_args(mode, &setup_log_path()).as_ref());
+        let dir = wide(setup.parent().unwrap_or(Path::new("")).as_os_str());
+
+        // SAFETY: SHELLEXECUTEINFOW ist eine reine C-Struktur; alles Null ist ein gültiger
+        // Anfangszustand (keine Fenster, keine Griffe).
+        let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
+        info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+        info.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+        info.lpVerb = verb.as_ptr();
+        info.lpFile = file.as_ptr();
+        info.lpParameters = params.as_ptr();
+        info.lpDirectory = dir.as_ptr();
+        info.nShow = SW_SHOWNORMAL;
+        // SAFETY: `info` ist vollständig gesetzt; alle Zeichenketten sind nullterminiert und
+        // leben bis nach dem Aufruf.
+        if unsafe { ShellExecuteExW(&mut info) } != 0 {
+            return Ok(());
+        }
+        // SAFETY: Liest nur den Fehlercode des eigenen Fadens.
+        let code = unsafe { GetLastError() };
+        if code == ERROR_CANCELLED {
+            Err(LaunchError::Cancelled)
+        } else {
+            Err(LaunchError::Failed(
+                std::io::Error::from_raw_os_error(code as i32).to_string(),
+            ))
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn launch(&self, _setup: &Path, _mode: InstallMode) -> Result<(), LaunchError> {
+        Err(LaunchError::Failed(ONLY_WINDOWS.into()))
+    }
+}
+
+/// Start, der nie etwas startet, für [`crate::app::PlanoraApp::for_tests`].
+pub struct NoLaunch;
+
+impl SetupLauncher for NoLaunch {
+    fn launch(&self, _setup: &Path, _mode: InstallMode) -> Result<(), LaunchError> {
+        Err(LaunchError::Failed("in Tests nicht möglich".into()))
+    }
 }

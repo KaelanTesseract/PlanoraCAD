@@ -14,11 +14,11 @@ use crate::version::Version;
 /// Das Repository, aus dem Updates kommen; fest, nicht einstellbar.
 pub const REPO: &str = "KaelanTesseract/PlanoraCAD";
 
-/// Dateiname der Programmdatei im Release.
-pub const EXE_NAME: &str = "planoracad-windows-x64.exe";
+/// Dateiname des Installers im Release.
+pub const SETUP_NAME: &str = "planoracad-setup-x64.exe";
 
-/// Dateiname der Prüfsummen-Datei im Release.
-pub const SHA256_NAME: &str = "planoracad-windows-x64.sha256";
+/// Dateiname der Prüfsummen-Datei des Installers im Release.
+pub const SHA256_NAME: &str = "planoracad-setup-x64.sha256";
 
 /// Dateiname der Lizenzhinweise im Release (optional).
 pub const LICENSES_NAME: &str = "THIRD-PARTY-LICENSES.txt";
@@ -49,8 +49,8 @@ pub struct Release {
     pub tag: String,
     /// Patchnotes (Markdown, Beschreibung des Releases); leer, wenn keine vorhanden.
     pub notes: String,
-    /// Programmdatei.
-    pub exe: AssetRef,
+    /// Installer.
+    pub setup: AssetRef,
     /// Prüfsummen-Datei.
     pub sha256: AssetRef,
     /// Lizenzhinweise, falls genau eine passende Datei vorhanden ist.
@@ -109,7 +109,7 @@ struct RawAsset {
 
 /// Liest die Release-Liste im GitHub-Format. Ausgelassen werden Entwürfe, Einträge mit
 /// unlesbarer Version oder unpassendem Aufbau und Einträge, die nicht genau eine
-/// [`EXE_NAME`]- und eine [`SHA256_NAME`]-Datei unter der Release-Adresse von [`REPO`]
+/// [`SETUP_NAME`]- und eine [`SHA256_NAME`]-Datei unter der Release-Adresse von [`REPO`]
 /// haben. Die Lizenzdatei ist optional; fehlt sie, ist sie doppelt oder liegt sie woanders,
 /// bleibt `licenses` leer. Die Reihenfolge der Antwort bleibt erhalten.
 pub fn parse_releases(json: &str) -> Result<Vec<Release>, ReleaseError> {
@@ -127,14 +127,14 @@ fn release_from(item: serde_json::Value) -> Option<Release> {
         return None;
     }
     let version = Version::parse(&raw.tag_name).ok()?;
-    let exe = single_asset(&raw, EXE_NAME)?;
+    let setup = single_asset(&raw, SETUP_NAME)?;
     let sha256 = single_asset(&raw, SHA256_NAME)?;
     let licenses = single_asset(&raw, LICENSES_NAME);
     Some(Release {
         version,
         tag: raw.tag_name,
         notes: raw.body.unwrap_or_default(),
-        exe,
+        setup,
         sha256,
         licenses,
     })

@@ -1,8 +1,8 @@
 //! Prüft die Veröffentlichungs-Angaben des Repositorys: die Versionsnummer in `Cargo.toml`
 //! und die Abschnitte in `CHANGELOG.md`. Beides muss zusammenpassen, sonst bricht
-//! `release.yml` ab (siehe README, Abschnitt „Updates und Versionen“).
+//! `release.yml` ab (siehe `docs/funktionen.md`, Abschnitt „Updates und Versionen“).
 
-use planora_update::Version;
+use planora_update::{SETUP_NAME, SHA256_NAME, Version};
 use std::path::PathBuf;
 
 fn repo_file(name: &str) -> String {
@@ -128,6 +128,64 @@ fn release_ships_the_pdb_but_update_never_loads_it() {
             !text.to_ascii_lowercase().contains(".pdb"),
             "{} erwähnt .pdb",
             e.path().display()
+        );
+    }
+}
+
+/// Der Teil von `release.yml`, der `gh release create` zusammenbaut.
+fn release_args() -> String {
+    let yml = repo_file(".github/workflows/release.yml");
+    let start = yml
+        .find("$ghArgs = @('release', 'create'")
+        .expect("gh release create fehlt in release.yml");
+    let rest = &yml[start..];
+    let end = rest.find("--verify-tag").expect("Ende der Argumentliste");
+    rest[..end].to_string()
+}
+
+#[test]
+fn release_uploads_exactly_the_four_files() {
+    let args = release_args();
+    let files = [
+        format!("'dist/{SETUP_NAME}'"),
+        format!("'dist/{SHA256_NAME}'"),
+        "'dist/THIRD-PARTY-LICENSES.txt'".to_string(),
+        "'dist/planoracad-windows-x64.pdb'".to_string(),
+    ];
+    for f in &files {
+        assert_eq!(
+            args.matches(f.as_str()).count(),
+            1,
+            "{f} fehlt oder doppelt"
+        );
+    }
+    assert_eq!(
+        args.matches("'dist/").count(),
+        4,
+        "genau vier Dateien: {args}"
+    );
+    let yml = repo_file(".github/workflows/release.yml");
+    assert!(
+        !yml.contains("planoracad-windows-x64.exe"),
+        "die Einzel-exe darf nirgends mehr vorkommen"
+    );
+}
+
+#[test]
+fn release_builds_the_installer_with_the_script() {
+    let yml = repo_file(".github/workflows/release.yml");
+    assert!(
+        yml.contains("./tools/build-installer.ps1 -Exe target/release/planora-app.exe"),
+        "release.yml ruft build-installer.ps1 nicht mit der Programmdatei auf"
+    );
+    assert!(
+        yml.contains("choco install innosetup --version 6.7.3"),
+        "Inno Setup ist nicht auf eine Version gepinnt"
+    );
+    for line in yml.lines().filter(|l| l.contains("cargo build")) {
+        assert!(
+            !line.contains("--features"),
+            "der Bau darf keine Zusatzfunktionen einschalten: {line}"
         );
     }
 }

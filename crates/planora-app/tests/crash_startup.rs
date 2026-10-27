@@ -412,13 +412,6 @@ fn notice_never_shows_while_restart_locked() {
     r.settle();
     r.settle();
     assert!(!r.notice_shown());
-    // Während die Rückmeldung an die alte Version aussteht, auch nicht.
-    let mut r = Rig::bare("planora-rueckfrage-okmarker", SIZE);
-    let finding = crashed(&r.data);
-    r.app.set_start_finding(finding);
-    r.app.run_update_startup(true);
-    r.frame(vec![]);
-    assert!(!r.notice_shown());
 }
 
 #[test]
