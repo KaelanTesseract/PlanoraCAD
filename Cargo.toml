@@ -23,6 +23,7 @@ planora-exchange = { path = "crates/planora-exchange" }
 planora-step = { path = "crates/planora-step" }
 planora-drawing = { path = "crates/planora-drawing" }
 planora-update = { path = "crates/planora-update" }
+planora-i18n = { path = "crates/planora-i18n" }
 
 # externe Crates (Lizenzen am 2026-10-09 geprüft: alle MIT und/oder Apache-2.0, earcutr ISC, spade MIT OR Apache-2.0, Roboto-Schrift Apache-2.0)
 glam = "0.34"
@@ -50,6 +51,10 @@ chrono = { version = "=0.4.45", default-features = false, features = ["clock"] }
 # Windows-eigenen TLS-Schicht (Schannel über native-tls). Ohne rustls/ring und ohne die
 # webpki-Stammzertifikate (CDLA-Lizenz); geprüft wird gegen den Zertifikatsspeicher von Windows.
 ureq = { version = "3.5", default-features = false, features = ["native-tls-no-default"] }
+# Sprachen (planora-i18n): Fluent-Sprachdateien und Sprach-Ids (BCP 47). Am 2026-10-27 geprüft:
+# fluent-bundle und unic-langid MIT OR Apache-2.0; Unterpakete siehe cargo deny.
+fluent-bundle = "=0.16.0"
+unic-langid = "=0.9.6"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
