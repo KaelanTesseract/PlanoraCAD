@@ -588,7 +588,7 @@ Einzelheiten und die Handliste: `docs/superpowers/offene-punkte.md`, Abschnitt �
 
 Das Programm hat ein neues, ruhigeres Aussehen bekommen: dunkelgraue Flächen, dünne Ränder, Farbe nur dort, wo sie etwas bedeutet (eingeschalteter Modus, gewählte Teile, Tastaturfokus).
 
-- Hell oder Dunkel: Du kannst für jedes Dokument zwischen hellem und dunklem Aussehen wählen. Das Papier der Zeichnung bleibt in beiden Fällen weiß.
+- Hell oder Dunkel: Du wählst über „Ansicht“ zwischen hellem und dunklem Aussehen; die Wahl gilt für alle Tabs und bleibt nach einem Neustart erhalten. Das Papier der Zeichnung bleibt in beiden Fällen weiß.
 - Neue Schrift: Montserrat in drei Stärken, überall im Programm.
 - Neue Symbole: einheitliche Linien-Symbole in den Menüs und Werkzeugleisten, dazu passend gezeichnete Symbole für die Skizzenwerkzeuge.
 - Einheitliche Abstände, Ränder und Rundungen in allen Fenstern.

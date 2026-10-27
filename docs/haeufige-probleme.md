@@ -20,7 +20,7 @@ Manche Virenprogramme prüfen eine neue Programmdatei erst eine Weile oder halte
 2. Zeigt das Programm nur den Knopf „Download-Seite öffnen“? Dann wurde es nicht mit dem Installer installiert, zum Beispiel direkt aus dem Bauordner gestartet. Lade `planoracad-setup-x64.exe` von der [Seite der Veröffentlichungen](https://github.com/KaelanTesseract/PlanoraCAD/releases) und installiere es.
 3. Klappt es trotzdem nicht? Das Programm schreibt den Verlauf in die Datei `planoracad-update.log` im Temp-Ordner. Drück die Windows-Taste und R, tipp `%TEMP%` ein und such die Datei. Lade danach den neuen Installer von der Release-Seite und führ ihn selbst aus. Er ersetzt die alte Version; deine Projekte und Einstellungen bleiben erhalten.
 
-Unter Linux und macOS gibt es keine Updates über das Programm. Dort lädst du neue Versionen von Hand herunter.
+Unter Linux (selbst gebaut) gibt es keine Updates über das Programm. Dort lädst du neue Versionen von Hand herunter.
 
 ## Etwas anderes?
 

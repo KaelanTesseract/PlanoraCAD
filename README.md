@@ -43,8 +43,8 @@ Alles mit Einzelheiten, Bedienung und Grenzen steht unter [Funktionen im Detail]
 2. Such die neueste Version. Klick darunter im Bereich „Assets“ auf `planoracad-setup-x64.exe`. Die Datei wird heruntergeladen.
 3. Doppelklick auf `planoracad-setup-x64.exe`.
 4. Windows zeigt wahrscheinlich ein blaues Fenster „Der Computer wurde durch Windows geschützt“. Klick dort auf „Weitere Informationen“ und dann auf „Trotzdem ausführen“. Die Warnung kommt, weil die Datei nicht digital signiert ist. Lade das Programm deshalb nur von der Seite der Veröffentlichungen hier im Repository.
-5. Auf der Lizenzseite („Lesen Sie bitte die folgenden Lizenzvereinbarungen …“) liest du die Lizenz, wählst „Ich akzeptiere die Vereinbarung“ und klickst auf „Weiter“.
-6. Im Installer wählst du, für wen das Programm da sein soll: „Nur für mich“ (ohne Administratorrechte) oder „Für alle Benutzer“ (Windows fragt dann nach Administratorrechten).
+5. Zuerst fragt der Installer, für wen das Programm da sein soll: „Nur für mich“ (ohne Administratorrechte) oder „Für alle Benutzer“ (Windows fragt dann nach Administratorrechten).
+6. Auf der Lizenzseite („Lesen Sie bitte die folgenden Lizenzvereinbarungen …“) liest du die Lizenz, wählst „Ich akzeptiere die Vereinbarung“ und klickst auf „Weiter“.
 7. Setz bei Bedarf das Häkchen für die Verknüpfung auf dem Desktop.
 8. Klick dich bis „Fertigstellen“ durch. Das Programm steht danach im Startmenü und startet auf Wunsch gleich.
 
