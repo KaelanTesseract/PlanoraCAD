@@ -242,6 +242,10 @@ impl Diag {
 /// freien Platz (ein früherer, gescheiterter Versuch hat `.1.log` schon frei gemacht); dann wird
 /// nur noch die aktuelle Datei verschoben, und wiederholte Versuche löschen keine älteren
 /// Dateien nach und nach.
+///
+/// Ist die aktuelle Datei gesperrt (etwa von einem Virenscanner), kann beim ersten Versuch die
+/// älteste Datei (`.2.log`) schon weggefallen und `.1.log` nachgerückt sein, bevor das
+/// Verschieben der aktuellen scheitert – wie bei einem gelungenen Drehen, nur ohne neue Datei.
 fn rotate(dir: &Path) -> bool {
     let name = |i: usize| {
         if i == 0 {
