@@ -1025,8 +1025,19 @@ impl PlanoraApp {
         {
             self.after_update_action(ctx, action);
         }
-        if self.ws.prompt.is_none() {
-            update_dialog::show_after_update(ctx, &mut self.after_update);
+        if self.ws.prompt.is_none()
+            && update_dialog::show_after_update(ctx, &mut self.after_update)
+                == Some(update_dialog::AfterUpdateAction::Feedback)
+        {
+            let info = self.feedback_context(ctx);
+            open_feedback(
+                &mut self.ws,
+                &mut self.projects,
+                &mut self.settings,
+                &mut self.overview,
+                &mut self.feedback,
+                info,
+            );
         }
     }
 

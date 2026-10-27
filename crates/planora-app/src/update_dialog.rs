@@ -415,16 +415,31 @@ pub(crate) fn failure_box(ui: &mut egui::Ui, message: &str, dark: bool) {
         });
 }
 
+/// Satz im Hinweis nach einem Update.
+pub const AFTER_UPDATE_FEEDBACK: &str = "Etwas stimmt nicht?";
+/// Knopf im Hinweis nach einem Update: öffnet das Fenster „Rückmeldung“.
+pub const FEEDBACK_BUTTON: &str = "Rückmeldung geben";
+
+/// Was der Hinweis nach einem Update dem Programm aufträgt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AfterUpdateAction {
+    /// Das Fenster „Rückmeldung“ öffnen (der Hinweis ist dann schon zu).
+    Feedback,
+}
+
 /// Hinweis „Aktualisiert auf Version X“ nach einem Update, einmal: mit den Patchnotes dieser
-/// Version, sonst nur dem Verweis auf GitHub. „OK“, ✕ und Esc schließen ihn (`after` wird
-/// leer).
-pub fn show_after_update(ctx: &egui::Context, after: &mut Option<AfterUpdate>) {
-    let Some(info) = after.as_ref() else {
-        return;
-    };
+/// Version, sonst nur dem Verweis auf GitHub, dazu die laufende Version und der Knopf
+/// „Rückmeldung geben“. „OK“, ✕ und Esc schließen ihn (`after` wird leer); „Rückmeldung geben“
+/// schließt ihn auch und liefert [`AfterUpdateAction::Feedback`].
+pub fn show_after_update(
+    ctx: &egui::Context,
+    after: &mut Option<AfterUpdate>,
+) -> Option<AfterUpdateAction> {
+    let info = after.as_ref()?;
     let dark = ctx.global_style().visuals.dark_mode;
     let mut open = true;
     let mut ok = false;
+    let mut feedback = false;
     Dialog::new(
         update_install::updated_title(&info.version),
         DialogSize::Wide,
@@ -438,32 +453,47 @@ pub fn show_after_update(ctx: &egui::Context, after: &mut Option<AfterUpdate>) {
             let blocks = info.notes.as_deref().map(parse_notes).unwrap_or_default();
             if blocks.is_empty() {
                 ui.label(NOTES_ON_GITHUB);
-                return;
+            } else {
+                theme::scroll_area(
+                    ui,
+                    egui::ScrollArea::vertical()
+                        .id_salt("update_done_notes")
+                        .auto_shrink([false, true])
+                        .max_height(notes_height(ctx.content_rect().height())),
+                    |ui| {
+                        for block in &blocks {
+                            note_block(ui, block, dark);
+                        }
+                    },
+                );
             }
-            theme::scroll_area(
-                ui,
-                egui::ScrollArea::vertical()
-                    .id_salt("update_done_notes")
-                    .auto_shrink([false, true])
-                    .max_height(notes_height(ctx.content_rect().height())),
-                |ui| {
-                    for block in &blocks {
-                        note_block(ui, block, dark);
-                    }
-                },
+            ui.add_space(theme::SPACE_3);
+            ui.label(format!(
+                "Laufende Version: {}",
+                crate::build_info::build_info().version_line()
+            ));
+            ui.label(
+                egui::RichText::new(AFTER_UPDATE_FEEDBACK)
+                    .color(theme::palette(dark).text_secondary),
             );
         },
         |ui| {
-            if ui.add(theme::primary_button(OK, dark)).clicked() {
-                ok = true;
-            }
+            ui.horizontal(|ui| {
+                if ui.add(theme::primary_button(OK, dark)).clicked() {
+                    ok = true;
+                }
+                if ui.button(FEEDBACK_BUTTON).clicked() {
+                    feedback = true;
+                }
+            });
         },
     );
     let esc = !crate::viewport::typing(ctx)
         && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
-    if ok || !open || esc {
+    if ok || feedback || !open || esc {
         *after = None;
     }
+    feedback.then_some(AfterUpdateAction::Feedback)
 }
 
 /// Die Notizen aller Versionen, neueste oben, je mit Überschrift „Version X“.

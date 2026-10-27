@@ -693,3 +693,53 @@ fn no_notice_when_the_check_found_nothing() {
         assert!(!h.texts().iter().any(|t| t.starts_with("Update verfügbar")));
     }
 }
+
+fn after_update_harness(prefix: &str) -> Harness {
+    let (ws, cfg) = workspace(prefix);
+    let mut h = Harness::new(ws, cfg, Fake::new(String::new()));
+    h.app
+        .set_after_update(Some(planora_app::update_install::AfterUpdate {
+            version: running_version(),
+            notes: None,
+        }));
+    h.settle();
+    h
+}
+
+#[test]
+fn after_update_notice_offers_feedback() {
+    let h = after_update_harness("planora-after-feedback");
+    assert!(h.sees(AFTER_UPDATE_FEEDBACK), "{:?}", h.texts());
+    assert!(h.sees(FEEDBACK_BUTTON), "{:?}", h.texts());
+    assert!(h.sees(OK));
+    assert_eq!(AFTER_UPDATE_FEEDBACK, "Etwas stimmt nicht?");
+    assert_eq!(FEEDBACK_BUTTON, "Rückmeldung geben");
+    let line = planora_app::build_info::build_info().version_line();
+    assert!(
+        h.texts().iter().any(|t| t.contains(&line)),
+        "Laufende Version fehlt: {:?}",
+        h.texts()
+    );
+}
+
+#[test]
+fn feedback_button_closes_notice_and_opens_feedback_window() {
+    let mut h = after_update_harness("planora-after-feedback-click");
+    h.click(FEEDBACK_BUTTON);
+    assert!(h.app.after_update().is_none());
+    assert!(h.app.feedback_mut().open);
+    assert!(!h.sees(FEEDBACK_BUTTON));
+    assert!(
+        h.sees(planora_app::feedback_dialog::TITLE),
+        "{:?}",
+        h.texts()
+    );
+}
+
+#[test]
+fn ok_still_just_closes() {
+    let mut h = after_update_harness("planora-after-feedback-ok");
+    h.click(OK);
+    assert!(h.app.after_update().is_none());
+    assert!(!h.app.feedback_mut().open);
+}
