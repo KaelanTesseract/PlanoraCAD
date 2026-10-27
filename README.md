@@ -43,9 +43,10 @@ Alles mit Einzelheiten, Bedienung und Grenzen steht unter [Funktionen im Detail]
 2. Such die neueste Version. Klick darunter im Bereich „Assets“ auf `planoracad-setup-x64.exe`. Die Datei wird heruntergeladen.
 3. Doppelklick auf `planoracad-setup-x64.exe`.
 4. Windows zeigt wahrscheinlich ein blaues Fenster „Der Computer wurde durch Windows geschützt“. Klick dort auf „Weitere Informationen“ und dann auf „Trotzdem ausführen“. Die Warnung kommt, weil die Datei nicht digital signiert ist. Lade das Programm deshalb nur von der Seite der Veröffentlichungen hier im Repository.
-5. Im Installer wählst du, für wen das Programm da sein soll: „Nur für mich“ (ohne Administratorrechte) oder „Für alle Benutzer“ (Windows fragt dann nach Administratorrechten).
-6. Setz bei Bedarf das Häkchen für die Verknüpfung auf dem Desktop.
-7. Klick dich bis „Fertigstellen“ durch. Das Programm steht danach im Startmenü und startet auf Wunsch gleich.
+5. Auf der Lizenzseite („Lesen Sie bitte die folgenden Lizenzvereinbarungen …“) liest du die Lizenz, wählst „Ich akzeptiere die Vereinbarung“ und klickst auf „Weiter“.
+6. Im Installer wählst du, für wen das Programm da sein soll: „Nur für mich“ (ohne Administratorrechte) oder „Für alle Benutzer“ (Windows fragt dann nach Administratorrechten).
+7. Setz bei Bedarf das Häkchen für die Verknüpfung auf dem Desktop.
+8. Klick dich bis „Fertigstellen“ durch. Das Programm steht danach im Startmenü und startet auf Wunsch gleich.
 
 Hält dein Virenprogramm die Datei fest oder startet etwas nicht, schau unter [Häufige Probleme](docs/haeufige-probleme.md).
 
@@ -66,7 +67,7 @@ Brauchst du die Ordner oben nicht mehr, kannst du sie nach dem Deinstallieren se
 
 - Beim Start schaut das Programm höchstens einmal am Tag nach, ob es eine neuere Version gibt. Zurzeit gibt es nur Entwicklerversionen (Kanal „Dev“).
 - Gibt es eine, zeigt es ein Fenster mit den Änderungen. Du wählst „Jetzt aktualisieren“, „Später“ oder „Diese Version überspringen“.
-- Bei „Jetzt aktualisieren“ fragt das Programm, ob du ungespeicherte Arbeit speichern willst, lädt den neuen Installer und startet ihn im Hintergrund. Bei „Für alle Benutzer“ fragt Windows nach Administratorrechten.
+- Bei „Jetzt aktualisieren“ lädt das Programm den neuen Installer und prüft ihn. Danach fragt es, ob du ungespeicherte Arbeit speichern willst, und startet erst dann den Installer im Hintergrund. Bei „Für alle Benutzer“ fragt Windows nach Administratorrechten.
 - Lehnst du das ab oder klappt etwas nicht, läuft die bisherige Version weiter. Hilfe steht unter [Häufige Probleme](docs/haeufige-probleme.md).
 - Abschalten oder von Hand suchen: „Datei → Einstellungen …“, Abschnitt „Updates“.
 - Was sich in jeder Version geändert hat, steht in [CHANGELOG.md](CHANGELOG.md). Einzelheiten zu den Updates: [Updates und Versionen](docs/funktionen.md#updates-und-versionen).

@@ -180,5 +180,5 @@ Write-Output 'Alles bereit. Das Skript setzt keinen Tag. Zum Veroeffentlichen se
 Write-Output "  git tag -a $tag -m `"PlanoraCAD $version`""
 Write-Output "  git push origin $tag"
 Write-Output 'Danach baut release.yml die Version, packt den Installer (planoracad-setup-x64.exe, braucht Inno Setup 6, das der Ablauf selbst bereitstellt) und legt das Release an.'
-Write-Output 'Den Installer lokal probieren: toolsuild-installer.ps1 (nach cargo build --release -p planora-app).'
+Write-Output 'Den Installer lokal probieren: tools\build-installer.ps1 (nach cargo build --release -p planora-app).'
 exit 0

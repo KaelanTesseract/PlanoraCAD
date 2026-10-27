@@ -501,7 +501,7 @@ fn take_notes(file: &Path, version: &Version) -> Option<String> {
 
 /// Beim Programmstart: Steht in der Konfiguration ein begonnenes Update (`update_pending`), wird
 /// es gelöscht, ebenso ein liegengebliebener Download `download` (der Installer bleibt nach
-/// seinem Start liegen, weil er ihn selbst noch braucht). War das Ziel des Updates die laufende
+/// seinem Start liegen, weil er ihn selbst noch braucht; weg kommt er erst beim nächsten Start). War das Ziel des Updates die laufende
 /// Version, den Hinweis „Aktualisiert auf Version X“ liefern (mit den hinterlegten Patchnotes);
 /// sonst ist das Update nicht durchgelaufen und wird nicht wiederholt.
 pub fn startup(

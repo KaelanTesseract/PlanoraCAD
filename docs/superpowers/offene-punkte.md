@@ -1852,6 +1852,9 @@ Hat Fusion für eine neue Funktion ein Kürzel, gilt: **Taste eintragen, sobald 
 - **Keine Signatur (SmartScreen):** Der Installer ist nicht signiert, Windows warnt beim ersten Start. Bleibt liegen: Ein Zertifikat kostet Geld und lohnt sich erst mit mehr Nutzern; die README erklärt den Weg über „Weitere Informationen“.
 - **UAC-Abfrage blockiert das Programmfenster kurz:** Bei „Für alle Benutzer“ fragt Windows beim Update nach Administratorrechten; währenddessen ist das Programmfenster kurz nicht bedienbar. Bleibt liegen: Das ist Windows-Verhalten und dauert nur Sekunden.
 - **Inno startet die neue Version bei „für alle“ über explorer.exe:** Das Programm läuft danach mit den normalen Rechten des Benutzers, nicht mit Administratorrechten (gewollt). Bleibt liegen: Es gibt dadurch keinen Nachteil, nur einen anderen Startweg als bei „nur für mich“.
+- **Neustart bei „für alle Benutzer“ mit Standard-Benutzerkonto ungeprüft:** Gibt man das Administratorkennwort eines anderen Kontos ein, ist unklar, ob der Neustart über explorer.exe PlanoraCAD als angemeldeter Benutzer startet. Nur mit einem zweiten Konto prüfbar.
+- **Dateitausch im kurzen Fenster:** Zwischen der Freigabe der Sperre nach ShellExecuteExW und dem erneuten Öffnen durch Inno könnte ein Schadprogramm desselben Benutzers die Datei tauschen. Bleibt liegen: außerhalb des Bedrohungsmodells.
+- **Stiller Installer scheitert nach dem Beenden:** Scheitert der Installer, nachdem sich die App beendet hat, startet nichts neu. Die einzige Spur steht im Protokoll `planoracad-update.log`.
 - **Noch nie auf GitHub gelaufen:** Der Trockenlauf von `release.yml` mit dem Installer-Schritt (Inno Setup über Chocolatey, Version 6.7.3) steht aus.
 
 ## Update-Funktion

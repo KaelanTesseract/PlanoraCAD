@@ -675,7 +675,7 @@ impl PlanoraApp {
                     update_install::SETUP_LOG_NAME
                 ));
                 // Der Installer bleibt liegen (er braucht seine Datei); die neue Version räumt
-                // ihn beim Start weg. Ohne weitere Rückfrage: `handle_close_request` schickt
+                // ihn erst beim nächsten Start weg, weil das Setup dann meist noch läuft. Ohne weitere Rückfrage: `handle_close_request` schickt
                 // `Close`.
                 self.restart = RestartPhase::Exiting;
                 self.ws.quit = true;
@@ -2302,11 +2302,11 @@ impl eframe::App for PlanoraApp {
     /// und die Autosicherung.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Vor dem Schließen: Nach der Rückfrage zum Neustart steht `quit`, das Programm darf
-        // sich aber erst beenden, wenn die neue Version läuft.
+        // sich erst beenden, nachdem der Installer gestartet ist (dann setzt `Exiting` `quit`).
         self.install_tick(ctx);
         if self.restart_locked() && !self.ws.quit && ctx.input(|i| i.viewport().close_requested()) {
-            // Während des Neustarts beendet sich das Programm gleich selbst (oder läuft nach
-            // dem Zurücklegen weiter); eine Rückfrage jetzt könnte unbeantwortet verloren gehen.
+            // Während des Neustarts beendet sich das Programm gleich selbst (oder läuft weiter,
+            // falls der Installer nicht startet); eine Rückfrage jetzt könnte unbeantwortet verloren gehen.
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         } else {
             handle_close_request(ctx, &mut self.ws, &mut self.close_sent);
@@ -2506,8 +2506,8 @@ impl eframe::App for PlanoraApp {
         about_dialog::show(&ctx, &mut self.ws.about_open);
         prompts::show(&ctx, &mut self.ws);
         if self.restart_locked() {
-            // Über allem: sperrt die Bedienung, bis die neue Version läuft oder der alte Stand
-            // zurückliegt.
+            // Über allem: sperrt die Bedienung, bis der Installer gestartet ist und sich das Programm
+            // beendet (oder der Start scheitert und das Programm weiterläuft).
             egui::Modal::new(egui::Id::new("planora_update_restart"))
                 .show(&ctx, |ui| ui.label(update_install::RESTART_BOX));
         }

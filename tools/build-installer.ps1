@@ -95,7 +95,7 @@ if (-not (Test-Path -LiteralPath $OutDir)) { New-Item -ItemType Directory -Path 
 
 # ---- Installer bauen ----
 $script = Join-Path $root 'installer\planoracad.iss'
-& $isccPath /Q "/DAppVersion=$version" "/DAppVersionNumeric=$versionNumeric" "/DSourceExe=$Exe" "/DLicensesFile=$Licenses" "/O$OutDir" $script
+& $isccPath /Qp "/DAppVersion=$version" "/DAppVersionNumeric=$versionNumeric" "/DSourceExe=$Exe" "/DLicensesFile=$Licenses" "/O$OutDir" $script
 if ($LASTEXITCODE -ne 0) { Stop-Build "ISCC ist mit Code $LASTEXITCODE fehlgeschlagen." }
 
 $setup = Join-Path $OutDir $setupName
