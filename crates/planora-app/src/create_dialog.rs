@@ -297,6 +297,7 @@ impl CreateDialog {
         let fields = self.fields();
         let scope = state.document.param_scope();
         Dialog::new(title, DialogSize::Normal)
+            .id(egui::Id::new(("create_dialog", key)))
             .open(&mut open)
             .show(ctx, |ui| {
                 match self {

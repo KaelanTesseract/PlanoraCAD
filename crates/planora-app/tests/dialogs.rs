@@ -338,6 +338,20 @@ fn tab_id(rig: &mut Rig) -> u64 {
     rig.app.ws_mut().active_tab().id
 }
 
+/// Feste Kennung des Fensters zu seinem (deutschen) Titel; die Fenster hängen nicht am Titel.
+fn model_window_id(title: &str) -> Option<Id> {
+    Some(match title {
+        "Quader erzeugen" => Id::new(("create_dialog", "box")),
+        "Zylinder erzeugen" => Id::new(("create_dialog", "cylinder")),
+        "Skizze extrudieren" => Id::new(("create_dialog", "extrude")),
+        "Skizze drehen" => Id::new(("create_dialog", "revolve")),
+        "Boolesche Operation" => Id::new("boolean_dialog"),
+        "Verrunden" => BlendDialog::fillet().window_id(),
+        "Fase" => BlendDialog::chamfer().window_id(),
+        _ => return None,
+    })
+}
+
 fn model_case(
     name: &'static str,
     title: &'static str,
@@ -347,7 +361,7 @@ fn model_case(
     Case {
         name,
         title,
-        id: (!title.is_empty()).then(|| Id::new(title)),
+        id: model_window_id(title),
         class: DialogSize::Normal,
         closable: true,
         open: Box::new(open),
@@ -1004,7 +1018,7 @@ fn dialogs_in_all_modes_above_fields() {
                 y: 2.0,
                 z: 3.0,
             });
-            ids.push(Id::new("Quader erzeugen"));
+            ids.push(Id::new(("create_dialog", "box")));
         }
         rig.settle(6);
         let ids_all = ids.clone();
@@ -1105,7 +1119,7 @@ fn blend_dialog_can_be_moved_and_edges_stay_clickable() {
     rig.settle(4);
     rig.app.ws_mut().active_tab_mut().blend_dialog = Some(BlendDialog::fillet());
     rig.settle(6);
-    let id = Id::new(BlendDialog::fillet().title());
+    let id = BlendDialog::fillet().window_id();
     let rect = rig.area(id).expect("Dialog");
 
     // Eine Kante des Quaders, deren Mitte unter dem Dialog liegt und die man sonst anklicken könnte.

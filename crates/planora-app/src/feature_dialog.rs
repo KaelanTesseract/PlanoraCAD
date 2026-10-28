@@ -11,7 +11,7 @@ use crate::dialog::{Dialog, DialogSize};
 use crate::formula_field::{
     FieldInput, FormulaField, classify, names_hint, number_field_text, resolve,
 };
-use crate::msg::Msg;
+use crate::msg::{Msg, MsgArg};
 use crate::sketch_view::format_number;
 use crate::state::{AppState, MAX_COORD_MM};
 use crate::theme;
@@ -59,6 +59,20 @@ impl FieldLabel {
             FieldLabel::Radius(n) => tr!("blend-field-radius-n", n = n),
         }
     }
+
+    /// Wie [`FieldLabel::text`], als Wert einer Meldung: die Bezeichnungen der App werden erst
+    /// beim Zeichnen übersetzt, die der Bibliothek stehen als Text.
+    fn arg(self, kind: &FeatureKind) -> MsgArg {
+        match self {
+            FieldLabel::Library(_) => MsgArg::Text(self.text(kind)),
+            FieldLabel::Position(n) => {
+                MsgArg::Msg(Box::new(crate::msg!("blend-field-position-n", n = n)))
+            }
+            FieldLabel::Radius(n) => {
+                MsgArg::Msg(Box::new(crate::msg!("blend-field-radius-n", n = n)))
+            }
+        }
+    }
 }
 
 /// Ein Zahlenfeld des Dialogs.
@@ -80,7 +94,8 @@ pub fn stale_message() -> Msg {
 }
 
 /// Meldung eines Feldes, das nur Zahlen annimmt, bei einer Formel.
-pub fn numbers_only(label: &str) -> Msg {
+pub fn numbers_only(label: impl Into<MsgArg>) -> Msg {
+    let label = label.into();
     crate::msg!("edit-numbers-only", label = label)
 }
 
@@ -132,26 +147,26 @@ fn is_kept_broken(saved: &Formulas, key: FieldKey, text: &str) -> bool {
 }
 
 /// Liest eine Zahl eines Feldes ohne Formeln; der Fehlertext nennt das Feld.
-fn plain_value(label: &str, text: &str) -> Result<f64, Msg> {
+fn plain_value(label: &MsgArg, text: &str) -> Result<f64, Msg> {
     match classify(text) {
         Some(FieldInput::Number(v)) => Ok(v),
-        Some(FieldInput::Formula(_)) => Err(numbers_only(label)),
+        Some(FieldInput::Formula(_)) => Err(numbers_only(label.clone())),
         None => Err(crate::msg!(
             "edit-invalid-number",
-            label = label,
+            label = label.clone(),
             text = text
         )),
     }
 }
 
 /// Prüft den Betrag eines Wertes (höchstens [`MAX_COORD_MM`]).
-fn check_size(label: &str, v: f64) -> Result<f64, Msg> {
+fn check_size(label: &MsgArg, v: f64) -> Result<f64, Msg> {
     if v.abs() <= MAX_COORD_MM {
         Ok(v)
     } else {
         Err(crate::msg!(
             "edit-too-big",
-            label = label,
+            label = label.clone(),
             max = format!("{MAX_COORD_MM:e}")
         ))
     }
@@ -391,7 +406,7 @@ impl FeatureDialog {
     fn variable_points(&self) -> Result<Vec<(f64, f64)>, Msg> {
         let mut values = Vec::with_capacity(self.numbers.len());
         for f in &self.numbers {
-            let label = f.label.text(&self.kind);
+            let label = f.label.arg(&self.kind);
             values.push(check_size(&label, plain_value(&label, &f.text)?)?);
         }
         Ok(values
@@ -435,12 +450,12 @@ impl FeatureDialog {
                 Err(e) => {
                     return Err(crate::msg!(
                         "field-error",
-                        label = f.label.text(&kind),
+                        label = f.label.arg(&kind),
                         error = e
                     ));
                 }
             };
-            let checked = check_size(&f.label.text(&kind), v)?;
+            let checked = check_size(&f.label.arg(&kind), v)?;
             set_field_value(&mut kind, key, checked);
             if let Some(t) = formula {
                 formulas.insert(key, t);

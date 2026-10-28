@@ -11,7 +11,7 @@
 
 mod common;
 
-use common::{Seen, assert_english, assert_has, join, looks_like_key};
+use common::{Seen, assert_has, join, looks_like_key};
 use egui::{Pos2, Rect, vec2};
 use planora_app::blend_dialog::{ArtChoice, BlendDialog, no_edge, too_many_points};
 use planora_app::boolean_dialog::BooleanDialog;
@@ -42,15 +42,42 @@ use std::sync::Arc;
 /// bleiben ohne Umlaut unbemerkt), Einheiten der Parameter („Länge“), der Name unbenannter
 /// STEP-Körper, Fehlertexte der Formeln („Den Namen „Breit“ gibt es nicht.“, „Hier wird eine
 /// Länge erwartet …“) und der Leser („Zeile 2: …“, „Die Datei ist unvollständig …“).
-const LIBRARY_TEXTS: [&str; 7] = [
+const LIBRARY_TEXTS: [&str; 5] = [
     "STEP-Körper",
-    "Den Namen",
-    "Hier ",
-    "Zeile ",
-    "Die Datei ",
-    "Länge",
-    "Höhe",
+    "Den Namen „Breit“ gibt es nicht.",
+    "Hier wird eine Länge erwartet",
+    "Zeile 2: Die Fläche verweist auf einen Punkt",
+    "Die Datei ist unvollständig",
 ];
+
+/// Ganze Texte aus der Bibliothek: Bezeichnungen der Felder und Einheiten der Parameter.
+const LIBRARY_EXACT: [&str; 2] = ["Höhe", "Länge"];
+
+/// Wie `common::assert_english`, aber nur die ganzen Bibliothekstexte aus [`LIBRARY_EXACT`] und
+/// die Zeilen mit einer der Wendungen `later` werden übergangen (keine kurzen Bruchstücke, hinter
+/// denen sich Texte der App verstecken könnten).
+fn assert_english(what: &str, seen: &[Seen], _skip: &[Rect], later: &[&str]) {
+    for s in seen {
+        if LIBRARY_EXACT.contains(&s.text.trim()) {
+            continue;
+        }
+        for line in s.text.lines() {
+            if later.iter().any(|l| line.contains(l)) {
+                continue;
+            }
+            assert!(
+                !line.chars().any(|c| "äöüßÄÖÜ„".contains(c)),
+                "{what}: deutscher Text „{line}“ in {}",
+                join(seen)
+            );
+            assert!(
+                !looks_like_key(line),
+                "{what}: Schlüssel-Id „{line}“ sichtbar in {}",
+                join(seen)
+            );
+        }
+    }
+}
 
 fn draw_ctx() -> egui::Context {
     let ctx = egui::Context::default();
@@ -105,7 +132,7 @@ fn check(what: &str, seen: &[Seen], wanted: &[&str]) {
 /// Wie [`check`] für einen einzelnen Text (Meldung): englisch, ohne Schlüssel-Id.
 fn plain(what: &str, text: &str) {
     for line in text.lines() {
-        if LIBRARY_TEXTS.iter().any(|l| line.contains(l)) {
+        if LIBRARY_TEXTS.iter().any(|l| line.contains(l)) || LIBRARY_EXACT.contains(&line) {
             continue;
         }
         assert!(
@@ -1096,7 +1123,7 @@ fn mesh_body_properties_speak_english() {
                 "Volume",
                 "Dimensions",
                 "Triangles",
-                "Closed when read",
+                "Closed at import",
                 "no",
                 "Position x",
                 "Position y",
@@ -1110,7 +1137,7 @@ fn mesh_body_properties_speak_english() {
         assert_starts(
             "Warnung",
             &seen,
-            "When read: The mesh is not fully closed: 3 open edges",
+            "At import: The mesh is not fully closed: 3 open edges",
         );
 
         let mut closed = AppState::new();
@@ -1628,6 +1655,78 @@ fn stored_messages_follow_the_language() {
             has_start(&seen, "\"Radius\" is too small"),
             "{}",
             join(&seen)
+        );
+    });
+
+    // Fase: die Bezeichnung des Feldes in der Meldung wechselt mit (Abstand 2 / Distance 2).
+    let mut chamfer = BlendDialog::chamfer();
+    chamfer.set_art(ArtChoice::FaseZwei);
+    chamfer.second = "0,00001".into();
+    with_lang(&german(), || {
+        assert!(chamfer.execute(&mut s));
+        assert!(
+            chamfer
+                .error()
+                .unwrap()
+                .starts_with("„Abstand 2“ ist zu klein")
+        );
+    });
+    with_lang(&english(), || {
+        let text = chamfer.error().unwrap();
+        assert!(text.starts_with("\"Distance 2\" is too small;"), "{text}");
+    });
+    let mut angle = BlendDialog::chamfer();
+    angle.set_art(ArtChoice::FaseWinkel);
+    angle.first = "abc".into();
+    with_lang(&german(), || {
+        assert!(angle.execute(&mut s));
+        assert!(
+            angle
+                .error()
+                .unwrap()
+                .starts_with("„Abstand“ muss eine Zahl")
+        );
+    });
+    with_lang(&english(), || {
+        let text = angle.error().unwrap();
+        assert!(text.starts_with("\"Distance\" must be a number"), "{text}");
+    });
+    // Kanten zweier Körper, einer davon unbekannt: der Ersatzname wechselt mit.
+    let mut mixed = BlendDialog::fillet();
+    let mut m = AppState::new();
+    m.create_box(DVec3::splat(10.0)).unwrap();
+    let me = edge_between(&m.bodies[0].solid, "Deckel", "Wand 1");
+    m.marked_edges = vec![EdgeRef { body: 0, edge: me }, EdgeRef { body: 5, edge: me }];
+    with_lang(&german(), || {
+        assert!(mixed.execute(&mut m));
+        assert!(mixed.error().unwrap().contains("Körper 6"));
+    });
+    with_lang(&english(), || {
+        let text = mixed.error().unwrap();
+        assert!(text.contains("Body 6"), "{text}");
+        assert!(text.ends_with("only one body at a time"), "{text}");
+    });
+    // Variable Rundung im Bearbeiten-Fenster: Meldung mit Bezeichnung des Punktfeldes.
+    let mut var = FeatureDialog::new(&s, id).unwrap();
+    var.set_blend_art(ArtChoice::RundungVariabel);
+    var.set_text("Radius 2", "");
+    let mut d2 = Draw::new();
+    with_lang(&german(), || {
+        let seen = d2.show(&mut |ctx| {
+            var.show(ctx, &mut s);
+        });
+        d2.click_text(&seen, "Übernehmen", &mut |ctx| {
+            var.show(ctx, &mut s);
+        });
+        assert_eq!(
+            var.error().as_deref(),
+            Some("Ungültige Zahl bei „Radius 2“: „“")
+        );
+    });
+    with_lang(&english(), || {
+        assert_eq!(
+            var.error().as_deref(),
+            Some("Invalid number for \"Radius 2\": \"\"")
         );
     });
 

@@ -29,6 +29,22 @@ pub enum MsgArg {
     Plain(f64),
     /// Eine eingebettete Meldung, beim Zeichnen übersetzt.
     Msg(Box<Msg>),
+    /// Eine Liste von Werten, beim Zeichnen mit „, “ verbunden.
+    List(Vec<MsgArg>),
+}
+
+impl MsgArg {
+    /// Text in der aktuellen Sprache.
+    fn text(&self) -> String {
+        match self {
+            MsgArg::Text(s) => s.clone(),
+            MsgArg::Int(n) => n.to_string(),
+            MsgArg::Num(v, d) => fmt_num(*v, *d),
+            MsgArg::Plain(v) => plain_number(*v),
+            MsgArg::Msg(m) => m.text(),
+            MsgArg::List(l) => l.iter().map(MsgArg::text).collect::<Vec<_>>().join(", "),
+        }
+    }
 }
 
 impl Msg {
@@ -41,11 +57,8 @@ impl Msg {
                     .iter()
                     .map(|(k, v)| {
                         let a = match v {
-                            MsgArg::Text(s) => Arg::from(s.clone()),
                             MsgArg::Int(n) => Arg::from(*n),
-                            MsgArg::Num(v, d) => Arg::from(fmt_num(*v, *d)),
-                            MsgArg::Plain(v) => Arg::from(plain_number(*v)),
-                            MsgArg::Msg(m) => Arg::from(m.text()),
+                            other => Arg::from(other.text()),
                         };
                         (*k, a)
                     })

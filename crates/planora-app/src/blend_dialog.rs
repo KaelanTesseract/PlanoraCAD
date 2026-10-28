@@ -54,14 +54,25 @@ impl ArtChoice {
 
     /// Bezeichnungen der Maßfelder (das zweite fehlt bei Rundung und gleicher Fase).
     pub fn fields(self) -> (String, Option<String>) {
+        let (a, b) = self.field_labels();
+        (a.text(), b.as_ref().map(Msg::text))
+    }
+
+    /// Wie [`ArtChoice::fields`], als Grund: Meldungen, die das Fenster behält, tragen die
+    /// Bezeichnung so und übersetzen sie erst beim Zeichnen.
+    pub fn field_labels(self) -> (Msg, Option<Msg>) {
+        use crate::msg;
         match self {
-            ArtChoice::Rundung | ArtChoice::RundungVariabel => (tr!("blend-field-radius"), None),
-            ArtChoice::FaseGleich => (tr!("blend-field-distance"), None),
+            ArtChoice::Rundung | ArtChoice::RundungVariabel => (msg!("blend-field-radius"), None),
+            ArtChoice::FaseGleich => (msg!("blend-field-distance"), None),
             ArtChoice::FaseZwei => (
-                tr!("blend-field-distance-1"),
-                Some(tr!("blend-field-distance-2")),
+                msg!("blend-field-distance-1"),
+                Some(msg!("blend-field-distance-2")),
             ),
-            ArtChoice::FaseWinkel => (tr!("blend-field-distance"), Some(tr!("blend-field-angle"))),
+            ArtChoice::FaseWinkel => (
+                msg!("blend-field-distance"),
+                Some(msg!("blend-field-angle")),
+            ),
         }
     }
 
@@ -159,19 +170,20 @@ pub fn min_text(v: f64) -> String {
 
 /// Prüft die Maße (Radien, Abstände) gegen das Mindestmaß des Kerns.
 pub fn check_min_sizes(art: &BlendArt, min: f64) -> Result<(), Msg> {
-    let sizes: Vec<(String, f64)> = match art {
-        BlendArt::Rundung { radius } => vec![(tr!("blend-field-radius"), *radius)],
+    use crate::msg;
+    let sizes: Vec<(Msg, f64)> = match art {
+        BlendArt::Rundung { radius } => vec![(msg!("blend-field-radius"), *radius)],
         BlendArt::RundungVariabel { punkte } => punkte
             .iter()
             .enumerate()
-            .map(|(k, p)| (tr!("blend-field-radius-n", n = k + 1), p.1))
+            .map(|(k, p)| (msg!("blend-field-radius-n", n = k + 1), p.1))
             .collect(),
         BlendArt::FaseGleich { abstand } | BlendArt::FaseWinkel { abstand, .. } => {
-            vec![(tr!("blend-field-distance"), *abstand)]
+            vec![(msg!("blend-field-distance"), *abstand)]
         }
         BlendArt::FaseZwei { abstand1, abstand2 } => vec![
-            (tr!("blend-field-distance-1"), *abstand1),
-            (tr!("blend-field-distance-2"), *abstand2),
+            (msg!("blend-field-distance-1"), *abstand1),
+            (msg!("blend-field-distance-2"), *abstand2),
         ],
     };
     match sizes.into_iter().find(|(_, v)| *v < min) {
@@ -232,7 +244,8 @@ fn angle_ok(w: f64) -> bool {
     (MIN_CHAMFER_ANGLE_DEG..=MAX_CHAMFER_ANGLE_DEG).contains(&w)
 }
 
-fn size_message(label: &str, text: &str) -> Msg {
+fn size_message(label: &Msg, text: &str) -> Msg {
+    let label = label.clone();
     crate::msg!("blend-size-invalid", label = label, text = text)
 }
 
@@ -252,7 +265,7 @@ pub fn angle_message(text: &str) -> String {
 }
 
 /// Liest ein Maß (nur Zahlen).
-fn size(label: &str, text: &str) -> Result<f64, Msg> {
+fn size(label: &Msg, text: &str) -> Result<f64, Msg> {
     match parse_number(text) {
         Some(v) if size_ok(v) => Ok(v),
         _ => Err(size_message(label, text)),
@@ -264,7 +277,7 @@ fn size(label: &str, text: &str) -> Result<f64, Msg> {
 /// Parameter gilt ein Text, der sich nicht auswerten lässt, wie bisher als ungültige Zahl
 /// (`bad()`, etwa bei „nan“).
 fn read_field(
-    label: &str,
+    label: &Msg,
     text: &str,
     unit: ParamUnit,
     scope: &ParamScope,
@@ -276,7 +289,7 @@ fn read_field(
             Ok(v) if ok(v) => return Ok((v, Some(f))),
             Ok(_) => return Err(bad()),
             Err(e) if !scope.names().is_empty() => {
-                return Err(crate::msg!("field-error", label = label, error = e));
+                return Err(crate::msg!("field-error", label = label.clone(), error = e));
             }
             Err(_) => return Err(bad()),
         }
@@ -366,6 +379,15 @@ impl BlendDialog {
         }
     }
 
+    /// Feste Kennung des Fensters (hängt nicht vom übersetzten Titel ab, damit es beim
+    /// Sprachwechsel nicht springt).
+    pub fn window_id(&self) -> egui::Id {
+        egui::Id::new((
+            "blend_dialog",
+            matches!(self.art, ArtChoice::Rundung | ArtChoice::RundungVariabel),
+        ))
+    }
+
     /// Die Meldung im Fenster in der aktuellen Sprache.
     pub fn error(&self) -> Option<String> {
         self.error.as_ref().map(Msg::text)
@@ -449,17 +471,20 @@ impl BlendDialog {
         if state.marked_edges.iter().all(|m| m.body == first) {
             return None;
         }
-        let mut names: Vec<String> = Vec::new();
+        let mut names: Vec<MsgArg> = Vec::new();
         for m in &state.marked_edges {
-            let name = state
-                .bodies
-                .get(m.body)
-                .map_or_else(|| tr!("blend-body-n", n = m.body + 1), |b| b.name.clone());
+            let name = state.bodies.get(m.body).map_or_else(
+                || MsgArg::Msg(Box::new(crate::msg!("blend-body-n", n = m.body + 1))),
+                |b| MsgArg::Text(b.name.clone()),
+            );
             if !names.contains(&name) {
                 names.push(name);
             }
         }
-        Some(crate::msg!("blend-mixed-bodies", names = names.join(", ")))
+        Some(crate::msg!(
+            "blend-mixed-bodies",
+            names = MsgArg::List(names)
+        ))
     }
 
     /// Art mit den eingegebenen Maßen (nur Zahlen, ohne Parameter); ein Fehlertext nennt das
@@ -480,13 +505,16 @@ impl BlendDialog {
                 let pos = parse_number(p)
                     .filter(|v| (0.0..=100.0).contains(v))
                     .ok_or_else(|| crate::msg!("blend-position-range", n = k + 1))?;
-                punkte.push((pos, size(&tr!("blend-field-radius-n", n = k + 1), r)?));
+                punkte.push((
+                    pos,
+                    size(&crate::msg!("blend-field-radius-n", n = k + 1), r)?,
+                ));
             }
             return Ok((BlendArt::RundungVariabel { punkte }, formulas));
         }
-        let (l1, l2) = self.art.fields();
+        let (l1, l2) = self.art.field_labels();
         let (k1, k2) = self.art.keys();
-        let mut read = |label: &str, key: FieldKey, text: &str| -> Result<f64, Msg> {
+        let mut read = |label: &Msg, key: FieldKey, text: &str| -> Result<f64, Msg> {
             let (v, formula) = if key == FieldKey::Winkel {
                 read_field(label, text, ParamUnit::Angle, scope, angle_ok, || {
                     angle_msg(text)
@@ -502,8 +530,8 @@ impl BlendDialog {
             Ok(v)
         };
         let a = read(&l1, k1, &self.first)?;
-        let second = match (l2, k2) {
-            (Some(l2), Some(k2)) => Some(read(&l2, k2, &self.second)?),
+        let second = match (&l2, k2) {
+            (Some(l2), Some(k2)) => Some(read(l2, k2, &self.second)?),
             _ => None,
         };
         let art = match (self.art, second) {
@@ -578,6 +606,7 @@ impl BlendDialog {
         let scope = state.document.param_scope();
         let mut errors: Vec<String> = Vec::new();
         Dialog::new(self.title(), DialogSize::Normal)
+            .id(self.window_id())
             .open(&mut open)
             .show(ctx, |ui| {
                 match self.chosen_edges(state) {
