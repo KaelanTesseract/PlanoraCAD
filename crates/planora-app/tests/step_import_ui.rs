@@ -605,7 +605,10 @@ fn one_undo_step() {
     );
     assert_eq!(rig.bodies(), 3);
     let seen = rig.settle();
-    assert_eq!(rig.ws().active_tab().undo_label(), Some("STEP importieren"));
+    assert_eq!(
+        rig.ws().active_tab().undo_label(),
+        Some("STEP importieren".to_string())
+    );
     // Die Zusammenfassung überlebt den neuen Verlaufsschritt als Hinweis in neutraler Farbe.
     let st = &rig.ws().active_tab().state;
     let info = st.info.clone().expect("Hinweis nach dem Import");
@@ -1279,7 +1282,10 @@ fn menu_entry() {
     d.import(&mut tab.state).unwrap();
     tab.step_import_dialog = None;
     ws.observe_history(false);
-    assert_eq!(ws.active_tab().undo_label(), Some("STEP importieren"));
+    assert_eq!(
+        ws.active_tab().undo_label(),
+        Some("STEP importieren".to_string())
+    );
     ws.active_tab_mut().undo().unwrap();
     let s = &ws.active_tab().state;
     assert!(s.bodies.is_empty());

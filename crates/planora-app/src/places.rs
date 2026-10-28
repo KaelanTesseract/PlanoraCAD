@@ -74,6 +74,16 @@ const KNOWN: [(PlaceKind, &str, &str); 4] = [
     (PlaceKind::Pictures, "Pictures", "place-pictures"),
 ];
 
+/// Beschriftung eines bekannten Ordners in der aktuellen Sprache (`kind` ohne bekannten Ordner:
+/// leer).
+pub fn known_label(kind: PlaceKind) -> String {
+    KNOWN
+        .iter()
+        .find(|(k, _, _)| *k == kind)
+        .map(|(_, _, id)| planora_i18n::t(id))
+        .unwrap_or_default()
+}
+
 /// Beschriftung des Projektordners.
 pub fn project_label() -> String {
     tr!("place-projects")

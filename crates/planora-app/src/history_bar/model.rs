@@ -6,11 +6,13 @@ use crate::state::AppState;
 pub use crate::theme::BodyColor;
 use crate::workspace::Workspace;
 use planora_feature::{Document, FeatureId, FeatureKind, FeatureStatus};
+use planora_i18n::tr;
 use std::collections::{HashMap, HashSet};
 
 /// Hinweis, wenn eine neue Aktion an einem zurückgesetzten Körper gesperrt ist.
-pub const LOCK_HINT: &str =
-    "Dieser Körper ist zurückgesetzt. Springe zuerst zum Ende des Verlaufs.";
+pub fn lock_hint() -> String {
+    tr!("history-lock-hint")
+}
 
 /// Zustand eines Schritts in der Leiste.
 #[derive(Clone, Debug, PartialEq)]
@@ -37,8 +39,9 @@ pub struct StepView {
 
 /// Meldung, wenn der Marker eines Körpers hinter Schritte soll, die nur der globale Marker
 /// zurücksetzt.
-pub const GLOBAL_HINT: &str =
-    "Der ganze Verlauf ist zurückgesetzt. Aktiviere ihn zuerst mit „Alles aktivieren“.";
+pub fn global_hint() -> String {
+    tr!("history-global-hint")
+}
 
 /// Aktivität aller Features, einmal je Aufruf aus dem Dokument berechnet (wie
 /// `Document::is_active`, ohne den Satz für jeden Schritt neu zu bauen).
@@ -154,24 +157,24 @@ pub fn marker_position(state: &AppState, tip: FeatureId) -> usize {
 /// Dokuments kennt kein Setzen einer ganzen Liste: Jede entfallende Stelle braucht einen
 /// eigenen Aufruf (Neuberechnung aus dem Zwischenspeicher); im üblichen Fall ist es einer.
 ///
-/// Abgelehnt (Dokument unverändert, Meldung [`GLOBAL_HINT`]) wird ein Ziel hinter Schritten,
+/// Abgelehnt (Dokument unverändert, Meldung [`global_hint`]) wird ein Ziel hinter Schritten,
 /// die nur der globale Marker zurücksetzt: Eine Stelle dort hätte keine sichtbare Wirkung,
 /// würde den Körper aber sperren.
 pub fn move_marker(state: &mut AppState, tip: FeatureId, position: usize) -> Result<(), String> {
     state.message = None;
     if state.document.feature(tip).is_none() {
-        return state.fail("Den Körper gibt es nicht mehr".into());
+        return state.fail(tr!("history-body-gone"));
     }
     let chain = state.document.chain(tip);
     if position > chain.len() {
-        return state.fail("Diese Stelle gibt es im Verlauf nicht".into());
+        return state.fail(tr!("history-no-such-place"));
     }
     let activity = Activity::of(&state.document);
     if chain[..position]
         .iter()
         .any(|id| activity.behind_global(*id))
     {
-        return state.fail(GLOBAL_HINT.into());
+        return state.fail(global_hint());
     }
     let target = chain.get(position).copied();
     state.end_sketch_for(target)?;
@@ -269,7 +272,7 @@ pub fn body_root(state: &AppState, tip: FeatureId) -> Option<FeatureId> {
 }
 
 /// Ist der Körper zurückgesetzt (eine Rückrollstelle in seiner Kette)? Dann sind neue Aktionen
-/// an ihm gesperrt ([`LOCK_HINT`]).
+/// an ihm gesperrt ([`lock_hint`]).
 pub fn is_locked(state: &AppState, tip: FeatureId) -> bool {
     state.document.rollback_in_chain(tip).is_some()
 }
@@ -277,13 +280,13 @@ pub fn is_locked(state: &AppState, tip: FeatureId) -> bool {
 /// Die zentrale Prüfung der Sperre: Warum eine neue Aktion mit den Eingaben `inputs` gerade nicht
 /// geht. Eingaben sind die Kennungen, auf denen das neue Feature aufbaut
 /// ([`FeatureKind::dependencies`]: Körper, Skizzen, Herkunft von Flächen und Kanten).
-/// [`LOCK_HINT`], wenn eine davon in der Kette eines zurückgesetzten Körpers liegt
+/// [`lock_hint`], wenn eine davon in der Kette eines zurückgesetzten Körpers liegt
 /// ([`is_locked`]); bei mehreren Eingangskörpern reicht einer. Andere Körper und neue
 /// freistehende Körper (ohne Eingaben) sind nie gesperrt.
 ///
 /// Eine Skizze, die mehrere Körper verwenden, ist gesperrt, sobald einer davon zurückgesetzt
 /// ist (vorsichtig: ein neuer Körper aus ihr gehörte sonst halb zu einem zurückgesetzten Verlauf).
-pub(crate) fn lock_reason(state: &AppState, inputs: &[FeatureId]) -> Option<&'static str> {
+pub(crate) fn lock_reason(state: &AppState, inputs: &[FeatureId]) -> Option<String> {
     let doc = &state.document;
     if doc.rollbacks().is_empty() || inputs.is_empty() {
         return None;
@@ -293,14 +296,14 @@ pub(crate) fn lock_reason(state: &AppState, inputs: &[FeatureId]) -> Option<&'st
         inputs.iter().any(|i| chain.contains(i))
             && doc.rollbacks().iter().any(|r| chain.contains(r))
     });
-    locked.then_some(LOCK_HINT)
+    locked.then(lock_hint)
 }
 
-/// Wie [`lock_reason`] vor einer neuen Aktion: gesperrt steht [`LOCK_HINT`] in `message` und
+/// Wie [`lock_reason`] vor einer neuen Aktion: gesperrt steht [`lock_hint`] in `message` und
 /// kommt als Fehler zurück (nichts geändert).
 pub(crate) fn refuse_if_locked(state: &mut AppState, inputs: &[FeatureId]) -> Result<(), String> {
     match lock_reason(state, inputs) {
-        Some(why) => state.fail(why.into()),
+        Some(why) => state.fail(why),
         None => Ok(()),
     }
 }

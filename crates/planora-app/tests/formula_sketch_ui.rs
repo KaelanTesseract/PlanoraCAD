@@ -340,7 +340,10 @@ fn sketch_existing_dimension_formula() {
     assert!(fx.top() >= name.bottom() - 1.0, "fx unter dem Maß");
     assert!(formula.left() > fx.right(), "Formel hinter fx");
     // Ein Schritt im Skizzenverlauf „Formel ändern“.
-    assert_eq!(state(&mut r.app).sketch_undo_label(), Some("Formel ändern"));
+    assert_eq!(
+        state(&mut r.app).sketch_undo_label(),
+        Some("Formel ändern".to_string())
+    );
 
     // Wieder öffnen: das Feld zeigt die Formel; „25“ löscht nur die Formel (P2).
     sketch_panel::open_existing_dimension_editor(&c, state(&mut r.app), id);
@@ -362,7 +365,7 @@ fn sketch_existing_dimension_formula() {
 
     // Rückgängig in der Skizze holt Wert und Formel zurück, Wiederholen wieder die Zahl.
     let s = state(&mut r.app);
-    assert_eq!(s.sketch_undo_label(), Some("Formel ändern"));
+    assert_eq!(s.sketch_undo_label(), Some("Formel ändern".to_string()));
     assert!(s.undo_sketch());
     assert_eq!(draft_value(s, id), 40.0);
     assert_eq!(draft_formula(s, id).as_deref(), Some("Breite"));
@@ -453,7 +456,10 @@ fn sketch_new_dimension_formula() {
     assert_eq!(v, 20.0);
     assert_eq!(draft_formula(s, id).as_deref(), Some("Breite/2"));
     settle(&c, &mut r.app, SIZE);
-    assert_eq!(state(&mut r.app).sketch_undo_label(), Some("Maß setzen"));
+    assert_eq!(
+        state(&mut r.app).sketch_undo_label(),
+        Some("Maß setzen".to_string())
+    );
 
     // Winkelmaß „w“ zwischen zwei Linien: gespeichert in Bogenmaß, bitgenau wie das Dokument.
     let s = state(&mut r.app);
@@ -572,7 +578,10 @@ fn sketch_unsolvable_is_rejected_in_session() {
     let p = theme::palette(true);
     assert_eq!(shot.find_in(side(&c), &msg).color, p.error);
     // Kein Schritt im Verlauf.
-    assert_ne!(state(&mut r.app).sketch_undo_label(), Some("Formel ändern"));
+    assert_ne!(
+        state(&mut r.app).sketch_undo_label(),
+        Some("Formel ändern".to_string())
+    );
 }
 
 #[test]
@@ -788,9 +797,9 @@ fn close_writes_formulas() {
     assert!((sk.line_length(r.line).unwrap() - 50.0).abs() < 1e-6);
     // Rückgängig (Dokument) nimmt die Parameteränderung, dann die Skizze als einen Schritt.
     let tab = r.app.ws_mut().active_tab_mut();
-    assert_eq!(tab.undo_label(), Some("Parameter ändern"));
+    assert_eq!(tab.undo_label(), Some("Parameter ändern".to_string()));
     tab.undo().unwrap();
-    assert_eq!(tab.undo_label(), Some("Skizze bearbeiten"));
+    assert_eq!(tab.undo_label(), Some("Skizze bearbeiten".to_string()));
     tab.undo().unwrap();
     let sf = match &tab.state.document.feature(r.sketch).unwrap().kind {
         FeatureKind::Sketch(sf) => sf.clone(),

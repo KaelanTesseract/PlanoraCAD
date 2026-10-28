@@ -541,7 +541,7 @@ fn folders_get_the_folder_symbol_files_the_file_symbol() {
 fn the_open_hint_is_only_a_tooltip_of_folders() {
     let a = dir_entry("A");
     assert_eq!(entry_text(&a), "A");
-    assert_eq!(entry_hover(&a), Some("Doppelklick zum Öffnen"));
+    assert_eq!(entry_hover(&a), Some("Doppelklick zum Öffnen".to_string()));
     assert_eq!(entry_hover(&file_entry("a.stl")), None);
     assert_eq!(entry_text(&file_entry("a.stl")), "a.stl");
 }

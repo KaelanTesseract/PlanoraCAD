@@ -7,6 +7,7 @@ use crate::state::AppState;
 use crate::{browser, properties, shell_panels, theme, viewport};
 use egui::{Rect, pos2, vec2};
 use planora_feature::{FeatureId, FeatureKind};
+use planora_i18n::tr;
 
 /// Kante eines Schrittsymbols.
 const STEP_SIZE: f32 = 30.0;
@@ -258,52 +259,58 @@ fn playback(
     let (pos, reach) = bar.map_or((0, 0), |b| (b.pos, b.reach));
     let some = bar.is_some();
     let (play_icon, play_label, play_action) = if playing {
-        (Icon::HistoryPause, "Anhalten", Action::Pause)
+        (Icon::HistoryPause, tr!("history-pause"), Action::Pause)
     } else {
-        (Icon::HistoryPlay, "Abspielen", Action::Play)
+        (Icon::HistoryPlay, tr!("history-play"), Action::Play)
     };
     let entries = [
-        (Icon::HistoryStart, "Zum Anfang", pos > 0, Action::Go(0)),
+        (
+            Icon::HistoryStart,
+            tr!("history-to-start"),
+            pos > 0,
+            Action::Go(0),
+        ),
         (
             Icon::HistoryBack,
-            "Einen Schritt zurück",
+            tr!("history-step-back"),
             pos > 0,
             Action::Go(pos.saturating_sub(1)),
         ),
         (play_icon, play_label, playing || reach > 0, play_action),
         (
             Icon::HistoryForward,
-            "Einen Schritt vor",
+            tr!("history-step-forward"),
             pos < reach,
             Action::Go(pos + 1),
         ),
         (
             Icon::ToTimelineEnd,
-            "Zum Ende",
+            tr!("history-to-end"),
             pos < reach,
             Action::Go(reach),
         ),
     ];
-    let reason = lock.or((!some).then_some("Zuerst einen Körper wählen."));
+    let reason = lock
+        .map(str::to_string)
+        .or_else(|| (!some).then(|| tr!("history-choose-body-first")));
     for (icon, label, possible, act) in entries {
         let on = some && possible;
         let r = ui
             .add_enabled_ui(on, |ui| {
-                icons::source_icon_button(ui, IconSource::Font(icon), label, dark)
+                icons::source_icon_button(ui, IconSource::Font(icon), &label, dark)
             })
             .inner;
-        let r = match reason {
+        let r = match &reason {
             Some(why) => r.on_disabled_hover_ui(|ui| {
-                ui.strong(label);
+                ui.strong(&label);
                 ui.label(why);
             }),
-            None => r.on_hover_text(label),
+            None => r.on_hover_text(&label),
         };
         if r.clicked() {
             *action = Some(act);
         }
-        out.buttons
-            .push((label.to_owned(), r.rect, on && ui.is_enabled()));
+        out.buttons.push((label, r.rect, on && ui.is_enabled()));
     }
 }
 
@@ -331,9 +338,9 @@ fn text_width(ui: &egui::Ui, text: &str) -> f32 {
 fn status_texts(bar: &Bar) -> (String, String) {
     let long = if bar.pos == 0 && bar.len() > 0 {
         // Noch kein Schritt ist aktiv: „Schritt 0 von 3“ liest sich schief.
-        "Vor Schritt 1".to_owned()
+        tr!("history-before-step-one")
     } else {
-        format!("Schritt {} von {}", bar.pos, bar.len())
+        tr!("history-step-of", pos = bar.pos, len = bar.len())
     };
     (long, format!("{}/{}", bar.pos, bar.len()))
 }
@@ -350,8 +357,8 @@ fn status_fit(ui: &egui::Ui, bar: Option<&Bar>) -> Fit {
     let avail = ui.available_width();
     let fits = |w: f32| avail - w - sep >= MIN_STRIP;
     if bar.hidden() {
-        let button = text_width(ui, ACTIVATE_ALL) + 2.0 * ui.spacing().button_padding.x;
-        let full = button + gap + text_width(ui, GLOBAL_RESET);
+        let button = text_width(ui, &activate_all()) + 2.0 * ui.spacing().button_padding.x;
+        let full = button + gap + text_width(ui, &global_reset());
         return if fits(full) { Fit::Full } else { Fit::Short };
     }
     let (long, short) = status_texts(bar);
@@ -365,9 +372,13 @@ fn status_fit(ui: &egui::Ui, bar: Option<&Bar>) -> Fit {
 }
 
 /// Beschriftung des Knopfs, der den globalen Marker ans Ende setzt.
-const ACTIVATE_ALL: &str = "Alles aktivieren";
+fn activate_all() -> String {
+    tr!("history-activate-all")
+}
 /// Hinweis, wenn der globale Marker Schritte des Körpers zurücksetzt.
-const GLOBAL_RESET: &str = "Gesamter Verlauf zurückgesetzt";
+fn global_reset() -> String {
+    tr!("history-global-reset")
+}
 
 /// Rechts der Stand: „Schritt n von m“, ohne Körper „Körper wählen“, bei vom globalen Marker
 /// zurückgesetztem Verlauf der Hinweis mit „Alles aktivieren“ (Zeile von rechts nach links, also
@@ -383,31 +394,36 @@ fn status(
     let p = theme::palette(dark);
     match bar {
         None => {
-            let r = ui.label(egui::RichText::new("Körper wählen").color(p.text_secondary));
+            let r =
+                ui.label(egui::RichText::new(tr!("history-choose-body")).color(p.text_secondary));
             out.status = r.rect;
         }
         Some(bar) if bar.hidden() => {
             // Schmal: nur ein Symbolknopf (Warnzeichen), Hinweis und Befehl beim Überfahren.
+            let activate = activate_all();
             let r = if fit == Fit::Full {
-                ui.button(ACTIVATE_ALL)
+                ui.button(&activate)
             } else {
-                icons::source_icon_button(ui, IconSource::Font(Icon::Warning), ACTIVATE_ALL, dark)
+                icons::source_icon_button(ui, IconSource::Font(Icon::Warning), &activate, dark)
             };
             theme::focus_ring(ui, &r);
             let hint = if fit == Fit::Full {
-                "Den ganzen Verlauf wieder berechnen".to_string()
+                tr!("history-recompute-all")
             } else {
-                format!("{GLOBAL_RESET}. {ACTIVATE_ALL}: den ganzen Verlauf wieder berechnen")
+                tr!(
+                    "history-global-reset-hint",
+                    reset = global_reset(),
+                    activate = activate.as_str()
+                )
             };
             let r = r.on_hover_text(hint);
             if r.clicked() {
                 *action = Some(Action::ActivateAll);
             }
-            out.buttons
-                .push((ACTIVATE_ALL.into(), r.rect, ui.is_enabled()));
+            out.buttons.push((activate, r.rect, ui.is_enabled()));
             out.status = r.rect;
             if fit == Fit::Full {
-                let l = ui.label(egui::RichText::new(GLOBAL_RESET).color(p.warning));
+                let l = ui.label(egui::RichText::new(global_reset()).color(p.warning));
                 out.status = out.status.union(l.rect);
             }
         }
@@ -539,13 +555,13 @@ fn step_button(
                 ui.colored_label(p.error, e);
             }
             StepState::Inactive => {
-                ui.label(egui::RichText::new("Zurückgesetzt").color(p.text_secondary));
+                ui.label(egui::RichText::new(tr!("history-rolled-back")).color(p.text_secondary));
             }
             StepState::Active => {}
         }
         let hint = match state.document.feature(v.id).map(|f| &f.kind) {
-            Some(FeatureKind::Sketch(_)) => "Doppelklick öffnet die Skizze.",
-            _ => "Doppelklick öffnet die Einstellungen.",
+            Some(FeatureKind::Sketch(_)) => tr!("history-double-click-sketch"),
+            _ => tr!("history-double-click-settings"),
         };
         ui.label(egui::RichText::new(hint).color(p.text_secondary));
     })
@@ -560,22 +576,22 @@ fn step_menu(r: &egui::Response, state: &AppState, id: FeatureId, action: &mut O
             *action = Some(a);
             ui.close();
         };
-        if ui.button("Bearbeiten").clicked() {
+        if ui.button(tr!("history-edit")).clicked() {
             pick(Action::Open(id), ui);
         }
-        if ui.button("Umbenennen").clicked() {
+        if ui.button(tr!("history-rename")).clicked() {
             pick(Action::Rename(id), ui);
         }
         let toggle = if suppressed {
-            "Aktivieren"
+            tr!("history-activate")
         } else {
-            "Unterdrücken"
+            tr!("history-suppress")
         };
-        if ui.button(toggle).clicked() {
+        if ui.button(&toggle).clicked() {
             pick(Action::ToggleSuppress(id), ui);
         }
         ui.separator();
-        if ui.button("Löschen").clicked() {
+        if ui.button(tr!("history-delete")).clicked() {
             pick(Action::Delete(id), ui);
         }
     });
@@ -633,7 +649,7 @@ fn marker(
         egui::WidgetInfo::labeled(
             egui::WidgetType::Slider,
             enabled,
-            format!("Marker: Schritt {} von {}", bar.pos, bar.len()),
+            tr!("history-marker-label", pos = bar.pos, len = bar.len()),
         )
     });
     // Der Marker liest nur die Pfeiltasten: Esc, Entf und Eingabe bleiben für die Ansicht.

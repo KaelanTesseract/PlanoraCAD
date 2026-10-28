@@ -384,7 +384,7 @@ fn buttons_do_what_the_menu_does() {
             rig.tab().state.info.as_deref(),
             Some("Rückgängig: Quader anlegen")
         );
-        assert_eq!(rig.tab().redo_label(), Some("Quader anlegen"));
+        assert_eq!(rig.tab().redo_label(), Some("Quader anlegen".to_string()));
         assert_eq!(rig.tab().undo_label(), None);
     }
     assert_eq!(
@@ -401,7 +401,7 @@ fn buttons_do_what_the_menu_does() {
             rig.tab().state.info.as_deref(),
             Some("Wiederholen: Quader anlegen")
         );
-        assert_eq!(rig.tab().undo_label(), Some("Quader anlegen"));
+        assert_eq!(rig.tab().undo_label(), Some("Quader anlegen".to_string()));
         assert_eq!(rig.tab().redo_label(), None);
     }
     assert_eq!(by_button.picture(), by_menu.picture());

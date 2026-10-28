@@ -944,7 +944,7 @@ fn a_command_without_window_keeps_the_running_one() {
     commands::run_action(rig.ws(), Action::ExtrudeSketch);
     assert_eq!(
         rig.st().message.as_deref(),
-        Some(history_bar::LOCK_HINT),
+        Some(history_bar::lock_hint().as_str()),
         "nur eine Meldung"
     );
     assert!(rig.ws().active_tab().dialog.is_none());

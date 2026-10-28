@@ -51,7 +51,9 @@ pub const MAX_ATTEMPTS: u32 = 2;
 /// Speichern entfernt (Reste eines Absturzes).
 pub const STALE_TMP: Duration = Duration::from_secs(60 * 60);
 /// Kacheltext für eine Miniatur, deren Aufbau das Programm beendet hat.
-pub const IMPOSSIBLE_TEXT: &str = "Miniatur nicht möglich";
+pub fn impossible_text() -> String {
+    planora_i18n::tr!("projects-impossible")
+}
 
 /// Bildgröße der Datei in Pixeln.
 const PREVIEW_W: u32 = THUMB_W * THUMB_SCALE;

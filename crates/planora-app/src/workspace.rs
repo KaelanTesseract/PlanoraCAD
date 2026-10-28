@@ -16,6 +16,7 @@ use crate::state::{AppState, REDO_FAILED, UNDO_FAILED};
 use crate::step_import_dialog::StepImportDialog;
 use crate::undo_labels::describe_change;
 use planora_feature::Snapshot;
+use planora_i18n::tr;
 use planora_project::config::{
     Config, PendingUpdate, THEME_DARK, THEME_LIGHT, WindowState, clamp_panel_transparency,
 };
@@ -31,35 +32,45 @@ use std::time::{Duration, Instant};
 pub const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(120);
 
 /// Meldung, wenn noch kein Projektverzeichnis gewählt ist.
-const NO_ROOT: &str = "Es ist noch kein Projektverzeichnis gewählt.";
+pub fn no_root() -> String {
+    tr!("project-no-root")
+}
 /// Schritt (Letzte Schritte) nach einem gelungenen Speichern; erst dann, nicht schon beim Befehl.
 const SAVE_STEP: &str = "Speichern";
 
 /// Ablehnung eines Dokumentnamens auf „.pcad“ (wie bei Ordnern; die Endung hängt das Programm
 /// selbst an).
-pub const DOCUMENT_NAME_SUFFIX: &str = "Dokumentnamen dürfen nicht auf „.pcad“ enden.";
+pub fn document_name_suffix() -> String {
+    tr!("project-name-suffix")
+}
 
 /// Geprüfter Dokumentname (wie `validate_name`, dazu ohne „.pcad“ am Ende, gleich welche
 /// Schreibweise).
 fn document_name(name: &str) -> Result<String, String> {
     let name = validate_name(name).map_err(err)?;
     if name.to_lowercase().ends_with(DOCUMENT_SUFFIX) {
-        return Err(DOCUMENT_NAME_SUFFIX.into());
+        return Err(document_name_suffix());
     }
     Ok(name)
 }
 
 /// Meldung von [`Workspace::choose_root`], solange gespeicherte Dokumente offen sind.
 pub fn root_locked() -> String {
-    planora_i18n::tr!("settings-root-locked")
+    tr!("settings-root-locked")
 }
 
 /// Grund, warum Rückgängig nicht geht: kein Schritt da.
-pub const NOTHING_TO_UNDO: &str = "Es gibt nichts rückgängig zu machen.";
+pub fn nothing_to_undo() -> String {
+    tr!("project-nothing-to-undo")
+}
 /// Grund, warum Wiederholen nicht geht: kein Schritt da.
-pub const NOTHING_TO_REDO: &str = "Es gibt nichts zu wiederholen.";
+pub fn nothing_to_redo() -> String {
+    tr!("project-nothing-to-redo")
+}
 /// Grund, warum Rückgängig und Wiederholen nicht gehen: das Export-Fenster schreibt eine Datei.
-pub const EXPORT_WRITING: &str = "Während des Exports ist das nicht möglich.";
+pub fn export_writing() -> String {
+    tr!("project-export-writing")
+}
 
 pub struct DocTab {
     pub id: u64,
@@ -236,7 +247,7 @@ impl DocTab {
             return;
         }
         let label = describe_change(self.history.current(), &after);
-        crate::diag::step(label);
+        crate::diag::step(&label);
         let bytes = snapshot_bytes(&after);
         self.history.record(after, bytes, label);
     }
@@ -252,15 +263,15 @@ impl DocTab {
     }
 
     /// Gemeinsame Sperren von Rückgängig und Wiederholen: alte Version, Export schreibt.
-    fn history_locked(&self) -> Option<&'static str> {
+    fn history_locked(&self) -> Option<String> {
         if self.read_only {
-            Some(crate::drawing_browser::READ_ONLY_HINT)
+            Some(crate::drawing_browser::READ_ONLY_HINT.to_string())
         } else if self
             .export_dialog
             .as_ref()
             .is_some_and(|d| d.is_writing_file())
         {
-            Some(EXPORT_WRITING)
+            Some(export_writing())
         } else {
             None
         }
@@ -273,52 +284,52 @@ impl DocTab {
     }
 
     /// Warum Rückgängig gerade nicht geht (`None`: es geht).
-    pub fn undo_blocked(&self) -> Option<&'static str> {
+    pub fn undo_blocked(&self) -> Option<String> {
         self.history_locked().or_else(|| {
             let nothing = if self.in_sketch() {
                 self.state.sketch_undo_label().is_none()
             } else {
                 self.history.undo_len() == 0 && self.pending_change().is_none()
             };
-            nothing.then_some(NOTHING_TO_UNDO)
+            nothing.then(nothing_to_undo)
         })
     }
 
     /// Warum Wiederholen gerade nicht geht (`None`: es geht). Eine noch offene Änderung leert
     /// beim Übernehmen die Wiederholen-Liste; dann gibt es nichts zu wiederholen.
-    pub fn redo_blocked(&self) -> Option<&'static str> {
+    pub fn redo_blocked(&self) -> Option<String> {
         self.history_locked().or_else(|| {
             let nothing = if self.in_sketch() {
                 self.state.sketch_redo_label().is_none()
             } else {
                 self.history.redo_len() == 0 || self.pending_change().is_some()
             };
-            nothing.then_some(NOTHING_TO_REDO)
+            nothing.then(nothing_to_redo)
         })
     }
 
     /// Name des Schritts, den Rückgängig zurücknähme (eine noch offene Änderung zählt mit; bei
     /// offener Skizze der Schritt der Skizze).
-    pub fn undo_label(&self) -> Option<&'static str> {
+    pub fn undo_label(&self) -> Option<String> {
         if self.in_sketch() {
             return self.state.sketch_undo_label();
         }
         match self.pending_change() {
             Some(now) => Some(describe_change(self.history.current(), &now)),
-            None => self.history.undo_label(),
+            None => self.history.undo_label().map(str::to_string),
         }
     }
 
     /// Name des Schritts, den Wiederholen herstellte (bei offener Skizze der Schritt der
     /// Skizze).
-    pub fn redo_label(&self) -> Option<&'static str> {
+    pub fn redo_label(&self) -> Option<String> {
         if self.in_sketch() {
             return self.state.sketch_redo_label();
         }
         if self.pending_change().is_some() {
             return None;
         }
-        self.history.redo_label()
+        self.history.redo_label().map(str::to_string)
     }
 
     /// Nimmt den letzten Schritt zurück. Offene Änderungen werden vorher ein Schritt. Gelingt
@@ -328,18 +339,18 @@ impl DocTab {
     /// bleibt dann unberührt, auch wenn die Skizze nichts zurückzunehmen hat.
     pub fn undo(&mut self) -> Result<(), String> {
         if let Some(why) = self.history_locked() {
-            return Err(why.into());
+            return Err(why);
         }
         self.observe_history(false);
         if self.in_sketch() {
             return if self.state.undo_sketch() {
                 Ok(())
             } else {
-                Err(NOTHING_TO_UNDO.into())
+                Err(nothing_to_undo())
             };
         }
         let Some(target) = self.history.peek_undo().cloned() else {
-            return Err(NOTHING_TO_UNDO.into());
+            return Err(nothing_to_undo());
         };
         match self.state.restore_document(target) {
             Ok(_) => {
@@ -359,18 +370,18 @@ impl DocTab {
     /// Meldung bei Fehler [`REDO_FAILED`]; bei offener Skizze nur deren Verlauf).
     pub fn redo(&mut self) -> Result<(), String> {
         if let Some(why) = self.history_locked() {
-            return Err(why.into());
+            return Err(why);
         }
         self.observe_history(false);
         if self.in_sketch() {
             return if self.state.redo_sketch() {
                 Ok(())
             } else {
-                Err(NOTHING_TO_REDO.into())
+                Err(nothing_to_redo())
             };
         }
         let Some(target) = self.history.peek_redo().cloned() else {
-            return Err(NOTHING_TO_REDO.into());
+            return Err(nothing_to_redo());
         };
         match self.state.restore_document(target) {
             Ok(_) => {
@@ -675,7 +686,7 @@ impl Workspace {
         state.fit_pending = true;
         self.tabs.push(DocTab::new(
             id,
-            format!("Unbenannt {}", self.untitled),
+            tr!("project-untitled", n = self.untitled),
             state,
         ));
         self.active = self.tabs.len() - 1;
@@ -821,10 +832,7 @@ impl Workspace {
         new_branch: Option<&str>,
     ) -> Result<SaveOutcome, String> {
         if tab.read_only {
-            return Err(
-                "Diese Version ist schreibgeschützt. Zuerst abzweigen oder wiederherstellen."
-                    .into(),
-            );
+            return Err(tr!("project-read-only-save"));
         }
         tab.state.try_close_sketch()?;
         let snapshot = tab.state.snapshot();
@@ -870,9 +878,9 @@ impl Workspace {
         name: &str,
         comment: &str,
     ) -> Result<NodePath, String> {
-        let lib = self.library.as_ref().ok_or(NO_ROOT)?;
+        let lib = self.library.as_ref().ok_or_else(no_root)?;
         if !lib.is_container(parent) {
-            return Err("Bitte ein Projekt oder einen Ordner als Ziel wählen.".into());
+            return Err(tr!("project-pick-target"));
         }
         let name = document_name(name)?;
         let mut path = parent.clone();
@@ -908,9 +916,9 @@ impl Workspace {
     /// Projekt oder Ordner; dieselben Prüfungen und Meldungen wie `save_as`; `library_revision += 1`.
     /// Die offenen Tabs bleiben unberührt (Öffnen ist Sache des Aufrufers).
     pub fn create_document(&mut self, parent: &NodePath, name: &str) -> Result<NodePath, String> {
-        let lib = self.library.as_ref().ok_or(NO_ROOT)?;
+        let lib = self.library.as_ref().ok_or_else(no_root)?;
         if !lib.is_container(parent) {
-            return Err("Bitte ein Projekt oder einen Ordner als Ziel wählen.".into());
+            return Err(tr!("project-pick-target"));
         }
         let name = document_name(name)?;
         let mut path = parent.clone();
@@ -994,30 +1002,31 @@ impl Workspace {
         let lib = self
             .library
             .as_ref()
-            .ok_or_else(|| ProjectError::Invalid(NO_ROOT.into()))?;
+            .ok_or_else(|| ProjectError::Invalid(no_root()))?;
         let dir = lib.document_dir(path)?;
         let (store, report) = DocStore::open(&dir, mode)?;
         let branch = store.info().active_branch.clone();
         let v = store.latest_readable(&branch).ok_or_else(|| {
-            ProjectError::corrupt(dir.display().to_string(), "Es gibt keine lesbare Version.")
+            ProjectError::corrupt(
+                dir.display().to_string(),
+                tr!("project-no-readable-version"),
+            )
         })?;
         let snapshot = store.load_version(v)?;
         let state = AppState::from_snapshot(snapshot).map_err(ProjectError::Invalid)?;
         let mut notes = Vec::new();
         if !report.orphans.is_empty() {
-            notes.push(format!(
-                "Reste eines abgebrochenen Speicherns gefunden und ignoriert: {}.",
-                report.orphans.join(", ")
+            notes.push(tr!(
+                "project-note-orphans",
+                list = report.orphans.join(", ")
             ));
         }
         if !report.missing.is_empty() {
             let list: Vec<String> = report.missing.iter().map(|n| format!("v{n}")).collect();
-            notes.push(format!("Versionsdateien fehlen: {}.", list.join(", ")));
+            notes.push(tr!("project-note-missing", list = list.join(", ")));
         }
         if store.info().tip(&branch) != Some(v) {
-            notes.push(format!(
-                "Die neueste Version ist nicht lesbar; v{v} wurde geladen."
-            ));
+            notes.push(tr!("project-note-tip-unreadable", v = v));
         }
         // Eine Autosicherung existiert nur, wenn das letzte Speichern nicht abgeschlossen wurde;
         // „>=“, weil Zeitstempel sekundengenau sind.
@@ -1028,8 +1037,9 @@ impl Workspace {
             // Die Datei bleibt erhalten (nach einem Absturz womöglich die einzige Kopie, oder
             // von einer neueren Programmversion); sie wird weder angeboten noch überschrieben.
             Err(e) => {
-                notes.push(format!(
-                    "Die Autosicherung lässt sich nicht lesen und wird nicht verwendet; die Datei bleibt erhalten: {e}"
+                notes.push(tr!(
+                    "project-note-autosave-unreadable",
+                    error = e.to_string()
                 ));
                 keep_autosave = true;
                 None
@@ -1087,8 +1097,9 @@ impl Workspace {
             Err(e) => {
                 // Datei unangetastet lassen
                 self.tabs[i].keep_autosave = true;
-                self.prompt = Some(Prompt::Notice(format!(
-                    "Die Autosicherung lässt sich nicht laden; die Datei bleibt erhalten: {e}"
+                self.prompt = Some(Prompt::Notice(tr!(
+                    "project-autosave-load-failed",
+                    error = e.to_string()
                 )))
             }
         }
@@ -1123,7 +1134,7 @@ impl Workspace {
         let lib = self
             .library
             .as_ref()
-            .ok_or_else(|| ProjectError::Invalid(NO_ROOT.into()))?;
+            .ok_or_else(|| ProjectError::Invalid(no_root()))?;
         let dir = lib.document_dir(path)?;
         let snapshot = match self
             .tab_for_path(path)
@@ -1149,18 +1160,18 @@ impl Workspace {
     /// Macht eine schreibgeschützte Ansicht bearbeitbar (Abzweigen): holt die Sperre. Gibt es
     /// das Dokument schon beschreibbar in einem anderen Tab, ist das ein Fehler.
     pub fn make_editable(&mut self, i: usize) -> Result<(), String> {
-        let tab = self.tabs.get(i).ok_or("Kein solcher Tab.")?;
+        let tab = self.tabs.get(i).ok_or_else(|| tr!("project-no-such-tab"))?;
         if !tab.read_only {
             return Ok(());
         }
-        let path = tab.path.clone().ok_or("Das Dokument hat keinen Ort.")?;
+        let path = tab.path.clone().ok_or_else(|| tr!("project-no-location"))?;
         if self.tab_for_path(&path).is_some() {
-            return Err("Das Dokument ist schon in einem anderen Tab geöffnet. Dort weiterarbeiten oder den Tab schließen.".into());
+            return Err(tr!("project-open-elsewhere"));
         }
         let dir = tab
             .source_dir
             .clone()
-            .ok_or("Das Dokument hat keinen Ort.")?;
+            .ok_or_else(|| tr!("project-no-location"))?;
         let (store, _) = DocStore::open(&dir, LockMode::Acquire).map_err(err)?;
         let tab = &mut self.tabs[i];
         tab.store = Some(store);
@@ -1177,7 +1188,11 @@ impl Workspace {
     /// Ansicht dafür bearbeitbar gemacht wurde, wird sie wieder zur schreibgeschützten Ansicht
     /// (Sperre freigegeben).
     pub fn restore_version(&mut self, i: usize, n: u32) -> Result<(), String> {
-        let read_only = self.tabs.get(i).ok_or("Kein solcher Tab.")?.read_only;
+        let read_only = self
+            .tabs
+            .get(i)
+            .ok_or_else(|| tr!("project-no-such-tab"))?
+            .read_only;
         let (target, made_editable) = if read_only {
             match self.tabs[i]
                 .path
@@ -1206,14 +1221,9 @@ impl Workspace {
     fn restore_into(&mut self, target: usize, n: u32) -> Result<(), String> {
         let tab = &mut self.tabs[target];
         if tab.is_dirty() {
-            return Err(
-                "Es gibt ungespeicherte Änderungen. Zuerst speichern oder verwerfen.".into(),
-            );
+            return Err(tr!("project-unsaved-changes"));
         }
-        let store = tab
-            .store
-            .as_mut()
-            .ok_or("Das Dokument ist nicht gespeichert.")?;
+        let store = tab.store.as_mut().ok_or_else(|| tr!("project-not-saved"))?;
         let branch = tab
             .based_on
             .and_then(|b| store.info().version(b))
@@ -1236,11 +1246,11 @@ impl Workspace {
     /// beruht er danach auf der neuen Spitze ihres Zweigs (sonst auf der des aktiven Zweigs),
     /// damit Speichern weiter möglich ist. Offene Ansichten bleiben als Kopien bestehen.
     pub fn delete_version(&mut self, i: usize, n: u32) -> Result<(), String> {
-        let tab = self.tabs.get_mut(i).ok_or("Kein solcher Tab.")?;
-        let store = tab
-            .store
-            .as_mut()
-            .ok_or("Das Dokument ist nicht gespeichert.")?;
+        let tab = self
+            .tabs
+            .get_mut(i)
+            .ok_or_else(|| tr!("project-no-such-tab"))?;
+        let store = tab.store.as_mut().ok_or_else(|| tr!("project-not-saved"))?;
         let branch = store.info().version(n).map(|v| v.branch.clone());
         store.delete_version(n).map_err(err)?;
         Self::fix_based_on(tab, branch.as_deref());
@@ -1250,11 +1260,11 @@ impl Workspace {
 
     /// Löscht den Zweig `name` über den beschreibbaren Tab `i` (siehe `delete_version`).
     pub fn delete_branch(&mut self, i: usize, name: &str) -> Result<(), String> {
-        let tab = self.tabs.get_mut(i).ok_or("Kein solcher Tab.")?;
-        let store = tab
-            .store
-            .as_mut()
-            .ok_or("Das Dokument ist nicht gespeichert.")?;
+        let tab = self
+            .tabs
+            .get_mut(i)
+            .ok_or_else(|| tr!("project-no-such-tab"))?;
+        let store = tab.store.as_mut().ok_or_else(|| tr!("project-not-saved"))?;
         store.delete_branch(name).map_err(err)?;
         Self::fix_based_on(tab, Some(name));
         self.content_revision += 1;

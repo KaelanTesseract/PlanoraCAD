@@ -189,27 +189,27 @@ fn each_action_is_one_step() {
     assert_eq!(tab(&mut w).redo_label(), None);
 
     for label in ["Umbenennen", "Verschieben", "Quader anlegen"] {
-        assert_eq!(tab(&mut w).undo_label(), Some(label));
+        assert_eq!(tab(&mut w).undo_label(), Some(label.to_string()));
         tab(&mut w).undo().unwrap();
         // Rückgängig selbst ist kein Schritt.
         observe(&mut w);
-        assert_eq!(tab(&mut w).redo_label(), Some(label));
+        assert_eq!(tab(&mut w).redo_label(), Some(label.to_string()));
     }
     assert_eq!(undo_len(&w), 0);
     assert_eq!(redo_len(&w), 3);
     assert_same(&st(&mut w).snapshot(), &start, "nach dreimal Rückgängig");
     assert!(st(&mut w).bodies.is_empty());
-    assert_eq!(tab(&mut w).undo(), Err(NOTHING_TO_UNDO.into()));
+    assert_eq!(tab(&mut w).undo(), Err(nothing_to_undo()));
 
     for label in ["Quader anlegen", "Verschieben", "Umbenennen"] {
-        assert_eq!(tab(&mut w).redo_label(), Some(label));
+        assert_eq!(tab(&mut w).redo_label(), Some(label.to_string()));
         tab(&mut w).redo().unwrap();
         observe(&mut w);
     }
     assert_same(&st(&mut w).snapshot(), &end, "nach dreimal Wiederholen");
     assert_eq!(undo_len(&w), 3);
     assert_eq!(redo_len(&w), 0);
-    assert_eq!(tab(&mut w).redo(), Err(NOTHING_TO_REDO.into()));
+    assert_eq!(tab(&mut w).redo(), Err(nothing_to_redo()));
     assert_eq!(st(&mut w).bodies[0].name, "Teil");
 }
 
@@ -272,7 +272,7 @@ fn no_step_without_change() {
     assert_eq!(undo_len(&w), 1);
     assert_eq!(
         tab(&mut w).undo_label(),
-        Some("Quader anlegen"),
+        Some("Quader anlegen".to_string()),
         "kein offener Schritt"
     );
 
@@ -288,7 +288,7 @@ fn no_step_without_change() {
     );
     observe(&mut w);
     assert_eq!(undo_len(&w), 1, "kein Schritt für die verworfene Zeichnung");
-    assert_eq!(tab(&mut w).undo_label(), Some("Quader anlegen"));
+    assert_eq!(tab(&mut w).undo_label(), Some("Quader anlegen".to_string()));
     // Die nächste Zeichnung bekommt dieselbe Kennung wie ohne den Fehlversuch.
     let d = st(&mut w)
         .document
@@ -358,17 +358,20 @@ fn delete_with_dependents_is_one_step() {
     assert!(st(&mut w).document.features().is_empty());
     observe(&mut w);
     assert_eq!(undo_len(&w), 5);
-    assert_eq!(tab(&mut w).undo_label(), Some("Feature löschen"));
+    assert_eq!(
+        tab(&mut w).undo_label(),
+        Some("Feature löschen".to_string())
+    );
 
     tab(&mut w).undo().unwrap();
     assert_same(&st(&mut w).snapshot(), &before, "alles zurück");
     assert_eq!(st(&mut w).bodies.len(), 1);
-    assert_eq!(tab(&mut w).undo_label(), Some("Skizze anlegen"));
+    assert_eq!(tab(&mut w).undo_label(), Some("Skizze anlegen".to_string()));
     tab(&mut w).redo().unwrap();
     assert!(st(&mut w).document.features().is_empty());
     tab(&mut w).undo().unwrap();
     tab(&mut w).undo().unwrap();
-    assert_eq!(tab(&mut w).undo_label(), Some("Verrunden"));
+    assert_eq!(tab(&mut w).undo_label(), Some("Verrunden".to_string()));
 }
 
 // ---- (d) Ziehen ist ein Schritt -------------------------------------------------------------
@@ -387,12 +390,12 @@ fn drag_is_one_step() {
         w.observe_history(true);
         assert_eq!(undo_len(&w), n, "während des Ziehens kein Schritt");
         assert!(tab(&mut w).is_dirty());
-        assert_eq!(tab(&mut w).undo_label(), Some("Verschieben"));
+        assert_eq!(tab(&mut w).undo_label(), Some("Verschieben".to_string()));
     }
     st(&mut w).end_drag();
     observe(&mut w);
     assert_eq!(undo_len(&w), n + 1);
-    assert_eq!(tab(&mut w).undo_label(), Some("Verschieben"));
+    assert_eq!(tab(&mut w).undo_label(), Some("Verschieben".to_string()));
     let after = bounds(&w, 0);
     assert_eq!(after.0 - before.0, DVec3::new(15.0, -7.5, 0.0));
     tab(&mut w).undo().unwrap();
@@ -544,7 +547,10 @@ fn drag_in_real_frames() {
     rig.frame(vec![press(p + vec2(60.0, 0.0), false)]);
     rig.settle();
     assert_eq!(rig.undo_len(), 2, "ein Schritt für das ganze Ziehen");
-    assert_eq!(rig.ws().active_tab().undo_label(), Some("Verschieben"));
+    assert_eq!(
+        rig.ws().active_tab().undo_label(),
+        Some("Verschieben".to_string())
+    );
     let end = rig.ws().active_tab().state.bodies[0].bounds.0;
     rig.ws().active_tab_mut().undo().unwrap();
     rig.settle();
@@ -592,7 +598,10 @@ fn typing_a_number_is_one_step() {
     let x_end = rig.ws().active_tab().state.bodies[0].bounds.0.x;
     assert!((x_end - 42.5).abs() < 1e-9, "x = {x_end} (vorher {x})");
     assert_eq!(rig.undo_len(), 2, "ein Schritt für die ganze Eingabe");
-    assert_eq!(rig.ws().active_tab().undo_label(), Some("Verschieben"));
+    assert_eq!(
+        rig.ws().active_tab().undo_label(),
+        Some("Verschieben".to_string())
+    );
     rig.ws().active_tab_mut().undo().unwrap();
     rig.settle();
     assert_eq!(rig.ws().active_tab().state.bodies[0].bounds.0.x, 0.0);
@@ -642,7 +651,7 @@ fn view_drag_in_real_frames() {
     assert_eq!(rig.undo_len(), n + 1, "ein Schritt für das ganze Ziehen");
     assert_eq!(
         rig.ws().active_tab().undo_label(),
-        Some("Ansicht verschieben")
+        Some("Ansicht verschieben".to_string())
     );
     let end = placement(&rig.ws().active_tab().state, d, v);
     rig.ws().active_tab_mut().undo().unwrap();
@@ -672,7 +681,10 @@ fn dirty_dot_follows_history() {
     save_as(&mut w, "Teil");
     assert!(!w.active_tab().is_dirty(), "gespeichert");
     assert_eq!(undo_len(&w), 2, "Verlauf bleibt nach dem Speichern");
-    assert_eq!(w.active_tab().undo_label(), Some("Zylinder anlegen"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Zylinder anlegen".to_string())
+    );
 
     tab(&mut w).undo().unwrap();
     assert!(w.active_tab().is_dirty(), "vom gespeicherten Stand weg");
@@ -988,10 +1000,10 @@ fn undo_closes_dialogs_and_blocks_while_writing() {
         assert!(e.is_writing_file());
         w.active_tab_mut().export_dialog = Some(e);
     }
-    assert_eq!(tab(&mut w).undo_blocked(), Some(EXPORT_WRITING));
-    assert_eq!(tab(&mut w).redo_blocked(), Some(EXPORT_WRITING));
+    assert_eq!(tab(&mut w).undo_blocked(), Some(export_writing()));
+    assert_eq!(tab(&mut w).redo_blocked(), Some(export_writing()));
     let before = st(&mut w).snapshot();
-    assert_eq!(tab(&mut w).undo(), Err(EXPORT_WRITING.into()));
+    assert_eq!(tab(&mut w).undo(), Err(export_writing()));
     assert_same(&st(&mut w).snapshot(), &before, "Export sperrt");
     tab(&mut w).close_dialogs();
     assert!(
@@ -1014,23 +1026,26 @@ fn undo_closes_dialogs_and_blocks_while_writing() {
 #[test]
 fn blocked_texts() {
     let mut w = ws();
-    assert_eq!(tab(&mut w).undo_blocked(), Some(NOTHING_TO_UNDO));
-    assert_eq!(tab(&mut w).redo_blocked(), Some(NOTHING_TO_REDO));
-    assert_eq!(NOTHING_TO_UNDO, "Es gibt nichts rückgängig zu machen.");
-    assert_eq!(NOTHING_TO_REDO, "Es gibt nichts zu wiederholen.");
-    assert_eq!(EXPORT_WRITING, "Während des Exports ist das nicht möglich.");
+    assert_eq!(tab(&mut w).undo_blocked(), Some(nothing_to_undo()));
+    assert_eq!(tab(&mut w).redo_blocked(), Some(nothing_to_redo()));
+    assert_eq!(nothing_to_undo(), "Es gibt nichts rückgängig zu machen.");
+    assert_eq!(nothing_to_redo(), "Es gibt nichts zu wiederholen.");
+    assert_eq!(
+        export_writing(),
+        "Während des Exports ist das nicht möglich."
+    );
     // Eine offene Änderung (noch kein Schritt) lässt sich schon zurücknehmen.
     st(&mut w).create_box(DVec3::splat(10.0)).unwrap();
     assert_eq!(tab(&mut w).undo_blocked(), None);
-    assert_eq!(tab(&mut w).undo_label(), Some("Quader anlegen"));
+    assert_eq!(tab(&mut w).undo_label(), Some("Quader anlegen".to_string()));
     tab(&mut w).undo().unwrap();
-    assert_eq!(tab(&mut w).undo_blocked(), Some(NOTHING_TO_UNDO));
+    assert_eq!(tab(&mut w).undo_blocked(), Some(nothing_to_undo()));
     assert_eq!(tab(&mut w).redo_blocked(), None);
     // Eine neue Änderung macht Wiederholen hinfällig, schon vor dem Bildende.
     st(&mut w).create_sphere(1.0).unwrap();
-    assert_eq!(tab(&mut w).redo_blocked(), Some(NOTHING_TO_REDO));
+    assert_eq!(tab(&mut w).redo_blocked(), Some(nothing_to_redo()));
     assert_eq!(tab(&mut w).redo_label(), None);
-    assert_eq!(tab(&mut w).redo(), Err(NOTHING_TO_REDO.into()));
+    assert_eq!(tab(&mut w).redo(), Err(nothing_to_redo()));
     assert_eq!(st(&mut w).bodies.len(), 1);
 
     // Alte Version: gesperrt mit dem Hinweis der alten Version.
@@ -1041,13 +1056,13 @@ fn blocked_texts() {
     w.activate(v);
     assert_eq!(
         tab(&mut w).undo_blocked(),
-        Some("In einer alten Version lässt sich nichts ändern.")
+        Some("In einer alten Version lässt sich nichts ändern.".to_string())
     );
     assert_eq!(
         READ_ONLY_HINT,
         "In einer alten Version lässt sich nichts ändern."
     );
-    assert_eq!(tab(&mut w).redo_blocked(), Some(READ_ONLY_HINT));
+    assert_eq!(tab(&mut w).redo_blocked(), Some(READ_ONLY_HINT.to_string()));
     let before = st(&mut w).snapshot();
     assert!(tab(&mut w).undo().is_err());
     assert_same(&st(&mut w).snapshot(), &before, "alte Version unverändert");
@@ -1077,7 +1092,7 @@ fn autosave_and_restore_reset_history() {
     assert!(t.is_dirty(), "Sicherung ist nicht gespeichert");
     assert!(!t.dialog_open(), "Fenster des alten Stands geschlossen");
     w.activate(r.tab);
-    assert_eq!(tab(&mut w).undo(), Err(NOTHING_TO_UNDO.into()));
+    assert_eq!(tab(&mut w).undo(), Err(nothing_to_undo()));
     assert!(w.active_tab().is_dirty());
     // Eine Änderung und zurück: bleibt ungespeichert.
     st(&mut w).create_sphere(1.0).unwrap();
@@ -1101,7 +1116,7 @@ fn autosave_and_restore_reset_history() {
     assert_eq!(t.history().undo_len(), 0);
     assert_eq!(t.history().redo_len(), 0);
     assert!(!t.is_dirty());
-    assert_eq!(tab(&mut w).undo(), Err(NOTHING_TO_UNDO.into()));
+    assert_eq!(tab(&mut w).undo(), Err(nothing_to_undo()));
 }
 
 // ---- Nachtrag: gewählter Körper, überholte Autosicherung, Grenzen ----------------------------

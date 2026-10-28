@@ -2075,7 +2075,7 @@ impl AppState {
             return;
         };
         let label = self.sketch_label(h.current(), draft);
-        crate::diag::step(label);
+        crate::diag::step(&label);
         let after = draft.clone();
         let bytes = sketch_bytes(&after);
         if let Some(h) = self.sketch_history.as_mut() {
@@ -2136,7 +2136,7 @@ impl AppState {
 
     /// Name des Schritts, den Rückgängig in der offenen Skizze zurücknähme (eine noch offene
     /// Änderung zählt mit, auch ein offener erster Klick); `None`: nichts da.
-    pub fn sketch_undo_label(&self) -> Option<&'static str> {
+    pub fn sketch_undo_label(&self) -> Option<String> {
         match self.sketch_open_change() {
             // Nur ein offener erster Klick: Rückgängig nimmt diesen Punkt zurück.
             Some((h, draft, true)) => Some(crate::undo_labels::describe_sketch_change(
@@ -2144,13 +2144,13 @@ impl AppState {
                 draft,
             )),
             Some((h, draft, false)) => Some(self.sketch_label(h.current(), draft)),
-            None => self.sketch_history()?.undo_label(),
+            None => self.sketch_history()?.undo_label().map(str::to_string),
         }
     }
 
     /// Name eines Skizzenschritts; offene Punkte des laufenden Werkzeugs gehören zum nächsten
     /// Element und benennen ihn nicht.
-    fn sketch_label(&self, before: &SketchFeature, after: &SketchFeature) -> &'static str {
+    fn sketch_label(&self, before: &SketchFeature, after: &SketchFeature) -> String {
         let open = self
             .sketch_session
             .as_ref()
@@ -2160,11 +2160,11 @@ impl AppState {
 
     /// Name des Schritts, den Wiederholen in der offenen Skizze herstellte. Bei einer offenen
     /// Änderung (auch einem offenen ersten Klick) gibt es nichts zu wiederholen: `None`.
-    pub fn sketch_redo_label(&self) -> Option<&'static str> {
+    pub fn sketch_redo_label(&self) -> Option<String> {
         if self.sketch_open_change().is_some() {
             return None;
         }
-        self.sketch_history()?.redo_label()
+        self.sketch_history()?.redo_label().map(str::to_string)
     }
 
     /// Verwirft Sitzung und Entwurf (das Skizzen-Feature gibt es nicht mehr).
@@ -2460,14 +2460,14 @@ impl AppState {
 
     /// Ist der sichtbare Körper `index` zurückgesetzt? Dann [`crate::history_bar::LOCK_HINT`]
     /// (neue Aktionen an ihm sind gesperrt, siehe [`crate::history_bar::lock_reason`]).
-    pub fn body_lock(&self, index: usize) -> Option<&'static str> {
+    pub fn body_lock(&self, index: usize) -> Option<String> {
         let b = self.bodies.get(index)?;
         crate::history_bar::lock_reason(self, &[b.source.feature])
     }
 
     /// Sperre des Körpers, um den es bei Menü und Befehlsfeld geht: der gewählte, sonst der
     /// Körper der gewählten Fläche oder Kante.
-    pub(crate) fn chosen_lock(&self) -> Option<&'static str> {
+    pub(crate) fn chosen_lock(&self) -> Option<String> {
         self.chosen_body().and_then(|i| self.body_lock(i))
     }
 
@@ -2482,31 +2482,31 @@ impl AppState {
     }
 
     /// Warum „Vereinigen“, „Abziehen“ und „Schneiden“ gerade nicht gehen (`None`: sie gehen).
-    pub fn boolean_blocked(&self) -> Option<&'static str> {
+    pub fn boolean_blocked(&self) -> Option<String> {
         if self.selected_is_mesh() {
-            Some(MESH_LOCKED_HINT)
+            Some(MESH_LOCKED_HINT.to_string())
         } else if self.solid_body_count() < 2 {
-            Some("Dafür werden mindestens zwei Körper benötigt.")
+            Some("Dafür werden mindestens zwei Körper benötigt.".to_string())
         } else {
             self.chosen_lock()
         }
     }
 
     /// Warum „Verrunden“ und „Fase“ gerade nicht gehen (`None`: sie gehen).
-    pub fn blend_blocked(&self) -> Option<&'static str> {
+    pub fn blend_blocked(&self) -> Option<String> {
         if self.selected_is_mesh() {
-            Some(MESH_LOCKED_HINT)
+            Some(MESH_LOCKED_HINT.to_string())
         } else if self.solid_body_count() == 0 {
-            Some("Dafür wird mindestens ein Körper benötigt.")
+            Some("Dafür wird mindestens ein Körper benötigt.".to_string())
         } else {
             self.chosen_lock()
         }
     }
 
     /// Warum „Skizze auf gewählter Fläche“ gerade nicht geht (`None`: es geht).
-    pub fn sketch_on_face_blocked(&self) -> Option<&'static str> {
+    pub fn sketch_on_face_blocked(&self) -> Option<String> {
         if self.selected_is_mesh() {
-            return Some(MESH_LOCKED_HINT);
+            return Some(MESH_LOCKED_HINT.to_string());
         }
         let planar = match self.selection {
             Some(Pick::Face(FaceRef { body, face })) => self
@@ -2519,7 +2519,7 @@ impl AppState {
         if let Some(body) = planar {
             self.body_lock(body)
         } else {
-            Some("Dafür zuerst eine ebene Fläche eines Körpers anklicken.")
+            Some("Dafür zuerst eine ebene Fläche eines Körpers anklicken.".to_string())
         }
     }
 

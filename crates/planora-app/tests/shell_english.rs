@@ -18,10 +18,10 @@ use planora_project::library::Library;
 
 const BIG: Vec2 = vec2(1920.0, 1080.0);
 
-/// Texte, die zu Dateien späterer Tasks gehören und hier noch deutsch sind (Task 10: STEP-Import;
-/// Task 12: Würfelseiten). Sie werden nur von der Deutsch-Prüfung
+/// Texte, die zu Dateien späterer Tasks gehören und hier noch deutsch sind (Task 9: Ordner
+/// „Zeichnungen“ im Feature-Baum; Task 10: STEP-Import; Task 12: Würfelseiten). Sie werden nur von der Deutsch-Prüfung
 /// ausgenommen, nicht von den Erwartungen.
-const LATER_TASKS: [&str; 3] = ["STEP", "Würfel", "Körper wählen"];
+const LATER_TASKS: [&str; 3] = ["STEP", "Würfel", "Noch keine Zeichnung"];
 
 thread_local! {
     static SIDES: std::cell::RefCell<Vec<Rect>> = const { std::cell::RefCell::new(Vec::new()) };
@@ -77,7 +77,7 @@ impl Rig {
         }
         let sides = shell_panels::field_rects(&self.ctx)
             .into_iter()
-            .filter(|(n, _)| *n == "links" || *n == "rechts" || *n == "Verlauf")
+            .filter(|(n, _)| *n == "rechts")
             .map(|(_, r)| r)
             .collect();
         SIDES.with(|c| *c.borrow_mut() = sides);
@@ -118,7 +118,8 @@ impl Rig {
 /// Kein deutscher Buchstabe und keine Schlüssel-Id in den Texten (Zeilen späterer Tasks
 /// ausgenommen).
 fn assert_english(what: &str, seen: &[Seen]) {
-    // Seitenfelder und Verlaufsleiste (Feature-Baum, Eigenschaften, Verlauf) gehören zu Task 6 und 7.
+    // Das rechte Feld (Eigenschaften) gehört zu Task 7; Feature-Baum und Verlaufsleiste sind
+    // seit Task 6 englisch.
     let sides = SIDES.with(|c| c.borrow().clone());
     common::assert_english(what, seen, &sides, &LATER_TASKS);
 }

@@ -6,7 +6,7 @@
 mod common;
 
 use egui::{Color32, Event, Modifiers, PointerButton, Pos2, Rect, pos2, vec2};
-use planora_app::file_chooser::{CHOOSE_FOLDER, display_path};
+use planora_app::file_chooser::{choose_folder, display_path};
 use planora_app::icons::{self, Icon};
 use planora_app::places::{self, Places};
 use planora_app::settings_window::*;
@@ -477,7 +477,7 @@ fn the_window_shows_section_path_button_and_hint() {
     let seen = a.settle(4);
     let t = texts(&seen);
     assert!(t.contains(&choose_heading().as_str()), "{t:?}");
-    assert!(t.contains(&CHOOSE_FOLDER), "{t:?}");
+    assert!(t.iter().any(|s| *s == choose_folder()), "{t:?}");
     assert!(!t.iter().any(|s| s.contains("Wurzel")), "{t:?}");
 }
 
@@ -506,7 +506,7 @@ fn choosing_a_marked_folder_switches_and_closes_the_chooser() {
     a.w.open(false);
     a.click(change_directory().as_str());
     a.w.chooser_mut().unwrap().mark("Neu");
-    a.click(CHOOSE_FOLDER);
+    a.click(&choose_folder());
     assert_eq!(lib_root(&a.e.ws), a.e.root.join("Neu"));
     assert_eq!(a.w.message(), None);
     assert!(a.w.chooser_mut().is_none());
@@ -547,7 +547,7 @@ fn refuse(a: &mut App) {
     a.w.open(false);
     a.click(change_directory().as_str());
     a.w.chooser_mut().unwrap().mark("Neu");
-    a.click(CHOOSE_FOLDER);
+    a.click(&choose_folder());
 }
 
 #[test]
@@ -589,7 +589,7 @@ fn a_later_successful_change_clears_an_earlier_warning() {
     a.e.ws.close_tab(0);
     a.click(change_directory().as_str());
     a.w.chooser_mut().unwrap().mark("Neu");
-    a.click(CHOOSE_FOLDER);
+    a.click(&choose_folder());
     assert_eq!(a.w.message(), None, "alte Warnung weg");
     assert_eq!(lib_root(&a.e.ws), a.e.root.join("Neu"));
     let seen = a.settle(4);
@@ -733,7 +733,7 @@ fn the_window_fits_800x600_while_choosing() {
                 );
             }
         }
-        for button in [CHOOSE_FOLDER, "Abbrechen"] {
+        for button in [choose_folder(), "Abbrechen".to_string()] {
             let b = seen
                 .iter()
                 .find(|s| s.text == button)

@@ -1315,7 +1315,7 @@ fn a_stale_foreign_marker_stores_impossible_and_never_builds() {
     let again = thumbnail_for_with(&dir, &key, &BuildLimits::default(), &mut || steps += 1);
     assert!(again.from_cache && matches!(again.thumb, Thumb::Impossible));
     assert_eq!(steps, 0);
-    assert_eq!(IMPOSSIBLE_TEXT, "Miniatur nicht möglich");
+    assert_eq!(impossible_text(), "Miniatur nicht möglich");
     // Eine Marke weit in der Zukunft (verstellte Uhr) gilt ebenfalls als alt.
     let dir = doc(&boxed());
     let key = key_of(&dir);

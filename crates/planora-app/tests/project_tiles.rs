@@ -477,7 +477,7 @@ fn more_than_500_tiles_are_cut() {
     assert_eq!(tiles.len(), MAX_TILES);
     assert_eq!(tiles[0].name, "P000");
     assert_eq!(tiles[MAX_TILES - 1].name, "P499");
-    assert_eq!(TOO_MANY, "Es werden nur die ersten 500 gezeigt.");
+    assert_eq!(too_many(), "Es werden nur die ersten 500 gezeigt.");
 }
 
 // ---------- Echte Bibliotheken ----------
@@ -538,8 +538,8 @@ fn a_cancelled_scan_stops() {
     .unwrap();
     let progress = Progress::new();
     progress.cancel();
-    assert_eq!(scan_library(&root, &progress).unwrap_err(), CANCELLED);
-    assert_eq!(CANCELLED, "Abgebrochen");
+    assert_eq!(scan_library(&root, &progress).unwrap_err(), cancelled());
+    assert_eq!(cancelled(), "Abgebrochen");
 }
 
 // ---------- Fix-Runde 1: Datum der Spitze, unmögliche Zeiten, Abbruch, Fortschritt ----------
@@ -734,7 +734,7 @@ fn cancelling_during_the_scan_stops_before_the_rest() {
         read += 1;
         progress.cancel(); // nach dem ersten Dokument
     });
-    assert_eq!(result.unwrap_err(), CANCELLED);
+    assert_eq!(result.unwrap_err(), cancelled());
     assert_eq!(
         read, 1,
         "nach dem Abbruch wird kein weiteres Dokument gelesen"

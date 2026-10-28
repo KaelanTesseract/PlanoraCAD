@@ -10,7 +10,7 @@ use planora_app::feature_dialog::FeatureDialog;
 use planora_app::history::snapshot_bytes;
 use planora_app::icons::{self, FeatureIcon, Icon, IconSource};
 use planora_app::state::*;
-use planora_app::undo_labels::{FALLBACK, describe_change};
+use planora_app::undo_labels::{describe_change, fallback};
 use planora_app::workspace::Workspace;
 use planora_app::{fonts, properties, theme};
 use planora_drawing::{Paper, Placement, Projection, Scale, Sheet, ViewKind};
@@ -371,7 +371,10 @@ fn import_is_one_step_named() {
     assert_eq!(ids.len(), 3);
     w.observe_history(false);
     assert_eq!(w.active_tab().history().undo_len(), 1, "genau ein Schritt");
-    assert_eq!(w.active_tab().undo_label(), Some("STEP importieren"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("STEP importieren".to_string())
+    );
     let after = marks(&w.active_tab().state);
     assert_eq!(after.len(), 3);
     assert_eq!(after[0].1.len(), 6);
@@ -381,7 +384,10 @@ fn import_is_one_step_named() {
     w.observe_history(false);
     assert!(w.active_tab().state.bodies.is_empty(), "alle drei zurück");
     assert!(w.active_tab().state.document.features().is_empty());
-    assert_eq!(w.active_tab().redo_label(), Some("STEP importieren"));
+    assert_eq!(
+        w.active_tab().redo_label(),
+        Some("STEP importieren".to_string())
+    );
 
     w.active_tab_mut().redo().unwrap();
     w.observe_history(false);
@@ -412,7 +418,7 @@ fn step_name_only_for_pure_imports() {
     s.create_box(DVec3::splat(3.0)).unwrap();
     s.import_step(vec![("B".into(), shape(&box_at(DVec3::ZERO)))])
         .unwrap();
-    assert_eq!(describe_change(&before, &s.snapshot()), FALLBACK);
+    assert_eq!(describe_change(&before, &s.snapshot()), fallback());
 }
 
 #[test]

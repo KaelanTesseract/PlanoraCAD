@@ -1,59 +1,62 @@
 //! Namen der rücknehmbaren Schritte („Rückgängig: Quader anlegen“): rein, aus dem Vergleich
 //! zweier Zustandsbilder. Die Regeln gelten der Reihe nach, die erste passende gewinnt; passt
-//! keine, steht [`FALLBACK`] da. Alle Texte nur mit Zeichen, die die Schriften haben.
+//! keine, steht [`fallback`] da. Alle Texte nur mit Zeichen, die die Schriften haben.
 
 use planora_drawing::Drawing;
 use planora_drawing::model::{Balloon, DrawingKind, ViewSpec};
 use planora_feature::{FeatureKind, Parameter, Snapshot, SnapshotFeature};
+use planora_i18n::tr;
 use planora_kernel::boolean::BoolOp;
 use planora_sketch::CurveKind;
 use planora_sketch::constraint::ConstraintKind;
 use planora_sketch::model::PointId;
 
 /// Name, wenn keine Regel passt.
-pub const FALLBACK: &str = "Ändern";
+pub fn fallback() -> String {
+    tr!("undo-change")
+}
 
 /// Name des Schritts, der das Bild `before` in das Bild `after` verwandelt hat.
-pub fn describe_change(before: &Snapshot, after: &Snapshot) -> &'static str {
+pub fn describe_change(before: &Snapshot, after: &Snapshot) -> String {
     parameters(before, after)
         .or_else(|| features(before, after))
         .or_else(|| drawings(before, after))
-        .or_else(|| (before.project_info != after.project_info).then_some("Blattangaben ändern"))
+        .or_else(|| (before.project_info != after.project_info).then_some(tr!("undo-sheet-info")))
         .or_else(|| {
-            (before.parts_overrides != after.parts_overrides).then_some("Stücklistentext ändern")
+            (before.parts_overrides != after.parts_overrides).then_some(tr!("undo-parts-text"))
         })
-        .unwrap_or(FALLBACK)
+        .unwrap_or_else(fallback)
 }
 
 /// Parametertabelle (vor allen anderen Regeln: eine Parameteränderung ändert meist auch Felder
 /// und Körper, der Schritt heißt trotzdem nach dem Parameter). Eine neue Kennung: „Parameter
 /// anlegen“; eine fehlende (Löschen, auch „Durch den Wert ersetzen“): „Parameter löschen“; sonst
 /// eine andere Zeile oder ein anderer Zähler: „Parameter ändern“.
-fn parameters(before: &Snapshot, after: &Snapshot) -> Option<&'static str> {
+fn parameters(before: &Snapshot, after: &Snapshot) -> Option<String> {
     let missing = |list: &[Parameter], p: &Parameter| list.iter().all(|q| q.id != p.id);
     if after
         .parameters
         .iter()
         .any(|p| missing(&before.parameters, p))
     {
-        return Some("Parameter anlegen");
+        return Some(tr!("undo-param-add"));
     }
     if before
         .parameters
         .iter()
         .any(|p| missing(&after.parameters, p))
     {
-        return Some("Parameter löschen");
+        return Some(tr!("undo-param-delete"));
     }
     (before.parameters != after.parameters || before.next_param != after.next_param)
-        .then_some("Parameter ändern")
+        .then_some(tr!("undo-param-change"))
 }
 
 fn has(list: &[SnapshotFeature], f: &SnapshotFeature) -> bool {
     list.iter().any(|g| g.id == f.id)
 }
 
-fn features(before: &Snapshot, after: &Snapshot) -> Option<&'static str> {
+fn features(before: &Snapshot, after: &Snapshot) -> Option<String> {
     let added: Vec<&SnapshotFeature> = after
         .features
         .iter()
@@ -70,11 +73,11 @@ fn features(before: &Snapshot, after: &Snapshot) -> Option<&'static str> {
         {
             return Some(created_label(&many[0].kind));
         }
-        _ => return Some(FALLBACK),
+        _ => return Some(fallback()),
     }
     // 2. Features fehlen.
     if before.features.iter().any(|f| !has(&after.features, f)) {
-        return Some("Feature löschen");
+        return Some(tr!("undo-feature-delete"));
     }
     // 3. Gleiche Kennungen: das erste geänderte Feature je Art der Änderung.
     let pairs: Vec<(&SnapshotFeature, &SnapshotFeature)> = before
@@ -83,22 +86,22 @@ fn features(before: &Snapshot, after: &Snapshot) -> Option<&'static str> {
         .filter_map(|b| after.features.iter().find(|a| a.id == b.id).map(|a| (b, a)))
         .collect();
     if pairs.iter().any(|(b, a)| b.name != a.name) {
-        return Some("Umbenennen");
+        return Some(tr!("undo-rename"));
     }
     if let Some((_, a)) = pairs.iter().find(|(b, a)| b.suppressed != a.suppressed) {
         return Some(if a.suppressed {
-            "Unterdrücken"
+            tr!("undo-suppress")
         } else {
-            "Einblenden"
+            tr!("undo-unsuppress")
         });
     }
     if before.marker != after.marker {
-        return Some("Zeitleistenmarke setzen");
+        return Some(tr!("undo-timeline-marker"));
     }
     // Marker eines Körpers in der Verlaufsleiste (vor- wie zurück): eigener Name neben der
     // globalen Zeitleistenmarke.
     if before.rollbacks != after.rollbacks {
-        return Some("Verlaufsmarke setzen");
+        return Some(tr!("undo-history-marker"));
     }
     // Gleiche Art, aber andere Formeln (etwa nur der Formeltext, der Wert bleibt): benannt wie
     // eine Änderung der Art.
@@ -107,42 +110,42 @@ fn features(before: &Snapshot, after: &Snapshot) -> Option<&'static str> {
         .find(|(b, a)| b.kind != a.kind || b.formulas != a.formulas)
     {
         return Some(match a.kind {
-            FeatureKind::Move { .. } | FeatureKind::MeshBody { .. } => "Verschieben",
-            FeatureKind::Sketch(_) => "Skizze bearbeiten",
-            _ => "Feature ändern",
+            FeatureKind::Move { .. } | FeatureKind::MeshBody { .. } => tr!("undo-move"),
+            FeatureKind::Sketch(_) => tr!("undo-sketch-edit"),
+            _ => tr!("undo-feature-change"),
         });
     }
     None
 }
 
-fn created_label(kind: &FeatureKind) -> &'static str {
+fn created_label(kind: &FeatureKind) -> String {
     match kind {
-        FeatureKind::Box { .. } => "Quader anlegen",
-        FeatureKind::Cylinder { .. } => "Zylinder anlegen",
-        FeatureKind::Sphere { .. } => "Kugel anlegen",
-        FeatureKind::Cone { .. } => "Kegel anlegen",
-        FeatureKind::Sketch(_) => "Skizze anlegen",
-        FeatureKind::Extrude { .. } => "Extrudieren",
-        FeatureKind::Revolve { .. } => "Drehen",
+        FeatureKind::Box { .. } => tr!("undo-box"),
+        FeatureKind::Cylinder { .. } => tr!("undo-cylinder"),
+        FeatureKind::Sphere { .. } => tr!("undo-sphere"),
+        FeatureKind::Cone { .. } => tr!("undo-cone"),
+        FeatureKind::Sketch(_) => tr!("undo-sketch-create"),
+        FeatureKind::Extrude { .. } => tr!("undo-extrude"),
+        FeatureKind::Revolve { .. } => tr!("undo-revolve"),
         FeatureKind::Boolean { op, .. } => match op {
-            BoolOp::Union => "Vereinigen",
-            BoolOp::Difference => "Abziehen",
-            BoolOp::Intersection => "Schneiden",
+            BoolOp::Union => tr!("undo-union"),
+            BoolOp::Difference => tr!("undo-subtract"),
+            BoolOp::Intersection => tr!("undo-intersect"),
         },
-        FeatureKind::Move { .. } => "Verschieben",
+        FeatureKind::Move { .. } => tr!("undo-move"),
         FeatureKind::Verrunden { art, .. } => {
             if art.is_chamfer() {
-                "Fase"
+                tr!("undo-chamfer")
             } else {
-                "Verrunden"
+                tr!("undo-fillet")
             }
         }
-        FeatureKind::MeshBody { .. } => "Netz importieren",
-        FeatureKind::StepBody { .. } => "STEP importieren",
+        FeatureKind::MeshBody { .. } => tr!("undo-mesh-import"),
+        FeatureKind::StepBody { .. } => tr!("undo-step-import"),
     }
 }
 
-fn drawings(before: &Snapshot, after: &Snapshot) -> Option<&'static str> {
+fn drawings(before: &Snapshot, after: &Snapshot) -> Option<String> {
     let new: Vec<&Drawing> = after
         .drawings
         .iter()
@@ -153,9 +156,9 @@ fn drawings(before: &Snapshot, after: &Snapshot) -> Option<&'static str> {
             .iter()
             .all(|d| matches!(d.kind, DrawingKind::PartsList { .. }));
         return Some(if only_parts {
-            "Stücklistenblatt anlegen"
+            tr!("undo-parts-sheet")
         } else {
-            "Zeichnung anlegen"
+            tr!("undo-drawing-create")
         });
     }
     if before
@@ -163,7 +166,7 @@ fn drawings(before: &Snapshot, after: &Snapshot) -> Option<&'static str> {
         .iter()
         .any(|b| after.drawings.iter().all(|d| d.id != b.id))
     {
-        return Some("Zeichnung löschen");
+        return Some(tr!("undo-drawing-delete"));
     }
     let pairs: Vec<(&Drawing, &Drawing)> = before
         .drawings
@@ -175,7 +178,7 @@ fn drawings(before: &Snapshot, after: &Snapshot) -> Option<&'static str> {
         return None;
     }
     if pairs.iter().any(|(b, a)| b.name != a.name) {
-        return Some("Zeichnung umbenennen");
+        return Some(tr!("undo-drawing-rename"));
     }
     inside_drawings(&pairs)
 }
@@ -192,75 +195,75 @@ fn view_pairs<'a>(pairs: &[(&'a Drawing, &'a Drawing)]) -> Vec<(&'a ViewSpec, &'
         .collect()
 }
 
-fn inside_drawings(pairs: &[(&Drawing, &Drawing)]) -> Option<&'static str> {
+fn inside_drawings(pairs: &[(&Drawing, &Drawing)]) -> Option<String> {
     let new_views: Vec<&ViewSpec> = pairs
         .iter()
         .flat_map(|(b, a)| a.views.iter().filter(|v| b.view(v.id).is_none()))
         .collect();
     if !new_views.is_empty() {
         return Some(if new_views.iter().any(|v| v.section.is_some()) {
-            "Schnitt anlegen"
+            tr!("undo-section-create")
         } else {
-            "Ansicht hinzufügen"
+            tr!("undo-view-add")
         });
     }
     if pairs
         .iter()
         .any(|(b, a)| b.views.iter().any(|v| a.view(v.id).is_none()))
     {
-        return Some("Ansicht löschen");
+        return Some(tr!("undo-view-delete"));
     }
     let vp = view_pairs(pairs);
     if vp.iter().any(|(b, a)| b.placement != a.placement) {
-        return Some("Ansicht verschieben");
+        return Some(tr!("undo-view-move"));
     }
     if vp.iter().any(|(b, a)| b.scale != a.scale) {
-        return Some("Maßstab ändern");
+        return Some(tr!("undo-scale-change"));
     }
     if vp.iter().any(|(b, a)| b.section != a.section) {
-        return Some("Schnitt ändern");
+        return Some(tr!("undo-section-change"));
     }
     if vp.iter().any(|(b, a)| b != a) {
-        return Some("Ansicht ändern");
+        return Some(tr!("undo-view-change"));
     }
     if pairs
         .iter()
         .any(|(b, a)| a.dimensions.iter().any(|m| b.dimension(m.id).is_none()))
     {
-        return Some("Maß anlegen");
+        return Some(tr!("undo-dim-add"));
     }
     if pairs
         .iter()
         .any(|(b, a)| b.dimensions.iter().any(|m| a.dimension(m.id).is_none()))
     {
-        return Some("Maß löschen");
+        return Some(tr!("undo-dim-delete"));
     }
     if pairs.iter().any(|(b, a)| b.dimensions != a.dimensions) {
-        return Some("Maß ändern");
+        return Some(tr!("undo-dim-change"));
     }
     if pairs
         .iter()
         .any(|(b, a)| a.balloons.iter().any(|n| b.balloon(n.id).is_none()))
     {
-        return Some("Positionsnummer anlegen");
+        return Some(tr!("undo-balloon-add"));
     }
     if pairs
         .iter()
         .any(|(b, a)| b.balloons.iter().any(|n| a.balloon(n.id).is_none()))
     {
-        return Some("Positionsnummer löschen");
+        return Some(tr!("undo-balloon-delete"));
     }
     if pairs
         .iter()
         .any(|(b, a)| balloons_differ(&b.balloons, &a.balloons))
     {
-        return Some("Positionsnummer verschieben");
+        return Some(tr!("undo-balloon-move"));
     }
     if pairs
         .iter()
         .any(|(b, a)| b.sheet != a.sheet || b.projection != a.projection || b.info != a.info)
     {
-        return Some("Blattangaben ändern");
+        return Some(tr!("undo-sheet-info"));
     }
     None
 }
@@ -274,7 +277,7 @@ fn balloons_differ(b: &[Balloon], a: &[Balloon]) -> bool {
 pub fn describe_sketch_change(
     before: &planora_feature::SketchFeature,
     after: &planora_feature::SketchFeature,
-) -> &'static str {
+) -> String {
     describe_sketch_change_beside(before, after, &[])
 }
 
@@ -285,10 +288,10 @@ pub fn describe_sketch_change_beside(
     before: &planora_feature::SketchFeature,
     after: &planora_feature::SketchFeature,
     open: &[PointId],
-) -> &'static str {
+) -> String {
     let (bs, as_) = (&before.sketch, &after.sketch);
     if after.copies.len() > before.copies.len() {
-        return "Kante übernehmen";
+        return tr!("undo-edge-project");
     }
     // Gelöscht heißt: eine Kennung von vorher gibt es nachher nicht mehr (nicht nur: weniger).
     let removed = bs.curves().any(|(id, _)| as_.curve(id).is_none())
@@ -297,7 +300,7 @@ pub fn describe_sketch_change_beside(
             .any(|(id, _)| as_.points().all(|(p, _)| p != id))
         || bs.constraints().any(|(id, _)| as_.constraint(id).is_none());
     if removed {
-        return "Löschen";
+        return tr!("undo-delete");
     }
     let new_curves: Vec<&CurveKind> = as_
         .curves()
@@ -308,19 +311,19 @@ pub fn describe_sketch_change_beside(
         [] => {}
         [one] => {
             return match one {
-                CurveKind::Line { .. } => "Linie zeichnen",
-                CurveKind::Circle { .. } => "Kreis zeichnen",
-                CurveKind::Arc { .. } => "Bogen zeichnen",
-                CurveKind::Ellipse { .. } => "Ellipse zeichnen",
-                CurveKind::Spline { .. } => "Spline zeichnen",
+                CurveKind::Line { .. } => tr!("undo-line"),
+                CurveKind::Circle { .. } => tr!("undo-circle"),
+                CurveKind::Arc { .. } => tr!("undo-arc"),
+                CurveKind::Ellipse { .. } => tr!("undo-ellipse"),
+                CurveKind::Spline { .. } => tr!("undo-spline"),
             };
         }
         many => {
             let lines = many.iter().all(|k| matches!(k, CurveKind::Line { .. }));
             return if many.len() == 4 && lines {
-                "Rechteck zeichnen"
+                tr!("undo-rectangle")
             } else {
-                "Zeichnen"
+                tr!("undo-draw")
             };
         }
     }
@@ -328,7 +331,7 @@ pub fn describe_sketch_change_beside(
         .points()
         .any(|(id, _)| !open.contains(&id) && bs.points().all(|(p, _)| p != id))
     {
-        return "Punkt setzen";
+        return tr!("undo-point");
     }
     let open_snap =
         |k: &ConstraintKind| matches!(k, ConstraintKind::PointOnCurve(p, _) if open.contains(p));
@@ -340,21 +343,21 @@ pub fn describe_sketch_change_beside(
     if !new_constraints.is_empty() {
         let any_dim = new_constraints.iter().any(|k| k.is_dimension());
         return if any_dim {
-            "Maß setzen"
+            tr!("undo-dim-set")
         } else {
-            "Abhängigkeit setzen"
+            tr!("undo-constraint")
         };
     }
     if as_.curves().any(|(id, c)| {
         bs.curve(id)
             .is_some_and(|o| o.construction != c.construction)
     }) {
-        return "Hilfslinie umschalten";
+        return tr!("undo-construction");
     }
     // Nach allen Strukturregeln: eine Formel neu, anders oder entfernt (auch wenn sich dabei der
     // Wert des Maßes ändert).
     if before.formulas != after.formulas {
-        return "Formel ändern";
+        return tr!("undo-formula");
     }
-    "Skizze ändern"
+    tr!("undo-sketch-change")
 }

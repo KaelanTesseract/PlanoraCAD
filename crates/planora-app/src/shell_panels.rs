@@ -616,8 +616,8 @@ fn history_buttons(ui: &mut egui::Ui, ws: &mut crate::workspace::Workspace, dark
     let lock = edit_lock(ws);
     let tab = ws.active_tab();
     let (undo_text, redo_text) = (
-        app::undo_menu_text(tab.undo_label()),
-        app::redo_menu_text(tab.redo_label()),
+        app::undo_menu_text(tab.undo_label().as_deref()),
+        app::redo_menu_text(tab.redo_label().as_deref()),
     );
     // Beim Überfahren der Menütext mit der (ersten) Taste aus der Tastenbelegung.
     let hint = |a, text: &str| crate::keymap::with_hint(&ws.keymap, a, text);
@@ -627,7 +627,7 @@ fn history_buttons(ui: &mut egui::Ui, ws: &mut crate::workspace::Workspace, dark
             crate::keymap::Action::Undo.label(),
             hint(crate::keymap::Action::Undo, &undo_text),
             undo_text,
-            tab.undo_blocked().map(String::from),
+            tab.undo_blocked(),
             true,
         ),
         (
@@ -635,7 +635,7 @@ fn history_buttons(ui: &mut egui::Ui, ws: &mut crate::workspace::Workspace, dark
             crate::keymap::Action::Redo.label(),
             hint(crate::keymap::Action::Redo, &redo_text),
             redo_text,
-            tab.redo_blocked().map(String::from),
+            tab.redo_blocked(),
             false,
         ),
     ];
@@ -963,13 +963,8 @@ fn bottom_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
     let inner = inner_size(&frame, rects.bottom.size());
     let margin = frame.total_margin().sum().x;
     let lock = edit_lock(&app.ws);
-    let boolean_blocked = app
-        .ws
-        .active_tab()
-        .state
-        .boolean_blocked()
-        .map(String::from);
-    let blend_blocked = app.ws.active_tab().state.blend_blocked().map(String::from);
+    let boolean_blocked = app.ws.active_tab().state.boolean_blocked();
+    let blend_blocked = app.ws.active_tab().state.blend_blocked();
     let mut command = None;
     let mut seen: Vec<(String, egui::Rect)> = Vec::new();
     let mut chips_end = 0.0;

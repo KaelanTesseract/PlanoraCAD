@@ -1276,7 +1276,7 @@ fn history_step(ws: &mut Workspace, undo: bool) {
         tab.redo_blocked()
     };
     if let Some(why) = blocked {
-        tab.state.message = Some(why.into());
+        tab.state.message = Some(why);
         tab.state.info = None;
         return;
     }
@@ -1928,7 +1928,7 @@ pub fn create_blocked(ws: &Workspace, kind: CreateKind) -> Option<String> {
     match kind {
         CreateKind::Extrusion | CreateKind::Revolution => match sketch_target(state) {
             None => Some(tr!("menu-create-need-sketch")),
-            Some(sketch) => crate::history_bar::lock_reason(state, &[sketch]).map(str::to_string),
+            Some(sketch) => crate::history_bar::lock_reason(state, &[sketch]),
         },
         _ => None,
     }
@@ -1939,7 +1939,7 @@ pub fn create_blocked(ws: &Workspace, kind: CreateKind) -> Option<String> {
 /// Skizze offen und der Dialog entfällt. Ist `kind` gesperrt ([`create_blocked`], etwa die
 /// Skizze eines zurückgesetzten Körpers), steht der Grund in `message`.
 pub fn do_create(ws: &mut Workspace, kind: CreateKind) {
-    if let Some(why) = create_blocked(ws, kind).filter(|w| w == crate::history_bar::LOCK_HINT) {
+    if let Some(why) = create_blocked(ws, kind).filter(|w| *w == crate::history_bar::lock_hint()) {
         ws.active_tab_mut().state.message = Some(why);
         return;
     }
@@ -1992,7 +1992,7 @@ pub fn open_boolean(ws: &mut Workspace, op: BoolOp) {
 fn open_boolean_inner(ws: &mut Workspace, op: BoolOp) {
     let tab = ws.active_tab_mut();
     if let Some(why) = tab.state.chosen_lock() {
-        tab.state.message = Some(why.into());
+        tab.state.message = Some(why);
         return;
     }
     if tab.state.try_close_sketch().is_ok() {
@@ -2004,7 +2004,7 @@ fn open_boolean_inner(ws: &mut Workspace, op: BoolOp) {
 pub fn open_blend(ws: &mut Workspace, chamfer: bool) {
     let tab = ws.active_tab_mut();
     if let Some(why) = tab.state.chosen_lock() {
-        tab.state.message = Some(why.into());
+        tab.state.message = Some(why);
         return;
     }
     if tab.state.try_close_sketch().is_ok() {
@@ -2094,8 +2094,8 @@ pub fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     // Versionen und während des Exports. Ein offenes Fenster sperrt nicht, es wird geschlossen.
     let tab = ws.active_tab();
     let (undo_block, redo_block) = (tab.undo_blocked(), tab.redo_blocked());
-    let undo_text = undo_menu_text(tab.undo_label());
-    let redo_text = redo_menu_text(tab.redo_label());
+    let undo_text = undo_menu_text(tab.undo_label().as_deref());
+    let redo_text = redo_menu_text(tab.redo_label().as_deref());
     let undo_keys = keymap::shortcut_hint(&ws.keymap, Action::Undo);
     let redo_keys = keymap::shortcut_hint(&ws.keymap, Action::Redo);
     if shortcut_button(ui, undo_block.is_none(), Icon::Undo, &undo_text, undo_keys)
@@ -2144,7 +2144,7 @@ pub fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
         ),
     ] {
         if entry(ui, boolean.is_none(), icons::button(icon, label))
-            .on_disabled_hover_text(boolean.unwrap_or_default())
+            .on_disabled_hover_text(boolean.clone().unwrap_or_default())
             .clicked()
         {
             open_boolean(ws, op);
@@ -2160,7 +2160,7 @@ pub fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
             keymap::shortcut_hint(&ws.keymap, Action::Fillet)
         };
         if icons::source_entry_keys(ui, source, &label, &keys, blend.is_none())
-            .on_disabled_hover_text(blend.unwrap_or_default())
+            .on_disabled_hover_text(blend.clone().unwrap_or_default())
             .clicked()
         {
             run_blend(ws, chamfer);

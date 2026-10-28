@@ -81,9 +81,12 @@ fn the_edit_menu_rules_name_the_lock() {
     s.create_box(DVec3::splat(5.0)).unwrap();
     assert_eq!(s.boolean_blocked(), None);
     s.import_mesh("N", Arc::new(cube()), 1.0).unwrap(); // jetzt gewählt
-    assert_eq!(s.boolean_blocked(), Some(MESH_LOCKED_HINT));
-    assert_eq!(s.blend_blocked(), Some(MESH_LOCKED_HINT));
-    assert_eq!(s.sketch_on_face_blocked(), Some(MESH_LOCKED_HINT));
+    assert_eq!(s.boolean_blocked(), Some(MESH_LOCKED_HINT.to_string()));
+    assert_eq!(s.blend_blocked(), Some(MESH_LOCKED_HINT.to_string()));
+    assert_eq!(
+        s.sketch_on_face_blocked(),
+        Some(MESH_LOCKED_HINT.to_string())
+    );
     s.selected_body = Some(0);
     assert_eq!(s.boolean_blocked(), None);
     assert_eq!(s.blend_blocked(), None);

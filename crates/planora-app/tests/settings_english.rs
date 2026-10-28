@@ -2,8 +2,7 @@
 //! `with_lang(&english(), …)` gezeichnet, ohne Fenster. Kein Test ruft `set_language` oder
 //! `set_global` (Ruling 4): die Sprache gilt nur für den Thread des Tests.
 //!
-//! Die Dateiauswahl im Fenster „Einstellungen“ gehört zu einem späteren Task; sie wird nur
-//! gebraucht, um eine Meldung auszulösen, und nicht auf Deutsch geprüft.
+//! Die Dateiauswahl im Fenster „Einstellungen“ ist seit Task 6 übersetzt und wird mitgeprüft.
 
 mod common;
 
@@ -263,15 +262,13 @@ fn settings_messages_speak_english() {
         win.w.chooser_mut().unwrap().enter("sub");
         let seen = win.settle(4);
         // Der Knopf zum Wählen steht in der Fußzeile der Dateiauswahl.
-        let choose = seen
-            .iter()
-            // Deutsch, solange die Dateiauswahl nicht übersetzt ist (späterer Task).
-            .find(|s| s.text == "Diesen Ordner wählen" || s.text == "Choose this folder")
-            .map(|s| s.text.clone());
-        let Some(choose) = choose else {
-            panic!("Knopf zum Wählen fehlt in {}", join(&seen));
-        };
-        let seen = win.click(&choose);
+        assert_has(
+            "Dateiauswahl",
+            &seen,
+            &["Choose this folder", "Up one folder"],
+        );
+        assert_english("Dateiauswahl", &seen, &[], &[]);
+        let seen = win.click("Choose this folder");
         assert_has(
             "Projektordner",
             &seen,

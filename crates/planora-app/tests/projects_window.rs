@@ -245,10 +245,10 @@ fn every_panel_action_is_reachable_from_tiles() {
     for name in ["F", "Teil"] {
         let t = tile(&w, name);
         for entry in tile_menu(t.kind) {
-            w.apply_menu(&t, entry);
+            w.apply_menu(&t, &entry);
             assert!(project_actions::dialog_open(&w.ui), "{name}: {entry}");
             let text = dialog_texts(&c, &mut e.ws, &mut w.ui);
-            let shown = match *entry {
+            let shown = match entry.as_str() {
                 "Umbenennen …" => format!("Neuer Name für „{}“:", t.path.join(" / ")),
                 "Verschieben …" => format!("„{}“ verschieben nach:", t.path.join(" / ")),
                 _ => format!("„{}“ in den Papierkorb verschieben?", t.path.join(" / ")),
@@ -597,7 +597,7 @@ fn without_a_library_there_is_no_scan() {
     assert!(start.elapsed() < Duration::from_secs(1));
     assert!(w.scan_state().is_none());
     assert!(w.tiles().is_empty());
-    assert!(project_actions::NO_LIBRARY.contains("Projektverzeichnis …"));
+    assert!(project_actions::no_library().contains("Projektverzeichnis …"));
 }
 
 #[test]
@@ -727,7 +727,10 @@ fn document_names_ending_in_the_suffix_are_refused() {
     let mut w = opened(&e.ws);
     for bad in ["x.pcad", "X.PCAD", "Teil.Pcad"] {
         assert!(project_actions::create_document(&mut e.ws, &mut w.ui, &p, bad).is_none());
-        assert_eq!(notice(&e.ws), planora_app::workspace::DOCUMENT_NAME_SUFFIX);
+        assert_eq!(
+            notice(&e.ws),
+            planora_app::workspace::document_name_suffix()
+        );
         e.ws.prompt = None;
     }
     assert!(fs::read_dir(lib_root(&e.ws).join("P")).unwrap().all(|x| {
@@ -750,11 +753,11 @@ fn the_move_window_says_when_the_targets_are_still_being_read() {
     let mut st = ProjectsUi::default();
     project_actions::request_move(&mut st, doc.clone());
     let t = dialog_texts(&c, &mut e.ws, &mut st);
-    assert!(t.contains(project_actions::TARGETS_PENDING), "{t}");
+    assert!(t.contains(&project_actions::targets_pending()), "{t}");
     // gelesen: kein Hinweis
     let mut w = opened(&e.ws);
     project_actions::request_move(&mut w.ui, doc);
     let t = dialog_texts(&c, &mut e.ws, &mut w.ui);
-    assert!(!t.contains(project_actions::TARGETS_PENDING), "{t}");
+    assert!(!t.contains(&project_actions::targets_pending()), "{t}");
     assert!(t.contains("verschieben nach:"), "{t}");
 }

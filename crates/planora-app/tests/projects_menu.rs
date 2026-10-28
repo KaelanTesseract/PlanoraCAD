@@ -13,11 +13,11 @@ use planora_app::app::{
 };
 use planora_app::dialog::close_label;
 use planora_app::export_dialog::{ExportDialog, ExportFormat};
-use planora_app::file_chooser::CHOOSE_FOLDER;
+use planora_app::file_chooser::choose_folder;
 use planora_app::icons::{self, Icon};
 use planora_app::import_dialog::ImportDialog;
 use planora_app::project_actions;
-use planora_app::projects_window::DIRECTORY_BUTTON;
+use planora_app::projects_window::directory_button;
 use planora_app::settings_window::{Note, RootMessage, change_directory};
 use planora_app::shell::ShellState;
 use planora_app::state::{AppState, StandardPlane};
@@ -521,7 +521,7 @@ fn ctrl_o_opens_the_projects_window_everywhere() {
             "{mode}: Dokument unverändert"
         );
         assert!(
-            shot.has(planora_app::projects_window::TITLE),
+            shot.has(&planora_app::projects_window::title()),
             "{mode}: Fenster gezeichnet"
         );
         // Noch einmal: bleibt offen.
@@ -594,7 +594,7 @@ fn the_directory_button_goes_to_settings_and_back() {
     let mut rig = Rig::new(workspace());
     rig.ctrl(Key::O);
     rig.wait_scan();
-    rig.click(DIRECTORY_BUTTON);
+    rig.click(&directory_button());
     assert!(
         rig.settings_open(),
         "Projektverzeichnis … öffnet Einstellungen"
@@ -606,7 +606,7 @@ fn the_directory_button_goes_to_settings_and_back() {
     assert!(rig.projects_open(), "Rückweg nach Projekte");
     // Der Rückweg gilt nur einmal: Projekte schließen, Einstellungen aus dem Menü, schließen.
     let shot = rig.settle(2);
-    assert!(shot.has(planora_app::projects_window::TITLE));
+    assert!(shot.has(&planora_app::projects_window::title()));
     rig.menu("Datei", &settings_entry());
     let area = rig.settings_rect();
     rig.click_in(&close_label(), Some(area));
@@ -671,7 +671,7 @@ fn change_directory_and_come_back(blocked: bool) {
     rig.ctrl(Key::O);
     rig.frames_until_tiles();
     assert!(rig.tile_names().contains(&"A".to_string()));
-    rig.click(DIRECTORY_BUTTON);
+    rig.click(&directory_button());
     rig.click(change_directory().as_str());
     rig.app
         .windows_mut()
@@ -679,7 +679,7 @@ fn change_directory_and_come_back(blocked: bool) {
         .chooser_mut()
         .expect("Auswahl offen")
         .mark("Zweit");
-    rig.click(CHOOSE_FOLDER);
+    rig.click(&choose_folder());
     assert!(planora_app::places::same_dir(
         &lib_root(rig.ws()),
         &std::fs::canonicalize(&second).unwrap()
@@ -734,11 +734,11 @@ fn a_prompt_locks_every_button_of_the_projects_window() {
     rig.ctrl(Key::S);
     assert!(matches!(rig.ws().prompt, Some(Prompt::SaveAs { .. })));
     let generation = rig.app.windows_mut().1.ui.generation();
-    click_in_projects(&mut rig, DIRECTORY_BUTTON);
+    click_in_projects(&mut rig, &directory_button());
     assert!(!rig.settings_open(), "Projektverzeichnis … öffnet nichts");
     assert!(rig.projects_open());
-    click_in_projects(&mut rig, planora_app::projects_window::NEW_PROJECT);
-    click_in_projects(&mut rig, planora_app::projects_window::REFRESH);
+    click_in_projects(&mut rig, &planora_app::projects_window::new_project());
+    click_in_projects(&mut rig, &planora_app::projects_window::refresh());
     assert!(
         !project_actions::dialog_open(&rig.app.windows_mut().1.ui),
         "Neues Projekt öffnet nichts"
@@ -754,18 +754,18 @@ fn a_prompt_locks_every_button_of_the_projects_window() {
     rig.settle(3);
     rig.ctrl(Key::S);
     for text in [
-        planora_app::projects_window::NEW_DOCUMENT,
-        planora_app::projects_window::NEW_FOLDER,
-        planora_app::projects_window::TITLE,
+        planora_app::projects_window::new_document(),
+        planora_app::projects_window::new_folder(),
+        planora_app::projects_window::title(),
     ] {
-        click_in_projects(&mut rig, text);
+        click_in_projects(&mut rig, &text);
     }
     assert!(!project_actions::dialog_open(&rig.app.windows_mut().1.ui));
     assert_eq!(rig.app.windows_mut().1.location(), &p, "Pfad gesperrt");
     // Nach der Antwort geht alles wieder.
     rig.ws().prompt = None;
     rig.settle(2);
-    click_in_projects(&mut rig, planora_app::projects_window::NEW_FOLDER);
+    click_in_projects(&mut rig, &planora_app::projects_window::new_folder());
     assert!(project_actions::dialog_open(&rig.app.windows_mut().1.ui));
 }
 
@@ -780,7 +780,7 @@ fn the_directory_cannot_be_changed_while_a_prompt_is_open() {
     rig.ctrl(Key::O);
     rig.wait_scan();
     rig.ctrl(Key::S);
-    click_in_projects(&mut rig, DIRECTORY_BUTTON);
+    click_in_projects(&mut rig, &directory_button());
     assert!(!rig.settings_open(), "keine Einstellungen bei Rückfrage");
     // Auch direkt nicht.
     {
@@ -809,7 +809,7 @@ fn the_directory_cannot_be_changed_while_a_prompt_is_open() {
     });
     rig.settle(2);
     let area = rig.settings_rect();
-    rig.click_in(CHOOSE_FOLDER, Some(area));
+    rig.click_in(&choose_folder(), Some(area));
     assert_eq!(lib_root(rig.ws()), root, "Verzeichnis bleibt");
     assert!(
         rig.app.windows_mut().2.chooser_mut().is_some(),
@@ -1114,7 +1114,7 @@ fn save_as_points_to_the_projects_window() {
     rig.click("Abbrechen");
     rig.ctrl(Key::O);
     rig.wait_scan();
-    click_in_projects(&mut rig, planora_app::projects_window::NEW_PROJECT);
+    click_in_projects(&mut rig, &planora_app::projects_window::new_project());
     assert!(
         project_actions::dialog_open(&rig.app.windows_mut().1.ui),
         "Neues Projekt öffnet"
@@ -1130,7 +1130,7 @@ fn new_texts_say_du_and_projektverzeichnis() {
         "Deine Projekte bleiben, wo sie sind. Im neuen Verzeichnis erscheinen nur die Projekte, die dort liegen."
     );
     assert_eq!(
-        project_actions::READ_ERROR_PREFIX,
+        project_actions::read_error_prefix(),
         "Das Projektverzeichnis lässt sich nicht lesen: "
     );
     assert_eq!(
@@ -1154,7 +1154,7 @@ fn renaming_a_document_to_a_pcad_name_is_refused() {
         );
         assert!(
             matches!(&ws.prompt, Some(Prompt::Notice(t))
-                if t == planora_app::workspace::DOCUMENT_NAME_SUFFIX),
+                if *t == planora_app::workspace::document_name_suffix()),
             "{bad}: Hinweis wie beim Anlegen"
         );
         ws.prompt = None;

@@ -408,7 +408,7 @@ fn keys_undo_and_redo() {
         (2, 0),
         "nichts mehr zu wiederholen"
     );
-    assert_eq!(rig.message().as_deref(), Some(NOTHING_TO_REDO));
+    assert_eq!(rig.message().as_deref(), Some(nothing_to_redo().as_str()));
     assert_eq!(rig.bodies(), 2);
 
     // Bis zum Anfang und darüber hinaus: die Statuszeile sagt, dass es nichts gibt.
@@ -419,11 +419,11 @@ fn keys_undo_and_redo() {
     rig.undo_key();
     assert_eq!(rig.bodies(), 0);
     assert_eq!((rig.undo_len(), rig.redo_len()), (0, 2));
-    assert_eq!(rig.message().as_deref(), Some(NOTHING_TO_UNDO));
+    assert_eq!(rig.message().as_deref(), Some(nothing_to_undo().as_str()));
     assert_eq!(rig.info(), None);
     let seen = rig.settle();
     assert_eq!(
-        status_color(&seen, NOTHING_TO_UNDO),
+        status_color(&seen, &nothing_to_undo()),
         theme::palette(true).error
     );
 }
@@ -433,12 +433,12 @@ fn keys_undo_and_redo() {
 fn empty_history_says_so() {
     let mut rig = Rig::new(ws());
     rig.undo_key();
-    assert_eq!(rig.message().as_deref(), Some(NOTHING_TO_UNDO));
+    assert_eq!(rig.message().as_deref(), Some(nothing_to_undo().as_str()));
     assert!(!rig.left_over);
     rig.press(Key::Y, Modifiers::COMMAND);
-    assert_eq!(rig.message().as_deref(), Some(NOTHING_TO_REDO));
+    assert_eq!(rig.message().as_deref(), Some(nothing_to_redo().as_str()));
     rig.press(Key::Z, SHIFT_COMMAND);
-    assert_eq!(rig.message().as_deref(), Some(NOTHING_TO_REDO));
+    assert_eq!(rig.message().as_deref(), Some(nothing_to_redo().as_str()));
     assert_eq!((rig.undo_len(), rig.redo_len()), (0, 0));
 }
 
@@ -831,7 +831,7 @@ fn keys_in_sketch_mode() {
     rig.undo_key();
     rig.undo_key();
     assert_eq!(curves(&mut rig), 0);
-    assert_eq!(rig.message().as_deref(), Some(NOTHING_TO_UNDO));
+    assert_eq!(rig.message().as_deref(), Some(nothing_to_undo().as_str()));
     assert_eq!(rig.st().document.edit_count(), edits);
     assert_eq!(rig.bodies(), 1, "der Quader bleibt");
     assert!(rig.st().sketch_session.is_some());
@@ -1210,7 +1210,7 @@ fn sketch_hint_despite_failing_feature_and_old_message() {
     }
     rig.settle();
     rig.press(Key::Y, Modifiers::COMMAND);
-    assert_eq!(rig.message().as_deref(), Some(NOTHING_TO_REDO));
+    assert_eq!(rig.message().as_deref(), Some(nothing_to_redo().as_str()));
     rig.settle();
     rig.undo_key();
     assert_eq!(rig.message(), None, "die alte Meldung ist weg");

@@ -157,7 +157,7 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
             // Ohne Skizze (etwa eine gemerkte Extrusion in einem Tab ohne Skizzen) ein Hinweis;
             // die Sperre durch einen zurückgesetzten Körper meldet `do_create` selbst.
             match app::create_blocked(ws, CreateKind::Extrusion) {
-                Some(why) if why != crate::history_bar::LOCK_HINT => {
+                Some(why) if why != crate::history_bar::lock_hint() => {
                     hint(&mut ws.active_tab_mut().state, &why);
                 }
                 _ => {
@@ -170,7 +170,7 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
             let state = &mut ws.active_tab_mut().state;
             // Eine Sperre durch einen zurückgesetzten Körper meldet `open_blend` selbst.
             match state.blend_blocked() {
-                Some(why) if state.chosen_lock().is_none() => hint(state, why),
+                Some(why) if state.chosen_lock().is_none() => hint(state, &why),
                 _ => {
                     app::open_blend(ws, false);
                     track(ws, a);

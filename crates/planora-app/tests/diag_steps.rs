@@ -121,7 +121,7 @@ fn sketch_change_becomes_a_step() {
     }
     w.observe_history(false);
     let label = w.active_tab().state.sketch_undo_label().unwrap();
-    assert!(has(label), "{label} fehlt in {:?}", diag::recent_steps());
+    assert!(has(&label), "{label} fehlt in {:?}", diag::recent_steps());
 }
 
 #[test]

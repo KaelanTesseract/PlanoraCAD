@@ -8,14 +8,14 @@ use common::{Screen, Seen};
 use egui::epaint::{ClippedShape, Shape};
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, StrokeKind};
 use planora_app::icons::{self, Icon};
-use planora_app::project_actions::{self, NO_LIBRARY, READ_ERROR_PREFIX};
+use planora_app::project_actions::{self, no_library, read_error_prefix};
 use planora_app::project_tiles::format_changed;
 use planora_app::projects_window::*;
 use planora_app::settings_window::change_root;
 use planora_app::state::AppState;
 use planora_app::theme;
 use planora_app::thumbnail_cache::{
-    BuildLimits, IMPOSSIBLE_TEXT, PREVIEW_JSON, Thumb, ThumbOutcome, thumbnail_for,
+    BuildLimits, PREVIEW_JSON, Thumb, ThumbOutcome, impossible_text, thumbnail_for,
 };
 use planora_app::thumbnail_worker::{BUSY_RETRY, ThumbRequest, ThumbWorker};
 use planora_app::workspace::{Prompt, Workspace};
@@ -375,24 +375,24 @@ fn tiles_show_name_date_version_and_count() {
     assert!(shot.has(&changed), "{changed}: {}", shot.texts());
     assert!(shot.has("Version 1 · 1 Dokument"), "{}", shot.texts());
     assert!(shot.has("1 Projekt"), "Fußzeile: {}", shot.texts());
-    assert!(shot.has(FOOTER_HINT));
+    assert!(shot.has(&footer_hint()));
 }
 
 #[test]
 fn an_empty_library_shows_the_empty_text_and_no_library_shows_the_directory_button() {
     let mut h = H::new(workspace());
     let shot = h.ready();
-    assert!(shot.has(EMPTY), "{}", shot.texts());
+    assert!(shot.has(&empty()), "{}", shot.texts());
     assert!(!shot.texts().contains("Wurzel"));
 
     let mut h = H::new(with_config(Workspace::new(None, Config::default())));
     let shot = h.settle(4);
-    assert!(shot.has(NO_LIBRARY), "{}", shot.texts());
-    assert!(shot.has(DIRECTORY_BUTTON), "{}", shot.texts());
+    assert!(shot.has(&no_library()), "{}", shot.texts());
+    assert!(shot.has(&directory_button()), "{}", shot.texts());
     assert!(!shot.texts().contains("Wurzel"));
-    assert!(!shot.has(EMPTY));
+    assert!(!shot.has(&empty()));
     // „Neues Projekt“ ist ohne Projektverzeichnis gesperrt
-    let shot = h.click(shot.at(NEW_PROJECT));
+    let shot = h.click(shot.at(&new_project()));
     assert!(
         !shot.has("Anlegen"),
         "kein Fenster „Neues Projekt“: {}",
@@ -461,32 +461,32 @@ fn an_empty_project_or_folder_shows_a_calm_hint() {
     let shot = h.settle(3);
     assert!(h.w.tiles().is_empty());
     assert_eq!(
-        EMPTY_PROJECT,
+        empty_project(),
         "Dieses Projekt ist noch leer. Lege oben ein Dokument oder einen Ordner an."
     );
-    assert!(shot.has(EMPTY_PROJECT), "{}", shot.texts());
-    assert_eq!(shot.color_of(EMPTY_PROJECT), palette(&h).text_tertiary);
+    assert!(shot.has(&empty_project()), "{}", shot.texts());
+    assert_eq!(shot.color_of(&empty_project()), palette(&h).text_tertiary);
     assert!(
         h.w.grid_rect()
             .unwrap()
-            .contains_rect(shot.find(EMPTY_PROJECT).unwrap().rect)
+            .contains_rect(shot.find(&empty_project()).unwrap().rect)
     );
     assert_eq!(h.w.last_rect.unwrap(), window, "Fenster gleich groß");
     assert_eq!(h.w.grid_rect().unwrap(), grid, "Kachelbereich gleich groß");
-    assert!(!shot.has(EMPTY), "nicht der Text der ersten Ebene");
+    assert!(!shot.has(&empty()), "nicht der Text der ersten Ebene");
     // Leerer Ordner im Projekt P.
     h.w.go_to(vec!["P".to_string(), "F".to_string()]);
     let shot = h.settle(3);
     assert_eq!(
-        EMPTY_FOLDER,
+        empty_folder(),
         "Dieser Ordner ist noch leer. Lege oben ein Dokument oder einen Ordner an."
     );
-    assert!(shot.has(EMPTY_FOLDER), "{}", shot.texts());
+    assert!(shot.has(&empty_folder()), "{}", shot.texts());
     assert_eq!(h.w.grid_rect().unwrap(), grid);
     // Ein Projekt mit Inhalt zeigt keinen Hinweis.
     h.w.go_to(p);
     let shot = h.settle(3);
-    assert!(!shot.has(EMPTY_FOLDER) && !shot.has(EMPTY_PROJECT));
+    assert!(!shot.has(&empty_folder()) && !shot.has(&empty_project()));
 }
 
 /// Relative Leuchtdichte (WCAG) einer Farbe.
@@ -600,7 +600,7 @@ fn the_breadcrumb_goes_back() {
     let crumb = shot
         .seen
         .iter()
-        .rfind(|s| s.text == TITLE)
+        .rfind(|s| s.text == title())
         .unwrap()
         .rect
         .center();
@@ -617,21 +617,28 @@ fn right_click_menus_offer_the_spec_entries() {
     let mut h = H::new(ws);
     h.ready();
     let shot = h.right_click(h.tile("P").center());
-    assert!(shot.has(RENAME) && shot.has(DELETE), "{}", shot.texts());
-    assert!(!shot.has(MOVE), "Projekte lassen sich nicht verschieben");
+    assert!(
+        shot.has(&rename()) && shot.has(&delete()),
+        "{}",
+        shot.texts()
+    );
+    assert!(
+        !shot.has(&move_item()),
+        "Projekte lassen sich nicht verschieben"
+    );
     h.key(Key::Escape);
     h.double_click(h.tile("P").center());
     h.settle(2);
     for name in ["F", "D"] {
         let shot = h.right_click(h.tile(name).center());
-        for entry in [RENAME, MOVE, DELETE] {
-            assert!(shot.has(entry), "{name}: {entry} fehlt: {}", shot.texts());
+        for entry in [rename(), move_item(), delete()] {
+            assert!(shot.has(&entry), "{name}: {entry} fehlt: {}", shot.texts());
         }
         h.key(Key::Escape);
     }
     // ein Eintrag öffnet das Fenster der Aktion
     let shot = h.right_click(h.tile("F").center());
-    let shot = h.click(shot.at(RENAME));
+    let shot = h.click(shot.at(&rename()));
     assert!(shot.has("Neuer Name für „P / F“:"), "{}", shot.texts());
 }
 
@@ -691,7 +698,7 @@ fn tab_reaches_every_tile_and_enter_opens_it() {
 fn new_project_button_creates_and_selects() {
     let mut h = H::new(workspace());
     let shot = h.ready();
-    h.click(shot.at(NEW_PROJECT));
+    h.click(shot.at(&new_project()));
     let shot = h.settle(2);
     assert!(
         shot.has("Anlegen"),
@@ -713,10 +720,10 @@ fn new_document_button_creates_opens_and_shows_the_tile() {
     let p = project(&ws, "P");
     let mut h = H::new(ws);
     let shot = h.ready();
-    assert!(!shot.has(NEW_DOCUMENT), "nur in einem Projekt");
+    assert!(!shot.has(&new_document()), "nur in einem Projekt");
     h.double_click(h.tile("P").center());
     let shot = h.settle(2);
-    h.click(shot.at(NEW_DOCUMENT));
+    h.click(shot.at(&new_document()));
     h.settle(2);
     h.type_text("Teil");
     h.key(Key::Enter);
@@ -787,7 +794,7 @@ fn the_frame_never_waits_for_a_slow_thumbnail() {
     );
     assert!(h.w.thumb_state(&dir).is_none(), "noch nicht fertig");
     assert!(
-        shot.text_in(BUILDING_TEXT, h.image_area("P")),
+        shot.text_in(&building_text(), h.image_area("P")),
         "ruhiger Hinweis: {}",
         shot.texts()
     );
@@ -806,7 +813,7 @@ fn the_frame_never_waits_for_a_slow_thumbnail() {
     let shot = h.settle(3);
     assert!(shot.texture_in(h.image_area("P")));
     assert!(
-        !shot.text_in(BUILDING_TEXT, h.image_area("P")),
+        !shot.text_in(&building_text(), h.image_area("P")),
         "Hinweis weg"
     );
     // fertig: kein weiteres Neuzeichnen
@@ -859,14 +866,14 @@ fn placeholders_name_no_bodies_and_too_complex() {
             .any(|s| s.text == text && area.contains_rect(s.rect))
     };
     assert!(
-        inside(&shot, NO_BODIES, h.image_area("Leer")),
+        inside(&shot, &no_bodies(), h.image_area("Leer")),
         "{}",
         shot.texts()
     );
-    assert!(inside(&shot, TOO_COMPLEX, h.image_area("Schwer")));
-    assert!(inside(&shot, IMPOSSIBLE_TEXT, h.image_area("Kaputt")));
+    assert!(inside(&shot, &too_complex(), h.image_area("Schwer")));
+    assert!(inside(&shot, &impossible_text(), h.image_area("Kaputt")));
     assert!(
-        inside(&shot, NO_BODIES, h.image_area("Ohne")),
+        inside(&shot, &no_bodies(), h.image_area("Ohne")),
         "Projekt ohne Dokument"
     );
     assert!(shot.has("Noch kein Dokument"));
@@ -900,7 +907,7 @@ fn refresh_rereads_external_changes() {
         .unwrap();
     let shot = h.settle(4);
     assert!(!shot.has("Außen"), "ohne Aktualisieren nicht neu gelesen");
-    h.click(shot.at(REFRESH));
+    h.click(shot.at(&refresh()));
     h.w.wait_for_scan(&h.ws);
     let shot = h.settle(3);
     assert!(shot.has("Außen"), "{}", shot.texts());
@@ -926,7 +933,7 @@ fn a_prompt_disables_the_tiles() {
 fn the_directory_button_asks_for_the_settings() {
     let mut h = H::new(workspace());
     let shot = h.ready();
-    h.click(shot.at(DIRECTORY_BUTTON));
+    h.click(shot.at(&directory_button()));
     assert!(
         h.events.contains(&ProjectsEvent::OpenSettings),
         "{:?}",
@@ -970,7 +977,7 @@ fn a_failed_store_is_not_retried_in_this_session() {
     let shot = h.ready();
     assert!(h.w.wait_for_thumbnails(WAIT));
     h.settle(20);
-    h.click(shot.at(REFRESH));
+    h.click(shot.at(&refresh()));
     h.w.wait_for_scan(&h.ws);
     h.settle(5);
     assert!(h.w.wait_for_thumbnails(WAIT));
@@ -1200,7 +1207,7 @@ fn a_busy_document_is_asked_again_later() {
     let shot = h.settle(5);
     assert_eq!(count.load(Ordering::SeqCst), 1, "nicht sofort erneut");
     assert!(
-        shot.text_in(BUILDING_TEXT, h.image_area("P")),
+        shot.text_in(&building_text(), h.image_area("P")),
         "{}",
         shot.texts()
     );
@@ -1353,7 +1360,7 @@ fn thumbnails_belong_to_the_document_folder_not_the_path() {
         !shot.texture_in(h.image_area("P")),
         "kein Bild aus dem alten Verzeichnis"
     );
-    assert!(shot.has(NO_BODIES), "{}", shot.texts());
+    assert!(shot.has(&no_bodies()), "{}", shot.texts());
 }
 
 // ---- Runde 1 der Prüfung -----------------------------------------------------------------------
@@ -1555,21 +1562,24 @@ fn a_read_error_deeper_down_offers_the_directory_and_back() {
     h.ready();
     h.double_click(h.tile("P").center());
     let shot = h.settle(2);
-    assert!(!shot.has(DIRECTORY_BUTTON), "tiefer nur bei einem Fehler");
+    assert!(
+        !shot.has(&directory_button()),
+        "tiefer nur bei einem Fehler"
+    );
     fs::remove_dir_all(&root).unwrap();
-    h.click(shot.at(REFRESH));
+    h.click(shot.at(&refresh()));
     h.w.wait_for_scan(&h.ws);
     let shot = h.settle(3);
     let Some(Err(e)) = h.w.scan_state() else {
         panic!("Lesefehler erwartet")
     };
-    let text = format!("{READ_ERROR_PREFIX}{e}");
+    let text = format!("{}{e}", read_error_prefix());
     assert_eq!(shot.color_of(&text), palette(&h).error, "Fehlerfarbe");
-    assert!(shot.has(DIRECTORY_BUTTON), "{}", shot.texts());
+    assert!(shot.has(&directory_button()), "{}", shot.texts());
     h.click(shot.at(&icons::glyph(Icon::Back).to_string()));
     assert!(h.w.location().is_empty(), "zurück geht noch");
     let shot = h.settle(2);
-    h.click(shot.at(DIRECTORY_BUTTON));
+    h.click(shot.at(&directory_button()));
     assert!(h.events.contains(&ProjectsEvent::OpenSettings));
 }
 
@@ -1615,7 +1625,7 @@ fn finishing_the_scan_requests_a_repaint_without_any_input() {
     let mut h = H::new(ws);
     h.w.set_scan_delay(Duration::from_millis(150));
     let shot = h.settle(8);
-    assert!(shot.has(READING), "das Lesen läuft: {}", shot.texts());
+    assert!(shot.has(&reading()), "das Lesen läuft: {}", shot.texts());
     assert!(h.w.scanning());
     assert!(
         !h.screen.ctx.has_requested_repaint(),
@@ -1632,5 +1642,5 @@ fn finishing_the_scan_requests_a_repaint_without_any_input() {
     );
     // und das nächste Bild zeigt das Ergebnis
     let shot = h.settle(3);
-    assert!(!shot.has(READING), "{}", shot.texts());
+    assert!(!shot.has(&reading()), "{}", shot.texts());
 }
