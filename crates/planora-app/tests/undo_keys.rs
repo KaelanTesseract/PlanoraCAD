@@ -22,7 +22,7 @@ use planora_app::drawing_state::WorkArea;
 use planora_app::export_dialog::ExportDialog;
 use planora_app::feature_dialog::FeatureDialog;
 use planora_app::history::{History, snapshot_bytes};
-use planora_app::properties::POSITION_LABEL;
+use planora_app::properties::position_label;
 use planora_app::sketch_state::Tool;
 use planora_app::state::*;
 use planora_app::workspace::*;
@@ -315,8 +315,8 @@ fn dim_spec(view: ViewId, refs: Vec<GeoRef>) -> DimSpec {
 fn position_x_field(seen: &[Seen]) -> Pos2 {
     let label = seen
         .iter()
-        .find(|s| s.text == POSITION_LABEL)
-        .unwrap_or_else(|| panic!("„{POSITION_LABEL}“ fehlt"))
+        .find(|s| s.text == position_label())
+        .unwrap_or_else(|| panic!("„{}“ fehlt", position_label()))
         .rect;
     seen.iter()
         .filter(|s| {
@@ -325,7 +325,7 @@ fn position_x_field(seen: &[Seen]) -> Pos2 {
                 && s.text.parse::<f64>().is_ok()
         })
         .min_by(|a, b| a.rect.left().total_cmp(&b.rect.left()))
-        .unwrap_or_else(|| panic!("kein Zahlenfeld unter „{POSITION_LABEL}“"))
+        .unwrap_or_else(|| panic!("kein Zahlenfeld unter „{}“", position_label()))
         .rect
         .center()
 }
@@ -1044,11 +1044,14 @@ fn failed_restore_through_keys() {
     assert_eq!(rig.info().as_deref(), Some("Rückgängig: Kegel anlegen"));
     rig.settle();
     rig.undo_key();
-    assert_eq!(rig.message().as_deref(), Some(UNDO_FAILED));
+    assert_eq!(rig.message(), Some(undo_failed()));
     assert_eq!(rig.info(), None, "kein Erfolgshinweis");
     assert_eq!(rig.bodies(), 2, "Dokument unverändert");
     let seen = rig.settle();
-    assert_eq!(status_color(&seen, UNDO_FAILED), theme::palette(true).error);
+    assert_eq!(
+        status_color(&seen, &undo_failed()),
+        theme::palette(true).error
+    );
     assert!(!seen.iter().any(|s| s.text.starts_with("Rückgängig:")));
 
     // Wiederholen: das nächste Bild ist unbrauchbar.
@@ -1065,11 +1068,14 @@ fn failed_restore_through_keys() {
     let mut rig = Rig::new(w);
     assert_eq!(rig.redo_len(), 1);
     rig.press(Key::Y, Modifiers::COMMAND);
-    assert_eq!(rig.message().as_deref(), Some(REDO_FAILED));
+    assert_eq!(rig.message(), Some(redo_failed()));
     assert_eq!(rig.info(), None, "kein Erfolgshinweis");
     assert_eq!(rig.bodies(), 0);
     let seen = rig.settle();
-    assert_eq!(status_color(&seen, REDO_FAILED), theme::palette(true).error);
+    assert_eq!(
+        status_color(&seen, &redo_failed()),
+        theme::palette(true).error
+    );
     assert!(!seen.iter().any(|s| s.text.starts_with("Wiederholen:")));
 }
 

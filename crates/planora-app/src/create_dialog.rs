@@ -1,10 +1,11 @@
 use crate::dialog::{Dialog, DialogSize};
-use crate::formula_field::{FormulaField, names_hint, resolve};
+use crate::formula_field::{FormulaField, names_hint, number_field_text, resolve};
 use crate::sketch_view::{format_length, format_number};
 use crate::state::AppState;
 use crate::theme;
 use planora_feature::expr::number_text;
 use planora_feature::{FeatureId, FieldKey, Formulas, ParamUnit};
+use planora_i18n::tr;
 use planora_math::DVec3;
 use planora_sketch::model::{CurveId, CurveKind, Sketch};
 use std::collections::BTreeMap;
@@ -12,20 +13,14 @@ use std::collections::BTreeMap;
 /// Voreingestellte Höhe für „Skizze extrudieren“ in Millimetern.
 pub const DEFAULT_SKETCH_HEIGHT: f64 = 10.0;
 
-/// Titel aller Erzeugen-Fenster (für das Aufräumen der eingegebenen Texte).
-const TITLES: [&str; 6] = [
-    "Quader erzeugen",
-    "Zylinder erzeugen",
-    "Kugel erzeugen",
-    "Kegel erzeugen",
-    "Skizze extrudieren",
-    "Skizze drehen",
-];
+/// Feste Namen aller Erzeugen-Fenster (für das Aufräumen der eingegebenen Texte); sie hängen
+/// nicht von der Sprache ab, damit ein Wechsel der Sprache bei offenem Fenster nichts verliert.
+const KEYS: [&str; 6] = ["box", "cylinder", "sphere", "cone", "extrude", "revolve"];
 
-/// Kennung der eingegebenen Texte eines Erzeugen-Fensters im egui-Speicher: je Titel und
+/// Kennung der eingegebenen Texte eines Erzeugen-Fensters im egui-Speicher: je Fenster und
 /// Dokument-Tab (`AppState::instance`), damit zwei Tabs sich nicht die Texte teilen.
-fn texts_id(title: &str, instance: u64) -> egui::Id {
-    egui::Id::new(("create-formulas", title)).with(instance)
+fn texts_id(key: &str, instance: u64) -> egui::Id {
+    egui::Id::new(("create-formulas", key)).with(instance)
 }
 
 /// Offener Erzeugen-Dialog samt Eingabewerten.
@@ -79,10 +74,14 @@ pub fn axis_candidates(sk: &Sketch) -> Vec<(CurveId, String)> {
             let length = sk.line_length(id).map(format_length).unwrap_or_default();
             let name = if construction {
                 n_construction += 1;
-                format!("Konstruktionslinie {n_construction} ({length})")
+                tr!(
+                    "create-axis-construction",
+                    n = n_construction,
+                    length = length
+                )
             } else {
                 n_line += 1;
-                format!("Linie {n_line} ({length})")
+                tr!("create-axis-line", n = n_line, length = length)
             };
             (id, name)
         })
@@ -113,14 +112,26 @@ impl CreateDialog {
         }
     }
 
-    pub fn title(&self) -> &'static str {
+    pub fn title(&self) -> String {
         match self {
-            CreateDialog::Box { .. } => "Quader erzeugen",
-            CreateDialog::Cylinder { .. } => "Zylinder erzeugen",
-            CreateDialog::Sphere { .. } => "Kugel erzeugen",
-            CreateDialog::Cone { .. } => "Kegel erzeugen",
-            CreateDialog::ExtrudeSketch { .. } => "Skizze extrudieren",
-            CreateDialog::RevolveSketch { .. } => "Skizze drehen",
+            CreateDialog::Box { .. } => tr!("create-box-title"),
+            CreateDialog::Cylinder { .. } => tr!("create-cylinder-title"),
+            CreateDialog::Sphere { .. } => tr!("create-sphere-title"),
+            CreateDialog::Cone { .. } => tr!("create-cone-title"),
+            CreateDialog::ExtrudeSketch { .. } => tr!("create-extrude-title"),
+            CreateDialog::RevolveSketch { .. } => tr!("create-revolve-title"),
+        }
+    }
+
+    /// Fester, sprachunabhängiger Name des Fensters (siehe [`KEYS`]).
+    fn key(&self) -> &'static str {
+        match self {
+            CreateDialog::Box { .. } => KEYS[0],
+            CreateDialog::Cylinder { .. } => KEYS[1],
+            CreateDialog::Sphere { .. } => KEYS[2],
+            CreateDialog::Cone { .. } => KEYS[3],
+            CreateDialog::ExtrudeSketch { .. } => KEYS[4],
+            CreateDialog::RevolveSketch { .. } => KEYS[5],
         }
     }
 
@@ -132,8 +143,8 @@ impl CreateDialog {
             .iter()
             .find(|(id, _)| id == sketch)
             .map(|(_, name)| name.clone())
-            .unwrap_or_else(|| "(keine)".into());
-        egui::ComboBox::from_label("Skizze")
+            .unwrap_or_else(|| tr!("create-none"));
+        egui::ComboBox::from_label(tr!("create-sketch"))
             .selected_text(current)
             .show_ui(ui, |ui| {
                 for (id, name) in &sketches {
@@ -148,28 +159,35 @@ impl CreateDialog {
     fn profile_list(ui: &mut egui::Ui, state: &AppState, sketch: FeatureId, profile: &mut usize) {
         // Die berechnete Skizze (aufgelöste Ebene, nachgeführte Kantenkopien).
         let Some(sk) = state.document.sketch_of(sketch) else {
-            ui.weak("Skizze nicht gefunden oder nicht berechnet.");
+            ui.weak(tr!("create-sketch-missing"));
             return;
         };
         // Zwischengespeichert je Stand der Skizze: neu berechnet nur nach einer Änderung.
         let extracted = state.profile_cache.get(sk);
-        ui.label("Profil");
+        ui.label(tr!("create-profile"));
         if extracted.profiles.is_empty() {
-            ui.weak("Die Skizze enthält kein geschlossenes Profil.");
+            ui.weak(tr!("create-no-profile"));
         }
         for (i, p) in extracted.profiles.iter().enumerate() {
             let area = p.outer.signed_area().abs()
                 - p.holes.iter().map(|h| h.signed_area().abs()).sum::<f64>();
-            let holes = match p.holes.len() {
-                0 => String::new(),
-                1 => ", 1 Loch".into(),
-                n => format!(", {n} Löcher"),
+            let label = match p.holes.len() {
+                0 => tr!(
+                    "create-profile-label",
+                    n = i + 1,
+                    area = format_number(area, 2)
+                ),
+                holes => tr!(
+                    "create-profile-label-holes",
+                    n = i + 1,
+                    area = format_number(area, 2),
+                    holes = holes
+                ),
             };
-            let label = format!("Profil {}: {} mm²{holes}", i + 1, format_number(area, 2));
             ui.selectable_value(profile, i, label);
         }
         for r in &extracted.rejected {
-            ui.weak(format!("Nicht verwendbar: {}", r.reason));
+            ui.weak(tr!("create-rejected", reason = r.reason.to_string()));
         }
     }
 
@@ -186,15 +204,15 @@ impl CreateDialog {
             .map(axis_candidates)
             .unwrap_or_default();
         if candidates.is_empty() {
-            ui.weak("Die Skizze enthält keine Linie, die als Drehachse dienen kann.");
+            ui.weak(tr!("create-no-axis"));
             return;
         }
         let current = candidates
             .iter()
             .find(|(id, _)| Some(*id) == *axis)
             .map(|(_, n)| n.clone())
-            .unwrap_or_else(|| "(bitte wählen)".into());
-        egui::ComboBox::from_label("Drehachse")
+            .unwrap_or_else(|| tr!("create-choose"));
+        egui::ComboBox::from_label(tr!("create-axis"))
             .selected_text(current)
             .show_ui(ui, |ui| {
                 for (id, name) in &candidates {
@@ -205,28 +223,32 @@ impl CreateDialog {
 
     /// Die Zahlenfelder des Dialogs: Feld, Bezeichnung, Vorgabe (mm). Alle nehmen Formeln an
     /// (Längen).
-    pub fn fields(&self) -> Vec<(FieldKey, &'static str, f64)> {
+    pub fn fields(&self) -> Vec<(FieldKey, String, f64)> {
         match self {
             CreateDialog::Box { x, y, z } => vec![
-                (FieldKey::Breite, "Breite (x)", *x),
-                (FieldKey::Tiefe, "Tiefe (y)", *y),
-                (FieldKey::Hoehe, "Höhe (z)", *z),
+                (FieldKey::Breite, tr!("create-field-width"), *x),
+                (FieldKey::Tiefe, tr!("create-field-depth"), *y),
+                (FieldKey::Hoehe, tr!("create-field-height-z"), *z),
             ],
             CreateDialog::Cylinder { radius, height } | CreateDialog::Cone { radius, height } => {
                 vec![
-                    (FieldKey::Radius, "Radius", *radius),
-                    (FieldKey::Hoehe, "Höhe", *height),
+                    (FieldKey::Radius, tr!("create-field-radius"), *radius),
+                    (FieldKey::Hoehe, tr!("create-field-height"), *height),
                 ]
             }
-            CreateDialog::Sphere { radius } => vec![(FieldKey::Radius, "Radius", *radius)],
-            CreateDialog::ExtrudeSketch { height, .. } => vec![(FieldKey::Hoehe, "Höhe", *height)],
+            CreateDialog::Sphere { radius } => {
+                vec![(FieldKey::Radius, tr!("create-field-radius"), *radius)]
+            }
+            CreateDialog::ExtrudeSketch { height, .. } => {
+                vec![(FieldKey::Hoehe, tr!("create-field-height"), *height)]
+            }
             CreateDialog::RevolveSketch { .. } => Vec::new(),
         }
     }
 
-    /// Kennung der eingegebenen Texte im egui-Speicher (je Fenstertitel und Dokument-Tab).
+    /// Kennung der eingegebenen Texte im egui-Speicher (je Fenster und Dokument-Tab).
     pub fn texts_id(&self, state: &AppState) -> egui::Id {
-        texts_id(self.title(), state.instance)
+        texts_id(self.key(), state.instance)
     }
 
     /// Die eingegebenen Texte der Felder (fehlende Felder: Vorgabe als Zahl).
@@ -235,7 +257,7 @@ impl CreateDialog {
             .data(|d| d.get_temp::<BTreeMap<FieldKey, String>>(self.texts_id(state)))
             .unwrap_or_default();
         for (key, _, value) in self.fields() {
-            texts.entry(key).or_insert_with(|| number_text(value));
+            texts.entry(key).or_insert_with(|| number_field_text(value));
         }
         texts
     }
@@ -251,8 +273,8 @@ impl CreateDialog {
     /// wurde geschlossen; beim nächsten Öffnen stehen wieder die Vorgaben darin).
     pub fn forget_texts(ctx: &egui::Context, instance: u64) {
         ctx.data_mut(|d| {
-            for title in TITLES {
-                d.remove::<BTreeMap<FieldKey, String>>(texts_id(title, instance));
+            for key in KEYS {
+                d.remove::<BTreeMap<FieldKey, String>>(texts_id(key, instance));
             }
         });
     }
@@ -263,10 +285,11 @@ impl CreateDialog {
         let mut create = false;
         let mut cancel = false;
         let title = self.title();
+        let key = self.key();
         // Ein Tab hat höchstens ein Erzeugen-Fenster: Texte anderer Fenster (etwa eines
         // Quaders, der durch eine Kugel ersetzt wurde) gelten nicht mehr.
         ctx.data_mut(|d| {
-            for other in TITLES.into_iter().filter(|t| *t != title) {
+            for other in KEYS.into_iter().filter(|k| *k != key) {
                 d.remove::<BTreeMap<FieldKey, String>>(texts_id(other, state.instance));
             }
         });
@@ -311,22 +334,22 @@ impl CreateDialog {
                 // Felder nicht verschieben.
                 let mut errors = Vec::new();
                 if !fields.is_empty() {
-                    egui::Grid::new(("create_fields", title))
+                    egui::Grid::new(("create_fields", key))
                         .num_columns(2)
                         .show(ui, |ui| {
-                            for (key, label, _) in &fields {
-                                ui.label(*label);
-                                let text = texts.entry(*key).or_default();
+                            for (field, label, _) in &fields {
+                                ui.label(label);
+                                let text = texts.entry(*field).or_default();
                                 let out = FormulaField::new(
-                                    ("create-field", title, *key),
+                                    ("create-field", key, *field),
                                     text,
                                     ParamUnit::Length,
                                 )
                                 .error_below(false)
-                                .label(*label)
+                                .label(label)
                                 .show(ui, &scope);
                                 if let Some(e) = out.error {
-                                    errors.push(format!("{label}: {e}"));
+                                    errors.push(tr!("field-error", label = label, error = e));
                                 }
                                 ui.end_row();
                             }
@@ -343,12 +366,12 @@ impl CreateDialog {
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     if ui
-                        .add_enabled(errors.is_empty(), egui::Button::new("Erzeugen"))
+                        .add_enabled(errors.is_empty(), egui::Button::new(tr!("create-create")))
                         .clicked()
                     {
                         create = true;
                     }
-                    if ui.button("Abbrechen").clicked() {
+                    if ui.button(tr!("common-cancel")).clicked() {
                         cancel = true;
                     }
                 });
@@ -396,7 +419,7 @@ impl CreateDialog {
                     }
                 }
                 Err(e) => {
-                    state.message = Some(format!("{label}: {e}"));
+                    state.message = Some(tr!("field-error", label = label, error = e));
                     return false;
                 }
             }
@@ -433,8 +456,7 @@ impl CreateDialog {
                 _,
             ) => {
                 let Some(axis) = axis else {
-                    state.message =
-                        Some("Bitte eine Drehachse wählen (eine Linie der Skizze).".into());
+                    state.message = Some(tr!("create-pick-axis"));
                     return false;
                 };
                 // Die Achse kann veraltet sein (Linie oder Skizze inzwischen gelöscht, Index
@@ -444,10 +466,7 @@ impl CreateDialog {
                     .sketch_of(*sketch)
                     .is_some_and(|sk| axis_candidates(sk).iter().any(|(id, _)| id == axis));
                 if !valid {
-                    state.message = Some(
-                        "Die gewählte Drehachse gibt es in dieser Skizze nicht mehr; bitte neu wählen."
-                            .into(),
-                    );
+                    state.message = Some(tr!("create-axis-gone"));
                     return false;
                 }
                 return state.revolve_sketch(*sketch, *profile, *axis).is_ok();
@@ -460,7 +479,7 @@ impl CreateDialog {
 
 #[cfg(test)]
 mod tests {
-    use super::{CreateDialog, TITLES};
+    use super::{CreateDialog, KEYS};
     use planora_feature::FeatureId;
 
     #[test]
@@ -487,7 +506,7 @@ mod tests {
                 axis: None,
             },
         ];
-        let titles: Vec<&str> = all.iter().map(CreateDialog::title).collect();
-        assert_eq!(titles, TITLES);
+        let keys: Vec<&str> = all.iter().map(CreateDialog::key).collect();
+        assert_eq!(keys, KEYS);
     }
 }

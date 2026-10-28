@@ -9,6 +9,15 @@ use crate::sketch_view::format_number;
 use crate::theme;
 use planora_feature::expr::{number_text, plain_number};
 use planora_feature::{ParamScope, ParamUnit};
+use planora_i18n::{localize_decimal, tr};
+
+/// Zahl als Text für ein Feld, das aus einem Zahlenwert vorbelegt wird: verlustfrei wie
+/// [`number_text`], aber mit dem Dezimaltrenner der Sprache (wie die Vorgaben der Skizzenfelder).
+/// Der Text darf wieder mit Komma oder Punkt gelesen werden. Gespeicherte Formeltexte bleiben,
+/// wie sie getippt wurden.
+pub fn number_field_text(v: f64) -> String {
+    localize_decimal(&number_text(v).replace(',', "."))
+}
 
 /// Was im Feld steht.
 #[derive(Clone, Debug, PartialEq)]
@@ -22,11 +31,17 @@ pub enum FieldInput {
 /// Zeichen vor einer Formel.
 pub const FX: &str = "fx";
 /// Name des Zeichens „fx“ für Bildschirmleser.
-pub const FX_LABEL: &str = "In Wert umwandeln";
+pub fn fx_label() -> String {
+    tr!("field-fx-label")
+}
 /// Hinweis zum Zeichen „fx“.
-pub const FX_HINT: &str = "Formel. Klicken setzt den berechneten Wert ein und löscht die Formel.";
+pub fn fx_hint() -> String {
+    tr!("field-fx-hint")
+}
 /// Meldung bei leerem Feld.
-pub const EMPTY: &str = "Bitte eine Zahl oder Formel eingeben.";
+pub fn empty() -> String {
+    tr!("field-empty")
+}
 /// So viele Namen nennt [`names_hint`] höchstens.
 pub const HINT_NAMES: usize = 8;
 
@@ -50,7 +65,7 @@ pub fn resolve(
     scope: &ParamScope,
 ) -> Result<(f64, Option<String>), String> {
     match classify(text) {
-        None => Err(EMPTY.into()),
+        None => Err(empty()),
         Some(FieldInput::Number(v)) => Ok((v, None)),
         Some(FieldInput::Formula(f)) => scope.eval(&f, unit).map(|v| (v, Some(f))),
     }
@@ -80,7 +95,10 @@ pub fn names_hint(scope: &ParamScope) -> Option<String> {
     }
     let shown: Vec<&str> = names.iter().take(HINT_NAMES).map(String::as_str).collect();
     let more = if names.len() > HINT_NAMES { " …" } else { "" };
-    Some(format!("Namen: {}{more}", shown.join(", ")))
+    Some(tr!(
+        "field-names",
+        list = format!("{}{more}", shown.join(", "))
+    ))
 }
 
 /// Ergebnis eines Formelfelds in diesem Bild.
@@ -221,19 +239,19 @@ impl<'a> FormulaField<'a> {
                                 .frame(false)
                                 .sense(egui::Sense::CLICK),
                         )
-                        .on_hover_text(FX_HINT)
-                        .on_disabled_hover_text(FX_HINT);
+                        .on_hover_text(fx_hint())
+                        .on_disabled_hover_text(fx_hint());
                     fx.widget_info(|| {
                         egui::WidgetInfo::labeled(
                             egui::WidgetType::Button,
                             enabled && valid,
-                            FX_LABEL,
+                            fx_label(),
                         )
                     });
                     if fx.clicked()
                         && let Some(Ok(v)) = result
                     {
-                        *text = number_text(v);
+                        *text = number_field_text(v);
                         fx_clicked = true;
                     }
                 }

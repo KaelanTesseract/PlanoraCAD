@@ -139,7 +139,7 @@ fn very_large_meshes_are_shown_as_a_preview() {
         "Maße aus dem ganzen Netz"
     );
     assert_eq!(b.mesh_report.unwrap().triangles, 12);
-    assert!(s.mesh_note().unwrap().contains(PREVIEW_NOTE));
+    assert!(s.mesh_note().unwrap().contains(&preview_note()));
     assert_eq!(DISPLAY_TRIANGLES, 5_000_000);
     assert_eq!(AppState::new().display_triangles, DISPLAY_TRIANGLES);
 }

@@ -704,8 +704,8 @@ fn coarse_body_never_silently_wrong() {
     assert_eq!(
         rows,
         [
-            ("Flächen", "6".to_string()),
-            ("Genauigkeit der Datei", "0,001 mm".to_string())
+            ("Flächen".to_string(), "6".to_string()),
+            ("Genauigkeit der Datei".to_string(), "0,001 mm".to_string())
         ]
     );
 
@@ -939,7 +939,11 @@ fn accuracy_shows_four_digits() {
         let id = s.import_step(vec![("Q".into(), sh)]).unwrap()[0];
         let kind = s.document.feature(id).unwrap().kind.clone();
         let rows = properties::parameter_rows(&s, &kind);
-        assert_eq!(rows[1], ("Genauigkeit der Datei", want.to_string()), "{t}");
+        assert_eq!(
+            rows[1],
+            ("Genauigkeit der Datei".to_string(), want.to_string()),
+            "{t}"
+        );
     }
 }
 
@@ -990,7 +994,7 @@ fn unknown_accuracy_is_shown_as_unknown() {
     assert_eq!(
         rows[1],
         (
-            "Genauigkeit der Datei",
+            "Genauigkeit der Datei".to_string(),
             "unbekannt (angenommen 0,001 mm)".to_string()
         )
     );

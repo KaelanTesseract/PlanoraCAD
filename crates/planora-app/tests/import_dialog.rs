@@ -114,7 +114,7 @@ fn broken_files_show_a_named_error_and_change_nothing() {
     d.tick(true);
     assert!(d.loaded.is_none());
     assert_eq!(
-        d.error.as_deref(),
+        d.error_text().as_deref(),
         Some("Zeile 2: Die Fläche verweist auf einen Punkt, den es nicht gibt")
     );
     assert!(d.import(&mut s).is_err());
@@ -132,7 +132,7 @@ fn cancelling_drops_the_reading() {
     d.cancel();
     assert!(!d.is_loading());
     assert!(d.loaded.is_none());
-    assert_eq!(d.error.as_deref(), Some("Abgebrochen"));
+    assert_eq!(d.error_text().as_deref(), Some("Abgebrochen"));
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -148,7 +148,7 @@ fn an_open_mesh_is_imported_with_a_warning() {
     d.tick(true);
     assert!(!d.loaded.as_ref().unwrap().report.closed);
     let text = draw(&mut d, &mut s);
-    assert!(text.contains(OPEN_MESH_HINT), "{text}");
+    assert!(text.contains(&open_mesh_hint()), "{text}");
     d.import(&mut s).unwrap();
     assert_eq!(s.bodies[0].kind, BodyKind::Mesh);
     let _ = fs::remove_dir_all(&dir);
@@ -224,13 +224,13 @@ fn a_result_for_an_older_document_is_never_imported() {
     // Das Dokument ändert sich, bevor „Importieren“ gedrückt wird.
     s.import_mesh("Anderes", mesh, 1.0).unwrap();
     let before = s.document.features().len();
-    assert_eq!(d.import(&mut s), Err(STALE.to_string()));
+    assert_eq!(d.import(&mut s), Err(stale().text()));
     assert_eq!(s.document.features().len(), before, "nichts ändert sich");
     // Beim Zeichnen wird das veraltete Ergebnis verworfen und die Meldung gezeigt.
     let text = draw(&mut d, &mut s);
     assert!(d.loaded.is_none());
-    assert_eq!(d.error.as_deref(), Some(STALE));
-    assert!(text.contains(STALE), "{text}");
+    assert_eq!(d.error, Some(stale()));
+    assert!(text.contains(&stale().text()), "{text}");
     assert_eq!(s.document.features().len(), before);
     let _ = fs::remove_dir_all(&dir);
 }

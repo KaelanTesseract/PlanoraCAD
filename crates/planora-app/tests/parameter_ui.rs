@@ -488,10 +488,16 @@ fn menu_opens_window() {
     let seen = rig.settle();
     assert!(rig.tab().parameter_dialog.is_some(), "Fenster offen");
     let rect = rig.dialog_rect();
-    assert!(visible(&seen, TITLE, rect), "Titel „Parameter“");
+    assert!(
+        visible(&seen, &parameter_dialog::title(), rect),
+        "Titel „Parameter“"
+    );
     // Ohne Zeilen der Hinweis, mit einer Zeile alle Spaltenköpfe.
-    assert!(visible(&seen, EMPTY_TABLE, rect));
-    let add = find(&seen, ADD_ROW).unwrap().rect.center();
+    assert!(visible(&seen, &parameter_dialog::empty_table(), rect));
+    let add = find(&seen, &parameter_dialog::add_row())
+        .unwrap()
+        .rect
+        .center();
     rig.click(add);
     let seen = rig.settle();
     for head in ["Name", "Formel", "Wert", "Art", "Kommentar"] {
@@ -547,7 +553,10 @@ fn edit_commits_on_enter_only() {
     let mut rig = Rig::new(ws());
     parameter_dialog::open(rig.tab());
     let seen = rig.settle();
-    let add = find(&seen, ADD_ROW).expect("Knopf").rect.center();
+    let add = find(&seen, &parameter_dialog::add_row())
+        .expect("Knopf")
+        .rect
+        .center();
     rig.click(add);
     rig.settle();
     let s = &rig.tab().state;
@@ -646,7 +655,10 @@ fn delete_used_offers_replace() {
         let tab = rig.tab();
         let d = tab.parameter_dialog.as_mut().unwrap();
         d.request_delete(breite, &mut tab.state).unwrap();
-        assert_eq!(d.confirm_text(), Some("Breite wird in Quader 1 benutzt."));
+        assert_eq!(
+            d.confirm_text(),
+            Some("Breite wird in Quader 1 benutzt.".to_string())
+        );
     }
     assert!(
         rig.tab().state.snapshot().same_content(&before),
@@ -655,11 +667,20 @@ fn delete_used_offers_replace() {
     let seen = rig.settle();
     let rect = rig.dialog_rect();
     assert!(visible(&seen, "Breite wird in Quader 1 benutzt.", rect));
-    assert!(visible(&seen, REPLACE, rect), "„Durch den Wert ersetzen“");
-    assert!(visible(&seen, CANCEL, rect), "„Abbrechen“");
+    assert!(
+        visible(&seen, &parameter_dialog::replace(), rect),
+        "„Durch den Wert ersetzen“"
+    );
+    assert!(
+        visible(&seen, &parameter_dialog::cancel(), rect),
+        "„Abbrechen“"
+    );
 
     // Abbrechen: nichts ändert sich.
-    let cancel = find(&seen, CANCEL).unwrap().rect.center();
+    let cancel = find(&seen, &parameter_dialog::cancel())
+        .unwrap()
+        .rect
+        .center();
     rig.click(cancel);
     rig.settle();
     let tab = rig.tab();
@@ -679,7 +700,10 @@ fn delete_used_offers_replace() {
         .center();
     rig.click(p);
     let seen = rig.settle();
-    let replace = find(&seen, REPLACE).expect("Rückfrage").rect.center();
+    let replace = find(&seen, &parameter_dialog::replace())
+        .expect("Rückfrage")
+        .rect
+        .center();
     rig.click(replace);
     rig.settle();
     let tab = rig.tab();
@@ -735,7 +759,7 @@ fn delete_unused_and_refused_replace() {
         "Parameter „b“ lässt sich nicht durch den Wert ersetzen: „Quader 1“ hat gerade einen \
          Fehler. Beheben Sie zuerst den Fehler."
     );
-    assert_eq!(d.error(), Some(e.as_str()));
+    assert_eq!(d.error(), Some(e.clone()));
     assert!(s.snapshot().same_content(&before));
     assert_eq!(feature_formulas(&s, f).len(), 1);
 }
@@ -777,7 +801,7 @@ fn error_stays_in_row() {
     d.set_text(a, Column::Formula, "b");
     let e = d.commit(a, &mut s).unwrap_err();
     assert!(e.contains("im Kreis"), "{e}");
-    assert_eq!(d.error(), Some(e.as_str()));
+    assert_eq!(d.error(), Some(e.clone()));
     assert!(s.snapshot().same_content(&before), "Dokument unverändert");
     assert_eq!(s.document.edit_count(), count);
     assert_eq!(d.text(a, Column::Formula), Some("b"), "Entwurf bleibt");
@@ -826,7 +850,10 @@ fn locked_case(s: &mut AppState, read_only: bool, hint: &str) {
     pane.frame(vec![Event::Text("x".into())], &mut f);
     pane.frame(vec![key(Key::Enter, Modifiers::NONE)], &mut f);
     let seen = pane.settle(&mut f);
-    let add = find(&seen, ADD_ROW).unwrap().rect.center();
+    let add = find(&seen, &parameter_dialog::add_row())
+        .unwrap()
+        .rect
+        .center();
     pane.click(add, &mut f);
     let trash = icons::glyph(Icon::Delete).to_string();
     let p = find(&seen, &trash).unwrap().rect.center();
@@ -1016,7 +1043,10 @@ fn parameter_change_closes_edit_dialog_and_ends_the_step() {
         tab.feature_dialog.is_none(),
         "Bearbeiten-Fenster geschlossen"
     );
-    assert_eq!(tab.state.info.as_deref(), Some(DIALOG_CLOSED));
+    assert_eq!(
+        tab.state.info.as_deref(),
+        Some(parameter_dialog::dialog_closed().as_str())
+    );
     rig.frame(vec![button(away, false)]);
     rig.settle();
     let tab = rig.tab();
@@ -1075,14 +1105,17 @@ fn fits_small_and_both_themes() {
                 "Löschsymbol im Fenster"
             );
             assert!(
-                visible(&seen, ADD_ROW, rect),
+                visible(&seen, &parameter_dialog::add_row(), rect),
                 "„Zeile hinzufügen“ ohne Rollen"
             );
             assert!(
                 !visible(&seen, "Laenge30", rect),
                 "{w}×{h}: die Tabelle rollt (letzte Zeile erst nach dem Rollen)"
             );
-            let add = find(&seen, ADD_ROW).unwrap().rect.center();
+            let add = find(&seen, &parameter_dialog::add_row())
+                .unwrap()
+                .rect
+                .center();
             pane.click(add, &mut f);
             drop(f);
             assert_eq!(
@@ -1458,7 +1491,7 @@ fn fields_have_accessible_names() {
     assert_eq!(role_of("Formel von Breite"), Some(Role::TextInput));
     assert_eq!(role_of("Kommentar von Breite"), Some(Role::TextInput));
     assert_eq!(role_of("Art von Breite"), Some(Role::ComboBox));
-    assert_eq!(role_of(DELETE_ROW), Some(Role::Button));
+    assert_eq!(role_of(&parameter_dialog::delete_row()), Some(Role::Button));
 }
 
 /// F7 (R11/R12): Name und Formel ohne Leerraum am Rand übernommen.
@@ -1493,7 +1526,7 @@ fn request_delete_while_sketch_open() {
     for id in [a, b] {
         assert_eq!(
             d.request_delete(id, &mut s),
-            Err(SKETCH_OPEN_LOCK.to_string())
+            Err(sketch_open_lock().to_string())
         );
         assert_eq!(d.confirm_text(), None);
         assert!(s.document.parameter(id).is_some());
@@ -1635,7 +1668,7 @@ fn delete_prompt_vanishes_with_its_parameter() {
         d.show(ui.ctx(), &mut s, false);
     });
     assert_eq!(d.confirm_text(), None);
-    assert!(find(&seen, REPLACE).is_none());
+    assert!(find(&seen, &parameter_dialog::replace()).is_none());
 }
 
 /// F3: Wird ein Feld mitten im Tippen gesperrt, übernimmt es nicht (der Fokusverlust ist dann
@@ -1955,7 +1988,10 @@ fn add_row_scrolls_into_view_and_focuses_name() {
         focused.set(d.focused_row());
     };
     let seen = pane.settle(&mut f);
-    let add = find(&seen, ADD_ROW).unwrap().rect.center();
+    let add = find(&seen, &parameter_dialog::add_row())
+        .unwrap()
+        .rect
+        .center();
     pane.click(add, &mut f);
     let seen = pane.settle(&mut f);
     drop(f);
@@ -1974,7 +2010,10 @@ fn add_row_scrolls_into_view_and_focuses_name() {
         assert!(d.show(ui.ctx(), &mut s, false));
     };
     let seen = pane.settle(&mut f);
-    let add = find(&seen, ADD_ROW).unwrap().rect.center();
+    let add = find(&seen, &parameter_dialog::add_row())
+        .unwrap()
+        .rect
+        .center();
     pane.click(add, &mut f);
     let seen = pane.settle(&mut f);
     drop(f);
@@ -2110,7 +2149,7 @@ fn fx_name_and_error_count() {
     assert!(
         nodes
             .iter()
-            .any(|(l, r)| l == FX_LABEL && *r == egui::accesskit::Role::Button),
+            .any(|(l, r)| *l == fx_label() && *r == egui::accesskit::Role::Button),
         "{nodes:?}"
     );
     d.set_text(a, Column::Formula, "x1");

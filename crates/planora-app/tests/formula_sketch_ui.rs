@@ -11,10 +11,10 @@ use eframe::App as _;
 use egui::epaint::{ClippedShape, Shape};
 use egui::{Color32, Event, Key, Modifiers, PointerButton, Pos2, Rect, Vec2, vec2};
 use planora_app::app::PlanoraApp;
-use planora_app::formula_field::FX_LABEL;
+use planora_app::formula_field::fx_label;
 use planora_app::sketch_panel::{self, LIST_FX_LABEL};
 use planora_app::sketch_state::{ConstraintAction, DRIVEN_NO_FORMULA, Item};
-use planora_app::state::{AppState, SKETCH_OPEN_LOCK, StandardPlane};
+use planora_app::state::{AppState, StandardPlane, sketch_open_lock};
 use planora_app::workspace::Workspace;
 use planora_app::{fonts, shell_panels, theme};
 use planora_feature::{FeatureId, FeatureKind, ParamEdit, ParamId, ParamUnit, SketchPlane};
@@ -895,7 +895,7 @@ fn unknown_names_show_an_error_and_lock_ok() {
     );
     // Das Fenster „Parameter“ bleibt bei offener Skizze gesperrt.
     let s = state(&mut r.app);
-    assert_eq!(s.add_parameter(), Err(SKETCH_OPEN_LOCK.to_string()));
+    assert_eq!(s.add_parameter(), Err(sketch_open_lock().to_string()));
 }
 
 #[test]
@@ -972,6 +972,6 @@ fn accessibility_names_of_field_and_fx() {
             .clone()
     };
     assert_eq!(node(LIST_FX_LABEL).role(), Role::Button);
-    assert_eq!(node(FX_LABEL).role(), Role::Button);
+    assert_eq!(node(&fx_label()).role(), Role::Button);
     assert_eq!(node("Abstand").role(), Role::TextInput);
 }

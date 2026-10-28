@@ -42,6 +42,7 @@ pub mod keymap;
 pub mod local_time;
 pub mod logo;
 pub mod mesh_body;
+pub mod msg;
 pub mod parameter_dialog;
 pub mod parts_section;
 pub mod places;

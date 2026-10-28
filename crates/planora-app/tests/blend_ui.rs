@@ -61,7 +61,7 @@ fn the_properties_show_the_blend_parameters() {
     });
     let kind = s.document.feature(id).unwrap().kind.clone();
     let rows = properties::parameter_rows(&s, &kind);
-    let labels: Vec<&str> = rows.iter().map(|(l, _)| *l).collect();
+    let labels: Vec<&str> = rows.iter().map(|(l, _)| l.as_str()).collect();
     assert_eq!(
         labels,
         [
@@ -204,7 +204,7 @@ fn blend_dialog_formulas() {
     d.second = "Breite".into();
     let msg = "Winkel: Hier wird ein Winkel erwartet, die Formel ergibt eine Länge.";
     assert!(d.execute(&mut s), "Fenster bleibt offen");
-    assert_eq!(d.error(), Some(msg));
+    assert_eq!(d.error().as_deref(), Some(msg));
     assert_eq!(s.document.features().len(), count, "kein Feature");
     // Das Fenster zeigt die Meldung schon beim Tippen (Fußzeile) und sperrt „Erzeugen“.
     let ctx = context();

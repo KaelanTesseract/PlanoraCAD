@@ -173,12 +173,12 @@ fn is_id(s: &str) -> bool {
         })
 }
 
-/// Ids aus `tr!("…"`, `t("…"` und `t_args("…"` im ganzen Text, mit Zeilennummer (ab 1).
+/// Ids aus `tr!("…"`, `msg!("…"`, `t("…"` und `t_args("…"` im ganzen Text, mit Zeilennummer (ab 1).
 /// Zwischen `(` und `"` darf Leerraum samt Zeilenumbruch stehen (so bricht rustfmt lange Aufrufe um).
 /// Wortgrenze davor; Treffer in Zeilenkommentaren zählen nicht.
 fn ids_in_text(text: &str) -> Vec<(usize, String)> {
     let mut found = Vec::new();
-    for prefix in ["tr!(", "t(", "t_args("] {
+    for prefix in ["tr!(", "t(", "t_args(", "msg!("] {
         let mut from = 0;
         while let Some(pos) = text[from..].find(prefix) {
             let start = from + pos;

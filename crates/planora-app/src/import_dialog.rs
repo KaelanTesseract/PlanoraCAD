@@ -7,24 +7,33 @@
 use crate::browser::error_color;
 use crate::cards::card_row;
 use crate::dialog::{Dialog, DialogSize};
-use crate::export_dialog::{LOST, PROGRESS_WIDTH, REPAINT, file_name, group_digits};
+use crate::export_dialog::{PROGRESS_WIDTH, REPAINT, file_name, group_digits};
 use crate::file_chooser::{ChooserAction, FileChooser};
 use crate::jobs::{Job, Poll};
 use crate::mesh_body::{report_text, warning_color};
+use crate::msg::Msg;
 use crate::places::Places;
 use crate::state::AppState;
 use crate::theme;
 use planora_exchange::{ExchangeError, ExchangeMesh, MeshReport, check_mesh, import_file};
 use planora_feature::FeatureId;
+use planora_i18n::tr;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Hinweis bei nicht geschlossenem Netz.
-pub const OPEN_MESH_HINT: &str = "Der Netz-Körper lässt sich trotzdem anlegen und anzeigen; Volumen und Oberfläche stimmen dann nur ungefähr.";
+pub fn open_mesh_hint() -> String {
+    tr!("meshimport-open-hint")
+}
 /// Meldung, wenn sich das Dokument seit der Dateiwahl geändert hat.
-pub const STALE: &str =
-    "Das Dokument hat sich seit dem Lesen der Datei geändert. Bitte die Datei noch einmal wählen.";
+pub fn stale() -> Msg {
+    crate::msg!("import-stale")
+}
+/// Meldung, wenn ein Arbeitsthread ohne Ergebnis endet.
+pub fn lost() -> Msg {
+    crate::msg!("import-lost")
+}
 
 /// Einheit der Quelldatei (Spec §8).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,12 +57,12 @@ impl Unit {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Unit::Millimeter => "Millimeter",
-            Unit::Zentimeter => "Zentimeter",
-            Unit::Meter => "Meter",
-            Unit::Zoll => "Zoll",
+            Unit::Millimeter => tr!("import-unit-mm"),
+            Unit::Zentimeter => tr!("import-unit-cm"),
+            Unit::Meter => tr!("import-unit-m"),
+            Unit::Zoll => tr!("import-unit-inch"),
         }
     }
 }
@@ -83,7 +92,8 @@ pub struct ImportDialog {
     pub loaded: Option<Loaded>,
     pub name: String,
     pub unit: Unit,
-    pub error: Option<String>,
+    /// Meldung im Fenster; wird beim Zeichnen übersetzt.
+    pub error: Option<Msg>,
     /// Rechteck des Fensters im letzten Bild (Tests der vollen Breite).
     pub last_rect: Option<egui::Rect>,
     /// Rechtecke der Karten im letzten Bild (Tests der gleichen Höhe).
@@ -137,6 +147,11 @@ impl ImportDialog {
         });
     }
 
+    /// Die Meldung im Fenster in der aktuellen Sprache.
+    pub fn error_text(&self) -> Option<String> {
+        self.error.as_ref().map(Msg::text)
+    }
+
     pub fn is_loading(&self) -> bool {
         self.reading.is_some()
     }
@@ -148,7 +163,7 @@ impl ImportDialog {
     /// Bricht das Lesen ab (der Arbeitsthread endet beim nächsten Prüfen).
     pub fn cancel(&mut self) {
         if self.reading.take().is_some() {
-            self.error = Some(ExchangeError::Cancelled.to_string());
+            self.error = Some(crate::msg!("projects-cancelled"));
         }
     }
 
@@ -157,8 +172,8 @@ impl ImportDialog {
         let done = match &self.reading {
             Some(r) => match r.job.fetch(block) {
                 Poll::Pending => None,
-                Poll::Ready(res) => Some(res.map_err(|e| e.to_string())),
-                Poll::Lost => Some(Err(LOST.to_string())),
+                Poll::Ready(res) => Some(res.map_err(|e: ExchangeError| Msg::Raw(e.to_string()))),
+                Poll::Lost => Some(Err(lost())),
             },
             None => None,
         };
@@ -187,19 +202,26 @@ impl ImportDialog {
             && l.edits.is_some_and(|e| e != state.document.edit_count())
         {
             self.loaded = None;
-            self.error = Some(STALE.into());
+            self.error = Some(stale());
         }
     }
 
     /// Legt den Netz-Körper an (Name, Einheit); das Dokument ändert sich nur bei Erfolg.
     pub fn import(&self, state: &mut AppState) -> Result<FeatureId, String> {
+        self.import_msg(state).map_err(|m| m.text())
+    }
+
+    /// Wie [`ImportDialog::import`], der Fehler ist aber der Grund (das Fenster behält ihn).
+    fn import_msg(&self, state: &mut AppState) -> Result<FeatureId, Msg> {
         let Some(l) = &self.loaded else {
-            return Err("Bitte zuerst eine Datei wählen.".into());
+            return Err(crate::msg!("import-choose-file"));
         };
         if l.edits.is_some_and(|e| e != state.document.edit_count()) {
-            return Err(STALE.into());
+            return Err(stale());
         }
-        state.import_mesh(&self.name, Arc::clone(&l.mesh), self.unit.factor())
+        state
+            .import_mesh(&self.name, Arc::clone(&l.mesh), self.unit.factor())
+            .map_err(Msg::Raw)
     }
 
     /// Zeichnet das Fenster; `true`, solange es offen bleiben soll.
@@ -221,41 +243,42 @@ impl ImportDialog {
         let (mut name, mut unit) = (self.name.clone(), self.unit);
         let loading = self.is_loading().then(|| self.progress());
         let has_loaded = self.loaded.is_some();
+        let error = self.error_text();
         // Die Dateiauswahl zeichnet oben (rollt) und in der Fußzeile (Öffnen, Abbrechen).
         let chooser = RefCell::new(&mut self.chooser);
         let (mut body_action, mut footer_action) = (ChooserAction::None, ChooserAction::None);
-        let response = Dialog::new("Netz importieren", DialogSize::File)
+        let response = Dialog::new(tr!("meshimport-title"), DialogSize::File)
             .center_on_open()
             .open(&mut open)
             .show_with_footer(
                 ctx,
                 |ui| {
-                    ui.strong("Datei wählen (STL oder OBJ)");
+                    ui.strong(tr!("meshimport-choose"));
                     body_action = chooser.borrow_mut().show_body(ui, places);
                     if let Some(f) = loading {
                         ui.horizontal(|ui| {
                             ui.add(
                                 egui::ProgressBar::new(f)
                                     .desired_width(PROGRESS_WIDTH)
-                                    .text("Die Datei wird gelesen …"),
+                                    .text(tr!("import-reading")),
                             );
-                            if ui.button("Abbrechen").clicked() {
+                            if ui.button(tr!("common-cancel")).clicked() {
                                 cancel = true;
                             }
                         });
                     }
-                    if let Some(e) = &self.error {
+                    if let Some(e) = &error {
                         ui.colored_label(error_color(ui.visuals().dark_mode), e);
                     }
                     if let Some(l) = &self.loaded {
                         ui.separator();
                         let mut report_card = |ui: &mut egui::Ui| {
-                            ui.strong("Prüfung");
-                            ui.label(format!("Datei: {}", file_name(&l.path)));
-                            ui.label(format!(
-                                "{} Dreiecke, {} Punkte",
-                                group_digits(l.report.triangles as u64),
-                                group_digits(l.report.vertices as u64)
+                            ui.strong(tr!("meshimport-check"));
+                            ui.label(tr!("meshimport-file", name = file_name(&l.path)));
+                            ui.label(tr!(
+                                "meshimport-counts",
+                                triangles = group_digits(l.report.triangles as u64),
+                                points = group_digits(l.report.vertices as u64)
                             ));
                             if l.report.closed {
                                 ui.label(report_text(&l.report));
@@ -266,18 +289,18 @@ impl ImportDialog {
                                 );
                                 ui.colored_label(
                                     warning_color(ui.visuals().dark_mode),
-                                    OPEN_MESH_HINT,
+                                    open_mesh_hint(),
                                 );
                             }
                         };
                         let mut name_card = |ui: &mut egui::Ui| {
-                            ui.strong("Name");
+                            ui.strong(tr!("props-name"));
                             theme::text_field(
                                 ui,
                                 egui::TextEdit::singleline(&mut name).desired_width(f32::INFINITY),
                             );
                             ui.add_space(4.0);
-                            ui.strong("Einheit der Datei");
+                            ui.strong(tr!("import-unit-title"));
                             ui.horizontal_wrapped(|ui| {
                                 for u in Unit::ALL {
                                     ui.radio_value(&mut unit, u, u.label());
@@ -293,7 +316,7 @@ impl ImportDialog {
                     // Fußzeile: bleibt stehen, auch wenn der Inhalt darüber rollt. Die Dateiauswahl
                     // ist immer zu sehen, darum kein eigenes „Schließen“: „Abbrechen“ schließt.
                     footer_action = chooser.borrow_mut().show_footer(ui);
-                    if has_loaded && ui.button("Importieren").clicked() {
+                    if has_loaded && ui.button(tr!("import-import")).clicked() {
                         import = true;
                     }
                 },
@@ -319,7 +342,7 @@ impl ImportDialog {
             self.load_at(p, state.document.edit_count());
         }
         if import {
-            match self.import(state) {
+            match self.import_msg(state) {
                 Ok(_) => return false,
                 Err(e) => self.error = Some(e),
             }

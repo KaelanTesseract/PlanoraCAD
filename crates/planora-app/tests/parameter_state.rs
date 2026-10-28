@@ -392,12 +392,12 @@ fn sketch_open_locks_parameters() {
     s.open_sketch(sk).unwrap();
     let before = s.snapshot();
     let count = s.document.edit_count();
-    let lock = Err(SKETCH_OPEN_LOCK.to_string());
+    let lock = Err(sketch_open_lock().to_string());
     assert_eq!(s.add_parameter().map(|_| ()), lock);
-    assert_eq!(s.message.as_deref(), Some(SKETCH_OPEN_LOCK));
+    assert_eq!(s.message, Some(sketch_open_lock()));
     s.message = None;
     assert_eq!(set_formula(&mut s, breite, "60"), lock);
-    assert_eq!(s.message.as_deref(), Some(SKETCH_OPEN_LOCK));
+    assert_eq!(s.message, Some(sketch_open_lock()));
     assert_eq!(s.delete_parameter(breite), lock);
     assert_eq!(s.replace_parameter(breite), lock);
     assert_eq!(s.document.edit_count(), count);

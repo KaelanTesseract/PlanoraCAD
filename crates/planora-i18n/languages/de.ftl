@@ -613,3 +613,295 @@ chooser-truncated = Es werden nur die ersten { $n } Einträge gezeigt.
 chooser-file-name = Dateiname
 chooser-replace = Ersetzen
 chooser-open = Öffnen
+
+## Formelfelder
+field-fx-label = In Wert umwandeln
+field-fx-hint = Formel. Klicken setzt den berechneten Wert ein und löscht die Formel.
+field-empty = Bitte eine Zahl oder Formel eingeben.
+field-names = Namen: { $list }
+field-error = { $label }: { $error }
+
+## Körper erzeugen
+create-box-title = Quader erzeugen
+create-cylinder-title = Zylinder erzeugen
+create-sphere-title = Kugel erzeugen
+create-cone-title = Kegel erzeugen
+create-extrude-title = Skizze extrudieren
+create-revolve-title = Skizze drehen
+create-field-width = Breite (x)
+create-field-depth = Tiefe (y)
+create-field-height-z = Höhe (z)
+create-field-radius = Radius
+create-field-height = Höhe
+create-axis-construction = Konstruktionslinie { $n } ({ $length })
+create-axis-line = Linie { $n } ({ $length })
+create-none = (keine)
+create-choose = (bitte wählen)
+create-sketch = Skizze
+create-profile = Profil
+create-axis = Drehachse
+create-sketch-missing = Skizze nicht gefunden oder nicht berechnet.
+create-no-profile = Die Skizze enthält kein geschlossenes Profil.
+create-profile-label = Profil { $n }: { $area } mm²
+create-profile-label-holes = Profil { $n }: { $area } mm², { $holes ->
+    [one] 1 Loch
+   *[other] { $holes } Löcher
+}
+create-rejected = Nicht verwendbar: { $reason }
+create-no-axis = Die Skizze enthält keine Linie, die als Drehachse dienen kann.
+create-create = Erzeugen
+create-pick-axis = Bitte eine Drehachse wählen (eine Linie der Skizze).
+create-axis-gone = Die gewählte Drehachse gibt es in dieser Skizze nicht mehr; bitte neu wählen.
+
+## Verrunden und Fase
+blend-fillet-title = Verrunden
+blend-chamfer-title = Fase
+blend-no-edge = Bitte zuerst eine Kante im Fenster anklicken.
+blend-art-round = Rundung
+blend-art-variable = Rundung mit variablem Radius
+blend-art-chamfer-equal = Fase: gleicher Abstand
+blend-art-chamfer-two = Fase: zwei Abstände
+blend-art-chamfer-angle = Fase: Abstand und Winkel
+blend-field-radius = Radius
+blend-field-radius-n = Radius { $n }
+blend-field-position-n = Position { $n }
+blend-field-distance = Abstand
+blend-field-distance-1 = Abstand 1
+blend-field-distance-2 = Abstand 2
+blend-field-angle = Winkel
+blend-too-many-points = Ein variabler Radius hat höchstens { $max } Punkte
+blend-too-small = „{ $label }“ ist zu klein; das kleinste mögliche Maß ist { $min } mm
+blend-size-invalid = „{ $label }“ muss eine Zahl größer als null sein (eingegeben: „{ $text }“)
+blend-angle-invalid = „Winkel“ muss zwischen { $min }° und { $max }° liegen (eingegeben: „{ $text }“)
+blend-position-range = „Position { $n }“ muss zwischen 0 und 100 % liegen
+blend-body-n = Körper { $n }
+blend-mixed-bodies = Die Kanten gehören zu verschiedenen Körpern ({ $names }); es geht nur ein Körper auf einmal
+blend-chosen-edges = Gewählte Kanten: { $n }
+blend-click-edge = Kante im Fenster anklicken (Umschalt: mehrere).
+blend-point-n = Punkt { $n }
+blend-remove = Entfernen
+blend-add-point = Punkt hinzufügen
+blend-face-1 = Fläche 1
+blend-min-size = Kleinstes Maß: { $min } mm
+blend-chain = Tangentenkette (glatt anschließende Kanten mitnehmen)
+
+## Feature bearbeiten
+edit-title = „{ $name }“ bearbeiten
+edit-stale = Das Feature wurde inzwischen geändert; der Dialog zeigt jetzt den aktuellen Stand. Bitte die Werte prüfen und erneut übernehmen.
+edit-numbers-only = { $label }: Hier sind nur Zahlen möglich.
+edit-invalid-number = Ungültige Zahl bei „{ $label }“: „{ $text }“
+edit-too-big = Der Wert bei „{ $label }“ ist zu groß (Betrag höchstens { $max } mm)
+edit-op-difference = Abziehen (Ziel − Werkzeug)
+edit-rejected = Die Änderung wurde abgelehnt: { $error }
+edit-remove-point = Punkt entfernen
+edit-target = Ziel
+edit-tool = Werkzeug
+edit-body = Körper: { $name }
+edit-edges = Kanten: { $n }
+edit-sketch-not-computed = Die Skizze ist nicht berechnet.
+
+## Boolesche Operation
+boolean-title = Boolesche Operation
+boolean-body-a = Körper A
+boolean-body-b = Körper B
+boolean-subtract = Abziehen (A − B)
+boolean-run = Ausführen
+boolean-same-body = Körper A und Körper B müssen verschieden sein.
+
+## Parameter
+param-title = Parameter
+param-add-row = Zeile hinzufügen
+param-delete-row = Zeile löschen
+param-replace = Durch den Wert ersetzen
+param-empty-table = Noch keine Parameter.
+param-dialog-closed = Der Dialog wurde geschlossen, weil sich Parameter geändert haben.
+param-col-name = Name
+param-col-formula = Formel
+param-col-value = Wert
+param-col-kind = Art
+param-col-comment = Kommentar
+param-gone = Den Parameter gibt es nicht mehr.
+param-live-more = { $first } (+ { $n ->
+    [one] 1 weiterer Fehler
+   *[other] { $n } weitere Fehler
+})
+param-field-label = { $column } von { $name }
+param-other-row = Parameter „{ $name }“: { $message }
+
+## Eigenschaften
+props-name = Name
+props-kind = Art
+props-status = Status
+props-status-ok = berechnet
+props-status-error = Fehler: { $error }
+props-status-skipped = übersprungen: { $why }
+props-status-not-computed = nicht berechnet (hinter dem Rückrollmarker)
+props-open-sketch = Skizze öffnen
+props-edit = Bearbeiten …
+props-nothing-selected = Nichts ausgewählt.
+props-volume = Volumen
+props-surface = Oberfläche
+props-centroid = Schwerpunkt
+props-dimensions = Abmessungen
+props-faces-edges = Flächen / Kanten
+props-faces = Flächen
+props-faces-in-file = Flächen in der Datei
+props-accuracy = Genauigkeit der Datei
+props-accuracy-unknown = unbekannt (angenommen { $assumed })
+props-step-coarse-hint = Rechnen mit diesem Körper kann scheitern.
+props-position-label = Position x / y / z in mm
+props-rotation-label = Drehung x / y / z in Grad
+props-position-x = Position x
+props-position-y = Position y
+props-position-z = Position z
+props-selected-face = Ausgewählte Fläche: { $kind }
+props-selected-edge = Ausgewählte Kante: { $kind }, Länge ≈ { $length } mm
+props-click-face-or-edge = Klicke im Viewport eine Fläche oder Kante an.
+props-mesh-body = Netz-Körper
+props-triangles-label = Dreiecke
+props-closed-at-import = Geschlossen beim Einlesen
+props-yes = ja
+props-no = nein
+props-at-import = Beim Einlesen: { $report }
+props-mesh-body-hint = Netz-Körper lassen sich verschieben, drehen, vergrößern, messen und exportieren, aber nicht mit anderen Körpern verrechnen, runden oder als Fläche für eine Skizze nutzen.
+props-on-face = Fläche „{ $role }“ von „{ $name }“
+props-plane = Ebene
+props-curves = Kurven
+props-edge-copies = Kantenkopien
+props-size = Größe
+props-position = Position
+props-radius = Radius
+props-height = Höhe
+props-sketch = Skizze
+props-profile = Profil
+props-axis = Drehachse
+props-curve-n = Kurve { $n }
+props-operation = Operation
+props-body = Körper
+props-displacement = Verschiebung
+props-edges = Kanten
+props-points = Punkte
+props-tangent-chain = Tangentenkette
+props-on = an
+props-off = aus
+props-mesh = Netz
+props-triangles = { $n } Dreiecke
+props-rotation = Drehung
+props-scale = Maßstab
+
+## Netz-Körper
+mesh-preview-note = Hinweis: Das Netz ist sehr groß; die Ansicht zeigt nur einen Teil der Dreiecke. Gespeichert und exportiert wird es vollständig.
+mesh-open-edges = { $n ->
+    [one] 1 offene Kante
+   *[other] { $n } offene Kanten
+}
+mesh-flipped-edges = { $n ->
+    [one] 1 Kante mit falsch herum liegenden Dreiecken
+   *[other] { $n } Kanten mit falsch herum liegenden Dreiecken
+}
+mesh-non-manifold-edges = { $n ->
+    [one] 1 Kante an mehr als zwei Dreiecken
+   *[other] { $n } Kanten an mehr als zwei Dreiecken
+}
+mesh-closed = Das Netz ist geschlossen.
+mesh-not-closed = Das Netz ist nicht geschlossen.
+mesh-not-fully-closed = Das Netz ist nicht ganz geschlossen: { $parts }.
+mesh-degenerate = { $n ->
+    [one] 1 Dreieck hat keine Fläche.
+   *[other] { $n } Dreiecke haben keine Fläche.
+}
+
+## Importieren (Netz und STEP)
+import-reading = Die Datei wird gelesen …
+import-stale = Das Dokument hat sich seit dem Lesen der Datei geändert. Bitte die Datei noch einmal wählen.
+import-lost = Die Berechnung wurde unerwartet beendet.
+import-choose-file = Bitte zuerst eine Datei wählen.
+import-unit-title = Einheit der Datei
+import-unit-mm = Millimeter
+import-unit-cm = Zentimeter
+import-unit-m = Meter
+import-unit-inch = Zoll
+import-unit-inch-short = Zoll
+import-import = Importieren
+meshimport-title = Netz importieren
+meshimport-choose = Datei wählen (STL oder OBJ)
+meshimport-check = Prüfung
+meshimport-file = Datei: { $name }
+meshimport-counts = { $triangles } Dreiecke, { $points } Punkte
+meshimport-open-hint = Der Netz-Körper lässt sich trotzdem anlegen und anzeigen; Volumen und Oberfläche stimmen dann nur ungefähr.
+
+## STEP importieren
+menu-file-import-step = STEP importieren …
+stepimport-title = STEP importieren
+stepimport-checking = Die Körper werden geprüft …
+stepimport-no-unit = Die Datei nennt keine Längeneinheit; angenommen: Millimeter.
+stepimport-unclear-unit = Die Datei nennt verschiedene Längeneinheiten. Bitte die Einheit der Datei wählen.
+stepimport-unreadable-unit = Die Einheit der Datei lässt sich nicht lesen. Bitte die Einheit der Datei wählen.
+stepimport-mixed-unit-hint = Die Körper der Datei stehen in verschiedenen Längeneinheiten; jeder wird in seiner eigenen gelesen.
+stepimport-free-skipped = Ein Körper ohne eigene Einheit ist ausgelassen, weil die Datei verschiedene Längeneinheiten nennt. Eine gewählte Einheit gilt für alle Körper.
+stepimport-mixed-unit = gemischt
+stepimport-nothing-checked = Bitte mindestens einen Körper anhaken.
+stepimport-size-hint = Maße der Hülle, auf 0,1 mm gerundet; bei gekrümmten Flächen ungefähr.
+stepimport-hint-mixed-chosen-all = Die Datei nennt verschiedene Längeneinheiten; gewählt: { $unit } für alle Körper.
+stepimport-hint-named-chosen = Die Datei nennt { $own }; gewählt: { $unit }.
+stepimport-hint-missing-chosen = Die Datei nennt keine Längeneinheit; gewählt: { $unit }.
+stepimport-hint-mixed-chosen = Die Datei nennt verschiedene Längeneinheiten; gewählt: { $unit }.
+stepimport-hint-unreadable-chosen = Die Einheit der Datei lässt sich nicht lesen; gewählt: { $unit }.
+stepimport-about = etwa { $size }
+stepimport-summary = { $n } Körper importiert
+stepimport-and-more = und { $n } weitere
+stepimport-summary-skipped = { $head }, { $n } ausgelassen: { $list }
+stepimport-status-skipped = wird ausgelassen: { $why }
+stepimport-status-ok = wird übernommen
+stepimport-status-ok-warning = wird übernommen – { $warnings }
+stepimport-wait = Bitte warten, bis die Prüfung fertig ist.
+stepimport-choose = Datei wählen (STEP)
+stepimport-other-file = Andere Datei wählen …
+stepimport-file = Datei
+stepimport-col-unit = Einheit
+stepimport-usable = { $usable } von { $total } Körpern lassen sich übernehmen.
+
+## Körper, Skizzen und Meldungen des Modells
+state-undo-failed = Rückgängig ist nicht möglich.
+state-redo-failed = Wiederholen ist nicht möglich.
+state-sketch-open-lock = Beenden Sie zuerst die Skizze.
+state-mesh-note = Hinweis: Das Netz dieses Körpers ist an einzelnen Stellen ungenau; die Anzeige kann kleine Lücken haben.
+state-sketch-label = Skizze
+state-mesh-label = Netz-Körper
+state-unnamed = Unbenannt
+state-feature-n = Feature { $n }
+state-create-sizes-positive = Erzeugen fehlgeschlagen: Die Maße müssen größer als null sein
+state-create-sizes-max = Erzeugen fehlgeschlagen: Die Maße dürfen höchstens { $max } mm betragen
+state-pick-two-bodies = Bitte zwei verschiedene Körper wählen
+state-pick-edge-first = Bitte zuerst eine Kante anklicken
+state-body-not-found = Körper nicht gefunden
+state-face-not-found = Fläche nicht gefunden
+state-sketch-not-found = Skizze nicht gefunden
+state-profile-not-found = Profil nicht gefunden
+state-invalid-move = Ungültige Verschiebung
+state-body-invisible = Der Körper ist nach dem Beenden der Skizze nicht mehr sichtbar
+state-move-rejected = Verschieben abgelehnt: Der Körper läge außerhalb von ±{ $max } mm
+state-move-label = Verschieben
+state-move-gone = Das Verschieben gibt es nicht mehr
+state-move-discarded = Verschieben verworfen: Feature „{ $name }“ ließe sich danach nicht mehr berechnen ({ $message })
+state-end-sketch-first = Zuerst die Skizze beenden (Knopf „Skizze beenden“ unten), dann erneut versuchen
+state-delete-blocked = „{ $name }“ lässt sich nicht löschen, weil diese Features darauf aufbauen: { $list }
+state-tessellation-failed = Tessellierung fehlgeschlagen: { $error }
+state-body-note = „{ $name }“: { $note }
+state-sketch-planar-only = Skizzen lassen sich nur auf ebenen Flächen anlegen
+state-sketch-on-face-failed = Auf dieser Fläche geht keine Skizze: { $error }
+state-sketch-commit-failed = Die Skizze ließ sich nicht übernehmen: { $error }
+state-no-open-sketch = Es ist keine Skizze geöffnet
+state-edge-body-later = Dieser Körper entsteht erst nach der Skizze (etwa durch ein späteres Verschieben oder eine spätere Boolesche Operation); seine Kanten lassen sich nicht hineinkopieren
+state-edge-copy-failed = Diese Kante lässt sich nicht kopieren: { $error }
+state-sketch-not-computed = Die Skizze „{ $name }“ ist nicht berechnet ({ $reason })
+state-height-positive = Die Höhe muss größer als null sein
+state-extrusion-name = Extrusion: { $name }
+state-revolve-name = Rotation: { $name }
+state-feature-failed = Das Feature konnte nicht berechnet werden
+state-mesh-locked = Netz-Körper lassen sich nicht bearbeiten.
+state-need-two-bodies = Dafür werden mindestens zwei Körper benötigt.
+state-need-one-body = Dafür wird mindestens ein Körper benötigt.
+state-pick-planar-face = Dafür zuerst eine ebene Fläche eines Körpers anklicken.
+state-not-mesh = Das ist kein Netz-Körper
+state-field-no-formula = Dieses Feld kann keine Formel haben

@@ -1727,7 +1727,7 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
     if entry(
         ui,
         !read_only,
-        icons::button(Icon::Import, step_import_dialog::MENU_LABEL),
+        icons::button(Icon::Import, step_import_dialog::menu_label()),
     )
     .on_disabled_hover_text(tr!("menu-old-version-add"))
     .clicked()
@@ -2121,7 +2121,7 @@ pub fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
         !sketch_open,
         icons::button(Icon::Parameters, parameters_entry()),
     )
-    .on_disabled_hover_text(crate::state::SKETCH_OPEN_LOCK)
+    .on_disabled_hover_text(crate::state::sketch_open_lock())
     .clicked()
     {
         commands::timed("Parameter", || parameter_dialog::open(tab));

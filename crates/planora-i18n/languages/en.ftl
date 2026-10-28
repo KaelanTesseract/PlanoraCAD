@@ -621,3 +621,304 @@ chooser-truncated = Only the first { $n } entries are shown.
 chooser-file-name = File name
 chooser-replace = Replace
 chooser-open = Open
+
+## Formula fields
+field-fx-label = Convert to value
+field-fx-hint = Formula. Click to insert the calculated value and remove the formula.
+field-empty = Please enter a number or a formula.
+field-names = Names: { $list }
+field-error = { $label }: { $error }
+
+## Create bodies
+create-box-title = Create box
+create-cylinder-title = Create cylinder
+create-sphere-title = Create sphere
+create-cone-title = Create cone
+create-extrude-title = Extrude sketch
+create-revolve-title = Revolve sketch
+create-field-width = Width (x)
+create-field-depth = Depth (y)
+create-field-height-z = Height (z)
+create-field-radius = Radius
+create-field-height = Height
+create-axis-construction = Construction line { $n } ({ $length })
+create-axis-line = Line { $n } ({ $length })
+create-none = (none)
+create-choose = (please choose)
+create-sketch = Sketch
+create-profile = Profile
+create-axis = Axis of revolution
+create-sketch-missing = Sketch not found or not computed.
+create-no-profile = The sketch has no closed profile.
+create-profile-label = Profile { $n }: { $area } mm²
+create-profile-label-holes = Profile { $n }: { $area } mm², { $holes ->
+    [one] 1 hole
+   *[other] { $holes } holes
+}
+create-rejected = Not usable: { $reason }
+create-no-axis = The sketch has no line that can serve as the axis of revolution.
+create-create = Create
+create-pick-axis = Please choose an axis of revolution (a line of the sketch).
+create-axis-gone = The chosen axis of revolution no longer exists in this sketch; please choose again.
+
+## Fillet and chamfer
+blend-fillet-title = Fillet
+blend-chamfer-title = Chamfer
+blend-no-edge = Please click an edge in the view first.
+blend-art-round = Fillet
+blend-art-variable = Fillet with variable radius
+blend-art-chamfer-equal = Chamfer: equal distance
+blend-art-chamfer-two = Chamfer: two distances
+blend-art-chamfer-angle = Chamfer: distance and angle
+blend-field-radius = Radius
+blend-field-radius-n = Radius { $n }
+blend-field-position-n = Position { $n }
+blend-field-distance = Distance
+blend-field-distance-1 = Distance 1
+blend-field-distance-2 = Distance 2
+blend-field-angle = Angle
+blend-too-many-points = A variable radius can have at most { $max } points
+blend-too-small = "{ $label }" is too small; the smallest possible size is { $min } mm
+blend-size-invalid = "{ $label }" must be a number greater than zero (entered: "{ $text }")
+blend-angle-invalid = "Angle" must be between { $min }° and { $max }° (entered: "{ $text }")
+blend-position-range = "Position { $n }" must be between 0 and 100 %
+blend-body-n = Body { $n }
+blend-mixed-bodies = The edges belong to different bodies ({ $names }); only one body can be done at a time
+blend-chosen-edges = Chosen edges: { $n }
+blend-click-edge = Click an edge in the view (Shift: several).
+blend-point-n = Point { $n }
+blend-remove = Remove
+blend-add-point = Add point
+blend-face-1 = Face 1
+blend-min-size = Smallest size: { $min } mm
+blend-chain = Tangent chain (include smoothly connected edges)
+
+## Edit feature
+edit-title = Edit "{ $name }"
+edit-stale = The feature has been changed in the meantime; the window now shows the current state. Please check the values and apply again.
+edit-numbers-only = { $label }: Only numbers are possible here.
+edit-invalid-number = Invalid number for "{ $label }": "{ $text }"
+edit-too-big = The value for "{ $label }" is too large (absolute value at most { $max } mm)
+edit-op-difference = Subtract (target − tool)
+edit-rejected = The change was rejected: { $error }
+edit-remove-point = Remove point
+edit-target = Target
+edit-tool = Tool
+edit-body = Body: { $name }
+edit-edges = Edges: { $n }
+edit-sketch-not-computed = The sketch has not been computed.
+
+## Boolean operation
+boolean-title = Boolean operation
+boolean-body-a = Body A
+boolean-body-b = Body B
+boolean-subtract = Subtract (A − B)
+boolean-run = Run
+boolean-same-body = Body A and body B must be different.
+
+## Parameters
+param-title = Parameters
+param-add-row = Add row
+param-delete-row = Delete row
+param-replace = Replace with value
+param-empty-table = No parameters yet.
+param-dialog-closed = The window was closed because parameters changed.
+param-col-name = Name
+param-col-formula = Formula
+param-col-value = Value
+param-col-kind = Type
+param-col-comment = Comment
+param-gone = The parameter no longer exists.
+param-live-more = { $first } (+ { $n ->
+    [one] 1 more error
+   *[other] { $n } more errors
+})
+param-field-label = { $column } of { $name }
+param-other-row = Parameter "{ $name }": { $message }
+
+## Properties
+props-name = Name
+props-kind = Type
+props-status = Status
+props-status-ok = computed
+props-status-error = Error: { $error }
+props-status-skipped = skipped: { $why }
+props-status-not-computed = not computed (behind the timeline marker)
+props-open-sketch = Open sketch
+props-edit = Edit …
+props-nothing-selected = Nothing selected.
+props-volume = Volume
+props-surface = Surface area
+props-centroid = Center of mass
+props-dimensions = Dimensions
+props-faces-edges = Faces / edges
+props-faces = Faces
+props-faces-in-file = Faces in the file
+props-accuracy = Accuracy of the file
+props-accuracy-unknown = unknown (assumed { $assumed })
+props-step-coarse-hint = Calculating with this body may fail.
+props-position-label = Position x / y / z in mm
+props-rotation-label = Rotation x / y / z in degrees
+props-position-x = Position x
+props-position-y = Position y
+props-position-z = Position z
+props-selected-face = Selected face: { $kind }
+props-selected-edge = Selected edge: { $kind }, length ≈ { $length } mm
+props-click-face-or-edge = Click a face or an edge in the viewport.
+props-mesh-body = Mesh body
+props-triangles-label = Triangles
+props-closed-at-import = Closed when read
+props-yes = yes
+props-no = no
+props-at-import = When read: { $report }
+props-mesh-body-hint = Mesh bodies can be moved, rotated, scaled, measured and exported, but not combined with other bodies, filleted or used as a face for a sketch.
+props-on-face = Face "{ $role }" of "{ $name }"
+props-plane = Plane
+props-curves = Curves
+props-edge-copies = Edge copies
+props-size = Size
+props-position = Position
+props-radius = Radius
+props-height = Height
+props-sketch = Sketch
+props-profile = Profile
+props-axis = Axis of revolution
+props-curve-n = Curve { $n }
+props-operation = Operation
+props-body = Body
+props-displacement = Displacement
+props-edges = Edges
+props-points = Points
+props-tangent-chain = Tangent chain
+props-on = on
+props-off = off
+props-mesh = Mesh
+props-triangles = { $n ->
+    [one] 1 triangle
+   *[other] { $n } triangles
+}
+props-rotation = Rotation
+props-scale = Scale
+
+## Mesh bodies
+mesh-preview-note = Note: The mesh is very large; the view shows only some of the triangles. It is saved and exported in full.
+mesh-open-edges = { $n ->
+    [one] 1 open edge
+   *[other] { $n } open edges
+}
+mesh-flipped-edges = { $n ->
+    [one] 1 edge with flipped triangles
+   *[other] { $n } edges with flipped triangles
+}
+mesh-non-manifold-edges = { $n ->
+    [one] 1 edge shared by more than two triangles
+   *[other] { $n } edges shared by more than two triangles
+}
+mesh-closed = The mesh is closed.
+mesh-not-closed = The mesh is not closed.
+mesh-not-fully-closed = The mesh is not fully closed: { $parts }.
+mesh-degenerate = { $n ->
+    [one] 1 triangle has no area.
+   *[other] { $n } triangles have no area.
+}
+
+## Import (mesh and STEP)
+import-reading = Reading the file …
+import-stale = The document has changed since the file was read. Please choose the file again.
+import-lost = The calculation ended unexpectedly.
+import-choose-file = Please choose a file first.
+import-unit-title = Unit of the file
+import-unit-mm = Millimeters
+import-unit-cm = Centimeters
+import-unit-m = Meters
+import-unit-inch = Inches
+import-unit-inch-short = in
+import-import = Import
+meshimport-title = Import mesh
+meshimport-choose = Choose file (STL or OBJ)
+meshimport-check = Check
+meshimport-file = File: { $name }
+meshimport-counts = { $triangles } triangles, { $points } points
+meshimport-open-hint = You can still create and show the mesh body; volume and surface area are then only approximate.
+
+## Import STEP
+menu-file-import-step = Import STEP …
+stepimport-title = Import STEP
+stepimport-checking = Checking the bodies …
+stepimport-no-unit = The file does not name a length unit; assumed: millimeters.
+stepimport-unclear-unit = The file names different length units. Please choose the unit of the file.
+stepimport-unreadable-unit = The unit of the file cannot be read. Please choose the unit of the file.
+stepimport-mixed-unit-hint = The bodies in the file use different length units; each one is read in its own unit.
+stepimport-free-skipped = A body without its own unit was skipped because the file names different length units. A unit you choose applies to all bodies.
+stepimport-mixed-unit = mixed
+stepimport-nothing-checked = Please tick at least one body.
+stepimport-size-hint = Size of the bounding box, rounded to 0.1 mm; approximate for curved surfaces.
+stepimport-hint-mixed-chosen-all = The file names different length units; chosen: { $unit } for all bodies.
+stepimport-hint-named-chosen = The file names { $own }; chosen: { $unit }.
+stepimport-hint-missing-chosen = The file does not name a length unit; chosen: { $unit }.
+stepimport-hint-mixed-chosen = The file names different length units; chosen: { $unit }.
+stepimport-hint-unreadable-chosen = The unit of the file cannot be read; chosen: { $unit }.
+stepimport-about = about { $size }
+stepimport-summary = { $n ->
+    [one] 1 body imported
+   *[other] { $n } bodies imported
+}
+stepimport-and-more = and { $n } more
+stepimport-summary-skipped = { $head }, { $n } skipped: { $list }
+stepimport-status-skipped = will be skipped: { $why }
+stepimport-status-ok = will be imported
+stepimport-status-ok-warning = will be imported – { $warnings }
+stepimport-wait = Please wait until the check is finished.
+stepimport-choose = Choose file (STEP)
+stepimport-other-file = Choose another file …
+stepimport-file = File
+stepimport-col-unit = Unit
+stepimport-usable = { $total ->
+    [one] { $usable } of { $total } body can be imported.
+   *[other] { $usable } of { $total } bodies can be imported.
+}
+
+## Bodies, sketches and model messages
+state-undo-failed = Undo is not possible.
+state-redo-failed = Redo is not possible.
+state-sketch-open-lock = Please finish the sketch first.
+state-mesh-note = Note: The mesh of this body is inexact in places; the view may show small gaps.
+state-sketch-label = Sketch
+state-mesh-label = Mesh body
+state-unnamed = Untitled
+state-feature-n = Feature { $n }
+state-create-sizes-positive = Creating failed: The sizes must be greater than zero
+state-create-sizes-max = Creating failed: The sizes may be at most { $max } mm
+state-pick-two-bodies = Please choose two different bodies
+state-pick-edge-first = Please click an edge first
+state-body-not-found = Body not found
+state-face-not-found = Face not found
+state-sketch-not-found = Sketch not found
+state-profile-not-found = Profile not found
+state-invalid-move = Invalid displacement
+state-body-invisible = The body is no longer visible after finishing the sketch
+state-move-rejected = Move rejected: The body would lie outside ±{ $max } mm
+state-move-label = Move
+state-move-gone = The move no longer exists
+state-move-discarded = Move discarded: The feature "{ $name }" could no longer be computed afterwards ({ $message })
+state-end-sketch-first = Please finish the sketch first (button "Finish sketch" at the bottom), then try again
+state-delete-blocked = "{ $name }" cannot be deleted because these features depend on it: { $list }
+state-tessellation-failed = Tessellation failed: { $error }
+state-body-note = "{ $name }": { $note }
+state-sketch-planar-only = Sketches can only be created on flat faces
+state-sketch-on-face-failed = A sketch is not possible on this face: { $error }
+state-sketch-commit-failed = The sketch could not be applied: { $error }
+state-no-open-sketch = No sketch is open
+state-edge-body-later = This body only exists after the sketch (for example through a later move or a later Boolean operation); its edges cannot be copied into it
+state-edge-copy-failed = This edge cannot be copied: { $error }
+state-sketch-not-computed = The sketch "{ $name }" is not computed ({ $reason })
+state-height-positive = The height must be greater than zero
+state-extrusion-name = Extrusion: { $name }
+state-revolve-name = Revolve: { $name }
+state-feature-failed = The feature could not be computed
+state-mesh-locked = Mesh bodies cannot be edited.
+state-need-two-bodies = This needs at least two bodies.
+state-need-one-body = This needs at least one body.
+state-pick-planar-face = First click a flat face of a body.
+state-not-mesh = This is not a mesh body
+state-field-no-formula = This field cannot have a formula

@@ -7,6 +7,7 @@ use planora_feature::{
     FieldKey, Formulas, MESH_LOCKED, MeshId, NewStepBody, ParamEdit, ParamId, RestoreKind,
     SketchFeature, SketchPlane, StepShape,
 };
+use planora_i18n::tr;
 use planora_kernel::boolean::BoolOp;
 use planora_kernel::{AnalyticKernel, Edge, Face, Id, Solid};
 use planora_math::{DQuat, DVec2, DVec3, Frame};
@@ -52,13 +53,17 @@ const MAX_NAME_COUNTER: u64 = 1_000_000;
 pub const CHORD_TOLERANCE: f64 = 0.05;
 
 /// Meldung, wenn sich ein Schritt nicht zurückladen lässt (Rückgängig).
-pub const UNDO_FAILED: &str = "Rückgängig ist nicht möglich.";
+pub fn undo_failed() -> String {
+    tr!("state-undo-failed")
+}
 /// Meldung, wenn sich ein Schritt nicht zurückladen lässt (Wiederholen).
-pub const REDO_FAILED: &str = "Wiederholen ist nicht möglich.";
+pub fn redo_failed() -> String {
+    tr!("state-redo-failed")
+}
 /// Sperre der Parameter, solange eine Skizze offen ist (ihr Entwurf hängt an den alten Werten).
-pub const SKETCH_OPEN_LOCK: &str = "Beenden Sie zuerst die Skizze.";
-/// Meldung bei leerem Formelfeld.
-const EMPTY_FIELD: &str = "Bitte eine Zahl oder Formel eingeben.";
+pub fn sketch_open_lock() -> String {
+    tr!("state-sketch-open-lock")
+}
 
 static NEXT_SCENE_VERSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
@@ -80,7 +85,7 @@ pub struct Body {
     /// Achsenparallele Hülle `(min, max)` in Millimetern.
     pub bounds: (DVec3, DVec3),
     /// Das Netz ist an einzelnen Stellen ungenau (`Mesh::inexact_faces`) oder nicht geschlossen;
-    /// die Statuszeile zeigt dann [`MESH_NOTE`]. Der Körper selbst ist davon nicht betroffen.
+    /// die Statuszeile zeigt dann [`mesh_note`]. Der Körper selbst ist davon nicht betroffen.
     pub mesh_inexact: bool,
     /// Prüfbericht des Netzes; nur bei Netz-Körpern (Spec §6).
     pub mesh_report: Option<MeshReport>,
@@ -89,7 +94,9 @@ pub struct Body {
 }
 
 /// Hinweis in der Statuszeile, wenn das Netz eines Körpers ungenau ist.
-pub const MESH_NOTE: &str = "Hinweis: Das Netz dieses Körpers ist an einzelnen Stellen ungenau; die Anzeige kann kleine Lücken haben.";
+pub fn mesh_note() -> String {
+    tr!("state-mesh-note")
+}
 
 /// Punkte näher als das gelten bei der Prüfung auf ein geschlossenes Netz als derselbe Punkt
 /// (wie in den Netztests; benachbarte Flächen teilen ihre Kantenpunkte exakt).
@@ -311,8 +318,11 @@ fn edge_key(solid: &Solid, edge: Id<Edge>) -> Option<[u64; EDGE_KEY_LEN]> {
 /// [`planora_feature::MAX_COORD_MM`], dort für jede Berechnung geprüft): Darüber ist der
 /// Abstand benachbarter `f64`-Werte größer als die Toleranz.
 pub const MAX_COORD_MM: f64 = planora_feature::MAX_COORD_MM;
-/// Bezeichnung (und Namensstamm) von Skizzen-Features.
-const SKETCH_LABEL: &str = "Skizze";
+/// Bezeichnung (und Namensstamm) von Skizzen-Features. Der Name wird mit dem Feature
+/// gespeichert und bleibt in der Sprache, in der er entstand.
+fn sketch_label() -> String {
+    tr!("state-sketch-label")
+}
 const PICK_EDGE_PX: f32 = 6.0;
 const BODY_GAP_MM: f64 = 10.0;
 /// Mindestgröße des Bereichs, auf den die Ansicht beim Öffnen einer Skizze eingepasst wird.
@@ -393,7 +403,7 @@ impl AppState {
             dimension_dialog: None,
             sheet_dialog: None,
             pending_delete_dimension: None,
-            document_name: "Unbenannt".to_string(),
+            document_name: tr!("state-unnamed"),
             instance: NEXT_INSTANCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         };
         state.rebuild_scene();
@@ -455,7 +465,7 @@ impl AppState {
             let kind = body_kind(&self.document, v.body);
             match self.make_body(kind, name.clone(), v.body, v.solid.clone()) {
                 Ok(b) => bodies.push(b),
-                Err(e) => failed.push(format!("„{name}“: {e}")),
+                Err(e) => failed.push(tr!("tree-status-line", name = &name, error = e)),
             }
         }
         for v in self.document.visible_meshes() {
@@ -849,12 +859,12 @@ impl AppState {
     fn check_sizes(&mut self, values: &[f64]) -> Result<(), String> {
         let min = self.kernel.tolerance.linear;
         if !values.iter().all(|v| v.is_finite() && *v > min) {
-            return self
-                .fail("Erzeugen fehlgeschlagen: Die Maße müssen größer als null sein".into());
+            return self.fail(tr!("state-create-sizes-positive"));
         }
         if values.iter().any(|v| *v > MAX_COORD_MM) {
-            return self.fail(format!(
-                "Erzeugen fehlgeschlagen: Die Maße dürfen höchstens {MAX_COORD_MM:e} mm betragen"
+            return self.fail(tr!(
+                "state-create-sizes-max",
+                max = format!("{MAX_COORD_MM:e}")
             ));
         }
         Ok(())
@@ -949,7 +959,7 @@ impl AppState {
     /// `message`.
     pub fn add_boolean(&mut self, a: usize, b: usize, op: BoolOp) -> Result<FeatureId, String> {
         if a == b || a >= self.bodies.len() || b >= self.bodies.len() {
-            return self.fail("Bitte zwei verschiedene Körper wählen".into());
+            return self.fail(tr!("state-pick-two-bodies"));
         }
         if self.is_mesh(a) || self.is_mesh(b) {
             return self.fail(MESH_LOCKED.into());
@@ -1019,10 +1029,10 @@ impl AppState {
             return self.fail(MESH_LOCKED.into());
         }
         let Some(b) = self.bodies.get(body) else {
-            return self.fail("Körper nicht gefunden".into());
+            return self.fail(tr!("state-body-not-found"));
         };
         if edges.is_empty() {
-            return self.fail("Bitte zuerst eine Kante anklicken".into());
+            return self.fail(tr!("state-pick-edge-first"));
         }
         let tol = self.kernel.tolerance;
         let mut refs = Vec::with_capacity(edges.len());
@@ -1125,10 +1135,10 @@ impl AppState {
 
     fn move_body_with(&mut self, index: usize, delta: DVec3, dragging: bool) -> Result<(), String> {
         if !delta.is_finite() {
-            return self.fail("Ungültige Verschiebung".into());
+            return self.fail(tr!("state-invalid-move"));
         }
         let Some(r) = self.bodies.get(index).map(|b| b.source) else {
-            return self.fail("Körper nicht gefunden".into());
+            return self.fail(tr!("state-body-not-found"));
         };
         if delta == DVec3::ZERO {
             return Ok(());
@@ -1143,15 +1153,15 @@ impl AppState {
         // Extrusion der Skizze danach fehlschlägt): den Körper über seinen Verweis neu suchen.
         self.try_close_sketch()?;
         let Some((index, (lo, hi))) = self.body_index(r).map(|i| (i, self.bodies[i].bounds)) else {
-            return self
-                .fail("Der Körper ist nach dem Beenden der Skizze nicht mehr sichtbar".into());
+            return self.fail(tr!("state-body-invisible"));
         };
         // Der Körper muss danach im darstellbaren Bereich liegen; das deckt auch Summen ab, die
         // beim Erweitern eines Verschiebens nicht mehr endlich wären.
         let inside = |p: DVec3| p.is_finite() && p.abs().max_element() <= MAX_COORD_MM;
         if !(inside(lo + delta) && inside(hi + delta)) {
-            return self.fail(format!(
-                "Verschieben abgelehnt: Der Körper läge außerhalb von ±{MAX_COORD_MM:e} mm"
+            return self.fail(tr!(
+                "state-move-rejected",
+                max = format!("{MAX_COORD_MM:e}")
             ));
         }
         // Ein Verschieben mit Formeln wird nie erweitert (P11): Die Formeln bleiben gültig, die
@@ -1165,7 +1175,10 @@ impl AppState {
             self.extend_move(r.feature, delta)?;
             r
         } else {
-            let id = self.add_checked("Verschieben", FeatureKind::Move { body: r, delta })?;
+            let id = self.add_checked(
+                &tr!("state-move-label"),
+                FeatureKind::Move { body: r, delta },
+            )?;
             if dragging {
                 self.drag_move = Some(id);
             }
@@ -1210,9 +1223,9 @@ impl AppState {
         let (old, old_formulas) = match self.document.feature(id) {
             Some(f) => match &f.kind {
                 FeatureKind::Move { delta, .. } => (*delta, f.formulas().clone()),
-                _ => return self.fail("Das Verschieben gibt es nicht mehr".into()),
+                _ => return self.fail(tr!("state-move-gone")),
             },
-            None => return self.fail("Das Verschieben gibt es nicht mehr".into()),
+            None => return self.fail(tr!("state-move-gone")),
         };
         let was_ok: Vec<FeatureId> = self
             .document
@@ -1250,10 +1263,7 @@ impl AppState {
                         .document
                         .feature(broken_id)
                         .map_or_else(String::new, |f| f.name.clone());
-                    self.fail(format!(
-                        "Verschieben verworfen: Feature „{name}“ ließe sich danach nicht mehr \
-                         berechnen ({message})"
-                    ))
+                    self.fail(tr!("state-move-discarded", name = name, message = message))
                 }
             }
         }
@@ -1264,7 +1274,7 @@ impl AppState {
     pub fn body_ref_name(&self, r: BodyRef) -> String {
         self.document
             .body_display_name(r)
-            .unwrap_or_else(|| format!("Feature {}", r.feature.0))
+            .unwrap_or_else(|| tr!("state-feature-n", n = r.feature.0))
     }
 
     /// Das Feature, das den Namen des Körpers `index` trägt: das erzeugende Feature, bei
@@ -1294,11 +1304,7 @@ impl AppState {
     /// zuerst zu beenden; sonst wird eine offene Skizze beendet und ihr Entwurf übernommen.
     pub fn end_sketch_for(&mut self, target: Option<FeatureId>) -> Result<(), String> {
         if target.is_some() && target == self.open_sketch_id() {
-            return self.fail(
-                "Zuerst die Skizze beenden (Knopf „Skizze beenden“ unten), dann erneut \
-                 versuchen"
-                    .into(),
-            );
+            return self.fail(tr!("state-end-sketch-first"));
         }
         self.try_close_sketch()
     }
@@ -1336,11 +1342,12 @@ impl AppState {
                 let names: Vec<String> = ids
                     .iter()
                     .filter_map(|d| self.document.feature(FeatureId(*d)))
-                    .map(|f| format!("„{}“", f.name))
+                    .map(|f| tr!("tree-quoted-name", name = &f.name))
                     .collect();
-                self.fail(format!(
-                    "„{name}“ lässt sich nicht löschen, weil diese Features darauf aufbauen: {}",
-                    names.join(", ")
+                self.fail(tr!(
+                    "state-delete-blocked",
+                    name = name,
+                    list = names.join(", ")
                 ))
             }
             Err(e) => self.fail(e.to_string()),
@@ -1372,12 +1379,12 @@ impl AppState {
     /// vorher beendet.
     pub fn delete_body(&mut self, index: usize) -> Result<(), String> {
         let Some(r) = self.bodies.get(index).map(|b| b.source) else {
-            return self.fail("Körper nicht gefunden".into());
+            return self.fail(tr!("state-body-not-found"));
         };
         // Beim Übernehmen des Entwurfs kann sich die Körperliste ändern.
         self.try_close_sketch()?;
         let Some(id) = self.body_index(r).and_then(|i| self.naming_feature(i)) else {
-            return self.fail("Körper nicht gefunden".into());
+            return self.fail(tr!("state-body-not-found"));
         };
         let only_moves = self.document.dependents(id).iter().all(|d| {
             self.document
@@ -1424,7 +1431,7 @@ impl AppState {
                 chord_tolerance: self.chord_tolerance,
             },
         )
-        .map_err(|e| format!("Tessellierung fehlgeschlagen: {e}"))
+        .map_err(|e| tr!("state-tessellation-failed", error = e.to_string()))
     }
 
     pub fn rebuild_scene(&mut self) {
@@ -1666,11 +1673,11 @@ impl AppState {
             .filter(noted);
         let body = chosen.or_else(|| self.bodies.iter().find(noted))?;
         let note = if body.preview {
-            crate::mesh_body::PREVIEW_NOTE
+            crate::mesh_body::preview_note()
         } else {
-            MESH_NOTE
+            mesh_note()
         };
-        Some(format!("„{}“: {note}", body.name))
+        Some(tr!("state-body-note", name = &body.name, note = note))
     }
 
     /// Fehler als Meldung ablegen und zurückgeben.
@@ -1710,14 +1717,15 @@ impl AppState {
     /// Legt ein leeres Skizzen-Feature auf `plane` an; `frame` ist die Lage der Ebene, die in
     /// der Definition gespeichert wird.
     fn add_sketch_in(&mut self, plane: SketchPlane, frame: Frame) -> Result<FeatureId, String> {
-        let sketch = Sketch::new(frame, self.next_name(SKETCH_LABEL), self.kernel.tolerance);
+        let label = sketch_label();
+        let sketch = Sketch::new(frame, self.next_name(&label), self.kernel.tolerance);
         let kind = FeatureKind::Sketch(SketchFeature {
             sketch,
             plane,
             copies: Vec::new(),
             formulas: Default::default(),
         });
-        self.add_checked(SKETCH_LABEL, kind)
+        self.add_checked(&label, kind)
     }
 
     /// Legt ein Skizzen-Feature auf der ebenen Fläche `face` des sichtbaren Körpers `body` an.
@@ -1727,17 +1735,19 @@ impl AppState {
             return self.fail(MESH_LOCKED.into());
         }
         let Some(b) = self.bodies.get(body) else {
-            return self.fail("Körper nicht gefunden".into());
+            return self.fail(tr!("state-body-not-found"));
         };
         if b.solid.faces.get(face).is_none() {
-            return self.fail("Fläche nicht gefunden".into());
+            return self.fail(tr!("state-face-not-found"));
         }
         let Some(frame) = plane_of_face(&b.solid, face) else {
-            return self.fail("Skizzen lassen sich nur auf ebenen Flächen anlegen".into());
+            return self.fail(tr!("state-sketch-planar-only"));
         };
         let r = match planora_feature::FaceRef::from_face(&b.solid, face, &self.kernel.tolerance) {
             Ok(r) => r,
-            Err(e) => return self.fail(format!("Auf dieser Fläche geht keine Skizze: {e}")),
+            Err(e) => {
+                return self.fail(tr!("state-sketch-on-face-failed", error = e.to_string()));
+            }
         };
         self.add_sketch_in(SketchPlane::OnFace(r), frame)
     }
@@ -1752,7 +1762,7 @@ impl AppState {
             .feature(id)
             .is_some_and(|f| matches!(f.kind, FeatureKind::Sketch(_)))
         {
-            return self.fail("Skizze nicht gefunden".into());
+            return self.fail(tr!("state-sketch-not-found"));
         }
         let switching = self.sketch_session.is_some();
         if switching {
@@ -1760,10 +1770,10 @@ impl AppState {
             self.commit_draft()?;
         }
         let Some(f) = self.document.feature(id) else {
-            return self.fail("Skizze nicht gefunden".into());
+            return self.fail(tr!("state-sketch-not-found"));
         };
         let FeatureKind::Sketch(def) = &f.kind else {
-            return self.fail("Skizze nicht gefunden".into());
+            return self.fail(tr!("state-sketch-not-found"));
         };
         let mut draft = def.clone();
         // Die berechnete Skizze trägt die aufgelöste Ebene und die nachgeführten Kantenkopien;
@@ -2005,7 +2015,7 @@ impl AppState {
                 Ok(())
             }
             Err(e) => {
-                let message = format!("Die Skizze ließ sich nicht übernehmen: {e}");
+                let message = tr!("state-sketch-commit-failed", error = e.to_string());
                 se.message = Some(message.clone());
                 self.sketch_session = Some(se);
                 self.sketch_draft = Some(draft);
@@ -2237,29 +2247,24 @@ impl AppState {
     fn try_project_edge(&mut self, body: usize, edge: Id<Edge>) -> Result<(), String> {
         let id = self
             .open_sketch_id()
-            .ok_or_else(|| "Es ist keine Skizze geöffnet".to_string())?;
+            .ok_or_else(|| tr!("state-no-open-sketch"))?;
         let source = self
             .bodies
             .get(body)
             .map(|b| b.source)
-            .ok_or_else(|| "Körper nicht gefunden".to_string())?;
+            .ok_or_else(|| tr!("state-body-not-found"))?;
         let solid = self
             .document
             .visible_bodies_before(id)
             .into_iter()
             .find(|v| v.body == source)
             .map(|v| v.solid.clone())
-            .ok_or_else(|| {
-                "Dieser Körper entsteht erst nach der Skizze (etwa durch ein späteres \
-                 Verschieben oder eine spätere Boolesche Operation); seine Kanten lassen sich nicht \
-                 hineinkopieren"
-                    .to_string()
-            })?;
+            .ok_or_else(|| tr!("state-edge-body-later"))?;
         let edge_ref = planora_feature::EdgeRef::from_edge(&solid, edge, &self.kernel.tolerance)
-            .map_err(|e| format!("Diese Kante lässt sich nicht kopieren: {e}"))?;
+            .map_err(|e| tr!("state-edge-copy-failed", error = e.to_string()))?;
         let (Some(se), Some(draft)) = (self.sketch_session.as_mut(), self.sketch_draft.as_mut())
         else {
-            return Err("Es ist keine Skizze geöffnet".into());
+            return Err(tr!("state-no-open-sketch"));
         };
         let curve = se.project_edge(&mut draft.sketch, &solid, edge)?;
         draft.copies.push(EdgeCopy {
@@ -2291,16 +2296,16 @@ impl AppState {
             .document
             .feature(sketch)
             .filter(|f| matches!(f.kind, FeatureKind::Sketch(_)))
-            .ok_or_else(|| "Skizze nicht gefunden".to_string())?;
+            .ok_or_else(|| tr!("state-sketch-not-found"))?;
         let sk = self.document.sketch_of(sketch).ok_or_else(|| {
-            format!(
-                "Die Skizze „{}“ ist nicht berechnet ({})",
-                f.name,
-                status_message(Some(f.status.clone()))
+            tr!(
+                "state-sketch-not-computed",
+                name = &f.name,
+                reason = status_message(Some(f.status.clone()))
             )
         })?;
         if profile >= self.profile_cache.get(sk).profiles.len() {
-            return Err("Profil nicht gefunden".into());
+            return Err(tr!("state-profile-not-found"));
         }
         Ok(f.name.clone())
     }
@@ -2340,14 +2345,14 @@ impl AppState {
     ) -> Result<FeatureId, String> {
         self.try_close_sketch()?;
         if !(height.is_finite() && height > self.kernel.tolerance.linear) {
-            return self.fail("Die Höhe muss größer als null sein".into());
+            return self.fail(tr!("state-height-positive"));
         }
         let name = match self.check_profile(sketch, profile) {
             Ok(n) => n,
             Err(e) => return self.fail(e),
         };
         self.add_body_from_sketch(
-            format!("Extrusion: {name}"),
+            tr!("state-extrusion-name", name = name),
             FeatureKind::Extrude {
                 sketch,
                 profile,
@@ -2372,7 +2377,7 @@ impl AppState {
             Err(e) => return self.fail(e),
         };
         self.add_body_from_sketch(
-            format!("Rotation: {name}"),
+            tr!("state-revolve-name", name = name),
             FeatureKind::Revolve {
                 sketch,
                 profile,
@@ -2394,7 +2399,7 @@ fn bounds_of(mesh: &Mesh) -> (DVec3, DVec3) {
 fn status_message(status: Option<FeatureStatus>) -> String {
     match status {
         Some(FeatureStatus::Error(e) | FeatureStatus::Skipped(e)) => e,
-        _ => "Das Feature konnte nicht berechnet werden".into(),
+        _ => tr!("state-feature-failed"),
     }
 }
 
@@ -2416,11 +2421,16 @@ fn body_kind(doc: &Document, r: BodyRef) -> BodyKind {
 
 // ---- Netz-Körper ------------------------------------------------------------------------------
 
-/// Bezeichnung (und Namensstamm) eingelesener Netze.
-const MESH_LABEL: &str = "Netz-Körper";
+/// Bezeichnung (und Namensstamm) eingelesener Netze. Der Name wird mit dem Feature gespeichert
+/// und bleibt in der Sprache, in der er entstand.
+fn mesh_label() -> String {
+    tr!("state-mesh-label")
+}
 
 /// Hinweis an ausgegrauten Menüpunkten bei gewähltem Netz-Körper (Spec §6).
-pub const MESH_LOCKED_HINT: &str = "Netz-Körper lassen sich nicht bearbeiten.";
+pub fn mesh_locked_hint() -> String {
+    tr!("state-mesh-locked")
+}
 
 /// Der Körper, den ein Feature fortführt (sein Ergebnis ist für den Nutzer „derselbe Körper“):
 /// Verschieben, Verrunden/Fase, bei Booleschen Operationen das Ziel.
@@ -2484,9 +2494,9 @@ impl AppState {
     /// Warum „Vereinigen“, „Abziehen“ und „Schneiden“ gerade nicht gehen (`None`: sie gehen).
     pub fn boolean_blocked(&self) -> Option<String> {
         if self.selected_is_mesh() {
-            Some(MESH_LOCKED_HINT.to_string())
+            Some(mesh_locked_hint())
         } else if self.solid_body_count() < 2 {
-            Some("Dafür werden mindestens zwei Körper benötigt.".to_string())
+            Some(tr!("state-need-two-bodies"))
         } else {
             self.chosen_lock()
         }
@@ -2495,9 +2505,9 @@ impl AppState {
     /// Warum „Verrunden“ und „Fase“ gerade nicht gehen (`None`: sie gehen).
     pub fn blend_blocked(&self) -> Option<String> {
         if self.selected_is_mesh() {
-            Some(MESH_LOCKED_HINT.to_string())
+            Some(mesh_locked_hint())
         } else if self.solid_body_count() == 0 {
-            Some("Dafür wird mindestens ein Körper benötigt.".to_string())
+            Some(tr!("state-need-one-body"))
         } else {
             self.chosen_lock()
         }
@@ -2506,7 +2516,7 @@ impl AppState {
     /// Warum „Skizze auf gewählter Fläche“ gerade nicht geht (`None`: es geht).
     pub fn sketch_on_face_blocked(&self) -> Option<String> {
         if self.selected_is_mesh() {
-            return Some(MESH_LOCKED_HINT.to_string());
+            return Some(mesh_locked_hint());
         }
         let planar = match self.selection {
             Some(Pick::Face(FaceRef { body, face })) => self
@@ -2519,7 +2529,7 @@ impl AppState {
         if let Some(body) = planar {
             self.body_lock(body)
         } else {
-            Some("Dafür zuerst eine ebene Fläche eines Körpers anklicken.".to_string())
+            Some(tr!("state-pick-planar-face"))
         }
     }
 
@@ -2551,8 +2561,9 @@ impl AppState {
     ) -> Result<FeatureId, String> {
         self.try_close_sketch()?;
         let trimmed = name.trim();
+        let label = mesh_label();
         let (name, counted) = if trimmed.is_empty() {
-            (self.next_name(MESH_LABEL), true)
+            (self.next_name(&label), true)
         } else {
             (trimmed.to_string(), false)
         };
@@ -2564,7 +2575,7 @@ impl AppState {
         match self.document.add_mesh_body(name, mesh, t) {
             Ok(id) => {
                 if counted {
-                    self.count_name(MESH_LABEL);
+                    self.count_name(&label);
                 }
                 self.hover = None;
                 self.selection = None;
@@ -2589,14 +2600,14 @@ impl AppState {
             .filter(|b| b.kind == BodyKind::Mesh)
             .map(|b| b.source)
         else {
-            return self.fail("Das ist kein Netz-Körper".into());
+            return self.fail(tr!("state-not-mesh"));
         };
         self.set_mesh_transform_of(r, t)
     }
 
     fn move_mesh_body(&mut self, r: BodyRef, delta: DVec3) -> Result<(), String> {
         let Some(mut t) = self.document.mesh_body(r.feature).map(|(_, t)| t) else {
-            return self.fail("Körper nicht gefunden".into());
+            return self.fail(tr!("state-body-not-found"));
         };
         t.offset += delta;
         self.set_mesh_transform_of(r, t)
@@ -2606,7 +2617,7 @@ impl AppState {
     fn set_mesh_transform_of(&mut self, r: BodyRef, t: MeshTransform) -> Result<(), String> {
         self.try_close_sketch()?;
         let Some(old) = self.document.mesh_body(r.feature).map(|(_, t)| t) else {
-            return self.fail("Körper nicht gefunden".into());
+            return self.fail(tr!("state-body-not-found"));
         };
         if old == t {
             return Ok(());
@@ -2630,21 +2641,19 @@ impl AppState {
             .filter(|b| b.kind == BodyKind::Mesh)
             .map(|b| b.source)
         else {
-            return self.fail("Das ist kein Netz-Körper".into());
+            return self.fail(tr!("state-not-mesh"));
         };
         let text = text.trim();
         if text.is_empty() {
-            return self.fail(EMPTY_FIELD.into());
+            return self.fail(crate::formula_field::empty());
         }
         self.try_close_sketch()?;
         let Some(f) = self.document.feature(r.feature) else {
-            return self.fail("Körper nicht gefunden".into());
+            return self.fail(tr!("state-body-not-found"));
         };
         if !planora_feature::field_keys(&f.kind).contains(&key) {
-            return self.fail(
-                FeatureError::InvalidInput("Dieses Feld kann keine Formel haben".into())
-                    .to_string(),
-            );
+            return self
+                .fail(FeatureError::InvalidInput(tr!("state-field-no-formula")).to_string());
         }
         let mut formulas = f.formulas().clone();
         let number = planora_feature::expr::plain_number(text);
@@ -2689,7 +2698,7 @@ impl AppState {
             .feature(r.feature)
             .map(|f| (f.kind.clone(), f.formulas().clone()))
         else {
-            return self.fail("Körper nicht gefunden".into());
+            return self.fail(tr!("state-body-not-found"));
         };
         let changed = match formulas {
             Some(t) => self
@@ -2847,7 +2856,7 @@ impl AppState {
     }
 
     /// Gemeinsamer Ablauf der Parameter-Aktionen: Bei offener Skizze gesperrt
-    /// ([`SKETCH_OPEN_LOCK`], Dokument unverändert). Sonst die Änderung am Dokument (abgelehnt:
+    /// ([`sketch_open_lock`], Dokument unverändert). Sonst die Änderung am Dokument (abgelehnt:
     /// nichts ändert sich, Meldung in `message`), danach die Körper neu; Auswahl und gewählter
     /// Körper folgen den Regeln von [`AppState::refresh`]. Scheitert dadurch ein Feature, das
     /// vorher keinen Fehler hatte, nennt `message` das erste davon („„Quader 1“: …“).
@@ -2856,7 +2865,7 @@ impl AppState {
         act: impl FnOnce(&mut Document) -> Result<T, FeatureError>,
     ) -> Result<T, String> {
         if self.sketch_session.is_some() {
-            return self.fail(SKETCH_OPEN_LOCK.into());
+            return self.fail(sketch_open_lock());
         }
         let failed_before: Vec<FeatureId> = self
             .document
@@ -2880,7 +2889,7 @@ impl AppState {
             .iter()
             .find_map(|f| match &f.status {
                 FeatureStatus::Error(e) if !failed_before.contains(&f.id) => {
-                    Some(format!("„{}“: {e}", f.name))
+                    Some(tr!("tree-status-line", name = &f.name, error = e))
                 }
                 _ => None,
             });

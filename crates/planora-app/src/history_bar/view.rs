@@ -600,7 +600,7 @@ fn step_menu(r: &egui::Response, state: &AppState, id: FeatureId, action: &mut O
 /// Die wichtigsten Maße eines Schritts für den Hinweis: höchstens [`HOVER_ROWS`] Zeilen aus
 /// [`properties::parameter_rows`], Maße (mm, Grad) zuerst; ohne Maße die ersten Zeilen.
 #[doc(hidden)]
-pub fn hover_rows(state: &AppState, kind: &FeatureKind) -> Vec<(&'static str, String)> {
+pub fn hover_rows(state: &AppState, kind: &FeatureKind) -> Vec<(String, String)> {
     let (mut rows, rest): (Vec<_>, Vec<_>) = properties::parameter_rows(state, kind)
         .into_iter()
         .partition(|(_, value)| value.ends_with(" mm") || value.ends_with('°'));

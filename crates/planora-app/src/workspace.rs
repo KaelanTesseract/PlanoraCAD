@@ -12,7 +12,7 @@ use crate::import_dialog::ImportDialog;
 use crate::keymap::Keymap;
 use crate::parameter_dialog::ParameterDialog;
 use crate::places::{FavoriteChange, Places};
-use crate::state::{AppState, REDO_FAILED, UNDO_FAILED};
+use crate::state::{AppState, redo_failed, undo_failed};
 use crate::step_import_dialog::StepImportDialog;
 use crate::undo_labels::describe_change;
 use planora_feature::Snapshot;
@@ -335,7 +335,7 @@ impl DocTab {
     /// Nimmt den letzten Schritt zurück. Offene Änderungen werden vorher ein Schritt. Gelingt
     /// das Zurückladen, schließen die Fenster des Tabs (sie gehören zum alten Stand); schlägt es
     /// fehl, bleibt das Dokument, nur dieser Schritt wird verworfen und `state.message` sagt
-    /// [`UNDO_FAILED`] (Spec §6a.8). Bei offener Skizze nur deren Verlauf (R10); das Dokument
+    /// [`undo_failed`] (Spec §6a.8). Bei offener Skizze nur deren Verlauf (R10); das Dokument
     /// bleibt dann unberührt, auch wenn die Skizze nichts zurückzunehmen hat.
     pub fn undo(&mut self) -> Result<(), String> {
         if let Some(why) = self.history_locked() {
@@ -360,14 +360,14 @@ impl DocTab {
             }
             Err(e) => {
                 self.history.discard_undo();
-                self.state.message = Some(UNDO_FAILED.into());
+                self.state.message = Some(undo_failed());
                 Err(e)
             }
         }
     }
 
     /// Stellt den zuletzt zurückgenommenen Schritt wieder her (Gegenstück zu [`DocTab::undo`];
-    /// Meldung bei Fehler [`REDO_FAILED`]; bei offener Skizze nur deren Verlauf).
+    /// Meldung bei Fehler [`redo_failed`]; bei offener Skizze nur deren Verlauf).
     pub fn redo(&mut self) -> Result<(), String> {
         if let Some(why) = self.history_locked() {
             return Err(why);
@@ -391,7 +391,7 @@ impl DocTab {
             }
             Err(e) => {
                 self.history.discard_redo();
-                self.state.message = Some(REDO_FAILED.into());
+                self.state.message = Some(redo_failed());
                 Err(e)
             }
         }
@@ -420,7 +420,7 @@ impl DocTab {
     pub fn after_parameter_change(&mut self) {
         self.observe_history(false);
         if self.feature_dialog.take().is_some() {
-            self.state.info = Some(crate::parameter_dialog::DIALOG_CLOSED.into());
+            self.state.info = Some(crate::parameter_dialog::dialog_closed());
         }
     }
 

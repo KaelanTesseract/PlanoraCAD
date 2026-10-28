@@ -864,8 +864,8 @@ fn history_bar_speaks_english() {
         bar_frame(&mut d, &mut s, vec![Event::PointerMoved(at)]);
         let seen = bar_settle(&mut d, &mut s, 30);
         assert_has("Hinweis", &seen, &["Double-click opens the settings."]);
-        // Die Maße im Hinweis kommen aus den Eigenschaften (Task 7).
-        assert_english("Hinweis", &seen, &[], &["Körper:"]);
+        // Die Maße im Hinweis kommen aus den Eigenschaften (seit Task 7 englisch).
+        assert_english("Hinweis", &seen, &[], &[]);
         let at = rects.steps[0].1.center();
         bar_frame(&mut d, &mut s, vec![Event::PointerMoved(at)]);
         let seen = bar_settle(&mut d, &mut s, 30);
@@ -890,7 +890,7 @@ fn history_bar_speaks_english() {
         bar_frame(&mut d, &mut s, vec![Event::PointerMoved(at)]);
         let seen = bar_settle(&mut d, &mut s, 30);
         assert_has("zurückgesetzt", &seen, &["Rolled back"]);
-        assert_english("zurückgesetzt", &seen, &[], &["Körper:"]);
+        assert_english("zurückgesetzt", &seen, &[], &[]);
         assert_eq!(
             history_bar::lock_hint(),
             "This body is rolled back. Jump to the end of the history first."

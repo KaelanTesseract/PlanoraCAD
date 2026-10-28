@@ -23,7 +23,7 @@ use planora_app::export_dialog::{ExportDialog, ExportFormat};
 use planora_app::feature_dialog::FeatureDialog;
 use planora_app::history::{History, snapshot_bytes};
 use planora_app::import_dialog::ImportDialog;
-use planora_app::properties::POSITION_LABEL;
+use planora_app::properties::position_label;
 use planora_app::state::*;
 use planora_app::workspace::*;
 use planora_app::{drawing_view, fonts, sheet_dialog, tabs, theme, viewport};
@@ -500,8 +500,8 @@ fn key(k: Key) -> Event {
 fn position_x_field(seen: &[Seen]) -> Pos2 {
     let label = seen
         .iter()
-        .find(|s| s.text == POSITION_LABEL)
-        .unwrap_or_else(|| panic!("„{POSITION_LABEL}“ fehlt"))
+        .find(|s| s.text == position_label())
+        .unwrap_or_else(|| panic!("„{}“ fehlt", position_label()))
         .rect;
     let field = seen
         .iter()
@@ -511,7 +511,7 @@ fn position_x_field(seen: &[Seen]) -> Pos2 {
                 && s.text.parse::<f64>().is_ok()
         })
         .min_by(|a, b| a.rect.left().total_cmp(&b.rect.left()))
-        .unwrap_or_else(|| panic!("kein Zahlenfeld unter „{POSITION_LABEL}“: {seen:?}"));
+        .unwrap_or_else(|| panic!("kein Zahlenfeld unter „{}“: {seen:?}", position_label()));
     field.rect.center()
 }
 
@@ -874,7 +874,7 @@ fn restore_failure_drops_one_step() {
     assert_eq!(undo_len(&w), 2);
     let edits = st(&mut w).document.edit_count();
     assert!(tab(&mut w).undo().is_err());
-    assert_eq!(st(&mut w).message.as_deref(), Some(UNDO_FAILED));
+    assert_eq!(st(&mut w).message, Some(undo_failed()));
     assert_same(&st(&mut w).snapshot(), &s2, "Dokument unverändert");
     assert_eq!(st(&mut w).document.edit_count(), edits);
     assert_eq!(undo_len(&w), 1, "nur der kaputte Schritt fällt weg");
@@ -891,7 +891,7 @@ fn restore_failure_drops_one_step() {
     h.commit_undo();
     *tab(&mut w).history_mut() = h;
     assert!(tab(&mut w).redo().is_err());
-    assert_eq!(st(&mut w).message.as_deref(), Some(REDO_FAILED));
+    assert_eq!(st(&mut w).message, Some(redo_failed()));
     assert_same(&st(&mut w).snapshot(), &s0, "Dokument unverändert");
     assert_eq!(redo_len(&w), 0, "nur der kaputte Schritt fällt weg");
     assert_eq!(undo_len(&w), 0);
@@ -1137,7 +1137,7 @@ fn moved_body_stays_selected_through_undo_and_redo() {
     rig.frame(vec![press(p + vec2(30.0, 0.0), false)]);
     rig.settle();
     assert_eq!(rig.undo_len(), 2);
-    let shows_position = |seen: &[Seen]| seen.iter().any(|s| s.text == POSITION_LABEL);
+    let shows_position = |seen: &[Seen]| seen.iter().any(|s| s.text == position_label());
 
     rig.ws().active_tab_mut().undo().unwrap();
     let seen = rig.settle();
