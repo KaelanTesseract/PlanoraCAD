@@ -83,6 +83,12 @@ impl From<Msg> for String {
     }
 }
 
+impl From<String> for Msg {
+    fn from(s: String) -> Self {
+        Msg::Raw(s)
+    }
+}
+
 impl From<String> for MsgArg {
     fn from(s: String) -> Self {
         MsgArg::Text(s)

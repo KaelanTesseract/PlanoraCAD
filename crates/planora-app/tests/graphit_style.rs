@@ -475,10 +475,10 @@ fn no_text_is_clipped_at_1400px() {
         s.text(must);
     }
     // Der Schalter „Waagerecht/senkrecht erkennen“ steht in zwei Zeilen.
-    assert_eq!(sketch_panel::AUTO_AXIS, "Waagerecht/senkrecht erkennen");
+    assert_eq!(sketch_panel::auto_axis(), "Waagerecht/senkrecht erkennen");
     s.text(&sketch_panel::auto_axis_label());
     assert!(
-        !sketch_panel::AUTO_AXIS_HINT.contains("  "),
+        !sketch_panel::auto_axis_hint().contains("  "),
         "Leerzeichen-Kolonne im Hinweistext"
     );
     nothing_clipped(&s, "Skizzenfelder");

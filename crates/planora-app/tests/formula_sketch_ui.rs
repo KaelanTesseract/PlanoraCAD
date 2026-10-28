@@ -12,8 +12,8 @@ use egui::epaint::{ClippedShape, Shape};
 use egui::{Color32, Event, Key, Modifiers, PointerButton, Pos2, Rect, Vec2, vec2};
 use planora_app::app::PlanoraApp;
 use planora_app::formula_field::fx_label;
-use planora_app::sketch_panel::{self, LIST_FX_LABEL};
-use planora_app::sketch_state::{ConstraintAction, DRIVEN_NO_FORMULA, Item};
+use planora_app::sketch_panel::{self, list_fx_label};
+use planora_app::sketch_state::{ConstraintAction, Item, driven_no_formula};
 use planora_app::state::{AppState, StandardPlane, sketch_open_lock};
 use planora_app::workspace::Workspace;
 use planora_app::{fonts, shell_panels, theme};
@@ -485,7 +485,7 @@ fn sketch_new_dimension_formula() {
     );
     assert_eq!(*sf, before);
     assert_eq!(
-        se.message.as_deref(),
+        se.message_text().as_deref(),
         Some("Hier wird ein Winkel erwartet, die Formel ergibt eine Länge.")
     );
 }
@@ -563,7 +563,7 @@ fn sketch_unsolvable_is_rejected_in_session() {
     type_text(&c, &mut r.app, SIZE, "Breite*2");
     enter(&c, &mut r.app, SIZE);
     let s = state(&mut r.app);
-    let msg = s.sketch_session.as_ref().unwrap().message.clone().unwrap();
+    let msg = s.sketch_session.as_ref().unwrap().message_text().unwrap();
     assert!(
         msg == "Widerspruch: Die Änderung widerspricht vorhandenen Abhängigkeiten"
             || msg == "Die Skizze ließ sich nach der Änderung nicht lösen",
@@ -630,7 +630,7 @@ fn unsolved_formula_sketch_shows_its_error_in_the_editor() {
     let (se, sf) = s.session_draft_mut().unwrap();
     se.set_dimension_input(sf, r.dim, "35", &scope).unwrap();
     assert_eq!(
-        se.message.as_deref(),
+        se.message_text().as_deref(),
         Some("Mit den Werten der Formeln widersprechen sich Abhängigkeiten")
     );
 }
@@ -659,7 +659,7 @@ fn driven_drops_formula() {
     let before = sf.clone();
     assert_eq!(
         se.set_dimension_input(sf, id, "Breite", &scope),
-        Err(DRIVEN_NO_FORMULA.to_string())
+        Err(driven_no_formula())
     );
     assert_eq!(*sf, before);
     se.set_driven(&mut sf.sketch, id, false).unwrap();
@@ -691,9 +691,9 @@ fn driven_drops_formula() {
             .sketch_session
             .as_ref()
             .unwrap()
-            .message
+            .message_text()
             .as_deref(),
-        Some(DRIVEN_NO_FORMULA)
+        Some(driven_no_formula().as_str())
     );
     assert_eq!(draft_formula(state(&mut r.app), id), None);
 }
@@ -712,7 +712,7 @@ fn a_new_redundant_dimension_drops_its_formula() {
     assert!(sf.sketch.constraint(id).unwrap().driven);
     assert_eq!(sf.formulas.get(&id), None, "anzeigend: keine Formel");
     assert_eq!(
-        se.message.as_deref(),
+        se.message_text().as_deref(),
         Some("Dieses Maß ist bereits durch andere Abhängigkeiten bestimmt und wird nur angezeigt")
     );
 }
@@ -971,7 +971,7 @@ fn accessibility_names_of_field_and_fx() {
             .unwrap_or_else(|| panic!("kein Knoten „{label}“"))
             .clone()
     };
-    assert_eq!(node(LIST_FX_LABEL).role(), Role::Button);
+    assert_eq!(node(&list_fx_label()).role(), Role::Button);
     assert_eq!(node(&fx_label()).role(), Role::Button);
     assert_eq!(node("Abstand").role(), Role::TextInput);
 }

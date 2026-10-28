@@ -431,7 +431,7 @@ fn jump_clears_session_bits() {
         let (se, _) = sess(&mut w);
         assert!(!se.pending.is_empty() && !se.pending_pos.is_empty());
         se.selection = vec![Item::Curve(c)];
-        se.message = Some("alt".into());
+        se.message = Some(planora_app::msg::Msg::Raw("alt".into()));
         se.dragging = Some(p);
         se.last_report = None;
     }
@@ -459,7 +459,7 @@ fn jump_clears_session_bits() {
     {
         let (se, _) = sess(&mut w);
         se.selection = vec![Item::Curve(c)];
-        se.message = Some("alt".into());
+        se.message = Some(planora_app::msg::Msg::Raw("alt".into()));
         se.dragging = Some(p);
         se.last_report = None;
     }
@@ -491,7 +491,7 @@ fn jump_clears_session_bits() {
     {
         let (se, _) = sess(&mut w);
         se.selection = vec![Item::Point(p)];
-        se.message = Some("alt".into());
+        se.message = Some(planora_app::msg::Msg::Raw("alt".into()));
         se.last_report = None;
     }
     assert!(st(&mut w).redo_sketch());

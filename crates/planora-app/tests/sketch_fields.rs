@@ -246,9 +246,12 @@ fn all_nine_tools_are_buttons_with_tooltips_and_widget_info() {
     settle(&c, &mut app, SIZE);
     let strip = field(&c, "Leiste");
     let buttons = sketch_panel::strip_buttons(&c);
-    let labels: Vec<&str> = sketch_panel::TOOLS.iter().map(|(_, l, _)| *l).collect();
+    let labels: Vec<String> = sketch_panel::tools()
+        .into_iter()
+        .map(|(_, l, _)| l)
+        .collect();
     assert_eq!(
-        buttons.iter().map(|(l, _)| *l).collect::<Vec<_>>(),
+        buttons.iter().map(|(l, _)| l.clone()).collect::<Vec<_>>(),
         labels,
         "alle neun Werkzeuge in der Reihenfolge der Liste"
     );
@@ -269,12 +272,12 @@ fn all_nine_tools_are_buttons_with_tooltips_and_widget_info() {
         .take()
         .expect("AccessKit-Baum");
     out.drop_without_applying_deltas();
-    for (tool, label, _) in sketch_panel::TOOLS {
+    for (tool, label, _) in sketch_panel::tools() {
         let node = update
             .nodes
             .iter()
             .map(|(_, n)| n)
-            .find(|n| n.label() == Some(label))
+            .find(|n| n.label() == Some(label.as_str()))
             .unwrap_or_else(|| panic!("kein Knoten „{label}“"));
         assert_eq!(node.role(), Role::Button, "{label}");
         let want = if tool == Tool::Select {
@@ -288,7 +291,7 @@ fn all_nine_tools_are_buttons_with_tooltips_and_widget_info() {
     let at = |c: &egui::Context, label: &str| {
         sketch_panel::strip_buttons(c)
             .into_iter()
-            .find(|(l, _)| *l == label)
+            .find(|(l, _)| l == label)
             .unwrap()
             .1
     };
@@ -296,21 +299,21 @@ fn all_nine_tools_are_buttons_with_tooltips_and_widget_info() {
     // kurz nach einem Klick keine Hinweistexte).
     // Werkzeuge mit Kürzel nennen die Taste („Linie (L)“).
     let km = planora_app::keymap::Keymap::defaults();
-    for (tool, label, hint) in sketch_panel::TOOLS {
-        let r = at(&c, label);
+    for (tool, label, hint) in sketch_panel::tools() {
+        let r = at(&c, &label);
         frame(&c, &mut app, SIZE, vec![moved(r.center())]);
         frame(&c, &mut app, SIZE, vec![moved(r.center())]);
         let shot = frame(&c, &mut app, SIZE, vec![]);
         let title = match planora_app::keymap::Action::for_sketch_tool(tool) {
-            Some(a) => planora_app::keymap::with_hint(&km, a, label),
+            Some(a) => planora_app::keymap::with_hint(&km, a, &label),
             None => label.to_string(),
         };
         assert!(shot.has(&title), "Hinweistext „{title}“ fehlt");
-        assert!(shot.has(hint), "Hinweis zu „{label}“ fehlt");
+        assert!(shot.has(&hint), "Hinweis zu „{label}“ fehlt");
     }
     let p = theme::palette(true);
-    for (tool, label, _) in sketch_panel::TOOLS {
-        let r = at(&c, label);
+    for (tool, label, _) in sketch_panel::tools() {
+        let r = at(&c, &label);
         // Klick wählt das Werkzeug.
         let shot = click(&c, &mut app, SIZE, r.center());
         assert_eq!(state(&mut app).sketch_session.as_ref().unwrap().tool, tool);
@@ -553,7 +556,7 @@ fn foot_shows_status_and_end_sketch() {
     let t = shot.find_in(foot, "2 Freiheitsgrade");
     assert_eq!(t.color, p.text_secondary);
     // Der Hinweis zum Werkzeug steht ebenfalls im Fuß.
-    let hint = sketch_panel::TOOLS[0].2;
+    let hint = sketch_panel::tools()[0].2.clone();
     assert!(
         shot.texts
             .iter()

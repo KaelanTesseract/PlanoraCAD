@@ -257,11 +257,11 @@ fn every_hand_drawn_icon_draws_with_the_theme_width() {
 #[test]
 fn every_sketch_tool_and_action_has_an_icon_source() {
     use icons::IconSource;
-    use planora_app::sketch_panel::{ACTIONS, TOOLS};
-    assert_eq!(TOOLS.len(), 9);
+    use planora_app::sketch_panel::{ACTIONS, tools};
+    assert_eq!(tools().len(), 9);
     assert_eq!(ACTIONS.len(), 16);
     let mut sources = Vec::new();
-    for (tool, ..) in TOOLS {
+    for (tool, ..) in tools() {
         sources.push((format!("{tool:?}"), icons::sketch_tool_icon(tool)));
     }
     for action in ACTIONS {

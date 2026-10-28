@@ -1,4 +1,5 @@
 use crate::history::{History, sketch_bytes};
+use crate::msg::Msg;
 use crate::sketch_state::SketchSession;
 use glam::{Vec2, Vec3};
 use planora_exchange::{ExchangeMesh, MeshReport, MeshTransform, check_mesh};
@@ -2016,7 +2017,10 @@ impl AppState {
             }
             Err(e) => {
                 let message = tr!("state-sketch-commit-failed", error = e.to_string());
-                se.message = Some(message.clone());
+                se.message = Some(crate::msg!(
+                    "state-sketch-commit-failed",
+                    error = e.to_string()
+                ));
                 self.sketch_session = Some(se);
                 self.sketch_draft = Some(draft);
                 self.sketch_history = history;
@@ -2237,36 +2241,45 @@ impl AppState {
     /// Skizzen-Feature sichtbar sind, sind erlaubt. Fehler stehen auch in der Meldung der
     /// Sitzung.
     pub fn project_edge_into_sketch(&mut self, body: usize, edge: Id<Edge>) -> Result<(), String> {
-        let result = self.try_project_edge(body, edge);
-        if let (Err(e), Some(se)) = (&result, self.sketch_session.as_mut()) {
-            se.message = Some(e.clone());
+        match self.try_project_edge(body, edge) {
+            Ok(()) => Ok(()),
+            Err(m) => {
+                let text = m.text();
+                if let Some(se) = self.sketch_session.as_mut() {
+                    se.message = Some(m);
+                }
+                Err(text)
+            }
         }
-        result
     }
 
-    fn try_project_edge(&mut self, body: usize, edge: Id<Edge>) -> Result<(), String> {
+    fn try_project_edge(&mut self, body: usize, edge: Id<Edge>) -> Result<(), Msg> {
         let id = self
             .open_sketch_id()
-            .ok_or_else(|| tr!("state-no-open-sketch"))?;
+            .ok_or_else(|| crate::msg!("state-no-open-sketch"))?;
         let source = self
             .bodies
             .get(body)
             .map(|b| b.source)
-            .ok_or_else(|| tr!("state-body-not-found"))?;
+            .ok_or_else(|| crate::msg!("state-body-not-found"))?;
         let solid = self
             .document
             .visible_bodies_before(id)
             .into_iter()
             .find(|v| v.body == source)
             .map(|v| v.solid.clone())
-            .ok_or_else(|| tr!("state-edge-body-later"))?;
+            .ok_or_else(|| crate::msg!("state-edge-body-later"))?;
         let edge_ref = planora_feature::EdgeRef::from_edge(&solid, edge, &self.kernel.tolerance)
-            .map_err(|e| tr!("state-edge-copy-failed", error = e.to_string()))?;
+            .map_err(|e| crate::msg!("state-edge-copy-failed", error = e.to_string()))?;
         let (Some(se), Some(draft)) = (self.sketch_session.as_mut(), self.sketch_draft.as_mut())
         else {
-            return Err(tr!("state-no-open-sketch"));
+            return Err(crate::msg!("state-no-open-sketch"));
         };
-        let curve = se.project_edge(&mut draft.sketch, &solid, edge)?;
+        // Fehler der Sitzung stehen schon als Grund in ihrer Meldung.
+        let curve = match se.project_edge(&mut draft.sketch, &solid, edge) {
+            Ok(c) => c,
+            Err(e) => return Err(se.message.clone().unwrap_or(Msg::Raw(e))),
+        };
         draft.copies.push(EdgeCopy {
             curve,
             edge: edge_ref,

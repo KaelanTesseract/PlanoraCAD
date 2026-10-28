@@ -7,6 +7,7 @@
 use crate::formula_field::{FX, FormulaField, names_hint};
 use crate::icons::{self, Icon, IconSource};
 use crate::keymap::{Action, with_hint};
+use crate::msg::Msg;
 use crate::shell::{self, ShellMode, ShellRects, ShellState};
 use crate::shell_panels;
 use crate::sketch_state::{ConstraintAction, Item, Severity, SketchSession, Tool, formula_problem};
@@ -15,56 +16,60 @@ use crate::state::AppState;
 use crate::theme;
 use egui::RichText;
 use planora_feature::{FeatureId, ParamScope, ParamUnit, SketchFeature, constraint_unit};
+use planora_i18n::tr;
 use planora_math::DVec2;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind};
 use planora_sketch::model::{CurveKind, Sketch};
 
-const _: () = assert!(TOOLS.len() == crate::shell::STRIP_TOOLS);
+const _: () = assert!(TOOL_ORDER.len() == crate::shell::STRIP_TOOLS);
 
-/// Werkzeuge der Skizzenleiste: Werkzeug, Beschriftung, Hinweis.
-pub const TOOLS: [(Tool, &str, &str); 9] = [
-    (
-        Tool::Select,
-        "Auswahl",
-        "Klick wählt, Umschalt + Klick ergänzt; Punkte lassen sich ziehen.",
-    ),
-    (Tool::Point, "Punkt", "Klick setzt einen Punkt."),
-    (
-        Tool::Line,
-        "Linie",
-        "Punkte nacheinander anklicken; Eingabe, Doppelklick oder Esc beendet den Linienzug.",
-    ),
-    (
-        Tool::Rectangle,
-        "Rechteck",
-        "Zwei gegenüberliegende Ecken anklicken.",
-    ),
-    (
-        Tool::Circle,
-        "Kreis",
-        "Mittelpunkt, dann einen Punkt auf dem Kreis anklicken.",
-    ),
-    (
-        Tool::Arc,
-        "Bogen",
-        "Mittelpunkt, Start und Ende (gegen den Uhrzeigersinn) anklicken.",
-    ),
-    (
-        Tool::Ellipse,
-        "Ellipse",
-        "Mittelpunkt, Ende der großen Halbachse, dann die Breite anklicken.",
-    ),
-    (
-        Tool::Spline,
-        "Spline",
-        "Stützpunkte anklicken; Eingabe oder Doppelklick legt den Spline an.",
-    ),
-    (
-        Tool::ProjectEdge,
-        "Körperkante kopieren",
-        "Eine Kante eines Körpers anklicken; sie wird als feste Konstruktionslinie übernommen.",
-    ),
+/// Werkzeuge der Skizzenleiste in der Reihenfolge der Leiste.
+pub const TOOL_ORDER: [Tool; 9] = [
+    Tool::Select,
+    Tool::Point,
+    Tool::Line,
+    Tool::Rectangle,
+    Tool::Circle,
+    Tool::Arc,
+    Tool::Ellipse,
+    Tool::Spline,
+    Tool::ProjectEdge,
 ];
+
+/// Beschriftung eines Werkzeugs in der aktuellen Sprache.
+pub fn tool_label(tool: Tool) -> String {
+    match tool {
+        Tool::Select => tr!("sketch-tool-select"),
+        Tool::Point => tr!("sketch-tool-point"),
+        Tool::Line => tr!("action-sketch-line"),
+        Tool::Rectangle => tr!("action-sketch-rectangle"),
+        Tool::Circle => tr!("action-sketch-circle"),
+        Tool::Arc => tr!("sketch-tool-arc"),
+        Tool::Ellipse => tr!("sketch-tool-ellipse"),
+        Tool::Spline => tr!("sketch-tool-spline"),
+        Tool::ProjectEdge => tr!("action-sketch-project-edge"),
+    }
+}
+
+/// Hinweis zu einem Werkzeug in der aktuellen Sprache.
+pub fn tool_hint(tool: Tool) -> String {
+    match tool {
+        Tool::Select => tr!("sketch-tool-select-hint"),
+        Tool::Point => tr!("sketch-tool-point-hint"),
+        Tool::Line => tr!("sketch-tool-line-hint"),
+        Tool::Rectangle => tr!("sketch-tool-rectangle-hint"),
+        Tool::Circle => tr!("sketch-tool-circle-hint"),
+        Tool::Arc => tr!("sketch-tool-arc-hint"),
+        Tool::Ellipse => tr!("sketch-tool-ellipse-hint"),
+        Tool::Spline => tr!("sketch-tool-spline-hint"),
+        Tool::ProjectEdge => tr!("sketch-tool-project-edge-hint"),
+    }
+}
+
+/// Werkzeuge der Skizzenleiste: Werkzeug, Beschriftung, Hinweis (in der aktuellen Sprache).
+pub fn tools() -> [(Tool, String, String); 9] {
+    TOOL_ORDER.map(|t| (t, tool_label(t), tool_hint(t)))
+}
 
 /// Abhängigkeiten, die die Skizzenleiste anbietet.
 pub const ACTIONS: [ConstraintAction; 16] = {
@@ -100,9 +105,9 @@ const VALUE_WIDTH: f32 = 100.0;
 /// Zahl zu Formel („fx“ erscheint davor) die Tastatur behält.
 const VALUE_FIELD_ID: &str = "planora-sketch-dimension-field";
 /// Name des Zeichens „fx“ in der Liste der Abhängigkeiten (Bildschirmleser).
-pub const LIST_FX_LABEL: &str = "Formel bearbeiten";
-/// Hinweis zum Zeichen „fx“ in der Liste.
-const LIST_FX_HINT: &str = "Dieses Maß folgt einer Formel. Klicken öffnet das Maßfeld.";
+pub fn list_fx_label() -> String {
+    tr!("sketch-fx-label")
+}
 /// Höhe der Abhängigkeitsliste, ab der sie rollt.
 const LIST_HEIGHT: f32 = 180.0;
 
@@ -147,8 +152,8 @@ struct PanelState {
     pattern_dx: String,
     pattern_dy: String,
     pattern_count: String,
-    /// Eigene Eingabefehler (z. B. keine Zahl).
-    error: Option<String>,
+    /// Eigene Eingabefehler (z. B. keine Zahl), als Grund gespeichert und beim Zeichnen übersetzt.
+    error: Option<Msg>,
 }
 
 impl PanelState {
@@ -168,8 +173,6 @@ impl PanelState {
 fn panel_id() -> egui::Id {
     egui::Id::new("planora-sketch-panel")
 }
-
-const NOT_A_NUMBER: &str = "Bitte eine Zahl eingeben";
 
 /// Maßfeld für das bestehende Maß `id`: zeigt die Formel, sonst den Wert (Winkel in Grad,
 /// gerundet). `None`, wenn es kein Maß ist.
@@ -265,8 +268,8 @@ fn strip_buttons_key() -> egui::Id {
 
 /// Name und Lage der Werkzeugknöpfe der Leiste im letzten Bild (für Tests).
 #[doc(hidden)]
-pub fn strip_buttons(ctx: &egui::Context) -> Vec<(&'static str, egui::Rect)> {
-    ctx.data(|d| d.get_temp::<Vec<(&'static str, egui::Rect)>>(strip_buttons_key()))
+pub fn strip_buttons(ctx: &egui::Context) -> Vec<(String, egui::Rect)> {
+    ctx.data(|d| d.get_temp::<Vec<(String, egui::Rect)>>(strip_buttons_key()))
         .unwrap_or_default()
 }
 
@@ -341,7 +344,7 @@ fn strip_field(
         (shell::STRIP_PAD - theme::panel_frame(dark).stroke.width) as i8,
     ));
     let inner = shell_panels::inner_size(&frame, rect.size());
-    let mut seen: Vec<(&'static str, egui::Rect)> = Vec::new();
+    let mut seen: Vec<(String, egui::Rect)> = Vec::new();
     // Die Tastenbelegung dieses Bilds (für die Taste im Hinweistext).
     let km = crate::keymap::mouse::current(ctx);
     shell_panels::field(
@@ -360,19 +363,19 @@ fn strip_field(
                 .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = shell::STRIP_SPACING;
-                    for (tool, label, hint) in TOOLS {
+                    for (tool, label, hint) in tools() {
                         let selected = se.tool == tool;
                         // Name mit Taste („Linie (L)“), ohne Eintrag in der Tabelle nur der
                         // Name.
                         let title = match Action::for_sketch_tool(tool) {
-                            Some(a) => with_hint(&km, a, label),
-                            None => label.to_string(),
+                            Some(a) => with_hint(&km, a, &label),
+                            None => label.clone(),
                         };
                         let r =
-                            strip_button(ui, icons::sketch_tool_icon(tool), label, selected, dark)
+                            strip_button(ui, icons::sketch_tool_icon(tool), &label, selected, dark)
                                 .on_hover_ui(|ui| {
                                     ui.strong(&title);
-                                    ui.label(hint);
+                                    ui.label(&hint);
                                 });
                         if r.clicked() {
                             se.choose_tool(sk, tool);
@@ -463,7 +466,7 @@ fn side_contents(
     ui.add_space(2.0);
 
     // Abhängigkeiten
-    theme::section_header(ui, "Abhängigkeiten", theme::SUB_HEADER_H);
+    theme::section_header(ui, &tr!("sketch-section-constraints"), theme::SUB_HEADER_H);
     let sk = &mut sf.sketch;
     let available = se.available_actions(sk);
     ui.horizontal_wrapped(|ui| {
@@ -475,7 +478,7 @@ fn side_contents(
                 action.label().to_string()
             };
             if tool_button(ui, icons::sketch_action_icon(action), &label, enabled)
-                .on_disabled_hover_text("Passt nicht zur aktuellen Auswahl.")
+                .on_disabled_hover_text(tr!("sketch-not-fitting"))
                 .clicked()
             {
                 panel.error = None;
@@ -494,10 +497,11 @@ fn side_contents(
     let problem = formula_problem(sf, se.last_report.as_ref());
     if let Some(m) = panel
         .error
-        .as_deref()
-        .or(se.message.as_deref())
-        .filter(|m| live.as_deref() != Some(*m))
-        .or(problem)
+        .as_ref()
+        .or(se.message.as_ref())
+        .map(Msg::text)
+        .filter(|m| live.as_deref() != Some(m.as_str()))
+        .or(problem.map(|p| p.text()))
     {
         ui.colored_label(theme::palette(ui.visuals().dark_mode).error, m);
     }
@@ -505,7 +509,7 @@ fn side_contents(
     ui.separator();
 
     // Bearbeiten
-    theme::section_header(ui, "Bearbeiten", theme::SUB_HEADER_H);
+    theme::section_header(ui, &tr!("sketch-section-edit"), theme::SUB_HEADER_H);
     let curves = se
         .selection
         .iter()
@@ -513,20 +517,21 @@ fn side_contents(
         .count();
     let axis = mirror_axis(se, sk);
     // Die Taste steht im Hinweistext („Konstruktion umschalten (X)“).
+    let construction = construction();
     let construction_tip = with_hint(
         &crate::keymap::mouse::current(ui.ctx()),
         Action::SketchConstruction,
-        CONSTRUCTION,
+        &construction,
     );
     ui.horizontal_wrapped(|ui| {
         if tool_button(
             ui,
             IconSource::Font(Icon::ToggleConstruction),
-            CONSTRUCTION,
+            &construction,
             se.can_toggle_construction(),
         )
         .on_hover_text(construction_tip)
-        .on_disabled_hover_text("Zuerst Kurven auswählen.")
+        .on_disabled_hover_text(tr!("sketch-select-curves-first"))
         .clicked()
         {
             se.toggle_construction_if_possible(sk);
@@ -534,27 +539,32 @@ fn side_contents(
         if tool_button(
             ui,
             IconSource::Font(Icon::Mirror),
-            "Spiegeln …",
+            &tr!("sketch-mirror-button"),
             axis.is_some() && curves >= 2,
         )
-        .on_disabled_hover_text("Kurven und zuletzt die Linie auswählen, an der gespiegelt wird.")
+        .on_disabled_hover_text(tr!("sketch-mirror-disabled"))
         .clicked()
         {
             panel.section = Some(Section::Mirror);
         }
-        if tool_button(ui, IconSource::Font(Icon::Pattern), "Muster …", curves > 0)
-            .on_disabled_hover_text("Zuerst Kurven auswählen.")
-            .clicked()
+        if tool_button(
+            ui,
+            IconSource::Font(Icon::Pattern),
+            &tr!("sketch-pattern-button"),
+            curves > 0,
+        )
+        .on_disabled_hover_text(tr!("sketch-select-curves-first"))
+        .clicked()
         {
             panel.section = Some(Section::Pattern);
         }
         if tool_button(
             ui,
             IconSource::Font(Icon::Delete),
-            "Löschen",
+            &tr!("action-delete"),
             !se.selection.is_empty(),
         )
-        .on_disabled_hover_text("Es ist nichts ausgewählt.")
+        .on_disabled_hover_text(tr!("sketch-delete-disabled"))
         .clicked()
         {
             se.delete_selection(sk);
@@ -567,11 +577,11 @@ fn side_contents(
         &mut se.auto_constrain,
         auto_axis_label(),
     ))
-    .on_hover_text(AUTO_AXIS_HINT);
+    .on_hover_text(auto_axis_hint());
     ui.separator();
 
     // Liste der Abhängigkeiten
-    theme::section_header(ui, "Abhängigkeiten der Skizze", theme::SUB_HEADER_H);
+    theme::section_header(ui, &tr!("sketch-section-list"), theme::SUB_HEADER_H);
     constraint_list(ui, se, sf, panel);
 }
 
@@ -596,10 +606,7 @@ fn foot_field(
         Severity::Warning => p.warning,
         Severity::Error => p.error,
     };
-    let hint = TOOLS
-        .iter()
-        .find(|(t, ..)| *t == se.tool)
-        .map_or("", |(_, _, h)| *h);
+    let hint = tool_hint(se.tool);
     let mut close = false;
     shell_panels::field(ctx, shell_panels::sketch_foot_id(), rect.min, frame, |ui| {
         ui.set_width(inner.x);
@@ -608,7 +615,7 @@ fn foot_field(
             let right = ui.cursor().right();
             let end = ui.add(icons::button(
                 Icon::EndSketch,
-                RichText::new("Skizze beenden").strong(),
+                RichText::new(tr!("sketch-end")).strong(),
             ));
             close = end.clicked();
             let gap = ui.spacing().item_spacing.x;
@@ -616,7 +623,7 @@ fn foot_field(
             let status = ui.colored_label(color, &text);
             let fixed = right - status.rect.left();
             let galley = ui.painter().layout_no_wrap(
-                hint.to_owned(),
+                hint.clone(),
                 egui::TextStyle::Body.resolve(ui.style()),
                 p.text_secondary,
             );
@@ -624,7 +631,7 @@ fn foot_field(
             // er (er steht auch im Hinweistext der Leiste).
             if ui.available_width() - sep > MIN_HINT_W {
                 ui.separator();
-                ui.add(egui::Label::new(RichText::new(hint).color(p.text_secondary)).truncate());
+                ui.add(egui::Label::new(RichText::new(&hint).color(p.text_secondary)).truncate());
             }
             // Wunsch: alles in einer Zeile; mindestens: Zustand und Knopf.
             let wanted = fixed + gap + sep + galley.size().x + margin;
@@ -682,9 +689,9 @@ fn value_editor(
 ) -> Option<String> {
     let editor = panel.editor.as_mut()?;
     let title = match editor.target {
-        EditTarget::New(a) => a.label().to_string(),
+        EditTarget::New(a) => a.label(),
         EditTarget::Existing(id) => match sf.sketch.constraint(id) {
-            Some(c) => crate::sketch_view::kind_label(&c.kind).to_string(),
+            Some(c) => crate::sketch_view::kind_label(&c.kind),
             None => {
                 panel.editor = None;
                 return None;
@@ -735,13 +742,13 @@ fn value_editor(
     }
     ui.horizontal(|ui| {
         if ui
-            .add_enabled(live.is_none(), egui::Button::new("OK").small())
-            .on_disabled_hover_text("Die Formel enthält einen Fehler.")
+            .add_enabled(live.is_none(), egui::Button::new(tr!("common-ok")).small())
+            .on_disabled_hover_text(tr!("sketch-formula-has-error"))
             .clicked()
         {
             ok = true;
         }
-        if ui.small_button("Abbrechen").clicked() {
+        if ui.small_button(tr!("common-cancel")).clicked() {
             cancel = true;
         }
     });
@@ -780,17 +787,20 @@ fn sections(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch, panel: &
     match panel.section {
         Some(Section::Mirror) => {
             let axis = mirror_axis(se, sk);
-            ui.label("Achse: die zuletzt ausgewählte Linie.");
+            ui.label(tr!("sketch-mirror-axis"));
             ui.horizontal(|ui| {
                 if ui
-                    .add_enabled(axis.is_some(), egui::Button::new("Spiegeln").small())
+                    .add_enabled(
+                        axis.is_some(),
+                        egui::Button::new(tr!("sketch-mirror-do")).small(),
+                    )
                     .clicked()
                     && let Some(axis) = axis
                     && se.mirror_selection(sk, axis).is_ok()
                 {
                     panel.section = None;
                 }
-                if ui.small_button("Abbrechen").clicked() {
+                if ui.small_button(tr!("common-cancel")).clicked() {
                     panel.section = None;
                 }
             });
@@ -798,8 +808,8 @@ fn sections(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch, panel: &
         Some(Section::Pattern) => {
             // Je Wert eine Zeile, damit alles in die Feldbreite 250 passt.
             for (label, text) in [
-                ("Versatz x", &mut panel.pattern_dx),
-                ("Versatz y", &mut panel.pattern_dy),
+                (tr!("sketch-offset-x"), &mut panel.pattern_dx),
+                (tr!("sketch-offset-y"), &mut panel.pattern_dy),
             ] {
                 ui.horizontal(|ui| {
                     ui.label(label);
@@ -808,14 +818,14 @@ fn sections(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch, panel: &
                 });
             }
             ui.horizontal(|ui| {
-                ui.label("Anzahl Kopien");
+                ui.label(tr!("sketch-pattern-count"));
                 theme::text_field(
                     ui,
                     egui::TextEdit::singleline(&mut panel.pattern_count).desired_width(40.0),
                 );
             });
             ui.horizontal(|ui| {
-                if ui.small_button("Erzeugen").clicked() {
+                if ui.small_button(tr!("create-create")).clicked() {
                     let dx = parse_number(&panel.pattern_dx);
                     let dy = parse_number(&panel.pattern_dy);
                     let count = panel.pattern_count.trim().parse::<usize>().ok();
@@ -826,10 +836,10 @@ fn sections(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch, panel: &
                                 panel.section = None;
                             }
                         }
-                        _ => panel.error = Some(NOT_A_NUMBER.into()),
+                        _ => panel.error = Some(crate::msg!("sketch-enter-number")),
                     }
                 }
-                if ui.small_button("Abbrechen").clicked() {
+                if ui.small_button(tr!("common-cancel")).clicked() {
                     panel.section = None;
                     panel.error = None;
                 }
@@ -854,7 +864,7 @@ fn constraint_list(
         .map(|(id, c)| (id, c.kind.clone(), c.driven))
         .collect();
     if rows.is_empty() {
-        ui.label(RichText::new("Noch keine Abhängigkeiten.").small().weak());
+        ui.label(RichText::new(tr!("sketch-list-empty")).small().weak());
         return;
     }
     let bad: Vec<ConstraintId> = se
@@ -882,13 +892,14 @@ fn constraint_list(
                     // Löschen als Symbol rechts, damit der Name die Feldbreite behält.
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let dark = ui.visuals().dark_mode;
+                        let delete_row = tr!("sketch-delete-row");
                         delete = icons::source_icon_button(
                             ui,
                             IconSource::Font(Icon::Delete),
-                            DELETE_ROW,
+                            &delete_row,
                             dark,
                         )
-                        .on_hover_text(DELETE_ROW)
+                        .on_hover_text(&delete_row)
                         .clicked();
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                             name = Some(ui.selectable_label(selected, text));
@@ -921,8 +932,8 @@ fn constraint_list(
                     }
                     let mut d = driven;
                     if ui
-                        .checkbox(&mut d, "anzeigend")
-                        .on_hover_text("Nur anzeigendes Maß (bestimmt nichts)")
+                        .checkbox(&mut d, tr!("sketch-driven"))
+                        .on_hover_text(tr!("sketch-driven-hint"))
                         .changed()
                         && se.set_driven(&mut sf.sketch, id, d).is_ok()
                     {
@@ -946,9 +957,10 @@ fn formula_row(ui: &mut egui::Ui, formula: &str) -> egui::Response {
     ui.horizontal(|ui| {
         let fx = ui
             .add(egui::Button::new(RichText::new(FX).italics()).frame(false))
-            .on_hover_text(LIST_FX_HINT);
+            .on_hover_text(tr!("sketch-fx-hint"));
+        let fx_label = list_fx_label();
         fx.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), LIST_FX_LABEL)
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &fx_label)
         });
         theme::focus_ring(ui, &fx);
         ui.add(egui::Label::new(RichText::new(formula).color(p.text_secondary)).truncate());
@@ -957,22 +969,22 @@ fn formula_row(ui: &mut egui::Ui, formula: &str) -> egui::Response {
     .inner
 }
 
-/// Beschriftung des Schalters [`AUTO_AXIS`] in zwei Zeilen („erkennen“ in der zweiten).
+/// Beschriftung des Schalters [`auto_axis`] in zwei Zeilen (nach dem ersten Wort umbrochen).
 pub fn auto_axis_label() -> String {
-    AUTO_AXIS.replacen(
-        ' ', "
-", 1,
-    )
+    auto_axis().replacen(' ', "\n", 1)
 }
 
-/// Erklärung zum Schalter [`AUTO_AXIS`] (Hinweistext).
-pub const AUTO_AXIS_HINT: &str = "Fast waagerechte oder senkrechte Linien bekommen beim Zeichnen von selbst die passende Abhängigkeit.";
+/// Erklärung zum Schalter [`auto_axis`] (Hinweistext).
+pub fn auto_axis_hint() -> String {
+    tr!("sketch-auto-axis-hint")
+}
 
 /// Schalter für automatisch waagerechte/senkrechte Linien.
-pub const AUTO_AXIS: &str = "Waagerecht/senkrecht erkennen";
+pub fn auto_axis() -> String {
+    tr!("sketch-auto-axis")
+}
 
 /// Beschriftung des Knopfs „Konstruktion umschalten“ (gleich dem Namen seiner Aktion).
-pub const CONSTRUCTION: &str = "Konstruktion umschalten";
-
-/// Beschreibung des Löschknopfs einer Zeile der Liste.
-const DELETE_ROW: &str = "Abhängigkeit löschen";
+pub fn construction() -> String {
+    Action::SketchConstruction.label()
+}

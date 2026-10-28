@@ -213,7 +213,12 @@ fn contradicting_and_redundant_dimensions_are_handled() {
         .apply(&mut sk, ConstraintAction::Distance, Some(10.0))
         .unwrap();
     assert!(sk.constraint(id).unwrap().driven);
-    assert!(se.message.as_deref().unwrap_or("").contains("bereits"));
+    assert!(
+        se.message_text()
+            .as_deref()
+            .unwrap_or("")
+            .contains("bereits")
+    );
 }
 
 #[test]
@@ -489,7 +494,10 @@ fn a_new_conflict_in_an_already_broken_sketch_is_rejected() {
     se.apply(&mut sk, ConstraintAction::Distance, Some(8.0))
         .unwrap();
     assert!(
-        se.message.as_deref().unwrap_or("").contains("weiterhin"),
+        se.message_text()
+            .as_deref()
+            .unwrap_or("")
+            .contains("weiterhin"),
         "{:?}",
         se.message
     );
@@ -514,7 +522,10 @@ fn a_tool_change_in_an_already_broken_sketch_warns() {
     se.set_tool(&mut sk, Tool::Point);
     click(&mut se, &mut sk, 30.0, 30.0);
     assert!(
-        se.message.as_deref().unwrap_or("").contains("weiterhin"),
+        se.message_text()
+            .as_deref()
+            .unwrap_or("")
+            .contains("weiterhin"),
         "{:?}",
         se.message
     );
