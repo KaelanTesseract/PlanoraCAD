@@ -348,7 +348,7 @@ fn write_failure_keeps_value_for_the_session_with_hint() {
         assert_eq!(fs::read(&blocker).unwrap(), b"x");
         assert_eq!(
             a.w.updates_message(),
-            Some(&RootMessage::Warning(verbose_not_saved()))
+            Some(&RootMessage::Warning(Note::VerboseNotSaved))
         );
         assert_eq!(
             verbose_not_saved().as_str(),

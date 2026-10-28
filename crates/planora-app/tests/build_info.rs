@@ -55,7 +55,16 @@ fn gpu_from_adapter_fills_unknown_driver() {
     a.name = "Testkarte".into();
     let g = gpu_from_adapter(&a);
     assert_eq!(g.name, "Testkarte");
-    assert_eq!(g.driver, "unbekannt");
+    assert_eq!(
+        g.driver, "",
+        "unbekannt: leer, der Text kommt erst in gpu_line"
+    );
+    let info = BuildInfo {
+        version: planora_app::running_version(),
+        os: "Test".into(),
+        gpu: Some(g.clone()),
+    };
+    assert_eq!(info.gpu_line(), "Testkarte · Treiber unbekannt · Vulkan");
     assert_eq!(g.backend, "Vulkan");
     a.driver = "NVIDIA".into();
     a.driver_info = "555.1".into();

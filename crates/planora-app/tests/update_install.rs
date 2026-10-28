@@ -525,7 +525,7 @@ fn wrong_checksum_never_launches_and_shows_message() {
         h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
         assert_eq!(
             h.state(),
-            InstallState::Failed(InstallError::Checksum.message())
+            InstallState::Failed(FailReason::Error(InstallError::Checksum))
         );
         assert_eq!(downloader.calls(), 2);
         h.settle();
@@ -690,7 +690,7 @@ fn all_users_mode_hands_the_mode_to_the_launcher() {
 /// Gemeinsamer Teil der Fälle, in denen der Installer nicht startet: das Programm läuft weiter,
 /// nichts ist vorgemerkt, der Download ist weg, die Meldung zeigt den Fehler und bietet die
 /// Version weiter an (auch wenn sie inzwischen nicht mehr vorgemerkt war).
-fn launch_refused(prefix: &str, answer: LaunchError, message: &str) {
+fn launch_refused(prefix: &str, answer: LaunchError, reason: FailReason, message: &str) {
     let launcher = FakeLauncher::answering(Err(answer));
     let mut h = Harness::offered(prefix, FakeDownloader::good(), launcher.clone());
     let gate = h.hold_reverify();
@@ -700,7 +700,8 @@ fn launch_refused(prefix: &str, answer: LaunchError, message: &str) {
     drop(gate);
     h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
     h.settle();
-    assert_eq!(h.state(), InstallState::Failed(message.to_string()));
+    assert_eq!(h.state(), InstallState::Failed(reason.clone()));
+    assert_eq!(reason.text(), message);
     assert_eq!(launcher.calls().len(), 1);
     assert_eq!(h.app.restart_phase(), RestartPhase::None);
     assert_eq!(h.app.ws_mut().pending_update(), None);
@@ -730,6 +731,7 @@ fn declined_admin_prompt_keeps_running_with_cancel_hint() {
     launch_refused(
         "planora-install-admin-abgelehnt",
         LaunchError::Cancelled,
+        FailReason::UpdateCancelled,
         update_cancelled().as_str(),
     );
     assert_eq!(
@@ -743,6 +745,7 @@ fn launch_error_keeps_running_with_message() {
     launch_refused(
         "planora-install-startfehler",
         LaunchError::Failed("kaputt".into()),
+        FailReason::LaunchFailed("kaputt".into()),
         &launch_failed("kaputt"),
     );
     assert_eq!(
@@ -761,7 +764,7 @@ fn pending_that_cannot_be_saved_aborts_before_launch() {
     h.until_offered();
     h.click(install_now().as_str());
     h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
-    assert_eq!(h.state(), InstallState::Failed(pending_not_saved()));
+    assert_eq!(h.state(), InstallState::Failed(FailReason::PendingNotSaved));
     assert!(!h.paths.setup.exists());
     assert!(launcher.calls().is_empty());
     assert!(!h.app.ws_mut().quit);
@@ -784,7 +787,7 @@ fn setup_changed_before_launch_is_not_started() {
     h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
     assert_eq!(
         h.state(),
-        InstallState::Failed(InstallError::Checksum.message())
+        InstallState::Failed(FailReason::Error(InstallError::Checksum))
     );
     assert!(launcher.calls().is_empty(), "nichts gestartet");
     assert!(!h.paths.setup.exists(), "Installer gelöscht");
@@ -1498,7 +1501,10 @@ fn disk_full_during_download_shows_message_and_leaves_no_file() {
     );
     h.click(install_now().as_str());
     h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
-    assert_eq!(h.state(), InstallState::Failed(error.message()));
+    assert_eq!(
+        h.state(),
+        InstallState::Failed(FailReason::Error(error.clone()))
+    );
     h.settle();
     assert!(h.sees(&error.message()), "{:?}", h.texts());
     assert!(!h.paths.setup.exists(), "Teil-Download gelöscht");

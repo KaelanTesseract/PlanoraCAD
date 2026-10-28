@@ -13,7 +13,7 @@ use planora_app::app::PlanoraApp;
 use planora_app::keymap::settings_ui::*;
 use planora_app::keymap::text::binding_text;
 use planora_app::keymap::{Action, Area, Binding, Gesture, KeyChord, Keymap, MouseButton, search};
-use planora_app::settings_window::RootMessage;
+use planora_app::settings_window::{Note, RootMessage};
 use planora_app::workspace::Workspace;
 use planora_app::{fonts, theme};
 use planora_project::config::Config;
@@ -627,7 +627,7 @@ fn save_failure_keeps_the_value_and_shows_a_hint() {
     assert!(r.ws().keys_pending);
     assert_eq!(
         r.state().message,
-        Some(RootMessage::Warning(keys_not_saved()))
+        Some(RootMessage::Warning(Note::KeysNotSaved))
     );
     assert!(r.sees(&keys_not_saved()), "{:?}", r.texts());
     // Gelingt das nächste Speichern, ist der Hinweis weg.

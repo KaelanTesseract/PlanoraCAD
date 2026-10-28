@@ -80,10 +80,11 @@ fn changing_the_directory_with_open_documents_is_refused_and_writes_nothing() {
     let other = e.tmp.join("Anderes");
     assert_eq!(
         change_root(&mut e.ws, &other),
-        Err(RootMessage::Warning(
-            "Bitte zuerst alle gespeicherten Dokumente schließen, bevor der Projektordner wechselt."
-                .into()
-        ))
+        Err(RootMessage::Warning(Note::RootLocked))
+    );
+    assert_eq!(
+        RootMessage::Warning(Note::RootLocked).text(),
+        "Bitte zuerst alle gespeicherten Dokumente schließen, bevor der Projektordner wechselt."
     );
     assert_eq!(
         fs::read(&e.cfg).unwrap(),
@@ -188,7 +189,7 @@ fn a_project_or_document_folder_is_not_accepted() {
     ] {
         assert_eq!(
             change_root(&mut e.ws, &target),
-            Err(RootMessage::Error(nested())),
+            Err(RootMessage::Error(Note::Nested)),
             "{target:?}"
         );
     }
@@ -209,9 +210,10 @@ fn an_unreadable_target_gives_a_plain_error_and_keeps_the_old_one() {
     // Eine Datei lässt sich nicht als Ordner lesen.
     let file = e.tmp.join("datei.txt");
     fs::write(&file, b"x").unwrap();
-    let Err(RootMessage::Error(text)) = change_root(&mut e.ws, &file) else {
+    let Err(message @ RootMessage::Error(_)) = change_root(&mut e.ws, &file) else {
         panic!("Fehler erwartet");
     };
+    let text = message.text();
     assert!(text.starts_with(unreadable().as_str()), "{text}");
     assert!(
         text.len() > unreadable().as_str().len(),
@@ -240,7 +242,7 @@ fn a_failed_save_switches_for_this_session_with_a_warning() {
     let other = e.tmp.join("Anderes");
     assert_eq!(
         change_root(&mut e.ws, &other),
-        Err(RootMessage::Warning(not_saved()))
+        Err(RootMessage::Warning(Note::NotSaved))
     );
     assert_eq!(
         not_saved().as_str(),
@@ -276,8 +278,14 @@ fn persisting_reports_whether_it_was_written() {
 fn errors_and_warnings_have_their_own_colours() {
     for dark in [false, true] {
         let p = theme::palette(dark);
-        assert_eq!(RootMessage::Error("x".into()).color(dark), p.error);
-        assert_eq!(RootMessage::Warning("x".into()).color(dark), p.warning);
+        assert_eq!(
+            RootMessage::Error(Note::Raw("x".into())).color(dark),
+            p.error
+        );
+        assert_eq!(
+            RootMessage::Warning(Note::Raw("x".into())).color(dark),
+            p.warning
+        );
         assert_ne!(p.error, p.warning);
     }
 }
@@ -550,9 +558,10 @@ fn a_refusal_is_shown_in_warning_colour() {
         fs::create_dir_all(e.given.join("Neu")).unwrap();
         let mut a = App::new(e, dark, 1400.0, 900.0);
         refuse(&mut a);
-        let Some(RootMessage::Warning(text)) = a.w.message().cloned() else {
+        let Some(message @ RootMessage::Warning(_)) = a.w.message().cloned() else {
             panic!("Warnung erwartet: {:?}", a.w.message());
         };
+        let text = message.text();
         assert!(
             a.w.chooser_mut().is_none(),
             "Auswahl schließt auch bei Ablehnung"
@@ -871,7 +880,7 @@ fn a_failed_save_keeps_the_transparency_for_the_session_with_a_hint() {
         assert_eq!(fs::read(&blocker).unwrap(), b"x");
         assert_eq!(
             a.w.appearance_message(),
-            Some(&RootMessage::Warning(transparency_not_saved()))
+            Some(&RootMessage::Warning(Note::TransparencyNotSaved))
         );
         assert_eq!(
             transparency_not_saved().as_str(),

@@ -164,7 +164,10 @@ pub enum InstallView<'a> {
     Restarting,
     /// Fehlermeldung mit „Download-Seite öffnen“ und „Schließen“, bei `retry` auch „Erneut
     /// versuchen“.
-    Failed { message: &'a str, retry: bool },
+    Failed {
+        reason: &'a update_install::FailReason,
+        retry: bool,
+    },
 }
 
 /// Zustand der Meldung zwischen den Bildern (gehört der App).
@@ -314,7 +317,7 @@ pub fn show(
     let mut open = true;
     let mut action = None;
     let failure = match install {
-        InstallView::Failed { message, .. } if state.installing => Some(message),
+        InstallView::Failed { reason, .. } if state.installing => Some(reason),
         _ => None,
     };
     let heading = match failure {
@@ -329,8 +332,8 @@ pub fn show(
         .show_with_footer(
             ctx,
             |ui| {
-                if let Some(message) = failure {
-                    failure_box(ui, message, dark);
+                if let Some(reason) = failure {
+                    failure_box(ui, &reason.text(), dark);
                     ui.add_space(theme::SPACE_3);
                 }
                 ui.label(running_line(&running_version()));

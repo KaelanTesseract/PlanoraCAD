@@ -242,7 +242,7 @@ fn about_texts_are_plain_language() {
     let mut all = vec![
         about_dialog::version_line(),
         about_dialog::license_line(),
-        about_dialog::sources_heading().as_str().to_string(),
+        about_dialog::sources_heading(),
     ];
     all.extend(about_dialog::sources().iter().map(|s| s.to_string()));
     assert_eq!(about_dialog::sources().len(), 4);

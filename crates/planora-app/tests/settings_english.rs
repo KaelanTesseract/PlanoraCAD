@@ -11,7 +11,9 @@ use common::{Screen, Seen, assert_english, assert_has, join};
 use planora_app::build_info::{BuildInfo, GpuInfo};
 use planora_app::settings_window::{self, CheckHint, SettingsWindow, change_root};
 use planora_app::update_dialog::{self, AfterUpdateAction, InstallView, UpdateDialog};
-use planora_app::update_install::{self, AfterUpdate, InstallState, Installer, NoDownload};
+use planora_app::update_install::{
+    self, AfterUpdate, FailReason, InstallState, Installer, NoDownload,
+};
 use planora_app::workspace::Workspace;
 use planora_app::{about_dialog, build_info, running_version};
 use planora_i18n::{english, german, with_lang};
@@ -126,7 +128,7 @@ fn settings_speaks_english() {
                 "Check for updates on start",
                 "When checking, the program asks GitHub, which can see your IP address.",
                 "Detailed log",
-                "Writes more to the log file on your computer, for example every command and how long it takes. Nothing of it is sent anywhere.",
+                "Writes more to the log file on your computer, for example every command and how long it takes. None of it is sent.",
                 "Check for updates now",
                 "Last check: never",
                 // Projekte
@@ -282,12 +284,12 @@ fn settings_messages_speak_english() {
         assert_eq!(
             change_root(&mut win.ws, &sub),
             Err(settings_window::RootMessage::Error(
-                settings_window::nested()
+                settings_window::Note::Nested
             ))
         );
         assert_eq!(
             planora_app::workspace::root_locked(),
-            "Please close all saved documents first, before the project folder changes."
+            "Close all saved documents before you change the project folder."
         );
     });
 }
@@ -403,7 +405,7 @@ fn updates_speak_english() {
             (
                 "Bereit",
                 InstallView::Waiting,
-                vec!["The update is ready and waits until you are done."],
+                vec!["The update is ready and will wait until you are done."],
             ),
             ("Neustart", InstallView::Restarting, vec![]),
         ];
@@ -414,12 +416,12 @@ fn updates_speak_english() {
         }
 
         // Fehler: Titel, Meldung, Knöpfe.
-        let message = update_install::install_error_text(&InstallError::Checksum);
+        let reason = FailReason::Error(InstallError::Checksum);
         let seen = draw_notice(
             &mut ws,
             &mut state,
             InstallView::Failed {
-                message: &message,
+                reason: &reason,
                 retry: true,
             },
             true,
@@ -440,7 +442,7 @@ fn updates_speak_english() {
             &mut ws,
             &mut state,
             InstallView::Failed {
-                message: &update_install::only_windows(),
+                reason: &FailReason::OnlyWindows,
                 retry: false,
             },
             true,
@@ -523,10 +525,10 @@ fn update_messages_speak_english() {
             ),
             (
                 update_install::status_text(&InstallState::ReadyToRestart, false),
-                "The update is ready and waits until you are done.",
+                "The update is ready and will wait until you are done.",
             ),
             (
-                update_install::status_text(&InstallState::Failed("x".into()), false),
+                update_install::status_text(&InstallState::Failed(FailReason::NoFolder), false),
                 "Update failed",
             ),
             (
@@ -551,8 +553,9 @@ fn update_messages_speak_english() {
         let InstallState::Failed(message) = installer.state() else {
             panic!("Fehler erwartet: {:?}", installer.state());
         };
+        assert_eq!(message, &FailReason::ForeignUrl);
         assert_eq!(
-            message,
+            message.text(),
             "The new version could not be downloaded (Address does not belong to the release). Please try again later."
         );
 
@@ -630,7 +633,7 @@ fn about_speaks_english() {
                 "License: GPL-3.0-only",
                 "Bundled fonts and icons",
                 "Font Montserrat (SIL Open Font License)",
-                "Icons Phosphor Icons (MIT)",
+                "Phosphor Icons (MIT)",
                 "Font Roboto (Apache-2.0)",
                 "Logo font Rajdhani (SIL Open Font License)",
             ],
@@ -671,7 +674,14 @@ fn about_speaks_english() {
             eframe::egui_wgpu::wgpu::Backend::Vulkan,
         );
         adapter.name = "Testcard".into();
-        assert_eq!(build_info::gpu_from_adapter(&adapter).driver, "unknown");
+        let gpu = build_info::gpu_from_adapter(&adapter);
+        assert_eq!(gpu.driver, "");
+        let info = BuildInfo {
+            version: running_version(),
+            os: "Test".into(),
+            gpu: Some(gpu),
+        };
+        assert_eq!(info.gpu_line(), "Testcard · Driver unknown · Vulkan");
     });
 }
 
@@ -703,4 +713,114 @@ fn settings_follow_the_language_while_open() {
         ],
     );
     assert_english("Umschalten", &en, &[], &[]);
+}
+
+#[test]
+fn shown_messages_follow_the_language() {
+    // Review-Fokus 5: eine schon angezeigte Meldung wechselt mit der Sprache im nächsten Bild.
+    // Durchsichtigkeit (Darstellung) und Update-Einstellung (Updates) im offenen Fenster.
+    let mut win = Win::blocked("planora-settings-switch-transparency");
+    win.w.open(false);
+    win.settle(3);
+    win.w.preview_transparency(&mut win.ws, 55);
+    let de = with_lang(&german(), || win.settle(3));
+    assert_has(
+        "Durchsichtigkeit deutsch",
+        &de,
+        &[
+            "Die Durchsichtigkeit gilt nur bis zum Programmende: die Einstellung konnte nicht gespeichert werden.",
+        ],
+    );
+    let en = with_lang(&english(), || win.settle(2));
+    assert_has(
+        "Durchsichtigkeit englisch",
+        &en,
+        &[
+            "The transparency only applies until you close the program: the setting could not be saved.",
+        ],
+    );
+    assert_english("Durchsichtigkeit englisch", &en, &[], &[]);
+
+    let mut win = Win::blocked("planora-settings-switch-updates");
+    win.w.open(false);
+    let de = with_lang(&german(), || win.click("Beim Start nach Updates suchen"));
+    assert_has(
+        "Updates deutsch",
+        &de,
+        &[
+            "Die Update-Einstellung gilt nur bis zum Programmende: sie konnte nicht gespeichert werden.",
+        ],
+    );
+    let en = with_lang(&english(), || win.settle(2));
+    assert_has(
+        "Updates englisch",
+        &en,
+        &["The update setting only applies until you close the program: it could not be saved."],
+    );
+    assert_english("Updates englisch", &en, &[], &[]);
+
+    // Gespeicherte Gründe (Verzeichnis, Tastenkürzel) liefern ihren Text je Sprache.
+    use settings_window::{Note, RootMessage};
+    let locked = RootMessage::Warning(Note::RootLocked);
+    assert_eq!(
+        with_lang(&german(), || locked.text()),
+        "Bitte zuerst alle gespeicherten Dokumente schließen, bevor der Projektordner wechselt."
+    );
+    assert_eq!(
+        with_lang(&english(), || locked.text()),
+        "Close all saved documents before you change the project folder."
+    );
+    let keys = RootMessage::Warning(Note::KeysNotSaved);
+    assert_ne!(
+        with_lang(&german(), || keys.text()),
+        with_lang(&english(), || keys.text())
+    );
+    let unreadable = RootMessage::Error(Note::Unreadable(std::io::ErrorKind::NotFound));
+    assert_eq!(
+        with_lang(&english(), || unreadable.text()),
+        "The folder cannot be read. The folder does not exist."
+    );
+
+    // Gescheiterte Updates: dieselbe Meldung der Download-Seite, erst Deutsch, dann Englisch.
+    let tmp = common::temp_root("planora-updates-switch");
+    let mut ws = Workspace::new(None, Config::default());
+    ws.config_path = tmp.join("config.json");
+    let mut state = UpdateDialog::default();
+    state.open_with(update(false));
+    state.installing = true;
+    let mut screen = Screen::new(1920.0, 1080.0);
+    screen.ctx.set_fonts(planora_app::fonts::definitions());
+    planora_app::theme::apply(&screen.ctx, true);
+    let reason = FailReason::Error(InstallError::Checksum);
+    let mut draw = |screen: &mut Screen| {
+        screen.settle(4, &mut |ctx| {
+            update_dialog::show(
+                ctx,
+                &mut ws,
+                &mut state,
+                InstallView::Failed {
+                    reason: &reason,
+                    retry: true,
+                },
+                true,
+            );
+        })
+    };
+    let de = with_lang(&german(), || draw(&mut screen));
+    assert_has(
+        "Fehler deutsch",
+        &de,
+        &["Update hat nicht geklappt", "Erneut versuchen"],
+    );
+    let en = with_lang(&english(), || draw(&mut screen));
+    assert_has(
+        "Fehler englisch",
+        &en,
+        &[
+            "Update failed",
+            "The downloaded file is damaged (the checksum does not match). Nothing was installed.",
+            "Try again",
+        ],
+    );
+    assert_english("Fehler englisch", &en, &[], &[]);
 }

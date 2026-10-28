@@ -134,8 +134,63 @@ pub enum InstallState {
     Downloading { done: u64, total: u64 },
     /// Der Installer liegt da und die Prüfsumme stimmt; jetzt der Neustart.
     ReadyToRestart,
-    /// Gescheitert; die Meldung in einfacher Sprache.
-    Failed(String),
+    /// Gescheitert; der Grund (der Text entsteht erst beim Zeichnen, in der Sprache des Bildes).
+    Failed(FailReason),
+}
+
+/// Warum ein Update gescheitert ist. Gespeichert wird der Grund, nicht der Text
+/// ([`FailReason::text`]), damit ein Wechsel der Sprache bei offener Meldung wirkt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FailReason {
+    /// Fehler des Downloads; die Einzelheit setzt die Quelle des Fehlers.
+    Error(InstallError),
+    /// Die Adresse gehört nicht zum Release.
+    ForeignUrl,
+    /// Der Thread des Downloads ist ohne Ergebnis geendet.
+    DownloadAborted,
+    /// Es gibt keinen Ordner für den Download.
+    NoFolder,
+    /// Der Thread der zweiten Prüfung ist ohne Ergebnis geendet.
+    CheckAborted,
+    /// Nicht unter Windows ([`only_windows`]).
+    OnlyWindows,
+    /// `update_pending` ließ sich nicht speichern ([`pending_not_saved`]).
+    PendingNotSaved,
+    /// Ein abgebrochener Download endet noch ([`still_stopping`]).
+    StillStopping,
+    /// Die Admin-Abfrage von Windows wurde abgelehnt ([`update_cancelled`]).
+    UpdateCancelled,
+    /// Der Installer startet nicht (der Grund von Windows).
+    LaunchFailed(String),
+    /// Der Start war nicht möglich, weil nicht installiert oder kein Download da ist.
+    LaunchNotInstalled,
+}
+
+impl FailReason {
+    /// Der Text in der aktuellen Sprache.
+    pub fn text(&self) -> String {
+        match self {
+            FailReason::Error(e) => install_error_text(e),
+            FailReason::ForeignUrl => {
+                install_error_text(&InstallError::Network(tr!("update-detail-foreign-url")))
+            }
+            FailReason::DownloadAborted => {
+                install_error_text(&InstallError::Io(tr!("update-detail-download-aborted")))
+            }
+            FailReason::NoFolder => {
+                install_error_text(&InstallError::Io(tr!("update-detail-no-folder")))
+            }
+            FailReason::CheckAborted => {
+                install_error_text(&InstallError::Io(tr!("update-detail-check-aborted")))
+            }
+            FailReason::OnlyWindows => only_windows(),
+            FailReason::PendingNotSaved => pending_not_saved(),
+            FailReason::StillStopping => still_stopping(),
+            FailReason::UpdateCancelled => update_cancelled(),
+            FailReason::LaunchFailed(detail) => launch_failed(detail),
+            FailReason::LaunchNotInstalled => launch_failed(&tr!("update-detail-not-installed")),
+        }
+    }
 }
 
 /// Was „Jetzt aktualisieren“ tut.
@@ -143,7 +198,7 @@ pub enum InstallState {
 pub enum InstallDecision {
     /// Den Installer laden und starten.
     Download,
-    /// Nicht unter Windows: Hinweis [`ONLY_WINDOWS`] und die Release-Seite öffnen.
+    /// Nicht unter Windows: Hinweis [`only_windows`] und die Release-Seite öffnen.
     OnlyWindows,
     /// Nicht installiert (etwa aus dem Bauordner): die Meldung bietet nur
     /// [`open_download_page`] ([`not_installed_hint`]).
@@ -228,9 +283,9 @@ impl Installer {
         self.handle.as_ref().is_some_and(|h| !h.is_finished())
     }
 
-    /// Setzt den Zustand auf `Failed(message)`.
-    pub fn fail(&mut self, message: impl Into<String>) {
-        self.state = InstallState::Failed(message.into());
+    /// Setzt den Zustand auf `Failed(reason)`.
+    pub fn fail(&mut self, reason: FailReason) {
+        self.state = InstallState::Failed(reason);
     }
 
     /// Zurück auf `Idle` (nach dem Schließen einer Fehlermeldung).
@@ -254,23 +309,21 @@ impl Installer {
             return;
         }
         if self.thread_running() {
-            self.fail(still_stopping());
+            self.fail(FailReason::StillStopping);
             return;
         }
         let release = &update.latest;
         if !release_url_ok(&release.setup.url) || !release_url_ok(&release.sha256.url) {
-            self.fail(install_error_text(&InstallError::Network(tr!(
-                "update-detail-foreign-url"
-            ))));
+            self.fail(FailReason::ForeignUrl);
             return;
         }
         let limit = match download_limit(release.setup.size) {
             Ok(limit) => limit,
-            Err(e) => return self.fail(install_error_text(&e)),
+            Err(e) => return self.fail(FailReason::Error(e)),
         };
         discard_download(&paths);
         if let Err(e) = prepare_dir(&paths) {
-            return self.fail(install_error_text(&e));
+            return self.fail(FailReason::Error(e));
         }
 
         let cancel = Arc::new(AtomicBool::new(false));
@@ -337,7 +390,7 @@ impl Installer {
             }
             Err(e) => {
                 discard_download(&paths);
-                self.fail(install_error_text(&InstallError::Io(e.to_string())));
+                self.fail(FailReason::Error(InstallError::Io(e.to_string())));
             }
         }
     }
@@ -358,16 +411,14 @@ impl Installer {
                             InstallState::ReadyToRestart
                         }
                         Err(InstallError::Cancelled) => InstallState::Idle,
-                        Err(e) => InstallState::Failed(install_error_text(&e)),
+                        Err(e) => InstallState::Failed(FailReason::Error(e)),
                     };
                     return;
                 }
                 Err(TryRecvError::Empty) => return,
                 Err(TryRecvError::Disconnected) => {
                     self.rx = None;
-                    self.state = InstallState::Failed(install_error_text(&InstallError::Io(tr!(
-                        "update-detail-download-aborted"
-                    ))));
+                    self.state = InstallState::Failed(FailReason::DownloadAborted);
                     return;
                 }
             }

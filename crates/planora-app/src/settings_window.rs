@@ -209,17 +209,59 @@ impl CheckHint {
     }
 }
 
+/// Grund einer Meldung im Fenster. Gespeichert wird der Grund, nicht der Text: gezeichnet wird in
+/// der Sprache des Bildes ([`Note::text`]), auch wenn sie bei offenem Fenster wechselt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Note {
+    TransparencyNotSaved,
+    UpdatesNotSaved,
+    VerboseNotSaved,
+    LanguageNotSaved,
+    KeysNotSaved,
+    /// Das neue Projektverzeichnis gilt nur bis zum Programmende.
+    NotSaved,
+    /// Gespeicherte Dokumente sind offen.
+    RootLocked,
+    /// Das Ziel ist selbst ein Projekt oder Dokument.
+    Nested,
+    /// Das Ziel lässt sich nicht lesen (mit dem Grund).
+    Unreadable(std::io::ErrorKind),
+    /// Fertiger Text aus dem Betriebssystem oder einer Bibliothek (nicht übersetzt).
+    Raw(String),
+}
+
+impl Note {
+    /// Der Text in der aktuellen Sprache.
+    pub fn text(&self) -> String {
+        match self {
+            Note::TransparencyNotSaved => transparency_not_saved(),
+            Note::UpdatesNotSaved => updates_not_saved(),
+            Note::VerboseNotSaved => verbose_not_saved(),
+            Note::LanguageNotSaved => language_not_saved(),
+            Note::KeysNotSaved => settings_ui::keys_not_saved(),
+            Note::NotSaved => not_saved(),
+            Note::RootLocked => root_locked(),
+            Note::Nested => nested(),
+            Note::Unreadable(kind) => {
+                format!("{} {}", unreadable(), file_chooser::io_message(*kind))
+            }
+            Note::Raw(text) => text.clone(),
+        }
+    }
+}
+
 /// Meldung nach einem Wechsel: Warnung (Warnfarbe) oder Fehler (Fehlerfarbe).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RootMessage {
-    Warning(String),
-    Error(String),
+    Warning(Note),
+    Error(Note),
 }
 
 impl RootMessage {
-    pub fn text(&self) -> &str {
+    /// Der Text in der aktuellen Sprache.
+    pub fn text(&self) -> String {
         match self {
-            RootMessage::Warning(t) | RootMessage::Error(t) => t,
+            RootMessage::Warning(n) | RootMessage::Error(n) => n.text(),
         }
     }
 
@@ -258,11 +300,7 @@ fn check_target(dir: &Path) -> Result<(), RootMessage> {
         return Ok(());
     }
     if let Err(e) = std::fs::read_dir(dir) {
-        return Err(RootMessage::Error(format!(
-            "{} {}",
-            unreadable(),
-            file_chooser::io_message(e.kind())
-        )));
+        return Err(RootMessage::Error(Note::Unreadable(e.kind())));
     }
     let document_name = dir.file_name().is_some_and(|n| {
         n.to_string_lossy()
@@ -270,7 +308,7 @@ fn check_target(dir: &Path) -> Result<(), RootMessage> {
             .ends_with(DOCUMENT_SUFFIX)
     });
     if document_name || dir.join(PROJECT_FILE).exists() || dir.join(DOCUMENT_FILE).exists() {
-        return Err(RootMessage::Error(nested()));
+        return Err(RootMessage::Error(Note::Nested));
     }
     Ok(())
 }
@@ -286,12 +324,13 @@ pub fn change_root(ws: &mut Workspace, dir: &Path) -> Result<(), RootMessage> {
         return Ok(());
     }
     if ws.has_saved_documents() {
-        return Err(RootMessage::Warning(root_locked()));
+        return Err(RootMessage::Warning(Note::RootLocked));
     }
     check_target(dir)?;
-    ws.choose_root(dir).map_err(RootMessage::Error)?;
+    ws.choose_root(dir)
+        .map_err(|e| RootMessage::Error(Note::Raw(e)))?;
     if !ws.try_persist_config() {
-        return Err(RootMessage::Warning(not_saved()));
+        return Err(RootMessage::Warning(Note::NotSaved));
     }
     Ok(())
 }
@@ -426,7 +465,7 @@ impl SettingsWindow {
     /// Hinweis nach dem Speichern einer Update-Einstellung: [`updates_not_saved`], wenn es
     /// misslang (der Wert gilt dann für die Sitzung), sonst keiner.
     fn note_updates_saved(&mut self, written: bool) {
-        self.updates_message = (!written).then(|| RootMessage::Warning(updates_not_saved()));
+        self.updates_message = (!written).then_some(RootMessage::Warning(Note::UpdatesNotSaved));
     }
 
     /// Was der Regler beim Ziehen tut: der Wert gilt sofort, ist aber noch nicht gespeichert. Er
@@ -444,7 +483,7 @@ impl SettingsWindow {
     fn save_transparency(&mut self, ws: &mut Workspace) {
         self.transparency_unsaved = false;
         self.appearance_message = (!ws.set_panel_transparency(ws.panel_transparency()))
-            .then(|| RootMessage::Warning(transparency_not_saved()));
+            .then_some(RootMessage::Warning(Note::TransparencyNotSaved));
     }
 
     /// Wie in der App: [`SettingsWindow::show`] mit den Schnellzugriffen des Arbeitsbereichs;
@@ -600,7 +639,7 @@ impl SettingsWindow {
         {
             let written = ws.set_language(&lang);
             self.appearance_message =
-                (!written).then(|| RootMessage::Warning(language_not_saved()));
+                (!written).then_some(RootMessage::Warning(Note::LanguageNotSaved));
         }
         if check_now && !locked {
             self.check_requested = true;
@@ -625,7 +664,8 @@ impl SettingsWindow {
         }
         if !locked && verbose != ws.verbose_log() {
             let written = ws.set_verbose_log(verbose);
-            self.updates_message = (!written).then(|| RootMessage::Warning(verbose_not_saved()));
+            self.updates_message =
+                (!written).then_some(RootMessage::Warning(Note::VerboseNotSaved));
         }
         for action in [body_action, footer_action] {
             let target = match action {

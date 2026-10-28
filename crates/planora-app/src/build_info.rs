@@ -40,11 +40,8 @@ pub fn gpu_from_adapter(info: &AdapterInfo) -> GpuInfo {
     let driver = driver.trim();
     GpuInfo {
         name: info.name.clone(),
-        driver: if driver.is_empty() {
-            tr!("build-driver-unknown")
-        } else {
-            driver.to_string()
-        },
+        // Leer, wenn unbekannt; der Text entsteht erst in `gpu_line`.
+        driver: driver.to_string(),
         backend: format!("{:?}", info.backend),
     }
 }
@@ -75,7 +72,11 @@ impl BuildInfo {
             Some(g) => tr!(
                 "build-gpu-line",
                 name = g.name.as_str(),
-                driver = g.driver.as_str(),
+                driver = if g.driver.is_empty() {
+                    tr!("build-driver-unknown")
+                } else {
+                    g.driver.clone()
+                },
                 backend = g.backend.as_str()
             ),
             None => gpu_unknown(),

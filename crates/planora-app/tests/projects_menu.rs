@@ -18,7 +18,7 @@ use planora_app::icons::{self, Icon};
 use planora_app::import_dialog::ImportDialog;
 use planora_app::project_actions;
 use planora_app::projects_window::DIRECTORY_BUTTON;
-use planora_app::settings_window::{RootMessage, change_directory, not_saved};
+use planora_app::settings_window::{Note, RootMessage, change_directory};
 use planora_app::shell::ShellState;
 use planora_app::state::{AppState, StandardPlane};
 use planora_app::step_import_dialog::StepImportDialog;
@@ -688,7 +688,7 @@ fn change_directory_and_come_back(blocked: bool) {
     if blocked {
         assert_eq!(
             message,
-            Some(RootMessage::Warning(not_saved())),
+            Some(RootMessage::Warning(Note::NotSaved)),
             "Warnung, Wechsel gilt trotzdem"
         );
     } else {

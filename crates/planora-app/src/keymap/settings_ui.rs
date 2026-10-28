@@ -31,7 +31,7 @@
 //! Durchsichtigkeit).
 
 use super::{Action, Binding, Gesture, KeyChord, Keymap, MouseButton, search, text};
-use crate::settings_window::RootMessage;
+use crate::settings_window::{Note, RootMessage};
 use crate::theme;
 use crate::workspace::Workspace;
 use planora_i18n::tr;
@@ -421,7 +421,7 @@ fn take(ws: &mut Workspace, state: &mut CaptureState, a: Action, index: usize, b
 
 /// Übernimmt `km` und speichert sie; misslingt das Speichern, der Hinweis [`keys_not_saved()`].
 fn commit(ws: &mut Workspace, state: &mut CaptureState, km: Keymap) {
-    state.message = (!ws.set_keymap(km)).then(|| RootMessage::Warning(keys_not_saved()));
+    state.message = (!ws.set_keymap(km)).then_some(RootMessage::Warning(Note::KeysNotSaved));
 }
 
 /// Was ein Klick im Abschnitt auslöst (nach dem Zeichnen ausgeführt).

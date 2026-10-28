@@ -24,8 +24,8 @@ use crate::step_import_dialog::{self, StepImportDialog};
 use crate::update_check::{self, CheckRequest, CheckResult, NoNetwork, UpdateChecker};
 use crate::update_dialog::{self, InstallView, UpdateAction, UpdateDialog};
 use crate::update_install::{
-    self, AfterUpdate, InstallDecision, InstallState, Installer, LaunchError, LockedSetup,
-    NoDownload, NoLaunch, SetupLauncher, ShellLauncher,
+    self, AfterUpdate, FailReason, InstallDecision, InstallState, Installer, LaunchError,
+    LockedSetup, NoDownload, NoLaunch, SetupLauncher, ShellLauncher,
 };
 use crate::versions_panel::VersionsUi;
 use crate::workspace::{Prompt, Workspace};
@@ -516,14 +516,10 @@ impl PlanoraApp {
                 Some(paths) => self
                     .installer
                     .start(&update, paths, Arc::clone(&self.downloader)),
-                None => self
-                    .installer
-                    .fail(update_install::install_error_text(&InstallError::Io(tr!(
-                        "update-detail-no-folder"
-                    )))),
+                None => self.installer.fail(FailReason::NoFolder),
             },
             InstallDecision::OnlyWindows => {
-                self.installer.fail(update_install::only_windows());
+                self.installer.fail(FailReason::OnlyWindows);
                 open_release_page(ctx, &update);
             }
             InstallDecision::NotInstalled => open_release_page(ctx, &update),
@@ -599,14 +595,12 @@ impl PlanoraApp {
             }
             RestartPhase::Verifying => {
                 let result = match self.reverify.as_ref().map(Receiver::try_recv) {
-                    Some(Ok(result)) => result,
+                    Some(Ok(result)) => result.map_err(FailReason::Error),
                     Some(Err(TryRecvError::Empty)) => {
                         ctx.request_repaint_after(Duration::from_millis(50));
                         return;
                     }
-                    Some(Err(TryRecvError::Disconnected)) | None => {
-                        Err(InstallError::Io(tr!("update-detail-check-aborted")))
-                    }
+                    Some(Err(TryRecvError::Disconnected)) | None => Err(FailReason::CheckAborted),
                 };
                 self.reverify = None;
                 match result {
@@ -622,7 +616,7 @@ impl PlanoraApp {
                         if let Some(paths) = self.installer.paths() {
                             discard_download(paths);
                         }
-                        self.installer.fail(update_install::install_error_text(&e));
+                        self.installer.fail(e);
                     }
                 }
             }
@@ -637,7 +631,7 @@ impl PlanoraApp {
         else {
             self.restart = RestartPhase::None;
             self.installer
-                .fail(update_install::install_error_text(&InstallError::Checksum));
+                .fail(FailReason::Error(InstallError::Checksum));
             return;
         };
         self.reverify = Some(update_install::reverify(
@@ -661,9 +655,7 @@ impl PlanoraApp {
             self.installer.target(),
             self.install_mode,
         ) else {
-            self.installer.fail(update_install::launch_failed(&tr!(
-                "update-detail-not-installed"
-            )));
+            self.installer.fail(FailReason::LaunchNotInstalled);
             return;
         };
         let from = crate::running_version();
@@ -674,7 +666,7 @@ impl PlanoraApp {
             let _ = self.ws.set_pending_update(None);
             drop(locked);
             discard_download(&paths);
-            self.installer.fail(update_install::pending_not_saved());
+            self.installer.fail(FailReason::PendingNotSaved);
             return;
         }
         if let Some(update) = &self.update_dialog.update
@@ -706,9 +698,9 @@ impl PlanoraApp {
     /// vormerken, Download und Patchnotes löschen, die Meldung zeigen und die Version weiter
     /// anbieten. Das Programm läuft in der bisherigen Version weiter.
     fn launch_refused(&mut self, paths: &DownloadPaths, e: &LaunchError) {
-        let message = match e {
-            LaunchError::Cancelled => update_install::update_cancelled(),
-            LaunchError::Failed(detail) => update_install::launch_failed(detail),
+        let reason = match e {
+            LaunchError::Cancelled => FailReason::UpdateCancelled,
+            LaunchError::Failed(detail) => FailReason::LaunchFailed(detail.clone()),
         };
         let why = match e {
             LaunchError::Cancelled => "Admin-Abfrage abgelehnt".to_string(),
@@ -721,7 +713,7 @@ impl PlanoraApp {
         let _ = self.ws.set_pending_update(None);
         let _ = std::fs::remove_file(update_install::notes_file(&self.ws));
         discard_download(paths);
-        self.installer.fail(message);
+        self.installer.fail(reason);
         if self.pending_notice.is_none() {
             self.pending_notice = self.update_dialog.update.clone();
         }
@@ -1531,7 +1523,7 @@ fn install_view(locked: bool, state: &InstallState, retry: bool) -> InstallView<
             total: *total,
         },
         InstallState::ReadyToRestart => InstallView::Waiting,
-        InstallState::Failed(message) => InstallView::Failed { message, retry },
+        InstallState::Failed(reason) => InstallView::Failed { reason, retry },
     }
 }
 
