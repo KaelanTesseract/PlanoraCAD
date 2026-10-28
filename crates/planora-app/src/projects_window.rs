@@ -27,7 +27,7 @@ use crate::icons::{self, Icon};
 use crate::jobs::{Job, Poll};
 use crate::project_actions::{self as actions, ProjectsUi, no_library, read_error_prefix};
 use crate::project_tiles::{
-    MAX_TILES, Scan, Tile, TileKind, Tone, changed_line, footer_text_of, meta_line,
+    MAX_TILES, Scan, ScanError, Tile, TileKind, Tone, changed_line, footer_text_of, meta_line,
     scan_library_with, tiles_at,
 };
 use crate::theme;
@@ -186,10 +186,31 @@ pub enum ProjectsEvent {
 }
 
 /// Einträge des Rechtsklick-Menüs einer Kachel; Projekte lassen sich nicht verschieben.
-pub fn tile_menu(kind: TileKind) -> Vec<String> {
+pub fn tile_menu(kind: TileKind) -> Vec<TileMenu> {
     match kind {
-        TileKind::Project => vec![rename(), delete()],
-        TileKind::Folder | TileKind::Document => vec![rename(), move_item(), delete()],
+        TileKind::Project => vec![TileMenu::Rename, TileMenu::Delete],
+        TileKind::Folder | TileKind::Document => {
+            vec![TileMenu::Rename, TileMenu::Move, TileMenu::Delete]
+        }
+    }
+}
+
+/// Ein Eintrag des Rechtsklick-Menüs einer Kachel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TileMenu {
+    Rename,
+    Move,
+    Delete,
+}
+
+impl TileMenu {
+    /// Beschriftung in der aktuellen Sprache.
+    pub fn label(self) -> String {
+        match self {
+            TileMenu::Rename => rename(),
+            TileMenu::Move => move_item(),
+            TileMenu::Delete => delete(),
+        }
     }
 }
 
@@ -206,7 +227,7 @@ pub fn grid_height_for(window_height: f32) -> f32 {
 
 /// Laufendes Lesen mit dem Stand, zu dem es begann.
 struct ScanJob {
-    job: Job<Result<Scan, String>>,
+    job: Job<Result<Scan, ScanError>>,
     revision: u64,
     generation: u64,
 }
@@ -247,7 +268,7 @@ enum Picture {
 enum Action {
     Select(NodePath),
     Activate(NodePath),
-    Menu(Tile, String),
+    Menu(Tile, TileMenu),
     Back,
     GoTo(NodePath),
     NewProject,
@@ -278,7 +299,7 @@ pub struct ProjectsWindow {
     location: NodePath,
     job: Option<ScanJob>,
     /// Letztes Ergebnis des Lesens.
-    data: Option<Result<Scan, String>>,
+    data: Option<Result<Scan, ScanError>>,
     /// Kacheln der aktuellen Ebene aus `data`.
     tiles: Vec<Tile>,
     /// Die Ebene hat mehr als [`MAX_TILES`] Einträge.
@@ -553,7 +574,7 @@ impl ProjectsWindow {
         let result = match j.job.poll() {
             Poll::Pending => return,
             Poll::Ready(r) => r,
-            Poll::Lost => Err(scan_lost()),
+            Poll::Lost => Err(ScanError::Lost),
         };
         let revision = j.revision;
         self.job = None;
@@ -561,7 +582,7 @@ impl ProjectsWindow {
             result
                 .as_ref()
                 .map(|s| s.tree.clone())
-                .map_err(Clone::clone),
+                .map_err(ScanError::text),
             revision,
         );
         self.data = Some(result);
@@ -593,7 +614,7 @@ impl ProjectsWindow {
 
     /// Letztes Ergebnis des Lesens (`None`, solange nichts gelesen ist oder ohne
     /// Projektverzeichnis).
-    pub fn scan_state(&self) -> Option<&Result<Scan, String>> {
+    pub fn scan_state(&self) -> Option<&Result<Scan, ScanError>> {
         self.data.as_ref()
     }
 
@@ -854,19 +875,18 @@ impl ProjectsWindow {
 
     /// Eintrag `entry` aus [`tile_menu`] für `tile`: öffnet das passende Fenster der Aktionen
     /// (andere offene Fenster der Aktionen schließen dabei).
-    pub fn apply_menu(&mut self, tile: &Tile, entry: impl AsRef<str>) {
+    pub fn apply_menu(&mut self, tile: &Tile, entry: TileMenu) {
         let path = tile.path.clone();
-        let entry = entry.as_ref();
         match entry {
-            e if e == rename() => {
+            TileMenu::Rename => {
                 self.ui.close_dialogs();
                 actions::request_rename(&mut self.ui, path, &tile.name);
             }
-            e if e == move_item() && tile.kind != TileKind::Project => {
+            TileMenu::Move if tile.kind != TileKind::Project => {
                 self.ui.close_dialogs();
                 actions::request_move(&mut self.ui, path);
             }
-            e if e == delete() => {
+            TileMenu::Delete => {
                 self.ui.close_dialogs();
                 actions::request_delete(&mut self.ui, path);
             }
@@ -1024,7 +1044,7 @@ impl ProjectsWindow {
         };
         let message = match (&self.data, frame.has_library) {
             (_, false) => Some((no_library(), p.text_primary)),
-            (Some(Err(e)), true) => Some((format!("{}{e}", read_error_prefix()), p.error)),
+            (Some(Err(e)), true) => Some((format!("{}{}", read_error_prefix(), e.text()), p.error)),
             (None, true) => Some((reading(), p.text_tertiary)),
             (Some(Ok(_)), true) if tiles.is_empty() && location_empty => {
                 Some((empty(), p.text_primary))
@@ -1097,7 +1117,7 @@ impl ProjectsWindow {
                             }
                             resp.context_menu(|ui| {
                                 for entry in tile_menu(tile.kind) {
-                                    if ui.button(&entry).clicked() {
+                                    if ui.button(entry.label()).clicked() {
                                         out.push(Action::Menu(tile.clone(), entry));
                                         ui.close();
                                     }

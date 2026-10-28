@@ -288,17 +288,18 @@ fn projects_window_speaks_english() {
         assert_english("Lesefehler", &seen, &[], &[]);
 
         // Texte der Kachelzeilen und Menüs ohne Fenster.
-        assert_eq!(
-            projects_window::tile_menu(TileKind::Folder),
-            ["Rename …", "Move …", "Delete …"]
-        );
+        let labels: Vec<String> = projects_window::tile_menu(TileKind::Folder)
+            .into_iter()
+            .map(projects_window::TileMenu::label)
+            .collect();
+        assert_eq!(labels, ["Rename …", "Move …", "Delete …"]);
         assert_eq!(project_tiles::documents_text(1), "1 document");
         assert_eq!(project_tiles::documents_text(3), "3 documents");
         assert_eq!(project_tiles::too_many(), "Only the first 500 are shown.");
         assert_eq!(project_tiles::cancelled(), "Cancelled");
         assert_eq!(projects_window::no_bodies(), "No bodies yet");
         assert_eq!(projects_window::too_complex(), "Thumbnail too complex");
-        assert_eq!(projects_window::building_text(), "Being created …");
+        assert_eq!(projects_window::building_text(), "Creating thumbnail …");
         assert_eq!(
             planora_app::thumbnail_cache::impossible_text(),
             "Thumbnail not possible"
@@ -331,7 +332,7 @@ fn projects_window_speaks_english() {
         let p = lib(&ws).create_project("P").unwrap();
         let doc = box_doc(&ws, &p, "Teil");
         assert!(project_actions::rename_node(&mut ws, &mut st, &doc, "Neu.pcad").is_none());
-        assert_notice(&ws, "Document names must not end in “.pcad”.");
+        assert_notice(&ws, "Document names must not end in \".pcad\".");
         ws.prompt = None;
         project_actions::open_node(&mut ws, &doc);
         ws.prompt = None;
@@ -381,6 +382,26 @@ fn open_windows_follow_a_language_switch() {
     with_lang(&german(), || pw.click(at, egui::PointerButton::Secondary));
     let seen = with_lang(&english(), || pw.draw(3));
     assert_has("Menü", &seen, &["Rename …", "Delete …"]);
+
+    // Ein Lesefehler, der deutsch entstand, wird englisch gezeichnet (gespeichert ist der Grund).
+    pw.w.ui.close_dialogs();
+    let root = lib(&pw.ws).root().path().to_path_buf();
+    std::fs::remove_dir_all(&root).unwrap();
+    pw.w.ui.invalidate();
+    let seen = with_lang(&german(), || pw.ready());
+    assert!(
+        seen.iter().any(|s| s
+            .text
+            .starts_with("Das Projektverzeichnis lässt sich nicht lesen: ")),
+        "{}",
+        join(&seen)
+    );
+    let seen = with_lang(&english(), || pw.draw(3));
+    let error = seen
+        .iter()
+        .find(|s| s.text.starts_with("The project folder cannot be read: "))
+        .unwrap_or_else(|| panic!("Lesefehler fehlt in {}", join(&seen)));
+    assert!(error.text.ends_with("was not found."), "{}", error.text);
 }
 
 fn assert_notice(ws: &Workspace, want: &str) {
@@ -428,8 +449,8 @@ impl Fc {
 
 #[test]
 fn file_chooser_speaks_english() {
-    // Das Anlegen in Deutsch, das Zeichnen in Englisch: bekannte Ordner und Meldungen folgen der
-    // Sprache des Bildes (Review Focus 5).
+    // Das Anlegen in Deutsch, das Zeichnen in Englisch: bekannte Ordner und Meldungen (gespeichert
+    // wird der Grund, `ChooserError`) folgen der Sprache des Bildes (Review Focus 5).
     let dir = chooser_dir("planora-chooser-english");
     let mut save = with_lang(&german(), || {
         FileChooser::save(dir.clone(), String::new(), "stl")
@@ -457,9 +478,23 @@ fn file_chooser_speaks_english() {
             assert_eq!(b.place.label, want, "{:?}", b.place);
         }
 
-        // Fehlerfälle: ungültiger Name, Ersetzen.
+        // Die Meldung wird deutsch ausgelöst und englisch gezeichnet: gespeichert ist der Grund.
         save.file_name = "a?b".into();
-        assert_eq!(save.confirm(), ChooserAction::None);
+        with_lang(&german(), || {
+            assert_eq!(save.confirm(), ChooserAction::None)
+        });
+        assert_eq!(
+            save.error_text().as_deref(),
+            Some(
+                "Please enter a valid file name (without special characters such as : ? * or slashes)."
+            )
+        );
+        assert_eq!(
+            with_lang(&german(), || save.error_text()).as_deref(),
+            Some(
+                "Bitte einen gültigen Dateinamen eingeben (ohne Sonderzeichen wie : ? * oder Schrägstriche)."
+            )
+        );
         let seen = fc.show(&mut save);
         assert_has(
             "Name",
@@ -482,6 +517,19 @@ fn file_chooser_speaks_english() {
             ],
         );
         assert_english("Ersetzen", &seen, &[], &[]);
+
+        // Weitere Gründe: Favorit fehlt, Ordner nicht lesbar.
+        save.error = Some(file_chooser::ChooserError::FavoriteMissing);
+        assert!(
+            save.error_text()
+                .unwrap()
+                .starts_with("This folder does not exist.")
+        );
+        save.error = Some(file_chooser::ChooserError::Io(std::io::ErrorKind::NotFound));
+        assert_eq!(
+            save.error_text().as_deref(),
+            Some("The folder does not exist.")
+        );
 
         // Der Ordner aus der Eingabezeile fehlt.
         save.dir_text = dir.join("gibt-es-nicht").display().to_string();
@@ -659,7 +707,6 @@ fn versions_panel_speaks_english() {
         versions_panel::set_comment(&mut ws, 1, "x");
         assert_notice(&ws, "The document has not been saved yet.");
         let mut ws = ws_with_versions("planora-versions-english4", 1);
-        let path = ws.active_tab().path.clone().unwrap();
         // Nur die Ansicht bleibt offen: sie hat keinen beschreibbaren Tab.
         versions_panel::open_version(&mut ws, 1);
         ws.close_tab(0);
@@ -669,7 +716,6 @@ fn versions_panel_speaks_english() {
             &ws,
             "To change anything, open the document for editing first.",
         );
-        let _ = path;
     });
 }
 
@@ -685,7 +731,7 @@ fn workspace_messages_speak_english() {
         assert_eq!(w::no_root(), "No project folder has been chosen yet.");
         assert_eq!(
             w::document_name_suffix(),
-            "Document names must not end in “.pcad”."
+            "Document names must not end in \".pcad\"."
         );
 
         // Vorgeschlagener Name eines neuen Tabs: in der Sprache des Anlegens.
@@ -706,7 +752,7 @@ fn workspace_messages_speak_english() {
         );
         assert_eq!(
             ws.save_as(&p, "Teil.pcad", ""),
-            Err("Document names must not end in “.pcad”.".to_string())
+            Err("Document names must not end in \".pcad\".".to_string())
         );
         assert_eq!(
             ws.create_document(&Vec::new(), "T"),
@@ -998,7 +1044,12 @@ fn feature_tree_speaks_english() {
             note.starts_with("\"Box\" will be deleted.\n\nNote: A sketch on a face"),
             "{note}"
         );
-        assert!(note.contains("\"S1\", \"S2\" is therefore kept"), "{note}");
+        assert!(
+            note.ends_with(
+                "It is therefore kept and then lies on the face of that body: \"S1\", \"S2\""
+            ),
+            "{note}"
+        );
         assert_eq!(
             browser::apply_delete(
                 &mut s,

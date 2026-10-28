@@ -272,7 +272,7 @@ fn at_most_24_favorites() {
         ..Places::default()
     };
     c.apply_menu(&RowMenu::AddFavorite(d.join("x")), &mut shared);
-    assert_eq!(c.error.as_deref(), Some(favorites_full().as_str()));
+    assert_eq!(c.error_text().as_deref(), Some(favorites_full().as_str()));
     assert!(!shared.changed());
     let _ = fs::remove_dir_all(&d);
 }
@@ -492,7 +492,7 @@ fn a_full_list_on_disk_reports_instead_of_dropping_silently() {
         c.show_with(ui, &mut shared);
     })
     .drop_without_applying_deltas();
-    assert_eq!(c.error.as_deref(), Some(favorites_full().as_str()));
+    assert_eq!(c.error_text().as_deref(), Some(favorites_full().as_str()));
     assert_eq!(shared.notice, None, "übernommen");
     // Danach verschwindet sie aus dem Arbeitsbereich.
     a.save_places(shared);
@@ -604,9 +604,12 @@ fn a_place_changes_the_folder_or_reports_a_missing_one() {
     assert!(c.error.is_none());
     assert!(!c.go_to_place(&to(PlaceKind::Drive, d.join("fehlt"))));
     assert_eq!(c.dir(), d.join("Teile").as_path(), "bleibt im Ordner");
-    assert_eq!(c.error.as_deref(), Some("Diesen Ordner gibt es nicht."));
+    assert_eq!(
+        c.error_text().as_deref(),
+        Some("Diesen Ordner gibt es nicht.")
+    );
     assert!(!c.go_to_place(&to(PlaceKind::Favorite, d.join("fehlt"))));
-    assert_eq!(c.error.as_deref(), Some(favorite_missing().as_str()));
+    assert_eq!(c.error_text().as_deref(), Some(favorite_missing().as_str()));
     let _ = fs::remove_dir_all(&d);
 }
 

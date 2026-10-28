@@ -79,7 +79,7 @@ fn status_words() -> [String; 4] {
 pub struct DeletePlan {
     pub target: FeatureId,
     pub dependents: Vec<FeatureId>,
-    pub names: Vec<(String, String)>,
+    pub names: Vec<(String, FeatureKind)>,
     /// Name des Features selbst.
     pub target_name: String,
     /// Hinweis zu Skizzen auf Flächen, die nicht mitgelöscht werden, aber danach woanders
@@ -97,7 +97,7 @@ impl DeletePlan {
                 .names
                 .iter()
                 .map(|(name, kind)| {
-                    tr!("tree-plan-item", name = name.as_str(), kind = kind.as_str())
+                    tr!("tree-plan-item", name = name.as_str(), kind = kind.label())
                 })
                 .collect();
             tr!(
@@ -132,7 +132,7 @@ impl DeletePlan {
 pub fn delete_plan(state: &AppState, id: FeatureId) -> DeletePlan {
     let doc = &state.document;
     let dependents = doc.dependents(id);
-    let label = |f: &planora_feature::Feature| (f.name.clone(), f.kind.label().to_string());
+    let label = |f: &planora_feature::Feature| (f.name.clone(), f.kind.clone());
     let names = dependents
         .iter()
         .filter_map(|d| doc.feature(*d))
@@ -564,21 +564,18 @@ fn status_view(
     weak: Color32,
     error: Color32,
 ) -> (Option<String>, Option<Color32>, Option<String>) {
+    let [error_word, skipped_word, suppressed_word, not_computed_word] = status_words();
     match status {
         FeatureStatus::Ok => (None, None, None),
-        FeatureStatus::Error(e) => (Some(tr!("tree-status-error")), Some(error), Some(e.clone())),
-        FeatureStatus::Skipped(why) => (
-            Some(tr!("tree-status-skipped")),
-            Some(weak),
-            Some(why.clone()),
-        ),
+        FeatureStatus::Error(e) => (Some(error_word), Some(error), Some(e.clone())),
+        FeatureStatus::Skipped(why) => (Some(skipped_word), Some(weak), Some(why.clone())),
         FeatureStatus::Suppressed => (
-            Some(tr!("tree-status-suppressed")),
+            Some(suppressed_word),
             Some(weak),
             Some(tr!("tree-suppressed-hint")),
         ),
         FeatureStatus::NotComputed => (
-            Some(tr!("tree-status-not-computed")),
+            Some(not_computed_word),
             Some(weak),
             Some(tr!("tree-not-computed-hint")),
         ),

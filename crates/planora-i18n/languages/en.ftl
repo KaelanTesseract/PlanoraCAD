@@ -364,7 +364,7 @@ build-gpu-line = { $name } · Driver { $driver } · { $backend }
 
 ## Projects and documents
 project-no-root = No project folder has been chosen yet.
-project-name-suffix = Document names must not end in “.pcad”.
+project-name-suffix = Document names must not end in ".pcad".
 project-nothing-to-undo = There is nothing to undo.
 project-nothing-to-redo = There is nothing to redo.
 project-export-writing = This is not possible while exporting.
@@ -466,7 +466,7 @@ projects-reading = Reading the projects …
 projects-back-hint = Up one level
 projects-empty-project = This project is still empty. Create a document or a folder above.
 projects-empty-folder = This folder is still empty. Create a document or a folder above.
-projects-building = Being created …
+projects-building = Creating thumbnail …
 projects-no-library = No project folder has been chosen yet. Choose the folder for your projects with "Project folder …".
 projects-read-error-prefix = { "The project folder cannot be read: " }
 projects-close-first = Please close the affected documents first.
@@ -569,7 +569,7 @@ tree-delete-single = "{ $name }" will be deleted.
 tree-delete-with-dependents = "{ $name }" and { $count } feature(s) that depend on it will be deleted: { $list }
 tree-plan-item = "{ $name }" ({ $kind })
 tree-quoted-name = "{ $name }"
-tree-face-note = Note: A sketch on a face depends only on the feature that created the face (primitive, extrusion or revolution), not on later operations. { $names } is therefore kept and then lies on the face of that body.
+tree-face-note = Note: A sketch on a face depends only on the feature that created the face (primitive, extrusion or revolution), not on later operations. It is therefore kept and then lies on the face of that body: { $names }
 tree-feature-gone = The feature no longer exists
 tree-plan-changed = The effects of deleting have changed; please check the new list
 tree-status-line = "{ $name }": { $error }

@@ -113,7 +113,7 @@ pub enum Thumb {
     /// Über einer Grenze (Dreiecke, Zeit, Zeichenaufwand).
     TooComplex,
     /// Ein früherer Aufbau dieser Version hat das Programm beendet; gespeichert, nie neu gebaut
-    /// (Kacheltext [`IMPOSSIBLE_TEXT`]).
+    /// (Kacheltext [`impossible_text`]).
     Impossible,
     /// Eine andere Instanz baut diese Miniatur gerade (nichts gebaut, nichts gespeichert).
     Busy,

@@ -535,6 +535,9 @@ pub enum Prompt {
     AutosaveOffer {
         tab: u64,
     },
+    /// Hinweis als fertiger Text in der Sprache beim Entstehen: die Rückfrage ist modal, die
+    /// Sprache lässt sich bei offenem Hinweis nicht wechseln (die Fehlertexte aus
+    /// `planora-project` folgen in Task 13).
     Notice(String),
 }
 

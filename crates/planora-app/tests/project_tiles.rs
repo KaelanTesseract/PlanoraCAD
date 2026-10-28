@@ -538,7 +538,10 @@ fn a_cancelled_scan_stops() {
     .unwrap();
     let progress = Progress::new();
     progress.cancel();
-    assert_eq!(scan_library(&root, &progress).unwrap_err(), cancelled());
+    assert_eq!(
+        scan_library(&root, &progress).unwrap_err(),
+        ScanError::Cancelled
+    );
     assert_eq!(cancelled(), "Abgebrochen");
 }
 
@@ -734,7 +737,7 @@ fn cancelling_during_the_scan_stops_before_the_rest() {
         read += 1;
         progress.cancel(); // nach dem ersten Dokument
     });
-    assert_eq!(result.unwrap_err(), cancelled());
+    assert_eq!(result.unwrap_err(), ScanError::Cancelled);
     assert_eq!(
         read, 1,
         "nach dem Abbruch wird kein weiteres Dokument gelesen"

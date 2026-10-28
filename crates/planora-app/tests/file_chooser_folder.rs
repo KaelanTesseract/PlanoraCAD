@@ -216,7 +216,7 @@ fn a_vanished_folder_cannot_be_chosen() {
     fs::remove_dir_all(dir.join("a")).unwrap();
     assert_eq!(c.target(), None);
     assert_eq!(c.confirm(), ChooserAction::None);
-    assert_eq!(c.error.as_deref(), Some(no_folder().as_str()));
+    assert_eq!(c.error_text().as_deref(), Some(no_folder().as_str()));
 }
 
 #[test]
@@ -376,7 +376,7 @@ fn a_vanished_marked_folder_is_not_replaced_by_the_current_one() {
     fs::remove_dir_all(dir.join("b")).unwrap();
     assert_eq!(c.target(), None, "kein Rückfall auf den aktuellen Ordner");
     assert_eq!(c.confirm(), ChooserAction::None);
-    assert_eq!(c.error.as_deref(), Some(no_folder().as_str()));
+    assert_eq!(c.error_text().as_deref(), Some(no_folder().as_str()));
     assert_eq!(c.marked(), None, "Marke gelöscht");
     assert_eq!(names(&c), ["a"], "Liste neu gelesen");
     // Danach entscheidet der Nutzer neu: ohne Marke der aktuelle Ordner.
@@ -387,7 +387,7 @@ fn a_vanished_marked_folder_is_not_replaced_by_the_current_one() {
     fs::write(dir.join("a"), b"x").unwrap();
     assert_eq!(c.target(), None);
     assert_eq!(c.confirm(), ChooserAction::None);
-    assert_eq!(c.error.as_deref(), Some(no_folder().as_str()));
+    assert_eq!(c.error_text().as_deref(), Some(no_folder().as_str()));
     assert_eq!(c.marked(), None);
 }
 
@@ -433,7 +433,10 @@ fn a_typed_folder_is_applied_before_choosing() {
     c.dir_text = dir.join("gibt-es-nicht").display().to_string();
     h.clicks(&mut c, &choose_folder(), 1);
     assert_eq!(h.action, ChooserAction::None, "nichts gewählt");
-    assert_eq!(c.error.as_deref(), Some("Diesen Ordner gibt es nicht."));
+    assert_eq!(
+        c.error_text().as_deref(),
+        Some("Diesen Ordner gibt es nicht.")
+    );
     let seen = h.settle(&mut c);
     assert!(texts(&seen).contains(&"Diesen Ordner gibt es nicht."));
     assert_eq!(c.dir(), dir.join("a").as_path(), "Ordner bleibt");

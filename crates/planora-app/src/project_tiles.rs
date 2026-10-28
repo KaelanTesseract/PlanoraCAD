@@ -19,7 +19,39 @@ pub fn too_many() -> String {
     tr!("projects-too-many")
 }
 pub fn cancelled() -> String {
-    tr!("projects-cancelled")
+    ScanError::Cancelled.text()
+}
+
+/// Warum das Lesen der Bibliothek nichts ergab. Gespeichert wird der Grund, nicht der Text:
+/// gezeichnet wird in der Sprache des Bildes ([`ScanError::text`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ScanError {
+    /// Das Lesen wurde abgebrochen.
+    Cancelled,
+    /// Das Lesen endete unerwartet ohne Ergebnis.
+    Lost,
+    /// Das Projektverzeichnis (der Pfad) gibt es nicht.
+    RootMissing(String),
+    /// Fertiger Text der Bibliothek (nicht übersetzt).
+    Raw(String),
+}
+
+impl ScanError {
+    /// Der Text in der aktuellen Sprache.
+    pub fn text(&self) -> String {
+        match self {
+            ScanError::Cancelled => tr!("projects-cancelled"),
+            ScanError::Lost => tr!("projects-scan-lost"),
+            ScanError::RootMissing(path) => tr!("projects-root-missing", path = path.as_str()),
+            ScanError::Raw(text) => text.clone(),
+        }
+    }
+}
+
+impl std::fmt::Display for ScanError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text())
+    }
 }
 
 /// Angaben eines lesbaren Dokuments.
@@ -57,7 +89,7 @@ pub struct Scan {
 }
 
 /// Baum + `peek` je Dokument; fehlt `root`, Fehler (nie anlegen); Abbruch → Err(CANCELLED).
-pub fn scan_library(root: &Path, progress: &Progress) -> Result<Scan, String> {
+pub fn scan_library(root: &Path, progress: &Progress) -> Result<Scan, ScanError> {
     scan_library_with(root, progress, |_| {})
 }
 
@@ -67,19 +99,16 @@ pub fn scan_library_with(
     root: &Path,
     progress: &Progress,
     mut after_document: impl FnMut(&NodePath),
-) -> Result<Scan, String> {
+) -> Result<Scan, ScanError> {
     // `Library::open` legt einen fehlenden Ordner an: vorher prüfen.
     if !root.is_dir() {
-        return Err(tr!(
-            "projects-root-missing",
-            path = root.display().to_string()
-        ));
+        return Err(ScanError::RootMissing(root.display().to_string()));
     }
     if stop(progress) {
-        return Err(self::cancelled());
+        return Err(ScanError::Cancelled);
     }
-    let lib = Library::open(root).map_err(|e| e.to_string())?;
-    let tree = lib.tree().map_err(|e| e.to_string())?;
+    let lib = Library::open(root).map_err(|e| ScanError::Raw(e.to_string()))?;
+    let tree = lib.tree().map_err(|e| ScanError::Raw(e.to_string()))?;
     let mut count: u64 = 0;
     walk_documents(&tree, &mut |_| count += 1);
     progress.set_total(count);
@@ -109,7 +138,7 @@ pub fn scan_library_with(
         after_document(&node.path);
     });
     if cancelled {
-        return Err(self::cancelled());
+        return Err(ScanError::Cancelled);
     }
     Ok(Scan {
         root: root.to_path_buf(),

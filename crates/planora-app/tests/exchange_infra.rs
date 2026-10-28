@@ -324,13 +324,13 @@ fn relative_folders_become_absolute_and_errors_are_plain_german() {
         .display()
         .to_string();
     assert!(!c.go_to_text());
-    let msg = c.error.clone().unwrap();
+    let msg = c.error_text().unwrap();
     assert!(!msg.contains("os error"), "{msg}");
     let c2 = FileChooser::open(
         std::env::temp_dir().join("planora-gibt-es-nicht-y"),
         vec!["stl"],
     );
-    assert!(!c2.error.clone().unwrap_or_default().contains("os error"));
+    assert!(!c2.error_text().unwrap_or_default().contains("os error"));
 }
 
 /// Enter als gedrückte und losgelassene Taste.
@@ -399,7 +399,7 @@ fn enter_in_the_name_field_opens_only_when_opening() {
         "{actions:?}"
     );
     assert_eq!(
-        c.error.as_deref(),
+        c.error_text().as_deref(),
         Some("Bitte eine vorhandene Datei wählen.")
     );
 

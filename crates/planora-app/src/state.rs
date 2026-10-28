@@ -2458,7 +2458,7 @@ impl AppState {
         self.selected_body.is_some_and(|i| self.is_mesh(i))
     }
 
-    /// Ist der sichtbare Körper `index` zurückgesetzt? Dann [`crate::history_bar::LOCK_HINT`]
+    /// Ist der sichtbare Körper `index` zurückgesetzt? Dann [`crate::history_bar::lock_hint`]
     /// (neue Aktionen an ihm sind gesperrt, siehe [`crate::history_bar::lock_reason`]).
     pub fn body_lock(&self, index: usize) -> Option<String> {
         let b = self.bodies.get(index)?;

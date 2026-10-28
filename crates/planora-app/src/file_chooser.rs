@@ -265,7 +265,7 @@ pub struct FileChooser {
     entries: Vec<Entry>,
     /// Der Ordner hat mehr als [`MAX_ENTRIES`] Einträge.
     pub truncated: bool,
-    pub error: Option<String>,
+    pub error: Option<ChooserError>,
     /// Ziel, dessen Ersetzen noch bestätigt werden muss.
     confirm: Option<PathBuf>,
     /// Per Klick markierter Unterordner (nur Ordner-Modus); jeder Ordnerwechsel löscht ihn.
@@ -301,6 +301,41 @@ pub fn io_message(kind: std::io::ErrorKind) -> String {
         std::io::ErrorKind::NotFound => planora_i18n::tr!("chooser-io-not-found"),
         std::io::ErrorKind::PermissionDenied => planora_i18n::tr!("chooser-io-denied"),
         _ => planora_i18n::tr!("chooser-io-other"),
+    }
+}
+
+/// Grund der Meldung unter der Liste. Gespeichert wird der Grund, nicht der Text: gezeichnet wird
+/// in der Sprache des Bildes ([`ChooserError::text`]), auch wenn sie bei offener Auswahl wechselt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChooserError {
+    /// Der Ordner lässt sich nicht lesen (mit dem Grund).
+    Io(std::io::ErrorKind),
+    /// Der eingetippte Ordner fehlt.
+    FolderMissing,
+    /// Der Ordner im Ordner-Modus gibt es nicht (mehr).
+    NoFolder,
+    /// Der Dateiname ist leer oder hat verbotene Zeichen.
+    BadFileName,
+    /// Beim Öffnen fehlt eine vorhandene Datei.
+    PickExistingFile,
+    /// Der Ordner eines Favoriten fehlt.
+    FavoriteMissing,
+    /// Fertiger Text aus einer anderen Stelle (etwa die Meldung der Favoriten); nicht übersetzt.
+    Raw(String),
+}
+
+impl ChooserError {
+    /// Der Text in der aktuellen Sprache.
+    pub fn text(&self) -> String {
+        match self {
+            ChooserError::Io(kind) => io_message(*kind),
+            ChooserError::FolderMissing => tr!("chooser-folder-missing"),
+            ChooserError::NoFolder => no_folder(),
+            ChooserError::BadFileName => tr!("chooser-bad-file-name"),
+            ChooserError::PickExistingFile => tr!("chooser-pick-existing-file"),
+            ChooserError::FavoriteMissing => places::favorite_missing(),
+            ChooserError::Raw(text) => text.clone(),
+        }
     }
 }
 
@@ -384,7 +419,7 @@ impl FileChooser {
         self.dir_text = place.path.display().to_string();
         let ok = self.go_to_text();
         if !ok && place.kind == PlaceKind::Favorite {
-            self.error = Some(places::favorite_missing());
+            self.error = Some(ChooserError::FavoriteMissing);
         }
         ok
     }
@@ -394,11 +429,16 @@ impl FileChooser {
         match menu {
             RowMenu::AddFavorite(p) => {
                 if let Err(e) = shared.add_favorite(p) {
-                    self.error = Some(e);
+                    self.error = Some(ChooserError::Raw(e));
                 }
             }
             RowMenu::RemoveFavorite(p) => shared.remove_favorite(p),
         }
+    }
+
+    /// Die Meldung unter der Liste in der aktuellen Sprache.
+    pub fn error_text(&self) -> Option<String> {
+        self.error.as_ref().map(ChooserError::text)
     }
 
     pub fn dir(&self) -> &Path {
@@ -418,7 +458,7 @@ impl FileChooser {
         let read = match std::fs::read_dir(&self.dir) {
             Ok(r) => r,
             Err(e) => {
-                self.error = Some(io_message(e.kind()));
+                self.error = Some(ChooserError::Io(e.kind()));
                 return;
             }
         };
@@ -480,7 +520,7 @@ impl FileChooser {
             self.set_dir(p);
             true
         } else {
-            self.error = Some(tr!("chooser-folder-missing"));
+            self.error = Some(ChooserError::FolderMissing);
             false
         }
     }
@@ -565,14 +605,14 @@ impl FileChooser {
         if self.mode == ChooserMode::Folder && self.marked.is_some() && self.target().is_none() {
             self.marked = None;
             self.reload();
-            self.error = Some(no_folder());
+            self.error = Some(ChooserError::NoFolder);
             return ChooserAction::None;
         }
         let Some(target) = self.target() else {
             self.error = Some(match self.mode {
-                ChooserMode::Save => tr!("chooser-bad-file-name"),
-                ChooserMode::Open => tr!("chooser-pick-existing-file"),
-                ChooserMode::Folder => no_folder(),
+                ChooserMode::Save => ChooserError::BadFileName,
+                ChooserMode::Open => ChooserError::PickExistingFile,
+                ChooserMode::Folder => ChooserError::NoFolder,
             });
             return ChooserAction::None;
         };
@@ -611,7 +651,7 @@ impl FileChooser {
     /// Speichern (`shared.notice`) wird übernommen und angezeigt.
     pub fn show_body(&mut self, ui: &mut egui::Ui, shared: &mut Places) -> ChooserAction {
         if let Some(notice) = shared.notice.take() {
-            self.error = Some(notice);
+            self.error = Some(ChooserError::Raw(notice));
         }
         let mut action = ChooserAction::None;
         ui.horizontal(|ui| {
@@ -756,7 +796,7 @@ impl FileChooser {
     pub fn show_footer(&mut self, ui: &mut egui::Ui) -> ChooserAction {
         let mut action = ChooserAction::None;
         if let Some(e) = &self.error {
-            ui.colored_label(error_color(ui.visuals().dark_mode), e);
+            ui.colored_label(error_color(ui.visuals().dark_mode), e.text());
         }
         if self.asks_to_replace() {
             ui.colored_label(warning_color(ui.visuals().dark_mode), replace_hint());
