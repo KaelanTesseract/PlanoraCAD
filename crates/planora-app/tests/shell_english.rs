@@ -4,6 +4,7 @@
 
 mod common;
 
+use common::{Seen, assert_has, join, looks_like_key};
 use eframe::App as _;
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, Vec2, vec2};
 use planora_app::app::{self, CreateKind, PlanoraApp};
@@ -17,29 +18,13 @@ use planora_project::library::Library;
 
 const BIG: Vec2 = vec2(1920.0, 1080.0);
 
-/// Texte, die zu Dateien späterer Tasks gehören und hier noch deutsch sind (Task 5: „Über …“;
-/// Task 10: STEP-Import; Task 12: Würfelseiten). Sie werden nur von der Deutsch-Prüfung
+/// Texte, die zu Dateien späterer Tasks gehören und hier noch deutsch sind (Task 10: STEP-Import;
+/// Task 12: Würfelseiten). Sie werden nur von der Deutsch-Prüfung
 /// ausgenommen, nicht von den Erwartungen.
-const LATER_TASKS: [&str; 4] = ["Über PlanoraCAD", "STEP", "Würfel", "Körper wählen"];
+const LATER_TASKS: [&str; 3] = ["STEP", "Würfel", "Körper wählen"];
 
 thread_local! {
     static SIDES: std::cell::RefCell<Vec<Rect>> = const { std::cell::RefCell::new(Vec::new()) };
-}
-
-struct Seen {
-    text: String,
-    rect: Rect,
-}
-
-fn walk(shape: &egui::epaint::Shape, out: &mut Vec<Seen>) {
-    match shape {
-        egui::epaint::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
-        egui::epaint::Shape::Text(t) => out.push(Seen {
-            text: t.galley.text().to_string(),
-            rect: Rect::from_min_size(t.pos, t.galley.size()),
-        }),
-        _ => {}
-    }
 }
 
 struct Rig {
@@ -80,10 +65,7 @@ impl Rig {
         let mut f = eframe::Frame::_new_kittest();
         let app = &mut self.app;
         let out = self.ctx.run_ui(raw, |ui| app.ui(ui, &mut f));
-        let mut seen = Vec::new();
-        for c in &out.shapes {
-            walk(&c.shape, &mut seen);
-        }
+        let seen = common::collect_seen(&out.shapes);
         out.drop_without_applying_deltas();
         seen
     }
@@ -133,57 +115,12 @@ impl Rig {
     }
 }
 
-fn join(seen: &[Seen]) -> String {
-    seen.iter()
-        .map(|s| s.text.as_str())
-        .collect::<Vec<_>>()
-        .join(" | ")
-}
-
-fn looks_like_key(line: &str) -> bool {
-    let parts: Vec<&str> = line.split('-').collect();
-    parts.len() > 1
-        && parts.iter().all(|p| {
-            !p.is_empty()
-                && p.chars()
-                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-        })
-}
-
 /// Kein deutscher Buchstabe und keine Schlüssel-Id in den Texten (Zeilen späterer Tasks
 /// ausgenommen).
 fn assert_english(what: &str, seen: &[Seen]) {
     // Seitenfelder und Verlaufsleiste (Feature-Baum, Eigenschaften, Verlauf) gehören zu Task 6 und 7.
     let sides = SIDES.with(|c| c.borrow().clone());
-    for s in seen {
-        if sides.iter().any(|r| r.contains_rect(s.rect)) {
-            continue;
-        }
-        for line in s.text.lines() {
-            if LATER_TASKS.iter().any(|l| line.contains(l)) {
-                continue;
-            }
-            assert!(
-                !line.chars().any(|c| "äöüßÄÖÜ„".contains(c)),
-                "{what}: deutscher Text „{line}“ in {}",
-                join(seen)
-            );
-            assert!(
-                !looks_like_key(line),
-                "{what}: Schlüssel-Id „{line}“ sichtbar"
-            );
-        }
-    }
-}
-
-fn assert_has(what: &str, seen: &[Seen], wanted: &[&str]) {
-    for w in wanted {
-        assert!(
-            seen.iter().any(|s| s.text == *w),
-            "{what}: „{w}“ fehlt in {}",
-            join(seen)
-        );
-    }
+    common::assert_english(what, seen, &sides, &LATER_TASKS);
 }
 
 #[test]
@@ -355,7 +292,7 @@ fn prompts_speak_english() {
                     tab,
                     then: After::Quit,
                 }),
-                vec!["Save changes?"],
+                vec!["Restart for the update", "Save", "Discard", "Cancel"],
             ),
             (
                 "Version speichern",
@@ -402,13 +339,72 @@ fn prompts_speak_english() {
         for (what, make, wanted) in cases {
             let mut rig = Rig::new();
             let tab = rig.app.ws_mut().active_tab().id;
+            // Beim Beenden für ein Update nennt die Rückfrage das Update.
+            rig.app.ws_mut().quit_for_update = what == "Neustart für das Update";
             rig.app.ws_mut().prompt = Some(make(tab));
             let seen = rig.settle();
             assert_has(what, &seen, &wanted);
             assert_english(what, &seen);
+            if what == "Neustart für das Update" {
+                assert!(
+                    seen.iter().any(|s| s.text.starts_with(
+                        "PlanoraCAD has to restart to update. Save the unsaved changes in \""
+                    )),
+                    "Text zum Update fehlt in {}",
+                    join(&seen)
+                );
+                assert!(!seen.iter().any(|s| s.text == "Save changes?"));
+            }
+            if what == "Speichern unter" {
+                // Ohne Projekt steht der Hinweis dabei.
+                assert!(
+                    seen.iter()
+                        .any(|s| s.text.starts_with("There is no project yet. Please close")),
+                    "Hinweis ohne Projekt fehlt in {}",
+                    join(&seen)
+                );
+            }
         }
-        // Gesperrtes Dokument braucht einen Pfad: der Text kommt direkt aus der Sprachdatei.
-        assert_eq!(planora_i18n::tr!("prompt-locked-title"), "Document locked");
+        // Ohne Projektverzeichnis.
+        let mut ws = Workspace::new(None, Config::default());
+        ws.config_path = common::temp_root("planora-shell-english-nolib").join("config.json");
+        let mut rig = Rig::with(ws);
+        let tab = rig.app.ws_mut().active_tab().id;
+        rig.app.ws_mut().prompt = Some(Prompt::SaveAs {
+            tab,
+            then: None,
+            parent: Vec::new(),
+            name: String::new(),
+            comment: String::new(),
+        });
+        let seen = rig.settle();
+        assert_has(
+            "Speichern unter ohne Verzeichnis",
+            &seen,
+            &[
+                "Save as",
+                "Please close this with \"Cancel\", then choose the project folder in the \"File\" menu under \"Settings …\".",
+            ],
+        );
+        assert_english("Speichern unter ohne Verzeichnis", &seen);
+        // Gesperrtes Dokument.
+        let mut rig = Rig::new();
+        rig.app.ws_mut().prompt = Some(Prompt::TakeOver {
+            path: Vec::new(),
+            version: None,
+        });
+        let seen = rig.settle();
+        assert_has(
+            "Gesperrtes Dokument",
+            &seen,
+            &[
+                "Document locked",
+                "The document is currently in use by another program (locked). If that program has crashed, you can take over the lock.",
+                "Take over lock",
+                "Cancel",
+            ],
+        );
+        assert_english("Gesperrtes Dokument", &seen);
     });
 }
 
@@ -463,10 +459,7 @@ fn keys_speak_english() {
                 egui::CentralPanel::default()
                     .show(ui, |ui| settings_ui::show(ui, &mut ws, &mut state));
             });
-            seen.clear();
-            for c in &out.shapes {
-                walk(&c.shape, &mut seen);
-            }
+            seen = common::collect_seen(&out.shapes);
             out.drop_without_applying_deltas();
         }
         assert_has(

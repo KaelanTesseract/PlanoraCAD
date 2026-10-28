@@ -2,7 +2,7 @@
 
 use eframe::egui_wgpu::wgpu::{AdapterInfo, Backend, DeviceType};
 use planora_app::build_info::{
-    self, BuildInfo, GPU_UNKNOWN, GpuInfo, gpu_from_adapter, os_text, windows_name,
+    self, BuildInfo, GpuInfo, gpu_from_adapter, gpu_unknown, os_text, windows_name,
 };
 
 #[test]
@@ -31,7 +31,7 @@ fn gpu_line_without_gpu_is_unknown() {
         os: "Test".into(),
         gpu: None,
     };
-    assert_eq!(info.gpu_line(), GPU_UNKNOWN);
+    assert_eq!(info.gpu_line(), gpu_unknown().as_str());
     assert_eq!(info.system_line(), "System: Test");
 }
 

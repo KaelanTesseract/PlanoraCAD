@@ -559,10 +559,10 @@ fn typing_in_rename_window_keeps_ctrl_z() {
 // ---- (c) Fenster, „Über“, Rückfrage sperren ---------------------------------------------------
 
 /// Öffnet Fenster Nummer `which` (`None`, wenn es die Nummer nicht gibt) und liefert seinen Namen.
-fn open_window(w: &mut Workspace, which: usize, d: DrawingId, v: ViewId) -> Option<&'static str> {
+fn open_window(w: &mut Workspace, which: usize, d: DrawingId, v: ViewId) -> Option<String> {
     let t = w.active_tab_mut();
     let quader = t.state.document.features()[0].id;
-    Some(match which {
+    Some(String::from(match which {
         0 => {
             t.dialog = Some(CreateDialog::Box {
                 x: 1.0,
@@ -603,14 +603,14 @@ fn open_window(w: &mut Workspace, which: usize, d: DrawingId, v: ViewId) -> Opti
         }
         8 => {
             w.about_open = true;
-            about_dialog::TITLE
+            return Some(about_dialog::title());
         }
         9 => {
             w.prompt = Some(Prompt::Notice("Hinweis".into()));
             "Rückfrage"
         }
         _ => return None,
-    })
+    }))
 }
 
 fn still_open(w: &Workspace, which: usize) -> bool {

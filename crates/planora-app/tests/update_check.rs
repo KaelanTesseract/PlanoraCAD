@@ -9,11 +9,11 @@ use eframe::App as _;
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, Vec2, vec2};
 use planora_app::app::PlanoraApp;
 use planora_app::settings_window::{
-    CHECK_FAILED, CHECK_NOW, CHECK_RUNNING, CheckHint, NOT_ON_THIS_SYSTEM, SHOW_NOTICE, UNSKIP,
-    UP_TO_DATE, skipped_line, update_found_line,
+    CheckHint, check_failed, check_now, check_running, not_on_this_system, show_notice,
+    skipped_line, unskip, up_to_date, update_found_line,
 };
 use planora_app::update_check::{CheckRequest, UpdateChecker, now_unix, records_check};
-use planora_app::update_dialog::{INSTALL_NOW, LATER, SKIP};
+use planora_app::update_dialog::{install_now, later, skip};
 use planora_app::workspace::Workspace;
 use planora_app::{fonts, theme};
 use planora_project::config::Config;
@@ -390,11 +390,11 @@ fn manual_check_shows_up_to_date_hint() {
     let mut h = Harness::new(ws, cfg, fake.clone());
     h.open_settings();
     assert_eq!(fake.calls(), 0);
-    h.click(CHECK_NOW);
+    h.click(check_now().as_str());
     // Läuft: Hinweis, Knopf aus.
     let seen = h.frame(vec![]);
     assert!(h.app.update_check_running());
-    assert!(has(&seen, CHECK_RUNNING), "läuft");
+    assert!(has(&seen, check_running().as_str()), "läuft");
     assert_eq!(
         h.app.windows_mut().2.check_hint(),
         Some(&CheckHint::Running)
@@ -402,14 +402,20 @@ fn manual_check_shows_up_to_date_hint() {
     open.send(()).unwrap();
     let seen = h.until_idle();
     assert_eq!(fake.calls(), 1);
-    assert!(has(&seen, UP_TO_DATE), "Hinweis „aktuell“");
-    assert!(!has(&seen, CHECK_RUNNING));
-    assert_eq!(UP_TO_DATE, "Du hast die neueste Version.");
+    assert!(has(&seen, up_to_date().as_str()), "Hinweis „aktuell“");
+    assert!(!has(&seen, check_running().as_str()));
+    assert_eq!(up_to_date().as_str(), "Du hast die neueste Version.");
     let last = h.app.ws_mut().last_update_check().unwrap();
     assert!(last > recent, "Zeitpunkt gemerkt");
     // Der Hinweis steht rechts neben dem Knopf, in derselben Zeile.
-    let button = seen.iter().find(|s| s.text == CHECK_NOW).unwrap();
-    let hint = seen.iter().find(|s| s.text == UP_TO_DATE).unwrap();
+    let button = seen
+        .iter()
+        .find(|s| s.text == check_now().as_str())
+        .unwrap();
+    let hint = seen
+        .iter()
+        .find(|s| s.text == up_to_date().as_str())
+        .unwrap();
     assert!(button.rect.right() < hint.rect.left());
     assert!((button.rect.center().y - hint.rect.center().y).abs() < 4.0);
     // Neu öffnen leert das alte Ergebnis.
@@ -424,7 +430,7 @@ fn manual_check_shows_up_to_date_hint() {
     let fake = Fake::new(Ok(newer_list()));
     let mut h = Harness::new(ws, cfg, fake.clone());
     h.open_settings();
-    h.click(CHECK_NOW);
+    h.click(check_now().as_str());
     let seen = h.until_idle();
     assert!(has(&seen, &update_found_line(&v("99.0.0-dev.1"))));
     assert_eq!(
@@ -443,7 +449,7 @@ fn manual_result_survives_closing_settings_while_running() {
     *fake.gate.lock().unwrap() = Some(gate);
     let mut h = Harness::new(ws, cfg, fake.clone());
     h.open_settings();
-    h.click(CHECK_NOW);
+    h.click(check_now().as_str());
     assert!(h.app.update_check_running());
     // Fenster zu, während die Suche läuft; das Ergebnis kommt bei geschlossenem Fenster.
     h.app.windows_mut().2.close();
@@ -456,12 +462,12 @@ fn manual_result_survives_closing_settings_while_running() {
     // Wieder geöffnet: das noch nie gezeigte Ergebnis steht da.
     h.open_settings();
     let seen = h.frame(vec![]);
-    assert!(has(&seen, UP_TO_DATE), "Ergebnis nicht verloren");
+    assert!(has(&seen, up_to_date().as_str()), "Ergebnis nicht verloren");
     // Einmal gezeigt: beim nächsten Öffnen ist es weg.
     h.app.windows_mut().2.close();
     h.open_settings();
     let seen = h.frame(vec![]);
-    assert!(!has(&seen, UP_TO_DATE));
+    assert!(!has(&seen, up_to_date().as_str()));
     assert_eq!(h.app.windows_mut().2.check_hint(), None);
 }
 
@@ -478,19 +484,22 @@ fn manual_check_failure_hint() {
         let fake = Fake::new(Err(err.clone()));
         let mut h = Harness::new(ws, cfg, fake.clone());
         h.open_settings();
-        h.click(CHECK_NOW);
+        h.click(check_now().as_str());
         let seen = h.until_idle();
         assert_eq!(fake.calls(), 1);
         let hint = seen
             .iter()
-            .find(|s| s.text == CHECK_FAILED)
+            .find(|s| s.text == check_failed().as_str())
             .unwrap_or_else(|| panic!("{err:?}: Hinweis fehlt"));
         assert_eq!(hint.color, theme::palette(true).warning, "Warnfarbe");
         assert_eq!(h.app.windows_mut().2.check_hint(), Some(&CheckHint::Failed));
         // Kein Fehlerfenster, keine Rückfrage.
         assert!(h.app.ws_mut().prompt.is_none());
     }
-    assert_eq!(CHECK_FAILED, "Die Suche hat nicht geklappt (kein Netz?).");
+    assert_eq!(
+        check_failed().as_str(),
+        "Die Suche hat nicht geklappt (kein Netz?)."
+    );
 }
 
 /// Auf einem System ohne Aktualisierung über das Programm (Linux, macOS) sagt der Knopf das
@@ -502,16 +511,16 @@ fn manual_check_on_a_system_without_updates_says_so() {
     let fake = Fake::new(Err(NetError::Unsupported));
     let mut h = Harness::new(ws, cfg, fake.clone());
     h.open_settings();
-    h.click(CHECK_NOW);
+    h.click(check_now().as_str());
     let seen = h.until_idle();
-    assert!(has(&seen, NOT_ON_THIS_SYSTEM), "Hinweis fehlt");
-    assert!(!has(&seen, CHECK_FAILED));
+    assert!(has(&seen, not_on_this_system().as_str()), "Hinweis fehlt");
+    assert!(!has(&seen, check_failed().as_str()));
     assert_eq!(
         h.app.windows_mut().2.check_hint(),
         Some(&CheckHint::Unsupported)
     );
     assert_eq!(
-        NOT_ON_THIS_SYSTEM,
+        not_on_this_system().as_str(),
         "Auf diesem System gibt es keine Aktualisierung über das Programm."
     );
 }
@@ -528,11 +537,11 @@ fn manual_click_during_start_check_counts_as_manual() {
     h.open_settings();
     // Die Prüfung beim Start zeigt nichts an, der Knopf bleibt also bedienbar; gedrückt
     // übernimmt er deren Ergebnis, statt ein zweites Mal zu fragen.
-    h.click(CHECK_NOW);
+    h.click(check_now().as_str());
     open.send(()).unwrap();
     let seen = h.until_idle();
     assert_eq!(fake.calls(), 1, "keine zweite Abfrage");
-    assert!(has(&seen, UP_TO_DATE));
+    assert!(has(&seen, up_to_date().as_str()));
 }
 
 #[test]
@@ -555,13 +564,17 @@ fn no_error_window_at_start_on_failure() {
         assert!(!h.app.windows_mut().2.is_open(), "{answer:?}");
         assert_eq!(h.app.windows_mut().2.check_hint(), None, "{answer:?}");
         assert_eq!(h.app.pending_notice(), None);
-        for t in [CHECK_FAILED, CHECK_RUNNING, UP_TO_DATE] {
+        for t in [
+            check_failed().as_str(),
+            check_running().as_str(),
+            up_to_date().as_str(),
+        ] {
             assert!(!has(&seen, t), "{answer:?}: {t}");
         }
         // Auch nach dem Öffnen der Einstellungen kein Hinweis.
         h.open_settings();
         let seen = h.frame(vec![]);
-        assert!(!has(&seen, CHECK_FAILED), "{answer:?}");
+        assert!(!has(&seen, check_failed().as_str()), "{answer:?}");
     }
 }
 
@@ -599,24 +612,24 @@ fn manual_check_ignores_the_skipped_version() {
     // Nach „Später“ in dieser Sitzung: die Suche von Hand zeigt die Meldung trotzdem wieder.
     h.app.update_dialog_mut().snooze_until = Some(now_unix() + 3600);
     h.open_settings();
-    h.click(CHECK_NOW);
+    h.click(check_now().as_str());
     let seen = h.until_idle();
     assert_eq!(fake.calls(), 2);
-    assert!(!has(&seen, UP_TO_DATE));
+    assert!(!has(&seen, up_to_date().as_str()));
     assert!(has(&seen, &update_found_line(&v("99.0.0-dev.1"))));
     assert_eq!(
         h.app.pending_notice().map(|u| u.latest.version),
         Some(v("99.0.0-dev.1"))
     );
     // „Meldung anzeigen“ öffnet sie (die Einstellungen gehen dabei zu).
-    h.click(SHOW_NOTICE);
+    h.click(show_notice().as_str());
     for _ in 0..4 {
         h.frame(vec![]);
     }
     assert!(h.app.update_dialog_mut().open);
     assert!(!h.app.windows_mut().2.is_open());
     let seen = h.frame(vec![]);
-    for t in [INSTALL_NOW, LATER, SKIP] {
+    for t in [install_now().as_str(), later().as_str(), skip().as_str()] {
         assert!(has(&seen, t), "{t}");
     }
     // Das Überspringen selbst bleibt gespeichert (die Prüfung beim Start beachtet es weiter).
@@ -636,7 +649,7 @@ fn manual_check_during_start_check_asks_again_without_the_skip() {
     h.frame(vec![]);
     assert!(h.app.update_check_running());
     h.open_settings();
-    h.click(CHECK_NOW);
+    h.click(check_now().as_str());
     open.send(()).unwrap();
     h.until(|_| fake.calls() == 2);
     let seen = h.until_idle();
@@ -654,7 +667,7 @@ fn settings_show_the_skipped_version_and_undo_it() {
     let mut h = Harness::new(ws, cfg.clone(), fake.clone());
     h.open_settings();
     let seen = h.frame(vec![]);
-    assert!(!has(&seen, UNSKIP), "nichts übersprungen");
+    assert!(!has(&seen, unskip().as_str()), "nichts übersprungen");
     assert!(h.app.ws_mut().set_skipped_version(Some(v("99.0.0-dev.1"))));
     h.frame(vec![]);
     let seen = h.frame(vec![]);
@@ -663,13 +676,13 @@ fn settings_show_the_skipped_version_and_undo_it() {
         skipped_line(&v("0.2.0-dev.2")),
         "Übersprungen: Version 0.2.0-dev.2"
     );
-    assert!(has(&seen, UNSKIP));
-    assert_eq!(UNSKIP, "Doch wieder anzeigen");
-    h.click(UNSKIP);
+    assert!(has(&seen, unskip().as_str()));
+    assert_eq!(unskip().as_str(), "Doch wieder anzeigen");
+    h.click(unskip().as_str());
     let seen = h.until_idle();
     assert_eq!(h.app.ws_mut().skipped_version(), None);
     assert_eq!(Config::read_from(&cfg).unwrap().skipped_version, None);
-    assert!(!has(&seen, UNSKIP));
+    assert!(!has(&seen, unskip().as_str()));
     assert_eq!(fake.calls(), 1, "gleich gesucht");
     assert!(has(&seen, &update_found_line(&v("99.0.0-dev.1"))));
     assert!(h.app.pending_notice().is_some());

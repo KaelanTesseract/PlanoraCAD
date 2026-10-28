@@ -14,7 +14,7 @@ use planora_app::app::{PlanoraApp, RestartPhase};
 use planora_app::install_mode::InstallMode;
 use planora_app::prompts::{save_for_update_text, save_for_update_title};
 use planora_app::update_dialog::{
-    CANCEL, CLOSE, FAILED_TITLE, INSTALL_NOW, InstallView, LATER, NOTES_ON_GITHUB, OK, RETRY, SKIP,
+    InstallView, cancel, close, failed_title, install_now, later, notes_on_github, ok, retry, skip,
 };
 use planora_app::update_install::*;
 use planora_app::workspace::{Prompt, Workspace};
@@ -521,7 +521,7 @@ fn wrong_checksum_never_launches_and_shows_message() {
             downloader.clone(),
             launcher.clone(),
         );
-        h.click(INSTALL_NOW);
+        h.click(install_now().as_str());
         h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
         assert_eq!(
             h.state(),
@@ -530,7 +530,7 @@ fn wrong_checksum_never_launches_and_shows_message() {
         assert_eq!(downloader.calls(), 2);
         h.settle();
         assert!(h.sees(&InstallError::Checksum.message()), "{:?}", h.texts());
-        assert!(h.sees(OPEN_DOWNLOAD_PAGE));
+        assert!(h.sees(open_download_page().as_str()));
         // Nichts gestartet, nichts liegen geblieben, nichts vorgemerkt.
         assert!(!h.paths.setup.exists());
         assert!(!h.paths.checksum.exists());
@@ -540,7 +540,7 @@ fn wrong_checksum_never_launches_and_shows_message() {
         assert_eq!(h.app.restart_phase(), RestartPhase::None);
         assert!(!h.close_sent());
         // „Schließen“ beendet das Update; die Meldung ruht dann wie nach „Später“.
-        h.click(CLOSE);
+        h.click(close().as_str());
         assert_eq!(h.state(), InstallState::Idle);
         assert!(!h.app.update_dialog_mut().open);
         assert!(!h.app.update_dialog_mut().installing);
@@ -558,7 +558,7 @@ fn prompt_for_unsaved_work_before_restart_and_cancel_aborts_the_update_and_delet
     dirty(&mut ws);
     let mut h = Harness::with(ws, cfg, paths, FakeDownloader::good(), launcher.clone());
     h.until_offered();
-    h.click(INSTALL_NOW);
+    h.click(install_now().as_str());
     h.until(|a| a.restart_phase() == RestartPhase::AwaitingPrompt);
     h.settle();
     assert!(matches!(
@@ -573,9 +573,9 @@ fn prompt_for_unsaved_work_before_restart_and_cancel_aborts_the_update_and_delet
     assert!(h.sees(&save_for_update_text(&name)), "{:?}", h.texts());
     assert!(h.sees("Speichern") && h.sees("Verwerfen") && h.sees("Abbrechen"));
     // Noch startet nichts neu: weder die Statuszeile noch die Meldung sagen „Neustart …“.
-    assert!(!h.sees(RESTARTING), "{:?}", h.texts());
-    assert!(!h.sees(RESTART_BOX), "{:?}", h.texts());
-    assert!(h.sees(WAITING), "{:?}", h.texts());
+    assert!(!h.sees(restarting().as_str()), "{:?}", h.texts());
+    assert!(!h.sees(restart_box().as_str()), "{:?}", h.texts());
+    assert!(h.sees(waiting().as_str()), "{:?}", h.texts());
     // Auch die Meldung selbst zeigt „wartet“, nicht den Neustart.
     assert_eq!(h.app.notice_view(), InstallView::Waiting);
     assert_eq!(h.app.restart_phase(), RestartPhase::AwaitingPrompt);
@@ -618,7 +618,7 @@ fn successful_flow_saves_pending_launches_setup_and_quits() {
         launcher.clone(),
     );
     h.viewport = Some(visible_window());
-    h.click(INSTALL_NOW);
+    h.click(install_now().as_str());
     h.until(|a| a.restart_phase() == RestartPhase::Exiting);
     h.settle();
     // Einmal gestartet: der geladene Installer, „nur für mich“, mit dem geprüften Inhalt.
@@ -661,7 +661,7 @@ fn successful_flow_saves_pending_launches_setup_and_quits() {
     assert!(h.app.ws_mut().prompt.is_none());
     assert!(h.close_sent());
     assert_eq!(
-        RESTART_BOX,
+        restart_box().as_str(),
         "PlanoraCAD wird für das Update beendet und startet danach von selbst neu."
     );
 }
@@ -679,7 +679,7 @@ fn all_users_mode_hands_the_mode_to_the_launcher() {
         Some(InstallMode::AllUsers),
     );
     h.until_offered();
-    h.click(INSTALL_NOW);
+    h.click(install_now().as_str());
     h.until(|a| a.restart_phase() == RestartPhase::Exiting);
     assert_eq!(
         launcher.calls(),
@@ -694,7 +694,7 @@ fn launch_refused(prefix: &str, answer: LaunchError, message: &str) {
     let launcher = FakeLauncher::answering(Err(answer));
     let mut h = Harness::offered(prefix, FakeDownloader::good(), launcher.clone());
     let gate = h.hold_reverify();
-    h.click(INSTALL_NOW);
+    h.click(install_now().as_str());
     h.until(|a| a.restart_phase() == RestartPhase::Verifying);
     *h.app.pending_notice_mut() = None;
     drop(gate);
@@ -713,15 +713,15 @@ fn launch_refused(prefix: &str, answer: LaunchError, message: &str) {
     assert!(!h.app.ws_mut().quit);
     assert!(!h.close_sent());
     assert_eq!(h.app.ws_mut().skipped_version(), None);
-    assert!(h.sees(FAILED_TITLE), "{:?}", h.texts());
+    assert!(h.sees(failed_title().as_str()), "{:?}", h.texts());
     assert!(h.sees(message), "{:?}", h.texts());
-    assert!(h.sees(RETRY), "{:?}", h.texts());
+    assert!(h.sees(retry().as_str()), "{:?}", h.texts());
     assert_eq!(
         h.app.pending_notice().map(|u| u.latest.version),
         Some(v(TARGET))
     );
     // „Schließen“: die Meldung ruht, die Statuszeile bietet die Version weiter an.
-    h.click(CLOSE);
+    h.click(close().as_str());
     assert!(h.sees(&planora_app::update_dialog::status_hint(&v(TARGET))));
 }
 
@@ -730,10 +730,10 @@ fn declined_admin_prompt_keeps_running_with_cancel_hint() {
     launch_refused(
         "planora-install-admin-abgelehnt",
         LaunchError::Cancelled,
-        UPDATE_CANCELLED,
+        update_cancelled().as_str(),
     );
     assert_eq!(
-        UPDATE_CANCELLED,
+        update_cancelled().as_str(),
         "Update abgebrochen. Ohne die Erlaubnis von Windows lässt sich PlanoraCAD nicht für alle Benutzer aktualisieren. Du arbeitest in der bisherigen Version weiter."
     );
 }
@@ -759,9 +759,9 @@ fn pending_that_cannot_be_saved_aborts_before_launch() {
     let cfg = ws.config_path.clone();
     let mut h = Harness::with(ws, cfg, paths, FakeDownloader::good(), launcher.clone());
     h.until_offered();
-    h.click(INSTALL_NOW);
+    h.click(install_now().as_str());
     h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
-    assert_eq!(h.state(), InstallState::Failed(PENDING_NOT_SAVED.into()));
+    assert_eq!(h.state(), InstallState::Failed(pending_not_saved()));
     assert!(!h.paths.setup.exists());
     assert!(launcher.calls().is_empty());
     assert!(!h.app.ws_mut().quit);
@@ -776,7 +776,7 @@ fn setup_changed_before_launch_is_not_started() {
     dirty(&mut ws);
     let mut h = Harness::with(ws, cfg, paths, FakeDownloader::good(), launcher.clone());
     h.until_offered();
-    h.click(INSTALL_NOW);
+    h.click(install_now().as_str());
     h.until(|a| a.restart_phase() == RestartPhase::AwaitingPrompt);
     // Während die Rückfrage steht, verändert ein anderes Programm den Installer.
     std::fs::write(&h.paths.setup, b"halb geschrieben").unwrap();
@@ -902,11 +902,15 @@ fn not_installed_offers_only_the_download_page() {
     let (ws, cfg, paths) = workspace("planora-install-nicht-installiert");
     let mut h = Harness::with_mode(ws, cfg, paths, downloader.clone(), launcher.clone(), None);
     h.until_offered();
-    assert!(h.sees(NOT_INSTALLED_HINT), "{:?}", h.texts());
-    assert!(h.sees(OPEN_DOWNLOAD_PAGE), "{:?}", h.texts());
-    assert!(h.sees(LATER) && h.sees(SKIP), "{:?}", h.texts());
-    assert!(!h.sees(INSTALL_NOW), "{:?}", h.texts());
-    h.click(OPEN_DOWNLOAD_PAGE);
+    assert!(h.sees(not_installed_hint().as_str()), "{:?}", h.texts());
+    assert!(h.sees(open_download_page().as_str()), "{:?}", h.texts());
+    assert!(
+        h.sees(later().as_str()) && h.sees(skip().as_str()),
+        "{:?}",
+        h.texts()
+    );
+    assert!(!h.sees(install_now().as_str()), "{:?}", h.texts());
+    h.click(open_download_page().as_str());
     assert_eq!(h.urls, vec![release_page(TAG)]);
     assert_eq!(h.state(), InstallState::Idle);
     assert_eq!(downloader.calls(), 0);
@@ -945,8 +949,8 @@ fn startup_with_matching_pending_shows_notice_once_and_cleans_up() {
     h.settle();
     assert!(h.sees(&updated_title(&running)), "{:?}", h.texts());
     assert!(h.sees("Schneller beim Öffnen"));
-    assert!(h.sees(planora_app::update_dialog::FEEDBACK_BUTTON));
-    h.click(OK);
+    assert!(h.sees(planora_app::update_dialog::feedback_button().as_str()));
+    h.click(ok().as_str());
     assert!(h.app.after_update().is_none());
     assert!(!h.sees(&updated_title(&running)));
     // Einmal: beim nächsten Start kein Hinweis mehr.
@@ -962,7 +966,7 @@ fn startup_with_matching_pending_shows_notice_once_and_cleans_up() {
     h.app.run_update_startup();
     h.settle();
     assert!(h.sees(&updated_title(&running)));
-    assert!(h.sees(NOTES_ON_GITHUB));
+    assert!(h.sees(notes_on_github().as_str()));
 }
 
 /// Ein liegengebliebener Download (etwa nach einem abgestürzten Lauf) wird beim Start
@@ -1038,7 +1042,7 @@ fn startup_notice_once_even_if_the_settings_cannot_be_written() {
     h.app.run_update_startup();
     h.settle();
     assert!(h.sees(&updated_title(&running)), "{:?}", h.texts());
-    h.click(OK);
+    h.click(ok().as_str());
     // Noch auf der Platte, aber nicht mehr in diesem Lauf.
     assert_eq!(
         h.pending_on_disk(),
@@ -1063,7 +1067,7 @@ fn changes_while_checking_the_new_file_go_back_to_the_prompt() {
     dirty(&mut ws);
     let mut h = Harness::with(ws, cfg, paths, FakeDownloader::good(), launcher.clone());
     h.until_offered();
-    h.click(INSTALL_NOW);
+    h.click(install_now().as_str());
     h.until(|a| a.restart_phase() == RestartPhase::AwaitingPrompt);
     // „Verwerfen“ ohne Klick; gleich danach entsteht neue Arbeit (im Programm verhindert das die
     // Sperre). Die zweite Prüfung läuft trotzdem an; ist sie fertig, geht es zurück zur
@@ -1101,7 +1105,7 @@ fn closing_the_window_while_locked_is_held_back() {
         launcher.clone(),
     );
     let gate = h.hold_reverify();
-    h.click(INSTALL_NOW);
+    h.click(install_now().as_str());
     h.until(|a| a.restart_phase() == RestartPhase::Verifying);
     h.commands.clear();
     h.frame_close();
@@ -1116,7 +1120,7 @@ fn closing_the_window_while_locked_is_held_back() {
     assert!(!h.app.ws_mut().quit);
     assert!(h.app.ws_mut().prompt.is_none());
     h.settle();
-    assert!(h.sees(RESTARTING), "{:?}", h.texts());
+    assert!(h.sees(restarting().as_str()), "{:?}", h.texts());
     assert!(launcher.calls().is_empty());
     // Die Prüfung ist fertig: Installer gestartet, jetzt beendet sich das Programm.
     drop(gate);
@@ -1172,8 +1176,8 @@ fn non_windows_shows_hint_and_opens_release_page() {
         launcher.clone(),
     );
     h.app.set_auto_install_supported(false);
-    h.click(INSTALL_NOW);
-    assert!(h.sees(ONLY_WINDOWS), "{:?}", h.texts());
+    h.click(install_now().as_str());
+    assert!(h.sees(only_windows().as_str()), "{:?}", h.texts());
     let page = release_page(TAG);
     assert_eq!(
         page,
@@ -1183,7 +1187,7 @@ fn non_windows_shows_hint_and_opens_release_page() {
     assert_eq!(downloader.calls(), 0);
     assert!(launcher.calls().is_empty());
     // Der Knopf in der Fehlermeldung öffnet die Seite noch einmal.
-    h.click(OPEN_DOWNLOAD_PAGE);
+    h.click(open_download_page().as_str());
     assert_eq!(h.urls, vec![page.clone(), page]);
 }
 
@@ -1198,16 +1202,16 @@ fn cancel_during_download_returns_to_idle() {
         downloader.clone(),
         launcher.clone(),
     );
-    h.click(INSTALL_NOW);
+    h.click(install_now().as_str());
     // Ein erstes Stück, dann steht der Download.
     gate_tx.send(()).unwrap();
     h.until(
         |a| matches!(a.installer().state(), InstallState::Downloading { done, .. } if *done > 0),
     );
     h.settle();
-    assert!(h.sees(CANCEL), "{:?}", h.texts());
+    assert!(h.sees(cancel().as_str()), "{:?}", h.texts());
     assert!(h.paths.setup.exists());
-    h.click(CANCEL);
+    h.click(cancel().as_str());
     assert_eq!(h.state(), InstallState::Idle);
     assert!(!h.app.update_dialog_mut().open);
     assert!(!h.app.update_dialog_mut().installing);
@@ -1236,7 +1240,7 @@ fn ui_stays_responsive_state_machine_progress() {
         launcher.clone(),
     );
     assert_eq!(h.state(), InstallState::Idle);
-    h.click(INSTALL_NOW);
+    h.click(install_now().as_str());
     let total = NEW_SETUP.len() as u64;
     assert_eq!(
         h.state(),
@@ -1313,7 +1317,7 @@ fn waits_until_free(
     let (ws, cfg, paths) = ws.unwrap_or_else(|| workspace(prefix));
     let mut h = Harness::with(ws, cfg, paths, downloader, launcher.clone());
     h.until_offered();
-    h.click(INSTALL_NOW);
+    h.click(install_now().as_str());
     block(&mut h.app);
     drop(gate_tx_rest(gate_tx));
     h.until(|a| *a.installer().state() == InstallState::ReadyToRestart);
@@ -1345,7 +1349,10 @@ fn restart_waits_while_a_prompt_is_open() {
     );
     h.until(|a| a.restart_phase() == RestartPhase::Exiting);
     assert_eq!(launcher.calls().len(), 1);
-    assert_eq!(WAITING, "Update ist bereit und wartet, bis du fertig bist.");
+    assert_eq!(
+        waiting().as_str(),
+        "Update ist bereit und wartet, bis du fertig bist."
+    );
 }
 
 #[test]
@@ -1457,7 +1464,7 @@ fn autosave_offer_during_the_prompt_is_not_a_cancel() {
     dirty(&mut ws);
     let mut h = Harness::with(ws, cfg, paths, FakeDownloader::good(), launcher.clone());
     h.until_offered();
-    h.click(INSTALL_NOW);
+    h.click(install_now().as_str());
     h.until(|a| a.restart_phase() == RestartPhase::AwaitingPrompt);
     // Das Angebot ersetzt die Rückfrage.
     let offer = autosave(h.app.ws_mut(), 0);
@@ -1489,7 +1496,7 @@ fn disk_full_during_download_shows_message_and_leaves_no_file() {
         FakeDownloader::failing(error.clone()),
         launcher.clone(),
     );
-    h.click(INSTALL_NOW);
+    h.click(install_now().as_str());
     h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
     assert_eq!(h.state(), InstallState::Failed(error.message()));
     h.settle();
@@ -1509,7 +1516,7 @@ fn unsaved_tabs_discarded_then_restart_is_requested() {
     dirty(&mut ws);
     let mut h = Harness::with(ws, cfg, paths, FakeDownloader::good(), launcher.clone());
     h.until_offered();
-    h.click(INSTALL_NOW);
+    h.click(install_now().as_str());
     h.until(|a| a.restart_phase() == RestartPhase::AwaitingPrompt);
     h.click("Verwerfen");
     assert_eq!(h.app.restart_phase(), RestartPhase::AwaitingPrompt);
@@ -1533,12 +1540,12 @@ fn failure_has_its_own_title_message_on_top_and_retry() {
         downloader.clone(),
         FakeLauncher::ok(),
     );
-    h.click(INSTALL_NOW);
+    h.click(install_now().as_str());
     h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
     h.settle();
     let message = InstallError::Checksum.message();
-    assert!(h.sees(FAILED_TITLE), "{:?}", h.texts());
-    assert_eq!(FAILED_TITLE, "Update hat nicht geklappt");
+    assert!(h.sees(failed_title().as_str()), "{:?}", h.texts());
+    assert_eq!(failed_title().as_str(), "Update hat nicht geklappt");
     assert!(
         !h.sees(&planora_app::update_dialog::title(&v(TARGET))),
         "{:?}",
@@ -1553,9 +1560,13 @@ fn failure_has_its_own_title_message_on_top_and_retry() {
             .top()
     };
     assert!(top(&h, &message) < top(&h, "Schneller beim Öffnen"));
-    assert!(h.sees(RETRY) && h.sees(OPEN_DOWNLOAD_PAGE) && h.sees(CLOSE));
+    assert!(
+        h.sees(retry().as_str())
+            && h.sees(open_download_page().as_str())
+            && h.sees(close().as_str())
+    );
     assert_eq!(downloader.calls(), 2);
-    h.click(RETRY);
+    h.click(retry().as_str());
     h.until(|a| matches!(a.installer().state(), InstallState::Failed(_)));
     assert_eq!(downloader.calls(), 4, "noch einmal geladen");
     assert!(h.app.update_dialog_mut().installing);
@@ -1567,11 +1578,11 @@ fn failure_has_its_own_title_message_on_top_and_retry() {
         FakeLauncher::ok(),
     );
     h.app.set_auto_install_supported(false);
-    h.click(INSTALL_NOW);
+    h.click(install_now().as_str());
     h.settle();
-    assert!(h.sees(FAILED_TITLE), "{:?}", h.texts());
-    assert!(h.sees(ONLY_WINDOWS));
-    assert!(!h.sees(RETRY), "{:?}", h.texts());
+    assert!(h.sees(failed_title().as_str()), "{:?}", h.texts());
+    assert!(h.sees(only_windows().as_str()));
+    assert!(!h.sees(retry().as_str()), "{:?}", h.texts());
 }
 
 /// „Neustart …“ steht während der Prüfung vor dem Start nur einmal da (in der Statuszeile); der
@@ -1584,13 +1595,17 @@ fn restart_text_appears_once_while_waiting() {
         FakeLauncher::ok(),
     );
     let gate = h.hold_reverify();
-    h.click(INSTALL_NOW);
+    h.click(install_now().as_str());
     h.until(|a| a.restart_phase() == RestartPhase::Verifying);
     h.settle();
     assert_eq!(h.app.notice_view(), InstallView::Restarting);
-    let restarting = h.seen.iter().filter(|s| s.text == RESTARTING).count();
+    let restarting = h
+        .seen
+        .iter()
+        .filter(|s| s.text == restarting().as_str())
+        .count();
     assert_eq!(restarting, 1, "{:?}", h.texts());
-    assert!(h.sees(RESTART_BOX), "{:?}", h.texts());
+    assert!(h.sees(restart_box().as_str()), "{:?}", h.texts());
     drop(gate);
 }
 
@@ -1612,7 +1627,7 @@ fn notice_sits_bottom_right_and_dialogs_do_not_cover_it() {
             .rect
     };
     let notice = find(&h, &title);
-    let skip = find(&h, SKIP);
+    let skip = find(&h, skip().as_str());
     // Rechts von jedem mittigen Fenster bis zur Breite „Wide“ (720) und über der Verlaufsleiste.
     let wide_right = SIZE.x / 2.0 + planora_app::dialog::DialogSize::Wide.width() / 2.0;
     assert!(notice.left() > wide_right, "{notice:?}");
@@ -1655,7 +1670,7 @@ fn window_state_goes_with_the_pending_update() {
         maximized: Some(true),
         ..Default::default()
     });
-    h.click(INSTALL_NOW);
+    h.click(install_now().as_str());
     h.until(|a| a.restart_phase() == RestartPhase::Exiting);
     let config = Config::load_from(&h.cfg);
     let window = config
@@ -1736,7 +1751,7 @@ fn minimized_window_keeps_the_last_visible_state() {
     h.settle();
     h.viewport = Some(minimized);
     // Die Meldung bleibt bedienbar; der Klick kommt beim „minimierten“ Fenster an.
-    h.click(INSTALL_NOW);
+    h.click(install_now().as_str());
     h.until(|a| a.restart_phase() == RestartPhase::Exiting);
     let window = Config::load_from(&h.cfg)
         .update_pending
@@ -1763,7 +1778,7 @@ fn update_exit_leaves_no_run_marker() {
     assert_eq!(finding, planora_app::crash::StartFinding::Clean);
     h.app.set_run_marker(marker);
     assert!(planora_app::crash::marker_path(&data, 4_000_000_011).exists());
-    h.click(INSTALL_NOW);
+    h.click(install_now().as_str());
     h.until(|a| a.restart_phase() == RestartPhase::Exiting);
     h.settle();
     assert!(h.close_sent());

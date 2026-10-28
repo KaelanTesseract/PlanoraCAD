@@ -518,10 +518,12 @@ impl PlanoraApp {
                     .start(&update, paths, Arc::clone(&self.downloader)),
                 None => self
                     .installer
-                    .fail(InstallError::Io("kein Ordner für den Download".into()).message()),
+                    .fail(update_install::install_error_text(&InstallError::Io(tr!(
+                        "update-detail-no-folder"
+                    )))),
             },
             InstallDecision::OnlyWindows => {
-                self.installer.fail(update_install::ONLY_WINDOWS);
+                self.installer.fail(update_install::only_windows());
                 open_release_page(ctx, &update);
             }
             InstallDecision::NotInstalled => open_release_page(ctx, &update),
@@ -603,7 +605,7 @@ impl PlanoraApp {
                         return;
                     }
                     Some(Err(TryRecvError::Disconnected)) | None => {
-                        Err(InstallError::Io("Prüfung abgebrochen".into()))
+                        Err(InstallError::Io(tr!("update-detail-check-aborted")))
                     }
                 };
                 self.reverify = None;
@@ -620,7 +622,7 @@ impl PlanoraApp {
                         if let Some(paths) = self.installer.paths() {
                             discard_download(paths);
                         }
-                        self.installer.fail(e.message());
+                        self.installer.fail(update_install::install_error_text(&e));
                     }
                 }
             }
@@ -634,7 +636,8 @@ impl PlanoraApp {
         let (Some(paths), Some(hex)) = (self.installer.paths(), self.installer.verified_sha256())
         else {
             self.restart = RestartPhase::None;
-            self.installer.fail(InstallError::Checksum.message());
+            self.installer
+                .fail(update_install::install_error_text(&InstallError::Checksum));
             return;
         };
         self.reverify = Some(update_install::reverify(
@@ -658,9 +661,9 @@ impl PlanoraApp {
             self.installer.target(),
             self.install_mode,
         ) else {
-            self.installer.fail(update_install::launch_failed(
-                "nicht installiert oder kein Download",
-            ));
+            self.installer.fail(update_install::launch_failed(&tr!(
+                "update-detail-not-installed"
+            )));
             return;
         };
         let from = crate::running_version();
@@ -671,7 +674,7 @@ impl PlanoraApp {
             let _ = self.ws.set_pending_update(None);
             drop(locked);
             discard_download(&paths);
-            self.installer.fail(update_install::PENDING_NOT_SAVED);
+            self.installer.fail(update_install::pending_not_saved());
             return;
         }
         if let Some(update) = &self.update_dialog.update
@@ -704,7 +707,7 @@ impl PlanoraApp {
     /// anbieten. Das Programm läuft in der bisherigen Version weiter.
     fn launch_refused(&mut self, paths: &DownloadPaths, e: &LaunchError) {
         let message = match e {
-            LaunchError::Cancelled => update_install::UPDATE_CANCELLED.to_string(),
+            LaunchError::Cancelled => update_install::update_cancelled(),
             LaunchError::Failed(detail) => update_install::launch_failed(detail),
         };
         let why = match e {
@@ -1781,7 +1784,7 @@ pub fn help_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
         ui.close();
     }
     ui.separator();
-    if entry(ui, true, icons::button(Icon::About, about_dialog::TITLE)).clicked() {
+    if entry(ui, true, icons::button(Icon::About, about_dialog::title())).clicked() {
         commands::timed("Über PlanoraCAD", || ws.about_open = true);
         ui.close();
     }
@@ -2540,7 +2543,7 @@ impl eframe::App for PlanoraApp {
             // Über allem: sperrt die Bedienung, bis der Installer gestartet ist und sich das Programm
             // beendet (oder der Start scheitert und das Programm weiterläuft).
             egui::Modal::new(egui::Id::new("planora_update_restart"))
-                .show(&ctx, |ui| ui.label(update_install::RESTART_BOX));
+                .show(&ctx, |ui| ui.label(update_install::restart_box()));
         }
 
         // Änderungen am Dokument werden Schritte für Rückgängig (R3, R4): erst wenn keine

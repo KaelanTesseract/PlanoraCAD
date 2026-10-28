@@ -280,11 +280,11 @@ pub fn default_dir() -> PathBuf {
 }
 
 /// Einfache Meldung zu einem Lesefehler, ohne Text des Betriebssystems.
-pub fn io_message(kind: std::io::ErrorKind) -> &'static str {
+pub fn io_message(kind: std::io::ErrorKind) -> String {
     match kind {
-        std::io::ErrorKind::NotFound => "Der Ordner ist nicht vorhanden.",
-        std::io::ErrorKind::PermissionDenied => "Auf diesen Ordner darf nicht zugegriffen werden.",
-        _ => "Der Ordner lässt sich nicht öffnen.",
+        std::io::ErrorKind::NotFound => planora_i18n::tr!("chooser-io-not-found"),
+        std::io::ErrorKind::PermissionDenied => planora_i18n::tr!("chooser-io-denied"),
+        _ => planora_i18n::tr!("chooser-io-other"),
     }
 }
 
@@ -392,7 +392,7 @@ impl FileChooser {
         let read = match std::fs::read_dir(&self.dir) {
             Ok(r) => r,
             Err(e) => {
-                self.error = Some(io_message(e.kind()).into());
+                self.error = Some(io_message(e.kind()));
                 return;
             }
         };

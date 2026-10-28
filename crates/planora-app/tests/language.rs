@@ -87,7 +87,9 @@ fn fixed_number_helpers_follow_the_language() {
         ]
     );
     let en = with_lang(&english(), all);
-    let expected: Vec<String> = de.iter().map(|s| s.replace(',', ".")).collect();
+    let mut expected: Vec<String> = de.iter().map(|s| s.replace(',', ".")).collect();
+    // Der Text des Downloads ist selbst übersetzt, nur die Zahl folgt der Sprache.
+    expected[6] = "Downloading … 3.4 MB".into();
     assert_eq!(en, expected);
     // Gelesen werden Komma und Punkt in jeder Sprache.
     for lang in [german(), english()] {
@@ -141,7 +143,7 @@ fn the_language_choice_sits_in_appearance_and_shows_the_current_language() {
     // „Sprache“ steht im Abschnitt „Darstellung“ (nach dessen Titel, vor „Updates“).
     let pos = |t: &str| lines.iter().position(|l| *l == t).unwrap();
     assert!(
-        pos(settings_window::SECTION_APPEARANCE) < pos("Sprache"),
+        pos(settings_window::section_appearance().as_str()) < pos("Sprache"),
         "{de}"
     );
     let en = with_lang(&english(), || settings_texts(&mut ws));

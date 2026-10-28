@@ -3,24 +3,24 @@
 //! ([`SetupLauncher`]) und was beim Start nach einem Update geschieht ([`startup`]).
 //!
 //! **Ablauf.** „Jetzt aktualisieren“ → [`decide`] (nur Windows, nur eine installierte Fassung;
-//! eine nicht installierte bietet nur die Download-Seite, [`NOT_INSTALLED_HINT`]) →
+//! eine nicht installierte bietet nur die Download-Seite, [`not_installed_hint`]) →
 //! [`Installer::start`]: ein eigener Thread lädt die Prüfsummen-Datei und den Installer in den
 //! Ordner [`download_dir`] und prüft die Summe (`Downloading` → `ReadyToRestart`, sonst
 //! `Failed`); die erwartete Summe bleibt gemerkt. Weiter geht es erst, wenn nichts mehr offen ist
 //! (keine Rückfrage, kein Fenster, kein schreibender Export, kein Autosicherungs-Angebot; bis
-//! dahin [`WAITING`]). Dann fragt die App wie beim Schließen nach ungespeicherter Arbeit
+//! dahin [`waiting`]). Dann fragt die App wie beim Schließen nach ungespeicherter Arbeit
 //! (`Workspace::request_quit`); „Abbrechen“ dort bricht das Update ab und löscht den Download.
 //! Sonst: den Installer im Hintergrund noch einmal gegen die gemerkte Summe prüfen
 //! ([`reverify`]; ab da ist die Datei bis nach dem Start gesperrt, [`LockedSetup`]),
 //! `update_pending` samt Fenster speichern (gelingt das nicht, startet nichts:
-//! [`PENDING_NOT_SAVED`]), die Patchnotes hinterlegen und den Installer über die Sperre starten
+//! [`pending_not_saved`]), die Patchnotes hinterlegen und den Installer über die Sperre starten
 //! ([`LockedSetup::launch`], still, mit [`setup_args`]). Startet er, beendet sich das Programm
 //! ohne weitere Rückfrage (sauber, wie beim Schließen); der Installer wartet darauf, ersetzt die
 //! Dateien und startet die neue Version (nur mit [`SETUP_RESTART_PARAM`]). Lehnt jemand die
-//! Admin-Abfrage von Windows ab ([`UPDATE_CANCELLED`]) oder startet der Installer nicht
+//! Admin-Abfrage von Windows ab ([`update_cancelled`]) oder startet der Installer nicht
 //! ([`launch_failed`]), läuft das Programm in der bisherigen Version weiter und bietet die
 //! Version weiter an. Von der zweiten Prüfung bis zum Ende ist die Bedienung gesperrt
-//! ([`RESTART_BOX`]). Die Schritte nach dem Download stehen in [`crate::app`]
+//! ([`restart_box`]). Die Schritte nach dem Download stehen in [`crate::app`]
 //! (`PlanoraApp::install_tick`).
 //!
 //! **Start.** [`startup`] löscht `update_pending` und einen liegengebliebenen Download und zeigt
@@ -36,6 +36,7 @@ use std::thread::JoinHandle;
 
 use crate::install_mode::InstallMode;
 use crate::workspace::Workspace;
+use planora_i18n::tr;
 use planora_project::config::{Config, WindowState};
 use planora_update::install::{
     DownloadPaths, Downloader, InstallError, MAX_CHECKSUM_BYTES, checksum_hex, discard_download,
@@ -44,7 +45,9 @@ use planora_update::install::{
 use planora_update::{REPO, SETUP_NAME, Update, Version};
 
 /// Statuszeile und Meldung, solange ein fertiges Update auf das Ende der laufenden Arbeit wartet.
-pub const WAITING: &str = "Update ist bereit und wartet, bis du fertig bist.";
+pub fn waiting() -> String {
+    tr!("update-waiting")
+}
 
 /// Zwischenablage der Patchnotes der neuen Version neben der Konfiguration (erste Zeile die
 /// Version, dann die Notizen); die neue Version liest und löscht sie beim Start.
@@ -60,29 +63,51 @@ pub const DOWNLOAD_DIR_NAME: &str = "PlanoraCAD-Update";
 pub const SETUP_LOG_NAME: &str = "planoracad-update.log";
 
 /// Hinweis, wenn das Programm nicht unter Windows läuft.
-pub const ONLY_WINDOWS: &str = "Automatisches Aktualisieren gibt es nur unter Windows.";
+pub fn only_windows() -> String {
+    tr!("update-only-windows")
+}
 /// Knopf: öffnet die Release-Seite auf GitHub.
-pub const OPEN_DOWNLOAD_PAGE: &str = "Download-Seite öffnen";
+pub fn open_download_page() -> String {
+    tr!("update-open-download-page")
+}
 /// Meldung, wenn `update_pending` nicht gespeichert werden kann.
-pub const PENDING_NOT_SAVED: &str = "Das Update ließ sich nicht vormerken, weil die Einstellungen nicht gespeichert werden können. Es wurde nichts installiert.";
+pub fn pending_not_saved() -> String {
+    tr!("update-pending-not-saved")
+}
 /// Meldung, solange ein abgebrochener Download noch endet.
-pub const STILL_STOPPING: &str =
-    "Der abgebrochene Download endet gerade noch. Bitte gleich noch einmal versuchen.";
+pub fn still_stopping() -> String {
+    tr!("update-still-stopping")
+}
 /// Meldung, wenn die Admin-Abfrage von Windows abgelehnt wurde.
-pub const UPDATE_CANCELLED: &str = "Update abgebrochen. Ohne die Erlaubnis von Windows lässt sich PlanoraCAD nicht für alle Benutzer aktualisieren. Du arbeitest in der bisherigen Version weiter.";
+pub fn update_cancelled() -> String {
+    tr!("update-cancelled")
+}
 /// Hinweis in der Meldung, wenn diese Fassung nicht installiert ist (etwa aus dem Bauordner).
-pub const NOT_INSTALLED_HINT: &str = "Diese Fassung von PlanoraCAD ist nicht installiert und kann sich nicht selbst aktualisieren. Lade die neue Version auf der Download-Seite herunter.";
+pub fn not_installed_hint() -> String {
+    tr!("update-not-installed-hint")
+}
 
 /// Meldung, wenn der Installer nicht startet (`detail`: der Grund von Windows).
 pub fn launch_failed(detail: &str) -> String {
-    format!(
-        "Das Update ließ sich nicht starten ({detail}). Du arbeitest in der bisherigen Version weiter."
-    )
+    tr!("update-launch-failed", detail = detail)
 }
 
 /// Titel des Hinweises nach einem Update: „Aktualisiert auf Version 0.2.0-dev.2“.
 pub fn updated_title(v: &Version) -> String {
-    format!("Aktualisiert auf Version {v}")
+    tr!("update-updated-title", version = v.to_string())
+}
+
+/// Meldung für den Benutzer zu einem Fehler des Downloads (in der Sprache des Fensters; die
+/// deutsche Fassung von [`InstallError::message`] bleibt für Protokolle). Die Einzelheit
+/// (`detail`) setzt die Quelle des Fehlers.
+pub fn install_error_text(e: &InstallError) -> String {
+    match e {
+        InstallError::Cancelled => tr!("update-error-cancelled"),
+        InstallError::Network(detail) => tr!("update-error-network", detail = detail.as_str()),
+        InstallError::TooLarge => tr!("update-error-too-large"),
+        InstallError::Checksum => tr!("update-error-checksum"),
+        InstallError::Io(detail) => tr!("update-error-io", detail = detail.as_str()),
+    }
 }
 
 /// Release-Seite einer Version auf GitHub.
@@ -121,7 +146,7 @@ pub enum InstallDecision {
     /// Nicht unter Windows: Hinweis [`ONLY_WINDOWS`] und die Release-Seite öffnen.
     OnlyWindows,
     /// Nicht installiert (etwa aus dem Bauordner): die Meldung bietet nur
-    /// [`OPEN_DOWNLOAD_PAGE`] ([`NOT_INSTALLED_HINT`]).
+    /// [`open_download_page`] ([`not_installed_hint`]).
     NotInstalled,
 }
 
@@ -229,21 +254,23 @@ impl Installer {
             return;
         }
         if self.thread_running() {
-            self.fail(STILL_STOPPING);
+            self.fail(still_stopping());
             return;
         }
         let release = &update.latest;
         if !release_url_ok(&release.setup.url) || !release_url_ok(&release.sha256.url) {
-            self.fail(InstallError::Network("Adresse gehört nicht zum Release".into()).message());
+            self.fail(install_error_text(&InstallError::Network(tr!(
+                "update-detail-foreign-url"
+            ))));
             return;
         }
         let limit = match download_limit(release.setup.size) {
             Ok(limit) => limit,
-            Err(e) => return self.fail(e.message()),
+            Err(e) => return self.fail(install_error_text(&e)),
         };
         discard_download(&paths);
         if let Err(e) = prepare_dir(&paths) {
-            return self.fail(e.message());
+            return self.fail(install_error_text(&e));
         }
 
         let cancel = Arc::new(AtomicBool::new(false));
@@ -310,7 +337,7 @@ impl Installer {
             }
             Err(e) => {
                 discard_download(&paths);
-                self.fail(InstallError::Io(e.to_string()).message());
+                self.fail(install_error_text(&InstallError::Io(e.to_string())));
             }
         }
     }
@@ -331,16 +358,16 @@ impl Installer {
                             InstallState::ReadyToRestart
                         }
                         Err(InstallError::Cancelled) => InstallState::Idle,
-                        Err(e) => InstallState::Failed(e.message()),
+                        Err(e) => InstallState::Failed(install_error_text(&e)),
                     };
                     return;
                 }
                 Err(TryRecvError::Empty) => return,
                 Err(TryRecvError::Disconnected) => {
                     self.rx = None;
-                    self.state = InstallState::Failed(
-                        InstallError::Io("Download abgebrochen".into()).message(),
-                    );
+                    self.state = InstallState::Failed(install_error_text(&InstallError::Io(tr!(
+                        "update-detail-download-aborted"
+                    ))));
                     return;
                 }
             }
@@ -412,7 +439,7 @@ pub fn lock_verified(file: &Path, expected_hex: &str) -> Result<LockedSetup, Ins
     }
     let mut f = options
         .open(file)
-        .map_err(|e| InstallError::Io(format!("Datei lesen: {e}")))?;
+        .map_err(|e| InstallError::Io(tr!("update-detail-read-file", error = e.to_string())))?;
     reader_matches_sha256(&mut f, expected_hex)?;
     Ok(LockedSetup {
         path: file.to_path_buf(),
@@ -541,30 +568,35 @@ pub fn window_for_start(config: &Config, running: &Version) -> Option<WindowStat
 /// Text der Statuszeile während eines Updates.
 pub fn status_text(state: &InstallState, restarting: bool) -> String {
     match state {
-        _ if restarting => RESTARTING.into(),
+        _ if restarting => self::restarting(),
         InstallState::Downloading { done, total } => download_text(*done, *total),
-        InstallState::ReadyToRestart => WAITING.into(),
-        InstallState::Failed(_) => FAILED_SHORT.into(),
-        InstallState::Idle => crate::update_dialog::PREPARING.into(),
+        InstallState::ReadyToRestart => waiting(),
+        InstallState::Failed(_) => failed_short(),
+        InstallState::Idle => crate::update_dialog::preparing(),
     }
 }
 
 /// Statuszeile, solange der Installer geprüft und gestartet wird.
-pub const RESTARTING: &str = "Neustart …";
+pub fn restarting() -> String {
+    tr!("update-restarting")
+}
 /// Kasten über allem, solange der Installer geprüft und gestartet wird (die Bedienung ist
 /// gesperrt).
-pub const RESTART_BOX: &str =
-    "PlanoraCAD wird für das Update beendet und startet danach von selbst neu.";
+pub fn restart_box() -> String {
+    tr!("update-restart-box")
+}
 /// Statuszeile nach einem gescheiterten Update.
-pub const FAILED_SHORT: &str = "Update fehlgeschlagen";
+pub fn failed_short() -> String {
+    tr!("update-failed-short")
+}
 
 /// „Wird heruntergeladen … 42 %“ (ohne bekannte Größe: „… 3,4 MB“).
 pub fn download_text(done: u64, total: u64) -> String {
     match done.min(total).saturating_mul(100).checked_div(total) {
-        Some(pct) => format!("Wird heruntergeladen … {pct} %"),
+        Some(pct) => tr!("update-downloading-percent", percent = pct),
         None => {
             let mb = done as f64 / (1024.0 * 1024.0);
-            format!("Wird heruntergeladen … {} MB", planora_i18n::fmt_num(mb, 1))
+            tr!("update-downloading-mb", mb = planora_i18n::fmt_num(mb, 1))
         }
     }
 }
@@ -725,7 +757,7 @@ impl SetupLauncher for ShellLauncher {
 
     #[cfg(not(windows))]
     fn launch(&self, _setup: &Path, _mode: InstallMode) -> Result<(), LaunchError> {
-        Err(LaunchError::Failed(ONLY_WINDOWS.into()))
+        Err(LaunchError::Failed(only_windows()))
     }
 }
 

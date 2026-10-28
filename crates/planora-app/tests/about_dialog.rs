@@ -135,7 +135,7 @@ fn open_about(c: &egui::Context, app: &mut PlanoraApp, size: Vec2) -> Shot {
         .expect("Menü Hilfe");
     let shot = click(c, app, size, hilfe.center());
     let entry = shot
-        .rect(about_dialog::TITLE)
+        .rect(about_dialog::title().as_str())
         .expect("Eintrag im Menü Hilfe");
     click(c, app, size, entry.center())
 }
@@ -238,14 +238,14 @@ fn about_shows_system_and_gpu_lines() {
 
 #[test]
 fn about_texts_are_plain_language() {
-    assert_eq!(about_dialog::TITLE, "Über PlanoraCAD");
+    assert_eq!(about_dialog::title().as_str(), "Über PlanoraCAD");
     let mut all = vec![
         about_dialog::version_line(),
         about_dialog::license_line(),
-        about_dialog::SOURCES_HEADING.to_string(),
+        about_dialog::sources_heading().as_str().to_string(),
     ];
-    all.extend(about_dialog::SOURCES.iter().map(|s| s.to_string()));
-    assert_eq!(about_dialog::SOURCES.len(), 4);
+    all.extend(about_dialog::sources().iter().map(|s| s.to_string()));
+    assert_eq!(about_dialog::sources().len(), 4);
     for t in &all {
         assert!(t.chars().count() <= 60, "kurz genug: {t}");
         for tech in ["TTF", "crate", "::", "Cargo", "bytes", "px"] {
@@ -265,7 +265,7 @@ fn about_dialog_fits_the_smallest_window() {
     let mut app = new_app();
     open_about(&c, &mut app, SMALL);
     settle(&c, &mut app, SMALL);
-    let id = egui::Id::new(about_dialog::TITLE);
+    let id = egui::Id::new(about_dialog::title().as_str());
     let rect = c.memory(|m| m.area_rect(id)).expect("Dialog gezeigt");
     let window = Rect::from_min_size(Pos2::ZERO, SMALL);
     assert!(window.contains_rect(rect), "{rect:?} im Fenster");

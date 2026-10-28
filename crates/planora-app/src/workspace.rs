@@ -50,8 +50,9 @@ fn document_name(name: &str) -> Result<String, String> {
 }
 
 /// Meldung von [`Workspace::choose_root`], solange gespeicherte Dokumente offen sind.
-pub const ROOT_LOCKED: &str =
-    "Bitte zuerst alle gespeicherten Dokumente schließen, bevor der Projektordner wechselt.";
+pub fn root_locked() -> String {
+    planora_i18n::tr!("settings-root-locked")
+}
 
 /// Grund, warum Rückgängig nicht geht: kein Schritt da.
 pub const NOTHING_TO_UNDO: &str = "Es gibt nichts rückgängig zu machen.";
@@ -1278,7 +1279,7 @@ impl Workspace {
     /// gehören zur bisherigen Wurzel.
     pub fn choose_root(&mut self, root: &Path) -> Result<(), String> {
         if self.has_saved_documents() {
-            return Err(ROOT_LOCKED.into());
+            return Err(root_locked());
         }
         let lib = Library::open(root).map_err(err)?;
         self.library = Some(lib);

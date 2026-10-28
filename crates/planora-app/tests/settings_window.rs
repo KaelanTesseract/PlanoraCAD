@@ -188,12 +188,12 @@ fn a_project_or_document_folder_is_not_accepted() {
     ] {
         assert_eq!(
             change_root(&mut e.ws, &target),
-            Err(RootMessage::Error(NESTED.into())),
+            Err(RootMessage::Error(nested())),
             "{target:?}"
         );
     }
     assert_eq!(
-        NESTED,
+        nested().as_str(),
         "Das ist selbst schon ein Projekt oder Dokument. Bitte den Ordner wählen, der deine Projekte enthält."
     );
     assert_eq!(lib_root(&e.ws), e.root);
@@ -212,13 +212,19 @@ fn an_unreadable_target_gives_a_plain_error_and_keeps_the_old_one() {
     let Err(RootMessage::Error(text)) = change_root(&mut e.ws, &file) else {
         panic!("Fehler erwartet");
     };
-    assert!(text.starts_with(UNREADABLE), "{text}");
-    assert!(text.len() > UNREADABLE.len(), "mit Grund: {text}");
+    assert!(text.starts_with(unreadable().as_str()), "{text}");
+    assert!(
+        text.len() > unreadable().as_str().len(),
+        "mit Grund: {text}"
+    );
     assert!(
         !text.contains("os error"),
         "ohne Text des Betriebssystems: {text}"
     );
-    assert_eq!(UNREADABLE, "Das Verzeichnis lässt sich nicht lesen.");
+    assert_eq!(
+        unreadable().as_str(),
+        "Das Verzeichnis lässt sich nicht lesen."
+    );
     assert_eq!(lib_root(&e.ws), e.root);
     assert_eq!(fs::read(&e.cfg).unwrap(), before);
 }
@@ -234,10 +240,10 @@ fn a_failed_save_switches_for_this_session_with_a_warning() {
     let other = e.tmp.join("Anderes");
     assert_eq!(
         change_root(&mut e.ws, &other),
-        Err(RootMessage::Warning(NOT_SAVED.into()))
+        Err(RootMessage::Warning(not_saved()))
     );
     assert_eq!(
-        NOT_SAVED,
+        not_saved().as_str(),
         "Das neue Projektverzeichnis gilt nur bis zum Programmende: die Einstellung konnte nicht gespeichert werden."
     );
     assert!(places::same_dir(
@@ -446,23 +452,23 @@ fn the_window_shows_section_path_button_and_hint() {
     let seen = a.settle(6);
     let t = texts(&seen);
     for wanted in [
-        TITLE,
-        SECTION_PROJECTS,
-        DIRECTORY_LABEL,
+        title().as_str(),
+        section_projects().as_str(),
+        directory_label().as_str(),
         path.as_str(),
-        CHANGE_DIRECTORY,
-        KEEP_HINT,
+        change_directory().as_str(),
+        keep_hint().as_str(),
         "Schließen",
     ] {
         assert!(t.contains(&wanted), "„{wanted}“ fehlt: {t:?}");
     }
     assert!(!t.iter().any(|s| s.contains("Wurzel")), "{t:?}");
     // Auch beim Wählen nirgends „Wurzel“.
-    a.click(CHANGE_DIRECTORY);
+    a.click(change_directory().as_str());
     assert!(a.w.chooser_mut().is_some(), "Knopf öffnet die Auswahl");
     let seen = a.settle(4);
     let t = texts(&seen);
-    assert!(t.contains(&CHOOSE_HEADING), "{t:?}");
+    assert!(t.contains(&choose_heading().as_str()), "{t:?}");
     assert!(t.contains(&CHOOSE_FOLDER), "{t:?}");
     assert!(!t.iter().any(|s| s.contains("Wurzel")), "{t:?}");
 }
@@ -473,7 +479,7 @@ fn cancel_changes_nothing() {
     fs::create_dir_all(e.given.join("Neu")).unwrap();
     let mut a = App::new(e, true, 1400.0, 900.0);
     a.w.open(false);
-    a.click(CHANGE_DIRECTORY);
+    a.click(change_directory().as_str());
     a.w.chooser_mut().unwrap().mark("Neu");
     assert_eq!(a.w.chooser_mut().unwrap().marked(), Some("Neu"));
     a.click("Abbrechen");
@@ -490,7 +496,7 @@ fn choosing_a_marked_folder_switches_and_closes_the_chooser() {
     fs::create_dir_all(e.given.join("Neu")).unwrap();
     let mut a = App::new(e, true, 1400.0, 900.0);
     a.w.open(false);
-    a.click(CHANGE_DIRECTORY);
+    a.click(change_directory().as_str());
     a.w.chooser_mut().unwrap().mark("Neu");
     a.click(CHOOSE_FOLDER);
     assert_eq!(lib_root(&a.e.ws), a.e.root.join("Neu"));
@@ -531,7 +537,7 @@ fn the_chooser_starts_in_the_current_directory() {
 /// Wählt mit offenem Dokument den Ordner „Neu“: wird abgelehnt.
 fn refuse(a: &mut App) {
     a.w.open(false);
-    a.click(CHANGE_DIRECTORY);
+    a.click(change_directory().as_str());
     a.w.chooser_mut().unwrap().mark("Neu");
     a.click(CHOOSE_FOLDER);
 }
@@ -572,7 +578,7 @@ fn a_later_successful_change_clears_an_earlier_warning() {
     // Dokument schließen, dann noch einmal wählen (ohne neues `open`).
     a.e.ws.new_tab();
     a.e.ws.close_tab(0);
-    a.click(CHANGE_DIRECTORY);
+    a.click(change_directory().as_str());
     a.w.chooser_mut().unwrap().mark("Neu");
     a.click(CHOOSE_FOLDER);
     assert_eq!(a.w.message(), None, "alte Warnung weg");
@@ -589,7 +595,7 @@ fn a_favorite_added_in_the_settings_chooser_is_written_to_the_config_file() {
     let mut a = App::new(e, true, 1400.0, 900.0);
     a.via_show_in = true;
     a.w.open(false);
-    a.click(CHANGE_DIRECTORY);
+    a.click(change_directory().as_str());
     a.click_with("Teile", PointerButton::Secondary);
     a.click(&places::add_favorite_label());
     let disk = Config::read_from(&a.e.cfg).unwrap();
@@ -666,7 +672,7 @@ fn closing_reports_the_way_back_to_projects() {
     // ✕ auch während des Wählens.
     a.last = SettingsEvent::None;
     a.w.open(true);
-    a.click(CHANGE_DIRECTORY);
+    a.click(change_directory().as_str());
     a.click(&close_glyph());
     assert_eq!(
         a.last,
@@ -740,7 +746,7 @@ fn the_window_fits_800x600_while_choosing() {
 fn shown_value(seen: &[Shot]) -> (u8, Rect) {
     let label = seen
         .iter()
-        .find(|s| s.text == TRANSPARENCY_LABEL)
+        .find(|s| s.text == transparency_label().as_str())
         .expect("Beschriftung sichtbar");
     let number = seen
         .iter()
@@ -766,7 +772,7 @@ fn click_slider(a: &mut App, at: f32) {
     let seen = a.settle(4);
     let label = seen
         .iter()
-        .find(|s| s.text == TRANSPARENCY_LABEL)
+        .find(|s| s.text == transparency_label().as_str())
         .expect("Beschriftung sichtbar");
     let (_, value) = shown_value(&seen);
     let value = Shot {
@@ -804,13 +810,13 @@ fn the_appearance_section_stands_above_projects() {
                 .unwrap_or_else(|| panic!("„{t}“ fehlt: {:?}", texts(&seen)))
                 .rect
         };
-        assert_eq!(SECTION_APPEARANCE, "Darstellung");
-        assert_eq!(TRANSPARENCY_LABEL, "Durchsichtigkeit der Panels");
-        let appearance = find(SECTION_APPEARANCE);
-        let label = find(TRANSPARENCY_LABEL);
+        assert_eq!(section_appearance().as_str(), "Darstellung");
+        assert_eq!(transparency_label().as_str(), "Durchsichtigkeit der Panels");
+        let appearance = find(section_appearance().as_str());
+        let label = find(transparency_label().as_str());
         let (shown, value) = shown_value(&seen);
         assert_eq!(shown, 40, "Voreinstellung 40 %");
-        let projects = find(SECTION_PROJECTS);
+        let projects = find(section_projects().as_str());
         assert!(
             appearance.bottom() <= label.top(),
             "Überschrift über dem Regler"
@@ -865,16 +871,16 @@ fn a_failed_save_keeps_the_transparency_for_the_session_with_a_hint() {
         assert_eq!(fs::read(&blocker).unwrap(), b"x");
         assert_eq!(
             a.w.appearance_message(),
-            Some(&RootMessage::Warning(TRANSPARENCY_NOT_SAVED.into()))
+            Some(&RootMessage::Warning(transparency_not_saved()))
         );
         assert_eq!(
-            TRANSPARENCY_NOT_SAVED,
+            transparency_not_saved().as_str(),
             "Die Durchsichtigkeit gilt nur bis zum Programmende: die Einstellung konnte nicht gespeichert werden."
         );
         let seen = a.settle(3);
         let shot = seen
             .iter()
-            .find(|s| s.text == TRANSPARENCY_NOT_SAVED)
+            .find(|s| s.text == transparency_not_saved().as_str())
             .expect("Hinweis gezeichnet");
         assert_eq!(shot.color, theme::palette(dark).warning);
         // Neu öffnen leert den Hinweis.

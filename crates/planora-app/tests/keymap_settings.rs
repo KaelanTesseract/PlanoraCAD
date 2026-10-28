@@ -859,7 +859,7 @@ fn a_click_elsewhere_ends_capturing() {
     // „Projektverzeichnis ändern …“: Erfassen endet, die Auswahl öffnet.
     let mut r = rig();
     start_capture(&mut r);
-    r.click(planora_app::settings_window::CHANGE_DIRECTORY, 0);
+    r.click(planora_app::settings_window::change_directory().as_str(), 0);
     assert_eq!(r.state().capturing, None);
     assert!(r.app.windows_mut().2.chooser_mut().is_some());
 

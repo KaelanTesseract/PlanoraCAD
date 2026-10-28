@@ -4,10 +4,13 @@
 use crate::dialog::{Dialog, DialogSize};
 use crate::logo;
 use crate::theme::{self, SPACE_2, SPACE_4};
+use planora_i18n::tr;
 use planora_update::Version;
 
 /// Titel des Dialogs und Beschriftung des Menüeintrags.
-pub const TITLE: &str = "Über PlanoraCAD";
+pub fn title() -> String {
+    tr!("about-title")
+}
 
 /// Name des Programms.
 pub const NAME: &str = "PlanoraCAD";
@@ -16,15 +19,19 @@ pub const NAME: &str = "PlanoraCAD";
 pub const LICENSE: &str = "GPL-3.0-only";
 
 /// Überschrift über der Liste der Quellen.
-pub const SOURCES_HEADING: &str = "Mitgelieferte Schriften und Symbole";
+pub fn sources_heading() -> String {
+    tr!("about-sources-heading")
+}
 
 /// Woher die mitgelieferten Schriften und Symbole stammen.
-pub const SOURCES: [&str; 4] = [
-    "Schrift Montserrat (SIL Open Font License)",
-    "Symbole Phosphor Icons (MIT)",
-    "Schrift Roboto (Apache-2.0)",
-    "Logo-Schrift Rajdhani (SIL Open Font License)",
-];
+pub fn sources() -> [String; 4] {
+    [
+        tr!("about-source-montserrat"),
+        tr!("about-source-phosphor"),
+        tr!("about-source-roboto"),
+        tr!("about-source-rajdhani"),
+    ]
+}
 
 /// Zeile mit der laufenden Version und ihrem Kanal, etwa „Version 0.2.0-dev.1 (Dev)“.
 pub fn version_line() -> String {
@@ -33,20 +40,24 @@ pub fn version_line() -> String {
 
 /// Zeile mit der Version `v` und ihrem Kanal.
 pub fn version_line_for(v: &Version) -> String {
-    format!("Version {v} ({})", v.channel().label())
+    tr!(
+        "about-version",
+        version = v.to_string(),
+        channel = v.channel().label()
+    )
 }
 
 /// Zeile mit der Grafikkarte, etwa „Grafikkarte: Name · Treiber X · Vulkan“.
 pub fn gpu_text(info: &crate::build_info::BuildInfo) -> String {
     match info.gpu {
-        Some(_) => format!("Grafikkarte: {}", info.gpu_line()),
+        Some(_) => tr!("about-gpu", gpu = info.gpu_line()),
         None => info.gpu_line(),
     }
 }
 
 /// Zeile mit der Lizenz.
 pub fn license_line() -> String {
-    format!("Lizenz: {LICENSE}")
+    tr!("about-license", license = LICENSE)
 }
 
 /// Zeigt den Dialog, solange `*open` gilt; das Schließen-Symbol setzt `*open = false`.
@@ -54,7 +65,7 @@ pub fn show(ctx: &egui::Context, open: &mut bool) {
     if !*open {
         return;
     }
-    Dialog::new(TITLE, DialogSize::Normal)
+    Dialog::new(title(), DialogSize::Normal)
         .open(open)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -73,9 +84,9 @@ pub fn show(ctx: &egui::Context, open: &mut bool) {
                 });
             });
             ui.add_space(SPACE_4);
-            ui.strong(SOURCES_HEADING);
+            ui.strong(sources_heading());
             ui.add_space(SPACE_2);
-            for line in SOURCES {
+            for line in sources() {
                 ui.label(line);
             }
         });

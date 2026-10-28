@@ -421,7 +421,7 @@ fn help_menu_has_feedback_faq_and_about_and_file_menu_no_longer_has_about() {
     for t in [
         feedback_entry().as_str(),
         faq_entry().as_str(),
-        about_dialog::TITLE,
+        about_dialog::title().as_str(),
         "Strg+Umschalt+R",
     ] {
         assert!(r.sees(t), "„{t}“ fehlt: {:?}", r.texts());
@@ -429,7 +429,7 @@ fn help_menu_has_feedback_faq_and_about_and_file_menu_no_longer_has_about() {
     let (fb, faq, about) = (
         r.find(&feedback_entry()),
         r.find(&faq_entry()),
-        r.find(about_dialog::TITLE),
+        r.find(about_dialog::title().as_str()),
     );
     assert!(
         fb.top() < faq.top() && faq.top() < about.top(),
@@ -457,7 +457,7 @@ fn help_menu_has_feedback_faq_and_about_and_file_menu_no_longer_has_about() {
 
     // Über PlanoraCAD öffnet den Über-Dialog.
     r.open_menu(&help_menu_title());
-    r.click(about_dialog::TITLE);
+    r.click(about_dialog::title().as_str());
     assert!(r.app.ws_mut().about_open, "Über offen");
     r.app.ws_mut().about_open = false;
     r.settle();
@@ -465,7 +465,10 @@ fn help_menu_has_feedback_faq_and_about_and_file_menu_no_longer_has_about() {
     // Im Menü „Datei“ steht „Über“ nicht mehr.
     r.open_menu("Datei");
     assert!(r.sees(&settings_entry()), "Datei offen: {:?}", r.texts());
-    assert!(!r.sees(about_dialog::TITLE), "kein Über im Menü Datei");
+    assert!(
+        !r.sees(about_dialog::title().as_str()),
+        "kein Über im Menü Datei"
+    );
     assert_eq!(r.urls().len(), 1, "sonst nichts im Browser");
 }
 
@@ -1065,7 +1068,7 @@ fn window_rules_like_the_overview() {
     assert!(!r.app.ws_mut().about_open, "Über schließt");
     // „Über“ öffnet sich über der Rückmeldung (das zuletzt geöffnete Fenster gewinnt).
     r.open_menu(&help_menu_title());
-    r.click(about_dialog::TITLE);
+    r.click(about_dialog::title().as_str());
     assert!(r.app.ws_mut().about_open);
     assert!(!r.fb().open, "Rückmeldung tritt zurück");
     r.app.ws_mut().about_open = false;

@@ -18,7 +18,7 @@ use planora_app::icons::{self, Icon};
 use planora_app::import_dialog::ImportDialog;
 use planora_app::project_actions;
 use planora_app::projects_window::DIRECTORY_BUTTON;
-use planora_app::settings_window::{CHANGE_DIRECTORY, NOT_SAVED, RootMessage};
+use planora_app::settings_window::{RootMessage, change_directory, not_saved};
 use planora_app::shell::ShellState;
 use planora_app::state::{AppState, StandardPlane};
 use planora_app::step_import_dialog::StepImportDialog;
@@ -420,7 +420,7 @@ fn the_file_menu_has_projects_with_ctrl_o_and_settings() {
     let settings = shot.all(&settings_entry())[0].clone();
     // „Über PlanoraCAD“ steht im Menü „Hilfe“ (tests/feedback_dialog.rs).
     assert!(
-        shot.all(about_dialog::TITLE).is_empty(),
+        shot.all(about_dialog::title().as_str()).is_empty(),
         "kein Über im Menü Datei"
     );
     // Die Symbole links in der Zeile.
@@ -580,7 +580,7 @@ fn settings_from_the_menu_open_without_way_back() {
     let shot = rig.menu("Datei", &settings_entry());
     assert!(rig.settings_open(), "Einstellungen offen");
     assert!(!rig.projects_open(), "Projekte schließt");
-    assert!(shot.has(planora_app::settings_window::TITLE));
+    assert!(shot.has(planora_app::settings_window::title().as_str()));
     let area = rig.settings_rect();
     rig.click_in(&close_label(), Some(area));
     assert!(!rig.settings_open(), "Schließen schließt");
@@ -621,7 +621,7 @@ fn a_favorite_added_in_the_settings_of_the_app_is_saved() {
     let cfg = ws.config_path.clone();
     let mut rig = Rig::new(ws);
     rig.menu("Datei", &settings_entry());
-    rig.click(CHANGE_DIRECTORY);
+    rig.click(change_directory().as_str());
     // Rechtsklick auf den Ordner, dann „Zu Favoriten hinzufügen“.
     let shot = rig.pause();
     let at = shot.all("Teile")[0].rect.center();
@@ -672,7 +672,7 @@ fn change_directory_and_come_back(blocked: bool) {
     rig.frames_until_tiles();
     assert!(rig.tile_names().contains(&"A".to_string()));
     rig.click(DIRECTORY_BUTTON);
-    rig.click(CHANGE_DIRECTORY);
+    rig.click(change_directory().as_str());
     rig.app
         .windows_mut()
         .2
@@ -688,7 +688,7 @@ fn change_directory_and_come_back(blocked: bool) {
     if blocked {
         assert_eq!(
             message,
-            Some(RootMessage::Warning(NOT_SAVED.into())),
+            Some(RootMessage::Warning(not_saved())),
             "Warnung, Wechsel gilt trotzdem"
         );
     } else {
@@ -794,7 +794,7 @@ fn the_directory_cannot_be_changed_while_a_prompt_is_open() {
     // RV3: Einstellungen offen, Auswahl läuft; dann „Dokument gesperrt“ (Übernahme) als
     // Rückfrage: die Wahl ist gesperrt, bis die Rückfrage beantwortet ist.
     rig.menu("Datei", &settings_entry());
-    rig.click(CHANGE_DIRECTORY);
+    rig.click(change_directory().as_str());
     rig.app
         .windows_mut()
         .2
@@ -823,7 +823,7 @@ fn the_directory_cannot_be_changed_while_a_prompt_is_open() {
     rig.ctrl(Key::S);
     assert!(rig.ws().prompt.is_some());
     let area = rig.settings_rect();
-    rig.click_in(CHANGE_DIRECTORY, Some(area));
+    rig.click_in(change_directory().as_str(), Some(area));
     assert!(
         rig.app.windows_mut().2.chooser_mut().is_none(),
         "„ändern“ gesperrt"
@@ -831,7 +831,7 @@ fn the_directory_cannot_be_changed_while_a_prompt_is_open() {
     // Beantwortet: wieder frei.
     rig.ws().prompt = None;
     rig.settle(2);
-    rig.click(CHANGE_DIRECTORY);
+    rig.click(change_directory().as_str());
     assert!(rig.app.windows_mut().2.chooser_mut().is_some());
 }
 
@@ -1126,7 +1126,7 @@ fn save_as_points_to_the_projects_window() {
 #[test]
 fn new_texts_say_du_and_projektverzeichnis() {
     assert_eq!(
-        planora_app::settings_window::KEEP_HINT,
+        planora_app::settings_window::keep_hint().as_str(),
         "Deine Projekte bleiben, wo sie sind. Im neuen Verzeichnis erscheinen nur die Projekte, die dort liegen."
     );
     assert_eq!(
@@ -1134,7 +1134,7 @@ fn new_texts_say_du_and_projektverzeichnis() {
         "Das Projektverzeichnis lässt sich nicht lesen: "
     );
     assert_eq!(
-        planora_app::workspace::ROOT_LOCKED,
+        planora_app::workspace::root_locked().as_str(),
         "Bitte zuerst alle gespeicherten Dokumente schließen, bevor der Projektordner wechselt."
     );
 }

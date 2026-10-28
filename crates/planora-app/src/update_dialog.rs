@@ -14,14 +14,14 @@
 //!
 //! **Aktualisieren.** Nach „Jetzt aktualisieren“ bleibt die Meldung offen und zeigt statt der
 //! Knöpfe den Stand ([`InstallView`]): Fortschritt mit „Abbrechen“, „Update ist bereit …“
-//! oder einen Fehler. Ein Fehler steht deutlich da: Titel [`FAILED_TITLE`], die Meldung mit
+//! oder einen Fehler. Ein Fehler steht deutlich da: Titel [`failed_title`], die Meldung mit
 //! Warnsymbol in Warnfarbe über den Patchnotes (die weiter zu lesen sind), Knöpfe „Erneut
 //! versuchen“ (wo es helfen kann), „Download-Seite öffnen“ und „Schließen“. Während des
 //! Neustarts bleibt die Fußzeile leer; dann sagt es der Kasten über allem. ✕ und Esc blenden
 //! sie während des Updates nur aus (der
 //! Download läuft weiter, die Statuszeile zeigt den Stand); nach einem Fehler schließen sie wie
 //! „Schließen“. Ist diese Fassung nicht installiert (Entwicklung), steht statt „Jetzt
-//! aktualisieren“ ein Satz dazu ([`update_install::NOT_INSTALLED_HINT`]) und „Download-Seite
+//! aktualisieren“ ein Satz dazu ([`update_install::not_installed_hint`]) und „Download-Seite
 //! öffnen“ ist der Hauptknopf. Den Ablauf selbst führt [`crate::update_install`] mit der App aus. Nach dem
 //! Neustart zeigt [`show_after_update`] einmal „Aktualisiert auf Version X“.
 //!
@@ -38,20 +38,33 @@ use crate::icons::{self, Icon};
 use crate::update_install::{self, AfterUpdate};
 use crate::workspace::Workspace;
 use crate::{fonts, running_version, theme};
+use planora_i18n::tr;
 use planora_update::{NoteBlock, Span, Update, Version, parse_notes};
 
 /// Knopf: das Update herunterladen und einspielen.
-pub const INSTALL_NOW: &str = "Jetzt aktualisieren";
+pub fn install_now() -> String {
+    tr!("update-install-now")
+}
 /// Knopf: schließen, frühestens nach [`SNOOZE_SECS`] wieder von allein zeigen.
-pub const LATER: &str = "Später";
+pub fn later() -> String {
+    tr!("update-later")
+}
 /// Knopf: diese Version beim Start nicht wieder anbieten (die Suche von Hand zeigt sie weiter).
-pub const SKIP: &str = "Diese Version überspringen";
+pub fn skip() -> String {
+    tr!("update-skip")
+}
 /// Unter den Patchnotes, wenn sie wegen der Obergrenzen gekürzt sind.
-pub const MORE_ON_GITHUB: &str = "… und weitere Änderungen auf GitHub.";
+pub fn more_on_github() -> String {
+    tr!("update-more-on-github")
+}
 /// Statt der Notizen einer Version, die keine Beschreibung hat.
-pub const NO_NOTES: &str = "Keine Beschreibung.";
+pub fn no_notes() -> String {
+    tr!("update-no-notes")
+}
 /// Statuszeile nach „Jetzt aktualisieren“, bis das Update läuft.
-pub const PREPARING: &str = "Update wird vorbereitet …";
+pub fn preparing() -> String {
+    tr!("update-preparing")
+}
 /// So lange zeigt sich die Meldung nach „Später“ nicht von allein (24 Stunden).
 pub const SNOOZE_SECS: u64 = 24 * 60 * 60;
 /// Größte Höhe der Patchnotes; darüber rollen sie (Kopf und Knöpfe bleiben stehen).
@@ -65,39 +78,55 @@ const DONE_WINDOW_ID: &str = "planora_update_done";
 /// Breite des Fortschrittsbalkens.
 const PROGRESS_W: f32 = 360.0;
 /// Knopf während des Downloads: bricht das Update ab.
-pub const CANCEL: &str = "Abbrechen";
+pub fn cancel() -> String {
+    tr!("common-cancel")
+}
 /// Knopf nach einem Fehler: schließt die Meldung.
-pub const CLOSE: &str = "Schließen";
+pub fn close() -> String {
+    tr!("dialog-close")
+}
 /// Im Hinweis nach einem Update, wenn keine Patchnotes hinterlegt sind.
-pub const NOTES_ON_GITHUB: &str = "Was neu ist, steht auf GitHub.";
+pub fn notes_on_github() -> String {
+    tr!("update-notes-on-github")
+}
 /// Knopf des Hinweises nach einem Update.
-pub const OK: &str = "OK";
+pub fn ok() -> String {
+    tr!("common-ok")
+}
 /// Titel der Meldung nach einem Fehler.
-pub const FAILED_TITLE: &str = "Update hat nicht geklappt";
+pub fn failed_title() -> String {
+    tr!("update-failed-title")
+}
 /// Knopf nach einem Fehler: das Update noch einmal versuchen.
-pub const RETRY: &str = "Erneut versuchen";
+pub fn retry() -> String {
+    tr!("update-retry")
+}
 /// Größe des Warnsymbols vor einer Fehlermeldung.
 const WARNING_ICON_SIZE: f32 = 20.0;
 
 /// Titel: „Neue Version verfügbar: 0.2.0-dev.2 (Dev)“.
 pub fn title(v: &Version) -> String {
-    format!("Neue Version verfügbar: {v} ({})", v.channel().label())
+    tr!(
+        "update-title",
+        version = v.to_string(),
+        channel = v.channel().label()
+    )
 }
 
 /// „Du hast Version 0.2.0-dev.1“.
 pub fn running_line(v: &Version) -> String {
-    format!("Du hast Version {v}")
+    tr!("update-running-line", version = v.to_string())
 }
 
 /// Überschrift der Notizen einer Version: „Version 0.2.0-dev.2“.
 pub fn version_heading(v: &Version) -> String {
-    format!("Version {v}")
+    tr!("update-version-heading", version = v.to_string())
 }
 
 /// Hinweis in der Statuszeile, solange ein Update vorgemerkt und die Meldung zu ist (ein Klick
 /// öffnet sie): „Update verfügbar: 0.2.0-dev.2“.
 pub fn status_hint(v: &Version) -> String {
-    format!("Update verfügbar: {v}")
+    tr!("update-status-hint", version = v.to_string())
 }
 
 /// Was in der Meldung gewählt wurde.
@@ -125,7 +154,7 @@ pub enum UpdateAction {
 /// Was die Meldung nach „Jetzt aktualisieren“ statt der Knöpfe zeigt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InstallView<'a> {
-    /// Noch nichts gestartet: [`PREPARING`].
+    /// Noch nichts gestartet: [`preparing`].
     Preparing,
     /// Fortschrittsbalken und „Abbrechen“.
     Downloading { done: u64, total: u64 },
@@ -289,7 +318,7 @@ pub fn show(
         _ => None,
     };
     let heading = match failure {
-        Some(_) => FAILED_TITLE.to_string(),
+        Some(_) => failed_title(),
         None => title(&update.latest.version),
     };
     let area = notice_area(ctx.content_rect());
@@ -319,7 +348,7 @@ pub fn show(
                 if update.truncated {
                     ui.add_space(theme::SPACE_2);
                     ui.label(
-                        egui::RichText::new(MORE_ON_GITHUB)
+                        egui::RichText::new(more_on_github())
                             .color(theme::palette(dark).text_secondary),
                     );
                 }
@@ -330,25 +359,25 @@ pub fn show(
                     return;
                 }
                 if !installable {
-                    ui.add(egui::Label::new(update_install::NOT_INSTALLED_HINT).wrap());
+                    ui.add(egui::Label::new(update_install::not_installed_hint()).wrap());
                     ui.add_space(theme::SPACE_2);
                 }
                 ui.horizontal(|ui| {
                     let main = if installable {
-                        (INSTALL_NOW, UpdateAction::InstallNow)
+                        (install_now(), UpdateAction::InstallNow)
                     } else {
                         (
-                            update_install::OPEN_DOWNLOAD_PAGE,
+                            update_install::open_download_page(),
                             UpdateAction::OpenDownloadPage,
                         )
                     };
-                    if ui.add(theme::primary_button(main.0, dark)).clicked() {
+                    if ui.add(theme::primary_button(&main.0, dark)).clicked() {
                         action = Some(main.1);
                     }
-                    if ui.button(LATER).clicked() {
+                    if ui.button(later()).clicked() {
                         action = Some(UpdateAction::Later);
                     }
-                    if ui.button(SKIP).clicked() {
+                    if ui.button(skip()).clicked() {
                         action = Some(UpdateAction::Skip);
                     }
                 });
@@ -369,12 +398,12 @@ fn install_footer(ui: &mut egui::Ui, install: InstallView<'_>, dark: bool) -> Op
     let mut action = None;
     match install {
         InstallView::Preparing => {
-            ui.label(PREPARING);
+            ui.label(preparing());
         }
         // Der Kasten über allem sagt es schon ([`update_install::RESTART_BOX`]).
         InstallView::Restarting => {}
         InstallView::Waiting => {
-            ui.label(update_install::WAITING);
+            ui.label(update_install::waiting());
         }
         InstallView::Downloading { done, total } => {
             ui.horizontal(|ui| {
@@ -383,7 +412,7 @@ fn install_footer(ui: &mut egui::Ui, install: InstallView<'_>, dark: bool) -> Op
                         .desired_width(PROGRESS_W)
                         .text(update_install::download_text(done, total)),
                 );
-                if ui.button(CANCEL).clicked() {
+                if ui.button(cancel()).clicked() {
                     action = Some(UpdateAction::CancelInstall);
                 }
             });
@@ -391,21 +420,25 @@ fn install_footer(ui: &mut egui::Ui, install: InstallView<'_>, dark: bool) -> Op
         // Die Meldung selbst steht oben im Inhalt ([`failure_box`]).
         InstallView::Failed { retry, .. } => {
             ui.horizontal(|ui| {
-                if retry && ui.add(theme::primary_button(RETRY, dark)).clicked() {
+                if retry
+                    && ui
+                        .add(theme::primary_button(&self::retry(), dark))
+                        .clicked()
+                {
                     action = Some(UpdateAction::Retry);
                 }
                 let page = if retry {
-                    ui.button(update_install::OPEN_DOWNLOAD_PAGE)
+                    ui.button(update_install::open_download_page())
                 } else {
                     ui.add(theme::primary_button(
-                        update_install::OPEN_DOWNLOAD_PAGE,
+                        &update_install::open_download_page(),
                         dark,
                     ))
                 };
                 if page.clicked() {
                     action = Some(UpdateAction::OpenDownloadPage);
                 }
-                if ui.button(CLOSE).clicked() {
+                if ui.button(self::close()).clicked() {
                     action = Some(UpdateAction::CloseFailed);
                 }
             });
@@ -432,9 +465,13 @@ pub(crate) fn failure_box(ui: &mut egui::Ui, message: &str, dark: bool) {
 }
 
 /// Satz im Hinweis nach einem Update.
-pub const AFTER_UPDATE_FEEDBACK: &str = "Etwas stimmt nicht?";
+pub fn after_update_feedback() -> String {
+    tr!("update-after-feedback")
+}
 /// Knopf im Hinweis nach einem Update: öffnet das Fenster „Rückmeldung“.
-pub const FEEDBACK_BUTTON: &str = "Rückmeldung geben";
+pub fn feedback_button() -> String {
+    tr!("update-feedback-button")
+}
 
 /// Was der Hinweis nach einem Update dem Programm aufträgt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -469,7 +506,7 @@ pub fn show_after_update(
         |ui| {
             let blocks = info.notes.as_deref().map(parse_notes).unwrap_or_default();
             if blocks.is_empty() {
-                ui.label(NOTES_ON_GITHUB);
+                ui.label(notes_on_github());
             } else {
                 theme::scroll_area(
                     ui,
@@ -486,16 +523,16 @@ pub fn show_after_update(
             }
             ui.add_space(theme::SPACE_3);
             ui.label(
-                egui::RichText::new(AFTER_UPDATE_FEEDBACK)
+                egui::RichText::new(after_update_feedback())
                     .color(theme::palette(dark).text_secondary),
             );
         },
         |ui| {
             ui.horizontal(|ui| {
-                if ui.add(theme::primary_button(OK, dark)).clicked() {
+                if ui.add(theme::primary_button(&self::ok(), dark)).clicked() {
                     ok = true;
                 }
-                if ui.button(FEEDBACK_BUTTON).clicked() {
+                if ui.button(feedback_button()).clicked() {
                     feedback = true;
                 }
             });
@@ -519,7 +556,7 @@ fn notes(ui: &mut egui::Ui, update: &Update, dark: bool) {
         ui.add_space(theme::SPACE_1);
         let blocks = parse_notes(text);
         if blocks.is_empty() {
-            ui.label(egui::RichText::new(NO_NOTES).color(theme::palette(dark).text_secondary));
+            ui.label(egui::RichText::new(no_notes()).color(theme::palette(dark).text_secondary));
         }
         ui.push_id(i, |ui| {
             for block in &blocks {
