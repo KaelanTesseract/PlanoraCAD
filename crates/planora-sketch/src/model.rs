@@ -100,16 +100,16 @@ pub const MAX_COORD: f64 = 1e9;
 pub const MAX_SPLINE_POINTS: usize = 64;
 
 /// Endlich und betragsmäßig höchstens [`MAX_COORD`].
-pub(crate) fn finite(v: f64, what: String) -> Result<(), SketchError> {
+pub(crate) fn finite(v: f64, what: impl FnOnce() -> String) -> Result<(), SketchError> {
     if !v.is_finite() {
         Err(SketchError::InvalidInput(tr!(
             "sketch-err-not-finite",
-            what = what
+            what = what()
         )))
     } else if v.abs() > MAX_COORD {
         Err(SketchError::InvalidInput(tr!(
             "sketch-err-too-large",
-            what = what,
+            what = what(),
             max = format!("{MAX_COORD:e}")
         )))
     } else {
@@ -203,8 +203,8 @@ impl Sketch {
     }
 
     pub fn add_point(&mut self, x: f64, y: f64) -> Result<PointId, SketchError> {
-        finite(x, tr!("sketch-err-what-x"))?;
-        finite(y, tr!("sketch-err-what-y"))?;
+        finite(x, || tr!("sketch-err-what-x"))?;
+        finite(y, || tr!("sketch-err-what-y"))?;
         let (xi, yi) = (self.new_var(x), self.new_var(y));
         Ok(self.points.push(PointData {
             x: xi,
@@ -221,8 +221,8 @@ impl Sketch {
 
     pub fn set_point_xy(&mut self, p: PointId, x: f64, y: f64) -> Result<(), SketchError> {
         self.check_point(p)?;
-        finite(x, tr!("sketch-err-what-x"))?;
-        finite(y, tr!("sketch-err-what-y"))?;
+        finite(x, || tr!("sketch-err-what-x"))?;
+        finite(y, || tr!("sketch-err-what-y"))?;
         let (xi, yi) = (self.points[p].x, self.points[p].y);
         self.vars[xi] = x;
         self.vars[yi] = y;
@@ -250,7 +250,7 @@ impl Sketch {
 
     pub fn add_circle(&mut self, center: PointId, radius: f64) -> Result<CurveId, SketchError> {
         self.check_point(center)?;
-        finite(radius, tr!("sketch-err-what-radius"))?;
+        finite(radius, || tr!("sketch-err-what-radius"))?;
         if radius <= self.tol.linear {
             return Err(SketchError::Degenerate(tr!("sketch-radius-positive")));
         }
@@ -289,9 +289,9 @@ impl Sketch {
         minor: f64,
     ) -> Result<CurveId, SketchError> {
         self.check_point(center)?;
-        finite(major.x, tr!("sketch-err-what-major"))?;
-        finite(major.y, tr!("sketch-err-what-major"))?;
-        finite(minor, tr!("sketch-err-what-minor"))?;
+        finite(major.x, || tr!("sketch-err-what-major"))?;
+        finite(major.y, || tr!("sketch-err-what-major"))?;
+        finite(minor, || tr!("sketch-err-what-minor"))?;
         let len = major.length();
         if len <= self.tol.linear {
             return Err(SketchError::Degenerate(tr!("sketch-major-axis-positive")));

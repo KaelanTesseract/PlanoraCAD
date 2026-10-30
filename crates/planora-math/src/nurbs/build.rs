@@ -90,11 +90,11 @@ fn arc_knots(segments: usize, lo: f64, hi: f64) -> Vec<f64> {
     k
 }
 
-fn check_point(p: DVec3, what: String) -> Result<(), NurbsError> {
+fn check_point(p: DVec3, what: impl FnOnce() -> String) -> Result<(), NurbsError> {
     if !p.is_finite() || p.abs().max_element() > MAX_COORD {
         return Err(NurbsError::Input(tr!(
             "math-point-range",
-            what = what,
+            what = what(),
             max = MAX_COORD.to_string()
         )));
     }
@@ -114,9 +114,9 @@ impl NurbsCurve {
         start: f64,
         sweep: f64,
     ) -> Result<NurbsCurve, NurbsError> {
-        check_point(center, tr!("math-what-center"))?;
-        check_point(a, tr!("math-what-axis-a"))?;
-        check_point(b, tr!("math-what-axis-b"))?;
+        check_point(center, || tr!("math-what-center"))?;
+        check_point(a, || tr!("math-what-axis-a"))?;
+        check_point(b, || tr!("math-what-axis-b"))?;
         if a.cross(b).length() <= PARALLEL_RATIO * a.length() * b.length()
             || a.length() < MIN_DIRECTION_LENGTH
             || b.length() < MIN_DIRECTION_LENGTH
@@ -151,7 +151,7 @@ impl NurbsCurve {
             )));
         }
         for p in points {
-            check_point(*p, tr!("math-what-each-point"))?;
+            check_point(*p, || tr!("math-what-each-point"))?;
         }
         if params.iter().any(|t| !t.is_finite()) {
             return Err(NurbsError::Input(tr!("math-params-finite")));
@@ -248,7 +248,7 @@ impl NurbsSurface {
         start: f64,
         sweep: f64,
     ) -> Result<NurbsSurface, NurbsError> {
-        check_point(axis_origin, tr!("math-what-axis-point"))?;
+        check_point(axis_origin, || tr!("math-what-axis-point"))?;
         if !axis_dir.is_finite() || axis_dir.length() < MIN_DIRECTION_LENGTH {
             return Err(NurbsError::Input(tr!("math-axis-direction")));
         }

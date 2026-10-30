@@ -349,7 +349,7 @@ fn boolean_error(a: &Solid, b: &Solid, e: &BooleanError) -> FeatureError {
         return FeatureError::Kernel(e.to_string());
     }
     let cause = e.to_string();
-    if cause.contains(&tr!("feature-hint-marker")) {
+    if e.has_user_hint() {
         FeatureError::Kernel(tr!("feature-freeform-prefix", cause = cause.to_string()))
     } else {
         FeatureError::Kernel(tr!("feature-freeform-hint", cause = cause.to_string()))
@@ -666,6 +666,45 @@ mod tests {
         for e in plain_kinds {
             assert_eq!(text(&freeform, &plain, e.clone()), e.to_string());
         }
+    }
+
+    #[test]
+    fn the_freeform_hint_follows_the_error_kind_in_both_languages() {
+        use planora_i18n::{english, german, with_lang};
+        use planora_kernel::{Profile, ProfileLoop};
+        use planora_math::nurbs::NurbsCurve;
+        use planora_math::{Frame, Tolerance};
+        let tol = Tolerance::default();
+        let ellipse = NurbsCurve::elliptic_arc(
+            DVec3::ZERO,
+            DVec3::new(5.0, 0.0, 0.0),
+            DVec3::new(0.0, 3.0, 0.0),
+            0.0,
+            std::f64::consts::TAU,
+        )
+        .unwrap();
+        let profile = Profile {
+            outer: ProfileLoop::nurbs_loop(ellipse).unwrap(),
+            holes: vec![],
+        };
+        let frame = Frame::from_origin_normal(DVec3::ZERO, DVec3::Z);
+        let freeform = planora_kernel::extrude(&profile, &frame, 4.0, &tol).unwrap();
+        let plain = planora_kernel::primitives::make_box(DVec3::ONE, &tol).unwrap();
+        let text = |e: &BooleanError| match boolean_error(&freeform, &plain, e) {
+            FeatureError::Kernel(m) => m,
+            other => panic!("{other:?}"),
+        };
+        // Mit eigenem Vorschlag in der Ursache: nur der Vorsatz, in jeder Sprache.
+        let own = BooleanError::Unsupported(planora_kernel::boolean::TOO_EXPENSIVE.into());
+        // Ohne Vorschlag: der Vorsatz und der Vorschlag der Bibliothek.
+        let bare = BooleanError::AmbiguousContact;
+        let de = with_lang(&german(), || (text(&own), text(&bare)));
+        assert_eq!(de.0, format!("Bei Körpern mit Freiformflächen: {own}"));
+        assert!(de.1.ends_with("; bitte Lage oder Maße eines Körpers leicht ändern"));
+        let en = with_lang(&english(), || (text(&own), text(&bare)));
+        assert_eq!(en.0, format!("For bodies with freeform faces: {own}"));
+        assert!(en.1.starts_with("For bodies with freeform faces: "));
+        assert!(en.1.ends_with("; please change the position or size of a body slightly"));
     }
 
     #[test]

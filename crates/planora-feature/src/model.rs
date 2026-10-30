@@ -162,17 +162,17 @@ impl BlendArt {
     /// Bezeichnung der Feature-Art: „Rundung“ oder „Fase“.
     pub fn label(&self) -> String {
         if self.is_chamfer() {
-            tr!("undo-chamfer")
+            tr!("feature-label-chamfer")
         } else {
-            tr!("blend-art-round")
+            tr!("feature-label-fillet")
         }
     }
 
     /// Ausführliche Bezeichnung für Eigenschaften und Fenster.
     pub fn kind_label(&self) -> String {
         match self {
-            BlendArt::Rundung { .. } => tr!("blend-art-round"),
-            BlendArt::RundungVariabel { .. } => tr!("blend-art-variable"),
+            BlendArt::Rundung { .. } => tr!("feature-label-fillet"),
+            BlendArt::RundungVariabel { .. } => tr!("feature-label-fillet-variable"),
             BlendArt::FaseGleich { .. } => tr!("feature-label-chamfer-equal"),
             BlendArt::FaseZwei { .. } => tr!("feature-label-chamfer-two"),
             BlendArt::FaseWinkel { .. } => tr!("feature-label-chamfer-angle"),
@@ -281,20 +281,20 @@ pub enum FeatureKind {
 }
 
 impl FeatureKind {
-    /// Deutsche Bezeichnung der Feature-Art für die Oberfläche.
+    /// Bezeichnung (in der Sprache des Programms) der Feature-Art für die Oberfläche.
     pub fn label(&self) -> String {
         match self {
-            FeatureKind::Sketch(_) => tr!("area-sketch"),
+            FeatureKind::Sketch(_) => tr!("feature-label-sketch"),
             FeatureKind::Box { .. } => tr!("feature-label-box"),
             FeatureKind::Cylinder { .. } => tr!("feature-label-cylinder"),
             FeatureKind::Sphere { .. } => tr!("feature-label-sphere"),
             FeatureKind::Cone { .. } => tr!("feature-label-cone"),
             FeatureKind::Extrude { .. } => tr!("feature-label-extrude"),
             FeatureKind::Revolve { .. } => tr!("feature-label-revolve"),
-            FeatureKind::Boolean { .. } => tr!("boolean-title"),
-            FeatureKind::Move { .. } => tr!("undo-move"),
+            FeatureKind::Boolean { .. } => tr!("feature-label-boolean"),
+            FeatureKind::Move { .. } => tr!("feature-label-move"),
             FeatureKind::Verrunden { art, .. } => art.label(),
-            FeatureKind::MeshBody { .. } => tr!("props-mesh-body"),
+            FeatureKind::MeshBody { .. } => tr!("feature-label-mesh"),
             FeatureKind::StepBody { .. } => tr!("feature-label-step"),
         }
     }

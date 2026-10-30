@@ -113,7 +113,7 @@ impl Sketch {
             return Err(bad(tr!("sketch-err-data-frame")));
         }
         for v in &d.vars {
-            finite(*v, tr!("sketch-err-what-sketch-value"))?;
+            finite(*v, || tr!("sketch-err-what-sketch-value"))?;
         }
         let nv = d.vars.len();
         let var_ok = |i: usize| i < nv;

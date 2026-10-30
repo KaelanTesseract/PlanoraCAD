@@ -133,7 +133,7 @@ pub fn field_label(kind: &FeatureKind, key: FieldKey) -> String {
         (_, FieldKey::Abstand) => tr!("blend-field-distance"),
         (_, FieldKey::Abstand1) => tr!("blend-field-distance-1"),
         (_, FieldKey::Abstand2) => tr!("blend-field-distance-2"),
-        (_, FieldKey::Winkel) => tr!("blend-field-angle"),
+        (_, FieldKey::Winkel) => tr!("feature-unit-angle"),
         (_, FieldKey::Massstab) => tr!("props-scale"),
     }
 }

@@ -34,6 +34,13 @@ pub enum BooleanError {
 const FREEFORM_NAME: &str = "Freiformfläche";
 
 impl BooleanError {
+    /// Enthält die Meldung schon einen Vorschlag des Benutzers („…; bitte …“)? Das entscheidet
+    /// die Fehlerart, nicht der Wortlaut (der je nach Sprache wechselt): bisher nur die
+    /// Arbeitsgrenze für Freiformflächen.
+    pub fn has_user_hint(&self) -> bool {
+        matches!(self, BooleanError::Unsupported(msg) if msg == super::budget::TOO_EXPENSIVE)
+    }
+
     /// Stammt die Meldung aus einem Weg, den es nur mit Freiformflächen gibt (Schnittrechner,
     /// Einordnen gegen Freiformflächen, dünne Gebilde, Arbeitsgrenze, Kante neben der
     /// Freiformfläche)? Grenzen analytischer Wege (etwa Ebene gegen Kegel) zählen nicht, auch wenn

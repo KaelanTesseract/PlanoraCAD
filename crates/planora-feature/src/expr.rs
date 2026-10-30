@@ -118,7 +118,7 @@ impl ParamUnit {
     pub fn label(self) -> String {
         match self {
             ParamUnit::Length => tr!("feature-unit-length"),
-            ParamUnit::Angle => tr!("blend-field-angle"),
+            ParamUnit::Angle => tr!("feature-unit-angle"),
             ParamUnit::Number => tr!("feature-unit-number"),
         }
     }
@@ -163,7 +163,7 @@ impl Dim {
     }
 }
 
-/// Fehler einer Formel oder eines Namens mit fertiger deutscher Meldung.
+/// Fehler einer Formel oder eines Namens mit fertiger Meldung in der Sprache des Programms.
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]
 #[error("{0}")]
 pub struct ExprError(pub String);
@@ -596,7 +596,7 @@ fn dim_name(d: Dim) -> String {
         (1, 0) => tr!("feature-unit-length"),
         (2, 0) => tr!("feature-unit-area"),
         (3, 0) => tr!("feature-unit-volume"),
-        (0, 1) => tr!("blend-field-angle"),
+        (0, 1) => tr!("feature-unit-angle"),
         _ => tr!("feature-unit-other"),
     }
 }

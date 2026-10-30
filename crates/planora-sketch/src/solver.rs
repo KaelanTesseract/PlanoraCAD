@@ -783,8 +783,8 @@ impl Sketch {
             if !d.target.is_finite() {
                 return Err(SketchError::InvalidInput(tr!("sketch-err-target-finite")));
             }
-            crate::model::finite(d.target.x, tr!("sketch-err-what-target-x"))?;
-            crate::model::finite(d.target.y, tr!("sketch-err-what-target-y"))?;
+            crate::model::finite(d.target.x, || tr!("sketch-err-what-target-x"))?;
+            crate::model::finite(d.target.y, || tr!("sketch-err-what-target-y"))?;
         }
         let mut soft = Vec::with_capacity(2 * drags.len());
         for d in drags {

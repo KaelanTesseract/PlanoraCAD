@@ -514,7 +514,7 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
 
 /// Endliche Länge oder Koordinate mit Betrag höchstens `MAX_COORD`.
 fn finite(v: f64) -> Result<(), SketchError> {
-    crate::model::finite(v, tr!("sketch-err-what-value"))
+    crate::model::finite(v, || tr!("sketch-err-what-value"))
 }
 
 /// Endlicher Winkel (ohne Betragsgrenze).

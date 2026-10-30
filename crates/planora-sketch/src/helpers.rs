@@ -359,7 +359,7 @@ impl Sketch {
                         radius: r,
                     },
                 ) => {
-                    finite(radius, tr!("sketch-err-what-radius"))?;
+                    finite(radius, || tr!("sketch-err-what-radius"))?;
                     s.set_point_xy(m, center.x, center.y)?;
                     s.vars[r] = radius;
                     radius_value = Some(radius);
@@ -389,9 +389,9 @@ impl Sketch {
                         minor: mi,
                     },
                 ) => {
-                    finite(axis.x, tr!("sketch-err-what-major"))?;
-                    finite(axis.y, tr!("sketch-err-what-major"))?;
-                    finite(minor, tr!("sketch-err-what-minor"))?;
+                    finite(axis.x, || tr!("sketch-err-what-major"))?;
+                    finite(axis.y, || tr!("sketch-err-what-major"))?;
+                    finite(minor, || tr!("sketch-err-what-minor"))?;
                     s.set_point_xy(m, center.x, center.y)?;
                     (s.vars[ax], s.vars[ay], s.vars[mi]) = (axis.x, axis.y, minor);
                     ellipse_values = Some((axis.length(), minor, axis.y.atan2(axis.x)));

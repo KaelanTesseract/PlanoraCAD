@@ -1842,3 +1842,14 @@ fn table_texts_of_the_step_import_follow_the_language_when_drawn() {
     assert_eq!(en.1, "mm");
     assert_eq!(de.0.replace(',', "."), en.0);
 }
+
+#[test]
+fn proposed_names_of_new_bodies_follow_the_language_at_creation() {
+    for (lang, name) in [(english(), "Box 1"), (german(), "Quader 1")] {
+        with_lang(&lang, || {
+            let mut s = AppState::new();
+            s.create_box(DVec3::ONE).unwrap();
+            assert_eq!(s.bodies[0].name, name);
+        });
+    }
+}

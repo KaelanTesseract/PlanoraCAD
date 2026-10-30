@@ -198,7 +198,7 @@ fn vertex(solid: &Solid, v: Id<planora_kernel::Vertex>) -> Result<DVec3, DimErro
 }
 
 /// Löst einen Bezug gegen die exakten Körper auf. Fehler als [`DimError`]: nicht gefunden oder
-/// nicht bemaßbar → `Lost` mit deutschem Grund; mehrere gleich passende Kandidaten (gleicher
+/// nicht bemaßbar → `Lost` mit Grund in der Sprache des Programms; mehrere gleich passende Kandidaten (gleicher
 /// Abstand zum Hinweispunkt, siehe Modulbeschreibung) → `Ambiguous`.
 ///
 /// Regeln: `Edge` mit gerader Kurve → `Line` zwischen Anfangs- und Endpunkt der Kante, mit

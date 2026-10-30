@@ -118,7 +118,7 @@ pub fn validate_drawing(d: &Drawing) -> Result<(), String> {
                     .views
                     .iter()
                     .find(|w| w.id == p)
-                    .ok_or(tr!("feature-view-parent-unknown"))?;
+                    .ok_or_else(|| tr!("feature-view-parent-unknown"))?;
                 if let Some(sec) = &v.section {
                     validate_section(d, v, sec, parent, &seen)?;
                 }
