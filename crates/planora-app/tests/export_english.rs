@@ -451,6 +451,9 @@ fn export_stored_messages_follow_the_language() {
     let mut d = ExportDialog::new(&s);
     d.set_compute(fail_top);
     d.format = SVG;
+    // Sprache der Zeichnung fest (Task 17): Bei „Wie das Programm“ rechnete der Wechsel der
+    // Programmsprache neu, hier geht es um die gespeicherte Meldung.
+    d.export_lang = Some("de".into());
     d.tick(&s, true);
     assert!(matches!(d.status(&s), ExportStatus::Failed(m) if m.starts_with("Die Ansicht „Oben“")));
     let seen = with_lang(&english(), || draw(&ctx, &mut d, &mut s));

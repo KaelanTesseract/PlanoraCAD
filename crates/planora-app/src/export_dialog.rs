@@ -64,7 +64,7 @@ use planora_exchange::{
     Progress, SolidSource, check_mesh, collect_body, export_file,
 };
 use planora_feature::{BodyRef, resolve_drawing_dimensions_views};
-use planora_i18n::tr;
+use planora_i18n::{Lang, tr, with_lang};
 use planora_kernel::Solid;
 use planora_mesh::{TessellationOptions, tessellate};
 use planora_step::{
@@ -547,11 +547,20 @@ pub fn outside_text(n: usize) -> String {
 /// Passen alle Texte des Blatts in ein DXF-`TEXT`? Sonst die Meldung (statt eines Fehlers erst
 /// beim Schreiben).
 pub fn dxf_texts_fit(model: &SheetModel) -> Result<(), String> {
-    dxf_texts_fit_msg(model).map_err(|m| m.text())
+    dxf_texts_fit_msg(model, &BTreeMap::new()).map_err(|m| m.text())
 }
 
-/// Wie [`dxf_texts_fit`], übersetzt erst beim Zeichnen.
-fn dxf_texts_fit_msg(model: &SheetModel) -> Result<(), Msg> {
+/// Name der Ansicht `v` in Meldungen des Fensters: aus `names` (übersetzt erst beim Zeichnen, in
+/// der Sprache des Fensters), sonst der Name auf dem Blatt (in der Sprache der Zeichnung).
+fn sheet_view_arg(v: &planora_drawing::sheet::SheetView, names: &BTreeMap<ViewId, Msg>) -> MsgArg {
+    match names.get(&v.id) {
+        Some(m) => MsgArg::from(m.clone()),
+        None => MsgArg::Text(v.name.to_string()),
+    }
+}
+
+/// Wie [`dxf_texts_fit`], übersetzt erst beim Zeichnen; die Ansicht heißt wie in `names`.
+fn dxf_texts_fit_msg(model: &SheetModel, names: &BTreeMap<ViewId, Msg>) -> Result<(), Msg> {
     for v in &model.views {
         for m in &v.marks {
             if let Mark::Text { text, .. } = m
@@ -559,7 +568,7 @@ fn dxf_texts_fit_msg(model: &SheetModel) -> Result<(), Msg> {
             {
                 return Err(crate::msg!(
                     "export-dxf-dim-long",
-                    view = v.name.to_string(),
+                    view = sheet_view_arg(v, names),
                     text = shorten_for_display(text)
                 ));
             }
@@ -694,11 +703,11 @@ fn pdf_sheet_texts_msg(texts: &TitleTexts) -> Result<(), Msg> {
 /// Lassen sich alle Texte der Ansichten (Maßtexte, Positionsnummern) in einer PDF ausgeben (P13)?
 /// Sonst die Meldung mit dem Zeichen und der Ansicht.
 pub fn pdf_model_texts_ok(model: &SheetModel) -> Result<(), String> {
-    pdf_model_texts_msg(model).map_err(|m| m.text())
+    pdf_model_texts_msg(model, &BTreeMap::new()).map_err(|m| m.text())
 }
 
-/// Wie [`pdf_model_texts_ok`], übersetzt erst beim Zeichnen.
-fn pdf_model_texts_msg(model: &SheetModel) -> Result<(), Msg> {
+/// Wie [`pdf_model_texts_ok`], übersetzt erst beim Zeichnen; die Ansicht heißt wie in `names`.
+fn pdf_model_texts_msg(model: &SheetModel, names: &BTreeMap<ViewId, Msg>) -> Result<(), Msg> {
     for v in &model.views {
         for m in &v.marks {
             if let Mark::Text { text, .. } = m
@@ -707,7 +716,7 @@ fn pdf_model_texts_msg(model: &SheetModel) -> Result<(), Msg> {
                 return Err(crate::msg!(
                     "export-pdf-char-dim",
                     char = char_arg(c),
-                    view = v.name.to_string()
+                    view = sheet_view_arg(v, names)
                 ));
             }
         }
@@ -784,6 +793,34 @@ pub fn pdf_all_hint() -> String {
     tr!("export-pdf-all-hint")
 }
 
+/// Erster Eintrag der Auswahl „Sprache der Zeichnung“: „Wie das Programm (Deutsch)“.
+pub fn drawing_lang_program() -> String {
+    tr!(
+        "export-drawing-lang-program",
+        name = planora_i18n::current().name()
+    )
+}
+
+/// Auswahl „Sprache der Zeichnung“ in der Karte „Zeichnung“ (nur Zeichnungsformate): erst „Wie
+/// das Programm (<Name>)“ (`None`), dann alle Sprachen mit ihrem Eigennamen.
+fn drawing_lang_choice(ui: &mut egui::Ui, choice: &mut Option<String>) {
+    let langs = planora_i18n::available();
+    let shown = choice
+        .as_deref()
+        .and_then(|id| langs.iter().find(|l| l.id() == id))
+        .map_or_else(drawing_lang_program, Lang::name);
+    ui.label(tr!("export-drawing-lang"));
+    egui::ComboBox::from_id_salt("export-drawing-lang")
+        .selected_text(shown)
+        .width(ui.available_width())
+        .show_ui(ui, |ui| {
+            ui.selectable_value(choice, None, drawing_lang_program());
+            for l in &langs {
+                ui.selectable_value(choice, Some(l.id().to_string()), l.name());
+            }
+        });
+}
+
 /// Text im Fortschrittsbalken, solange bei „Alle Blätter“ das Blatt `n` von `total` berechnet
 /// wird.
 pub fn sheet_progress_text(n: usize, total: usize) -> String {
@@ -828,12 +865,13 @@ pub struct SheetJob {
 const SHEET_STEPS: u64 = 1000;
 
 /// Prüft ein fertiges Blatt auf Zeichen, die sich in einer PDF nicht ausgeben lassen (P13):
-/// erst die Felder des Rahmens, dann die Texte der Ansichten.
-fn pdf_texts_ok(r: &DrawingPrepared) -> Result<(), Msg> {
+/// erst die Felder des Rahmens, dann die Texte der Ansichten (Namen der Ansichten von `drawing`
+/// in der Sprache des Fensters).
+fn pdf_texts_ok(r: &DrawingPrepared, drawing: &Drawing) -> Result<(), Msg> {
     if let Some(texts) = &r.texts {
         pdf_sheet_texts_msg(texts)?;
     }
-    pdf_model_texts_msg(&r.model)
+    pdf_model_texts_msg(&r.model, &view_name_msgs(drawing))
 }
 
 /// Berechnet alle Blätter für eine PDF nacheinander in der gegebenen Reihenfolge (P12, F2; läuft
@@ -855,12 +893,14 @@ pub fn prepare_all_sheets(
     counter: &AtomicUsize,
     progress: &Progress,
 ) -> Result<Vec<DrawingPrepared>, String> {
-    prepare_all_counted(sheets, solids, compute, resolve, counter, progress)
+    let lang = planora_i18n::current();
+    prepare_all_counted(sheets, solids, compute, resolve, counter, progress, &lang)
         .map_err(|f| f.message.text())
 }
 
 /// Wie [`prepare_all_sheets`]; scheitert erst das letzte Blatt an einer späteren Prüfung, nachdem
-/// seine Linien berechnet sind, trägt der Fehler die Summe der Linien aller Blätter.
+/// seine Linien berechnet sind, trägt der Fehler die Summe der Linien aller Blätter. Die Blätter
+/// entstehen in der Sprache `lang` (siehe [`prepare_counted`]).
 fn prepare_all_counted(
     sheets: &[SheetJob],
     solids: &[(String, Solid)],
@@ -868,6 +908,7 @@ fn prepare_all_counted(
     resolve: ResolveFn,
     counter: &AtomicUsize,
     progress: &Progress,
+    lang: &Lang,
 ) -> Result<Vec<DrawingPrepared>, DrawFailed> {
     let cancelled = cancelled_msg();
     progress.set_total(sheets.len().max(1) as u64 * SHEET_STEPS);
@@ -881,23 +922,29 @@ fn prepare_all_counted(
         // Eigener Fortschritt je Blatt; Abbrechen wird weitergereicht, der Anteil fließt in den
         // Fortschritt aller Blätter ein.
         let inner = Progress::new();
+        // Der Blatt-Thread rechnet und meldet in der Sprache dieses Threads (sonst fiele er auf
+        // die globale Sprache zurück).
+        let thread_lang = planora_i18n::current();
         let result = std::thread::scope(|scope| {
             let handle = scope.spawn(|| -> Result<DrawingPrepared, DrawFailed> {
-                let mut lines = None;
-                let fail = |m: Msg, lines| DrawFailed { message: m, lines };
-                let r = prepare_counted(
-                    &sheet.drawing,
-                    solids,
-                    compute,
-                    resolve,
-                    sheet.frame.as_ref(),
-                    &sheet.parts,
-                    &inner,
-                    &mut lines,
-                )
-                .map_err(|m| fail(m, lines))?;
-                pdf_texts_ok(&r).map_err(|m| fail(m, lines))?;
-                Ok(r)
+                with_lang(&thread_lang, || {
+                    let mut lines = None;
+                    let fail = |m: Msg, lines| DrawFailed { message: m, lines };
+                    let r = prepare_counted(
+                        &sheet.drawing,
+                        solids,
+                        compute,
+                        resolve,
+                        sheet.frame.as_ref(),
+                        &sheet.parts,
+                        &inner,
+                        &mut lines,
+                        lang,
+                    )
+                    .map_err(|m| fail(m, lines))?;
+                    pdf_texts_ok(&r, &sheet.drawing).map_err(|m| fail(m, lines))?;
+                    Ok(r)
+                })
             });
             while !handle.is_finished() {
                 if progress.is_cancelled() {
@@ -966,21 +1013,24 @@ fn compute_watched(
     outer: &Progress,
 ) -> Option<Result<KeyedLines, DrawError>> {
     let inner = Progress::new();
+    // Gründe der Rechnung in der Sprache dieses Threads (nicht der globalen).
+    let lang = planora_i18n::current();
     std::thread::scope(|scope| {
         let handle = scope.spawn(|| {
-            let refs: Vec<DrawBody> = solids
-                .iter()
-                .map(|(name, solid)| DrawBody {
-                    name: name.clone(),
-                    solid,
-                })
-                .collect();
-            match key {
-                ViewKey::Plain(kind) => compute(&refs, kind, &inner).map(|l| (l, None)),
-                ViewKey::Section(plane) => {
-                    compute_section(&refs, &plane, compute, &inner).map(|s| (s.lines, Some(s.data)))
+            with_lang(&lang, || {
+                let refs: Vec<DrawBody> = solids
+                    .iter()
+                    .map(|(name, solid)| DrawBody {
+                        name: name.clone(),
+                        solid,
+                    })
+                    .collect();
+                match key {
+                    ViewKey::Plain(kind) => compute(&refs, kind, &inner).map(|l| (l, None)),
+                    ViewKey::Section(plane) => compute_section(&refs, &plane, compute, &inner)
+                        .map(|s| (s.lines, Some(s.data))),
                 }
-            }
+            })
         });
         while !handle.is_finished() {
             if outer.is_cancelled() {
@@ -1146,14 +1196,21 @@ pub fn prepare_drawing_parts(
     progress: &Progress,
 ) -> Result<DrawingPrepared, String> {
     let mut lines = None;
+    let lang = planora_i18n::current();
     prepare_counted(
-        drawing, solids, compute, resolve, frame, parts, progress, &mut lines,
+        drawing, solids, compute, resolve, frame, parts, progress, &mut lines, &lang,
     )
     .map_err(|m| m.text())
 }
 
 /// Wie [`prepare_drawing_parts`]; sobald alle Ansichten mit ihren Linien auf dem Blatt stehen,
 /// steht deren Zahl in `lines_out`, auch wenn eine spätere Prüfung die Ausgabe noch sperrt.
+///
+/// Sprache der Zeichnung (Sprachplan, Task 17): Alles, was auf das Blatt kommt (Namen und
+/// Titel der Ansichten, Maßtexte mit ihrem Dezimaltrenner, Schnitttitel, Schriftfeld,
+/// Stückliste), entsteht unter `lang`. Rechnung und Meldungen laufen in der Sprache des
+/// aufrufenden Threads (beim Export die des Fensters), damit auch Gründe der Bibliotheken
+/// (Ansicht, Maßbezug, Schraffur) in der Sprache des Fensters stehen.
 #[allow(clippy::too_many_arguments)]
 fn prepare_counted(
     drawing: &Drawing,
@@ -1164,6 +1221,7 @@ fn prepare_counted(
     parts: &PartsInput,
     progress: &Progress,
     lines_out: &mut Option<LineCounts>,
+    lang: &Lang,
 ) -> Result<DrawingPrepared, Msg> {
     let cancelled = cancelled_msg;
     // Erst die Normarten wie bisher, dann je Schnittansicht ihre Ebene.
@@ -1240,7 +1298,9 @@ fn prepare_counted(
         // Scheitern die Maße, sind die Linien doch berechnet: ihre Zahl aus dem Blatt ohne Maße
         // (Maße ändern keine Linie).
         let mut no_dims = || {
-            let plain = build_sheet_with(drawing, &map, &ResolvedDims::default());
+            let plain = with_lang(lang, || {
+                build_sheet_with(drawing, &map, &ResolvedDims::default())
+            });
             *lines_out = sheet_line_counts(drawing, &plain);
         };
         let dims = match resolve(drawing, &refs, &cut, progress) {
@@ -1260,14 +1320,23 @@ fn prepare_counted(
     } else {
         ResolvedDims::default()
     };
-    let mut model = build_sheet_with(drawing, &map, &dims);
-    add_balloon_marks(&mut model, &balloon_marks(drawing, &map, &parts.balloons));
+    let mut model = with_lang(lang, || {
+        let mut model = build_sheet_with(drawing, &map, &dims);
+        add_balloon_marks(&mut model, &balloon_marks(drawing, &map, &parts.balloons));
+        model
+    });
     // Die Linien stehen fest (Schnittmarken und Rahmen ändern sie nicht).
     *lines_out = sheet_line_counts(drawing, &model);
     // Schraffur, Schnittlinie und Titel; ein Fehler (zu feine Schraffur) sperrt die Ausgabe.
-    let (marks, section_errors) = section_marks(drawing, &map, &section_data);
-    if let Some(m) = section_errors.into_iter().next() {
-        return Err(Msg::Raw(m));
+    let (marks, section_errors) = with_lang(lang, || section_marks(drawing, &map, &section_data));
+    if !section_errors.is_empty() {
+        // Die Meldung in der Sprache des Threads (die Titel oben in der Sprache der Zeichnung).
+        let (_, errors) = section_marks(drawing, &map, &section_data);
+        let first = errors
+            .into_iter()
+            .next()
+            .or(section_errors.into_iter().next());
+        return Err(Msg::Raw(first.unwrap_or_default()));
     }
     add_section_marks(&mut model, &marks);
     // `build_sheet` lässt Ansichten weg, die sich nicht anordnen lassen; das Dokument prüft Lage,
@@ -1280,7 +1349,7 @@ fn prepare_counted(
         progress.advance(1);
     }
     let space = parts_space_for(drawing, parts.cells.len(), false);
-    let texts = match frame {
+    let texts = with_lang(lang, || match frame {
         Some(f) => {
             let mut texts = resolve_texts(drawing, f.project.as_ref(), &f.ctx, main_scale(drawing));
             texts.parts = parts.cells.clone();
@@ -1317,9 +1386,9 @@ fn prepare_counted(
             })
         }
         None => None,
-    };
+    });
     let outside = count_outside(
-        &dimension_marks(drawing, &map, &dims),
+        &with_lang(lang, || dimension_marks(drawing, &map, &dims)),
         drawing.sheet.size_mm(),
     );
     Ok(DrawingPrepared {
@@ -1702,7 +1771,8 @@ enum DrawTarget {
 /// Stand, zu dem ein Zeichnungsergebnis gehört: Zeichnung bzw. alle Blätter, Änderungszahl des
 /// Dokuments (alle Änderungen, auch an jeder Zeichnung, an Projekt- und Blattangaben), Format,
 /// Schalter „Blattrahmen“ und Prüfsumme des Dokumentnamens (er steckt in der Zeichnungsnummer
-/// und im Titel der PDF aller Blätter).
+/// und im Titel der PDF aller Blätter) sowie Prüfsumme der Id der Sprache der Zeichnung (ein
+/// Wechsel rechnet neu).
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct DrawKey {
     target: DrawTarget,
@@ -1710,6 +1780,7 @@ struct DrawKey {
     format: DrawingFormat,
     frame: bool,
     doc_name: u64,
+    lang: u64,
 }
 
 /// Ergebnis: die Blätter in Dokumentreihenfolge (beim gewählten Blatt genau eines).
@@ -1768,6 +1839,9 @@ pub struct ExportDialog {
     pub with_frame: bool,
     /// PDF: das gewählte Blatt oder alle Blätter; Vorgabe das gewählte.
     pub pdf_pages: PdfPages,
+    /// Zeichnungsformate: Id der Sprache der Zeichnung; `None` heißt „Wie das Programm“
+    /// (Vorgabe). Gilt, solange das Fenster offen ist; wird nicht gespeichert.
+    pub export_lang: Option<String>,
     prepared: Option<(Key, PrepResult)>,
     job: Option<(Key, PrepJob)>,
     step_prepared: Option<(Key, StepResult)>,
@@ -1816,6 +1890,7 @@ impl ExportDialog {
             drawing: default_drawing(state),
             with_frame: true,
             pdf_pages: PdfPages::default(),
+            export_lang: None,
             prepared: None,
             job: None,
             step_prepared: None,
@@ -1936,6 +2011,15 @@ impl ExportDialog {
         self.format == ExportFormat::Drawing(DrawingFormat::Pdf) && self.pdf_pages == PdfPages::All
     }
 
+    /// Sprache, in der die Zeichnung entsteht und geschrieben wird: die gewählte, sonst (Vorgabe
+    /// oder nicht mehr vorhanden) die des Programms.
+    pub fn drawing_lang(&self) -> Lang {
+        self.export_lang
+            .as_deref()
+            .and_then(planora_i18n::find)
+            .unwrap_or_else(planora_i18n::current)
+    }
+
     /// Schlüssel des Zeichnungsergebnisses; `None` bei anderen Formaten oder ohne Zeichnung. Bei
     /// „Alle Blätter“ zählt die gewählte Zeichnung nicht (eine andere Wahl rechnet nicht neu).
     fn drawing_key(&self, state: &AppState) -> Option<DrawKey> {
@@ -1943,6 +2027,8 @@ impl ExportDialog {
         let d = self.current_drawing(state)?;
         let mut hasher = std::hash::DefaultHasher::new();
         std::hash::Hash::hash(&state.document_name, &mut hasher);
+        let mut lang = std::hash::DefaultHasher::new();
+        std::hash::Hash::hash(self.drawing_lang().id(), &mut lang);
         Some(DrawKey {
             target: if self.all_sheets() {
                 DrawTarget::All
@@ -1953,6 +2039,7 @@ impl ExportDialog {
             format,
             frame: self.with_frame,
             doc_name: std::hash::Hasher::finish(&hasher),
+            lang: std::hash::Hasher::finish(&lang),
         })
     }
 
@@ -2006,6 +2093,8 @@ impl ExportDialog {
             ..parts_input(state, &drawing)
         };
         let is_list = matches!(drawing.kind, DrawingKind::PartsList { .. });
+        let lang = self.drawing_lang();
+        // Der Auftrag läuft in der Sprache des Fensters (Meldungen); das Blatt entsteht in `lang`.
         let job = Job::spawn(move |p| {
             let mut lines = None;
             let mut r = prepare_counted(
@@ -2017,6 +2106,7 @@ impl ExportDialog {
                 &parts,
                 p,
                 &mut lines,
+                &lang,
             )
             .map_err(|message| DrawFailed { message, lines })?;
             // Die Prüfungen der Texte sperren die Ausgabe, die Linien sind aber berechnet.
@@ -2025,10 +2115,10 @@ impl ExportDialog {
                 if let Some(texts) = &r.texts {
                     checked(dxf_sheet_texts_msg(texts))?;
                 }
-                checked(dxf_texts_fit_msg(&r.model))?;
+                checked(dxf_texts_fit_msg(&r.model, &view_name_msgs(&drawing)))?;
             }
             if format == DrawingFormat::Pdf {
-                checked(pdf_texts_ok(&r))?;
+                checked(pdf_texts_ok(&r, &drawing))?;
             }
             // Ein Stücklistenblatt hat keine Ansichten, die Netz-Körper auslassen.
             if !is_list {
@@ -2063,8 +2153,9 @@ impl ExportDialog {
         let counter = Arc::new(AtomicUsize::new(0));
         let shared = Arc::clone(&counter);
         let (compute, resolve) = (self.compute, self.resolve);
+        let lang = self.drawing_lang();
         let job = Job::spawn(move |p| {
-            let mut r = prepare_all_counted(&sheets, &solids, compute, resolve, &shared, p)?;
+            let mut r = prepare_all_counted(&sheets, &solids, compute, resolve, &shared, p, &lang)?;
             if let Some(first) = sheets
                 .iter()
                 .zip(r.iter_mut())
@@ -2237,6 +2328,9 @@ impl ExportDialog {
         };
         let target = path.clone();
         self.written = None;
+        // Die Datei entsteht in der Sprache der Zeichnung (Ebenen, Gruppen); die Meldung des
+        // Auftrags in der des Fensters (der Auftrag selbst läuft darin).
+        let lang = self.drawing_lang();
         let job: DrawWriteJob = if format == DrawingFormat::Pdf {
             let pages = if key.is_some_and(|k| k.target == DrawTarget::All) {
                 PdfPages::All
@@ -2252,12 +2346,14 @@ impl ExportDialog {
             let pdf_writer = self.pdf_writer;
             Job::spawn(move |p| {
                 let models: Vec<&SheetModel> = prepared.iter().map(|d| &*d.model).collect();
-                pdf_writer(&target, &models, &meta, p).map_err(|e| draw_msg(&e))
+                with_lang(&lang, || pdf_writer(&target, &models, &meta, p))
+                    .map_err(|e| draw_msg(&e))
             })
         } else {
             let writer = self.writer;
             Job::spawn(move |p| match prepared.first() {
-                Some(d) => writer(&target, &d.model, format, p).map_err(|e| draw_msg(&e)),
+                Some(d) => with_lang(&lang, || writer(&target, &d.model, format, p))
+                    .map_err(|e| draw_msg(&e)),
                 None => Err(not_computed_msg()),
             })
         };
@@ -2644,6 +2740,8 @@ impl ExportDialog {
         let is_pdf = before == ExportFormat::Drawing(DrawingFormat::Pdf);
         let all = self.all_sheets();
         let mut pdf_pages = self.pdf_pages;
+        let mut export_lang = self.export_lang.clone();
+        let export_lang_before = export_lang.clone();
         let sheet_no = self.computing_sheet();
         let lines_line = self.lines_text(state, &status);
         let mut drawing_info: Vec<String> = Vec::new();
@@ -2798,6 +2896,8 @@ impl ExportDialog {
                         }
                         ui.add_space(4.0);
                         ui.add(theme::Toggle::new(&mut with_frame, frame_switch()));
+                        ui.add_space(4.0);
+                        drawing_lang_choice(ui, &mut export_lang);
                     };
                     cards = if before.is_drawing() {
                         let row: &mut [&mut dyn FnMut(&mut egui::Ui)] =
@@ -3008,6 +3108,8 @@ impl ExportDialog {
         }
         let other_pages = pdf_pages != self.pdf_pages;
         self.pdf_pages = pdf_pages;
+        let other_lang = export_lang != export_lang_before;
+        self.export_lang = export_lang;
         let stale_chooser = self
             .chooser_key
             .is_some_and(|k| k != self.chooser_key_now(state));
@@ -3015,7 +3117,13 @@ impl ExportDialog {
             self.chooser = None;
             self.chooser_key = None;
         }
-        if self.format != before || stale_chooser || other_drawing || toggled || other_pages {
+        if self.format != before
+            || stale_chooser
+            || other_drawing
+            || toggled
+            || other_pages
+            || other_lang
+        {
             // Die Meldung „Fertig“ gehörte zum alten Format oder Stand.
             self.written = None;
         }
