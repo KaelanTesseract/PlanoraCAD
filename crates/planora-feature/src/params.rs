@@ -7,7 +7,7 @@
 //! Rückgängig, Speichern und Ansichten sie wie jede Feature-Änderung behandeln.
 
 use crate::error::FeatureError;
-use crate::expr::{self, MAX_COMMENT_CHARS, MAX_PARAMETERS, ParamDef, ParamUnit, TableError};
+use crate::expr::{self, MAX_COMMENT_CHARS, ParamDef, ParamUnit, TableError};
 use crate::formulas::{Formulas, mentions, rewrite_formulas};
 use crate::model::{Document, FeatureKind};
 use crate::recompute::RecomputeReport;
@@ -134,27 +134,13 @@ pub(crate) fn check_table(params: &[Parameter]) -> Result<Vec<f64>, String> {
 }
 
 fn table_message(params: &[Parameter], e: TableError) -> String {
-    if params.len() > MAX_PARAMETERS {
-        return e.message;
-    }
-    let Some(p) = params.get(e.index) else {
-        return e.message;
-    };
-    let name_problem = expr::check_name(&p.name).is_err()
-        || params[..e.index]
-            .iter()
-            .any(|q| expr::same_name(&q.name, &p.name));
-    let (cycle_start, cycle_end) = expr::cycle_affixes();
-    let names_itself = e.message == tr!("feature-param-self", name = p.name.to_string())
-        || (e.message.starts_with(&cycle_start) && e.message.ends_with(&cycle_end));
-    if name_problem || names_itself {
-        e.message
-    } else {
-        tr!(
+    match params.get(e.index) {
+        Some(p) if !e.stands_alone() => tr!(
             "feature-param-prefix",
             name = p.name.to_string(),
             detail = e.message.to_string()
-        )
+        ),
+        _ => e.message,
     }
 }
 

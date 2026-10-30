@@ -195,7 +195,7 @@ fn feedback_window_speaks_english() {
         assert_english("Rückmeldung (geschickt)", &seen, &[], &[]);
         assert!(
             seen.iter()
-                .any(|t| t.text.starts_with("Drag “rueckmeldung.txt”")),
+                .any(|t| t.text.starts_with("Drag \"rueckmeldung.txt\"")),
             "{}",
             common::join(&seen)
         );

@@ -4,9 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use fluent_syntax::ast::{
-    CallArguments, Entry, Expression, InlineExpression, Pattern, PatternElement,
-};
+use fluent_syntax::ast::{Entry, Expression, InlineExpression, Pattern, PatternElement};
 use fluent_syntax::parser;
 
 const DE: &str = include_str!("../languages/de.ftl");
@@ -15,88 +13,20 @@ const EN: &str = include_str!("../languages/en.ftl");
 /// Schlüssel (`id` oder `id.attribut`) -> Menge der Variablen `$name` im Text.
 type Keys = BTreeMap<String, BTreeSet<String>>;
 
-fn vars_in_pattern(p: &Pattern<&str>, out: &mut BTreeSet<String>) {
-    for el in &p.elements {
-        if let PatternElement::Placeable { expression } = el {
-            vars_in_expression(expression, out);
-        }
-    }
-}
-
-fn vars_in_expression(e: &Expression<&str>, out: &mut BTreeSet<String>) {
-    match e {
-        Expression::Inline(i) => vars_in_inline(i, out),
-        Expression::Select { selector, variants } => {
-            vars_in_inline(selector, out);
-            for v in variants {
-                vars_in_pattern(&v.value, out);
-            }
-        }
-    }
-}
-
-fn vars_in_args(a: &CallArguments<&str>, out: &mut BTreeSet<String>) {
-    for p in &a.positional {
-        vars_in_inline(p, out);
-    }
-    for n in &a.named {
-        vars_in_inline(&n.value, out);
-    }
-}
-
-fn vars_in_inline(i: &InlineExpression<&str>, out: &mut BTreeSet<String>) {
-    match i {
-        InlineExpression::VariableReference { id } => {
-            out.insert(id.name.to_string());
-        }
-        InlineExpression::FunctionReference { arguments, .. } => vars_in_args(arguments, out),
-        InlineExpression::TermReference {
-            arguments: Some(a), ..
-        } => vars_in_args(a, out),
-        InlineExpression::Placeable { expression } => vars_in_expression(expression, out),
-        _ => {}
-    }
-}
-
-fn vars_of(p: &Pattern<&str>) -> BTreeSet<String> {
-    let mut vars = BTreeSet::new();
-    vars_in_pattern(p, &mut vars);
-    vars
-}
-
 fn parse(name: &str, source: &'static str) -> Keys {
     parse_with_duplicates(name, source).0
 }
 
 /// Wie [`parse`], dazu die mehrfach definierten Schlüssel (sonst überschriebe der letzte still).
+/// Die Platzhalter liefert dieselbe Funktion, mit der `load_dir` Übersetzerdateien prüft.
 fn parse_with_duplicates(name: &str, source: &'static str) -> (Keys, Vec<String>) {
-    let resource = parser::parse(source)
-        .unwrap_or_else(|(_, errors)| panic!("{name} hat Syntaxfehler: {errors:?}"));
+    let entries =
+        planora_i18n::placeholders(source).unwrap_or_else(|| panic!("{name} hat Syntaxfehler"));
     let mut keys = Keys::new();
     let mut duplicates = Vec::new();
-    let mut add = |key: String, vars: BTreeSet<String>| {
+    for (key, vars) in entries {
         if keys.insert(key.clone(), vars).is_some() {
             duplicates.push(key);
-        }
-    };
-    for entry in &resource.body {
-        match entry {
-            Entry::Message(m) => {
-                add(
-                    m.id.name.to_string(),
-                    m.value.as_ref().map(vars_of).unwrap_or_default(),
-                );
-                for a in &m.attributes {
-                    add(format!("{}.{}", m.id.name, a.id.name), vars_of(&a.value));
-                }
-            }
-            Entry::Term(t) => {
-                add(format!("-{}", t.id.name), vars_of(&t.value));
-                for a in &t.attributes {
-                    add(format!("-{}.{}", t.id.name, a.id.name), vars_of(&a.value));
-                }
-            }
-            _ => {}
         }
     }
     (keys, duplicates)
@@ -281,6 +211,7 @@ fn every_key_used_in_code_exists() {
             }
         }
     }
+    assert!(checked > 0, "keine Ids im Code gefunden – Suche kaputt?");
     assert!(
         problems.is_empty(),
         "Im Code benutzte Ids fehlen in den Sprachdateien ({checked} Stellen geprüft):\n{}",

@@ -42,6 +42,8 @@ The files use the [Fluent](https://projectfluent.org/) format. You only need a f
 
 A broken file never makes the program crash. If the file has an error (wrong syntax, a key twice, `language-name` missing, wrong `decimal-separator`), PlanoraCAD skips the whole file and starts with another language. The reason is written to the log file `%APPDATA%\PlanoraCAD\planora.log`, in a line that contains `Language file skipped:`. Fix the error and restart.
 
+PlanoraCAD also compares the placeholders (`{ $name }`) of every text with the English file. If a text uses other placeholders than in English (one missing, one misspelled, one extra), the file still loads, but the log gets a line with `Language file problem:` that names the key, for example `"feature-param-cycle" uses the placeholders none but English uses $list`. Such a text may show a gap or a placeholder name instead of the value, so fix it.
+
 If a single text is missing or its key is misspelled, only that text appears in English.
 
 ## Limits

@@ -173,6 +173,49 @@ fn duplicate_keys_and_bad_separator_skip_the_file_missing_separator_is_a_dot() {
     assert_eq!(find("xp").unwrap().decimal(), '.');
 }
 
+/// Andere Platzhalter als im Englischen: je Schlüssel ein Problem (englisch, mit Schlüssel), die
+/// Datei wird trotzdem geladen.
+#[test]
+fn placeholder_mismatch_is_reported_but_the_file_loads() {
+    let dir = fresh_dir("placeholders");
+    std::fs::write(
+        dir.join("xv.ftl"),
+        "language-name = Platzhalter\n\
+         test-args = Hej\n\
+         test-hello = Hej { $who }\n\
+         test-count = { $count } filer\n\
+         only-here = { $x }\n",
+    )
+    .unwrap();
+    let problems = load_dir(&dir);
+    let mut messages: Vec<&str> = problems.iter().map(|p| p.message.as_str()).collect();
+    messages.sort();
+    assert_eq!(
+        messages,
+        [
+            "\"test-args\" uses the placeholders none but English uses $name",
+            "\"test-hello\" uses the placeholders $who but English uses none",
+        ],
+        "{problems:?}"
+    );
+    assert!(problems.iter().all(|p| !p.skipped));
+    assert!(problems.iter().all(|p| p.file.ends_with("xv.ftl")));
+    let xv = find("xv").expect("xv trotzdem geladen");
+    with_lang(&xv, || assert_eq!(t("test-args"), "Hej"));
+}
+
+/// `pt_BR.ftl` ergibt die Id `pt-BR`.
+#[test]
+fn underscore_in_file_name_becomes_a_hyphen() {
+    let dir = fresh_dir("underscore");
+    std::fs::write(dir.join("pt_BR.ftl"), "language-name = Português\n").unwrap();
+    let problems = load_dir(&dir);
+    assert!(problems.is_empty(), "{problems:?}");
+    let lang = find("pt-BR").expect("pt-BR geladen");
+    assert_eq!(lang.id(), "pt-BR");
+    assert!(find("pt_BR").is_none());
+}
+
 #[test]
 fn missing_dir_gives_no_problems() {
     let dir = std::env::temp_dir().join("planora-i18n-test-gibt-es-nicht-4711");

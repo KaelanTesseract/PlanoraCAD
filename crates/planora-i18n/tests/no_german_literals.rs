@@ -5,6 +5,9 @@
 //! die Ordner `tests/` zählen nicht. Oberflächentexte gehören in die Sprachdateien
 //! (`languages/*.ftl`), Protokolle und Absturzmeldungen sind englisch. Was bewusst deutsch bleibt,
 //! steht mit Begründung in [`ALLOWED`].
+//!
+//! Grenze: Erkannt wird Deutsch nur an Umlauten, `ß` und den Anführungszeichen „“. Ein deutsches
+//! Literal ohne diese Zeichen (etwa „Datei nicht gefunden“ ohne Umlaut) rutscht durch.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

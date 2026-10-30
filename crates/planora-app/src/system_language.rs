@@ -93,17 +93,19 @@ pub fn language_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// Protokollzeile (englisch) zu einer übergangenen Sprachdatei.
+/// Protokollzeile (englisch) zu einem Problem mit einer Sprachdatei: übergangen oder geladen
+/// mit abweichenden Platzhaltern.
 pub fn problem_line(problem: &LoadProblem) -> String {
-    format!(
-        "Language file skipped: {}: {}",
-        problem.file.display(),
-        problem.message
-    )
+    let what = if problem.skipped {
+        "Language file skipped"
+    } else {
+        "Language file problem"
+    };
+    format!("{what}: {}: {}", problem.file.display(), problem.message)
 }
 
-/// Lädt die Sprachdateien aus `dirs` (fehlende Ordner sind kein Problem). Jede übergangene Datei
-/// kommt als Warnung ins Protokoll; die Zeilen werden auch zurückgegeben.
+/// Lädt die Sprachdateien aus `dirs` (fehlende Ordner sind kein Problem). Jedes Problem
+/// (übergangene Datei, abweichende Platzhalter) kommt als Warnung ins Protokoll; die Zeilen werden auch zurückgegeben.
 pub fn load_languages(dirs: &[PathBuf]) -> Vec<String> {
     let mut lines = Vec::new();
     for dir in dirs {

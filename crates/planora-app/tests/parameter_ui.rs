@@ -1608,8 +1608,8 @@ fn errors_of_other_rows_are_prefixed() {
 }
 
 /// Englisch: Nennt die Meldung einer anderen Zeile deren Namen schon (hier der Kreis, gemeldet
-/// an der ersten Zeile des Kreises), kommt kein Präfix davor – die Prüfung muss die englischen
-/// Anführungszeichen kennen (`param-quoted-name`), sonst stünde „Parameter "b": “ doppelt.
+/// an der ersten Zeile des Kreises), kommt kein Präfix davor (entschieden nach der Art des
+/// Fehlers, `TableErrorKind`), sonst stünde „Parameter "b": “ doppelt.
 #[test]
 fn errors_of_other_rows_naming_the_row_get_no_prefix_in_english() {
     planora_i18n::with_lang(&planora_i18n::english(), || {
@@ -1638,6 +1638,69 @@ fn errors_of_other_rows_naming_the_row_get_no_prefix_in_english() {
             .expect("cycle message in English");
         assert!(e.text.starts_with("The parameters "), "{}", e.text);
         assert!(!e.text.contains("Parameter \"b\": "), "{}", e.text);
+    });
+}
+
+/// Die Vorsilbe für Fehler anderer Zeilen hängt an der Art des Fehlers, nicht am Wortlaut: In
+/// einer Übersetzerdatei, deren Kreis-Meldung den Namen gar nicht nennt (`$list` fehlt), bleibt
+/// die Kreis-Meldung ohne Vorsilbe; ein Rechenfehler der anderen Zeile bekommt sie.
+#[test]
+fn other_row_prefix_does_not_depend_on_the_wording() {
+    let dir = common::temp_root("planora-param-wording");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("xw.ftl"),
+        "language-name = Wortlaut\n\
+         feature-param-cycle = Circular.\n\
+         param-other-row = <{ $name }> { $message }\n",
+    )
+    .unwrap();
+    let problems = planora_i18n::load_dir(&dir);
+    assert!(problems.iter().all(|p| !p.skipped), "{problems:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+    let lang = planora_i18n::find("xw").expect("Testsprache geladen");
+    planora_i18n::with_lang(&lang, || {
+        let show = |s: &mut AppState, row: ParamId, text: &str| {
+            let mut d = ParameterDialog::new(s);
+            d.set_text(row, Column::Formula, text);
+            let mut pane = Pane::new(true);
+            pane.settle(&mut |ui| {
+                d.show(ui.ctx(), s, false);
+            })
+            .into_iter()
+            .map(|t| t.text)
+            .collect::<Vec<_>>()
+        };
+        let mut s = AppState::new();
+        let b = param(&mut s, "b", "10", ParamUnit::Length);
+        let a = param(&mut s, "a", "10", ParamUnit::Length);
+        s.edit_parameter(
+            b,
+            ParamEdit {
+                name: "b".into(),
+                formula: "a*2".into(),
+                unit: ParamUnit::Length,
+                comment: String::new(),
+            },
+        )
+        .unwrap();
+        // Kreis, gemeldet an „b“ (erste Zeile des Kreises): ohne Vorsilbe.
+        let seen = show(&mut s, a, "b");
+        assert!(seen.iter().any(|t| t == "Circular."), "{seen:?}");
+        assert!(!seen.iter().any(|t| t.starts_with("<b>")), "{seen:?}");
+        // Division durch null in „b“: mit Vorsilbe.
+        s.edit_parameter(
+            b,
+            ParamEdit {
+                name: "b".into(),
+                formula: "a*10/(a-5)".into(),
+                unit: ParamUnit::Length,
+                comment: String::new(),
+            },
+        )
+        .unwrap();
+        let seen = show(&mut s, a, "2+3");
+        assert!(seen.iter().any(|t| t.starts_with("<b> ")), "{seen:?}");
     });
 }
 

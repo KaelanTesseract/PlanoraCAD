@@ -259,10 +259,21 @@ fn problems_with_language_files_go_english_into_the_log() {
     let line = system_language::problem_line(&LoadProblem {
         file: PathBuf::from("C:/x/fr.ftl"),
         message: "syntax error (1 in total): boom".into(),
+        skipped: true,
     });
     assert_eq!(
         line,
         "Language file skipped: C:/x/fr.ftl: syntax error (1 in total): boom"
+    );
+    // Geladen, aber ein Text mit anderen Platzhaltern: eigener Hinweis, nicht „skipped“.
+    let line = system_language::problem_line(&LoadProblem {
+        file: PathBuf::from("C:/x/fr.ftl"),
+        message: "\"x\" uses the placeholders none but English uses $n".into(),
+        skipped: false,
+    });
+    assert_eq!(
+        line,
+        "Language file problem: C:/x/fr.ftl: \"x\" uses the placeholders none but English uses $n"
     );
     // Eine kaputte Datei in einem der Ordner: übergangen, im Protokoll vermerkt, kein Absturz.
     let dir = common::temp_root("planora-sprachdateien");

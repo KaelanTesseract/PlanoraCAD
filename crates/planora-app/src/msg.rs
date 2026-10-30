@@ -92,6 +92,9 @@ impl From<Msg> for String {
     }
 }
 
+/// Achtung: Damit macht `?` aus jedem `String`-Fehler still ein [`Msg::Raw`]. Ein solcher Text ist
+/// fertig in der Sprache seines Entstehens und wechselt beim Umschalten der Sprache nicht mit;
+/// übersetzbare Meldungen deshalb als Schlüssel-`Msg` bauen, nicht als `String` durchreichen.
 impl From<String> for Msg {
     fn from(s: String) -> Self {
         Msg::Raw(s)

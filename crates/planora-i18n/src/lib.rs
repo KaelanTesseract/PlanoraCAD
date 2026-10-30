@@ -9,12 +9,16 @@
 
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 
 use fluent_bundle::concurrent::FluentBundle;
 use fluent_bundle::{FluentArgs, FluentResource, FluentValue};
+use fluent_syntax::ast::{
+    CallArguments, Entry, Expression, InlineExpression, Pattern, PatternElement,
+};
 use unic_langid::LanguageIdentifier;
 
 const DE_FTL: &str = include_str!("../languages/de.ftl");
@@ -170,17 +174,145 @@ pub fn find(id: &str) -> Option<Lang> {
         .find(|l| l.id().eq_ignore_ascii_case(id))
 }
 
-/// Ein Problem beim Laden einer Sprachdatei; die Datei wurde übergangen.
+/// Ein Problem beim Laden einer Sprachdatei.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadProblem {
     pub file: PathBuf,
     /// Beschreibung auf Englisch (fürs Protokoll).
     pub message: String,
+    /// `true`: die Datei wurde übergangen; `false`: sie wurde geladen, aber ein Text hat andere
+    /// Platzhalter als im Englischen (dort fehlt dann womöglich ein Wert).
+    pub skipped: bool,
 }
 
-/// Lädt alle `*.ftl` aus `dir` als zusätzliche Sprachen (Id = Dateiname ohne `.ftl`).
-/// Fehlerhafte Dateien werden übergangen und als Problem gemeldet. Eine Datei mit der Id einer
-/// eingebauten Sprache ersetzt diese nicht. Fehlt der Ordner, gibt es keine Probleme.
+// ---- Platzhalter ----------------------------------------------------------------------------
+
+/// Platzhalter (`$name`, ohne `$`) je Schlüssel einer `.ftl`-Datei, in Reihenfolge der Datei.
+/// Schlüssel: `id`, `id.attribut`, Terme mit `-` davor (`-id`, `-id.attribut`); doppelte
+/// Schlüssel kommen doppelt vor. `None` bei Syntaxfehlern.
+pub fn placeholders(source: &str) -> Option<Vec<(String, BTreeSet<String>)>> {
+    let resource = fluent_syntax::parser::parse(source).ok()?;
+    let mut out = Vec::new();
+    for entry in &resource.body {
+        match entry {
+            Entry::Message(m) => {
+                out.push((
+                    m.id.name.to_string(),
+                    m.value.as_ref().map(vars_of).unwrap_or_default(),
+                ));
+                for a in &m.attributes {
+                    out.push((format!("{}.{}", m.id.name, a.id.name), vars_of(&a.value)));
+                }
+            }
+            Entry::Term(t) => {
+                out.push((format!("-{}", t.id.name), vars_of(&t.value)));
+                for a in &t.attributes {
+                    out.push((format!("-{}.{}", t.id.name, a.id.name), vars_of(&a.value)));
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(out)
+}
+
+fn vars_of(p: &Pattern<&str>) -> BTreeSet<String> {
+    let mut vars = BTreeSet::new();
+    vars_in_pattern(p, &mut vars);
+    vars
+}
+
+fn vars_in_pattern(p: &Pattern<&str>, out: &mut BTreeSet<String>) {
+    for el in &p.elements {
+        if let PatternElement::Placeable { expression } = el {
+            vars_in_expression(expression, out);
+        }
+    }
+}
+
+fn vars_in_expression(e: &Expression<&str>, out: &mut BTreeSet<String>) {
+    match e {
+        Expression::Inline(i) => vars_in_inline(i, out),
+        Expression::Select { selector, variants } => {
+            vars_in_inline(selector, out);
+            for v in variants {
+                vars_in_pattern(&v.value, out);
+            }
+        }
+    }
+}
+
+fn vars_in_args(a: &CallArguments<&str>, out: &mut BTreeSet<String>) {
+    for p in &a.positional {
+        vars_in_inline(p, out);
+    }
+    for n in &a.named {
+        vars_in_inline(&n.value, out);
+    }
+}
+
+fn vars_in_inline(i: &InlineExpression<&str>, out: &mut BTreeSet<String>) {
+    match i {
+        InlineExpression::VariableReference { id } => {
+            out.insert(id.name.to_string());
+        }
+        InlineExpression::FunctionReference { arguments, .. } => vars_in_args(arguments, out),
+        InlineExpression::TermReference {
+            arguments: Some(a), ..
+        } => vars_in_args(a, out),
+        InlineExpression::Placeable { expression } => vars_in_expression(expression, out),
+        _ => {}
+    }
+}
+
+/// Platzhalter je Nachricht und Attribut (ohne Terme) der eingebauten englischen Datei.
+fn english_placeholders() -> &'static BTreeMap<String, BTreeSet<String>> {
+    static EN: OnceLock<BTreeMap<String, BTreeSet<String>>> = OnceLock::new();
+    EN.get_or_init(|| {
+        placeholders(EN_FTL)
+            .expect("built-in en.ftl is valid")
+            .into_iter()
+            .filter(|(key, _)| !key.starts_with('-'))
+            .collect()
+    })
+}
+
+/// Englische Beschreibungen aller Nachrichten und Attribute aus `source`, deren Platzhalter
+/// nicht genau die des Englischen sind (Schlüssel, die es im Englischen nicht gibt, zählen nicht).
+fn placeholder_mismatches(source: &str) -> Vec<String> {
+    let english = english_placeholders();
+    let show = |vars: &BTreeSet<String>| {
+        if vars.is_empty() {
+            "none".to_string()
+        } else {
+            vars.iter()
+                .map(|v| format!("${v}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+    };
+    placeholders(source)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(key, _)| !key.starts_with('-'))
+        .filter_map(|(key, vars)| {
+            let expected = english.get(&key)?;
+            (vars != *expected).then(|| {
+                format!(
+                    "\"{key}\" uses the placeholders {} but English uses {}",
+                    show(&vars),
+                    show(expected)
+                )
+            })
+        })
+        .collect()
+}
+
+/// Lädt alle `*.ftl` aus `dir` als zusätzliche Sprachen (Id = Dateiname ohne `.ftl`, `_` wird
+/// zu `-`, also `pt_BR.ftl` → `pt-BR`). Fehlerhafte Dateien werden übergangen und als Problem
+/// gemeldet. Texte mit anderen Platzhaltern als im Englischen werden als Problem gemeldet, die
+/// Datei wird trotzdem geladen. Eine Datei mit der Id einer eingebauten Sprache ersetzt diese
+/// nicht. Fehlt der Ordner, gibt es keine Probleme.
 pub fn load_dir(dir: &Path) -> Vec<LoadProblem> {
     let mut problems = Vec::new();
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -200,8 +332,13 @@ pub fn load_dir(dir: &Path) -> Vec<LoadProblem> {
         let problem = |message: String| LoadProblem {
             file: file.clone(),
             message,
+            skipped: true,
         };
-        let Some(id) = file.file_stem().and_then(|s| s.to_str()) else {
+        let Some(id) = file
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(|s| s.replace('_', "-"))
+        else {
             problems.push(problem("the file name is not valid UTF-8".to_string()));
             continue;
         };
@@ -218,8 +355,15 @@ pub fn load_dir(dir: &Path) -> Vec<LoadProblem> {
                 continue;
             }
         };
-        match build(id, source) {
-            Ok(lang) => fresh.push(lang),
+        let mismatches = placeholder_mismatches(&source);
+        match build(&id, source) {
+            Ok(lang) => {
+                fresh.push(lang);
+                problems.extend(mismatches.into_iter().map(|message| LoadProblem {
+                    skipped: false,
+                    ..problem(message)
+                }));
+            }
             Err(message) => problems.push(problem(message)),
         }
     }

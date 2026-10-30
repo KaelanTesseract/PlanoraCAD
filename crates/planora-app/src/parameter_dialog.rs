@@ -888,17 +888,11 @@ fn trial_value(params: &[Parameter], index: usize, text: &str) -> Result<f64, St
         Ok(values) => Ok(values[index]),
         Err(e) if e.index == index => Err(e.message),
         Err(e) => match params.get(e.index) {
-            Some(other)
-                if !e
-                    .message
-                    .contains(&tr!("param-quoted-name", name = &other.name)) =>
-            {
-                Err(tr!(
-                    "param-other-row",
-                    name = &other.name,
-                    message = &e.message
-                ))
-            }
+            Some(other) if !e.stands_alone() => Err(tr!(
+                "param-other-row",
+                name = &other.name,
+                message = &e.message
+            )),
             _ => Err(e.message),
         },
     }

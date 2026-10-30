@@ -55,7 +55,7 @@ ureq = { version = "3.5", default-features = false, features = ["native-tls-no-d
 # fluent-bundle und unic-langid MIT OR Apache-2.0; Unterpakete siehe cargo deny.
 fluent-bundle = "=0.16.0"
 unic-langid = "=0.9.6"
-# fluent-syntax (nur für die Tests von planora-i18n) MIT OR Apache-2.0, schon über fluent-bundle im Baum.
+# fluent-syntax (Platzhalter-Prüfung der Sprachdateien) MIT OR Apache-2.0, schon über fluent-bundle im Baum.
 fluent-syntax = "=0.12.0"
 
 [workspace.lints.clippy]

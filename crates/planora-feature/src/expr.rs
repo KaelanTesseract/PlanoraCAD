@@ -172,17 +172,6 @@ fn fail<T>(message: impl Into<String>) -> Result<T, ExprError> {
     Err(ExprError(message.into()))
 }
 
-/// Anfang und Ende der Meldung „Die Parameter … hängen im Kreis voneinander ab“ in der
-/// aktuellen Sprache (um sie von anderen Meldungen zu unterscheiden, ohne Wortlaut im Code).
-pub(crate) fn cycle_affixes() -> (String, String) {
-    let marker = "\u{1}";
-    let text = tr!("feature-param-cycle", list = marker);
-    match text.split_once(marker) {
-        Some((a, b)) => (a.to_string(), b.to_string()),
-        None => (text, String::new()),
-    }
-}
-
 /// Zahlentext einer Formel-Ausgabe (Dezimalkomma, [`number_text`], [`short_number`]) mit dem
 /// Dezimaltrenner der aktuellen Sprache, nur für Meldungen.
 pub(crate) fn display_number(text: &str) -> String {
@@ -997,40 +986,84 @@ pub struct ParamDef<'a> {
     pub unit: ParamUnit,
 }
 
-/// Fehler der Tabelle: Zeile (0-basiert) und Meldung.
+/// Art eines Tabellenfehlers; danach richten sich Zuordnung und Vorsilbe der Meldung, nie
+/// nach ihrem Wortlaut.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TableErrorKind {
+    /// Mehr als [`MAX_PARAMETERS`] Zeilen.
+    TooMany,
+    /// Der Name der Zeile ist ungültig oder doppelt.
+    Name,
+    /// Die Formel der Zeile nennt die Zeile selbst.
+    SelfRef,
+    /// Die Zeile ist das erste Glied (in Tabellenreihenfolge) eines Kreises.
+    Cycle,
+    /// Formel-, Verweis-, Rechen- oder Einheitenfehler.
+    Other,
+}
+
+/// Fehler der Tabelle: Zeile (0-basiert), Art und Meldung.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TableError {
     pub index: usize,
+    pub kind: TableErrorKind,
     pub message: String,
+}
+
+impl TableError {
+    /// Steht die Meldung ohne Vorsilbe „Parameter „{name}“: “? Anzahl- und Namensfehler,
+    /// Selbstbezug und Kreise nennen die Zeile schon selbst (oder betreffen ihren Namen).
+    pub fn stands_alone(&self) -> bool {
+        !matches!(self.kind, TableErrorKind::Other)
+    }
 }
 
 /// Wertet die ganze Tabelle aus (Werte in Tabellenreihenfolge). Prüft Anzahl, Namen,
 /// Eindeutigkeit, Formeln, Verweise, Selbstbezug, Kreise (ohne Rekursion) und Einheiten.
 pub fn evaluate_table(defs: &[ParamDef<'_>]) -> Result<Vec<f64>, TableError> {
-    let at = |index: usize, message: String| TableError { index, message };
+    use TableErrorKind::{Cycle, Name, Other, SelfRef, TooMany};
+    let at = |index: usize, kind: TableErrorKind, message: String| TableError {
+        index,
+        kind,
+        message,
+    };
     if defs.len() > MAX_PARAMETERS {
-        return Err(at(MAX_PARAMETERS, too_many()));
+        return Err(at(MAX_PARAMETERS, TooMany, too_many()));
     }
     let n = defs.len();
     let mut by_name: HashMap<String, usize> = HashMap::with_capacity(n);
     for (i, d) in defs.iter().enumerate() {
-        check_name(d.name).map_err(|e| at(i, e.0))?;
+        check_name(d.name).map_err(|e| at(i, Name, e.0))?;
         if by_name.insert(d.name.to_lowercase(), i).is_some() {
-            return Err(at(i, tr!("feature-name-exists", name = d.name.to_string())));
+            return Err(at(
+                i,
+                Name,
+                tr!("feature-name-exists", name = d.name.to_string()),
+            ));
         }
     }
     let mut exprs = Vec::with_capacity(n);
     let mut deps: Vec<Vec<usize>> = Vec::with_capacity(n);
     for (i, d) in defs.iter().enumerate() {
-        let e = parse(d.formula).map_err(|e| at(i, e.0))?;
+        let e = parse(d.formula).map_err(|e| at(i, Other, e.0))?;
         let mut mine = Vec::new();
         for name in e.names() {
             match by_name.get(&name.to_lowercase()) {
                 Some(&j) if j == i => {
-                    return Err(at(i, tr!("feature-param-self", name = d.name.to_string())));
+                    return Err(at(
+                        i,
+                        SelfRef,
+                        tr!("feature-param-self", name = d.name.to_string()),
+                    ));
                 }
                 Some(&j) => mine.push(j),
-                None => return Err(at(i, tr!("feature-expr-no-name", name = name.to_string()))),
+                None => {
+                    return Err(at(
+                        i,
+                        Other,
+                        tr!("feature-expr-no-name", name = name.to_string()),
+                    ));
+                }
             }
         }
         deps.push(mine);
@@ -1082,6 +1115,7 @@ pub fn evaluate_table(defs: &[ParamDef<'_>]) -> Result<Vec<f64>, TableError> {
             .collect();
         return Err(at(
             ring[0],
+            Cycle,
             tr!("feature-param-cycle", list = (list.join(", ")).to_string()),
         ));
     }
@@ -1096,7 +1130,7 @@ pub fn evaluate_table(defs: &[ParamDef<'_>]) -> Result<Vec<f64>, TableError> {
             };
             evaluate(&exprs[i], &lookup).and_then(|(v, d)| fit_unit(v, d, defs[i].unit))
         };
-        values[i] = result.map_err(|e| at(i, e.0))?;
+        values[i] = result.map_err(|e| at(i, Other, e.0))?;
     }
     Ok(values)
 }

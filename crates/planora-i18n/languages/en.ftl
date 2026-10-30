@@ -283,13 +283,13 @@ chip-subtract = Subtract
 chip-intersect = Intersect
 shell-sketch-mode-info = Sketch mode: { $name } · { $info }
 shell-sketch-mode = Sketch mode: { $name }
-shell-bodies-note = 
-    { $count -> 
+shell-bodies-note =
+    { $count ->
         [one] { $count } body
        *[other] { $count } bodies
     } – { $note }
-shell-bodies = 
-    { $count -> 
+shell-bodies =
+    { $count ->
         [one] { $count } body
        *[other] { $count } bodies
     }
@@ -735,8 +735,6 @@ param-live-more = { $first } (+ { $n ->
 })
 param-field-label = { $column } of { $name }
 param-other-row = Parameter "{ $name }": { $message }
-# Same quotes as tree-quoted-name (formula messages quote names that way).
-param-quoted-name = "{ $name }"
 
 ## Properties
 props-name = Name
@@ -2710,8 +2708,8 @@ feedback-project-checkbox = Put the project file in the folder
 feedback-project-too-big = The project file is too large to send.
 feedback-project-too-big-for-form = Your project is too large for the form (25 MB at most). Send the feedback without the project; Dennis will get in touch if he needs it. The file is still in the folder.
 feedback-project-empty = The project is empty and will not be sent.
-feedback-project-preview = Puts the project as “{ $name }” into the feedback folder (without unsaved changes). It only goes along if you drag the file into the form yourself.
-feedback-folder-file = “{ $name }”
+feedback-project-preview = Puts the project as "{ $name }" into the feedback folder (without unsaved changes). It only goes along if you drag the file into the form yourself.
+feedback-folder-file = "{ $name }"
 feedback-folder-and = { " and " }
 feedback-folder-hint = Drag { $files } from the opened folder into the form.
 
@@ -2726,7 +2724,7 @@ crash-open-folder = Open folder
 crash-not-now = Not now
 crash-delete = Delete
 crash-unexpected-title = PlanoraCAD closed unexpectedly last time
-crash-unexpected-text = If you like, use “Open as feedback” to tell us briefly what you did last.
+crash-unexpected-text = If you like, use "Open as feedback" to tell us briefly what you did last.
 crash-summary-report = Report
 crash-summary-time = { " from " }{ $time }
 crash-summary-date = { $year }-{ $month }-{ $day } { $time }
