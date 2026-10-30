@@ -378,7 +378,8 @@ fn loading_does_not_sync() {
     loaded.rename(ids[0], "Anders").unwrap();
     assert_eq!(pages(&loaded), [1]);
 
-    // Lücke in den Seiten oder falscher Name: abgelehnt.
+    // Lücke in den Seiten: abgelehnt. Ein anderer Name ist Benutzerdaten (Task 14: das Blatt
+    // erkennt man an seiner Art), ein doppelter Name bleibt verboten.
     let mut s = d.snapshot();
     s.drawings
         .retain(|x| x.kind != DrawingKind::PartsList { page: 1 });
@@ -387,6 +388,13 @@ fn loading_does_not_sync() {
     for x in s.drawings.iter_mut() {
         if x.kind == (DrawingKind::PartsList { page: 2 }) {
             x.name = "Blatt zwei".into();
+        }
+    }
+    assert!(Document::from_snapshot(s, 0.05).is_ok());
+    let mut s = d.snapshot();
+    for x in s.drawings.iter_mut() {
+        if x.kind == (DrawingKind::PartsList { page: 2 }) {
+            x.name = "stückliste".into();
         }
     }
     assert!(Document::from_snapshot(s, 0.05).is_err());

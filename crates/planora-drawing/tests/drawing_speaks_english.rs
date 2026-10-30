@@ -528,3 +528,44 @@ fn dxf_layers_and_blocks_speak_the_current_language() {
         assert!(de.contains(must), "{must:?} fehlt");
     }
 }
+
+/// Grenzabmaße: Null ohne Vorzeichen in jeder Sprache (Deutsch „0,0“, Englisch „0.0“).
+#[test]
+fn zero_limit_deviation_has_no_sign_in_either_language() {
+    use planora_drawing::annotate::dimension_text;
+    let spec = DimSpec {
+        id: DimId(1),
+        view: ViewId(1),
+        kind: DimKind::Horizontal,
+        refs: Vec::new(),
+        offset: 10.0,
+        angle: 45.0,
+        text_shift: (0.0, 0.0),
+        tolerance: Tolerance::Limits {
+            upper: 0.1,
+            lower: 0.0,
+        },
+        decimals: 1,
+        text_override: None,
+        chain: None,
+        suggested: false,
+    };
+    let (a, b) = (DVec2::ZERO, DVec2::new(38.8, 0.0));
+    let m = Measured {
+        value: 38.8,
+        anchor: Anchor::Linear {
+            a,
+            b,
+            dir: DVec2::new(1.0, 0.0),
+            a_span: (a, a),
+            b_span: (b, b),
+        },
+        prefix: None,
+    };
+    let en = with_lang(&english(), || dimension_text(&spec, &m));
+    assert_eq!(en.main, "38.8");
+    assert_eq!(en.stack, Some(("+0.1".to_string(), "0.0".to_string())));
+    let de = with_lang(&german(), || dimension_text(&spec, &m));
+    assert_eq!(de.main, "38,8");
+    assert_eq!(de.stack, Some(("+0,1".to_string(), "0,0".to_string())));
+}

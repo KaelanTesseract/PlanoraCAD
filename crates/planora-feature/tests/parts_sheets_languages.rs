@@ -1,7 +1,8 @@
 //! Stücklistenblätter über Sprachen hinweg (Sprachplan, Task 14): Ein Stücklistenblatt erkennt
 //! man an seiner Art (`DrawingKind::PartsList`), nicht am Namen. Der Name entsteht beim Anlegen in
-//! der damaligen Sprache und bleibt danach, wie er ist; ein Dokument aus einer Sprache lädt in
-//! jeder anderen ohne Namenskonflikt. Kein Test ruft `set_global` (Ruling 4).
+//! der damaligen Sprache und ist danach Benutzerdaten; ein Dokument aus einer Sprache lädt in
+//! jeder anderen (auch ohne deren Sprachdatei) ohne Namenskonflikt. Kein Test ruft
+//! `set_global` (Ruling 4).
 
 use planora_drawing::sheet_info::Stamp;
 use planora_drawing::{DrawingKind, Paper, Projection, Sheet};
@@ -102,25 +103,33 @@ fn an_english_document_keeps_its_names_in_german() {
 }
 
 #[test]
-fn a_wrong_parts_sheet_name_is_still_rejected_in_every_language() {
+fn parts_sheet_names_are_user_data_when_loading() {
+    // Ein Dokument aus einer Übersetzersprache (hier „Teileliste“), deren Datei fehlt: Das Blatt
+    // ist an seiner Art erkannt, der Name zählt beim Laden nicht.
     let d = with_lang(&german(), || doc_with(27));
     let mut snap = d.snapshot();
     for x in snap.drawings.iter_mut() {
-        if x.kind == (DrawingKind::PartsList { page: 2 }) {
-            x.name = "Blatt zwei".into();
+        match x.kind {
+            DrawingKind::PartsList { page: 1 } => x.name = "Teileliste".into(),
+            DrawingKind::PartsList { page } => x.name = format!("Teileliste ({page})"),
+            DrawingKind::Views => {}
         }
     }
     for lang in [german(), english()] {
-        assert!(with_lang(&lang, || Document::from_snapshot(snap.clone(), 0.05)).is_err());
+        let loaded = with_lang(&lang, || Document::from_snapshot(snap.clone(), 0.05))
+            .expect("Name eines Stücklistenblatts ist Benutzerdaten");
+        assert_eq!(sheet_names(&loaded), ["Teileliste", "Teileliste (2)"]);
     }
-    // Seite 2 mit dem Namen von Seite 1 passt in keiner Sprache.
-    let mut snap = d.snapshot();
-    for x in snap.drawings.iter_mut() {
+    // Lücken in den Seiten und doppelte Namen bleiben verboten.
+    let mut gap = snap.clone();
+    gap.drawings
+        .retain(|x| x.kind != DrawingKind::PartsList { page: 1 });
+    assert!(Document::from_snapshot(gap, 0.05).is_err());
+    let mut twice = snap;
+    for x in twice.drawings.iter_mut() {
         if x.kind == (DrawingKind::PartsList { page: 2 }) {
-            x.name = "Parts list".into();
+            x.name = "teileliste".into();
         }
     }
-    for lang in [german(), english()] {
-        assert!(with_lang(&lang, || Document::from_snapshot(snap.clone(), 0.05)).is_err());
-    }
+    assert!(Document::from_snapshot(twice, 0.05).is_err());
 }

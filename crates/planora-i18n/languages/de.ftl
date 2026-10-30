@@ -1312,6 +1312,7 @@ parts-too-many-rows = Mehr als { $max } Zeilen passen nicht auf die Stücklisten
 parts-none = Es gibt noch keine Teile.
 parts-create = Stücklistenblatt erzeugen
 parts-open = Stücklistenblatt öffnen
+parts-col-pos = Pos.
 parts-col-name = Benennung
 parts-col-qty = Menge
 parts-col-material = Werkstoff
@@ -1764,7 +1765,6 @@ feature-drawing-id-twice = Eine Zeichnungskennung kommt doppelt vor
 feature-drawing-prefix = Zeichnung „{ $name }“: { $detail }
 feature-drawing-name-twice = Ein Zeichnungsname kommt doppelt vor
 feature-parts-pages-gap = Die Stücklistenblätter müssen die Seiten 1, 2, 3 … ohne Lücke haben
-feature-parts-sheet-name = Ein Stücklistenblatt hat einen falschen Namen
 
 ## Fehlermeldungen: Formeln und Parameter
 feature-expr-empty = Die Formel ist leer.
@@ -2559,7 +2559,6 @@ drawing-err-section-letters = Es sind keine Schnittbuchstaben mehr frei.
 drawing-err-hatch-too-fine = Die Schraffur von „{ $name }“ ist zu fein.
 drawing-err-hatch-failed = Die Schraffur von „{ $name }“ lässt sich nicht berechnen.
 drawing-err-section-normal = Ein Schnitt braucht eine der sechs Normansichten.
-parts-col-pos = Pos.
 drawing-parts-doc-type = Stückliste
 drawing-parts-sheet-page = { $name } ({ $page })
 drawing-what-part-name = Die Benennung

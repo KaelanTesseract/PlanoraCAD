@@ -129,10 +129,21 @@ use crate::error::DrawError;
 use crate::out2d::Out2d;
 use crate::sheet::SheetModel;
 use crate::sheet_frame::{SheetPen, sheet_scale};
-use planora_i18n::tr;
+use planora_i18n::{english, tr, with_lang};
 use planora_math::{DVec2, PI, TAU};
 use std::collections::BTreeSet;
 use std::io::Write;
+
+/// Ebenenname für die Datei: ohne Leerraum an den Enden, unzulässige Zeichen und Leerzeichen als
+/// `_`, Zeichen außerhalb von ASCII wie bei den Blocknamen kodiert.
+fn layer_name(text: &str) -> String {
+    let clean: String = text
+        .trim()
+        .chars()
+        .map(|c| if illegal(c) || c == ' ' { '_' } else { c })
+        .collect();
+    encode(&clean)
+}
 
 /// Namen der Ebenen in der aktuellen Sprache (Deutsch: SICHTBAR, VERDECKT, MASSE, …), einmal je
 /// Datei bestimmt: unzulässige Zeichen und Leerzeichen werden `_`, Zeichen außerhalb von ASCII
@@ -155,29 +166,74 @@ struct Layers {
 
 impl Layers {
     fn new() -> Layers {
-        let name = |text: String| {
-            let clean: String = text
-                .trim()
-                .chars()
-                .map(|c| if illegal(c) || c == ' ' { '_' } else { c })
-                .collect();
-            encode(&clean)
-        };
-        Layers {
-            visible: name(tr!("drawing-layer-visible")),
-            hidden: name(tr!("drawing-layer-hidden")),
-            dim: name(tr!("drawing-layer-dims")),
-            center: name(tr!("drawing-layer-center")),
-            lost: name(tr!("drawing-layer-lost")),
-            frame: name(tr!("drawing-layer-frame")),
-            centre: name(tr!("drawing-layer-sheet-centre")),
-            sheet: name(tr!("drawing-layer-sheet")),
-            position: name(tr!("drawing-layer-positions")),
-            position_line: name(tr!("drawing-layer-position-line")),
-            hatch: name(tr!("drawing-layer-hatch")),
-            section: name(tr!("drawing-layer-section")),
-            section_heavy: name(tr!("drawing-layer-section-heavy")),
+        Layers::from_texts(Layers::texts(), with_lang(&english(), Layers::texts))
+    }
+
+    /// Baut die Ebenen aus den Namen der Sprache; ein leerer Name, „0“ oder ein doppelter Name
+    /// (Groß-/Kleinschreibung egal) wäre in der Datei ungültig: dann gilt der englische Name
+    /// dieser Ebene.
+    fn from_texts(own: [String; 13], english: [String; 13]) -> Layers {
+        let mut used: BTreeSet<String> = BTreeSet::from(["0".to_string()]);
+        let mut out: Vec<String> = Vec::with_capacity(13);
+        for (own, en) in own.into_iter().zip(english) {
+            let own = layer_name(&own);
+            let pick = if own.is_empty() || used.contains(&own.to_uppercase()) {
+                layer_name(&en)
+            } else {
+                own
+            };
+            used.insert(pick.to_uppercase());
+            out.push(pick);
         }
+        let [
+            visible,
+            hidden,
+            dim,
+            center,
+            lost,
+            frame,
+            centre,
+            sheet,
+            position,
+            position_line,
+            hatch,
+            section,
+            section_heavy,
+        ]: [String; 13] = out.try_into().expect("13 Ebenen");
+        Layers {
+            visible,
+            hidden,
+            dim,
+            center,
+            lost,
+            frame,
+            centre,
+            sheet,
+            position,
+            position_line,
+            hatch,
+            section,
+            section_heavy,
+        }
+    }
+
+    /// Die Namen in der aktuellen Sprache, Reihenfolge wie die Felder.
+    fn texts() -> [String; 13] {
+        [
+            tr!("drawing-layer-visible"),
+            tr!("drawing-layer-hidden"),
+            tr!("drawing-layer-dims"),
+            tr!("drawing-layer-center"),
+            tr!("drawing-layer-lost"),
+            tr!("drawing-layer-frame"),
+            tr!("drawing-layer-sheet-centre"),
+            tr!("drawing-layer-sheet"),
+            tr!("drawing-layer-positions"),
+            tr!("drawing-layer-position-line"),
+            tr!("drawing-layer-hatch"),
+            tr!("drawing-layer-section"),
+            tr!("drawing-layer-section-heavy"),
+        ]
     }
 
     /// Ebene einer Markierungsart.
@@ -1312,4 +1368,45 @@ fn encode_text(s: &str) -> String {
 /// Steuerzeichen? (Andere Zeichen werden in der Datei durch `?` bzw. ein Leerzeichen ersetzt.)
 pub fn dxf_char_ok(c: char) -> bool {
     (c as u32) <= 0xFFFF && !c.is_control()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(list: [&str; 13]) -> [String; 13] {
+        list.map(String::from)
+    }
+
+    const EN: [&str; 13] = [
+        "VISIBLE",
+        "HIDDEN",
+        "DIMENSIONS",
+        "CENTERLINES",
+        "DIMENSIONS_LOST",
+        "SHEET_FRAME",
+        "SHEET_CENTER",
+        "SHEET",
+        "BALLOONS",
+        "BALLOON_LINES",
+        "HATCHING",
+        "SECTION_LINE",
+        "SECTION_LINE_HEAVY",
+    ];
+
+    #[test]
+    fn unusable_layer_names_fall_back_to_english() {
+        let mut own = names(EN).map(|n| format!("x {n}"));
+        own[0] = "  ".into();
+        own[1] = "0".into();
+        own[3] = own[2].to_lowercase();
+        own[4] = "a:b".into();
+        let l = Layers::from_texts(own, names(EN));
+        assert_eq!(l.visible, "VISIBLE");
+        assert_eq!(l.hidden, "HIDDEN");
+        assert_eq!(l.dim, "x_DIMENSIONS");
+        assert_eq!(l.center, "CENTERLINES");
+        assert_eq!(l.lost, "a_b");
+        assert_eq!(l.frame, "x_SHEET_FRAME");
+    }
 }

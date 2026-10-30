@@ -502,7 +502,7 @@ impl Drawing {
                     ViewName::Section(l) => crate::section_marks::section_view_name(l),
                     ViewName::Kind(k, 1) => k.label(),
                     ViewName::Kind(k, n) => {
-                        tr!("drawing-view-numbered", name = k.label(), n = n as usize)
+                        tr!("drawing-view-numbered", name = k.label(), n = n.to_string())
                     }
                 };
                 (id, name)

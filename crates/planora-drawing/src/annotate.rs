@@ -272,10 +272,10 @@ pub fn format_value(value: f64, decimals: u8) -> String {
     localize_decimal(&s).replace('-', "\u{2212}")
 }
 
-/// Zahl mit Vorzeichen (`+`, `−`); null ohne Vorzeichen.
+/// Zahl mit Vorzeichen (`+`, `−`); null ohne Vorzeichen (gleich mit welchem Dezimaltrenner).
 fn signed_value(value: f64, decimals: u8) -> String {
     let s = format_value(value, decimals);
-    if s.starts_with('\u{2212}') || s == "?" || s.chars().all(|c| matches!(c, '0' | ',')) {
+    if s.starts_with('\u{2212}') || s == "?" || s.chars().all(|c| matches!(c, '0' | ',' | '.')) {
         s
     } else {
         format!("+{s}")

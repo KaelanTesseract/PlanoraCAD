@@ -23,7 +23,7 @@ use planora_drawing::sheet_info::{
     DASH, DEFAULT_TOLERANCE, FieldValue, MAX_FIELD_CHARS, MAX_NOTE_CHARS, MAX_NOTES,
     MAX_REVISION_CHARS, MAX_REVISIONS, MAX_TITLE_CHARS, NotesValue, ProjectInfo, SheetContext,
     SheetInfo, Stamp, TitleTexts, default_notes, main_scale, resolve_texts, revision_letter,
-    too_many_revisions, validate_project_info, validate_sheet_info,
+    validate_project_info, validate_sheet_info,
 };
 use planora_drawing::sheet_marks::{field_is_cut, note_is_cut, revision_cell_is_cut};
 use planora_drawing::{Drawing, DrawingId, DrawingKind, PartsRow};
@@ -217,14 +217,13 @@ impl SheetInfoDialog {
     }
 
     /// Hängt eine Änderung mit dem Datum von heute und dem Namen `creator` an; ab der 24. gibt
-    /// es stattdessen die Meldung.
+    /// es stattdessen die Meldung (der einzige Fehler von `SheetInfo::add_revision`).
     pub fn add_revision(&mut self, stamp: &Stamp, creator: &str) {
         match self.sheet.add_revision(&stamp.date, creator) {
             Ok(()) => self.message = None,
-            Err(m) if m == too_many_revisions() => {
+            Err(_) => {
                 self.message = Some(crate::msg!("sheet-too-many-revisions", max = MAX_REVISIONS));
             }
-            Err(m) => self.message = Some(Msg::Raw(m)),
         }
     }
 
