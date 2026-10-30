@@ -429,7 +429,7 @@ pub fn encode_png(img: &Image) -> Result<Vec<u8>, String> {
     let expected = u64::from(img.width) * u64::from(img.height) * 4;
     if img.rgba.len() as u64 != expected {
         return Err(format!(
-            "Bildpuffer hat {} statt {expected} Bytes.",
+            "The image buffer has {} instead of {expected} bytes.",
             img.rgba.len()
         ));
     }
@@ -455,12 +455,12 @@ pub fn decode_png(bytes: &[u8], width: u32, height: u32) -> Result<Image, String
     let info = reader.info();
     if info.width != width || info.height != height {
         return Err(format!(
-            "Bild hat {} × {} statt {width} × {height} Pixel.",
+            "The image has {} x {} instead of {width} x {height} pixels.",
             info.width, info.height
         ));
     }
     if info.color_type != png::ColorType::Rgba || info.bit_depth != png::BitDepth::Eight {
-        return Err("Bild ist nicht RGBA mit 8 Bit.".to_string());
+        return Err("The image is not 8-bit RGBA.".to_string());
     }
     let size = reader
         .output_buffer_size()

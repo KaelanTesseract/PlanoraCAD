@@ -735,6 +735,7 @@ param-live-more = { $first } (+ { $n ->
 })
 param-field-label = { $column } of { $name }
 param-other-row = Parameter "{ $name }": { $message }
+# Same quotes as tree-quoted-name (formula messages quote names that way).
 param-quoted-name = "{ $name }"
 
 ## Properties

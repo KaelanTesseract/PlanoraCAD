@@ -98,7 +98,7 @@ impl ThumbKey {
         let (info, _) = peek(doc_dir).map_err(|e| e.to_string())?;
         let version = info
             .tip(&info.active_branch)
-            .ok_or_else(|| "Der aktive Zweig hat keine Version.".to_string())?;
+            .ok_or_else(|| "The active branch has no version.".to_string())?;
         Ok(ThumbKey::new(&info.id, version, &info.active_branch, dark))
     }
 }
@@ -322,7 +322,7 @@ pub fn store(doc_dir: &Path, key: &ThumbKey, thumb: &Thumb) -> Result<(), String
         Thumb::Image(img) => {
             if (img.width, img.height) != (PREVIEW_W, PREVIEW_H) {
                 return Err(format!(
-                    "Die Vorschau hat {} × {} statt {PREVIEW_W} × {PREVIEW_H} Pixel.",
+                    "The preview has {} x {} instead of {PREVIEW_W} x {PREVIEW_H} pixels.",
                     img.width, img.height
                 ));
             }
@@ -332,7 +332,7 @@ pub fn store(doc_dir: &Path, key: &ThumbKey, thumb: &Thumb) -> Result<(), String
         Thumb::TooComplex => (ART_TOO_COMPLEX, None),
         Thumb::Impossible => (ART_IMPOSSIBLE, None),
         Thumb::Busy | Thumb::Failed(_) => {
-            return Err("Diese Vorschau wird nicht gespeichert.".into());
+            return Err("This preview is not stored.".into());
         }
     };
     remove_stale_tmp(doc_dir);

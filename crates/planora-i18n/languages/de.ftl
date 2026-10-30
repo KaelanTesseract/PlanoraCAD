@@ -727,6 +727,7 @@ param-live-more = { $first } (+ { $n ->
 })
 param-field-label = { $column } von { $name }
 param-other-row = Parameter „{ $name }“: { $message }
+# Gleiche Anführungszeichen wie tree-quoted-name (so nennen Formelmeldungen den Namen).
 param-quoted-name = „{ $name }“
 
 ## Eigenschaften

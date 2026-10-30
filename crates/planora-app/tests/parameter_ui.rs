@@ -1607,6 +1607,40 @@ fn errors_of_other_rows_are_prefixed() {
     assert_eq!(e.color, theme::palette(true).error);
 }
 
+/// Englisch: Nennt die Meldung einer anderen Zeile deren Namen schon (hier der Kreis, gemeldet
+/// an der ersten Zeile des Kreises), kommt kein Präfix davor – die Prüfung muss die englischen
+/// Anführungszeichen kennen (`param-quoted-name`), sonst stünde „Parameter "b": “ doppelt.
+#[test]
+fn errors_of_other_rows_naming_the_row_get_no_prefix_in_english() {
+    planora_i18n::with_lang(&planora_i18n::english(), || {
+        let mut s = AppState::new();
+        let b = param(&mut s, "b", "10", ParamUnit::Length);
+        let a = param(&mut s, "a", "10", ParamUnit::Length);
+        s.edit_parameter(
+            b,
+            ParamEdit {
+                name: "b".into(),
+                formula: "a*2".into(),
+                unit: ParamUnit::Length,
+                comment: String::new(),
+            },
+        )
+        .unwrap();
+        let mut d = ParameterDialog::new(&s);
+        d.set_text(a, Column::Formula, "b");
+        let mut pane = Pane::new(true);
+        let seen = pane.settle(&mut |ui| {
+            d.show(ui.ctx(), &mut s, false);
+        });
+        let e = seen
+            .iter()
+            .find(|t| t.text.contains("depend on each other"))
+            .expect("cycle message in English");
+        assert!(e.text.starts_with("The parameters "), "{}", e.text);
+        assert!(!e.text.contains("Parameter \"b\": "), "{}", e.text);
+    });
+}
+
 /// F7 (R40): Eine abgelehnte Änderung schließt das Bearbeiten-Fenster nicht.
 #[test]
 fn rejected_change_keeps_edit_dialog() {

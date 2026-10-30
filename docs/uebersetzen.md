@@ -15,7 +15,7 @@ PlanoraCAD comes in German and English. You can add any other language yourself,
    - `language-name` is required. It is the name of the language in the language itself, as it should appear in the list. Without it, the file is not loaded.
    - `decimal-separator` is `,` or `.`. Numbers are shown with it (`38,8` or `38.8`). If the line is missing, `.` is used. Any other value makes the file invalid.
 5. Translate the text after each `=`. Do not change the part before `=` (the key).
-6. Put the file in the folder `%APPDATA%\PlanoraCAD\languages`. To get there, type `%APPDATA%\PlanoraCAD` into the address bar of Windows Explorer and create the folder `languages` if it does not exist. (The folder `languages` next to `PlanoraCAD.exe` works too. If both have a file with the same name, the one in `%APPDATA%` wins.)
+6. Put the file in the folder `%APPDATA%\PlanoraCAD\languages`. To get there, type `%APPDATA%\PlanoraCAD` into the address bar of Windows Explorer and create the folder `languages` if it does not exist. (The folder `languages` next to `PlanoraCAD.exe` works too. If both have a file with the same name, a valid file in `%APPDATA%` wins.)
 7. Restart PlanoraCAD. Choose your language under "File → Settings …", section "Appearance", "Language".
 
 You do not have to translate everything at once. Any text that is missing in your file appears in English.
@@ -40,7 +40,7 @@ The files use the [Fluent](https://projectfluent.org/) format. You only need a f
 
 ## If something goes wrong
 
-A broken file never makes the program crash. If the file has an error (wrong syntax, a key twice, `language-name` missing, wrong `decimal-separator`), PlanoraCAD skips the whole file and starts with another language. The reason is written to the log file `%APPDATA%\PlanoraCAD\planora.log`, in a line that starts with `Language file skipped:`. Fix the error and restart.
+A broken file never makes the program crash. If the file has an error (wrong syntax, a key twice, `language-name` missing, wrong `decimal-separator`), PlanoraCAD skips the whole file and starts with another language. The reason is written to the log file `%APPDATA%\PlanoraCAD\planora.log`, in a line that contains `Language file skipped:`. Fix the error and restart.
 
 If a single text is missing or its key is misspelled, only that text appears in English.
 

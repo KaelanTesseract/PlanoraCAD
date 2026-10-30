@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 
 const GERMAN: [char; 9] = ['ä', 'ö', 'ü', 'ß', 'Ä', 'Ö', 'Ü', '„', '“'];
 
-/// Erlaubte Literale: (Datei relativ zum Arbeitsbereich mit `/`, Literal enthält, Begründung).
+/// Erlaubte Literale: (Datei relativ zum Arbeitsbereich mit `/`, genauer Inhalt des Literals,
+/// Begründung). Verglichen wird genau, damit eine Ausnahme keine anderen Texte durchlässt.
 /// Jede Ausnahme muss noch treffen, sonst schlägt der Test fehl (Liste bleibt kurz).
 const ALLOWED: &[(&str, &str, &str)] = &[
     (
@@ -47,7 +48,12 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     (
         "crates/planora-kernel/src/blend/topo.rs",
         "Fläche",
-        "gespeicherte Rollen der Flächenmarken (Dateiformat), angezeigt per tr!",
+        "gespeicherte Rolle der Flächenmarken (Dateiformat), angezeigt per tr!",
+    ),
+    (
+        "crates/planora-kernel/src/blend/topo.rs",
+        "STEP-Fläche",
+        "gespeicherte Rolle der Flächenmarken (Dateiformat), angezeigt per tr!",
     ),
     (
         "crates/planora-kernel/src/revolve.rs",
@@ -459,17 +465,17 @@ fn no_german_literals_in_code() {
         for lit in scan.literals.iter().filter(|l| has_german(&l.text)) {
             let allowed = ALLOWED
                 .iter()
-                .position(|(f, part, _)| *f == shown && lit.text.contains(part));
+                .position(|(f, text, _)| *f == shown && lit.text == *text);
             match allowed {
                 Some(k) => used[k] = true,
                 None => problems.push(format!("  {shown}:{}: \"{}\"", lit.line, lit.text)),
             }
         }
     }
-    for (k, (f, part, _)) in ALLOWED.iter().enumerate() {
+    for (k, (f, text, _)) in ALLOWED.iter().enumerate() {
         if !used[k] {
             problems.push(format!(
-                "  Ausnahme ohne Treffer (bitte streichen): {f}: \"{part}\""
+                "  Ausnahme ohne Treffer (bitte streichen): {f}: \"{text}\""
             ));
         }
     }
