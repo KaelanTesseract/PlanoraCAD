@@ -84,27 +84,33 @@ const REV_NAME_W: f32 = 140.0;
 /// Schmalste Spalte des Namens, wenn der Platz für Beschreibung und Rollbalken knapp wird.
 const REV_NAME_MIN_W: f32 = 120.0;
 
-/// Bezeichnung eines Felds des Schriftfelds in der Oberfläche und in Meldungen.
-pub fn title_field_name(field: TitleField) -> String {
+/// Bezeichnung eines Felds des Schriftfelds, übersetzt erst beim Zeichnen (Meldungen, die ein
+/// Fenster behält).
+pub fn title_field_msg(field: TitleField) -> Msg {
     match field {
-        TitleField::Owner => tr!("sheet-field-owner"),
-        TitleField::Number => tr!("sheet-field-number"),
-        TitleField::Title => tr!("sheet-field-title"),
-        TitleField::Subtitle => tr!("sheet-field-subtitle"),
-        TitleField::DocType => tr!("sheet-field-doc-type"),
-        TitleField::Status => tr!("sheet-field-status"),
-        TitleField::Issued => tr!("sheet-field-issued"),
-        TitleField::Revision => tr!("sheet-field-revision"),
-        TitleField::SheetOf => tr!("sheet-field-sheet-of"),
-        TitleField::Format => tr!("sheet-field-format"),
-        TitleField::Scale => tr!("sheet-field-scale"),
-        TitleField::Creator => tr!("sheet-field-creator"),
-        TitleField::Checked => tr!("sheet-field-checked"),
-        TitleField::Approved => tr!("sheet-field-approved"),
-        TitleField::Material => tr!("sheet-field-material"),
-        TitleField::Weight => tr!("sheet-field-weight"),
-        TitleField::Language => tr!("sheet-field-language"),
+        TitleField::Owner => crate::msg!("sheet-field-owner"),
+        TitleField::Number => crate::msg!("sheet-field-number"),
+        TitleField::Title => crate::msg!("sheet-field-title"),
+        TitleField::Subtitle => crate::msg!("sheet-field-subtitle"),
+        TitleField::DocType => crate::msg!("sheet-field-doc-type"),
+        TitleField::Status => crate::msg!("sheet-field-status"),
+        TitleField::Issued => crate::msg!("sheet-field-issued"),
+        TitleField::Revision => crate::msg!("sheet-field-revision"),
+        TitleField::SheetOf => crate::msg!("sheet-field-sheet-of"),
+        TitleField::Format => crate::msg!("sheet-field-format"),
+        TitleField::Scale => crate::msg!("sheet-field-scale"),
+        TitleField::Creator => crate::msg!("sheet-field-creator"),
+        TitleField::Checked => crate::msg!("sheet-field-checked"),
+        TitleField::Approved => crate::msg!("sheet-field-approved"),
+        TitleField::Material => crate::msg!("sheet-field-material"),
+        TitleField::Weight => crate::msg!("sheet-field-weight"),
+        TitleField::Language => crate::msg!("sheet-field-language"),
     }
+}
+
+/// Wie [`title_field_msg`], als Text in der aktuellen Sprache.
+pub fn title_field_name(field: TitleField) -> String {
+    title_field_msg(field).text()
 }
 
 /// Fenster „Blattangaben“.

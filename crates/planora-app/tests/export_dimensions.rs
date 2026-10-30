@@ -829,7 +829,7 @@ fn stale_dimension_edit_prepares_again() {
     assert!(matches!(d.status(&s), ExportStatus::Computing(_)));
     let path = dir.join("neu.svg");
     d.write_to(path.clone(), &s);
-    assert_eq!(d.write_state(), WriteState::Failed(STALE.into()));
+    assert_eq!(d.write_state(), WriteState::Failed(stale()));
     assert!(!path.exists());
     d.tick(&s, true);
     let new = write(&mut d, &s, &path);
@@ -844,7 +844,7 @@ fn stale_dimension_edit_prepares_again() {
         .update_dimension(id, width, |m| m.text_override = Some("<> breit".into()))
         .unwrap();
     d.write_to(dir.join("t.dxf"), &s);
-    assert_eq!(d.write_state(), WriteState::Failed(STALE.into()));
+    assert_eq!(d.write_state(), WriteState::Failed(stale()));
     d.tick(&s, true);
     let text = write(&mut d, &s, &dir.join("t.dxf"));
     let dxf = dxf_read::read(&text).unwrap();

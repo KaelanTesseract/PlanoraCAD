@@ -517,7 +517,7 @@ fn frame_switch_applies() {
     // Der Schalter steht in der Karte der Zeichnungsformate, auch bei PDF.
     let mut d = ExportDialog::new(&s);
     d.format = PDF;
-    assert!(draw(&mut d, &mut s).contains(FRAME_SWITCH));
+    assert!(draw(&mut d, &mut s).contains(&frame_switch()));
 
     // An: Rahmen mit Texten und kräftigem Randstrich (0,7 mm = 1,9843 pt).
     let mut d = dialog_with(&s, PDF, true, id);
@@ -979,7 +979,7 @@ fn existing_file_stays_when_cancelled_and_window_stays_open_while_writing() {
         out.drop_without_applying_deltas();
     }
     assert!(d.is_writing_file(), "das Schreiben muss noch laufen");
-    assert!(text.contains(WRITING_HINT), "{text}");
+    assert!(text.contains(&writing_hint()), "{text}");
     assert!(text.contains("Die Datei wird geschrieben"), "{text}");
     assert!(text.contains("Abbrechen"), "{text}");
     d.cancel_write();
@@ -1372,11 +1372,7 @@ fn key_covers_format_and_meta() {
     set_creator(&mut s, FieldValue::Text("Erika".into()));
     assert!(matches!(d.status(&s), ExportStatus::Computing(_)));
     d.write_to(dir.join("1.pdf"), &s);
-    assert_eq!(
-        d.write_state(),
-        WriteState::Failed(STALE.into()),
-        "Ersteller"
-    );
+    assert_eq!(d.write_state(), WriteState::Failed(stale()), "Ersteller");
     let pdf = read(&written(&mut d, &s, &dir.join("1.pdf")));
     assert_eq!(info_text(&pdf, "Author").as_deref(), Some("Erika"));
     // Neuer Name des Blatts: Titel der PDF.
@@ -1384,7 +1380,7 @@ fn key_covers_format_and_meta() {
         .update_drawing(id, |dr| dr.name = "Anders".into())
         .unwrap();
     d.write_to(dir.join("2.pdf"), &s);
-    assert_eq!(d.write_state(), WriteState::Failed(STALE.into()), "Name");
+    assert_eq!(d.write_state(), WriteState::Failed(stale()), "Name");
     let pdf = read(&written(&mut d, &s, &dir.join("2.pdf")));
     assert_eq!(info_text(&pdf, "Title").as_deref(), Some("Anders"));
     // Neues Ausgabedatum: Datum der PDF.
@@ -1392,7 +1388,7 @@ fn key_covers_format_and_meta() {
         i.issued = FieldValue::Text("2031-12-24".into());
     });
     d.write_to(dir.join("3.pdf"), &s);
-    assert_eq!(d.write_state(), WriteState::Failed(STALE.into()), "Datum");
+    assert_eq!(d.write_state(), WriteState::Failed(stale()), "Datum");
     let pdf = read(&written(&mut d, &s, &dir.join("3.pdf")));
     assert_eq!(
         pdf.info["CreationDate"],
@@ -1402,7 +1398,7 @@ fn key_covers_format_and_meta() {
     d.format = SVG;
     assert!(matches!(d.status(&s), ExportStatus::Computing(_)));
     d.write_to(dir.join("4.svg"), &s);
-    assert_eq!(d.write_state(), WriteState::Failed(NOT_COMPUTED.into()));
+    assert_eq!(d.write_state(), WriteState::Failed(not_computed()));
     assert!(!dir.join("4.svg").exists());
     // Das PDF-Ergebnis bleibt stehen, bis es selbst veraltet.
     d.format = PDF;
@@ -1722,10 +1718,10 @@ fn cube() -> planora_exchange::ExchangeMesh {
 fn choice_ui() {
     use common::{Screen, assert_cards_inside, find};
     assert_eq!(PdfPages::default(), PdfPages::Selected);
-    assert_eq!(PDF_SELECTED, "Gewähltes Blatt");
-    assert_eq!(PDF_ALL, "Alle Blätter");
+    assert_eq!(pdf_selected(), "Gewähltes Blatt");
+    assert_eq!(pdf_all(), "Alle Blätter");
     assert_eq!(
-        PDF_ALL_HINT,
+        pdf_all_hint(),
         "Bei „Alle Blätter“ kommen alle Zeichnungen der Reihe nach in die PDF."
     );
     let mut s = box_state();
@@ -1742,7 +1738,7 @@ fn choice_ui() {
         d.format = format;
         let ui = draw(&mut d, &mut s);
         assert!(
-            !ui.contains(PDF_ALL) && !ui.contains(PDF_SELECTED),
+            !ui.contains(&pdf_all()) && !ui.contains(&pdf_selected()),
             "{format:?}:\n{ui}"
         );
     }
@@ -1750,9 +1746,12 @@ fn choice_ui() {
     let mut d = ExportDialog::new(&s);
     d.format = PDF;
     let ui = draw(&mut d, &mut s);
-    assert!(ui.contains(PDF_SELECTED) && ui.contains(PDF_ALL), "{ui}");
     assert!(
-        !ui.contains(PDF_ALL_HINT) && !ui.contains("Blätter:"),
+        ui.contains(&pdf_selected()) && ui.contains(&pdf_all()),
+        "{ui}"
+    );
+    assert!(
+        !ui.contains(&pdf_all_hint()) && !ui.contains("Blätter:"),
         "{ui}"
     );
     assert_eq!(d.pdf_pages, PdfPages::Selected);
@@ -1800,7 +1799,7 @@ fn choice_ui() {
     };
     assert!(find(&after, "Blatt C").is_none(), "Liste zu");
     assert_eq!(d.drawing, Some(a), "Auswahl unverändert");
-    let all_button = find(&after, PDF_ALL)
+    let all_button = find(&after, &pdf_all())
         .expect("Wahl „Alle Blätter“")
         .rect
         .center();
@@ -1822,7 +1821,7 @@ fn choice_ui() {
         egui::Rect::from_min_size(egui::Pos2::ZERO, screen.size).contains_rect(r)
     }));
     let words: Vec<&str> = seen.iter().map(|x| x.text.as_str()).collect();
-    for want in [PDF_ALL_HINT, "Blätter: 4"] {
+    for want in [pdf_all_hint().as_str(), "Blätter: 4"] {
         assert!(
             seen.iter().any(|x| x.text == want),
             "„{want}“ fehlt: {words:?}"
@@ -1853,7 +1852,10 @@ fn choice_ui() {
     // Andere Formate zeigen die Wahl auch dann nicht, wenn „Alle Blätter“ gewählt ist.
     d.format = SVG;
     let ui = draw(&mut d, &mut s);
-    assert!(!ui.contains(PDF_ALL) && !ui.contains(PDF_ALL_HINT), "{ui}");
+    assert!(
+        !ui.contains(&pdf_all()) && !ui.contains(&pdf_all_hint()),
+        "{ui}"
+    );
     assert!(
         ui.contains("Blatt: A3 quer"),
         "SVG gilt dem gewählten Blatt:\n{ui}"
@@ -2163,7 +2165,7 @@ fn stale_and_key_coverage() {
     // Je eine Änderung: das alte Ergebnis wird nie geschrieben, die neue Datei passt.
     let stale = |d: &mut ExportDialog, s: &AppState, what: &str| {
         d.write_to(dir.join("stale.pdf"), s);
-        assert_eq!(d.write_state(), WriteState::Failed(STALE.into()), "{what}");
+        assert_eq!(d.write_state(), WriteState::Failed(stale()), "{what}");
         assert!(!dir.join("stale.pdf").exists(), "{what}");
         read(&written(d, s, &dir.join(format!("{what}.pdf"))))
     };
@@ -2733,7 +2735,7 @@ fn crashing_sheet_is_named_and_never_skipped() {
     d.set_resolve(panic_resolve_blatt_2);
     d.format = PDF;
     d.pdf_pages = PdfPages::All;
-    locked(&mut d, &mut s, &in_sheet("Blatt 2", LOST), &dir);
+    locked(&mut d, &mut s, &in_sheet("Blatt 2", &lost()), &dir);
     s.document.delete_dimension(ids[1], dim).unwrap();
     // Absturz in einer Ansicht von Blatt 2.
     let front = front_of(&s, ids[1]);
@@ -2747,7 +2749,7 @@ fn crashing_sheet_is_named_and_never_skipped() {
         )
         .unwrap();
     let mut d = all_dialog(&s, false, panic_right);
-    locked(&mut d, &mut s, &in_sheet("Blatt 2", LOST), &dir);
+    locked(&mut d, &mut s, &in_sheet("Blatt 2", &lost()), &dir);
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -2794,7 +2796,7 @@ fn page_choice_clears_the_done_message() {
     });
     let done_text = |seen: &[common::Seen]| seen.iter().any(|x| x.text.starts_with("Fertig:"));
     assert!(done_text(&seen), "Fertig vor dem Wechsel");
-    let all = find(&seen, PDF_ALL).expect("Wahl").rect.center();
+    let all = find(&seen, &pdf_all()).expect("Wahl").rect.center();
     let seen = {
         let mut f = |ctx: &egui::Context| {
             assert!(d.show_in(
@@ -2871,7 +2873,7 @@ fn locked_export_still_shows_the_line_counts() {
         let text = draw(&mut d, &mut s);
         assert!(text.contains(&want), "{format:?}: {want} fehlt: {text}");
         assert!(!text.contains("Linien: …"), "{format:?}: {text}");
-        assert!(!text.contains(LINES_NOT_COMPUTED), "{format:?}: {text}");
+        assert!(!text.contains(&lines_not_computed()), "{format:?}: {text}");
     }
 }
 
@@ -2907,7 +2909,7 @@ fn locked_all_sheets_show_counts_only_when_every_sheet_is_computed() {
         d.status(&s)
     );
     let text = draw(&mut d, &mut s);
-    assert!(text.contains(LINES_NOT_COMPUTED), "{text}");
+    assert!(text.contains(&lines_not_computed()), "{text}");
     assert!(!text.contains("sichtbar,"), "{text}");
     assert!(!text.contains("Linien: …"), "{text}");
 }
@@ -2944,7 +2946,7 @@ fn while_computing_the_lines_say_so() {
             "{format:?}: {:?}",
             d.status(&s)
         );
-        assert!(text.contains(LINES_COMPUTING), "{format:?}: {text}");
+        assert!(text.contains(&lines_computing()), "{format:?}: {text}");
         assert!(!text.contains("Linien: …"), "{format:?}: {text}");
     }
 }
@@ -2969,8 +2971,8 @@ fn unavailable_says_lines_not_computed() {
                 d.status(state)
             );
             let text = draw(&mut d, state);
-            assert!(text.contains(LINES_NOT_COMPUTED), "{format:?}: {text}");
-            assert!(!text.contains(LINES_COMPUTING), "{format:?}: {text}");
+            assert!(text.contains(&lines_not_computed()), "{format:?}: {text}");
+            assert!(!text.contains(&lines_computing()), "{format:?}: {text}");
             assert!(!text.contains("Linien: …"), "{format:?}: {text}");
         }
     }

@@ -534,7 +534,7 @@ fn export_resolves_section_dims() {
         )),
         "{msg}"
     );
-    assert!(msg.ends_with(LOST_ADVICE), "{msg}");
+    assert!(msg.ends_with(&lost_advice()), "{msg}");
     dlg.write_to(path.clone(), &st);
     dlg.tick(&st, true);
     assert!(matches!(dlg.write_state(), WriteState::Failed(_)));

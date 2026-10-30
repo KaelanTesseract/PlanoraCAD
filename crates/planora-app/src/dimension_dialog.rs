@@ -69,13 +69,18 @@ impl ToleranceKind {
 
 /// Bezeichnung der Maßart in der Oberfläche.
 pub fn kind_label(kind: DimKind) -> String {
+    kind_msg(kind).text()
+}
+
+/// Wie [`kind_label`], übersetzt erst beim Zeichnen (für Meldungen, die ein Fenster behält).
+pub fn kind_msg(kind: DimKind) -> crate::msg::Msg {
     match kind {
-        DimKind::Horizontal => tr!("dim-kind-horizontal"),
-        DimKind::Vertical => tr!("dim-kind-vertical"),
-        DimKind::Aligned => tr!("dim-kind-aligned"),
-        DimKind::Diameter => tr!("dim-kind-diameter"),
-        DimKind::Radius => tr!("dim-kind-radius"),
-        DimKind::Angle => tr!("dim-kind-angle"),
+        DimKind::Horizontal => crate::msg!("dim-kind-horizontal"),
+        DimKind::Vertical => crate::msg!("dim-kind-vertical"),
+        DimKind::Aligned => crate::msg!("dim-kind-aligned"),
+        DimKind::Diameter => crate::msg!("dim-kind-diameter"),
+        DimKind::Radius => crate::msg!("dim-kind-radius"),
+        DimKind::Angle => crate::msg!("dim-kind-angle"),
     }
 }
 

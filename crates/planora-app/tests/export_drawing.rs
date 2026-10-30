@@ -316,15 +316,15 @@ fn svg_and_dxf_files_are_written_and_readable() {
 #[test]
 fn no_drawing_gives_a_clear_hint() {
     assert_eq!(
-        NO_DRAWING,
+        no_drawing(),
         "Es gibt noch keine Zeichnung. Über „Zeichnung“ im Menü lässt sich eine anlegen."
     );
     let mut s = box_state();
     let mut d = dialog(&s, SVG);
-    assert_eq!(d.status(&s), ExportStatus::Unavailable(NO_DRAWING.into()));
-    assert_eq!(disabled_hint(&d.status(&s)), NO_DRAWING);
+    assert_eq!(d.status(&s), ExportStatus::Unavailable(no_drawing()));
+    assert_eq!(disabled_hint(&d.status(&s)), no_drawing());
     let text = draw(&mut d, &mut s);
-    assert!(text.contains(NO_DRAWING), "{text}");
+    assert!(text.contains(&no_drawing()), "{text}");
     assert!(!text.contains("Neu berechnen"), "{text}");
     let dir = temp_dir("keine");
     d.write_to(dir.join("x.svg"), &s);
@@ -462,7 +462,7 @@ fn stale_result_is_not_written() {
     s.selected_body = None;
     let path = dir.join("a.svg");
     d.write_to(path.clone(), &s);
-    assert_eq!(d.write_state(), WriteState::Failed(STALE.into()));
+    assert_eq!(d.write_state(), WriteState::Failed(stale()));
     assert!(!path.exists());
     // Neue Prüfung, dann passt die Datei zum neuen Modell (zwei Quader).
     d.tick(&s, true);
@@ -494,7 +494,7 @@ fn stale_result_is_not_written() {
     d.drawing = Some(b);
     let other = dir.join("b.svg");
     d.write_to(other.clone(), &s);
-    assert_eq!(d.write_state(), WriteState::Failed(STALE.into()));
+    assert_eq!(d.write_state(), WriteState::Failed(stale()));
     assert!(!other.exists());
     d.tick(&s, true);
     d.write_to(other.clone(), &s);
@@ -521,7 +521,7 @@ fn a_drawing_edit_prepares_again() {
         .update_drawing(a, |dr| dr.views[0].scale = one(1, 2))
         .unwrap();
     d.write_to(dir.join("a.dxf"), &s);
-    assert_eq!(d.write_state(), WriteState::Failed(STALE.into()));
+    assert_eq!(d.write_state(), WriteState::Failed(stale()));
     d.tick(&s, true);
     d.write_to(dir.join("a.dxf"), &s);
     d.tick(&s, true);
@@ -799,7 +799,7 @@ fn window_stays_open_while_writing() {
         out.drop_without_applying_deltas();
     }
     assert!(d.is_writing_file(), "das Schreiben muss noch laufen");
-    assert!(text.contains(WRITING_HINT), "{text}");
+    assert!(text.contains(&writing_hint()), "{text}");
     assert!(text.contains("Die Datei wird geschrieben"), "{text}");
     assert!(text.contains("Abbrechen"), "{text}");
     d.cancel_write();
@@ -939,12 +939,12 @@ fn frame_switch_controls_the_output() {
     for format in [ExportFormat::Mesh(Format::Stl), ExportFormat::Step] {
         d.format = format;
         let ui = draw(&mut d, &mut s);
-        assert!(!ui.contains(FRAME_SWITCH), "{format:?}: {ui}");
+        assert!(!ui.contains(&frame_switch()), "{format:?}: {ui}");
     }
     for format in [SVG, DXF] {
         d.format = format;
         let ui = draw(&mut d, &mut s);
-        assert!(ui.contains(FRAME_SWITCH), "{format:?}: {ui}");
+        assert!(ui.contains(&frame_switch()), "{format:?}: {ui}");
     }
 
     // An: Rahmen und Schriftfeld in beiden Formaten.
@@ -1084,7 +1084,7 @@ fn export_uses_current_auto_values() {
     // Ein Stand mit altem Namen wird nicht mehr geschrieben.
     s.document_name = "Dritter".into();
     d.write_to(dir.join("dritter.svg"), &s);
-    assert_eq!(d.write_state(), WriteState::Failed(STALE.into()));
+    assert_eq!(d.write_state(), WriteState::Failed(stale()));
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -1580,7 +1580,7 @@ fn override_change_restarts() {
             "eine Überschreibung startet die Berechnung neu"
         );
         d.write_to(dir.join("alt"), &s);
-        assert_eq!(d.write_state(), WriteState::Failed(STALE.into()));
+        assert_eq!(d.write_state(), WriteState::Failed(stale()));
         let out = written(&mut d, &s, &dir.join(format!("n.{}", format.extension())));
         assert!(has_text(format, &out, &text), "{format:?}");
         assert!(!has_text(format, &out, "Teil 1"), "{format:?}");
@@ -1610,7 +1610,7 @@ fn every_change_to_the_output_restarts_the_computation() {
     d.write_to(dir.join("1.svg"), &s);
     assert_eq!(
         d.write_state(),
-        WriteState::Failed(STALE.into()),
+        WriteState::Failed(stale()),
         "Kreis verschoben"
     );
     let moved = written(&mut d, &s, &dir.join("1.svg"));
@@ -1621,11 +1621,7 @@ fn every_change_to_the_output_restarts_the_computation() {
     // Körper umbenennen.
     s.rename_feature(f[1], "Platte").unwrap();
     d.write_to(dir.join("2.svg"), &s);
-    assert_eq!(
-        d.write_state(),
-        WriteState::Failed(STALE.into()),
-        "umbenannt"
-    );
+    assert_eq!(d.write_state(), WriteState::Failed(stale()), "umbenannt");
     let renamed = written(&mut d, &s, &dir.join("2.svg"));
     assert!(renamed.contains(">Platte</text>") && !renamed.contains(">Teil 2</text>"));
     // Körper hinzufügen.
@@ -1633,11 +1629,7 @@ fn every_change_to_the_output_restarts_the_computation() {
     s.rename_feature(g, "Neu").unwrap();
     s.selected_body = None;
     d.write_to(dir.join("3.svg"), &s);
-    assert_eq!(
-        d.write_state(),
-        WriteState::Failed(STALE.into()),
-        "hinzugefügt"
-    );
+    assert_eq!(d.write_state(), WriteState::Failed(stale()), "hinzugefügt");
     let added = written(&mut d, &s, &dir.join("3.svg"));
     assert!(added.contains(">Neu</text>"));
     // Schalter im Blatt aus.
@@ -1645,7 +1637,7 @@ fn every_change_to_the_output_restarts_the_computation() {
     d.write_to(dir.join("4.svg"), &s);
     assert_eq!(
         d.write_state(),
-        WriteState::Failed(STALE.into()),
+        WriteState::Failed(stale()),
         "Schalter im Blatt"
     );
     let off = written(&mut d, &s, &dir.join("4.svg"));

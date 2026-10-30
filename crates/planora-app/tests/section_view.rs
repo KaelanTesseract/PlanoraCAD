@@ -842,7 +842,10 @@ fn too_fine_blocks_export() {
         "{locked_text}"
     );
     assert!(!locked_text.contains("Linien: …"), "{locked_text}");
-    assert!(!locked_text.contains(LINES_NOT_COMPUTED), "{locked_text}");
+    assert!(
+        !locked_text.contains(&lines_not_computed()),
+        "{locked_text}"
+    );
 }
 
 /// Zeichnet das Exportfenster dreimal und liefert die Texte des letzten Bildes.
@@ -889,7 +892,7 @@ fn failed_section_says_lines_not_computed() {
             dlg.status(&st)
         );
         let text = dialog_text(&mut dlg, &mut st);
-        assert!(text.contains(LINES_NOT_COMPUTED), "{format:?}: {text}");
+        assert!(text.contains(&lines_not_computed()), "{format:?}: {text}");
         assert!(!text.contains("Linien: …"), "{format:?}: {text}");
         assert!(!text.contains("sichtbar,"), "{format:?}: {text}");
     }
@@ -898,7 +901,7 @@ fn failed_section_says_lines_not_computed() {
     let mut dlg = dialog(&st, PDF);
     assert!(matches!(dlg.status(&st), ExportStatus::Failed(_)));
     let text = dialog_text(&mut dlg, &mut st);
-    assert!(text.contains(LINES_NOT_COMPUTED), "{text}");
+    assert!(text.contains(&lines_not_computed()), "{text}");
 }
 
 // --- (g) ------------------------------------------------------------------------------------

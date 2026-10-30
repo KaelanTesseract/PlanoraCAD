@@ -99,8 +99,8 @@ fn step_is_the_fifth_format_with_its_own_extension() {
     assert_eq!(ExportFormat::ALL.len(), 8);
     assert_eq!(ExportFormat::ALL[4], ExportFormat::Step);
     assert_eq!(ExportFormat::Step.extension(), "step");
-    assert_eq!(ExportFormat::Step.label(), STEP_LABEL);
-    assert_eq!(STEP_LABEL, "STEP – für andere CAD-Programme (exakt)");
+    assert_eq!(ExportFormat::Step.label(), step_label());
+    assert_eq!(step_label(), "STEP – für andere CAD-Programme (exakt)");
     assert_eq!(ExportFormat::Mesh(Format::Stl).extension(), "stl");
     assert!(ExportFormat::Step.is_step() && !ExportFormat::Mesh(Format::Obj).is_step());
 }
@@ -126,8 +126,8 @@ fn the_window_shows_step_texts_without_the_quality_card() {
     let mut d = step_dialog(&s);
     let text = draw(&mut d, &mut s);
     for word in [
-        STEP_LABEL,
-        STEP_EXACT,
+        step_label().as_str(),
+        step_exact().as_str(),
         "2 Körper, 7 Flächen",
         "Netz-Körper werden als STEP nicht ausgegeben: „Würfel“",
         "STL – für den 3D-Druck",
@@ -197,7 +197,7 @@ fn a_stale_step_result_is_never_written() {
     s.selected_body = Some(1);
     let path = dir.join("x.step");
     d.write_to(path.clone(), &s);
-    assert_eq!(d.write_state(), WriteState::Failed(STALE.into()));
+    assert_eq!(d.write_state(), WriteState::Failed(stale()));
     assert!(!path.exists());
     let _ = fs::remove_dir_all(&dir);
 }
@@ -212,7 +212,7 @@ fn only_mesh_bodies_leave_nothing_to_write() {
         ExportStatus::StepReady { bodies: 0, .. }
     ));
     let text = draw(&mut d, &mut s);
-    assert!(text.contains(STEP_NOTHING), "{text}");
+    assert!(text.contains(&step_nothing()), "{text}");
     let dir = temp_dir("nichts");
     d.write_to(dir.join("x.step"), &s);
     assert!(matches!(d.write_state(), WriteState::Failed(m) if m.contains("keinen Körper")));
@@ -394,7 +394,7 @@ fn the_window_stays_open_with_a_hint_while_step_is_written() {
         out.drop_without_applying_deltas();
     }
     assert!(d.is_writing_step(), "das Schreiben muss noch laufen");
-    assert!(text.contains(WRITING_HINT), "{text}");
+    assert!(text.contains(&writing_hint()), "{text}");
     d.cancel_write();
     d.tick(&s, true);
     assert_eq!(d.write_state(), WriteState::Failed("Abgebrochen".into()));
@@ -692,7 +692,7 @@ fn clicking_another_format_removes_the_done_line() {
     let text = c.click(&mut d, &mut s, "STL – für den 3D-Druck");
     assert_eq!(d.format, ExportFormat::Mesh(Format::Stl));
     assert!(!text.contains("Fertig"), "{text}");
-    let text = c.click(&mut d, &mut s, STEP_LABEL);
+    let text = c.click(&mut d, &mut s, &step_label());
     assert_eq!(d.format, ExportFormat::Step);
     assert!(
         !text.contains("Fertig"),
@@ -760,7 +760,7 @@ fn the_disabled_export_button_says_why_when_nothing_can_be_written() {
     let mut s = AppState::new();
     s.import_mesh("Würfel", Arc::new(cube()), 1.0).unwrap();
     let d = step_dialog(&s);
-    assert_eq!(disabled_hint(&d.status(&s)), STEP_NOTHING);
+    assert_eq!(disabled_hint(&d.status(&s)), step_nothing());
     assert_eq!(
         disabled_hint(&ExportStatus::Computing(0.5)),
         "Erst möglich, wenn die Berechnung fertig ist."
