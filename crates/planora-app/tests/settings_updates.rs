@@ -202,7 +202,7 @@ fn section_shows_version_channel_switch_and_note() {
             section_updates().as_str(),
             version_line.as_str(),
             channel_label().as_str(),
-            Channel::Dev.label(),
+            &Channel::Dev.label(),
             check_on_start_label().as_str(),
             privacy_note().as_str(),
             check_now().as_str(),
@@ -399,17 +399,17 @@ fn channel_choice_is_saved_and_dev_is_the_only_option() {
     a.w.open(false);
     let seen = a.settle(6);
     // Die Auswahl zeigt den gespeicherten Kanal.
-    find(&seen, Channel::Beta.label());
-    a.click(Channel::Beta.label());
+    find(&seen, &Channel::Beta.label());
+    a.click(&Channel::Beta.label());
     let seen = a.settle(3);
     // Aufgeklappt: nur „Dev“ steht zur Wahl.
     assert!(
-        texts(&seen).contains(&Channel::Dev.label()),
+        texts(&seen).iter().any(|t| *t == Channel::Dev.label()),
         "Dev wählbar: {:?}",
         texts(&seen)
     );
     assert!(
-        !texts(&seen).contains(&Channel::Stable.label()),
+        !texts(&seen).iter().any(|t| *t == Channel::Stable.label()),
         "Stabil nicht wählbar: {:?}",
         texts(&seen)
     );
@@ -420,7 +420,7 @@ fn channel_choice_is_saved_and_dev_is_the_only_option() {
         1,
         "Beta nur als Anzeige des gespeicherten Kanals"
     );
-    a.click(Channel::Dev.label());
+    a.click(&Channel::Dev.label());
     assert_eq!(a.e.ws.update_channel(), Channel::Dev);
     let disk = Config::read_from(&a.e.cfg).unwrap();
     assert_eq!(disk.update_channel, "dev", "gespeichert");

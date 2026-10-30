@@ -5,6 +5,7 @@ use crate::error::{ProjectError, Result};
 use crate::fsutil::{DocLock, atomic_write, new_id, now_iso};
 use crate::library::DOCUMENT_FILE;
 use planora_feature::Snapshot;
+use planora_i18n::tr;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -75,7 +76,7 @@ impl DocumentInfo {
     /// aktiver Zweig vorhanden.
     pub fn check(&self) -> std::result::Result<(), String> {
         if self.versions.is_empty() {
-            return Err("Das Dokument hat keine Version".into());
+            return Err(tr!("proj-tree-no-version"));
         }
         let mut seen = BTreeSet::new();
         let mut last = 0;
@@ -83,60 +84,49 @@ impl DocumentInfo {
         let mut newest: BTreeMap<&str, u32> = BTreeMap::new();
         for (i, v) in self.versions.iter().enumerate() {
             if v.number == 0 || v.number <= last {
-                return Err(format!(
-                    "Versionsnummer {} ist doppelt oder nicht aufsteigend",
-                    v.number
-                ));
+                return Err(tr!("proj-tree-number-order", n = v.number.to_string()));
             }
             last = v.number;
             match v.parent {
                 None if i != 0 => {
-                    return Err(format!("Version {} hat keine Elternversion", v.number));
+                    return Err(tr!("proj-tree-no-parent", n = v.number.to_string()));
                 }
                 Some(p) if p >= v.number || !seen.contains(&p) => {
-                    return Err(format!(
-                        "Version {} verweist auf eine ungültige Elternversion {p}",
-                        v.number
+                    return Err(tr!(
+                        "proj-tree-bad-parent",
+                        n = v.number.to_string(),
+                        parent = p.to_string()
                     ));
                 }
                 _ => {}
             }
             seen.insert(v.number);
             if !branch_name_ok(&v.branch) {
-                return Err(format!(
-                    "Version {} hat einen ungültigen Zweignamen",
-                    v.number
-                ));
+                return Err(tr!("proj-tree-bad-branch-name", n = v.number.to_string()));
             }
             if !time_ok(&v.time) {
-                return Err(format!(
-                    "Version {} hat eine ungültige Zeitangabe",
-                    v.number
-                ));
+                return Err(tr!("proj-tree-bad-time", n = v.number.to_string()));
             }
             if v.comment.chars().count() > MAX_COMMENT_CHARS
                 || v.comment.chars().any(|c| c.is_control() && c != '\n')
             {
-                return Err(format!(
-                    "Version {} hat einen ungültigen Kommentar",
-                    v.number
-                ));
+                return Err(tr!("proj-tree-bad-comment", n = v.number.to_string()));
             }
             newest.insert(&v.branch, v.number);
         }
         if self.max_number < last {
-            return Err("Die höchste vergebene Versionsnummer stimmt nicht".into());
+            return Err(tr!("proj-tree-max-number"));
         }
         if newest.len() != self.branches.len() {
-            return Err("Zweige und Versionen passen nicht zusammen".into());
+            return Err(tr!("proj-tree-branch-mismatch"));
         }
         for (name, tip) in &self.branches {
             if newest.get(name.as_str()) != Some(tip) {
-                return Err(format!("Die Spitze des Zweigs „{name}“ stimmt nicht"));
+                return Err(tr!("proj-tree-bad-tip", name = name.as_str()));
             }
         }
         if !self.branches.contains_key(&self.active_branch) {
-            return Err("Der aktive Zweig gibt es nicht".into());
+            return Err(tr!("proj-tree-no-active"));
         }
         Ok(())
     }
@@ -184,7 +174,7 @@ fn check_head<'a>(text: &'a str, origin: &str) -> Result<&'a str> {
         });
     }
     if head.format == 0 {
-        return Err(ProjectError::corrupt(origin, "ungültiges Format 0"));
+        return Err(ProjectError::corrupt(origin, tr!("proj-format-zero-info")));
     }
     Ok(text)
 }
@@ -196,8 +186,9 @@ fn clean_comment(t: &str) -> Result<String> {
         .filter(|c| !c.is_control() || *c == '\n')
         .collect();
     if t.chars().count() > MAX_COMMENT_CHARS {
-        return Err(ProjectError::Invalid(format!(
-            "Der Kommentar ist zu lang (höchstens {MAX_COMMENT_CHARS} Zeichen)."
+        return Err(ProjectError::Invalid(tr!(
+            "proj-comment-too-long-sentence",
+            max = MAX_COMMENT_CHARS.to_string()
         )));
     }
     Ok(t)
@@ -253,7 +244,7 @@ fn to_file(i: &DocumentInfo) -> DocFile {
 
 fn from_file(f: DocFile, origin: &str) -> Result<DocumentInfo> {
     if f.versionen.len() > MAX_VERSIONS {
-        return Err(ProjectError::corrupt(origin, "zu viele Versionen"));
+        return Err(ProjectError::corrupt(origin, tr!("proj-too-many-versions")));
     }
     let tree_max = f.versionen.iter().map(|v| v.nummer).max().unwrap_or(0);
     let info = DocumentInfo {
@@ -356,7 +347,10 @@ pub fn peek(dir: &Path) -> Result<(DocumentInfo, OpenReport)> {
 pub fn read_version(dir: &Path, n: u32) -> Result<Snapshot> {
     let (info, _) = peek(dir)?;
     if info.version(n).is_none() {
-        return Err(ProjectError::NotFound(format!("Version {n}")));
+        return Err(ProjectError::NotFound(tr!(
+            "proj-version-label",
+            n = n.to_string()
+        )));
     }
     let path = dir.join(VERSIONS_DIR).join(version_file(n));
     let text = fs::read_to_string(&path).map_err(|e| ProjectError::io(&path, &e))?;
@@ -491,7 +485,10 @@ impl DocStore {
 
     pub fn load_version(&self, n: u32) -> Result<Snapshot> {
         if self.info.version(n).is_none() {
-            return Err(ProjectError::NotFound(format!("Version {n}")));
+            return Err(ProjectError::NotFound(tr!(
+                "proj-version-label",
+                n = n.to_string()
+            )));
         }
         let path = self.dir.join(VERSIONS_DIR).join(version_file(n));
         let text = fs::read_to_string(&path).map_err(|e| ProjectError::io(&path, &e))?;
@@ -533,7 +530,7 @@ impl DocStore {
             }
         }
         max.checked_add(1)
-            .ok_or_else(|| ProjectError::Invalid("Die Versionsnummern sind aufgebraucht.".into()))
+            .ok_or_else(|| ProjectError::Invalid(tr!("proj-version-numbers-exhausted")))
     }
 
     pub fn save(
@@ -554,9 +551,7 @@ impl DocStore {
                     // aktiven Zweigs (der Name wird nie stillschweigend ignoriert).
                     Some(name) => {
                         if !branch_name_ok(name) || self.info.branches.contains_key(name) {
-                            return Err(ProjectError::InvalidName(
-                                "Der Zweigname ist ungültig oder vergeben.".into(),
-                            ));
+                            return Err(ProjectError::InvalidName(tr!("proj-branch-name-invalid")));
                         }
                         (tip, name.to_string())
                     }
@@ -564,16 +559,13 @@ impl DocStore {
                 }
             }
             Some(n) => {
-                let v = self
-                    .info
-                    .version(n)
-                    .ok_or_else(|| ProjectError::NotFound(format!("Version {n}")))?;
+                let v = self.info.version(n).ok_or_else(|| {
+                    ProjectError::NotFound(tr!("proj-version-label", n = n.to_string()))
+                })?;
                 match new_branch {
                     Some(name) => {
                         if !branch_name_ok(name) || self.info.branches.contains_key(name) {
-                            return Err(ProjectError::InvalidName(
-                                "Der Zweigname ist ungültig oder vergeben.".into(),
-                            ));
+                            return Err(ProjectError::InvalidName(tr!("proj-branch-name-invalid")));
                         }
                         (Some(n), name.to_string())
                     }
@@ -590,13 +582,13 @@ impl DocStore {
         let tip = self
             .info
             .tip(onto_branch)
-            .ok_or_else(|| ProjectError::NotFound(format!("Zweig {onto_branch}")))?;
+            .ok_or_else(|| ProjectError::NotFound(tr!("proj-branch-label", name = onto_branch)))?;
         let snapshot = self.load_version(version)?;
         self.append(
             Some(tip),
             onto_branch.to_string(),
             &snapshot,
-            format!("Wiederhergestellt aus v{version}"),
+            tr!("proj-restored-from", n = version.to_string()),
         )
     }
 
@@ -641,7 +633,7 @@ impl DocStore {
             .versions
             .iter_mut()
             .find(|v| v.number == n)
-            .ok_or_else(|| ProjectError::NotFound(format!("Version {n}")))?;
+            .ok_or_else(|| ProjectError::NotFound(tr!("proj-version-label", n = n.to_string())))?;
         v.comment = text;
         self.persist(&info)?;
         self.info = info;
@@ -651,7 +643,10 @@ impl DocStore {
     pub fn set_active_branch(&mut self, name: &str) -> Result<()> {
         self.ensure_lock()?;
         if !self.info.branches.contains_key(name) {
-            return Err(ProjectError::NotFound(format!("Zweig {name}")));
+            return Err(ProjectError::NotFound(tr!(
+                "proj-branch-label",
+                name = name
+            )));
         }
         let mut info = self.info.clone();
         info.active_branch = name.to_string();
@@ -665,22 +660,16 @@ impl DocStore {
         let v = self
             .info
             .version(n)
-            .ok_or_else(|| ProjectError::NotFound(format!("Version {n}")))?
+            .ok_or_else(|| ProjectError::NotFound(tr!("proj-version-label", n = n.to_string())))?
             .clone();
         if self.info.versions.len() == 1 {
-            return Err(ProjectError::Invalid(
-                "Die einzige Version lässt sich nicht löschen.".into(),
-            ));
+            return Err(ProjectError::Invalid(tr!("proj-delete-only-version")));
         }
         if !self.info.children(n).is_empty() {
-            return Err(ProjectError::Invalid(
-                "Auf dieser Version bauen andere auf.".into(),
-            ));
+            return Err(ProjectError::Invalid(tr!("proj-delete-has-children")));
         }
         if self.info.tip(&v.branch) != Some(n) {
-            return Err(ProjectError::Invalid(
-                "Nur die neueste Version eines Zweigs lässt sich löschen.".into(),
-            ));
+            return Err(ProjectError::Invalid(tr!("proj-delete-not-newest")));
         }
         let mut info = self.info.clone();
         info.versions.retain(|x| x.number != n);
@@ -717,12 +706,13 @@ impl DocStore {
     pub fn delete_branch(&mut self, name: &str) -> Result<()> {
         self.ensure_lock()?;
         if !self.info.branches.contains_key(name) {
-            return Err(ProjectError::NotFound(format!("Zweig {name}")));
+            return Err(ProjectError::NotFound(tr!(
+                "proj-branch-label",
+                name = name
+            )));
         }
         if self.info.active_branch == name {
-            return Err(ProjectError::Invalid(
-                "Der aktive Zweig lässt sich nicht löschen.".into(),
-            ));
+            return Err(ProjectError::Invalid(tr!("proj-delete-active-branch")));
         }
         let own: BTreeSet<u32> = self
             .info
@@ -735,9 +725,9 @@ impl DocStore {
             .iter()
             .any(|n| self.info.children(*n).iter().any(|c| !own.contains(c)))
         {
-            return Err(ProjectError::Invalid(
-                "Auf diesem Zweig bauen andere Zweige auf.".into(),
-            ));
+            return Err(ProjectError::Invalid(tr!(
+                "proj-delete-branch-has-children"
+            )));
         }
         let mut info = self.info.clone();
         info.versions.retain(|v| !own.contains(&v.number));
@@ -779,7 +769,7 @@ impl DocStore {
         {
             return Err(ProjectError::corrupt(
                 origin,
-                format!("die Autosicherung beruht auf der unbekannten Version {n}"),
+                tr!("proj-autosave-unknown-version", n = n.to_string()),
             ));
         }
         Ok(Some(Autosave {

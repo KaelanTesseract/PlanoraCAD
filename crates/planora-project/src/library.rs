@@ -2,6 +2,7 @@
 
 use crate::error::{ProjectError, Result};
 use crate::fsutil::{Root, TRASH, atomic_write, new_id, validate_name};
+use planora_i18n::tr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -96,16 +97,14 @@ impl Library {
         } else if path.len() > 1 && !path.last().is_some_and(|p| p.ends_with(DOCUMENT_SUFFIX)) {
             Ok(NodeKind::Folder)
         } else {
-            Err(ProjectError::Invalid(
-                "Das ist kein Projekt, Ordner oder Dokument.".into(),
-            ))
+            Err(ProjectError::Invalid(tr!("proj-not-a-node")))
         }
     }
 
     /// Ort für Ordner und Dokumente: ein Projekt oder ein Ordner.
     fn require_container(&self, path: &NodePath) -> Result<()> {
         match self.kind_of(path)? {
-            NodeKind::Document => Err(ProjectError::Invalid("Das Ziel ist ein Dokument.".into())),
+            NodeKind::Document => Err(ProjectError::Invalid(tr!("proj-target-is-document"))),
             _ => Ok(()),
         }
     }
@@ -178,9 +177,7 @@ impl Library {
     pub fn create_project(&self, name: &str) -> Result<NodePath> {
         let name = validate_name(name)?;
         if name.ends_with(DOCUMENT_SUFFIX) {
-            return Err(ProjectError::InvalidName(
-                "Projektnamen dürfen nicht auf „.pcad“ enden.".into(),
-            ));
+            return Err(ProjectError::InvalidName(tr!("proj-project-name-suffix")));
         }
         let path = vec![name.clone()];
         let dir = self.root.resolve(&path)?;
@@ -203,15 +200,11 @@ impl Library {
 
     pub fn create_folder(&self, parent: &NodePath, name: &str) -> Result<NodePath> {
         if self.kind_of(parent)? == NodeKind::Document {
-            return Err(ProjectError::Invalid(
-                "In einem Dokument lassen sich keine Ordner anlegen.".into(),
-            ));
+            return Err(ProjectError::Invalid(tr!("proj-no-folder-in-document")));
         }
         let name = validate_name(name)?;
         if name.ends_with(DOCUMENT_SUFFIX) {
-            return Err(ProjectError::InvalidName(
-                "Ordnernamen dürfen nicht auf „.pcad“ enden.".into(),
-            ));
+            return Err(ProjectError::InvalidName(tr!("proj-folder-name-suffix")));
         }
         let mut path = parent.clone();
         path.push(name.clone());
@@ -227,9 +220,7 @@ impl Library {
         let kind = self.kind_of(path)?;
         let name = validate_name(new_name)?;
         if kind != NodeKind::Document && name.ends_with(DOCUMENT_SUFFIX) {
-            return Err(ProjectError::InvalidName(
-                "Dieser Name ist nicht erlaubt.".into(),
-            ));
+            return Err(ProjectError::InvalidName(tr!("proj-name-not-allowed")));
         }
         let part = if kind == NodeKind::Document {
             format!("{name}{DOCUMENT_SUFFIX}")
@@ -250,15 +241,11 @@ impl Library {
     pub fn move_node(&self, path: &NodePath, new_parent: &NodePath) -> Result<NodePath> {
         let kind = self.kind_of(path)?;
         if kind == NodeKind::Project {
-            return Err(ProjectError::Invalid(
-                "Projekte lassen sich nicht verschieben.".into(),
-            ));
+            return Err(ProjectError::Invalid(tr!("proj-no-move-project")));
         }
         self.require_container(new_parent)?;
         if new_parent.starts_with(path) {
-            return Err(ProjectError::Invalid(
-                "Ein Ordner lässt sich nicht in sich selbst verschieben.".into(),
-            ));
+            return Err(ProjectError::Invalid(tr!("proj-no-move-into-self")));
         }
         let mut to = new_parent.clone();
         to.push(path.last().cloned().unwrap_or_default());
@@ -292,7 +279,7 @@ impl Library {
 
     pub fn delete(&self, path: &NodePath) -> Result<()> {
         if path.is_empty() {
-            return Err(ProjectError::Invalid("Nichts ausgewählt.".into()));
+            return Err(ProjectError::Invalid(tr!("proj-nothing-selected")));
         }
         self.kind_of(path)?;
         self.root.to_trash(path)

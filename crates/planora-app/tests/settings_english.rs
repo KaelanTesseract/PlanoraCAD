@@ -562,10 +562,11 @@ fn update_messages_speak_english() {
                 "Adresse gehört nicht zum Release".into(),
             ))
         });
-        assert_eq!(
-            de,
+        // Die Meldung der Bibliothek (Protokollfassung) ist unter Deutsch dieselbe.
+        let log_form = with_lang(&german(), || {
             InstallError::Network("Adresse gehört nicht zum Release".into()).message()
-        );
+        });
+        assert_eq!(de, log_form);
     });
 }
 

@@ -11,6 +11,7 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread::JoinHandle;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use planora_i18n::tr;
 use planora_update::check::{CheckOutcome, Checker, NetError, ReleaseSource};
 use planora_update::{Channel, Version};
 
@@ -111,7 +112,7 @@ impl UpdateChecker {
             Ok(result) => result,
             Err(TryRecvError::Empty) => return None,
             Err(TryRecvError::Disconnected) => CheckResult {
-                outcome: CheckOutcome::Failed(NetError::Other("Prüfung abgebrochen".into())),
+                outcome: CheckOutcome::Failed(NetError::Other(tr!("update-detail-check-aborted"))),
                 manual: self.manual,
                 at: now_unix(),
             },

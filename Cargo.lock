@@ -2756,6 +2756,7 @@ dependencies = [
  "planora-drawing",
  "planora-exchange",
  "planora-feature",
+ "planora-i18n",
  "planora-kernel",
  "planora-math",
  "planora-mesh",
@@ -2763,7 +2764,6 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
- "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2809,6 +2809,7 @@ dependencies = [
 name = "planora-update"
 version = "0.0.2-dev.1"
 dependencies = [
+ "planora-i18n",
  "serde",
  "serde_json",
  "ureq",

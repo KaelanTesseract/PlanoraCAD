@@ -7,6 +7,8 @@
 
 use std::time::Duration;
 
+use planora_i18n::tr;
+
 use crate::check::{NetError, ReleaseSource};
 #[cfg(test)]
 use crate::release::REPO;
@@ -152,9 +154,7 @@ impl crate::install::Downloader for HttpDownloader {
     ) -> Result<(), crate::install::InstallError> {
         use crate::install::{InstallError, release_url_ok};
         if !release_url_ok(url) {
-            return Err(InstallError::Network(
-                "Adresse gehört nicht zum Release".into(),
-            ));
+            return Err(InstallError::Network(tr!("update-detail-foreign-url")));
         }
         #[cfg(windows)]
         {
@@ -163,7 +163,7 @@ impl crate::install::Downloader for HttpDownloader {
         #[cfg(not(windows))]
         {
             let _ = (dest, max_bytes, progress);
-            Err(InstallError::Network("nur Windows".into()))
+            Err(InstallError::Network(tr!("update-detail-only-windows")))
         }
     }
 }
@@ -293,7 +293,9 @@ mod windows {
                     .headers()
                     .get("location")
                     .and_then(|v| v.to_str().ok())
-                    .ok_or_else(|| InstallError::Network("Weiterleitung ohne Ziel".into()))?;
+                    .ok_or_else(|| {
+                        InstallError::Network(tr!("update-detail-redirect-no-target"))
+                    })?;
                 current = redirect_target(&current, location)?;
                 continue;
             }
@@ -322,7 +324,9 @@ mod windows {
                 progress,
             );
         }
-        Err(InstallError::Network("zu viele Weiterleitungen".into()))
+        Err(InstallError::Network(tr!(
+            "update-detail-too-many-redirects"
+        )))
     }
 
     /// Netzfehler zu einem Fehler von `ureq`.
@@ -334,7 +338,7 @@ mod windows {
                 status_error(code, None).unwrap_or(NetError::Http(code))
             }
             ureq::Error::Io(io) => io_error(&io),
-            ureq::Error::BodyExceedsLimit(_) => NetError::Other("Antwort zu groß".into()),
+            ureq::Error::BodyExceedsLimit(_) => NetError::Other(tr!("update-net-too-big")),
             other => NetError::Other(other.to_string()),
         }
     }

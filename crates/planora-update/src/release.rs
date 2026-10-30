@@ -6,6 +6,7 @@
 
 use std::fmt;
 
+use planora_i18n::tr;
 use serde::Deserialize;
 
 use crate::channel::Channel;
@@ -81,8 +82,8 @@ pub enum ReleaseError {
 impl fmt::Display for ReleaseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ReleaseError::Json(msg) => write!(f, "Antwort von GitHub nicht lesbar: {msg}"),
-            ReleaseError::NotAList => write!(f, "Antwort von GitHub ist keine Release-Liste"),
+            ReleaseError::Json(msg) => f.write_str(&tr!("update-release-unreadable", msg = msg)),
+            ReleaseError::NotAList => f.write_str(&tr!("update-release-not-a-list")),
         }
     }
 }

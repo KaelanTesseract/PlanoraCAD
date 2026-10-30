@@ -1,6 +1,7 @@
 //! Dateisystem-Hilfen: Namen prüfen, atomar schreiben, Wurzel mit Pfadprüfung, Papierkorb, Sperre.
 
 use crate::error::{ProjectError, Result};
+use planora_i18n::tr;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -57,35 +58,34 @@ const RESERVED: [&str; 32] = [
     "LPT\u{b3}",
 ];
 
-fn invalid(msg: &str) -> ProjectError {
-    ProjectError::InvalidName(msg.to_string())
+fn invalid(msg: String) -> ProjectError {
+    ProjectError::InvalidName(msg)
 }
 
 /// Prüft einen Namen und gibt ihn getrimmt zurück.
 pub fn validate_name(name: &str) -> Result<String> {
     let n = name.trim();
     if n.is_empty() {
-        return Err(invalid("Der Name darf nicht leer sein."));
+        return Err(invalid(tr!("proj-name-empty")));
     }
     if n.chars().count() > MAX_NAME_CHARS {
-        return Err(invalid("Der Name ist zu lang (höchstens 80 Zeichen)."));
+        return Err(invalid(tr!(
+            "proj-name-too-long",
+            max = MAX_NAME_CHARS.to_string()
+        )));
     }
     if n.starts_with('.') || n.ends_with('.') {
-        return Err(invalid(
-            "Der Name darf nicht mit einem Punkt beginnen oder enden.",
-        ));
+        return Err(invalid(tr!("proj-name-dot")));
     }
     if n.chars()
         .any(|c| c.is_control() || "/\\:*?\"<>|".contains(c))
     {
-        return Err(invalid(
-            "Der Name enthält ein unzulässiges Zeichen (/ \\ : * ? \" < > |).",
-        ));
+        return Err(invalid(tr!("proj-name-bad-char")));
     }
     // Windows ignoriert Leerzeichen und Punkte am Ende des Namensteils vor der Endung.
     let stem = n.split('.').next().unwrap_or(n).trim_end().to_uppercase();
     if RESERVED.contains(&stem.as_str()) {
-        return Err(invalid("Dieser Name ist vom Betriebssystem reserviert."));
+        return Err(invalid(tr!("proj-name-reserved")));
     }
     Ok(n.to_string())
 }
@@ -143,7 +143,7 @@ fn rename_with_retries(from: &Path, to: &Path) -> Result<()> {
             }
         }
     }
-    let err = last.unwrap_or_else(|| std::io::Error::other("Umbenennen fehlgeschlagen"));
+    let err = last.unwrap_or_else(|| std::io::Error::other(tr!("proj-rename-failed")));
     Err(ProjectError::io(to, &err))
 }
 
@@ -224,9 +224,7 @@ impl Root {
             // würde der Dateiname vom geprüften Namen abweichen.
             let name = part.strip_suffix(DOC_SUFFIX).unwrap_or(part);
             if validate_name(name)? != name {
-                return Err(invalid(
-                    "Der Name darf nicht mit einem Leerzeichen beginnen oder enden.",
-                ));
+                return Err(invalid(tr!("proj-name-space")));
             }
             p.push(part);
         }
