@@ -176,7 +176,7 @@ fn feedback_window_speaks_english() {
                 "Feedback",
                 "What is it about?",
                 "Drawing",
-                "This goes along",
+                "What gets sent",
                 "Last steps",
             ],
         );

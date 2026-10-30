@@ -21,8 +21,8 @@ use planora_app::create_dialog::CreateDialog;
 use planora_app::diag::Step;
 use planora_app::dialog::DialogSize;
 use planora_app::feedback::{
-    self, ATTACH_HINT, ATTACH_HINT_PICTURE, FEEDBACK_DIR, FEEDBACK_FILE, Part, Personal,
-    SystemOpen, percent_encode,
+    self, FEEDBACK_DIR, FEEDBACK_FILE, Part, Personal, SystemOpen, attach_hint,
+    attach_hint_picture, percent_encode,
 };
 use planora_app::feedback_dialog::*;
 use planora_app::keymap::{Action, Area, Binding, KeyChord, Keymap, SetResult};
@@ -772,7 +772,7 @@ fn preview_is_exactly_what_the_address_carries() {
     );
     assert_eq!(
         field(&fields, feedback::FIELD_PASSIERT),
-        Some(format!("{}\n\n{}", d.description, ATTACH_HINT).as_str())
+        Some(format!("{}\n\n{}", d.description, attach_hint()).as_str())
     );
 
     // Wunsch: alle angehakten Teile mit Überschrift gesammelt im Feld „angaben“.
@@ -906,7 +906,7 @@ fn open_browser_emits_the_issue_url_and_shows_copy_hint() {
     // Kurz: kein Ordner, keine Datei.
     assert!(r.opened().is_empty());
     assert!(!r.bundle_root().exists());
-    assert!(!url.contains(&percent_encode(ATTACH_HINT)));
+    assert!(!url.contains(&percent_encode(&attach_hint())));
     // Das Fenster bleibt offen und hilft weiter.
     assert!(r.fb().open);
     for t in [browser_hint(), copy_text(), close()] {
@@ -979,7 +979,7 @@ fn long_input_writes_bundle_and_opens_folder() {
     assert!(text.contains("<user>") && !text.contains("Müller"));
     let url = r.urls().pop().expect("Browser");
     assert!(url.len() < 2000, "{}", url.len());
-    assert!(url.contains(&percent_encode(ATTACH_HINT)), "{url}");
+    assert!(url.contains(&percent_encode(&attach_hint())), "{url}");
     assert_eq!(FEEDBACK_FILE, "rueckmeldung.txt");
     assert!(r.sees(&folder_hint(&[FEEDBACK_FILE])), "{:?}", r.texts());
     assert!(!r.sees(&no_file()));
@@ -1011,7 +1011,7 @@ fn unwritable_data_dir_still_opens_browser_with_no_file_hint() {
     r.fb().description = "Es ist abgestürzt.".into();
     r.click(&open_browser());
     let url = r.urls().pop().unwrap();
-    assert!(!url.contains(&percent_encode(ATTACH_HINT)), "{url}");
+    assert!(!url.contains(&percent_encode(&attach_hint())), "{url}");
     assert!(r.sees(&no_file()));
 }
 
@@ -1366,7 +1366,10 @@ fn app_sends_viewport_screenshot_command_after_one_hidden_frame() {
     let bytes = std::fs::read(&png).expect("bild.png angelegt");
     assert_eq!(&bytes[..4], b"\x89PNG");
     let url = r.urls().pop().unwrap();
-    assert!(url.contains(&percent_encode(ATTACH_HINT_PICTURE)), "{url}");
+    assert!(
+        url.contains(&percent_encode(&attach_hint_picture())),
+        "{url}"
+    );
     assert!(
         r.sees(&folder_hint(&[FEEDBACK_FILE, SHOT_FILE])),
         "{:?}",
@@ -1393,7 +1396,10 @@ fn picture_is_named_in_the_window_hint_and_the_web_address() {
     r.click(&webform_button());
     let url = r.urls().pop().unwrap();
     assert!(url.starts_with(planora_app::feedback::WEBFORM_URL), "{url}");
-    assert!(url.contains(&percent_encode(ATTACH_HINT_PICTURE)), "{url}");
+    assert!(
+        url.contains(&percent_encode(&attach_hint_picture())),
+        "{url}"
+    );
     assert!(
         r.sees(&folder_hint(&[FEEDBACK_FILE, SHOT_FILE])),
         "{:?}",
@@ -1482,7 +1488,7 @@ fn webform_button_opens_folder_when_needed() {
     let url = r.urls().pop().expect("Browser");
     assert!(url.starts_with(planora_app::feedback::WEBFORM_URL));
     assert!(url.len() < 2000);
-    assert!(url.contains(&percent_encode(ATTACH_HINT)), "{url}");
+    assert!(url.contains(&percent_encode(&attach_hint())), "{url}");
     assert!(r.sees(&folder_hint(&[FEEDBACK_FILE])));
 }
 

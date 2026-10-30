@@ -707,7 +707,9 @@ impl PlanoraApp {
         };
         let why = match e {
             LaunchError::Cancelled => "admin prompt declined".to_string(),
-            LaunchError::Failed(detail) => format!("error: {detail}"),
+            // Der Text kommt vom Betriebssystem (auf deutschem Windows deutsch) und gehört nur in die
+            // Meldung; ins Protokoll (immer englisch) schreibt der Start den Code (`ShellLauncher`).
+            LaunchError::Failed(_) => "installer could not be started".to_string(),
         };
         crate::diag::warn(&format!(
             "Update cancelled ({why}); installer log, if any: {} in the temp folder",

@@ -741,3 +741,42 @@ pub fn expected_panics<R>(f: impl FnOnce() -> R) -> R {
 fn panic_expected() -> bool {
     EXPECTED.try_with(|c| c.get() > 0).unwrap_or(false)
 }
+
+#[cfg(test)]
+mod report_document_tests {
+    use super::report_document;
+    use std::path::PathBuf;
+
+    #[test]
+    fn report_document_handles_none_in_both_languages() {
+        assert_eq!(
+            report_document(
+                "Document: none
+Error: x"
+            ),
+            None
+        );
+        assert_eq!(
+            report_document(
+                "Dokument: keines
+Fehler: x"
+            ),
+            None
+        );
+        assert_eq!(
+            report_document(
+                "Dokument: 
+Fehler: x"
+            ),
+            None
+        );
+        assert_eq!(
+            report_document("Document: C:/a/b.pcad.zip"),
+            Some(PathBuf::from("C:/a/b.pcad.zip"))
+        );
+        assert_eq!(
+            report_document("Dokument: C:/a/b.pcad.zip"),
+            Some(PathBuf::from("C:/a/b.pcad.zip"))
+        );
+    }
+}

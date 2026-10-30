@@ -1,0 +1,73 @@
+name: Report a bug
+description: Something does not work or looks wrong.
+title: "Bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting. Two sentences are enough. Anything marked "Filled in by the program." can stay empty if you did not come from the program.
+        Please do not write passwords or private details in the report. This page is public.
+  - type: textarea
+    id: ziel
+    attributes:
+      label: What did you want to do?
+      description: For example "Drill a hole into a box".
+    validations:
+      required: true
+  - type: textarea
+    id: passiert
+    attributes:
+      label: What happened?
+      description: An error message you saw helps, too.
+    validations:
+      required: true
+  - type: textarea
+    id: erwartet
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: dropdown
+    id: bereich
+    attributes:
+      label: Where did it happen?
+      options:
+        - Sketch
+        - 3D
+        - Export
+        - Drawing
+        - Shortcuts
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: version
+    attributes:
+      label: Version
+      description: Filled in by the program.
+  - type: textarea
+    id: system
+    attributes:
+      label: System
+      description: Filled in by the program.
+  - type: textarea
+    id: grafik
+    attributes:
+      label: Graphics card
+      description: Filled in by the program.
+  - type: textarea
+    id: schritte
+    attributes:
+      label: Last steps
+      description: Filled in by the program.
+  - type: textarea
+    id: protokoll
+    attributes:
+      label: Log
+      description: Filled in by the program.
+  - type: textarea
+    id: bild
+    attributes:
+      label: Picture
+      description: Drag a picture here.

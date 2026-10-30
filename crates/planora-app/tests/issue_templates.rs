@@ -237,3 +237,55 @@ fn guide_files_exist_and_are_linked_from_readme() {
         "README braucht den Link „Was geplant ist“"
     );
 }
+
+#[test]
+fn english_forms_have_the_same_ids_fields_and_options_as_the_german_ones() {
+    for (de, en) in [("fehler.yml", "bug.yml"), ("wunsch.yml", "feature.yml")] {
+        let d = read(&format!(".github/ISSUE_TEMPLATE/{de}"));
+        let e = read(&format!(".github/ISSUE_TEMPLATE/{en}"));
+        assert_eq!(ids(&d), ids(&e), "{en}");
+        assert_eq!(required(&d), required(&e), "{en}");
+        let (fd, fe) = (fields(&d), fields(&e));
+        assert_eq!(fd.len(), fe.len(), "{en}");
+        for (a, b) in fd.iter().zip(&fe) {
+            assert_eq!(a.kind, b.kind, "{en}");
+            assert_eq!(a.options.len(), b.options.len(), "{en}: {:?}", a.id);
+        }
+        let label = |t: &str| {
+            t.lines()
+                .find(|l| l.starts_with("labels:"))
+                .map(str::to_string)
+        };
+        assert_eq!(label(&d), label(&e), "{en}");
+    }
+}
+
+#[test]
+fn english_forms_are_found_by_the_app_in_english() {
+    use planora_app::feedback::Kind;
+    use planora_i18n::{english, with_lang};
+    with_lang(&english(), || {
+        for kind in [Kind::Fehler, Kind::Wunsch, Kind::Frage] {
+            let file = format!(".github/ISSUE_TEMPLATE/{}", kind.template());
+            let t = read(&file);
+            assert!(
+                ids(&t).iter().any(|f| f == kind.description_field()),
+                "{file}"
+            );
+            if kind != Kind::Frage {
+                assert!(
+                    t.lines()
+                        .any(|l| l == format!("title: \"{}\"", kind.title_prefix())),
+                    "{file}"
+                );
+            }
+        }
+    });
+}
+
+#[test]
+fn config_names_the_help_pages_in_both_languages() {
+    let t = read(".github/ISSUE_TEMPLATE/config.yml");
+    assert!(t.contains("name: Common problems"));
+    assert!(t.contains("name: How to report something"));
+}

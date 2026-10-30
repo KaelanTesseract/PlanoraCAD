@@ -1158,3 +1158,46 @@ fn footer(
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::feedback::Kind;
+
+    fn crash_report(text: &str) -> Report {
+        Report {
+            kind: Kind::Fehler,
+            area: None,
+            description: "Absturz".into(),
+            parts: vec![(Part::Absturzbericht, text.to_string())],
+            project_file: None,
+        }
+    }
+
+    #[test]
+    fn url_report_reads_an_old_german_crash_report() {
+        let old = "Zeit: 26.10.2026, 10:00:00
+Fehler: index out of bounds
+Ort: src/x.rs:1:2
+Dokument: keines
+Ablauf:
+  0: a";
+        let r = url_report(&crash_report(old));
+        assert_eq!(
+            r.parts[0].1,
+            "Fehler: index out of bounds
+Ort: src/x.rs:1:2"
+        );
+        let new = "Time: 2026-10-26 10:00:00
+Error: boom
+Location: src/x.rs:1:2
+Document: none
+Backtrace:
+  0: a";
+        assert_eq!(
+            url_report(&crash_report(new)).parts[0].1,
+            "Error: boom
+Location: src/x.rs:1:2"
+        );
+    }
+}

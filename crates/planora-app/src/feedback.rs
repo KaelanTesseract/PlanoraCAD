@@ -48,18 +48,39 @@ pub fn area_label(area: &str) -> String {
 
 /// Webformular auf dennis-guse.de: der Weg ohne GitHub-Konto (deutsch).
 pub const WEBFORM_URL: &str = "https://dennis-guse.de/planoracad/rueckmeldung.php";
-/// Dasselbe Formular auf Englisch (gleiche Felder); vorgehalten für eine spätere englische
-/// Oberfläche, derzeit ungenutzt.
+/// Dasselbe Formular auf Englisch (gleiche Felder).
 pub const WEBFORM_URL_EN: &str = "https://dennis-guse.de/en/planoracad/feedback.php";
+
+/// Läuft das Programm gerade auf Deutsch? Dann gelten deutsches Formular und deutsche Vorlage,
+/// bei jeder anderen Sprache die englischen.
+fn is_german() -> bool {
+    planora_i18n::current().id() == planora_i18n::german().id()
+}
+
+/// Webformular in der Sprache des Programms: Deutsch [`WEBFORM_URL`], sonst [`WEBFORM_URL_EN`].
+/// (`webform_url` ist schon die Adresse eines fertigen Berichts.)
+pub fn webform_base() -> &'static str {
+    if is_german() {
+        WEBFORM_URL
+    } else {
+        WEBFORM_URL_EN
+    }
+}
 
 /// Die Adresse bleibt nach dem Kodieren kürzer als dieser Wert.
 pub const MAX_URL_LEN: usize = 2000;
-/// Endet eine gekürzte Beschreibung in der Adresse.
-pub const KUERZUNG_HINWEIS: &str = "… (gekürzt, ganz in der angehängten Datei)";
+/// Endet eine gekürzte Beschreibung in der Adresse (in der Sprache des Programms).
+pub fn cut_hint() -> String {
+    tr!("feedback-cut-hint")
+}
 /// Steht am Ende des Beschreibungsfelds, wenn es eine Datei zum Anhängen gibt.
-pub const ATTACH_HINT: &str = "Datei hier anhängen: rueckmeldung.txt";
-/// Wie [`ATTACH_HINT`], wenn auch `bild.png` im Ordner liegt (Bestandteil „Bild vom Fenster“).
-pub const ATTACH_HINT_PICTURE: &str = "Dateien hier anhängen: rueckmeldung.txt und bild.png";
+pub fn attach_hint() -> String {
+    attach_hint_for(&[FEEDBACK_FILE])
+}
+/// Wie [`attach_hint`], wenn auch `bild.png` im Ordner liegt (Bestandteil „Bild vom Fenster“).
+pub fn attach_hint_picture() -> String {
+    attach_hint_for(&[FEEDBACK_FILE, crate::feedback_shot::SHOT_FILE])
+}
 /// Höchstlänge der Treiberangabe der Grafikkarte.
 pub const MAX_DRIVER_CHARS: usize = 120;
 
@@ -125,19 +146,23 @@ impl Kind {
         }
     }
 
-    /// Formular unter `.github/ISSUE_TEMPLATE`. Fragen nutzen das Wunsch-Formular.
+    /// Formular unter `.github/ISSUE_TEMPLATE` in der Sprache des Programms: Deutsch
+    /// `fehler.yml`/`wunsch.yml`, sonst `bug.yml`/`feature.yml`. Fragen nutzen das Wunsch-Formular.
     pub fn template(self) -> &'static str {
-        match self {
-            Kind::Fehler => "fehler.yml",
-            Kind::Wunsch | Kind::Frage => "wunsch.yml",
+        match (self, is_german()) {
+            (Kind::Fehler, true) => "fehler.yml",
+            (Kind::Fehler, false) => "bug.yml",
+            (Kind::Wunsch | Kind::Frage, true) => "wunsch.yml",
+            (Kind::Wunsch | Kind::Frage, false) => "feature.yml",
         }
     }
 
-    pub fn title_prefix(self) -> &'static str {
+    /// Anfang des Titels (muss zum `title:` der Vorlage passen).
+    pub fn title_prefix(self) -> String {
         match self {
-            Kind::Fehler => "Fehler: ",
-            Kind::Wunsch => "Wunsch: ",
-            Kind::Frage => "Frage: ",
+            Kind::Fehler => tr!("feedback-title-bug"),
+            Kind::Wunsch => tr!("feedback-title-wish"),
+            Kind::Frage => tr!("feedback-title-question"),
         }
     }
 
@@ -575,14 +600,14 @@ pub struct Built {
     pub dropped: Vec<Part>,
     pub steps_cut: bool,
     pub description_cut: bool,
-    /// Wahr, wenn die Adresse auf `rueckmeldung.txt` verweist ([`ATTACH_HINT`] steht
+    /// Wahr, wenn die Adresse auf `rueckmeldung.txt` verweist ([`attach_hint`] steht
     /// darin): `with_file` war gesetzt, oder es wurde etwas weggelassen oder gekürzt.
     pub needs_file: bool,
 }
 
 /// Hinweis auf die Dateien im Ordner: mit `bild.png`, wenn das Bild (Bestandteil `Bild`)
 /// mitgeht, und mit der Projektdatei ([`Report::project_file`]).
-fn attach_hint(report: &Report) -> String {
+fn report_attach_hint(report: &Report) -> String {
     let mut files = vec![FEEDBACK_FILE];
     if report.parts.iter().any(|(p, _)| *p == Part::Bild) {
         files.push(crate::feedback_shot::SHOT_FILE);
@@ -597,13 +622,19 @@ fn attach_hint(report: &Report) -> String {
 pub fn attach_hint_for(files: &[&str]) -> String {
     match files {
         [] => String::new(),
-        [one] => format!("Datei hier anhängen: {one}"),
-        [rest @ .., last] => format!("Dateien hier anhängen: {} und {last}", rest.join(", ")),
+        [one] => planora_i18n::t_args("feedback-attach-one", &[("file", (*one).into())]),
+        [rest @ .., last] => planora_i18n::t_args(
+            "feedback-attach-many",
+            &[("rest", rest.join(", ").into()), ("last", (*last).into())],
+        ),
     }
 }
 
 fn area_line(report: &Report) -> Option<String> {
-    report.area.as_ref().map(|a| format!("Bereich: {a}"))
+    report
+        .area
+        .as_ref()
+        .map(|a| planora_i18n::t_args("feedback-area-line", &[("area", area_label(a).into())]))
 }
 
 fn title(report: &Report) -> String {
@@ -640,7 +671,7 @@ fn render_web(
     parts: &[(Part, String)],
     with_file: bool,
 ) -> String {
-    let mut url = format!("{WEBFORM_URL}?art={}", report.kind.form_value());
+    let mut url = format!("{}?art={}", webform_base(), report.kind.form_value());
     let mut push = |name: &str, value: &str| {
         url.push('&');
         url.push_str(name);
@@ -673,11 +704,11 @@ fn render_web(
     }
     let mut description = desc.to_string();
     if cut {
-        description.push_str(KUERZUNG_HINWEIS);
+        description.push_str(&cut_hint());
     }
     if with_file {
         description.push_str("\n\n");
-        description.push_str(&attach_hint(report));
+        description.push_str(&report_attach_hint(report));
     }
     push(report.kind.description_field(), &description);
     url
@@ -738,11 +769,11 @@ fn render_github(
     }
     description.push_str(desc);
     if cut {
-        description.push_str(KUERZUNG_HINWEIS);
+        description.push_str(&cut_hint());
     }
     if with_file {
         description.push_str("\n\n");
-        description.push_str(&attach_hint(report));
+        description.push_str(&report_attach_hint(report));
     }
     // Die Beschreibung steht zuletzt.
     fields.push((report.kind.description_field(), description));
@@ -767,9 +798,9 @@ fn render_github(
 /// Ist sie zu lang, fallen zuerst automatisch gesammelte Angaben weg: die Protokollzeilen,
 /// dann die Schritte von den ältesten her, dann Absturzbericht, Grafikkarte, System und
 /// Version. Die Beschreibung bleibt ganz, solange sie allein passt; sonst wird sie an einer
-/// Zeichengrenze gekürzt und endet mit [`KUERZUNG_HINWEIS`].
+/// Zeichengrenze gekürzt und endet mit [`cut_hint`].
 ///
-/// `with_file` hängt [`ATTACH_HINT`] an das Beschreibungsfeld. Wurde etwas weggelassen oder
+/// `with_file` hängt [`attach_hint`] an das Beschreibungsfeld. Wurde etwas weggelassen oder
 /// gekürzt, geschieht das von selbst; [`Built::needs_file`] sagt dann, dass der Ordner mit
 /// `rueckmeldung.txt` angelegt werden muss.
 pub fn issue_url(report: &Report, with_file: bool) -> Built {

@@ -800,9 +800,14 @@ impl SetupLauncher for ShellLauncher {
         if code == ERROR_CANCELLED {
             Err(LaunchError::Cancelled)
         } else {
-            Err(LaunchError::Failed(
-                std::io::Error::from_raw_os_error(code as i32).to_string(),
-            ))
+            // Das Protokoll ist englisch: Code und Art statt des übersetzten Windows-Texts, der
+            // nur in die Meldung geht.
+            let err = std::io::Error::from_raw_os_error(code as i32);
+            crate::diag::warn(&format!(
+                "Installer launch failed: OS error {code} ({:?})",
+                err.kind()
+            ));
+            Err(LaunchError::Failed(err.to_string()))
         }
     }
 
