@@ -150,7 +150,7 @@ fn oblique_ends_of_a_skin_are_named() {
             },
         ),
     ) {
-        Err(BlendError::Unsupported(m)) => assert_eq!(m, OBLIQUE_END),
+        Err(BlendError::Unsupported(m)) => assert_eq!(m, oblique_end()),
         other => panic!("{:?}", other.map(|_| ())),
     }
 }

@@ -5,6 +5,7 @@
 use crate::basis::Basis;
 use crate::limits::geom_tol;
 use crate::model::{ViewId, ViewKind};
+use planora_i18n::tr;
 use planora_math::{DVec2, DVec3};
 use std::f64::consts::TAU;
 
@@ -154,23 +155,33 @@ pub enum Geo3 {
     },
 }
 
-/// Fehler einer Maßangabe.
+/// Fehler einer Maßangabe. Der Text entsteht in der aktuellen Sprache; `Lost` und `Invalid`
+/// tragen einen Grund, der beim Entstehen in der damals aktuellen Sprache geschrieben wurde.
 #[derive(Debug, thiserror::Error, Clone, PartialEq)]
+#[error("{}", self.text())]
 pub enum DimError {
-    #[error("Die Kante steht nicht quer zum Maß.")]
     NotAcross,
-    #[error("Der Bezug ist in dieser Ansicht nicht zu sehen.")]
     NotVisible,
-    #[error("Der Bezug ist nicht eindeutig.")]
     Ambiguous,
-    #[error("Der Bezug wurde nicht gefunden: {0}")]
     Lost(String),
-    #[error("In der Isometrie gibt es keine Maße.")]
     NotAllowedInIsometric,
-    #[error("Es gibt zu viele Maße in dieser Zeichnung.")]
     TooMany,
-    #[error("Das Maß ist ungültig: {0}")]
     Invalid(String),
+}
+
+impl DimError {
+    /// Die Meldung in der aktuellen Sprache.
+    fn text(&self) -> String {
+        match self {
+            DimError::NotAcross => tr!("drawing-dim-err-not-across"),
+            DimError::NotVisible => tr!("drawing-dim-err-not-visible"),
+            DimError::Ambiguous => tr!("drawing-dim-err-ambiguous"),
+            DimError::Lost(why) => tr!("drawing-dim-err-lost", reason = why.as_str()),
+            DimError::NotAllowedInIsometric => tr!("drawing-dim-err-isometric"),
+            DimError::TooMany => tr!("drawing-dim-err-too-many"),
+            DimError::Invalid(why) => tr!("drawing-dim-err-invalid", reason = why.as_str()),
+        }
+    }
 }
 
 /// Ergebnis einer Messung in **Ansichtskoordinaten** (ungeskaliert, mm; y nach oben).
@@ -292,26 +303,44 @@ pub const END_PARAM_TOL: f64 = 1e-6;
 /// (`e` normierte Kantenrichtung im Raum, `d` Blickrichtung).
 pub const ANGLE_PLANE_TOL: f64 = 1e-6;
 
-const ZERO_LENGTH: &str = "Das Maß hat die Länge null.";
-const OBLIQUE: &str = "Der Kreis erscheint schräg.";
-const NOT_FINITE: &str = "Der Bezug enthält Zahlen, mit denen sich nicht rechnen lässt.";
-const WRONG_COUNT: &str = "Das Maß hat die falsche Zahl von Bezügen.";
-const ALIGNED_REFS: &str = "Ein schräges Maß braucht zwei Punkte oder zwei parallele Kanten.";
-const ROUND_REFS: &str =
-    "Durchmesser und Radius brauchen einen Kreis, einen Zylinder oder eine Kugel.";
-const ANGLE_REFS: &str = "Ein Winkelmaß braucht zwei Kanten.";
-const NO_RADIUS: &str = "Der Kreis hat keinen Radius.";
-const NO_DIRECTION: &str = "Der Bezug hat keine Richtung.";
-const POINT_EDGE: &str = "Die Kante erscheint in dieser Ansicht als Punkt.";
-const PARALLEL: &str = "Die Kanten sind parallel und bilden keinen Winkel.";
-const AXIS_RANGE: &str = "Der Bereich der Zylinderfläche ist ungültig.";
-const RADIUS_SIDE: &str = "Der Radius ist nur mit Blick auf den Kreis möglich.";
-const RADIUS_AXIS: &str = "Der Radius ist nur an Kreisen, Bögen und Kugeln möglich.";
-const ANGLE_OBLIQUE: &str =
-    "Die Kante liegt schräg zur Ansicht; der Winkel würde verzerrt gezeigt.";
+/// Gründe für [`DimError::Invalid`] (Text in der aktuellen Sprache).
+#[derive(Clone, Copy)]
+enum Why {
+    ZeroLength,
+    Oblique,
+    NotFinite,
+    WrongCount,
+    AlignedRefs,
+    RoundRefs,
+    AngleRefs,
+    NoRadius,
+    NoDirection,
+    PointEdge,
+    Parallel,
+    AxisRange,
+    RadiusSide,
+    RadiusAxis,
+    AngleOblique,
+}
 
-fn invalid(text: &str) -> DimError {
-    DimError::Invalid(text.into())
+fn invalid(why: Why) -> DimError {
+    DimError::Invalid(match why {
+        Why::ZeroLength => tr!("drawing-dim-zero-length"),
+        Why::Oblique => tr!("drawing-dim-oblique"),
+        Why::NotFinite => tr!("drawing-dim-not-finite"),
+        Why::WrongCount => tr!("drawing-dim-wrong-count"),
+        Why::AlignedRefs => tr!("drawing-dim-aligned-refs"),
+        Why::RoundRefs => tr!("drawing-dim-round-refs"),
+        Why::AngleRefs => tr!("drawing-dim-angle-refs"),
+        Why::NoRadius => tr!("drawing-dim-no-radius"),
+        Why::NoDirection => tr!("drawing-dim-no-direction"),
+        Why::PointEdge => tr!("drawing-dim-point-edge"),
+        Why::Parallel => tr!("drawing-dim-parallel"),
+        Why::AxisRange => tr!("drawing-dim-axis-range"),
+        Why::RadiusSide => tr!("drawing-dim-radius-side"),
+        Why::RadiusAxis => tr!("drawing-dim-radius-axis"),
+        Why::AngleOblique => tr!("drawing-dim-angle-oblique"),
+    })
 }
 
 fn geo_is_finite(g: &Geo3) -> bool {
@@ -399,7 +428,7 @@ impl Seg {
         if s.a.is_finite() && s.b.is_finite() && s.v.is_finite() && s.len.is_finite() {
             Ok(s)
         } else {
-            Err(invalid(NOT_FINITE))
+            Err(invalid(Why::NotFinite))
         }
     }
 }
@@ -416,7 +445,7 @@ fn axis_ends(
     if p0.is_finite() && p1.is_finite() {
         Ok((e, p0, p1))
     } else {
-        Err(invalid(NOT_FINITE))
+        Err(invalid(Why::NotFinite))
     }
 }
 
@@ -482,11 +511,11 @@ pub fn measure(
     }
     let (lo, hi) = ref_count(kind);
     if geos.len() < lo || geos.len() > hi {
-        return Err(invalid(WRONG_COUNT));
+        return Err(invalid(Why::WrongCount));
     }
     let basis_ok = basis.d.is_finite() && basis.ex.is_finite() && basis.ey.is_finite();
     if !(basis_ok && extent.is_finite() && extent >= 0.0 && geos.iter().all(geo_is_finite)) {
-        return Err(invalid(NOT_FINITE));
+        return Err(invalid(Why::NotFinite));
     }
     // Überlauf beim Projizieren (endliche, aber riesige Zahlen) wird vor den fachlichen
     // Prüfungen gemeldet, unabhängig von der Reihenfolge der Bezüge.
@@ -503,7 +532,7 @@ pub fn measure(
                 ..
             } => {
                 if t1 < t0 {
-                    return Err(invalid(AXIS_RANGE));
+                    return Err(invalid(Why::AxisRange));
                 }
                 match axis_ends(*origin, *dir, *t0, *t1) {
                     Ok((_, p0, p1)) => (p0, p1),
@@ -528,7 +557,7 @@ pub fn measure(
     if m.value.is_finite() && anchor_is_finite(&m.anchor) {
         Ok(m)
     } else {
-        Err(invalid(NOT_FINITE))
+        Err(invalid(Why::NotFinite))
     }
 }
 
@@ -608,7 +637,7 @@ fn locus(g: &Geo3, basis: &Basis, u: DVec2, w: DVec2, tol: f64) -> Result<Loc, D
 fn unit3(v: DVec3) -> Result<DVec3, DimError> {
     let n = v.normalize_or_zero();
     if n == DVec3::ZERO || !n.is_finite() {
-        Err(invalid(NO_DIRECTION))
+        Err(invalid(Why::NoDirection))
     } else {
         Ok(n)
     }
@@ -620,10 +649,10 @@ fn linear(geos: &[Geo3], basis: &Basis, u: DVec2, tol: f64) -> Result<Measured, 
     let lb = locus(&geos[1], basis, u, w, tol)?;
     let value = (lb.at - la.at).abs();
     if value.is_nan() {
-        return Err(invalid(NOT_FINITE));
+        return Err(invalid(Why::NotFinite));
     }
     if value < tol {
-        return Err(invalid(ZERO_LENGTH));
+        return Err(invalid(Why::ZeroLength));
     }
     Ok(Measured {
         value,
@@ -660,10 +689,10 @@ fn aligned_measured(
     tol: f64,
 ) -> Result<Measured, DimError> {
     if !value.is_finite() {
-        return Err(invalid(NOT_FINITE));
+        return Err(invalid(Why::NotFinite));
     }
     if value < tol {
-        return Err(invalid(ZERO_LENGTH));
+        return Err(invalid(Why::ZeroLength));
     }
     Ok(Measured {
         value,
@@ -692,7 +721,7 @@ fn aligned(geos: &[Geo3], basis: &Basis, tol: f64) -> Result<Measured, DimError>
             let s2 = Seg::of(basis, *a2, *b2)?;
             let (e, e2) = (s1.v / s1.len, s2.v / s2.len);
             if e.perp_dot(e2).abs() > ACROSS_TOL {
-                return Err(invalid(ALIGNED_REFS));
+                return Err(invalid(Why::AlignedRefs));
             }
             // Bereiche der Kanten entlang e; Punkt der Geraden 1 bzw. 2 zur Lage k entlang e.
             let range = |s: &Seg| {
@@ -718,7 +747,7 @@ fn aligned(geos: &[Geo3], basis: &Basis, tol: f64) -> Result<Measured, DimError>
             let spans = (by_cross(s1.a, s1.b, w), by_cross(s2.a, s2.b, w));
             aligned_measured(sd.abs(), a, b, dir, spans, tol)
         }
-        _ => Err(invalid(ALIGNED_REFS)),
+        _ => Err(invalid(Why::AlignedRefs)),
     }
 }
 
@@ -785,7 +814,7 @@ fn round(g: &Geo3, basis: &Basis, radius_kind: bool) -> Result<Measured, DimErro
         if r > 0.0 {
             Ok(r)
         } else {
-            Err(invalid(NO_RADIUS))
+            Err(invalid(Why::NoRadius))
         }
     };
     let d = unit3(basis.d)?;
@@ -810,17 +839,17 @@ fn round(g: &Geo3, basis: &Basis, radius_kind: bool) -> Result<Measured, DimErro
                 Ok(round_anchor(c, r, span, radius_kind))
             } else if cos <= VIEW_TOL {
                 if radius_kind {
-                    return Err(invalid(RADIUS_SIDE));
+                    return Err(invalid(Why::RadiusSide));
                 }
                 // Die Kreisebene steht senkrecht zum Bild; ihre Spur verläuft senkrecht zum Bild
                 // der Normalen.
                 let pn = basis.project(n).normalize_or_zero();
                 if pn == DVec2::ZERO {
-                    return Err(invalid(NO_DIRECTION));
+                    return Err(invalid(Why::NoDirection));
                 }
                 Ok(across_diameter(c, pn.perp(), r))
             } else {
-                Err(invalid(OBLIQUE))
+                Err(invalid(Why::Oblique))
             }
         }
         Geo3::Axis {
@@ -835,13 +864,13 @@ fn round(g: &Geo3, basis: &Basis, radius_kind: bool) -> Result<Measured, DimErro
             let s = Seg::of(basis, p0, p1)?;
             let cos = e.dot(d).abs();
             if cos > VIEW_TOL && cos < 1.0 - VIEW_TOL {
-                Err(invalid(OBLIQUE))
+                Err(invalid(Why::Oblique))
             } else if radius_kind {
-                Err(invalid(RADIUS_AXIS))
+                Err(invalid(Why::RadiusAxis))
             } else if cos <= VIEW_TOL {
                 let q = basis.project(e).normalize_or_zero();
                 if q == DVec2::ZERO {
-                    return Err(invalid(NO_DIRECTION));
+                    return Err(invalid(Why::NoDirection));
                 }
                 Ok(across_axis_diameter(s.a, s.b, q, r))
             } else {
@@ -852,7 +881,7 @@ fn round(g: &Geo3, basis: &Basis, radius_kind: bool) -> Result<Measured, DimErro
             let r = positive(*radius)?;
             Ok(round_anchor(basis.project(*center), r, None, radius_kind))
         }
-        Geo3::Point(_) | Geo3::Line { .. } => Err(invalid(ROUND_REFS)),
+        Geo3::Point(_) | Geo3::Line { .. } => Err(invalid(Why::RoundRefs)),
     }
 }
 
@@ -872,30 +901,30 @@ fn angle(geos: &[Geo3], basis: &Basis, tol: f64) -> Result<Measured, DimError> {
         Geo3::Line { a, b } => {
             let s = Seg::of(basis, *a, *b)?;
             if s.len <= point_len(tol) {
-                return Err(invalid(POINT_EDGE));
+                return Err(invalid(Why::PointEdge));
             }
             if unit3(*b - *a)?.dot(d).abs() > ANGLE_PLANE_TOL {
-                return Err(invalid(ANGLE_OBLIQUE));
+                return Err(invalid(Why::AngleOblique));
             }
             Ok(s)
         }
-        _ => Err(invalid(ANGLE_REFS)),
+        _ => Err(invalid(Why::AngleRefs)),
     };
     let s1 = seg(&geos[0])?;
     let s2 = seg(&geos[1])?;
     let (e1, e2) = (s1.v / s1.len, s2.v / s2.len);
     let sin = e1.perp_dot(e2);
     if !sin.is_finite() {
-        return Err(invalid(NOT_FINITE));
+        return Err(invalid(Why::NotFinite));
     }
     if sin.abs() <= PARALLEL_SIN {
-        return Err(invalid(PARALLEL));
+        return Err(invalid(Why::Parallel));
     }
     // s1.a + t·e1 = s2.a + r·e2  ⇒  t = ((s2.a − s1.a) × e2) / (e1 × e2).
     let t = (s2.a - s1.a).perp_dot(e2) / sin;
     let vertex = s1.a + e1 * t;
     if !vertex.is_finite() {
-        return Err(invalid(NOT_FINITE));
+        return Err(invalid(Why::NotFinite));
     }
     let d1 = ray_dir(&s1, vertex);
     let d2 = ray_dir(&s2, vertex);
@@ -919,5 +948,45 @@ impl DimKind {
     /// Siehe [`ref_count`].
     pub fn ref_count(self) -> (usize, usize) {
         ref_count(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use planora_i18n::{english, german, with_lang};
+
+    const ALL_WHY: [Why; 15] = [
+        Why::ZeroLength,
+        Why::Oblique,
+        Why::NotFinite,
+        Why::WrongCount,
+        Why::AlignedRefs,
+        Why::RoundRefs,
+        Why::AngleRefs,
+        Why::NoRadius,
+        Why::NoDirection,
+        Why::PointEdge,
+        Why::Parallel,
+        Why::AxisRange,
+        Why::RadiusSide,
+        Why::RadiusAxis,
+        Why::AngleOblique,
+    ];
+
+    #[test]
+    fn invalid_reasons_speak_english() {
+        for why in ALL_WHY {
+            let en = with_lang(&english(), || invalid(why).to_string());
+            let de = with_lang(&german(), || invalid(why).to_string());
+            assert!(en.starts_with("The dimension is not valid: "), "{en}");
+            assert!(de.starts_with("Das Maß ist ungültig: "), "{de}");
+            assert!(!en.chars().any(|c| "äöüßÄÖÜ„".contains(c)), "{en}");
+            assert_ne!(en, de);
+        }
+        assert_eq!(
+            with_lang(&german(), || invalid(Why::ZeroLength).to_string()),
+            "Das Maß ist ungültig: Das Maß hat die Länge null."
+        );
     }
 }

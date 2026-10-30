@@ -110,27 +110,27 @@ fn sample() -> Addresses {
 #[test]
 fn abschnitt_mit_rahmen() {
     let t = crash_addr::section_text(Some(&sample()));
-    let want = "Adressen (für Dennis):\n\
-                Modul: planora-app.exe\n\
+    let want = "Addresses (for Dennis):\n\
+                Module: planora-app.exe\n\
                 PDB-GUID: 12345678-9ABC-DEF0-0123-456789ABCDEF\n\
                 PDB-Age: 3\n\
-                PE-Zeit: 0x65432100\n\
+                PE-Time: 0x65432100\n\
                 \x20 0: planora-app.exe+0x1a2b3c\n\
                 \x20 1: ntdll.dll+0x10\n\
-                \x20 2: unbekannt 0x7ff000001234\n";
+                \x20 2: unknown 0x7ff000001234\n";
     assert_eq!(t, want);
 }
 
 #[test]
 fn abschnitt_ohne_angaben() {
     let t = crash_addr::section_text(None);
-    assert_eq!(t, "Adressen (für Dennis):\nnicht verfügbar\n");
+    assert_eq!(t, "Addresses (for Dennis):\nnot available\n");
     let mut a = sample();
     a.build = None;
     a.frames.clear();
     let t = crash_addr::section_text(Some(&a));
-    assert!(t.contains("PDB-GUID: nicht verfügbar\n"), "{t}");
-    assert!(t.contains("keine Rahmen\n"), "{t}");
+    assert!(t.contains("PDB-GUID: not available\n"), "{t}");
+    assert!(t.contains("no frames\n"), "{t}");
 }
 
 #[test]

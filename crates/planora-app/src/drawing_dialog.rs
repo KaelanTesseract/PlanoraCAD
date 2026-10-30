@@ -7,20 +7,30 @@ use crate::drawing_state::{WorkArea, suggest_scale_in};
 use crate::drawing_view;
 use crate::export_dialog::shorten_for_display;
 use crate::icons::{self, Icon};
+use crate::msg::Msg;
 use crate::state::AppState;
 use crate::theme;
 use planora_drawing::sheet_info::Stamp;
 use planora_drawing::{DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewKind};
 use planora_feature::Document;
+use planora_i18n::tr;
 
 /// Meldung bei leerem Namen.
-pub const EMPTY_NAME: &str = "Bitte einen Namen eingeben.";
+pub fn empty_name() -> Msg {
+    crate::msg!("drawing-name-empty")
+}
 /// Meldung bei einem Namen, den es schon gibt (ohne Rücksicht auf Groß- und Kleinschreibung).
-pub const DUPLICATE_NAME: &str = "Eine Zeichnung mit diesem Namen gibt es schon.";
+pub fn duplicate_name() -> Msg {
+    crate::msg!("drawing-name-duplicate")
+}
 /// Hinweis an gesperrten Einträgen im Skizzen-Modus.
-pub const SKETCH_BLOCKED: &str = "Erst die Skizze beenden.";
+pub fn sketch_blocked() -> Msg {
+    crate::msg!("drawing-sketch-blocked")
+}
 /// Hinweis an „Neue Zeichnung“ in einer alten Version.
-const READ_ONLY: &str = "In einer alten Version lässt sich nichts hinzufügen.";
+fn add_read_only() -> String {
+    tr!("drawing-add-read-only")
+}
 
 /// Papiergrößen der Auswahl.
 pub const PAPERS: [Paper; 5] = [Paper::A4, Paper::A3, Paper::A2, Paper::A1, Paper::A0];
@@ -31,10 +41,10 @@ pub fn paper_label(p: Paper) -> &'static str {
 }
 
 /// Name einer Projektionsart.
-pub fn projection_label(p: Projection) -> &'static str {
+pub fn projection_label(p: Projection) -> String {
     match p {
-        Projection::First => "Erstwinkel (Europa)",
-        Projection::Third => "Dritter Winkel (USA)",
+        Projection::First => tr!("drawing-projection-first"),
+        Projection::Third => tr!("drawing-projection-third"),
     }
 }
 
@@ -50,9 +60,9 @@ fn name_taken(doc: &Document, name: &str) -> bool {
 /// Namensvorschlag „Zeichnung N“ mit der kleinsten freien Zahl N ≥ 1.
 pub fn suggested_name(doc: &Document) -> String {
     (1..=doc.drawings().len() + 1)
-        .map(|n| format!("Zeichnung {n}"))
+        .map(|n| tr!("drawing-suggested-name", n = n))
         .find(|n| !name_taken(doc, n))
-        .unwrap_or_else(|| format!("Zeichnung {}", doc.drawings().len() + 1))
+        .unwrap_or_else(|| tr!("drawing-suggested-name", n = doc.drawings().len() + 1))
 }
 
 /// Fenster „Neue Zeichnung“.
@@ -103,11 +113,11 @@ impl NewDrawingDialog {
     }
 
     /// Warum sich (noch) nichts anlegen lässt.
-    pub fn error(&self, state: &AppState) -> Option<&'static str> {
+    pub fn error(&self, state: &AppState) -> Option<Msg> {
         if self.name.trim().is_empty() {
-            Some(EMPTY_NAME)
+            Some(empty_name())
         } else if name_taken(&state.document, &self.name) {
-            Some(DUPLICATE_NAME)
+            Some(duplicate_name())
         } else {
             None
         }
@@ -115,9 +125,9 @@ impl NewDrawingDialog {
 
     /// Legt die Zeichnung (mit Datum und Benutzer von heute) mit der Grundansicht in der Mitte
     /// des freien Bereichs an und öffnet sie.
-    pub fn create(&self, state: &mut AppState) -> Result<DrawingId, String> {
+    pub fn create(&self, state: &mut AppState) -> Result<DrawingId, Msg> {
         if let Some(e) = self.error(state) {
-            return Err(e.into());
+            return Err(e);
         }
         let sheet = self.sheet();
         let had_project = state.document.project_info().is_some();
@@ -128,12 +138,12 @@ impl NewDrawingDialog {
         let id = state
             .document
             .add_drawing_stamped(&self.name, sheet, self.projection, &Stamp::now())
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| Msg::Raw(e.to_string()))?;
         let free = state
             .document
             .drawing(id)
             .map(|d| drawing_view::placement_layout(state, d).free)
-            .ok_or("Die Zeichnung fehlt.")?;
+            .ok_or_else(|| crate::msg!("drawing-missing"))?;
         // Die Grundansicht allein liegt in der Mitte des freien Bereichs; mit der ersten
         // weiteren Ansicht rückt sie so, dass der Block mittig liegt (`drawing_view::add_view`).
         let (x, y) = drawing_view::free_centre(((free.0.x, free.0.y), (free.1.x, free.1.y)));
@@ -150,7 +160,7 @@ impl NewDrawingDialog {
                     state.document.clear_project_info();
                 }
             }
-            return Err(e.to_string());
+            return Err(Msg::Raw(e.to_string()));
         }
         state.drawing_ui.open(id);
         state.drawing_ui.tick(&state.bodies, &state.document, false);
@@ -159,25 +169,25 @@ impl NewDrawingDialog {
 
     /// Zeichnet das Fenster; `true`, solange es offen bleiben soll.
     pub fn show(&mut self, ctx: &egui::Context, state: &mut AppState) -> bool {
-        let error = self.error(state);
+        let error = self.error(state).map(|m| m.text());
         let (mut open, mut close, mut create) = (true, false, false);
         let mut cards = Vec::new();
         let (mut name, mut paper, mut landscape) = (self.name.clone(), self.paper, self.landscape);
         let (mut projection, mut base) = (self.projection, self.base);
         let (mut scale, mut scale_chosen) = (self.scale, self.scale_chosen);
-        let response = Dialog::new("Neue Zeichnung", DialogSize::Wide)
+        let response = Dialog::new(tr!("drawing-new-title"), DialogSize::Wide)
             .open(&mut open)
             .show(ctx, |ui| {
                 let mut sheet_card = |ui: &mut egui::Ui| {
-                    ui.strong("Blatt");
+                    ui.strong(tr!("drawing-new-sheet"));
                     egui::Grid::new("planora-new-drawing-sheet")
                         .num_columns(2)
                         .spacing([12.0, 8.0])
                         .show(ui, |ui| {
-                            ui.label("Name");
+                            ui.label(tr!("drawing-new-name"));
                             theme::text_field(ui, egui::TextEdit::singleline(&mut name));
                             ui.end_row();
-                            ui.label("Papier");
+                            ui.label(tr!("drawing-new-paper"));
                             egui::ComboBox::from_id_salt("planora-new-drawing-paper")
                                 .selected_text(paper_label(paper))
                                 .show_ui(ui, |ui| {
@@ -187,12 +197,12 @@ impl NewDrawingDialog {
                                 });
                             ui.end_row();
                             ui.label("");
-                            ui.checkbox(&mut landscape, "Querformat");
+                            ui.checkbox(&mut landscape, tr!("drawing-new-landscape"));
                             ui.end_row();
                         });
                 };
                 let mut view_card = |ui: &mut egui::Ui| {
-                    ui.strong("Ansichten");
+                    ui.strong(tr!("drawing-new-views"));
                     for p in [Projection::First, Projection::Third] {
                         ui.radio_value(&mut projection, p, projection_label(p));
                     }
@@ -200,16 +210,20 @@ impl NewDrawingDialog {
                         .num_columns(2)
                         .spacing([12.0, 8.0])
                         .show(ui, |ui| {
-                            ui.label("Grundansicht");
+                            ui.label(tr!("drawing-new-base-view"));
                             egui::ComboBox::from_id_salt("planora-new-drawing-base")
-                                .selected_text(base.label())
+                                .selected_text(drawing_view::view_kind_label(base))
                                 .show_ui(ui, |ui| {
                                     for k in ViewKind::ALL.into_iter().filter(|k| k.is_normal()) {
-                                        ui.selectable_value(&mut base, k, k.label());
+                                        ui.selectable_value(
+                                            &mut base,
+                                            k,
+                                            drawing_view::view_kind_label(k),
+                                        );
                                     }
                                 });
                             ui.end_row();
-                            ui.label("Maßstab");
+                            ui.label(tr!("drawing-scale"));
                             egui::ComboBox::from_id_salt("planora-new-drawing-scale")
                                 .selected_text(scale.label())
                                 .show_ui(ui, |ui| {
@@ -227,18 +241,18 @@ impl NewDrawingDialog {
                     &mut [&mut sheet_card, &mut view_card];
                 cards = card_row(ui, "new-drawing", row);
                 ui.add_space(8.0);
-                if let Some(e) = error {
+                if let Some(e) = &error {
                     ui.colored_label(error_color(ui.visuals().dark_mode), e);
                 }
                 ui.separator();
                 ui.horizontal(|ui| {
                     if ui
-                        .add_enabled(error.is_none(), egui::Button::new("Anlegen"))
+                        .add_enabled(error.is_none(), egui::Button::new(tr!("projects-create")))
                         .clicked()
                     {
                         create = true;
                     }
-                    if ui.button("Abbrechen").clicked() {
+                    if ui.button(tr!("common-cancel")).clicked() {
                         close = true;
                     }
                 });
@@ -254,7 +268,7 @@ impl NewDrawingDialog {
         if create {
             match self.create(state) {
                 Ok(_) => return false,
-                Err(e) => state.message = Some(e),
+                Err(e) => state.message = Some(e.text()),
             }
         }
         open && !close
@@ -262,8 +276,8 @@ impl NewDrawingDialog {
 }
 
 /// Warum das Menü „Zeichnung“ gesperrt ist (Skizzen-Modus).
-pub fn drawing_menu_blocked(state: &AppState) -> Option<&'static str> {
-    state.sketch_session.is_some().then_some(SKETCH_BLOCKED)
+pub fn drawing_menu_blocked(state: &AppState) -> Option<Msg> {
+    state.sketch_session.is_some().then(sketch_blocked)
 }
 
 /// Einträge des Menüs „Zeichnung“: „Neue Zeichnung …“, je Zeichnung „Öffnen: {Name}“ und
@@ -274,15 +288,15 @@ pub fn drawing_menu(
     dialog: &mut Option<NewDrawingDialog>,
     read_only: bool,
 ) {
-    let blocked = drawing_menu_blocked(state);
+    let blocked = drawing_menu_blocked(state).map(|m| m.text());
     let free = blocked.is_none();
     // Randlose Menüeinträge: der Tastaturfokus zeigt sich über `theme::entry` als Ring.
     if theme::entry(
         ui,
         free && !read_only,
-        icons::button(Icon::NewDrawing, "Neue Zeichnung …"),
+        icons::button(Icon::NewDrawing, tr!("drawing-menu-new")),
     )
-    .on_disabled_hover_text(blocked.unwrap_or(READ_ONLY))
+    .on_disabled_hover_text(blocked.clone().unwrap_or_else(add_read_only))
     .clicked()
     {
         *dialog = Some(NewDrawingDialog::new(state));
@@ -293,17 +307,17 @@ pub fn drawing_menu(
         WorkArea::Drawing(id) if state.document.drawing(id).is_some() => Some(id),
         _ => None,
     };
-    let why = if let Some(b) = blocked {
+    let why = if let Some(b) = blocked.clone() {
         b
     } else if read_only {
-        crate::drawing_browser::READ_ONLY_HINT
+        crate::drawing_browser::read_only_hint()
     } else {
-        crate::sheet_dialog::NO_DRAWING_OPEN
+        crate::sheet_dialog::no_drawing_open()
     };
     if theme::entry(
         ui,
         free && !read_only && shown.is_some(),
-        icons::button(Icon::SheetInfo, crate::sheet_dialog::MENU_ENTRY),
+        icons::button(Icon::SheetInfo, crate::sheet_dialog::menu_entry()),
     )
     .on_disabled_hover_text(why)
     .clicked()
@@ -323,9 +337,9 @@ pub fn drawing_menu(
         if theme::entry(
             ui,
             free,
-            icons::button(Icon::OpenDrawing, format!("Öffnen: {name}")),
+            icons::button(Icon::OpenDrawing, tr!("drawing-menu-open", name = name)),
         )
-        .on_disabled_hover_text(SKETCH_BLOCKED)
+        .on_disabled_hover_text(sketch_blocked().text())
         .clicked()
         {
             // Die zuletzt offene Zeichnung behält Auswahl, Zoom und Verschiebung.
@@ -334,9 +348,13 @@ pub fn drawing_menu(
             ui.close();
         }
     }
-    if theme::entry(ui, free, icons::button(Icon::ToModel, "Zum 3D-Modell"))
-        .on_disabled_hover_text(SKETCH_BLOCKED)
-        .clicked()
+    if theme::entry(
+        ui,
+        free,
+        icons::button(Icon::ToModel, tr!("drawing-menu-to-model")),
+    )
+    .on_disabled_hover_text(sketch_blocked().text())
+    .clicked()
     {
         state.drawing_ui.area = WorkArea::Model;
         ui.close();

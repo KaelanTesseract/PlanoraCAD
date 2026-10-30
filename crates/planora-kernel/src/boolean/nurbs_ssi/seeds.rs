@@ -1,11 +1,12 @@
 //! Startpunktsuche: gerichtete Unterteilung der Bézier-Flicken mit sicherem Ausschluss,
 //! Normalenkegel-Test gegen Schleifen und mehrere Kurvenäste je Kandidat, Newton im Raum.
 
+use planora_i18n::tr;
 use std::f64::consts::{FRAC_PI_2, PI};
 
 use super::{
-    Hints, MAX_SEEDS, MAX_SUBDIVISION_DEPTH, MSG_NEAR_TANGENT, MSG_NUMERIC, PARALLEL_NORMALS,
-    Probe, Side, Ssi, msg_too_many_seeds,
+    Hints, MAX_SEEDS, MAX_SUBDIVISION_DEPTH, PARALLEL_NORMALS, Probe, Side, Ssi, msg_near_tangent,
+    msg_numeric, msg_too_many_seeds,
 };
 use crate::geometry::Surface;
 use crate::nurbs_surface::NurbsSurfaceData;
@@ -515,8 +516,9 @@ impl Ssi<'_> {
     fn count_visit(&mut self) -> Result<(), String> {
         self.visits += 1;
         if self.visits > MAX_PATCH_VISITS {
-            return Err(format!(
-                "Zu viele Schnittbereiche (mehr als {MAX_PATCH_VISITS} geprüfte Flicken)"
+            return Err(tr!(
+                "kernel-ssi-too-many-patch-visits",
+                max = MAX_PATCH_VISITS
             ));
         }
         Ok(())
@@ -777,7 +779,7 @@ impl Ssi<'_> {
             s.nurbs
                 .map(|d| d.surface().bezier_patches())
                 .transpose()
-                .map_err(|e| format!("Die Freiformfläche lässt sich nicht zerlegen: {e}"))
+                .map_err(|e| tr!("kernel-ssi-cannot-split", e = e.to_string()))
         };
         let (pa, pb) = (patches(&self.a)?, patches(&self.b)?);
         if pa.is_some() && pb.is_some() {
@@ -794,8 +796,9 @@ impl Ssi<'_> {
             (None, Some(y)) => (0..y.len()).map(|j| (None, Some(j))).collect(),
             (Some(x), Some(y)) => {
                 if x.len().saturating_mul(y.len()) > MAX_PATCH_VISITS {
-                    return Err(format!(
-                        "Zu viele Schnittbereiche (mehr als {MAX_PATCH_VISITS} Flickenpaare)"
+                    return Err(tr!(
+                        "kernel-ssi-too-many-patch-pairs",
+                        max = MAX_PATCH_VISITS
                     ));
                 }
                 (0..x.len())
@@ -901,18 +904,16 @@ impl Ssi<'_> {
             Some(p) => self.limit_transversal(p),
             None if r.residual <= NEAR_CONTACT_FACTOR * self.tol.linear => match r.last {
                 Some(p) => self.handle_touch(p),
-                None => Err(MSG_NEAR_TANGENT.into()),
+                None => Err(msg_near_tangent()),
             },
-            None => Err(MSG_NEAR_TANGENT.into()),
+            None => Err(msg_near_tangent()),
         }
     }
 
     fn count_candidate(&mut self) -> Result<(), String> {
         self.candidates += 1;
         if self.candidates > MAX_CANDIDATES {
-            return Err(format!(
-                "Zu viele Schnittbereiche (mehr als {MAX_CANDIDATES} Kandidaten-Flicken)"
-            ));
+            return Err(tr!("kernel-ssi-too-many-candidates", max = MAX_CANDIDATES));
         }
         Ok(())
     }
@@ -953,7 +954,7 @@ impl Ssi<'_> {
             return Ok(());
         }
         if self.on_traced(&p)? {
-            return Err(MSG_NEAR_TANGENT.into());
+            return Err(msg_near_tangent());
         }
         self.count_start(p.q)?;
         let br = self.trace(&p, self.starts.len())?;
@@ -962,7 +963,7 @@ impl Ssi<'_> {
             self.touches.push(p);
             return Ok(());
         }
-        Err(MSG_NEAR_TANGENT.into())
+        Err(msg_near_tangent())
     }
 
     /// Berührpunkt: Punkte nahe einem schon eingeordneten (innerhalb der Kandidatengröße, etwa
@@ -1029,7 +1030,7 @@ impl Ssi<'_> {
                 }
             };
             if !delta.is_finite() {
-                return Err(MSG_NUMERIC.into());
+                return Err(msg_numeric());
             }
             let len = delta.length();
             if res <= self.eps && len <= self.eps {

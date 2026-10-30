@@ -11,7 +11,7 @@ use egui::epaint::{ClippedShape, Shape};
 use egui::{Color32, Event, Modifiers, PointerButton, Pos2, Rect, Vec2, pos2, vec2};
 use planora_app::app::PlanoraApp;
 use planora_app::browser::ERROR_COLOR;
-use planora_app::dimension_tool::{READ_ONLY_TIP, TOOL};
+use planora_app::dimension_tool::{read_only_tip, tool as dim_tool_label};
 use planora_app::drawing_view::{self, FIT_MARGIN_PX};
 use planora_app::shell::{self, ShellMode, ShellState};
 use planora_app::state::AppState;
@@ -440,8 +440,8 @@ fn tool_field_has_all_toolbar_texts_in_two_rows() {
             sheet.as_str(),
             zoom_out.as_str(),
             zoom_in.as_str(),
-            drawing_view::SUGGEST,
-            TOOL,
+            &drawing_view::suggest(),
+            &dim_tool_label(),
         ] {
             let t = shot.find_in(tool, must);
             assert!(
@@ -481,7 +481,7 @@ fn view_settings_field_shows_view_state_and_acts() {
     let shot = h.settle(&mut st);
     let side = field(&h.c, "Ansichtsfeld");
     shot.find_in(side, "Ansicht");
-    shot.find_in(side, drawing_view::NO_VIEW_SELECTED);
+    shot.find_in(side, &drawing_view::no_view_selected());
     assert!(!shot.has("Verdeckte Kanten zeigen"));
     assert!(!shot.has("Ansicht löschen"));
     // Mit Auswahl: Name, Maßstab, Schalter und „Ansicht löschen“.
@@ -494,7 +494,7 @@ fn view_settings_field_shows_view_state_and_acts() {
         "Maßstab",
         "1:1",
         "Verdeckte Kanten zeigen",
-        drawing_view::CENTERLINES,
+        &drawing_view::centerlines_label(),
         "Ansicht löschen",
     ] {
         let t = shot.find_in(side, must);
@@ -503,7 +503,7 @@ fn view_settings_field_shows_view_state_and_acts() {
             "„{must}“ abgeschnitten"
         );
     }
-    assert!(!shot.has(drawing_view::NO_VIEW_SELECTED));
+    assert!(!shot.has(&drawing_view::no_view_selected()));
 
     // Verdeckte Kanten: Schalter ändert das Dokument.
     let before = view(&st, d, front).unwrap().show_hidden;
@@ -511,7 +511,7 @@ fn view_settings_field_shows_view_state_and_acts() {
     assert_eq!(view(&st, d, front).unwrap().show_hidden, !before);
     // Mittellinien.
     let before = view(&st, d, front).unwrap().centerlines;
-    h.click_in(&mut st, "Ansichtsfeld", drawing_view::CENTERLINES);
+    h.click_in(&mut st, "Ansichtsfeld", &drawing_view::centerlines_label());
     assert_eq!(view(&st, d, front).unwrap().centerlines, !before);
     // Maßstab: Auswahl öffnen und 1:2 wählen.
     h.click_in(&mut st, "Ansichtsfeld", "1:1");
@@ -529,7 +529,10 @@ fn view_settings_field_shows_view_state_and_acts() {
     h.click_in(&mut st, "Ansichtsfeld", "Ansicht löschen");
     assert!(view(&st, d, front).is_none(), "Ansicht gelöscht");
     let shot = h.settle(&mut st);
-    shot.find_in(field(&h.c, "Ansichtsfeld"), drawing_view::NO_VIEW_SELECTED);
+    shot.find_in(
+        field(&h.c, "Ansichtsfeld"),
+        &drawing_view::no_view_selected(),
+    );
 }
 
 // (f) ------------------------------------------------------------------------------------------
@@ -635,11 +638,12 @@ fn hint_field_shows_dimension_hints_and_messages() {
     assert!(
         shot.texts
             .iter()
-            .any(|t| t.text.contains(drawing_view::HINT) && hint.contains(t.rect.center())),
+            .any(|t| t.text.contains(&drawing_view::default_hint())
+                && hint.contains(t.rect.center())),
         "Hinweis im Hinweisfeld"
     );
     // Meldung (Vorschlag) im Feld.
-    st.drawing_ui.dim_message = Some("3 Maße wurden hinzugefügt.".into());
+    st.drawing_ui.dim_message = Some("3 Maße wurden hinzugefügt.".to_string().into());
     st.drawing_ui.dim_message_key = Some((
         st.document.edit_count(),
         st.drawing_ui.selected_view,
@@ -649,7 +653,7 @@ fn hint_field_shows_dimension_hints_and_messages() {
     shot.find_in(hint, "3 Maße wurden hinzugefügt.");
     // Werkzeug „Maß“: Hinweis des Werkzeugs; ein Klick ins Leere wird rot abgelehnt.
     st.drawing_ui.dim_message = None;
-    h.click_in(&mut st, "Werkzeugfeld", TOOL);
+    h.click_in(&mut st, "Werkzeugfeld", &dim_tool_label());
     assert!(st.dimension_tool.is_active());
     let shot = h.settle(&mut st);
     let tool_hint = st.dimension_tool.hint().expect("Werkzeughinweis");
@@ -789,7 +793,7 @@ fn read_only_locks_like_before() {
     assert!(!shot.has("Isometrisch"), "Menü in alter Version offen");
     // Schalter, Maßstab und Löschen ändern nichts.
     h.click_in(&mut st, "Ansichtsfeld", "Verdeckte Kanten zeigen");
-    h.click_in(&mut st, "Ansichtsfeld", drawing_view::CENTERLINES);
+    h.click_in(&mut st, "Ansichtsfeld", &drawing_view::centerlines_label());
     h.click_in(&mut st, "Ansichtsfeld", "1:1");
     let shot = h.settle(&mut st);
     assert!(!shot.has("1:2"), "Maßstab-Auswahl in alter Version offen");
@@ -797,18 +801,21 @@ fn read_only_locks_like_before() {
     assert_eq!(view(&st, d, front).unwrap(), before);
     assert_eq!(st.document.drawing(d).unwrap().views.len(), 1);
     // Maße vorschlagen setzt nichts, das Werkzeug „Maß“ bleibt aus und nennt den Grund.
-    h.click_in(&mut st, "Werkzeugfeld", drawing_view::SUGGEST);
+    h.click_in(&mut st, "Werkzeugfeld", &drawing_view::suggest());
     assert!(st.document.drawing(d).unwrap().dimensions.is_empty());
-    let shot = h.click_in(&mut st, "Werkzeugfeld", TOOL);
+    let shot = h.click_in(&mut st, "Werkzeugfeld", &dim_tool_label());
     assert!(!st.dimension_tool.is_active());
     let _ = shot;
     let tool = field(&h.c, "Werkzeugfeld");
     let shot = h.settle(&mut st);
-    let p = shot.find_in(tool, TOOL).rect.center();
+    let p = shot.find_in(tool, &dim_tool_label()).rect.center();
     h.frame(&mut st, vec![moved(p)]);
     h.frame(&mut st, vec![moved(p)]);
     let shot = h.frame(&mut st, vec![moved(p)]);
-    assert!(shot.contains(READ_ONLY_TIP), "Grund am gesperrten Werkzeug");
+    assert!(
+        shot.contains(&read_only_tip()),
+        "Grund am gesperrten Werkzeug"
+    );
 }
 
 /// Ein Maßhinweis und eine Meldung im Hinweisfeld schmaler Fenster: alles bleibt im Feld (zu
@@ -817,7 +824,7 @@ fn read_only_locks_like_before() {
 fn narrow_hint_field_keeps_notes_inside() {
     for size in [vec2(800.0, 600.0), MID] {
         let (mut st, mut h) = lost_and_outside(size);
-        st.drawing_ui.dim_message = Some("3 Maße wurden hinzugefügt.".into());
+        st.drawing_ui.dim_message = Some("3 Maße wurden hinzugefügt.".to_string().into());
         st.drawing_ui.dim_message_key = Some((
             st.document.edit_count(),
             st.drawing_ui.selected_view,
@@ -871,8 +878,8 @@ fn tool_field_texts_are_reachable_by_scrolling_at_800x600() {
         sheet.as_str(),
         zoom_out.as_str(),
         zoom_in.as_str(),
-        drawing_view::SUGGEST,
-        TOOL,
+        &drawing_view::suggest(),
+        &dim_tool_label(),
         "Waagerecht",
     ];
     let visible = |shot: &Shot, text: &str| {

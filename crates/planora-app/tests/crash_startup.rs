@@ -16,7 +16,7 @@ use planora_app::crash::{
 };
 use planora_app::crash_dialog::{self, *};
 use planora_app::feedback::{FEEDBACK_FILE, Part, SystemOpen, percent_encode};
-use planora_app::feedback_dialog::{self, OPEN_BROWSER, PROJECT_CHECKBOX};
+use planora_app::feedback_dialog::{self, open_browser, project_checkbox};
 use planora_app::update_install::AfterUpdate;
 use planora_app::workspace::Workspace;
 use planora_app::{fonts, theme};
@@ -232,7 +232,7 @@ impl Rig {
     }
 
     fn notice_shown(&self) -> bool {
-        self.sees(TITLE)
+        self.sees(&title())
     }
 }
 
@@ -400,7 +400,7 @@ fn notice_waits_for_first_frame_autosave_offer_and_after_update_notice() {
     r.app.set_after_update(None);
     r.settle();
     assert!(r.notice_shown(), "{:?}", r.texts());
-    assert!(r.sees(QUESTION));
+    assert!(r.sees(&question()));
 }
 
 #[test]
@@ -421,7 +421,7 @@ fn report_from_a_newer_version_is_offered_with_its_version() {
     });
     assert!(r.notice_shown());
     assert!(r.sees_part("9.9.9-dev.1"), "{:?}", r.texts());
-    r.click(VIEW);
+    r.click(&view());
     assert!(r.sees_part("Version: 9.9.9-dev.1"), "{:?}", r.texts());
     assert!(r.sees_part("Testpanik im Modell"));
 }
@@ -434,7 +434,7 @@ fn not_now_keeps_the_report_delete_removes_it() {
         keep.push(p.clone());
         StartFinding::Crashed(vec![p])
     });
-    r.click(NOT_NOW);
+    r.click(&not_now());
     assert!(!r.notice_shown());
     assert!(keep[0].exists(), "bleibt für den nächsten Start");
     let (marker, finding) = start_run(&r.data, OWN);
@@ -448,14 +448,14 @@ fn not_now_keeps_the_report_delete_removes_it() {
         gone.extend([a.clone(), b.clone()]);
         StartFinding::Crashed(vec![b, a])
     });
-    r.click(DELETE);
+    r.click(&delete());
     assert!(!r.notice_shown());
     assert!(gone.iter().all(|p| !p.exists()), "alle angebotenen weg");
     assert!(reports_in(&r.crash_dir()).is_empty());
 
     // „Ordner öffnen“ öffnet den Ordner der Berichte.
     let mut r = Rig::with("planora-rueckfrage-ordner", SIZE, crashed);
-    r.click(OPEN_FOLDER);
+    r.click(&open_folder());
     let dir = r.crash_dir();
     assert_eq!(r.opened.lock().unwrap().clone(), vec![dir]);
 }
@@ -479,9 +479,9 @@ fn as_feedback_opens_the_feedback_window_with_the_report_part_on_and_project_off
         rep = report(d, "0.2.0-dev.1", Some(doc));
         StartFinding::Crashed(vec![rep.clone()])
     });
-    r.click(AS_FEEDBACK);
+    r.click(&as_feedback());
     assert!(!r.notice_shown());
-    assert!(r.sees(feedback_dialog::TITLE), "{:?}", r.texts());
+    assert!(r.sees(&feedback_dialog::title()), "{:?}", r.texts());
     let fb = r.app.feedback_mut();
     assert!(fb.open);
     assert!(fb.is_checked(Part::Absturzbericht), "Bericht angehakt");
@@ -490,22 +490,24 @@ fn as_feedback_opens_the_feedback_window_with_the_report_part_on_and_project_off
     assert!(
         fb.preview_text(Part::Absturzbericht)
             .unwrap()
-            .contains("Ablauf (Backtrace)"),
+            .contains("Backtrace:"),
         "Vorschau zeigt den ganzen Bericht"
     );
     // In der Adresse nur Nachricht und Ort.
     fb.description = "Beim Extrudieren ist es abgestürzt.".into();
     let url = fb.built().url;
     assert!(
-        url.contains(&percent_encode("Fehler: Testpanik im Modell")),
+        url.contains(&percent_encode("Error: Testpanik im Modell")),
         "{url}"
     );
-    assert!(url.contains(&percent_encode("Ort: crates/planora-app/src/app.rs:10:5")));
+    assert!(url.contains(&percent_encode(
+        "Location: crates/planora-app/src/app.rs:10:5"
+    )));
     assert!(
         !url.contains(&percent_encode("Geheimnis")),
         "kein Ablauf in der Adresse"
     );
-    assert!(!url.contains(&percent_encode("Ablauf (Backtrace)")));
+    assert!(!url.contains(&percent_encode("Backtrace:")));
 }
 
 fn send_with_project(prefix: &str, check: bool) -> (Rig, PathBuf) {
@@ -513,13 +515,13 @@ fn send_with_project(prefix: &str, check: bool) -> (Rig, PathBuf) {
         let doc = project(d);
         StartFinding::Crashed(vec![report(d, "0.2.0-dev.1", Some(doc))])
     });
-    r.click(AS_FEEDBACK);
+    r.click(&as_feedback());
     r.type_text("Beim Extrudieren ist es abgestürzt.");
     if check {
-        r.click(PROJECT_CHECKBOX);
+        r.click(&project_checkbox());
         assert!(r.app.feedback_mut().is_checked(Part::Projektdatei));
     }
-    r.click(OPEN_BROWSER);
+    r.click(&open_browser());
     let bundle = r
         .opened
         .lock()
@@ -571,7 +573,7 @@ fn project_checkbox_copies_the_document_into_the_bundle_only_when_checked() {
     );
     // Der ganze Bericht liegt als Datei im Ordner.
     let text = std::fs::read_to_string(bundle.join(FEEDBACK_FILE)).unwrap();
-    assert!(text.contains("Ablauf (Backtrace)"), "{text}");
+    assert!(text.contains("Backtrace:"), "{text}");
 
     let (_r, bundle) = send_with_project("planora-rueckfrage-ohne-projekt", false);
     assert!(bundle.join(FEEDBACK_FILE).exists());
@@ -586,43 +588,43 @@ fn unexpected_shows_the_short_hint_without_report() {
     let mut r = Rig::with("planora-rueckfrage-unerwartet", SIZE, |_| {
         StartFinding::Unexpected
     });
-    assert!(r.sees(UNEXPECTED_TITLE), "{:?}", r.texts());
-    assert!(r.sees_part(UNEXPECTED_TEXT));
-    assert!(!r.sees(VIEW) && !r.sees(DELETE) && !r.sees(OPEN_FOLDER));
-    assert!(r.sees(AS_FEEDBACK) && r.sees(NOT_NOW));
-    r.click(AS_FEEDBACK);
+    assert!(r.sees(&unexpected_title()), "{:?}", r.texts());
+    assert!(r.sees_part(&unexpected_text()));
+    assert!(!r.sees(&view()) && !r.sees(&delete()) && !r.sees(&open_folder()));
+    assert!(r.sees(&as_feedback()) && r.sees(&not_now()));
+    r.click(&as_feedback());
     let fb = r.app.feedback_mut();
     assert!(fb.open);
     assert!(!fb.shown_parts().contains(&Part::Absturzbericht));
 
     // Sauberer Start: keine Rückfrage.
     let r = Rig::with("planora-rueckfrage-sauber", SIZE, |_| StartFinding::Clean);
-    assert!(!r.notice_shown() && !r.sees(UNEXPECTED_TITLE));
+    assert!(!r.notice_shown() && !r.sees(&unexpected_title()));
 }
 
 #[test]
 fn fits_at_1920x1080_and_no_panic_at_800x600() {
     let mut r = Rig::with("planora-rueckfrage-gross", SIZE, crashed);
-    r.click(VIEW);
+    r.click(&view());
     let rect = r
         .ctx
         .memory(|m| m.area_rect(crash_dialog::window_id()))
         .expect("Rückfrage gezeigt");
     let screen = Rect::from_min_size(Pos2::ZERO, SIZE);
     assert!(screen.contains_rect(rect), "{rect:?}");
-    for t in [HIDE, AS_FEEDBACK, OPEN_FOLDER, NOT_NOW, DELETE] {
-        assert!(r.sees(t), "Knopf „{t}“ fehlt");
+    for t in [hide(), as_feedback(), open_folder(), not_now(), delete()] {
+        assert!(r.sees(&t), "Knopf „{t}“ fehlt");
     }
 
     let mut r = Rig::with("planora-rueckfrage-klein", SMALL, crashed);
-    r.click(VIEW);
+    r.click(&view());
     r.settle();
     assert!(r.notice_shown());
     let mut r = Rig::with("planora-rueckfrage-klein-unerwartet", SMALL, |_| {
         StartFinding::Unexpected
     });
     r.settle();
-    assert!(r.sees(UNEXPECTED_TITLE));
+    assert!(r.sees(&unexpected_title()));
 }
 
 #[test]
@@ -680,14 +682,14 @@ fn upload_limits_follow_the_web_form() {
     assert_eq!(feedback_dialog::TOTAL_MAX_BYTES, 30_000_000);
     assert_eq!(feedback_dialog::PROJECT_MAX_BYTES, 200 * 1024 * 1024);
     for t in [
-        feedback_dialog::PROJECT_TOO_BIG_FOR_FORM,
-        feedback_dialog::PROJECT_EMPTY,
+        feedback_dialog::project_too_big_for_form(),
+        feedback_dialog::project_empty(),
     ] {
         assert!(!t.contains("  "), "{t}");
     }
-    assert!(feedback_dialog::PROJECT_TOO_BIG_FOR_FORM.contains("25 MB"));
+    assert!(feedback_dialog::project_too_big_for_form().contains("25 MB"));
     assert_eq!(
-        feedback_dialog::PROJECT_EMPTY,
+        feedback_dialog::project_empty(),
         "Das Projekt ist leer und wird nicht mitgeschickt."
     );
 }
@@ -699,10 +701,10 @@ fn send_with_limits(prefix: &str, upload: u64, total: u64) -> (Rig, PathBuf) {
         StartFinding::Crashed(vec![report(d, "0.2.0-dev.1", Some(doc))])
     });
     r.app.feedback_mut().set_upload_limits(upload, total);
-    r.click(AS_FEEDBACK);
+    r.click(&as_feedback());
     r.type_text("Beim Extrudieren ist es abgestürzt.");
-    r.click(PROJECT_CHECKBOX);
-    r.click(OPEN_BROWSER);
+    r.click(&project_checkbox());
+    r.click(&open_browser());
     let bundle = r.opened.lock().unwrap().first().cloned().expect("Ordner");
     (r, bundle)
 }
@@ -717,7 +719,7 @@ fn assert_project_not_offered_for_upload(r: &mut Rig, bundle: &Path) {
         r.texts()
     );
     assert!(
-        r.sees(feedback_dialog::PROJECT_TOO_BIG_FOR_FORM),
+        r.sees(&feedback_dialog::project_too_big_for_form()),
         "{:?}",
         r.texts()
     );
@@ -750,7 +752,7 @@ fn zip_within_the_limits_is_offered() {
     let sent = r.app.feedback_mut().sent.clone().unwrap();
     assert_eq!(sent.project.as_deref(), Some("Halter.pcad.zip"));
     assert!(!sent.project_too_big_for_form);
-    assert!(!r.sees(feedback_dialog::PROJECT_TOO_BIG_FOR_FORM));
+    assert!(!r.sees(&feedback_dialog::project_too_big_for_form()));
 }
 
 #[test]
@@ -778,7 +780,7 @@ fn empty_project_is_not_packed_and_says_so() {
             }
             StartFinding::Crashed(vec![report(d, "0.2.0-dev.1", Some(doc))])
         });
-        r.click(AS_FEEDBACK);
+        r.click(&as_feedback());
         assert!(
             !r.app
                 .feedback_mut()
@@ -786,9 +788,9 @@ fn empty_project_is_not_packed_and_says_so() {
                 .contains(&Part::Projektdatei),
             "{prefix}"
         );
-        assert!(r.sees(feedback_dialog::PROJECT_EMPTY), "{:?}", r.texts());
+        assert!(r.sees(&feedback_dialog::project_empty()), "{:?}", r.texts());
         r.type_text("Beim Extrudieren ist es abgestürzt.");
-        r.click(OPEN_BROWSER);
+        r.click(&open_browser());
         let bundle = r.opened.lock().unwrap().first().cloned().unwrap();
         assert!(!bundle.join("Leer.pcad.zip").exists(), "{prefix}");
     }
@@ -802,7 +804,7 @@ fn project_is_only_offered_for_a_pcad_folder() {
         std::fs::write(doc.join("modell.json"), "{}").unwrap();
         StartFinding::Crashed(vec![report(d, "0.2.0-dev.1", Some(doc))])
     });
-    r.click(AS_FEEDBACK);
+    r.click(&as_feedback());
     let fb = r.app.feedback_mut();
     assert!(fb.open);
     assert!(fb.shown_parts().contains(&Part::Absturzbericht));
@@ -820,16 +822,20 @@ fn too_big_project_is_not_copied_and_says_so() {
     });
     // Kleine Grenze: die Testdatei (10 Byte) ist darüber.
     r.app.feedback_mut().set_project_limit(5);
-    r.click(AS_FEEDBACK);
+    r.click(&as_feedback());
     assert!(
         !r.app
             .feedback_mut()
             .shown_parts()
             .contains(&Part::Projektdatei)
     );
-    assert!(r.sees(feedback_dialog::PROJECT_TOO_BIG), "{:?}", r.texts());
+    assert!(
+        r.sees(&feedback_dialog::project_too_big()),
+        "{:?}",
+        r.texts()
+    );
     assert_eq!(
-        feedback_dialog::PROJECT_TOO_BIG,
+        feedback_dialog::project_too_big(),
         "Die Projektdatei ist zu groß zum Mitschicken."
     );
     assert_eq!(feedback_dialog::PROJECT_MAX_BYTES, 200 * 1024 * 1024);
@@ -840,14 +846,14 @@ fn too_big_project_is_not_copied_and_says_so() {
 #[test]
 fn view_toggles_to_hide_and_back() {
     let mut r = Rig::with("planora-rueckfrage-umschalten", SIZE, crashed);
-    assert_eq!(HIDE, "Bericht ausblenden");
-    assert!(r.sees(VIEW) && !r.sees(HIDE));
-    r.click(VIEW);
-    assert!(r.sees(HIDE) && !r.sees(VIEW), "{:?}", r.texts());
-    assert!(r.sees_part("Ablauf (Backtrace)"), "Bericht sichtbar");
-    r.click(HIDE);
-    assert!(r.sees(VIEW) && !r.sees(HIDE));
-    assert!(!r.sees_part("Ablauf (Backtrace)"), "wieder ausgeblendet");
+    assert_eq!(hide(), "Bericht ausblenden");
+    assert!(r.sees(&view()) && !r.sees(&hide()));
+    r.click(&view());
+    assert!(r.sees(&hide()) && !r.sees(&view()), "{:?}", r.texts());
+    assert!(r.sees_part("Backtrace:"), "Bericht sichtbar");
+    r.click(&hide());
+    assert!(r.sees(&view()) && !r.sees(&hide()));
+    assert!(!r.sees_part("Backtrace:"), "wieder ausgeblendet");
     assert!(r.notice_shown());
 }
 
@@ -862,7 +868,7 @@ fn as_feedback_moves_the_offered_reports_to_sent_and_they_do_not_come_back() {
         StartFinding::Crashed(vec![b, a])
     });
     assert!(crash::companion_path(&offered[0]).exists());
-    r.click(AS_FEEDBACK);
+    r.click(&as_feedback());
     let sent = r.crash_dir().join(crash::SENT_DIR);
     assert_eq!(crash::SENT_DIR, "gesendet");
     for p in &offered {
@@ -895,7 +901,7 @@ fn delete_and_cleanup_remove_the_companion_file_too() {
     });
     let side = crash::companion_path(&gone[0]);
     assert!(side.exists());
-    r.click(DELETE);
+    r.click(&delete());
     assert!(!gone[0].exists() && !side.exists());
     assert!(
         reports_in(&r.crash_dir()).is_empty(),
@@ -938,7 +944,7 @@ fn as_feedback_keeps_the_reports_when_the_feedback_window_does_not_open() {
     // Etwas hält das Rückmeldungs-Fenster zurück (offene Rückfrage der App).
     let tab = r.app.ws_mut().active_tab().id;
     r.app.ws_mut().prompt = Some(planora_app::workspace::Prompt::AutosaveOffer { tab });
-    r.click(AS_FEEDBACK);
+    r.click(&as_feedback());
     assert!(!r.app.feedback_mut().open, "Fenster blockiert");
     assert!(offered[0].is_file(), "Bericht bleibt liegen");
     let sent = r.crash_dir().join(crash::SENT_DIR);
@@ -946,7 +952,7 @@ fn as_feedback_keeps_the_reports_when_the_feedback_window_does_not_open() {
     assert!(r.notice_shown(), "Rückfrage bleibt stehen");
     // Ohne Hindernis klappt es beim nächsten Klick (der Klick kam also an).
     r.app.ws_mut().prompt = None;
-    r.click(AS_FEEDBACK);
+    r.click(&as_feedback());
     assert!(r.app.feedback_mut().open);
     assert!(!offered[0].exists(), "jetzt verschoben");
 }

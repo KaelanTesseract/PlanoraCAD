@@ -2295,7 +2295,7 @@ fn full_ellipses_end_exactly_at_two_pi() {
         );
         let (_, d) = read_of(&m);
         let name = kind.label();
-        for (e, _) in ents(&d, name) {
+        for (e, _) in ents(&d, &name) {
             if e.kind == "ELLIPSE" {
                 ellipses += 1;
                 assert_eq!(

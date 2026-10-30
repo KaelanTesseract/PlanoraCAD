@@ -6,6 +6,7 @@
 use super::analytic::{EdgeGeom, VolumeModel};
 use super::chain::{CHAIN_ANGLE, leaving_direction};
 use super::error::BlendError;
+use super::topo::role_label;
 use super::topo::{NEAR_TANGENT_ANGLE, face_name, outward_normal, vertex_faces};
 use crate::boolean::{
     Containment, CurveSurface, FaceGeom, Piece, Seg, SurfaceIntersection, curve_surface_roots,
@@ -16,6 +17,7 @@ use crate::geometry::{Curve, Surface, UvRect};
 use crate::ids::Id;
 use crate::topology::{Face, FaceTag, Solid, Vertex};
 use crate::validate::validate_with;
+use planora_i18n::tr;
 use planora_math::{DVec3, PI, Tolerance};
 use std::collections::{BTreeMap, HashMap};
 
@@ -99,9 +101,9 @@ fn on_curve(curve: &Curve, t: f64, p: DVec3, tol: &Tolerance) -> bool {
 pub(crate) fn three_faces(solid: &Solid, v: Id<Vertex>) -> Result<Vec<Id<Face>>, BlendError> {
     let faces = vertex_faces(solid, v);
     if faces.len() != 3 {
-        return Err(BlendError::Corner(format!(
-            "An der Ecke treffen {} Flächen zusammen; unterstützt sind drei",
-            faces.len()
+        return Err(BlendError::Corner(tr!(
+            "kernel-blend-corner-face-count",
+            n = faces.len()
         )));
     }
     Ok(faces)
@@ -164,10 +166,10 @@ fn check_transversal_end(
         let ns = outward_normal(&solid.faces[side], vp);
         // NaN (Normale nicht bestimmbar) zählt wie „glatt“.
         if !(nc.cross(ns).length() >= NEAR_TANGENT_ANGLE.sin()) {
-            return Err(BlendError::Unsupported(format!(
-                "Die Fläche „{}“ setzt an der Ecke die Fläche „{}“ glatt fort; dort lässt sich die Rundung oder Fase nicht abschließen (fortsetzen lässt sie sich nur zusammen mit einer glatt anschließenden Kante, etwa über „Tangentenkette“)",
-                face_name(solid, c),
-                face_name(solid, side)
+            return Err(BlendError::Unsupported(tr!(
+                "kernel-blend-face-continues-smooth",
+                a = role_label(&face_name(solid, c)),
+                b = role_label(&face_name(solid, side))
             )));
         }
     }
@@ -269,9 +271,9 @@ pub fn cap_cut(
         .filter(|f| *f != g.sides.a.face && *f != g.sides.b.face)
         .collect();
     if others.len() != 1 {
-        return Err(BlendError::Corner(
-            "Die Kante grenzt an der Ecke nicht an zwei der drei Flächen".into(),
-        ));
+        return Err(BlendError::Corner(tr!(
+            "kernel-blend-edge-not-two-of-three"
+        )));
     }
     let c = others[0];
     let vp = solid.vertices[v].point;
@@ -281,9 +283,9 @@ pub fn cap_cut(
     check_transversal_end(solid, g, c, vp)?;
     let (sa, sb, curve) =
         cut_with(g, at_end, &solid.faces[c].surface, vp, tol).ok_or_else(|| {
-            BlendError::Unsupported(format!(
-                "Die Rundung lässt sich an der Fläche „{}“ nicht abschließen",
-                face_name(solid, c)
+            BlendError::Unsupported(tr!(
+                "kernel-blend-cannot-end-on-face",
+                face = role_label(&face_name(solid, c))
             ))
         })?;
     Ok(EndCut {
@@ -296,7 +298,7 @@ pub fn cap_cut(
 
 /// Abschluss einer Hautfläche (Task 14, P5) an der dritten Fläche `c` der Ecke `v`: nur an einer
 /// Ebene senkrecht zur Kante durch die Ecke, und nur wenn der exakte Endquerschnitt in ihr liegt;
-/// sonst [`OBLIQUE_END`](super::march::OBLIQUE_END).
+/// sonst [`oblique_end`](super::march::oblique_end).
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
 fn skin_cap(
     solid: &Solid,
@@ -308,7 +310,7 @@ fn skin_cap(
 ) -> Result<EndCut, BlendError> {
     let vp = solid.vertices[v].point;
     let d = leaving_direction(solid, g.edge, v);
-    let oblique = || BlendError::Unsupported(super::march::OBLIQUE_END.into());
+    let oblique = || BlendError::Unsupported(super::march::oblique_end());
     let Surface::Plane { frame } = &solid.faces[c].surface else {
         return Err(oblique());
     };
@@ -378,16 +380,14 @@ fn smooth_pair(
     }
     three_faces(solid, v)?;
     if gi.convex != gj.convex {
-        return Err(BlendError::Unsupported(
-            "Am glatten Übergang wechselt die Kante zwischen konvex und konkav".into(),
-        ));
+        return Err(BlendError::Unsupported(tr!("kernel-blend-smooth-switch")));
     }
     let (ci, cj) = (section_cut(gi, ei), section_cut(gj, ej));
     let weld = ON_CURVE_FACTOR * blend_tol(solid, geoms, tol).linear;
     if !same_cut(&ci.curve, &cj.curve, weld) {
-        return Err(BlendError::Unsupported(
-            "Die Rundung lässt sich am glatten Übergang nicht fortsetzen".into(),
-        ));
+        return Err(BlendError::Unsupported(tr!(
+            "kernel-blend-smooth-no-continue"
+        )));
     }
     Ok(Some((ci, cj)))
 }
@@ -405,7 +405,7 @@ fn vertex_pair(
         return Ok(vec![(x.0, x.1, cx), (y.0, y.1, cy)]);
     }
     if !(geoms[x.0].analytic && geoms[y.0].analytic) {
-        return Err(BlendError::Corner(super::march::VARIABLE_CORNER.into()));
+        return Err(BlendError::Corner(super::march::variable_corner()));
     }
     super::corner::miter_pair(solid, geoms, v, x, y, tol)
 }
@@ -420,7 +420,7 @@ fn corner_many(
     tol: &Tolerance,
 ) -> Result<Vec<(usize, bool, EndCut)>, BlendError> {
     if list.iter().any(|&(i, _)| !geoms[i].analytic) {
-        return Err(BlendError::Corner(super::march::VARIABLE_CORNER.into()));
+        return Err(BlendError::Corner(super::march::variable_corner()));
     }
     let index = plan.corners.len() + 1;
     let (cuts, piece, volume) = super::corner::corner_three(solid, geoms, v, list, index, tol)?;
@@ -463,7 +463,7 @@ pub fn end_cuts(solid: &Solid, geoms: &[EdgeGeom], tol: &Tolerance) -> Result<En
             }
         }
     }
-    let missing = || BlendError::ResultInvalid("Ein Abschluss der Rundung fehlt".into());
+    let missing = || BlendError::ResultInvalid(tr!("kernel-blend-end-missing"));
     plan.starts = starts
         .into_iter()
         .map(|c| c.ok_or_else(missing))
@@ -488,8 +488,9 @@ fn retarget(
     let old = if at_end { seg.t1 } else { seg.t0 };
     let t = param_near(&seg.curve, p, old);
     if !on_curve(&seg.curve, t, p, tol) {
-        return Err(BlendError::Unsupported(format!(
-            "Eine Kante der Fläche „{face}“ passt nicht zur Rundung"
+        return Err(BlendError::Unsupported(tr!(
+            "kernel-blend-edge-mismatch",
+            face = role_label(face)
         )));
     }
     let (t0, t1) = if at_end { (seg.t0, t) } else { (t, seg.t1) };
@@ -534,8 +535,9 @@ fn reconnect(
                 // NaN gilt als „treffen sich nicht“.
                 let gap = segs[prev].end().distance(segs[k].start());
                 if !(gap <= ON_CURVE_FACTOR * tol.linear) {
-                    return Err(BlendError::Corner(format!(
-                        "Die Rundungen treffen sich auf der Fläche „{face}“ nicht"
+                    return Err(BlendError::Corner(tr!(
+                        "kernel-blend-blends-dont-meet",
+                        face = role_label(face)
                     )));
                 }
             }
@@ -576,8 +578,9 @@ fn insert_cap(
             } else if on(&lp[j], cap.end(), true) && on(&lp[k], cap.start(), false) {
                 cap.reversed()
             } else {
-                return Err(BlendError::Unsupported(format!(
-                    "Die Abschlusskurve passt nicht zur Fläche „{face}“"
+                return Err(BlendError::Unsupported(tr!(
+                    "kernel-blend-cap-mismatch",
+                    face = role_label(face)
                 )));
             };
             lp[j] = retarget(&lp[j], oriented.start(), true, face, tol)?;
@@ -586,8 +589,9 @@ fn insert_cap(
             return Ok(());
         }
     }
-    Err(BlendError::ResultInvalid(format!(
-        "Die Ecke der Fläche „{face}“ wurde nicht gefunden"
+    Err(BlendError::ResultInvalid(tr!(
+        "kernel-blend-corner-not-found",
+        face = role_label(face)
     )))
 }
 
@@ -691,9 +695,7 @@ fn contact_span_ok(range: (f64, f64), s0: f64, s1: f64) -> bool {
 
 /// Meldung für Löcher und Flächen, die in den Bereich der Rundung reichen.
 fn in_blend_area(what: &str) -> BlendError {
-    BlendError::Unsupported(format!(
-        "{what} liegt im Bereich der Rundung; bitte ein kleineres Maß wählen"
-    ))
+    BlendError::Unsupported(tr!("kernel-blend-in-area", what = what))
 }
 
 /// Liegen alle Löcher einer umgebauten Fläche noch ganz innerhalb ihrer neuen Außenschleife, ohne
@@ -709,7 +711,7 @@ fn check_holes(
     let Some((outer, holes)) = loops.split_first() else {
         return Ok(());
     };
-    let refuse = || in_blend_area(&format!("Ein Loch der Fläche „{face}“"));
+    let refuse = || in_blend_area(&tr!("kernel-blend-what-hole", face = role_label(face)));
     let shape = FaceGeom {
         surface: surface.clone(),
         same_sense,
@@ -784,8 +786,9 @@ fn check_crossings(
                 .iter()
                 .any(|&(fa, _)| !shared(a.at(fa)))
             {
-                return Err(in_blend_area(&format!(
-                    "Eine Aussparung oder Kante der Fläche „{face}“"
+                return Err(in_blend_area(&tr!(
+                    "kernel-blend-what-cutout",
+                    face = role_label(face)
                 )));
             }
         }
@@ -960,14 +963,19 @@ fn check_piercing(
             }
         };
         if hit {
-            return Err(in_blend_area(&format!("Die Fläche „{face}“")));
+            return Err(in_blend_area(&tr!(
+                "kernel-blend-what-face",
+                face = role_label(face)
+            )));
         }
     }
     Ok(())
 }
 
 /// Meldung für Körper mit mehreren Schalen (Hohlraum oder getrennte Teile).
-pub const CAVITY: &str = "Der Körper hat mehrere Schalen (etwa einen Hohlraum); Rundungen und Fasen an solchen Körpern werden noch nicht unterstützt";
+pub fn cavity() -> String {
+    tr!("kernel-blend-cavity")
+}
 
 /// Hat der Körper mehr als eine Schale mit Flächen (Hohlraum oder getrennte Teile)? Eine solche
 /// Schale berührt keine Fläche der Kante; ob sie im abgetragenen Bereich liegt oder die neue
@@ -993,21 +1001,21 @@ pub fn assemble(
         || plan.ends.len() != geoms.len()
         || roles.len() != geoms.len()
     {
-        return Err(BlendError::ResultInvalid(
-            "Kanten, Abschlüsse und Flächennamen passen nicht zusammen".into(),
-        ));
+        return Err(BlendError::ResultInvalid(tr!(
+            "kernel-blend-mismatch-names"
+        )));
     }
     if has_cavity(solid) {
-        return Err(BlendError::Unsupported(CAVITY.into()));
+        return Err(BlendError::Unsupported(cavity()));
     }
     let btol = blend_tol(solid, geoms, tol);
     let weld = ON_CURVE_FACTOR * btol.linear;
     for cut in plan.starts.iter().chain(&plan.ends) {
         // NaN gilt als zu kurz.
         if !(cut.curve.length() > weld) {
-            return Err(BlendError::InvalidParameter(format!(
-                "Die Abschlusskurve ist nicht länger als {} mm; das Maß ist zu klein",
-                super::show_num(weld)
+            return Err(BlendError::InvalidParameter(tr!(
+                "kernel-blend-cap-too-short",
+                mm = super::show_num(weld)
             )));
         }
     }
@@ -1065,8 +1073,9 @@ pub fn assemble(
                 .vertices
                 .get(*v)
                 .ok_or_else(|| {
-                    BlendError::ResultInvalid(format!(
-                        "Die Ecke der Fläche „{name}“ wurde nicht gefunden"
+                    BlendError::ResultInvalid(tr!(
+                        "kernel-blend-corner-not-found-name",
+                        name = role_label(&name)
                     ))
                 })?
                 .point;
@@ -1154,13 +1163,16 @@ pub fn assemble(
             match super::overlap::crossing(&pieces[k], blend, tol, &btol) {
                 super::overlap::Crossing::Clear => {}
                 super::overlap::Crossing::Hit => {
-                    return Err(in_blend_area(&format!("Die Fläche „{name}“")));
+                    return Err(in_blend_area(&tr!(
+                        "kernel-blend-what-face-name",
+                        name = role_label(name)
+                    )));
                 }
                 super::overlap::Crossing::Unknown => {
-                    return Err(BlendError::Unsupported(format!(
-                        "Die Fläche „{name}“ kommt der neuen Fläche „{new_name}“ nahe; ob sie \
-                         sich durchdringen, lässt sich nicht sicher prüfen. Bitte ein kleineres \
-                         Maß wählen"
+                    return Err(BlendError::Unsupported(tr!(
+                        "kernel-blend-near-new-face",
+                        name = role_label(name),
+                        new_name = role_label(new_name)
                     )));
                 }
             }

@@ -9,6 +9,7 @@
 use crate::read::error::StepReadError;
 use crate::read::index::StepFile;
 use crate::read::value::{Entity, Value};
+use planora_i18n::tr;
 use std::f64::consts::PI;
 
 /// Genauigkeit, wenn die Datei keine nennt (mm).
@@ -52,14 +53,14 @@ impl LengthUnit {
         }
     }
 
-    /// Name für die Oberfläche.
+    /// Name für die Oberfläche (in der aktuellen Sprache).
     pub fn label(self) -> String {
         match self {
-            LengthUnit::Millimeter => "Millimeter".into(),
-            LengthUnit::Zentimeter => "Zentimeter".into(),
-            LengthUnit::Meter => "Meter".into(),
-            LengthUnit::Zoll => "Zoll".into(),
-            LengthUnit::Other { mm } => format!("1 Einheit = {} mm", decimal(mm)),
+            LengthUnit::Millimeter => tr!("step-unit-mm"),
+            LengthUnit::Zentimeter => tr!("step-unit-cm"),
+            LengthUnit::Meter => tr!("step-unit-m"),
+            LengthUnit::Zoll => tr!("step-unit-inch"),
+            LengthUnit::Other { mm } => tr!("step-unit-other", mm = decimal(mm)),
         }
     }
 
@@ -86,7 +87,7 @@ fn decimal(x: f64) -> String {
         let s = format!("{x:.6}");
         s.trim_end_matches('0').trim_end_matches('.').to_string()
     };
-    s.replace('.', ",")
+    planora_i18n::localize_decimal(&s)
 }
 
 /// Einheiten und Genauigkeit eines Kontexts.
@@ -205,15 +206,12 @@ fn measure_args(e: &Entity) -> Option<(&Value, &Value)> {
 /// Art und Faktor einer Einheit: Länge in mm, Winkel in rad; andere Arten mit Faktor 1.
 fn unit_value(file: &StepFile, id: u64, depth: usize) -> Result<(Kind, f64), StepReadError> {
     if depth > MAX_UNIT_DEPTH {
-        return Err(file.fail(
-            id,
-            format!("Die Einheit ist zu tief verschachtelt (höchstens {MAX_UNIT_DEPTH} Stufen)."),
-        ));
+        return Err(file.fail(id, tr!("step-r-unit-too-deep", max = MAX_UNIT_DEPTH)));
     }
     let e = file.entity(id)?;
     if let Some(args) = e.part("SI_UNIT") {
         let Some((prefix, name)) = si_args(args) else {
-            return Err(file.fail(id, "Eine Einheit ist unvollständig angegeben (SI_UNIT)."));
+            return Err(file.fail(id, tr!("step-r-unit-incomplete")));
         };
         let prefix = if prefix.is_unset() {
             None
@@ -229,10 +227,7 @@ fn unit_value(file: &StepFile, id: u64, depth: usize) -> Result<(Kind, f64), Ste
         let Some(mm) = prefix_mm(prefix) else {
             return Err(file.fail(
                 id,
-                format!(
-                    "Der Vorsatz „{}“ ist unbekannt.",
-                    prefix.unwrap_or_default()
-                ),
+                tr!("step-r-unit-prefix", prefix = prefix.unwrap_or_default()),
             ));
         };
         return Ok(match kind {
@@ -242,12 +237,12 @@ fn unit_value(file: &StepFile, id: u64, depth: usize) -> Result<(Kind, f64), Ste
     }
     if let Some(args) = e.part("CONVERSION_BASED_UNIT") {
         let Some(factor) = args.last() else {
-            return Err(file.fail(id, "Bei einer umgerechneten Einheit fehlt der Umrechnungswert (CONVERSION_BASED_UNIT)."));
+            return Err(file.fail(id, tr!("step-r-unit-no-conversion")));
         };
         let m = factor.reference().map_err(|msg| file.fail(id, msg))?;
         let me = file.entity(m)?;
         let Some((value, unit)) = measure_args(&me) else {
-            return Err(file.fail(m, "Erwartet wird ein Wert mit Einheit."));
+            return Err(file.fail(m, tr!("step-r-expected-measure")));
         };
         let value = value.measure().map_err(|msg| file.fail(m, msg))?;
         let unit = unit.reference().map_err(|msg| file.fail(m, msg))?;
@@ -260,23 +255,14 @@ fn unit_value(file: &StepFile, id: u64, depth: usize) -> Result<(Kind, f64), Ste
             base
         };
         if base != declared {
-            return Err(file.fail(
-                id,
-                "Die Einheit wird aus einer Einheit anderer Art umgerechnet.",
-            ));
+            return Err(file.fail(id, tr!("step-r-unit-other-kind")));
         }
         let x = value * f;
         if !x.is_finite() {
-            return Err(file.fail(
-                id,
-                "Der Umrechnungswert der Einheit ist keine endliche Zahl.",
-            ));
+            return Err(file.fail(id, tr!("step-r-unit-factor-not-finite")));
         }
         if x <= 0.0 {
-            return Err(file.fail(
-                id,
-                "Der Umrechnungswert der Einheit ist nicht größer als null.",
-            ));
+            return Err(file.fail(id, tr!("step-r-unit-factor-not-positive")));
         }
         // Bekannte Einheiten je Stufe genau (2,54 · 10 mm = 25,4 mm, Grad = π/180), damit
         // verschachtelte Einheiten und mehrere Schreibweisen derselben Einheit übereinstimmen.
@@ -311,7 +297,7 @@ pub fn context_units(file: &StepFile, context: u64) -> Result<Units, StepReadErr
     if let Some(args) = ctx.part("GLOBAL_UNIT_ASSIGNED_CONTEXT") {
         let list = args
             .first()
-            .ok_or_else(|| file.fail(context, "Die Liste der Einheiten fehlt."))?
+            .ok_or_else(|| file.fail(context, tr!("step-r-unit-list-missing")))?
             .refs()
             .map_err(|m| file.fail(context, m))?;
         for u in list {
@@ -323,10 +309,7 @@ pub fn context_units(file: &StepFile, context: u64) -> Result<Units, StepReadErr
             };
             match slot {
                 Some(old) if *old != f => {
-                    return Err(file.fail(
-                        context,
-                        "Der Kontext nennt mehrere verschiedene Einheiten derselben Art.",
-                    ));
+                    return Err(file.fail(context, tr!("step-r-unit-ambiguous")));
                 }
                 _ => *slot = Some(f),
             }
@@ -342,13 +325,13 @@ pub fn context_units(file: &StepFile, context: u64) -> Result<Units, StepReadErr
     if let Some(args) = ctx.part("GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT") {
         let list = args
             .first()
-            .ok_or_else(|| file.fail(context, "Die Liste der Genauigkeiten fehlt."))?
+            .ok_or_else(|| file.fail(context, tr!("step-r-accuracy-list-missing")))?
             .refs()
             .map_err(|m| file.fail(context, m))?;
         for u in list {
             let e = file.entity(u)?;
             let Some((value, unit)) = measure_args(&e) else {
-                return Err(file.fail(u, "Erwartet wird eine Genauigkeit mit Einheit."));
+                return Err(file.fail(u, tr!("step-r-expected-accuracy")));
             };
             let unit = unit.reference().map_err(|m| file.fail(u, m))?;
             let (kind, f) = unit_value(file, unit, 0)?;

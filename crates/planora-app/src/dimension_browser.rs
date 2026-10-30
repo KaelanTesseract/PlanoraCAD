@@ -11,33 +11,42 @@ use crate::browser::{body_indent, error_color, row};
 use crate::dialog::{Dialog, DialogSize};
 use crate::dimension_dialog;
 use crate::dimension_state::resolve_in;
-use crate::drawing_browser::{READ_ONLY_HINT, open_drawing, select_drawing};
+use crate::drawing_browser::{open_drawing, read_only_hint, select_drawing};
 use crate::drawing_state::WorkArea;
 use crate::drawing_view::view_names;
 use crate::icons::{paint_dimension_icon, paint_view_icon};
+use crate::msg::Msg;
 use crate::state::AppState;
 use crate::theme;
 use planora_drawing::DrawingId;
 use planora_drawing::annotate::dimension_text;
 use planora_drawing::dimension::{DimError, DimId, DimKind, DimSpec, Measured};
+use planora_i18n::tr;
 
 /// Text, solange die Zeichnung kein Maß hat.
-pub const EMPTY_TEXT: &str =
-    "Noch keine Maße. Mit dem Werkzeug „Maß“ oder „Maße vorschlagen“ lassen sich welche anlegen.";
+pub fn empty_text() -> String {
+    tr!("dim-empty")
+}
 /// Rückfrage vor dem Löschen eines Maßes, das zu einer Kette gehört.
-pub const CHAIN_ASK: &str = "Dieses Maß gehört zu einer Kette; die anderen Maße bleiben";
+pub fn chain_ask() -> Msg {
+    crate::msg!("dim-chain-ask")
+}
 /// Meldung, wenn Zeichnung oder Maß inzwischen fehlen.
-const GONE: &str = "Das Maß gibt es nicht mehr.";
+fn gone() -> Msg {
+    crate::msg!("dim-gone")
+}
 /// Hinweis, wenn für ein Maß kein Messergebnis vorliegt.
-const NO_RESULT: &str = "Das Maß lässt sich nicht berechnen.";
+fn no_result() -> String {
+    tr!("dim-no-result")
+}
 
 /// Rückfrage „Maß löschen“.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DimDeletePlan {
     pub drawing: DrawingId,
     pub dim: DimId,
-    /// Text der Rückfrage.
-    pub text: String,
+    /// Text der Rückfrage (übersetzt erst beim Zeichnen).
+    pub text: Msg,
 }
 
 /// Text einer Zeile: Maßtext wie auf dem Blatt (Vorsatz, Wert, Toleranz; gestapelte Werte als
@@ -62,7 +71,7 @@ pub fn lost_reason(result: Option<&Result<Measured, DimError>>) -> Option<String
     match result {
         Some(Ok(_)) => None,
         Some(Err(e)) => Some(e.to_string()),
-        None => Some(NO_RESULT.into()),
+        None => Some(no_result()),
     }
 }
 
@@ -90,20 +99,20 @@ pub fn request_delete_dimension(
     state: &mut AppState,
     drawing: DrawingId,
     dim: DimId,
-) -> Result<(), String> {
+) -> Result<(), Msg> {
     let Some(spec) = state
         .document
         .drawing(drawing)
         .and_then(|d| d.dimension(dim))
     else {
-        return Err(GONE.into());
+        return Err(gone());
     };
     if spec.chain.is_some() {
         state.message = None;
         state.pending_delete_dimension = Some(DimDeletePlan {
             drawing,
             dim,
-            text: CHAIN_ASK.into(),
+            text: chain_ask(),
         });
         return Ok(());
     }
@@ -115,12 +124,12 @@ pub fn apply_delete_dimension(
     state: &mut AppState,
     drawing: DrawingId,
     dim: DimId,
-) -> Result<(), String> {
+) -> Result<(), Msg> {
     state.pending_delete_dimension = None;
     state
         .document
         .delete_dimension(drawing, dim)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| Msg::Raw(e.to_string()))?;
     if state.drawing_ui.area == WorkArea::Drawing(drawing)
         && state.drawing_ui.selected_dim == Some(dim)
     {
@@ -208,11 +217,11 @@ pub(crate) fn windows(ctx: &egui::Context, state: &mut AppState) {
 
 fn section(ui: &mut egui::Ui, state: &mut AppState, id: DrawingId, read_only: bool) {
     ui.add_space(theme::SPACE_3);
-    theme::section_header(ui, "Maße", theme::SUB_HEADER_H);
+    theme::section_header(ui, &tr!("dim-section"), theme::SUB_HEADER_H);
     ui.add_space(theme::SPACE_1);
     let groups = groups_of(state, id);
     if groups.is_empty() {
-        ui.weak(EMPTY_TEXT);
+        ui.weak(empty_text());
     }
     let mut action = None;
     for g in &groups {
@@ -233,9 +242,7 @@ fn section(ui: &mut egui::Ui, state: &mut AppState, id: DrawingId, read_only: bo
             );
             let resp = match &r.lost {
                 Some(reason) => resp.on_hover_text(reason),
-                None => resp.on_hover_text(
-                    "Klick wählt das Maß; Doppelklick öffnet „Maß bearbeiten“; Rechtsklick zeigt weitere Befehle.",
-                ),
+                None => resp.on_hover_text(tr!("dim-row-tip")),
             };
             if resp.double_clicked() {
                 action = Some(Action::Edit(dim));
@@ -244,7 +251,11 @@ fn section(ui: &mut egui::Ui, state: &mut AppState, id: DrawingId, read_only: bo
             }
             resp.context_menu(|ui| {
                 if ui
-                    .button(if read_only { "Ansehen" } else { "Bearbeiten" })
+                    .button(if read_only {
+                        tr!("dim-view")
+                    } else {
+                        tr!("tree-edit")
+                    })
                     .clicked()
                 {
                     action = Some(Action::Edit(dim));
@@ -252,8 +263,8 @@ fn section(ui: &mut egui::Ui, state: &mut AppState, id: DrawingId, read_only: bo
                 }
                 ui.separator();
                 if ui
-                    .add_enabled(!read_only, egui::Button::new("Löschen"))
-                    .on_disabled_hover_text(READ_ONLY_HINT)
+                    .add_enabled(!read_only, egui::Button::new(tr!("action-delete")))
+                    .on_disabled_hover_text(read_only_hint())
                     .clicked()
                 {
                     action = Some(Action::Delete(dim));
@@ -279,7 +290,7 @@ fn run(state: &mut AppState, drawing: DrawingId, action: Action, read_only: bool
         Action::Delete(_) if read_only => {}
         Action::Delete(dim) => {
             if let Err(e) = request_delete_dimension(state, drawing, dim) {
-                state.message = Some(e);
+                state.message = Some(e.text());
             }
         }
     }
@@ -302,29 +313,30 @@ fn delete_window(ctx: &egui::Context, state: &mut AppState) {
     }
     let (mut confirm, mut cancel) = (false, false);
     let mut open = true;
-    Dialog::new("Rückfrage", DialogSize::Prompt)
+    Dialog::new(tr!("tree-confirm-title"), DialogSize::Prompt)
         .id(egui::Id::new("planora-delete-dimension"))
         .open(&mut open)
         .show(ctx, |ui| {
-            ui.label(&plan.text);
+            ui.label(plan.text.text());
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 if ui
                     .button(
-                        egui::RichText::new("Löschen").color(error_color(ui.visuals().dark_mode)),
+                        egui::RichText::new(tr!("action-delete"))
+                            .color(error_color(ui.visuals().dark_mode)),
                     )
                     .clicked()
                 {
                     confirm = true;
                 }
-                if ui.button("Abbrechen").clicked() {
+                if ui.button(tr!("common-cancel")).clicked() {
                     cancel = true;
                 }
             });
         });
     if confirm {
         if let Err(e) = apply_delete_dimension(state, plan.drawing, plan.dim) {
-            state.message = Some(e);
+            state.message = Some(e.text());
         }
     } else if cancel || !open {
         state.pending_delete_dimension = None;

@@ -7,6 +7,7 @@ use crate::model::{
 };
 use crate::refs::{FaceRef, first_face, resolve_edge, resolve_face};
 use planora_exchange::{ExchangeMesh, MeshTransform};
+use planora_i18n::tr;
 use planora_kernel::blend::{MAX_BLEND_EDGES, MAX_RADIUS_POINTS};
 use planora_kernel::boolean::BooleanError;
 use planora_kernel::{
@@ -74,7 +75,7 @@ fn in_range(v: f64) -> bool {
 /// Prüft die Zahlen eines Features gegen [`MAX_COORD_MM`], bevor der Kernel rechnet. Die
 /// Ausdehnung eines Grundkörpers (Lage plus Maß) muss ebenfalls im Bereich liegen.
 pub(crate) fn check_parameters(kind: &FeatureKind) -> Result<(), FeatureError> {
-    let out = |what: &str| Err(FeatureError::OutOfRange(what.to_string()));
+    let out = |what: String| Err(FeatureError::OutOfRange(what));
     let place = |origin: DVec3, extent: f64| {
         origin
             .to_array()
@@ -84,10 +85,10 @@ pub(crate) fn check_parameters(kind: &FeatureKind) -> Result<(), FeatureError> {
     match kind {
         FeatureKind::Box { size, origin } => {
             if !size.to_array().iter().all(|v| in_range(*v)) {
-                return out("Die Größe des Quaders");
+                return out(tr!("feature-what-box-size"));
             }
             if !place(*origin, size.abs().max_element()) {
-                return out("Der Quader");
+                return out(tr!("feature-what-box"));
             }
         }
         FeatureKind::Cylinder {
@@ -101,52 +102,52 @@ pub(crate) fn check_parameters(kind: &FeatureKind) -> Result<(), FeatureError> {
             origin,
         } => {
             if !(in_range(*radius) && in_range(*height)) {
-                return out("Radius oder Höhe");
+                return out(tr!("feature-what-radius-height"));
             }
             if !place(*origin, radius.abs().max(height.abs())) {
-                return out("Der Körper");
+                return out(tr!("feature-what-body"));
             }
         }
         FeatureKind::Sphere { radius, origin } => {
             if !in_range(*radius) {
-                return out("Der Radius");
+                return out(tr!("feature-what-radius"));
             }
             if !place(*origin, radius.abs()) {
-                return out("Die Kugel");
+                return out(tr!("feature-what-sphere"));
             }
         }
         FeatureKind::Extrude { height, .. } => {
             if !in_range(*height) {
-                return out("Die Höhe der Extrusion");
+                return out(tr!("feature-what-extrude-height"));
             }
         }
         FeatureKind::Move { delta, .. } => {
             if !delta.to_array().iter().all(|v| in_range(*v)) {
-                return out("Die Verschiebung");
+                return out(tr!("feature-what-move"));
             }
         }
         FeatureKind::Verrunden { edges, art, .. } => {
             if edges.is_empty() {
-                return Err(FeatureError::InvalidInput(
-                    "Es ist keine Kante gewählt".into(),
-                ));
+                return Err(FeatureError::InvalidInput(tr!("feature-no-edge")));
             }
             // Grenzen des Kernels schon hier: Eine feindliche Datei mit sehr vielen Kanten oder
             // Radienpunkten soll nicht erst jede Kante im Körper suchen lassen.
             if edges.len() > MAX_BLEND_EDGES {
-                return Err(FeatureError::InvalidInput(format!(
-                    "Zu viele Kanten (höchstens {MAX_BLEND_EDGES})"
+                return Err(FeatureError::InvalidInput(tr!(
+                    "feature-too-many-edges",
+                    max = MAX_BLEND_EDGES.to_string()
                 )));
             }
             if let BlendArt::RundungVariabel { punkte } = art
                 && punkte.len() > MAX_RADIUS_POINTS
             {
-                return Err(FeatureError::InvalidInput(format!(
-                    "Ein variabler Radius braucht 2 bis {MAX_RADIUS_POINTS} Punkte"
+                return Err(FeatureError::InvalidInput(tr!(
+                    "feature-radius-points",
+                    max = MAX_RADIUS_POINTS.to_string()
                 )));
             }
             if !art.numbers().iter().all(|v| in_range(*v)) {
-                return out("Ein Maß der Rundung oder Fase");
+                return out(tr!("feature-what-blend-size"));
             }
         }
         FeatureKind::MeshBody {
@@ -156,17 +157,13 @@ pub(crate) fn check_parameters(kind: &FeatureKind) -> Result<(), FeatureError> {
             ..
         } => {
             if !offset.to_array().iter().all(|v| in_range(*v)) {
-                return out("Die Position des Netz-Körpers");
+                return out(tr!("feature-what-mesh-position"));
             }
             if !(scale.is_finite() && (MIN_MESH_SCALE..=MAX_MESH_SCALE).contains(scale)) {
-                return Err(FeatureError::InvalidInput(
-                    "Der Maßstab muss zwischen 0,000001 und 1 000 000 liegen".into(),
-                ));
+                return Err(FeatureError::InvalidInput(tr!("feature-mesh-scale-range")));
             }
             if !(rotation.is_finite() && (rotation.length() - 1.0).abs() <= ROTATION_NORM_TOL) {
-                return Err(FeatureError::InvalidInput(
-                    "Die Drehung des Netz-Körpers ist ungültig".into(),
-                ));
+                return Err(FeatureError::InvalidInput(tr!("feature-mesh-rotation")));
             }
         }
         FeatureKind::Sketch(_)
@@ -187,7 +184,7 @@ fn check_extent(solid: &Solid) -> Result<(), FeatureError> {
     {
         Ok(())
     } else {
-        Err(FeatureError::OutOfRange("Der Körper".into()))
+        Err(FeatureError::OutOfRange(tr!("feature-what-body")))
     }
 }
 
@@ -205,7 +202,7 @@ pub(crate) fn check_mesh_extent(
     if inside {
         Ok(())
     } else {
-        Err(FeatureError::OutOfRange("Der Netz-Körper".into()))
+        Err(FeatureError::OutOfRange(tr!("feature-what-mesh")))
     }
 }
 
@@ -266,9 +263,7 @@ fn compute_unchecked(
             let a = visible_body(doc, visible, *target)?;
             let b = visible_body(doc, visible, *tool)?;
             if target == tool {
-                return Err(FeatureError::InvalidInput(
-                    "Ziel und Werkzeug müssen verschiedene Körper sein".into(),
-                ));
+                return Err(FeatureError::InvalidInput(tr!("feature-target-tool")));
             }
             let mut result = kernel
                 .boolean(a, b, *op)
@@ -354,12 +349,10 @@ fn boolean_error(a: &Solid, b: &Solid, e: &BooleanError) -> FeatureError {
         return FeatureError::Kernel(e.to_string());
     }
     let cause = e.to_string();
-    if cause.contains("; bitte ") {
-        FeatureError::Kernel(format!("Bei Körpern mit Freiformflächen: {cause}"))
+    if e.has_user_hint() {
+        FeatureError::Kernel(tr!("feature-freeform-prefix", cause = cause.to_string()))
     } else {
-        FeatureError::Kernel(format!(
-            "Bei Körpern mit Freiformflächen: {cause}; bitte Lage oder Maße eines Körpers leicht ändern"
-        ))
+        FeatureError::Kernel(tr!("feature-freeform-hint", cause = cause.to_string()))
     }
 }
 
@@ -378,7 +371,7 @@ fn blend_error(input: &Solid, e: &BlendError) -> FeatureError {
         BlendError::SpineLost | BlendError::Unsupported(_) | BlendError::TooExpensive
     );
     if is_freeform(input) && limit {
-        FeatureError::Kernel(format!("Bei Körpern mit Freiformflächen: {e}"))
+        FeatureError::Kernel(tr!("feature-freeform-prefix", cause = e.to_string()))
     } else {
         FeatureError::Kernel(e.to_string())
     }
@@ -448,7 +441,7 @@ fn sketch_error(e: planora_sketch::SketchError) -> FeatureError {
 fn input_sketch(doc: &Document, id: crate::model::FeatureId) -> Result<&Sketch, FeatureError> {
     doc.sketch_of(id).ok_or_else(|| {
         let name = doc.feature(id).map_or_else(String::new, |f| f.name.clone());
-        FeatureError::InvalidInput(format!("Feature „{name}“ ist keine Skizze"))
+        FeatureError::InvalidInput(tr!("feature-not-sketch", name = name.to_string()))
     })
 }
 
@@ -467,11 +460,12 @@ fn nth_profile(sk: &Sketch, n: usize) -> Result<planora_kernel::Profile, Feature
         }
     }
     Err(FeatureError::InvalidInput(if reasons.is_empty() {
-        format!("Profil {n} gibt es nicht")
+        tr!("feature-no-profile", n = n.to_string())
     } else {
-        format!(
-            "Profil {n} gibt es nicht; abgelehnte Kurvenzüge der Skizze: {}",
-            reasons.join("; ")
+        tr!(
+            "feature-no-profile-rejected",
+            n = n.to_string(),
+            reasons = (reasons.join("; ")).to_string()
         )
     }))
 }
@@ -556,9 +550,8 @@ fn compute_sketch(
         SketchPlane::Standard(p) => (p.frame(), sf.plane.clone()),
         SketchPlane::OnFace(r) => {
             let found = resolve_face(&solids, r, &tol)?;
-            let frame = plane_of_face(solids[found.body], found.face).ok_or_else(|| {
-                FeatureError::InvalidInput("Die Fläche für die Skizze ist nicht eben".into())
-            })?;
+            let frame = plane_of_face(solids[found.body], found.face)
+                .ok_or_else(|| FeatureError::InvalidInput(tr!("feature-face-not-flat")))?;
             let updated = FaceRef {
                 hint: found.hint,
                 ..r.clone()
@@ -589,14 +582,10 @@ fn compute_sketch(
         match sketch.solve().status {
             SolveStatus::Solved => {}
             SolveStatus::Conflicting => {
-                return Err(FeatureError::Sketch(
-                    "Mit den Werten der Formeln widersprechen sich Abhängigkeiten".into(),
-                ));
+                return Err(FeatureError::Sketch(tr!("sketch-formula-conflict")));
             }
             SolveStatus::NotConverged => {
-                return Err(FeatureError::Sketch(
-                    "Mit den Werten der Formeln lässt sich die Skizze nicht lösen".into(),
-                ));
+                return Err(FeatureError::Sketch(tr!("sketch-formula-unsolvable")));
             }
         }
     }
@@ -639,8 +628,8 @@ mod tests {
             other => panic!("{other:?}"),
         };
         let hinted = [
-            BooleanError::Unsupported(planora_kernel::boolean::TOO_EXPENSIVE.into()),
-            BooleanError::Unsupported(
+            BooleanError::TooExpensive,
+            BooleanError::FreeformLimit(
                 "Der Schnitt von Freiformfläche mit Zylinder wird nicht unterstützt: x".into(),
             ),
             BooleanError::AmbiguousContact,
@@ -677,6 +666,47 @@ mod tests {
         for e in plain_kinds {
             assert_eq!(text(&freeform, &plain, e.clone()), e.to_string());
         }
+    }
+
+    #[test]
+    fn the_freeform_hint_follows_the_error_kind_in_both_languages() {
+        use planora_i18n::{english, german, with_lang};
+        use planora_kernel::{Profile, ProfileLoop};
+        use planora_math::nurbs::NurbsCurve;
+        use planora_math::{Frame, Tolerance};
+        let tol = Tolerance::default();
+        let ellipse = NurbsCurve::elliptic_arc(
+            DVec3::ZERO,
+            DVec3::new(5.0, 0.0, 0.0),
+            DVec3::new(0.0, 3.0, 0.0),
+            0.0,
+            std::f64::consts::TAU,
+        )
+        .unwrap();
+        let profile = Profile {
+            outer: ProfileLoop::nurbs_loop(ellipse).unwrap(),
+            holes: vec![],
+        };
+        let frame = Frame::from_origin_normal(DVec3::ZERO, DVec3::Z);
+        let freeform = planora_kernel::extrude(&profile, &frame, 4.0, &tol).unwrap();
+        let plain = planora_kernel::primitives::make_box(DVec3::ONE, &tol).unwrap();
+        let text = |e: &BooleanError| match boolean_error(&freeform, &plain, e) {
+            FeatureError::Kernel(m) => m,
+            other => panic!("{other:?}"),
+        };
+        // Mit eigenem Vorschlag in der Ursache: nur der Vorsatz, in jeder Sprache.
+        let own = BooleanError::TooExpensive;
+        // Ohne Vorschlag: der Vorsatz und der Vorschlag der Bibliothek.
+        let bare = BooleanError::AmbiguousContact;
+        let de = with_lang(&german(), || (text(&own), text(&bare)));
+        let own_de = with_lang(&german(), || own.to_string());
+        assert_eq!(de.0, format!("Bei Körpern mit Freiformflächen: {own_de}"));
+        assert!(de.1.ends_with("; bitte Lage oder Maße eines Körpers leicht ändern"));
+        let en = with_lang(&english(), || (text(&own), text(&bare)));
+        let own_en = with_lang(&english(), || own.to_string());
+        assert_eq!(en.0, format!("For bodies with freeform faces: {own_en}"));
+        assert!(en.1.starts_with("For bodies with freeform faces: "));
+        assert!(en.1.ends_with("; please change the position or size of a body slightly"));
     }
 
     #[test]

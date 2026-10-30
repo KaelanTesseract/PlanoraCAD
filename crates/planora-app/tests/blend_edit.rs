@@ -1,7 +1,7 @@
 //! Verrunden nachträglich ändern (Teilprojekt 8, Task 19).
 
 use planora_app::blend_dialog::{ArtChoice, BlendDialog};
-use planora_app::feature_dialog::{FeatureDialog, STALE_MESSAGE};
+use planora_app::feature_dialog::{FeatureDialog, stale_message};
 use planora_app::state::*;
 use planora_feature::{BlendArt, FeatureId, FeatureKind, FeatureStatus};
 use planora_kernel::blend::topo::{edge_uses, face_name};
@@ -105,7 +105,7 @@ fn the_tangent_chain_and_stale_dialogs() {
         FeatureKind::Verrunden { tangentenkette, .. } => assert!(!tangentenkette),
         k => panic!("{k:?}"),
     }
-    assert_eq!(stale.apply(&mut s), Err(STALE_MESSAGE.to_string()));
+    assert_eq!(stale.apply(&mut s), Err(stale_message().text()));
 }
 
 #[test]
@@ -237,15 +237,15 @@ fn the_new_dialog_parts_draw() {
 #[test]
 fn at_most_sixty_four_radius_points() {
     // Korrekturwelle (Minor d): Der 65. Punkt wird nicht eingefügt, der Dialog meldet die Grenze.
-    use planora_app::blend_dialog::{TOO_MANY_POINTS, insert_point};
+    use planora_app::blend_dialog::{insert_point, too_many_points};
     let mut pts: Vec<(f64, f64)> = (0..64).map(|i| (i as f64, 1.0)).collect();
-    assert_eq!(insert_point(&mut pts), Err(TOO_MANY_POINTS.to_string()));
+    assert_eq!(insert_point(&mut pts), Err(too_many_points()));
     assert_eq!(pts.len(), 64);
     let mut d = BlendDialog::variable();
     d.points = (0..64).map(|i| (i.to_string(), "1".to_string())).collect();
     d.add_point();
     assert_eq!(d.points.len(), 64);
-    assert_eq!(d.error(), Some(TOO_MANY_POINTS));
+    assert_eq!(d.error(), Some(too_many_points().text()));
     let (s, id) = with_fillet();
     let mut d = FeatureDialog::new(&s, id).unwrap();
     d.set_blend_art(ArtChoice::RundungVariabel);
@@ -256,5 +256,5 @@ fn at_most_sixty_four_radius_points() {
     assert_eq!(d.error(), None);
     d.add_point();
     assert_eq!(d.labels().len(), 128);
-    assert_eq!(d.error(), Some(TOO_MANY_POINTS));
+    assert_eq!(d.error(), Some(too_many_points().text()));
 }

@@ -5,6 +5,7 @@ use super::{
     MAX_DEGREE, MAX_DERIV_ORDER, MAX_KNOT_MAGNITUDE, MIN_KNOT_DOMAIN, MIN_KNOT_GAP_RATIO,
     NurbsError,
 };
+use planora_i18n::tr;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct KnotVector {
@@ -19,41 +20,39 @@ impl KnotVector {
             return Err(NurbsError::Degree(degree));
         }
         if knots.len() < 2 * (degree + 1) {
-            return Err(NurbsError::Knots("zu wenige Knoten".into()));
+            return Err(NurbsError::Knots(tr!("math-knots-few")));
         }
         if knots.iter().any(|k| !k.is_finite()) {
-            return Err(NurbsError::Knots("nicht endliche Zahl".into()));
+            return Err(NurbsError::Knots(tr!("math-knots-nonfinite")));
         }
         if knots.windows(2).any(|w| w[1] < w[0]) {
-            return Err(NurbsError::Knots("Knoten fallen".into()));
+            return Err(NurbsError::Knots(tr!("math-knots-decrease")));
         }
         let (n, p) = (knots.len(), degree);
         let clamped = knots[..=p].iter().all(|k| *k == knots[0])
             && knots[n - p - 1..].iter().all(|k| *k == knots[n - 1]);
         if !clamped {
-            return Err(NurbsError::Knots(
-                "nicht geklemmt (Anfang und Ende brauchen Grad+1 gleiche Knoten)".into(),
-            ));
+            return Err(NurbsError::Knots(tr!("math-knots-clamped")));
         }
         if knots[n - 1] <= knots[0] {
-            return Err(NurbsError::Knots("der Parameterbereich ist leer".into()));
+            return Err(NurbsError::Knots(tr!("math-domain-empty")));
         }
         // Anfang und Ende dürfen nicht mehr als Grad+1 gleiche Knoten haben,
         // sonst gäbe es leere Randabschnitte.
         if knots[p + 1] <= knots[p] || knots[n - p - 2] >= knots[n - p - 1] {
-            return Err(NurbsError::Knots(
-                "Anfang oder Ende hat mehr als Grad+1 gleiche Knoten".into(),
-            ));
+            return Err(NurbsError::Knots(tr!("math-knots-too-equal")));
         }
         let length = knots[n - 1] - knots[0];
         if knots.iter().any(|k| k.abs() > MAX_KNOT_MAGNITUDE) || length > MAX_KNOT_MAGNITUDE {
-            return Err(NurbsError::Knots(format!(
-                "Knoten und Parameterbereich dürfen höchstens {MAX_KNOT_MAGNITUDE} betragen"
+            return Err(NurbsError::Knots(tr!(
+                "math-knots-magnitude",
+                max = MAX_KNOT_MAGNITUDE.to_string()
             )));
         }
         if length < MIN_KNOT_DOMAIN {
-            return Err(NurbsError::Knots(format!(
-                "der Parameterbereich ist zu klein (mindestens {MIN_KNOT_DOMAIN})"
+            return Err(NurbsError::Knots(tr!(
+                "math-domain-small",
+                min = MIN_KNOT_DOMAIN.to_string()
             )));
         }
         let min_gap = knots
@@ -62,16 +61,14 @@ impl KnotVector {
             .filter(|g| *g > 0.0)
             .fold(f64::INFINITY, f64::min);
         if min_gap < MIN_KNOT_GAP_RATIO * length {
-            return Err(NurbsError::Knots(
-                "zwei verschiedene Knoten liegen zu nah beieinander".into(),
-            ));
+            return Err(NurbsError::Knots(tr!("math-knots-close")));
         }
         // Keine Mehrfachknoten über dem Grad im Inneren (sonst unstetig/entartet).
         let mut run = 1;
         for w in knots[p + 1..n - p - 1].windows(2) {
             run = if w[1] == w[0] { run + 1 } else { 1 };
             if run > p {
-                return Err(NurbsError::Knots("innerer Knoten zu oft wiederholt".into()));
+                return Err(NurbsError::Knots(tr!("math-knot-repeated")));
             }
         }
         Ok(KnotVector { degree, knots })

@@ -2,11 +2,14 @@
 //! erscheinen im Über-Dialog, in der Protokolldatei und später in Rückmeldungen.
 
 use eframe::egui_wgpu::wgpu::AdapterInfo;
+use planora_i18n::tr;
 use planora_update::Version;
 use std::sync::OnceLock;
 
 /// Text, wenn die Grafikkarte (noch) nicht bekannt ist.
-pub const GPU_UNKNOWN: &str = "Grafikkarte unbekannt";
+pub fn gpu_unknown() -> String {
+    tr!("build-gpu-unknown")
+}
 
 /// Die Grafikkarte, mit der gezeichnet wird.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,11 +40,8 @@ pub fn gpu_from_adapter(info: &AdapterInfo) -> GpuInfo {
     let driver = driver.trim();
     GpuInfo {
         name: info.name.clone(),
-        driver: if driver.is_empty() {
-            "unbekannt".to_string()
-        } else {
-            driver.to_string()
-        },
+        // Leer, wenn unbekannt; der Text entsteht erst in `gpu_line`.
+        driver: driver.to_string(),
         backend: format!("{:?}", info.backend),
     }
 }
@@ -63,14 +63,23 @@ impl BuildInfo {
 
     /// Etwa „System: Windows 11 (Build 26100)“.
     pub fn system_line(&self) -> String {
-        format!("System: {}", self.os)
+        tr!("build-system", os = self.os.as_str())
     }
 
-    /// Etwa „Name · Treiber X · Vulkan“, ohne Grafikkarte [`GPU_UNKNOWN`].
+    /// Etwa „Name · Treiber X · Vulkan“, ohne Grafikkarte [`gpu_unknown`].
     pub fn gpu_line(&self) -> String {
         match &self.gpu {
-            Some(g) => format!("{} · Treiber {} · {}", g.name, g.driver, g.backend),
-            None => GPU_UNKNOWN.to_string(),
+            Some(g) => tr!(
+                "build-gpu-line",
+                name = g.name.as_str(),
+                driver = if g.driver.is_empty() {
+                    tr!("build-driver-unknown")
+                } else {
+                    g.driver.clone()
+                },
+                backend = g.backend.as_str()
+            ),
+            None => gpu_unknown(),
         }
     }
 }

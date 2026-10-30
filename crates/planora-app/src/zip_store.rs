@@ -45,13 +45,13 @@ pub fn write_project_zip(project: &Path, out: &Path) -> std::io::Result<()> {
 fn write_inner(project: &Path, out: &Path) -> std::io::Result<()> {
     let root = project
         .file_name()
-        .ok_or_else(|| std::io::Error::other("kein Ordnername"))?
+        .ok_or_else(|| std::io::Error::other("no folder name"))?
         .to_string_lossy()
         .into_owned();
     if !project.is_dir() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
-            "kein Projektordner",
+            "not a project folder",
         ));
     }
     let mut w = Writer {
@@ -70,7 +70,7 @@ struct Writer {
 }
 
 fn too_big() -> std::io::Error {
-    std::io::Error::other("zu groß für ZIP ohne ZIP64")
+    std::io::Error::other("too large for ZIP without ZIP64")
 }
 
 impl Writer {

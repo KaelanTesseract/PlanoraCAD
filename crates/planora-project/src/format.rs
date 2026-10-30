@@ -3,6 +3,7 @@
 //! ignoriert (unbekannte **Feldschlüssel** in einer Formeltabelle sind dagegen Daten und werden
 //! beim Lesen abgelehnt, siehe `convert.rs`).
 
+use planora_i18n::tr;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -127,7 +128,7 @@ fn de_formula_map<'de, D: serde::Deserializer<'de>>(
     impl<'de> serde::de::Visitor<'de> for Map {
         type Value = BTreeMap<String, String>;
         fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-            write!(f, "eine Tabelle Feld → Formel")
+            f.write_str(&tr!("proj-expect-formula-map"))
         }
         fn visit_map<A: serde::de::MapAccess<'de>>(
             self,
@@ -136,9 +137,9 @@ fn de_formula_map<'de, D: serde::Deserializer<'de>>(
             let mut out = BTreeMap::new();
             while let Some((k, v)) = map.next_entry::<String, String>()? {
                 if out.contains_key(&k) {
-                    return Err(serde::de::Error::custom(format!(
-                        "Das Formelfeld „{}“ kommt doppelt vor",
-                        quoted(&k)
+                    return Err(serde::de::Error::custom(tr!(
+                        "proj-formula-field-twice",
+                        key = quoted(&k)
                     )));
                 }
                 out.insert(k, v);
@@ -196,7 +197,7 @@ where
     impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for Capped<T> {
         type Value = Vec<T>;
         fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-            write!(f, "eine Liste")
+            f.write_str(&tr!("proj-expect-list"))
         }
         fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<T>, A::Error> {
             let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(self.max));
@@ -238,7 +239,7 @@ fn de_positions<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<PositionDt
 fn de_overrides<'de, D: serde::Deserializer<'de>>(
     d: D,
 ) -> Result<Vec<StuecklisteZeileDto>, D::Error> {
-    de_bounded(d, MAX_FILE_OVERRIDES, "Stückliste")
+    de_bounded(d, MAX_FILE_OVERRIDES, || tr!("proj-l-parts-list"))
 }
 
 fn de_revisions<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<AenderungDto>, D::Error> {
@@ -342,28 +343,29 @@ pub const MAX_FILE_VIEWS: usize = planora_feature::MAX_VIEWS;
 
 /// Liest eine Liste, bricht aber ab, sobald sie mehr als `max` Einträge hat (vor dem Anlegen
 /// weiterer Einträge; der Rest der Datei wird nicht mehr gelesen).
-fn de_bounded<'de, D, T>(d: D, max: usize, what: &'static str) -> Result<Vec<T>, D::Error>
+fn de_bounded<'de, D, T>(d: D, max: usize, what: fn() -> String) -> Result<Vec<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
     T: Deserialize<'de>,
 {
     struct Bounded<T> {
         max: usize,
-        what: &'static str,
+        what: fn() -> String,
         marker: std::marker::PhantomData<T>,
     }
     impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for Bounded<T> {
         type Value = Vec<T>;
         fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-            write!(f, "eine Liste mit höchstens {} Einträgen", self.max)
+            f.write_str(&tr!("proj-expect-list-max", max = self.max.to_string()))
         }
         fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<T>, A::Error> {
             let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(self.max));
             while let Some(x) = seq.next_element()? {
                 if out.len() == self.max {
-                    return Err(serde::de::Error::custom(format!(
-                        "{}: zu viele Einträge (höchstens {})",
-                        self.what, self.max
+                    return Err(serde::de::Error::custom(tr!(
+                        "proj-list-too-many",
+                        what = (self.what)(),
+                        max = self.max.to_string()
                     )));
                 }
                 out.push(x);
@@ -379,11 +381,11 @@ where
 }
 
 fn de_drawings<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<ZeichnungDto>, D::Error> {
-    de_bounded(d, MAX_FILE_DRAWINGS, "Zeichnungen")
+    de_bounded(d, MAX_FILE_DRAWINGS, || tr!("proj-l-drawings"))
 }
 
 fn de_views<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<AnsichtDto>, D::Error> {
-    de_bounded(d, MAX_FILE_VIEWS, "Ansichten")
+    de_bounded(d, MAX_FILE_VIEWS, || tr!("proj-l-views"))
 }
 
 /// Höchstzahl der Maße je Zeichnung, die beim Lesen überhaupt angenommen wird.
@@ -392,11 +394,11 @@ pub const MAX_FILE_DIMENSIONS: usize = planora_drawing::limits::MAX_DIMENSIONS;
 pub const MAX_FILE_DIM_REFS: usize = 4;
 
 fn de_dims<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<MassDto>, D::Error> {
-    de_bounded(d, MAX_FILE_DIMENSIONS, "Maße")
+    de_bounded(d, MAX_FILE_DIMENSIONS, || tr!("proj-l-dimensions"))
 }
 
 fn de_refs<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<BezugDto>, D::Error> {
-    de_bounded(d, MAX_FILE_DIM_REFS, "Bezüge")
+    de_bounded(d, MAX_FILE_DIM_REFS, || tr!("proj-l-references"))
 }
 
 /// Eine Zeichnung (ab Format 4).

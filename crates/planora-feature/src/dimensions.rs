@@ -17,6 +17,7 @@ use planora_drawing::stroke::extent_of;
 use planora_drawing::{
     Basis, DrawBody, Drawing, DrawingId, ViewId, ViewKind, dimension_key, measure,
 };
+use planora_i18n::tr;
 use planora_kernel::Solid;
 use planora_math::{DVec3, Tolerance};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -79,37 +80,37 @@ fn roles_ok(r: &GeoRef) -> bool {
 fn validate_spec(m: &DimSpec) -> Result<(), String> {
     let (lo, hi) = ref_count(m.kind);
     if m.refs.len() < lo || m.refs.len() > hi {
-        return Err("Ein Maß hat die falsche Zahl von Bezügen".into());
+        return Err(tr!("feature-dim-ref-count"));
     }
     if !m.refs.iter().all(ref_ok) {
-        return Err("Ein Bezug eines Maßes ist ungültig".into());
+        return Err(tr!("feature-dim-ref-invalid"));
     }
     if !m.refs.iter().all(roles_ok) {
-        return Err(format!(
-            "Die Rolle einer Fläche ist zu lang (höchstens {MAX_ROLE_CHARS} Zeichen)"
+        return Err(tr!(
+            "feature-dim-role-long",
+            max = MAX_ROLE_CHARS.to_string()
         ));
     }
     let pos = |x: f64| x.is_finite() && x.abs() <= MAX_POS_MM;
     if !pos(m.offset) {
-        return Err("Der Abstand der Maßlinie liegt außerhalb des Blatts".into());
+        return Err(tr!("feature-dim-line-offset"));
     }
     if !pos(m.angle) {
-        return Err("Der Winkel der Führungslinie ist ungültig".into());
+        return Err(tr!("feature-dim-leader-angle"));
     }
     if !pos(m.text_shift.0) || !pos(m.text_shift.1) {
-        return Err("Die Verschiebung des Maßtextes liegt außerhalb des Blatts".into());
+        return Err(tr!("feature-dim-text-shift"));
     }
     if m.decimals > MAX_DECIMALS {
-        return Err(format!(
-            "Ein Maß darf höchstens {MAX_DECIMALS} Nachkommastellen haben"
-        ));
+        return Err(tr!("feature-dim-decimals", max = MAX_DECIMALS.to_string()));
     }
     if m.text_override
         .as_ref()
         .is_some_and(|t| t.chars().count() > MAX_DIM_TEXT_CHARS)
     {
-        return Err(format!(
-            "Der eigene Maßtext ist zu lang (höchstens {MAX_DIM_TEXT_CHARS} Zeichen)"
+        return Err(tr!(
+            "feature-dim-text-long",
+            max = MAX_DIM_TEXT_CHARS.to_string()
         ));
     }
     let tol_ok = |x: f64| x.is_finite() && x.abs() <= MAX_TOL_MM;
@@ -121,17 +122,13 @@ fn validate_spec(m: &DimSpec) -> Result<(), String> {
         }
         DimTolerance::Fit(text) => {
             if text.chars().count() > MAX_FIT_CHARS {
-                return Err(format!(
-                    "Die Passungsangabe ist zu lang (höchstens {MAX_FIT_CHARS} Zeichen)"
-                ));
+                return Err(tr!("feature-dim-fit-long", max = MAX_FIT_CHARS.to_string()));
             }
             true
         }
     };
     if !tolerance_ok {
-        return Err(format!(
-            "Die Toleranz eines Maßes ist ungültig (Beträge höchstens {MAX_TOL_MM} mm)"
-        ));
+        return Err(tr!("feature-dim-tolerance", max = MAX_TOL_MM.to_string()));
     }
     Ok(())
 }
@@ -143,12 +140,10 @@ fn validate_spec(m: &DimSpec) -> Result<(), String> {
 /// [`MAX_DIMENSIONS`]; höchstens [`MAX_DIMENSIONS`] Maße.
 pub(crate) fn validate_dimensions(d: &Drawing) -> Result<(), String> {
     if d.next_dim == 0 || d.next_dim == u64::MAX {
-        return Err("Der Maßzähler der Zeichnung ist ungültig".into());
+        return Err(tr!("feature-dim-counter-invalid"));
     }
     if d.dimensions.len() > MAX_DIMENSIONS {
-        return Err(format!(
-            "Eine Zeichnung darf höchstens {MAX_DIMENSIONS} Maße haben"
-        ));
+        return Err(tr!("feature-dim-max", max = MAX_DIMENSIONS.to_string()));
     }
     let views: HashMap<ViewId, ViewKind> = d.views.iter().map(|v| (v.id, v.kind)).collect();
     let mut ids = HashSet::with_capacity(d.dimensions.len());
@@ -156,15 +151,15 @@ pub(crate) fn validate_dimensions(d: &Drawing) -> Result<(), String> {
     let mut orders: HashSet<(u64, u32)> = HashSet::new();
     for m in &d.dimensions {
         if m.id.0 == 0 || m.id.0 >= d.next_dim {
-            return Err("Ein Maß hat eine ungültige Kennung".into());
+            return Err(tr!("feature-dim-id-invalid"));
         }
         if !ids.insert(m.id) {
-            return Err("Eine Maßkennung kommt doppelt vor".into());
+            return Err(tr!("feature-dim-id-twice"));
         }
         match views.get(&m.view) {
-            None => return Err("Ein Maß gehört zu keiner Ansicht der Zeichnung".into()),
+            None => return Err(tr!("feature-dim-no-view")),
             Some(kind) if !kind.is_normal() => {
-                return Err("In der isometrischen Ansicht gibt es keine Maße".into());
+                return Err(tr!("feature-dim-isometric"));
             }
             Some(_) => {}
         }
@@ -172,22 +167,19 @@ pub(crate) fn validate_dimensions(d: &Drawing) -> Result<(), String> {
         if let Some(c) = m.chain {
             let first = *groups.entry(c.group).or_insert((m.kind, m.view, c.mode));
             if first.2 != c.mode {
-                return Err("Die Maße einer Kette mischen Kettenmaße und Bezugsmaße".into());
+                return Err(tr!("feature-dim-chain-mix"));
             }
             if (first.0, first.1) != (m.kind, m.view) {
-                return Err(
-                    "Die Maße einer Kette müssen dieselbe Art haben und in derselben Ansicht liegen"
-                        .into(),
-                );
+                return Err(tr!("feature-dim-chain-same"));
             }
             if c.order as usize >= MAX_DIMENSIONS {
-                return Err(format!(
-                    "Die Stelle in einer Maßkette ist zu groß (höchstens {})",
-                    MAX_DIMENSIONS - 1
+                return Err(tr!(
+                    "feature-dim-chain-order",
+                    max = (MAX_DIMENSIONS - 1).to_string()
                 ));
             }
             if !orders.insert((c.group, c.order)) {
-                return Err("Eine Stelle in einer Maßkette kommt doppelt vor".into());
+                return Err(tr!("feature-dim-chain-twice"));
             }
         }
     }
@@ -208,7 +200,7 @@ impl Document {
                 new_id = Some(d.add_dimension(spec));
             }
         })?;
-        new_id.ok_or_else(|| bad("Der Maßzähler der Zeichnung ist erschöpft"))
+        new_id.ok_or_else(|| bad(tr!("feature-dim-counter-used")))
     }
 
     /// Ändert ein Maß auf einer Kopie und prüft das Ergebnis; die Kennung lässt sich nicht
@@ -222,7 +214,7 @@ impl Document {
         let mut spec = self.dimension_spec(drawing, id)?.clone();
         f(&mut spec);
         if spec.id != id {
-            return Err(bad("Die Kennung eines Maßes lässt sich nicht ändern"));
+            return Err(bad(tr!("feature-dim-id-fixed")));
         }
         self.update_drawing(drawing, |d| {
             if let Some(m) = d.dimensions.iter_mut().find(|m| m.id == id) {
@@ -241,9 +233,9 @@ impl Document {
 
     fn dimension_spec(&self, drawing: DrawingId, id: DimId) -> Result<&DimSpec, FeatureError> {
         self.drawing(drawing)
-            .ok_or_else(|| bad("Die Zeichnung gibt es nicht"))?
+            .ok_or_else(|| bad(tr!("feature-drawing-unknown")))?
             .dimension(id)
-            .ok_or_else(|| bad("Das Maß gibt es nicht"))
+            .ok_or_else(|| bad(tr!("feature-dim-unknown")))
     }
 
     /// Löst alle Maße der Zeichnung gegen die Körper `solids` auf und misst sie: je Maß die
@@ -261,7 +253,7 @@ impl Document {
     ) -> Result<ResolvedDims, FeatureError> {
         let d = self
             .drawing(drawing)
-            .ok_or_else(|| bad("Die Zeichnung gibt es nicht"))?;
+            .ok_or_else(|| bad(tr!("feature-drawing-unknown")))?;
         match resolve_drawing_dimensions(d, solids, || Ok::<(), Infallible>(())) {
             Ok(out) => Ok(out),
             Err(never) => match never {},

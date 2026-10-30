@@ -7,10 +7,11 @@
 //! Rückgängig, Speichern und Ansichten sie wie jede Feature-Änderung behandeln.
 
 use crate::error::FeatureError;
-use crate::expr::{self, MAX_COMMENT_CHARS, MAX_PARAMETERS, ParamDef, ParamUnit, TableError};
+use crate::expr::{self, MAX_COMMENT_CHARS, ParamDef, ParamUnit, TableError};
 use crate::formulas::{Formulas, mentions, rewrite_formulas};
 use crate::model::{Document, FeatureKind};
 use crate::recompute::RecomputeReport;
+use planora_i18n::tr;
 use std::collections::HashMap;
 
 /// Dauerhafte Kennung eines Parameters (ab 1); wird nie wiederverwendet.
@@ -75,8 +76,12 @@ impl ParamScope {
     }
 }
 
-const COMMENT_TOO_LONG: &str = "Der Kommentar ist zu lang (höchstens 200 Zeichen).";
-const UNKNOWN_PARAMETER: &str = "Den Parameter gibt es in diesem Dokument nicht";
+fn comment_too_long() -> String {
+    tr!("feature-comment-too-long")
+}
+fn unknown_parameter() -> String {
+    tr!("feature-param-unknown")
+}
 
 /// Ergäbe „Durch den Wert ersetzen“ des Parameters `name` an diesem Feature (das ihn nennt)
 /// still ein anderes Modell? (Nie still ein anderes Modell, Spec §1.)
@@ -123,29 +128,19 @@ pub(crate) fn check_table(params: &[Parameter]) -> Result<Vec<f64>, String> {
         .iter()
         .any(|p| p.comment.chars().count() > MAX_COMMENT_CHARS)
     {
-        return Err(COMMENT_TOO_LONG.into());
+        return Err(comment_too_long());
     }
     Ok(values)
 }
 
 fn table_message(params: &[Parameter], e: TableError) -> String {
-    if params.len() > MAX_PARAMETERS {
-        return e.message;
-    }
-    let Some(p) = params.get(e.index) else {
-        return e.message;
-    };
-    let name_problem = expr::check_name(&p.name).is_err()
-        || params[..e.index]
-            .iter()
-            .any(|q| expr::same_name(&q.name, &p.name));
-    let names_itself = e.message == format!("Der Parameter „{}“ hängt von sich selbst ab.", p.name)
-        || (e.message.starts_with("Die Parameter „")
-            && e.message.ends_with("hängen im Kreis voneinander ab."));
-    if name_problem || names_itself {
-        e.message
-    } else {
-        format!("Parameter „{}“: {}", p.name, e.message)
+    match params.get(e.index) {
+        Some(p) if !e.stands_alone() => tr!(
+            "feature-param-prefix",
+            name = p.name.to_string(),
+            detail = e.message.to_string()
+        ),
+        _ => e.message,
     }
 }
 
@@ -185,9 +180,7 @@ impl Document {
             .next_param
             .checked_add(1)
             .filter(|n| *n < u64::MAX)
-            .ok_or_else(|| {
-                FeatureError::InvalidInput("Die Parameter-Kennungen sind aufgebraucht".into())
-            })?;
+            .ok_or_else(|| FeatureError::InvalidInput(tr!("feature-param-ids-used")))?;
         let mut table = self.parameters.clone();
         table.push(Parameter {
             id,
@@ -206,7 +199,7 @@ impl Document {
         let name = (1..)
             .map(|n| format!("Parameter{n}"))
             .find(|c| !self.parameters.iter().any(|p| expr::same_name(&p.name, c)))
-            .expect("höchstens 500 Namen belegt");
+            .expect("at most 500 names are taken");
         self.add_parameter(&name, "10", ParamUnit::Length, "")
     }
 
@@ -236,9 +229,9 @@ impl Document {
             .enumerate()
             .any(|(i, p)| i != idx && expr::same_name(&p.name, &edit.name))
         {
-            return Err(FeatureError::Formula(format!(
-                "Den Namen „{}“ gibt es schon.",
-                edit.name
+            return Err(FeatureError::Formula(tr!(
+                "feature-name-exists",
+                name = edit.name.to_string()
             )));
         }
         let mut table = self.parameters.clone();
@@ -302,17 +295,21 @@ impl Document {
             .iter()
             .find(|f| mentions(&f.kind, &f.formulas, &name) && replace_would_change_model(f, &name))
         {
-            return Err(FeatureError::Formula(format!(
-                "Parameter „{name}“ lässt sich nicht durch den Wert ersetzen: „{}“ hat gerade \
-                 einen Fehler. Beheben Sie zuerst den Fehler.",
-                f.name
+            return Err(FeatureError::Formula(tr!(
+                "feature-param-replace-blocked",
+                name = name.as_str(),
+                feature = f.name.as_str()
             )));
         }
         let mut table = self.parameters.clone();
         for (i, p) in table.iter_mut().enumerate() {
             if i != idx && expr::references(&p.formula, &name) {
                 p.formula = expr::value_text(self.param_values[i]).map_err(|e| {
-                    FeatureError::Formula(format!("Parameter „{}“: {}", p.name, e.0))
+                    FeatureError::Formula(tr!(
+                        "feature-param-prefix",
+                        name = p.name.to_string(),
+                        detail = e.0.to_string()
+                    ))
                 })?;
             }
         }
@@ -351,7 +348,7 @@ impl Document {
             .parameters
             .iter()
             .filter(|p| p.id != id && expr::references(&p.formula, &me.name))
-            .map(|p| format!("Parameter {}", p.name));
+            .map(|p| tr!("feature-param-user", name = p.name.to_string()));
         features.chain(params).collect()
     }
 
@@ -359,7 +356,7 @@ impl Document {
         self.parameters
             .iter()
             .position(|p| p.id == id)
-            .ok_or_else(|| FeatureError::InvalidInput(UNKNOWN_PARAMETER.into()))
+            .ok_or_else(|| FeatureError::InvalidInput(unknown_parameter()))
     }
 
     /// Prüft die neue Tabelle und mit ihren Werten alle Feature-Formeln (`features`: neue Art

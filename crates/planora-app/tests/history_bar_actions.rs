@@ -4,7 +4,7 @@
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, Vec2, pos2, vec2};
 use planora_app::app::{self, CreateKind, PlanoraApp};
 use planora_app::browser;
-use planora_app::history_bar::{self, LOCK_HINT};
+use planora_app::history_bar::{self, lock_hint};
 use planora_app::shell_panels;
 use planora_app::state::*;
 use planora_app::workspace::Workspace;
@@ -299,8 +299,8 @@ fn new_feature_on_rolled_back_body_is_refused_with_hint() {
     let j = body_of(&s, other);
 
     let refused = |s: &mut AppState, r: Result<(), String>, what: &str| {
-        assert_eq!(r, Err(LOCK_HINT.to_string()), "{what}");
-        assert_eq!(s.message.as_deref(), Some(LOCK_HINT), "{what}");
+        assert_eq!(r, Err(lock_hint()), "{what}");
+        assert_eq!(s.message.as_deref(), Some(lock_hint().as_str()), "{what}");
         s.message = None;
     };
     let r = s.move_body(i, DVec3::Y);
@@ -332,11 +332,11 @@ fn new_feature_on_rolled_back_body_is_refused_with_hint() {
 
     // Menüs und Knöpfe: gesperrt mit Hinweis, wenn der gewählte Körper zurückgesetzt ist.
     s.selected_body = Some(i);
-    assert_eq!(s.boolean_blocked(), Some(LOCK_HINT));
-    assert_eq!(s.blend_blocked(), Some(LOCK_HINT));
+    assert_eq!(s.boolean_blocked(), Some(lock_hint()));
+    assert_eq!(s.blend_blocked(), Some(lock_hint()));
     s.set_selection(Some(Pick::Face(FaceRef { body: i, face })));
-    assert_eq!(s.sketch_on_face_blocked(), Some(LOCK_HINT));
-    assert_eq!(s.body_lock(i), Some(LOCK_HINT));
+    assert_eq!(s.sketch_on_face_blocked(), Some(lock_hint()));
+    assert_eq!(s.body_lock(i), Some(lock_hint()));
     assert_eq!(s.body_lock(j), None);
     // Neue freistehende Körper gehen weiter.
     s.create_cylinder(2.0, 3.0).unwrap();
@@ -353,21 +353,21 @@ fn extruding_a_sketch_of_a_rolled_back_body_is_refused() {
     let s = &mut ws.active_tab_mut().state;
     assert_eq!(s.document.rollbacks(), &[m]);
     let r = s.extrude_sketch(sk, 0, 3.0).map(|_| ());
-    assert_eq!(r, Err(LOCK_HINT.to_string()));
+    assert_eq!(r, Err(lock_hint()));
     s.message = None;
     s.selected_feature = Some(sk);
     assert_eq!(
         app::create_blocked(&ws, CreateKind::Extrusion),
-        Some(LOCK_HINT)
+        Some(lock_hint())
     );
     assert_eq!(
         app::create_blocked(&ws, CreateKind::Revolution),
-        Some(LOCK_HINT)
+        Some(lock_hint())
     );
     assert_eq!(app::create_blocked(&ws, CreateKind::Box), None);
     // Der Körper der Extrusion selbst ist sichtbar und gesperrt.
     let s = &ws.active_tab().state;
-    assert_eq!(s.body_lock(body_of(s, e)), Some(LOCK_HINT));
+    assert_eq!(s.body_lock(body_of(s, e)), Some(lock_hint()));
 }
 
 #[test]
@@ -421,7 +421,7 @@ fn union_is_refused_when_the_rolled_back_body_is_the_newer_of_the_inputs() {
         (jn, io, "älterer als Werkzeug"),
     ] {
         let r = s.add_boolean(target, tool, BoolOp::Union).map(|_| ());
-        assert_eq!(r, Err(LOCK_HINT.to_string()), "{what}");
+        assert_eq!(r, Err(lock_hint()), "{what}");
         s.message = None;
     }
     assert_eq!(s.document.features().len(), count, "nichts angelegt");

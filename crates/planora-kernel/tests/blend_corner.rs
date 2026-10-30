@@ -557,7 +557,7 @@ fn oblique_corners_of_three_planes_and_skin_corners() {
     validate(&r.solid).unwrap();
     assert!(names(&r.solid).contains(&"Ecke 1".to_string()));
     // Variabler Radius an einer Ecke: vor jeder Eckbehandlung benannt abgelehnt (build.rs,
-    // `march::VARIABLE_CORNER`); Gehrung und Kugelecke sehen keine Hautflächen.
+    // `march::variable_corner`); Gehrung und Kugelecke sehen keine Hautflächen.
     let b = k().make_box(DVec3::splat(10.0)).unwrap();
     let two = [
         edge_between(&b, "Deckel", "Wand 1"),
@@ -565,6 +565,6 @@ fn oblique_corners_of_three_planes_and_skin_corners() {
     ];
     assert!(matches!(
         blend(&b, &two, BlendKind::VariableFillet { points: vec![(0.0, 1.0), (1.0, 1.0)] }),
-        Err(BlendError::Corner(m)) if m == planora_kernel::blend::march::VARIABLE_CORNER
+        Err(BlendError::Corner(m)) if m == planora_kernel::blend::march::variable_corner()
     ));
 }

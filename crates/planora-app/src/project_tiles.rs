@@ -6,6 +6,7 @@
 
 use crate::local_time;
 use planora_exchange::Progress;
+use planora_i18n::tr;
 use planora_project::docstore::{DocumentInfo, peek};
 use planora_project::library::{Library, NodeKind, NodePath, TreeNode};
 use std::cmp::Ordering;
@@ -14,8 +15,44 @@ use std::path::{Path, PathBuf};
 
 /// Höchstens so viele Kacheln je Ebene.
 pub const MAX_TILES: usize = 500;
-pub const TOO_MANY: &str = "Es werden nur die ersten 500 gezeigt.";
-pub const CANCELLED: &str = "Abgebrochen";
+pub fn too_many() -> String {
+    tr!("projects-too-many")
+}
+pub fn cancelled() -> String {
+    ScanError::Cancelled.text()
+}
+
+/// Warum das Lesen der Bibliothek nichts ergab. Gespeichert wird der Grund, nicht der Text:
+/// gezeichnet wird in der Sprache des Bildes ([`ScanError::text`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ScanError {
+    /// Das Lesen wurde abgebrochen.
+    Cancelled,
+    /// Das Lesen endete unerwartet ohne Ergebnis.
+    Lost,
+    /// Das Projektverzeichnis (der Pfad) gibt es nicht.
+    RootMissing(String),
+    /// Fertiger Text der Bibliothek (nicht übersetzt).
+    Raw(String),
+}
+
+impl ScanError {
+    /// Der Text in der aktuellen Sprache.
+    pub fn text(&self) -> String {
+        match self {
+            ScanError::Cancelled => tr!("projects-cancelled"),
+            ScanError::Lost => tr!("projects-scan-lost"),
+            ScanError::RootMissing(path) => tr!("projects-root-missing", path = path.as_str()),
+            ScanError::Raw(text) => text.clone(),
+        }
+    }
+}
+
+impl std::fmt::Display for ScanError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text())
+    }
+}
 
 /// Angaben eines lesbaren Dokuments.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -52,7 +89,7 @@ pub struct Scan {
 }
 
 /// Baum + `peek` je Dokument; fehlt `root`, Fehler (nie anlegen); Abbruch → Err(CANCELLED).
-pub fn scan_library(root: &Path, progress: &Progress) -> Result<Scan, String> {
+pub fn scan_library(root: &Path, progress: &Progress) -> Result<Scan, ScanError> {
     scan_library_with(root, progress, |_| {})
 }
 
@@ -62,16 +99,16 @@ pub fn scan_library_with(
     root: &Path,
     progress: &Progress,
     mut after_document: impl FnMut(&NodePath),
-) -> Result<Scan, String> {
+) -> Result<Scan, ScanError> {
     // `Library::open` legt einen fehlenden Ordner an: vorher prüfen.
     if !root.is_dir() {
-        return Err(format!("„{}“ wurde nicht gefunden.", root.display()));
+        return Err(ScanError::RootMissing(root.display().to_string()));
     }
     if stop(progress) {
-        return Err(CANCELLED.into());
+        return Err(ScanError::Cancelled);
     }
-    let lib = Library::open(root).map_err(|e| e.to_string())?;
-    let tree = lib.tree().map_err(|e| e.to_string())?;
+    let lib = Library::open(root).map_err(|e| ScanError::Raw(e.to_string()))?;
+    let tree = lib.tree().map_err(|e| ScanError::Raw(e.to_string()))?;
     let mut count: u64 = 0;
     walk_documents(&tree, &mut |_| count += 1);
     progress.set_total(count);
@@ -101,7 +138,7 @@ pub fn scan_library_with(
         after_document(&node.path);
     });
     if cancelled {
-        return Err(CANCELLED.into());
+        return Err(ScanError::Cancelled);
     }
     Ok(Scan {
         root: root.to_path_buf(),
@@ -153,13 +190,13 @@ pub fn facts(info: &DocumentInfo) -> Option<DocFacts> {
 
 /// Wie [`facts`], mit dem Grund, warum es keine Angaben gibt.
 fn tip_facts(info: &DocumentInfo) -> Result<DocFacts, String> {
-    let no_tip = || "Der aktive Zweig hat keine Version.".to_string();
+    let no_tip = || "The active branch has no version.".to_string();
     let version = info.tip(&info.active_branch).ok_or_else(no_tip)?;
     let time = &info.version(version).ok_or_else(no_tip)?.time;
     // `peek` prüft nur die Form der Zeit; „9999-99-99T99:99:99Z“ darf weder datieren noch
     // beim Vergleich „zuletzt geändert“ gewinnen.
     if local_time::format_offset(time, 0).is_none() {
-        return Err(format!("Die Zeitangabe „{time}“ ist ungültig."));
+        return Err(format!("The time \"{time}\" is invalid."));
     }
     Ok(DocFacts {
         version,
@@ -306,8 +343,8 @@ pub fn changed_line(tile: &Tile) -> String {
     match &tile.newest {
         None => String::new(),
         Some((_, f)) => match format_changed(&f.changed) {
-            Some(t) => format!("Geändert {t}"),
-            None => "Datum unbekannt".into(),
+            Some(t) => tr!("projects-changed", time = t),
+            None => tr!("projects-date-unknown"),
         },
     }
 }
@@ -318,22 +355,24 @@ pub fn meta_line(tile: &Tile, no_bodies: bool) -> (String, Tone) {
     let version = tile.newest.as_ref().map(|(_, f)| f.version);
     match tile.kind {
         TileKind::Document => match version {
-            Some(v) if tile.unreadable == 0 => normal(format!("Version {v}")),
-            _ => ("Dokument nicht lesbar".into(), Tone::Warning),
+            Some(v) if tile.unreadable == 0 => normal(tr!("projects-version", v = v)),
+            _ => (tr!("projects-document-unreadable"), Tone::Warning),
         },
         TileKind::Project | TileKind::Folder => {
             if tile.documents == 0 {
-                return normal("Noch kein Dokument".into());
+                return normal(tr!("projects-no-document"));
             }
             if tile.unreadable >= tile.documents {
-                return ("Dokumente nicht lesbar".into(), Tone::Warning);
+                return (tr!("projects-documents-unreadable"), Tone::Warning);
             }
             let count = documents_text(tile.documents);
             match (tile.kind, version) {
                 (TileKind::Project, _) if no_bodies => {
-                    normal(format!("Noch keine Körper · {count}"))
+                    normal(tr!("projects-meta-no-bodies", count = count))
                 }
-                (TileKind::Project, Some(v)) => normal(format!("Version {v} · {count}")),
+                (TileKind::Project, Some(v)) => {
+                    normal(tr!("projects-meta-version", v = v, count = count))
+                }
                 _ => normal(count),
             }
         }
@@ -342,11 +381,7 @@ pub fn meta_line(tile: &Tile, no_bodies: bool) -> (String, Tone) {
 
 /// „1 Dokument“ / „{n} Dokumente“.
 pub fn documents_text(n: usize) -> String {
-    if n == 1 {
-        "1 Dokument".into()
-    } else {
-        format!("{n} Dokumente")
-    }
+    tr!("projects-documents", n = n)
 }
 
 /// Wie [`footer_text`]; zeigt die Ebene nur einen Teil ihrer `total` Einträge (über
@@ -356,18 +391,25 @@ pub fn footer_text_of(tiles: &[Tile], top_level: bool, total: usize) -> String {
         return footer_text(tiles, top_level);
     }
     // `total` ist hier größer als eins: immer Mehrzahl
-    let noun = if top_level { "Projekten" } else { "Einträgen" };
-    format!("{} von {total} {noun}", tiles.len())
+    if top_level {
+        tr!(
+            "projects-footer-partial-top",
+            shown = tiles.len(),
+            total = total
+        )
+    } else {
+        tr!(
+            "projects-footer-partial-entries",
+            shown = tiles.len(),
+            total = total
+        )
+    }
 }
 
 /// Fußzeile: oben die Zahl der Projekte, darunter Ordner und Dokumente der Ebene.
 pub fn footer_text(tiles: &[Tile], top_level: bool) -> String {
     if top_level {
-        return match tiles.len() {
-            0 => "Keine Projekte".into(),
-            1 => "1 Projekt".into(),
-            n => format!("{n} Projekte"),
-        };
+        return tr!("projects-count", n = tiles.len());
     }
     let folders = tiles.iter().filter(|t| t.kind == TileKind::Folder).count();
     let docs = tiles
@@ -376,13 +418,13 @@ pub fn footer_text(tiles: &[Tile], top_level: bool) -> String {
         .count();
     let mut parts = Vec::new();
     if folders > 0 {
-        parts.push(format!("{folders} Ordner"));
+        parts.push(tr!("projects-folders", n = folders));
     }
     if docs > 0 {
         parts.push(documents_text(docs));
     }
     if parts.is_empty() {
-        "Leer".into()
+        tr!("projects-empty-level")
     } else {
         parts.join(" · ")
     }

@@ -151,10 +151,7 @@ pub fn build_scene_marked(
             .checked_add(mesh.positions.len())
             .is_some_and(|n| n <= u32::MAX as usize);
         let (true, Ok(vertex_base)) = (fits, u32::try_from(scene.face_vertices.len())) else {
-            eprintln!(
-                "Warnung: Szene zu groß, Körper {} wird nicht gezeichnet",
-                body + 1
-            );
+            eprintln!("Warning: scene too large, body {} is not drawn", body + 1);
             continue;
         };
         scene.face_vertices.extend(

@@ -442,7 +442,7 @@ fn on_circle() -> (f64, f64) {
 fn horizontal_dimension_by_two_edge_clicks_and_placing() {
     let (mut st, _, d, front, mut h) = box_front();
     // Schalter „Maß“ in der Werkzeugleiste: Vorgabe waagerecht.
-    h.click_text(&mut st, TOOL);
+    h.click_text(&mut st, &tool());
     assert_eq!(
         st.dimension_tool.mode,
         ToolMode::Linear(LinearDir::Horizontal)
@@ -916,7 +916,7 @@ fn rejections_are_german_and_leave_the_document_unchanged() {
     h.click_at(&mut st, (95.0, 100.0));
     h.click_at(&mut st, (100.0, 85.0));
     assert_eq!(
-        st.dimension_tool.message(),
+        st.dimension_tool.message().as_deref(),
         Some("Die Kante steht nicht quer zum Maß.")
     );
     assert_eq!(st.dimension_tool.pending().len(), 1, "erster Bezug bleibt");
@@ -928,12 +928,12 @@ fn rejections_are_german_and_leave_the_document_unchanged() {
     );
     // Ein Klick neben die Linien setzt nichts.
     h.click_at(&mut st, (60.0, 60.0));
-    assert_eq!(st.dimension_tool.message(), Some(MISSED));
+    assert_eq!(st.dimension_tool.message(), Some(missed().text()));
     assert_eq!(st.document.edit_count(), e0);
     assert!(dims(&st, d).is_empty());
     let mut texts = vec![
         "Die Kante steht nicht quer zum Maß.".to_string(),
-        MISSED.to_string(),
+        missed().text(),
     ];
 
     // Isometrie: Klick auf eine Linie der isometrischen Ansicht.
@@ -960,10 +960,10 @@ fn rejections_are_german_and_leave_the_document_unchanged() {
         .unwrap();
     let e0 = st.document.edit_count();
     h.click_at(&mut st, (mid.x, mid.y));
-    assert_eq!(st.dimension_tool.message(), Some(NO_ISOMETRIC));
+    assert_eq!(st.dimension_tool.message(), Some(no_isometric().text()));
     assert!(st.dimension_tool.pending().is_empty());
     assert_eq!(st.document.edit_count(), e0);
-    texts.push(NO_ISOMETRIC.into());
+    texts.push(no_isometric().text());
 
     // Nur Netz-Körper: keine Linie lässt sich bemaßen.
     let mut st = AppState::new();
@@ -985,11 +985,11 @@ fn rejections_are_german_and_leave_the_document_unchanged() {
         panic!("{out:?}")
     };
     assert_eq!(
-        t,
+        t.text(),
         "Alle Körper sind Netze; eine Zeichnung braucht exakte Körper."
     );
     assert_eq!(st.document.edit_count(), e0);
-    texts.push(t);
+    texts.push(t.text());
 
     // Ellipsenkante: lässt sich nicht bemaßen (auch nicht als Durchmesser).
     let mut st = AppState::new();
@@ -1009,27 +1009,24 @@ fn rejections_are_german_and_leave_the_document_unchanged() {
         );
         assert_eq!(
             st.dimension_tool.message(),
-            Some(NOT_DIMENSIONABLE),
+            Some(not_dimensionable().text()),
             "{mode:?}"
         );
         assert!(st.dimension_tool.pending().is_empty());
     }
     assert_eq!(st.document.edit_count(), e0);
-    texts.push(NOT_DIMENSIONABLE.into());
+    texts.push(not_dimensionable().text());
 
     // Auch Hinweise und Erklärungen des Werkzeugs.
-    texts.extend(
-        [
-            TOOL_TIP,
-            READ_ONLY_TIP,
-            ISOMETRIC_TIP,
-            NO_VIEWS_TIP,
-            ANGLE_LINES,
-            SILHOUETTE_NOTE,
-        ]
-        .map(String::from),
-    );
-    texts.push(incomplete_text(1, 2));
+    texts.extend([
+        tool_tip(),
+        read_only_tip(),
+        isometric_tip(),
+        no_views_tip(),
+        angle_lines().text(),
+        silhouette_note().text(),
+    ]);
+    texts.push(incomplete_text(1, 2).text());
     for mode in ToolMode::CHOICES {
         let mut tool = DimensionTool::default();
         tool.set_mode(mode);
@@ -1046,7 +1043,7 @@ fn rejections_are_german_and_leave_the_document_unchanged() {
 #[test]
 fn escape_cancels_without_changes() {
     let (mut st, _, d, _, mut h) = box_front();
-    h.click_text(&mut st, TOOL);
+    h.click_text(&mut st, &tool());
     let e0 = st.document.edit_count();
     h.click_at(&mut st, (95.0, 100.0));
     h.key(&mut st, Key::Escape);
@@ -1167,7 +1164,7 @@ fn tool_is_disabled_in_read_only_tabs_and_isometric_view() {
     h.idle(&mut st);
     h.idle(&mut st);
     let e0 = st.document.edit_count();
-    h.click_text(&mut st, TOOL);
+    h.click_text(&mut st, &tool());
     assert_eq!(st.dimension_tool.mode, ToolMode::Off);
     st.dimension_tool
         .set_mode(ToolMode::Linear(LinearDir::Horizontal));
@@ -1185,7 +1182,7 @@ fn tool_is_disabled_in_read_only_tabs_and_isometric_view() {
     let d = new_drawing(&mut st);
     let iso = add_view(&mut st, d, ViewKind::Isometric, 140.0, 100.0);
     let mut h = open(&mut st, d);
-    h.click_text(&mut st, TOOL);
+    h.click_text(&mut st, &tool());
     assert_eq!(st.dimension_tool.mode, ToolMode::Off);
     st.dimension_tool
         .set_mode(ToolMode::Linear(LinearDir::Horizontal));
@@ -1200,7 +1197,7 @@ fn tool_is_disabled_in_read_only_tabs_and_isometric_view() {
     };
     assert_eq!(
         tool.click(&st, d, iso, &hit),
-        ToolOutcome::Rejected(NO_ISOMETRIC.into())
+        ToolOutcome::Rejected(no_isometric())
     );
     assert!(tool.pending().is_empty());
     assert_eq!(
@@ -1400,8 +1397,8 @@ fn escape_never_gets_stuck_at_the_dimension_limit() {
     assert!(st.dimension_tool.pending().is_empty());
     assert!(!st.dimension_tool.is_ready());
     assert_eq!(st.dimension_tool.view(), None);
-    assert_eq!(st.dimension_tool.message(), Some(full_text().as_str()));
-    assert!(shot.text.contains(&full_text()), "{}", shot.text);
+    assert_eq!(st.dimension_tool.message(), Some(full_text().text()));
+    assert!(shot.text.contains(&full_text().text()), "{}", shot.text);
     assert_eq!(st.document.edit_count(), e0);
     assert_eq!(
         dims(&st, d).len(),
@@ -1478,9 +1475,13 @@ fn silhouette_in_a_linear_dimension_measures_to_the_axis_and_says_so() {
         "{:?}",
         st.dimension_tool.pending()
     );
-    assert_eq!(st.dimension_tool.notice(), Some(SILHOUETTE_NOTE));
+    assert_eq!(st.dimension_tool.notice(), Some(silhouette_note().text()));
     let shot = h.idle(&mut st);
-    assert!(shot.text.contains(SILHOUETTE_NOTE), "{}", shot.text);
+    assert!(
+        shot.text.contains(&silhouette_note().text()),
+        "{}",
+        shot.text
+    );
     h.click_at(&mut st, (100.0, 125.0));
     let all = dims(&st, d);
     assert_eq!(all.len(), 1);
@@ -1502,25 +1503,25 @@ fn tool_lock_texts_and_sentences() {
     let drawing = |st: &AppState| st.document.drawing(d).unwrap().clone();
     assert_eq!(
         drawing_view::tool_blocked(&drawing(&st), true),
-        Some(NO_VIEWS_TIP)
+        Some(no_views_tip())
     );
     add_view(&mut st, d, ViewKind::Isometric, 140.0, 100.0);
     assert_eq!(
         drawing_view::tool_blocked(&drawing(&st), true),
-        Some(ISOMETRIC_TIP)
+        Some(isometric_tip())
     );
     add_view(&mut st, d, ViewKind::Front, 60.0, 100.0);
     assert_eq!(drawing_view::tool_blocked(&drawing(&st), true), None);
     assert_eq!(
         drawing_view::tool_blocked(&drawing(&st), false),
-        Some(READ_ONLY_TIP)
+        Some(read_only_tip())
     );
     // Durchgereichte Texte enden mit einem Satzzeichen.
     assert_eq!(sentence("Das Maß gibt es nicht"), "Das Maß gibt es nicht.");
     assert_eq!(sentence("Schon ein Satz."), "Schon ein Satz.");
     assert_eq!(sentence("Wirklich?"), "Wirklich?");
     assert_eq!(
-        incomplete_text(1, 2),
+        incomplete_text(1, 2).text(),
         "Die Maße sind unvollständig: nur 1 von 2 Maßen wurden gesetzt."
     );
 }

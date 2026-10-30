@@ -31,7 +31,7 @@ impl Matrix {
         let cols = rows.first().map_or(0, Vec::len);
         let mut m = Self::zeros(rows.len(), cols);
         for (i, r) in rows.iter().enumerate() {
-            assert_eq!(r.len(), cols, "Zeilen müssen gleich lang sein");
+            assert_eq!(r.len(), cols, "rows must have the same length");
             m.data[i * cols..(i + 1) * cols].copy_from_slice(r);
         }
         m

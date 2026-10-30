@@ -370,7 +370,7 @@ fn disabled_entries_explain() {
     assert_eq!(rig.menu_texts().0, entry);
     write_export(&mut rig, d);
     rig.settle();
-    assert_eq!(rig.tab().undo_blocked(), Some(EXPORT_WRITING));
+    assert_eq!(rig.tab().undo_blocked(), Some(export_writing()));
     let texts = hover_texts(&mut rig, entry);
     assert!(
         texts

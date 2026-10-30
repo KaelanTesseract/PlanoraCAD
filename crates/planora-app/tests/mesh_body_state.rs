@@ -4,7 +4,7 @@
 use planora_app::mesh_body::*;
 use planora_app::state::*;
 use planora_exchange::{ExchangeMesh, MeshReport, MeshTransform};
-use planora_feature::{BlendArt, MESH_LOCKED};
+use planora_feature::{BlendArt, mesh_locked};
 use planora_kernel::Id;
 use planora_kernel::boolean::BoolOp;
 use planora_math::{DQuat, DVec3};
@@ -111,19 +111,19 @@ fn mesh_bodies_refuse_booleans_blends_and_sketches() {
     for (a, b) in [(q, m), (m, q)] {
         assert_eq!(
             s.add_boolean(a, b, BoolOp::Union),
-            Err(MESH_LOCKED.to_string())
+            Err(mesh_locked().to_string())
         );
     }
     assert_eq!(
         s.add_blend(m, &[], BlendArt::Rundung { radius: 1.0 }, false),
-        Err(MESH_LOCKED.to_string())
+        Err(mesh_locked().to_string())
     );
     assert_eq!(
         s.new_sketch_on_face(m, Id::from_index(0)),
-        Err(MESH_LOCKED.to_string())
+        Err(mesh_locked().to_string())
     );
     assert_eq!(s.document.features().len(), count);
-    assert_eq!(s.message.as_deref(), Some(MESH_LOCKED));
+    assert_eq!(s.message.as_deref(), Some(mesh_locked().as_str()));
 }
 
 #[test]
@@ -139,7 +139,7 @@ fn very_large_meshes_are_shown_as_a_preview() {
         "Maße aus dem ganzen Netz"
     );
     assert_eq!(b.mesh_report.unwrap().triangles, 12);
-    assert!(s.mesh_note().unwrap().contains(PREVIEW_NOTE));
+    assert!(s.mesh_note().unwrap().contains(&preview_note()));
     assert_eq!(DISPLAY_TRIANGLES, 5_000_000);
     assert_eq!(AppState::new().display_triangles, DISPLAY_TRIANGLES);
 }

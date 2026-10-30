@@ -173,15 +173,18 @@ fn section_shows_version_channel_switch_and_note() {
         let mut a = App::new(e, dark, 1920.0, 1080.0);
         a.w.open(false);
         let seen = a.settle(6);
-        assert_eq!(SECTION_UPDATES, "Updates");
-        assert_eq!(CHANNEL_LABEL, "Update-Kanal");
-        assert_eq!(CHECK_ON_START_LABEL, "Beim Start nach Updates suchen");
+        assert_eq!(section_updates().as_str(), "Updates");
+        assert_eq!(channel_label().as_str(), "Update-Kanal");
         assert_eq!(
-            PRIVACY_NOTE,
+            check_on_start_label().as_str(),
+            "Beim Start nach Updates suchen"
+        );
+        assert_eq!(
+            privacy_note().as_str(),
             "Beim Suchen fragt das Programm bei GitHub nach; dabei sieht GitHub deine IP-Adresse."
         );
-        assert_eq!(CHECK_NOW, "Jetzt nach Updates suchen");
-        assert_eq!(CHECK_RUNNING, "Suche läuft …");
+        assert_eq!(check_now().as_str(), "Jetzt nach Updates suchen");
+        assert_eq!(check_running().as_str(), "Suche läuft …");
         let running = planora_app::running_version();
         let version_line = running_version_line();
         assert_eq!(
@@ -195,16 +198,16 @@ fn section_shows_version_channel_switch_and_note() {
         assert_eq!(last_check_line(None), "Letzte Prüfung: noch nie");
         let never = last_check_line(None);
         for t in [
-            SECTION_APPEARANCE,
-            SECTION_UPDATES,
+            section_appearance().as_str(),
+            section_updates().as_str(),
             version_line.as_str(),
-            CHANNEL_LABEL,
-            Channel::Dev.label(),
-            CHECK_ON_START_LABEL,
-            PRIVACY_NOTE,
-            CHECK_NOW,
+            channel_label().as_str(),
+            &Channel::Dev.label(),
+            check_on_start_label().as_str(),
+            privacy_note().as_str(),
+            check_now().as_str(),
             never.as_str(),
-            SECTION_PROJECTS,
+            section_projects().as_str(),
             "Schließen",
         ] {
             find(&seen, t);
@@ -212,23 +215,23 @@ fn section_shows_version_channel_switch_and_note() {
         // Reihenfolge: Darstellung neben Updates (ab 1600 Pixeln Breite), Updates (Version und
         // letzte Prüfung, Kanal und Schalter, Hinweis, Knopf), Projekte.
         let (look, upd) = (
-            find(&seen, SECTION_APPEARANCE),
-            find(&seen, SECTION_UPDATES),
+            find(&seen, section_appearance().as_str()),
+            find(&seen, section_updates().as_str()),
         );
         assert!(
             (look.rect.top() - upd.rect.top()).abs() < 1.0 && look.rect.right() < upd.rect.left(),
             "dunkel {dark}: Darstellung neben Updates"
         );
         let order = [
-            SECTION_UPDATES,
-            version_line.as_str(),
-            CHANNEL_LABEL,
-            PRIVACY_NOTE,
-            CHECK_NOW,
-            SECTION_PROJECTS,
+            section_updates(),
+            version_line.clone(),
+            channel_label(),
+            privacy_note(),
+            check_now(),
+            section_projects(),
         ];
         for pair in order.windows(2) {
-            let (a, b) = (find(&seen, pair[0]), find(&seen, pair[1]));
+            let (a, b) = (find(&seen, &pair[0]), find(&seen, &pair[1]));
             assert!(
                 a.rect.bottom() <= b.rect.top(),
                 "dunkel {dark}: „{}“ über „{}“",
@@ -239,7 +242,7 @@ fn section_shows_version_channel_switch_and_note() {
         // Je Zeile zwei Angaben, nebeneinander.
         for (left, right) in [
             (version_line.as_str(), never.as_str()),
-            (CHANNEL_LABEL, CHECK_ON_START_LABEL),
+            (channel_label().as_str(), check_on_start_label().as_str()),
         ] {
             let (l, r) = (find(&seen, left), find(&seen, right));
             assert!(
@@ -256,8 +259,8 @@ fn section_shows_version_channel_switch_and_note() {
             "dunkel {dark}: Fenster {window:?} über der Menüleiste"
         );
         // Der Hinweis zum Datenschutz ist zurückhaltend (schwache Schrift).
-        let note = find(&seen, PRIVACY_NOTE);
-        let label = find(&seen, CHECK_ON_START_LABEL);
+        let note = find(&seen, privacy_note().as_str());
+        let label = find(&seen, check_on_start_label().as_str());
         assert!(
             note.rect.height() <= label.rect.height() + 0.5,
             "kleine Schrift"
@@ -278,14 +281,14 @@ fn section_shows_version_channel_switch_and_note() {
         assert!(close.clip.contains_rect(close.rect));
         // Die Texte sind deutsch und einfach.
         for t in [
-            CHANNEL_LABEL,
-            CHECK_ON_START_LABEL,
-            PRIVACY_NOTE,
-            CHECK_NOW,
-            CHECK_RUNNING,
-            UP_TO_DATE,
-            CHECK_FAILED,
-            UPDATES_NOT_SAVED,
+            channel_label().as_str(),
+            check_on_start_label().as_str(),
+            privacy_note().as_str(),
+            check_now().as_str(),
+            check_running().as_str(),
+            up_to_date().as_str(),
+            check_failed().as_str(),
+            updates_not_saved().as_str(),
         ] {
             for tech in ["API", "HTTP", "Cargo", "::", "config", "Release"] {
                 assert!(!t.contains(tech), "{t} enthält {tech}");
@@ -301,7 +304,7 @@ fn the_check_now_button_asks_the_app_and_shows_the_hint() {
         let mut a = App::new(e, dark, 1920.0, 1080.0);
         a.w.open(false);
         assert!(!a.w.take_check_request());
-        a.click(CHECK_NOW);
+        a.click(check_now().as_str());
         // Das Fenster sucht nicht selbst: es meldet den Wunsch (einmal) an die App.
         assert!(a.w.is_open());
         assert!(a.w.take_check_request());
@@ -311,8 +314,8 @@ fn the_check_now_button_asks_the_app_and_shows_the_hint() {
         // Läuft die Suche, ist der Knopf aus.
         a.w.set_check_hint(Some(CheckHint::Running));
         let seen = a.settle(3);
-        find(&seen, CHECK_RUNNING);
-        a.click(CHECK_NOW);
+        find(&seen, check_running().as_str());
+        a.click(check_now().as_str());
         assert!(!a.w.take_check_request(), "Knopf aus");
         // Ergebnisse neben dem Knopf, der Fehler in Warnfarbe; das Fenster lässt bei
         // 1920 × 1080 die Menüleiste frei.
@@ -324,7 +327,7 @@ fn the_check_now_button_asks_the_app_and_shows_the_hint() {
         ] {
             a.w.set_check_hint(Some(hint.clone()));
             let seen = a.settle(3);
-            let (button, shown) = (find(&seen, CHECK_NOW), find(&seen, &hint.text()));
+            let (button, shown) = (find(&seen, check_now().as_str()), find(&seen, &hint.text()));
             assert!(
                 button.rect.right() < shown.rect.left()
                     && (button.rect.center().y - shown.rect.center().y).abs() < 4.0,
@@ -396,17 +399,17 @@ fn channel_choice_is_saved_and_dev_is_the_only_option() {
     a.w.open(false);
     let seen = a.settle(6);
     // Die Auswahl zeigt den gespeicherten Kanal.
-    find(&seen, Channel::Beta.label());
-    a.click(Channel::Beta.label());
+    find(&seen, &Channel::Beta.label());
+    a.click(&Channel::Beta.label());
     let seen = a.settle(3);
     // Aufgeklappt: nur „Dev“ steht zur Wahl.
     assert!(
-        texts(&seen).contains(&Channel::Dev.label()),
+        texts(&seen).iter().any(|t| *t == Channel::Dev.label()),
         "Dev wählbar: {:?}",
         texts(&seen)
     );
     assert!(
-        !texts(&seen).contains(&Channel::Stable.label()),
+        !texts(&seen).iter().any(|t| *t == Channel::Stable.label()),
         "Stabil nicht wählbar: {:?}",
         texts(&seen)
     );
@@ -417,7 +420,7 @@ fn channel_choice_is_saved_and_dev_is_the_only_option() {
         1,
         "Beta nur als Anzeige des gespeicherten Kanals"
     );
-    a.click(Channel::Dev.label());
+    a.click(&Channel::Dev.label());
     assert_eq!(a.e.ws.update_channel(), Channel::Dev);
     let disk = Config::read_from(&a.e.cfg).unwrap();
     assert_eq!(disk.update_channel, "dev", "gespeichert");
@@ -440,14 +443,14 @@ fn switch_is_saved_and_failure_keeps_value_for_the_session_with_hint() {
         let mut a = App::new(e, dark, 1920.0, 1080.0);
         a.w.open(false);
         assert!(a.e.ws.update_check_enabled(), "Voreinstellung an");
-        a.click(CHECK_ON_START_LABEL);
+        a.click(check_on_start_label().as_str());
         assert!(!a.e.ws.update_check_enabled(), "aus");
         assert!(
             !Config::read_from(&a.e.cfg).unwrap().update_check,
             "gespeichert"
         );
         assert_eq!(a.w.updates_message(), None);
-        a.click(CHECK_ON_START_LABEL);
+        a.click(check_on_start_label().as_str());
         assert!(a.e.ws.update_check_enabled(), "wieder an");
         let text = fs::read_to_string(&a.e.cfg).unwrap();
         assert!(
@@ -457,20 +460,20 @@ fn switch_is_saved_and_failure_keeps_value_for_the_session_with_hint() {
 
         // Schreiben scheitert: der Wert gilt für die Sitzung, Hinweis in Warnfarbe.
         let blocker = block(&mut a.e);
-        a.click(CHECK_ON_START_LABEL);
+        a.click(check_on_start_label().as_str());
         assert!(!a.e.ws.update_check_enabled(), "gilt trotzdem");
         assert_eq!(fs::read(&blocker).unwrap(), b"x");
         assert_eq!(
             a.w.updates_message(),
-            Some(&RootMessage::Warning(UPDATES_NOT_SAVED.into()))
+            Some(&RootMessage::Warning(Note::UpdatesNotSaved))
         );
         assert_eq!(
-            UPDATES_NOT_SAVED,
+            updates_not_saved().as_str(),
             "Die Update-Einstellung gilt nur bis zum Programmende: sie konnte nicht gespeichert werden."
         );
         let seen = a.settle(3);
         assert_eq!(
-            find(&seen, UPDATES_NOT_SAVED).color,
+            find(&seen, updates_not_saved().as_str()).color,
             theme::palette(dark).warning
         );
         // Nächstes gelungenes Schreiben (hier das Projektverzeichnis) nimmt den Wert mit.
@@ -675,9 +678,9 @@ fn keys_table_height_follows_the_window_and_the_menu_stays_free() {
         // Mit Hinweiszeilen im Abschnitt „Updates“ (Ergebnis und Speicherfehler).
         a.w.set_check_hint(Some(CheckHint::Failed));
         block(&mut a.e);
-        a.click(CHECK_ON_START_LABEL);
+        a.click(check_on_start_label().as_str());
         let seen = a.settle(6);
-        find(&seen, UPDATES_NOT_SAVED);
+        find(&seen, updates_not_saved().as_str());
         let window = a.w.last_rect.expect("Fenster gezeichnet");
         assert!(
             window.top() > 50.0,

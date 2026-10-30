@@ -79,7 +79,7 @@ fn ready(ui: &DrawingUi, st: &AppState, kind: ViewKind) -> Arc<ViewLines> {
 
 fn failed(ui: &DrawingUi, st: &AppState, kind: ViewKind) -> String {
     match ui.result(kind, st.document.model_edit_count()) {
-        ViewResult::Failed(m) => m,
+        ViewResult::Failed(m) => m.text(),
         other => panic!("{kind:?}: {other:?}"),
     }
 }
@@ -359,7 +359,7 @@ fn drawing_errors_and_crashed_workers_become_failures() {
     loop {
         tick(&mut ui, &st, false);
         if let ViewResult::Failed(m) = ui.result(ViewKind::Front, st.document.model_edit_count()) {
-            assert_eq!(m, "Die Berechnung wurde unerwartet beendet.");
+            assert_eq!(m.text(), "Die Berechnung wurde unerwartet beendet.");
             break;
         }
         assert!(start.elapsed() < Duration::from_secs(10), "hängt");

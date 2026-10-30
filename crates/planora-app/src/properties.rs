@@ -2,7 +2,7 @@ use crate::browser::error_color;
 use crate::formula_field::FormulaField;
 use crate::mesh_body::{euler_degrees, report_text, rotation_from_degrees, warning_color};
 use crate::sketch_view::format_number;
-use crate::state::{AppState, BodyKind, STEP_LABEL};
+use crate::state::{AppState, BodyKind, step_label};
 use crate::theme;
 use planora_exchange::MeshTransform;
 use planora_feature::expr::number_text;
@@ -10,40 +10,45 @@ use planora_feature::{
     BlendArt, FeatureId, FeatureKind, FeatureStatus, FieldKey, ParamUnit, SketchPlane,
     StandardPlane, StepShape, field_unit, field_value,
 };
+use planora_i18n::{fmt_num, localize_decimal, tr};
 use planora_kernel::{BoolOp, Kernel};
 use planora_math::DVec3;
 use planora_render::Pick;
 
 /// Beschriftung der Zeile „Geschlossen“: Der Bericht stammt vom Einlesen; das Export-Fenster
 /// prüft nach der Lage noch einmal und kann deshalb ein anderes Ergebnis zeigen.
-const CLOSED_AT_IMPORT_LABEL: &str = "Geschlossen beim Einlesen";
+fn closed_at_import_label() -> String {
+    tr!("props-closed-at-import")
+}
 
 /// Bezeichnung der Zahlenfelder für die Lage (die Einheit steht hier, nicht in jedem Feld, damit
 /// die Zahlen in ein Drittel der Feldbreite passen).
-pub const POSITION_LABEL: &str = "Position x / y / z in mm";
+pub fn position_label() -> String {
+    tr!("props-position-label")
+}
 
 /// Bezeichnung der Zahlenfelder für die Drehung eines Netz-Körpers.
-pub const ROTATION_LABEL: &str = "Drehung x / y / z in Grad";
-
-/// Vorsatz der Warnung aus dem Bericht beim Einlesen.
-const AT_IMPORT_PREFIX: &str = "Beim Einlesen: ";
+pub fn rotation_label() -> String {
+    tr!("props-rotation-label")
+}
 
 /// Warnung unter den Zeilen: der Bericht von damals, als solcher gekennzeichnet.
 fn import_warning(r: &planora_exchange::MeshReport) -> String {
-    format!("{AT_IMPORT_PREFIX}{}", report_text(r))
+    tr!("props-at-import", report = report_text(r))
 }
 
 /// Hinweis unter den Netz-Körpern (ein Satz, ohne doppelte Leerzeichen).
-const MESH_BODY_HINT: &str = concat!(
-    "Netz-Körper lassen sich verschieben, drehen, vergrößern, messen und exportieren, ",
-    "aber nicht mit anderen Körpern verrechnen, runden oder als Fläche für eine Skizze nutzen."
-);
+fn mesh_body_hint() -> String {
+    tr!("props-mesh-body-hint")
+}
 
 /// Warnung bei STEP-Körpern mit grober Genauigkeit der Datei (gröber als 1e-5 mm), in Warnfarbe.
-pub const STEP_COARSE_HINT: &str = "Rechnen mit diesem Körper kann scheitern.";
+pub fn step_coarse_hint() -> String {
+    tr!("props-step-coarse-hint")
+}
 
-/// Genauigkeit in mm für die Anzeige: höchstens vier gültige Stellen, Komma, ohne überflüssige
-/// Nullen („0,001 mm“, „0,00000254 mm“), wie in den Meldungen des STEP-Lesers.
+/// Genauigkeit in mm für die Anzeige: höchstens vier gültige Stellen, Dezimaltrenner der Sprache,
+/// ohne überflüssige Nullen („0,001 mm“, „0,00000254 mm“), wie in den Meldungen des STEP-Lesers.
 fn tolerance_text(t: f64) -> String {
     if !t.is_finite() || t <= 0.0 {
         return "0 mm".into();
@@ -55,7 +60,7 @@ fn tolerance_text(t: f64) -> String {
     } else {
         s
     };
-    format!("{} mm", s.replace('.', ","))
+    format!("{} mm", planora_i18n::localize_decimal(&s))
 }
 
 /// Genauigkeit der Datei für die Anzeige; nennt die Datei keine, „unbekannt“ mit dem
@@ -65,34 +70,35 @@ fn accuracy_text(shape: &StepShape) -> String {
     if shape.tolerance_known() {
         t
     } else {
-        format!("unbekannt (angenommen {t})")
+        tr!("props-accuracy-unknown", assumed = t)
     }
 }
 
 /// Zeilen „Flächen“ und „Genauigkeit der Datei“ einer STEP-Form (Flächen der Form, wie sie aus
-/// der Datei kam; „–“, wenn sie sich nicht lesen lässt).
-fn step_rows(state: &AppState, shape: &StepShape) -> Vec<(&'static str, String)> {
+/// der Datei kam; „–“, wenn sie sich nicht lesen lässt). `faces_label` ist die Bezeichnung der
+/// ersten Zeile.
+fn step_rows(state: &AppState, shape: &StepShape, faces_label: String) -> Vec<(String, String)> {
     let faces = shape.solid().map_or_else(
         |_| "–".to_string(),
         |s| state.kernel.counts(s).0.to_string(),
     );
     vec![
-        ("Flächen", faces),
-        ("Genauigkeit der Datei", accuracy_text(shape)),
+        (faces_label, faces),
+        (tr!("props-accuracy"), accuracy_text(shape)),
     ]
 }
 
 /// Warnung unter den Zeilen eines groben STEP-Körpers.
 fn step_warning(ui: &mut egui::Ui, shape: &StepShape) {
     if shape.is_coarse() {
-        ui.colored_label(warning_color(ui.visuals().dark_mode), STEP_COARSE_HINT);
+        ui.colored_label(warning_color(ui.visuals().dark_mode), step_coarse_hint());
     }
 }
 
 /// Eigenschaften: für einen gewählten Körper Maße, Fläche/Kante und Position; für ein
 /// gewähltes Feature Art, Name, Status und Parameter.
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
-    theme::section_header(ui, "Eigenschaften", theme::HEADER_H);
+    theme::section_header(ui, &tr!("tab-properties"), theme::HEADER_H);
     ui.add_space(theme::SPACE_1);
     show_content(ui, state);
 }
@@ -107,7 +113,7 @@ pub fn show_content(ui: &mut egui::Ui, state: &mut AppState) {
     {
         feature(ui, state, id);
     } else {
-        ui.weak("Nichts ausgewählt.");
+        ui.weak(tr!("props-nothing-selected"));
     }
 }
 
@@ -236,33 +242,33 @@ fn triple(v: DVec3) -> String {
 }
 
 /// Parameter eines Features als Text (Bezeichnung, Wert).
-pub fn parameter_rows(state: &AppState, kind: &FeatureKind) -> Vec<(&'static str, String)> {
+pub fn parameter_rows(state: &AppState, kind: &FeatureKind) -> Vec<(String, String)> {
     let doc = &state.document;
     let feature_name = |id: FeatureId| {
         doc.feature(id)
-            .map_or_else(|| format!("Feature {}", id.0), |f| f.name.clone())
+            .map_or_else(|| tr!("state-feature-n", n = id.0), |f| f.name.clone())
     };
     match kind {
         FeatureKind::Sketch(s) => {
             let plane = match &s.plane {
-                SketchPlane::Standard(StandardPlane::XY) => "XY-Ebene".to_string(),
-                SketchPlane::Standard(StandardPlane::XZ) => "XZ-Ebene".to_string(),
-                SketchPlane::Standard(StandardPlane::YZ) => "YZ-Ebene".to_string(),
-                SketchPlane::OnFace(r) => format!(
-                    "Fläche „{}“ von „{}“",
-                    r.role,
-                    feature_name(FeatureId(r.origin))
+                SketchPlane::Standard(StandardPlane::XY) => tr!("tree-plane-xy"),
+                SketchPlane::Standard(StandardPlane::XZ) => tr!("tree-plane-xz"),
+                SketchPlane::Standard(StandardPlane::YZ) => tr!("tree-plane-yz"),
+                SketchPlane::OnFace(r) => tr!(
+                    "props-on-face",
+                    role = planora_kernel::blend::topo::role_label(&r.role),
+                    name = feature_name(FeatureId(r.origin))
                 ),
             };
             vec![
-                ("Ebene", plane),
-                ("Kurven", s.sketch.curves().count().to_string()),
-                ("Kantenkopien", s.copies.len().to_string()),
+                (tr!("props-plane"), plane),
+                (tr!("props-curves"), s.sketch.curves().count().to_string()),
+                (tr!("props-edge-copies"), s.copies.len().to_string()),
             ]
         }
         FeatureKind::Box { size, origin } => vec![
             (
-                "Größe",
+                tr!("props-size"),
                 format!(
                     "{} × {} × {} mm",
                     format_number(size.x, 2),
@@ -270,7 +276,7 @@ pub fn parameter_rows(state: &AppState, kind: &FeatureKind) -> Vec<(&'static str
                     format_number(size.z, 2)
                 ),
             ),
-            ("Position", triple(*origin)),
+            (tr!("props-position"), triple(*origin)),
         ],
         FeatureKind::Cylinder {
             radius,
@@ -282,47 +288,52 @@ pub fn parameter_rows(state: &AppState, kind: &FeatureKind) -> Vec<(&'static str
             height,
             origin,
         } => vec![
-            ("Radius", mm(*radius)),
-            ("Höhe", mm(*height)),
-            ("Position", triple(*origin)),
+            (tr!("props-radius"), mm(*radius)),
+            (tr!("props-height"), mm(*height)),
+            (tr!("props-position"), triple(*origin)),
         ],
         FeatureKind::Sphere { radius, origin } => {
-            vec![("Radius", mm(*radius)), ("Position", triple(*origin))]
+            vec![
+                (tr!("props-radius"), mm(*radius)),
+                (tr!("props-position"), triple(*origin)),
+            ]
         }
         FeatureKind::Extrude {
             sketch,
             profile,
             height,
         } => vec![
-            ("Skizze", feature_name(*sketch)),
-            ("Profil", (profile + 1).to_string()),
-            ("Höhe", mm(*height)),
+            (tr!("props-sketch"), feature_name(*sketch)),
+            (tr!("props-profile"), (profile + 1).to_string()),
+            (tr!("props-height"), mm(*height)),
         ],
         FeatureKind::Revolve {
             sketch,
             profile,
             axis,
         } => vec![
-            ("Skizze", feature_name(*sketch)),
-            ("Profil", (profile + 1).to_string()),
-            ("Drehachse", format!("Kurve {}", axis.index() + 1)),
+            (tr!("props-sketch"), feature_name(*sketch)),
+            (tr!("props-profile"), (profile + 1).to_string()),
+            (
+                tr!("props-axis"),
+                tr!("props-curve-n", n = axis.index() + 1),
+            ),
         ],
         FeatureKind::Boolean { target, tool, op } => vec![
-            ("Ziel", state.body_ref_name(*target)),
-            ("Werkzeug", state.body_ref_name(*tool)),
+            (tr!("edit-target"), state.body_ref_name(*target)),
+            (tr!("edit-tool"), state.body_ref_name(*tool)),
             (
-                "Operation",
+                tr!("props-operation"),
                 match op {
-                    BoolOp::Union => "Vereinigen",
-                    BoolOp::Difference => "Abziehen",
-                    BoolOp::Intersection => "Schneiden",
-                }
-                .to_string(),
+                    BoolOp::Union => tr!("chip-union"),
+                    BoolOp::Difference => tr!("chip-subtract"),
+                    BoolOp::Intersection => tr!("chip-intersect"),
+                },
             ),
         ],
         FeatureKind::Move { body, delta } => vec![
-            ("Körper", state.body_ref_name(*body)),
-            ("Verschiebung", triple(*delta)),
+            (tr!("props-body"), state.body_ref_name(*body)),
+            (tr!("props-displacement"), triple(*delta)),
         ],
         FeatureKind::Verrunden {
             body,
@@ -331,28 +342,37 @@ pub fn parameter_rows(state: &AppState, kind: &FeatureKind) -> Vec<(&'static str
             tangentenkette,
         } => {
             let mut rows = vec![
-                ("Körper", state.body_ref_name(*body)),
-                ("Kanten", edges.len().to_string()),
-                ("Art", art.kind_label().to_string()),
+                (tr!("props-body"), state.body_ref_name(*body)),
+                (tr!("props-edges"), edges.len().to_string()),
+                (tr!("props-kind"), art.kind_label().to_string()),
             ];
             match art {
-                BlendArt::Rundung { radius } => rows.push(("Radius", mm(*radius))),
+                BlendArt::Rundung { radius } => rows.push((tr!("props-radius"), mm(*radius))),
                 BlendArt::RundungVariabel { punkte } => {
-                    rows.push(("Punkte", punkte.len().to_string()))
+                    rows.push((tr!("props-points"), punkte.len().to_string()))
                 }
-                BlendArt::FaseGleich { abstand } => rows.push(("Abstand", mm(*abstand))),
+                BlendArt::FaseGleich { abstand } => {
+                    rows.push((tr!("blend-field-distance"), mm(*abstand)))
+                }
                 BlendArt::FaseZwei { abstand1, abstand2 } => {
-                    rows.push(("Abstand 1", mm(*abstand1)));
-                    rows.push(("Abstand 2", mm(*abstand2)));
+                    rows.push((tr!("blend-field-distance-1"), mm(*abstand1)));
+                    rows.push((tr!("blend-field-distance-2"), mm(*abstand2)));
                 }
                 BlendArt::FaseWinkel { abstand, winkel } => {
-                    rows.push(("Abstand", mm(*abstand)));
-                    rows.push(("Winkel", format!("{} °", format_number(*winkel, 2))));
+                    rows.push((tr!("blend-field-distance"), mm(*abstand)));
+                    rows.push((
+                        tr!("blend-field-angle"),
+                        format!("{} °", format_number(*winkel, 2)),
+                    ));
                 }
             }
             rows.push((
-                "Tangentenkette",
-                if *tangentenkette { "an" } else { "aus" }.to_string(),
+                tr!("props-tangent-chain"),
+                if *tangentenkette {
+                    tr!("props-on")
+                } else {
+                    tr!("props-off")
+                },
             ));
             rows
         }
@@ -365,10 +385,10 @@ pub fn parameter_rows(state: &AppState, kind: &FeatureKind) -> Vec<(&'static str
             let triangles = doc.mesh(*mesh).map_or(0, |m| m.triangle_count());
             let d = euler_degrees(*rotation);
             vec![
-                ("Netz", format!("{triangles} Dreiecke")),
-                ("Position", triple(*offset)),
+                (tr!("props-mesh"), tr!("props-triangles", n = triangles)),
+                (tr!("props-position"), triple(*offset)),
                 (
-                    "Drehung",
+                    tr!("props-rotation"),
                     format!(
                         "{} / {} / {} °",
                         format_number(d.x, 2),
@@ -376,13 +396,13 @@ pub fn parameter_rows(state: &AppState, kind: &FeatureKind) -> Vec<(&'static str
                         format_number(d.z, 2)
                     ),
                 ),
-                ("Maßstab", format_number(*scale, 4)),
+                (tr!("props-scale"), format_number(*scale, 4)),
             ]
         }
         // Keine Zahlenfelder (P6): nur Angaben zur Form aus der Datei.
         FeatureKind::StepBody { shape } => doc
             .step_shape(*shape)
-            .map_or_else(Vec::new, |s| step_rows(state, s)),
+            .map_or_else(Vec::new, |s| step_rows(state, s, tr!("props-faces"))),
     }
 }
 
@@ -394,21 +414,20 @@ fn feature(ui: &mut egui::Ui, state: &mut AppState, id: FeatureId) {
     let (name, label, status) = (f.name.clone(), f.kind.label(), f.status.clone());
     let rows = parameter_rows(state, &f.kind);
     let sketch = matches!(f.kind, FeatureKind::Sketch(_));
-    ui.label("Name");
+    ui.label(tr!("props-name"));
     let renamed = name_field(ui, Some(id), &name);
     ui.add_space(6.0);
-    row(ui, "Art", theme::value(label));
+    row(ui, &tr!("props-kind"), theme::value(label));
     let weak = |text: String| egui::RichText::new(text).weak();
     let status_text = match &status {
-        FeatureStatus::Ok => theme::value("berechnet"),
-        FeatureStatus::Error(e) => {
-            egui::RichText::new(format!("Fehler: {e}")).color(error_color(ui.visuals().dark_mode))
-        }
-        FeatureStatus::Skipped(why) => weak(format!("übersprungen: {why}")),
-        FeatureStatus::Suppressed => weak("unterdrückt".into()),
-        FeatureStatus::NotComputed => weak("nicht berechnet (hinter dem Rückrollmarker)".into()),
+        FeatureStatus::Ok => theme::value(tr!("props-status-ok")),
+        FeatureStatus::Error(e) => egui::RichText::new(tr!("props-status-error", error = e))
+            .color(error_color(ui.visuals().dark_mode)),
+        FeatureStatus::Skipped(why) => weak(tr!("props-status-skipped", why = why)),
+        FeatureStatus::Suppressed => weak(tr!("tree-status-suppressed")),
+        FeatureStatus::NotComputed => weak(tr!("props-status-not-computed")),
     };
-    row(ui, "Status", status_text);
+    row(ui, &tr!("props-status"), status_text);
     for (k, v) in &rows {
         row(ui, k, theme::value(v));
     }
@@ -418,9 +437,9 @@ fn feature(ui: &mut egui::Ui, state: &mut AppState, id: FeatureId) {
     ui.add_space(8.0);
     let edit = ui
         .button(if sketch {
-            "Skizze öffnen"
+            tr!("props-open-sketch")
         } else {
-            "Bearbeiten …"
+            tr!("props-edit")
         })
         .clicked();
     if let Some(name) = renamed {
@@ -443,12 +462,12 @@ fn feature(ui: &mut egui::Ui, state: &mut AppState, id: FeatureId) {
 fn mass_rows(ui: &mut egui::Ui, mass: &planora_mesh::MassProperties) {
     row(
         ui,
-        "Volumen",
+        &tr!("props-volume"),
         theme::value(format!("≈ {:.2} mm³", mass.volume)),
     );
     row(
         ui,
-        "Oberfläche",
+        &tr!("props-surface"),
         theme::value(format!("≈ {:.2} mm²", mass.surface_area)),
     );
 }
@@ -465,7 +484,7 @@ fn body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
     let renamed;
     {
         let body = &state.bodies[index];
-        ui.label("Name");
+        ui.label(tr!("props-name"));
         // Der Name gehört dem erzeugenden Feature.
         renamed = name_field(ui, state.naming_feature(index), &body.name);
         ui.add_space(6.0);
@@ -475,17 +494,12 @@ fn body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
             .flatten()
             .and_then(|f| state.document.step_body(f));
         if let Some(shape) = step {
-            row(ui, "Art", theme::value(STEP_LABEL));
+            row(ui, &tr!("props-kind"), theme::value(step_label()));
             // Der Körper kann seit dem Import gerundet oder verrechnet sein: Die Zahl der Form
             // aus der Datei heißt hier ausdrücklich so, „Flächen / Kanten“ unten zählt den
             // Körper, wie er jetzt ist.
-            for (k, v) in step_rows(state, shape) {
-                let k = if k == "Flächen" {
-                    "Flächen in der Datei"
-                } else {
-                    k
-                };
-                row(ui, k, theme::value(v));
+            for (k, v) in step_rows(state, shape, tr!("props-faces-in-file")) {
+                row(ui, &k, theme::value(v));
             }
             step_warning(ui, shape);
         }
@@ -494,7 +508,7 @@ fn body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
         mass_rows(ui, &body.mass);
         row(
             ui,
-            "Schwerpunkt",
+            &tr!("props-centroid"),
             theme::value(format!(
                 "{:.2} / {:.2} / {:.2} mm",
                 body.mass.centroid.x, body.mass.centroid.y, body.mass.centroid.z
@@ -502,13 +516,13 @@ fn body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
         );
         row(
             ui,
-            "Abmessungen",
+            &tr!("props-dimensions"),
             theme::value(format!("{:.2} × {:.2} × {:.2} mm", size.x, size.y, size.z)),
         );
         let (faces, edges) = state.kernel.counts(&body.solid);
         row(
             ui,
-            "Flächen / Kanten",
+            &tr!("props-faces-edges"),
             theme::value(format!("{faces} / {edges}")),
         );
         ui.add_space(theme::SPACE_1);
@@ -520,7 +534,7 @@ fn body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
             xyz_fields(
                 ui,
                 "body-position",
-                POSITION_LABEL,
+                &position_label(),
                 [&mut position.x, &mut position.y, &mut position.z],
                 0.5,
             )
@@ -539,13 +553,13 @@ fn body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
         Some(Pick::Face(f)) if f.body == index => {
             match state.kernel.face_kind(&state.bodies[index].solid, f.face) {
                 Some(kind) => {
-                    ui.label(theme::value(format!(
-                        "Ausgewählte Fläche: {}",
-                        kind.label()
+                    ui.label(theme::value(tr!(
+                        "props-selected-face",
+                        kind = kind.label()
                     )));
                 }
                 None => {
-                    ui.weak("Klicke im Viewport eine Fläche oder Kante an.");
+                    ui.weak(tr!("props-click-face-or-edge"));
                 }
             }
         }
@@ -560,19 +574,19 @@ fn body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
                         .map_or(0.0, |line| {
                             line.points.windows(2).map(|w| w[0].distance(w[1])).sum()
                         });
-                    ui.label(theme::value(format!(
-                        "Ausgewählte Kante: {}, Länge ≈ {:.2} mm",
-                        kind.label(),
-                        length
+                    ui.label(theme::value(tr!(
+                        "props-selected-edge",
+                        kind = kind.label(),
+                        length = format!("{length:.2}")
                     )));
                 }
                 None => {
-                    ui.weak("Klicke im Viewport eine Fläche oder Kante an.");
+                    ui.weak(tr!("props-click-face-or-edge"));
                 }
             }
         }
         _ => {
-            ui.weak("Klicke im Viewport eine Fläche oder Kante an.");
+            ui.weak(tr!("props-click-face-or-edge"));
         }
     }
 
@@ -609,23 +623,31 @@ fn mesh_body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
     let mut commit: Option<(FieldKey, String)>;
     {
         let body = &state.bodies[index];
-        ui.label("Name");
+        ui.label(tr!("props-name"));
         renamed = name_field(ui, state.naming_feature(index), &body.name);
         ui.add_space(6.0);
         let size = body.bounds.1 - body.bounds.0;
-        row(ui, "Art", theme::value("Netz-Körper"));
+        row(ui, &tr!("props-kind"), theme::value(tr!("props-mesh-body")));
         mass_rows(ui, &body.mass);
         row(
             ui,
-            "Abmessungen",
+            &tr!("props-dimensions"),
             theme::value(format!("{:.2} × {:.2} × {:.2} mm", size.x, size.y, size.z)),
         );
         if let Some(r) = body.mesh_report {
-            row(ui, "Dreiecke", theme::value(r.triangles.to_string()));
             row(
                 ui,
-                CLOSED_AT_IMPORT_LABEL,
-                theme::value(if r.closed { "ja" } else { "nein" }),
+                &tr!("props-triangles-label"),
+                theme::value(r.triangles.to_string()),
+            );
+            row(
+                ui,
+                &closed_at_import_label(),
+                theme::value(if r.closed {
+                    tr!("props-yes")
+                } else {
+                    tr!("props-no")
+                }),
             );
         }
         ui.add_space(theme::SPACE_1);
@@ -636,7 +658,7 @@ fn mesh_body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
         xyz_fields(
             ui,
             "mesh-rotation",
-            ROTATION_LABEL,
+            &rotation_label(),
             [&mut degrees.x, &mut degrees.y, &mut degrees.z],
             1.0,
         );
@@ -652,7 +674,7 @@ fn mesh_body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
             ui.colored_label(warning_color(ui.visuals().dark_mode), import_warning(&r));
         }
         ui.add_space(4.0);
-        ui.weak(MESH_BODY_HINT);
+        ui.weak(mesh_body_hint());
     }
     if let (Some(name), Some(id)) = (renamed, state.naming_feature(index)) {
         let _ = state.rename_feature(id, &name);
@@ -709,7 +731,7 @@ fn mesh_draft_id(fid: FeatureId, key: FieldKey) -> egui::Id {
 /// sonst der Wert).
 struct MeshField {
     key: FieldKey,
-    label: &'static str,
+    label: String,
     unit: ParamUnit,
     saved: String,
 }
@@ -721,10 +743,10 @@ fn mesh_fields(state: &AppState, index: usize) -> Vec<MeshField> {
         .get(index)
         .and_then(|b| state.document.feature(b.source.feature));
     [
-        (FieldKey::X, "Position x"),
-        (FieldKey::Y, "Position y"),
-        (FieldKey::Z, "Position z"),
-        (FieldKey::Massstab, "Maßstab"),
+        (FieldKey::X, tr!("props-position-x")),
+        (FieldKey::Y, tr!("props-position-y")),
+        (FieldKey::Z, tr!("props-position-z")),
+        (FieldKey::Massstab, tr!("props-scale")),
     ]
     .into_iter()
     .map(|(key, label)| {
@@ -746,15 +768,20 @@ fn mesh_fields(state: &AppState, index: usize) -> Vec<MeshField> {
     .collect()
 }
 
-/// Zahl für ein Formelfeld: verlustfrei, solange sie kurz ist, sonst auf vier Stellen gerundet
-/// (Nullen am Ende weg). Bleibt der Text unverändert, wird nichts übernommen.
+/// Zahl für ein Formelfeld, das aus einem Zahlenwert vorbelegt wird: verlustfrei, solange sie
+/// kurz ist, sonst auf vier Stellen gerundet (Nullen am Ende weg), mit dem Dezimaltrenner der
+/// Sprache (wie die Vorgaben der Skizzenfelder; gelesen werden Komma und Punkt). Eine
+/// gespeicherte Formel zeigt das Feld dagegen, wie sie getippt wurde. Winzige negative Werte
+/// ergeben „0“, nie „-0“. Bleibt der Text unverändert, wird nichts übernommen.
 fn field_text(v: f64) -> String {
-    let exact = number_text(v);
+    let exact = localize_decimal(&number_text(v).replace(',', "."));
     if exact.chars().count() <= 12 {
         return exact;
     }
-    let rounded = format_number(v, 4);
-    let rounded = rounded.trim_end_matches('0').trim_end_matches(',');
+    // `fmt_num` schreibt kein „-0,0000“. Die Nullen am Ende fallen weg, mit dem Trenner.
+    let rounded = fmt_num(v, 4);
+    let sep = planora_i18n::current().decimal();
+    let rounded = rounded.trim_end_matches('0').trim_end_matches(sep);
     if rounded.is_empty() || rounded == "-" {
         "0".into()
     } else {
@@ -784,12 +811,12 @@ fn mesh_formula_rows(
                 .as_ref()
                 .map_or_else(|| f.saved.clone(), |d| d.text.clone());
             let mut error = draft.and_then(|d| d.error);
-            ui.label(f.label);
+            ui.label(&f.label);
             let out = ui
                 .vertical(|ui| {
                     let out = FormulaField::new(("mesh-field", fid, f.key), &mut text, f.unit)
                         .width(80.0)
-                        .label(f.label)
+                        .label(&f.label)
                         .saved(&f.saved)
                         .show(ui, &scope);
                     if let Some(e) = &error
@@ -824,7 +851,7 @@ fn mesh_formula_rows(
 
 #[cfg(test)]
 mod tests {
-    use super::{CLOSED_AT_IMPORT_LABEL, MESH_BODY_HINT, import_warning};
+    use super::{closed_at_import_label, import_warning, mesh_body_hint};
     use planora_exchange::MeshReport;
 
     #[test]
@@ -836,12 +863,13 @@ mod tests {
         let text = import_warning(&open);
         assert!(text.starts_with("Beim Einlesen: "), "{text}");
         assert!(text.contains("3 offene Kanten"), "{text}");
-        assert!(CLOSED_AT_IMPORT_LABEL.contains("beim Einlesen"));
+        assert!(closed_at_import_label().contains("beim Einlesen"));
     }
 
     #[test]
     fn the_mesh_body_hint_has_no_runs_of_spaces() {
-        assert!(!MESH_BODY_HINT.contains("  "), "{MESH_BODY_HINT:?}");
-        assert!(MESH_BODY_HINT.contains("exportieren, aber nicht"));
+        let hint = mesh_body_hint();
+        assert!(!hint.contains("  "), "{hint:?}");
+        assert!(hint.contains("exportieren, aber nicht"));
     }
 }

@@ -661,10 +661,10 @@ fn strokes_without_width_are_rejected() {
     let basis = Basis::of(ViewKind::Top);
     assert!(matches!(
         stroke_cross(&a, &b, &basis, 10.0),
-        Err(DrawError::InvalidBody(ref m)) if m == ZERO_WIDTH
+        Err(DrawError::InvalidBody(ref m)) if *m == zero_width()
     ));
     assert!(matches!(
         split_params(&[b, a], &basis, 10.0, &Progress::new()),
-        Err(DrawError::InvalidBody(ref m)) if m == ZERO_WIDTH
+        Err(DrawError::InvalidBody(ref m)) if *m == zero_width()
     ));
 }

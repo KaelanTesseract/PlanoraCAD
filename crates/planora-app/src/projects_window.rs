@@ -25,30 +25,41 @@ use crate::file_chooser::display_path;
 use crate::fonts;
 use crate::icons::{self, Icon};
 use crate::jobs::{Job, Poll};
-use crate::project_actions::{self as actions, NO_LIBRARY, ProjectsUi, READ_ERROR_PREFIX};
+use crate::project_actions::{self as actions, ProjectsUi, no_library, read_error_prefix};
 use crate::project_tiles::{
-    MAX_TILES, Scan, TOO_MANY, Tile, TileKind, Tone, changed_line, footer_text_of, meta_line,
+    MAX_TILES, Scan, ScanError, Tile, TileKind, Tone, changed_line, footer_text_of, meta_line,
     scan_library_with, tiles_at,
 };
 use crate::theme;
 use crate::thumbnail::{Image, THUMB_H, THUMB_W};
-use crate::thumbnail_cache::{IMPOSSIBLE_TEXT, Thumb, ThumbKey};
+use crate::thumbnail_cache::{Thumb, ThumbKey, impossible_text};
 use crate::thumbnail_worker::{BUSY_RETRY, ThumbRequest, ThumbWorker};
 use crate::workspace::Workspace;
 use egui::text::{LayoutJob, TextWrapping};
 use egui::{Align, Align2, Color32, FontId, Layout, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
+use planora_i18n::tr;
 use planora_project::library::{NodeKind, NodePath, TreeNode};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-pub const TITLE: &str = "Projekte";
-pub const RENAME: &str = "Umbenennen …";
-pub const MOVE: &str = "Verschieben …";
-pub const DELETE: &str = "Löschen …";
+pub fn title() -> String {
+    tr!("projects-title")
+}
+pub fn rename() -> String {
+    tr!("projects-rename")
+}
+pub fn move_item() -> String {
+    tr!("projects-move")
+}
+pub fn delete() -> String {
+    tr!("projects-delete")
+}
 /// Meldung, wenn das Lesen ohne Ergebnis endete.
-pub const SCAN_LOST: &str = "Das Lesen der Projekte wurde unerwartet beendet.";
+pub fn scan_lost() -> String {
+    tr!("projects-scan-lost")
+}
 /// Längstes Warten in [`ProjectsWindow::wait_for_scan`].
 const SCAN_WAIT_LIMIT: Duration = Duration::from_secs(60);
 
@@ -60,22 +71,44 @@ pub const TILE_H: f32 = 220.0;
 pub const TILE_GAP: f32 = theme::SPACE_3;
 /// Fensterhöhe, die nicht zum Kachelbereich gehört (Rand, Kopf, Knöpfe, Fußzeile).
 pub const PROJECTS_CHROME_H: f32 = 260.0;
-pub const FOOTER_HINT: &str = "Doppelklick: öffnen · Rechtsklick: weitere Befehle";
-pub const DIRECTORY_BUTTON: &str = "Projektverzeichnis …";
-pub const NO_BODIES: &str = "Noch keine Körper";
-pub const TOO_COMPLEX: &str = "Miniatur zu aufwendig";
-pub const NEW_PROJECT: &str = "Neues Projekt";
-pub const NEW_DOCUMENT: &str = "Neues Dokument";
-pub const NEW_FOLDER: &str = "Neuer Ordner";
-pub const REFRESH: &str = "Aktualisieren";
+pub fn footer_hint() -> String {
+    tr!("projects-footer-hint")
+}
+pub fn directory_button() -> String {
+    tr!("projects-directory-button")
+}
+pub fn no_bodies() -> String {
+    tr!("projects-no-bodies")
+}
+pub fn too_complex() -> String {
+    tr!("projects-too-complex")
+}
+pub fn new_project() -> String {
+    tr!("projects-new-project")
+}
+pub fn new_document() -> String {
+    tr!("projects-new-document")
+}
+pub fn new_folder() -> String {
+    tr!("projects-new-folder")
+}
+pub fn refresh() -> String {
+    tr!("projects-refresh")
+}
 /// Leere Bibliothek.
-pub const EMPTY: &str = "Noch keine Projekte. Lege mit „Neues Projekt“ das erste an.";
+pub fn empty() -> String {
+    tr!("projects-empty")
+}
 /// Solange das erste Lesen läuft.
-pub const READING: &str = "Die Projekte werden gelesen …";
+pub fn reading() -> String {
+    tr!("projects-reading")
+}
 /// Steht im Pfad für zusammengefallene vordere Teile.
 pub const CRUMB_ELLIPSIS: &str = "…";
 /// Hinweis am Pfeil „eine Ebene hinauf“ im Pfad.
-pub const BACK_HINT: &str = "Eine Ebene hinauf";
+pub fn back_hint() -> String {
+    tr!("projects-back-hint")
+}
 
 /// Kennung des Fensters (unabhängig vom Titel).
 const WINDOW_ID: &str = "planora_projects_window";
@@ -89,11 +122,13 @@ pub const TILE_BORDER: f32 = 1.0;
 /// groß, nichts verschiebt sich.
 pub const SELECTED_BORDER: f32 = 2.0;
 /// Leeres Projekt (Ebene 2).
-pub const EMPTY_PROJECT: &str =
-    "Dieses Projekt ist noch leer. Lege oben ein Dokument oder einen Ordner an.";
+pub fn empty_project() -> String {
+    tr!("projects-empty-project")
+}
 /// Leerer Ordner.
-pub const EMPTY_FOLDER: &str =
-    "Dieser Ordner ist noch leer. Lege oben ein Dokument oder einen Ordner an.";
+pub fn empty_folder() -> String {
+    tr!("projects-empty-folder")
+}
 /// Tastaturfokus: Ring außen um die Kachel (Mitte des Strichs so weit außerhalb), deutlich
 /// anders als der Rand der Auswahl.
 pub const FOCUS_OFFSET: f32 = 2.0;
@@ -109,7 +144,9 @@ const CAPTION_SIZE: f32 = 11.0;
 const FOLDER_ICON_SIZE: f32 = 64.0;
 const CUBE_ICON_SIZE: f32 = 40.0;
 /// Ruhiger Hinweis, solange eine Miniatur entsteht (hier oder in einer anderen Instanz).
-pub const BUILDING_TEXT: &str = "Wird gerade erzeugt …";
+pub fn building_text() -> String {
+    tr!("projects-building")
+}
 /// So oft wird neu gezeichnet, solange eigene Miniaturen entstehen.
 pub const THUMB_POLL: Duration = Duration::from_millis(100);
 /// Höchstens so viele Texturen gleichzeitig (sichtbare werden nie verdrängt).
@@ -149,10 +186,31 @@ pub enum ProjectsEvent {
 }
 
 /// Einträge des Rechtsklick-Menüs einer Kachel; Projekte lassen sich nicht verschieben.
-pub fn tile_menu(kind: TileKind) -> &'static [&'static str] {
+pub fn tile_menu(kind: TileKind) -> Vec<TileMenu> {
     match kind {
-        TileKind::Project => &[RENAME, DELETE],
-        TileKind::Folder | TileKind::Document => &[RENAME, MOVE, DELETE],
+        TileKind::Project => vec![TileMenu::Rename, TileMenu::Delete],
+        TileKind::Folder | TileKind::Document => {
+            vec![TileMenu::Rename, TileMenu::Move, TileMenu::Delete]
+        }
+    }
+}
+
+/// Ein Eintrag des Rechtsklick-Menüs einer Kachel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TileMenu {
+    Rename,
+    Move,
+    Delete,
+}
+
+impl TileMenu {
+    /// Beschriftung in der aktuellen Sprache.
+    pub fn label(self) -> String {
+        match self {
+            TileMenu::Rename => rename(),
+            TileMenu::Move => move_item(),
+            TileMenu::Delete => delete(),
+        }
     }
 }
 
@@ -169,7 +227,7 @@ pub fn grid_height_for(window_height: f32) -> f32 {
 
 /// Laufendes Lesen mit dem Stand, zu dem es begann.
 struct ScanJob {
-    job: Job<Result<Scan, String>>,
+    job: Job<Result<Scan, ScanError>>,
     revision: u64,
     generation: u64,
 }
@@ -202,7 +260,7 @@ enum Picture {
     Texture(egui::TextureId),
     /// Würfel, darunter ein Hinweis (ruhig, ohne Bewegung).
     Placeholder {
-        caption: Option<&'static str>,
+        caption: Option<String>,
     },
 }
 
@@ -210,7 +268,7 @@ enum Picture {
 enum Action {
     Select(NodePath),
     Activate(NodePath),
-    Menu(Tile, &'static str),
+    Menu(Tile, TileMenu),
     Back,
     GoTo(NodePath),
     NewProject,
@@ -241,7 +299,7 @@ pub struct ProjectsWindow {
     location: NodePath,
     job: Option<ScanJob>,
     /// Letztes Ergebnis des Lesens.
-    data: Option<Result<Scan, String>>,
+    data: Option<Result<Scan, ScanError>>,
     /// Kacheln der aktuellen Ebene aus `data`.
     tiles: Vec<Tile>,
     /// Die Ebene hat mehr als [`MAX_TILES`] Einträge.
@@ -516,7 +574,7 @@ impl ProjectsWindow {
         let result = match j.job.poll() {
             Poll::Pending => return,
             Poll::Ready(r) => r,
-            Poll::Lost => Err(SCAN_LOST.to_string()),
+            Poll::Lost => Err(ScanError::Lost),
         };
         let revision = j.revision;
         self.job = None;
@@ -524,7 +582,7 @@ impl ProjectsWindow {
             result
                 .as_ref()
                 .map(|s| s.tree.clone())
-                .map_err(Clone::clone),
+                .map_err(ScanError::text),
             revision,
         );
         self.data = Some(result);
@@ -556,7 +614,7 @@ impl ProjectsWindow {
 
     /// Letztes Ergebnis des Lesens (`None`, solange nichts gelesen ist oder ohne
     /// Projektverzeichnis).
-    pub fn scan_state(&self) -> Option<&Result<Scan, String>> {
+    pub fn scan_state(&self) -> Option<&Result<Scan, ScanError>> {
         self.data.as_ref()
     }
 
@@ -817,18 +875,18 @@ impl ProjectsWindow {
 
     /// Eintrag `entry` aus [`tile_menu`] für `tile`: öffnet das passende Fenster der Aktionen
     /// (andere offene Fenster der Aktionen schließen dabei).
-    pub fn apply_menu(&mut self, tile: &Tile, entry: &str) {
+    pub fn apply_menu(&mut self, tile: &Tile, entry: TileMenu) {
         let path = tile.path.clone();
         match entry {
-            RENAME => {
+            TileMenu::Rename => {
                 self.ui.close_dialogs();
                 actions::request_rename(&mut self.ui, path, &tile.name);
             }
-            MOVE if tile.kind != TileKind::Project => {
+            TileMenu::Move if tile.kind != TileKind::Project => {
                 self.ui.close_dialogs();
                 actions::request_move(&mut self.ui, path);
             }
-            DELETE => {
+            TileMenu::Delete => {
                 self.ui.close_dialogs();
                 actions::request_delete(&mut self.ui, path);
             }
@@ -904,7 +962,7 @@ impl ProjectsWindow {
         };
         let mut acts = Vec::new();
         let (mut open, mut refresh) = (true, false);
-        let response = Dialog::new(TITLE, DialogSize::File)
+        let response = Dialog::new(title(), DialogSize::File)
             .id(egui::Id::new(WINDOW_ID))
             .center_on_open()
             .open(&mut open)
@@ -985,15 +1043,15 @@ impl ProjectsWindow {
             _ => None,
         };
         let message = match (&self.data, frame.has_library) {
-            (_, false) => Some((NO_LIBRARY.to_string(), p.text_primary)),
-            (Some(Err(e)), true) => Some((format!("{READ_ERROR_PREFIX}{e}"), p.error)),
-            (None, true) => Some((READING.to_string(), p.text_tertiary)),
+            (_, false) => Some((no_library(), p.text_primary)),
+            (Some(Err(e)), true) => Some((format!("{}{}", read_error_prefix(), e.text()), p.error)),
+            (None, true) => Some((reading(), p.text_tertiary)),
             (Some(Ok(_)), true) if tiles.is_empty() && location_empty => {
-                Some((EMPTY.to_string(), p.text_primary))
+                Some((empty(), p.text_primary))
             }
             (Some(Ok(_)), true) if tiles.is_empty() => match level_kind {
-                Some(NodeKind::Project) => Some((EMPTY_PROJECT.to_string(), p.text_tertiary)),
-                Some(_) => Some((EMPTY_FOLDER.to_string(), p.text_tertiary)),
+                Some(NodeKind::Project) => Some((empty_project(), p.text_tertiary)),
+                Some(_) => Some((empty_folder(), p.text_tertiary)),
                 None => None,
             },
             _ => None,
@@ -1004,7 +1062,9 @@ impl ProjectsWindow {
                 ui.add(egui::Label::new(egui::RichText::new(text).color(color)).wrap());
             }
             if too_many {
-                ui.label(egui::RichText::new(TOO_MANY).color(p.text_secondary));
+                ui.label(
+                    egui::RichText::new(crate::project_tiles::too_many()).color(p.text_secondary),
+                );
             }
             ui.add_space(FOCUS_ROOM);
             ui.spacing_mut().item_spacing = vec2(TILE_GAP, TILE_GAP);
@@ -1057,7 +1117,7 @@ impl ProjectsWindow {
                             }
                             resp.context_menu(|ui| {
                                 for entry in tile_menu(tile.kind) {
-                                    if ui.button(*entry).clicked() {
+                                    if ui.button(entry.label()).clicked() {
                                         out.push(Action::Menu(tile.clone(), entry));
                                         ui.close();
                                     }
@@ -1105,7 +1165,7 @@ impl ProjectsWindow {
             ui.set_min_height(row_h);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if level_one || frame.read_error {
-                    let r = ui.button(DIRECTORY_BUTTON);
+                    let r = ui.button(directory_button());
                     theme::focus_ring(ui, &r);
                     if r.clicked() {
                         out.push(Action::Settings);
@@ -1128,18 +1188,21 @@ impl ProjectsWindow {
         ui.horizontal(|ui| {
             ui.set_min_height(row_h);
             if level_one {
-                let r = ui.add_enabled(frame.has_library, theme::primary_button(NEW_PROJECT, dark));
+                let r = ui.add_enabled(
+                    frame.has_library,
+                    theme::primary_button(&new_project(), dark),
+                );
                 theme::focus_ring(ui, &r);
                 if r.clicked() {
                     out.push(Action::NewProject);
                 }
             } else {
-                let r = ui.add(theme::primary_button(NEW_DOCUMENT, dark));
+                let r = ui.add(theme::primary_button(&new_document(), dark));
                 theme::focus_ring(ui, &r);
                 if r.clicked() {
                     out.push(Action::NewDocument);
                 }
-                let r = ui.button(NEW_FOLDER);
+                let r = ui.button(new_folder());
                 theme::focus_ring(ui, &r);
                 if r.clicked() {
                     out.push(Action::NewFolder);
@@ -1159,14 +1222,14 @@ impl ProjectsWindow {
                 icons::LABEL_ICON_SIZE,
                 Color32::PLACEHOLDER,
             ))
-            .on_hover_text(BACK_HINT);
+            .on_hover_text(back_hint());
         // Der Knopf trägt nur ein Symbol; für Bildschirmleser heißt er wie sein Hinweis.
-        r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, BACK_HINT));
+        r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, back_hint()));
         theme::focus_ring(ui, &r);
         if r.clicked() {
             out.push(Action::Back);
         }
-        let r = ui.button(TITLE);
+        let r = ui.button(title());
         theme::focus_ring(ui, &r);
         if r.clicked() {
             out.push(Action::GoTo(NodePath::new()));
@@ -1182,7 +1245,8 @@ impl ProjectsWindow {
         if hidden > 0 {
             // die vorderen Teile als „…“, der ganze Pfad als Hinweis
             separator(ui);
-            let full = std::iter::once(TITLE)
+            let first = title();
+            let full = std::iter::once(first.as_str())
                 .chain(self.location.iter().map(String::as_str))
                 .collect::<Vec<_>>()
                 .join(" / ");
@@ -1236,13 +1300,13 @@ fn footer_row(ui: &mut egui::Ui, footer: &str, refresh: &mut bool) {
         ui.set_min_height(ui.spacing().interact_size.y);
         ui.label(egui::RichText::new(footer).color(p.text_secondary));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let r = ui.button(REFRESH);
+            let r = ui.button(self::refresh());
             theme::focus_ring(ui, &r);
             if r.clicked() {
                 *refresh = true;
             }
             ui.add(
-                egui::Label::new(egui::RichText::new(FOOTER_HINT).color(p.text_tertiary))
+                egui::Label::new(egui::RichText::new(footer_hint()).color(p.text_tertiary))
                     .truncate(),
             );
         });
@@ -1250,7 +1314,7 @@ fn footer_row(ui: &mut egui::Ui, footer: &str, refresh: &mut bool) {
 }
 
 /// Inhalt der Bildfläche. Die Textur einer Miniatur legt [`ProjectsWindow::manage_textures`]
-/// an; bis dahin (und solange sie entsteht) steht der ruhige Hinweis [`BUILDING_TEXT`].
+/// an; bis dahin (und solange sie entsteht) steht der ruhige Hinweis [`building_text`].
 fn picture(
     tile: &Tile,
     source: Option<&(PathBuf, ThumbKey)>,
@@ -1265,9 +1329,9 @@ fn picture(
     }
     let Some((dir, key)) = source else {
         // ohne lesbares Dokument: leeres Projekt oder nicht lesbar
-        return placeholder((tile.documents == 0).then_some(NO_BODIES));
+        return placeholder((tile.documents == 0).then(no_bodies));
     };
-    let building = alive.then_some(BUILDING_TEXT);
+    let building = alive.then(building_text);
     match thumb {
         Some(Thumb::Image(_)) => match textures.get_mut(dir).filter(|t| t.key == *key) {
             Some(t) => {
@@ -1276,9 +1340,9 @@ fn picture(
             }
             None => placeholder(building),
         },
-        Some(Thumb::NoBodies) => placeholder(Some(NO_BODIES)),
-        Some(Thumb::TooComplex) => placeholder(Some(TOO_COMPLEX)),
-        Some(Thumb::Impossible) => placeholder(Some(IMPOSSIBLE_TEXT)),
+        Some(Thumb::NoBodies) => placeholder(Some(no_bodies())),
+        Some(Thumb::TooComplex) => placeholder(Some(too_complex())),
+        Some(Thumb::Impossible) => placeholder(Some(impossible_text())),
         Some(Thumb::Failed(_)) => placeholder(None),
         Some(Thumb::Busy) | None => placeholder(building),
     }
@@ -1385,7 +1449,7 @@ fn paint_tile(
                 painter.text(
                     pos2(image.center().x, below),
                     Align2::CENTER_TOP,
-                    *c,
+                    c.as_str(),
                     FontId::new(CAPTION_SIZE, fonts::medium()),
                     p.text_tertiary,
                 );

@@ -562,14 +562,14 @@ fn drawing_tool_keys_select_the_tools() {
     let seen = rig.settle();
     let at = seen
         .iter()
-        .find(|s| s.text == balloon_tool::TOOL)
+        .find(|s| s.text == balloon_tool::tool())
         .expect("Schalter Position")
         .rect
         .center();
     let texts = rig.hover(at);
     assert!(texts.iter().any(|t| t == "Position (B)"), "{texts:?}");
     assert!(
-        texts.iter().any(|t| t == balloon_tool::TOOL_TIP),
+        texts.iter().any(|t| *t == balloon_tool::tool_tip()),
         "{texts:?}"
     );
     assert_eq!(
@@ -726,7 +726,7 @@ fn construction_key_toggles_like_the_button() {
     assert_eq!(Action::SketchConstruction.id(), "skizze.konstruktion");
     assert_eq!(
         Action::SketchConstruction.label(),
-        sketch_panel::CONSTRUCTION,
+        sketch_panel::construction(),
         "Name wie der Knopf"
     );
     assert_eq!(km.bindings(Action::SketchConstruction), [plain(Key::X)]);
@@ -765,7 +765,7 @@ fn construction_key_toggles_like_the_button() {
     let at = rig
         .settle()
         .into_iter()
-        .find(|s| s.text == sketch_panel::CONSTRUCTION)
+        .find(|s| s.text == sketch_panel::construction())
         .expect("Knopf Konstruktion umschalten")
         .rect
         .center();

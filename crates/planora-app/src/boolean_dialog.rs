@@ -1,5 +1,7 @@
 use crate::dialog::{Dialog, DialogSize};
+use crate::msg::Msg;
 use crate::state::AppState;
+use planora_i18n::tr;
 use planora_kernel::boolean::BoolOp;
 
 /// Offener Dialog „Boolesche Operation“: Körper A, Körper B und die Operation.
@@ -10,7 +12,7 @@ pub struct BooleanDialog {
     pub op: BoolOp,
     /// Fehlermeldung des letzten Ausführens samt der Auswahl (A, B, Operation), für die sie
     /// galt; der Dialog bleibt dann offen und zeigt sie an, solange die Auswahl gleich bleibt.
-    error: Option<((usize, usize, BoolOp), String)>,
+    error: Option<((usize, usize, BoolOp), Msg)>,
 }
 
 impl BooleanDialog {
@@ -40,11 +42,11 @@ impl BooleanDialog {
 
     /// Meldung des letzten fehlgeschlagenen Ausführens, solange A, B und die Operation noch
     /// dieselben sind; nach einer Änderung der Auswahl ist sie hinfällig.
-    pub fn error(&self) -> Option<&str> {
+    pub fn error(&self) -> Option<String> {
         self.error
             .as_ref()
             .filter(|(key, _)| *key == (self.a, self.b, self.op))
-            .map(|(_, m)| m.as_str())
+            .map(|(_, m)| m.text())
     }
 
     /// „Ausführen“ ist nur mit zwei verschiedenen Körpern möglich.
@@ -56,6 +58,13 @@ impl BooleanDialog {
     /// Fehler steht die Meldung dann in `error` (und in der Statuszeile); nach Erfolg schließt er.
     pub fn execute(&mut self, state: &mut AppState) -> bool {
         state.message = None;
+        if !self.can_run() {
+            // Der Grund bleibt im Fenster und wird beim Zeichnen übersetzt.
+            let e = crate::msg!("state-pick-two-bodies");
+            state.message = Some(e.text());
+            self.error = Some(((self.a, self.b, self.op), e));
+            return true;
+        }
         match state.add_boolean(self.a, self.b, self.op) {
             Ok(_) => {
                 self.error = None;
@@ -63,7 +72,7 @@ impl BooleanDialog {
             }
             Err(e) => {
                 state.message = Some(e.clone());
-                self.error = Some(((self.a, self.b, self.op), e));
+                self.error = Some(((self.a, self.b, self.op), Msg::Raw(e)));
                 true
             }
         }
@@ -73,12 +82,16 @@ impl BooleanDialog {
     pub fn show(&mut self, ctx: &egui::Context, state: &mut AppState) -> bool {
         let mut open = true;
         let (mut run, mut cancel) = (false, false);
-        Dialog::new("Boolesche Operation", DialogSize::Normal)
+        Dialog::new(tr!("boolean-title"), DialogSize::Normal)
+            .id(egui::Id::new("boolean_dialog"))
             .open(&mut open)
             .show(ctx, |ui| {
                 let names: Vec<String> = state.bodies.iter().map(|b| b.name.clone()).collect();
                 let meshes: Vec<bool> = (0..names.len()).map(|i| state.is_mesh(i)).collect();
-                for (label, slot) in [("Körper A", &mut self.a), ("Körper B", &mut self.b)] {
+                for (label, slot) in [
+                    (tr!("boolean-body-a"), &mut self.a),
+                    (tr!("boolean-body-b"), &mut self.b),
+                ] {
                     egui::ComboBox::from_label(label)
                         .selected_text(names.get(*slot).cloned().unwrap_or_default())
                         .show_ui(ui, |ui| {
@@ -90,9 +103,9 @@ impl BooleanDialog {
                         });
                 }
                 ui.add_space(4.0);
-                ui.radio_value(&mut self.op, BoolOp::Union, "Vereinigen");
-                ui.radio_value(&mut self.op, BoolOp::Difference, "Abziehen (A − B)");
-                ui.radio_value(&mut self.op, BoolOp::Intersection, "Schneiden");
+                ui.radio_value(&mut self.op, BoolOp::Union, tr!("chip-union"));
+                ui.radio_value(&mut self.op, BoolOp::Difference, tr!("boolean-subtract"));
+                ui.radio_value(&mut self.op, BoolOp::Intersection, tr!("chip-intersect"));
                 ui.add_space(4.0);
                 if let Some(e) = self.error() {
                     ui.colored_label(crate::browser::error_color(ui.visuals().dark_mode), e);
@@ -101,13 +114,13 @@ impl BooleanDialog {
                 let can_run = self.can_run();
                 ui.horizontal(|ui| {
                     if ui
-                        .add_enabled(can_run, egui::Button::new("Ausführen"))
-                        .on_disabled_hover_text("Körper A und Körper B müssen verschieden sein.")
+                        .add_enabled(can_run, egui::Button::new(tr!("boolean-run")))
+                        .on_disabled_hover_text(tr!("boolean-same-body"))
                         .clicked()
                     {
                         run = true;
                     }
-                    if ui.button("Abbrechen").clicked() {
+                    if ui.button(tr!("common-cancel")).clicked() {
                         cancel = true;
                     }
                 });

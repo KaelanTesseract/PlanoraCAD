@@ -5,6 +5,7 @@
 use crate::error::FeatureError;
 use crate::model::{Document, FeatureId, FeatureKind};
 use crate::recompute::RecomputeReport;
+use planora_i18n::tr;
 use std::collections::HashSet;
 
 /// Erzeugt die Art einen Körper (Skizzen nicht)?
@@ -86,9 +87,9 @@ impl Document {
         self.index_of(tip).ok_or(FeatureError::UnknownFeature)?;
         let chain = self.chain(tip);
         if !chain.contains(&step) {
-            return Err(FeatureError::InvalidInput(
-                "Der Schritt gehört nicht zum Verlauf dieses Körpers".into(),
-            ));
+            return Err(FeatureError::InvalidInput(tr!(
+                "feature-step-not-in-history"
+            )));
         }
         let before = self.chain(step);
         let behind = self.dependents(step);
@@ -188,16 +189,10 @@ impl Document {
         let mut out = Vec::with_capacity(given.len());
         for r in given {
             if !position.contains_key(r) {
-                return Err(bad(format!(
-                    "Eine Rückrollstelle verweist auf einen unbekannten Schritt (Kennung {})",
-                    r.0
-                )));
+                return Err(bad(tr!("feature-rollback-unknown", id = r.0.to_string())));
             }
             if !seen.insert(*r) {
-                return Err(bad(format!(
-                    "Eine Rückrollstelle kommt doppelt vor (Kennung {})",
-                    r.0
-                )));
+                return Err(bad(tr!("feature-rollback-twice", id = r.0.to_string())));
             }
             out.push(*r);
         }
@@ -211,10 +206,10 @@ impl Document {
                 .find(|c| c != r && seen.contains(c));
             if let Some(o) = found {
                 let name = |id: FeatureId| self.feature(id).map_or("?", |f| f.name.as_str());
-                return Err(bad(format!(
-                    "Die Rückrollstellen „{}“ und „{}“ liegen im Verlauf desselben Körpers",
-                    name(o),
-                    name(*r)
+                return Err(bad(tr!(
+                    "feature-rollback-same-body",
+                    a = (name(o)).to_string(),
+                    b = (name(*r)).to_string()
                 )));
             }
         }

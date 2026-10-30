@@ -4,6 +4,7 @@
 //! mehrere Flächen mit derselben Marke (etwa weil eine Boolesche Operation eine Fläche geteilt
 //! hat), entscheidet der Abstand ihres Prüfpunkts zum gespeicherten Hinweispunkt.
 
+use planora_i18n::tr;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
 use std::marker::PhantomData;
@@ -122,7 +123,7 @@ impl FaceRef {
         let tag = assigned_tag(solid, face).ok_or(FeatureError::UntaggedFace)?;
         let hint = cache
             .face_probe(solid, face, tol)
-            .ok_or_else(|| FeatureError::InvalidInput("Die Fläche hat keinen Prüfpunkt".into()))?;
+            .ok_or_else(|| FeatureError::InvalidInput(tr!("feature-face-no-check-point")))?;
         Ok(FaceRef {
             origin: tag.origin,
             role: tag.role.clone(),
@@ -231,7 +232,7 @@ impl EdgeRef {
             .filter(|u| u.len() >= 2)
             .ok_or(FeatureError::UntaggedEdge)?;
         let hint = edge_probe_point(solid, edge)
-            .ok_or_else(|| FeatureError::InvalidInput("Die Kante hat keinen Prüfpunkt".into()))?;
+            .ok_or_else(|| FeatureError::InvalidInput(tr!("feature-edge-no-check-point")))?;
         // Hat eine angrenzende Fläche keinen eigenen Prüfpunkt (sehr schmale Fläche), dient der
         // Kantenpunkt als ihr Hinweis; er liegt auf dem Rand der Fläche.
         let face_ref = |face: Id<Face>| -> Result<FaceRef, FeatureError> {

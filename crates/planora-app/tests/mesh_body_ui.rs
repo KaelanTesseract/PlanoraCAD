@@ -68,7 +68,7 @@ fn the_properties_of_a_mesh_body_show_measures_transform_and_report() {
     let id = s.document.features()[0].id;
     let kind = s.document.feature(id).unwrap().kind.clone();
     let rows = properties::parameter_rows(&s, &kind);
-    let labels: Vec<&str> = rows.iter().map(|(l, _)| *l).collect();
+    let labels: Vec<&str> = rows.iter().map(|(l, _)| l.as_str()).collect();
     assert_eq!(labels, ["Netz", "Position", "Drehung", "Maßstab"]);
     assert_eq!(rows[0].1, "11 Dreiecke");
     assert_eq!(FeatureIcon::of(&kind), FeatureIcon::Body(BodyKind::Mesh));
@@ -81,9 +81,12 @@ fn the_edit_menu_rules_name_the_lock() {
     s.create_box(DVec3::splat(5.0)).unwrap();
     assert_eq!(s.boolean_blocked(), None);
     s.import_mesh("N", Arc::new(cube()), 1.0).unwrap(); // jetzt gewählt
-    assert_eq!(s.boolean_blocked(), Some(MESH_LOCKED_HINT));
-    assert_eq!(s.blend_blocked(), Some(MESH_LOCKED_HINT));
-    assert_eq!(s.sketch_on_face_blocked(), Some(MESH_LOCKED_HINT));
+    assert_eq!(s.boolean_blocked(), Some(mesh_locked_hint().to_string()));
+    assert_eq!(s.blend_blocked(), Some(mesh_locked_hint().to_string()));
+    assert_eq!(
+        s.sketch_on_face_blocked(),
+        Some(mesh_locked_hint().to_string())
+    );
     s.selected_body = Some(0);
     assert_eq!(s.boolean_blocked(), None);
     assert_eq!(s.blend_blocked(), None);

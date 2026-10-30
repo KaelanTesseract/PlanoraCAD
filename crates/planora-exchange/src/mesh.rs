@@ -3,6 +3,7 @@
 
 use crate::error::ExchangeError;
 use crate::limits::{MAX_TRIANGLES, MAX_VERTICES};
+use planora_i18n::tr;
 use planora_math::{DQuat, DVec3};
 use planora_mesh::{MassProperties, Mesh, mass_properties};
 
@@ -36,9 +37,7 @@ impl ExchangeMesh {
             return Err(ExchangeError::Empty);
         }
         if !self.indices.len().is_multiple_of(3) {
-            return Err(ExchangeError::Corrupt(
-                "Die Zahl der Punktnummern ist kein Vielfaches von drei".into(),
-            ));
+            return Err(ExchangeError::Corrupt(tr!("exchange-index-count")));
         }
         if self.triangle_count() > MAX_TRIANGLES {
             return Err(ExchangeError::TooManyTriangles);
@@ -48,9 +47,7 @@ impl ExchangeMesh {
         }
         let n = self.positions.len();
         if self.indices.iter().any(|&i| i as usize >= n) {
-            return Err(ExchangeError::Corrupt(
-                "Ein Dreieck verweist auf einen Punkt, den es nicht gibt".into(),
-            ));
+            return Err(ExchangeError::Corrupt(tr!("exchange-triangle-dangling")));
         }
         if !self
             .positions
@@ -100,7 +97,7 @@ impl ExchangeMesh {
     /// bevor etwas reserviert wird.
     pub fn byte_len_from_header(head: &[u8]) -> Result<u64, ExchangeError> {
         let Some(h) = head.get(..8) else {
-            return Err(ExchangeError::Corrupt("Die Netzdaten sind zu kurz".into()));
+            return Err(ExchangeError::Corrupt(tr!("exchange-data-too-short")));
         };
         let vertices = u64::from(u32::from_le_bytes([h[0], h[1], h[2], h[3]]));
         let triangles = u64::from(u32::from_le_bytes([h[4], h[5], h[6], h[7]]));
@@ -117,9 +114,7 @@ impl ExchangeMesh {
     pub fn from_bytes(bytes: &[u8]) -> Result<ExchangeMesh, ExchangeError> {
         let expected = Self::byte_len_from_header(bytes)?;
         if expected != bytes.len() as u64 {
-            return Err(ExchangeError::Corrupt(
-                "Die Länge der Netzdaten passt nicht zu den Anzahlen".into(),
-            ));
+            return Err(ExchangeError::Corrupt(tr!("exchange-data-length")));
         }
         let vertices = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
         let (points, numbers) = bytes[8..].split_at(12 * vertices);

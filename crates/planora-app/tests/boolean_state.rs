@@ -228,7 +228,7 @@ fn boolean_dialog_stays_open_on_error_and_closes_on_success() {
         "{:?}",
         d.error()
     );
-    assert_eq!(s.message.as_deref(), d.error());
+    assert_eq!(s.message, d.error());
     assert_eq!(
         s.bodies.len(),
         2,

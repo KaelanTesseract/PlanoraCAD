@@ -33,7 +33,7 @@ struct Entry<T> {
     state: T,
     bytes: usize,
     id: StepId,
-    label: &'static str,
+    label: String,
 }
 
 /// Verlauf von Zustandsbildern mit Rückgängig- und Wiederholen-Liste.
@@ -80,13 +80,13 @@ impl<T> History<T> {
 
     /// Legt einen Schritt an: das bisherige Bild wandert in die Rückgängig-Liste, `after` wird
     /// aktuell und bekommt eine neue Nummer; die Wiederholen-Liste wird geleert.
-    pub fn record(&mut self, after: T, bytes: usize, label: &'static str) {
+    pub fn record(&mut self, after: T, bytes: usize, label: impl Into<String>) {
         let before = std::mem::replace(&mut self.current, after);
         self.undo.push_back(Entry {
             state: before,
             bytes: self.current_bytes,
             id: self.current_id,
-            label,
+            label: label.into(),
         });
         self.current_bytes = bytes;
         self.current_id = self.next_id;
@@ -103,12 +103,12 @@ impl<T> History<T> {
         }
     }
 
-    pub fn undo_label(&self) -> Option<&'static str> {
-        self.undo.back().map(|e| e.label)
+    pub fn undo_label(&self) -> Option<&str> {
+        self.undo.back().map(|e| e.label.as_str())
     }
 
-    pub fn redo_label(&self) -> Option<&'static str> {
-        self.redo.last().map(|e| e.label)
+    pub fn redo_label(&self) -> Option<&str> {
+        self.redo.last().map(|e| e.label.as_str())
     }
 
     /// Das Bild, das Rückgängig herstellen würde.
@@ -123,7 +123,7 @@ impl<T> History<T> {
 
     /// Nach gelungenem Zurückladen: aktuelles Bild in die Wiederholen-Liste, oberstes Bild der
     /// Rückgängig-Liste wird aktuell (mit seiner Nummer). Liefert den Namen des Schritts.
-    pub fn commit_undo(&mut self) -> Option<&'static str> {
+    pub fn commit_undo(&mut self) -> Option<&str> {
         let e = self.undo.pop_back()?;
         let label = e.label;
         let old = std::mem::replace(&mut self.current, e.state);
@@ -135,11 +135,11 @@ impl<T> History<T> {
         });
         self.current_bytes = e.bytes;
         self.current_id = e.id;
-        Some(label)
+        self.redo.last().map(|e| e.label.as_str())
     }
 
     /// Gegenstück zu [`History::commit_undo`].
-    pub fn commit_redo(&mut self) -> Option<&'static str> {
+    pub fn commit_redo(&mut self) -> Option<&str> {
         let e = self.redo.pop()?;
         let label = e.label;
         let old = std::mem::replace(&mut self.current, e.state);
@@ -151,7 +151,7 @@ impl<T> History<T> {
         });
         self.current_bytes = e.bytes;
         self.current_id = e.id;
-        Some(label)
+        self.undo.back().map(|e| e.label.as_str())
     }
 
     /// Verwirft nur den obersten Rückgängig-Schritt (Zurückladen fehlgeschlagen).

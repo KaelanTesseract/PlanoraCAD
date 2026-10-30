@@ -6,3 +6,9 @@ contact_links:
   - name: So meldest du etwas
     url: https://github.com/KaelanTesseract/PlanoraCAD/blob/master/docs/so-meldest-du-etwas.md
     about: Eine kurze Anleitung, mit und ohne GitHub-Konto.
+  - name: Common problems (German page)
+    url: https://github.com/KaelanTesseract/PlanoraCAD/blob/master/docs/haeufige-probleme.md
+    about: Windows warning, graphics problems, update does not work. The answer may already be there. The page is in German.
+  - name: How to report something (German page)
+    url: https://github.com/KaelanTesseract/PlanoraCAD/blob/master/docs/so-meldest-du-etwas.md
+    about: A short guide, with and without a GitHub account. The page is in German.

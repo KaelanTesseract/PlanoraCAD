@@ -27,39 +27,80 @@
 //! Aktion verliert sie) und „Abbrechen“.
 //!
 //! Jede Änderung gilt sofort und wird mit [`Workspace::set_keymap`] gespeichert; misslingt das,
-//! gilt sie für die Sitzung und der Hinweis [`KEYS_NOT_SAVED`] erscheint (wie bei der
+//! gilt sie für die Sitzung und der Hinweis [`keys_not_saved()`] erscheint (wie bei der
 //! Durchsichtigkeit).
 
 use super::{Action, Binding, Gesture, KeyChord, Keymap, MouseButton, search, text};
-use crate::settings_window::RootMessage;
+use crate::settings_window::{Note, RootMessage};
 use crate::theme;
 use crate::workspace::Workspace;
+use planora_i18n::tr;
 
-pub const SECTION: &str = "Tastenkürzel";
-pub const SEARCH_HINT: &str = "Suchen: Aktion, Bereich oder Taste";
-pub const HELP: &str = "„Ändern“ wählen und die neue Taste drücken. Esc bricht ab.";
-pub const COLUMN_ACTION: &str = "Aktion";
-pub const COLUMN_AREA: &str = "Bereich";
-pub const COLUMN_BINDINGS: &str = "Belegung";
-pub const CHANGE: &str = "Ändern";
-pub const REMOVE: &str = "Entfernen";
-pub const ADD: &str = "Hinzufügen";
-pub const RESET: &str = "Zurücksetzen";
-pub const RESET_ALL: &str = "Alles zurücksetzen";
+pub fn section() -> String {
+    tr!("keys-section")
+}
+pub fn search_hint() -> String {
+    tr!("keys-search-hint")
+}
+pub fn help() -> String {
+    tr!("keys-help")
+}
+pub fn column_action() -> String {
+    tr!("keys-column-action")
+}
+pub fn column_area() -> String {
+    tr!("keys-column-area")
+}
+pub fn column_bindings() -> String {
+    tr!("keys-column-bindings")
+}
+pub fn change() -> String {
+    tr!("keys-change")
+}
+pub fn remove() -> String {
+    tr!("keys-remove")
+}
+pub fn add() -> String {
+    tr!("keys-add")
+}
+pub fn reset() -> String {
+    tr!("keys-reset")
+}
+pub fn reset_all() -> String {
+    tr!("keys-reset-all")
+}
 /// Steht in der Zeile, solange eine Taste erfasst wird.
-pub const PRESS_KEY: &str = "Taste drücken …";
-/// Wie [`PRESS_KEY`] für „Ansicht schwenken“ und „Ansicht drehen“.
-pub const DRAG_NOW: &str = "Maustaste halten und ziehen …";
-/// Wie [`PRESS_KEY`] für „Ansicht zoomen“.
-pub const WHEEL_NOW: &str = "Mausrad drehen …";
-pub const CANCEL: &str = "Abbrechen";
-pub const SWAP: &str = "Tauschen";
+pub fn press_key() -> String {
+    tr!("keys-press-key")
+}
+/// Wie [`press_key()`] für „Ansicht schwenken“ und „Ansicht drehen“.
+pub fn drag_now() -> String {
+    tr!("keys-drag-now")
+}
+/// Wie [`press_key()`] für „Ansicht zoomen“.
+pub fn wheel_now() -> String {
+    tr!("keys-wheel-now")
+}
+pub fn cancel() -> String {
+    tr!("keys-cancel")
+}
+pub fn swap() -> String {
+    tr!("keys-swap")
+}
 /// Statt einer Belegung, wenn die Aktion keine hat.
-pub const UNBOUND: &str = "ohne Belegung";
-pub const NOTHING_FOUND: &str = "Keine Aktion gefunden.";
-pub const NOTES_HEADING: &str = "Beim Laden übergangen:";
+pub fn unbound() -> String {
+    tr!("keys-unbound")
+}
+pub fn nothing_found() -> String {
+    tr!("keys-nothing-found")
+}
+pub fn notes_heading() -> String {
+    tr!("keys-notes-heading")
+}
 /// Warnung, wenn die Belegung gilt, aber nicht gespeichert werden konnte.
-pub const KEYS_NOT_SAVED: &str = "Die Tastenkürzel gelten nur bis zum Programmende: die Einstellung konnte nicht gespeichert werden.";
+pub fn keys_not_saved() -> String {
+    tr!("keys-not-saved")
+}
 /// Mindestweg einer Ziehgeste beim Erfassen (Pixel); darunter ist es ein Klick.
 pub const DRAG_MIN: f32 = 4.0;
 /// Kleinste Höhe der Tabelle (in kleinen Fenstern rollt dann das ganze Einstellungsfenster).
@@ -104,28 +145,28 @@ fn action_width(total: f32) -> f32 {
 
 /// „Strg+S ist schon für „Speichern“ belegt.“
 pub fn conflict_text(b: &Binding, other: Action) -> String {
-    format!(
-        "{} ist schon für „{}“ belegt.",
-        text::binding_text(b),
-        other.label()
+    tr!(
+        "keys-conflict",
+        binding = text::binding_text(b),
+        action = other.label()
     )
 }
 
 /// Hinweis nach „Zurücksetzen“, wenn eine andere Aktion eine Voreinstellung abgeben musste.
 pub fn taken_text(b: &Binding, other: Action) -> String {
-    format!(
-        "{} gehört wieder zur Voreinstellung und gilt nicht mehr für „{}“.",
-        text::binding_text(b),
-        other.label()
+    tr!(
+        "keys-taken",
+        binding = text::binding_text(b),
+        action = other.label()
     )
 }
 
 /// Hinweis nach „Tauschen“: welche Aktion die Belegung abgeben musste.
 pub fn swapped_text(b: &Binding, other: Action) -> String {
-    format!(
-        "{} gilt nicht mehr für „{}“.",
-        text::binding_text(b),
-        other.label()
+    tr!(
+        "keys-swapped",
+        binding = text::binding_text(b),
+        action = other.label()
     )
 }
 
@@ -138,7 +179,7 @@ pub struct CaptureState {
     pub capturing: Option<(Action, usize)>,
     /// Offene Doppelbelegung: Aktion, Stelle, neue Belegung, Aktion, der sie schon gehört.
     pub pending_conflict: Option<(Action, usize, Binding, Action)>,
-    /// Speichern fehlgeschlagen ([`KEYS_NOT_SAVED`]).
+    /// Speichern fehlgeschlagen ([`keys_not_saved()`]).
     pub message: Option<RootMessage>,
     /// Kurzer Hinweis nach einer Änderung (etwa [`taken_text`]).
     pub info: Option<String>,
@@ -378,9 +419,9 @@ fn take(ws: &mut Workspace, state: &mut CaptureState, a: Action, index: usize, b
     commit(ws, state, km);
 }
 
-/// Übernimmt `km` und speichert sie; misslingt das Speichern, der Hinweis [`KEYS_NOT_SAVED`].
+/// Übernimmt `km` und speichert sie; misslingt das Speichern, der Hinweis [`keys_not_saved()`].
 fn commit(ws: &mut Workspace, state: &mut CaptureState, km: Keymap) {
-    state.message = (!ws.set_keymap(km)).then(|| RootMessage::Warning(KEYS_NOT_SAVED.into()));
+    state.message = (!ws.set_keymap(km)).then_some(RootMessage::Warning(Note::KeysNotSaved));
 }
 
 /// Was ein Klick im Abschnitt auslöst (nach dem Zeichnen ausgeführt).
@@ -406,10 +447,10 @@ pub fn show(ui: &mut egui::Ui, ws: &mut Workspace, state: &mut CaptureState) {
     let warning = theme::palette(dark).warning;
     let muted = theme::palette(dark).text_secondary;
     let mut click = None;
-    theme::section_header(ui, SECTION, theme::SUB_HEADER_H);
+    theme::section_header(ui, &section(), theme::SUB_HEADER_H);
     ui.add_space(theme::SPACE_2);
     if !ws.key_notes.is_empty() {
-        ui.colored_label(warning, NOTES_HEADING);
+        ui.colored_label(warning, notes_heading());
         for n in &ws.key_notes {
             ui.add(egui::Label::new(egui::RichText::new(n).color(warning)).wrap());
         }
@@ -419,18 +460,18 @@ pub fn show(ui: &mut egui::Ui, ws: &mut Workspace, state: &mut CaptureState) {
         theme::text_field(
             ui,
             egui::TextEdit::singleline(&mut state.filter)
-                .hint_text(SEARCH_HINT)
+                .hint_text(search_hint())
                 .desired_width(320.0),
         );
         let changed = Action::ALL.iter().any(|&a| !ws.keymap.is_default(a));
         if ui
-            .add_enabled(changed, egui::Button::new(RESET_ALL))
+            .add_enabled(changed, egui::Button::new(reset_all()))
             .clicked()
         {
             click = Some(Click::ResetAll);
         }
     });
-    ui.label(egui::RichText::new(HELP).color(muted));
+    ui.label(egui::RichText::new(help()).color(muted));
     if let Some(m) = &state.message {
         ui.colored_label(m.color(dark), m.text());
     }
@@ -444,12 +485,12 @@ pub fn show(ui: &mut egui::Ui, ws: &mut Workspace, state: &mut CaptureState) {
     let action_w = action_width(table_w);
     ui.horizontal(|ui| {
         column(ui, action_w, |ui| {
-            ui.strong(COLUMN_ACTION);
+            ui.strong(column_action());
         });
         column(ui, AREA_W, |ui| {
-            ui.strong(COLUMN_AREA);
+            ui.strong(column_area());
         });
-        ui.strong(COLUMN_BINDINGS);
+        ui.strong(column_bindings());
     });
     ui.separator();
     // Nach einer erfassten Ziehgeste ist die Taste noch unten: ihr Loslassen soll keinen Knopf
@@ -472,7 +513,7 @@ pub fn show(ui: &mut egui::Ui, ws: &mut Workspace, state: &mut CaptureState) {
             ui.set_max_width(table_w);
             ui.add_enabled_ui(!hold, |ui| {
                 if shown.is_empty() {
-                    ui.label(NOTHING_FOUND);
+                    ui.label(nothing_found());
                 }
                 let mut conflict_seen = false;
                 for &a in &shown {
@@ -590,11 +631,11 @@ pub(super) fn chip(ui: &mut egui::Ui, text: &str, color: Option<egui::Color32>) 
     );
 }
 
-fn capture_prompt(a: Action) -> &'static str {
+fn capture_prompt(a: Action) -> String {
     match a {
-        Action::ViewZoom => WHEEL_NOW,
-        a if is_mouse_action(a) => DRAG_NOW,
-        _ => PRESS_KEY,
+        Action::ViewZoom => wheel_now(),
+        a if is_mouse_action(a) => drag_now(),
+        _ => press_key(),
     }
 }
 
@@ -632,39 +673,39 @@ fn row(
                 |ui| {
                     ui.set_min_width(width);
                     if list.is_empty() && capturing.is_none() {
-                        chip(ui, UNBOUND, Some(muted));
+                        chip(ui, &unbound(), Some(muted));
                     }
                     // Chip und Knöpfe einzeln in die umbrechende Zeile (nicht als Block): so
                     // rutschen bei wenig Platz die Knöpfe in die nächste Zeile.
                     for (i, b) in list.iter().enumerate() {
                         if capturing == Some(i) {
-                            chip(ui, capture_prompt(a), Some(accent));
-                            if ui.small_button(CANCEL).clicked() {
+                            chip(ui, &capture_prompt(a), Some(accent));
+                            if ui.small_button(cancel()).clicked() {
                                 *click = Some(Click::CancelCapture);
                             }
                         } else {
                             chip(ui, &text::binding_text(b), None);
-                            if ui.small_button(CHANGE).clicked() {
+                            if ui.small_button(change()).clicked() {
                                 *click = Some(Click::Change(a, i));
                             }
-                            if ui.small_button(REMOVE).clicked() {
+                            if ui.small_button(remove()).clicked() {
                                 *click = Some(Click::Remove(a, i));
                             }
                         }
                     }
                     if capturing.is_some_and(|i| i >= list.len()) {
-                        chip(ui, capture_prompt(a), Some(accent));
-                        if ui.small_button(CANCEL).clicked() {
+                        chip(ui, &capture_prompt(a), Some(accent));
+                        if ui.small_button(cancel()).clicked() {
                             *click = Some(Click::CancelCapture);
                         }
-                    } else if ui.small_button(ADD).clicked() {
+                    } else if ui.small_button(add()).clicked() {
                         *click = Some(Click::Change(a, list.len()));
                     }
                 },
             );
             column(ui, RESET_W, |ui| {
                 if ui
-                    .add_enabled(!km.is_default(a), egui::Button::new(RESET))
+                    .add_enabled(!km.is_default(a), egui::Button::new(reset()))
                     .clicked()
                 {
                     *click = Some(Click::Reset(a));
@@ -677,10 +718,10 @@ fn row(
             let r = ui.horizontal_wrapped(|ui| {
                 ui.add_space(action_w + AREA_W);
                 ui.colored_label(theme::palette(dark).warning, conflict_text(b, *other));
-                if ui.button(SWAP).clicked() {
+                if ui.button(swap()).clicked() {
                     *click = Some(Click::Swap);
                 }
-                if ui.button(CANCEL).clicked() {
+                if ui.button(cancel()).clicked() {
                     *click = Some(Click::CancelConflict);
                 }
             });

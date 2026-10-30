@@ -8,6 +8,7 @@ use crate::formulas::{
 };
 use crate::model::{Document, FeatureId, FeatureKind, FeatureStatus};
 use crate::recompute::RecomputeReport;
+use planora_i18n::tr;
 use planora_kernel::Kernel;
 
 impl Document {
@@ -54,9 +55,7 @@ impl Document {
         let before = std::mem::discriminant(&kind);
         f(&mut kind);
         if std::mem::discriminant(&kind) != before {
-            return Err(FeatureError::InvalidInput(
-                "Die Art des Features lässt sich nicht ändern".into(),
-            ));
+            return Err(FeatureError::InvalidInput(tr!("feature-kind-fixed")));
         }
         self.check_references(&kind, idx)?;
         Ok((idx, kind))
@@ -104,9 +103,7 @@ impl Document {
     pub fn rename(&mut self, id: FeatureId, name: impl Into<String>) -> Result<(), FeatureError> {
         let name = name.into();
         if name.trim().is_empty() {
-            return Err(FeatureError::InvalidInput(
-                "Der Name darf nicht leer sein".into(),
-            ));
+            return Err(FeatureError::InvalidInput(tr!("feature-name-empty")));
         }
         let idx = self.index_of(id).ok_or(FeatureError::UnknownFeature)?;
         if self.features[idx].name != name {
@@ -212,15 +209,15 @@ impl Document {
     pub fn check_invariants(&self) -> Result<(), String> {
         for (i, f) in self.features.iter().enumerate() {
             if self.features[..i].iter().any(|g| g.id == f.id) {
-                return Err(format!("Feature-Id {} ist doppelt", f.id.0));
+                return Err(format!("feature id {} is duplicated", f.id.0));
             }
             if f.id.0 == 0 || f.id.0 >= self.next_id {
-                return Err(format!("Feature-Id {} wurde nie vergeben", f.id.0));
+                return Err(format!("feature id {} was never assigned", f.id.0));
             }
         }
         if self.marker > self.features.len() {
             return Err(format!(
-                "Marker {} hinter dem Ende ({} Features)",
+                "marker {} past the end ({} features)",
                 self.marker,
                 self.features.len()
             ));
@@ -229,37 +226,34 @@ impl Document {
         let rolled_back = self.rolled_back();
         for (idx, f) in self.features.iter().enumerate() {
             if let Err(e) = self.check_references(&f.kind, idx) {
-                return Err(format!("Feature „{}“: {e}", f.name));
+                return Err(format!("feature \"{}\": {e}", f.name));
             }
             if idx >= self.marker && f.status != FeatureStatus::NotComputed {
                 return Err(format!(
-                    "Feature „{}“ steht hinter dem Marker, hat aber Status {:?}",
+                    "feature \"{}\" is after the marker but has status {:?}",
                     f.name, f.status
                 ));
             }
             if rolled_back.contains(&f.id) && f.status != FeatureStatus::NotComputed {
                 return Err(format!(
-                    "Feature „{}“ ist zurückgesetzt, hat aber Status {:?}",
+                    "feature \"{}\" is rolled back but has status {:?}",
                     f.name, f.status
                 ));
             }
             let active = idx < self.marker && !rolled_back.contains(&f.id);
             if active && !f.suppressed && f.status == FeatureStatus::NotComputed {
                 return Err(format!(
-                    "Feature „{}“ steht vor dem Marker, wurde aber nicht berechnet",
+                    "feature \"{}\" is before the marker but was not computed",
                     f.name
                 ));
             }
             match (&f.status, f.result.is_some()) {
                 (FeatureStatus::Ok, false) => {
-                    return Err(format!(
-                        "Feature „{}“ ist Ok, hat aber kein Ergebnis",
-                        f.name
-                    ));
+                    return Err(format!("feature \"{}\" is Ok but has no result", f.name));
                 }
                 (FeatureStatus::Error(_) | FeatureStatus::Skipped(_), true) => {
                     return Err(format!(
-                        "Feature „{}“ hat Status {:?} und trotzdem ein Ergebnis",
+                        "feature \"{}\" has status {:?} and still a result",
                         f.name, f.status
                     ));
                 }
@@ -267,7 +261,7 @@ impl Document {
             }
             if active && f.suppressed != (f.status == FeatureStatus::Suppressed) {
                 return Err(format!(
-                    "Feature „{}“: Unterdrückung und Status {:?} passen nicht zusammen",
+                    "feature \"{}\": suppression and status {:?} do not match",
                     f.name, f.status
                 ));
             }
@@ -276,7 +270,7 @@ impl Document {
         self.check_formula_invariants()?;
         for v in self.visible_bodies() {
             if let Err(e) = self.kernel.validate(v.solid) {
-                return Err(format!("Sichtbarer Körper „{}“ ist ungültig: {e}", v.name));
+                return Err(format!("visible body \"{}\" is invalid: {e}", v.name));
             }
         }
         Ok(())
@@ -288,16 +282,16 @@ impl Document {
         let mut last = None;
         for r in &self.rollbacks {
             let Some(idx) = self.index_of(*r) else {
-                return Err(format!("Rückrollstelle {} verweist auf kein Feature", r.0));
+                return Err(format!("rollback point {} refers to no feature", r.0));
             };
             if last.is_some_and(|l| l >= idx) {
-                return Err("Rückrollstellen nicht in Listenordnung oder doppelt".into());
+                return Err("rollback points not in list order or duplicated".into());
             }
             last = Some(idx);
             let chain = self.chain(*r);
             if let Some(o) = self.rollbacks.iter().find(|o| *o != r && chain.contains(o)) {
                 return Err(format!(
-                    "Rückrollstelle {} liegt in der Kette der Stelle {}",
+                    "rollback point {} lies in the chain of point {}",
                     o.0, r.0
                 ));
             }
@@ -309,18 +303,18 @@ impl Document {
     /// Einheiten, Kommentare), gespeicherte Werte bitgenau wie berechnet.
     fn check_parameter_invariants(&self) -> Result<(), String> {
         if self.next_param == 0 {
-            return Err("Parameterzähler ist 0".into());
+            return Err("parameter counter is 0".into());
         }
         for (i, p) in self.parameters.iter().enumerate() {
             if p.id.0 == 0 || p.id.0 >= self.next_param {
-                return Err(format!("Parameter-Id {} wurde nie vergeben", p.id.0));
+                return Err(format!("parameter id {} was never assigned", p.id.0));
             }
             if self.parameters[..i].iter().any(|q| q.id == p.id) {
-                return Err(format!("Parameter-Id {} ist doppelt", p.id.0));
+                return Err(format!("parameter id {} is duplicated", p.id.0));
             }
         }
         let values = crate::params::check_table(&self.parameters)
-            .map_err(|m| format!("Parametertabelle ungültig: {m}"))?;
+            .map_err(|m| format!("parameter table invalid: {m}"))?;
         if values.len() != self.param_values.len()
             || values
                 .iter()
@@ -328,7 +322,7 @@ impl Document {
                 .any(|(a, b)| a.to_bits() != b.to_bits())
         {
             return Err(format!(
-                "Parameterwerte veraltet: {:?} statt {values:?}",
+                "parameter values stale: {:?} instead of {values:?}",
                 self.param_values
             ));
         }
@@ -345,12 +339,12 @@ impl Document {
         let tolerance = self.kernel.tolerance.linear;
         let rolled_back = self.rolled_back();
         for (idx, f) in self.features.iter().enumerate() {
-            check_keys(&f.kind, &f.formulas).map_err(|e| format!("Feature „{}“: {e}", f.name))?;
+            check_keys(&f.kind, &f.formulas).map_err(|e| format!("feature \"{}\": {e}", f.name))?;
             if let FeatureKind::Sketch(sf) = &f.kind
                 && sf.clone().prune_formulas()
             {
                 return Err(format!(
-                    "Feature „{}“: Formel an einer Abhängigkeit, die keine haben kann",
+                    "feature \"{}\": formula on a constraint that cannot have one",
                     f.name
                 ));
             }
@@ -360,19 +354,19 @@ impl Document {
                 .find(|k| !same_fields(&f.kind, &ev.kind, *k))
             {
                 return Err(format!(
-                    "Feature „{}“: Feld {k:?} trägt nicht den Wert seiner Formel",
+                    "feature \"{}\": field {k:?} does not hold the value of its formula",
                     f.name
                 ));
             }
             if !same_values(&f.kind, &ev.kind) {
                 return Err(format!(
-                    "Feature „{}“: ein Skizzenmaß trägt nicht den Wert seiner Formel",
+                    "feature \"{}\": a sketch dimension does not hold the value of its formula",
                     f.name
                 ));
             }
             if ev.issue != f.issue {
                 return Err(format!(
-                    "Feature „{}“: Formelfehler {:?} statt {:?}",
+                    "feature \"{}\": formula issue {:?} instead of {:?}",
                     f.name, f.issue, ev.issue
                 ));
             }
@@ -383,7 +377,7 @@ impl Document {
                 && f.status != FeatureStatus::Error(issue.message().to_string())
             {
                 return Err(format!(
-                    "Feature „{}“ hat einen Formelfehler, aber Status {:?}",
+                    "feature \"{}\" has a formula issue but status {:?}",
                     f.name, f.status
                 ));
             }
@@ -414,7 +408,7 @@ mod tests {
         d.features[idx].status = FeatureStatus::NotComputed;
         d.features[idx].result = None;
         let e = d.check_invariants().unwrap_err();
-        assert!(e.contains("nicht berechnet"), "{e}");
+        assert!(e.contains("not computed"), "{e}");
         // unterdrückt vor dem Marker ist erlaubt (Status Suppressed), hinter dem Marker auch
         d.set_suppressed(a, true).unwrap();
         d.check_invariants().unwrap();
@@ -451,24 +445,24 @@ mod tests {
         // Werte der Tabelle veraltet
         let (mut d, _) = fresh();
         d.param_values[0] = 41.0;
-        check(&d, "Parameterwerte veraltet");
+        check(&d, "parameter values stale");
         // Tabelle ungültig (Kreis)
         let (mut d, _) = fresh();
         d.parameters[0].formula = "Breite+1".into();
-        check(&d, "Parametertabelle ungültig");
+        check(&d, "parameter table invalid");
         // doppelte Kennung
         let (mut d, _) = fresh();
         let mut p = d.parameters[0].clone();
         p.name = "Zweite".into();
         d.parameters.push(p);
         d.param_values.push(40.0);
-        check(&d, "doppelt");
+        check(&d, "duplicated");
         // Feld trägt nicht den Formelwert
         let (mut d, i) = fresh();
         if let FeatureKind::Box { size, .. } = &mut d.features[i].kind {
             size.x = 39.0;
         }
-        check(&d, "trägt nicht den Wert");
+        check(&d, "does not hold the value");
         // Formel an einem Feld, das die Art nicht hat
         let (mut d, i) = fresh();
         d.features[i]
@@ -480,7 +474,7 @@ mod tests {
         d.features[i]
             .formulas
             .insert(FieldKey::Breite, "Gibtsnicht".to_string());
-        check(&d, "Formelfehler");
+        check(&d, "formula issue");
         // Formelfehler ohne Fehlerstatus
         let (mut d, i) = fresh();
         d.features[i]
@@ -489,6 +483,6 @@ mod tests {
         d.features[i].issue = Some(FormulaIssue::Broken(
             "Den Namen „Gibtsnicht“ gibt es nicht.".into(),
         ));
-        check(&d, "hat einen Formelfehler, aber Status");
+        check(&d, "has a formula issue but status");
     }
 }

@@ -9,7 +9,7 @@
 mod blend_common;
 
 use blend_common::*;
-use planora_kernel::blend::march::VARIABLE_CORNER;
+use planora_kernel::blend::march::variable_corner;
 use planora_kernel::*;
 use planora_math::{DMat4, DVec2, DVec3, Frame, PI, TAU};
 use planora_mesh::{
@@ -333,7 +333,7 @@ fn a_chain_carries_the_law_across_smooth_transitions() {
     // Ohne Kette endet die Gerade an der Halbzylinderwand: kein ebener Abschluss (P5), benannt.
     let r = blend_edges(&s, &[e], variable(&[(0.0, 0.5), (1.0, 0.9)]), false);
     assert!(
-        matches!(&r, Err(BlendError::Unsupported(m)) if m == planora_kernel::blend::march::OBLIQUE_END),
+        matches!(&r, Err(BlendError::Unsupported(m)) if *m == planora_kernel::blend::march::oblique_end()),
         "{:?}",
         r.map(|_| ())
     );
@@ -471,7 +471,7 @@ fn corners_sizes_and_curvature_limits_are_named() {
     let e2 = edge_between(&s, "Deckel", "Wand 2");
     // Zwei Kanten mit variablem Radius an einer Ecke (P6, Task 17).
     match blend_edges(&s, &[e1, e2], variable(&[(0.0, 1.0), (1.0, 1.5)]), false) {
-        Err(BlendError::Corner(m)) => assert_eq!(m, VARIABLE_CORNER),
+        Err(BlendError::Corner(m)) => assert_eq!(m, variable_corner()),
         other => panic!("{:?}", other.map(|_| ())),
     }
     // Hautflächen verschweißen mit der Knotentoleranz: Mindestmaß 2e-3 mm.

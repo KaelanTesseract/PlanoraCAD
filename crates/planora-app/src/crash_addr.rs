@@ -13,7 +13,7 @@
 /// auf alten Windows-Versionen weniger als 63).
 pub const MAX_FRAMES: usize = 62;
 /// Überschrift des Abschnitts im Bericht.
-pub const SECTION: &str = "Adressen (für Dennis):";
+pub const SECTION: &str = "Addresses (for Dennis):";
 
 /// Bau-Kennung der exe.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,7 +42,7 @@ pub struct Addresses {
     pub frames: Vec<Frame>,
 }
 
-const UNAVAILABLE: &str = "nicht verfügbar";
+const UNAVAILABLE: &str = "not available";
 /// Höchstens so viele Debugeinträge werden durchsucht.
 const MAX_DEBUG_ENTRIES: usize = 32;
 const DEBUG_ENTRY_SIZE: usize = 28;
@@ -154,23 +154,23 @@ pub fn section_text(a: Option<&Addresses>) -> String {
         t.push('\n');
         return t;
     };
-    t.push_str(&format!("Modul: {}\n", a.module));
+    t.push_str(&format!("Module: {}\n", a.module));
     let guid = a.build.as_ref().and_then(|b| b.pdb_guid.as_deref());
     t.push_str(&format!("PDB-GUID: {}\n", guid.unwrap_or(UNAVAILABLE)));
     if let Some(age) = a.build.as_ref().and_then(|b| b.pdb_age) {
         t.push_str(&format!("PDB-Age: {age}\n"));
     }
     match &a.build {
-        Some(b) => t.push_str(&format!("PE-Zeit: 0x{:08X}\n", b.time_stamp)),
-        None => t.push_str(&format!("PE-Zeit: {UNAVAILABLE}\n")),
+        Some(b) => t.push_str(&format!("PE-Time: 0x{:08X}\n", b.time_stamp)),
+        None => t.push_str(&format!("PE-Time: {UNAVAILABLE}\n")),
     }
     if a.frames.is_empty() {
-        t.push_str("keine Rahmen\n");
+        t.push_str("no frames\n");
     }
     for (i, f) in a.frames.iter().take(MAX_FRAMES).enumerate() {
         match &f.module {
             Some(m) => t.push_str(&format!("{i:3}: {m}+0x{:x}\n", f.offset)),
-            None => t.push_str(&format!("{i:3}: unbekannt 0x{:x}\n", f.offset)),
+            None => t.push_str(&format!("{i:3}: unknown 0x{:x}\n", f.offset)),
         }
     }
     t

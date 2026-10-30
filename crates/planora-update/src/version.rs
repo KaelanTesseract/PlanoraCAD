@@ -3,6 +3,8 @@
 use std::cmp::Ordering;
 use std::fmt;
 
+use planora_i18n::tr;
+
 use crate::channel::Channel;
 
 /// Art der Vorabversion. Die Reihenfolge der Varianten ist die Sortierreihenfolge (`Dev` < `Beta`).
@@ -56,7 +58,10 @@ pub struct ParseError {
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "keine gültige Versionsnummer: {:?}", self.input)
+        f.write_str(&tr!(
+            "update-version-invalid",
+            input = format!("{:?}", self.input)
+        ))
     }
 }
 
@@ -129,7 +134,7 @@ impl Version {
     pub fn from_cargo(cargo_version: &str) -> Version {
         match Self::parse(cargo_version) {
             Ok(version) => version,
-            Err(err) => panic!("Cargo-Version ungeeignet für Updates: {err}"),
+            Err(err) => panic!("Cargo version unsuitable for updates: {err}"),
         }
     }
 

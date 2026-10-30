@@ -2,6 +2,7 @@
 
 use crate::error::SketchError;
 use crate::model::{CurveId, CurveKind, Sketch};
+use planora_i18n::tr;
 use planora_kernel::{Kernel, Profile, ProfileLoop, Segment, Solid, segment_end};
 use planora_math::{DVec2, DVec3, Frame};
 
@@ -48,19 +49,15 @@ impl Sketch {
     ) -> Result<(ProfileLoop, Frame), SketchError> {
         let tol = self.tolerance().linear;
         if !profile.holes.is_empty() {
-            return Err(SketchError::UnsupportedForSolid("Loch".into()));
+            return Err(SketchError::UnsupportedForSolid(tr!("sketch-err-hole")));
         }
         self.check_curve(axis)?;
         let CurveKind::Line { a, b } = self.curves[axis].kind else {
-            return Err(SketchError::WrongType(
-                "Die Drehachse muss eine Linie sein".into(),
-            ));
+            return Err(SketchError::WrongType(tr!("sketch-err-axis-line")));
         };
         let (pa, pb) = (self.pos(a), self.pos(b));
         if pa.distance(pb) <= tol {
-            return Err(SketchError::Degenerate(
-                "Die Drehachse hat keine Länge".into(),
-            ));
+            return Err(SketchError::Degenerate(tr!("sketch-err-axis-zero")));
         }
         let d = (pb - pa).normalize();
         let perp_of = |p: DVec2| d.x * (p - pa).y - d.y * (p - pa).x;
@@ -76,9 +73,9 @@ impl Sketch {
                 && perp_of(pts[i + 1]).abs() <= tol
         };
         let Some(axis_seg) = (0..m).find(|&i| on_axis(i)) else {
-            return Err(SketchError::Degenerate(
-                "Das Profil hat keine Kante auf der Drehachse".into(),
-            ));
+            return Err(SketchError::Degenerate(tr!(
+                "sketch-err-profile-no-axis-edge"
+            )));
         };
         let side: Vec<f64> = lp
             .sample(SIDE_CHECK_STEPS_PER_TURN)
@@ -88,9 +85,9 @@ impl Sketch {
         let any_left = side.iter().any(|&v| v > tol);
         let any_right = side.iter().any(|&v| v < -tol);
         if any_left && any_right {
-            return Err(SketchError::Degenerate(
-                "Das Profil liegt auf beiden Seiten der Drehachse".into(),
-            ));
+            return Err(SketchError::Degenerate(tr!(
+                "sketch-err-profile-both-sides"
+            )));
         }
         let s = if any_right { -1.0 } else { 1.0 };
         let to_rz = |p: DVec2| DVec2::new(s * perp_of(p), along_of(p));

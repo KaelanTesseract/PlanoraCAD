@@ -8,7 +8,7 @@ mod common;
 use egui::{Color32, Pos2, Rect, vec2};
 use planora_app::file_chooser::FileChooser;
 use planora_app::formula_field::formula_field;
-use planora_app::keymap::settings_ui::{self, CaptureState, SEARCH_HINT};
+use planora_app::keymap::settings_ui::{self, CaptureState, search_hint};
 use planora_app::places::Places;
 use planora_app::state::AppState;
 use planora_app::workspace::Workspace;
@@ -154,7 +154,11 @@ fn shortcut_search_shows_input_strong_and_hint_weak() {
         let p = theme::palette(dark);
         let mut state = CaptureState::default();
         let painted = draw(dark, &mut |ui| settings_ui::show(ui, &mut ws, &mut state));
-        assert_eq!(colour_of(&painted, SEARCH_HINT), p.text_tertiary, "{dark}");
+        assert_eq!(
+            colour_of(&painted, &search_hint()),
+            p.text_tertiary,
+            "{dark}"
+        );
         let mut state = CaptureState::default();
         state.filter = "speichern".into();
         let painted = draw(dark, &mut |ui| settings_ui::show(ui, &mut ws, &mut state));

@@ -477,7 +477,10 @@ fn the_question_counts_the_views() {
     let (d1, _, _) = two_drawings(&mut st);
     drawing_browser::request_delete_drawing(&mut st, d1);
     let plan: &DrawingDeletePlan = st.pending_delete_drawing.as_ref().unwrap();
-    assert_eq!(plan.text, "Zeichnung „Blatt 1“ mit 3 Ansichten löschen?");
+    assert_eq!(
+        plan.text.text(),
+        "Zeichnung „Blatt 1“ mit 3 Ansichten löschen?"
+    );
 }
 
 // (d) ------------------------------------------------------------------------------------------
@@ -588,7 +591,7 @@ fn deleting_a_view_with_dimensions_always_asks_and_counts_them() {
     drawing_browser::request_delete_view(&mut st, d1, front);
     let plan = st.pending_delete_drawing.clone().expect("Rückfrage");
     assert_eq!(
-        plan.text,
+        plan.text.text(),
         "Die Ansicht „Vorne“ hat abgeleitete Ansichten: Oben. Sie werden mit gelöscht, und 2 \
          Maße werden mit gelöscht."
     );
@@ -598,7 +601,9 @@ fn deleting_a_view_with_dimensions_always_asks_and_counts_them() {
     assert!(drawing_browser::apply_delete(&mut st, &plan).is_err());
     let plan = st.pending_delete_drawing.clone().expect("neue Rückfrage");
     assert!(
-        plan.text.ends_with("und 3 Maße werden mit gelöscht."),
+        plan.text
+            .text()
+            .ends_with("und 3 Maße werden mit gelöscht."),
         "{}",
         plan.text
     );
@@ -619,7 +624,7 @@ fn deleting_a_view_with_dimensions_always_asks_and_counts_them() {
     add_dim(&mut st, d1, v);
     drawing_browser::request_delete_view(&mut st, d1, v);
     assert_eq!(
-        st.pending_delete_drawing.as_ref().unwrap().text,
+        st.pending_delete_drawing.as_ref().unwrap().text.text(),
         "Die Ansicht „Vorne“ wird gelöscht, und 1 Maß wird mit gelöscht."
     );
 }

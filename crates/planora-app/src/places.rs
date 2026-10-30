@@ -6,6 +6,7 @@
 //! die schon gefundenen.
 
 use crate::icons::Icon;
+use planora_i18n::tr;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
@@ -14,13 +15,21 @@ use std::time::{Duration, Instant};
 /// Höchstzahl der Favoriten.
 pub const MAX_FAVORITES: usize = planora_project::config::MAX_FAVORITES;
 /// Meldung, wenn schon [`MAX_FAVORITES`] Favoriten da sind.
-pub const FAVORITES_FULL: &str = "Es gibt schon 24 Favoriten. Bitte zuerst einen entfernen.";
+pub fn favorites_full() -> String {
+    tr!("place-favorites-full")
+}
 /// Eintrag im Kontextmenü eines Ordners.
-pub const ADD_FAVORITE: &str = "Zu Favoriten hinzufügen";
+pub fn add_favorite_label() -> String {
+    tr!("place-add-favorite")
+}
 /// Eintrag im Kontextmenü eines Ordners oder Favoriten.
-pub const REMOVE_FAVORITE: &str = "Aus Favoriten entfernen";
+pub fn remove_favorite_label() -> String {
+    tr!("place-remove-favorite")
+}
 /// Meldung, wenn der Ordner eines Favoriten fehlt.
-pub const FAVORITE_MISSING: &str = "Diesen Ordner gibt es nicht. Mit einem Rechtsklick auf den Knopf lässt er sich aus den Favoriten entfernen.";
+pub fn favorite_missing() -> String {
+    tr!("place-favorite-missing")
+}
 
 /// Art eines Schnellzugriffs (bestimmt das Symbol).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,16 +66,28 @@ pub struct Place {
     pub path: PathBuf,
 }
 
-/// Bekannte Ordner: Art, Name im Benutzerordner, Beschriftung.
+/// Bekannte Ordner: Art, Name im Benutzerordner, Id der Beschriftung.
 const KNOWN: [(PlaceKind, &str, &str); 4] = [
-    (PlaceKind::Documents, "Documents", "Dokumente"),
-    (PlaceKind::Downloads, "Downloads", "Downloads"),
-    (PlaceKind::Desktop, "Desktop", "Desktop"),
-    (PlaceKind::Pictures, "Pictures", "Bilder"),
+    (PlaceKind::Documents, "Documents", "place-documents"),
+    (PlaceKind::Downloads, "Downloads", "place-downloads"),
+    (PlaceKind::Desktop, "Desktop", "place-desktop"),
+    (PlaceKind::Pictures, "Pictures", "place-pictures"),
 ];
 
+/// Beschriftung eines bekannten Ordners in der aktuellen Sprache (`kind` ohne bekannten Ordner:
+/// leer).
+pub fn known_label(kind: PlaceKind) -> String {
+    KNOWN
+        .iter()
+        .find(|(k, _, _)| *k == kind)
+        .map(|(_, _, id)| planora_i18n::t(id))
+        .unwrap_or_default()
+}
+
 /// Beschriftung des Projektordners.
-pub const PROJECT_LABEL: &str = "Projekte";
+pub fn project_label() -> String {
+    tr!("place-projects")
+}
 
 /// Benutzerordner (`USERPROFILE`, sonst `HOME`).
 pub fn home_dir() -> Option<PathBuf> {
@@ -93,10 +114,10 @@ pub fn known_places(home: Option<&Path>, exists: &dyn Fn(&Path) -> bool) -> Vec<
     };
     KNOWN
         .iter()
-        .filter_map(|&(kind, name, label)| {
+        .filter_map(|&(kind, name, label_id)| {
             known_folder(home, name, exists).map(|path| Place {
                 kind,
-                label: label.to_string(),
+                label: planora_i18n::t(label_id),
                 path,
             })
         })
@@ -115,7 +136,7 @@ pub fn build_places(
     if let Some(p) = project {
         out.push(Place {
             kind: PlaceKind::Project,
-            label: PROJECT_LABEL.to_string(),
+            label: project_label(),
             path: p.to_path_buf(),
         });
     }
@@ -166,12 +187,12 @@ pub fn is_favorite(favorites: &[PathBuf], path: &Path) -> bool {
 }
 
 /// Fügt `path` hinten an; `Ok(false)`, wenn er schon da ist, Fehlermeldung bei voller Liste.
-pub fn add_favorite(favorites: &mut Vec<PathBuf>, path: &Path) -> Result<bool, &'static str> {
+pub fn add_favorite(favorites: &mut Vec<PathBuf>, path: &Path) -> Result<bool, String> {
     if is_favorite(favorites, path) {
         return Ok(false);
     }
     if favorites.len() >= MAX_FAVORITES {
-        return Err(FAVORITES_FULL);
+        return Err(favorites_full());
     }
     favorites.push(path.to_path_buf());
     Ok(true)
@@ -239,8 +260,8 @@ pub enum FavoriteChange {
 
 impl FavoriteChange {
     /// Wendet die Änderung auf `favorites` an. Eine volle Liste nimmt nichts mehr auf: dann
-    /// [`FAVORITES_FULL`] (der Favorit fehlt danach).
-    pub fn apply(&self, favorites: &mut Vec<PathBuf>) -> Result<(), &'static str> {
+    /// [`favorites_full()`] (der Favorit fehlt danach).
+    pub fn apply(&self, favorites: &mut Vec<PathBuf>) -> Result<(), String> {
         match self {
             FavoriteChange::Add(p) => add_favorite(favorites, p).map(|_| ()),
             FavoriteChange::Remove(p) => {
@@ -263,9 +284,9 @@ pub struct Places {
     pub changes: Vec<FavoriteChange>,
     /// Vorgegebene Laufwerke (Tests); `None` = die des Rechners ([`system_drives`]).
     pub drives: Option<Vec<PathBuf>>,
-    /// Meldung aus dem letzten Speichern (z. B. [`FAVORITES_FULL`]); die nächste gezeichnete
+    /// Meldung aus dem letzten Speichern (z. B. [`favorites_full()`]); die nächste gezeichnete
     /// Dateiauswahl zeigt sie an und leert das Feld.
-    pub notice: Option<&'static str>,
+    pub notice: Option<String>,
 }
 
 impl Places {
@@ -275,7 +296,7 @@ impl Places {
     }
 
     /// Fügt einen Favoriten hinzu (siehe [`add_favorite`]).
-    pub fn add_favorite(&mut self, path: &Path) -> Result<(), &'static str> {
+    pub fn add_favorite(&mut self, path: &Path) -> Result<(), String> {
         if add_favorite(&mut self.favorites, path)? {
             self.changes.push(FavoriteChange::Add(path.to_path_buf()));
         }

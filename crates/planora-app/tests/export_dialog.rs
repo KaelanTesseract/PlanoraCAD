@@ -313,7 +313,7 @@ fn the_window_warns_about_open_meshes_and_still_exports() {
     d.tick(&s, true);
     let text = draw(&mut d, &mut s);
     assert!(text.contains("nicht ganz geschlossen"), "{text}");
-    assert!(text.contains(NOT_CLOSED_WARNING), "{text}");
+    assert!(text.contains(&not_closed_warning()), "{text}");
     let dir = temp_dir("offen");
     let path = dir.join("offen.stl");
     d.write_to(path.clone(), &s);
@@ -358,7 +358,7 @@ fn a_stale_result_is_never_written_and_the_chooser_closes() {
     let path = dir.join("Quader 1.stl");
     d.write_to(path.clone(), &s);
     d.tick(&s, true);
-    assert_eq!(d.write_state(), WriteState::Failed(STALE.into()));
+    assert_eq!(d.write_state(), WriteState::Failed(stale()));
     assert!(!path.exists(), "es darf nichts geschrieben werden");
     // Die offene Dateiauswahl schließt, sobald sich die Auswahl ändert.
     draw(&mut d, &mut s);
@@ -394,7 +394,7 @@ fn writing_without_a_result_says_so_and_scope_falls_back_without_selection() {
     let mut d = ExportDialog::new(&s);
     assert_eq!(d.scope, Scope::Selected);
     d.write_to(temp_dir("leer").join("x.stl"), &s);
-    assert_eq!(d.write_state(), WriteState::Failed(NOT_COMPUTED.into()));
+    assert_eq!(d.write_state(), WriteState::Failed(not_computed()));
     s.selected_body = None;
     d.tick(&s, true);
     assert_eq!(d.scope, Scope::Visible);

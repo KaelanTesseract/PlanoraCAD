@@ -7,9 +7,12 @@ use crate::icons::{self, Icon};
 use crate::shell::SHELL_INSET;
 use crate::theme::{self, SPACE_2};
 use egui::{Align, Align2, Layout};
+use planora_i18n::tr;
 
 /// Name des Schließen-Symbols (Tooltip und Bedienhilfe).
-pub const CLOSE_LABEL: &str = "Schließen";
+pub fn close_label() -> String {
+    tr!("dialog-close")
+}
 
 /// Größe des Schließen-Symbols in der Kopfzeile.
 const CLOSE_ICON_SIZE: f32 = 16.0;
@@ -173,7 +176,7 @@ impl<'a> Dialog<'a> {
         let reopened =
             ctx.memory(|m| m.area_rect(id).is_some() && !m.areas().visible_last_frame(&layer));
         if reopened {
-            ctx.request_discard("Dialog: wieder geöffnet");
+            ctx.request_discard("Dialog: opened again");
         }
         // Größe vor diesem Durchgang: egui stellt das Fenster mit der Größe des vorigen Bilds
         // hin. Ändert sich die Höhe des Inhalts, stünde der Dialog ein Bild lang versetzt (ein
@@ -218,7 +221,7 @@ impl<'a> Dialog<'a> {
             // bestimmen. Dieser Durchgang wird verworfen und sofort wiederholt, damit der Dialog
             // schon im ersten Bild sichtbar und an seiner Stelle steht.
             if ui.is_sizing_pass() {
-                ui.ctx().request_discard("Dialog: erste Größenbestimmung");
+                ui.ctx().request_discard("Dialog: first sizing pass");
             }
             let top = ui.min_rect().top();
             let close = header(ui, &title, open.is_some());
@@ -246,7 +249,7 @@ impl<'a> Dialog<'a> {
                 let h = ui.min_rect().bottom() - start;
                 if (h - footer_h).abs() > 0.5 {
                     ui.ctx().data_mut(|d| d.insert_temp(footer_id, h));
-                    ui.ctx().request_discard("Dialog: Fußzeile vermessen");
+                    ui.ctx().request_discard("Dialog: footer measured");
                 }
             }
             (close, r)
@@ -257,7 +260,7 @@ impl<'a> Dialog<'a> {
             && !reopened
             && (response.response.rect.size() - before).abs().max_elem() > 0.5
         {
-            ctx.request_discard("Dialog: Höhe geändert");
+            ctx.request_discard("Dialog: height changed");
         }
         closed.map(|response| {
             let inner = response.inner.map(|(close, r)| {
@@ -289,12 +292,12 @@ fn header(ui: &mut egui::Ui, title: &str, closable: bool) -> bool {
                         CLOSE_ICON_SIZE,
                         egui::Color32::PLACEHOLDER,
                     )))
-                    .on_hover_text(CLOSE_LABEL);
+                    .on_hover_text(close_label());
                 // Der Knopf trägt nur ein Symbol aus der Symbolschrift; sein eigener Name wäre ein
                 // unlesbares Zeichen. Diese zweite Angabe ersetzt ihn durch „Schließen“ für
                 // Bildschirmleser.
                 response.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::WidgetType::Button, true, CLOSE_LABEL)
+                    egui::WidgetInfo::labeled(egui::WidgetType::Button, true, close_label())
                 });
                 theme::focus_ring(ui, &response);
                 close = response.clicked();

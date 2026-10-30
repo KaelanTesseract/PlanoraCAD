@@ -9,6 +9,7 @@ use super::{
 };
 use crate::DVec3;
 use glam::DVec4;
+use planora_i18n::tr;
 
 /// Höchste Ableitungsordnung von `NurbsSurface::derivs` (harte Grenze; größere Werte werden
 /// auf diese Ordnung begrenzt).
@@ -52,48 +53,52 @@ impl NurbsSurface {
         let knots_u = KnotVector::new(degree_u, knots_u)?;
         let knots_v = KnotVector::new(degree_v, knots_v)?;
         if nu > MAX_CONTROL_POINTS || nv > MAX_CONTROL_POINTS {
-            return Err(NurbsError::Control(format!(
-                "zu viele Kontrollpunkte je Richtung (höchstens {MAX_CONTROL_POINTS})"
+            return Err(NurbsError::Control(tr!(
+                "math-control-per-direction",
+                max = MAX_CONTROL_POINTS.to_string()
             )));
         }
         let total = nu
             .checked_mul(nv)
             .filter(|t| *t <= MAX_CONTROL_TOTAL)
             .ok_or_else(|| {
-                NurbsError::Control(format!(
-                    "zu viele Kontrollpunkte insgesamt (höchstens {MAX_CONTROL_TOTAL})"
+                NurbsError::Control(tr!(
+                    "math-control-total",
+                    max = MAX_CONTROL_TOTAL.to_string()
                 ))
             })?;
         if knots_u.basis_count() != nu || knots_v.basis_count() != nv {
-            return Err(NurbsError::Knots(
-                "die Knotenzahl passt nicht zu Kontrollpunkten und Grad".into(),
-            ));
+            return Err(NurbsError::Knots(tr!("math-knot-count")));
         }
         if control.len() != total {
-            return Err(NurbsError::Control(format!(
-                "erwartet {nu} × {nv} = {total} Kontrollpunkte, erhalten {}",
-                control.len()
+            return Err(NurbsError::Control(tr!(
+                "math-control-expected",
+                nu = nu.to_string(),
+                nv = nv.to_string(),
+                total = total.to_string(),
+                got = control.len().to_string()
             )));
         }
         if weights.len() != total {
-            return Err(NurbsError::Weights(
-                "Gewichte und Kontrollpunkte haben verschiedene Anzahl".into(),
-            ));
+            return Err(NurbsError::Weights(tr!("math-weights-count")));
         }
         if weights
             .iter()
             .any(|w| !(MIN_WEIGHT..=MAX_WEIGHT).contains(w))
         {
-            return Err(NurbsError::Weights(format!(
-                "Gewichte müssen zwischen {MIN_WEIGHT} und {MAX_WEIGHT} liegen"
+            return Err(NurbsError::Weights(tr!(
+                "math-weights-range",
+                min = MIN_WEIGHT.to_string(),
+                max = MAX_WEIGHT.to_string()
             )));
         }
         if control
             .iter()
             .any(|p| !p.is_finite() || p.abs().max_element() > MAX_COORD)
         {
-            return Err(NurbsError::Control(format!(
-                "Koordinaten müssen endlich sein und höchstens {MAX_COORD} betragen"
+            return Err(NurbsError::Control(tr!(
+                "math-coords-range",
+                max = MAX_COORD.to_string()
             )));
         }
         Ok(NurbsSurface {
@@ -371,8 +376,10 @@ impl NurbsSurface {
     pub fn bezier_patches(&self) -> Result<Vec<BezierPatch>, NurbsError> {
         let count = self.bezier_patch_count();
         if count > MAX_BEZIER_PATCHES {
-            return Err(NurbsError::TooLarge(format!(
-                "die Zerlegung ergäbe {count} Bézier-Flicken (höchstens {MAX_BEZIER_PATCHES})"
+            return Err(NurbsError::TooLarge(tr!(
+                "math-patches-too-many",
+                count = count.to_string(),
+                max = MAX_BEZIER_PATCHES.to_string()
             )));
         }
         let (p, q) = (self.degree_u(), self.degree_v());

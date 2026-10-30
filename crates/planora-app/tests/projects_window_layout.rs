@@ -8,7 +8,7 @@ mod common;
 use common::{Screen, Seen, find};
 use egui::{Event, Modifiers, PointerButton, Rect, pos2, vec2};
 use planora_app::dialog::{DialogSize, limits};
-use planora_app::project_tiles::{MAX_TILES, TOO_MANY};
+use planora_app::project_tiles::{MAX_TILES, too_many};
 use planora_app::projects_window::*;
 use planora_app::state::AppState;
 use planora_app::theme;
@@ -164,14 +164,15 @@ fn layout_holds_at_all_sizes_with_0_1_and_200_tiles() {
                 let (rect, tiles) = x.rects();
                 assert!(rect.width() <= 1200.0 + 0.5, "{what}: {rect:?}");
                 assert!(x.window().contains_rect(rect), "{what}: {rect:?}");
-                let refresh = find(&seen, REFRESH).unwrap_or_else(|| panic!("{what}: Fußzeile"));
+                let refresh = find(&seen, &refresh()).unwrap_or_else(|| panic!("{what}: Fußzeile"));
                 assert!(
                     refresh.clip.contains_rect(refresh.rect) && rect.contains_rect(refresh.rect),
-                    "{what}: „{REFRESH}“ {:?} in {:?}",
+                    "{what}: „{}“ {:?} in {:?}",
+                    refresh.text,
                     refresh.rect,
                     refresh.clip
                 );
-                let hint = find(&seen, FOOTER_HINT).unwrap_or_else(|| panic!("{what}: Hinweis"));
+                let hint = find(&seen, &footer_hint()).unwrap_or_else(|| panic!("{what}: Hinweis"));
                 assert!(rect.contains_rect(hint.rect.intersect(hint.clip)), "{what}");
                 assert_eq!(tiles.len(), n.min(MAX_TILES), "{what}");
                 // Kachelbereich mit fester Höhe (P5), ganz im Fenster
@@ -350,7 +351,7 @@ fn more_than_500_projects_show_the_hint() {
     let root = library(MAX_TILES + 1);
     let mut x = H::new(workspace(&root, true), 1400.0, 900.0);
     let seen = x.ready();
-    let hint = find(&seen, TOO_MANY).expect("Hinweis");
+    let hint = find(&seen, &too_many()).expect("Hinweis");
     assert!(
         hint.clip.contains_rect(hint.rect),
         "sichtbar: {:?}",
@@ -362,7 +363,7 @@ fn more_than_500_projects_show_the_hint() {
     let root = library(MAX_TILES);
     let mut x = H::new(workspace(&root, true), 1400.0, 900.0);
     let seen = x.ready();
-    assert!(find(&seen, TOO_MANY).is_none());
+    assert!(find(&seen, &too_many()).is_none());
     assert!(find(&seen, &format!("{MAX_TILES} Projekte")).is_some());
 }
 
@@ -419,8 +420,8 @@ fn a_deep_path_never_covers_the_buttons() {
                 );
             }
         }
-        for button in [NEW_DOCUMENT, NEW_FOLDER] {
-            let b = find(&seen, button).unwrap_or_else(|| panic!("{what}: {button}"));
+        for button in [new_document(), new_folder()] {
+            let b = find(&seen, &button).unwrap_or_else(|| panic!("{what}: {button}"));
             assert!(
                 b.clip.contains_rect(b.rect),
                 "{what}: {button} abgeschnitten"

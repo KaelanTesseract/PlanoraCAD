@@ -1,0 +1,50 @@
+name: Wish or question
+description: "You wish for something, or you have a question. For a question, start the title with \"Question: \"."
+title: "Feature: "
+labels: ["idee"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Show with a 👍 under a wish that you want it, too.
+        Please do not write passwords or private details in the report. This page is public.
+  - type: textarea
+    id: wunsch
+    attributes:
+      label: What would you like to be able to do?
+      description: For a question, write it here.
+    validations:
+      required: true
+  - type: textarea
+    id: heute
+    attributes:
+      label: How do you do it today?
+      description: For example in another program or by hand. If you do not do it at all, say so.
+    validations:
+      required: true
+  - type: dropdown
+    id: wichtig
+    attributes:
+      label: How important is it to you?
+      options:
+        - Nice to have
+        - Important
+        - Hard to work without
+  - type: dropdown
+    id: bereich
+    attributes:
+      label: Where does it belong?
+      options:
+        - Sketch
+        - 3D
+        - Export
+        - Drawing
+        - Shortcuts
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: angaben
+    attributes:
+      label: Details
+      description: Filled in by the program.

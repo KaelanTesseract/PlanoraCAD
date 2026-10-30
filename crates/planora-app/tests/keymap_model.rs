@@ -429,7 +429,10 @@ fn keys_do_nothing_without_a_matching_selection() {
     let mut rig = Rig::new(ws());
     rig.press(Key::E, NONE);
     assert!(rig.ws().active_tab().dialog.is_none());
-    assert_eq!(rig.st().info.as_deref(), Some(commands::NEED_SKETCH));
+    assert_eq!(
+        rig.st().info.as_deref(),
+        Some(commands::need_sketch().as_str())
+    );
     assert_eq!(rig.features(), 0);
 
     // E mit einer Skizze ohne geschlossenes Profil und E mit gewähltem Körper statt Skizze.
@@ -442,7 +445,10 @@ fn keys_do_nothing_without_a_matching_selection() {
     let mut rig = Rig::new(w);
     rig.press(Key::E, NONE);
     assert!(rig.ws().active_tab().dialog.is_none(), "kein Profil");
-    assert_eq!(rig.st().info.as_deref(), Some(commands::NEED_SKETCH));
+    assert_eq!(
+        rig.st().info.as_deref(),
+        Some(commands::need_sketch().as_str())
+    );
     let (w, _) = box_ws();
     let mut rig = Rig::new(w);
     rig.press(Key::E, NONE);
@@ -459,9 +465,15 @@ fn keys_do_nothing_without_a_matching_selection() {
     assert!(rig.st().info.is_some(), "Hinweis in der Statuszeile");
     rig.st().selected_feature = None;
     rig.press(Key::V, NONE);
-    assert_eq!(rig.st().info.as_deref(), Some(commands::NEED_BODY));
+    assert_eq!(
+        rig.st().info.as_deref(),
+        Some(commands::need_body().as_str())
+    );
     rig.press(Key::Delete, NONE);
-    assert_eq!(rig.st().info.as_deref(), Some(commands::NEED_SELECTION));
+    assert_eq!(
+        rig.st().info.as_deref(),
+        Some(commands::need_selection().as_str())
+    );
     assert!(rig.st().document.feature(sk).is_some());
 }
 
@@ -544,7 +556,7 @@ fn space_repeats_the_last_command_via_menu_and_via_key() {
     let (w, sk) = sketch_ws();
     let mut rig = Rig::new(w);
     rig.ws().last_command.remember(Action::Fillet);
-    rig.click_bottom(app::CreateKind::Extrusion.label());
+    rig.click_bottom(&app::CreateKind::Extrusion.label());
     assert!(rig.ws().active_tab().dialog.is_some(), "Fenster offen");
     assert_eq!(
         rig.last(),
@@ -783,7 +795,7 @@ fn tooltips_show_the_current_keys() {
     w.observe_history(false);
     let mut rig = Rig::new(w);
     let extrude = app::CreateKind::Extrusion.label();
-    let at = bottom_button(&rig.ctx, extrude).center();
+    let at = bottom_button(&rig.ctx, &extrude).center();
     let texts = rig.hover(at);
     assert!(texts.contains(&format!("{extrude} (E)")), "{texts:?}");
     let at = bottom_button(&rig.ctx, "Verrunden …").center();
@@ -797,7 +809,7 @@ fn tooltips_show_the_current_keys() {
         Binding::Key(chord(Key::E, false, true, false)),
     );
     rig.ws().keymap = km.clone();
-    let at = bottom_button(&rig.ctx, extrude).center();
+    let at = bottom_button(&rig.ctx, &extrude).center();
     let texts = rig.hover(at);
     assert!(
         texts.contains(&format!("{extrude} (Umschalt+E)")),
@@ -848,7 +860,7 @@ fn tooltips_show_the_current_keys() {
 fn erzeugen_menu_extrude_is_remembered_and_space_repeats_it() {
     let (w, sk) = sketch_ws();
     let mut rig = Rig::new(w);
-    rig.menu("Erzeugen", app::CreateKind::Extrusion.label());
+    rig.menu("Erzeugen", &app::CreateKind::Extrusion.label());
     assert_eq!(
         rig.ws().active_tab().dialog,
         Some(CreateDialog::extrude_sketch(sk)),
@@ -932,7 +944,7 @@ fn a_command_without_window_keeps_the_running_one() {
     commands::run_action(rig.ws(), Action::ExtrudeSketch);
     assert_eq!(
         rig.st().message.as_deref(),
-        Some(history_bar::LOCK_HINT),
+        Some(history_bar::lock_hint().as_str()),
         "nur eine Meldung"
     );
     assert!(rig.ws().active_tab().dialog.is_none());

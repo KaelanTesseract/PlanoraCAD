@@ -557,7 +557,7 @@ fn centerlines_are_dashed_and_follow_the_toggle() {
 
     // Schalter aus: keine Mittellinie mehr.
     st.drawing_ui.selected_view = Some(front);
-    h.click_text(&mut st, drawing_view::CENTERLINES);
+    h.click_text(&mut st, &drawing_view::centerlines_label());
     assert!(
         !st.document
             .drawing(d)
@@ -599,7 +599,7 @@ fn toggle_centerlines_updates_the_sheet() {
     st.drawing_ui.selected_view = Some(front);
     let (model, edits) = (st.document.model_edit_count(), st.document.edit_count());
     let spawned = st.drawing_ui.spawned();
-    h.click_text(&mut st, drawing_view::CENTERLINES);
+    h.click_text(&mut st, &drawing_view::centerlines_label());
     assert!(
         !st.document
             .drawing(d)
@@ -612,7 +612,7 @@ fn toggle_centerlines_updates_the_sheet() {
     assert_eq!(st.document.edit_count(), edits + 1, "eine Änderung");
     assert_eq!(st.document.model_edit_count(), model, "Modell bleibt");
     assert_eq!(st.drawing_ui.spawned(), spawned, "nichts neu berechnet");
-    h.click_text(&mut st, drawing_view::CENTERLINES);
+    h.click_text(&mut st, &drawing_view::centerlines_label());
     assert!(
         st.document
             .drawing(d)
@@ -698,7 +698,7 @@ fn lost_dimension_is_red_and_has_a_tooltip_with_the_reason() {
         text = h.idle(&mut st).text;
     }
     assert!(
-        text.contains(drawing_view::LOST_TIP),
+        text.contains(&drawing_view::lost_tip()),
         "Tooltip fehlt:\n{text}"
     );
     assert!(
@@ -711,7 +711,7 @@ fn lost_dimension_is_red_and_has_a_tooltip_with_the_reason() {
     for _ in 0..30 {
         text = h.idle(&mut st).text;
     }
-    assert!(!text.contains(drawing_view::LOST_TIP), "{text}");
+    assert!(!text.contains(&drawing_view::lost_tip()), "{text}");
 }
 
 #[test]
@@ -731,7 +731,7 @@ fn notes_line_shows_lost_and_outside_counts_in_german() {
         shot.text("1 Maß hat seinen Bezug verloren.").color,
         ERROR_COLOR
     );
-    assert!(shot2.text.contains(drawing_view::HINT));
+    assert!(shot2.text.contains(&drawing_view::default_hint()));
     let hint = h.layout().hint;
     assert!(
         hint.contains(
@@ -791,7 +791,7 @@ fn hint_line_keeps_the_lost_count_first_and_nothing_leaves_the_line() {
     let (mut st, d, front, _, mut h) = lost_state();
     add_height(&mut st, d, front, 0, 5000.0);
     h.idle(&mut st);
-    st.drawing_ui.dim_message = Some("Eine sehr lange Meldung. ".repeat(20));
+    st.drawing_ui.dim_message = Some("Eine sehr lange Meldung. ".repeat(20).into());
     st.drawing_ui.dim_message_key = Some((
         st.document.edit_count(),
         st.drawing_ui.selected_view,
@@ -833,7 +833,7 @@ fn hint_line_keeps_the_lost_count_first_and_nothing_leaves_the_line() {
 #[test]
 fn the_suggest_message_disappears_after_the_next_change() {
     let (mut st, d, _, _, mut h) = front_and_top(None);
-    h.click_text(&mut st, drawing_view::SUGGEST);
+    h.click_text(&mut st, &drawing_view::suggest());
     assert!(h.idle(&mut st).text.contains("3 Maße wurden hinzugefügt."));
     // Eine Auswahl (hier: ein Maß) lässt die Meldung verfallen.
     h.click(&mut st, screen(&h, (100.0, 125.0)));
@@ -843,7 +843,7 @@ fn the_suggest_message_disappears_after_the_next_change() {
     assert_eq!(st.drawing_ui.dim_message, None);
     // Ebenso eine Änderung am Dokument.
     h.click(&mut st, screen(&h, (250.0, 30.0)));
-    h.click_text(&mut st, drawing_view::SUGGEST);
+    h.click_text(&mut st, &drawing_view::suggest());
     assert!(st.drawing_ui.dim_message.is_some());
     let w = st.document.drawing(d).unwrap().dimensions[0].id;
     st.document
@@ -1191,7 +1191,7 @@ fn centerline_switch_is_locked_with_a_reason_in_the_isometric_view() {
     compute(&mut st);
     st.drawing_ui.selected_view = Some(iso);
     let edits = st.document.edit_count();
-    h.click_text(&mut st, drawing_view::CENTERLINES);
+    h.click_text(&mut st, &drawing_view::centerlines_label());
     assert!(
         !st.document
             .drawing(d)
@@ -1204,7 +1204,7 @@ fn centerline_switch_is_locked_with_a_reason_in_the_isometric_view() {
     // Der Grund steht am gesperrten Schalter.
     let p = h
         .idle(&mut st)
-        .pos_of(drawing_view::CENTERLINES)
+        .pos_of(&drawing_view::centerlines_label())
         .expect("Schalter sichtbar");
     h.frame(&mut st, vec![Event::PointerMoved(p)]);
     let mut text = String::new();
@@ -1212,7 +1212,7 @@ fn centerline_switch_is_locked_with_a_reason_in_the_isometric_view() {
         text = h.idle(&mut st).text;
     }
     assert!(
-        text.contains(drawing_view::NO_ISO_CENTERLINES),
+        text.contains(&drawing_view::no_iso_centerlines()),
         "Erklärung fehlt:\n{text}"
     );
 }
@@ -1233,11 +1233,11 @@ fn read_only_tab_can_select_but_not_drag_or_toggle_or_suggest() {
     h.drag(&mut st, shot.text("10,0").rect.center(), vec2(30.0, 10.0));
     assert_eq!(st.document.drawing(d).unwrap(), &before);
     // „Maße vorschlagen“ und „Mittellinien“ sind gesperrt.
-    h.click_text(&mut st, drawing_view::SUGGEST);
+    h.click_text(&mut st, &drawing_view::suggest());
     assert_eq!(st.document.drawing(d).unwrap(), &before);
     assert_eq!(st.drawing_ui.dim_message, None);
     st.drawing_ui.selected_view = Some(front);
-    h.click_text(&mut st, drawing_view::CENTERLINES);
+    h.click_text(&mut st, &drawing_view::centerlines_label());
     assert_eq!(st.document.drawing(d).unwrap(), &before);
 }
 
@@ -1268,7 +1268,7 @@ fn front_and_top(
 fn suggest_button_adds_dimensions_and_reports_the_count() {
     let (mut st, d, _, _, mut h) = front_and_top(None);
     let model = st.document.model_edit_count();
-    h.click_text(&mut st, drawing_view::SUGGEST);
+    h.click_text(&mut st, &drawing_view::suggest());
     assert_eq!(st.document.drawing(d).unwrap().dimensions.len(), 3);
     let shot = h.idle(&mut st);
     assert!(
@@ -1284,7 +1284,7 @@ fn suggest_button_adds_dimensions_and_reports_the_count() {
     // Mit gewählter Ansicht nur diese: Vorderansicht → Breite und Höhe.
     let (mut st, d, front, _, mut h) = front_and_top(None);
     st.drawing_ui.selected_view = Some(front);
-    h.click_text(&mut st, drawing_view::SUGGEST);
+    h.click_text(&mut st, &drawing_view::suggest());
     let dims = &st.document.drawing(d).unwrap().dimensions;
     assert_eq!(dims.len(), 2);
     assert!(dims.iter().all(|m| m.view == front));
@@ -1293,7 +1293,7 @@ fn suggest_button_adds_dimensions_and_reports_the_count() {
     // Eine Ansicht ließ sich nicht berechnen: die Meldung sagt es.
     let (mut st, d, _, top, mut h) = front_and_top(Some(top_fails));
     let name = drawing_view::view_names(st.document.drawing(d).unwrap())[&top].clone();
-    h.click_text(&mut st, drawing_view::SUGGEST);
+    h.click_text(&mut st, &drawing_view::suggest());
     let text = h.idle(&mut st).text;
     let want = format!(
         "2 Maße wurden hinzugefügt. Die Ansicht „{name}“ ließ sich nicht berechnen und bekam keine Maße."
@@ -1301,7 +1301,7 @@ fn suggest_button_adds_dimensions_and_reports_the_count() {
     assert!(text.contains(&want), "„{want}“ fehlt:\n{text}");
     // Nur diese Ansicht gewählt: die Meldung nennt sie und den Grund.
     st.drawing_ui.selected_view = Some(top);
-    h.click_text(&mut st, drawing_view::SUGGEST);
+    h.click_text(&mut st, &drawing_view::suggest());
     let text = h.idle(&mut st).text;
     let want = format!(
         "Die Ansicht „{name}“ ließ sich nicht berechnen. {}",
@@ -1313,10 +1313,10 @@ fn suggest_button_adds_dimensions_and_reports_the_count() {
 #[test]
 fn suggest_button_reports_nothing_new_on_second_press() {
     let (mut st, d, _, _, mut h) = front_and_top(None);
-    h.click_text(&mut st, drawing_view::SUGGEST);
+    h.click_text(&mut st, &drawing_view::suggest());
     assert_eq!(st.document.drawing(d).unwrap().dimensions.len(), 3);
     let edits = st.document.edit_count();
-    h.click_text(&mut st, drawing_view::SUGGEST);
+    h.click_text(&mut st, &drawing_view::suggest());
     assert_eq!(st.document.drawing(d).unwrap().dimensions.len(), 3);
     assert_eq!(st.document.edit_count(), edits, "keine Änderung");
     let text = h.idle(&mut st).text;
@@ -1346,7 +1346,7 @@ fn dragging_does_not_reflatten_the_lines() {
     // Text ziehen und Mittellinien umschalten ebenso nicht.
     h.drag(&mut st, shot.text("10,0").rect.center(), vec2(10.0, 0.0));
     st.drawing_ui.selected_view = Some(front);
-    h.click_text(&mut st, drawing_view::CENTERLINES);
+    h.click_text(&mut st, &drawing_view::centerlines_label());
     assert_eq!(drawing_view::flatten_calls(), c0);
     // Gegenprobe des Zählers: eine Ansicht verschieben ändert die Linien und zerlegt neu.
     h.drag(&mut st, screen(&h, (100.0, 100.0)), vec2(30.0, 0.0));
@@ -1408,11 +1408,11 @@ fn german_texts_only() {
     let (mut st, d, front, _, mut h) = lost_state();
     add_height(&mut st, d, front, 0, 5000.0);
     st.drawing_ui.selected_view = Some(front);
-    h.click_text(&mut st, drawing_view::SUGGEST);
+    h.click_text(&mut st, &drawing_view::suggest());
     let shot = h.idle(&mut st);
     for w in [
-        drawing_view::SUGGEST,
-        drawing_view::CENTERLINES,
+        &drawing_view::suggest(),
+        &drawing_view::centerlines_label(),
         "Maß hat seinen Bezug verloren",
         "außerhalb des Blatts",
     ] {
@@ -1441,28 +1441,29 @@ fn german_texts_only() {
         h.idle(&mut st);
     }
     let tip = h.idle(&mut st).text;
-    assert!(tip.contains(drawing_view::LOST_TIP), "{tip}");
+    assert!(tip.contains(&drawing_view::lost_tip()), "{tip}");
     all.push_str(&tip);
     // Hover-Texte des Knopfs (mit und ohne gewählte Ansicht) und alle Meldungen des Vorschlags.
     for t in [
-        SuggestOutcome::Added(1).message(),
-        SuggestOutcome::Added(3).message(),
-        SuggestOutcome::NothingNew.message(),
+        SuggestOutcome::Added(1).message().text(),
+        SuggestOutcome::Added(3).message().text(),
+        SuggestOutcome::NothingNew.message().text(),
         SuggestOutcome::Partly {
             added: 0,
-            skipped: vec![NOT_BOUND.into()],
+            skipped: vec![not_bound()],
         }
-        .message(),
-        VIEWS_PENDING.into(),
-        NO_ISOMETRIC.into(),
-        NO_NORMAL_VIEW.into(),
+        .message()
+        .text(),
+        views_pending().text(),
+        no_isometric().text(),
+        no_normal_view().text(),
     ] {
         all.push_str(&t);
         all.push('\n');
     }
     let (mut st2, _, _, _, mut h2) = front_and_top(None);
     let shot = h2.idle(&mut st2);
-    let p = shot.pos_of(drawing_view::SUGGEST).unwrap();
+    let p = shot.pos_of(&drawing_view::suggest()).unwrap();
     h2.frame(&mut st2, vec![Event::PointerMoved(p)]);
     let mut hover = String::new();
     for _ in 0..30 {
@@ -1470,7 +1471,7 @@ fn german_texts_only() {
     }
     assert!(hover.contains("Setzt die wichtigsten Maße"), "{hover}");
     all.push_str(&hover);
-    all.push_str(drawing_view::HINT);
+    all.push_str(&drawing_view::default_hint());
     let bad = english_words(&all);
     assert!(bad.is_empty(), "englische Wörter {bad:?} in:\n{all}");
     assert_eq!(
@@ -1560,7 +1561,7 @@ fn switching_drawings_clears_the_dimension_selection_and_message() {
     let (mut st, _, _, w, mut h) = box_with_width();
     h.click(&mut st, screen(&h, (100.0, 125.0)));
     assert_eq!(st.drawing_ui.selected_dim, Some(w));
-    st.drawing_ui.dim_message = Some("x".into());
+    st.drawing_ui.dim_message = Some("x".to_string().into());
     let other = st
         .document
         .add_drawing("Blatt 2", A4_QUER, Projection::First)
@@ -1580,7 +1581,7 @@ fn selecting_a_view_keeps_the_canvas_in_place() {
     st.drawing_ui.selected_view = Some(front);
     let shot = h.idle(&mut st);
     assert!(
-        shot.text.contains(drawing_view::CENTERLINES),
+        shot.text.contains(&drawing_view::centerlines_label()),
         "{}",
         shot.text
     );

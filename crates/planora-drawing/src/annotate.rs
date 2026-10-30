@@ -51,6 +51,7 @@ use crate::dimension::{
 use crate::model::ViewId;
 use crate::sheet::SheetTransform;
 use crate::sheet_frame::SheetPen;
+use planora_i18n::localize_decimal;
 use planora_math::DVec2;
 use std::collections::BTreeMap;
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
@@ -253,9 +254,9 @@ impl DimText {
 
 /// Zahl mit `decimals` Nachkommastellen (begrenzt auf 0…3), gerundet wie `format!("{:.n}")`
 /// (nächster Wert; bei einem exakten binären Halbwert zur geraden Ziffer: 0,25 → „0,2“,
-/// 0,05 ist binär etwas größer → „0,1“), deutsches Komma, Minus als `−` (U+2212). Werte, die
-/// auf null runden, ohne Minus („0,0“). Nicht endlich → „?“. Für DXF wandelt der Schreiber `−`
-/// in `-` um.
+/// 0,05 ist binär etwas größer → „0,1“), Dezimaltrenner der aktuellen Sprache (Deutsch Komma,
+/// Englisch Punkt), Minus als `−` (U+2212). Werte, die auf null runden, ohne Minus („0,0“).
+/// Nicht endlich → „?“. Für DXF wandelt der Schreiber `−` in `-` um.
 pub fn format_value(value: f64, decimals: u8) -> String {
     if !value.is_finite() {
         return "?".into();
@@ -268,13 +269,13 @@ pub fn format_value(value: f64, decimals: u8) -> String {
     } else {
         s
     };
-    s.replace('.', ",").replace('-', "\u{2212}")
+    localize_decimal(&s).replace('-', "\u{2212}")
 }
 
-/// Zahl mit Vorzeichen (`+`, `−`); null ohne Vorzeichen.
+/// Zahl mit Vorzeichen (`+`, `−`); null ohne Vorzeichen (gleich mit welchem Dezimaltrenner).
 fn signed_value(value: f64, decimals: u8) -> String {
     let s = format_value(value, decimals);
-    if s.starts_with('\u{2212}') || s == "?" || s.chars().all(|c| matches!(c, '0' | ',')) {
+    if s.starts_with('\u{2212}') || s == "?" || s.chars().all(|c| matches!(c, '0' | ',' | '.')) {
         s
     } else {
         format!("+{s}")

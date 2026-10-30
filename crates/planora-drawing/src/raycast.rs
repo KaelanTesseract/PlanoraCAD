@@ -371,7 +371,7 @@ impl Scene {
     pub fn cast(&self, origin: DVec3, dir: DVec3, min_s: f64) -> Ray {
         let len = dir.length();
         if !(origin.is_finite() && len.is_finite() && len > 0.0 && !min_s.is_nan()) {
-            return Ray::Unsafe("ungültiger Strahl");
+            return Ray::Unsafe("invalid ray");
         }
         let d = dir / len;
         debug_assert!(
@@ -382,7 +382,7 @@ impl Scene {
                     && origin
                         .cmple(self.scene_hi + DVec3::splat(self.extent))
                         .all()),
-            "Strahlursprung weiter als `extent` außerhalb der Szene: `reach` reicht nicht"
+            "ray origin more than `extent` outside the scene: `reach` is too short"
         );
         let mut out = Vec::new();
         if min_s >= self.reach {
@@ -439,7 +439,7 @@ impl Scene {
                 let dist = frame.z.dot(o - frame.origin);
                 if nd.abs() < PLANE_PARALLEL {
                     if dist.abs() < IN_PLANE_REL * e {
-                        return Err("Strahl liegt in einer ebenen Fläche");
+                        return Err("ray lies in a planar face");
                     }
                     return Ok(Vec::new());
                 }
@@ -505,7 +505,7 @@ impl Scene {
                     .get_or_init(|| n.surface().bezier_patches().ok())
                     .as_deref()
                 else {
-                    return Err("Freiformfläche nicht sicher entscheidbar");
+                    return Err("freeform face cannot be decided safely");
                 };
                 // Abstand zum Rand der Fläche (Randkurven einschließlich Nähte, also auch zum
                 // Rand des Parameterbereichs, soweit er Rand der Fläche ist).
@@ -859,7 +859,7 @@ fn quadratic(
     if a.abs() < QUAD_A_EPS {
         if b.abs() < QUAD_B_REL * e {
             if dist() < IN_SURFACE_REL * e {
-                return Err("Strahl liegt in einer gekrümmten Fläche");
+                return Err("ray lies in a curved face");
             }
             return Ok(Vec::new());
         }
@@ -875,7 +875,7 @@ fn quadratic(
         let s0 = -b / a;
         let in_range = |s: f64| s > min_s && s <= reach;
         if in_range(s0) || (disc > 0.0 && (in_range(s0 - half_sep) || in_range(s0 + half_sep))) {
-            return Err("Strahl streift eine gekrümmte Fläche");
+            return Err("ray grazes a curved face");
         }
         return Ok(Vec::new());
     }
@@ -947,7 +947,7 @@ fn torus_roots(
             let before = if i > 0 { fs[i - 1] } else { fs[i] };
             let after = if i < n { fs[i + 1] } else { fs[i] };
             if before * after >= 0.0 && xs[i] > min_s {
-                return Err("Strahl berührt Torus");
+                return Err("ray touches a torus");
             }
             roots.push(xs[i]);
         }
@@ -974,7 +974,7 @@ fn torus_roots(
         }
         if gm.abs() < touch && gm.abs() < START_DIP * a.abs().min(b.abs()) {
             if sm > min_s {
-                return Err("Strahl berührt Torus");
+                return Err("ray touches a torus");
             }
             done[j - 1] = true;
             done[j] = true;
@@ -1096,7 +1096,7 @@ fn torus_roots_sampled(
             let before = if i > 0 { fs[i - 1] } else { fs[i] };
             let after = if i < n { fs[i + 1] } else { fs[i] };
             if before * after >= 0.0 && ss[i] > min_s {
-                return Err("Strahl berührt Torus");
+                return Err("ray touches a torus");
             }
             roots.push(ss[i]);
             continue;
@@ -1125,7 +1125,7 @@ fn torus_roots_sampled(
         // berühren; eine echte Berührung bringt |F| auf null.
         if gm.abs() < touch && gm.abs() < START_DIP * a.abs().min(b.abs()) {
             if sm > min_s {
-                return Err("Strahl berührt Torus");
+                return Err("ray touches a torus");
             }
             continue;
         }
@@ -1180,10 +1180,10 @@ fn nurbs_hits(
         if t > min_s {
             let p = o + d * t;
             if on_face(p) {
-                return Err("Strahl streift eine Freiformfläche");
+                return Err("ray grazes a freeform face");
             }
             if near_rim(p, size) {
-                return Err("Strahl streift den Rand einer Freiformfläche");
+                return Err("ray grazes the rim of a freeform face");
             }
         }
     }
@@ -1207,7 +1207,7 @@ fn patch_hits(
     (start, end): (f64, f64),
     leaf: f64,
 ) -> Result<(Vec<Candidate>, Vec<Touch>), &'static str> {
-    const UNSAFE: &str = "Freiformfläche nicht sicher entscheidbar";
+    const UNSAFE: &str = "freeform face cannot be decided safely";
     let sf = n.surface();
     let scale = patches
         .iter()
@@ -1731,7 +1731,7 @@ mod tests {
                 }),
             )
         };
-        assert!(matches!(run(true), Err(m) if m.contains("Rand")));
+        assert!(matches!(run(true), Err(m) if m.contains("rim")));
         assert!(asked.get());
         // Fern vom Rand: Die Berührung neben der Fläche bleibt ohne Folge (die beiden
         // Newton-Treffer am Gipfel selbst ordnet erst die Einordnung ein).

@@ -113,10 +113,13 @@ fn undo_in_sketch_touches_only_the_sketch() {
     observe(&mut w);
     assert_eq!(curves(&w), 2);
     assert_eq!(sk_undo_len(&w), 2, "zwei Linien, zwei Schritte");
-    assert_eq!(w.active_tab().undo_label(), Some("Linie zeichnen"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Linie zeichnen".to_string())
+    );
     assert_eq!(
         w.active_tab().state.sketch_undo_label(),
-        Some("Linie zeichnen")
+        Some("Linie zeichnen".to_string())
     );
 
     tab(&mut w).undo().unwrap();
@@ -132,7 +135,10 @@ fn undo_in_sketch_touches_only_the_sketch() {
     assert!(st(&mut w).snapshot().same_content(&doc_before));
     assert!(st(&mut w).sketch_session.is_some(), "Skizze bleibt offen");
     assert_eq!(st(&mut w).bodies.len(), 1, "der Quader bleibt");
-    assert_eq!(w.active_tab().redo_label(), Some("Linie zeichnen"));
+    assert_eq!(
+        w.active_tab().redo_label(),
+        Some("Linie zeichnen".to_string())
+    );
 
     tab(&mut w).redo().unwrap();
     assert_eq!(curves(&w), 2, "wiederholt");
@@ -151,10 +157,13 @@ fn undo_in_sketch_touches_only_the_sketch() {
     click(&mut w, 7.0, 7.0);
     observe(&mut w);
     assert_eq!(sk_redo_len(&w), 0);
-    assert_eq!(w.active_tab().undo_label(), Some("Punkt setzen"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Punkt setzen".to_string())
+    );
     assert_eq!(
         w.active_tab().redo_blocked(),
-        Some(NOTHING_TO_REDO),
+        Some(nothing_to_redo()),
         "nichts mehr zu wiederholen"
     );
     // Die offene Skizze bleibt „ungespeichert“, auch am Anfang ihres Verlaufs.
@@ -181,7 +190,7 @@ fn rejected_change_is_no_step() {
     assert_eq!(sk_undo_len(&w), 1, "Widerspruch abgelehnt: kein Schritt");
     assert_eq!(
         w.active_tab().state.sketch_undo_label(),
-        Some("Linie zeichnen")
+        Some("Linie zeichnen".to_string())
     );
 }
 
@@ -197,7 +206,10 @@ fn first_click_belongs_to_the_line() {
     assert_eq!(draft(&w).points().count(), 1, "der Punkt steht schon");
     assert_eq!(sk_undo_len(&w), 0, "erster Klick: kein Schritt");
     // Rückgängig nähme nur den offenen Punkt zurück (wie Esc); Wiederholen gibt es nicht.
-    assert_eq!(w.active_tab().undo_label(), Some("Punkt setzen"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Punkt setzen".to_string())
+    );
     assert_eq!(w.active_tab().undo_blocked(), None);
     assert_eq!(w.active_tab().redo_label(), None);
     observe(&mut w);
@@ -206,7 +218,10 @@ fn first_click_belongs_to_the_line() {
     click(&mut w, 10.0, 5.0);
     observe(&mut w);
     assert_eq!(sk_undo_len(&w), 1, "zweiter Klick: genau ein Schritt");
-    assert_eq!(w.active_tab().undo_label(), Some("Linie zeichnen"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Linie zeichnen".to_string())
+    );
     // Linienzug weiter: der dritte Klick ist der zweite Schritt.
     click(&mut w, 2.0, 9.0);
     observe(&mut w);
@@ -223,7 +238,10 @@ fn first_click_belongs_to_the_line() {
     let n = sk_undo_len(&w);
     rectangle(&mut w, (20.0, 0.0), (30.0, 6.0));
     assert_eq!(sk_undo_len(&w), n + 1);
-    assert_eq!(w.active_tab().undo_label(), Some("Rechteck zeichnen"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Rechteck zeichnen".to_string())
+    );
 
     // Kreis, Mittelpunkt auf einer Linie gefangen (Punkt samt Bindung): ein Schritt.
     tool(&mut w, Tool::Circle);
@@ -238,7 +256,10 @@ fn first_click_belongs_to_the_line() {
     click(&mut w, 27.0, 0.0);
     observe(&mut w);
     assert_eq!(sk_undo_len(&w), n + 1);
-    assert_eq!(w.active_tab().undo_label(), Some("Kreis zeichnen"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Kreis zeichnen".to_string())
+    );
 
     // Bogen: drei Klicks, ein Schritt.
     tool(&mut w, Tool::Arc);
@@ -248,7 +269,10 @@ fn first_click_belongs_to_the_line() {
         observe(&mut w);
     }
     assert_eq!(sk_undo_len(&w), n + 1);
-    assert_eq!(w.active_tab().undo_label(), Some("Bogen zeichnen"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Bogen zeichnen".to_string())
+    );
 
     // Spline: drei Punkte und Abschließen, ein Schritt.
     tool(&mut w, Tool::Spline);
@@ -262,7 +286,10 @@ fn first_click_belongs_to_the_line() {
     se.finish_tool(sk).unwrap();
     observe(&mut w);
     assert_eq!(sk_undo_len(&w), n + 1);
-    assert_eq!(w.active_tab().undo_label(), Some("Spline zeichnen"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Spline zeichnen".to_string())
+    );
 
     // Ein abgebrochener erster Klick hinterlässt einen Punkt: der ist ein eigener Schritt.
     tool(&mut w, Tool::Line);
@@ -274,7 +301,10 @@ fn first_click_belongs_to_the_line() {
     se.cancel(sk);
     observe(&mut w);
     assert_eq!(sk_undo_len(&w), n + 1);
-    assert_eq!(w.active_tab().undo_label(), Some("Punkt setzen"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Punkt setzen".to_string())
+    );
 }
 
 /// Offener erster Klick und Rückgängig: Zuerst geht nur der offene Punkt weg (wie Esc), der
@@ -304,7 +334,10 @@ fn undo_with_open_first_click_cancels_it_first() {
     assert_eq!(se.tool, Tool::Line);
     observe(&mut w);
     assert_eq!(sk_undo_len(&w), 1, "kein neuer Schritt");
-    assert_eq!(w.active_tab().undo_label(), Some("Punkt setzen"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Punkt setzen".to_string())
+    );
     tab(&mut w).undo().unwrap();
     assert_eq!(
         draft(&w).points().count(),
@@ -318,7 +351,7 @@ fn undo_with_open_first_click_cancels_it_first() {
     tab(&mut w).undo().unwrap();
     click(&mut w, 5.0, 5.0);
     observe(&mut w);
-    assert_eq!(tab(&mut w).redo().unwrap_err(), NOTHING_TO_REDO);
+    assert_eq!(tab(&mut w).redo().unwrap_err(), nothing_to_redo());
     tab(&mut w).undo().unwrap();
     assert_eq!(draft(&w).points().count(), 0);
     assert_eq!(sk_redo_len(&w), 1, "die Wiederholen-Liste bleibt");
@@ -352,7 +385,10 @@ fn point_drag_is_one_step() {
     assert!(end.distance(start) > 5.0, "der Punkt ist gewandert");
     observe(&mut w);
     assert_eq!(sk_undo_len(&w), n + 1, "Ziehen: genau ein Schritt");
-    assert_eq!(w.active_tab().undo_label(), Some("Skizze ändern"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Skizze ändern".to_string())
+    );
 
     tab(&mut w).undo().unwrap();
     let back = draft(&w).point_xy(p).unwrap();
@@ -395,7 +431,7 @@ fn jump_clears_session_bits() {
         let (se, _) = sess(&mut w);
         assert!(!se.pending.is_empty() && !se.pending_pos.is_empty());
         se.selection = vec![Item::Curve(c)];
-        se.message = Some("alt".into());
+        se.message = Some(planora_app::msg::Msg::Raw("alt".into()));
         se.dragging = Some(p);
         se.last_report = None;
     }
@@ -423,7 +459,7 @@ fn jump_clears_session_bits() {
     {
         let (se, _) = sess(&mut w);
         se.selection = vec![Item::Curve(c)];
-        se.message = Some("alt".into());
+        se.message = Some(planora_app::msg::Msg::Raw("alt".into()));
         se.dragging = Some(p);
         se.last_report = None;
     }
@@ -455,7 +491,7 @@ fn jump_clears_session_bits() {
     {
         let (se, _) = sess(&mut w);
         se.selection = vec![Item::Point(p)];
-        se.message = Some("alt".into());
+        se.message = Some(planora_app::msg::Msg::Raw("alt".into()));
         se.last_report = None;
     }
     assert!(st(&mut w).redo_sketch());
@@ -512,7 +548,10 @@ fn jump_reports_the_restored_solver_state() {
             .dof
     };
     assert_eq!(dof_after(&w), free - 1);
-    assert_eq!(w.active_tab().undo_label(), Some("Abhängigkeit setzen"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Abhängigkeit setzen".to_string())
+    );
     tab(&mut w).undo().unwrap();
     assert_eq!(
         dof_after(&w),
@@ -550,7 +589,10 @@ fn end_sketch_is_one_document_step() {
     st(&mut w).close_sketch();
     observe(&mut w);
     assert_eq!(doc_undo_len(&w), 2, "genau ein Dokumentschritt");
-    assert_eq!(w.active_tab().undo_label(), Some("Skizze bearbeiten"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Skizze bearbeiten".to_string())
+    );
     assert_eq!(
         st(&mut w).document.sketch_of(id).unwrap().curves().count(),
         5
@@ -648,7 +690,10 @@ fn sketch_history_ends_with_session() {
     assert!(st(&mut w).sketch_session.is_none());
     assert!(st(&mut w).sketch_history().is_none());
     observe(&mut w);
-    assert_eq!(w.active_tab().undo_label(), Some("Feature löschen"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Feature löschen".to_string())
+    );
 
     // Zurückladen des Dokuments verwirft eine offene Skizze samt Verlauf.
     st(&mut w).open_sketch(id).unwrap();
@@ -687,17 +732,20 @@ fn labels_route_by_mode() {
     let mut w = ws();
     st(&mut w).create_box(DVec3::splat(2.0)).unwrap();
     observe(&mut w);
-    assert_eq!(w.active_tab().undo_label(), Some("Quader anlegen"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Quader anlegen".to_string())
+    );
     let id = open_new_sketch(&mut w);
     // Offen, ohne Skizzenschritt: kein Name, Rückgängig ändert das Dokument nicht.
     assert_eq!(w.active_tab().undo_label(), None);
     assert_eq!(w.active_tab().redo_label(), None);
-    assert_eq!(w.active_tab().undo_blocked(), Some(NOTHING_TO_UNDO));
-    assert_eq!(w.active_tab().redo_blocked(), Some(NOTHING_TO_REDO));
+    assert_eq!(w.active_tab().undo_blocked(), Some(nothing_to_undo()));
+    assert_eq!(w.active_tab().redo_blocked(), Some(nothing_to_redo()));
     let edits = st(&mut w).document.edit_count();
     let features = st(&mut w).document.features().len();
-    assert_eq!(tab(&mut w).undo().unwrap_err(), NOTHING_TO_UNDO);
-    assert_eq!(tab(&mut w).redo().unwrap_err(), NOTHING_TO_REDO);
+    assert_eq!(tab(&mut w).undo().unwrap_err(), nothing_to_undo());
+    assert_eq!(tab(&mut w).redo().unwrap_err(), nothing_to_redo());
     assert_eq!(st(&mut w).document.edit_count(), edits);
     assert_eq!(st(&mut w).document.features().len(), features);
     assert_eq!(
@@ -712,22 +760,38 @@ fn labels_route_by_mode() {
     tool(&mut w, Tool::Line);
     click(&mut w, 0.0, 0.0);
     click(&mut w, 4.0, 3.0);
-    assert_eq!(w.active_tab().undo_label(), Some("Linie zeichnen"), "offen");
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Linie zeichnen".to_string()),
+        "offen"
+    );
     assert_eq!(w.active_tab().undo_blocked(), None);
     observe(&mut w);
-    assert_eq!(w.active_tab().undo_label(), Some("Linie zeichnen"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Linie zeichnen".to_string())
+    );
     tab(&mut w).undo().unwrap();
-    assert_eq!(w.active_tab().redo_label(), Some("Linie zeichnen"));
+    assert_eq!(
+        w.active_tab().redo_label(),
+        Some("Linie zeichnen".to_string())
+    );
     assert_eq!(w.active_tab().redo_blocked(), None);
-    assert_eq!(w.active_tab().undo_blocked(), Some(NOTHING_TO_UNDO));
+    assert_eq!(w.active_tab().undo_blocked(), Some(nothing_to_undo()));
     tab(&mut w).redo().unwrap();
 
     // Geschlossen: wieder der Dokumentverlauf.
     st(&mut w).close_sketch();
     observe(&mut w);
-    assert_eq!(w.active_tab().undo_label(), Some("Skizze bearbeiten"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Skizze bearbeiten".to_string())
+    );
     tab(&mut w).undo().unwrap();
-    assert_eq!(w.active_tab().undo_label(), Some("Skizze anlegen"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Skizze anlegen".to_string())
+    );
     assert!(matches!(
         st(&mut w)
             .document
@@ -755,7 +819,10 @@ fn projected_edge_is_a_step_with_its_copy() {
     }
     assert_eq!(done, 2);
     assert_eq!(sk_undo_len(&w), 2);
-    assert_eq!(w.active_tab().undo_label(), Some("Kante übernehmen"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Kante übernehmen".to_string())
+    );
     let copies = |w: &Workspace| {
         w.active_tab()
             .state
@@ -825,7 +892,7 @@ fn line_with_dimension_and_open_click(
         .apply(sk, ConstraintAction::Distance, Some(10.0))
         .unwrap();
     observe(w);
-    assert_eq!(w.active_tab().undo_label(), Some("Maß setzen"));
+    assert_eq!(w.active_tab().undo_label(), Some("Maß setzen".to_string()));
     tool(w, Tool::Line);
     click(w, 30.0, 30.0);
     observe(w);
@@ -845,7 +912,10 @@ fn dimension_value_with_open_click_is_its_own_step() {
     observe(&mut w);
     assert_eq!(sk_undo_len(&w), n + 1, "Maß 10 → 20: eigener Schritt");
     // Der offene Punkt benennt den Schritt nicht.
-    assert_eq!(w.active_tab().undo_label(), Some("Skizze ändern"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Skizze ändern".to_string())
+    );
     click(&mut w, 40.0, 33.0);
     observe(&mut w);
     assert_eq!(
@@ -853,7 +923,10 @@ fn dimension_value_with_open_click_is_its_own_step() {
         n + 2,
         "die Linie bleibt ein eigener Schritt"
     );
-    assert_eq!(w.active_tab().undo_label(), Some("Linie zeichnen"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Linie zeichnen".to_string())
+    );
     tab(&mut w).undo().unwrap();
     tab(&mut w).undo().unwrap();
     let v = |w: &Workspace| match draft(w).constraint(dim).unwrap().kind {
@@ -875,7 +948,10 @@ fn new_constraint_with_open_click_is_its_own_step() {
     se.apply(sk, ConstraintAction::Horizontal, None).unwrap();
     observe(&mut w);
     assert_eq!(sk_undo_len(&w), n + 1);
-    assert_eq!(w.active_tab().undo_label(), Some("Abhängigkeit setzen"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Abhängigkeit setzen".to_string())
+    );
 }
 
 /// I1: „anzeigend“ umschalten bei offenem erstem Klick ist ein eigener Schritt.
@@ -905,7 +981,10 @@ fn construction_toggle_with_open_click_is_its_own_step() {
     se.toggle_construction(sk);
     observe(&mut w);
     assert_eq!(sk_undo_len(&w), n + 1);
-    assert_eq!(w.active_tab().undo_label(), Some("Hilfslinie umschalten"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Hilfslinie umschalten".to_string())
+    );
 }
 
 /// Abhängigkeit löschen bei offenem erstem Klick: eigener Schritt.
@@ -921,7 +1000,7 @@ fn deleting_a_constraint_with_open_click_is_its_own_step() {
     assert!(!se.pending.is_empty(), "der offene Punkt bleibt");
     observe(&mut w);
     assert_eq!(sk_undo_len(&w), n + 1);
-    assert_eq!(w.active_tab().undo_label(), Some("Löschen"));
+    assert_eq!(w.active_tab().undo_label(), Some("Löschen".to_string()));
 }
 
 /// Einen freien Punkt löschen bei offenem erstem Klick: eigener Schritt.
@@ -943,7 +1022,7 @@ fn deleting_a_point_with_open_click_is_its_own_step() {
     assert!(!se.pending.is_empty());
     observe(&mut w);
     assert_eq!(sk_undo_len(&w), n + 1);
-    assert_eq!(w.active_tab().undo_label(), Some("Löschen"));
+    assert_eq!(w.active_tab().undo_label(), Some("Löschen".to_string()));
 }
 
 /// Rückgängig ohne vorheriges Bildende: die noch nicht erfasste Änderung wird ein Schritt und
@@ -1009,7 +1088,10 @@ fn rejected_commit_keeps_the_sketch_history() {
     assert!(st(&mut w).try_close_sketch().is_err());
     assert!(st(&mut w).sketch_session.is_some());
     assert_eq!(sk_undo_len(&w), 1, "der Verlauf bleibt");
-    assert_eq!(w.active_tab().undo_label(), Some("Kante übernehmen"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Kante übernehmen".to_string())
+    );
     tab(&mut w).undo().unwrap();
     tab(&mut w).undo().unwrap();
     assert_eq!(draft(&w).points().count(), 0);
@@ -1026,15 +1108,15 @@ fn redo_label_is_none_with_an_open_change() {
     tab(&mut w).undo().unwrap();
     assert_eq!(
         w.active_tab().state.sketch_redo_label(),
-        Some("Punkt setzen")
+        Some("Punkt setzen".to_string())
     );
     click(&mut w, 2.0, 2.0); // noch kein Schritt
     assert_eq!(w.active_tab().state.sketch_redo_label(), None);
-    assert_eq!(w.active_tab().redo_blocked(), Some(NOTHING_TO_REDO));
+    assert_eq!(w.active_tab().redo_blocked(), Some(nothing_to_redo()));
     tab(&mut w).undo().unwrap();
     assert_eq!(
         w.active_tab().state.sketch_redo_label(),
-        Some("Punkt setzen")
+        Some("Punkt setzen".to_string())
     );
     tool(&mut w, Tool::Line);
     click(&mut w, 3.0, 3.0); // offener erster Klick
@@ -1104,7 +1186,10 @@ fn moved_point_with_open_click_is_its_own_step() {
     sess(&mut w).1.set_point_xy(lone, -21.0, -20.0).unwrap();
     observe(&mut w);
     assert_eq!(sk_undo_len(&w), n + 1);
-    assert_eq!(w.active_tab().undo_label(), Some("Skizze ändern"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Skizze ändern".to_string())
+    );
 }
 
 /// I1: Häkchen „anzeigend“ direkt an der Skizze (Wert unverändert) bei offenem erstem Klick:
@@ -1139,5 +1224,8 @@ fn first_click_snapped_on_a_circle_is_deferred() {
     click(&mut w, 20.0, 15.0);
     observe(&mut w);
     assert_eq!(sk_undo_len(&w), n + 1);
-    assert_eq!(w.active_tab().undo_label(), Some("Linie zeichnen"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Linie zeichnen".to_string())
+    );
 }

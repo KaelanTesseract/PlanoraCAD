@@ -4,7 +4,7 @@
 //! Änderungen geprüft.
 
 use planora_app::state::*;
-use planora_app::undo_labels::{FALLBACK, describe_change, describe_sketch_change};
+use planora_app::undo_labels::{describe_change, describe_sketch_change, fallback};
 use planora_drawing::dimension::{
     DimId, DimKind, DimSpec, GeoRef, GeoRefData, Tolerance as DimTolerance,
 };
@@ -117,7 +117,7 @@ fn width_spec(st: &AppState, view: ViewId, offset: f64) -> DimSpec {
 }
 
 /// Bild davor, Aktion, Bild danach; liefert den Namen.
-fn label(st: &mut AppState, act: impl FnOnce(&mut AppState)) -> &'static str {
+fn label(st: &mut AppState, act: impl FnOnce(&mut AppState)) -> String {
     let before = st.snapshot();
     act(st);
     let after = st.snapshot();
@@ -221,13 +221,13 @@ fn full() -> Full {
     }
 }
 
-type Case = (&'static str, &'static str);
+type Case = (&'static str, String);
 
 /// Eine Zeile je Einstieg: erwarteter Name, tatsächlicher Name.
 #[allow(clippy::too_many_lines)]
 fn entry_cases() -> Vec<(String, Case)> {
     let mut v: Vec<(String, Case)> = Vec::new();
-    let mut add = |name: &str, expected: &'static str, got: &'static str| {
+    let mut add = |name: &str, expected: &'static str, got: String| {
         v.push((name.to_string(), (expected, got)));
     };
 
@@ -762,10 +762,10 @@ fn priority_and_fallback() {
         s.create_box(BOX).unwrap();
         s.create_box(BOX).unwrap();
     });
-    assert_eq!(got, FALLBACK);
+    assert_eq!(got, fallback());
     // Gleiche Bilder: Ändern.
     let snap = one_box().snapshot();
-    assert_eq!(describe_change(&snap, &snap.clone()), FALLBACK);
+    assert_eq!(describe_change(&snap, &snap.clone()), fallback());
     // Ein neues Feature schlägt Zeichnungsänderungen im selben Bild.
     let mut st = drawing().st;
     let d = st.document.drawings()[0].id;
@@ -1067,7 +1067,7 @@ fn base_sketch() -> Base {
     }
 }
 
-fn changed(base: &SketchFeature, f: impl FnOnce(&mut Sketch)) -> &'static str {
+fn changed(base: &SketchFeature, f: impl FnOnce(&mut Sketch)) -> String {
     let mut after = base.clone();
     f(&mut after.sketch);
     describe_sketch_change(base, &after)
@@ -1258,20 +1258,13 @@ fn edge_copies_are_named_first() {
 
 // (d) Schriftzeichen -----------------------------------------------------------------------
 
-/// Alle Texte in Anführungszeichen im Quelltext der Namen (ohne Kommentarzeilen).
-fn literals(source: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    for line in source.lines() {
-        if line.trim_start().starts_with("//") {
-            continue;
-        }
-        for (i, part) in line.split('"').enumerate() {
-            if i % 2 == 1 {
-                out.push(part.to_string());
-            }
-        }
-    }
-    out
+/// Alle Namen der Rückgängig-Schritte in einer Sprachdatei (Zeilen `undo-…`).
+fn undo_texts(ftl: &str) -> Vec<String> {
+    ftl.lines()
+        .filter(|l| l.starts_with("undo-"))
+        .filter_map(|l| l.split_once(" = "))
+        .map(|(_, text)| text.to_string())
+        .collect()
 }
 
 #[test]
@@ -1283,17 +1276,23 @@ fn labels_use_allowed_glyphs() {
         .expect("Erlaubnisliste in tests/fonts.rs");
     let allowed: String = allowed_line.split('"').nth(1).unwrap().to_string();
     assert!(allowed.contains('ä'));
-    let texts = literals(include_str!("../src/undo_labels.rs"));
-    assert!(texts.len() > 50, "Namen im Quelltext: {}", texts.len());
+    let texts = undo_texts(include_str!("../../planora-i18n/languages/de.ftl"));
+    assert!(
+        texts.len() > 50,
+        "Namen in der Sprachdatei: {}",
+        texts.len()
+    );
+    let english = undo_texts(include_str!("../../planora-i18n/languages/en.ftl"));
+    assert_eq!(english.len(), texts.len(), "je Name ein englischer");
     for t in &texts {
         assert!(!t.ends_with('…') && !t.ends_with("..."), "{t}");
         for c in t.chars() {
             assert!(c.is_ascii() || allowed.contains(c), "{t:?}: Zeichen {c:?}");
         }
     }
-    // Die tatsächlich gelieferten Namen stehen alle im Quelltext.
+    // Die tatsächlich gelieferten Namen stehen alle in der Sprachdatei.
     for (name, (want, got)) in entry_cases() {
-        assert!(texts.iter().any(|t| t == got), "{name}: {got}");
+        assert!(texts.contains(&got), "{name}: {got}");
         assert!(texts.iter().any(|t| t == want), "{name}: {want}");
     }
 }

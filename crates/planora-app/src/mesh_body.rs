@@ -4,6 +4,7 @@
 use crate::state::{Body, BodyKind};
 use planora_exchange::{ExchangeMesh, MeshReport, MeshTransform, SMOOTH_ANGLE_DEG, shade};
 use planora_feature::BodyRef;
+use planora_i18n::tr;
 use planora_kernel::{Id, Solid};
 use planora_math::{DQuat, DVec3, EulerRot};
 use planora_mesh::{FaceRange, Mesh, mass_properties};
@@ -13,7 +14,9 @@ use planora_mesh::{FaceRange, Mesh, mass_properties};
 pub const DISPLAY_TRIANGLES: usize = 5_000_000;
 
 /// Hinweis in der Statuszeile für einen Netz-Körper in der Vorschau.
-pub const PREVIEW_NOTE: &str = "Hinweis: Das Netz ist sehr groß; die Ansicht zeigt nur einen Teil der Dreiecke. Gespeichert und exportiert wird es vollständig.";
+pub fn preview_note() -> String {
+    tr!("mesh-preview-note")
+}
 
 /// Farbe für Warnungen (nicht geschlossenes Netz).
 pub const WARNING_COLOR: egui::Color32 = crate::theme::DARK.warning;
@@ -117,48 +120,28 @@ pub fn rotation_from_degrees(d: DVec3) -> DQuat {
     .normalize()
 }
 
-fn count(n: usize, one: &str, many: &str) -> String {
-    if n == 1 {
-        format!("1 {one}")
-    } else {
-        format!("{n} {many}")
-    }
-}
-
 /// Prüfbericht in einfachen Worten.
 pub fn report_text(r: &MeshReport) -> String {
     let mut parts = Vec::new();
     if r.open_edges > 0 {
-        parts.push(count(r.open_edges, "offene Kante", "offene Kanten"));
+        parts.push(tr!("mesh-open-edges", n = r.open_edges));
     }
     if r.flipped_edges > 0 {
-        parts.push(count(
-            r.flipped_edges,
-            "Kante mit falsch herum liegenden Dreiecken",
-            "Kanten mit falsch herum liegenden Dreiecken",
-        ));
+        parts.push(tr!("mesh-flipped-edges", n = r.flipped_edges));
     }
     if r.non_manifold_edges > 0 {
-        parts.push(count(
-            r.non_manifold_edges,
-            "Kante an mehr als zwei Dreiecken",
-            "Kanten an mehr als zwei Dreiecken",
-        ));
+        parts.push(tr!("mesh-non-manifold-edges", n = r.non_manifold_edges));
     }
     let mut text = if r.closed {
-        "Das Netz ist geschlossen.".to_string()
+        tr!("mesh-closed")
     } else if parts.is_empty() {
-        "Das Netz ist nicht geschlossen.".to_string()
+        tr!("mesh-not-closed")
     } else {
-        format!("Das Netz ist nicht ganz geschlossen: {}.", parts.join(", "))
+        tr!("mesh-not-fully-closed", parts = parts.join(", "))
     };
     if r.degenerate_triangles > 0 {
         text.push(' ');
-        text.push_str(&count(
-            r.degenerate_triangles,
-            "Dreieck hat keine Fläche.",
-            "Dreiecke haben keine Fläche.",
-        ));
+        text.push_str(&tr!("mesh-degenerate", n = r.degenerate_triangles));
     }
     text
 }

@@ -6,9 +6,16 @@ const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwx
 /// Untere sechs Bit eines Zeichens.
 const SIX_BITS: u32 = 0x3F;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("Die Netzdaten sind keine gültige Base64-Zeichenkette")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Base64Error;
+
+impl std::fmt::Display for Base64Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&planora_i18n::tr!("proj-base64-invalid"))
+    }
+}
+
+impl std::error::Error for Base64Error {}
 
 fn symbol(n: u32) -> char {
     char::from(ALPHABET[(n & SIX_BITS) as usize])

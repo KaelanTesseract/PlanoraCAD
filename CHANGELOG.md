@@ -2,6 +2,15 @@
 
 Hier steht, was sich in jeder Version geändert hat. Die neueste Version steht oben.
 
+## 0.0.2-dev.2
+
+### Neu
+- PlanoraCAD spricht jetzt Deutsch und Englisch. Beim ersten Start nimmt das Programm die Sprache von Windows; gibt es sie nicht, ist es englisch. Unter „Datei → Einstellungen …“ lässt sich die Sprache wechseln, alle Texte wechseln sofort mit. Auf einem deutschen Windows bleibt alles wie bisher.
+- Zahlen erscheinen in der Sprache des Programms: deutsch mit Komma (38,8), englisch mit Punkt (38.8). Eintippen geht in beiden Sprachen mit Komma und mit Punkt.
+- Beim Exportieren einer Zeichnung kannst du eine andere Sprache für die Zeichnung wählen, zum Beispiel eine englische Zeichnung aus dem deutschen Programm.
+- Weitere Sprachen lassen sich ohne Programmieren hinzufügen: eine Textdatei je Sprache in den Ordner `languages` legen. Wie das geht, steht auf Englisch in `docs/uebersetzen.md`.
+- Rückmeldung und Absturzbericht: Das Formular und die Vorlage öffnen sich in der Sprache des Programms. Protokoll und Absturzbericht sind immer englisch.
+
 ## 0.0.2-dev.1
 
 Das ist die erste Entwicklerversion mit Update-Funktion. Sie ist noch nicht für den Alltag gedacht.

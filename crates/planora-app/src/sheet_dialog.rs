@@ -13,6 +13,7 @@ use crate::dialog::{Dialog, DialogSize};
 use crate::drawing_view;
 use crate::icons::{self, Icon};
 use crate::mesh_body::warning_color;
+use crate::msg::Msg;
 use crate::parts_section::{self, PartsDraft};
 use crate::state::AppState;
 use crate::theme;
@@ -20,35 +21,55 @@ use planora_drawing::parts::{MAX_OVERRIDES, resolve_parts, validate_override};
 use planora_drawing::sheet_frame::TitleField;
 use planora_drawing::sheet_info::{
     DASH, DEFAULT_TOLERANCE, FieldValue, MAX_FIELD_CHARS, MAX_NOTE_CHARS, MAX_NOTES,
-    MAX_REVISION_CHARS, MAX_TITLE_CHARS, NotesValue, ProjectInfo, SheetContext, SheetInfo, Stamp,
-    TOO_MANY_REVISIONS, TitleTexts, default_notes, main_scale, resolve_texts, revision_letter,
+    MAX_REVISION_CHARS, MAX_REVISIONS, MAX_TITLE_CHARS, NotesValue, ProjectInfo, SheetContext,
+    SheetInfo, Stamp, TitleTexts, default_notes, main_scale, resolve_texts, revision_letter,
     validate_project_info, validate_sheet_info,
 };
 use planora_drawing::sheet_marks::{field_is_cut, note_is_cut, revision_cell_is_cut};
 use planora_drawing::{Drawing, DrawingId, DrawingKind, PartsRow};
+use planora_i18n::tr;
 use std::collections::BTreeMap;
 
 /// Titel des Fensters.
-pub const TITLE: &str = "Blattangaben";
+pub fn title() -> String {
+    tr!("sheet-title")
+}
 /// Beschriftung des Knopfs im Werkzeugfeld.
-pub const BUTTON: &str = "Blattangaben";
+pub fn button() -> String {
+    tr!("sheet-button")
+}
 /// Hinweis am Knopf.
-pub const BUTTON_TIP: &str =
-    "Titel, Zeichnungsnummer, Änderungen und weitere Angaben des Schriftfelds bearbeiten.";
+pub fn button_tip() -> String {
+    tr!("sheet-button-tip")
+}
 /// Eintrag im Menü „Zeichnung“.
-pub const MENU_ENTRY: &str = "Blattangaben …";
+pub fn menu_entry() -> String {
+    tr!("sheet-menu-entry")
+}
 /// Hinweis am gesperrten Menüeintrag, wenn keine Zeichnung offen ist.
-pub const NO_DRAWING_OPEN: &str = "Dafür zuerst eine Zeichnung öffnen.";
+pub fn no_drawing_open() -> String {
+    tr!("sheet-no-drawing-open")
+}
 /// Warnung bei leerem Eigentümer.
-pub const OWNER_MISSING: &str = "Bitte den Eigentümer eintragen. Er gehört auf jede Zeichnung.";
+pub fn owner_missing() -> String {
+    tr!("sheet-owner-missing")
+}
 /// Warnung bei einem Eintrag, der nicht ganz ins Feld des Schriftfelds passt.
-pub const CUT_WARNING: &str = "Passt nicht ganz ins Feld und wird auf dem Blatt gekürzt.";
+pub fn cut_warning() -> String {
+    tr!("sheet-cut-warning")
+}
 /// Hinweis im Abschnitt „Änderungen“: nur die letzten drei stehen auf dem Blatt.
-pub const REVISIONS_ON_SHEET: &str = "Auf dem Blatt stehen die letzten 3 Änderungen.";
+pub fn revisions_on_sheet() -> String {
+    tr!("sheet-revisions-on-sheet")
+}
 /// Meldung, wenn es die Zeichnung nicht mehr gibt.
-const GONE: &str = "Die Zeichnung gibt es nicht mehr.";
+fn gone() -> Msg {
+    crate::msg!("sheet-gone")
+}
 /// Hinweis am gesperrten Knopf „Zeile hinzufügen“.
-const NOTES_FULL: &str = "Es sind höchstens 6 Hinweiszeilen möglich.";
+fn notes_full() -> String {
+    tr!("sheet-notes-full", max = MAX_NOTES)
+}
 
 /// Breite der Textfelder der Angaben.
 const FIELD_W: f32 = 280.0;
@@ -63,27 +84,33 @@ const REV_NAME_W: f32 = 140.0;
 /// Schmalste Spalte des Namens, wenn der Platz für Beschreibung und Rollbalken knapp wird.
 const REV_NAME_MIN_W: f32 = 120.0;
 
-/// Bezeichnung eines Felds des Schriftfelds in der Oberfläche und in Meldungen.
-pub fn title_field_name(field: TitleField) -> &'static str {
+/// Bezeichnung eines Felds des Schriftfelds, übersetzt erst beim Zeichnen (Meldungen, die ein
+/// Fenster behält).
+pub fn title_field_msg(field: TitleField) -> Msg {
     match field {
-        TitleField::Owner => "Eigentümer",
-        TitleField::Number => "Zeichnungsnummer",
-        TitleField::Title => "Titel",
-        TitleField::Subtitle => "Zusatztitel",
-        TitleField::DocType => "Dokumentart",
-        TitleField::Status => "Dokumentstatus",
-        TitleField::Issued => "Ausgabedatum",
-        TitleField::Revision => "Änderungsstand",
-        TitleField::SheetOf => "Blatt",
-        TitleField::Format => "Format",
-        TitleField::Scale => "Maßstab",
-        TitleField::Creator => "Erstellt",
-        TitleField::Checked => "Geprüft",
-        TitleField::Approved => "Freigabe",
-        TitleField::Material => "Werkstoff",
-        TitleField::Weight => "Gewicht",
-        TitleField::Language => "Sprache",
+        TitleField::Owner => crate::msg!("sheet-field-owner"),
+        TitleField::Number => crate::msg!("sheet-field-number"),
+        TitleField::Title => crate::msg!("sheet-field-title"),
+        TitleField::Subtitle => crate::msg!("sheet-field-subtitle"),
+        TitleField::DocType => crate::msg!("sheet-field-doc-type"),
+        TitleField::Status => crate::msg!("sheet-field-status"),
+        TitleField::Issued => crate::msg!("sheet-field-issued"),
+        TitleField::Revision => crate::msg!("sheet-field-revision"),
+        TitleField::SheetOf => crate::msg!("sheet-field-sheet-of"),
+        TitleField::Format => crate::msg!("sheet-field-format"),
+        TitleField::Scale => crate::msg!("sheet-field-scale"),
+        TitleField::Creator => crate::msg!("sheet-field-creator"),
+        TitleField::Checked => crate::msg!("sheet-field-checked"),
+        TitleField::Approved => crate::msg!("sheet-field-approved"),
+        TitleField::Material => crate::msg!("sheet-field-material"),
+        TitleField::Weight => crate::msg!("sheet-field-weight"),
+        TitleField::Language => crate::msg!("sheet-field-language"),
     }
+}
+
+/// Wie [`title_field_msg`], als Text in der aktuellen Sprache.
+pub fn title_field_name(field: TitleField) -> String {
+    title_field_msg(field).text()
 }
 
 /// Fenster „Blattangaben“.
@@ -96,8 +123,8 @@ pub struct SheetInfoDialog {
     pub sheet: SheetInfo,
     /// Kopie der eigenen Texte der Stückliste und Papierwahl für das Stücklistenblatt.
     pub parts: PartsDraft,
-    /// Meldung (zu viele Änderungen, Fehler beim Übernehmen).
-    pub message: Option<String>,
+    /// Meldung (zu viele Änderungen, Fehler beim Übernehmen); übersetzt erst beim Zeichnen.
+    pub message: Option<Msg>,
     pub last_rect: Option<egui::Rect>,
     /// Zeilen der Stückliste und ob es Stücklistenblätter gibt, je Stand des Dokuments
     /// (Zustand, Änderungszähler) einmal gerechnet.
@@ -152,28 +179,30 @@ impl SheetInfoDialog {
     /// Schreibt Projekt- und Blattangaben ins Dokument, danach die geänderten eigenen Texte der
     /// Stückliste (je Zeile). Gleiche Werte ändern nichts. Alles wird vorher geprüft, damit ein
     /// Fehler nichts halb schreibt.
-    pub fn apply(&self, state: &mut AppState) -> Result<(), String> {
-        validate_project_info(&self.project)?;
-        validate_sheet_info(&self.sheet)?;
+    pub fn apply(&self, state: &mut AppState) -> Result<(), Msg> {
+        validate_project_info(&self.project).map_err(Msg::Raw)?;
+        validate_sheet_info(&self.sheet).map_err(Msg::Raw)?;
         for o in self.parts.overrides.values() {
-            validate_override(o).map_err(|e| format!("Stückliste: {e}"))?;
+            validate_override(o)
+                .map_err(|e| crate::msg!("sheet-parts-error", reason = e.to_string()))?;
         }
         if self.parts.overrides.len() > MAX_OVERRIDES {
-            return Err(format!(
-                "Die Stückliste darf höchstens {MAX_OVERRIDES} eigene Zeilentexte haben"
+            return Err(crate::msg!(
+                "sheet-parts-too-many-overrides",
+                max = MAX_OVERRIDES
             ));
         }
         if state.document.drawing(self.drawing).is_none() {
-            return Err(GONE.into());
+            return Err(gone());
         }
         state
             .document
             .set_project_info(self.project.clone())
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| Msg::Raw(e.to_string()))?;
         state
             .document
             .set_sheet_info(self.drawing, self.sheet.clone())
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| Msg::Raw(e.to_string()))?;
         // Erst die entfernten Einträge, dann die übrigen: so wird die Grenze nie kurz
         // überschritten.
         let mut changes = self.parts.changes(state.document.parts_overrides());
@@ -182,17 +211,19 @@ impl SheetInfoDialog {
             state
                 .document
                 .set_parts_override(key, o)
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| Msg::Raw(e.to_string()))?;
         }
         Ok(())
     }
 
     /// Hängt eine Änderung mit dem Datum von heute und dem Namen `creator` an; ab der 24. gibt
-    /// es stattdessen die Meldung.
+    /// es stattdessen die Meldung (der einzige Fehler von `SheetInfo::add_revision`).
     pub fn add_revision(&mut self, stamp: &Stamp, creator: &str) {
         match self.sheet.add_revision(&stamp.date, creator) {
             Ok(()) => self.message = None,
-            Err(m) => self.message = Some(m.to_string()),
+            Err(_) => {
+                self.message = Some(crate::msg!("sheet-too-many-revisions", max = MAX_REVISIONS));
+            }
         }
     }
 
@@ -292,21 +323,21 @@ impl SheetInfoDialog {
             last_rect,
             ..
         } = self;
-        let response = Dialog::new(TITLE, DialogSize::Wide)
+        let response = Dialog::new(title(), DialogSize::Wide)
             .open(&mut open)
             .show_with_footer(
                 ctx,
                 |ui| {
                     let dark = ui.visuals().dark_mode;
-                    let warn = |f: TitleField| -> Option<(&'static str, bool)> {
+                    let warn = |f: TitleField| -> Option<(String, bool)> {
                         if f == TitleField::Owner && actual.get(f).trim().is_empty() {
-                            return Some((OWNER_MISSING, true));
+                            return Some((owner_missing(), true));
                         }
-                        field_is_cut(f, actual.get(f), &layout).then_some((CUT_WARNING, false))
+                        field_is_cut(f, actual.get(f), &layout).then(|| (cut_warning(), false))
                     };
 
                     // ---- Projekt ----
-                    theme::section_header(ui, "Projekt", theme::SUB_HEADER_H);
+                    theme::section_header(ui, &tr!("sheet-section-project"), theme::SUB_HEADER_H);
                     ui.add_space(theme::SPACE_1);
                     // Eine Bezeichnungsspalte für alle Abschnitte: die Felder beginnen überall gleich.
                     let label_w = label_column_width(ui);
@@ -315,18 +346,19 @@ impl SheetInfoDialog {
                         .spacing([12.0, 8.0])
                         .min_col_width(label_w)
                         .show(ui, |ui| {
-                            let rows: [(&str, &mut FieldValue, TitleField); 5] = [
-                                ("Eigentümer", &mut project.owner, TitleField::Owner),
-                                ("Erstellt", &mut project.creator, TitleField::Creator),
-                                ("Geprüft", &mut project.checked, TitleField::Checked),
-                                ("Freigabe", &mut project.approved, TitleField::Approved),
-                                ("Werkstoff", &mut project.material, TitleField::Material),
+                            let rows: [(&mut FieldValue, TitleField); 5] = [
+                                (&mut project.owner, TitleField::Owner),
+                                (&mut project.creator, TitleField::Creator),
+                                (&mut project.checked, TitleField::Checked),
+                                (&mut project.approved, TitleField::Approved),
+                                (&mut project.material, TitleField::Material),
                             ];
-                            for (label, value, f) in rows {
+                            for (value, f) in rows {
                                 field_row(
                                     ui,
                                     dark,
-                                    label,
+                                    f,
+                                    &title_field_name(f),
                                     value,
                                     auto.get(f),
                                     MAX_FIELD_CHARS,
@@ -336,7 +368,8 @@ impl SheetInfoDialog {
                             field_row(
                                 ui,
                                 dark,
-                                "Allgemeintoleranz",
+                                "tolerance",
+                                &tr!("sheet-field-tolerance"),
                                 &mut project.tolerance,
                                 DEFAULT_TOLERANCE,
                                 MAX_FIELD_CHARS,
@@ -344,7 +377,7 @@ impl SheetInfoDialog {
                             );
                         });
                     ui.add_space(theme::SPACE_2);
-                    ui.label("Hinweise für alle Blätter");
+                    ui.label(tr!("sheet-notes-all"));
                     let effective = match &project.notes {
                         NotesValue::Lines(l) => l.clone(),
                         NotesValue::Auto => default_notes(&tolerance),
@@ -355,7 +388,7 @@ impl SheetInfoDialog {
                         project.notes = NotesValue::Lines(lines);
                     }
                     if matches!(project.notes, NotesValue::Lines(_))
-                        && ui.button("Hinweise zurücksetzen").clicked()
+                        && ui.button(tr!("sheet-notes-reset")).clicked()
                     {
                         project.notes = NotesValue::Auto;
                     }
@@ -366,83 +399,37 @@ impl SheetInfoDialog {
 
                     // ---- Dieses Blatt ----
                     ui.add_space(theme::SPACE_3);
-                    theme::section_header(ui, "Dieses Blatt", theme::SUB_HEADER_H);
+                    theme::section_header(ui, &tr!("sheet-section-sheet"), theme::SUB_HEADER_H);
                     ui.add_space(theme::SPACE_1);
                     egui::Grid::new("planora-sheet-own")
                         .num_columns(2)
                         .spacing([12.0, 8.0])
                         .min_col_width(label_w)
                         .show(ui, |ui| {
-                            let rows: [(&str, &mut FieldValue, TitleField, usize); 11] = [
-                                (
-                                    "Zeichnungsnummer",
-                                    &mut sheet.number,
-                                    TitleField::Number,
-                                    MAX_FIELD_CHARS,
-                                ),
-                                (
-                                    "Titel",
-                                    &mut sheet.title,
-                                    TitleField::Title,
-                                    MAX_TITLE_CHARS,
-                                ),
-                                (
-                                    "Zusatztitel",
-                                    &mut sheet.subtitle,
-                                    TitleField::Subtitle,
-                                    MAX_FIELD_CHARS,
-                                ),
-                                (
-                                    "Dokumentart",
-                                    &mut sheet.doc_type,
-                                    TitleField::DocType,
-                                    MAX_FIELD_CHARS,
-                                ),
-                                (
-                                    "Dokumentstatus",
-                                    &mut sheet.status,
-                                    TitleField::Status,
-                                    MAX_FIELD_CHARS,
-                                ),
-                                (
-                                    "Ausgabedatum",
-                                    &mut sheet.issued,
-                                    TitleField::Issued,
-                                    MAX_FIELD_CHARS,
-                                ),
-                                (
-                                    "Änderungsstand",
-                                    &mut sheet.revision,
-                                    TitleField::Revision,
-                                    MAX_FIELD_CHARS,
-                                ),
-                                (
-                                    "Blatt",
-                                    &mut sheet.sheet_of,
-                                    TitleField::SheetOf,
-                                    MAX_FIELD_CHARS,
-                                ),
-                                (
-                                    "Format",
-                                    &mut sheet.format,
-                                    TitleField::Format,
-                                    MAX_FIELD_CHARS,
-                                ),
-                                (
-                                    "Maßstab",
-                                    &mut sheet.scale,
-                                    TitleField::Scale,
-                                    MAX_FIELD_CHARS,
-                                ),
-                                (
-                                    "Gewicht",
-                                    &mut sheet.weight,
-                                    TitleField::Weight,
-                                    MAX_FIELD_CHARS,
-                                ),
+                            let rows: [(&mut FieldValue, TitleField, usize); 11] = [
+                                (&mut sheet.number, TitleField::Number, MAX_FIELD_CHARS),
+                                (&mut sheet.title, TitleField::Title, MAX_TITLE_CHARS),
+                                (&mut sheet.subtitle, TitleField::Subtitle, MAX_FIELD_CHARS),
+                                (&mut sheet.doc_type, TitleField::DocType, MAX_FIELD_CHARS),
+                                (&mut sheet.status, TitleField::Status, MAX_FIELD_CHARS),
+                                (&mut sheet.issued, TitleField::Issued, MAX_FIELD_CHARS),
+                                (&mut sheet.revision, TitleField::Revision, MAX_FIELD_CHARS),
+                                (&mut sheet.sheet_of, TitleField::SheetOf, MAX_FIELD_CHARS),
+                                (&mut sheet.format, TitleField::Format, MAX_FIELD_CHARS),
+                                (&mut sheet.scale, TitleField::Scale, MAX_FIELD_CHARS),
+                                (&mut sheet.weight, TitleField::Weight, MAX_FIELD_CHARS),
                             ];
-                            for (label, value, f, max) in rows {
-                                field_row(ui, dark, label, value, auto.get(f), max, warn(f));
+                            for (value, f, max) in rows {
+                                field_row(
+                                    ui,
+                                    dark,
+                                    f,
+                                    &title_field_name(f),
+                                    value,
+                                    auto.get(f),
+                                    max,
+                                    warn(f),
+                                );
                             }
                         });
                     // Ein Stücklistenblatt hat kein Hinweisfeld.
@@ -450,10 +437,7 @@ impl SheetInfoDialog {
                         ui.add_space(theme::SPACE_2);
                         let was_own = matches!(sheet.notes, NotesValue::Lines(_));
                         let mut own = was_own;
-                        ui.add(theme::Toggle::new(
-                            &mut own,
-                            "Eigene Hinweise für dieses Blatt",
-                        ));
+                        ui.add(theme::Toggle::new(&mut own, tr!("sheet-notes-own")));
                         if own != was_own {
                             sheet.notes = if own {
                                 NotesValue::Lines(project_notes.clone())
@@ -468,21 +452,28 @@ impl SheetInfoDialog {
 
                     // ---- Änderungen ----
                     ui.add_space(theme::SPACE_3);
-                    theme::section_header(ui, "Änderungen", theme::SUB_HEADER_H);
+                    theme::section_header(ui, &tr!("sheet-section-revisions"), theme::SUB_HEADER_H);
                     ui.add_space(theme::SPACE_1);
-                    ui.weak(REVISIONS_ON_SHEET);
+                    ui.weak(revisions_on_sheet());
                     ui.add_space(theme::SPACE_1);
                     if sheet.revisions.is_empty() {
-                        ui.weak("Noch keine Änderungen.");
+                        ui.weak(tr!("sheet-no-revisions"));
                     } else {
                         // Feste Spaltenbreiten (Kopf und Zeilen in derselben Breite, also bündig):
                         // Buchstabe, Datum und Name fest, die Beschreibung nimmt den Rest.
                         let gap = ui.spacing().item_spacing.x;
-                        let delete_w = text_width(ui, "Löschen", egui::TextStyle::Button)
-                            + 2.0 * ui.spacing().button_padding.x;
+                        let delete_w =
+                            text_width(ui, &tr!("action-delete"), egui::TextStyle::Button)
+                                + 2.0 * ui.spacing().button_padding.x;
                         // Die Spalte des Buchstabens ist mindestens so breit wie ihr Kopf.
+                        let heads = [
+                            tr!("sheet-rev-letter"),
+                            tr!("sheet-rev-description"),
+                            tr!("sheet-rev-date"),
+                            tr!("sheet-rev-name"),
+                        ];
                         let letter_w =
-                            REV_LETTER_W.max(text_width(ui, "Buchstabe", egui::TextStyle::Body));
+                            REV_LETTER_W.max(text_width(ui, &heads[0], egui::TextStyle::Body));
                         // Rechts bleibt Platz für den Rollbalken des Fensters, damit „Löschen“ ihn
                         // nicht berührt; reicht es dann nicht für die Beschreibung, wird die Spalte
                         // des Namens schmaler (bis REV_NAME_MIN_W).
@@ -498,10 +489,7 @@ impl SheetInfoDialog {
                         let text_w = (row - fixed - name_w).max(REV_TEXT_MIN_W);
                         let widths = [letter_w, text_w, REV_DATE_W, name_w];
                         ui.horizontal(|ui| {
-                            for (h, w) in ["Buchstabe", "Beschreibung", "Datum", "Name"]
-                                .into_iter()
-                                .zip(widths)
-                            {
+                            for (h, w) in heads.iter().zip(widths) {
                                 cell(ui, w, |ui| {
                                     ui.weak(h);
                                 });
@@ -567,7 +555,7 @@ impl SheetInfoDialog {
                                     )
                                     .on_hover_text(length_label(&r.name, MAX_FIELD_CHARS));
                                 });
-                                if ui.button("Löschen").clicked() {
+                                if ui.button(tr!("action-delete")).clicked() {
                                     delete_rev = Some(i);
                                 }
                             });
@@ -580,7 +568,7 @@ impl SheetInfoDialog {
                                         ui.set_max_width(widths[1]);
                                         ui.add(
                                             egui::Label::new(
-                                                egui::RichText::new(CUT_WARNING)
+                                                egui::RichText::new(cut_warning())
                                                     .color(warning_color(dark)),
                                             )
                                             .wrap(),
@@ -592,14 +580,14 @@ impl SheetInfoDialog {
                     }
                     ui.add_space(theme::SPACE_1);
                     if ui
-                        .add(icons::button(Icon::AddView, "Änderung hinzufügen"))
+                        .add(icons::button(Icon::AddView, tr!("sheet-rev-add")))
                         .clicked()
                     {
                         add_rev = true;
                     }
-                    let too_many = message.as_deref() == Some(TOO_MANY_REVISIONS);
-                    if too_many {
-                        ui.colored_label(error_color(dark), TOO_MANY_REVISIONS);
+                    let too_many = is_too_many(message);
+                    if let (true, Some(m)) = (too_many, message.as_ref()) {
+                        ui.colored_label(error_color(dark), m.text());
                     }
 
                     // ---- Stückliste ----
@@ -619,16 +607,16 @@ impl SheetInfoDialog {
                 // ---- Knöpfe (Fußzeile: immer zu sehen, auch bei langer Stückliste) ----
                 |ui| {
                     let dark = ui.visuals().dark_mode;
-                    let too_many = message.as_deref() == Some(TOO_MANY_REVISIONS);
-                    if let Some(m) = message.as_deref().filter(|_| !too_many) {
-                        ui.colored_label(error_color(dark), m);
+                    let too_many = is_too_many(message);
+                    if let Some(m) = message.as_ref().filter(|_| !too_many) {
+                        ui.colored_label(error_color(dark), m.text());
                     }
                     ui.separator();
                     ui.horizontal(|ui| {
-                        if ui.button("Übernehmen").clicked() {
+                        if ui.button(tr!("tree-apply")).clicked() {
                             apply = true;
                         }
-                        if ui.button("Abbrechen").clicked() {
+                        if ui.button(tr!("common-cancel")).clicked() {
                             close = true;
                         }
                     });
@@ -661,6 +649,11 @@ impl SheetInfoDialog {
     }
 }
 
+/// Ist die Meldung die der zu vielen Änderungen (steht bei „Änderung hinzufügen“)?
+fn is_too_many(message: &Option<Msg>) -> bool {
+    matches!(message, Some(Msg::Id("sheet-too-many-revisions", _)))
+}
+
 /// Zelle fester Breite `w` (Spalte der Änderungstabelle), Inhalt links und senkrecht mittig.
 pub(crate) fn cell(ui: &mut egui::Ui, w: f32, add: impl FnOnce(&mut egui::Ui)) {
     ui.allocate_ui_with_layout(
@@ -684,33 +677,45 @@ fn text_width(ui: &egui::Ui, text: &str, style: egui::TextStyle) -> f32 {
 
 /// Gemeinsame Breite der Bezeichnungsspalte aller Abschnitte: die längste Bezeichnung.
 pub(crate) fn label_column_width(ui: &egui::Ui) -> f32 {
-    LABELS
+    labels()
         .iter()
-        .chain(parts_section::LABELS.iter())
+        .chain(parts_section::labels().iter())
         .map(|l| text_width(ui, l, egui::TextStyle::Body))
         .fold(0.0, f32::max)
 }
 
 /// Alle Bezeichnungen der Felder in „Projekt“ und „Dieses Blatt“.
-const LABELS: [&str; 17] = [
-    "Eigentümer",
-    "Erstellt",
-    "Geprüft",
-    "Freigabe",
-    "Werkstoff",
-    "Allgemeintoleranz",
-    "Zeichnungsnummer",
-    "Titel",
-    "Zusatztitel",
-    "Dokumentart",
-    "Dokumentstatus",
-    "Ausgabedatum",
-    "Änderungsstand",
-    "Blatt",
-    "Format",
-    "Maßstab",
-    "Gewicht",
-];
+fn labels() -> Vec<String> {
+    let mut all: Vec<String> = [
+        TitleField::Owner,
+        TitleField::Creator,
+        TitleField::Checked,
+        TitleField::Approved,
+        TitleField::Material,
+    ]
+    .into_iter()
+    .map(title_field_name)
+    .collect();
+    all.push(tr!("sheet-field-tolerance"));
+    all.extend(
+        [
+            TitleField::Number,
+            TitleField::Title,
+            TitleField::Subtitle,
+            TitleField::DocType,
+            TitleField::Status,
+            TitleField::Issued,
+            TitleField::Revision,
+            TitleField::SheetOf,
+            TitleField::Format,
+            TitleField::Scale,
+            TitleField::Weight,
+        ]
+        .into_iter()
+        .map(title_field_name),
+    );
+    all
+}
 
 /// Länge eines Eintrags als „n/max“ (Zeichen).
 pub(crate) fn length_label(text: &str, max: usize) -> String {
@@ -719,19 +724,21 @@ pub(crate) fn length_label(text: &str, max: usize) -> String {
 
 /// Eine Zeile des Fensters: Bezeichnung, Textfeld (mit dem automatischen Wert als Hinweistext),
 /// Länge „n/max“, „Zurücksetzen“ bei eigenem Text und darunter die Warnung des Felds.
+#[allow(clippy::too_many_arguments)]
 fn field_row(
     ui: &mut egui::Ui,
     dark: bool,
+    key: impl std::hash::Hash + std::fmt::Debug,
     label: &str,
     value: &mut FieldValue,
     auto: &str,
     max: usize,
-    warn: Option<(&'static str, bool)>,
+    warn: Option<(String, bool)>,
 ) {
     field_row_with(
         ui,
         dark,
-        ("planora-sheet-field", label),
+        ("planora-sheet-field", key),
         label,
         value,
         auto,
@@ -751,7 +758,7 @@ pub(crate) fn field_row_with(
     value: &mut FieldValue,
     auto: &str,
     max: usize,
-    warn: Option<(&'static str, bool)>,
+    warn: Option<(String, bool)>,
 ) {
     ui.label(label);
     let mut text = match value {
@@ -771,7 +778,7 @@ pub(crate) fn field_row_with(
             );
             ui.weak(length_label(&text, max));
             if ui
-                .add_visible(custom, egui::Button::new("Zurücksetzen"))
+                .add_visible(custom, egui::Button::new(tr!("keys-reset")))
                 .clicked()
             {
                 text.clear();
@@ -783,7 +790,7 @@ pub(crate) fn field_row_with(
             } else {
                 warning_color(dark)
             };
-            ui.colored_label(color, message);
+            ui.colored_label(color, &message);
         }
     });
     *value = FieldValue::from_input(&text);
@@ -811,12 +818,12 @@ fn lines_editor(
                         .char_limit(MAX_NOTE_CHARS),
                 );
                 ui.weak(length_label(line, MAX_NOTE_CHARS));
-                if ui.button("Zeile löschen").clicked() {
+                if ui.button(tr!("sheet-line-delete")).clicked() {
                     delete = Some(i);
                 }
             });
             if is_cut(line) {
-                ui.colored_label(warning_color(dark), CUT_WARNING);
+                ui.colored_label(warning_color(dark), cut_warning());
             }
         });
     }
@@ -825,8 +832,8 @@ fn lines_editor(
     }
     let full = lines.len() >= MAX_NOTES;
     if ui
-        .add_enabled(!full, egui::Button::new("Zeile hinzufügen"))
-        .on_disabled_hover_text(NOTES_FULL)
+        .add_enabled(!full, egui::Button::new(tr!("sheet-line-add")))
+        .on_disabled_hover_text(notes_full())
         .clicked()
     {
         lines.push(String::new());

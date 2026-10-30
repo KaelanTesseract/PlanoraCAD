@@ -3,7 +3,7 @@
 //! Die Grenze zählt NURBS-Auswertungen, nicht Zeit; das Ergebnis ist bei jedem Lauf gleich.
 
 use planora_kernel::boolean::{
-    BooleanError, MAX_FREEFORM_EVALUATIONS, TOO_EXPENSIVE, boolean, boolean_limited,
+    BooleanError, MAX_FREEFORM_EVALUATIONS, boolean, boolean_limited, too_expensive,
 };
 use planora_kernel::{AnalyticKernel, BoolOp, Kernel, ProfileLoop, Segment, Solid, revolve};
 use planora_math::nurbs::{NurbsCurve, evaluations};
@@ -81,10 +81,10 @@ fn a_spline_with_39_points_stops_at_a_small_work_limit_with_a_named_error() {
     let (first, used) = run();
     assert_eq!(
         first.as_ref().map(|_| ()),
-        Err(&BooleanError::Unsupported(TOO_EXPENSIVE.into())),
+        Err(&BooleanError::TooExpensive),
         "{first:?}"
     );
-    assert!(TOO_EXPENSIVE.contains("zu aufwendig"));
+    assert!(too_expensive().contains("zu aufwendig"));
     // Die Grenze greift an der nächsten Prüfstelle; der Überhang ist eine Stufe der Pipeline.
     assert!(used > SMALL && used < 20 * SMALL, "{used}");
     assert!(t.elapsed() < Duration::from_secs(25), "{:?}", t.elapsed());
@@ -138,6 +138,8 @@ fn a_spline_with_39_points_ends_within_the_real_limit() {
                     matches!(
                         e,
                         BooleanError::Unsupported(_)
+                            | BooleanError::FreeformLimit(_)
+                            | BooleanError::TooExpensive
                             | BooleanError::AmbiguousContact
                             | BooleanError::AmbiguousClassification
                             | BooleanError::InvalidInput(_)

@@ -6,6 +6,7 @@ use crate::dialog::{Dialog, DialogSize};
 use crate::keymap::{self, Action, Keymap};
 use crate::theme;
 use crate::workspace::{After, Prompt, SaveOutcome, Workspace};
+use planora_i18n::tr;
 use planora_project::docstore::LockMode;
 use planora_project::library::{NodeKind, NodePath, TreeNode};
 
@@ -51,13 +52,13 @@ fn tab_name(ws: &Workspace, tab: u64) -> String {
 }
 
 /// Titel der Rückfrage, wenn PlanoraCAD für ein Update neu startet.
-pub const SAVE_FOR_UPDATE_TITLE: &str = "Neustart für das Update";
+pub fn save_for_update_title() -> String {
+    tr!("prompt-update-restart-title")
+}
 
 /// Text der Rückfrage beim Neustart für ein Update.
 pub fn save_for_update_text(name: &str) -> String {
-    format!(
-        "Zum Aktualisieren muss PlanoraCAD neu starten. Ungespeicherte Änderungen in „{name}“ speichern?"
-    )
+    tr!("prompt-update-restart-text", name = name)
 }
 
 /// „Änderungen speichern?“; beim Beenden für ein Update ([`Workspace::quit_for_update`]) mit
@@ -67,24 +68,24 @@ fn save_changes(ctx: &egui::Context, ws: &mut Workspace, tab: u64, then: After) 
     let mut choice = None;
     let for_update = ws.quit_for_update && then == After::Quit;
     let (title, text) = if for_update {
-        (SAVE_FOR_UPDATE_TITLE, save_for_update_text(&name))
+        (save_for_update_title(), save_for_update_text(&name))
     } else {
         (
-            "Änderungen speichern?",
-            format!("„{name}“ hat ungespeicherte Änderungen."),
+            tr!("prompt-save-changes-title"),
+            tr!("prompt-save-changes-text", name = name),
         )
     };
-    window(ctx, "save_changes", title, |ui| {
+    window(ctx, "save_changes", &title, |ui| {
         ui.add(egui::Label::new(text).wrap());
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            if ui.button("Speichern").clicked() {
+            if ui.button(tr!("common-save")).clicked() {
                 choice = Some(0);
             }
-            if ui.button("Verwerfen").clicked() {
+            if ui.button(tr!("common-discard")).clicked() {
                 choice = Some(1);
             }
-            if ui.button("Abbrechen").clicked() {
+            if ui.button(tr!("common-cancel")).clicked() {
                 choice = Some(2);
             }
         });
@@ -106,31 +107,37 @@ fn save_comment(
     mut branch: Option<String>,
 ) {
     let mut done = None;
-    window(ctx, "save_comment", "Version speichern", |ui| {
-        if let Some(b) = branch.as_mut() {
-            ui.label(
-                "Diese Version ist nicht die neueste ihres Zweigs. Der Stand wird in einem neuen Zweig gespeichert.",
-            );
+    window(
+        ctx,
+        "save_comment",
+        &tr!("prompt-save-version-title"),
+        |ui| {
+            if let Some(b) = branch.as_mut() {
+                ui.label(tr!("prompt-save-version-branch-note"));
+                ui.horizontal(|ui| {
+                    ui.label(tr!("prompt-branch"));
+                    theme::text_field(ui, egui::TextEdit::singleline(b));
+                });
+            }
             ui.horizontal(|ui| {
-                ui.label("Zweig:");
-                theme::text_field(ui, egui::TextEdit::singleline(b));
+                ui.label(tr!("prompt-comment"));
+                theme::text_field(ui, egui::TextEdit::singleline(&mut comment));
             });
-        }
-        ui.horizontal(|ui| {
-            ui.label("Kommentar:");
-            theme::text_field(ui, egui::TextEdit::singleline(&mut comment));
-        });
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            let ok = branch.as_ref().is_none_or(|b| !b.trim().is_empty());
-            if ui.add_enabled(ok, egui::Button::new("Speichern")).clicked() {
-                done = Some(true);
-            }
-            if ui.button("Abbrechen").clicked() {
-                done = Some(false);
-            }
-        });
-    });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                let ok = branch.as_ref().is_none_or(|b| !b.trim().is_empty());
+                if ui
+                    .add_enabled(ok, egui::Button::new(tr!("common-save")))
+                    .clicked()
+                {
+                    done = Some(true);
+                }
+                if ui.button(tr!("common-cancel")).clicked() {
+                    done = Some(false);
+                }
+            });
+        },
+    );
     match done {
         Some(true) => {
             ws.prompt = None;
@@ -207,13 +214,14 @@ fn container_tree(ui: &mut egui::Ui, nodes: &[TreeNode], selected: &mut NodePath
 pub fn no_project_hint(km: &Keymap) -> String {
     let keys = keymap::shortcut_hint(km, Action::Projects);
     let open = if keys.is_empty() {
-        format!("im Menü „Datei“ unter „{}“", crate::app::PROJECTS_ENTRY)
+        tr!(
+            "prompt-no-project-via-menu",
+            entry = crate::app::projects_entry()
+        )
     } else {
-        format!("mit {keys}")
+        tr!("prompt-no-project-via-keys", keys = keys)
     };
-    format!(
-        "Noch kein Projekt vorhanden. Bitte mit „Abbrechen“ schließen, dann {open} das Fenster Projekte öffnen und ein Projekt anlegen."
-    )
+    tr!("prompt-no-project", open = open)
 }
 
 fn save_as(
@@ -228,18 +236,18 @@ fn save_as(
     let tree = ws.library.as_ref().map(|l| l.tree());
     let no_project_hint = no_project_hint(&ws.keymap);
     let mut done = None;
-    window(ctx, "save_as", "Speichern unter", |ui| {
+    window(ctx, "save_as", &tr!("prompt-save-as-title"), |ui| {
         match &tree {
             None => {
                 // Bei offener Rückfrage sind Projekte und Einstellungen gesperrt: erst schließen.
                 // (Kein „→“: das Zeichen fehlt in den Schriften.)
-                ui.label("Bitte mit „Abbrechen“ schließen, dann im Menü „Datei“ unter „Einstellungen …“ das Projektverzeichnis wählen.");
+                ui.label(tr!("prompt-no-library"));
             }
             Some(Err(e)) => {
-                ui.label(format!("Die Projekte lassen sich nicht lesen: {e}"));
+                ui.label(tr!("prompt-tree-error", error = e.to_string()));
             }
             Some(Ok(nodes)) => {
-                ui.label("Ziel (Projekt oder Ordner):");
+                ui.label(tr!("prompt-target"));
                 egui::Frame::group(ui.style()).show(ui, |ui| {
                     let area = egui::ScrollArea::vertical()
                         .max_height(220.0)
@@ -256,10 +264,10 @@ fn save_as(
         egui::Grid::new("speichern_unter_felder")
             .num_columns(2)
             .show(ui, |ui| {
-                ui.label("Name:");
+                ui.label(tr!("prompt-name"));
                 theme::text_field(ui, egui::TextEdit::singleline(&mut name));
                 ui.end_row();
-                ui.label("Kommentar:");
+                ui.label(tr!("prompt-comment"));
                 theme::text_field(ui, egui::TextEdit::singleline(&mut comment));
                 ui.end_row();
             });
@@ -267,13 +275,13 @@ fn save_as(
         ui.horizontal(|ui| {
             let ok = matches!(tree, Some(Ok(_))) && !parent.is_empty() && !name.trim().is_empty();
             if ui
-                .add_enabled(ok, egui::Button::new("Speichern"))
-                .on_disabled_hover_text("Ziel wählen und einen Namen eingeben.")
+                .add_enabled(ok, egui::Button::new(tr!("common-save")))
+                .on_disabled_hover_text(tr!("prompt-save-as-disabled"))
                 .clicked()
             {
                 done = Some(true);
             }
-            if ui.button("Abbrechen").clicked() {
+            if ui.button(tr!("common-cancel")).clicked() {
                 done = Some(false);
             }
         });
@@ -303,16 +311,14 @@ fn save_as(
 
 fn take_over(ctx: &egui::Context, ws: &mut Workspace, path: NodePath, version: Option<u32>) {
     let mut done = None;
-    window(ctx, "take_over", "Dokument gesperrt", |ui| {
-        ui.label(
-            "Das Dokument wird gerade von einem anderen Programm benutzt (gesperrt). Falls das Programm abgestürzt ist, kannst du die Sperre übernehmen.",
-        );
+    window(ctx, "take_over", &tr!("prompt-locked-title"), |ui| {
+        ui.label(tr!("prompt-locked-text"));
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            if ui.button("Sperre übernehmen").clicked() {
+            if ui.button(tr!("prompt-take-over")).clicked() {
                 done = Some(true);
             }
-            if ui.button("Abbrechen").clicked() {
+            if ui.button(tr!("common-cancel")).clicked() {
                 done = Some(false);
             }
         });
@@ -350,23 +356,21 @@ fn take_over(ctx: &egui::Context, ws: &mut Workspace, path: NodePath, version: O
 fn autosave_offer(ctx: &egui::Context, ws: &mut Workspace, tab: u64) {
     let name = tab_name(ws, tab);
     let mut choice = None;
-    window(ctx, "autosave_offer", "Autosicherung gefunden", |ui| {
+    window(ctx, "autosave_offer", &tr!("prompt-autosave-title"), |ui| {
         ui.strong(name);
-        ui.label(
-            "Für dieses Dokument gibt es eine Autosicherung, die neuer ist als der gespeicherte Stand (zum Beispiel nach einem Absturz).",
-        );
+        ui.label(tr!("prompt-autosave-text"));
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             if ui
-                .button("Wiederherstellen")
-                .on_hover_text("Den Stand der Autosicherung laden (gilt danach als ungespeichert).")
+                .button(tr!("prompt-restore"))
+                .on_hover_text(tr!("prompt-restore-hint"))
                 .clicked()
             {
                 choice = Some(true);
             }
             if ui
-                .button("Verwerfen")
-                .on_hover_text("Die Autosicherung löschen und den gespeicherten Stand behalten.")
+                .button(tr!("common-discard"))
+                .on_hover_text(tr!("prompt-discard-autosave-hint"))
                 .clicked()
             {
                 choice = Some(false);
@@ -382,10 +386,10 @@ fn autosave_offer(ctx: &egui::Context, ws: &mut Workspace, tab: u64) {
 
 fn notice(ctx: &egui::Context, ws: &mut Workspace, text: &str) {
     let mut ok = false;
-    window(ctx, "notice", "Hinweis", |ui| {
+    window(ctx, "notice", &tr!("prompt-notice-title"), |ui| {
         ui.label(text);
         ui.add_space(6.0);
-        if ui.button("OK").clicked() {
+        if ui.button(tr!("common-ok")).clicked() {
             ok = true;
         }
     });

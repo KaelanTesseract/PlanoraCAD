@@ -4,6 +4,7 @@
 use super::error::BlendError;
 use crate::ids::Id;
 use crate::topology::{Edge, Face, Solid, Vertex};
+use planora_i18n::tr;
 use planora_math::DVec3;
 use std::f64::consts::PI;
 
@@ -80,9 +81,9 @@ pub fn edge_sides(
     }
     let uses = edge_uses(solid, edge);
     if uses.len() != 2 {
-        return Err(BlendError::InvalidInput(format!(
-            "Die Kante wird {}-mal statt zweimal verwendet",
-            uses.len()
+        return Err(BlendError::InvalidInput(tr!(
+            "kernel-blend-edge-used-times",
+            n = uses.len()
         )));
     }
     if uses[0].face == uses[1].face {
@@ -91,9 +92,9 @@ pub fn edge_sides(
     let (a, b) = match first_face {
         Some(f) if uses[1].face == f => (uses[1], uses[0]),
         Some(f) if uses[0].face != f => {
-            return Err(BlendError::InvalidInput(
-                "Die gewählte erste Fläche grenzt nicht an die Kante".into(),
-            ));
+            return Err(BlendError::InvalidInput(tr!(
+                "kernel-blend-first-face-not-adjacent"
+            )));
         }
         _ => (uses[0], uses[1]),
     };
@@ -146,10 +147,9 @@ pub fn edge_angle(
         match first {
             None => first = Some(convex),
             Some(c) if c != convex => {
-                return Err(BlendError::Unsupported(
-                    "Die Kante wechselt zwischen konvex und konkav; das wird nicht unterstützt"
-                        .into(),
-                ));
+                return Err(BlendError::Unsupported(tr!(
+                    "kernel-blend-edge-convex-concave"
+                )));
             }
             Some(_) => {}
         }
@@ -214,5 +214,47 @@ pub fn face_name(solid: &Solid, face: Id<Face>) -> String {
         .get(face)
         .and_then(|f| f.tag.as_ref())
         .map(|t| t.role.clone())
-        .unwrap_or_else(|| format!("Fläche {}", face.index() + 1))
+        .unwrap_or_else(|| tr!("kernel-face-n", n = face.index() + 1))
+}
+
+/// Stammwort einer Marke mit Nummer: „Wand 3“ wird in der aktuellen Sprache „Wall 3“.
+fn numbered_role(role: &str) -> Option<String> {
+    let (word, n) = role.rsplit_once(' ')?;
+    if n.is_empty() || !n.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(match word {
+        "Wand" => tr!("kernel-role-wall", n = n),
+        "Fläche" => tr!("kernel-role-face", n = n),
+        "Ecke" => tr!("kernel-role-corner", n = n),
+        "STEP-Fläche" => tr!("kernel-role-step-face", n = n),
+        "Rundung" => tr!("kernel-role-fillet", n = n),
+        "Fase" => tr!("kernel-role-chamfer", n = n),
+        "Loch" => tr!("kernel-role-hole", n = n),
+        _ => return None,
+    })
+}
+
+/// Anzeigename einer Flächenmarke (`FaceTag.role`) in der aktuellen Sprache. Die Marke selbst
+/// ist ein gespeicherter Bezeichner und bleibt deutsch („Deckel“, „Boden“, „Wand n“, „Fläche n“,
+/// „Ecke n“, „STEP-Fläche n“, „Rundung n“, „Fase n“, „Loch k, Wand n“); nur wo sie angezeigt
+/// wird, geht sie durch diese Funktion. Unbekannte Marken bleiben unverändert.
+pub fn role_label(role: &str) -> String {
+    match role {
+        "Deckel" => return tr!("kernel-role-top"),
+        "Boden" => return tr!("kernel-role-bottom"),
+        "Ecke" => return tr!("kernel-role-corner-bare"),
+        _ => {}
+    }
+    if let Some(label) = numbered_role(role) {
+        return label;
+    }
+    // „Loch 2, Wand 1“: Vorsatz und Rest einzeln.
+    if let Some((head, rest)) = role.split_once(", ")
+        && head.starts_with("Loch ")
+        && let Some(h) = numbered_role(head)
+    {
+        return format!("{h}, {}", role_label(rest));
+    }
+    role.to_string()
 }

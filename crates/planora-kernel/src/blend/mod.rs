@@ -18,9 +18,10 @@ use crate::ids::Id;
 use crate::topology::{Edge, Face, Solid};
 use crate::validate::validate_with;
 use analytic::{EdgeGeom, SectionKind, VolumeModel, analytic_geom};
-use build::{CAVITY, EndCut, EndPlan, assemble, end_cuts, has_cavity};
+use build::{EndCut, EndPlan, assemble, cavity, end_cuts, has_cavity};
 use chain::{ChainedEdge, select_edges};
 use march::{SectionLaw, march_geom};
+use planora_i18n::tr;
 use planora_math::nurbs::MAX_COORD;
 use planora_math::{PI, RadiusLaw, Tolerance};
 use section::ChamferSpec;
@@ -148,15 +149,14 @@ const SHOW_MAX_DECIMALS: i32 = 12;
 /// und sehr große Werte in Exponentenschreibweise, nicht endliche als Wort.
 pub(crate) fn show_num(x: f64) -> String {
     if x.is_nan() {
-        return "keine Zahl".into();
+        return tr!("kernel-num-nan");
     }
     if x.is_infinite() {
         return if x > 0.0 {
-            "unendlich"
+            tr!("kernel-num-inf")
         } else {
-            "minus unendlich"
-        }
-        .into();
+            tr!("kernel-num-minus-inf")
+        };
     }
     let a = x.abs();
     if a == 0.0 {
@@ -182,21 +182,25 @@ pub(crate) fn show_num(x: f64) -> String {
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
 fn check_size(x: f64, what: &str, min: f64) -> Result<(), BlendError> {
     if !(x.is_finite() && x <= MAX_COORD) {
-        return Err(BlendError::InvalidParameter(format!(
-            "{what} muss eine endliche Zahl bis {MAX_COORD:e} mm sein (war {})",
-            show_num(x)
+        return Err(BlendError::InvalidParameter(tr!(
+            "kernel-blend-size-finite",
+            what = what,
+            max = format!("{MAX_COORD:e}"),
+            x = show_num(x)
         )));
     }
     if x <= 0.0 {
-        return Err(BlendError::InvalidParameter(format!(
-            "{what} ist zu klein (muss größer als 0 sein)"
+        return Err(BlendError::InvalidParameter(tr!(
+            "kernel-blend-size-positive",
+            what = what
         )));
     }
     if !(x >= min) {
-        return Err(BlendError::InvalidParameter(format!(
-            "{what} ist zu klein (mindestens {} mm, war {})",
-            show_num(min),
-            show_num(x)
+        return Err(BlendError::InvalidParameter(tr!(
+            "kernel-blend-size-min",
+            what = what,
+            min = show_num(min),
+            x = show_num(x)
         )));
     }
     Ok(())
@@ -214,8 +218,9 @@ fn check_request_min(r: &BlendRequest, min: f64) -> Result<(), BlendError> {
         return Err(BlendError::NoEdges);
     }
     if r.edges.len() > MAX_BLEND_EDGES {
-        return Err(BlendError::InvalidParameter(format!(
-            "Zu viele Kanten (höchstens {MAX_BLEND_EDGES})"
+        return Err(BlendError::InvalidParameter(tr!(
+            "kernel-blend-too-many-edges",
+            max = MAX_BLEND_EDGES
         )));
     }
     check_kind_min(&r.kind, min)
@@ -225,45 +230,48 @@ fn check_request_min(r: &BlendRequest, min: f64) -> Result<(), BlendError> {
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
 fn check_kind_min(kind: &BlendKind, min: f64) -> Result<(), BlendError> {
     match kind {
-        BlendKind::Fillet { radius } => check_size(*radius, "Der Radius", min),
+        BlendKind::Fillet { radius } => check_size(*radius, &tr!("kernel-what-radius"), min),
         BlendKind::VariableFillet { points } => {
             if points.len() < 2 || points.len() > MAX_RADIUS_POINTS {
-                return Err(BlendError::InvalidParameter(format!(
-                    "Ein variabler Radius braucht 2 bis {MAX_RADIUS_POINTS} Punkte"
+                return Err(BlendError::InvalidParameter(tr!(
+                    "kernel-blend-var-radius-points",
+                    max = MAX_RADIUS_POINTS
                 )));
             }
             for (i, (s, radius)) in points.iter().enumerate() {
                 if !(s.is_finite() && (0.0..=1.0).contains(s)) {
-                    return Err(BlendError::InvalidParameter(
-                        "Die Positionen müssen zwischen 0 und 100 % liegen".into(),
-                    ));
+                    return Err(BlendError::InvalidParameter(tr!(
+                        "kernel-blend-positions-range"
+                    )));
                 }
                 if i > 0 && !(*s > points[i - 1].0) {
-                    return Err(BlendError::InvalidParameter(
-                        "Die Positionen müssen streng steigen".into(),
-                    ));
+                    return Err(BlendError::InvalidParameter(tr!(
+                        "kernel-blend-positions-increasing"
+                    )));
                 }
-                check_size(*radius, "Ein Radius", min)?;
+                check_size(*radius, &tr!("kernel-what-a-radius"), min)?;
             }
             Ok(())
         }
-        BlendKind::ChamferEqual { distance } => check_size(*distance, "Der Abstand", min),
+        BlendKind::ChamferEqual { distance } => {
+            check_size(*distance, &tr!("kernel-what-distance"), min)
+        }
         BlendKind::ChamferTwo {
             distance1,
             distance2,
         } => {
-            check_size(*distance1, "Abstand 1", min)?;
-            check_size(*distance2, "Abstand 2", min)
+            check_size(*distance1, &tr!("kernel-what-distance-1"), min)?;
+            check_size(*distance2, &tr!("kernel-what-distance-2"), min)
         }
         BlendKind::ChamferAngle { distance, angle } => {
-            check_size(*distance, "Der Abstand", min)?;
+            check_size(*distance, &tr!("kernel-what-distance"), min)?;
             if angle.is_finite() && *angle >= MIN_CHAMFER_ANGLE && *angle <= PI - MIN_CHAMFER_ANGLE
             {
                 Ok(())
             } else {
-                Err(BlendError::InvalidParameter(format!(
-                    "Der Winkel der Fase muss zwischen 1° und 179° liegen (war {:.3}°)",
-                    angle.to_degrees()
+                Err(BlendError::InvalidParameter(tr!(
+                    "kernel-blend-chamfer-angle-range",
+                    deg = format!("{:.3}", angle.to_degrees())
                 )))
             }
         }
@@ -374,10 +382,9 @@ fn check_closed_chains(
             && start == end
             && (law.radius(0.0) - law.radius(1.0)).abs() > tol.linear
         {
-            return Err(BlendError::InvalidParameter(
-                "Auf einer geschlossenen Kette muss der Radius am Anfang und am Ende gleich sein"
-                    .into(),
-            ));
+            return Err(BlendError::InvalidParameter(tr!(
+                "kernel-blend-closed-chain-radius"
+            )));
         }
     }
     Ok(())
@@ -393,9 +400,7 @@ pub fn check_contacts(
     tol: &Tolerance,
 ) -> Result<(), BlendError> {
     if plan.starts.len() != geoms.len() || plan.ends.len() != geoms.len() {
-        return Err(BlendError::ResultInvalid(
-            "Kanten und Abschlüsse passen nicht zusammen".into(),
-        ));
+        return Err(BlendError::ResultInvalid(tr!("kernel-blend-mismatch-ends")));
     }
     for (i, g) in geoms.iter().enumerate() {
         let (s, e) = (&plan.starts[i], &plan.ends[i]);
@@ -490,7 +495,7 @@ pub fn blend_limited(
         return Err(BlendError::EdgeNotFound);
     }
     if has_cavity(solid) {
-        return Err(BlendError::Unsupported(CAVITY.into()));
+        return Err(BlendError::Unsupported(cavity()));
     }
     validate_with(solid, tol).map_err(|e| BlendError::InvalidInput(e.to_string()))?;
     let chained = select_edges(solid, request)?;
@@ -517,9 +522,9 @@ pub fn blend_limited(
     let volume_change = per_edge.iter().sum::<f64>() + plan.corner_volume;
     let volume_scale = per_edge.iter().map(|v| v.abs()).sum::<f64>() + plan.corner_scale;
     if !(volume_change.is_finite() && volume_scale.is_finite()) {
-        return Err(BlendError::ResultInvalid(
-            "Die Volumenschätzung ist keine endliche Zahl".into(),
-        ));
+        return Err(BlendError::ResultInvalid(tr!(
+            "kernel-blend-volume-not-finite"
+        )));
     }
     let result = assemble(
         solid,
@@ -548,11 +553,11 @@ mod tests {
         assert_eq!(show_num(2.5), "2.5");
         assert_eq!(show_num(1e-300), "1e-300");
         assert_eq!(show_num(1e300), "1e300");
-        assert_eq!(show_num(f64::NAN), "keine Zahl");
-        assert_eq!(show_num(f64::NEG_INFINITY), "minus unendlich");
+        assert_eq!(show_num(f64::NAN), tr!("kernel-num-nan"));
+        assert_eq!(show_num(f64::NEG_INFINITY), tr!("kernel-num-minus-inf"));
         assert_eq!(show_num(0.1 + 0.2), "0.3");
         assert_eq!(show_num(0.0), "0");
-        let m = check_size(1e-300, "Der Radius", min_blend_size(&tol))
+        let m = check_size(1e-300, &tr!("kernel-what-radius"), min_blend_size(&tol))
             .unwrap_err()
             .to_string();
         assert!(

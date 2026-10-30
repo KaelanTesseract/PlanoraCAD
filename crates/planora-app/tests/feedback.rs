@@ -163,7 +163,7 @@ fn area_goes_to_the_start_of_the_text_not_into_a_parameter() {
             .unwrap()
             .starts_with(&percent_encode("Bereich: 3D\n"))
     );
-    assert!(full_text(&r).contains("Bereich: 3D"));
+    assert!(full_text(&r).contains("Area: 3D"));
 }
 
 #[test]
@@ -172,10 +172,10 @@ fn attach_hint_is_added_to_the_description_field() {
     assert!(
         param(&b.url, FIELD_PASSIERT)
             .unwrap()
-            .ends_with(&percent_encode(ATTACH_HINT))
+            .ends_with(&percent_encode(&attach_hint()))
     );
     let b = issue_url(&report(Kind::Fehler, "Kurz und klar beschrieben"), false);
-    assert!(!b.url.contains(&percent_encode(ATTACH_HINT)));
+    assert!(!b.url.contains(&percent_encode(&attach_hint())));
 }
 
 #[test]
@@ -221,7 +221,9 @@ fn oversized_description_is_cut_at_a_char_boundary_with_hint() {
     // gekürzt → Hinweis und Datei-Hinweis kommen von selbst
     assert!(
         b.url.ends_with(&percent_encode(&format!(
-            "{KUERZUNG_HINWEIS}\n\n{ATTACH_HINT}"
+            "{}\n\n{}",
+            cut_hint(),
+            attach_hint()
         ))),
         "{}",
         b.url
@@ -289,15 +291,15 @@ fn sanitize_user_name_variants() {
         "%USERPROFILE% ist C:\\Users\\Max Müller",
     ] {
         let out = sanitize(text, &who);
-        assert!(out.contains("<Benutzer>"), "{out}");
+        assert!(out.contains("<user>"), "{out}");
         assert!(!out.to_lowercase().contains("müller"), "{out}");
         assert!(!out.to_lowercase().contains("max"), "{out}");
     }
     let out = sanitize("/home/max/.config/planora/x.log", &Personal::default());
-    assert_eq!(out, "/home/<Benutzer>/.config/planora/x.log");
+    assert_eq!(out, "/home/<user>/.config/planora/x.log");
     // unbekannter Name, aber unter Users
     let out = sanitize(r"C:\Users\Erika\x.log und weiter", &Personal::default());
-    assert_eq!(out, r"C:\Users\<Benutzer>\x.log und weiter");
+    assert_eq!(out, r"C:\Users\<user>\x.log und weiter");
     // Wörter, die den Namen nur enthalten, bleiben
     let w = Personal {
         user_names: vec!["max".to_string()],
@@ -329,9 +331,9 @@ fn sanitize_mail_addresses() {
     let none = Personal::default();
     assert_eq!(
         sanitize("Absender max.mueller@example.org, bitte", &none),
-        "Absender <Mailadresse>, bitte"
+        "Absender <email>, bitte"
     );
-    assert_eq!(sanitize("<a@b.de>", &none), "<<Mailadresse>>");
+    assert_eq!(sanitize("<a@b.de>", &none), "<<email>>");
     assert_eq!(sanitize("3 @ 4", &none), "3 @ 4");
     assert_eq!(sanitize("x@localhost", &none), "x@localhost");
     // Versionsangaben sind keine Mailadressen
@@ -351,11 +353,11 @@ fn sanitize_name_as_word_in_a_log_line() {
     };
     assert_eq!(
         sanitize("Fehler bei Max Müller beim Laden", &w),
-        "Fehler bei <Benutzer> beim Laden"
+        "Fehler bei <user> beim Laden"
     );
     assert_eq!(
         sanitize("Fehler bei MAX MÜLLER beim Laden", &w),
-        "Fehler bei <Benutzer> beim Laden"
+        "Fehler bei <user> beim Laden"
     );
 }
 
@@ -369,7 +371,7 @@ fn sanitize_home_dir_outside_users() {
     };
     assert_eq!(
         sanitize(r"lese d:/profile/MM/planora/x.log", &w),
-        r"lese <Benutzer>/planora/x.log"
+        r"lese <user>/planora/x.log"
     );
 }
 
@@ -379,7 +381,7 @@ fn sanitize_onedrive_company_name() {
         r"C:\Users\Erika\OneDrive - Geheim GmbH\Teile\x.log",
         &Personal::default(),
     );
-    assert_eq!(out, r"C:\Users\<Benutzer>\OneDrive\Teile\x.log");
+    assert_eq!(out, r"C:\Users\<user>\OneDrive\Teile\x.log");
     let out = sanitize("/mnt/c/onedrive - Firma AG/x", &Personal::default());
     assert_eq!(out, "/mnt/c/OneDrive/x");
 }
@@ -436,10 +438,10 @@ fn anything_cut_adds_the_file_hint_by_itself() {
     let b = issue_url(&report(Kind::Fehler, &"y".repeat(3000)), false);
     assert!(b.needs_file);
     assert!(b.description_cut);
-    assert!(b.url.contains(&percent_encode(ATTACH_HINT)));
+    assert!(b.url.contains(&percent_encode(&attach_hint())));
     let b = issue_url(&report(Kind::Fehler, "kurz und knapp"), false);
     assert!(!b.needs_file);
-    assert!(!b.url.contains(&percent_encode(ATTACH_HINT)));
+    assert!(!b.url.contains(&percent_encode(&attach_hint())));
     let b = issue_url(&report(Kind::Fehler, "kurz und knapp"), true);
     assert!(b.needs_file);
 }
@@ -473,7 +475,7 @@ fn gpu_driver_is_sanitized_and_cut() {
     };
     let line = gpu_line(&info, &who());
     assert!(!line.contains("Müller"), "{line}");
-    assert!(line.contains("<Benutzer>"));
+    assert!(line.contains("<user>"));
     let driver = line
         .split(" · ")
         .nth(1)
@@ -553,7 +555,7 @@ fn write_bundle_writes_full_text() {
     assert_eq!(text.matches('ü').count(), 5000);
     assert!(text.contains("Zeile 499"));
     for p in [Part::Version, Part::Protokoll, Part::Schritte] {
-        assert!(text.contains(p.label()), "{p:?}");
+        assert!(text.contains(p.heading()), "{p:?}");
     }
 }
 
@@ -656,7 +658,7 @@ fn webform_with_file_adds_hint() {
     assert!(
         param(&b.url, "passiert")
             .unwrap()
-            .ends_with(&percent_encode(&format!("\n\n{ATTACH_HINT}")))
+            .ends_with(&percent_encode(&format!("\n\n{}", attach_hint())))
     );
 }
 
@@ -693,7 +695,9 @@ fn webform_oversized_description_is_cut_with_file() {
     assert!(b.description_cut);
     assert!(b.needs_file);
     assert!(b.url.ends_with(&percent_encode(&format!(
-        "{KUERZUNG_HINWEIS}\n\n{ATTACH_HINT}"
+        "{}\n\n{}",
+        cut_hint(),
+        attach_hint()
     ))));
     for f in ["version", "system", "grafik", "bereich"] {
         assert!(param(&b.url, f).is_some(), "{f}");
@@ -732,8 +736,8 @@ fn with_picture(mut r: Report) -> Report {
 #[test]
 fn attach_hint_names_the_picture_only_when_one_goes_along() {
     assert!(
-        ATTACH_HINT_PICTURE.contains("rueckmeldung.txt")
-            && ATTACH_HINT_PICTURE.contains("bild.png")
+        attach_hint_picture().contains("rueckmeldung.txt")
+            && attach_hint_picture().contains("bild.png")
     );
     for web in [false, true] {
         let build = |r: &Report, with_file: bool| {
@@ -744,14 +748,14 @@ fn attach_hint_names_the_picture_only_when_one_goes_along() {
             }
         };
         let plain = build(&web_report(Kind::Fehler, "Es hängt"), true);
-        assert!(plain.url.contains(&percent_encode(ATTACH_HINT)), "{web}");
+        assert!(plain.url.contains(&percent_encode(&attach_hint())), "{web}");
         assert!(!plain.url.contains("bild.png"), "{web}");
         let pic = build(&with_picture(web_report(Kind::Fehler, "Es hängt")), true);
         assert!(
-            pic.url.contains(&percent_encode(ATTACH_HINT_PICTURE)),
+            pic.url.contains(&percent_encode(&attach_hint_picture())),
             "{web}"
         );
-        assert!(!pic.url.contains(&percent_encode(ATTACH_HINT)), "{web}");
+        assert!(!pic.url.contains(&percent_encode(&attach_hint())), "{web}");
         // Auch wenn nur gekürzt wurde und `with_file` nicht gesetzt war.
         let long = build(
             &with_picture(web_report(Kind::Fehler, &"x".repeat(5000))),
@@ -759,7 +763,7 @@ fn attach_hint_names_the_picture_only_when_one_goes_along() {
         );
         assert!(long.needs_file && long.description_cut, "{web}");
         assert!(
-            long.url.contains(&percent_encode(ATTACH_HINT_PICTURE)),
+            long.url.contains(&percent_encode(&attach_hint_picture())),
             "{web}"
         );
     }
@@ -852,10 +856,10 @@ fn webform_address_boundary_is_below_2000() {
 
 #[test]
 fn attach_hint_names_the_project_zip_when_it_goes_along() {
-    assert_eq!(attach_hint_for(&["rueckmeldung.txt"]), ATTACH_HINT);
+    assert_eq!(attach_hint_for(&["rueckmeldung.txt"]), attach_hint());
     assert_eq!(
         attach_hint_for(&["rueckmeldung.txt", "bild.png"]),
-        ATTACH_HINT_PICTURE
+        attach_hint_picture()
     );
     assert_eq!(
         attach_hint_for(&["rueckmeldung.txt", "bild.png", "Halter.pcad.zip"]),
@@ -977,4 +981,56 @@ fn cleanup_feedback_dirs_treats_future_stamps_as_now() {
         .unwrap();
     cleanup_feedback_dirs(&base, later);
     assert!(!future.exists());
+}
+
+#[test]
+fn address_and_template_follow_the_program_language() {
+    use planora_i18n::{english, german, with_lang};
+    with_lang(&german(), || {
+        assert_eq!(webform_base(), WEBFORM_URL);
+        assert_eq!(Kind::Fehler.template(), "fehler.yml");
+        assert_eq!(Kind::Wunsch.template(), "wunsch.yml");
+        assert_eq!(Kind::Frage.template(), "wunsch.yml");
+    });
+    with_lang(&english(), || {
+        assert_eq!(webform_base(), WEBFORM_URL_EN);
+        assert_eq!(Kind::Fehler.template(), "bug.yml");
+        assert_eq!(Kind::Wunsch.template(), "feature.yml");
+        assert_eq!(Kind::Frage.template(), "feature.yml");
+        assert_eq!(Kind::Fehler.title_prefix(), "Bug: ");
+        assert_eq!(Kind::Wunsch.title_prefix(), "Feature: ");
+        assert_eq!(Kind::Frage.title_prefix(), "Question: ");
+        let r = web_report(Kind::Fehler, "It hangs");
+        let web = webform_url(&r, true);
+        assert!(
+            web.url
+                .starts_with(&format!("{WEBFORM_URL_EN}?art=fehler&"))
+        );
+        assert!(
+            web.url
+                .contains(&percent_encode("Attach file here: rueckmeldung.txt"))
+        );
+        let gh = issue_url(&r, true);
+        assert!(
+            gh.url.contains("issues/new?template=bug.yml&"),
+            "{}",
+            gh.url
+        );
+        assert!(
+            gh.url.contains(&percent_encode("Bug: It hangs")),
+            "{}",
+            gh.url
+        );
+        assert!(
+            gh.url.contains(&percent_encode("Area: Shortcuts")),
+            "{}",
+            gh.url
+        );
+        assert!(!gh.url.contains(&percent_encode("Bereich")), "{}", gh.url);
+        assert_eq!(
+            attach_hint_for(&["rueckmeldung.txt", "bild.png", "A.pcad.zip"]),
+            "Attach files here: rueckmeldung.txt, bild.png and A.pcad.zip"
+        );
+        assert!(cut_hint().contains("shortened"));
+    });
 }

@@ -185,9 +185,9 @@ fn detail_logged(mark: &str) -> bool {
 #[test]
 fn switch_saves_and_turns_on_detail_lines() {
     let _g = diag_lock();
-    assert_eq!(VERBOSE_LABEL, "Ausführliches Protokoll");
+    assert_eq!(verbose_label().as_str(), "Ausführliches Protokoll");
     assert_eq!(
-        VERBOSE_NOTE,
+        verbose_note().as_str(),
         "Schreibt mehr in die Protokolldatei auf deinem Rechner, zum Beispiel jeden Befehl und wie lange er dauert. Gesendet wird davon nichts."
     );
     for dark in [false, true] {
@@ -200,15 +200,15 @@ fn switch_saves_and_turns_on_detail_lines() {
         // vor „Projekte“; kein eigener Abschnitt „Hilfe“. Alles im Fenster sichtbar.
         assert!(!texts(&seen).contains(&"Hilfe"), "{:?}", texts(&seen));
         let order = [
-            SECTION_UPDATES,
-            CHECK_ON_START_LABEL,
-            PRIVACY_NOTE,
-            VERBOSE_LABEL,
-            VERBOSE_NOTE,
-            SECTION_PROJECTS,
+            section_updates(),
+            check_on_start_label(),
+            privacy_note(),
+            verbose_label(),
+            verbose_note(),
+            section_projects(),
         ];
         for pair in order.windows(2) {
-            let (x, y) = (find(&seen, pair[0]), find(&seen, pair[1]));
+            let (x, y) = (find(&seen, &pair[0]), find(&seen, &pair[1]));
             assert!(
                 x.rect.bottom() <= y.rect.top(),
                 "„{}“ über „{}“",
@@ -216,13 +216,16 @@ fn switch_saves_and_turns_on_detail_lines() {
                 pair[1]
             );
         }
-        for t in [VERBOSE_LABEL, VERBOSE_NOTE] {
+        for t in [verbose_label().as_str(), verbose_note().as_str()] {
             let s = find(&seen, t);
             assert!(s.clip.contains(s.rect.center()), "{t} sichtbar");
         }
         // Der Hinweis sieht aus wie der Datenschutzhinweis darüber: gleiche Höhe (Schriftgröße
         // und Gewicht) und gleiche Farbe, einzeilig.
-        let (note, privacy) = (find(&seen, VERBOSE_NOTE), find(&seen, PRIVACY_NOTE));
+        let (note, privacy) = (
+            find(&seen, verbose_note().as_str()),
+            find(&seen, privacy_note().as_str()),
+        );
         assert!(
             note.size == privacy.size && note.bold == privacy.bold,
             "gleiche Schrift: {} / {}",
@@ -234,7 +237,7 @@ fn switch_saves_and_turns_on_detail_lines() {
         assert!(!a.e.ws.verbose_log(), "Voreinstellung aus");
         assert!(!detail_logged("aus-vorher"));
 
-        a.click(VERBOSE_LABEL);
+        a.click(verbose_label().as_str());
         assert!(a.e.ws.verbose_log(), "an");
         let text = fs::read_to_string(&a.e.cfg).unwrap();
         assert!(text.contains("\"verbose_log\": true"), "{text}");
@@ -244,7 +247,7 @@ fn switch_saves_and_turns_on_detail_lines() {
             "Detailzeilen gleich nach dem Umschalten"
         );
 
-        a.click(VERBOSE_LABEL);
+        a.click(verbose_label().as_str());
         assert!(!a.e.ws.verbose_log(), "wieder aus");
         let text = fs::read_to_string(&a.e.cfg).unwrap();
         assert!(
@@ -339,23 +342,23 @@ fn write_failure_keeps_value_for_the_session_with_hint() {
         let mut a = App::new(e, dark);
         a.w.open(false);
         let blocker = block(&mut a.e);
-        a.click(VERBOSE_LABEL);
+        a.click(verbose_label().as_str());
         assert!(a.e.ws.verbose_log(), "gilt trotzdem");
         assert!(detail_logged("sitzung"), "wirkt trotzdem");
         assert_eq!(fs::read(&blocker).unwrap(), b"x");
         assert_eq!(
             a.w.updates_message(),
-            Some(&RootMessage::Warning(VERBOSE_NOT_SAVED.into()))
+            Some(&RootMessage::Warning(Note::VerboseNotSaved))
         );
         assert_eq!(
-            VERBOSE_NOT_SAVED,
+            verbose_not_saved().as_str(),
             "Das ausführliche Protokoll gilt nur bis zum Programmende: die Einstellung konnte nicht gespeichert werden."
         );
         let seen = a.settle(3);
-        let warn = find(&seen, VERBOSE_NOT_SAVED);
+        let warn = find(&seen, verbose_not_saved().as_str());
         assert_eq!(warn.color, theme::palette(dark).warning);
         // Wie die anderen Hinweise im Abschnitt „Updates“: vor „Projekte“.
-        assert!(warn.rect.bottom() <= find(&seen, SECTION_PROJECTS).rect.top());
+        assert!(warn.rect.bottom() <= find(&seen, section_projects().as_str()).rect.top());
         // Nächstes gelungenes Schreiben nimmt den Wert mit.
         a.e.ws.config_path = a.e.cfg.clone();
         assert!(a.e.ws.try_persist_config());
@@ -415,9 +418,9 @@ fn detail_lines_have_no_project_content() {
     let root_text = root.display().to_string();
     for l in &details {
         let text = l.splitn(3, ' ').nth(2).unwrap();
-        // Nur „Befehl <Name>: <n> ms“ mit dem festen Namen der Aktion.
+        // Nur „Command <Name>: <n> ms“ mit dem festen englischen Namen der Aktion.
         let rest = text
-            .strip_prefix("Befehl ")
+            .strip_prefix("Command ")
             .unwrap_or_else(|| panic!("{l}"));
         let (name, dur) = rest.rsplit_once(": ").unwrap_or_else(|| panic!("{l}"));
         assert!(
@@ -429,7 +432,7 @@ fn detail_lines_have_no_project_content() {
                 Action::New
             ]
             .iter()
-            .any(|a| a.label() == name),
+            .any(|a| diag::in_english(|| a.label()) == name),
             "{l}"
         );
         let ms = dur.strip_suffix(" ms").unwrap_or_else(|| panic!("{l}"));
@@ -456,8 +459,8 @@ fn appearance_and_updates_side_by_side_from_1600_pixels() {
         a.w.open(false);
         let seen = a.settle(6);
         let (look, upd) = (
-            find(&seen, SECTION_APPEARANCE),
-            find(&seen, SECTION_UPDATES),
+            find(&seen, section_appearance().as_str()),
+            find(&seen, section_updates().as_str()),
         );
         if side {
             assert!(
@@ -471,8 +474,12 @@ fn appearance_and_updates_side_by_side_from_1600_pixels() {
             assert!(look.rect.bottom() <= upd.rect.top(), "{w}: untereinander");
         }
         // „Projekte“ steht unter beiden Spalten (die Reihe ist so hoch wie die höhere Spalte).
-        let projects = find(&seen, SECTION_PROJECTS).rect.top();
-        for t in [TRANSPARENCY_LABEL, VERBOSE_NOTE, CHECK_NOW] {
+        let projects = find(&seen, section_projects().as_str()).rect.top();
+        for t in [
+            transparency_label().as_str(),
+            verbose_note().as_str(),
+            check_now().as_str(),
+        ] {
             assert!(find(&seen, t).rect.bottom() <= projects, "{w}: {t}");
         }
         // Die Menüleiste bleibt frei, auch untereinander.
@@ -483,7 +490,10 @@ fn appearance_and_updates_side_by_side_from_1600_pixels() {
         );
         // Bei 1920 Pixeln ist der Hinweis eine Zeile (schmaler bricht er um).
         if w >= 1920.0 {
-            let (note, privacy) = (find(&seen, VERBOSE_NOTE), find(&seen, PRIVACY_NOTE));
+            let (note, privacy) = (
+                find(&seen, verbose_note().as_str()),
+                find(&seen, privacy_note().as_str()),
+            );
             assert!(
                 note.size == privacy.size && note.bold == privacy.bold,
                 "{w}: gleiche Schrift"

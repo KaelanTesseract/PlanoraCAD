@@ -4,6 +4,7 @@ use super::{
     KnotVector, MAX_CONTROL_POINTS, MAX_COORD, MAX_DERIV_ORDER, MAX_WEIGHT, MIN_WEIGHT, NurbsError,
 };
 use crate::DVec3;
+use planora_i18n::tr;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct NurbsCurve {
@@ -31,36 +32,36 @@ impl NurbsCurve {
     ) -> Result<Self, NurbsError> {
         let knots = KnotVector::new(degree, knots)?;
         if control.len() > MAX_CONTROL_POINTS {
-            return Err(NurbsError::Control(format!(
-                "zu viele Kontrollpunkte (höchstens {MAX_CONTROL_POINTS})"
+            return Err(NurbsError::Control(tr!(
+                "math-control-too-many",
+                max = MAX_CONTROL_POINTS.to_string()
             )));
         }
         // Zu wenige Kontrollpunkte fängt der Vergleich mit der Knotenzahl unten ab
         // (KnotVector::new verlangt mindestens 2*(Grad+1) Knoten).
         if knots.basis_count() != control.len() {
-            return Err(NurbsError::Knots(
-                "die Knotenzahl passt nicht zu Kontrollpunkten und Grad".into(),
-            ));
+            return Err(NurbsError::Knots(tr!("math-knot-count")));
         }
         if weights.len() != control.len() {
-            return Err(NurbsError::Weights(
-                "Gewichte und Kontrollpunkte haben verschiedene Anzahl".into(),
-            ));
+            return Err(NurbsError::Weights(tr!("math-weights-count")));
         }
         if weights
             .iter()
             .any(|w| !(MIN_WEIGHT..=MAX_WEIGHT).contains(w))
         {
-            return Err(NurbsError::Weights(format!(
-                "Gewichte müssen zwischen {MIN_WEIGHT} und {MAX_WEIGHT} liegen"
+            return Err(NurbsError::Weights(tr!(
+                "math-weights-range",
+                min = MIN_WEIGHT.to_string(),
+                max = MAX_WEIGHT.to_string()
             )));
         }
         if control
             .iter()
             .any(|p| !p.is_finite() || p.abs().max_element() > MAX_COORD)
         {
-            return Err(NurbsError::Control(format!(
-                "Koordinaten müssen endlich sein und höchstens {MAX_COORD} betragen"
+            return Err(NurbsError::Control(tr!(
+                "math-coords-range",
+                max = MAX_COORD.to_string()
             )));
         }
         Ok(NurbsCurve {

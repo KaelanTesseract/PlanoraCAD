@@ -9,7 +9,8 @@
 //! sicher: Lipschitz-Ausschluss und Monotonie über Tangenten- und Gradientenkegel).
 
 use super::seeds::{Cone, Node, analytic_cone, excluded_points, patch_cone, separates, tangents};
-use super::{Hints, MSG_LOST, MSG_NEAR_TANGENT, PARALLEL_NORMALS, Probe, Side, Ssi, Uv};
+use super::{Hints, PARALLEL_NORMALS, Probe, Side, Ssi, Uv, msg_lost, msg_near_tangent};
+use planora_i18n::tr;
 use std::cell::Cell;
 
 use planora_math::DVec3;
@@ -237,7 +238,7 @@ impl Ssi<'_> {
                     Some(p) => self.handle_seed(p)?,
                     // Die Nullstelle ist echt (Vorzeichenwechsel), konvergiert aber nicht in
                     // ihrer Nähe: lieber melden als einen Bogen verlieren.
-                    None if exact => return Err(MSG_LOST.into()),
+                    None if exact => return Err(msg_lost()),
                     // Nur eine Annäherung bis auf die Toleranz ohne Vorzeichenwechsel (das
                     // Randstück berührt die andere Fläche): eine Berührung am Rand.
                     None => match self.probe(x, hints)? {
@@ -303,8 +304,9 @@ impl Ssi<'_> {
         while let Some((e, depth)) = stack.pop() {
             self.edge_visits += 1;
             if self.edge_visits > MAX_EDGE_VISITS {
-                return Err(format!(
-                    "Zu viele Schnittbereiche (mehr als {MAX_EDGE_VISITS} geprüfte Randstücke)"
+                return Err(tr!(
+                    "kernel-ssi-too-many-edge-visits",
+                    max = MAX_EDGE_VISITS
                 ));
             }
             let ctrl = e.control();
@@ -394,7 +396,7 @@ impl Ssi<'_> {
                 && fc.abs() <= lin
                 && fc.abs() < f0.abs().min(f1.abs())
             {
-                return Err(MSG_NEAR_TANGENT.into());
+                return Err(msg_near_tangent());
             }
             if f0.abs() <= self.eps {
                 push_root(out, p0, hints_at(&e, 0.0), self.same, true);
@@ -474,7 +476,7 @@ impl Ssi<'_> {
             self.patches_a.clone()
         };
         let Some(patches) = patches else {
-            return Err(MSG_NEAR_TANGENT.into());
+            return Err(msg_near_tangent());
         };
         // Echte Überlappung (ohne Zuschlag): ein Schnittpunkt liegt in beiden Quadern;
         // Annäherungen innerhalb der Toleranz ohne Schnitt sind hier keine Nullstellen.
@@ -496,8 +498,9 @@ impl Ssi<'_> {
         while let Some((e, q, de, dq)) = stack.pop() {
             self.edge_visits += 1;
             if self.edge_visits > MAX_EDGE_VISITS {
-                return Err(format!(
-                    "Zu viele Schnittbereiche (mehr als {MAX_EDGE_VISITS} geprüfte Randstücke)"
+                return Err(tr!(
+                    "kernel-ssi-too-many-edge-visits",
+                    max = MAX_EDGE_VISITS
                 ));
             }
             let eb = ebox(&e);
@@ -575,7 +578,7 @@ impl Ssi<'_> {
                     }
                 }
                 if !near {
-                    return Err(MSG_NEAR_TANGENT.into());
+                    return Err(msg_near_tangent());
                 }
                 let own = Some(e.uv(0.5));
                 let hints = if side_a {
@@ -616,7 +619,7 @@ impl Ssi<'_> {
             let (s, su, sv) = (ders[0][0], ders[1][0], ders[0][1]);
             let r = c - s;
             if !r.is_finite() {
-                return Err(super::MSG_NUMERIC.into());
+                return Err(super::msg_numeric());
             }
             if r.length() <= self.eps {
                 // Ein konvergierter Punkt mit `t` im Randstück ist ein echter Schnitt der

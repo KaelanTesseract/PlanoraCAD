@@ -51,7 +51,9 @@ pub const MAX_ATTEMPTS: u32 = 2;
 /// Speichern entfernt (Reste eines Absturzes).
 pub const STALE_TMP: Duration = Duration::from_secs(60 * 60);
 /// Kacheltext für eine Miniatur, deren Aufbau das Programm beendet hat.
-pub const IMPOSSIBLE_TEXT: &str = "Miniatur nicht möglich";
+pub fn impossible_text() -> String {
+    planora_i18n::tr!("projects-impossible")
+}
 
 /// Bildgröße der Datei in Pixeln.
 const PREVIEW_W: u32 = THUMB_W * THUMB_SCALE;
@@ -96,7 +98,7 @@ impl ThumbKey {
         let (info, _) = peek(doc_dir).map_err(|e| e.to_string())?;
         let version = info
             .tip(&info.active_branch)
-            .ok_or_else(|| "Der aktive Zweig hat keine Version.".to_string())?;
+            .ok_or_else(|| "The active branch has no version.".to_string())?;
         Ok(ThumbKey::new(&info.id, version, &info.active_branch, dark))
     }
 }
@@ -111,7 +113,7 @@ pub enum Thumb {
     /// Über einer Grenze (Dreiecke, Zeit, Zeichenaufwand).
     TooComplex,
     /// Ein früherer Aufbau dieser Version hat das Programm beendet; gespeichert, nie neu gebaut
-    /// (Kacheltext [`IMPOSSIBLE_TEXT`]).
+    /// (Kacheltext [`impossible_text`]).
     Impossible,
     /// Eine andere Instanz baut diese Miniatur gerade (nichts gebaut, nichts gespeichert).
     Busy,
@@ -190,9 +192,7 @@ pub fn build_with(
     let run = catch_unwind(AssertUnwindSafe(|| {
         crate::crash::expected_panics(|| build_unguarded(doc_dir, key, limits, after_step))
     }));
-    run.unwrap_or_else(|_| {
-        Thumb::Failed("Beim Erstellen der Vorschau ist ein Fehler aufgetreten.".into())
-    })
+    run.unwrap_or_else(|_| Thumb::Failed("An error occurred while building the preview.".into()))
 }
 
 /// Zählt Dreiecke gegen die Grenze und prüft die Zeit.
@@ -292,7 +292,7 @@ fn build_unguarded(
 }
 
 fn failed(reason: String) -> Thumb {
-    Thumb::Failed(format!("Die Vorschau ließ sich nicht erstellen: {reason}"))
+    Thumb::Failed(format!("The preview could not be built: {reason}"))
 }
 
 /// Gehört der Ordner noch dem Dokument des Schlüssels, und ist die Version noch die Spitze
@@ -309,10 +309,7 @@ fn remove_if_present(path: &Path) -> Result<(), String> {
     match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(format!(
-            "„{}“ lässt sich nicht entfernen: {e}",
-            path.display()
-        )),
+        Err(e) => Err(format!("\"{}\" cannot be removed: {e}", path.display())),
     }
 }
 
@@ -325,7 +322,7 @@ pub fn store(doc_dir: &Path, key: &ThumbKey, thumb: &Thumb) -> Result<(), String
         Thumb::Image(img) => {
             if (img.width, img.height) != (PREVIEW_W, PREVIEW_H) {
                 return Err(format!(
-                    "Die Vorschau hat {} × {} statt {PREVIEW_W} × {PREVIEW_H} Pixel.",
+                    "The preview has {} x {} instead of {PREVIEW_W} x {PREVIEW_H} pixels.",
                     img.width, img.height
                 ));
             }
@@ -335,12 +332,12 @@ pub fn store(doc_dir: &Path, key: &ThumbKey, thumb: &Thumb) -> Result<(), String
         Thumb::TooComplex => (ART_TOO_COMPLEX, None),
         Thumb::Impossible => (ART_IMPOSSIBLE, None),
         Thumb::Busy | Thumb::Failed(_) => {
-            return Err("Diese Vorschau wird nicht gespeichert.".into());
+            return Err("This preview is not stored.".into());
         }
     };
     remove_stale_tmp(doc_dir);
     if !still_current(doc_dir, key) {
-        return Err("Das Dokument hat sich inzwischen geändert.".into());
+        return Err("The document has changed in the meantime.".into());
     }
     remove_if_present(&doc_dir.join(PREVIEW_JSON))?;
     let json = record_json(key, art);
@@ -422,11 +419,7 @@ pub fn thumbnail_for_with(
         return outcome(thumb, true, true);
     }
     if !still_current(doc_dir, key) {
-        return outcome(
-            failed("Das Dokument hat sich geändert.".into()),
-            false,
-            false,
-        );
+        return outcome(failed("The document has changed.".into()), false, false);
     }
     let attempt = match marker_state(doc_dir, key) {
         Marker::Fresh => return outcome(Thumb::Busy, false, false),

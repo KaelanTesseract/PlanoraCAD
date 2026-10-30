@@ -19,6 +19,7 @@ use crate::error::DrawError;
 use crate::limits::{BISECT_TOL, MAX_PAIR_TESTS, MAX_STROKES, MAX_SUBDIVISION_DEPTH, geom_tol};
 use crate::stroke::Stroke;
 use planora_exchange::Progress;
+use planora_i18n::tr;
 use planora_kernel::Curve;
 use planora_math::nurbs::BezierSegment;
 use planora_math::{DVec2, DVec3};
@@ -269,12 +270,15 @@ fn check_width(s: &Stroke) -> Result<(), DrawError> {
     if s.param_len() > 0.0 {
         Ok(())
     } else {
-        Err(DrawError::InvalidBody(ZERO_WIDTH.into()))
+        Err(DrawError::InvalidBody(zero_width()))
     }
 }
 
 /// Meldung für Striche ohne Parameterbereich.
-pub const ZERO_WIDTH: &str = "Linie ohne Länge";
+/// Grund für [`DrawError::InvalidBody`] bei einer Linie ohne Länge (aktuelle Sprache).
+pub fn zero_width() -> String {
+    tr!("drawing-err-zero-width")
+}
 
 /// Kreuzungen zweier Striche in der Ansicht. Wurzeln gelten im Bereich ± `BISECT_TOL`·Breite und
 /// werden auf den Bereich begrenzt; jede Kreuzung wird genau einmal gemeldet (auch an der Naht

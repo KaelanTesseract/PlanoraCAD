@@ -1,7 +1,7 @@
 //! Modell der Verlaufsleiste (ohne Oberfläche): Schritte eines Körpers, Marker je Körper,
 //! Körperfarbe, Sperre und der gewählte Körper der Leiste.
 
-use planora_app::history_bar::{self, LOCK_HINT, StepState};
+use planora_app::history_bar::{self, StepState, lock_hint};
 use planora_app::icons::FeatureIcon;
 use planora_app::state::*;
 use planora_app::theme;
@@ -265,7 +265,7 @@ fn locked_body_reports_hint() {
     assert!(history_bar::is_locked(&s, m));
     assert!(!history_bar::is_locked(&s, other), "andere Körper nicht");
     assert_eq!(
-        LOCK_HINT,
+        lock_hint(),
         "Dieser Körper ist zurückgesetzt. Springe zuerst zum Ende des Verlaufs."
     );
     history_bar::to_end(&mut s, m).unwrap();
@@ -336,8 +336,11 @@ fn global_marker_blocks_moving_past_it() {
         history_bar::to_end(&mut s, m),
         history_bar::move_marker(&mut s, m, 2),
     ] {
-        assert_eq!(r.unwrap_err(), history_bar::GLOBAL_HINT);
-        assert_eq!(s.message.as_deref(), Some(history_bar::GLOBAL_HINT));
+        assert_eq!(r.unwrap_err(), history_bar::global_hint());
+        assert_eq!(
+            s.message.as_deref(),
+            Some(history_bar::global_hint().as_str())
+        );
     }
     assert!(s.document.rollbacks().is_empty());
     assert!(!history_bar::is_locked(&s, m));

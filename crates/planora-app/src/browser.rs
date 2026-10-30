@@ -10,6 +10,7 @@ use crate::state::{AppState, SketchRequest};
 use crate::theme;
 use egui::{Color32, Sense, vec2};
 use planora_feature::{BodyRef, FeatureId, FeatureKind, FeatureStatus, SketchPlane};
+use planora_i18n::tr;
 
 /// Zeilenhöhe (Graphit: 24).
 const ROW_HEIGHT: f32 = theme::ROW_H;
@@ -61,7 +62,14 @@ pub(crate) fn row_error(ui: &egui::Ui) -> Color32 {
     tree_ink(ui).map_or_else(|| error_color(ui.visuals().dark_mode), |i| i.error)
 }
 /// Kurze Statustexte rechts in den Zeilen.
-const STATUS_WORDS: [&str; 4] = ["Fehler", "übersprungen", "unterdrückt", "nicht berechnet"];
+fn status_words() -> [String; 4] {
+    [
+        tr!("tree-status-error"),
+        tr!("tree-status-skipped"),
+        tr!("tree-status-suppressed"),
+        tr!("tree-status-not-computed"),
+    ]
+}
 
 // ---- Zustandsfunktionen -----------------------------------------------------------------------
 
@@ -71,30 +79,41 @@ const STATUS_WORDS: [&str; 4] = ["Fehler", "übersprungen", "unterdrückt", "nic
 pub struct DeletePlan {
     pub target: FeatureId,
     pub dependents: Vec<FeatureId>,
-    pub names: Vec<String>,
+    pub names: Vec<(String, FeatureKind)>,
     /// Name des Features selbst.
     pub target_name: String,
     /// Hinweis zu Skizzen auf Flächen, die nicht mitgelöscht werden, aber danach woanders
     /// liegen können (siehe [`delete_plan`]).
-    pub note: Option<String>,
+    pub note: Option<Vec<String>>,
 }
 
 impl DeletePlan {
     /// Text der Rückfrage.
     pub fn text(&self) -> String {
         let mut t = if self.dependents.is_empty() {
-            format!("„{}“ wird gelöscht.", self.target_name)
+            tr!("tree-delete-single", name = self.target_name.as_str())
         } else {
-            format!(
-                "„{}“ und {} davon abhängige Feature(s) werden gelöscht: {}",
-                self.target_name,
-                self.dependents.len(),
-                self.names.join(", ")
+            let list: Vec<String> = self
+                .names
+                .iter()
+                .map(|(name, kind)| {
+                    tr!("tree-plan-item", name = name.as_str(), kind = kind.label())
+                })
+                .collect();
+            tr!(
+                "tree-delete-with-dependents",
+                name = self.target_name.as_str(),
+                count = self.dependents.len(),
+                list = list.join(", ")
             )
         };
-        if let Some(note) = &self.note {
+        if let Some(sketches) = &self.note {
+            let quoted: Vec<String> = sketches
+                .iter()
+                .map(|n| tr!("tree-quoted-name", name = n.as_str()))
+                .collect();
             t.push_str("\n\n");
-            t.push_str(note);
+            t.push_str(&tr!("tree-face-note", names = quoted.join(", ")));
         }
         t
     }
@@ -113,7 +132,7 @@ impl DeletePlan {
 pub fn delete_plan(state: &AppState, id: FeatureId) -> DeletePlan {
     let doc = &state.document;
     let dependents = doc.dependents(id);
-    let label = |f: &planora_feature::Feature| format!("„{}“ ({})", f.name, f.kind.label());
+    let label = |f: &planora_feature::Feature| (f.name.clone(), f.kind.clone());
     let names = dependents
         .iter()
         .filter_map(|d| doc.feature(*d))
@@ -134,17 +153,9 @@ pub fn delete_plan(state: &AppState, id: FeatureId) -> DeletePlan {
             .filter(|f| {
                 matches!(&f.kind, FeatureKind::Sketch(s) if matches!(s.plane, SketchPlane::OnFace(_)))
             })
-            .map(|f| format!("„{}“", f.name))
+            .map(|f| f.name.clone())
             .collect();
-        (!face_sketches.is_empty()).then(|| {
-            format!(
-                "Hinweis: Eine Skizze auf einer Fläche hängt nur von dem Feature ab, das die \
-                 Fläche erzeugt hat (Grundkörper, Extrusion oder Rotation), nicht von späteren \
-                 Operationen. {} bleibt deshalb erhalten und liegt danach auf der Fläche dieses \
-                 Körpers.",
-                face_sketches.join(", ")
-            )
-        })
+        (!face_sketches.is_empty()).then_some(face_sketches)
     } else {
         None
     };
@@ -167,7 +178,7 @@ pub fn apply_delete(state: &mut AppState, plan: &DeletePlan) -> Result<(), Strin
     state.message = None;
     if state.document.feature(plan.target).is_none() {
         state.pending_delete = None;
-        return state.fail("Das Feature gibt es nicht mehr".into());
+        return state.fail(tr!("tree-feature-gone"));
     }
     if let Err(e) = state.end_sketch_before_delete(plan.target) {
         state.pending_delete = None;
@@ -176,9 +187,7 @@ pub fn apply_delete(state: &mut AppState, plan: &DeletePlan) -> Result<(), Strin
     let current = delete_plan(state, plan.target);
     if current.dependents != plan.dependents || current.note != plan.note {
         state.pending_delete = Some(current);
-        return state.fail(
-            "Die Folgen des Löschens haben sich geändert; bitte die neue Liste prüfen".into(),
-        );
+        return state.fail(tr!("tree-plan-changed"));
     }
     state.pending_delete = None;
     state
@@ -210,7 +219,7 @@ pub fn request_delete(state: &mut AppState, id: FeatureId) {
 pub fn toggle_suppress(state: &mut AppState, id: FeatureId) -> Result<(), String> {
     state.message = None;
     let Some(suppressed) = state.document.feature(id).map(|f| f.suppressed) else {
-        return state.fail("Das Feature gibt es nicht mehr".into());
+        return state.fail(tr!("tree-feature-gone"));
     };
     state.end_sketch_for(Some(id))?;
     if let Err(e) = state.document.set_suppressed(id, !suppressed) {
@@ -225,7 +234,7 @@ pub fn toggle_suppress(state: &mut AppState, id: FeatureId) -> Result<(), String
 pub fn roll_back_to(state: &mut AppState, id: FeatureId) -> Result<(), String> {
     state.message = None;
     let Some(idx) = state.document.index_of(id) else {
-        return state.fail("Das Feature gibt es nicht mehr".into());
+        return state.fail(tr!("tree-feature-gone"));
     };
     state.end_sketch_for(Some(id))?;
     set_marker(state, idx + 1)
@@ -271,7 +280,11 @@ pub fn status_text(state: &AppState) -> Option<String> {
         .features()
         .iter()
         .find_map(|f| match &f.status {
-            FeatureStatus::Error(e) => Some(format!("„{}“: {e}", f.name)),
+            FeatureStatus::Error(e) => Some(tr!(
+                "tree-status-line",
+                name = f.name.as_str(),
+                error = e.as_str()
+            )),
             _ => None,
         })
 }
@@ -301,12 +314,12 @@ impl Folder {
     ];
 
     /// Beschriftung im Baum.
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Folder::Bodies => "Körper",
-            Folder::Sketches => "Skizzen",
-            Folder::Drawings => "Zeichnungen",
-            Folder::Origin => "Ursprung",
+            Folder::Bodies => tr!("tree-folder-bodies"),
+            Folder::Sketches => tr!("tree-folder-sketches"),
+            Folder::Drawings => tr!("tree-folder-drawings"),
+            Folder::Origin => tr!("tree-folder-origin"),
         }
     }
 
@@ -350,22 +363,33 @@ impl FolderState {
 // ---- Zeichnen ---------------------------------------------------------------------------------
 
 /// Text im Ordner „Körper“, solange es keinen Körper gibt.
-pub const EMPTY_TEXT: &str =
-    "Noch keine Körper. Über „Erzeugen“ im Menü lässt sich ein Körper oder eine Skizze anlegen.";
+pub fn empty_text() -> String {
+    tr!("tree-empty")
+}
 
 /// Text im Ordner „Skizzen“, solange es keine Skizze gibt.
-pub const NO_SKETCHES: &str =
-    "Noch keine Skizze. Über „Erzeugen“, dann „Skizze“ lässt sich eine anlegen.";
+pub fn no_sketches() -> String {
+    tr!("tree-no-sketches")
+}
 
 /// Kurzer Statustext eines Körpers, dessen Verlauf zurückgesetzt ist.
-pub const ROLLED_BACK: &str = "zurückgesetzt";
+pub fn rolled_back() -> String {
+    tr!("tree-rolled-back")
+}
 
 /// Hinweis zu einem zurückgesetzten Körper.
-const ROLLED_BACK_HINT: &str = "Der Verlauf dieses Körpers ist zurückgesetzt. In der \
-     Verlaufsleiste unten lässt er sich wieder bis zum Ende vorspulen.";
+fn rolled_back_hint() -> String {
+    tr!("tree-rolled-back-hint")
+}
 
 /// Die drei Grundebenen im Ordner „Ursprung“.
-const PLANES: [&str; 3] = ["XY-Ebene", "XZ-Ebene", "YZ-Ebene"];
+fn planes() -> [String; 3] {
+    [
+        tr!("tree-plane-xy"),
+        tr!("tree-plane-xz"),
+        tr!("tree-plane-yz"),
+    ]
+}
 
 /// Rahmen des Feldes, in dem der Baum steht (die einzige Stelle, an der er festgelegt wird):
 /// das Panel, zu `percent` Prozent durchsichtig (Einstellungen → Darstellung).
@@ -539,24 +563,21 @@ fn status_view(
     status: &FeatureStatus,
     weak: Color32,
     error: Color32,
-) -> (Option<&'static str>, Option<Color32>, Option<String>) {
+) -> (Option<String>, Option<Color32>, Option<String>) {
+    let [error_word, skipped_word, suppressed_word, not_computed_word] = status_words();
     match status {
         FeatureStatus::Ok => (None, None, None),
-        FeatureStatus::Error(e) => (Some(STATUS_WORDS[0]), Some(error), Some(e.clone())),
-        FeatureStatus::Skipped(why) => (Some(STATUS_WORDS[1]), Some(weak), Some(why.clone())),
+        FeatureStatus::Error(e) => (Some(error_word), Some(error), Some(e.clone())),
+        FeatureStatus::Skipped(why) => (Some(skipped_word), Some(weak), Some(why.clone())),
         FeatureStatus::Suppressed => (
-            Some(STATUS_WORDS[2]),
+            Some(suppressed_word),
             Some(weak),
-            Some("Unterdrückt: wird nicht berechnet (Rechtsklick, dann „Aktivieren“)".into()),
+            Some(tr!("tree-suppressed-hint")),
         ),
         FeatureStatus::NotComputed => (
-            Some(STATUS_WORDS[3]),
+            Some(not_computed_word),
             Some(weak),
-            Some(
-                "Liegt hinter dem Ende des Verlaufs und wird nicht berechnet (Menü \
-                 „Bearbeiten“, dann „Zum Ende der Zeitleiste“)"
-                    .into(),
-            ),
+            Some(tr!("tree-not-computed-hint")),
         ),
     }
 }
@@ -805,9 +826,9 @@ fn folder_header(ui: &mut egui::Ui, folder: Folder, open: bool) -> egui::Respons
         color,
     );
     response.on_hover_text(if open {
-        "Klick klappt den Ordner zu."
+        tr!("tree-fold-close")
     } else {
-        "Klick klappt den Ordner auf."
+        tr!("tree-fold-open")
     })
 }
 
@@ -859,7 +880,7 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
         d.insert_temp(folders_id(), Vec::<(Folder, egui::Rect)>::new());
         d.insert_temp(eyes_id(), Vec::<(String, egui::Rect)>::new());
     });
-    theme::section_header(ui, "Feature-Baum", theme::HEADER_H);
+    theme::section_header(ui, &tr!("tree-header"), theme::HEADER_H);
     ui.add_space(theme::SPACE_1);
     let name = state.document_name.clone();
     document_row(ui, &name);
@@ -903,10 +924,8 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
 /// Schriftatlas, sodass das Erscheinen eines Status später keine Texturänderung braucht.
 fn prime_status_words(ui: &egui::Ui) {
     let weak = ui.visuals().weak_text_color();
-    for t in STATUS_WORDS.iter().chain([&ROLLED_BACK]) {
-        let _ = ui
-            .painter()
-            .layout_no_wrap(t.to_string(), theme::value_font(), weak);
+    for t in status_words().into_iter().chain([rolled_back()]) {
+        let _ = ui.painter().layout_no_wrap(t, theme::value_font(), weak);
     }
 }
 
@@ -917,7 +936,7 @@ fn bodies(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
     prime_status_words(ui);
     let rows = body_rows(state, dark);
     if rows.is_empty() {
-        ui.weak(EMPTY_TEXT);
+        ui.weak(empty_text());
     }
     for r in rows {
         let selected = r.index.is_some_and(|j| state.selected_body == Some(j))
@@ -925,11 +944,7 @@ fn bodies(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
                 .selected_feature
                 .is_some_and(|f| f == r.target || f == r.tip);
         let (status, mut color, reason) = if r.locked {
-            (
-                Some(ROLLED_BACK),
-                Some(weak),
-                Some(ROLLED_BACK_HINT.to_string()),
-            )
+            (Some(rolled_back()), Some(weak), Some(rolled_back_hint()))
         } else {
             status_view(&r.status, weak, row_error(ui))
         };
@@ -944,16 +959,12 @@ fn bodies(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
             selected,
             &r.name,
             color,
-            status.zip(color),
+            status.as_deref().zip(color),
             None,
             |p, rect, c| paint_feature_icon(p, rect, icon, c),
         );
         let full = resp.rect;
-        let resp = resp.on_hover_text(reason.unwrap_or_else(|| {
-            "Körper: Klick wählt ihn für die Eigenschaften und die Verlaufsleiste; Doppelklick \
-             öffnet „Bearbeiten“; Rechtsklick zeigt weitere Befehle."
-                .to_string()
-        }));
+        let resp = resp.on_hover_text(reason.unwrap_or_else(|| tr!("tree-body-hint")));
         if resp.double_clicked() {
             *action = Some(Action::Edit(r.target));
         } else if resp.clicked() {
@@ -1002,14 +1013,14 @@ fn bodies(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
             let e = e.on_hover_ui(|ui| {
                 let km = crate::keymap::mouse::current(ui.ctx());
                 let text = if r.hidden {
-                    "Körper einblenden"
+                    tr!("tree-show-body")
                 } else {
-                    "Körper ausblenden (nur in der Ansicht)"
+                    tr!("tree-hide-body")
                 };
                 ui.label(crate::keymap::with_hint(
                     &km,
                     crate::keymap::Action::ToggleVisibility,
-                    text,
+                    &text,
                 ));
             });
             if e.clicked() {
@@ -1037,13 +1048,13 @@ fn sketches(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
         })
         .collect();
     if rows.is_empty() {
-        ui.weak(NO_SKETCHES);
+        ui.weak(no_sketches());
     }
     for r in rows {
         let id = r.id;
         let selected = state.selected_feature == Some(id) || open == Some(id);
         let name = if open == Some(id) {
-            format!("{} (in Bearbeitung)", r.name)
+            tr!("tree-in-progress", name = r.name.as_str())
         } else {
             r.name.clone()
         };
@@ -1054,14 +1065,11 @@ fn sketches(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
             selected,
             &name,
             color,
-            status.zip(color),
+            status.as_deref().zip(color),
             None,
             |p, rect, c| paint_feature_icon(p, rect, FeatureIcon::Sketch, c),
         )
-        .on_hover_text(reason.unwrap_or_else(|| {
-            "Doppelklick öffnet die Skizze zum Bearbeiten; Rechtsklick zeigt weitere Befehle."
-                .to_string()
-        }));
+        .on_hover_text(reason.unwrap_or_else(|| tr!("tree-sketch-hint")));
         if resp.double_clicked() {
             *action = Some(Action::Edit(id));
         } else if resp.clicked() {
@@ -1082,7 +1090,7 @@ fn feature_menu(
     action: &mut Option<Action>,
     id: FeatureId,
     suppressed: bool,
-    sketch: Option<Option<&'static str>>,
+    sketch: Option<Option<String>>,
 ) {
     let mut pick = |a: Action, ui: &mut egui::Ui| {
         *action = Some(a);
@@ -1099,16 +1107,16 @@ fn feature_menu(
             b.shortcut_text(egui::RichText::new(keys).font(theme::kbd_font()))
         }
     };
-    if ui.button("Bearbeiten").clicked() {
+    if ui.button(tr!("tree-edit")).clicked() {
         pick(Action::Edit(id), ui);
     }
-    if ui.button("Umbenennen").clicked() {
+    if ui.button(tr!("tree-rename")).clicked() {
         pick(Action::Rename(id), ui);
     }
     let toggle = if suppressed {
-        "Aktivieren"
+        tr!("tree-activate")
     } else {
-        "Unterdrücken"
+        tr!("tree-suppress")
     };
     if ui.button(toggle).clicked() {
         pick(Action::ToggleSuppress(id), ui);
@@ -1117,19 +1125,19 @@ fn feature_menu(
         ui.separator();
         for (label, act, key) in [
             (
-                "Extrudieren …",
+                tr!("tree-extrude"),
                 Action::Extrude(id),
                 Some(crate::keymap::Action::ExtrudeSketch),
             ),
-            ("Drehen …", Action::Revolve(id), None),
+            (tr!("tree-revolve"), Action::Revolve(id), None),
         ] {
             let button = match key {
-                Some(k) => key_button(label, k),
+                Some(k) => key_button(&label, k),
                 None => egui::Button::new(label),
             };
             if ui
                 .add_enabled(lock.is_none(), button)
-                .on_disabled_hover_text(lock.unwrap_or_default())
+                .on_disabled_hover_text(lock.clone().unwrap_or_default())
                 .clicked()
             {
                 pick(act, ui);
@@ -1139,7 +1147,7 @@ fn feature_menu(
     ui.separator();
     if ui
         .add(key_button(
-            "Löschen",
+            &tr!("tree-delete"),
             crate::keymap::Action::DeleteSelection,
         ))
         .clicked()
@@ -1150,11 +1158,11 @@ fn feature_menu(
 
 /// Ordner „Ursprung“: die drei Grundebenen (nur zur Anzeige).
 fn origin(ui: &mut egui::Ui) {
-    for plane in PLANES {
-        row(ui, 0.0, false, plane, None, None, None, |p, rect, c| {
+    for plane in planes() {
+        row(ui, 0.0, false, &plane, None, None, None, |p, rect, c| {
             paint_source(p, rect, IconSource::Font(Icon::SketchOnPlane), c)
         })
-        .on_hover_text("Grundebene; „Erzeugen“, dann „Skizze“ legt darauf eine Skizze an.");
+        .on_hover_text(tr!("tree-plane-hint"));
     }
 }
 
@@ -1225,7 +1233,7 @@ fn rename_window(ctx: &egui::Context, state: &mut AppState) {
     };
     let (mut apply, mut cancel) = (false, false);
     let mut open = true;
-    Dialog::new("Umbenennen", DialogSize::Prompt)
+    Dialog::new(tr!("tree-rename"), DialogSize::Prompt)
         .open(&mut open)
         .show(ctx, |ui| {
             let r = theme::text_field(ui, egui::TextEdit::singleline(name));
@@ -1234,10 +1242,10 @@ fn rename_window(ctx: &egui::Context, state: &mut AppState) {
             }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                if ui.button("Übernehmen").clicked() {
+                if ui.button(tr!("tree-apply")).clicked() {
                     apply = true;
                 }
-                if ui.button("Abbrechen").clicked() {
+                if ui.button(tr!("common-cancel")).clicked() {
                     cancel = true;
                 }
             });
@@ -1256,7 +1264,7 @@ fn delete_window(ctx: &egui::Context, state: &mut AppState) {
     };
     let (mut confirm, mut cancel) = (false, false);
     let mut open = true;
-    Dialog::new("Rückfrage", DialogSize::Prompt)
+    Dialog::new(tr!("tree-confirm-title"), DialogSize::Prompt)
         .open(&mut open)
         .show(ctx, |ui| {
             ui.label(plan.text());
@@ -1264,13 +1272,14 @@ fn delete_window(ctx: &egui::Context, state: &mut AppState) {
             ui.horizontal(|ui| {
                 if ui
                     .button(
-                        egui::RichText::new("Löschen").color(error_color(ui.visuals().dark_mode)),
+                        egui::RichText::new(tr!("tree-delete"))
+                            .color(error_color(ui.visuals().dark_mode)),
                     )
                     .clicked()
                 {
                     confirm = true;
                 }
-                if ui.button("Abbrechen").clicked() {
+                if ui.button(tr!("common-cancel")).clicked() {
                     cancel = true;
                 }
             });

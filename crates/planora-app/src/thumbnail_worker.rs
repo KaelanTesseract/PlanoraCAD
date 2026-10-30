@@ -350,7 +350,7 @@ fn guarded(work: &dyn Fn(&ThumbRequest) -> ThumbOutcome, req: &ThumbRequest) -> 
     })) {
         Ok(o) => o,
         Err(_) => ThumbOutcome {
-            thumb: Thumb::Failed("Beim Erstellen der Vorschau ist ein Fehler aufgetreten.".into()),
+            thumb: Thumb::Failed("An error occurred while building the preview.".into()),
             stored: false,
             from_cache: false,
         },

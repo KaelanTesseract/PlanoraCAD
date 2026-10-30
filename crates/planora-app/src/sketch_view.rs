@@ -8,6 +8,7 @@ use crate::theme::{lighten as lighter, sketch_colors as colors};
 use crate::viewport;
 use egui::{Color32, FontId, PointerButton, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2};
 use glam::{Vec2, Vec3};
+use planora_i18n::tr;
 use planora_math::{DVec2, DVec3, Frame};
 use planora_render::{EdgeRef, OrbitCamera, Pick};
 use planora_sketch::constraint::{ConstraintKind, LineOrPoints};
@@ -97,24 +98,16 @@ pub fn pick_radius_units(
 
 // ---- Zahlen und Namen ---------------------------------------------------------------------
 
-/// Zahl mit `decimals` Nachkommastellen und Komma als Dezimaltrenner (nur für die Anzeige).
+/// Zahl mit `decimals` Nachkommastellen und dem Dezimaltrenner der Sprache (nur für die
+/// Anzeige; ohne „-0,00“). Weiterleitung an [`planora_i18n::fmt_num`].
 pub fn format_number(v: f64, decimals: usize) -> String {
-    let s = format!("{v:.decimals$}");
-    // „-0,00“ wäre irritierend.
-    let s = match s.strip_prefix('-') {
-        Some(rest) if rest.chars().all(|c| c == '0' || c == '.') => rest.to_string(),
-        _ => s,
-    };
-    s.replace('.', ",")
+    planora_i18n::fmt_num(v, decimals)
 }
 
 /// Liest eine Zahl; Komma und Punkt gelten als Dezimaltrenner. Nicht endliche Werte sind ungültig.
+/// Weiterleitung an [`planora_i18n::parse_num`].
 pub fn parse_number(text: &str) -> Option<f64> {
-    text.trim()
-        .replace(',', ".")
-        .parse::<f64>()
-        .ok()
-        .filter(|v| v.is_finite())
+    planora_i18n::parse_num(text)
 }
 
 /// Länge mit Einheit, z. B. „40,00 mm“.
@@ -169,30 +162,30 @@ pub fn value_text(kind: &ConstraintKind, v: f64) -> String {
     }
 }
 
-/// Deutscher Name der Abhängigkeitsart.
-pub fn kind_label(kind: &ConstraintKind) -> &'static str {
+/// Name der Abhängigkeitsart in der aktuellen Sprache.
+pub fn kind_label(kind: &ConstraintKind) -> String {
     use ConstraintKind as K;
     match kind {
-        K::Coincident(..) => "Deckungsgleich",
-        K::PointOnCurve(..) => "Punkt auf Kurve",
-        K::Horizontal(..) => "Waagerecht",
-        K::Vertical(..) => "Senkrecht",
-        K::Parallel(..) => "Parallel",
-        K::Perpendicular(..) => "Rechtwinklig",
-        K::Tangent(..) => "Tangential",
-        K::Equal(..) => "Gleich",
-        K::Fixed(..) => "Fest",
-        K::Symmetric(..) => "Symmetrisch",
-        K::Midpoint(..) => "Mittelpunkt",
-        K::Distance(..) => "Abstand",
-        K::DistancePointLine(..) => "Abstand Punkt–Linie",
-        K::Radius(..) => "Radius",
-        K::Diameter(..) => "Durchmesser",
-        K::Angle(..) => "Winkel",
-        K::ArcRadius(..) => "Bogenradius",
-        K::EllipseMajor(..) => "Große Halbachse",
-        K::EllipseMinor(..) => "Kleine Halbachse",
-        K::EllipseAngle(..) => "Ellipsenwinkel",
+        K::Coincident(..) => tr!("sketch-constraint-coincident"),
+        K::PointOnCurve(..) => tr!("sketch-constraint-point-on-curve"),
+        K::Horizontal(..) => tr!("sketch-constraint-horizontal"),
+        K::Vertical(..) => tr!("sketch-constraint-vertical"),
+        K::Parallel(..) => tr!("sketch-constraint-parallel"),
+        K::Perpendicular(..) => tr!("sketch-constraint-perpendicular"),
+        K::Tangent(..) => tr!("sketch-constraint-tangent"),
+        K::Equal(..) => tr!("sketch-constraint-equal"),
+        K::Fixed(..) => tr!("sketch-constraint-fixed"),
+        K::Symmetric(..) => tr!("sketch-constraint-symmetric"),
+        K::Midpoint(..) => tr!("sketch-constraint-midpoint"),
+        K::Distance(..) => tr!("sketch-constraint-distance"),
+        K::DistancePointLine(..) => tr!("sketch-constraint-distance-point-line"),
+        K::Radius(..) => tr!("sketch-constraint-radius"),
+        K::Diameter(..) => tr!("sketch-constraint-diameter"),
+        K::Angle(..) => tr!("sketch-constraint-angle"),
+        K::ArcRadius(..) => tr!("sketch-constraint-arc-radius"),
+        K::EllipseMajor(..) => tr!("sketch-constraint-ellipse-major"),
+        K::EllipseMinor(..) => tr!("sketch-constraint-ellipse-minor"),
+        K::EllipseAngle(..) => tr!("sketch-constraint-ellipse-angle"),
     }
 }
 
@@ -202,7 +195,7 @@ pub fn constraint_name(sk: &Sketch, kind: &ConstraintKind, driven: bool) -> Stri
     match shown_value(sk, kind, driven) {
         Some(v) if driven => format!("{label} ({})", value_text(kind, v)),
         Some(v) => format!("{label} {}", value_text(kind, v)),
-        None => label.to_string(),
+        None => label,
     }
 }
 
@@ -226,20 +219,23 @@ pub fn overlay_text(
     use ConstraintKind as K;
     let plain = match kind {
         K::Coincident(..) | K::ArcRadius(..) => return String::new(),
-        K::Horizontal(..) => "H",
-        K::Vertical(..) => "V",
-        K::Parallel(..) => symbol(ctx, "∥", "||"),
-        K::Perpendicular(..) => symbol(ctx, "⟂", "Lot"),
-        K::Equal(..) => "=",
-        K::Tangent(..) => "T",
-        K::Fixed(..) => "fix",
-        K::Midpoint(..) => "Mitte",
-        K::Symmetric(..) => "Sym",
-        K::PointOnCurve(..) => "auf",
-        _ => "",
+        K::Horizontal(..) => "H".to_string(),
+        K::Vertical(..) => "V".to_string(),
+        K::Parallel(..) => symbol(ctx, "∥", "||").to_string(),
+        K::Perpendicular(..) => match symbol(ctx, "⟂", "") {
+            "" => tr!("sketch-overlay-perpendicular"),
+            sym => sym.to_string(),
+        },
+        K::Equal(..) => "=".to_string(),
+        K::Tangent(..) => "T".to_string(),
+        K::Fixed(..) => "fix".to_string(),
+        K::Midpoint(..) => tr!("sketch-overlay-midpoint"),
+        K::Symmetric(..) => tr!("sketch-overlay-symmetric"),
+        K::PointOnCurve(..) => tr!("sketch-overlay-on-curve"),
+        _ => String::new(),
     };
     if !plain.is_empty() {
-        return plain.to_string();
+        return plain;
     }
     let Some(v) = shown_value(sk, kind, driven) else {
         return String::new();
@@ -577,7 +573,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             }
             _ => {
                 if let Some(se) = state.sketch_session.as_mut() {
-                    se.message = Some("Bitte eine Körperkante anklicken".into());
+                    se.message = Some(crate::msg!("sketch-pick-edge"));
                 }
             }
         }

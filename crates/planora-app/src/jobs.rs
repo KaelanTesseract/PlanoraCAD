@@ -33,7 +33,9 @@ impl<T: Send + 'static> Job<T> {
     }
 
     /// Wie [`Job::spawn_with`]; `done` läuft im Arbeitsthread, nachdem das Ergebnis abholbereit
-    /// ist (etwa um ein Neuzeichnen anzufordern).
+    /// ist (etwa um ein Neuzeichnen anzufordern). `work` läuft in der Sprache des startenden
+    /// Threads ([`planora_i18n::current`] beim Start), damit Meldungen aus dem Arbeitsthread in
+    /// der Sprache des Fensters erscheinen.
     pub fn spawn_notify(
         progress: Arc<Progress>,
         done: impl FnOnce() + Send + 'static,
@@ -41,11 +43,13 @@ impl<T: Send + 'static> Job<T> {
     ) -> Job<T> {
         let (tx, rx) = mpsc::channel();
         let shared = Arc::clone(&progress);
+        let lang = planora_i18n::current();
         // Lässt sich kein Thread starten, ist der Sender schon fort: `poll` meldet `Lost`.
         let _ = std::thread::Builder::new()
             .name("planora-austausch".into())
             .spawn(move || {
-                let _ = tx.send(work(&shared));
+                let result = planora_i18n::with_lang(&lang, || work(&shared));
+                let _ = tx.send(result);
                 done();
             });
         Job { rx, progress }

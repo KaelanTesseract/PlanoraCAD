@@ -442,7 +442,7 @@ fn moved(s: Solid, by: DVec3) -> Solid {
 
 fn assert_cavity_refused(r: Result<Solid, BlendError>) {
     match r {
-        Err(BlendError::Unsupported(m)) => assert_eq!(m, CAVITY),
+        Err(BlendError::Unsupported(m)) => assert_eq!(m, cavity()),
         other => panic!("{:?}", other.map(|s| s.faces.len())),
     }
 }

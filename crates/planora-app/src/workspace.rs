@@ -12,10 +12,11 @@ use crate::import_dialog::ImportDialog;
 use crate::keymap::Keymap;
 use crate::parameter_dialog::ParameterDialog;
 use crate::places::{FavoriteChange, Places};
-use crate::state::{AppState, REDO_FAILED, UNDO_FAILED};
+use crate::state::{AppState, redo_failed, undo_failed};
 use crate::step_import_dialog::StepImportDialog;
 use crate::undo_labels::describe_change;
 use planora_feature::Snapshot;
+use planora_i18n::tr;
 use planora_project::config::{
     Config, PendingUpdate, THEME_DARK, THEME_LIGHT, WindowState, clamp_panel_transparency,
 };
@@ -31,34 +32,46 @@ use std::time::{Duration, Instant};
 pub const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(120);
 
 /// Meldung, wenn noch kein Projektverzeichnis gewählt ist.
-const NO_ROOT: &str = "Es ist noch kein Projektverzeichnis gewählt.";
-/// Schritt (Letzte Schritte) nach einem gelungenen Speichern; erst dann, nicht schon beim Befehl.
-const SAVE_STEP: &str = "Speichern";
+pub fn no_root() -> String {
+    tr!("project-no-root")
+}
+/// Schritt (Letzte Schritte, englisch) nach einem gelungenen Speichern; erst dann, nicht schon
+/// beim Befehl.
+const SAVE_STEP: &str = "Save";
 
 /// Ablehnung eines Dokumentnamens auf „.pcad“ (wie bei Ordnern; die Endung hängt das Programm
 /// selbst an).
-pub const DOCUMENT_NAME_SUFFIX: &str = "Dokumentnamen dürfen nicht auf „.pcad“ enden.";
+pub fn document_name_suffix() -> String {
+    tr!("project-name-suffix")
+}
 
 /// Geprüfter Dokumentname (wie `validate_name`, dazu ohne „.pcad“ am Ende, gleich welche
 /// Schreibweise).
 fn document_name(name: &str) -> Result<String, String> {
     let name = validate_name(name).map_err(err)?;
     if name.to_lowercase().ends_with(DOCUMENT_SUFFIX) {
-        return Err(DOCUMENT_NAME_SUFFIX.into());
+        return Err(document_name_suffix());
     }
     Ok(name)
 }
 
 /// Meldung von [`Workspace::choose_root`], solange gespeicherte Dokumente offen sind.
-pub const ROOT_LOCKED: &str =
-    "Bitte zuerst alle gespeicherten Dokumente schließen, bevor der Projektordner wechselt.";
+pub fn root_locked() -> String {
+    tr!("settings-root-locked")
+}
 
 /// Grund, warum Rückgängig nicht geht: kein Schritt da.
-pub const NOTHING_TO_UNDO: &str = "Es gibt nichts rückgängig zu machen.";
+pub fn nothing_to_undo() -> String {
+    tr!("project-nothing-to-undo")
+}
 /// Grund, warum Wiederholen nicht geht: kein Schritt da.
-pub const NOTHING_TO_REDO: &str = "Es gibt nichts zu wiederholen.";
+pub fn nothing_to_redo() -> String {
+    tr!("project-nothing-to-redo")
+}
 /// Grund, warum Rückgängig und Wiederholen nicht gehen: das Export-Fenster schreibt eine Datei.
-pub const EXPORT_WRITING: &str = "Während des Exports ist das nicht möglich.";
+pub fn export_writing() -> String {
+    tr!("project-export-writing")
+}
 
 pub struct DocTab {
     pub id: u64,
@@ -235,7 +248,9 @@ impl DocTab {
             return;
         }
         let label = describe_change(self.history.current(), &after);
-        crate::diag::step(label);
+        crate::diag::step(&crate::diag::in_english(|| {
+            describe_change(self.history.current(), &after)
+        }));
         let bytes = snapshot_bytes(&after);
         self.history.record(after, bytes, label);
     }
@@ -251,15 +266,15 @@ impl DocTab {
     }
 
     /// Gemeinsame Sperren von Rückgängig und Wiederholen: alte Version, Export schreibt.
-    fn history_locked(&self) -> Option<&'static str> {
+    fn history_locked(&self) -> Option<String> {
         if self.read_only {
-            Some(crate::drawing_browser::READ_ONLY_HINT)
+            Some(crate::drawing_browser::read_only_hint())
         } else if self
             .export_dialog
             .as_ref()
             .is_some_and(|d| d.is_writing_file())
         {
-            Some(EXPORT_WRITING)
+            Some(export_writing())
         } else {
             None
         }
@@ -272,73 +287,73 @@ impl DocTab {
     }
 
     /// Warum Rückgängig gerade nicht geht (`None`: es geht).
-    pub fn undo_blocked(&self) -> Option<&'static str> {
+    pub fn undo_blocked(&self) -> Option<String> {
         self.history_locked().or_else(|| {
             let nothing = if self.in_sketch() {
                 self.state.sketch_undo_label().is_none()
             } else {
                 self.history.undo_len() == 0 && self.pending_change().is_none()
             };
-            nothing.then_some(NOTHING_TO_UNDO)
+            nothing.then(nothing_to_undo)
         })
     }
 
     /// Warum Wiederholen gerade nicht geht (`None`: es geht). Eine noch offene Änderung leert
     /// beim Übernehmen die Wiederholen-Liste; dann gibt es nichts zu wiederholen.
-    pub fn redo_blocked(&self) -> Option<&'static str> {
+    pub fn redo_blocked(&self) -> Option<String> {
         self.history_locked().or_else(|| {
             let nothing = if self.in_sketch() {
                 self.state.sketch_redo_label().is_none()
             } else {
                 self.history.redo_len() == 0 || self.pending_change().is_some()
             };
-            nothing.then_some(NOTHING_TO_REDO)
+            nothing.then(nothing_to_redo)
         })
     }
 
     /// Name des Schritts, den Rückgängig zurücknähme (eine noch offene Änderung zählt mit; bei
     /// offener Skizze der Schritt der Skizze).
-    pub fn undo_label(&self) -> Option<&'static str> {
+    pub fn undo_label(&self) -> Option<String> {
         if self.in_sketch() {
             return self.state.sketch_undo_label();
         }
         match self.pending_change() {
             Some(now) => Some(describe_change(self.history.current(), &now)),
-            None => self.history.undo_label(),
+            None => self.history.undo_label().map(str::to_string),
         }
     }
 
     /// Name des Schritts, den Wiederholen herstellte (bei offener Skizze der Schritt der
     /// Skizze).
-    pub fn redo_label(&self) -> Option<&'static str> {
+    pub fn redo_label(&self) -> Option<String> {
         if self.in_sketch() {
             return self.state.sketch_redo_label();
         }
         if self.pending_change().is_some() {
             return None;
         }
-        self.history.redo_label()
+        self.history.redo_label().map(str::to_string)
     }
 
     /// Nimmt den letzten Schritt zurück. Offene Änderungen werden vorher ein Schritt. Gelingt
     /// das Zurückladen, schließen die Fenster des Tabs (sie gehören zum alten Stand); schlägt es
     /// fehl, bleibt das Dokument, nur dieser Schritt wird verworfen und `state.message` sagt
-    /// [`UNDO_FAILED`] (Spec §6a.8). Bei offener Skizze nur deren Verlauf (R10); das Dokument
+    /// [`undo_failed`] (Spec §6a.8). Bei offener Skizze nur deren Verlauf (R10); das Dokument
     /// bleibt dann unberührt, auch wenn die Skizze nichts zurückzunehmen hat.
     pub fn undo(&mut self) -> Result<(), String> {
         if let Some(why) = self.history_locked() {
-            return Err(why.into());
+            return Err(why);
         }
         self.observe_history(false);
         if self.in_sketch() {
             return if self.state.undo_sketch() {
                 Ok(())
             } else {
-                Err(NOTHING_TO_UNDO.into())
+                Err(nothing_to_undo())
             };
         }
         let Some(target) = self.history.peek_undo().cloned() else {
-            return Err(NOTHING_TO_UNDO.into());
+            return Err(nothing_to_undo());
         };
         match self.state.restore_document(target) {
             Ok(_) => {
@@ -348,28 +363,28 @@ impl DocTab {
             }
             Err(e) => {
                 self.history.discard_undo();
-                self.state.message = Some(UNDO_FAILED.into());
+                self.state.message = Some(undo_failed());
                 Err(e)
             }
         }
     }
 
     /// Stellt den zuletzt zurückgenommenen Schritt wieder her (Gegenstück zu [`DocTab::undo`];
-    /// Meldung bei Fehler [`REDO_FAILED`]; bei offener Skizze nur deren Verlauf).
+    /// Meldung bei Fehler [`redo_failed`]; bei offener Skizze nur deren Verlauf).
     pub fn redo(&mut self) -> Result<(), String> {
         if let Some(why) = self.history_locked() {
-            return Err(why.into());
+            return Err(why);
         }
         self.observe_history(false);
         if self.in_sketch() {
             return if self.state.redo_sketch() {
                 Ok(())
             } else {
-                Err(NOTHING_TO_REDO.into())
+                Err(nothing_to_redo())
             };
         }
         let Some(target) = self.history.peek_redo().cloned() else {
-            return Err(NOTHING_TO_REDO.into());
+            return Err(nothing_to_redo());
         };
         match self.state.restore_document(target) {
             Ok(_) => {
@@ -379,7 +394,7 @@ impl DocTab {
             }
             Err(e) => {
                 self.history.discard_redo();
-                self.state.message = Some(REDO_FAILED.into());
+                self.state.message = Some(redo_failed());
                 Err(e)
             }
         }
@@ -408,7 +423,7 @@ impl DocTab {
     pub fn after_parameter_change(&mut self) {
         self.observe_history(false);
         if self.feature_dialog.take().is_some() {
-            self.state.info = Some(crate::parameter_dialog::DIALOG_CLOSED.into());
+            self.state.info = Some(crate::parameter_dialog::dialog_closed());
         }
     }
 
@@ -523,6 +538,9 @@ pub enum Prompt {
     AutosaveOffer {
         tab: u64,
     },
+    /// Hinweis als fertiger Text in der Sprache beim Entstehen: die Rückfrage ist modal, die
+    /// Sprache lässt sich bei offenem Hinweis nicht wechseln (die Fehlertexte aus
+    /// `planora-project` folgen in Task 13).
     Notice(String),
 }
 
@@ -553,7 +571,7 @@ pub struct Workspace {
     pub favorites_pending: Vec<FavoriteChange>,
     /// Meldung aus dem letzten Speichern der Favoriten (z. B. Liste auf der Platte voll); geht
     /// über [`Workspace::places`] an die nächste gezeichnete Dateiauswahl.
-    pub favorites_notice: Option<&'static str>,
+    pub favorites_notice: Option<String>,
     /// Die Durchsichtigkeit in `config.panel_transparency` konnte noch nicht gespeichert werden;
     /// sie wird beim nächsten gelungenen Schreiben ([`Workspace::try_persist_config`]) mit
     /// geschrieben.
@@ -575,6 +593,9 @@ pub struct Workspace {
     /// Das Design in `config.theme` konnte noch nicht gespeichert werden; es wird beim nächsten
     /// gelungenen Schreiben der Konfiguration mit geschrieben (wie `keys_pending`).
     pub theme_pending: bool,
+    /// Die Sprache in `config.language` konnte noch nicht gespeichert werden; sie wird beim
+    /// nächsten gelungenen Schreiben der Konfiguration mit geschrieben (wie `theme_pending`).
+    pub language_pending: bool,
     /// Für „Letzten Befehl wiederholen“ (Leertaste): der zuletzt abgeschlossene Befehl, über
     /// alle Tabs.
     pub last_command: crate::commands::LastCommand,
@@ -629,6 +650,7 @@ impl Workspace {
             keys_pending: false,
             update_settings_pending: false,
             theme_pending: false,
+            language_pending: false,
             last_command: Default::default(),
             prompt: None,
             quit: false,
@@ -670,7 +692,7 @@ impl Workspace {
         state.fit_pending = true;
         self.tabs.push(DocTab::new(
             id,
-            format!("Unbenannt {}", self.untitled),
+            tr!("project-untitled", n = self.untitled),
             state,
         ));
         self.active = self.tabs.len() - 1;
@@ -816,10 +838,7 @@ impl Workspace {
         new_branch: Option<&str>,
     ) -> Result<SaveOutcome, String> {
         if tab.read_only {
-            return Err(
-                "Diese Version ist schreibgeschützt. Zuerst abzweigen oder wiederherstellen."
-                    .into(),
-            );
+            return Err(tr!("project-read-only-save"));
         }
         tab.state.try_close_sketch()?;
         let snapshot = tab.state.snapshot();
@@ -835,12 +854,12 @@ impl Workspace {
                 tab.based_on = Some(n);
                 tab.mark_clean();
                 crate::diag::step(SAVE_STEP);
-                crate::diag::info(&format!("Gespeichert: {} (Version {n})", tab.name));
+                crate::diag::info(&format!("Saved: {} (version {n})", tab.name));
                 Ok(SaveOutcome::Saved(n))
             }
             Err(ProjectError::NeedsBranch) => Ok(SaveOutcome::NeedsBranch),
             Err(e) => {
-                crate::diag::fehler(&format!("Speichern fehlgeschlagen: {}", tab.name));
+                crate::diag::fehler(&format!("Save failed: {}", tab.name));
                 Err(err(e))
             }
         }
@@ -865,9 +884,9 @@ impl Workspace {
         name: &str,
         comment: &str,
     ) -> Result<NodePath, String> {
-        let lib = self.library.as_ref().ok_or(NO_ROOT)?;
+        let lib = self.library.as_ref().ok_or_else(no_root)?;
         if !lib.is_container(parent) {
-            return Err("Bitte ein Projekt oder einen Ordner als Ziel wählen.".into());
+            return Err(tr!("project-pick-target"));
         }
         let name = document_name(name)?;
         let mut path = parent.clone();
@@ -892,7 +911,7 @@ impl Workspace {
         tab.pending_autosave = None;
         tab.keep_autosave = false;
         crate::diag::step(SAVE_STEP);
-        crate::diag::info(&format!("Gespeichert: {} (Version 1)", tab.name));
+        crate::diag::info(&format!("Saved: {} (version 1)", tab.name));
         tab.mark_clean();
         self.library_revision += 1;
         self.content_revision += 1;
@@ -903,9 +922,9 @@ impl Workspace {
     /// Projekt oder Ordner; dieselben Prüfungen und Meldungen wie `save_as`; `library_revision += 1`.
     /// Die offenen Tabs bleiben unberührt (Öffnen ist Sache des Aufrufers).
     pub fn create_document(&mut self, parent: &NodePath, name: &str) -> Result<NodePath, String> {
-        let lib = self.library.as_ref().ok_or(NO_ROOT)?;
+        let lib = self.library.as_ref().ok_or_else(no_root)?;
         if !lib.is_container(parent) {
-            return Err("Bitte ein Projekt oder einen Ordner als Ziel wählen.".into());
+            return Err(tr!("project-pick-target"));
         }
         let name = document_name(name)?;
         let mut path = parent.clone();
@@ -989,30 +1008,31 @@ impl Workspace {
         let lib = self
             .library
             .as_ref()
-            .ok_or_else(|| ProjectError::Invalid(NO_ROOT.into()))?;
+            .ok_or_else(|| ProjectError::Invalid(no_root()))?;
         let dir = lib.document_dir(path)?;
         let (store, report) = DocStore::open(&dir, mode)?;
         let branch = store.info().active_branch.clone();
         let v = store.latest_readable(&branch).ok_or_else(|| {
-            ProjectError::corrupt(dir.display().to_string(), "Es gibt keine lesbare Version.")
+            ProjectError::corrupt(
+                dir.display().to_string(),
+                tr!("project-no-readable-version"),
+            )
         })?;
         let snapshot = store.load_version(v)?;
         let state = AppState::from_snapshot(snapshot).map_err(ProjectError::Invalid)?;
         let mut notes = Vec::new();
         if !report.orphans.is_empty() {
-            notes.push(format!(
-                "Reste eines abgebrochenen Speicherns gefunden und ignoriert: {}.",
-                report.orphans.join(", ")
+            notes.push(tr!(
+                "project-note-orphans",
+                list = report.orphans.join(", ")
             ));
         }
         if !report.missing.is_empty() {
             let list: Vec<String> = report.missing.iter().map(|n| format!("v{n}")).collect();
-            notes.push(format!("Versionsdateien fehlen: {}.", list.join(", ")));
+            notes.push(tr!("project-note-missing", list = list.join(", ")));
         }
         if store.info().tip(&branch) != Some(v) {
-            notes.push(format!(
-                "Die neueste Version ist nicht lesbar; v{v} wurde geladen."
-            ));
+            notes.push(tr!("project-note-tip-unreadable", v = v));
         }
         // Eine Autosicherung existiert nur, wenn das letzte Speichern nicht abgeschlossen wurde;
         // „>=“, weil Zeitstempel sekundengenau sind.
@@ -1023,8 +1043,9 @@ impl Workspace {
             // Die Datei bleibt erhalten (nach einem Absturz womöglich die einzige Kopie, oder
             // von einer neueren Programmversion); sie wird weder angeboten noch überschrieben.
             Err(e) => {
-                notes.push(format!(
-                    "Die Autosicherung lässt sich nicht lesen und wird nicht verwendet; die Datei bleibt erhalten: {e}"
+                notes.push(tr!(
+                    "project-note-autosave-unreadable",
+                    error = e.to_string()
                 ));
                 keep_autosave = true;
                 None
@@ -1041,7 +1062,7 @@ impl Workspace {
         tab.based_on = Some(v);
         tab.pending_autosave = autosave;
         tab.keep_autosave = keep_autosave;
-        crate::diag::info(&format!("Geöffnet: {} (Version {v})", display_name(path)));
+        crate::diag::info(&format!("Opened: {} (version {v})", display_name(path)));
         let i = self.push_tab(tab);
         // ein schon stehender Prompt (z. B. das Angebot eines anderen Dokuments) bleibt;
         // `refresh_prompts` bietet diese Sicherung danach an
@@ -1082,8 +1103,9 @@ impl Workspace {
             Err(e) => {
                 // Datei unangetastet lassen
                 self.tabs[i].keep_autosave = true;
-                self.prompt = Some(Prompt::Notice(format!(
-                    "Die Autosicherung lässt sich nicht laden; die Datei bleibt erhalten: {e}"
+                self.prompt = Some(Prompt::Notice(tr!(
+                    "project-autosave-load-failed",
+                    error = e.to_string()
                 )))
             }
         }
@@ -1118,7 +1140,7 @@ impl Workspace {
         let lib = self
             .library
             .as_ref()
-            .ok_or_else(|| ProjectError::Invalid(NO_ROOT.into()))?;
+            .ok_or_else(|| ProjectError::Invalid(no_root()))?;
         let dir = lib.document_dir(path)?;
         let snapshot = match self
             .tab_for_path(path)
@@ -1144,18 +1166,18 @@ impl Workspace {
     /// Macht eine schreibgeschützte Ansicht bearbeitbar (Abzweigen): holt die Sperre. Gibt es
     /// das Dokument schon beschreibbar in einem anderen Tab, ist das ein Fehler.
     pub fn make_editable(&mut self, i: usize) -> Result<(), String> {
-        let tab = self.tabs.get(i).ok_or("Kein solcher Tab.")?;
+        let tab = self.tabs.get(i).ok_or_else(|| tr!("project-no-such-tab"))?;
         if !tab.read_only {
             return Ok(());
         }
-        let path = tab.path.clone().ok_or("Das Dokument hat keinen Ort.")?;
+        let path = tab.path.clone().ok_or_else(|| tr!("project-no-location"))?;
         if self.tab_for_path(&path).is_some() {
-            return Err("Das Dokument ist schon in einem anderen Tab geöffnet. Dort weiterarbeiten oder den Tab schließen.".into());
+            return Err(tr!("project-open-elsewhere"));
         }
         let dir = tab
             .source_dir
             .clone()
-            .ok_or("Das Dokument hat keinen Ort.")?;
+            .ok_or_else(|| tr!("project-no-location"))?;
         let (store, _) = DocStore::open(&dir, LockMode::Acquire).map_err(err)?;
         let tab = &mut self.tabs[i];
         tab.store = Some(store);
@@ -1172,7 +1194,11 @@ impl Workspace {
     /// Ansicht dafür bearbeitbar gemacht wurde, wird sie wieder zur schreibgeschützten Ansicht
     /// (Sperre freigegeben).
     pub fn restore_version(&mut self, i: usize, n: u32) -> Result<(), String> {
-        let read_only = self.tabs.get(i).ok_or("Kein solcher Tab.")?.read_only;
+        let read_only = self
+            .tabs
+            .get(i)
+            .ok_or_else(|| tr!("project-no-such-tab"))?
+            .read_only;
         let (target, made_editable) = if read_only {
             match self.tabs[i]
                 .path
@@ -1201,14 +1227,9 @@ impl Workspace {
     fn restore_into(&mut self, target: usize, n: u32) -> Result<(), String> {
         let tab = &mut self.tabs[target];
         if tab.is_dirty() {
-            return Err(
-                "Es gibt ungespeicherte Änderungen. Zuerst speichern oder verwerfen.".into(),
-            );
+            return Err(tr!("project-unsaved-changes"));
         }
-        let store = tab
-            .store
-            .as_mut()
-            .ok_or("Das Dokument ist nicht gespeichert.")?;
+        let store = tab.store.as_mut().ok_or_else(|| tr!("project-not-saved"))?;
         let branch = tab
             .based_on
             .and_then(|b| store.info().version(b))
@@ -1231,11 +1252,11 @@ impl Workspace {
     /// beruht er danach auf der neuen Spitze ihres Zweigs (sonst auf der des aktiven Zweigs),
     /// damit Speichern weiter möglich ist. Offene Ansichten bleiben als Kopien bestehen.
     pub fn delete_version(&mut self, i: usize, n: u32) -> Result<(), String> {
-        let tab = self.tabs.get_mut(i).ok_or("Kein solcher Tab.")?;
-        let store = tab
-            .store
-            .as_mut()
-            .ok_or("Das Dokument ist nicht gespeichert.")?;
+        let tab = self
+            .tabs
+            .get_mut(i)
+            .ok_or_else(|| tr!("project-no-such-tab"))?;
+        let store = tab.store.as_mut().ok_or_else(|| tr!("project-not-saved"))?;
         let branch = store.info().version(n).map(|v| v.branch.clone());
         store.delete_version(n).map_err(err)?;
         Self::fix_based_on(tab, branch.as_deref());
@@ -1245,11 +1266,11 @@ impl Workspace {
 
     /// Löscht den Zweig `name` über den beschreibbaren Tab `i` (siehe `delete_version`).
     pub fn delete_branch(&mut self, i: usize, name: &str) -> Result<(), String> {
-        let tab = self.tabs.get_mut(i).ok_or("Kein solcher Tab.")?;
-        let store = tab
-            .store
-            .as_mut()
-            .ok_or("Das Dokument ist nicht gespeichert.")?;
+        let tab = self
+            .tabs
+            .get_mut(i)
+            .ok_or_else(|| tr!("project-no-such-tab"))?;
+        let store = tab.store.as_mut().ok_or_else(|| tr!("project-not-saved"))?;
         store.delete_branch(name).map_err(err)?;
         Self::fix_based_on(tab, Some(name));
         self.content_revision += 1;
@@ -1274,7 +1295,7 @@ impl Workspace {
     /// gehören zur bisherigen Wurzel.
     pub fn choose_root(&mut self, root: &Path) -> Result<(), String> {
         if self.has_saved_documents() {
-            return Err(ROOT_LOCKED.into());
+            return Err(root_locked());
         }
         let lib = Library::open(root).map_err(err)?;
         self.library = Some(lib);
@@ -1317,6 +1338,7 @@ impl Workspace {
         let keys = self.pending_keys();
         let updates = self.pending_update_settings();
         let theme = self.pending_theme();
+        let language = self.pending_language();
         let mut full = None;
         let written = Config::update_at(&self.config_path, |c| {
             c.root = root;
@@ -1333,6 +1355,9 @@ impl Workspace {
             if let Some(t) = theme {
                 c.theme = t;
             }
+            if let Some(l) = language {
+                c.language = l;
+            }
         });
         match written {
             Ok(disk) => {
@@ -1344,6 +1369,7 @@ impl Workspace {
                 self.keys_pending = false;
                 self.update_settings_pending = false;
                 self.theme_pending = false;
+                self.language_pending = false;
                 true
             }
             Err(_) => {
@@ -1355,6 +1381,7 @@ impl Workspace {
                     self.keys_pending = false;
                     self.update_settings_pending = false;
                     self.theme_pending = false;
+                    self.language_pending = false;
                 } else {
                     self.favorites_pending = pending;
                 }
@@ -1380,6 +1407,7 @@ impl Workspace {
         let keys = self.pending_keys();
         let updates = self.pending_update_settings();
         let theme = self.pending_theme();
+        let language = self.pending_language();
         let written = Config::update_at(&self.config_path, |c| {
             c.panel_transparency = percent;
             if let Some(k) = keys {
@@ -1391,6 +1419,9 @@ impl Workspace {
             if let Some(t) = theme {
                 c.theme = t;
             }
+            if let Some(l) = language {
+                c.language = l;
+            }
         })
         .is_ok();
         self.panel_transparency_pending = !written;
@@ -1398,6 +1429,7 @@ impl Workspace {
             self.keys_pending = false;
             self.update_settings_pending = false;
             self.theme_pending = false;
+            self.language_pending = false;
         }
         written
     }
@@ -1421,6 +1453,7 @@ impl Workspace {
             .then(|| self.panel_transparency());
         let keys = self.pending_keys();
         let updates = self.pending_update_settings();
+        let language = self.pending_language();
         let written = Config::update_at(&self.config_path, |c| {
             c.theme = Some(name.to_string());
             if let Some(t) = transparency {
@@ -1432,6 +1465,9 @@ impl Workspace {
             if let Some(u) = updates {
                 u.apply(c);
             }
+            if let Some(l) = language {
+                c.language = l;
+            }
         })
         .is_ok();
         self.theme_pending = !written;
@@ -1439,6 +1475,58 @@ impl Workspace {
             self.panel_transparency_pending = false;
             self.keys_pending = false;
             self.update_settings_pending = false;
+            self.language_pending = false;
+        }
+        written
+    }
+
+    /// Die Sprache, wenn sie zum Schreiben vorgemerkt ist.
+    fn pending_language(&self) -> Option<Option<String>> {
+        self.language_pending.then(|| self.config.language.clone())
+    }
+
+    /// Gespeicherte Wahl der Sprache (Id wie `en`); ohne Wahl keine.
+    pub fn language_id(&self) -> Option<&str> {
+        self.config.language.as_deref()
+    }
+
+    /// Wählt die Sprache (Einstellungen → Darstellung): wirkt sofort im ganzen Programm (globale
+    /// Sprache, nächstes Bild) und wird gleich in [`Workspace::config_path`] gespeichert (Feld
+    /// `language`); `true`, wenn geschrieben wurde. Sonst gilt die Wahl für die Sitzung und kommt
+    /// beim nächsten gelungenen Schreiben mit ([`Workspace::language_pending`]); die Datei bleibt
+    /// dann unangetastet. Wie [`Workspace::set_theme`].
+    pub fn set_language(&mut self, lang: &planora_i18n::Lang) -> bool {
+        planora_i18n::set_global(lang.clone());
+        let id = lang.id().to_string();
+        self.config.language = Some(id.clone());
+        let transparency = self
+            .panel_transparency_pending
+            .then(|| self.panel_transparency());
+        let keys = self.pending_keys();
+        let updates = self.pending_update_settings();
+        let theme = self.pending_theme();
+        let written = Config::update_at(&self.config_path, |c| {
+            c.language = Some(id);
+            if let Some(t) = transparency {
+                c.panel_transparency = t;
+            }
+            if let Some(k) = keys {
+                c.keys = k;
+            }
+            if let Some(u) = updates {
+                u.apply(c);
+            }
+            if let Some(t) = theme {
+                c.theme = t;
+            }
+        })
+        .is_ok();
+        self.language_pending = !written;
+        if written {
+            self.panel_transparency_pending = false;
+            self.keys_pending = false;
+            self.update_settings_pending = false;
+            self.theme_pending = false;
         }
         written
     }
@@ -1558,6 +1646,7 @@ impl Workspace {
             .then(|| self.panel_transparency());
         let keys = self.pending_keys();
         let theme = self.pending_theme();
+        let language = self.pending_language();
         let written = Config::update_at(&self.config_path, |c| {
             if all {
                 current.apply(c);
@@ -1573,11 +1662,15 @@ impl Workspace {
             if let Some(t) = theme {
                 c.theme = t;
             }
+            if let Some(l) = language {
+                c.language = l;
+            }
         })
         .is_ok();
         self.update_settings_pending = !written;
         if written {
             self.theme_pending = false;
+            self.language_pending = false;
             self.panel_transparency_pending = false;
             self.keys_pending = false;
         }
@@ -1602,6 +1695,7 @@ impl Workspace {
             .then(|| self.panel_transparency());
         let updates = self.pending_update_settings();
         let theme = self.pending_theme();
+        let language = self.pending_language();
         let written = Config::update_at(&self.config_path, |c| {
             c.keys = keys;
             if let Some(t) = transparency {
@@ -1613,6 +1707,9 @@ impl Workspace {
             if let Some(t) = theme {
                 c.theme = t;
             }
+            if let Some(l) = language {
+                c.language = l;
+            }
         })
         .is_ok();
         self.keys_pending = !written;
@@ -1620,6 +1717,7 @@ impl Workspace {
             self.panel_transparency_pending = false;
             self.update_settings_pending = false;
             self.theme_pending = false;
+            self.language_pending = false;
             self.key_notes.clear();
         }
         written
@@ -1638,7 +1736,7 @@ impl Workspace {
             ),
             changes: Vec::new(),
             drives: None,
-            notice: self.favorites_notice,
+            notice: self.favorites_notice.clone(),
         }
     }
 
@@ -1652,7 +1750,7 @@ impl Workspace {
     /// ([`Workspace::favorites_pending`]) und werden beim nächsten gelungenen Schreiben mit
     /// angewandt, sonst gelten sie bis Programmende. Ist die Liste auf der Platte schon voll
     /// (eine andere Instanz), fehlt der neue Favorit danach und die Auswahl meldet
-    /// [`crate::places::FAVORITES_FULL`].
+    /// [`crate::places::favorites_full`].
     pub fn save_places(&mut self, places: Places) -> bool {
         // Die Meldung des letzten Speicherns hat eine Auswahl übernommen (Feld geleert).
         if places.notice.is_none() {
@@ -1672,6 +1770,7 @@ impl Workspace {
         let keys = self.pending_keys();
         let updates = self.pending_update_settings();
         let theme = self.pending_theme();
+        let language = self.pending_language();
         let written = Config::update_at(&self.config_path, |c| {
             full = apply_changes(&all, &mut c.favorites);
             if let Some(t) = transparency {
@@ -1686,6 +1785,9 @@ impl Workspace {
             if let Some(t) = theme {
                 c.theme = t;
             }
+            if let Some(l) = language {
+                c.language = l;
+            }
         });
         match written {
             Ok(disk) => {
@@ -1695,6 +1797,7 @@ impl Workspace {
                 self.keys_pending = false;
                 self.update_settings_pending = false;
                 self.theme_pending = false;
+                self.language_pending = false;
                 true
             }
             Err(_) => {
@@ -1774,7 +1877,7 @@ impl UpdateSettings {
 }
 
 /// Wendet Favoriten-Änderungen der Reihe nach an; die erste Meldung (volle Liste) oder `None`.
-fn apply_changes(changes: &[FavoriteChange], favorites: &mut Vec<PathBuf>) -> Option<&'static str> {
+fn apply_changes(changes: &[FavoriteChange], favorites: &mut Vec<PathBuf>) -> Option<String> {
     let mut first = None;
     for ch in changes {
         if let Err(e) = ch.apply(favorites) {

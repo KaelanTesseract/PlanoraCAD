@@ -23,23 +23,26 @@
 use crate::browser::error_color;
 use crate::cards::card_row;
 use crate::dialog::{Dialog, DialogSize};
-use crate::dimension_dialog::kind_label;
+use crate::dimension_dialog::{kind_label, kind_msg};
 use crate::dimension_state::count_outside;
 use crate::drawing_dialog::paper_label;
 use crate::drawing_state::{ComputeFn, WorkArea};
-use crate::drawing_view::{context_or_single, parts_on, parts_space_for, view_names};
+use crate::drawing_view::{
+    context_or_single, parts_on, parts_space_for, view_kind_msg, view_name_msgs,
+};
 use crate::file_chooser::{ChooserAction, FileChooser, default_dir};
 use crate::jobs::{Job, Poll};
 use crate::mesh_body::{report_text, warning_color};
+use crate::msg::{Msg, MsgArg};
 use crate::places::Places;
-use crate::sheet_dialog::title_field_name;
+use crate::sheet_dialog::title_field_msg;
 use crate::state::{AppState, BodyKind};
 use crate::theme;
 use planora_drawing::annotate::{Mark, ResolvedDims};
 use planora_drawing::balloon::{add_balloon_marks, balloon_marks};
 use planora_drawing::dimension::{DimError, DimSpec};
 use planora_drawing::dxf::{dxf_char_ok, dxf_text_fits};
-use planora_drawing::parts::PARTS_HEAD;
+use planora_drawing::parts::parts_head;
 use planora_drawing::pdf::{MAX_PAGES, PdfMeta, pdf_date};
 use planora_drawing::pdf_font::pdf_char_ok;
 use planora_drawing::section_marks::{add_section_marks, section_marks};
@@ -61,6 +64,7 @@ use planora_exchange::{
     Progress, SolidSource, check_mesh, collect_body, export_file,
 };
 use planora_feature::{BodyRef, resolve_drawing_dimensions_views};
+use planora_i18n::{Lang, tr, with_lang};
 use planora_kernel::Solid;
 use planora_mesh::{TessellationOptions, tessellate};
 use planora_step::{
@@ -82,24 +86,84 @@ const BYTES_PER_MB: f64 = 1e6;
 /// Darunter zeigt das Fenster „unter 0,1 MB“.
 const MIN_SHOWN_MB: f64 = 0.1;
 /// Meldung, wenn ein Arbeitsthread ohne Ergebnis endet.
-pub const LOST: &str = "Die Berechnung wurde unerwartet beendet.";
+pub fn lost() -> String {
+    lost_msg().text()
+}
+
+/// Wie [`lost`], übersetzt erst beim Zeichnen.
+fn lost_msg() -> Msg {
+    crate::msg!("export-lost")
+}
+
+/// „Abgebrochen“: die Meldung nach dem Abbrechen eines Auftrags (statt des Texts der
+/// Bibliotheken, damit sie in der Sprache des Fensters steht).
+fn cancelled_msg() -> Msg {
+    crate::msg!("export-cancelled")
+}
+
+/// Fehler des Austauschs als Meldung des Fensters: „Abgebrochen“ wird zur eigenen Meldung, jeder
+/// andere Text bleibt (er hat noch keine Id, Task 12).
+fn exchange_msg(e: &ExchangeError) -> Msg {
+    match e {
+        ExchangeError::Cancelled => cancelled_msg(),
+        e => Msg::Raw(e.to_string()),
+    }
+}
+
+/// Wie [`exchange_msg`] für Fehler des STEP-Exports.
+fn step_msg(e: &StepError) -> Msg {
+    match e {
+        StepError::Cancelled => cancelled_msg(),
+        e => Msg::Raw(e.to_string()),
+    }
+}
+
+/// Wie [`exchange_msg`] für Fehler der Zeichnungsausgabe.
+fn draw_msg(e: &DrawError) -> Msg {
+    match e {
+        DrawError::Cancelled => cancelled_msg(),
+        e => crate::drawing_state::draw_error_msg(e),
+    }
+}
+
 /// Warnung bei nicht geschlossenem Netz (Spec E6).
-pub const NOT_CLOSED_WARNING: &str = "Die Datei wird trotzdem geschrieben. Manche Programme für den 3D-Druck melden solche Netze als fehlerhaft.";
+pub fn not_closed_warning() -> String {
+    tr!("export-not-closed-warning")
+}
+
 /// Eintrag des fünften Formats (STEP-Spec §6).
-pub const STEP_LABEL: &str = "STEP – für andere CAD-Programme (exakt)";
+pub fn step_label() -> String {
+    tr!("export-format-step")
+}
+
 /// Steht bei STEP an der Stelle der Karte „Qualität“ (STEP-Spec §6).
-pub const STEP_EXACT: &str = "Rundungen und Bohrungen bleiben exakt.";
+pub fn step_exact() -> String {
+    tr!("export-step-exact")
+}
+
 /// Hinweis, wenn das Fenster beim Schreiben einer STEP-Datei nicht geschlossen werden darf.
-pub const WRITING_HINT: &str = "Das Schreiben läuft noch. Bitte warten oder erst abbrechen.";
+pub fn writing_hint() -> String {
+    tr!("export-writing-hint")
+}
+
 /// So viele Zeichen eines Körpernamens zeigt das Fenster in Meldungen und Listen höchstens.
 const MAX_SHOWN_NAME: usize = 40;
+
 /// Meldung, wenn bei STEP kein Körper übrig bleibt.
-pub const STEP_NOTHING: &str = "Es gibt keinen Körper, der sich als STEP-Datei ausgeben lässt.";
+pub fn step_nothing() -> String {
+    tr!("export-step-nothing")
+}
+
 /// Schalter in der Karte „Zeichnung“: Rahmen, Schriftfeld und Tabellen des Blatts mit ausgeben.
-pub const FRAME_SWITCH: &str = "Blattrahmen mit ausgeben";
+pub fn frame_switch() -> String {
+    tr!("export-frame-switch")
+}
+
 /// Hinweis bei den Zeichnungsformaten, wenn das Dokument keine Zeichnung hat.
-pub const NO_DRAWING: &str =
-    "Es gibt noch keine Zeichnung. Über „Zeichnung“ im Menü lässt sich eine anlegen.";
+pub fn no_drawing() -> String {
+    tr!("export-no-drawing")
+}
+
 /// So oft schaut der Arbeitsthread nach, ob die Berechnung einer Ansicht abgebrochen werden soll.
 const WATCH: Duration = Duration::from_millis(5);
 
@@ -110,9 +174,24 @@ const CHORD_NORMAL: f64 = 0.01;
 /// Sehnentoleranz „Fein“ in Millimetern (Spec E5).
 const CHORD_FINE: f64 = 0.001;
 /// Meldung, wenn sich Auswahl, Qualität oder Modell seit der Berechnung geändert haben.
-pub const STALE: &str = "Die Auswahl hat sich geändert, bitte noch einmal speichern.";
+pub fn stale() -> String {
+    stale_msg().text()
+}
+
+/// Wie [`stale`], übersetzt erst beim Zeichnen.
+fn stale_msg() -> Msg {
+    crate::msg!("export-stale")
+}
+
 /// Meldung, wenn es noch kein fertiges Netz gibt.
-pub const NOT_COMPUTED: &str = "Es ist noch nichts berechnet. Bitte warten oder neu berechnen.";
+pub fn not_computed() -> String {
+    not_computed_msg().text()
+}
+
+/// Wie [`not_computed`], übersetzt erst beim Zeichnen.
+fn not_computed_msg() -> Msg {
+    crate::msg!("export-not-computed")
+}
 
 /// Qualität des Netzes (Spec E5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -134,11 +213,11 @@ impl Quality {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Quality::Coarse => "Grob (bis 0,1 mm Abweichung)",
-            Quality::Normal => "Normal (bis 0,01 mm)",
-            Quality::Fine => "Fein (bis 0,001 mm)",
+            Quality::Coarse => tr!("export-quality-coarse"),
+            Quality::Normal => tr!("export-quality-normal"),
+            Quality::Fine => tr!("export-quality-fine"),
         }
     }
 }
@@ -179,11 +258,13 @@ impl ExportFormat {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
             ExportFormat::Mesh(f) => format_label(f),
-            ExportFormat::Step => STEP_LABEL,
-            ExportFormat::Drawing(f) => f.label(),
+            ExportFormat::Step => step_label(),
+            ExportFormat::Drawing(DrawingFormat::Svg) => tr!("export-format-svg"),
+            ExportFormat::Drawing(DrawingFormat::Dxf) => tr!("export-format-dxf"),
+            ExportFormat::Drawing(DrawingFormat::Pdf) => tr!("export-format-pdf"),
         }
     }
 
@@ -294,8 +375,8 @@ pub enum ExportStatus {
 pub struct DrawingPrepared {
     pub model: Arc<SheetModel>,
     pub views: usize,
-    /// Blatt, z. B. „A3 quer“.
-    pub sheet: String,
+    /// Blatt (z. B. A3 quer); der Text entsteht erst beim Zeichnen ([`sheet_label`]).
+    pub sheet: Sheet,
     pub visible: usize,
     pub hidden: usize,
     /// Netz-Körper, die die Zeichnung nicht enthält.
@@ -322,11 +403,11 @@ pub enum CenterlineUse {
 
 impl CenterlineUse {
     /// „ja“, „nein“ oder „teilweise“.
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            CenterlineUse::Yes => "ja",
-            CenterlineUse::No => "nein",
-            CenterlineUse::Partly => "teilweise",
+            CenterlineUse::Yes => tr!("export-centerlines-yes"),
+            CenterlineUse::No => tr!("export-centerlines-no"),
+            CenterlineUse::Partly => tr!("export-centerlines-partly"),
         }
     }
 }
@@ -382,7 +463,15 @@ pub fn resolve_dimensions_in_worker(
 pub fn dimension_label(spec: &DimSpec) -> String {
     match spec.text_override.as_deref().map(str::trim) {
         Some(t) if !t.is_empty() => shorten_for_display(&t.replace("<>", "?")),
-        _ => kind_label(spec.kind).to_string(),
+        _ => kind_label(spec.kind),
+    }
+}
+
+/// Wie [`dimension_label`], als Wert einer Meldung (die Art übersetzt erst beim Zeichnen).
+fn dimension_arg(spec: &DimSpec) -> MsgArg {
+    match spec.text_override.as_deref().map(str::trim) {
+        Some(t) if !t.is_empty() => MsgArg::Text(shorten_for_display(&t.replace("<>", "?"))),
+        _ => MsgArg::Msg(Box::new(kind_msg(spec.kind))),
     }
 }
 
@@ -392,62 +481,95 @@ pub fn dimension_label(spec: &DimSpec) -> String {
 ///
 /// Der Grund ist bei `Lost` der Satz aus der Auflösung selbst (ohne den Vorsatz „Der Bezug
 /// wurde nicht gefunden“). Am Ende steht, was hilft: Das Fenster „Maß bearbeiten“ kann den
-/// Bezug nicht neu verknüpfen, also bleibt nur Löschen und neu Setzen ([`LOST_ADVICE`]).
+/// Bezug nicht neu verknüpfen, also bleibt nur Löschen und neu Setzen ([`lost_advice`]).
 pub fn lost_dimension_text(label: &str, view: &str, error: &DimError) -> String {
+    lost_dimension_msg(label.into(), view.into(), error).text()
+}
+
+/// Wie [`lost_dimension_text`], übersetzt erst beim Zeichnen. Der Grund ist Text der
+/// Bibliothek (in der Sprache beim Entstehen des Fehlers).
+fn lost_dimension_msg(label: MsgArg, view: MsgArg, error: &DimError) -> Msg {
     let text = match error {
         DimError::Lost(inner) => inner.clone(),
         e => e.to_string(),
     };
-    let reason = text.trim_end().trim_end_matches('.');
-    let what = match error {
-        DimError::Lost(_) => "hat seinen Bezug verloren",
-        _ => "hat sich verändert und lässt sich nicht mehr messen",
-    };
-    format!("Das Maß „{label}“ in der Ansicht „{view}“ {what}: {reason}. {LOST_ADVICE}")
+    let reason = text.trim_end().trim_end_matches('.').to_string();
+    match error {
+        DimError::Lost(_) => {
+            crate::msg!(
+                "export-dim-lost",
+                label = label,
+                view = view,
+                reason = reason
+            )
+        }
+        _ => crate::msg!(
+            "export-dim-changed",
+            label = label,
+            view = view,
+            reason = reason
+        ),
+    }
 }
 
 /// Schlusssatz der Meldung bei einem Maß ohne Messwert (Festlegung P13).
-pub const LOST_ADVICE: &str = "Bitte das Maß löschen und neu setzen.";
+pub fn lost_advice() -> String {
+    tr!("export-lost-advice")
+}
 
 /// Das erste Maß (Ansichten in der Reihenfolge der Zeichnung) ohne Messwert als Meldung.
 fn first_lost(
     drawing: &Drawing,
     dims: &ResolvedDims,
-    names: &BTreeMap<ViewId, String>,
-) -> Option<String> {
+    names: &BTreeMap<ViewId, Msg>,
+) -> Option<Msg> {
     drawing.views.iter().find_map(|v| {
         dims.by_view.get(&v.id)?.iter().find_map(|(spec, r)| {
             let e = r.as_ref().err()?;
             let name = names
                 .get(&v.id)
                 .cloned()
-                .unwrap_or_else(|| v.kind.label().to_string());
-            Some(lost_dimension_text(&dimension_label(spec), &name, e))
+                .unwrap_or_else(|| view_kind_msg(v.kind));
+            Some(lost_dimension_msg(
+                dimension_arg(spec),
+                MsgArg::from(name),
+                e,
+            ))
         })
     })
 }
 
 /// Hinweis auf Maße außerhalb des Blatts (sie werden trotzdem geschrieben).
 pub fn outside_text(n: usize) -> String {
-    if n == 1 {
-        "1 Maß liegt außerhalb des Blatts und wird trotzdem geschrieben.".into()
-    } else {
-        format!("{n} Maße liegen außerhalb des Blatts und werden trotzdem geschrieben.")
-    }
+    crate::msg!("export-outside", n = n).text()
 }
 
 /// Passen alle Texte des Blatts in ein DXF-`TEXT`? Sonst die Meldung (statt eines Fehlers erst
 /// beim Schreiben).
 pub fn dxf_texts_fit(model: &SheetModel) -> Result<(), String> {
+    dxf_texts_fit_msg(model, &BTreeMap::new()).map_err(|m| m.text())
+}
+
+/// Name der Ansicht `v` in Meldungen des Fensters: aus `names` (übersetzt erst beim Zeichnen, in
+/// der Sprache des Fensters), sonst der Name auf dem Blatt (in der Sprache der Zeichnung).
+fn sheet_view_arg(v: &planora_drawing::sheet::SheetView, names: &BTreeMap<ViewId, Msg>) -> MsgArg {
+    match names.get(&v.id) {
+        Some(m) => MsgArg::from(m.clone()),
+        None => MsgArg::Text(v.name.to_string()),
+    }
+}
+
+/// Wie [`dxf_texts_fit`], übersetzt erst beim Zeichnen; die Ansicht heißt wie in `names`.
+fn dxf_texts_fit_msg(model: &SheetModel, names: &BTreeMap<ViewId, Msg>) -> Result<(), Msg> {
     for v in &model.views {
         for m in &v.marks {
             if let Mark::Text { text, .. } = m
                 && !dxf_text_fits(text)
             {
-                return Err(format!(
-                    "Ein Maßtext in der Ansicht „{}“ ist für DXF zu lang: „{}“. Bitte den eigenen Text kürzen.",
-                    v.name,
-                    shorten_for_display(text)
+                return Err(crate::msg!(
+                    "export-dxf-dim-long",
+                    view = sheet_view_arg(v, names),
+                    text = shorten_for_display(text)
                 ));
             }
         }
@@ -457,10 +579,7 @@ pub fn dxf_texts_fit(model: &SheetModel) -> Result<(), String> {
             if let Mark::Text { text, .. } = m
                 && !dxf_text_fits(text)
             {
-                return Err(
-                    "Ein Text im Blattrahmen ist für DXF zu lang. Bitte die Angaben kürzen."
-                        .to_string(),
-                );
+                return Err(crate::msg!("export-dxf-frame-long"));
             }
         }
     }
@@ -472,20 +591,36 @@ pub fn dxf_texts_fit(model: &SheetModel) -> Result<(), String> {
 /// Zeichennummer „U+1F600“, weil die Schrift ein solches Zeichen oft nur als leeres Kästchen
 /// zeigt), dann zu lange Texte.
 pub fn dxf_sheet_texts_ok(texts: &TitleTexts) -> Result<(), String> {
+    dxf_sheet_texts_msg(texts).map_err(|m| m.text())
+}
+
+/// Wie [`dxf_sheet_texts_ok`], übersetzt erst beim Zeichnen.
+fn dxf_sheet_texts_msg(texts: &TitleTexts) -> Result<(), Msg> {
     check_sheet_cells(texts, &|name, text| {
         if let Some(c) = text.chars().find(|c| !dxf_char_ok(*c)) {
-            return Err(format!(
-                "Das Zeichen U+{:04X} im Feld „{name}“ lässt sich als DXF nicht ausgeben. Bitte ändern.",
-                c as u32
+            return Err(crate::msg!(
+                "export-dxf-char",
+                code = format!("{:04X}", c as u32),
+                field = name.clone()
             ));
         }
         if !dxf_text_fits(text) {
-            return Err(format!(
-                "Der Text im Feld „{name}“ ist für DXF zu lang. Bitte kürzen."
-            ));
+            return Err(crate::msg!("export-dxf-field-long", field = name.clone()));
         }
         Ok(())
     })
+}
+
+/// Spaltenkopf der Stückliste (Spalte `index` ab 1) als Wert einer Meldung; eine unbekannte
+/// Spalte behält den Kopf der Bibliothek.
+fn parts_head_arg(index: usize, head: &str) -> MsgArg {
+    match index {
+        1 => crate::msg!("parts-col-name").into(),
+        2 => crate::msg!("parts-col-qty").into(),
+        3 => crate::msg!("parts-col-material").into(),
+        4 => crate::msg!("parts-col-note").into(),
+        _ => MsgArg::Text(head.to_string()),
+    }
 }
 
 /// Geht alle Zellen des Blattrahmens mit ihrem Feldnamen durch (Felder des Schriftfelds, Zeilen
@@ -494,44 +629,72 @@ pub fn dxf_sheet_texts_ok(texts: &TitleTexts) -> Result<(), String> {
 /// nennen.
 fn check_sheet_cells(
     texts: &TitleTexts,
-    check: &dyn Fn(&str, &str) -> Result<(), String>,
-) -> Result<(), String> {
+    check: &dyn Fn(&MsgArg, &str) -> Result<(), Msg>,
+) -> Result<(), Msg> {
     for (field, text) in &texts.fields {
-        check(title_field_name(*field), text)?;
+        check(&MsgArg::from(title_field_msg(*field)), text)?;
     }
     for row in texts.visible_revisions() {
-        let name = format!("Änderung {}", row[0]);
+        let name = MsgArg::from(crate::msg!(
+            "export-field-revision",
+            letter = row[0].to_string()
+        ));
         for cell in row {
             check(&name, cell)?;
         }
     }
     for (i, note) in texts.notes.iter().enumerate() {
-        check(&format!("Hinweis {}", i + 1), note)?;
+        check(
+            &MsgArg::from(crate::msg!("export-field-note", n = i + 1)),
+            note,
+        )?;
     }
+    let heads = parts_head();
     for row in &texts.parts {
-        for (cell, head) in row.iter().zip(PARTS_HEAD).skip(1) {
-            check(&format!("Stückliste, Pos. {}, {head}", row[0]), cell)?;
+        for (i, (cell, head)) in row.iter().zip(&heads).enumerate().skip(1) {
+            let name = MsgArg::from(crate::msg!(
+                "export-field-parts",
+                pos = row[0].to_string(),
+                head = parts_head_arg(i, head)
+            ));
+            check(&name, cell)?;
         }
     }
     Ok(())
 }
 
+/// Ein Zeichen in einer Meldung: „U+0020“ für unsichtbare, sonst das Zeichen in Anführungszeichen
+/// der Sprache (übersetzt erst beim Zeichnen).
+fn char_arg(c: char) -> MsgArg {
+    match planora_drawing::pdf::pdf_char_code(c) {
+        Some(code) => MsgArg::Text(code),
+        None => crate::msg!("drawing-quoted", name = c.to_string()).into(),
+    }
+}
+
 /// Meldung zu einem Zeichen im Feld `field`, das sich in einer PDF nicht ausgeben lässt (Spec §4).
 pub fn pdf_char_text(c: char, field: &str) -> String {
-    format!(
-        "Das Zeichen {} im Feld „{field}“ lässt sich in einer PDF nicht ausgeben.",
-        planora_drawing::pdf::pdf_char_label(c)
-    )
+    pdf_char_msg(c, field.into()).text()
+}
+
+/// Wie [`pdf_char_text`], übersetzt erst beim Zeichnen.
+fn pdf_char_msg(c: char, field: MsgArg) -> Msg {
+    crate::msg!("export-pdf-char", char = char_arg(c), field = field)
 }
 
 /// Lassen sich alle Texte des Blattrahmens in einer PDF ausgeben (P13)? Sonst die Meldung mit
 /// dem Feld, genau wie beim DXF benannt; nichts wird gekürzt oder ersetzt. Die Länge ist bei PDF
 /// kein Hindernis (die Texte werden beim Bau des Blatts eingepasst).
 pub fn pdf_sheet_texts_ok(texts: &TitleTexts) -> Result<(), String> {
+    pdf_sheet_texts_msg(texts).map_err(|m| m.text())
+}
+
+/// Wie [`pdf_sheet_texts_ok`], übersetzt erst beim Zeichnen.
+fn pdf_sheet_texts_msg(texts: &TitleTexts) -> Result<(), Msg> {
     check_sheet_cells(
         texts,
         &|name, text| match text.chars().find(|c| !pdf_char_ok(*c)) {
-            Some(c) => Err(pdf_char_text(c, name)),
+            Some(c) => Err(pdf_char_msg(c, name.clone())),
             None => Ok(()),
         },
     )
@@ -540,15 +703,20 @@ pub fn pdf_sheet_texts_ok(texts: &TitleTexts) -> Result<(), String> {
 /// Lassen sich alle Texte der Ansichten (Maßtexte, Positionsnummern) in einer PDF ausgeben (P13)?
 /// Sonst die Meldung mit dem Zeichen und der Ansicht.
 pub fn pdf_model_texts_ok(model: &SheetModel) -> Result<(), String> {
+    pdf_model_texts_msg(model, &BTreeMap::new()).map_err(|m| m.text())
+}
+
+/// Wie [`pdf_model_texts_ok`], übersetzt erst beim Zeichnen; die Ansicht heißt wie in `names`.
+fn pdf_model_texts_msg(model: &SheetModel, names: &BTreeMap<ViewId, Msg>) -> Result<(), Msg> {
     for v in &model.views {
         for m in &v.marks {
             if let Mark::Text { text, .. } = m
                 && let Some(c) = text.chars().find(|c| !pdf_char_ok(*c))
             {
-                return Err(format!(
-                    "Das Zeichen {} in einem Maßtext der Ansicht „{}“ lässt sich in einer PDF nicht ausgeben.",
-                    planora_drawing::pdf::pdf_char_label(c),
-                    v.name
+                return Err(crate::msg!(
+                    "export-pdf-char-dim",
+                    char = char_arg(c),
+                    view = sheet_view_arg(v, names)
                 ));
             }
         }
@@ -611,38 +779,77 @@ pub fn pdf_meta(
 }
 
 /// Wahl in der Karte „Zeichnung“ bei PDF: nur das gewählte Blatt.
-pub const PDF_SELECTED: &str = "Gewähltes Blatt";
+pub fn pdf_selected() -> String {
+    tr!("export-pdf-selected")
+}
+
 /// Wahl in der Karte „Zeichnung“ bei PDF: alle Blätter des Dokuments.
-pub const PDF_ALL: &str = "Alle Blätter";
+pub fn pdf_all() -> String {
+    tr!("export-pdf-all")
+}
+
 /// Hinweis an der gesperrten Zeichnungsauswahl bei „Alle Blätter“.
-pub const PDF_ALL_HINT: &str =
-    "Bei „Alle Blätter“ kommen alle Zeichnungen der Reihe nach in die PDF.";
+pub fn pdf_all_hint() -> String {
+    tr!("export-pdf-all-hint")
+}
+
+/// Erster Eintrag der Auswahl „Sprache der Zeichnung“: „Wie das Programm (Deutsch)“.
+pub fn drawing_lang_program() -> String {
+    tr!(
+        "export-drawing-lang-program",
+        name = planora_i18n::current().name()
+    )
+}
+
+/// Auswahl „Sprache der Zeichnung“ in der Karte „Zeichnung“ (nur Zeichnungsformate): erst „Wie
+/// das Programm (<Name>)“ (`None`), dann alle Sprachen mit ihrem Eigennamen.
+fn drawing_lang_choice(ui: &mut egui::Ui, choice: &mut Option<String>) {
+    let langs = planora_i18n::available();
+    let shown = choice
+        .as_deref()
+        .and_then(|id| langs.iter().find(|l| l.id() == id))
+        .map_or_else(drawing_lang_program, Lang::name);
+    ui.label(tr!("export-drawing-lang"));
+    egui::ComboBox::from_id_salt("export-drawing-lang")
+        .selected_text(shown)
+        .width(ui.available_width())
+        .show_ui(ui, |ui| {
+            ui.selectable_value(choice, None, drawing_lang_program());
+            for l in &langs {
+                ui.selectable_value(choice, Some(l.id().to_string()), l.name());
+            }
+        });
+}
 
 /// Text im Fortschrittsbalken, solange bei „Alle Blätter“ das Blatt `n` von `total` berechnet
 /// wird.
 pub fn sheet_progress_text(n: usize, total: usize) -> String {
-    format!("Blatt {n} von {total} wird berechnet …")
+    crate::msg!("export-sheet-progress", n = n, total = total).text()
 }
 
 /// Meldung `msg` zu dem Blatt `sheet` (bei „Alle Blätter“).
 pub fn in_sheet(sheet: &str, msg: &str) -> String {
-    format!("Im Blatt „{sheet}“: {msg}")
+    in_sheet_msg(sheet, Msg::Raw(msg.to_string())).text()
+}
+
+/// Wie [`in_sheet`], übersetzt erst beim Zeichnen.
+fn in_sheet_msg(sheet: &str, msg: Msg) -> Msg {
+    crate::msg!("export-in-sheet", sheet = sheet, msg = msg)
 }
 
 /// Meldung, wenn das Dokument mehr Blätter hat, als eine PDF enthalten kann.
 pub fn too_many_pages_text(n: usize) -> String {
-    format!(
-        "Eine PDF kann höchstens {MAX_PAGES} Blätter enthalten, das Dokument hat {n}. Bitte einzelne Blätter ausgeben."
-    )
+    too_many_pages_msg(n).text()
+}
+
+/// Wie [`too_many_pages_text`], übersetzt erst beim Zeichnen.
+fn too_many_pages_msg(n: usize) -> Msg {
+    crate::msg!("export-too-many-pages", max = MAX_PAGES, n = n)
 }
 
 /// „1 Blatt“ bzw. „{n} Blätter“.
 pub fn pages_label(n: usize) -> String {
-    if n == 1 {
-        "1 Blatt".to_string()
-    } else {
-        format!("{n} Blätter")
-    }
+    crate::msg!("export-pages", n = n).text()
 }
 
 /// Ein Blatt für die Berechnung aller Blätter: Kopie der Zeichnung, ihr Blattrahmen (mit der
@@ -658,12 +865,13 @@ pub struct SheetJob {
 const SHEET_STEPS: u64 = 1000;
 
 /// Prüft ein fertiges Blatt auf Zeichen, die sich in einer PDF nicht ausgeben lassen (P13):
-/// erst die Felder des Rahmens, dann die Texte der Ansichten.
-fn pdf_texts_ok(r: &DrawingPrepared) -> Result<(), String> {
+/// erst die Felder des Rahmens, dann die Texte der Ansichten (Namen der Ansichten von `drawing`
+/// in der Sprache des Fensters).
+fn pdf_texts_ok(r: &DrawingPrepared, drawing: &Drawing) -> Result<(), Msg> {
     if let Some(texts) = &r.texts {
-        pdf_sheet_texts_ok(texts)?;
+        pdf_sheet_texts_msg(texts)?;
     }
-    pdf_model_texts_ok(&r.model)
+    pdf_model_texts_msg(&r.model, &view_name_msgs(drawing))
 }
 
 /// Berechnet alle Blätter für eine PDF nacheinander in der gegebenen Reihenfolge (P12, F2; läuft
@@ -685,11 +893,14 @@ pub fn prepare_all_sheets(
     counter: &AtomicUsize,
     progress: &Progress,
 ) -> Result<Vec<DrawingPrepared>, String> {
-    prepare_all_counted(sheets, solids, compute, resolve, counter, progress).map_err(|f| f.message)
+    let lang = planora_i18n::current();
+    prepare_all_counted(sheets, solids, compute, resolve, counter, progress, &lang)
+        .map_err(|f| f.message.text())
 }
 
 /// Wie [`prepare_all_sheets`]; scheitert erst das letzte Blatt an einer späteren Prüfung, nachdem
-/// seine Linien berechnet sind, trägt der Fehler die Summe der Linien aller Blätter.
+/// seine Linien berechnet sind, trägt der Fehler die Summe der Linien aller Blätter. Die Blätter
+/// entstehen in der Sprache `lang` (siehe [`prepare_counted`]).
 fn prepare_all_counted(
     sheets: &[SheetJob],
     solids: &[(String, Solid)],
@@ -697,8 +908,9 @@ fn prepare_all_counted(
     resolve: ResolveFn,
     counter: &AtomicUsize,
     progress: &Progress,
+    lang: &Lang,
 ) -> Result<Vec<DrawingPrepared>, DrawFailed> {
-    let cancelled = ExchangeError::Cancelled.to_string();
+    let cancelled = cancelled_msg();
     progress.set_total(sheets.len().max(1) as u64 * SHEET_STEPS);
     let mut shown = 0u64;
     let mut out = Vec::with_capacity(sheets.len());
@@ -710,23 +922,29 @@ fn prepare_all_counted(
         // Eigener Fortschritt je Blatt; Abbrechen wird weitergereicht, der Anteil fließt in den
         // Fortschritt aller Blätter ein.
         let inner = Progress::new();
+        // Der Blatt-Thread rechnet und meldet in der Sprache dieses Threads (sonst fiele er auf
+        // die globale Sprache zurück).
+        let thread_lang = planora_i18n::current();
         let result = std::thread::scope(|scope| {
             let handle = scope.spawn(|| -> Result<DrawingPrepared, DrawFailed> {
-                let mut lines = None;
-                let fail = |m: String, lines| DrawFailed { message: m, lines };
-                let r = prepare_counted(
-                    &sheet.drawing,
-                    solids,
-                    compute,
-                    resolve,
-                    sheet.frame.as_ref(),
-                    &sheet.parts,
-                    &inner,
-                    &mut lines,
-                )
-                .map_err(|m| fail(m, lines))?;
-                pdf_texts_ok(&r).map_err(|m| fail(m, lines))?;
-                Ok(r)
+                with_lang(&thread_lang, || {
+                    let mut lines = None;
+                    let fail = |m: Msg, lines| DrawFailed { message: m, lines };
+                    let r = prepare_counted(
+                        &sheet.drawing,
+                        solids,
+                        compute,
+                        resolve,
+                        sheet.frame.as_ref(),
+                        &sheet.parts,
+                        &inner,
+                        &mut lines,
+                        lang,
+                    )
+                    .map_err(|m| fail(m, lines))?;
+                    pdf_texts_ok(&r, &sheet.drawing).map_err(|m| fail(m, lines))?;
+                    Ok(r)
+                })
             });
             while !handle.is_finished() {
                 if progress.is_cancelled() {
@@ -755,11 +973,11 @@ fn prepare_all_counted(
                         .fold((v, h), |(v, h), p| (v + p.visible, h + p.hidden))
                 });
                 return Err(DrawFailed {
-                    message: in_sheet(&name, &f.message),
+                    message: in_sheet_msg(&name, f.message),
                     lines,
                 });
             }
-            None => return Err(DrawFailed::plain(in_sheet(&name, LOST))),
+            None => return Err(DrawFailed::plain(in_sheet_msg(&name, lost_msg()))),
         }
         let at = (i as u64 + 1) * SHEET_STEPS;
         if at > shown {
@@ -775,7 +993,11 @@ pub fn sheet_label(sheet: Sheet) -> String {
     format!(
         "{} {}",
         paper_label(sheet.paper),
-        if sheet.landscape { "quer" } else { "hoch" }
+        if sheet.landscape {
+            tr!("drawing-landscape")
+        } else {
+            tr!("drawing-portrait")
+        }
     )
 }
 
@@ -791,21 +1013,24 @@ fn compute_watched(
     outer: &Progress,
 ) -> Option<Result<KeyedLines, DrawError>> {
     let inner = Progress::new();
+    // Gründe der Rechnung in der Sprache dieses Threads (nicht der globalen).
+    let lang = planora_i18n::current();
     std::thread::scope(|scope| {
         let handle = scope.spawn(|| {
-            let refs: Vec<DrawBody> = solids
-                .iter()
-                .map(|(name, solid)| DrawBody {
-                    name: name.clone(),
-                    solid,
-                })
-                .collect();
-            match key {
-                ViewKey::Plain(kind) => compute(&refs, kind, &inner).map(|l| (l, None)),
-                ViewKey::Section(plane) => {
-                    compute_section(&refs, &plane, compute, &inner).map(|s| (s.lines, Some(s.data)))
+            with_lang(&lang, || {
+                let refs: Vec<DrawBody> = solids
+                    .iter()
+                    .map(|(name, solid)| DrawBody {
+                        name: name.clone(),
+                        solid,
+                    })
+                    .collect();
+                match key {
+                    ViewKey::Plain(kind) => compute(&refs, kind, &inner).map(|l| (l, None)),
+                    ViewKey::Section(plane) => compute_section(&refs, &plane, compute, &inner)
+                        .map(|s| (s.lines, Some(s.data))),
                 }
-            }
+            })
         });
         while !handle.is_finished() {
             if outer.is_cancelled() {
@@ -881,7 +1106,7 @@ pub fn prepare_drawing_framed(
 ) -> Result<DrawingPrepared, String> {
     debug_assert!(
         drawing.balloons.is_empty(),
-        "Zeichnungen mit Positionsnummern gehören zu prepare_drawing_parts (mit den Nummern)"
+        "drawings with balloons belong to prepare_drawing_parts (with the numbers)"
     );
     prepare_drawing_parts(
         drawing,
@@ -930,22 +1155,30 @@ pub fn parts_input(state: &AppState, drawing: &Drawing) -> PartsInput {
 /// Meldung, wenn ein Nummernkreis seinen Körper verloren hat (Festlegung G13): es wird nichts
 /// geschrieben.
 pub fn lost_balloon_text(view: &str) -> String {
-    format!(
-        "Die Positionsnummer in der Ansicht „{view}“ gehört zu einem Teil, das es nicht mehr gibt. Bitte die Positionsnummer löschen und neu setzen."
-    )
+    lost_balloon_msg(view.into()).text()
+}
+
+/// Wie [`lost_balloon_text`], übersetzt erst beim Zeichnen.
+fn lost_balloon_msg(view: MsgArg) -> Msg {
+    crate::msg!("export-balloon-lost", view = view)
 }
 
 /// Der erste Nummernkreis (in der Reihenfolge der Zeichnung) ohne Nummer als Meldung.
 fn first_lost_balloon(
     drawing: &Drawing,
     numbers: &BTreeMap<BalloonId, Option<u32>>,
-    names: &BTreeMap<ViewId, String>,
-) -> Option<String> {
+    names: &BTreeMap<ViewId, Msg>,
+) -> Option<Msg> {
     drawing
         .balloons
         .iter()
         .find(|b| numbers.get(&b.id).copied().flatten().is_none())
-        .map(|b| lost_balloon_text(&names.get(&b.view).cloned().unwrap_or_default()))
+        .map(|b| {
+            lost_balloon_msg(match names.get(&b.view) {
+                Some(name) => MsgArg::from(name.clone()),
+                None => MsgArg::Text(String::new()),
+            })
+        })
 }
 
 /// Wie [`prepare_drawing_framed`] mit der Stückliste `parts`. Die Nummernkreise stehen immer im
@@ -963,13 +1196,21 @@ pub fn prepare_drawing_parts(
     progress: &Progress,
 ) -> Result<DrawingPrepared, String> {
     let mut lines = None;
+    let lang = planora_i18n::current();
     prepare_counted(
-        drawing, solids, compute, resolve, frame, parts, progress, &mut lines,
+        drawing, solids, compute, resolve, frame, parts, progress, &mut lines, &lang,
     )
+    .map_err(|m| m.text())
 }
 
 /// Wie [`prepare_drawing_parts`]; sobald alle Ansichten mit ihren Linien auf dem Blatt stehen,
 /// steht deren Zahl in `lines_out`, auch wenn eine spätere Prüfung die Ausgabe noch sperrt.
+///
+/// Sprache der Zeichnung (Sprachplan, Task 17): Alles, was auf das Blatt kommt (Namen und
+/// Titel der Ansichten, Maßtexte mit ihrem Dezimaltrenner, Schnitttitel, Schriftfeld,
+/// Stückliste), entsteht unter `lang`. Rechnung und Meldungen laufen in der Sprache des
+/// aufrufenden Threads (beim Export die des Fensters), damit auch Gründe der Bibliotheken
+/// (Ansicht, Maßbezug, Schraffur) in der Sprache des Fensters stehen.
 #[allow(clippy::too_many_arguments)]
 fn prepare_counted(
     drawing: &Drawing,
@@ -980,8 +1221,9 @@ fn prepare_counted(
     parts: &PartsInput,
     progress: &Progress,
     lines_out: &mut Option<LineCounts>,
-) -> Result<DrawingPrepared, String> {
-    let cancelled = || ExchangeError::Cancelled.to_string();
+    lang: &Lang,
+) -> Result<DrawingPrepared, Msg> {
+    let cancelled = cancelled_msg;
     // Erst die Normarten wie bisher, dann je Schnittansicht ihre Ebene.
     let mut keys: Vec<ViewKey> = Vec::new();
     for v in drawing.views.iter().filter(|v| v.section.is_none()) {
@@ -999,7 +1241,7 @@ fn prepare_counted(
     let with_dims = !drawing.dimensions.is_empty();
     let kinds_empty = keys.is_empty();
     progress.set_total((keys.len() as u64 + u64::from(with_dims)).max(1));
-    let names = view_names(drawing);
+    let names = view_name_msgs(drawing);
     if let Some(m) = first_lost_balloon(drawing, &parts.balloons, &names) {
         return Err(m);
     }
@@ -1007,7 +1249,7 @@ fn prepare_counted(
     for key in keys {
         progress.check().map_err(|_| cancelled())?;
         match compute_watched(solids, key, compute, progress) {
-            None => return Err(LOST.to_string()),
+            None => return Err(lost_msg()),
             Some(Ok(l)) => lines.push((key, l)),
             Some(Err(DrawError::Cancelled)) => return Err(cancelled()),
             Some(Err(e)) => {
@@ -1018,11 +1260,13 @@ fn prepare_counted(
                     .and_then(|v| names.get(&v.id))
                     .cloned()
                     .unwrap_or_else(|| match key {
-                        ViewKey::Plain(kind) => kind.label().to_string(),
-                        ViewKey::Section(plane) => plane.kind.label().to_string(),
+                        ViewKey::Plain(kind) => view_kind_msg(kind),
+                        ViewKey::Section(plane) => view_kind_msg(plane.kind),
                     });
-                return Err(format!(
-                    "Die Ansicht „{name}“ lässt sich nicht berechnen: {e}"
+                return Err(crate::msg!(
+                    "export-view-failed",
+                    name = name,
+                    reason = crate::drawing_state::draw_error_msg(&e)
                 ));
             }
         }
@@ -1054,7 +1298,9 @@ fn prepare_counted(
         // Scheitern die Maße, sind die Linien doch berechnet: ihre Zahl aus dem Blatt ohne Maße
         // (Maße ändern keine Linie).
         let mut no_dims = || {
-            let plain = build_sheet_with(drawing, &map, &ResolvedDims::default());
+            let plain = with_lang(lang, || {
+                build_sheet_with(drawing, &map, &ResolvedDims::default())
+            });
             *lines_out = sheet_line_counts(drawing, &plain);
         };
         let dims = match resolve(drawing, &refs, &cut, progress) {
@@ -1062,7 +1308,7 @@ fn prepare_counted(
             Err(DrawError::Cancelled) => return Err(cancelled()),
             Err(e) => {
                 no_dims();
-                return Err(e.to_string());
+                return Err(draw_msg(&e));
             }
         };
         if let Some(m) = first_lost(drawing, &dims, &names) {
@@ -1074,27 +1320,36 @@ fn prepare_counted(
     } else {
         ResolvedDims::default()
     };
-    let mut model = build_sheet_with(drawing, &map, &dims);
-    add_balloon_marks(&mut model, &balloon_marks(drawing, &map, &parts.balloons));
+    let mut model = with_lang(lang, || {
+        let mut model = build_sheet_with(drawing, &map, &dims);
+        add_balloon_marks(&mut model, &balloon_marks(drawing, &map, &parts.balloons));
+        model
+    });
     // Die Linien stehen fest (Schnittmarken und Rahmen ändern sie nicht).
     *lines_out = sheet_line_counts(drawing, &model);
     // Schraffur, Schnittlinie und Titel; ein Fehler (zu feine Schraffur) sperrt die Ausgabe.
-    let (marks, section_errors) = section_marks(drawing, &map, &section_data);
-    if let Some(m) = section_errors.into_iter().next() {
-        return Err(m);
+    let (marks, section_errors) = with_lang(lang, || section_marks(drawing, &map, &section_data));
+    if !section_errors.is_empty() {
+        // Die Meldung in der Sprache des Threads (die Titel oben in der Sprache der Zeichnung).
+        let (_, errors) = section_marks(drawing, &map, &section_data);
+        let first = errors
+            .into_iter()
+            .next()
+            .or(section_errors.into_iter().next());
+        return Err(Msg::Raw(first.unwrap_or_default()));
     }
     add_section_marks(&mut model, &marks);
     // `build_sheet` lässt Ansichten weg, die sich nicht anordnen lassen; das Dokument prüft Lage,
     // Maßstab und Eltern, also kommt das nur bei einer beschädigten Zeichnung vor. Nie still
     // weniger Ansichten schreiben.
     if model.views.len() < drawing.views.len() {
-        return Err(VIEWS_NOT_PLACEABLE.to_string());
+        return Err(crate::msg!("export-views-not-placeable"));
     }
     if kinds_empty && !with_dims {
         progress.advance(1);
     }
     let space = parts_space_for(drawing, parts.cells.len(), false);
-    let texts = match frame {
+    let texts = with_lang(lang, || match frame {
         Some(f) => {
             let mut texts = resolve_texts(drawing, f.project.as_ref(), &f.ctx, main_scale(drawing));
             texts.parts = parts.cells.clone();
@@ -1131,14 +1386,14 @@ fn prepare_counted(
             })
         }
         None => None,
-    };
+    });
     let outside = count_outside(
-        &dimension_marks(drawing, &map, &dims),
+        &with_lang(lang, || dimension_marks(drawing, &map, &dims)),
         drawing.sheet.size_mm(),
     );
     Ok(DrawingPrepared {
         views: model.views.len(),
-        sheet: sheet_label(drawing.sheet),
+        sheet: drawing.sheet,
         visible: line_count(&model, Visibility::Visible),
         hidden: line_count(&model, Visibility::Hidden),
         skipped_meshes: Vec::new(),
@@ -1172,53 +1427,55 @@ fn sheet_line_counts(drawing: &Drawing, model: &SheetModel) -> Option<LineCounts
 }
 
 /// Meldung, wenn sich nicht alle Ansichten auf dem Blatt anordnen lassen.
-pub const VIEWS_NOT_PLACEABLE: &str =
-    "Die Zeichnung enthält Ansichten, die sich nicht auf dem Blatt anordnen lassen.";
+pub fn views_not_placeable() -> String {
+    tr!("export-views-not-placeable")
+}
 
 /// Zeile „Linien“, solange die Ansichten berechnet werden.
-pub const LINES_COMPUTING: &str = "Linien: werden berechnet …";
+pub fn lines_computing() -> String {
+    tr!("export-lines-computing")
+}
+
 /// Zeile „Linien“, wenn es keine berechneten Linien gibt (etwa eine Ansicht scheiterte).
-pub const LINES_NOT_COMPUTED: &str = "Linien: nicht berechnet";
+pub fn lines_not_computed() -> String {
+    tr!("export-lines-not-computed")
+}
 
 /// Zeile „Linien“ mit der Zahl der sichtbaren und verdeckten Linien.
 pub fn lines_counts_text(visible: usize, hidden: usize) -> String {
-    format!(
-        "Linien: {} sichtbar, {} verdeckt",
-        group_digits(visible as u64),
-        group_digits(hidden as u64)
+    tr!(
+        "export-lines-counts",
+        visible = group_digits(visible as u64),
+        hidden = group_digits(hidden as u64)
     )
 }
 
 /// Text im Fortschrittsbalken, solange das Ergebnis des Formats `format` berechnet wird;
 /// `is_list` für ein Stücklistenblatt.
-pub fn computing_text(format: ExportFormat, is_list: bool) -> &'static str {
+pub fn computing_text(format: ExportFormat, is_list: bool) -> String {
     if format.is_drawing() && is_list {
-        "Die Stückliste wird berechnet …"
+        tr!("export-computing-list")
     } else if format.is_drawing() {
-        "Die Ansichten werden berechnet …"
+        tr!("export-computing-views")
     } else if format.is_step() {
-        "Die Körper werden geprüft …"
+        tr!("export-computing-step")
     } else {
-        "Das Netz wird berechnet …"
+        tr!("export-computing-mesh")
     }
+}
+
+/// Namen in Anführungszeichen der Sprache, durch Komma getrennt.
+fn quoted_list(names: &[String]) -> String {
+    names
+        .iter()
+        .map(|n| tr!("drawing-quoted", name = n.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Hinweis auf Netz-Körper, die eine Zeichnung nicht enthält.
 pub fn drawing_skipped_text(names: &[String]) -> String {
-    let list: Vec<String> = names.iter().map(|n| format!("„{n}“")).collect();
-    format!(
-        "Netz-Körper sind in der Zeichnung nicht enthalten: {}.",
-        list.join(", ")
-    )
-}
-
-/// Meldung zu einem Fehler beim Schreiben einer Zeichnung (Abbrechen wie bei den anderen
-/// Formaten).
-fn draw_write_text(e: DrawError) -> String {
-    match e {
-        DrawError::Cancelled => ExchangeError::Cancelled.to_string(),
-        e => e.to_string(),
-    }
+    tr!("export-drawing-skipped", names = quoted_list(names))
 }
 
 /// Vorgabe der Zeichnung: die geöffnete, sonst die erste.
@@ -1260,17 +1517,31 @@ pub fn prepare(
     quality: Quality,
     progress: &Progress,
 ) -> Result<Prepared, String> {
+    prepare_msg(items, quality, progress).map_err(|m| m.text())
+}
+
+/// Wie [`prepare`]; die Meldung übersetzt erst beim Zeichnen.
+fn prepare_msg(
+    items: &[ExportItem],
+    quality: Quality,
+    progress: &Progress,
+) -> Result<Prepared, Msg> {
     progress.set_total(items.len() as u64);
     let mut bodies = Vec::with_capacity(items.len());
     for item in items {
-        progress.check().map_err(|e| e.to_string())?;
+        progress.check().map_err(|e| exchange_msg(&e))?;
         let body = match &item.source {
             ExportSource::Solid(s) => {
                 let options = TessellationOptions {
                     chord_tolerance: quality.chord_tolerance(),
                 };
-                let mesh = tessellate(s, &options)
-                    .map_err(|e| format!("„{}“ lässt sich nicht vernetzen: {e}", item.name))?;
+                let mesh = tessellate(s, &options).map_err(|e| {
+                    crate::msg!(
+                        "export-mesh-failed",
+                        name = item.name.clone(),
+                        reason = e.to_string()
+                    )
+                })?;
                 collect_body(&SolidSource {
                     name: &item.name,
                     mesh: &mesh,
@@ -1282,7 +1553,13 @@ pub fn prepare(
                 transform: *t,
             }),
         }
-        .map_err(|e| format!("„{}“: {e}", item.name))?;
+        .map_err(|e| {
+            crate::msg!(
+                "export-body-error",
+                name = item.name.clone(),
+                reason = e.to_string()
+            )
+        })?;
         bodies.push(body);
         progress.advance(1);
     }
@@ -1297,6 +1574,11 @@ pub fn prepare(
 /// genannt, jeder exakte Körper durchläuft `check_body`; abgelehnte stehen mit Grund in der
 /// Liste. Bricht zwischen den Körpern und in großen Körpern ab, wenn gewünscht.
 pub fn prepare_step(items: &[ExportItem], progress: &Progress) -> Result<StepPrepared, String> {
+    prepare_step_msg(items, progress).map_err(|m| m.text())
+}
+
+/// Wie [`prepare_step`]; die Meldung übersetzt erst beim Zeichnen.
+fn prepare_step_msg(items: &[ExportItem], progress: &Progress) -> Result<StepPrepared, Msg> {
     progress.set_total(items.len() as u64);
     let mut out = StepPrepared {
         bodies: Vec::new(),
@@ -1306,7 +1588,7 @@ pub fn prepare_step(items: &[ExportItem], progress: &Progress) -> Result<StepPre
         shortened: Vec::new(),
     };
     for (index, item) in items.iter().enumerate() {
-        progress.check().map_err(|e| e.to_string())?;
+        progress.check().map_err(|e| exchange_msg(&e))?;
         // Leere Namen werden „Körper n“, damit Meldungen nie „„“ lauten; lange Namen erscheinen
         // in Meldungen und Listen gekürzt.
         let name = display_name(&item.name, index);
@@ -1327,7 +1609,7 @@ pub fn prepare_step(items: &[ExportItem], progress: &Progress) -> Result<StepPre
                         out.bodies.push((name, s.clone()));
                     }
                     Err(e @ StepError::InvalidBody { .. }) => out.rejected.push(e.to_string()),
-                    Err(e) => return Err(e.to_string()),
+                    Err(e) => return Err(step_msg(&e)),
                 }
             }
         }
@@ -1348,10 +1630,10 @@ pub fn shorten_for_display(name: &str) -> String {
 
 /// Hinweis auf Namen, die in der Datei gekürzt wurden.
 pub fn shortened_text(names: &[String]) -> String {
-    let list: Vec<String> = names.iter().map(|n| format!("„{n}“")).collect();
-    format!(
-        "Name gekürzt (höchstens {MAX_NAME_CHARS} Zeichen in der Datei): {}",
-        list.join(", ")
+    tr!(
+        "export-shortened",
+        max = MAX_NAME_CHARS,
+        names = quoted_list(names)
     )
 }
 
@@ -1384,9 +1666,9 @@ pub fn normalize_target(format: ExportFormat, path: PathBuf) -> PathBuf {
 /// die sich nicht berechnen lässt, der Grund, sonst Warten.
 pub fn disabled_hint(status: &ExportStatus) -> String {
     match status {
-        ExportStatus::StepReady { bodies: 0, .. } => STEP_NOTHING.to_string(),
+        ExportStatus::StepReady { bodies: 0, .. } => step_nothing(),
         ExportStatus::Unavailable(m) => m.clone(),
-        _ => "Erst möglich, wenn die Berechnung fertig ist.".to_string(),
+        _ => tr!("export-wait-hint"),
     }
 }
 
@@ -1410,54 +1692,56 @@ pub fn write_step_bodies(
 }
 
 /// Kurzbeschreibung eines Netzformats für die Auswahl.
-pub fn format_label(f: Format) -> &'static str {
+pub fn format_label(f: Format) -> String {
     match f {
-        Format::Stl => "STL – für den 3D-Druck",
-        Format::Obj => "OBJ – für viele 3D-Programme",
-        Format::ThreeMf => "3MF – für den 3D-Druck, mit Namen",
-        Format::Glb => "glTF (.glb) – zum Ansehen und Zeigen",
+        Format::Stl => tr!("export-format-stl"),
+        Format::Obj => tr!("export-format-obj"),
+        Format::ThreeMf => tr!("export-format-3mf"),
+        Format::Glb => tr!("export-format-glb"),
     }
 }
 
 /// Hinweis auf ausgelassene Netz-Körper (STEP-Spec E3).
 pub fn skipped_text(names: &[String]) -> String {
-    let list: Vec<String> = names.iter().map(|n| format!("„{n}“")).collect();
-    format!(
-        "Netz-Körper werden als STEP nicht ausgegeben: {}. Für sie bitte STL, OBJ, 3MF oder glTF wählen.",
-        list.join(", ")
-    )
+    tr!("export-skipped", names = quoted_list(names))
 }
 
-/// Zahl mit Leerzeichen als Tausendertrenner („12 345“).
+/// Zahl mit Tausendertrenner der Sprache: Leerzeichen („12 345“), bei Sprachen mit Dezimalpunkt
+/// ein Komma („12,345“).
 pub fn group_digits(n: u64) -> String {
+    let sep = if planora_i18n::current().decimal() == '.' {
+        ','
+    } else {
+        ' '
+    };
     let s = n.to_string();
     let mut out = String::with_capacity(s.len() + s.len() / 3);
     for (i, c) in s.chars().enumerate() {
         if i > 0 && (s.len() - i).is_multiple_of(3) {
-            out.push(' ');
+            out.push(sep);
         }
         out.push(c);
     }
     out
 }
 
-/// Größe in Megabyte mit Komma; unter 0,1 MB „unter 0,1 MB“.
+/// Größe in Megabyte mit dem Dezimaltrenner der Sprache; unter 0,1 MB „unter 0,1 MB“.
 pub fn mb_text(bytes: u64) -> String {
     let mb = bytes as f64 / BYTES_PER_MB;
     if mb < MIN_SHOWN_MB {
-        "unter 0,1 MB".into()
+        tr!("export-size-under")
     } else {
-        format!("{mb:.1} MB").replace('.', ",")
+        planora_i18n::localize_decimal(&format!("{mb:.1} MB"))
     }
 }
 
 /// Geschätzte Größe: „ca. 1,2 MB“ (sehr kleine Dateien „unter 0,1 MB“).
 pub fn estimate_text(bytes: u64) -> String {
     let t = mb_text(bytes);
-    if t.starts_with("unter") {
+    if bytes as f64 / BYTES_PER_MB < MIN_SHOWN_MB {
         t
     } else {
-        format!("ca. {t}")
+        tr!("export-size-estimate", size = t)
     }
 }
 
@@ -1471,10 +1755,10 @@ pub(crate) fn file_name(path: &Path) -> String {
 /// Stand, zu dem ein Ergebnis gehört: Qualität (`None` bei STEP), Umfang, Änderungszahl des
 /// Dokuments, gewählter Körper.
 type Key = (Option<Quality>, Scope, u64, Option<BodyRef>);
-type PrepJob = Job<Result<Prepared, String>>;
-type PrepResult = Result<Arc<Prepared>, String>;
-type StepJob = Job<Result<StepPrepared, String>>;
-type StepResult = Result<Arc<StepPrepared>, String>;
+type PrepJob = Job<Result<Prepared, Msg>>;
+type PrepResult = Result<Arc<Prepared>, Msg>;
+type StepJob = Job<Result<StepPrepared, Msg>>;
+type StepResult = Result<Arc<StepPrepared>, Msg>;
 type WriteJob = Job<Result<u64, ExchangeError>>;
 type StepWriteJob = Job<Result<u64, StepError>>;
 /// Was ein Zeichnungsergebnis enthält: eine Zeichnung oder (nur PDF) alle Blätter.
@@ -1487,7 +1771,8 @@ enum DrawTarget {
 /// Stand, zu dem ein Zeichnungsergebnis gehört: Zeichnung bzw. alle Blätter, Änderungszahl des
 /// Dokuments (alle Änderungen, auch an jeder Zeichnung, an Projekt- und Blattangaben), Format,
 /// Schalter „Blattrahmen“ und Prüfsumme des Dokumentnamens (er steckt in der Zeichnungsnummer
-/// und im Titel der PDF aller Blätter).
+/// und im Titel der PDF aller Blätter) sowie Prüfsumme der Id der Sprache der Zeichnung (ein
+/// Wechsel rechnet neu).
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct DrawKey {
     target: DrawTarget,
@@ -1495,6 +1780,7 @@ struct DrawKey {
     format: DrawingFormat,
     frame: bool,
     doc_name: u64,
+    lang: u64,
 }
 
 /// Ergebnis: die Blätter in Dokumentreihenfolge (beim gewählten Blatt genau eines).
@@ -1509,15 +1795,15 @@ type LineCounts = (usize, usize);
 /// PDF nicht ausgeben kann, oder eine zu feine Schraffur), deren Zahl für die Angaben.
 #[derive(Debug)]
 struct DrawFailed {
-    message: String,
+    message: Msg,
     lines: Option<LineCounts>,
 }
 
 impl DrawFailed {
     /// Fehler ohne berechnete Linien.
-    fn plain(message: impl Into<String>) -> Self {
+    fn plain(message: Msg) -> Self {
         DrawFailed {
-            message: message.into(),
+            message,
             lines: None,
         }
     }
@@ -1525,7 +1811,7 @@ impl DrawFailed {
 /// Laufende Berechnung: Stand, Auftrag und bei „Alle Blätter“ Zähler des Blatts und Zahl der
 /// Blätter.
 type DrawRun = (DrawKey, DrawJob, Option<(Arc<AtomicUsize>, usize)>);
-type DrawWriteJob = Job<Result<u64, String>>;
+type DrawWriteJob = Job<Result<u64, Msg>>;
 /// Das Schreiben einer Zeichnung (austauschbar nur für Tests).
 pub type WriteFn = fn(&Path, &SheetModel, DrawingFormat, &Progress) -> Result<u64, DrawError>;
 /// Das Schreiben einer PDF-Datei aus Blättern mit Dokumenteigenschaften (austauschbar nur für
@@ -1553,6 +1839,9 @@ pub struct ExportDialog {
     pub with_frame: bool,
     /// PDF: das gewählte Blatt oder alle Blätter; Vorgabe das gewählte.
     pub pdf_pages: PdfPages,
+    /// Zeichnungsformate: Id der Sprache der Zeichnung; `None` heißt „Wie das Programm“
+    /// (Vorgabe). Gilt, solange das Fenster offen ist; wird nicht gespeichert.
+    pub export_lang: Option<String>,
     prepared: Option<(Key, PrepResult)>,
     job: Option<(Key, PrepJob)>,
     step_prepared: Option<(Key, StepResult)>,
@@ -1571,9 +1860,10 @@ pub struct ExportDialog {
     resolve: ResolveFn,
     writer: WriteFn,
     pdf_writer: PdfWriteFn,
-    step_prepare: StepPrepareFn,
+    /// Ersatz der Prüfung vor dem STEP-Export (nur für Tests); sonst [`prepare_step_msg`].
+    step_prepare: Option<StepPrepareFn>,
     step_writer: StepWriteFn,
-    written: Option<Result<(PathBuf, u64), String>>,
+    written: Option<Result<(PathBuf, u64), Msg>>,
     /// Format, mit dem zuletzt geschrieben wurde; die Meldung gehört nur zu diesem Format.
     write_format: ExportFormat,
     written_format: Option<ExportFormat>,
@@ -1600,6 +1890,7 @@ impl ExportDialog {
             drawing: default_drawing(state),
             with_frame: true,
             pdf_pages: PdfPages::default(),
+            export_lang: None,
             prepared: None,
             job: None,
             step_prepared: None,
@@ -1615,7 +1906,7 @@ impl ExportDialog {
             resolve: resolve_dimensions_in_worker,
             writer: export_drawing_file,
             pdf_writer: export_pdf_file,
-            step_prepare: prepare_step,
+            step_prepare: None,
             step_writer: write_step_bodies,
             written: None,
             write_format: ExportFormat::Mesh(Format::Stl),
@@ -1698,7 +1989,7 @@ impl ExportDialog {
     /// läuft).
     #[doc(hidden)]
     pub fn set_step_prepare(&mut self, f: StepPrepareFn) {
-        self.step_prepare = f;
+        self.step_prepare = Some(f);
     }
 
     /// Ersetzt das Schreiben einer STEP-Datei (nur für Tests: Schreiben, das bis zum Abbrechen
@@ -1720,6 +2011,15 @@ impl ExportDialog {
         self.format == ExportFormat::Drawing(DrawingFormat::Pdf) && self.pdf_pages == PdfPages::All
     }
 
+    /// Sprache, in der die Zeichnung entsteht und geschrieben wird: die gewählte, sonst (Vorgabe
+    /// oder nicht mehr vorhanden) die des Programms.
+    pub fn drawing_lang(&self) -> Lang {
+        self.export_lang
+            .as_deref()
+            .and_then(planora_i18n::find)
+            .unwrap_or_else(planora_i18n::current)
+    }
+
     /// Schlüssel des Zeichnungsergebnisses; `None` bei anderen Formaten oder ohne Zeichnung. Bei
     /// „Alle Blätter“ zählt die gewählte Zeichnung nicht (eine andere Wahl rechnet nicht neu).
     fn drawing_key(&self, state: &AppState) -> Option<DrawKey> {
@@ -1727,6 +2027,8 @@ impl ExportDialog {
         let d = self.current_drawing(state)?;
         let mut hasher = std::hash::DefaultHasher::new();
         std::hash::Hash::hash(&state.document_name, &mut hasher);
+        let mut lang = std::hash::DefaultHasher::new();
+        std::hash::Hash::hash(self.drawing_lang().id(), &mut lang);
         Some(DrawKey {
             target: if self.all_sheets() {
                 DrawTarget::All
@@ -1737,34 +2039,31 @@ impl ExportDialog {
             format,
             frame: self.with_frame,
             doc_name: std::hash::Hasher::finish(&hasher),
+            lang: std::hash::Hasher::finish(&lang),
         })
     }
 
     /// Warum sich keine Zeichnung berechnen lässt: keine Zeichnung, keine exakten Körper (wie
     /// im Zeichnungsbereich) oder keine Ansicht. Bei „Alle Blätter“ auch zu viele Blätter
     /// ([`too_many_pages_text`]) und die erste Ansichtenzeichnung ohne Ansicht.
-    fn drawing_block(&self, state: &AppState) -> Option<String> {
+    fn drawing_block(&self, state: &AppState) -> Option<Msg> {
         let Some(d) = self.current_drawing(state) else {
-            return Some(NO_DRAWING.to_string());
+            return Some(crate::msg!("export-no-drawing"));
         };
         if state.bodies.is_empty() {
-            return Some(DrawError::NoBodies.to_string());
+            return Some(Msg::Raw(DrawError::NoBodies.to_string()));
         }
         if state.bodies.iter().all(|b| b.kind == BodyKind::Mesh) {
-            return Some(DrawError::MeshBodiesOnly.to_string());
+            return Some(Msg::Raw(DrawError::MeshBodiesOnly.to_string()));
         }
         let no_view = |d: &Drawing| {
-            (d.views.is_empty() && matches!(d.kind, DrawingKind::Views)).then(|| {
-                format!(
-                    "Die Zeichnung „{}“ hat noch keine Ansicht.",
-                    shorten_for_display(&d.name)
-                )
-            })
+            (d.views.is_empty() && matches!(d.kind, DrawingKind::Views))
+                .then(|| crate::msg!("export-no-view", name = shorten_for_display(&d.name)))
         };
         if self.all_sheets() {
             let all = state.document.drawings();
             if all.len() > MAX_PAGES {
-                return Some(too_many_pages_text(all.len()));
+                return Some(too_many_pages_msg(all.len()));
             }
             return all.iter().find_map(no_view);
         }
@@ -1794,6 +2093,8 @@ impl ExportDialog {
             ..parts_input(state, &drawing)
         };
         let is_list = matches!(drawing.kind, DrawingKind::PartsList { .. });
+        let lang = self.drawing_lang();
+        // Der Auftrag läuft in der Sprache des Fensters (Meldungen); das Blatt entsteht in `lang`.
         let job = Job::spawn(move |p| {
             let mut lines = None;
             let mut r = prepare_counted(
@@ -1805,19 +2106,19 @@ impl ExportDialog {
                 &parts,
                 p,
                 &mut lines,
+                &lang,
             )
             .map_err(|message| DrawFailed { message, lines })?;
             // Die Prüfungen der Texte sperren die Ausgabe, die Linien sind aber berechnet.
-            let checked =
-                |c: Result<(), String>| c.map_err(|message| DrawFailed { message, lines });
+            let checked = |c: Result<(), Msg>| c.map_err(|message| DrawFailed { message, lines });
             if format == DrawingFormat::Dxf {
                 if let Some(texts) = &r.texts {
-                    checked(dxf_sheet_texts_ok(texts))?;
+                    checked(dxf_sheet_texts_msg(texts))?;
                 }
-                checked(dxf_texts_fit(&r.model))?;
+                checked(dxf_texts_fit_msg(&r.model, &view_name_msgs(&drawing)))?;
             }
             if format == DrawingFormat::Pdf {
-                checked(pdf_texts_ok(&r))?;
+                checked(pdf_texts_ok(&r, &drawing))?;
             }
             // Ein Stücklistenblatt hat keine Ansichten, die Netz-Körper auslassen.
             if !is_list {
@@ -1852,8 +2153,9 @@ impl ExportDialog {
         let counter = Arc::new(AtomicUsize::new(0));
         let shared = Arc::clone(&counter);
         let (compute, resolve) = (self.compute, self.resolve);
+        let lang = self.drawing_lang();
         let job = Job::spawn(move |p| {
-            let mut r = prepare_all_counted(&sheets, &solids, compute, resolve, &shared, p)?;
+            let mut r = prepare_all_counted(&sheets, &solids, compute, resolve, &shared, p, &lang)?;
             if let Some(first) = sheets
                 .iter()
                 .zip(r.iter_mut())
@@ -1895,7 +2197,7 @@ impl ExportDialog {
             Some((k, job, _)) => match job.fetch(block) {
                 Poll::Pending => None,
                 Poll::Ready(r) => Some((*k, r.map(Arc::new))),
-                Poll::Lost => Some((*k, Err(DrawFailed::plain(LOST)))),
+                Poll::Lost => Some((*k, Err(DrawFailed::plain(lost_msg())))),
             },
             None => None,
         };
@@ -1919,7 +2221,7 @@ impl ExportDialog {
 
     fn drawing_status(&self, state: &AppState) -> ExportStatus {
         if let Some(m) = self.drawing_block(state) {
-            return ExportStatus::Unavailable(m);
+            return ExportStatus::Unavailable(m.text());
         }
         let key = self.drawing_key(state);
         if let Some((k, job, _)) = &self.drawing_job
@@ -1936,7 +2238,9 @@ impl ExportDialog {
                     sheet: if all {
                         pages_label(list.len())
                     } else {
-                        list.first().map(|p| p.sheet.clone()).unwrap_or_default()
+                        list.first()
+                            .map(|p| sheet_label(p.sheet))
+                            .unwrap_or_default()
                     },
                     visible: sum(|p| p.visible),
                     hidden: sum(|p| p.hidden),
@@ -1953,21 +2257,21 @@ impl ExportDialog {
                     },
                 }
             }
-            Some((k, Err(f))) if Some(*k) == key => ExportStatus::Failed(f.message.clone()),
+            Some((k, Err(f))) if Some(*k) == key => ExportStatus::Failed(f.message.text()),
             _ => ExportStatus::Computing(0.0),
         }
     }
 
     /// Zeile „Linien“ in den Angaben zur Zeichnung (für alle Zeichnungsformate gleich): die Zahl
     /// der Linien, sobald sie berechnet ist, auch wenn eine spätere Prüfung die Ausgabe sperrt;
-    /// sonst [`LINES_COMPUTING`] während der Berechnung und [`LINES_NOT_COMPUTED`], wenn es keine
+    /// sonst [`lines_computing`] während der Berechnung und [`lines_not_computed`], wenn es keine
     /// Linien gibt (gescheiterte Ansicht, Abbruch, nichts zu berechnen).
     fn lines_text(&self, state: &AppState, status: &ExportStatus) -> String {
         let counts = match status {
             ExportStatus::DrawingReady {
                 visible, hidden, ..
             } => Some((*visible, *hidden)),
-            ExportStatus::Computing(_) => return LINES_COMPUTING.to_string(),
+            ExportStatus::Computing(_) => return lines_computing(),
             ExportStatus::Failed(_) => {
                 let key = self.drawing_key(state);
                 match key.and_then(|k| self.prepared_for(k.format)) {
@@ -1979,7 +2283,7 @@ impl ExportDialog {
         };
         match counts {
             Some((visible, hidden)) => lines_counts_text(visible, hidden),
-            None => LINES_NOT_COMPUTED.to_string(),
+            None => lines_not_computed(),
         }
     }
 
@@ -2008,7 +2312,7 @@ impl ExportDialog {
         let key = self.drawing_key(state);
         let prepared = match self.prepared_for(format) {
             Some((k, _)) if Some(*k) != key => {
-                self.set_written(Err(STALE.to_string()));
+                self.set_written(Err(stale_msg()));
                 return;
             }
             Some((_, Ok(p))) => Arc::clone(p),
@@ -2018,12 +2322,15 @@ impl ExportDialog {
                 return;
             }
             None => {
-                self.set_written(Err(NOT_COMPUTED.to_string()));
+                self.set_written(Err(not_computed_msg()));
                 return;
             }
         };
         let target = path.clone();
         self.written = None;
+        // Die Datei entsteht in der Sprache der Zeichnung (Ebenen, Gruppen); die Meldung des
+        // Auftrags in der des Fensters (der Auftrag selbst läuft darin).
+        let lang = self.drawing_lang();
         let job: DrawWriteJob = if format == DrawingFormat::Pdf {
             let pages = if key.is_some_and(|k| k.target == DrawTarget::All) {
                 PdfPages::All
@@ -2039,13 +2346,15 @@ impl ExportDialog {
             let pdf_writer = self.pdf_writer;
             Job::spawn(move |p| {
                 let models: Vec<&SheetModel> = prepared.iter().map(|d| &*d.model).collect();
-                pdf_writer(&target, &models, &meta, p).map_err(draw_write_text)
+                with_lang(&lang, || pdf_writer(&target, &models, &meta, p))
+                    .map_err(|e| draw_msg(&e))
             })
         } else {
             let writer = self.writer;
             Job::spawn(move |p| match prepared.first() {
-                Some(d) => writer(&target, &d.model, format, p).map_err(draw_write_text),
-                None => Err(NOT_COMPUTED.to_string()),
+                Some(d) => with_lang(&lang, || writer(&target, &d.model, format, p))
+                    .map_err(|e| draw_msg(&e)),
+                None => Err(not_computed_msg()),
             })
         };
         self.drawing_writing = Some((path, job));
@@ -2067,14 +2376,17 @@ impl ExportDialog {
             let running = self.step_job.as_ref().is_some_and(|(k, _)| *k == key);
             if !fresh && !running {
                 let items = self.items(state);
-                let prepare = self.step_prepare;
-                self.step_job = Some((key, Job::spawn(move |p| prepare(&items, p))));
+                let job = match self.step_prepare {
+                    Some(prepare) => Job::spawn(move |p| prepare(&items, p).map_err(Msg::Raw)),
+                    None => Job::spawn(move |p| prepare_step_msg(&items, p)),
+                };
+                self.step_job = Some((key, job));
             }
             let finished = match &self.step_job {
                 Some((k, job)) => match job.fetch(block) {
                     Poll::Pending => None,
                     Poll::Ready(r) => Some((*k, r.map(Arc::new))),
-                    Poll::Lost => Some((*k, Err(LOST.to_string()))),
+                    Poll::Lost => Some((*k, Err(lost_msg()))),
                 },
                 None => None,
             };
@@ -2089,13 +2401,13 @@ impl ExportDialog {
                 let items = self.items(state);
                 let quality = self.quality;
                 // Ein alter Auftrag wird dabei fallengelassen und bricht ab.
-                self.job = Some((key, Job::spawn(move |p| prepare(&items, quality, p))));
+                self.job = Some((key, Job::spawn(move |p| prepare_msg(&items, quality, p))));
             }
             let finished = match &self.job {
                 Some((k, job)) => match job.fetch(block) {
                     Poll::Pending => None,
                     Poll::Ready(r) => Some((*k, r.map(Arc::new))),
-                    Poll::Lost => Some((*k, Err(LOST.to_string()))),
+                    Poll::Lost => Some((*k, Err(lost_msg()))),
                 },
                 None => None,
             };
@@ -2107,8 +2419,8 @@ impl ExportDialog {
         let wrote = match &self.writing {
             Some((path, job)) => match job.fetch(block) {
                 Poll::Pending => None,
-                Poll::Ready(r) => Some(r.map(|n| (path.clone(), n)).map_err(|e| e.to_string())),
-                Poll::Lost => Some(Err(LOST.to_string())),
+                Poll::Ready(r) => Some(r.map(|n| (path.clone(), n)).map_err(|e| exchange_msg(&e))),
+                Poll::Lost => Some(Err(lost_msg())),
             },
             None => None,
         };
@@ -2119,8 +2431,8 @@ impl ExportDialog {
         let wrote = match &self.step_writing {
             Some((path, job)) => match job.fetch(block) {
                 Poll::Pending => None,
-                Poll::Ready(r) => Some(r.map(|n| (path.clone(), n)).map_err(|e| e.to_string())),
-                Poll::Lost => Some(Err(LOST.to_string())),
+                Poll::Ready(r) => Some(r.map(|n| (path.clone(), n)).map_err(|e| step_msg(&e))),
+                Poll::Lost => Some(Err(lost_msg())),
             },
             None => None,
         };
@@ -2132,7 +2444,7 @@ impl ExportDialog {
             Some((path, job)) => match job.fetch(block) {
                 Poll::Pending => None,
                 Poll::Ready(r) => Some(r.map(|n| (path.clone(), n))),
-                Poll::Lost => Some(Err(LOST.to_string())),
+                Poll::Lost => Some(Err(lost_msg())),
             },
             None => None,
         };
@@ -2158,7 +2470,7 @@ impl ExportDialog {
     }
 
     /// Fragt, ob das Fenster geschlossen werden darf; beim Schreiben einer STEP-Datei oder
-    /// Zeichnung nicht (dann steht im Fenster der Hinweis `WRITING_HINT`).
+    /// Zeichnung nicht (dann steht im Fenster der Hinweis [`writing_hint`]).
     pub fn request_close(&mut self) -> bool {
         if self.is_writing_file() {
             self.close_denied = true;
@@ -2186,7 +2498,7 @@ impl ExportDialog {
                     rejected: p.rejected.clone(),
                     skipped_meshes: p.skipped_meshes.clone(),
                 },
-                Some((k, Err(m))) if *k == key => ExportStatus::Failed(m.clone()),
+                Some((k, Err(m))) if *k == key => ExportStatus::Failed(m.text()),
                 _ => ExportStatus::Computing(0.0),
             };
         }
@@ -2201,13 +2513,13 @@ impl ExportDialog {
                 bytes: f.estimate_bytes(p.triangles(), p.vertices()),
                 report: p.report,
             },
-            (Some((k, Err(m))), _) if *k == key => ExportStatus::Failed(m.clone()),
+            (Some((k, Err(m))), _) if *k == key => ExportStatus::Failed(m.text()),
             _ => ExportStatus::Computing(0.0),
         }
     }
 
     /// Merkt sich das Ergebnis des Schreibens samt Format, mit dem geschrieben wurde.
-    fn set_written(&mut self, w: Result<(PathBuf, u64), String>) {
+    fn set_written(&mut self, w: Result<(PathBuf, u64), Msg>) {
         self.written = Some(w);
         self.written_format = Some(self.write_format);
     }
@@ -2230,7 +2542,7 @@ impl ExportDialog {
         match &self.written {
             None => WriteState::Idle,
             Some(Ok((p, n))) => WriteState::Done(p.clone(), *n),
-            Some(Err(m)) => WriteState::Failed(m.clone()),
+            Some(Err(m)) => WriteState::Failed(m.text()),
         }
     }
 
@@ -2240,17 +2552,14 @@ impl ExportDialog {
         // Nur der Auftrag des gewählten Formats; der andere läuft im Hintergrund weiter.
         if self.format.is_drawing() {
             if let Some((key, ..)) = self.drawing_job.take() {
-                self.store_prepared((
-                    key,
-                    Err(DrawFailed::plain(ExchangeError::Cancelled.to_string())),
-                ));
+                self.store_prepared((key, Err(DrawFailed::plain(cancelled_msg()))));
             }
         } else if self.format.is_step() {
             if let Some((key, _)) = self.step_job.take() {
-                self.step_prepared = Some((key, Err(StepError::Cancelled.to_string())));
+                self.step_prepared = Some((key, Err(cancelled_msg())));
             }
         } else if let Some((key, _)) = self.job.take() {
-            self.prepared = Some((key, Err(ExchangeError::Cancelled.to_string())));
+            self.prepared = Some((key, Err(cancelled_msg())));
         }
     }
 
@@ -2297,7 +2606,7 @@ impl ExportDialog {
             state.document_name.clone()
         } else if self.format.is_drawing() {
             self.current_drawing(state)
-                .map_or_else(|| "Zeichnung".to_string(), |d| d.name.clone())
+                .map_or_else(|| tr!("export-default-drawing-name"), |d| d.name.clone())
         } else {
             let names: Vec<&str> = self
                 .chosen(state)
@@ -2306,7 +2615,7 @@ impl ExportDialog {
                 .collect();
             match names.as_slice() {
                 [one] => (*one).to_string(),
-                _ => "Körper".to_string(),
+                _ => tr!("export-default-body-name"),
             }
         };
         let stem: String = stem
@@ -2338,15 +2647,15 @@ impl ExportDialog {
             ExportFormat::Drawing(format) => self.write_drawing(path, format, state),
             ExportFormat::Step => {
                 let Some((k, Ok(prepared))) = &self.step_prepared else {
-                    self.set_written(Err(NOT_COMPUTED.to_string()));
+                    self.set_written(Err(not_computed_msg()));
                     return;
                 };
                 if *k != key {
-                    self.set_written(Err(STALE.to_string()));
+                    self.set_written(Err(stale_msg()));
                     return;
                 }
                 if prepared.bodies.is_empty() {
-                    self.set_written(Err(StepError::NothingToExport.to_string()));
+                    self.set_written(Err(crate::msg!("export-step-nothing-written")));
                     return;
                 }
                 let (prepared, target) = (Arc::clone(prepared), path.clone());
@@ -2357,11 +2666,11 @@ impl ExportDialog {
             }
             ExportFormat::Mesh(format) => {
                 let Some((k, Ok(prepared))) = &self.prepared else {
-                    self.set_written(Err(NOT_COMPUTED.to_string()));
+                    self.set_written(Err(not_computed_msg()));
                     return;
                 };
                 if *k != key {
-                    self.set_written(Err(STALE.to_string()));
+                    self.set_written(Err(stale_msg()));
                     return;
                 }
                 let (prepared, target) = (Arc::clone(prepared), path.clone());
@@ -2431,13 +2740,15 @@ impl ExportDialog {
         let is_pdf = before == ExportFormat::Drawing(DrawingFormat::Pdf);
         let all = self.all_sheets();
         let mut pdf_pages = self.pdf_pages;
+        let mut export_lang = self.export_lang.clone();
+        let export_lang_before = export_lang.clone();
         let sheet_no = self.computing_sheet();
         let lines_line = self.lines_text(state, &status);
         let mut drawing_info: Vec<String> = Vec::new();
         if all {
             // Alle Blätter: Zahl der Blätter und Summen über alle (P9).
             let drawings = state.document.drawings();
-            drawing_info.push(format!("Blätter: {}", drawings.len()));
+            drawing_info.push(tr!("export-sheets-count", n = drawings.len().to_string()));
             let (views, dims, centerlines) = match &status {
                 ExportStatus::DrawingReady {
                     views,
@@ -2451,48 +2762,50 @@ impl ExportDialog {
                     centerline_use_all(drawings),
                 ),
             };
-            drawing_info.push(format!("Ansichten: {}", group_digits(views as u64)));
+            drawing_info.push(tr!("export-views-count", n = group_digits(views as u64)));
             drawing_info.push(lines_line);
-            drawing_info.push(format!("Maße: {}", group_digits(dims as u64)));
+            drawing_info.push(tr!("export-dims-count", n = group_digits(dims as u64)));
             if let ExportStatus::DrawingReady { outside, .. } = &status
                 && *outside > 0
             {
-                drawing_info.push(format!(
-                    "Maße außerhalb des Blatts: {}",
-                    group_digits(*outside as u64)
+                drawing_info.push(tr!(
+                    "export-dims-outside",
+                    n = group_digits(*outside as u64)
                 ));
             }
-            drawing_info.push(format!("Mittellinien: {}", centerlines.label()));
+            drawing_info.push(tr!("export-centerlines-line", value = centerlines.label()));
         } else if let Some(d) = current {
-            let views = match &status {
-                ExportStatus::DrawingReady { views, .. } => *views,
-                _ => d.views.len(),
-            };
-            drawing_info.push(format!("Ansichten: {views}"));
-            drawing_info.push(format!("Blatt: {}", sheet_label(d.sheet)));
-            drawing_info.push(lines_line);
-            // Maße und Mittellinien: aus der Zeichnung, nach der Berechnung aus dem Ergebnis.
-            let (dims, centerlines) = match &status {
-                ExportStatus::DrawingReady {
-                    dimensions,
-                    centerlines,
-                    ..
-                } => (*dimensions, *centerlines),
-                _ => (d.dimensions.len(), centerline_use(d)),
-            };
-            drawing_info.push(format!("Maße: {}", group_digits(dims as u64)));
-            if let ExportStatus::DrawingReady { outside, .. } = &status
-                && *outside > 0
-            {
-                drawing_info.push(format!(
-                    "Maße außerhalb des Blatts: {}",
-                    group_digits(*outside as u64)
-                ));
-            }
-            drawing_info.push(format!("Mittellinien: {}", centerlines.label()));
+            let sheet_line = tr!("export-sheet-line", sheet = sheet_label(d.sheet));
             if is_list {
                 // Ein Stücklistenblatt hat weder Ansichten noch Maße.
-                drawing_info.retain(|l| l.starts_with("Blatt:"));
+                drawing_info.push(sheet_line);
+            } else {
+                let views = match &status {
+                    ExportStatus::DrawingReady { views, .. } => *views,
+                    _ => d.views.len(),
+                };
+                drawing_info.push(tr!("export-views-count", n = views.to_string()));
+                drawing_info.push(sheet_line);
+                drawing_info.push(lines_line);
+                // Maße und Mittellinien: aus der Zeichnung, nach der Berechnung aus dem Ergebnis.
+                let (dims, centerlines) = match &status {
+                    ExportStatus::DrawingReady {
+                        dimensions,
+                        centerlines,
+                        ..
+                    } => (*dimensions, *centerlines),
+                    _ => (d.dimensions.len(), centerline_use(d)),
+                };
+                drawing_info.push(tr!("export-dims-count", n = group_digits(dims as u64)));
+                if let ExportStatus::DrawingReady { outside, .. } = &status
+                    && *outside > 0
+                {
+                    drawing_info.push(tr!(
+                        "export-dims-outside",
+                        n = group_digits(*outside as u64)
+                    ));
+                }
+                drawing_info.push(tr!("export-centerlines-line", value = centerlines.label()));
             }
         }
         let writing_file = self.is_writing_file();
@@ -2504,55 +2817,55 @@ impl ExportDialog {
         // Die Dateiauswahl zeichnet oben (rollt) und in der Fußzeile (Speichern, Abbrechen).
         let chooser = RefCell::new(&mut self.chooser);
         let (mut body_action, mut footer_action) = (ChooserAction::None, ChooserAction::None);
-        let response = Dialog::new("Exportieren", DialogSize::File)
+        let response = Dialog::new(tr!("export-title"), DialogSize::File)
             .center_on_open()
             .open(&mut open)
             .show_with_footer(
                 ctx,
                 |ui| {
                     let mut format_card = |ui: &mut egui::Ui| {
-                        ui.strong("Format");
+                        ui.strong(tr!("export-format"));
                         for f in ExportFormat::ALL {
                             ui.radio_value(&mut format, f, f.label());
                         }
                     };
                     let mut quality_card = |ui: &mut egui::Ui| {
                         if before.is_step() {
-                            ui.label(STEP_EXACT);
+                            ui.label(step_exact());
                         } else {
-                            ui.strong("Qualität");
+                            ui.strong(tr!("export-quality"));
                             for q in Quality::ALL {
                                 ui.radio_value(&mut quality, q, q.label());
                             }
-                            ui.weak("Feiner heißt mehr Dreiecke und größere Dateien.");
+                            ui.weak(tr!("export-quality-hint"));
                         }
                     };
                     let mut scope_card = |ui: &mut egui::Ui| {
-                        ui.strong("Umfang");
+                        ui.strong(tr!("export-scope"));
                         let selected = ui
                             .add_enabled(
                                 has_selection,
                                 egui::RadioButton::new(
                                     scope == Scope::Selected,
-                                    "Gewählter Körper",
+                                    tr!("export-scope-selected"),
                                 ),
                             )
-                            .on_disabled_hover_text("Dafür zuerst einen Körper wählen.");
+                            .on_disabled_hover_text(tr!("export-scope-selected-tip"));
                         if selected.clicked() {
                             scope = Scope::Selected;
                         }
-                        ui.radio_value(&mut scope, Scope::Visible, "Alle sichtbaren Körper");
-                        ui.weak("Unterdrückte Schritte zählen nicht.");
+                        ui.radio_value(&mut scope, Scope::Visible, tr!("export-scope-visible"));
+                        ui.weak(tr!("export-scope-note"));
                     };
                     let mut drawing_card = |ui: &mut egui::Ui| {
-                        ui.strong("Zeichnung");
+                        ui.strong(tr!("export-drawing-card"));
                         // Nur bei PDF: das gewählte Blatt oder alle Blätter (P9).
                         if is_pdf {
-                            ui.radio_value(&mut pdf_pages, PdfPages::Selected, PDF_SELECTED);
-                            ui.radio_value(&mut pdf_pages, PdfPages::All, PDF_ALL);
+                            ui.radio_value(&mut pdf_pages, PdfPages::Selected, pdf_selected());
+                            ui.radio_value(&mut pdf_pages, PdfPages::All, pdf_all());
                         }
                         if drawing_list.is_empty() {
-                            ui.weak("Keine Zeichnung vorhanden.");
+                            ui.weak(tr!("export-no-drawings"));
                         } else {
                             let shown = drawing_list
                                 .iter()
@@ -2573,16 +2886,18 @@ impl ExportDialog {
                                     });
                             })
                             .response
-                            .on_disabled_hover_text(PDF_ALL_HINT);
+                            .on_disabled_hover_text(pdf_all_hint());
                             if all {
-                                ui.weak(PDF_ALL_HINT);
+                                ui.weak(pdf_all_hint());
                             }
                         }
                         for line in &drawing_info {
                             ui.label(line);
                         }
                         ui.add_space(4.0);
-                        ui.add(theme::Toggle::new(&mut with_frame, FRAME_SWITCH));
+                        ui.add(theme::Toggle::new(&mut with_frame, frame_switch()));
+                        ui.add_space(4.0);
+                        drawing_lang_choice(ui, &mut export_lang);
                     };
                     cards = if before.is_drawing() {
                         let row: &mut [&mut dyn FnMut(&mut egui::Ui)] =
@@ -2598,7 +2913,7 @@ impl ExportDialog {
                         ExportStatus::Computing(f) => {
                             let text = match sheet_no {
                                 Some((n, total)) if all => sheet_progress_text(n, total),
-                                _ => computing_text(before, is_list).to_string(),
+                                _ => computing_text(before, is_list),
                             };
                             ui.horizontal(|ui| {
                                 ui.add(
@@ -2606,14 +2921,14 @@ impl ExportDialog {
                                         .desired_width(PROGRESS_WIDTH)
                                         .text(text),
                                 );
-                                if ui.button("Abbrechen").clicked() {
+                                if ui.button(tr!("common-cancel")).clicked() {
                                     cancel = true;
                                 }
                             });
                         }
                         ExportStatus::Failed(m) => {
                             ui.colored_label(error_color(ui.visuals().dark_mode), m);
-                            if ui.button("Neu berechnen").clicked() {
+                            if ui.button(tr!("export-recompute")).clicked() {
                                 recompute = true;
                             }
                         }
@@ -2622,10 +2937,10 @@ impl ExportDialog {
                             bytes,
                             report,
                         } => {
-                            ui.label(format!(
-                                "{} Dreiecke, {}",
-                                group_digits(*triangles),
-                                estimate_text(*bytes)
+                            ui.label(tr!(
+                                "export-triangles",
+                                triangles = group_digits(*triangles),
+                                size = estimate_text(*bytes)
                             ));
                             if report.closed {
                                 ui.label(report_text(report));
@@ -2636,7 +2951,7 @@ impl ExportDialog {
                                 );
                                 ui.colored_label(
                                     warning_color(ui.visuals().dark_mode),
-                                    NOT_CLOSED_WARNING,
+                                    not_closed_warning(),
                                 );
                             }
                         }
@@ -2649,13 +2964,13 @@ impl ExportDialog {
                             if *bodies == 0 {
                                 ui.colored_label(
                                     warning_color(ui.visuals().dark_mode),
-                                    STEP_NOTHING,
+                                    step_nothing(),
                                 );
                             } else {
-                                ui.label(format!(
-                                    "{} Körper, {} Flächen",
-                                    group_digits(*bodies as u64),
-                                    group_digits(*faces as u64)
+                                ui.label(tr!(
+                                    "export-bodies-faces",
+                                    bodies = group_digits(*bodies as u64),
+                                    faces = group_digits(*faces as u64)
                                 ));
                             }
                             for r in rejected {
@@ -2674,11 +2989,11 @@ impl ExportDialog {
                             ..
                         } => {
                             ui.label(if all {
-                                "Alle Blätter sind berechnet."
+                                tr!("export-ready-all")
                             } else if is_list {
-                                "Die Stückliste ist berechnet."
+                                tr!("export-ready-list")
                             } else {
-                                "Alle Ansichten sind berechnet."
+                                tr!("export-ready-views")
                             });
                             if *outside > 0 {
                                 ui.colored_label(
@@ -2704,24 +3019,24 @@ impl ExportDialog {
                                 ui.add(
                                     egui::ProgressBar::new(write_progress)
                                         .desired_width(PROGRESS_WIDTH)
-                                        .text("Die Datei wird geschrieben …"),
+                                        .text(tr!("export-writing")),
                                 );
-                                if writing_file && ui.button("Abbrechen").clicked() {
+                                if writing_file && ui.button(tr!("common-cancel")).clicked() {
                                     cancel_write = true;
                                 }
                             });
                             if denied {
                                 ui.colored_label(
                                     warning_color(ui.visuals().dark_mode),
-                                    WRITING_HINT,
+                                    writing_hint(),
                                 );
                             }
                         }
                         WriteState::Done(path, n) => {
-                            ui.label(format!(
-                                "Fertig: „{}“ geschrieben ({}).",
-                                file_name(path),
-                                mb_text(*n)
+                            ui.label(tr!(
+                                "export-done",
+                                name = file_name(path),
+                                size = mb_text(*n)
                             ));
                             if !shortened.is_empty() {
                                 ui.colored_label(
@@ -2733,14 +3048,14 @@ impl ExportDialog {
                         WriteState::Failed(m) => {
                             ui.colored_label(
                                 error_color(ui.visuals().dark_mode),
-                                format!("Nicht geschrieben: {m}"),
+                                tr!("export-failed", reason = m.as_str()),
                             );
                         }
                     }
                     ui.separator();
                     match chooser.borrow_mut().as_mut() {
                         Some(c) => {
-                            ui.strong("Speichern unter");
+                            ui.strong(tr!("export-save-as"));
                             body_action = c.show_body(ui, places);
                         }
                         None => {
@@ -2752,13 +3067,13 @@ impl ExportDialog {
                             } && write_state != WriteState::Writing;
                             ui.horizontal(|ui| {
                                 if ui
-                                    .add_enabled(ready, egui::Button::new("Exportieren …"))
+                                    .add_enabled(ready, egui::Button::new(tr!("export-start")))
                                     .on_disabled_hover_text(disabled_hint(&status))
                                     .clicked()
                                 {
                                     begin = true;
                                 }
-                                if ui.button("Schließen").clicked() {
+                                if ui.button(tr!("dialog-close")).clicked() {
                                     close = true;
                                 }
                             });
@@ -2793,6 +3108,8 @@ impl ExportDialog {
         }
         let other_pages = pdf_pages != self.pdf_pages;
         self.pdf_pages = pdf_pages;
+        let other_lang = export_lang != export_lang_before;
+        self.export_lang = export_lang;
         let stale_chooser = self
             .chooser_key
             .is_some_and(|k| k != self.chooser_key_now(state));
@@ -2800,7 +3117,13 @@ impl ExportDialog {
             self.chooser = None;
             self.chooser_key = None;
         }
-        if self.format != before || stale_chooser || other_drawing || toggled || other_pages {
+        if self.format != before
+            || stale_chooser
+            || other_drawing
+            || toggled
+            || other_pages
+            || other_lang
+        {
             // Die Meldung „Fertig“ gehörte zum alten Format oder Stand.
             self.written = None;
         }

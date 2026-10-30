@@ -4,7 +4,9 @@
 //! Sitzung (laufendes Werkzeug, Auswahl) unverändert, und `message` erklärt den Fehler.
 
 use crate::formula_field::resolve;
+use crate::msg::Msg;
 use planora_feature::{FeatureId, ParamScope, ParamUnit, SketchFeature, constraint_unit};
+use planora_i18n::tr;
 use planora_kernel::{Edge, Id, Solid};
 use planora_math::DVec2;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
@@ -62,26 +64,32 @@ pub enum ConstraintAction {
 }
 
 impl ConstraintAction {
-    pub fn label(self) -> &'static str {
+    /// Name als gespeicherte Meldung (für Meldungen, die mit der Sprache wechseln).
+    pub fn label_msg(self) -> Msg {
         use ConstraintAction::*;
         match self {
-            Coincident => "Deckungsgleich",
-            Horizontal => "Waagerecht",
-            Vertical => "Senkrecht",
-            Parallel => "Parallel",
-            Perpendicular => "Rechtwinklig",
-            Tangent => "Tangential",
-            Equal => "Gleich",
-            Fixed => "Fest",
-            Midpoint => "Mittelpunkt",
-            Symmetric => "Symmetrisch",
-            PointOnCurve => "Punkt auf Kurve",
-            Distance => "Abstand",
-            DistancePointLine => "Abstand Punkt–Linie",
-            Radius => "Radius",
-            Diameter => "Durchmesser",
-            Angle => "Winkel",
+            Coincident => crate::msg!("sketch-constraint-coincident"),
+            Horizontal => crate::msg!("sketch-constraint-horizontal"),
+            Vertical => crate::msg!("sketch-constraint-vertical"),
+            Parallel => crate::msg!("sketch-constraint-parallel"),
+            Perpendicular => crate::msg!("sketch-constraint-perpendicular"),
+            Tangent => crate::msg!("sketch-constraint-tangent"),
+            Equal => crate::msg!("sketch-constraint-equal"),
+            Fixed => crate::msg!("sketch-constraint-fixed"),
+            Midpoint => crate::msg!("sketch-constraint-midpoint"),
+            Symmetric => crate::msg!("sketch-constraint-symmetric"),
+            PointOnCurve => crate::msg!("sketch-constraint-point-on-curve"),
+            Distance => crate::msg!("sketch-constraint-distance"),
+            DistancePointLine => crate::msg!("sketch-constraint-distance-point-line"),
+            Radius => crate::msg!("sketch-constraint-radius"),
+            Diameter => crate::msg!("sketch-constraint-diameter"),
+            Angle => crate::msg!("sketch-constraint-angle"),
         }
+    }
+
+    /// Name in der aktuellen Sprache.
+    pub fn label(self) -> String {
+        self.label_msg().text()
     }
 
     /// Ist das ein Maß (mit Zahlenwert)?
@@ -104,23 +112,20 @@ impl ConstraintAction {
 }
 
 /// Meldung, wenn man in ein anzeigendes Maß eine Formel tippt.
-pub const DRIVEN_NO_FORMULA: &str =
-    "Ein anzeigendes Maß bestimmt nichts und kann keine Formel haben.";
+pub fn driven_no_formula() -> String {
+    tr!("sketch-driven-no-formula")
+}
 
 /// Zustand einer Skizze mit Formeln, die sich nicht lösen lässt (Plan P12): derselbe Text wie
 /// der Fehlerstatus, den die Skizze beim Beenden bekommt. `None` ohne Formeln oder gelöst.
-pub fn formula_problem(sf: &SketchFeature, report: Option<&SolveReport>) -> Option<&'static str> {
+pub fn formula_problem(sf: &SketchFeature, report: Option<&SolveReport>) -> Option<Msg> {
     if sf.formulas.is_empty() {
         return None;
     }
     match report?.status {
         SolveStatus::Solved => None,
-        SolveStatus::Conflicting => {
-            Some("Mit den Werten der Formeln widersprechen sich Abhängigkeiten")
-        }
-        SolveStatus::NotConverged => {
-            Some("Mit den Werten der Formeln lässt sich die Skizze nicht lösen")
-        }
+        SolveStatus::Conflicting => Some(crate::msg!("sketch-formula-conflict")),
+        SolveStatus::NotConverged => Some(crate::msg!("sketch-formula-unsolvable")),
     }
 }
 
@@ -129,7 +134,7 @@ fn dimension_input(
     text: &str,
     unit: ParamUnit,
     scope: &ParamScope,
-) -> Result<(f64, Option<String>), String> {
+) -> Result<(f64, Option<String>), Msg> {
     let (v, formula) = resolve(text, unit, scope)?;
     let v = if unit == ParamUnit::Angle {
         v.to_radians()
@@ -161,7 +166,9 @@ pub struct SketchSession {
     /// Beim Zeichnen von Linien automatisch waagerecht/senkrecht ergänzen.
     pub auto_constrain: bool,
     pub last_report: Option<SolveReport>,
-    pub message: Option<String>,
+    /// Meldung zum letzten Schritt; gespeichert als Grund und erst beim Zeichnen übersetzt
+    /// ([`message_text`](Self::message_text)).
+    pub message: Option<Msg>,
     pub dragging: Option<PointId>,
     /// Zählt die Sprünge durch Rückgängig/Wiederholen ([`SketchSession::after_history_jump`]);
     /// Eingabefelder der Oberfläche, die zu einem älteren Zählerstand gehören, schließen.
@@ -190,8 +197,10 @@ struct Sorted {
     curves: Vec<CurveId>,
 }
 
-fn err(e: impl std::fmt::Display) -> String {
-    e.to_string()
+/// Fehler einer Bibliothek als Meldung (der Text kommt von dort, bis die Bibliotheken übersetzt
+/// sind).
+fn err(e: impl std::fmt::Display) -> Msg {
+    Msg::Raw(e.to_string())
 }
 
 fn status_ok(r: &SolveReport) -> bool {
@@ -199,17 +208,20 @@ fn status_ok(r: &SolveReport) -> bool {
 }
 
 /// Hinweis, wenn die Skizze nach einer erlaubten Änderung weiterhin nicht gelöst ist.
-fn unsolved_hint(report: Option<&SolveReport>) -> Option<&'static str> {
+fn unsolved_hint(report: Option<&SolveReport>) -> Option<Msg> {
     match report.map(|r| r.status) {
-        Some(SolveStatus::Conflicting) => Some("Die Skizze enthält weiterhin Widersprüche"),
-        Some(SolveStatus::NotConverged) => {
-            Some("Die Skizze lässt sich weiterhin nicht vollständig lösen")
-        }
+        Some(SolveStatus::Conflicting) => Some(crate::msg!("sketch-still-conflicting")),
+        Some(SolveStatus::NotConverged) => Some(crate::msg!("sketch-still-unsolved")),
         _ => None,
     }
 }
 
 impl SketchSession {
+    /// Die Meldung in der aktuellen Sprache.
+    pub fn message_text(&self) -> Option<String> {
+        self.message.as_ref().map(Msg::text)
+    }
+
     pub fn new(sketch: FeatureId) -> SketchSession {
         SketchSession {
             sketch,
@@ -295,7 +307,7 @@ impl SketchSession {
     fn atomic<T>(
         &mut self,
         sk: &mut Sketch,
-        f: impl FnOnce(&mut Self, &mut Sketch, &Sketch) -> Result<T, String>,
+        f: impl FnOnce(&mut Self, &mut Sketch, &Sketch) -> Result<T, Msg>,
     ) -> Result<T, String> {
         self.message = None;
         let b = self.backup(sk);
@@ -303,24 +315,23 @@ impl SketchSession {
             Ok(v) => Ok(v),
             Err(e) => {
                 self.restore(sk, b);
-                self.message = Some(e.clone());
-                Err(e)
+                let text = e.text();
+                self.message = Some(e);
+                Err(text)
             }
         }
     }
 
     /// Löst die Skizze und merkt sich den Bericht. Macht die Änderung die Skizze widersprüchlich
     /// oder unlösbar, ist das ein Fehler (siehe [`check_change`]).
-    fn solve_checked(&mut self, sk: &mut Sketch, prior: &Sketch) -> Result<SolveReport, String> {
+    fn solve_checked(&mut self, sk: &mut Sketch, prior: &Sketch) -> Result<SolveReport, Msg> {
         let before = self.last_report.take();
         let report = sk.solve();
         self.last_report = Some(report.clone());
         if let Some(problem) = check_change(&report, before.as_ref(), prior, None) {
             return Err(match problem {
-                SolveStatus::Conflicting => {
-                    "Widerspruch: Die Änderung widerspricht vorhandenen Abhängigkeiten".to_string()
-                }
-                _ => "Die Skizze ließ sich nach der Änderung nicht lösen".to_string(),
+                SolveStatus::Conflicting => crate::msg!("sketch-change-conflict"),
+                _ => crate::msg!("sketch-change-unsolved"),
             });
         }
         self.warn_if_unsolved();
@@ -333,14 +344,14 @@ impl SketchSession {
         if self.message.is_some() {
             return;
         }
-        self.message = unsolved_hint(self.last_report.as_ref()).map(str::to_string);
+        self.message = unsolved_hint(self.last_report.as_ref());
     }
 
     // ---- Werkzeuge ----------------------------------------------------------------------
 
     /// Vorhandener Punkt unter `at` oder ein neuer; auf einer Kurve wird der neue Punkt auf die
     /// Kurve gesetzt und mit `PointOnCurve` daran gebunden.
-    fn point_at(&mut self, sk: &mut Sketch, at: DVec2, radius: f64) -> Result<PointId, String> {
+    fn point_at(&mut self, sk: &mut Sketch, at: DVec2, radius: f64) -> Result<PointId, Msg> {
         match self.snap(sk, at, radius) {
             Snap::Point(p) => Ok(p),
             Snap::Curve(c) => {
@@ -364,9 +375,10 @@ impl SketchSession {
         extend: bool,
     ) -> Result<(), String> {
         if !at.is_finite() || !radius.is_finite() || radius < 0.0 {
-            let e = "Ungültige Position".to_string();
-            self.message = Some(e.clone());
-            return Err(e);
+            let e = crate::msg!("sketch-invalid-position");
+            let text = e.text();
+            self.message = Some(e);
+            return Err(text);
         }
         self.cursor = Some(at);
         self.atomic(sk, |se, sk, prior| match se.tool {
@@ -412,7 +424,7 @@ impl SketchSession {
         at: DVec2,
         radius: f64,
         prior: &Sketch,
-    ) -> Result<(), String> {
+    ) -> Result<(), Msg> {
         if let Snap::Point(_) = self.snap(sk, at, radius) {
             return Ok(());
         }
@@ -427,7 +439,7 @@ impl SketchSession {
         at: DVec2,
         radius: f64,
         prior: &Sketch,
-    ) -> Result<(), String> {
+    ) -> Result<(), Msg> {
         let p = self.point_at(sk, at, radius)?;
         let Some(&start) = self.pending.first() else {
             self.pending = vec![p];
@@ -475,12 +487,7 @@ impl SketchSession {
         }
     }
 
-    fn click_rectangle(
-        &mut self,
-        sk: &mut Sketch,
-        at: DVec2,
-        prior: &Sketch,
-    ) -> Result<(), String> {
+    fn click_rectangle(&mut self, sk: &mut Sketch, at: DVec2, prior: &Sketch) -> Result<(), Msg> {
         let Some(&corner) = self.pending_pos.first() else {
             self.pending_pos = vec![at];
             return Ok(());
@@ -497,7 +504,7 @@ impl SketchSession {
         at: DVec2,
         radius: f64,
         prior: &Sketch,
-    ) -> Result<(), String> {
+    ) -> Result<(), Msg> {
         let Some(&center) = self.pending.first() else {
             let c = self.point_at(sk, at, radius)?;
             self.pending = vec![c];
@@ -506,7 +513,7 @@ impl SketchSession {
         };
         let r = sk.point_xy(center).map_err(err)?.distance(at);
         if r <= sk.tolerance().linear {
-            return Err("Der Radius muss größer als null sein".into());
+            return Err(crate::msg!("sketch-radius-positive"));
         }
         sk.add_circle(center, r).map_err(err)?;
         self.pending.clear();
@@ -520,7 +527,7 @@ impl SketchSession {
         at: DVec2,
         radius: f64,
         prior: &Sketch,
-    ) -> Result<(), String> {
+    ) -> Result<(), Msg> {
         let tol = sk.tolerance().linear;
         match *self.pending.as_slice() {
             [] => {
@@ -536,7 +543,7 @@ impl SketchSession {
                         .distance(sk.point_xy(center).map_err(err)?)
                         <= tol
                 {
-                    return Err("Der Startpunkt darf nicht in der Mitte liegen".into());
+                    return Err(crate::msg!("sketch-arc-start-center"));
                 }
                 self.pending.push(s);
             }
@@ -546,22 +553,22 @@ impl SketchSession {
                 let r = s.distance(m);
                 let dir = at - m;
                 if dir.length() <= tol {
-                    return Err("Das Bogenende darf nicht in der Mitte liegen".into());
+                    return Err(crate::msg!("sketch-arc-end-center"));
                 }
-                let on_start = "Das Ende fällt auf den Start; der Bogen hätte keine Länge";
+                let on_start = || crate::msg!("sketch-arc-end-on-start");
                 let end = match self.snap(sk, at, radius) {
-                    Snap::Point(p) if p == start => return Err(on_start.into()),
+                    Snap::Point(p) if p == start => return Err(on_start()),
                     Snap::Point(p) if p != center => p,
                     _ => {
                         let q = m + dir.normalize() * r;
                         if q.distance(s) <= tol {
-                            return Err(on_start.into());
+                            return Err(on_start());
                         }
                         sk.add_point(q.x, q.y).map_err(err)?
                     }
                 };
                 if sk.point_xy(end).map_err(err)?.distance(s) <= tol {
-                    return Err(on_start.into());
+                    return Err(on_start());
                 }
                 sk.add_arc(center, start, end).map_err(err)?;
                 self.pending.clear();
@@ -577,7 +584,7 @@ impl SketchSession {
         at: DVec2,
         radius: f64,
         prior: &Sketch,
-    ) -> Result<(), String> {
+    ) -> Result<(), Msg> {
         let tol = sk.tolerance().linear;
         let Some(&center) = self.pending.first() else {
             let c = self.point_at(sk, at, radius)?;
@@ -588,7 +595,7 @@ impl SketchSession {
         let m = sk.point_xy(center).map_err(err)?;
         let Some(&major_end) = self.pending_pos.first() else {
             if (at - m).length() <= tol {
-                return Err("Die große Halbachse muss länger als null sein".into());
+                return Err(crate::msg!("sketch-major-axis-positive"));
             }
             self.pending_pos = vec![at];
             return Ok(());
@@ -596,11 +603,11 @@ impl SketchSession {
         let major = major_end - m;
         let len = major.length();
         if len <= tol {
-            return Err("Die große Halbachse muss länger als null sein".into());
+            return Err(crate::msg!("sketch-major-axis-positive"));
         }
         let minor = (major / len).perp_dot(at - m).abs().min(len);
         if minor <= tol {
-            return Err("Die kleine Halbachse muss größer als null sein".into());
+            return Err(crate::msg!("sketch-minor-axis-positive"));
         }
         sk.add_ellipse(center, major, minor).map_err(err)?;
         self.pending.clear();
@@ -615,15 +622,13 @@ impl SketchSession {
         at: DVec2,
         radius: f64,
         prior: &Sketch,
-    ) -> Result<(), String> {
+    ) -> Result<(), Msg> {
         if self.pending.len() >= MAX_SPLINE_POINTS {
-            return Err(format!(
-                "Ein Spline hat höchstens {MAX_SPLINE_POINTS} Punkte; bitte abschließen"
-            ));
+            return Err(crate::msg!("sketch-spline-max", max = MAX_SPLINE_POINTS));
         }
         let p = self.point_at(sk, at, radius)?;
         if self.pending.contains(&p) {
-            return Err("Dieser Punkt gehört schon zum Spline".into());
+            return Err(crate::msg!("sketch-spline-point-twice"));
         }
         self.pending.push(p);
         self.solve_checked(sk, prior)?;
@@ -640,7 +645,7 @@ impl SketchSession {
         }
         self.atomic(sk, |se, sk, prior| {
             if se.pending.len() < 2 {
-                return Err("Ein Spline braucht mindestens 2 Punkte".into());
+                return Err(crate::msg!("sketch-spline-min"));
             }
             sk.add_spline(&se.pending).map_err(err)?;
             se.pending.clear();
@@ -681,12 +686,10 @@ impl SketchSession {
         self.cursor = Some(at);
         match sk.drag(&[Drag { point, target: at }]) {
             Ok(report) => {
-                self.message = (!status_ok(&report)).then(|| {
-                    "Der Punkt lässt sich wegen der Abhängigkeiten nicht dorthin ziehen".to_string()
-                });
+                self.message = (!status_ok(&report)).then(|| crate::msg!("sketch-drag-blocked"));
                 self.last_report = Some(report);
             }
-            Err(e) => self.message = Some(e.to_string()),
+            Err(e) => self.message = Some(err(e)),
         }
     }
 
@@ -750,21 +753,21 @@ impl SketchSession {
     }
 
     /// Baut die Abhängigkeit aus der Auswahl (Maße mit Platzhalterwert 0).
-    fn build(&self, sk: &Sketch, action: ConstraintAction) -> Result<ConstraintKind, String> {
+    fn build(&self, sk: &Sketch, action: ConstraintAction) -> Result<ConstraintKind, Msg> {
         use ConstraintAction as A;
         use ConstraintKind as K;
         if self.selection.is_empty() {
-            return Err("Es ist nichts ausgewählt".into());
+            return Err(crate::msg!("sketch-nothing-selected"));
         }
         if !self.available_actions(sk).contains(&action) {
-            return Err(format!(
-                "„{}“ passt nicht zur aktuellen Auswahl",
-                action.label()
+            return Err(crate::msg!(
+                "sketch-action-mismatch",
+                action = action.label_msg()
             ));
         }
         let s = self
             .sorted(sk)
-            .ok_or_else(|| "Die Auswahl ist ungültig".to_string())?;
+            .ok_or_else(|| crate::msg!("sketch-selection-invalid"))?;
         let p = &s.points;
         let c = &s.curves;
         Ok(match action {
@@ -791,7 +794,7 @@ impl SketchSession {
                 } else {
                     let Some(CurveKind::Line { a, b }) = sk.curve(c[0]).map(|d| d.kind.clone())
                     else {
-                        return Err("Die Länge gibt es nur für Linien".into());
+                        return Err(crate::msg!("sketch-length-lines-only"));
                     };
                     K::Distance(a, b, 0.0)
                 }
@@ -826,9 +829,9 @@ impl SketchSession {
                     Some(v) => v,
                     None => sk
                         .measure(&kind)
-                        .ok_or_else(|| "Das Maß lässt sich nicht messen".to_string())?,
+                        .ok_or_else(|| crate::msg!("sketch-cannot-measure"))?,
                 };
-                kind = with_checked_value(sk, &kind, v)?;
+                kind = checked_value(sk, &kind, v)?;
             }
             let id = sk.add_constraint(kind).map_err(err)?;
             let before = se.last_report.take();
@@ -836,11 +839,10 @@ impl SketchSession {
             se.last_report = Some(report.clone());
             if let Some(problem) = check_change(&report, before.as_ref(), prior, Some(id)) {
                 return Err(match problem {
-                    SolveStatus::Conflicting => format!(
-                        "Widerspruch: „{}“ widerspricht vorhandenen Abhängigkeiten",
-                        action.label()
-                    ),
-                    _ => format!("„{}“ ließ sich nicht lösen", action.label()),
+                    SolveStatus::Conflicting => {
+                        crate::msg!("sketch-apply-conflict", action = action.label_msg())
+                    }
+                    _ => crate::msg!("sketch-apply-unsolved", action = action.label_msg()),
                 });
             }
             if report.redundant.contains(&id) {
@@ -850,13 +852,9 @@ impl SketchSession {
                         sk.set_constraint_value(id, v).map_err(err)?;
                     }
                     se.last_report = Some(sk.solve());
-                    se.message = Some(
-                        "Dieses Maß ist bereits durch andere Abhängigkeiten bestimmt und wird \
-                         nur angezeigt"
-                            .into(),
-                    );
+                    se.message = Some(crate::msg!("sketch-became-driven"));
                 } else {
-                    se.message = Some("Diese Abhängigkeit ist überzählig".into());
+                    se.message = Some(crate::msg!("sketch-redundant"));
                 }
             }
             se.warn_if_unsolved();
@@ -886,8 +884,8 @@ impl SketchSession {
             let kind = sk
                 .constraint(id)
                 .map(|c| c.kind.clone())
-                .ok_or_else(|| "Abhängigkeit nicht gefunden".to_string())?;
-            with_checked_value(sk, &kind, value)?;
+                .ok_or_else(|| crate::msg!("sketch-constraint-missing"))?;
+            checked_value(sk, &kind, value)?;
             sk.set_constraint_value(id, value).map_err(err)?;
             se.solve_checked(sk, prior)?;
             Ok(())
@@ -909,13 +907,13 @@ impl SketchSession {
     ) -> Result<(), String> {
         self.message = None;
         let read = match sf.sketch.constraint(id) {
-            None => Err("Abhängigkeit nicht gefunden".to_string()),
-            Some(c) if !c.kind.is_dimension() => Err("Das ist kein Maß".to_string()),
+            None => Err(crate::msg!("sketch-constraint-missing")),
+            Some(c) if !c.kind.is_dimension() => Err(crate::msg!("sketch-not-dimension")),
             Some(c) => {
                 let driven = c.driven;
                 dimension_input(text, constraint_unit(&c.kind), scope).and_then(|(v, f)| {
                     if driven && f.is_some() {
-                        Err(DRIVEN_NO_FORMULA.to_string())
+                        Err(crate::msg!("sketch-driven-no-formula"))
                     } else {
                         Ok((v, f))
                     }
@@ -925,8 +923,9 @@ impl SketchSession {
         let (value, formula) = match read {
             Ok(r) => r,
             Err(e) => {
-                self.message = Some(e.clone());
-                return Err(e);
+                let text = e.text();
+                self.message = Some(e);
+                return Err(text);
             }
         };
         self.set_dimension_value(&mut sf.sketch, id, value)?;
@@ -956,13 +955,14 @@ impl SketchSession {
         let read = if action.is_dimension() {
             dimension_input(text, action.unit(), scope)
         } else {
-            Err("Das ist kein Maß".to_string())
+            Err(crate::msg!("sketch-not-dimension"))
         };
         let (value, formula) = match read {
             Ok(r) => r,
             Err(e) => {
-                self.message = Some(e.clone());
-                return Err(e);
+                let text = e.text();
+                self.message = Some(e);
+                return Err(text);
             }
         };
         let id = self.apply(&mut sf.sketch, action, Some(value))?;
@@ -984,10 +984,9 @@ impl SketchSession {
     /// Meldung da, sofern keine andere ansteht oder nur der allgemeine Hinweis.
     fn note_formula_problem(&mut self, sf: &SketchFeature) {
         if let Some(p) = formula_problem(sf, self.last_report.as_ref())
-            && (self.message.is_none()
-                || self.message.as_deref() == unsolved_hint(self.last_report.as_ref()))
+            && (self.message.is_none() || self.message == unsolved_hint(self.last_report.as_ref()))
         {
-            self.message = Some(p.to_string());
+            self.message = Some(p);
         }
     }
 
@@ -1004,9 +1003,9 @@ impl SketchSession {
             let kind = sk
                 .constraint(id)
                 .map(|c| c.kind.clone())
-                .ok_or_else(|| "Abhängigkeit nicht gefunden".to_string())?;
+                .ok_or_else(|| crate::msg!("sketch-constraint-missing"))?;
             if !kind.is_dimension() {
-                return Err("Nur Maße können nur anzeigend sein".into());
+                return Err(crate::msg!("sketch-only-dimension-driven"));
             }
             if let Some(v) = sk.measure(&kind) {
                 sk.set_constraint_value(id, v).map_err(err)?;
@@ -1019,18 +1018,12 @@ impl SketchSession {
                 check_change(&report, before.as_ref(), prior, (!driven).then_some(id))
             {
                 return Err(match problem {
-                    SolveStatus::Conflicting => {
-                        "Widerspruch: Das Maß widerspricht vorhandenen Abhängigkeiten".to_string()
-                    }
-                    _ => "Die Skizze ließ sich nach der Änderung nicht lösen".to_string(),
+                    SolveStatus::Conflicting => crate::msg!("sketch-change-conflict"),
+                    _ => crate::msg!("sketch-change-unsolved"),
                 });
             }
             if !driven && report.redundant.contains(&id) {
-                return Err(
-                    "Dieses Maß ist bereits durch andere Abhängigkeiten bestimmt und bleibt nur \
-                     anzeigend"
-                        .into(),
-                );
+                return Err(crate::msg!("sketch-stays-driven"));
             }
             se.warn_if_unsolved();
             Ok(())
@@ -1109,23 +1102,20 @@ impl SketchSession {
         };
         match report.status {
             SolveStatus::Conflicting => (
-                format!(
-                    "Widerspruch zwischen {} Abhängigkeiten",
-                    report.conflicting.len()
-                ),
+                tr!("sketch-status-conflict", n = report.conflicting.len()),
                 Severity::Error,
             ),
-            SolveStatus::NotConverged => ("Nicht lösbar".into(), Severity::Error),
+            SolveStatus::NotConverged => (tr!("sketch-status-unsolvable"), Severity::Error),
             SolveStatus::Solved => {
                 let mut text = match report.dof {
-                    0 => "Vollständig bestimmt".to_string(),
-                    1 => "1 Freiheitsgrad".to_string(),
-                    n => format!("{n} Freiheitsgrade"),
+                    0 => tr!("sketch-status-solved"),
+                    1 => tr!("sketch-status-dof-one"),
+                    n => tr!("sketch-status-dof", n = n),
                 };
                 if report.redundant.is_empty() {
                     (text, Severity::Info)
                 } else {
-                    text.push_str(&format!(", {} überzählig", report.redundant.len()));
+                    text.push_str(&tr!("sketch-status-redundant", n = report.redundant.len()));
                     (text, Severity::Warning)
                 }
             }
@@ -1239,12 +1229,17 @@ pub fn with_checked_value(
     kind: &ConstraintKind,
     value: f64,
 ) -> Result<ConstraintKind, String> {
+    checked_value(sk, kind, value).map_err(|m| m.text())
+}
+
+/// Wie [`with_checked_value`], mit der Meldung als Grund (zum Speichern).
+fn checked_value(sk: &Sketch, kind: &ConstraintKind, value: f64) -> Result<ConstraintKind, Msg> {
     if !value.is_finite() {
-        return Err("Bitte eine Zahl eingeben".into());
+        return Err(crate::msg!("sketch-enter-number"));
     }
     let changed = kind
         .with_value(value)
-        .ok_or_else(|| "Das ist kein Maß".to_string())?;
+        .ok_or_else(|| crate::msg!("sketch-not-dimension"))?;
     sk.check_constraint_value(&changed).map_err(err)?;
     Ok(changed)
 }

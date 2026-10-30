@@ -13,13 +13,14 @@
 
 use crate::annotate::{Mark, MarkKind, TextAnchor};
 use crate::model::Projection;
-use crate::parts::{PARTS_HEAD, PartsCells};
+use crate::parts::{PartsCells, parts_head};
 use crate::sheet_frame::{
     GRID_TEXT_H, LABEL_H, NOTE_LINES_MAX, NOTES_LINE_MM, NOTES_PAD_MM, NOTES_TEXT_H, PARTS_ROW_H,
     PROJECTION_CENTRE_Y, PROJECTION_X0, PartsSpace, REV_ROW_H, REV_VISIBLE, SheetLayout, SheetPen,
     TitleField, VALUE_H, projection_symbol,
 };
 use crate::sheet_info::TitleTexts;
+use planora_i18n::tr;
 use planora_math::{DVec2, TAU};
 
 /// Der Blattrahmen eines Blatts als Markierungen.
@@ -310,7 +311,7 @@ fn build_frame(
             p(t0.x + c.x0 + s(1.0), t0.y + c.y1 - s(1.0) - s(LABEL_H)),
             s(LABEL_H),
             TextAnchor::Start,
-            c.label,
+            &c.label.text(),
         );
     }
     for slot in &layout.title_slots() {
@@ -376,12 +377,17 @@ fn revision_table(m: &mut Vec<Mark>, layout: &SheetLayout, texts: &TitleTexts, w
         m.push(line(p(x, lo.y), p(x, hi.y), SheetPen::Thin));
     }
     let shown = texts.visible_revisions();
-    let head = ["Rev.", "Änderung", "Datum", "Name"];
+    let head = [
+        tr!("drawing-rev-head-letter"),
+        tr!("drawing-rev-head-change"),
+        tr!("sheet-rev-date"),
+        tr!("sheet-rev-name"),
+    ];
     for k in 0..=rows {
         let baseline = hi.y - row_h * (k + 1) as f64 + s((REV_ROW_H - VALUE_H) / 2.0);
         for (i, col) in columns.iter().enumerate() {
             let t = if k == 0 {
-                head[i]
+                head[i].as_str()
             } else {
                 shown.get(k - 1).map_or("", |r| r[i].as_str())
             };
@@ -466,11 +472,12 @@ pub fn parts_table_marks(layout: &SheetLayout, rows: &[PartsCells], widen: f64) 
     for &x in &xs[1..xs.len() - 1] {
         m.push(line(p(x, y0), p(x, y1), SheetPen::Thin));
     }
+    let head = parts_head();
     for k in 0..=n {
         let baseline = row_bottom(k) + s((PARTS_ROW_H - VALUE_H) / 2.0);
         for (i, col) in columns.iter().enumerate() {
             let t = if k == 0 {
-                PARTS_HEAD[i]
+                head[i].as_str()
             } else {
                 rows[k - 1][i].as_str()
             };

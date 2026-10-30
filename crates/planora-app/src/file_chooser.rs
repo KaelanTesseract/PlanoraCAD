@@ -13,6 +13,7 @@ use crate::icons::{self, Icon};
 use crate::mesh_body::warning_color;
 use crate::places::{self, Place, PlaceKind, Places};
 use crate::theme;
+use planora_i18n::tr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -20,17 +21,29 @@ use std::time::Duration;
 pub const MAX_ENTRIES: usize = 2000;
 /// Höhe der Liste in Punkten.
 const LIST_HEIGHT: f32 = 220.0;
-const REPLACE_HINT: &str = "Diese Datei gibt es schon. Noch einmal klicken, um sie zu ersetzen.";
+fn replace_hint() -> String {
+    tr!("chooser-replace-hint")
+}
 
 /// Knopf der Fußzeile im Ordner-Modus.
-pub const CHOOSE_FOLDER: &str = "Diesen Ordner wählen";
+pub fn choose_folder() -> String {
+    tr!("chooser-choose-folder")
+}
 /// Leere Liste im Ordner-Modus.
-pub const NO_SUBFOLDERS: &str = "Hier gibt es keine Unterordner.";
+pub fn no_subfolders() -> String {
+    tr!("chooser-no-subfolders")
+}
 /// Anfang der Zeile mit dem Ordner, der gewählt würde (Ordner-Modus, statt „Dateiname“).
-pub const CHOSEN_PREFIX: &str = "Gewählt:";
+pub fn chosen_prefix() -> String {
+    tr!("chooser-chosen-prefix")
+}
 /// Meldung, wenn der Ordner nicht (mehr) vorhanden ist.
-pub const NO_FOLDER: &str = "Bitte einen vorhandenen Ordner wählen.";
-const NO_MATCHING_FILES: &str = "Hier gibt es keine passenden Dateien.";
+pub fn no_folder() -> String {
+    tr!("chooser-no-folder")
+}
+fn no_matching_files() -> String {
+    tr!("chooser-no-matching-files")
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChooserMode {
@@ -60,7 +73,9 @@ pub struct Entry {
 }
 
 /// Hinweis beim Überfahren eines Ordners.
-pub const OPEN_HINT: &str = "Doppelklick zum Öffnen";
+pub fn open_hint() -> String {
+    tr!("chooser-open-hint")
+}
 
 /// Symbol eines Eintrags der Liste: Ordner (Akzentfarbe) oder Datei (ruhiges Grau, eines für
 /// alle Dateiarten, damit die Namen bündig stehen).
@@ -99,9 +114,9 @@ pub fn entry_text(entry: &Entry) -> &str {
     &entry.name
 }
 
-/// Tooltip eines Eintrags: bei Ordnern [`OPEN_HINT`].
-pub fn entry_hover(entry: &Entry) -> Option<&'static str> {
-    entry.is_dir.then_some(OPEN_HINT)
+/// Tooltip eines Eintrags: bei Ordnern [`open_hint`].
+pub fn entry_hover(entry: &Entry) -> Option<String> {
+    entry.is_dir.then(open_hint)
 }
 
 /// Eintrag des Kontextmenüs einer Zeile oder eines Favoriten-Knopfs.
@@ -112,10 +127,10 @@ pub enum RowMenu {
 }
 
 impl RowMenu {
-    pub fn label(&self) -> &'static str {
+    pub fn label(&self) -> String {
         match self {
-            RowMenu::AddFavorite(_) => places::ADD_FAVORITE,
-            RowMenu::RemoveFavorite(_) => places::REMOVE_FAVORITE,
+            RowMenu::AddFavorite(_) => places::add_favorite_label(),
+            RowMenu::RemoveFavorite(_) => places::remove_favorite_label(),
         }
     }
 }
@@ -250,12 +265,13 @@ pub struct FileChooser {
     entries: Vec<Entry>,
     /// Der Ordner hat mehr als [`MAX_ENTRIES`] Einträge.
     pub truncated: bool,
-    pub error: Option<String>,
+    pub error: Option<ChooserError>,
     /// Ziel, dessen Ersetzen noch bestätigt werden muss.
     confirm: Option<PathBuf>,
     /// Per Klick markierter Unterordner (nur Ordner-Modus); jeder Ordnerwechsel löscht ihn.
     marked: Option<String>,
-    /// Vorhandene bekannte Ordner (einmal beim Öffnen der Auswahl ermittelt).
+    /// Vorhandene bekannte Ordner (einmal beim Öffnen der Auswahl ermittelt); die Beschriftungen
+    /// darin gelten nur beim Anlegen, gezeichnet wird mit [`places::known_label`].
     known: Vec<Place>,
     /// Zuletzt geprüfter Projektordner und ob es ihn gibt (nicht in jedem Bild prüfen).
     project: Option<(PathBuf, bool)>,
@@ -280,11 +296,46 @@ pub fn default_dir() -> PathBuf {
 }
 
 /// Einfache Meldung zu einem Lesefehler, ohne Text des Betriebssystems.
-pub fn io_message(kind: std::io::ErrorKind) -> &'static str {
+pub fn io_message(kind: std::io::ErrorKind) -> String {
     match kind {
-        std::io::ErrorKind::NotFound => "Der Ordner ist nicht vorhanden.",
-        std::io::ErrorKind::PermissionDenied => "Auf diesen Ordner darf nicht zugegriffen werden.",
-        _ => "Der Ordner lässt sich nicht öffnen.",
+        std::io::ErrorKind::NotFound => planora_i18n::tr!("chooser-io-not-found"),
+        std::io::ErrorKind::PermissionDenied => planora_i18n::tr!("chooser-io-denied"),
+        _ => planora_i18n::tr!("chooser-io-other"),
+    }
+}
+
+/// Grund der Meldung unter der Liste. Gespeichert wird der Grund, nicht der Text: gezeichnet wird
+/// in der Sprache des Bildes ([`ChooserError::text`]), auch wenn sie bei offener Auswahl wechselt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChooserError {
+    /// Der Ordner lässt sich nicht lesen (mit dem Grund).
+    Io(std::io::ErrorKind),
+    /// Der eingetippte Ordner fehlt.
+    FolderMissing,
+    /// Der Ordner im Ordner-Modus gibt es nicht (mehr).
+    NoFolder,
+    /// Der Dateiname ist leer oder hat verbotene Zeichen.
+    BadFileName,
+    /// Beim Öffnen fehlt eine vorhandene Datei.
+    PickExistingFile,
+    /// Der Ordner eines Favoriten fehlt.
+    FavoriteMissing,
+    /// Fertiger Text aus einer anderen Stelle (etwa die Meldung der Favoriten); nicht übersetzt.
+    Raw(String),
+}
+
+impl ChooserError {
+    /// Der Text in der aktuellen Sprache.
+    pub fn text(&self) -> String {
+        match self {
+            ChooserError::Io(kind) => io_message(*kind),
+            ChooserError::FolderMissing => tr!("chooser-folder-missing"),
+            ChooserError::NoFolder => no_folder(),
+            ChooserError::BadFileName => tr!("chooser-bad-file-name"),
+            ChooserError::PickExistingFile => tr!("chooser-pick-existing-file"),
+            ChooserError::FavoriteMissing => places::favorite_missing(),
+            ChooserError::Raw(text) => text.clone(),
+        }
     }
 }
 
@@ -349,7 +400,17 @@ impl FileChooser {
             }
             None => None,
         };
-        places::build_places(&self.known, project, drives, &shared.favorites)
+        // Die Beschriftungen der bekannten Ordner erst jetzt übersetzen: die Auswahl kann bei
+        // einem Wechsel der Sprache offen bleiben.
+        let known: Vec<Place> = self
+            .known
+            .iter()
+            .map(|p| Place {
+                label: places::known_label(p.kind),
+                ..p.clone()
+            })
+            .collect();
+        places::build_places(&known, project, drives, &shared.favorites)
     }
 
     /// Wechselt in den Ordner eines Schnellzugriffs (wie eingetippt); fehlt er, die übliche
@@ -358,7 +419,7 @@ impl FileChooser {
         self.dir_text = place.path.display().to_string();
         let ok = self.go_to_text();
         if !ok && place.kind == PlaceKind::Favorite {
-            self.error = Some(places::FAVORITE_MISSING.into());
+            self.error = Some(ChooserError::FavoriteMissing);
         }
         ok
     }
@@ -368,11 +429,16 @@ impl FileChooser {
         match menu {
             RowMenu::AddFavorite(p) => {
                 if let Err(e) = shared.add_favorite(p) {
-                    self.error = Some(e.into());
+                    self.error = Some(ChooserError::Raw(e));
                 }
             }
             RowMenu::RemoveFavorite(p) => shared.remove_favorite(p),
         }
+    }
+
+    /// Die Meldung unter der Liste in der aktuellen Sprache.
+    pub fn error_text(&self) -> Option<String> {
+        self.error.as_ref().map(ChooserError::text)
     }
 
     pub fn dir(&self) -> &Path {
@@ -392,7 +458,7 @@ impl FileChooser {
         let read = match std::fs::read_dir(&self.dir) {
             Ok(r) => r,
             Err(e) => {
-                self.error = Some(io_message(e.kind()).into());
+                self.error = Some(ChooserError::Io(e.kind()));
                 return;
             }
         };
@@ -454,7 +520,7 @@ impl FileChooser {
             self.set_dir(p);
             true
         } else {
-            self.error = Some("Diesen Ordner gibt es nicht.".into());
+            self.error = Some(ChooserError::FolderMissing);
             false
         }
     }
@@ -524,7 +590,7 @@ impl FileChooser {
         (!bad).then_some(name)
     }
 
-    /// „Speichern“, „Öffnen“ oder [`CHOOSE_FOLDER`]: liefert das Ziel. Gibt es die Datei beim
+    /// „Speichern“, „Öffnen“ oder [`choose_folder`]: liefert das Ziel. Gibt es die Datei beim
     /// Speichern schon, erst beim zweiten Aufruf mit demselben Ziel (ein Ordner wird nie
     /// ersetzt). Im Ordner-Modus gilt ein eingetippter, noch nicht übernommener Ordner zuerst
     /// (gibt es ihn nicht, wird nichts gewählt); ist der markierte Ordner verschwunden, wird
@@ -539,20 +605,15 @@ impl FileChooser {
         if self.mode == ChooserMode::Folder && self.marked.is_some() && self.target().is_none() {
             self.marked = None;
             self.reload();
-            self.error = Some(NO_FOLDER.into());
+            self.error = Some(ChooserError::NoFolder);
             return ChooserAction::None;
         }
         let Some(target) = self.target() else {
-            self.error = Some(
-                match self.mode {
-                    ChooserMode::Save => {
-                        "Bitte einen gültigen Dateinamen eingeben (ohne Sonderzeichen wie : ? * oder Schrägstriche)."
-                    }
-                    ChooserMode::Open => "Bitte eine vorhandene Datei wählen.",
-                    ChooserMode::Folder => NO_FOLDER,
-                }
-                .into(),
-            );
+            self.error = Some(match self.mode {
+                ChooserMode::Save => ChooserError::BadFileName,
+                ChooserMode::Open => ChooserError::PickExistingFile,
+                ChooserMode::Folder => ChooserError::NoFolder,
+            });
             return ChooserAction::None;
         };
         self.error = None;
@@ -585,16 +646,16 @@ impl FileChooser {
     }
 
     /// Oberer Teil: Ordnerzeile, Schnellzugriffe, Liste und Dateiname, im Ordner-Modus statt
-    /// des Dateinamens die Zeile [`CHOSEN_PREFIX`] (alles, was rollen darf).
+    /// des Dateinamens die Zeile [`chosen_prefix`] (alles, was rollen darf).
     /// Geänderte Favoriten stehen danach in `shared` (`changes`); eine Meldung aus dem letzten
     /// Speichern (`shared.notice`) wird übernommen und angezeigt.
     pub fn show_body(&mut self, ui: &mut egui::Ui, shared: &mut Places) -> ChooserAction {
         if let Some(notice) = shared.notice.take() {
-            self.error = Some(notice.into());
+            self.error = Some(ChooserError::Raw(notice));
         }
         let mut action = ChooserAction::None;
         ui.horizontal(|ui| {
-            if ui.button("Ordner höher").clicked() {
+            if ui.button(tr!("chooser-folder-up")).clicked() {
                 self.up();
             }
             let edit = theme::text_field(
@@ -673,15 +734,13 @@ impl FileChooser {
                 });
                 if self.entries.is_empty() {
                     ui.weak(if folder_mode {
-                        NO_SUBFOLDERS
+                        no_subfolders()
                     } else {
-                        NO_MATCHING_FILES
+                        no_matching_files()
                     });
                 }
                 if self.truncated {
-                    ui.weak(format!(
-                        "Es werden nur die ersten {MAX_ENTRIES} Einträge gezeigt."
-                    ));
+                    ui.weak(tr!("chooser-truncated", n = MAX_ENTRIES));
                 }
             },
         );
@@ -699,13 +758,17 @@ impl FileChooser {
         }
         if folder_mode {
             // Statt des Dateinamens: der Ordner, der gewählt würde (eine Zeile, gekürzt).
-            let chosen = format!("{CHOSEN_PREFIX} {}", display_path(&self.folder_choice()));
+            let chosen = format!(
+                "{} {}",
+                chosen_prefix(),
+                display_path(&self.folder_choice())
+            );
             ui.add(egui::Label::new(chosen).truncate());
             return action;
         }
         let mut enter = false;
         ui.horizontal(|ui| {
-            ui.label("Dateiname");
+            ui.label(tr!("chooser-file-name"));
             let edit = theme::text_field(
                 ui,
                 egui::TextEdit::singleline(&mut self.file_name).desired_width(f32::INFINITY),
@@ -729,26 +792,26 @@ impl FileChooser {
     }
 
     /// Unterer Teil: Meldungen und die Knöpfe „Speichern“ bzw. „Ersetzen“, „Öffnen“ oder
-    /// [`CHOOSE_FOLDER`] und „Abbrechen“ (in Fenstern mit Fußzeile dort, damit sie nie unter den Rand rollen).
+    /// [`choose_folder`] und „Abbrechen“ (in Fenstern mit Fußzeile dort, damit sie nie unter den Rand rollen).
     pub fn show_footer(&mut self, ui: &mut egui::Ui) -> ChooserAction {
         let mut action = ChooserAction::None;
         if let Some(e) = &self.error {
-            ui.colored_label(error_color(ui.visuals().dark_mode), e);
+            ui.colored_label(error_color(ui.visuals().dark_mode), e.text());
         }
         if self.asks_to_replace() {
-            ui.colored_label(warning_color(ui.visuals().dark_mode), REPLACE_HINT);
+            ui.colored_label(warning_color(ui.visuals().dark_mode), replace_hint());
         }
         ui.horizontal(|ui| {
             let label = match self.mode {
-                ChooserMode::Save if self.asks_to_replace() => "Ersetzen",
-                ChooserMode::Save => "Speichern",
-                ChooserMode::Open => "Öffnen",
-                ChooserMode::Folder => CHOOSE_FOLDER,
+                ChooserMode::Save if self.asks_to_replace() => tr!("chooser-replace"),
+                ChooserMode::Save => tr!("common-save"),
+                ChooserMode::Open => tr!("chooser-open"),
+                ChooserMode::Folder => choose_folder(),
             };
             if ui.button(label).clicked() {
                 action = self.confirm();
             }
-            if ui.button("Abbrechen").clicked() {
+            if ui.button(tr!("common-cancel")).clicked() {
                 action = ChooserAction::Cancel;
             }
         });

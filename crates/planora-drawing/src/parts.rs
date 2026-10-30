@@ -3,6 +3,7 @@
 //! in [`sheet_frame`](crate::sheet_frame) und [`sheet_marks`](crate::sheet_marks)).
 
 use crate::sheet_info::{FieldValue, check_value};
+use planora_i18n::{Lang, available, tr, with_lang};
 use std::collections::BTreeMap;
 
 /// Kennung eines Körpers über Änderungen am Teil hinweg: der Ursprungs-Körper (Feature und
@@ -45,8 +46,16 @@ pub struct PartsRow {
 /// Die Texte einer Zeile: Pos., Benennung, Menge, Werkstoff, Bemerkung.
 pub type PartsCells = [String; 5];
 
-/// Feste Spaltennamen.
-pub const PARTS_HEAD: [&str; 5] = ["Pos.", "Benennung", "Menge", "Werkstoff", "Bemerkung"];
+/// Feste Spaltennamen in der aktuellen Sprache: Pos., Benennung, Menge, Werkstoff, Bemerkung.
+pub fn parts_head() -> [String; 5] {
+    [
+        tr!("parts-col-pos"),
+        tr!("parts-col-name"),
+        tr!("parts-col-qty"),
+        tr!("parts-col-material"),
+        tr!("parts-col-note"),
+    ]
+}
 pub const MAX_PARTS_NAME_CHARS: usize = 60;
 pub const MAX_PARTS_QTY_CHARS: usize = 60;
 pub const MAX_PARTS_MATERIAL_CHARS: usize = 60;
@@ -59,24 +68,73 @@ pub const MAX_PARTS_LIST_ROWS: usize = 200;
 pub const MAX_BALLOONS: usize = 200;
 /// Höchstens so viele Überschreibungen je Dokument.
 pub const MAX_OVERRIDES: usize = 1000;
-/// Dokumentart der Stücklistenblätter.
-pub const PARTS_DOC_TYPE: &str = "Stückliste";
+/// Dokumentart der Stücklistenblätter in der aktuellen Sprache („Stückliste“).
+pub fn parts_doc_type() -> String {
+    tr!("drawing-parts-doc-type")
+}
 
-/// Name des Stücklistenblatts `page` (ab 1): „Stückliste“, „Stückliste (2)“, …
+/// Name des Stücklistenblatts `page` (ab 1) in der aktuellen Sprache: „Stückliste“,
+/// „Stückliste (2)“, … Der Name entsteht beim Anlegen des Blatts und ist danach Benutzerdaten:
+/// Stücklistenblätter erkennt man an [`DrawingKind::PartsList`](crate::DrawingKind), nicht am
+/// Namen.
 pub fn parts_sheet_name(page: u32) -> String {
     if page <= 1 {
-        PARTS_DOC_TYPE.to_string()
+        parts_doc_type()
     } else {
-        format!("{PARTS_DOC_TYPE} ({page})")
+        tr!(
+            "drawing-parts-sheet-page",
+            name = parts_doc_type(),
+            page = page.to_string()
+        )
+    }
+}
+
+/// Vergleichsschlüssel eines Namens: ohne Leerraum an den Enden, klein geschrieben.
+fn name_key(name: &str) -> String {
+    name.trim().to_lowercase()
+}
+
+/// Ob `name` der Name des Stücklistenblatts `page` in einer der verfügbaren Sprachen ist
+/// (Leerraum an den Enden und Groß-/Kleinschreibung zählen nicht). So bleibt ein Dokument, das
+/// in einer Sprache angelegt wurde, in jeder anderen gültig.
+pub fn is_parts_sheet_name(name: &str, page: u32) -> bool {
+    parts_sheet_lang(name, page).is_some()
+}
+
+/// Die verfügbare Sprache, in der `name` der Name des Stücklistenblatts `page` ist (bei
+/// gleichen Namen die aktuelle Sprache zuerst).
+fn parts_sheet_lang(name: &str, page: u32) -> Option<Lang> {
+    let key = name_key(name);
+    let current = planora_i18n::current();
+    std::iter::once(current)
+        .chain(available())
+        .find(|l| with_lang(l, || name_key(&parts_sheet_name(page))) == key)
+}
+
+/// Name des Stücklistenblatts `page` in der Sprache, in der `first` (der Name von Seite 1)
+/// geschrieben ist, sonst in der aktuellen Sprache. Damit heißen Folgeblätter wie ihre erste
+/// Seite, auch wenn das Programm inzwischen eine andere Sprache spricht.
+pub fn parts_sheet_name_like(first: &str, page: u32) -> String {
+    match parts_sheet_lang(first, 1) {
+        Some(lang) => with_lang(&lang, || parts_sheet_name(page)),
+        None => parts_sheet_name(page),
     }
 }
 
 /// Prüft die eigenen Texte einer Zeile: Längen in Zeichen und Steuerzeichen.
 pub fn validate_override(o: &RowOverride) -> Result<(), String> {
-    check_value("Die Benennung", &o.name, MAX_PARTS_NAME_CHARS)?;
-    check_value("Die Menge", &o.qty, MAX_PARTS_QTY_CHARS)?;
-    check_value("Der Werkstoff", &o.material, MAX_PARTS_MATERIAL_CHARS)?;
-    check_value("Die Bemerkung", &o.note, MAX_PARTS_NOTE_CHARS)
+    check_value(
+        || tr!("drawing-what-part-name"),
+        &o.name,
+        MAX_PARTS_NAME_CHARS,
+    )?;
+    check_value(|| tr!("drawing-what-qty"), &o.qty, MAX_PARTS_QTY_CHARS)?;
+    check_value(
+        || tr!("drawing-what-material"),
+        &o.material,
+        MAX_PARTS_MATERIAL_CHARS,
+    )?;
+    check_value(|| tr!("drawing-what-note"), &o.note, MAX_PARTS_NOTE_CHARS)
 }
 
 /// Löst die Zeilen mit ihren Überschreibungen (unter dem ersten Schlüssel der Zeile) zu den

@@ -9,7 +9,7 @@ use super::error::BooleanError;
 use super::roots::{CurveSurface, curve_surface_roots, seg_intersections};
 use super::seg::Seg;
 use super::split::{pole_point, seam_segments};
-use super::surfsurf::{SurfaceIntersection, intersect_surfaces, surface_name};
+use super::surfsurf::{SurfaceIntersection, intersect_surfaces, surface_label, surface_name};
 use super::uv::{
     Containment, FaceGeom, check_loops_on_surface, face_geom, loop_points, point_in_face,
 };
@@ -17,6 +17,7 @@ use super::{face_is_freeform, pipeline_tol};
 use crate::geometry::{Curve, Surface};
 use crate::topology::Solid;
 use crate::validate::edge_surface_tol;
+use planora_i18n::tr;
 use planora_math::{DVec3, Tolerance};
 
 /// Zuschlag zum Hüllquader als Anteil seiner Diagonale (deckt die Sehnenabweichung der
@@ -460,11 +461,20 @@ pub fn imprint(
                 SurfaceIntersection::None | SurfaceIntersection::Touch => {}
                 SurfaceIntersection::Unsupported => return Err(unsupported()),
                 SurfaceIntersection::UnsupportedBecause(msg) => {
-                    return Err(BooleanError::Unsupported(format!(
-                        "Der Schnitt von {} mit {} wird nicht unterstützt: {msg}",
-                        surface_name(&ga.surface),
-                        surface_name(&gb.surface)
-                    )));
+                    let text = tr!(
+                        "kernel-boolean-intersection-because",
+                        a = surface_label(surface_name(&ga.surface)),
+                        b = surface_label(surface_name(&gb.surface)),
+                        msg = msg
+                    );
+                    // Nur Wege mit Freiformflächen kommen hierher (der Schnittrechner braucht
+                    // mindestens eine); sie gelten als Freiform-Grenze. Der Zweig `Unsupported`
+                    // ist nur Absicherung und wird nie erreicht.
+                    return Err(if freeform {
+                        BooleanError::FreeformLimit(text)
+                    } else {
+                        BooleanError::Unsupported(text)
+                    });
                 }
                 SurfaceIntersection::Coincident => {
                     for s in coincident_sections(fb, fa, tol_p) {

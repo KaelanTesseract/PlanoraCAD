@@ -204,14 +204,14 @@ fn hostile_text_files_get_named_errors_with_line_numbers() {
             "solid x\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nendloop\nendfacet\nendsolid\n",
             ExchangeError::Syntax {
                 line: 7,
-                msg: three,
+                msg: three.to_string(),
             },
         ),
         (
             "solid x\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nvertex 1 1 0\n",
             ExchangeError::Syntax {
                 line: 7,
-                msg: three,
+                msg: three.to_string(),
             },
         ),
         (
@@ -230,7 +230,7 @@ fn hostile_text_files_get_named_errors_with_line_numbers() {
             "solid x\nfacet normal 0 0 1\nouter loop\nvertex 0 0\n",
             ExchangeError::Syntax {
                 line: 4,
-                msg: "Es fehlt eine Zahl",
+                msg: "Es fehlt eine Zahl".to_string(),
             },
         ),
         (
@@ -241,7 +241,7 @@ fn hostile_text_files_get_named_errors_with_line_numbers() {
             "solid x\r\nhallo welt\r\n",
             ExchangeError::Syntax {
                 line: 2,
-                msg: "Unbekanntes Wort in der STL-Datei",
+                msg: "Unbekanntes Wort in der STL-Datei".to_string(),
             },
         ),
     ];
@@ -262,7 +262,7 @@ fn an_endless_line_is_refused() {
         read(&text),
         Err(ExchangeError::Syntax {
             line: 2,
-            msg: "Die Zeile ist zu lang"
+            msg: "Die Zeile ist zu lang".to_string()
         })
     );
 }

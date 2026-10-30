@@ -9,6 +9,7 @@
 
 use crate::error::FeatureError;
 use crate::model::{Document, FeatureId, FeatureKind, FeatureStatus};
+use planora_i18n::tr;
 use planora_kernel::Solid;
 use planora_step::read::units::{MAX_WELD_TOL_MM, MIN_WELD_TOL_MM};
 use planora_step::{COARSE_TOL_MM, check_normal_header, read_normal_body};
@@ -109,7 +110,7 @@ impl StepShape {
     pub fn new(text: String, tolerance_mm: f64) -> Result<StepShape, String> {
         check_normal_header(&text)?;
         if !(MIN_WELD_TOL_MM..=MAX_WELD_TOL_MM).contains(&tolerance_mm) {
-            return Err("Die Genauigkeit muss zwischen 0,000001 und 0,001 mm liegen.".into());
+            return Err(tr!("feature-step-accuracy"));
         }
         Ok(StepShape {
             text,
@@ -216,9 +217,7 @@ impl Document {
             return Ok(Vec::new());
         }
         if bodies.iter().any(|b| b.name.trim().is_empty()) {
-            return Err(FeatureError::InvalidInput(
-                "Der Name darf nicht leer sein".into(),
-            ));
+            return Err(FeatureError::InvalidInput(tr!("feature-name-empty")));
         }
         // Nie mehr STEP-Text halten, als sich speichern lässt (Summengrenze des Dateiformats).
         let total = step_text_sum(
@@ -228,10 +227,10 @@ impl Document {
         );
         let limit = step_text_sum_limit();
         if total > limit {
-            return Err(FeatureError::StepImport(format!(
-                "Die STEP-Formen im Projekt sind zusammen zu groß ({} MB, erlaubt {} MB). Bitte weniger oder kleinere Körper importieren.",
-                step_text_megabytes(total),
-                step_text_megabytes(limit)
+            return Err(FeatureError::StepImport(tr!(
+                "feature-step-total-size",
+                size = crate::expr::display_number(&step_text_megabytes(total)),
+                limit = crate::expr::display_number(&step_text_megabytes(limit))
             )));
         }
         let saved = (self.next_id, self.next_step_shape, self.edits, self.marker);
@@ -250,7 +249,11 @@ impl Document {
                     FeatureStatus::Error(m) | FeatureStatus::Skipped(m) => m.clone(),
                     other => format!("{other:?}"),
                 };
-                Some(FeatureError::StepImport(format!("„{}“: {message}", f.name)))
+                Some(FeatureError::StepImport(tr!(
+                    "feature-step-import-reason",
+                    name = f.name.to_string(),
+                    detail = message.to_string()
+                )))
             }),
         };
         let Some(e) = refused else {
@@ -276,9 +279,10 @@ impl Document {
         let mut named = Vec::with_capacity(bodies.len());
         for b in bodies {
             let id = StepShapeId(self.next_step_shape);
-            self.next_step_shape = self.next_step_shape.checked_add(1).ok_or_else(|| {
-                FeatureError::InvalidInput("Die STEP-Form-Kennungen sind aufgebraucht".into())
-            })?;
+            self.next_step_shape = self
+                .next_step_shape
+                .checked_add(1)
+                .ok_or_else(|| FeatureError::InvalidInput(tr!("feature-step-ids-used")))?;
             self.step_shapes.insert(id, b.shape);
             shapes.push(id);
             named.push((b.name, id));

@@ -1,6 +1,6 @@
 //! Rundungen und Fasen in der App (Teilprojekt 8, Task 8).
 
-use planora_app::blend_dialog::{ArtChoice, BlendDialog, NO_EDGE};
+use planora_app::blend_dialog::{ArtChoice, BlendDialog, no_edge};
 use planora_app::state::*;
 use planora_feature::{BlendArt, FeatureKind};
 use planora_kernel::blend::topo::{edge_uses, face_name};
@@ -77,7 +77,7 @@ fn the_dialog_needs_a_clicked_edge_and_valid_numbers() {
     let (mut s, e) = with_box();
     let mut d = BlendDialog::fillet();
     assert!(d.execute(&mut s), "ohne Kante bleibt das Fenster offen");
-    assert_eq!(d.error(), Some(NO_EDGE));
+    assert_eq!(d.error(), Some(no_edge().text()));
     s.set_selection(Some(Pick::Edge(EdgeRef { body: 0, edge: e })));
     d.first = "abc".into();
     assert!(d.execute(&mut s));
@@ -115,7 +115,7 @@ fn chamfer_choices_read_their_fields() {
     );
     assert_eq!(
         ArtChoice::FaseZwei.fields(),
-        ("Abstand 1", Some("Abstand 2"))
+        ("Abstand 1".to_string(), Some("Abstand 2".to_string()))
     );
 }
 

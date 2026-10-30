@@ -49,6 +49,7 @@ use crate::error::DrawError;
 use crate::out2d::{Out2d, bezier_pieces};
 use crate::sheet::SheetModel;
 use crate::sheet_frame::sheet_scale;
+use planora_i18n::tr;
 use planora_math::{DVec2, PI, TAU};
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -87,7 +88,7 @@ pub fn svg_string(model: &SheetModel) -> Result<String, DrawError> {
     let mut used: BTreeSet<String> = BTreeSet::new();
     if let Some(frame) = &model.frame {
         // Der Blattrahmen steht als erste Gruppe unter den Ansichten.
-        let id = unique_name(&mut used, FRAME_GROUP);
+        let id = unique_name(&mut used, &tr!("drawing-group-frame"));
         let mut body = String::new();
         for m in &frame.marks {
             mark_element(&mut body, m, frame.scale)?;
@@ -133,8 +134,6 @@ pub fn svg_string(model: &SheetModel) -> Result<String, DrawError> {
 // Markierungen
 // ---------------------------------------------------------------------------------------------
 
-/// Kennung der Gruppe des Blattrahmens.
-const FRAME_GROUP: &str = "Blattrahmen";
 /// Farbe der Maße und Mittellinien.
 const MARK_COLOR: &str = "#000";
 /// Farbe verlorener Maße.
@@ -179,9 +178,9 @@ fn mark_group(m: &Mark) -> MarkGroup {
 }
 
 /// Schreibt die Gruppen `„{name} Maße“`, `„{name} Mittellinien“` und `„{name} Positionen“`
-/// (nur wenn es Markierungen dieser Art gibt; verlorene Kreise stehen wie verlorene Maße bei den
-/// Maßen); die Kennungen sind unter allen Gruppen eindeutig. `sheet_scale` ist der Faktor des
-/// Blatts (Strichbreite der Nummernkreise).
+/// (Wörter in der aktuellen Sprache; nur wenn es Markierungen dieser Art gibt; verlorene Kreise
+/// stehen wie verlorene Maße bei den Maßen); die Kennungen sind unter allen Gruppen eindeutig.
+/// `sheet_scale` ist der Faktor des Blatts (Strichbreite der Nummernkreise).
 fn mark_groups(
     s: &mut String,
     used: &mut BTreeSet<String>,
@@ -189,12 +188,12 @@ fn mark_groups(
     marks: &[Mark],
     sheet_scale: f64,
 ) -> Result<(), DrawError> {
-    for (suffix, group) in [
-        ("Maße", MarkGroup::Dims),
-        ("Mittellinien", MarkGroup::Centre),
-        ("Positionen", MarkGroup::Positions),
-        ("Schraffur", MarkGroup::Hatch),
-        ("Schnitt", MarkGroup::Section),
+    for group in [
+        MarkGroup::Dims,
+        MarkGroup::Centre,
+        MarkGroup::Positions,
+        MarkGroup::Hatch,
+        MarkGroup::Section,
     ] {
         let mut body = String::new();
         for m in marks.iter().filter(|m| mark_group(m) == group) {
@@ -203,6 +202,13 @@ fn mark_groups(
         if body.is_empty() {
             continue;
         }
+        let suffix = match group {
+            MarkGroup::Dims => tr!("drawing-group-dims"),
+            MarkGroup::Centre => tr!("drawing-group-centre"),
+            MarkGroup::Positions => tr!("drawing-group-positions"),
+            MarkGroup::Hatch => tr!("drawing-group-hatch"),
+            MarkGroup::Section => tr!("drawing-group-section"),
+        };
         let id = unique_name(used, &format!("{name} {suffix}"));
         s.push_str(&format!(
             "<g id=\"{}\">
@@ -380,7 +386,13 @@ fn move_to(d: &mut String, p: DVec2) -> Result<(), DrawError> {
 
 /// Eindeutiger Name: bei Wiederholung ` 2`, ` 3`, … anhängen; leer wird zu „Ansicht“.
 fn unique_name(used: &mut BTreeSet<String>, base: &str) -> String {
-    let base = if base.is_empty() { "Ansicht" } else { base };
+    let fallback;
+    let base = if base.is_empty() {
+        fallback = tr!("drawing-view-header");
+        fallback.as_str()
+    } else {
+        base
+    };
     let mut name = base.to_string();
     let mut n = 2;
     while used.contains(&name) {

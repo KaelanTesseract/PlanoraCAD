@@ -216,7 +216,7 @@ fn a_vanished_folder_cannot_be_chosen() {
     fs::remove_dir_all(dir.join("a")).unwrap();
     assert_eq!(c.target(), None);
     assert_eq!(c.confirm(), ChooserAction::None);
-    assert_eq!(c.error.as_deref(), Some(NO_FOLDER));
+    assert_eq!(c.error_text().as_deref(), Some(no_folder().as_str()));
 }
 
 #[test]
@@ -288,12 +288,12 @@ fn footer_says_choose_this_folder_and_cancel_closes() {
     let mut h = Harness::new();
     let seen = h.settle(&mut c);
     let t = texts(&seen);
-    assert!(t.contains(&CHOOSE_FOLDER), "{t:?}");
+    assert!(t.iter().any(|s| *s == choose_folder()), "{t:?}");
     assert!(t.contains(&"Abbrechen"), "{t:?}");
     for absent in ["Dateiname", "Öffnen", "Speichern", "teil.stl", "x.step"] {
         assert!(!t.contains(&absent), "kein „{absent}“: {t:?}");
     }
-    h.clicks(&mut c, CHOOSE_FOLDER, 1);
+    h.clicks(&mut c, &choose_folder(), 1);
     assert_eq!(h.action, ChooserAction::Chosen(dir.clone()));
     h.action = ChooserAction::None;
     h.clicks(&mut c, "Abbrechen", 1);
@@ -307,7 +307,7 @@ fn the_chosen_line_shows_the_target() {
     let mut h = Harness::new();
     let line = |seen: &[Seen]| {
         seen.iter()
-            .find(|s| s.text.starts_with(CHOSEN_PREFIX))
+            .find(|s| s.text.starts_with(&chosen_prefix()))
             .map(|s| s.text.clone())
             .expect("Zeile „Gewählt:“")
     };
@@ -327,7 +327,7 @@ fn empty_folder_shows_no_subfolders_hint() {
     let mut h = Harness::new();
     let seen = h.settle(&mut c);
     let t = texts(&seen);
-    assert!(t.contains(&NO_SUBFOLDERS), "{t:?}");
+    assert!(t.iter().any(|s| *s == no_subfolders()), "{t:?}");
     assert!(
         !t.contains(&"Hier gibt es keine passenden Dateien."),
         "{t:?}"
@@ -345,8 +345,8 @@ fn save_and_open_modes_are_unchanged() {
     let t = h.settle(&mut c);
     let t = texts(&t);
     assert!(t.contains(&"Öffnen") && t.contains(&"Dateiname"), "{t:?}");
-    assert!(!t.contains(&CHOOSE_FOLDER), "{t:?}");
-    assert!(!t.iter().any(|s| s.starts_with(CHOSEN_PREFIX)), "{t:?}");
+    assert!(!t.iter().any(|s| *s == choose_folder()), "{t:?}");
+    assert!(!t.iter().any(|s| s.starts_with(&chosen_prefix())), "{t:?}");
     h.clicks(&mut c, "b", 1);
     assert_eq!(
         c.marked(),
@@ -376,7 +376,7 @@ fn a_vanished_marked_folder_is_not_replaced_by_the_current_one() {
     fs::remove_dir_all(dir.join("b")).unwrap();
     assert_eq!(c.target(), None, "kein Rückfall auf den aktuellen Ordner");
     assert_eq!(c.confirm(), ChooserAction::None);
-    assert_eq!(c.error.as_deref(), Some(NO_FOLDER));
+    assert_eq!(c.error_text().as_deref(), Some(no_folder().as_str()));
     assert_eq!(c.marked(), None, "Marke gelöscht");
     assert_eq!(names(&c), ["a"], "Liste neu gelesen");
     // Danach entscheidet der Nutzer neu: ohne Marke der aktuelle Ordner.
@@ -387,7 +387,7 @@ fn a_vanished_marked_folder_is_not_replaced_by_the_current_one() {
     fs::write(dir.join("a"), b"x").unwrap();
     assert_eq!(c.target(), None);
     assert_eq!(c.confirm(), ChooserAction::None);
-    assert_eq!(c.error.as_deref(), Some(NO_FOLDER));
+    assert_eq!(c.error_text().as_deref(), Some(no_folder().as_str()));
     assert_eq!(c.marked(), None);
 }
 
@@ -426,14 +426,17 @@ fn a_typed_folder_is_applied_before_choosing() {
     let mut h = Harness::new();
     c.mark("b");
     c.dir_text = dir.join("a").display().to_string();
-    h.clicks(&mut c, CHOOSE_FOLDER, 1);
+    h.clicks(&mut c, &choose_folder(), 1);
     assert_eq!(h.action, ChooserAction::Chosen(dir.join("a")));
     assert_eq!(c.dir(), dir.join("a").as_path());
     h.action = ChooserAction::None;
     c.dir_text = dir.join("gibt-es-nicht").display().to_string();
-    h.clicks(&mut c, CHOOSE_FOLDER, 1);
+    h.clicks(&mut c, &choose_folder(), 1);
     assert_eq!(h.action, ChooserAction::None, "nichts gewählt");
-    assert_eq!(c.error.as_deref(), Some("Diesen Ordner gibt es nicht."));
+    assert_eq!(
+        c.error_text().as_deref(),
+        Some("Diesen Ordner gibt es nicht.")
+    );
     let seen = h.settle(&mut c);
     assert!(texts(&seen).contains(&"Diesen Ordner gibt es nicht."));
     assert_eq!(c.dir(), dir.join("a").as_path(), "Ordner bleibt");

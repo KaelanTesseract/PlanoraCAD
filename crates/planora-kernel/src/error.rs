@@ -1,37 +1,50 @@
-use thiserror::Error;
+use planora_i18n::tr;
+use std::fmt;
 
-#[derive(Debug, Clone, PartialEq, Error)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum KernelError {
-    #[error("Das Profil ist nicht geschlossen")]
     ProfileNotClosed,
-    #[error("Ein Profilsegment hat die Länge null")]
     DegenerateSegment,
-    #[error("Das Profil hat die Fläche null")]
     ZeroAreaProfile,
-    #[error("Das Maß muss eine Zahl größer als die Toleranz sein (war {0})")]
     InvalidDimension(f64),
-    #[error("Das Rotationsprofil muss auf der Achse beginnen und enden")]
     ProfileOffAxis,
-    #[error("Das Rotationsprofil darf die Achse nur am Anfang und am Ende berühren")]
     ProfileCrossesAxis,
-    #[error("Dieses Rotationssegment wird noch nicht unterstützt: {0}")]
-    UnsupportedSegment(&'static str),
-    #[error(
-        "Die Matrix ist keine Ähnlichkeitstransformation (verschieben, drehen, spiegeln, gleichmäßig skalieren)"
-    )]
+    UnsupportedSegment(String),
     NonSimilarityTransform,
-    #[error("Das Koordinatensystem ist ungültig (nicht endlich oder nicht orthonormal)")]
     InvalidFrame,
-    #[error("Ein Loch liegt nicht vollständig innerhalb der äußeren Schleife")]
     HoleOutsideOuter,
-    #[error("Zwei Schleifen des Profils schneiden oder berühren sich")]
     ProfileLoopsIntersect,
-    #[error("Ein Loch liegt innerhalb eines anderen Lochs")]
     NestedHoles,
-    #[error("Eine Schleife des Profils schneidet oder berührt sich selbst")]
     ProfileSelfIntersects,
-    #[error("Die Freiformfläche ist ungültig: {0}")]
     InvalidSurface(String),
-    #[error("Die Freiformkurve ist ungültig: {0}")]
     InvalidCurve(String),
 }
+
+impl fmt::Display for KernelError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            KernelError::ProfileNotClosed => tr!("kernel-profile-not-closed"),
+            KernelError::DegenerateSegment => tr!("kernel-degenerate-segment"),
+            KernelError::ZeroAreaProfile => tr!("kernel-zero-area-profile"),
+            KernelError::InvalidDimension(x) => {
+                tr!("kernel-invalid-dimension", x = x.to_string())
+            }
+            KernelError::ProfileOffAxis => tr!("kernel-profile-off-axis"),
+            KernelError::ProfileCrossesAxis => tr!("kernel-profile-crosses-axis"),
+            KernelError::UnsupportedSegment(what) => {
+                tr!("kernel-unsupported-segment", what = what)
+            }
+            KernelError::NonSimilarityTransform => tr!("kernel-non-similarity"),
+            KernelError::InvalidFrame => tr!("kernel-invalid-frame"),
+            KernelError::HoleOutsideOuter => tr!("kernel-hole-outside-outer"),
+            KernelError::ProfileLoopsIntersect => tr!("kernel-profile-loops-intersect"),
+            KernelError::NestedHoles => tr!("kernel-nested-holes"),
+            KernelError::ProfileSelfIntersects => tr!("kernel-profile-self-intersects"),
+            KernelError::InvalidSurface(m) => tr!("kernel-invalid-surface", msg = m),
+            KernelError::InvalidCurve(m) => tr!("kernel-invalid-curve", msg = m),
+        };
+        f.write_str(&text)
+    }
+}
+
+impl std::error::Error for KernelError {}

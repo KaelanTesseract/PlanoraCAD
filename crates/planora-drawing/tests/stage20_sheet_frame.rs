@@ -285,7 +285,7 @@ fn title_block_and_tables() {
                 && b.x0 < a.x1 - 1e-9
                 && a.y0 < b.y1 - 1e-9
                 && b.y0 < a.y1 - 1e-9;
-            assert!(!o, "{} / {}", a.label, b.label);
+            assert!(!o, "{} / {}", a.label.text(), b.label.text());
         }
     }
     assert!((area - 180.0 * 56.0).abs() < 1e-9);
@@ -305,9 +305,9 @@ fn title_block_and_tables() {
             })
             .unwrap_or_else(|| panic!("{:?} in keiner Zelle", s.field));
         if s.field != TitleField::Subtitle {
-            assert_eq!(c.label, s.field.label());
+            assert_eq!(c.label.text(), s.field.label());
         } else {
-            assert_eq!(c.label, "Titel");
+            assert_eq!(c.label.text(), "Titel");
         }
         // unter dem Feldnamen (Grundlinie y1 - 1 - LABEL_H)
         assert!(
@@ -406,7 +406,7 @@ fn every_paper_is_a_scaled_a3() {
                     // Zellen und Inhaltsplätze.
                     for (c, c3) in l.title_cells().iter().zip(TITLE_CELLS.iter()) {
                         for (a, b) in [(c.x0, c3.x0), (c.x1, c3.x1), (c.y0, c3.y0), (c.y1, c3.y1)] {
-                            assert!((a - b * f).abs() < 1e-9, "{ctx}: {}", c.label);
+                            assert!((a - b * f).abs() < 1e-9, "{ctx}: {}", c.label.text());
                         }
                     }
                     for (s, s3) in l.title_slots().iter().zip(TITLE_SLOTS.iter()) {

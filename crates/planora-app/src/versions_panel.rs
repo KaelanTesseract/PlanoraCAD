@@ -9,12 +9,17 @@ use crate::dialog::{Dialog, DialogSize};
 use crate::local_time;
 use crate::theme;
 use crate::workspace::{Prompt, Workspace};
+use planora_i18n::tr;
 use planora_project::docstore::DocumentInfo;
 use planora_project::library::NodePath;
 
 /// Hinweis, wenn zum Ändern kein beschreibbarer Tab des Dokuments offen ist.
-const OPEN_EDITABLE: &str = "Zum Ändern das Dokument zuerst bearbeitbar öffnen.";
-const NOT_SAVED: &str = "Das Dokument ist noch nicht gespeichert.";
+fn open_editable() -> String {
+    tr!("versions-open-editable")
+}
+fn not_saved() -> String {
+    tr!("versions-not-saved-hint")
+}
 
 #[derive(Default)]
 pub struct VersionsUi {
@@ -98,12 +103,12 @@ fn active_path(ws: &Workspace) -> Option<NodePath> {
 /// offene beschreibbare Tab); sonst steht ein Hinweis.
 fn writable(ws: &mut Workspace) -> Option<usize> {
     let Some(path) = active_path(ws) else {
-        notice(ws, NOT_SAVED);
+        notice(ws, not_saved());
         return None;
     };
     let i = ws.tab_for_path(&path);
     if i.is_none() {
-        notice(ws, OPEN_EDITABLE);
+        notice(ws, open_editable());
     }
     i
 }
@@ -111,7 +116,7 @@ fn writable(ws: &mut Workspace) -> Option<usize> {
 /// Öffnet Version `n` schreibgeschützt.
 pub fn open_version(ws: &mut Workspace, n: u32) {
     let Some(path) = active_path(ws) else {
-        return notice(ws, NOT_SAVED);
+        return notice(ws, not_saved());
     };
     if let Err(e) = ws.open_version(&path, n) {
         notice(ws, e.to_string());
@@ -128,7 +133,7 @@ pub fn restore(ws: &mut Workspace, n: u32) {
 /// Öffnet Version `n` als Ansicht und macht sie bearbeitbar (neuer Zweig beim Speichern).
 pub fn branch_from(ws: &mut Workspace, n: u32) {
     let Some(path) = active_path(ws) else {
-        return notice(ws, NOT_SAVED);
+        return notice(ws, not_saved());
     };
     let view = match ws.open_version(&path, n) {
         Ok(i) => i,
@@ -282,20 +287,20 @@ pub fn show_with_header(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut Versions
 fn show_enabled(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut VersionsUi, header: bool) {
     let info = match current_info(ws, st) {
         None => {
-            ui.weak("Dieses Dokument ist noch nicht gespeichert.");
+            ui.weak(tr!("versions-not-saved"));
             return;
         }
         Some(Err(())) => {
             ui.colored_label(
                 error_color(ui.visuals().dark_mode),
-                "Die Versionen lassen sich nicht lesen.",
+                tr!("versions-unreadable"),
             );
             return;
         }
         Some(Ok(info)) => info,
     };
     if header {
-        theme::section_header(ui, "Versionen", theme::HEADER_H);
+        theme::section_header(ui, &tr!("tab-versions"), theme::HEADER_H);
     }
     let (read_only, dirty, based_on) = {
         let t = ws.active_tab();
@@ -304,20 +309,20 @@ fn show_enabled(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut VersionsUi, head
     let can_write = active_path(ws).and_then(|p| ws.tab_for_path(&p)).is_some();
     let mut actions = Vec::new();
     if read_only {
-        ui.label("Du siehst eine alte Version.");
+        ui.label(tr!("versions-viewing-old"));
         if let Some(n) = based_on {
             ui.horizontal(|ui| {
-                if ui.button("Wiederherstellen").clicked() {
+                if ui.button(tr!("versions-restore")).clicked() {
                     actions.push(Action::Restore(n));
                 }
-                if ui.button("Abzweigen").clicked() {
+                if ui.button(tr!("versions-branch")).clicked() {
                     actions.push(Action::Branch(n));
                 }
             });
         }
     }
     if dirty {
-        ui.label("Änderungen (nicht gespeichert)");
+        ui.label(tr!("versions-unsaved-changes"));
     }
     ui.separator();
     for r in rows(&info) {
@@ -344,37 +349,37 @@ fn show_enabled(ui: &mut egui::Ui, ws: &mut Workspace, st: &mut VersionsUi, head
             actions.push(Action::Open(r.number));
         }
         resp.context_menu(|ui| {
-            if ui.button("Öffnen").clicked() {
+            if ui.button(tr!("versions-open")).clicked() {
                 actions.push(Action::Open(r.number));
                 ui.close();
             }
-            if ui.button("Wiederherstellen").clicked() {
+            if ui.button(tr!("versions-restore")).clicked() {
                 actions.push(Action::Restore(r.number));
                 ui.close();
             }
-            if ui.button("Abzweigen").clicked() {
+            if ui.button(tr!("versions-branch")).clicked() {
                 actions.push(Action::Branch(r.number));
                 ui.close();
             }
-            let w = |ui: &mut egui::Ui, label: &str| {
+            let w = |ui: &mut egui::Ui, label: String| {
                 ui.add_enabled(can_write, egui::Button::new(label))
-                    .on_disabled_hover_text(OPEN_EDITABLE)
+                    .on_disabled_hover_text(open_editable())
                     .clicked()
             };
-            if w(ui, "Kommentar ändern …") {
+            if w(ui, tr!("versions-edit-comment")) {
                 actions.push(Action::Comment(r.number, v.comment.clone()));
                 ui.close();
             }
-            if w(ui, "Löschen …") {
+            if w(ui, tr!("versions-delete-entry")) {
                 actions.push(Action::AskDelete(r.number));
                 ui.close();
             }
             if r.is_tip {
-                if w(ui, "Zweig löschen …") {
+                if w(ui, tr!("versions-delete-branch-entry")) {
                     actions.push(Action::AskDeleteBranch(r.branch.clone()));
                     ui.close();
                 }
-                if w(ui, "Zu diesem Zweig wechseln") {
+                if w(ui, tr!("versions-switch-branch")) {
                     actions.push(Action::Switch(r.branch.clone()));
                     ui.close();
                 }
@@ -407,18 +412,18 @@ fn dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut VersionsUi) {
     if let Some(mut p) = st.comment_edit.take() {
         let mut keep = true;
         let mut apply = false;
-        Dialog::new("Kommentar ändern", DialogSize::Prompt)
+        Dialog::new(tr!("versions-comment-title"), DialogSize::Prompt)
             .fixed()
             .show(ctx, |ui| {
-                ui.label(format!("Kommentar zu v{}", p.what.0));
+                ui.label(tr!("versions-comment-for", n = p.what.0));
                 let r = theme::text_field(ui, egui::TextEdit::singleline(&mut p.what.1));
                 let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 ui.horizontal(|ui| {
-                    if ui.button("Übernehmen").clicked() || enter {
+                    if ui.button(tr!("versions-apply")).clicked() || enter {
                         apply = true;
                         keep = false;
                     }
-                    if ui.button("Abbrechen").clicked() {
+                    if ui.button(tr!("common-cancel")).clicked() {
                         keep = false;
                     }
                 });
@@ -433,21 +438,21 @@ fn dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut VersionsUi) {
     }
     if let Some(p) = st.confirm_delete.take() {
         let question = match &p.what {
-            Confirm::Version(n) => format!("Version v{n} endgültig löschen?"),
+            Confirm::Version(n) => tr!("versions-confirm-delete-version", n = *n),
             Confirm::Branch(b) => {
-                format!("Zweig „{b}“ mit allen seinen Versionen endgültig löschen?")
+                tr!("versions-confirm-delete-branch", name = b.as_str())
             }
         };
         let mut answer = None;
-        Dialog::new("Löschen", DialogSize::Prompt)
+        Dialog::new(tr!("versions-delete-title"), DialogSize::Prompt)
             .fixed()
             .show(ctx, |ui| {
                 ui.label(question);
                 ui.horizontal(|ui| {
-                    if ui.button("Löschen").clicked() {
+                    if ui.button(tr!("versions-delete-title")).clicked() {
                         answer = Some(true);
                     }
-                    if ui.button("Abbrechen").clicked() {
+                    if ui.button(tr!("common-cancel")).clicked() {
                         answer = Some(false);
                     }
                 });

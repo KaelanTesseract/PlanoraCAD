@@ -93,7 +93,7 @@ fn create_first_page() {
 
     let count = d.edit_count();
     let e = d.add_parts_sheets(A4_HOCH, &stamp()).unwrap_err();
-    assert_eq!(msg(e), PARTS_SHEET_EXISTS);
+    assert_eq!(msg(e), parts_sheet_exists());
     assert_eq!(d.edit_count(), count);
     assert_eq!(d.drawings().len(), 1);
 
@@ -103,7 +103,7 @@ fn create_first_page() {
         .unwrap();
     let count = other.edit_count();
     let e = other.add_parts_sheets(A4_HOCH, &stamp()).unwrap_err();
-    assert_eq!(msg(e), PARTS_NAME_TAKEN);
+    assert_eq!(msg(e), parts_name_taken());
     assert_eq!(other.edit_count(), count);
     assert_eq!(other.drawings().len(), 1);
     assert!(other.project_info().is_none());
@@ -237,7 +237,7 @@ fn delete_and_rename_rules() {
     let c = d.edit_count();
     for s in &sheets[1..] {
         let e = d.delete_drawing(*s).unwrap_err();
-        assert_eq!(msg(e), FOLLOW_PAGE_DELETE);
+        assert_eq!(msg(e), follow_page_delete());
     }
     assert_eq!(names(&d), snap_names);
     assert_eq!(d.edit_count(), c);
@@ -245,11 +245,11 @@ fn delete_and_rename_rules() {
     // Umbenennen: jedes Blatt abgelehnt, auch über update_drawing; Namen bleiben.
     for s in &sheets {
         let e = d.rename_drawing(*s, "Teile").unwrap_err();
-        assert_eq!(msg(e), PARTS_SHEET_RENAME);
+        assert_eq!(msg(e), parts_sheet_rename());
         let e = d
             .update_drawing(*s, |x| x.name = "Teile".into())
             .unwrap_err();
-        assert_eq!(msg(e), PARTS_SHEET_RENAME);
+        assert_eq!(msg(e), parts_sheet_rename());
     }
     assert_eq!(names(&d), snap_names);
     assert_eq!(d.edit_count(), c);
@@ -378,7 +378,8 @@ fn loading_does_not_sync() {
     loaded.rename(ids[0], "Anders").unwrap();
     assert_eq!(pages(&loaded), [1]);
 
-    // Lücke in den Seiten oder falscher Name: abgelehnt.
+    // Lücke in den Seiten: abgelehnt. Ein anderer Name ist Benutzerdaten (Task 14: das Blatt
+    // erkennt man an seiner Art), ein doppelter Name bleibt verboten.
     let mut s = d.snapshot();
     s.drawings
         .retain(|x| x.kind != DrawingKind::PartsList { page: 1 });
@@ -387,6 +388,13 @@ fn loading_does_not_sync() {
     for x in s.drawings.iter_mut() {
         if x.kind == (DrawingKind::PartsList { page: 2 }) {
             x.name = "Blatt zwei".into();
+        }
+    }
+    assert!(Document::from_snapshot(s, 0.05).is_ok());
+    let mut s = d.snapshot();
+    for x in s.drawings.iter_mut() {
+        if x.kind == (DrawingKind::PartsList { page: 2 }) {
+            x.name = "stückliste".into();
         }
     }
     assert!(Document::from_snapshot(s, 0.05).is_err());
@@ -515,7 +523,7 @@ fn reserved_follow_up_names_block_creation() {
         d.add_drawing(&name, A4_QUER, Projection::First).unwrap();
         let c = d.edit_count();
         let e = d.add_parts_sheets(A4_QUER, &stamp()).unwrap_err();
-        assert_eq!(msg(e), PARTS_PAGE_NAME_TAKEN, "{name}");
+        assert_eq!(msg(e), parts_page_name_taken(), "{name}");
         assert_eq!(d.edit_count(), c);
         assert_eq!(d.drawings().len(), 1);
         assert!(d.project_info().is_none());

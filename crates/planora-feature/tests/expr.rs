@@ -2,8 +2,9 @@
 //! Grenzen, Namensregeln, Umbenennen und Auswertung der Tabelle.
 
 use planora_feature::expr::{
-    ExprError, ParamDef, ParamUnit, TableError, check_name, eval_text, evaluate_table, number_text,
-    parse, plain_number, references, rename_in, same_name, short_number, value_text,
+    ExprError, ParamDef, ParamUnit, TableError, TableErrorKind, check_name, eval_text,
+    evaluate_table, number_text, parse, plain_number, references, rename_in, same_name,
+    short_number, value_text,
 };
 use std::f64::consts::PI;
 
@@ -518,6 +519,7 @@ fn table() {
         evaluate_table(&[def("a", "b+1", Length), def("b", "a", Length)]),
         Err(TableError {
             index: 0,
+            kind: TableErrorKind::Cycle,
             message: "Die Parameter „a“, „b“ hängen im Kreis voneinander ab.".into()
         })
     );
@@ -532,6 +534,7 @@ fn table() {
         ]),
         Err(TableError {
             index: 1,
+            kind: TableErrorKind::Cycle,
             message: "Die Parameter „d“, „c“, „e“ hängen im Kreis voneinander ab.".into()
         })
     );
@@ -539,6 +542,7 @@ fn table() {
         evaluate_table(&[def("a", "a+1", Length)]),
         Err(TableError {
             index: 0,
+            kind: TableErrorKind::SelfRef,
             message: "Der Parameter „a“ hängt von sich selbst ab.".into()
         })
     );
@@ -546,6 +550,7 @@ fn table() {
         evaluate_table(&[def("z", "1", Number), def("Abc", "ABC*2", Length)]),
         Err(TableError {
             index: 1,
+            kind: TableErrorKind::SelfRef,
             message: "Der Parameter „Abc“ hängt von sich selbst ab.".into()
         })
     );
@@ -553,6 +558,7 @@ fn table() {
         evaluate_table(&[def("Breite", "1", Length), def("breite", "2", Length)]),
         Err(TableError {
             index: 1,
+            kind: TableErrorKind::Name,
             message: "Den Namen „breite“ gibt es schon.".into()
         })
     );
@@ -560,6 +566,7 @@ fn table() {
         evaluate_table(&[def("a", "c", Length)]),
         Err(TableError {
             index: 0,
+            kind: TableErrorKind::Other,
             message: "Den Namen „c“ gibt es nicht.".into()
         })
     );
@@ -567,6 +574,7 @@ fn table() {
         evaluate_table(&[def("w", "30", Angle), def("l", "w", Length)]),
         Err(TableError {
             index: 1,
+            kind: TableErrorKind::Other,
             message: "Hier wird eine Länge erwartet, die Formel ergibt einen Winkel.".into()
         })
     );
@@ -574,6 +582,7 @@ fn table() {
         evaluate_table(&[def("a", "1", Length), def("sin", "2", Length)]),
         Err(TableError {
             index: 1,
+            kind: TableErrorKind::Name,
             message: "„sin“ ist schon eine Funktion oder Konstante.".into()
         })
     );
@@ -581,6 +590,7 @@ fn table() {
         evaluate_table(&[def("a", "1", Length), def("b", "2+", Length)]),
         Err(TableError {
             index: 1,
+            kind: TableErrorKind::Other,
             message: "Die Formel endet unerwartet.".into()
         })
     );
@@ -588,6 +598,7 @@ fn table() {
         evaluate_table(&[def("n", "0", Number), def("q", "1/n", Number)]),
         Err(TableError {
             index: 1,
+            kind: TableErrorKind::Other,
             message: "Division durch null.".into()
         })
     );
@@ -610,6 +621,7 @@ fn table() {
         evaluate_table(&many),
         Err(TableError {
             index: 500,
+            kind: TableErrorKind::TooMany,
             message: "Höchstens 500 Parameter.".into()
         })
     );
@@ -642,6 +654,7 @@ fn table() {
         ]),
         Err(TableError {
             index: 1,
+            kind: TableErrorKind::Cycle,
             message: "Die Parameter „e“, „d“, „c“ hängen im Kreis voneinander ab.".into()
         })
     );
@@ -650,7 +663,7 @@ fn table() {
     ring[499].1 = "p500+1".into();
     let defs: Vec<ParamDef<'_>> = ring.iter().map(|(n, f)| def(n, f, Length)).collect();
     let e = evaluate_table(&defs).unwrap_err();
-    assert_eq!(e.index, 0);
+    assert_eq!((e.index, e.kind), (0, TableErrorKind::Cycle));
     assert!(e.message.starts_with("Die Parameter „p500“, „p499“, "));
     assert!(e.message.ends_with("„p1“ hängen im Kreis voneinander ab."));
 }

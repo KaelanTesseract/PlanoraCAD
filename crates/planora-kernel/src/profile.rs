@@ -1,5 +1,6 @@
 use crate::error::KernelError;
 use crate::geometry::nurbs_divisions;
+use planora_i18n::tr;
 use planora_math::nurbs::NurbsCurve;
 use planora_math::{DVec2, DVec3, TAU, Tolerance, orient2d};
 use std::sync::Arc;
@@ -354,9 +355,9 @@ fn check_nurbs_plane(curve: &NurbsCurve, tol: &Tolerance) -> Result<(), KernelEr
         .iter()
         .any(|p| !p.is_finite() || p.z.abs() > tol.linear)
     {
-        return Err(KernelError::InvalidCurve(
-            "die Kurve liegt nicht in der Profilebene".into(),
-        ));
+        return Err(KernelError::InvalidCurve(tr!(
+            "kernel-profile-curve-off-plane"
+        )));
     }
     Ok(())
 }
@@ -374,9 +375,7 @@ fn check_nurbs_segment(
     check_nurbs_plane(curve, tol)?;
     let (a, b) = curve.domain();
     if !(xy(curve.point(a)).distance(from) <= tol.linear) {
-        return Err(KernelError::InvalidCurve(
-            "die Kurve schließt nicht an das vorige Segment an".into(),
-        ));
+        return Err(KernelError::InvalidCurve(tr!("kernel-profile-curve-gap")));
     }
     let cp = curve.control_points();
     let spread = cp.iter().map(|p| p.distance(cp[0])).fold(0.0, f64::max);

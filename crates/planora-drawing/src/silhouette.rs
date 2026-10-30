@@ -35,6 +35,7 @@ use crate::limits::{BISECT_TOL, MAX_OUTLINE_POINTS, MAX_RAW_STROKES, SILHOUETTE_
 use crate::raycast::Region;
 use crate::stroke::{Stroke, StrokeOrigin};
 use planora_exchange::Progress;
+use planora_i18n::tr;
 use planora_kernel::boolean::{Containment, FaceGeom, face_geom, loop_points, point_in_face};
 use planora_kernel::{Curve, NurbsSurfaceData, Surface};
 use planora_math::nurbs::{NurbsCurve, NurbsSurface};
@@ -109,12 +110,18 @@ const NEWTON_ACCEPT: f64 = 1e-9;
 /// klein, wird die Fläche nur von der Seite gesehen und hat keinen Umriss.
 const ZERO_G: f64 = 1e-12;
 /// Meldung, wenn ein Freiform-Umriss eine Stelle ohne Normale erreicht.
-pub const POLE_MESSAGE: &str = "Umriss an einem Pol der Freiformfläche";
+pub fn pole_message() -> String {
+    tr!("drawing-err-outline-pole")
+}
 /// Meldung, wenn auch das feinste Raster einen Vorzeichenwechsel von g nur zwischen seinen
 /// Punkten zeigt (Umrissschleife kleiner als eine Rasterzelle).
-pub const HIDDEN_MESSAGE: &str = "Umriss der Freiformfläche feiner als das Suchraster";
-/// Meldung, wenn eine Anpassung die Genauigkeit nicht erreicht.
-const FIT_MESSAGE: &str = "Umriss lässt sich nicht genau genug annähern";
+pub fn hidden_message() -> String {
+    tr!("drawing-err-outline-hidden")
+}
+/// Meldung, wenn eine Anpassung die Genauigkeit nicht erreicht; `why` ist der Grund.
+fn fit_message(why: &str) -> String {
+    tr!("drawing-err-outline-fit", why = why)
+}
 
 /// Ein Umrisskandidat vor dem Zuschnitt: Kurve und Parameterbereich; `closed` bei Vollkreisen.
 struct Candidate {
@@ -410,9 +417,9 @@ fn densify(
             }
             if doublings == MAX_DOUBLINGS {
                 // Ohne die Sehnenschranke wäre die Prüfung der Anpassung nicht mehr streng.
-                return Err(DrawError::Unsupported(format!(
-                    "{FIT_MESSAGE} (Umriss zu stark gekrümmt)"
-                )));
+                return Err(DrawError::Unsupported(fit_message(&tr!(
+                    "drawing-err-outline-curved"
+                ))));
             }
             n *= 2;
             doublings += 1;
@@ -453,9 +460,9 @@ fn spline_pieces(
     // noch einmal aus.
     let failed = || {
         if path.failed.as_ref().is_some_and(|f| f.get()) {
-            Err(DrawError::Unsupported(format!(
-                "{FIT_MESSAGE} (Punkt nicht auf dem Umriss)"
-            )))
+            Err(DrawError::Unsupported(fit_message(&tr!(
+                "drawing-err-outline-off"
+            ))))
         } else {
             Ok(())
         }
@@ -522,7 +529,7 @@ fn fit_checked(
     for _ in 0..FIT_ATTEMPTS {
         match NurbsCurve::fit(pts, ftol) {
             Ok(c) if follows(&c, pts, FIT_SHARE * SILHOUETTE_TOL) => return Ok(vec![c]),
-            Ok(_) => why = "Prüfung zwischen den Stützstellen".into(),
+            Ok(_) => why = tr!("drawing-err-outline-between"),
             Err(e) => why = e.to_string(),
         }
         ftol *= 0.5;
@@ -533,7 +540,7 @@ fn fit_checked(
         out.extend(fit_checked(&pts[m..], tol, depth + 1, progress)?);
         return Ok(out);
     }
-    Err(DrawError::Unsupported(format!("{FIT_MESSAGE} ({why})")))
+    Err(DrawError::Unsupported(fit_message(&why)))
 }
 
 /// Liegt die Kurve überall höchstens `limit` neben dem Streckenzug `pts`? Geprüft an
@@ -791,7 +798,7 @@ fn outline_chains(
             break (us, vs, gv);
         }
         if cap_u && cap_v {
-            return Err(DrawError::Unsupported(HIDDEN_MESSAGE.into()));
+            return Err(DrawError::Unsupported(hidden_message()));
         }
         level += 1;
     };
@@ -818,7 +825,7 @@ fn outline_chains(
             EdgeKey::V(i, j) => (DVec2::new(us[i], vs[j]), DVec2::new(us[i], vs[j + 1])),
         };
         let g = |p: DVec2| -> Result<f64, DrawError> {
-            g_snap(p.x, p.y)?.ok_or(DrawError::Unsupported(POLE_MESSAGE.into()))
+            g_snap(p.x, p.y)?.ok_or_else(|| DrawError::Unsupported(pole_message()))
         };
         let (mut lo, mut hi) = (a, b);
         let ga = g(lo)?;
@@ -852,7 +859,7 @@ fn outline_chains(
             let defined: Vec<f64> = corners.iter().flatten().copied().collect();
             if defined.len() < 4 {
                 if defined.iter().any(|&g| pos(g)) && defined.iter().any(|&g| !pos(g)) {
-                    return Err(DrawError::Unsupported(POLE_MESSAGE.into()));
+                    return Err(DrawError::Unsupported(pole_message()));
                 }
                 continue;
             }
@@ -870,8 +877,8 @@ fn outline_chains(
                 2 => vec![(cuts[0], cuts[1])],
                 4 => {
                     let mid = DVec2::new(0.5 * (us[i] + us[i + 1]), 0.5 * (vs[j] + vs[j + 1]));
-                    let gc =
-                        g_snap(mid.x, mid.y)?.ok_or(DrawError::Unsupported(POLE_MESSAGE.into()))?;
+                    let gc = g_snap(mid.x, mid.y)?
+                        .ok_or_else(|| DrawError::Unsupported(pole_message()))?;
                     if pos(gc) == s[0] {
                         // c0 und c2 hängen über die Mitte zusammen: c1 und c3 abgetrennt.
                         vec![(0, 1), (2, 3)]
@@ -1929,7 +1936,7 @@ mod tests {
                     );
                 }
             }
-            Err(DrawError::Unsupported(m)) => assert_eq!(m, HIDDEN_MESSAGE),
+            Err(DrawError::Unsupported(m)) => assert_eq!(m, hidden_message()),
             Err(e) => panic!("{e:?}"),
         }
     }

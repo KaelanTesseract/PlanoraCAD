@@ -14,10 +14,7 @@ use planora_app::app::PlanoraApp;
 use planora_app::browser::error_color;
 use planora_app::drawing_browser;
 use planora_app::drawing_view;
-use planora_app::section_tool::{
-    self, FULL, HINT_FIRST, HINT_SECOND, NO_STRAIGHT_TIP, NOT_A_NUMBER, NOT_FROM_HERE, NUDGED,
-    PARTS_SHEET_TIP, READ_ONLY_TIP, SNAP_PX, TOO_SHORT, TOOL,
-};
+use planora_app::section_tool::{self, SNAP_PX};
 use planora_app::state::AppState;
 use planora_app::workspace::Workspace;
 use planora_app::{fonts, shell_panels, theme};
@@ -367,7 +364,7 @@ fn two_clicks_make_a_section() {
     let mid_y = 0.5 * (y0 + y1);
     st.section_tool.set_active(true);
     let shot = h.idle(&mut st);
-    assert!(shot.has(HINT_FIRST));
+    assert!(shot.has(&section_tool::hint_first()));
     let e0 = st.document.edit_count();
 
     // Waagerecht knapp neben der Mitte (0,3 mm sind weit unter der Fangweite).
@@ -380,7 +377,7 @@ fn two_clicks_make_a_section() {
     );
     assert!(sections(&st, d).is_empty());
     let shot = h.idle(&mut st);
-    assert!(shot.has(HINT_SECOND));
+    assert!(shot.has(&section_tool::hint_second()));
     assert!(h.layout().preview_drawn > 0, "Vorschau mit Pfeilen");
     click_v(&mut h, &mut st, d, front, (x1 - 5.0, mid_y + 0.3));
     assert_eq!(st.document.edit_count(), e0 + 1, "genau eine Änderung");
@@ -444,8 +441,15 @@ fn two_clicks_make_a_section() {
     h.idle(&mut st);
     click_v(&mut h, &mut st, d, front, (x0 + 5.0, y0 + 30.0));
     let shot = click_v(&mut h, &mut st, d, front, (x0 + 5.2, y0 + 30.1));
-    assert_eq!(st.section_tool.message(), Some(TOO_SHORT));
-    assert_eq!(shot.find(TOO_SHORT).color, error_color(st.dark), "rot");
+    assert_eq!(
+        st.section_tool.message(),
+        Some(section_tool::too_short().text())
+    );
+    assert_eq!(
+        shot.find(&section_tool::too_short().text()).color,
+        error_color(st.dark),
+        "rot"
+    );
     assert_eq!(sections(&st, d).len(), 3);
 }
 
@@ -506,12 +510,12 @@ fn blocked_cases() {
     );
     assert_eq!(
         section_tool::blocked(&dr, dr.view(iso), true),
-        Some(NOT_FROM_HERE),
+        Some(section_tool::not_from_here().text()),
         "Isometrie gewählt"
     );
     assert_eq!(
         section_tool::blocked(&dr, None, false),
-        Some(READ_ONLY_TIP),
+        Some(section_tool::read_only_tip()),
         "alte Version"
     );
     // Stücklistenblatt.
@@ -524,7 +528,7 @@ fn blocked_cases() {
     parts.kind = DrawingKind::PartsList { page: 1 };
     assert_eq!(
         section_tool::blocked(&parts, None, true),
-        Some(PARTS_SHEET_TIP)
+        Some(section_tool::parts_sheet_tip())
     );
     // Keine gerade Ansicht: nur Isometrie.
     let mut only_iso = Drawing::new(DrawingId(98), "Iso".into(), A3_QUER, Projection::First);
@@ -536,17 +540,17 @@ fn blocked_cases() {
     );
     assert_eq!(
         section_tool::blocked(&only_iso, None, true),
-        Some(NO_STRAIGHT_TIP)
+        Some(section_tool::no_straight_tip())
     );
 
     // Schalter in der Leiste: mit gewählter Isometrie gesperrt, sonst frei.
     st.drawing_ui.selected_view = Some(iso);
     h.idle(&mut st);
-    h.click_text(&mut st, TOOL);
+    h.click_text(&mut st, &section_tool::tool());
     assert!(!st.section_tool.is_active(), "Knopf bei Isometrie gesperrt");
     st.drawing_ui.selected_view = None;
     h.idle(&mut st);
-    h.click_text(&mut st, TOOL);
+    h.click_text(&mut st, &section_tool::tool());
     assert!(st.section_tool.is_active(), "Knopf frei ohne Auswahl");
     // Klick in die Isometrie: Ablehnung, nichts gemerkt.
     let iso_pt = h
@@ -559,8 +563,14 @@ fn blocked_cases() {
         .center();
     let e0 = st.document.edit_count();
     let shot = h.click(&mut st, iso_pt);
-    assert_eq!(st.section_tool.message(), Some(NOT_FROM_HERE));
-    assert_eq!(shot.find(NOT_FROM_HERE).color, error_color(st.dark));
+    assert_eq!(
+        st.section_tool.message(),
+        Some(section_tool::not_from_here().text())
+    );
+    assert_eq!(
+        shot.find(&section_tool::not_from_here().text()).color,
+        error_color(st.dark)
+    );
     assert!(st.section_tool.start().is_none());
     assert_eq!(st.document.edit_count(), e0);
     st.section_tool.set_active(false);
@@ -572,9 +582,9 @@ fn blocked_cases() {
     let dr = drawing(&st, d);
     assert_eq!(
         section_tool::blocked(&dr, dr.view(sec), true),
-        Some(NOT_FROM_HERE)
+        Some(section_tool::not_from_here().text())
     );
-    h.click_text(&mut st, TOOL);
+    h.click_text(&mut st, &section_tool::tool());
     assert!(!st.section_tool.is_active(), "Knopf bei Schnitt gesperrt");
 
     // Alte Version: das eingeschaltete Werkzeug geht aus.
@@ -591,16 +601,19 @@ fn blocked_cases() {
     }
     let dr = drawing(&st, d);
     assert_eq!(sections(&st, d).len(), 12);
-    assert_eq!(section_tool::blocked(&dr, None, true), Some(FULL));
+    assert_eq!(
+        section_tool::blocked(&dr, None, true),
+        Some(section_tool::full().text())
+    );
     let before = st.document.edit_count();
     assert_eq!(
         section_tool::create(&mut st, d, front, true, 5.0),
-        Err(FULL.to_string())
+        Err(section_tool::full())
     );
     assert_eq!(st.document.edit_count(), before);
     st.drawing_ui.selected_view = None;
     h.idle(&mut st);
-    h.click_text(&mut st, TOOL);
+    h.click_text(&mut st, &section_tool::tool());
     assert!(
         !st.section_tool.is_active(),
         "Knopf bei 12 Schnitten gesperrt"
@@ -676,7 +689,7 @@ fn properties_edit() {
     let before = spec(&st);
     assert_eq!(
         section_tool::set_offset_text(&mut st, d, sec, "abc"),
-        Err(NOT_A_NUMBER.to_string())
+        Err(section_tool::not_a_number())
     );
     assert_eq!(spec(&st), before);
     assert_eq!(st.document.edit_count(), e0 + 1);
@@ -712,7 +725,7 @@ fn properties_edit() {
     let before = spec(&st);
     let e2 = st.document.edit_count();
     assert_eq!(
-        section_tool::set_spacing_text(&mut st, d, sec, "0,3"),
+        section_tool::set_spacing_text(&mut st, d, sec, "0,3").map_err(|m| m.text()),
         Err(format!(
             "Der Schraffurabstand von „{NAME}“ wäre auf diesem Blatt kleiner als 0,5 mm."
         ))
@@ -721,7 +734,7 @@ fn properties_edit() {
     assert_eq!(st.document.edit_count(), e2);
     assert_eq!(
         section_tool::set_spacing_text(&mut st, d, sec, "xyz"),
-        Err(NOT_A_NUMBER.to_string())
+        Err(section_tool::not_a_number())
     );
     assert!(section_tool::set_spacing_text(&mut st, d, sec, "99").is_err());
     assert_eq!(spec(&st), before);
@@ -772,8 +785,14 @@ fn view_field_edits_with_events() {
     let shot = h.key(&mut st, Key::Enter);
     assert_eq!(st.document.edit_count(), e1);
     assert_eq!(spec(&st).section.unwrap().offset, 7.5);
-    assert_eq!(st.section_tool.message(), Some(NOT_A_NUMBER));
-    assert_eq!(shot.find(NOT_A_NUMBER).color, error_color(st.dark));
+    assert_eq!(
+        st.section_tool.message(),
+        Some(section_tool::not_a_number().text())
+    );
+    assert_eq!(
+        shot.find(&section_tool::not_a_number().text()).color,
+        error_color(st.dark)
+    );
     assert!(shot.has("7,5"));
     assert!(!shot.has("abc"));
 
@@ -824,25 +843,25 @@ fn new_views_never_hang_under_a_section() {
 #[test]
 fn tools_exclude_each_other() {
     let (mut st, _, _, mut h) = box_front(A3_QUER, BIG);
-    h.click_text(&mut st, TOOL);
+    h.click_text(&mut st, &section_tool::tool());
     assert!(st.section_tool.is_active());
-    h.click_text(&mut st, planora_app::dimension_tool::TOOL);
+    h.click_text(&mut st, &planora_app::dimension_tool::tool());
     assert!(st.dimension_tool.is_active());
     assert!(!st.section_tool.is_active(), "Maß schaltet Schnitt aus");
-    h.click_text(&mut st, TOOL);
+    h.click_text(&mut st, &section_tool::tool());
     assert!(st.section_tool.is_active());
     assert!(!st.dimension_tool.is_active(), "Schnitt schaltet Maß aus");
-    h.click_text(&mut st, planora_app::balloon_tool::TOOL);
+    h.click_text(&mut st, &planora_app::balloon_tool::tool());
     assert!(st.balloon_tool.is_active());
     assert!(
         !st.section_tool.is_active(),
         "Position schaltet Schnitt aus"
     );
-    h.click_text(&mut st, TOOL);
+    h.click_text(&mut st, &section_tool::tool());
     assert!(st.section_tool.is_active());
     assert!(!st.balloon_tool.is_active());
     // Der Knopf schaltet auch wieder aus.
-    h.click_text(&mut st, TOOL);
+    h.click_text(&mut st, &section_tool::tool());
     assert!(!st.section_tool.is_active());
 }
 
@@ -896,7 +915,7 @@ fn scale_combo_forwards_and_is_locked_on_a_section() {
     h.frame(&mut st, vec![Event::PointerMoved(p)]);
     h.frame(&mut st, vec![Event::PointerMoved(p)]);
     let shot = h.frame(&mut st, vec![Event::PointerMoved(p)]);
-    assert!(shot.has(section_tool::SCALE_LOCKED_TIP));
+    assert!(shot.has(&section_tool::scale_locked_tip()));
 }
 
 /// Lage der Ebene aus den Klicks, auch auf der negativen Seite und bei einer Quellansicht, deren
@@ -1156,7 +1175,7 @@ fn delete_question_with_dimensions_reads_plainly() {
     drawing_browser::request_delete_view(&mut st, d, sec);
     let plan = st.pending_delete_drawing.clone().expect("Rückfrage");
     assert_eq!(
-        plan.text,
+        plan.text.text(),
         "Die Schnittansicht „Schnitt A\u{2013}A“ wird gelöscht. Mit ihr verschwinden die Schnittlinie in „Vorne“ und 2 Maße."
     );
 }
@@ -1178,7 +1197,7 @@ fn delete_both_ways() {
     drawing_browser::request_delete_view(&mut st, d, sec);
     let plan = st.pending_delete_drawing.clone().expect("Rückfrage");
     assert_eq!(
-        plan.text,
+        plan.text.text(),
         "Die Schnittansicht „Schnitt A\u{2013}A“ wird gelöscht. Mit ihr verschwindet die Schnittlinie in „Vorne“."
     );
     assert_eq!(st.document.edit_count(), e0, "noch nichts gelöscht");
@@ -1194,7 +1213,11 @@ fn delete_both_ways() {
     let _ = sec;
     drawing_browser::request_delete_view(&mut st, d, front);
     let plan = st.pending_delete_drawing.clone().expect("Rückfrage");
-    assert!(plan.text.contains("Schnitt A\u{2013}A"), "{}", plan.text);
+    assert!(
+        plan.text.text().contains("Schnitt A\u{2013}A"),
+        "{}",
+        plan.text
+    );
     drawing_browser::apply_delete(&mut st, &plan).unwrap();
     assert!(drawing(&st, d).views.is_empty());
 }
@@ -1263,14 +1286,14 @@ fn nudge_note() {
     st.drawing_ui.selected_view = Some(sec);
     let shot = h.idle(&mut st);
     assert!(
-        shot.has(NUDGED),
+        shot.has(&section_tool::nudged()),
         "Hinweis fehlt: {:?}",
         shot.texts.iter().map(|t| &t.text).collect::<Vec<_>>()
     );
     // Eine Ebene mitten durch Material braucht keinen Hinweis.
     section_tool::set_offset_text(&mut st, d, sec, "12").unwrap();
     compute(&mut st, &mut h);
-    assert!(!h.idle(&mut st).has(NUDGED));
+    assert!(!h.idle(&mut st).has(&section_tool::nudged()));
 }
 
 // (g) -----------------------------------------------------------------------------------------
@@ -1460,8 +1483,10 @@ fn window_sizes() {
                 let tool_btn = shot
                     .texts
                     .iter()
-                    .find(|t| t.text == TOOL && tool.contains(t.rect.center()))
-                    .unwrap_or_else(|| panic!("{ctx}: „{TOOL}“ fehlt im Werkzeugfeld"));
+                    .find(|t| t.text == section_tool::tool() && tool.contains(t.rect.center()))
+                    .unwrap_or_else(|| {
+                        panic!("{ctx}: „{}“ fehlt im Werkzeugfeld", section_tool::tool())
+                    });
                 assert!(
                     (tool_btn.rect.center().y - add.rect.center().y).abs() < 6.0,
                     "{ctx}"

@@ -17,6 +17,7 @@
 //! übernehmen: …“ (bzw. „…kurve…“) und die Zeile davor. Die übrigen liefern ganze Sätze.
 
 use crate::read::geom::{Skip, SurfaceGeom};
+use planora_i18n::tr;
 use planora_kernel::{Curve, KernelError, Surface};
 use planora_math::nurbs::{MAX_DEGREE, MIN_KNOT_GAP_RATIO, MIN_WEIGHT, NurbsCurve, NurbsSurface};
 use planora_math::{DVec3, Frame, TAU};
@@ -57,27 +58,25 @@ fn skip(m: impl Into<String>) -> Skip {
 /// Knoten aus Vielfachheiten und Werten (STEP-Form); Summen > 10 000 oder fallende Werte → Skip.
 pub fn expand_knots(mults: &[i64], values: &[f64]) -> Result<Vec<f64>, Skip> {
     if mults.len() != values.len() {
-        return Err(skip(
-            "Die Listen der Knoten und ihrer Vielfachheiten sind verschieden lang.",
-        ));
+        return Err(skip(tr!("step-r-knot-lists")));
     }
     if values.iter().any(|v| !v.is_finite()) {
-        return Err(skip("Ein Knoten ist keine endliche Zahl."));
+        return Err(skip(tr!("step-r-knot-not-finite")));
     }
     if values.windows(2).any(|w| w[1] < w[0]) {
-        return Err(skip("Die Knoten fallen."));
+        return Err(skip(tr!("step-r-knots-decreasing")));
     }
     let mut total: usize = 0;
     for m in mults {
         let Ok(m) = usize::try_from(*m) else {
-            return Err(skip("Eine Vielfachheit ist kleiner als 1."));
+            return Err(skip(tr!("step-r-multiplicity")));
         };
         if m == 0 {
-            return Err(skip("Eine Vielfachheit ist kleiner als 1."));
+            return Err(skip(tr!("step-r-multiplicity")));
         }
         total = total.saturating_add(m);
         if total > MAX_KNOTS {
-            return Err(skip("Es gibt mehr als 10 000 Knoten."));
+            return Err(skip(tr!("step-r-too-many-knots")));
         }
     }
     let mut out = Vec::with_capacity(total);
@@ -93,15 +92,17 @@ pub fn expand_knots(mults: &[i64], values: &[f64]) -> Result<Vec<f64>, Skip> {
 /// `PIECEWISE_BEZIER_KNOTS`), `count` die Zahl der Kontrollpunkte (ISO 10303-42).
 pub fn implicit_knots(kind: &str, degree: usize, count: usize) -> Result<Vec<f64>, Skip> {
     if degree == 0 || degree > MAX_DEGREE {
-        return Err(skip(format!(
-            "Der Grad {degree} ist nicht erlaubt (1 bis {MAX_DEGREE})."
+        return Err(skip(tr!(
+            "step-r-degree-not-allowed-d",
+            degree = degree,
+            max = MAX_DEGREE
         )));
     }
     if count < degree + 1 {
-        return Err(skip("Es gibt zu wenige Kontrollpunkte für den Grad."));
+        return Err(skip(tr!("step-r-too-few-points")));
     }
     if count + degree + 1 > MAX_KNOTS {
-        return Err(skip("Es gibt mehr als 10 000 Knoten."));
+        return Err(skip(tr!("step-r-too-many-knots")));
     }
     let p = degree;
     match kind {
@@ -118,9 +119,7 @@ pub fn implicit_knots(kind: &str, degree: usize, count: usize) -> Result<Vec<f64
         // Bézier-Stücke: Ränder p + 1-fach, innen p-fach, Werte 0, 1, 2, …
         "BEZIER_KNOTS" | "PIECEWISE_BEZIER_KNOTS" => {
             if !(count - 1).is_multiple_of(p) {
-                return Err(skip(
-                    "Die Zahl der Kontrollpunkte passt nicht zu einer Bézier-Form.",
-                ));
+                return Err(skip(tr!("step-r-bezier-count")));
             }
             let segments = (count - 1) / p;
             let mut k = vec![0.0; p + 1];
@@ -130,9 +129,7 @@ pub fn implicit_knots(kind: &str, degree: usize, count: usize) -> Result<Vec<f64
             k.extend(std::iter::repeat_n(segments as f64, p + 1));
             Ok(k)
         }
-        other => Err(skip(format!(
-            "Die Knotenart {other} wird nicht unterstützt."
-        ))),
+        other => Err(skip(tr!("step-r-knot-type", other = other))),
     }
 }
 
@@ -141,35 +138,33 @@ pub fn implicit_knots(kind: &str, degree: usize, count: usize) -> Result<Vec<f64
 /// `MIN_KNOT_GAP_RATIO` · Bereich.
 pub fn check_knots(degree: usize, knots: &[f64], count: usize) -> Result<(), Skip> {
     if degree == 0 || degree > MAX_DEGREE {
-        return Err(skip(format!(
-            "Der Grad {degree} ist nicht erlaubt (1 bis {MAX_DEGREE})."
+        return Err(skip(tr!(
+            "step-r-degree-not-allowed-d",
+            degree = degree,
+            max = MAX_DEGREE
         )));
     }
     if count < degree + 1 {
-        return Err(skip("Es gibt zu wenige Kontrollpunkte für den Grad."));
+        return Err(skip(tr!("step-r-too-few-points")));
     }
     if knots.len() != count + degree + 1 {
-        return Err(skip(
-            "Die Zahl der Knoten passt nicht zu Grad und Kontrollpunkten.",
-        ));
+        return Err(skip(tr!("step-r-knot-count")));
     }
     if knots.iter().any(|k| !k.is_finite()) {
-        return Err(skip("Ein Knoten ist keine endliche Zahl."));
+        return Err(skip(tr!("step-r-knot-not-finite")));
     }
     if knots.windows(2).any(|w| w[1] < w[0]) {
-        return Err(skip("Die Knoten fallen."));
+        return Err(skip(tr!("step-r-knots-decreasing")));
     }
     let (a, b) = (knots[degree], knots[count]);
     if b <= a {
-        return Err(skip("Der Parameterbereich ist leer."));
+        return Err(skip(tr!("step-r-param-range-empty")));
     }
     let mut run = 1;
     for w in knots.windows(2) {
         run = if w[1] == w[0] { run + 1 } else { 1 };
         if run > degree && w[0] > a && w[0] < b {
-            return Err(skip(
-                "Ein innerer Knoten kommt öfter vor, als der Grad erlaubt.",
-            ));
+            return Err(skip(tr!("step-r-inner-knot")));
         }
     }
     let gap = knots[degree..=count]
@@ -178,7 +173,7 @@ pub fn check_knots(degree: usize, knots: &[f64], count: usize) -> Result<(), Ski
         .filter(|g| *g > 0.0)
         .fold(f64::INFINITY, f64::min);
     if gap < MIN_KNOT_GAP_RATIO * (b - a) {
-        return Err(skip("Zwei Knoten liegen zu nah beieinander."));
+        return Err(skip(tr!("step-r-knots-close")));
     }
     Ok(())
 }
@@ -257,19 +252,17 @@ where
 /// Teilt alle Gewichte durch das größte; kleinstes danach < MIN_WEIGHT → Skip.
 pub fn normalize_weights(w: &mut [f64]) -> Result<(), Skip> {
     if w.iter().any(|x| !(x.is_finite() && *x > 0.0)) {
-        return Err(skip("Ein Gewicht ist nicht größer als null."));
+        return Err(skip(tr!("step-r-weight-not-positive")));
     }
     let max = w.iter().copied().fold(0.0, f64::max);
     if max <= 0.0 {
-        return Err(skip("Es gibt keine Gewichte."));
+        return Err(skip(tr!("step-r-no-weights")));
     }
     for x in w.iter_mut() {
         *x /= max;
     }
     if w.iter().any(|x| *x < MIN_WEIGHT) {
-        return Err(skip(
-            "Die Gewichte sind zu verschieden (das kleinste ist kleiner als ein Millionstel des größten).",
-        ));
+        return Err(skip(tr!("step-r-weights-spread")));
     }
     Ok(())
 }
@@ -277,11 +270,8 @@ pub fn normalize_weights(w: &mut [f64]) -> Result<(), Skip> {
 /// Kurve des Kernels als NURBS über [t0, t1] (Gerade Grad 1, Kreis/Ellipse rational Grad 2).
 /// Eine Freiformkurve wird ganz übernommen (ihr eigener Bereich; `t0`, `t1` zählen nicht).
 pub fn curve_to_nurbs(c: &Curve, t0: f64, t1: f64) -> Result<NurbsCurve, Skip> {
-    let why = |e: planora_math::nurbs::NurbsError| {
-        skip(format!(
-            "Eine Freiformkurve lässt sich nicht übernehmen: {e}"
-        ))
-    };
+    let why =
+        |e: planora_math::nurbs::NurbsError| skip(tr!("step-r-curve-not-taken", e = e.to_string()));
     match c {
         Curve::Line { .. } => NurbsCurve::new(
             1,
@@ -466,7 +456,7 @@ pub fn finish_nurbs_surface(ns: NurbsSurface, weld_tol: f64) -> Result<(Surface,
 // Die negierten Vergleiche lehnen absichtlich auch NaN ab.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn measured_flip(surface: &Surface, p: DVec3, step_normal: DVec3) -> Result<bool, Skip> {
-    let unclear = || skip("Die Richtung einer Fläche lässt sich nicht bestimmen.");
+    let unclear = || skip(tr!("step-r-surface-direction"));
     let len = step_normal.length();
     if !(len.is_finite() && len > 0.0) {
         return Err(unclear());
@@ -611,7 +601,7 @@ pub(crate) fn revolution_trimmed(
     let near = |d: f64, p: DVec3| d <= LINEAR_EPS * (1.0 + (p - origin).length());
     // Liegt eine Kreismitte auf der Achse? Bis zur Genauigkeit der Datei.
     let on_axis = |d: f64, p: DVec3| near(d, p) || d <= weld_tol;
-    let none = || skip("Eine Drehfläche hat keine Ausdehnung.");
+    let none = || skip(tr!("step-r-revolution-no-extent"));
     // Probe einer Geraden: ihr Ursprung, liegt er auf der Achse, 1 weiter.
     let line_t = match curve {
         Curve::Line { origin: o, .. } if near((*o - foot(*o)).length(), *o) => 1.0,
@@ -639,9 +629,7 @@ pub(crate) fn revolution_trimmed(
                 // Abstand der Geraden von der Achse.
                 let n = cross.normalize();
                 if !near((*o - origin).dot(n).abs(), *o) {
-                    return Err(skip(
-                        "Eine Drehfläche aus einer schrägen Geraden wird noch nicht unterstützt.",
-                    ));
+                    return Err(skip(tr!("step-r-revolution-oblique")));
                 }
                 return Ok(SurfaceGeom::LineCone {
                     line_origin: *o,
@@ -665,9 +653,7 @@ pub(crate) fn revolution_trimmed(
                     }
                 } else if *radius >= major * (1.0 - TORUS_REL) {
                     // Auch „gleich nach Rundung“ (Horntorus) und darüber (Spindeltorus).
-                    return Err(skip(
-                        "Eine Torusfläche mit kleinem Radius größer oder gleich dem großen wird noch nicht unterstützt.",
-                    ));
+                    return Err(skip(tr!("step-r-torus-self-intersecting")));
                 } else {
                     Surface::Torus {
                         frame: frame(fc, (c - fc) / major, v),
@@ -730,10 +716,10 @@ pub fn finish_cone(
             (a.min(*s), b.max(*s))
         });
     if !(far > tol) {
-        return Err(skip("Eine Drehfläche hat keine Ausdehnung."));
+        return Err(skip(tr!("step-r-revolution-no-extent")));
     }
     if lo < -tol && hi > tol {
-        return Err(skip("Eine Kegelfläche reicht über ihre Spitze hinaus."));
+        return Err(skip(tr!("step-r-cone-beyond-apex")));
     }
     let s_ref = if hi > tol { hi } else { lo };
     let r = apex + dir * s_ref;
@@ -755,7 +741,7 @@ pub fn finish_cone(
     let t_ref = (r - line_origin).dot(dir);
     let range = (line_origin - axis_origin).length().max(1.0);
     let (p, n) = revolution_probe(&line, axis_origin, v, &[t_ref], DIFF_STEP * range)
-        .ok_or_else(|| skip("Eine Drehfläche hat keine Ausdehnung."))?;
+        .ok_or_else(|| skip(tr!("step-r-revolution-no-extent")))?;
     let flipped = measured_flip(&surface, p, n)?;
     Ok((surface, flipped))
 }
@@ -770,14 +756,14 @@ fn revolve_nurbs(
     axis: DVec3,
     weld_tol: f64,
 ) -> Result<Surface, Skip> {
-    let why = |m: String| skip(format!("Eine Drehfläche lässt sich nicht übernehmen: {m}"));
+    let why = |m: String| skip(tr!("step-r-revolution-not-taken", m = m));
     let c = match (curve, range) {
         (Curve::Nurbs(n), Some((a, b))) => nurbs_between(n, a, b)?,
         (_, Some((a, b))) => curve_to_nurbs(curve, a, b)?,
         _ => curve_to_nurbs(curve, 0.0, TAU)?,
     };
     if crosses_axis(&c, origin, axis, weld_tol) {
-        return Err(skip("Das Profil einer Drehfläche schneidet die Drehachse."));
+        return Err(skip(tr!("step-r-revolution-profile-axis")));
     }
     let ns = NurbsSurface::revolve(&c, origin, axis, 0.0, TAU).map_err(|e| why(e.to_string()))?;
     let (surface, _) = finish_nurbs_surface(ns, weld_tol).map_err(|Skip(m)| why(m))?;
@@ -819,12 +805,8 @@ fn crosses_axis(c: &NurbsCurve, origin: DVec3, axis: DVec3, weld_tol: f64) -> bo
 // Die negierten Vergleiche lehnen absichtlich auch NaN ab.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub(crate) fn nurbs_between(c: &NurbsCurve, a: f64, b: f64) -> Result<NurbsCurve, Skip> {
-    let why = |m: String| {
-        skip(format!(
-            "Eine Freiformkurve lässt sich nicht übernehmen: {m}"
-        ))
-    };
-    let cut = || skip("Ein getrimmtes Profil lässt sich nicht ausschneiden.");
+    let why = |m: String| skip(tr!("step-r-curve-not-taken-m", m = m));
+    let cut = || skip(tr!("step-r-trimmed-profile"));
     let (d0, d1) = c.domain();
     let eps = 1e-12 * (d1 - d0);
     let a = if a <= d0 + eps { d0 } else { a };
@@ -887,7 +869,7 @@ pub(crate) fn nurbs_between(c: &NurbsCurve, a: f64, b: f64) -> Result<NurbsCurve
 /// gemessenem `flipped`); sonst [`SurfaceGeom::Extrusion`], deren Bereich die Schleifen
 /// bestimmen ([`finish_extrusion`]).
 pub fn extrusion(curve: &Curve, dir: DVec3) -> Result<SurfaceGeom, Skip> {
-    let none = || skip("Eine Strangfläche hat keine Ausdehnung.");
+    let none = || skip(tr!("step-r-extrusion-no-extent"));
     let surface = match curve {
         Curve::Line { origin, dir: d } => {
             let y = dir - *d * d.dot(dir);
@@ -932,11 +914,7 @@ fn extrude_between(
     w1: f64,
     weld_tol: f64,
 ) -> Result<Surface, Skip> {
-    let why = |m: String| {
-        skip(format!(
-            "Eine Strangfläche lässt sich nicht übernehmen: {m}"
-        ))
-    };
+    let why = |m: String| skip(tr!("step-r-extrusion-not-taken", m = m));
     let base = curve
         .transformed(|p| p + d * w0)
         .map_err(|e| why(e.to_string()))?;
@@ -972,11 +950,11 @@ pub fn finish_extrusion_with_tol(
 ) -> Result<Surface, Skip> {
     let d = dir.normalize();
     if !d.is_finite() {
-        return Err(skip("Eine Strangfläche hat keine Ausdehnung."));
+        return Err(skip(tr!("step-r-extrusion-no-extent")));
     }
     let pts: Vec<DVec3> = loops.iter().flatten().copied().collect();
     if pts.is_empty() {
-        return Err(skip("Eine Fläche hat keinen Rand."));
+        return Err(skip(tr!("step-r-face-no-rim")));
     }
     let range = |it: &mut dyn Iterator<Item = f64>| {
         it.fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), x| {
@@ -998,7 +976,7 @@ pub fn finish_extrusion_with_tol(
         hi = hi.max(w);
     }
     if !(hi > lo) {
-        return Err(skip("Eine Strangfläche hat keine Ausdehnung."));
+        return Err(skip(tr!("step-r-extrusion-no-extent")));
     }
     let margin = EXTRUSION_MARGIN * (hi - lo);
     extrude_between(curve, d, lo - margin, hi + margin, weld_tol)

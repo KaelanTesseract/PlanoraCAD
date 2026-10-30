@@ -7,6 +7,7 @@ use crate::model::{
     CurveData, CurveId, CurveKind, MAX_COORD, MAX_SPLINE_POINTS, PointData, PointId, Sketch, finite,
 };
 use crate::solver::SolveCache;
+use planora_i18n::tr;
 use planora_kernel::Arena;
 use planora_math::{Frame, Tolerance};
 
@@ -101,18 +102,18 @@ impl Sketch {
             && d.tolerance.angular.is_finite()
             && d.tolerance.angular > 0.0)
         {
-            return Err(bad("Die Toleranz der Skizze ist ungültig"));
+            return Err(bad(tr!("sketch-err-data-tolerance")));
         }
         for v in [d.frame.origin, d.frame.x, d.frame.y, d.frame.z] {
             if !v.is_finite() || v.abs().max_element() > MAX_COORD {
-                return Err(bad("Das Koordinatensystem der Skizze ist ungültig"));
+                return Err(bad(tr!("sketch-err-data-frame")));
             }
         }
         if !d.frame.is_orthonormal(d.tolerance.linear) {
-            return Err(bad("Das Koordinatensystem der Skizze ist ungültig"));
+            return Err(bad(tr!("sketch-err-data-frame")));
         }
         for v in &d.vars {
-            finite(*v, "Ein Wert der Skizze")?;
+            finite(*v, || tr!("sketch-err-what-sketch-value"))?;
         }
         let nv = d.vars.len();
         let var_ok = |i: usize| i < nv;
@@ -125,55 +126,55 @@ impl Sketch {
 
         for p in &d.points {
             if !var_ok(p.x) || !var_ok(p.y) {
-                return Err(bad("Ein Punkt verweist auf einen fehlenden Wert"));
+                return Err(bad(tr!("sketch-err-data-point-value")));
             }
         }
         for c in &d.curves {
             let pts = c.kind.points();
             if pts.iter().any(|p| !point_ok(*p)) {
-                return Err(bad("Eine Kurve verweist auf einen fehlenden Punkt"));
+                return Err(bad(tr!("sketch-err-data-curve-point")));
             }
             match &c.kind {
                 CurveKind::Circle { radius, .. } if !var_ok(*radius) => {
-                    return Err(bad("Ein Kreis verweist auf einen fehlenden Wert"));
+                    return Err(bad(tr!("sketch-err-data-circle-value")));
                 }
                 CurveKind::Ellipse { ax, ay, minor, .. }
                     if !(var_ok(*ax) && var_ok(*ay) && var_ok(*minor)) =>
                 {
-                    return Err(bad("Eine Ellipse verweist auf einen fehlenden Wert"));
+                    return Err(bad(tr!("sketch-err-data-ellipse-value")));
                 }
                 CurveKind::Spline { points }
                     if points.len() < 2 || points.len() > MAX_SPLINE_POINTS =>
                 {
-                    return Err(bad("Ein Spline hat eine ungültige Zahl von Stützpunkten"));
+                    return Err(bad(tr!("sketch-err-data-spline-count")));
                 }
                 _ => {}
             }
             if c.alive && pts.iter().any(|p| !point_alive(*p)) {
-                return Err(bad("Eine Kurve verweist auf einen gelöschten Punkt"));
+                return Err(bad(tr!("sketch-err-data-curve-deleted")));
             }
         }
         for c in &d.constraints {
             if !(-1..=1).contains(&c.branch) {
-                return Err(bad("Ungültige Lage einer Abhängigkeit"));
+                return Err(bad(tr!("sketch-err-data-constraint-place")));
             }
             if let Some(e) = c.extra
                 && !var_ok(e)
             {
-                return Err(bad("Eine Abhängigkeit verweist auf einen fehlenden Wert"));
+                return Err(bad(tr!("sketch-err-data-constraint-value")));
             }
             let pts = c.kind.points();
             let curves = c.kind.curves();
             if pts.iter().any(|p| !point_ok(*p)) || curves.iter().any(|k| !curve_ok(*k)) {
-                return Err(bad("Eine Abhängigkeit verweist auf ein fehlendes Objekt"));
+                return Err(bad(tr!("sketch-err-data-constraint-object")));
             }
             if !constraint_numbers_ok(&c.kind) {
-                return Err(bad("Eine Abhängigkeit hat einen ungültigen Zahlenwert"));
+                return Err(bad(tr!("sketch-err-data-constraint-number")));
             }
             if c.alive
                 && (pts.iter().any(|p| !point_alive(*p)) || curves.iter().any(|k| !curve_alive(*k)))
             {
-                return Err(bad("Eine Abhängigkeit verweist auf ein gelöschtes Objekt"));
+                return Err(bad(tr!("sketch-err-data-constraint-deleted")));
             }
         }
 
@@ -219,7 +220,7 @@ impl Sketch {
             s.check_types(&c.kind)?;
             if c.alive {
                 if c.extra.is_none() && s.needs_extra(&c.kind) {
-                    return Err(bad("Einer Abhängigkeit fehlt ihre Zusatzvariable"));
+                    return Err(bad(tr!("sketch-err-data-constraint-extra")));
                 }
                 s.check_constraint_value(&c.kind)?;
             }

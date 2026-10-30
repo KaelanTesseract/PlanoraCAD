@@ -15,6 +15,7 @@ update-test-source = []
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+planora-i18n.workspace = true
 
 # Netzzugriff nur unter Windows (Schannel); auf anderen Systemen meldet `HttpSource` „nur Windows“.
 [target.'cfg(windows)'.dependencies]

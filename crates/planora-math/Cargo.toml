@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 glam.workspace = true
 robust.workspace = true
+planora-i18n.workspace = true
 thiserror.workspace = true
 
 [lints]

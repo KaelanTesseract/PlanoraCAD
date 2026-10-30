@@ -10,21 +10,28 @@
 
 use crate::dialog::{Dialog, DialogSize};
 use crate::theme;
-use crate::workspace::{DOCUMENT_NAME_SUFFIX, Prompt, Workspace};
+use crate::workspace::{Prompt, Workspace, document_name_suffix, no_root};
+use planora_i18n::tr;
 use planora_project::ProjectError;
 use planora_project::docstore::LockMode;
 use planora_project::library::{DOCUMENT_SUFFIX, Library, NodeKind, NodePath, TreeNode};
 
 /// Hinweis ohne gewähltes Projektverzeichnis.
-pub const NO_LIBRARY: &str = "Es ist noch kein Projektverzeichnis gewählt. Wähle mit „Projektverzeichnis …“ den Ordner, in dem deine Projekte liegen sollen.";
+pub fn no_library() -> String {
+    tr!("projects-no-library")
+}
 /// Anfang der Meldung, wenn sich das Projektverzeichnis nicht lesen lässt (danach der Grund).
-pub const READ_ERROR_PREFIX: &str = "Das Projektverzeichnis lässt sich nicht lesen: ";
+pub fn read_error_prefix() -> String {
+    tr!("projects-read-error-prefix")
+}
 /// Ablehnung, solange betroffene Dokumente in Tabs offen sind.
-const CLOSE_FIRST: &str = "Bitte zuerst die betroffenen Dokumente schließen.";
-/// Meldung, wenn eine Aktion keine Bibliothek hat.
-const NO_ROOT: &str = "Es ist noch kein Projektverzeichnis gewählt.";
+fn close_first() -> String {
+    tr!("projects-close-first")
+}
 /// Hinweis im Fenster „Verschieben“, solange der Baum (neu) gelesen wird.
-pub const TARGETS_PENDING: &str = "Die Ziele werden noch gelesen …";
+pub fn targets_pending() -> String {
+    tr!("projects-targets-pending")
+}
 
 #[derive(Default)]
 pub struct ProjectsUi {
@@ -145,10 +152,10 @@ fn open_tabs_under(ws: &Workspace, path: &NodePath) -> bool {
 /// Prüfung vor Umbenennen, Verschieben und Löschen; `false` = abgelehnt (Hinweis steht).
 fn may_change(ws: &mut Workspace, path: &NodePath) -> bool {
     if path.is_empty() {
-        notice(ws, "Nichts ausgewählt.");
+        notice(ws, tr!("projects-nothing-selected"));
         false
     } else if open_tabs_under(ws, path) {
-        notice(ws, CLOSE_FIRST);
+        notice(ws, close_first());
         false
     } else {
         true
@@ -183,7 +190,7 @@ pub fn open_node(ws: &mut Workspace, path: &NodePath) {
 
 fn lib(ws: &mut Workspace) -> Option<&Library> {
     if ws.library.is_none() {
-        notice(ws, NO_ROOT);
+        notice(ws, no_root());
     }
     ws.library.as_ref()
 }
@@ -246,7 +253,7 @@ pub fn rename_node(
         .last()
         .is_some_and(|p| p.to_lowercase().ends_with(DOCUMENT_SUFFIX));
     if is_document && name.trim().to_lowercase().ends_with(DOCUMENT_SUFFIX) {
-        notice(ws, DOCUMENT_NAME_SUFFIX);
+        notice(ws, document_name_suffix());
         return None;
     }
     let r = lib(ws)?.rename(path, name);
@@ -394,8 +401,8 @@ fn name_window(
         }
         let enter = name_field(ui, name);
         ui.horizontal(|ui| {
-            ok = ui.button("Anlegen").clicked() || enter;
-            cancel = ui.button("Abbrechen").clicked();
+            ok = ui.button(tr!("projects-create")).clicked() || enter;
+            cancel = ui.button(tr!("common-cancel")).clicked();
         });
     });
     (ok, cancel)
@@ -411,7 +418,13 @@ pub fn show_dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut ProjectsUi
         return;
     }
     if let Some(mut name) = st.new_project.take() {
-        let (ok, cancel) = name_window(ctx, "Neues Projekt", "project", None, &mut name);
+        let (ok, cancel) = name_window(
+            ctx,
+            &tr!("projects-new-project"),
+            "project",
+            None,
+            &mut name,
+        );
         let done = cancel
             || (ok
                 && create_project(ws, st, &name)
@@ -422,16 +435,28 @@ pub fn show_dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut ProjectsUi
         }
     }
     if let Some((parent, mut name)) = st.new_document.take() {
-        let text = format!("In „{}“:", label(&parent));
-        let (ok, cancel) = name_window(ctx, "Neues Dokument", "document", Some(text), &mut name);
+        let text = tr!("projects-in-location", name = label(&parent));
+        let (ok, cancel) = name_window(
+            ctx,
+            &tr!("projects-new-document"),
+            "document",
+            Some(text),
+            &mut name,
+        );
         let done = cancel || (ok && create_document(ws, st, &parent, &name).is_some());
         if !done {
             st.new_document = Some((parent, name));
         }
     }
     if let Some((parent, mut name)) = st.new_folder.take() {
-        let text = format!("In „{}“:", label(&parent));
-        let (ok, cancel) = name_window(ctx, "Neuer Ordner", "folder", Some(text), &mut name);
+        let text = tr!("projects-in-location", name = label(&parent));
+        let (ok, cancel) = name_window(
+            ctx,
+            &tr!("projects-new-folder"),
+            "folder",
+            Some(text),
+            &mut name,
+        );
         let done = cancel
             || (ok
                 && create_folder(ws, st, &parent, &name)
@@ -443,12 +468,12 @@ pub fn show_dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut ProjectsUi
     }
     if let Some((path, mut name)) = st.rename.take() {
         let (mut ok, mut cancel) = (false, false);
-        dialog_window("Umbenennen", "rename").show(ctx, |ui| {
-            ui.label(format!("Neuer Name für „{}“:", label(&path)));
+        dialog_window(&tr!("projects-rename-title"), "rename").show(ctx, |ui| {
+            ui.label(tr!("projects-new-name-for", name = label(&path)));
             let enter = name_field(ui, &mut name);
             ui.horizontal(|ui| {
-                ok = ui.button("Umbenennen").clicked() || enter;
-                cancel = ui.button("Abbrechen").clicked();
+                ok = ui.button(tr!("projects-rename-title")).clicked() || enter;
+                cancel = ui.button(tr!("common-cancel")).clicked();
             });
         });
         let done = cancel || (ok && rename_node(ws, st, &path, &name).is_some());
@@ -460,17 +485,17 @@ pub fn show_dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut ProjectsUi
         let targets = move_targets(st, &path);
         let reading = st.tree.is_none();
         let (mut ok, mut cancel) = (false, false);
-        dialog_window("Verschieben", "move").show(ctx, |ui| {
-            ui.label(format!("„{}“ verschieben nach:", label(&path)));
+        dialog_window(&tr!("projects-move-title"), "move").show(ctx, |ui| {
+            ui.label(tr!("projects-move-to", name = label(&path)));
             if reading {
-                ui.weak(TARGETS_PENDING);
+                ui.weak(targets_pending());
             }
             egui::ComboBox::from_id_salt("planora_projects_move_target")
                 .selected_text(
                     target
                         .as_ref()
                         .map(label)
-                        .unwrap_or_else(|| "Ziel wählen".into()),
+                        .unwrap_or_else(|| tr!("projects-choose-target")),
                 )
                 .show_ui(ui, |ui| {
                     for t in &targets {
@@ -479,9 +504,12 @@ pub fn show_dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut ProjectsUi
                 });
             ui.horizontal(|ui| {
                 ok = ui
-                    .add_enabled(target.is_some(), egui::Button::new("Verschieben"))
+                    .add_enabled(
+                        target.is_some(),
+                        egui::Button::new(tr!("projects-move-title")),
+                    )
                     .clicked();
-                cancel = ui.button("Abbrechen").clicked();
+                cancel = ui.button(tr!("common-cancel")).clicked();
             });
         });
         let done = cancel
@@ -495,11 +523,11 @@ pub fn show_dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut ProjectsUi
     }
     if let Some(path) = st.confirm_delete.take() {
         let (mut ok, mut cancel) = (false, false);
-        dialog_window("Löschen", "delete").show(ctx, |ui| {
-            ui.label(format!("„{}“ in den Papierkorb verschieben?", label(&path)));
+        dialog_window(&tr!("projects-delete-title"), "delete").show(ctx, |ui| {
+            ui.label(tr!("projects-confirm-delete", name = label(&path)));
             ui.horizontal(|ui| {
-                ok = ui.button("In den Papierkorb").clicked();
-                cancel = ui.button("Abbrechen").clicked();
+                ok = ui.button(tr!("projects-to-trash")).clicked();
+                cancel = ui.button(tr!("common-cancel")).clicked();
             });
         });
         // Auch nach einem Fehler schließt die Rückfrage; der Hinweis erklärt den Grund.

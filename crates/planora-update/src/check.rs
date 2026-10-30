@@ -8,6 +8,8 @@
 use std::fmt;
 use std::sync::Arc;
 
+use planora_i18n::tr;
+
 use crate::channel::Channel;
 use crate::release::{Update, parse_releases, pick_update};
 use crate::version::Version;
@@ -38,12 +40,12 @@ pub enum NetError {
 impl fmt::Display for NetError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            NetError::Offline => write!(f, "keine Verbindung"),
-            NetError::Timeout => write!(f, "Zeitüberschreitung"),
-            NetError::RateLimited => write!(f, "zu viele Anfragen, später erneut versuchen"),
-            NetError::Http(code) => write!(f, "Antwort mit Status {code}"),
+            NetError::Offline => f.write_str(&tr!("update-net-offline")),
+            NetError::Timeout => f.write_str(&tr!("update-net-timeout")),
+            NetError::RateLimited => f.write_str(&tr!("update-net-rate-limited")),
+            NetError::Http(code) => f.write_str(&tr!("update-net-http", code = i64::from(*code))),
             NetError::Other(msg) => write!(f, "{msg}"),
-            NetError::Unsupported => write!(f, "auf diesem System nicht vorgesehen"),
+            NetError::Unsupported => f.write_str(&tr!("update-net-unsupported")),
         }
     }
 }

@@ -1,34 +1,53 @@
-#[derive(Debug, thiserror::Error)]
+use planora_i18n::tr;
+use std::fmt;
+
+/// Fehler der Projektdateien. Die Texte entstehen beim Anzeigen in der aktuellen Sprache; die
+/// Texte in `InvalidName`, `Invalid` und `msg` sind schon in der Sprache fertig, in der der Fehler
+/// entstand.
+#[derive(Debug)]
 pub enum ProjectError {
-    #[error("Dateifehler bei „{path}“: {msg}")]
     Io { path: String, msg: String },
-    #[error("Die Datei „{path}“ ist beschädigt: {msg}")]
     Corrupt { path: String, msg: String },
-    #[error(
-        "Die Datei „{path}“ wurde mit einer neueren Programmversion erstellt (Format {found})."
-    )]
     TooNew { path: String, found: u32 },
-    #[error("{0}")]
     InvalidName(String),
-    #[error("Der Pfad liegt außerhalb des Projektordners.")]
     OutsideRoot,
-    #[error("„{0}“ gibt es schon.")]
     Exists(String),
-    #[error("„{0}“ wurde nicht gefunden.")]
     NotFound(String),
-    #[error("Das Dokument wird gerade von einem anderen Programm benutzt (gesperrt seit {since}).")]
     Locked { since: String },
-    #[error(
-        "Die Sperre wurde von einem anderen Programm übernommen. Das Dokument wurde nicht verändert; bitte neu öffnen."
-    )]
     LockLost,
-    #[error("{0}")]
     Invalid(String),
-    #[error(
-        "Diese Version ist nicht die neueste ihres Zweigs. Bitte einen neuen Zweignamen angeben."
-    )]
     NeedsBranch,
 }
+
+impl fmt::Display for ProjectError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            ProjectError::Io { path, msg } => {
+                tr!("proj-err-io", path = path.as_str(), msg = msg.as_str())
+            }
+            ProjectError::Corrupt { path, msg } => {
+                tr!("proj-err-corrupt", path = path.as_str(), msg = msg.as_str())
+            }
+            ProjectError::TooNew { path, found } => {
+                tr!(
+                    "proj-err-too-new",
+                    path = path.as_str(),
+                    found = found.to_string()
+                )
+            }
+            ProjectError::InvalidName(text) | ProjectError::Invalid(text) => text.clone(),
+            ProjectError::OutsideRoot => tr!("proj-err-outside-root"),
+            ProjectError::Exists(name) => tr!("proj-err-exists", name = name.as_str()),
+            ProjectError::NotFound(name) => tr!("proj-err-not-found", name = name.as_str()),
+            ProjectError::Locked { since } => tr!("proj-err-locked", since = since.as_str()),
+            ProjectError::LockLost => tr!("proj-err-lock-lost"),
+            ProjectError::NeedsBranch => tr!("proj-err-needs-branch"),
+        };
+        f.write_str(&text)
+    }
+}
+
+impl std::error::Error for ProjectError {}
 
 impl ProjectError {
     pub fn io(path: &std::path::Path, e: &std::io::Error) -> Self {

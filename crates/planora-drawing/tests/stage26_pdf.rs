@@ -14,7 +14,7 @@ use planora_drawing::balloon::{PositionPen, layout_balloon};
 use planora_drawing::model::{Paper, Sheet};
 use planora_drawing::out2d::Out2d;
 use planora_drawing::pdf::{
-    MAX_PAGES, NO_PAGES, PdfMeta, TOO_MANY_PAGES, fits_page_pt, pdf_char_message, pdf_date, pdf_num,
+    MAX_PAGES, PdfMeta, fits_page_pt, no_pages, pdf_char_message, pdf_date, pdf_num, too_many_pages,
 };
 use planora_drawing::sheet::{SheetLine, SheetModel, SheetView};
 use planora_drawing::sheet_frame::{SheetPen, sheet_scale};
@@ -1483,7 +1483,7 @@ fn bad_input_writes_nothing() {
     let many: Vec<&SheetModel> = vec![&ok; MAX_PAGES + 1];
     let (r, out) = try_write(&many);
     match r {
-        Err(DrawError::Unsupported(msg)) => assert_eq!(msg, TOO_MANY_PAGES),
+        Err(DrawError::Unsupported(msg)) => assert_eq!(msg, too_many_pages()),
         other => panic!("{other:?}"),
     }
     assert!(out.is_empty());
@@ -1492,7 +1492,7 @@ fn bad_input_writes_nothing() {
     assert_eq!(read(&out).unwrap().pages.len(), 200);
     let (r, out) = try_write(&[]);
     match r {
-        Err(DrawError::Unsupported(msg)) => assert_eq!(msg, NO_PAGES),
+        Err(DrawError::Unsupported(msg)) => assert_eq!(msg, no_pages()),
         other => panic!("{other:?}"),
     }
     assert!(out.is_empty());

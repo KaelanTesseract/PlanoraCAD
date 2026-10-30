@@ -210,32 +210,35 @@ fn every_panel_action_is_reachable_from_tiles() {
     let f = folder(&e.ws, &p, "F");
     let doc = e.ws.save_as(&p, "Teil", "").unwrap();
     e.ws.close_tab(0);
+    let labels = |kind| {
+        tile_menu(kind)
+            .into_iter()
+            .map(TileMenu::label)
+            .collect::<Vec<_>>()
+    };
     assert_eq!(
-        tile_menu(TileKind::Project),
+        labels(TileKind::Project),
         ["Umbenennen …", "Löschen …"],
         "Projekte lassen sich nicht verschieben"
     );
     for kind in [TileKind::Folder, TileKind::Document] {
-        assert_eq!(
-            tile_menu(kind),
-            ["Umbenennen …", "Verschieben …", "Löschen …"]
-        );
+        assert_eq!(labels(kind), ["Umbenennen …", "Verschieben …", "Löschen …"]);
     }
     let mut w = opened(&e.ws);
     // erste Ebene: Projekt
     let tp = tile(&w, "P");
     for (entry, title) in [
-        ("Umbenennen …", "Neuer Name für „P“:"),
-        ("Löschen …", "„P“ in den Papierkorb verschieben?"),
+        (TileMenu::Rename, "Neuer Name für „P“:"),
+        (TileMenu::Delete, "„P“ in den Papierkorb verschieben?"),
     ] {
         w.apply_menu(&tp, entry);
-        assert!(project_actions::dialog_open(&w.ui), "{entry}");
+        assert!(project_actions::dialog_open(&w.ui), "{entry:?}");
         let t = dialog_texts(&c, &mut e.ws, &mut w.ui);
-        assert!(t.contains(title), "{entry}: {t}");
+        assert!(t.contains(title), "{entry:?}: {t}");
         w.ui.close_dialogs();
         assert!(!project_actions::dialog_open(&w.ui));
     }
-    w.apply_menu(&tp, "Verschieben …");
+    w.apply_menu(&tp, TileMenu::Move);
     assert!(
         !project_actions::dialog_open(&w.ui),
         "kein Verschieben für Projekte"
@@ -246,14 +249,16 @@ fn every_panel_action_is_reachable_from_tiles() {
         let t = tile(&w, name);
         for entry in tile_menu(t.kind) {
             w.apply_menu(&t, entry);
-            assert!(project_actions::dialog_open(&w.ui), "{name}: {entry}");
+            assert!(project_actions::dialog_open(&w.ui), "{name}: {entry:?}");
             let text = dialog_texts(&c, &mut e.ws, &mut w.ui);
-            let shown = match *entry {
-                "Umbenennen …" => format!("Neuer Name für „{}“:", t.path.join(" / ")),
-                "Verschieben …" => format!("„{}“ verschieben nach:", t.path.join(" / ")),
-                _ => format!("„{}“ in den Papierkorb verschieben?", t.path.join(" / ")),
+            let shown = match entry {
+                TileMenu::Rename => format!("Neuer Name für „{}“:", t.path.join(" / ")),
+                TileMenu::Move => format!("„{}“ verschieben nach:", t.path.join(" / ")),
+                TileMenu::Delete => {
+                    format!("„{}“ in den Papierkorb verschieben?", t.path.join(" / "))
+                }
             };
-            assert!(text.contains(&shown), "{name}: {entry}: {text}");
+            assert!(text.contains(&shown), "{name}: {entry:?}: {text}");
             w.ui.close_dialogs();
         }
     }
@@ -304,7 +309,7 @@ fn open_documents_lock_rename_move_and_delete() {
     // über die Kachel und die Rückfrage
     w.go_to(p.clone());
     let t = tile(&w, "Teil");
-    w.apply_menu(&t, "Löschen …");
+    w.apply_menu(&t, TileMenu::Delete);
     let mut s = common::Screen::new(1000.0, 700.0);
     let mut draw = |c: &egui::Context| project_actions::show_dialogs(c, &mut e.ws, &mut w.ui);
     let seen = s.settle(3, &mut draw);
@@ -597,7 +602,7 @@ fn without_a_library_there_is_no_scan() {
     assert!(start.elapsed() < Duration::from_secs(1));
     assert!(w.scan_state().is_none());
     assert!(w.tiles().is_empty());
-    assert!(project_actions::NO_LIBRARY.contains("Projektverzeichnis …"));
+    assert!(project_actions::no_library().contains("Projektverzeichnis …"));
 }
 
 #[test]
@@ -727,7 +732,10 @@ fn document_names_ending_in_the_suffix_are_refused() {
     let mut w = opened(&e.ws);
     for bad in ["x.pcad", "X.PCAD", "Teil.Pcad"] {
         assert!(project_actions::create_document(&mut e.ws, &mut w.ui, &p, bad).is_none());
-        assert_eq!(notice(&e.ws), planora_app::workspace::DOCUMENT_NAME_SUFFIX);
+        assert_eq!(
+            notice(&e.ws),
+            planora_app::workspace::document_name_suffix()
+        );
         e.ws.prompt = None;
     }
     assert!(fs::read_dir(lib_root(&e.ws).join("P")).unwrap().all(|x| {
@@ -750,11 +758,11 @@ fn the_move_window_says_when_the_targets_are_still_being_read() {
     let mut st = ProjectsUi::default();
     project_actions::request_move(&mut st, doc.clone());
     let t = dialog_texts(&c, &mut e.ws, &mut st);
-    assert!(t.contains(project_actions::TARGETS_PENDING), "{t}");
+    assert!(t.contains(&project_actions::targets_pending()), "{t}");
     // gelesen: kein Hinweis
     let mut w = opened(&e.ws);
     project_actions::request_move(&mut w.ui, doc);
     let t = dialog_texts(&c, &mut e.ws, &mut w.ui);
-    assert!(!t.contains(project_actions::TARGETS_PENDING), "{t}");
+    assert!(!t.contains(&project_actions::targets_pending()), "{t}");
     assert!(t.contains("verschieben nach:"), "{t}");
 }

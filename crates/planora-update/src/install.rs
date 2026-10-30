@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
+use planora_i18n::tr;
+
 use crate::release::{REPO, SETUP_NAME, SHA256_NAME};
 use crate::sha256::Sha256;
 
@@ -53,24 +55,16 @@ pub enum InstallError {
 }
 
 impl InstallError {
-    /// Meldung für den Nutzer in einfacher Sprache.
+    /// Meldung für den Nutzer in einfacher Sprache, in der aktuellen Sprache.
     pub fn message(&self) -> String {
         match self {
-            InstallError::Cancelled => "Das Update wurde abgebrochen.".into(),
-            InstallError::Network(detail) => format!(
-                "Die neue Version ließ sich nicht herunterladen ({detail}). Bitte später noch einmal versuchen."
-            ),
-            InstallError::TooLarge => {
-                "Die heruntergeladene Datei ist größer als erwartet. Es wurde nichts installiert."
-                    .into()
+            InstallError::Cancelled => tr!("update-error-cancelled"),
+            InstallError::Network(detail) => {
+                tr!("update-error-network", detail = detail.as_str())
             }
-            InstallError::Checksum => {
-                "Die heruntergeladene Datei ist beschädigt (die Prüfsumme stimmt nicht). Es wurde nichts installiert."
-                    .into()
-            }
-            InstallError::Io(detail) => format!(
-                "Das Update ließ sich nicht vorbereiten ({detail}). Das Programm läuft in der bisherigen Version weiter."
-            ),
+            InstallError::TooLarge => tr!("update-error-too-large"),
+            InstallError::Checksum => tr!("update-error-checksum"),
+            InstallError::Io(detail) => tr!("update-error-io", detail = detail.as_str()),
         }
     }
 }
@@ -83,8 +77,26 @@ impl std::fmt::Display for InstallError {
 
 impl std::error::Error for InstallError {}
 
-fn io_err(what: &str, e: &io::Error) -> InstallError {
-    InstallError::Io(format!("{what}: {e}"))
+/// Welcher Vorgang gescheitert ist (für [`io_err`]).
+#[derive(Clone, Copy)]
+enum Op {
+    CreateFile,
+    WriteFile,
+    ReadFile,
+    Thread,
+    CreateDir,
+}
+
+/// Fehler beim Zugriff auf Dateien, mit dem Text des Vorgangs.
+fn io_err(op: Op, e: &io::Error) -> InstallError {
+    let error = e.to_string();
+    InstallError::Io(match op {
+        Op::CreateFile => tr!("update-detail-create-file", error = error),
+        Op::WriteFile => tr!("update-detail-write-file", error = error),
+        Op::ReadFile => tr!("update-detail-read-file", error = error),
+        Op::Thread => tr!("update-detail-thread", error = error),
+        Op::CreateDir => tr!("update-detail-create-dir", error = error),
+    })
 }
 
 /// Lädt eine Datei des Releases. `progress(geladen, gesamt)` kommt mindestens alle 100 ms
@@ -144,16 +156,14 @@ pub fn redirect_target(current: &str, location: &str) -> Result<String, InstallE
         format!("https://{rest}")
     } else if location.starts_with('/') {
         let (origin, _) = split_origin(current)
-            .ok_or_else(|| InstallError::Network("Weiterleitung nicht erlaubt".into()))?;
+            .ok_or_else(|| InstallError::Network(tr!("update-detail-redirect-denied")))?;
         format!("{origin}{location}")
     } else {
-        return Err(InstallError::Network("Weiterleitung nicht erlaubt".into()));
+        return Err(InstallError::Network(tr!("update-detail-redirect-denied")));
     };
     match split_origin(&target) {
         Some((_, host)) if host_allowed(&host) => Ok(target),
-        _ => Err(InstallError::Network(
-            "Weiterleitung zu einer fremden Adresse".into(),
-        )),
+        _ => Err(InstallError::Network(tr!("update-detail-redirect-foreign"))),
     }
 }
 
@@ -240,7 +250,7 @@ pub fn copy_limited(
     stall: Duration,
     progress: &mut dyn FnMut(u64, u64) -> bool,
 ) -> Result<(), InstallError> {
-    let mut file = File::create(dest).map_err(|e| io_err("Datei anlegen", &e))?;
+    let mut file = File::create(dest).map_err(|e| io_err(Op::CreateFile, &e))?;
     let result = copy_into(reader, total, &mut file, max_bytes, stall, progress);
     drop(file);
     if result.is_err() {
@@ -275,7 +285,7 @@ fn copy_into(
                 }
             }
         })
-        .map_err(|e| io_err("Thread", &e))?;
+        .map_err(|e| io_err(Op::Thread, &e))?;
 
     let mut done = 0u64;
     let mut last_data = Instant::now();
@@ -291,27 +301,27 @@ fn copy_into(
                     return Err(InstallError::TooLarge);
                 }
                 file.write_all(&chunk)
-                    .map_err(|e| io_err("Datei schreiben", &e))?;
+                    .map_err(|e| io_err(Op::WriteFile, &e))?;
                 last_data = Instant::now();
             }
             Ok(Err(e)) => return Err(InstallError::Network(e.to_string())),
             Err(RecvTimeoutError::Timeout) => {
                 if last_data.elapsed() >= stall {
-                    return Err(InstallError::Network(format!(
-                        "seit {} Sekunden kommen keine Daten",
-                        stall.as_secs().max(1)
+                    return Err(InstallError::Network(tr!(
+                        "update-detail-stalled",
+                        seconds = stall.as_secs().max(1)
                     )));
                 }
             }
             Err(RecvTimeoutError::Disconnected) => {
-                return Err(InstallError::Network("Verbindung abgebrochen".into()));
+                return Err(InstallError::Network(tr!("update-detail-connection-lost")));
             }
         }
         if !progress(done, total) {
             return Err(InstallError::Cancelled);
         }
     }
-    file.sync_all().map_err(|e| io_err("Datei schreiben", &e))?;
+    file.sync_all().map_err(|e| io_err(Op::WriteFile, &e))?;
     Ok(())
 }
 
@@ -330,7 +340,7 @@ pub fn verify_sha256(
 /// Stimmt die Prüfsumme von `file` mit `expected_hex` überein (Groß-/Kleinschreibung egal)?
 /// Sonst [`InstallError::Checksum`].
 pub fn file_matches_sha256(file: &Path, expected_hex: &str) -> Result<(), InstallError> {
-    let mut f = File::open(file).map_err(|e| io_err("Datei lesen", &e))?;
+    let mut f = File::open(file).map_err(|e| io_err(Op::ReadFile, &e))?;
     reader_matches_sha256(&mut f, expected_hex)
 }
 
@@ -381,7 +391,7 @@ fn reader_sha256(f: &mut dyn Read) -> Result<String, InstallError> {
             Ok(0) => break,
             Ok(n) => h.update(&buf[..n]),
             Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-            Err(e) => return Err(io_err("Datei lesen", &e)),
+            Err(e) => return Err(io_err(Op::ReadFile, &e)),
         }
     }
     Ok(h.hex())
@@ -411,7 +421,7 @@ impl DownloadPaths {
 
 /// Legt den Ordner des Downloads an (auch übergeordnete Ordner).
 pub fn prepare_dir(paths: &DownloadPaths) -> Result<(), InstallError> {
-    std::fs::create_dir_all(&paths.dir).map_err(|e| io_err("Ordner anlegen", &e))
+    std::fs::create_dir_all(&paths.dir).map_err(|e| io_err(Op::CreateDir, &e))
 }
 
 /// Verwirft einen Download: Installer und Prüfsummen-Datei, danach den Ordner, aber nur, wenn

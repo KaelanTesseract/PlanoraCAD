@@ -27,6 +27,7 @@ use planora_feature::{
     SketchPlane, Snapshot, SnapshotFeature, StandardPlane, StepShape, StepShapeId, field_keys,
     step_text_megabytes, step_text_sum_limit, validate_drawing,
 };
+use planora_i18n::tr;
 use planora_kernel::BoolOp;
 use planora_math::{DQuat, DVec3, Frame, Tolerance};
 use planora_sketch::{
@@ -106,18 +107,48 @@ fn v3(v: DVec3) -> V3 {
 /// Prueft eine Zahl aus der Datei: endlich und im Betrag hoechstens `2 * MAX_COORD_MM`. Der
 /// Faktor 2 laesst Ursprung plus Groesse (z. B. ein Quader am Rand des Raums) zu, waehrend
 /// Werte weit ueber dem Rechenbereich abgelehnt werden.
-fn num(origin: &str, what: &str, x: f64) -> Result<f64> {
+fn num(origin: &str, what: What, x: f64) -> Result<f64> {
     if x.is_finite() && x.abs() <= MAX_COORD_MM * 2.0 {
         Ok(x)
     } else {
         Err(ProjectError::corrupt(
             origin,
-            format!("{what}: Zahl ungültig oder zu groß"),
+            tr!("proj-number-invalid", what = what()),
         ))
     }
 }
 
-fn dv3(origin: &str, what: &str, v: V3) -> Result<DVec3> {
+/// Bezeichnung des Werts für Fehlermeldungen. Der Text entsteht erst im Fehlerfall, denn die
+/// Prüfungen laufen für jede Zahl einer Datei.
+type What<'a> = &'a dyn Fn() -> String;
+
+/// Bezeichnung eines Feldes allein (ohne Namen), z. B. „Radius“.
+type Label = fn() -> String;
+
+/// `„Name“ Feld`, z. B. `„Quader 1“ Radius`.
+fn field_label(name: &str, label: String) -> String {
+    tr!("proj-field", name = name, label = label)
+}
+
+/// `Skizze „Name“ Feld`.
+fn sketch_label(feature: &str, label: String) -> String {
+    tr!(
+        "proj-what-label",
+        what = tr!("proj-w-sketch", name = feature),
+        label = label
+    )
+}
+
+/// `Zeichnung „Name“ Feld`.
+fn drawing_label(drawing: &str, label: String) -> String {
+    tr!(
+        "proj-what-label",
+        what = tr!("proj-w-drawing", name = drawing),
+        label = label
+    )
+}
+
+fn dv3(origin: &str, what: What, v: V3) -> Result<DVec3> {
     Ok(DVec3::new(
         num(origin, what, v[0])?,
         num(origin, what, v[1])?,
@@ -125,11 +156,11 @@ fn dv3(origin: &str, what: &str, v: V3) -> Result<DVec3> {
     ))
 }
 
-fn check_len(origin: &str, what: &str, n: usize) -> Result<()> {
+fn check_len(origin: &str, what: What, n: usize) -> Result<()> {
     if n > MAX_LIST {
         Err(ProjectError::corrupt(
             origin,
-            format!("{what}: zu viele Einträge"),
+            tr!("proj-too-many", what = what()),
         ))
     } else {
         Ok(())
@@ -150,7 +181,7 @@ fn face_from(origin: &str, name: &str, d: &FaceRefDto) -> Result<FaceRef> {
     Ok(FaceRef {
         origin: d.herkunft,
         role: d.rolle.clone(),
-        hint: dv3(origin, &format!("„{name}“ Hinweispunkt"), d.hinweis)?,
+        hint: dv3(origin, &|| field_label(name, tr!("proj-l-hint")), d.hinweis)?,
     })
 }
 
@@ -166,7 +197,7 @@ fn edge_from(origin: &str, name: &str, d: &EdgeRefDto) -> Result<EdgeRef> {
     Ok(EdgeRef {
         a: face_from(origin, name, &d.a)?,
         b: face_from(origin, name, &d.b)?,
-        hint: dv3(origin, &format!("„{name}“ Hinweispunkt"), d.hinweis)?,
+        hint: dv3(origin, &|| field_label(name, tr!("proj-l-hint")), d.hinweis)?,
     })
 }
 
@@ -419,22 +450,39 @@ fn sketch_to(s: &Sketch) -> SketchDto {
 }
 
 fn sketch_from(origin: &str, feature: &str, d: &SketchDto) -> Result<Sketch> {
-    let ctx = |m: String| ProjectError::corrupt(origin, format!("Skizze „{feature}“: {m}"));
-    check_len(origin, "Werte", d.werte.len())?;
-    check_len(origin, "Punkte", d.punkte.len())?;
-    check_len(origin, "Kurven", d.kurven.len())?;
-    check_len(origin, "Abhängigkeiten", d.abhaengigkeiten.len())?;
+    let ctx =
+        |m: String| ProjectError::corrupt(origin, tr!("proj-ctx-sketch", name = feature, msg = m));
+    check_len(origin, &|| tr!("proj-l-values"), d.werte.len())?;
+    check_len(origin, &|| tr!("proj-l-points"), d.punkte.len())?;
+    check_len(origin, &|| tr!("proj-l-curves"), d.kurven.len())?;
+    check_len(
+        origin,
+        &|| tr!("proj-l-constraints"),
+        d.abhaengigkeiten.len(),
+    )?;
     let data = SketchData {
         name: d.name.clone(),
         frame: Frame {
             origin: dv3(
                 origin,
-                &format!("Skizze „{feature}“ Ursprung"),
+                &|| sketch_label(feature, tr!("proj-l-origin")),
                 d.ebene.ursprung,
             )?,
-            x: dv3(origin, &format!("Skizze „{feature}“ x-Achse"), d.ebene.x)?,
-            y: dv3(origin, &format!("Skizze „{feature}“ y-Achse"), d.ebene.y)?,
-            z: dv3(origin, &format!("Skizze „{feature}“ z-Achse"), d.ebene.z)?,
+            x: dv3(
+                origin,
+                &|| sketch_label(feature, tr!("proj-l-x-axis")),
+                d.ebene.x,
+            )?,
+            y: dv3(
+                origin,
+                &|| sketch_label(feature, tr!("proj-l-y-axis")),
+                d.ebene.y,
+            )?,
+            z: dv3(
+                origin,
+                &|| sketch_label(feature, tr!("proj-l-z-axis")),
+                d.ebene.z,
+            )?,
         },
         tolerance: Tolerance {
             linear: d.linear,
@@ -624,40 +672,45 @@ fn art_to(a: &BlendArt) -> BlendArtDto {
 }
 
 fn art_from(origin: &str, name: &str, d: &BlendArtDto) -> Result<BlendArt> {
-    let n = |what: &str, x: f64| num(origin, &format!("„{name}“ {what}"), x);
+    let n = |label: Label, x: f64| num(origin, &|| field_label(name, label()), x);
     Ok(match d {
         BlendArtDto::Rundung { radius } => BlendArt::Rundung {
-            radius: n("Radius", *radius)?,
+            radius: n(|| tr!("proj-l-radius"), *radius)?,
         },
         BlendArtDto::RundungVariabel { punkte } => {
-            check_len(origin, "Radienpunkte", punkte.len())?;
+            check_len(origin, &|| tr!("proj-l-radius-points"), punkte.len())?;
             BlendArt::RundungVariabel {
                 punkte: punkte
                     .iter()
-                    .map(|[p, r]| Ok((n("Position", *p)?, n("Radius", *r)?)))
+                    .map(|[p, r]| {
+                        Ok((
+                            n(|| tr!("proj-l-position"), *p)?,
+                            n(|| tr!("proj-l-radius"), *r)?,
+                        ))
+                    })
                     .collect::<Result<Vec<_>>>()?,
             }
         }
         BlendArtDto::FaseGleich { abstand } => BlendArt::FaseGleich {
-            abstand: n("Abstand", *abstand)?,
+            abstand: n(|| tr!("proj-l-distance"), *abstand)?,
         },
         BlendArtDto::FaseZwei { abstand1, abstand2 } => BlendArt::FaseZwei {
-            abstand1: n("Abstand 1", *abstand1)?,
-            abstand2: n("Abstand 2", *abstand2)?,
+            abstand1: n(|| tr!("proj-l-distance-1"), *abstand1)?,
+            abstand2: n(|| tr!("proj-l-distance-2"), *abstand2)?,
         },
         BlendArtDto::FaseWinkel { abstand, winkel } => BlendArt::FaseWinkel {
-            abstand: n("Abstand", *abstand)?,
-            winkel: n("Winkel", *winkel)?,
+            abstand: n(|| tr!("proj-l-distance"), *abstand)?,
+            winkel: n(|| tr!("proj-l-angle"), *winkel)?,
         },
     })
 }
 
 fn kind_from(origin: &str, name: &str, d: &KindDto) -> Result<FeatureKind> {
-    let n = |what: &str, x: f64| num(origin, &format!("„{name}“ {what}"), x);
-    let v = |what: &str, x: V3| dv3(origin, &format!("„{name}“ {what}"), x);
+    let n = |label: Label, x: f64| num(origin, &|| field_label(name, label()), x);
+    let v = |label: Label, x: V3| dv3(origin, &|| field_label(name, label()), x);
     Ok(match d {
         KindDto::Skizze(s) => {
-            check_len(origin, "Kantenkopien", s.kopien.len())?;
+            check_len(origin, &|| tr!("proj-l-edge-copies"), s.kopien.len())?;
             let sketch = sketch_from(origin, name, &s.skizze)?;
             let formulas = sketch_formulas_from(origin, name, s, &sketch)?;
             FeatureKind::Sketch(SketchFeature {
@@ -670,7 +723,11 @@ fn kind_from(origin: &str, name: &str, d: &KindDto) -> Result<FeatureKind> {
                         other => {
                             return Err(ProjectError::corrupt(
                                 origin,
-                                format!("„{name}“: Unbekannte Ebene „{other}“"),
+                                tr!(
+                                    "proj-ctx-feature",
+                                    name = name,
+                                    msg = tr!("proj-unknown-plane", value = other)
+                                ),
                             ));
                         }
                     }),
@@ -692,30 +749,30 @@ fn kind_from(origin: &str, name: &str, d: &KindDto) -> Result<FeatureKind> {
             })
         }
         KindDto::Quader { groesse, ursprung } => FeatureKind::Box {
-            size: v("Größe", *groesse)?,
-            origin: v("Ursprung", *ursprung)?,
+            size: v(|| tr!("proj-l-size"), *groesse)?,
+            origin: v(|| tr!("proj-l-origin"), *ursprung)?,
         },
         KindDto::Zylinder {
             radius,
             hoehe,
             ursprung,
         } => FeatureKind::Cylinder {
-            radius: n("Radius", *radius)?,
-            height: n("Höhe", *hoehe)?,
-            origin: v("Ursprung", *ursprung)?,
+            radius: n(|| tr!("proj-l-radius"), *radius)?,
+            height: n(|| tr!("proj-l-height"), *hoehe)?,
+            origin: v(|| tr!("proj-l-origin"), *ursprung)?,
         },
         KindDto::Kugel { radius, ursprung } => FeatureKind::Sphere {
-            radius: n("Radius", *radius)?,
-            origin: v("Ursprung", *ursprung)?,
+            radius: n(|| tr!("proj-l-radius"), *radius)?,
+            origin: v(|| tr!("proj-l-origin"), *ursprung)?,
         },
         KindDto::Kegel {
             radius,
             hoehe,
             ursprung,
         } => FeatureKind::Cone {
-            radius: n("Radius", *radius)?,
-            height: n("Höhe", *hoehe)?,
-            origin: v("Ursprung", *ursprung)?,
+            radius: n(|| tr!("proj-l-radius"), *radius)?,
+            height: n(|| tr!("proj-l-height"), *hoehe)?,
+            origin: v(|| tr!("proj-l-origin"), *ursprung)?,
         },
         KindDto::Extrusion {
             skizze,
@@ -724,7 +781,7 @@ fn kind_from(origin: &str, name: &str, d: &KindDto) -> Result<FeatureKind> {
         } => FeatureKind::Extrude {
             sketch: FeatureId(*skizze),
             profile: *profil,
-            height: n("Höhe", *hoehe)?,
+            height: n(|| tr!("proj-l-height"), *hoehe)?,
         },
         KindDto::Rotation {
             skizze,
@@ -749,14 +806,18 @@ fn kind_from(origin: &str, name: &str, d: &KindDto) -> Result<FeatureKind> {
                 other => {
                     return Err(ProjectError::corrupt(
                         origin,
-                        format!("„{name}“: Unbekannte Operation „{other}“"),
+                        tr!(
+                            "proj-ctx-feature",
+                            name = name,
+                            msg = tr!("proj-unknown-operation", value = other)
+                        ),
                     ));
                 }
             },
         },
         KindDto::Verschieben { koerper, versatz } => FeatureKind::Move {
             body: body_from(koerper),
-            delta: v("Versatz", *versatz)?,
+            delta: v(|| tr!("proj-l-offset"), *versatz)?,
         },
         KindDto::Verrunden {
             koerper,
@@ -764,11 +825,15 @@ fn kind_from(origin: &str, name: &str, d: &KindDto) -> Result<FeatureKind> {
             art,
             tangentenkette,
         } => {
-            check_len(origin, "Kanten", kanten.len())?;
+            check_len(origin, &|| tr!("proj-l-edges"), kanten.len())?;
             if kanten.is_empty() {
                 return Err(ProjectError::corrupt(
                     origin,
-                    format!("„{name}“: keine Kante gewählt"),
+                    tr!(
+                        "proj-ctx-feature",
+                        name = name,
+                        msg = tr!("proj-no-edge-selected")
+                    ),
                 ));
             }
             FeatureKind::Verrunden {
@@ -790,14 +855,14 @@ fn kind_from(origin: &str, name: &str, d: &KindDto) -> Result<FeatureKind> {
             let [x, y, z, w] = *drehung;
             FeatureKind::MeshBody {
                 mesh: MeshId(*netz),
-                offset: v("Position", *versatz)?,
+                offset: v(|| tr!("proj-l-position"), *versatz)?,
                 rotation: DQuat::from_xyzw(
-                    n("Drehung", x)?,
-                    n("Drehung", y)?,
-                    n("Drehung", z)?,
-                    n("Drehung", w)?,
+                    n(|| tr!("proj-l-rotation"), x)?,
+                    n(|| tr!("proj-l-rotation"), y)?,
+                    n(|| tr!("proj-l-rotation"), z)?,
+                    n(|| tr!("proj-l-rotation"), w)?,
                 ),
-                scale: n("Maßstab", *massstab)?,
+                scale: n(|| tr!("proj-l-scale"), *massstab)?,
             }
         }
         KindDto::StepKoerper { form } => FeatureKind::StepBody {
@@ -824,7 +889,11 @@ fn formula_from(origin: &str, what: &str, text: &str) -> Result<String> {
     if too_long(text, MAX_FORMULA_CHARS) {
         return Err(ProjectError::corrupt(
             origin,
-            format!("{what}: Die Formel ist zu lang (höchstens {MAX_FORMULA_CHARS} Zeichen)"),
+            tr!(
+                "proj-formula-too-long",
+                what = what,
+                max = MAX_FORMULA_CHARS.to_string()
+            ),
         ));
     }
     Ok(text.to_string())
@@ -838,26 +907,25 @@ fn sketch_formulas_from(
     d: &SketchFeatureDto,
     sketch: &Sketch,
 ) -> Result<SketchFormulas> {
-    let bad = |m: &str| ProjectError::corrupt(origin, format!("„{feature}“: {m}"));
+    let bad =
+        |m: &str| ProjectError::corrupt(origin, tr!("proj-ctx-feature", name = feature, msg = m));
     let mut out = SketchFormulas::new();
     for f in &d.formeln {
         // Erst gegen die Länge der Liste prüfen: `from_index` schneidet sonst große Zahlen ab.
         if f.abhaengigkeit >= d.skizze.abhaengigkeiten.len() {
-            return Err(bad("Formel an einer fehlenden Abhängigkeit"));
+            return Err(bad(&tr!("proj-formula-missing-constraint")));
         }
         let id = ConstraintId::from_index(f.abhaengigkeit);
         match sketch.constraint(id) {
-            None => return Err(bad("Formel an einer fehlenden Abhängigkeit")),
+            None => return Err(bad(&tr!("proj-formula-missing-constraint"))),
             Some(c) if !c.kind.is_dimension() || c.driven => {
-                return Err(bad(
-                    "Formel an einer Abhängigkeit, die kein bestimmendes Maß ist",
-                ));
+                return Err(bad(&tr!("proj-formula-not-driving")));
             }
             Some(_) => {}
         }
-        let text = formula_from(origin, &format!("„{feature}“"), &f.formel)?;
+        let text = formula_from(origin, &tr!("proj-w-quoted", name = feature), &f.formel)?;
         if out.insert(id, text).is_some() {
-            return Err(bad("Eine Abhängigkeit hat mehr als eine Formel"));
+            return Err(bad(&tr!("proj-formula-twice")));
         }
     }
     Ok(out)
@@ -865,19 +933,24 @@ fn sketch_formulas_from(
 
 /// Formeln der Zahlenfelder eines Features: bekannte Schlüssel, die die Art auch hat.
 fn feature_formulas_from(origin: &str, f: &FeatureDto, kind: &FeatureKind) -> Result<Formulas> {
-    let bad = |m: String| ProjectError::corrupt(origin, format!("„{}“: {m}", f.name));
+    let bad = |m: String| {
+        ProjectError::corrupt(
+            origin,
+            tr!("proj-ctx-feature", name = f.name.as_str(), msg = m),
+        )
+    };
     let keys = field_keys(kind);
     let mut out = Formulas::new();
     for (key, text) in &f.formeln {
         let k = FieldKey::from_file_key(key)
-            .ok_or_else(|| bad(format!("unbekanntes Formelfeld „{}“", quoted(key))))?;
+            .ok_or_else(|| bad(tr!("proj-formula-unknown-field", key = quoted(key))))?;
         if !keys.contains(&k) {
-            return Err(bad(format!(
-                "Das Feld „{}“ kann keine Formel haben",
-                quoted(key)
-            )));
+            return Err(bad(tr!("proj-formula-field-none", key = quoted(key))));
         }
-        out.insert(k, formula_from(origin, &format!("„{}“", f.name), text)?);
+        out.insert(
+            k,
+            formula_from(origin, &tr!("proj-w-quoted", name = f.name.as_str()), text)?,
+        );
     }
     Ok(out)
 }
@@ -889,12 +962,12 @@ fn parameters_from(origin: &str, file: &VersionFile) -> Result<(Vec<Parameter>, 
     if file.parameter.len() > MAX_PARAMETERS {
         return Err(ProjectError::corrupt(
             origin,
-            format!("Höchstens {MAX_PARAMETERS} Parameter"),
+            tr!("proj-too-many-parameters", max = MAX_PARAMETERS.to_string()),
         ));
     }
     let next = counter(
         origin,
-        "Parameter",
+        &tr!("proj-w-parameter-counter"),
         file.naechster_parameter,
         file.parameter.iter().map(|p| p.id),
     )?;
@@ -904,26 +977,37 @@ fn parameters_from(origin: &str, file: &VersionFile) -> Result<(Vec<Parameter>, 
         if too_long(&p.name, MAX_PARAM_NAME_CHARS) {
             return Err(ProjectError::corrupt(
                 origin,
-                format!(
-                    "Parameter: Ein Name ist zu lang (höchstens {MAX_PARAM_NAME_CHARS} Zeichen)"
+                tr!(
+                    "proj-param-name-too-long",
+                    max = MAX_PARAM_NAME_CHARS.to_string()
                 ),
             ));
         }
-        let bad = |m: String| ProjectError::corrupt(origin, format!("Parameter „{}“: {m}", p.name));
+        let bad = |m: String| {
+            ProjectError::corrupt(
+                origin,
+                tr!("proj-ctx-parameter", name = p.name.as_str(), msg = m),
+            )
+        };
         if !ids.insert(p.id) {
-            return Err(bad("Die Kennung kommt doppelt vor".into()));
+            return Err(bad(tr!("proj-duplicate-id")));
         }
         let unit = value_of(&PARAM_UNITS, &p.art)
-            .ok_or_else(|| bad(format!("unbekannte Art „{}“", quoted(&p.art))))?;
+            .ok_or_else(|| bad(tr!("proj-param-unknown-unit", value = quoted(&p.art))))?;
         if too_long(&p.kommentar, MAX_COMMENT_CHARS) {
-            return Err(bad(format!(
-                "Der Kommentar ist zu lang (höchstens {MAX_COMMENT_CHARS} Zeichen)"
+            return Err(bad(tr!(
+                "proj-param-comment-too-long",
+                max = MAX_COMMENT_CHARS.to_string()
             )));
         }
         out.push(Parameter {
             id: ParamId(p.id),
             name: p.name.clone(),
-            formula: formula_from(origin, &format!("Parameter „{}“", p.name), &p.formel)?,
+            formula: formula_from(
+                origin,
+                &tr!("proj-w-parameter", name = p.name.as_str()),
+                &p.formel,
+            )?,
             unit,
             comment: p.kommentar.clone(),
         });
@@ -958,25 +1042,27 @@ fn meshes_from(origin: &str, list: &[MeshDto]) -> Result<BTreeMap<MeshId, Arc<Ex
     let mut total: u64 = 0;
     let mut out = BTreeMap::new();
     for d in list {
-        let bad = |m: &str| ProjectError::corrupt(origin, format!("Netz {}: {m}", d.id));
+        let bad = |m: &str| {
+            ProjectError::corrupt(origin, tr!("proj-ctx-mesh", id = d.id.to_string(), msg = m))
+        };
         if d.id == 0 {
-            return Err(bad("Die Kennung ist ungültig"));
+            return Err(bad(&tr!("proj-bad-id")));
         }
         let len = base64::decoded_len(&d.daten).map_err(|e| bad(&e.to_string()))? as u64;
         total = total.saturating_add(len);
         if len > MAX_MESH_BYTES || total > MAX_MESH_BYTES {
-            return Err(bad("Die Netzdaten sind zu groß"));
+            return Err(bad(&tr!("proj-mesh-too-big")));
         }
         let head = base64::decode_prefix(&d.daten, 8).map_err(|e| bad(&e.to_string()))?;
         let expected =
             ExchangeMesh::byte_len_from_header(&head).map_err(|e| bad(&e.to_string()))?;
         if expected != len {
-            return Err(bad("Die Länge der Netzdaten passt nicht zu den Anzahlen"));
+            return Err(bad(&tr!("proj-mesh-length-mismatch")));
         }
         let bytes = base64::decode(&d.daten).map_err(|e| bad(&e.to_string()))?;
         let mesh = ExchangeMesh::from_bytes(&bytes).map_err(|e| bad(&e.to_string()))?;
         if out.insert(MeshId(d.id), Arc::new(mesh)).is_some() {
-            return Err(bad("Die Kennung kommt doppelt vor"));
+            return Err(bad(&tr!("proj-duplicate-id")));
         }
     }
     Ok(out)
@@ -1025,24 +1111,29 @@ fn step_forms_from(
     origin: &str,
     list: Vec<StepFormDto>,
 ) -> Result<BTreeMap<StepShapeId, Arc<StepShape>>> {
-    check_len(origin, "STEP-Formen", list.len())?;
+    check_len(origin, &|| tr!("proj-l-step-shapes"), list.len())?;
     let total = list
         .iter()
         .fold(0usize, |sum, f| sum.saturating_add(f.text.len()));
     if total > step_text_sum_limit() {
         return Err(ProjectError::corrupt(
             origin,
-            "Die STEP-Formen sind zu groß",
+            tr!("proj-step-forms-too-big"),
         ));
     }
     let mut out = BTreeMap::new();
     for f in list {
-        let bad = |m: &str| ProjectError::corrupt(origin, format!("STEP-Form {}: {m}", f.id));
+        let bad = |m: &str| {
+            ProjectError::corrupt(
+                origin,
+                tr!("proj-ctx-step-form", id = f.id.to_string(), msg = m),
+            )
+        };
         if f.id == 0 {
-            return Err(bad("Die Kennung ist ungültig"));
+            return Err(bad(&tr!("proj-bad-id")));
         }
         if out.contains_key(&StepShapeId(f.id)) {
-            return Err(bad("Die Kennung kommt doppelt vor"));
+            return Err(bad(&tr!("proj-duplicate-id")));
         }
         let mut shape = StepShape::new(f.text, f.genauigkeit).map_err(|m| bad(&m))?;
         if f.genauigkeit_unbekannt {
@@ -1087,13 +1178,13 @@ fn value_of<T: Copy>(table: &[(T, &'static str)], s: &str) -> Option<T> {
 }
 
 /// Lageangabe auf dem Blatt: endlich und im Betrag höchstens `MAX_POS_MM`.
-fn pos(origin: &str, what: &str, x: f64) -> Result<f64> {
+fn pos(origin: &str, what: What, x: f64) -> Result<f64> {
     if x.is_finite() && x.abs() <= MAX_POS_MM {
         Ok(x)
     } else {
         Err(ProjectError::corrupt(
             origin,
-            format!("{what}: Zahl ungültig oder zu groß"),
+            tr!("proj-number-invalid", what = what()),
         ))
     }
 }
@@ -1106,7 +1197,7 @@ fn counter(
     stored: u64,
     ids: impl Iterator<Item = u64> + Clone,
 ) -> Result<u64> {
-    let bad_id = || ProjectError::corrupt(origin, format!("{what}: ungültige Kennung"));
+    let bad_id = || ProjectError::corrupt(origin, tr!("proj-counter-bad-id", what = what));
     let next = if stored == 0 {
         match ids.clone().max() {
             Some(m) => m.checked_add(1).ok_or_else(bad_id)?,
@@ -1118,7 +1209,7 @@ fn counter(
     if next == u64::MAX {
         return Err(ProjectError::corrupt(
             origin,
-            format!("{what}: Der Zähler ist ungültig"),
+            tr!("proj-counter-invalid", what = what),
         ));
     }
     if ids.into_iter().any(|id| id == 0 || id >= next) {
@@ -1199,10 +1290,7 @@ fn dimension_to(m: &DimSpec) -> Result<MassDto> {
         .iter()
         .map(|r| {
             georef_to(r).ok_or_else(|| {
-                ProjectError::Invalid(format!(
-                    "Ein Bezug des Maßes {} passt nicht zu seiner Art",
-                    m.id.0
-                ))
+                ProjectError::Invalid(tr!("proj-dim-ref-mismatch", id = m.id.0.to_string()))
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -1230,7 +1318,11 @@ fn dimension_to(m: &DimSpec) -> Result<MassDto> {
 /// endlich, Betrag höchstens `2·MAX_COORD_MM` = `MAX_HINT_MM`), denn es ist ein Modellpunkt,
 /// kein Blattwert.
 fn hint_from(origin: &str, what: &str, v: V3) -> Result<DVec3> {
-    dv3(origin, &format!("{what} Hinweispunkt"), v)
+    dv3(
+        origin,
+        &|| tr!("proj-what-label", what = what, label = tr!("proj-l-hint")),
+        v,
+    )
 }
 
 /// Liest eine Flächenmarke eines Maßbezugs: Rolle höchstens [`MAX_ROLE_CHARS`] Zeichen,
@@ -1239,8 +1331,10 @@ fn tag_from(origin: &str, what: &str, d: &FaceRefDto) -> Result<TagData> {
     if d.rolle.chars().count() > MAX_ROLE_CHARS {
         return Err(ProjectError::corrupt(
             origin,
-            format!(
-                "{what}: Die Rolle einer Fläche ist zu lang (höchstens {MAX_ROLE_CHARS} Zeichen)"
+            tr!(
+                "proj-role-too-long",
+                what = what,
+                max = MAX_ROLE_CHARS.to_string()
             ),
         ));
     }
@@ -1277,7 +1371,10 @@ fn georef_from(origin: &str, what: &str, d: &BezugDto) -> Result<GeoRef> {
             ende,
         } => GeoRef::EdgeEnd {
             end: value_of(&END_SELS, ende).ok_or_else(|| {
-                ProjectError::corrupt(origin, format!("{what}: Unbekanntes Kantenende „{ende}“"))
+                ProjectError::corrupt(
+                    origin,
+                    tr!("proj-edge-end-unknown", what = what, value = ende.as_str()),
+                )
             })?,
             edge: edge_data_from(origin, what, a, b, *hinweis)?,
         },
@@ -1297,7 +1394,7 @@ fn tolerance_from(origin: &str, what: &str, d: &ToleranzDto) -> Result<DimTolera
         } else {
             Err(ProjectError::corrupt(
                 origin,
-                format!("{what} Toleranz: Zahl ungültig oder zu groß"),
+                tr!("proj-tolerance-number-invalid", what = what),
             ))
         }
     };
@@ -1316,8 +1413,10 @@ fn tolerance_from(origin: &str, what: &str, d: &ToleranzDto) -> Result<DimTolera
             if text.chars().count() > MAX_FIT_CHARS {
                 return Err(ProjectError::corrupt(
                     origin,
-                    format!(
-                        "{what}: Die Passungsangabe ist zu lang (höchstens {MAX_FIT_CHARS} Zeichen)"
+                    tr!(
+                        "proj-fit-too-long",
+                        what = what,
+                        max = MAX_FIT_CHARS.to_string()
                     ),
                 ));
             }
@@ -1334,20 +1433,22 @@ fn dimension_from(
     views: &HashMap<ViewId, ViewKind>,
     d: &MassDto,
 ) -> Result<DimSpec> {
-    let what = format!("Zeichnung „{drawing}“, Maß {}", d.id);
-    let bad = |m: String| ProjectError::corrupt(origin, format!("{what}: {m}"));
+    let what = tr!("proj-w-dimension", drawing = drawing, id = d.id.to_string());
+    let bad = |m: String| {
+        ProjectError::corrupt(origin, tr!("proj-ctx-what", what = what.as_str(), msg = m))
+    };
     let kind = value_of(&DIM_KINDS, &d.art)
-        .ok_or_else(|| bad(format!("Unbekannte Maßart „{}“", d.art)))?;
+        .ok_or_else(|| bad(tr!("proj-dim-unknown-kind", value = d.art.as_str())))?;
     match views.get(&ViewId(d.ansicht)) {
-        None => return Err(bad("Das Maß gehört zu keiner Ansicht der Zeichnung".into())),
+        None => return Err(bad(tr!("proj-dim-no-view"))),
         Some(k) if !k.is_normal() => {
-            return Err(bad("In der isometrischen Ansicht gibt es keine Maße".into()));
+            return Err(bad(tr!("proj-dim-iso-view")));
         }
         Some(_) => {}
     }
     let (lo, hi) = ref_count(kind);
     if d.bezuege.len() < lo || d.bezuege.len() > hi {
-        return Err(bad("Das Maß hat die falsche Zahl von Bezügen".into()));
+        return Err(bad(tr!("proj-dim-wrong-refs")));
     }
     let refs = d
         .bezuege
@@ -1355,16 +1456,18 @@ fn dimension_from(
         .map(|r| georef_from(origin, &what, r))
         .collect::<Result<Vec<_>>>()?;
     if d.stellen > MAX_DECIMALS {
-        return Err(bad(format!(
-            "Ein Maß darf höchstens {MAX_DECIMALS} Nachkommastellen haben"
+        return Err(bad(tr!(
+            "proj-dim-decimals",
+            max = MAX_DECIMALS.to_string()
         )));
     }
     if d.text
         .as_ref()
         .is_some_and(|t| t.chars().count() > MAX_DIM_TEXT_CHARS)
     {
-        return Err(bad(format!(
-            "Der eigene Maßtext ist zu lang (höchstens {MAX_DIM_TEXT_CHARS} Zeichen)"
+        return Err(bad(tr!(
+            "proj-dim-text-too-long",
+            max = MAX_DIM_TEXT_CHARS.to_string()
         )));
     }
     // Eine Stelle in einer Kette ist höchstens so groß wie die Zahl der Maße einer Zeichnung
@@ -1372,9 +1475,9 @@ fn dimension_from(
     if let Some(k) = &d.kette
         && k.reihenfolge as usize >= MAX_DIMENSIONS
     {
-        return Err(bad(format!(
-            "Die Stelle in der Maßkette ist zu groß (höchstens {})",
-            MAX_DIMENSIONS - 1
+        return Err(bad(tr!(
+            "proj-dim-chain-order",
+            max = (MAX_DIMENSIONS - 1).to_string()
         )));
     }
     let chain = match &d.kette {
@@ -1382,21 +1485,27 @@ fn dimension_from(
         Some(k) => Some(ChainSpec {
             group: k.gruppe,
             mode: value_of(&CHAIN_MODES, &k.modus)
-                .ok_or_else(|| bad(format!("Unbekannte Kettenart „{}“", k.modus)))?,
+                .ok_or_else(|| bad(tr!("proj-dim-unknown-chain", value = k.modus.as_str())))?,
             order: k.reihenfolge,
         }),
     };
-    let p = |name: &str, x: f64| pos(origin, &format!("{what} {name}"), x);
+    let p = |label: Label, x: f64| {
+        pos(
+            origin,
+            &|| tr!("proj-what-label", what = what.as_str(), label = label()),
+            x,
+        )
+    };
     Ok(DimSpec {
         id: DimId(d.id),
         view: ViewId(d.ansicht),
         kind,
         refs,
-        offset: p("Abstand", d.abstand)?,
-        angle: p("Winkel", d.winkel)?,
+        offset: p(|| tr!("proj-l-distance"), d.abstand)?,
+        angle: p(|| tr!("proj-l-angle"), d.winkel)?,
         text_shift: (
-            p("Textversatz", d.textversatz[0])?,
-            p("Textversatz", d.textversatz[1])?,
+            p(|| tr!("proj-l-text-shift"), d.textversatz[0])?,
+            p(|| tr!("proj-l-text-shift"), d.textversatz[1])?,
         ),
         tolerance: tolerance_from(origin, &what, &d.toleranz)?,
         decimals: d.stellen,
@@ -1415,13 +1524,18 @@ fn dimensions_from(
     d: &ZeichnungDto,
     views: &HashMap<ViewId, ViewKind>,
 ) -> Result<(Vec<DimSpec>, u64)> {
-    let ctx = |m: &str| ProjectError::corrupt(origin, format!("Zeichnung „{}“: {m}", d.name));
+    let ctx = |m: &str| {
+        ProjectError::corrupt(
+            origin,
+            tr!("proj-ctx-drawing", name = d.name.as_str(), msg = m),
+        )
+    };
     if d.masse.len() > MAX_DIMENSIONS {
-        return Err(ctx("Maße: zu viele Einträge"));
+        return Err(ctx(&tr!("proj-dim-too-many")));
     }
     let next = counter(
         origin,
-        &format!("Zeichnung „{}“, Maß", d.name),
+        &tr!("proj-w-dimension-counter", name = d.name.as_str()),
         d.naechstes_mass,
         d.masse.iter().map(|m| m.id),
     )?;
@@ -1430,15 +1544,13 @@ fn dimensions_from(
     let mut out = Vec::with_capacity(d.masse.len());
     for m in &d.masse {
         if !ids.insert(m.id) {
-            return Err(ctx("Eine Maßkennung kommt doppelt vor"));
+            return Err(ctx(&tr!("proj-dim-id-twice")));
         }
         let spec = dimension_from(origin, &d.name, views, m)?;
         if let Some(c) = spec.chain
             && *modes.entry(c.group).or_insert(c.mode) != c.mode
         {
-            return Err(ctx(
-                "Die Maße einer Kette mischen Kettenmaße und Bezugsmaße",
-            ));
+            return Err(ctx(&tr!("proj-dim-chain-mixed")));
         }
         out.push(spec);
     }
@@ -1494,7 +1606,7 @@ fn project_from(origin: &str, p: &ProjektangabenDto) -> Result<ProjectInfo> {
         notes: notes_from(&p.hinweise),
     };
     validate_project_info(&info)
-        .map_err(|e| ProjectError::corrupt(origin, format!("Projektangaben: {e}")))?;
+        .map_err(|e| ProjectError::corrupt(origin, tr!("proj-ctx-project-info", msg = e)))?;
     Ok(info)
 }
 
@@ -1554,8 +1666,9 @@ fn sheet_info_from(origin: &str, name: &str, b: &BlattangabenDto) -> Result<Shee
             .collect(),
         parts_list: b.stueckliste,
     };
-    validate_sheet_info(&info)
-        .map_err(|e| ProjectError::corrupt(origin, format!("Zeichnung „{name}“: {e}")))?;
+    validate_sheet_info(&info).map_err(|e| {
+        ProjectError::corrupt(origin, tr!("proj-ctx-drawing", name = name, msg = e))
+    })?;
     Ok(info)
 }
 
@@ -1582,11 +1695,11 @@ fn overrides_from(
     origin: &str,
     list: &[StuecklisteZeileDto],
 ) -> Result<BTreeMap<BodyKey, RowOverride>> {
-    let bad = |m: String| ProjectError::corrupt(origin, format!("Stückliste: {m}"));
+    let bad = |m: String| ProjectError::corrupt(origin, tr!("proj-ctx-parts-list", msg = m));
     // Die Länge ist beim Lesen schon auf MAX_OVERRIDES begrenzt (`de_overrides`).
     let mut out = BTreeMap::new();
     for z in list {
-        let key = body_key_from(z.koerper).ok_or_else(|| bad("Der Körper ist ungültig".into()))?;
+        let key = body_key_from(z.koerper).ok_or_else(|| bad(tr!("proj-parts-bad-body")))?;
         let o = RowOverride {
             name: field_from(&z.benennung),
             qty: field_from(&z.menge),
@@ -1595,10 +1708,10 @@ fn overrides_from(
         };
         validate_override(&o).map_err(bad)?;
         if o.is_auto() {
-            return Err(bad("Ein Eintrag hat keine eigenen Texte".into()));
+            return Err(bad(tr!("proj-parts-no-texts")));
         }
         if out.insert(key, o).is_some() {
-            return Err(bad("Ein Körper kommt doppelt vor".into()));
+            return Err(bad(tr!("proj-parts-body-twice")));
         }
     }
     Ok(out)
@@ -1674,15 +1787,24 @@ fn drawing_to(d: &Drawing, with_marks: bool, with_parts: bool) -> Result<Zeichnu
 }
 
 fn drawing_from(origin: &str, d: &ZeichnungDto) -> Result<Drawing> {
-    let ctx = |m: String| ProjectError::corrupt(origin, format!("Zeichnung „{}“: {m}", d.name));
+    let ctx = |m: String| {
+        ProjectError::corrupt(
+            origin,
+            tr!("proj-ctx-drawing", name = d.name.as_str(), msg = m),
+        )
+    };
     if d.ansichten.len() > MAX_VIEWS {
-        return Err(ctx("Ansichten: zu viele Einträge".into()));
+        return Err(ctx(tr!("proj-views-too-many")));
     }
     let paper = value_of(&PAPERS, &d.blatt.papier)
-        .ok_or_else(|| ctx(format!("Unbekanntes Papierformat „{}“", d.blatt.papier)))?;
-    let projection = value_of(&PROJECTIONS, &d.projektion)
-        .ok_or_else(|| ctx(format!("Unbekannte Projektion „{}“", d.projektion)))?;
-    let what = format!("Zeichnung „{}“, Ansicht", d.name);
+        .ok_or_else(|| ctx(tr!("proj-unknown-paper", value = d.blatt.papier.as_str())))?;
+    let projection = value_of(&PROJECTIONS, &d.projektion).ok_or_else(|| {
+        ctx(tr!(
+            "proj-unknown-projection",
+            value = d.projektion.as_str()
+        ))
+    })?;
+    let what = tr!("proj-w-view-counter", name = d.name.as_str());
     let next_view = counter(
         origin,
         &what,
@@ -1692,38 +1814,40 @@ fn drawing_from(origin: &str, d: &ZeichnungDto) -> Result<Drawing> {
     let mut views = Vec::with_capacity(d.ansichten.len());
     for v in &d.ansichten {
         let kind = value_of(&VIEW_KINDS, &v.art)
-            .ok_or_else(|| ctx(format!("Unbekannte Ansichtsart „{}“", v.art)))?;
+            .ok_or_else(|| ctx(tr!("proj-unknown-view-kind", value = v.art.as_str())))?;
         let [num, den] = v.massstab;
         if !(1..=1000).contains(&num) || !(1..=1000).contains(&den) {
-            return Err(ctx(format!(
-                "Maßstab {num}:{den} liegt nicht zwischen 1:1000 und 1000:1"
+            return Err(ctx(tr!(
+                "proj-scale-range",
+                num = num.to_string(),
+                den = den.to_string()
             )));
         }
-        let p = |what: &str, x: f64| pos(origin, &format!("Zeichnung „{}“ {what}", d.name), x);
+        let p = |label: Label, x: f64| pos(origin, &|| drawing_label(d.name.as_str(), label()), x);
         let placement = match v.lage {
             LageDto::Frei { x, y } => Placement::Free {
-                x: p("Lage", x)?,
-                y: p("Lage", y)?,
+                x: p(|| tr!("proj-l-placement"), x)?,
+                y: p(|| tr!("proj-l-placement"), y)?,
             },
             LageDto::Ausgerichtet { abstand } => Placement::Aligned {
-                distance: p("Abstand", abstand)?,
+                distance: p(|| tr!("proj-l-distance"), abstand)?,
             },
         };
         let section = v
             .schnitt
             .as_ref()
             .map(|s| -> Result<SectionSpec> {
-                let what = format!("Zeichnung „{}“ Schnitt", d.name);
+                let what = drawing_label(d.name.as_str(), tr!("proj-l-section"));
                 let mut chars = s.buchstabe.chars();
                 let (Some(letter), None) = (chars.next(), chars.next()) else {
-                    return Err(ctx("Schnitt: Der Buchstabe ist ungültig".into()));
+                    return Err(ctx(tr!("proj-section-letter")));
                 };
                 Ok(SectionSpec {
-                    offset: pos(origin, &what, s.versatz)?,
+                    offset: pos(origin, &|| what.clone(), s.versatz)?,
                     letter,
                     hatch: HatchSpec {
                         on: s.schraffur,
-                        spacing: pos(origin, &what, s.schraffurabstand)?,
+                        spacing: pos(origin, &|| what.clone(), s.schraffurabstand)?,
                     },
                 })
             })
@@ -1742,13 +1866,14 @@ fn drawing_from(origin: &str, d: &ZeichnungDto) -> Result<Drawing> {
     let kinds: HashMap<ViewId, ViewKind> = views.iter().map(|v| (v.id, v.kind)).collect();
     let (dimensions, next_dim) = dimensions_from(origin, d, &kinds)?;
     if d.positionen.len() > MAX_BALLOONS {
-        return Err(ctx(format!(
-            "Positionsnummern: höchstens {MAX_BALLOONS} Einträge"
+        return Err(ctx(tr!(
+            "proj-balloons-max",
+            max = MAX_BALLOONS.to_string()
         )));
     }
     let next_balloon = counter(
         origin,
-        &format!("Zeichnung „{}“, Positionsnummer", d.name),
+        &tr!("proj-w-balloon-counter", name = d.name.as_str()),
         d.naechste_position,
         d.positionen.iter().map(|b| b.id),
     )?;
@@ -1757,8 +1882,7 @@ fn drawing_from(origin: &str, d: &ZeichnungDto) -> Result<Drawing> {
         balloons.push(Balloon {
             id: BalloonId(b.id),
             view: ViewId(b.ansicht),
-            body: body_key_from(b.koerper)
-                .ok_or_else(|| ctx("Positionsnummer: Der Körper ist ungültig".into()))?,
+            body: body_key_from(b.koerper).ok_or_else(|| ctx(tr!("proj-balloon-bad-body")))?,
             anchor: (b.anker[0], b.anker[1]),
             offset: (b.versatz[0], b.versatz[1]),
         });
@@ -1805,7 +1929,11 @@ fn drawings_from(origin: &str, file: &VersionFile) -> Result<(Vec<Drawing>, u64)
     if file.format < 4 && (!file.zeichnungen.is_empty() || file.naechste_zeichnung != 0) {
         return Err(ProjectError::corrupt(
             origin,
-            "Zeichnungen gibt es erst ab Dateiformat 4",
+            tr!(
+                "proj-since-format",
+                what = tr!("proj-feat-drawings"),
+                format = "4"
+            ),
         ));
     }
     let has_marks = |z: &ZeichnungDto| {
@@ -1816,13 +1944,21 @@ fn drawings_from(origin: &str, file: &VersionFile) -> Result<(Vec<Drawing>, u64)
     if file.format < 5 && file.zeichnungen.iter().any(has_marks) {
         return Err(ProjectError::corrupt(
             origin,
-            "Maße und Mittellinien gibt es erst ab Dateiformat 5",
+            tr!(
+                "proj-since-format",
+                what = tr!("proj-feat-dims"),
+                format = "5"
+            ),
         ));
     }
     if file.format < 6 && file.zeichnungen.iter().any(|z| z.blattangaben.is_some()) {
         return Err(ProjectError::corrupt(
             origin,
-            "Blattangaben gibt es erst ab Dateiformat 6",
+            tr!(
+                "proj-since-format",
+                what = tr!("proj-feat-sheet"),
+                format = "6"
+            ),
         ));
     }
     if file.format < 8
@@ -1833,19 +1969,20 @@ fn drawings_from(origin: &str, file: &VersionFile) -> Result<(Vec<Drawing>, u64)
     {
         return Err(ProjectError::corrupt(
             origin,
-            "Schnittansichten gibt es erst ab Dateiformat 8",
+            tr!(
+                "proj-since-format",
+                what = tr!("proj-feat-sections"),
+                format = "8"
+            ),
         ));
     }
-    check_len(origin, "Zeichnungen", file.zeichnungen.len())?;
+    check_len(origin, &|| tr!("proj-l-drawings"), file.zeichnungen.len())?;
     if file.zeichnungen.len() > MAX_DRAWINGS {
-        return Err(ProjectError::corrupt(
-            origin,
-            "Zeichnungen: zu viele Einträge",
-        ));
+        return Err(ProjectError::corrupt(origin, tr!("proj-drawings-too-many")));
     }
     let next = counter(
         origin,
-        "Zeichnung",
+        &tr!("proj-w-drawing-counter"),
         file.naechste_zeichnung,
         file.zeichnungen.iter().map(|z| z.id),
     )?;
@@ -1859,6 +1996,11 @@ fn drawings_from(origin: &str, file: &VersionFile) -> Result<(Vec<Drawing>, u64)
 
 // ---- Öffentliche Funktionen -------------------------------------------------------------
 
+/// Megabyte für die Meldung, mit dem Dezimaltrenner der aktuellen Sprache.
+fn mb_text(bytes: usize) -> String {
+    planora_i18n::localize_decimal(&step_text_megabytes(bytes).replace(',', "."))
+}
+
 /// JSON-Text einer Versionsdatei. Enthält der Snapshot eine nicht endliche Zahl, ist das ein
 /// Fehler (das Dokument wird dann nicht geschrieben).
 pub fn encode_version(s: &Snapshot) -> Result<String> {
@@ -1871,10 +2013,10 @@ pub fn encode_version(s: &Snapshot) -> Result<String> {
         .fold(0usize, |sum, f| sum.saturating_add(f.text.len()));
     let limit = step_text_sum_limit();
     if total > limit {
-        return Err(ProjectError::Invalid(format!(
-            "Das Projekt lässt sich nicht speichern: Die STEP-Formen sind zusammen zu groß ({} MB, erlaubt {} MB). Bitte STEP-Körper löschen oder durch kleinere ersetzen.",
-            step_text_megabytes(total),
-            step_text_megabytes(limit)
+        return Err(ProjectError::Invalid(tr!(
+            "proj-step-too-large-to-save",
+            size = mb_text(total),
+            max = mb_text(limit)
         )));
     }
     let file = VersionFile {
@@ -1930,16 +2072,12 @@ pub fn encode_version(s: &Snapshot) -> Result<String> {
         rueckrollstellen: s.rollbacks.iter().map(|r| r.0).collect(),
         step_formen,
     };
-    let text = serde_json::to_string_pretty(&file).map_err(|e| {
-        ProjectError::Invalid(format!("Das Dokument lässt sich nicht schreiben: {e}"))
-    })?;
+    let text = serde_json::to_string_pretty(&file)
+        .map_err(|e| ProjectError::Invalid(tr!("proj-write-failed", msg = e.to_string())))?;
     // Nur schreiben, was sich wieder lesen lässt (nicht endliche Zahlen schreibt serde_json
     // als `null`; das fällt beim Lesen auf).
-    decode_version(&text, "Ausgabe").map_err(|e| {
-        ProjectError::Invalid(format!(
-            "Das Dokument enthält ungültige Werte und wird nicht gespeichert: {e}"
-        ))
-    })?;
+    decode_version(&text, &tr!("proj-origin-output"))
+        .map_err(|e| ProjectError::Invalid(tr!("proj-invalid-values", msg = e.to_string())))?;
     Ok(text)
 }
 
@@ -1956,7 +2094,7 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
     let head: Head =
         serde_json::from_str(text).map_err(|e| ProjectError::corrupt(origin, e.to_string()))?;
     if head.format == 0 {
-        return Err(ProjectError::corrupt(origin, "Ungültige Formatnummer 0"));
+        return Err(ProjectError::corrupt(origin, tr!("proj-format-zero")));
     }
     if head.format > FORMAT_VERSION {
         return Err(ProjectError::TooNew {
@@ -1974,7 +2112,11 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
     {
         return Err(ProjectError::corrupt(
             origin,
-            "Rundungen und Fasen gibt es erst ab Dateiformat 2",
+            tr!(
+                "proj-since-format",
+                what = tr!("proj-feat-blends"),
+                format = "2"
+            ),
         ));
     }
     let has_mesh_body = file
@@ -1984,13 +2126,21 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
     if file.format < 3 && (has_mesh_body || !file.netze.is_empty()) {
         return Err(ProjectError::corrupt(
             origin,
-            "Netz-Körper gibt es erst ab Dateiformat 3",
+            tr!(
+                "proj-since-format",
+                what = tr!("proj-feat-mesh"),
+                format = "3"
+            ),
         ));
     }
     if file.format < 6 && file.projektangaben.is_some() {
         return Err(ProjectError::corrupt(
             origin,
-            "Blattangaben gibt es erst ab Dateiformat 6",
+            tr!(
+                "proj-since-format",
+                what = tr!("proj-feat-sheet"),
+                format = "6"
+            ),
         ));
     }
     let has_parts = |z: &ZeichnungDto| {
@@ -2002,13 +2152,21 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
     if file.format < 7 && (!file.stueckliste.is_empty() || file.zeichnungen.iter().any(has_parts)) {
         return Err(ProjectError::corrupt(
             origin,
-            "Stücklisten und Positionsnummern gibt es erst ab Dateiformat 7",
+            tr!(
+                "proj-since-format",
+                what = tr!("proj-feat-parts"),
+                format = "7"
+            ),
         ));
     }
     if file.format < 9 && has_format_9_data(&file) {
         return Err(ProjectError::corrupt(
             origin,
-            "Parameter und Formeln gibt es erst ab Dateiformat 9",
+            tr!(
+                "proj-since-format",
+                what = tr!("proj-feat-params"),
+                format = "9"
+            ),
         ));
     }
     let has_step_body = file
@@ -2018,7 +2176,11 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
     if file.format < 10 && (has_step_body || !file.step_formen.is_empty()) {
         return Err(ProjectError::corrupt(
             origin,
-            "STEP-Körper gibt es erst ab Dateiformat 10",
+            tr!(
+                "proj-since-format",
+                what = tr!("proj-feat-step"),
+                format = "10"
+            ),
         ));
     }
     let rollbacks = rollbacks_from(origin, &file)?;
@@ -2030,7 +2192,7 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
         .as_ref()
         .map(|p| project_from(origin, p))
         .transpose()?;
-    check_len(origin, "Netze", file.netze.len())?;
+    check_len(origin, &|| tr!("proj-l-meshes"), file.netze.len())?;
     let meshes = meshes_from(origin, &file.netze)?;
     for f in &file.features {
         if let KindDto::NetzKoerper { netz, .. } = &f.art
@@ -2038,7 +2200,11 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
         {
             return Err(ProjectError::corrupt(
                 origin,
-                format!("„{}“: Das Netz {netz} fehlt in der Datei", f.name),
+                tr!(
+                    "proj-ctx-feature",
+                    name = f.name.as_str(),
+                    msg = tr!("proj-mesh-missing", id = netz.to_string())
+                ),
             ));
         }
     }
@@ -2049,11 +2215,15 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
         {
             return Err(ProjectError::corrupt(
                 origin,
-                format!("„{}“: Die STEP-Form {form} fehlt in der Datei", f.name),
+                tr!(
+                    "proj-ctx-feature",
+                    name = f.name.as_str(),
+                    msg = tr!("proj-step-form-missing", id = form.to_string())
+                ),
             ));
         }
     }
-    check_len(origin, "Features", file.features.len())?;
+    check_len(origin, &|| tr!("proj-l-features"), file.features.len())?;
     let mut features = Vec::with_capacity(file.features.len());
     for f in &file.features {
         let kind = kind_from(origin, &f.name, &f.art)?;
@@ -2089,10 +2259,18 @@ fn rollbacks_from(origin: &str, file: &VersionFile) -> Result<Vec<FeatureId>> {
     if file.format < 11 && !file.rueckrollstellen.is_empty() {
         return Err(ProjectError::corrupt(
             origin,
-            "Rückrollstellen gibt es erst ab Dateiformat 11",
+            tr!(
+                "proj-since-format",
+                what = tr!("proj-feat-rollbacks"),
+                format = "11"
+            ),
         ));
     }
-    check_len(origin, "Rückrollstellen", file.rueckrollstellen.len())?;
+    check_len(
+        origin,
+        &|| tr!("proj-l-rollbacks"),
+        file.rueckrollstellen.len(),
+    )?;
     let ids: HashSet<u64> = file.features.iter().map(|f| f.id).collect();
     file.rueckrollstellen
         .iter()
@@ -2102,9 +2280,7 @@ fn rollbacks_from(origin: &str, file: &VersionFile) -> Result<Vec<FeatureId>> {
             } else {
                 Err(ProjectError::corrupt(
                     origin,
-                    format!(
-                        "Eine Rückrollstelle verweist auf einen unbekannten Schritt (Kennung {r})"
-                    ),
+                    tr!("proj-rollback-unknown", id = r.to_string()),
                 ))
             }
         })

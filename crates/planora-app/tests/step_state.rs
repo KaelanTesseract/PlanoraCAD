@@ -10,7 +10,7 @@ use planora_app::feature_dialog::FeatureDialog;
 use planora_app::history::snapshot_bytes;
 use planora_app::icons::{self, FeatureIcon, Icon, IconSource};
 use planora_app::state::*;
-use planora_app::undo_labels::{FALLBACK, describe_change};
+use planora_app::undo_labels::{describe_change, fallback};
 use planora_app::workspace::Workspace;
 use planora_app::{fonts, properties, theme};
 use planora_drawing::{Paper, Placement, Projection, Scale, Sheet, ViewKind};
@@ -371,7 +371,10 @@ fn import_is_one_step_named() {
     assert_eq!(ids.len(), 3);
     w.observe_history(false);
     assert_eq!(w.active_tab().history().undo_len(), 1, "genau ein Schritt");
-    assert_eq!(w.active_tab().undo_label(), Some("STEP importieren"));
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("STEP importieren".to_string())
+    );
     let after = marks(&w.active_tab().state);
     assert_eq!(after.len(), 3);
     assert_eq!(after[0].1.len(), 6);
@@ -381,7 +384,10 @@ fn import_is_one_step_named() {
     w.observe_history(false);
     assert!(w.active_tab().state.bodies.is_empty(), "alle drei zurück");
     assert!(w.active_tab().state.document.features().is_empty());
-    assert_eq!(w.active_tab().redo_label(), Some("STEP importieren"));
+    assert_eq!(
+        w.active_tab().redo_label(),
+        Some("STEP importieren".to_string())
+    );
 
     w.active_tab_mut().redo().unwrap();
     w.observe_history(false);
@@ -412,7 +418,7 @@ fn step_name_only_for_pure_imports() {
     s.create_box(DVec3::splat(3.0)).unwrap();
     s.import_step(vec![("B".into(), shape(&box_at(DVec3::ZERO)))])
         .unwrap();
-    assert_eq!(describe_change(&before, &s.snapshot()), FALLBACK);
+    assert_eq!(describe_change(&before, &s.snapshot()), fallback());
 }
 
 #[test]
@@ -698,8 +704,8 @@ fn coarse_body_never_silently_wrong() {
     assert_eq!(
         rows,
         [
-            ("Flächen", "6".to_string()),
-            ("Genauigkeit der Datei", "0,001 mm".to_string())
+            ("Flächen".to_string(), "6".to_string()),
+            ("Genauigkeit der Datei".to_string(), "0,001 mm".to_string())
         ]
     );
 
@@ -933,7 +939,11 @@ fn accuracy_shows_four_digits() {
         let id = s.import_step(vec![("Q".into(), sh)]).unwrap()[0];
         let kind = s.document.feature(id).unwrap().kind.clone();
         let rows = properties::parameter_rows(&s, &kind);
-        assert_eq!(rows[1], ("Genauigkeit der Datei", want.to_string()), "{t}");
+        assert_eq!(
+            rows[1],
+            ("Genauigkeit der Datei".to_string(), want.to_string()),
+            "{t}"
+        );
     }
 }
 
@@ -965,10 +975,10 @@ fn the_step_label_has_one_source() {
         .import_step(vec![("".into(), shape(&box_at(DVec3::ZERO)))])
         .unwrap()[0];
     let label = s.document.feature(id).unwrap().kind.label();
-    assert_eq!(label, planora_step::UNNAMED_BODY);
+    assert_eq!(label, planora_step::unnamed_body());
     assert_eq!(names(&s), [format!("{label} 1")]);
     let seen = draw_properties(&mut s, true);
-    assert!(has_exact(&seen, label), "Art im Eigenschaftenfeld");
+    assert!(has_exact(&seen, &label), "Art im Eigenschaftenfeld");
 }
 
 /// Schlussprüfung M1: Nennt die Datei keine Genauigkeit, zeigt die Eigenschaft das als
@@ -984,7 +994,7 @@ fn unknown_accuracy_is_shown_as_unknown() {
     assert_eq!(
         rows[1],
         (
-            "Genauigkeit der Datei",
+            "Genauigkeit der Datei".to_string(),
             "unbekannt (angenommen 0,001 mm)".to_string()
         )
     );

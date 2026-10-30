@@ -405,7 +405,7 @@ fn a_small_nurbs_sphere_is_located_and_a_tiny_one_reports_a_grazing_ray() {
     // jeder Strahl läuft aber näher als 2e-5 an einem Pol vorbei.
     let tiny = solid_faces(&nurbs_sphere_solid(1.8e-5));
     match solid_contains(&tiny, DVec3::ZERO, &tol) {
-        Err(BooleanError::Unsupported(msg)) => assert!(msg.contains("Streifschuss"), "{msg}"),
+        Err(BooleanError::FreeformLimit(msg)) => assert!(msg.contains("Streifschuss"), "{msg}"),
         other => panic!("{other:?}"),
     }
 }
@@ -443,7 +443,7 @@ fn a_piece_meeting_a_nurbs_face_obliquely_is_not_guessed_as_flush() {
         holes: vec![],
     };
     match classify_region(&side, &region, &cyl, &Tolerance::default()) {
-        Err(BooleanError::Unsupported(msg)) => assert!(msg.contains("schräg"), "{msg}"),
+        Err(BooleanError::FreeformLimit(msg)) => assert!(msg.contains("schräg"), "{msg}"),
         other => panic!("{other:?}"),
     }
 }
@@ -516,7 +516,8 @@ fn rays_through_both_poles_never_give_a_wrong_location() {
                 rng.range(-1.0, 1.0),
             ) * scale;
         match solid_contains(&faces, p, &tol) {
-            Ok(Location::Outside) | Err(BooleanError::Unsupported(_)) => {}
+            Ok(Location::Outside)
+            | Err(BooleanError::Unsupported(_) | BooleanError::FreeformLimit(_)) => {}
             other => panic!("{p:?} (Verschiebung {scale}): {other:?}"),
         }
     }

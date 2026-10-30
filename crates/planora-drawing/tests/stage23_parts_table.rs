@@ -421,7 +421,7 @@ fn table_marks() {
     let marks = parts_table_marks(&l, &rows, 1.0);
     let ts = texts(&marks);
     let at = |t: &str| ts.iter().find(|x| x.2 == t).map(|x| x.0).expect(t);
-    for h in PARTS_HEAD {
+    for h in &parts_head() {
         assert!((at(h).y - 67.75).abs() < 1e-9, "{h}");
     }
     assert!((at("Pos.").x - 231.0).abs() < 1e-9);
@@ -450,7 +450,7 @@ fn table_marks() {
     let ts = texts(&marks);
     assert_eq!(
         ts.iter().map(|t| t.2.as_str()).collect::<Vec<_>>(),
-        PARTS_HEAD.to_vec()
+        parts_head().to_vec()
     );
     // Ohne Tabelle nichts.
     let l = sheet_layout(sh(Paper::A3, true), 0, 0);
@@ -480,7 +480,7 @@ fn doc_type_of_parts_sheet() {
     };
     let p = ProjectInfo::new(&stamp);
     let t = resolve_texts(&d, Some(&p), &ctx, None);
-    assert_eq!(t.get(TitleField::DocType), PARTS_DOC_TYPE);
+    assert_eq!(t.get(TitleField::DocType), parts_doc_type());
     assert_eq!(t.get(TitleField::DocType), "Stückliste");
     assert_eq!(t.get(TitleField::Title), "Stückliste (2)");
     assert!(t.parts.is_empty());

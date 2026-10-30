@@ -6,36 +6,57 @@
 //! neuesten Bericht bereinigt (und wird dann zu „Bericht ausblenden“) ([`crate::feedback::sanitize`]); was nach außen geht (Ordner
 //! öffnen, Rückmeldung), gibt es als [`CrashAction`] an die App.
 
-use crate::crash::{StartFinding, report_field};
+use crate::crash::{StartFinding, TIME_KEY, report_field, report_field_either};
 use crate::dialog::{Dialog, DialogSize};
 use crate::feedback::{self, Personal};
 use crate::theme::{self, SPACE_1, SPACE_2, SPACE_3};
+use planora_i18n::tr;
 use std::path::{Path, PathBuf};
 
 /// Titel nach einem Absturz mit Bericht.
-pub const TITLE: &str = "PlanoraCAD ist beim letzten Mal abgestürzt";
+pub fn title() -> String {
+    tr!("crash-title")
+}
 /// Frage unter dem Titel.
-pub const QUESTION: &str = "Möchtest du uns helfen?";
+pub fn question() -> String {
+    tr!("crash-question")
+}
 /// Erklärung unter der Frage.
-pub const EXPLAIN: &str = "Dabei ist ein Bericht entstanden. Er liegt nur auf deinem Rechner. \
-     Schickst du ihn uns als Rückmeldung, können wir den Fehler leichter finden.";
+pub fn explain() -> String {
+    tr!("crash-explain")
+}
 /// Zeigt den bereinigten Bericht.
-pub const VIEW: &str = "Bericht ansehen";
-/// Statt [`VIEW`], solange der Bericht gezeigt wird: blendet ihn wieder aus.
-pub const HIDE: &str = "Bericht ausblenden";
+pub fn view() -> String {
+    tr!("crash-view")
+}
+/// Statt [`view`], solange der Bericht gezeigt wird: blendet ihn wieder aus.
+pub fn hide() -> String {
+    tr!("crash-hide")
+}
 /// Öffnet das Rückmeldungsfenster mit dem Bericht.
-pub const AS_FEEDBACK: &str = "Als Rückmeldung öffnen";
+pub fn as_feedback() -> String {
+    tr!("crash-as-feedback")
+}
 /// Öffnet den Ordner der Berichte.
-pub const OPEN_FOLDER: &str = "Ordner öffnen";
+pub fn open_folder() -> String {
+    tr!("crash-open-folder")
+}
 /// Schließt; der Bericht bleibt und kommt beim nächsten Start wieder.
-pub const NOT_NOW: &str = "Nicht jetzt";
+pub fn not_now() -> String {
+    tr!("crash-not-now")
+}
 /// Löscht die angebotenen Berichte.
-pub const DELETE: &str = "Löschen";
+pub fn delete() -> String {
+    tr!("crash-delete")
+}
 /// Titel nach einem Ende ohne Bericht.
-pub const UNEXPECTED_TITLE: &str = "PlanoraCAD wurde beim letzten Mal unerwartet beendet";
+pub fn unexpected_title() -> String {
+    tr!("crash-unexpected-title")
+}
 /// Text nach einem Ende ohne Bericht.
-pub const UNEXPECTED_TEXT: &str = "Wenn du magst, schreib uns über „Als Rückmeldung öffnen“ kurz, \
-     was du zuletzt gemacht hast.";
+pub fn unexpected_text() -> String {
+    tr!("crash-unexpected-text")
+}
 
 /// Kennung des Fensters.
 const WINDOW_ID: &str = "planora_absturz_rueckfrage";
@@ -70,8 +91,17 @@ pub struct CrashNotice {
     pub viewing: bool,
     /// Bereinigter Text des neuesten Berichts.
     text: String,
-    /// Zeile mit Zeit und Version des neuesten Berichts.
-    summary: String,
+    /// Angaben für die Zeile mit Zeit und Version des neuesten Berichts; der Text entsteht
+    /// erst beim Zeichnen, in der Sprache des Fensters.
+    summary: Summary,
+}
+
+/// Zeit und Version des neuesten Berichts und die Zahl der älteren.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Summary {
+    time: Option<String>,
+    version: Option<String>,
+    older: usize,
 }
 
 impl CrashNotice {
@@ -114,7 +144,7 @@ impl CrashNotice {
             let to = match crate::crash::mark_sent(p) {
                 Ok(to) => to,
                 Err(e) => {
-                    crate::diag::warn(&format!("Absturzbericht nicht verschoben ({:?})", e.kind()));
+                    crate::diag::warn(&format!("Crash report not moved ({:?})", e.kind()));
                     p.clone()
                 }
             };
@@ -134,11 +164,11 @@ impl CrashNotice {
                 && e.kind() != std::io::ErrorKind::NotFound
             {
                 failed += 1;
-                crate::diag::warn(&format!("Absturzbericht nicht gelöscht ({:?})", e.kind()));
+                crate::diag::warn(&format!("Crash report not deleted ({:?})", e.kind()));
             }
         }
         crate::diag::info(&format!(
-            "Absturzberichte gelöscht ({} von {})",
+            "Crash reports deleted ({} of {})",
             self.reports.len() - failed,
             self.reports.len()
         ));
@@ -151,19 +181,46 @@ fn read(path: &Path) -> Option<String> {
         .map(|b| String::from_utf8_lossy(&b).into_owned())
 }
 
-/// „Bericht vom …, Version …“, bei mehreren Berichten mit Anzahl.
-fn summary(text: &str, count: usize) -> String {
-    let mut s = String::from("Bericht");
-    if let Some(t) = report_field(text, "Zeit") {
-        s.push_str(&format!(" vom {t}"));
+/// Zeit und Version aus dem Bericht (auch aus älteren, deutschen Berichten) und die Zahl der
+/// älteren Berichte.
+fn summary(text: &str, count: usize) -> Summary {
+    Summary {
+        time: report_field_either(text, TIME_KEY, "Zeit").map(str::to_string),
+        version: report_field(text, "Version").map(str::to_string),
+        older: count.saturating_sub(1),
     }
-    if let Some(v) = report_field(text, "Version") {
-        s.push_str(&format!(", Version {v}"));
+}
+
+/// Die Zeit des Berichts in der Schreibweise der Sprache; eine Zeit, die sich nicht lesen lässt,
+/// steht, wie sie ist.
+fn shown_time(t: &str) -> String {
+    let parsed = chrono::NaiveDateTime::parse_from_str(t, crate::crash::REPORT_TIME_FORMAT)
+        .or_else(|_| chrono::NaiveDateTime::parse_from_str(t, "%d.%m.%Y, %H:%M:%S"));
+    match parsed {
+        Ok(d) => tr!(
+            "crash-summary-date",
+            day = d.format("%d").to_string(),
+            month = d.format("%m").to_string(),
+            year = d.format("%Y").to_string(),
+            time = d.format("%H:%M:%S").to_string()
+        ),
+        Err(_) => t.to_string(),
     }
-    if count > 1 {
-        s.push_str(&format!(" (dazu {} ältere)", count - 1));
+}
+
+/// „Bericht vom …, Version …“, bei mehreren Berichten mit Anzahl (in der aktuellen Sprache).
+fn summary_text(s: &Summary) -> String {
+    let mut out = tr!("crash-summary-report");
+    if let Some(t) = &s.time {
+        out.push_str(&tr!("crash-summary-time", time = shown_time(t)));
     }
-    s
+    if let Some(v) = &s.version {
+        out.push_str(&tr!("crash-summary-version", version = v.as_str()));
+    }
+    if s.older > 0 {
+        out.push_str(&tr!("crash-summary-older", count = s.older as i64));
+    }
+    out
 }
 
 /// Zeichnet die Rückfrage, solange `state.open` gilt. „Bericht ansehen“ und „Nicht jetzt“
@@ -173,7 +230,7 @@ pub fn show(ctx: &egui::Context, state: &mut CrashNotice, dark: bool) -> Option<
         return None;
     }
     let crashed = state.crashed();
-    let title = if crashed { TITLE } else { UNEXPECTED_TITLE };
+    let title = if crashed { title() } else { unexpected_title() };
     let mut open = true;
     let mut action = None;
     let viewing = state.viewing;
@@ -185,15 +242,16 @@ pub fn show(ctx: &egui::Context, state: &mut CrashNotice, dark: bool) -> Option<
             ctx,
             |ui| {
                 if !crashed {
-                    ui.add(egui::Label::new(UNEXPECTED_TEXT).wrap());
+                    ui.add(egui::Label::new(unexpected_text()).wrap());
                     return;
                 }
-                ui.strong(QUESTION);
+                ui.strong(question());
                 ui.add_space(SPACE_1);
-                ui.add(egui::Label::new(EXPLAIN).wrap());
+                ui.add(egui::Label::new(explain()).wrap());
                 ui.add_space(SPACE_2);
                 ui.label(
-                    egui::RichText::new(&state.summary).color(theme::palette(dark).text_secondary),
+                    egui::RichText::new(summary_text(&state.summary))
+                        .color(theme::palette(dark).text_secondary),
                 );
                 if viewing {
                     ui.add_space(SPACE_3);
@@ -224,17 +282,21 @@ pub fn show(ctx: &egui::Context, state: &mut CrashNotice, dark: bool) -> Option<
                     };
                     button(
                         ui,
-                        theme::primary_button(AS_FEEDBACK, dark),
+                        theme::primary_button(&as_feedback(), dark),
                         CrashAction::AsFeedback,
                     );
                     if crashed {
-                        let label = if viewing { HIDE } else { VIEW };
+                        let label = if viewing { hide() } else { view() };
                         button(ui, egui::Button::new(label), CrashAction::View);
-                        button(ui, egui::Button::new(OPEN_FOLDER), CrashAction::OpenFolder);
+                        button(
+                            ui,
+                            egui::Button::new(open_folder()),
+                            CrashAction::OpenFolder,
+                        );
                     }
-                    button(ui, egui::Button::new(NOT_NOW), CrashAction::NotNow);
+                    button(ui, egui::Button::new(not_now()), CrashAction::NotNow);
                     if crashed {
-                        button(ui, egui::Button::new(DELETE), CrashAction::Delete);
+                        button(ui, egui::Button::new(delete()), CrashAction::Delete);
                     }
                 });
             },

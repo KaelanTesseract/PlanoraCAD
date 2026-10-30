@@ -157,7 +157,7 @@ fn hostile_obj_files_get_named_errors() {
             "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 99999999999999999999\n",
             ExchangeError::Syntax {
                 line: 4,
-                msg: "Eine Ecke hat keine gültige Punktnummer",
+                msg: "Eine Ecke hat keine gültige Punktnummer".to_string(),
             },
         ),
         ("v 0 0 1e400\n", ExchangeError::NotFinite { line: Some(1) }),
@@ -167,7 +167,7 @@ fn hostile_obj_files_get_named_errors() {
             "v 0 0 0\nv 1 0 0\nf 1 2\n",
             ExchangeError::Syntax {
                 line: 3,
-                msg: "Eine Fläche braucht mindestens drei Ecken",
+                msg: "Eine Fläche braucht mindestens drei Ecken".to_string(),
             },
         ),
     ];

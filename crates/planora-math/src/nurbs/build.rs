@@ -5,6 +5,7 @@ use super::dense::solve_dense;
 use super::fit::MAX_FIT_CONTROL_POINTS;
 use super::{KnotVector, MAX_COORD, NurbsCurve, NurbsError, NurbsSurface};
 use crate::{DVec3, TAU};
+use planora_i18n::tr;
 use std::f64::consts::FRAC_PI_2;
 
 /// Kleinster erlaubter Öffnungswinkel eines Bogens (Winkeltoleranz aus `Tolerance::default()`);
@@ -28,18 +29,15 @@ struct ArcCoeffs {
 
 fn check_sweep(start: f64, sweep: f64) -> Result<(), NurbsError> {
     if !start.is_finite() || !sweep.is_finite() {
-        return Err(NurbsError::Input(
-            "Anfangswinkel und Öffnungswinkel müssen endlich sein".into(),
-        ));
+        return Err(NurbsError::Input(tr!("math-sweep-finite")));
     }
     if sweep.abs() > TAU {
-        return Err(NurbsError::Input(
-            "der Öffnungswinkel ist größer als ein voller Umlauf".into(),
-        ));
+        return Err(NurbsError::Input(tr!("math-sweep-large")));
     }
     if sweep.abs() < MIN_ARC_SWEEP {
-        return Err(NurbsError::Input(format!(
-            "der Öffnungswinkel ist zu klein (mindestens {MIN_ARC_SWEEP})"
+        return Err(NurbsError::Input(tr!(
+            "math-sweep-small",
+            min = MIN_ARC_SWEEP.to_string()
         )));
     }
     Ok(())
@@ -92,10 +90,12 @@ fn arc_knots(segments: usize, lo: f64, hi: f64) -> Vec<f64> {
     k
 }
 
-fn check_point(p: DVec3, what: &str) -> Result<(), NurbsError> {
+fn check_point(p: DVec3, what: impl FnOnce() -> String) -> Result<(), NurbsError> {
     if !p.is_finite() || p.abs().max_element() > MAX_COORD {
-        return Err(NurbsError::Input(format!(
-            "{what} muss endlich sein und höchstens {MAX_COORD} betragen"
+        return Err(NurbsError::Input(tr!(
+            "math-point-range",
+            what = what(),
+            max = MAX_COORD.to_string()
         )));
     }
     Ok(())
@@ -114,16 +114,14 @@ impl NurbsCurve {
         start: f64,
         sweep: f64,
     ) -> Result<NurbsCurve, NurbsError> {
-        check_point(center, "der Mittelpunkt")?;
-        check_point(a, "die Halbachse a")?;
-        check_point(b, "die Halbachse b")?;
+        check_point(center, || tr!("math-what-center"))?;
+        check_point(a, || tr!("math-what-axis-a"))?;
+        check_point(b, || tr!("math-what-axis-b"))?;
         if a.cross(b).length() <= PARALLEL_RATIO * a.length() * b.length()
             || a.length() < MIN_DIRECTION_LENGTH
             || b.length() < MIN_DIRECTION_LENGTH
         {
-            return Err(NurbsError::Input(
-                "die Halbachsen sind null oder parallel".into(),
-            ));
+            return Err(NurbsError::Input(tr!("math-axes-degenerate")));
         }
         check_sweep(start, sweep)?;
         let arc = arc_coeffs(start, sweep);
@@ -141,27 +139,25 @@ impl NurbsCurve {
     pub fn natural_cubic(points: &[DVec3], params: &[f64]) -> Result<NurbsCurve, NurbsError> {
         let n = points.len();
         if n != params.len() {
-            return Err(NurbsError::Input(
-                "Punkte und Parameter haben verschiedene Anzahl".into(),
-            ));
+            return Err(NurbsError::Input(tr!("math-points-params-count")));
         }
         if n < 2 {
-            return Err(NurbsError::Input("mindestens zwei Punkte nötig".into()));
+            return Err(NurbsError::Input(tr!("math-two-points")));
         }
         if n > MAX_FIT_CONTROL_POINTS - 2 {
-            return Err(NurbsError::TooLarge(format!(
-                "höchstens {} Punkte",
-                MAX_FIT_CONTROL_POINTS - 2
+            return Err(NurbsError::TooLarge(tr!(
+                "math-max-points",
+                max = (MAX_FIT_CONTROL_POINTS - 2).to_string()
             )));
         }
         for p in points {
-            check_point(*p, "jeder Punkt")?;
+            check_point(*p, || tr!("math-what-each-point"))?;
         }
         if params.iter().any(|t| !t.is_finite()) {
-            return Err(NurbsError::Input("Parameter müssen endlich sein".into()));
+            return Err(NurbsError::Input(tr!("math-params-finite")));
         }
         if params.windows(2).any(|w| w[1] <= w[0]) {
-            return Err(NurbsError::Input("Parameter müssen streng steigen".into()));
+            return Err(NurbsError::Input(tr!("math-params-increasing")));
         }
         let (t0, t1) = (params[0], params[n - 1]);
         if n == 2 {
@@ -217,9 +213,7 @@ impl NurbsSurface {
     /// v ∈ [0, 1] (v = 0 ist die Kurve, v = 1 die verschobene Kurve).
     pub fn extrude(curve: &NurbsCurve, dir: DVec3) -> Result<NurbsSurface, NurbsError> {
         if !dir.is_finite() || dir.length() < MIN_DIRECTION_LENGTH {
-            return Err(NurbsError::Input(
-                "die Richtung muss endlich und nicht null sein".into(),
-            ));
+            return Err(NurbsError::Input(tr!("math-direction")));
         }
         let nu = curve.control_points().len();
         let mut control = Vec::with_capacity(2 * nu);
@@ -254,11 +248,9 @@ impl NurbsSurface {
         start: f64,
         sweep: f64,
     ) -> Result<NurbsSurface, NurbsError> {
-        check_point(axis_origin, "der Achspunkt")?;
+        check_point(axis_origin, || tr!("math-what-axis-point"))?;
         if !axis_dir.is_finite() || axis_dir.length() < MIN_DIRECTION_LENGTH {
-            return Err(NurbsError::Input(
-                "die Achsrichtung muss endlich und nicht null sein".into(),
-            ));
+            return Err(NurbsError::Input(tr!("math-axis-direction")));
         }
         check_sweep(start, sweep)?;
         let (s0, sw) = if sweep < 0.0 {
@@ -296,9 +288,7 @@ impl NurbsSurface {
             }
         }
         if !off_axis {
-            return Err(NurbsError::Input(
-                "die Profilkurve liegt ganz auf der Drehachse".into(),
-            ));
+            return Err(NurbsError::Input(tr!("math-profile-on-axis")));
         }
         NurbsSurface::new(
             2,

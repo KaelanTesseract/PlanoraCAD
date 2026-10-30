@@ -10,7 +10,7 @@
 use egui::epaint::Shape;
 use egui::{Color32, Event, Modifiers, PointerButton, Pos2, Rect, vec2};
 use planora_app::browser::{self, ERROR_COLOR};
-use planora_app::dimension_browser::{CHAIN_ASK, EMPTY_TEXT};
+use planora_app::dimension_browser::{chain_ask, empty_text};
 use planora_app::drawing_state::WorkArea;
 use planora_app::state::AppState;
 use planora_app::workspace::*;
@@ -447,7 +447,7 @@ fn lost_row_is_red_with_reason() {
     );
     let q = shot.find("?").expect("Zeile mit Fragezeichen");
     assert_eq!(q.color, ERROR_COLOR);
-    assert_eq!(h.tail(2), [ViewKind::Front.label(), "?"]);
+    assert_eq!(h.tail(2), [ViewKind::Front.label().as_str(), "?"]);
     // Hinweistext mit dem Grund.
     let p = q.rect.center();
     h.frame(&mut st, vec![Event::PointerMoved(p)]);
@@ -586,24 +586,24 @@ fn chain_delete_asks_first() {
     let (mut st, d, ids, mut h) = chain_state();
     assert_eq!(
         h.tail(4),
-        [ViewKind::Front.label(), "10,0", "10,00", "30,0"]
+        [ViewKind::Front.label().as_str(), "10,0", "10,00", "30,0"]
     );
     let e0 = st.document.edit_count();
     h.menu(&mut st, "10,00", "Löschen");
     // Rückfrage mit dem vorgegebenen Text; noch ist nichts gelöscht.
     assert_eq!(
-        CHAIN_ASK,
+        chain_ask().text(),
         "Dieses Maß gehört zu einer Kette; die anderen Maße bleiben"
     );
     let plan = st.pending_delete_dimension.clone().expect("Rückfrage");
     assert_eq!(
-        (plan.drawing, plan.dim, plan.text.as_str()),
-        (d, ids[1], CHAIN_ASK)
+        (plan.drawing, plan.dim, plan.text.text()),
+        (d, ids[1], chain_ask().text())
     );
     assert_eq!(st.document.edit_count(), e0);
     assert_eq!(st.document.drawing(d).unwrap().dimensions.len(), 3);
     let shot = h.idle(&mut st);
-    assert!(shot.find(CHAIN_ASK).is_some(), "{}", shot.text);
+    assert!(shot.find(&chain_ask().text()).is_some(), "{}", shot.text);
     // „Abbrechen“: nichts passiert.
     h.click(&mut st, "Abbrechen");
     assert!(st.pending_delete_dimension.is_none());
@@ -620,7 +620,10 @@ fn chain_delete_asks_first() {
         [ids[0], ids[2]]
     );
     assert_eq!(st.document.edit_count(), e0 + 1);
-    assert_eq!(h.tail(3), [ViewKind::Front.label(), "10,0", "30,0"]);
+    assert_eq!(
+        h.tail(3),
+        [ViewKind::Front.label().as_str(), "10,0", "30,0"]
+    );
     // Ein Maß, das nicht zu einer Kette gehört, wird ohne Rückfrage gelöscht.
     h.menu(&mut st, "30,0", "Löschen");
     assert!(st.pending_delete_dimension.is_none());
@@ -652,10 +655,10 @@ fn empty_state_text() {
     let mut h = Harness::new();
     let shot = h.idle(&mut st);
     assert_eq!(
-        EMPTY_TEXT,
+        empty_text(),
         "Noch keine Maße. Mit dem Werkzeug „Maß“ oder „Maße vorschlagen“ lassen sich welche anlegen."
     );
-    assert!(shot.find(EMPTY_TEXT).is_some(), "{}", shot.text);
+    assert!(shot.find(&empty_text()).is_some(), "{}", shot.text);
     assert!(shot.find("Maße").is_some());
 }
 
@@ -719,7 +722,7 @@ fn deleting_the_last_dimension_clears_selection() {
     assert_eq!(st.drawing_ui.selected_dim, None);
     assert!(st.document.drawing(d).unwrap().dimensions.is_empty());
     let shot = h.idle(&mut st);
-    assert!(shot.find(EMPTY_TEXT).is_some(), "{}", shot.text);
+    assert!(shot.find(&empty_text()).is_some(), "{}", shot.text);
     // Auch das offene Fenster „Maß bearbeiten“ für dieses Maß verschwindet.
     let mut st2 = AppState::new();
     let f = build(&mut st2);

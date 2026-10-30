@@ -11,10 +11,10 @@ use eframe::App as _;
 use egui::epaint::{ClippedShape, Shape};
 use egui::{Color32, Event, Key, Modifiers, PointerButton, Pos2, Rect, Vec2, vec2};
 use planora_app::app::PlanoraApp;
-use planora_app::formula_field::FX_LABEL;
-use planora_app::sketch_panel::{self, LIST_FX_LABEL};
-use planora_app::sketch_state::{ConstraintAction, DRIVEN_NO_FORMULA, Item};
-use planora_app::state::{AppState, SKETCH_OPEN_LOCK, StandardPlane};
+use planora_app::formula_field::fx_label;
+use planora_app::sketch_panel::{self, list_fx_label};
+use planora_app::sketch_state::{ConstraintAction, Item, driven_no_formula};
+use planora_app::state::{AppState, StandardPlane, sketch_open_lock};
 use planora_app::workspace::Workspace;
 use planora_app::{fonts, shell_panels, theme};
 use planora_feature::{FeatureId, FeatureKind, ParamEdit, ParamId, ParamUnit, SketchPlane};
@@ -340,7 +340,10 @@ fn sketch_existing_dimension_formula() {
     assert!(fx.top() >= name.bottom() - 1.0, "fx unter dem Maß");
     assert!(formula.left() > fx.right(), "Formel hinter fx");
     // Ein Schritt im Skizzenverlauf „Formel ändern“.
-    assert_eq!(state(&mut r.app).sketch_undo_label(), Some("Formel ändern"));
+    assert_eq!(
+        state(&mut r.app).sketch_undo_label(),
+        Some("Formel ändern".to_string())
+    );
 
     // Wieder öffnen: das Feld zeigt die Formel; „25“ löscht nur die Formel (P2).
     sketch_panel::open_existing_dimension_editor(&c, state(&mut r.app), id);
@@ -362,7 +365,7 @@ fn sketch_existing_dimension_formula() {
 
     // Rückgängig in der Skizze holt Wert und Formel zurück, Wiederholen wieder die Zahl.
     let s = state(&mut r.app);
-    assert_eq!(s.sketch_undo_label(), Some("Formel ändern"));
+    assert_eq!(s.sketch_undo_label(), Some("Formel ändern".to_string()));
     assert!(s.undo_sketch());
     assert_eq!(draft_value(s, id), 40.0);
     assert_eq!(draft_formula(s, id).as_deref(), Some("Breite"));
@@ -453,7 +456,10 @@ fn sketch_new_dimension_formula() {
     assert_eq!(v, 20.0);
     assert_eq!(draft_formula(s, id).as_deref(), Some("Breite/2"));
     settle(&c, &mut r.app, SIZE);
-    assert_eq!(state(&mut r.app).sketch_undo_label(), Some("Maß setzen"));
+    assert_eq!(
+        state(&mut r.app).sketch_undo_label(),
+        Some("Maß setzen".to_string())
+    );
 
     // Winkelmaß „w“ zwischen zwei Linien: gespeichert in Bogenmaß, bitgenau wie das Dokument.
     let s = state(&mut r.app);
@@ -479,7 +485,7 @@ fn sketch_new_dimension_formula() {
     );
     assert_eq!(*sf, before);
     assert_eq!(
-        se.message.as_deref(),
+        se.message_text().as_deref(),
         Some("Hier wird ein Winkel erwartet, die Formel ergibt eine Länge.")
     );
 }
@@ -557,7 +563,7 @@ fn sketch_unsolvable_is_rejected_in_session() {
     type_text(&c, &mut r.app, SIZE, "Breite*2");
     enter(&c, &mut r.app, SIZE);
     let s = state(&mut r.app);
-    let msg = s.sketch_session.as_ref().unwrap().message.clone().unwrap();
+    let msg = s.sketch_session.as_ref().unwrap().message_text().unwrap();
     assert!(
         msg == "Widerspruch: Die Änderung widerspricht vorhandenen Abhängigkeiten"
             || msg == "Die Skizze ließ sich nach der Änderung nicht lösen",
@@ -572,7 +578,10 @@ fn sketch_unsolvable_is_rejected_in_session() {
     let p = theme::palette(true);
     assert_eq!(shot.find_in(side(&c), &msg).color, p.error);
     // Kein Schritt im Verlauf.
-    assert_ne!(state(&mut r.app).sketch_undo_label(), Some("Formel ändern"));
+    assert_ne!(
+        state(&mut r.app).sketch_undo_label(),
+        Some("Formel ändern".to_string())
+    );
 }
 
 #[test]
@@ -621,7 +630,7 @@ fn unsolved_formula_sketch_shows_its_error_in_the_editor() {
     let (se, sf) = s.session_draft_mut().unwrap();
     se.set_dimension_input(sf, r.dim, "35", &scope).unwrap();
     assert_eq!(
-        se.message.as_deref(),
+        se.message_text().as_deref(),
         Some("Mit den Werten der Formeln widersprechen sich Abhängigkeiten")
     );
 }
@@ -650,7 +659,7 @@ fn driven_drops_formula() {
     let before = sf.clone();
     assert_eq!(
         se.set_dimension_input(sf, id, "Breite", &scope),
-        Err(DRIVEN_NO_FORMULA.to_string())
+        Err(driven_no_formula())
     );
     assert_eq!(*sf, before);
     se.set_driven(&mut sf.sketch, id, false).unwrap();
@@ -682,9 +691,9 @@ fn driven_drops_formula() {
             .sketch_session
             .as_ref()
             .unwrap()
-            .message
+            .message_text()
             .as_deref(),
-        Some(DRIVEN_NO_FORMULA)
+        Some(driven_no_formula().as_str())
     );
     assert_eq!(draft_formula(state(&mut r.app), id), None);
 }
@@ -703,7 +712,7 @@ fn a_new_redundant_dimension_drops_its_formula() {
     assert!(sf.sketch.constraint(id).unwrap().driven);
     assert_eq!(sf.formulas.get(&id), None, "anzeigend: keine Formel");
     assert_eq!(
-        se.message.as_deref(),
+        se.message_text().as_deref(),
         Some("Dieses Maß ist bereits durch andere Abhängigkeiten bestimmt und wird nur angezeigt")
     );
 }
@@ -788,9 +797,9 @@ fn close_writes_formulas() {
     assert!((sk.line_length(r.line).unwrap() - 50.0).abs() < 1e-6);
     // Rückgängig (Dokument) nimmt die Parameteränderung, dann die Skizze als einen Schritt.
     let tab = r.app.ws_mut().active_tab_mut();
-    assert_eq!(tab.undo_label(), Some("Parameter ändern"));
+    assert_eq!(tab.undo_label(), Some("Parameter ändern".to_string()));
     tab.undo().unwrap();
-    assert_eq!(tab.undo_label(), Some("Skizze bearbeiten"));
+    assert_eq!(tab.undo_label(), Some("Skizze bearbeiten".to_string()));
     tab.undo().unwrap();
     let sf = match &tab.state.document.feature(r.sketch).unwrap().kind {
         FeatureKind::Sketch(sf) => sf.clone(),
@@ -886,7 +895,7 @@ fn unknown_names_show_an_error_and_lock_ok() {
     );
     // Das Fenster „Parameter“ bleibt bei offener Skizze gesperrt.
     let s = state(&mut r.app);
-    assert_eq!(s.add_parameter(), Err(SKETCH_OPEN_LOCK.to_string()));
+    assert_eq!(s.add_parameter(), Err(sketch_open_lock().to_string()));
 }
 
 #[test]
@@ -962,7 +971,7 @@ fn accessibility_names_of_field_and_fx() {
             .unwrap_or_else(|| panic!("kein Knoten „{label}“"))
             .clone()
     };
-    assert_eq!(node(LIST_FX_LABEL).role(), Role::Button);
-    assert_eq!(node(FX_LABEL).role(), Role::Button);
+    assert_eq!(node(&list_fx_label()).role(), Role::Button);
+    assert_eq!(node(&fx_label()).role(), Role::Button);
     assert_eq!(node("Abstand").role(), Role::TextInput);
 }

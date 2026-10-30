@@ -564,7 +564,7 @@ fn save_as_refuses_names_ending_in_the_document_suffix() {
     let p = w.library.as_ref().unwrap().create_project("P").unwrap();
     for bad in ["x.pcad", "X.PCAD", "Teil.Pcad "] {
         let err = w.save_as(&p, bad, "").unwrap_err();
-        assert_eq!(err, DOCUMENT_NAME_SUFFIX, "{bad}");
+        assert_eq!(err, document_name_suffix(), "{bad}");
         assert!(w.active_tab().path.is_none(), "{bad}");
     }
     assert_eq!(w.library_revision, 0);

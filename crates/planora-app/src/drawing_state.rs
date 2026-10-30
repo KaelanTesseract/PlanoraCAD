@@ -10,6 +10,7 @@
 
 use crate::export_dialog::shorten_for_display;
 use crate::jobs::{Job, Poll};
+use crate::msg::Msg;
 use crate::state::{Body, BodyKind};
 use planora_drawing::dimension::DimId;
 use planora_drawing::sheet_frame::{REV_VISIBLE, sheet_layout};
@@ -32,7 +33,31 @@ pub const MAX_CACHED: usize = 7 + MAX_SECTIONS;
 const _: () = assert!(MAX_CACHED >= ViewKind::ALL.len() + MAX_SECTIONS);
 
 /// Meldung, wenn ein Arbeitsthread ohne Ergebnis endet (Absturz).
-pub const LOST_TEXT: &str = "Die Berechnung wurde unerwartet beendet.";
+pub fn lost_text() -> Msg {
+    crate::msg!("drawing-lost")
+}
+
+/// Meldung zu einem Fehler der Zeichnungsrechnung mit den Ids der Bibliothek `planora-drawing`
+/// (übersetzt erst beim Zeichnen). Mitgegebene Gründe und Namen (z. B. bei
+/// [`DrawError::Unsupported`]) bleiben in der Sprache, in der der Fehler entstand; Schreibfehler
+/// als Text (die Meldung des Betriebssystems lässt sich nicht nachträglich übersetzen).
+pub fn draw_error_msg(e: &DrawError) -> Msg {
+    match e {
+        DrawError::NoBodies => crate::msg!("drawing-no-bodies"),
+        DrawError::MeshBodiesOnly => crate::msg!("drawing-mesh-bodies-only"),
+        DrawError::AmbiguousVisibility(what) => crate::msg!("drawing-err-ambiguous", what = what),
+        DrawError::TooComplex(n) => crate::msg!("drawing-err-too-complex", n = n.to_string()),
+        DrawError::SectionMisses => crate::msg!("drawing-err-section-misses"),
+        DrawError::SectionFailed(what) => crate::msg!("drawing-err-section-failed", what = what),
+        DrawError::NonFinite => crate::msg!("drawing-err-non-finite"),
+        DrawError::Cancelled => crate::msg!("drawing-err-cancelled"),
+        DrawError::InvalidBody(detail) => {
+            crate::msg!("drawing-err-invalid-body", detail = detail)
+        }
+        DrawError::Unsupported(detail) => crate::msg!("drawing-err-unsupported", detail = detail),
+        DrawError::Io(_) => Msg::Raw(e.to_string()),
+    }
+}
 
 /// Geöffneter Arbeitsbereich.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -50,8 +75,8 @@ pub enum ViewResult {
         fraction: f32,
     },
     Ready(Arc<ViewLines>),
-    /// Verständliche Meldung, warum es keine Linien gibt.
-    Failed(String),
+    /// Verständliche Meldung, warum es keine Linien gibt (übersetzt erst beim Zeichnen).
+    Failed(Msg),
 }
 
 impl PartialEq for ViewResult {
@@ -86,7 +111,7 @@ enum EntryState {
         progress: Arc<Progress>,
     },
     Ready(Done),
-    Failed(String),
+    Failed(Msg),
 }
 
 struct Entry {
@@ -117,7 +142,7 @@ pub struct DrawingUi {
     /// Im Zeichnungsbereich gewählter Nummernkreis (schließt Ansicht und Maß aus).
     pub selected_balloon: Option<BalloonId>,
     /// Letzte Meldung zu den Maßen (etwa nach „Maße vorschlagen“) für die Hinweiszeile.
-    pub dim_message: Option<String>,
+    pub dim_message: Option<Msg>,
     /// Stand zur Meldung (Änderungszähler, gewählte Ansicht, gewähltes Maß); weicht der
     /// aktuelle Stand ab, verfällt die Meldung.
     pub dim_message_key: Option<(u64, Option<ViewId>, Option<DimId>)>,
@@ -397,7 +422,7 @@ impl DrawingUi {
             } else {
                 DrawError::MeshBodiesOnly
             };
-            return EntryState::Failed(e.to_string());
+            return EntryState::Failed(draw_error_msg(&e));
         }
         let compute = self.compute;
         let progress = Arc::new(Progress::new());
@@ -430,8 +455,8 @@ impl DrawingUi {
                 lines: Arc::new(lines),
                 data: data.map(Arc::new),
             }),
-            Poll::Ready(Err(err)) => EntryState::Failed(err.to_string()),
-            Poll::Lost => EntryState::Failed(LOST_TEXT.into()),
+            Poll::Ready(Err(err)) => EntryState::Failed(draw_error_msg(&err)),
+            Poll::Lost => EntryState::Failed(lost_text()),
         };
     }
 
@@ -523,7 +548,7 @@ impl DrawingUi {
     /// gezeichnet werden. `None`, wenn alle Körper exakt sind.
     pub fn note(&self, bodies: &[Body]) -> Option<String> {
         if bodies.is_empty() {
-            return Some(DrawError::NoBodies.to_string());
+            return Some(draw_error_msg(&DrawError::NoBodies).text());
         }
         let meshes: Vec<String> = bodies
             .iter()
@@ -534,11 +559,11 @@ impl DrawingUi {
         if meshes.is_empty() {
             None
         } else if meshes.len() == bodies.len() {
-            Some(DrawError::MeshBodiesOnly.to_string())
+            Some(draw_error_msg(&DrawError::MeshBodiesOnly).text())
         } else {
-            Some(format!(
-                "Netz-Körper werden nicht gezeichnet: {}.",
-                meshes.join(", ")
+            Some(planora_i18n::tr!(
+                "drawing-meshes-skipped",
+                names = meshes.join(", ")
             ))
         }
     }

@@ -264,12 +264,15 @@ fn undo_restores_table_and_fields() {
         .unwrap();
     observe(&mut w);
     let steps = undo_len(&w);
-    assert_eq!(tab(&mut w).undo_label(), Some("Quader anlegen"));
+    assert_eq!(tab(&mut w).undo_label(), Some("Quader anlegen".to_string()));
 
     set_formula(st(&mut w), breite, "60").unwrap();
     observe(&mut w);
     assert_eq!(undo_len(&w), steps + 1, "genau ein Schritt");
-    assert_eq!(tab(&mut w).undo_label(), Some("Parameter ändern"));
+    assert_eq!(
+        tab(&mut w).undo_label(),
+        Some("Parameter ändern".to_string())
+    );
     assert_eq!(box_size(st(&mut w), q).x, 60.0);
     assert!((width(st(&mut w), 0) - 60.0).abs() < 1e-6);
 
@@ -299,12 +302,18 @@ fn parameter_actions_are_one_step_each() {
     let mut w = ws();
     let a = st(&mut w).add_parameter().unwrap();
     observe(&mut w);
-    assert_eq!(tab(&mut w).undo_label(), Some("Parameter anlegen"));
+    assert_eq!(
+        tab(&mut w).undo_label(),
+        Some("Parameter anlegen".to_string())
+    );
     assert_eq!(st(&mut w).document.parameter(a).unwrap().name, "Parameter1");
     let breite = param(st(&mut w), "Breite", "40");
     observe(&mut w);
     // Anlegen und Ändern im selben Bild: ein Schritt (Anlegen).
-    assert_eq!(tab(&mut w).undo_label(), Some("Parameter anlegen"));
+    assert_eq!(
+        tab(&mut w).undo_label(),
+        Some("Parameter anlegen".to_string())
+    );
     let q = st(&mut w)
         .create_box_with(
             DVec3::new(40.0, 20.0, 10.0),
@@ -314,12 +323,18 @@ fn parameter_actions_are_one_step_each() {
     observe(&mut w);
     st(&mut w).delete_parameter(a).unwrap();
     observe(&mut w);
-    assert_eq!(tab(&mut w).undo_label(), Some("Parameter löschen"));
+    assert_eq!(
+        tab(&mut w).undo_label(),
+        Some("Parameter löschen".to_string())
+    );
     let steps = undo_len(&w);
     st(&mut w).replace_parameter(breite).unwrap();
     observe(&mut w);
     assert_eq!(undo_len(&w), steps + 1);
-    assert_eq!(tab(&mut w).undo_label(), Some("Parameter löschen"));
+    assert_eq!(
+        tab(&mut w).undo_label(),
+        Some("Parameter löschen".to_string())
+    );
     assert!(st(&mut w).document.parameters().is_empty());
     assert!(feature_formulas(st(&mut w), q).is_empty());
     assert_eq!(box_size(st(&mut w), q).x, 40.0);
@@ -377,12 +392,12 @@ fn sketch_open_locks_parameters() {
     s.open_sketch(sk).unwrap();
     let before = s.snapshot();
     let count = s.document.edit_count();
-    let lock = Err(SKETCH_OPEN_LOCK.to_string());
+    let lock = Err(sketch_open_lock().to_string());
     assert_eq!(s.add_parameter().map(|_| ()), lock);
-    assert_eq!(s.message.as_deref(), Some(SKETCH_OPEN_LOCK));
+    assert_eq!(s.message, Some(sketch_open_lock()));
     s.message = None;
     assert_eq!(set_formula(&mut s, breite, "60"), lock);
-    assert_eq!(s.message.as_deref(), Some(SKETCH_OPEN_LOCK));
+    assert_eq!(s.message, Some(sketch_open_lock()));
     assert_eq!(s.delete_parameter(breite), lock);
     assert_eq!(s.replace_parameter(breite), lock);
     assert_eq!(s.document.edit_count(), count);
@@ -545,7 +560,7 @@ fn formula_only_change_commits() {
         .formulas
         .insert(c, "breite".into());
     observe(&mut w);
-    assert_eq!(tab(&mut w).undo_label(), Some("Formel ändern"));
+    assert_eq!(tab(&mut w).undo_label(), Some("Formel ändern".to_string()));
     st(&mut w).try_close_sketch().unwrap();
     observe(&mut w);
     let s = st(&mut w);
@@ -559,7 +574,10 @@ fn formula_only_change_commits() {
         ref k => panic!("kein Abstand: {k:?}"),
     }
     assert_eq!(undo_len(&w), steps + 1);
-    assert_eq!(tab(&mut w).undo_label(), Some("Skizze bearbeiten"));
+    assert_eq!(
+        tab(&mut w).undo_label(),
+        Some("Skizze bearbeiten".to_string())
+    );
 
     // Ein unveränderter Entwurf bleibt ohne Schritt.
     let count = st(&mut w).document.edit_count();
@@ -622,7 +640,7 @@ fn create_with_formulas() {
         .unwrap();
     observe(&mut w);
     assert_eq!(undo_len(&w), steps + 1);
-    assert_eq!(tab(&mut w).undo_label(), Some("Quader anlegen"));
+    assert_eq!(tab(&mut w).undo_label(), Some("Quader anlegen".to_string()));
     let s = st(&mut w);
     assert_eq!(
         feature_formulas(s, q),

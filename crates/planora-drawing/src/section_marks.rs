@@ -36,6 +36,7 @@ use crate::section::{SectionData, loop_polygon};
 use crate::sheet::{SheetModel, view_transform};
 use crate::sheet_frame::sheet_scale;
 use crate::{Basis, ViewLines};
+use planora_i18n::tr;
 use planora_math::DVec2;
 use std::collections::BTreeMap;
 use std::f64::consts::FRAC_PI_4;
@@ -45,9 +46,9 @@ pub fn section_title(letter: char, scale: Scale) -> String {
     format!("{letter}\u{2013}{letter} ({})", scale.label())
 }
 
-/// Name der Schnittansicht, z. B. „Schnitt A–A“.
+/// Name der Schnittansicht in der aktuellen Sprache, z. B. „Schnitt A–A“.
 pub fn section_view_name(letter: char) -> String {
-    format!("Schnitt {letter}\u{2013}{letter}")
+    tr!("drawing-view-section", letter = letter.to_string())
 }
 
 /// Markierungen, die zu einer Ansicht des Blatts hinzukommen.
@@ -107,13 +108,13 @@ pub fn section_marks(
         {
             match hatch_marks(data, lines, &xf, spec, sec.hatch.spacing * f) {
                 Ok(m) => own.extend(m),
-                Err(HatchError::TooMany(_)) => errors.push(format!(
-                    "Die Schraffur von „{}“ ist zu fein.",
-                    section_view_name(sec.letter)
+                Err(HatchError::TooMany(_)) => errors.push(tr!(
+                    "drawing-err-hatch-too-fine",
+                    name = section_view_name(sec.letter)
                 )),
-                Err(HatchError::BadInput) => errors.push(format!(
-                    "Die Schraffur von „{}“ lässt sich nicht berechnen.",
-                    section_view_name(sec.letter)
+                Err(HatchError::BadInput) => errors.push(tr!(
+                    "drawing-err-hatch-failed",
+                    name = section_view_name(sec.letter)
                 )),
             }
         }

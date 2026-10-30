@@ -14,6 +14,7 @@ use crate::boolean::Seg;
 use crate::geometry::{Curve, Surface};
 use crate::ids::Id;
 use crate::topology::{Edge, Solid};
+use planora_i18n::tr;
 use planora_math::{DVec3, Frame, PI, Tolerance};
 
 /// Winkel (Bogenmaß), bis zu dem Achsen als parallel bzw. Normalen als senkrecht zur Kante
@@ -342,9 +343,9 @@ fn check_section(
         && sec.pb.distance(o) > min
         && sec.pa.distance(sec.pb) > min)
     {
-        return Err(BlendError::InvalidParameter(format!(
-            "Die Berührpunkte liegen nicht weiter als {} mm auseinander; das Maß ist zu klein",
-            super::show_num(min)
+        return Err(BlendError::InvalidParameter(tr!(
+            "kernel-blend-contact-too-close",
+            mm = super::show_num(min)
         )));
     }
     Ok(())
@@ -510,9 +511,7 @@ fn rotate_geom(
         SectionKind::Fillet { radius } => {
             let rc = rho(sec.center);
             if !(rc > radius * (1.0 + AXIS_MARGIN)) {
-                return Err(BlendError::Unsupported(
-                    "Die Kugelbahn kommt der Drehachse näher als der Radius; bitte einen kleineren Radius wählen".into(),
-                ));
+                return Err(BlendError::Unsupported(tr!("kernel-blend-ball-near-axis")));
             }
             let frame = Frame {
                 origin: center + axis * h(sec.center),

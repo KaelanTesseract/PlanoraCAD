@@ -30,6 +30,8 @@ use crate::read::value::Entity;
 use crate::read::weld;
 use crate::topology::CLASSIFY_CHORD;
 use planora_exchange::{CHECK_EVERY, Progress};
+use planora_i18n::tr;
+use planora_kernel::blend::topo::role_label;
 use planora_kernel::boolean::{face_geom, loop_points, oriented_area, points_to_uv};
 use planora_kernel::{
     Curve, Face, FaceTag, HalfEdge, Id, Loop, NURBS_EDGE_TOL, Shell, Solid, Surface, UvRect,
@@ -66,7 +68,9 @@ const POLE_REL: f64 = 1e-7;
 
 /// Grund aus [`derive_patch_sensed`], wenn ein Rand am Pol zur falschen Seite springt (Rand und
 /// Sinn der Fläche passen nicht zusammen); [`finish_face`] nennt dazu die Fläche.
-const TWISTED_AT_POLE: &str = "Rand und Außenseite passen am Pol nicht zusammen.";
+fn twisted_at_pole() -> String {
+    tr!("step-r-twisted-at-pole")
+}
 
 /// Breite (relativ), unter der ein Parameterbereich keine Ausdehnung hat.
 const EMPTY_REL: f64 = 1e-12;
@@ -149,7 +153,7 @@ pub struct RawBody {
 pub(crate) fn at_line(line: usize, msg: impl Into<String>) -> Skip {
     let msg = msg.into();
     if line > 0 {
-        Skip(format!("Zeile {line}: {msg}"))
+        Skip(tr!("step-r-at-line", line = line, msg = msg))
     } else {
         Skip(msg)
     }
@@ -273,10 +277,16 @@ impl RawBody {
 /// Zahl mit Leerzeichen als Tausendertrennung („20 000“).
 fn grouped(n: usize) -> String {
     let digits = n.to_string();
+    // Tausendertrenner: Leerzeichen bei Komma als Dezimaltrenner, sonst Komma.
+    let group = if planora_i18n::current().decimal() == '.' {
+        ','
+    } else {
+        ' '
+    };
     let mut out = String::new();
     for (i, c) in digits.chars().enumerate() {
         if i > 0 && (digits.len() - i).is_multiple_of(3) {
-            out.push(' ');
+            out.push(group);
         }
         out.push(c);
     }
@@ -287,7 +297,7 @@ fn grouped(n: usize) -> String {
 fn coord(x: f64) -> String {
     let r = (x * 100.0).round() / 100.0;
     let r = if r == 0.0 { 0.0 } else { r };
-    format!("{r:.2}").replace('.', ",")
+    planora_i18n::localize_decimal(&format!("{r:.2}"))
 }
 
 pub(crate) fn place(p: DVec3) -> String {
@@ -317,10 +327,10 @@ impl<'f> TopoReader<'f> {
             Some(n) => Ok((e, n)),
             None => Err(self.fail(
                 id,
-                format!(
-                    "Erwartet wird {}, gefunden: {}.",
-                    names.join(" oder "),
-                    e.names().join(" ")
+                tr!(
+                    "step-expected-found-names",
+                    want = names.join(" oder "),
+                    found = e.names().join(" ")
                 ),
             )),
         }
@@ -343,7 +353,7 @@ impl<'f> TopoReader<'f> {
         e.arg(name, i)
             .and_then(|v| v.logical())
             .map_err(|m| self.fail(id, m))?
-            .ok_or_else(|| self.fail(id, "Eine Richtung ist unbestimmt („.U.“)."))
+            .ok_or_else(|| self.fail(id, tr!("step-r-direction-undetermined")))
     }
 
     /// Schalen der Volumen-Einträge `items`: (Flächen, umgekehrt, äußere Schale des Hohlraums).
@@ -351,7 +361,7 @@ impl<'f> TopoReader<'f> {
     #[allow(clippy::type_complexity)]
     fn shells(&self, items: &[u64]) -> Result<Vec<(Vec<u64>, bool, Option<usize>)>, Skip> {
         if items.is_empty() {
-            return Err(Skip("Der Körper hat keine Flächen.".into()));
+            return Err(Skip(tr!("step-r-body-no-faces")));
         }
         let mut shells: Vec<(Vec<u64>, bool, Option<usize>)> = Vec::new();
         for &item in items {
@@ -368,7 +378,7 @@ impl<'f> TopoReader<'f> {
             }
         }
         if shells.iter().any(|(faces, ..)| faces.is_empty()) {
-            return Err(Skip("Der Körper hat keine Flächen.".into()));
+            return Err(Skip(tr!("step-r-body-no-faces")));
         }
         Ok(shells)
     }
@@ -385,7 +395,7 @@ impl<'f> TopoReader<'f> {
             flipped ^= !self.flag(id, &e, kind, 3)?;
             id = self.reference(id, &e, kind, 2)?;
         }
-        Err(self.fail(id, "Die Schalen verweisen zu tief aufeinander."))
+        Err(self.fail(id, tr!("step-r-shells-too-deep")))
     }
 
     fn vertex(&mut self, id: u64) -> Result<usize, Skip> {
@@ -427,10 +437,7 @@ impl<'f> TopoReader<'f> {
             if let Some(closed) = close_curve(c, self.tol) {
                 curve = Curve::nurbs(closed);
             } else if gap > self.tol.max(linear) {
-                return Err(Skip(format!(
-                    "Die Ecke bei {} liegt nicht auf ihrer Kante.",
-                    place(p)
-                )));
+                return Err(Skip(tr!("step-r-vertex-off-edge", place = place(p))));
             }
         }
         // Eine offene Kurve zwischen zusammenfallenden Ecken hat die Länge null (geschlossene
@@ -465,7 +472,7 @@ impl<'f> TopoReader<'f> {
             forward ^= !self.flag(id, &e, kind, 4)?;
             id = self.reference(id, &e, kind, 3)?;
         }
-        Err(self.fail(id, "Die Kanten verweisen zu tief aufeinander."))
+        Err(self.fail(id, tr!("step-r-edges-too-deep")))
     }
 
     /// Ein Rand (`FACE_BOUND`/`FACE_OUTER_BOUND`) als Schleife des Kernels; `reverse` kehrt ihn
@@ -483,17 +490,11 @@ impl<'f> TopoReader<'f> {
             return Ok(Bound::Pole(self.res.point(p)?));
         }
         if !le.is("EDGE_LOOP") {
-            return Err(self.fail(
-                lp,
-                format!(
-                    "Ein Rand vom Typ {} wird noch nicht unterstützt.",
-                    le.names().join(" ")
-                ),
-            ));
+            return Err(self.fail(lp, tr!("step-r-loop-type", type = le.names().join(" "))));
         }
         let list = self.refs(lp, &le, "EDGE_LOOP", 1)?;
         if list.is_empty() {
-            return Err(self.fail(lp, "Ein Rand hat keine Kanten."));
+            return Err(self.fail(lp, tr!("step-r-loop-no-edges")));
         }
         let mut hes = Vec::with_capacity(list.len());
         for oe in list {
@@ -530,7 +531,7 @@ impl<'f> TopoReader<'f> {
             };
             if outer {
                 if marked_outer.is_some() {
-                    return Err(self.fail(id, "Eine Fläche hat mehr als einen äußeren Rand."));
+                    return Err(self.fail(id, tr!("step-r-face-two-outer")));
                 }
                 marked_outer = Some(loops.len());
             }
@@ -589,7 +590,7 @@ enum Bound {
 pub(crate) fn finish_face(raw: &mut RawBody, i: usize, tol: f64) -> Result<(), Skip> {
     let f = &raw.faces[i];
     if f.loops.is_empty() {
-        return Err(at_line(f.line, "Eine Fläche hat keinen Rand."));
+        return Err(at_line(f.line, tr!("step-r-face-no-rim")));
     }
     let surface = &f.surface;
     let sense = f.same_sense;
@@ -656,15 +657,11 @@ pub(crate) fn finish_face(raw: &mut RawBody, i: usize, tol: f64) -> Result<(), S
                 .map(|(_, p)| p.clone()),
         );
         Some(
-            derive_patch_sensed(surface, sense, &ordered, tol).map_err(|Skip(m)| {
-                if m == TWISTED_AT_POLE {
-                    Skip(format!(
-                        "Die Fläche „{}“ ist verdreht: Rand und Außenseite passen nicht zusammen.",
-                        f.tag.role
-                    ))
-                } else {
-                    at_line(f.line, m)
+            derive_patch_impl(surface, sense, &ordered, tol).map_err(|e| match e {
+                PatchFail::TwistedAtPole => {
+                    Skip(tr!("step-r-face-twisted", role = role_label(&f.tag.role)))
                 }
+                PatchFail::Other(Skip(m)) => at_line(f.line, m),
             })?,
         )
     };
@@ -692,9 +689,7 @@ pub fn edge_params(
     let t0 = curve.project(start);
     let te = curve.project(end);
     if !(t0.is_finite() && te.is_finite()) {
-        return Err(Skip(
-            "Die Lage einer Ecke auf ihrer Kante lässt sich nicht bestimmen.".into(),
-        ));
+        return Err(Skip(tr!("step-r-vertex-pos")));
     }
     let Some(period) = curve.period() else {
         return Ok((t0, te));
@@ -730,7 +725,24 @@ pub fn derive_patch_sensed(
     loops: &[Vec<DVec3>],
     tol_mm: f64,
 ) -> Result<UvRect, Skip> {
-    derive_patch_impl(surface, same_sense, loops, tol_mm)
+    derive_patch_impl(surface, same_sense, loops, tol_mm).map_err(|e| match e {
+        PatchFail::TwistedAtPole => Skip(twisted_at_pole()),
+        PatchFail::Other(skip) => skip,
+    })
+}
+
+/// Grund, aus dem kein Bereich entsteht. Die Art steht in der Variante, nicht im Text (der je
+/// nach Sprache wechselt): `TwistedAtPole` heißt, dass Rand und Außenseite am Pol nicht
+/// zusammenpassen.
+pub(crate) enum PatchFail {
+    TwistedAtPole,
+    Other(Skip),
+}
+
+impl From<Skip> for PatchFail {
+    fn from(skip: Skip) -> Self {
+        PatchFail::Other(skip)
+    }
 }
 
 /// Randpunkte im Parameterraum: `u`, `v` (entfaltet), ob `u` für den Bereich zählt und ob der
@@ -744,7 +756,7 @@ fn derive_patch_impl(
     sense: bool,
     loops: &[Vec<DVec3>],
     tol_mm: f64,
-) -> Result<UvRect, Skip> {
+) -> Result<UvRect, PatchFail> {
     let periods = [surface.u_period(), surface.v_period()];
     let base = match surface {
         Surface::Nurbs(d) => {
@@ -789,9 +801,7 @@ fn derive_patch_impl(
                 None => surface.project(*p),
             };
             if !(u.is_finite() && v.is_finite()) {
-                return Err(Skip(
-                    "Ein Randpunkt lässt sich nicht auf seine Fläche zurückrechnen.".into(),
-                ));
+                return Err(Skip(tr!("step-r-rim-point")).into());
             }
             hint = Some((u, v));
             let at_pole = param_pole(v) || geo_pole(*p).is_some();
@@ -823,7 +833,7 @@ fn derive_patch_impl(
             if let (Some(per), Some(a), Some(b)) = (periods[0], track.first(), track.last())
                 && !((b.0 - a.0).abs() < 0.5 * per)
             {
-                return Err(Skip(TWISTED_AT_POLE.into()));
+                return Err(PatchFail::TwistedAtPole);
             }
             for k in 0..2 {
                 let first = track
@@ -868,9 +878,7 @@ fn derive_patch_impl(
     // Ohne Ausdehnung ist es kein Bereich.
     let flat = |k: usize| !(hi[k] - lo[k] > EMPTY_REL * (1.0 + lo[k].abs()));
     if flat(0) || flat(1) {
-        return Err(Skip(
-            "Der Parameterbereich einer Fläche lässt sich nicht bestimmen.".into(),
-        ));
+        return Err(Skip(tr!("step-r-param-range")).into());
     }
     for k in 0..2 {
         if let Some(per) = periods[k] {
@@ -878,9 +886,7 @@ fn derive_patch_impl(
             // Über einen Pol hinweg darf `u` weiter reichen (geschlossene Schleife oben geprüft);
             // der Bereich ist dann genau eine Periode.
             if !(hi[k] - lo[k] <= per + slack) && !(through_pole && k == 0) {
-                return Err(Skip(
-                    "Der Parameterbereich einer Fläche reicht über mehr als einen Umlauf.".into(),
-                ));
+                return Err(Skip(tr!("step-r-param-range-wraps")).into());
             }
             if hi[k] - lo[k] > per {
                 hi[k] = lo[k] + per;
@@ -969,10 +975,9 @@ fn check_open_seams(solid: &Solid) -> Result<(), Skip> {
             .collect();
         edges.sort_unstable();
         if edges.windows(2).any(|w| w[0] == w[1]) {
-            return Err(Skip(format!(
-                "Die Fläche {} liegt nicht richtig im Körper: Innen und außen passen an ihr \
-                 nicht zusammen.",
-                face_name(solid, fid.index())
+            return Err(Skip(tr!(
+                "step-r-face-inside-out",
+                face = face_name(solid, fid.index())
             )));
         }
     }
@@ -1002,9 +1007,9 @@ pub fn read_raw(
     let shells = r.shells(items)?;
     let total: usize = shells.iter().map(|(faces, ..)| faces.len()).sum();
     if total > file.limits().max_faces {
-        return Err(Skip(format!(
-            "Der Körper hat mehr als {} Flächen.",
-            grouped(MAX_STEP_FACES)
+        return Err(Skip(tr!(
+            "step-r-too-many-faces",
+            max = grouped(MAX_STEP_FACES)
         )));
     }
     // Noch nicht gezählte Flächen: Scheitert eine Fläche, zählt der Körper trotzdem ganz (die
@@ -1061,8 +1066,8 @@ fn face_name(solid: &Solid, i: usize) -> String {
         .get(Id::from_index(i))
         .and_then(|f| f.tag.as_ref())
     {
-        Some(t) => format!("„{}“", t.role),
-        None => "einer Fläche".into(),
+        Some(t) => tr!("step-quoted", text = role_label(&t.role)),
+        None => tr!("step-r-a-face"),
     }
 }
 
@@ -1079,46 +1084,25 @@ fn invalid(solid: &Solid, e: &ValidationError) -> Skip {
     use ValidationError as V;
     let why = match *e {
         V::EdgeUseCount(k, 1) => {
-            format!(
-                "Die Kante bei {} gehört nur zu einer Fläche.",
-                edge_place(solid, k)
-            )
+            tr!("step-r-edge-one-face", place = edge_place(solid, k))
         }
-        V::EdgeUseCount(k, n) => format!(
-            "Die Kante bei {} gehört zu {n} Flächen statt zu zwei.",
-            edge_place(solid, k)
-        ),
-        V::EdgeOrientation(k) => format!(
-            "Die Kante bei {} wird von beiden Flächen in derselben Richtung durchlaufen.",
-            edge_place(solid, k)
-        ),
-        V::OpenLoop(f) => format!(
-            "Ein Rand der Fläche {} ist nicht geschlossen.",
-            face_name(solid, f)
-        ),
-        V::EmptyLoop(f) => format!("Ein Rand der Fläche {} ist leer.", face_name(solid, f)),
-        V::MissingPatch(f) => format!(
-            "Die Fläche {} hat keinen Parameterbereich.",
-            face_name(solid, f)
-        ),
+        V::EdgeUseCount(k, n) => tr!("step-r-edge-n-faces", place = edge_place(solid, k), n = n),
+        V::EdgeOrientation(k) => tr!("step-r-edge-same-direction", place = edge_place(solid, k)),
+        V::OpenLoop(f) => tr!("step-r-rim-open", face = face_name(solid, f)),
+        V::EmptyLoop(f) => tr!("step-r-rim-empty", face = face_name(solid, f)),
+        V::MissingPatch(f) => tr!("step-r-face-no-range", face = face_name(solid, f)),
         V::InvalidEulerCharacteristic(_) => {
-            "Die Flächen schließen den Körper nicht richtig ab.".into()
+            tr!("step-r-faces-not-closed")
         }
-        V::ShellMembership(f) => format!(
-            "Die Fläche {} gehört nicht zu genau einer Schale.",
-            face_name(solid, f)
+        V::ShellMembership(f) => tr!("step-r-face-shell", face = face_name(solid, f)),
+        V::EdgeOffSurface(k, f) => tr!(
+            "step-r-edge-off-face",
+            place = edge_place(solid, k),
+            face = face_name(solid, f)
         ),
-        V::EdgeOffSurface(k, f) => format!(
-            "Die Kante bei {} liegt nicht auf der Fläche {}.",
-            edge_place(solid, k),
-            face_name(solid, f)
-        ),
-        V::HoleAcrossSeam(f) => format!(
-            "Ein Loch der Fläche {} reicht über ihre Naht.",
-            face_name(solid, f)
-        ),
+        V::HoleAcrossSeam(f) => tr!("step-r-hole-seam", face = face_name(solid, f)),
     };
-    Skip(format!("Der Körper ist ungültig: {why}"))
+    Skip(tr!("step-r-body-invalid", why = why))
 }
 
 /// Liegt der Wert eines Polygons im Parameterraum um ganze Perioden neben dem Anfang? Dann
@@ -1158,9 +1142,9 @@ fn check_face_loops(solid: &Solid) -> Result<(), Skip> {
         for poly in loops {
             for (axis, period) in periods.iter().enumerate() {
                 if period.is_some_and(|p| winds(poly, axis, p)) {
-                    return Err(Skip(format!(
-                        "Der Rand der Fläche {} schließt sich nicht: Eine Kante läuft falsch herum.",
-                        face_name(solid, id.index())
+                    return Err(Skip(tr!(
+                        "step-r-rim-not-closing-face",
+                        face = face_name(solid, id.index())
                     )));
                 }
             }
@@ -1172,9 +1156,9 @@ fn check_face_loops(solid: &Solid) -> Result<(), Skip> {
             let area = oriented_area(poly, sense);
             let ok = if k == 0 { area > 0.0 } else { area < 0.0 };
             if !ok {
-                return Err(Skip(format!(
-                    "Die Fläche {} ist verdreht: Rand und Außenseite passen nicht zusammen.",
-                    face_name(solid, id.index())
+                return Err(Skip(tr!(
+                    "step-r-face-twisted-face",
+                    face = face_name(solid, id.index())
                 )));
             }
         }
@@ -1250,12 +1234,9 @@ fn shell_volumes(solid: &Solid) -> Result<ShellMesh, Skip> {
     .map_err(|e| {
         Skip(match e {
             MeshError::Triangulation(f) | MeshError::MissingPatch(f) | MeshError::OffSurface(f) => {
-                format!(
-                    "Die Fläche {} lässt sich nicht in Dreiecke zerlegen.",
-                    face_name(solid, f)
-                )
+                tr!("step-r-face-triangulate", face = face_name(solid, f))
             }
-            MeshError::TooLarge => "Der Körper ist zu groß für ein Dreiecksnetz.".into(),
+            MeshError::TooLarge => tr!("step-r-body-too-large"),
         })
     })?;
     let mut shell_of = vec![0usize; solid.faces.len()];
@@ -1290,7 +1271,7 @@ fn shell_volumes(solid: &Solid) -> Result<ShellMesh, Skip> {
             abs += v.abs();
         }
         if !(sum.is_finite() && sum.abs() > VOLUME_REL * abs) {
-            return Err(Skip("Der Körper hat kein Volumen.".into()));
+            return Err(Skip(tr!("step-r-body-no-volume")));
         }
         volumes[k] = sum;
     }
@@ -1913,10 +1894,9 @@ fn check_face_sides(
             continue;
         };
         if inside != 1 || outside != 0 {
-            return Err(Skip(format!(
-                "Die Fläche {} liegt nicht richtig im Körper: Innen und außen passen an ihr \
-                 nicht zusammen.",
-                face_name(solid, f.face)
+            return Err(Skip(tr!(
+                "step-r-face-inside-out",
+                face = face_name(solid, f.face)
             )));
         }
     }
@@ -1950,7 +1930,7 @@ fn check_shells(
         .collect();
     let lumps: Vec<usize> = (0..owners.len()).filter(|k| owners[*k].is_none()).collect();
     let region = |k: usize| FacetGrid::new(facets(&triangles[k], &faces[k], volumes[k], false));
-    let outside = || Skip("Ein Hohlraum liegt nicht ganz im Körper.".into());
+    let outside = || Skip(tr!("step-r-cavity-outside"));
     // Hohlräume: ganz in ihrer äußeren Schale, die äußere Schale nicht im Hohlraum.
     for (v, owner) in owners.iter().enumerate() {
         let Some(o) = *owner else {
@@ -1984,7 +1964,7 @@ fn check_shells(
                 .iter()
                 .any(|q| in_box(*q, boxes[b], depth) && grid.deep_inside(*q, depth) == Some(true))
             {
-                return Err(Skip("Zwei Stücke des Körpers überschneiden sich.".into()));
+                return Err(Skip(tr!("step-r-pieces-overlap")));
             }
         }
     }
@@ -2014,10 +1994,9 @@ fn orient_shells(
         if (v > 0.0) == void {
             let ids = solid.shells[k].faces.clone();
             if let Some(f) = ids.iter().find(|f| guessed.get(f.index()) == Some(&true)) {
-                return Err(Skip(format!(
-                    "Die Seite der Fläche {} ist nicht eindeutig: Sie hat weder Naht noch Pol, und \
-                     der Körper müsste umgedreht werden.",
-                    face_name(solid, f.index())
+                return Err(Skip(tr!(
+                    "step-r-face-side-unclear",
+                    face = face_name(solid, f.index())
                 )));
             }
             turn_inside_out(solid, &ids);
@@ -2063,10 +2042,7 @@ fn check_edges(solid: &Solid, weld_tol: f64) -> Result<(), Skip> {
             let s = &solid.faces[fid].surface;
             let limit = weld_tol.max(point_surface_tol(s, &tol));
             if !(s.implicit(mid).abs() <= limit) {
-                return Err(Skip(format!(
-                    "Die Kante bei {} liegt nicht auf ihren Flächen.",
-                    place(mid)
-                )));
+                return Err(Skip(tr!("step-r-edge-off-faces", place = place(mid))));
             }
         }
     }
@@ -2079,10 +2055,7 @@ fn check_edges(solid: &Solid, weld_tol: f64) -> Result<(), Skip> {
         for (t, v) in [(e.t0, e.start), (e.t1, e.end)] {
             let p = solid.vertices[v].point;
             if !(e.curve.point(t).distance(p) <= limit) {
-                return Err(Skip(format!(
-                    "Die Ecke bei {} liegt nicht auf ihrer Kante.",
-                    place(p)
-                )));
+                return Err(Skip(tr!("step-r-vertex-off-edge", place = place(p))));
             }
         }
     }

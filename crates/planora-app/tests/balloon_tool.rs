@@ -13,12 +13,10 @@ use eframe::App as _;
 use egui::epaint::{ColorMode, Shape};
 use egui::{Color32, Event, Key, Modifiers, PointerButton, Pos2, Rect, Vec2, pos2, vec2};
 use planora_app::app::PlanoraApp;
-use planora_app::balloon_tool::{
-    self, HINT, LOST_TIP, MISSED, PARTS_SHEET_TIP, READ_ONLY_TIP, TOOL, TOOL_TIP, lost_note,
-};
+use planora_app::balloon_tool::{self, lost_note};
 use planora_app::browser::error_color;
-use planora_app::dimension_tool::{self, NO_VIEWS_TIP, ToolMode};
-use planora_app::drawing_dialog::{NewDrawingDialog, SKETCH_BLOCKED};
+use planora_app::dimension_tool::{self, ToolMode};
+use planora_app::drawing_dialog::{NewDrawingDialog, sketch_blocked};
 use planora_app::drawing_state::WorkArea;
 use planora_app::drawing_view;
 use planora_app::state::{AppState, StandardPlane};
@@ -34,7 +32,7 @@ use planora_drawing::{
     BalloonId, BodyKey, DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewId, ViewKind,
     Visibility,
 };
-use planora_feature::{FeatureId, FeatureKind, SketchFeature, SketchPlane, TOO_MANY_BALLOONS};
+use planora_feature::{FeatureId, FeatureKind, SketchFeature, SketchPlane};
 use planora_math::{DVec2, DVec3, Frame, Tolerance};
 use planora_project::config::Config;
 use planora_project::library::Library;
@@ -509,14 +507,14 @@ fn click_sets_balloon_on_every_line_kind() {
             .unwrap();
         let mut h = open(&mut st, d, size);
         if size == BIG {
-            h.click_text(&mut st, TOOL);
+            h.click_text(&mut st, &balloon_tool::tool());
         } else {
             // Bei 800 × 600 rollt das Werkzeugfeld; der Knopf liegt rechts außerhalb.
             st.balloon_tool.set_active(true);
         }
         assert!(st.balloon_tool.is_active(), "{size:?}");
         let shot = h.idle(&mut st);
-        assert!(shot.has(HINT), "{size:?}: Hinweis fehlt");
+        assert!(shot.has(&balloon_tool::hint()), "{size:?}: Hinweis fehlt");
         let mut b0 = None;
         for (what, vis) in [
             ("sichtbare Kante", Visibility::Visible),
@@ -539,8 +537,11 @@ fn click_sets_balloon_on_every_line_kind() {
         let shot = h.click_at(&mut st, DVec2::new(30.0, 30.0));
         assert_eq!(balloons(&st, d).len(), n);
         assert_eq!(st.document.edit_count(), e0);
-        assert_eq!(st.balloon_tool.message(), Some(MISSED));
-        let m = shot.find(MISSED);
+        assert_eq!(
+            st.balloon_tool.message(),
+            Some(balloon_tool::missed().text())
+        );
+        let m = shot.find(&balloon_tool::missed().text());
         assert_eq!(m.color, error_color(st.dark), "Meldung rot");
         // Der nächste Treffer nimmt die Meldung weg (bei 800 × 600 läge der Klick schon im
         // Fangbereich eines Kreises).
@@ -548,11 +549,14 @@ fn click_sets_balloon_on_every_line_kind() {
             let p = h.line_mid(front, "verdeckte Kante", |l| l.vis == Visibility::Hidden);
             let extra = place_by_click(&mut st, &mut h, d, p);
             assert_eq!(st.balloon_tool.message(), None);
-            assert!(!h.idle(&mut st).has(MISSED));
+            assert!(!h.idle(&mut st).has(&balloon_tool::missed().text()));
             balloon_tool::delete(&mut st, d, extra.id);
             // Ebenso ein Klick, der einen Kreis wählt.
             h.click_at(&mut st, DVec2::new(30.0, 30.0));
-            assert_eq!(st.balloon_tool.message(), Some(MISSED));
+            assert_eq!(
+                st.balloon_tool.message(),
+                Some(balloon_tool::missed().text())
+            );
             let b0 = b0.expect("erster Kreis");
             let c = h.screen(h.balloon(b0).centre);
             h.click(&mut st, c);
@@ -681,7 +685,7 @@ fn balloon_hit_reaches_pick_px_outside_the_circle() {
 #[test]
 fn select_delete_escape() {
     let (mut st, _, d, _, mut h) = box_front(BIG);
-    h.click_text(&mut st, TOOL);
+    h.click_text(&mut st, &balloon_tool::tool());
     let b = place_by_click(&mut st, &mut h, d, DVec2::new(95.0, 100.0));
     // Mit Werkzeug: Klick auf den Kreis wählt ihn und setzt keinen neuen.
     h.click_at(&mut st, DVec2::new(30.0, 30.0));
@@ -984,23 +988,23 @@ fn typing_in_the_sheet_dialog_does_not_reach_the_balloon() {
 #[test]
 fn exclusive_tools() {
     let (mut st, _, _, _, mut h) = box_front(BIG);
-    h.click_text(&mut st, TOOL);
+    h.click_text(&mut st, &balloon_tool::tool());
     assert!(st.balloon_tool.is_active());
     assert_eq!(st.dimension_tool.mode, ToolMode::Off);
-    h.click_text(&mut st, dimension_tool::TOOL);
+    h.click_text(&mut st, &dimension_tool::tool());
     assert!(st.dimension_tool.is_active());
     assert!(!st.balloon_tool.is_active(), "Maß an → Position aus");
-    h.click_text(&mut st, TOOL);
+    h.click_text(&mut st, &balloon_tool::tool());
     assert!(st.balloon_tool.is_active());
     assert!(!st.dimension_tool.is_active(), "Position an → Maß aus");
     // Eine Maßart wählen schaltet „Maß“ ein und „Position“ aus.
     h.click_text(
         &mut st,
-        ToolMode::Linear(dimension_tool::LinearDir::Horizontal).label(),
+        &ToolMode::Linear(dimension_tool::LinearDir::Horizontal).label(),
     );
     h.click_text(
         &mut st,
-        ToolMode::Linear(dimension_tool::LinearDir::Vertical).label(),
+        &ToolMode::Linear(dimension_tool::LinearDir::Vertical).label(),
     );
     assert_eq!(
         st.dimension_tool.mode,
@@ -1078,11 +1082,11 @@ fn lost_balloon_is_shown() {
         .expect("„?“ im Kreis");
     assert_eq!(q.color, theme::SHEET_LOST);
     // Hinweiszeile rot.
-    let note = shot.find(&lost_note(1));
+    let note = shot.find(&lost_note(1).text());
     assert_eq!(note.color, error_color(st.dark));
     // Tooltip über dem Kreis.
     let shot = h.hover(&mut st, c);
-    assert!(shot.has(LOST_TIP), "Tooltip fehlt");
+    assert!(shot.has(&balloon_tool::lost_tip()), "Tooltip fehlt");
     // Über einem Kreis mit Teil kein solcher Tooltip.
     let ok = st
         .document
@@ -1097,22 +1101,31 @@ fn lost_balloon_is_shown() {
     h.idle(&mut st);
     let c_ok = h.screen(h.balloon(ok).centre);
     let shot = h.hover(&mut st, c_ok);
-    assert!(!shot.has(LOST_TIP), "Tooltip über einem Kreis mit Teil");
+    assert!(
+        !shot.has(&balloon_tool::lost_tip()),
+        "Tooltip über einem Kreis mit Teil"
+    );
     st.document
         .update_drawing(d, |dr| {
             dr.remove_balloon(ok);
         })
         .unwrap();
     // Zwei verlorene Kreise: Mehrzahl.
-    assert_eq!(lost_note(1), "1 Positionsnummer hat ihr Teil verloren.");
-    assert_eq!(lost_note(2), "2 Positionsnummern haben ihr Teil verloren.");
+    assert_eq!(
+        lost_note(1).text(),
+        "1 Positionsnummer hat ihr Teil verloren."
+    );
+    assert_eq!(
+        lost_note(2).text(),
+        "2 Positionsnummern haben ihr Teil verloren."
+    );
     let k1 = st.document.drawing(d).unwrap().balloons[0].body;
     st.document
         .add_balloon(d, front, k1, (0.2, 0.2), (-10.0, 10.0))
         .unwrap();
     let shot = h.idle(&mut st);
-    assert!(shot.has(&lost_note(2)));
-    assert!(!shot.has(&lost_note(1)));
+    assert!(shot.has(&lost_note(2).text()));
+    assert!(!shot.has(&lost_note(1).text()));
 }
 
 // (f) -----------------------------------------------------------------------------------------
@@ -1285,9 +1298,9 @@ fn toolbar_fits_1100x700() {
                     t.text
                 );
             }
-            let pos = inside(TOOL);
-            let dim = inside(dimension_tool::TOOL);
-            let combo = inside(mode.label());
+            let pos = inside(&balloon_tool::tool());
+            let dim = inside(&dimension_tool::tool());
+            let combo = inside(&mode.label());
             // „Blatt einpassen“ als Symbol neben den Lupen in Zeile 2.
             let fit_r = inside(&fit);
             assert!((fit_r.rect.center().y - dim.rect.center().y).abs() < 6.0);
@@ -1338,9 +1351,12 @@ fn blocked_states() {
     h.editable = false;
     h.idle(&mut st);
     let drawing = st.document.drawing(d).unwrap().clone();
-    assert_eq!(balloon_tool::blocked(&drawing, false), Some(READ_ONLY_TIP));
+    assert_eq!(
+        balloon_tool::blocked(&drawing, false),
+        Some(balloon_tool::read_only_tip())
+    );
     let e0 = st.document.edit_count();
-    h.click_text(&mut st, TOOL);
+    h.click_text(&mut st, &balloon_tool::tool());
     assert!(!st.balloon_tool.is_active());
     st.balloon_tool.set_active(true);
     h.idle(&mut st);
@@ -1360,8 +1376,11 @@ fn blocked_states() {
     let d = new_drawing(&mut st, A4_QUER);
     let mut h = open(&mut st, d, BIG);
     let drawing = st.document.drawing(d).unwrap().clone();
-    assert_eq!(balloon_tool::blocked(&drawing, true), Some(NO_VIEWS_TIP));
-    h.click_text(&mut st, TOOL);
+    assert_eq!(
+        balloon_tool::blocked(&drawing, true),
+        Some(dimension_tool::no_views_tip())
+    );
+    h.click_text(&mut st, &balloon_tool::tool());
     assert!(!st.balloon_tool.is_active());
 
     // Stücklistenblatt.
@@ -1372,15 +1391,18 @@ fn blocked_states() {
     let p = st.document.add_parts_sheets(A4_QUER, &stamp).unwrap();
     let mut h = open(&mut st, p, BIG);
     let drawing = st.document.drawing(p).unwrap().clone();
-    assert_eq!(balloon_tool::blocked(&drawing, true), Some(PARTS_SHEET_TIP));
-    h.click_text(&mut st, TOOL);
+    assert_eq!(
+        balloon_tool::blocked(&drawing, true),
+        Some(balloon_tool::parts_sheet_tip())
+    );
+    h.click_text(&mut st, &balloon_tool::tool());
     assert!(!st.balloon_tool.is_active());
     st.balloon_tool.set_active(true);
     h.idle(&mut st);
     assert!(!st.balloon_tool.is_active());
     assert_eq!(
-        balloon_tool::place(&mut st, p, ViewId(1), 0, DVec2::new(10.0, 10.0)),
-        Err(PARTS_SHEET_TIP.to_string())
+        balloon_tool::place(&mut st, p, ViewId(1), 0, DVec2::new(10.0, 10.0)).map_err(|m| m.text()),
+        Err(balloon_tool::parts_sheet_tip())
     );
 
     // Nur Isometrie: erlaubt.
@@ -1391,7 +1413,7 @@ fn blocked_states() {
     let mut h = open(&mut st, d, BIG);
     let drawing = st.document.drawing(d).unwrap().clone();
     assert_eq!(balloon_tool::blocked(&drawing, true), None);
-    h.click_text(&mut st, TOOL);
+    h.click_text(&mut st, &balloon_tool::tool());
     assert!(st.balloon_tool.is_active());
     let p = h.line_mid(iso, "Kante", |l| l.vis == Visibility::Visible);
     let b = place_by_click(&mut st, &mut h, d, p);
@@ -1405,7 +1427,7 @@ fn blocked_states() {
     let before = st.document.edit_count();
     assert_eq!(
         balloon_tool::place(&mut st, d, iso, 0, p),
-        Err(SKETCH_BLOCKED.to_string())
+        Err(sketch_blocked())
     );
     assert_eq!(st.document.edit_count(), before);
     h.idle(&mut st);
@@ -1428,8 +1450,14 @@ fn limit_message() {
     let shot = h.click_at(&mut st, DVec2::new(95.0, 100.0));
     assert_eq!(balloons(&st, d).len(), 200);
     assert_eq!(st.document.edit_count(), e0);
-    assert_eq!(st.balloon_tool.message(), Some(TOO_MANY_BALLOONS));
-    assert_eq!(shot.find(TOO_MANY_BALLOONS).color, error_color(st.dark));
+    assert_eq!(
+        st.balloon_tool.message(),
+        Some(balloon_tool::too_many().text())
+    );
+    assert_eq!(
+        shot.find(&balloon_tool::too_many().text()).color,
+        error_color(st.dark)
+    );
 }
 
 // ---- Übertrag aus Aufgabe 4: Farbe und Strichbreite der Kreise -------------------------------
@@ -1486,16 +1514,24 @@ fn balloons_paint_in_sheet_colour_with_paper_widths() {
 
 /// Texte und Tooltips in einfacher Sprache, als ganze Sätze.
 #[test]
+fn app_texts_match_the_feature_constants() {
+    assert_eq!(
+        balloon_tool::too_many().text(),
+        planora_feature::too_many_balloons()
+    );
+}
+
+#[test]
 fn texts_are_plain_sentences() {
     for t in [
-        TOOL_TIP,
-        HINT,
-        MISSED,
-        READ_ONLY_TIP,
-        PARTS_SHEET_TIP,
-        LOST_TIP,
-        &lost_note(1),
-        &lost_note(3),
+        &balloon_tool::tool_tip(),
+        &balloon_tool::hint(),
+        &balloon_tool::missed().text(),
+        &balloon_tool::read_only_tip(),
+        &balloon_tool::parts_sheet_tip(),
+        &balloon_tool::lost_tip(),
+        &lost_note(1).text(),
+        &lost_note(3).text(),
     ] {
         assert!(t.ends_with('.'), "{t}");
         for w in ["balloon", "body", "key", "index", "stroke", "edge"] {
@@ -1505,10 +1541,10 @@ fn texts_are_plain_sentences() {
     // Tooltip am Schalter.
     let (mut st, _, _, _, mut h) = box_front(BIG);
     let shot = h.idle(&mut st);
-    let p = shot.find(TOOL).rect.center();
+    let p = shot.find(&balloon_tool::tool()).rect.center();
     let shot = h.hover(&mut st, p);
     assert!(
-        shot.has(TOOL) && shot.has(TOOL_TIP),
+        shot.has(&balloon_tool::tool()) && shot.has(&balloon_tool::tool_tip()),
         "Tooltip mit Name und Erklärung"
     );
 }
@@ -1801,9 +1837,9 @@ fn balloon_selection_is_cleared_when_it_goes_stale() {
 fn tool_button_name_lock_and_reason() {
     let fit = icons::glyph(icons::Icon::FitSheet).to_string();
     let (mut st, _, _, _, mut h) = box_front(BIG);
-    h.click_text(&mut st, TOOL);
+    h.click_text(&mut st, &balloon_tool::tool());
     assert!(
-        h.clicked.iter().any(|l| l.contains(TOOL)),
+        h.clicked.iter().any(|l| l.contains(&balloon_tool::tool())),
         "{:?}",
         h.clicked
     );
@@ -1811,18 +1847,21 @@ fn tool_button_name_lock_and_reason() {
     h.click_text(&mut st, &fit);
     assert_eq!(st.drawing_ui.zoom, 1.0);
     assert!(
-        h.clicked.iter().any(|l| l == drawing_view::FIT_SHEET),
+        h.clicked.iter().any(|l| l == &drawing_view::fit_sheet()),
         "{:?}",
         h.clicked
     );
     let shot = h.idle(&mut st);
     let shot = h.hover(&mut st, shot.find(&fit).rect.center());
     assert!(
-        shot.has(drawing_view::FIT_SHEET),
+        shot.has(&drawing_view::fit_sheet()),
         "Tooltip „Blatt einpassen“"
     );
     // Gesperrt: Tooltip nennt den Grund, nicht die Erklärung.
-    for (editable, parts, why) in [(false, false, READ_ONLY_TIP), (true, true, PARTS_SHEET_TIP)] {
+    for (editable, parts, why) in [
+        (false, false, &balloon_tool::read_only_tip()),
+        (true, true, &balloon_tool::parts_sheet_tip()),
+    ] {
         let (mut st, _, d, _, _) = box_front(BIG);
         let d = if parts {
             let stamp = Stamp {
@@ -1836,11 +1875,14 @@ fn tool_button_name_lock_and_reason() {
         let mut h = open(&mut st, d, BIG);
         h.editable = editable;
         let shot = h.idle(&mut st);
-        let p = shot.find(TOOL).rect.center();
+        let p = shot.find(&balloon_tool::tool()).rect.center();
         let shot = h.hover(&mut st, p);
         let shot = (0..5).fold(shot, |_, _| h.hover(&mut st, p));
         assert!(shot.has(why), "Grund „{why}“ fehlt");
-        assert!(!shot.has(TOOL_TIP), "gesperrt zeigt nicht die Erklärung");
+        assert!(
+            !shot.has(&balloon_tool::tool_tip()),
+            "gesperrt zeigt nicht die Erklärung"
+        );
         let n = h.clicked.len();
         h.click(&mut st, p);
         assert_eq!(h.clicked.len(), n, "gesperrter Knopf nimmt keinen Klick an");

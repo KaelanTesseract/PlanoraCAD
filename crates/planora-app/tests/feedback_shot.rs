@@ -19,7 +19,7 @@ fn dummy(w: usize, h: usize) -> ColorImage {
 fn constants() {
     assert_eq!(SHOT_FILE, "bild.png");
     assert_eq!(SHOT_TIMEOUT, Duration::from_secs(3));
-    assert_eq!(SHOT_FAILED, "Das Bild hat nicht geklappt.");
+    assert_eq!(shot_failed(), "Das Bild hat nicht geklappt.");
 }
 
 #[test]
@@ -75,7 +75,7 @@ fn flow_hides_then_requests_then_shows_again() {
     assert_eq!(f.received(img.clone()), ShotStep::ShowDialogAgain);
     assert!(!f.hides_dialog());
     assert!(Arc::ptr_eq(f.image().unwrap(), &img));
-    assert_eq!(preview_line(&img), "bild.png, 3 × 2 Pixel");
+    assert_eq!(preview_line(&img), "bild.png, 3 × 2 pixels");
 }
 
 #[test]

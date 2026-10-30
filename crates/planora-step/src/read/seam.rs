@@ -22,6 +22,8 @@
 
 use crate::read::geom::Skip;
 use crate::read::topo::{RawBody, RawEdge, RawHalfEdge, at_line};
+use planora_i18n::tr;
+use planora_kernel::blend::topo::role_label;
 use planora_kernel::boolean::{oriented_area, points_to_uv};
 use planora_kernel::{Curve, Surface};
 use planora_math::{DVec2, DVec3, Frame, Tolerance};
@@ -225,7 +227,7 @@ pub fn drop_degenerate(raw: &mut RawBody, tol: f64) -> Result<(), Skip> {
             if let Some(k) = dropped {
                 let n = rest.len();
                 if (0..n).any(|j| end(&rest[j]) != start(&rest[(j + 1) % n])) {
-                    return Err(at_line(edges[k].line, "Eine Kante hat die Länge null."));
+                    return Err(at_line(edges[k].line, tr!("step-r-edge-zero")));
                 }
             }
             if f.marked_outer == Some(i) {
@@ -254,9 +256,9 @@ pub(crate) fn check_poles(raw: &RawBody, tol: f64) -> Result<(), Skip> {
             for p in raw.loop_points(lp) {
                 for (pv, q) in &poles {
                     if q.distance(p) <= near && !at_pole(f.surface.project(p).1, *pv) {
-                        return Err(Skip(format!(
-                            "Der Rand der Fläche „{}“ läuft nicht genau durch einen Pol.",
-                            f.tag.role
+                        return Err(Skip(tr!(
+                            "step-r-rim-not-through-pole",
+                            role = role_label(&f.tag.role)
                         )));
                     }
                 }
@@ -267,14 +269,14 @@ pub(crate) fn check_poles(raw: &RawBody, tol: f64) -> Result<(), Skip> {
 }
 
 /// Name der Flächenart für die Meldung nach P9.
-fn kind_name(s: &Surface) -> &'static str {
+fn kind_name(s: &Surface) -> String {
     match s {
-        Surface::Plane { .. } => "Ebene",
-        Surface::Cylinder { .. } => "Zylinder",
-        Surface::Cone { .. } => "Kegel",
-        Surface::Sphere { .. } => "Kugel",
-        Surface::Torus { .. } => "Torus",
-        Surface::Nurbs(_) => "Freiformfläche",
+        Surface::Plane { .. } => tr!("kernel-surface-plane"),
+        Surface::Cylinder { .. } => tr!("kernel-surface-cylinder"),
+        Surface::Cone { .. } => tr!("kernel-surface-cone"),
+        Surface::Sphere { .. } => tr!("kernel-surface-sphere"),
+        Surface::Torus { .. } => tr!("kernel-surface-torus"),
+        Surface::Nurbs(_) => tr!("kernel-surface-freeform"),
     }
 }
 
@@ -326,25 +328,12 @@ fn insert_seam(raw: &mut RawBody, i: usize, tol: f64) -> Result<(), Skip> {
     let line = f.line;
     let same_sense = f.same_sense;
     let periods = [surface.u_period(), surface.v_period()];
-    let no_rim = || at_line(line, "Eine Fläche hat keinen Rand.");
-    let no_seam = || {
-        Skip(format!(
-            "Fläche vom Typ {} ohne Naht wird noch nicht unterstützt.",
-            kind_name(&surface)
-        ))
-    };
+    let no_rim = || at_line(line, tr!("step-r-face-no-rim"));
+    let no_seam = || Skip(tr!("step-r-surface-no-seam", type = kind_name(&surface)));
     // Ränder, die sich um die Achse winden, aber nicht zu einer Fläche ohne Naht passen (etwa
     // ein Kreis falsch herum): derselbe Grund wie bei der Prüfung der Schleifen.
-    let not_closing = || {
-        Skip(format!(
-            "Der Rand der Fläche „{role}“ schließt sich nicht: Eine Kante läuft falsch herum."
-        ))
-    };
-    let twisted = || {
-        Skip(format!(
-            "Die Fläche „{role}“ ist verdreht: Rand und Außenseite passen nicht zusammen."
-        ))
-    };
+    let not_closing = || Skip(tr!("step-r-rim-not-closing", role = role_label(&role)));
+    let twisted = || Skip(tr!("step-r-face-twisted", role = role_label(&role)));
     if periods.iter().all(Option::is_none) {
         return if f.loops.is_empty() {
             Err(no_rim())
@@ -541,12 +530,7 @@ fn sphere_piece(raw: &mut RawBody, i: usize, polys: &[Vec<DVec2>], tol: f64) -> 
     if has_seam {
         return Ok(());
     }
-    let twisted = || {
-        Skip(format!(
-            "Die Fläche „{}“ ist verdreht: Rand und Außenseite passen nicht zusammen.",
-            f.tag.role
-        ))
-    };
+    let twisted = || Skip(tr!("step-r-face-twisted", role = role_label(&f.tag.role)));
     let near = tol.max(linear());
     let pole_points = pole_points(&surface);
     if touches {
@@ -597,9 +581,7 @@ fn sphere_piece(raw: &mut RawBody, i: usize, polys: &[Vec<DVec2>], tol: f64) -> 
 }
 
 fn no_room(role: &str) -> Skip {
-    Skip(format!(
-        "Der Fläche „{role}“ lässt sich keine Naht hinzufügen."
-    ))
+    Skip(tr!("step-r-no-room-seam", role = role_label(role)))
 }
 
 /// Anteile der Sprungstrecke am Pol, an denen die Naht zum inneren Pol versucht wird.
@@ -619,16 +601,8 @@ fn sphere_around_pole(raw: &mut RawBody, i: usize, k: usize, tol: f64) -> Result
     let line = f.line;
     let near = tol.max(linear());
     let per = surface.u_period().unwrap_or(std::f64::consts::TAU);
-    let not_closing = || {
-        Skip(format!(
-            "Der Rand der Fläche „{role}“ schließt sich nicht: Eine Kante läuft falsch herum."
-        ))
-    };
-    let twisted = || {
-        Skip(format!(
-            "Die Fläche „{role}“ ist verdreht: Rand und Außenseite passen nicht zusammen."
-        ))
-    };
+    let not_closing = || Skip(tr!("step-r-rim-not-closing", role = role_label(&role)));
+    let twisted = || Skip(tr!("step-r-face-twisted", role = role_label(&role)));
     let poles = pole_points(&surface);
     let lp = f.loops[k].clone();
     // Der berührte Pol ist eine Ecke der Schleife (nach dem Teilen an den Polen), der andere nicht.
@@ -651,7 +625,7 @@ fn sphere_around_pole(raw: &mut RawBody, i: usize, k: usize, tol: f64) -> Result
             return Err(twisted());
         }
     }
-    let j = touched[t].expect("berührter Pol ist eine Ecke");
+    let j = touched[t].expect("touched pole is a corner");
     let vt = raw.he_start(lp[j]);
     let rim: Vec<RawHalfEdge> = lp[j..].iter().chain(&lp[..j]).copied().collect();
     // Sprungstrecke am berührten Pol: die letzten beiden Polpunkte des Polygons (die Schleife
@@ -1119,7 +1093,7 @@ fn push_seam(
             let d = pb - pa;
             let len = d.length();
             if !(len > linear()) {
-                return Err(at_line(line, "Eine Naht hätte die Länge null."));
+                return Err(at_line(line, tr!("step-r-seam-zero")));
             }
             (
                 Curve::Line {

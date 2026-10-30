@@ -12,7 +12,7 @@ mod common;
 use eframe::App as _;
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, Vec2, vec2};
 use planora_app::app::{PlanoraApp, open_projects};
-use planora_app::settings_window::CHECK_NOW;
+use planora_app::settings_window::check_now;
 use planora_app::update_check::now_unix;
 use planora_app::update_dialog::*;
 use planora_app::workspace::{Prompt, Workspace};
@@ -272,7 +272,7 @@ impl Harness {
     fn manual_check(&mut self) {
         self.app.windows_mut().2.open(false);
         self.settle();
-        self.click(CHECK_NOW);
+        self.click(&check_now());
         self.until_idle();
         self.app.windows_mut().2.close();
         self.settle();
@@ -290,9 +290,9 @@ fn notice_opens_when_an_update_is_found_and_nothing_else_is_open() {
         running_line(&running_version()).as_str(),
         version_heading(&latest).as_str(),
         "Schneller",
-        INSTALL_NOW,
-        LATER,
-        SKIP,
+        install_now().as_str(),
+        later().as_str(),
+        skip().as_str(),
     ] {
         assert!(h.sees(t), "„{t}“ fehlt: {:?}", h.texts());
     }
@@ -301,12 +301,12 @@ fn notice_opens_when_an_update_is_found_and_nothing_else_is_open() {
         running_line(&v("0.2.0-dev.1")),
         "Du hast Version 0.2.0-dev.1"
     );
-    assert!(!h.sees(MORE_ON_GITHUB), "nicht gekürzt");
+    assert!(!h.sees(more_on_github().as_str()), "nicht gekürzt");
     // Solange die Meldung offen ist, kein Hinweis in der Statuszeile.
     assert!(!h.sees(&status_hint(&latest)));
     // Ganz im Fenster.
     let screen = Rect::from_min_size(Pos2::ZERO, SIZE);
-    for t in [INSTALL_NOW, SKIP] {
+    for t in [install_now().as_str(), skip().as_str()] {
         assert!(screen.contains_rect(h.find(t).rect), "{t}");
     }
 }
@@ -388,8 +388,8 @@ fn notes_of_all_skipped_versions_are_shown_newest_first() {
     assert!(y(&h, &h3) < y(&h, "Dritte Notiz"));
     assert!(y(&h, "Dritte Notiz") < y(&h, &h2));
     // Version ohne Beschreibung.
-    assert!(y(&h, &h2) < y(&h, NO_NOTES));
-    assert!(y(&h, NO_NOTES) < y(&h, &h1));
+    assert!(y(&h, &h2) < y(&h, no_notes().as_str()));
+    assert!(y(&h, no_notes().as_str()) < y(&h, &h1));
     assert!(y(&h, &h1) < y(&h, "Erste Notiz"));
 }
 
@@ -450,13 +450,16 @@ fn truncated_notes_show_the_hint() {
     let mut h = Harness::started("planora-meldung-gekuerzt", Fake::new(list(&entries)));
     assert!(h.notice_open());
     assert!(h.app.pending_notice().unwrap().truncated);
-    assert!(h.sees(MORE_ON_GITHUB), "{:?}", h.texts());
-    assert_eq!(MORE_ON_GITHUB, "… und weitere Änderungen auf GitHub.");
+    assert!(h.sees(more_on_github().as_str()), "{:?}", h.texts());
+    assert_eq!(
+        more_on_github().as_str(),
+        "… und weitere Änderungen auf GitHub."
+    );
     // Der Hinweis steht über den Knöpfen und ganz im Fenster.
     let screen = Rect::from_min_size(Pos2::ZERO, SIZE);
-    let hint = h.find(MORE_ON_GITHUB).rect;
+    let hint = h.find(more_on_github().as_str()).rect;
     assert!(screen.contains_rect(hint));
-    assert!(hint.bottom() <= h.find(LATER).rect.top());
+    assert!(hint.bottom() <= h.find(later().as_str()).rect.top());
 }
 
 #[test]
@@ -465,7 +468,7 @@ fn later_closes_and_does_not_return_in_this_session_within_24h() {
     let mut h = Harness::started("planora-meldung-spaeter", fake.clone());
     assert!(h.notice_open());
     let before = now_unix();
-    h.click(LATER);
+    h.click(later().as_str());
     assert!(!h.notice_open());
     let until = h.app.update_dialog_mut().snooze_until.unwrap();
     assert!(until >= before + SNOOZE_SECS && until <= now_unix() + SNOOZE_SECS);
@@ -481,7 +484,7 @@ fn later_closes_and_does_not_return_in_this_session_within_24h() {
     h.settle();
     assert!(h.notice_open());
     // Die Suche von Hand zeigt sie auch vor Ablauf wieder (sie hebt „Später“ auf).
-    h.click(LATER);
+    h.click(later().as_str());
     assert!(!h.notice_open());
     h.manual_check();
     assert_eq!(fake.calls(), 2);
@@ -534,7 +537,7 @@ fn skip_saves_the_version_and_the_same_version_is_not_offered_again_but_the_next
     let fake = Fake::new(one_newer());
     let mut h = Harness::started("planora-meldung-ueberspringen", fake.clone());
     assert!(h.notice_open());
-    h.click(SKIP);
+    h.click(skip().as_str());
     assert!(!h.notice_open());
     assert_eq!(h.app.ws_mut().skipped_version(), Some(v("99.0.0-dev.1")));
     let disk = Config::read_from(&h.cfg).unwrap();
@@ -566,7 +569,7 @@ fn skip_saves_the_version_and_the_same_version_is_not_offered_again_but_the_next
         Some(v("99.0.0-dev.1"))
     );
     assert!(h.notice_open());
-    h.click(SKIP);
+    h.click(skip().as_str());
     // … und die nächste Version auch beim Start.
     fake.set(list(&[
         ("v99.0.0-dev.1", "Alt"),
@@ -588,7 +591,7 @@ fn statusline_hint_while_pending() {
     assert_eq!(hint, "Update verfügbar: 99.0.0-dev.1");
     assert!(h.notice_open());
     assert!(!h.sees(&hint));
-    h.click(LATER);
+    h.click(later().as_str());
     assert!(h.sees(&hint), "{:?}", h.texts());
     // Der Hinweis steht unten in der Statuszeile neben deren Text.
     let status = h.find("0 Körper").rect;
@@ -656,7 +659,7 @@ fn install_now_keeps_the_notice_for_the_progress() {
     let mut h = Harness::started("planora-meldung-jetzt", Fake::new(one_newer()));
     h.app.set_auto_install_supported(false);
     assert!(h.notice_open());
-    h.click(INSTALL_NOW);
+    h.click(install_now().as_str());
     assert!(h.notice_open(), "bleibt offen für Fortschritt oder Hinweis");
     let d = h.app.update_dialog_mut();
     assert!(d.installing);
@@ -667,11 +670,11 @@ fn install_now_keeps_the_notice_for_the_progress() {
     );
     assert_eq!(d.snooze_until, None);
     assert!(
-        h.sees(planora_app::update_install::ONLY_WINDOWS),
+        h.sees(planora_app::update_install::only_windows().as_str()),
         "{:?}",
         h.texts()
     );
-    assert!(!h.sees(INSTALL_NOW), "statt der Knöpfe");
+    assert!(!h.sees(install_now().as_str()), "statt der Knöpfe");
     assert!(!h.sees(&status_hint(&v("99.0.0-dev.1"))));
     assert_eq!(h.app.ws_mut().skipped_version(), None);
     // ✕ bzw. Esc nach dem Hinweis schließt; die Meldung ruht dann wie nach „Später“.
@@ -689,7 +692,7 @@ fn install_now_keeps_the_notice_for_the_progress() {
 /// „Jetzt aktualisieren“. Bei 1920 × 1080 im hellen und im dunklen Aussehen.
 #[test]
 fn not_installable_notice_has_download_page_as_main_button() {
-    use planora_app::update_install::{NOT_INSTALLED_HINT, OPEN_DOWNLOAD_PAGE};
+    use planora_app::update_install::{not_installed_hint, open_download_page};
     for dark in [false, true] {
         let (mut ws, cfg) = workspace("planora-meldung-nicht-installiert");
         ws.active_tab_mut().state.dark = dark;
@@ -698,11 +701,11 @@ fn not_installable_notice_has_download_page_as_main_button() {
         h.app.set_install_mode(None);
         h.until_idle();
         assert!(h.notice_open());
-        assert!(h.sees(NOT_INSTALLED_HINT), "{:?}", h.texts());
-        assert!(!h.sees(INSTALL_NOW), "{:?}", h.texts());
-        let page = h.find(OPEN_DOWNLOAD_PAGE);
-        let later = h.find(LATER);
-        let skip = h.find(SKIP);
+        assert!(h.sees(not_installed_hint().as_str()), "{:?}", h.texts());
+        assert!(!h.sees(install_now().as_str()), "{:?}", h.texts());
+        let page = h.find(open_download_page().as_str());
+        let later = h.find(later().as_str());
+        let skip = h.find(skip().as_str());
         assert_eq!(page.color, theme::palette(dark).on_accent, "Hauptknopf");
         assert_ne!(later.color, theme::palette(dark).on_accent);
         assert!(page.rect.right() < later.rect.left(), "Hauptknopf vorne");
@@ -713,7 +716,7 @@ fn not_installable_notice_has_download_page_as_main_button() {
         }
     }
     assert_eq!(
-        NOT_INSTALLED_HINT,
+        not_installed_hint().as_str(),
         "Diese Fassung von PlanoraCAD ist nicht installiert und kann sich nicht selbst aktualisieren. Lade die neue Version auf der Download-Seite herunter."
     );
 }
@@ -750,11 +753,11 @@ fn after_update_harness(prefix: &str) -> Harness {
 #[test]
 fn after_update_notice_offers_feedback() {
     let h = after_update_harness("planora-after-feedback");
-    assert!(h.sees(AFTER_UPDATE_FEEDBACK), "{:?}", h.texts());
-    assert!(h.sees(FEEDBACK_BUTTON), "{:?}", h.texts());
-    assert!(h.sees(OK));
-    assert_eq!(AFTER_UPDATE_FEEDBACK, "Etwas stimmt nicht?");
-    assert_eq!(FEEDBACK_BUTTON, "Rückmeldung geben");
+    assert!(h.sees(after_update_feedback().as_str()), "{:?}", h.texts());
+    assert!(h.sees(feedback_button().as_str()), "{:?}", h.texts());
+    assert!(h.sees(ok().as_str()));
+    assert_eq!(after_update_feedback().as_str(), "Etwas stimmt nicht?");
+    assert_eq!(feedback_button().as_str(), "Rückmeldung geben");
     // Die Version steht schon im Titel; keine eigene Zeile „Laufende Version“.
     assert!(
         !h.texts().iter().any(|t| t.contains("Laufende Version")),
@@ -783,7 +786,7 @@ fn feedback_button_keeps_notice_while_an_export_is_writing() {
     // Knopf drücken, dann beginnt ein Export zu schreiben, dann loslassen (sonst läge das
     // Exportfenster über dem Knopf).
     h.settle();
-    let at = h.find(FEEDBACK_BUTTON).rect.center();
+    let at = h.find(feedback_button().as_str()).rect.center();
     let button = |pressed| Event::PointerButton {
         pos: at,
         button: PointerButton::Primary,
@@ -828,7 +831,7 @@ fn feedback_button_keeps_notice_while_an_export_is_writing() {
     h.frame(vec![button(false)]);
     assert_eq!(
         h.app.ws_mut().active_tab().state.message.as_deref(),
-        Some(planora_app::app::EXPORT_BUSY),
+        Some(planora_app::app::export_busy().as_str()),
         "der Knopf wurde gedrückt, die Rückmeldung wartet auf den Export"
     );
     assert!(
@@ -839,7 +842,7 @@ fn feedback_button_keeps_notice_while_an_export_is_writing() {
         h.app.after_update().is_some(),
         "der Hinweis bleibt offen, solange sich die Rückmeldung nicht öffnet"
     );
-    assert!(h.sees(FEEDBACK_BUTTON), "{:?}", h.texts());
+    assert!(h.sees(feedback_button().as_str()), "{:?}", h.texts());
     if let Some(e) = h.app.ws_mut().active_tab_mut().export_dialog.as_mut() {
         e.cancel_write();
     }
@@ -848,12 +851,12 @@ fn feedback_button_keeps_notice_while_an_export_is_writing() {
 #[test]
 fn feedback_button_closes_notice_and_opens_feedback_window() {
     let mut h = after_update_harness("planora-after-feedback-click");
-    h.click(FEEDBACK_BUTTON);
+    h.click(feedback_button().as_str());
     assert!(h.app.after_update().is_none());
     assert!(h.app.feedback_mut().open);
-    assert!(!h.sees(FEEDBACK_BUTTON));
+    assert!(!h.sees(feedback_button().as_str()));
     assert!(
-        h.sees(planora_app::feedback_dialog::TITLE),
+        h.sees(&planora_app::feedback_dialog::title()),
         "{:?}",
         h.texts()
     );
@@ -862,7 +865,7 @@ fn feedback_button_closes_notice_and_opens_feedback_window() {
 #[test]
 fn ok_still_just_closes() {
     let mut h = after_update_harness("planora-after-feedback-ok");
-    h.click(OK);
+    h.click(ok().as_str());
     assert!(h.app.after_update().is_none());
     assert!(!h.app.feedback_mut().open);
 }

@@ -11,6 +11,7 @@
 use super::error::{MAX_STEP_NESTING, StepReadError};
 use super::value::{Entity, Record, Value};
 use planora_exchange::Progress;
+use planora_i18n::tr;
 
 /// Abstand der Abbruchprüfungen im Zeichenstrom (1 MiB), damit auch ein riesiger einzelner
 /// Eintrag abgebrochen werden kann.
@@ -317,7 +318,7 @@ impl<'a> Lexer<'a> {
             None => Err(self.at_end()),
             Some(_) => Err(StepReadError::syntax(
                 self.line,
-                "Eine Aufzählung ist nicht mit „.“ abgeschlossen.",
+                tr!("step-r-enum-unclosed"),
             )),
         }
     }
@@ -330,7 +331,7 @@ impl<'a> Lexer<'a> {
                 None => Err(self.at_end()),
                 Some(_) => Err(StepReadError::syntax(
                     self.line,
-                    "Nach „#“ fehlt die Nummer.",
+                    tr!("step-r-missing-number"),
                 )),
             };
         }
@@ -438,7 +439,7 @@ fn hex(bytes: &[u8]) -> Option<u32> {
 /// anderer einzelner Rückstrich bleibt stehen. Rohe Bytes ab 0x80: gültiges UTF-8 als UTF-8,
 /// sonst ISO 8859-1. Zeilenumbrüche fallen weg (ISO 10303-21, 3. Ausgabe).
 pub fn decode(s: &[u8], line: usize, mut out: Option<&mut String>) -> Result<()> {
-    let bad = || StepReadError::syntax(line, "Eine Maskierung in einer Zeichenkette ist ungültig.");
+    let bad = || StepReadError::syntax(line, tr!("step-r-bad-escape"));
     let mut push = |c: char| {
         if let Some(o) = out.as_deref_mut() {
             o.push(c);
@@ -580,14 +581,14 @@ pub fn parse_body(lex: &mut Lexer, build: bool, names: &mut Vec<(usize, usize)>)
                     Tok::Close => {
                         return Err(StepReadError::syntax(
                             lex.tok_line(),
-                            "Ein zusammengesetzter Eintrag ist leer.",
+                            tr!("step-r-complex-empty"),
                         ));
                     }
                     Tok::Eof => return Err(lex.truncated()),
                     _ => {
                         return Err(StepReadError::syntax(
                             lex.tok_line(),
-                            "In einem zusammengesetzten Eintrag wird ein Typname erwartet.",
+                            tr!("step-r-complex-type-expected"),
                         ));
                     }
                 }
@@ -600,7 +601,7 @@ pub fn parse_body(lex: &mut Lexer, build: bool, names: &mut Vec<(usize, usize)>)
         Tok::Eof => Err(lex.truncated()),
         _ => Err(StepReadError::syntax(
             lex.tok_line(),
-            "Nach „=“ fehlt der Typname.",
+            tr!("step-r-missing-type-name"),
         )),
     }
 }
@@ -641,12 +642,15 @@ pub fn parse_args(
         let value = match tok {
             Tok::Close => {
                 if !may_close {
-                    return Err(StepReadError::syntax(line, "Nach „,“ fehlt ein Wert."));
+                    return Err(StepReadError::syntax(
+                        line,
+                        tr!("step-r-missing-value-after-comma"),
+                    ));
                 }
                 // Der Stapel ist hier nie leer: die äußerste „)“ beendet die Schleife unten;
                 // eine weitere „)“ meldet der Aufrufer („Zu viele „)“.“).
                 let Some(frame) = stack.pop() else {
-                    return Err(StepReadError::syntax(line, TOO_MANY_CLOSE));
+                    return Err(StepReadError::syntax(line, too_many_close()));
                 };
                 let Some(parent) = stack.last_mut() else {
                     return Ok(frame.items);
@@ -663,25 +667,21 @@ pub fn parse_args(
             }
             Tok::Comma => {
                 if want_value {
-                    return Err(StepReadError::syntax(line, "Hier fehlt ein Wert."));
+                    return Err(StepReadError::syntax(line, tr!("step-r-missing-value")));
                 }
                 want_value = true;
                 may_close = false;
                 continue;
             }
             Tok::Semicolon => {
-                return Err(StepReadError::syntax(
-                    line,
-                    "Es fehlt eine schließende Klammer.",
-                ));
+                return Err(StepReadError::syntax(line, tr!("step-r-missing-close")));
             }
             Tok::Eof => return Err(lex.truncated()),
-            Tok::Equals => return Err(StepReadError::syntax(line, "Unerwartetes „=“.")),
+            Tok::Equals => {
+                return Err(StepReadError::syntax(line, tr!("step-r-unexpected-equals")));
+            }
             _ if !want_value => {
-                return Err(StepReadError::syntax(
-                    line,
-                    "Zwischen zwei Werten fehlt ein „,“.",
-                ));
+                return Err(StepReadError::syntax(line, tr!("step-r-missing-comma")));
             }
             Tok::Open | Tok::Keyword { .. } => {
                 let typed = if let Tok::Keyword { start, end } = tok {
@@ -734,11 +734,13 @@ pub fn parse_args(
 }
 
 /// Meldung für eine „)“ zu viel.
-pub const TOO_MANY_CLOSE: &str = "Zu viele „)“.";
+pub fn too_many_close() -> String {
+    tr!("step-r-too-many-close")
+}
 
 fn missing_open(lex: &Lexer, (start, end): (usize, usize)) -> StepReadError {
     StepReadError::syntax(
         lex.end_line(),
-        format!("Nach „{}“ fehlt „(“.", lex.upper(start, end)),
+        tr!("step-r-missing-open", name = lex.upper(start, end)),
     )
 }

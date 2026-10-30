@@ -21,6 +21,7 @@ use super::uv::{
 };
 use super::{face_is_freeform, pipeline_tol, seg_is_freeform};
 use crate::geometry::Surface;
+use planora_i18n::tr;
 use planora_math::{DVec2, DVec3, TAU, Tolerance};
 
 /// Ein zusammenhängendes Flächenstück: eine äußere Schleife und beliebig viele Löcher.
@@ -302,9 +303,9 @@ pub fn split_face(
                 .all(|p| p.is_finite())
     };
     if !sections.iter().all(finite) {
-        return Err(BooleanError::InvalidInput(
-            "Schnittkurve mit ungültigen Zahlenwerten".into(),
-        ));
+        return Err(BooleanError::InvalidInput(tr!(
+            "kernel-boolean-curve-invalid"
+        )));
     }
 
     let boundary: Vec<Seg> = face.loops.iter().flatten().cloned().collect();

@@ -5,7 +5,7 @@
 //! Task 17; die Ebenen dürfen nur nicht fast parallel sein, `MIN_CORNER_DET`).
 //!
 //! Grenzen (bewusst): keine Ecken an Hautflächen (Freiformkanten, variabler Radius; abgelehnt
-//! schon in `build.rs` mit `march::VARIABLE_CORNER`), keine Ecken aus drei Fasen, keine konkaven Kugelecken, keine Kugelecken an gekrümmten Flächen.
+//! schon in `build.rs` mit `march::variable_corner`), keine Ecken aus drei Fasen, keine konkaven Kugelecken, keine Kugelecken an gekrümmten Flächen.
 //!
 //! Gehrung nur, wenn sie die Schnittmenge der einzeln gerundeten Körper ist (P6): Die dritte,
 //! ungerundete Kante an der Ecke muss dieselbe Art (konvex/konkav) haben wie die beiden
@@ -21,11 +21,13 @@ use super::build::{
 };
 use super::chain::leaving_direction;
 use super::error::BlendError;
+use super::topo::role_label;
 use super::topo::{edge_angle, edge_sides, face_name, vertex_edges};
 use crate::boolean::{Piece, Seg};
 use crate::geometry::Surface;
 use crate::ids::Id;
 use crate::topology::{Face, FaceTag, Solid, Vertex};
+use planora_i18n::tr;
 use planora_math::{DVec3, Frame, Tolerance};
 
 /// Kleinster Betrag der Determinante der drei Normalen: darunter schneiden sich die drei
@@ -41,18 +43,24 @@ const CORNER_PROBES: usize = 16;
 pub type CornerCuts = Vec<(usize, bool, EndCut)>;
 
 /// Benannte Ablehnung an der Ecke der Flächen `faces`.
-fn at_corner(solid: &Solid, faces: &[Id<Face>], msg: &str) -> BlendError {
-    BlendError::Corner(format!("{msg} (Ecke der Flächen {})", names(solid, faces)))
+fn at_corner(solid: &Solid, faces: &[Id<Face>], msg: String) -> BlendError {
+    BlendError::Corner(tr!(
+        "kernel-blend-at-corner",
+        faces = names(solid, faces),
+        msg = msg
+    ))
 }
 
 /// Namen der Flächen für Meldungen: „A“, „B“ und „C“.
 fn names(solid: &Solid, faces: &[Id<Face>]) -> String {
     let n: Vec<String> = faces
         .iter()
-        .map(|f| format!("„{}“", face_name(solid, *f)))
+        .map(|f| tr!("kernel-quoted", text = role_label(&face_name(solid, *f))))
         .collect();
     match n.split_last() {
-        Some((last, rest)) if !rest.is_empty() => format!("{} und {last}", rest.join(", ")),
+        Some((last, rest)) if !rest.is_empty() => {
+            tr!("kernel-names-and", rest = rest.join(", "), last = last)
+        }
         Some((last, _)) => last.clone(),
         None => String::new(),
     }
@@ -81,7 +89,7 @@ pub fn miter_pair(
         return Err(at_corner(
             solid,
             &faces,
-            "An der Ecke treffen eine konvexe und eine konkave Kante zusammen; das wird nicht unterstützt",
+            tr!("kernel-corner-convex-concave"),
         ));
     }
     let fi = [gi.sides.a.face, gi.sides.b.face];
@@ -92,7 +100,7 @@ pub fn miter_pair(
         return Err(at_corner(
             solid,
             &faces,
-            "Die beiden Kanten haben keine gemeinsame Fläche",
+            tr!("kernel-corner-no-common-face"),
         ));
     }
     // Die dritte, ungerundete Kante an der Ecke (zwischen den beiden nicht gemeinsamen Flächen).
@@ -101,30 +109,32 @@ pub fn miter_pair(
         .filter(|&e| e != gi.edge && e != gj.edge)
         .collect();
     let [third] = third.as_slice() else {
-        return Err(BlendError::Corner(format!(
-            "An der Ecke der Flächen {} treffen {} weitere Kanten zusammen; unterstützt ist eine",
-            names(solid, &faces),
-            third.len()
+        return Err(BlendError::Corner(tr!(
+            "kernel-corner-more-edges",
+            faces = names(solid, &faces),
+            n = third.len()
         )));
     };
     let convex_third = edge_sides(solid, *third, None)
         .and_then(|s| edge_angle(solid, *third, &s))
         .map_err(|_| {
-            BlendError::Corner(format!(
-                "Die dritte Kante an der Ecke der Flächen {} ist keine scharfe Kante; dort lässt sich keine Gehrung bilden",
-                names(solid, &faces)
+            BlendError::Corner(tr!(
+                "kernel-corner-third-not-sharp",
+                faces = names(solid, &faces)
             ))
         })?
         .convex;
     if convex_third != gi.convex {
         let (rounded, other) = if gi.convex {
-            ("konvexe", "konkav")
+            (tr!("kernel-word-convex-adj"), tr!("kernel-word-concave"))
         } else {
-            ("konkave", "konvex")
+            (tr!("kernel-word-concave-adj"), tr!("kernel-word-convex"))
         };
-        return Err(BlendError::Corner(format!(
-            "Zwei {rounded} Rundungen an einer Ecke, deren dritte Kante {other} ist (Flächen {}), werden noch nicht unterstützt",
-            names(solid, &faces)
+        return Err(BlendError::Corner(tr!(
+            "kernel-corner-mixed",
+            faces = names(solid, &faces),
+            rounded = rounded,
+            other = other
         )));
     }
     let vp = solid.vertices[v].point;
@@ -134,7 +144,7 @@ pub fn miter_pair(
         return Err(at_corner(
             solid,
             &faces,
-            "Die beiden Kanten laufen in dieselbe Richtung",
+            tr!("kernel-corner-same-direction"),
         ));
     }
     let plane = Surface::Plane {
@@ -149,9 +159,9 @@ pub fn miter_pair(
                 cap: None,
             })
             .ok_or_else(|| {
-                BlendError::Corner(format!(
-                    "Die Rundungen lassen sich an der Ecke der Flächen {} nicht zusammenführen",
-                    names(solid, &faces)
+                BlendError::Corner(tr!(
+                    "kernel-corner-cannot-join",
+                    faces = names(solid, &faces)
                 ))
             })
     };
@@ -161,9 +171,9 @@ pub fn miter_pair(
         && lies_on(&ci.curve, &gj.surface, weld)
         && lies_on(&cj.curve, &gi.surface, weld))
     {
-        return Err(BlendError::Corner(format!(
-            "Die Rundungen treffen sich an der Ecke der Flächen {} nicht auf der winkelhalbierenden Ebene, weil sie dort nicht spiegelbildlich liegen (etwa bei verschieden großen Kantenwinkeln oder verschiedenen Maßen auf den Flächen); eine solche Gehrung wird nicht unterstützt",
-            names(solid, &faces)
+        return Err(BlendError::Corner(tr!(
+            "kernel-corner-not-mirrored",
+            faces = names(solid, &faces)
         )));
     }
     Ok(vec![(i, ei, ci), (j, ej, cj)])
@@ -205,9 +215,9 @@ pub fn corner_three(
     tol: &Tolerance,
 ) -> Result<(CornerCuts, Piece, f64), BlendError> {
     if list.len() != 3 {
-        return Err(BlendError::Corner(format!(
-            "An der Ecke treffen {} gerundete Kanten zusammen; unterstützt sind höchstens drei",
-            list.len()
+        return Err(BlendError::Corner(tr!(
+            "kernel-corner-rounded-count",
+            n = list.len()
         )));
     }
     let faces = three_faces(solid, v)?;
@@ -221,27 +231,27 @@ pub fn corner_three(
                 return Err(at_corner(
                     solid,
                     &faces,
-                    "Ecken mit drei Fasen werden nicht unterstützt",
+                    tr!("kernel-corner-three-chamfers"),
                 ));
             }
             _ => {
-                return Err(BlendError::Corner(format!(
-                    "Nur gerade Kanten zwischen Ebenen bekommen ein Kugelstück (Kante zwischen {})",
-                    names(solid, &[g.sides.a.face, g.sides.b.face])
+                return Err(BlendError::Corner(tr!(
+                    "kernel-corner-straight-only",
+                    faces = names(solid, &[g.sides.a.face, g.sides.b.face])
                 )));
             }
         };
         if !g.convex {
-            return Err(BlendError::Corner(format!(
-                "Ecken mit konkaven Kanten werden noch nicht unterstützt (Flächen {})",
-                names(solid, &faces)
+            return Err(BlendError::Corner(tr!(
+                "kernel-corner-concave",
+                faces = names(solid, &faces)
             )));
         }
         match radius {
             Some(r0) if !((r0 - r).abs() <= tol.linear) => {
-                return Err(BlendError::Corner(format!(
-                    "Die Radien der Kanten an der Ecke der Flächen {} sind verschieden",
-                    names(solid, &faces)
+                return Err(BlendError::Corner(tr!(
+                    "kernel-corner-radii-differ",
+                    faces = names(solid, &faces)
                 )));
             }
             _ => radius = Some(r),
@@ -249,38 +259,33 @@ pub fn corner_three(
         let mut pair = [g.sides.a.face, g.sides.b.face];
         pair.sort();
         if !pair.iter().all(|f| faces.contains(f)) || pairs.contains(&pair) {
-            return Err(BlendError::Corner(format!(
-                "Die Kanten an der Ecke der Flächen {} liegen nicht je zwischen zwei der drei Flächen",
-                names(solid, &faces)
+            return Err(BlendError::Corner(tr!(
+                "kernel-corner-edges-not-between",
+                faces = names(solid, &faces)
             )));
         }
         pairs.push(pair);
     }
-    let r = radius.ok_or_else(|| at_corner(solid, &faces, "An der Ecke fehlt eine Rundung"))?;
+    let r = radius.ok_or_else(|| at_corner(solid, &faces, tr!("kernel-corner-blend-missing")))?;
     let mut n = [DVec3::ZERO; 3];
     for (k, f) in faces.iter().enumerate() {
         let face = &solid.faces[*f];
         let Surface::Plane { frame } = &face.surface else {
-            return Err(BlendError::Corner(format!(
-                "Nur Ecken aus drei Ebenen bekommen ein Kugelstück; die Fläche „{}“ ist keine Ebene",
-                face_name(solid, *f)
+            return Err(BlendError::Corner(tr!(
+                "kernel-corner-three-planes",
+                face = role_label(&face_name(solid, *f))
             )));
         };
         n[k] = if face.same_sense { frame.z } else { -frame.z };
     }
     let vp = solid.vertices[v].point;
-    let center = ball_center(n, vp, r).ok_or_else(|| {
-        at_corner(
-            solid,
-            &faces,
-            "Die drei Flächen schneiden sich nicht in einem Punkt",
-        )
-    })?;
+    let center = ball_center(n, vp, r)
+        .ok_or_else(|| at_corner(solid, &faces, tr!("kernel-corner-no-point")))?;
     let weld = ON_CURVE_FACTOR * blend_tol(solid, geoms, tol).linear;
     let sphere_miss = || {
-        BlendError::Corner(format!(
-            "Die Rundungen an der Ecke der Flächen {} treffen die Kugel nicht",
-            names(solid, &faces)
+        BlendError::Corner(tr!(
+            "kernel-corner-sphere-miss",
+            faces = names(solid, &faces)
         ))
     };
     let mut cuts = Vec::with_capacity(3);
@@ -292,9 +297,9 @@ pub fn corner_three(
         // Suchfenster bis zum Kugelmittelpunkt (spitze Ecken: Mittelpunkt weit von der Ecke).
         let reach = center.distance(vp);
         let (sa, sb, curve) = cut_within(g, end, &plane, vp, reach, tol).ok_or_else(|| {
-            BlendError::Corner(format!(
-                "Die Rundung zwischen {} lässt sich an der Kugelecke nicht abschließen",
-                names(solid, &[g.sides.a.face, g.sides.b.face])
+            BlendError::Corner(tr!(
+                "kernel-corner-sphere-no-end",
+                faces = names(solid, &[g.sides.a.face, g.sides.b.face])
             ))
         })?;
         // Der Abschluss muss ein Bogen der Kugel sein (Kugelmitte auf der Rundungsachse).
@@ -321,13 +326,7 @@ pub fn corner_three(
         .into_iter()
         .map(|d| d.normalize())
         .find(|d| !inside_cone(n, *d) && !inside_cone(n, -*d))
-        .ok_or_else(|| {
-            at_corner(
-                solid,
-                &faces,
-                "Für das Kugelstück gibt es keine Lage ohne Pol",
-            )
-        })?;
+        .ok_or_else(|| at_corner(solid, &faces, tr!("kernel-corner-no-pole-free")))?;
     let mid = (n[0] + n[1] + n[2]).normalize();
     let x = (mid - z * mid.dot(z)).normalize();
     let frame = Frame {

@@ -829,7 +829,7 @@ fn stale_dimension_edit_prepares_again() {
     assert!(matches!(d.status(&s), ExportStatus::Computing(_)));
     let path = dir.join("neu.svg");
     d.write_to(path.clone(), &s);
-    assert_eq!(d.write_state(), WriteState::Failed(STALE.into()));
+    assert_eq!(d.write_state(), WriteState::Failed(stale()));
     assert!(!path.exists());
     d.tick(&s, true);
     let new = write(&mut d, &s, &path);
@@ -844,7 +844,7 @@ fn stale_dimension_edit_prepares_again() {
         .update_dimension(id, width, |m| m.text_override = Some("<> breit".into()))
         .unwrap();
     d.write_to(dir.join("t.dxf"), &s);
-    assert_eq!(d.write_state(), WriteState::Failed(STALE.into()));
+    assert_eq!(d.write_state(), WriteState::Failed(stale()));
     d.tick(&s, true);
     let text = write(&mut d, &s, &dir.join("t.dxf"));
     let dxf = dxf_read::read(&text).unwrap();
@@ -1158,7 +1158,7 @@ fn every_view_kind_exports_without_marks_on_isometric() {
                 "{:?}",
                 svg.group_ids
             );
-            assert!(!svg.paths_of(name).collect::<Vec<_>>().is_empty());
+            assert!(!svg.paths_of(&name).collect::<Vec<_>>().is_empty());
         }
     }
     let mut d = dialog(&s, DXF);
@@ -1169,13 +1169,13 @@ fn every_view_kind_exports_without_marks_on_isometric() {
         let name = kind.label();
         let marks: usize = ["MASSE", "MITTEL", "MASSE_FEHLT"]
             .iter()
-            .map(|l| dxf_count(&dxf, name, l))
+            .map(|l| dxf_count(&dxf, &name, l))
             .sum();
         if kind.is_normal() {
-            assert!(dxf_count(&dxf, name, "MITTEL") > 0, "{name}");
+            assert!(dxf_count(&dxf, &name, "MITTEL") > 0, "{name}");
         } else {
             assert_eq!(marks, 0, "{name}");
-            assert!(dxf_count(&dxf, name, "SICHTBAR") > 0, "{name}");
+            assert!(dxf_count(&dxf, &name, "SICHTBAR") > 0, "{name}");
         }
     }
     let _ = fs::remove_dir_all(&dir);

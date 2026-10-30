@@ -129,23 +129,130 @@ use crate::error::DrawError;
 use crate::out2d::Out2d;
 use crate::sheet::SheetModel;
 use crate::sheet_frame::{SheetPen, sheet_scale};
+use planora_i18n::{english, tr, with_lang};
 use planora_math::{DVec2, PI, TAU};
 use std::collections::BTreeSet;
 use std::io::Write;
 
-const LAYER_VISIBLE: &str = "SICHTBAR";
-const LAYER_HIDDEN: &str = "VERDECKT";
-const LAYER_DIM: &str = "MASSE";
-const LAYER_CENTER: &str = "MITTEL";
-const LAYER_LOST: &str = "MASSE_FEHLT";
-const LAYER_FRAME: &str = "BLATTRAHMEN";
-const LAYER_CENTRE: &str = "BLATT_MITTE";
-const LAYER_SHEET: &str = "BLATT";
-const LAYER_POSITION: &str = "POSITIONEN";
-const LAYER_POSITION_LINE: &str = "POSITIONEN_LINIE";
-const LAYER_HATCH: &str = "SCHRAFFUR";
-const LAYER_SECTION: &str = "SCHNITTLINIE";
-const LAYER_SECTION_HEAVY: &str = "SCHNITTLINIE_DICK";
+/// Ebenenname für die Datei: ohne Leerraum an den Enden, unzulässige Zeichen und Leerzeichen als
+/// `_`, Zeichen außerhalb von ASCII wie bei den Blocknamen kodiert.
+fn layer_name(text: &str) -> String {
+    let clean: String = text
+        .trim()
+        .chars()
+        .map(|c| if illegal(c) || c == ' ' { '_' } else { c })
+        .collect();
+    encode(&clean)
+}
+
+/// Namen der Ebenen in der aktuellen Sprache (Deutsch: SICHTBAR, VERDECKT, MASSE, …), einmal je
+/// Datei bestimmt: unzulässige Zeichen und Leerzeichen werden `_`, Zeichen außerhalb von ASCII
+/// stehen wie bei den Blocknamen als `\U+XXXX`.
+struct Layers {
+    visible: String,
+    hidden: String,
+    dim: String,
+    center: String,
+    lost: String,
+    frame: String,
+    centre: String,
+    sheet: String,
+    position: String,
+    position_line: String,
+    hatch: String,
+    section: String,
+    section_heavy: String,
+}
+
+impl Layers {
+    fn new() -> Layers {
+        Layers::from_texts(Layers::texts(), with_lang(&english(), Layers::texts))
+    }
+
+    /// Baut die Ebenen aus den Namen der Sprache; ein leerer Name, „0“ oder ein doppelter Name
+    /// (Groß-/Kleinschreibung egal) wäre in der Datei ungültig: dann gilt der englische Name
+    /// dieser Ebene.
+    fn from_texts(own: [String; 13], english: [String; 13]) -> Layers {
+        let mut used: BTreeSet<String> = BTreeSet::from(["0".to_string()]);
+        let mut out: Vec<String> = Vec::with_capacity(13);
+        for (own, en) in own.into_iter().zip(english) {
+            let own = layer_name(&own);
+            let pick = if own.is_empty() || used.contains(&own.to_uppercase()) {
+                layer_name(&en)
+            } else {
+                own
+            };
+            used.insert(pick.to_uppercase());
+            out.push(pick);
+        }
+        let [
+            visible,
+            hidden,
+            dim,
+            center,
+            lost,
+            frame,
+            centre,
+            sheet,
+            position,
+            position_line,
+            hatch,
+            section,
+            section_heavy,
+        ]: [String; 13] = out.try_into().expect("13 Ebenen");
+        Layers {
+            visible,
+            hidden,
+            dim,
+            center,
+            lost,
+            frame,
+            centre,
+            sheet,
+            position,
+            position_line,
+            hatch,
+            section,
+            section_heavy,
+        }
+    }
+
+    /// Die Namen in der aktuellen Sprache, Reihenfolge wie die Felder.
+    fn texts() -> [String; 13] {
+        [
+            tr!("drawing-layer-visible"),
+            tr!("drawing-layer-hidden"),
+            tr!("drawing-layer-dims"),
+            tr!("drawing-layer-center"),
+            tr!("drawing-layer-lost"),
+            tr!("drawing-layer-frame"),
+            tr!("drawing-layer-sheet-centre"),
+            tr!("drawing-layer-sheet"),
+            tr!("drawing-layer-positions"),
+            tr!("drawing-layer-position-line"),
+            tr!("drawing-layer-hatch"),
+            tr!("drawing-layer-section"),
+            tr!("drawing-layer-section-heavy"),
+        ]
+    }
+
+    /// Ebene einer Markierungsart.
+    fn of(&self, kind: MarkKind) -> &str {
+        match kind {
+            MarkKind::Dimension => &self.dim,
+            MarkKind::Hatch => &self.hatch,
+            MarkKind::SectionLine(SectionPen::Chain) => &self.section,
+            MarkKind::SectionLine(SectionPen::End) => &self.section_heavy,
+            MarkKind::CenterLine => &self.center,
+            MarkKind::Lost => &self.lost,
+            MarkKind::Sheet(SheetPen::Heavy) => &self.frame,
+            MarkKind::Sheet(SheetPen::Medium) => &self.centre,
+            MarkKind::Sheet(SheetPen::Thin) => &self.sheet,
+            MarkKind::Position(PositionPen::Circle) => &self.position,
+            MarkKind::Position(PositionPen::Leader) => &self.position_line,
+        }
+    }
+}
 /// Höchstlänge eines Maßtexts in der Datei (Zeichen, nach der Verschlüsselung).
 const MAX_TEXT_LEN: usize = 255;
 /// Nachkommastellen aller Zahlen der Datei.
@@ -200,6 +307,7 @@ pub fn dxf_string(model: &SheetModel) -> Result<String, DrawError> {
     t.plot_placeholder = placeholder;
 
     let used = UsedKinds::of(model);
+    let layers = Layers::new();
     let mut tables = Out::new();
     write_tables(
         &mut tables,
@@ -210,6 +318,7 @@ pub fn dxf_string(model: &SheetModel) -> Result<String, DrawError> {
         [br_model, br_paper],
         &br_views,
         used,
+        &layers,
     )?;
 
     let mut blocks = Out::new();
@@ -218,15 +327,15 @@ pub fn dxf_string(model: &SheetModel) -> Result<String, DrawError> {
         &mut hs,
         model,
         &names,
-        br_model,
-        br_paper,
+        [br_model, br_paper],
         &br_views,
+        &layers,
     )?;
 
     let mut entities = Out::new();
     if let Some(frame) = &model.frame {
         for m in &frame.marks {
-            write_mark(&mut entities, &mut hs, br_model, m, 1.0)?;
+            write_mark(&mut entities, &mut hs, br_model, m, 1.0, &layers)?;
         }
     }
     for name in &names {
@@ -419,8 +528,10 @@ fn unique_name(used: &mut BTreeSet<String>, raw: &str) -> String {
         .map(|c| if illegal(c) { '_' } else { c })
         .collect();
     let cleaned = cleaned.trim();
+    let fallback;
     let base = if cleaned.is_empty() {
-        "Ansicht"
+        fallback = tr!("drawing-view-header");
+        fallback.as_str()
     } else {
         cleaned
     };
@@ -645,22 +756,6 @@ fn mark_kind(m: &Mark) -> MarkKind {
     }
 }
 
-fn mark_layer(kind: MarkKind) -> &'static str {
-    match kind {
-        MarkKind::Dimension => LAYER_DIM,
-        MarkKind::Hatch => LAYER_HATCH,
-        MarkKind::SectionLine(SectionPen::Chain) => LAYER_SECTION,
-        MarkKind::SectionLine(SectionPen::End) => LAYER_SECTION_HEAVY,
-        MarkKind::CenterLine => LAYER_CENTER,
-        MarkKind::Lost => LAYER_LOST,
-        MarkKind::Sheet(SheetPen::Heavy) => LAYER_FRAME,
-        MarkKind::Sheet(SheetPen::Medium) => LAYER_CENTRE,
-        MarkKind::Sheet(SheetPen::Thin) => LAYER_SHEET,
-        MarkKind::Position(PositionPen::Circle) => LAYER_POSITION,
-        MarkKind::Position(PositionPen::Leader) => LAYER_POSITION_LINE,
-    }
-}
-
 struct TableHandles {
     vport: u64,
     ltype: u64,
@@ -685,6 +780,7 @@ fn write_tables(
     [br_model, br_paper]: [u64; 2],
     br_views: &[u64],
     used: UsedKinds,
+    l: &Layers,
 ) -> Result<(), DrawError> {
     // VPORT: eine aktive Ansicht, die das ganze Blatt zeigt.
     o.table_head("VPORT", t.vport, 1);
@@ -778,17 +874,17 @@ fn write_tables(
     // Markierungen, die vorkommen.
     let mut layers = vec![
         ("0", "CONTINUOUS", 7, -3),
-        (LAYER_VISIBLE, "CONTINUOUS", 7, 50),
-        (LAYER_HIDDEN, "HIDDEN", 7, 25),
+        (l.visible.as_str(), "CONTINUOUS", 7, 50),
+        (l.hidden.as_str(), "HIDDEN", 7, 25),
     ];
     for (on, layer) in [
-        (used.dim, (LAYER_DIM, "CONTINUOUS", 7, 25)),
-        (used.center, (LAYER_CENTER, "CENTER", 7, 25)),
-        (used.lost, (LAYER_LOST, "CONTINUOUS", 1, 25)),
+        (used.dim, (l.dim.as_str(), "CONTINUOUS", 7, 25)),
+        (used.center, (l.center.as_str(), "CENTER", 7, 25)),
+        (used.lost, (l.lost.as_str(), "CONTINUOUS", 1, 25)),
         (
             used.sheet_heavy,
             (
-                LAYER_FRAME,
+                l.frame.as_str(),
                 "CONTINUOUS",
                 7,
                 sheet_weight(SheetPen::Heavy, used),
@@ -797,7 +893,7 @@ fn write_tables(
         (
             used.sheet_medium,
             (
-                LAYER_CENTRE,
+                l.centre.as_str(),
                 "CONTINUOUS",
                 7,
                 sheet_weight(SheetPen::Medium, used),
@@ -806,7 +902,7 @@ fn write_tables(
         (
             used.sheet_thin,
             (
-                LAYER_SHEET,
+                l.sheet.as_str(),
                 "CONTINUOUS",
                 7,
                 sheet_weight(SheetPen::Thin, used),
@@ -815,7 +911,7 @@ fn write_tables(
         (
             used.position,
             (
-                LAYER_POSITION,
+                l.position.as_str(),
                 "CONTINUOUS",
                 7,
                 dxf_lineweight(PositionPen::Circle.width_at(used.paper_scale)),
@@ -824,17 +920,17 @@ fn write_tables(
         (
             used.position_line,
             (
-                LAYER_POSITION_LINE,
+                l.position_line.as_str(),
                 "CONTINUOUS",
                 7,
                 dxf_lineweight(PositionPen::Leader.width_at(used.paper_scale)),
             ),
         ),
-        (used.hatch, (LAYER_HATCH, "CONTINUOUS", 7, 25)),
-        (used.section, (LAYER_SECTION, "CENTER", 7, 25)),
+        (used.hatch, (l.hatch.as_str(), "CONTINUOUS", 7, 25)),
+        (used.section, (l.section.as_str(), "CENTER", 7, 25)),
         (
             used.section_heavy,
-            (LAYER_SECTION_HEAVY, "CONTINUOUS", 7, 50),
+            (l.section_heavy.as_str(), "CONTINUOUS", 7, 50),
         ),
     ] {
         if on {
@@ -937,9 +1033,9 @@ fn write_blocks(
     hs: &mut Handles,
     model: &SheetModel,
     names: &[String],
-    br_model: u64,
-    br_paper: u64,
+    [br_model, br_paper]: [u64; 2],
     br_views: &[u64],
+    l: &Layers,
 ) -> Result<(), DrawError> {
     block_begin(o, hs.next(), br_model, "*Model_Space", false)?;
     block_end(o, hs.next(), br_model, false);
@@ -949,14 +1045,14 @@ fn write_blocks(
         block_begin(o, hs.next(), br, &encode(name), false)?;
         for line in &view.lines {
             let layer = match line.vis {
-                Visibility::Visible => LAYER_VISIBLE,
-                Visibility::Hidden => LAYER_HIDDEN,
+                Visibility::Visible => l.visible.as_str(),
+                Visibility::Hidden => l.hidden.as_str(),
             };
             write_curve(o, hs, br, layer, &line.curve)?;
         }
         let paper = sheet_scale(model.sheet);
         for m in &view.marks {
-            write_mark(o, hs, br, &balloon_text_dxf(m, paper), paper)?;
+            write_mark(o, hs, br, &balloon_text_dxf(m, paper), paper, l)?;
         }
         block_end(o, hs.next(), br, false);
     }
@@ -1157,8 +1253,9 @@ fn write_mark(
     owner: u64,
     m: &Mark,
     paper: f64,
+    layers: &Layers,
 ) -> Result<(), DrawError> {
-    let layer = mark_layer(mark_kind(m));
+    let layer = layers.of(mark_kind(m));
     match m {
         Mark::Line { a, b, .. } => write_curve(o, hs, owner, layer, &Out2d::Line { a: *a, b: *b }),
         Mark::Arc {
@@ -1212,7 +1309,7 @@ fn write_mark(
             }
             let encoded = encode_text(text);
             if encoded.len() > MAX_TEXT_LEN {
-                return Err(DrawError::Unsupported("Der Maßtext ist zu lang.".into()));
+                return Err(DrawError::Unsupported(tr!("drawing-err-dim-text-long")));
             }
             let align = match anchor {
                 TextAnchor::Start => 0,
@@ -1271,4 +1368,45 @@ fn encode_text(s: &str) -> String {
 /// Steuerzeichen? (Andere Zeichen werden in der Datei durch `?` bzw. ein Leerzeichen ersetzt.)
 pub fn dxf_char_ok(c: char) -> bool {
     (c as u32) <= 0xFFFF && !c.is_control()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(list: [&str; 13]) -> [String; 13] {
+        list.map(String::from)
+    }
+
+    const EN: [&str; 13] = [
+        "VISIBLE",
+        "HIDDEN",
+        "DIMENSIONS",
+        "CENTERLINES",
+        "DIMENSIONS_LOST",
+        "SHEET_FRAME",
+        "SHEET_CENTER",
+        "SHEET",
+        "BALLOONS",
+        "BALLOON_LINES",
+        "HATCHING",
+        "SECTION_LINE",
+        "SECTION_LINE_HEAVY",
+    ];
+
+    #[test]
+    fn unusable_layer_names_fall_back_to_english() {
+        let mut own = names(EN).map(|n| format!("x {n}"));
+        own[0] = "  ".into();
+        own[1] = "0".into();
+        own[3] = own[2].to_lowercase();
+        own[4] = "a:b".into();
+        let l = Layers::from_texts(own, names(EN));
+        assert_eq!(l.visible, "VISIBLE");
+        assert_eq!(l.hidden, "HIDDEN");
+        assert_eq!(l.dim, "x_DIMENSIONS");
+        assert_eq!(l.center, "CENTERLINES");
+        assert_eq!(l.lost, "a_b");
+        assert_eq!(l.frame, "x_SHEET_FRAME");
+    }
 }

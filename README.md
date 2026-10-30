@@ -63,6 +63,12 @@ Hält dein Virenprogramm die Datei fest oder startet etwas nicht, schau unter [H
 
 Brauchst du die Ordner oben nicht mehr, kannst du sie nach dem Deinstallieren selbst löschen.
 
+## Sprache
+
+PlanoraCAD gibt es auf Deutsch und Englisch. Beim ersten Start nimmt das Programm die Sprache von Windows, sonst Englisch. Umstellen kannst du sie unter „Datei → Einstellungen …“, Abschnitt „Darstellung“, Auswahl „Sprache“.
+
+Du möchtest PlanoraCAD in eine andere Sprache übersetzen? Die Anleitung (auf Englisch) steht in [docs/uebersetzen.md](docs/uebersetzen.md).
+
 ## Updates
 
 - Beim Start schaut das Programm höchstens einmal am Tag nach, ob es eine neuere Version gibt. Zurzeit gibt es nur Entwicklerversionen (Kanal „Dev“).

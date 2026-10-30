@@ -51,6 +51,76 @@ pub struct Seen {
     pub clip: egui::Rect,
 }
 
+/// Alle Texte der Formen eines Bilds (mit Rechteck und Ausschnitt).
+#[allow(dead_code)]
+pub fn collect_seen(shapes: &[egui::epaint::ClippedShape]) -> Vec<Seen> {
+    let mut seen = Vec::new();
+    for c in shapes {
+        walk_shape(&c.shape, c.clip_rect, &mut seen);
+    }
+    seen
+}
+
+/// Die Texte `seen` mit " | " verbunden (für Fehlermeldungen).
+#[allow(dead_code)]
+pub fn join(seen: &[Seen]) -> String {
+    seen.iter()
+        .map(|s| s.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+/// Sieht die Zeile wie eine Schlüssel-Id der Sprachdateien aus (`^[a-z0-9]+(-[a-z0-9]+)+$`)?
+#[allow(dead_code)]
+pub fn looks_like_key(line: &str) -> bool {
+    let parts: Vec<&str> = line.split('-').collect();
+    parts.len() > 1
+        && parts.iter().all(|p| {
+            !p.is_empty()
+                && p.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        })
+}
+
+/// Kein deutscher Buchstabe (`äöüßÄÖÜ„`) und keine Schlüssel-Id in den Texten. Texte in einem der
+/// Rechtecke `skip` (Bereiche späterer Tasks) und Zeilen, die eines der Stücke `later`
+/// enthalten, werden übergangen.
+#[allow(dead_code)]
+pub fn assert_english(what: &str, seen: &[Seen], skip: &[egui::Rect], later: &[&str]) {
+    for s in seen {
+        if skip.iter().any(|r| r.contains_rect(s.rect)) {
+            continue;
+        }
+        for line in s.text.lines() {
+            if later.iter().any(|l| line.contains(l)) {
+                continue;
+            }
+            assert!(
+                !line.chars().any(|c| "äöüßÄÖÜ„".contains(c)),
+                "{what}: deutscher Text „{line}“ in {}",
+                join(seen)
+            );
+            assert!(
+                !looks_like_key(line),
+                "{what}: Schlüssel-Id „{line}“ sichtbar in {}",
+                join(seen)
+            );
+        }
+    }
+}
+
+/// Jeder Text von `wanted` steht ganz (als ein Text) im Bild.
+#[allow(dead_code)]
+pub fn assert_has(what: &str, seen: &[Seen], wanted: &[&str]) {
+    for w in wanted {
+        assert!(
+            seen.iter().any(|s| s.text == *w),
+            "{what}: „{w}“ fehlt in {}",
+            join(seen)
+        );
+    }
+}
+
 fn walk_shape(shape: &egui::epaint::Shape, clip: egui::Rect, out: &mut Vec<Seen>) {
     match shape {
         egui::epaint::Shape::Vec(v) => v.iter().for_each(|s| walk_shape(s, clip, out)),

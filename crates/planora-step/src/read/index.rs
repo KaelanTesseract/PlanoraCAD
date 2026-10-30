@@ -9,9 +9,10 @@
 //! Kreise selbst erkennen, mit Besuchsliste und Tiefengrenze: dafür gibt es [`RefPath`].
 
 use super::error::{MAX_REF_DEPTH, ReadLimits, StepReadError};
-use super::lex::{Lexer, TOO_MANY_CLOSE, Tok, parse_args, parse_body};
+use super::lex::{Lexer, Tok, parse_args, parse_body, too_many_close};
 use super::value::{Entity, Value};
 use planora_exchange::{CHECK_EVERY, Progress};
+use planora_i18n::tr;
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
@@ -156,11 +157,11 @@ impl StepFile {
         let body = parse_body(&mut lex, true, &mut names)?;
         match lex.token()? {
             Tok::Eof => {}
-            Tok::Close => return Err(StepReadError::syntax(line, TOO_MANY_CLOSE)),
-            _ => return Err(StepReadError::syntax(line, "Es fehlt ein „;“.")),
+            Tok::Close => return Err(StepReadError::syntax(line, too_many_close())),
+            _ => return Err(StepReadError::syntax(line, tr!("step-r-missing-semicolon"))),
         }
         let Some(entity) = body.entity else {
-            return Err(StepReadError::syntax(line, "Der Eintrag ist leer."));
+            return Err(StepReadError::syntax(line, tr!("step-r-entry-empty")));
         };
         Ok(entity)
     }
@@ -249,10 +250,7 @@ impl RefPath {
         if self.ids.len() >= self.limit {
             return Err(StepReadError::syntax(
                 line,
-                format!(
-                    "Die Verweise sind zu tief verschachtelt (höchstens {} Ebenen).",
-                    self.limit
-                ),
+                tr!("step-r-refs-too-deep", max = self.limit),
             ));
         }
         self.ids.push(id);
@@ -323,7 +321,7 @@ impl<'a> Indexer<'a> {
                 if sections == 0 {
                     return Err(StepReadError::syntax(
                         ix.lex.tok_line(),
-                        "Es fehlt der Abschnitt „DATA;“.",
+                        tr!("step-r-missing-data"),
                     ));
                 }
                 ix.semicolon()?;
@@ -333,7 +331,7 @@ impl<'a> Indexer<'a> {
             } else {
                 return Err(StepReadError::syntax(
                     ix.lex.tok_line(),
-                    "Hier wird „DATA;“ oder „END-ISO-10303-21;“ erwartet.",
+                    tr!("step-r-expected-data-or-end"),
                 ));
             }
         }
@@ -387,7 +385,7 @@ impl<'a> Indexer<'a> {
             Tok::Eof => Err(self.lex.truncated()),
             _ => Err(StepReadError::syntax(
                 self.lex.end_line(),
-                "Es fehlt ein „;“.",
+                tr!("step-r-missing-semicolon"),
             )),
         }
     }
@@ -400,7 +398,7 @@ impl<'a> Indexer<'a> {
         if !self.lex.is_keyword(tok, "HEADER") {
             return Err(StepReadError::syntax(
                 self.lex.tok_line(),
-                "Es fehlt „HEADER;“.",
+                tr!("step-r-missing-header"),
             ));
         }
         self.semicolon()?;
@@ -413,7 +411,7 @@ impl<'a> Indexer<'a> {
                 }
                 return Err(StepReadError::syntax(
                     self.lex.tok_line(),
-                    "Im Kopf wird ein Eintrag wie „FILE_NAME(…);“ erwartet.",
+                    tr!("step-r-expected-header-entry"),
                 ));
             };
             if self.lex.is_keyword(tok, "ENDSEC") {
@@ -460,7 +458,7 @@ impl<'a> Indexer<'a> {
                 _ => {
                     return Err(StepReadError::syntax(
                         self.lex.tok_line(),
-                        "Hier wird ein Eintrag „#Nummer = …;“ erwartet.",
+                        tr!("step-r-expected-entry"),
                     ));
                 }
             };
@@ -471,7 +469,7 @@ impl<'a> Indexer<'a> {
                 _ => {
                     return Err(StepReadError::syntax(
                         self.lex.end_line(),
-                        format!("Nach „#{id}“ fehlt „=“."),
+                        tr!("step-r-missing-equals", id = id),
                     ));
                 }
             }
@@ -481,12 +479,12 @@ impl<'a> Indexer<'a> {
                 Tok::Semicolon => {}
                 Tok::Eof => return Err(self.lex.truncated()),
                 Tok::Close => {
-                    return Err(StepReadError::syntax(self.lex.tok_line(), TOO_MANY_CLOSE));
+                    return Err(StepReadError::syntax(self.lex.tok_line(), too_many_close()));
                 }
                 _ => {
                     return Err(StepReadError::syntax(
                         self.lex.end_line(),
-                        "Es fehlt ein „;“.",
+                        tr!("step-r-missing-semicolon"),
                     ));
                 }
             }

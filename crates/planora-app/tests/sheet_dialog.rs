@@ -7,19 +7,17 @@ mod common;
 use eframe::App as _;
 use egui::{Color32, Event, Key, Modifiers, PointerButton, Pos2, Rect, Vec2, pos2, vec2};
 use planora_app::app::PlanoraApp;
-use planora_app::drawing_browser::READ_ONLY_HINT;
-use planora_app::drawing_dialog::SKETCH_BLOCKED;
+use planora_app::drawing_browser::read_only_hint;
+use planora_app::drawing_dialog::sketch_blocked;
 use planora_app::drawing_state::WorkArea;
-use planora_app::sheet_dialog::{
-    CUT_WARNING, MENU_ENTRY, NO_DRAWING_OPEN, OWNER_MISSING, REVISIONS_ON_SHEET, SheetInfoDialog,
-};
+use planora_app::sheet_dialog::SheetInfoDialog;
 use planora_app::state::{AppState, StandardPlane};
 use planora_app::workspace::Workspace;
 use planora_app::{drawing_view, fonts, icons, shell_panels, theme, viewport};
 use planora_drawing::sheet_frame::TitleField;
 use planora_drawing::sheet_info::{
-    DEFAULT_TOLERANCE, FieldValue, NotesValue, Stamp, TOO_MANY_REVISIONS, default_notes,
-    resolve_texts,
+    DEFAULT_TOLERANCE, FieldValue, NotesValue, Stamp, default_notes, resolve_texts,
+    too_many_revisions,
 };
 use planora_drawing::{DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewId, ViewKind};
 use planora_feature::SketchPlane;
@@ -433,7 +431,7 @@ fn edit_count(h: &mut H) -> u64 {
 }
 
 /// Die Einträge des Menüs „Zeichnung“ allein in einem Fenster (wie `tests/drawing_ui.rs`): Zeiger
-/// auf `MENU_ENTRY`, dann ein Klick. Liefert die Texte des Bildes mit dem Hinweis.
+/// auf `&planora_app::sheet_dialog::menu_entry()`, dann ein Klick. Liefert die Texte des Bildes mit dem Hinweis.
 fn menu_entry_hint(st: &mut AppState, read_only: bool) -> Vec<String> {
     let c = egui::Context::default();
     c.set_fonts(fonts::definitions());
@@ -451,7 +449,7 @@ fn menu_entry_hint(st: &mut AppState, read_only: bool) -> Vec<String> {
     let texts = run(st, vec![]);
     let p = texts
         .iter()
-        .find(|t| t.text == MENU_ENTRY)
+        .find(|t| t.text == planora_app::sheet_dialog::menu_entry())
         .expect("Menüeintrag")
         .rect
         .center();
@@ -511,7 +509,7 @@ fn opens_from_toolbar_and_menu() {
             !shot.texts.iter().any(|t| tool.contains_rect(t.rect)
                 && !t.text.starts_with(icons::glyph(icons::Icon::SheetInfo))
                 && !t.text.starts_with(section_glyph)
-                && t.text != planora_app::section_tool::TOOL
+                && t.text != planora_app::section_tool::tool()
                 && (t.rect.center().y - info.center().y).abs() < 6.0
                 && t.rect.left() > fit.right()
                 && t.rect.right() < info.left()),
@@ -541,7 +539,7 @@ fn opens_from_toolbar_and_menu() {
         let x = shot.dlg(&close, rect)[0].rect.center();
         h.click(x);
         assert!(!h.is_open(), "{size:?}: Schließen-Symbol");
-        h.menu_click(MENU_ENTRY);
+        h.menu_click(&planora_app::sheet_dialog::menu_entry());
         assert!(h.is_open(), "{size:?}: Menü öffnet das Fenster");
         h.settle();
         assert_eq!(h.dialog().drawing, first);
@@ -567,18 +565,19 @@ fn locked_in_old_versions_and_in_the_sketch_mode() {
     let tip = h.hover(p);
     assert!(
         tip.has(&format!(
-            "{}: {READ_ONLY_HINT}",
-            planora_app::sheet_dialog::BUTTON
+            "{}: {}",
+            planora_app::sheet_dialog::button(),
+            read_only_hint()
         )),
         "Hinweis am Knopf fehlt"
     );
     let texts = menu_entry_hint(h.st(), true);
     assert!(
-        texts.contains(&READ_ONLY_HINT.to_string()),
+        texts.contains(&read_only_hint()),
         "Hinweis am Menüeintrag fehlt: {texts:?}"
     );
     assert!(!h.is_open(), "Menüeintrag gesperrt");
-    h.menu_click(MENU_ENTRY);
+    h.menu_click(&planora_app::sheet_dialog::menu_entry());
     assert!(!h.is_open(), "Menüeintrag in der App gesperrt");
 
     // Skizzen-Modus: ein offenes Fenster schließt sich, das Menü ist gesperrt.
@@ -595,11 +594,11 @@ fn locked_in_old_versions_and_in_the_sketch_mode() {
     assert_eq!(h.st().drawing_ui.area, WorkArea::Model);
     let texts = menu_entry_hint(h.st(), false);
     assert!(
-        texts.contains(&SKETCH_BLOCKED.to_string()),
+        texts.contains(&sketch_blocked().text()),
         "Hinweis fehlt: {texts:?}"
     );
     assert!(!h.is_open());
-    h.menu_click(MENU_ENTRY);
+    h.menu_click(&planora_app::sheet_dialog::menu_entry());
     assert!(!h.is_open(), "Menüeintrag im Skizzen-Modus gesperrt");
 
     // Ohne offene Zeichnung (Modell): Menüeintrag gesperrt mit Hinweis.
@@ -607,15 +606,15 @@ fn locked_in_old_versions_and_in_the_sketch_mode() {
     h.st().drawing_ui.area = WorkArea::Model;
     let texts = menu_entry_hint(h.st(), false);
     assert!(
-        texts.contains(&NO_DRAWING_OPEN.to_string()),
+        texts.contains(&planora_app::sheet_dialog::no_drawing_open()),
         "Hinweis fehlt: {texts:?}"
     );
     assert!(!h.is_open());
-    h.menu_click(MENU_ENTRY);
+    h.menu_click(&planora_app::sheet_dialog::menu_entry());
     assert!(!h.is_open());
     // Und mit offener Zeichnung geht es.
     h.st().drawing_ui.area = WorkArea::Drawing(h.st().document.drawings()[0].id);
-    h.menu_click(MENU_ENTRY);
+    h.menu_click(&planora_app::sheet_dialog::menu_entry());
     assert!(h.is_open());
 }
 
@@ -829,8 +828,11 @@ fn revisions_in_the_dialog() {
     assert_eq!(h.dialog().message, None);
     h.click_text("Änderung hinzufügen");
     assert_eq!(h.dialog().sheet.revisions.len(), 23);
-    assert_eq!(h.dialog().message.as_deref(), Some(TOO_MANY_REVISIONS));
-    h.scroll_to(TOO_MANY_REVISIONS);
+    assert_eq!(
+        h.dialog().message.as_ref().map(|m| m.text()).as_deref(),
+        Some(too_many_revisions().as_str())
+    );
+    h.scroll_to(&too_many_revisions());
     // Die Meldung verschwindet mit dem Löschen einer Zeile.
     let shot = h.settle();
     let rect = h.dialog_rect().unwrap();
@@ -850,12 +852,15 @@ fn warnings_in_place() {
     let rect = h.dialog_rect().unwrap();
     let shot = h.settle();
     let label = shot.dlg("Eigentümer", rect)[0].rect;
-    let warn = shot.dlg(OWNER_MISSING, rect);
+    let warn = shot.dlg(&planora_app::sheet_dialog::owner_missing(), rect);
     assert_eq!(warn.len(), 1, "Eigentümer fehlt");
     // Die Warnung steht direkt unter dem Feld ihrer Zeile.
     let dy = warn[0].rect.top() - label.bottom();
     assert!((0.0..40.0).contains(&dy), "Warnung unter dem Feld: {dy}");
-    assert!(shot.dlg(CUT_WARNING, rect).is_empty());
+    assert!(
+        shot.dlg(&planora_app::sheet_dialog::cut_warning(), rect)
+            .is_empty()
+    );
 
     // 80 × „W“ im Feld Eigentümer: zu breit für das Feld im Schriftfeld.
     let field = pos2(label.left() + 250.0, label.center().y);
@@ -865,10 +870,11 @@ fn warnings_in_place() {
     let shot = h.settle();
     let label = shot.dlg("Eigentümer", rect)[0].rect;
     assert!(
-        shot.dlg(OWNER_MISSING, rect).is_empty(),
+        shot.dlg(&planora_app::sheet_dialog::owner_missing(), rect)
+            .is_empty(),
         "Eigentümer ist jetzt eingetragen"
     );
-    let cut = shot.dlg(CUT_WARNING, rect);
+    let cut = shot.dlg(&planora_app::sheet_dialog::cut_warning(), rect);
     assert_eq!(cut.len(), 1, "nur dieses Feld ist zu lang");
     let dy = cut[0].rect.top() - label.bottom();
     assert!((0.0..40.0).contains(&dy), "Warnung unter dem Feld: {dy}");
@@ -984,7 +990,8 @@ fn notes_and_revision_cells_warn_when_cut() {
     let count = |h: &mut H| {
         let shot = h.settle();
         let rect = h.dialog_rect().unwrap();
-        shot.dlg(CUT_WARNING, rect).len()
+        shot.dlg(&planora_app::sheet_dialog::cut_warning(), rect)
+            .len()
     };
     assert_eq!(count(&mut h), 0, "ohne lange Texte keine Warnung");
     // Beschreibung mit 100 Zeichen: die Spalte der Tabelle ist 102 mm breit.
@@ -1016,7 +1023,11 @@ fn notes_and_revision_cells_warn_when_cut() {
     assert_eq!(count(&mut h), 3, "nur die sichtbaren drei");
     let shot = h.settle();
     let rect = h.dialog_rect().unwrap();
-    assert_eq!(shot.dlg(REVISIONS_ON_SHEET, rect).len(), 1);
+    assert_eq!(
+        shot.dlg(&planora_app::sheet_dialog::revisions_on_sheet(), rect)
+            .len(),
+        1
+    );
 }
 
 #[test]

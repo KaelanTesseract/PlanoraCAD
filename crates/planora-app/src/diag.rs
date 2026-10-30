@@ -7,6 +7,9 @@
 //!
 //! Wichtig: Meldungen an `diag::*` dürfen keine rohen `io::Error` oder Pfade enthalten. Die
 //! Bereinigung vor dem Versenden (Task 6) greift nur auf feste Muster.
+//!
+//! Alle Zeilen und Schritte sind englisch, unabhängig von der Sprache des Programms: feste Texte
+//! als englische Literale, Texte aus den Sprachdateien über [`in_english`].
 
 use std::collections::VecDeque;
 use std::fs::{self, OpenOptions};
@@ -53,7 +56,7 @@ impl Level {
         match self {
             Level::Info => "INFO",
             Level::Warn => "WARN",
-            Level::Fehler => "FEHLER",
+            Level::Fehler => "ERROR",
             Level::Detail => "DETAIL",
         }
     }
@@ -378,7 +381,14 @@ pub fn recent_steps() -> Vec<Step> {
     lock().recent_steps()
 }
 
-/// Eine Zeile je Schritt: `14:03:22 Skizze extrudieren`.
+/// Führt `f` in Englisch aus: Texte aus den Sprachdateien (Befehlsnamen, Fehlermeldungen), die
+/// ins Protokoll, in die letzten Schritte oder in einen Bericht gehen, entstehen so immer
+/// englisch, unabhängig von der Sprache des Programms.
+pub fn in_english<R>(f: impl FnOnce() -> R) -> R {
+    planora_i18n::with_lang(&planora_i18n::english(), f)
+}
+
+/// Eine Zeile je Schritt: `14:03:22 Extrude sketch`.
 pub fn steps_text(steps: &[Step]) -> String {
     steps
         .iter()

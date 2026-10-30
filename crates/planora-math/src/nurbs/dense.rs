@@ -3,6 +3,7 @@
 
 use super::NurbsError;
 use super::fit::MAX_FIT_CONTROL_POINTS;
+use planora_i18n::tr;
 
 /// Ist der Betrag des besten Pivots kleiner, gilt das System als singulär.
 const SINGULAR_PIVOT: f64 = 1e-300;
@@ -17,19 +18,17 @@ const SINGULAR_PIVOT_RATIO: f64 = 1e-12;
 /// Seite mit einer Kopie der Matrix aufgerufen.
 pub(crate) fn solve_dense(a: &mut [f64], b: &mut [f64], n: usize) -> Result<(), NurbsError> {
     if n == 0 || n > MAX_FIT_CONTROL_POINTS {
-        return Err(NurbsError::TooLarge(format!(
-            "Gleichungssystem mit {n} Unbekannten (erlaubt: 1 bis {MAX_FIT_CONTROL_POINTS})"
+        return Err(NurbsError::TooLarge(tr!(
+            "math-system-size",
+            n = n.to_string(),
+            max = MAX_FIT_CONTROL_POINTS.to_string()
         )));
     }
     if a.len() != n * n || b.len() != n {
-        return Err(NurbsError::Input(
-            "Matrix und rechte Seite passen nicht zur Größe des Gleichungssystems".into(),
-        ));
+        return Err(NurbsError::Input(tr!("math-system-shape")));
     }
     if a.iter().chain(b.iter()).any(|v| !v.is_finite()) {
-        return Err(NurbsError::Fit(
-            "Gleichungssystem enthält nicht endliche Zahlen".into(),
-        ));
+        return Err(NurbsError::Fit(tr!("math-system-finite")));
     }
     let scale = a.iter().fold(0.0f64, |m, v| m.max(v.abs()));
     let min_pivot = SINGULAR_PIVOT.max(SINGULAR_PIVOT_RATIO * scale);
@@ -38,7 +37,7 @@ pub(crate) fn solve_dense(a: &mut [f64], b: &mut [f64], n: usize) -> Result<(), 
             .map(|r| (r, a[r * n + col].abs()))
             .fold((col, -1.0), |acc, x| if x.1 > acc.1 { x } else { acc });
         if best < min_pivot {
-            return Err(NurbsError::Fit("Gleichungssystem ist singulär".into()));
+            return Err(NurbsError::Fit(tr!("math-system-singular")));
         }
         if piv != col {
             for k in 0..n {
@@ -67,9 +66,7 @@ pub(crate) fn solve_dense(a: &mut [f64], b: &mut [f64], n: usize) -> Result<(), 
         b[r] = s / a[r * n + r];
     }
     if b.iter().any(|v| !v.is_finite()) {
-        return Err(NurbsError::Fit(
-            "Gleichungssystem ist numerisch singulär (Lösung nicht endlich)".into(),
-        ));
+        return Err(NurbsError::Fit(tr!("math-system-singular-numeric")));
     }
     Ok(())
 }

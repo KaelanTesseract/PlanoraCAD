@@ -2,7 +2,7 @@
 
 use eframe::egui_wgpu::wgpu::{AdapterInfo, Backend, DeviceType};
 use planora_app::build_info::{
-    self, BuildInfo, GPU_UNKNOWN, GpuInfo, gpu_from_adapter, os_text, windows_name,
+    self, BuildInfo, GpuInfo, gpu_from_adapter, gpu_unknown, os_text, windows_name,
 };
 
 #[test]
@@ -31,7 +31,7 @@ fn gpu_line_without_gpu_is_unknown() {
         os: "Test".into(),
         gpu: None,
     };
-    assert_eq!(info.gpu_line(), GPU_UNKNOWN);
+    assert_eq!(info.gpu_line(), gpu_unknown().as_str());
     assert_eq!(info.system_line(), "System: Test");
 }
 
@@ -55,7 +55,16 @@ fn gpu_from_adapter_fills_unknown_driver() {
     a.name = "Testkarte".into();
     let g = gpu_from_adapter(&a);
     assert_eq!(g.name, "Testkarte");
-    assert_eq!(g.driver, "unbekannt");
+    assert_eq!(
+        g.driver, "",
+        "unbekannt: leer, der Text kommt erst in gpu_line"
+    );
+    let info = BuildInfo {
+        version: planora_app::running_version(),
+        os: "Test".into(),
+        gpu: Some(g.clone()),
+    };
+    assert_eq!(info.gpu_line(), "Testkarte · Treiber unbekannt · Vulkan");
     assert_eq!(g.backend, "Vulkan");
     a.driver = "NVIDIA".into();
     a.driver_info = "555.1".into();

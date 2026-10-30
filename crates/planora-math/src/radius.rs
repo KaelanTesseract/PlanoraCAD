@@ -12,15 +12,24 @@
 //! (`m / d ∈ [0, 3]` je Stück), also bleibt jedes Stück monoton. Bei zwei Punkten ist das Gesetz
 //! linear.
 
+use planora_i18n::tr;
+
 /// Fehler beim Anlegen eines Radiusgesetzes.
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]
 pub enum RadiusLawError {
-    #[error("Ein variabler Radius braucht mindestens zwei Punkte")]
     TooFewPoints,
-    #[error("Die Positionen müssen endlich sein und streng steigen")]
     Positions,
-    #[error("Jeder Radius muss endlich und größer als null sein")]
     Radii,
+}
+
+impl std::fmt::Display for RadiusLawError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&match self {
+            RadiusLawError::TooFewPoints => tr!("math-radius-few-points"),
+            RadiusLawError::Positions => tr!("math-radius-positions"),
+            RadiusLawError::Radii => tr!("math-radius-values"),
+        })
+    }
 }
 
 /// Radius als Funktion des Anteils der Kettenlänge.

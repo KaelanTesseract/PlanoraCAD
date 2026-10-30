@@ -22,7 +22,7 @@ use planora_app::drawing_state::WorkArea;
 use planora_app::export_dialog::ExportDialog;
 use planora_app::feature_dialog::FeatureDialog;
 use planora_app::history::{History, snapshot_bytes};
-use planora_app::properties::POSITION_LABEL;
+use planora_app::properties::position_label;
 use planora_app::sketch_state::Tool;
 use planora_app::state::*;
 use planora_app::workspace::*;
@@ -315,8 +315,8 @@ fn dim_spec(view: ViewId, refs: Vec<GeoRef>) -> DimSpec {
 fn position_x_field(seen: &[Seen]) -> Pos2 {
     let label = seen
         .iter()
-        .find(|s| s.text == POSITION_LABEL)
-        .unwrap_or_else(|| panic!("„{POSITION_LABEL}“ fehlt"))
+        .find(|s| s.text == position_label())
+        .unwrap_or_else(|| panic!("„{}“ fehlt", position_label()))
         .rect;
     seen.iter()
         .filter(|s| {
@@ -325,7 +325,7 @@ fn position_x_field(seen: &[Seen]) -> Pos2 {
                 && s.text.parse::<f64>().is_ok()
         })
         .min_by(|a, b| a.rect.left().total_cmp(&b.rect.left()))
-        .unwrap_or_else(|| panic!("kein Zahlenfeld unter „{POSITION_LABEL}“"))
+        .unwrap_or_else(|| panic!("kein Zahlenfeld unter „{}“", position_label()))
         .rect
         .center()
 }
@@ -408,7 +408,7 @@ fn keys_undo_and_redo() {
         (2, 0),
         "nichts mehr zu wiederholen"
     );
-    assert_eq!(rig.message().as_deref(), Some(NOTHING_TO_REDO));
+    assert_eq!(rig.message().as_deref(), Some(nothing_to_redo().as_str()));
     assert_eq!(rig.bodies(), 2);
 
     // Bis zum Anfang und darüber hinaus: die Statuszeile sagt, dass es nichts gibt.
@@ -419,11 +419,11 @@ fn keys_undo_and_redo() {
     rig.undo_key();
     assert_eq!(rig.bodies(), 0);
     assert_eq!((rig.undo_len(), rig.redo_len()), (0, 2));
-    assert_eq!(rig.message().as_deref(), Some(NOTHING_TO_UNDO));
+    assert_eq!(rig.message().as_deref(), Some(nothing_to_undo().as_str()));
     assert_eq!(rig.info(), None);
     let seen = rig.settle();
     assert_eq!(
-        status_color(&seen, NOTHING_TO_UNDO),
+        status_color(&seen, &nothing_to_undo()),
         theme::palette(true).error
     );
 }
@@ -433,12 +433,12 @@ fn keys_undo_and_redo() {
 fn empty_history_says_so() {
     let mut rig = Rig::new(ws());
     rig.undo_key();
-    assert_eq!(rig.message().as_deref(), Some(NOTHING_TO_UNDO));
+    assert_eq!(rig.message().as_deref(), Some(nothing_to_undo().as_str()));
     assert!(!rig.left_over);
     rig.press(Key::Y, Modifiers::COMMAND);
-    assert_eq!(rig.message().as_deref(), Some(NOTHING_TO_REDO));
+    assert_eq!(rig.message().as_deref(), Some(nothing_to_redo().as_str()));
     rig.press(Key::Z, SHIFT_COMMAND);
-    assert_eq!(rig.message().as_deref(), Some(NOTHING_TO_REDO));
+    assert_eq!(rig.message().as_deref(), Some(nothing_to_redo().as_str()));
     assert_eq!((rig.undo_len(), rig.redo_len()), (0, 0));
 }
 
@@ -559,10 +559,10 @@ fn typing_in_rename_window_keeps_ctrl_z() {
 // ---- (c) Fenster, „Über“, Rückfrage sperren ---------------------------------------------------
 
 /// Öffnet Fenster Nummer `which` (`None`, wenn es die Nummer nicht gibt) und liefert seinen Namen.
-fn open_window(w: &mut Workspace, which: usize, d: DrawingId, v: ViewId) -> Option<&'static str> {
+fn open_window(w: &mut Workspace, which: usize, d: DrawingId, v: ViewId) -> Option<String> {
     let t = w.active_tab_mut();
     let quader = t.state.document.features()[0].id;
-    Some(match which {
+    Some(String::from(match which {
         0 => {
             t.dialog = Some(CreateDialog::Box {
                 x: 1.0,
@@ -603,14 +603,14 @@ fn open_window(w: &mut Workspace, which: usize, d: DrawingId, v: ViewId) -> Opti
         }
         8 => {
             w.about_open = true;
-            about_dialog::TITLE
+            return Some(about_dialog::title());
         }
         9 => {
             w.prompt = Some(Prompt::Notice("Hinweis".into()));
             "Rückfrage"
         }
         _ => return None,
-    })
+    }))
 }
 
 fn still_open(w: &Workspace, which: usize) -> bool {
@@ -831,7 +831,7 @@ fn keys_in_sketch_mode() {
     rig.undo_key();
     rig.undo_key();
     assert_eq!(curves(&mut rig), 0);
-    assert_eq!(rig.message().as_deref(), Some(NOTHING_TO_UNDO));
+    assert_eq!(rig.message().as_deref(), Some(nothing_to_undo().as_str()));
     assert_eq!(rig.st().document.edit_count(), edits);
     assert_eq!(rig.bodies(), 1, "der Quader bleibt");
     assert!(rig.st().sketch_session.is_some());
@@ -1044,11 +1044,14 @@ fn failed_restore_through_keys() {
     assert_eq!(rig.info().as_deref(), Some("Rückgängig: Kegel anlegen"));
     rig.settle();
     rig.undo_key();
-    assert_eq!(rig.message().as_deref(), Some(UNDO_FAILED));
+    assert_eq!(rig.message(), Some(undo_failed()));
     assert_eq!(rig.info(), None, "kein Erfolgshinweis");
     assert_eq!(rig.bodies(), 2, "Dokument unverändert");
     let seen = rig.settle();
-    assert_eq!(status_color(&seen, UNDO_FAILED), theme::palette(true).error);
+    assert_eq!(
+        status_color(&seen, &undo_failed()),
+        theme::palette(true).error
+    );
     assert!(!seen.iter().any(|s| s.text.starts_with("Rückgängig:")));
 
     // Wiederholen: das nächste Bild ist unbrauchbar.
@@ -1065,11 +1068,14 @@ fn failed_restore_through_keys() {
     let mut rig = Rig::new(w);
     assert_eq!(rig.redo_len(), 1);
     rig.press(Key::Y, Modifiers::COMMAND);
-    assert_eq!(rig.message().as_deref(), Some(REDO_FAILED));
+    assert_eq!(rig.message(), Some(redo_failed()));
     assert_eq!(rig.info(), None, "kein Erfolgshinweis");
     assert_eq!(rig.bodies(), 0);
     let seen = rig.settle();
-    assert_eq!(status_color(&seen, REDO_FAILED), theme::palette(true).error);
+    assert_eq!(
+        status_color(&seen, &redo_failed()),
+        theme::palette(true).error
+    );
     assert!(!seen.iter().any(|s| s.text.starts_with("Wiederholen:")));
 }
 
@@ -1210,7 +1216,7 @@ fn sketch_hint_despite_failing_feature_and_old_message() {
     }
     rig.settle();
     rig.press(Key::Y, Modifiers::COMMAND);
-    assert_eq!(rig.message().as_deref(), Some(NOTHING_TO_REDO));
+    assert_eq!(rig.message().as_deref(), Some(nothing_to_redo().as_str()));
     rig.settle();
     rig.undo_key();
     assert_eq!(rig.message(), None, "die alte Meldung ist weg");

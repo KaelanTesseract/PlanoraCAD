@@ -434,7 +434,7 @@ fn no_text_is_clipped_at_1400px() {
     }
     assert_eq!(rows.len(), 2, "zwei Zeilen: {rows:?}");
     let fit = planora_app::icons::glyph(icons::Icon::FitSheet).to_string();
-    for must in ["3D-Modell", fit.as_str(), drawing_view::SUGGEST] {
+    for must in ["3D-Modell", fit.as_str(), &drawing_view::suggest()] {
         assert!(
             bar.contains_rect(s.text(must).rect),
             "„{must}“ im Werkzeugfeld"
@@ -448,7 +448,7 @@ fn no_text_is_clipped_at_1400px() {
     for must in [
         "Ansicht „Vorne“",
         "Verdeckte Kanten zeigen",
-        drawing_view::CENTERLINES,
+        &drawing_view::centerlines_label(),
         "Ansicht löschen",
     ] {
         assert!(
@@ -475,10 +475,10 @@ fn no_text_is_clipped_at_1400px() {
         s.text(must);
     }
     // Der Schalter „Waagerecht/senkrecht erkennen“ steht in zwei Zeilen.
-    assert_eq!(sketch_panel::AUTO_AXIS, "Waagerecht/senkrecht erkennen");
+    assert_eq!(sketch_panel::auto_axis(), "Waagerecht/senkrecht erkennen");
     s.text(&sketch_panel::auto_axis_label());
     assert!(
-        !sketch_panel::AUTO_AXIS_HINT.contains("  "),
+        !sketch_panel::auto_axis_hint().contains("  "),
         "Leerzeichen-Kolonne im Hinweistext"
     );
     nothing_clipped(&s, "Skizzenfelder");
@@ -498,7 +498,7 @@ fn no_text_is_clipped_at_1400px() {
         ui.set_max_width(0.24 * WIDTH);
         properties::show(ui, &mut st);
     });
-    s.text(properties::POSITION_LABEL);
+    s.text(&properties::position_label());
     nothing_clipped(&s, "Eigenschaften");
 }
 
@@ -815,7 +815,7 @@ fn text_and_number_fields_are_26_high() {
 }
 
 fn command_lines(name: &str) -> usize {
-    let tag = format!("DETAIL Befehl {name}: ");
+    let tag = format!("DETAIL Command {name}: ");
     diag::recent_lines(2000)
         .iter()
         .filter(|l| l.contains(&tag))
@@ -831,7 +831,7 @@ fn menu_clicks_and_keys_each_log_one_detail_line() {
     let c = context(Some(true));
     let mut ws = workspace();
     // Menü „Erzeugen → Quader …“: genau eine Zeile.
-    let before = command_lines("Quader anlegen");
+    let before = command_lines("Create box");
     let (s, _) = shot_with(&c, vec![], |ui| app::create_menu(ui, &mut ws));
     let at = s.text("Quader …").rect.center();
     click(&c, at, |ui| {
@@ -839,10 +839,10 @@ fn menu_clicks_and_keys_each_log_one_detail_line() {
         false
     });
     assert!(ws.active_tab().dialog.is_some(), "Dialog offen");
-    assert_eq!(command_lines("Quader anlegen"), before + 1);
+    assert_eq!(command_lines("Create box"), before + 1);
     // Menü „Datei → Schließen“ (Aktion der Tastenbelegung): genau eine Zeile.
-    let name = Action::Close.label();
-    let before = command_lines(name);
+    let name = diag::in_english(|| Action::Close.label());
+    let before = command_lines(&name);
     let (s, _) = shot_with(&c, vec![], |ui| {
         app::file_menu(ui, &mut ws);
     });
@@ -851,10 +851,10 @@ fn menu_clicks_and_keys_each_log_one_detail_line() {
         app::file_menu(ui, &mut ws);
         false
     });
-    assert_eq!(command_lines(name), before + 1);
+    assert_eq!(command_lines(&name), before + 1);
     // Taste: ebenfalls genau eine.
-    let before = command_lines(name);
+    let before = command_lines(&name);
     commands::run_key(&mut ws, Action::Close);
-    assert_eq!(command_lines(name), before + 1);
+    assert_eq!(command_lines(&name), before + 1);
     diag::set_verbose(false);
 }

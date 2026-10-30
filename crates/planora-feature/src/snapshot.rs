@@ -8,6 +8,7 @@ use crate::step_bodies::{StepShape, StepShapeId};
 use planora_drawing::sheet_info::{ProjectInfo, validate_project_info};
 use planora_drawing::{BodyKey, Drawing, RowOverride};
 use planora_exchange::ExchangeMesh;
+use planora_i18n::tr;
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -194,8 +195,12 @@ impl Document {
     pub fn restore(&mut self, s: Snapshot) -> Result<RestoreKind, FeatureError> {
         if self.snapshot().same_model(&s) {
             if let Some(p) = &s.project_info {
-                validate_project_info(p)
-                    .map_err(|e| FeatureError::InvalidInput(format!("Projektangaben: {e}")))?;
+                validate_project_info(p).map_err(|e| {
+                    FeatureError::InvalidInput(tr!(
+                        "feature-snap-project-info",
+                        detail = e.to_string()
+                    ))
+                })?;
             }
             crate::parts::check_overrides(&s.parts_overrides)?;
             // Als letzte Prüfung: `set_drawings` ändert das Dokument erst, wenn alles stimmt.
@@ -222,28 +227,29 @@ impl Document {
         known: &BTreeMap<MeshId, Arc<ExchangeMesh>>,
         first_version: u64,
     ) -> Result<Document, FeatureError> {
-        let bad = |m: &str| FeatureError::InvalidInput(m.to_string());
+        let bad = |m: String| FeatureError::InvalidInput(m);
         if s.next_id == u64::MAX {
-            return Err(bad("Der Kennungszähler ist ungültig"));
+            return Err(bad(tr!("feature-snap-id-counter")));
         }
         if s.marker > s.features.len() {
-            return Err(bad("Der Rückrollmarker liegt hinter dem letzten Feature"));
+            return Err(bad(tr!("feature-snap-marker")));
         }
         // Parametertabelle vor den Features: Kennungen, dann die ganze Tabelle.
         if s.next_param == 0 || s.next_param == u64::MAX {
-            return Err(bad("Der Parameterzähler ist ungültig"));
+            return Err(bad(tr!("feature-snap-param-counter")));
         }
         let mut seen_params = std::collections::HashSet::with_capacity(s.parameters.len());
         for p in &s.parameters {
             if p.id.0 == 0 || p.id.0 >= s.next_param {
-                return Err(bad("Ein Parameter hat eine ungültige Kennung"));
+                return Err(bad(tr!("feature-snap-param-id")));
             }
             if !seen_params.insert(p.id) {
-                return Err(bad("Eine Parameter-Kennung kommt doppelt vor"));
+                return Err(bad(tr!("feature-snap-param-id-twice")));
             }
         }
-        let param_values = check_table(&s.parameters)
-            .map_err(|m| FeatureError::InvalidInput(format!("Parametertabelle: {m}")))?;
+        let param_values = check_table(&s.parameters).map_err(|m| {
+            FeatureError::InvalidInput(tr!("feature-snap-param-table", detail = m.to_string()))
+        })?;
         let mut seen = std::collections::HashSet::with_capacity(s.features.len());
         let mut doc = Document::with_options(chord_tolerance);
         doc.next_version = first_version.max(1);
@@ -252,38 +258,39 @@ impl Document {
         doc.next_param = s.next_param;
         for f in s.features.iter() {
             if f.id.0 == 0 || f.id.0 >= s.next_id {
-                return Err(bad("Ein Feature hat eine ungültige Kennung"));
+                return Err(bad(tr!("feature-snap-feature-id")));
             }
             if !seen.insert(f.id) {
-                return Err(bad("Eine Feature-Kennung kommt doppelt vor"));
+                return Err(bad(tr!("feature-snap-feature-id-twice")));
             }
             if f.name.trim().is_empty() {
-                return Err(bad("Ein Feature hat keinen Namen"));
+                return Err(bad(tr!("feature-snap-feature-name")));
             }
             // Formeln an Feldern, die die Art nicht hat: Bild kaputt. Eine kaputte Formel selbst
             // lädt dagegen; das Feature zeigt dann den Fehlerstatus (Spec §4a.7, P3).
-            check_keys(&f.kind, &f.formulas).map_err(|_| {
-                bad(&format!(
-                    "Feature „{}“: Dieses Feld kann keine Formel haben",
-                    f.name
-                ))
-            })?;
+            check_keys(&f.kind, &f.formulas)
+                .map_err(|_| bad(tr!("feature-snap-no-formula", name = f.name.to_string())))?;
         }
         for (id, mesh) in &s.meshes {
             if id.0 == 0 {
-                return Err(bad("Ein Netz hat eine ungültige Kennung"));
+                return Err(bad(tr!("feature-snap-mesh-id")));
             }
             if known.values().any(|k| Arc::ptr_eq(k, mesh)) {
                 continue;
             }
             MESH_VALIDATIONS.with(|c| c.set(c.get() + 1));
-            mesh.validate()
-                .map_err(|e| FeatureError::InvalidInput(format!("Netz {}: {e}", id.0)))?;
+            mesh.validate().map_err(|e| {
+                FeatureError::InvalidInput(tr!(
+                    "feature-snap-mesh",
+                    id = id.0.to_string(),
+                    detail = e.to_string()
+                ))
+            })?;
         }
         doc.next_mesh = match s.meshes.last_key_value() {
             Some((id, _)) => {
                 id.0.checked_add(1)
-                    .ok_or_else(|| bad("Ein Netz hat eine ungültige Kennung"))?
+                    .ok_or_else(|| bad(tr!("feature-snap-mesh-id")))?
             }
             None => 1,
         };
@@ -292,12 +299,12 @@ impl Document {
         // `StepShape::solid` (ein schon gebautes `Arc` baut nie neu). Ein unlesbarer Text gibt
         // nur dem STEP-Körper den Fehlerstatus (P14), das Laden geht weiter.
         if s.step_shapes.contains_key(&StepShapeId(0)) {
-            return Err(bad("Eine STEP-Form hat eine ungültige Kennung"));
+            return Err(bad(tr!("feature-snap-step-id")));
         }
         doc.next_step_shape = match s.step_shapes.last_key_value() {
             Some((id, _)) => {
                 id.0.checked_add(1)
-                    .ok_or_else(|| bad("Eine STEP-Form hat eine ungültige Kennung"))?
+                    .ok_or_else(|| bad(tr!("feature-snap-step-id")))?
             }
             None => 1,
         };
@@ -325,7 +332,8 @@ impl Document {
         }
         doc.set_drawings(s.drawings, s.next_drawing)?;
         if let Some(p) = &s.project_info {
-            validate_project_info(p).map_err(|e| bad(&format!("Projektangaben: {e}")))?;
+            validate_project_info(p)
+                .map_err(|e| bad(tr!("feature-snap-project-info", detail = e.to_string())))?;
         }
         doc.project_info = s.project_info;
         crate::parts::check_overrides(&s.parts_overrides)?;

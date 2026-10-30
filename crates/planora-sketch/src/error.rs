@@ -1,27 +1,43 @@
+use planora_i18n::tr;
+use std::fmt;
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum SketchError {
-    #[error("Ungültige Eingabe: {0}")]
     InvalidInput(String),
-    #[error("Das Objekt gibt es in dieser Skizze nicht")]
     UnknownObject,
-    #[error("Entartete Geometrie: {0}")]
     Degenerate(String),
-    #[error("Falscher Objekttyp: {0}")]
     WrongType(String),
-    #[error("Das Profil ist nicht geschlossen")]
     OpenLoop,
-    #[error("Das Profil ist nicht eindeutig: {0}")]
     AmbiguousTopology(String),
-    #[error("Das Profil schneidet oder berührt sich selbst oder ein anderes Profil")]
     SelfIntersecting,
-    #[error("Die Verschachtelung der Profile ist nicht eindeutig")]
     AmbiguousNesting,
-    #[error("Dieses Profil enthält {0} und kann noch nicht zu einem Körper werden")]
     UnsupportedForSolid(String),
-    #[error("Diese Kante kann noch nicht in die Skizze kopiert werden: {0}")]
     UnsupportedProjection(String),
-    #[error("Der Kernel hat das Profil abgelehnt: {0}")]
     Kernel(String),
+}
+
+impl fmt::Display for SketchError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            SketchError::InvalidInput(d) => tr!("sketch-err-invalid-input", detail = d.as_str()),
+            SketchError::UnknownObject => tr!("sketch-err-unknown-object"),
+            SketchError::Degenerate(d) => tr!("sketch-err-degenerate", detail = d.as_str()),
+            SketchError::WrongType(d) => tr!("sketch-err-wrong-type", detail = d.as_str()),
+            SketchError::OpenLoop => tr!("sketch-err-open-loop"),
+            SketchError::AmbiguousTopology(d) => {
+                tr!("sketch-err-ambiguous-topology", detail = d.as_str())
+            }
+            SketchError::SelfIntersecting => tr!("sketch-err-self-intersecting"),
+            SketchError::AmbiguousNesting => tr!("sketch-err-ambiguous-nesting"),
+            SketchError::UnsupportedForSolid(w) => {
+                tr!("sketch-err-unsupported-solid", what = w.as_str())
+            }
+            SketchError::UnsupportedProjection(d) => {
+                tr!("sketch-err-unsupported-projection", detail = d.as_str())
+            }
+            SketchError::Kernel(d) => tr!("sketch-err-kernel", detail = d.as_str()),
+        };
+        f.write_str(&text)
+    }
 }

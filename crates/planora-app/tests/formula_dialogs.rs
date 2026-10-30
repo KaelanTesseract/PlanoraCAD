@@ -733,7 +733,7 @@ fn the_blend_create_window_takes_formulas() {
     d.first = "w".into();
     assert!(d.execute(&mut s), "Winkel im Radius: offen");
     assert_eq!(
-        d.error(),
+        d.error().as_deref(),
         Some("Radius: Hier wird eine Länge erwartet, die Formel ergibt einen Winkel.")
     );
     assert_eq!(s.document.features().len(), 1);
@@ -770,7 +770,8 @@ fn the_blend_create_window_takes_formulas() {
     d.set_art(ArtChoice::FaseWinkel);
     d.second = "w*10".into();
     assert_eq!(
-        d.art_formulas(&s.document.param_scope()),
+        d.art_formulas(&s.document.param_scope())
+            .map_err(|m| m.text()),
         Err(angle_message("w*10"))
     );
     // Zwei Abstände: zweites Feld „Abstand 2“.
@@ -1088,7 +1089,7 @@ fn edit_window_closes_after_a_parameter_change() {
     assert!(tab.feature_dialog.is_none());
     assert_eq!(
         tab.state.info.as_deref(),
-        Some(planora_app::parameter_dialog::DIALOG_CLOSED)
+        Some(planora_app::parameter_dialog::dialog_closed().as_str())
     );
     assert_eq!(feature_formulas(&tab.state, f).len(), 1, "Formel bleibt");
 }

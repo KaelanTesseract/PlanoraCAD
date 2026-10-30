@@ -379,12 +379,12 @@ fn empty_document_shows_invitation_text() {
     let mut s = AppState::new();
     let mut t = Tree::new(true);
     let shot = t.settle(&mut s);
-    assert!(shot.has(browser::EMPTY_TEXT), "{}", shot.all_text());
-    assert!(browser::EMPTY_TEXT.contains("„Erzeugen“"));
+    assert!(shot.has(&browser::empty_text()), "{}", shot.all_text());
+    assert!(browser::empty_text().contains("„Erzeugen“"));
     // Mit einem Körper verschwindet die Einladung.
     s.create_box(DVec3::splat(4.0)).unwrap();
     let shot = t.settle(&mut s);
-    assert!(!shot.has(browser::EMPTY_TEXT));
+    assert!(!shot.has(&browser::empty_text()));
 }
 
 #[test]
@@ -410,7 +410,7 @@ fn rolled_back_body_is_dimmed_but_listed() {
     let weak = t.ctx.style_of(egui::Theme::Dark).visuals.weak_text_color();
     assert_eq!(*color, weak);
     assert_ne!(*color, planora_app::icons::stroke_color(true, false));
-    assert!(shot.has(browser::ROLLED_BACK), "{}", shot.all_text());
+    assert!(shot.has(&browser::rolled_back()), "{}", shot.all_text());
     // Ein Klick wählt ihn für die Leiste (dort lässt er sich wieder vorspulen).
     s.select_body(Some(later));
     assert_eq!(s.history_body(), Some(later));
@@ -652,7 +652,7 @@ fn a_long_name_is_shortened_with_an_ellipsis_and_the_status_moves_to_the_hint() 
     );
     assert!(!drawn.iter().any(|x| x == long), "nicht in voller Länge");
     // Der Status passt nicht mehr daneben: er steht nur im Hinweis.
-    assert!(!shot.has(browser::ROLLED_BACK), "{}", shot.all_text());
+    assert!(!shot.has(&browser::rolled_back()), "{}", shot.all_text());
     let row = t.row(long).expect("Zeile");
     let mut text = String::new();
     for i in 0..6 {
@@ -664,7 +664,7 @@ fn a_long_name_is_shortened_with_an_ellipsis_and_the_status_moves_to_the_hint() 
         t.time += 0.5;
         text = t.frame(&mut s, events).all_text();
     }
-    assert!(text.contains(browser::ROLLED_BACK), "Hinweis:\n{text}");
+    assert!(text.contains(&browser::rolled_back()), "Hinweis:\n{text}");
 }
 
 #[test]
@@ -675,26 +675,26 @@ fn the_empty_hints_sit_inside_their_folders() {
     let shot = t.settle(&mut s);
     let bodies = t.folder(Folder::Bodies);
     let sketches = t.folder(Folder::Sketches);
-    let hint = shot.text(browser::EMPTY_TEXT).1;
+    let hint = shot.text(&browser::empty_text()).1;
     assert!(
         hint.top() >= bodies.bottom() - 0.5 && hint.bottom() <= sketches.top() + 0.5,
         "Hinweis im Ordner „Körper“: {hint:?}, Körper {bodies:?}, Skizzen {sketches:?}"
     );
-    assert!(shot.has(browser::NO_SKETCHES), "{}", shot.all_text());
-    let sk = shot.text(browser::NO_SKETCHES).1;
+    assert!(shot.has(&browser::no_sketches()), "{}", shot.all_text());
+    let sk = shot.text(&browser::no_sketches()).1;
     assert!(sk.top() >= sketches.bottom() - 0.5);
     // Zugeklappt: kein Hinweis.
     s.tree_folders.set_open(Folder::Bodies, false);
     s.tree_folders.set_open(Folder::Sketches, false);
     let shot = t.settle(&mut s);
-    assert!(!shot.has(browser::EMPTY_TEXT), "{}", shot.all_text());
-    assert!(!shot.has(browser::NO_SKETCHES), "{}", shot.all_text());
+    assert!(!shot.has(&browser::empty_text()), "{}", shot.all_text());
+    assert!(!shot.has(&browser::no_sketches()), "{}", shot.all_text());
     // Mit einem Körper, aber ohne Skizze: nur noch der Hinweis bei den Skizzen.
     s.tree_folders = Default::default();
     s.create_box(DVec3::splat(4.0)).unwrap();
     let shot = t.settle(&mut s);
-    assert!(!shot.has(browser::EMPTY_TEXT));
-    assert!(shot.has(browser::NO_SKETCHES));
+    assert!(!shot.has(&browser::empty_text()));
+    assert!(shot.has(&browser::no_sketches()));
 }
 
 #[test]

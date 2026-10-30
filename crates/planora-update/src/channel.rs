@@ -1,5 +1,7 @@
 //! Update-Kanäle: Dev, Beta, Stabil.
 
+use planora_i18n::tr;
+
 use crate::version::Version;
 
 /// Update-Kanal des Nutzers. Ein Kanal schließt die stabileren mit ein.
@@ -27,11 +29,11 @@ impl Channel {
     }
 
     /// Anzeigename in der Oberfläche.
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Channel::Dev => "Dev",
-            Channel::Beta => "Beta",
-            Channel::Stable => "Stabil",
+            Channel::Dev => tr!("update-channel-dev"),
+            Channel::Beta => tr!("update-channel-beta"),
+            Channel::Stable => tr!("update-channel-stable"),
         }
     }
 

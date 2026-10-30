@@ -19,16 +19,14 @@
 use crate::balloon_tool;
 use crate::browser::error_color;
 use crate::dimension_state::{SuggestOutcome, marks_in, notes_in, resolve_in, suggest_for};
-use crate::dimension_tool::{
-    END_PX, Hit, ISOMETRIC_TIP, MISSED, NO_VIEWS_TIP, READ_ONLY_TIP, TOOL, TOOL_TIP, ToolError,
-    ToolMode, with_tool,
-};
+use crate::dimension_tool::{END_PX, Hit, ToolError, ToolMode, with_tool};
 use crate::drawing_state::{
     FreeArea, ViewResult, WorkArea, block_origin, default_distance, estimate_view_size,
     iso_placement, keep_in_free, suggest_scale_in,
 };
 use crate::export_dialog::{REPAINT, shorten_for_display};
 use crate::icons::{self, Icon};
+use crate::msg::{Msg, MsgArg};
 use crate::section_tool;
 use crate::shell::{self, ShellMode, ShellRects, ShellState};
 use crate::state::AppState;
@@ -59,9 +57,10 @@ use planora_drawing::sheet_marks::sheet_frame;
 use planora_drawing::stroke::StrokeOrigin;
 use planora_drawing::{
     Anchor, BalloonId, Drawing, DrawingId, DrawingKind, PartsCells, Placement, Projection, Scale,
-    SectionData, Sheet, ViewId, ViewKey, ViewKind, ViewLines, ViewSpec, Visibility, align_dir,
-    view_extent,
+    SectionData, Sheet, ViewId, ViewKey, ViewKind, ViewLines, ViewName, ViewSpec, Visibility,
+    align_dir, view_extent,
 };
+use planora_i18n::tr;
 use planora_math::DVec2;
 use std::collections::BTreeMap;
 use std::f64::consts::PI;
@@ -106,27 +105,47 @@ const MAX_TEXT_PX: f64 = 400.0;
 /// das Ziehen begann).
 pub const MIN_DRAG_OFFSET_MM: f64 = 1.0;
 /// Name (Tooltip) des Symbolknopfs „Blatt einpassen“.
-pub const FIT_SHEET: &str = "Blatt einpassen";
+pub fn fit_sheet() -> String {
+    tr!("drawing-fit-sheet")
+}
 /// Kleinster Radius eines Winkelmaßes beim Ziehen (Blatt-mm).
 const MIN_ANGLE_RADIUS_MM: f64 = 1.0;
 /// Hinweis, wenn es zu den Körpern nichts zu sagen gibt.
-pub const HINT: &str = "Klicken wählt eine Ansicht oder ein Maß, Ziehen verschiebt es. Mausrad vergrößert, mittlere Maustaste oder Umschalt + Ziehen verschiebt das Blatt.";
+pub fn default_hint() -> String {
+    tr!("drawing-hint")
+}
 /// Beschriftung des Schalters für die Mittellinien der gewählten Ansicht.
-pub const CENTERLINES: &str = "Mittellinien";
+pub fn centerlines_label() -> String {
+    tr!("drawing-centerlines")
+}
 /// Erklärung am gesperrten Schalter „Mittellinien“ einer isometrischen Ansicht.
-pub const NO_ISO_CENTERLINES: &str = "In der Isometrie gibt es keine Mittellinien; sie erscheinen nur in den geraden Ansichten (vorne, oben, seitlich).";
+pub fn no_iso_centerlines() -> String {
+    tr!("drawing-no-iso-centerlines")
+}
 /// Hinweis im Ansichtsfeld, solange keine Ansicht gewählt ist.
-pub const NO_VIEW_SELECTED: &str = "Eine Ansicht auswählen.";
+pub fn no_view_selected() -> String {
+    tr!("drawing-no-view-selected")
+}
 /// Beschriftung des Knopfs für den Maßvorschlag.
-pub const SUGGEST: &str = "Maße vorschlagen";
+pub fn suggest() -> String {
+    tr!("drawing-suggest")
+}
 /// Satzanfang des Tooltips eines Maßes, das seinen Bezug verloren hat.
-pub const LOST_TIP: &str = "Das Maß hat seinen Bezug verloren.";
+pub fn lost_tip() -> String {
+    tr!("drawing-lost-tip")
+}
 /// Meldung, wenn die Ausgangsansicht einer abgeleiteten Ansicht nicht gezeichnet werden kann.
-pub const PARENT_MISSING: &str = "Die Ausgangsansicht lässt sich nicht zeichnen.";
+pub fn parent_missing() -> Msg {
+    crate::msg!("drawing-parent-missing")
+}
 /// Meldung ohne geöffnete Zeichnung.
-const NO_DRAWING: &str = "Es ist keine Zeichnung geöffnet.";
+fn no_drawing_open() -> Msg {
+    crate::msg!("drawing-none-open")
+}
 /// Hinweis am gesperrten „Ansicht hinzufügen“ eines Stücklistenblatts.
-pub const NO_VIEWS_ON_PARTS_SHEET: &str = "Auf dem Stücklistenblatt gibt es keine Ansichten.";
+pub fn no_views_on_parts_sheet() -> Msg {
+    crate::msg!("drawing-no-views-on-parts-sheet")
+}
 
 /// Was an der Stelle einer Ansicht zu sehen ist.
 #[derive(Clone, Debug, PartialEq)]
@@ -418,10 +437,53 @@ pub fn dash_pattern(points: &[DVec2], pattern: &[f64]) -> Vec<Vec<DVec2>> {
     out
 }
 
+/// Name einer Ansichtsart in der Oberfläche.
+pub fn view_kind_msg(kind: ViewKind) -> Msg {
+    match kind {
+        ViewKind::Front => crate::msg!("drawing-view-front"),
+        ViewKind::Back => crate::msg!("drawing-view-back"),
+        ViewKind::Left => crate::msg!("drawing-view-left"),
+        ViewKind::Right => crate::msg!("drawing-view-right"),
+        ViewKind::Top => crate::msg!("drawing-view-top"),
+        ViewKind::Bottom => crate::msg!("drawing-view-bottom"),
+        ViewKind::Isometric => crate::msg!("drawing-view-isometric"),
+    }
+}
+
+/// Wie [`view_kind_msg`], als Text in der aktuellen Sprache.
+pub fn view_kind_label(kind: ViewKind) -> String {
+    view_kind_msg(kind).text()
+}
+
 /// Namen der Ansichten wie auf dem Blatt: Art, bei mehrfach gleicher Art mit Nummer, Schnitte
-/// als „Schnitt A–A“ (siehe [`Drawing::view_names`]).
+/// als „Schnitt A–A“ (wie [`Drawing::view_names`], aber übersetzt erst beim Zeichnen).
+pub fn view_name_msgs(drawing: &Drawing) -> BTreeMap<ViewId, Msg> {
+    drawing
+        .view_name_parts()
+        .into_iter()
+        .map(|(id, part)| {
+            let name = match part {
+                ViewName::Section(letter) => {
+                    crate::msg!("drawing-view-section", letter = letter.to_string())
+                }
+                ViewName::Kind(kind, 1) => view_kind_msg(kind),
+                ViewName::Kind(kind, n) => crate::msg!(
+                    "drawing-view-numbered",
+                    name = MsgArg::from(view_kind_msg(kind)),
+                    n = n as usize
+                ),
+            };
+            (id, name)
+        })
+        .collect()
+}
+
+/// Namen der Ansichten in der aktuellen Sprache (siehe [`view_name_msgs`]).
 pub fn view_names(drawing: &Drawing) -> BTreeMap<ViewId, String> {
-    drawing.view_names()
+    view_name_msgs(drawing)
+        .into_iter()
+        .map(|(id, m)| (id, m.text()))
+        .collect()
 }
 
 /// Mitte einer Ansicht auf dem Blatt (auch wenn noch nichts berechnet ist).
@@ -483,7 +545,7 @@ fn place_views(state: &AppState, drawing: &Drawing, sheet: &SheetModel, model: u
             (ViewResult::Ready(lines), None) => {
                 let st = match pending_ancestor(drawing, v.id, &results) {
                     Some(f) => DrawnState::Pending(f),
-                    None => DrawnState::Failed(PARENT_MISSING.into()),
+                    None => DrawnState::Failed(parent_missing().text()),
                 };
                 (placeholder(view_extent(lines.bbox, v.scale)), st)
             }
@@ -493,7 +555,7 @@ fn place_views(state: &AppState, drawing: &Drawing, sheet: &SheetModel, model: u
             ),
             (ViewResult::Failed(m), _) => (
                 placeholder(estimated(state, v.kind, v.scale)),
-                DrawnState::Failed(m.clone()),
+                DrawnState::Failed(m.text()),
             ),
         };
         let half = DVec2::new(size.0, size.1) * 0.5;
@@ -1025,13 +1087,13 @@ enum SectionEdit {
 
 /// Kann das Werkzeug „Maß“ benutzt werden? Sonst die Erklärung (alte Version, keine Ansicht,
 /// nur Isometrie).
-pub fn tool_blocked(drawing: &Drawing, editable: bool) -> Option<&'static str> {
+pub fn tool_blocked(drawing: &Drawing, editable: bool) -> Option<String> {
     if !editable {
-        Some(READ_ONLY_TIP)
+        Some(crate::dimension_tool::read_only_tip())
     } else if drawing.views.is_empty() {
-        Some(NO_VIEWS_TIP)
+        Some(crate::dimension_tool::no_views_tip())
     } else if !drawing.views.iter().any(|v| v.kind.is_normal()) {
-        Some(ISOMETRIC_TIP)
+        Some(crate::dimension_tool::isometric_tip())
     } else {
         None
     }
@@ -1181,7 +1243,7 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
             if let Some(sel) = state.drawing_ui.selected_view
                 && let Err(e) = section_tool::set_scale(state, id, sel, s)
             {
-                state.message = Some(e);
+                state.message = Some(e.text());
             }
         }
         Some(Action::Hidden(h)) => set_selected(state, id, |v| v.show_hidden = h),
@@ -1238,7 +1300,7 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
     let section_notes = section_errors(&ctx, state, id);
     red += section_notes.len();
     for (i, t) in section_notes.into_iter().enumerate() {
-        notes.texts.insert(i, t);
+        notes.texts.insert(i, Msg::Raw(t));
     }
     if lost_balloons > 0 {
         notes
@@ -1260,26 +1322,21 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, editable: bool) {
         .dimension_tool
         .message()
         .or(state.balloon_tool.message())
-        .or(state.section_tool.message())
-        .map(str::to_owned);
+        .or(state.section_tool.message());
     let message = rejected
         .clone()
-        .or_else(|| state.dimension_tool.notice().map(str::to_owned))
-        .or_else(|| state.drawing_ui.dim_message.clone());
+        .or_else(|| state.dimension_tool.notice())
+        .or_else(|| state.drawing_ui.dim_message.as_ref().map(Msg::text));
     let hint_text = state
         .dimension_tool
         .hint()
-        .or_else(|| {
-            state
-                .balloon_tool
-                .is_active()
-                .then(|| balloon_tool::HINT.to_string())
-        })
-        .or_else(|| state.section_tool.hint().map(str::to_owned))
+        .or_else(|| state.balloon_tool.is_active().then(balloon_tool::hint))
+        .or_else(|| state.section_tool.hint())
         .or(note)
-        .unwrap_or_else(|| HINT.to_string());
+        .unwrap_or_else(default_hint);
+    let note_texts: Vec<String> = notes.texts.iter().map(Msg::text).collect();
     let lines = HintLines {
-        notes: &notes.texts,
+        notes: &note_texts,
         red,
         message: message.map(|m| (m, rejected.is_some())),
         hint: hint_text,
@@ -1391,7 +1448,11 @@ fn tool_field(
                 // Erste Zeile: zurück zum Modell, Name der Zeichnung, Ansicht hinzufügen.
                 tool_row(ui, |ui| {
                     if ui
-                        .add(flat(icons::selectable(false, Icon::ToModel, "3D-Modell")))
+                        .add(flat(icons::selectable(
+                            false,
+                            Icon::ToModel,
+                            tr!("drawing-to-model"),
+                        )))
                         .clicked()
                     {
                         action = Some(Action::ToModel);
@@ -1399,34 +1460,37 @@ fn tool_field(
                     let _ = ui.add(flat(icons::selectable(
                         true,
                         Icon::OpenDrawing,
-                        format!("Zeichnung: {}", shorten_for_display(&drawing.name)),
+                        tr!("drawing-current", name = shorten_for_display(&drawing.name)),
                     )));
                     ui.separator();
                     // Auf einem Stücklistenblatt gibt es keine Ansichten.
                     let parts_sheet = matches!(drawing.kind, DrawingKind::PartsList { .. });
                     let add_why = if parts_sheet {
-                        NO_VIEWS_ON_PARTS_SHEET
+                        no_views_on_parts_sheet().text()
                     } else {
-                        crate::drawing_browser::READ_ONLY_HINT
+                        crate::drawing_browser::read_only_hint()
                     };
                     ui.add_enabled(editable && !parts_sheet, |ui: &mut egui::Ui| {
                         let saved = ui.style().clone();
                         theme::frameless(ui.style_mut());
                         let r = ui
-                            .menu_button((icons::atom(Icon::AddView), "Ansicht hinzufügen"), |ui| {
-                                for k in ViewKind::ALL {
-                                    if theme::entry(
-                                        ui,
-                                        true,
-                                        icons::button(Icon::ViewFace, k.label()),
-                                    )
-                                    .clicked()
-                                    {
-                                        action = Some(Action::Add(k));
-                                        ui.close();
+                            .menu_button(
+                                (icons::atom(Icon::AddView), tr!("drawing-add-view")),
+                                |ui| {
+                                    for k in ViewKind::ALL {
+                                        if theme::entry(
+                                            ui,
+                                            true,
+                                            icons::button(Icon::ViewFace, view_kind_label(k)),
+                                        )
+                                        .clicked()
+                                        {
+                                            action = Some(Action::Add(k));
+                                            ui.close();
+                                        }
                                     }
-                                }
-                            })
+                                },
+                            )
                             .response;
                         ui.set_style(saved);
                         theme::focus_ring(ui, &r);
@@ -1441,17 +1505,17 @@ fn tool_field(
                     let button = if state.section_tool.is_active() {
                         egui::Button::new((
                             icons::text(Icon::SectionTool, icons::LABEL_ICON_SIZE, p.on_accent),
-                            egui::RichText::new(section_tool::TOOL).color(p.on_accent),
+                            egui::RichText::new(section_tool::tool()).color(p.on_accent),
                         ))
                         .fill(p.accent)
                         .selected(true)
                     } else {
-                        icons::button(Icon::SectionTool, section_tool::TOOL)
+                        icons::button(Icon::SectionTool, section_tool::tool())
                     };
                     if ui
                         .add_enabled(section_why.is_none(), flat(button))
-                        .on_hover_text(section_tool::TOOL_TIP)
-                        .on_disabled_hover_text(section_why.unwrap_or(section_tool::TOOL_TIP))
+                        .on_hover_text(section_tool::tool_tip())
+                        .on_disabled_hover_text(section_why.unwrap_or_else(section_tool::tool_tip))
                         .clicked()
                     {
                         action = Some(Action::SectionTool);
@@ -1464,19 +1528,19 @@ fn tool_field(
                         egui::WidgetInfo::labeled(
                             egui::WidgetType::Button,
                             editable,
-                            crate::sheet_dialog::BUTTON,
+                            crate::sheet_dialog::button(),
                         )
                     });
                     if info
                         .on_hover_text(format!(
                             "{}: {}",
-                            crate::sheet_dialog::BUTTON,
-                            crate::sheet_dialog::BUTTON_TIP
+                            crate::sheet_dialog::button(),
+                            crate::sheet_dialog::button_tip()
                         ))
                         .on_disabled_hover_text(format!(
                             "{}: {}",
-                            crate::sheet_dialog::BUTTON,
-                            crate::drawing_browser::READ_ONLY_HINT
+                            crate::sheet_dialog::button(),
+                            crate::drawing_browser::read_only_hint()
                         ))
                         .clicked()
                     {
@@ -1491,35 +1555,35 @@ fn tool_field(
                     // bei 1100 × 700 ins Feld passt; der Name steht im Tooltip.
                     let fit = ui.add(flat(icon_only(Icon::FitSheet)));
                     fit.widget_info(|| {
-                        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, FIT_SHEET)
+                        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, fit_sheet())
                     });
-                    if fit.on_hover_text(FIT_SHEET).clicked() {
+                    if fit.on_hover_text(fit_sheet()).clicked() {
                         action = Some(Action::Fit);
                     }
                     if ui
                         .add(flat(icon_only(Icon::ZoomOut)))
-                        .on_hover_text("Verkleinern")
+                        .on_hover_text(tr!("drawing-zoom-out"))
                         .clicked()
                     {
                         action = Some(Action::Zoom(1.0 / ZOOM_STEP));
                     }
                     if ui
                         .add(flat(icon_only(Icon::ZoomIn)))
-                        .on_hover_text("Vergrößern")
+                        .on_hover_text(tr!("drawing-zoom-in"))
                         .clicked()
                     {
                         action = Some(Action::Zoom(ZOOM_STEP));
                     }
                     ui.separator();
                     let tip = if selected {
-                        "Setzt die wichtigsten Maße in die gewählte Ansicht."
+                        tr!("drawing-suggest-tip-view")
                     } else {
-                        "Setzt die wichtigsten Maße in alle Ansichten."
+                        tr!("drawing-suggest-tip-all")
                     };
                     if ui
                         .add_enabled(
                             editable,
-                            flat(icons::button(Icon::SuggestDimensions, SUGGEST)),
+                            flat(icons::button(Icon::SuggestDimensions, suggest())),
                         )
                         .on_hover_text(tip)
                         .clicked()
@@ -1531,23 +1595,28 @@ fn tool_field(
                     let blocked = tool_blocked(drawing, editable);
                     let free = blocked.is_none();
                     let tool = &state.dimension_tool;
-                    let why = blocked.unwrap_or(TOOL_TIP);
+                    let why = blocked.unwrap_or_else(crate::dimension_tool::tool_tip);
                     let button = if tool.is_active() {
                         egui::Button::new((
                             icons::text(Icon::DimensionTool, icons::LABEL_ICON_SIZE, p.on_accent),
-                            egui::RichText::new(TOOL).color(p.on_accent),
+                            egui::RichText::new(crate::dimension_tool::tool()).color(p.on_accent),
                         ))
                         .fill(p.accent)
                         .selected(true)
                     } else {
-                        icons::button(Icon::DimensionTool, TOOL)
+                        icons::button(Icon::DimensionTool, crate::dimension_tool::tool())
                     };
                     if ui
                         .add_enabled(free, flat(button))
                         .on_hover_ui(|ui| {
-                            tool_tip(ui, crate::keymap::Action::DrawingDimension, TOOL, TOOL_TIP)
+                            tool_tip(
+                                ui,
+                                crate::keymap::Action::DrawingDimension,
+                                &crate::dimension_tool::tool(),
+                                &crate::dimension_tool::tool_tip(),
+                            )
                         })
-                        .on_disabled_hover_text(why)
+                        .on_disabled_hover_text(why.clone())
                         .clicked()
                     {
                         action = Some(Action::ToolToggle);
@@ -1575,12 +1644,12 @@ fn tool_field(
                     let button = if state.balloon_tool.is_active() {
                         egui::Button::new((
                             icons::text(Icon::PositionTool, icons::LABEL_ICON_SIZE, p.on_accent),
-                            egui::RichText::new(balloon_tool::TOOL).color(p.on_accent),
+                            egui::RichText::new(balloon_tool::tool()).color(p.on_accent),
                         ))
                         .fill(p.accent)
                         .selected(true)
                     } else {
-                        icons::button(Icon::PositionTool, balloon_tool::TOOL)
+                        icons::button(Icon::PositionTool, balloon_tool::tool())
                     };
                     if ui
                         .add_enabled(balloon_why.is_none(), flat(button))
@@ -1588,11 +1657,11 @@ fn tool_field(
                             tool_tip(
                                 ui,
                                 crate::keymap::Action::DrawingBalloon,
-                                balloon_tool::TOOL,
-                                balloon_tool::TOOL_TIP,
+                                &balloon_tool::tool(),
+                                &balloon_tool::tool_tip(),
                             )
                         })
-                        .on_disabled_hover_text(balloon_why.unwrap_or(balloon_tool::TOOL_TIP))
+                        .on_disabled_hover_text(balloon_why.unwrap_or_else(balloon_tool::tool_tip))
                         .clicked()
                     {
                         action = Some(Action::BalloonTool);
@@ -1624,7 +1693,7 @@ pub fn mode_combo_width(ui: &egui::Ui) -> f32 {
         ToolMode::CHOICES
             .iter()
             .map(|m| {
-                f.layout_no_wrap(m.label().to_string(), font.clone(), Color32::PLACEHOLDER)
+                f.layout_no_wrap(m.label(), font.clone(), Color32::PLACEHOLDER)
                     .size()
                     .x
             })
@@ -1667,9 +1736,9 @@ fn view_field(
                     .auto_shrink([false, true]);
                 theme::scroll_area(ui, area, |ui| {
                     let Some(v) = &selected else {
-                        theme::section_header(ui, "Ansicht", theme::HEADER_H);
+                        theme::section_header(ui, &tr!("drawing-view-header"), theme::HEADER_H);
                         ui.add_space(theme::SPACE_1);
-                        ui.weak(NO_VIEW_SELECTED);
+                        ui.weak(no_view_selected());
                         return;
                     };
                     let name = names.get(&v.id).cloned().unwrap_or_default();
@@ -1677,15 +1746,15 @@ fn view_field(
                     let title = if v.section.is_some() {
                         name.clone()
                     } else {
-                        format!("Ansicht „{name}“")
+                        tr!("drawing-view-title", name = name.as_str())
                     };
                     theme::section_header(ui, &title, theme::HEADER_H);
                     ui.add_space(theme::SPACE_1);
                     // Der Maßstab einer Schnittansicht folgt ihrer Ausgangsansicht.
                     let scale_free = editable && v.section.is_none();
                     ui.horizontal(|ui| {
-                        ui.add_enabled(scale_free, egui::Label::new("Maßstab"))
-                            .on_disabled_hover_text(section_tool::SCALE_LOCKED_TIP);
+                        ui.add_enabled(scale_free, egui::Label::new(tr!("drawing-scale")))
+                            .on_disabled_hover_text(section_tool::scale_locked_tip());
                         ui.add_enabled(scale_free, |ui: &mut egui::Ui| {
                             egui::ComboBox::from_id_salt("planora-drawing-scale")
                                 .selected_text(v.scale.label())
@@ -1698,7 +1767,7 @@ fn view_field(
                                 })
                                 .response
                         })
-                        .on_disabled_hover_text(section_tool::SCALE_LOCKED_TIP);
+                        .on_disabled_hover_text(section_tool::scale_locked_tip());
                     });
                     if let Some(sec) = &v.section {
                         let model = state.document.model_edit_count();
@@ -1714,7 +1783,7 @@ fn view_field(
                     if ui
                         .add_enabled(
                             editable,
-                            theme::Toggle::new(&mut hidden, "Verdeckte Kanten zeigen"),
+                            theme::Toggle::new(&mut hidden, tr!("drawing-show-hidden")),
                         )
                         .changed()
                     {
@@ -1726,9 +1795,9 @@ fn view_field(
                     if ui
                         .add_enabled(
                             editable && v.kind.is_normal(),
-                            theme::Toggle::new(&mut centerlines, CENTERLINES),
+                            theme::Toggle::new(&mut centerlines, centerlines_label()),
                         )
-                        .on_disabled_hover_text(NO_ISO_CENTERLINES)
+                        .on_disabled_hover_text(no_iso_centerlines())
                         .changed()
                     {
                         action = Some(Action::Centerlines(centerlines));
@@ -1737,7 +1806,7 @@ fn view_field(
                     if ui
                         .add_enabled(
                             editable,
-                            flat(icons::button(Icon::Delete, "Ansicht löschen")),
+                            flat(icons::button(Icon::Delete, tr!("drawing-view-delete"))),
                         )
                         .clicked()
                     {
@@ -1794,7 +1863,7 @@ fn section_fields(
 ) -> Option<SectionEdit> {
     let mut edit = None;
     ui.add_space(theme::SPACE_1);
-    ui.add_enabled(editable, egui::Label::new("Schnittposition (mm)"));
+    ui.add_enabled(editable, egui::Label::new(tr!("drawing-section-position")));
     if let Some(t) = commit_field(
         ui,
         "offset",
@@ -1808,7 +1877,7 @@ fn section_fields(
     if ui
         .add_enabled(
             editable,
-            flat(icons::button(Icon::Mirror, "Blickrichtung umdrehen")),
+            flat(icons::button(Icon::Mirror, tr!("drawing-section-flip"))),
         )
         .clicked()
     {
@@ -1816,14 +1885,17 @@ fn section_fields(
     }
     let mut hatch = sec.hatch.on;
     if ui
-        .add_enabled(editable, theme::Toggle::new(&mut hatch, "Schraffur"))
+        .add_enabled(
+            editable,
+            theme::Toggle::new(&mut hatch, tr!("drawing-section-hatch")),
+        )
         .changed()
     {
         edit = Some(SectionEdit::Hatch(hatch));
     }
     ui.add_enabled(
         editable && sec.hatch.on,
-        egui::Label::new("Schraffurabstand (mm)"),
+        egui::Label::new(tr!("drawing-section-hatch-spacing")),
     );
     if let Some(t) = commit_field(
         ui,
@@ -1836,7 +1908,7 @@ fn section_fields(
     }
     if nudged {
         ui.add_space(theme::SPACE_1);
-        ui.add(egui::Label::new(egui::RichText::new(section_tool::NUDGED).weak()).wrap());
+        ui.add(egui::Label::new(egui::RichText::new(section_tool::nudged()).weak()).wrap());
     }
     edit
 }
@@ -1992,18 +2064,19 @@ pub fn delete_selected(state: &mut AppState) {
 pub fn suggest_dimensions(state: &mut AppState, id: DrawingId) {
     let only = state.drawing_ui.selected_view;
     let model = state.document.model_edit_count();
-    let failed: Vec<(String, String)> = state
+    let failed: Vec<(Msg, Msg)> = state
         .document
         .drawing(id)
         .map(|d| {
-            let names = view_names(d);
+            let names = view_name_msgs(d);
             d.views
                 .iter()
                 .filter(|v| v.kind.is_normal() && only.is_none_or(|o| o == v.id))
                 .filter_map(|v| match state.drawing_ui.result_of(v, model) {
-                    ViewResult::Failed(m) => {
-                        Some((names.get(&v.id).cloned().unwrap_or_default(), m))
-                    }
+                    ViewResult::Failed(m) => Some((
+                        names.get(&v.id).cloned().unwrap_or(Msg::Raw(String::new())),
+                        m,
+                    )),
                     _ => None,
                 })
                 .collect()
@@ -2012,34 +2085,34 @@ pub fn suggest_dimensions(state: &mut AppState, id: DrawingId) {
     let outcome = suggest_for(state, id, only);
     let mut text = outcome.message();
     if !failed.is_empty() {
-        let quoted: Vec<String> = failed.iter().map(|(n, _)| format!("„{n}“")).collect();
+        let quoted = MsgArg::List(
+            failed
+                .iter()
+                .map(|(n, _)| crate::msg!("drawing-quoted", name = n.clone()).into())
+                .collect(),
+        );
+        let count = failed.len();
         match &outcome {
             // Keine Ansicht ließ sich berechnen: der Grund ist der Fehlertext einer Ansicht.
             SuggestOutcome::Unavailable(t) if failed.iter().any(|(_, m)| m == t) => {
-                text = if failed.len() == 1 {
-                    format!("Die Ansicht {} ließ sich nicht berechnen. {t}", quoted[0])
-                } else {
-                    format!(
-                        "Die Ansichten {} ließen sich nicht berechnen. {t}",
-                        quoted.join(", ")
-                    )
-                };
+                text = crate::msg!(
+                    "drawing-views-failed",
+                    count = count,
+                    names = quoted,
+                    reason = t.clone()
+                );
             }
             // Anderer Grund (etwa: es wird noch gerechnet).
             SuggestOutcome::Unavailable(_) => {}
             _ => {
-                text.push(' ');
-                text.push_str(&if failed.len() == 1 {
-                    format!(
-                        "Die Ansicht {} ließ sich nicht berechnen und bekam keine Maße.",
-                        quoted[0]
-                    )
-                } else {
-                    format!(
-                        "Die Ansichten {} ließen sich nicht berechnen und bekamen keine Maße.",
-                        quoted.join(", ")
-                    )
-                });
+                text = Msg::Join(vec![
+                    text,
+                    crate::msg!(
+                        "drawing-views-failed-no-dims",
+                        count = count,
+                        names = quoted
+                    ),
+                ]);
             }
         }
     }
@@ -2077,7 +2150,9 @@ fn tool_click(
         };
         with_tool(state, |t, st| t.click(st, id, view, &hit));
     } else {
-        state.dimension_tool.set_message(Some(MISSED.into()));
+        state
+            .dimension_tool
+            .set_message(Some(crate::dimension_tool::missed()));
     }
 }
 
@@ -2093,7 +2168,7 @@ fn tool_escape(state: &mut AppState, id: DrawingId) {
         // Esc bleibt nie hängen: lässt sich nichts setzen, verfallen die Bezüge, und der Grund
         // bleibt in der Hinweiszeile.
         if tool_finish(state, id, p).is_err() {
-            let reason = state.dimension_tool.message().map(str::to_owned);
+            let reason = state.dimension_tool.message_msg();
             state.dimension_tool.cancel();
             state.dimension_tool.set_message(reason);
         }
@@ -2108,10 +2183,7 @@ fn tool_escape(state: &mut AppState, id: DrawingId) {
 fn tool_finish(state: &mut AppState, id: DrawingId, at: DVec2) -> Result<(), ToolError> {
     match with_tool(state, |t, st| t.finish(st, id, at)) {
         Ok(ids) => {
-            state.drawing_ui.dim_message = Some(match ids.len() {
-                1 => "1 Maß wurde gesetzt.".into(),
-                n => format!("{n} Maße wurden gesetzt."),
-            });
+            state.drawing_ui.dim_message = Some(crate::msg!("dim-set", n = ids.len()));
             state.drawing_ui.dim_message_key = Some(message_key(state));
             Ok(())
         }
@@ -2157,9 +2229,7 @@ fn balloon_click(
     at: DVec2,
 ) {
     let Some((view, origin)) = found else {
-        state
-            .balloon_tool
-            .set_message(Some(balloon_tool::MISSED.into()));
+        state.balloon_tool.set_message(Some(balloon_tool::missed()));
         return;
     };
     let body = match origin {
@@ -2200,11 +2270,15 @@ fn message_key(state: &AppState) -> (u64, Option<ViewId>, Option<DimId>) {
 /// bündig an der rechten bzw. oberen Kante.
 pub fn add_view(state: &mut AppState, kind: ViewKind) -> Result<ViewId, String> {
     let WorkArea::Drawing(id) = state.drawing_ui.area else {
-        return Err(NO_DRAWING.into());
+        return Err(no_drawing_open().text());
     };
-    let mut d = state.document.drawing(id).ok_or(NO_DRAWING)?.clone();
+    let mut d = state
+        .document
+        .drawing(id)
+        .ok_or_else(|| no_drawing_open().text())?
+        .clone();
     if matches!(d.kind, DrawingKind::PartsList { .. }) {
-        return Err(NO_VIEWS_ON_PARTS_SHEET.into());
+        return Err(no_views_on_parts_sheet().text());
     }
     let (lo, hi) = placement_layout(state, &d).free;
     let free: FreeArea = ((lo.x, lo.y), (hi.x, hi.y));
@@ -2304,7 +2378,7 @@ pub fn add_view(state: &mut AppState, kind: ViewKind) -> Result<ViewId, String> 
             new_id = Some(dr.add_view(kind, scale, placement, parent));
         })
         .map_err(|e| e.to_string())?;
-    new_id.ok_or_else(|| NO_DRAWING.to_string())
+    new_id.ok_or_else(|| no_drawing_open().text())
 }
 
 /// Mitte des freien Bereichs.
@@ -2642,7 +2716,7 @@ fn canvas_ui(
         if balloon_tool::balloon_hit(&lost_balloons, &to_screen0, p).is_some() {
             response
                 .clone()
-                .on_hover_text_at_pointer(balloon_tool::LOST_TIP);
+                .on_hover_text_at_pointer(balloon_tool::lost_tip());
         } else if let Some((i, _)) = dim_hit(&ctx, &dim_marks, lost, &to_screen0, k0, p) {
             let reason = dims
                 .by_view
@@ -2652,8 +2726,8 @@ fn canvas_ui(
                 .and_then(|(_, r)| r.as_ref().err())
                 .map(|e| e.to_string());
             let text = match reason {
-                Some(r) => format!("{LOST_TIP} {r}"),
-                None => LOST_TIP.to_string(),
+                Some(r) => format!("{} {r}", lost_tip()),
+                None => lost_tip(),
             };
             response.clone().on_hover_text_at_pointer(text);
         }
@@ -2903,9 +2977,9 @@ fn canvas_ui(
 
 /// Text des Platzhalters einer Ansicht, die berechnet wird.
 pub fn pending_text(fraction: f32) -> String {
-    format!(
-        "wird berechnet … {} %",
-        (fraction.clamp(0.0, 1.0) * 100.0).round() as i32
+    tr!(
+        "drawing-pending",
+        percent = (fraction.clamp(0.0, 1.0) * 100.0).round() as i32
     )
 }
 

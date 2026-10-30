@@ -24,8 +24,8 @@ use crate::step_import_dialog::{self, StepImportDialog};
 use crate::update_check::{self, CheckRequest, CheckResult, NoNetwork, UpdateChecker};
 use crate::update_dialog::{self, InstallView, UpdateAction, UpdateDialog};
 use crate::update_install::{
-    self, AfterUpdate, InstallDecision, InstallState, Installer, LaunchError, LockedSetup,
-    NoDownload, NoLaunch, SetupLauncher, ShellLauncher,
+    self, AfterUpdate, FailReason, InstallDecision, InstallState, Installer, LaunchError,
+    LockedSetup, NoDownload, NoLaunch, SetupLauncher, ShellLauncher,
 };
 use crate::versions_panel::VersionsUi;
 use crate::workspace::{Prompt, Workspace};
@@ -34,6 +34,7 @@ use crate::{
     sketch_panel, theme, viewport,
 };
 use planora_feature::SketchPlane;
+use planora_i18n::tr;
 use planora_kernel::BoolOp;
 use planora_project::config::WindowState;
 use planora_render::gpu::GpuScene;
@@ -57,19 +58,33 @@ const AUTOSAVE_REPAINT: Duration = Duration::from_secs(30);
 pub const EXIT_WAIT: Duration = Duration::from_secs(2);
 
 /// Menüeintrag „Datei → Projekte …“ (Kürzel [`Action::Projects`]).
-pub const PROJECTS_ENTRY: &str = "Projekte …";
+pub fn projects_entry() -> String {
+    tr!("menu-file-projects")
+}
 /// Hinweis, wenn Projekte oder Einstellungen nicht öffnen, weil gerade ein Export schreibt.
-pub const EXPORT_BUSY: &str = "Bitte erst den Export beenden.";
+pub fn export_busy() -> String {
+    tr!("menu-export-busy")
+}
 /// Menüeintrag „Datei → Einstellungen …“.
-pub const SETTINGS_ENTRY: &str = "Einstellungen …";
+pub fn settings_entry() -> String {
+    tr!("menu-file-settings")
+}
 /// Menüeintrag „Ansicht → Tastenkürzel …“ (Kürzel [`Action::ShowShortcuts`]).
-pub const VIEW_SHORTCUTS_ENTRY: &str = "Tastenkürzel …";
+pub fn view_shortcuts_entry() -> String {
+    tr!("menu-view-shortcuts")
+}
 /// Menü „Hilfe“ (nach „Ansicht“).
-pub const HELP_MENU: &str = "Hilfe";
+pub fn help_menu_title() -> String {
+    tr!("menu-help")
+}
 /// Menüeintrag „Hilfe → Rückmeldung …“ (Kürzel [`Action::FeedbackOpen`]).
-pub const FEEDBACK_ENTRY: &str = "Rückmeldung …";
+pub fn feedback_entry() -> String {
+    tr!("menu-help-feedback")
+}
 /// Menüeintrag „Hilfe → Häufige Probleme“ (öffnet [`crate::feedback::faq_url`] im Browser).
-pub const FAQ_ENTRY: &str = "Häufige Probleme";
+pub fn faq_entry() -> String {
+    tr!("menu-help-faq")
+}
 
 /// Was die Menüs außer ihren eigenen Aktionen verlangen: das Fenster „Projekte“,
 /// „Einstellungen“, „Tastenkürzel“ oder „Rückmeldung“ öffnen (die Fenster gehören der App, nicht
@@ -207,7 +222,7 @@ impl PlanoraApp {
         let render_state = cc
             .wgpu_render_state
             .as_ref()
-            .expect("PlanoraCAD benötigt den wgpu-Renderer");
+            .expect("PlanoraCAD needs the wgpu renderer");
         cc.egui_ctx.set_fonts(fonts::definitions());
         Self::setup_context(&cc.egui_ctx);
         GpuScene::install(render_state);
@@ -215,14 +230,17 @@ impl PlanoraApp {
             &render_state.adapter.get_info(),
         ));
         let bi = crate::build_info::build_info();
-        crate::diag::info(&bi.system_line().replacen(':', "", 1));
-        crate::diag::info(&format!("Grafikkarte {}", bi.gpu_line()));
+        crate::diag::info(&crate::diag::in_english(|| bi.system_line()).replacen(':', "", 1));
+        crate::diag::info(&format!(
+            "Graphics card {}",
+            crate::diag::in_english(|| bi.gpu_line())
+        ));
         let running = crate::running_version();
         let install_mode = install_mode::detect(std::env::current_exe().ok().as_deref());
         crate::diag::info(match install_mode {
-            Some(InstallMode::User) => "Installiert für den Benutzer",
-            Some(InstallMode::AllUsers) => "Installiert für alle Benutzer",
-            None => "Nicht installiert",
+            Some(InstallMode::User) => "Installed for the current user",
+            Some(InstallMode::AllUsers) => "Installed for all users",
+            None => "Not installed",
         });
 
         let config = planora_project::config::Config::load();
@@ -309,7 +327,7 @@ impl PlanoraApp {
             Some(CrashAction::OpenFolder) => {
                 let dir = notice.dir.clone();
                 if !self.system_open.open_folder(&dir) {
-                    crate::diag::warn("Ordner der Absturzberichte ließ sich nicht öffnen");
+                    crate::diag::warn("Could not open the crash report folder");
                 }
             }
             Some(CrashAction::AsFeedback) => {
@@ -501,12 +519,10 @@ impl PlanoraApp {
                 Some(paths) => self
                     .installer
                     .start(&update, paths, Arc::clone(&self.downloader)),
-                None => self
-                    .installer
-                    .fail(InstallError::Io("kein Ordner für den Download".into()).message()),
+                None => self.installer.fail(FailReason::NoFolder),
             },
             InstallDecision::OnlyWindows => {
-                self.installer.fail(update_install::ONLY_WINDOWS);
+                self.installer.fail(FailReason::OnlyWindows);
                 open_release_page(ctx, &update);
             }
             InstallDecision::NotInstalled => open_release_page(ctx, &update),
@@ -582,14 +598,12 @@ impl PlanoraApp {
             }
             RestartPhase::Verifying => {
                 let result = match self.reverify.as_ref().map(Receiver::try_recv) {
-                    Some(Ok(result)) => result,
+                    Some(Ok(result)) => result.map_err(FailReason::Error),
                     Some(Err(TryRecvError::Empty)) => {
                         ctx.request_repaint_after(Duration::from_millis(50));
                         return;
                     }
-                    Some(Err(TryRecvError::Disconnected)) | None => {
-                        Err(InstallError::Io("Prüfung abgebrochen".into()))
-                    }
+                    Some(Err(TryRecvError::Disconnected)) | None => Err(FailReason::CheckAborted),
                 };
                 self.reverify = None;
                 match result {
@@ -605,7 +619,7 @@ impl PlanoraApp {
                         if let Some(paths) = self.installer.paths() {
                             discard_download(paths);
                         }
-                        self.installer.fail(e.message());
+                        self.installer.fail(e);
                     }
                 }
             }
@@ -619,7 +633,8 @@ impl PlanoraApp {
         let (Some(paths), Some(hex)) = (self.installer.paths(), self.installer.verified_sha256())
         else {
             self.restart = RestartPhase::None;
-            self.installer.fail(InstallError::Checksum.message());
+            self.installer
+                .fail(FailReason::Error(InstallError::Checksum));
             return;
         };
         self.reverify = Some(update_install::reverify(
@@ -643,9 +658,7 @@ impl PlanoraApp {
             self.installer.target(),
             self.install_mode,
         ) else {
-            self.installer.fail(update_install::launch_failed(
-                "nicht installiert oder kein Download",
-            ));
+            self.installer.fail(FailReason::LaunchNotInstalled);
             return;
         };
         let from = crate::running_version();
@@ -656,7 +669,7 @@ impl PlanoraApp {
             let _ = self.ws.set_pending_update(None);
             drop(locked);
             discard_download(&paths);
-            self.installer.fail(update_install::PENDING_NOT_SAVED);
+            self.installer.fail(FailReason::PendingNotSaved);
             return;
         }
         if let Some(update) = &self.update_dialog.update
@@ -671,7 +684,7 @@ impl PlanoraApp {
         match locked.launch(&*self.launcher, mode) {
             Ok(()) => {
                 crate::diag::info(&format!(
-                    "Installer für Version {to} gestartet; sein Protokoll: {} im Temp-Ordner",
+                    "Installer for version {to} started; its log: {} in the temp folder",
                     update_install::SETUP_LOG_NAME
                 ));
                 // Der Installer bleibt liegen (er braucht seine Datei); die neue Version räumt
@@ -688,22 +701,24 @@ impl PlanoraApp {
     /// vormerken, Download und Patchnotes löschen, die Meldung zeigen und die Version weiter
     /// anbieten. Das Programm läuft in der bisherigen Version weiter.
     fn launch_refused(&mut self, paths: &DownloadPaths, e: &LaunchError) {
-        let message = match e {
-            LaunchError::Cancelled => update_install::UPDATE_CANCELLED.to_string(),
-            LaunchError::Failed(detail) => update_install::launch_failed(detail),
+        let reason = match e {
+            LaunchError::Cancelled => FailReason::UpdateCancelled,
+            LaunchError::Failed(detail) => FailReason::LaunchFailed(detail.clone()),
         };
         let why = match e {
-            LaunchError::Cancelled => "Admin-Abfrage abgelehnt".to_string(),
-            LaunchError::Failed(detail) => format!("Fehler: {detail}"),
+            LaunchError::Cancelled => "admin prompt declined".to_string(),
+            // Der Text kommt vom Betriebssystem (auf deutschem Windows deutsch) und gehört nur in die
+            // Meldung; ins Protokoll (immer englisch) schreibt der Start den Code (`ShellLauncher`).
+            LaunchError::Failed(_) => "installer could not be started".to_string(),
         };
         crate::diag::warn(&format!(
-            "Update abgebrochen ({why}); Protokoll des Installers, falls vorhanden: {} im Temp-Ordner",
+            "Update cancelled ({why}); installer log, if any: {} in the temp folder",
             update_install::SETUP_LOG_NAME
         ));
         let _ = self.ws.set_pending_update(None);
         let _ = std::fs::remove_file(update_install::notes_file(&self.ws));
         discard_download(paths);
-        self.installer.fail(message);
+        self.installer.fail(reason);
         if self.pending_notice.is_none() {
             self.pending_notice = self.update_dialog.update.clone();
         }
@@ -1133,7 +1148,7 @@ impl PlanoraApp {
             FeedbackAction::OpenBrowser(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
             FeedbackAction::OpenFolder(dir) => {
                 if !self.system_open.open_folder(&dir) {
-                    crate::diag::warn("Rückmeldungsordner ließ sich nicht öffnen");
+                    crate::diag::warn("Could not open the feedback folder");
                 }
             }
             FeedbackAction::Copy(text) => ctx.copy_text(text),
@@ -1171,7 +1186,7 @@ impl PlanoraApp {
         {
             let mods = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT | egui::Modifiers::ALT;
             if ctx.input_mut(|i| i.consume_key(mods, egui::Key::F12)) {
-                panic!("Absturz-Test: absichtlich ausgelöst");
+                panic!("Crash test: triggered on purpose");
             }
         }
         let area = keymap::dispatch::current_area(&self.ws.active_tab().state);
@@ -1266,7 +1281,7 @@ fn history_step(ws: &mut Workspace, undo: bool) {
         tab.redo_blocked()
     };
     if let Some(why) = blocked {
-        tab.state.message = Some(why.into());
+        tab.state.message = Some(why);
         tab.state.info = None;
         return;
     }
@@ -1275,9 +1290,9 @@ fn history_step(ws: &mut Workspace, undo: bool) {
     tab.state.message = None;
     tab.state.info = None;
     let (label, done, word) = if undo {
-        (tab.undo_label(), tab.undo(), "Rückgängig")
+        (tab.undo_label(), tab.undo(), Action::Undo.label())
     } else {
-        (tab.redo_label(), tab.redo(), "Wiederholen")
+        (tab.redo_label(), tab.redo(), Action::Redo.label())
     };
     // Landet der Sprung auf einem Stand mit fehlerhaftem Feature, zeigt die Statuszeile dessen
     // Fehler (Fehlerfarbe) statt des Hinweises; in der offenen Skizze steht der Hinweis hinter
@@ -1288,7 +1303,7 @@ fn history_step(ws: &mut Workspace, undo: bool) {
     if done.is_ok() && !shows_error {
         tab.state.info = Some(match label {
             Some(l) => format!("{word}: {l}"),
-            None => word.into(),
+            None => word,
         });
     }
 }
@@ -1364,7 +1379,7 @@ fn file_window_open(ws: &Workspace) -> bool {
 
 /// P10: schließt die Dateifenster des aktiven Tabs für Projekte oder Einstellungen. Ein
 /// schreibendes Exportfenster bleibt (sonst endete das Schreiben ohne Meldung); dann `false`,
-/// das andere Fenster öffnet nicht und die Statuszeile sagt warum ([`EXPORT_BUSY`]).
+/// das andere Fenster öffnet nicht und die Statuszeile sagt warum ([`export_busy()`]).
 fn close_file_windows(ws: &mut Workspace) -> bool {
     let tab = ws.active_tab_mut();
     if tab
@@ -1372,7 +1387,7 @@ fn close_file_windows(ws: &mut Workspace) -> bool {
         .as_ref()
         .is_some_and(|d| d.is_writing_file())
     {
-        tab.state.message = Some(EXPORT_BUSY.into());
+        tab.state.message = Some(export_busy());
         tab.state.info = None;
         return false;
     }
@@ -1425,7 +1440,7 @@ pub fn open_settings(
 /// Öffnet die Übersicht „Tastenkürzel“ (Menü Ansicht und Taste S) mit aktivem Suchfeld. Sie
 /// steht für sich wie Projekte und Einstellungen (P10): diese und die Dateifenster des aktiven
 /// Tabs schließen dabei (ein schreibendes Exportfenster bleibt, dann öffnet sie nicht,
-/// [`EXPORT_BUSY`]). Bei offener Rückfrage öffnet sie nicht (wie die Einstellungen).
+/// [`export_busy()`]). Bei offener Rückfrage öffnet sie nicht (wie die Einstellungen).
 pub fn open_overview(
     ws: &mut Workspace,
     projects: &mut ProjectsWindow,
@@ -1458,7 +1473,7 @@ pub fn enforce_overview_rules(
 /// `ctx_info` (Schnappschuss beim Öffnen, [`FeedbackDialog::open_fresh`]). Es steht für sich wie
 /// die Übersicht „Tastenkürzel“: Projekte, Einstellungen, die Übersicht, „Über“ und die
 /// Dateifenster des aktiven Tabs schließen dabei (ein schreibendes Exportfenster bleibt, dann
-/// öffnet es nicht, [`EXPORT_BUSY`]). Bei offener Rückfrage öffnet es nicht. Ist es schon offen,
+/// öffnet es nicht, [`export_busy()`]). Bei offener Rückfrage öffnet es nicht. Ist es schon offen,
 /// bleibt es, wie es ist (der getippte Text geht nicht verloren).
 pub fn open_feedback(
     ws: &mut Workspace,
@@ -1513,7 +1528,7 @@ fn install_view(locked: bool, state: &InstallState, retry: bool) -> InstallView<
             total: *total,
         },
         InstallState::ReadyToRestart => InstallView::Waiting,
-        InstallState::Failed(message) => InstallView::Failed { message, retry },
+        InstallState::Failed(reason) => InstallView::Failed { reason, retry },
     }
 }
 
@@ -1527,7 +1542,7 @@ fn open_release_page(ctx: &egui::Context, update: &Update) {
 /// Öffnet die Meldung „Neue Version verfügbar“ für `update` (Klick auf den Hinweis in der
 /// Statuszeile). Sie steht für sich wie die Übersicht der Tastenkürzel: Projekte, Einstellungen,
 /// die Übersicht und die Dateifenster des aktiven Tabs schließen dabei (ein schreibendes
-/// Exportfenster bleibt, dann öffnet sie nicht, [`EXPORT_BUSY`]). Bei offener Rückfrage öffnet
+/// Exportfenster bleibt, dann öffnet sie nicht, [`export_busy()`]). Bei offener Rückfrage öffnet
 /// sie nicht.
 pub fn open_update_notice(
     ws: &mut Workspace,
@@ -1671,33 +1686,33 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
         hint(ws, Action::Export),
         hint(ws, Action::Close),
     );
-    if shortcut_button(ui, true, Icon::New, "Neu", new_keys).clicked() {
+    if shortcut_button(ui, true, Icon::New, &tr!("menu-file-new"), new_keys).clicked() {
         commands::run_action(ws, Action::New);
         ui.close();
     }
-    if shortcut_button(ui, true, Icon::Projects, PROJECTS_ENTRY, projects_keys).clicked() {
+    if shortcut_button(ui, true, Icon::Projects, &projects_entry(), projects_keys).clicked() {
         request = MenuRequest::Projects;
         ui.close();
     }
     ui.separator();
-    if shortcut_button(ui, !read_only, Icon::Save, "Speichern", save_keys).clicked() {
+    if shortcut_button(ui, !read_only, Icon::Save, &tr!("common-save"), save_keys).clicked() {
         commands::run_action(ws, Action::Save);
         ui.close();
     }
     if entry(
         ui,
         !read_only,
-        icons::button(Icon::SaveAs, "Speichern unter …"),
+        icons::button(Icon::SaveAs, tr!("menu-file-save-as")),
     )
     .clicked()
     {
-        commands::timed("Speichern unter", || begin_save(ws, true));
+        commands::timed("Save as", || begin_save(ws, true));
         ui.close();
     }
     ui.separator();
     let any = !ws.active_tab().state.bodies.is_empty();
-    if shortcut_button(ui, any, Icon::Export, "Exportieren …", export_keys)
-        .on_disabled_hover_text("Es gibt noch keinen Körper.")
+    if shortcut_button(ui, any, Icon::Export, &tr!("menu-file-export"), export_keys)
+        .on_disabled_hover_text(tr!("menu-file-export-disabled"))
         .clicked()
     {
         commands::run_action(ws, Action::Export);
@@ -1706,44 +1721,44 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
     if entry(
         ui,
         !read_only,
-        icons::button(Icon::Import, "Netz importieren …"),
+        icons::button(Icon::Import, tr!("menu-file-import-mesh")),
     )
-    .on_disabled_hover_text("In einer alten Version lässt sich nichts hinzufügen.")
+    .on_disabled_hover_text(tr!("menu-old-version-add"))
     .clicked()
     {
-        commands::timed("Netz importieren", || open_import(ws));
+        commands::timed("Import mesh", || open_import(ws));
         ui.close();
     }
     if entry(
         ui,
         !read_only,
-        icons::button(Icon::Import, step_import_dialog::MENU_LABEL),
+        icons::button(Icon::Import, step_import_dialog::menu_label()),
     )
-    .on_disabled_hover_text("In einer alten Version lässt sich nichts hinzufügen.")
+    .on_disabled_hover_text(tr!("menu-old-version-add"))
     .clicked()
     {
-        commands::timed("STEP importieren", || open_step_import(ws));
+        commands::timed("Import STEP", || open_step_import(ws));
         ui.close();
     }
     ui.separator();
-    if shortcut_button(ui, true, Icon::Close, "Schließen", close_keys).clicked() {
+    if shortcut_button(ui, true, Icon::Close, &tr!("menu-file-close"), close_keys).clicked() {
         commands::run_action(ws, Action::Close);
         ui.close();
     }
     if entry(
         ui,
         ws.prompt.is_none(),
-        icons::button(Icon::Settings, SETTINGS_ENTRY),
+        icons::button(Icon::Settings, settings_entry()),
     )
-    .on_disabled_hover_text("Zuerst die offene Rückfrage beantworten.")
+    .on_disabled_hover_text(tr!("menu-answer-prompt-first"))
     .clicked()
     {
         request = MenuRequest::Settings;
         ui.close();
     }
-    if entry(ui, true, icons::button(Icon::Quit, "Beenden")).clicked() {
+    if entry(ui, true, icons::button(Icon::Quit, tr!("menu-file-quit"))).clicked() {
         // Ist Beenden freigegeben, schickt `handle_close_request` im nächsten Bild `Close`.
-        commands::timed("Beenden", || ws.request_quit());
+        commands::timed("Quit", || ws.request_quit());
         ui.close();
     }
     request
@@ -1756,18 +1771,18 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
 pub fn help_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
     let mut request = MenuRequest::None;
     let keys = keymap::shortcut_hint(&ws.keymap, Action::FeedbackOpen);
-    if shortcut_button(ui, true, Icon::Feedback, FEEDBACK_ENTRY, keys).clicked() {
+    if shortcut_button(ui, true, Icon::Feedback, &feedback_entry(), keys).clicked() {
         request = MenuRequest::Feedback;
         ui.close();
     }
-    if entry(ui, true, icons::button(Icon::Help, FAQ_ENTRY)).clicked() {
+    if entry(ui, true, icons::button(Icon::Help, faq_entry())).clicked() {
         ui.ctx()
             .open_url(egui::OpenUrl::new_tab(crate::feedback::faq_url()));
         ui.close();
     }
     ui.separator();
-    if entry(ui, true, icons::button(Icon::About, about_dialog::TITLE)).clicked() {
-        commands::timed("Über PlanoraCAD", || ws.about_open = true);
+    if entry(ui, true, icons::button(Icon::About, about_dialog::title())).clicked() {
+        commands::timed("About PlanoraCAD", || ws.about_open = true);
         ui.close();
     }
     request
@@ -1794,24 +1809,24 @@ pub(crate) fn menu_bar_measured(
         .config(egui::containers::menu::MenuConfig::new().style(theme::menu_style))
         .ui(ui, |ui| {
             let start = ui.cursor().left();
-            ui.menu_button("Datei", |ui| request = file_menu(ui, ws));
+            ui.menu_button(tr!("menu-file"), |ui| request = file_menu(ui, ws));
             ui.add_enabled_ui(!read_only, |ui| {
-                ui.menu_button("Erzeugen", |ui| create_menu(ui, ws));
+                ui.menu_button(tr!("menu-create"), |ui| create_menu(ui, ws));
             });
             // Zeichnungen lassen sich auch in alten Versionen öffnen, aber nicht anlegen.
-            ui.menu_button("Zeichnung", |ui| {
+            ui.menu_button(tr!("menu-drawing"), |ui| {
                 let tab = ws.active_tab_mut();
                 drawing_menu(ui, &mut tab.state, &mut tab.drawing_dialog, read_only);
             });
             ui.add_enabled_ui(!read_only, |ui| {
-                ui.menu_button("Bearbeiten", |ui| edit_menu(ui, ws));
+                ui.menu_button(tr!("menu-edit"), |ui| edit_menu(ui, ws));
             });
-            ui.menu_button("Ansicht", |ui| {
+            ui.menu_button(tr!("menu-view"), |ui| {
                 if view_menu(ui, ws, shell) {
                     request = MenuRequest::Shortcuts;
                 }
             });
-            ui.menu_button(HELP_MENU, |ui| {
+            ui.menu_button(help_menu_title(), |ui| {
                 let r = help_menu(ui, ws);
                 if r != MenuRequest::None {
                     request = r;
@@ -1829,7 +1844,7 @@ fn shell_toggles(ui: &mut egui::Ui, shell: &mut ShellState) {
     if ui
         .checkbox(
             &mut versions,
-            (icons::atom(Icon::PanelVersions), "Versionen"),
+            (icons::atom(Icon::PanelVersions), tr!("menu-view-versions")),
         )
         .changed()
     {
@@ -1859,26 +1874,26 @@ impl CreateKind {
     ];
 
     /// Beschriftung im Menü (und Hinweistext im Befehlsfeld).
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            CreateKind::Box => "Quader …",
-            CreateKind::Cylinder => "Zylinder …",
-            CreateKind::Sphere => "Kugel …",
-            CreateKind::Cone => "Kegel …",
-            CreateKind::Extrusion => "Skizze extrudieren …",
-            CreateKind::Revolution => "Skizze drehen …",
+            CreateKind::Box => tr!("menu-create-box"),
+            CreateKind::Cylinder => tr!("menu-create-cylinder"),
+            CreateKind::Sphere => tr!("menu-create-sphere"),
+            CreateKind::Cone => tr!("menu-create-cone"),
+            CreateKind::Extrusion => tr!("menu-create-extrude"),
+            CreateKind::Revolution => tr!("menu-create-revolve"),
         }
     }
 
-    /// Fester Name im ausführlichen Protokoll („Befehl Quader anlegen: 2 ms“).
+    /// Fester englischer Name im ausführlichen Protokoll („Command Create box: 2 ms“).
     pub fn command_name(self) -> &'static str {
         match self {
-            CreateKind::Box => "Quader anlegen",
-            CreateKind::Cylinder => "Zylinder anlegen",
-            CreateKind::Sphere => "Kugel anlegen",
-            CreateKind::Cone => "Kegel anlegen",
-            CreateKind::Extrusion => "Skizze extrudieren",
-            CreateKind::Revolution => "Skizze drehen",
+            CreateKind::Box => "Create box",
+            CreateKind::Cylinder => "Create cylinder",
+            CreateKind::Sphere => "Create sphere",
+            CreateKind::Cone => "Create cone",
+            CreateKind::Extrusion => "Extrude sketch",
+            CreateKind::Revolution => "Revolve sketch",
         }
     }
 
@@ -1913,11 +1928,11 @@ fn sketch_target(state: &AppState) -> Option<planora_feature::FeatureId> {
 /// Grund, warum `kind` gerade nicht geht (Menü und Befehlsfeld); `None`: erlaubt.
 /// Körper aus der Skizze eines zurückgesetzten Körpers sind gesperrt
 /// ([`crate::history_bar::lock_reason`]); freistehende Grundkörper nie.
-pub fn create_blocked(ws: &Workspace, kind: CreateKind) -> Option<&'static str> {
+pub fn create_blocked(ws: &Workspace, kind: CreateKind) -> Option<String> {
     let state = &ws.active_tab().state;
     match kind {
         CreateKind::Extrusion | CreateKind::Revolution => match sketch_target(state) {
-            None => Some("Zuerst eine Skizze anlegen."),
+            None => Some(tr!("menu-create-need-sketch")),
             Some(sketch) => crate::history_bar::lock_reason(state, &[sketch]),
         },
         _ => None,
@@ -1929,8 +1944,8 @@ pub fn create_blocked(ws: &Workspace, kind: CreateKind) -> Option<&'static str> 
 /// Skizze offen und der Dialog entfällt. Ist `kind` gesperrt ([`create_blocked`], etwa die
 /// Skizze eines zurückgesetzten Körpers), steht der Grund in `message`.
 pub fn do_create(ws: &mut Workspace, kind: CreateKind) {
-    if let Some(why) = create_blocked(ws, kind).filter(|w| *w == crate::history_bar::LOCK_HINT) {
-        ws.active_tab_mut().state.message = Some(why.into());
+    if let Some(why) = create_blocked(ws, kind).filter(|w| *w == crate::history_bar::lock_hint()) {
+        ws.active_tab_mut().state.message = Some(why);
         return;
     }
     let tab = ws.active_tab_mut();
@@ -1972,9 +1987,9 @@ pub fn do_create(ws: &mut Workspace, kind: CreateKind) {
 /// Öffnet den Dialog „Boolesche Operation“ mit vorgewählter Operation (Menü und Chips).
 pub fn open_boolean(ws: &mut Workspace, op: BoolOp) {
     let name = match op {
-        BoolOp::Union => "Vereinigen",
-        BoolOp::Difference => "Abziehen",
-        BoolOp::Intersection => "Schneiden",
+        BoolOp::Union => "Union",
+        BoolOp::Difference => "Subtract",
+        BoolOp::Intersection => "Intersect",
     };
     commands::timed(name, || open_boolean_inner(ws, op));
 }
@@ -1982,7 +1997,7 @@ pub fn open_boolean(ws: &mut Workspace, op: BoolOp) {
 fn open_boolean_inner(ws: &mut Workspace, op: BoolOp) {
     let tab = ws.active_tab_mut();
     if let Some(why) = tab.state.chosen_lock() {
-        tab.state.message = Some(why.into());
+        tab.state.message = Some(why);
         return;
     }
     if tab.state.try_close_sketch().is_ok() {
@@ -1994,7 +2009,7 @@ fn open_boolean_inner(ws: &mut Workspace, op: BoolOp) {
 pub fn open_blend(ws: &mut Workspace, chamfer: bool) {
     let tab = ws.active_tab_mut();
     if let Some(why) = tab.state.chosen_lock() {
-        tab.state.message = Some(why.into());
+        tab.state.message = Some(why);
         return;
     }
     if tab.state.try_close_sketch().is_ok() {
@@ -2011,7 +2026,7 @@ pub fn open_blend(ws: &mut Workspace, chamfer: bool) {
 #[doc(hidden)]
 pub fn create_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     for kind in &CreateKind::ALL[..4] {
-        if icons::source_entry(ui, kind.icon(), kind.label(), true).clicked() {
+        if icons::source_entry(ui, kind.icon(), &kind.label(), true).clicked() {
             run_create(ws, *kind);
             ui.close();
         }
@@ -2024,7 +2039,7 @@ pub fn create_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
         let blocked = create_blocked(ws, *kind);
         let action = kind.action();
         let keys = action.map_or_else(String::new, |a| keymap::shortcut_hint(&ws.keymap, a));
-        if icons::source_entry_keys(ui, kind.icon(), kind.label(), &keys, blocked.is_none())
+        if icons::source_entry_keys(ui, kind.icon(), &kind.label(), &keys, blocked.is_none())
             .on_disabled_hover_text(blocked.unwrap_or_default())
             .clicked()
         {
@@ -2048,7 +2063,7 @@ pub(crate) fn run_create(ws: &mut Workspace, kind: CreateKind) {
 /// Verrunden (über [`commands::run_action`]) oder Fase aus Menü oder Befehlsfeld.
 pub(crate) fn run_blend(ws: &mut Workspace, chamfer: bool) {
     if chamfer {
-        commands::timed("Fase anlegen", || open_blend(ws, true));
+        commands::timed("Create chamfer", || open_blend(ws, true));
     } else {
         commands::run_action(ws, Action::Fillet);
     }
@@ -2058,21 +2073,23 @@ pub(crate) fn run_blend(ws: &mut Workspace, chamfer: bool) {
 /// Schritt nur „Rückgängig“.
 pub fn undo_menu_text(label: Option<&str>) -> String {
     match label {
-        Some(l) => format!("Rückgängig: {l}"),
-        None => "Rückgängig".into(),
+        Some(l) => tr!("menu-undo-with", label = l),
+        None => Action::Undo.label(),
     }
 }
 
 /// Text des Menüeintrags „Wiederholen“ (wie [`undo_menu_text`]).
 pub fn redo_menu_text(label: Option<&str>) -> String {
     match label {
-        Some(l) => format!("Wiederholen: {l}"),
-        None => "Wiederholen".into(),
+        Some(l) => tr!("menu-redo-with", label = l),
+        None => Action::Redo.label(),
     }
 }
 
 /// Menüeintrag „Bearbeiten → Parameter …“.
-pub const PARAMETERS_ENTRY: &str = "Parameter …";
+pub fn parameters_entry() -> String {
+    tr!("menu-edit-parameters")
+}
 
 /// Menü „Bearbeiten“: Rückgängig, Wiederholen, Parameter, Boolesche Operationen, Verrunden und
 /// Fase (Verrunden mit seiner Taste), Zum Ende der Zeitleiste.
@@ -2082,8 +2099,8 @@ pub fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     // Versionen und während des Exports. Ein offenes Fenster sperrt nicht, es wird geschlossen.
     let tab = ws.active_tab();
     let (undo_block, redo_block) = (tab.undo_blocked(), tab.redo_blocked());
-    let undo_text = undo_menu_text(tab.undo_label());
-    let redo_text = redo_menu_text(tab.redo_label());
+    let undo_text = undo_menu_text(tab.undo_label().as_deref());
+    let redo_text = redo_menu_text(tab.redo_label().as_deref());
     let undo_keys = keymap::shortcut_hint(&ws.keymap, Action::Undo);
     let redo_keys = keymap::shortcut_hint(&ws.keymap, Action::Redo);
     if shortcut_button(ui, undo_block.is_none(), Icon::Undo, &undo_text, undo_keys)
@@ -2107,24 +2124,32 @@ pub fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     if entry(
         ui,
         !sketch_open,
-        icons::button(Icon::Parameters, PARAMETERS_ENTRY),
+        icons::button(Icon::Parameters, parameters_entry()),
     )
-    .on_disabled_hover_text(crate::state::SKETCH_OPEN_LOCK)
+    .on_disabled_hover_text(crate::state::sketch_open_lock())
     .clicked()
     {
-        commands::timed("Parameter", || parameter_dialog::open(tab));
+        commands::timed("Parameters", || parameter_dialog::open(tab));
         ui.close();
     }
     ui.separator();
     // Boolesche Operationen brauchen zwei gewöhnliche Körper; Netz-Körper sind gesperrt.
     let boolean = ws.active_tab().state.boolean_blocked();
     for (icon, label, op) in [
-        (Icon::Union, "Vereinigen …", BoolOp::Union),
-        (Icon::Subtract, "Abziehen …", BoolOp::Difference),
-        (Icon::Intersect, "Schneiden …", BoolOp::Intersection),
+        (Icon::Union, tr!("menu-bool-union"), BoolOp::Union),
+        (
+            Icon::Subtract,
+            tr!("menu-bool-subtract"),
+            BoolOp::Difference,
+        ),
+        (
+            Icon::Intersect,
+            tr!("menu-bool-intersect"),
+            BoolOp::Intersection,
+        ),
     ] {
         if entry(ui, boolean.is_none(), icons::button(icon, label))
-            .on_disabled_hover_text(boolean.unwrap_or_default())
+            .on_disabled_hover_text(boolean.clone().unwrap_or_default())
             .clicked()
         {
             open_boolean(ws, op);
@@ -2139,8 +2164,8 @@ pub fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
         } else {
             keymap::shortcut_hint(&ws.keymap, Action::Fillet)
         };
-        if icons::source_entry_keys(ui, source, label, &keys, blend.is_none())
-            .on_disabled_hover_text(blend.unwrap_or_default())
+        if icons::source_entry_keys(ui, source, &label, &keys, blend.is_none())
+            .on_disabled_hover_text(blend.clone().unwrap_or_default())
             .clicked()
         {
             run_blend(ws, chamfer);
@@ -2153,12 +2178,12 @@ pub fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     if entry(
         ui,
         rolled_back,
-        icons::button(Icon::ToTimelineEnd, "Zum Ende der Zeitleiste"),
+        icons::button(Icon::ToTimelineEnd, tr!("menu-edit-to-end")),
     )
-    .on_disabled_hover_text("Es wird bereits die ganze Zeitleiste berechnet.")
+    .on_disabled_hover_text(tr!("menu-edit-to-end-disabled"))
     .clicked()
     {
-        commands::timed("Zum Ende der Zeitleiste", || {
+        commands::timed("Roll to end of timeline", || {
             let _ = browser::roll_to_end(&mut tab.state);
         });
         ui.close();
@@ -2172,33 +2197,43 @@ fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) -> b
     let state = &mut ws.active_tab_mut().state;
     for face in ViewFace::ALL {
         if entry(ui, true, icons::button(Icon::ViewFace, face.label())).clicked() {
-            commands::timed(face.label(), || state.camera.set_view(face));
+            commands::timed(&crate::diag::in_english(|| face.label()), || {
+                state.camera.set_view(face)
+            });
             ui.close();
         }
     }
-    if entry(ui, true, icons::button(Icon::ViewIso, "Isometrisch")).clicked() {
-        commands::timed("Isometrisch", || state.camera.set_iso_view());
+    if entry(ui, true, icons::button(Icon::ViewIso, tr!("menu-view-iso"))).clicked() {
+        commands::timed("Isometric", || state.camera.set_iso_view());
         ui.close();
     }
     ui.separator();
-    if entry(ui, true, icons::button(Icon::FitAll, "Alles einpassen")).clicked() {
-        commands::timed("Alles einpassen", || state.frame_all());
+    if entry(
+        ui,
+        true,
+        icons::button(Icon::FitAll, tr!("menu-view-fit-all")),
+    )
+    .clicked()
+    {
+        commands::timed("Fit all", || state.frame_all());
         ui.close();
     }
     ui.separator();
     let dark = state.dark;
     let (icon, label) = if dark {
-        (Icon::ThemeLight, "Helles Design")
+        (Icon::ThemeLight, tr!("menu-view-light"))
     } else {
-        (Icon::ThemeDark, "Dunkles Design")
+        (Icon::ThemeDark, tr!("menu-view-dark"))
     };
-    if entry(ui, true, icons::button(icon, label)).clicked() {
-        commands::timed(label, || ws.set_theme(!dark));
+    if entry(ui, true, icons::button(icon, label.as_str())).clicked() {
+        commands::timed(if dark { "Light theme" } else { "Dark theme" }, || {
+            ws.set_theme(!dark)
+        });
         ui.close();
     }
     ui.separator();
     let keys = keymap::shortcut_hint(&ws.keymap, Action::ShowShortcuts);
-    if shortcut_button(ui, true, Icon::Keyboard, VIEW_SHORTCUTS_ENTRY, keys).clicked() {
+    if shortcut_button(ui, true, Icon::Keyboard, &view_shortcuts_entry(), keys).clicked() {
         shortcuts = true;
         ui.close();
     }
@@ -2210,13 +2245,25 @@ fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) -> b
 /// Einträge „Skizze auf …“ im Menü „Erzeugen“ (ohne Untermenü).
 fn sketch_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     let state = &mut ws.active_tab_mut().state;
-    for (label, plane) in [
-        ("Skizze auf XY-Ebene", StandardPlane::XY),
-        ("Skizze auf XZ-Ebene", StandardPlane::XZ),
-        ("Skizze auf YZ-Ebene", StandardPlane::YZ),
+    for (label, name, plane) in [
+        (
+            tr!("menu-sketch-xy"),
+            "Sketch on XY plane",
+            StandardPlane::XY,
+        ),
+        (
+            tr!("menu-sketch-xz"),
+            "Sketch on XZ plane",
+            StandardPlane::XZ,
+        ),
+        (
+            tr!("menu-sketch-yz"),
+            "Sketch on YZ plane",
+            StandardPlane::YZ,
+        ),
     ] {
-        if entry(ui, true, icons::button(Icon::SketchOnPlane, label)).clicked() {
-            commands::timed(label, || {
+        if entry(ui, true, icons::button(Icon::SketchOnPlane, label.as_str())).clicked() {
+            commands::timed(name, || {
                 if let Ok(id) = state.add_sketch(SketchPlane::Standard(plane)) {
                     let _ = state.open_sketch(id);
                 }
@@ -2237,7 +2284,7 @@ fn sketch_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     if entry(
         ui,
         blocked.is_none(),
-        icons::button(Icon::SketchOnFace, "Skizze auf gewählter Fläche"),
+        icons::button(Icon::SketchOnFace, tr!("menu-sketch-on-face")),
     )
     .on_disabled_hover_text(blocked.unwrap_or_default())
     .clicked()
@@ -2509,7 +2556,7 @@ impl eframe::App for PlanoraApp {
             // Über allem: sperrt die Bedienung, bis der Installer gestartet ist und sich das Programm
             // beendet (oder der Start scheitert und das Programm weiterläuft).
             egui::Modal::new(egui::Id::new("planora_update_restart"))
-                .show(&ctx, |ui| ui.label(update_install::RESTART_BOX));
+                .show(&ctx, |ui| ui.label(update_install::restart_box()));
         }
 
         // Änderungen am Dokument werden Schritte für Rückgängig (R3, R4): erst wenn keine

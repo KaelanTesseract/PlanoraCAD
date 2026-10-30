@@ -4,10 +4,10 @@
 
 use egui::epaint::Shape;
 use egui::{Color32, Event, Modifiers, PointerButton, Pos2, Rect, vec2};
-use planora_app::balloon_browser::{EMPTY_TEXT, SECTION, row_text};
-use planora_app::balloon_tool::LOST_TIP;
+use planora_app::balloon_browser::{empty_text, row_text, section};
+use planora_app::balloon_tool::lost_tip;
 use planora_app::browser::{self, ERROR_COLOR};
-use planora_app::drawing_browser::READ_ONLY_HINT;
+use planora_app::drawing_browser::read_only_hint;
 use planora_app::drawing_state::WorkArea;
 use planora_app::drawing_view::view_names;
 use planora_app::fonts;
@@ -267,8 +267,8 @@ fn no_section_on_a_parts_sheet() {
     st.drawing_ui.open(p);
     let mut h = Harness::new(false);
     let shot = h.idle(&mut st);
-    assert!(!shot.has(SECTION));
-    assert!(!shot.has(EMPTY_TEXT));
+    assert!(!shot.has(&section()));
+    assert!(!shot.has(&empty_text()));
 }
 
 #[test]
@@ -283,7 +283,7 @@ fn section_lists_and_acts() {
     } = fixture();
     let mut h = Harness::new(false);
     let shot = h.idle(&mut st);
-    assert!(shot.has(SECTION));
+    assert!(shot.has(&section()));
     let names = view_names(st.document.drawing(d).unwrap());
     // Gruppen je Ansicht (in der Reihenfolge der Ansichten), darunter die Kreise.
     let rows = h.rows();
@@ -301,7 +301,7 @@ fn section_lists_and_acts() {
             "Pos. 1 – Platte".into(),
         ]
     );
-    assert!(!shot.has(EMPTY_TEXT));
+    assert!(!shot.has(&empty_text()));
     // Klick wählt den Kreis (auch eine gewählte Ansicht oder ein Maß verfällt).
     st.drawing_ui.selected_view = Some(front);
     h.click(&mut st, "Pos. 2 – Bolzen");
@@ -360,7 +360,7 @@ fn section_lists_and_acts() {
     for _ in 0..10 {
         shot = ro.idle(&mut st);
     }
-    assert!(shot.has(READ_ONLY_HINT), "gesperrt mit Grund");
+    assert!(shot.has(&read_only_hint()), "gesperrt mit Grund");
     let e0 = st.document.edit_count();
     ro.click_at(&mut st, q, PointerButton::Primary);
     ro.idle(&mut st);
@@ -378,20 +378,20 @@ fn section_lists_and_acts() {
     let ok = shot.find("Pos. 1 – Platte").unwrap();
     assert_ne!(ok.color, ERROR_COLOR);
     let shot = h.hover(&mut st, "Pos. ? – Teil fehlt");
-    assert!(shot.has(LOST_TIP), "Hinweistext fehlt");
+    assert!(shot.has(&lost_tip()), "Hinweistext fehlt");
 
     // Ohne Kreise: der Hinweis.
     st.document
         .update_drawing(d, |dr| dr.balloons.clear())
         .unwrap();
     let shot = h.idle(&mut st);
-    assert!(shot.has(SECTION));
-    assert!(shot.has(EMPTY_TEXT));
+    assert!(shot.has(&section()));
+    assert!(shot.has(&empty_text()));
     assert!(!shot.texts.iter().any(|t| t.text.starts_with("Pos. ")));
 
     // Ohne geöffnete Zeichnung: kein Abschnitt.
     st.drawing_ui.area = WorkArea::Model;
     let shot = h.idle(&mut st);
-    assert!(!shot.has(SECTION));
-    assert!(!shot.has(EMPTY_TEXT));
+    assert!(!shot.has(&section()));
+    assert!(!shot.has(&empty_text()));
 }

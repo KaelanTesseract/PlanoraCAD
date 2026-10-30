@@ -277,7 +277,7 @@ fn face_label_mesh(
     if size != label.key.1 {
         painter
             .ctx()
-            .request_discard("Würfelbeschriftung: Schriftatlas gewachsen");
+            .request_discard("Cube labels: font atlas grew");
     }
     let uv_scale = vec2(1.0 / size[0].max(1) as f32, 1.0 / size[1].max(1) as f32);
     let mut mesh = Mesh::default();
@@ -366,7 +366,7 @@ fn paint_cube(
                 painter.add(Shape::mesh(face_label_mesh(
                     painter,
                     &frame,
-                    face.label(),
+                    &face.label(),
                     color.gamma_multiply(label_opacity(frame.facing)),
                     label,
                 )));
@@ -634,14 +634,20 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
     if let Some(region) = hovered_region
         && !cube_dragging
     {
-        cube_response.on_hover_text(format!("Ansicht: {}", region.name()));
+        cube_response.on_hover_text(planora_i18n::tr!("view-cube-hover", name = region.name()));
     }
     let home_response = ui.interact(
         home_rect(cube),
         ui.id().with("planora-view-home"),
         Sense::click_and_drag(),
     );
-    home_response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Home"));
+    home_response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            true,
+            planora_i18n::tr!("view-home-label"),
+        )
+    });
     if home_response.clicked() {
         state.camera.home();
         state.frame_all();
@@ -654,7 +660,7 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
             state.camera.zoom(scroll);
         }
     }
-    home_response.on_hover_text("Home: Grundansicht (Isometrisch)");
+    home_response.on_hover_text(planora_i18n::tr!("view-home-hint"));
 
     if !sketching {
         // Auswahl (nicht über dem Würfel; dort ist die Ansicht nicht „hovered“)

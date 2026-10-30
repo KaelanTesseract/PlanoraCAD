@@ -1,7 +1,8 @@
 //! Fehler und Grenzen des STEP-Lesers. Die Meldungen sind deutsch und für die Oberfläche
 //! bestimmt; Zeilen zählen ab 1.
 
-use thiserror::Error;
+use planora_i18n::{fmt_num, tr};
+use std::fmt;
 
 /// Größte Datei, die gelesen wird (200 MB).
 pub const MAX_STEP_FILE_BYTES: u64 = 200 * 1024 * 1024;
@@ -45,53 +46,116 @@ impl Default for ReadLimits {
 }
 
 /// Fehler beim Lesen einer STEP-Datei.
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StepReadError {
-    #[error("Die Datei ist keine STEP-Datei (am Anfang fehlt „ISO-10303-21;“).")]
     NotStep,
-    #[error("Die Datei ist unvollständig: Sie endet in Zeile {line}, bevor alles gelesen ist.")]
-    Truncated { line: usize },
-    #[error("Die Datei ist zu groß ({} MB); erlaubt sind höchstens 200 MB.", megabytes(*.bytes))]
-    TooLarge { bytes: u64 },
-    #[error("Die Datei hat mehr als 5 Millionen Einträge.")]
+    Truncated {
+        line: usize,
+    },
+    TooLarge {
+        bytes: u64,
+    },
     TooManyEntities,
-    #[error("Zeile {line}: Die Nummer #{id} kommt doppelt vor (zuerst in Zeile {first}).")]
-    Duplicate { line: usize, id: u64, first: usize },
-    #[error("Zeile {line}: #{id} verweist auf #{target}, den es nicht gibt.")]
-    MissingRef { line: usize, id: u64, target: u64 },
-    #[error("Zeile {line}: Die Einträge verweisen im Kreis (#{id}).")]
-    Cycle { line: usize, id: u64 },
-    #[error("Zeile {line}: Die Zahl „{}“ ist zu groß oder keine gültige Zahl.", shorten(.text))]
-    BadNumber { line: usize, text: String },
-    #[error("Zeile {line}: Die Klammern sind zu tief verschachtelt (höchstens 64 Ebenen).")]
-    TooDeep { line: usize },
-    #[error("Zeile {line}: Unerwartetes Zeichen „{}“.", show_char(*.c))]
-    UnexpectedChar { line: usize, c: char },
-    #[error("Zeile {line}: Eine Zeichenkette ist nicht geschlossen.")]
-    OpenString { line: usize },
-    #[error("Zeile {line}: Ein Kommentar ist nicht geschlossen.")]
-    OpenComment { line: usize },
-    #[error("Zeile {line}: {msg}")]
-    Syntax { line: usize, msg: String },
-    #[error("Die Datei lässt sich nicht lesen: {msg}")]
-    Io { msg: String },
-    #[error("Die Datei enthält keine Volumenkörper.")]
+    Duplicate {
+        line: usize,
+        id: u64,
+        first: usize,
+    },
+    MissingRef {
+        line: usize,
+        id: u64,
+        target: u64,
+    },
+    Cycle {
+        line: usize,
+        id: u64,
+    },
+    BadNumber {
+        line: usize,
+        text: String,
+    },
+    TooDeep {
+        line: usize,
+    },
+    UnexpectedChar {
+        line: usize,
+        c: char,
+    },
+    OpenString {
+        line: usize,
+    },
+    OpenComment {
+        line: usize,
+    },
+    Syntax {
+        line: usize,
+        msg: String,
+    },
+    Io {
+        msg: String,
+    },
     NoBodies,
-    #[error("Die Datei enthält mehr als 50 Körper.")]
     TooManyBodies,
-    #[error("Abgebrochen")]
     Cancelled,
     /// Ein Eintrag ohne eigenen Kontext (freier Volumen-Eintrag), während die Kontexte der Datei
     /// verschiedene Einheiten nennen (Aufgabe 9).
-    #[error(
-        "Die Einheit ist unklar: Der Körper steht in keiner Darstellung, und die Datei nennt \
-         verschiedene Einheiten."
-    )]
     UnclearUnits,
     /// Programmfehler des Aufrufers: nach einer Nummer gefragt, die es nicht gibt.
-    #[error("Den Eintrag #{id} gibt es nicht.")]
-    NoEntity { id: u64 },
+    NoEntity {
+        id: u64,
+    },
 }
+
+impl fmt::Display for StepReadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            StepReadError::NotStep => tr!("step-read-not-step"),
+            StepReadError::Truncated { line } => tr!("step-read-truncated", line = *line),
+            StepReadError::TooLarge { bytes } => {
+                tr!("step-read-too-large", mb = megabytes(*bytes))
+            }
+            StepReadError::TooManyEntities => tr!("step-read-too-many-entities"),
+            StepReadError::Duplicate { line, id, first } => {
+                tr!(
+                    "step-read-duplicate",
+                    line = *line,
+                    id = *id,
+                    first = *first
+                )
+            }
+            StepReadError::MissingRef { line, id, target } => {
+                tr!(
+                    "step-read-missing-ref",
+                    line = *line,
+                    id = *id,
+                    target = *target
+                )
+            }
+            StepReadError::Cycle { line, id } => tr!("step-read-cycle", line = *line, id = *id),
+            StepReadError::BadNumber { line, text } => {
+                tr!("step-read-bad-number", line = *line, text = shorten(text))
+            }
+            StepReadError::TooDeep { line } => tr!("step-read-too-deep", line = *line),
+            StepReadError::UnexpectedChar { line, c } => {
+                tr!("step-read-unexpected-char", line = *line, c = show_char(*c))
+            }
+            StepReadError::OpenString { line } => tr!("step-read-open-string", line = *line),
+            StepReadError::OpenComment { line } => tr!("step-read-open-comment", line = *line),
+            StepReadError::Syntax { line, msg } => {
+                tr!("step-read-syntax", line = *line, msg = msg)
+            }
+            StepReadError::Io { msg } => tr!("step-read-io", msg = msg),
+            StepReadError::NoBodies => tr!("step-read-no-bodies"),
+            StepReadError::TooManyBodies => tr!("step-read-too-many-bodies"),
+            StepReadError::Cancelled => tr!("step-cancelled"),
+            StepReadError::UnclearUnits => tr!("step-read-unclear-units"),
+            StepReadError::NoEntity { id } => tr!("step-read-no-entity", id = *id),
+        };
+        f.write_str(&text)
+    }
+}
+
+impl std::error::Error for StepReadError {}
 
 impl StepReadError {
     /// `BadNumber` mit höchstens [`MAX_BAD_NUMBER_CHARS`] Zeichen des Textes.
@@ -111,9 +175,9 @@ impl StepReadError {
     }
 }
 
-/// Bytes in MB (1024·1024) mit einer Nachkommastelle und Komma.
+/// Bytes in MB (1024·1024) mit einer Nachkommastelle und dem Dezimaltrenner der Sprache.
 fn megabytes(bytes: u64) -> String {
-    format!("{:.1}", bytes as f64 / (1024.0 * 1024.0)).replace('.', ",")
+    fmt_num(bytes as f64 / (1024.0 * 1024.0), 1)
 }
 
 /// Steuer- und unsichtbare Zeichen erscheinen als `U+XXXX`, nie roh.

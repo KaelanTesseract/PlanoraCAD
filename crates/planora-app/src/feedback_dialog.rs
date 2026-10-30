@@ -13,16 +13,21 @@
 //!
 //! Welche Fenster es schließt und welche es schließen, regelt die App (`app::open_feedback`,
 //! `app::enforce_feedback_rules`).
+//!
+//! Das Fenster spricht die Sprache des Programms; die gesammelten Angaben (Version, System,
+//! Grafikkarte, Schritte, Protokoll, Absturzbericht) sind englisch, so wie sie mitgehen.
 
 use crate::build_info::BuildInfo;
+use crate::diag::in_english;
 use crate::diag::{self, Step};
 use crate::dialog::{Dialog, DialogSize};
 use crate::feedback::{self, AREAS, Built, FEEDBACK_FILE, Kind, Part, Personal, Report};
 use crate::feedback_shot::{
-    SHOT_FAILED, SHOT_FILE, ShotFlow, ShotPhase, ShotStep, preview_line, save_png,
+    SHOT_FILE, ShotFlow, ShotPhase, ShotStep, preview_line, save_png, shot_failed,
 };
 use crate::theme::{self, SPACE_1, SPACE_2, SPACE_3, SPACE_4};
 use crate::zip_store;
+use planora_i18n::tr;
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -30,69 +35,115 @@ use std::sync::Arc;
 use std::time::Instant;
 
 /// Titel des Fensters.
-pub const TITLE: &str = "Rückmeldung";
+pub fn title() -> String {
+    tr!("feedback-title")
+}
 /// Vor der Wahl von Fehler, Wunsch oder Frage.
-pub const KIND_LABEL: &str = "Worum geht es?";
+pub fn kind_label() -> String {
+    tr!("feedback-kind-label")
+}
 /// Vor der Auswahl des Bereichs (freiwillig, steht als „Bereich: …“ am Anfang des Textes).
-pub const AREA_LABEL: &str = "Bereich";
+pub fn area_label() -> String {
+    tr!("feedback-area-label")
+}
 /// Auswahl „kein Bereich“.
-pub const AREA_NONE: &str = "Keine Angabe";
-/// Über dem Beschreibungsfeld.
-pub const DESCRIPTION_LABEL: &str = "Beschreib kurz, was du gemacht hast und was passiert ist.";
+pub fn area_none() -> String {
+    tr!("feedback-area-none")
+}
+/// Über dem Beschreibungsfeld bei einem Fehler.
+pub fn bug_label() -> String {
+    tr!("feedback-bug-label")
+}
 /// Über dem Beschreibungsfeld bei einem Wunsch.
-pub const WISH_LABEL: &str = "Was möchtest du tun können?";
+pub fn wish_label() -> String {
+    tr!("feedback-wish-label")
+}
 /// Über dem Beschreibungsfeld bei einer Frage.
-pub const QUESTION_LABEL: &str = "Was möchtest du wissen?";
+pub fn question_label() -> String {
+    tr!("feedback-question-label")
+}
 
 /// Die Aufforderung über dem Beschreibungsfeld zur Art der Rückmeldung.
-pub fn description_label(kind: Kind) -> &'static str {
+pub fn description_label(kind: Kind) -> String {
     match kind {
-        Kind::Fehler => DESCRIPTION_LABEL,
-        Kind::Wunsch => WISH_LABEL,
-        Kind::Frage => QUESTION_LABEL,
+        Kind::Fehler => bug_label(),
+        Kind::Wunsch => wish_label(),
+        Kind::Frage => question_label(),
     }
 }
 /// So viele Zeichen braucht die Beschreibung mindestens (ohne Leerraum am Rand).
 pub const MIN_CHARS: usize = 10;
 /// Neben dem gesperrten Knopf, solange die Beschreibung zu kurz ist.
-pub const TOO_SHORT: &str = "Bitte schreib mindestens 10 Zeichen.";
+pub fn too_short() -> String {
+    tr!("feedback-too-short")
+}
 /// Überschrift über den Bestandteilen mit Häkchen.
-pub const PREVIEW_HEADING: &str = "Das geht mit";
+pub fn preview_heading() -> String {
+    tr!("feedback-preview-heading")
+}
 /// Hauptknopf: Ordner (bei Bedarf) und Adresse öffnen.
-pub const OPEN_BROWSER: &str = "Im Browser öffnen";
+pub fn open_browser() -> String {
+    tr!("feedback-open-browser")
+}
 /// Zweiter Knopf: das Webformular auf dennis-guse.de statt GitHub.
-pub const WEBFORM_BUTTON: &str = "Ohne GitHub-Konto senden";
+pub fn webform_button() -> String {
+    tr!("feedback-webform-button")
+}
 /// Hinweis zum zweiten Knopf.
-pub const WEBFORM_HINT: &str = "Öffnet ein Formular auf dennis-guse.de. Dort kannst du Dateien anhängen: ein Bild vom Fenster, die Datei rueckmeldung.txt oder auf Wunsch dein Projekt als .pcad.zip.";
+pub fn webform_hint() -> String {
+    tr!("feedback-webform-hint")
+}
 /// Notweg, steht nach dem Senden.
-pub const MAIL_FALLBACK: &str = "Klappt beides nicht? Schreib an info@dennis-guse.de.";
+pub fn mail_fallback() -> String {
+    tr!("feedback-mail-fallback")
+}
 /// Schließt ohne etwas zu tun.
-pub const CANCEL: &str = "Abbrechen";
+pub fn cancel() -> String {
+    tr!("feedback-cancel")
+}
 /// Schließt nach „Im Browser öffnen“.
-pub const CLOSE: &str = "Schließen";
+pub fn close() -> String {
+    tr!("feedback-close")
+}
 /// Kopf der aufklappbaren Adresse.
-pub const SHOW_ADDRESS: &str = "Adresse anzeigen";
+pub fn show_address() -> String {
+    tr!("feedback-show-address")
+}
 /// Kopiert die Adresse in die Zwischenablage.
-pub const COPY_TEXT: &str = "Text kopieren";
+pub fn copy_text() -> String {
+    tr!("feedback-copy-text")
+}
 /// Nach „Im Browser öffnen“.
-pub const BROWSER_HINT: &str =
-    "Hat sich kein Browser geöffnet? Kopier die Adresse und füg sie im Browser ein.";
+pub fn browser_hint() -> String {
+    tr!("feedback-browser-hint")
+}
 /// Nach „Text kopieren“.
-pub const COPIED: &str = "Kopiert.";
+pub fn copied() -> String {
+    tr!("feedback-copied")
+}
 /// Statt [`folder_hint`], wenn der Rückmeldungsordner nicht angelegt werden konnte.
-pub const NO_FILE: &str = "Die Datei ließ sich nicht anlegen. Die Meldung geht trotzdem.";
+pub fn no_file() -> String {
+    tr!("feedback-no-file")
+}
 /// Steht immer unten im Fenster.
-pub const PRIVACY_LINE: &str = "Die Angaben gehen erst mit dem Öffnen im Browser an GitHub oder das Formular. Gespeichert und gemeldet wird erst, wenn du dort absendest.";
+pub fn privacy_line() -> String {
+    tr!("feedback-privacy-line")
+}
 /// So viele letzte Protokollzeilen kommen in den Bestandteil „Protokollzeilen“.
 pub const LOG_LINES: usize = 100;
 /// Vorschau zum Bild, solange noch keins aufgenommen ist.
-pub const SHOT_NOT_YET: &str =
-    "Beim Anhaken nimmt das Programm ein Bild vom Fenster auf (ohne dieses Fenster).";
+pub fn shot_not_yet() -> String {
+    tr!("feedback-shot-not-yet")
+}
 /// Häkchen des Bestandteils „Projektdatei“ (nur mit Absturzbericht, der ein Dokument nennt).
-pub const PROJECT_CHECKBOX: &str = "Projektdatei in den Ordner legen";
+pub fn project_checkbox() -> String {
+    tr!("feedback-project-checkbox")
+}
 
 /// Statt des Häkchens, wenn der Projektordner größer als die Grenze ist.
-pub const PROJECT_TOO_BIG: &str = "Die Projektdatei ist zu groß zum Mitschicken.";
+pub fn project_too_big() -> String {
+    tr!("feedback-project-too-big")
+}
 /// Größer darf der Projektordner zum Mitschicken nicht sein (alle Dateien zusammen).
 pub const PROJECT_MAX_BYTES: u64 = 200 * 1024 * 1024;
 /// Größte Einzeldatei, die das Webformular annimmt. Die Seite nennt „25 MB“; ob sie 10^6 oder
@@ -103,17 +154,18 @@ pub const UPLOAD_MAX_BYTES: u64 = 25_000_000;
 /// („30 MB“, ebenfalls die kleinere Lesart). Höchstens 10 Dateien: hier gehen höchstens 3 mit.
 pub const TOTAL_MAX_BYTES: u64 = 30_000_000;
 /// Statt des Hinweises auf die ZIP, wenn sie fürs Formular zu groß ist (sie bleibt im Ordner).
-pub const PROJECT_TOO_BIG_FOR_FORM: &str = "Dein Projekt ist zu groß für das Formular (höchstens 25 MB). Schick die Meldung ohne Projekt; Dennis meldet sich, wenn er es braucht. Die Datei liegt trotzdem im Ordner.";
+pub fn project_too_big_for_form() -> String {
+    tr!("feedback-project-too-big-for-form")
+}
 /// Statt des Häkchens, wenn im Projekt keine Datei liegt.
-pub const PROJECT_EMPTY: &str = "Das Projekt ist leer und wird nicht mitgeschickt.";
+pub fn project_empty() -> String {
+    tr!("feedback-project-empty")
+}
 
 /// Vorschau zur Projektdatei: was mit dem Projekt geschieht; `name` ist der Name der Datei im
 /// Rückmeldungsordner (`<Name>.pcad.zip`, [`project_zip_name`]).
 pub fn project_preview(name: &str) -> String {
-    format!(
-        "Legt das Projekt als „{name}“ in den Rückmeldungsordner (ohne ungespeicherte \
-         Änderungen). Es geht nur mit, wenn du die Datei selbst ins Formular ziehst."
-    )
+    tr!("feedback-project-preview", name = name)
 }
 
 /// Name der Projektdatei im Rückmeldungsordner zum Projektordner `project`: `Teil.pcad.zip`.
@@ -171,16 +223,20 @@ const DESCRIPTION_ROWS: usize = 4;
 
 /// Hinweis nach „Im Browser öffnen“, wenn ein Ordner mit den Dateien `files` geöffnet wurde.
 pub fn folder_hint(files: &[&str]) -> String {
-    let names: Vec<String> = files.iter().map(|f| format!("„{f}“")).collect();
-    format!(
-        "Zieh {} aus dem geöffneten Ordner ins Formular.",
-        names.join(" und ")
+    let names: Vec<String> = files
+        .iter()
+        .map(|f| tr!("feedback-folder-file", name = *f))
+        .collect();
+    tr!(
+        "feedback-folder-hint",
+        files = names.join(&tr!("feedback-folder-and"))
     )
 }
 
-/// Zeile mit der Bildschirmgröße im Bestandteil „System“.
+/// Zeile mit der Bildschirmgröße im Bestandteil „System“ (englisch, wie alle gesammelten
+/// Angaben).
 pub fn screen_line(width: u32, height: u32) -> String {
-    format!("Bildschirm: {width} × {height}")
+    format!("Screen: {width} × {height}")
 }
 
 /// Kennung des Fensters (für Lage und Größe in Tests).
@@ -188,9 +244,9 @@ pub fn window_id() -> egui::Id {
     egui::Id::new(WINDOW_ID)
 }
 
-/// Kennung der aufklappbaren Vorschau von `part`.
+/// Kennung der aufklappbaren Vorschau von `part` (unabhängig von der Sprache).
 pub fn preview_id(part: Part) -> egui::Id {
-    egui::Id::new(("planora_feedback_vorschau", part.label()))
+    egui::Id::new(("planora_feedback_vorschau", part.heading()))
 }
 
 /// Was beim Öffnen über das Programm bekannt ist (Schnappschuss; ändert sich nicht, solange
@@ -235,13 +291,13 @@ pub struct Sent {
     pub url: String,
     /// Der angelegte und geöffnete Rückmeldungsordner.
     pub folder: Option<PathBuf>,
-    /// Ein Ordner war nötig, ließ sich aber nicht anlegen ([`NO_FILE`]).
+    /// Ein Ordner war nötig, ließ sich aber nicht anlegen ([`no_file`]).
     pub file_failed: bool,
     /// `bild.png` liegt mit im Ordner.
     pub picture: bool,
     /// Name der Projektdatei im Ordner (`<Name>.pcad.zip`), wenn sie geschrieben wurde.
     pub project: Option<String>,
-    /// Die ZIP liegt im Ordner, ist aber fürs Formular zu groß ([`PROJECT_TOO_BIG_FOR_FORM`]);
+    /// Die ZIP liegt im Ordner, ist aber fürs Formular zu groß ([`project_too_big_for_form`]);
     /// sie wird nicht zum Hochladen genannt.
     pub project_too_big_for_form: bool,
 }
@@ -250,8 +306,42 @@ pub struct Sent {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PartRow {
     part: Part,
-    text: String,
+    text: RowText,
     on: bool,
+}
+
+/// Text eines Bestandteils. Gesammelte Angaben sind englisch und stehen so in Vorschau und
+/// Meldung; Hinweise des Fensters entstehen erst beim Zeichnen in der Sprache des Programms.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RowText {
+    /// Gesammelte, bereinigte Angabe (englisch).
+    Data(String),
+    /// Bild: noch keins aufgenommen.
+    ShotNotYet,
+    /// Bild: kam nicht oder ließ sich nicht speichern.
+    ShotFailed,
+    /// Projektdatei mit dem Namen der ZIP im Rückmeldungsordner.
+    Project(String),
+}
+
+impl RowText {
+    /// Text in der Vorschau (Hinweise in der aktuellen Sprache).
+    fn shown(&self) -> String {
+        match self {
+            RowText::Data(t) => t.clone(),
+            RowText::ShotNotYet => shot_not_yet(),
+            RowText::ShotFailed => shot_failed(),
+            RowText::Project(name) => project_preview(name),
+        }
+    }
+
+    /// Text in der Meldung (immer englisch).
+    fn report(&self) -> String {
+        match self {
+            RowText::Data(t) => t.clone(),
+            other => in_english(|| other.shown()),
+        }
+    }
 }
 
 /// Wovon die Adresse abhängt (Zwischenspeicher, damit sie nicht jedes Bild neu entsteht).
@@ -389,15 +479,15 @@ impl FeedbackDialog {
         if on {
             if self.shot.image().is_none() {
                 self.shot.start();
-                self.set_picture_text(SHOT_NOT_YET.to_string());
+                self.set_picture_text(RowText::ShotNotYet);
             }
         } else {
             self.shot.reset();
-            self.set_picture_text(SHOT_NOT_YET.to_string());
+            self.set_picture_text(RowText::ShotNotYet);
         }
     }
 
-    fn set_picture_text(&mut self, text: String) {
+    fn set_picture_text(&mut self, text: RowText) {
         if let Some(r) = self.rows.iter_mut().find(|r| r.part == Part::Bild) {
             r.text = text;
         }
@@ -410,15 +500,15 @@ impl FeedbackDialog {
 
     /// Einmal je Bild vor dem Zeichnen: liefert, ob die App das Bild anfordern soll. Kam nach
     /// [`SHOT_TIMEOUT`](crate::feedback_shot::SHOT_TIMEOUT) keins, ist das Häkchen wieder aus
-    /// und die Vorschau sagt [`SHOT_FAILED`].
+    /// und die Vorschau sagt [`shot_failed`].
     pub fn shot_tick(&mut self, now: Instant) -> ShotStep {
         let step = self.shot.tick(now);
         if step == ShotStep::ShowDialogAgain && matches!(self.shot.phase, ShotPhase::Failed) {
-            diag::warn("Bild vom Fenster kam nicht");
+            diag::warn("Window picture did not arrive");
             if let Some(r) = self.rows.iter_mut().find(|r| r.part == Part::Bild) {
                 r.on = false;
             }
-            self.set_picture_text(SHOT_FAILED.to_string());
+            self.set_picture_text(RowText::ShotFailed);
         }
         step
     }
@@ -429,7 +519,7 @@ impl FeedbackDialog {
             && let Some(img) = self.shot.image()
         {
             let line = preview_line(img);
-            self.set_picture_text(line);
+            self.set_picture_text(RowText::Data(line));
         }
     }
 
@@ -454,12 +544,12 @@ impl FeedbackDialog {
         self.project_dir.as_deref().and_then(project_zip_name)
     }
 
-    /// Bereinigter Text von `part`, wie in der Vorschau.
-    pub fn preview_text(&self, part: Part) -> Option<&str> {
+    /// Bereinigter Text von `part`, wie in der Vorschau (Hinweise in der aktuellen Sprache).
+    pub fn preview_text(&self, part: Part) -> Option<String> {
         self.rows
             .iter()
             .find(|r| r.part == part)
-            .map(|r| r.text.as_str())
+            .map(|r| r.text.shown())
     }
 
     /// Ist die Beschreibung lang genug ([`MIN_CHARS`])?
@@ -477,7 +567,7 @@ impl FeedbackDialog {
                 .rows
                 .iter()
                 .filter(|r| r.on)
-                .map(|r| (r.part, r.text.clone()))
+                .map(|r| (r.part, r.text.report()))
                 .collect(),
             project_file: self.copied_project_name(),
         }
@@ -555,7 +645,7 @@ impl FeedbackDialog {
                     let dir = feedback::bundle_dir(&c.data_dir, chrono::Local::now().naive_local());
                     feedback::write_bundle(&dir, &report).map(|_| dir)
                 }
-                None => Err(std::io::Error::other("kein Datenordner")),
+                None => Err(std::io::Error::other("no data folder")),
             };
             let written = written.and_then(|dir| match &picture {
                 Some(img) => save_png(&dir, img).map(|_| dir),
@@ -577,7 +667,7 @@ impl FeedbackDialog {
                         }
                     }
                     Err(e) => {
-                        diag::warn(&format!("Projektdatei nicht geschrieben ({:?})", e.kind()));
+                        diag::warn(&format!("Project file not written ({:?})", e.kind()));
                         // Ohne Datei auch kein Hinweis darauf in der Adresse.
                         report.project_file = None;
                         built = make(&report, with_file);
@@ -588,10 +678,7 @@ impl FeedbackDialog {
                 Ok(dir) => folder = Some(dir),
                 Err(e) => {
                     file_failed = true;
-                    diag::warn(&format!(
-                        "Rückmeldungsordner nicht angelegt ({:?})",
-                        e.kind()
-                    ));
+                    diag::warn(&format!("Feedback folder not created ({:?})", e.kind()));
                     // Ohne Ordner gehen auch Bild und Projektdatei nicht mit.
                     report.parts.retain(|(p, _)| *p != Part::Bild);
                     report.project_file = None;
@@ -600,12 +687,12 @@ impl FeedbackDialog {
             }
         }
         diag::info(&format!(
-            "Rückmeldung ({}) {} geöffnet",
-            report.kind.label(),
+            "Feedback ({}) opened {}",
+            report.kind.report_name(),
             if web {
-                "über das Webformular"
+                "via the web form"
             } else {
-                "über GitHub"
+                "via GitHub"
             }
         ));
         let picture = folder.is_some() && picture.is_some();
@@ -629,19 +716,22 @@ impl FeedbackDialog {
 }
 
 /// Die Bestandteile aus den Angaben beim Öffnen, bereinigt. Schritte, Protokoll und
-/// Absturzbericht nur, wenn es sie gibt.
+/// Absturzbericht nur, wenn es sie gibt. Die gesammelten Angaben entstehen englisch.
 fn rows_for(c: &FeedbackContext, project: Option<&Path>) -> Vec<PartRow> {
     let who = &c.personal;
-    let clean = |t: &str| feedback::sanitize(t, who);
+    let clean = |t: &str| RowText::Data(feedback::sanitize(t, who));
     let mut system = c.info.os.clone();
     if let Some((w, h)) = c.screen {
         system.push('\n');
         system.push_str(&screen_line(w, h));
     }
     let mut rows = vec![
-        (Part::Version, clean(&c.info.version_line())),
+        (Part::Version, clean(&in_english(|| c.info.version_line()))),
         (Part::System, clean(&system)),
-        (Part::Grafik, feedback::gpu_line(&c.info, who)),
+        (
+            Part::Grafik,
+            RowText::Data(in_english(|| feedback::gpu_line(&c.info, who))),
+        ),
     ];
     if !c.steps.is_empty() {
         rows.push((Part::Schritte, clean(&diag::steps_text(&c.steps))));
@@ -650,11 +740,14 @@ fn rows_for(c: &FeedbackContext, project: Option<&Path>) -> Vec<PartRow> {
         let from = c.log.len().saturating_sub(LOG_LINES);
         rows.push((Part::Protokoll, clean(&c.log[from..].join("\n"))));
     }
-    rows.push((Part::Bild, SHOT_NOT_YET.to_string()));
+    rows.push((Part::Bild, RowText::ShotNotYet));
     if let Some(text) = c.crash_report.as_deref().and_then(read_report) {
         rows.push((Part::Absturzbericht, clean(&text)));
         if let Some(name) = project.and_then(project_zip_name) {
-            rows.push((Part::Projektdatei, clean(&project_preview(&name))));
+            rows.push((
+                Part::Projektdatei,
+                RowText::Project(feedback::sanitize(&name, who)),
+            ));
         }
     }
     rows.into_iter()
@@ -666,17 +759,27 @@ fn rows_for(c: &FeedbackContext, project: Option<&Path>) -> Vec<PartRow> {
         .collect()
 }
 
-/// Die Meldung für die Adresse: vom Absturzbericht nur die Zeilen „Fehler“ und „Ort“ (der ganze
-/// Bericht steht in `rueckmeldung.txt`). Fehlen beide, bleibt der Text, wie er ist.
+/// Die Meldung für die Adresse: vom Absturzbericht nur die Zeilen „Error“ und „Location“ (in
+/// älteren Berichten „Fehler“ und „Ort“; der ganze Bericht steht in `rueckmeldung.txt`). Fehlen
+/// sie, bleibt der Text, wie er ist.
 fn url_report(report: &Report) -> Report {
     let mut r = report.clone();
+    let keys = [
+        crate::crash::ERROR_KEY,
+        crate::crash::LOCATION_KEY,
+        "Fehler",
+        "Ort",
+    ];
     for (part, text) in &mut r.parts {
         if *part != Part::Absturzbericht {
             continue;
         }
         let short: Vec<&str> = text
             .lines()
-            .filter(|l| l.starts_with("Fehler: ") || l.starts_with("Ort: "))
+            .filter(|l| {
+                keys.iter()
+                    .any(|k| l.strip_prefix(k).is_some_and(|r| r.starts_with(": ")))
+            })
             .collect();
         if !short.is_empty() {
             *text = short.join("\n");
@@ -773,7 +876,7 @@ pub fn show(ctx: &egui::Context, state: &mut FeedbackDialog, dark: bool) -> Opti
     let mut click = None;
     let sent = state.sent.is_some();
     let enough = Cell::new(state.long_enough());
-    Dialog::new(TITLE, DialogSize::Wide)
+    Dialog::new(title(), DialogSize::Wide)
         .id(window_id())
         .center_on_open()
         .open(&mut open)
@@ -812,7 +915,7 @@ pub fn show(ctx: &egui::Context, state: &mut FeedbackDialog, dark: bool) -> Opti
 /// Art, Bereich, Beschreibung, Bestandteile mit Vorschau und die Adresse.
 fn form(ui: &mut egui::Ui, state: &mut FeedbackDialog, action: &mut Option<FeedbackAction>) {
     ui.horizontal(|ui| {
-        ui.strong(KIND_LABEL);
+        ui.strong(kind_label());
         ui.add_space(SPACE_2);
         for k in [Kind::Fehler, Kind::Wunsch, Kind::Frage] {
             let r = ui.radio_value(&mut state.kind, k, k.label());
@@ -821,14 +924,14 @@ fn form(ui: &mut egui::Ui, state: &mut FeedbackDialog, action: &mut Option<Feedb
     });
     ui.add_space(SPACE_2);
     ui.horizontal(|ui| {
-        ui.strong(AREA_LABEL);
+        ui.strong(area_label());
         ui.add_space(SPACE_2);
         egui::ComboBox::from_id_salt("planora_feedback_bereich")
-            .selected_text(state.area.unwrap_or(AREA_NONE))
+            .selected_text(state.area.map_or_else(area_none, feedback::area_label))
             .show_ui(ui, |ui| {
-                ui.selectable_value(&mut state.area, None, AREA_NONE);
+                ui.selectable_value(&mut state.area, None, area_none());
                 for a in AREAS {
-                    ui.selectable_value(&mut state.area, Some(a), a);
+                    ui.selectable_value(&mut state.area, Some(a), feedback::area_label(a));
                 }
             });
     });
@@ -860,7 +963,7 @@ fn form(ui: &mut egui::Ui, state: &mut FeedbackDialog, action: &mut Option<Feedb
     }
 
     ui.add_space(SPACE_4);
-    theme::section_header(ui, PREVIEW_HEADING, theme::SUB_HEADER_H);
+    theme::section_header(ui, &preview_heading(), theme::SUB_HEADER_H);
     ui.add_space(SPACE_1);
     let picture_before = state.is_checked(Part::Bild);
     for row in &mut state.rows {
@@ -871,20 +974,20 @@ fn form(ui: &mut egui::Ui, state: &mut FeedbackDialog, action: &mut Option<Feedb
         )
         .show_header(ui, |ui| {
             let label = if row.part == Part::Projektdatei {
-                PROJECT_CHECKBOX
+                project_checkbox()
             } else {
                 row.part.label()
             };
             let r = ui.checkbox(&mut row.on, label);
             theme::focus_ring(ui, &r);
         })
-        .body(|ui| read_only_text(ui, preview_id(row.part), &row.text, PREVIEW_MAX_H));
+        .body(|ui| read_only_text(ui, preview_id(row.part), &row.text.shown(), PREVIEW_MAX_H));
     }
     if state.project_too_big {
-        ui.add(egui::Label::new(PROJECT_TOO_BIG).wrap());
+        ui.add(egui::Label::new(project_too_big()).wrap());
     }
     if state.project_empty {
-        ui.add(egui::Label::new(PROJECT_EMPTY).wrap());
+        ui.add(egui::Label::new(project_empty()).wrap());
     }
     let picture_now = state.is_checked(Part::Bild);
     if picture_now != picture_before {
@@ -893,7 +996,7 @@ fn form(ui: &mut egui::Ui, state: &mut FeedbackDialog, action: &mut Option<Feedb
 
     ui.add_space(SPACE_3);
     let url = state.built().url;
-    egui::CollapsingHeader::new(SHOW_ADDRESS)
+    egui::CollapsingHeader::new(show_address())
         .id_salt(("planora_feedback_adresse", state.opened_count))
         .default_open(false)
         .show(ui, |ui| {
@@ -917,7 +1020,7 @@ fn collapse(ctx: &egui::Context, id: egui::Id) {
     ctx.animate_bool_with_time(id, false, 0.0);
 }
 
-/// Nach „Im Browser öffnen“: Hinweis mit „Text kopieren“, Ordner-Hinweis oder [`NO_FILE`],
+/// Nach „Im Browser öffnen“: Hinweis mit „Text kopieren“, Ordner-Hinweis oder [`no_file`],
 /// die geöffnete Adresse zum Aufklappen.
 fn after_send(
     ui: &mut egui::Ui,
@@ -928,12 +1031,12 @@ fn after_send(
     let Some(sent) = state.sent.clone() else {
         return;
     };
-    ui.add(egui::Label::new(BROWSER_HINT).wrap());
+    ui.add(egui::Label::new(browser_hint()).wrap());
     ui.add_space(SPACE_1);
     copy_row(ui, state, &sent.url, action);
     if sent.file_failed {
         ui.add_space(SPACE_3);
-        crate::update_dialog::failure_box(ui, NO_FILE, dark);
+        crate::update_dialog::failure_box(ui, &no_file(), dark);
     } else if sent.folder.is_some() {
         ui.add_space(SPACE_3);
         let mut files = vec![FEEDBACK_FILE.to_string()];
@@ -947,13 +1050,13 @@ fn after_send(
         ui.add(egui::Label::new(folder_hint(&files)).wrap());
         if sent.project_too_big_for_form {
             ui.add_space(SPACE_1);
-            ui.add(egui::Label::new(PROJECT_TOO_BIG_FOR_FORM).wrap());
+            ui.add(egui::Label::new(project_too_big_for_form()).wrap());
         }
     }
     ui.add_space(SPACE_3);
-    ui.add(egui::Label::new(MAIL_FALLBACK).wrap());
+    ui.add(egui::Label::new(mail_fallback()).wrap());
     ui.add_space(SPACE_3);
-    egui::CollapsingHeader::new(SHOW_ADDRESS)
+    egui::CollapsingHeader::new(show_address())
         .id_salt(("planora_feedback_adresse_geschickt", state.opened_count))
         .default_open(false)
         .show(ui, |ui| {
@@ -974,14 +1077,14 @@ fn copy_row(
     action: &mut Option<FeedbackAction>,
 ) {
     ui.horizontal(|ui| {
-        let r = ui.button(COPY_TEXT);
+        let r = ui.button(copy_text());
         theme::focus_ring(ui, &r);
         if r.clicked() {
             state.copied = true;
             *action = Some(FeedbackAction::Copy(url.to_string()));
         }
         if state.copied {
-            ui.label(COPIED);
+            ui.label(copied());
         }
     });
 }
@@ -1016,14 +1119,14 @@ fn footer(
     click: &mut Option<FooterClick>,
 ) {
     ui.add_space(SPACE_2);
-    ui.label(egui::RichText::new(PRIVACY_LINE).color(theme::palette(dark).text_secondary));
+    ui.label(egui::RichText::new(privacy_line()).color(theme::palette(dark).text_secondary));
     if !sent {
-        ui.label(egui::RichText::new(WEBFORM_HINT).color(theme::palette(dark).text_secondary));
+        ui.label(egui::RichText::new(webform_hint()).color(theme::palette(dark).text_secondary));
     }
     ui.add_space(SPACE_2);
     ui.horizontal(|ui| {
         if sent {
-            let r = ui.add(theme::primary_button(CLOSE, dark));
+            let r = ui.add(theme::primary_button(&close(), dark));
             theme::focus_ring(ui, &r);
             if r.clicked() {
                 *click = Some(FooterClick::Cancel);
@@ -1031,27 +1134,70 @@ fn footer(
             return;
         }
         let r = ui
-            .add_enabled(enough, theme::primary_button(OPEN_BROWSER, dark))
-            .on_disabled_hover_text(TOO_SHORT);
+            .add_enabled(enough, theme::primary_button(&open_browser(), dark))
+            .on_disabled_hover_text(too_short());
         theme::focus_ring(ui, &r);
         if r.clicked() {
             *click = Some(FooterClick::Send);
         }
         let r = ui
-            .add_enabled(enough, egui::Button::new(WEBFORM_BUTTON))
-            .on_disabled_hover_text(TOO_SHORT);
+            .add_enabled(enough, egui::Button::new(webform_button()))
+            .on_disabled_hover_text(too_short());
         theme::focus_ring(ui, &r);
         if r.clicked() {
             *click = Some(FooterClick::SendWeb);
         }
-        let r = ui.button(CANCEL);
+        let r = ui.button(cancel());
         theme::focus_ring(ui, &r);
         if r.clicked() {
             *click = Some(FooterClick::Cancel);
         }
         if !enough {
             ui.add_space(SPACE_2);
-            ui.label(egui::RichText::new(TOO_SHORT).color(theme::palette(dark).text_secondary));
+            ui.label(egui::RichText::new(too_short()).color(theme::palette(dark).text_secondary));
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::feedback::Kind;
+
+    fn crash_report(text: &str) -> Report {
+        Report {
+            kind: Kind::Fehler,
+            area: None,
+            description: "Absturz".into(),
+            parts: vec![(Part::Absturzbericht, text.to_string())],
+            project_file: None,
+        }
+    }
+
+    #[test]
+    fn url_report_reads_an_old_german_crash_report() {
+        let old = "Zeit: 26.10.2026, 10:00:00
+Fehler: index out of bounds
+Ort: src/x.rs:1:2
+Dokument: keines
+Ablauf:
+  0: a";
+        let r = url_report(&crash_report(old));
+        assert_eq!(
+            r.parts[0].1,
+            "Fehler: index out of bounds
+Ort: src/x.rs:1:2"
+        );
+        let new = "Time: 2026-10-26 10:00:00
+Error: boom
+Location: src/x.rs:1:2
+Document: none
+Backtrace:
+  0: a";
+        assert_eq!(
+            url_report(&crash_report(new)).parts[0].1,
+            "Error: boom
+Location: src/x.rs:1:2"
+        );
+    }
 }

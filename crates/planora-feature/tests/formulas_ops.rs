@@ -544,7 +544,7 @@ fn keys_and_labels() {
     assert_eq!(field_keys(&ext), [Hoehe]);
     assert_eq!(field_keys(&mv), [X, Y, Z]);
     assert_eq!(field_keys(&mesh), [X, Y, Z, Massstab]);
-    let labels = |k: &FeatureKind| -> Vec<&str> {
+    let labels = |k: &FeatureKind| -> Vec<String> {
         field_keys(k)
             .into_iter()
             .map(|f| field_label(k, f))

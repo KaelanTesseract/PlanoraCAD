@@ -28,6 +28,7 @@ Die Texte stammen aus der Entwicklung und sind entsprechend genau. Viele Abschni
 - [Tastenkürzel und Maus](#tastenkürzel-und-maus)
 - [Rückmeldung, Absturzberichte und Protokoll](#rückmeldung-absturzberichte-und-protokoll)
 - [Updates und Versionen](#updates-und-versionen)
+- [Sprache](#sprache)
 
 ## Grundkörper und Boolesche Operationen
 
@@ -667,7 +668,7 @@ Welche üblichen Kürzel noch fehlen, weil es die Funktion noch nicht gibt, steh
 
 **Was mitgeht.** Version, System, Grafikkarte, die letzten Schritte, auf Wunsch Protokollzeilen und ein Bild vom Programmfenster. Jede Angabe lässt sich in der Vorschau abwählen. Benutzername, Projektpfade und Mailadressen werden vorher entfernt. Ein Bericht in GitHub ist öffentlich; das Webformular schickt an Dennis.
 
-**Absturzbericht.** Bei einem Rust-Absturz (Panic) schreibt das Programm einen Bericht in den Datenordner (ohne Benutzernamen), beim nächsten Start fragt es nach. Das Projekt kommt auf Wunsch als `.pcad.zip` dazu (Formular: höchstens 25 MB je Datei, 30 MB zusammen, 10 Dateien). Endet das Programm ohne Bericht (hart beendet, Stromausfall, Absturz außerhalb von Rust), kann es das nur beim nächsten Start melden. Wie ein Bericht mit der `.pdb` des Releases aufgelöst wird, steht unter „Absturzbericht auflösen“ in „Updates und Versionen“.
+**Absturzbericht.** Bei einem Rust-Absturz (Panic) schreibt das Programm einen Bericht in den Datenordner (ohne Benutzernamen), beim nächsten Start fragt es nach. Das Projekt kommt auf Wunsch als `.pcad.zip` dazu (Formular: höchstens 25 MB je Datei, 30 MB zusammen, 10 Dateien). Endet das Programm ohne Bericht (hart beendet, Stromausfall, Absturz außerhalb von Rust), kann es das nur beim nächsten Start melden. Wie ein Bericht mit der `.pdb` des Releases aufgelöst wird, steht unter „Absturzbericht auflösen“ in „Updates und Versionen“. Protokoll, letzte Schritte, Absturzbericht und die gesammelten Angaben in `rueckmeldung.txt` sind immer englisch, egal welche Sprache das Programm spricht; das Rückmelde-Fenster und die Rückfrage nach einem Absturz folgen der Programmsprache, und der selbst geschriebene Text bleibt, wie er ist.
 
 **Ausführliches Protokoll.** Unter „Datei → Einstellungen …“, Abschnitt „Updates“, schreibt der Schalter „Ausführliches Protokoll“ mehr in `planora.log` (jeder Befehl mit Dauer, keine Projektinhalte). Die Datei dreht bei etwa 1 MB (`planora.log`, `planora.1.log`, `planora.2.log`) und bleibt auf dem Rechner.
 
@@ -713,6 +714,25 @@ Unter „Datei → Einstellungen …“, Abschnitt „Updates“, lässt sich di
 
 **Lizenzdatei:** `powershell -File tools\third-party-licenses.ps1` erzeugt `THIRD-PARTY-LICENSES.txt` (alle Bibliotheken der Windows-Version und die Schriften, jeweils mit Lizenztext). Das ist die Datei, die am Release hängt; sie gehört nicht ins Repository.
 
-**Absturzbericht auflösen:** Die Windows-Version enthält keine Zeilenangaben; der „Ablauf (Backtrace)“ im Bericht eines Testers zeigt deshalb nur `<unknown>`. Am Ende steht aber der Abschnitt „Adressen (für Dennis)“: die Rücksprungadressen als `PlanoraCAD.exe+0x…` und die Bau-Kennung (PDB-GUID). `powershell -File tools\symbolize.ps1 -Report absturz-….txt -Version 0.2.0-dev.2` lädt die passende `.pdb` des Releases (nur lesen, mit `gh`) und zeigt je Rahmen Funktion, Datei und Zeile; mit `-Pdb <Pfad>` statt `-Version` nimmt es eine vorhandene `.pdb`. Es prüft, dass die PDB-GUID zum Bericht passt. Nötig ist nur Windows (die Auflösung nutzt die mitgelieferte `dbghelp.dll`) und für `-Version` die GitHub-Kommandozeile `gh`. Die geladene `.pdb` bleibt im Temp-Ordner liegen und kann dort gelöscht werden.
+**Absturzbericht auflösen:** Die Windows-Version enthält keine Zeilenangaben; der „Backtrace“ im Bericht eines Testers zeigt deshalb nur `<unknown>`. Am Ende steht aber der Abschnitt „Addresses (for Dennis)“ (in Berichten vor der englischen Fassung „Adressen (für Dennis)“): die Rücksprungadressen als `PlanoraCAD.exe+0x…` und die Bau-Kennung (PDB-GUID). `powershell -File tools\symbolize.ps1 -Report absturz-….txt -Version 0.2.0-dev.2` lädt die passende `.pdb` des Releases (nur lesen, mit `gh`) und zeigt je Rahmen Funktion, Datei und Zeile; mit `-Pdb <Pfad>` statt `-Version` nimmt es eine vorhandene `.pdb`. Es prüft, dass die PDB-GUID zum Bericht passt. Nötig ist nur Windows (die Auflösung nutzt die mitgelieferte `dbghelp.dll`) und für `-Version` die GitHub-Kommandozeile `gh`. Die geladene `.pdb` bleibt im Temp-Ordner liegen und kann dort gelöscht werden.
 
 **Wenn nach einem Update etwas nicht stimmt:** Führ den Installer der gewünschten Version von der Seite der Veröffentlichungen noch einmal aus; er ersetzt die installierte Version. Das Programm schreibt den Verlauf des Updates in die Datei `planoracad-update.log` im Temp-Ordner (Windows-Taste + R, `%TEMP%` eintippen). Die Projekte und Einstellungen liegen außerhalb des Programmordners und bleiben unberührt.
+
+## Sprache
+
+PlanoraCAD spricht Deutsch und Englisch. Weitere Sprachen kann jeder ohne Programmieren hinzufügen.
+
+- **Erster Start:** Das Programm nimmt die Sprache von Windows (Sprache der Benutzeroberfläche). Gibt es dafür keine Sprachdatei, ist es englisch. Bestehende Installationen ohne gespeicherte Wahl werden genauso behandelt; auf einem deutschen Windows bleibt also alles deutsch.
+- **Umstellen:** „Datei → Einstellungen …“, Abschnitt „Darstellung“, Auswahl „Sprache“. Jede Sprache steht dort in ihrem eigenen Namen („Deutsch“, „English“). Alle sichtbaren Texte wechseln sofort; die Wahl wird gespeichert.
+- **Zahlen:** Deutsch zeigt ein Komma (38,8), Englisch einen Punkt (38.8). Beim Eintippen gelten in jeder Sprache Komma und Punkt. Selbst eingetippte Formeln bleiben, wie sie getippt wurden.
+- **Zeichnung exportieren:** Im Export-Fenster wählt „Sprache der Zeichnung“ eine andere Sprache nur für die Zeichnung (Beschriftungen, Stückliste, Zahlen). Das Programm selbst bleibt in seiner Sprache.
+- **Was immer englisch ist:** Protokoll (`planora.log`), letzte Schritte, Absturzbericht und die technischen Angaben in `rueckmeldung.txt`. Das Rückmelde-Fenster, das Formular und die GitHub-Vorlage folgen der Programmsprache.
+- **Was nie übersetzt wird:** Namen und Texte, die du selbst eingibst. Rückgängig-Beschriftungen und vorgeschlagene Namen bleiben in der Sprache, in der sie entstanden sind.
+- **Eigene Sprache hinzufügen:** Eine Datei `<Sprache>.ftl` (zum Beispiel `fr.ftl`) in den Ordner `%APPDATA%\PlanoraCAD\languages` oder in den Ordner `languages` neben `PlanoraCAD.exe` legen und das Programm neu starten. Fehlende Texte erscheinen englisch; eine fehlerhafte Datei wird übergangen und im Protokoll vermerkt. Die Anleitung für Übersetzer (auf Englisch): [uebersetzen.md](uebersetzen.md).
+
+**Grenzen**
+- Datumsangaben bleiben auch im Englischen in der Form TT.MM.JJJJ.
+- Zoll und andere Einheiten gibt es noch nicht (eigenes Teilprojekt).
+- Schrift von rechts nach links (Arabisch, Hebräisch) und Schriften, die die eingebauten Schriftarten nicht abdecken (zum Beispiel Chinesisch, Japanisch), gehen noch nicht.
+
+Mehr dazu in `docs/superpowers/offene-punkte.md`, Abschnitt „Sprachen“.

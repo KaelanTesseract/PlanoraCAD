@@ -26,6 +26,16 @@ use planora_math::{DVec3, Tolerance};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+/// Die Hinweise als Text in der aktuellen Sprache.
+fn note_texts(notes: &DimNotes) -> Vec<String> {
+    notes.texts.iter().map(|m| m.text()).collect()
+}
+
+/// Meldung eines Vorschlags als Text.
+fn text_of(out: &SuggestOutcome) -> String {
+    out.message().text()
+}
+
 const A4_QUER: Sheet = Sheet {
     paper: Paper::A4,
     landscape: true,
@@ -274,7 +284,7 @@ fn deleted_reference_becomes_lost_with_reason_and_keeps_last_anchor() {
     let notes = ui.notes(&st, d, &after);
     assert_eq!(notes.lost, 1);
     assert_eq!(
-        notes.texts,
+        note_texts(&notes),
         vec!["1 Maß hat seinen Bezug verloren.".to_string()]
     );
     // Auf dem Blatt rot an der alten Stelle: die Maßlinie liegt wie vorher 10 mm über der
@@ -372,7 +382,7 @@ fn suggest_adds_overall_and_diameter_dimensions_once() {
     let edits = st.document.edit_count();
     let out = suggest_for(&mut st, d, None);
     assert_eq!(out, SuggestOutcome::Added(3), "{}", out.message());
-    assert_eq!(out.message(), "3 Maße wurden hinzugefügt.");
+    assert_eq!(out.message().text(), "3 Maße wurden hinzugefügt.");
     assert_eq!(st.document.edit_count(), edits + 3, "je Maß eine Änderung");
     let dims = dims_of(&st, d);
     let mut seen: Vec<(ViewId, DimKind)> = dims.iter().map(|m| (m.view, m.kind)).collect();
@@ -568,7 +578,11 @@ fn suggest_waits_for_views() {
     // Nicht geöffnet / noch nicht berechnet.
     assert_eq!(
         suggest_for(&mut st, d, None),
-        SuggestOutcome::Unavailable("Die Ansichten werden noch berechnet.".into())
+        SuggestOutcome::Unavailable(views_pending())
+    );
+    assert_eq!(
+        views_pending().text(),
+        "Die Ansichten werden noch berechnet."
     );
     assert!(dims_of(&st, d).is_empty());
     // Berechnet, dann Modelländerung: die alten Linien zählen nicht.
@@ -576,7 +590,7 @@ fn suggest_waits_for_views() {
     st.create_box(BOX).unwrap();
     assert_eq!(
         suggest_for(&mut st, d, None),
-        SuggestOutcome::Unavailable(VIEWS_PENDING.into())
+        SuggestOutcome::Unavailable(views_pending())
     );
 }
 
@@ -608,8 +622,8 @@ fn suggest_on_mesh_only_or_empty_document_is_named() {
     let front = add_view(&mut st, d, ViewKind::Front, 100.0, 100.0);
     open_and_compute(&mut st, d);
     assert_eq!(
-        suggest_for(&mut st, d, None),
-        SuggestOutcome::Unavailable("Es gibt keinen Körper, der sich zeichnen lässt.".into())
+        text_of(&suggest_for(&mut st, d, None)),
+        "Es gibt keinen Körper, der sich zeichnen lässt."
     );
     assert!(dims_of(&st, d).is_empty());
     // Nur Netz-Körper.
@@ -617,10 +631,8 @@ fn suggest_on_mesh_only_or_empty_document_is_named() {
         .unwrap();
     compute(&mut st);
     assert_eq!(
-        suggest_for(&mut st, d, Some(front)),
-        SuggestOutcome::Unavailable(
-            "Alle Körper sind Netze; eine Zeichnung braucht exakte Körper.".into()
-        )
+        text_of(&suggest_for(&mut st, d, Some(front))),
+        "Alle Körper sind Netze; eine Zeichnung braucht exakte Körper."
     );
     // Isometrie, Zeichnung ohne Normansicht, unbekannte Ansicht und Zeichnung.
     let mut st = AppState::new();
@@ -629,19 +641,19 @@ fn suggest_on_mesh_only_or_empty_document_is_named() {
     let iso = add_view(&mut st, d, ViewKind::Isometric, 100.0, 100.0);
     open_and_compute(&mut st, d);
     assert_eq!(
-        suggest_for(&mut st, d, Some(iso)).message(),
+        suggest_for(&mut st, d, Some(iso)).message().text(),
         "In der isometrischen Ansicht gibt es keine Maße."
     );
     assert_eq!(
-        suggest_for(&mut st, d, None).message(),
+        suggest_for(&mut st, d, None).message().text(),
         "Die Zeichnung hat noch keine Ansicht, in der sich Maße vorschlagen lassen."
     );
     assert_eq!(
-        suggest_for(&mut st, d, Some(ViewId(77))).message(),
+        suggest_for(&mut st, d, Some(ViewId(77))).message().text(),
         "Die Ansicht gibt es nicht."
     );
     assert_eq!(
-        suggest_for(&mut st, DrawingId(77), None).message(),
+        suggest_for(&mut st, DrawingId(77), None).message().text(),
         "Die Zeichnung gibt es nicht."
     );
     assert!(dims_of(&st, d).is_empty());
@@ -663,23 +675,22 @@ fn suggest_respects_max_dimensions() {
     open_and_compute(&mut st, d);
     // Platz für eines: Höhe vorne und Tiefe oben wären neu, nur eines passt.
     let out = suggest_for(&mut st, d, None);
+    let SuggestOutcome::Partly { added, skipped } = &out else {
+        panic!("teilweise erwartet: {out:?}")
+    };
+    assert_eq!(*added, 1);
     assert_eq!(
-        out,
-        SuggestOutcome::Partly {
-            added: 1,
-            skipped: vec![
-                "Die Zeichnung hat schon die Höchstzahl von 2000 Maßen. 1 weiteres Maß wurde nicht gesetzt."
-                    .into()
-            ]
-        }
+        skipped.iter().map(|m| m.text()).collect::<Vec<_>>(),
+        vec![
+            "Die Zeichnung hat schon die Höchstzahl von 2000 Maßen. 1 weiteres Maß wurde nicht gesetzt."
+                .to_string()
+        ]
     );
     assert_eq!(dims_of(&st, d).len(), MAX_DIMENSIONS);
     let out = suggest_for(&mut st, d, None);
     assert_eq!(
-        out,
-        SuggestOutcome::Unavailable(
-            "Die Zeichnung hat schon die Höchstzahl von 2000 Maßen.".into()
-        )
+        text_of(&out),
+        "Die Zeichnung hat schon die Höchstzahl von 2000 Maßen."
     );
     assert_eq!(dims_of(&st, d).len(), MAX_DIMENSIONS);
 }
@@ -726,7 +737,7 @@ fn notes_count_lost_and_outside_the_sheet() {
     assert_eq!(notes.lost, 0);
     assert_eq!(notes.outside, 1);
     assert_eq!(
-        notes.texts,
+        note_texts(&notes),
         vec!["1 Maß liegt außerhalb des Blatts.".to_string()]
     );
     // Das Maß wird trotzdem gezeichnet.
@@ -775,7 +786,7 @@ fn notes_count_lost_and_outside_the_sheet() {
     assert_eq!(notes.lost, 2);
     assert_eq!(notes.outside, 2);
     assert_eq!(
-        notes.texts,
+        note_texts(&notes),
         vec![
             "2 Maße haben ihren Bezug verloren.".to_string(),
             "2 Maße liegen außerhalb des Blatts.".to_string()

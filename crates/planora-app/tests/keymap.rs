@@ -459,13 +459,13 @@ fn from_overrides_ignores_unknown_action_invalid_binding_and_duplicates_and_repo
     assert!(
         notes
             .iter()
-            .any(|n| n.contains("Strg+Umschalt+N") && n.contains(Action::Projects.label())),
+            .any(|n| n.contains("Strg+Umschalt+N") && n.contains(&Action::Projects.label())),
         "{all}"
     );
     assert!(
         notes
             .iter()
-            .any(|n| n.contains("Strg+Z") && n.contains(Action::Undo.label())),
+            .any(|n| n.contains("Strg+Z") && n.contains(&Action::Undo.label())),
         "{all}"
     );
 }

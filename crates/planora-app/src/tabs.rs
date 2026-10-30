@@ -4,6 +4,7 @@ use crate::icons::{self, Icon};
 use crate::keymap::{self, Action};
 use crate::theme;
 use crate::workspace::Workspace;
+use planora_i18n::tr;
 
 /// Kennzeichen geänderter Tabs hinter dem Namen.
 const DIRTY_MARK: char = '●';
@@ -47,7 +48,7 @@ pub fn show_tabs_only(ui: &mut egui::Ui, ws: &mut Workspace, reveal_active: bool
 
 /// Tooltip des Symbols „Neu“ mit der Taste aus der Tastenbelegung.
 fn new_tab_hint(ws: &Workspace) -> String {
-    keymap::with_hint(&ws.keymap, Action::New, "Neues Dokument")
+    keymap::with_hint(&ws.keymap, Action::New, &Action::New.label())
 }
 
 /// Symbol „Neu“ (Neues Dokument) für sich; legt beim Klick einen neuen Tab an.
@@ -70,7 +71,7 @@ fn show_impl(ui: &mut egui::Ui, ws: &mut Workspace, reveal_active: bool, with_ne
     let mut close = None;
     let mut add = false;
     let (close_hint, new_hint) = (
-        keymap::with_hint(&ws.keymap, Action::Close, "Schließen"),
+        keymap::with_hint(&ws.keymap, Action::Close, &tr!("tab-close")),
         new_tab_hint(ws),
     );
     ui.horizontal_wrapped(|ui| {

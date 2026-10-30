@@ -5,6 +5,7 @@ use crate::curves::{Sampled, ellipse_eval, spline_eval, spline_second_derivative
 use crate::dual::Dual;
 use crate::error::SketchError;
 use crate::model::{CurveId, CurveKind, PointId, Sketch};
+use planora_i18n::tr;
 use planora_kernel::Id;
 use planora_math::DVec2;
 use std::cell::RefCell;
@@ -258,7 +259,7 @@ fn norm_len(a: &V2) -> Dual {
 /// Anfangspunkt und Richtung `b − a` einer (geprüften) Linie.
 fn line_dir(ctx: &Ctx, c: CurveId) -> (V2, V2) {
     let CurveKind::Line { a, b } = ctx.sk.curves[c].kind else {
-        unreachable!("Typ wurde geprüft")
+        unreachable!("type was checked")
     };
     let (pa, pb) = (ctx.pt(a), ctx.pt(b));
     let d = sub2(&pb, &pa);
@@ -274,7 +275,7 @@ fn circle_of(ctx: &Ctx, c: CurveId) -> (V2, Dual) {
             let r = length(&sub2(&ctx.pt(*start), &pc));
             (pc, r)
         }
-        _ => unreachable!("Typ wurde geprüft"),
+        _ => unreachable!("type was checked"),
     }
 }
 
@@ -288,7 +289,7 @@ fn ellipse_of(ctx: &Ctx, c: CurveId) -> (V2, V2, Dual, Dual) {
         minor,
     } = ctx.sk.curves[c].kind
     else {
-        unreachable!("Typ wurde geprüft")
+        unreachable!("type was checked")
     };
     let m = ctx.pt(center);
     let a = (ctx.var(ax), ctx.var(ay));
@@ -315,14 +316,14 @@ fn param_curve(ctx: &Ctx, c: CurveId, t: &Dual) -> (V2, V2) {
             let (y, dy) = spline_eval(&ys, &my, t);
             ((x, y), (dx, dy))
         }
-        _ => unreachable!("Typ wurde geprüft"),
+        _ => unreachable!("type was checked"),
     }
 }
 
 /// Die Zusatzvariable einer parametrischen Abhängigkeit.
 fn extra_var(ctx: &Ctx, data: &ConstraintData) -> Dual {
     let Some(t) = data.extra else {
-        unreachable!("parametrische Abhängigkeiten werden mit Zusatzvariable angelegt")
+        unreachable!("parametric constraints are created with an extra variable")
     };
     ctx.var(t)
 }
@@ -418,7 +419,7 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
         }
         Tangent(c1, c2) if line_and_param(sk, *c1, *c2).is_some() => {
             let Some((line, curve)) = line_and_param(sk, *c1, *c2) else {
-                unreachable!("im Wächter geprüft")
+                unreachable!("checked in the guard")
             };
             let t = extra_var(ctx, data);
             let (q, dq) = param_curve(ctx, curve, &t);
@@ -493,7 +494,7 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
         }
         ArcRadius(c) => {
             let CurveKind::Arc { center, start, end } = sk.curves[*c].kind else {
-                unreachable!("Typ wurde geprüft")
+                unreachable!("type was checked")
             };
             let pc = ctx.pt(center);
             vec![length(&sub2(&ctx.pt(end), &pc)) - length(&sub2(&ctx.pt(start), &pc))]
@@ -513,7 +514,7 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
 
 /// Endliche Länge oder Koordinate mit Betrag höchstens `MAX_COORD`.
 fn finite(v: f64) -> Result<(), SketchError> {
-    crate::model::finite(v, "Der Wert")
+    crate::model::finite(v, || tr!("sketch-err-what-value"))
 }
 
 /// Endlicher Winkel (ohne Betragsgrenze).
@@ -521,9 +522,7 @@ fn finite_angle(v: f64) -> Result<(), SketchError> {
     if v.is_finite() {
         Ok(())
     } else {
-        Err(SketchError::InvalidInput(
-            "Der Wert muss eine endliche Zahl sein".into(),
-        ))
+        Err(SketchError::InvalidInput(tr!("sketch-err-value-finite")))
     }
 }
 
@@ -624,7 +623,7 @@ impl Sketch {
         let kind = self.constraints[id]
             .kind
             .with_value(v)
-            .ok_or_else(|| SketchError::WrongType("Das ist kein Maß".into()))?;
+            .ok_or_else(|| SketchError::WrongType(tr!("sketch-not-dimension")))?;
         self.check_refs(&kind)?;
         self.constraints[id].kind = kind;
         self.touch_structure();
@@ -687,34 +686,29 @@ impl Sketch {
                 CurveKind::Circle { .. } | CurveKind::Arc { .. }
             )
         };
-        let wrong = |what: &str| -> Result<(), SketchError> {
-            Err(SketchError::WrongType(what.to_string()))
-        };
-        let degenerate = |what: &str| -> Result<(), SketchError> {
-            Err(SketchError::Degenerate(what.to_string()))
-        };
+        let wrong = |what: String| -> Result<(), SketchError> { Err(SketchError::WrongType(what)) };
+        let degenerate =
+            |what: String| -> Result<(), SketchError> { Err(SketchError::Degenerate(what)) };
         use ConstraintKind::*;
         match kind {
-            Coincident(a, b) if a == b => {
-                degenerate("Ein Punkt kann nicht mit sich selbst zusammenfallen")
-            }
+            Coincident(a, b) if a == b => degenerate(tr!("sketch-err-point-self")),
             Horizontal(LineOrPoints::Line(c)) | Vertical(LineOrPoints::Line(c)) if !is_line(*c) => {
-                wrong("Das gilt nur für Linien")
+                wrong(tr!("sketch-err-only-lines"))
             }
             Horizontal(LineOrPoints::Points(a, b)) | Vertical(LineOrPoints::Points(a, b))
                 if a == b =>
             {
-                degenerate("Zwei verschiedene Punkte sind nötig")
+                degenerate(tr!("sketch-err-two-points"))
             }
             Parallel(a, b) | Perpendicular(a, b) | Angle(a, b, _)
                 if !(is_line(*a) && is_line(*b)) =>
             {
-                wrong("Das gilt nur für Linien")
+                wrong(tr!("sketch-err-only-lines"))
             }
             Parallel(a, b) | Perpendicular(a, b) | Angle(a, b, _) | Equal(a, b) | Tangent(a, b)
                 if a == b =>
             {
-                degenerate("Zwei verschiedene Objekte sind nötig")
+                degenerate(tr!("sketch-err-two-objects"))
             }
             Tangent(a, b)
                 if !((is_line(*a) && is_round(*b))
@@ -722,31 +716,26 @@ impl Sketch {
                     || (is_round(*a) && is_round(*b))
                     || line_and_param(self, *a, *b).is_some()) =>
             {
-                wrong(
-                    "Tangential geht nur zwischen Linie und Kreis/Bogen/Ellipse/Spline oder zwei \
-                     Kreisen/Bögen",
-                )
+                wrong(tr!("sketch-err-tangent-kinds"))
             }
             Equal(a, b) if !((is_line(*a) && is_line(*b)) || (is_round(*a) && is_round(*b))) => {
-                wrong("Gleich geht nur für zwei Linien oder zwei Kreise/Bögen")
+                wrong(tr!("sketch-err-equal-kinds"))
             }
             Symmetric(a, b, axis) if a == b || !is_line(*axis) => {
-                wrong("Symmetrie braucht zwei verschiedene Punkte und eine Linie als Achse")
+                wrong(tr!("sketch-err-symmetric"))
             }
             Midpoint(_, l) | DistancePointLine(_, l, _) if !is_line(*l) => {
-                wrong("Das gilt nur für Linien")
+                wrong(tr!("sketch-err-only-lines"))
             }
-            Distance(a, b, _) if a == b => degenerate("Zwei verschiedene Punkte sind nötig"),
-            Radius(c, _) | Diameter(c, _) if !is_round(*c) => {
-                wrong("Das gilt nur für Kreise und Bögen")
-            }
+            Distance(a, b, _) if a == b => degenerate(tr!("sketch-err-two-points")),
+            Radius(c, _) | Diameter(c, _) if !is_round(*c) => wrong(tr!("sketch-err-only-circles")),
             ArcRadius(c) if !matches!(self.curves[*c].kind, CurveKind::Arc { .. }) => {
-                wrong("Das gilt nur für Bögen")
+                wrong(tr!("sketch-err-only-arcs"))
             }
             EllipseMajor(c, _) | EllipseMinor(c, _) | EllipseAngle(c, _)
                 if !matches!(self.curves[*c].kind, CurveKind::Ellipse { .. }) =>
             {
-                wrong("Das gilt nur für Ellipsen")
+                wrong(tr!("sketch-err-only-ellipses"))
             }
             _ => Ok(()),
         }
@@ -770,9 +759,7 @@ impl Sketch {
             DistancePointLine(_, _, v) => {
                 finite(*v)?;
                 if *v < 0.0 {
-                    Err(SketchError::Degenerate(
-                        "Der Abstand darf nicht negativ sein".into(),
-                    ))
+                    Err(SketchError::Degenerate(tr!("sketch-err-distance-negative")))
                 } else {
                     Ok(())
                 }
@@ -794,9 +781,9 @@ impl Sketch {
     fn check_positive(&self, v: f64) -> Result<(), SketchError> {
         finite(v)?;
         if v <= self.tolerance().linear {
-            Err(SketchError::Degenerate(
-                "Das Maß muss größer als null sein".into(),
-            ))
+            Err(SketchError::Degenerate(tr!(
+                "sketch-err-dimension-positive"
+            )))
         } else {
             Ok(())
         }
@@ -824,12 +811,13 @@ impl Sketch {
         });
         if violated {
             let hint = if matches!(kind, EllipseMajor(..)) {
-                "zuerst die kleine Halbachse verkleinern"
+                tr!("sketch-err-hint-minor-smaller")
             } else {
-                "zuerst die große Halbachse vergrößern"
+                tr!("sketch-err-hint-major-larger")
             };
-            Err(SketchError::Degenerate(format!(
-                "Die kleine Halbachse darf nicht länger als die große sein; {hint}"
+            Err(SketchError::Degenerate(tr!(
+                "sketch-err-minor-longer",
+                hint = hint.to_string()
             )))
         } else {
             Ok(())
@@ -957,9 +945,9 @@ impl Sketch {
     /// Legt eine Abhängigkeit an. Bei einem Fehler bleibt die Skizze unverändert.
     pub fn add_constraint(&mut self, kind: ConstraintKind) -> Result<ConstraintId, SketchError> {
         if matches!(kind, ConstraintKind::ArcRadius(_)) {
-            return Err(SketchError::WrongType(
-                "Diese Abhängigkeit wird intern angelegt".into(),
-            ));
+            return Err(SketchError::WrongType(tr!(
+                "sketch-err-internal-constraint"
+            )));
         }
         self.check_refs(&kind)?;
         let branch = self.initial_branch(&kind);

@@ -28,6 +28,7 @@ use crate::model::ViewKind;
 use crate::stroke::{Stroke, StrokeOrigin};
 use crate::{DrawBody, ViewLines};
 use planora_exchange::Progress;
+use planora_i18n::tr;
 use planora_kernel::boolean::boolean;
 use planora_kernel::primitives::make_box;
 use planora_kernel::{BoolOp, BooleanError, Curve, Face, Id, Loop, Solid, Surface};
@@ -197,15 +198,14 @@ pub fn cut_body(
 ) -> Result<CutOutcome, String> {
     let (a, da) = plane
         .axis()
-        .ok_or_else(|| "keine gültige Schnittebene".to_string())?;
+        .ok_or_else(|| "no valid section plane".to_string())?;
     if body as u64 > u64::MAX - SECTION_ORIGIN_MIN {
-        return Err("zu viele Körper für die Schnittmarken".into());
+        return Err("too many bodies for the section marks".into());
     }
     if !cut_faces(solid).is_empty() {
-        return Err("der Körper trägt schon eine Schnittmarke".into());
+        return Err("the body already carries a section mark".into());
     }
-    let (lo, hi) =
-        solid_bounds(solid).ok_or_else(|| "leerer oder ungültiger Körper".to_string())?;
+    let (lo, hi) = solid_bounds(solid).ok_or_else(|| "empty or invalid body".to_string())?;
 
     let side = |off: f64| classify(lo[a], hi[a], da, off);
     match side(plane.offset) {
@@ -492,9 +492,7 @@ pub fn compute_section(
         return Err(DrawError::NonFinite);
     }
     if plane.axis().is_none() {
-        return Err(DrawError::Unsupported(
-            "Ein Schnitt braucht eine der sechs Normansichten.".into(),
-        ));
+        return Err(DrawError::Unsupported(tr!("drawing-err-section-normal")));
     }
     progress.set_total(bodies.len() as u64);
     let data = cut_all(bodies, plane, progress)?;
@@ -507,7 +505,7 @@ pub fn compute_section(
         // dieselben Körper Schnittflächen haben (sonst fiele ein knapp angeschnittener Körper
         // still weg); sonst und wenn auch das nicht geht, bleibt die erste Meldung.
         Err(first @ DrawError::AmbiguousVisibility(_)) => {
-            let (_, da) = plane.axis().expect("oben geprüft");
+            let (_, da) = plane.axis().expect("checked above");
             let shifted = SectionPlane {
                 kind: plane.kind,
                 offset: plane.offset + da * SECTION_NUDGE_MM,

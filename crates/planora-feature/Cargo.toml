@@ -14,6 +14,7 @@ planora-exchange.workspace = true
 planora-sketch.workspace = true
 planora-drawing.workspace = true
 planora-step.workspace = true
+planora-i18n.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

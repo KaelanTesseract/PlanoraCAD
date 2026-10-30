@@ -5,6 +5,7 @@ use crate::dimension::{DimId, DimSpec};
 use crate::parts::BodyKey;
 use crate::section::SectionPlane;
 use crate::sheet_frame::sheet_scale;
+use planora_i18n::{localize_decimal, tr};
 use std::collections::BTreeMap;
 
 /// Kennung einer Zeichnung im Dokument.
@@ -83,6 +84,15 @@ pub enum ViewKind {
     Isometric,
 }
 
+/// Name einer Ansicht ohne Text (siehe [`Drawing::view_name_parts`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewName {
+    /// Art der Ansicht und ihre Nummer unter den Ansichten dieser Art (ab 1).
+    Kind(ViewKind, u32),
+    /// Schnittansicht mit ihrem Buchstaben.
+    Section(char),
+}
+
 impl ViewKind {
     /// Alle Ansichtsarten in fester Reihenfolge.
     pub const ALL: [ViewKind; 7] = [
@@ -95,16 +105,16 @@ impl ViewKind {
         ViewKind::Isometric,
     ];
 
-    /// Name für die Oberfläche.
-    pub fn label(self) -> &'static str {
+    /// Name für Blatt und Oberfläche in der aktuellen Sprache.
+    pub fn label(self) -> String {
         match self {
-            ViewKind::Front => "Vorne",
-            ViewKind::Back => "Hinten",
-            ViewKind::Left => "Links",
-            ViewKind::Right => "Rechts",
-            ViewKind::Top => "Oben",
-            ViewKind::Bottom => "Unten",
-            ViewKind::Isometric => "Isometrisch",
+            ViewKind::Front => tr!("drawing-view-front"),
+            ViewKind::Back => tr!("drawing-view-back"),
+            ViewKind::Left => tr!("drawing-view-left"),
+            ViewKind::Right => tr!("drawing-view-right"),
+            ViewKind::Top => tr!("drawing-view-top"),
+            ViewKind::Bottom => tr!("drawing-view-bottom"),
+            ViewKind::Isometric => tr!("drawing-view-isometric"),
         }
     }
 
@@ -308,15 +318,14 @@ pub fn sections_ok_on(d: &Drawing, sheet: Sheet) -> Result<(), String> {
         let Some(sec) = &v.section else { continue };
         let spacing = sec.hatch.spacing;
         if spacing > MAX_HATCH_SPACING {
-            return Err(format!(
-                "Der Schraffurabstand ist zu groß (höchstens {MAX_HATCH_SPACING} mm)."
+            return Err(tr!(
+                "drawing-err-hatch-spacing-max",
+                max = localize_decimal(&MAX_HATCH_SPACING.to_string())
             ));
         }
         if spacing.is_nan() || spacing * f < MIN_HATCH_SHEET_MM {
             let name = names.get(&v.id).cloned().unwrap_or_default();
-            return Err(format!(
-                "Der Schraffurabstand von „{name}“ wäre auf diesem Blatt kleiner als 0,5 mm."
-            ));
+            return Err(tr!("drawing-err-hatch-spacing-min", name = name));
         }
     }
     Ok(())
@@ -433,16 +442,17 @@ impl Drawing {
         let source = self
             .view(parent)
             .filter(|p| p.kind.is_normal() && p.section.is_none())
-            .ok_or("Ein Schnitt geht nur aus einer geraden Ansicht.")?;
+            .ok_or_else(|| tr!("drawing-err-section-source"))?;
         let scale = source.scale;
         if self.views.iter().filter(|v| v.section.is_some()).count() >= MAX_SECTIONS {
-            return Err(format!(
-                "Es sind höchstens {MAX_SECTIONS} Schnitte je Blatt möglich."
+            return Err(tr!(
+                "drawing-err-sections-max",
+                max = MAX_SECTIONS.to_string()
             ));
         }
         let letter = self
             .next_letter()
-            .ok_or("Es sind keine Schnittbuchstaben mehr frei.")?;
+            .ok_or_else(|| tr!("drawing-err-section-letters"))?;
         let id = ViewId(self.next_view);
         self.next_view += 1;
         self.views.push(ViewSpec {
@@ -462,27 +472,42 @@ impl Drawing {
         Ok(id)
     }
 
-    /// Namen der Ansichten wie auf dem Blatt: Normansichten mit ihrer Art, bei mehrfach gleicher
-    /// Art mit Nummer („Oben 2“); Schnitte zählen dabei nicht mit und heißen „Schnitt A–A“.
-    pub fn view_names(&self) -> BTreeMap<ViewId, String> {
-        let mut counts: BTreeMap<usize, usize> = BTreeMap::new();
+    /// Namen der Ansichten ohne Text: Art und laufende Nummer (ab 1, je Art; Schnitte zählen
+    /// nicht mit) bzw. der Buchstabe des Schnitts. Aus diesen Teilen entstehen die Namen auf dem
+    /// Blatt ([`Drawing::view_names`]) und in der Oberfläche der App.
+    pub fn view_name_parts(&self) -> BTreeMap<ViewId, ViewName> {
+        let mut counts: BTreeMap<usize, u32> = BTreeMap::new();
         let mut out = BTreeMap::new();
         for v in &self.views {
             if let Some(sec) = &v.section {
-                out.insert(v.id, format!("Schnitt {0}\u{2013}{0}", sec.letter));
+                out.insert(v.id, ViewName::Section(sec.letter));
                 continue;
             }
             let i = ViewKind::ALL.iter().position(|k| *k == v.kind).unwrap_or(0);
             let n = counts.entry(i).or_insert(0);
             *n += 1;
-            let name = if *n == 1 {
-                v.kind.label().to_string()
-            } else {
-                format!("{} {}", v.kind.label(), n)
-            };
-            out.insert(v.id, name);
+            out.insert(v.id, ViewName::Kind(v.kind, *n));
         }
         out
+    }
+
+    /// Namen der Ansichten wie auf dem Blatt, in der aktuellen Sprache: Normansichten mit ihrer
+    /// Art, bei mehrfach gleicher Art mit Nummer („Oben 2“); Schnitte zählen dabei nicht mit und
+    /// heißen „Schnitt A–A“.
+    pub fn view_names(&self) -> BTreeMap<ViewId, String> {
+        self.view_name_parts()
+            .into_iter()
+            .map(|(id, p)| {
+                let name = match p {
+                    ViewName::Section(l) => crate::section_marks::section_view_name(l),
+                    ViewName::Kind(k, 1) => k.label(),
+                    ViewName::Kind(k, n) => {
+                        tr!("drawing-view-numbered", name = k.label(), n = n.to_string())
+                    }
+                };
+                (id, name)
+            })
+            .collect()
     }
 
     /// Sucht eine Ansicht.

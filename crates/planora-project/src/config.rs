@@ -1,5 +1,6 @@
 //! Kleine Konfiguration (gewählte Wurzel, Favoriten der Dateiauswahl, Durchsichtigkeit der
-//! Panels, Abweichungen der Tastenbelegung, Einstellungen der Updates), ohne neue Abhängigkeit.
+//! Panels, Abweichungen der Tastenbelegung, Einstellungen der Updates, Design, Sprache), ohne neue
+//! Abhängigkeit.
 
 use crate::error::{ProjectError, Result};
 use crate::fsutil::atomic_write_unique;
@@ -114,6 +115,15 @@ pub struct Config {
         deserialize_with = "lenient_bool_false"
     )]
     pub verbose_log: bool,
+    /// Gewählte Sprache als Id (BCP 47, etwa `de`, `en`, `pt-BR`; Einstellungen → Darstellung).
+    /// Ohne Wahl gilt beim Start die Sprache von Windows. Kein oder ein leerer Text → keine
+    /// Wahl; ob es die Sprache gibt, prüft erst das Programm. Ohne Wahl wird nichts geschrieben.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_language"
+    )]
+    pub language: Option<String>,
 }
 
 /// Voreinstellung des Update-Kanals (Kennung).
@@ -222,6 +232,7 @@ impl Default for Config {
             update_pending: None,
             theme: None,
             verbose_log: false,
+            language: None,
         }
     }
 }
@@ -277,6 +288,18 @@ fn lenient_theme<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<
     Ok(value
         .as_str()
         .filter(|t| *t == THEME_LIGHT || *t == THEME_DARK)
+        .map(String::from))
+}
+
+/// Liest `language` aus jedem JSON-Wert: ein Text ohne Leerraum am Rand, sonst keine Wahl.
+fn lenient_language<'de, D: Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Option<String>, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(value
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
         .map(String::from))
 }
 

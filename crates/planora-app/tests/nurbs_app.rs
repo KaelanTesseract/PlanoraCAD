@@ -244,7 +244,7 @@ fn an_inexact_mesh_shows_a_note_in_the_status_line() {
     assert!(fine.bodies[0].mesh_inexact);
     assert!(!fine.bodies[0].mesh.inexact_faces.is_empty());
     let note = fine.mesh_note().expect("Hinweis");
-    assert!(note.contains(planora_app::state::MESH_NOTE), "{note}");
+    assert!(note.contains(&planora_app::state::mesh_note()), "{note}");
     assert!(note.contains(&fine.bodies[0].name), "{note}");
     // Nur ein Hinweis: keine Fehlermeldung, der Körper bleibt.
     assert!(fine.message.is_none(), "{:?}", fine.message);

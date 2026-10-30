@@ -287,7 +287,7 @@ fn mesh_bodies_cannot_be_edited_by_other_features() {
         },
     );
     let locked = FeatureError::MeshBodyLocked.to_string();
-    assert_eq!(locked, MESH_LOCKED);
+    assert_eq!(locked, mesh_locked());
     let face = FaceRef {
         origin: n.0,
         role: "Netz".into(),

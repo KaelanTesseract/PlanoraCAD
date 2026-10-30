@@ -468,7 +468,7 @@ fn balloon_in_section_view() {
     // Ein Index außerhalb der geschnittenen Körper wird abgelehnt.
     assert_eq!(
         balloon_tool::place(&mut st, d, sec, 1, mid(&line)),
-        Err(balloon_tool::MISSED.to_string())
+        Err(balloon_tool::missed())
     );
 }
 
@@ -534,7 +534,7 @@ fn export_resolves_section_dims() {
         )),
         "{msg}"
     );
-    assert!(msg.ends_with(LOST_ADVICE), "{msg}");
+    assert!(msg.ends_with(&lost_advice()), "{msg}");
     dlg.write_to(path.clone(), &st);
     dlg.tick(&st, true);
     assert!(matches!(dlg.write_state(), WriteState::Failed(_)));

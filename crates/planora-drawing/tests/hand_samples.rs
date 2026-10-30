@@ -391,7 +391,7 @@ fn mm(x: f64) -> String {
     format!("{x:.2}").replace('.', ",")
 }
 
-fn view_name(k: ViewKind) -> &'static str {
+fn view_name(k: ViewKind) -> String {
     k.label()
 }
 

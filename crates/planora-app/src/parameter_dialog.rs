@@ -9,36 +9,59 @@
 //! - Das Fenster sperrt Rückgängig nicht (Plan P8): Nach Rückgängig, Wiederholen, Zurückladen
 //!   oder einem anderen Stand des Dokuments lädt es seine Zeilen neu und verwirft die Entwürfe.
 //!   Kennungen (`ParamId`) gelten nur für den Stand, aus dem sie gelesen wurden.
-//! - Bei offener Skizze ist alles gesperrt ([`SKETCH_OPEN_LOCK`]), in einer alten Version ebenso
-//!   ([`READ_ONLY_HINT`]).
+//! - Bei offener Skizze ist alles gesperrt ([`sketch_open_lock`]), in einer alten Version ebenso
+//!   (Hinweis „In einer alten Version lässt sich nichts ändern“).
 
 use crate::dialog::{Dialog, DialogSize};
-use crate::drawing_browser::READ_ONLY_HINT;
 use crate::formula_field::{FieldInput, FormulaField, classify, leave_signal, unit_value};
 use crate::icons::{self, Icon};
-use crate::state::{AppState, SKETCH_OPEN_LOCK};
+use crate::msg::Msg;
+use crate::state::{AppState, sketch_open_lock};
 use crate::theme::{self, SPACE_2};
 use crate::workspace::DocTab;
 use planora_feature::expr::{ParamDef, evaluate_table};
 use planora_feature::{FeatureError, ParamEdit, ParamId, ParamUnit, Parameter};
+use planora_i18n::tr;
 
 /// Titel des Fensters.
-pub const TITLE: &str = "Parameter";
+pub fn title() -> String {
+    tr!("param-title")
+}
 /// Knopf unter der Tabelle.
-pub const ADD_ROW: &str = "Zeile hinzufügen";
+pub fn add_row() -> String {
+    tr!("param-add-row")
+}
 /// Hinweis am Löschsymbol einer Zeile.
-pub const DELETE_ROW: &str = "Zeile löschen";
+pub fn delete_row() -> String {
+    tr!("param-delete-row")
+}
 /// Knopf der Rückfrage bei einem benutzten Parameter.
-pub const REPLACE: &str = "Durch den Wert ersetzen";
+pub fn replace() -> String {
+    tr!("param-replace")
+}
 /// Zweiter Knopf der Rückfrage.
-pub const CANCEL: &str = "Abbrechen";
+pub fn cancel() -> String {
+    tr!("common-cancel")
+}
 /// Hinweis bei leerer Tabelle.
-pub const EMPTY_TABLE: &str = "Noch keine Parameter.";
+pub fn empty_table() -> String {
+    tr!("param-empty-table")
+}
 /// Hinweis in der Statuszeile, wenn ein Bearbeiten-Fenster wegen einer Parameteränderung
 /// schließt (seine Felder zeigten sonst alte Werte und Formeln).
-pub const DIALOG_CLOSED: &str = "Der Dialog wurde geschlossen, weil sich Parameter geändert haben.";
+pub fn dialog_closed() -> String {
+    tr!("param-dialog-closed")
+}
 /// Spaltenköpfe in der Reihenfolge der Tabelle.
-pub const COLUMNS: [&str; 5] = ["Name", "Formel", "Wert", "Art", "Kommentar"];
+pub fn columns() -> [String; 5] {
+    [
+        tr!("param-col-name"),
+        tr!("param-col-formula"),
+        tr!("param-col-value"),
+        tr!("param-col-kind"),
+        tr!("param-col-comment"),
+    ]
+}
 
 /// Breiten der Spalten in Punkten (Name, Formel samt „fx“ und Wertanzeige, Wert, Art,
 /// Kommentar, Löschsymbol); zusammen mit den Abständen und dem Rollbalken passt die Tabelle in
@@ -128,9 +151,9 @@ enum Action {
 /// Fenster „Parameter“.
 pub struct ParameterDialog {
     rows: Vec<Row>,
-    error: Option<String>,
+    error: Option<Msg>,
     /// Offene Rückfrage beim Löschen: Parameter und Meldung („Breite wird in Quader 1 benutzt.“).
-    confirm: Option<(ParamId, String)>,
+    confirm: Option<(ParamId, Msg)>,
     /// Stand, aus dem die Zeilen gelesen wurden: Zustand (`AppState::instance`) und
     /// Änderungszähler des Dokuments. Weicht er ab, lädt das Fenster neu.
     seen: (u64, u64),
@@ -282,7 +305,7 @@ impl ParameterDialog {
             }
             .to_string();
             self.error = None;
-            self.confirm = Some((id, text));
+            self.confirm = Some((id, Msg::Raw(text)));
             return Ok(());
         }
         let result = state.delete_parameter(id);
@@ -290,8 +313,8 @@ impl ParameterDialog {
     }
 
     /// Meldung der offenen Rückfrage.
-    pub fn confirm_text(&self) -> Option<&str> {
-        self.confirm.as_ref().map(|(_, t)| t.as_str())
+    pub fn confirm_text(&self) -> Option<String> {
+        self.confirm.as_ref().map(|(_, t)| t.text())
     }
 
     /// „Durch den Wert ersetzen“ in der Rückfrage (ein Schritt; abgelehnt etwa, solange ein
@@ -310,8 +333,8 @@ impl ParameterDialog {
     }
 
     /// Meldung unter der Tabelle (zuletzt abgelehnte Änderung).
-    pub fn error(&self) -> Option<&str> {
-        self.error.as_deref()
+    pub fn error(&self) -> Option<String> {
+        self.error.as_ref().map(Msg::text)
     }
 
     /// Nach einer Aktion: gelungen → Zeilen aus dem neuen Stand (Umbenennen schreibt auch andere
@@ -330,7 +353,7 @@ impl ParameterDialog {
                 Ok(())
             }
             Err(e) => {
-                self.error = Some(e.clone());
+                self.error = Some(Msg::Raw(e.clone()));
                 Err(e)
             }
         }
@@ -339,9 +362,10 @@ impl ParameterDialog {
     /// Die Zeile gibt es im Dokument nicht mehr: neu laden.
     fn gone(&mut self, state: &AppState) -> String {
         self.reload(state);
-        let e = "Den Parameter gibt es nicht mehr.".to_string();
-        self.error = Some(e.clone());
-        e
+        let e = crate::msg!("param-gone");
+        let text = e.text();
+        self.error = Some(e);
+        text
     }
 
     /// Zeigt das Fenster und führt aus, was darin angeklickt oder übernommen wurde; `true`,
@@ -391,9 +415,9 @@ impl ParameterDialog {
             self.refresh(state, None);
         }
         let lock = if read_only {
-            Some(READ_ONLY_HINT)
+            Some(tr!("shell-old-version-readonly"))
         } else if state.sketch_session.is_some() {
-            Some(SKETCH_OPEN_LOCK)
+            Some(sketch_open_lock())
         } else {
             None
         };
@@ -404,17 +428,17 @@ impl ParameterDialog {
         let mut open = true;
         let mut actions = Vec::new();
         let mut footer_actions = Vec::new();
-        let confirm = self.confirm.as_ref().map(|(_, t)| t.clone());
-        let error = self.error.clone();
+        let confirm = self.confirm_text();
+        let error = self.error();
         let live = live_message(&self.draft_errors(state));
         let table_h = (ctx.content_rect().height() - 260.0).clamp(120.0, TABLE_MAX_H);
-        let shown = Dialog::new(TITLE, DialogSize::Wide)
+        let shown = Dialog::new(title(), DialogSize::Wide)
             .id(egui::Id::new("parameter_dialog"))
             .open(&mut open)
             .show_with_footer(
                 ctx,
                 |ui| {
-                    if let Some(hint) = lock {
+                    if let Some(hint) = &lock {
                         ui.label(
                             egui::RichText::new(hint)
                                 .color(theme::palette(ui.visuals().dark_mode).warning),
@@ -468,7 +492,7 @@ impl ParameterDialog {
     /// liegt wieder eine Zeile dahinter bereit.
     fn table(&mut self, ui: &mut egui::Ui, state: &AppState, max_h: f32, out: &mut Vec<Action>) {
         if self.rows.is_empty() {
-            ui.weak(EMPTY_TABLE);
+            ui.weak(empty_table());
             return;
         }
         let dark = ui.visuals().dark_mode;
@@ -480,10 +504,10 @@ impl ParameterDialog {
         ui.scope(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(SPACE_2, SPACE_2);
             ui.horizontal(|ui| {
-                for (head, w) in COLUMNS.iter().zip(WIDTHS) {
+                for (head, w) in columns().iter().zip(WIDTHS) {
                     cell(ui, w, center(), |ui| {
                         ui.label(
-                            egui::RichText::new(*head)
+                            egui::RichText::new(head)
                                 .font(theme::label_font())
                                 .color(theme::palette(dark).text_tertiary),
                         );
@@ -588,8 +612,7 @@ fn live_message(errors: &[String]) -> Option<String> {
     let first = errors.first()?;
     Some(match errors.len() - 1 {
         0 => first.clone(),
-        1 => format!("{first} (+ 1 weiterer Fehler)"),
-        k => format!("{first} (+ {k} weitere Fehler)"),
+        k => tr!("param-live-more", first = first, n = k),
     })
 }
 
@@ -629,19 +652,22 @@ fn footer(
         ui.label(text);
         ui.horizontal(|ui| {
             if ui
-                .add_enabled(enabled, egui::Button::new(REPLACE))
+                .add_enabled(enabled, egui::Button::new(replace()))
                 .clicked()
             {
                 out.push(Action::Replace);
             }
-            if ui.add_enabled(enabled, egui::Button::new(CANCEL)).clicked() {
+            if ui
+                .add_enabled(enabled, egui::Button::new(cancel()))
+                .clicked()
+            {
                 out.push(Action::Cancel);
             }
         });
         ui.add_space(SPACE_2);
     }
     if ui
-        .add_enabled(enabled, icons::button(Icon::NewTab, ADD_ROW))
+        .add_enabled(enabled, icons::button(Icon::NewTab, add_row()))
         .clicked()
     {
         out.push(Action::Add);
@@ -703,7 +729,7 @@ fn stand(state: &AppState) -> (u64, u64) {
 
 /// Name einer Zeile für Bildschirmleser und Meldungen.
 fn field_label(column: &str, name: &str) -> String {
-    format!("{column} von {name}")
+    tr!("param-field-label", column = column, name = name)
 }
 
 /// Bekommt ein Bedienelement die Tastatur (Tab), rollt der Bereich zu ihm.
@@ -739,7 +765,7 @@ fn row_ui(
         &name,
         egui::WidgetType::TextEdit,
         enabled,
-        &field_label("Name", &p.name),
+        &field_label(&tr!("param-col-name"), &p.name),
     );
     if focus_name {
         name.request_focus();
@@ -766,7 +792,7 @@ fn row_ui(
             .width(FORMULA_W)
             .enabled(enabled)
             .error_below(false)
-            .label(field_label("Formel", &p.name))
+            .label(field_label(&tr!("param-col-formula"), &p.name))
             .saved(&row.base.formula)
             .show_with(ui, &eval)
     });
@@ -796,7 +822,7 @@ fn row_ui(
         &art,
         egui::WidgetType::ComboBox,
         enabled,
-        &field_label("Art", &p.name),
+        &field_label(&tr!("param-col-kind"), &p.name),
     );
     follow_focus(&art);
     if unit != p.unit {
@@ -814,7 +840,7 @@ fn row_ui(
         &comment,
         egui::WidgetType::TextEdit,
         enabled,
-        &field_label("Kommentar", &p.name),
+        &field_label(&tr!("param-col-comment"), &p.name),
     );
     follow_focus(&comment);
     if leave_signal(ui, &comment, row.comment != row.base.comment) {
@@ -830,9 +856,9 @@ fn row_ui(
             .frame(false),
         )
     })
-    .on_hover_text(DELETE_ROW);
+    .on_hover_text(delete_row());
     // Das Symbol ist ein Zeichen der Symbolschrift; Bildschirmleser hören „Zeile löschen“.
-    labelled(&delete, egui::WidgetType::Button, enabled, DELETE_ROW);
+    labelled(&delete, egui::WidgetType::Button, enabled, &delete_row());
     follow_focus(&delete);
     theme::focus_ring(ui, &delete);
     if delete.clicked() {
@@ -862,9 +888,11 @@ fn trial_value(params: &[Parameter], index: usize, text: &str) -> Result<f64, St
         Ok(values) => Ok(values[index]),
         Err(e) if e.index == index => Err(e.message),
         Err(e) => match params.get(e.index) {
-            Some(other) if !e.message.contains(&format!("„{}“", other.name)) => {
-                Err(format!("Parameter „{}“: {}", other.name, e.message))
-            }
+            Some(other) if !e.stands_alone() => Err(tr!(
+                "param-other-row",
+                name = &other.name,
+                message = &e.message
+            )),
             _ => Err(e.message),
         },
     }

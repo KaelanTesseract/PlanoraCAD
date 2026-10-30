@@ -5,6 +5,7 @@
 use super::build::solve_components;
 use super::{KnotVector, MAX_COORD, NurbsCurve, NurbsError};
 use crate::DVec3;
+use planora_i18n::tr;
 
 /// Höchstzahl Kontrollpunkte einer Annäherung oder eines Interpolations-Splines
 /// (begrenzt die Größe der dichten Gleichungssysteme).
@@ -110,26 +111,23 @@ impl NurbsCurve {
 /// etwa linear in der Punktzahl.
 fn fit_capped(points: &[DVec3], tol: f64, cap: usize) -> Result<NurbsCurve, NurbsError> {
     if points.len() < 2 {
-        return Err(NurbsError::Input("mindestens zwei Punkte nötig".into()));
+        return Err(NurbsError::Input(tr!("math-two-points")));
     }
     if !tol.is_finite() || tol <= 0.0 {
-        return Err(NurbsError::Input(
-            "die Fehlerschranke muss endlich und positiv sein".into(),
-        ));
+        return Err(NurbsError::Input(tr!("math-bound-positive")));
     }
     if points
         .iter()
         .any(|p| !p.is_finite() || p.abs().max_element() > MAX_COORD)
     {
-        return Err(NurbsError::Input(format!(
-            "Punkte müssen endlich sein und höchstens {MAX_COORD} betragen"
+        return Err(NurbsError::Input(tr!(
+            "math-points-range",
+            max = MAX_COORD.to_string()
         )));
     }
     let total: f64 = points.windows(2).map(|w| w[0].distance(w[1])).sum();
     if total.is_nan() || total <= MIN_FIT_LENGTH {
-        return Err(NurbsError::Fit(
-            "die Punkte fallen zusammen (Gesamtlänge null)".into(),
-        ));
+        return Err(NurbsError::Fit(tr!("math-points-coincide")));
     }
     // Zu nahe aufeinanderfolgende Punkte zusammenfassen; der letzte Punkt bleibt immer.
     // `rep[i]` ist der Index des Punktes in `q`, der Punkt `i` vertritt.
@@ -157,9 +155,7 @@ fn fit_capped(points: &[DVec3], tol: f64, cap: usize) -> Result<NurbsCurve, Nurb
         rep[points.len() - 1] = r;
     }
     if q.len() < 2 {
-        return Err(NurbsError::Fit(
-            "die Punkte fallen zusammen (Gesamtlänge null)".into(),
-        ));
+        return Err(NurbsError::Fit(tr!("math-points-coincide")));
     }
     let params = chord_params(&q);
     let n = q.len();
@@ -205,11 +201,14 @@ fn fit_capped(points: &[DVec3], tol: f64, cap: usize) -> Result<NurbsCurve, Nurb
         }
         if m >= cap {
             let why = match failure {
-                Some(e) => format!("Ausgleich misslungen: {e}"),
-                None => format!("Abstand {err} über der Schranke"),
+                Some(e) => tr!("math-fit-failed", detail = e.to_string()),
+                None => tr!("math-fit-distance", err = err.to_string()),
             };
-            return Err(NurbsError::Fit(format!(
-                "Fehlerschranke {tol} mit höchstens {cap} Kontrollpunkten nicht erreichbar ({why})"
+            return Err(NurbsError::Fit(tr!(
+                "math-fit-unreachable",
+                tol = tol.to_string(),
+                cap = cap.to_string(),
+                why = why.to_string()
             )));
         }
         m = next_count(2 * m, n, cap);

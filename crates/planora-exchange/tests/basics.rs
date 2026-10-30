@@ -44,7 +44,7 @@ fn error_texts_are_german_and_name_the_line() {
     assert_eq!(
         ExchangeError::Syntax {
             line: 12,
-            msg: "Unbekanntes Wort"
+            msg: "Unbekanntes Wort".to_string()
         }
         .to_string(),
         "Zeile 12: Unbekanntes Wort"

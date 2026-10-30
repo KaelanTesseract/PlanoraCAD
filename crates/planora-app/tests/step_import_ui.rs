@@ -11,7 +11,7 @@ use common::{Screen, find};
 use eframe::App as _;
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, vec2};
 use planora_app::app::{self, PlanoraApp};
-use planora_app::import_dialog::{STALE, Unit};
+use planora_app::import_dialog::{Unit, stale};
 use planora_app::jobs::Job;
 use planora_app::state::*;
 use planora_app::step_import_dialog::*;
@@ -267,7 +267,7 @@ fn list_shows_every_body() {
     let lid = reason(&d, 3);
     let text = draw(&mut d, &mut s);
     for word in [
-        TITLE,
+        title().as_str(),
         "Datei",
         "gestell.step",
         "Körper",
@@ -462,7 +462,7 @@ fn checkboxes_and_summary() {
     assert!(d.import(&mut s).is_err());
     assert_eq!(
         s.message.as_deref(),
-        Some(NOTHING_CHECKED),
+        Some(nothing_checked().as_str()),
         "Ablehnung als Meldung"
     );
     assert_eq!(s.info, None);
@@ -605,7 +605,10 @@ fn one_undo_step() {
     );
     assert_eq!(rig.bodies(), 3);
     let seen = rig.settle();
-    assert_eq!(rig.ws().active_tab().undo_label(), Some("STEP importieren"));
+    assert_eq!(
+        rig.ws().active_tab().undo_label(),
+        Some("STEP importieren".to_string())
+    );
     // Die Zusammenfassung überlebt den neuen Verlaufsschritt als Hinweis in neutraler Farbe.
     let st = &rig.ws().active_tab().state;
     let info = st.info.clone().expect("Hinweis nach dem Import");
@@ -671,7 +674,7 @@ fn cancel_and_errors() {
     let mut d = StepImportDialog::new(dir.clone());
     d.load_with(path.clone(), None, Arc::clone(&p));
     d.tick(true);
-    assert_eq!(d.error.as_deref(), Some("Abgebrochen"));
+    assert_eq!(d.error_text().as_deref(), Some("Abgebrochen"));
     assert!(d.loaded.is_none() && !d.is_loading());
 
     // „Abbrechen“ beendet den Auftrag selbst, nicht nur die Anzeige.
@@ -679,10 +682,10 @@ fn cancel_and_errors() {
     let mut d = StepImportDialog::new(dir.clone());
     d.load_with(path.clone(), None, Arc::clone(&p));
     assert!(d.is_loading());
-    assert_eq!(d.phase(), Some(READING));
+    assert_eq!(d.phase(), Some(reading()));
     d.cancel();
     assert!(p.is_cancelled(), "Auftrag abgebrochen");
-    assert_eq!(d.error.as_deref(), Some("Abgebrochen"));
+    assert_eq!(d.error_text().as_deref(), Some("Abgebrochen"));
     assert!(!d.is_loading() && d.phase().is_none());
     d.tick(true);
     assert!(
@@ -693,7 +696,7 @@ fn cancel_and_errors() {
     // Abbrechen der Neuberechnung: die alte Liste bleibt stimmig (Einheit Zoll).
     let mut d = loaded(&dir, "g3.step", &combined());
     d.set_unit(LengthUnit::Millimeter);
-    assert_eq!(d.phase(), Some(CHECKING));
+    assert_eq!(d.phase(), Some(checking()));
     d.cancel();
     d.tick(true);
     let l = d.loaded.as_ref().unwrap();
@@ -702,7 +705,7 @@ fn cancel_and_errors() {
         size_text(l.import.bodies[0].bounds),
         "25,4 × 50,8 × 76,2 mm"
     );
-    assert_eq!(d.error.as_deref(), Some("Abgebrochen"));
+    assert_eq!(d.error_text().as_deref(), Some("Abgebrochen"));
 
     // Abgeschnittene Datei: Meldung im Fenster, das Fenster bleibt offen.
     let text = combined();
@@ -710,7 +713,7 @@ fn cancel_and_errors() {
     let mut d = StepImportDialog::new(dir.clone());
     d.load(cut);
     d.tick(true);
-    let e = d.error.clone().expect("Meldung");
+    let e = d.error_text().expect("Meldung");
     assert!(
         e.starts_with("Die Datei ist unvollständig: Sie endet in Zeile "),
         "{e}"
@@ -727,7 +730,7 @@ fn cancel_and_errors() {
     d.load(write(&dir, "viele.step", &wrap(&many.join("\n"))));
     d.tick(true);
     assert_eq!(
-        d.error.as_deref(),
+        d.error_text().as_deref(),
         Some("Die Datei enthält mehr als 50 Körper.")
     );
 
@@ -737,7 +740,7 @@ fn cancel_and_errors() {
     d.load(write(&dir, "facetten.step", &facets));
     d.tick(true);
     assert_eq!(
-        d.error.as_deref(),
+        d.error_text().as_deref(),
         Some("Die Datei enthält keine Volumenkörper.")
     );
     assert_eq!(d.notes.len(), 1, "{:?}", d.notes);
@@ -774,14 +777,14 @@ fn unit_override_rebuilds() {
     screen.frame(vec![press(true)], &mut f);
     let seen = screen.frame(vec![press(false)], &mut f);
     drop(f);
-    assert_eq!(d.phase(), Some(CHECKING));
-    let seen = if find(&seen, CHECKING).is_some() {
+    assert_eq!(d.phase(), Some(checking()));
+    let seen = if find(&seen, &checking()).is_some() {
         seen
     } else {
         screen.frame(vec![], &mut show_on(&mut d, &mut s, &mut open))
     };
     assert!(
-        find(&seen, CHECKING).is_some(),
+        find(&seen, &checking()).is_some(),
         "Phase sichtbar: {}",
         all(&seen)
     );
@@ -838,7 +841,10 @@ fn unit_hints_tell_missing_from_unclear() {
         LengthUnit::Zoll,
         vec![LengthUnit::Zoll, LengthUnit::Millimeter],
     );
-    assert_eq!(unit_hint(&mixed, None).as_deref(), Some(MIXED_UNIT_HINT));
+    assert_eq!(
+        unit_hint(&mixed, None).as_deref(),
+        Some(mixed_unit_hint().as_str())
+    );
     assert_eq!(
         unit_hint(&mixed, Some(LengthUnit::Meter)).as_deref(),
         Some("Die Datei nennt verschiedene Längeneinheiten; gewählt: Meter für alle Körper.")
@@ -848,12 +854,18 @@ fn unit_hints_tell_missing_from_unclear() {
         free_skipped: true,
         ..zoll.clone()
     };
-    assert_eq!(unit_hint(&free, None).as_deref(), Some(FREE_SKIPPED_HINT));
+    assert_eq!(
+        unit_hint(&free, None).as_deref(),
+        Some(free_skipped_hint().as_str())
+    );
     let missing = import(UnitState::Missing, LengthUnit::Millimeter);
     let none = info(UnitState::Missing, LengthUnit::Millimeter, vec![]);
-    assert_eq!(unit_hint(&none, None).as_deref(), Some(NO_UNIT_HINT));
     assert_eq!(
-        NO_UNIT_HINT,
+        unit_hint(&none, None).as_deref(),
+        Some(no_unit_hint().as_str())
+    );
+    assert_eq!(
+        no_unit_hint(),
         "Die Datei nennt keine Längeneinheit; angenommen: Millimeter."
     );
     assert_eq!(selected_unit(&missing, None), Some(Unit::Millimeter));
@@ -870,7 +882,7 @@ fn unit_hints_tell_missing_from_unclear() {
     );
     assert_eq!(
         unit_hint(&conflict, None).as_deref(),
-        Some(UNCLEAR_UNIT_HINT)
+        Some(unclear_unit_hint().as_str())
     );
     assert_eq!(selected_unit(&unclear, None), None, "nichts vorgewählt");
     assert_eq!(
@@ -883,7 +895,7 @@ fn unit_hints_tell_missing_from_unclear() {
     };
     assert_eq!(
         unit_hint(&unreadable, None).as_deref(),
-        Some(UNREADABLE_UNIT_HINT)
+        Some(unreadable_unit_hint().as_str())
     );
     assert_eq!(
         unit_hint(&unreadable, Some(LengthUnit::Zoll)).as_deref(),
@@ -910,7 +922,7 @@ fn unit_hints_tell_missing_from_unclear() {
     );
     let mut s = AppState::new();
     let shown = draw(&mut d, &mut s);
-    assert!(shown.contains(NO_UNIT_HINT), "{shown}");
+    assert!(shown.contains(&no_unit_hint()), "{shown}");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -927,14 +939,18 @@ fn stale_and_undo_consistency() {
     assert!(d.loaded.is_some());
     s.create_box(DVec3::splat(10.0)).unwrap();
     s.info = Some("alt".into());
-    assert_eq!(d.import(&mut s), Err(STALE.to_string()));
-    assert_eq!(s.message.as_deref(), Some(STALE), "Ablehnung als Meldung");
+    assert_eq!(d.import(&mut s), Err(stale().text()));
+    assert_eq!(
+        s.message.as_deref(),
+        Some(stale().text().as_str()),
+        "Ablehnung als Meldung"
+    );
     assert_eq!(s.info.as_deref(), Some("alt"), "kein Erfolgshinweis");
     assert_eq!(s.document.features().len(), 1);
     let text = draw(&mut d, &mut s);
     assert!(d.loaded.is_none());
-    assert_eq!(d.error.as_deref(), Some(STALE));
-    assert!(text.contains(STALE), "{text}");
+    assert_eq!(d.error, Some(stale()));
+    assert!(text.contains(&stale().text()), "{text}");
     assert!(!text.lines().any(|l| l == "Importieren"), "{text}");
     assert!(!text.lines().any(|l| l == "Block"), "keine Liste: {text}");
 
@@ -960,7 +976,7 @@ fn stale_and_undo_consistency() {
         assert!(
             !t.text.starts_with("wird ")
                 && t.text != "Block"
-                && t.text != STALE
+                && t.text != stale().text()
                 && t.text != "Importieren",
             "alter Inhalt im neuen Fenster: {}",
             t.text
@@ -1279,7 +1295,10 @@ fn menu_entry() {
     d.import(&mut tab.state).unwrap();
     tab.step_import_dialog = None;
     ws.observe_history(false);
-    assert_eq!(ws.active_tab().undo_label(), Some("STEP importieren"));
+    assert_eq!(
+        ws.active_tab().undo_label(),
+        Some("STEP importieren".to_string())
+    );
     ws.active_tab_mut().undo().unwrap();
     let s = &ws.active_tab().state;
     assert!(s.bodies.is_empty());
@@ -1294,7 +1313,7 @@ fn menu_entry() {
     let mut st = AppState::new();
     let text = draw(&mut d, &mut st);
     assert!(text.lines().any(|l| l == "STEP importieren"), "{text}");
-    assert_eq!(TITLE, "STEP importieren");
+    assert_eq!(title(), "STEP importieren");
 
     // In einer alten Version gesperrt, mit Hinweis.
     let mut ws = workspace();
@@ -1383,7 +1402,7 @@ fn row_of(d: &StepImportDialog, name: &str) -> (String, String) {
         .iter()
         .position(|b| b.name == name)
         .unwrap_or_else(|| panic!("{name}"));
-    (l.sizes[i].clone(), l.row_units[i].clone())
+    (l.sizes[i].text(), l.row_units[i].text())
 }
 
 /// Baugruppe in Zoll und ein Würfel 10 × 20 × 30 mm mit eigenem Kontext in einer Datei.
@@ -1412,7 +1431,7 @@ fn choosing_the_file_unit_again_never_rescales_other_bodies() {
         ("10 × 20 × 30 mm".into(), "mm".into())
     );
     let seen = screen.settle(4, &mut show_on(&mut d, &mut s, &mut open));
-    assert!(find(&seen, MIXED_UNIT_HINT).is_some(), "{}", all(&seen));
+    assert!(find(&seen, &mixed_unit_hint()).is_some(), "{}", all(&seen));
     assert!(find(&seen, "mm").is_some() && find(&seen, "Zoll").is_some());
 
     // Millimeter für alle: der Hinweis sagt es.
@@ -1434,7 +1453,7 @@ fn choosing_the_file_unit_again_never_rescales_other_bodies() {
         row_of(&d, "Block"),
         ("25,4 × 50,8 × 76,2 mm".into(), "Zoll".into())
     );
-    assert!(find(&seen, MIXED_UNIT_HINT).is_some(), "{}", all(&seen));
+    assert!(find(&seen, &mixed_unit_hint()).is_some(), "{}", all(&seen));
     d.import(&mut s).unwrap();
     let cube = s.bodies.iter().find(|b| b.name == "Würfel").unwrap();
     let size = cube.bounds.1 - cube.bounds.0;
@@ -1485,7 +1504,11 @@ fn a_newly_usable_body_is_ticked_and_the_choice_is_shown() {
     let mut open = true;
     let mut screen = Screen::new(1200.0, 800.0);
     let seen = screen.settle(4, &mut show_on(&mut d, &mut s, &mut open));
-    assert!(find(&seen, UNCLEAR_UNIT_HINT).is_some(), "{}", all(&seen));
+    assert!(
+        find(&seen, &unclear_unit_hint()).is_some(),
+        "{}",
+        all(&seen)
+    );
     let seen = click_text(&mut screen, &mut d, &mut s, &mut open, "Millimeter");
     assert_eq!(d.checked, [true], "neu übernehmbar: angehakt");
     assert_eq!(d.chosen_unit(), Some(LengthUnit::Millimeter));
@@ -1521,7 +1544,7 @@ fn a_newly_usable_body_is_ticked_and_the_choice_is_shown() {
     assert_eq!(l.import.unit_state, UnitState::Named);
     assert!(l.units.free_skipped);
     let text = draw(&mut d, &mut s);
-    assert!(text.contains(FREE_SKIPPED_HINT), "{text}");
+    assert!(text.contains(&free_skipped_hint()), "{text}");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -1541,9 +1564,9 @@ fn a_file_chosen_in_the_window_is_bound_to_the_document() {
     );
     // Das Dokument ändert sich nach der Vorschau: nichts wird übernommen.
     s.create_box(DVec3::splat(10.0)).unwrap();
-    assert_eq!(d.import(&mut s), Err(STALE.to_string()));
+    assert_eq!(d.import(&mut s), Err(stale().text()));
     let seen = screen.settle(3, &mut show_on(&mut d, &mut s, &mut open));
-    assert!(find(&seen, STALE).is_some(), "{}", all(&seen));
+    assert!(find(&seen, &stale().text()).is_some(), "{}", all(&seen));
     assert!(find(&seen, "Importieren").is_none());
     assert_eq!(s.document.features().len(), 1, "kein Teil-Import");
     let _ = fs::remove_dir_all(&dir);
