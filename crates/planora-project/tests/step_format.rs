@@ -997,6 +997,15 @@ fn import_and_save_at_limit(n: usize, limit: usize) {
     });
     s.next_id = 100;
     let m = encode_version(&s).unwrap_err().to_string();
+    // Englisch: Dezimalpunkt statt Komma in der Größenangabe.
+    let en = planora_i18n::with_lang(&planora_i18n::english(), || {
+        encode_version(&s).unwrap_err().to_string()
+    });
+    assert!(
+        en.starts_with("The project cannot be saved: The STEP shapes together are too large ("),
+        "{en}"
+    );
+    assert!(en.contains("(0.1 MB, allowed 0.1 MB)"), "{en}");
     assert!(
         m.starts_with(
             "Das Projekt lässt sich nicht speichern: Die STEP-Formen sind zusammen zu groß ("

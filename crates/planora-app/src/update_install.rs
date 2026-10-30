@@ -97,17 +97,17 @@ pub fn updated_title(v: &Version) -> String {
     tr!("update-updated-title", version = v.to_string())
 }
 
-/// Meldung für den Benutzer zu einem Fehler des Downloads (in der Sprache des Fensters; die
-/// deutsche Fassung von [`InstallError::message`] bleibt für Protokolle). Die Einzelheit
-/// (`detail`) setzt die Quelle des Fehlers.
+/// Meldung für den Benutzer zu einem Fehler des Downloads in der aktuellen Sprache (die
+/// Bibliothek erzeugt den Text; die Einzelheit `detail` setzt die Quelle des Fehlers).
 pub fn install_error_text(e: &InstallError) -> String {
-    match e {
-        InstallError::Cancelled => tr!("update-error-cancelled"),
-        InstallError::Network(detail) => tr!("update-error-network", detail = detail.as_str()),
-        InstallError::TooLarge => tr!("update-error-too-large"),
-        InstallError::Checksum => tr!("update-error-checksum"),
-        InstallError::Io(detail) => tr!("update-error-io", detail = detail.as_str()),
-    }
+    e.message()
+}
+
+/// Verpackt die Arbeit eines Hintergrund-Threads so, dass sie in der Sprache läuft, die beim
+/// Start des Threads gilt (wie in `jobs.rs`).
+pub(crate) fn in_lang<F: FnOnce() + Send + 'static>(work: F) -> impl FnOnce() + Send + 'static {
+    let lang = planora_i18n::current();
+    move || planora_i18n::with_lang(&lang, work)
 }
 
 /// Release-Seite einer Version auf GitHub.
@@ -335,7 +335,7 @@ impl Installer {
         let job_cancel = Arc::clone(&cancel);
         let spawned = std::thread::Builder::new()
             .name("planora-update-download".into())
-            .spawn(move || {
+            .spawn(in_lang(move || {
                 let paths = job_paths;
                 let cancel = job_cancel;
                 let ping = || {
@@ -374,7 +374,7 @@ impl Installer {
                 }
                 let _ = tx.send(Msg::Done(result));
                 ping();
-            });
+            }));
         match spawned {
             Ok(handle) => {
                 self.handle = Some(handle);
@@ -514,7 +514,7 @@ pub fn reverify(
     let job_tx = tx.clone();
     let spawned = std::thread::Builder::new()
         .name("planora-update-pruefen".into())
-        .spawn(move || {
+        .spawn(in_lang(move || {
             if let Some(gate) = gate {
                 let _ = gate.recv();
             }
@@ -522,7 +522,7 @@ pub fn reverify(
             if let Some(ctx) = repaint {
                 ctx.request_repaint();
             }
-        });
+        }));
     if let Err(e) = spawned {
         let _ = tx.send(Err(InstallError::Io(e.to_string())));
     }
@@ -540,7 +540,7 @@ impl Downloader for NoDownload {
         _max_bytes: u64,
         _progress: &mut dyn FnMut(u64, u64) -> bool,
     ) -> Result<(), InstallError> {
-        Err(InstallError::Network("keine Verbindung".into()))
+        Err(InstallError::Network(tr!("update-net-offline")))
     }
 }
 

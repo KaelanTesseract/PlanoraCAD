@@ -2353,7 +2353,7 @@ update-detail-thread = Thread: { $error }
 update-detail-create-dir = Creating folder: { $error }
 
 ## Fehlermeldungen der Projektdateien
-proj-err-io = File error at "{ $path }": { $msg }
+proj-err-io = File error in "{ $path }": { $msg }
 proj-err-corrupt = The file "{ $path }" is damaged: { $msg }
 proj-err-too-new = The file "{ $path }" was created with a newer program version (format { $found }).
 proj-err-outside-root = The path is outside the project folder.

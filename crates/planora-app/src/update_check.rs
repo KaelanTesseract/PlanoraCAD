@@ -70,7 +70,7 @@ impl UpdateChecker {
         let manual = request.manual;
         let spawned = std::thread::Builder::new()
             .name("planora-update-pruefung".into())
-            .spawn(move || {
+            .spawn(crate::update_install::in_lang(move || {
                 let outcome = Checker::new(source).check(
                     &request.running,
                     request.channel,
@@ -85,7 +85,7 @@ impl UpdateChecker {
                 if let Some(ctx) = repaint {
                     ctx.request_repaint();
                 }
-            });
+            }));
         self.manual = manual;
         match spawned {
             Ok(handle) => {

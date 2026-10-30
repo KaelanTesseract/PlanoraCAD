@@ -1996,6 +1996,11 @@ fn drawings_from(origin: &str, file: &VersionFile) -> Result<(Vec<Drawing>, u64)
 
 // ---- Öffentliche Funktionen -------------------------------------------------------------
 
+/// Megabyte für die Meldung, mit dem Dezimaltrenner der aktuellen Sprache.
+fn mb_text(bytes: usize) -> String {
+    planora_i18n::localize_decimal(&step_text_megabytes(bytes).replace(',', "."))
+}
+
 /// JSON-Text einer Versionsdatei. Enthält der Snapshot eine nicht endliche Zahl, ist das ein
 /// Fehler (das Dokument wird dann nicht geschrieben).
 pub fn encode_version(s: &Snapshot) -> Result<String> {
@@ -2010,8 +2015,8 @@ pub fn encode_version(s: &Snapshot) -> Result<String> {
     if total > limit {
         return Err(ProjectError::Invalid(tr!(
             "proj-step-too-large-to-save",
-            size = step_text_megabytes(total).to_string(),
-            max = step_text_megabytes(limit).to_string()
+            size = mb_text(total),
+            max = mb_text(limit)
         )));
     }
     let file = VersionFile {
