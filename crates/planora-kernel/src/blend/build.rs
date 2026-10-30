@@ -6,6 +6,7 @@
 use super::analytic::{EdgeGeom, VolumeModel};
 use super::chain::{CHAIN_ANGLE, leaving_direction};
 use super::error::BlendError;
+use super::topo::role_label;
 use super::topo::{NEAR_TANGENT_ANGLE, face_name, outward_normal, vertex_faces};
 use crate::boolean::{
     Containment, CurveSurface, FaceGeom, Piece, Seg, SurfaceIntersection, curve_surface_roots,
@@ -167,8 +168,8 @@ fn check_transversal_end(
         if !(nc.cross(ns).length() >= NEAR_TANGENT_ANGLE.sin()) {
             return Err(BlendError::Unsupported(tr!(
                 "kernel-blend-face-continues-smooth",
-                a = face_name(solid, c),
-                b = face_name(solid, side)
+                a = role_label(&face_name(solid, c)),
+                b = role_label(&face_name(solid, side))
             )));
         }
     }
@@ -284,7 +285,7 @@ pub fn cap_cut(
         cut_with(g, at_end, &solid.faces[c].surface, vp, tol).ok_or_else(|| {
             BlendError::Unsupported(tr!(
                 "kernel-blend-cannot-end-on-face",
-                face = face_name(solid, c)
+                face = role_label(&face_name(solid, c))
             ))
         })?;
     Ok(EndCut {
@@ -489,7 +490,7 @@ fn retarget(
     if !on_curve(&seg.curve, t, p, tol) {
         return Err(BlendError::Unsupported(tr!(
             "kernel-blend-edge-mismatch",
-            face = face
+            face = role_label(face)
         )));
     }
     let (t0, t1) = if at_end { (seg.t0, t) } else { (t, seg.t1) };
@@ -536,7 +537,7 @@ fn reconnect(
                 if !(gap <= ON_CURVE_FACTOR * tol.linear) {
                     return Err(BlendError::Corner(tr!(
                         "kernel-blend-blends-dont-meet",
-                        face = face
+                        face = role_label(face)
                     )));
                 }
             }
@@ -579,7 +580,7 @@ fn insert_cap(
             } else {
                 return Err(BlendError::Unsupported(tr!(
                     "kernel-blend-cap-mismatch",
-                    face = face
+                    face = role_label(face)
                 )));
             };
             lp[j] = retarget(&lp[j], oriented.start(), true, face, tol)?;
@@ -590,7 +591,7 @@ fn insert_cap(
     }
     Err(BlendError::ResultInvalid(tr!(
         "kernel-blend-corner-not-found",
-        face = face
+        face = role_label(face)
     )))
 }
 
@@ -710,7 +711,7 @@ fn check_holes(
     let Some((outer, holes)) = loops.split_first() else {
         return Ok(());
     };
-    let refuse = || in_blend_area(&tr!("kernel-blend-what-hole", face = face));
+    let refuse = || in_blend_area(&tr!("kernel-blend-what-hole", face = role_label(face)));
     let shape = FaceGeom {
         surface: surface.clone(),
         same_sense,
@@ -785,7 +786,10 @@ fn check_crossings(
                 .iter()
                 .any(|&(fa, _)| !shared(a.at(fa)))
             {
-                return Err(in_blend_area(&tr!("kernel-blend-what-cutout", face = face)));
+                return Err(in_blend_area(&tr!(
+                    "kernel-blend-what-cutout",
+                    face = role_label(face)
+                )));
             }
         }
     }
@@ -959,7 +963,10 @@ fn check_piercing(
             }
         };
         if hit {
-            return Err(in_blend_area(&tr!("kernel-blend-what-face", face = face)));
+            return Err(in_blend_area(&tr!(
+                "kernel-blend-what-face",
+                face = role_label(face)
+            )));
         }
     }
     Ok(())
@@ -1068,7 +1075,7 @@ pub fn assemble(
                 .ok_or_else(|| {
                     BlendError::ResultInvalid(tr!(
                         "kernel-blend-corner-not-found-name",
-                        name = &name
+                        name = role_label(&name)
                     ))
                 })?
                 .point;
@@ -1158,14 +1165,14 @@ pub fn assemble(
                 super::overlap::Crossing::Hit => {
                     return Err(in_blend_area(&tr!(
                         "kernel-blend-what-face-name",
-                        name = name
+                        name = role_label(&name)
                     )));
                 }
                 super::overlap::Crossing::Unknown => {
                     return Err(BlendError::Unsupported(tr!(
                         "kernel-blend-near-new-face",
-                        name = name,
-                        new_name = new_name
+                        name = role_label(&name),
+                        new_name = role_label(new_name)
                     )));
                 }
             }

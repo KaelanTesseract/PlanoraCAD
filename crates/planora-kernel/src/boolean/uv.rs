@@ -130,7 +130,7 @@ pub(crate) fn edge_off_freeform() -> String {
 
 /// Liegen alle Randkanten (an ihren Abtastpunkten und Enden) auf der Freiformfläche, höchstens
 /// [`edge_surface_tol`] entfernt? Sonst ließen sich ihre Parameter nicht sinnvoll zurückrechnen:
-/// [`BooleanError::Unsupported`] mit [`edge_off_freeform`]. Analytische Flächen: immer `Ok`
+/// [`BooleanError::FreeformLimit`] mit [`edge_off_freeform`]. Analytische Flächen: immer `Ok`
 /// (wie bisher keine geometrische Prüfung).
 pub(crate) fn check_loops_on_surface(face: &FaceGeom, tol: &Tolerance) -> Result<(), BooleanError> {
     check_segs_on_surface(&face.surface, face.loops.iter().flatten(), tol)

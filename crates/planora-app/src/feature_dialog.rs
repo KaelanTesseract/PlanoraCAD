@@ -744,10 +744,16 @@ impl FeatureDialog {
                 {
                     let (a, b) = (e.a.role.clone(), e.b.role.clone());
                     egui::ComboBox::from_label(tr!("blend-face-1"))
-                        .selected_text(a.clone())
+                        .selected_text(planora_kernel::blend::topo::role_label(&a))
                         .show_ui(ui, |ui| {
                             for name in [&a, &b] {
-                                if ui.selectable_label(*name == a, name).clicked() {
+                                if ui
+                                    .selectable_label(
+                                        *name == a,
+                                        planora_kernel::blend::topo::role_label(name),
+                                    )
+                                    .clicked()
+                                {
                                     face = Some(name.clone());
                                 }
                             }

@@ -21,6 +21,7 @@ use super::build::{
 };
 use super::chain::leaving_direction;
 use super::error::BlendError;
+use super::topo::role_label;
 use super::topo::{edge_angle, edge_sides, face_name, vertex_edges};
 use crate::boolean::{Piece, Seg};
 use crate::geometry::Surface;
@@ -54,7 +55,7 @@ fn at_corner(solid: &Solid, faces: &[Id<Face>], msg: String) -> BlendError {
 fn names(solid: &Solid, faces: &[Id<Face>]) -> String {
     let n: Vec<String> = faces
         .iter()
-        .map(|f| format!("„{}“", face_name(solid, *f)))
+        .map(|f| tr!("kernel-quoted", text = role_label(&face_name(solid, *f))))
         .collect();
     match n.split_last() {
         Some((last, rest)) if !rest.is_empty() => {
@@ -272,7 +273,7 @@ pub fn corner_three(
         let Surface::Plane { frame } = &face.surface else {
             return Err(BlendError::Corner(tr!(
                 "kernel-corner-three-planes",
-                face = face_name(solid, *f)
+                face = role_label(&face_name(solid, *f))
             )));
         };
         n[k] = if face.same_sense { frame.z } else { -frame.z };

@@ -256,7 +256,7 @@ pub fn parameter_rows(state: &AppState, kind: &FeatureKind) -> Vec<(String, Stri
                 SketchPlane::Standard(StandardPlane::YZ) => tr!("tree-plane-yz"),
                 SketchPlane::OnFace(r) => tr!(
                     "props-on-face",
-                    role = &r.role,
+                    role = planora_kernel::blend::topo::role_label(&r.role),
                     name = feature_name(FeatureId(r.origin))
                 ),
             };

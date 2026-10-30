@@ -444,7 +444,7 @@ fn shown_names(import: &StepImport, checked: &[bool], state: &AppState) -> Vec<S
         .iter()
         .map(|b| {
             if b.name.trim().is_empty() {
-                unnamed_body().to_string()
+                unnamed_body()
             } else {
                 b.name.clone()
             }
@@ -867,7 +867,7 @@ impl StepImportDialog {
             .filter_map(|b| {
                 let why = b.outcome.as_ref().err()?;
                 let name = if b.name.trim().is_empty() {
-                    unnamed_body().to_string()
+                    unnamed_body()
                 } else {
                     b.name.clone()
                 };

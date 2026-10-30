@@ -468,7 +468,8 @@ pub fn imprint(
                         msg = msg
                     );
                     // Nur Wege mit Freiformflächen kommen hierher (der Schnittrechner braucht
-                    // mindestens eine); sie gelten als Freiform-Grenze.
+                    // mindestens eine); sie gelten als Freiform-Grenze. Der Zweig `Unsupported`
+                    // ist nur Absicherung und wird nie erreicht.
                     return Err(if freeform {
                         BooleanError::FreeformLimit(text)
                     } else {

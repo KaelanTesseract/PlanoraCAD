@@ -57,8 +57,12 @@ fn blend_errors() -> Vec<BlendError> {
         BlendError::InvalidInput("x".into()),
         BlendError::SeamEdge,
         BlendError::NearlyTangent { angle_deg: 1.234 },
-        BlendError::TooLarge { face: "Top".into() },
-        BlendError::CurvatureTooSmall { face: "Top".into() },
+        BlendError::TooLarge {
+            face: "Deckel".into(),
+        },
+        BlendError::CurvatureTooSmall {
+            face: "Fläche 3".into(),
+        },
         BlendError::SpineLost,
         BlendError::Unsupported("x".into()),
         BlendError::Corner("x".into()),
@@ -253,5 +257,40 @@ fn failing_operations_speak_english() {
         let skew = planora_math::DMat4::from_scale(DVec3::new(1.0, 2.0, 3.0));
         let e = k().transform(&a, &skew).unwrap_err();
         assert_english("Matrix", &e.to_string());
+    });
+}
+
+#[test]
+fn face_roles_are_shown_in_the_current_language() {
+    use planora_kernel::blend::topo::role_label;
+    let roles = [
+        ("Deckel", "Top"),
+        ("Boden", "Bottom"),
+        ("Wand 2", "Wall 2"),
+        ("Fläche 3", "Face 3"),
+        ("Ecke 1", "Corner 1"),
+        ("STEP-Fläche 7", "STEP face 7"),
+        ("Rundung 1", "Blend 1"),
+        ("Fase 2", "Chamfer 2"),
+        ("Loch 1, Wand 3", "Hole 1, Wall 3"),
+    ];
+    with_lang(&german(), || {
+        for (de, _) in roles {
+            assert_eq!(role_label(de), de);
+        }
+        assert_eq!(role_label("Meine Marke"), "Meine Marke");
+    });
+    with_lang(&english(), || {
+        for (de, en) in roles {
+            assert_eq!(role_label(de), en);
+        }
+        // Unbekannte Marken und Nummern ohne Ziffern bleiben unverändert.
+        assert_eq!(role_label("Meine Marke"), "Meine Marke");
+        assert_eq!(role_label("Wand x"), "Wand x");
+        assert_eq!(role_label(""), "");
+        let e = BlendError::TooLarge {
+            face: "Wand 1".into(),
+        };
+        assert!(e.to_string().contains("\"Wall 1\""), "{e}");
     });
 }

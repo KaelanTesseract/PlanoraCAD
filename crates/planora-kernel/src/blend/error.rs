@@ -1,5 +1,6 @@
 //! Fehler der Rundungen und Fasen (Meldungen deutsch, für die Oberfläche bestimmt).
 
+use super::topo::role_label;
 use planora_i18n::tr;
 use std::fmt;
 
@@ -32,9 +33,9 @@ impl fmt::Display for BlendError {
                 "kernel-blend-nearly-tangent",
                 angle = format!("{angle_deg:.1}")
             ),
-            BlendError::TooLarge { face } => tr!("kernel-blend-too-large", face = face),
+            BlendError::TooLarge { face } => tr!("kernel-blend-too-large", face = role_label(face)),
             BlendError::CurvatureTooSmall { face } => {
-                tr!("kernel-blend-curvature-too-small", face = face)
+                tr!("kernel-blend-curvature-too-small", face = role_label(face))
             }
             BlendError::SpineLost => tr!("kernel-blend-spine-lost"),
             BlendError::Unsupported(m) => m.clone(),

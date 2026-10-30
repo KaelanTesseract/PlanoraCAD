@@ -2013,6 +2013,17 @@ kernel-validate-edge-off-surface = Die Kante { $edge } liegt nicht auf der Fläc
 kernel-validate-hole-seam = Ein Loch der Fläche { $face } reicht über die Naht ihrer Trägerfläche
 kernel-face-n = Fläche { $n }
 kernel-blend-near-new-face = Die Fläche „{ $name }“ kommt der neuen Fläche „{ $new_name }“ nahe; ob sie sich durchdringen, lässt sich nicht sicher prüfen. Bitte ein kleineres Maß wählen
+kernel-role-top = Deckel
+kernel-role-bottom = Boden
+kernel-role-corner-bare = Ecke
+kernel-role-wall = Wand { $n }
+kernel-role-face = Fläche { $n }
+kernel-role-corner = Ecke { $n }
+kernel-role-step-face = STEP-Fläche { $n }
+kernel-role-fillet = Rundung { $n }
+kernel-role-chamfer = Fase { $n }
+kernel-role-hole = Loch { $n }
+kernel-quoted = „{ $text }“
 
 ## Fehlermeldungen des STEP-Moduls
 step-write-io = Die Datei lässt sich nicht schreiben: { $msg }

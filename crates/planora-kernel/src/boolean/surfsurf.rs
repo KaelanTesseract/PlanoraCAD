@@ -14,7 +14,7 @@ pub enum SurfaceIntersection {
     Curves(Vec<Curve>),
     /// Paar außerhalb von Stufe A.
     Unsupported,
-    /// Nicht lösbare Lage mit benannter Ursache (numerischer Schnittrechner, deutsche Meldung).
+    /// Nicht lösbare Lage mit benannter Ursache (numerischer Schnittrechner; der Text steht in der Sprache, die beim Anlegen galt).
     UnsupportedBecause(String),
 }
 

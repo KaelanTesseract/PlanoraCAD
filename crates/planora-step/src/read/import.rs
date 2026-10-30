@@ -702,7 +702,7 @@ mod tests {
             normal_failure(
                 "Zeile 121: Der Parameterbereich einer Fläche reicht über mehr als einen Umlauf."
             ),
-            tr!("step-r-body-convert")
+            "Der Körper lässt sich nicht in die Form des Programms umschreiben: Der Parameterbereich einer Fläche reicht über mehr als einen Umlauf."
         );
         assert_eq!(without_line("Zeile x: a"), "Zeile x: a");
         assert_eq!(without_line("Zeile : a"), "Zeile : a");

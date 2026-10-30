@@ -2030,6 +2030,17 @@ kernel-validate-edge-off-surface = Edge { $edge } does not lie on face { $face }
 kernel-validate-hole-seam = A hole in face { $face } extends across the seam of its supporting surface
 kernel-face-n = Face { $n }
 kernel-blend-near-new-face = The face "{ $name }" comes close to the new face "{ $new_name }"; whether they intersect cannot be checked reliably. Please choose a smaller size
+kernel-role-top = Top
+kernel-role-bottom = Bottom
+kernel-role-corner-bare = Corner
+kernel-role-wall = Wall { $n }
+kernel-role-face = Face { $n }
+kernel-role-corner = Corner { $n }
+kernel-role-step-face = STEP face { $n }
+kernel-role-fillet = Blend { $n }
+kernel-role-chamfer = Chamfer { $n }
+kernel-role-hole = Hole { $n }
+kernel-quoted = "{ $text }"
 
 ## Fehlermeldungen des STEP-Moduls
 step-write-io = The file cannot be written: { $msg }

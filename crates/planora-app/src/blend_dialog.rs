@@ -13,7 +13,7 @@ use planora_feature::{
     ParamUnit,
 };
 use planora_i18n::tr;
-use planora_kernel::blend::topo::{edge_uses, face_name};
+use planora_kernel::blend::topo::{edge_uses, face_name, role_label};
 use planora_kernel::blend::{MAX_RADIUS_POINTS, min_blend_size_request};
 use planora_kernel::{BlendKind, Edge, Id, Solid};
 use planora_math::Tolerance;
@@ -701,10 +701,13 @@ impl BlendDialog {
                 {
                     let current = self.first_face.clone().unwrap_or_else(|| a.clone());
                     egui::ComboBox::from_label(tr!("blend-face-1"))
-                        .selected_text(current.clone())
+                        .selected_text(role_label(&current))
                         .show_ui(ui, |ui| {
                             for name in [&a, &b] {
-                                if ui.selectable_label(*name == current, name).clicked() {
+                                if ui
+                                    .selectable_label(*name == current, role_label(name))
+                                    .clicked()
+                                {
                                     self.first_face = Some(name.clone());
                                 }
                             }

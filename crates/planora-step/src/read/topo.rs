@@ -31,6 +31,7 @@ use crate::read::weld;
 use crate::topology::CLASSIFY_CHORD;
 use planora_exchange::{CHECK_EVERY, Progress};
 use planora_i18n::tr;
+use planora_kernel::blend::topo::role_label;
 use planora_kernel::boolean::{face_geom, loop_points, oriented_area, points_to_uv};
 use planora_kernel::{
     Curve, Face, FaceTag, HalfEdge, Id, Loop, NURBS_EDGE_TOL, Shell, Solid, Surface, UvRect,
@@ -656,12 +657,11 @@ pub(crate) fn finish_face(raw: &mut RawBody, i: usize, tol: f64) -> Result<(), S
                 .map(|(_, p)| p.clone()),
         );
         Some(
-            derive_patch_sensed(surface, sense, &ordered, tol).map_err(|Skip(m)| {
-                if m == twisted_at_pole() {
-                    Skip(tr!("step-r-face-twisted", role = &f.tag.role))
-                } else {
-                    at_line(f.line, m)
+            derive_patch_impl(surface, sense, &ordered, tol).map_err(|e| match e {
+                PatchFail::TwistedAtPole => {
+                    Skip(tr!("step-r-face-twisted", role = role_label(&f.tag.role)))
                 }
+                PatchFail::Other(Skip(m)) => at_line(f.line, m),
             })?,
         )
     };
@@ -725,7 +725,24 @@ pub fn derive_patch_sensed(
     loops: &[Vec<DVec3>],
     tol_mm: f64,
 ) -> Result<UvRect, Skip> {
-    derive_patch_impl(surface, same_sense, loops, tol_mm)
+    derive_patch_impl(surface, same_sense, loops, tol_mm).map_err(|e| match e {
+        PatchFail::TwistedAtPole => Skip(twisted_at_pole()),
+        PatchFail::Other(skip) => skip,
+    })
+}
+
+/// Grund, aus dem kein Bereich entsteht. Die Art steht in der Variante, nicht im Text (der je
+/// nach Sprache wechselt): `TwistedAtPole` heißt, dass Rand und Außenseite am Pol nicht
+/// zusammenpassen.
+pub(crate) enum PatchFail {
+    TwistedAtPole,
+    Other(Skip),
+}
+
+impl From<Skip> for PatchFail {
+    fn from(skip: Skip) -> Self {
+        PatchFail::Other(skip)
+    }
 }
 
 /// Randpunkte im Parameterraum: `u`, `v` (entfaltet), ob `u` für den Bereich zählt und ob der
@@ -739,7 +756,7 @@ fn derive_patch_impl(
     sense: bool,
     loops: &[Vec<DVec3>],
     tol_mm: f64,
-) -> Result<UvRect, Skip> {
+) -> Result<UvRect, PatchFail> {
     let periods = [surface.u_period(), surface.v_period()];
     let base = match surface {
         Surface::Nurbs(d) => {
@@ -784,7 +801,7 @@ fn derive_patch_impl(
                 None => surface.project(*p),
             };
             if !(u.is_finite() && v.is_finite()) {
-                return Err(Skip(tr!("step-r-rim-point")));
+                return Err(Skip(tr!("step-r-rim-point")).into());
             }
             hint = Some((u, v));
             let at_pole = param_pole(v) || geo_pole(*p).is_some();
@@ -816,7 +833,7 @@ fn derive_patch_impl(
             if let (Some(per), Some(a), Some(b)) = (periods[0], track.first(), track.last())
                 && !((b.0 - a.0).abs() < 0.5 * per)
             {
-                return Err(Skip(twisted_at_pole()));
+                return Err(PatchFail::TwistedAtPole);
             }
             for k in 0..2 {
                 let first = track
@@ -861,7 +878,7 @@ fn derive_patch_impl(
     // Ohne Ausdehnung ist es kein Bereich.
     let flat = |k: usize| !(hi[k] - lo[k] > EMPTY_REL * (1.0 + lo[k].abs()));
     if flat(0) || flat(1) {
-        return Err(Skip(tr!("step-r-param-range")));
+        return Err(Skip(tr!("step-r-param-range")).into());
     }
     for k in 0..2 {
         if let Some(per) = periods[k] {
@@ -869,7 +886,7 @@ fn derive_patch_impl(
             // Über einen Pol hinweg darf `u` weiter reichen (geschlossene Schleife oben geprüft);
             // der Bereich ist dann genau eine Periode.
             if !(hi[k] - lo[k] <= per + slack) && !(through_pole && k == 0) {
-                return Err(Skip(tr!("step-r-param-range-wraps")));
+                return Err(Skip(tr!("step-r-param-range-wraps")).into());
             }
             if hi[k] - lo[k] > per {
                 hi[k] = lo[k] + per;
@@ -1049,7 +1066,7 @@ fn face_name(solid: &Solid, i: usize) -> String {
         .get(Id::from_index(i))
         .and_then(|f| f.tag.as_ref())
     {
-        Some(t) => tr!("step-quoted", text = &t.role),
+        Some(t) => tr!("step-quoted", text = role_label(&t.role)),
         None => tr!("step-r-a-face"),
     }
 }

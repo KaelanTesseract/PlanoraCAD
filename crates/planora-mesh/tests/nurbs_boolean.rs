@@ -287,7 +287,7 @@ fn a_nurbs_surface_with_a_far_edge_reports_a_named_error() {
         *radius += 0.01;
     }
     match imprint(&centered_box(), &cyl, &tol()) {
-        Err(BooleanError::Unsupported(msg)) => assert!(msg.contains("Freiformfläche"), "{msg}"),
+        Err(BooleanError::FreeformLimit(msg)) => assert!(msg.contains("Freiformfläche"), "{msg}"),
         other => panic!("{:?}", other.map(|_| ())),
     }
 }
@@ -310,7 +310,7 @@ fn unsupported_pairs_give_a_named_message() {
         )
         .unwrap();
     match boolean(&a, &b, BoolOp::Union, &tol()) {
-        Err(BooleanError::Unsupported(msg)) => {
+        Err(BooleanError::FreeformLimit(msg)) => {
             assert!(
                 msg.contains("Freiformfläche") && msg.contains("Schnitt"),
                 "{msg}"

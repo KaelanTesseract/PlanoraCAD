@@ -216,3 +216,45 @@ pub fn face_name(solid: &Solid, face: Id<Face>) -> String {
         .map(|t| t.role.clone())
         .unwrap_or_else(|| tr!("kernel-face-n", n = face.index() + 1))
 }
+
+/// Stammwort einer Marke mit Nummer: „Wand 3“ wird in der aktuellen Sprache „Wall 3“.
+fn numbered_role(role: &str) -> Option<String> {
+    let (word, n) = role.rsplit_once(' ')?;
+    if n.is_empty() || !n.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(match word {
+        "Wand" => tr!("kernel-role-wall", n = n),
+        "Fläche" => tr!("kernel-role-face", n = n),
+        "Ecke" => tr!("kernel-role-corner", n = n),
+        "STEP-Fläche" => tr!("kernel-role-step-face", n = n),
+        "Rundung" => tr!("kernel-role-fillet", n = n),
+        "Fase" => tr!("kernel-role-chamfer", n = n),
+        "Loch" => tr!("kernel-role-hole", n = n),
+        _ => return None,
+    })
+}
+
+/// Anzeigename einer Flächenmarke (`FaceTag.role`) in der aktuellen Sprache. Die Marke selbst
+/// ist ein gespeicherter Bezeichner und bleibt deutsch („Deckel“, „Boden“, „Wand n“, „Fläche n“,
+/// „Ecke n“, „STEP-Fläche n“, „Rundung n“, „Fase n“, „Loch k, Wand n“); nur wo sie angezeigt
+/// wird, geht sie durch diese Funktion. Unbekannte Marken bleiben unverändert.
+pub fn role_label(role: &str) -> String {
+    match role {
+        "Deckel" => return tr!("kernel-role-top"),
+        "Boden" => return tr!("kernel-role-bottom"),
+        "Ecke" => return tr!("kernel-role-corner-bare"),
+        _ => {}
+    }
+    if let Some(label) = numbered_role(role) {
+        return label;
+    }
+    // „Loch 2, Wand 1“: Vorsatz und Rest einzeln.
+    if let Some((head, rest)) = role.split_once(", ")
+        && head.starts_with("Loch ")
+        && let Some(h) = numbered_role(head)
+    {
+        return format!("{h}, {}", role_label(rest));
+    }
+    role.to_string()
+}
