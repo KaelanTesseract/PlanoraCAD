@@ -499,8 +499,13 @@ fn drawing_area_speaks_english() {
             st.drawing_ui.dim_message =
                 Some(Msg::Join(vec![planora_app::msg!("dim-added", n = 3usize)]));
         });
-        st.drawing_ui.dim_message_key = None;
+        st.drawing_ui.dim_message_key = Some((
+            st.document.edit_count(),
+            st.drawing_ui.selected_view,
+            st.drawing_ui.selected_dim,
+        ));
         let seen = area(&mut rig, &mut st);
+        assert_has("Hinweis", &seen, &["3 dimensions were added."]);
         assert_english("Hinweis", &seen);
         assert!(st.drawing_ui.area == WorkArea::Drawing(d));
     });
@@ -711,6 +716,63 @@ fn stored_drawing_messages_follow_the_language() {
         "keine deutschen Buchstaben: {en}"
     );
 
+    // Rückfrage zu einem Kettenglied: unter Deutsch gespeichert, unter Englisch gezeichnet.
+    let dim = st.document.drawing(d).unwrap().dimensions[0].id;
+    st.pending_delete_dimension = Some(with_lang(&german(), || {
+        planora_app::dimension_browser::DimDeletePlan {
+            drawing: d,
+            dim,
+            text: planora_app::dimension_browser::chain_ask(),
+        }
+    }));
+    let seen = with_lang(&english(), || browser_frame(&mut rig, &mut st));
+    assert_has(
+        "Kettenrückfrage",
+        &seen,
+        &["This dimension belongs to a chain; the other dimensions stay"],
+    );
+    st.pending_delete_dimension = None;
+
+    // Fehler einer Ansicht: unter Deutsch gespeichert, unter Englisch gelesen.
+    let mut empty = AppState::new();
+    let ed = empty
+        .document
+        .add_drawing("Blatt 1", A4_QUER, Projection::First)
+        .unwrap();
+    let ev = empty
+        .document
+        .add_view(
+            ed,
+            ViewKind::Front,
+            Scale { num: 1, den: 1 },
+            Placement::Free { x: 80.0, y: 100.0 },
+            None,
+        )
+        .unwrap();
+    empty.drawing_ui.open(ed);
+    with_lang(&german(), || {
+        empty.drawing_ui.tick(&empty.bodies, &empty.document, true)
+    });
+    let model = empty.document.model_edit_count();
+    let failed = empty
+        .document
+        .drawing(ed)
+        .unwrap()
+        .view(ev)
+        .map(|v| empty.drawing_ui.result_of(v, model))
+        .unwrap();
+    let planora_app::drawing_state::ViewResult::Failed(m) = failed else {
+        panic!("Fehler erwartet: {failed:?}")
+    };
+    assert_eq!(
+        with_lang(&german(), || m.text()),
+        "Es gibt keinen Körper, der sich zeichnen lässt."
+    );
+    assert_eq!(
+        with_lang(&english(), || m.text()),
+        "There is no body that can be drawn."
+    );
+
     // Zusammengesetzte Meldungen (unter Deutsch gebaut, englisch gelesen).
     let partly = with_lang(&german(), || {
         planora_app::dimension_state::SuggestOutcome::Partly {
@@ -758,4 +820,38 @@ fn stored_drawing_messages_follow_the_language() {
         drawing_browser::drawing_detail(st.document.drawing(d).unwrap())
     });
     assert_eq!(shown, "A4 landscape, First angle");
+}
+
+/// Die Namen auf dem Blatt (`Drawing::view_names`) und in der Oberfläche kommen aus denselben
+/// Teilen: gleiche Namen unter Deutsch, mehrere Ansichten einer Art und ein Schnitt.
+#[test]
+fn view_names_agree_with_the_sheet_names() {
+    let Fixture {
+        mut st, drawing: d, ..
+    } = fixture();
+    for (x, kind) in [(60.0, ViewKind::Front), (90.0, ViewKind::Top)] {
+        st.document
+            .add_view(
+                d,
+                kind,
+                Scale { num: 1, den: 1 },
+                Placement::Free { x, y: 40.0 },
+                None,
+            )
+            .unwrap();
+    }
+    let drawing = st.document.drawing(d).unwrap();
+    let sheet = drawing.view_names();
+    let ui = with_lang(&german(), || drawing_view::view_names(drawing));
+    assert_eq!(sheet, ui);
+    assert!(sheet.values().any(|n| n == "Vorne 2"), "{sheet:?}");
+    assert!(sheet.values().any(|n| n == "Oben 2"), "{sheet:?}");
+    assert!(
+        sheet.values().any(|n| n == "Schnitt A\u{2013}A"),
+        "{sheet:?}"
+    );
+    let en = with_lang(&english(), || drawing_view::view_names(drawing));
+    assert!(en.values().any(|n| n == "Front 2"), "{en:?}");
+    assert!(en.values().any(|n| n == "Section A\u{2013}A"), "{en:?}");
+    assert_eq!(sheet.len(), en.len());
 }

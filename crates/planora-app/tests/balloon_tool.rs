@@ -1514,6 +1514,14 @@ fn balloons_paint_in_sheet_colour_with_paper_widths() {
 
 /// Texte und Tooltips in einfacher Sprache, als ganze Sätze.
 #[test]
+fn app_texts_match_the_feature_constants() {
+    assert_eq!(
+        balloon_tool::too_many().text(),
+        planora_feature::TOO_MANY_BALLOONS
+    );
+}
+
+#[test]
 fn texts_are_plain_sentences() {
     for t in [
         &balloon_tool::tool_tip(),

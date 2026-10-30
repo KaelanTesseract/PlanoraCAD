@@ -193,38 +193,20 @@ fn plan_delete_view(
         );
         // „Mit ihr verschwindet die Schnittlinie in „Vorne“.“ bzw. „… verschwinden die
         // Schnittlinie in „Vorne“, die abgeleiteten Ansichten (…) und 2 Maße.“
-        let mut items: Vec<MsgArg> =
-            vec![crate::msg!("drawing-del-section-line", source = source).into()];
-        if !dependents.is_empty() {
-            items.push(
-                crate::msg!(
-                    "drawing-del-derived-views",
-                    names = MsgArg::List(dependents.clone())
-                )
-                .into(),
-            );
-        }
-        if dims > 0 {
-            items.push(crate::msg!("drawing-del-dims", n = dims).into());
-        }
-        let count = items.len();
-        let mut it = items.into_iter();
-        let list = match count {
-            1 => crate::msg!(
-                "drawing-del-list-1",
-                a = it.next().unwrap_or(MsgArg::Int(0))
-            ),
-            2 => crate::msg!(
-                "drawing-del-list-2",
-                a = it.next().unwrap_or(MsgArg::Int(0)),
-                b = it.next().unwrap_or(MsgArg::Int(0))
-            ),
-            _ => crate::msg!(
-                "drawing-del-list-3",
-                a = it.next().unwrap_or(MsgArg::Int(0)),
-                b = it.next().unwrap_or(MsgArg::Int(0)),
-                c = it.next().unwrap_or(MsgArg::Int(0))
-            ),
+        let line = crate::msg!("drawing-del-section-line", source = source);
+        let derived = (!dependents.is_empty()).then(|| {
+            crate::msg!(
+                "drawing-del-derived-views",
+                names = MsgArg::List(dependents.clone())
+            )
+        });
+        let dim_item = (dims > 0).then(|| crate::msg!("drawing-del-dims", n = dims));
+        let (count, list) = match (derived, dim_item) {
+            (None, None) => (1usize, crate::msg!("drawing-del-list-1", a = line)),
+            (Some(b), None) | (None, Some(b)) => {
+                (2, crate::msg!("drawing-del-list-2", a = line, b = b))
+            }
+            (Some(b), Some(c)) => (3, crate::msg!("drawing-del-list-3", a = line, b = b, c = c)),
         };
         let text = crate::msg!(
             "drawing-del-section",

@@ -1320,6 +1320,18 @@ fn browser_rules() {
 }
 
 #[test]
+fn app_texts_match_the_feature_constants() {
+    assert_eq!(
+        drawing_browser::follow_page_delete().text(),
+        planora_feature::FOLLOW_PAGE_DELETE
+    );
+    assert_eq!(
+        drawing_browser::parts_sheet_rename().text(),
+        planora_feature::PARTS_SHEET_RENAME
+    );
+}
+
+#[test]
 fn no_views_on_a_parts_sheet() {
     let (mut st, _) = boxes(3);
     new_drawing(&mut st, A3_QUER);

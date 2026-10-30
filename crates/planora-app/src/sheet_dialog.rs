@@ -352,6 +352,7 @@ impl SheetInfoDialog {
                                 field_row(
                                     ui,
                                     dark,
+                                    f,
                                     &title_field_name(f),
                                     value,
                                     auto.get(f),
@@ -362,6 +363,7 @@ impl SheetInfoDialog {
                             field_row(
                                 ui,
                                 dark,
+                                "tolerance",
                                 &tr!("sheet-field-tolerance"),
                                 &mut project.tolerance,
                                 DEFAULT_TOLERANCE,
@@ -416,6 +418,7 @@ impl SheetInfoDialog {
                                 field_row(
                                     ui,
                                     dark,
+                                    f,
                                     &title_field_name(f),
                                     value,
                                     auto.get(f),
@@ -716,9 +719,11 @@ pub(crate) fn length_label(text: &str, max: usize) -> String {
 
 /// Eine Zeile des Fensters: Bezeichnung, Textfeld (mit dem automatischen Wert als Hinweistext),
 /// Länge „n/max“, „Zurücksetzen“ bei eigenem Text und darunter die Warnung des Felds.
+#[allow(clippy::too_many_arguments)]
 fn field_row(
     ui: &mut egui::Ui,
     dark: bool,
+    key: impl std::hash::Hash + std::fmt::Debug,
     label: &str,
     value: &mut FieldValue,
     auto: &str,
@@ -728,7 +733,7 @@ fn field_row(
     field_row_with(
         ui,
         dark,
-        ("planora-sheet-field", label),
+        ("planora-sheet-field", key),
         label,
         value,
         auto,

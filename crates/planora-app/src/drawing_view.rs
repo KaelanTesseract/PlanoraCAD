@@ -57,8 +57,8 @@ use planora_drawing::sheet_marks::sheet_frame;
 use planora_drawing::stroke::StrokeOrigin;
 use planora_drawing::{
     Anchor, BalloonId, Drawing, DrawingId, DrawingKind, PartsCells, Placement, Projection, Scale,
-    SectionData, Sheet, ViewId, ViewKey, ViewKind, ViewLines, ViewSpec, Visibility, align_dir,
-    view_extent,
+    SectionData, Sheet, ViewId, ViewKey, ViewKind, ViewLines, ViewName, ViewSpec, Visibility,
+    align_dir, view_extent,
 };
 use planora_i18n::tr;
 use planora_math::DVec2;
@@ -458,31 +458,24 @@ pub fn view_kind_label(kind: ViewKind) -> String {
 /// Namen der Ansichten wie auf dem Blatt: Art, bei mehrfach gleicher Art mit Nummer, Schnitte
 /// als „Schnitt A–A“ (wie [`Drawing::view_names`], aber übersetzt erst beim Zeichnen).
 pub fn view_name_msgs(drawing: &Drawing) -> BTreeMap<ViewId, Msg> {
-    let mut counts: BTreeMap<usize, usize> = BTreeMap::new();
-    let mut out = BTreeMap::new();
-    for v in &drawing.views {
-        if let Some(sec) = &v.section {
-            out.insert(
-                v.id,
-                crate::msg!("drawing-view-section", letter = sec.letter.to_string()),
-            );
-            continue;
-        }
-        let i = ViewKind::ALL.iter().position(|k| *k == v.kind).unwrap_or(0);
-        let n = counts.entry(i).or_insert(0);
-        *n += 1;
-        let name = if *n == 1 {
-            view_kind_msg(v.kind)
-        } else {
-            crate::msg!(
-                "drawing-view-numbered",
-                name = MsgArg::from(view_kind_msg(v.kind)),
-                n = *n
-            )
-        };
-        out.insert(v.id, name);
-    }
-    out
+    drawing
+        .view_name_parts()
+        .into_iter()
+        .map(|(id, part)| {
+            let name = match part {
+                ViewName::Section(letter) => {
+                    crate::msg!("drawing-view-section", letter = letter.to_string())
+                }
+                ViewName::Kind(kind, 1) => view_kind_msg(kind),
+                ViewName::Kind(kind, n) => crate::msg!(
+                    "drawing-view-numbered",
+                    name = MsgArg::from(view_kind_msg(kind)),
+                    n = n as usize
+                ),
+            };
+            (id, name)
+        })
+        .collect()
 }
 
 /// Namen der Ansichten in der aktuellen Sprache (siehe [`view_name_msgs`]).

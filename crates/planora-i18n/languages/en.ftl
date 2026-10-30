@@ -1135,7 +1135,7 @@ drawing-views-failed-no-dims = { $count ->
     [one] The view { $names } could not be calculated and got no dimensions.
    *[other] The views { $names } could not be calculated and got no dimensions.
 }
-drawing-pending = calculating … { $percent } %
+drawing-pending = calculating … { $percent }%
 
 ## Dimensions
 dim-views-pending = The views are still being calculated.
@@ -1329,7 +1329,7 @@ parts-too-many-rows = More than { $max } rows do not fit on the parts list sheet
 parts-none = There are no parts yet.
 parts-create = Create parts list sheet
 parts-open = Open parts list sheet
-parts-col-name = Description
+parts-col-name = Part name
 parts-col-qty = Quantity
 parts-col-material = Material
 parts-col-note = Remark

@@ -83,6 +83,15 @@ pub enum ViewKind {
     Isometric,
 }
 
+/// Name einer Ansicht ohne Text (siehe [`Drawing::view_name_parts`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewName {
+    /// Art der Ansicht und ihre Nummer unter den Ansichten dieser Art (ab 1).
+    Kind(ViewKind, u32),
+    /// Schnittansicht mit ihrem Buchstaben.
+    Section(char),
+}
+
 impl ViewKind {
     /// Alle Ansichtsarten in fester Reihenfolge.
     pub const ALL: [ViewKind; 7] = [
@@ -462,27 +471,39 @@ impl Drawing {
         Ok(id)
     }
 
-    /// Namen der Ansichten wie auf dem Blatt: Normansichten mit ihrer Art, bei mehrfach gleicher
-    /// Art mit Nummer („Oben 2“); Schnitte zählen dabei nicht mit und heißen „Schnitt A–A“.
-    pub fn view_names(&self) -> BTreeMap<ViewId, String> {
-        let mut counts: BTreeMap<usize, usize> = BTreeMap::new();
+    /// Namen der Ansichten ohne Text: Art und laufende Nummer (ab 1, je Art; Schnitte zählen
+    /// nicht mit) bzw. der Buchstabe des Schnitts. Aus diesen Teilen entstehen die Namen auf dem
+    /// Blatt ([`Drawing::view_names`]) und in der Oberfläche der App.
+    pub fn view_name_parts(&self) -> BTreeMap<ViewId, ViewName> {
+        let mut counts: BTreeMap<usize, u32> = BTreeMap::new();
         let mut out = BTreeMap::new();
         for v in &self.views {
             if let Some(sec) = &v.section {
-                out.insert(v.id, format!("Schnitt {0}\u{2013}{0}", sec.letter));
+                out.insert(v.id, ViewName::Section(sec.letter));
                 continue;
             }
             let i = ViewKind::ALL.iter().position(|k| *k == v.kind).unwrap_or(0);
             let n = counts.entry(i).or_insert(0);
             *n += 1;
-            let name = if *n == 1 {
-                v.kind.label().to_string()
-            } else {
-                format!("{} {}", v.kind.label(), n)
-            };
-            out.insert(v.id, name);
+            out.insert(v.id, ViewName::Kind(v.kind, *n));
         }
         out
+    }
+
+    /// Namen der Ansichten wie auf dem Blatt: Normansichten mit ihrer Art, bei mehrfach gleicher
+    /// Art mit Nummer („Oben 2“); Schnitte zählen dabei nicht mit und heißen „Schnitt A–A“.
+    pub fn view_names(&self) -> BTreeMap<ViewId, String> {
+        self.view_name_parts()
+            .into_iter()
+            .map(|(id, p)| {
+                let name = match p {
+                    ViewName::Section(l) => format!("Schnitt {0}\u{2013}{0}", l),
+                    ViewName::Kind(k, 1) => k.label().to_string(),
+                    ViewName::Kind(k, n) => format!("{} {}", k.label(), n),
+                };
+                (id, name)
+            })
+            .collect()
     }
 
     /// Sucht eine Ansicht.
