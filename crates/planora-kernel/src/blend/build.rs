@@ -1165,13 +1165,13 @@ pub fn assemble(
                 super::overlap::Crossing::Hit => {
                     return Err(in_blend_area(&tr!(
                         "kernel-blend-what-face-name",
-                        name = role_label(&name)
+                        name = role_label(name)
                     )));
                 }
                 super::overlap::Crossing::Unknown => {
                     return Err(BlendError::Unsupported(tr!(
                         "kernel-blend-near-new-face",
-                        name = role_label(&name),
+                        name = role_label(name),
                         new_name = role_label(new_name)
                     )));
                 }
