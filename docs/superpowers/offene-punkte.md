@@ -1961,7 +1961,7 @@ Stand nach Etappe 6 (Plan `docs/superpowers/plans/2026-10-26-rueckmeldungen.md`)
 
 ## Sprachen
 
-Teilprojekt Sprachen (Deutsch und Englisch, weitere Sprachen über Dateien), in Arbeit. Zurückgestellt:
+Teilprojekt Sprachen (Deutsch und Englisch, weitere Sprachen über Dateien), abgeschlossen und am 2026-10-30 nach master gemergt (CI grün, 4429 Tests). Zurückgestellt:
 - Datumsangaben bleiben auch im Englischen in der deutschen Form TT.MM.JJJJ (z. B. „23.10.2026, 18:42“ in Projekte-Fenster und Versionen).
 - Zoll und andere Einheiten: eigenes Teilprojekt, siehe unten „Später: Teilprojekt Zoll“.
 - Schrift von rechts nach links (Arabisch, Hebräisch) und Schriften, die die eingebauten Schriftarten nicht abdecken (z. B. Chinesisch, Japanisch), gehen nicht; die Anleitung `docs/uebersetzen.md` sagt das.
