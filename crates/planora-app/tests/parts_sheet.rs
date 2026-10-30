@@ -17,7 +17,7 @@ use planora_app::sheet_dialog::SheetInfoDialog;
 use planora_app::state::{AppState, StandardPlane};
 use planora_app::workspace::Workspace;
 use planora_app::{browser, fonts, icons, theme, viewport};
-use planora_drawing::parts::PARTS_HEAD;
+use planora_drawing::parts::parts_head;
 use planora_drawing::sheet_frame::{PartsSpace, REV_VISIBLE, TitleField, sheet_layout_with};
 use planora_drawing::sheet_info::{FieldValue, Stamp, resolve_texts};
 use planora_drawing::{
@@ -1002,7 +1002,11 @@ fn create_and_open_parts_sheet() {
     let shot = h.settle();
     assert!(shot.has("2 von 2"));
     let table = h.table_texts();
-    for t in PARTS_HEAD.iter().copied().chain(["Quader 1", "Quader 3"]) {
+    for t in parts_head()
+        .iter()
+        .map(String::as_str)
+        .chain(["Quader 1", "Quader 3"])
+    {
         assert!(table.iter().any(|x| x == t), "„{t}“: {table:?}");
     }
     // Jetzt heißt der Knopf „öffnen“ und öffnet Seite 1.
@@ -1929,9 +1933,9 @@ fn parts_sheet_display_in_a_small_window() {
             .iter()
             .filter(|t| table.contains(t.rect.center()))
             .collect();
-        for must in PARTS_HEAD
+        for must in parts_head()
             .iter()
-            .copied()
+            .map(String::as_str)
             .chain(["Quader 1", "Quader 3", "3"])
         {
             assert!(inside.iter().any(|t| t.text == must), "„{must}“");

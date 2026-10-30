@@ -17,7 +17,7 @@ use crate::state::AppState;
 use crate::theme;
 use planora_drawing::parts::{
     MAX_PARTS_LIST_ROWS, MAX_PARTS_MATERIAL_CHARS, MAX_PARTS_NAME_CHARS, MAX_PARTS_NOTE_CHARS,
-    MAX_PARTS_QTY_CHARS, PARTS_HEAD, PARTS_ON_SHEET,
+    MAX_PARTS_QTY_CHARS, PARTS_ON_SHEET, parts_head,
 };
 use planora_drawing::sheet_info::{FieldValue, SheetInfo, Stamp};
 use planora_drawing::sheet_marks::parts_cell_is_cut;
@@ -237,9 +237,9 @@ pub fn show_section(
     let widths = column_widths(ui.available_width() - gutter, gap);
     let row_w: f32 = widths.iter().sum::<f32>() + 5.0 * gap;
     ui.horizontal(|ui| {
-        for (c, head) in PARTS_HEAD.iter().enumerate() {
+        for (c, head) in parts_head().into_iter().enumerate() {
             cell(ui, widths[c], |ui| {
-                ui.weak(*head);
+                ui.weak(head);
             });
         }
     });

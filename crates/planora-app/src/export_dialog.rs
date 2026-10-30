@@ -42,7 +42,7 @@ use planora_drawing::annotate::{Mark, ResolvedDims};
 use planora_drawing::balloon::{add_balloon_marks, balloon_marks};
 use planora_drawing::dimension::{DimError, DimSpec};
 use planora_drawing::dxf::{dxf_char_ok, dxf_text_fits};
-use planora_drawing::parts::PARTS_HEAD;
+use planora_drawing::parts::parts_head;
 use planora_drawing::pdf::{MAX_PAGES, PdfMeta, pdf_date};
 use planora_drawing::pdf_font::pdf_char_ok;
 use planora_drawing::section_marks::{add_section_marks, section_marks};
@@ -122,7 +122,7 @@ fn step_msg(e: &StepError) -> Msg {
 fn draw_msg(e: &DrawError) -> Msg {
     match e {
         DrawError::Cancelled => cancelled_msg(),
-        e => Msg::Raw(e.to_string()),
+        e => crate::drawing_state::draw_error_msg(e),
     }
 }
 
@@ -487,7 +487,7 @@ pub fn lost_dimension_text(label: &str, view: &str, error: &DimError) -> String 
 }
 
 /// Wie [`lost_dimension_text`], übersetzt erst beim Zeichnen. Der Grund ist Text der
-/// Bibliothek (noch ohne Id).
+/// Bibliothek (in der Sprache beim Entstehen des Fehlers).
 fn lost_dimension_msg(label: MsgArg, view: MsgArg, error: &DimError) -> Msg {
     let text = match error {
         DimError::Lost(inner) => inner.clone(),
@@ -640,8 +640,9 @@ fn check_sheet_cells(
             note,
         )?;
     }
+    let heads = parts_head();
     for row in &texts.parts {
-        for (i, (cell, head)) in row.iter().zip(PARTS_HEAD).enumerate().skip(1) {
+        for (i, (cell, head)) in row.iter().zip(&heads).enumerate().skip(1) {
             let name = MsgArg::from(crate::msg!(
                 "export-field-parts",
                 pos = row[0].to_string(),
@@ -654,12 +655,11 @@ fn check_sheet_cells(
 }
 
 /// Ein Zeichen in einer Meldung: „U+0020“ für unsichtbare, sonst das Zeichen in Anführungszeichen
-/// der Sprache (die Bibliothek setzt deutsche).
+/// der Sprache (übersetzt erst beim Zeichnen).
 fn char_arg(c: char) -> MsgArg {
-    let label = planora_drawing::pdf::pdf_char_label(c);
-    match label.strip_prefix('„').and_then(|l| l.strip_suffix('“')) {
-        Some(ch) => crate::msg!("drawing-quoted", name = ch).into(),
-        None => MsgArg::Text(label),
+    match planora_drawing::pdf::pdf_char_code(c) {
+        Some(code) => MsgArg::Text(code),
+        None => crate::msg!("drawing-quoted", name = c.to_string()).into(),
     }
 }
 
@@ -1208,7 +1208,7 @@ fn prepare_counted(
                 return Err(crate::msg!(
                     "export-view-failed",
                     name = name,
-                    reason = e.to_string()
+                    reason = crate::drawing_state::draw_error_msg(&e)
                 ));
             }
         }

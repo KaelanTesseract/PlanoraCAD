@@ -22,8 +22,8 @@ use planora_drawing::sheet_frame::TitleField;
 use planora_drawing::sheet_info::{
     DASH, DEFAULT_TOLERANCE, FieldValue, MAX_FIELD_CHARS, MAX_NOTE_CHARS, MAX_NOTES,
     MAX_REVISION_CHARS, MAX_REVISIONS, MAX_TITLE_CHARS, NotesValue, ProjectInfo, SheetContext,
-    SheetInfo, Stamp, TOO_MANY_REVISIONS, TitleTexts, default_notes, main_scale, resolve_texts,
-    revision_letter, validate_project_info, validate_sheet_info,
+    SheetInfo, Stamp, TitleTexts, default_notes, main_scale, resolve_texts, revision_letter,
+    too_many_revisions, validate_project_info, validate_sheet_info,
 };
 use planora_drawing::sheet_marks::{field_is_cut, note_is_cut, revision_cell_is_cut};
 use planora_drawing::{Drawing, DrawingId, DrawingKind, PartsRow};
@@ -221,10 +221,10 @@ impl SheetInfoDialog {
     pub fn add_revision(&mut self, stamp: &Stamp, creator: &str) {
         match self.sheet.add_revision(&stamp.date, creator) {
             Ok(()) => self.message = None,
-            Err(m) if m == TOO_MANY_REVISIONS => {
+            Err(m) if m == too_many_revisions() => {
                 self.message = Some(crate::msg!("sheet-too-many-revisions", max = MAX_REVISIONS));
             }
-            Err(m) => self.message = Some(Msg::Raw(m.to_string())),
+            Err(m) => self.message = Some(Msg::Raw(m)),
         }
     }
 

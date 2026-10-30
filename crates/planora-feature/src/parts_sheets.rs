@@ -3,7 +3,9 @@
 
 use crate::error::FeatureError;
 use crate::model::Document;
-use planora_drawing::parts::{pages_needed, parts_sheet_name};
+use planora_drawing::parts::{
+    is_parts_sheet_name, pages_needed, parts_sheet_name, parts_sheet_name_like,
+};
 use planora_drawing::sheet_frame::parts_rows_per_page;
 use planora_drawing::sheet_info::{
     NotesValue, ProjectInfo, SheetInfo, Stamp, validate_project_info,
@@ -54,12 +56,11 @@ impl Document {
         v.into_iter().map(|(_, id)| id).collect()
     }
 
-    /// Ob der Name zu den Seitennamen gehört, die Stücklistenblättern vorbehalten sind (nur
-    /// wirksam, solange es Stücklistenblätter gibt).
+    /// Ob der Name zu den Seitennamen gehört, die Stücklistenblättern vorbehalten sind, in
+    /// irgendeiner verfügbaren Sprache (nur wirksam, solange es Stücklistenblätter gibt).
     pub(crate) fn reserved_for_parts(&self, name: &str) -> bool {
-        let key = name.trim().to_lowercase();
         self.drawings.iter().any(|d| page_of(d).is_some())
-            && (1..=RESERVED_PAGES).any(|p| parts_sheet_name(p).to_lowercase() == key)
+            && (1..=RESERVED_PAGES).any(|p| is_parts_sheet_name(name, p))
     }
 
     /// Legt Seite 1 der Stückliste an (Erstwinkelprojektion, ohne Hinweisfeld) und gleicht die
@@ -161,7 +162,8 @@ impl Document {
             .as_ref()
             .map_or_else(String::new, |i| i.created.clone());
         for page in (have.min(wanted) + 1)..=wanted {
-            let name = parts_sheet_name(page);
+            // Folgeblätter heißen in der Sprache von Seite 1.
+            let name = parts_sheet_name_like(&first.name, page);
             if self.drawings.len() >= crate::drawings::MAX_DRAWINGS
                 || self.next_drawing == u64::MAX
                 || self.name_taken(&name, None)

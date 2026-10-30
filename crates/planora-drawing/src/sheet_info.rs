@@ -2,8 +2,9 @@
 //! Buchstaben, Grenzen und die Auflösung zu den Texten, die auf das Blatt kommen.
 
 use crate::model::{Drawing, DrawingKind, Scale};
-use crate::parts::{PARTS_DOC_TYPE, PartsCells};
+use crate::parts::{PartsCells, parts_doc_type};
 use crate::sheet_frame::{REV_VISIBLE, TitleField};
+use planora_i18n::tr;
 use std::collections::BTreeMap;
 
 pub const MAX_FIELD_CHARS: usize = 80;
@@ -12,12 +13,32 @@ pub const MAX_NOTE_CHARS: usize = 100;
 pub const MAX_REVISION_CHARS: usize = 120;
 pub const MAX_NOTES: usize = 6;
 pub const MAX_REVISIONS: usize = 23;
-pub const TOO_MANY_REVISIONS: &str = "Es sind höchstens 23 Änderungen möglich.";
-pub const DEFAULT_DOC_TYPE: &str = "Fertigungszeichnung";
-pub const DEFAULT_STATUS: &str = "in Arbeit";
 pub const DASH: &str = "–";
 pub const DEFAULT_TOLERANCE: &str = "ISO 2768-m";
-pub const LANGUAGE: &str = "de";
+
+/// Meldung, wenn schon [`MAX_REVISIONS`] Änderungen eingetragen sind.
+pub fn too_many_revisions() -> String {
+    tr!("sheet-too-many-revisions", max = MAX_REVISIONS.to_string())
+}
+
+// Vorgaben des Schriftfelds: Sie stehen nicht im Dokument (das Feld bleibt „automatisch“),
+// sondern entstehen beim Zeichnen und Exportieren in der aktuellen Sprache (beim Export in der
+// gewählten Export-Sprache). Eigene Einträge des Benutzers bleiben, wie sie sind.
+
+/// Vorgabe der Dokumentart („Fertigungszeichnung“).
+pub fn default_doc_type() -> String {
+    tr!("drawing-default-doc-type")
+}
+
+/// Vorgabe des Dokumentstatus („in Arbeit“).
+pub fn default_status() -> String {
+    tr!("drawing-default-status")
+}
+
+/// Eintrag im Feld „Sprache“: die Kennung der aktuellen Sprache (z. B. `de`, `en`).
+pub fn language() -> String {
+    planora_i18n::current().id().to_string()
+}
 
 /// Ein Eintrag: automatisch oder eigener Text.
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -194,9 +215,9 @@ impl SheetInfo {
     }
 
     /// Hängt eine Änderung an (Buchstabe automatisch); ab der 24. Fehler.
-    pub fn add_revision(&mut self, date: &str, name: &str) -> Result<(), &'static str> {
+    pub fn add_revision(&mut self, date: &str, name: &str) -> Result<(), String> {
         if self.revisions.len() >= MAX_REVISIONS {
-            return Err(TOO_MANY_REVISIONS);
+            return Err(too_many_revisions());
         }
         self.revisions.push(Revision {
             letter: FieldValue::Auto,
@@ -208,26 +229,36 @@ impl SheetInfo {
     }
 }
 
-/// Die vorbelegten Hinweiszeilen.
+/// Die vorbelegten Hinweiszeilen in der aktuellen Sprache (wie die übrigen Vorgaben erst beim
+/// Zeichnen erzeugt; eigene Zeilen bleiben, wie sie sind).
 pub fn default_notes(tolerance: &str) -> Vec<String> {
     vec![
-        format!("Allgemeintoleranzen {tolerance}"),
-        "Kanten gebrochen 0,3 mm".to_string(),
-        "Oberflächen Ra 3,2 (soweit nicht anders angegeben)".to_string(),
+        tr!("drawing-note-tolerance", tolerance = tolerance),
+        tr!("drawing-note-edges"),
+        tr!("drawing-note-surfaces"),
     ]
 }
 
-pub(crate) fn check_text(what: &str, s: &str, max: usize) -> Result<(), String> {
+/// Prüft einen Text; `what` nennt das Feld (erst im Fehlerfall erzeugt).
+pub(crate) fn check_text(what: impl Fn() -> String, s: &str, max: usize) -> Result<(), String> {
     if s.chars().any(char::is_control) {
-        return Err(format!("{what}: Steuerzeichen sind nicht erlaubt."));
+        return Err(tr!("drawing-err-control-chars", what = what()));
     }
     if s.chars().count() > max {
-        return Err(format!("{what} ist zu lang (höchstens {max} Zeichen)."));
+        return Err(tr!(
+            "drawing-err-text-long",
+            what = what(),
+            max = max.to_string()
+        ));
     }
     Ok(())
 }
 
-pub(crate) fn check_value(what: &str, v: &FieldValue, max: usize) -> Result<(), String> {
+pub(crate) fn check_value(
+    what: impl Fn() -> String,
+    v: &FieldValue,
+    max: usize,
+) -> Result<(), String> {
     match v {
         FieldValue::Auto => Ok(()),
         FieldValue::Text(t) => check_text(what, t, max),
@@ -237,12 +268,10 @@ pub(crate) fn check_value(what: &str, v: &FieldValue, max: usize) -> Result<(), 
 fn check_notes(n: &NotesValue) -> Result<(), String> {
     if let NotesValue::Lines(l) = n {
         if l.len() > MAX_NOTES {
-            return Err(format!(
-                "Es sind höchstens {MAX_NOTES} Hinweiszeilen möglich."
-            ));
+            return Err(tr!("sheet-notes-full", max = MAX_NOTES.to_string()));
         }
         for line in l {
-            check_text("Ein Hinweis", line, MAX_NOTE_CHARS)?;
+            check_text(|| tr!("drawing-what-note-line"), line, MAX_NOTE_CHARS)?;
         }
     }
     Ok(())
@@ -250,43 +279,45 @@ fn check_notes(n: &NotesValue) -> Result<(), String> {
 
 /// Prüft Längen (in Zeichen), Zeilenzahl, Zahl der Änderungen und Steuerzeichen.
 pub fn validate_sheet_info(i: &SheetInfo) -> Result<(), String> {
-    check_text("Das Erstellungsdatum", &i.created, MAX_FIELD_CHARS)?;
-    check_value("Die Zeichnungsnummer", &i.number, MAX_FIELD_CHARS)?;
-    check_value("Der Titel", &i.title, MAX_TITLE_CHARS)?;
-    check_value("Der Zusatztitel", &i.subtitle, MAX_FIELD_CHARS)?;
-    check_value("Die Dokumentart", &i.doc_type, MAX_FIELD_CHARS)?;
-    check_value("Der Dokumentstatus", &i.status, MAX_FIELD_CHARS)?;
-    check_value("Das Ausgabedatum", &i.issued, MAX_FIELD_CHARS)?;
-    check_value("Der Änderungsstand", &i.revision, MAX_FIELD_CHARS)?;
-    check_value("Die Blattangabe", &i.sheet_of, MAX_FIELD_CHARS)?;
-    check_value("Das Format", &i.format, MAX_FIELD_CHARS)?;
-    check_value("Der Maßstab", &i.scale, MAX_FIELD_CHARS)?;
-    check_value("Das Gewicht", &i.weight, MAX_FIELD_CHARS)?;
+    let f = MAX_FIELD_CHARS;
+    check_text(|| tr!("drawing-what-created"), &i.created, f)?;
+    check_value(|| tr!("drawing-what-number"), &i.number, f)?;
+    check_value(|| tr!("drawing-what-title"), &i.title, MAX_TITLE_CHARS)?;
+    check_value(|| tr!("drawing-what-subtitle"), &i.subtitle, f)?;
+    check_value(|| tr!("drawing-what-doc-type"), &i.doc_type, f)?;
+    check_value(|| tr!("drawing-what-status"), &i.status, f)?;
+    check_value(|| tr!("drawing-what-issued"), &i.issued, f)?;
+    check_value(|| tr!("drawing-what-revision"), &i.revision, f)?;
+    check_value(|| tr!("drawing-what-sheet-of"), &i.sheet_of, f)?;
+    check_value(|| tr!("drawing-what-format"), &i.format, f)?;
+    check_value(|| tr!("drawing-what-scale"), &i.scale, f)?;
+    check_value(|| tr!("drawing-what-weight"), &i.weight, f)?;
     check_notes(&i.notes)?;
     if i.revisions.len() > MAX_REVISIONS {
-        return Err(TOO_MANY_REVISIONS.to_string());
+        return Err(too_many_revisions());
     }
     for r in &i.revisions {
-        check_value("Der Änderungsbuchstabe", &r.letter, MAX_FIELD_CHARS)?;
+        check_value(|| tr!("drawing-what-rev-letter"), &r.letter, f)?;
         check_text(
-            "Die Beschreibung der Änderung",
+            || tr!("drawing-what-rev-description"),
             &r.description,
             MAX_REVISION_CHARS,
         )?;
-        check_text("Das Datum der Änderung", &r.date, MAX_FIELD_CHARS)?;
-        check_text("Der Name bei der Änderung", &r.name, MAX_FIELD_CHARS)?;
+        check_text(|| tr!("drawing-what-rev-date"), &r.date, f)?;
+        check_text(|| tr!("drawing-what-rev-name"), &r.name, f)?;
     }
     Ok(())
 }
 
 pub fn validate_project_info(p: &ProjectInfo) -> Result<(), String> {
-    check_text("Der Benutzername", &p.login, MAX_FIELD_CHARS)?;
-    check_value("Der Eigentümer", &p.owner, MAX_FIELD_CHARS)?;
-    check_value("Der Ersteller", &p.creator, MAX_FIELD_CHARS)?;
-    check_value("Der Prüfer", &p.checked, MAX_FIELD_CHARS)?;
-    check_value("Die Freigabe", &p.approved, MAX_FIELD_CHARS)?;
-    check_value("Der Werkstoff", &p.material, MAX_FIELD_CHARS)?;
-    check_value("Die Allgemeintoleranz", &p.tolerance, MAX_FIELD_CHARS)?;
+    let f = MAX_FIELD_CHARS;
+    check_text(|| tr!("drawing-what-login"), &p.login, f)?;
+    check_value(|| tr!("drawing-what-owner"), &p.owner, f)?;
+    check_value(|| tr!("drawing-what-creator"), &p.creator, f)?;
+    check_value(|| tr!("drawing-what-checked"), &p.checked, f)?;
+    check_value(|| tr!("drawing-what-approved"), &p.approved, f)?;
+    check_value(|| tr!("drawing-what-material"), &p.material, f)?;
+    check_value(|| tr!("drawing-what-tolerance"), &p.tolerance, f)?;
     check_notes(&p.notes)
 }
 
@@ -339,10 +370,14 @@ pub fn resolve_texts(
         v.map_or(auto, |v| v.resolve(auto)).to_string()
     };
     let auto_number = format!("{}-{:02}", ctx.doc_name, ctx.index);
-    let auto_sheet = format!("{} von {}", ctx.index, ctx.count);
+    let auto_sheet = tr!(
+        "drawing-sheet-of",
+        index = ctx.index.to_string(),
+        count = ctx.count.to_string()
+    );
     let auto_doc_type = match d.kind {
-        DrawingKind::PartsList { .. } => PARTS_DOC_TYPE,
-        DrawingKind::Views => DEFAULT_DOC_TYPE,
+        DrawingKind::PartsList { .. } => parts_doc_type(),
+        DrawingKind::Views => default_doc_type(),
     };
     let auto_scale = main.map_or_else(|| DASH.to_string(), |s| s.label());
     let issued_auto = info.map_or(DASH, |i| i.created.as_str());
@@ -361,11 +396,11 @@ pub fn resolve_texts(
     fields.insert(TitleField::Subtitle, pick(info.map(|i| &i.subtitle), ""));
     fields.insert(
         TitleField::DocType,
-        pick(info.map(|i| &i.doc_type), auto_doc_type),
+        pick(info.map(|i| &i.doc_type), &auto_doc_type),
     );
     fields.insert(
         TitleField::Status,
-        pick(info.map(|i| &i.status), DEFAULT_STATUS),
+        pick(info.map(|i| &i.status), &default_status()),
     );
     fields.insert(
         TitleField::Issued,
@@ -409,7 +444,7 @@ pub fn resolve_texts(
     fields.insert(TitleField::Approved, proj(|p| &p.approved, ""));
     fields.insert(TitleField::Material, proj(|p| &p.material, DASH));
     fields.insert(TitleField::Weight, pick(info.map(|i| &i.weight), DASH));
-    fields.insert(TitleField::Language, LANGUAGE.to_string());
+    fields.insert(TitleField::Language, language());
 
     let tolerance = project.map_or(DEFAULT_TOLERANCE, |p| {
         p.tolerance.resolve(DEFAULT_TOLERANCE)

@@ -1,43 +1,61 @@
-//! Fehler der Zeichnungserzeugung (deutsche Meldungen).
+//! Fehler der Zeichnungserzeugung (Meldungen in der aktuellen Sprache).
 
 use planora_exchange::ExchangeError;
+use planora_i18n::tr;
 
-/// Fehler beim Berechnen oder Schreiben einer Zeichnung.
+/// Fehler beim Berechnen oder Schreiben einer Zeichnung. Der Text entsteht in der aktuellen
+/// Sprache ([`planora_i18n::current`]).
 #[derive(Debug, thiserror::Error)]
+#[error("{}", self.text())]
 pub enum DrawError {
-    #[error("Es gibt keinen Körper, der sich zeichnen lässt.")]
     NoBodies,
-    #[error("Alle Körper sind Netze; eine Zeichnung braucht exakte Körper.")]
     MeshBodiesOnly,
-    #[error(
-        "Bei „{0}“ lässt sich nicht sicher sagen, ob die Linie verdeckt ist. Ein anderer Maßstab hilft nicht; eine andere Ansicht kann gehen."
-    )]
     AmbiguousVisibility(String),
     /// Eine Arbeitsgrenze ist überschritten; die Zahl kann Striche, Teilstücke, Paartests,
     /// Sichtprüfungen oder Umrisspunkte zählen.
-    #[error("Der Körper ist für diese Ansicht zu aufwendig ({0} Arbeitsschritte).")]
     TooComplex(u64),
-    #[error("Die Schnittebene trifft den Körper nicht.")]
     SectionMisses,
-    #[error("Bei „{0}“ lässt sich der Schnitt nicht berechnen.")]
     SectionFailed(String),
-    #[error("Ein Wert im Körper ist keine gültige Zahl.")]
     NonFinite,
-    #[error("Abgebrochen.")]
     Cancelled,
-    #[error("{}", io_text(.0))]
     Io(#[from] std::io::Error),
-    #[error("Der Körper ist fehlerhaft: {0}")]
     InvalidBody(String),
-    #[error("Das wird nicht unterstützt: {0}")]
     Unsupported(String),
+}
+
+impl DrawError {
+    /// Die Meldung in der aktuellen Sprache.
+    fn text(&self) -> String {
+        match self {
+            DrawError::NoBodies => tr!("drawing-no-bodies"),
+            DrawError::MeshBodiesOnly => tr!("drawing-mesh-bodies-only"),
+            DrawError::AmbiguousVisibility(what) => {
+                tr!("drawing-err-ambiguous", what = what.as_str())
+            }
+            DrawError::TooComplex(n) => tr!("drawing-err-too-complex", n = n.to_string()),
+            DrawError::SectionMisses => tr!("drawing-err-section-misses"),
+            DrawError::SectionFailed(what) => {
+                tr!("drawing-err-section-failed", what = what.as_str())
+            }
+            DrawError::NonFinite => tr!("drawing-err-non-finite"),
+            DrawError::Cancelled => tr!("drawing-err-cancelled"),
+            DrawError::Io(e) => io_text(e),
+            DrawError::InvalidBody(detail) => {
+                tr!("drawing-err-invalid-body", detail = detail.as_str())
+            }
+            DrawError::Unsupported(detail) => {
+                tr!("drawing-err-unsupported", detail = detail.as_str())
+            }
+        }
+    }
 }
 
 /// Meldung zu einem Schreibfehler; Windows-Fehler 32/33 (Datei gesperrt) bekommen einen Hinweis.
 fn io_text(e: &std::io::Error) -> String {
-    let mut t = format!("Die Datei lässt sich nicht schreiben: {e}");
+    let mut t = tr!("drawing-err-io", msg = e.to_string());
     if matches!(e.raw_os_error(), Some(32 | 33)) {
-        t.push_str(" Ist die Datei in einem anderen Programm geöffnet? Bitte dort schließen.");
+        t.push(' ');
+        t.push_str(&tr!("drawing-err-io-locked"));
     }
     t
 }

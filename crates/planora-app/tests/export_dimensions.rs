@@ -1158,7 +1158,7 @@ fn every_view_kind_exports_without_marks_on_isometric() {
                 "{:?}",
                 svg.group_ids
             );
-            assert!(!svg.paths_of(name).collect::<Vec<_>>().is_empty());
+            assert!(!svg.paths_of(&name).collect::<Vec<_>>().is_empty());
         }
     }
     let mut d = dialog(&s, DXF);
@@ -1169,13 +1169,13 @@ fn every_view_kind_exports_without_marks_on_isometric() {
         let name = kind.label();
         let marks: usize = ["MASSE", "MITTEL", "MASSE_FEHLT"]
             .iter()
-            .map(|l| dxf_count(&dxf, name, l))
+            .map(|l| dxf_count(&dxf, &name, l))
             .sum();
         if kind.is_normal() {
-            assert!(dxf_count(&dxf, name, "MITTEL") > 0, "{name}");
+            assert!(dxf_count(&dxf, &name, "MITTEL") > 0, "{name}");
         } else {
             assert_eq!(marks, 0, "{name}");
-            assert!(dxf_count(&dxf, name, "SICHTBAR") > 0, "{name}");
+            assert!(dxf_count(&dxf, &name, "SICHTBAR") > 0, "{name}");
         }
     }
     let _ = fs::remove_dir_all(&dir);

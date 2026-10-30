@@ -28,6 +28,7 @@ use crate::model::ViewKind;
 use crate::stroke::{Stroke, StrokeOrigin};
 use crate::{DrawBody, ViewLines};
 use planora_exchange::Progress;
+use planora_i18n::tr;
 use planora_kernel::boolean::boolean;
 use planora_kernel::primitives::make_box;
 use planora_kernel::{BoolOp, BooleanError, Curve, Face, Id, Loop, Solid, Surface};
@@ -492,9 +493,7 @@ pub fn compute_section(
         return Err(DrawError::NonFinite);
     }
     if plane.axis().is_none() {
-        return Err(DrawError::Unsupported(
-            "Ein Schnitt braucht eine der sechs Normansichten.".into(),
-        ));
+        return Err(DrawError::Unsupported(tr!("drawing-err-section-normal")));
     }
     progress.set_total(bodies.len() as u64);
     let data = cut_all(bodies, plane, progress)?;

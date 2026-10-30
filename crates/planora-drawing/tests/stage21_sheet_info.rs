@@ -178,7 +178,7 @@ fn revisions_and_state() {
         );
     }
     let err = info(&mut d).add_revision("2026-10-17", "dg").unwrap_err();
-    assert_eq!(err, TOO_MANY_REVISIONS);
+    assert_eq!(err, too_many_revisions());
     assert!(err.contains("höchstens 23 Änderungen"));
     assert_eq!(info(&mut d).revisions.len(), 23);
     let t = texts(&d, None);

@@ -5,7 +5,7 @@ use crate::model::Document;
 use crate::parts_sheets::{follow_page_delete, page_of, parts_sheet_rename};
 use planora_drawing::basis::Basis;
 use planora_drawing::model::{Balloon, BalloonId};
-use planora_drawing::parts::{BodyKey, MAX_BALLOONS, parts_sheet_name};
+use planora_drawing::parts::{BodyKey, MAX_BALLOONS, is_parts_sheet_name};
 use planora_drawing::sheet_info::{ProjectInfo, SheetInfo, Stamp, validate_project_info};
 use planora_drawing::{
     Drawing, DrawingId, DrawingKind, MAX_SECTIONS, Placement, Projection, SECTION_LETTERS, Scale,
@@ -514,9 +514,12 @@ impl Document {
         if pages.iter().enumerate().any(|(i, p)| *p != i as u32 + 1) {
             return Err(bad(tr!("feature-parts-pages-gap")));
         }
-        if drawings.iter().any(|d| {
-            page_of(d).is_some_and(|p| name_key(&d.name) != name_key(&parts_sheet_name(p)))
-        }) {
+        // Stücklistenblätter erkennt man an ihrer Art; ihr Name entstand in der Sprache beim
+        // Anlegen und gilt in jeder verfügbaren Sprache.
+        if drawings
+            .iter()
+            .any(|d| page_of(d).is_some_and(|p| !is_parts_sheet_name(&d.name, p)))
+        {
             return Err(bad(tr!("feature-parts-sheet-name")));
         }
         self.drawings = drawings;

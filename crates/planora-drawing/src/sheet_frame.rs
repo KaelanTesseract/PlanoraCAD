@@ -11,6 +11,7 @@
 
 use crate::model::{Projection, Sheet};
 use crate::parts::PARTS_ON_SHEET;
+use planora_i18n::tr;
 use planora_math::DVec2;
 
 /// Lange Blattseite des Bezugsformats A3; dort ist der Faktor 1.
@@ -134,26 +135,26 @@ impl TitleField {
         TitleField::Language,
     ];
 
-    /// Feldname im Schriftfeld.
-    pub fn label(self) -> &'static str {
+    /// Feldname im Schriftfeld in der aktuellen Sprache.
+    pub fn label(self) -> String {
         match self {
-            TitleField::Owner => "Eigentümer",
-            TitleField::Number => "Zeichnungsnummer",
-            TitleField::Title => "Titel",
-            TitleField::Subtitle => "Zusatztitel",
-            TitleField::DocType => "Dokumentart",
-            TitleField::Status => "Dokumentstatus",
-            TitleField::Issued => "Ausgabedatum",
-            TitleField::Revision => "Index",
-            TitleField::SheetOf => "Blatt",
-            TitleField::Format => "Format",
-            TitleField::Scale => "Maßstab",
-            TitleField::Creator => "Erstellt",
-            TitleField::Checked => "Geprüft",
-            TitleField::Approved => "Freigabe",
-            TitleField::Material => "Werkstoff",
-            TitleField::Weight => "Gewicht",
-            TitleField::Language => "Sprache",
+            TitleField::Owner => tr!("sheet-field-owner"),
+            TitleField::Number => tr!("sheet-field-number"),
+            TitleField::Title => tr!("sheet-field-title"),
+            TitleField::Subtitle => tr!("sheet-field-subtitle"),
+            TitleField::DocType => tr!("sheet-field-doc-type"),
+            TitleField::Status => tr!("sheet-field-status"),
+            TitleField::Issued => tr!("sheet-field-issued"),
+            TitleField::Revision => tr!("drawing-tb-revision"),
+            TitleField::SheetOf => tr!("sheet-field-sheet-of"),
+            TitleField::Format => tr!("sheet-field-format"),
+            TitleField::Scale => tr!("sheet-field-scale"),
+            TitleField::Creator => tr!("sheet-field-creator"),
+            TitleField::Checked => tr!("sheet-field-checked"),
+            TitleField::Approved => tr!("sheet-field-approved"),
+            TitleField::Material => tr!("sheet-field-material"),
+            TitleField::Weight => tr!("sheet-field-weight"),
+            TitleField::Language => tr!("sheet-field-language"),
         }
     }
 
@@ -166,6 +167,23 @@ impl TitleField {
     }
 }
 
+/// Beschriftung einer Zelle des Schriftfelds: ein Feld oder die Projektion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CellLabel {
+    Field(TitleField),
+    Projection,
+}
+
+impl CellLabel {
+    /// Text der Beschriftung in der aktuellen Sprache.
+    pub fn text(self) -> String {
+        match self {
+            CellLabel::Field(f) => f.label(),
+            CellLabel::Projection => tr!("drawing-tb-projection"),
+        }
+    }
+}
+
 /// Zelle des Schriftfelds, relativ zu dessen linker unterer Ecke.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TitleCell {
@@ -173,7 +191,7 @@ pub struct TitleCell {
     pub x1: f64,
     pub y0: f64,
     pub y1: f64,
-    pub label: &'static str,
+    pub label: CellLabel,
 }
 
 /// Platz für den Inhalt eines Felds, relativ zur linken unteren Ecke des Schriftfelds.
@@ -186,35 +204,41 @@ pub struct TextSlot {
     pub height: f64,
 }
 
-const fn cell(x0: f64, x1: f64, y0: f64, y1: f64, label: &'static str) -> TitleCell {
+const fn cell(x0: f64, x1: f64, y0: f64, y1: f64, field: TitleField) -> TitleCell {
     TitleCell {
         x0,
         x1,
         y0,
         y1,
-        label,
+        label: CellLabel::Field(field),
     }
 }
 
 /// Die 17 Zellen des Schriftfelds (mit der Projektion), Zeilen von unten.
 pub const TITLE_CELLS: [TitleCell; 17] = [
-    cell(0.0, 100.0, 0.0, 10.0, "Zeichnungsnummer"),
-    cell(100.0, 125.0, 0.0, 10.0, "Index"),
-    cell(125.0, 155.0, 0.0, 10.0, "Blatt"),
-    cell(155.0, 180.0, 0.0, 10.0, "Sprache"),
-    cell(0.0, 180.0, 10.0, 28.0, "Titel"),
-    cell(0.0, 80.0, 28.0, 38.0, "Eigentümer"),
-    cell(80.0, 135.0, 28.0, 38.0, "Dokumentart"),
-    cell(135.0, 180.0, 28.0, 38.0, "Dokumentstatus"),
-    cell(0.0, 45.0, 38.0, 47.0, "Erstellt"),
-    cell(45.0, 90.0, 38.0, 47.0, "Geprüft"),
-    cell(90.0, 135.0, 38.0, 47.0, "Freigabe"),
-    cell(135.0, 180.0, 38.0, 47.0, "Ausgabedatum"),
-    cell(0.0, 60.0, 47.0, 56.0, "Werkstoff"),
-    cell(60.0, 90.0, 47.0, 56.0, "Gewicht"),
-    cell(90.0, 115.0, 47.0, 56.0, "Maßstab"),
-    cell(115.0, 135.0, 47.0, 56.0, "Format"),
-    cell(135.0, 180.0, 47.0, 56.0, "Projektion"),
+    cell(0.0, 100.0, 0.0, 10.0, TitleField::Number),
+    cell(100.0, 125.0, 0.0, 10.0, TitleField::Revision),
+    cell(125.0, 155.0, 0.0, 10.0, TitleField::SheetOf),
+    cell(155.0, 180.0, 0.0, 10.0, TitleField::Language),
+    cell(0.0, 180.0, 10.0, 28.0, TitleField::Title),
+    cell(0.0, 80.0, 28.0, 38.0, TitleField::Owner),
+    cell(80.0, 135.0, 28.0, 38.0, TitleField::DocType),
+    cell(135.0, 180.0, 28.0, 38.0, TitleField::Status),
+    cell(0.0, 45.0, 38.0, 47.0, TitleField::Creator),
+    cell(45.0, 90.0, 38.0, 47.0, TitleField::Checked),
+    cell(90.0, 135.0, 38.0, 47.0, TitleField::Approved),
+    cell(135.0, 180.0, 38.0, 47.0, TitleField::Issued),
+    cell(0.0, 60.0, 47.0, 56.0, TitleField::Material),
+    cell(60.0, 90.0, 47.0, 56.0, TitleField::Weight),
+    cell(90.0, 115.0, 47.0, 56.0, TitleField::Scale),
+    cell(115.0, 135.0, 47.0, 56.0, TitleField::Format),
+    TitleCell {
+        x0: 135.0,
+        x1: 180.0,
+        y0: 47.0,
+        y1: 56.0,
+        label: CellLabel::Projection,
+    },
 ];
 
 const fn slot(field: TitleField, c: usize, baseline: f64, height: f64) -> TextSlot {

@@ -7,6 +7,7 @@ use crate::pdf::{PdfMeta, pdf_bytes};
 use crate::sheet::SheetModel;
 use crate::{dxf_string, svg_string};
 use planora_exchange::{Progress, temp_path};
+use planora_i18n::tr;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
@@ -32,12 +33,12 @@ impl DrawingFormat {
         }
     }
 
-    /// Name für die Auswahl.
-    pub fn label(self) -> &'static str {
+    /// Name für die Auswahl in der aktuellen Sprache.
+    pub fn label(self) -> String {
         match self {
-            DrawingFormat::Svg => "Zeichnung als SVG",
-            DrawingFormat::Dxf => "Zeichnung als DXF",
-            DrawingFormat::Pdf => "Zeichnung als PDF",
+            DrawingFormat::Svg => tr!("export-format-svg"),
+            DrawingFormat::Dxf => tr!("export-format-dxf"),
+            DrawingFormat::Pdf => tr!("export-format-pdf"),
         }
     }
 }

@@ -790,7 +790,7 @@ fn the_toolbar_menu_adds_a_view() {
     let shot = h.idle(&mut st);
     for k in ViewKind::ALL {
         assert!(
-            shot.pos_of(k.label()).is_some(),
+            shot.pos_of(&k.label()).is_some(),
             "„{}“ fehlt:\n{}",
             k.label(),
             shot.text

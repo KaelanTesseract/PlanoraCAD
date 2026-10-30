@@ -37,13 +37,25 @@ pub fn lost_text() -> Msg {
     crate::msg!("drawing-lost")
 }
 
-/// Meldung zu einem Fehler der Zeichnungsrechnung: die häufigen Fälle mit Id, alles andere als
-/// Text der Bibliothek `planora-drawing` (deutsch bis Task 14).
+/// Meldung zu einem Fehler der Zeichnungsrechnung mit den Ids der Bibliothek `planora-drawing`
+/// (übersetzt erst beim Zeichnen). Mitgegebene Gründe und Namen (z. B. bei
+/// [`DrawError::Unsupported`]) bleiben in der Sprache, in der der Fehler entstand; Schreibfehler
+/// als Text (die Meldung des Betriebssystems lässt sich nicht nachträglich übersetzen).
 pub fn draw_error_msg(e: &DrawError) -> Msg {
     match e {
         DrawError::NoBodies => crate::msg!("drawing-no-bodies"),
         DrawError::MeshBodiesOnly => crate::msg!("drawing-mesh-bodies-only"),
-        other => Msg::Raw(other.to_string()),
+        DrawError::AmbiguousVisibility(what) => crate::msg!("drawing-err-ambiguous", what = what),
+        DrawError::TooComplex(n) => crate::msg!("drawing-err-too-complex", n = n.to_string()),
+        DrawError::SectionMisses => crate::msg!("drawing-err-section-misses"),
+        DrawError::SectionFailed(what) => crate::msg!("drawing-err-section-failed", what = what),
+        DrawError::NonFinite => crate::msg!("drawing-err-non-finite"),
+        DrawError::Cancelled => crate::msg!("drawing-err-cancelled"),
+        DrawError::InvalidBody(detail) => {
+            crate::msg!("drawing-err-invalid-body", detail = detail)
+        }
+        DrawError::Unsupported(detail) => crate::msg!("drawing-err-unsupported", detail = detail),
+        DrawError::Io(_) => Msg::Raw(e.to_string()),
     }
 }
 

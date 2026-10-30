@@ -5,8 +5,7 @@
 //!
 //! Meldungen, die das Fenster in seinem Zustand behält, werden unter Deutsch angelegt und im
 //! nächsten Bild unter Englisch gezeichnet. Texte der Bibliotheken (`planora-drawing`,
-//! `planora-step`, `planora-exchange`) bleiben bis Task 12/14 deutsch; sie sind unten in `LATER`
-//! aufgeführt und nur von der Deutsch-Prüfung ausgenommen.
+//! `planora-step`, `planora-exchange`) entstehen seit Task 12/14 in der Sprache des Threads.
 
 mod common;
 
@@ -36,11 +35,6 @@ const A3_QUER: Sheet = Sheet {
     paper: Paper::A3,
     landscape: true,
 };
-
-/// Texte der Bibliotheken, die bis Task 12/14 deutsch bleiben und einen deutschen Buchstaben
-/// enthalten: der Grund einer gescheiterten Ansicht („Der Körper ist für diese Ansicht zu
-/// aufwendig …“).
-const LATER: [&str; 1] = ["Der Körper ist für diese Ansicht"];
 
 fn cube() -> ExchangeMesh {
     ExchangeMesh {
@@ -175,7 +169,7 @@ fn fail_top(b: &[DrawBody], k: ViewKind, p: &Progress) -> Result<ViewLines, Draw
 }
 
 fn check(what: &str, seen: &[Seen]) {
-    assert_english(what, seen, &[], &LATER);
+    assert_english(what, seen, &[], &[]);
 }
 
 fn has_prefix(seen: &[Seen], prefix: &str) -> bool {

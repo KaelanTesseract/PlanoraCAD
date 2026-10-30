@@ -16,8 +16,8 @@ use planora_app::workspace::Workspace;
 use planora_app::{drawing_view, fonts, icons, shell_panels, theme, viewport};
 use planora_drawing::sheet_frame::TitleField;
 use planora_drawing::sheet_info::{
-    DEFAULT_TOLERANCE, FieldValue, NotesValue, Stamp, TOO_MANY_REVISIONS, default_notes,
-    resolve_texts,
+    DEFAULT_TOLERANCE, FieldValue, NotesValue, Stamp, default_notes, resolve_texts,
+    too_many_revisions,
 };
 use planora_drawing::{DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewId, ViewKind};
 use planora_feature::SketchPlane;
@@ -830,9 +830,9 @@ fn revisions_in_the_dialog() {
     assert_eq!(h.dialog().sheet.revisions.len(), 23);
     assert_eq!(
         h.dialog().message.as_ref().map(|m| m.text()).as_deref(),
-        Some(TOO_MANY_REVISIONS)
+        Some(too_many_revisions().as_str())
     );
-    h.scroll_to(TOO_MANY_REVISIONS);
+    h.scroll_to(&too_many_revisions());
     // Die Meldung verschwindet mit dem Löschen einer Zeile.
     let shot = h.settle();
     let rect = h.dialog_rect().unwrap();

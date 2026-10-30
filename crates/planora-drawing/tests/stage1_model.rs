@@ -195,7 +195,7 @@ fn paper_sizes_follow_iso_216() {
 
 #[test]
 fn view_kind_labels_order_and_normal_views() {
-    let labels: Vec<&str> = ViewKind::ALL.iter().map(|k| k.label()).collect();
+    let labels: Vec<String> = ViewKind::ALL.iter().map(|k| k.label()).collect();
     assert_eq!(
         labels,
         [

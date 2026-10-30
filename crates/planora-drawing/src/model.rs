@@ -5,6 +5,7 @@ use crate::dimension::{DimId, DimSpec};
 use crate::parts::BodyKey;
 use crate::section::SectionPlane;
 use crate::sheet_frame::sheet_scale;
+use planora_i18n::{localize_decimal, tr};
 use std::collections::BTreeMap;
 
 /// Kennung einer Zeichnung im Dokument.
@@ -104,16 +105,16 @@ impl ViewKind {
         ViewKind::Isometric,
     ];
 
-    /// Name für die Oberfläche.
-    pub fn label(self) -> &'static str {
+    /// Name für Blatt und Oberfläche in der aktuellen Sprache.
+    pub fn label(self) -> String {
         match self {
-            ViewKind::Front => "Vorne",
-            ViewKind::Back => "Hinten",
-            ViewKind::Left => "Links",
-            ViewKind::Right => "Rechts",
-            ViewKind::Top => "Oben",
-            ViewKind::Bottom => "Unten",
-            ViewKind::Isometric => "Isometrisch",
+            ViewKind::Front => tr!("drawing-view-front"),
+            ViewKind::Back => tr!("drawing-view-back"),
+            ViewKind::Left => tr!("drawing-view-left"),
+            ViewKind::Right => tr!("drawing-view-right"),
+            ViewKind::Top => tr!("drawing-view-top"),
+            ViewKind::Bottom => tr!("drawing-view-bottom"),
+            ViewKind::Isometric => tr!("drawing-view-isometric"),
         }
     }
 
@@ -317,15 +318,14 @@ pub fn sections_ok_on(d: &Drawing, sheet: Sheet) -> Result<(), String> {
         let Some(sec) = &v.section else { continue };
         let spacing = sec.hatch.spacing;
         if spacing > MAX_HATCH_SPACING {
-            return Err(format!(
-                "Der Schraffurabstand ist zu groß (höchstens {MAX_HATCH_SPACING} mm)."
+            return Err(tr!(
+                "drawing-err-hatch-spacing-max",
+                max = localize_decimal(&MAX_HATCH_SPACING.to_string())
             ));
         }
         if spacing.is_nan() || spacing * f < MIN_HATCH_SHEET_MM {
             let name = names.get(&v.id).cloned().unwrap_or_default();
-            return Err(format!(
-                "Der Schraffurabstand von „{name}“ wäre auf diesem Blatt kleiner als 0,5 mm."
-            ));
+            return Err(tr!("drawing-err-hatch-spacing-min", name = name));
         }
     }
     Ok(())
@@ -442,16 +442,17 @@ impl Drawing {
         let source = self
             .view(parent)
             .filter(|p| p.kind.is_normal() && p.section.is_none())
-            .ok_or("Ein Schnitt geht nur aus einer geraden Ansicht.")?;
+            .ok_or_else(|| tr!("drawing-err-section-source"))?;
         let scale = source.scale;
         if self.views.iter().filter(|v| v.section.is_some()).count() >= MAX_SECTIONS {
-            return Err(format!(
-                "Es sind höchstens {MAX_SECTIONS} Schnitte je Blatt möglich."
+            return Err(tr!(
+                "drawing-err-sections-max",
+                max = MAX_SECTIONS.to_string()
             ));
         }
         let letter = self
             .next_letter()
-            .ok_or("Es sind keine Schnittbuchstaben mehr frei.")?;
+            .ok_or_else(|| tr!("drawing-err-section-letters"))?;
         let id = ViewId(self.next_view);
         self.next_view += 1;
         self.views.push(ViewSpec {
@@ -490,16 +491,19 @@ impl Drawing {
         out
     }
 
-    /// Namen der Ansichten wie auf dem Blatt: Normansichten mit ihrer Art, bei mehrfach gleicher
-    /// Art mit Nummer („Oben 2“); Schnitte zählen dabei nicht mit und heißen „Schnitt A–A“.
+    /// Namen der Ansichten wie auf dem Blatt, in der aktuellen Sprache: Normansichten mit ihrer
+    /// Art, bei mehrfach gleicher Art mit Nummer („Oben 2“); Schnitte zählen dabei nicht mit und
+    /// heißen „Schnitt A–A“.
     pub fn view_names(&self) -> BTreeMap<ViewId, String> {
         self.view_name_parts()
             .into_iter()
             .map(|(id, p)| {
                 let name = match p {
-                    ViewName::Section(l) => format!("Schnitt {0}\u{2013}{0}", l),
-                    ViewName::Kind(k, 1) => k.label().to_string(),
-                    ViewName::Kind(k, n) => format!("{} {}", k.label(), n),
+                    ViewName::Section(l) => crate::section_marks::section_view_name(l),
+                    ViewName::Kind(k, 1) => k.label(),
+                    ViewName::Kind(k, n) => {
+                        tr!("drawing-view-numbered", name = k.label(), n = n as usize)
+                    }
                 };
                 (id, name)
             })

@@ -49,13 +49,14 @@ pub use parts::{BodyKey, PartsCells, PartsRow, RowOverride};
 pub use pdf::{PdfMeta, pdf_bytes, write_pdf};
 pub use section::{SectionData, SectionLines, compute_section};
 pub use sheet_frame::{
-    PartsSpace, SheetLayout, SheetPen, TitleField, sheet_layout, sheet_layout_with,
+    CellLabel, PartsSpace, SheetLayout, SheetPen, TitleField, sheet_layout, sheet_layout_with,
 };
 pub use suggest::{Candidate, CandidateOrigin, dimension_key, suggest};
 pub use svg::{svg_string, write_svg};
 
 use limits::{MAX_PIECES, MAX_STROKES, geom_tol};
 use planora_exchange::Progress;
+use planora_i18n::tr;
 use std::cell::Cell;
 use stroke::{EdgeFaces, Stroke, StrokeOrigin};
 
@@ -103,12 +104,16 @@ pub struct ViewLines {
 /// Name eines Strichs für Meldungen.
 fn stroke_name(bodies: &[DrawBody], s: &Stroke) -> String {
     match s.origin {
-        StrokeOrigin::Edge { body, edge } => {
-            format!("{}, Kante {}", bodies[body].name, edge + 1)
-        }
-        StrokeOrigin::Silhouette { body, face } => {
-            format!("{}, Umriss von Fläche {}", bodies[body].name, face + 1)
-        }
+        StrokeOrigin::Edge { body, edge } => tr!(
+            "drawing-stroke-edge",
+            body = bodies[body].name.as_str(),
+            n = (edge + 1).to_string()
+        ),
+        StrokeOrigin::Silhouette { body, face } => tr!(
+            "drawing-stroke-silhouette",
+            body = bodies[body].name.as_str(),
+            n = (face + 1).to_string()
+        ),
     }
 }
 

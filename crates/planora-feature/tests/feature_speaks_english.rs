@@ -389,9 +389,7 @@ fn all_messages_speak_english() {
     assert!(en.len() >= 90, "zu wenige Texte: {}", en.len());
     assert_eq!(en.len(), de.len(), "gleiche Fälle in beiden Sprachen");
     for t in &en {
-        // Der Name der Stücklistenblätter kommt aus planora-drawing (`parts_sheet_name`) und
-        // wird dort erst mit dem Zeichnungs-Crate zweisprachig.
-        assert_english("Meldung", &t.replace("Stückliste", "Parts list"));
+        assert_english("Meldung", t);
     }
     // Gleich lauten nur Wörter, die in beiden Sprachen gleich sind.
     const SAME_IN_BOTH: [&str; 7] = [

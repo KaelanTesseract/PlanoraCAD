@@ -51,8 +51,8 @@
 //!   `/Author` als UTF-16BE-Hex mit BOM (fehlen, wenn leer), `/CreationDate (D:JJJJMMTT000000Z)`
 //!   nur bei gültigem Datum `JJJJ-MM-TT`. Keine `/ID`, kein `/ModDate`: gleiche Eingabe ergibt
 //!   gleiche Bytes.
-//! * **P8 Grenzen:** 0 Seiten → [`NO_PAGES`], mehr als [`MAX_PAGES`] → [`TOO_MANY_PAGES`], eine
-//!   Kante über [`MAX_PAGE_PT`] → [`PAGE_TOO_LARGE`].
+//! * **P8 Grenzen:** 0 Seiten → [`no_pages`], mehr als [`MAX_PAGES`] → [`too_many_pages`], eine
+//!   Kante über [`MAX_PAGE_PT`] → [`page_too_large`].
 
 use crate::Visibility;
 use crate::annotate::{
@@ -65,6 +65,7 @@ use crate::pdf_font::{pdf_text_width, winansi_byte};
 use crate::sheet::SheetModel;
 use crate::sheet_frame::sheet_scale;
 use crate::svg::fitted_cubics;
+use planora_i18n::tr;
 use planora_math::{DVec2, PI, TAU};
 use std::fmt::Write as _;
 use std::io::Write;
@@ -77,9 +78,24 @@ pub const MAX_PAGES: usize = 200;
 pub const MAX_PAGE_PT: f64 = 14_400.0;
 /// Name des Programms in den Dokumenteigenschaften.
 pub const PRODUCER: &str = "PlanoraCAD";
-pub const NO_PAGES: &str = "Es gibt kein Blatt für die PDF.";
-pub const TOO_MANY_PAGES: &str = "Eine PDF kann höchstens 200 Blätter enthalten.";
-pub const PAGE_TOO_LARGE: &str = "Das Blatt ist für eine PDF zu groß.";
+
+/// Meldung ohne Blatt.
+pub fn no_pages() -> String {
+    tr!("drawing-err-pdf-no-pages")
+}
+
+/// Meldung bei mehr als [`MAX_PAGES`] Blättern.
+pub fn too_many_pages() -> String {
+    tr!(
+        "drawing-err-pdf-too-many-pages",
+        max = MAX_PAGES.to_string()
+    )
+}
+
+/// Meldung bei einem Blatt über [`MAX_PAGE_PT`].
+pub fn page_too_large() -> String {
+    tr!("drawing-err-pdf-page-too-large")
+}
 
 /// Sichtbare Linien (mm).
 const VISIBLE_W: f64 = 0.5;
@@ -102,23 +118,22 @@ pub struct PdfMeta {
 /// Zeichen für eine Meldung: sichtbare Zeichen in Anführungszeichen, unsichtbare oder
 /// verwechselbare (Leerzeichen, Steuer-, Format-, Kombinationszeichen, Sonderstriche) als „U+XXXX“.
 pub fn pdf_char_label(c: char) -> String {
+    pdf_char_code(c).unwrap_or_else(|| tr!("drawing-quoted", name = c.to_string()))
+}
+
+/// „U+XXXX“ für ein unsichtbares oder verwechselbares Zeichen (siehe [`pdf_char_label`]), sonst
+/// `None` (dann steht das Zeichen selbst in Anführungszeichen der Sprache).
+pub fn pdf_char_code(c: char) -> Option<String> {
     let u = c as u32;
     let hidden = c.is_whitespace()
         || c.is_control()
         || matches!(u, 0x300..=0x36F | 0x2010..=0x2015 | 0x200B..=0x200F | 0x2028..=0x202F | 0x2060..=0x206F | 0xFEFF);
-    if hidden {
-        format!("U+{u:04X}")
-    } else {
-        format!("„{c}“")
-    }
+    hidden.then(|| format!("U+{u:04X}"))
 }
 
 /// Meldung für ein Zeichen, das eine PDF nicht ausgeben kann.
 pub fn pdf_char_message(c: char) -> String {
-    format!(
-        "Das Zeichen {} lässt sich in einer PDF nicht ausgeben.",
-        pdf_char_label(c)
-    )
+    tr!("drawing-err-pdf-char", char = pdf_char_label(c))
 }
 
 /// Zahl auf vier Nachkommastellen, ohne Exponent und ohne nachgestellte Nullen; `-0` wird
@@ -188,10 +203,10 @@ pub fn write_pdf(
 /// Die Blätter als PDF-Datei (eine Seite je Blatt).
 pub fn pdf_bytes(pages: &[&SheetModel], meta: &PdfMeta) -> Result<Vec<u8>, DrawError> {
     if pages.is_empty() {
-        return Err(DrawError::Unsupported(NO_PAGES.into()));
+        return Err(DrawError::Unsupported(no_pages()));
     }
     if pages.len() > MAX_PAGES {
-        return Err(DrawError::Unsupported(TOO_MANY_PAGES.into()));
+        return Err(DrawError::Unsupported(too_many_pages()));
     }
     let mut objects: Vec<String> = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".into(),
@@ -204,7 +219,7 @@ pub fn pdf_bytes(pages: &[&SheetModel], meta: &PdfMeta) -> Result<Vec<u8>, DrawE
         let (w, h) = model.sheet.size_mm();
         let (w, h) = (w * PT_PER_MM, h * PT_PER_MM);
         if !fits_page_pt(w, h) {
-            return Err(DrawError::Unsupported(PAGE_TOO_LARGE.into()));
+            return Err(DrawError::Unsupported(page_too_large()));
         }
         let content = page_content(model)?;
         let (page, stream) = (5 + 2 * i, 6 + 2 * i);

@@ -328,7 +328,7 @@ fn pole_of_a_freeform_face_is_named_not_guessed() {
     // Genauer: Von vorne läuft der Umriss (Meridian) durch den Pol → benannte Meldung, auch in
     // der Gesamtrechnung.
     assert!(
-        matches!(r, Err(planora_drawing::DrawError::Unsupported(ref m)) if m == POLE_MESSAGE),
+        matches!(r, Err(planora_drawing::DrawError::Unsupported(ref m)) if *m == pole_message()),
         "{:?}",
         r.as_ref().map(|v| v.pieces.len())
     );

@@ -5,6 +5,7 @@ use crate::DrawBody;
 use crate::basis::Basis;
 use crate::error::DrawError;
 use crate::limits::{MAX_RAW_STROKES, SMOOTH_ANGLE, geom_tol};
+use planora_i18n::tr;
 use planora_kernel::{Curve, Edge, Face, Id, Solid, Surface};
 use planora_math::{DVec2, DVec3};
 
@@ -232,7 +233,7 @@ pub fn edge_strokes(
             }
             let faces = &uses[ei];
             if faces.len() < 2 {
-                return Err(DrawError::InvalidBody("Kante ohne zwei Flächen".into()));
+                return Err(DrawError::InvalidBody(tr!("drawing-err-edge-faces")));
             }
             // Naht: alle Halbkanten in derselben Fläche.
             if faces.iter().all(|&f| f == faces[0]) {

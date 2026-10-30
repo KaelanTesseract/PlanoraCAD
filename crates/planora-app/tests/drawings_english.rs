@@ -4,9 +4,9 @@
 //! gezeichnet, ohne Fenster. Kein Test ruft `set_language` oder `set_global` (Ruling 4): die
 //! Sprache gilt nur für den Thread des Tests.
 //!
-//! Texte der Bibliotheken `planora-drawing` und `planora-feature` (Fehlertexte, Vorgaben des
-//! Schriftfelds, Spaltenköpfe der Stückliste) bleiben bis Task 14 deutsch; sie sind unten in
-//! `LATER` aufgeführt und nur von der Deutsch-Prüfung ausgenommen.
+//! Seit Task 14 spricht auch das Blatt selbst (Schriftfeld, Vorgaben, Änderungstabelle,
+//! Stückliste, Schnittnamen, Maßzahlen) die Sprache des Threads; geprüft wird der ganze
+//! Zeichnungsbereich. Benutzertexte des Fixtures („Blatt 1“, „Platte“) sind ohne Umlaute.
 
 mod common;
 
@@ -37,12 +37,6 @@ const A4_QUER: Sheet = Sheet {
     paper: Paper::A4,
     landscape: true,
 };
-
-/// Texte aus `planora-drawing` und `planora-feature`, die bis Task 14 deutsch bleiben und einen
-/// deutschen Buchstaben enthalten: Vorgabehinweise des Schriftfelds („Oberflächen Ra …“). Ohne
-/// solche Buchstaben, aber ebenfalls deutsch: „Fertigungszeichnung“, „in Arbeit“, „1 von 1“ und
-/// die Spaltenköpfe der Stückliste.
-const LATER: [&str; 1] = ["Oberflächen"];
 
 struct Rig {
     ctx: egui::Context,
@@ -147,7 +141,7 @@ fn assert_english(what: &str, seen: &[Seen]) {
             clip: s.clip,
         })
         .collect();
-    common::assert_english(what, &kept, &[], &LATER);
+    common::assert_english(what, &kept, &[], &[]);
 }
 
 fn key(f: FeatureId) -> BodyKey {
@@ -221,24 +215,6 @@ fn fixture() -> Fixture {
         front,
         top,
     }
-}
-
-/// Nur die Texte der schwebenden Felder des Zeichnungsbereichs (das Blatt selbst zeigt Texte der
-/// Bibliothek `planora-drawing`, deutsch bis Task 14).
-fn fields_only(ctx: &egui::Context, seen: &[Seen]) -> Vec<Seen> {
-    let rects: Vec<Rect> = planora_app::shell_panels::field_rects(ctx)
-        .into_iter()
-        .filter(|(n, _)| ["Werkzeugfeld", "Ansichtsfeld", "Hinweisfeld"].contains(n))
-        .map(|(_, r)| r)
-        .collect();
-    seen.iter()
-        .filter(|s| rects.iter().any(|r| r.contains(s.rect.center())))
-        .map(|s| Seen {
-            text: s.text.clone(),
-            rect: s.rect,
-            clip: s.clip,
-        })
-        .collect()
 }
 
 /// Tabs des Browsers: Zeichnungen, Maße und Positionen der offenen Zeichnung.
@@ -376,13 +352,29 @@ fn drawing_area_speaks_english() {
             ..
         } = fixture();
         let mut rig = Rig::new();
+        // Der ganze Zeichnungsbereich: schwebende Felder und das Blatt selbst.
         let area = |rig: &mut Rig, st: &mut AppState| {
-            let seen = rig.settle(|ui| drawing_view::show_with(ui, st, true));
-            fields_only(&rig.ctx, &seen)
+            rig.settle(|ui| drawing_view::show_with(ui, st, true))
         };
 
         // Werkzeugfeld, Hinweisfeld, Ansichtsfeld ohne Auswahl.
         let seen = area(&mut rig, &mut st);
+        // Blatt: Schriftfeld mit Feldnamen und Vorgaben in der Sprache des Threads.
+        assert_has(
+            "Blatt",
+            &seen,
+            &[
+                "Drawing number",
+                "Sheet",
+                "Language",
+                "en",
+                "1 of 1",
+                "Document type",
+                "Manufacturing drawing",
+                "in progress",
+                "Projection",
+            ],
+        );
         assert_has(
             "Zeichnungsbereich",
             &seen,
