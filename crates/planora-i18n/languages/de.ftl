@@ -1008,3 +1008,311 @@ sketch-mirror-do = Spiegeln
 sketch-offset-x = Versatz x
 sketch-offset-y = Versatz y
 sketch-pattern-count = Anzahl Kopien
+
+## Zeichnungen
+drawing-lost = Die Berechnung wurde unerwartet beendet.
+drawing-no-bodies = Es gibt keinen Körper, der sich zeichnen lässt.
+drawing-mesh-bodies-only = Alle Körper sind Netze; eine Zeichnung braucht exakte Körper.
+drawing-meshes-skipped = Netz-Körper werden nicht gezeichnet: { $names }.
+drawing-sketch-blocked = Erst die Skizze beenden.
+drawing-add-read-only = In einer alten Version lässt sich nichts hinzufügen.
+drawing-read-only = In einer alten Version lässt sich nichts ändern.
+drawing-name-empty = Bitte einen Namen eingeben.
+drawing-name-duplicate = Eine Zeichnung mit diesem Namen gibt es schon.
+drawing-projection-first = Erstwinkel (Europa)
+drawing-projection-third = Dritter Winkel (USA)
+drawing-suggested-name = Zeichnung { $n }
+drawing-missing = Die Zeichnung fehlt.
+drawing-new-title = Neue Zeichnung
+drawing-new-sheet = Blatt
+drawing-new-name = Name
+drawing-new-paper = Papier
+drawing-new-landscape = Querformat
+drawing-new-views = Ansichten
+drawing-new-base-view = Grundansicht
+drawing-scale = Maßstab
+drawing-menu-new = Neue Zeichnung …
+drawing-menu-open = Öffnen: { $name }
+drawing-menu-to-model = Zum 3D-Modell
+drawing-empty = Noch keine Zeichnung. Über „Zeichnung“ im Menü lässt sich eine anlegen.
+drawing-gone-view = Die Zeichnung oder Ansicht gibt es nicht mehr.
+drawing-follow-page-delete = Ein Folgeblatt der Stückliste lässt sich nicht einzeln löschen. Es verschwindet von selbst, wenn die Zeilen auf weniger Blätter passen.
+drawing-parts-sheet-rename = Stücklistenblätter lassen sich nicht umbenennen.
+drawing-detail = { $paper } { $orientation }, { $projection }
+drawing-landscape = quer
+drawing-portrait = hoch
+drawing-angle-first = Erstwinkel
+drawing-angle-third = Dritter Winkel
+drawing-del-parts = Stückliste löschen?
+drawing-del-parts-pages = Stückliste mit { $n } Blättern löschen?
+drawing-del-ask = { $views ->
+    [0] Zeichnung „{ $name }“ löschen?
+    [one] Zeichnung „{ $name }“ mit 1 Ansicht löschen?
+   *[other] Zeichnung „{ $name }“ mit { $views } Ansichten löschen?
+}
+drawing-del-section-line = die Schnittlinie in „{ $source }“
+drawing-del-derived-views = die abgeleiteten Ansichten ({ $names })
+drawing-del-dims = { $n ->
+    [one] 1 Maß
+   *[other] { $n } Maße
+}
+drawing-del-list-1 = { $a }
+drawing-del-list-2 = { $a } und { $b }
+drawing-del-list-3 = { $a }, { $b } und { $c }
+drawing-del-section = { $count ->
+    [one] Die Schnittansicht „{ $name }“ wird gelöscht. Mit ihr verschwindet { $list }.
+   *[other] Die Schnittansicht „{ $name }“ wird gelöscht. Mit ihr verschwinden { $list }.
+}
+drawing-del-view = Die Ansicht „{ $name }“ wird gelöscht.
+drawing-del-view-dims = Die Ansicht „{ $name }“ wird gelöscht, und { $dims }.
+drawing-del-view-derived = Die Ansicht „{ $name }“ hat abgeleitete Ansichten: { $names }. Sie werden mit gelöscht.
+drawing-del-view-derived-dims = Die Ansicht „{ $name }“ hat abgeleitete Ansichten: { $names }. Sie werden mit gelöscht, und { $dims }.
+drawing-del-dims-along = { $n ->
+    [one] 1 Maß wird mit gelöscht
+   *[other] { $n } Maße werden mit gelöscht
+}
+drawing-del-changed = Die Folgen des Löschens haben sich geändert; bitte prüfen
+drawing-row-tip = Doppelklick öffnet die Zeichnung; Rechtsklick zeigt weitere Befehle.
+drawing-view-row-tip = Klick öffnet die Zeichnung und wählt die Ansicht.
+drawing-hide-hidden = Verdeckte Kanten ausblenden
+drawing-show-hidden = Verdeckte Kanten zeigen
+drawing-fit-sheet = Blatt einpassen
+drawing-hint = Klicken wählt eine Ansicht oder ein Maß, Ziehen verschiebt es. Mausrad vergrößert, mittlere Maustaste oder Umschalt + Ziehen verschiebt das Blatt.
+drawing-centerlines = Mittellinien
+drawing-no-iso-centerlines = In der Isometrie gibt es keine Mittellinien; sie erscheinen nur in den geraden Ansichten (vorne, oben, seitlich).
+drawing-no-view-selected = Eine Ansicht auswählen.
+drawing-suggest = Maße vorschlagen
+drawing-lost-tip = Das Maß hat seinen Bezug verloren.
+drawing-parent-missing = Die Ausgangsansicht lässt sich nicht zeichnen.
+drawing-none-open = Es ist keine Zeichnung geöffnet.
+drawing-no-views-on-parts-sheet = Auf dem Stücklistenblatt gibt es keine Ansichten.
+drawing-view-front = Vorne
+drawing-view-back = Hinten
+drawing-view-left = Links
+drawing-view-right = Rechts
+drawing-view-top = Oben
+drawing-view-bottom = Unten
+drawing-view-isometric = Isometrisch
+drawing-view-section = Schnitt { $letter }–{ $letter }
+drawing-view-numbered = { $name } { $n }
+drawing-to-model = 3D-Modell
+drawing-current = Zeichnung: { $name }
+drawing-add-view = Ansicht hinzufügen
+drawing-zoom-out = Verkleinern
+drawing-zoom-in = Vergrößern
+drawing-suggest-tip-view = Setzt die wichtigsten Maße in die gewählte Ansicht.
+drawing-suggest-tip-all = Setzt die wichtigsten Maße in alle Ansichten.
+drawing-view-header = Ansicht
+drawing-view-title = Ansicht „{ $name }“
+drawing-view-delete = Ansicht löschen
+drawing-section-position = Schnittposition (mm)
+drawing-section-flip = Blickrichtung umdrehen
+drawing-section-hatch = Schraffur
+drawing-section-hatch-spacing = Schraffurabstand (mm)
+drawing-quoted = „{ $name }“
+drawing-views-failed = { $count ->
+    [one] Die Ansicht { $names } ließ sich nicht berechnen. { $reason }
+   *[other] Die Ansichten { $names } ließen sich nicht berechnen. { $reason }
+}
+drawing-views-failed-no-dims = { $count ->
+    [one] Die Ansicht { $names } ließ sich nicht berechnen und bekam keine Maße.
+   *[other] Die Ansichten { $names } ließen sich nicht berechnen und bekamen keine Maße.
+}
+drawing-pending = wird berechnet … { $percent } %
+
+## Maße
+dim-views-pending = Die Ansichten werden noch berechnet.
+dim-no-drawing = Die Zeichnung gibt es nicht.
+dim-no-view = Die Ansicht gibt es nicht.
+dim-no-isometric = In der isometrischen Ansicht gibt es keine Maße.
+dim-no-normal-view = Die Zeichnung hat noch keine Ansicht, in der sich Maße vorschlagen lassen.
+dim-not-bound = Ein vorgeschlagenes Maß ließ sich nicht sicher am Modell festmachen und wurde ausgelassen.
+dim-full = Die Zeichnung hat schon die Höchstzahl von { $max } Maßen.
+dim-added = { $n ->
+    [0] Es wurde kein Maß hinzugefügt.
+    [one] 1 Maß wurde hinzugefügt.
+   *[other] { $n } Maße wurden hinzugefügt.
+}
+dim-none-new = Es gibt keine neuen Maße vorzuschlagen.
+dim-note-lost = { $n ->
+    [one] 1 Maß hat seinen Bezug verloren.
+   *[other] { $n } Maße haben ihren Bezug verloren.
+}
+dim-note-outside = { $n ->
+    [one] 1 Maß liegt außerhalb des Blatts.
+   *[other] { $n } Maße liegen außerhalb des Blatts.
+}
+dim-rest-not-set = { $n ->
+    [one] 1 weiteres Maß wurde nicht gesetzt.
+   *[other] { $n } weitere Maße wurden nicht gesetzt.
+}
+dim-skipped = Ein Maß wurde ausgelassen: { $reason }
+dim-set = { $n ->
+    [one] 1 Maß wurde gesetzt.
+   *[other] { $n } Maße wurden gesetzt.
+}
+dim-not-dimensionable = Der Bezug lässt sich nicht bemaßen.
+dim-tool-no-isometric = In der Isometrie gibt es keine Maße.
+dim-angle-lines = Ein Winkelmaß braucht zwei gerade Kanten.
+dim-silhouette-note = Gemessen wird bis zur Mitte des Zylinders.
+dim-no-views-tip = Zuerst eine Ansicht anlegen.
+dim-missed = Bitte eine Linie der Ansicht anklicken.
+dim-tool = Maß
+dim-tool-tip = Maße von Hand setzen: Linien oder Ecken anklicken, dann die Maßlinie mit einem Klick ablegen.
+dim-read-only-tip = In einer alten Version lassen sich keine Maße setzen.
+dim-isometric-tip = In der Isometrie gibt es keine Maße. Fügen Sie eine Vorder-, Seiten- oder Draufsicht hinzu.
+dim-kind-horizontal = Waagerecht
+dim-kind-vertical = Senkrecht
+dim-kind-aligned = Schräg
+dim-kind-diameter = Durchmesser
+dim-kind-radius = Radius
+dim-kind-angle = Winkel
+dim-mode-off = Aus
+dim-mode-chain = Kette
+dim-mode-baseline = Bezugsmaße
+dim-incomplete = Die Maße sind unvollständig: nur { $set } von { $total } Maßen wurden gesetzt.
+dim-not-enough-lines = Es sind noch nicht genug Linien gewählt.
+dim-pick-mode-first = Bitte zuerst eine Maßart wählen.
+dim-no-group = Die Zeichnung hat keine freie Gruppennummer mehr.
+dim-hint-round = Kreis, Bogen oder Zylinderrand anklicken.
+dim-hint-angle-first = Erste gerade Kante anklicken.
+dim-hint-angle-second = Zweite gerade Kante anklicken.
+dim-hint-linear-first = Erste Kante oder Ecke anklicken.
+dim-hint-linear-second = Zweite Kante oder Ecke anklicken.
+dim-hint-chain-first = Ersten Punkt der Kette anklicken.
+dim-hint-chain-next = Nächsten Punkt der Kette anklicken.
+dim-hint-baseline-first = Bezugskante anklicken.
+dim-hint-baseline-target = Erstes Ziel anklicken.
+dim-hint-more = Weitere Punkte anklicken; Klick ins Leere, Doppelklick oder Esc setzt die Maße.
+dim-hint-place = Klicken legt die Maßlinie ab. Esc bricht ab.
+dim-gone = Das Maß gibt es nicht mehr.
+dim-placeholder-hint = <> steht für den berechneten Wert
+dim-lost-prefix = Das Maß hat seinen Bezug verloren
+dim-tol-none = Keine
+dim-tol-symmetric = Symmetrisch ±
+dim-tol-limits = Oben und unten
+dim-tol-limit-sizes = Grenzmaße
+dim-tol-fit = Passung
+dim-err-enter-number = Bitte eine Zahl eingeben.
+dim-err-not-a-number = „{ $text }“ ist keine Zahl.
+dim-err-too-big = Die Zahl darf höchstens { $max } betragen.
+dim-deviation = Abweichung
+dim-err-negative = Abweichung: Die Abweichung darf nicht negativ sein.
+dim-upper = Oben
+dim-lower = Unten
+dim-upper-deviation = Obere Abweichung
+dim-lower-deviation = Untere Abweichung
+dim-err-limits-order = { $label }: Die obere Abweichung darf nicht kleiner als die untere sein.
+dim-err-fit-empty = Passung: Bitte eine Passung eingeben.
+dim-err-fit-long = Passung: Der Text darf höchstens { $max } Zeichen haben.
+dim-err-text-long = Maßtext: Der Text darf höchstens { $max } Zeichen haben.
+dim-err-decimals = Nachkommastellen: Höchstens { $max } sind möglich.
+dim-edit-title = Maß bearbeiten
+dim-card-measure = Maß
+dim-card-tolerance = Toleranz
+dim-kind = Art
+dim-value = Wert
+dim-decimals = Nachkommastellen
+dim-text = Maßtext
+dim-tolerance-kind = Toleranzart
+dim-deviation-pm = Abweichung ±
+dim-limit-sizes-note = Gezeigt werden Höchstmaß und Mindestmaß.
+dim-delete = Maß löschen
+dim-empty = Noch keine Maße. Mit dem Werkzeug „Maß“ oder „Maße vorschlagen“ lassen sich welche anlegen.
+dim-chain-ask = Dieses Maß gehört zu einer Kette; die anderen Maße bleiben
+dim-no-result = Das Maß lässt sich nicht berechnen.
+dim-section = Maße
+dim-row-tip = Klick wählt das Maß; Doppelklick öffnet „Maß bearbeiten“; Rechtsklick zeigt weitere Befehle.
+dim-view = Ansehen
+
+## Positionsnummern
+balloon-tool = Position
+balloon-tool-tip = Ein Klick auf eine Linie eines Teils setzt eine Positionsnummer. Den Kreis kann man danach verschieben.
+balloon-hint = Auf eine Linie eines Teils klicken. Esc beendet.
+balloon-missed = Bitte eine Linie eines Teils anklicken.
+balloon-read-only-tip = In einer alten Version lassen sich keine Positionsnummern setzen.
+balloon-parts-sheet-tip = Auf dem Stücklistenblatt gibt es keine Positionsnummern.
+balloon-lost-tip = Das Teil zu dieser Positionsnummer gibt es nicht mehr.
+balloon-too-many = Es sind höchstens { $max } Positionsnummern je Zeichnung möglich.
+balloon-lost-note = { $n ->
+    [one] 1 Positionsnummer hat ihr Teil verloren.
+   *[other] { $n } Positionsnummern haben ihr Teil verloren.
+}
+balloon-empty = Noch keine Positionsnummern. Das Werkzeug „Position“ setzt welche.
+balloon-section = Positionen
+balloon-row-tip = Klick wählt die Positionsnummer; Rechtsklick zeigt weitere Befehle.
+balloon-row = Pos. { $n } – { $name }
+balloon-row-lost = Pos. ? – Teil fehlt
+
+## Schnitte
+section-tool = Schnitt
+section-tool-tip = Zwei Klicks in einer geraden Ansicht legen die Schnittlinie fest. Daraus entsteht eine Schnittansicht.
+section-hint-first = Anfang der Schnittlinie in einer geraden Ansicht anklicken. Esc beendet.
+section-hint-second = Ende der Schnittlinie anklicken. Die Linie rastet waagerecht oder senkrecht ein.
+section-not-from-here = Ein Schnitt geht nur aus einer geraden Ansicht.
+section-too-short = Bitte zwei verschiedene Punkte anklicken.
+section-full = Es sind höchstens { $max } Schnitte je Blatt möglich.
+section-nudged = Die Schnittebene lag genau auf einer Fläche oder Kante und wurde um 0,001 mm verschoben.
+section-read-only-tip = In einer alten Version lassen sich keine Schnitte anlegen.
+section-parts-sheet-tip = Auf dem Stücklistenblatt gibt es keine Schnitte.
+section-no-straight-tip = Für einen Schnitt braucht das Blatt eine gerade Ansicht.
+section-scale-locked-tip = Der Maßstab folgt der Ausgangsansicht.
+section-not-a-number = Bitte eine Zahl eingeben.
+
+## Blattangaben und Stückliste
+sheet-title = Blattangaben
+sheet-button = Blattangaben
+sheet-button-tip = Titel, Zeichnungsnummer, Änderungen und weitere Angaben des Schriftfelds bearbeiten.
+sheet-menu-entry = Blattangaben …
+sheet-no-drawing-open = Dafür zuerst eine Zeichnung öffnen.
+sheet-owner-missing = Bitte den Eigentümer eintragen. Er gehört auf jede Zeichnung.
+sheet-cut-warning = Passt nicht ganz ins Feld und wird auf dem Blatt gekürzt.
+sheet-revisions-on-sheet = Auf dem Blatt stehen die letzten 3 Änderungen.
+sheet-gone = Die Zeichnung gibt es nicht mehr.
+sheet-notes-full = Es sind höchstens { $max } Hinweiszeilen möglich.
+sheet-field-owner = Eigentümer
+sheet-field-number = Zeichnungsnummer
+sheet-field-title = Titel
+sheet-field-subtitle = Zusatztitel
+sheet-field-doc-type = Dokumentart
+sheet-field-status = Dokumentstatus
+sheet-field-issued = Ausgabedatum
+sheet-field-revision = Änderungsstand
+sheet-field-sheet-of = Blatt
+sheet-field-format = Format
+sheet-field-scale = Maßstab
+sheet-field-creator = Erstellt
+sheet-field-checked = Geprüft
+sheet-field-approved = Freigabe
+sheet-field-material = Werkstoff
+sheet-field-weight = Gewicht
+sheet-field-language = Sprache
+sheet-field-tolerance = Allgemeintoleranz
+sheet-section-project = Projekt
+sheet-section-sheet = Dieses Blatt
+sheet-section-revisions = Änderungen
+sheet-notes-all = Hinweise für alle Blätter
+sheet-notes-reset = Hinweise zurücksetzen
+sheet-notes-own = Eigene Hinweise für dieses Blatt
+sheet-no-revisions = Noch keine Änderungen.
+sheet-rev-letter = Buchstabe
+sheet-rev-description = Beschreibung
+sheet-rev-date = Datum
+sheet-rev-name = Name
+sheet-rev-add = Änderung hinzufügen
+sheet-line-delete = Zeile löschen
+sheet-line-add = Zeile hinzufügen
+sheet-parts-error = Stückliste: { $reason }
+sheet-parts-too-many-overrides = Die Stückliste darf höchstens { $max } eigene Zeilentexte haben
+sheet-too-many-revisions = Es sind höchstens { $max } Änderungen möglich.
+parts-section = Stückliste
+parts-switch = Stückliste auf diesem Blatt
+parts-too-many-on-sheet = Weitere Zeilen passen nicht aufs Blatt. Dafür gibt es das Stücklistenblatt.
+parts-too-many-rows = Mehr als { $max } Zeilen passen nicht auf die Stücklistenblätter.
+parts-none = Es gibt noch keine Teile.
+parts-create = Stücklistenblatt erzeugen
+parts-open = Stücklistenblatt öffnen
+parts-col-name = Benennung
+parts-col-qty = Menge
+parts-col-material = Werkstoff
+parts-col-note = Bemerkung

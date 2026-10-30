@@ -12,21 +12,28 @@ use crate::cards::card_row;
 use crate::dialog::{Dialog, DialogSize};
 use crate::dimension_browser::{lost_reason, request_delete_dimension};
 use crate::dimension_state::resolve_in;
-use crate::drawing_browser::READ_ONLY_HINT;
+use crate::drawing_browser::read_only_hint;
 use crate::state::AppState;
 use crate::theme;
 use planora_drawing::DrawingId;
 use planora_drawing::annotate::dimension_text;
 use planora_drawing::dimension::{DimId, DimKind, DimSpec, Tolerance};
 use planora_feature::{MAX_DECIMALS, MAX_DIM_TEXT_CHARS, MAX_FIT_CHARS, MAX_TOL_MM};
+use planora_i18n::tr;
 use std::cell::RefCell;
 
 /// Meldung, wenn das Maß inzwischen fehlt.
-const GONE: &str = "Das Maß gibt es nicht mehr.";
+fn gone() -> String {
+    tr!("dim-gone")
+}
 /// Hinweis zum eigenen Maßtext.
-pub const PLACEHOLDER_HINT: &str = "<> steht für den berechneten Wert";
+pub fn placeholder_hint() -> String {
+    tr!("dim-placeholder-hint")
+}
 /// Text neben dem Wert, wenn das Maß keinen Bezug mehr hat.
-const LOST_PREFIX: &str = "Das Maß hat seinen Bezug verloren";
+fn lost_prefix() -> String {
+    tr!("dim-lost-prefix")
+}
 
 /// Art der Toleranz in der Auswahl.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,26 +56,26 @@ impl ToleranceKind {
     ];
 
     /// Bezeichnung in der Oberfläche.
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            ToleranceKind::None => "Keine",
-            ToleranceKind::Symmetric => "Symmetrisch ±",
-            ToleranceKind::Limits => "Oben und unten",
-            ToleranceKind::LimitSizes => "Grenzmaße",
-            ToleranceKind::Fit => "Passung",
+            ToleranceKind::None => tr!("dim-tol-none"),
+            ToleranceKind::Symmetric => tr!("dim-tol-symmetric"),
+            ToleranceKind::Limits => tr!("dim-tol-limits"),
+            ToleranceKind::LimitSizes => tr!("dim-tol-limit-sizes"),
+            ToleranceKind::Fit => tr!("dim-tol-fit"),
         }
     }
 }
 
 /// Bezeichnung der Maßart in der Oberfläche.
-pub fn kind_label(kind: DimKind) -> &'static str {
+pub fn kind_label(kind: DimKind) -> String {
     match kind {
-        DimKind::Horizontal => "Waagerecht",
-        DimKind::Vertical => "Senkrecht",
-        DimKind::Aligned => "Schräg",
-        DimKind::Diameter => "Durchmesser",
-        DimKind::Radius => "Radius",
-        DimKind::Angle => "Winkel",
+        DimKind::Horizontal => tr!("dim-kind-horizontal"),
+        DimKind::Vertical => tr!("dim-kind-vertical"),
+        DimKind::Aligned => tr!("dim-kind-aligned"),
+        DimKind::Diameter => tr!("dim-kind-diameter"),
+        DimKind::Radius => tr!("dim-kind-radius"),
+        DimKind::Angle => tr!("dim-kind-angle"),
     }
 }
 
@@ -81,17 +88,20 @@ fn number_text(v: f64) -> String {
 fn parse_number(text: &str) -> Result<f64, String> {
     let t = text.trim();
     if t.is_empty() {
-        return Err("Bitte eine Zahl eingeben.".into());
+        return Err(tr!("dim-err-enter-number"));
     }
     let normal = t.replace('\u{2212}', "-").replace(',', ".");
     let v: f64 = normal
         .parse()
-        .map_err(|_| format!("„{t}“ ist keine Zahl."))?;
+        .map_err(|_| tr!("dim-err-not-a-number", text = t))?;
     if !v.is_finite() {
-        return Err(format!("„{t}“ ist keine Zahl."));
+        return Err(tr!("dim-err-not-a-number", text = t));
     }
     if v.abs() > MAX_TOL_MM {
-        return Err(format!("Die Zahl darf höchstens {MAX_TOL_MM} betragen."));
+        return Err(tr!(
+            "dim-err-too-big",
+            max = crate::msg::plain_number(MAX_TOL_MM)
+        ));
     }
     Ok(v)
 }
@@ -188,31 +198,30 @@ impl DimensionDialog {
                 0.0
             }
         };
+        let deviation = tr!("dim-deviation");
         // Leerzeichen am Rand zählen nicht: ein Text nur aus Leerzeichen ist „kein Text“.
         let fit = self.fit.trim();
         let tolerance = match self.kind {
             ToleranceKind::None => Tolerance::None,
             ToleranceKind::Symmetric => {
                 let ok = errors.len();
-                let v = number(&mut errors, "Abweichung", &self.symmetric);
+                let v = number(&mut errors, &deviation, &self.symmetric);
                 if errors.len() == ok && v < 0.0 {
-                    errors.push("Abweichung: Die Abweichung darf nicht negativ sein.".into());
+                    errors.push(tr!("dim-err-negative"));
                 }
                 Tolerance::Symmetric(v)
             }
             ToleranceKind::Limits | ToleranceKind::LimitSizes => {
                 let (up, low) = if self.kind == ToleranceKind::Limits {
-                    ("Oben", "Unten")
+                    (tr!("dim-upper"), tr!("dim-lower"))
                 } else {
-                    ("Obere Abweichung", "Untere Abweichung")
+                    (tr!("dim-upper-deviation"), tr!("dim-lower-deviation"))
                 };
                 let ok = errors.len();
-                let upper = number(&mut errors, up, &self.upper);
-                let lower = number(&mut errors, low, &self.lower);
+                let upper = number(&mut errors, &up, &self.upper);
+                let lower = number(&mut errors, &low, &self.lower);
                 if errors.len() == ok && upper < lower {
-                    errors.push(format!(
-                        "{up}: Die obere Abweichung darf nicht kleiner als die untere sein."
-                    ));
+                    errors.push(tr!("dim-err-limits-order", label = up));
                 }
                 if self.kind == ToleranceKind::Limits {
                     Tolerance::Limits { upper, lower }
@@ -224,22 +233,16 @@ impl DimensionDialog {
         };
         if self.kind == ToleranceKind::Fit {
             if fit.is_empty() {
-                errors.push("Passung: Bitte eine Passung eingeben.".into());
+                errors.push(tr!("dim-err-fit-empty"));
             } else if fit.chars().count() > MAX_FIT_CHARS {
-                errors.push(format!(
-                    "Passung: Der Text darf höchstens {MAX_FIT_CHARS} Zeichen haben."
-                ));
+                errors.push(tr!("dim-err-fit-long", max = MAX_FIT_CHARS));
             }
         }
         if self.text.trim().chars().count() > MAX_DIM_TEXT_CHARS {
-            errors.push(format!(
-                "Maßtext: Der Text darf höchstens {MAX_DIM_TEXT_CHARS} Zeichen haben."
-            ));
+            errors.push(tr!("dim-err-text-long", max = MAX_DIM_TEXT_CHARS));
         }
         if self.decimals > MAX_DECIMALS {
-            errors.push(format!(
-                "Nachkommastellen: Höchstens {MAX_DECIMALS} sind möglich."
-            ));
+            errors.push(tr!("dim-err-decimals", max = usize::from(MAX_DECIMALS)));
         }
         if !errors.is_empty() {
             return Err(errors);
@@ -258,7 +261,7 @@ impl DimensionDialog {
     /// Dokument unberührt.
     pub fn apply(&self, state: &mut AppState) -> Result<(), String> {
         if self.read_only {
-            return Err(READ_ONLY_HINT.into());
+            return Err(read_only_hint());
         }
         let (decimals, tolerance, text) = self.build().map_err(|e| e.join(" "))?;
         let Some(spec) = state
@@ -266,7 +269,7 @@ impl DimensionDialog {
             .drawing(self.drawing)
             .and_then(|d| d.dimension(self.dim))
         else {
-            return Err(GONE.into());
+            return Err(gone());
         };
         if spec.decimals == decimals && spec.tolerance == tolerance && spec.text_override == text {
             return Ok(());
@@ -325,19 +328,19 @@ impl DimensionDialog {
         let (mut open, mut close, mut apply, mut delete) = (true, false, false, false);
         let mut cards = Vec::new();
         let apply_ok = !read_only && errors.is_empty();
-        let response = Dialog::new("Maß bearbeiten", DialogSize::Wide)
+        let response = Dialog::new(tr!("dim-edit-title"), DialogSize::Wide)
             .open(&mut open)
             .show(ctx, |ui| {
                 let mut measure_card = |ui: &mut egui::Ui| {
-                    ui.strong("Maß");
+                    ui.strong(tr!("dim-card-measure"));
                     egui::Grid::new("planora-dimension-measure")
                         .num_columns(2)
                         .spacing([12.0, 8.0])
                         .show(ui, |ui| {
-                            ui.label("Art");
+                            ui.label(tr!("dim-kind"));
                             ui.label(kind_label(spec.kind));
                             ui.end_row();
-                            ui.label("Wert");
+                            ui.label(tr!("dim-value"));
                             match &value {
                                 Ok(v) => {
                                     ui.label(v);
@@ -347,7 +350,8 @@ impl DimensionDialog {
                                 }
                             }
                             ui.end_row();
-                            ui.label("Nachkommastellen");
+                            let decimals_label = tr!("dim-decimals");
+                            ui.label(&decimals_label);
                             let r = ui.add_enabled_ui(!read_only, |ui| {
                                 egui::ComboBox::from_id_salt("planora-dimension-decimals")
                                     .selected_text(decimals.to_string())
@@ -358,33 +362,34 @@ impl DimensionDialog {
                                     })
                                     .response
                             });
-                            note("Nachkommastellen", &r.inner);
+                            note(&decimals_label, &r.inner);
                             ui.end_row();
-                            ui.label("Maßtext");
+                            let text_label = tr!("dim-text");
+                            ui.label(&text_label);
                             let r = theme::text_field_enabled(
                                 ui,
                                 !read_only,
                                 egui::TextEdit::singleline(&mut text).desired_width(220.0),
                             );
-                            note("Maßtext", &r);
+                            note(&text_label, &r);
                             ui.end_row();
                         });
-                    ui.weak(PLACEHOLDER_HINT);
+                    ui.weak(placeholder_hint());
                     if let Err(reason) = &value {
                         ui.add_space(4.0);
                         ui.colored_label(
                             error_color(ui.visuals().dark_mode),
-                            format!("{LOST_PREFIX}: {reason}"),
+                            format!("{}: {reason}", lost_prefix()),
                         );
                     }
                 };
                 let mut tolerance_card = |ui: &mut egui::Ui| {
-                    ui.strong("Toleranz");
+                    ui.strong(tr!("dim-card-tolerance"));
                     egui::Grid::new("planora-dimension-tolerance")
                         .num_columns(2)
                         .spacing([12.0, 8.0])
                         .show(ui, |ui| {
-                            ui.label("Art");
+                            ui.label(tr!("dim-kind"));
                             let r = ui.add_enabled_ui(!read_only, |ui| {
                                 egui::ComboBox::from_id_salt("planora-dimension-tolerance-kind")
                                     .selected_text(kind.label())
@@ -395,7 +400,7 @@ impl DimensionDialog {
                                     })
                                     .response
                             });
-                            note("Toleranzart", &r.inner);
+                            note(&tr!("dim-tolerance-kind"), &r.inner);
                             ui.end_row();
                             let field = |ui: &mut egui::Ui, label: &str, value: &mut String| {
                                 ui.label(label);
@@ -410,23 +415,23 @@ impl DimensionDialog {
                             match kind {
                                 ToleranceKind::None => {}
                                 ToleranceKind::Symmetric => {
-                                    field(ui, "Abweichung ±", &mut symmetric);
+                                    field(ui, &tr!("dim-deviation-pm"), &mut symmetric);
                                 }
                                 ToleranceKind::Limits => {
-                                    field(ui, "Oben", &mut upper);
-                                    field(ui, "Unten", &mut lower);
+                                    field(ui, &tr!("dim-upper"), &mut upper);
+                                    field(ui, &tr!("dim-lower"), &mut lower);
                                 }
                                 ToleranceKind::LimitSizes => {
-                                    field(ui, "Obere Abweichung", &mut upper);
-                                    field(ui, "Untere Abweichung", &mut lower);
+                                    field(ui, &tr!("dim-upper-deviation"), &mut upper);
+                                    field(ui, &tr!("dim-lower-deviation"), &mut lower);
                                 }
                                 ToleranceKind::Fit => {
-                                    field(ui, "Passung", &mut fit);
+                                    field(ui, &tr!("dim-tol-fit"), &mut fit);
                                 }
                             }
                         });
                     if kind == ToleranceKind::LimitSizes {
-                        ui.weak("Gezeigt werden Höchstmaß und Mindestmaß.");
+                        ui.weak(tr!("dim-limit-sizes-note"));
                     }
                 };
                 let row: &mut [&mut dyn FnMut(&mut egui::Ui)] =
@@ -437,29 +442,35 @@ impl DimensionDialog {
                     ui.colored_label(error_color(ui.visuals().dark_mode), e);
                 }
                 if read_only {
-                    ui.weak(READ_ONLY_HINT);
+                    ui.weak(read_only_hint());
                 }
                 ui.separator();
                 ui.horizontal(|ui| {
-                    let r = ui.add_enabled(apply_ok, egui::Button::new("Übernehmen"));
-                    note("Übernehmen", &r);
+                    let apply_label = tr!("tree-apply");
+                    let r = ui.add_enabled(apply_ok, egui::Button::new(&apply_label));
+                    note(&apply_label, &r);
                     if r.clicked() {
                         apply = true;
                     }
                     if ui
-                        .button(if read_only { "Schließen" } else { "Abbrechen" })
+                        .button(if read_only {
+                            tr!("dialog-close")
+                        } else {
+                            tr!("common-cancel")
+                        })
                         .clicked()
                     {
                         close = true;
                     }
+                    let delete_label = tr!("dim-delete");
                     let r = ui.add_enabled(
                         !read_only,
                         egui::Button::new(
-                            egui::RichText::new("Maß löschen")
+                            egui::RichText::new(&delete_label)
                                 .color(error_color(ui.visuals().dark_mode)),
                         ),
                     );
-                    note("Maß löschen", &r);
+                    note(&delete_label, &r);
                     if r.clicked() {
                         delete = true;
                     }
@@ -481,7 +492,7 @@ impl DimensionDialog {
             match request_delete_dimension(state, self.drawing, self.dim) {
                 Ok(()) if state.pending_delete_dimension.is_none() => return false,
                 Ok(()) => {}
-                Err(e) => state.message = Some(e),
+                Err(e) => state.message = Some(e.text()),
             }
         }
         open && !close

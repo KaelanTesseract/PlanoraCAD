@@ -497,7 +497,7 @@ fn check_sheet_cells(
     check: &dyn Fn(&str, &str) -> Result<(), String>,
 ) -> Result<(), String> {
     for (field, text) in &texts.fields {
-        check(title_field_name(*field), text)?;
+        check(&title_field_name(*field), text)?;
     }
     for row in texts.visible_revisions() {
         let name = format!("Änderung {}", row[0]);

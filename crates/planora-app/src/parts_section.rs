@@ -11,7 +11,8 @@ use crate::drawing_browser::open_drawing;
 use crate::drawing_dialog::{PAPERS, drawing_menu_blocked, paper_label};
 use crate::icons::{self, Icon};
 use crate::mesh_body::warning_color;
-use crate::sheet_dialog::{CUT_WARNING, cell, length_label};
+use crate::msg::Msg;
+use crate::sheet_dialog::{cell, cut_warning, length_label};
 use crate::state::AppState;
 use crate::theme;
 use planora_drawing::parts::{
@@ -23,23 +24,37 @@ use planora_drawing::sheet_marks::parts_cell_is_cut;
 use planora_drawing::{
     BodyKey, DrawingId, DrawingKind, Paper, PartsCells, PartsRow, RowOverride, Sheet, SheetLayout,
 };
+use planora_i18n::tr;
 use std::collections::BTreeMap;
 
 /// Überschrift des Abschnitts.
-pub const SECTION: &str = "Stückliste";
+pub fn section() -> String {
+    tr!("parts-section")
+}
 /// Schalter der Stückliste auf dem Zeichnungsblatt.
-pub const SWITCH: &str = "Stückliste auf diesem Blatt";
+pub fn switch() -> String {
+    tr!("parts-switch")
+}
 /// Hinweis bei mehr Zeilen, als auf das Zeichnungsblatt passen.
-pub const TOO_MANY_ON_SHEET: &str =
-    "Weitere Zeilen passen nicht aufs Blatt. Dafür gibt es das Stücklistenblatt.";
+pub fn too_many_on_sheet() -> String {
+    tr!("parts-too-many-on-sheet")
+}
 /// Hinweis bei mehr Zeilen, als auf die Stücklistenblätter passen.
-pub const TOO_MANY_ROWS: &str = "Mehr als 200 Zeilen passen nicht auf die Stücklistenblätter.";
+pub fn too_many_rows() -> String {
+    tr!("parts-too-many-rows", max = MAX_PARTS_LIST_ROWS)
+}
 /// Text ohne Zeilen.
-pub const NO_PARTS: &str = "Es gibt noch keine Teile.";
+pub fn no_parts() -> String {
+    tr!("parts-none")
+}
 /// Knopf, solange es kein Stücklistenblatt gibt.
-pub const CREATE: &str = "Stücklistenblatt erzeugen";
+pub fn create() -> String {
+    tr!("parts-create")
+}
 /// Knopf, wenn es das Stücklistenblatt schon gibt.
-pub const OPEN: &str = "Stücklistenblatt öffnen";
+pub fn open() -> String {
+    tr!("parts-open")
+}
 
 /// Kopie der eigenen Zeilentexte und die Papierwahl für ein neues Stücklistenblatt.
 #[derive(Clone, Debug)]
@@ -86,19 +101,19 @@ impl PartsDraft {
 /// Legt das Stücklistenblatt (Seite 1 und die nötigen Folgeblätter) auf `sheet` an oder öffnet,
 /// wenn es schon eines gibt, dessen Seite 1; danach steht es im Arbeitsbereich. Im Skizzen-Modus
 /// geht es nicht.
-pub fn create_or_open(state: &mut AppState, sheet: Sheet) -> Result<DrawingId, String> {
+pub fn create_or_open(state: &mut AppState, sheet: Sheet) -> Result<DrawingId, Msg> {
     if let Some(why) = drawing_menu_blocked(state) {
-        return Err(why.into());
+        return Err(why);
     }
     let id = match state.document.parts_sheets().first() {
         Some(id) => *id,
         None => state
             .document
             .add_parts_sheets(sheet, &Stamp::now())
-            .map_err(|e| e.to_string())?,
+            .map_err(|e| Msg::Raw(e.to_string()))?,
     };
     if !open_drawing(state, id) {
-        return Err(state.message.clone().unwrap_or_default());
+        return Err(Msg::Raw(state.message.clone().unwrap_or_default()));
     }
     Ok(id)
 }
@@ -112,10 +127,19 @@ const LIMITS: [usize; 4] = [
 ];
 
 /// Bezeichnungen der Spalten im Fenster.
-pub(crate) const LABELS: [&str; 4] = ["Benennung", "Menge", "Werkstoff", "Bemerkung"];
+pub(crate) fn labels() -> [String; 4] {
+    [
+        tr!("parts-col-name"),
+        tr!("parts-col-qty"),
+        tr!("parts-col-material"),
+        tr!("parts-col-note"),
+    ]
+}
 
 /// Hinweis am Knopf, der die eigenen Texte einer Zeile entfernt.
-pub const RESET: &str = "Zurücksetzen";
+pub fn reset_tip() -> String {
+    tr!("keys-reset")
+}
 
 /// Breite der Spalte Pos. (nur Text).
 const POS_W: f32 = 40.0;
@@ -162,17 +186,17 @@ pub fn show_section(
     layout: &SheetLayout,
     has_sheets: bool,
 ) -> bool {
-    theme::section_header(ui, SECTION, theme::SUB_HEADER_H);
+    theme::section_header(ui, &section(), theme::SUB_HEADER_H);
     ui.add_space(theme::SPACE_1);
     let views = matches!(kind, DrawingKind::Views);
     if views {
-        ui.add(theme::Toggle::new(&mut info.parts_list, SWITCH));
+        ui.add(theme::Toggle::new(&mut info.parts_list, switch()));
     }
     // Stücklistenblatt: Papierwahl (nur zum Anlegen) und Knopf.
     let mut clicked = false;
     ui.horizontal(|ui| {
         if !has_sheets {
-            ui.label("Papier");
+            ui.label(tr!("drawing-new-paper"));
             egui::ComboBox::from_id_salt("planora-parts-paper")
                 .selected_text(paper_label(draft.paper))
                 .show_ui(ui, |ui| {
@@ -180,10 +204,13 @@ pub fn show_section(
                         ui.selectable_value(&mut draft.paper, p, paper_label(p));
                     }
                 });
-            ui.radio_value(&mut draft.landscape, false, "hoch");
-            ui.radio_value(&mut draft.landscape, true, "quer");
+            ui.radio_value(&mut draft.landscape, false, tr!("drawing-portrait"));
+            ui.radio_value(&mut draft.landscape, true, tr!("drawing-landscape"));
         }
-        if ui.button(if has_sheets { OPEN } else { CREATE }).clicked() {
+        if ui
+            .button(if has_sheets { open() } else { create() })
+            .clicked()
+        {
             clicked = true;
         }
     });
@@ -191,14 +218,14 @@ pub fn show_section(
         ui.add(egui::Label::new(egui::RichText::new(text).color(warning_color(dark))).wrap());
     };
     if rows.is_empty() {
-        ui.weak(NO_PARTS);
+        ui.weak(no_parts());
         return clicked;
     }
     if views && info.parts_list && rows.len() > PARTS_ON_SHEET {
-        warn(ui, TOO_MANY_ON_SHEET);
+        warn(ui, &too_many_on_sheet());
     }
     if rows.len() > MAX_PARTS_LIST_ROWS {
-        warn(ui, TOO_MANY_ROWS);
+        warn(ui, &too_many_rows());
     }
     ui.add_space(theme::SPACE_1);
 
@@ -268,7 +295,7 @@ pub fn show_section(
             cell(ui, widths[5], |ui| {
                 if ui
                     .add_visible(custom, egui::Button::new(icons::atom(Icon::Close)))
-                    .on_hover_text(RESET)
+                    .on_hover_text(reset_tip())
                     .clicked()
                 {
                     reset = true;
@@ -284,7 +311,7 @@ pub fn show_section(
                 ui.add_space(widths[0] + gap);
                 ui.scope(|ui| {
                     ui.set_max_width(row_w - widths[0] - gap);
-                    warn(ui, CUT_WARNING);
+                    warn(ui, &cut_warning());
                 });
             });
         }

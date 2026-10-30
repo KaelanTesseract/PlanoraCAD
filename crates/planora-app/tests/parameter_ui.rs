@@ -881,7 +881,11 @@ fn locked_while_sketch_open() {
 
     let mut s = AppState::new();
     param(&mut s, "Breite", "40", ParamUnit::Length);
-    locked_case(&mut s, true, planora_app::drawing_browser::READ_ONLY_HINT);
+    locked_case(
+        &mut s,
+        true,
+        &planora_app::drawing_browser::read_only_hint(),
+    );
 }
 
 // ---- (j) -------------------------------------------------------------------------------------

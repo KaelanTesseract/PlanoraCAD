@@ -553,18 +553,18 @@ fn empty_and_duplicate_names_block_creation_with_a_clear_text() {
     let mut d = NewDrawingDialog::new(&st);
     assert_eq!(d.name, "Zeichnung 2");
     for (name, msg) in [
-        ("", EMPTY_NAME),
-        ("   ", EMPTY_NAME),
-        ("zeichnung 1", DUPLICATE_NAME),
-        ("  ZEICHNUNG 1 ", DUPLICATE_NAME),
+        ("", empty_name()),
+        ("   ", empty_name()),
+        ("zeichnung 1", duplicate_name()),
+        ("  ZEICHNUNG 1 ", duplicate_name()),
     ] {
         d.name = name.into();
-        assert_eq!(d.error(&st), Some(msg), "{name:?}");
+        assert_eq!(d.error(&st), Some(msg.clone()), "{name:?}");
         let shot = dialog_shot(&mut h, &mut d, &mut st);
         let seen = shot
             .texts
             .iter()
-            .find(|t| t.text == msg)
+            .find(|t| t.text == msg.text())
             .unwrap_or_else(|| panic!("Meldung fehlt:\n{}", shot.text));
         assert_eq!(seen.color, ERROR_COLOR, "Meldung in Rot");
         let keep = dialog_click(&mut h, &mut d, &mut st, "Anlegen");
@@ -575,9 +575,9 @@ fn empty_and_duplicate_names_block_creation_with_a_clear_text() {
             "nichts angelegt bei {name:?}"
         );
     }
-    assert_eq!(EMPTY_NAME, "Bitte einen Namen eingeben.");
+    assert_eq!(empty_name().text(), "Bitte einen Namen eingeben.");
     assert_eq!(
-        DUPLICATE_NAME,
+        duplicate_name().text(),
         "Eine Zeichnung mit diesem Namen gibt es schon."
     );
     d.name = "Zeichnung 2".into();
@@ -638,7 +638,7 @@ fn drawing_area_shows_all_texts_in_german() {
         "Ansicht löschen",
         "1:1",
         too_complex.as_str(),
-        drawing_view::HINT,
+        &drawing_view::default_hint(),
     ] {
         assert!(shot.text.contains(word), "„{word}“ fehlt:\n{}", shot.text);
     }
@@ -676,7 +676,7 @@ fn drawing_area_shows_all_texts_in_german() {
     all.push_str(&first);
     dialog.name.clear();
     let empty = dialog_shot(&mut h4, &mut dialog, &mut st).text;
-    assert!(empty.contains(EMPTY_NAME), "{empty}");
+    assert!(empty.contains(&empty_name().text()), "{empty}");
     all.push_str(&empty);
 
     let bad = english_words(&all);
@@ -1003,7 +1003,7 @@ fn selecting_by_click_on_a_line_and_deleting_removes_children() {
     );
     let plan = st.pending_delete_drawing.clone().expect("Rückfrage");
     assert_eq!(
-        plan.text,
+        plan.text.text(),
         "Die Ansicht „Vorne“ hat abgeleitete Ansichten: Oben, Links. Sie werden mit gelöscht."
     );
     planora_app::drawing_browser::apply_delete(&mut st, &plan).unwrap();
@@ -1064,7 +1064,7 @@ fn toolbar_delete_of_a_view_with_dimensions_asks_first() {
     assert_eq!(st.drawing_ui.selected_view, Some(front), "Auswahl bleibt");
     let plan = st.pending_delete_drawing.clone().expect("Rückfrage");
     assert_eq!(
-        plan.text,
+        plan.text.text(),
         "Die Ansicht „Vorne“ wird gelöscht, und 2 Maße werden mit gelöscht."
     );
     planora_app::drawing_browser::apply_delete(&mut st, &plan).unwrap();

@@ -1025,3 +1025,311 @@ sketch-mirror-do = Mirror
 sketch-offset-x = Offset x
 sketch-offset-y = Offset y
 sketch-pattern-count = Number of copies
+
+## Drawings
+drawing-lost = The calculation ended unexpectedly.
+drawing-no-bodies = There is no body that can be drawn.
+drawing-mesh-bodies-only = All bodies are meshes; a drawing needs exact bodies.
+drawing-meshes-skipped = Mesh bodies are not drawn: { $names }.
+drawing-sketch-blocked = Finish the sketch first.
+drawing-add-read-only = Nothing can be added in an old version.
+drawing-read-only = Nothing can be changed in an old version.
+drawing-name-empty = Please enter a name.
+drawing-name-duplicate = A drawing with this name already exists.
+drawing-projection-first = First angle (Europe)
+drawing-projection-third = Third angle (USA)
+drawing-suggested-name = Drawing { $n }
+drawing-missing = The drawing is missing.
+drawing-new-title = New drawing
+drawing-new-sheet = Sheet
+drawing-new-name = Name
+drawing-new-paper = Paper
+drawing-new-landscape = Landscape
+drawing-new-views = Views
+drawing-new-base-view = Base view
+drawing-scale = Scale
+drawing-menu-new = New drawing …
+drawing-menu-open = Open: { $name }
+drawing-menu-to-model = To 3D model
+drawing-empty = No drawing yet. Use "Drawing" in the menu to create one.
+drawing-gone-view = The drawing or view no longer exists.
+drawing-follow-page-delete = A continuation sheet of the parts list cannot be deleted on its own. It disappears by itself when the rows fit on fewer sheets.
+drawing-parts-sheet-rename = Parts list sheets cannot be renamed.
+drawing-detail = { $paper } { $orientation }, { $projection }
+drawing-landscape = landscape
+drawing-portrait = portrait
+drawing-angle-first = First angle
+drawing-angle-third = Third angle
+drawing-del-parts = Delete the parts list?
+drawing-del-parts-pages = Delete the parts list with { $n } sheets?
+drawing-del-ask = { $views ->
+    [0] Delete drawing "{ $name }"?
+    [one] Delete drawing "{ $name }" with 1 view?
+   *[other] Delete drawing "{ $name }" with { $views } views?
+}
+drawing-del-section-line = the section line in "{ $source }"
+drawing-del-derived-views = the derived views ({ $names })
+drawing-del-dims = { $n ->
+    [one] 1 dimension
+   *[other] { $n } dimensions
+}
+drawing-del-list-1 = { $a }
+drawing-del-list-2 = { $a } and { $b }
+drawing-del-list-3 = { $a }, { $b } and { $c }
+drawing-del-section = { $count ->
+    [one] Section view "{ $name }" will be deleted. With it, { $list } disappears.
+   *[other] Section view "{ $name }" will be deleted. With it, { $list } disappear.
+}
+drawing-del-view = View "{ $name }" will be deleted.
+drawing-del-view-dims = View "{ $name }" will be deleted, and { $dims }.
+drawing-del-view-derived = View "{ $name }" has derived views: { $names }. They will be deleted too.
+drawing-del-view-derived-dims = View "{ $name }" has derived views: { $names }. They will be deleted too, and { $dims }.
+drawing-del-dims-along = { $n ->
+    [one] 1 dimension will be deleted too
+   *[other] { $n } dimensions will be deleted too
+}
+drawing-del-changed = The consequences of deleting have changed; please check
+drawing-row-tip = Double-click opens the drawing; right-click shows more commands.
+drawing-view-row-tip = Click opens the drawing and selects the view.
+drawing-hide-hidden = Hide hidden edges
+drawing-show-hidden = Show hidden edges
+drawing-fit-sheet = Fit sheet
+drawing-hint = Clicking selects a view or a dimension, dragging moves it. The mouse wheel zooms; the middle mouse button or Shift + drag pans the sheet.
+drawing-centerlines = Centerlines
+drawing-no-iso-centerlines = Isometric views have no centerlines; they only appear in the orthographic views (front, top, side).
+drawing-no-view-selected = Select a view.
+drawing-suggest = Suggest dimensions
+drawing-lost-tip = The dimension has lost its reference.
+drawing-parent-missing = The source view cannot be drawn.
+drawing-none-open = No drawing is open.
+drawing-no-views-on-parts-sheet = There are no views on the parts list sheet.
+drawing-view-front = Front
+drawing-view-back = Back
+drawing-view-left = Left
+drawing-view-right = Right
+drawing-view-top = Top
+drawing-view-bottom = Bottom
+drawing-view-isometric = Isometric
+drawing-view-section = Section { $letter }–{ $letter }
+drawing-view-numbered = { $name } { $n }
+drawing-to-model = 3D model
+drawing-current = Drawing: { $name }
+drawing-add-view = Add view
+drawing-zoom-out = Zoom out
+drawing-zoom-in = Zoom in
+drawing-suggest-tip-view = Places the most important dimensions in the selected view.
+drawing-suggest-tip-all = Places the most important dimensions in all views.
+drawing-view-header = View
+drawing-view-title = View "{ $name }"
+drawing-view-delete = Delete view
+drawing-section-position = Section position (mm)
+drawing-section-flip = Reverse viewing direction
+drawing-section-hatch = Hatching
+drawing-section-hatch-spacing = Hatch spacing (mm)
+drawing-quoted = "{ $name }"
+drawing-views-failed = { $count ->
+    [one] The view { $names } could not be calculated. { $reason }
+   *[other] The views { $names } could not be calculated. { $reason }
+}
+drawing-views-failed-no-dims = { $count ->
+    [one] The view { $names } could not be calculated and got no dimensions.
+   *[other] The views { $names } could not be calculated and got no dimensions.
+}
+drawing-pending = calculating … { $percent } %
+
+## Dimensions
+dim-views-pending = The views are still being calculated.
+dim-no-drawing = The drawing does not exist.
+dim-no-view = The view does not exist.
+dim-no-isometric = There are no dimensions in the isometric view.
+dim-no-normal-view = The drawing has no view yet in which dimensions can be suggested.
+dim-not-bound = A suggested dimension could not be attached to the model reliably and was skipped.
+dim-full = The drawing already has the maximum of { $max } dimensions.
+dim-added = { $n ->
+    [0] No dimension was added.
+    [one] 1 dimension was added.
+   *[other] { $n } dimensions were added.
+}
+dim-none-new = There are no new dimensions to suggest.
+dim-note-lost = { $n ->
+    [one] 1 dimension has lost its reference.
+   *[other] { $n } dimensions have lost their reference.
+}
+dim-note-outside = { $n ->
+    [one] 1 dimension is outside the sheet.
+   *[other] { $n } dimensions are outside the sheet.
+}
+dim-rest-not-set = { $n ->
+    [one] 1 more dimension was not placed.
+   *[other] { $n } more dimensions were not placed.
+}
+dim-skipped = A dimension was skipped: { $reason }
+dim-set = { $n ->
+    [one] 1 dimension was placed.
+   *[other] { $n } dimensions were placed.
+}
+dim-not-dimensionable = This reference cannot be dimensioned.
+dim-tool-no-isometric = There are no dimensions in an isometric view.
+dim-angle-lines = An angle dimension needs two straight edges.
+dim-silhouette-note = The measurement goes to the center of the cylinder.
+dim-no-views-tip = Create a view first.
+dim-missed = Please click a line of the view.
+dim-tool = Dimension
+dim-tool-tip = Place dimensions by hand: click lines or corners, then click to place the dimension line.
+dim-read-only-tip = Dimensions cannot be placed in an old version.
+dim-isometric-tip = There are no dimensions in an isometric view. Add a front, side or top view.
+dim-kind-horizontal = Horizontal
+dim-kind-vertical = Vertical
+dim-kind-aligned = Aligned
+dim-kind-diameter = Diameter
+dim-kind-radius = Radius
+dim-kind-angle = Angle
+dim-mode-off = Off
+dim-mode-chain = Chain
+dim-mode-baseline = Baseline
+dim-incomplete = The dimensions are incomplete: only { $set } of { $total } were placed.
+dim-not-enough-lines = Not enough lines are selected yet.
+dim-pick-mode-first = Please choose a dimension type first.
+dim-no-group = The drawing has no free group number left.
+dim-hint-round = Click a circle, an arc or the edge of a cylinder.
+dim-hint-angle-first = Click the first straight edge.
+dim-hint-angle-second = Click the second straight edge.
+dim-hint-linear-first = Click the first edge or corner.
+dim-hint-linear-second = Click the second edge or corner.
+dim-hint-chain-first = Click the first point of the chain.
+dim-hint-chain-next = Click the next point of the chain.
+dim-hint-baseline-first = Click the baseline edge.
+dim-hint-baseline-target = Click the first target.
+dim-hint-more = Click more points; a click on empty space, a double-click or Esc places the dimensions.
+dim-hint-place = Click to place the dimension line. Esc cancels.
+dim-gone = The dimension no longer exists.
+dim-placeholder-hint = <> stands for the calculated value
+dim-lost-prefix = The dimension has lost its reference
+dim-tol-none = None
+dim-tol-symmetric = Symmetric ±
+dim-tol-limits = Upper and lower
+dim-tol-limit-sizes = Limit sizes
+dim-tol-fit = Fit
+dim-err-enter-number = Please enter a number.
+dim-err-not-a-number = "{ $text }" is not a number.
+dim-err-too-big = The number must not exceed { $max }.
+dim-deviation = Deviation
+dim-err-negative = Deviation: The deviation must not be negative.
+dim-upper = Upper
+dim-lower = Lower
+dim-upper-deviation = Upper deviation
+dim-lower-deviation = Lower deviation
+dim-err-limits-order = { $label }: The upper deviation must not be smaller than the lower one.
+dim-err-fit-empty = Fit: Please enter a fit.
+dim-err-fit-long = Fit: The text may have at most { $max } characters.
+dim-err-text-long = Dimension text: The text may have at most { $max } characters.
+dim-err-decimals = Decimal places: At most { $max } are possible.
+dim-edit-title = Edit dimension
+dim-card-measure = Dimension
+dim-card-tolerance = Tolerance
+dim-kind = Type
+dim-value = Value
+dim-decimals = Decimal places
+dim-text = Dimension text
+dim-tolerance-kind = Tolerance type
+dim-deviation-pm = Deviation ±
+dim-limit-sizes-note = The maximum and minimum size are shown.
+dim-delete = Delete dimension
+dim-empty = No dimensions yet. Use the "Dimension" tool or "Suggest dimensions" to create some.
+dim-chain-ask = This dimension belongs to a chain; the other dimensions stay
+dim-no-result = The dimension cannot be calculated.
+dim-section = Dimensions
+dim-row-tip = Click selects the dimension; double-click opens "Edit dimension"; right-click shows more commands.
+dim-view = View
+
+## Balloons
+balloon-tool = Balloon
+balloon-tool-tip = Click a line of a part to place a balloon number. You can move the circle afterwards.
+balloon-hint = Click a line of a part. Esc ends the tool.
+balloon-missed = Please click a line of a part.
+balloon-read-only-tip = Balloon numbers cannot be placed in an old version.
+balloon-parts-sheet-tip = There are no balloon numbers on the parts list sheet.
+balloon-lost-tip = The part for this balloon number no longer exists.
+balloon-too-many = A drawing can have at most { $max } balloon numbers.
+balloon-lost-note = { $n ->
+    [one] 1 balloon number has lost its part.
+   *[other] { $n } balloon numbers have lost their part.
+}
+balloon-empty = No balloon numbers yet. The "Balloon" tool places them.
+balloon-section = Balloons
+balloon-row-tip = Click selects the balloon number; right-click shows more commands.
+balloon-row = Balloon { $n } – { $name }
+balloon-row-lost = Balloon ? – part missing
+
+## Sections
+section-tool = Section
+section-tool-tip = Two clicks in an orthographic view define the section line. This creates a section view.
+section-hint-first = Click the start of the section line in an orthographic view. Esc ends the tool.
+section-hint-second = Click the end of the section line. The line snaps to horizontal or vertical.
+section-not-from-here = A section can only be made from an orthographic view.
+section-too-short = Please click two different points.
+section-full = A sheet can have at most { $max } sections.
+section-nudged = The section plane lay exactly on a face or edge and was moved by 0.001 mm.
+section-read-only-tip = Sections cannot be created in an old version.
+section-parts-sheet-tip = There are no sections on the parts list sheet.
+section-no-straight-tip = A section needs an orthographic view on the sheet.
+section-scale-locked-tip = The scale follows the source view.
+section-not-a-number = Please enter a number.
+
+## Sheet info and parts list
+sheet-title = Sheet info
+sheet-button = Sheet info
+sheet-button-tip = Edit the title, drawing number, revisions and other title block entries.
+sheet-menu-entry = Sheet info …
+sheet-no-drawing-open = Open a drawing first.
+sheet-owner-missing = Please enter the owner. It belongs on every drawing.
+sheet-cut-warning = Does not fit the field completely and is shortened on the sheet.
+sheet-revisions-on-sheet = The sheet shows the last 3 revisions.
+sheet-gone = The drawing no longer exists.
+sheet-notes-full = At most { $max } note lines are possible.
+sheet-field-owner = Owner
+sheet-field-number = Drawing number
+sheet-field-title = Title
+sheet-field-subtitle = Subtitle
+sheet-field-doc-type = Document type
+sheet-field-status = Document status
+sheet-field-issued = Issue date
+sheet-field-revision = Revision
+sheet-field-sheet-of = Sheet
+sheet-field-format = Format
+sheet-field-scale = Scale
+sheet-field-creator = Created by
+sheet-field-checked = Checked by
+sheet-field-approved = Approved by
+sheet-field-material = Material
+sheet-field-weight = Weight
+sheet-field-language = Language
+sheet-field-tolerance = General tolerance
+sheet-section-project = Project
+sheet-section-sheet = This sheet
+sheet-section-revisions = Revisions
+sheet-notes-all = Notes for all sheets
+sheet-notes-reset = Reset notes
+sheet-notes-own = Own notes for this sheet
+sheet-no-revisions = No revisions yet.
+sheet-rev-letter = Letter
+sheet-rev-description = Description
+sheet-rev-date = Date
+sheet-rev-name = Name
+sheet-rev-add = Add revision
+sheet-line-delete = Delete line
+sheet-line-add = Add line
+sheet-parts-error = Parts list: { $reason }
+sheet-parts-too-many-overrides = The parts list can have at most { $max } custom row texts
+sheet-too-many-revisions = At most { $max } revisions are possible.
+parts-section = Parts list
+parts-switch = Parts list on this sheet
+parts-too-many-on-sheet = More rows do not fit on the sheet. Use the parts list sheet for them.
+parts-too-many-rows = More than { $max } rows do not fit on the parts list sheets.
+parts-none = There are no parts yet.
+parts-create = Create parts list sheet
+parts-open = Open parts list sheet
+parts-col-name = Description
+parts-col-qty = Quantity
+parts-col-material = Material
+parts-col-note = Remark

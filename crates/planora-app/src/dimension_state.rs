@@ -8,7 +8,8 @@
 //! übernommen statt neu gerechnet. Die Linien der Ansichten rechnet hier nichts: die kommen aus
 //! [`crate::drawing_state::DrawingUi`].
 
-use crate::drawing_state::ViewResult;
+use crate::drawing_state::{ViewResult, draw_error_msg};
+use crate::msg::Msg;
 use crate::state::{AppState, Body, BodyKind};
 use planora_drawing::annotate::{
     ARROW_HALF_W, ARROW_LEN, DEFAULT_OFFSET, DIM_STEP, Mark, ResolvedDims, TextAnchor, text_width,
@@ -34,19 +35,29 @@ use std::convert::Infallible;
 use std::sync::Arc;
 
 /// Meldung, solange die Ansichten für den Vorschlag noch nicht fertig sind.
-pub const VIEWS_PENDING: &str = "Die Ansichten werden noch berechnet.";
+pub fn views_pending() -> Msg {
+    crate::msg!("dim-views-pending")
+}
 /// Meldung, wenn es die Zeichnung nicht (mehr) gibt.
-pub const NO_DRAWING: &str = "Die Zeichnung gibt es nicht.";
+pub fn no_drawing() -> Msg {
+    crate::msg!("dim-no-drawing")
+}
 /// Meldung, wenn es die gewählte Ansicht nicht (mehr) gibt.
-pub const NO_VIEW: &str = "Die Ansicht gibt es nicht.";
+pub fn no_view() -> Msg {
+    crate::msg!("dim-no-view")
+}
 /// Meldung für die isometrische Ansicht.
-pub const NO_ISOMETRIC: &str = "In der isometrischen Ansicht gibt es keine Maße.";
+pub fn no_isometric() -> Msg {
+    crate::msg!("dim-no-isometric")
+}
 /// Meldung, wenn die Zeichnung keine Ansicht hat, in der sich Maße vorschlagen lassen.
-pub const NO_NORMAL_VIEW: &str =
-    "Die Zeichnung hat noch keine Ansicht, in der sich Maße vorschlagen lassen.";
+pub fn no_normal_view() -> Msg {
+    crate::msg!("dim-no-normal-view")
+}
 /// Meldung, wenn ein vorgeschlagenes Maß nicht sicher am Modell festzumachen ist.
-pub const NOT_BOUND: &str =
-    "Ein vorgeschlagenes Maß ließ sich nicht sicher am Modell festmachen und wurde ausgelassen.";
+pub fn not_bound() -> Msg {
+    crate::msg!("dim-not-bound")
+}
 /// Toleranz (Blatt-mm), um die eine Markierung über den Blattrand ragen darf, ohne als
 /// „außerhalb“ zu gelten (Rundung).
 const SHEET_EPS: f64 = 1e-9;
@@ -54,58 +65,47 @@ const SHEET_EPS: f64 = 1e-9;
 const ARC_SAMPLES: usize = 32;
 
 /// Meldung, wenn die Zeichnung schon die Höchstzahl an Maßen hat.
-pub fn full_text() -> String {
-    format!("Die Zeichnung hat schon die Höchstzahl von {MAX_DIMENSIONS} Maßen.")
+pub fn full_text() -> Msg {
+    crate::msg!("dim-full", max = MAX_DIMENSIONS)
 }
 
 /// Hinweise zu den Maßen einer Zeichnung.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct DimNotes {
     /// Maße, deren Bezug verloren ist (rot gezeichnet).
     pub lost: usize,
     /// Maße, die ganz oder teilweise außerhalb des Blatts liegen (trotzdem gezeichnet).
     pub outside: usize,
-    /// Die Hinweise als Sätze (leer, wenn alles in Ordnung ist).
-    pub texts: Vec<String>,
+    /// Die Hinweise als Sätze (leer, wenn alles in Ordnung ist); übersetzt erst beim Zeichnen.
+    pub texts: Vec<Msg>,
 }
 
 /// Ergebnis von [`suggest_for`].
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum SuggestOutcome {
     /// So viele Maße wurden hinzugefügt (alle Vorschläge).
     Added(usize),
     /// Ein Teil wurde hinzugefügt, der Rest ausgelassen; je ausgelassenem Grund ein Satz.
-    Partly { added: usize, skipped: Vec<String> },
+    Partly { added: usize, skipped: Vec<Msg> },
     /// Es gibt nichts Neues vorzuschlagen.
     NothingNew,
     /// Kein Vorschlag möglich; der Grund als Satz.
-    Unavailable(String),
+    Unavailable(Msg),
 }
 
 impl SuggestOutcome {
     /// Meldung für die Oberfläche.
-    pub fn message(&self) -> String {
+    pub fn message(&self) -> Msg {
         match self {
-            SuggestOutcome::Added(n) => added_text(*n),
+            SuggestOutcome::Added(n) => crate::msg!("dim-added", n = *n),
             SuggestOutcome::Partly { added, skipped } => {
-                let mut s = added_text(*added);
-                for t in skipped {
-                    s.push(' ');
-                    s.push_str(t);
-                }
-                s
+                let mut list = vec![crate::msg!("dim-added", n = *added)];
+                list.extend(skipped.iter().cloned());
+                Msg::Join(list)
             }
-            SuggestOutcome::NothingNew => "Es gibt keine neuen Maße vorzuschlagen.".into(),
+            SuggestOutcome::NothingNew => crate::msg!("dim-none-new"),
             SuggestOutcome::Unavailable(t) => t.clone(),
         }
-    }
-}
-
-fn added_text(n: usize) -> String {
-    match n {
-        0 => "Es wurde kein Maß hinzugefügt.".into(),
-        1 => "1 Maß wurde hinzugefügt.".into(),
-        n => format!("{n} Maße wurden hinzugefügt."),
     }
 }
 
@@ -441,13 +441,11 @@ fn notes_of(resolved: &ResolvedDims, marks: &[DimMarks], size: (f64, f64)) -> Di
     let mut texts = Vec::new();
     match lost {
         0 => {}
-        1 => texts.push("1 Maß hat seinen Bezug verloren.".into()),
-        n => texts.push(format!("{n} Maße haben ihren Bezug verloren.")),
+        n => texts.push(crate::msg!("dim-note-lost", n = n)),
     }
     match outside {
         0 => {}
-        1 => texts.push("1 Maß liegt außerhalb des Blatts.".into()),
-        n => texts.push(format!("{n} Maße liegen außerhalb des Blatts.")),
+        n => texts.push(crate::msg!("dim-note-outside", n = n)),
     }
     DimNotes {
         lost,
@@ -610,7 +608,7 @@ fn direction_of_kind(kind: DimKind) -> Option<bool> {
 /// fügt sie dem Dokument hinzu.
 ///
 /// Grundlage sind die **berechneten** Ansichten (`DrawingUi::result`); rechnet eine noch, gibt
-/// es nichts ([`VIEWS_PENDING`]). Vorhandene Maße werden über ihren Schlüssel
+/// es nichts ([`views_pending`]). Vorhandene Maße werden über ihren Schlüssel
 /// (`dimension_key`) erkannt und nicht noch einmal vorgeschlagen; für Maße mit verlorenem Bezug
 /// gilt ihr zuletzt bekannter Schlüssel ([`DimensionUi::last_key`]). Nur ein Maß, das in dieser
 /// Sitzung nie aufgelöst wurde (etwa schon verloren aus einer Datei geladen), hat keinen und kann
@@ -628,7 +626,7 @@ fn direction_of_kind(kind: DimKind) -> Option<bool> {
 ///
 /// Schnittansichten (Spec §9.3) übernehmen keine Maße ihrer Quelle: Ihre Vorschläge entstehen
 /// aus ihren eigenen Linien und den geschnittenen Körpern, Bezüge auf eine Schnittfläche tragen
-/// deren Schnittmarke. Rechnet ein gewählter Schnitt noch, gibt es nichts ([`VIEWS_PENDING`]).
+/// deren Schnittmarke. Rechnet ein gewählter Schnitt noch, gibt es nichts ([`views_pending`]).
 pub fn suggest_for(
     state: &mut AppState,
     drawing: DrawingId,
@@ -636,19 +634,19 @@ pub fn suggest_for(
 ) -> SuggestOutcome {
     use SuggestOutcome::Unavailable;
     let Some(d) = state.document.drawing(drawing).cloned() else {
-        return Unavailable(NO_DRAWING.into());
+        return Unavailable(no_drawing());
     };
     if state.bodies.is_empty() {
-        return Unavailable(DrawError::NoBodies.to_string());
+        return Unavailable(draw_error_msg(&DrawError::NoBodies));
     }
     let exact = exact_bodies(&state.bodies);
     if exact.is_empty() {
-        return Unavailable(DrawError::MeshBodiesOnly.to_string());
+        return Unavailable(draw_error_msg(&DrawError::MeshBodiesOnly));
     }
     if let Some(o) = only_view {
         match d.view(o) {
-            None => return Unavailable(NO_VIEW.into()),
-            Some(v) if !v.kind.is_normal() => return Unavailable(NO_ISOMETRIC.into()),
+            None => return Unavailable(no_view()),
+            Some(v) if !v.kind.is_normal() => return Unavailable(no_isometric()),
             Some(_) => {}
         }
     }
@@ -658,17 +656,17 @@ pub fn suggest_for(
         .filter(|v| v.kind.is_normal() && only_view.is_none_or(|o| v.id == o))
         .collect();
     if wanted.is_empty() {
-        return Unavailable(NO_NORMAL_VIEW.into());
+        return Unavailable(no_normal_view());
     }
     if d.dimensions.len() >= MAX_DIMENSIONS {
         return Unavailable(full_text());
     }
     let model = state.document.model_edit_count();
     let mut ready: Vec<(ViewSpec, Arc<ViewLines>)> = Vec::new();
-    let mut failed: Option<String> = None;
+    let mut failed: Option<Msg> = None;
     for v in &wanted {
         match state.drawing_ui.result_of(v, model) {
-            ViewResult::Pending { .. } => return Unavailable(VIEWS_PENDING.into()),
+            ViewResult::Pending { .. } => return Unavailable(views_pending()),
             ViewResult::Failed(m) => {
                 failed.get_or_insert(m);
             }
@@ -676,7 +674,7 @@ pub fn suggest_for(
         }
     }
     if ready.is_empty() {
-        return Unavailable(failed.unwrap_or_else(|| VIEWS_PENDING.into()));
+        return Unavailable(failed.unwrap_or_else(views_pending));
     }
     // Die geschnittenen Körper aller fertigen Schnittansichten (auch nicht gewählter: deren
     // vorhandene Maße zählen gegen Doppelungen und für die Stufen).
@@ -685,7 +683,7 @@ pub fn suggest_for(
         .iter()
         .any(|(v, _)| v.section.is_some() && !sections.contains_key(&v.id))
     {
-        return Unavailable(VIEWS_PENDING.into());
+        return Unavailable(views_pending());
     }
 
     let solids: Vec<&Solid> = exact.iter().map(|b| &b.solid).collect();
@@ -777,7 +775,7 @@ pub fn suggest_for(
     let mut count = d.dimensions.len();
     let mut added = 0usize;
     let mut proposed = 0usize;
-    let mut skipped: Vec<String> = Vec::new();
+    let mut skipped: Vec<Msg> = Vec::new();
     let mut unbound = false;
     'passes: for (vb, pairs) in passes {
         let candidates = suggest(&vb.draw(), &pairs, &existing);
@@ -788,11 +786,10 @@ pub fn suggest_for(
         for (i, c) in candidates.iter().enumerate() {
             if count >= MAX_DIMENSIONS {
                 let rest = candidates.len() - i;
-                skipped.push(if rest == 1 {
-                    format!("{} 1 weiteres Maß wurde nicht gesetzt.", full_text())
-                } else {
-                    format!("{} {rest} weitere Maße wurden nicht gesetzt.", full_text())
-                });
+                skipped.push(Msg::Join(vec![
+                    full_text(),
+                    crate::msg!("dim-rest-not-set", n = rest),
+                ]));
                 break 'passes;
             }
             // Stufen und Gruppen zählen erst weiter, wenn das Maß wirklich gesetzt ist.
@@ -811,7 +808,7 @@ pub fn suggest_for(
                     count += 1;
                     (stack, groups, next_group) = (st, gr, ng);
                 }
-                Err(e) => skipped.push(format!("Ein Maß wurde ausgelassen: {e}")),
+                Err(e) => skipped.push(crate::msg!("dim-skipped", reason = e.to_string())),
             }
         }
     }
@@ -819,7 +816,7 @@ pub fn suggest_for(
         return SuggestOutcome::NothingNew;
     }
     if unbound {
-        skipped.insert(0, NOT_BOUND.into());
+        skipped.insert(0, not_bound());
     }
     if skipped.is_empty() {
         SuggestOutcome::Added(added)

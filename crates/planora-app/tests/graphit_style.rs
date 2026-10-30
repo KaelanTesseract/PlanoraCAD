@@ -434,7 +434,7 @@ fn no_text_is_clipped_at_1400px() {
     }
     assert_eq!(rows.len(), 2, "zwei Zeilen: {rows:?}");
     let fit = planora_app::icons::glyph(icons::Icon::FitSheet).to_string();
-    for must in ["3D-Modell", fit.as_str(), drawing_view::SUGGEST] {
+    for must in ["3D-Modell", fit.as_str(), &drawing_view::suggest()] {
         assert!(
             bar.contains_rect(s.text(must).rect),
             "„{must}“ im Werkzeugfeld"
@@ -448,7 +448,7 @@ fn no_text_is_clipped_at_1400px() {
     for must in [
         "Ansicht „Vorne“",
         "Verdeckte Kanten zeigen",
-        drawing_view::CENTERLINES,
+        &drawing_view::centerlines_label(),
         "Ansicht löschen",
     ] {
         assert!(

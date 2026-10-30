@@ -11,22 +11,36 @@
 
 use crate::browser::{body_indent, error_color, row};
 use crate::dialog::{Dialog, DialogSize};
-use crate::drawing_dialog::{DUPLICATE_NAME, EMPTY_NAME, SKETCH_BLOCKED, paper_label};
+use crate::drawing_dialog::{duplicate_name, empty_name, paper_label, sketch_blocked};
 use crate::drawing_state::WorkArea;
-use crate::drawing_view::view_names;
+use crate::drawing_view::{view_name_msgs, view_names};
 use crate::icons::{paint_drawing_icon, paint_view_icon};
+use crate::msg::{Msg, MsgArg};
 use crate::state::AppState;
 use crate::theme;
 use planora_drawing::{Drawing, DrawingId, DrawingKind, Projection, ViewId};
-use planora_feature::{FOLLOW_PAGE_DELETE, PARTS_SHEET_RENAME};
+use planora_i18n::tr;
 
 /// Text bei fehlenden Zeichnungen.
-pub const EMPTY_TEXT: &str =
-    "Noch keine Zeichnung. Über „Zeichnung“ im Menü lässt sich eine anlegen.";
+pub fn empty_text() -> String {
+    tr!("drawing-empty")
+}
 /// Hinweis an gesperrten Einträgen in einer alten Version.
-pub const READ_ONLY_HINT: &str = "In einer alten Version lässt sich nichts ändern.";
+pub fn read_only_hint() -> String {
+    tr!("drawing-read-only")
+}
 /// Meldung, wenn die Zeichnung oder Ansicht inzwischen fehlt.
-const GONE: &str = "Die Zeichnung oder Ansicht gibt es nicht mehr.";
+fn gone() -> Msg {
+    crate::msg!("drawing-gone-view")
+}
+/// Hinweis, dass ein Folgeblatt der Stückliste nicht einzeln gelöscht wird.
+pub fn follow_page_delete() -> Msg {
+    crate::msg!("drawing-follow-page-delete")
+}
+/// Hinweis, dass sich Stücklistenblätter nicht umbenennen lassen.
+pub fn parts_sheet_rename() -> Msg {
+    crate::msg!("drawing-parts-sheet-rename")
+}
 
 /// Was „Löschen“ in der Rückfrage bedeutet: eine ganze Zeichnung oder eine Ansicht (samt der
 /// von ihr abgeleiteten).
@@ -35,19 +49,23 @@ pub struct DrawingDeletePlan {
     pub drawing: DrawingId,
     /// `None`: die ganze Zeichnung.
     pub view: Option<ViewId>,
-    /// Text der Rückfrage.
-    pub text: String,
+    /// Text der Rückfrage (übersetzt erst beim Zeichnen).
+    pub text: Msg,
 }
 
 /// Blatt und Projektion für die Zeile, z. B. „A3 quer, Erstwinkel“.
 pub fn drawing_detail(d: &Drawing) -> String {
-    format!(
-        "{} {}, {}",
-        paper_label(d.sheet.paper),
-        if d.sheet.landscape { "quer" } else { "hoch" },
-        match d.projection {
-            Projection::First => "Erstwinkel",
-            Projection::Third => "Dritter Winkel",
+    tr!(
+        "drawing-detail",
+        paper = paper_label(d.sheet.paper),
+        orientation = if d.sheet.landscape {
+            tr!("drawing-landscape")
+        } else {
+            tr!("drawing-portrait")
+        },
+        projection = match d.projection {
+            Projection::First => tr!("drawing-angle-first"),
+            Projection::Third => tr!("drawing-angle-third"),
         }
     )
 }
@@ -58,7 +76,7 @@ pub fn drawing_detail(d: &Drawing) -> String {
 /// zuletzt offene war). Im Skizzen-Modus geht es nicht: die Meldung sagt warum.
 pub(crate) fn open_drawing(state: &mut AppState, id: DrawingId) -> bool {
     if state.sketch_session.is_some() {
-        state.message = Some(SKETCH_BLOCKED.into());
+        state.message = Some(sketch_blocked().text());
         return false;
     }
     state.drawing_ui.show_drawing(id);
@@ -103,23 +121,23 @@ fn parts_page(d: &Drawing) -> Option<u32> {
 }
 
 /// Rückfrage vor dem Löschen der Stückliste mit `pages` Blättern.
-pub fn parts_delete_text(pages: usize) -> String {
+pub fn parts_delete_text(pages: usize) -> Msg {
     if pages <= 1 {
-        "Stückliste löschen?".to_string()
+        crate::msg!("drawing-del-parts")
     } else {
-        format!("Stückliste mit {pages} Blättern löschen?")
+        crate::msg!("drawing-del-parts-pages", n = pages)
     }
 }
 
-fn delete_text_drawing(state: &AppState, d: &Drawing) -> String {
+fn delete_text_drawing(state: &AppState, d: &Drawing) -> Msg {
     if parts_page(d).is_some() {
         return parts_delete_text(state.document.parts_sheets().len());
     }
-    match d.views.len() {
-        0 => format!("Zeichnung „{}“ löschen?", d.name),
-        1 => format!("Zeichnung „{}“ mit 1 Ansicht löschen?", d.name),
-        n => format!("Zeichnung „{}“ mit {n} Ansichten löschen?", d.name),
-    }
+    crate::msg!(
+        "drawing-del-ask",
+        name = d.name.as_str(),
+        views = d.views.len()
+    )
 }
 
 /// Fragt vor dem Löschen einer Zeichnung zurück (die Rückfrage steht in
@@ -129,7 +147,7 @@ pub fn request_delete_drawing(state: &mut AppState, id: DrawingId) {
         return;
     };
     if parts_page(d).is_some_and(|p| p > 1) {
-        state.message = Some(FOLLOW_PAGE_DELETE.into());
+        state.message = Some(follow_page_delete().text());
         return;
     }
     let plan = DrawingDeletePlan {
@@ -151,53 +169,69 @@ fn plan_delete_view(
 ) -> Option<(DrawingDeletePlan, bool)> {
     let d = state.document.drawing(drawing)?;
     d.view(view)?;
-    let names = view_names(d);
+    let names = view_name_msgs(d);
     let removed = d.clone().remove_view(view);
-    let dependents: Vec<&str> = removed
+    let dependents: Vec<MsgArg> = removed
         .iter()
         .skip(1)
-        .filter_map(|v| names.get(v).map(String::as_str))
+        .filter_map(|v| names.get(v).cloned().map(MsgArg::from))
         .collect();
     let dims = d
         .dimensions
         .iter()
         .filter(|m| removed.contains(&m.view))
         .count();
-    let name = names.get(&view).cloned().unwrap_or_default();
+    let name = MsgArg::from(names.get(&view).cloned().unwrap_or(Msg::Raw(String::new())));
     // Eine Schnittansicht reißt immer ihre Schnittlinie in der Ausgangsansicht mit: stets mit
     // Rückfrage.
     if let Some(v) = d.view(view).filter(|v| v.section.is_some()) {
-        let source = v
-            .parent
-            .and_then(|p| names.get(&p))
-            .cloned()
-            .unwrap_or_default();
+        let source = MsgArg::from(
+            v.parent
+                .and_then(|p| names.get(&p))
+                .cloned()
+                .unwrap_or(Msg::Raw(String::new())),
+        );
         // „Mit ihr verschwindet die Schnittlinie in „Vorne“.“ bzw. „… verschwinden die
         // Schnittlinie in „Vorne“, die abgeleiteten Ansichten (…) und 2 Maße.“
-        let mut items = vec![format!("die Schnittlinie in „{source}“")];
+        let mut items: Vec<MsgArg> =
+            vec![crate::msg!("drawing-del-section-line", source = source).into()];
         if !dependents.is_empty() {
-            items.push(format!(
-                "die abgeleiteten Ansichten ({})",
-                dependents.join(", ")
-            ));
+            items.push(
+                crate::msg!(
+                    "drawing-del-derived-views",
+                    names = MsgArg::List(dependents.clone())
+                )
+                .into(),
+            );
         }
-        match dims {
-            0 => {}
-            1 => items.push("1 Maß".into()),
-            n => items.push(format!("{n} Maße")),
+        if dims > 0 {
+            items.push(crate::msg!("drawing-del-dims", n = dims).into());
         }
-        let verb = if items.len() == 1 {
-            "verschwindet"
-        } else {
-            "verschwinden"
+        let count = items.len();
+        let mut it = items.into_iter();
+        let list = match count {
+            1 => crate::msg!(
+                "drawing-del-list-1",
+                a = it.next().unwrap_or(MsgArg::Int(0))
+            ),
+            2 => crate::msg!(
+                "drawing-del-list-2",
+                a = it.next().unwrap_or(MsgArg::Int(0)),
+                b = it.next().unwrap_or(MsgArg::Int(0))
+            ),
+            _ => crate::msg!(
+                "drawing-del-list-3",
+                a = it.next().unwrap_or(MsgArg::Int(0)),
+                b = it.next().unwrap_or(MsgArg::Int(0)),
+                c = it.next().unwrap_or(MsgArg::Int(0))
+            ),
         };
-        let last = items.pop().unwrap_or_default();
-        let list = if items.is_empty() {
-            last
-        } else {
-            format!("{} und {last}", items.join(", "))
-        };
-        let text = format!("Die Schnittansicht „{name}“ wird gelöscht. Mit ihr {verb} {list}.");
+        let text = crate::msg!(
+            "drawing-del-section",
+            name = name,
+            count = count,
+            list = list
+        );
         return Some((
             DrawingDeletePlan {
                 drawing,
@@ -207,20 +241,20 @@ fn plan_delete_view(
             true,
         ));
     }
+    let list = MsgArg::List(dependents.clone());
     let text = match (dependents.is_empty(), dims) {
-        (true, 0) => format!("Die Ansicht „{name}“ wird gelöscht."),
-        (true, n) => format!(
-            "Die Ansicht „{name}“ wird gelöscht, und {}.",
-            dims_go_along(n)
+        (true, 0) => crate::msg!("drawing-del-view", name = name),
+        (true, n) => crate::msg!(
+            "drawing-del-view-dims",
+            name = name,
+            dims = dims_go_along(n)
         ),
-        (false, 0) => format!(
-            "Die Ansicht „{name}“ hat abgeleitete Ansichten: {}. Sie werden mit gelöscht.",
-            dependents.join(", ")
-        ),
-        (false, n) => format!(
-            "Die Ansicht „{name}“ hat abgeleitete Ansichten: {}. Sie werden mit gelöscht, und {}.",
-            dependents.join(", "),
-            dims_go_along(n)
+        (false, 0) => crate::msg!("drawing-del-view-derived", name = name, names = list),
+        (false, n) => crate::msg!(
+            "drawing-del-view-derived-dims",
+            name = name,
+            names = list,
+            dims = dims_go_along(n)
         ),
     };
     Some((
@@ -234,12 +268,8 @@ fn plan_delete_view(
 }
 
 /// „1 Maß wird mit gelöscht“ bzw. „n Maße werden mit gelöscht“.
-fn dims_go_along(n: usize) -> String {
-    if n == 1 {
-        "1 Maß wird mit gelöscht".into()
-    } else {
-        format!("{n} Maße werden mit gelöscht")
-    }
+fn dims_go_along(n: usize) -> Msg {
+    crate::msg!("drawing-del-dims-along", n = n)
 }
 
 /// „Löschen“ bei einer Ansicht (Browser und Werkzeugleiste des Zeichnungsbereichs): ohne
@@ -260,12 +290,12 @@ pub fn request_delete_view(state: &mut AppState, drawing: DrawingId, view: ViewI
 /// Führt einen Löschplan aus und schließt die Rückfrage. Gibt es Zeichnung oder Ansicht nicht
 /// mehr, passiert nichts außer dem Aufräumen. Haben sich die Folgen für eine Ansicht
 /// geändert, wird nichts gelöscht und die Rückfrage zeigt den neuen Text.
-pub fn apply_delete(state: &mut AppState, plan: &DrawingDeletePlan) -> Result<(), String> {
+pub fn apply_delete(state: &mut AppState, plan: &DrawingDeletePlan) -> Result<(), Msg> {
     state.pending_delete_drawing = None;
     let id = plan.drawing;
     if state.document.drawing(id).is_none() {
         forget(state, id);
-        return Err(GONE.into());
+        return Err(gone());
     }
     match plan.view {
         None => {
@@ -273,7 +303,7 @@ pub fn apply_delete(state: &mut AppState, plan: &DrawingDeletePlan) -> Result<()
             state
                 .document
                 .delete_drawing(id)
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| Msg::Raw(e.to_string()))?;
             // Seite 1 der Stückliste nimmt ihre Folgeblätter mit: alle Verschwundenen aufräumen.
             for gone in before {
                 if state.document.drawing(gone).is_none() {
@@ -284,17 +314,17 @@ pub fn apply_delete(state: &mut AppState, plan: &DrawingDeletePlan) -> Result<()
         }
         Some(view) => {
             let Some((current, _)) = plan_delete_view(state, id, view) else {
-                return Err(GONE.into());
+                return Err(gone());
             };
             if current.text != plan.text {
                 state.pending_delete_drawing = Some(current);
-                return Err("Die Folgen des Löschens haben sich geändert; bitte prüfen".into());
+                return Err(crate::msg!("drawing-del-changed"));
             }
             let mut removed = Vec::new();
             state
                 .document
                 .update_drawing(id, |d| removed = d.remove_view(view))
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| Msg::Raw(e.to_string()))?;
             // Ansichtskennungen zählen je Zeichnung: nur die Auswahl der offenen Zeichnung, aus
             // der gelöscht wurde, wird geleert.
             if state.drawing_ui.area == WorkArea::Drawing(id)
@@ -314,7 +344,7 @@ pub fn apply_delete(state: &mut AppState, plan: &DrawingDeletePlan) -> Result<()
 pub fn request_rename(state: &mut AppState, id: DrawingId) {
     if let Some(d) = state.document.drawing(id) {
         if parts_page(d).is_some() {
-            state.message = Some(PARTS_SHEET_RENAME.into());
+            state.message = Some(parts_sheet_rename().text());
             return;
         }
         state.rename_drawing_draft = Some((id, d.name.clone()));
@@ -323,17 +353,17 @@ pub fn request_rename(state: &mut AppState, id: DrawingId) {
 
 /// Warum `name` für die Zeichnung `id` nicht geht: leer oder schon vergeben (ohne Rücksicht auf
 /// Groß- und Kleinschreibung; der eigene Name zählt nicht).
-pub fn rename_error(state: &AppState, id: DrawingId, name: &str) -> Option<&'static str> {
+pub fn rename_error(state: &AppState, id: DrawingId, name: &str) -> Option<Msg> {
     let key = name.trim().to_lowercase();
     if key.is_empty() {
-        Some(EMPTY_NAME)
+        Some(empty_name())
     } else if state
         .document
         .drawings()
         .iter()
         .any(|d| d.id != id && d.name.trim().to_lowercase() == key)
     {
-        Some(DUPLICATE_NAME)
+        Some(duplicate_name())
     } else {
         None
     }
@@ -341,16 +371,16 @@ pub fn rename_error(state: &AppState, id: DrawingId, name: &str) -> Option<&'sta
 
 /// Übernimmt den Namen aus dem Fenster „Umbenennen“. Bei einem ungültigen Namen bleibt der
 /// Entwurf (das Fenster) offen.
-pub fn apply_rename(state: &mut AppState) -> Result<(), String> {
+pub fn apply_rename(state: &mut AppState) -> Result<(), Msg> {
     let Some((id, name)) = state.rename_drawing_draft.take() else {
         return Ok(());
     };
     if state.document.drawing(id).is_none() {
-        return Err(GONE.into());
+        return Err(gone());
     }
     if let Some(e) = rename_error(state, id, &name) {
         state.rename_drawing_draft = Some((id, name));
-        return Err(e.into());
+        return Err(e);
     }
     match state.document.rename_drawing(id, name.trim()) {
         Ok(()) => {
@@ -359,7 +389,7 @@ pub fn apply_rename(state: &mut AppState) -> Result<(), String> {
         }
         Err(e) => {
             state.rename_drawing_draft = Some((id, name));
-            Err(e.to_string())
+            Err(Msg::Raw(e.to_string()))
         }
     }
 }
@@ -437,7 +467,7 @@ fn rows_of(state: &AppState) -> Vec<DrawingRow> {
 pub fn show(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
     let rows = rows_of(state);
     if rows.is_empty() {
-        ui.weak(EMPTY_TEXT);
+        ui.weak(empty_text());
     }
     let open = match state.drawing_ui.area {
         WorkArea::Drawing(id) => Some(id),
@@ -456,26 +486,26 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
             Some(&r.detail),
             paint_drawing_icon,
         )
-        .on_hover_text("Doppelklick öffnet die Zeichnung; Rechtsklick zeigt weitere Befehle.");
+        .on_hover_text(tr!("drawing-row-tip"));
         if resp.double_clicked() {
             action = Some(Action::Open(id));
         } else if resp.clicked() {
             action = Some(Action::Select(id));
         }
         resp.context_menu(|ui| {
-            if ui.button("Öffnen").clicked() {
+            if ui.button(tr!("chooser-open")).clicked() {
                 action = Some(Action::Open(id));
                 ui.close();
             }
             let rename_why = if read_only {
-                READ_ONLY_HINT
+                read_only_hint()
             } else {
-                PARTS_SHEET_RENAME
+                parts_sheet_rename().text()
             };
             if ui
                 .add_enabled(
                     !read_only && r.parts_page.is_none(),
-                    egui::Button::new("Umbenennen"),
+                    egui::Button::new(tr!("tree-rename")),
                 )
                 .on_disabled_hover_text(rename_why)
                 .clicked()
@@ -486,12 +516,15 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
             ui.separator();
             let follow = r.parts_page.is_some_and(|p| p > 1);
             let delete_why = if read_only {
-                READ_ONLY_HINT
+                read_only_hint()
             } else {
-                FOLLOW_PAGE_DELETE
+                follow_page_delete().text()
             };
             if ui
-                .add_enabled(!read_only && !follow, egui::Button::new("Löschen"))
+                .add_enabled(
+                    !read_only && !follow,
+                    egui::Button::new(tr!("action-delete")),
+                )
                 .on_disabled_hover_text(delete_why)
                 .clicked()
             {
@@ -512,27 +545,27 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
                 Some(&v.scale),
                 paint_view_icon,
             )
-            .on_hover_text("Klick öffnet die Zeichnung und wählt die Ansicht.");
+            .on_hover_text(tr!("drawing-view-row-tip"));
             if resp.clicked() {
                 action = Some(Action::SelectView(id, vid));
             }
             resp.context_menu(|ui| {
                 if ui
-                    .add_enabled(!read_only, egui::Button::new("Löschen"))
-                    .on_disabled_hover_text(READ_ONLY_HINT)
+                    .add_enabled(!read_only, egui::Button::new(tr!("action-delete")))
+                    .on_disabled_hover_text(read_only_hint())
                     .clicked()
                 {
                     action = Some(Action::DeleteView(id, vid));
                     ui.close();
                 }
                 let toggle = if v.show_hidden {
-                    "Verdeckte Kanten ausblenden"
+                    tr!("drawing-hide-hidden")
                 } else {
-                    "Verdeckte Kanten zeigen"
+                    tr!("drawing-show-hidden")
                 };
                 if ui
                     .add_enabled(!read_only, egui::Button::new(toggle))
-                    .on_disabled_hover_text(READ_ONLY_HINT)
+                    .on_disabled_hover_text(read_only_hint())
                     .clicked()
                 {
                     action = Some(Action::ToggleHidden(id, vid));
@@ -585,10 +618,10 @@ fn rename_window(ctx: &egui::Context, state: &mut AppState) {
         state.rename_drawing_draft = None;
         return;
     }
-    let error = rename_error(state, id, &name);
+    let error = rename_error(state, id, &name).map(|m| m.text());
     let (mut apply, mut cancel) = (false, false);
     let mut open = true;
-    Dialog::new("Umbenennen", DialogSize::Prompt)
+    Dialog::new(tr!("tree-rename"), DialogSize::Prompt)
         .id(egui::Id::new("planora-rename-drawing"))
         .open(&mut open)
         .show(ctx, |ui| {
@@ -596,18 +629,18 @@ fn rename_window(ctx: &egui::Context, state: &mut AppState) {
             if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 apply = true;
             }
-            if let Some(e) = error {
+            if let Some(e) = &error {
                 ui.colored_label(error_color(ui.visuals().dark_mode), e);
             }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 if ui
-                    .add_enabled(error.is_none(), egui::Button::new("Übernehmen"))
+                    .add_enabled(error.is_none(), egui::Button::new(tr!("tree-apply")))
                     .clicked()
                 {
                     apply = true;
                 }
-                if ui.button("Abbrechen").clicked() {
+                if ui.button(tr!("common-cancel")).clicked() {
                     cancel = true;
                 }
             });
@@ -630,22 +663,23 @@ fn delete_window(ctx: &egui::Context, state: &mut AppState) {
     };
     let (mut confirm, mut cancel) = (false, false);
     let mut open = true;
-    Dialog::new("Rückfrage", DialogSize::Prompt)
+    Dialog::new(tr!("tree-confirm-title"), DialogSize::Prompt)
         .id(egui::Id::new("planora-delete-drawing"))
         .open(&mut open)
         .show(ctx, |ui| {
-            ui.label(&plan.text);
+            ui.label(plan.text.text());
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 if ui
                     .button(
-                        egui::RichText::new("Löschen").color(error_color(ui.visuals().dark_mode)),
+                        egui::RichText::new(tr!("action-delete"))
+                            .color(error_color(ui.visuals().dark_mode)),
                     )
                     .clicked()
                 {
                     confirm = true;
                 }
-                if ui.button("Abbrechen").clicked() {
+                if ui.button(tr!("common-cancel")).clicked() {
                     cancel = true;
                 }
             });

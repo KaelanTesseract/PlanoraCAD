@@ -14,6 +14,8 @@ pub enum Msg {
     Id(&'static str, Vec<(&'static str, MsgArg)>),
     /// Text einer Bibliothek oder des Betriebssystems.
     Raw(String),
+    /// Mehrere Meldungen hintereinander, durch ein Leerzeichen getrennt (Sätze).
+    Join(Vec<Msg>),
 }
 
 /// Ein Wert einer Meldung.
@@ -52,6 +54,7 @@ impl Msg {
     pub fn text(&self) -> String {
         match self {
             Msg::Raw(s) => s.clone(),
+            Msg::Join(list) => list.iter().map(Msg::text).collect::<Vec<_>>().join(" "),
             Msg::Id(id, args) => {
                 let owned: Vec<(&str, Arg)> = args
                     .iter()
@@ -75,6 +78,12 @@ pub fn plain_number(v: f64) -> String {
     let s = format!("{v:.6}");
     let s = s.trim_end_matches('0').trim_end_matches('.');
     localize_decimal(s)
+}
+
+impl std::fmt::Display for Msg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text())
+    }
 }
 
 impl From<Msg> for String {

@@ -13,11 +13,12 @@
 //! höchstens [`PICK_PX`] außerhalb seines Rands liegt ([`balloon_hit`]). Ziehen verschiebt nur den
 //! Kreis (der Anker bleibt am Teil) und ist am Ende eine einzige Änderung des Dokuments.
 
-use crate::dimension_state::{NO_DRAWING, NO_VIEW, VIEWS_PENDING};
-use crate::dimension_tool::{NO_VIEWS_TIP, sentence};
-use crate::drawing_dialog::SKETCH_BLOCKED;
+use crate::dimension_state::{no_drawing, no_view, views_pending};
+use crate::dimension_tool::sentence;
+use crate::drawing_dialog::sketch_blocked;
 use crate::drawing_state::WorkArea;
 use crate::drawing_view::PICK_PX;
+use crate::msg::Msg;
 use crate::state::{AppState, BodyKind};
 use egui::Pos2;
 use planora_drawing::balloon::{
@@ -27,41 +28,56 @@ use planora_drawing::parts::MAX_BALLOONS;
 use planora_drawing::sheet::view_transform;
 use planora_drawing::sheet_frame::sheet_scale;
 use planora_drawing::{BalloonId, BodyKey, Drawing, DrawingId, DrawingKind, ViewId, ViewLines};
-use planora_feature::{FeatureError, TOO_MANY_BALLOONS};
+use planora_feature::FeatureError;
+use planora_i18n::tr;
 use planora_math::DVec2;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// Beschriftung des Schalters.
-pub const TOOL: &str = "Position";
+pub fn tool() -> String {
+    tr!("balloon-tool")
+}
 /// Tooltip des Schalters.
-pub const TOOL_TIP: &str = "Ein Klick auf eine Linie eines Teils setzt eine Positionsnummer. Den Kreis kann man danach verschieben.";
+pub fn tool_tip() -> String {
+    tr!("balloon-tool-tip")
+}
 /// Hinweis bei eingeschaltetem Werkzeug.
-pub const HINT: &str = "Auf eine Linie eines Teils klicken. Esc beendet.";
+pub fn hint() -> String {
+    tr!("balloon-hint")
+}
 /// Meldung bei einem Klick neben die Linien.
-pub const MISSED: &str = "Bitte eine Linie eines Teils anklicken.";
+pub fn missed() -> Msg {
+    crate::msg!("balloon-missed")
+}
 /// Erklärung, wenn der Schalter in einer alten Version gesperrt ist.
-pub const READ_ONLY_TIP: &str = "In einer alten Version lassen sich keine Positionsnummern setzen.";
+pub fn read_only_tip() -> String {
+    tr!("balloon-read-only-tip")
+}
 /// Erklärung am gesperrten Schalter eines Stücklistenblatts.
-pub const PARTS_SHEET_TIP: &str = "Auf dem Stücklistenblatt gibt es keine Positionsnummern.";
+pub fn parts_sheet_tip() -> String {
+    tr!("balloon-parts-sheet-tip")
+}
 /// Tooltip eines verlorenen Kreises.
-pub const LOST_TIP: &str = "Das Teil zu dieser Positionsnummer gibt es nicht mehr.";
+pub fn lost_tip() -> String {
+    tr!("balloon-lost-tip")
+}
+/// Meldung, wenn die Zeichnung schon die Höchstzahl an Positionsnummern hat.
+pub fn too_many() -> Msg {
+    crate::msg!("balloon-too-many", max = MAX_BALLOONS)
+}
 
 /// Hinweis zu verlorenen Kreisen: „1 Positionsnummer hat ihr Teil verloren.“ bzw.
 /// „{n} Positionsnummern haben ihr Teil verloren.“
-pub fn lost_note(n: usize) -> String {
-    if n == 1 {
-        "1 Positionsnummer hat ihr Teil verloren.".into()
-    } else {
-        format!("{n} Positionsnummern haben ihr Teil verloren.")
-    }
+pub fn lost_note(n: usize) -> Msg {
+    crate::msg!("balloon-lost-note", n = n)
 }
 
 /// Zustand des Werkzeugs „Position“.
 #[derive(Debug, Default)]
 pub struct BalloonTool {
     active: bool,
-    message: Option<String>,
+    message: Option<Msg>,
 }
 
 impl BalloonTool {
@@ -76,26 +92,32 @@ impl BalloonTool {
         self.message = None;
     }
 
-    /// Letzte Ablehnung (rot in der Hinweiszeile), bis zum nächsten Klick.
-    pub fn message(&self) -> Option<&str> {
-        self.message.as_deref()
+    /// Letzte Ablehnung (rot in der Hinweiszeile), bis zum nächsten Klick, in der aktuellen
+    /// Sprache.
+    pub fn message(&self) -> Option<String> {
+        self.message.as_ref().map(Msg::text)
     }
 
     /// Setzt die Meldung für die Hinweiszeile.
-    pub fn set_message(&mut self, message: Option<String>) {
+    pub fn set_message(&mut self, message: Option<Msg>) {
         self.message = message;
     }
 }
 
 /// Kann das Werkzeug benutzt werden? Sonst die Erklärung (alte Version, Stücklistenblatt, keine
 /// Ansicht). Isometrische Ansichten sind erlaubt.
-pub fn blocked(drawing: &Drawing, editable: bool) -> Option<&'static str> {
+pub fn blocked(drawing: &Drawing, editable: bool) -> Option<String> {
+    blocked_msg(drawing, editable).map(|m| m.text())
+}
+
+/// Wie [`blocked`], als Meldung (übersetzt erst beim Zeichnen).
+pub fn blocked_msg(drawing: &Drawing, editable: bool) -> Option<Msg> {
     if !editable {
-        Some(READ_ONLY_TIP)
+        Some(crate::msg!("balloon-read-only-tip"))
     } else if matches!(drawing.kind, DrawingKind::PartsList { .. }) {
-        Some(PARTS_SHEET_TIP)
+        Some(crate::msg!("balloon-parts-sheet-tip"))
     } else if drawing.views.is_empty() {
-        Some(NO_VIEWS_TIP)
+        Some(crate::msg!("dim-no-views-tip"))
     } else {
         None
     }
@@ -119,10 +141,10 @@ pub fn clamp_offset(at: DVec2, offset: (f64, f64), size: (f64, f64)) -> (f64, f6
     (cx - at.x, cy - at.y)
 }
 
-fn feature_text(e: FeatureError) -> String {
+fn feature_text(e: FeatureError) -> Msg {
     match e {
-        FeatureError::InvalidInput(m) => sentence(&m),
-        e => sentence(&e.to_string()),
+        FeatureError::InvalidInput(m) => Msg::Raw(sentence(&m)),
+        e => Msg::Raw(sentence(&e.to_string())),
     }
 }
 
@@ -136,20 +158,20 @@ pub fn place(
     view: ViewId,
     body: usize,
     at: DVec2,
-) -> Result<BalloonId, String> {
+) -> Result<BalloonId, Msg> {
     if state.sketch_session.is_some() {
-        return Err(SKETCH_BLOCKED.into());
+        return Err(sketch_blocked());
     }
-    let d = state.document.drawing(drawing).ok_or(NO_DRAWING)?;
-    if let Some(why) = blocked(d, true) {
-        return Err(why.into());
+    let d = state.document.drawing(drawing).ok_or_else(no_drawing)?;
+    if let Some(why) = blocked_msg(d, true) {
+        return Err(why);
     }
-    let spec = d.view(view).ok_or(NO_VIEW)?;
+    let spec = d.view(view).ok_or_else(no_view)?;
     if d.balloons.len() >= MAX_BALLOONS {
-        return Err(TOO_MANY_BALLOONS.into());
+        return Err(too_many());
     }
     if !at.is_finite() {
-        return Err(MISSED.into());
+        return Err(missed());
     }
     // In einer Schnittansicht zählt die Herkunft der Linie in den geschnittenen Körpern; der
     // Kreis gehört zum ursprünglichen Körper (`SectionData::source`).
@@ -157,22 +179,22 @@ pub fn place(
         let data = state
             .drawing_ui
             .section_ref(spec, state.document.model_edit_count())
-            .ok_or(VIEWS_PENDING)?;
-        *data.source.get(body).ok_or(MISSED)?
+            .ok_or_else(views_pending)?;
+        *data.source.get(body).ok_or_else(missed)?
     } else {
         body
     };
-    let key = body_key_of_stroke(state, body).ok_or(MISSED)?;
+    let key = body_key_of_stroke(state, body).ok_or_else(missed)?;
     // Nur Körper, die eine Zeile der Stückliste haben.
     if state.document.row_of(key).is_none() {
-        return Err(MISSED.into());
+        return Err(missed());
     }
     let owned = state
         .drawing_ui
         .results_for(d, state.document.model_edit_count());
     let refs: BTreeMap<ViewId, &ViewLines> = owned.iter().map(|(k, l)| (*k, l.as_ref())).collect();
     let (Some(xf), Some(lines)) = (view_transform(d, view, &refs), refs.get(&view)) else {
-        return Err(VIEWS_PENDING.into());
+        return Err(views_pending());
     };
     let anchor = anchor_of(lines.bbox, &xf, at);
     let point = planora_drawing::balloon::anchor_point(lines.bbox, &xf, anchor);
@@ -206,7 +228,7 @@ pub fn delete(state: &mut AppState, drawing: DrawingId, b: BalloonId) -> bool {
         removed = d.remove_balloon(b);
     });
     if let Err(e) = r {
-        state.message = Some(feature_text(e));
+        state.message = Some(feature_text(e).text());
         return false;
     }
     if state.drawing_ui.selected_balloon == Some(b) {

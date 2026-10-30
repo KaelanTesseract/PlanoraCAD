@@ -17,7 +17,7 @@ use planora_app::browser::delete_plan;
 use planora_app::create_dialog::CreateDialog;
 use planora_app::dimension_browser::DimDeletePlan;
 use planora_app::dimension_dialog::DimensionDialog;
-use planora_app::drawing_browser::{DrawingDeletePlan, READ_ONLY_HINT};
+use planora_app::drawing_browser::{DrawingDeletePlan, read_only_hint};
 use planora_app::drawing_dialog::NewDrawingDialog;
 use planora_app::export_dialog::{ExportDialog, ExportFormat};
 use planora_app::feature_dialog::FeatureDialog;
@@ -932,14 +932,14 @@ fn open_dialog(t: &mut DocTab, which: usize, d: DrawingId, v: ViewId) -> bool {
             t.state.pending_delete_drawing = Some(DrawingDeletePlan {
                 drawing: d,
                 view: None,
-                text: "Blatt 1".into(),
+                text: "Blatt 1".to_string().into(),
             })
         }
         10 => {
             t.state.pending_delete_dimension = Some(DimDeletePlan {
                 drawing: d,
                 dim: DimId(1),
-                text: "Maß".into(),
+                text: "Maß".to_string().into(),
             })
         }
         11 => t.state.rename_draft = Some((quader, "Neu".into())),
@@ -1059,10 +1059,10 @@ fn blocked_texts() {
         Some("In einer alten Version lässt sich nichts ändern.".to_string())
     );
     assert_eq!(
-        READ_ONLY_HINT,
+        read_only_hint(),
         "In einer alten Version lässt sich nichts ändern."
     );
-    assert_eq!(tab(&mut w).redo_blocked(), Some(READ_ONLY_HINT.to_string()));
+    assert_eq!(tab(&mut w).redo_blocked(), Some(read_only_hint()));
     let before = st(&mut w).snapshot();
     assert!(tab(&mut w).undo().is_err());
     assert_same(&st(&mut w).snapshot(), &before, "alte Version unverändert");

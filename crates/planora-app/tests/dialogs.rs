@@ -15,7 +15,7 @@ use planora_app::boolean_dialog::BooleanDialog;
 use planora_app::browser::delete_plan;
 use planora_app::create_dialog::CreateDialog;
 use planora_app::dialog::DialogSize;
-use planora_app::dimension_browser::{CHAIN_ASK, DimDeletePlan};
+use planora_app::dimension_browser::{DimDeletePlan, chain_ask};
 use planora_app::drawing_browser::request_delete_drawing;
 use planora_app::feature_dialog::FeatureDialog;
 use planora_app::icons::{self, Icon};
@@ -567,7 +567,7 @@ fn cases() -> Vec<Case> {
                 r.state().pending_delete_dimension = Some(DimDeletePlan {
                     drawing,
                     dim,
-                    text: CHAIN_ASK.into(),
+                    text: chain_ask(),
                 });
             }),
             is_open: Box::new(|r| r.state().pending_delete_dimension.is_some()),

@@ -29,8 +29,10 @@
 //! gemeinsamer Maßlinie. **Bezugsmaße:** erster Klick = Bezug, weitere = Ziele; die Maßlinien
 //! stapeln sich um `DIM_STEP`. Beide bekommen eine neue Gruppennummer der Zeichnung.
 
-use crate::dimension_state::{NO_DRAWING, NO_VIEW, VIEWS_PENDING, full_text, geo_ref, next_group};
+use crate::dimension_state::{full_text, geo_ref, next_group, no_drawing, no_view, views_pending};
+use crate::drawing_state::draw_error_msg;
 use crate::drawing_view::{MIN_DRAG_OFFSET_MM, normalize_deg};
+use crate::msg::Msg;
 use crate::state::{AppState, BodyKind};
 use planora_drawing::annotate::{
     DEFAULT_OFFSET, LARGE_DIAMETER, Mark, ResolvedDims, clamp_leader_deg, group_base,
@@ -47,6 +49,7 @@ use planora_drawing::{
     ViewKind, ViewLines, ViewSpec, measure,
 };
 use planora_feature::{RefCache, resolve_geo_cached};
+use planora_i18n::tr;
 use planora_kernel::{Curve, Edge, Id, Solid};
 use planora_math::{DVec2, DVec3, Tolerance};
 use std::collections::BTreeMap;
@@ -55,27 +58,45 @@ use std::collections::BTreeMap;
 pub const END_PX: f64 = 8.0;
 
 /// Ablehnung: der Bezug lässt sich nicht bemaßen.
-pub const NOT_DIMENSIONABLE: &str = "Der Bezug lässt sich nicht bemaßen.";
+pub fn not_dimensionable() -> Msg {
+    crate::msg!("dim-not-dimensionable")
+}
 /// Ablehnung in der Isometrie.
-pub const NO_ISOMETRIC: &str = "In der Isometrie gibt es keine Maße.";
+pub fn no_isometric() -> Msg {
+    crate::msg!("dim-tool-no-isometric")
+}
 /// Ablehnung beim Winkelmaß mit einer gebogenen Kante.
-pub const ANGLE_LINES: &str = "Ein Winkelmaß braucht zwei gerade Kanten.";
+pub fn angle_lines() -> Msg {
+    crate::msg!("dim-angle-lines")
+}
 /// Hinweis nach dem Klick auf den Umriss eines Zylinders in einem linearen Maß.
-pub const SILHOUETTE_NOTE: &str = "Gemessen wird bis zur Mitte des Zylinders.";
+pub fn silhouette_note() -> Msg {
+    crate::msg!("dim-silhouette-note")
+}
 /// Erklärung, wenn die Zeichnung noch keine Ansicht hat.
-pub const NO_VIEWS_TIP: &str = "Zuerst eine Ansicht anlegen.";
+pub fn no_views_tip() -> String {
+    tr!("dim-no-views-tip")
+}
 /// Hinweis bei einem Klick neben die Linien.
-pub const MISSED: &str = "Bitte eine Linie der Ansicht anklicken.";
+pub fn missed() -> Msg {
+    crate::msg!("dim-missed")
+}
 /// Beschriftung des Schalters.
-pub const TOOL: &str = "Maß";
+pub fn tool() -> String {
+    tr!("dim-tool")
+}
 /// Tooltip des Schalters.
-pub const TOOL_TIP: &str =
-    "Maße von Hand setzen: Linien oder Ecken anklicken, dann die Maßlinie mit einem Klick ablegen.";
+pub fn tool_tip() -> String {
+    tr!("dim-tool-tip")
+}
 /// Erklärung, wenn der Schalter in einer alten Version gesperrt ist.
-pub const READ_ONLY_TIP: &str = "In einer alten Version lassen sich keine Maße setzen.";
+pub fn read_only_tip() -> String {
+    tr!("dim-read-only-tip")
+}
 /// Erklärung, wenn die Zeichnung nur eine Isometrie (oder keine Ansicht) hat.
-pub const ISOMETRIC_TIP: &str =
-    "In der Isometrie gibt es keine Maße. Fügen Sie eine Vorder-, Seiten- oder Draufsicht hinzu.";
+pub fn isometric_tip() -> String {
+    tr!("dim-isometric-tip")
+}
 
 /// Messrichtung eines linearen Maßes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,17 +133,17 @@ impl ToolMode {
     ];
 
     /// Bezeichnung in der Oberfläche.
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            ToolMode::Off => "Aus",
-            ToolMode::Linear(LinearDir::Horizontal) => "Waagerecht",
-            ToolMode::Linear(LinearDir::Vertical) => "Senkrecht",
-            ToolMode::Linear(LinearDir::Aligned) => "Schräg",
-            ToolMode::Diameter => "Durchmesser",
-            ToolMode::Radius => "Radius",
-            ToolMode::Angle => "Winkel",
-            ToolMode::Chain => "Kette",
-            ToolMode::Baseline => "Bezugsmaße",
+            ToolMode::Off => tr!("dim-mode-off"),
+            ToolMode::Linear(LinearDir::Horizontal) => tr!("dim-kind-horizontal"),
+            ToolMode::Linear(LinearDir::Vertical) => tr!("dim-kind-vertical"),
+            ToolMode::Linear(LinearDir::Aligned) => tr!("dim-kind-aligned"),
+            ToolMode::Diameter => tr!("dim-kind-diameter"),
+            ToolMode::Radius => tr!("dim-kind-radius"),
+            ToolMode::Angle => tr!("dim-kind-angle"),
+            ToolMode::Chain => tr!("dim-mode-chain"),
+            ToolMode::Baseline => tr!("dim-mode-baseline"),
         }
     }
 
@@ -159,30 +180,30 @@ pub struct Hit {
 }
 
 /// Ergebnis eines Klicks.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ToolOutcome {
     /// Der Bezug ist gemerkt; es fehlt noch etwas (Hinweis als Satz).
     NeedMore(String),
     /// Genug Bezüge: die Maßlinie folgt dem Zeiger, der nächste Klick setzt das Maß.
     Ready,
     /// Abgelehnt (Grund als Satz); nichts wurde gemerkt oder geändert.
-    Rejected(String),
+    Rejected(Msg),
 }
 
 /// Fehler beim Setzen.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ToolError {
     /// Es fehlen noch Bezüge.
     NotReady,
     /// Abgelehnt (Grund als Satz); das Dokument ist unverändert.
-    Rejected(String),
+    Rejected(Msg),
 }
 
 impl std::fmt::Display for ToolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ToolError::NotReady => f.write_str("Es sind noch nicht genug Linien gewählt."),
-            ToolError::Rejected(t) => f.write_str(t),
+            ToolError::NotReady => f.write_str(&tr!("dim-not-enough-lines")),
+            ToolError::Rejected(t) => f.write_str(&t.text()),
         }
     }
 }
@@ -206,9 +227,9 @@ pub struct DimensionTool {
     /// Gruppennummer der zuletzt gesetzten Kette bzw. Bezugsmaße.
     group: Option<u64>,
     pointer: Option<DVec2>,
-    message: Option<String>,
+    message: Option<Msg>,
     /// Hinweis zum zuletzt gewählten Bezug (keine Ablehnung).
-    notice: Option<String>,
+    notice: Option<Msg>,
 }
 
 /// Alles, was zum Messen in einer Ansicht gebraucht wird.
@@ -227,14 +248,14 @@ struct Ctx<'a> {
 }
 
 impl<'a> Ctx<'a> {
-    fn new(state: &'a AppState, drawing: DrawingId, view: ViewId) -> Result<Ctx<'a>, String> {
-        let d = state.document.drawing(drawing).ok_or(NO_DRAWING)?;
-        let v = d.view(view).ok_or(NO_VIEW)?.clone();
+    fn new(state: &'a AppState, drawing: DrawingId, view: ViewId) -> Result<Ctx<'a>, Msg> {
+        let d = state.document.drawing(drawing).ok_or_else(no_drawing)?;
+        let v = d.view(view).ok_or_else(no_view)?.clone();
         if v.kind == ViewKind::Isometric {
-            return Err(NO_ISOMETRIC.into());
+            return Err(no_isometric());
         }
         if state.bodies.is_empty() {
-            return Err(DrawError::NoBodies.to_string());
+            return Err(draw_error_msg(&DrawError::NoBodies));
         }
         let model = state.document.model_edit_count();
         let solids: Vec<&Solid> = state
@@ -244,7 +265,7 @@ impl<'a> Ctx<'a> {
             .map(|b| &b.solid)
             .collect();
         if solids.is_empty() {
-            return Err(DrawError::MeshBodiesOnly.to_string());
+            return Err(draw_error_msg(&DrawError::MeshBodiesOnly));
         }
         // Eine Schnittansicht misst an ihren geschnittenen Körpern (Spec §9.3); die Herkunft
         // ihrer Linien zählt in diesen Körpern.
@@ -252,7 +273,7 @@ impl<'a> Ctx<'a> {
             let data = state
                 .drawing_ui
                 .section_ref(&v, model)
-                .ok_or(VIEWS_PENDING)?;
+                .ok_or_else(views_pending)?;
             data.solids.iter().collect()
         } else {
             solids
@@ -260,7 +281,7 @@ impl<'a> Ctx<'a> {
         let results = state.drawing_ui.results_for(d, model);
         let refs: BTreeMap<ViewId, &ViewLines> =
             results.iter().map(|(k, l)| (*k, l.as_ref())).collect();
-        let xf = view_transform(d, view, &refs).ok_or(VIEWS_PENDING)?;
+        let xf = view_transform(d, view, &refs).ok_or_else(views_pending)?;
         let draw: Vec<DrawBody> = solids
             .iter()
             .map(|s| DrawBody {
@@ -288,25 +309,25 @@ impl<'a> Ctx<'a> {
     }
 
     /// Misst ein Maß an den Bezügen; Fehler als Satz für die Oberfläche.
-    fn measure(&self, kind: DimKind, refs: &[GeoRef]) -> Result<Measured, String> {
+    fn measure(&self, kind: DimKind, refs: &[GeoRef]) -> Result<Measured, Msg> {
         let geos = refs
             .iter()
             .map(|r| resolve_geo_cached(&self.solids, r, &self.tol, &self.cache))
             .collect::<Result<Vec<Geo3>, _>>()
-            .map_err(|_| NOT_DIMENSIONABLE.to_string())?;
+            .map_err(|_| not_dimensionable())?;
         measure(kind, &geos, &self.basis, self.view.kind, self.extent).map_err(|e| dim_text(&e))
     }
 
     /// Bezug aus der getroffenen Linie (siehe Modulkommentar).
-    fn reference(&self, hit: &Hit, whole: bool) -> Result<GeoRef, String> {
+    fn reference(&self, hit: &Hit, whole: bool) -> Result<GeoRef, Msg> {
         let origin = match hit.origin {
             StrokeOrigin::Silhouette { body, face } => CandidateOrigin::Face { body, face },
             StrokeOrigin::Edge { body, edge } => {
-                let solid = self.solids.get(body).ok_or(NOT_DIMENSIONABLE)?;
+                let solid = self.solids.get(body).ok_or_else(not_dimensionable)?;
                 let e = solid
                     .edges
                     .get(Id::<Edge>::from_index(edge))
-                    .ok_or(NOT_DIMENSIONABLE)?;
+                    .ok_or_else(not_dimensionable)?;
                 if whole {
                     CandidateOrigin::Edge { body, edge }
                 } else {
@@ -314,8 +335,7 @@ impl<'a> Ctx<'a> {
                 }
             }
         };
-        geo_ref(&self.solids, origin, &self.tol, &self.cache)
-            .ok_or_else(|| NOT_DIMENSIONABLE.to_string())
+        geo_ref(&self.solids, origin, &self.tol, &self.cache).ok_or_else(not_dimensionable)
     }
 
     /// Kante, Kantenende (bis [`END_PX`] an einem Ende) oder Kreismitte (bis [`END_PX`] an der
@@ -362,17 +382,26 @@ pub fn sentence(text: &str) -> String {
     }
 }
 
+/// Wie [`sentence`] für eine Meldung: nur Text ohne Id bekommt nötigenfalls den Punkt (die Texte
+/// der Sprachdateien enden schon mit einem).
+pub fn sentence_msg(m: Msg) -> Msg {
+    match m {
+        Msg::Raw(t) => Msg::Raw(sentence(&t)),
+        other => other,
+    }
+}
+
 /// Meldung, wenn eine Kette oder Bezugsmaße nur zum Teil gesetzt werden konnten.
-pub fn incomplete_text(set: usize, total: usize) -> String {
-    format!("Die Maße sind unvollständig: nur {set} von {total} Maßen wurden gesetzt.")
+pub fn incomplete_text(set: usize, total: usize) -> Msg {
+    crate::msg!("dim-incomplete", set = set, total = total)
 }
 
 /// Fehler einer Messung als Satz für die Oberfläche (ohne Hinweise auf die Herkunft).
-fn dim_text(e: &DimError) -> String {
+fn dim_text(e: &DimError) -> Msg {
     match e {
-        DimError::Invalid(t) => t.clone(),
-        DimError::Lost(_) | DimError::Ambiguous => NOT_DIMENSIONABLE.into(),
-        e => e.to_string(),
+        DimError::Invalid(t) => Msg::Raw(t.clone()),
+        DimError::Lost(_) | DimError::Ambiguous => not_dimensionable(),
+        e => Msg::Raw(e.to_string()),
     }
 }
 
@@ -439,13 +468,18 @@ impl DimensionTool {
         self.pointer
     }
 
-    /// Letzte Ablehnung (bis zum nächsten Klick).
-    pub fn message(&self) -> Option<&str> {
-        self.message.as_deref()
+    /// Letzte Ablehnung (bis zum nächsten Klick) in der aktuellen Sprache.
+    pub fn message(&self) -> Option<String> {
+        self.message.as_ref().map(Msg::text)
+    }
+
+    /// Die gespeicherte Meldung selbst (um sie weiterzureichen, ohne sie zu übersetzen).
+    pub fn message_msg(&self) -> Option<Msg> {
+        self.message.clone()
     }
 
     /// Setzt die Meldung für die Hinweiszeile (etwa bei einem Klick neben die Linien).
-    pub fn set_message(&mut self, message: Option<String>) {
+    pub fn set_message(&mut self, message: Option<Msg>) {
         self.message = message;
     }
 
@@ -471,8 +505,8 @@ impl DimensionTool {
     }
 
     /// Hinweis zum zuletzt gewählten Bezug (etwa: Zylinderumriss misst bis zur Mitte).
-    pub fn notice(&self) -> Option<&str> {
-        self.notice.as_deref()
+    pub fn notice(&self) -> Option<String> {
+        self.notice.as_ref().map(Msg::text)
     }
 
     /// Hinweis zum nächsten Schritt; `None`, wenn das Werkzeug aus ist.
@@ -480,23 +514,19 @@ impl DimensionTool {
         let n = self.pending.len();
         let text = match self.mode {
             ToolMode::Off => return None,
-            ToolMode::Diameter | ToolMode::Radius if n == 0 => {
-                "Kreis, Bogen oder Zylinderrand anklicken."
-            }
-            ToolMode::Angle if n == 0 => "Erste gerade Kante anklicken.",
-            ToolMode::Angle if n == 1 => "Zweite gerade Kante anklicken.",
-            ToolMode::Linear(_) if n == 0 => "Erste Kante oder Ecke anklicken.",
-            ToolMode::Linear(_) if n == 1 => "Zweite Kante oder Ecke anklicken.",
-            ToolMode::Chain if n == 0 => "Ersten Punkt der Kette anklicken.",
-            ToolMode::Chain if n == 1 => "Nächsten Punkt der Kette anklicken.",
-            ToolMode::Baseline if n == 0 => "Bezugskante anklicken.",
-            ToolMode::Baseline if n == 1 => "Erstes Ziel anklicken.",
-            ToolMode::Chain | ToolMode::Baseline => {
-                "Weitere Punkte anklicken; Klick ins Leere, Doppelklick oder Esc setzt die Maße."
-            }
-            _ => "Klicken legt die Maßlinie ab. Esc bricht ab.",
+            ToolMode::Diameter | ToolMode::Radius if n == 0 => tr!("dim-hint-round"),
+            ToolMode::Angle if n == 0 => tr!("dim-hint-angle-first"),
+            ToolMode::Angle if n == 1 => tr!("dim-hint-angle-second"),
+            ToolMode::Linear(_) if n == 0 => tr!("dim-hint-linear-first"),
+            ToolMode::Linear(_) if n == 1 => tr!("dim-hint-linear-second"),
+            ToolMode::Chain if n == 0 => tr!("dim-hint-chain-first"),
+            ToolMode::Chain if n == 1 => tr!("dim-hint-chain-next"),
+            ToolMode::Baseline if n == 0 => tr!("dim-hint-baseline-first"),
+            ToolMode::Baseline if n == 1 => tr!("dim-hint-baseline-target"),
+            ToolMode::Chain | ToolMode::Baseline => tr!("dim-hint-more"),
+            _ => tr!("dim-hint-place"),
         };
-        Some(text.into())
+        Some(text)
     }
 
     /// Klick auf eine Linie der Ansicht `view`: merkt den Bezug oder lehnt ihn ab (das Dokument
@@ -510,7 +540,7 @@ impl DimensionTool {
     ) -> ToolOutcome {
         let out = self.click_inner(state, drawing, view, hit);
         let out = match out {
-            ToolOutcome::Rejected(t) => ToolOutcome::Rejected(sentence(&t)),
+            ToolOutcome::Rejected(t) => ToolOutcome::Rejected(sentence_msg(t)),
             o => o,
         };
         self.message = match &out {
@@ -522,7 +552,7 @@ impl DimensionTool {
             (ToolOutcome::NeedMore(_) | ToolOutcome::Ready, Some(GeoRef::Face(_)))
                 if !self.mode.whole_edges() =>
             {
-                Some(SILHOUETTE_NOTE.into())
+                Some(silhouette_note())
             }
             _ => None,
         };
@@ -538,7 +568,7 @@ impl DimensionTool {
     ) -> ToolOutcome {
         use ToolOutcome::{NeedMore, Ready, Rejected};
         if self.mode == ToolMode::Off {
-            return Rejected("Bitte zuerst eine Maßart wählen.".into());
+            return Rejected(crate::msg!("dim-pick-mode-first"));
         }
         let ctx = match Ctx::new(state, drawing, view) {
             Ok(c) => c,
@@ -560,12 +590,12 @@ impl DimensionTool {
         };
         let geo = match resolve_geo_cached(&ctx.solids, &r, &ctx.tol, &ctx.cache) {
             Ok(g) => g,
-            Err(_) => return Rejected(NOT_DIMENSIONABLE.into()),
+            Err(_) => return Rejected(not_dimensionable()),
         };
         let first = self.pending.first().cloned();
         let last = self.pending.last().cloned();
         match self.mode {
-            ToolMode::Off => Rejected("Bitte zuerst eine Maßart wählen.".into()),
+            ToolMode::Off => Rejected(crate::msg!("dim-pick-mode-first")),
             ToolMode::Diameter | ToolMode::Radius => {
                 let kind = if self.mode == ToolMode::Diameter {
                     DimKind::Diameter
@@ -582,7 +612,7 @@ impl DimensionTool {
             }
             ToolMode::Angle | ToolMode::Linear(_) => {
                 if self.mode == ToolMode::Angle && !matches!(geo, Geo3::Line { .. }) {
-                    return Rejected(ANGLE_LINES.into());
+                    return Rejected(angle_lines());
                 }
                 let Some(a) = first else {
                     self.pending.push(r);
@@ -661,7 +691,7 @@ impl DimensionTool {
         pointer: DVec2,
     ) -> Result<Vec<DimId>, ToolError> {
         let r = match self.finish_inner(state, drawing, pointer) {
-            Err(ToolError::Rejected(t)) => Err(ToolError::Rejected(sentence(&t))),
+            Err(ToolError::Rejected(t)) => Err(ToolError::Rejected(sentence_msg(t))),
             r => r,
         };
         self.message = match &r {
@@ -688,14 +718,12 @@ impl DimensionTool {
         let d = state
             .document
             .drawing(drawing)
-            .ok_or_else(|| ToolError::Rejected(NO_DRAWING.into()))?;
+            .ok_or_else(|| ToolError::Rejected(no_drawing()))?;
         if d.dimensions.len() + specs.len() > MAX_DIMENSIONS {
             return Err(ToolError::Rejected(full_text()));
         }
         let group = if self.mode.collects() {
-            Some(next_group(d).ok_or_else(|| {
-                ToolError::Rejected("Die Zeichnung hat keine freie Gruppennummer mehr.".into())
-            })?)
+            Some(next_group(d).ok_or_else(|| ToolError::Rejected(crate::msg!("dim-no-group")))?)
         } else {
             None
         };
@@ -711,7 +739,7 @@ impl DimensionTool {
                     // Nur das erste Maß kann scheitern, ohne etwas zu ändern; alle Maße einer
                     // Gruppe sind gleich gebaut.
                     if ids.is_empty() {
-                        return Err(ToolError::Rejected(e.to_string()));
+                        return Err(ToolError::Rejected(Msg::Raw(e.to_string())));
                     }
                     break;
                 }
@@ -795,7 +823,7 @@ impl DimensionTool {
 
 /// Messrichtung einer Kette aus den ersten beiden Punkten: waagerecht oder senkrecht, je
 /// nachdem, was sich messen lässt; geht beides, die Richtung mit dem größeren Wert.
-fn chain_direction(ctx: &Ctx, pair: &[GeoRef]) -> Result<DimKind, String> {
+fn chain_direction(ctx: &Ctx, pair: &[GeoRef]) -> Result<DimKind, Msg> {
     let h = ctx.measure(DimKind::Horizontal, pair);
     let v = ctx.measure(DimKind::Vertical, pair);
     match (h, v) {

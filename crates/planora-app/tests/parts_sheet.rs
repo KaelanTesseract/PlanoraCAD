@@ -9,13 +9,11 @@ use eframe::App as _;
 use egui::{Color32, Event, Key, Modifiers, PointerButton, Pos2, Rect, Vec2, pos2, vec2};
 use planora_app::app::PlanoraApp;
 use planora_app::drawing_browser;
-use planora_app::drawing_dialog::{NewDrawingDialog, SKETCH_BLOCKED};
+use planora_app::drawing_dialog::{NewDrawingDialog, sketch_blocked};
 use planora_app::drawing_state::{WorkArea, estimate_view_size, suggest_scale_in};
-use planora_app::drawing_view::{self, NO_VIEWS_ON_PARTS_SHEET};
-use planora_app::parts_section::{
-    CREATE, NO_PARTS, OPEN, SECTION, SWITCH, TOO_MANY_ON_SHEET, TOO_MANY_ROWS, create_or_open,
-};
-use planora_app::sheet_dialog::{CUT_WARNING, SheetInfoDialog};
+use planora_app::drawing_view;
+use planora_app::parts_section::{self, create_or_open};
+use planora_app::sheet_dialog::SheetInfoDialog;
 use planora_app::state::{AppState, StandardPlane};
 use planora_app::workspace::Workspace;
 use planora_app::{browser, fonts, icons, theme, viewport};
@@ -25,7 +23,7 @@ use planora_drawing::sheet_info::{FieldValue, Stamp, resolve_texts};
 use planora_drawing::{
     DrawingId, DrawingKind, Paper, Placement, Projection, RowOverride, Sheet, ViewKind,
 };
-use planora_feature::{FOLLOW_PAGE_DELETE, FeatureId, PARTS_SHEET_RENAME, SketchPlane};
+use planora_feature::{FeatureId, SketchPlane};
 use planora_math::{DVec2, DVec3};
 use planora_project::config::Config;
 use planora_project::library::Library;
@@ -421,7 +419,7 @@ impl H {
     /// Texte beim Überfahren des Fenstertexts `text` (etwa ein Feld): die Hinweise dazu.
     fn hover_texts(&mut self, text: &str) -> Vec<String> {
         // Erst die Tastatur vom Feld nehmen (ein Feld im Bearbeiten zeigt keinen Hinweis).
-        let head = self.scroll_to(SECTION);
+        let head = self.scroll_to(&parts_section::section());
         self.click(head.center());
         let probe = text.chars().take(4).collect::<String>();
         self.scroll_to_prefix(&probe);
@@ -606,10 +604,13 @@ fn more_than_ten_rows() {
         assert!(!texts.contains(&format!("Quader {n}")));
     }
     h.open_dialog();
-    h.scroll_to(TOO_MANY_ON_SHEET);
+    h.scroll_to(&parts_section::too_many_on_sheet());
     // Ausgeschaltet: kein Hinweis.
     h.dialog().sheet.parts_list = false;
-    assert!(h.try_scroll_to(TOO_MANY_ON_SHEET).is_none());
+    assert!(
+        h.try_scroll_to(&parts_section::too_many_on_sheet())
+            .is_none()
+    );
 }
 
 // (c) ------------------------------------------------------------------------------------------
@@ -724,8 +725,8 @@ fn section_edit_apply_reset() {
     h.open_dialog();
     assert_eq!(h.edits(), before, "Öffnen ändert nichts");
     // Abschnitt, Schalter, Pos. als Text (ohne Feld) links in der Zeile.
-    h.scroll_to(SECTION);
-    h.scroll_to(SWITCH);
+    h.scroll_to(&parts_section::section());
+    h.scroll_to(&parts_section::switch());
     let name = h.scroll_to("Quader 1");
     let shot = h.settle();
     let rect = h.dialog_rect().unwrap();
@@ -864,7 +865,13 @@ fn limits_and_bad_texts() {
     assert!(tip.contains(&"60/60".to_string()), "{tip:?}");
     // 60 Zeichen passen nicht in die Spalte der Tabelle auf dem Blatt.
     let rect = h.dialog_rect().unwrap();
-    assert_eq!(h.settle().dlg(CUT_WARNING, rect).len(), 1, "gekürzt");
+    assert_eq!(
+        h.settle()
+            .dlg(&planora_app::sheet_dialog::cut_warning(), rect)
+            .len(),
+        1,
+        "gekürzt"
+    );
     // Die Warnung folgt dem Schalter des Entwurfs: ohne Tabelle auf dem Blatt keine.
     assert!(
         h.st().document.drawings()[0]
@@ -874,9 +881,20 @@ fn limits_and_bad_texts() {
             .parts_list
     );
     h.dialog().sheet.parts_list = false;
-    assert_eq!(h.settle().dlg(CUT_WARNING, rect).len(), 0, "ohne Tabelle");
+    assert_eq!(
+        h.settle()
+            .dlg(&planora_app::sheet_dialog::cut_warning(), rect)
+            .len(),
+        0,
+        "ohne Tabelle"
+    );
     h.dialog().sheet.parts_list = true;
-    assert_eq!(h.settle().dlg(CUT_WARNING, rect).len(), 1);
+    assert_eq!(
+        h.settle()
+            .dlg(&planora_app::sheet_dialog::cut_warning(), rect)
+            .len(),
+        1
+    );
     // Zu langer Text aus der Kopie (nicht über das Feld): „Übernehmen“ schreibt nichts.
     let before = h.edits();
     h.dialog().sheet.title = FieldValue::Text("Neu".into());
@@ -908,7 +926,7 @@ fn switch_toggle() {
     };
     let on = area(&mut h);
     h.open_dialog();
-    h.click_text(SWITCH);
+    h.click_text(&parts_section::switch());
     assert!(!h.dialog().sheet.parts_list);
     assert!(
         h.st()
@@ -938,7 +956,7 @@ fn switch_toggle() {
     assert!(area(&mut h) > on, "freier Bereich größer");
     assert_eq!(required_format(h.st()), 6);
     h.open_dialog();
-    h.click_text(SWITCH);
+    h.click_text(&parts_section::switch());
     h.click_text("Übernehmen");
     assert!(h.table_texts().contains(&"Benennung".to_string()));
     assert_eq!(required_format(h.st()), 7);
@@ -953,13 +971,13 @@ fn create_and_open_parts_sheet() {
     let first = new_drawing(&mut st, A3_QUER);
     let mut h = H::new(TALL, false, st);
     h.open_dialog();
-    assert!(h.try_scroll_to(OPEN).is_none());
+    assert!(h.try_scroll_to(&parts_section::open()).is_none());
     h.scroll_to("Papier");
     let before = h.edits();
-    h.click_text(CREATE);
+    h.click_text(&parts_section::create());
     assert_eq!(h.edits(), before + 1, "Anlegen ist ein Schritt");
     // Die Papierwahl gibt es nur zum Anlegen.
-    h.scroll_to(OPEN);
+    h.scroll_to(&parts_section::open());
     assert!(h.try_scroll_to("Papier").is_none(), "Papierwahl weg");
     assert!(h.try_scroll_to("quer").is_none());
     let sheets = h.st().document.parts_sheets();
@@ -990,10 +1008,10 @@ fn create_and_open_parts_sheet() {
     // Jetzt heißt der Knopf „öffnen“ und öffnet Seite 1.
     h.st().drawing_ui.open(first);
     h.open_dialog();
-    assert!(h.try_scroll_to(CREATE).is_none());
+    assert!(h.try_scroll_to(&parts_section::create()).is_none());
     h.st().drawing_ui.area = WorkArea::Model;
     let before = h.edits();
-    h.click_text(OPEN);
+    h.click_text(&parts_section::open());
     assert_eq!(h.st().drawing_ui.area, WorkArea::Drawing(p1));
     assert_eq!(h.edits(), before, "Öffnen ändert nichts");
     assert_eq!(h.st().document.parts_sheets().len(), 1);
@@ -1006,7 +1024,7 @@ fn create_and_open_parts_sheet() {
     h.dialog().parts.paper = Paper::A3;
     h.click_text("quer");
     assert!(h.dialog().parts.landscape);
-    h.click_text(CREATE);
+    h.click_text(&parts_section::create());
     let p = h.st().document.parts_sheets()[0];
     assert_eq!(h.st().document.drawing(p).unwrap().sheet, A3_QUER);
 }
@@ -1112,8 +1130,11 @@ fn the_switch_of_a_parts_sheet_is_ignored() {
     let mut h = H::new(TALL, false, loaded);
     h.st().drawing_ui.open(p1);
     h.open_dialog();
-    h.scroll_to(SECTION);
-    assert!(h.try_scroll_to(SWITCH).is_none(), "kein Schalter");
+    h.scroll_to(&parts_section::section());
+    assert!(
+        h.try_scroll_to(&parts_section::switch()).is_none(),
+        "kein Schalter"
+    );
     assert!(
         h.try_scroll_to("Eigene Hinweise für dieses Blatt")
             .is_none(),
@@ -1124,7 +1145,7 @@ fn the_switch_of_a_parts_sheet_is_ignored() {
     assert_eq!(h.edits(), before);
     h.st().drawing_ui.open(first);
     h.open_dialog();
-    h.scroll_to(SWITCH);
+    h.scroll_to(&parts_section::switch());
     h.scroll_to("Eigene Hinweise für dieses Blatt");
 }
 
@@ -1240,7 +1261,7 @@ fn browser_rules() {
     for row in ["Stückliste", "Stückliste (2)"] {
         let hover = b.menu_entry(&mut st, row, "Umbenennen");
         assert!(
-            hover.contains(&PARTS_SHEET_RENAME.to_string()),
+            hover.contains(&drawing_browser::parts_sheet_rename().text()),
             "{row}: {hover:?}"
         );
         assert!(st.rename_drawing_draft.is_none(), "{row}: gesperrt");
@@ -1248,7 +1269,10 @@ fn browser_rules() {
     // Auch der zweite Riegel.
     drawing_browser::request_rename(&mut st, p1);
     assert!(st.rename_drawing_draft.is_none());
-    assert_eq!(st.message.as_deref(), Some(PARTS_SHEET_RENAME));
+    assert_eq!(
+        st.message.as_deref(),
+        Some(drawing_browser::parts_sheet_rename().text().as_str())
+    );
     // Eine gewöhnliche Zeichnung lässt sich umbenennen.
     drawing_browser::request_rename(&mut st, first);
     assert!(st.rename_drawing_draft.is_some());
@@ -1256,11 +1280,17 @@ fn browser_rules() {
 
     // Löschen bei Blatt 2 gesperrt.
     let hover = b.menu_entry(&mut st, "Stückliste (2)", "Löschen");
-    assert!(hover.contains(&FOLLOW_PAGE_DELETE.to_string()), "{hover:?}");
+    assert!(
+        hover.contains(&drawing_browser::follow_page_delete().text()),
+        "{hover:?}"
+    );
     assert!(st.pending_delete_drawing.is_none());
     drawing_browser::request_delete_drawing(&mut st, p2);
     assert!(st.pending_delete_drawing.is_none());
-    assert_eq!(st.message.as_deref(), Some(FOLLOW_PAGE_DELETE));
+    assert_eq!(
+        st.message.as_deref(),
+        Some(drawing_browser::follow_page_delete().text().as_str())
+    );
     assert!(st.document.drawing(p2).is_some());
 
     // Löschen bei Blatt 1 fragt mit der Zahl der Blätter und entfernt beide; Blatt 2 war offen
@@ -1269,9 +1299,9 @@ fn browser_rules() {
     st.drawing_ui.selected_drawing = Some(p2);
     b.menu_entry(&mut st, "Stückliste", "Löschen");
     let plan = st.pending_delete_drawing.clone().expect("Rückfrage");
-    assert_eq!(plan.text, "Stückliste mit 2 Blättern löschen?");
+    assert_eq!(plan.text.text(), "Stückliste mit 2 Blättern löschen?");
     let texts = b.idle(&mut st);
-    assert!(texts.iter().any(|t| t.text == plan.text));
+    assert!(texts.iter().any(|t| t.text == plan.text.text()));
     drawing_browser::apply_delete(&mut st, &plan).unwrap();
     assert!(st.document.parts_sheets().is_empty());
     assert!(st.document.drawing(first).is_some());
@@ -1284,7 +1314,7 @@ fn browser_rules() {
     let p = st.document.parts_sheets()[0];
     drawing_browser::request_delete_drawing(&mut st, p);
     assert_eq!(
-        st.pending_delete_drawing.as_ref().unwrap().text,
+        st.pending_delete_drawing.as_ref().unwrap().text.text(),
         "Stückliste löschen?"
     );
 }
@@ -1297,7 +1327,7 @@ fn no_views_on_a_parts_sheet() {
     let before = st.document.edit_count();
     assert_eq!(
         drawing_view::add_view(&mut st, ViewKind::Front),
-        Err(NO_VIEWS_ON_PARTS_SHEET.to_string())
+        Err(drawing_view::no_views_on_parts_sheet().text().to_string())
     );
     assert!(st.document.drawing(p1).unwrap().views.is_empty());
     assert_eq!(st.document.edit_count(), before);
@@ -1314,7 +1344,10 @@ fn no_views_on_a_parts_sheet() {
     let shot = h.click(p);
     assert!(!shot.has("Isometrisch"), "Menü geht nicht auf");
     let tip = h.hover(p);
-    assert!(tip.has(NO_VIEWS_ON_PARTS_SHEET), "Hinweis fehlt");
+    assert!(
+        tip.has(&drawing_view::no_views_on_parts_sheet().text()),
+        "Hinweis fehlt"
+    );
     assert!(h.st().document.drawing(p1).unwrap().views.is_empty());
 }
 
@@ -1392,10 +1425,7 @@ fn locked_in_old_versions_and_in_the_sketch_mode() {
         .unwrap();
     st.open_sketch(sk).unwrap();
     let before = st.document.edit_count();
-    assert_eq!(
-        create_or_open(&mut st, A4_HOCH),
-        Err(SKETCH_BLOCKED.to_string())
-    );
+    assert_eq!(create_or_open(&mut st, A4_HOCH), Err(sketch_blocked()));
     assert!(st.document.parts_sheets().is_empty());
     assert_eq!(st.document.edit_count(), before);
 
@@ -1422,7 +1452,7 @@ fn texts_are_plain() {
         let mut all: Vec<String> = h.all_dialog_texts().into_iter().map(|t| t.text).collect();
         // Und auf einem Stücklistenblatt (Knopf „öffnen“).
         let id = h.dialog().drawing;
-        h.click_text(CREATE);
+        h.click_text(&parts_section::create());
         let p1 = h.st().document.parts_sheets()[0];
         h.st().sheet_dialog = None;
         h.st().drawing_ui.open(p1);
@@ -1431,10 +1461,10 @@ fn texts_are_plain() {
         all.sort();
         all.dedup();
         for must in [
-            SECTION,
-            SWITCH,
-            TOO_MANY_ON_SHEET,
-            OPEN,
+            &parts_section::section(),
+            &parts_section::switch(),
+            &parts_section::too_many_on_sheet(),
+            &parts_section::open(),
             "Pos.",
             "Quader 12",
             "Benennung",
@@ -1453,14 +1483,14 @@ fn texts_are_plain() {
         let _ = id;
     }
     for t in [
-        SECTION,
-        SWITCH,
-        TOO_MANY_ON_SHEET,
-        TOO_MANY_ROWS,
-        NO_PARTS,
-        CREATE,
-        OPEN,
-        NO_VIEWS_ON_PARTS_SHEET,
+        &parts_section::section(),
+        &parts_section::switch(),
+        &parts_section::too_many_on_sheet(),
+        &parts_section::too_many_rows(),
+        &parts_section::no_parts(),
+        &parts_section::create(),
+        &parts_section::open(),
+        &drawing_view::no_views_on_parts_sheet().text(),
     ] {
         for banned in ["Spec", "ISO", "DXF", "Format 7", "Kennung", "TODO"] {
             assert!(!t.contains(banned), "„{t}“");
@@ -1525,31 +1555,38 @@ fn section_messages_and_row_limit() {
     let has = |t: &[String], s: &str| t.iter().any(|x| x == s);
     // 201 Zeilen: Hinweis, nur 200 Zeilen im Abschnitt.
     let t = section_alone(201, true, DrawingKind::Views);
-    assert!(has(&t, TOO_MANY_ROWS) && has(&t, TOO_MANY_ON_SHEET));
+    assert!(
+        has(&t, &parts_section::too_many_rows()) && has(&t, &parts_section::too_many_on_sheet())
+    );
     assert!(has(&t, "Teil 200") && !has(&t, "Teil 201"));
     // Genau 200: kein Hinweis zu den Stücklistenblättern.
     let t = section_alone(200, true, DrawingKind::Views);
-    assert!(!has(&t, TOO_MANY_ROWS) && has(&t, TOO_MANY_ON_SHEET));
+    assert!(
+        !has(&t, &parts_section::too_many_rows()) && has(&t, &parts_section::too_many_on_sheet())
+    );
     // 10 Zeilen passen aufs Blatt, 11 nicht; ausgeschaltet kein Hinweis.
     assert!(!has(
         &section_alone(10, true, DrawingKind::Views),
-        TOO_MANY_ON_SHEET
+        &parts_section::too_many_on_sheet()
     ));
     assert!(has(
         &section_alone(11, true, DrawingKind::Views),
-        TOO_MANY_ON_SHEET
+        &parts_section::too_many_on_sheet()
     ));
     assert!(!has(
         &section_alone(11, false, DrawingKind::Views),
-        TOO_MANY_ON_SHEET
+        &parts_section::too_many_on_sheet()
     ));
     // Auf einem Stücklistenblatt weder Schalter noch Hinweis zum Zeichnungsblatt.
     let t = section_alone(11, true, DrawingKind::PartsList { page: 1 });
-    assert!(!has(&t, SWITCH) && !has(&t, TOO_MANY_ON_SHEET));
-    assert!(has(&section_alone(11, true, DrawingKind::Views), SWITCH));
+    assert!(!has(&t, &parts_section::switch()) && !has(&t, &parts_section::too_many_on_sheet()));
+    assert!(has(
+        &section_alone(11, true, DrawingKind::Views),
+        &parts_section::switch()
+    ));
     // Ohne Zeilen.
     let t = section_alone(0, true, DrawingKind::Views);
-    assert!(has(&t, NO_PARTS) && has(&t, CREATE));
+    assert!(has(&t, &parts_section::no_parts()) && has(&t, &parts_section::create()));
 }
 
 #[test]
@@ -1563,7 +1600,7 @@ fn messages_without_parts() {
     st.drawing_ui.open(id);
     let mut h = H::new(TALL, false, st);
     h.open_dialog();
-    h.scroll_to(NO_PARTS);
+    h.scroll_to(&parts_section::no_parts());
     assert!(h.try_scroll_to("Pos.").is_none(), "keine Tabelle");
 }
 
@@ -1582,7 +1619,13 @@ fn fits_small_window() {
         // Einen eigenen Text, damit „Zurücksetzen“ erscheint.
         h.type_into_hinted("Quader 3", "Bolzen");
         let glyph = icons::glyph(icons::Icon::Close).to_string();
-        for t in [SECTION, "Quader 2", "Bolzen", CREATE, "quer"] {
+        for t in [
+            &parts_section::section(),
+            "Quader 2",
+            "Bolzen",
+            &parts_section::create(),
+            "quer",
+        ] {
             h.scroll_to(t);
             let shot = h.settle();
             let rect = h.dialog_rect().unwrap();
@@ -1753,7 +1796,7 @@ fn automatic_material_follows_the_draft() {
     let mut h = H::new(TALL, false, st);
     h.open_dialog();
     h.dialog().project.material = FieldValue::Text("Messing".into());
-    h.scroll_to(SECTION);
+    h.scroll_to(&parts_section::section());
     let rect = h.dialog_rect().unwrap();
     // Hinweis in beiden Zeilen (und im Feld „Werkstoff“ der Projektangaben).
     let mut seen = 0;
@@ -1833,7 +1876,7 @@ fn rows_are_compact_and_the_buttons_stay_in_view() {
             }
         }
         // Knopf und Schalter stehen über den Zeilen.
-        let c = h.scroll_to(CREATE);
+        let c = h.scroll_to(&parts_section::create());
         let shot = h.settle();
         let rect = h.dialog_rect().unwrap();
         if let Some(q) = shot.dlg("Quader 1", rect).first() {

@@ -258,12 +258,12 @@ fn transient_ui_is_cleared() {
     st.pending_delete_drawing = Some(DrawingDeletePlan {
         drawing: d,
         view: None,
-        text: "Löschen?".into(),
+        text: "Löschen?".to_string().into(),
     });
     st.pending_delete_dimension = Some(DimDeletePlan {
         drawing: d,
         dim: DimId(1),
-        text: "Maß löschen?".into(),
+        text: "Maß löschen?".to_string().into(),
     });
     st.rename_draft = Some((q1, "Neu".into()));
     st.rename_drawing_draft = Some((d, "Blatt neu".into()));
@@ -418,7 +418,7 @@ fn transient_ui_is_cleared_on_the_drawing_path_too() {
     st.pending_delete_drawing = Some(DrawingDeletePlan {
         drawing: d,
         view: Some(v),
-        text: "Löschen?".into(),
+        text: "Löschen?".to_string().into(),
     });
     st.message = Some("alt".into());
     let scene = Arc::clone(&st.scene);

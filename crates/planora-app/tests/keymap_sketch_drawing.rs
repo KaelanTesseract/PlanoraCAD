@@ -562,14 +562,14 @@ fn drawing_tool_keys_select_the_tools() {
     let seen = rig.settle();
     let at = seen
         .iter()
-        .find(|s| s.text == balloon_tool::TOOL)
+        .find(|s| s.text == balloon_tool::tool())
         .expect("Schalter Position")
         .rect
         .center();
     let texts = rig.hover(at);
     assert!(texts.iter().any(|t| t == "Position (B)"), "{texts:?}");
     assert!(
-        texts.iter().any(|t| t == balloon_tool::TOOL_TIP),
+        texts.iter().any(|t| *t == balloon_tool::tool_tip()),
         "{texts:?}"
     );
     assert_eq!(

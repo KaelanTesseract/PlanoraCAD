@@ -3,28 +3,35 @@
 //! („Pos. 2 – Platte“); Klick wählt den Kreis, das Kontextmenü löscht ihn. Ein Kreis, dessen Teil
 //! es nicht mehr gibt, steht rot als „Pos. ? – Teil fehlt“ mit dem Grund als Hinweistext.
 
-use crate::balloon_tool::{self, LOST_TIP};
+use crate::balloon_tool;
 use crate::browser::{body_indent, row};
-use crate::drawing_browser::{READ_ONLY_HINT, open_drawing, select_drawing};
+use crate::drawing_browser::{open_drawing, read_only_hint, select_drawing};
 use crate::drawing_state::WorkArea;
 use crate::drawing_view::view_names;
 use crate::icons::{paint_balloon_icon, paint_view_icon};
 use crate::state::AppState;
 use crate::theme;
 use planora_drawing::{BalloonId, DrawingId};
+use planora_i18n::tr;
 
 /// Text, solange die Zeichnung keinen Nummernkreis hat.
-pub const EMPTY_TEXT: &str = "Noch keine Positionsnummern. Das Werkzeug „Position“ setzt welche.";
+pub fn empty_text() -> String {
+    tr!("balloon-empty")
+}
 /// Überschrift des Abschnitts.
-pub const SECTION: &str = "Positionen";
+pub fn section() -> String {
+    tr!("balloon-section")
+}
 /// Hinweistext einer Zeile.
-const ROW_TIP: &str = "Klick wählt die Positionsnummer; Rechtsklick zeigt weitere Befehle.";
+fn row_tip() -> String {
+    tr!("balloon-row-tip")
+}
 
 /// Text einer Zeile: „Pos. 2 – Platte“; ohne Nummer (Teil fehlt) „Pos. ? – Teil fehlt“.
 pub fn row_text(number: Option<u32>, name: &str) -> String {
     match number {
-        Some(n) => format!("Pos. {n} – {name}"),
-        None => "Pos. ? – Teil fehlt".into(),
+        Some(n) => tr!("balloon-row", n = n, name = name),
+        None => tr!("balloon-row-lost"),
     }
 }
 
@@ -112,11 +119,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
         _ => return,
     }
     ui.add_space(theme::SPACE_3);
-    theme::section_header(ui, SECTION, theme::SUB_HEADER_H);
+    theme::section_header(ui, &section(), theme::SUB_HEADER_H);
     ui.add_space(theme::SPACE_1);
     let groups = groups_of(ui.ctx(), state, id);
     if groups.is_empty() {
-        ui.weak(EMPTY_TEXT);
+        ui.weak(empty_text());
     }
     let mut action = None;
     for g in &groups {
@@ -135,14 +142,18 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
                 None,
                 paint_balloon_icon,
             );
-            let resp = resp.on_hover_text(if r.lost { LOST_TIP } else { ROW_TIP });
+            let resp = resp.on_hover_text(if r.lost {
+                balloon_tool::lost_tip()
+            } else {
+                row_tip()
+            });
             if resp.clicked() {
                 action = Some(Action::Select(b));
             }
             resp.context_menu(|ui| {
                 if ui
-                    .add_enabled(!read_only, egui::Button::new("Löschen"))
-                    .on_disabled_hover_text(READ_ONLY_HINT)
+                    .add_enabled(!read_only, egui::Button::new(tr!("action-delete")))
+                    .on_disabled_hover_text(read_only_hint())
                     .clicked()
                 {
                     action = Some(Action::Delete(b));

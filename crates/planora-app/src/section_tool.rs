@@ -3,7 +3,7 @@
 //! Blickrichtung, Schraffur).
 //!
 //! **Ablauf:** der erste Klick liegt in der Hüllbox einer geraden Ansicht ohne Schnitt (sonst
-//! [`NOT_FROM_HERE`]) und merkt Ansicht und Punkt (in Ansichtskoordinaten). Der zweite Klick legt
+//! [`not_from_here`]) und merkt Ansicht und Punkt (in Ansichtskoordinaten). Der zweite Klick legt
 //! die Richtung fest ([`snap`]: waagerecht, wenn |dx| ≥ |dy|); die quer liegende Koordinate ist die
 //! des ersten Klicks und rastet auf die Mitte der Hüllbox ein, wenn sie auf dem Bildschirm näher
 //! als [`SNAP_PX`] daran liegt ([`line_for`]). [`create`] ist genau eine Änderung des Dokuments.
@@ -11,10 +11,11 @@
 //! **Lage der neuen Ansicht (S12):** abhängig von der Quellansicht mit deren Maßstab, im
 //! Vorgabeabstand; liegt schon ein Kind derselben Quellansicht in derselben Richtung, dahinter.
 
-use crate::dimension_state::{NO_DRAWING, NO_VIEW, VIEWS_PENDING};
+use crate::dimension_state::{no_drawing, no_view, views_pending};
 use crate::dimension_tool::sentence;
-use crate::drawing_dialog::SKETCH_BLOCKED;
+use crate::drawing_dialog::sketch_blocked;
 use crate::drawing_state::{default_distance, estimate_view_size};
+use crate::msg::Msg;
 use crate::sketch_view::parse_number;
 use crate::state::AppState;
 use egui::Pos2;
@@ -28,40 +29,64 @@ use planora_drawing::{
     ViewLines, ViewSpec, align_dir, plane_offset_from_view, section_kind, section_line_coord,
 };
 use planora_feature::FeatureError;
+use planora_i18n::tr;
 use planora_math::DVec2;
 use std::collections::BTreeMap;
 
 /// Beschriftung des Schalters.
-pub const TOOL: &str = "Schnitt";
+pub fn tool() -> String {
+    tr!("section-tool")
+}
 /// Tooltip des Schalters.
-pub const TOOL_TIP: &str = "Zwei Klicks in einer geraden Ansicht legen die Schnittlinie fest. Daraus entsteht eine Schnittansicht.";
+pub fn tool_tip() -> String {
+    tr!("section-tool-tip")
+}
 /// Hinweis vor dem ersten Klick.
-pub const HINT_FIRST: &str =
-    "Anfang der Schnittlinie in einer geraden Ansicht anklicken. Esc beendet.";
+pub fn hint_first() -> String {
+    tr!("section-hint-first")
+}
 /// Hinweis vor dem zweiten Klick.
-pub const HINT_SECOND: &str =
-    "Ende der Schnittlinie anklicken. Die Linie rastet waagerecht oder senkrecht ein.";
+pub fn hint_second() -> String {
+    tr!("section-hint-second")
+}
 /// Ablehnung: der Schnitt geht nicht aus dieser Ansicht.
-pub const NOT_FROM_HERE: &str = "Ein Schnitt geht nur aus einer geraden Ansicht.";
+pub fn not_from_here() -> Msg {
+    crate::msg!("section-not-from-here")
+}
 /// Ablehnung: beide Klicks liegen (fast) auf demselben Punkt.
-pub const TOO_SHORT: &str = "Bitte zwei verschiedene Punkte anklicken.";
+pub fn too_short() -> Msg {
+    crate::msg!("section-too-short")
+}
 /// Ablehnung: zu viele Schnitte auf dem Blatt.
-pub const FULL: &str = "Es sind höchstens 12 Schnitte je Blatt möglich.";
+pub fn full() -> Msg {
+    crate::msg!("section-full", max = MAX_SECTIONS)
+}
 /// Hinweis im Ansichtsfeld, wenn die Ebene verschoben werden musste.
-pub const NUDGED: &str =
-    "Die Schnittebene lag genau auf einer Fläche oder Kante und wurde um 0,001 mm verschoben.";
+pub fn nudged() -> String {
+    tr!("section-nudged")
+}
 /// Fangweite der Mitte der Hüllbox in Bildschirmpunkten.
 pub const SNAP_PX: f32 = 8.0;
 /// Erklärung am gesperrten Schalter in einer alten Version.
-pub const READ_ONLY_TIP: &str = "In einer alten Version lassen sich keine Schnitte anlegen.";
+pub fn read_only_tip() -> String {
+    tr!("section-read-only-tip")
+}
 /// Erklärung am gesperrten Schalter eines Stücklistenblatts.
-pub const PARTS_SHEET_TIP: &str = "Auf dem Stücklistenblatt gibt es keine Schnitte.";
+pub fn parts_sheet_tip() -> String {
+    tr!("section-parts-sheet-tip")
+}
 /// Erklärung, wenn es noch keine gerade Ansicht gibt.
-pub const NO_STRAIGHT_TIP: &str = "Für einen Schnitt braucht das Blatt eine gerade Ansicht.";
+pub fn no_straight_tip() -> String {
+    tr!("section-no-straight-tip")
+}
 /// Tooltip des gesperrten Maßstabs einer Schnittansicht.
-pub const SCALE_LOCKED_TIP: &str = "Der Maßstab folgt der Ausgangsansicht.";
+pub fn scale_locked_tip() -> String {
+    tr!("section-scale-locked-tip")
+}
 /// Meldung bei einer Eingabe, die keine Zahl ist.
-pub const NOT_A_NUMBER: &str = "Bitte eine Zahl eingeben.";
+pub fn not_a_number() -> Msg {
+    crate::msg!("section-not-a-number")
+}
 /// Mindestabstand der beiden Klicks auf dem Blatt in Millimetern.
 pub const MIN_LENGTH_MM: f64 = 1.0;
 
@@ -75,7 +100,7 @@ pub struct SectionTool {
     active: bool,
     /// Erster Klick: Ansicht und Punkt in Ansichtskoordinaten.
     start: Option<(ViewId, DVec2)>,
-    message: Option<String>,
+    message: Option<Msg>,
     message_key: Option<MessageKey>,
 }
 
@@ -103,13 +128,13 @@ impl SectionTool {
         self.start.take().is_some()
     }
 
-    /// Letzte Ablehnung (rot in der Hinweiszeile).
-    pub fn message(&self) -> Option<&str> {
-        self.message.as_deref()
+    /// Letzte Ablehnung (rot in der Hinweiszeile) in der aktuellen Sprache.
+    pub fn message(&self) -> Option<String> {
+        self.message.as_ref().map(Msg::text)
     }
 
     /// Setzt die Meldung für die Hinweiszeile.
-    pub fn set_message(&mut self, message: Option<String>) {
+    pub fn set_message(&mut self, message: Option<Msg>) {
         self.message = message;
         self.message_key = None;
     }
@@ -131,12 +156,12 @@ impl SectionTool {
     }
 
     /// Hinweis zur Bedienung bei eingeschaltetem Werkzeug.
-    pub fn hint(&self) -> Option<&'static str> {
+    pub fn hint(&self) -> Option<String> {
         self.active.then(|| {
             if self.start.is_some() {
-                HINT_SECOND
+                hint_second()
             } else {
-                HINT_FIRST
+                hint_first()
             }
         })
     }
@@ -145,25 +170,26 @@ impl SectionTool {
 /// Kann das Werkzeug benutzt werden? Sonst die Erklärung (alte Version, Stücklistenblatt, keine
 /// gerade Ansicht ohne Schnitt, gewählte Ansicht ist Isometrie oder selbst ein Schnitt, schon 12
 /// Schnitte).
-pub fn blocked(
-    drawing: &Drawing,
-    selected: Option<&ViewSpec>,
-    editable: bool,
-) -> Option<&'static str> {
+pub fn blocked(drawing: &Drawing, selected: Option<&ViewSpec>, editable: bool) -> Option<String> {
+    blocked_msg(drawing, selected, editable).map(|m| m.text())
+}
+
+/// Wie [`blocked`], als Meldung (übersetzt erst beim Zeichnen).
+pub fn blocked_msg(drawing: &Drawing, selected: Option<&ViewSpec>, editable: bool) -> Option<Msg> {
     if !editable {
-        Some(READ_ONLY_TIP)
+        Some(crate::msg!("section-read-only-tip"))
     } else if matches!(drawing.kind, DrawingKind::PartsList { .. }) {
-        Some(PARTS_SHEET_TIP)
+        Some(crate::msg!("section-parts-sheet-tip"))
     } else if !drawing
         .views
         .iter()
         .any(|v| v.kind.is_normal() && v.section.is_none())
     {
-        Some(NO_STRAIGHT_TIP)
+        Some(crate::msg!("section-no-straight-tip"))
     } else if selected.is_some_and(|v| !v.kind.is_normal() || v.section.is_some()) {
-        Some(NOT_FROM_HERE)
+        Some(not_from_here())
     } else if drawing.views.iter().filter(|v| v.section.is_some()).count() >= MAX_SECTIONS {
-        Some(FULL)
+        Some(full())
     } else {
         None
     }
@@ -201,10 +227,10 @@ pub fn to_view(xf: &SheetTransform, at: DVec2) -> DVec2 {
     (at - DVec2::new(xf.tx, xf.ty)) / s + xf.bbox_center
 }
 
-fn feature_text(e: FeatureError) -> String {
+fn feature_text(e: FeatureError) -> Msg {
     match e {
-        FeatureError::InvalidInput(m) => sentence(&m),
-        e => sentence(&e.to_string()),
+        FeatureError::InvalidInput(m) => Msg::Raw(sentence(&m)),
+        e => Msg::Raw(sentence(&e.to_string())),
     }
 }
 
@@ -243,20 +269,20 @@ pub fn create(
     parent: ViewId,
     horizontal: bool,
     coord: f64,
-) -> Result<ViewId, String> {
+) -> Result<ViewId, Msg> {
     if state.sketch_session.is_some() {
-        return Err(SKETCH_BLOCKED.into());
+        return Err(sketch_blocked());
     }
-    let d = state.document.drawing(drawing).ok_or(NO_DRAWING)?;
-    let source = d.view(parent).ok_or(NO_VIEW)?;
-    if let Some(why) = blocked(d, Some(source), true) {
-        return Err(why.into());
+    let d = state.document.drawing(drawing).ok_or_else(no_drawing)?;
+    let source = d.view(parent).ok_or_else(no_view)?;
+    if let Some(why) = blocked_msg(d, Some(source), true) {
+        return Err(why);
     }
     if !coord.is_finite() {
-        return Err(TOO_SHORT.into());
+        return Err(too_short());
     }
-    let kind = section_kind(source.kind, horizontal, false).ok_or(NOT_FROM_HERE)?;
-    let offset = plane_offset_from_view(source.kind, kind, coord).ok_or(NOT_FROM_HERE)?;
+    let kind = section_kind(source.kind, horizontal, false).ok_or_else(not_from_here)?;
+    let offset = plane_offset_from_view(source.kind, kind, coord).ok_or_else(not_from_here)?;
     let distance = section_distance(state, d, source, kind);
     let mut made = None;
     state
@@ -265,7 +291,9 @@ pub fn create(
             made = Some(dr.add_section(parent, kind, offset, distance));
         })
         .map_err(feature_text)?;
-    let id = made.ok_or(NO_DRAWING)?.map_err(|m| sentence(&m))?;
+    let id = made
+        .ok_or_else(no_drawing)?
+        .map_err(|m| Msg::Raw(sentence(&m)))?;
     let ui = &mut state.drawing_ui;
     ui.selected_view = Some(id);
     ui.selected_dim = None;
@@ -275,17 +303,17 @@ pub fn create(
 
 /// Dreht die Blickrichtung der Schnittansicht `view` um (Gegenansicht, `offset` bleibt). Eine
 /// Änderung des Dokuments.
-pub fn flip(state: &mut AppState, drawing: DrawingId, view: ViewId) -> Result<(), String> {
-    let d = state.document.drawing(drawing).ok_or(NO_DRAWING)?;
-    let v = d.view(view).ok_or(NO_VIEW)?;
+pub fn flip(state: &mut AppState, drawing: DrawingId, view: ViewId) -> Result<(), Msg> {
+    let d = state.document.drawing(drawing).ok_or_else(no_drawing)?;
+    let v = d.view(view).ok_or_else(no_view)?;
     if v.section.is_none() {
-        return Err(NOT_FROM_HERE.into());
+        return Err(not_from_here());
     }
     let opposite = ViewKind::ALL
         .into_iter()
         .filter(|k| k.is_normal())
         .find(|k| (Basis::of(*k).d + Basis::of(v.kind).d).length() < 1e-9)
-        .ok_or(NOT_FROM_HERE)?;
+        .ok_or_else(not_from_here)?;
     edit(state, drawing, view, |v| v.kind = opposite)
 }
 
@@ -295,7 +323,7 @@ fn edit(
     drawing: DrawingId,
     view: ViewId,
     f: impl FnOnce(&mut ViewSpec),
-) -> Result<(), String> {
+) -> Result<(), Msg> {
     state
         .document
         .update_drawing(drawing, |d| {
@@ -316,8 +344,8 @@ pub fn set_offset_text(
     drawing: DrawingId,
     view: ViewId,
     text: &str,
-) -> Result<(), String> {
-    let value = parse_number(text).ok_or(NOT_A_NUMBER)?;
+) -> Result<(), Msg> {
+    let value = parse_number(text).ok_or_else(not_a_number)?;
     edit(state, drawing, view, |v| {
         if let Some(s) = v.section.as_mut() {
             s.offset = value;
@@ -331,7 +359,7 @@ pub fn set_hatch(
     drawing: DrawingId,
     view: ViewId,
     on: bool,
-) -> Result<(), String> {
+) -> Result<(), Msg> {
     edit(state, drawing, view, |v| {
         if let Some(s) = v.section.as_mut() {
             s.hatch.on = on;
@@ -346,8 +374,8 @@ pub fn set_spacing_text(
     drawing: DrawingId,
     view: ViewId,
     text: &str,
-) -> Result<(), String> {
-    let value = parse_number(text).ok_or(NOT_A_NUMBER)?;
+) -> Result<(), Msg> {
+    let value = parse_number(text).ok_or_else(not_a_number)?;
     edit(state, drawing, view, |v| {
         if let Some(s) = v.section.as_mut() {
             s.hatch.spacing = value;
@@ -362,7 +390,7 @@ pub fn set_scale(
     drawing: DrawingId,
     view: ViewId,
     scale: planora_drawing::Scale,
-) -> Result<(), String> {
+) -> Result<(), Msg> {
     state
         .document
         .update_drawing(drawing, |d| {
@@ -432,11 +460,11 @@ pub fn click(state: &mut AppState, drawing: DrawingId, at: DVec2, px_per_mm: f64
     }
 }
 
-fn try_click(state: &mut AppState, id: DrawingId, at: DVec2, px_per_mm: f64) -> Result<(), String> {
+fn try_click(state: &mut AppState, id: DrawingId, at: DVec2, px_per_mm: f64) -> Result<(), Msg> {
     if state.sketch_session.is_some() {
-        return Err(SKETCH_BLOCKED.into());
+        return Err(sketch_blocked());
     }
-    let d = state.document.drawing(id).ok_or(NO_DRAWING)?;
+    let d = state.document.drawing(id).ok_or_else(no_drawing)?;
     let owned = state
         .drawing_ui
         .results_for(d, state.document.model_edit_count());
@@ -449,10 +477,10 @@ fn try_click(state: &mut AppState, id: DrawingId, at: DVec2, px_per_mm: f64) -> 
             at.x >= lo.x && at.x <= hi.x && at.y >= lo.y && at.y <= hi.y
         });
         let Some(s) = hit else {
-            return Err(NOT_FROM_HERE.into());
+            return Err(not_from_here());
         };
         if !s.spec.kind.is_normal() || s.spec.section.is_some() {
-            return Err(NOT_FROM_HERE.into());
+            return Err(not_from_here());
         }
         let p = to_view(&s.xf, at);
         let view = s.spec.id;
@@ -462,11 +490,11 @@ fn try_click(state: &mut AppState, id: DrawingId, at: DVec2, px_per_mm: f64) -> 
     // Zweiter Klick.
     let Some(s) = shown.iter().find(|s| s.spec.id == view) else {
         state.section_tool.start = None;
-        return Err(VIEWS_PENDING.into());
+        return Err(views_pending());
     };
     let end = to_view(&s.xf, at);
     if (end - p0).length() * s.xf.scale < MIN_LENGTH_MM {
-        return Err(TOO_SHORT.into());
+        return Err(too_short());
     }
     let (horizontal, coord) = line_for(p0, end, s.lines.bbox, s.xf.scale * px_per_mm);
     state.section_tool.start = None;

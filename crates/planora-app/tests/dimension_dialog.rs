@@ -828,7 +828,7 @@ fn german_texts_only() {
         h.dlg.fit = "H".repeat(60);
         h.dlg.text = "t".repeat(201);
         all.push_str(&h.idle(&mut st).text);
-        all.push_str(k.label());
+        all.push_str(&k.label());
     }
     let mut ro = Harness::new(dialog(&st, d, w, true));
     all.push_str(&ro.idle(&mut st).text);
@@ -840,10 +840,10 @@ fn german_texts_only() {
         DimKind::Radius,
         DimKind::Angle,
     ] {
-        all.push_str(kind_label(k));
+        all.push_str(&kind_label(k));
         all.push('\n');
     }
-    all.push_str(PLACEHOLDER_HINT);
+    all.push_str(&placeholder_hint());
     let bad = english_words(&all);
     assert!(bad.is_empty(), "englische Wörter {bad:?} in:\n{all}");
     assert_eq!(english_words("Apply the Tolerance"), ["apply", "tolerance"]);

@@ -265,7 +265,7 @@ impl DocTab {
     /// Gemeinsame Sperren von Rückgängig und Wiederholen: alte Version, Export schreibt.
     fn history_locked(&self) -> Option<String> {
         if self.read_only {
-            Some(crate::drawing_browser::READ_ONLY_HINT.to_string())
+            Some(crate::drawing_browser::read_only_hint())
         } else if self
             .export_dialog
             .as_ref()
