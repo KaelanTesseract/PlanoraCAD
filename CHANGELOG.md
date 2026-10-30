@@ -12,7 +12,7 @@ Hier steht, was sich in jeder Version geändert hat. Die neueste Version steht o
 - Rückmeldung und Absturzbericht: Das Formular und die Vorlage öffnen sich in der Sprache des Programms. Protokoll und Absturzbericht sind immer englisch.
 
 ### Behoben
-- Eine neue Schnittansicht landete manchmal auf dem Schriftfeld. Jetzt weicht sie auf die andere Seite der Ausgangsansicht aus oder rückt näher heran, wenn dort Schriftfeld, Tabellen oder der Blattrand im Weg sind.
+- Eine neue Schnittansicht landete manchmal auf dem Schriftfeld. Jetzt weicht sie auf die andere Seite der Ausgangsansicht aus, rückt näher heran oder schiebt die Ausgangsansicht ein Stück zur Seite, wenn dort Schriftfeld, Tabellen oder der Blattrand im Weg sind.
 
 ## 0.0.2-dev.1
 

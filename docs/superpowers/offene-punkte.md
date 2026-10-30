@@ -1966,7 +1966,7 @@ Teilprojekt Sprachen (Deutsch und Englisch, weitere Sprachen über Dateien), abg
 - Zoll und andere Einheiten: eigenes Teilprojekt, siehe unten „Später: Teilprojekt Zoll“.
 - Schrift von rechts nach links (Arabisch, Hebräisch) und Schriften, die die eingebauten Schriftarten nicht abdecken (z. B. Chinesisch, Japanisch), gehen nicht; die Anleitung `docs/uebersetzen.md` sagt das.
 - Mitgeliefert werden nur Deutsch und Englisch; der Installer legt den leeren Ordner `languages` neben der exe an.
-- (Behoben am 2026-10-30:) Neue Schnittansichten wurden automatisch über das Schriftfeld gelegt; jetzt weichen sie auf die Gegenseite aus oder rücken enger (siehe `docs/funktionen.md`, „Schnitt anlegen“).
+- (Behoben am 2026-10-30:) Neue Schnittansichten wurden automatisch über das Schriftfeld gelegt; jetzt weichen sie auf die Gegenseite aus, rücken enger oder schieben die Ausgangsansicht (siehe `docs/funktionen.md`, „Schnitt anlegen“).
 
 ## Später: Teilprojekt Zoll
 

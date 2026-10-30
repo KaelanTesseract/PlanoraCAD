@@ -1545,15 +1545,17 @@ fn overlaps(a: (DVec2, DVec2), b: (DVec2, DVec2)) -> bool {
     a.0.x < b.1.x && b.0.x < a.1.x && a.0.y < b.1.y && b.0.y < a.1.y
 }
 
-/// Neue Zeichnung wie aus dem Fenster „Neue Zeichnung“ (Vorgaben bis auf das Papier `paper`,
-/// quer, Maßstab `scale` oder der Vorschlag), dazu die Ansichten `extra` wie über das Menü.
+/// Quader `size` und eine neue Zeichnung wie aus dem Fenster „Neue Zeichnung“ (Vorgaben bis auf
+/// das Papier `paper`, quer, Maßstab `scale` oder der Vorschlag), dazu die Ansichten `extra` wie
+/// über das Menü.
 fn dialog_drawing(
+    size: DVec3,
     paper: Paper,
     scale: Option<Scale>,
     extra: &[ViewKind],
 ) -> (AppState, DrawingId, ViewId, Harness) {
     let mut st = AppState::new();
-    st.create_box(DVec3::new(40.0, 20.0, 60.0)).unwrap();
+    st.create_box(size).unwrap();
     let mut dialog = planora_app::drawing_dialog::NewDrawingDialog::new(&st);
     dialog.paper = paper;
     dialog.scale = scale.unwrap_or_else(|| dialog.suggestion(&st));
@@ -1568,12 +1570,14 @@ fn dialog_drawing(
     (st, d, front, h)
 }
 
-/// Die Schnittansicht `sec` liegt im Rahmen, nicht auf Schriftfeld, Änderungstabelle,
+/// Die Schnittansicht `sec` liegt samt Titel im Rahmen, nicht auf Schriftfeld, Änderungstabelle,
 /// Hinweisfeld oder Stückliste und nicht auf einer anderen Ansicht.
 fn assert_free_spot(st: &AppState, d: DrawingId, sec: ViewId, what: &str) {
     let dr = drawing(st, d);
     let layout = drawing_view::placement_layout(st, &dr);
+    // Mit dem Titel „A–A (2:1)“ darunter (5 + 5 A3-mm).
     let r = sheet_box(st, d, sec);
+    let r = (r.0 - DVec2::new(0.0, 10.0 * layout.scale), r.1);
     let f = layout.frame;
     assert!(
         r.0.x >= f.0.x && r.0.y >= f.0.y && r.1.x <= f.1.x && r.1.y <= f.1.y,
@@ -1604,34 +1608,37 @@ fn assert_free_spot(st: &AppState, d: DrawingId, sec: ViewId, what: &str) {
 
 #[test]
 fn new_section_avoids_title_block_and_views() {
-    // Nur die Grundansicht (so legt das Fenster sie an, A4 ist die Vorgabe), waagerechter und
-    // senkrechter Schnitt. Mit 20 mm Lücke passt der Schnitt auf A4 auf keiner Seite, mit der
-    // halben Lücke schon.
-    for horizontal in [true, false] {
-        let (mut st, d, front, mut h) = dialog_drawing(Paper::A4, None, &[]);
-        let ((x0, y0), (x1, y1)) = bbox(&st, d, front);
-        let c = if horizontal {
-            0.5 * (y0 + y1)
-        } else {
-            0.5 * (x0 + x1)
+    let cut_through =
+        |st: &mut AppState, h: &mut Harness, d: DrawingId, front: ViewId, hz: bool| {
+            let ((x0, y0), (x1, y1)) = bbox(st, d, front);
+            let c = if hz { 0.5 * (y0 + y1) } else { 0.5 * (x0 + x1) };
+            let sec = section_tool::create(st, d, front, hz, c).expect("Schnitt");
+            compute(st, h);
+            sec
         };
-        let sec = section_tool::create(&mut st, d, front, horizontal, c).expect("Schnitt");
-        compute(&mut st, &mut h);
-        assert_free_spot(&st, d, sec, &format!("allein, waagerecht={horizontal}"));
+    let tall = DVec3::new(40.0, 20.0, 60.0);
+    // Vorgabequader des Programms (40 × 30 × 20): auf A4 im Vorschlagsmaßstab 2:1 passt der
+    // Schnitt neben der mittig liegenden Grundansicht auf keiner Seite; die Grundansicht rückt.
+    let flat = DVec3::new(40.0, 30.0, 20.0);
+    // Nur die Grundansicht (so legt das Fenster sie an, A4 ist die Vorgabe), waagerechter und
+    // senkrechter Schnitt.
+    for size in [tall, flat] {
+        for hz in [true, false] {
+            let (mut st, d, front, mut h) = dialog_drawing(size, Paper::A4, None, &[]);
+            let sec = cut_through(&mut st, &mut h, d, front, hz);
+            assert_free_spot(&st, d, sec, &format!("allein, {size:?}, waagerecht={hz}"));
+        }
     }
     // Dreiansichten-Block auf A3 in 1:1: der Schnitt muss an Oben bzw. Links vorbei. (Mit dem
     // Vorschlagsmaßstab füllt der Block den freien Bereich, dann gibt es keinen sauberen Platz.)
-    for horizontal in [true, false] {
-        let (mut st, d, front, mut h) =
-            dialog_drawing(Paper::A3, Some(s11()), &[ViewKind::Top, ViewKind::Left]);
-        let ((x0, y0), (x1, y1)) = bbox(&st, d, front);
-        let c = if horizontal {
-            0.5 * (y0 + y1)
-        } else {
-            0.5 * (x0 + x1)
-        };
-        let sec = section_tool::create(&mut st, d, front, horizontal, c).expect("Schnitt");
-        compute(&mut st, &mut h);
-        assert_free_spot(&st, d, sec, &format!("Block, waagerecht={horizontal}"));
+    for hz in [true, false] {
+        let (mut st, d, front, mut h) = dialog_drawing(
+            tall,
+            Paper::A3,
+            Some(s11()),
+            &[ViewKind::Top, ViewKind::Left],
+        );
+        let sec = cut_through(&mut st, &mut h, d, front, hz);
+        assert_free_spot(&st, d, sec, &format!("Block, waagerecht={hz}"));
     }
 }
