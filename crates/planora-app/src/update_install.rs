@@ -822,6 +822,6 @@ pub struct NoLaunch;
 
 impl SetupLauncher for NoLaunch {
     fn launch(&self, _setup: &Path, _mode: InstallMode) -> Result<(), LaunchError> {
-        Err(LaunchError::Failed("in Tests nicht möglich".into()))
+        Err(LaunchError::Failed("not possible in tests".into()))
     }
 }

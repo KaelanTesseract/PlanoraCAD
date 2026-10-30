@@ -379,8 +379,18 @@ impl FeatureDialog {
 
     /// Breite, Tiefe und Höhe eines Quaders (für Tests).
     pub fn set_box_size(&mut self, size: DVec3) {
-        for (label, v) in [("Breite", size.x), ("Tiefe", size.y), ("Höhe", size.z)] {
-            self.set_text(label, &number_text(v));
+        for (key, v) in [
+            (FieldKey::Breite, size.x),
+            (FieldKey::Tiefe, size.y),
+            (FieldKey::Hoehe, size.z),
+        ] {
+            if let Some(f) = self
+                .numbers
+                .iter_mut()
+                .find(|f| f.label == FieldLabel::Library(key))
+            {
+                f.text = number_text(v);
+            }
         }
     }
 

@@ -277,7 +277,7 @@ fn face_label_mesh(
     if size != label.key.1 {
         painter
             .ctx()
-            .request_discard("Würfelbeschriftung: Schriftatlas gewachsen");
+            .request_discard("Cube labels: font atlas grew");
     }
     let uv_scale = vec2(1.0 / size[0].max(1) as f32, 1.0 / size[1].max(1) as f32);
     let mut mesh = Mesh::default();

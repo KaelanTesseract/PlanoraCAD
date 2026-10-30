@@ -262,7 +262,7 @@ impl GpuScene {
         }
         if !too_large.is_empty() {
             eprintln!(
-                "Warnung: Szene zu groß für die Grafikkarte (max. {max_buffer_size} Byte je Puffer), nicht gezeichnet: {}",
+                "Warning: scene too large for the graphics card (max. {max_buffer_size} bytes per buffer), not drawn: {}",
                 too_large.join(", ")
             );
         }

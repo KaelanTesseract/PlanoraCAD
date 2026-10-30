@@ -259,7 +259,7 @@ fn norm_len(a: &V2) -> Dual {
 /// Anfangspunkt und Richtung `b − a` einer (geprüften) Linie.
 fn line_dir(ctx: &Ctx, c: CurveId) -> (V2, V2) {
     let CurveKind::Line { a, b } = ctx.sk.curves[c].kind else {
-        unreachable!("Typ wurde geprüft")
+        unreachable!("type was checked")
     };
     let (pa, pb) = (ctx.pt(a), ctx.pt(b));
     let d = sub2(&pb, &pa);
@@ -275,7 +275,7 @@ fn circle_of(ctx: &Ctx, c: CurveId) -> (V2, Dual) {
             let r = length(&sub2(&ctx.pt(*start), &pc));
             (pc, r)
         }
-        _ => unreachable!("Typ wurde geprüft"),
+        _ => unreachable!("type was checked"),
     }
 }
 
@@ -289,7 +289,7 @@ fn ellipse_of(ctx: &Ctx, c: CurveId) -> (V2, V2, Dual, Dual) {
         minor,
     } = ctx.sk.curves[c].kind
     else {
-        unreachable!("Typ wurde geprüft")
+        unreachable!("type was checked")
     };
     let m = ctx.pt(center);
     let a = (ctx.var(ax), ctx.var(ay));
@@ -316,14 +316,14 @@ fn param_curve(ctx: &Ctx, c: CurveId, t: &Dual) -> (V2, V2) {
             let (y, dy) = spline_eval(&ys, &my, t);
             ((x, y), (dx, dy))
         }
-        _ => unreachable!("Typ wurde geprüft"),
+        _ => unreachable!("type was checked"),
     }
 }
 
 /// Die Zusatzvariable einer parametrischen Abhängigkeit.
 fn extra_var(ctx: &Ctx, data: &ConstraintData) -> Dual {
     let Some(t) = data.extra else {
-        unreachable!("parametrische Abhängigkeiten werden mit Zusatzvariable angelegt")
+        unreachable!("parametric constraints are created with an extra variable")
     };
     ctx.var(t)
 }
@@ -419,7 +419,7 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
         }
         Tangent(c1, c2) if line_and_param(sk, *c1, *c2).is_some() => {
             let Some((line, curve)) = line_and_param(sk, *c1, *c2) else {
-                unreachable!("im Wächter geprüft")
+                unreachable!("checked in the guard")
             };
             let t = extra_var(ctx, data);
             let (q, dq) = param_curve(ctx, curve, &t);
@@ -494,7 +494,7 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
         }
         ArcRadius(c) => {
             let CurveKind::Arc { center, start, end } = sk.curves[*c].kind else {
-                unreachable!("Typ wurde geprüft")
+                unreachable!("type was checked")
             };
             let pc = ctx.pt(center);
             vec![length(&sub2(&ctx.pt(end), &pc)) - length(&sub2(&ctx.pt(start), &pc))]

@@ -182,7 +182,7 @@ pub(crate) fn remember_width(ui: &egui::Ui, key: egui::Id, width: f32) {
     let old = stored(ui.ctx(), key);
     ui.ctx().data_mut(|d| d.insert_temp(key, width));
     if old.is_some_and(|o| (o - width).abs() > 0.5) {
-        discard(ui.ctx(), "Feld: Breite geändert");
+        discard(ui.ctx(), "Panel: width changed");
     }
 }
 
@@ -431,7 +431,7 @@ pub(crate) fn field<R>(
     theme::field_area(id, pos)
         .show(ctx, |ui| {
             if ui.is_sizing_pass() {
-                discard(ui.ctx(), "Feld: erste Größenbestimmung");
+                discard(ui.ctx(), "Panel: first sizing pass");
             }
             let shown = frame.show(ui, add_contents);
             let radius = ui.style().interaction.interact_radius;

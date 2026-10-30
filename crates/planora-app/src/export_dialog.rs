@@ -1106,7 +1106,7 @@ pub fn prepare_drawing_framed(
 ) -> Result<DrawingPrepared, String> {
     debug_assert!(
         drawing.balloons.is_empty(),
-        "Zeichnungen mit Positionsnummern gehören zu prepare_drawing_parts (mit den Nummern)"
+        "drawings with balloons belong to prepare_drawing_parts (with the numbers)"
     );
     prepare_drawing_parts(
         drawing,

@@ -1062,7 +1062,7 @@ pub fn evaluate_table(defs: &[ParamDef<'_>]) -> Result<Vec<f64>, TableError> {
         let open = |i: usize| waiting[i] > 0;
         let mut seen: Vec<Option<usize>> = vec![None; n];
         let mut path = Vec::new();
-        let mut cur = (0..n).find(|&i| open(i)).expect("übrige Zeile");
+        let mut cur = (0..n).find(|&i| open(i)).expect("remaining row");
         let start = loop {
             if let Some(p) = seen[cur] {
                 break p;
@@ -1072,7 +1072,7 @@ pub fn evaluate_table(defs: &[ParamDef<'_>]) -> Result<Vec<f64>, TableError> {
             cur = *deps[cur]
                 .iter()
                 .find(|&&j| open(j))
-                .expect("übrige Abhängigkeit");
+                .expect("remaining dependency");
         };
         let mut ring = path[start..].to_vec();
         ring.sort_unstable();

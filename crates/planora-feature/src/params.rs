@@ -213,7 +213,7 @@ impl Document {
         let name = (1..)
             .map(|n| format!("Parameter{n}"))
             .find(|c| !self.parameters.iter().any(|p| expr::same_name(&p.name, c)))
-            .expect("höchstens 500 Namen belegt");
+            .expect("at most 500 names are taken");
         self.add_parameter(&name, "10", ParamUnit::Length, "")
     }
 

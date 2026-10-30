@@ -145,6 +145,34 @@ fn broken_file_is_skipped_with_a_problem() {
     assert_eq!(find("de").unwrap().name(), "Deutsch");
 }
 
+/// Wie in `docs/uebersetzen.md` beschrieben: doppelter Schlüssel oder falscher Dezimaltrenner
+/// machen die ganze Datei ungültig; ohne `decimal-separator` gilt der Punkt.
+#[test]
+fn duplicate_keys_and_bad_separator_skip_the_file_missing_separator_is_a_dot() {
+    let dir = fresh_dir("rules");
+    std::fs::write(
+        dir.join("xd.ftl"),
+        "language-name = Doppelt\nfoo = eins\nfoo = zwei\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("xs.ftl"),
+        "language-name = Trenner\ndecimal-separator = ;\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("xp.ftl"), "language-name = Punkt\n").unwrap();
+    let problems = load_dir(&dir);
+    let mut skipped: Vec<String> = problems
+        .iter()
+        .map(|p| p.file.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    skipped.sort();
+    assert_eq!(skipped, ["xd.ftl", "xs.ftl"], "{problems:?}");
+    assert!(find("xd").is_none());
+    assert!(find("xs").is_none());
+    assert_eq!(find("xp").unwrap().decimal(), '.');
+}
+
 #[test]
 fn missing_dir_gives_no_problems() {
     let dir = std::env::temp_dir().join("planora-i18n-test-gibt-es-nicht-4711");

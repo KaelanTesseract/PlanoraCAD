@@ -58,6 +58,10 @@ Name: "de"; MessagesFile: "compiler:Languages\German.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
+[Dirs]
+; Ordner fuer weitere Sprachdateien (*.ftl), die das Programm beim Start liest.
+Name: "{app}\languages"
+
 [Files]
 Source: "{#SourceExe}"; DestDir: "{app}"; DestName: "PlanoraCAD.exe"; Flags: ignoreversion
 Source: "{#LicensesFile}"; DestDir: "{app}"; DestName: "THIRD-PARTY-LICENSES.txt"; Flags: ignoreversion

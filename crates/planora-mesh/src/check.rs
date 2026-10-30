@@ -126,7 +126,7 @@ pub fn check_face_boundaries(solid: &Solid, mesh: &Mesh) -> Result<(), String> {
     for range in &mesh.face_ranges {
         let fid = range.face;
         let Some(face) = solid.faces.get(fid) else {
-            return Err(format!("Fläche {} fehlt im Körper", fid.index()));
+            return Err(format!("face {} is missing from the body", fid.index()));
         };
         // Schleifenpunkte wie in `tessellate::loop_points`
         let mut rings: Vec<Vec<DVec3>> = Vec::new();
@@ -134,7 +134,7 @@ pub fn check_face_boundaries(solid: &Solid, mesh: &Mesh) -> Result<(), String> {
             let mut pts = Vec::new();
             for he in &lp.half_edges {
                 let Some(poly) = polyline(he.edge.index()) else {
-                    return Err(format!("Kante {} ohne Linienzug", he.edge.index()));
+                    return Err(format!("edge {} has no polyline", he.edge.index()));
                 };
                 if he.forward {
                     pts.extend_from_slice(&poly[..poly.len() - 1]);
@@ -226,13 +226,13 @@ pub fn check_face_boundaries(solid: &Solid, mesh: &Mesh) -> Result<(), String> {
         if let Some(((a, b), n)) = chain.iter().find(|(_, n)| *n != 0) {
             let at = |i: usize| {
                 if i < n_loop {
-                    format!("Randpunkt {:?}", ids[i])
+                    format!("boundary point {:?}", ids[i])
                 } else {
-                    format!("Netzpunkt {:?}", mesh.positions[i - n_loop])
+                    format!("mesh point {:?}", mesh.positions[i - n_loop])
                 }
             };
             return Err(format!(
-                "Fläche {}: Rand der Dreiecke weicht von den Schleifen ab ({} – {}, Überschuss {n})",
+                "face {}: the triangle boundary differs from the loops ({} - {}, excess {n})",
                 fid.index(),
                 at(*a),
                 at(*b)

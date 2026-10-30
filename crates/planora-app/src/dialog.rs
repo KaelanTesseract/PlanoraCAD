@@ -176,7 +176,7 @@ impl<'a> Dialog<'a> {
         let reopened =
             ctx.memory(|m| m.area_rect(id).is_some() && !m.areas().visible_last_frame(&layer));
         if reopened {
-            ctx.request_discard("Dialog: wieder geöffnet");
+            ctx.request_discard("Dialog: opened again");
         }
         // Größe vor diesem Durchgang: egui stellt das Fenster mit der Größe des vorigen Bilds
         // hin. Ändert sich die Höhe des Inhalts, stünde der Dialog ein Bild lang versetzt (ein
@@ -221,7 +221,7 @@ impl<'a> Dialog<'a> {
             // bestimmen. Dieser Durchgang wird verworfen und sofort wiederholt, damit der Dialog
             // schon im ersten Bild sichtbar und an seiner Stelle steht.
             if ui.is_sizing_pass() {
-                ui.ctx().request_discard("Dialog: erste Größenbestimmung");
+                ui.ctx().request_discard("Dialog: first sizing pass");
             }
             let top = ui.min_rect().top();
             let close = header(ui, &title, open.is_some());
@@ -249,7 +249,7 @@ impl<'a> Dialog<'a> {
                 let h = ui.min_rect().bottom() - start;
                 if (h - footer_h).abs() > 0.5 {
                     ui.ctx().data_mut(|d| d.insert_temp(footer_id, h));
-                    ui.ctx().request_discard("Dialog: Fußzeile vermessen");
+                    ui.ctx().request_discard("Dialog: footer measured");
                 }
             }
             (close, r)
@@ -260,7 +260,7 @@ impl<'a> Dialog<'a> {
             && !reopened
             && (response.response.rect.size() - before).abs().max_elem() > 0.5
         {
-            ctx.request_discard("Dialog: Höhe geändert");
+            ctx.request_discard("Dialog: height changed");
         }
         closed.map(|response| {
             let inner = response.inner.map(|(close, r)| {

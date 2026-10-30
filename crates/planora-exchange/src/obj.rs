@@ -47,7 +47,7 @@ fn object_name(name: &str) -> String {
         .collect();
     let clean = clean.trim();
     if clean.is_empty() {
-        "Körper".into()
+        tr!("exchange-default-body")
     } else {
         clean.to_string()
     }

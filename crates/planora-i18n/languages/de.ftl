@@ -727,6 +727,7 @@ param-live-more = { $first } (+ { $n ->
 })
 param-field-label = { $column } von { $name }
 param-other-row = Parameter „{ $name }“: { $message }
+param-quoted-name = „{ $name }“
 
 ## Eigenschaften
 props-name = Name
@@ -2264,6 +2265,7 @@ step-unit-inch = Zoll
 step-unit-other = 1 Einheit = { $mm } mm
 step-quoted = „{ $text }“
 step-unnamed-body = STEP-Körper
+step-body-n = Körper { $n }
 
 ## Fehlermeldungen des Austauschs
 exchange-io = Die Datei lässt sich nicht lesen oder schreiben: { $msg }
@@ -2296,6 +2298,7 @@ exchange-data-length = Die Länge der Netzdaten passt nicht zu den Anzahlen
 exchange-zip-name-long = Der Name eines ZIP-Eintrags ist zu lang
 exchange-zip-content-changed = Der Inhalt eines ZIP-Eintrags hat sich beim Schreiben geändert
 exchange-stl-three-points = Ein Dreieck braucht genau drei Punkte
+exchange-default-body = Körper
 
 ## Fehlermeldungen des Netzes
 mesh-triangulation = Fläche { $face }: Triangulation fehlgeschlagen

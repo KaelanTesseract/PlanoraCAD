@@ -132,8 +132,8 @@ struct Registry {
 fn registry() -> &'static Registry {
     static REGISTRY: OnceLock<Registry> = OnceLock::new();
     REGISTRY.get_or_init(|| Registry {
-        german: build("de", DE_FTL.to_string()).expect("eingebaute de.ftl ist gültig"),
-        english: build("en", EN_FTL.to_string()).expect("eingebaute en.ftl ist gültig"),
+        german: build("de", DE_FTL.to_string()).expect("built-in de.ftl is valid"),
+        english: build("en", EN_FTL.to_string()).expect("built-in en.ftl is valid"),
         loaded: RwLock::new(Vec::new()),
     })
 }

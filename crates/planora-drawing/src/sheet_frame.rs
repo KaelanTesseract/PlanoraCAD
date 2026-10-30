@@ -546,7 +546,7 @@ pub fn sheet_layout_with(
 /// Tabellenhöhe passen, weniger eine für den Kopf (hoch 44, quer 26 auf jedem Papier).
 pub fn parts_rows_per_page(sheet: Sheet) -> usize {
     let l = sheet_layout_with(sheet, 0, 0, PartsSpace::ListPage);
-    let (lo, hi) = l.parts.expect("Stücklistenblatt hat eine Tabelle");
+    let (lo, hi) = l.parts.expect("a parts list page has a table");
     (((hi.y - lo.y) / l.mm(PARTS_ROW_H) + 1e-9).floor() as usize).saturating_sub(1)
 }
 

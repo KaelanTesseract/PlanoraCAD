@@ -1959,6 +1959,15 @@ Stand nach Etappe 6 (Plan `docs/superpowers/plans/2026-10-26-rueckmeldungen.md`)
 - Die Schwellen für schmale Fenster liegen seit dem Menü „Hilfe“ 39 Pixel höher (von Dennis angenommen).
 - Die Feldfarben im hellen Aussehen sind nicht einzeln geprüft worden, sondern nur über Tests und die Gesamtprüfung von Etappe 3.
 
+## Sprachen
+
+Teilprojekt Sprachen (Deutsch und Englisch, weitere Sprachen über Dateien), abgeschlossen am 2026-10-30. Zurückgestellt:
+- Datumsangaben bleiben auch im Englischen in der deutschen Form TT.MM.JJJJ (z. B. „23.10.2026, 18:42“ in Projekte-Fenster und Versionen).
+- Zoll und andere Einheiten: eigenes Teilprojekt, siehe unten „Später: Teilprojekt Zoll“.
+- Schrift von rechts nach links (Arabisch, Hebräisch) und Schriften, die die eingebauten Schriftarten nicht abdecken (z. B. Chinesisch, Japanisch), gehen nicht; die Anleitung `docs/uebersetzen.md` sagt das.
+- Mitgeliefert werden nur Deutsch und Englisch; der Installer legt den leeren Ordner `languages` neben der exe an.
+- Neue Schnittansichten werden automatisch über das Schriftfeld gelegt (bei einer Sichtprüfung gefunden, hat mit den Sprachen nichts zu tun).
+
 ## Später: Teilprojekt Zoll
 
 - Maße in Zoll statt Millimeter (für die USA). Beim Entwurf der Sprachen am 2026-10-27 bewusst ausgeklammert; eigenes Teilprojekt (Dennis).

@@ -157,6 +157,15 @@ fn files_are_exe_and_licenses() {
 }
 
 #[test]
+fn languages_folder_is_created_next_to_the_exe() {
+    // Weitere Sprachdateien (*.ftl) liest das Programm aus `languages` neben der exe.
+    let dirs = section("Dirs");
+    let line = find(&dirs, &[r#"Name: "{app}\languages""#]);
+    // Ohne Löschregel: Der Ordner verschwindet beim Deinstallieren nur, wenn er leer ist.
+    assert!(!line.contains("uninsalwaysuninstall"), "{line}");
+}
+
+#[test]
 fn registry_remembers_mode_and_path() {
     let reg = section("Registry");
     for l in &reg {

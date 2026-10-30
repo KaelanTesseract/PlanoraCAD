@@ -538,7 +538,7 @@ fn add_planar_face(
     // Läuft das Segment nach außen (q.x > p.x), zeigt die Außennormale nach -z.
     let same_sense = q.x < p.x;
     let (big, small) = if p.x >= q.x { (i, i + 1) } else { (i + 1, i) };
-    let outer_edge = circles[big].expect("der größere Kreis liegt nie auf der Achse");
+    let outer_edge = circles[big].expect("the larger circle never lies on the axis");
     let mut outer = Loop {
         half_edges: vec![HalfEdge {
             edge: outer_edge,

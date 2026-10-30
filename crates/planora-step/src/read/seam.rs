@@ -625,7 +625,7 @@ fn sphere_around_pole(raw: &mut RawBody, i: usize, k: usize, tol: f64) -> Result
             return Err(twisted());
         }
     }
-    let j = touched[t].expect("berührter Pol ist eine Ecke");
+    let j = touched[t].expect("touched pole is a corner");
     let vt = raw.he_start(lp[j]);
     let rim: Vec<RawHalfEdge> = lp[j..].iter().chain(&lp[..j]).copied().collect();
     // Sprungstrecke am berührten Pol: die letzten beiden Polpunkte des Polygons (die Schleife

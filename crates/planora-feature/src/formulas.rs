@@ -467,11 +467,11 @@ fn evaluate_sketch(sf: &SketchFeature, scope: &ParamScope) -> (Sketch, Option<Fo
         let mut rejected = Vec::new();
         let mut progress = false;
         for d in pending {
-            let kind = &sketch.constraint(d.id).expect("oben geprüft").kind;
+            let kind = &sketch.constraint(d.id).expect("checked above").kind;
             if dimension_value(kind).map(f64::to_bits) == Some(d.stored.to_bits()) {
                 continue;
             }
-            let candidate = kind.with_value(d.stored).expect("ein Maß");
+            let candidate = kind.with_value(d.stored).expect("a dimension");
             let checked = sketch
                 .check_constraint_value(&candidate)
                 .and_then(|()| sketch.set_constraint_value(d.id, d.stored));

@@ -222,7 +222,7 @@ impl PlanoraApp {
         let render_state = cc
             .wgpu_render_state
             .as_ref()
-            .expect("PlanoraCAD benötigt den wgpu-Renderer");
+            .expect("PlanoraCAD needs the wgpu renderer");
         cc.egui_ctx.set_fonts(fonts::definitions());
         Self::setup_context(&cc.egui_ctx);
         GpuScene::install(render_state);
@@ -1186,7 +1186,7 @@ impl PlanoraApp {
         {
             let mods = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT | egui::Modifiers::ALT;
             if ctx.input_mut(|i| i.consume_key(mods, egui::Key::F12)) {
-                panic!("Absturz-Test: absichtlich ausgelöst");
+                panic!("Crash test: triggered on purpose");
             }
         }
         let area = keymap::dispatch::current_area(&self.ws.active_tab().state);

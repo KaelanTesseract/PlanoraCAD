@@ -464,14 +464,14 @@ pub fn decode_png(bytes: &[u8], width: u32, height: u32) -> Result<Image, String
     }
     let size = reader
         .output_buffer_size()
-        .ok_or_else(|| "Bild ist zu groß.".to_string())?;
+        .ok_or_else(|| "The image is too large.".to_string())?;
     let mut buf = vec![0; size];
     let frame = reader.next_frame(&mut buf).map_err(|e| e.to_string())?;
     buf.truncate(frame.buffer_size());
     let expected = width as usize * height as usize * 4;
     // Größe und Format stehen oben schon fest (aus dem Kopf); hier nur die gelesene Datenmenge.
     if buf.len() != expected {
-        return Err("Bilddaten passen nicht zur Größe.".to_string());
+        return Err("The image data does not match the size.".to_string());
     }
     Ok(Image {
         width,

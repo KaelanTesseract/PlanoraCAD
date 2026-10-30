@@ -90,10 +90,10 @@ pub struct BodyStats {
     pub entities: u64,
 }
 
-/// Anzeigename: leere Namen werden „Körper n“ (n ab 1).
+/// Anzeigename: leere Namen werden „Körper n“ (n ab 1, in der aktuellen Sprache).
 pub fn display_name(name: &str, index: usize) -> String {
     if name.trim().is_empty() {
-        format!("Körper {}", index + 1)
+        tr!("step-body-n", n = index + 1)
     } else {
         name.to_string()
     }

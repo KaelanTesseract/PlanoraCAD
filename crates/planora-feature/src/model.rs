@@ -216,7 +216,7 @@ impl BlendArt {
 #[derive(Clone, Debug, PartialEq)]
 #[allow(
     clippy::large_enum_variant,
-    reason = "wenige Features je Dokument; die Skizze direkt zu halten hält die Schnittstelle einfach"
+    reason = "few features per document; holding the sketch directly keeps the interface simple"
 )]
 pub enum FeatureKind {
     Sketch(SketchFeature),

@@ -134,7 +134,7 @@ impl Version {
     pub fn from_cargo(cargo_version: &str) -> Version {
         match Self::parse(cargo_version) {
             Ok(version) => version,
-            Err(err) => panic!("Cargo-Version ungeeignet für Updates: {err}"),
+            Err(err) => panic!("Cargo version unsuitable for updates: {err}"),
         }
     }
 

@@ -190,13 +190,13 @@ pub fn facts(info: &DocumentInfo) -> Option<DocFacts> {
 
 /// Wie [`facts`], mit dem Grund, warum es keine Angaben gibt.
 fn tip_facts(info: &DocumentInfo) -> Result<DocFacts, String> {
-    let no_tip = || "Der aktive Zweig hat keine Version.".to_string();
+    let no_tip = || "The active branch has no version.".to_string();
     let version = info.tip(&info.active_branch).ok_or_else(no_tip)?;
     let time = &info.version(version).ok_or_else(no_tip)?.time;
     // `peek` prüft nur die Form der Zeit; „9999-99-99T99:99:99Z“ darf weder datieren noch
     // beim Vergleich „zuletzt geändert“ gewinnen.
     if local_time::format_offset(time, 0).is_none() {
-        return Err(format!("Die Zeitangabe „{time}“ ist ungültig."));
+        return Err(format!("The time \"{time}\" is invalid."));
     }
     Ok(DocFacts {
         version,
