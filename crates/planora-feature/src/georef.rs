@@ -16,22 +16,39 @@ use crate::refs::{
 use planora_drawing::centerline::axial_range;
 use planora_drawing::dimension::{DimError, EndSel, Geo3, GeoRef, GeoRefData, TagData};
 use planora_drawing::suggest::circle_edge_arc;
+use planora_i18n::tr;
 use planora_kernel::{Curve, Edge, Face, Id, Solid, Surface};
 use planora_math::{DVec3, Tolerance};
 
-const EDGE_KIND: &str = "Dieser Kantentyp lässt sich nicht bemaßen.";
-const FACE_KIND: &str = "Diese Fläche lässt sich nicht bemaßen.";
-const NO_CENTER: &str = "Nur Kreise und Bögen haben eine Mitte.";
-const NO_RANGE: &str = "Der Bereich der Zylinderfläche lässt sich nicht bestimmen.";
-const MISMATCH: &str = "Der Bezug passt nicht zu seiner Art.";
-const BROKEN: &str = "Der Bezug ist im Modell beschädigt.";
+fn edge_kind() -> String {
+    tr!("feature-geo-edge-kind")
+}
+fn face_kind() -> String {
+    tr!("feature-geo-face-kind")
+}
+fn no_center() -> String {
+    tr!("feature-geo-no-center")
+}
+fn no_range() -> String {
+    tr!("feature-geo-no-range")
+}
+fn mismatch() -> String {
+    tr!("feature-geo-mismatch")
+}
+fn broken() -> String {
+    tr!("feature-geo-broken")
+}
 /// Grund, wenn die Fläche eines Bezugs fehlt (ohne innere Nummern oder Rollennamen).
-pub const FACE_GONE: &str = "Die Fläche, an der das Maß hing, gibt es nicht mehr.";
+pub fn face_gone() -> String {
+    tr!("feature-geo-face-gone")
+}
 /// Grund, wenn die Kante eines Bezugs fehlt (ohne innere Nummern oder Rollennamen).
-pub const EDGE_GONE: &str = "Die Kante, an der das Maß hing, gibt es nicht mehr.";
+pub fn edge_gone() -> String {
+    tr!("feature-geo-edge-gone")
+}
 
-fn lost(text: &str) -> DimError {
-    DimError::Lost(text.into())
+fn lost(text: String) -> DimError {
+    DimError::Lost(text)
 }
 
 fn tag_data(r: &FaceRef) -> TagData {
@@ -164,11 +181,11 @@ fn find_edge<'a>(
     tol: &Tolerance,
     cache: &RefCache<'a>,
 ) -> Result<(&'a Solid, &'a Edge), DimError> {
-    let r = to_edge_ref(d).ok_or_else(|| lost(MISMATCH))?;
+    let r = to_edge_ref(d).ok_or_else(|| lost(mismatch()))?;
     let candidates = edge_candidates_cached(solids, &r, cache);
-    let (body, edge) = pick(&candidates, r.hint, tol)?.ok_or_else(|| lost(EDGE_GONE))?;
+    let (body, edge) = pick(&candidates, r.hint, tol)?.ok_or_else(|| lost(edge_gone()))?;
     let solid = solids[body];
-    let e = solid.edges.get(edge).ok_or_else(|| lost(BROKEN))?;
+    let e = solid.edges.get(edge).ok_or_else(|| lost(broken()))?;
     Ok((solid, e))
 }
 
@@ -177,7 +194,7 @@ fn vertex(solid: &Solid, v: Id<planora_kernel::Vertex>) -> Result<DVec3, DimErro
         .vertices
         .get(v)
         .map(|v| v.point)
-        .ok_or_else(|| lost(BROKEN))
+        .ok_or_else(|| lost(broken()))
 }
 
 /// Löst einen Bezug gegen die exakten Körper auf. Fehler als [`DimError`]: nicht gefunden oder
@@ -220,7 +237,7 @@ pub fn resolve_geo_cached<'a>(
                     radius: *radius,
                     arc: circle_edge_arc(solid, e),
                 }),
-                _ => Err(lost(EDGE_KIND)),
+                _ => Err(lost(edge_kind())),
             }
         }
         GeoRef::EdgeEnd { edge, end } => {
@@ -236,15 +253,15 @@ pub fn resolve_geo_cached<'a>(
             let (_, e) = find_edge(solids, d, tol, cache)?;
             match &e.curve {
                 Curve::Circle { frame, .. } => Ok(Geo3::Point(frame.origin)),
-                _ => Err(lost(NO_CENTER)),
+                _ => Err(lost(no_center())),
             }
         }
         GeoRef::Face(d) => {
-            let fr = to_face_ref(d).ok_or_else(|| lost(MISMATCH))?;
+            let fr = to_face_ref(d).ok_or_else(|| lost(mismatch()))?;
             let candidates = face_candidates_cached(solids, &fr, tol, cache);
-            let (body, face) = pick(&candidates, fr.hint, tol)?.ok_or_else(|| lost(FACE_GONE))?;
+            let (body, face) = pick(&candidates, fr.hint, tol)?.ok_or_else(|| lost(face_gone()))?;
             let solid = solids[body];
-            let f = solid.faces.get(face).ok_or_else(|| lost(BROKEN))?;
+            let f = solid.faces.get(face).ok_or_else(|| lost(broken()))?;
             match &f.surface {
                 Surface::Cylinder { frame, radius } => {
                     let z = frame.z.normalize_or_zero();
@@ -258,7 +275,7 @@ pub fn resolve_geo_cached<'a>(
                             r
                         }
                     };
-                    let (t0, t1) = range.ok_or_else(|| lost(NO_RANGE))?;
+                    let (t0, t1) = range.ok_or_else(|| lost(no_range()))?;
                     Ok(Geo3::Axis {
                         origin: frame.origin,
                         dir: z,
@@ -271,7 +288,7 @@ pub fn resolve_geo_cached<'a>(
                     center: frame.origin,
                     radius: *radius,
                 }),
-                _ => Err(lost(FACE_KIND)),
+                _ => Err(lost(face_kind())),
             }
         }
     }

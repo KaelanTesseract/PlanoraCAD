@@ -7,6 +7,7 @@ use planora_drawing::parts::{
     BodyKey, MAX_OVERRIDES, PartsCells, PartsRow, RowOverride, resolve_parts, validate_override,
 };
 use planora_drawing::sheet_info::DASH;
+use planora_i18n::tr;
 use std::collections::BTreeMap;
 
 fn bad(m: impl Into<String>) -> FeatureError {
@@ -16,12 +17,14 @@ fn bad(m: impl Into<String>) -> FeatureError {
 /// Prüft die Überschreibungen aus einem Snapshot (Anzahl und Texte).
 pub(crate) fn check_overrides(o: &BTreeMap<BodyKey, RowOverride>) -> Result<(), FeatureError> {
     if o.len() > MAX_OVERRIDES {
-        return Err(bad(format!(
-            "Die Stückliste darf höchstens {MAX_OVERRIDES} eigene Zeilentexte haben"
+        return Err(bad(tr!(
+            "sheet-parts-too-many-overrides",
+            max = MAX_OVERRIDES.to_string()
         )));
     }
     for v in o.values() {
-        validate_override(v).map_err(|e| bad(format!("Stückliste: {e}")))?;
+        validate_override(v)
+            .map_err(|e| bad(tr!("feature-parts-prefix", detail = e.to_string())))?;
     }
     Ok(())
 }
@@ -129,7 +132,8 @@ impl Document {
     /// automatische Texte entfernen den Eintrag. Der Änderungszähler steigt nur bei einer
     /// Änderung.
     pub fn set_parts_override(&mut self, key: BodyKey, o: RowOverride) -> Result<(), FeatureError> {
-        validate_override(&o).map_err(|e| bad(format!("Stückliste: {e}")))?;
+        validate_override(&o)
+            .map_err(|e| bad(tr!("feature-parts-prefix", detail = e.to_string())))?;
         if o.is_auto() {
             if self.parts_overrides.remove(&key).is_some() {
                 self.drawing_edits += 1;
@@ -140,8 +144,9 @@ impl Document {
             return Ok(());
         }
         if !self.parts_overrides.contains_key(&key) && self.parts_overrides.len() >= MAX_OVERRIDES {
-            return Err(bad(format!(
-                "Die Stückliste darf höchstens {MAX_OVERRIDES} eigene Zeilentexte haben"
+            return Err(bad(tr!(
+                "sheet-parts-too-many-overrides",
+                max = MAX_OVERRIDES.to_string()
             )));
         }
         self.parts_overrides.insert(key, o);

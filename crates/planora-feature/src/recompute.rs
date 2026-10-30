@@ -7,6 +7,7 @@ use crate::formulas::Formulas;
 use crate::model::{
     BodyRef, Document, Feature, FeatureId, FeatureKind, FeatureResult, FeatureStatus, SketchPlane,
 };
+use planora_i18n::tr;
 use planora_kernel::Solid;
 use planora_sketch::Sketch;
 
@@ -53,9 +54,10 @@ impl Document {
         formulas: Formulas,
     ) -> Result<FeatureId, FeatureError> {
         let id = FeatureId(self.next_id);
-        let next_id = self.next_id.checked_add(1).ok_or_else(|| {
-            FeatureError::InvalidInput("Die Feature-Kennungen sind aufgebraucht".into())
-        })?;
+        let next_id = self
+            .next_id
+            .checked_add(1)
+            .ok_or_else(|| FeatureError::InvalidInput(tr!("feature-feature-ids-used")))?;
         self.next_id = next_id;
         let version = self.bump();
         self.features.insert(
@@ -107,9 +109,9 @@ impl Document {
     /// Setzt den Rückrollmarker auf `n` (Anzahl der aktiven Features) und berechnet neu.
     pub fn set_marker(&mut self, n: usize) -> Result<(), FeatureError> {
         if n > self.features.len() {
-            return Err(FeatureError::InvalidInput(format!(
-                "Der Marker kann höchstens hinter Feature {} stehen",
-                self.features.len()
+            return Err(FeatureError::InvalidInput(tr!(
+                "feature-marker-max",
+                n = self.features.len().to_string()
             )));
         }
         if n != self.marker {
@@ -342,22 +344,22 @@ impl Document {
             }
             let d = &self.features[di];
             if d.suppressed {
-                return Some(Blocked::Skipped(format!(
-                    "Feature „{}“ ist unterdrückt",
-                    d.name
+                return Some(Blocked::Skipped(tr!(
+                    "feature-dep-suppressed",
+                    name = d.name.to_string()
                 )));
             }
             match d.status {
                 FeatureStatus::Error(_) => {
-                    return Some(Blocked::Skipped(format!(
-                        "abhängig von Feature „{}“ (Fehler)",
-                        d.name
+                    return Some(Blocked::Skipped(tr!(
+                        "feature-dep-error",
+                        name = d.name.to_string()
                     )));
                 }
                 FeatureStatus::Skipped(_) => {
-                    return Some(Blocked::Skipped(format!(
-                        "abhängig von Feature „{}“ (ausgesetzt)",
-                        d.name
+                    return Some(Blocked::Skipped(tr!(
+                        "feature-dep-skipped",
+                        name = d.name.to_string()
                     )));
                 }
                 _ => {}

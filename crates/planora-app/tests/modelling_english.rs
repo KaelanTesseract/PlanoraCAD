@@ -37,30 +37,20 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// Texte aus den Bibliotheken, die noch deutsch sind (Tasks 11–13) und einen deutschen Buchstaben
-/// enthalten (nur solche Zeilen fielen sonst durch): Feldnamen der Features („Höhe“, „Breite“ …
-/// bleiben ohne Umlaut unbemerkt), Einheiten der Parameter („Länge“), der Name unbenannter
-/// STEP-Körper, Fehlertexte der Formeln („Den Namen „Breit“ gibt es nicht.“, „Hier wird eine
-/// Länge erwartet …“) und der Leser („Zeile 2: …“, „Die Datei ist unvollständig …“).
-const LIBRARY_TEXTS: [&str; 5] = [
+/// Texte aus den Bibliotheken, die noch deutsch sind (Task 12/13: Lesefehler und Name
+/// unbenannter STEP-Körper) und einen deutschen Buchstaben enthalten (nur solche Zeilen fielen
+/// sonst durch). Die Texte von planora-feature, -sketch und -math (Feldnamen, Einheiten,
+/// Formelfehler) sind seit Task 11 englisch und werden hier geprüft.
+const LIBRARY_TEXTS: [&str; 3] = [
     "STEP-Körper",
-    "Den Namen „Breit“ gibt es nicht.",
-    "Hier wird eine Länge erwartet",
     "Zeile 2: Die Fläche verweist auf einen Punkt",
     "Die Datei ist unvollständig",
 ];
 
-/// Ganze Texte aus der Bibliothek: Bezeichnungen der Felder und Einheiten der Parameter.
-const LIBRARY_EXACT: [&str; 2] = ["Höhe", "Länge"];
-
-/// Wie `common::assert_english`, aber nur die ganzen Bibliothekstexte aus [`LIBRARY_EXACT`] und
-/// die Zeilen mit einer der Wendungen `later` werden übergangen (keine kurzen Bruchstücke, hinter
-/// denen sich Texte der App verstecken könnten).
+/// Wie `common::assert_english`; die Zeilen mit einer der Wendungen `later` werden übergangen
+/// (keine kurzen Bruchstücke, hinter denen sich Texte der App verstecken könnten).
 fn assert_english(what: &str, seen: &[Seen], _skip: &[Rect], later: &[&str]) {
     for s in seen {
-        if LIBRARY_EXACT.contains(&s.text.trim()) {
-            continue;
-        }
         for line in s.text.lines() {
             if later.iter().any(|l| line.contains(l)) {
                 continue;
@@ -132,7 +122,7 @@ fn check(what: &str, seen: &[Seen], wanted: &[&str]) {
 /// Wie [`check`] für einen einzelnen Text (Meldung): englisch, ohne Schlüssel-Id.
 fn plain(what: &str, text: &str) {
     for line in text.lines() {
-        if LIBRARY_TEXTS.iter().any(|l| line.contains(l)) || LIBRARY_EXACT.contains(&line) {
+        if LIBRARY_TEXTS.iter().any(|l| line.contains(l)) {
             continue;
         }
         assert!(

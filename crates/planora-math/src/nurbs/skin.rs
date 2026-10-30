@@ -22,6 +22,7 @@
 
 use super::{MAX_CONTROL_POINTS, MIN_WEIGHT, NurbsCurve, NurbsError, NurbsSurface};
 use crate::DVec3;
+use planora_i18n::tr;
 use std::f64::consts::PI;
 
 /// Kleinster Öffnungswinkel eines Querschnittsbogens (wie `MIN_ARC_SWEEP` der Kreisbögen).
@@ -71,29 +72,21 @@ impl SkinSection {
         if !(ra.is_finite() && rb.is_finite() && ra > 0.0)
             || (ra - rb).abs() > SAME_RADIUS_REL * ra.max(1.0)
         {
-            return Err(NurbsError::Input(
-                "die Bogenenden haben verschiedene Abstände vom Mittelpunkt".into(),
-            ));
+            return Err(NurbsError::Input(tr!("math-arc-radii")));
         }
         // Bei unterlaufendem `ra · rb` ergibt sich NaN und die Bereichsprüfung lehnt ab.
         let theta = (a.dot(b) / (ra * rb)).clamp(-1.0, 1.0).acos();
         if !(theta >= MIN_SECTION_SWEEP) {
-            return Err(NurbsError::Input(
-                "der Öffnungswinkel des Querschnitts ist zu klein".into(),
-            ));
+            return Err(NurbsError::Input(tr!("math-section-angle-small")));
         }
         if theta > MAX_SECTION_SWEEP {
-            return Err(NurbsError::Input(
-                "der Öffnungswinkel des Querschnitts liegt zu nahe an 180°".into(),
-            ));
+            return Err(NurbsError::Input(tr!("math-section-angle-180")));
         }
         let w1 = (0.5 * theta).cos();
         let bis = (a / ra + b / rb).normalize();
         let p1 = center + bis * (ra / w1);
         if !p1.is_finite() {
-            return Err(NurbsError::Input(
-                "der Querschnitt hat nicht endliche Koordinaten".into(),
-            ));
+            return Err(NurbsError::Input(tr!("math-section-finite")));
         }
         Ok(SkinSection {
             p0: from,
@@ -166,39 +159,31 @@ pub fn skin_sided(
 ) -> Result<NurbsSurface, NurbsError> {
     let n = sections.len();
     if n < 2 || left.len() != n || right.len() != n || params.len() != n {
-        return Err(NurbsError::Input(
-            "Querschnitte, Ableitungen und Parameter passen nicht zusammen".into(),
-        ));
+        return Err(NurbsError::Input(tr!("math-sections-mismatch")));
     }
     if params.iter().any(|x| !x.is_finite()) || params.windows(2).any(|w| !(w[1] > w[0])) {
-        return Err(NurbsError::Input(
-            "die Parameter müssen streng steigen".into(),
-        ));
+        return Err(NurbsError::Input(tr!("math-params-increasing2")));
     }
     if sections.iter().any(|s| !(s.p0.distance(s.p2) > 0.0)) {
-        return Err(NurbsError::Input(
-            "ein Querschnitt hat die Länge null".into(),
-        ));
+        return Err(NurbsError::Input(tr!("math-section-zero")));
     }
     let finite = |t: &SkinTangent| {
         t.d0.is_finite() && t.d1.is_finite() && t.d2.is_finite() && t.dw.is_finite()
     };
     if !left.iter().chain(right).all(finite) {
-        return Err(NurbsError::Input("eine Tangente ist nicht endlich".into()));
+        return Err(NurbsError::Input(tr!("math-tangent-finite")));
     }
     let still = |t: &SkinTangent| {
         t.d0 == DVec3::ZERO && t.d1 == DVec3::ZERO && t.d2 == DVec3::ZERO && t.dw == 0.0
     };
     if sections.windows(2).all(|w| w[0] == w[1]) && left.iter().chain(right).all(still) {
-        return Err(NurbsError::Input(
-            "die Querschnitte bewegen sich längs nicht (entartete Fläche)".into(),
-        ));
+        return Err(NurbsError::Input(tr!("math-sections-static")));
     }
     let nu = 3 * (n - 1) + 1;
     if nu > MAX_CONTROL_POINTS {
-        return Err(NurbsError::TooLarge(format!(
-            "höchstens {} Querschnitte",
-            (MAX_CONTROL_POINTS - 1) / 3 + 1
+        return Err(NurbsError::TooLarge(tr!(
+            "math-max-sections",
+            max = ((MAX_CONTROL_POINTS - 1) / 3 + 1).to_string()
         )));
     }
     let rows = |s: &SkinSection| [(s.p0, 1.0), (s.p1 * s.w1, s.w1), (s.p2, 1.0)];

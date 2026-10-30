@@ -2,7 +2,7 @@
 
 use crate::error::FeatureError;
 use crate::model::Document;
-use crate::parts_sheets::{FOLLOW_PAGE_DELETE, PARTS_SHEET_RENAME, page_of};
+use crate::parts_sheets::{follow_page_delete, page_of, parts_sheet_rename};
 use planora_drawing::basis::Basis;
 use planora_drawing::model::{Balloon, BalloonId};
 use planora_drawing::parts::{BodyKey, MAX_BALLOONS, parts_sheet_name};
@@ -11,6 +11,7 @@ use planora_drawing::{
     Drawing, DrawingId, DrawingKind, MAX_SECTIONS, Placement, Projection, SECTION_LETTERS, Scale,
     Sheet, ViewId, ViewKind, align_dir, sections_ok_on,
 };
+use planora_i18n::tr;
 use std::collections::{BTreeMap, HashSet};
 
 /// Höchstzahl der Zeichnungen in einem Dokument.
@@ -22,14 +23,16 @@ pub const MAX_NAME_CHARS: usize = 200;
 /// Größter Betrag einer Lageangabe auf dem Blatt in Millimetern.
 pub const MAX_POS_MM: f64 = 1.0e5;
 /// Meldung, wenn eine Zeichnung schon die Höchstzahl an Nummernkreisen hat.
-pub const TOO_MANY_BALLOONS: &str = "Es sind höchstens 200 Positionsnummern je Zeichnung möglich.";
+pub fn too_many_balloons() -> String {
+    tr!("feature-balloons-max")
+}
 
 fn bad(m: impl Into<String>) -> FeatureError {
     FeatureError::InvalidInput(m.into())
 }
 
 fn unknown() -> FeatureError {
-    bad("Die Zeichnung gibt es nicht")
+    bad(tr!("feature-drawing-unknown"))
 }
 
 fn name_key(name: &str) -> String {
@@ -39,52 +42,49 @@ fn name_key(name: &str) -> String {
 /// Prüft eine einzelne Zeichnung (Name, Ansichten, Verweise, Zahlen, Maße).
 pub fn validate_drawing(d: &Drawing) -> Result<(), String> {
     if d.name.trim().is_empty() {
-        return Err("Die Zeichnung braucht einen Namen".into());
+        return Err(tr!("feature-drawing-name-needed"));
     }
     if d.name.chars().count() > MAX_NAME_CHARS {
-        return Err(format!(
-            "Der Name der Zeichnung ist zu lang (höchstens {MAX_NAME_CHARS} Zeichen)"
+        return Err(tr!(
+            "feature-drawing-name-long",
+            max = MAX_NAME_CHARS.to_string()
         ));
     }
     match d.kind {
         DrawingKind::Views => {}
         DrawingKind::PartsList { page } => {
             if page == 0 {
-                return Err("Ein Stücklistenblatt braucht eine Seitennummer ab 1".into());
+                return Err(tr!("feature-parts-page-number"));
             }
             if !d.views.is_empty() || !d.dimensions.is_empty() || !d.balloons.is_empty() {
-                return Err(
-                    "Ein Stücklistenblatt hat keine Ansichten, keine Maße und keine Positionsnummern"
-                        .into(),
-                );
+                return Err(tr!("feature-parts-sheet-empty"));
             }
         }
     }
     if d.views.len() > MAX_VIEWS {
-        return Err(format!(
-            "Eine Zeichnung darf höchstens {MAX_VIEWS} Ansichten haben"
+        return Err(tr!(
+            "feature-drawing-views-max",
+            max = MAX_VIEWS.to_string()
         ));
     }
     if d.next_view == 0 || d.next_view == u64::MAX {
-        return Err("Der Ansichtszähler der Zeichnung ist ungültig".into());
+        return Err(tr!("feature-view-counter-invalid"));
     }
     if d.views.iter().filter(|v| v.section.is_some()).count() > MAX_SECTIONS {
-        return Err(format!(
-            "Es sind höchstens {MAX_SECTIONS} Schnitte je Blatt möglich."
-        ));
+        return Err(tr!("section-full", max = MAX_SECTIONS.to_string()));
     }
     let ok = |x: f64| x.is_finite() && x.abs() <= MAX_POS_MM;
     let in_range = |s: u32| (1..=1000).contains(&s);
     let mut seen: Vec<ViewId> = Vec::with_capacity(d.views.len());
     for v in &d.views {
         if v.id.0 == 0 || v.id.0 >= d.next_view {
-            return Err("Eine Ansicht hat eine ungültige Kennung".into());
+            return Err(tr!("feature-view-id-invalid"));
         }
         if seen.contains(&v.id) {
-            return Err("Eine Ansichtskennung kommt doppelt vor".into());
+            return Err(tr!("feature-view-id-twice"));
         }
         if !in_range(v.scale.num) || !in_range(v.scale.den) {
-            return Err("Der Maßstab muss zwischen 1:1000 und 1000:1 liegen".into());
+            return Err(tr!("feature-view-scale"));
         }
         if v.section.is_some()
             && !matches!(
@@ -92,45 +92,41 @@ pub fn validate_drawing(d: &Drawing) -> Result<(), String> {
                 (Placement::Aligned { .. }, Some(_))
             )
         {
-            return Err(NOT_STRAIGHT.into());
+            return Err(not_straight());
         }
         match (v.placement, v.parent) {
             (Placement::Free { x, y }, None) => {
                 if !ok(x) || !ok(y) {
-                    return Err("Die Lage einer Ansicht liegt außerhalb des Blatts".into());
+                    return Err(tr!("feature-view-position"));
                 }
             }
             (Placement::Free { .. }, Some(_)) => {
-                return Err("Eine abgeleitete Ansicht muss an ihrer Ausrichtung hängen".into());
+                return Err(tr!("feature-view-derived-aligned"));
             }
             (Placement::Aligned { .. }, None) => {
-                return Err(
-                    "Eine Ansicht ohne Ausgangsansicht kann nicht ausgerichtet sein".into(),
-                );
+                return Err(tr!("feature-view-no-parent-aligned"));
             }
             (Placement::Aligned { distance }, Some(p)) => {
                 if !ok(distance) {
-                    return Err("Der Abstand einer Ansicht liegt außerhalb des Blatts".into());
+                    return Err(tr!("feature-view-offset"));
                 }
                 // Die Ausgangsansicht muss früher in der Liste stehen: das schließt Zyklen aus.
                 if !seen.contains(&p) {
-                    return Err(
-                        "Die Ausgangsansicht muss vor der abgeleiteten Ansicht stehen".into(),
-                    );
+                    return Err(tr!("feature-view-parent-first"));
                 }
                 let parent = d
                     .views
                     .iter()
                     .find(|w| w.id == p)
-                    .ok_or("Die Ausgangsansicht gibt es nicht")?;
+                    .ok_or(tr!("feature-view-parent-unknown"))?;
                 if let Some(sec) = &v.section {
                     validate_section(d, v, sec, parent, &seen)?;
                 }
                 if !parent.kind.is_normal() {
-                    return Err("Aus einer isometrischen Ansicht lässt sich nichts ableiten".into());
+                    return Err(tr!("feature-view-isometric-derive"));
                 }
                 if align_dir(d.projection, parent.kind, v.kind).is_none() {
-                    return Err("Diese Ansicht lässt sich nicht ableiten".into());
+                    return Err(tr!("feature-view-not-derivable"));
                 }
             }
         }
@@ -144,7 +140,9 @@ pub fn validate_drawing(d: &Drawing) -> Result<(), String> {
     crate::dimensions::validate_dimensions(d)
 }
 
-const NOT_STRAIGHT: &str = "Ein Schnitt geht nur aus einer geraden Ansicht.";
+fn not_straight() -> String {
+    tr!("section-not-from-here")
+}
 
 /// Prüft eine Schnittansicht `v` gegen ihre Ausgangsansicht `parent` und die Buchstaben der
 /// Ansichten davor (`seen`).
@@ -156,13 +154,13 @@ fn validate_section(
     seen: &[ViewId],
 ) -> Result<(), String> {
     if !parent.kind.is_normal() || parent.section.is_some() {
-        return Err(NOT_STRAIGHT.into());
+        return Err(not_straight());
     }
     if !v.kind.is_normal() || Basis::of(v.kind).d.dot(Basis::of(parent.kind).d).abs() > 1e-9 {
-        return Err("Die Schnittebene passt nicht zur Ausgangsansicht.".into());
+        return Err(tr!("feature-section-plane"));
     }
     if v.scale != parent.scale {
-        return Err("Eine Schnittansicht hat den Maßstab ihrer Ausgangsansicht.".into());
+        return Err(tr!("feature-section-scale"));
     }
     let twice = d
         .views
@@ -170,10 +168,10 @@ fn validate_section(
         .filter(|w| seen.contains(&w.id))
         .any(|w| w.section.is_some_and(|s| s.letter == sec.letter));
     if !SECTION_LETTERS.contains(sec.letter) || twice {
-        return Err("Ein Schnittbuchstabe ist ungültig oder doppelt.".into());
+        return Err(tr!("feature-section-letter"));
     }
     if !sec.offset.is_finite() || sec.offset.abs() > MAX_POS_MM {
-        return Err("Die Lage der Schnittebene ist ungültig.".into());
+        return Err(tr!("feature-section-offset"));
     }
     Ok(())
 }
@@ -181,29 +179,29 @@ fn validate_section(
 /// Prüft die Nummernkreise: Anzahl, Kennungen, Ansicht, Anker und Versatz.
 fn validate_balloons(d: &Drawing) -> Result<(), String> {
     if d.balloons.len() > MAX_BALLOONS {
-        return Err(TOO_MANY_BALLOONS.into());
+        return Err(too_many_balloons());
     }
     if d.next_balloon == 0 || d.next_balloon == u64::MAX {
-        return Err("Der Zähler der Positionsnummern ist ungültig".into());
+        return Err(tr!("feature-balloon-counter"));
     }
     let mut ids = HashSet::with_capacity(d.balloons.len());
     for b in &d.balloons {
         if b.id.0 == 0 || b.id.0 >= d.next_balloon {
-            return Err("Eine Positionsnummer hat eine ungültige Kennung".into());
+            return Err(tr!("feature-balloon-id-invalid"));
         }
         if !ids.insert(b.id) {
-            return Err("Eine Kennung einer Positionsnummer kommt doppelt vor".into());
+            return Err(tr!("feature-balloon-id-twice"));
         }
         if d.view(b.view).is_none() {
-            return Err("Eine Positionsnummer gehört zu einer Ansicht, die es nicht gibt".into());
+            return Err(tr!("feature-balloon-no-view"));
         }
         let unit = |x: f64| x.is_finite() && (0.0..=1.0).contains(&x);
         if !unit(b.anchor.0) || !unit(b.anchor.1) {
-            return Err("Eine Positionsnummer zeigt auf eine Stelle außerhalb der Ansicht".into());
+            return Err(tr!("feature-balloon-target"));
         }
         let (dx, dy) = b.offset;
         if !(dx.is_finite() && dy.is_finite() && dx.hypot(dy) <= MAX_POS_MM) {
-            return Err("Eine Positionsnummer liegt außerhalb des Blatts".into());
+            return Err(tr!("feature-balloon-position"));
         }
     }
     Ok(())
@@ -237,7 +235,7 @@ impl Document {
         if self.name_taken(&d.name, Some(d.id))
             || (renamed && page_of(d).is_none() && self.reserved_for_parts(&d.name))
         {
-            return Err(bad("Eine Zeichnung mit diesem Namen gibt es schon"));
+            return Err(bad(tr!("feature-drawing-name-taken")));
         }
         Ok(())
     }
@@ -284,12 +282,13 @@ impl Document {
         project: Option<ProjectInfo>,
     ) -> Result<DrawingId, FeatureError> {
         if self.drawings.len() >= MAX_DRAWINGS {
-            return Err(bad(format!(
-                "Ein Dokument darf höchstens {MAX_DRAWINGS} Zeichnungen haben"
+            return Err(bad(tr!(
+                "feature-max-drawings",
+                max = MAX_DRAWINGS.to_string()
             )));
         }
         if self.next_drawing == u64::MAX {
-            return Err(bad("Der Zeichnungszähler ist erschöpft"));
+            return Err(bad(tr!("feature-drawing-counter-used")));
         }
         let id = DrawingId(self.next_drawing);
         let mut d = Drawing::new(id, name.trim().to_string(), sheet, projection);
@@ -335,7 +334,7 @@ impl Document {
     /// Benennt eine Zeichnung um.
     pub fn rename_drawing(&mut self, id: DrawingId, name: &str) -> Result<(), FeatureError> {
         if self.drawing(id).is_some_and(|d| page_of(d).is_some()) {
-            return Err(bad(PARTS_SHEET_RENAME));
+            return Err(bad(parts_sheet_rename()));
         }
         let name = name.trim().to_string();
         self.update_drawing(id, |d| d.name = name)
@@ -349,7 +348,7 @@ impl Document {
             .position(|d| d.id == id)
             .ok_or_else(unknown)?;
         match page_of(&self.drawings[idx]) {
-            Some(page) if page > 1 => return Err(bad(FOLLOW_PAGE_DELETE)),
+            Some(page) if page > 1 => return Err(bad(follow_page_delete())),
             // Seite 1 nimmt alle Folgeblätter mit.
             Some(_) => self.drawings.retain(|d| page_of(d).is_none()),
             None => {
@@ -375,14 +374,14 @@ impl Document {
         let mut copy = self.drawings[idx].clone();
         f(&mut copy);
         if copy.id != id {
-            return Err(bad("Die Kennung einer Zeichnung lässt sich nicht ändern"));
+            return Err(bad(tr!("feature-drawing-id-fixed")));
         }
         let old = &self.drawings[idx];
         if copy.kind != old.kind {
-            return Err(bad("Die Art einer Zeichnung lässt sich nicht ändern"));
+            return Err(bad(tr!("feature-drawing-kind-fixed")));
         }
         if page_of(old).is_some() && copy.name != old.name {
-            return Err(bad(PARTS_SHEET_RENAME));
+            return Err(bad(parts_sheet_rename()));
         }
         self.check_drawing(&copy)?;
         if copy != self.drawings[idx] {
@@ -434,13 +433,13 @@ impl Document {
     ) -> Result<BalloonId, FeatureError> {
         let d = self.drawing(drawing).ok_or_else(unknown)?;
         if d.balloons.len() >= MAX_BALLOONS {
-            return Err(bad(TOO_MANY_BALLOONS));
+            return Err(bad(too_many_balloons()));
         }
         if d.view(view).is_none() {
-            return Err(bad("Die Ansicht gibt es nicht"));
+            return Err(bad(tr!("feature-view-unknown")));
         }
         if !(anchor.0.is_finite() && anchor.1.is_finite()) {
-            return Err(bad("Die Stelle der Positionsnummer ist ungültig"));
+            return Err(bad(tr!("feature-balloon-place")));
         }
         let anchor = (anchor.0.clamp(0.0, 1.0), anchor.1.clamp(0.0, 1.0));
         let mut new_id = None;
@@ -482,38 +481,43 @@ impl Document {
         next_drawing: u64,
     ) -> Result<(), FeatureError> {
         if next_drawing == 0 || next_drawing == u64::MAX {
-            return Err(bad("Der Zeichnungszähler ist ungültig"));
+            return Err(bad(tr!("feature-drawing-counter-invalid")));
         }
         if drawings.len() > MAX_DRAWINGS {
-            return Err(bad(format!(
-                "Ein Dokument darf höchstens {MAX_DRAWINGS} Zeichnungen haben"
+            return Err(bad(tr!(
+                "feature-max-drawings",
+                max = MAX_DRAWINGS.to_string()
             )));
         }
         let mut ids = HashSet::new();
         let mut names = HashSet::new();
         for d in &drawings {
             if d.id.0 == 0 || d.id.0 >= next_drawing {
-                return Err(bad("Eine Zeichnung hat eine ungültige Kennung"));
+                return Err(bad(tr!("feature-drawing-id-invalid")));
             }
             if !ids.insert(d.id) {
-                return Err(bad("Eine Zeichnungskennung kommt doppelt vor"));
+                return Err(bad(tr!("feature-drawing-id-twice")));
             }
-            validate_drawing(d).map_err(|e| bad(format!("Zeichnung „{}“: {e}", d.name)))?;
+            validate_drawing(d).map_err(|e| {
+                bad(tr!(
+                    "feature-drawing-prefix",
+                    name = d.name.to_string(),
+                    detail = e.to_string()
+                ))
+            })?;
             if !names.insert(name_key(&d.name)) {
-                return Err(bad("Ein Zeichnungsname kommt doppelt vor"));
+                return Err(bad(tr!("feature-drawing-name-twice")));
             }
         }
         let mut pages: Vec<u32> = drawings.iter().filter_map(page_of).collect();
         pages.sort_unstable();
         if pages.iter().enumerate().any(|(i, p)| *p != i as u32 + 1) {
-            return Err(bad(
-                "Die Stücklistenblätter müssen die Seiten 1, 2, 3 … ohne Lücke haben",
-            ));
+            return Err(bad(tr!("feature-parts-pages-gap")));
         }
         if drawings.iter().any(|d| {
             page_of(d).is_some_and(|p| name_key(&d.name) != name_key(&parts_sheet_name(p)))
         }) {
-            return Err(bad("Ein Stücklistenblatt hat einen falschen Namen"));
+            return Err(bad(tr!("feature-parts-sheet-name")));
         }
         self.drawings = drawings;
         self.next_drawing = next_drawing;

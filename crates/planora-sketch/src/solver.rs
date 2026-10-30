@@ -22,6 +22,7 @@ use crate::constraint::ConstraintId;
 use crate::error::SketchError;
 use crate::linalg::{Matrix, analyze_rows, cholesky_solve};
 use crate::model::{CurveId, CurveKind, PointId, Sketch};
+use planora_i18n::tr;
 use planora_math::DVec2;
 use std::collections::{HashMap, HashSet};
 
@@ -780,12 +781,10 @@ impl Sketch {
         for d in drags {
             self.check_point(d.point)?;
             if !d.target.is_finite() {
-                return Err(SketchError::InvalidInput(
-                    "Das Ziel muss eine endliche Position sein".into(),
-                ));
+                return Err(SketchError::InvalidInput(tr!("sketch-err-target-finite")));
             }
-            crate::model::finite(d.target.x, "Die x-Koordinate des Ziels")?;
-            crate::model::finite(d.target.y, "Die y-Koordinate des Ziels")?;
+            crate::model::finite(d.target.x, tr!("sketch-err-what-target-x"))?;
+            crate::model::finite(d.target.y, tr!("sketch-err-what-target-y"))?;
         }
         let mut soft = Vec::with_capacity(2 * drags.len());
         for d in drags {

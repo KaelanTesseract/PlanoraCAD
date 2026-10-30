@@ -26,7 +26,7 @@ pub use dimensions::{
     resolve_drawing_dimensions, resolve_drawing_dimensions_keyed, resolve_drawing_dimensions_views,
 };
 pub use drawings::{
-    MAX_DRAWINGS, MAX_NAME_CHARS, MAX_POS_MM, MAX_VIEWS, TOO_MANY_BALLOONS, validate_drawing,
+    MAX_DRAWINGS, MAX_NAME_CHARS, MAX_POS_MM, MAX_VIEWS, too_many_balloons, validate_drawing,
 };
 pub use error::FeatureError;
 pub use expr::{
@@ -44,13 +44,13 @@ pub use georef::{
 pub use meshes::VisibleMesh;
 pub use model::{
     BlendArt, BodyRef, Document, EdgeCopy, Feature, FeatureId, FeatureKind, FeatureStatus,
-    MAX_CHAMFER_ANGLE_DEG, MAX_MESH_SCALE, MESH_LOCKED, MIN_CHAMFER_ANGLE_DEG, MIN_MESH_SCALE,
-    MeshId, ROTATION_NORM_TOL, SketchFeature, SketchFormulas, SketchPlane, StandardPlane,
+    MAX_CHAMFER_ANGLE_DEG, MAX_MESH_SCALE, MIN_CHAMFER_ANGLE_DEG, MIN_MESH_SCALE, MeshId,
+    ROTATION_NORM_TOL, SketchFeature, SketchFormulas, SketchPlane, StandardPlane, mesh_locked,
 };
 pub use params::{ParamEdit, ParamId, ParamScope, Parameter};
 pub use parts_sheets::{
-    FOLLOW_PAGE_DELETE, PARTS_NAME_TAKEN, PARTS_PAGE_NAME_TAKEN, PARTS_SHEET_EXISTS,
-    PARTS_SHEET_RENAME,
+    follow_page_delete, parts_name_taken, parts_page_name_taken, parts_sheet_exists,
+    parts_sheet_rename,
 };
 pub use recompute::{RecomputeReport, VisibleBody};
 pub use refs::{

@@ -1323,11 +1323,11 @@ fn browser_rules() {
 fn app_texts_match_the_feature_constants() {
     assert_eq!(
         drawing_browser::follow_page_delete().text(),
-        planora_feature::FOLLOW_PAGE_DELETE
+        planora_feature::follow_page_delete()
     );
     assert_eq!(
         drawing_browser::parts_sheet_rename().text(),
-        planora_feature::PARTS_SHEET_RENAME
+        planora_feature::parts_sheet_rename()
     );
 }
 

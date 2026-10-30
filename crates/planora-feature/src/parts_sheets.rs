@@ -9,12 +9,23 @@ use planora_drawing::sheet_info::{
     NotesValue, ProjectInfo, SheetInfo, Stamp, validate_project_info,
 };
 use planora_drawing::{Drawing, DrawingId, DrawingKind, Projection, Sheet};
+use planora_i18n::tr;
 
-pub const PARTS_SHEET_EXISTS: &str = "Es gibt schon ein Stücklistenblatt.";
-pub const PARTS_NAME_TAKEN: &str = "Es gibt schon eine Zeichnung mit dem Namen „Stückliste“.";
-pub const FOLLOW_PAGE_DELETE: &str = "Ein Folgeblatt der Stückliste lässt sich nicht einzeln löschen. Es verschwindet von selbst, wenn die Zeilen auf weniger Blätter passen.";
-pub const PARTS_PAGE_NAME_TAKEN: &str = "Es gibt schon eine Zeichnung mit einem Namen wie „Stückliste (2)“. Bitte benenne sie zuerst um, damit die Folgeblätter der Stückliste Platz haben.";
-pub const PARTS_SHEET_RENAME: &str = "Stücklistenblätter lassen sich nicht umbenennen.";
+pub fn parts_sheet_exists() -> String {
+    tr!("feature-parts-sheet-exists")
+}
+pub fn parts_name_taken() -> String {
+    tr!("feature-parts-name-taken", name = parts_sheet_name(1))
+}
+pub fn follow_page_delete() -> String {
+    tr!("drawing-follow-page-delete")
+}
+pub fn parts_page_name_taken() -> String {
+    tr!("feature-parts-page-name-taken", name = parts_sheet_name(2))
+}
+pub fn parts_sheet_rename() -> String {
+    tr!("drawing-parts-sheet-rename")
+}
 
 /// So viele Seitennamen („Stückliste (2)“ …) sind für Stücklistenblätter reserviert, solange es
 /// welche gibt: 200 Zeilen auf dem kleinsten Blatt (26 Zeilen) ergeben höchstens 8 Seiten.
@@ -59,14 +70,14 @@ impl Document {
         stamp: &Stamp,
     ) -> Result<DrawingId, FeatureError> {
         if self.drawings.iter().any(|d| page_of(d).is_some()) {
-            return Err(bad(PARTS_SHEET_EXISTS));
+            return Err(bad(parts_sheet_exists()));
         }
         let name = parts_sheet_name(1);
         if self.name_taken(&name, None) {
-            return Err(bad(PARTS_NAME_TAKEN));
+            return Err(bad(parts_name_taken()));
         }
         if (2..=RESERVED_PAGES).any(|p| self.name_taken(&parts_sheet_name(p), None)) {
-            return Err(bad(PARTS_PAGE_NAME_TAKEN));
+            return Err(bad(parts_page_name_taken()));
         }
         let project = match self.project_info {
             Some(_) => None,
@@ -77,13 +88,13 @@ impl Document {
             }
         };
         if self.drawings.len() >= crate::drawings::MAX_DRAWINGS {
-            return Err(bad(format!(
-                "Ein Dokument darf höchstens {} Zeichnungen haben",
-                crate::drawings::MAX_DRAWINGS
+            return Err(bad(tr!(
+                "feature-max-drawings",
+                max = (crate::drawings::MAX_DRAWINGS).to_string()
             )));
         }
         if self.next_drawing == u64::MAX {
-            return Err(bad("Der Zeichnungszähler ist erschöpft"));
+            return Err(bad(tr!("feature-drawing-counter-used")));
         }
         let id = DrawingId(self.next_drawing);
         let mut d = Drawing::new(id, name, sheet, Projection::First);

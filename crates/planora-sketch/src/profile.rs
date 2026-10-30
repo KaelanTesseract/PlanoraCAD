@@ -18,17 +18,21 @@
 
 use crate::error::SketchError;
 use crate::model::{CurveId, CurveKind, Sketch};
+use planora_i18n::tr;
 use planora_kernel::{Profile, ProfileLoop, SampledLoop, Segment, segment_end};
 use planora_math::nurbs::NurbsCurve;
 use planora_math::{DVec2, DVec3, TAU, Tolerance};
 use std::sync::Arc;
 
 /// Meldung für Bögen, deren Endpunkte nicht auf demselben Kreis um die Mitte liegen.
-const ARC_OFF_CIRCLE: &str =
-    "Ein Bogenende liegt nicht auf dem Bogenkreis; die Skizze zuerst lösen";
+fn arc_off_circle() -> String {
+    tr!("sketch-err-arc-off-circle")
+}
 
 /// Meldung für Splines, deren Kurvenenden nicht an den Knoten der Schleife liegen.
-const SPLINE_OFF_NODE: &str = "Ein Spline-Ende liegt nicht am Nachbarpunkt der Schleife";
+fn spline_off_node() -> String {
+    tr!("sketch-err-spline-off-node")
+}
 
 /// Abtastschritte je Vollkreis für Schnitt- und Enthaltensein-Prüfungen (wie im Kernel).
 const CHECK_STEPS: usize = 64;
@@ -95,9 +99,7 @@ impl Sketch {
                     if !(r.is_finite() && r > tol) {
                         out.rejected.push(RejectedLoop {
                             curves: vec![id],
-                            reason: SketchError::Degenerate(
-                                "Der Radius muss größer als null sein".into(),
-                            ),
+                            reason: SketchError::Degenerate(tr!("sketch-radius-positive")),
                         });
                         continue;
                     }
@@ -135,9 +137,7 @@ impl Sketch {
                     // verlangen zwei Punkte); zur Sicherheit benannt statt einer Panik.
                     _ => out.rejected.push(RejectedLoop {
                         curves: vec![id],
-                        reason: SketchError::Degenerate(
-                            "Ein Spline braucht mindestens zwei Punkte".into(),
-                        ),
+                        reason: SketchError::Degenerate(tr!("sketch-err-spline-two-points")),
                     }),
                 },
             }
@@ -209,7 +209,7 @@ impl Sketch {
                 // einer Achterschleife die Teilflächen aufheben. Schwelle: Quadrat der Kante tol.
                 out.rejected.push(RejectedLoop {
                     curves: c.curves.clone(),
-                    reason: SketchError::Degenerate("Die Schleife umschließt keine Fläche".into()),
+                    reason: SketchError::Degenerate(tr!("sketch-err-loop-no-area")),
                 });
             } else {
                 good.push(i);
@@ -286,13 +286,13 @@ impl Sketch {
             && !(comp.len() == 1 && is_spline(e))
         {
             let msg = match self.curves[edges[e].curve].kind {
-                CurveKind::Arc { .. } => "Ein Bogen beginnt und endet im selben Punkt",
+                CurveKind::Arc { .. } => tr!("sketch-err-arc-closed"),
                 CurveKind::Spline { .. } => {
-                    "Ein Spline beginnt und endet im selben Punkt, an dem weitere Kurven hängen"
+                    tr!("sketch-err-spline-closed-branch")
                 }
-                _ => "Eine Linie hat die Länge null",
+                _ => tr!("sketch-err-line-zero-length"),
             };
-            return Err(SketchError::Degenerate(msg.into()));
+            return Err(SketchError::Degenerate(msg));
         }
         let mut degree = vec![0usize; reps.len()];
         for &e in comp {
@@ -302,7 +302,7 @@ impl Sketch {
         // Verzweigungen zuerst: Ein Stummel an einer Ecke hat Grad 1 *und* 3 und ist mehrdeutig,
         // nicht „offen“.
         if degree.iter().any(|&d| d >= 3) {
-            return Err(SketchError::AmbiguousTopology("T-Verzweigung".into()));
+            return Err(SketchError::AmbiguousTopology(tr!("sketch-err-t-junction")));
         }
         if degree.contains(&1) {
             return Err(SketchError::OpenLoop);
@@ -332,9 +332,9 @@ impl Sketch {
         }
         if order.len() != comp.len() {
             // Kann bei Grad 2 überall nicht auftreten; zur Sicherheit statt einer Panik.
-            return Err(SketchError::AmbiguousTopology(
-                "mehrere Schleifen in einer Gruppe".into(),
-            ));
+            return Err(SketchError::AmbiguousTopology(tr!(
+                "sketch-err-loops-in-group"
+            )));
         }
 
         let start = reps[edges[first].a];
@@ -353,7 +353,7 @@ impl Sketch {
                     let c = self.pos(center);
                     let (ra, rb) = ((reps[edge.a] - c).length(), (reps[edge.b] - c).length());
                     if (ra - rb).abs() > tol.linear {
-                        return Err(SketchError::Degenerate(ARC_OFF_CIRCLE.into()));
+                        return Err(SketchError::Degenerate(arc_off_circle()));
                     }
                     let angle = |p: DVec2| (p - c).y.atan2((p - c).x);
                     let phi = (angle(reps[edge.b]) - angle(reps[edge.a])).rem_euclid(TAU);
@@ -361,9 +361,7 @@ impl Sketch {
                     // verschiedenen Knoten, der (fast) null oder eine volle Drehung überstreicht,
                     // ist entartet.
                     if phi <= tol.angular || phi >= TAU - tol.angular {
-                        return Err(SketchError::Degenerate(
-                            "Ein Bogen hat (fast) keinen Öffnungswinkel".into(),
-                        ));
+                        return Err(SketchError::Degenerate(tr!("sketch-err-arc-no-angle")));
                     }
                     Segment::Arc {
                         center: c,
@@ -376,22 +374,22 @@ impl Sketch {
                 // Der Kernel verlangt, dass ein Freiformsegment am Ende des vorigen beginnt.
                 let p = curve.point(curve.domain().0);
                 if at.distance(DVec2::new(p.x, p.y)) > tol.linear {
-                    return Err(SketchError::Degenerate(SPLINE_OFF_NODE.into()));
+                    return Err(SketchError::Degenerate(spline_off_node()));
                 }
-                SPLINE_OFF_NODE
+                spline_off_node()
             } else {
-                ARC_OFF_CIRCLE
+                arc_off_circle()
             };
             at = segment_end(at, &seg);
             if at.distance(target) > tol.linear {
-                return Err(SketchError::Degenerate(off_node.into()));
+                return Err(SketchError::Degenerate(off_node));
             }
             segments.push(seg);
         }
         let lp = ProfileLoop { start, segments };
         if !lp.is_closed(tol) {
             // Durch die Prüfung je Segment eigentlich ausgeschlossen; zur Sicherheit.
-            return Err(SketchError::Degenerate(ARC_OFF_CIRCLE.into()));
+            return Err(SketchError::Degenerate(arc_off_circle()));
         }
         Ok((order.iter().map(|&(e, _)| edges[e].curve).collect(), lp))
     }
@@ -409,20 +407,22 @@ impl Sketch {
             minor,
         } = self.curves[id].kind
         else {
-            return Err(SketchError::WrongType("Das ist keine Ellipse".into()));
+            return Err(SketchError::WrongType(tr!("sketch-err-not-ellipse")));
         };
         let tol = self.tolerance().linear;
         let a = DVec2::new(self.vars[ax], self.vars[ay]);
         let minor = self.vars[minor];
         let len = a.length();
         if !(len.is_finite() && len > tol) {
-            return Err(SketchError::Degenerate(format!(
-                "Die große Halbachse der Ellipse ist zu klein (mindestens {tol} mm)"
+            return Err(SketchError::Degenerate(tr!(
+                "sketch-err-ellipse-major-small",
+                tol = tol.to_string()
             )));
         }
         if !(minor.is_finite() && minor > tol) {
-            return Err(SketchError::Degenerate(format!(
-                "Die kleine Halbachse der Ellipse ist zu klein (mindestens {tol} mm)"
+            return Err(SketchError::Degenerate(tr!(
+                "sketch-err-ellipse-minor-small",
+                tol = tol.to_string()
             )));
         }
         let b = a.perp() / len * minor;
@@ -434,7 +434,9 @@ impl Sketch {
             0.0,
             TAU,
         )
-        .map_err(|e| SketchError::Degenerate(format!("Die Ellipse ist ungültig: {e}")))?;
+        .map_err(|e| {
+            SketchError::Degenerate(tr!("sketch-err-ellipse-invalid", detail = e.to_string()))
+        })?;
         ProfileLoop::nurbs_loop(curve).map_err(|e| SketchError::Kernel(e.to_string()))
     }
 
@@ -450,14 +452,13 @@ impl Sketch {
         let xy: Vec<DVec2> = points.iter().map(|&p| self.pos(p)).collect();
         // `add_spline` prüft das beim Anlegen; das Lösen kann Punkte danach zusammenlegen.
         if xy.windows(2).any(|w| w[0].distance(w[1]) <= tol) {
-            return Err(SketchError::Degenerate(
-                "Benachbarte Punkte des Splines liegen aufeinander".into(),
-            ));
+            return Err(SketchError::Degenerate(tr!("sketch-err-spline-neighbours")));
         }
         let pts: Vec<DVec3> = xy.iter().map(|p| DVec3::new(p.x, p.y, 0.0)).collect();
         let params: Vec<f64> = (0..pts.len()).map(|i| i as f64).collect();
-        let curve = NurbsCurve::natural_cubic(&pts, &params)
-            .map_err(|e| SketchError::Degenerate(format!("Der Spline ist ungültig: {e}")))?;
+        let curve = NurbsCurve::natural_cubic(&pts, &params).map_err(|e| {
+            SketchError::Degenerate(tr!("sketch-err-spline-invalid", detail = e.to_string()))
+        })?;
         let seg = Segment::Nurbs {
             curve: Arc::new(curve),
         };
@@ -476,7 +477,7 @@ impl Sketch {
             .segments
             .into_iter()
             .next()
-            .ok_or_else(|| SketchError::Degenerate("Der Spline lässt sich nicht umkehren".into()))
+            .ok_or_else(|| SketchError::Degenerate(tr!("sketch-err-spline-reverse")))
     }
 }
 

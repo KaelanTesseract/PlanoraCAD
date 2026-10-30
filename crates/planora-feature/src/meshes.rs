@@ -5,6 +5,7 @@ use crate::compute::{check_mesh_extent, check_parameters};
 use crate::error::FeatureError;
 use crate::model::{BodyRef, Document, FeatureId, FeatureKind, FeatureStatus, MeshId};
 use planora_exchange::{ExchangeMesh, MeshTransform};
+use planora_i18n::tr;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -25,9 +26,10 @@ impl Document {
         mesh.validate()
             .map_err(|e| FeatureError::InvalidInput(e.to_string()))?;
         let id = MeshId(self.next_mesh);
-        self.next_mesh = self.next_mesh.checked_add(1).ok_or_else(|| {
-            FeatureError::InvalidInput("Die Netz-Kennungen sind aufgebraucht".into())
-        })?;
+        self.next_mesh = self
+            .next_mesh
+            .checked_add(1)
+            .ok_or_else(|| FeatureError::InvalidInput(tr!("feature-mesh-ids-used")))?;
         self.meshes.insert(id, mesh);
         Ok(id)
     }
@@ -93,7 +95,7 @@ impl Document {
                 self.recompute();
                 let message = match status {
                     Some(FeatureStatus::Error(m) | FeatureStatus::Skipped(m)) => m,
-                    _ => "Der Netz-Körper ließ sich nicht anlegen".to_string(),
+                    _ => tr!("feature-mesh-not-created"),
                 };
                 Err(FeatureError::InvalidInput(message))
             }

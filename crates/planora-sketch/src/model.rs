@@ -2,6 +2,7 @@
 
 use crate::error::SketchError;
 use crate::solver::SolveCache;
+use planora_i18n::tr;
 use planora_kernel::{Arena, Id};
 use planora_math::{DVec2, Frame, Tolerance};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -99,14 +100,17 @@ pub const MAX_COORD: f64 = 1e9;
 pub const MAX_SPLINE_POINTS: usize = 64;
 
 /// Endlich und betragsmäßig höchstens [`MAX_COORD`].
-pub(crate) fn finite(v: f64, what: &str) -> Result<(), SketchError> {
+pub(crate) fn finite(v: f64, what: String) -> Result<(), SketchError> {
     if !v.is_finite() {
-        Err(SketchError::InvalidInput(format!(
-            "{what} muss eine endliche Zahl sein"
+        Err(SketchError::InvalidInput(tr!(
+            "sketch-err-not-finite",
+            what = what
         )))
     } else if v.abs() > MAX_COORD {
-        Err(SketchError::InvalidInput(format!(
-            "{what} ist zu groß (Betrag höchstens {MAX_COORD:e} mm)"
+        Err(SketchError::InvalidInput(tr!(
+            "sketch-err-too-large",
+            what = what,
+            max = format!("{MAX_COORD:e}")
         )))
     } else {
         Ok(())
@@ -155,9 +159,7 @@ impl Sketch {
     /// Koordinatensystem bleibt die Skizze unverändert.
     pub fn set_frame(&mut self, frame: Frame) -> Result<(), SketchError> {
         if !frame.is_orthonormal(self.tol.linear) {
-            return Err(SketchError::InvalidInput(
-                "Das Koordinatensystem der Skizze ist ungültig".into(),
-            ));
+            return Err(SketchError::InvalidInput(tr!("sketch-err-data-frame")));
         }
         self.frame = frame;
         self.touch_structure();
@@ -201,8 +203,8 @@ impl Sketch {
     }
 
     pub fn add_point(&mut self, x: f64, y: f64) -> Result<PointId, SketchError> {
-        finite(x, "Die x-Koordinate")?;
-        finite(y, "Die y-Koordinate")?;
+        finite(x, tr!("sketch-err-what-x"))?;
+        finite(y, tr!("sketch-err-what-y"))?;
         let (xi, yi) = (self.new_var(x), self.new_var(y));
         Ok(self.points.push(PointData {
             x: xi,
@@ -219,8 +221,8 @@ impl Sketch {
 
     pub fn set_point_xy(&mut self, p: PointId, x: f64, y: f64) -> Result<(), SketchError> {
         self.check_point(p)?;
-        finite(x, "Die x-Koordinate")?;
-        finite(y, "Die y-Koordinate")?;
+        finite(x, tr!("sketch-err-what-x"))?;
+        finite(y, tr!("sketch-err-what-y"))?;
         let (xi, yi) = (self.points[p].x, self.points[p].y);
         self.vars[xi] = x;
         self.vars[yi] = y;
@@ -241,20 +243,16 @@ impl Sketch {
         self.check_point(a)?;
         self.check_point(b)?;
         if a == b || self.pos(a).distance(self.pos(b)) <= self.tol.linear {
-            return Err(SketchError::Degenerate(
-                "Die Linie hätte die Länge null".into(),
-            ));
+            return Err(SketchError::Degenerate(tr!("sketch-err-line-zero")));
         }
         Ok(self.push_curve(CurveKind::Line { a, b }))
     }
 
     pub fn add_circle(&mut self, center: PointId, radius: f64) -> Result<CurveId, SketchError> {
         self.check_point(center)?;
-        finite(radius, "Der Radius")?;
+        finite(radius, tr!("sketch-err-what-radius"))?;
         if radius <= self.tol.linear {
-            return Err(SketchError::Degenerate(
-                "Der Radius muss größer als null sein".into(),
-            ));
+            return Err(SketchError::Degenerate(tr!("sketch-radius-positive")));
         }
         let r = self.new_var(radius);
         Ok(self.push_curve(CurveKind::Circle { center, radius: r }))
@@ -275,9 +273,7 @@ impl Sketch {
         if self.pos(start).distance(c) <= self.tol.linear
             || self.pos(end).distance(c) <= self.tol.linear
         {
-            return Err(SketchError::Degenerate(
-                "Start und Ende dürfen nicht in der Mitte liegen".into(),
-            ));
+            return Err(SketchError::Degenerate(tr!("sketch-err-arc-center")));
         }
         let id = self.push_curve(CurveKind::Arc { center, start, end });
         self.push_internal(crate::constraint::ConstraintKind::ArcRadius(id));
@@ -293,20 +289,15 @@ impl Sketch {
         minor: f64,
     ) -> Result<CurveId, SketchError> {
         self.check_point(center)?;
-        finite(major.x, "Die große Halbachse")?;
-        finite(major.y, "Die große Halbachse")?;
-        finite(minor, "Die kleine Halbachse")?;
+        finite(major.x, tr!("sketch-err-what-major"))?;
+        finite(major.y, tr!("sketch-err-what-major"))?;
+        finite(minor, tr!("sketch-err-what-minor"))?;
         let len = major.length();
         if len <= self.tol.linear {
-            return Err(SketchError::Degenerate(
-                "Die große Halbachse muss länger als null sein".into(),
-            ));
+            return Err(SketchError::Degenerate(tr!("sketch-major-axis-positive")));
         }
         if minor <= self.tol.linear || minor > len {
-            return Err(SketchError::Degenerate(
-                "Die kleine Halbachse muss größer als null und höchstens so lang wie die große sein"
-                    .into(),
-            ));
+            return Err(SketchError::Degenerate(tr!("sketch-err-minor-range")));
         }
         let (ax, ay, mi) = (
             self.new_var(major.x),
@@ -325,25 +316,22 @@ impl Sketch {
     /// Stützpunkt `i` liegt beim Parameter `t = i`.
     pub fn add_spline(&mut self, points: &[PointId]) -> Result<CurveId, SketchError> {
         if !(2..=MAX_SPLINE_POINTS).contains(&points.len()) {
-            return Err(SketchError::InvalidInput(format!(
-                "Ein Spline braucht 2 bis {MAX_SPLINE_POINTS} Punkte"
+            return Err(SketchError::InvalidInput(tr!(
+                "sketch-err-spline-count",
+                max = MAX_SPLINE_POINTS.to_string()
             )));
         }
         for (i, &p) in points.iter().enumerate() {
             self.check_point(p)?;
             if points[..i].contains(&p) {
-                return Err(SketchError::InvalidInput(
-                    "Ein Punkt ist mehrfach ausgewählt".into(),
-                ));
+                return Err(SketchError::InvalidInput(tr!("sketch-err-point-twice")));
             }
         }
         if points
             .windows(2)
             .any(|w| self.pos(w[0]).distance(self.pos(w[1])) <= self.tol.linear)
         {
-            return Err(SketchError::Degenerate(
-                "Benachbarte Punkte des Splines liegen aufeinander".into(),
-            ));
+            return Err(SketchError::Degenerate(tr!("sketch-err-spline-neighbours")));
         }
         Ok(self.push_curve(CurveKind::Spline {
             points: points.to_vec(),

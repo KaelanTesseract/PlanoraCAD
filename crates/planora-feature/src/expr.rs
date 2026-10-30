@@ -24,6 +24,7 @@
 //! Parsen, keine Textsuche), der übrige Text bleibt zeichengleich, auch in nicht zerlegbaren
 //! Formeln. Namen höchstens 64 Zeichen, Kommentare höchstens 200 Zeichen.
 
+use planora_i18n::tr;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::f64::consts::{FRAC_1_SQRT_2, PI};
 
@@ -38,27 +39,60 @@ pub const MAX_PARAM_NAME_CHARS: usize = 64;
 /// Höchstlänge eines Kommentars in Zeichen.
 pub const MAX_COMMENT_CHARS: usize = 200;
 
-const EMPTY: &str = "Die Formel ist leer.";
-const TOO_LONG: &str = "Die Formel ist zu lang (höchstens 200 Zeichen).";
-const TOO_DEEP: &str = "Die Formel ist zu tief verschachtelt (höchstens 64 Ebenen).";
-const END: &str = "Die Formel endet unerwartet.";
-const NO_CLOSE: &str = "Es fehlt eine schließende Klammer.";
-const DIV_ZERO: &str = "Division durch null.";
-const SQRT_NEG: &str = "Die Wurzel einer negativen Zahl gibt es nicht.";
-const SQRT_UNIT: &str = "„sqrt“ passt hier nicht zur Einheit.";
-const POW_UNIT: &str =
-    "Eine Länge oder ein Winkel lässt sich nur mit einer ganzen Zahl potenzieren.";
-const POW_EXP_UNIT: &str = "Der Exponent darf keine Einheit haben.";
-const MIX: &str = "Länge und Winkel lassen sich nicht zusammenrechnen.";
-const UNITS_DIFFER: &str = "Die Einheiten passen nicht zusammen.";
-const VALUE_TOO_LONG: &str =
-    "Der Wert lässt sich nicht als Zahl mit höchstens 200 Zeichen schreiben.";
-const NOT_FINITE: &str = "Das Ergebnis ist zu groß oder keine Zahl.";
-const NAME_EMPTY: &str = "Der Name darf nicht leer sein.";
-const NAME_FORM: &str =
-    "Ein Name beginnt mit einem Buchstaben oder „_“ und enthält nur Buchstaben, Ziffern und „_“.";
-const NAME_LONG: &str = "Der Name ist zu lang (höchstens 64 Zeichen).";
-const TOO_MANY: &str = "Höchstens 500 Parameter.";
+fn empty() -> String {
+    tr!("feature-expr-empty")
+}
+fn too_long() -> String {
+    tr!("feature-expr-too-long")
+}
+fn too_deep() -> String {
+    tr!("feature-expr-too-deep")
+}
+fn end() -> String {
+    tr!("feature-expr-end")
+}
+fn no_close() -> String {
+    tr!("feature-expr-no-close")
+}
+fn div_zero() -> String {
+    tr!("feature-expr-div-zero")
+}
+fn sqrt_neg() -> String {
+    tr!("feature-expr-sqrt-neg")
+}
+fn sqrt_unit() -> String {
+    tr!("feature-expr-sqrt-unit")
+}
+fn pow_unit() -> String {
+    tr!("feature-expr-pow-unit")
+}
+fn pow_exp_unit() -> String {
+    tr!("feature-expr-pow-exp-unit")
+}
+fn mix() -> String {
+    tr!("feature-expr-mix")
+}
+fn units_differ() -> String {
+    tr!("feature-expr-units-differ")
+}
+fn value_too_long() -> String {
+    tr!("feature-expr-value-too-long")
+}
+fn not_finite() -> String {
+    tr!("feature-expr-not-finite")
+}
+fn name_empty() -> String {
+    tr!("feature-expr-name-empty")
+}
+fn name_form() -> String {
+    tr!("feature-expr-name-form")
+}
+fn name_long() -> String {
+    tr!("feature-expr-name-long")
+}
+fn too_many() -> String {
+    tr!("feature-expr-too-many")
+}
 
 /// Funktionen und Konstanten; als Parametername gesperrt (klein verglichen).
 const RESERVED: [&str; 9] = [
@@ -81,11 +115,11 @@ impl ParamUnit {
     pub const ALL: [ParamUnit; 3] = [ParamUnit::Length, ParamUnit::Angle, ParamUnit::Number];
 
     /// Anzeigename der Art.
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            ParamUnit::Length => "Länge",
-            ParamUnit::Angle => "Winkel",
-            ParamUnit::Number => "Zahl",
+            ParamUnit::Length => tr!("feature-unit-length"),
+            ParamUnit::Angle => tr!("blend-field-angle"),
+            ParamUnit::Number => tr!("feature-unit-number"),
         }
     }
 
@@ -136,6 +170,23 @@ pub struct ExprError(pub String);
 
 fn fail<T>(message: impl Into<String>) -> Result<T, ExprError> {
     Err(ExprError(message.into()))
+}
+
+/// Anfang und Ende der Meldung „Die Parameter … hängen im Kreis voneinander ab“ in der
+/// aktuellen Sprache (um sie von anderen Meldungen zu unterscheiden, ohne Wortlaut im Code).
+pub(crate) fn cycle_affixes() -> (String, String) {
+    let marker = "\u{1}";
+    let text = tr!("feature-param-cycle", list = marker);
+    match text.split_once(marker) {
+        Some((a, b)) => (a.to_string(), b.to_string()),
+        None => (text, String::new()),
+    }
+}
+
+/// Zahlentext einer Formel-Ausgabe (Dezimalkomma, [`number_text`], [`short_number`]) mit dem
+/// Dezimaltrenner der aktuellen Sprache, nur für Meldungen.
+pub(crate) fn display_number(text: &str) -> String {
+    planora_i18n::localize_decimal(&text.replace(',', "."))
 }
 
 // ---------------------------------------------------------------------------------------
@@ -246,9 +297,10 @@ fn scan(text: &str) -> Vec<Token> {
 }
 
 fn unexpected(t: &Token) -> ExprError {
-    ExprError(format!(
-        "Unerwartetes Zeichen „{}“ an Stelle {}.",
-        t.first, t.pos
+    ExprError(tr!(
+        "feature-expr-unexpected",
+        char = t.first.to_string(),
+        pos = t.pos.to_string()
     ))
 }
 
@@ -376,7 +428,7 @@ impl Parser<'_> {
     fn enter(&mut self) -> Result<(), ExprError> {
         self.depth += 1;
         if self.depth > MAX_FORMULA_DEPTH {
-            return fail(TOO_DEEP);
+            return fail(too_deep());
         }
         Ok(())
     }
@@ -438,14 +490,14 @@ impl Parser<'_> {
 
     fn atom(&mut self) -> Result<Node, ExprError> {
         let Some(t) = self.next() else {
-            return fail(END);
+            return fail(end());
         };
         let text = &self.text[t.start..t.end];
         match t.kind {
             Tok::Num => {
                 let v: f64 = text.replace(',', ".").parse().map_err(|_| unexpected(&t))?;
                 if !v.is_finite() {
-                    return fail(NOT_FINITE);
+                    return fail(not_finite());
                 }
                 Ok(Node::Num(v))
             }
@@ -468,13 +520,13 @@ impl Parser<'_> {
         match self.next() {
             Some(t) if t.kind == Tok::Close => Ok(()),
             Some(t) => Err(unexpected(&t)),
-            None => fail(NO_CLOSE),
+            None => fail(no_close()),
         }
     }
 
     fn call(&mut self, name: &str) -> Result<Node, ExprError> {
         let Some(func) = Func::from_lower(&name.to_lowercase()) else {
-            return fail(format!("Die Funktion „{name}“ gibt es nicht."));
+            return fail(tr!("feature-expr-no-function", name = name.to_string()));
         };
         self.at += 1; // „(“
         self.enter()?;
@@ -488,20 +540,23 @@ impl Parser<'_> {
                     Some(t) if t.kind == Tok::Sep => {}
                     Some(t) if t.kind == Tok::Close => break,
                     Some(t) => return Err(unexpected(&t)),
-                    None => return fail(NO_CLOSE),
+                    None => return fail(no_close()),
                 }
             }
         }
         self.leave();
         if func.many() {
             if args.len() < 2 {
-                return fail(format!(
-                    "„{}“ braucht mindestens zwei Werte (Werte mit „;“ oder „, “ trennen).",
-                    func.name()
+                return fail(tr!(
+                    "feature-expr-needs-two",
+                    name = func.name().to_string()
                 ));
             }
         } else if args.len() != 1 {
-            return fail(format!("„{}“ braucht genau einen Wert.", func.name()));
+            return fail(tr!(
+                "feature-expr-needs-one",
+                name = func.name().to_string()
+            ));
         }
         Ok(Node::Call(func, args))
     }
@@ -511,10 +566,10 @@ impl Parser<'_> {
 /// Verschachtelungstiefe (unbekannte Parameternamen erst beim Auswerten).
 pub fn parse(text: &str) -> Result<Expr, ExprError> {
     if text.chars().count() > MAX_FORMULA_CHARS {
-        return fail(TOO_LONG);
+        return fail(too_long());
     }
     if text.trim().is_empty() {
-        return fail(EMPTY);
+        return fail(empty());
     }
     let mut p = Parser {
         text,
@@ -536,13 +591,13 @@ pub fn parse(text: &str) -> Result<Expr, ExprError> {
 type Lookup<'a> = &'a dyn Fn(&str) -> Option<(f64, ParamUnit)>;
 
 /// Name einer Einheit in Meldungen über unpassende Einheiten.
-fn dim_name(d: Dim) -> &'static str {
+fn dim_name(d: Dim) -> String {
     match (d.length, d.angle) {
-        (1, 0) => "Länge",
-        (2, 0) => "Fläche",
-        (3, 0) => "Rauminhalt",
-        (0, 1) => "Winkel",
-        _ => "eine andere Einheit",
+        (1, 0) => tr!("feature-unit-length"),
+        (2, 0) => tr!("feature-unit-area"),
+        (3, 0) => tr!("feature-unit-volume"),
+        (0, 1) => tr!("blend-field-angle"),
+        _ => tr!("feature-unit-other"),
     }
 }
 
@@ -557,21 +612,23 @@ fn join(a: Dim, b: Dim) -> Result<Dim, ExprError> {
     let length = Dim::of(ParamUnit::Length);
     let angle = Dim::of(ParamUnit::Angle);
     if (a == length && b == angle) || (a == angle && b == length) {
-        return fail(MIX);
+        return fail(mix());
     }
     let (na, nb) = (dim_name(a), dim_name(b));
     if na == nb {
-        return fail(UNITS_DIFFER);
+        return fail(units_differ());
     }
-    fail(format!(
-        "Die Einheiten passen nicht zusammen: {na} und {nb} lassen sich nicht zusammenrechnen."
+    fail(tr!(
+        "feature-expr-units-mismatch",
+        na = na.to_string(),
+        nb = nb.to_string()
     ))
 }
 
 fn dim_op(a: Dim, b: Dim, f: fn(i32, i32) -> Option<i32>) -> Result<Dim, ExprError> {
     match (f(a.length, b.length), f(a.angle, b.angle)) {
         (Some(length), Some(angle)) => Ok(Dim { length, angle }),
-        _ => fail(NOT_FINITE),
+        _ => fail(not_finite()),
     }
 }
 
@@ -655,7 +712,7 @@ fn eval_node(node: &Node, lookup: Lookup<'_>) -> Result<(f64, Dim), ExprError> {
         Node::Call(func, args) => eval_call(*func, args, lookup)?,
     };
     if !v.is_finite() {
-        return fail(NOT_FINITE);
+        return fail(not_finite());
     }
     Ok((no_neg_zero(v), d))
 }
@@ -664,7 +721,7 @@ fn eval_node(node: &Node, lookup: Lookup<'_>) -> Result<(f64, Dim), ExprError> {
 fn eval_name(name: &str, lookup: Lookup<'_>) -> Result<(f64, Dim), ExprError> {
     match lookup(name) {
         Some((v, unit)) => Ok((v, Dim::of(unit))),
-        None => fail(format!("Den Namen „{name}“ gibt es nicht.")),
+        None => fail(tr!("feature-expr-no-name", name = name.to_string())),
     }
 }
 
@@ -678,22 +735,22 @@ fn eval_bin(op: Op, l: &Node, r: &Node, lookup: Lookup<'_>) -> Result<(f64, Dim)
         Op::Mul => (a * b, dim_op(da, db, i32::checked_add)?),
         Op::Div => {
             if b == 0.0 {
-                return fail(DIV_ZERO);
+                return fail(div_zero());
             }
             (a / b, dim_op(da, db, i32::checked_sub)?)
         }
         Op::Pow => {
             if db != Dim::NUMBER {
-                return fail(POW_EXP_UNIT);
+                return fail(pow_exp_unit());
             }
             let d = if da == Dim::NUMBER {
                 Dim::NUMBER
             } else {
                 if b.fract() != 0.0 {
-                    return fail(POW_UNIT);
+                    return fail(pow_unit());
                 }
                 if b.abs() > f64::from(i32::MAX) {
-                    return fail(NOT_FINITE);
+                    return fail(not_finite());
                 }
                 let n = Dim {
                     length: b as i32,
@@ -718,19 +775,19 @@ fn eval_call(func: Func, args: &[Node], lookup: Lookup<'_>) -> Result<(f64, Dim)
         if angle_ok {
             Ok(())
         } else {
-            fail(format!(
-                "„{}“ braucht einen Winkel oder eine Zahl.",
-                func.name()
+            fail(tr!(
+                "feature-expr-needs-angle",
+                name = func.name().to_string()
             ))
         }
     };
     Ok(match func {
         Func::Sqrt => {
             if dx.length % 2 != 0 || dx.angle % 2 != 0 {
-                return fail(SQRT_UNIT);
+                return fail(sqrt_unit());
             }
             if x < 0.0 {
-                return fail(SQRT_NEG);
+                return fail(sqrt_neg());
             }
             let d = Dim {
                 length: dx.length / 2,
@@ -750,7 +807,7 @@ fn eval_call(func: Func, args: &[Node], lookup: Lookup<'_>) -> Result<(f64, Dim)
             trig()?;
             let c = cos_deg(x);
             if c == 0.0 {
-                return fail(NOT_FINITE);
+                return fail(not_finite());
             }
             (sin_deg(x) / c, Dim::NUMBER)
         }
@@ -780,34 +837,35 @@ pub fn evaluate(
     eval_node(&e.root, lookup)
 }
 
-fn dim_text(d: Dim) -> &'static str {
+fn dim_text(d: Dim) -> String {
     if d == Dim::of(ParamUnit::Length) {
-        "eine Länge"
+        tr!("feature-unit-a-length")
     } else if d == Dim::of(ParamUnit::Angle) {
-        "einen Winkel"
+        tr!("feature-unit-an-angle-acc")
     } else if d == Dim::NUMBER {
-        "eine Zahl"
+        tr!("feature-unit-a-number")
     } else {
-        "eine andere Einheit"
+        tr!("feature-unit-other")
     }
 }
 
 /// Prüft, ob ein Ergebnis in ein Feld der Art `want` passt (seine Einheit oder eine Zahl).
 pub fn fit_unit(value: f64, dim: Dim, want: ParamUnit) -> Result<f64, ExprError> {
     if !value.is_finite() {
-        return fail(NOT_FINITE);
+        return fail(not_finite());
     }
     if dim == Dim::of(want) || dim == Dim::NUMBER {
         return Ok(no_neg_zero(value));
     }
     let soll = match want {
-        ParamUnit::Length => "eine Länge",
-        ParamUnit::Angle => "ein Winkel",
-        ParamUnit::Number => "eine Zahl",
+        ParamUnit::Length => tr!("feature-unit-a-length"),
+        ParamUnit::Angle => tr!("feature-unit-an-angle"),
+        ParamUnit::Number => tr!("feature-unit-a-number"),
     };
-    fail(format!(
-        "Hier wird {soll} erwartet, die Formel ergibt {}.",
-        dim_text(dim)
+    fail(tr!(
+        "feature-expr-expected",
+        expected = soll.to_string(),
+        actual = (dim_text(dim)).to_string()
     ))
 }
 
@@ -850,11 +908,11 @@ pub fn number_text(v: f64) -> String {
 /// der Aufrufer lehnt ab.
 pub fn value_text(v: f64) -> Result<String, ExprError> {
     if !v.is_finite() {
-        return fail(VALUE_TOO_LONG);
+        return fail(value_too_long());
     }
     let text = number_text(v);
     if text.chars().count() > MAX_FORMULA_CHARS {
-        return fail(VALUE_TOO_LONG);
+        return fail(value_too_long());
     }
     Ok(text)
 }
@@ -882,18 +940,18 @@ pub fn short_number(v: f64) -> String {
 /// Prüft einen Parameternamen (Form, Länge, nicht Funktion oder Konstante).
 pub fn check_name(name: &str) -> Result<(), ExprError> {
     if name.is_empty() {
-        return fail(NAME_EMPTY);
+        return fail(name_empty());
     }
     if name.chars().count() > MAX_PARAM_NAME_CHARS {
-        return fail(NAME_LONG);
+        return fail(name_long());
     }
     let mut chars = name.chars();
     let form_ok = chars.next().is_some_and(is_name_start) && chars.all(is_name_char);
     if !form_ok {
-        return fail(NAME_FORM);
+        return fail(name_form());
     }
     if RESERVED.contains(&name.to_lowercase().as_str()) {
-        return fail(format!("„{name}“ ist schon eine Funktion oder Konstante."));
+        return fail(tr!("feature-expr-reserved", name = name.to_string()));
     }
     Ok(())
 }
@@ -951,14 +1009,14 @@ pub struct TableError {
 pub fn evaluate_table(defs: &[ParamDef<'_>]) -> Result<Vec<f64>, TableError> {
     let at = |index: usize, message: String| TableError { index, message };
     if defs.len() > MAX_PARAMETERS {
-        return Err(at(MAX_PARAMETERS, TOO_MANY.into()));
+        return Err(at(MAX_PARAMETERS, too_many()));
     }
     let n = defs.len();
     let mut by_name: HashMap<String, usize> = HashMap::with_capacity(n);
     for (i, d) in defs.iter().enumerate() {
         check_name(d.name).map_err(|e| at(i, e.0))?;
         if by_name.insert(d.name.to_lowercase(), i).is_some() {
-            return Err(at(i, format!("Den Namen „{}“ gibt es schon.", d.name)));
+            return Err(at(i, tr!("feature-name-exists", name = d.name.to_string())));
         }
     }
     let mut exprs = Vec::with_capacity(n);
@@ -969,13 +1027,10 @@ pub fn evaluate_table(defs: &[ParamDef<'_>]) -> Result<Vec<f64>, TableError> {
         for name in e.names() {
             match by_name.get(&name.to_lowercase()) {
                 Some(&j) if j == i => {
-                    return Err(at(
-                        i,
-                        format!("Der Parameter „{}“ hängt von sich selbst ab.", d.name),
-                    ));
+                    return Err(at(i, tr!("feature-param-self", name = d.name.to_string())));
                 }
                 Some(&j) => mine.push(j),
-                None => return Err(at(i, format!("Den Namen „{name}“ gibt es nicht."))),
+                None => return Err(at(i, tr!("feature-expr-no-name", name = name.to_string()))),
             }
         }
         deps.push(mine);
@@ -1023,14 +1078,11 @@ pub fn evaluate_table(defs: &[ParamDef<'_>]) -> Result<Vec<f64>, TableError> {
         ring.sort_unstable();
         let list: Vec<String> = ring
             .iter()
-            .map(|&i| format!("„{}“", defs[i].name))
+            .map(|&i| tr!("tree-quoted-name", name = defs[i].name.to_string()))
             .collect();
         return Err(at(
             ring[0],
-            format!(
-                "Die Parameter {} hängen im Kreis voneinander ab.",
-                list.join(", ")
-            ),
+            tr!("feature-param-cycle", list = (list.join(", ")).to_string()),
         ));
     }
 

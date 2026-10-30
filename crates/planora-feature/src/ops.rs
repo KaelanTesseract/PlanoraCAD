@@ -8,6 +8,7 @@ use crate::formulas::{
 };
 use crate::model::{Document, FeatureId, FeatureKind, FeatureStatus};
 use crate::recompute::RecomputeReport;
+use planora_i18n::tr;
 use planora_kernel::Kernel;
 
 impl Document {
@@ -54,9 +55,7 @@ impl Document {
         let before = std::mem::discriminant(&kind);
         f(&mut kind);
         if std::mem::discriminant(&kind) != before {
-            return Err(FeatureError::InvalidInput(
-                "Die Art des Features lässt sich nicht ändern".into(),
-            ));
+            return Err(FeatureError::InvalidInput(tr!("feature-kind-fixed")));
         }
         self.check_references(&kind, idx)?;
         Ok((idx, kind))
@@ -104,9 +103,7 @@ impl Document {
     pub fn rename(&mut self, id: FeatureId, name: impl Into<String>) -> Result<(), FeatureError> {
         let name = name.into();
         if name.trim().is_empty() {
-            return Err(FeatureError::InvalidInput(
-                "Der Name darf nicht leer sein".into(),
-            ));
+            return Err(FeatureError::InvalidInput(tr!("feature-name-empty")));
         }
         let idx = self.index_of(id).ok_or(FeatureError::UnknownFeature)?;
         if self.features[idx].name != name {

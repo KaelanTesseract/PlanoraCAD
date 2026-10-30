@@ -5,8 +5,8 @@ use glam::{Vec2, Vec3};
 use planora_exchange::{ExchangeMesh, MeshReport, MeshTransform, check_mesh};
 use planora_feature::{
     BlendArt, BodyRef, Document, EdgeCopy, FeatureError, FeatureId, FeatureKind, FeatureStatus,
-    FieldKey, Formulas, MESH_LOCKED, MeshId, NewStepBody, ParamEdit, ParamId, RestoreKind,
-    SketchFeature, SketchPlane, StepShape,
+    FieldKey, Formulas, MeshId, NewStepBody, ParamEdit, ParamId, RestoreKind, SketchFeature,
+    SketchPlane, StepShape, mesh_locked,
 };
 use planora_i18n::tr;
 use planora_kernel::boolean::BoolOp;
@@ -827,7 +827,7 @@ impl AppState {
         formulas: Formulas,
     ) -> Result<FeatureId, String> {
         crate::history_bar::refuse_if_locked(self, &kind.dependencies())?;
-        let label = base_name.unwrap_or(kind.label()).to_string();
+        let label = base_name.map_or_else(|| kind.label(), str::to_string);
         let name = self.next_name(&label);
         match self
             .document
@@ -963,7 +963,7 @@ impl AppState {
             return self.fail(tr!("state-pick-two-bodies"));
         }
         if self.is_mesh(a) || self.is_mesh(b) {
-            return self.fail(MESH_LOCKED.into());
+            return self.fail(mesh_locked());
         }
         let kind = FeatureKind::Boolean {
             target: self.bodies[a].source,
@@ -972,7 +972,7 @@ impl AppState {
         };
         // Name nach der Art („Boolesche Operation N“); die Operation zeigen Baum und
         // Eigenschaften.
-        let id = self.add_checked(kind.label(), kind)?;
+        let id = self.add_checked(&kind.label(), kind)?;
         self.hover = None;
         self.selection = None;
         self.refresh();
@@ -1027,7 +1027,7 @@ impl AppState {
         formulas: Formulas,
     ) -> Result<FeatureId, String> {
         if self.is_mesh(body) {
-            return self.fail(MESH_LOCKED.into());
+            return self.fail(mesh_locked());
         }
         let Some(b) = self.bodies.get(body) else {
             return self.fail(tr!("state-body-not-found"));
@@ -1054,7 +1054,7 @@ impl AppState {
             art,
             tangentenkette,
         };
-        let id = self.add_checked_with(kind.label(), kind, formulas)?;
+        let id = self.add_checked_with(&kind.label(), kind, formulas)?;
         self.hover = None;
         self.selection = None;
         self.refresh();
@@ -1733,7 +1733,7 @@ impl AppState {
     /// Die Skizze verweist über Marke und Hinweispunkt auf die Fläche und wandert mit ihr.
     pub fn new_sketch_on_face(&mut self, body: usize, face: Id<Face>) -> Result<FeatureId, String> {
         if self.is_mesh(body) {
-            return self.fail(MESH_LOCKED.into());
+            return self.fail(mesh_locked());
         }
         let Some(b) = self.bodies.get(body) else {
             return self.fail(tr!("state-body-not-found"));

@@ -160,12 +160,12 @@ fn limit_is_200_per_drawing() {
     assert_eq!(d.drawing(dr).unwrap().balloons.len(), 200);
     let snap = snapshot(&d);
     match d.add_balloon(dr, view, key(a), (0.5, 0.5), (1.0, 1.0)) {
-        Err(FeatureError::InvalidInput(m)) => assert_eq!(m, TOO_MANY_BALLOONS),
+        Err(FeatureError::InvalidInput(m)) => assert_eq!(m, too_many_balloons()),
         r => panic!("{r:?}"),
     }
     assert_eq!(snapshot(&d), snap);
     assert_eq!(
-        TOO_MANY_BALLOONS,
+        too_many_balloons(),
         "Es sind höchstens 200 Positionsnummern je Zeichnung möglich."
     );
     // Eine zweite Zeichnung hat ihre eigene Grenze.
@@ -198,7 +198,7 @@ fn limit_is_200_per_drawing() {
     };
     x.next_balloon += 1;
     x.balloons.push(extra);
-    assert_eq!(validate_drawing(&x), Err(TOO_MANY_BALLOONS.to_string()));
+    assert_eq!(validate_drawing(&x), Err(too_many_balloons().to_string()));
 }
 
 #[test]

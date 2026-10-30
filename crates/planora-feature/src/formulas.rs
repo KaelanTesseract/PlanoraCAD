@@ -27,6 +27,7 @@ use crate::model::{
     MIN_CHAMFER_ANGLE_DEG, MIN_MESH_SCALE, SketchFeature,
 };
 use crate::params::ParamScope;
+use planora_i18n::tr;
 use planora_sketch::{ConstraintId, ConstraintKind, Sketch, SketchError};
 use std::collections::{BTreeMap, HashSet};
 
@@ -117,23 +118,23 @@ pub fn field_keys(kind: &FeatureKind) -> Vec<FieldKey> {
 }
 
 /// Bezeichnung des Feldes wie im Fenster „bearbeiten“.
-pub fn field_label(kind: &FeatureKind, key: FieldKey) -> &'static str {
+pub fn field_label(kind: &FeatureKind, key: FieldKey) -> String {
     match (kind, key) {
-        (FeatureKind::Move { .. }, FieldKey::X) => "Δx",
-        (FeatureKind::Move { .. }, FieldKey::Y) => "Δy",
-        (FeatureKind::Move { .. }, FieldKey::Z) => "Δz",
-        (_, FieldKey::Breite) => "Breite",
-        (_, FieldKey::Tiefe) => "Tiefe",
-        (_, FieldKey::Hoehe) => "Höhe",
-        (_, FieldKey::Radius) => "Radius",
-        (_, FieldKey::X) => "Position x",
-        (_, FieldKey::Y) => "Position y",
-        (_, FieldKey::Z) => "Position z",
-        (_, FieldKey::Abstand) => "Abstand",
-        (_, FieldKey::Abstand1) => "Abstand 1",
-        (_, FieldKey::Abstand2) => "Abstand 2",
-        (_, FieldKey::Winkel) => "Winkel",
-        (_, FieldKey::Massstab) => "Maßstab",
+        (FeatureKind::Move { .. }, FieldKey::X) => "Δx".to_string(),
+        (FeatureKind::Move { .. }, FieldKey::Y) => "Δy".to_string(),
+        (FeatureKind::Move { .. }, FieldKey::Z) => "Δz".to_string(),
+        (_, FieldKey::Breite) => tr!("feature-field-width"),
+        (_, FieldKey::Tiefe) => tr!("feature-field-depth"),
+        (_, FieldKey::Hoehe) => tr!("create-field-height"),
+        (_, FieldKey::Radius) => tr!("create-field-radius"),
+        (_, FieldKey::X) => tr!("props-position-x"),
+        (_, FieldKey::Y) => tr!("props-position-y"),
+        (_, FieldKey::Z) => tr!("props-position-z"),
+        (_, FieldKey::Abstand) => tr!("blend-field-distance"),
+        (_, FieldKey::Abstand1) => tr!("blend-field-distance-1"),
+        (_, FieldKey::Abstand2) => tr!("blend-field-distance-2"),
+        (_, FieldKey::Winkel) => tr!("blend-field-angle"),
+        (_, FieldKey::Massstab) => tr!("props-scale"),
     }
 }
 
@@ -263,20 +264,20 @@ fn value_issue(kind: &FeatureKind, key: FieldKey, v: f64, tolerance: f64) -> Opt
         | FieldKey::Abstand2
             if v <= tolerance =>
         {
-            Some(format!(
-                "{} ergibt {} mm, es muss größer als 0 sein",
-                field_label(kind, key),
-                expr::short_number(v)
+            Some(tr!(
+                "feature-value-length",
+                field = (field_label(kind, key)).to_string(),
+                value = expr::display_number(&expr::short_number(v))
             ))
         }
-        FieldKey::Massstab if !(MIN_MESH_SCALE..=MAX_MESH_SCALE).contains(&v) => Some(format!(
-            "Maßstab ergibt {}, er muss zwischen 0,000001 und 1 000 000 liegen",
-            scale_text(v)
+        FieldKey::Massstab if !(MIN_MESH_SCALE..=MAX_MESH_SCALE).contains(&v) => Some(tr!(
+            "feature-value-scale",
+            value = expr::display_number(&scale_text(v))
         )),
         FieldKey::Winkel if !(MIN_CHAMFER_ANGLE_DEG..=MAX_CHAMFER_ANGLE_DEG).contains(&v) => {
-            Some(format!(
-                "Winkel ergibt {}°, er muss zwischen 1° und 179° liegen",
-                angle_text(v)
+            Some(tr!(
+                "feature-value-angle",
+                value = expr::display_number(&angle_text(v))
             ))
         }
         _ => None,
@@ -491,10 +492,11 @@ fn evaluate_sketch(sf: &SketchFeature, scope: &ParamScope) -> (Sketch, Option<Fo
             } else {
                 " mm"
             };
-            issue.get_or_insert(FormulaIssue::Value(format!(
-                "Ein Maß ergibt {}{suffix}: {}",
-                expr::short_number(d.shown),
-                sketch_reason(e)
+            issue.get_or_insert(FormulaIssue::Value(tr!(
+                "feature-value-dimension",
+                value = expr::display_number(&expr::short_number(d.shown)),
+                suffix = suffix.to_string(),
+                reason = (sketch_reason(e)).to_string()
             )));
             break;
         }
@@ -606,9 +608,7 @@ pub(crate) fn check_keys(kind: &FeatureKind, formulas: &Formulas) -> Result<(), 
     if formulas.keys().all(|k| keys.contains(k)) {
         Ok(())
     } else {
-        Err(FeatureError::InvalidInput(
-            "Dieses Feld kann keine Formel haben".into(),
-        ))
+        Err(FeatureError::InvalidInput(tr!("state-field-no-formula")))
     }
 }
 
@@ -656,8 +656,17 @@ impl Document {
                 && !id.is_some_and(|id| known.contains(&(id, slot, text.to_string())))
             {
                 return Err(FeatureError::Formula(match slot {
-                    Slot::Field(key) => format!("{name}, {}: {m}", field_label(kind, key)),
-                    Slot::Dim(_) => format!("{name}: {m}"),
+                    Slot::Field(key) => tr!(
+                        "feature-formula-in-field",
+                        name = name.to_string(),
+                        field = (field_label(kind, key)).to_string(),
+                        msg = m.to_string()
+                    ),
+                    Slot::Dim(_) => tr!(
+                        "feature-formula-in-dim",
+                        name = name.to_string(),
+                        msg = m.to_string()
+                    ),
                 }));
             }
         }

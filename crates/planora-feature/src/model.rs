@@ -3,6 +3,7 @@
 use crate::refs::{EdgeRef, FaceRef};
 use crate::step_bodies::{StepShape, StepShapeId};
 use planora_exchange::{ExchangeMesh, MeshTransform};
+use planora_i18n::tr;
 use planora_kernel::{AnalyticKernel, BlendKind, BoolOp, Solid};
 use planora_math::{DQuat, DVec3, Frame};
 use planora_sketch::{ConstraintId, CurveId, Sketch};
@@ -37,7 +38,9 @@ pub const MAX_CHAMFER_ANGLE_DEG: f64 = 179.0;
 pub const ROTATION_NORM_TOL: f64 = 1e-6;
 /// Meldung der Bearbeitungssperre (Spec §6), gleich dem Text von
 /// [`crate::FeatureError::MeshBodyLocked`].
-pub const MESH_LOCKED: &str = "Netz-Körper lassen sich nicht bearbeiten";
+pub fn mesh_locked() -> String {
+    tr!("feature-mesh-locked")
+}
 
 /// Grundebenen für Skizzen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -157,18 +160,22 @@ impl BlendArt {
     }
 
     /// Bezeichnung der Feature-Art: „Rundung“ oder „Fase“.
-    pub fn label(&self) -> &'static str {
-        if self.is_chamfer() { "Fase" } else { "Rundung" }
+    pub fn label(&self) -> String {
+        if self.is_chamfer() {
+            tr!("undo-chamfer")
+        } else {
+            tr!("blend-art-round")
+        }
     }
 
     /// Ausführliche Bezeichnung für Eigenschaften und Fenster.
-    pub fn kind_label(&self) -> &'static str {
+    pub fn kind_label(&self) -> String {
         match self {
-            BlendArt::Rundung { .. } => "Rundung",
-            BlendArt::RundungVariabel { .. } => "Rundung mit variablem Radius",
-            BlendArt::FaseGleich { .. } => "Fase mit gleichem Abstand",
-            BlendArt::FaseZwei { .. } => "Fase mit zwei Abständen",
-            BlendArt::FaseWinkel { .. } => "Fase mit Abstand und Winkel",
+            BlendArt::Rundung { .. } => tr!("blend-art-round"),
+            BlendArt::RundungVariabel { .. } => tr!("blend-art-variable"),
+            BlendArt::FaseGleich { .. } => tr!("feature-label-chamfer-equal"),
+            BlendArt::FaseZwei { .. } => tr!("feature-label-chamfer-two"),
+            BlendArt::FaseWinkel { .. } => tr!("feature-label-chamfer-angle"),
         }
     }
 
@@ -275,20 +282,20 @@ pub enum FeatureKind {
 
 impl FeatureKind {
     /// Deutsche Bezeichnung der Feature-Art für die Oberfläche.
-    pub fn label(&self) -> &'static str {
+    pub fn label(&self) -> String {
         match self {
-            FeatureKind::Sketch(_) => "Skizze",
-            FeatureKind::Box { .. } => "Quader",
-            FeatureKind::Cylinder { .. } => "Zylinder",
-            FeatureKind::Sphere { .. } => "Kugel",
-            FeatureKind::Cone { .. } => "Kegel",
-            FeatureKind::Extrude { .. } => "Extrusion",
-            FeatureKind::Revolve { .. } => "Rotation",
-            FeatureKind::Boolean { .. } => "Boolesche Operation",
-            FeatureKind::Move { .. } => "Verschieben",
+            FeatureKind::Sketch(_) => tr!("area-sketch"),
+            FeatureKind::Box { .. } => tr!("feature-label-box"),
+            FeatureKind::Cylinder { .. } => tr!("feature-label-cylinder"),
+            FeatureKind::Sphere { .. } => tr!("feature-label-sphere"),
+            FeatureKind::Cone { .. } => tr!("feature-label-cone"),
+            FeatureKind::Extrude { .. } => tr!("feature-label-extrude"),
+            FeatureKind::Revolve { .. } => tr!("feature-label-revolve"),
+            FeatureKind::Boolean { .. } => tr!("boolean-title"),
+            FeatureKind::Move { .. } => tr!("undo-move"),
             FeatureKind::Verrunden { art, .. } => art.label(),
-            FeatureKind::MeshBody { .. } => "Netz-Körper",
-            FeatureKind::StepBody { .. } => "STEP-Körper",
+            FeatureKind::MeshBody { .. } => tr!("props-mesh-body"),
+            FeatureKind::StepBody { .. } => tr!("feature-label-step"),
         }
     }
 

@@ -4,6 +4,7 @@
 use super::{NurbsCurve, NurbsError};
 use crate::DVec3;
 use glam::DVec4;
+use planora_i18n::tr;
 
 /// Höchstzahl Jacobi-Durchläufe für die Eigenrichtungen der 3×3-Kovarianz (harte Grenze).
 const JACOBI_MAX_SWEEPS: usize = 32;
@@ -35,15 +36,22 @@ fn span_and_multiplicity(knots: &[f64], p: usize, u: f64) -> (usize, usize) {
 pub(super) fn check_insertion(knots: &[f64], p: usize, u: f64, r: usize) -> Result<(), NurbsError> {
     let (a, b) = (knots[p], knots[knots.len() - p - 1]);
     if !u.is_finite() || u <= a || u >= b {
-        return Err(NurbsError::Input(format!(
-            "der Knoten {u} liegt nicht im Inneren des Bereichs ({a}, {b})"
+        return Err(NurbsError::Input(tr!(
+            "math-knot-outside",
+            u = u.to_string(),
+            a = a.to_string(),
+            b = b.to_string()
         )));
     }
     let (_, s) = span_and_multiplicity(knots, p, u);
     // `r > p` zuerst prüfen: so kann `s + r` (mit `s ≤ p`) nicht überlaufen.
     if r > p || s + r > p {
-        return Err(NurbsError::Knots(format!(
-            "{r}-faches Einfügen des Knotens {u} (bisher {s}-fach) ergäbe eine Vielfachheit über dem Grad {p}"
+        return Err(NurbsError::Knots(tr!(
+            "math-knot-multiplicity",
+            r = r.to_string(),
+            u = u.to_string(),
+            s = s.to_string(),
+            p = p.to_string()
         )));
     }
     Ok(())

@@ -1517,7 +1517,7 @@ fn balloons_paint_in_sheet_colour_with_paper_widths() {
 fn app_texts_match_the_feature_constants() {
     assert_eq!(
         balloon_tool::too_many().text(),
-        planora_feature::TOO_MANY_BALLOONS
+        planora_feature::too_many_balloons()
     );
 }
 

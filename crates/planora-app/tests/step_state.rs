@@ -978,7 +978,7 @@ fn the_step_label_has_one_source() {
     assert_eq!(label, planora_step::UNNAMED_BODY);
     assert_eq!(names(&s), [format!("{label} 1")]);
     let seen = draw_properties(&mut s, true);
-    assert!(has_exact(&seen, label), "Art im Eigenschaftenfeld");
+    assert!(has_exact(&seen, &label), "Art im Eigenschaftenfeld");
 }
 
 /// Schlussprüfung M1: Nennt die Datei keine Genauigkeit, zeigt die Eigenschaft das als

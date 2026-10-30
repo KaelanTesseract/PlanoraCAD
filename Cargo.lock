@@ -2699,6 +2699,7 @@ version = "0.0.2-dev.1"
 dependencies = [
  "planora-drawing",
  "planora-exchange",
+ "planora-i18n",
  "planora-kernel",
  "planora-math",
  "planora-mesh",
@@ -2731,6 +2732,7 @@ name = "planora-math"
 version = "0.0.2-dev.1"
 dependencies = [
  "glam",
+ "planora-i18n",
  "robust",
  "thiserror 2.0.21",
 ]
@@ -2782,6 +2784,7 @@ dependencies = [
 name = "planora-sketch"
 version = "0.0.2-dev.1"
 dependencies = [
+ "planora-i18n",
  "planora-kernel",
  "planora-math",
  "planora-mesh",

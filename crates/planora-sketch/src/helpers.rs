@@ -5,6 +5,7 @@
 use crate::constraint::{ConstraintKind, LineOrPoints};
 use crate::error::SketchError;
 use crate::model::{CurveId, CurveKind, PointId, Sketch, finite};
+use planora_i18n::tr;
 use planora_kernel::{Curve, Edge, Face, Id, Solid, Surface};
 use planora_math::{DVec2, DVec3, Frame, TAU};
 use std::collections::HashMap;
@@ -49,8 +50,8 @@ enum Projected {
     },
 }
 
-fn unsupported(what: &str) -> SketchError {
-    SketchError::UnsupportedProjection(what.into())
+fn unsupported(what: String) -> SketchError {
+    SketchError::UnsupportedProjection(what)
 }
 
 impl Sketch {
@@ -71,22 +72,18 @@ impl Sketch {
     /// Kreise und Bögen.
     fn check_copy_sources(&self, curves: &[CurveId]) -> Result<(), SketchError> {
         if curves.is_empty() {
-            return Err(SketchError::InvalidInput("Es ist nichts ausgewählt".into()));
+            return Err(SketchError::InvalidInput(tr!("sketch-nothing-selected")));
         }
         for (i, &c) in curves.iter().enumerate() {
             self.check_curve(c)?;
             if curves[..i].contains(&c) {
-                return Err(SketchError::InvalidInput(
-                    "Ein Objekt ist mehrfach ausgewählt".into(),
-                ));
+                return Err(SketchError::InvalidInput(tr!("sketch-err-object-twice")));
             }
             if matches!(
                 self.curves[c].kind,
                 CurveKind::Ellipse { .. } | CurveKind::Spline { .. }
             ) {
-                return Err(SketchError::WrongType(
-                    "Nur Linien, Kreise und Bögen können kopiert werden".into(),
-                ));
+                return Err(SketchError::WrongType(tr!("sketch-err-copy-kinds")));
             }
         }
         Ok(())
@@ -95,16 +92,12 @@ impl Sketch {
     /// Achsenparalleles Rechteck mit den gegenüberliegenden Ecken `a` und `b`.
     pub fn add_rectangle(&mut self, a: DVec2, b: DVec2) -> Result<RectIds, SketchError> {
         if !(a.is_finite() && b.is_finite()) {
-            return Err(SketchError::InvalidInput(
-                "Die Ecken müssen endliche Zahlen sein".into(),
-            ));
+            return Err(SketchError::InvalidInput(tr!("sketch-err-corners-finite")));
         }
         let (min, max) = (a.min(b), a.max(b));
         let size = max - min;
         if size.x <= self.tolerance().linear || size.y <= self.tolerance().linear {
-            return Err(SketchError::Degenerate(
-                "Breite und Höhe des Rechtecks müssen größer als null sein".into(),
-            ));
+            return Err(SketchError::Degenerate(tr!("sketch-err-rect-size")));
         }
         self.atomically(|s| {
             let corners = [min, DVec2::new(max.x, min.y), max, DVec2::new(min.x, max.y)];
@@ -148,9 +141,7 @@ impl Sketch {
                 self.add_arc(map[&center], s, e)?
             }
             CurveKind::Ellipse { .. } | CurveKind::Spline { .. } => {
-                return Err(SketchError::WrongType(
-                    "Nur Linien, Kreise und Bögen können kopiert werden".into(),
-                ));
+                return Err(SketchError::WrongType(tr!("sketch-err-copy-kinds")));
             }
         };
         self.curves[id].construction = construction;
@@ -174,21 +165,15 @@ impl Sketch {
     ) -> Result<Vec<CurveId>, SketchError> {
         self.check_curve(axis)?;
         let CurveKind::Line { a: aa, b: ab } = self.curves[axis].kind else {
-            return Err(SketchError::WrongType(
-                "Die Spiegelachse muss eine Linie sein".into(),
-            ));
+            return Err(SketchError::WrongType(tr!("sketch-err-mirror-line")));
         };
         self.check_copy_sources(curves)?;
         if curves.contains(&axis) {
-            return Err(SketchError::InvalidInput(
-                "Die Spiegelachse kann nicht selbst gespiegelt werden".into(),
-            ));
+            return Err(SketchError::InvalidInput(tr!("sketch-err-mirror-self")));
         }
         let (origin, dir) = (self.pos(aa), self.pos(ab) - self.pos(aa));
         if dir.length() <= self.tolerance().linear {
-            return Err(SketchError::Degenerate(
-                "Die Spiegelachse hat die Länge null".into(),
-            ));
+            return Err(SketchError::Degenerate(tr!("sketch-err-mirror-zero")));
         }
         let d = dir.normalize();
         self.atomically(|s| {
@@ -228,20 +213,17 @@ impl Sketch {
         count: usize,
     ) -> Result<Vec<Vec<CurveId>>, SketchError> {
         if !(1..=MAX_PATTERN_COPIES).contains(&count) {
-            return Err(SketchError::InvalidInput(format!(
-                "Die Anzahl der Kopien muss zwischen 1 und {MAX_PATTERN_COPIES} liegen"
+            return Err(SketchError::InvalidInput(tr!(
+                "sketch-err-copies-range",
+                max = MAX_PATTERN_COPIES.to_string()
             )));
         }
         if !offset.is_finite() {
-            return Err(SketchError::InvalidInput(
-                "Der Versatz muss aus endlichen Zahlen bestehen".into(),
-            ));
+            return Err(SketchError::InvalidInput(tr!("sketch-err-offset-finite")));
         }
         let tol = self.tolerance().linear;
         if offset.length() <= tol {
-            return Err(SketchError::Degenerate(
-                "Der Versatz darf nicht null sein".into(),
-            ));
+            return Err(SketchError::Degenerate(tr!("sketch-err-offset-zero")));
         }
         self.check_copy_sources(curves)?;
         let first = self.curves[curves[0]].kind.points()[0];
@@ -377,7 +359,7 @@ impl Sketch {
                         radius: r,
                     },
                 ) => {
-                    finite(radius, "Der Radius")?;
+                    finite(radius, tr!("sketch-err-what-radius"))?;
                     s.set_point_xy(m, center.x, center.y)?;
                     s.vars[r] = radius;
                     radius_value = Some(radius);
@@ -407,14 +389,14 @@ impl Sketch {
                         minor: mi,
                     },
                 ) => {
-                    finite(axis.x, "Die große Halbachse")?;
-                    finite(axis.y, "Die große Halbachse")?;
-                    finite(minor, "Die kleine Halbachse")?;
+                    finite(axis.x, tr!("sketch-err-what-major"))?;
+                    finite(axis.y, tr!("sketch-err-what-major"))?;
+                    finite(minor, tr!("sketch-err-what-minor"))?;
                     s.set_point_xy(m, center.x, center.y)?;
                     (s.vars[ax], s.vars[ay], s.vars[mi]) = (axis.x, axis.y, minor);
                     ellipse_values = Some((axis.length(), minor, axis.y.atan2(axis.x)));
                 }
-                _ => return Err(unsupported("Die Kante hat ihre Art geändert")),
+                _ => return Err(unsupported(tr!("sketch-err-edge-type-changed"))),
             }
             // Die Fixwerte und Maße, die `add_projected_edge` angelegt hat, mitführen.
             let points = s.curves[curve].kind.points();
@@ -460,17 +442,13 @@ impl Sketch {
         let tol = *self.tolerance();
         let project = |p: DVec3| frame.to_local(p).truncate();
         if !(e.t0.is_finite() && e.t1.is_finite()) || (e.t1 - e.t0).abs() <= tol.angular {
-            return Err(SketchError::Degenerate(
-                "Die Kante hat keinen Parameterbereich".into(),
-            ));
+            return Err(SketchError::Degenerate(tr!("sketch-err-edge-no-range")));
         }
         match &e.curve {
             Curve::Line { .. } => {
                 let (p0, p1) = (project(e.curve.point(e.t0)), project(e.curve.point(e.t1)));
                 if p0.distance(p1) <= tol.linear {
-                    return Err(unsupported(
-                        "Die Kante steht senkrecht zur Skizzenebene und wäre nur ein Punkt",
-                    ));
+                    return Err(unsupported(tr!("sketch-err-edge-perpendicular")));
                 }
                 Ok(Projected::Line(p0, p1))
             }
@@ -481,9 +459,7 @@ impl Sketch {
                 let full = (e.t1 - e.t0).abs() >= TAU - tol.angular;
                 if cf.z.cross(frame.z).length() > tol.angular {
                     if !full {
-                        return Err(unsupported(
-                            "Kreisbögen, die nicht parallel zur Skizzenebene liegen, werden nicht unterstützt",
-                        ));
+                        return Err(unsupported(tr!("sketch-err-arc-not-parallel")));
                     }
                     return self.project_ellipse(cf, *r, *r);
                 }
@@ -503,15 +479,11 @@ impl Sketch {
                 minor,
             } => {
                 if (e.t1 - e.t0).abs() < TAU - tol.angular {
-                    return Err(unsupported(
-                        "Ellipsenbögen werden nicht unterstützt, nur ganze Ellipsen",
-                    ));
+                    return Err(unsupported(tr!("sketch-err-ellipse-arc")));
                 }
                 self.project_ellipse(cf, *major, *minor)
             }
-            Curve::Nurbs(_) => Err(unsupported(
-                "Freiformkanten können noch nicht in die Skizze übernommen werden",
-            )),
+            Curve::Nurbs(_) => Err(unsupported(tr!("sketch-err-freeform-edge"))),
         }
     }
 
@@ -542,9 +514,7 @@ impl Sketch {
             (a, b.length())
         };
         if !(axis.is_finite() && short.is_finite()) || short <= tol.linear {
-            return Err(unsupported(
-                "Die Kurve steht senkrecht zur Skizzenebene und wäre nur eine Strecke",
-            ));
+            return Err(unsupported(tr!("sketch-err-curve-perpendicular")));
         }
         Ok(Projected::Ellipse {
             center,
