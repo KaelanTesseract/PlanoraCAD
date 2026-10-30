@@ -1,9 +1,10 @@
 use crate::geometry::{Curve, Surface};
 use crate::ids::Id;
 use crate::topology::{Edge, Face, Solid, Vertex};
+use planora_i18n::tr;
 use planora_math::Tolerance;
 use std::collections::HashSet;
-use thiserror::Error;
+use std::fmt;
 
 /// Toleranz (mm), mit der eine Ecke oder Kante auf einer Fläche liegt, wenn Freiformkurven oder
 /// -flächen beteiligt sind (Annäherung von Schnittkurven, Spec N4).
@@ -58,27 +59,45 @@ fn check_freeform_edges(solid: &Solid, tol: &Tolerance) -> Result<(), Validation
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidationError {
-    #[error("Kante {0} wird {1}-mal verwendet (erwartet: 2)")]
     EdgeUseCount(usize, usize),
-    #[error("Kante {0} wird nicht genau einmal vorwärts und einmal rückwärts durchlaufen")]
     EdgeOrientation(usize),
-    #[error("Eine Schleife der Fläche {0} ist nicht geschlossen")]
     OpenLoop(usize),
-    #[error("Eine Schleife der Fläche {0} ist leer")]
     EmptyLoop(usize),
-    #[error("Die gekrümmte Fläche {0} hat keinen Parameterbereich")]
     MissingPatch(usize),
-    #[error("Die Euler-Poincaré-Formel liefert kein ganzzahliges Geschlecht (V-E+F-R = {0})")]
     InvalidEulerCharacteristic(i64),
-    #[error("Die Fläche {0} gehört nicht zu genau einer Schale")]
     ShellMembership(usize),
-    #[error("Die Kante {0} liegt nicht auf der Fläche {1} (Freiformkurve oder -fläche beteiligt)")]
     EdgeOffSurface(usize, usize),
-    #[error("Ein Loch der Fläche {0} reicht über die Naht ihrer Trägerfläche")]
     HoleAcrossSeam(usize),
 }
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            ValidationError::EdgeUseCount(e, n) => {
+                tr!("kernel-validate-edge-use-count", edge = *e, n = *n)
+            }
+            ValidationError::EdgeOrientation(e) => {
+                tr!("kernel-validate-edge-orientation", edge = *e)
+            }
+            ValidationError::OpenLoop(fc) => tr!("kernel-validate-open-loop", face = *fc),
+            ValidationError::EmptyLoop(fc) => tr!("kernel-validate-empty-loop", face = *fc),
+            ValidationError::MissingPatch(fc) => tr!("kernel-validate-missing-patch", face = *fc),
+            ValidationError::InvalidEulerCharacteristic(c) => {
+                tr!("kernel-validate-euler", value = *c)
+            }
+            ValidationError::ShellMembership(fc) => tr!("kernel-validate-shell", face = *fc),
+            ValidationError::EdgeOffSurface(e, fc) => {
+                tr!("kernel-validate-edge-off-surface", edge = *e, face = *fc)
+            }
+            ValidationError::HoleAcrossSeam(fc) => tr!("kernel-validate-hole-seam", face = *fc),
+        };
+        f.write_str(&text)
+    }
+}
+
+impl std::error::Error for ValidationError {}
 
 /// Spielraum (Anteil der Periode), um den ein Loch über den Nahtrand der äußeren Schleife ragen
 /// darf, ohne als „über die Naht“ zu gelten: deckt Rundungsfehler der Rückrechnung auf Parameter

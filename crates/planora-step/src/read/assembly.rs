@@ -65,6 +65,7 @@ use crate::read::geom::{Resolver, Skip};
 use crate::read::index::StepFile;
 use crate::read::units::Units;
 use crate::read::value::{Entity, Value};
+use planora_i18n::tr;
 use planora_math::{DMat4, DVec3, Frame};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -93,36 +94,43 @@ pub struct FoundBody {
 
 /// Meldung zu einer Lage, die sich nicht bestimmen ließ.
 pub fn placement_note(name: &str, reason: &str) -> String {
-    format!(
-        "Die Lage von „{name}“ ließ sich nicht bestimmen ({reason}); der Körper liegt am Ursprung."
-    )
+    tr!("step-r-placement-failed", name = name, reason = reason)
 }
 
 /// Meldung zu einer Lage, deren Richtung in der Baugruppe angenommen wurde (Beziehung mit
 /// Transformation ohne Vorkommen: Eltern ist die Darstellung mit Produkt, sonst `rep_2`). Der
 /// Körper liegt an der angenommenen Stelle.
 pub fn guessed_note(name: &str) -> String {
-    format!(
-        "Die Lage von „{name}“ ist angenommen: Die Datei sagt nicht, welches Teil das \
-         übergeordnete ist."
-    )
+    tr!("step-r-placement-guessed", name = name)
 }
 
-/// Arten von Körpern, die (noch) nicht übernommen werden: Typ, Einzahl, Mehrzahl.
+/// Arten von Körpern, die (noch) nicht übernommen werden: Typ, Text-Id der Einzahl, der Mehrzahl.
 const UNSUPPORTED: &[(&str, &str, &str)] = &[
-    ("FACETED_BREP", "Facettenkörper", "Facettenkörper"),
+    (
+        "FACETED_BREP",
+        "step-r-kind-faceted-one",
+        "step-r-kind-faceted-many",
+    ),
     (
         "SHELL_BASED_SURFACE_MODEL",
-        "Flächenmodell",
-        "Flächenmodelle",
+        "step-r-kind-surface-one",
+        "step-r-kind-surface-many",
     ),
     (
         "FACE_BASED_SURFACE_MODEL",
-        "Flächenmodell",
-        "Flächenmodelle",
+        "step-r-kind-surface-one",
+        "step-r-kind-surface-many",
     ),
-    ("SHELL_BASED_WIREFRAME_MODEL", "Drahtmodell", "Drahtmodelle"),
-    ("EDGE_BASED_WIREFRAME_MODEL", "Drahtmodell", "Drahtmodelle"),
+    (
+        "SHELL_BASED_WIREFRAME_MODEL",
+        "step-r-kind-wire-one",
+        "step-r-kind-wire-many",
+    ),
+    (
+        "EDGE_BASED_WIREFRAME_MODEL",
+        "step-r-kind-wire-one",
+        "step-r-kind-wire-many",
+    ),
 ];
 
 /// Je Art von Körper, die die Datei enthält, aber nicht übernommen wird, eine Meldung
@@ -133,10 +141,11 @@ pub fn unsupported_kinds(file: &StepFile) -> Vec<String> {
         .filter_map(|(ty, one, many)| {
             let n = file.ids_of(ty).len();
             (n > 0).then(|| {
-                format!(
-                    "Die Datei enthält {n} {} ({ty}); diese Art wird noch nicht unterstützt und \
-                     ausgelassen.",
-                    if n == 1 { one } else { many }
+                tr!(
+                    "step-r-unsupported-kind",
+                    kind = planora_i18n::t(if n == 1 { one } else { many }),
+                    n = n,
+                    ty = *ty
                 )
             })
         })
@@ -144,12 +153,24 @@ pub fn unsupported_kinds(file: &StepFile) -> Vec<String> {
 }
 
 /// Gründe (wörtlich, Plan Aufgabe 8).
-const MIRROR: &str = "Spiegelung";
-const SCALING: &str = "Skalierung";
-const OBLIQUE: &str = "schiefe Achsen";
-const CYCLE: &str = "Verweise im Kreis";
-const TOO_DEEP: &str = "zu tief verschachtelt";
-const UNCLEAR: &str = "Richtung unklar";
+fn mirror() -> String {
+    tr!("step-r-reason-mirror")
+}
+fn scaling() -> String {
+    tr!("step-r-reason-scaling")
+}
+fn oblique() -> String {
+    tr!("step-r-reason-oblique")
+}
+fn cycle() -> String {
+    tr!("step-r-reason-cycle")
+}
+fn too_deep() -> String {
+    tr!("step-r-reason-too-deep")
+}
+fn unclear() -> String {
+    tr!("step-r-reason-unclear")
+}
 
 /// Typen, deren Einträge als Darstellungen nach Volumen-Einträgen durchsucht werden.
 const REP_TYPES: &[&str] = &[
@@ -319,7 +340,7 @@ impl<'a> Finder<'a> {
 
     /// Fehler, mit dem die Datei abgelehnt wird, weil `#id` nicht lesbar ist: der Fehler der
     /// Verweisprüfung (etwa `MissingRef`) oder `fallback`.
-    fn refusal(&self, id: u64, fallback: &str) -> StepReadError {
+    fn refusal(&self, id: u64, fallback: impl Into<String>) -> StepReadError {
         match self.file.entity(id) {
             Err(e) => e,
             Ok(_) => self.file.fail(id, fallback),
@@ -330,7 +351,7 @@ impl<'a> Finder<'a> {
     fn read_rep(&self, id: u64) -> Result<Rep, StepReadError> {
         let e = self.file.entity_unchecked(id)?;
         let Some(args) = rep_args(&e) else {
-            return Err(self.file.fail(id, "Erwartet wird eine Darstellung."));
+            return Err(self.file.fail(id, tr!("step-r-expected-representation")));
         };
         let name = args[0].text().unwrap_or("").to_string();
         let items = args[1].refs().map_err(|m| self.file.fail(id, m))?;
@@ -397,14 +418,14 @@ impl<'a> Finder<'a> {
             |e: &Entity, t: &str, i: usize| e.arg(t, i).ok().and_then(|v| v.reference().ok());
         let e = self.file.entity_unchecked(item)?;
         let (Some(source), Some(target)) = (refs(&e, MI, 1), refs(&e, MI, 2)) else {
-            return Err(self.refusal(item, "Die Abbildung lässt sich nicht lesen."));
+            return Err(self.refusal(item, tr!("step-r-mapping-unreadable")));
         };
         let map = self
             .file
             .entity_unchecked(source)
-            .map_err(|_| self.refusal(item, "Die Abbildung lässt sich nicht lesen."))?;
+            .map_err(|_| self.refusal(item, tr!("step-r-mapping-unreadable")))?;
         let (Some(origin), Some(child)) = (refs(&map, RM, 0), refs(&map, RM, 1)) else {
-            return Err(self.refusal(source, "Die Abbildung lässt sich nicht lesen."));
+            return Err(self.refusal(source, tr!("step-r-mapping-unreadable")));
         };
         if self.file.line(child).is_none() {
             return Ok(());
@@ -457,7 +478,7 @@ impl<'a> Finder<'a> {
         if is_operator(&e) {
             return operator_matrix(self.file, &mut res, id, &e);
         }
-        Err(format!("unbekannte Form der Lage: {}", type_name(&e)))
+        Err(tr!("step-r-unknown-placement", type = type_name(&e)))
     }
 
     /// Liest Darstellungen mit Körpern oder Abbildungen, Produkte, Vorkommen und Beziehungen.
@@ -494,13 +515,13 @@ impl<'a> Finder<'a> {
             const C: &str = "CONTEXT_DEPENDENT_SHAPE_REPRESENTATION";
             let e = self.file.entity_unchecked(cdsr)?;
             let (Ok(Value::Ref(rr)), Ok(Value::Ref(pds))) = (e.arg(C, 0), e.arg(C, 1)) else {
-                return Err(self.refusal(cdsr, "Das Vorkommen lässt sich nicht lesen."));
+                return Err(self.refusal(cdsr, tr!("step-r-occurrence-unreadable")));
             };
             let usage = self.usage_of(*pds);
             if self.relation_ends(*rr).is_none() {
                 // Ohne lesbare Beziehung: Hat das Kind Körper, läge es still am Ursprung.
                 if let Ok(Some((_, child))) = usage {
-                    let err = self.refusal(cdsr, "Die Beziehung des Vorkommens fehlt.");
+                    let err = self.refusal(cdsr, tr!("step-r-occurrence-relation"));
                     for rep in self.pd_reps.get(&child).cloned().unwrap_or_default() {
                         self.doubtful.push((rep, err.clone()));
                     }
@@ -565,7 +586,10 @@ impl<'a> Finder<'a> {
             .and_then(|v| v.reference().ok())
         else {
             return Err(reason(
-                &self.file.fail(pds, "Die Definition fehlt.").to_string(),
+                &self
+                    .file
+                    .fail(pds, tr!("step-r-definition-missing"))
+                    .to_string(),
             ));
         };
         let u = self.file.entity(def).map_err(|e| reason(&e.to_string()))?;
@@ -641,11 +665,9 @@ impl<'a> Finder<'a> {
         for (cdsr, usage) in occ {
             let key = self.key(cdsr);
             let swapped = match usage {
-                Ok(Some((ppd, cpd))) => {
-                    self.direction(rep_1, rep_2, ppd, cpd).ok_or(UNCLEAR.into())
-                }
-                Ok(None) => Err(UNCLEAR.into()),
-                Err(why) => Err(format!("{UNCLEAR} – {why}")),
+                Ok(Some((ppd, cpd))) => self.direction(rep_1, rep_2, ppd, cpd).ok_or(unclear()),
+                Ok(None) => Err(unclear()),
+                Err(why) => Err(format!("{} – {why}", unclear())),
             };
             let swapped = match swapped {
                 Ok(s) => s,
@@ -726,7 +748,7 @@ impl<'a> Finder<'a> {
                 return Err(reason(
                     &self
                         .file
-                        .fail(op, "Eine Lage der Transformation fehlt.")
+                        .fail(op, tr!("step-r-transform-position"))
                         .to_string(),
                 ));
             };
@@ -736,7 +758,7 @@ impl<'a> Finder<'a> {
                 match item_order(*it_1, *it_2, &self.reps[r1].items, &self.reps[r2].items) {
                     Some(true) => (*it_1, *it_2),
                     Some(false) => (*it_2, *it_1),
-                    None => return Err(UNCLEAR.into()),
+                    None => return Err(unclear()),
                 };
             let a_1 = self.item_matrix(it_1, ctx_1)?;
             let a_2 = self.item_matrix(it_2, ctx_2)?;
@@ -748,7 +770,7 @@ impl<'a> Finder<'a> {
             let m = self.item_matrix(op, ctx_2)?;
             return Ok(if swapped { rigid_inverse(m) } else { m });
         }
-        Err(format!("unbekannte Form der Lage: {}", type_name(&e)))
+        Err(tr!("step-r-unknown-placement", type = type_name(&e)))
     }
 
     /// Name des Produkts einer Darstellung (P10), getrimmt; leer, wenn keins.
@@ -954,7 +976,7 @@ impl<'a> Finder<'a> {
         // Nicht erreichte Darstellungen: nur über Kreise erreichbar.
         for g in 0..groups {
             if !walk.reached[g] {
-                walk.emit(g, &Err(CYCLE.into()), false)?;
+                walk.emit(g, &Err(cycle()), false)?;
             }
         }
         // Freie Volumen-Einträge; ließ sich eine Darstellung nicht lesen, könnten sie in ihr
@@ -1089,7 +1111,7 @@ impl Walk<'_> {
                 continue;
             }
             if depth + 1 > MAX_ASSEMBLY_DEPTH {
-                self.emit_below(e.child, TOO_DEEP)?;
+                self.emit_below(e.child, &too_deep())?;
                 continue;
             }
             let next = match (&m, &e.transform) {
@@ -1346,7 +1368,7 @@ fn operator_args(e: &Entity) -> Option<Vec<&Value>> {
 fn operator_matrix(file: &StepFile, res: &mut Resolver, id: u64, e: &Entity) -> Placed {
     let fail = |m: String| reason(&file.fail(id, m).to_string());
     let Some(args) = operator_args(e) else {
-        return Err(fail("Parameter des Operators fehlen.".into()));
+        return Err(fail(tr!("step-r-operator-params")));
     };
     let mut dir = |v: &Value| -> Result<Option<DVec3>, String> {
         if v.is_unset() {
@@ -1375,7 +1397,7 @@ fn operator_matrix(file: &StepFile, res: &mut Resolver, id: u64, e: &Entity) -> 
     let v = match axis1 {
         Some(a) => {
             if a.dot(z).abs() > OBLIQUE_TOL {
-                return Err(OBLIQUE.into());
+                return Err(oblique());
             }
             a
         }
@@ -1386,13 +1408,13 @@ fn operator_matrix(file: &StepFile, res: &mut Resolver, id: u64, e: &Entity) -> 
     };
     let x = v - z * v.dot(z);
     if x.length() <= DEGENERATE {
-        return Err(OBLIQUE.into());
+        return Err(oblique());
     }
     let x = x.normalize();
     let w = match axis2 {
         Some(a) => {
             if a.dot(z).abs() > OBLIQUE_TOL || a.dot(x).abs() > OBLIQUE_TOL {
-                return Err(OBLIQUE.into());
+                return Err(oblique());
             }
             a
         }
@@ -1400,22 +1422,22 @@ fn operator_matrix(file: &StepFile, res: &mut Resolver, id: u64, e: &Entity) -> 
     };
     let y = w - z * w.dot(z) - x * w.dot(x);
     if y.length() <= DEGENERATE {
-        return Err(OBLIQUE.into());
+        return Err(oblique());
     }
     let y = y.normalize();
     let handed = x.cross(y).dot(z);
     let det = scale * scale2 * scale3 * handed;
     if !(det.is_finite() && origin.is_finite()) {
-        return Err(SCALING.into());
+        return Err(scaling());
     }
     if det < 0.0 {
-        return Err(MIRROR.into());
+        return Err(mirror());
     }
     if [scale, scale2, scale3]
         .iter()
         .any(|s| (s - 1.0).abs() > SCALE_TOL)
     {
-        return Err(SCALING.into());
+        return Err(scaling());
     }
     Ok(DMat4::from_cols(
         x.extend(0.0),

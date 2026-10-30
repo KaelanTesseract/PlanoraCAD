@@ -23,6 +23,7 @@ use crate::read::spline::{
 };
 use crate::read::units::Units;
 use crate::read::value::{Entity, Value};
+use planora_i18n::tr;
 use planora_kernel::{Curve, Surface};
 use planora_math::nurbs::{MAX_DEGREE, NurbsCurve, NurbsSurface};
 use planora_math::{DVec3, Frame};
@@ -74,7 +75,7 @@ fn reversed(c: Curve) -> Result<Curve, String> {
         },
         Curve::Nurbs(n) => {
             Curve::Nurbs(Arc::new(n.reversed().map_err(|e| {
-                format!("Eine Freiformkurve lässt sich nicht umkehren: {e}")
+                tr!("step-r-curve-not-reversible", e = e.to_string())
             })?))
         }
     })
@@ -255,10 +256,10 @@ impl<'f> Resolver<'f> {
             .map_err(|m| self.bad(id, m))?;
         let r = raw * self.units.length.mm();
         if !r.is_finite() {
-            return Err(self.bad(id, format!("{what} ist keine endliche Zahl.")));
+            return Err(self.bad(id, tr!("step-r-not-finite", what = what)));
         }
         if r < 0.0 || (r == 0.0 && !zero_ok) {
-            return Err(self.bad(id, format!("{what} ist nicht größer als null.")));
+            return Err(self.bad(id, tr!("step-r-not-positive", what = what)));
         }
         Ok(r)
     }
@@ -275,11 +276,11 @@ impl<'f> Resolver<'f> {
             .reals()
             .map_err(|m| self.bad(id, m))?;
         let [x, y, z] = c[..] else {
-            return Err(self.bad(id, "Ein Punkt braucht drei Koordinaten."));
+            return Err(self.bad(id, tr!("step-r-point-three")));
         };
         let p = DVec3::new(x, y, z) * self.units.length.mm();
         if !p.is_finite() {
-            return Err(self.bad(id, "Ein Punkt hat keine endlichen Koordinaten."));
+            return Err(self.bad(id, tr!("step-r-point-finite")));
         }
         Ok(p)
     }
@@ -296,7 +297,7 @@ impl<'f> Resolver<'f> {
             .reals()
             .map_err(|m| self.bad(id, m))?;
         let [x, y, z] = c[..] else {
-            return Err(self.bad(id, "Eine Richtung braucht drei Werte."));
+            return Err(self.bad(id, tr!("step-r-direction-three")));
         };
         // Erst durch den größten Betrag teilen: kein Überlauf bei sehr großen Werten (1e200).
         // Die Werte sind endlich (der Lexer lehnt anderes ab).
@@ -306,12 +307,12 @@ impl<'f> Resolver<'f> {
         }
         let m = d.abs().max_element();
         if m == 0.0 {
-            return Err(self.bad(id, "Eine Richtung hat die Länge null."));
+            return Err(self.bad(id, tr!("step-r-direction-zero")));
         }
         let unit = d / m;
         let len = unit.length();
         if m * len < MIN_DIRECTION {
-            return Err(self.bad(id, "Eine Richtung hat die Länge null."));
+            return Err(self.bad(id, tr!("step-r-direction-zero")));
         }
         Ok(unit / len)
     }
@@ -347,7 +348,7 @@ impl<'f> Resolver<'f> {
         } else if x.length() >= MIN_REF_PERP {
             x.normalize()
         } else if given {
-            return Err(self.bad(id, "Die Bezugsrichtung liegt auf der Achse."));
+            return Err(self.bad(id, tr!("step-r-ref-direction-on-axis")));
         } else {
             z.any_orthonormal_vector()
         };
@@ -372,16 +373,16 @@ impl<'f> Resolver<'f> {
         if e.is("CIRCLE") {
             let a = self.reference(id, &e, "CIRCLE", 1)?;
             let frame = self.placement(a)?;
-            let radius = self.radius(id, &e, "CIRCLE", 2, "Der Radius eines Kreises")?;
+            let radius = self.radius(id, &e, "CIRCLE", 2, &tr!("step-what-circle-radius"))?;
             return Ok(Curve::Circle { frame, radius });
         }
         if e.is("ELLIPSE") {
             let a = self.reference(id, &e, "ELLIPSE", 1)?;
             let frame = self.placement(a)?;
-            let what = "Eine Halbachse einer Ellipse";
+            let what = tr!("step-what-ellipse-axis");
             // Wie der Kernel: erste Halbachse entlang x, zweite entlang y (auch wenn kürzer).
-            let major = self.radius(id, &e, "ELLIPSE", 2, what)?;
-            let minor = self.radius(id, &e, "ELLIPSE", 3, what)?;
+            let major = self.radius(id, &e, "ELLIPSE", 2, &what)?;
+            let minor = self.radius(id, &e, "ELLIPSE", 3, &what)?;
             return Ok(Curve::Ellipse {
                 frame,
                 major,
@@ -410,16 +411,10 @@ impl<'f> Resolver<'f> {
             return match sense {
                 Some(true) => Ok(base),
                 Some(false) => reversed(base).map_err(|m| self.bad(id, m)),
-                None => Err(self.bad(
-                    id,
-                    "Die Laufrichtung einer Trimmkurve ist unbestimmt („.U.“).",
-                )),
+                None => Err(self.bad(id, tr!("step-r-trim-sense"))),
             };
         }
-        Err(Skip(format!(
-            "Kante vom Typ {} wird noch nicht unterstützt.",
-            type_name(&e)
-        )))
+        Err(Skip(tr!("step-r-edge-type", type = type_name(&e))))
     }
 
     /// Profil einer Drehfläche: die Kurve und, bei `TRIMMED_CURVE`, der benutzte Bereich `a < b`
@@ -444,10 +439,7 @@ impl<'f> Resolver<'f> {
         {
             Some(s) => s,
             None => {
-                return Err(self.bad(
-                    id,
-                    "Die Laufrichtung einer Trimmkurve ist unbestimmt („.U.“).",
-                ));
+                return Err(self.bad(id, tr!("step-r-trim-sense")));
             }
         };
         let cartesian = matches!(
@@ -476,7 +468,7 @@ impl<'f> Resolver<'f> {
             None => (t1.min(t2), t1.max(t2)),
         };
         if !(b > a) {
-            return Err(self.bad(id, "Eine Trimmkurve hat keine Ausdehnung."));
+            return Err(self.bad(id, tr!("step-r-trim-no-extent")));
         }
         if sense {
             return Ok((base, Some((a, b))));
@@ -530,11 +522,11 @@ impl<'f> Resolver<'f> {
             (Some(x), _) => from_param(x),
             (None, Some(p)) => from_point(p),
             (None, None) => {
-                return Err(self.bad(id, "Eine Trimmkurve hat keine Grenze."));
+                return Err(self.bad(id, tr!("step-r-trim-no-bound")));
             }
         };
         if !t.is_finite() {
-            return Err(self.bad(id, "Eine Grenze einer Trimmkurve ist keine endliche Zahl."));
+            return Err(self.bad(id, tr!("step-r-trim-bound-not-finite")));
         }
         Ok(t)
     }
@@ -549,7 +541,7 @@ impl<'f> Resolver<'f> {
                 .measure()
                 .map_err(|m| s.bad(id, m))?;
             if m < 0.0 {
-                return Err(s.bad(id, "Der Betrag eines Vektors ist negativ."));
+                return Err(s.bad(id, tr!("step-r-vector-negative")));
             }
             s.direction(d)
         })
@@ -579,24 +571,21 @@ impl<'f> Resolver<'f> {
         if e.is("CYLINDRICAL_SURFACE") {
             const N: &str = "CYLINDRICAL_SURFACE";
             let frame = frame_of(self, N)?;
-            let radius = self.radius(id, &e, N, 2, "Der Radius eines Zylinders")?;
+            let radius = self.radius(id, &e, N, 2, &tr!("step-what-cylinder-radius"))?;
             return ready(Surface::Cylinder { frame, radius });
         }
         if e.is("CONICAL_SURFACE") {
             const N: &str = "CONICAL_SURFACE";
             let frame = frame_of(self, N)?;
             // ISO 10303-42 erlaubt am Ursprung den Radius null (Spitze); der Kernel auch.
-            let radius = self.length(id, &e, N, 2, "Der Radius eines Kegels", true)?;
+            let radius = self.length(id, &e, N, 2, &tr!("step-what-cone-radius"), true)?;
             let raw = self
                 .arg(id, &e, N, 3)?
                 .measure()
                 .map_err(|m| self.bad(id, m))?;
             let alpha = raw * self.units.angle_rad;
             if !(alpha.is_finite() && alpha > 0.0 && alpha < FRAC_PI_2) {
-                return Err(self.bad(
-                    id,
-                    "Der halbe Öffnungswinkel eines Kegels liegt nicht zwischen 0 und 90 Grad.",
-                ));
+                return Err(self.bad(id, tr!("step-r-cone-angle")));
             }
             return ready(Surface::Cone {
                 frame,
@@ -607,19 +596,16 @@ impl<'f> Resolver<'f> {
         if e.is("SPHERICAL_SURFACE") {
             const N: &str = "SPHERICAL_SURFACE";
             let frame = frame_of(self, N)?;
-            let radius = self.radius(id, &e, N, 2, "Der Radius einer Kugel")?;
+            let radius = self.radius(id, &e, N, 2, &tr!("step-what-sphere-radius"))?;
             return ready(Surface::Sphere { frame, radius });
         }
         if e.is("TOROIDAL_SURFACE") {
             const N: &str = "TOROIDAL_SURFACE";
             let frame = frame_of(self, N)?;
-            let major = self.radius(id, &e, N, 2, "Der große Radius eines Torus")?;
-            let minor = self.radius(id, &e, N, 3, "Der kleine Radius eines Torus")?;
+            let major = self.radius(id, &e, N, 2, &tr!("step-what-torus-major"))?;
+            let minor = self.radius(id, &e, N, 3, &tr!("step-what-torus-minor"))?;
             if minor >= major {
-                return Err(Skip(
-                    "Eine Torusfläche mit kleinem Radius größer oder gleich dem großen wird noch nicht unterstützt."
-                        .into(),
-                ));
+                return Err(Skip(tr!("step-r-torus-self-intersecting")));
             }
             return ready(Surface::Torus {
                 frame,
@@ -646,10 +632,7 @@ impl<'f> Resolver<'f> {
             let dir = self.extrusion_vector(v)?;
             return extrusion(&curve, dir);
         }
-        Err(Skip(format!(
-            "Fläche vom Typ {} wird noch nicht unterstützt.",
-            type_name(&e)
-        )))
+        Err(Skip(tr!("step-r-surface-type", type = type_name(&e))))
     }
 
     /// `AXIS1_PLACEMENT`: Punkt und Einheitsrichtung (`$` → Welt-z).
@@ -677,7 +660,7 @@ impl<'f> Resolver<'f> {
             .measure()
             .map_err(|m| self.bad(id, m))?;
         if !(m > 0.0) {
-            return Err(self.bad(id, "Eine Strangfläche hat keine Länge (Betrag null)."));
+            return Err(self.bad(id, tr!("step-r-extrusion-no-length")));
         }
         self.vector_direction(id)
     }
@@ -690,7 +673,7 @@ impl<'f> Resolver<'f> {
 
     /// Grund „{what} lässt sich nicht übernehmen: {m}“ mit der Zeile von `#id`.
     fn not_taken(&self, id: u64, what: &str, m: impl std::fmt::Display) -> Skip {
-        self.bad(id, format!("{what} lässt sich nicht übernehmen: {m}"))
+        self.bad(id, tr!("step-r-not-taken", what = what, m = m.to_string()))
     }
 
     /// Knoten einer Richtung: ausdrücklich (Vielfachheiten, Werte) oder aus der Knotenart.
@@ -721,39 +704,35 @@ impl<'f> Resolver<'f> {
 
     /// B-Spline-Kurve in jeder Form (Aufgabe 5): geklemmt, Gewichte normiert.
     fn spline_curve(&mut self, id: u64, e: &Entity) -> Result<Curve, Skip> {
-        const WHAT: &str = "Eine Freiformkurve";
-        let head = spline_head(e, &CURVE_SPLINE).map_err(|m| self.not_taken(id, WHAT, m))?;
-        let degree = spline_degree(&head.base, 0).map_err(|m| self.not_taken(id, WHAT, m))?;
+        let what = tr!("step-what-spline-curve");
+        let head = spline_head(e, &CURVE_SPLINE).map_err(|m| self.not_taken(id, &what, m))?;
+        let degree = spline_degree(&head.base, 0).map_err(|m| self.not_taken(id, &what, m))?;
         let cps = head
             .base
             .get(1)
-            .ok_or_else(|| self.not_taken(id, WHAT, "Die Kontrollpunkte fehlen."))?;
-        let points = self.points_of(id, cps, WHAT)?;
+            .ok_or_else(|| self.not_taken(id, &what, tr!("step-r-control-points-missing")))?;
+        let points = self.points_of(id, cps, &what)?;
         let n = points.len();
-        let knots = self.knots_of(id, WHAT, &head.knots, (0, 1), degree, n)?;
+        let knots = self.knots_of(id, &what, &head.knots, (0, 1), degree, n)?;
         let mut w = match &head.weights {
-            Some(v) => v.reals().map_err(|m| self.not_taken(id, WHAT, m))?,
+            Some(v) => v.reals().map_err(|m| self.not_taken(id, &what, m))?,
             None => vec![1.0; n],
         };
         if w.len() != n {
-            return Err(self.not_taken(
-                id,
-                WHAT,
-                "Gewichte und Kontrollpunkte haben verschiedene Anzahl.",
-            ));
+            return Err(self.not_taken(id, &what, tr!("step-r-weights-count")));
         }
-        normalize_weights(&mut w).map_err(|Skip(m)| self.not_taken(id, WHAT, m))?;
+        normalize_weights(&mut w).map_err(|Skip(m)| self.not_taken(id, &what, m))?;
         let hom: Vec<_> = points
             .iter()
             .zip(&w)
             .map(|(p, w)| (*p * *w).extend(*w))
             .collect();
         let (knots, hom) =
-            clamp_knots(degree, &knots, &hom).map_err(|Skip(m)| self.not_taken(id, WHAT, m))?;
+            clamp_knots(degree, &knots, &hom).map_err(|Skip(m)| self.not_taken(id, &what, m))?;
         let (control, weights): (Vec<DVec3>, Vec<f64>) =
             hom.iter().map(|h| (h.truncate() / h.w, h.w)).unzip();
         let c = NurbsCurve::new(degree, knots, control, weights)
-            .map_err(|err| self.not_taken(id, WHAT, err))?;
+            .map_err(|err| self.not_taken(id, &what, err))?;
         Ok(Curve::nurbs(c))
     }
 
@@ -761,33 +740,33 @@ impl<'f> Resolver<'f> {
     /// je Spalte in u und je Reihe in v geklemmt, Gewichte normiert, geschlossen nach den
     /// Kontrollreihen; bei einem Pol in u-Richtung u und v getauscht (`flipped`).
     fn spline_surface(&mut self, id: u64, e: &Entity) -> Result<SurfaceGeom, Skip> {
-        const WHAT: &str = "Eine Freiformfläche";
-        let head = spline_head(e, &SURFACE_SPLINE).map_err(|m| self.not_taken(id, WHAT, m))?;
-        let du = spline_degree(&head.base, 0).map_err(|m| self.not_taken(id, WHAT, m))?;
-        let dv = spline_degree(&head.base, 1).map_err(|m| self.not_taken(id, WHAT, m))?;
+        let what = tr!("step-what-spline-surface");
+        let head = spline_head(e, &SURFACE_SPLINE).map_err(|m| self.not_taken(id, &what, m))?;
+        let du = spline_degree(&head.base, 0).map_err(|m| self.not_taken(id, &what, m))?;
+        let dv = spline_degree(&head.base, 1).map_err(|m| self.not_taken(id, &what, m))?;
         let rows = head
             .base
             .get(2)
-            .ok_or_else(|| "Die Kontrollpunkte fehlen.".to_string())
+            .ok_or_else(|| tr!("step-r-control-points-missing"))
             .and_then(|v| v.list().map(<[Value]>::to_vec))
-            .map_err(|m| self.not_taken(id, WHAT, m))?;
+            .map_err(|m| self.not_taken(id, &what, m))?;
         let mut grid = Vec::with_capacity(rows.len());
         for row in &rows {
-            grid.push(self.points_of(id, row, WHAT)?);
+            grid.push(self.points_of(id, row, &what)?);
         }
         let nu = grid.len();
         let nv = grid.first().map_or(0, Vec::len);
         if nu < 2 || nv < 2 || grid.iter().any(|r| r.len() != nv) {
-            return Err(self.not_taken(id, WHAT, "Die Kontrollpunkte bilden kein Rechteck."));
+            return Err(self.not_taken(id, &what, tr!("step-r-control-grid")));
         }
-        let ku = self.knots_of(id, WHAT, &head.knots, (0, 2), du, nu)?;
-        let kv = self.knots_of(id, WHAT, &head.knots, (1, 3), dv, nv)?;
+        let ku = self.knots_of(id, &what, &head.knots, (0, 2), du, nu)?;
+        let kv = self.knots_of(id, &what, &head.knots, (1, 3), dv, nv)?;
         let mut w = match &head.weights {
             Some(v) => {
-                let rows = v.list().map_err(|m| self.not_taken(id, WHAT, m))?;
+                let rows = v.list().map_err(|m| self.not_taken(id, &what, m))?;
                 let mut flat = Vec::with_capacity(nu * nv);
                 for r in rows {
-                    let r = r.reals().map_err(|m| self.not_taken(id, WHAT, m))?;
+                    let r = r.reals().map_err(|m| self.not_taken(id, &what, m))?;
                     if r.len() != nv {
                         flat.clear();
                         break;
@@ -795,17 +774,13 @@ impl<'f> Resolver<'f> {
                     flat.extend(r);
                 }
                 if rows.len() != nu || flat.len() != nu * nv {
-                    return Err(self.not_taken(
-                        id,
-                        WHAT,
-                        "Gewichte und Kontrollpunkte haben verschiedene Anzahl.",
-                    ));
+                    return Err(self.not_taken(id, &what, tr!("step-r-weights-count")));
                 }
                 flat
             }
             None => vec![1.0; nu * nv],
         };
-        normalize_weights(&mut w).map_err(|Skip(m)| self.not_taken(id, WHAT, m))?;
+        normalize_weights(&mut w).map_err(|Skip(m)| self.not_taken(id, &what, m))?;
         let hom = |i: usize, j: usize| (grid[i][j] * w[i * nv + j]).extend(w[i * nv + j]);
         // Je Spalte in u klemmen (alle Spalten ergeben dieselben Knoten), dann je Reihe in v.
         let mut columns = Vec::with_capacity(nv);
@@ -813,7 +788,7 @@ impl<'f> Resolver<'f> {
         for j in 0..nv {
             let col: Vec<_> = (0..nu).map(|i| hom(i, j)).collect();
             let (k, c) =
-                clamp_knots(du, &ku, &col).map_err(|Skip(m)| self.not_taken(id, WHAT, m))?;
+                clamp_knots(du, &ku, &col).map_err(|Skip(m)| self.not_taken(id, &what, m))?;
             ku2 = k;
             columns.push(c);
         }
@@ -823,7 +798,7 @@ impl<'f> Resolver<'f> {
         for i in 0..nu2 {
             let row: Vec<_> = columns.iter().map(|c| c[i]).collect();
             let (k, r) =
-                clamp_knots(dv, &kv, &row).map_err(|Skip(m)| self.not_taken(id, WHAT, m))?;
+                clamp_knots(dv, &kv, &row).map_err(|Skip(m)| self.not_taken(id, &what, m))?;
             kv2 = k;
             net.push(r);
         }
@@ -834,9 +809,9 @@ impl<'f> Resolver<'f> {
             .map(|h| (h.truncate() / h.w, h.w))
             .unzip();
         let ns = NurbsSurface::new(du, dv, ku2, kv2, nu2, nv2, control, weights)
-            .map_err(|err| self.not_taken(id, WHAT, err))?;
+            .map_err(|err| self.not_taken(id, &what, err))?;
         let (surface, swapped) = finish_nurbs_surface(ns, self.units.weld_tol_mm())
-            .map_err(|Skip(m)| self.not_taken(id, WHAT, m))?;
+            .map_err(|Skip(m)| self.not_taken(id, &what, m))?;
         Ok(SurfaceGeom::Ready {
             surface,
             flipped: swapped,
@@ -903,18 +878,18 @@ struct SplineHead {
 
 fn arg_at(a: &[Value], i: usize) -> Result<&Value, String> {
     a.get(i)
-        .ok_or_else(|| format!("Der {}. Parameter der Knoten fehlt.", i + 1))
+        .ok_or_else(|| tr!("step-r-knot-param-missing", n = i + 1))
 }
 
 fn spline_degree(base: &[Value], i: usize) -> Result<usize, String> {
     let d = base
         .get(i)
-        .ok_or_else(|| "Der Grad fehlt.".to_string())?
+        .ok_or_else(|| tr!("step-r-degree-missing"))?
         .int()?;
     usize::try_from(d)
         .ok()
         .filter(|d| (1..=MAX_DEGREE).contains(d))
-        .ok_or_else(|| format!("Der Grad {d} ist nicht erlaubt (1 bis {MAX_DEGREE})."))
+        .ok_or_else(|| tr!("step-r-degree-not-allowed", d = d, max = MAX_DEGREE))
 }
 
 /// Zerlegt einfache (`B_SPLINE_CURVE_WITH_KNOTS('', …)`, `UNIFORM_CURVE('', …)` …) und
@@ -930,7 +905,7 @@ fn spline_head(e: &Entity, n: &SplineNames) -> Result<SplineHead, String> {
             } else if let Some((_, k)) = n.forms.iter().find(|(f, _)| *f == name) {
                 KnotSource::Implicit(k)
             } else {
-                return Err(format!("Die Form {} wird nicht unterstützt.", r.name));
+                return Err(tr!("step-r-form-unsupported", form = &r.name));
             };
             Ok(SplineHead {
                 base: args.to_vec(),
@@ -941,13 +916,13 @@ fn spline_head(e: &Entity, n: &SplineNames) -> Result<SplineHead, String> {
         Entity::Complex(_) => {
             let base = e
                 .part(n.base)
-                .ok_or_else(|| format!("Der Teil {} fehlt.", n.base))?;
+                .ok_or_else(|| tr!("step-r-part-missing", part = n.base))?;
             let knots = if let Some(a) = e.part(n.with_knots) {
                 KnotSource::Explicit(a.to_vec())
             } else if let Some((_, k)) = n.forms.iter().find(|(f, _)| e.is(f)) {
                 KnotSource::Implicit(k)
             } else {
-                return Err("Die Knoten fehlen.".into());
+                return Err(tr!("step-r-knots-missing"));
             };
             Ok(SplineHead {
                 base: base.to_vec(),

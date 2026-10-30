@@ -3,6 +3,7 @@
 use crate::entity::{Entities, logical, refs};
 use crate::error::StepError;
 use crate::number::push_real;
+use planora_i18n::tr;
 use planora_kernel::{Curve, NurbsSurfaceData, Surface, UvRect};
 use planora_math::nurbs::{KnotVector, NurbsCurve};
 use planora_math::{DVec3, Frame, Tolerance};
@@ -14,10 +15,10 @@ use std::fmt::Write as _;
 pub const FRAME_TOL: f64 = 1e-9;
 
 /// Ablehnung eines Körpers ohne Namen; [`crate::check_body`] setzt den Namen ein.
-pub(crate) fn reject(reason: &str) -> StepError {
+pub(crate) fn reject(reason: impl AsRef<str>) -> StepError {
     StepError::InvalidBody {
         name: String::new(),
-        reason: reason.to_string(),
+        reason: reason.as_ref().to_string(),
     }
 }
 
@@ -63,9 +64,7 @@ pub(crate) fn placement(
 /// Koordinatensystem des Kernels; schiefe oder nicht normierte Systeme werden abgelehnt.
 pub(crate) fn frame_placement(e: &mut Entities, f: &Frame) -> Result<u64, StepError> {
     if !f.is_orthonormal(FRAME_TOL) {
-        return Err(reject(
-            "Ein Koordinatensystem ist schief oder nicht normiert",
-        ));
+        return Err(reject(tr!("step-w-frame-skewed")));
     }
     placement(e, f.origin, f.z, f.x)
 }
@@ -87,14 +86,14 @@ fn with_numbers(
 }
 
 /// Prüft eine Länge, die in STEP positiv sein muss (Radius, Halbachse).
-fn positive(x: f64, what: &str) -> Result<f64, StepError> {
+fn positive(x: f64, what: String) -> Result<f64, StepError> {
     if !x.is_finite() {
         return Err(StepError::NotFinite);
     }
     if x > 0.0 {
         Ok(x)
     } else {
-        Err(reject(&format!("{what} ist nicht größer als null")))
+        Err(reject(tr!("step-w-not-positive", what = what)))
     }
 }
 
@@ -108,7 +107,7 @@ pub(crate) fn curve(e: &mut Entities, c: &Curve) -> Result<u64, StepError> {
             e.push(&format!("LINE('',#{p},#{v})"))
         }
         Curve::Circle { frame, radius } => {
-            let r = positive(*radius, "Der Radius eines Kreises")?;
+            let r = positive(*radius, tr!("step-what-circle-radius"))?;
             let a = frame_placement(e, frame)?;
             with_numbers(e, "CIRCLE", a, &[r])
         }
@@ -118,17 +117,15 @@ pub(crate) fn curve(e: &mut Entities, c: &Curve) -> Result<u64, StepError> {
             minor,
         } => {
             let (a, b) = (
-                positive(*major, "Eine Halbachse einer Ellipse")?,
-                positive(*minor, "Eine Halbachse einer Ellipse")?,
+                positive(*major, tr!("step-what-ellipse-axis"))?,
+                positive(*minor, tr!("step-what-ellipse-axis"))?,
             );
             if b > a {
                 // STEP legt die erste Halbachse in die Bezugsrichtung; die längere kommt dorthin
                 // (x' = y, y' = −x, derselbe Umlaufsinn um z). Der Parameter verschiebt sich um
                 // π/2; die Kante wird über ihre Eckpunkte begrenzt.
                 if !frame.is_orthonormal(FRAME_TOL) {
-                    return Err(reject(
-                        "Ein Koordinatensystem ist schief oder nicht normiert",
-                    ));
+                    return Err(reject(tr!("step-w-frame-skewed")));
                 }
                 let p = placement(e, frame.origin, frame.z, frame.y)?;
                 with_numbers(e, "ELLIPSE", p, &[b, a])
@@ -270,12 +267,10 @@ fn cone(
         return Err(StepError::NotFinite);
     }
     if !frame.is_orthonormal(FRAME_TOL) {
-        return Err(reject(
-            "Ein Koordinatensystem ist schief oder nicht normiert",
-        ));
+        return Err(reject(tr!("step-w-frame-skewed")));
     }
     let Some(p) = patch else {
-        return Err(reject("Eine Kegelfläche hat keinen Parameterbereich"));
+        return Err(reject(tr!("step-w-cone-no-range")));
     };
     // Liegt der Bezugsort des Kernels (v = 0) im Bereich der Fläche (bis auf Rundung) und ist
     // der Radius dort positiv, bleibt er: Ein gelesener Kegel wird dann bitgleich wieder
@@ -289,7 +284,7 @@ fn cone(
     }
     let rho = radius + slope * v_mid;
     if rho.is_nan() || rho <= 0.0 {
-        return Err(reject("Eine Kegelfläche liegt jenseits ihrer Spitze"));
+        return Err(reject(tr!("step-w-cone-beyond-apex")));
     }
     let origin = frame.origin + frame.z * v_mid;
     if slope == 0.0 {
@@ -313,12 +308,12 @@ pub(crate) fn surface(
             e.push(&format!("PLANE('',#{a})"))
         }
         Surface::Cylinder { frame, radius } => {
-            let r = positive(*radius, "Der Radius eines Zylinders")?;
+            let r = positive(*radius, tr!("step-what-cylinder-radius"))?;
             let a = frame_placement(e, frame)?;
             with_numbers(e, "CYLINDRICAL_SURFACE", a, &[r])
         }
         Surface::Sphere { frame, radius } => {
-            let r = positive(*radius, "Der Radius einer Kugel")?;
+            let r = positive(*radius, tr!("step-what-sphere-radius"))?;
             let a = frame_placement(e, frame)?;
             with_numbers(e, "SPHERICAL_SURFACE", a, &[r])
         }
@@ -327,14 +322,12 @@ pub(crate) fn surface(
             major,
             minor,
         } => {
-            let big = positive(*major, "Der große Radius eines Torus")?;
-            let small = positive(*minor, "Der kleine Radius eines Torus")?;
+            let big = positive(*major, tr!("step-what-torus-major"))?;
+            let small = positive(*minor, tr!("step-what-torus-minor"))?;
             if small >= big {
                 // Ein Spindel- oder Hornring (kleiner Radius ≥ großer) ist in STEP keine
                 // gewöhnliche Torusfläche; eine Sonderfläche ist hier nicht überprüft.
-                return Err(reject(
-                    "Eine Torusfläche mit kleinem Radius größer oder gleich dem großen lässt sich noch nicht als STEP ausgeben.",
-                ));
+                return Err(reject(tr!("step-w-torus-self-intersecting")));
             }
             let a = frame_placement(e, frame)?;
             with_numbers(e, "TOROIDAL_SURFACE", a, &[big, small])

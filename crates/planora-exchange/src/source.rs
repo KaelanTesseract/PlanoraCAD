@@ -5,6 +5,7 @@ use crate::check::weld_exact;
 use crate::error::ExchangeError;
 use crate::limits::{MAX_TRIANGLES, MAX_VERTICES};
 use crate::mesh::{ExchangeMesh, MeshTransform};
+use planora_i18n::tr;
 use planora_math::DVec3;
 use planora_mesh::Mesh;
 
@@ -146,9 +147,7 @@ pub fn collect_body(src: &dyn TriSource) -> Result<ExportBody, ExchangeError> {
     for i in 0..t {
         let tri = src.triangle(i);
         if tri.iter().any(|&k| k as usize >= n) {
-            return Err(ExchangeError::Corrupt(
-                "Ein Dreieck verweist auf einen Punkt, den es nicht gibt".into(),
-            ));
+            return Err(ExchangeError::Corrupt(tr!("exchange-triangle-dangling")));
         }
         indices.extend_from_slice(&tri);
     }

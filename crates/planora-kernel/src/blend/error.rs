@@ -1,39 +1,49 @@
 //! Fehler der Rundungen und Fasen (Meldungen deutsch, für die Oberfläche bestimmt).
 
-use thiserror::Error;
+use planora_i18n::tr;
+use std::fmt;
 
-#[derive(Debug, Clone, PartialEq, Error)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum BlendError {
-    #[error("Ungültiges Maß: {0}")]
     InvalidParameter(String),
-    #[error("Es ist keine Kante gewählt")]
     NoEdges,
-    #[error("Eine gewählte Kante gehört nicht zu diesem Körper")]
     EdgeNotFound,
-    #[error("Der Körper ist ungültig: {0}")]
     InvalidInput(String),
-    #[error("Die Kante ist die Naht einer gekrümmten Fläche und lässt sich nicht runden")]
     SeamEdge,
-    #[error(
-        "Die Flächen an der Kante gehen fast tangential ineinander über (Kantenwinkel {angle_deg:.1}°); dort ist keine Rundung oder Fase möglich"
-    )]
     NearlyTangent { angle_deg: f64 },
-    #[error("Das Maß ist zu groß für die Fläche „{face}“; bitte ein kleineres Maß wählen")]
     TooLarge { face: String },
-    #[error(
-        "Die Fläche „{face}“ ist enger gekrümmt als der Radius; bitte einen kleineren Radius wählen"
-    )]
     CurvatureTooSmall { face: String },
-    #[error("Die Kugel findet entlang der Kante keine Lage (die Bahn bricht ab)")]
     SpineLost,
-    #[error("{0}")]
     Unsupported(String),
-    #[error("Diese Ecke lässt sich nicht runden: {0}")]
     Corner(String),
-    #[error(
-        "Die Berechnung der Rundung ist zu aufwendig (Arbeitsgrenze erreicht); bitte weniger Kanten oder eine einfachere Form verwenden"
-    )]
     TooExpensive,
-    #[error("Das Ergebnis der Rundung ist ungültig: {0}")]
     ResultInvalid(String),
 }
+
+impl fmt::Display for BlendError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            BlendError::InvalidParameter(m) => tr!("kernel-blend-invalid-parameter", msg = m),
+            BlendError::NoEdges => tr!("kernel-blend-no-edges"),
+            BlendError::EdgeNotFound => tr!("kernel-blend-edge-not-found"),
+            BlendError::InvalidInput(m) => tr!("kernel-blend-invalid-input", msg = m),
+            BlendError::SeamEdge => tr!("kernel-blend-seam-edge"),
+            BlendError::NearlyTangent { angle_deg } => tr!(
+                "kernel-blend-nearly-tangent",
+                angle = format!("{angle_deg:.1}")
+            ),
+            BlendError::TooLarge { face } => tr!("kernel-blend-too-large", face = face),
+            BlendError::CurvatureTooSmall { face } => {
+                tr!("kernel-blend-curvature-too-small", face = face)
+            }
+            BlendError::SpineLost => tr!("kernel-blend-spine-lost"),
+            BlendError::Unsupported(m) => m.clone(),
+            BlendError::Corner(m) => tr!("kernel-blend-corner", msg = m),
+            BlendError::TooExpensive => tr!("kernel-blend-too-expensive"),
+            BlendError::ResultInvalid(m) => tr!("kernel-blend-result-invalid", msg = m),
+        };
+        f.write_str(&text)
+    }
+}
+
+impl std::error::Error for BlendError {}

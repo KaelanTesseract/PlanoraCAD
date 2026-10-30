@@ -11,7 +11,7 @@ planora-math.workspace = true
 planora-kernel.workspace = true
 planora-exchange.workspace = true
 planora-mesh.workspace = true
-thiserror.workspace = true
+planora-i18n.workspace = true
 
 [dev-dependencies]
 planora-drawing.workspace = true

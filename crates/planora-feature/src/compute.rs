@@ -628,8 +628,8 @@ mod tests {
             other => panic!("{other:?}"),
         };
         let hinted = [
-            BooleanError::Unsupported(planora_kernel::boolean::TOO_EXPENSIVE.into()),
-            BooleanError::Unsupported(
+            BooleanError::TooExpensive,
+            BooleanError::FreeformLimit(
                 "Der Schnitt von Freiformfläche mit Zylinder wird nicht unterstützt: x".into(),
             ),
             BooleanError::AmbiguousContact,
@@ -695,14 +695,16 @@ mod tests {
             other => panic!("{other:?}"),
         };
         // Mit eigenem Vorschlag in der Ursache: nur der Vorsatz, in jeder Sprache.
-        let own = BooleanError::Unsupported(planora_kernel::boolean::TOO_EXPENSIVE.into());
+        let own = BooleanError::TooExpensive;
         // Ohne Vorschlag: der Vorsatz und der Vorschlag der Bibliothek.
         let bare = BooleanError::AmbiguousContact;
         let de = with_lang(&german(), || (text(&own), text(&bare)));
-        assert_eq!(de.0, format!("Bei Körpern mit Freiformflächen: {own}"));
+        let own_de = with_lang(&german(), || own.to_string());
+        assert_eq!(de.0, format!("Bei Körpern mit Freiformflächen: {own_de}"));
         assert!(de.1.ends_with("; bitte Lage oder Maße eines Körpers leicht ändern"));
         let en = with_lang(&english(), || (text(&own), text(&bare)));
-        assert_eq!(en.0, format!("For bodies with freeform faces: {own}"));
+        let own_en = with_lang(&english(), || own.to_string());
+        assert_eq!(en.0, format!("For bodies with freeform faces: {own_en}"));
         assert!(en.1.starts_with("For bodies with freeform faces: "));
         assert!(en.1.ends_with("; please change the position or size of a body slightly"));
     }

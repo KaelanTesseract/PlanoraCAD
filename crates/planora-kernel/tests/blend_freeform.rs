@@ -172,7 +172,7 @@ fn a_freeform_edge_with_an_oblique_end_is_named() {
     let e = edge_between(&s, "Wand 2", "Deckel");
     assert!(matches!(
         k().blend(&s, &req(e, BlendKind::Fillet { radius: 0.5 })),
-        Err(BlendError::Unsupported(m)) if m == planora_kernel::blend::march::OBLIQUE_END
+        Err(BlendError::Unsupported(m)) if m == planora_kernel::blend::march::oblique_end()
     ));
 }
 
@@ -600,7 +600,7 @@ fn corners_cavities_and_patch_limits_on_freeform_bodies_are_named() {
     };
     match k().blend(&s, &r) {
         Err(BlendError::Corner(m)) => {
-            assert_eq!(m, planora_kernel::blend::march::VARIABLE_CORNER)
+            assert_eq!(m, planora_kernel::blend::march::variable_corner())
         }
         other => panic!("{:?}", other.map(|_| ())),
     }
@@ -616,7 +616,7 @@ fn corners_cavities_and_patch_limits_on_freeform_bodies_are_named() {
     let e = edge_between(&hollow, "Wand 1", "Deckel");
     assert!(matches!(
         k().blend(&hollow, &req(e, BlendKind::Fillet { radius: 0.5 })),
-        Err(BlendError::Unsupported(m)) if m == planora_kernel::blend::build::CAVITY
+        Err(BlendError::Unsupported(m)) if m == planora_kernel::blend::build::cavity()
     ));
     // Zu kurze Spline-Wand (2 mm) für r = 1,5: Die Kugel fände nur jenseits des Flächenstücks
     // Halt; benannt „zu groß“.

@@ -37,15 +37,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// Texte aus den Bibliotheken, die noch deutsch sind (Task 12/13: Lesefehler und Name
-/// unbenannter STEP-Körper) und einen deutschen Buchstaben enthalten (nur solche Zeilen fielen
-/// sonst durch). Die Texte von planora-feature, -sketch und -math (Feldnamen, Einheiten,
-/// Formelfehler) sind seit Task 11 englisch und werden hier geprüft.
-const LIBRARY_TEXTS: [&str; 3] = [
-    "STEP-Körper",
-    "Zeile 2: Die Fläche verweist auf einen Punkt",
-    "Die Datei ist unvollständig",
-];
+/// Texte aus den Bibliotheken, die noch deutsch sind und einen deutschen Buchstaben enthalten.
+/// Seit Task 12 gibt es keine mehr: auch die Lesefehler und der Name unbenannter STEP-Körper
+/// kommen englisch.
+const LIBRARY_TEXTS: [&str; 0] = [];
 
 /// Wie `common::assert_english`; die Zeilen mit einer der Wendungen `later` werden übergangen
 /// (keine kurzen Bruchstücke, hinter denen sich Texte der App verstecken könnten).

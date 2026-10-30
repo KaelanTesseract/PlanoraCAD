@@ -39,7 +39,7 @@ use planora_step::read::assembly::{find_bodies, unsupported_kinds};
 use planora_step::read::units::context_units;
 use planora_step::{
     ImportOptions, LengthUnit, ReadLimits, StepFile, StepHeader, StepImport, StepReadError,
-    UNNAMED_BODY, UnitState, import_bodies, read_step_file,
+    UnitState, import_bodies, read_step_file, unnamed_body,
 };
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -444,7 +444,7 @@ fn shown_names(import: &StepImport, checked: &[bool], state: &AppState) -> Vec<S
         .iter()
         .map(|b| {
             if b.name.trim().is_empty() {
-                UNNAMED_BODY.to_string()
+                unnamed_body().to_string()
             } else {
                 b.name.clone()
             }
@@ -867,7 +867,7 @@ impl StepImportDialog {
             .filter_map(|b| {
                 let why = b.outcome.as_ref().err()?;
                 let name = if b.name.trim().is_empty() {
-                    UNNAMED_BODY.to_string()
+                    unnamed_body().to_string()
                 } else {
                     b.name.clone()
                 };

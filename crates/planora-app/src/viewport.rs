@@ -366,7 +366,7 @@ fn paint_cube(
                 painter.add(Shape::mesh(face_label_mesh(
                     painter,
                     &frame,
-                    face.label(),
+                    &face.label(),
                     color.gamma_multiply(label_opacity(frame.facing)),
                     label,
                 )));

@@ -7,6 +7,7 @@
 //! einzelne Stufe kann die Grenze daher um ihren eigenen Aufwand überschreiten.
 
 use super::BooleanError;
+use planora_i18n::tr;
 use planora_math::nurbs::evaluations;
 use std::cell::Cell;
 
@@ -23,7 +24,9 @@ use std::cell::Cell;
 pub const MAX_FREEFORM_EVALUATIONS: u64 = 15_000_000;
 
 /// Meldung bei überschrittener Arbeitsgrenze.
-pub const TOO_EXPENSIVE: &str = "Die Berechnung ist zu aufwendig (Arbeitsgrenze für Freiformflächen erreicht); bitte weniger Spline-Punkte oder eine einfachere Form verwenden";
+pub fn too_expensive() -> String {
+    tr!("kernel-too-expensive")
+}
 
 thread_local! {
     /// Stand des Zählers, ab dem die laufende Operation abbricht (`None`: keine Grenze).
@@ -52,7 +55,7 @@ impl Drop for Scope {
 /// Fehler, wenn die laufende Operation ihre Grenze überschritten hat.
 pub(crate) fn check() -> Result<(), BooleanError> {
     match STOP_AT.with(Cell::get) {
-        Some(stop) if evaluations() > stop => Err(BooleanError::Unsupported(TOO_EXPENSIVE.into())),
+        Some(stop) if evaluations() > stop => Err(BooleanError::TooExpensive),
         _ => Ok(()),
     }
 }

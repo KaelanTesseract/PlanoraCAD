@@ -1,5 +1,6 @@
 use super::nurbs_ssi::{SsiOutcome, intersect_nurbs};
 use crate::geometry::{Curve, Surface};
+use planora_i18n::tr;
 use planora_math::{DVec3, Frame, Tolerance};
 
 #[derive(Clone, Debug)]
@@ -19,6 +20,8 @@ pub enum SurfaceIntersection {
 
 const ANG: f64 = 1e-9;
 
+/// Kennung der Flächenart (stabil, deutsch; die Anzeige in der aktuellen Sprache liefert
+/// [`surface_label`]).
 pub fn surface_name(s: &Surface) -> &'static str {
     match s {
         Surface::Plane { .. } => "Ebene",
@@ -27,6 +30,19 @@ pub fn surface_name(s: &Surface) -> &'static str {
         Surface::Sphere { .. } => "Kugel",
         Surface::Torus { .. } => "Torus",
         Surface::Nurbs(_) => "Freiformfläche",
+    }
+}
+
+/// Anzeigename zu einer Kennung von [`surface_name`] in der aktuellen Sprache.
+pub fn surface_label(name: &str) -> String {
+    match name {
+        "Ebene" => tr!("kernel-surface-plane"),
+        "Zylinder" => tr!("kernel-surface-cylinder"),
+        "Kegel" => tr!("kernel-surface-cone"),
+        "Kugel" => tr!("kernel-surface-sphere"),
+        "Torus" => tr!("kernel-surface-torus"),
+        "Freiformfläche" => tr!("kernel-surface-freeform"),
+        other => other.to_string(),
     }
 }
 

@@ -3,6 +3,7 @@ use crate::geometry::{Curve, Surface, UvRect};
 use crate::ids::Id;
 use crate::profile::{Profile, ProfileLoop, Segment, check_loop_input, check_self_intersection};
 use crate::topology::{Edge, Face, FaceTag, HalfEdge, Loop, Solid};
+use planora_i18n::tr;
 use planora_math::nurbs::{BezierSegment, NurbsCurve, NurbsError, NurbsSurface};
 use planora_math::{DVec2, DVec3, Frame, TAU, Tolerance};
 
@@ -242,9 +243,9 @@ pub fn revolve(chain: &ProfileLoop, frame: &Frame, tol: &Tolerance) -> Result<So
                         same_sense: None,
                     }
                 } else {
-                    return Err(KernelError::UnsupportedSegment(
-                        "Kreisbogen mit Mittelpunkt auf der negativen Seite der Achse",
-                    ));
+                    return Err(KernelError::UnsupportedSegment(tr!(
+                        "kernel-revolve-arc-negative-side"
+                    )));
                 }
             }
             Segment::Nurbs { .. } => match &prepared[i] {

@@ -25,6 +25,7 @@ mod fit;
 mod march;
 mod seeds;
 
+use planora_i18n::tr;
 use std::cell::Cell;
 use std::collections::HashMap;
 
@@ -78,43 +79,59 @@ const MIN_RADIUS: f64 = 1e-4;
 /// Toleranz der Orthonormalität eines Rahmens.
 const FRAME_EPS: f64 = 1e-9;
 
-const MSG_NUMERIC: &str = "Numerischer Fehler beim Flächenschnitt (ungültiger Zahlenwert)";
-const MSG_TANGENTIAL: &str =
-    "Die Flächen berühren sich tangential; der Schnitt lässt sich dort nicht sicher bestimmen";
-const MSG_NEAR_TANGENT: &str = "Die Flächen liegen stellenweise nahezu tangential zueinander; \
-     der Schnitt lässt sich dort nicht sicher bestimmen";
-const MSG_TOUCH_AND_CUT: &str =
-    "Die Flächen berühren sich tangential an einer Stelle und schneiden sich an einer anderen";
-const MSG_TOUCH_CROSSING: &str = "Die Flächen berühren sich tangential und durchdringen sich dabei";
-const MSG_BRANCH: &str = "Die Schnittkurve verzweigt sich oder trifft eine andere Schnittkurve";
-const MSG_SINGULAR: &str = "Die Schnittkurve verzweigt sich an einer Stelle, an der sich die \
-     Flächen tangential berühren";
-const MSG_LOST: &str =
-    "Die Schnittkurve lässt sich nicht verfolgen (Schrittweite unter der Grenze)";
-const MSG_FIT: &str = "Die Schnittkurve lässt sich nicht annähern";
-const MSG_PARTIAL: &str = "Die Flächen fallen teilweise zusammen";
-const MSG_NEARLY_COINCIDENT: &str =
-    "Die Flächen liegen fast aufeinander; der Schnitt lässt sich nicht sicher bestimmen";
+fn msg_numeric() -> String {
+    tr!("kernel-ssi-numeric")
+}
+fn msg_tangential() -> String {
+    tr!("kernel-ssi-tangential")
+}
+fn msg_near_tangent() -> String {
+    tr!("kernel-ssi-near-tangent")
+}
+fn msg_touch_and_cut() -> String {
+    tr!("kernel-ssi-touch-and-cut")
+}
+fn msg_touch_crossing() -> String {
+    tr!("kernel-ssi-touch-crossing")
+}
+fn msg_branch() -> String {
+    tr!("kernel-ssi-branch")
+}
+fn msg_singular() -> String {
+    tr!("kernel-ssi-singular")
+}
+fn msg_lost() -> String {
+    tr!("kernel-ssi-lost")
+}
+fn msg_fit() -> String {
+    tr!("kernel-ssi-fit")
+}
+fn msg_partial() -> String {
+    tr!("kernel-ssi-partial")
+}
+fn msg_nearly_coincident() -> String {
+    tr!("kernel-ssi-nearly-coincident")
+}
 /// Fast zusammenfallend: alle Stichproben näher als `NEAR_REL · Diagonale` an der anderen
 /// Fläche (aber nicht innerhalb `tol.linear`).
 const NEAR_REL: f64 = 1e-4;
 
 fn msg_too_many_seeds() -> String {
-    format!("Zu viele Schnittbereiche (mehr als {MAX_SEEDS} Startpunkte)")
+    tr!("kernel-ssi-too-many-seeds", max = MAX_SEEDS)
 }
 
 fn msg_budget() -> String {
-    format!("Der Flächenschnitt ist zu aufwendig (mehr als {MAX_PROBES} Auswertungen der Flächen)")
+    tr!("kernel-ssi-budget", max = MAX_PROBES)
 }
 
 fn msg_too_many_steps() -> String {
-    format!("Die Schnittkurve braucht zu viele Schritte (mehr als {MAX_MARCH_STEPS})")
+    tr!("kernel-ssi-too-many-steps", max = MAX_MARCH_STEPS)
 }
 
 fn msg_too_long() -> String {
-    format!(
-        "Die Schnittkurve ist zu lang (länger als das {MAX_CURVE_LENGTH_FACTOR}-Fache der \
-         Flächengröße)"
+    tr!(
+        "kernel-ssi-too-long",
+        factor = MAX_CURVE_LENGTH_FACTOR.to_string()
     )
 }
 
@@ -138,9 +155,7 @@ pub enum SsiOutcome {
 /// Schnitt zweier Flächen, von denen mindestens eine `Surface::Nurbs` ist.
 pub fn intersect_nurbs(a: &Surface, b: &Surface, tol: &Tolerance) -> SsiOutcome {
     if !matches!(a, Surface::Nurbs(_)) && !matches!(b, Surface::Nurbs(_)) {
-        return SsiOutcome::Unsupported(
-            "Der numerische Schnittrechner braucht mindestens eine Freiformfläche".into(),
-        );
+        return SsiOutcome::Unsupported(tr!("kernel-ssi-needs-freeform"));
     }
     if let Err(msg) = check_surface(a).and_then(|_| check_surface(b)) {
         return SsiOutcome::Unsupported(msg);
@@ -152,32 +167,36 @@ pub fn intersect_nurbs(a: &Surface, b: &Surface, tol: &Tolerance) -> SsiOutcome 
 /// Gültigkeit einer analytischen Fläche: endlicher, orthonormaler Rahmen, endliche Maße, Radien
 /// mindestens `MIN_RADIUS` (Freiformflächen prüft ihr Konstruktor).
 fn check_surface(s: &Surface) -> Result<(), String> {
-    let bad = |what: &str| Err(format!("Ungültige Fläche für den Schnitt: {what}"));
+    let bad = |what: &str| Err(tr!("kernel-ssi-invalid-surface", what = what));
     let frame_ok = |f: &Frame| f.is_orthonormal(FRAME_EPS);
     let radius_ok = |r: f64| r.is_finite() && r >= MIN_RADIUS;
     match s {
         Surface::Nurbs(_) => Ok(()),
-        _ if !frame_ok(s.frame()) => bad("das Koordinatensystem ist nicht orthonormal"),
+        _ if !frame_ok(s.frame()) => bad(&tr!("kernel-ssi-bad-frame")),
         Surface::Plane { .. } => Ok(()),
         Surface::Cylinder { radius, .. } | Surface::Sphere { radius, .. } => {
             if radius_ok(*radius) {
                 Ok(())
             } else {
-                bad(&format!("Radius {radius} (mindestens {MIN_RADIUS} mm)"))
+                bad(&tr!(
+                    "kernel-ssi-bad-radius",
+                    radius = radius.to_string(),
+                    min = MIN_RADIUS.to_string()
+                ))
             }
         }
         Surface::Cone { radius, slope, .. } => {
             if radius.is_finite() && *radius >= 0.0 && slope.is_finite() {
                 Ok(())
             } else {
-                bad("Kegel mit ungültigem Radius oder ungültiger Steigung")
+                bad(&tr!("kernel-ssi-bad-cone"))
             }
         }
         Surface::Torus { major, minor, .. } => {
             if radius_ok(*minor) && major.is_finite() && *major > *minor {
                 Ok(())
             } else {
-                bad("Torus mit ungültigen Radien")
+                bad(&tr!("kernel-ssi-bad-torus"))
             }
         }
     }
@@ -401,7 +420,7 @@ impl<'a> Ssi<'a> {
     fn run(&mut self) -> Result<SsiOutcome, String> {
         let lin = self.tol.linear;
         if !self.diag.is_finite() || !self.eps.is_finite() || !(lin.is_finite() && lin > 0.0) {
-            return Err(MSG_NUMERIC.into());
+            return Err(msg_numeric());
         }
         let shares: Vec<f64> = [
             self.share_on(&self.a, &self.b),
@@ -414,7 +433,7 @@ impl<'a> Ssi<'a> {
             return Ok(SsiOutcome::Coincident);
         }
         if shares.iter().any(|s| *s >= seeds::PARTIAL_SHARE) {
-            return Err(MSG_PARTIAL.into());
+            return Err(msg_partial());
         }
         // Fast zusammenfallend (überall dichter als `NEAR_REL · Diagonale`): Der Schnitt wäre
         // schlecht bestimmt und die Unterteilung fände kein Ende.
@@ -427,14 +446,14 @@ impl<'a> Ssi<'a> {
         .flatten()
         .collect();
         if near_shares.iter().all(|s| *s >= seeds::COINCIDENT_SHARE) {
-            return Err(MSG_NEARLY_COINCIDENT.into());
+            return Err(msg_nearly_coincident());
         }
         // Startpunkte und Verfolgung verschränkt (siehe `seeds::Ssi::search`).
         self.search()?;
         let branches = march::join(std::mem::take(&mut self.branches), self.same);
         if !branches.is_empty() {
             if !self.touches.is_empty() {
-                return Err(MSG_TOUCH_AND_CUT.into());
+                return Err(msg_touch_and_cut());
             }
             let mut curves = Vec::new();
             for b in &branches {
@@ -455,7 +474,7 @@ impl<'a> Ssi<'a> {
         let lift = |r: Result<Eval, Fail>| match r {
             Ok(e) => Ok(Some(e)),
             Err(Fail::NoFoot) => Ok(None),
-            Err(Fail::Numeric) => Err(String::from(MSG_NUMERIC)),
+            Err(Fail::Numeric) => Err(msg_numeric()),
         };
         let Some(ea) = lift(self.a.eval(q, h.a))? else {
             return Ok(None);
@@ -472,7 +491,7 @@ impl<'a> Ssi<'a> {
         match side.eval(q, hint) {
             Ok(e) => Ok(Some(e)),
             Err(Fail::NoFoot) => Ok(None),
-            Err(Fail::Numeric) => Err(MSG_NUMERIC.into()),
+            Err(Fail::Numeric) => Err(msg_numeric()),
         }
     }
 

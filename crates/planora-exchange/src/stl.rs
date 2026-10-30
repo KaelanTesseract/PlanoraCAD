@@ -7,6 +7,7 @@ use crate::mesh::ExchangeMesh;
 use crate::progress::Progress;
 use crate::source::ExportBody;
 use crate::text::{CountingReader, LineReader, three_numbers};
+use planora_i18n::tr;
 use planora_math::DVec3;
 use std::io::{BufRead, BufReader, Read, Write};
 
@@ -162,7 +163,7 @@ fn read_binary<R: Read>(
 }
 
 fn read_text<R: BufRead>(r: R, progress: &Progress) -> Result<ExchangeMesh, ExchangeError> {
-    const THREE: &str = "Ein Dreieck braucht genau drei Punkte";
+    let three = tr!("exchange-stl-three-points");
     let mut lines = LineReader::new(r);
     let mut points: Vec<[f32; 3]> = Vec::new();
     let (mut in_facet, mut corners, mut triangles) = (false, 0usize, 0usize);
@@ -181,7 +182,7 @@ fn read_text<R: BufRead>(r: R, progress: &Progress) -> Result<ExchangeMesh, Exch
                 if in_facet {
                     return Err(ExchangeError::Syntax {
                         line,
-                        msg: "Ein Dreieck beginnt, bevor das vorige endet",
+                        msg: tr!("exchange-stl-facet-overlap"),
                     });
                 }
                 in_facet = true;
@@ -189,14 +190,20 @@ fn read_text<R: BufRead>(r: R, progress: &Progress) -> Result<ExchangeMesh, Exch
             }
             "vertex" => {
                 if !in_facet || corners == 3 {
-                    return Err(ExchangeError::Syntax { line, msg: THREE });
+                    return Err(ExchangeError::Syntax {
+                        line,
+                        msg: three.clone(),
+                    });
                 }
                 points.push(three_numbers(&mut tokens, line)?);
                 corners += 1;
             }
             "endfacet" => {
                 if !in_facet || corners != 3 {
-                    return Err(ExchangeError::Syntax { line, msg: THREE });
+                    return Err(ExchangeError::Syntax {
+                        line,
+                        msg: three.clone(),
+                    });
                 }
                 in_facet = false;
                 triangles += 1;
@@ -207,7 +214,7 @@ fn read_text<R: BufRead>(r: R, progress: &Progress) -> Result<ExchangeMesh, Exch
             _ => {
                 return Err(ExchangeError::Syntax {
                     line,
-                    msg: "Unbekanntes Wort in der STL-Datei",
+                    msg: tr!("exchange-stl-unknown-word"),
                 });
             }
         }

@@ -1,60 +1,80 @@
 //! Fehler beim Lesen und Schreiben von Netzen (Meldungen deutsch, für die Oberfläche bestimmt).
 
-use thiserror::Error;
+use planora_i18n::{fmt_num, tr};
+use std::fmt;
 
 /// Bytes je Gigabyte (dezimal, für die Meldung).
 const BYTES_PER_GB: f64 = 1e9;
 
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExchangeError {
-    #[error("Die Datei lässt sich nicht lesen oder schreiben: {msg}")]
     Io { msg: String },
-    #[error(
-        "Die Datei ist zu groß ({}); erlaubt sind höchstens 8 GB",
-        gigabytes(.bytes)
-    )]
     FileTooLarge { bytes: u64 },
-    #[error("Das Netz hat mehr als 50 Millionen Dreiecke")]
     TooManyTriangles,
-    #[error("Das Netz hat mehr als 150 Millionen Punkte")]
     TooManyVertices,
-    #[error("Die Datei ist unvollständig: Sie endet, bevor alles gelesen ist")]
     Truncated,
-    #[error("Die Datei gibt {claimed} Dreiecke an, ist aber nur groß genug für {possible}")]
     CountTooLarge { claimed: u64, possible: u64 },
-    #[error("{}", not_finite(.line))]
     NotFinite { line: Option<usize> },
-    #[error("Zeile {line}: Die Zahl lässt sich nicht lesen")]
     BadNumber { line: usize },
-    #[error("Zeile {line}: Die Fläche verweist auf einen Punkt, den es nicht gibt")]
     IndexOutOfRange { line: usize },
-    #[error("Zeile {line}: {msg}")]
-    Syntax { line: usize, msg: &'static str },
-    #[error("Zeile {line}: Das Vieleck lässt sich nicht in Dreiecke zerlegen")]
+    Syntax { line: usize, msg: String },
     Polygon { line: usize },
-    #[error("Das Netz enthält keine Dreiecke")]
     Empty,
-    #[error(
-        "Das Netz ist für das Format {format} zu groß; bitte eine gröbere Qualität oder STL wählen"
-    )]
     TooLargeForFormat { format: &'static str },
-    #[error("Die Netzdaten sind beschädigt: {0}")]
     Corrupt(String),
-    #[error("Die Dateiendung „{0}“ wird nicht unterstützt; möglich sind .stl und .obj")]
     UnknownFormat(String),
-    #[error("Abgebrochen")]
     Cancelled,
 }
 
-/// Größe in Gigabyte mit Komma („9,1 GB“).
+impl fmt::Display for ExchangeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            ExchangeError::Io { msg } => tr!("exchange-io", msg = msg),
+            ExchangeError::FileTooLarge { bytes } => {
+                tr!("exchange-file-too-large", size = gigabytes(bytes))
+            }
+            ExchangeError::TooManyTriangles => tr!("exchange-too-many-triangles"),
+            ExchangeError::TooManyVertices => tr!("exchange-too-many-vertices"),
+            ExchangeError::Truncated => tr!("exchange-truncated"),
+            ExchangeError::CountTooLarge { claimed, possible } => {
+                tr!(
+                    "exchange-count-too-large",
+                    claimed = *claimed,
+                    possible = *possible
+                )
+            }
+            ExchangeError::NotFinite { line } => not_finite(line),
+            ExchangeError::BadNumber { line } => tr!("exchange-bad-number", line = *line),
+            ExchangeError::IndexOutOfRange { line } => {
+                tr!("exchange-index-out-of-range", line = *line)
+            }
+            ExchangeError::Syntax { line, msg } => {
+                tr!("exchange-syntax", line = *line, msg = msg)
+            }
+            ExchangeError::Polygon { line } => tr!("exchange-polygon", line = *line),
+            ExchangeError::Empty => tr!("exchange-empty"),
+            ExchangeError::TooLargeForFormat { format } => {
+                tr!("exchange-too-large-for-format", format = *format)
+            }
+            ExchangeError::Corrupt(m) => tr!("exchange-corrupt", msg = m),
+            ExchangeError::UnknownFormat(ext) => tr!("exchange-unknown-format", ext = ext),
+            ExchangeError::Cancelled => tr!("exchange-cancelled"),
+        };
+        f.write_str(&text)
+    }
+}
+
+impl std::error::Error for ExchangeError {}
+
+/// Größe in Gigabyte mit dem Dezimaltrenner der Sprache („9,1 GB“).
 fn gigabytes(bytes: &u64) -> String {
-    format!("{:.1} GB", *bytes as f64 / BYTES_PER_GB).replace('.', ",")
+    format!("{} GB", fmt_num(*bytes as f64 / BYTES_PER_GB, 1))
 }
 
 fn not_finite(line: &Option<usize>) -> String {
     match line {
-        Some(n) => format!("Zeile {n}: Eine Zahl ist zu groß oder keine gültige Zahl"),
-        None => "Die Datei enthält eine Zahl, die zu groß oder keine gültige Zahl ist".into(),
+        Some(n) => tr!("exchange-not-finite-line", line = *n),
+        None => tr!("exchange-not-finite"),
     }
 }
 

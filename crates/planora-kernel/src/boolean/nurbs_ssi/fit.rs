@@ -2,7 +2,7 @@
 //! Einordnung von Berührpunkten.
 
 use super::march::Branch;
-use super::{Hints, MSG_FIT, MSG_PARTIAL, MSG_TOUCH_CROSSING, NURBS_FIT_TOL, Probe, Ssi};
+use super::{Hints, NURBS_FIT_TOL, Probe, Ssi, msg_fit, msg_partial, msg_touch_crossing};
 use crate::geometry::Curve;
 use planora_math::nurbs::NurbsCurve;
 use planora_math::{DVec3, TAU};
@@ -54,7 +54,7 @@ impl Ssi<'_> {
             }
         }
         if pts.len() < 2 {
-            return Err(MSG_FIT.into());
+            return Err(msg_fit());
         }
         let br = Branch {
             pts,
@@ -96,7 +96,7 @@ impl Ssi<'_> {
                     out.extend(self.fit_piece(&pts[m..], &hints[m..], depth + 1)?);
                     return Ok(out);
                 }
-                return Err(MSG_FIT.into());
+                return Err(msg_fit());
             };
             let bad = self.verify(&c, &pts, &hints)?;
             if bad.is_empty() {
@@ -126,7 +126,7 @@ impl Ssi<'_> {
             out.extend(self.fit_piece(&pts[m..], &hints[m..], depth + 1)?);
             return Ok(out);
         }
-        Err(MSG_FIT.into())
+        Err(msg_fit())
     }
 
     /// Abschnitte `i` (zwischen Punkt `i` und `i + 1`), an deren Anfang oder an einer der
@@ -142,7 +142,7 @@ impl Ssi<'_> {
             chord.push(s);
         }
         if !s.is_finite() || s <= 0.0 {
-            return Err(MSG_FIT.into());
+            return Err(msg_fit());
         }
         let (a, b) = c.domain();
         let at = |x: f64| a + (b - a) * (x / s).clamp(0.0, 1.0);
@@ -219,10 +219,10 @@ impl Ssi<'_> {
                 }
             }
             if valid >= MIN_CONTACT_PROBES && on == valid {
-                return Err(MSG_PARTIAL.into());
+                return Err(msg_partial());
             }
             if pos && neg {
-                return Err(MSG_TOUCH_CROSSING.into());
+                return Err(msg_touch_crossing());
             }
         }
         Ok(())

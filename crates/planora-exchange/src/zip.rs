@@ -3,6 +3,7 @@
 //! Größe und CRC messen, dann schreiben; so liegt nichts ganz im Speicher.
 
 use crate::error::ExchangeError;
+use planora_i18n::tr;
 use std::io::{self, Write};
 
 /// Erzeugerpolynom der CRC-32 nach IEEE 802.3 (wie ZIP), bitweise gespiegelt.
@@ -165,9 +166,8 @@ impl<W: Write> ZipWriter<W> {
 
     /// Hängt einen Eintrag an (Name in ASCII, Ordner mit „/“).
     pub fn add_entry(&mut self, name: &str, content: Content<'_>) -> Result<(), ExchangeError> {
-        let name_len = u16::try_from(name.len()).map_err(|_| {
-            ExchangeError::Corrupt("Der Name eines ZIP-Eintrags ist zu lang".into())
-        })?;
+        let name_len = u16::try_from(name.len())
+            .map_err(|_| ExchangeError::Corrupt(tr!("exchange-zip-name-long")))?;
         let mut measure = Measure::new();
         content(&mut measure)?;
         let (crc, len) = (measure.crc.finish(), measure.len);
@@ -193,9 +193,7 @@ impl<W: Write> ZipWriter<W> {
         };
         content(&mut tee)?;
         if tee.measure.crc.finish() != crc || tee.measure.len != len {
-            return Err(ExchangeError::Corrupt(
-                "Der Inhalt eines ZIP-Eintrags hat sich beim Schreiben geändert".into(),
-            ));
+            return Err(ExchangeError::Corrupt(tr!("exchange-zip-content-changed")));
         }
         self.offset += header.len() as u64 + len;
         self.entries.push(Entry {

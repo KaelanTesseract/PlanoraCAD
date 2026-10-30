@@ -1,5 +1,6 @@
 use crate::error::KernelError;
 use crate::nurbs_surface::NurbsSurfaceData;
+use planora_i18n::tr;
 use planora_math::nurbs::{NurbsCurve, NurbsSurface, polygon_turning};
 use planora_math::{DVec3, Frame, PI, TAU, Tolerance};
 use std::cell::Cell;
@@ -460,15 +461,15 @@ pub enum SurfaceKind {
 }
 
 impl SurfaceKind {
-    /// Deutscher Anzeigename.
-    pub fn label(self) -> &'static str {
+    /// Anzeigename in der aktuellen Sprache.
+    pub fn label(self) -> String {
         match self {
-            SurfaceKind::Plane => "Ebene",
-            SurfaceKind::Cylinder => "Zylinderfläche",
-            SurfaceKind::Cone => "Kegelfläche",
-            SurfaceKind::Sphere => "Kugelfläche",
-            SurfaceKind::Torus => "Torusfläche",
-            SurfaceKind::Nurbs => "Freiformfläche",
+            SurfaceKind::Plane => tr!("kernel-kind-plane"),
+            SurfaceKind::Cylinder => tr!("kernel-kind-cylinder"),
+            SurfaceKind::Cone => tr!("kernel-kind-cone"),
+            SurfaceKind::Sphere => tr!("kernel-kind-sphere"),
+            SurfaceKind::Torus => tr!("kernel-kind-torus"),
+            SurfaceKind::Nurbs => tr!("kernel-kind-nurbs"),
         }
     }
 }

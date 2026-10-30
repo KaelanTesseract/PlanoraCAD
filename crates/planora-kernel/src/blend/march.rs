@@ -10,7 +10,7 @@
 //! neu gerechnet und mit der Hautfläche an fünf Querstellen verglichen (Punkt zu Punkt, also eine
 //! Schranke in beide Richtungen). Die Zahl der Stationen verdoppelt sich, bis die Abweichung
 //! überall höchstens `NURBS_FIT_TOL / 2` beträgt und die Berührkurven beide Flächen auf
-//! `NURBS_EDGE_TOL / 2` treffen; sonst benannte Ablehnung ([`INACCURATE`]).
+//! `NURBS_EDGE_TOL / 2` treffen; sonst benannte Ablehnung ([`inaccurate`]).
 //!
 //! Freiformflächen und -kanten (Task 15) laufen denselben Weg mit diesen Unterschieden: Startwert
 //! jedes Querschnitts ist die Ebenenformel am Kantenpunkt (der verschobene Nachbarmittelpunkt nur
@@ -48,6 +48,7 @@ use crate::geometry::{Curve, Surface};
 use crate::ids::Id;
 use crate::topology::{Edge, Solid};
 use crate::validate::NURBS_EDGE_TOL;
+use planora_i18n::tr;
 use planora_math::nurbs::{
     NurbsError, NurbsSurface, SkinSection, SkinTangent, evaluations, skin_sided,
 };
@@ -168,25 +169,32 @@ const MAX_TANGENT_SIN: f64 = 1e-2;
 /// Knoten haben; begrenzt zusätzlich durch [`MAX_BLEND_EVALUATIONS`].
 pub const MAX_FREEFORM_STATIONS: usize = 1025;
 /// Kleinster Stationsabstand der angepassten Teilung (Bruchteil der Kantenlänge); ein Stück, das
-/// darunter noch ungenau ist, ergibt [`INACCURATE`].
+/// darunter noch ungenau ist, ergibt [`inaccurate`].
 const MIN_SPAN_FRACTION: f64 = 1e-6;
 /// Größter Abstand (in Vielfachen von r) des Kugelmittelpunkts vom Startwert der Ebenenformel,
 /// ab dem bei Freiform-Bahnen der zweite Startwert (Nachbarstation) versucht wird.
 const MAX_START_JUMP: f64 = 0.5;
 /// Meldung, wenn der Querschnittsbogen nicht als ein rationales Stück darstellbar ist (Kanten
 /// fast tangential oder sehr spitz; Review M1).
-pub const SECTION_ARC: &str = "Der Querschnitt der Rundung ist an dieser Kante zu flach oder fast ein Halbkreis (Kantenwinkel sehr spitz oder fast gestreckt); als Freiform-Rundung lässt er sich nicht darstellen";
+pub fn section_arc() -> String {
+    tr!("kernel-blend-section-arc")
+}
 /// Meldung bei schrägem Abschluss einer Hautfläche (P5).
-pub const OBLIQUE_END: &str = "Eine Freiform- oder variable Rundung lässt sich nur an einer Ebene senkrecht zur Kante abschließen";
+pub fn oblique_end() -> String {
+    tr!("kernel-blend-oblique-end")
+}
 /// Meldung, wenn die Hautfläche die geforderte Genauigkeit nicht erreicht.
-pub const INACCURATE: &str =
-    "Die Rundungsfläche lässt sich nicht genau genug annähern; bitte Maß oder Form leicht ändern";
+pub fn inaccurate() -> String {
+    tr!("kernel-blend-inaccurate")
+}
 /// Meldung, wenn Querschnitte stillstehen oder die Fläche umklappt.
-pub const FOLDED: &str =
-    "Die Rundungsfläche würde sich selbst überschneiden; bitte ein kleineres Maß wählen";
+pub fn folded() -> String {
+    tr!("kernel-blend-folded")
+}
 /// Meldung für Ecken mit variablem Radius (P6, Task 17).
-pub const VARIABLE_CORNER: &str =
-    "Ecken mit variablem Radius oder Freiform-Rundungsflächen werden noch nicht unterstützt";
+pub fn variable_corner() -> String {
+    tr!("kernel-blend-variable-corner")
+}
 
 /// Querschnittsgesetz entlang der Kante.
 #[derive(Clone, Copy, Debug)]
@@ -300,7 +308,7 @@ struct Station {
 fn to_skin(st: &Station) -> Result<SkinSection, BlendError> {
     match st.kind {
         SectionKind::Fillet { .. } => SkinSection::arc(st.sec.center, st.sec.pa, st.sec.pb)
-            .map_err(|_| BlendError::Unsupported(SECTION_ARC.into())),
+            .map_err(|_| BlendError::Unsupported(section_arc())),
         SectionKind::Chamfer(_) => Ok(SkinSection::line(st.sec.pa, st.sec.pb)),
     }
 }
@@ -445,7 +453,7 @@ fn check_foot(side: Side, center: &DVec3, foot: DVec3, face: &str) -> Result<(),
 }
 
 fn invalid(err: NurbsError) -> BlendError {
-    BlendError::Unsupported(format!("Die Rundungsfläche ist ungültig: {err}"))
+    BlendError::Unsupported(tr!("kernel-blend-surface-invalid", err = err.to_string()))
 }
 
 /// Fläche und Schwerpunkt des Querschnitts zwischen Kantenpunkt `o` und Rundung bzw. Fase:
@@ -506,12 +514,7 @@ fn arc_extent(sec: &Section, k: DVec3) -> f64 {
 /// Kantenkrümmung unter [`EDGE_CURVATURE_LIMIT`]. Geraden: nie.
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
 fn check_spine(e: &Edge, t: f64, st: &Station, curvature: Option<DVec3>) -> Result<(), BlendError> {
-    let near_axis = || {
-        BlendError::Unsupported(
-            "Die Kugelbahn kommt der Drehachse näher als der Radius; bitte einen kleineren Radius wählen"
-                .into(),
-        )
-    };
+    let near_axis = || BlendError::Unsupported(tr!("kernel-blend-ball-near-axis"));
     let reach_r = match st.kind {
         SectionKind::Fillet { radius } => radius,
         SectionKind::Chamfer(_) => 0.0,
@@ -558,10 +561,9 @@ fn check_spine(e: &Edge, t: f64, st: &Station, curvature: Option<DVec3>) -> Resu
                     .max((st.sec.pb - st.o).dot(kvec)),
             };
             if !(kvec.is_finite() && reach < EDGE_CURVATURE_LIMIT) {
-                return Err(BlendError::Unsupported(
-                    "Die Rundung ist für die Krümmung der Kante zu groß; bitte ein kleineres Maß wählen"
-                        .into(),
-                ));
+                return Err(BlendError::Unsupported(tr!(
+                    "kernel-blend-too-big-for-curvature"
+                )));
             }
             Ok(())
         }
@@ -578,9 +580,9 @@ fn check_section(st: &Station, tol: &Tolerance) -> Result<(), BlendError> {
     }
     let min = tol.linear;
     if !(s.pa.distance(st.o) > min && s.pb.distance(st.o) > min && s.pa.distance(s.pb) > min) {
-        return Err(BlendError::InvalidParameter(format!(
-            "Die Berührpunkte liegen nicht weiter als {} mm auseinander; das Maß ist zu klein",
-            super::show_num(min)
+        return Err(BlendError::InvalidParameter(tr!(
+            "kernel-blend-contact-too-close",
+            mm = super::show_num(min)
         )));
     }
     Ok(())
@@ -641,10 +643,9 @@ pub fn march_geom(
         && closed
         && !((radius_at(l, 0.0) - radius_at(l, length)).abs() <= tol.linear)
     {
-        return Err(BlendError::InvalidParameter(
-            "Auf einer geschlossenen Kante muss der Radius am Anfang und am Ende gleich sein"
-                .into(),
-        ));
+        return Err(BlendError::InvalidParameter(tr!(
+            "kernel-blend-closed-edge-radius"
+        )));
     }
     // Stützstellen des Radiengesetzes auf dieser Kante (Bogenlänge ab Kantenanfang); `kinks` die
     // unter ihnen, an denen das Gesetz nur stetig ist (erster/letzter Punkt innerhalb der Kette).
@@ -895,7 +896,7 @@ pub fn march_geom(
             .iter()
             .any(|v| !(*v >= MIN_ROW_SPEED));
             if slow {
-                return Err(BlendError::Unsupported(FOLDED.into()));
+                return Err(BlendError::Unsupported(folded()));
             }
         }
         Ok((pair.0.0, pair.1.0))
@@ -937,7 +938,10 @@ pub fn march_geom(
                    xs: &[f64]|
      -> Result<NurbsSurface, BlendError> {
         skin_sided(sk, lefts, rights, xs).map_err(|err| {
-            BlendError::Unsupported(format!("Die Rundungsfläche lässt sich nicht bilden: {err}"))
+            BlendError::Unsupported(tr!(
+                "kernel-blend-surface-cannot-form",
+                err = err.to_string()
+            ))
         })
     };
     if freeform {
@@ -1030,7 +1034,7 @@ pub fn march_geom(
             );
         }
         if n >= MAX_STATIONS {
-            return Err(BlendError::Unsupported(INACCURATE.into()));
+            return Err(BlendError::Unsupported(inaccurate()));
         }
         n = 2 * n - 1;
     }
@@ -1080,7 +1084,7 @@ fn tangent_bits(t: &SkinTangent, out: &mut Vec<u64>) {
 /// jedes Stück, dessen Nachprüfung gegen exakte Querschnitte scheitert, halbiert (alle solchen
 /// Stücke je Durchgang), bis alles genau genug ist. Grenzen: [`MAX_FREEFORM_STATIONS`], kleinstes
 /// Stück [`MIN_SPAN_FRACTION`] der Kantenlänge, Auswertungsgrenzen der Bahn; sonst
-/// [`INACCURATE`]. Querschnitte, Ableitungen und Prüfergebnisse unveränderter Stücke werden
+/// [`inaccurate`]. Querschnitte, Ableitungen und Prüfergebnisse unveränderter Stücke werden
 /// wiederverwendet (Schlüssel: Lage, Nachbarabstände bzw. Werte und Ableitungen der Enden), das
 /// Ergebnis hängt nur von den Eingaben ab. Die Differenzenschritte sind `DERIV_STEP` mal dem
 /// Abstand zur Nachbarstation (Rauschen des Newton-Rests / Schritt mal Stücklänge bleibt so
@@ -1113,7 +1117,7 @@ fn march_adaptive(p: Adaptive) -> Result<(NurbsSurface, Vec<Station>, Vec<Statio
     }
     let mut xs = merged;
     if xs.len() > MAX_FREEFORM_STATIONS {
-        return Err(BlendError::Unsupported(INACCURATE.into()));
+        return Err(BlendError::Unsupported(inaccurate()));
     }
     let mut sections: HashMap<u64, Station> = HashMap::new();
     let mut diffs: HashMap<[u64; 4], (SkinTangent, SkinTangent)> = HashMap::new();
@@ -1208,7 +1212,7 @@ fn march_adaptive(p: Adaptive) -> Result<(NurbsSurface, Vec<Station>, Vec<Statio
             .iter()
             .any(|&i| xs[i + 1] - xs[i] <= 2.0 * MIN_SPAN_FRACTION * length);
         if too_short || m + bad.len() > MAX_FREEFORM_STATIONS {
-            return Err(BlendError::Unsupported(INACCURATE.into()));
+            return Err(BlendError::Unsupported(inaccurate()));
         }
         let halves: Vec<f64> = bad.iter().map(|&i| 0.5 * (xs[i] + xs[i + 1])).collect();
         xs.extend(halves);
@@ -1232,7 +1236,7 @@ fn finish(
     let contact_a = Curve::nurbs(surface.v_boundary(false).map_err(invalid)?);
     let contact_b = Curve::nurbs(surface.v_boundary(true).map_err(invalid)?);
     let blend_surface = Surface::nurbs(surface, closed, false).map_err(|err| {
-        BlendError::Unsupported(format!("Die Rundungsfläche ist ungültig: {err}"))
+        BlendError::Unsupported(tr!("kernel-blend-surface-invalid", err = err.to_string()))
     })?;
     let sense_at = |st: &Station| {
         let natural = blend_surface.normal(st.x, 0.5);
@@ -1247,7 +1251,7 @@ fn finish(
         .chain(mids)
         .any(|st| sense_at(st) != Some(same_sense))
     {
-        return Err(BlendError::Unsupported(FOLDED.into()));
+        return Err(BlendError::Unsupported(folded()));
     }
     // Volumen = ∫ A(s) · (c′(s) · T(s)) ds (Querschnitte in den Ebenen senkrecht zur Kante,
     // c = Schwerpunkt): je Stationsabstand Simpson, c′ aus der Parabel durch die drei Schwerpunkte.
@@ -1266,9 +1270,9 @@ fn finish(
                 + a1 * d1.dot(w[1].tangent));
     }
     if !(volume.is_finite() && volume > 0.0) {
-        return Err(BlendError::ResultInvalid(
-            "Die Volumenschätzung der Rundung ist ungültig".into(),
-        ));
+        return Err(BlendError::ResultInvalid(tr!(
+            "kernel-blend-volume-estimate-invalid"
+        )));
     }
     let reach = stations
         .iter()

@@ -1,7 +1,7 @@
 //! Kantenketten, Tangentenkette, glatte Übergänge (Teilprojekt 8, Task 9).
 
 use planora_kernel::blend::MAX_BLEND_EDGES;
-use planora_kernel::blend::build::CAVITY;
+use planora_kernel::blend::build::cavity;
 use planora_kernel::blend::chain::*;
 use planora_kernel::blend::topo::{edge_uses, face_name};
 use planora_kernel::*;
@@ -466,7 +466,7 @@ fn holes_and_cavities_are_named_for_chains_too() {
         .unwrap();
     let e = edge_between(&s, "Deckel", "Wand 1");
     match k().blend(&s, &req(&[e], kind, true)) {
-        Err(BlendError::Unsupported(m)) => assert_eq!(m, CAVITY),
+        Err(BlendError::Unsupported(m)) => assert_eq!(m, cavity()),
         other => panic!("{:?}", other.map(|b| b.edges.len())),
     }
 }

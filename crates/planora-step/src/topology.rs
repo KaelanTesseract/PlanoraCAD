@@ -5,6 +5,7 @@
 use crate::entity::{Entities, logical, refs};
 use crate::error::StepError;
 use crate::geometry::{self, reject};
+use planora_i18n::tr;
 use planora_kernel::{Edge, Face, Id, Loop, Solid, Vertex};
 use planora_math::DVec3;
 use planora_mesh::{TessellationOptions, tessellate};
@@ -180,11 +181,7 @@ pub(crate) fn lumps(solid: &Solid) -> Result<Vec<Lump>, StepError> {
             chord_tolerance: CLASSIFY_CHORD,
         },
     )
-    .map_err(|e| {
-        reject(&format!(
-            "Die Schalen lassen sich nicht unterscheiden ({e})"
-        ))
-    })?;
+    .map_err(|e| reject(tr!("step-w-shells-ambiguous", e = e.to_string())))?;
     let mut shell_of = vec![usize::MAX; solid.faces.len()];
     for (k, faces) in shells.iter().enumerate() {
         for f in faces {
@@ -211,7 +208,7 @@ pub(crate) fn lumps(solid: &Solid) -> Result<Vec<Lump>, StepError> {
         }
     }
     if volume.iter().any(|v| !v.is_finite() || *v == 0.0) {
-        return Err(reject("Eine Schale hat kein Volumen"));
+        return Err(reject(tr!("step-w-shell-no-volume")));
     }
     let mut out: Vec<Lump> = (0..shells.len())
         .filter(|&k| volume[k] > 0.0)
@@ -233,7 +230,7 @@ pub(crate) fn lumps(solid: &Solid) -> Result<Vec<Lump>, StepError> {
         let owner = (0..out.len())
             .filter(|&i| inside(out[i].outer))
             .min_by(|&a, &b| volume[out[a].outer].total_cmp(&volume[out[b].outer]))
-            .ok_or_else(|| reject("Ein Hohlraum liegt in keinem Teil des Körpers"))?;
+            .ok_or_else(|| reject(tr!("step-w-cavity-nowhere")))?;
         out[owner].voids.push(void);
     }
     Ok(out)
@@ -250,7 +247,7 @@ pub(crate) fn write_solid(
     let shells = shell_faces(solid);
     // ISO 10303-42: eine Hülle braucht mindestens eine Fläche.
     if shells.is_empty() || shells.iter().any(Vec::is_empty) {
-        return Err(reject("Der Körper hat keine Flächen"));
+        return Err(reject(tr!("step-w-body-no-faces")));
     }
     let mut w = TopoWriter::new(solid);
     let mut items = Vec::new();

@@ -1,6 +1,6 @@
 //! Kernel-Operation `blend` (Teilprojekt 8, Task 5).
 
-use planora_kernel::blend::build::CAVITY;
+use planora_kernel::blend::build::cavity;
 use planora_kernel::blend::topo::{edge_angle, edge_sides, edge_uses, face_name};
 use planora_kernel::blend::{MIN_CHAMFER_ANGLE, min_blend_size};
 use planora_kernel::*;
@@ -570,7 +570,7 @@ fn stale_references_and_cavities_are_named_before_any_geometry() {
     let hollow = k().boolean(&s, &void, BoolOp::Difference).unwrap();
     let e = edge_between(&hollow, "Deckel", "Wand 1");
     match k().blend(&hollow, &req(&[e], fillet)) {
-        Err(BlendError::Unsupported(m)) => assert_eq!(m, CAVITY),
+        Err(BlendError::Unsupported(m)) => assert_eq!(m, cavity()),
         other => panic!("{:?}", other.map(|_| ())),
     }
     // Der Eingangskörper bleibt unverändert.

@@ -7,6 +7,7 @@ use super::{BlendEdge, BlendRequest, MAX_BLEND_EDGES};
 use crate::boolean::Seg;
 use crate::ids::Id;
 use crate::topology::{Edge, Face, Solid, Vertex};
+use planora_i18n::tr;
 use planora_math::{DVec3, PI};
 use std::collections::VecDeque;
 
@@ -214,7 +215,7 @@ fn first_faces(
 /// [`MAX_BLEND_EDGES`] gilt nach Ausdehnung und ohne Doppelte.
 pub fn select_edges(solid: &Solid, r: &BlendRequest) -> Result<Vec<ChainedEdge>, BlendError> {
     let too_many =
-        || BlendError::InvalidParameter(format!("Zu viele Kanten (höchstens {MAX_BLEND_EDGES})"));
+        || BlendError::InvalidParameter(tr!("kernel-blend-too-many-edges", max = MAX_BLEND_EDGES));
     let mut picked: Vec<BlendEdge> = Vec::new();
     for be in &r.edges {
         if solid.edges.get(be.edge).is_none() {
@@ -288,9 +289,8 @@ fn group(solid: &Solid, picked: &[BlendEdge]) -> Result<Vec<ChainedEdge>, BlendE
         let total: f64 = lengths.iter().sum();
         let mut offset = 0.0;
         for (&(e, reversed), &length) in run.iter().zip(&lengths) {
-            let j = index(e).ok_or_else(|| {
-                BlendError::ResultInvalid("Eine Kante der Kette fehlt in der Auswahl".into())
-            })?;
+            let j = index(e)
+                .ok_or_else(|| BlendError::ResultInvalid(tr!("kernel-blend-chain-edge-missing")))?;
             out[j] = Some(ChainedEdge {
                 edge: picked[j],
                 chain,

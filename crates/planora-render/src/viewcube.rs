@@ -1,5 +1,6 @@
 use crate::camera::OrbitCamera;
 use glam::{Vec2, Vec3};
+use planora_i18n::tr;
 
 /// `(yaw, pitch)` der isometrischen Standardansicht.
 pub const ISO_VIEW: (f32, f32) = (-std::f32::consts::FRAC_PI_4, 0.615_479_7);
@@ -24,14 +25,15 @@ impl ViewFace {
         ViewFace::Bottom,
     ];
 
-    pub fn label(self) -> &'static str {
+    /// Name der Seite in der aktuellen Sprache.
+    pub fn label(self) -> String {
         match self {
-            ViewFace::Front => "Vorne",
-            ViewFace::Back => "Hinten",
-            ViewFace::Left => "Links",
-            ViewFace::Right => "Rechts",
-            ViewFace::Top => "Oben",
-            ViewFace::Bottom => "Unten",
+            ViewFace::Front => tr!("render-face-front"),
+            ViewFace::Back => tr!("render-face-back"),
+            ViewFace::Left => tr!("render-face-left"),
+            ViewFace::Right => tr!("render-face-right"),
+            ViewFace::Top => tr!("render-face-top"),
+            ViewFace::Bottom => tr!("render-face-bottom"),
         }
     }
 
@@ -238,10 +240,10 @@ impl CubeRegion {
         }
     }
 
-    /// Deutscher Name, z. B. „Vorne“, „Oben-Rechts“, „Oben-Vorne-Rechts“.
+    /// Name in der aktuellen Sprache, z. B. „Vorne“, „Oben-Rechts“, „Oben-Vorne-Rechts“.
     pub fn name(self) -> String {
         match self {
-            CubeRegion::Face(f) => f.label().to_string(),
+            CubeRegion::Face(f) => f.label(),
             CubeRegion::Edge { a, b } => format!("{}-{}", a.label(), b.label()),
             CubeRegion::Corner { x, y, z } => {
                 format!("{}-{}-{}", z.label(), y.label(), x.label())

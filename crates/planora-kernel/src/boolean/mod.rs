@@ -13,7 +13,7 @@ mod split;
 mod surfsurf;
 mod uv;
 
-pub use budget::{MAX_FREEFORM_EVALUATIONS, TOO_EXPENSIVE};
+pub use budget::{MAX_FREEFORM_EVALUATIONS, too_expensive};
 pub use classify::{
     Class, Location, classify_region, edge_probe_point, face_probe_point, solid_contains,
     solid_faces,
@@ -29,7 +29,7 @@ pub use seg::{Seg, reverse_loop};
 pub use select::{Piece, Side, select_piece};
 pub use sew::sew;
 pub use split::{Region, split_face};
-pub use surfsurf::{SurfaceIntersection, intersect_surfaces, surface_name};
+pub use surfsurf::{SurfaceIntersection, intersect_surfaces, surface_label, surface_name};
 pub use uv::{
     Containment, FaceGeom, face_geom, loop_points, oriented_area, point_in_face, points_to_uv,
     points_to_uv_indexed, winding,
@@ -38,6 +38,7 @@ pub use uv::{
 use crate::geometry::{Curve, Surface};
 use crate::topology::Solid;
 use crate::validate::{NURBS_EDGE_TOL, ValidationError, validate_with};
+use planora_i18n::tr;
 use planora_math::{DVec3, Frame, Tolerance};
 
 /// Längentoleranz für Knoten, Teilungen und das Verschweißen von Ecken, sobald Freiformkurven
@@ -84,12 +85,12 @@ fn nurbs_params_ok(c: &Curve, t0: f64, t1: f64) -> bool {
 /// der Validator.
 fn check_input(s: &Solid, tol: &Tolerance) -> Result<(), String> {
     if s.faces.is_empty() {
-        return Err("leerer Körper (keine Flächen)".into());
+        return Err(tr!("kernel-boolean-empty-body"));
     }
     let finite3 = |p: DVec3| p.is_finite();
     let frame_ok = |f: &Frame| finite3(f.origin) && finite3(f.x) && finite3(f.y) && finite3(f.z);
     if s.vertices.iter().any(|(_, v)| !finite3(v.point)) {
-        return Err("Eckpunkt mit ungültiger Koordinate (NaN oder unendlich)".into());
+        return Err(tr!("kernel-boolean-vertex-invalid"));
     }
     for (_, e) in s.edges.iter() {
         let curve_ok = match &e.curve {
@@ -104,10 +105,10 @@ fn check_input(s: &Solid, tol: &Tolerance) -> Result<(), String> {
             Curve::Nurbs(_) => true,
         };
         if !(curve_ok && e.t0.is_finite() && e.t1.is_finite()) {
-            return Err("Kante mit ungültigem Wert (NaN oder unendlich)".into());
+            return Err(tr!("kernel-boolean-edge-invalid"));
         }
         if !nurbs_params_ok(&e.curve, e.t0, e.t1) {
-            return Err("Kante einer Freiformkurve außerhalb ihres Parameterbereichs".into());
+            return Err(tr!("kernel-boolean-edge-outside-params"));
         }
     }
     validate_with(s, tol).map_err(|e| e.to_string())?;
@@ -122,7 +123,7 @@ pub fn boolean(a: &Solid, b: &Solid, op: BoolOp, tol: &Tolerance) -> Result<Soli
 
 /// Wie [`boolean`], mit eigener Arbeitsgrenze für Operationen mit Freiformflächen: Nach mehr als
 /// `max_evaluations` NURBS-Auswertungen endet die Operation mit
-/// `Unsupported(`[`TOO_EXPENSIVE`]`)` (deterministisch, siehe `budget`). Rein analytische
+/// `TooExpensive` (deterministisch, siehe `budget`). Rein analytische
 /// Operationen kennen keine Grenze (unverändert).
 pub fn boolean_limited(
     a: &Solid,
@@ -131,8 +132,10 @@ pub fn boolean_limited(
     tol: &Tolerance,
     max_evaluations: u64,
 ) -> Result<Solid, BooleanError> {
-    check_input(a, tol).map_err(|e| BooleanError::InvalidInput(format!("Körper A: {e}")))?;
-    check_input(b, tol).map_err(|e| BooleanError::InvalidInput(format!("Körper B: {e}")))?;
+    check_input(a, tol)
+        .map_err(|e| BooleanError::InvalidInput(tr!("kernel-boolean-body-a", e = e)))?;
+    check_input(b, tol)
+        .map_err(|e| BooleanError::InvalidInput(tr!("kernel-boolean-body-b", e = e)))?;
 
     let freeform = has_freeform(a) || has_freeform(b);
     let _scope = freeform.then(|| budget::Scope::start(max_evaluations));
@@ -183,7 +186,9 @@ const RESULT_CHECK_SECTIONS: usize = 8;
 
 /// Meldung, wenn das vernähte Ergebnis einer Operation mit Freiformflächen eine Kante neben ihrer
 /// Fläche oder neben ihren Ecken hat.
-pub(crate) const THIN_FEATURE: &str = "Ein Gebilde ist dünner als die Toleranz für Freiformflächen; das Ergebnis lässt sich nicht sicher bilden";
+pub(crate) fn thin_feature() -> String {
+    tr!("kernel-thin-feature")
+}
 
 /// `x ≤ limit`; NaN ist nie innerhalb. Eigene Funktion, weil die Prüfungen „nicht innerhalb“
 /// brauchen und clippy `!(x <= limit)` (gewollt: NaN zählt als außerhalb) ablehnt.
@@ -208,7 +213,7 @@ const ANALYTIC_EDGE_FACTOR: f64 = 1.0;
 /// Kanten neben ihr liegen. Rein analytische Operationen laufen nicht hierüber (unverändert).
 fn check_freeform_result(s: &Solid, tol: &Tolerance) -> Result<(), BooleanError> {
     let limit = ANALYTIC_EDGE_FACTOR * tol.linear;
-    let fail = || BooleanError::Unsupported(THIN_FEATURE.into());
+    let fail = || BooleanError::FreeformLimit(thin_feature());
     for (_, e) in s.edges.iter() {
         let (p0, p1) = (e.curve.point(e.t0), e.curve.point(e.t1));
         if !within(p0.distance(s.vertices[e.start].point), NURBS_NODE_TOL)

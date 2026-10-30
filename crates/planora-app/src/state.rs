@@ -2744,13 +2744,15 @@ impl AppState {
 /// Bezeichnung (und Namensstamm) der aus STEP-Dateien übernommenen Körper, gleich
 /// `FeatureKind::StepBody.label()`. Nur in der Crate sichtbar: `export_dialog::STEP_LABEL` (Name
 /// des Exportformats) trägt denselben Namen, und Tests binden beide Module mit `*` ein.
-pub(crate) const STEP_LABEL: &str = planora_step::UNNAMED_BODY;
+pub(crate) fn step_label() -> String {
+    planora_step::unnamed_body()
+}
 
 /// Nummer `n`, wenn `name` genau „STEP-Körper n“ ist (n höchstens `MAX_NAME_COUNTER`).
 fn step_number(name: &str) -> Option<u64> {
     let (label, num) = name.trim().rsplit_once(' ')?;
     let n = num.parse::<u64>().ok()?;
-    (label == STEP_LABEL && n <= MAX_NAME_COUNTER).then_some(n)
+    (label == step_label() && n <= MAX_NAME_COUNTER).then_some(n)
 }
 
 impl AppState {
@@ -2774,7 +2776,7 @@ impl AppState {
             .chain(self.bodies.iter().map(|b| b.name.as_str()))
             .chain(given.iter().map(String::as_str))
             .filter_map(step_number)
-            .chain(self.name_counters.get(STEP_LABEL).copied())
+            .chain(self.name_counters.get(&step_label()).copied())
             .max()
             .unwrap_or(0);
         let mut next = base;
@@ -2786,7 +2788,7 @@ impl AppState {
                 if trimmed.is_empty() {
                     next = next.saturating_add(1);
                     last = Some(next);
-                    format!("{STEP_LABEL} {next}")
+                    format!("{} {next}", step_label())
                 } else {
                     trimmed.to_string()
                 }
@@ -2819,7 +2821,7 @@ impl AppState {
         match self.document.add_step_bodies(list) {
             Ok(ids) => {
                 if let Some(n) = last {
-                    self.name_counters.insert(STEP_LABEL.to_string(), n);
+                    self.name_counters.insert(step_label(), n);
                 }
                 self.hover = None;
                 self.selection = None;

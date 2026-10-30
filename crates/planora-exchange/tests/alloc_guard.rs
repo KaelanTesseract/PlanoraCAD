@@ -86,7 +86,7 @@ fn hostile_files_never_ask_for_much_memory() {
         len,
         ExchangeError::Syntax {
             line: 2,
-            msg: "Die Zeile ist zu lang",
+            msg: "Die Zeile ist zu lang".to_string(),
         },
     ));
     for (what, bytes, len, expected) in cases {

@@ -24,13 +24,14 @@ pub use read::error::{
 };
 pub use read::import::{
     ImportOptions, ImportedBody, MAX_STEP_TEXT_BYTES, NORMAL_FILE_NAME, NormalBody, StepImport,
-    UNNAMED_BODY, UnitState, check_normal_header, import_bodies, normalize, read_normal_body,
+    UnitState, check_normal_header, import_bodies, normalize, read_normal_body, unnamed_body,
 };
 pub use read::index::{StepFile, StepHeader, read_step_file};
 pub use read::units::{COARSE_TOL_MM, DEFAULT_FILE_TOL_MM, LengthUnit};
 pub use text::{MAX_NAME_CHARS, StepText, step_string};
 
 use planora_exchange::Progress;
+use planora_i18n::tr;
 use planora_kernel::{Curve, NURBS_EDGE_TOL, Solid, Surface, validate_with};
 use planora_math::Tolerance;
 use std::io::Write;
@@ -111,9 +112,7 @@ pub fn check_body(
         reason,
     };
     if !topology::ids_in_range(body.solid) {
-        return Err(named(
-            "Der Körper verweist auf Teile, die es nicht gibt".into(),
-        ));
+        return Err(named(tr!("step-w-body-dangling")));
     }
     validate_with(body.solid, &opts.tolerance).map_err(|e| named(e.to_string()))?;
     let mut sink = std::io::sink();

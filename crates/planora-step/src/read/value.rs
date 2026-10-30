@@ -1,6 +1,7 @@
 //! Werte und Einträge einer STEP-Datei, wie `StepFile::entity` sie liefert. Typnamen stehen in
 //! Großbuchstaben. Die Zugriffe melden Fehler als `String` (Grund ohne Zeile); der Aufrufer
 //! setzt die Zeile davor.
+use planora_i18n::tr;
 
 /// Ein Parameter.
 #[derive(Clone, Debug, PartialEq)]
@@ -22,22 +23,22 @@ pub enum Value {
 
 impl Value {
     /// Kurze Beschreibung für Meldungen.
-    fn kind(&self) -> &'static str {
+    fn kind(&self) -> String {
         match self {
-            Value::Int(_) => "eine ganze Zahl",
-            Value::Real(_) => "eine Zahl",
-            Value::Str(_) => "ein Text",
-            Value::Enum(_) => "eine Aufzählung",
-            Value::Ref(_) => "ein Verweis",
-            Value::List(_) => "eine Liste",
-            Value::Typed(..) => "ein getypter Wert",
-            Value::Unset => "kein Wert („$“)",
-            Value::Derived => "ein abgeleiteter Wert („*“)",
+            Value::Int(_) => tr!("step-kind-int"),
+            Value::Real(_) => tr!("step-kind-real"),
+            Value::Str(_) => tr!("step-kind-string"),
+            Value::Enum(_) => tr!("step-kind-enum"),
+            Value::Ref(_) => tr!("step-kind-ref"),
+            Value::List(_) => tr!("step-kind-list"),
+            Value::Typed(..) => tr!("step-kind-typed"),
+            Value::Unset => tr!("step-kind-unset"),
+            Value::Derived => tr!("step-kind-derived"),
         }
     }
 
-    fn wrong(&self, want: &str) -> String {
-        format!("Erwartet wird {want}, gefunden: {}.", self.kind())
+    fn wrong(&self, want: String) -> String {
+        tr!("step-expected-found", found = self.kind(), want = want)
     }
 
     /// Zahl; nimmt auch ganze Zahlen (nachsichtig).
@@ -45,7 +46,7 @@ impl Value {
         match self {
             Value::Real(x) => Ok(*x),
             Value::Int(i) => Ok(*i as f64),
-            other => Err(other.wrong("eine Zahl")),
+            other => Err(other.wrong(tr!("step-kind-real"))),
         }
     }
 
@@ -54,7 +55,7 @@ impl Value {
     pub fn measure(&self) -> Result<f64, String> {
         match self {
             Value::Typed(_, args) if args.len() == 1 => args[0].real(),
-            Value::Typed(name, _) => Err(format!("Erwartet wird {name} mit genau einer Zahl.")),
+            Value::Typed(name, _) => Err(tr!("step-expected-one-number", name = name)),
             other => other.real(),
         }
     }
@@ -62,35 +63,35 @@ impl Value {
     pub fn int(&self) -> Result<i64, String> {
         match self {
             Value::Int(i) => Ok(*i),
-            other => Err(other.wrong("eine ganze Zahl")),
+            other => Err(other.wrong(tr!("step-kind-int"))),
         }
     }
 
     pub fn reference(&self) -> Result<u64, String> {
         match self {
             Value::Ref(r) => Ok(*r),
-            other => Err(other.wrong("ein Verweis")),
+            other => Err(other.wrong(tr!("step-kind-ref"))),
         }
     }
 
     pub fn list(&self) -> Result<&[Value], String> {
         match self {
             Value::List(items) => Ok(items),
-            other => Err(other.wrong("eine Liste")),
+            other => Err(other.wrong(tr!("step-kind-list"))),
         }
     }
 
     pub fn text(&self) -> Result<&str, String> {
         match self {
             Value::Str(s) => Ok(s),
-            other => Err(other.wrong("ein Text")),
+            other => Err(other.wrong(tr!("step-kind-string"))),
         }
     }
 
     pub fn enumeration(&self) -> Result<&str, String> {
         match self {
             Value::Enum(e) => Ok(e),
-            other => Err(other.wrong("eine Aufzählung")),
+            other => Err(other.wrong(tr!("step-kind-enum"))),
         }
     }
 
@@ -100,9 +101,7 @@ impl Value {
             "T" | "TRUE" => Ok(Some(true)),
             "F" | "FALSE" => Ok(Some(false)),
             "U" | "UNKNOWN" => Ok(None),
-            other => Err(format!(
-                "Erwartet wird .T., .F. oder .U., gefunden: .{other}."
-            )),
+            other => Err(tr!("step-expected-logical", other = other)),
         }
     }
 
@@ -162,9 +161,9 @@ impl Entity {
     pub fn arg(&self, name: &str, i: usize) -> Result<&Value, String> {
         let args = self
             .part(name)
-            .ok_or_else(|| format!("Ein Eintrag hat die falsche Art (erwartet: {name})."))?;
+            .ok_or_else(|| tr!("step-entry-wrong-kind", name = name))?;
         args.get(i)
-            .ok_or_else(|| format!("Bei einem Eintrag fehlt die {}. Angabe ({name}).", i + 1))
+            .ok_or_else(|| tr!("step-entry-missing-arg", n = i + 1, name = name))
     }
 
     /// Typnamen in der Reihenfolge der Datei.

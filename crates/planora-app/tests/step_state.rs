@@ -975,7 +975,7 @@ fn the_step_label_has_one_source() {
         .import_step(vec![("".into(), shape(&box_at(DVec3::ZERO)))])
         .unwrap()[0];
     let label = s.document.feature(id).unwrap().kind.label();
-    assert_eq!(label, planora_step::UNNAMED_BODY);
+    assert_eq!(label, planora_step::unnamed_body());
     assert_eq!(names(&s), [format!("{label} 1")]);
     let seen = draw_properties(&mut s, true);
     assert!(has_exact(&seen, &label), "Art im Eigenschaftenfeld");

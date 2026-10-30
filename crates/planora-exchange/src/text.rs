@@ -4,6 +4,7 @@
 use crate::error::ExchangeError;
 use crate::limits::MAX_LINE_BYTES;
 use crate::progress::Progress;
+use planora_i18n::tr;
 use std::io::{BufRead, Read};
 
 /// Zählt gelesene Bytes in `progress`.
@@ -74,7 +75,7 @@ impl<R: BufRead> LineReader<R> {
             if self.buf.len() + take > MAX_LINE_BYTES {
                 return Err(ExchangeError::Syntax {
                     line: self.line + 1,
-                    msg: "Die Zeile ist zu lang",
+                    msg: tr!("exchange-line-too-long"),
                 });
             }
             self.buf.extend_from_slice(&rest[..take]);
@@ -109,9 +110,9 @@ pub(crate) fn three_numbers<'a>(
 ) -> Result<[f32; 3], ExchangeError> {
     let mut out = [0.0f32; 3];
     for v in &mut out {
-        let token = tokens.next().ok_or(ExchangeError::Syntax {
+        let token = tokens.next().ok_or_else(|| ExchangeError::Syntax {
             line,
-            msg: "Es fehlt eine Zahl",
+            msg: tr!("exchange-number-missing"),
         })?;
         let x: f32 = token
             .parse()

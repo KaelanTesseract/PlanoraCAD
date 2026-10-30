@@ -7,6 +7,7 @@ mod ray;
 pub use ray::RAY_GRAZING_COS;
 
 use crate::error::KernelError;
+use planora_i18n::tr;
 use planora_math::nurbs::{BezierPatch, MAX_CONTROL_TOTAL, NurbsSurface, uncounted};
 use planora_math::{DVec3, Frame};
 use std::sync::OnceLock;
@@ -162,8 +163,9 @@ impl NurbsSurfaceData {
     ) -> Result<Self, KernelError> {
         let (nu, nv) = surface.counts();
         if nu.saturating_mul(nv) > MAX_CONTROL_TOTAL {
-            return Err(KernelError::InvalidSurface(format!(
-                "zu viele Kontrollpunkte (höchstens {MAX_CONTROL_TOTAL})"
+            return Err(KernelError::InvalidSurface(tr!(
+                "kernel-surface-too-many-points",
+                max = MAX_CONTROL_TOTAL
             )));
         }
         let same = |a: (usize, usize), b: (usize, usize)| {
@@ -171,26 +173,21 @@ impl NurbsSurfaceData {
                 && same_weight(surface.weight_at(a.0, a.1), surface.weight_at(b.0, b.1))
         };
         if periodic_u && !(0..nv).all(|j| same((0, j), (nu - 1, j))) {
-            return Err(KernelError::InvalidSurface(
-                "die Fläche ist in u nicht geschlossen (erste und letzte Kontrollpunktreihe verschieden)"
-                    .into(),
-            ));
+            return Err(KernelError::InvalidSurface(tr!(
+                "kernel-surface-not-closed-u"
+            )));
         }
         if periodic_v && !(0..nu).all(|i| same((i, 0), (i, nv - 1))) {
-            return Err(KernelError::InvalidSurface(
-                "die Fläche ist in v nicht geschlossen (erste und letzte Kontrollpunktreihe verschieden)"
-                    .into(),
-            ));
+            return Err(KernelError::InvalidSurface(tr!(
+                "kernel-surface-not-closed-v"
+            )));
         }
         // Reihe mit festem u-Index zusammengefallen: Pol in u-Richtung.
         let column_collapsed = |i: usize| {
             (1..nv).all(|j| same_point(surface.control_at(i, j), surface.control_at(i, 0)))
         };
         if (0..nu).any(column_collapsed) {
-            return Err(KernelError::InvalidSurface(
-                "eine Linie in v-Richtung fällt zu einem Punkt zusammen (Pol in u-Richtung wird nicht unterstützt)"
-                    .into(),
-            ));
+            return Err(KernelError::InvalidSurface(tr!("kernel-surface-pole-u")));
         }
         let (_, (v0, v1)) = surface.domain();
         let mut poles_v = Vec::new();
@@ -205,10 +202,9 @@ impl NurbsSurfaceData {
             } else if j == nv - 1 {
                 poles_v.push(v1);
             } else {
-                return Err(KernelError::InvalidSurface(
-                    "eine innere Kontrollpunktreihe fällt zu einem Punkt zusammen (innerer Pol)"
-                        .into(),
-                ));
+                return Err(KernelError::InvalidSurface(tr!(
+                    "kernel-surface-inner-pole"
+                )));
             }
         }
         let mut data = NurbsSurfaceData {

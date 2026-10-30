@@ -5,8 +5,8 @@
 use std::collections::HashMap;
 
 use super::{
-    CellKey, Hints, MAX_CURVE_LENGTH_FACTOR, MAX_MARCH_STEPS, MSG_BRANCH, MSG_LOST, MSG_SINGULAR,
-    MSG_TANGENTIAL, PARALLEL_NORMALS, Probe, Ssi, msg_too_long, msg_too_many_steps,
+    CellKey, Hints, MAX_CURVE_LENGTH_FACTOR, MAX_MARCH_STEPS, PARALLEL_NORMALS, Probe, Ssi,
+    msg_branch, msg_lost, msg_singular, msg_tangential, msg_too_long, msg_too_many_steps,
 };
 use planora_math::DVec3;
 
@@ -160,7 +160,7 @@ impl Ssi<'_> {
             let (ga, gb) = (pr.ea.g, pr.eb.g);
             let delta = -(gb.cross(t) * pr.ea.f + t.cross(ga) * pr.eb.f + n * r2) / det;
             if !delta.is_finite() {
-                return Err(super::MSG_NUMERIC.into());
+                return Err(super::msg_numeric());
             }
             if delta.length() > reach {
                 break;
@@ -183,9 +183,9 @@ impl Ssi<'_> {
                 Corr::Outside => CorrKind::Outside,
                 _ => CorrKind::Other,
             };
-            let fail = match corr {
+            let fail: fn() -> String = match corr {
                 Corr::Ok(q) => match self.tangent(&q) {
-                    None => MSG_TANGENTIAL,
+                    None => msg_tangential,
                     Some(tq) => {
                         let tq = tq * sign;
                         let d = q.q - p.q;
@@ -205,7 +205,7 @@ impl Ssi<'_> {
                                 boundary: false,
                             });
                         }
-                        MSG_LOST
+                        msg_lost
                     }
                 },
                 // Am Rand: Auch eine gescheiterte (statt „jenseits“ gemeldete) Korrektur endet die
@@ -226,11 +226,11 @@ impl Ssi<'_> {
                         boundary: true,
                     });
                 }
-                Corr::Outside | Corr::Failed => MSG_LOST,
-                Corr::Singular => MSG_TANGENTIAL,
+                Corr::Outside | Corr::Failed => msg_lost,
+                Corr::Singular => msg_tangential,
             };
             if at_min {
-                return Err(fail.into());
+                return Err(fail());
             }
             *h = (*h * 0.5).max(self.h_min);
         }
@@ -284,7 +284,7 @@ impl Ssi<'_> {
                 if te != DVec3::ZERO
                     && end.residual() + self.res > GRAZING_FRACTION * super::NURBS_FIT_TOL * sin
                 {
-                    return Err(super::MSG_NEAR_TANGENT.into());
+                    return Err(super::msg_near_tangent());
                 }
             }
             Ok(*end)
@@ -342,7 +342,7 @@ impl Ssi<'_> {
                     (gp - gm).abs() / (at(t1 + dt).distance(at(t1 - dt))).max(f64::MIN_POSITIVE);
                 // erreichter Rest (plus Koordinatenauflösung) geteilt durch die Steigung
                 if g1.abs() + self.res > GRAZING_FRACTION * super::NURBS_FIT_TOL * slope {
-                    return Err(super::MSG_NEAR_TANGENT.into());
+                    return Err(super::msg_near_tangent());
                 }
             }
         }
@@ -605,7 +605,7 @@ impl Ssi<'_> {
         });
         let start = seed.q;
         let mut p = *seed;
-        let mut t = self.tangent(&p).ok_or(MSG_TANGENTIAL)? * sign;
+        let mut t = self.tangent(&p).ok_or(msg_tangential())? * sign;
         let mut h = self.h_max;
         let max_len = MAX_CURVE_LENGTH_FACTOR * self.diag.max(self.h_min);
         // Für die Suche tangentialer Stellen: vorletzter Punkt und die letzten beiden |g_a × g_b|.
@@ -641,7 +641,7 @@ impl Ssi<'_> {
                 // (c) Treffen auf eine andere (oder dieselbe) Kurve
                 let arc_q = self.polys[pid].arc[n - 1] + st.dist;
                 if self.hits(pid, trace, p.q, q.q, arc_q, h)? {
-                    return Err(MSG_BRANCH.into());
+                    return Err(msg_branch());
                 }
                 // Tangentiale Stelle zwischen den Punkten (örtliches Minimum von |g_a × g_b|)?
                 let sin_q = q.cross().length();
@@ -651,7 +651,7 @@ impl Ssi<'_> {
                     && sin_p <= sin_q
                     && self.singular_between(&before, &q)?
                 {
-                    return Err(MSG_SINGULAR.into());
+                    return Err(msg_singular());
                 }
                 (before, sin_before, sin_p) = (p, sin_p, sin_q);
                 budget.length += st.dist;

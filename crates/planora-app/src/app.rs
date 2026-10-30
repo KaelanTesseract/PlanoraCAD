@@ -2192,7 +2192,7 @@ fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) -> b
     let state = &mut ws.active_tab_mut().state;
     for face in ViewFace::ALL {
         if entry(ui, true, icons::button(Icon::ViewFace, face.label())).clicked() {
-            commands::timed(face.label(), || state.camera.set_view(face));
+            commands::timed(&face.label(), || state.camera.set_view(face));
             ui.close();
         }
     }

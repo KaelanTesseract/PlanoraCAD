@@ -4,6 +4,7 @@
 use super::error::BlendError;
 use crate::ids::Id;
 use crate::topology::{Edge, Face, Solid, Vertex};
+use planora_i18n::tr;
 use planora_math::DVec3;
 use std::f64::consts::PI;
 
@@ -80,9 +81,9 @@ pub fn edge_sides(
     }
     let uses = edge_uses(solid, edge);
     if uses.len() != 2 {
-        return Err(BlendError::InvalidInput(format!(
-            "Die Kante wird {}-mal statt zweimal verwendet",
-            uses.len()
+        return Err(BlendError::InvalidInput(tr!(
+            "kernel-blend-edge-used-times",
+            n = uses.len()
         )));
     }
     if uses[0].face == uses[1].face {
@@ -91,9 +92,9 @@ pub fn edge_sides(
     let (a, b) = match first_face {
         Some(f) if uses[1].face == f => (uses[1], uses[0]),
         Some(f) if uses[0].face != f => {
-            return Err(BlendError::InvalidInput(
-                "Die gewählte erste Fläche grenzt nicht an die Kante".into(),
-            ));
+            return Err(BlendError::InvalidInput(tr!(
+                "kernel-blend-first-face-not-adjacent"
+            )));
         }
         _ => (uses[0], uses[1]),
     };
@@ -146,10 +147,9 @@ pub fn edge_angle(
         match first {
             None => first = Some(convex),
             Some(c) if c != convex => {
-                return Err(BlendError::Unsupported(
-                    "Die Kante wechselt zwischen konvex und konkav; das wird nicht unterstützt"
-                        .into(),
-                ));
+                return Err(BlendError::Unsupported(tr!(
+                    "kernel-blend-edge-convex-concave"
+                )));
             }
             Some(_) => {}
         }
@@ -214,5 +214,5 @@ pub fn face_name(solid: &Solid, face: Id<Face>) -> String {
         .get(face)
         .and_then(|f| f.tag.as_ref())
         .map(|t| t.role.clone())
-        .unwrap_or_else(|| format!("Fläche {}", face.index() + 1))
+        .unwrap_or_else(|| tr!("kernel-face-n", n = face.index() + 1))
 }

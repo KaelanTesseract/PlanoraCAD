@@ -1,21 +1,32 @@
 use crate::discretize::Discretizer;
 use crate::mesh::{EdgeLine, FaceRange, Mesh, TessellationOptions};
+use planora_i18n::tr;
 use planora_kernel::{Face, Id, Loop, Solid, Surface, UvRect};
 use planora_math::{DVec2, DVec3, Frame, TAU};
 use std::collections::HashMap;
-use thiserror::Error;
+use std::fmt;
 
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MeshError {
-    #[error("Fläche {0}: Triangulation fehlgeschlagen")]
     Triangulation(usize),
-    #[error("Fläche {0}: gekrümmte Fläche ohne Parameterbereich")]
     MissingPatch(usize),
-    #[error("Netz zu groß: mehr als 2³² Eckpunkte oder Indizes")]
     TooLarge,
-    #[error("Fläche {0}: ein Randpunkt lässt sich nicht auf die Freiformfläche zurückrechnen")]
     OffSurface(usize),
 }
+
+impl fmt::Display for MeshError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            MeshError::Triangulation(n) => tr!("mesh-triangulation", face = *n),
+            MeshError::MissingPatch(n) => tr!("mesh-missing-patch", face = *n),
+            MeshError::TooLarge => tr!("mesh-too-large"),
+            MeshError::OffSurface(n) => tr!("mesh-off-surface", face = *n),
+        };
+        f.write_str(&text)
+    }
+}
+
+impl std::error::Error for MeshError {}
 
 /// Wandelt eine Anzahl in einen `u32`-Index um, ohne still abzuschneiden.
 pub(crate) fn index_u32(n: usize) -> Result<u32, MeshError> {

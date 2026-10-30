@@ -2,7 +2,7 @@ use crate::browser::error_color;
 use crate::formula_field::FormulaField;
 use crate::mesh_body::{euler_degrees, report_text, rotation_from_degrees, warning_color};
 use crate::sketch_view::format_number;
-use crate::state::{AppState, BodyKind, STEP_LABEL};
+use crate::state::{AppState, BodyKind, step_label};
 use crate::theme;
 use planora_exchange::MeshTransform;
 use planora_feature::expr::number_text;
@@ -494,7 +494,7 @@ fn body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
             .flatten()
             .and_then(|f| state.document.step_body(f));
         if let Some(shape) = step {
-            row(ui, &tr!("props-kind"), theme::value(STEP_LABEL));
+            row(ui, &tr!("props-kind"), theme::value(step_label()));
             // Der Körper kann seit dem Import gerundet oder verrechnet sein: Die Zahl der Form
             // aus der Datei heißt hier ausdrücklich so, „Flächen / Kanten“ unten zählt den
             // Körper, wie er jetzt ist.

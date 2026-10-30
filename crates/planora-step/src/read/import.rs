@@ -46,6 +46,7 @@ use crate::read::units::{DEFAULT_FILE_TOL_MM, LengthUnit, Units, context_units};
 use crate::topology::CLASSIFY_CHORD;
 use crate::{StepBody, StepError, StepOptions, check_body, write_step};
 use planora_exchange::Progress;
+use planora_i18n::tr;
 use planora_kernel::Solid;
 use planora_math::{DVec3, Tolerance};
 use planora_mesh::{TessellationOptions, tessellate};
@@ -59,7 +60,9 @@ pub const MAX_STEP_TEXT_BYTES: usize = 64 * 1024 * 1024;
 
 /// Name in Meldungen für Körper ohne Namen (die App vergibt später „STEP-Körper n“, siehe
 /// [`ImportedBody::warnings_named`]).
-pub const UNNAMED_BODY: &str = "STEP-Körper";
+pub fn unnamed_body() -> String {
+    tr!("step-unnamed-body")
+}
 
 const NORMAL_START: &str = "ISO-10303-21;";
 const NORMAL_END: &str = "END-ISO-10303-21;";
@@ -295,9 +298,9 @@ fn import_one(
     progress: &Progress,
 ) -> Result<ImportedBody, StepReadError> {
     let shown = if b.name.is_empty() {
-        UNNAMED_BODY
+        unnamed_body()
     } else {
-        &b.name
+        b.name.clone()
     };
     let placement_reason = b
         .placement_note
@@ -315,9 +318,9 @@ fn import_one(
         outcome: Err(String::new()),
     };
     let note = match (&placement_reason, &b.placement_note) {
-        (Some(reason), _) => Some(placement_note(shown, reason)),
+        (Some(reason), _) => Some(placement_note(&shown, reason)),
         (None, Some(note)) => Some(note.clone()),
-        (None, None) => b.placement_guessed.then(|| guessed_note(shown)),
+        (None, None) => b.placement_guessed.then(|| guessed_note(&shown)),
     };
     let u = match units.of(b.context) {
         Ok(u) => u,
@@ -354,7 +357,7 @@ fn import_one(
                         Err(Stop::Failed(m)) => Err(normal_failure(&m)),
                     }
                 }
-                Err(_) => Err("Der Körper lässt sich nicht an seine Lage bringen.".into()),
+                Err(_) => Err(tr!("step-r-body-placement")),
             }
         }
         Err(Skip(m)) => Err(m),
@@ -448,7 +451,7 @@ fn write_normal(solid: &Solid, name: &str) -> Result<String, String> {
     check_body(&body, &opts, &quiet).map_err(writer_reason)?;
     let mut out = Vec::new();
     write_step(&[body], &opts, &mut out, &quiet).map_err(writer_reason)?;
-    String::from_utf8(out).map_err(|_| "Der Schreiber lieferte keinen Text.".to_string())
+    String::from_utf8(out).map_err(|_| tr!("step-r-writer-no-text"))
 }
 
 /// Warum das Normalisieren aufhörte.
@@ -461,10 +464,7 @@ enum Stop {
 /// Grund für einen Körper, der sich lesen, aber nicht normalisieren ließ: ohne „Zeile n:“
 /// (die Zeile gehörte zu unserem eigenen Text, nicht zur Datei des Nutzers).
 fn normal_failure(reason: &str) -> String {
-    format!(
-        "Der Körper lässt sich nicht in die Form des Programms umschreiben: {}",
-        without_line(reason)
-    )
+    tr!("step-r-body-convert", why = without_line(reason))
 }
 
 /// `reason` ohne vorangestelltes „Zeile n: “.
@@ -556,13 +556,13 @@ pub fn normalize(solid: &Solid, name: &str) -> Result<NormalBody, String> {
 /// Inhalt wird nicht gelesen.
 pub fn check_normal_header(text: &str) -> Result<(), String> {
     if text.len() > MAX_STEP_TEXT_BYTES {
-        return Err("Der Text ist größer als 64 MB.".into());
+        return Err(tr!("step-r-text-too-big"));
     }
     if !text.is_ascii() {
-        return Err("Der Text enthält Zeichen außerhalb von ASCII.".into());
+        return Err(tr!("step-r-text-not-ascii"));
     }
     if !text.starts_with(NORMAL_START) || !text.trim_end().ends_with(NORMAL_END) {
-        return Err("Der Text hat nicht Anfang und Ende einer STEP-Datei.".into());
+        return Err(tr!("step-r-text-not-step"));
     }
     Ok(())
 }
@@ -585,17 +585,14 @@ fn read_normal_inner(text: &str) -> Result<Solid, String> {
     };
     let found = find_bodies(&file, &units_of).map_err(|e| e.to_string())?;
     let [body] = found.as_slice() else {
-        return Err(format!(
-            "Der Text enthält {} Körper statt einem.",
-            found.len()
-        ));
+        return Err(tr!("step-r-text-body-count", n = found.len()));
     };
     let units = units_of(body.context).map_err(|e| e.to_string())?;
     if units.length != LengthUnit::Millimeter || !units.length_known {
-        return Err("Der Text ist nicht in Millimeter geschrieben.".into());
+        return Err(tr!("step-r-text-not-mm"));
     }
     if body.placement_note.is_some() || body.placement != planora_math::DMat4::IDENTITY {
-        return Err("Der Körper im Text liegt nicht an der Einheitslage.".into());
+        return Err(tr!("step-r-text-not-unit-pos"));
     }
     let built = build_solid(
         &file,
@@ -705,8 +702,7 @@ mod tests {
             normal_failure(
                 "Zeile 121: Der Parameterbereich einer Fläche reicht über mehr als einen Umlauf."
             ),
-            "Der Körper lässt sich nicht in die Form des Programms umschreiben: Der \
-             Parameterbereich einer Fläche reicht über mehr als einen Umlauf."
+            tr!("step-r-body-convert")
         );
         assert_eq!(without_line("Zeile x: a"), "Zeile x: a");
         assert_eq!(without_line("Zeile : a"), "Zeile : a");

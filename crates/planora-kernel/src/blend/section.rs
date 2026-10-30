@@ -5,6 +5,7 @@
 
 use super::error::BlendError;
 use crate::geometry::Surface;
+use planora_i18n::tr;
 use planora_math::DVec3;
 
 /// Höchstzahl Newton-Schritte je Querschnitt (deterministische Arbeitsgrenze).
@@ -209,11 +210,7 @@ pub fn chamfer_section(
             // Drehung in der Querschnittsebene: `u` und `na` stehen senkrecht aufeinander, der
             // Winkel zwischen Fase und Tangente von A ist genau `angle` (P4).
             let dir = u * angle.cos() - na * (s * angle.sin());
-            let misfit = || {
-                BlendError::InvalidParameter(
-                    "Der Winkel der Fase passt nicht zu dieser Kante (die Fase trifft die zweite Fläche nicht)".into(),
-                )
-            };
+            let misfit = || BlendError::InvalidParameter(tr!("kernel-blend-chamfer-angle-misfit"));
             let eps = SECTION_RESIDUAL_REL * (1.0 + o.abs().max_element() + distance);
             let mut lam = back.length();
             for _ in 0..SECTION_NEWTON_STEPS {
@@ -286,7 +283,9 @@ pub const FREEFORM_CURVATURE_MARGIN: f64 = 1e-3;
 /// Parameterrichtungen); darunter ist die Parametrisierung am Fußpunkt entartet (Pol).
 const MIN_PARAM_SIN2: f64 = 1e-12;
 /// Meldung, wenn die Krümmung einer Freiformfläche an einem Berührpunkt nicht bestimmbar ist.
-pub const FREEFORM_POLE: &str = "Die Rundung berührt eine Freiformfläche an einer entarteten Stelle (etwa einem Pol); dort lässt sich die Krümmung nicht prüfen";
+pub fn freeform_pole() -> String {
+    tr!("kernel-blend-freeform-pole")
+}
 
 /// Krümmungsprüfung für Freiformflächen (Spec §3.4): Am Fußpunkt `p` (Punkt auf der Fläche)
 /// werden aus erster und zweiter Fundamentalform die Hauptkrümmungen zur Kugel hin (`toward`,
@@ -313,7 +312,7 @@ pub fn check_freeform_curvature(
     let det = e * g - f * f;
     let n = su.cross(sv).normalize_or_zero();
     if !(det > MIN_PARAM_SIN2 * e * g && det.is_finite() && n != DVec3::ZERO) {
-        return Err(BlendError::Unsupported(FREEFORM_POLE.into()));
+        return Err(BlendError::Unsupported(freeform_pole()));
     }
     // Normale zur Kugel hin: positive Krümmung heißt, die Fläche biegt sich zur Kugel.
     let m = if n.dot(toward) >= 0.0 { n } else { -n };
@@ -322,7 +321,7 @@ pub fn check_freeform_curvature(
     let k_mean = (e * nn - 2.0 * f * mm + g * l) / (2.0 * det);
     let k_max = k_mean + (k_mean * k_mean - k_gauss).max(0.0).sqrt();
     if !k_max.is_finite() {
-        return Err(BlendError::Unsupported(FREEFORM_POLE.into()));
+        return Err(BlendError::Unsupported(freeform_pole()));
     }
     if radius * k_max >= 1.0 - FREEFORM_CURVATURE_MARGIN {
         return Err(BlendError::CurvatureTooSmall { face: face.into() });

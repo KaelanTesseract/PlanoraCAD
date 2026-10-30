@@ -26,6 +26,7 @@
 
 use crate::read::geom::Skip;
 use crate::read::topo::{RawBody, place};
+use planora_i18n::tr;
 use planora_kernel::{Curve, Surface};
 use planora_math::{DMat3, DVec3, Tolerance};
 use std::collections::HashMap;
@@ -128,25 +129,19 @@ pub(crate) fn short_number(x: f64) -> String {
     } else {
         s
     };
-    s.replace('.', ",")
+    planora_i18n::localize_decimal(&s)
 }
 
 /// Warnungstext für grobe Dateien.
 /// Warnung für eine Datei ohne Genauigkeit (P4: „Genauigkeit unbekannt“; gerechnet wird mit
 /// `tol_mm`, der Vorgabe 0,001 mm).
 pub fn unknown_accuracy_warning(tol_mm: f64) -> String {
-    format!(
-        "Genauigkeit der Datei unbekannt (angenommen {} mm): Rechnen mit diesem Körper kann scheitern.",
-        short_number(tol_mm)
-    )
+    tr!("step-r-accuracy-unknown", mm = short_number(tol_mm))
 }
 
 /// Warnung für eine grobe Datei, die ihre Genauigkeit nennt (gröber als `COARSE_TOL_MM`).
 pub fn coarse_warning(tol_mm: f64) -> String {
-    format!(
-        "Genauigkeit der Datei {} mm: Rechnen mit diesem Körper kann scheitern.",
-        short_number(tol_mm)
-    )
+    tr!("step-r-accuracy-coarse", mm = short_number(tol_mm))
 }
 
 /// Größter Betrag einer Koordinate (mm, 1 000 km), den das Zusammenziehen annimmt.
@@ -203,9 +198,7 @@ pub fn weld_body(raw: &mut RawBody, tol: f64) -> Result<(), Skip> {
         .iter()
         .any(|p| !p.is_finite() || p.abs().max_element() > MAX_COORD_MM)
     {
-        return Err(Skip(
-            "Der Körper liegt weiter als 1 000 km vom Ursprung entfernt.".into(),
-        ));
+        return Err(Skip(tr!("step-r-body-far")));
     }
     let tol = tol.max(Tolerance::default().linear);
     let (vertex_shell, edge_shell) = first_shells(raw);
@@ -336,8 +329,8 @@ pub fn check_open_edges(raw: &RawBody, tol: f64) -> Result<(), Skip> {
     }
     let at = place(edge_at(raw, first, 0.5));
     Err(Skip(match gap_of(raw, &grid, first, radius) {
-        Some(gap) => format!("Lücke von {} mm an der Kante bei {at}.", short_number(gap)),
-        None => format!("Der Körper ist ungültig: Die Kante bei {at} gehört nur zu einer Fläche."),
+        Some(gap) => tr!("step-r-gap", gap = short_number(gap), at = at),
+        None => tr!("step-r-body-invalid-edge", at = at),
     }))
 }
 

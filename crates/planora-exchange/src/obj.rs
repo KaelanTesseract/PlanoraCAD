@@ -8,6 +8,7 @@ use crate::mesh::ExchangeMesh;
 use crate::progress::Progress;
 use crate::source::ExportBody;
 use crate::text::{CountingReader, LineReader, three_numbers};
+use planora_i18n::tr;
 use planora_math::DVec3;
 use std::cmp::Ordering;
 use std::io::{BufReader, Read, Write};
@@ -111,7 +112,7 @@ pub fn read_obj<R: Read>(
                 if corners.len() < 3 {
                     return Err(ExchangeError::Syntax {
                         line,
-                        msg: "Eine Fläche braucht mindestens drei Ecken",
+                        msg: tr!("exchange-obj-three-corners"),
                     });
                 }
                 triangulate(&positions, &corners, line, &mut indices)?;
@@ -136,7 +137,7 @@ fn corner(token: &str, count: usize, line: usize) -> Result<u32, ExchangeError> 
     let first = token.split('/').next().unwrap_or_default();
     let i: i64 = first.parse().map_err(|_| ExchangeError::Syntax {
         line,
-        msg: "Eine Ecke hat keine gültige Punktnummer",
+        msg: tr!("exchange-obj-bad-index"),
     })?;
     let count = count as i64;
     let index = match i.cmp(&0) {

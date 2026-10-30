@@ -19,6 +19,7 @@ use crate::ids::Id;
 use crate::nurbs_surface::{NurbsSurfaceData, RAY_GRAZING_COS};
 use crate::topology::{Edge, Face, Solid};
 use crate::validate::point_surface_tol;
+use planora_i18n::tr;
 use planora_math::{DVec2, DVec3, Tolerance};
 use std::cell::OnceCell;
 
@@ -300,19 +301,22 @@ fn cast(
 }
 
 /// Meldung, wenn gegen einen Körper mit Freiformfläche keine zwei Strahlrichtungen eindeutig sind.
-pub(crate) const FREEFORM_GRAZING: &str =
-    "Die Lage des Flächenstücks zum Körper ist nicht eindeutig bestimmbar (Streifschuss)";
+pub(crate) fn freeform_grazing() -> String {
+    tr!("kernel-freeform-grazing")
+}
 
 /// Meldung, wenn sich zwei eindeutige Strahlrichtungen gegen einen Körper mit Freiformfläche
 /// widersprechen (ein Treffer wurde übersehen oder doppelt gezählt).
-pub(crate) const FREEFORM_RAYS_DISAGREE: &str = "Die Lage des Flächenstücks zum Körper ist nicht eindeutig bestimmbar (die Teststrahlen widersprechen sich)";
+pub(crate) fn freeform_rays_disagree() -> String {
+    tr!("kernel-freeform-rays-disagree")
+}
 
 /// Strahlverfahren mit allen festen Richtungen, bis eine eindeutig ist.
 ///
 /// Hat der Körper eine Freiformfläche, werden nach den sechs gewöhnlichen noch sechs weitere
 /// Richtungen versucht, und **zwei** eindeutige Richtungen müssen dasselbe ergeben
 /// (Gegenprobe gegen einen übersehenen Treffer der numerischen Strahlrechnung); widersprechen sie
-/// sich: [`FREEFORM_RAYS_DISAGREE`]; gibt es keine zwei eindeutigen: [`FREEFORM_GRAZING`].
+/// sich: [`freeform_rays_disagree`]; gibt es keine zwei eindeutigen: [`freeform_grazing`].
 /// Rein analytische Körper: unverändert die erste eindeutige Richtung.
 fn cast_all(other: &[FaceGeom], p: DVec3, tol: &Tolerance) -> Result<bool, BooleanError> {
     let reach = reach(other, p);
@@ -331,10 +335,10 @@ fn cast_all(other: &[FaceGeom], p: DVec3, tol: &Tolerance) -> Result<bool, Boole
         match first {
             None => first = Some(inside),
             Some(f) if f == inside => return Ok(inside),
-            Some(_) => return Err(BooleanError::Unsupported(FREEFORM_RAYS_DISAGREE.into())),
+            Some(_) => return Err(BooleanError::FreeformLimit(freeform_rays_disagree())),
         }
     }
-    Err(BooleanError::Unsupported(FREEFORM_GRAZING.into()))
+    Err(BooleanError::FreeformLimit(freeform_grazing()))
 }
 
 /// Lage eines Punkts relativ zu einem Körper (gegeben durch seine Flächen).
@@ -344,9 +348,9 @@ pub fn solid_contains(
     tol: &Tolerance,
 ) -> Result<Location, BooleanError> {
     if !p.is_finite() {
-        return Err(BooleanError::InvalidInput(
-            "Der Punkt hat keine endlichen Koordinaten".into(),
-        ));
+        return Err(BooleanError::InvalidInput(tr!(
+            "kernel-boolean-point-not-finite"
+        )));
     }
     if on_surface(other, p, tol).is_some() {
         return Ok(Location::OnBoundary);
@@ -487,7 +491,9 @@ const ON_SURFACE_MIN_COS: f64 = 0.5;
 
 /// Meldung, wenn ein Flächenstück eine Freiformfläche nur schräg berührt (siehe
 /// [`classify_region`]).
-pub(crate) const OBLIQUE_ON_FREEFORM: &str = "Ein Flächenstück liegt schräg auf einer Freiformfläche des anderen Körpers; die Lage lässt sich nicht sicher bestimmen";
+pub(crate) fn oblique_on_freeform() -> String {
+    tr!("kernel-oblique-on-freeform")
+}
 
 /// Ordnet ein Flächenstück relativ zum anderen Körper ein.
 pub fn classify_region(
@@ -506,7 +512,7 @@ pub fn classify_region(
         let freeform =
             matches!(face.surface, Surface::Nurbs(_)) || matches!(g.surface, Surface::Nurbs(_));
         if freeform && n.dot(n2).abs() < ON_SURFACE_MIN_COS {
-            return Err(BooleanError::Unsupported(OBLIQUE_ON_FREEFORM.into()));
+            return Err(BooleanError::FreeformLimit(oblique_on_freeform()));
         }
         return Ok(if n.dot(n2) > 0.0 {
             Class::OnSame

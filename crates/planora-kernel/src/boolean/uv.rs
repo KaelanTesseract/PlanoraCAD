@@ -10,6 +10,7 @@ use crate::geometry::{Curve, Surface, UvRect};
 use crate::ids::Id;
 use crate::topology::{Face, FaceTag, Loop, Solid};
 use crate::validate::{NURBS_EDGE_TOL, edge_surface_tol};
+use planora_i18n::tr;
 use planora_math::{DVec2, DVec3, TAU, Tolerance, orient2d};
 use std::cell::Cell;
 
@@ -123,11 +124,13 @@ fn project_all(surface: &Surface, pts: &[DVec3]) -> Vec<(f64, f64)> {
 }
 
 /// Meldung, wenn eine Randkante einer Freiformfläche nicht auf ihr liegt.
-pub(crate) const EDGE_OFF_FREEFORM: &str = "Eine Kante liegt nicht auf der Freiformfläche";
+pub(crate) fn edge_off_freeform() -> String {
+    tr!("kernel-edge-off-freeform")
+}
 
 /// Liegen alle Randkanten (an ihren Abtastpunkten und Enden) auf der Freiformfläche, höchstens
 /// [`edge_surface_tol`] entfernt? Sonst ließen sich ihre Parameter nicht sinnvoll zurückrechnen:
-/// [`BooleanError::Unsupported`] mit [`EDGE_OFF_FREEFORM`]. Analytische Flächen: immer `Ok`
+/// [`BooleanError::Unsupported`] mit [`edge_off_freeform`]. Analytische Flächen: immer `Ok`
 /// (wie bisher keine geometrische Prüfung).
 pub(crate) fn check_loops_on_surface(face: &FaceGeom, tol: &Tolerance) -> Result<(), BooleanError> {
     check_segs_on_surface(&face.surface, face.loops.iter().flatten(), tol)
@@ -152,7 +155,7 @@ pub(crate) fn check_segs_on_surface<'a>(
             d.abs() > limit
         });
         if off {
-            return Err(BooleanError::Unsupported(EDGE_OFF_FREEFORM.into()));
+            return Err(BooleanError::FreeformLimit(edge_off_freeform()));
         }
     }
     Ok(())

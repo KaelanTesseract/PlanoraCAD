@@ -18,9 +18,9 @@ use planora_project::library::Library;
 
 const BIG: Vec2 = vec2(1920.0, 1080.0);
 
-/// Texte, die zu Dateien späterer Tasks gehören und hier noch deutsch sind (Task 12: Würfelseiten).
-/// Sie werden nur von der Deutsch-Prüfung ausgenommen, nicht von den Erwartungen.
-const LATER_TASKS: [&str; 1] = ["Würfel"];
+/// Texte, die zu Dateien späterer Tasks gehören und hier noch deutsch sind (keine mehr: die
+/// Würfelseiten kamen mit Task 12).
+const LATER_TASKS: [&str; 0] = [];
 
 struct Rig {
     ctx: egui::Context,
