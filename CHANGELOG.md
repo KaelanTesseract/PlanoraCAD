@@ -11,6 +11,9 @@ Hier steht, was sich in jeder Version geändert hat. Die neueste Version steht o
 - Weitere Sprachen lassen sich ohne Programmieren hinzufügen: eine Textdatei je Sprache in den Ordner `languages` legen. Wie das geht, steht auf Englisch in `docs/uebersetzen.md`.
 - Rückmeldung und Absturzbericht: Das Formular und die Vorlage öffnen sich in der Sprache des Programms. Protokoll und Absturzbericht sind immer englisch.
 
+### Behoben
+- Eine neue Schnittansicht landete manchmal auf dem Schriftfeld. Jetzt weicht sie auf die andere Seite der Ausgangsansicht aus oder rückt näher heran, wenn dort Schriftfeld, Tabellen oder der Blattrand im Weg sind.
+
 ## 0.0.2-dev.1
 
 Das ist die erste Entwicklerversion mit Update-Funktion. Sie ist noch nicht für den Alltag gedacht.

@@ -9,12 +9,14 @@
 //! als [`SNAP_PX`] daran liegt ([`line_for`]). [`create`] ist genau eine Änderung des Dokuments.
 //!
 //! **Lage der neuen Ansicht (S12):** abhängig von der Quellansicht mit deren Maßstab, im
-//! Vorgabeabstand; liegt schon ein Kind derselben Quellansicht in derselben Richtung, dahinter.
+//! Vorgabeabstand; liegen dort schon Ansichten, dahinter. Ragt sie so auf Schriftfeld, Tabellen
+//! oder über den Rahmen, auf die Gegenseite ([`section_distance`]).
 
 use crate::dimension_state::{no_drawing, no_view, views_pending};
 use crate::dimension_tool::sentence;
 use crate::drawing_dialog::sketch_blocked;
 use crate::drawing_state::{default_distance, estimate_view_size};
+use crate::drawing_view;
 use crate::msg::Msg;
 use crate::sketch_view::parse_number;
 use crate::state::AppState;
@@ -25,8 +27,8 @@ use planora_drawing::annotate::{
 use planora_drawing::sheet::{SheetTransform, view_transform};
 use planora_drawing::sheet_frame::sheet_scale;
 use planora_drawing::{
-    Basis, Drawing, DrawingId, DrawingKind, GAP_MM, MAX_SECTIONS, Placement, ViewId, ViewKind,
-    ViewLines, ViewSpec, align_dir, plane_offset_from_view, section_kind, section_line_coord,
+    Basis, Drawing, DrawingId, DrawingKind, GAP_MM, MAX_SECTIONS, ViewId, ViewKind, ViewLines,
+    ViewSpec, align_dir, plane_offset_from_view, section_kind, section_line_coord,
 };
 use planora_feature::FeatureError;
 use planora_i18n::tr;
@@ -234,30 +236,92 @@ fn feature_text(e: FeatureError) -> Msg {
     }
 }
 
-/// Abstand der neuen Schnittansicht `kind` aus `parent` (S12).
+/// Abstand der neuen Schnittansicht `kind` aus `parent` (S12): auf der Ausrichtungsachse im
+/// Vorgabeabstand, hinter Ansichten, die dort schon liegen. Ragt sie so über den Rahmen oder auf
+/// Schriftfeld, Änderungstabelle, Hinweisfeld oder Stückliste, kommt sie auf die Gegenseite der
+/// Quellansicht (negativer Abstand); passt sie auf keiner Seite, wird die Lücke zwischen den
+/// Ansichten von [`GAP_MM`] auf die Hälfte enger. Passt sie auch dann nicht, die Lage, in der sie
+/// am wenigsten davon überdeckt (bei Gleichstand die übliche).
 fn section_distance(state: &AppState, d: &Drawing, parent: &ViewSpec, kind: ViewKind) -> f64 {
     let base = default_distance(&state.bodies, parent.kind, kind, parent.scale, parent.scale);
-    let Some(dir) = align_dir(d.projection, parent.kind, kind) else {
+    let Some((ax, ay)) = align_dir(d.projection, parent.kind, kind) else {
         return base;
     };
-    let widest = d
+    let dir = DVec2::new(ax, ay);
+    let Some(centre) = drawing_view::center_of(d, parent.id, d.views.len()) else {
+        return base;
+    };
+    let half = |k: ViewKind, f: f64| {
+        let (w, h) = estimate_view_size(&state.bodies, k);
+        DVec2::new(w, h) * f / 2.0
+    };
+    let size = half(kind, parent.scale.factor());
+    // Geschätzte Blattflächen der vorhandenen Ansichten.
+    let others: Vec<(DVec2, DVec2)> = d
         .views
         .iter()
-        .filter(|c| c.parent == Some(parent.id))
-        .filter(|c| align_dir(d.projection, parent.kind, c.kind) == Some(dir))
-        .filter_map(|c| match c.placement {
-            Placement::Aligned { distance } => Some(distance),
-            Placement::Free { .. } => None,
+        .filter_map(|v| {
+            let c = drawing_view::center_of(d, v.id, d.views.len())?;
+            let h = half(v.kind, v.scale.factor());
+            Some((c - h, c + h))
         })
-        .fold(None::<f64>, |m, x| Some(m.map_or(x, |m| m.max(x))));
-    match widest {
-        Some(w) => {
-            let (ew, eh) = estimate_view_size(&state.bodies, kind);
-            let ext = if dir.0 != 0.0 { ew } else { eh };
-            base.max(w + ext * parent.scale.factor() + GAP_MM)
+        .collect();
+    let rect = |dist: f64| {
+        let c = centre + dir * dist;
+        (c - size, c + size)
+    };
+    let hit = |a: (DVec2, DVec2), b: &(DVec2, DVec2)| {
+        a.0.x < b.1.x && b.0.x < a.1.x && a.0.y < b.1.y && b.0.y < a.1.y
+    };
+    // Auf einer Seite (`sign`) mit der Lücke `gap` hinter alle Ansichten rücken, die im Weg
+    // liegen.
+    let past = |sign: f64, gap: f64| {
+        let mut dist = sign * (base - GAP_MM + gap);
+        for _ in 0..=others.len() {
+            let r = rect(dist);
+            let Some(far) = others
+                .iter()
+                .filter(|o| hit(r, o))
+                .map(|o| {
+                    // Fernste Kante der Ansicht im Weg, gemessen längs `sign · dir` ab `centre`.
+                    let along = |p: DVec2| (p - centre).dot(dir) * sign;
+                    along(o.0).max(along(o.1))
+                })
+                .reduce(f64::max)
+            else {
+                break;
+            };
+            dist = sign * (far + gap + size.dot(dir.abs()));
         }
-        None => base,
+        dist
+    };
+    let layout = drawing_view::placement_layout(state, d);
+    let blocked: Vec<(DVec2, DVec2)> = [Some(layout.title), Some(layout.revisions)]
+        .into_iter()
+        .chain([layout.notes, layout.parts])
+        .flatten()
+        .collect();
+    // Fläche über dem Rahmen hinaus und auf Schriftfeld, Änderungstabelle, Hinweisfeld oder
+    // Stückliste.
+    let outside = |r: (DVec2, DVec2)| {
+        let area = |a: DVec2, b: DVec2| (b.x - a.x).max(0.0) * (b.y - a.y).max(0.0);
+        let cut = |b: &(DVec2, DVec2)| area(r.0.max(b.0), r.1.min(b.1));
+        area(r.0, r.1) - cut(&layout.frame) + blocked.iter().map(cut).sum::<f64>()
+    };
+    let mut best = (f64::INFINITY, base);
+    for gap in [GAP_MM, GAP_MM / 2.0] {
+        for sign in [1.0, -1.0] {
+            let dist = past(sign, gap);
+            let o = outside(rect(dist));
+            if o <= 1e-9 {
+                return dist;
+            }
+            if o < best.0 - 1e-9 {
+                best = (o, dist);
+            }
+        }
     }
+    best.1
 }
 
 /// Legt eine Schnittansicht aus `parent` an: Schnittlinie `horizontal` bei der Ansichtskoordinate

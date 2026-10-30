@@ -1531,3 +1531,107 @@ fn window_sizes() {
         }
     }
 }
+
+// Lage neuer Schnitte ---------------------------------------------------------------------------
+
+/// Blatt-Hüllbox der gerechneten Ansicht `view`.
+fn sheet_box(st: &AppState, d: DrawingId, view: ViewId) -> (DVec2, DVec2) {
+    let ((x0, y0), (x1, y1)) = bbox(st, d, view);
+    let (a, b) = (pt(st, d, view, (x0, y0)), pt(st, d, view, (x1, y1)));
+    (a.min(b), a.max(b))
+}
+
+fn overlaps(a: (DVec2, DVec2), b: (DVec2, DVec2)) -> bool {
+    a.0.x < b.1.x && b.0.x < a.1.x && a.0.y < b.1.y && b.0.y < a.1.y
+}
+
+/// Neue Zeichnung wie aus dem Fenster „Neue Zeichnung“ (Vorgaben bis auf das Papier `paper`,
+/// quer, Maßstab `scale` oder der Vorschlag), dazu die Ansichten `extra` wie über das Menü.
+fn dialog_drawing(
+    paper: Paper,
+    scale: Option<Scale>,
+    extra: &[ViewKind],
+) -> (AppState, DrawingId, ViewId, Harness) {
+    let mut st = AppState::new();
+    st.create_box(DVec3::new(40.0, 20.0, 60.0)).unwrap();
+    let mut dialog = planora_app::drawing_dialog::NewDrawingDialog::new(&st);
+    dialog.paper = paper;
+    dialog.scale = scale.unwrap_or_else(|| dialog.suggestion(&st));
+    let d = dialog.create(&mut st).expect("Zeichnung");
+    let front = drawing(&st, d).views[0].id;
+    for k in extra {
+        st.drawing_ui.selected_view = Some(front);
+        drawing_view::add_view(&mut st, *k).expect("Ansicht");
+    }
+    let mut h = open(&mut st, d, BIG);
+    compute(&mut st, &mut h);
+    (st, d, front, h)
+}
+
+/// Die Schnittansicht `sec` liegt im Rahmen, nicht auf Schriftfeld, Änderungstabelle,
+/// Hinweisfeld oder Stückliste und nicht auf einer anderen Ansicht.
+fn assert_free_spot(st: &AppState, d: DrawingId, sec: ViewId, what: &str) {
+    let dr = drawing(st, d);
+    let layout = drawing_view::placement_layout(st, &dr);
+    let r = sheet_box(st, d, sec);
+    let f = layout.frame;
+    assert!(
+        r.0.x >= f.0.x && r.0.y >= f.0.y && r.1.x <= f.1.x && r.1.y <= f.1.y,
+        "{what}: {r:?} ragt über den Rahmen {f:?}"
+    );
+    assert!(
+        !overlaps(r, layout.title),
+        "{what}: {r:?} auf dem Schriftfeld"
+    );
+    assert!(
+        !overlaps(r, layout.revisions),
+        "{what}: {r:?} auf der Änderungstabelle"
+    );
+    for b in [layout.notes, layout.parts].into_iter().flatten() {
+        assert!(
+            !overlaps(r, b),
+            "{what}: {r:?} auf Hinweisfeld/Stückliste {b:?}"
+        );
+    }
+    for v in dr.views.iter().filter(|v| v.id != sec) {
+        assert!(
+            !overlaps(r, sheet_box(st, d, v.id)),
+            "{what}: liegt auf Ansicht {:?}",
+            v.kind
+        );
+    }
+}
+
+#[test]
+fn new_section_avoids_title_block_and_views() {
+    // Nur die Grundansicht (so legt das Fenster sie an, A4 ist die Vorgabe), waagerechter und
+    // senkrechter Schnitt. Mit 20 mm Lücke passt der Schnitt auf A4 auf keiner Seite, mit der
+    // halben Lücke schon.
+    for horizontal in [true, false] {
+        let (mut st, d, front, mut h) = dialog_drawing(Paper::A4, None, &[]);
+        let ((x0, y0), (x1, y1)) = bbox(&st, d, front);
+        let c = if horizontal {
+            0.5 * (y0 + y1)
+        } else {
+            0.5 * (x0 + x1)
+        };
+        let sec = section_tool::create(&mut st, d, front, horizontal, c).expect("Schnitt");
+        compute(&mut st, &mut h);
+        assert_free_spot(&st, d, sec, &format!("allein, waagerecht={horizontal}"));
+    }
+    // Dreiansichten-Block auf A3 in 1:1: der Schnitt muss an Oben bzw. Links vorbei. (Mit dem
+    // Vorschlagsmaßstab füllt der Block den freien Bereich, dann gibt es keinen sauberen Platz.)
+    for horizontal in [true, false] {
+        let (mut st, d, front, mut h) =
+            dialog_drawing(Paper::A3, Some(s11()), &[ViewKind::Top, ViewKind::Left]);
+        let ((x0, y0), (x1, y1)) = bbox(&st, d, front);
+        let c = if horizontal {
+            0.5 * (y0 + y1)
+        } else {
+            0.5 * (x0 + x1)
+        };
+        let sec = section_tool::create(&mut st, d, front, horizontal, c).expect("Schnitt");
+        compute(&mut st, &mut h);
+        assert_free_spot(&st, d, sec, &format!("Block, waagerecht={horizontal}"));
+    }
+}
