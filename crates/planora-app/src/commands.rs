@@ -96,20 +96,22 @@ impl LastCommand {
 /// die Übersicht der Tastenkürzel ändert nichts und öffnet auch dort.
 ///
 /// Im ausführlichen Protokoll ([`crate::diag::detail`]) steht danach eine Zeile mit dem festen
-/// Namen der Aktion und der Dauer (`Befehl Rückgängig: 3 ms`), nie Projektinhalt.
+/// englischen Namen der Aktion und der Dauer (`Command Undo: 3 ms`), nie Projektinhalt.
 pub fn run_action(ws: &mut Workspace, a: Action) -> MenuRequest {
-    timed(&a.label(), || run_action_inner(ws, a))
+    timed(&crate::diag::in_english(|| a.label()), || {
+        run_action_inner(ws, a)
+    })
 }
 
-/// Führt `f` aus und schreibt danach die Detailzeile `Befehl <name>: <n> ms` ins ausführliche
+/// Führt `f` aus und schreibt danach die Detailzeile `Command <name>: <n> ms` ins ausführliche
 /// Protokoll. Die gemeinsame Stelle für Tasten, Menü und Werkzeugleiste: jede Aktion ruft sie
 /// genau einmal auf (Aktionen der Tastenbelegung über [`run_action`], die übrigen Einträge
-/// direkt). `name` ist ein fester Aktionsname, nie Projektinhalt.
+/// direkt). `name` ist ein fester englischer Aktionsname, nie Projektinhalt.
 pub fn timed<R>(name: &str, f: impl FnOnce() -> R) -> R {
     let start = std::time::Instant::now();
     let result = f();
     crate::diag::detail(&format!(
-        "Befehl {name}: {}",
+        "Command {name}: {}",
         duration_text(start.elapsed())
     ));
     result
@@ -134,7 +136,7 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
     // „Speichern“ wird erst ein Schritt, wenn wirklich gespeichert wurde (`Workspace`); ein
     // abgebrochenes „Speichern unter“ soll in den letzten Schritten nicht stehen.
     if a != Action::Save {
-        crate::diag::step(&a.label());
+        crate::diag::step(&crate::diag::in_english(|| a.label()));
     }
     match a {
         Action::ShowShortcuts | Action::SketchShowShortcuts => return MenuRequest::Shortcuts,

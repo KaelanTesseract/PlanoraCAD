@@ -99,13 +99,13 @@ fn report_text_has_all_sections() {
     let t = crash::report_text(&input());
     for s in [
         "Version",
-        "Fehler",
-        "Ort",
-        "Faden",
-        "Letzte Schritte",
-        "Protokoll",
-        "Ablauf (Backtrace)",
-        "Adressen (für Dennis):\nnicht verfügbar",
+        "Error",
+        "Location",
+        "Thread",
+        "Last steps",
+        "Log",
+        "Backtrace",
+        "Addresses (for Dennis):\nnot available",
     ] {
         assert!(t.contains(s), "Abschnitt {s} fehlt in:\n{t}");
     }
@@ -161,14 +161,14 @@ fn panicking_thread_writes_a_report_and_calls_previous_hook() {
     // Rücksprungadressen: unter Windows mit Bau-Kennung und Rahmen in der eigenen exe, sonst
     // „nicht verfügbar“.
     let section = text
-        .split_once("Adressen (für Dennis):\n")
+        .split_once("Addresses (for Dennis):\n")
         .map(|(_, s)| s)
         .expect("Abschnitt Adressen fehlt");
     if cfg!(windows) {
         assert!(section.contains("PDB-GUID: "), "{section}");
         assert!(section.contains(".exe+0x"), "{section}");
     } else {
-        assert!(section.starts_with("nicht verfügbar"), "{section}");
+        assert!(section.starts_with("not available"), "{section}");
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -187,7 +187,7 @@ fn hook_does_not_block_when_diag_is_locked() {
     let files = reports(&dir);
     assert_eq!(files.len(), 1);
     let text = std::fs::read_to_string(&files[0]).expect("lesbar");
-    assert!(text.contains("nicht verfügbar"), "{text}");
+    assert!(text.contains("not available"), "{text}");
     assert!(text.contains("Panik bei Sperre"), "{text}");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -230,7 +230,7 @@ fn non_string_payload_is_unknown() {
     let files = reports(&dir);
     assert_eq!(files.len(), 1);
     let text = std::fs::read_to_string(&files[0]).expect("lesbar");
-    assert!(text.contains("unbekannt"), "{text}");
+    assert!(text.contains("unknown"), "{text}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -329,7 +329,7 @@ fn report_names_only_the_document_file() {
     let mut i = input();
     i.document = Some(PathBuf::from(r"C:\Users\Mustermann\Kunde\Unbenannt 1.pcad"));
     let t = crash::report_text(&i);
-    assert!(t.contains("Dokument: Unbenannt 1.pcad\n"), "{t}");
+    assert!(t.contains("Document: Unbenannt 1.pcad\n"), "{t}");
     assert!(!t.contains("Kunde"), "{t}");
     assert!(!t.contains("Mustermann"), "{t}");
 }
@@ -338,7 +338,7 @@ fn report_names_only_the_document_file() {
 fn user_mask_replaces_profile_in_all_forms() {
     let m = mask();
     let ph = crash::USER_PLACEHOLDER;
-    assert_eq!(ph, "<Benutzer>");
+    assert_eq!(ph, "<user>");
     assert_eq!(
         m.apply(r"Ort: C:\Users\Mustermann\src\a.rs:1:2"),
         format!(r"Ort: {ph}\src\a.rs:1:2")
@@ -397,8 +397,8 @@ fn written_report_has_no_user_name_and_keeps_the_path_aside() {
         !text.to_lowercase().contains("mustermann"),
         "kein Benutzername: {text}"
     );
-    assert!(text.contains(r"Ort: <Benutzer>\.cargo"), "{text}");
-    assert!(text.contains("Dokument: Unbenannt 1.pcad"), "{text}");
+    assert!(text.contains(r"Location: <user>\.cargo"), "{text}");
+    assert!(text.contains("Document: Unbenannt 1.pcad"), "{text}");
     // Der volle Pfad liegt in der Begleitdatei (wird nie angehängt).
     let side = crash::companion_path(&path);
     assert_eq!(
@@ -434,6 +434,11 @@ fn old_reports_with_a_full_path_still_name_the_project() {
         None,
         "nur ein Name: nicht auffindbar"
     );
+    // Neuere, englische Berichte.
+    std::fs::write(&p, format!("Version: 1\nDocument: {full}\n")).unwrap();
+    assert_eq!(crash::report_project(&p), Some(PathBuf::from(full)));
+    std::fs::write(&p, "Document: none\n").unwrap();
+    assert_eq!(crash::report_project(&p), None);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

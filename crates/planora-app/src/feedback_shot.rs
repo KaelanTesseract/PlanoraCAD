@@ -14,7 +14,9 @@ pub const SHOT_FILE: &str = "bild.png";
 /// So lange wird auf das Bild gewartet.
 pub const SHOT_TIMEOUT: Duration = Duration::from_secs(3);
 /// Hinweis, wenn kein Bild kam oder es sich nicht speichern ließ.
-pub const SHOT_FAILED: &str = "Das Bild hat nicht geklappt.";
+pub fn shot_failed() -> String {
+    planora_i18n::tr!("feedback-shot-failed")
+}
 /// Kennung an der Bildanforderung, damit fremde Bilder nicht verwechselt werden.
 pub const FEEDBACK_SHOT_TAG: &str = "planora_feedback_bild";
 
@@ -143,5 +145,5 @@ pub fn is_our_shot(data: &egui::UserData) -> bool {
 /// Text der Vorschau zum Bild.
 pub fn preview_line(img: &egui::ColorImage) -> String {
     let [w, h] = img.size;
-    format!("{SHOT_FILE}, {w} × {h} Pixel")
+    format!("{SHOT_FILE}, {w} × {h} pixels")
 }

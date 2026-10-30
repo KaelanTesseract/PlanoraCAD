@@ -14,7 +14,7 @@ use planora_project::library::Library;
 fn saves() -> usize {
     diag::recent_steps()
         .iter()
-        .filter(|s| s.label.starts_with("Speichern"))
+        .filter(|s| s.label.starts_with("Save"))
         .count()
 }
 
@@ -35,5 +35,5 @@ fn cancelled_save_as_records_no_step_and_real_save_does() {
     assert_eq!(saves(), 1, "{:?}", diag::recent_steps());
     w.save_active("zwei", None).unwrap();
     let last = diag::recent_steps().into_iter().last().unwrap();
-    assert!(last.label.starts_with("Speichern"), "{last:?}");
+    assert!(last.label.starts_with("Save"), "{last:?}");
 }

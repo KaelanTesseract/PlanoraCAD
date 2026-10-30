@@ -2089,7 +2089,9 @@ impl AppState {
             return;
         };
         let label = self.sketch_label(h.current(), draft);
-        crate::diag::step(&label);
+        crate::diag::step(&crate::diag::in_english(|| {
+            self.sketch_label(h.current(), draft)
+        }));
         let after = draft.clone();
         let bytes = sketch_bytes(&after);
         if let Some(h) = self.sketch_history.as_mut() {

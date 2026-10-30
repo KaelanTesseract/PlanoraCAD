@@ -2,8 +2,12 @@
 //! GitHub-Formular bauen (höchstens [`MAX_URL_LEN`] Zeichen, bei Bedarf gekürzt) und den
 //! Rückmeldungsordner mit `rueckmeldung.txt` anlegen. Das Fenster dazu liegt in
 //! `feedback_dialog.rs`.
+//!
+//! Die technischen Teile (Überschriften und Angaben in `rueckmeldung.txt`, die Bestandteile in
+//! der Adresse) sind immer englisch; die Beschreibung bleibt, wie die Testerin sie schrieb.
 
 use crate::build_info::BuildInfo;
+use planora_i18n::tr;
 use std::path::{Path, PathBuf};
 
 /// Feld „Was ist passiert?“ im Fehler-Formular.
@@ -18,7 +22,8 @@ pub const FIELD_PROTOKOLL: &str = "protokoll";
 /// Beim Wunsch (und bei der Frage) gehen alle Angaben gesammelt in dieses Feld.
 pub const FIELD_ANGABEN: &str = "angaben";
 
-/// Die Bereiche wie in der Auswahl „Bereich“ der Formulare.
+/// Die Bereiche wie in der Auswahl „Bereich“ der Formulare (Werte für das Formular; angezeigt
+/// wird [`area_label`]).
 pub const AREAS: [&str; 6] = [
     "Skizze",
     "3D",
@@ -27,6 +32,19 @@ pub const AREAS: [&str; 6] = [
     "Tastenkürzel",
     "Anderes",
 ];
+
+/// Anzeigename des Bereichs `area` (einer aus [`AREAS`]) in der aktuellen Sprache.
+pub fn area_label(area: &str) -> String {
+    match area {
+        "Skizze" => tr!("feedback-area-sketch"),
+        "3D" => tr!("feedback-area-3d"),
+        "Export" => tr!("feedback-area-export"),
+        "Zeichnung" => tr!("feedback-area-drawing"),
+        "Tastenkürzel" => tr!("feedback-area-shortcuts"),
+        "Anderes" => tr!("feedback-area-other"),
+        other => other.to_string(),
+    }
+}
 
 /// Webformular auf dennis-guse.de: der Weg ohne GitHub-Konto (deutsch).
 pub const WEBFORM_URL: &str = "https://dennis-guse.de/planoracad/rueckmeldung.php";
@@ -68,8 +86,8 @@ fn doc_url(path: &str) -> String {
     )
 }
 
-const USER_MARK: &str = "<Benutzer>";
-const MAIL_MARK: &str = "<Mailadresse>";
+const USER_MARK: &str = "<user>";
+const MAIL_MARK: &str = "<email>";
 
 /// Art der Rückmeldung.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,11 +98,30 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub fn label(self) -> &'static str {
+    /// Name in der aktuellen Sprache (Auswahl im Fenster).
+    pub fn label(self) -> String {
         match self {
-            Kind::Fehler => "Fehler",
-            Kind::Wunsch => "Wunsch",
-            Kind::Frage => "Frage",
+            Kind::Fehler => tr!("feedback-kind-bug"),
+            Kind::Wunsch => tr!("feedback-kind-wish"),
+            Kind::Frage => tr!("feedback-kind-question"),
+        }
+    }
+
+    /// Englischer Name für Protokoll und `rueckmeldung.txt`.
+    pub fn report_name(self) -> &'static str {
+        match self {
+            Kind::Fehler => "Bug",
+            Kind::Wunsch => "Wish",
+            Kind::Frage => "Question",
+        }
+    }
+
+    /// Wert des Felds `art` im Webformular (`webformular-vorgabe.md`).
+    pub fn form_value(self) -> &'static str {
+        match self {
+            Kind::Fehler => "fehler",
+            Kind::Wunsch => "wunsch",
+            Kind::Frage => "frage",
         }
     }
 
@@ -127,16 +164,31 @@ pub enum Part {
 }
 
 impl Part {
-    pub fn label(self) -> &'static str {
+    /// Name in der aktuellen Sprache (Häkchen im Fenster).
+    pub fn label(self) -> String {
+        match self {
+            Part::Version => tr!("feedback-part-version"),
+            Part::System => tr!("feedback-part-system"),
+            Part::Grafik => tr!("feedback-part-graphics"),
+            Part::Schritte => tr!("feedback-part-steps"),
+            Part::Protokoll => tr!("feedback-part-log"),
+            Part::Bild => tr!("feedback-part-picture"),
+            Part::Projektdatei => tr!("feedback-part-project"),
+            Part::Absturzbericht => tr!("feedback-part-crash-report"),
+        }
+    }
+
+    /// Englische Überschrift in `rueckmeldung.txt` und in der Adresse (technischer Teil).
+    pub fn heading(self) -> &'static str {
         match self {
             Part::Version => "Version",
             Part::System => "System",
-            Part::Grafik => "Grafikkarte",
-            Part::Schritte => "Letzte Schritte",
-            Part::Protokoll => "Protokollzeilen",
-            Part::Bild => "Bild vom Fenster",
-            Part::Projektdatei => "Projektdatei",
-            Part::Absturzbericht => "Absturzbericht",
+            Part::Grafik => "Graphics card",
+            Part::Schritte => "Last steps",
+            Part::Protokoll => "Log lines",
+            Part::Bild => "Window picture",
+            Part::Projektdatei => "Project file",
+            Part::Absturzbericht => "Crash report",
         }
     }
 
@@ -426,8 +478,8 @@ fn mask_mail(text: &str) -> String {
 }
 
 /// Entfernt persönliche Angaben aus einem automatisch gesammelten Text: Projektpfade werden
-/// auf den letzten Teil gekürzt, Benutzername und Benutzerordner werden zu `<Benutzer>`,
-/// Mailadressen zu `<Mailadresse>`.
+/// auf den letzten Teil gekürzt, Benutzername und Benutzerordner werden zu `<user>`,
+/// Mailadressen zu `<email>`.
 pub fn sanitize(text: &str, who: &Personal) -> String {
     let mut t = text.to_string();
     for p in &who.project_paths {
@@ -588,10 +640,7 @@ fn render_web(
     parts: &[(Part, String)],
     with_file: bool,
 ) -> String {
-    let mut url = format!(
-        "{WEBFORM_URL}?art={}",
-        report.kind.label().to_lowercase().replace('ä', "ae")
-    );
+    let mut url = format!("{WEBFORM_URL}?art={}", report.kind.form_value());
     let mut push = |name: &str, value: &str| {
         url.push('&');
         url.push_str(name);
@@ -612,7 +661,7 @@ fn render_web(
             .iter()
             .filter(|(p, _)| p.bug_field() == Some(field))
             .map(|(p, t)| match field {
-                FIELD_PROTOKOLL => format!("{}:\n{t}", p.label()),
+                FIELD_PROTOKOLL => format!("{}:\n{t}", p.heading()),
                 // Das Feld „system“ des Webformulars ist einzeilig.
                 FIELD_SYSTEM => t.lines().collect::<Vec<_>>().join(", "),
                 _ => t.clone(),
@@ -663,7 +712,7 @@ fn render_github(
                     .filter(|(p, _)| p.bug_field() == Some(field))
                     .map(|(p, t)| {
                         if field == FIELD_PROTOKOLL {
-                            format!("{}:\n{t}", p.label())
+                            format!("{}:\n{t}", p.heading())
                         } else {
                             t.clone()
                         }
@@ -680,7 +729,7 @@ fn render_github(
                 parts
                     .iter()
                     .filter(|(p, _)| p.bug_field().is_some())
-                    .map(|(p, t)| format!("{}:\n{t}", p.label())),
+                    .map(|(p, t)| format!("{}:\n{t}", p.heading())),
             );
             if !blocks.is_empty() {
                 fields.push((FIELD_ANGABEN, blocks.join("\n\n")));
@@ -849,18 +898,19 @@ fn build(target: Target, report: &Report, with_file: bool) -> Built {
 }
 
 /// Alles ungekürzt, mit Überschrift je Teil. Inhalt von `rueckmeldung.txt`; Zeilenenden
-/// überall `\n` (auch unter Windows; der Editor dort zeigt das richtig an).
+/// überall `\n` (auch unter Windows; der Editor dort zeigt das richtig an). Alles außer der
+/// Beschreibung ist englisch, unabhängig von der Sprache des Programms.
 pub fn full_text(report: &Report) -> String {
-    let mut out = format!("Art: {}\n", report.kind.label());
-    if let Some(a) = area_line(report) {
-        out.push_str(&a);
-        out.push('\n');
+    let mut out = format!("Kind: {}\n", report.kind.report_name());
+    if let Some(a) = &report.area {
+        let name = crate::diag::in_english(|| area_label(a));
+        out.push_str(&format!("Area: {name}\n"));
     }
-    out.push_str("\n== Beschreibung ==\n");
+    out.push_str("\n== Description ==\n");
     out.push_str(&report.description);
     out.push('\n');
     for (p, t) in &report.parts {
-        out.push_str(&format!("\n== {} ==\n{t}\n", p.label()));
+        out.push_str(&format!("\n== {} ==\n{t}\n", p.heading()));
     }
     unify_newlines(&out)
 }

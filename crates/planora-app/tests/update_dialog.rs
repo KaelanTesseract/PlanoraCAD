@@ -856,7 +856,7 @@ fn feedback_button_closes_notice_and_opens_feedback_window() {
     assert!(h.app.feedback_mut().open);
     assert!(!h.sees(feedback_button().as_str()));
     assert!(
-        h.sees(planora_app::feedback_dialog::TITLE),
+        h.sees(&planora_app::feedback_dialog::title()),
         "{:?}",
         h.texts()
     );

@@ -51,7 +51,7 @@ fn lines_go_to_the_file_with_level_and_time() {
     assert!(t.and_utc().timestamp() > 1_700_000_000);
     assert!(lines[0].ends_with("Z INFO Hallo"));
     assert!(lines[1].ends_with(" WARN Achtung"));
-    assert!(lines[2].ends_with(" FEHLER Kaputt"));
+    assert!(lines[2].ends_with(" ERROR Kaputt"));
     assert!(!d.file_error());
 }
 
@@ -145,8 +145,8 @@ fn save_and_open_write_one_line_without_content() {
     w.close_tab(0);
     w.open_document(&path, LockMode::Acquire).unwrap();
     let all = diag::recent_lines(500).join("\n");
-    assert!(all.contains("Gespeichert"), "{all}");
-    assert!(all.contains("Geöffnet"), "{all}");
+    assert!(all.contains("Saved: "), "{all}");
+    assert!(all.contains("Opened: "), "{all}");
     assert!(all.contains("Mein Dokument"), "{all}");
     assert!(!all.contains("Geheimteil"));
 }
@@ -255,7 +255,7 @@ fn two_thousand_detail_lines_stay_quick() {
     d.set_verbose(true);
     let start = std::time::Instant::now();
     for i in 0..2000 {
-        d.log(Level::Detail, &format!("Befehl Rückgängig: {i} ms"));
+        d.log(Level::Detail, &format!("Command Undo: {i} ms"));
     }
     let took = start.elapsed();
     eprintln!("2000 Zeilen: {took:?}");

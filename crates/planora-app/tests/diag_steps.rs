@@ -1,4 +1,5 @@
-//! Die letzten Schritte (Namen von Aktionen und Rückgängig-Schritten, nie Projektinhalt).
+//! Die letzten Schritte (Namen von Aktionen und Rückgängig-Schritten, nie Projektinhalt). Sie
+//! sind immer englisch, auch wenn das Programm deutsch spricht (Tests laufen deutsch).
 
 mod common;
 
@@ -64,11 +65,7 @@ fn run_action_records_the_action_label() {
     let mut w = ws();
     commands::run_action(&mut w, Action::New);
     let last = diag::recent_steps().into_iter().last().unwrap();
-    assert!(
-        has("Neues Dokument"),
-        "letzter Schritt war {:?}",
-        last.label
-    );
+    assert!(has("New document"), "letzter Schritt war {:?}", last.label);
 }
 
 #[test]
@@ -87,7 +84,7 @@ fn blocked_model_action_in_old_version_records_nothing() {
     assert!(w.active_tab().read_only);
     // Nur dieser Test löst „Skizze extrudieren“ aus; die Liste darf den Namen nie enthalten.
     commands::run_action(&mut w, Action::ExtrudeSketch);
-    assert!(!has(&Action::ExtrudeSketch.label()));
+    assert!(!has(&diag::in_english(|| Action::ExtrudeSketch.label())));
 }
 
 #[test]
@@ -98,8 +95,10 @@ fn undo_label_becomes_a_step() {
         .create_box(DVec3::splat(100.0))
         .unwrap();
     w.observe_history(false);
+    // Der Rückgängig-Name bleibt deutsch (Sprache beim Entstehen), der Schritt ist englisch.
     let label = w.active_tab().history().undo_label().unwrap();
-    assert!(has(label), "{label} fehlt in {:?}", diag::recent_steps());
+    assert_eq!(label, "Quader anlegen");
+    assert!(has("Create box"), "fehlt in {:?}", diag::recent_steps());
 }
 
 #[test]
@@ -121,7 +120,8 @@ fn sketch_change_becomes_a_step() {
     }
     w.observe_history(false);
     let label = w.active_tab().state.sketch_undo_label().unwrap();
-    assert!(has(&label), "{label} fehlt in {:?}", diag::recent_steps());
+    assert_eq!(label, "Linie zeichnen");
+    assert!(has("Draw line"), "fehlt in {:?}", diag::recent_steps());
 }
 
 #[test]
@@ -132,9 +132,9 @@ fn undo_and_redo_actions_are_recorded_by_their_own_names() {
         .create_box(DVec3::splat(10.0))
         .unwrap();
     commands::run_action(&mut w, Action::Undo);
-    assert!(has("Rückgängig"));
+    assert!(has("Undo"));
     commands::run_action(&mut w, Action::Redo);
-    assert!(has("Wiederholen"));
+    assert!(has("Redo"));
 }
 
 #[test]
@@ -192,6 +192,7 @@ fn opening_the_feedback_window_is_not_a_step() {
     let req = commands::run_action(&mut w, Action::FeedbackOpen);
     assert_eq!(req, planora_app::app::MenuRequest::Feedback);
     let last = diag::recent_steps().into_iter().last().unwrap();
-    assert_ne!(last.label, Action::FeedbackOpen.label());
-    assert!(!has(&Action::FeedbackOpen.label()));
+    let name = diag::in_english(|| Action::FeedbackOpen.label());
+    assert_ne!(last.label, name);
+    assert!(!has(&name));
 }

@@ -163,7 +163,7 @@ fn area_goes_to_the_start_of_the_text_not_into_a_parameter() {
             .unwrap()
             .starts_with(&percent_encode("Bereich: 3D\n"))
     );
-    assert!(full_text(&r).contains("Bereich: 3D"));
+    assert!(full_text(&r).contains("Area: 3D"));
 }
 
 #[test]
@@ -289,15 +289,15 @@ fn sanitize_user_name_variants() {
         "%USERPROFILE% ist C:\\Users\\Max Müller",
     ] {
         let out = sanitize(text, &who);
-        assert!(out.contains("<Benutzer>"), "{out}");
+        assert!(out.contains("<user>"), "{out}");
         assert!(!out.to_lowercase().contains("müller"), "{out}");
         assert!(!out.to_lowercase().contains("max"), "{out}");
     }
     let out = sanitize("/home/max/.config/planora/x.log", &Personal::default());
-    assert_eq!(out, "/home/<Benutzer>/.config/planora/x.log");
+    assert_eq!(out, "/home/<user>/.config/planora/x.log");
     // unbekannter Name, aber unter Users
     let out = sanitize(r"C:\Users\Erika\x.log und weiter", &Personal::default());
-    assert_eq!(out, r"C:\Users\<Benutzer>\x.log und weiter");
+    assert_eq!(out, r"C:\Users\<user>\x.log und weiter");
     // Wörter, die den Namen nur enthalten, bleiben
     let w = Personal {
         user_names: vec!["max".to_string()],
@@ -329,9 +329,9 @@ fn sanitize_mail_addresses() {
     let none = Personal::default();
     assert_eq!(
         sanitize("Absender max.mueller@example.org, bitte", &none),
-        "Absender <Mailadresse>, bitte"
+        "Absender <email>, bitte"
     );
-    assert_eq!(sanitize("<a@b.de>", &none), "<<Mailadresse>>");
+    assert_eq!(sanitize("<a@b.de>", &none), "<<email>>");
     assert_eq!(sanitize("3 @ 4", &none), "3 @ 4");
     assert_eq!(sanitize("x@localhost", &none), "x@localhost");
     // Versionsangaben sind keine Mailadressen
@@ -351,11 +351,11 @@ fn sanitize_name_as_word_in_a_log_line() {
     };
     assert_eq!(
         sanitize("Fehler bei Max Müller beim Laden", &w),
-        "Fehler bei <Benutzer> beim Laden"
+        "Fehler bei <user> beim Laden"
     );
     assert_eq!(
         sanitize("Fehler bei MAX MÜLLER beim Laden", &w),
-        "Fehler bei <Benutzer> beim Laden"
+        "Fehler bei <user> beim Laden"
     );
 }
 
@@ -369,7 +369,7 @@ fn sanitize_home_dir_outside_users() {
     };
     assert_eq!(
         sanitize(r"lese d:/profile/MM/planora/x.log", &w),
-        r"lese <Benutzer>/planora/x.log"
+        r"lese <user>/planora/x.log"
     );
 }
 
@@ -379,7 +379,7 @@ fn sanitize_onedrive_company_name() {
         r"C:\Users\Erika\OneDrive - Geheim GmbH\Teile\x.log",
         &Personal::default(),
     );
-    assert_eq!(out, r"C:\Users\<Benutzer>\OneDrive\Teile\x.log");
+    assert_eq!(out, r"C:\Users\<user>\OneDrive\Teile\x.log");
     let out = sanitize("/mnt/c/onedrive - Firma AG/x", &Personal::default());
     assert_eq!(out, "/mnt/c/OneDrive/x");
 }
@@ -473,7 +473,7 @@ fn gpu_driver_is_sanitized_and_cut() {
     };
     let line = gpu_line(&info, &who());
     assert!(!line.contains("Müller"), "{line}");
-    assert!(line.contains("<Benutzer>"));
+    assert!(line.contains("<user>"));
     let driver = line
         .split(" · ")
         .nth(1)
@@ -553,7 +553,7 @@ fn write_bundle_writes_full_text() {
     assert_eq!(text.matches('ü').count(), 5000);
     assert!(text.contains("Zeile 499"));
     for p in [Part::Version, Part::Protokoll, Part::Schritte] {
-        assert!(text.contains(p.label()), "{p:?}");
+        assert!(text.contains(p.heading()), "{p:?}");
     }
 }
 

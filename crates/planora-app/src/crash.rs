@@ -9,7 +9,7 @@
 //! bereinigt [`crate::feedback::sanitize`] zusätzlich.
 //!
 //! Der Hook tut nichts anderes: kein Netz, kein Fenster, kein Warten. Das Protokoll liest er
-//! nur per `try_lock`; ist es gesperrt, steht „nicht verfügbar“ im Bericht. Eine Panik im Hook
+//! nur per `try_lock`; ist es gesperrt, steht „not available“ im Bericht. Eine Panik im Hook
 //! selbst beendet das Programm sofort (so verhält sich Rust), deshalb meidet der Code hier
 //! alles, was paniken kann; `catch_unwind` und ein Wiedereintritts-Merker sichern zusätzlich ab.
 
@@ -29,20 +29,32 @@ pub const CRASH_DIR: &str = "abstuerze";
 /// So viele letzte Protokollzeilen stehen im Bericht.
 pub const LOG_LINES_IN_REPORT: usize = 100;
 /// Steht im Bericht, wenn das Protokoll gerade gesperrt war.
-pub const UNAVAILABLE: &str = "nicht verfügbar";
+pub const UNAVAILABLE: &str = "not available";
 /// Nachricht, wenn die Panik keinen Text trägt.
-pub const UNKNOWN: &str = "unbekannt";
+pub const UNKNOWN: &str = "unknown";
 
 /// Höchstens so viele Namen mit Zusatz `_2`, `_3`, … werden bei Kollision probiert.
 const MAX_SUFFIX: u32 = 1000;
 /// Steht im Bericht statt des Benutzerordners.
-pub const USER_PLACEHOLDER: &str = "<Benutzer>";
+pub const USER_PLACEHOLDER: &str = "<user>";
 /// So viele Zeilen des Ablaufs (Backtrace) stehen höchstens im Bericht ([`trim_backtrace`]).
 pub const BACKTRACE_LINES: usize = 40;
 /// Endung der Begleitdatei mit dem vollen Dokumentpfad ([`companion_path`]).
 const COMPANION_EXT: &str = "dokument";
 /// Unterordner der Berichte, die schon als Rückmeldung geöffnet wurden ([`mark_sent`]).
 pub const SENT_DIR: &str = "gesendet";
+/// Schlüssel der Zeile mit der Zeit im Bericht (ältere Berichte: „Zeit“).
+pub const TIME_KEY: &str = "Time";
+/// Format der Zeit im Bericht (ältere Berichte: `%d.%m.%Y, %H:%M:%S`).
+pub const REPORT_TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
+/// Schlüssel der Zeile mit der Nachricht der Panik (ältere Berichte: „Fehler“).
+pub const ERROR_KEY: &str = "Error";
+/// Schlüssel der Zeile mit dem Ort der Panik (ältere Berichte: „Ort“).
+pub const LOCATION_KEY: &str = "Location";
+/// Schlüssel der Zeile mit dem Dokument (ältere Berichte: „Dokument“).
+pub const DOCUMENT_KEY: &str = "Document";
+/// Steht beim Dokument, wenn keins offen war (ältere Berichte: „keines“).
+pub const NO_DOCUMENT: &str = "none";
 
 /// Ersetzt den Benutzerordner (`C:\Users\<Name>`, `\\?\C:\Users\<Name>`, `/home/<name>`, auch
 /// mit `/` und in anderer Groß-/Kleinschreibung) durch [`USER_PLACEHOLDER`]. Die Muster
@@ -217,7 +229,7 @@ pub fn companion_path(report: &Path) -> PathBuf {
 }
 
 /// Das Projekt (voller Pfad) zum Bericht `report`: aus der Begleitdatei, bei älteren Berichten
-/// ohne Begleitdatei aus einer Zeile „Dokument: …“ mit vollem Pfad.
+/// ohne Begleitdatei aus einer Zeile „Document: …“ (früher „Dokument: …“) mit vollem Pfad.
 pub fn report_project(report: &Path) -> Option<PathBuf> {
     if let Ok(b) = std::fs::read(companion_path(report)) {
         let p = String::from_utf8_lossy(&b).trim().to_string();
@@ -232,11 +244,11 @@ pub fn report_project(report: &Path) -> Option<PathBuf> {
 pub fn mark_sent(report: &Path) -> std::io::Result<PathBuf> {
     let dir = report
         .parent()
-        .ok_or_else(|| std::io::Error::other("kein Ordner"))?
+        .ok_or_else(|| std::io::Error::other("no folder"))?
         .join(SENT_DIR);
     let name = report
         .file_name()
-        .ok_or_else(|| std::io::Error::other("kein Name"))?;
+        .ok_or_else(|| std::io::Error::other("no name"))?;
     std::fs::create_dir_all(&dir)?;
     let to = dir.join(name);
     std::fs::rename(report, &to)?;
@@ -266,20 +278,23 @@ pub struct ReportInput {
 /// Der Berichtstext: beim Dokument nur der Dateiname, der Ablauf gekürzt
 /// ([`trim_backtrace`]), am Ende die Rücksprungadressen
 /// ([`crate::crash_addr::section_text`]). Den Benutzerordner ersetzt erst [`write_report`].
+///
+/// Der Bericht ist immer englisch (die Schritte und Protokollzeilen sind es schon); nur die
+/// Nachricht der Panik steht, wie sie ist.
 pub fn report_text(input: &ReportInput) -> String {
     let mut t = String::new();
-    t.push_str("PlanoraCAD – Absturzbericht\n");
+    t.push_str("PlanoraCAD – crash report\n");
     t.push_str(&format!(
-        "Zeit: {}\n\n",
-        input.time.format("%d.%m.%Y, %H:%M:%S")
+        "{TIME_KEY}: {}\n\n",
+        input.time.format(REPORT_TIME_FORMAT)
     ));
     t.push_str(&format!("Version: {}\n", input.version));
-    t.push_str(&format!("Fehler: {}\n", input.message));
-    t.push_str(&format!("Ort: {}\n", input.location));
-    t.push_str(&format!("Faden: {}\n", input.thread));
+    t.push_str(&format!("{ERROR_KEY}: {}\n", input.message));
+    t.push_str(&format!("{LOCATION_KEY}: {}\n", input.location));
+    t.push_str(&format!("Thread: {}\n", input.thread));
     // Nach dem letzten `\` oder `/`, auf jedem System (auch ein Windows-Pfad unter Linux).
     let doc = input.document.as_ref().map_or_else(
-        || "keines".to_string(),
+        || NO_DOCUMENT.to_string(),
         |p| {
             let full = p.to_string_lossy();
             let name = full
@@ -291,24 +306,24 @@ pub fn report_text(input: &ReportInput) -> String {
                 .to_string()
         },
     );
-    t.push_str(&format!("Dokument: {doc}\n"));
-    t.push_str("\nLetzte Schritte:\n");
+    t.push_str(&format!("{DOCUMENT_KEY}: {doc}\n"));
+    t.push_str("\nLast steps:\n");
     if input.steps.is_empty() {
-        t.push_str("keine\n");
+        t.push_str("none\n");
     }
     for s in &input.steps {
         t.push_str(format!("{} {}", s.time, s.label).trim());
         t.push('\n');
     }
-    t.push_str("\nProtokoll:\n");
+    t.push_str("\nLog:\n");
     if input.log.is_empty() {
-        t.push_str("leer\n");
+        t.push_str("empty\n");
     }
     for l in &input.log {
         t.push_str(l);
         t.push('\n');
     }
-    t.push_str("\nAblauf (Backtrace):\n");
+    t.push_str("\nBacktrace:\n");
     t.push_str(&trim_backtrace(&input.backtrace));
     t.push_str("\n\n");
     t.push_str(&crate::crash_addr::section_text(input.addresses.as_ref()));
@@ -348,7 +363,7 @@ pub fn write_report(dir: &Path, input: &ReportInput, mask: &UserMask) -> std::io
     }
     Err(std::io::Error::new(
         std::io::ErrorKind::AlreadyExists,
-        "zu viele Berichte mit gleicher Zeit",
+        "too many reports with the same time",
     ))
 }
 
@@ -416,7 +431,7 @@ fn collect(info: &PanicHookInfo, diag: &Mutex<Diag>) -> ReportInput {
         .map_or_else(|| UNKNOWN.to_string(), |l| l.to_string());
     let thread = std::thread::current()
         .name()
-        .unwrap_or("<ohne Namen>")
+        .unwrap_or("<unnamed>")
         .to_string();
     let (steps, log, document) = match diag.try_lock() {
         Ok(d) => read_diag(&d),
@@ -629,7 +644,7 @@ pub fn start_run(data_dir: &Path, pid: u32) -> (Option<RunMarker>, StartFinding)
     match marker {
         Ok(m) => (Some(m), finding),
         Err(e) => {
-            diag::warn(&format!("Laufmarker nicht angelegt ({:?})", e.kind()));
+            diag::warn(&format!("Run marker not created ({:?})", e.kind()));
             (None, finding)
         }
     }
@@ -681,15 +696,22 @@ pub fn report_field<'a>(text: &'a str, key: &str) -> Option<&'a str> {
         .map(str::trim)
 }
 
-/// Das im Bericht genannte Dokument („Dokument: …“), falls eins genannt ist.
+/// Wert der Zeile `<key>: …` aus einem Bericht; `old` ist der Schlüssel älterer, deutscher
+/// Berichte (vor dem englischen Bericht), der ebenfalls gilt.
+pub fn report_field_either<'a>(text: &'a str, key: &str, old: &str) -> Option<&'a str> {
+    report_field(text, key).or_else(|| report_field(text, old))
+}
+
+/// Das im Bericht genannte Dokument („Document: …“, in älteren Berichten „Dokument: …“), falls
+/// eins genannt ist.
 pub fn report_document(text: &str) -> Option<PathBuf> {
-    report_field(text, "Dokument")
-        .filter(|d| !d.is_empty() && *d != "keines")
+    report_field_either(text, DOCUMENT_KEY, "Dokument")
+        .filter(|d| !d.is_empty() && *d != NO_DOCUMENT && *d != "keines")
         .map(PathBuf::from)
 }
 
 /// Protokollzeile statt eines Berichts bei einer abgefangenen Panik ([`expected_panics`]).
-pub const CAUGHT_LINE: &str = "Fehler beim Erstellen einer Vorschau abgefangen";
+pub const CAUGHT_LINE: &str = "Caught an error while building a preview";
 
 thread_local! {
     /// Wie tief dieser Faden gerade in [`expected_panics`] steckt.

@@ -230,14 +230,17 @@ impl PlanoraApp {
             &render_state.adapter.get_info(),
         ));
         let bi = crate::build_info::build_info();
-        crate::diag::info(&bi.system_line().replacen(':', "", 1));
-        crate::diag::info(&format!("Grafikkarte {}", bi.gpu_line()));
+        crate::diag::info(&crate::diag::in_english(|| bi.system_line()).replacen(':', "", 1));
+        crate::diag::info(&format!(
+            "Graphics card {}",
+            crate::diag::in_english(|| bi.gpu_line())
+        ));
         let running = crate::running_version();
         let install_mode = install_mode::detect(std::env::current_exe().ok().as_deref());
         crate::diag::info(match install_mode {
-            Some(InstallMode::User) => "Installiert für den Benutzer",
-            Some(InstallMode::AllUsers) => "Installiert für alle Benutzer",
-            None => "Nicht installiert",
+            Some(InstallMode::User) => "Installed for the current user",
+            Some(InstallMode::AllUsers) => "Installed for all users",
+            None => "Not installed",
         });
 
         let config = planora_project::config::Config::load();
@@ -324,7 +327,7 @@ impl PlanoraApp {
             Some(CrashAction::OpenFolder) => {
                 let dir = notice.dir.clone();
                 if !self.system_open.open_folder(&dir) {
-                    crate::diag::warn("Ordner der Absturzberichte ließ sich nicht öffnen");
+                    crate::diag::warn("Could not open the crash report folder");
                 }
             }
             Some(CrashAction::AsFeedback) => {
@@ -681,7 +684,7 @@ impl PlanoraApp {
         match locked.launch(&*self.launcher, mode) {
             Ok(()) => {
                 crate::diag::info(&format!(
-                    "Installer für Version {to} gestartet; sein Protokoll: {} im Temp-Ordner",
+                    "Installer for version {to} started; its log: {} in the temp folder",
                     update_install::SETUP_LOG_NAME
                 ));
                 // Der Installer bleibt liegen (er braucht seine Datei); die neue Version räumt
@@ -703,11 +706,11 @@ impl PlanoraApp {
             LaunchError::Failed(detail) => FailReason::LaunchFailed(detail.clone()),
         };
         let why = match e {
-            LaunchError::Cancelled => "Admin-Abfrage abgelehnt".to_string(),
-            LaunchError::Failed(detail) => format!("Fehler: {detail}"),
+            LaunchError::Cancelled => "admin prompt declined".to_string(),
+            LaunchError::Failed(detail) => format!("error: {detail}"),
         };
         crate::diag::warn(&format!(
-            "Update abgebrochen ({why}); Protokoll des Installers, falls vorhanden: {} im Temp-Ordner",
+            "Update cancelled ({why}); installer log, if any: {} in the temp folder",
             update_install::SETUP_LOG_NAME
         ));
         let _ = self.ws.set_pending_update(None);
@@ -1143,7 +1146,7 @@ impl PlanoraApp {
             FeedbackAction::OpenBrowser(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
             FeedbackAction::OpenFolder(dir) => {
                 if !self.system_open.open_folder(&dir) {
-                    crate::diag::warn("Rückmeldungsordner ließ sich nicht öffnen");
+                    crate::diag::warn("Could not open the feedback folder");
                 }
             }
             FeedbackAction::Copy(text) => ctx.copy_text(text),
@@ -1701,7 +1704,7 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
     )
     .clicked()
     {
-        commands::timed("Speichern unter", || begin_save(ws, true));
+        commands::timed("Save as", || begin_save(ws, true));
         ui.close();
     }
     ui.separator();
@@ -1721,7 +1724,7 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
     .on_disabled_hover_text(tr!("menu-old-version-add"))
     .clicked()
     {
-        commands::timed("Netz importieren", || open_import(ws));
+        commands::timed("Import mesh", || open_import(ws));
         ui.close();
     }
     if entry(
@@ -1732,7 +1735,7 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
     .on_disabled_hover_text(tr!("menu-old-version-add"))
     .clicked()
     {
-        commands::timed("STEP importieren", || open_step_import(ws));
+        commands::timed("Import STEP", || open_step_import(ws));
         ui.close();
     }
     ui.separator();
@@ -1753,7 +1756,7 @@ pub fn file_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
     }
     if entry(ui, true, icons::button(Icon::Quit, tr!("menu-file-quit"))).clicked() {
         // Ist Beenden freigegeben, schickt `handle_close_request` im nächsten Bild `Close`.
-        commands::timed("Beenden", || ws.request_quit());
+        commands::timed("Quit", || ws.request_quit());
         ui.close();
     }
     request
@@ -1777,7 +1780,7 @@ pub fn help_menu(ui: &mut egui::Ui, ws: &mut Workspace) -> MenuRequest {
     }
     ui.separator();
     if entry(ui, true, icons::button(Icon::About, about_dialog::title())).clicked() {
-        commands::timed("Über PlanoraCAD", || ws.about_open = true);
+        commands::timed("About PlanoraCAD", || ws.about_open = true);
         ui.close();
     }
     request
@@ -1880,15 +1883,15 @@ impl CreateKind {
         }
     }
 
-    /// Fester Name im ausführlichen Protokoll („Befehl Quader anlegen: 2 ms“).
+    /// Fester englischer Name im ausführlichen Protokoll („Command Create box: 2 ms“).
     pub fn command_name(self) -> &'static str {
         match self {
-            CreateKind::Box => "Quader anlegen",
-            CreateKind::Cylinder => "Zylinder anlegen",
-            CreateKind::Sphere => "Kugel anlegen",
-            CreateKind::Cone => "Kegel anlegen",
-            CreateKind::Extrusion => "Skizze extrudieren",
-            CreateKind::Revolution => "Skizze drehen",
+            CreateKind::Box => "Create box",
+            CreateKind::Cylinder => "Create cylinder",
+            CreateKind::Sphere => "Create sphere",
+            CreateKind::Cone => "Create cone",
+            CreateKind::Extrusion => "Extrude sketch",
+            CreateKind::Revolution => "Revolve sketch",
         }
     }
 
@@ -1982,9 +1985,9 @@ pub fn do_create(ws: &mut Workspace, kind: CreateKind) {
 /// Öffnet den Dialog „Boolesche Operation“ mit vorgewählter Operation (Menü und Chips).
 pub fn open_boolean(ws: &mut Workspace, op: BoolOp) {
     let name = match op {
-        BoolOp::Union => "Vereinigen",
-        BoolOp::Difference => "Abziehen",
-        BoolOp::Intersection => "Schneiden",
+        BoolOp::Union => "Union",
+        BoolOp::Difference => "Subtract",
+        BoolOp::Intersection => "Intersect",
     };
     commands::timed(name, || open_boolean_inner(ws, op));
 }
@@ -2058,7 +2061,7 @@ pub(crate) fn run_create(ws: &mut Workspace, kind: CreateKind) {
 /// Verrunden (über [`commands::run_action`]) oder Fase aus Menü oder Befehlsfeld.
 pub(crate) fn run_blend(ws: &mut Workspace, chamfer: bool) {
     if chamfer {
-        commands::timed("Fase anlegen", || open_blend(ws, true));
+        commands::timed("Create chamfer", || open_blend(ws, true));
     } else {
         commands::run_action(ws, Action::Fillet);
     }
@@ -2124,7 +2127,7 @@ pub fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     .on_disabled_hover_text(crate::state::sketch_open_lock())
     .clicked()
     {
-        commands::timed("Parameter", || parameter_dialog::open(tab));
+        commands::timed("Parameters", || parameter_dialog::open(tab));
         ui.close();
     }
     ui.separator();
@@ -2178,7 +2181,7 @@ pub fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     .on_disabled_hover_text(tr!("menu-edit-to-end-disabled"))
     .clicked()
     {
-        commands::timed("Zum Ende der Zeitleiste", || {
+        commands::timed("Roll to end of timeline", || {
             let _ = browser::roll_to_end(&mut tab.state);
         });
         ui.close();
@@ -2192,12 +2195,14 @@ fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) -> b
     let state = &mut ws.active_tab_mut().state;
     for face in ViewFace::ALL {
         if entry(ui, true, icons::button(Icon::ViewFace, face.label())).clicked() {
-            commands::timed(&face.label(), || state.camera.set_view(face));
+            commands::timed(&crate::diag::in_english(|| face.label()), || {
+                state.camera.set_view(face)
+            });
             ui.close();
         }
     }
     if entry(ui, true, icons::button(Icon::ViewIso, tr!("menu-view-iso"))).clicked() {
-        commands::timed("Isometrisch", || state.camera.set_iso_view());
+        commands::timed("Isometric", || state.camera.set_iso_view());
         ui.close();
     }
     ui.separator();
@@ -2208,7 +2213,7 @@ fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) -> b
     )
     .clicked()
     {
-        commands::timed("Alles einpassen", || state.frame_all());
+        commands::timed("Fit all", || state.frame_all());
         ui.close();
     }
     ui.separator();
@@ -2219,7 +2224,9 @@ fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) -> b
         (Icon::ThemeDark, tr!("menu-view-dark"))
     };
     if entry(ui, true, icons::button(icon, label.as_str())).clicked() {
-        commands::timed(&label, || ws.set_theme(!dark));
+        commands::timed(if dark { "Light theme" } else { "Dark theme" }, || {
+            ws.set_theme(!dark)
+        });
         ui.close();
     }
     ui.separator();
@@ -2236,13 +2243,25 @@ fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) -> b
 /// Einträge „Skizze auf …“ im Menü „Erzeugen“ (ohne Untermenü).
 fn sketch_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     let state = &mut ws.active_tab_mut().state;
-    for (label, plane) in [
-        (tr!("menu-sketch-xy"), StandardPlane::XY),
-        (tr!("menu-sketch-xz"), StandardPlane::XZ),
-        (tr!("menu-sketch-yz"), StandardPlane::YZ),
+    for (label, name, plane) in [
+        (
+            tr!("menu-sketch-xy"),
+            "Sketch on XY plane",
+            StandardPlane::XY,
+        ),
+        (
+            tr!("menu-sketch-xz"),
+            "Sketch on XZ plane",
+            StandardPlane::XZ,
+        ),
+        (
+            tr!("menu-sketch-yz"),
+            "Sketch on YZ plane",
+            StandardPlane::YZ,
+        ),
     ] {
         if entry(ui, true, icons::button(Icon::SketchOnPlane, label.as_str())).clicked() {
-            commands::timed(&label, || {
+            commands::timed(name, || {
                 if let Ok(id) = state.add_sketch(SketchPlane::Standard(plane)) {
                     let _ = state.open_sketch(id);
                 }

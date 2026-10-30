@@ -815,7 +815,7 @@ fn text_and_number_fields_are_26_high() {
 }
 
 fn command_lines(name: &str) -> usize {
-    let tag = format!("DETAIL Befehl {name}: ");
+    let tag = format!("DETAIL Command {name}: ");
     diag::recent_lines(2000)
         .iter()
         .filter(|l| l.contains(&tag))
@@ -831,7 +831,7 @@ fn menu_clicks_and_keys_each_log_one_detail_line() {
     let c = context(Some(true));
     let mut ws = workspace();
     // Menü „Erzeugen → Quader …“: genau eine Zeile.
-    let before = command_lines("Quader anlegen");
+    let before = command_lines("Create box");
     let (s, _) = shot_with(&c, vec![], |ui| app::create_menu(ui, &mut ws));
     let at = s.text("Quader …").rect.center();
     click(&c, at, |ui| {
@@ -839,9 +839,9 @@ fn menu_clicks_and_keys_each_log_one_detail_line() {
         false
     });
     assert!(ws.active_tab().dialog.is_some(), "Dialog offen");
-    assert_eq!(command_lines("Quader anlegen"), before + 1);
+    assert_eq!(command_lines("Create box"), before + 1);
     // Menü „Datei → Schließen“ (Aktion der Tastenbelegung): genau eine Zeile.
-    let name = Action::Close.label();
+    let name = diag::in_english(|| Action::Close.label());
     let before = command_lines(&name);
     let (s, _) = shot_with(&c, vec![], |ui| {
         app::file_menu(ui, &mut ws);

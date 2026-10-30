@@ -35,8 +35,9 @@ pub const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(120);
 pub fn no_root() -> String {
     tr!("project-no-root")
 }
-/// Schritt (Letzte Schritte) nach einem gelungenen Speichern; erst dann, nicht schon beim Befehl.
-const SAVE_STEP: &str = "Speichern";
+/// Schritt (Letzte Schritte, englisch) nach einem gelungenen Speichern; erst dann, nicht schon
+/// beim Befehl.
+const SAVE_STEP: &str = "Save";
 
 /// Ablehnung eines Dokumentnamens auf „.pcad“ (wie bei Ordnern; die Endung hängt das Programm
 /// selbst an).
@@ -247,7 +248,9 @@ impl DocTab {
             return;
         }
         let label = describe_change(self.history.current(), &after);
-        crate::diag::step(&label);
+        crate::diag::step(&crate::diag::in_english(|| {
+            describe_change(self.history.current(), &after)
+        }));
         let bytes = snapshot_bytes(&after);
         self.history.record(after, bytes, label);
     }
@@ -851,12 +854,12 @@ impl Workspace {
                 tab.based_on = Some(n);
                 tab.mark_clean();
                 crate::diag::step(SAVE_STEP);
-                crate::diag::info(&format!("Gespeichert: {} (Version {n})", tab.name));
+                crate::diag::info(&format!("Saved: {} (version {n})", tab.name));
                 Ok(SaveOutcome::Saved(n))
             }
             Err(ProjectError::NeedsBranch) => Ok(SaveOutcome::NeedsBranch),
             Err(e) => {
-                crate::diag::fehler(&format!("Speichern fehlgeschlagen: {}", tab.name));
+                crate::diag::fehler(&format!("Save failed: {}", tab.name));
                 Err(err(e))
             }
         }
@@ -908,7 +911,7 @@ impl Workspace {
         tab.pending_autosave = None;
         tab.keep_autosave = false;
         crate::diag::step(SAVE_STEP);
-        crate::diag::info(&format!("Gespeichert: {} (Version 1)", tab.name));
+        crate::diag::info(&format!("Saved: {} (version 1)", tab.name));
         tab.mark_clean();
         self.library_revision += 1;
         self.content_revision += 1;
@@ -1059,7 +1062,7 @@ impl Workspace {
         tab.based_on = Some(v);
         tab.pending_autosave = autosave;
         tab.keep_autosave = keep_autosave;
-        crate::diag::info(&format!("Geöffnet: {} (Version {v})", display_name(path)));
+        crate::diag::info(&format!("Opened: {} (version {v})", display_name(path)));
         let i = self.push_tab(tab);
         // ein schon stehender Prompt (z. B. das Angebot eines anderen Dokuments) bleibt;
         // `refresh_prompts` bietet diese Sicherung danach an

@@ -5,7 +5,7 @@
 .DESCRIPTION
   Die Windows-Version wird ohne Zeilenangaben ausgeliefert; die stehen in der Symboldatei
   (.pdb), die nur am Release haengt. Der Bericht eines Testers enthaelt am Ende den Abschnitt
-  "Adressen (fuer Dennis)": die Ruecksprungadressen als <exe>+0x<Versatz> und die Bau-Kennung
+  "Addresses (for Dennis)" (aeltere Berichte: "Adressen (fuer Dennis)"): die Ruecksprungadressen als <exe>+0x<Versatz> und die Bau-Kennung
   (PDB-GUID und Age). Dieses Skript
 
     1. liest diesen Abschnitt,
@@ -47,7 +47,7 @@ if (($Pdb -eq '') -eq ($Version -eq '')) { Stop-Symbolize 'Genau eins angeben: -
 $lines = [System.IO.File]::ReadAllLines((Resolve-Path -LiteralPath $Report).Path, [System.Text.Encoding]::UTF8)
 $start = -1
 for ($i = 0; $i -lt $lines.Count; $i++) {
-    if ($lines[$i].StartsWith('Adressen (f')) { $start = $i; break }
+    if ($lines[$i].StartsWith('Addresses (f') -or $lines[$i].StartsWith('Adressen (f')) { $start = $i; break }
 }
 if ($start -lt 0) { Stop-Symbolize 'Der Bericht hat keinen Abschnitt "Adressen". Er stammt von einer aelteren Version oder nicht von Windows.' }
 
@@ -57,10 +57,10 @@ $reportVersion = ''
 foreach ($l in $lines) { if ($l -match '^Version: (.+)$') { $reportVersion = $Matches[1].Trim(); break } }
 for ($i = $start + 1; $i -lt $lines.Count; $i++) {
     $l = $lines[$i]
-    if ($l -match '^Modul: (.+)$') { $module = $Matches[1].Trim() }
+    if ($l -match '^(?:Module|Modul): (.+)$') { $module = $Matches[1].Trim() }
     elseif ($l -match '^PDB-GUID: ([0-9A-Fa-f-]{36})$') { $guid = $Matches[1].ToUpperInvariant() }
     elseif ($l -match '^PDB-Age: (\d+)$') { $age = $Matches[1] }
-    elseif ($l -match '^PE-Zeit: (.+)$') { $peTime = $Matches[1].Trim() }
+    elseif ($l -match '^(?:PE-Time|PE-Zeit): (.+)$') { $peTime = $Matches[1].Trim() }
     elseif ($l -match '^\s*(\d+): (.+)\+0x([0-9a-fA-F]+)\s*$') {
         $frames.Add([pscustomobject]@{ N = [int]$Matches[1]; Module = $Matches[2]; Offset = [Convert]::ToUInt64($Matches[3], 16); Text = $l.Trim() })
     }

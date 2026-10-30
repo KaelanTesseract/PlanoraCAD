@@ -451,8 +451,8 @@ fn help_menu_has_feedback_faq_and_about_and_file_menu_no_longer_has_about() {
     r.open_menu(&help_menu_title());
     r.click(&feedback_entry());
     assert!(r.fb().open, "Rückmeldung offen");
-    assert!(r.sees(TITLE), "{:?}", r.texts());
-    r.click(CANCEL);
+    assert!(r.sees(&title()), "{:?}", r.texts());
+    r.click(&cancel());
     assert!(!r.fb().open);
 
     // Über PlanoraCAD öffnet den Über-Dialog.
@@ -504,13 +504,13 @@ fn ctrl_shift_r_opens_the_window_even_with_an_open_tab_dialog() {
     assert!(r.sees("Quader erzeugen"), "{:?}", r.texts());
     r.press(Key::R, CTRL_SHIFT);
     assert!(r.fb().open, "Strg+Umschalt+R öffnet die Rückmeldung");
-    assert!(r.sees(TITLE), "{:?}", r.texts());
+    assert!(r.sees(&title()), "{:?}", r.texts());
     assert!(
         r.app.ws_mut().active_tab().dialog.is_some(),
         "das Fenster des Tabs bleibt"
     );
     // Strg+R allein (ohne Umschalt) öffnet nichts.
-    r.click(CANCEL);
+    r.click(&cancel());
     assert!(!r.fb().open);
     r.press(Key::R, CTRL);
     assert!(!r.fb().open, "Strg+R ist nicht das Kürzel");
@@ -556,7 +556,7 @@ fn shortcut_is_listed_and_rebindable() {
     assert!(!r.fb().open, "alte Belegung wirkt nicht mehr");
     r.press(Key::K, CTRL_SHIFT);
     assert!(r.fb().open, "neue Belegung öffnet");
-    r.click(CANCEL);
+    r.click(&cancel());
     r.open_menu(&help_menu_title());
     assert!(r.sees("Strg+Umschalt+K"), "{:?}", r.texts());
     // Gespeichert unter der festen Id.
@@ -622,7 +622,7 @@ fn default_checkboxes() {
             Part::Bild
         ]
     );
-    assert_eq!(d.preview_text(Part::Bild), Some(SHOT_NOT_YET));
+    assert_eq!(d.preview_text(Part::Bild), Some(shot_not_yet()));
     // Die Adresse enthält nur die angehakten Teile.
     d.description = "Beim Extrudieren passiert nichts.".into();
     let url = d.built().url;
@@ -633,9 +633,9 @@ fn default_checkboxes() {
     // System mit Bildschirmgröße.
     assert_eq!(
         d.preview_text(Part::System),
-        Some("Windows 11 (Build 26100)\nBildschirm: 1920 × 1080")
+        Some("Windows 11 (Build 26100)\nScreen: 1920 × 1080".to_string())
     );
-    assert_eq!(screen_line(1920, 1080), "Bildschirm: 1920 × 1080");
+    assert_eq!(screen_line(1920, 1080), "Screen: 1920 × 1080");
 
     // Mit Absturzbericht (aus „Hilfe“ geöffnet): eigener Bestandteil, bereinigt, aber nicht
     // angehakt (an sind nur Version, System, Grafikkarte und letzte Schritte).
@@ -648,7 +648,7 @@ fn default_checkboxes() {
     assert!(d.shown_parts().contains(&Part::Absturzbericht));
     let text = d.preview_text(Part::Absturzbericht).unwrap();
     assert!(
-        text.contains("<Benutzer>") && !text.contains("Müller"),
+        text.contains("<user>") && !text.contains("Müller"),
         "{text}"
     );
 
@@ -662,18 +662,18 @@ fn default_checkboxes() {
         Part::Schritte,
         Part::Protokoll,
     ] {
-        assert!(r.sees(p.label()), "{p:?}: {:?}", r.texts());
+        assert!(r.sees(&p.label()), "{p:?}: {:?}", r.texts());
     }
     for t in [
-        KIND_LABEL,
-        DESCRIPTION_LABEL,
-        PREVIEW_HEADING,
-        PRIVACY_LINE,
-        SHOW_ADDRESS,
-        OPEN_BROWSER,
-        CANCEL,
+        kind_label(),
+        bug_label(),
+        preview_heading(),
+        privacy_line(),
+        show_address(),
+        open_browser(),
+        cancel(),
     ] {
-        assert!(r.sees(t), "„{t}“ fehlt: {:?}", r.texts());
+        assert!(r.sees(&t), "„{t}“ fehlt: {:?}", r.texts());
     }
 }
 
@@ -757,13 +757,13 @@ fn preview_is_exactly_what_the_address_carries() {
         (Part::Grafik, feedback::FIELD_GRAFIK),
         (Part::Schritte, feedback::FIELD_SCHRITTE),
     ] {
-        assert_eq!(field(&fields, name), d.preview_text(p), "{p:?}");
+        assert_eq!(field(&fields, name), d.preview_text(p).as_deref(), "{p:?}");
     }
     let log = format!(
         "{}:\n{}\n\n{}:\n{}",
-        Part::Protokoll.label(),
+        Part::Protokoll.heading(),
         d.preview_text(Part::Protokoll).unwrap(),
-        Part::Absturzbericht.label(),
+        Part::Absturzbericht.heading(),
         d.preview_text(Part::Absturzbericht).unwrap()
     );
     assert_eq!(
@@ -780,7 +780,7 @@ fn preview_is_exactly_what_the_address_carries() {
     let fields = url_fields(&d.built().url);
     let blocks: Vec<String> = checked
         .iter()
-        .map(|&p| format!("{}:\n{}", p.label(), d.preview_text(p).unwrap()))
+        .map(|&p| format!("{}:\n{}", p.heading(), d.preview_text(p).unwrap()))
         .collect();
     assert_eq!(
         field(&fields, feedback::FIELD_ANGABEN),
@@ -790,23 +790,23 @@ fn preview_is_exactly_what_the_address_carries() {
     d.set_checked(Part::Grafik, false);
     let fields = url_fields(&d.built().url);
     let angaben = field(&fields, feedback::FIELD_ANGABEN).unwrap();
-    assert!(!angaben.contains(d.preview_text(Part::Grafik).unwrap()));
+    assert!(!angaben.contains(d.preview_text(Part::Grafik).unwrap().as_str()));
 }
 
 #[test]
 fn area_none_means_no_area_line() {
-    assert_eq!(AREA_NONE, "Keine Angabe");
+    assert_eq!(area_none(), "Keine Angabe");
     let mut r = Rig::new("planora-fb-bereich");
     r.open_with_context();
     r.fb().description = "Die Skizze springt beim Bemaßen.".into();
     r.settle();
     // Am Anfang: keine Angabe.
     assert_eq!(r.fb().area, None);
-    assert!(r.sees(AREA_NONE), "{:?}", r.texts());
+    assert!(r.sees(&area_none()), "{:?}", r.texts());
     let url = r.fb().built().url;
     assert!(!url.contains(&percent_encode("Bereich:")), "{url}");
     // Klappliste: „Skizze“ wählen.
-    r.click(AREA_NONE);
+    r.click(&area_none());
     r.click(feedback::AREAS[0]);
     assert_eq!(r.fb().area, Some("Skizze"));
     let fields = url_fields(&r.fb().built().url);
@@ -817,11 +817,11 @@ fn area_none_means_no_area_line() {
     );
     // Zurück auf „Keine Angabe“: kein Bereich, keine Zeile „Bereich: …“.
     r.click("Skizze");
-    r.click(AREA_NONE);
+    r.click(&area_none());
     assert_eq!(r.fb().area, None);
     let url = r.fb().built().url;
     assert!(!url.contains(&percent_encode("Bereich:")), "{url}");
-    r.click(OPEN_BROWSER);
+    r.click(&open_browser());
     let sent = r.urls().pop().unwrap();
     assert!(!sent.contains(&percent_encode("Bereich:")), "{sent}");
     assert!(!sent.contains("bereich="), "nie als Parameter: {sent}");
@@ -836,8 +836,8 @@ fn preview_shows_sanitized_text() {
     open_previews(&r.ctx);
     r.settle();
     let all = r.texts().join("\n");
-    assert!(all.contains("<Benutzer>"), "Vorschau zu sehen: {all}");
-    assert!(all.contains("<Mailadresse>"), "{all}");
+    assert!(all.contains("<user>"), "Vorschau zu sehen: {all}");
+    assert!(all.contains("<email>"), "{all}");
     assert!(all.contains("Halter.pcad"), "{all}");
     for secret in ["Max Müller", "Müller", "max.mueller", "Kunden"] {
         assert!(!all.contains(secret), "„{secret}“ in der Vorschau: {all}");
@@ -860,23 +860,23 @@ fn preview_shows_sanitized_text() {
 #[test]
 fn button_disabled_below_10_chars_with_hint() {
     assert_eq!(MIN_CHARS, 10);
-    assert_eq!(TOO_SHORT, "Bitte schreib mindestens 10 Zeichen.");
+    assert_eq!(too_short(), "Bitte schreib mindestens 10 Zeichen.");
     let mut r = Rig::new("planora-fb-kurz");
     r.open_with_context();
-    assert!(r.sees(TOO_SHORT), "Hinweis am Anfang: {:?}", r.texts());
+    assert!(r.sees(&too_short()), "Hinweis am Anfang: {:?}", r.texts());
     // Leerzeichen zählen nicht.
     r.fb().description = "   kurz      ".into();
-    r.click(OPEN_BROWSER);
+    r.click(&open_browser());
     assert!(r.urls().is_empty(), "gesperrt");
     assert!(r.fb().sent.is_none());
-    assert!(r.sees(TOO_SHORT));
+    assert!(r.sees(&too_short()));
     r.fb().description = "123456789".into();
-    r.click(OPEN_BROWSER);
+    r.click(&open_browser());
     assert!(r.urls().is_empty(), "9 Zeichen reichen nicht");
     r.fb().description = "1234567890".into();
     r.settle();
-    assert!(!r.sees(TOO_SHORT), "Hinweis weg ab 10 Zeichen");
-    r.click(OPEN_BROWSER);
+    assert!(!r.sees(&too_short()), "Hinweis weg ab 10 Zeichen");
+    r.click(&open_browser());
     assert_eq!(r.urls().len(), 1, "10 Zeichen reichen");
 }
 
@@ -889,7 +889,7 @@ fn open_browser_emits_the_issue_url_and_shows_copy_hint() {
     r.type_text("Beim Extrudieren stürzt es ab & mehr");
     assert_eq!(r.fb().description, "Beim Extrudieren stürzt es ab & mehr");
     r.fb().area = Some("3D");
-    r.click(OPEN_BROWSER);
+    r.click(&open_browser());
     let urls = r.urls();
     assert_eq!(urls.len(), 1, "{urls:?}");
     let url = &urls[0];
@@ -909,12 +909,12 @@ fn open_browser_emits_the_issue_url_and_shows_copy_hint() {
     assert!(!url.contains(&percent_encode(ATTACH_HINT)));
     // Das Fenster bleibt offen und hilft weiter.
     assert!(r.fb().open);
-    for t in [BROWSER_HINT, COPY_TEXT, CLOSE] {
-        assert!(r.sees(t), "„{t}“ fehlt: {:?}", r.texts());
+    for t in [browser_hint(), copy_text(), close()] {
+        assert!(r.sees(&t), "„{t}“ fehlt: {:?}", r.texts());
     }
-    assert!(!r.sees(OPEN_BROWSER), "nicht zweimal schicken");
+    assert!(!r.sees(&open_browser()), "nicht zweimal schicken");
     assert_eq!(r.fb().sent.as_ref().unwrap().url, *url);
-    r.click(CLOSE);
+    r.click(&close());
     assert!(!r.fb().open);
     assert_eq!(r.urls().len(), 1);
 }
@@ -923,10 +923,10 @@ fn open_browser_emits_the_issue_url_and_shows_copy_hint() {
 fn wish_and_question_go_to_the_wish_form() {
     let mut r = Rig::new("planora-fb-wunsch");
     r.open_with_context();
-    r.click(feedback::Kind::Frage.label());
+    r.click(&feedback::Kind::Frage.label());
     assert_eq!(r.fb().kind, feedback::Kind::Frage);
     r.fb().description = "Wie spiegle ich eine Skizze?".into();
-    r.click(OPEN_BROWSER);
+    r.click(&open_browser());
     let url = r.urls().pop().unwrap();
     assert!(url.contains("template=wunsch.yml"), "{url}");
     assert!(url.contains(&percent_encode("Frage: ")), "{url}");
@@ -939,23 +939,23 @@ fn copy_puts_the_url_into_the_clipboard() {
     r.open_with_context();
     r.fb().description = "Die Bemaßung springt weg.".into();
     // Vor dem Schicken: unter „Adresse anzeigen“.
-    r.click(SHOW_ADDRESS);
+    r.click(&show_address());
     let url = r.fb().built().url;
     assert!(r.sees(&url), "Adresse als Text: {:?}", r.texts());
-    r.click(COPY_TEXT);
+    r.click(&copy_text());
     assert_eq!(r.copies(), std::slice::from_ref(&url));
-    assert!(r.sees(COPIED), "{:?}", r.texts());
+    assert!(r.sees(&copied()), "{:?}", r.texts());
     assert!(r.urls().is_empty(), "Kopieren öffnet keinen Browser");
     // Nach dem Schicken: neben dem Hinweis.
-    r.click(OPEN_BROWSER);
+    r.click(&open_browser());
     assert!(
-        !r.sees(COPIED),
+        !r.sees(&copied()),
         "Hinweis „Kopiert.“ gilt nur bis zum Schicken"
     );
-    r.click(COPY_TEXT);
+    r.click(&copy_text());
     assert_eq!(r.copies(), [url.clone(), url.clone()]);
     assert_eq!(r.urls(), [url]);
-    assert!(r.sees(COPIED));
+    assert!(r.sees(&copied()));
 }
 
 #[test]
@@ -965,7 +965,7 @@ fn long_input_writes_bundle_and_opens_folder() {
     r.fb().set_checked(Part::Protokoll, true);
     let long = "Erst skizziert, dann extrudiert, dann gespeichert. ".repeat(80);
     r.fb().description = long.clone();
-    r.click(OPEN_BROWSER);
+    r.click(&open_browser());
     let opened = r.opened();
     assert_eq!(opened.len(), 1, "Ordner geöffnet: {opened:?}");
     let dir = &opened[0];
@@ -976,13 +976,13 @@ fn long_input_writes_bundle_and_opens_folder() {
         text.contains(long.trim_end()),
         "ganze Beschreibung in der Datei"
     );
-    assert!(text.contains("<Benutzer>") && !text.contains("Müller"));
+    assert!(text.contains("<user>") && !text.contains("Müller"));
     let url = r.urls().pop().expect("Browser");
     assert!(url.len() < 2000, "{}", url.len());
     assert!(url.contains(&percent_encode(ATTACH_HINT)), "{url}");
     assert_eq!(FEEDBACK_FILE, "rueckmeldung.txt");
     assert!(r.sees(&folder_hint(&[FEEDBACK_FILE])), "{:?}", r.texts());
-    assert!(!r.sees(NO_FILE));
+    assert!(!r.sees(&no_file()));
     assert_eq!(r.fb().sent.as_ref().unwrap().folder.as_ref(), Some(dir));
 }
 
@@ -993,12 +993,12 @@ fn unwritable_data_dir_still_opens_browser_with_no_file_hint() {
     std::fs::write(r.bundle_root(), "kein Ordner").unwrap();
     r.open_with_context();
     r.fb().description = "Sehr lange Beschreibung. ".repeat(120);
-    r.click(OPEN_BROWSER);
+    r.click(&open_browser());
     assert_eq!(r.urls().len(), 1, "der Browser öffnet trotzdem");
     assert!(r.opened().is_empty(), "kein Ordner");
-    assert!(r.sees(NO_FILE), "{:?}", r.texts());
+    assert!(r.sees(&no_file()), "{:?}", r.texts());
     assert!(!r.sees(&folder_hint(&[FEEDBACK_FILE])));
-    assert!(r.sees(BROWSER_HINT));
+    assert!(r.sees(&browser_hint()));
     assert!(r.fb().sent.as_ref().unwrap().file_failed);
 
     // Kurz mit Absturzbericht: ohne Datei auch kein Hinweis „Datei hier anhängen“.
@@ -1009,10 +1009,10 @@ fn unwritable_data_dir_still_opens_browser_with_no_file_hint() {
     c.from_crash = true;
     r.fb().open_fresh(c);
     r.fb().description = "Es ist abgestürzt.".into();
-    r.click(OPEN_BROWSER);
+    r.click(&open_browser());
     let url = r.urls().pop().unwrap();
     assert!(!url.contains(&percent_encode(ATTACH_HINT)), "{url}");
-    assert!(r.sees(NO_FILE));
+    assert!(r.sees(&no_file()));
 }
 
 #[test]
@@ -1021,10 +1021,10 @@ fn unchecked_parts_are_not_in_the_url() {
     r.open_with_context();
     r.fb().description = "Der Kreis wird zur Ellipse.".into();
     // Ein Klick auf das Häkchen nimmt es weg.
-    r.click(Part::Version.label());
+    r.click(&Part::Version.label());
     assert!(!r.fb().is_checked(Part::Version));
     r.fb().set_checked(Part::System, false);
-    r.click(OPEN_BROWSER);
+    r.click(&open_browser());
     let url = r.urls().pop().unwrap();
     assert!(!url.contains("&version="), "{url}");
     assert!(!url.contains("&system="), "{url}");
@@ -1044,11 +1044,11 @@ fn esc_and_cancel_close_without_side_effects() {
     r.press(Key::Escape, NONE);
     r.press(Key::Escape, NONE);
     assert!(!r.fb().open, "Esc schließt");
-    assert!(!r.sees(TITLE));
+    assert!(!r.sees(&title()));
 
     r.open_with_context();
     r.fb().description = "Etwas ganz Langes, das nicht weggeht.".into();
-    r.click(CANCEL);
+    r.click(&cancel());
     assert!(!r.fb().open, "Abbrechen schließt");
 
     assert!(r.urls().is_empty(), "kein Browser");
@@ -1124,7 +1124,7 @@ fn window_rules_like_the_overview() {
         bodies,
         "Strg+Z wirkt nicht bei offener Rückmeldung"
     );
-    r.click(CANCEL);
+    r.click(&cancel());
     r.press(Key::Z, CTRL);
     assert_eq!(
         r.app.ws_mut().active_tab().state.bodies.len(),
@@ -1160,8 +1160,8 @@ fn fits_at_1920x1080_and_does_not_panic_at_800x600() {
         (rect.center().x - screen.center().x).abs() < 1.0,
         "mittig: {rect:?}"
     );
-    for t in [OPEN_BROWSER, CANCEL, PRIVACY_LINE] {
-        assert!(rect.contains_rect(r.find(t)), "{t} im Fenster");
+    for t in [open_browser(), cancel(), privacy_line()] {
+        assert!(rect.contains_rect(r.find(&t)), "{t} im Fenster");
     }
 
     // Klein, mit allem aufgeklappt und langem Protokoll: läuft durch, bleibt im Fenster.
@@ -1199,20 +1199,20 @@ fn fits_at_1920x1080_and_does_not_panic_at_800x600() {
         r.settle();
     };
     for _ in 0..40 {
-        if r.sees(SHOW_ADDRESS) {
+        if r.sees(&show_address()) {
             break;
         }
         wheel(&mut r);
     }
-    assert!(r.sees(OPEN_BROWSER), "Fußzeile bleibt: {:?}", r.texts());
-    r.click(SHOW_ADDRESS);
+    assert!(r.sees(&open_browser()), "Fußzeile bleibt: {:?}", r.texts());
+    r.click(&show_address());
     for _ in 0..5 {
         wheel(&mut r);
     }
     assert!(screen.contains_rect(r.window_rect()));
-    r.click(OPEN_BROWSER);
+    r.click(&open_browser());
     assert_eq!(r.urls().len(), 1);
-    r.click(CLOSE);
+    r.click(&close());
     assert!(!r.fb().open);
 }
 
@@ -1220,54 +1220,54 @@ fn fits_at_1920x1080_and_does_not_panic_at_800x600() {
 
 #[test]
 fn texts_are_plain_language() {
-    assert_eq!(TITLE, "Rückmeldung");
-    assert_eq!(KIND_LABEL, "Worum geht es?");
+    assert_eq!(title(), "Rückmeldung");
+    assert_eq!(kind_label(), "Worum geht es?");
     assert_eq!(
-        DESCRIPTION_LABEL,
+        bug_label(),
         "Beschreib kurz, was du gemacht hast und was passiert ist."
     );
-    assert_eq!(PREVIEW_HEADING, "Das geht mit");
-    assert_eq!(OPEN_BROWSER, "Im Browser öffnen");
-    assert_eq!(CANCEL, "Abbrechen");
-    assert_eq!(SHOW_ADDRESS, "Adresse anzeigen");
-    assert_eq!(COPY_TEXT, "Text kopieren");
+    assert_eq!(preview_heading(), "Das geht mit");
+    assert_eq!(open_browser(), "Im Browser öffnen");
+    assert_eq!(cancel(), "Abbrechen");
+    assert_eq!(show_address(), "Adresse anzeigen");
+    assert_eq!(copy_text(), "Text kopieren");
     assert_eq!(
-        BROWSER_HINT,
+        browser_hint(),
         "Hat sich kein Browser geöffnet? Kopier die Adresse und füg sie im Browser ein."
     );
-    assert_eq!(COPIED, "Kopiert.");
+    assert_eq!(copied(), "Kopiert.");
     assert_eq!(
-        NO_FILE,
+        no_file(),
         "Die Datei ließ sich nicht anlegen. Die Meldung geht trotzdem."
     );
     assert_eq!(
-        PRIVACY_LINE,
+        privacy_line(),
         "Die Angaben gehen erst mit dem Öffnen im Browser an GitHub oder das Formular. Gespeichert und gemeldet wird erst, wenn du dort absendest."
     );
     assert!(folder_hint(&["rueckmeldung.txt"]).contains("„rueckmeldung.txt“"));
     let all = [
-        TITLE.to_string(),
-        KIND_LABEL.into(),
-        AREA_LABEL.into(),
-        AREA_NONE.into(),
-        DESCRIPTION_LABEL.into(),
-        TOO_SHORT.into(),
-        PREVIEW_HEADING.into(),
-        OPEN_BROWSER.into(),
-        CANCEL.into(),
-        CLOSE.into(),
-        SHOW_ADDRESS.into(),
-        COPY_TEXT.into(),
-        BROWSER_HINT.into(),
-        COPIED.into(),
-        NO_FILE.into(),
-        PRIVACY_LINE.into(),
+        title().to_string(),
+        kind_label(),
+        area_label(),
+        area_none(),
+        bug_label(),
+        too_short(),
+        preview_heading(),
+        open_browser(),
+        cancel(),
+        close(),
+        show_address(),
+        copy_text(),
+        browser_hint(),
+        copied(),
+        no_file(),
+        privacy_line(),
         folder_hint(&["rueckmeldung.txt"]),
         screen_line(1920, 1080),
     ];
     for t in &all {
         // Der Datenschutz-Satz ist ehrlich und darum länger; er bricht im Fenster um.
-        let max = if t == PRIVACY_LINE { 140 } else { 90 };
+        let max = if *t == privacy_line() { 140 } else { 90 };
         assert!(t.chars().count() <= max, "kurz genug: {t}");
         for tech in ["URL", "Issue", "Parameter", "::", "Sie ", "Ihre"] {
             assert!(!t.contains(tech), "{t} enthält {tech}");
@@ -1306,13 +1306,13 @@ fn app_sends_viewport_screenshot_command_after_one_hidden_frame() {
     use planora_app::feedback_shot::{SHOT_FILE, preview_line, shot_user_data};
     let mut r = Rig::new("planora-fb-bild");
     r.open_with_context();
-    assert!(r.sees(TITLE));
+    assert!(r.sees(&title()));
     assert_eq!(shot_requests(&r), 0);
     open_previews(&r.ctx);
     r.settle();
     // Häkchen „Bild vom Fenster“ setzen: das Fenster verschwindet ein Bild lang, dann kommt
     // die Anforderung (das Bild davor zeigt kein Rückmeldungsfenster).
-    let p = r.find(Part::Bild.label()).center();
+    let p = r.find(&Part::Bild.label()).center();
     r.frame(vec![Event::PointerMoved(p)]);
     r.frame(vec![Event::PointerButton {
         pos: p,
@@ -1335,31 +1335,31 @@ fn app_sends_viewport_screenshot_command_after_one_hidden_frame() {
         frames += 1;
     }
     assert!(
-        !r.sees(TITLE),
+        !r.sees(&title()),
         "Fenster beim Anfordern verborgen: {:?}",
         r.texts()
     );
     assert_eq!(shot_requests(&r), 1);
     r.frame(vec![]);
-    assert!(!r.sees(TITLE), "verborgen, solange gewartet wird");
+    assert!(!r.sees(&title()), "verborgen, solange gewartet wird");
     // Ein fremdes Bild ändert nichts.
     r.frame(vec![screenshot_event(5, 5, egui::UserData::new("fremd"))]);
-    assert!(!r.sees(TITLE));
+    assert!(!r.sees(&title()));
     // Das eigene Bild kommt: Fenster wieder da, Vorschau mit Größe, Häkchen gesetzt.
     r.frame(vec![screenshot_event(64, 48, shot_user_data())]);
     r.settle();
-    assert!(r.sees(TITLE), "wieder gezeigt");
+    assert!(r.sees(&title()), "wieder gezeigt");
     assert!(r.fb().is_checked(Part::Bild));
     let line = preview_line(&egui::ColorImage::new(
         [64, 48],
         vec![egui::Color32::BLACK; 64 * 48],
     ));
-    assert_eq!(r.fb().preview_text(Part::Bild), Some(line.as_str()));
+    assert_eq!(r.fb().preview_text(Part::Bild), Some(line));
     assert_eq!(shot_requests(&r), 1, "nur einmal angefordert");
 
     // Schicken: das Bild liegt im Rückmeldungsordner, die Adresse sagt „anhängen“.
     r.fb().description = "Die Linie springt beim Ziehen weg.".into();
-    r.click(OPEN_BROWSER);
+    r.click(&open_browser());
     let opened = r.opened();
     assert_eq!(opened.len(), 1, "{opened:?}");
     let png = opened[0].join(SHOT_FILE);
@@ -1390,7 +1390,7 @@ fn picture_is_named_in_the_window_hint_and_the_web_address() {
         )));
     r.settle();
     assert!(r.fb().is_checked(Part::Bild));
-    r.click(WEBFORM_BUTTON);
+    r.click(&webform_button());
     let url = r.urls().pop().unwrap();
     assert!(url.starts_with(planora_app::feedback::WEBFORM_URL), "{url}");
     assert!(url.contains(&percent_encode(ATTACH_HINT_PICTURE)), "{url}");
@@ -1404,7 +1404,7 @@ fn picture_is_named_in_the_window_hint_and_the_web_address() {
 
 #[test]
 fn shot_timeout_unchecks_picture_and_shows_hint() {
-    use planora_app::feedback_shot::{SHOT_FAILED, SHOT_TIMEOUT, ShotStep};
+    use planora_app::feedback_shot::{SHOT_TIMEOUT, ShotStep, shot_failed};
     let tmp = common::temp_root("planora-fb-bild-zeit");
     std::fs::create_dir_all(&tmp).unwrap();
     let mut d = FeedbackDialog::default();
@@ -1416,33 +1416,33 @@ fn shot_timeout_unchecks_picture_and_shows_hint() {
     assert_eq!(d.shot_tick(t0 + SHOT_TIMEOUT), ShotStep::ShowDialogAgain);
     assert!(!d.hides_for_shot());
     assert!(!d.is_checked(Part::Bild), "ohne Bild kein Häkchen");
-    assert_eq!(d.preview_text(Part::Bild), Some(SHOT_FAILED));
+    assert_eq!(d.preview_text(Part::Bild), Some(shot_failed()));
     // Erneut anhaken versucht es noch einmal.
     d.set_checked(Part::Bild, true);
     assert!(d.hides_for_shot());
     // Abwählen bricht ab und vergisst das Bild.
     d.set_checked(Part::Bild, false);
     assert!(!d.hides_for_shot());
-    assert_eq!(d.preview_text(Part::Bild), Some(SHOT_NOT_YET));
+    assert_eq!(d.preview_text(Part::Bild), Some(shot_not_yet()));
 }
 
 #[test]
 fn webform_button_is_locked_below_10_chars() {
-    assert_eq!(WEBFORM_BUTTON, "Ohne GitHub-Konto senden");
+    assert_eq!(webform_button(), "Ohne GitHub-Konto senden");
     let mut r = Rig::new("planora-fb-web-kurz");
     r.open_with_context();
     assert!(
-        r.sees(WEBFORM_BUTTON) && r.sees(WEBFORM_HINT),
+        r.sees(&webform_button()) && r.sees(&webform_hint()),
         "{:?}",
         r.texts()
     );
     r.fb().description = "123456789".into();
-    r.click(WEBFORM_BUTTON);
+    r.click(&webform_button());
     assert!(r.urls().is_empty(), "gesperrt");
     assert!(r.fb().sent.is_none());
     r.fb().description = "1234567890".into();
     r.settle();
-    r.click(WEBFORM_BUTTON);
+    r.click(&webform_button());
     assert_eq!(r.urls().len(), 1);
 }
 
@@ -1452,7 +1452,7 @@ fn webform_button_opens_the_web_address_and_shows_copy_and_mail_hint() {
     r.open_with_context();
     r.fb().area = Some("3D");
     r.fb().description = "Beim Extrudieren stürzt es ab & mehr".into();
-    r.click(WEBFORM_BUTTON);
+    r.click(&webform_button());
     let urls = r.urls();
     assert_eq!(urls.len(), 1, "{urls:?}");
     assert!(
@@ -1462,10 +1462,10 @@ fn webform_button_opens_the_web_address_and_shows_copy_and_mail_hint() {
     );
     assert!(urls[0].contains("art=fehler") && urls[0].contains("bereich=3D"));
     assert!(r.opened().is_empty(), "kurz: kein Ordner");
-    assert!(r.sees(COPY_TEXT) && r.sees(BROWSER_HINT));
-    assert!(r.sees(MAIL_FALLBACK), "{:?}", r.texts());
+    assert!(r.sees(&copy_text()) && r.sees(&browser_hint()));
+    assert!(r.sees(&mail_fallback()), "{:?}", r.texts());
     assert_eq!(
-        MAIL_FALLBACK,
+        mail_fallback(),
         "Klappt beides nicht? Schreib an info@dennis-guse.de."
     );
 }
@@ -1475,7 +1475,7 @@ fn webform_button_opens_folder_when_needed() {
     let mut r = Rig::new("planora-fb-web-lang");
     r.open_with_context();
     r.fb().description = "Erst skizziert, dann extrudiert, dann gespeichert. ".repeat(80);
-    r.click(WEBFORM_BUTTON);
+    r.click(&webform_button());
     let opened = r.opened();
     assert_eq!(opened.len(), 1, "{opened:?}");
     assert!(opened[0].join(FEEDBACK_FILE).exists());
@@ -1494,7 +1494,7 @@ fn reopening_collapses_address_and_previews() {
     r.open_with_context();
     open_previews(&r.ctx);
     r.settle();
-    r.click(SHOW_ADDRESS);
+    r.click(&show_address());
     let shows_address = |r: &Rig| {
         r.seen
             .iter()
@@ -1544,55 +1544,55 @@ fn log_tells_github_from_webform() {
     let mut r = Rig::new("planora-fb-log");
     r.open_with_context();
     r.fb().description = "Beim Extrudieren stürzt es ab".into();
-    r.click(OPEN_BROWSER);
+    r.click(&open_browser());
     let lines = planora_app::diag::recent_lines(500);
     assert!(
         lines
             .iter()
-            .any(|l| l.ends_with("Rückmeldung (Fehler) über GitHub geöffnet")),
+            .any(|l| l.ends_with("Feedback (Bug) opened via GitHub")),
         "{lines:?}"
     );
     let mut r = Rig::new("planora-fb-log2");
     r.open_with_context();
     r.fb().description = "Beim Extrudieren stürzt es ab".into();
-    r.click(WEBFORM_BUTTON);
+    r.click(&webform_button());
     let lines = planora_app::diag::recent_lines(500);
     assert!(
         lines
             .iter()
-            .any(|l| l.ends_with("Rückmeldung (Fehler) über das Webformular geöffnet")),
+            .any(|l| l.ends_with("Feedback (Bug) opened via the web form")),
         "{lines:?}"
     );
 }
 
 #[test]
 fn description_prompt_follows_the_kind() {
-    assert_eq!(WISH_LABEL, "Was möchtest du tun können?");
-    assert_eq!(QUESTION_LABEL, "Was möchtest du wissen?");
+    assert_eq!(wish_label(), "Was möchtest du tun können?");
+    assert_eq!(question_label(), "Was möchtest du wissen?");
     let mut r = Rig::new("planora-fb-aufforderung");
     r.open_with_context();
     for (kind, text, others) in [
         (
             feedback::Kind::Wunsch,
-            WISH_LABEL,
-            [DESCRIPTION_LABEL, QUESTION_LABEL],
+            wish_label(),
+            [bug_label(), question_label()],
         ),
         (
             feedback::Kind::Frage,
-            QUESTION_LABEL,
-            [DESCRIPTION_LABEL, WISH_LABEL],
+            question_label(),
+            [bug_label(), wish_label()],
         ),
         (
             feedback::Kind::Fehler,
-            DESCRIPTION_LABEL,
-            [WISH_LABEL, QUESTION_LABEL],
+            bug_label(),
+            [wish_label(), question_label()],
         ),
     ] {
-        r.click(kind.label());
+        r.click(&kind.label());
         assert_eq!(description_label(kind), text);
-        assert!(r.sees(text), "{kind:?}: {:?}", r.texts());
+        assert!(r.sees(&text), "{kind:?}: {:?}", r.texts());
         for o in others {
-            assert!(!r.sees(o), "{kind:?}: „{o}“ zu sehen");
+            assert!(!r.sees(&o), "{kind:?}: „{o}“ zu sehen");
         }
     }
 }

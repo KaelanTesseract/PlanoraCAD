@@ -418,9 +418,9 @@ fn detail_lines_have_no_project_content() {
     let root_text = root.display().to_string();
     for l in &details {
         let text = l.splitn(3, ' ').nth(2).unwrap();
-        // Nur „Befehl <Name>: <n> ms“ mit dem festen Namen der Aktion.
+        // Nur „Command <Name>: <n> ms“ mit dem festen englischen Namen der Aktion.
         let rest = text
-            .strip_prefix("Befehl ")
+            .strip_prefix("Command ")
             .unwrap_or_else(|| panic!("{l}"));
         let (name, dur) = rest.rsplit_once(": ").unwrap_or_else(|| panic!("{l}"));
         assert!(
@@ -432,7 +432,7 @@ fn detail_lines_have_no_project_content() {
                 Action::New
             ]
             .iter()
-            .any(|a| a.label() == name),
+            .any(|a| diag::in_english(|| a.label()) == name),
             "{l}"
         );
         let ms = dur.strip_suffix(" ms").unwrap_or_else(|| panic!("{l}"));
