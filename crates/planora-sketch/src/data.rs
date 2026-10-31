@@ -53,6 +53,12 @@ fn bad(msg: impl Into<String>) -> SketchError {
 }
 
 impl Sketch {
+    /// Arten aller Kurveneinträge in Arena-Reihenfolge, auch gelöschter (wie in
+    /// [`Sketch::to_data`]).
+    pub fn curve_entries(&self) -> impl Iterator<Item = &CurveKind> {
+        self.curves.iter().map(|(_, c)| &c.kind)
+    }
+
     pub fn to_data(&self) -> SketchData {
         SketchData {
             name: self.name.clone(),
@@ -139,6 +145,7 @@ impl Sketch {
                     return Err(bad(tr!("sketch-err-data-circle-value")));
                 }
                 CurveKind::Ellipse { ax, ay, minor, .. }
+                | CurveKind::EllipticArc { ax, ay, minor, .. }
                     if !(var_ok(*ax) && var_ok(*ay) && var_ok(*minor)) =>
                 {
                     return Err(bad(tr!("sketch-err-data-ellipse-value")));

@@ -1,9 +1,10 @@
-//! Profil-Extraktion: geschlossene Ketten aus Linien, Bögen und Splines sowie Kreise und
-//! Ellipsen werden zu Kernel-Profilen.
+//! Profil-Extraktion: geschlossene Ketten aus Linien, Bögen, Ellipsenbögen und Splines sowie
+//! Kreise und Ellipsen werden zu Kernel-Profilen.
 //!
 //! Regeln: Es zählen lebende Kurven, die keine Konstruktionsgeometrie sind. Endpunkte im Abstand
 //! `≤ tol.linear` bilden denselben Knoten. Kreise und Ellipsen sind eigene Schleifen (Ellipsen als
-//! ein geschlossenes Freiformsegment), Linien, Bögen und Splines bilden einen Graphen, dessen
+//! ein geschlossenes Freiformsegment), Linien, Bögen, Ellipsenbögen (als Freiformsegment) und
+//! Splines bilden einen Graphen, dessen
 //! Zusammenhangskomponenten je ein einfacher Kreis sein müssen. Splines werden zu natürlichen
 //! kubischen Freiformkurven mit derselben Parametrisierung wie in der Skizze (Stützpunkt `i` bei
 //! `t = i`); ein Spline, dessen Enden zusammenfallen, ist allein eine Schleife. Schleifen, die
@@ -27,6 +28,11 @@ use std::sync::Arc;
 /// Meldung für Bögen, deren Endpunkte nicht auf demselben Kreis um die Mitte liegen.
 fn arc_off_circle() -> String {
     tr!("sketch-err-arc-off-circle")
+}
+
+/// Meldung für Ellipsenbögen, deren Endpunkte nicht auf ihrer Ellipse liegen.
+fn elliptic_arc_off_ellipse() -> String {
+    tr!("sketch-err-elliptic-arc-off-ellipse")
 }
 
 /// Meldung für Splines, deren Kurvenenden nicht an den Knoten der Schleife liegen.
@@ -89,8 +95,8 @@ impl Sketch {
                 })
         };
 
-        // Kreise und Ellipsen sind eigene Schleifen; Linien, Bögen und Splines bilden den
-        // Graphen (Splines hängen mit ihren Endpunkten daran).
+        // Kreise und Ellipsen sind eigene Schleifen; Linien, Bögen, Ellipsenbögen und Splines
+        // bilden den Graphen (Splines hängen mit ihren Endpunkten daran).
         let mut edges: Vec<Edge> = Vec::new();
         for (id, c) in self.curves().filter(|(_, c)| !c.construction) {
             match &c.kind {
@@ -108,6 +114,9 @@ impl Sketch {
                 }
                 CurveKind::Line { a, b }
                 | CurveKind::Arc {
+                    start: a, end: b, ..
+                }
+                | CurveKind::EllipticArc {
                     start: a, end: b, ..
                 } => {
                     let (na, nb) = (node(self.pos(*a)), node(self.pos(*b)));
@@ -286,7 +295,9 @@ impl Sketch {
             && !(comp.len() == 1 && is_spline(e))
         {
             let msg = match self.curves[edges[e].curve].kind {
-                CurveKind::Arc { .. } => tr!("sketch-err-arc-closed"),
+                CurveKind::Arc { .. } | CurveKind::EllipticArc { .. } => {
+                    tr!("sketch-err-arc-closed")
+                }
                 CurveKind::Spline { .. } => {
                     tr!("sketch-err-spline-closed-branch")
                 }
@@ -348,6 +359,9 @@ impl Sketch {
             let target = reps[if forward { edge.b } else { edge.a }];
             let seg = match &self.curves[edge.curve].kind {
                 CurveKind::Spline { points } => self.spline_segment(points, forward)?,
+                CurveKind::EllipticArc { .. } => {
+                    self.elliptic_arc_segment(edge.curve, reps[edge.a], reps[edge.b], forward)?
+                }
                 &CurveKind::Arc { center, .. } => {
                     // Der Bogen läuft gegen den Uhrzeigersinn vom Knoten `a` (Start) zu `b` (Ende).
                     let c = self.pos(center);
@@ -371,12 +385,17 @@ impl Sketch {
                 _ => Segment::Line { to: target },
             };
             let off_node = if let Segment::Nurbs { curve } = &seg {
+                let msg = if matches!(self.curves[edge.curve].kind, CurveKind::EllipticArc { .. }) {
+                    elliptic_arc_off_ellipse()
+                } else {
+                    spline_off_node()
+                };
                 // Der Kernel verlangt, dass ein Freiformsegment am Ende des vorigen beginnt.
                 let p = curve.point(curve.domain().0);
                 if at.distance(DVec2::new(p.x, p.y)) > tol.linear {
-                    return Err(SketchError::Degenerate(spline_off_node()));
+                    return Err(SketchError::Degenerate(msg));
                 }
-                spline_off_node()
+                msg
             } else {
                 arc_off_circle()
             };
@@ -400,18 +419,27 @@ impl Sketch {
     /// `c + a·cos t + b·sin t` mit `b = minor · (−ay, ax)/|a|` (gegen den Uhrzeigersinn, wie
     /// [`Sketch::ellipse_point`]).
     fn ellipse_loop(&self, id: CurveId) -> Result<ProfileLoop, SketchError> {
-        let CurveKind::Ellipse {
-            center,
-            ax,
-            ay,
-            minor,
-        } = self.curves[id].kind
-        else {
-            return Err(SketchError::WrongType(tr!("sketch-err-not-ellipse")));
-        };
+        let (c, a, b) = self.ellipse_frame(id)?;
+        let curve = NurbsCurve::elliptic_arc(
+            DVec3::new(c.x, c.y, 0.0),
+            DVec3::new(a.x, a.y, 0.0),
+            DVec3::new(b.x, b.y, 0.0),
+            0.0,
+            TAU,
+        )
+        .map_err(|e| {
+            SketchError::Degenerate(tr!("sketch-err-ellipse-invalid", detail = e.to_string()))
+        })?;
+        ProfileLoop::nurbs_loop(curve).map_err(|e| SketchError::Kernel(e.to_string()))
+    }
+
+    /// Mittelpunkt `c` und Halbachsen `a`, `b = minor · (−ay, ax)/|a|` einer Ellipse oder eines
+    /// Ellipsenbogens; beide Halbachsen müssen länger als `tol.linear` sein.
+    fn ellipse_frame(&self, id: CurveId) -> Result<(DVec2, DVec2, DVec2), SketchError> {
+        let (c, a, minor) = self
+            .ellipse_axes(id)
+            .ok_or_else(|| SketchError::WrongType(tr!("sketch-err-not-ellipse")))?;
         let tol = self.tolerance().linear;
-        let a = DVec2::new(self.vars[ax], self.vars[ay]);
-        let minor = self.vars[minor];
         let len = a.length();
         if !(len.is_finite() && len > tol) {
             return Err(SketchError::Degenerate(tr!(
@@ -427,19 +455,63 @@ impl Sketch {
                 unit = planora_i18n::unit_symbol()
             )));
         }
-        let b = a.perp() / len * minor;
-        let c = self.pos(center);
+        Ok((c, a, a.perp() / len * minor))
+    }
+
+    /// Freiformsegment eines Ellipsenbogens von Knoten `from` (Start) gegen den Uhrzeigersinn zu
+    /// Knoten `to` (Ende) auf seiner Ellipse: `NurbsCurve::elliptic_arc` mit dem Parameter des
+    /// Starts als Startwinkel und dem Parameterabstand zum Ende als Öffnungswinkel; umgekehrt,
+    /// wenn die Schleife ihn gegen seine Richtung durchläuft. Liegen die Knoten nicht auf der
+    /// Ellipse, beginnt oder endet das Segment neben ihnen (das prüft der Aufrufer).
+    fn elliptic_arc_segment(
+        &self,
+        id: CurveId,
+        from: DVec2,
+        to: DVec2,
+        forward: bool,
+    ) -> Result<Segment, SketchError> {
+        let tol = self.tolerance();
+        let (c, a, b) = self.ellipse_frame(id)?;
+        let (Some(t0), Some(t1)) = (
+            self.ellipse_param_of(id, from),
+            self.ellipse_param_of(id, to),
+        ) else {
+            return Err(SketchError::Degenerate(elliptic_arc_off_ellipse()));
+        };
+        let sweep = (t1 - t0).rem_euclid(TAU);
+        // wie beim Bogen: (fast) kein oder ein voller Umlauf zwischen zwei Knoten ist entartet
+        if sweep <= tol.angular || sweep >= TAU - tol.angular {
+            return Err(SketchError::Degenerate(tr!("sketch-err-arc-no-angle")));
+        }
         let curve = NurbsCurve::elliptic_arc(
             DVec3::new(c.x, c.y, 0.0),
             DVec3::new(a.x, a.y, 0.0),
             DVec3::new(b.x, b.y, 0.0),
-            0.0,
-            TAU,
+            t0,
+            sweep,
         )
         .map_err(|e| {
             SketchError::Degenerate(tr!("sketch-err-ellipse-invalid", detail = e.to_string()))
         })?;
-        ProfileLoop::nurbs_loop(curve).map_err(|e| SketchError::Kernel(e.to_string()))
+        let start = curve.point(curve.domain().0);
+        let seg = Segment::Nurbs {
+            curve: Arc::new(curve),
+        };
+        if forward {
+            return Ok(seg);
+        }
+        let single = ProfileLoop {
+            start: DVec2::new(start.x, start.y),
+            segments: vec![seg],
+        };
+        let reversed = single
+            .try_reversed()
+            .map_err(|e| SketchError::Kernel(e.to_string()))?;
+        reversed
+            .segments
+            .into_iter()
+            .next()
+            .ok_or_else(|| SketchError::Degenerate(tr!("sketch-err-elliptic-arc-reverse")))
     }
 
     /// Freiformsegment eines Splines: natürlicher kubischer Spline durch die Stützpunkte mit

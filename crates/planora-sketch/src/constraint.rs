@@ -76,6 +76,8 @@ pub enum ConstraintKind {
     /// Halbachse in die Gegenrichtung `v + π` zeigt. Das ist dieselbe Ellipse; `measure`
     /// liefert dann aber `v ± π` (Wert von `atan2` in `(−π, π]`).
     EllipseAngle(CurveId, f64),
+    /// Intern: Start und Ende eines Ellipsenbogens liegen auf seiner Ellipse.
+    EllipticArcEnds(CurveId),
 }
 
 impl ConstraintKind {
@@ -138,6 +140,7 @@ impl ConstraintKind {
             | Radius(c, _)
             | Diameter(c, _)
             | ArcRadius(c)
+            | EllipticArcEnds(c)
             | EllipseMajor(c, _)
             | EllipseMinor(c, _)
             | EllipseAngle(c, _)
@@ -280,14 +283,21 @@ fn circle_of(ctx: &Ctx, c: CurveId) -> (V2, Dual) {
 }
 
 /// Mittelpunkt, große Halbachse, deren (nach unten begrenzte) Länge und kleine Halbachse einer
-/// (geprüften) Ellipse.
+/// (geprüften) Ellipse oder eines Ellipsenbogens.
 fn ellipse_of(ctx: &Ctx, c: CurveId) -> (V2, V2, Dual, Dual) {
-    let CurveKind::Ellipse {
+    let (CurveKind::Ellipse {
         center,
         ax,
         ay,
         minor,
-    } = ctx.sk.curves[c].kind
+    }
+    | CurveKind::EllipticArc {
+        center,
+        ax,
+        ay,
+        minor,
+        ..
+    }) = ctx.sk.curves[c].kind
     else {
         unreachable!("type was checked")
     };
@@ -297,10 +307,28 @@ fn ellipse_of(ctx: &Ctx, c: CurveId) -> (V2, V2, Dual, Dual) {
     (m, a, len, ctx.var(minor))
 }
 
-/// Punkt und Ableitung nach `t` einer (geprüften) Ellipse oder eines Splines.
+/// Abstand des Punktes `p` von der (geprüften) Ellipse oder dem Ellipsenbogen `c` in impliziter
+/// Form: `(√((x'/|a|)² + (y'/m)²) − 1)·(|a| + m)/2` in Achskoordinaten.
+fn ellipse_residual(ctx: &Ctx, c: CurveId, p: &V2) -> Dual {
+    let (m, a, len, minor) = ellipse_of(ctx, c);
+    let v = sub2(p, &m);
+    let x = dot(&v, &a) / &len / &len;
+    // kleine Halbachse wie `norm_len` nach unten begrenzt (keine Division durch 0)
+    let minor = if minor.v < MIN_LEN {
+        Dual::constant(MIN_LEN)
+    } else {
+        minor
+    };
+    let y = cross(&a, &v) / &len / &minor;
+    let r = (&x * &x + &y * &y).sqrt();
+    (r - 1.0) * (&len + &minor) * 0.5
+}
+
+/// Punkt und Ableitung nach `t` einer (geprüften) Ellipse, eines Ellipsenbogens (auf seiner
+/// ganzen Ellipse) oder eines Splines.
 fn param_curve(ctx: &Ctx, c: CurveId, t: &Dual) -> (V2, V2) {
     match &ctx.sk.curves[c].kind {
-        CurveKind::Ellipse { .. } => {
+        CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. } => {
             let (m, a, len, minor) = ellipse_of(ctx, c);
             ellipse_eval(&m, &a, &len, &minor, t)
         }
@@ -333,10 +361,18 @@ fn is_line_kind(k: &CurveKind) -> bool {
 }
 
 fn is_param_kind(k: &CurveKind) -> bool {
-    matches!(k, CurveKind::Ellipse { .. } | CurveKind::Spline { .. })
+    matches!(
+        k,
+        CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. } | CurveKind::Spline { .. }
+    )
 }
 
-/// Bei einer Linie und einer Ellipse/einem Spline (in beliebiger Reihenfolge): `(Linie, Kurve)`.
+fn is_ellipse_kind(k: &CurveKind) -> bool {
+    matches!(k, CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. })
+}
+
+/// Bei einer Linie und einer Ellipse/einem Ellipsenbogen/einem Spline (in beliebiger
+/// Reihenfolge): `(Linie, Kurve)`.
 fn line_and_param(sk: &Sketch, a: CurveId, b: CurveId) -> Option<(CurveId, CurveId)> {
     let (ka, kb) = (&sk.curves[a].kind, &sk.curves[b].kind);
     if is_line_kind(ka) && is_param_kind(kb) {
@@ -366,20 +402,9 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
             let pp = ctx.pt(*p);
             match &sk.curves[*c].kind {
                 CurveKind::Line { .. } => vec![signed_distance(ctx, &pp, *c)],
-                CurveKind::Ellipse { .. } => {
-                    // implizit: (√((x'/|a|)² + (y'/m)²) − 1)·(|a| + m)/2 in Achskoordinaten
-                    let (m, a, len, minor) = ellipse_of(ctx, *c);
-                    let v = sub2(&pp, &m);
-                    let x = dot(&v, &a) / &len / &len;
-                    // kleine Halbachse wie `norm_len` nach unten begrenzt (keine Division durch 0)
-                    let minor = if minor.v < MIN_LEN {
-                        Dual::constant(MIN_LEN)
-                    } else {
-                        minor
-                    };
-                    let y = cross(&a, &v) / &len / &minor;
-                    let r = (&x * &x + &y * &y).sqrt();
-                    vec![(r - 1.0) * (&len + &minor) * 0.5]
+                // wie beim Bogen auf der ganzen Kurve
+                CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. } => {
+                    vec![ellipse_residual(ctx, *c, &pp)]
                 }
                 CurveKind::Spline { .. } => {
                     let t = extra_var(ctx, data);
@@ -498,6 +523,15 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
             };
             let pc = ctx.pt(center);
             vec![length(&sub2(&ctx.pt(end), &pc)) - length(&sub2(&ctx.pt(start), &pc))]
+        }
+        EllipticArcEnds(c) => {
+            let CurveKind::EllipticArc { start, end, .. } = sk.curves[*c].kind else {
+                unreachable!("type was checked")
+            };
+            vec![
+                ellipse_residual(ctx, *c, &ctx.pt(start)),
+                ellipse_residual(ctx, *c, &ctx.pt(end)),
+            ]
         }
         EllipseMajor(c, v) => {
             let (_, a, _, _) = ellipse_of(ctx, *c);
@@ -732,8 +766,13 @@ impl Sketch {
             ArcRadius(c) if !matches!(self.curves[*c].kind, CurveKind::Arc { .. }) => {
                 wrong(tr!("sketch-err-only-arcs"))
             }
+            EllipticArcEnds(c)
+                if !matches!(self.curves[*c].kind, CurveKind::EllipticArc { .. }) =>
+            {
+                wrong(tr!("sketch-err-only-elliptic-arcs"))
+            }
             EllipseMajor(c, _) | EllipseMinor(c, _) | EllipseAngle(c, _)
-                if !matches!(self.curves[*c].kind, CurveKind::Ellipse { .. }) =>
+                if !is_ellipse_kind(&self.curves[*c].kind) =>
             {
                 wrong(tr!("sketch-err-only-ellipses"))
             }
@@ -888,7 +927,8 @@ impl Sketch {
         }
     }
 
-    /// Abgetastete Form einer Ellipse oder eines Splines (sonst `None`).
+    /// Abgetastete Form einer Ellipse, der ganzen Ellipse eines Ellipsenbogens oder eines
+    /// Splines (sonst `None`).
     fn sampled(&self, c: CurveId) -> Option<Sampled> {
         match &self.curves[c].kind {
             CurveKind::Ellipse {
@@ -896,6 +936,13 @@ impl Sketch {
                 ax,
                 ay,
                 minor,
+            }
+            | CurveKind::EllipticArc {
+                center,
+                ax,
+                ay,
+                minor,
+                ..
             } => Some(Sampled::ellipse(
                 self.pos(*center),
                 DVec2::new(self.vars[*ax], self.vars[*ay]),
@@ -944,7 +991,10 @@ impl Sketch {
 
     /// Legt eine Abhängigkeit an. Bei einem Fehler bleibt die Skizze unverändert.
     pub fn add_constraint(&mut self, kind: ConstraintKind) -> Result<ConstraintId, SketchError> {
-        if matches!(kind, ConstraintKind::ArcRadius(_)) {
+        if matches!(
+            kind,
+            ConstraintKind::ArcRadius(_) | ConstraintKind::EllipticArcEnds(_)
+        ) {
             return Err(SketchError::WrongType(tr!(
                 "sketch-err-internal-constraint"
             )));

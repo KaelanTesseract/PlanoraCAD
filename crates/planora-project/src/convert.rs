@@ -38,23 +38,27 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Höchste lesbare Formatnummer der Versionsdateien (P7, P12, F7).
-pub const FORMAT_VERSION: u32 = 12;
+pub const FORMAT_VERSION: u32 = 13;
 /// Formatnummer der Rahmendateien `dokument.json` und `.autosave.json`; ihre Struktur ist seit
 /// Format 1 unverändert, ältere Programme öffnen das Projekt deshalb weiter (P7).
 pub const CONTAINER_FORMAT: u32 = 1;
 /// Größte Summe der dekodierten Netzdaten eines Dokuments (wie die Dateigrenze beim Import).
 const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 
-/// Kleinste Formatnummer, die den Stand darstellt: 12 mit einer Zeichnung in Zoll (als erste
-/// Regel geprüft), 11 mit Rückrollstellen, 10 mit einem STEP-Körper (auch unterdrückt: sein Text muss in der Datei stehen),
+/// Kleinste Formatnummer, die den Stand darstellt: 13 mit einem Ellipsenbogen in einer Skizze
+/// (auch einem gelöschten Kurveneintrag; als erste Regel geprüft), 12 mit einer Zeichnung in
+/// Zoll, 11 mit Rückrollstellen, 10 mit einem STEP-Körper (auch unterdrückt: sein Text muss in der Datei stehen),
 /// 9 mit Parametern, Feature-Formeln oder Skizzenformeln, 8 mit Schnittansichten, 7 mit
 /// Stücklisten-Daten (eigene Zeilentexte, Stücklistenblatt, Nummernkreise oder eingeschalteter
 /// Stückliste auf einem Blatt), 6 mit Blatt- oder Projektangaben, 5 mit Maßen oder
 /// eingeschalteten Mittellinien, 4 mit Zeichnungen, 3 mit Netz-Körpern, 2 mit Rundungen oder
-/// Fasen, sonst 1 (P7, P12, F7, Teilprojekt 12 P11, Teilprojekt STEP-Import, Verlaufsleiste).
+/// Fasen, sonst 1 (P7, P12, F7, Teilprojekt 12 P11, Teilprojekt STEP-Import, Verlaufsleiste,
+/// Teilprojekt Zoll, Teilprojekt Skizzen 1).
 pub fn required_format(s: &Snapshot) -> u32 {
     let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
-    if s.drawings.iter().any(|d| d.unit != DisplayUnit::Millimeter) {
+    if has(|k| matches!(k, FeatureKind::Sketch(sf) if has_elliptic_arc(&sf.sketch))) {
+        13
+    } else if s.drawings.iter().any(|d| d.unit != DisplayUnit::Millimeter) {
         12
     } else if !s.rollbacks.is_empty() {
         11
@@ -86,6 +90,12 @@ pub fn required_format(s: &Snapshot) -> u32 {
     } else {
         1
     }
+}
+/// Hat die Skizze einen Ellipsenbogen (auch einen gelöschten Kurveneintrag, er steht in der
+/// Datei)?
+fn has_elliptic_arc(s: &Sketch) -> bool {
+    s.curve_entries()
+        .any(|k| matches!(k, CurveKind::EllipticArc { .. }))
 }
 /// Eine Zeichnung braucht Format 7, wenn sie ein Stücklistenblatt ist, Nummernkreise hat oder die
 /// Stückliste auf dem Blatt eingeschaltet ist.
@@ -276,6 +286,21 @@ fn curve_to(k: &CurveKind) -> CurveKindDto {
         CurveKind::Spline { points } => CurveKindDto::Spline {
             punkte: points.iter().map(|p| p.index()).collect(),
         },
+        CurveKind::EllipticArc {
+            center,
+            ax,
+            ay,
+            minor,
+            start,
+            end,
+        } => CurveKindDto::Ellipsenbogen {
+            mitte: center.index(),
+            ax: *ax,
+            ay: *ay,
+            klein: *minor,
+            start: start.index(),
+            ende: end.index(),
+        },
     }
 }
 
@@ -305,6 +330,21 @@ fn curve_from(d: &CurveKindDto) -> CurveKind {
         },
         CurveKindDto::Spline { punkte } => CurveKind::Spline {
             points: punkte.iter().map(|i| p(*i)).collect(),
+        },
+        CurveKindDto::Ellipsenbogen {
+            mitte,
+            ax,
+            ay,
+            klein,
+            start,
+            ende,
+        } => CurveKind::EllipticArc {
+            center: p(*mitte),
+            ax: *ax,
+            ay: *ay,
+            minor: *klein,
+            start: p(*start),
+            end: p(*ende),
         },
     }
 }
@@ -363,6 +403,7 @@ fn constraint_to(k: &ConstraintKind) -> ConstraintKindDto {
             wert: *v,
         },
         K::ArcRadius(k) => D::BogenRadius { kurve: c(k) },
+        K::EllipticArcEnds(k) => D::EllipsenbogenEnden { kurve: c(k) },
         K::EllipseMajor(k, v) => D::EllipseGross {
             kurve: c(k),
             wert: *v,
@@ -402,6 +443,7 @@ fn constraint_from(d: &ConstraintKindDto) -> ConstraintKind {
         D::Durchmesser { kurve, wert } => K::Diameter(c(*kurve), *wert),
         D::Winkel { a, b, wert } => K::Angle(c(*a), c(*b), *wert),
         D::BogenRadius { kurve } => K::ArcRadius(c(*kurve)),
+        D::EllipsenbogenEnden { kurve } => K::EllipticArcEnds(c(*kurve)),
         D::EllipseGross { kurve, wert } => K::EllipseMajor(c(*kurve), *wert),
         D::EllipseKlein { kurve, wert } => K::EllipseMinor(c(*kurve), *wert),
         D::EllipseWinkel { kurve, wert } => K::EllipseAngle(c(*kurve), *wert),

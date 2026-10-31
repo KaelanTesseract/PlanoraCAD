@@ -664,6 +664,15 @@ pub enum CurveKindDto {
     Spline {
         punkte: Vec<usize>,
     },
+    /// Ab Format 13: gegen den Uhrzeigersinn von `start` nach `ende` auf der Ellipse.
+    Ellipsenbogen {
+        mitte: usize,
+        ax: usize,
+        ay: usize,
+        klein: usize,
+        start: usize,
+        ende: usize,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -765,6 +774,10 @@ pub enum ConstraintKindDto {
     EllipseWinkel {
         kurve: usize,
         wert: f64,
+    },
+    /// Ab Format 13: intern, die Enden eines Ellipsenbogens liegen auf seiner Ellipse.
+    EllipsenbogenEnden {
+        kurve: usize,
     },
 }
 

@@ -183,6 +183,7 @@ pub fn kind_label(kind: &ConstraintKind) -> String {
         K::Diameter(..) => tr!("sketch-constraint-diameter"),
         K::Angle(..) => tr!("sketch-constraint-angle"),
         K::ArcRadius(..) => tr!("sketch-constraint-arc-radius"),
+        K::EllipticArcEnds(..) => tr!("sketch-constraint-elliptic-arc-ends"),
         K::EllipseMajor(..) => tr!("sketch-constraint-ellipse-major"),
         K::EllipseMinor(..) => tr!("sketch-constraint-ellipse-minor"),
         K::EllipseAngle(..) => tr!("sketch-constraint-ellipse-angle"),
@@ -218,7 +219,7 @@ pub fn overlay_text(
 ) -> String {
     use ConstraintKind as K;
     let plain = match kind {
-        K::Coincident(..) | K::ArcRadius(..) => return String::new(),
+        K::Coincident(..) | K::ArcRadius(..) | K::EllipticArcEnds(..) => return String::new(),
         K::Horizontal(..) => "H".to_string(),
         K::Vertical(..) => "V".to_string(),
         K::Parallel(..) => symbol(ctx, "∥", "||").to_string(),
@@ -300,6 +301,7 @@ fn anchors(sk: &Sketch, kind: &ConstraintKind) -> Vec<DVec2> {
         K::Radius(c, _)
         | K::Diameter(c, _)
         | K::ArcRadius(c)
+        | K::EllipticArcEnds(c)
         | K::EllipseMajor(c, _)
         | K::EllipseMinor(c, _)
         | K::EllipseAngle(c, _) => vec![curve_anchor(sk, *c)],

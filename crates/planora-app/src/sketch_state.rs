@@ -716,7 +716,9 @@ impl SketchSession {
                     match sk.curve(c)?.kind {
                         CurveKind::Line { .. } => s.lines.push(c),
                         CurveKind::Circle { .. } | CurveKind::Arc { .. } => s.rounds.push(c),
-                        CurveKind::Ellipse { .. } | CurveKind::Spline { .. } => s.others.push(c),
+                        CurveKind::Ellipse { .. }
+                        | CurveKind::EllipticArc { .. }
+                        | CurveKind::Spline { .. } => s.others.push(c),
                     }
                     s.curves.push(c);
                 }
