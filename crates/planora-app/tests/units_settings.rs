@@ -1,11 +1,6 @@
 //! Umschalten der Maßeinheit in Einstellungen → Darstellung (Auswahl setzt die globale Einheit
 //! und schreibt die Konfiguration; Vorgemerktes geht nicht verloren). Einzige Testdatei, die die
 //! globale Einheit setzt; darum genau ein Test. Konfiguration nur im Temp-Ordner.
-//! (Vorlage: language_global.rs) Umschalten der Sprache bei offenem Fenster (Review-Schwerpunkt 5): Wählt man in
-//! Einstellungen → Darstellung „English“, wechseln die Texte der Sprachauswahl im nächsten Bild,
-//! und die Wahl steht in der Konfiguration. Einzige Testdatei, die die globale Sprache setzt;
-//! darum genau ein Test (parallele Tests im selben Programm würden sich sonst stören).
-//! Konfiguration nur im Temp-Ordner.
 
 mod common;
 
