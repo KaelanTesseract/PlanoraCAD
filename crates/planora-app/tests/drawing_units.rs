@@ -6,7 +6,7 @@
 mod common;
 
 use planora_app::dimension_browser::row_text_in;
-use planora_app::dimension_dialog::{DimensionDialog, tolerance_title};
+use planora_app::dimension_dialog::{DimensionDialog, ToleranceKind, tolerance_title};
 use planora_app::dimension_state::resolve_in;
 use planora_app::drawing_dialog::NewDrawingDialog;
 use planora_app::sheet_dialog::{self, SheetInfoDialog, unit_name};
@@ -109,17 +109,24 @@ fn sheet_dialog_shows_the_unit_choice() {
         .add_drawing_stamped("Blatt 1", A4_QUER, Projection::First, &stamp())
         .unwrap();
     let mut dialog = SheetInfoDialog::new(&s, d, &stamp());
-    let mut screen = common::Screen::new(1920.0, 2400.0);
+    // Standardauflösung 1920 × 1080: Auswahl ganz zu sehen (im Bild, nicht abgeschnitten).
+    let mut screen = common::Screen::new(1920.0, 1080.0);
     let seen = with_lang(&german(), || {
         screen.settle(6, &mut |ctx| {
             dialog.show(ctx, &mut s);
         })
     });
     let text = common::join(&seen);
-    assert!(common::find(&seen, "Maßeinheit").is_some(), "{text}");
+    let full = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1920.0, 1080.0));
+    let visible = |t: &str| {
+        seen.iter().any(|x| {
+            x.text == t && full.contains_rect(x.rect) && x.clip.expand(0.5).contains_rect(x.rect)
+        })
+    };
+    assert!(visible("Maßeinheit"), "{text}");
     let mm = with_lang(&german(), || unit_name(DisplayUnit::Millimeter));
     assert_eq!(mm, "Millimeter (mm)");
-    assert!(common::find(&seen, &mm).is_some(), "{text}");
+    assert!(visible(&mm), "{text}");
 }
 
 // ---- Maße in einer Zeichnung in Zoll --------------------------------------------------------
@@ -249,6 +256,52 @@ fn dimension_dialog_edits_tolerances_in_inches() {
     let mm = DimensionDialog::new(d, &spec, false);
     assert_eq!(mm.unit, DisplayUnit::Millimeter);
     assert!(mm.symmetric.starts_with("0,50"), "{}", mm.symmetric);
+}
+
+/// Zoll-Eingabe, dann die Zeichnung zurück auf mm: das Feld zeigt gerundet „0,508“, und
+/// unverändert übernommen bleibt der gespeicherte Wert bitgenau.
+#[test]
+fn switching_back_to_mm_shows_rounded_tolerances_and_keeps_the_value() {
+    let (mut s, d, _, id) = inch_state(DimTolerance::None);
+    planora_app::dimension_dialog::open(&mut s, d, id, false);
+    let mut dialog = s.dimension_dialog.take().unwrap();
+    dialog.kind = ToleranceKind::Symmetric;
+    dialog.symmetric = "0,02".into();
+    with_lang(&german(), || dialog.apply(&mut s)).unwrap();
+    let stored = match s
+        .document
+        .drawing(d)
+        .unwrap()
+        .dimension(id)
+        .unwrap()
+        .tolerance
+    {
+        DimTolerance::Symmetric(v) => v,
+        ref t => panic!("{t:?}"),
+    };
+    assert!((stored - 0.508).abs() < 1e-12, "{stored}");
+    s.document
+        .set_drawing_unit(d, DisplayUnit::Millimeter)
+        .unwrap();
+    planora_app::dimension_dialog::open(&mut s, d, id, false);
+    let dialog = s.dimension_dialog.take().unwrap();
+    assert_eq!(dialog.unit, DisplayUnit::Millimeter);
+    with_lang(&german(), || {
+        assert_eq!(dialog.symmetric, "0,508");
+        assert_eq!(tolerance_title(dialog.unit), "Toleranz");
+    });
+    let (_, tol, _) = with_lang(&german(), || dialog.build()).unwrap();
+    match tol {
+        DimTolerance::Symmetric(v) => assert_eq!(v.to_bits(), stored.to_bits()),
+        t => panic!("{t:?}"),
+    }
+    let edits = s.document.edit_count();
+    with_lang(&german(), || dialog.apply(&mut s)).unwrap();
+    assert_eq!(
+        s.document.edit_count(),
+        edits,
+        "unverändert: keine Änderung"
+    );
 }
 
 #[test]

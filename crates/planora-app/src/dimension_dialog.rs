@@ -92,27 +92,17 @@ pub fn kind_msg(kind: DimKind) -> crate::msg::Msg {
     }
 }
 
-/// Zahl als Text mit dem Dezimaltrenner der Sprache (verlustfrei, kürzeste Schreibweise).
-fn number_text(v: f64) -> String {
-    planora_i18n::localize_decimal(&format!("{v}"))
-}
-
-/// Toleranz (in mm) als Text in der Einheit `unit` der Zeichnung: in mm wie bisher
-/// ([`number_text`]), in Zoll umgerechnet mit höchstens sechs Nachkommastellen.
+/// Toleranz (in mm) als Text in der Einheit `unit` der Zeichnung, gerundet auf höchstens sechs
+/// Nachkommastellen (so erscheint 0,5079999999999999 als „0,508“). Der genaue Wert bleibt über
+/// [`parse_tolerance`] erhalten, solange das Feld unverändert ist.
 fn tolerance_text(mm: f64, unit: DisplayUnit) -> String {
-    match unit {
-        DisplayUnit::Millimeter => number_text(mm),
-        DisplayUnit::Zoll => crate::msg::plain_number(unit.to_display(mm)),
-    }
+    crate::msg::plain_number(unit.to_display(mm))
 }
 
 /// Toleranz aus einem Eingabefeld in der Einheit `unit`, zurück in mm. Steht im Feld noch der
 /// angezeigte Text (`shown`), bleibt der gespeicherte Wert genau erhalten (kein Rundungsverlust
-/// durch Hin- und Zurückrechnen).
+/// durch Runden der Anzeige oder Hin- und Zurückrechnen).
 fn parse_tolerance(text: &str, unit: DisplayUnit, shown: &(String, f64)) -> Result<f64, String> {
-    if unit == DisplayUnit::Millimeter {
-        return parse_number(text);
-    }
     if text.trim() == shown.0 {
         return Ok(shown.1);
     }
@@ -120,12 +110,8 @@ fn parse_tolerance(text: &str, unit: DisplayUnit, shown: &(String, f64)) -> Resu
     Ok(unit.from_display(v))
 }
 
-/// Zahl aus einem Eingabefeld: deutsches Komma oder Punkt, `−` oder `-`.
-fn parse_number(text: &str) -> Result<f64, String> {
-    parse_number_max(text, MAX_TOL_MM)
-}
-
-/// Wie [`parse_number`] mit der Grenze `max` (im Betrag).
+/// Zahl aus einem Eingabefeld: deutsches Komma oder Punkt, `−` oder `-`; im Betrag höchstens
+/// `max`.
 fn parse_number_max(text: &str, max: f64) -> Result<f64, String> {
     let t = text.trim();
     if t.is_empty() {
