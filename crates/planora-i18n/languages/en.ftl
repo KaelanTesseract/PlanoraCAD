@@ -5,6 +5,10 @@ decimal-separator = .
 ## Settings
 settings-language = Language
 settings-language-not-saved = The language only applies until you close the program: the setting could not be saved.
+settings-unit-label = Unit of length
+settings-unit-mm = Millimeters (mm)
+settings-unit-inch = Inches (in)
+settings-unit-not-saved = The unit only applies until you close the program: the setting could not be saved.
 settings-title = Settings
 settings-section-appearance = Appearance
 settings-transparency-label = Panel transparency

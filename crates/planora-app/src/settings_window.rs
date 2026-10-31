@@ -47,6 +47,22 @@ pub fn section_language() -> String {
 pub fn language_not_saved() -> String {
     tr!("settings-language-not-saved")
 }
+/// Beschriftung der Auswahl „Maßeinheit“ im Abschnitt „Darstellung“.
+pub fn section_unit() -> String {
+    tr!("settings-unit-label")
+}
+/// Eintrag „Millimeter (mm)“ der Auswahl „Maßeinheit“.
+pub fn unit_mm() -> String {
+    tr!("settings-unit-mm")
+}
+/// Eintrag „Zoll (in)“ der Auswahl „Maßeinheit“.
+pub fn unit_inch() -> String {
+    tr!("settings-unit-inch")
+}
+/// Warnung, wenn die Maßeinheit gilt, aber nicht gespeichert werden konnte.
+pub fn unit_not_saved() -> String {
+    tr!("settings-unit-not-saved")
+}
 /// Breite der Schieberspur des Reglers.
 pub const SLIDER_WIDTH: f32 = 200.0;
 pub fn section_updates() -> String {
@@ -217,6 +233,7 @@ pub enum Note {
     UpdatesNotSaved,
     VerboseNotSaved,
     LanguageNotSaved,
+    UnitNotSaved,
     KeysNotSaved,
     /// Das neue Projektverzeichnis gilt nur bis zum Programmende.
     NotSaved,
@@ -238,6 +255,7 @@ impl Note {
             Note::UpdatesNotSaved => updates_not_saved(),
             Note::VerboseNotSaved => verbose_not_saved(),
             Note::LanguageNotSaved => language_not_saved(),
+            Note::UnitNotSaved => unit_not_saved(),
             Note::KeysNotSaved => settings_ui::keys_not_saved(),
             Note::NotSaved => not_saved(),
             Note::RootLocked => root_locked(),
@@ -540,6 +558,8 @@ impl SettingsWindow {
         // Vorgewählt ist die Sprache, in der das Fenster gerade spricht.
         let language = planora_i18n::current();
         let mut chosen_language: Option<Lang> = None;
+        let unit = planora_i18n::current_unit();
+        let mut chosen_unit: Option<planora_i18n::DisplayUnit> = None;
         let choosing = self.chooser.is_some();
         // Die Auswahl zeichnet oben (rollt) und in der Fußzeile (wählen, abbrechen).
         let chooser = RefCell::new(self.chooser.as_mut());
@@ -559,6 +579,7 @@ impl SettingsWindow {
                                 &mut transparency,
                                 (&mut slid, &mut released),
                                 (&language, &mut chosen_language),
+                                (unit, &mut chosen_unit),
                                 appearance_message.as_ref(),
                             )
                         };
@@ -640,6 +661,15 @@ impl SettingsWindow {
             let written = ws.set_language(&lang);
             self.appearance_message =
                 (!written).then_some(RootMessage::Warning(Note::LanguageNotSaved));
+        }
+        // Die Maßeinheit wirkt ab dem nächsten Bild und wird sofort gespeichert.
+        if let Some(chosen) = chosen_unit
+            && !locked
+            && chosen != unit
+        {
+            let written = ws.set_length_unit(chosen);
+            self.appearance_message =
+                (!written).then_some(RootMessage::Warning(Note::UnitNotSaved));
         }
         if check_now && !locked {
             self.check_requested = true;
@@ -803,6 +833,10 @@ fn show_appearance(
     transparency: &mut u8,
     (slid, released): (&mut bool, &mut bool),
     (current, chosen): (&Lang, &mut Option<Lang>),
+    (unit, chosen_unit): (
+        planora_i18n::DisplayUnit,
+        &mut Option<planora_i18n::DisplayUnit>,
+    ),
     message: Option<&RootMessage>,
 ) {
     let dark = ui.visuals().dark_mode;
@@ -829,6 +863,28 @@ fn show_appearance(
                     let r = ui.selectable_label(lang.id() == current.id(), lang.name());
                     if r.clicked() {
                         *chosen = Some(lang);
+                    }
+                }
+            });
+        theme::focus_ring(ui, &r.response);
+    });
+    ui.add_space(theme::SPACE_1);
+    ui.horizontal(|ui| {
+        ui.strong(section_unit());
+        let name = |u: planora_i18n::DisplayUnit| match u {
+            planora_i18n::DisplayUnit::Millimeter => unit_mm(),
+            planora_i18n::DisplayUnit::Zoll => unit_inch(),
+        };
+        let r = egui::ComboBox::from_id_salt("planora_settings_unit")
+            .selected_text(name(unit))
+            .show_ui(ui, |ui| {
+                for u in [
+                    planora_i18n::DisplayUnit::Millimeter,
+                    planora_i18n::DisplayUnit::Zoll,
+                ] {
+                    let r = ui.selectable_label(u == unit, name(u));
+                    if r.clicked() {
+                        *chosen_unit = Some(u);
                     }
                 }
             });

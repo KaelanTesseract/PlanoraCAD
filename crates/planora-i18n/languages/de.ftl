@@ -5,6 +5,10 @@ decimal-separator = ,
 ## Einstellungen
 settings-language = Sprache
 settings-language-not-saved = Die Sprache gilt nur bis zum Programmende: die Einstellung konnte nicht gespeichert werden.
+settings-unit-label = Maßeinheit
+settings-unit-mm = Millimeter (mm)
+settings-unit-inch = Zoll (in)
+settings-unit-not-saved = Die Maßeinheit gilt nur bis zum Programmende: die Einstellung konnte nicht gespeichert werden.
 settings-title = Einstellungen
 settings-section-appearance = Darstellung
 settings-transparency-label = Durchsichtigkeit der Panels
