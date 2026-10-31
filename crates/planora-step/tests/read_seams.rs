@@ -453,13 +453,89 @@ fn seams_are_inserted() {
     assert!(why.ends_with(": Eine Fläche hat keinen Rand."), "{why}");
 }
 
+/// Torusfläche des Körpers und ein Probepunkt auf ihr.
+fn torus_probe(s: &Solid) -> (&Face, DVec3) {
+    let (id, face) = s
+        .faces
+        .iter()
+        .find(|(_, f)| matches!(f.surface, Surface::Torus { .. }))
+        .expect("Torusfläche");
+    let p = face_probe_point(s, id, &Tolerance::default()).expect("Probepunkt");
+    (face, p)
+}
+
 #[test]
-fn unsupported_seamless_torus_is_skipped() {
-    let text = data("seamless.step");
-    assert_eq!(
-        skip_of(&text, "Ring"),
-        "Fläche vom Typ Torus ohne Naht wird noch nicht unterstützt."
+fn seamless_torus_ring_gets_two_seams() {
+    // Torus 10/3 ganz ohne Rand: zwei Nähte durch eine Ecke, Volumen 2 π² R r².
+    let s = body(&data("seamless.step"), "Ring");
+    assert_eq!(s.faces.len(), 1);
+    assert_eq!(s.vertices.len(), 1);
+    let (_, ring) = s.faces.iter().next().expect("Fläche");
+    assert_eq!(ring.outer.half_edges.len(), 4);
+    assert_volume(&s, 2.0 * PI * PI * 10.0 * 9.0, "Ring");
+}
+
+#[test]
+fn torus_band_around_axis_gets_a_meridian_seam() {
+    let text = data("seamless_torus.step");
+    // Welle: Zylinder R 10 × 38, Scheibe R 8 × 2 und die Viertelkreisfläche r 2 um (8; 38)
+    // gedreht (Pappus: Schwerpunkt 8 + 8/(3π)).
+    let s = body(&text, "Welle");
+    let want = 3800.0 * PI + 128.0 * PI + 16.0 * PI * PI + 16.0 * PI / 3.0;
+    assert_volume(&s, want, "Welle");
+    let (face, p) = torus_probe(&s);
+    let (u, _) = face.surface.project(p);
+    let tube = DVec3::new(8.0 * u.cos(), 8.0 * u.sin(), 38.0);
+    assert!(outward(face, p).dot((p - tube).normalize()) > 1.0 - 1e-9, "Rundung nach außen");
+    // Kehle: Innenwand über v = π; Ring R 10…20 × 10 und die linke Hälfte des Rohrkreises r 5
+    // um (10; 0) gedreht (Schwerpunkt 10 − 20/(3π)).
+    let s = body(&text, "Kehle");
+    let want = 3000.0 * PI + 250.0 * PI * PI - 500.0 * PI / 3.0;
+    assert_volume(&s, want, "Kehle");
+    let (face, p) = torus_probe(&s);
+    let (u, _) = face.surface.project(p);
+    let tube = DVec3::new(10.0 * u.cos(), 10.0 * u.sin(), 0.0);
+    assert!(outward(face, p).dot((p - tube).normalize()) > 1.0 - 1e-9, "Wand zur Achse");
+}
+
+#[test]
+fn torus_elbow_gets_a_latitude_seam() {
+    // Rohr r 5 um R 20 über 90 Grad: π r² · R · π/2.
+    let text = data("seamless_torus.step");
+    // Ecke des zweiten Rohrkreises auch bei v = π/2: Er wird bei v = 0 geteilt.
+    let split = swap(
+        &text,
+        "#435=CARTESIAN_POINT('',(0.,25.,0.));",
+        "#435=CARTESIAN_POINT('',(0.,20.,5.));",
     );
+    for (text, edges) in [(&text, 3), (&split, 4)] {
+        let s = body(text, "Bogen");
+        assert_eq!(s.edges.len(), edges);
+        assert_volume(&s, 250.0 * PI * PI, "Bogen");
+        let (face, p) = torus_probe(&s);
+        let (u, _) = face.surface.project(p);
+        let tube = DVec3::new(20.0 * u.cos(), 20.0 * u.sin(), 0.0);
+        assert!(outward(face, p).dot((p - tube).normalize()) > 1.0 - 1e-9, "Rohr nach außen");
+    }
+}
+
+#[test]
+fn torus_band_with_a_wrong_circle_is_skipped() {
+    let text = data("seamless_torus.step");
+    let wrong = swap(
+        &text,
+        "#92=ORIENTED_EDGE('',*,*,#63,.F.);",
+        "#92=ORIENTED_EDGE('',*,*,#63,.T.);",
+    );
+    let why = skip_of(&wrong, "Welle");
+    assert!(why.contains("schließt sich nicht"), "{why}");
+    let wrong = swap(
+        &text,
+        "#484=ORIENTED_EDGE('',*,*,#461,.F.);",
+        "#484=ORIENTED_EDGE('',*,*,#461,.T.);",
+    );
+    let why = skip_of(&wrong, "Bogen");
+    assert!(why.contains("schließt sich nicht"), "{why}");
 }
 
 /// Prüft den Hohlquader: zwei Schalen, Volumen, Außennormale am Hohlraum zur Kugelmitte.
@@ -1075,9 +1151,10 @@ fn broken_shells_are_named() {
 }
 
 #[test]
-fn torus_band_without_seam_is_named_by_p9() {
-    // Torusfläche zwischen zwei Meridiankreisen (windet sich in v): P9, nicht „schließt sich
-    // nicht“ (das wäre ein falsch laufender Rand).
+fn open_torus_band_gets_its_seam() {
+    // Torusfläche zwischen zwei Meridiankreisen (windet sich in v), ohne Deckel: Sie bekommt
+    // eine Naht (nicht „schließt sich nicht“, das wäre ein falsch laufender Rand), der Körper
+    // bleibt aber offen.
     let band = "#20=MANIFOLD_SOLID_BREP('Ring',#21);\n#21=CLOSED_SHELL('',(#30));\n\
         #30=ADVANCED_FACE('',(#31,#32),#40,.T.);\n\
         #31=FACE_BOUND('',#33,.T.);\n#32=FACE_BOUND('',#34,.T.);\n\
@@ -1103,10 +1180,9 @@ fn torus_band_without_seam_is_named_by_p9() {
          #105=(GEOMETRIC_REPRESENTATION_CONTEXT(3)GLOBAL_UNIT_ASSIGNED_CONTEXT((#100))\
          REPRESENTATION_CONTEXT('',''));\n{band}ENDSEC;\nEND-ISO-10303-21;\n"
     );
-    assert_eq!(
-        skip_of(&text, "Ring"),
-        "Fläche vom Typ Torus ohne Naht wird noch nicht unterstützt."
-    );
+    // Das Band bekommt seine Naht; der Körper ist ohne Deckel aber offen.
+    let why = skip_of(&text, "Ring");
+    assert!(why.ends_with("gehört nur zu einer Fläche."), "{why}");
 }
 
 #[test]

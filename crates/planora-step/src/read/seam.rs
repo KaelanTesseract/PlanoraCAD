@@ -27,7 +27,7 @@ use planora_kernel::blend::topo::role_label;
 use planora_kernel::boolean::{oriented_area, points_to_uv};
 use planora_kernel::{Curve, Surface};
 use planora_math::{DVec2, DVec3, Frame, Tolerance};
-use std::f64::consts::FRAC_PI_2;
+use std::f64::consts::{FRAC_PI_2, TAU};
 
 /// Abschnitte, über die die Länge einer Kante gemessen wird.
 const LENGTH_SECTIONS: usize = 16;
@@ -402,6 +402,9 @@ fn insert_seam(raw: &mut RawBody, i: usize, tol: f64) -> Result<(), Skip> {
             });
         }
     }
+    if matches!(surface, Surface::Torus { .. }) {
+        return torus_seam(raw, i, &windings, &winding_loops, tol);
+    }
     if !matches!(
         surface,
         Surface::Cylinder { .. } | Surface::Cone { .. } | Surface::Sphere { .. }
@@ -458,10 +461,10 @@ fn insert_seam(raw: &mut RawBody, i: usize, tol: f64) -> Result<(), Skip> {
                 return Err(twisted());
             }
             let guessed = marks.is_empty() && matches!(surface, Surface::Sphere { .. });
-            let Some(u_s) = free_angle(raw, i, &[a], &holes, tol) else {
+            let Some(u_s) = free_angle(raw, i, &[a], &holes, tol, 0) else {
                 return Err(no_room(&role));
             };
-            let va = vertex_on(raw, i, a, u_s, tol).ok_or_else(|| no_room(&role))?;
+            let va = vertex_on(raw, i, a, u_s, tol, 0).ok_or_else(|| no_room(&role))?;
             let rim = rotated(raw, &raw.faces[i].loops[a], va).ok_or_else(|| no_room(&role))?;
             let vp = push_vertex(raw, surface.point(u_s, pv));
             let seam = push_seam(raw, &surface, u_s, va, vp, line)?;
@@ -484,11 +487,11 @@ fn insert_seam(raw: &mut RawBody, i: usize, tol: f64) -> Result<(), Skip> {
             if windings[lower][0] != s || windings[upper][0] != -s {
                 return Err(not_closing());
             }
-            let Some(u_s) = free_angle(raw, i, &[a, b], &holes, tol) else {
+            let Some(u_s) = free_angle(raw, i, &[a, b], &holes, tol, 0) else {
                 return Err(no_room(&role));
             };
-            let va = vertex_on(raw, i, a, u_s, tol).ok_or_else(|| no_room(&role))?;
-            let vb = vertex_on(raw, i, b, u_s, tol).ok_or_else(|| no_room(&role))?;
+            let va = vertex_on(raw, i, a, u_s, tol, 0).ok_or_else(|| no_room(&role))?;
+            let vb = vertex_on(raw, i, b, u_s, tol, 0).ok_or_else(|| no_room(&role))?;
             let f = &raw.faces[i];
             let (Some(rim_a), Some(rim_b)) =
                 (rotated(raw, &f.loops[a], va), rotated(raw, &f.loops[b], vb))
@@ -571,13 +574,161 @@ fn sphere_piece(raw: &mut RawBody, i: usize, polys: &[Vec<DVec2>], tol: f64) -> 
     let role = f.tag.role.clone();
     let line = f.line;
     let holes: Vec<usize> = (0..f.loops.len()).collect();
-    let u_s = free_angle(raw, i, &[], &holes, tol).ok_or_else(|| no_room(&role))?;
+    let u_s = free_angle(raw, i, &[], &holes, tol, 0).ok_or_else(|| no_room(&role))?;
     let south = push_vertex(raw, surface.point(u_s, -FRAC_PI_2));
     let north = push_vertex(raw, surface.point(u_s, FRAC_PI_2));
     let seam = push_seam(raw, &surface, u_s, south, north, line)?;
     set_seam_loop(raw, i, &[], vec![fwd(seam), bwd(seam)]);
     raw.faces[i].side_guessed = guessed;
     Ok(())
+}
+
+/// Torusfläche ohne Naht (Spec `2026-10-31-torus-naht-design.md`):
+/// - ohne Rand (voller Ring): zwei Nähte durch eine neue Ecke bei `(0, 0)`, die Schleife
+///   `[Breitenkreis, Meridian, Breitenkreis rückwärts, Meridian rückwärts]`;
+/// - zwei gegenläufige Ränder, die sich je einmal um die Achse winden (Band, etwa eine Rundung
+///   an einer Kreiskante): Naht ein Meridian beim freien Winkel `u_s`;
+/// - zwei gegenläufige Ränder, die sich je einmal um das Rohr winden (Rohrbogen): Naht ein
+///   Breitenkreis beim freien Winkel `v_s`.
+///
+/// Welches der beiden Bänder zwischen den Rändern gemeint ist (auch die Gegenrichtung ist
+/// periodisch), sagt der Umlaufsinn: Die Fläche liegt links ihres Rands. Ein Rand, der in `u`
+/// um die Außennormale gegen den Uhrzeigersinn läuft, ist der Anfang, und das Band läuft von dort
+/// in wachsendem `v`; beim Rohrbogen ist es der Rand, der in `v` mit dem Uhrzeigersinn läuft, und
+/// das Band wächst in `u`. Andere Ränder um die Achse: „schließt sich nicht“; andere Tori ohne
+/// Rand gibt es nicht.
+fn torus_seam(
+    raw: &mut RawBody,
+    i: usize,
+    windings: &[[i64; 2]],
+    winding_loops: &[usize],
+    tol: f64,
+) -> Result<(), Skip> {
+    let f = &raw.faces[i];
+    let surface = f.surface.clone();
+    let role = f.tag.role.clone();
+    let line = f.line;
+    let same_sense = f.same_sense;
+    let not_closing = || Skip(tr!("step-r-rim-not-closing", role = role_label(&role)));
+    let s: i64 = if same_sense { 1 } else { -1 };
+    let holes: Vec<usize> = (0..f.loops.len())
+        .filter(|k| !winding_loops.contains(k))
+        .collect();
+    let &[a, b] = winding_loops else {
+        if winding_loops.is_empty() && f.loops.is_empty() {
+            return full_ring(raw, i, line);
+        }
+        return Err(not_closing());
+    };
+    // Richtung, in der sich die Ränder winden (0 = um die Achse, 1 = um das Rohr).
+    let dir = match (windings[a], windings[b]) {
+        ([wa, 0], [wb, 0]) if wa.abs() == 1 && wa + wb == 0 => 0,
+        ([0, wa], [0, wb]) if wa.abs() == 1 && wa + wb == 0 => 1,
+        _ => return Err(not_closing()),
+    };
+    let first_sign = if dir == 0 { s } else { -s };
+    let (start, end) = if windings[a][dir] == first_sign {
+        (a, b)
+    } else {
+        (b, a)
+    };
+    let Some(at) = free_angle(raw, i, &[start, end], &holes, tol, dir) else {
+        return Err(no_room(&role));
+    };
+    let va = vertex_on(raw, i, start, at, tol, dir).ok_or_else(|| no_room(&role))?;
+    let vb = vertex_on(raw, i, end, at, tol, dir).ok_or_else(|| no_room(&role))?;
+    let f = &raw.faces[i];
+    let (Some(rim_a), Some(rim_b)) = (
+        rotated(raw, &f.loops[start], va),
+        rotated(raw, &f.loops[end], vb),
+    ) else {
+        return Err(no_room(&role));
+    };
+    // Die Naht läuft in der anderen Richtung in wachsendem Parameter vom Anfang zum Ende.
+    let along = 1 - dir;
+    let t0 = param_of(&surface, raw.vertices[va], along);
+    let t1 = t0 + (param_of(&surface, raw.vertices[vb], along) - t0).rem_euclid(TAU);
+    let seam = push_torus_seam(raw, &surface, along, at, (va, t0), (vb, t1), line)?;
+    let mut lp = rim_a;
+    lp.push(fwd(seam));
+    lp.extend(rim_b);
+    lp.push(bwd(seam));
+    set_seam_loop(raw, i, &[start, end], lp);
+    Ok(())
+}
+
+/// Voller Ring ohne Rand: eine Ecke bei `(0, 0)`, ein voller Breitenkreis (`v = 0`) und ein
+/// voller Meridian (`u = 0`) durch sie; die Schleife läuft im Parameterraum gegen den
+/// Uhrzeigersinn, bei umgekehrtem Sinn der Fläche andersherum.
+fn full_ring(raw: &mut RawBody, i: usize, line: usize) -> Result<(), Skip> {
+    let surface = raw.faces[i].surface.clone();
+    let v = push_vertex(raw, surface.point(0.0, 0.0));
+    let latitude = push_torus_seam(raw, &surface, 0, 0.0, (v, 0.0), (v, TAU), line)?;
+    let meridian = push_torus_seam(raw, &surface, 1, 0.0, (v, 0.0), (v, TAU), line)?;
+    let lp = if raw.faces[i].same_sense {
+        vec![fwd(latitude), fwd(meridian), bwd(latitude), bwd(meridian)]
+    } else {
+        vec![fwd(meridian), fwd(latitude), bwd(meridian), bwd(latitude)]
+    };
+    set_seam_loop(raw, i, &[], lp);
+    Ok(())
+}
+
+/// Neue Nahtkante auf einem Torus von `a` (Parameter `t0`) nach `b` (`t1`): `along = 0` ein
+/// Breitenkreis um die Achse beim Rohrwinkel `at` (Parameter = `u`), `along = 1` ein Meridian um
+/// die Rohrmitte beim Winkel `at` um die Achse (Ebene durch die Achse, Parameter = `v`, wie
+/// `revolve.rs` ihn baut).
+// Der negierte Vergleich lehnt absichtlich auch NaN ab.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+fn push_torus_seam(
+    raw: &mut RawBody,
+    surface: &Surface,
+    along: usize,
+    at: f64,
+    (a, t0): (usize, f64),
+    (b, t1): (usize, f64),
+    line: usize,
+) -> Result<usize, Skip> {
+    let Surface::Torus {
+        frame,
+        major,
+        minor,
+    } = surface
+    else {
+        return Err(at_line(line, tr!("step-r-seam-zero")));
+    };
+    let curve = if along == 0 {
+        Curve::Circle {
+            frame: Frame {
+                origin: frame.origin + frame.z * (minor * at.sin()),
+                ..*frame
+            },
+            radius: major + minor * at.cos(),
+        }
+    } else {
+        let radial = frame.x * at.cos() + frame.y * at.sin();
+        Curve::Circle {
+            frame: Frame {
+                origin: frame.origin + radial * *major,
+                x: radial,
+                y: frame.z,
+                z: radial.cross(frame.z),
+            },
+            radius: *minor,
+        }
+    };
+    if !(t1 - t0 > 1e-12) {
+        return Err(at_line(line, tr!("step-r-seam-zero")));
+    }
+    raw.edges.push(RawEdge {
+        curve,
+        t0,
+        t1,
+        start: a,
+        end: b,
+        line: 0,
+    });
+    Ok(raw.edges.len() - 1)
 }
 
 fn no_room(role: &str) -> Skip {
@@ -643,7 +794,7 @@ fn sphere_around_pole(raw: &mut RawBody, i: usize, k: usize, tol: f64) -> Result
     // Löcher (die übrigen Schleifen) mit Abstand; der Rand selbst darf die Mantellinie außer
     // am Pol nicht kreuzen und ihr nicht nahe kommen.
     let holes: Vec<usize> = (0..f.loops.len()).filter(|&h| h != k).collect();
-    let (hole_ranges, hole_margin) = hole_ranges(raw, i, &holes, tol, per);
+    let (hole_ranges, hole_margin) = hole_ranges(raw, i, &holes, tol, per, 0);
     let margin = SEAM_CLEARANCE * per;
     let wrap = |x: f64| x.rem_euclid(per);
     let track = u_track(raw, &surface, &rim);
@@ -689,15 +840,17 @@ fn sphere_around_pole(raw: &mut RawBody, i: usize, k: usize, tol: f64) -> Result
     Ok(())
 }
 
-/// Genaue Bereiche der Löcher `holes` der Fläche `i` in u und der Abstand, den eine Naht von
-/// ihnen halten muss: mindestens [`HOLE_CLEARANCE_TOLS`] Genauigkeiten der Datei als Winkel am
-/// kleinsten Abstand zur Achse, höchstens [`MAX_HOLE_CLEARANCE`] der Periode.
+/// Genaue Bereiche der Löcher `holes` der Fläche `i` in Richtung `dir` (0 = u, 1 = v) und der
+/// Abstand, den eine Naht von ihnen halten muss: mindestens [`HOLE_CLEARANCE_TOLS`] Genauigkeiten
+/// der Datei als Winkel am kleinsten Radius des Kreises, auf dem die Richtung läuft
+/// ([`iso_radius`]), höchstens [`MAX_HOLE_CLEARANCE`] der Periode.
 fn hole_ranges(
     raw: &RawBody,
     i: usize,
     holes: &[usize],
     tol: f64,
     per: f64,
+    dir: usize,
 ) -> (Vec<(f64, f64)>, f64) {
     let f = &raw.faces[i];
     let surface = &f.surface;
@@ -709,12 +862,12 @@ fn hole_ranges(
             let rho = raw
                 .loop_points(lp)
                 .iter()
-                .map(|p| axis_distance(surface, *p))
+                .map(|p| iso_radius(surface, *p, dir))
                 .fold(f64::INFINITY, f64::min);
             if rho > 0.0 {
                 hole_margin = hole_margin.max(HOLE_CLEARANCE_TOLS * tol / rho);
             }
-            u_extent(raw, surface, f.same_sense, lp, per)
+            u_extent(raw, surface, f.same_sense, lp, per, dir)
         })
         .collect();
     (ranges, hole_margin.min(MAX_HOLE_CLEARANCE * per))
@@ -728,22 +881,48 @@ const SEAM_CLEARANCE: f64 = 1e-6;
 const HOLE_CLEARANCE_TOLS: f64 = 10.0;
 const MAX_HOLE_CLEARANCE: f64 = 0.01;
 
-/// Abstand eines Punkts von der Achse einer Dreh-Fläche (Zylinder, Kegel, Kugel).
+/// Abstand eines Punkts von der Achse einer Dreh-Fläche (Zylinder, Kegel, Kugel, Torus).
 fn axis_distance(surface: &Surface, p: DVec3) -> f64 {
     let f = surface.frame();
     let d = p - f.origin;
     (d - f.z * d.dot(f.z)).length()
 }
 
-/// Bereich einer Schleife in u (fortlaufend aufgerollt), mit genau gesuchten Extremwerten: Ein
-/// Kreis auf einer Kugel hat sein größtes u mitten auf der Kante, Abtastpunkte allein lägen
-/// darunter. Läuft die Schleife durch einen Pol, gilt die Regel des Kernels (`points_to_uv`).
+/// Radius des Kreises, auf dem die Richtung `dir` am Punkt `p` läuft: um die Achse (u), beim
+/// Torus in v um die Rohrmitte (der kleine Radius).
+fn iso_radius(surface: &Surface, p: DVec3, dir: usize) -> f64 {
+    match surface {
+        Surface::Torus { minor, .. } if dir == 1 => minor.abs(),
+        _ => axis_distance(surface, p),
+    }
+}
+
+/// Parameter des Punkts `p` in Richtung `dir` (0 = u, 1 = v).
+fn param_of(surface: &Surface, p: DVec3, dir: usize) -> f64 {
+    let (u, v) = surface.project(p);
+    if dir == 0 { u } else { v }
+}
+
+/// Periode der Fläche in Richtung `dir` (0 = u, 1 = v).
+fn period_of(surface: &Surface, dir: usize) -> Option<f64> {
+    if dir == 0 {
+        surface.u_period()
+    } else {
+        surface.v_period()
+    }
+}
+
+/// Bereich einer Schleife in Richtung `dir` (0 = u, 1 = v; fortlaufend aufgerollt), mit genau
+/// gesuchten Extremwerten: Ein Kreis auf einer Kugel hat sein größtes u mitten auf der Kante,
+/// Abtastpunkte allein lägen darunter. Läuft die Schleife durch einen Pol, gilt die Regel des
+/// Kernels (`points_to_uv`).
 fn u_extent(
     raw: &RawBody,
     surface: &Surface,
     same_sense: bool,
     lp: &[RawHalfEdge],
     per: f64,
+    dir: usize,
 ) -> (f64, f64) {
     let poles = surface.pole_vs();
     let poly = points_to_uv(surface, same_sense, &raw.loop_points(lp));
@@ -751,13 +930,14 @@ fn u_extent(
         .iter()
         .any(|q| poles.iter().any(|pv| at_pole(q.y, *pv)))
     {
+        let comp = |q: &DVec2| if dir == 0 { q.x } else { q.y };
         return poly
             .iter()
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), q| {
-                (lo.min(q.x), hi.max(q.x))
+                (lo.min(comp(q)), hi.max(comp(q)))
             });
     }
-    let track = u_track(raw, surface, lp);
+    let track = track(raw, surface, lp, dir);
     let refine = |j: usize, sign: f64| -> f64 {
         let (he_i, s, u0) = track[j];
         let he = lp[he_i];
@@ -773,7 +953,7 @@ fn u_extent(
             .map_or(s, |t| t.1);
         let (mut a, mut b) = (a0, b0);
         let u_at = |x: f64| {
-            let u = surface.project(he_point(raw, he, x)).0;
+            let u = param_of(surface, he_point(raw, he, x), dir);
             sign * (u + per * ((u0 - u) / per).round())
         };
         for _ in 0..80 {
@@ -801,8 +981,18 @@ fn u_extent(
 /// Punkte einer Schleife mit ihrer Stelle (Index der Halbkante, Anteil entlang ihr) und `u`
 /// entlang der Schleife fortlaufend entfaltet (Schleifen ohne Pol).
 fn u_track(raw: &RawBody, surface: &Surface, lp: &[RawHalfEdge]) -> Vec<(usize, f64, f64)> {
+    track(raw, surface, lp, 0)
+}
+
+/// Wie [`u_track`], aber mit dem Parameter in Richtung `dir` (0 = u, 1 = v).
+fn track(
+    raw: &RawBody,
+    surface: &Surface,
+    lp: &[RawHalfEdge],
+    dir: usize,
+) -> Vec<(usize, f64, f64)> {
     let n = EDGE_STEPS;
-    let per = surface.u_period().unwrap_or(f64::INFINITY);
+    let per = period_of(surface, dir).unwrap_or(f64::INFINITY);
     // Abstand zweier Werte modulo der Periode (−½ … ½ Periode).
     let step = |a: f64, b: f64| {
         if per.is_finite() {
@@ -813,7 +1003,7 @@ fn u_track(raw: &RawBody, surface: &Surface, lp: &[RawHalfEdge]) -> Vec<(usize, 
     };
     let mut out: Vec<(usize, f64, f64)> = Vec::with_capacity(lp.len() * (n + 1));
     for (j, he) in lp.iter().enumerate() {
-        let u_of = |s: f64| surface.project(he_point(raw, *he, s)).0;
+        let u_of = |s: f64| param_of(surface, he_point(raw, *he, s), dir);
         // Gleichmäßig, dann dort verfeinert, wo u zwischen Nachbarn stark springt (nahe einem
         // Pol ändert sich u schnell; dort wäre das Aufrollen sonst mehrdeutig).
         let mut pts: Vec<(f64, f64)> = (0..=n)
@@ -895,23 +1085,30 @@ fn crossings(track: &[(usize, f64, f64)], t: f64, per: f64) -> Vec<(usize, f64)>
     out
 }
 
-/// Ein Winkel für die Naht, der Abstand zu allem anderen Rand der Fläche hält: Jede der
-/// Kreisschleifen `rims` kreuzt die Mantellinie dort genau einmal, und nicht entlang einer
-/// Kante (Mantellinien von Aussparungen und Fenstern); kein Loch (`holes`) reicht an ihn heran.
-/// Zuerst die Winkel der Ecken der ersten Kreisschleife (so verbindet die Naht bei den meisten
-/// Exporten vorhandene Ecken), dann die Mitten der größten freien Lücken.
-fn free_angle(raw: &RawBody, i: usize, rims: &[usize], holes: &[usize], tol: f64) -> Option<f64> {
+/// Ein Winkel in Richtung `dir` (0 = u, 1 = v) für die Naht, der Abstand zu allem anderen Rand
+/// der Fläche hält: Jede der Kreisschleifen `rims` kreuzt die Nahtlinie dort genau einmal, und
+/// nicht entlang einer Kante (Mantellinien von Aussparungen und Fenstern); kein Loch (`holes`)
+/// reicht an ihn heran. Zuerst die Winkel der Ecken der ersten Kreisschleife (so verbindet die
+/// Naht bei den meisten Exporten vorhandene Ecken), dann die Mitten der größten freien Lücken.
+fn free_angle(
+    raw: &RawBody,
+    i: usize,
+    rims: &[usize],
+    holes: &[usize],
+    tol: f64,
+    dir: usize,
+) -> Option<f64> {
     let f = &raw.faces[i];
     let surface = &f.surface;
-    let per = surface.u_period()?;
+    let per = period_of(surface, dir)?;
     let margin = SEAM_CLEARANCE * per;
     let tracks: Vec<Vec<(usize, f64, f64)>> = rims
         .iter()
-        .map(|&k| u_track(raw, surface, &f.loops[k]))
+        .map(|&k| track(raw, surface, &f.loops[k], dir))
         .collect();
     // Genaue Bereiche der Löcher in u (Extremwerte auf den Kanten gesucht) und ein Abstand von
     // mindestens einigen Genauigkeiten der Datei, als Winkel am kleinsten Abstand zur Achse.
-    let (hole_ranges, hole_margin) = hole_ranges(raw, i, holes, tol, per);
+    let (hole_ranges, hole_margin) = hole_ranges(raw, i, holes, tol, per, dir);
     let wrap = |x: f64| x.rem_euclid(per);
     let near = |x: f64, t: f64| {
         let d = wrap(x - t);
@@ -954,7 +1151,7 @@ fn free_angle(raw: &RawBody, i: usize, rims: &[usize], holes: &[usize], tol: f64
         .collect();
     for lp in &f.loops {
         for he in lp {
-            marks.push(wrap(surface.project(raw.vertices[raw.he_start(*he)]).0));
+            marks.push(wrap(param_of(surface, raw.vertices[raw.he_start(*he)], dir)));
         }
     }
     marks.sort_by(f64::total_cmp);
@@ -974,14 +1171,22 @@ fn free_angle(raw: &RawBody, i: usize, rims: &[usize], holes: &[usize], tol: f64
     candidates.into_iter().find(|&t| clear(t))
 }
 
-/// Ecke der Schleife `k` der Fläche `i` beim Winkel `u_s`: Die Mantellinie schneidet die
-/// Schleife dort (genau einmal, siehe [`free_angle`]); liegt der Schnittpunkt höchstens `tol`
-/// neben einer Ecke, ist es diese, sonst wird die Kante dort geteilt.
-fn vertex_on(raw: &mut RawBody, i: usize, k: usize, u_s: f64, tol: f64) -> Option<usize> {
+/// Ecke der Schleife `k` der Fläche `i` beim Winkel `u_s` in Richtung `dir` (0 = u, 1 = v): Die
+/// Nahtlinie schneidet die Schleife dort (genau einmal, siehe [`free_angle`]); liegt der
+/// Schnittpunkt höchstens `tol` neben einer Ecke, ist es diese, sonst wird die Kante dort
+/// geteilt.
+fn vertex_on(
+    raw: &mut RawBody,
+    i: usize,
+    k: usize,
+    u_s: f64,
+    tol: f64,
+    dir: usize,
+) -> Option<usize> {
     let surface = raw.faces[i].surface.clone();
-    let per = surface.u_period()?;
+    let per = period_of(&surface, dir)?;
     let lp = raw.faces[i].loops[k].clone();
-    let track = u_track(raw, &surface, &lp);
+    let track = track(raw, &surface, &lp, dir);
     let &[(j, target)] = &crossings(&track, u_s, per)[..] else {
         return None;
     };
@@ -996,7 +1201,7 @@ fn vertex_on(raw: &mut RawBody, i: usize, k: usize, u_s: f64, tol: f64) -> Optio
     let (s1, _) = (track[pos + 1].1, track[pos + 1].2);
     let he = lp[j];
     let u_at = |s: f64| {
-        let u = surface.project(he_point(raw, he, s)).0;
+        let u = param_of(&surface, he_point(raw, he, s), dir);
         u + per * ((u0 - u) / per).round()
     };
     let rising = u_at(s1) > u_at(s0);

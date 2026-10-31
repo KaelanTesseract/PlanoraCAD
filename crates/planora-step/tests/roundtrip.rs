@@ -861,14 +861,23 @@ fn hand_samples() -> Vec<(&'static str, Vec<Want>)> {
             vec![
                 Body("Zylinder", 3, PI * 25.0 * 10.0),
                 Body("Kugel", 1, 4.0 / 3.0 * PI * 64.0),
-                Skipped(
-                    "Ring",
-                    "Fläche vom Typ Torus ohne Naht wird noch nicht unterstützt.",
-                ),
+                Body("Ring", 1, 2.0 * PI * PI * 10.0 * 9.0),
                 Body("Kegel", 2, PI * 100.0 * 20.0 / 3.0),
                 Body("Kappe", 2, cap),
                 Body("Haube", 2, cap),
                 Body("Schale", 2, cap),
+            ],
+        ),
+        (
+            "seamless_torus",
+            vec![
+                Body(
+                    "Welle",
+                    4,
+                    3800.0 * PI + 128.0 * PI + 16.0 * PI * PI + 16.0 * PI / 3.0,
+                ),
+                Body("Kehle", 4, 3000.0 * PI + 250.0 * PI * PI - 500.0 * PI / 3.0),
+                Body("Bogen", 3, 250.0 * PI * PI),
             ],
         ),
         (
