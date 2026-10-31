@@ -5,7 +5,10 @@
 //! Grammatik (absteigender Parser):
 //! `sum := prod (('+'|'-') prod)*`, `prod := unary (('*'|'/') unary)*`,
 //! `unary := '-' unary | power`, `power := atom ('^' unary)?` (rechtsassoziativ),
-//! `atom := zahl | name | name '(' args ')' | '(' sum ')'`.
+//! `atom := zahl einheit? | name | name '(' args ')' | '(' sum ')'`,
+//! `einheit := 'mm' | 'cm' | 'm' | 'in'` (Groß-/Kleinschreibung egal, Leerzeichen davor
+//! erlaubt). Ein Einheitenzeichen gibt es nur direkt hinter einer Zahl; sonst sind `m` und
+//! `in` gewöhnliche Namen. Andere Wörter hinter einer Zahl („2 inch“) sind ein Fehler.
 //!
 //! **P4 Einheiten:** Ausdrücke rechnen mit Exponenten von Länge und Winkel ([`Dim`]). Bei
 //! `+`, `-`, `min`, `max` passt eine reine Zahl zu allem; Länge mit Winkel ist ein Fehler
@@ -23,8 +26,15 @@
 //! (`to_lowercase`); Umbenennen ersetzt ganze Namen-Token (derselbe Zerleger wie beim
 //! Parsen, keine Textsuche), der übrige Text bleibt zeichengleich, auch in nicht zerlegbaren
 //! Formeln. Namen höchstens 64 Zeichen, Kommentare höchstens 200 Zeichen.
+//!
+//! **Reine Längenzahlen:** Ein Teilausdruck ohne Einheit, der bei `+`, `-`, `min`, `max`
+//! neben einer Länge steht oder das ganze Ergebnis eines Längenfelds ist, zählt in der
+//! Anzeigeeinheit ([`eval_text_unit`]); Faktoren (`*`, `/`, `^`, Winkelfunktionen) bleiben
+//! Zahlen. Gespeicherte Formeln zählen immer in mm ([`eval_text`]); dafür schreibt
+//! [`rewrite_bare_lengths`] solche Teile vor dem Speichern mit Zeichen aus, und
+//! [`display_formula`] zeigt sie mit „mm“. Alle drei nutzen dieselbe Auswertung.
 
-use planora_i18n::tr;
+use planora_i18n::{DisplayUnit, tr};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::f64::consts::{FRAC_1_SQRT_2, PI};
 
@@ -352,13 +362,46 @@ impl Func {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-enum Node {
+enum Kind {
+    /// Zahl ohne Zeichen.
     Num(f64),
+    /// Zahl mit Einheitenzeichen, schon in mm.
+    Len(f64),
     Pi,
     Name(String),
     Neg(Box<Node>),
     Bin(Op, Box<Node>, Box<Node>),
     Call(Func, Vec<Node>),
+}
+
+/// Knoten mit seinem Byte-Bereich im Text (bei Klammern samt Klammern).
+#[derive(Clone, Debug, PartialEq)]
+struct Node {
+    kind: Kind,
+    start: usize,
+    end: usize,
+    /// In Klammern geschrieben.
+    paren: bool,
+}
+
+fn node(kind: Kind, start: usize, end: usize) -> Node {
+    Node {
+        kind,
+        start,
+        end,
+        paren: false,
+    }
+}
+
+/// Millimeter je Einheitenzeichen hinter einer Zahl.
+fn unit_mm(sign: &str) -> Option<f64> {
+    Some(match sign.to_lowercase().as_str() {
+        "mm" => 1.0,
+        "cm" => 10.0,
+        "m" => 1000.0,
+        "in" => 25.4,
+        _ => return None,
+    })
 }
 
 /// Zerlegte Formel.
@@ -375,19 +418,19 @@ impl Expr {
         let mut seen = HashSet::new();
         let mut stack = vec![&self.root];
         while let Some(node) = stack.pop() {
-            match node {
-                Node::Num(_) | Node::Pi => {}
-                Node::Name(name) => {
+            match &node.kind {
+                Kind::Num(_) | Kind::Len(_) | Kind::Pi => {}
+                Kind::Name(name) => {
                     if seen.insert(name.to_lowercase()) {
                         out.push(name.clone());
                     }
                 }
-                Node::Neg(inner) => stack.push(inner),
-                Node::Bin(_, l, r) => {
+                Kind::Neg(inner) => stack.push(inner),
+                Kind::Bin(_, l, r) => {
                     stack.push(r);
                     stack.push(l);
                 }
-                Node::Call(_, args) => stack.extend(args.iter().rev()),
+                Kind::Call(_, args) => stack.extend(args.iter().rev()),
             }
         }
         out
@@ -436,7 +479,7 @@ impl Parser<'_> {
             };
             self.at += 1;
             let right = self.prod()?;
-            left = Node::Bin(op, Box::new(left), Box::new(right));
+            left = bin(op, left, right);
         }
     }
 
@@ -450,17 +493,19 @@ impl Parser<'_> {
             };
             self.at += 1;
             let right = self.unary()?;
-            left = Node::Bin(op, Box::new(left), Box::new(right));
+            left = bin(op, left, right);
         }
     }
 
     fn unary(&mut self) -> Result<Node, ExprError> {
         if self.peek() == Some(Tok::Minus) {
+            let start = self.toks[self.at].start;
             self.at += 1;
             self.enter()?;
             let inner = self.unary()?;
             self.leave();
-            return Ok(Node::Neg(Box::new(inner)));
+            let end = inner.end;
+            return Ok(node(Kind::Neg(Box::new(inner)), start, end));
         }
         self.power()
     }
@@ -474,7 +519,7 @@ impl Parser<'_> {
         self.enter()?;
         let exp = self.unary()?;
         self.leave();
-        Ok(Node::Bin(Op::Pow, Box::new(base), Box::new(exp)))
+        Ok(bin(Op::Pow, base, exp))
     }
 
     fn atom(&mut self) -> Result<Node, ExprError> {
@@ -482,26 +527,41 @@ impl Parser<'_> {
             return fail(end());
         };
         let text = &self.text[t.start..t.end];
+        let at = |kind| Ok(node(kind, t.start, t.end));
         match t.kind {
             Tok::Num => {
                 let v: f64 = text.replace(',', ".").parse().map_err(|_| unexpected(&t))?;
                 if !v.is_finite() {
                     return fail(not_finite());
                 }
-                Ok(Node::Num(v))
+                Ok(self
+                    .unit_after(v, t.start)
+                    .unwrap_or(node(Kind::Num(v), t.start, t.end)))
             }
-            Tok::Name if self.peek() == Some(Tok::Open) => self.call(text),
-            Tok::Name if text.to_lowercase() == "pi" => Ok(Node::Pi),
-            Tok::Name => Ok(Node::Name(text.to_string())),
+            Tok::Name if self.peek() == Some(Tok::Open) => self.call(text, t.start),
+            Tok::Name if text.to_lowercase() == "pi" => at(Kind::Pi),
+            Tok::Name => at(Kind::Name(text.to_string())),
             Tok::Open => {
                 self.enter()?;
-                let inner = self.sum()?;
+                let mut inner = self.sum()?;
                 self.close()?;
                 self.leave();
+                inner.start = t.start;
+                inner.end = self.toks[self.at - 1].end;
+                inner.paren = true;
                 Ok(inner)
             }
             _ => Err(unexpected(&t)),
         }
+    }
+
+    /// Einheitenzeichen direkt hinter der Zahl `v`: verbraucht es und gibt die Länge in mm.
+    fn unit_after(&mut self, v: f64, start: usize) -> Option<Node> {
+        let t = self.toks.get(self.at).filter(|t| t.kind == Tok::Name)?;
+        let mm = unit_mm(&self.text[t.start..t.end])?;
+        let end = t.end;
+        self.at += 1;
+        Some(node(Kind::Len(v * mm), start, end))
     }
 
     /// Erwartet „)“.
@@ -513,7 +573,7 @@ impl Parser<'_> {
         }
     }
 
-    fn call(&mut self, name: &str) -> Result<Node, ExprError> {
+    fn call(&mut self, name: &str, start: usize) -> Result<Node, ExprError> {
         let Some(func) = Func::from_lower(&name.to_lowercase()) else {
             return fail(tr!("feature-expr-no-function", name = name.to_string()));
         };
@@ -547,8 +607,15 @@ impl Parser<'_> {
                 name = func.name().to_string()
             ));
         }
-        Ok(Node::Call(func, args))
+        let end = self.toks[self.at - 1].end;
+        Ok(node(Kind::Call(func, args), start, end))
     }
+}
+
+/// Zweierknoten über den Bereich beider Seiten.
+fn bin(op: Op, l: Node, r: Node) -> Node {
+    let (start, end) = (l.start, r.end);
+    node(Kind::Bin(op, Box::new(l), Box::new(r)), start, end)
 }
 
 /// Zerlegt eine Formel; prüft Länge, Leere, Schreibweise, Funktionsnamen, Wertezahl und
@@ -685,20 +752,61 @@ fn cos_deg(deg: f64) -> f64 {
     })
 }
 
+const LENGTH: Dim = Dim::of(ParamUnit::Length);
+
+/// Teilausdruck ohne Einheit, der als Länge zählt: Byte-Bereich im Text und ob er eine
+/// einzelne Zahl ohne Klammern ist (dann genügt ein Zeichen dahinter).
+#[derive(Clone, Copy, Debug)]
+struct Bare {
+    start: usize,
+    end: usize,
+    literal: bool,
+}
+
+/// Zustand einer Auswertung: Parameter, Faktor für reine Längenzahlen (mm je
+/// Anzeigeeinheit) und die gefundenen reinen Längenteile, innere vor äußeren.
+struct Ctx<'a> {
+    lookup: Lookup<'a>,
+    scale: f64,
+    bare: Vec<Bare>,
+}
+
+impl Ctx<'_> {
+    /// Ein Wert, dessen Verknüpfung (`+`, `-`, `min`, `max` oder das ganze Feld) die
+    /// Einheit `joined` hat: Ist er eine reine Zahl und `joined` eine Länge, zählt er in
+    /// der Anzeigeeinheit, und sein Bereich wird gemerkt. Ein Minus davor gehört nicht
+    /// zum gemerkten Bereich („-5“ wird „-5 in“).
+    fn bare_length(&mut self, v: f64, d: Dim, mut at: &Node, joined: Dim) -> f64 {
+        if d != Dim::NUMBER || joined != LENGTH {
+            return v;
+        }
+        while let Kind::Neg(inner) = &at.kind {
+            at = inner;
+        }
+        self.bare.push(Bare {
+            start: at.start,
+            end: at.end,
+            literal: matches!(at.kind, Kind::Num(_)) && !at.paren,
+        });
+        v * self.scale
+    }
+}
+
 /// Wertet einen Knoten aus. Jedes Zwischenergebnis muss endlich sein (kein stilles
 /// `min(10^400; 1) = 1`) und „-0“ wird zu 0. Zweierknoten und Funktionsaufrufe stehen in
 /// eigenen Funktionen, damit der Rahmen dieser rekursiven Funktion klein bleibt.
-fn eval_node(node: &Node, lookup: Lookup<'_>) -> Result<(f64, Dim), ExprError> {
-    let (v, d) = match node {
-        Node::Num(v) => (*v, Dim::NUMBER),
-        Node::Pi => (PI, Dim::NUMBER),
-        Node::Name(name) => eval_name(name, lookup)?,
-        Node::Neg(inner) => {
-            let (v, d) = eval_node(inner, lookup)?;
+fn eval_node(node: &Node, ctx: &mut Ctx<'_>) -> Result<(f64, Dim), ExprError> {
+    let (v, d) = match &node.kind {
+        Kind::Num(v) => (*v, Dim::NUMBER),
+        Kind::Len(v) => (*v, LENGTH),
+        Kind::Pi => (PI, Dim::NUMBER),
+        Kind::Name(name) => eval_name(name, ctx.lookup)?,
+        Kind::Neg(inner) => {
+            let (v, d) = eval_node(inner, ctx)?;
             (-v, d)
         }
-        Node::Bin(op, l, r) => eval_bin(*op, l, r, lookup)?,
-        Node::Call(func, args) => eval_call(*func, args, lookup)?,
+        Kind::Bin(op, l, r) => eval_bin(*op, l, r, ctx)?,
+        Kind::Call(func, args) => eval_call(*func, args, ctx)?,
     };
     if !v.is_finite() {
         return fail(not_finite());
@@ -715,12 +823,16 @@ fn eval_name(name: &str, lookup: Lookup<'_>) -> Result<(f64, Dim), ExprError> {
 }
 
 #[inline(never)]
-fn eval_bin(op: Op, l: &Node, r: &Node, lookup: Lookup<'_>) -> Result<(f64, Dim), ExprError> {
-    let (a, da) = eval_node(l, lookup)?;
-    let (b, db) = eval_node(r, lookup)?;
+fn eval_bin(op: Op, l: &Node, r: &Node, ctx: &mut Ctx<'_>) -> Result<(f64, Dim), ExprError> {
+    let (a, da) = eval_node(l, ctx)?;
+    let (b, db) = eval_node(r, ctx)?;
     Ok(match op {
-        Op::Add => (a + b, join(da, db)?),
-        Op::Sub => (a - b, join(da, db)?),
+        Op::Add | Op::Sub => {
+            let d = join(da, db)?;
+            let a = ctx.bare_length(a, da, l, d);
+            let b = ctx.bare_length(b, db, r, d);
+            (if op == Op::Add { a + b } else { a - b }, d)
+        }
         Op::Mul => (a * b, dim_op(da, db, i32::checked_add)?),
         Op::Div => {
             if b == 0.0 {
@@ -753,10 +865,10 @@ fn eval_bin(op: Op, l: &Node, r: &Node, lookup: Lookup<'_>) -> Result<(f64, Dim)
 }
 
 #[inline(never)]
-fn eval_call(func: Func, args: &[Node], lookup: Lookup<'_>) -> Result<(f64, Dim), ExprError> {
+fn eval_call(func: Func, args: &[Node], ctx: &mut Ctx<'_>) -> Result<(f64, Dim), ExprError> {
     let mut vals = Vec::with_capacity(args.len());
     for arg in args {
-        vals.push(eval_node(arg, lookup)?);
+        vals.push(eval_node(arg, ctx)?);
     }
     let (x, dx) = vals[0];
     let angle_ok = dx == Dim::NUMBER || dx == Dim::of(ParamUnit::Angle);
@@ -802,28 +914,68 @@ fn eval_call(func: Func, args: &[Node], lookup: Lookup<'_>) -> Result<(f64, Dim)
         }
         Func::Abs => (x.abs(), dx),
         Func::Round => (x.round(), dx),
-        Func::Min | Func::Max => {
-            let mut acc = (x, dx);
-            for &(v, d) in &vals[1..] {
-                let m = if func == Func::Min {
-                    acc.0.min(v)
-                } else {
-                    acc.0.max(v)
-                };
-                acc = (m, join(acc.1, d)?);
-            }
-            acc
-        }
+        Func::Min | Func::Max => min_max(func == Func::Min, args, &vals, ctx)?,
     })
 }
 
+/// `min`/`max`: erst die gemeinsame Einheit aller Werte, dann zählen reine Zahlen neben
+/// Längen in der Anzeigeeinheit, dann der kleinste bzw. größte Wert.
+fn min_max(
+    min: bool,
+    args: &[Node],
+    vals: &[(f64, Dim)],
+    ctx: &mut Ctx<'_>,
+) -> Result<(f64, Dim), ExprError> {
+    let mut d = vals[0].1;
+    for &(_, dv) in &vals[1..] {
+        d = join(d, dv)?;
+    }
+    let mut acc: Option<f64> = None;
+    for (arg, &(v, dv)) in args.iter().zip(vals) {
+        let v = ctx.bare_length(v, dv, arg, d);
+        acc = Some(match acc {
+            None => v,
+            Some(a) if min => a.min(v),
+            Some(a) => a.max(v),
+        });
+    }
+    Ok((acc.unwrap_or(f64::NAN), d))
+}
+
 /// Wertet eine zerlegte Formel aus. `lookup` bekommt Namen wie geschrieben und vergleicht
-/// selbst ohne Rücksicht auf Groß-/Kleinschreibung.
+/// selbst ohne Rücksicht auf Groß-/Kleinschreibung. Reine Zahlen zählen in mm.
 pub fn evaluate(
     e: &Expr,
     lookup: &dyn Fn(&str) -> Option<(f64, ParamUnit)>,
 ) -> Result<(f64, Dim), ExprError> {
-    eval_node(&e.root, lookup)
+    let mut ctx = Ctx {
+        lookup,
+        scale: 1.0,
+        bare: Vec::new(),
+    };
+    eval_node(&e.root, &mut ctx)
+}
+
+/// Auswerten für ein Feld der Art `want` mit `scale` mm je reiner Längenzahl; gibt den
+/// passenden Wert und die reinen Längenteile (innere vor äußeren).
+fn analyse(
+    e: &Expr,
+    want: ParamUnit,
+    lookup: Lookup<'_>,
+    scale: f64,
+) -> Result<(f64, Vec<Bare>), ExprError> {
+    let mut ctx = Ctx {
+        lookup,
+        scale,
+        bare: Vec::new(),
+    };
+    let (v, d) = eval_node(&e.root, &mut ctx)?;
+    let v = if want == ParamUnit::Length {
+        ctx.bare_length(v, d, &e.root, LENGTH)
+    } else {
+        v
+    };
+    Ok((fit_unit(v, d, want)?, ctx.bare))
 }
 
 fn dim_text(d: Dim) -> String {
@@ -858,15 +1010,105 @@ pub fn fit_unit(value: f64, dim: Dim, want: ParamUnit) -> Result<f64, ExprError>
     ))
 }
 
-/// Zerlegen, Auswerten und Einheit prüfen in einem Schritt.
+/// Zerlegen, Auswerten und Einheit prüfen in einem Schritt; reine Zahlen zählen in mm
+/// (so sind gespeicherte Formeln gemeint).
 pub fn eval_text(
     text: &str,
     want: ParamUnit,
     lookup: &dyn Fn(&str) -> Option<(f64, ParamUnit)>,
 ) -> Result<f64, ExprError> {
+    eval_text_unit(text, want, lookup, DisplayUnit::Millimeter)
+}
+
+/// Wie [`eval_text`], aber reine Längenzahlen (siehe Modulkopf) zählen in `bare`.
+pub fn eval_text_unit(
+    text: &str,
+    want: ParamUnit,
+    lookup: &dyn Fn(&str) -> Option<(f64, ParamUnit)>,
+    bare: DisplayUnit,
+) -> Result<f64, ExprError> {
     let e = parse(text)?;
-    let (v, d) = evaluate(&e, lookup)?;
-    fit_unit(v, d, want)
+    Ok(analyse(&e, want, lookup, bare.mm_per_unit())?.0)
+}
+
+/// Schreibt jede reine Längenzahl mit dem Zeichen von `unit` aus, damit der Text als
+/// gespeicherte Formel (reine Zahl = mm) denselben Wert ergibt wie mit
+/// [`eval_text_unit`] in `unit`: Zahl → „2 in“, sonst „(2^2) * 1 in“. Der übrige Text
+/// bleibt zeichengleich; bei Millimeter bleibt alles gleich. Fehler, wenn sich die Formel
+/// nicht auswerten lässt oder das Ergebnis zu lang oder zu tief wird.
+pub fn rewrite_bare_lengths(
+    text: &str,
+    want: ParamUnit,
+    lookup: &dyn Fn(&str) -> Option<(f64, ParamUnit)>,
+    unit: DisplayUnit,
+) -> Result<String, ExprError> {
+    let e = parse(text)?;
+    let (_, bare) = analyse(&e, want, lookup, unit.mm_per_unit())?;
+    if unit == DisplayUnit::Millimeter || bare.is_empty() {
+        return Ok(text.to_string());
+    }
+    let out = mark_bare(text, &bare, unit.id());
+    parse(&out)?;
+    Ok(out)
+}
+
+/// Anzeige der gespeicherten Formel eines Felds der Art `want` in `unit`: Bei Zoll und
+/// Länge wird eine reine Zahl umgerechnet („50“ → „1,968504“), sonst bekommt jede reine
+/// Längenzahl sichtbar „mm“. Sonst oder wenn sich die Formel nicht auswerten lässt: der
+/// gespeicherte Text.
+pub fn display_formula(
+    stored: &str,
+    want: ParamUnit,
+    lookup: &dyn Fn(&str) -> Option<(f64, ParamUnit)>,
+    unit: DisplayUnit,
+) -> String {
+    if unit == DisplayUnit::Millimeter || want != ParamUnit::Length {
+        return stored.to_string();
+    }
+    if let Some(v) = plain_number(stored) {
+        return unit_number(v / unit.mm_per_unit());
+    }
+    match parse(stored).and_then(|e| analyse(&e, want, lookup, 1.0)) {
+        Ok((_, bare)) => mark_bare(stored, &bare, DisplayUnit::Millimeter.id()),
+        Err(_) => stored.to_string(),
+    }
+}
+
+/// Setzt das Zeichen `sign` hinter jede reine Längenzahl (Zahl → „2 in“, sonst
+/// „(…) * 1 in“). An derselben Stelle kommen schließende Stücke vor öffnenden und innere
+/// vor äußeren (Reihenfolge von `bare`, das Sortieren ist stabil).
+fn mark_bare(text: &str, bare: &[Bare], sign: &str) -> String {
+    let mut ins: Vec<(usize, bool, String)> = Vec::with_capacity(bare.len() * 2);
+    for b in bare {
+        if b.literal {
+            ins.push((b.end, false, format!(" {sign}")));
+        } else {
+            ins.push((b.start, true, "(".to_string()));
+            ins.push((b.end, false, format!(") * 1 {sign}")));
+        }
+    }
+    ins.sort_by_key(|&(at, open, _)| (at, open));
+    let mut out = String::with_capacity(text.len() + ins.len() * 8);
+    let mut last = 0;
+    for (at, _, piece) in ins {
+        out.push_str(&text[last..at]);
+        out.push_str(&piece);
+        last = at;
+    }
+    out.push_str(&text[last..]);
+    out
+}
+
+/// Umgerechnete Zahl für die Anzeige: höchstens sechs Nachkommastellen, ohne Nullen am
+/// Ende, mit Komma, nie „-0“.
+fn unit_number(v: f64) -> String {
+    let s = format!("{v:.6}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s == "-0" {
+        "0".to_string()
+    } else {
+        s.replace('.', ",")
+    }
 }
 
 // ---------------------------------------------------------------------------------------
