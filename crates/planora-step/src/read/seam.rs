@@ -9,11 +9,13 @@
 //! - entfernt Kanten, deren Kurve kürzer als `weld_tol` ist ([`drop_degenerate`]), und legt ihre
 //!   Ecken zusammen; `VERTEX_LOOP`s sind beim Lesen keine Ränder geworden, ihre Punkte stehen als
 //!   Pole der Fläche (`pole_marks`) bereit;
-//! - fügt Zylinder-, Kegel- und Kugelflächen ohne Naht eine Naht hinzu ([`insert_seams`], P9):
-//!   zwischen zwei vollen Kreisen, von einem Kreis zum Pol, (Kugel ohne Rand oder mit beiden
+//! - fügt Zylinder-, Kegel-, Kugel- und Torusflächen ohne Naht eine Naht hinzu ([`insert_seams`],
+//!   P9): zwischen zwei vollen Kreisen, von einem Kreis zum Pol, (Kugel ohne Rand oder mit beiden
 //!   Polen zwischen ihren Löchern) von Pol zu Pol oder (Kugelfläche, deren Rand einen Pol
-//!   berührt und um die Kugel herumläuft) vom inneren zum berührten Pol, immer mit Abstand zum
-//!   übrigen Rand; andere Flächen ohne Naht werden ausgelassen. Wo nur der Umlaufsinn die Seite
+//!   berührt und um die Kugel herumläuft) vom inneren zum berührten Pol, beim Torus zwischen zwei
+//!   Breiten- oder zwei Rohrkreisen oder (voller Ring) zwei Nähte durch eine Ecke
+//!   ([`torus_seam`]), immer mit Abstand zum übrigen Rand; andere Flächen ohne Naht werden
+//!   ausgelassen. Wo nur der Umlaufsinn die Seite
 //!   einer Kugelfläche bestimmt (kein Pol genannt, oder ein Pol liegt im Rand), wird das
 //!   vermerkt (`side_guessed`);
 //! - prüft, dass jeder Rand, der in die Nähe eines Pols kommt, genau durch ihn läuft
@@ -282,8 +284,8 @@ fn kind_name(s: &Surface) -> String {
 
 /// Fügt Flächen ohne Naht eine Naht hinzu (P9). Eine Fläche hat keine Naht, wenn sie keinen Rand
 /// hat oder Ränder, die sich um ihre Achse winden (im Parameterraum nach der Regel des Kernels
-/// aufgerollt: Anfang und Ende liegen eine Periode auseinander). Nur bei Zylinder, Kegel und
-/// Kugel wird eingefügt:
+/// aufgerollt: Anfang und Ende liegen eine Periode auseinander). Bei Zylinder, Kegel und Kugel
+/// wird so eingefügt (Torus: [`torus_seam`]):
 /// - zwei Kreisschleifen (die untere läuft in Richtung der Außennormale gegen den Uhrzeigersinn,
 ///   die obere andersherum): Naht entlang der Mantellinie (Kugel: Meridian) beim Winkel `u_s`;
 /// - eine Kreisschleife und auf ihrer Seite ein Pol (Kugelkappe, Kegel mit Spitze): Naht vom

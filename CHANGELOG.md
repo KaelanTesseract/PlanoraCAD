@@ -12,6 +12,7 @@ Hier steht, was sich in jeder Version geändert hat. Die neueste Version steht o
 - Rückmeldung und Absturzbericht: Das Formular und die Vorlage öffnen sich in der Sprache des Programms. Protokoll und Absturzbericht sind immer englisch.
 
 ### Behoben
+- STEP-Import: Körper mit einer Ringfläche (Torus) ohne Naht kamen nicht an, zum Beispiel eine Welle mit gerundeter Kante, ein Rohrbogen oder ein Ring. Solche Flächen bekommen jetzt wie Zylinder und Kugel ihre Naht beim Einlesen.
 - Eine neue Schnittansicht landete manchmal auf dem Schriftfeld. Jetzt weicht sie auf die andere Seite der Ausgangsansicht aus, rückt näher heran oder schiebt die Ausgangsansicht ein Stück zur Seite, wenn dort Schriftfeld, Tabellen oder der Blattrand im Weg sind.
 
 ## 0.0.2-dev.1
