@@ -201,7 +201,7 @@ fn format_errors() {
     });
     assert!(bad(&wrong_kind).to_string().contains("Schnittebene"));
 
-    // Format 12 ist zu neu.
+    // Format 13 ist zu neu.
     let t = good.replacen("\"format\": 8", "\"format\": 13", 1);
     assert!(matches!(bad(&t), ProjectError::TooNew { found: 13, .. }));
 }

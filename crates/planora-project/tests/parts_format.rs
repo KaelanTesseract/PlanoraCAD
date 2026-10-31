@@ -360,8 +360,8 @@ fn rejects_bad_parts_data() {
         assert!(m.contains("erst ab Dateiformat 7"), "{name}: {m}");
     }
 
-    // Format 12 ist zu neu, Format 7 nicht
-    let t = edited(|v| v["format"] = 12.into());
+    // Format 13 ist zu neu, Format 7 nicht
+    let t = edited(|v| v["format"] = 13.into());
     assert!(matches!(bad(&t), ProjectError::TooNew { found: 13, .. }));
     assert!(decode_version(&text7(), "x.json").is_ok());
 

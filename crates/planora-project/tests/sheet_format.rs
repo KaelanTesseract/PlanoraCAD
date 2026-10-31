@@ -308,8 +308,8 @@ fn rejects_bad_sheet_data() {
     let t = edited(|v| v["zeichnungen"][0]["blattangaben"]["nummer"] = "a\u{1}b".into());
     assert!(msg(bad(&t)).contains("Zeichnung „Blatt A“"));
 
-    // Format 12 ist zu neu
-    let t = edited(|v| v["format"] = 12.into());
+    // Format 13 ist zu neu
+    let t = edited(|v| v["format"] = 13.into());
     assert!(matches!(bad(&t), ProjectError::TooNew { found: 13, .. }));
 }
 
