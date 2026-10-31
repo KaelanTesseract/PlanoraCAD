@@ -180,12 +180,25 @@ impl PanelState {
     }
 }
 
-/// Vorgabe des Versatzes x eines Musters in der Anzeigeeinheit (20 mm, in Zoll 1 in).
+/// Vorgabe des Versatzes x eines Musters in mm.
+const PATTERN_DX_MM: f64 = 20.0;
+
+/// Vorgabe des Versatzes x als Feldtext in der Anzeigeeinheit („20“, in Zoll „0,787402“).
 fn pattern_default() -> String {
-    match current_unit() {
-        DisplayUnit::Millimeter => "20".into(),
-        _ => "1".into(),
-    }
+    value_field_text(PATTERN_DX_MM, ParamUnit::Length)
+}
+
+/// Versatz eines Musters in mm aus den Texten der Felder x und y (Anzeigeeinheit). Eine
+/// unveränderte Vorgabe (x: 20 mm, y: 0) gilt genau. `None` je Feld ohne gültige Zahl.
+#[doc(hidden)]
+pub fn pattern_offsets(dx: &str, dy: &str) -> (Option<f64>, Option<f64>) {
+    let read = |text: &str, default_mm: f64| {
+        if text.trim() == value_field_text(default_mm, ParamUnit::Length) {
+            return Some(default_mm);
+        }
+        parse_number(text).map(|v| current_unit().from_display(v))
+    };
+    (read(dx, PATTERN_DX_MM), read(dy, 0.0))
 }
 
 fn panel_id() -> egui::Id {
@@ -874,9 +887,7 @@ fn sections(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch, panel: &
             ui.horizontal(|ui| {
                 if ui.small_button(tr!("create-create")).clicked() {
                     // Versatz in der Anzeigeeinheit, die Skizze rechnet in mm.
-                    let unit = current_unit();
-                    let dx = parse_number(&panel.pattern_dx).map(|v| unit.from_display(v));
-                    let dy = parse_number(&panel.pattern_dy).map(|v| unit.from_display(v));
+                    let (dx, dy) = pattern_offsets(&panel.pattern_dx, &panel.pattern_dy);
                     let count = panel.pattern_count.trim().parse::<usize>().ok();
                     match (dx, dy, count) {
                         (Some(dx), Some(dy), Some(n)) => {

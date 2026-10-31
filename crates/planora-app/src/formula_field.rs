@@ -119,7 +119,13 @@ pub fn resolve_kept(
 /// Wertet einen getippten Text (Formel oder Zahl) eines Feldes aus; reine Längenzahlen zählen
 /// in der Anzeigeeinheit.
 pub fn eval_shown(text: &str, unit: ParamUnit, scope: &ParamScope) -> Result<f64, String> {
-    eval_text_unit(text, unit, &|n| scope.lookup(n), current_unit()).map_err(|e| e.0)
+    let v = eval_text_unit(text, unit, &|n| scope.lookup(n), current_unit()).map_err(|e| e.0)?;
+    // Ließe sich der Text nicht speichern (zu lang, zu tief nach dem Ausschreiben der Zeichen),
+    // steht die Meldung schon jetzt da und nicht erst beim Bestätigen.
+    if current_unit() != DisplayUnit::Millimeter {
+        stored_formula(text, unit, scope)?;
+    }
+    Ok(v)
 }
 
 /// Text eines Feldes für den gespeicherten Wert `v` (Länge in mm) in der Anzeigeeinheit: in

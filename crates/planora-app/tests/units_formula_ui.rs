@@ -354,6 +354,56 @@ fn blend_sizes_count_in_inches() {
     );
 }
 
+#[test]
+fn untouched_defaults_in_inches_are_exactly_the_millimetre_defaults() {
+    let s = AppState::new();
+    let scope = s.document.param_scope();
+    with_unit(ZOLL, || {
+        // Verrunden: Vorgabe 1 mm, gezeigt in Zoll, unverändert genau 1 mm ohne Formel.
+        let d = BlendDialog::fillet();
+        assert_eq!(d.first, "0,03937");
+        let (art, f) = d.art_formulas(&scope).unwrap();
+        assert_eq!(art, BlendArt::Rundung { radius: 1.0 });
+        assert!(f.is_empty(), "keine Formel für die Vorgabe");
+        let v = BlendDialog::variable();
+        let (art, _) = v.art_formulas(&scope).unwrap();
+        assert_eq!(
+            art,
+            BlendArt::RundungVariabel {
+                punkte: vec![(0.0, 1.0), (100.0, 1.0)]
+            }
+        );
+        // Neuer Punkt: die alten Texte bleiben, der neue Radius ist genau 1 mm.
+        let mut v = BlendDialog::variable();
+        v.add_point();
+        assert_eq!(v.points.len(), 3);
+        assert_eq!(v.points[0].1, "0,03937");
+        let (art, _) = v.art_formulas(&scope).unwrap();
+        match art {
+            BlendArt::RundungVariabel { punkte } => {
+                assert_eq!(punkte[1].0, 50.0);
+                assert!((punkte[1].1 - 1.0).abs() < 1e-12, "{}", punkte[1].1);
+            }
+            a => panic!("{a:?}"),
+        }
+        // Muster: Vorgabe 20 mm / 0, unverändert genau.
+        assert_eq!(
+            sketch_panel::pattern_offsets("0,787402", "0"),
+            (Some(20.0), Some(0.0))
+        );
+        assert_eq!(
+            sketch_panel::pattern_offsets("1", "0"),
+            (Some(25.4), Some(0.0))
+        );
+    });
+    // In mm wie bisher.
+    assert_eq!(BlendDialog::fillet().first, "1");
+    assert_eq!(
+        sketch_panel::pattern_offsets("20", "0"),
+        (Some(20.0), Some(0.0))
+    );
+}
+
 // ---- Skizzenmaß -----------------------------------------------------------------------------
 
 fn sketch_rig() -> (Rig, ConstraintId) {
