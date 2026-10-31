@@ -25,7 +25,8 @@
 //! **P6 Namen:** Nachschlagen und Eindeutigkeit ohne Rücksicht auf Groß-/Kleinschreibung
 //! (`to_lowercase`); Umbenennen ersetzt ganze Namen-Token (derselbe Zerleger wie beim
 //! Parsen, keine Textsuche), der übrige Text bleibt zeichengleich, auch in nicht zerlegbaren
-//! Formeln. Namen höchstens 64 Zeichen, Kommentare höchstens 200 Zeichen.
+//! Formeln; ein Einheitenzeichen hinter einer Zahl („2 m“) ist dabei kein Name. Namen
+//! höchstens 64 Zeichen, Kommentare höchstens 200 Zeichen.
 //!
 //! **Reine Längenzahlen:** Ein Teilausdruck ohne Einheit, der bei `+`, `-`, `min`, `max`
 //! neben einer Länge steht oder das ganze Ergebnis eines Längenfelds ist, zählt in der
@@ -761,6 +762,8 @@ struct Bare {
     start: usize,
     end: usize,
     literal: bool,
+    /// Schon in Klammern geschrieben (dann keine zweiten).
+    paren: bool,
 }
 
 /// Zustand einer Auswertung: Parameter, Faktor für reine Längenzahlen (mm je
@@ -787,6 +790,7 @@ impl Ctx<'_> {
             start: at.start,
             end: at.end,
             literal: matches!(at.kind, Kind::Num(_)) && !at.paren,
+            paren: at.paren,
         });
         v * self.scale
     }
@@ -1052,21 +1056,24 @@ pub fn rewrite_bare_lengths(
     Ok(out)
 }
 
-/// Anzeige der gespeicherten Formel eines Felds der Art `want` in `unit`: Bei Zoll und
-/// Länge wird eine reine Zahl umgerechnet („50“ → „1,968504“), sonst bekommt jede reine
-/// Längenzahl sichtbar „mm“. Sonst oder wenn sich die Formel nicht auswerten lässt: der
-/// gespeicherte Text.
+/// Anzeige der gespeicherten Formel eines Felds der Art `want` in `unit` (nicht mm): Im
+/// Längenfeld wird eine reine Zahl umgerechnet („50“ → „1,968504“); sonst bekommt in jedem
+/// Feld jede reine Längenzahl sichtbar „mm“. Bei Millimeter oder wenn sich die Formel nicht
+/// auswerten lässt: der gespeicherte Text.
 pub fn display_formula(
     stored: &str,
     want: ParamUnit,
     lookup: &dyn Fn(&str) -> Option<(f64, ParamUnit)>,
     unit: DisplayUnit,
 ) -> String {
-    if unit == DisplayUnit::Millimeter || want != ParamUnit::Length {
+    if unit == DisplayUnit::Millimeter {
         return stored.to_string();
     }
     if let Some(v) = plain_number(stored) {
-        return unit_number(v / unit.mm_per_unit());
+        if want == ParamUnit::Length {
+            return unit_number(v / unit.mm_per_unit());
+        }
+        return stored.to_string();
     }
     match parse(stored).and_then(|e| analyse(&e, want, lookup, 1.0)) {
         Ok((_, bare)) => mark_bare(stored, &bare, DisplayUnit::Millimeter.id()),
@@ -1074,14 +1081,16 @@ pub fn display_formula(
     }
 }
 
-/// Setzt das Zeichen `sign` hinter jede reine Längenzahl (Zahl → „2 in“, sonst
-/// „(…) * 1 in“). An derselben Stelle kommen schließende Stücke vor öffnenden und innere
+/// Setzt das Zeichen `sign` hinter jede reine Längenzahl (Zahl → „2 in“, schon
+/// geklammert → „(…) * 1 in“, sonst Klammern dazu). An derselben Stelle kommen schließende Stücke vor öffnenden und innere
 /// vor äußeren (Reihenfolge von `bare`, das Sortieren ist stabil).
 fn mark_bare(text: &str, bare: &[Bare], sign: &str) -> String {
     let mut ins: Vec<(usize, bool, String)> = Vec::with_capacity(bare.len() * 2);
     for b in bare {
         if b.literal {
             ins.push((b.end, false, format!(" {sign}")));
+        } else if b.paren {
+            ins.push((b.end, false, format!(" * 1 {sign}")));
         } else {
             ins.push((b.start, true, "(".to_string()));
             ins.push((b.end, false, format!(") * 1 {sign}")));
@@ -1198,8 +1207,8 @@ pub fn rename_in(text: &str, old: &str, new: &str) -> String {
     let old = old.to_lowercase();
     let mut out = String::with_capacity(text.len());
     let mut last = 0;
-    for t in scan(text) {
-        if t.kind == Tok::Name && text[t.start..t.end].to_lowercase() == old {
+    for t in name_tokens(text) {
+        if text[t.start..t.end].to_lowercase() == old {
             out.push_str(&text[last..t.start]);
             out.push_str(new);
             last = t.end;
@@ -1212,9 +1221,24 @@ pub fn rename_in(text: &str, old: &str, new: &str) -> String {
 /// Nennt der Text den Namen als ganzes Token (klein verglichen)?
 pub fn references(text: &str, name: &str) -> bool {
     let name = name.to_lowercase();
-    scan(text)
+    name_tokens(text).any(|t| text[t.start..t.end].to_lowercase() == name)
+}
+
+/// Namen-Token des Texts ohne Einheitenzeichen direkt hinter einer Zahl („2 m“): So
+/// ändern Umbenennen und Verweissuche keinen Wert mit Zeichen.
+fn name_tokens(text: &str) -> impl Iterator<Item = Token> + '_ {
+    let toks = scan(text);
+    let keep: Vec<Token> = toks
         .iter()
-        .any(|t| t.kind == Tok::Name && text[t.start..t.end].to_lowercase() == name)
+        .enumerate()
+        .filter(|&(i, t)| {
+            let unit_sign =
+                i > 0 && toks[i - 1].kind == Tok::Num && unit_mm(&text[t.start..t.end]).is_some();
+            t.kind == Tok::Name && !unit_sign
+        })
+        .map(|(_, t)| *t)
+        .collect();
+    keep.into_iter()
 }
 
 // ---------------------------------------------------------------------------------------

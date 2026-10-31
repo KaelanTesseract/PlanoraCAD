@@ -2,7 +2,8 @@
 //! Umschreiben vor dem Speichern und Anzeige gespeicherter Formeln in Zoll.
 
 use planora_feature::expr::{
-    ParamUnit, display_formula, eval_text, eval_text_unit, rewrite_bare_lengths,
+    ParamDef, ParamUnit, display_formula, eval_text, eval_text_unit, evaluate_table, references,
+    rename_in, rewrite_bare_lengths,
 };
 use planora_i18n::DisplayUnit::{Millimeter, Zoll};
 
@@ -159,4 +160,46 @@ fn display_in_inch() {
         eval_text_unit(&shown, ParamUnit::Length, &len, Zoll).unwrap(),
         14.0,
     );
+}
+
+#[test]
+fn parenthesised_parts_get_no_second_brackets() {
+    let rw = |t: &str| rewrite_bare_lengths(t, ParamUnit::Length, &len, Zoll).unwrap();
+    assert_eq!(rw("(1 + 2) + breite"), "(1 + 2) * 1 in + breite");
+    assert_eq!(rw("(2) + breite"), "(2) * 1 in + breite");
+    assert_eq!(rw("-(2) + breite"), "-(2) * 1 in + breite");
+    assert_eq!(rw("(anzahl * 10)"), "(anzahl * 10) * 1 in");
+}
+
+#[test]
+fn unit_signs_are_no_names() {
+    assert_eq!(rename_in("2 m", "m", "cm"), "2 m");
+    assert_eq!(rename_in("m + 2 m", "m", "cm"), "cm + 2 m");
+    assert_eq!(rename_in("2 in + in", "in", "x"), "2 in + x");
+    assert_eq!(rename_in("2*m", "m", "x"), "2*x");
+    assert!(!references("2 in", "in"));
+    assert!(!references("2 m", "m"));
+    assert!(references("2 * m", "m"));
+    assert!(references("m + 2 m", "m"));
+    // Ein Parameter `m` mit der Formel „2 m“ nennt sich nicht selbst.
+    let defs = [ParamDef {
+        name: "m",
+        formula: "2 m",
+        unit: ParamUnit::Length,
+    }];
+    assert_eq!(evaluate_table(&defs).unwrap(), vec![2000.0]);
+}
+
+#[test]
+fn display_marks_bare_lengths_in_every_field() {
+    assert_eq!(
+        display_formula("breite / (breite + 1)", ParamUnit::Number, &len, Zoll),
+        "breite / (breite + 1 mm)"
+    );
+    assert_eq!(
+        display_formula("breite / 2", ParamUnit::Number, &len, Zoll),
+        "breite / 2"
+    );
+    assert_eq!(display_formula("3", ParamUnit::Number, &len, Zoll), "3");
+    assert_eq!(display_formula("30", ParamUnit::Angle, &len, Zoll), "30");
 }
