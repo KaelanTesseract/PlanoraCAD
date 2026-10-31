@@ -1978,8 +1978,8 @@ Teilprojekt Sprachen (Deutsch und Englisch, weitere Sprachen über Dateien), abg
 
 ## Teilprojekt Zoll
 
-Stand 2026-10-31 (Zweig `feature/zoll`, Spec `specs/2026-10-31-zoll-design.md`, Plan `plans/2026-10-31-zoll.md`). Einstellung „Maßeinheit“ (Millimeter/Zoll) für Anzeige und Eingabe, Einheiten hinter Zahlen in Formeln (`mm`, `cm`, `m`, `in`), eigene Einheit je Zeichnung mit Vermerk „Maße in Zoll“, Dateiformat 12 nur mit einer Zeichnung in Zoll. Intern bleibt alles in mm. Beschreibung in `docs/funktionen.md`, „Maßeinheit Zoll“.
-- **Offen:** Handtest in der App (Umschalten, Quader und Skizzenmaß in Zoll, Zeichnung in Zoll als PDF).
+Abgeschlossen 2026-10-31 (gemergt in master als 99c72fa; Spec `specs/2026-10-31-zoll-design.md`, Plan `plans/2026-10-31-zoll.md`). Einstellung „Maßeinheit“ (Millimeter/Zoll) für Anzeige und Eingabe, Einheiten hinter Zahlen in Formeln (`mm`, `cm`, `m`, `in`), eigene Einheit je Zeichnung mit Vermerk „Maße in Zoll“, Dateiformat 12 nur mit einer Zeichnung in Zoll. Intern bleibt alles in mm. Beschreibung in `docs/funktionen.md`, „Maßeinheit Zoll“.
+- **Geprüft:** Handtest in der App (Umschalten, Quader in Zoll, Zeichnung in Zoll als PDF) und GitHub-CI (Windows und Ubuntu) bestanden.
 - **Bewusst in mm gelassen (mit „mm“ beschriftet):** Schraffurabstand und alle Blattmaße; Exportgenauigkeit (`export-quality-*`); Genauigkeit einer STEP-Datei (`feature-step-accuracy`); Verschiebung beim Schnitt (`section-nudged`); Faktor einer fremden Dateieinheit (`step-unit-other`).
 - **Grenzen:**
   - Keine Brüche in der Anzeige, kein Fuß; Vorgabewerte sind nicht rund in Zoll (20 mm Musterabstand erscheint als 0,787402 in). Folgeidee: runde Zoll-Vorgaben.
