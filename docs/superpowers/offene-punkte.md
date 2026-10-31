@@ -1971,11 +1971,24 @@ Stand nach Etappe 6 (Plan `docs/superpowers/plans/2026-10-26-rueckmeldungen.md`)
 
 Teilprojekt Sprachen (Deutsch und Englisch, weitere Sprachen über Dateien), abgeschlossen und am 2026-10-30 nach master gemergt (CI grün, 4429 Tests). Zurückgestellt:
 - Datumsangaben bleiben auch im Englischen in der deutschen Form TT.MM.JJJJ (z. B. „23.10.2026, 18:42“ in Projekte-Fenster und Versionen).
-- Zoll und andere Einheiten: eigenes Teilprojekt, siehe unten „Später: Teilprojekt Zoll“.
+- Zoll: erledigt im Teilprojekt Zoll (siehe unten „Teilprojekt Zoll“); andere Einheiten gibt es nicht.
 - Schrift von rechts nach links (Arabisch, Hebräisch) und Schriften, die die eingebauten Schriftarten nicht abdecken (z. B. Chinesisch, Japanisch), gehen nicht; die Anleitung `docs/uebersetzen.md` sagt das.
 - Mitgeliefert werden nur Deutsch und Englisch; der Installer legt den leeren Ordner `languages` neben der exe an.
 - (Behoben am 2026-10-30:) Neue Schnittansichten wurden automatisch über das Schriftfeld gelegt; jetzt weichen sie auf die Gegenseite aus, rücken enger oder schieben die Ausgangsansicht (siehe `docs/funktionen.md`, „Schnitt anlegen“).
 
-## Später: Teilprojekt Zoll
+## Teilprojekt Zoll
 
-- Maße in Zoll statt Millimeter (für die USA). Beim Entwurf der Sprachen am 2026-10-27 bewusst ausgeklammert; eigenes Teilprojekt (Dennis).
+Stand 2026-10-31 (Zweig `feature/zoll`, Spec `specs/2026-10-31-zoll-design.md`, Plan `plans/2026-10-31-zoll.md`). Einstellung „Maßeinheit“ (Millimeter/Zoll) für Anzeige und Eingabe, Einheiten hinter Zahlen in Formeln (`mm`, `cm`, `m`, `in`), eigene Einheit je Zeichnung mit Vermerk „Maße in Zoll“, Dateiformat 12 nur mit einer Zeichnung in Zoll. Intern bleibt alles in mm. Beschreibung in `docs/funktionen.md`, „Maßeinheit Zoll“.
+- **Offen:** Handtest in der App (Umschalten, Quader und Skizzenmaß in Zoll, Zeichnung in Zoll als PDF).
+- **Bewusst in mm gelassen (mit „mm“ beschriftet):** Schraffurabstand und alle Blattmaße; Exportgenauigkeit (`export-quality-*`); Genauigkeit einer STEP-Datei (`feature-step-accuracy`); Verschiebung beim Schnitt (`section-nudged`); Faktor einer fremden Dateieinheit (`step-unit-other`).
+- **Grenzen:**
+  - Keine Brüche in der Anzeige, kein Fuß; Vorgabewerte sind nicht rund in Zoll (20 mm Musterabstand erscheint als 0,787402 in). Folgeidee: runde Zoll-Vorgaben.
+  - Meldungen aus Skizze, Feature, Kernel und STEP-Leser sind beim Entstehen fertiger Text; nach dem Umstellen behalten sie bis zur nächsten Neuberechnung die alte Einheit (Zahl und Zeichen passen zusammen).
+  - Beim Umstellen laden offene Dialoge neu; noch nicht bestätigte Eingaben gehen verloren (bewusst: getippter Text bekäme sonst still ein anderes Zeichen).
+  - Wechselt die Sprache bei offenem Rundungs-/Musterdialog, wird ein unveränderter Vorgabewert nicht mehr erkannt und als 0,99999 mm statt 1 mm übernommen (etwa 2e-5 mm).
+  - Neu eingefügter Zwischenradius beim veränderlichen Verrunden zeigt in Zoll eine lange Zahl.
+  - Vorhandene Maße behalten beim Umstellen einer Zeichnung auf Zoll ihre Nachkommastellen (1 Stelle ≈ 2,5 mm); Idee: beim Umstellen 1 → 2 Stellen anbieten.
+  - Ein offenes Maß-Fenster behält nach dem Umstellen der Zeichnungseinheit die alte Einheit in den Toleranzfeldern (Überschrift nennt sie, Werte werden richtig zurückgerechnet).
+  - Stücklistenblätter bekommen weder Einheitenwahl noch Vermerk (sie haben keine Maße).
+  - Die Einheitenwahl im Blattangaben-Fenster steht in der Zeile mit den eigenen Hinweisen (Platz bei 1920×1080).
+  - Code: Die ausstehenden Einstellungen werden an 8 Stellen in `workspace.rs` gemischt; eine gemeinsame Hilfe `apply_pending` wäre sauberer.

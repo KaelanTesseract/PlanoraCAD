@@ -29,6 +29,7 @@ Die Texte stammen aus der Entwicklung und sind entsprechend genau. Viele Abschni
 - [Rückmeldung, Absturzberichte und Protokoll](#rückmeldung-absturzberichte-und-protokoll)
 - [Updates und Versionen](#updates-und-versionen)
 - [Sprache](#sprache)
+- [Maßeinheit Zoll](#maßeinheit-zoll)
 
 ## Grundkörper und Boolesche Operationen
 
@@ -732,7 +733,26 @@ PlanoraCAD spricht Deutsch und Englisch. Weitere Sprachen kann jeder ohne Progra
 
 **Grenzen**
 - Datumsangaben bleiben auch im Englischen in der Form TT.MM.JJJJ.
-- Zoll und andere Einheiten gibt es noch nicht (eigenes Teilprojekt).
+- Zoll siehe [Maßeinheit Zoll](#maßeinheit-zoll); andere Einheiten (Fuß, Meter) gibt es nicht.
 - Schrift von rechts nach links (Arabisch, Hebräisch) und Schriften, die die eingebauten Schriftarten nicht abdecken (zum Beispiel Chinesisch, Japanisch), gehen noch nicht.
 
 Mehr dazu in `docs/superpowers/offene-punkte.md`, Abschnitt „Sprachen“.
+
+## Maßeinheit Zoll
+
+PlanoraCAD zeigt Längen in Millimeter oder in Zoll. Intern rechnet das Programm immer in Millimeter; Dateien und Körper ändern sich durch die Einstellung nicht.
+
+- **Umstellen:** „Datei → Einstellungen …“, Abschnitt „Darstellung“, Auswahl „Maßeinheit“ (unter der Sprache). Die Wahl gilt sofort und wird gespeichert. Offene Fenster mit noch nicht übernommenen Eingaben laden dabei neu; was dort getippt, aber noch nicht bestätigt war, geht verloren.
+- **Anzeige:** Längen in `in`, Flächen in `in²`, Volumen in `in³`, mit drei Nachkommastellen (in Millimeter wie bisher zwei). Das gilt für Eigenschaftsfeld, Skizzenmaße, Formelfelder, Meldungen („höchstens … in“), die Größen im STEP-Import und das Gitter im Ansichtsfenster (Schritte 0,1 in, 1 in, 10 in …).
+- **Eingabe:** Eine Zahl ohne Zeichen bedeutet die eingestellte Einheit. Hinter einer Zahl darf ein Zeichen stehen: `mm`, `cm`, `m`, `in` – zum Beispiel „2 in“, „50mm“ oder „breite + 1 in“. So lassen sich beide Einheiten mischen.
+- **Formeln bleiben gleich:** Eine gespeicherte Formel behält ihren Wert, egal wie die Einstellung steht. Tippt man in Zoll eine neue Formel, speichert PlanoraCAD die Zahlen mit Zeichen („2“ wird „2 in“, „breite + 1“ wird „breite + 1 in“; Faktoren wie in „breite * 2“ bleiben reine Zahlen). Alte Formeln mit reinen Zahlen (Millimeter) erscheinen in Zoll umgerechnet oder mit sichtbarem „mm“. Ein Feld, das man nur ansieht und unverändert bestätigt, bleibt genau wie es war.
+- **Vorgaben:** Vorgabewerte (zum Beispiel 20 mm Musterabstand, 1 mm Rundung) bleiben dieselben und erscheinen umgerechnet; unverändert bestätigt werden sie genau übernommen.
+- **Zeichnungen:** Jede Zeichnung hat ihre eigene Maßeinheit, damit sie auf jedem Rechner gleich aussieht. Eine neue Zeichnung übernimmt die Einstellung beim Anlegen; ändern lässt sie sich in den Blattangaben (ein Rückgängig-Schritt). In einer Zeichnung in Zoll sind die Maßzahlen umgerechnet (ohne Einheitenzeichen), neue Maße bekommen zwei Nachkommastellen, Toleranzen gelten in Zoll, und das Schriftfeld trägt den Vermerk „Maße in Zoll“. Zeichnungen in Millimeter bleiben unverändert. Ein Projekt mit einer Zeichnung in Zoll wird im Dateiformat 12 gespeichert; ältere Programmversionen können es dann nicht öffnen.
+
+**Grenzen**
+- Keine Brüche in der Anzeige (1/8″), kein Fuß. Eintippen von „1/8 in“ geht, weil Formeln teilen können.
+- Was zum Papier gehört, bleibt in Millimeter: Blattgröße, Strichstärken, Schraffurabstand, die Genauigkeit beim Export (STL, OBJ, 3MF, glTF, STEP) und die Blätter in DXF, SVG und PDF. Ebenso die Genauigkeit einer STEP-Datei („Genauigkeit der Datei“) und die kleine Verschiebung beim Schnitt; alle sind mit „mm“ beschriftet.
+- Meldungen, die schon angezeigt werden, wechseln beim Umstellen nicht mit; sie behalten Zahl und Zeichen, mit denen sie entstanden sind.
+- Vorhandene Maße behalten ihre Nachkommastellen, wenn man eine Zeichnung auf Zoll umstellt; eine Stelle ist dann nur etwa 2,5 mm fein. Die Stellen lassen sich im Maß ändern.
+
+Mehr dazu in `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt Zoll“.
