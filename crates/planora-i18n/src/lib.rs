@@ -435,6 +435,163 @@ pub fn with_lang<R>(lang: &Lang, f: impl FnOnce() -> R) -> R {
     f()
 }
 
+// ---- Maßeinheit -----------------------------------------------------------------------------
+
+/// Einheit, in der Längen angezeigt und eingegeben werden. Intern bleibt alles in Millimetern.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum DisplayUnit {
+    #[default]
+    Millimeter,
+    Zoll,
+}
+
+impl DisplayUnit {
+    /// Kennung zum Speichern: `"mm"` oder `"in"`.
+    pub fn id(self) -> &'static str {
+        match self {
+            DisplayUnit::Millimeter => "mm",
+            DisplayUnit::Zoll => "in",
+        }
+    }
+
+    /// Einheit zur Kennung; unbekannte Kennungen geben `None`.
+    pub fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "mm" => Some(DisplayUnit::Millimeter),
+            "in" => Some(DisplayUnit::Zoll),
+            _ => None,
+        }
+    }
+
+    /// Wie viele Millimeter eine Einheit hat.
+    pub fn mm_per_unit(self) -> f64 {
+        match self {
+            DisplayUnit::Millimeter => 1.0,
+            DisplayUnit::Zoll => 25.4,
+        }
+    }
+
+    /// Kurzzeichen der Länge.
+    pub fn symbol(self) -> &'static str {
+        self.id()
+    }
+
+    /// Kurzzeichen der Fläche.
+    pub fn area_symbol(self) -> &'static str {
+        match self {
+            DisplayUnit::Millimeter => "mm²",
+            DisplayUnit::Zoll => "in²",
+        }
+    }
+
+    /// Kurzzeichen des Volumens.
+    pub fn volume_symbol(self) -> &'static str {
+        match self {
+            DisplayUnit::Millimeter => "mm³",
+            DisplayUnit::Zoll => "in³",
+        }
+    }
+
+    /// Standard-Nachkommastellen der Anzeige.
+    pub fn decimals(self) -> usize {
+        match self {
+            DisplayUnit::Millimeter => 2,
+            DisplayUnit::Zoll => 3,
+        }
+    }
+
+    /// Millimeter -> Anzeigewert.
+    pub fn to_display(self, mm: f64) -> f64 {
+        mm / self.mm_per_unit()
+    }
+
+    /// Anzeigewert -> Millimeter.
+    pub fn from_display(self, v: f64) -> f64 {
+        v * self.mm_per_unit()
+    }
+}
+
+static GLOBAL_UNIT: RwLock<DisplayUnit> = RwLock::new(DisplayUnit::Millimeter);
+
+thread_local! {
+    static UNIT_OVERRIDE: RefCell<Option<DisplayUnit>> = const { RefCell::new(None) };
+}
+
+/// Die Einheit dieses Threads: Überschreibung aus [`with_unit`], sonst die globale.
+pub fn current_unit() -> DisplayUnit {
+    if let Some(unit) = UNIT_OVERRIDE.with(|o| *o.borrow()) {
+        return unit;
+    }
+    *GLOBAL_UNIT.read().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Setzt die globale Einheit (nur in `main`, bei der Einstellung und in einem eigenen Test).
+pub fn set_global_unit(unit: DisplayUnit) {
+    *GLOBAL_UNIT.write().unwrap_or_else(|e| e.into_inner()) = unit;
+}
+
+/// Führt `f` in diesem Thread mit `unit` aus; verschachtelbar. Danach gilt wieder die vorige
+/// Einheit, auch wenn `f` in Panik gerät.
+pub fn with_unit<R>(unit: DisplayUnit, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<DisplayUnit>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let previous = self.0.take();
+            UNIT_OVERRIDE.with(|o| *o.borrow_mut() = previous);
+        }
+    }
+    let previous = UNIT_OVERRIDE.with(|o| o.borrow_mut().replace(unit));
+    let _restore = Restore(previous);
+    f()
+}
+
+/// Länge (in mm) als Zahl in der aktuellen Einheit, ohne Kurzzeichen.
+pub fn fmt_len_num(mm: f64) -> String {
+    let unit = current_unit();
+    fmt_num(unit.to_display(mm), unit.decimals())
+}
+
+/// Länge (in mm) mit Kurzzeichen, z. B. „12,50 mm“ oder „0,492 in“.
+pub fn fmt_len(mm: f64) -> String {
+    format!("{} {}", fmt_len_num(mm), current_unit().symbol())
+}
+
+/// Wie [`fmt_len`], aber mit eigener Stellenzahl für Millimeter; in Zoll kommt eine Stelle dazu.
+pub fn fmt_len_with(mm: f64, decimals_mm: usize) -> String {
+    let unit = current_unit();
+    let decimals = match unit {
+        DisplayUnit::Millimeter => decimals_mm,
+        DisplayUnit::Zoll => decimals_mm + 1,
+    };
+    format!(
+        "{} {}",
+        fmt_num(unit.to_display(mm), decimals),
+        unit.symbol()
+    )
+}
+
+/// Fläche (in mm²) mit Kurzzeichen.
+pub fn fmt_area(mm2: f64) -> String {
+    let unit = current_unit();
+    let f = unit.mm_per_unit();
+    format!(
+        "{} {}",
+        fmt_num(mm2 / (f * f), unit.decimals()),
+        unit.area_symbol()
+    )
+}
+
+/// Volumen (in mm³) mit Kurzzeichen.
+pub fn fmt_volume(mm3: f64) -> String {
+    let unit = current_unit();
+    let f = unit.mm_per_unit();
+    format!(
+        "{} {}",
+        fmt_num(mm3 / (f * f * f), unit.decimals()),
+        unit.volume_symbol()
+    )
+}
+
 // ---- Texte ----------------------------------------------------------------------------------
 
 /// Wert für einen Platzhalter. Kommazahlen als Text übergeben (siehe [`fmt_num`]);
