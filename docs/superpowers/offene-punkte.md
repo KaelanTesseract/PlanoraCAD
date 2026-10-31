@@ -1990,5 +1990,7 @@ Stand 2026-10-31 (Zweig `feature/zoll`, Spec `specs/2026-10-31-zoll-design.md`, 
   - Vorhandene Maße behalten beim Umstellen einer Zeichnung auf Zoll ihre Nachkommastellen (1 Stelle ≈ 2,5 mm); Idee: beim Umstellen 1 → 2 Stellen anbieten.
   - Ein offenes Maß-Fenster behält nach dem Umstellen der Zeichnungseinheit die alte Einheit in den Toleranzfeldern (Überschrift nennt sie, Werte werden richtig zurückgerechnet).
   - Stücklistenblätter bekommen weder Einheitenwahl noch Vermerk (sie haben keine Maße).
+  - Eine in Zoll getippte reine Zahl wird als Formel gespeichert („2 in“). Folgen: Ein so verschobener Körper bekommt beim nächsten Ziehen einen neuen Schritt „Verschieben“, statt den alten zu verlängern; ein in Zoll getipptes Skizzenmaß zeigt eine Formelzeile „fx 2 in“ in der Bedingungsliste und hebt das Dateiformat auf 9 (wie jede Skizzenformel).
+  - Das Feld „Lage des Schnitts“ in der Zeichnungsansicht folgt der Einstellung, nicht der Zeichnungseinheit (es ist eine Modelllänge; Zahl und Zeichen passen zusammen).
   - Die Einheitenwahl im Blattangaben-Fenster steht in der Zeile mit den eigenen Hinweisen (Platz bei 1920×1080).
   - Code: Die ausstehenden Einstellungen werden an 8 Stellen in `workspace.rs` gemischt; eine gemeinsame Hilfe `apply_pending` wäre sauberer.

@@ -753,6 +753,8 @@ PlanoraCAD zeigt Längen in Millimeter oder in Zoll. Intern rechnet das Programm
 - Keine Brüche in der Anzeige (1/8″), kein Fuß. Eintippen von „1/8 in“ geht, weil Formeln teilen können.
 - Was zum Papier gehört, bleibt in Millimeter: Blattgröße, Strichstärken, Schraffurabstand, die Genauigkeit beim Export (STL, OBJ, 3MF, glTF, STEP) und die Blätter in DXF, SVG und PDF. Ebenso die Genauigkeit einer STEP-Datei („Genauigkeit der Datei“) und die kleine Verschiebung beim Schnitt; alle sind mit „mm“ beschriftet.
 - Meldungen, die schon angezeigt werden, wechseln beim Umstellen nicht mit; sie behalten Zahl und Zeichen, mit denen sie entstanden sind.
+- Eine in Zoll getippte Zahl wird als Formel gespeichert („2 in“). Ein so verschobener Körper bekommt beim nächsten Ziehen deshalb einen neuen Schritt, und ein Skizzenmaß zeigt eine Formelzeile.
+- Das Feld „Lage des Schnitts“ in der Zeichnungsansicht folgt der Einstellung, nicht der Einheit der Zeichnung.
 - Vorhandene Maße behalten ihre Nachkommastellen, wenn man eine Zeichnung auf Zoll umstellt; eine Stelle ist dann nur etwa 2,5 mm fein. Die Stellen lassen sich im Maß ändern.
 
 Mehr dazu in `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt Zoll“.
