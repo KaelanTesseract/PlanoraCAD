@@ -351,3 +351,54 @@ fn tiny_parameter_domains_are_rejected_and_the_minimum_evaluates_finitely() {
         assert!(c.derivs(u, 9).iter().all(|d| d.is_finite()), "u={u}");
     }
 }
+
+fn assert_sub_curve_matches(c: &NurbsCurve, u0: f64, u1: f64) {
+    let sub = c.sub_curve(u0, u1).unwrap();
+    assert_eq!(sub.domain(), (u0, u1));
+    for i in 0..50 {
+        let u = u0 + (u1 - u0) * i as f64 / 49.0;
+        let d = (sub.point(u) - c.point(u)).length();
+        assert!(d < 1e-12, "u={u}: Abweichung {d}");
+    }
+}
+
+#[test]
+fn sub_curve_matches_the_original_pointwise() {
+    let pts = [
+        DVec3::new(0.0, 0.0, 0.0),
+        DVec3::new(1.0, 2.0, 0.5),
+        DVec3::new(2.5, 1.0, -0.5),
+        DVec3::new(4.0, 3.0, 1.0),
+        DVec3::new(5.0, 0.0, 0.0),
+    ];
+    let spline = NurbsCurve::natural_cubic(&pts, &[0.0, 1.0, 2.0, 3.0, 4.0]).unwrap();
+    assert_sub_curve_matches(&spline, 0.7, 3.2);
+    assert_sub_curve_matches(&spline, 1.0, 3.0);
+
+    let ellipse = NurbsCurve::elliptic_arc(
+        DVec3::ZERO,
+        DVec3::new(3.0, 0.0, 0.0),
+        DVec3::new(0.0, 2.0, 0.0),
+        0.0,
+        std::f64::consts::TAU,
+    )
+    .unwrap();
+    let (d0, _) = ellipse.domain();
+    assert_sub_curve_matches(&ellipse, d0 + 0.25, d0 + 0.6);
+}
+
+#[test]
+fn sub_curve_rejects_bad_ranges_and_keeps_the_full_range() {
+    let pts = [
+        DVec3::new(0.0, 0.0, 0.0),
+        DVec3::new(1.0, 2.0, 0.0),
+        DVec3::new(2.0, 0.0, 0.0),
+    ];
+    let c = NurbsCurve::natural_cubic(&pts, &[0.0, 1.0, 2.0]).unwrap();
+    assert!(c.sub_curve(1.0, 1.0).is_err());
+    assert!(c.sub_curve(1.5, 1.0).is_err());
+    assert!(c.sub_curve(-0.5, 1.0).is_err());
+    assert!(c.sub_curve(0.5, 2.5).is_err());
+    assert!(c.sub_curve(f64::NAN, 1.0).is_err());
+    assert_sub_curve_matches(&c, 0.0, 2.0);
+}

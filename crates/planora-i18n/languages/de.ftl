@@ -1531,6 +1531,7 @@ sketch-err-not-finite = { $what } muss eine endliche Zahl sein
 sketch-err-too-large = { $what } ist zu groß (Betrag höchstens { $max } { $unit })
 
 ## Fehlermeldungen der Mathematik
+math-subcurve-range = der Teilbereich ({ $u0 }, { $u1 }) liegt nicht in der Kurve ({ $a }, { $b }) oder ist leer
 math-knot-outside = der Knoten { $u } liegt nicht im Inneren des Bereichs ({ $a }, { $b })
 math-knot-multiplicity = { $r }-faches Einfügen des Knotens { $u } (bisher { $s }-fach) ergäbe eine Vielfachheit über dem Grad { $p }
 math-sweep-finite = Anfangswinkel und Öffnungswinkel müssen endlich sein

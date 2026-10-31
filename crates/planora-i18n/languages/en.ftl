@@ -1548,6 +1548,7 @@ sketch-err-not-finite = { $what } must be a finite number
 sketch-err-too-large = { $what } is too large (absolute value at most { $max } { $unit })
 
 ## Math error messages
+math-subcurve-range = the sub-range ({ $u0 }, { $u1 }) is not inside the curve ({ $a }, { $b }) or is empty
 math-knot-outside = the knot { $u } is not inside the range ({ $a }, { $b })
 math-knot-multiplicity = inserting the knot { $u } { $r } times (currently { $s } times) would give a multiplicity above the degree { $p }
 math-sweep-finite = start angle and sweep angle must be finite
