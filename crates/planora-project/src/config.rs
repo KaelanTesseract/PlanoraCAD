@@ -124,6 +124,15 @@ pub struct Config {
         deserialize_with = "lenient_language"
     )]
     pub language: Option<String>,
+    /// Gewählte Maßeinheit der Anzeige als Id (`mm` oder `in`; Einstellungen → Darstellung).
+    /// Kein oder ein leerer Text → keine Wahl (Millimeter); ob es die Einheit gibt, prüft erst
+    /// das Programm. Ohne Wahl wird nichts geschrieben.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_language"
+    )]
+    pub length_unit: Option<String>,
 }
 
 /// Voreinstellung des Update-Kanals (Kennung).
@@ -233,6 +242,7 @@ impl Default for Config {
             theme: None,
             verbose_log: false,
             language: None,
+            length_unit: None,
         }
     }
 }

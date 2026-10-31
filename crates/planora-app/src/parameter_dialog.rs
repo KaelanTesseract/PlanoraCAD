@@ -13,15 +13,17 @@
 //!   (Hinweis „In einer alten Version lässt sich nichts ändern“).
 
 use crate::dialog::{Dialog, DialogSize};
-use crate::formula_field::{FieldInput, FormulaField, classify, leave_signal, unit_value};
+use crate::formula_field::{
+    FieldInput, FormulaField, classify, formula_text, leave_signal, stored_formula, unit_value,
+};
 use crate::icons::{self, Icon};
 use crate::msg::Msg;
 use crate::state::{AppState, sketch_open_lock};
 use crate::theme::{self, SPACE_2};
 use crate::workspace::DocTab;
 use planora_feature::expr::{ParamDef, evaluate_table};
-use planora_feature::{FeatureError, ParamEdit, ParamId, ParamUnit, Parameter};
-use planora_i18n::tr;
+use planora_feature::{FeatureError, ParamEdit, ParamId, ParamScope, ParamUnit, Parameter};
+use planora_i18n::{DisplayUnit, current_unit, tr};
 
 /// Titel des Fensters.
 pub fn title() -> String {
@@ -94,39 +96,59 @@ struct Row {
     formula: String,
     comment: String,
     base: Parameter,
+    /// Die Formel des Stands, wie das Feld sie zeigt (in der Anzeigeeinheit; in mm wie
+    /// gespeichert). Steht sie unverändert im Feld, bleibt die gespeicherte Formel.
+    shown: String,
 }
 
 impl Row {
-    fn of(p: &Parameter) -> Row {
+    fn of(p: &Parameter, scope: &ParamScope) -> Row {
+        let shown = formula_text(&p.formula, p.unit, scope);
         Row {
             id: p.id,
             name: p.name.clone(),
-            formula: p.formula.clone(),
+            formula: shown.clone(),
             comment: p.comment.clone(),
             base: p.clone(),
+            shown,
         }
     }
 
     /// Zeile aus dem neuen Stand `p`; Spalten, in denen `old` einen eigenen Entwurf hatte
     /// (anders als sein Stand), behalten ihn.
-    fn refreshed(p: &Parameter, old: &Row) -> Row {
+    fn refreshed(p: &Parameter, old: &Row, scope: &ParamScope) -> Row {
         let keep = |draft: &str, base: &str, now: &str| {
             if draft != base { draft } else { now }.to_string()
         };
+        let shown = formula_text(&p.formula, p.unit, scope);
         Row {
             id: p.id,
             name: keep(&old.name, &old.base.name, &p.name),
-            formula: keep(&old.formula, &old.base.formula, &p.formula),
+            formula: keep(&old.formula, &old.shown, &shown),
             comment: keep(&old.comment, &old.base.comment, &p.comment),
             base: p.clone(),
+            shown,
         }
     }
 
     /// Weicht ein Entwurf vom Stand ab?
     fn differs(&self) -> bool {
         self.name != self.base.name
-            || self.formula != self.base.formula
+            || self.formula != self.shown
             || self.comment != self.base.comment
+    }
+
+    /// Formeltext zum Übernehmen: unverändert die gespeicherte Formel (zeichengleich), sonst
+    /// wie getippt ([`table_formula`]), in einer anderen Anzeigeeinheit als mm mit
+    /// ausgeschriebenen Längenzeichen.
+    fn stored_formula(&self, unit: ParamUnit, scope: &ParamScope) -> Result<String, String> {
+        if current_unit() == DisplayUnit::Millimeter {
+            return Ok(table_formula(&self.formula));
+        }
+        if self.formula.trim() == self.shown.trim() {
+            return Ok(self.base.formula.clone());
+        }
+        stored_formula(&table_formula(&self.formula), unit, scope)
     }
 
     fn text_mut(&mut self, column: Column) -> &mut String {
@@ -169,6 +191,8 @@ pub struct ParameterDialog {
     scroll: (f32, f32),
     /// Rechteck im letzten Bild (für Tests).
     pub last_rect: Option<egui::Rect>,
+    /// Anzeigeeinheit der Zeilen; nach dem Umstellen lädt das Fenster neu.
+    unit: DisplayUnit,
 }
 
 impl ParameterDialog {
@@ -183,6 +207,7 @@ impl ParameterDialog {
             focus_new: None,
             scroll: (0.0, 0.0),
             last_rect: None,
+            unit: current_unit(),
         };
         d.reload(state);
         d
@@ -191,7 +216,14 @@ impl ParameterDialog {
     /// Liest die Zeilen neu aus dem Dokument; Entwürfe, Meldung und Rückfrage entfallen (nach
     /// Rückgängig, Wiederholen, Zurückladen, anderem Dokument).
     pub fn reload(&mut self, state: &AppState) {
-        self.rows = state.document.parameters().iter().map(Row::of).collect();
+        let scope = state.document.param_scope();
+        self.rows = state
+            .document
+            .parameters()
+            .iter()
+            .map(|p| Row::of(p, &scope))
+            .collect();
+        self.unit = current_unit();
         self.error = None;
         self.confirm = None;
         self.seen = stand(state);
@@ -202,13 +234,14 @@ impl ParameterDialog {
     /// übernommen wurde). Eine Rückfrage zu einem gelöschten Parameter entfällt.
     fn refresh(&mut self, state: &AppState, done: Option<ParamId>) {
         let old = std::mem::take(&mut self.rows);
+        let scope = state.document.param_scope();
         self.rows = state
             .document
             .parameters()
             .iter()
             .map(|p| match old.iter().find(|r| r.id == p.id) {
-                Some(r) if Some(p.id) != done => Row::refreshed(p, r),
-                _ => Row::of(p),
+                Some(r) if Some(p.id) != done => Row::refreshed(p, r, &scope),
+                _ => Row::of(p, &scope),
             })
             .collect();
         if self
@@ -252,9 +285,13 @@ impl ParameterDialog {
         let Some(unit) = state.document.parameter(id).map(|p| p.unit) else {
             return Err(self.gone(state));
         };
+        let formula = match row.stored_formula(unit, &state.document.param_scope()) {
+            Ok(f) => f,
+            Err(e) => return self.finish(state, Err(e), None),
+        };
         let edit = ParamEdit {
             name: row.name.trim().to_string(),
-            formula: table_formula(&row.formula),
+            formula,
             unit,
             comment: row.comment.clone(),
         };
@@ -385,13 +422,16 @@ impl ParameterDialog {
     /// Tabellenreihenfolge.
     fn draft_errors(&self, state: &AppState) -> Vec<String> {
         let params = state.document.parameters();
+        let scope = state.document.param_scope();
         self.rows
             .iter()
-            .filter(|r| r.formula != r.base.formula)
+            .filter(|r| r.formula != r.shown)
             .filter_map(|r| {
                 let i = params.iter().position(|p| p.id == r.id)?;
                 match classify(&r.formula) {
-                    Some(FieldInput::Formula(f)) => trial_value(params, i, &f).err(),
+                    Some(FieldInput::Formula(f)) => {
+                        trial_shown(params, i, &f, r.base.unit, &scope).err()
+                    }
                     _ => None,
                 }
             })
@@ -409,7 +449,7 @@ impl ParameterDialog {
         // Anderer Zustand (Datei neu geladen, anderes Dokument): Kennungen gelten nicht mehr.
         // Gewöhnliche Änderung am selben Dokument: Entwürfe bleiben.
         let now = stand(state);
-        if self.seen.0 != now.0 {
+        if self.seen.0 != now.0 || self.unit != current_unit() {
             self.reload(state);
         } else if self.seen.1 != now.1 {
             self.refresh(state, None);
@@ -779,13 +819,15 @@ fn row_ui(
     // diese mit dem Entwurf (sonst nähme sie ihren alten Wert, und ein Selbstbezug sähe gültig
     // aus). Unverändert: der Wert aus dem Dokument.
     let committed = state.document.parameter_value(id);
+    let shown = row.shown.clone();
+    let scope = state.document.param_scope();
     let eval = |text: &str| -> Result<f64, String> {
-        if text == p.formula
+        if text == shown
             && let Some(v) = committed
         {
             return Ok(v);
         }
-        trial_value(state.document.parameters(), index, text)
+        trial_shown(state.document.parameters(), index, text, p.unit, &scope)
     };
     let field = cell(ui, FORMULA_CELL_W, center(), |ui| {
         FormulaField::new(("parameter_formel", id.0), &mut row.formula, p.unit)
@@ -793,7 +835,7 @@ fn row_ui(
             .enabled(enabled)
             .error_below(false)
             .label(field_label(&tr!("param-col-formula"), &p.name))
-            .saved(&row.base.formula)
+            .saved(&shown)
             .show_with(ui, &eval)
     });
     follow_focus(&field.response);
@@ -870,6 +912,19 @@ fn row_ui(
 /// Gibt einem Bedienelement einen Namen für Bildschirmleser.
 fn labelled(response: &egui::Response, kind: egui::WidgetType, enabled: bool, label: &str) {
     response.widget_info(|| egui::WidgetInfo::labeled(kind, enabled, label));
+}
+
+/// Wie [`trial_value`] für einen getippten Entwurf in der Anzeigeeinheit (reine Längenzahlen
+/// zählen in ihr; in mm wie [`trial_value`]).
+fn trial_shown(
+    params: &[Parameter],
+    index: usize,
+    text: &str,
+    unit: ParamUnit,
+    scope: &ParamScope,
+) -> Result<f64, String> {
+    let stored = stored_formula(text, unit, scope)?;
+    trial_value(params, index, &stored)
 }
 
 /// Wert der Zeile `index` mit dem Formelentwurf `text` (übrige Zeilen wie im Dokument). Fehler

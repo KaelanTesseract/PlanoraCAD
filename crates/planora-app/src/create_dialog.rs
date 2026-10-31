@@ -1,9 +1,8 @@
 use crate::dialog::{Dialog, DialogSize};
-use crate::formula_field::{FormulaField, names_hint, number_field_text, resolve};
-use crate::sketch_view::{format_length, format_number};
+use crate::formula_field::{FormulaField, names_hint, resolve_kept, value_field_text};
+use crate::sketch_view::format_length;
 use crate::state::AppState;
 use crate::theme;
-use planora_feature::expr::number_text;
 use planora_feature::{FeatureId, FieldKey, Formulas, ParamUnit};
 use planora_i18n::tr;
 use planora_math::DVec3;
@@ -20,7 +19,17 @@ const KEYS: [&str; 6] = ["box", "cylinder", "sphere", "cone", "extrude", "revolv
 /// Kennung der eingegebenen Texte eines Erzeugen-Fensters im egui-Speicher: je Fenster und
 /// Dokument-Tab (`AppState::instance`), damit zwei Tabs sich nicht die Texte teilen.
 fn texts_id(key: &str, instance: u64) -> egui::Id {
-    egui::Id::new(("create-formulas", key)).with(instance)
+    texts_id_in(key, instance, planora_i18n::current_unit())
+}
+
+/// Kennung der Texte in einer Anzeigeeinheit: Nach dem Umstellen gelten die getippten Texte
+/// (in der alten Einheit) nicht mehr, das Fenster zeigt wieder die Vorgaben.
+fn texts_id_in(key: &str, instance: u64, unit: planora_i18n::DisplayUnit) -> egui::Id {
+    let id = egui::Id::new(("create-formulas", key)).with(instance);
+    match unit {
+        planora_i18n::DisplayUnit::Millimeter => id,
+        u => id.with(u.id()),
+    }
 }
 
 /// Offener Erzeugen-Dialog samt Eingabewerten.
@@ -175,12 +184,14 @@ impl CreateDialog {
                 0 => tr!(
                     "create-profile-label",
                     n = i + 1,
-                    area = format_number(area, 2)
+                    area = planora_i18n::fmt_area_num(area),
+                    unit = planora_i18n::current_unit().area_symbol()
                 ),
                 holes => tr!(
                     "create-profile-label-holes",
                     n = i + 1,
-                    area = format_number(area, 2),
+                    area = planora_i18n::fmt_area_num(area),
+                    unit = planora_i18n::current_unit().area_symbol(),
                     holes = holes
                 ),
             };
@@ -257,7 +268,9 @@ impl CreateDialog {
             .data(|d| d.get_temp::<BTreeMap<FieldKey, String>>(self.texts_id(state)))
             .unwrap_or_default();
         for (key, _, value) in self.fields() {
-            texts.entry(key).or_insert_with(|| number_field_text(value));
+            texts
+                .entry(key)
+                .or_insert_with(|| value_field_text(value, ParamUnit::Length));
         }
         texts
     }
@@ -274,7 +287,12 @@ impl CreateDialog {
     pub fn forget_texts(ctx: &egui::Context, instance: u64) {
         ctx.data_mut(|d| {
             for key in KEYS {
-                d.remove::<BTreeMap<FieldKey, String>>(texts_id(key, instance));
+                for unit in [
+                    planora_i18n::DisplayUnit::Millimeter,
+                    planora_i18n::DisplayUnit::Zoll,
+                ] {
+                    d.remove::<BTreeMap<FieldKey, String>>(texts_id_in(key, instance, unit));
+                }
             }
         });
     }
@@ -408,11 +426,12 @@ impl CreateDialog {
         let mut values = Vec::new();
         let mut formulas = Formulas::new();
         for (key, label, value) in self.fields() {
-            let text = texts
-                .get(&key)
-                .cloned()
-                .unwrap_or_else(|| number_text(value));
-            match resolve(&text, ParamUnit::Length, &scope) {
+            // Ein unverändertes Feld (oder ein fehlender Text) behält die Vorgabe bitgenau.
+            let read = match texts.get(&key) {
+                Some(text) => resolve_kept(text, ParamUnit::Length, &scope, value, None),
+                None => Ok((value, None)),
+            };
+            match read {
                 Ok((v, formula)) => {
                     values.push(v);
                     if let Some(f) = formula {

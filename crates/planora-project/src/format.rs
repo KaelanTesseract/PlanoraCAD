@@ -444,6 +444,10 @@ pub struct ZeichnungDto {
     /// Kennungen ableiten“.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub naechste_position: u64,
+    /// Maßeinheit der Zeichnung (ab Format 12): `"in"` für Zoll. Fehlt bei Millimeter, damit
+    /// Zeichnungen in mm Byte für Byte bleiben wie bisher.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub einheit: Option<String>,
 }
 
 /// Blatt: Papier `"A4"` bis `"A0"`, quer oder hoch.

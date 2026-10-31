@@ -701,7 +701,12 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
                 scene_version: state.scene_version,
                 // Raster und Achsen folgen der Kamera: je Bild neu, ohne die Szene anzufassen.
                 // Im Skizzen-Modus unverändert (die gedämpfte Palette lässt beide unberührt).
-                grid: grid_lines(cam.target, cam.distance, &state.palette()),
+                grid: grid_lines(
+                    cam.target,
+                    cam.distance,
+                    planora_i18n::current_unit().mm_per_unit() as f32,
+                    &state.palette(),
+                ),
             },
         ),
     );

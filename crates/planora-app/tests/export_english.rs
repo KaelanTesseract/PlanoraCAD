@@ -576,6 +576,7 @@ fn export_message_texts_speak_english() {
             revisions: Vec::new(),
             notes: vec!["ok".into(), "x😀".into()],
             parts: Vec::new(),
+            units_note: None,
         };
         t.fields.insert(TitleField::Owner, "Owner Ltd".into());
         assert_eq!(

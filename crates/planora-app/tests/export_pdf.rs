@@ -698,6 +698,7 @@ fn char_lock_names_the_sheet_fields_like_dxf() {
         revisions: Vec::new(),
         notes: vec!["gut".into(), "x😀".into()],
         parts: Vec::new(),
+        units_note: None,
     };
     t.fields.insert(TitleField::Owner, "Eigentümer GmbH".into());
     assert_eq!(

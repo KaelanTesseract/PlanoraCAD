@@ -35,7 +35,8 @@ use crate::drawing_view::{MIN_DRAG_OFFSET_MM, normalize_deg};
 use crate::msg::Msg;
 use crate::state::{AppState, BodyKind};
 use planora_drawing::annotate::{
-    DEFAULT_OFFSET, LARGE_DIAMETER, Mark, ResolvedDims, clamp_leader_deg, group_base,
+    DEFAULT_OFFSET, LARGE_DIAMETER, Mark, ResolvedDims, clamp_leader_deg, default_decimals,
+    group_base,
 };
 use planora_drawing::dimension::{
     ChainMode, ChainSpec, DimError, DimId, DimKind, DimSpec, EndSel, Geo3, GeoRef,
@@ -805,7 +806,7 @@ impl DimensionTool {
                     angle,
                     text_shift: (0.0, 0.0),
                     tolerance: DimTolerance::None,
-                    decimals: 1,
+                    decimals: default_decimals(kind, ctx.drawing.unit),
                     text_override: None,
                     chain: chain_mode.map(|mode| ChainSpec {
                         group: 0,

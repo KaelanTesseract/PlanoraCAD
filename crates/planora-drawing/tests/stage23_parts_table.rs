@@ -673,6 +673,7 @@ fn sheet_frame_contains_the_table() {
         revisions: Vec::new(),
         notes: Vec::new(),
         parts: numbered(3),
+        units_note: None,
     };
     let l = sheet_layout_with(sh(Paper::A3, true), 0, 0, PartsSpace::OnSheet { rows: 3 });
     let frame = sheet_frame(&l, &with_parts, Projection::First);

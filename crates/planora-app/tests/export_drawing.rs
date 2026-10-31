@@ -1035,6 +1035,7 @@ fn dxf_sheet_texts_report_the_field() {
         revisions: Vec::new(),
         notes: vec!["gut".into(), "x😀".into()],
         parts: Vec::new(),
+        units_note: None,
     };
     t.fields.insert(TitleField::Owner, "Eigentümer GmbH".into());
     assert_eq!(

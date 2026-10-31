@@ -10,6 +10,7 @@ Hier steht, was sich in jeder Version geändert hat. Die neueste Version steht o
 - Beim Exportieren einer Zeichnung kannst du eine andere Sprache für die Zeichnung wählen, zum Beispiel eine englische Zeichnung aus dem deutschen Programm.
 - Weitere Sprachen lassen sich ohne Programmieren hinzufügen: eine Textdatei je Sprache in den Ordner `languages` legen. Wie das geht, steht auf Englisch in `docs/uebersetzen.md`.
 - Rückmeldung und Absturzbericht: Das Formular und die Vorlage öffnen sich in der Sprache des Programms. Protokoll und Absturzbericht sind immer englisch.
+- Maßeinheit Zoll: Unter „Datei → Einstellungen …“ lässt sich „Zoll“ statt „Millimeter“ wählen. Längen, Flächen und Volumen erscheinen dann in in, in² und in³, und eingetippte Zahlen gelten als Zoll. Hinter einer Zahl darf ein Zeichen stehen („2 in“, „50mm“), so lassen sich Einheiten mischen. Gespeicherte Formeln behalten ihren Wert. Jede Zeichnung hat ihre eigene Einheit; eine Zeichnung in Zoll trägt den Vermerk „Maße in Zoll“. Beim Umstellen gehen noch nicht bestätigte Eingaben in offenen Fenstern verloren.
 
 ### Behoben
 - STEP-Import: Körper mit einer Ringfläche (Torus) ohne Naht kamen nicht an, zum Beispiel eine Welle mit gerundeter Kante, ein Rohrbogen oder ein Ring. Solche Flächen bekommen jetzt wie Zylinder und Kugel ihre Naht beim Einlesen.

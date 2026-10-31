@@ -34,6 +34,7 @@ fn texts_with(fields: &[(TitleField, &str)]) -> TitleTexts {
         fields: fields.iter().map(|(f, s)| (*f, s.to_string())).collect(),
         revisions: Vec::new(),
         notes: Vec::new(),
+        units_note: None,
     }
 }
 
@@ -192,6 +193,7 @@ fn longest_texts_stay_in_their_cells() {
                 })
                 .collect(),
             notes: (0..6).map(|_| cycle(pattern, 100)).collect(),
+            units_note: None,
         };
         for sheet in sheets {
             let layout = sheet_layout(sheet, 23, 6);
@@ -304,6 +306,7 @@ fn a3_texts() -> TitleTexts {
             ],
         ],
         notes: vec!["Eins".into(), "Zwei".into(), "Drei".into()],
+        units_note: None,
     }
 }
 
@@ -1020,6 +1023,7 @@ fn every_dxf_frame_text_stays_in_its_cell_with_the_width_factor() {
             })
             .collect(),
         notes: (0..6).map(|_| cycle("Wm", 100)).collect(),
+        units_note: None,
     };
     for sheet in [
         sh(Paper::A4, true),

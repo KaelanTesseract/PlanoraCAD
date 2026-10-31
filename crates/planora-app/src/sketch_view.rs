@@ -110,9 +110,9 @@ pub fn parse_number(text: &str) -> Option<f64> {
     planora_i18n::parse_num(text)
 }
 
-/// Länge mit Einheit, z. B. „40,00 mm“.
+/// Länge (in mm) mit Einheit der Anzeige, z. B. „40,00 mm“ oder „1,575 in“.
 pub fn format_length(v: f64) -> String {
-    format!("{} mm", format_number(v, 2))
+    planora_i18n::fmt_len(v)
 }
 
 /// Winkel (Radiant) in Grad mit Einheit, z. B. „90,0°“.
@@ -153,7 +153,7 @@ pub fn shown_value(sk: &Sketch, kind: &ConstraintKind, driven: bool) -> Option<f
     }
 }
 
-/// Wert mit Einheit (mm oder °).
+/// Wert mit Einheit (Anzeigeeinheit oder °).
 pub fn value_text(kind: &ConstraintKind, v: f64) -> String {
     if is_angle(kind) {
         format_angle(v)

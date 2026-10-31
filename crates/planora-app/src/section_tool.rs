@@ -493,7 +493,8 @@ fn edit(
         .map_err(feature_text)
 }
 
-/// Setzt die Schnittposition (Weltkoordinate der Ebene in mm) aus einem eingegebenen Text.
+/// Setzt die Schnittposition (Weltkoordinate der Ebene in mm) aus einem eingegebenen Text in
+/// der Anzeigeeinheit.
 pub fn set_offset_text(
     state: &mut AppState,
     drawing: DrawingId,
@@ -501,6 +502,7 @@ pub fn set_offset_text(
     text: &str,
 ) -> Result<(), Msg> {
     let value = parse_number(text).ok_or_else(not_a_number)?;
+    let value = planora_i18n::current_unit().from_display(value);
     edit(state, drawing, view, |v| {
         if let Some(s) = v.section.as_mut() {
             s.offset = value;
@@ -556,6 +558,12 @@ pub fn set_scale(
             }
         })
         .map_err(feature_text)
+}
+
+/// Text der Schnittposition (Modelllänge `v` in mm) in der Anzeigeeinheit, wie
+/// [`field_text`].
+pub fn offset_text(v: f64) -> String {
+    field_text(planora_i18n::current_unit().to_display(v))
 }
 
 /// Zahl für ein Eingabefeld: bis zu drei Nachkommastellen, ohne überflüssige Nullen, mit dem

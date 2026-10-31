@@ -1015,7 +1015,8 @@ pub fn assemble(
         if !(cut.curve.length() > weld) {
             return Err(BlendError::InvalidParameter(tr!(
                 "kernel-blend-cap-too-short",
-                mm = super::show_num(weld)
+                mm = planora_i18n::len_arg(weld, super::show_num(weld)),
+                unit = planora_i18n::unit_symbol()
             )));
         }
     }

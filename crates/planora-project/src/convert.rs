@@ -27,7 +27,7 @@ use planora_feature::{
     SketchPlane, Snapshot, SnapshotFeature, StandardPlane, StepShape, StepShapeId, field_keys,
     step_text_megabytes, step_text_sum_limit, validate_drawing,
 };
-use planora_i18n::tr;
+use planora_i18n::{DisplayUnit, tr};
 use planora_kernel::BoolOp;
 use planora_math::{DQuat, DVec3, Frame, Tolerance};
 use planora_sketch::{
@@ -38,15 +38,15 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Höchste lesbare Formatnummer der Versionsdateien (P7, P12, F7).
-pub const FORMAT_VERSION: u32 = 11;
+pub const FORMAT_VERSION: u32 = 12;
 /// Formatnummer der Rahmendateien `dokument.json` und `.autosave.json`; ihre Struktur ist seit
 /// Format 1 unverändert, ältere Programme öffnen das Projekt deshalb weiter (P7).
 pub const CONTAINER_FORMAT: u32 = 1;
 /// Größte Summe der dekodierten Netzdaten eines Dokuments (wie die Dateigrenze beim Import).
 const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 
-/// Kleinste Formatnummer, die den Stand darstellt: 11 mit Rückrollstellen (als erste Regel
-/// geprüft), 10 mit einem STEP-Körper (auch unterdrückt: sein Text muss in der Datei stehen),
+/// Kleinste Formatnummer, die den Stand darstellt: 12 mit einer Zeichnung in Zoll (als erste
+/// Regel geprüft), 11 mit Rückrollstellen, 10 mit einem STEP-Körper (auch unterdrückt: sein Text muss in der Datei stehen),
 /// 9 mit Parametern, Feature-Formeln oder Skizzenformeln, 8 mit Schnittansichten, 7 mit
 /// Stücklisten-Daten (eigene Zeilentexte, Stücklistenblatt, Nummernkreise oder eingeschalteter
 /// Stückliste auf einem Blatt), 6 mit Blatt- oder Projektangaben, 5 mit Maßen oder
@@ -54,7 +54,9 @@ const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 /// Fasen, sonst 1 (P7, P12, F7, Teilprojekt 12 P11, Teilprojekt STEP-Import, Verlaufsleiste).
 pub fn required_format(s: &Snapshot) -> u32 {
     let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
-    if !s.rollbacks.is_empty() {
+    if s.drawings.iter().any(|d| d.unit != DisplayUnit::Millimeter) {
+        12
+    } else if !s.rollbacks.is_empty() {
         11
     } else if has(|k| matches!(k, FeatureKind::StepBody { .. })) {
         10
@@ -1783,6 +1785,10 @@ fn drawing_to(d: &Drawing, with_marks: bool, with_parts: bool) -> Result<Zeichnu
         } else {
             0
         },
+        einheit: match d.unit {
+            DisplayUnit::Millimeter => None,
+            u => Some(u.id().to_string()),
+        },
     })
 }
 
@@ -1887,6 +1893,13 @@ fn drawing_from(origin: &str, d: &ZeichnungDto) -> Result<Drawing> {
             offset: (b.versatz[0], b.versatz[1]),
         });
     }
+    // Fehlt die Einheit (Dateien bis Format 11, Zeichnungen in mm), gilt Millimeter.
+    let unit = match d.einheit.as_deref() {
+        None => DisplayUnit::Millimeter,
+        Some(id) => {
+            DisplayUnit::from_id(id).ok_or_else(|| ctx(tr!("proj-unknown-unit", value = id)))?
+        }
+    };
     let drawing = Drawing {
         id: DrawingId(d.id),
         name: d.name.clone(),
@@ -1910,6 +1923,7 @@ fn drawing_from(origin: &str, d: &ZeichnungDto) -> Result<Drawing> {
         },
         balloons,
         next_balloon,
+        unit,
     };
     // Stücklistenblätter und Nummernkreise prüft dieselbe Regel wie beim Anlegen im Dokument;
     // die Meldung nennt die Zeichnung.

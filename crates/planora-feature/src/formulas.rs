@@ -267,7 +267,12 @@ fn value_issue(kind: &FeatureKind, key: FieldKey, v: f64, tolerance: f64) -> Opt
             Some(tr!(
                 "feature-value-length",
                 field = (field_label(kind, key)).to_string(),
-                value = expr::display_number(&expr::short_number(v))
+                value = if planora_i18n::current_unit() == planora_i18n::DisplayUnit::Millimeter {
+                    expr::display_number(&expr::short_number(v))
+                } else {
+                    planora_i18n::len_arg(v, String::new())
+                },
+                unit = planora_i18n::unit_symbol()
             ))
         }
         FieldKey::Massstab if !(MIN_MESH_SCALE..=MAX_MESH_SCALE).contains(&v) => Some(tr!(
@@ -487,15 +492,24 @@ fn evaluate_sketch(sf: &SketchFeature, scope: &ParamScope) -> (Sketch, Option<Fo
             let (d, e) = &rejected[0];
             // Winkel lehnt die Skizze nur bei nicht endlichen Werten ab, die eine Formel nie
             // ergibt: Der Zweig „°“ ist derzeit unerreichbar und bleibt als Absicherung.
-            let suffix = if d.unit == ParamUnit::Angle {
-                "°"
+            let (suffix, value) = if d.unit == ParamUnit::Angle {
+                (
+                    "°".to_string(),
+                    expr::display_number(&expr::short_number(d.shown)),
+                )
             } else {
-                " mm"
+                let unit = planora_i18n::current_unit();
+                let value = if unit == planora_i18n::DisplayUnit::Millimeter {
+                    expr::display_number(&expr::short_number(d.shown))
+                } else {
+                    planora_i18n::len_arg(d.shown, String::new())
+                };
+                (format!(" {}", unit.symbol()), value)
             };
             issue.get_or_insert(FormulaIssue::Value(tr!(
                 "feature-value-dimension",
-                value = expr::display_number(&expr::short_number(d.shown)),
-                suffix = suffix.to_string(),
+                value = value,
+                suffix = suffix,
                 reason = (sketch_reason(e)).to_string()
             )));
             break;

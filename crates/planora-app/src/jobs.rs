@@ -44,11 +44,14 @@ impl<T: Send + 'static> Job<T> {
         let (tx, rx) = mpsc::channel();
         let shared = Arc::clone(&progress);
         let lang = planora_i18n::current();
+        let unit = planora_i18n::current_unit();
         // Lässt sich kein Thread starten, ist der Sender schon fort: `poll` meldet `Lost`.
         let _ = std::thread::Builder::new()
             .name("planora-austausch".into())
             .spawn(move || {
-                let result = planora_i18n::with_lang(&lang, || work(&shared));
+                let result = planora_i18n::with_unit(unit, || {
+                    planora_i18n::with_lang(&lang, || work(&shared))
+                });
                 let _ = tx.send(result);
                 done();
             });

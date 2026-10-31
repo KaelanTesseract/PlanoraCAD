@@ -51,7 +51,7 @@ use crate::dimension::{
 use crate::model::ViewId;
 use crate::sheet::SheetTransform;
 use crate::sheet_frame::SheetPen;
-use planora_i18n::localize_decimal;
+use planora_i18n::{DisplayUnit, localize_decimal};
 use planora_math::DVec2;
 use std::collections::BTreeMap;
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
@@ -289,14 +289,21 @@ fn signed_value(value: f64, decimals: u8) -> String {
 /// Mindestmaß (Wert + `upper` / Wert + `lower`, mit Vorsatz) als zwei Zeilen in voller Höhe,
 /// ohne Nennmaß (Haupttext leer, außer bei eigenem Text).
 pub fn dimension_text(spec: &DimSpec, m: &Measured) -> DimText {
+    dimension_text_in(spec, m, DisplayUnit::Millimeter)
+}
+
+/// Wie [`dimension_text`], die Längen (Wert und Toleranzen) aber in der Einheit `unit` der
+/// Zeichnung (ohne Einheitenzeichen); Winkel bleiben in Grad. Die globale Einheit der
+/// Oberfläche spielt keine Rolle. In Millimeter genau wie [`dimension_text`].
+pub fn dimension_text_in(spec: &DimSpec, m: &Measured, unit: DisplayUnit) -> DimText {
     let dec = spec.decimals;
     let prefix: String = m.prefix.map(String::from).unwrap_or_default();
-    let degree = if spec.kind == DimKind::Angle || matches!(m.anchor, Anchor::Angle { .. }) {
-        "°"
-    } else {
-        ""
-    };
-    let value = format!("{}{degree}", format_value(m.value, dec));
+    let angle = spec.kind == DimKind::Angle || matches!(m.anchor, Anchor::Angle { .. });
+    let degree = if angle { "°" } else { "" };
+    // Längen in der Einheit der Zeichnung; Winkel unverändert (in mm Division durch 1, exakt).
+    let per = if angle { 1.0 } else { unit.mm_per_unit() };
+    let conv = |mm: f64| mm / per;
+    let value = format!("{}{degree}", format_value(conv(m.value), dec));
     let main = match &spec.text_override {
         Some(t) if t.starts_with("<>") => format!("{prefix}{}", t.replace("<>", &value)),
         Some(t) => t.replace("<>", &value),
@@ -310,7 +317,7 @@ pub fn dimension_text(spec: &DimSpec, m: &Measured) -> DimText {
             stack_height: tol_h,
         },
         Tolerance::Symmetric(t) => DimText {
-            main: format!("{main} ±{}", format_value(t.abs(), dec)),
+            main: format!("{main} ±{}", format_value(conv(t.abs()), dec)),
             stack: None,
             stack_height: tol_h,
         },
@@ -321,11 +328,14 @@ pub fn dimension_text(spec: &DimSpec, m: &Measured) -> DimText {
         },
         Tolerance::Limits { upper, lower } => DimText {
             main,
-            stack: Some((signed_value(*upper, dec), signed_value(*lower, dec))),
+            stack: Some((
+                signed_value(conv(*upper), dec),
+                signed_value(conv(*lower), dec),
+            )),
             stack_height: tol_h,
         },
         Tolerance::LimitSizes { upper, lower } => {
-            let line = |d: f64| format!("{prefix}{}{degree}", format_value(m.value + d, dec));
+            let line = |d: f64| format!("{prefix}{}{degree}", format_value(conv(m.value + d), dec));
             DimText {
                 main: if spec.text_override.is_some() {
                     main
@@ -399,6 +409,15 @@ pub fn layout_dimension(
     layout_dimension_in(spec, m, xf, group_index, None)
 }
 
+/// Nachkommastellen eines neuen Maßes: in Millimeter 1, in Zoll 2 (Längen); Winkel bleiben in
+/// Grad und haben immer 1.
+pub fn default_decimals(kind: DimKind, unit: DisplayUnit) -> u8 {
+    match (kind, unit) {
+        (DimKind::Angle, _) | (_, DisplayUnit::Millimeter) => 1,
+        (_, DisplayUnit::Zoll) => 2,
+    }
+}
+
 /// Markierungen eines gemessenen Maßes (Regeln im Modulkommentar), Art `Dimension`.
 /// `group_index` ist die Stufe eines Bezugsmaßes (`ChainMode::Baseline`): der Abstand wächst um
 /// `group_index · DIM_STEP` nach außen; bei anderen Maßen ohne Wirkung. `base` ist der
@@ -411,7 +430,20 @@ pub fn layout_dimension_in(
     group_index: usize,
     base: Option<&GroupBase>,
 ) -> Vec<Mark> {
-    let text = dimension_text(spec, m);
+    layout_dimension_unit(spec, m, xf, group_index, base, DisplayUnit::Millimeter)
+}
+
+/// Wie [`layout_dimension_in`], der Text aber in der Einheit `unit` der Zeichnung
+/// ([`dimension_text_in`]).
+pub fn layout_dimension_unit(
+    spec: &DimSpec,
+    m: &Measured,
+    xf: &SheetTransform,
+    group_index: usize,
+    base: Option<&GroupBase>,
+    unit: DisplayUnit,
+) -> Vec<Mark> {
+    let text = dimension_text_in(spec, m, unit);
     let marks = layout_with_text(spec, m, xf, group_index, base, &text, MarkKind::Dimension);
     finite_or_empty(marks)
 }

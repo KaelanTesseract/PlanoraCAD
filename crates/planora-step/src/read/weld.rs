@@ -132,16 +132,29 @@ pub(crate) fn short_number(x: f64) -> String {
     planora_i18n::localize_decimal(&s)
 }
 
+/// Länge (in mm) wie [`short_number`], aber in der Anzeigeeinheit (Zahl zu `{ $unit }`).
+pub(crate) fn short_len(mm: f64) -> String {
+    short_number(planora_i18n::current_unit().to_display(mm))
+}
+
 /// Warnungstext für grobe Dateien.
 /// Warnung für eine Datei ohne Genauigkeit (P4: „Genauigkeit unbekannt“; gerechnet wird mit
 /// `tol_mm`, der Vorgabe 0,001 mm).
 pub fn unknown_accuracy_warning(tol_mm: f64) -> String {
-    tr!("step-r-accuracy-unknown", mm = short_number(tol_mm))
+    tr!(
+        "step-r-accuracy-unknown",
+        mm = short_len(tol_mm),
+        unit = planora_i18n::unit_symbol()
+    )
 }
 
 /// Warnung für eine grobe Datei, die ihre Genauigkeit nennt (gröber als `COARSE_TOL_MM`).
 pub fn coarse_warning(tol_mm: f64) -> String {
-    tr!("step-r-accuracy-coarse", mm = short_number(tol_mm))
+    tr!(
+        "step-r-accuracy-coarse",
+        mm = short_len(tol_mm),
+        unit = planora_i18n::unit_symbol()
+    )
 }
 
 /// Größter Betrag einer Koordinate (mm, 1 000 km), den das Zusammenziehen annimmt.
@@ -329,7 +342,12 @@ pub fn check_open_edges(raw: &RawBody, tol: f64) -> Result<(), Skip> {
     }
     let at = place(edge_at(raw, first, 0.5));
     Err(Skip(match gap_of(raw, &grid, first, radius) {
-        Some(gap) => tr!("step-r-gap", gap = short_number(gap), at = at),
+        Some(gap) => tr!(
+            "step-r-gap",
+            gap = short_len(gap),
+            at = at,
+            unit = planora_i18n::unit_symbol()
+        ),
         None => tr!("step-r-body-invalid-edge", at = at),
     }))
 }

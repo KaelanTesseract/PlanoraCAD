@@ -1215,3 +1215,36 @@ fn far_away_bodies_are_refused_quickly() {
         Some("Der Körper liegt weiter als 1 000 km vom Ursprung entfernt.")
     );
 }
+
+/// Orte in Meldungen (Lücke, Kante ohne Fläche …) folgen der Anzeigeeinheit: in mm zwei, in Zoll
+/// drei Nachkommastellen; Einheit und Zahl passen immer zusammen.
+#[test]
+fn places_in_messages_follow_the_display_unit() {
+    use planora_i18n::{DisplayUnit, english, with_lang, with_unit};
+    use planora_step::read::topo::place;
+    let p = DVec3::new(25.4, 0.0, -50.8);
+    assert_eq!(
+        with_unit(DisplayUnit::Millimeter, || place(p)),
+        "(25,40; 0,00; -50,80)"
+    );
+    assert_eq!(
+        with_unit(DisplayUnit::Zoll, || place(p)),
+        "(1,000; 0,000; -2,000)"
+    );
+    assert_eq!(
+        with_lang(&english(), || with_unit(DisplayUnit::Zoll, || place(p))),
+        "(1.000; 0.000; -2.000)"
+    );
+    let gap = with_unit(DisplayUnit::Zoll, || {
+        planora_i18n::tr!(
+            "step-r-gap",
+            gap = "0,0001",
+            at = place(p),
+            unit = planora_i18n::unit_symbol()
+        )
+    });
+    assert_eq!(
+        gap,
+        "Lücke von 0,0001 in an der Kante bei (1,000; 0,000; -2,000)."
+    );
+}

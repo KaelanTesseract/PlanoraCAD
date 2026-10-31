@@ -865,7 +865,8 @@ impl AppState {
         if values.iter().any(|v| *v > MAX_COORD_MM) {
             return self.fail(tr!(
                 "state-create-sizes-max",
-                max = format!("{MAX_COORD_MM:e}")
+                max = planora_i18n::len_arg(MAX_COORD_MM, format!("{MAX_COORD_MM:e}")),
+                unit = planora_i18n::unit_symbol()
             ));
         }
         Ok(())
@@ -1162,7 +1163,8 @@ impl AppState {
         if !(inside(lo + delta) && inside(hi + delta)) {
             return self.fail(tr!(
                 "state-move-rejected",
-                max = format!("{MAX_COORD_MM:e}")
+                max = planora_i18n::len_arg(MAX_COORD_MM, format!("{MAX_COORD_MM:e}")),
+                unit = planora_i18n::unit_symbol()
             ));
         }
         // Ein Verschieben mit Formeln wird nie erweitert (P11): Die Formeln bleiben gültig, die

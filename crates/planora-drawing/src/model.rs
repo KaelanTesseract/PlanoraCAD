@@ -374,6 +374,10 @@ pub struct Drawing {
     /// Nummernkreise (Positionsnummern) der Ansichten.
     pub balloons: Vec<Balloon>,
     pub next_balloon: u64,
+    /// Maßeinheit der Zeichnung (Maßzahlen, Toleranzen, Vermerk im Schriftfeld). Gehört zur
+    /// Zeichnung, nicht zur Einstellung: dieselbe Zeichnung sieht überall gleich aus. Blatt,
+    /// Strichstärken und Schriftfeld bleiben in mm.
+    pub unit: planora_i18n::DisplayUnit,
 }
 
 impl Drawing {
@@ -392,6 +396,7 @@ impl Drawing {
             kind: DrawingKind::Views,
             balloons: Vec::new(),
             next_balloon: 1,
+            unit: planora_i18n::DisplayUnit::Millimeter,
         }
     }
 

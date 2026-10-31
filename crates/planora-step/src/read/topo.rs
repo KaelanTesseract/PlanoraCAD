@@ -293,14 +293,22 @@ fn grouped(n: usize) -> String {
     out
 }
 
-/// Koordinate für Meldungen: zwei Nachkommastellen, Komma, nie „-0,00“.
-fn coord(x: f64) -> String {
-    let r = (x * 100.0).round() / 100.0;
+/// Koordinate (in mm) für Meldungen in der Anzeigeeinheit: in mm zwei, in Zoll drei
+/// Nachkommastellen, Dezimaltrenner der Sprache, nie „-0,00“.
+fn coord(x_mm: f64) -> String {
+    let unit = planora_i18n::current_unit();
+    let (x, scale) = match unit {
+        planora_i18n::DisplayUnit::Millimeter => (x_mm, 100.0),
+        _ => (unit.to_display(x_mm), 1000.0),
+    };
+    let decimals = if scale == 100.0 { 2 } else { 3 };
+    let r = (x * scale).round() / scale;
     let r = if r == 0.0 { 0.0 } else { r };
-    planora_i18n::localize_decimal(&format!("{r:.2}"))
+    planora_i18n::localize_decimal(&format!("{r:.decimals$}"))
 }
 
-pub(crate) fn place(p: DVec3) -> String {
+/// Ort für Meldungen: „(x; y; z)“ in der Anzeigeeinheit (Punkt in mm).
+pub fn place(p: DVec3) -> String {
     format!("({}; {}; {})", coord(p.x), coord(p.y), coord(p.z))
 }
 

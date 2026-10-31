@@ -1383,6 +1383,7 @@ fn prepare_counted(
                 revisions: Vec::new(),
                 notes: Vec::new(),
                 parts: parts.cells.clone(),
+                units_note: None,
             })
         }
         None => None,

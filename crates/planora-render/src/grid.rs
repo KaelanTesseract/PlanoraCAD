@@ -34,12 +34,19 @@ const MIN_ALPHA: f32 = 0.01;
 /// Zehnerpotenz (in mm), bei der 10 bis 100 Linien über die Ansichtsbreite passen. `übergang`
 /// (0..1) ist der Anteil der nächstgröberen Stufe (zehnfacher Abstand): 0, solange die feine
 /// Stufe höchstens 40 Linien zeigt, 1 bei 100 Linien (dann ist die feine Stufe unsichtbar).
-pub fn grid_step(distance: f32) -> (f32, f32) {
+/// `unit_mm` ist die Länge der Anzeigeeinheit in mm (1 für mm, 25,4 für Zoll); die Stufen sind
+/// Zehnerpotenzen dieser Einheit, das Ergebnis bleibt in mm. Ungültig (≤ 0, nicht endlich) → 1.
+pub fn grid_step(distance: f32, unit_mm: f32) -> (f32, f32) {
+    let unit = if unit_mm.is_finite() && unit_mm > 0.0 {
+        unit_mm
+    } else {
+        1.0
+    };
     let span = if distance.is_finite() && distance > 0.0 {
         distance * VIEW_SPAN
     } else {
         VIEW_SPAN
-    };
+    } / unit;
     let mut exp = (span / 10.0).log10().floor() as i32;
     let step = |e: i32| 10.0_f32.powi(e);
     // Rundungsfehler an den Dekadengrenzen ausgleichen.
@@ -51,7 +58,7 @@ pub fn grid_step(distance: f32) -> (f32, f32) {
     }
     let lines = span / step(exp);
     let t = ((lines / FULL_LINES).ln() / (GONE_LINES / FULL_LINES).ln()).clamp(0.0, 1.0);
-    (step(exp), t * t * (3.0 - 2.0 * t))
+    (step(exp) * unit, t * t * (3.0 - 2.0 * t))
 }
 
 /// Radius, an dem das Raster bei Kameraabstand `distance` ausgeblendet ist.
@@ -104,12 +111,13 @@ fn line_style(k: i64, blend: f32, palette: &Palette) -> ([f32; 3], f32) {
 /// im Abstand `distance`, als Linienliste: je zwei aufeinanderfolgende Eckpunkte bilden eine
 /// Linie; die Deckkraft steckt im Alphawert der Farbe. Rasterlinien liegen auf Vielfachen des
 /// Linienabstands und bleiben beim Verschieben der Ansicht an ihrem Platz. Die Achsen sind so
-/// lang, dass sie das ganze Raster durchziehen (die z-Achse zeigt nach oben).
-pub fn grid_lines(target: Vec3, distance: f32, palette: &Palette) -> Vec<LineVertex> {
+/// lang, dass sie das ganze Raster durchziehen (die z-Achse zeigt nach oben). `unit_mm` wie bei
+/// [`grid_step`].
+pub fn grid_lines(target: Vec3, distance: f32, unit_mm: f32, palette: &Palette) -> Vec<LineVertex> {
     if !target.is_finite() || !distance.is_finite() || distance <= 0.0 {
         return Vec::new();
     }
-    let (fine, blend) = grid_step(distance);
+    let (fine, blend) = grid_step(distance, unit_mm);
     let radius = grid_radius(distance);
     let mut out = Vec::new();
 
@@ -206,7 +214,7 @@ mod tests {
         let mut last = 0.0;
         let mut d = 0.5_f32;
         while d < 1.0e6 {
-            let (fine, blend) = grid_step(d);
+            let (fine, blend) = grid_step(d, 1.0);
             let exp = fine.log10();
             assert!((exp - exp.round()).abs() < 1e-4, "{d}: {fine}");
             assert!(fine >= last, "{d}: {fine} < {last}");
@@ -220,7 +228,7 @@ mod tests {
     fn lines_across_the_view_stay_between_ten_and_forty() {
         let mut d = 0.5_f32;
         while d < 1.0e6 {
-            let (fine, blend) = grid_step(d);
+            let (fine, blend) = grid_step(d, 1.0);
             let across = d * VIEW_SPAN / fine;
             assert!((9.99..100.01).contains(&across), "{d}: {across}");
             if blend == 0.0 {
@@ -235,7 +243,7 @@ mod tests {
 
     #[test]
     fn default_distance_gives_ten_millimetre_lines() {
-        let (fine, blend) = grid_step(150.0);
+        let (fine, blend) = grid_step(150.0, 1.0);
         assert_eq!(fine, 10.0);
         assert_eq!(blend, 0.0);
     }
@@ -245,10 +253,10 @@ mod tests {
         // Direkt vor und nach dem Sprung der feinen Stufe: alt voll gröber, neu voll fein.
         let mut d = 1.0_f32;
         let mut jumps = 0;
-        let (mut prev_fine, mut prev_blend) = grid_step(d);
+        let (mut prev_fine, mut prev_blend) = grid_step(d, 1.0);
         while d < 1.0e5 {
             d *= 1.0005;
-            let (fine, blend) = grid_step(d);
+            let (fine, blend) = grid_step(d, 1.0);
             if fine != prev_fine {
                 jumps += 1;
                 assert!(prev_blend > 0.999, "{d}: {prev_blend}");
@@ -266,10 +274,10 @@ mod tests {
         for p in palettes() {
             let target = Vec3::new(37.0, -12.0, 5.0);
             let mut d = 5.0_f32;
-            let mut prev = line_alphas(&grid_lines(target, d, &p), &p);
+            let mut prev = line_alphas(&grid_lines(target, d, 1.0, &p), &p);
             while d < 5.0e4 {
                 d *= 1.002;
-                let cur = line_alphas(&grid_lines(target, d, &p), &p);
+                let cur = line_alphas(&grid_lines(target, d, 1.0, &p), &p);
                 for key in prev.keys().chain(cur.keys()) {
                     let a = prev.get(key).copied().unwrap_or(0.0);
                     let b = cur.get(key).copied().unwrap_or(0.0);
@@ -283,7 +291,7 @@ mod tests {
     #[test]
     fn every_fifth_line_is_stronger_and_brighter() {
         for p in palettes() {
-            let lines = grid_lines(Vec3::ZERO, 150.0, &p); // Stufe 10 mm, kein Übergang
+            let lines = grid_lines(Vec3::ZERO, 150.0, 1.0, &p); // Stufe 10 mm, kein Übergang
             let mut major = 0;
             let mut minor = 0;
             for pair in lines.chunks(2).filter(|c| !is_axis(&c[0], &p)) {
@@ -326,9 +334,9 @@ mod tests {
         let p = Palette::dark();
         // Übergang fast ganz: die feine Stufe ist fast weg, nur jede zehnte Linie bleibt.
         let d = 830.0; // 99,6 Linien der feinen Stufe (10 mm) über die Ansicht
-        let (fine, blend) = grid_step(d);
+        let (fine, blend) = grid_step(d, 1.0);
         assert!(blend > 0.95, "{blend}");
-        let alphas = line_alphas(&grid_lines(Vec3::ZERO, d, &p), &p);
+        let alphas = line_alphas(&grid_lines(Vec3::ZERO, d, 1.0, &p), &p);
         let at = |k: i64| alphas.get(&(true, (k as f32 * fine * 1000.0).round() as i64));
         let on_coarse = at(50).copied().unwrap_or(0.0); // 5. Linie der gröberen Stufe: Haupt
         let off_coarse = at(7).copied().unwrap_or(0.0);
@@ -342,7 +350,7 @@ mod tests {
             let target = Vec3::new(20.0, 30.0, 0.0);
             let d = 150.0;
             let radius = grid_radius(d);
-            let lines = grid_lines(target, d, &p);
+            let lines = grid_lines(target, d, 1.0, &p);
             let mut max = 0.0_f32;
             for v in lines.iter().filter(|v| !is_axis(v, &p)) {
                 let r = ((v.position[0] - target.x).powi(2) + (v.position[1] - target.y).powi(2))
@@ -369,9 +377,9 @@ mod tests {
     #[test]
     fn grid_follows_the_target_and_snaps_to_step_multiples() {
         let p = Palette::dark();
-        let (fine, _) = grid_step(150.0);
+        let (fine, _) = grid_step(150.0, 1.0);
         for target in [Vec3::new(4.0, 3.0, 0.0), Vec3::new(1234.5, -987.6, 0.0)] {
-            let lines = grid_lines(target, 150.0, &p);
+            let lines = grid_lines(target, 150.0, 1.0, &p);
             let grid: Vec<_> = lines.iter().filter(|v| !is_axis(v, &p)).collect();
             assert!(!grid.is_empty());
             for pair in lines.chunks(2).filter(|c| !is_axis(&c[0], &p)) {
@@ -393,8 +401,8 @@ mod tests {
             assert!(minx < target.x - 150.0 && maxx > target.x + 150.0);
         }
         // Verschobenes Ziel verschiebt die Linien (neue Querpositionen am einen Rand).
-        let a = line_alphas(&grid_lines(Vec3::ZERO, 150.0, &p), &p);
-        let b = line_alphas(&grid_lines(Vec3::new(400.0, 0.0, 0.0), 150.0, &p), &p);
+        let a = line_alphas(&grid_lines(Vec3::ZERO, 150.0, 1.0, &p), &p);
+        let b = line_alphas(&grid_lines(Vec3::new(400.0, 0.0, 0.0), 150.0, 1.0, &p), &p);
         assert!(a.contains_key(&(false, (-200.0_f32 * 1000.0) as i64)));
         assert!(!b.contains_key(&(false, (-200.0_f32 * 1000.0) as i64)));
         assert!(b.contains_key(&(false, (600.0_f32 * 1000.0) as i64)));
@@ -404,7 +412,7 @@ mod tests {
     fn axes_are_unfaded_at_the_origin_even_with_a_far_target() {
         for p in palettes() {
             for target in [Vec3::ZERO, Vec3::new(5000.0, -3000.0, 100.0)] {
-                let lines = grid_lines(target, 150.0, &p);
+                let lines = grid_lines(target, 150.0, 1.0, &p);
                 for (color, dir) in [
                     (p.axis_x, [1.0, 0.0, 0.0]),
                     (p.axis_y, [0.0, 1.0, 0.0]),
@@ -440,7 +448,7 @@ mod tests {
             let mut d = 0.5_f32;
             let mut worst = 0;
             while d < 1.0e6 {
-                let lines = grid_lines(Vec3::new(3.0, 4.0, 0.0), d, &p);
+                let lines = grid_lines(Vec3::new(3.0, 4.0, 0.0), d, 1.0, &p);
                 assert_eq!(lines.len() % 2, 0);
                 worst = worst.max(lines.len());
                 d *= 1.007;
@@ -452,9 +460,9 @@ mod tests {
     #[test]
     fn invalid_cameras_give_no_lines() {
         let p = Palette::dark();
-        assert!(grid_lines(Vec3::ZERO, f32::NAN, &p).is_empty());
-        assert!(grid_lines(Vec3::ZERO, 0.0, &p).is_empty());
-        assert!(grid_lines(Vec3::new(f32::INFINITY, 0.0, 0.0), 10.0, &p).is_empty());
+        assert!(grid_lines(Vec3::ZERO, f32::NAN, 1.0, &p).is_empty());
+        assert!(grid_lines(Vec3::ZERO, 0.0, 1.0, &p).is_empty());
+        assert!(grid_lines(Vec3::new(f32::INFINITY, 0.0, 0.0), 10.0, 1.0, &p).is_empty());
     }
 
     #[test]
@@ -464,5 +472,28 @@ mod tests {
         // Dunkler Grund: Hauptlinien heller; heller Grund: dunkler.
         assert!(lum(d.grid_major) > lum(d.grid));
         assert!(lum(l.grid_major) < lum(l.grid));
+    }
+
+    #[test]
+    fn inch_steps_are_decades_of_an_inch() {
+        let mut d = 0.5_f32;
+        while d < 1.0e6 {
+            let (fine, blend) = grid_step(d, 25.4);
+            let exp = (fine / 25.4).log10();
+            assert!((exp - exp.round()).abs() < 1e-4, "{d}: {fine}");
+            assert!((0.0..=1.0).contains(&blend), "{d}: {blend}");
+            d *= 1.01;
+        }
+        // Gleiche Linienzahl wie in mm bei 25,4-fachem Abstand.
+        let (mm, b_mm) = grid_step(150.0, 1.0);
+        let (inch, b_in) = grid_step(150.0 * 25.4, 25.4);
+        assert!((inch / mm - 25.4).abs() < 1e-3);
+        assert!((b_mm - b_in).abs() < 1e-4);
+    }
+
+    #[test]
+    fn invalid_unit_falls_back_to_millimetre() {
+        assert_eq!(grid_step(150.0, 0.0), grid_step(150.0, 1.0));
+        assert_eq!(grid_step(150.0, f32::NAN), grid_step(150.0, 1.0));
     }
 }

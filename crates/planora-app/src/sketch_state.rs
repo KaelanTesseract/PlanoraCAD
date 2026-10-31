@@ -911,9 +911,17 @@ impl SketchSession {
             Some(c) if !c.kind.is_dimension() => Err(crate::msg!("sketch-not-dimension")),
             Some(c) => {
                 let driven = c.driven;
+                // Ein anzeigendes Maß nimmt nur Zahlen; in Zoll hat auch eine Zahl einen
+                // Speichertext („1 in“), der entfällt.
+                let formula = matches!(
+                    crate::formula_field::classify(text),
+                    Some(crate::formula_field::FieldInput::Formula(_))
+                );
                 dimension_input(text, constraint_unit(&c.kind), scope).and_then(|(v, f)| {
-                    if driven && f.is_some() {
+                    if driven && formula {
                         Err(crate::msg!("sketch-driven-no-formula"))
+                    } else if driven {
+                        Ok((v, None))
                     } else {
                         Ok((v, f))
                     }
@@ -975,6 +983,28 @@ impl SketchSession {
                 sf.formulas.remove(&id);
             }
         }
+        self.note_formula_problem(sf);
+        Ok(id)
+    }
+
+    /// Neues Maß `action` aus der Auswahl mit dem Wert `value` (Skizzeneinheit, ohne Formel),
+    /// sonst wie [`apply_dimension_input`](Self::apply_dimension_input). Für ein unverändert
+    /// bestätigtes Maßfeld, dessen Text gerundet ist.
+    pub fn apply_dimension_value(
+        &mut self,
+        sf: &mut SketchFeature,
+        action: ConstraintAction,
+        value: f64,
+    ) -> Result<ConstraintId, String> {
+        self.message = None;
+        if !action.is_dimension() {
+            let e = crate::msg!("sketch-not-dimension");
+            let text = e.text();
+            self.message = Some(e);
+            return Err(text);
+        }
+        let id = self.apply(&mut sf.sketch, action, Some(value))?;
+        sf.formulas.remove(&id);
         self.note_formula_problem(sf);
         Ok(id)
     }

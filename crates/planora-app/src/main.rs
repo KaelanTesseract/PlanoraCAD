@@ -18,6 +18,14 @@ fn main() -> eframe::Result {
     // Sprache vor dem ersten Text: zusätzliche Sprachdateien laden (Probleme ins Protokoll),
     // dann die gespeicherte Wahl, sonst beim ersten Start die Sprache von Windows.
     planora_app::system_language::apply_at_start(config.language.as_deref());
+    // Maßeinheit der Anzeige: gespeicherte Wahl, unbekannt oder leer → Millimeter.
+    planora_i18n::set_global_unit(
+        config
+            .length_unit
+            .as_deref()
+            .and_then(planora_i18n::DisplayUnit::from_id)
+            .unwrap_or_default(),
+    );
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("PlanoraCAD")
         .with_inner_size([1400.0, 900.0])

@@ -29,6 +29,12 @@ pub enum MsgArg {
     Num(f64, usize),
     /// Kommazahl mit höchstens sechs Nachkommastellen ohne Nullen am Ende ([`plain_number`]).
     Plain(f64),
+    /// Länge in mm; beim Zeichnen in der Anzeigeeinheit (in mm wie [`MsgArg::Plain`]).
+    Len(f64),
+    /// Länge in mm mit eigenem Text für Millimeter (z. B. „1e6“); in Zoll umgerechnet.
+    LenAs(f64, String),
+    /// Kurzzeichen der Längeneinheit der Anzeige, beim Zeichnen gelesen.
+    Unit,
     /// Eine eingebettete Meldung, beim Zeichnen übersetzt.
     Msg(Box<Msg>),
     /// Eine Liste von Werten, beim Zeichnen mit „, “ verbunden.
@@ -43,6 +49,15 @@ impl MsgArg {
             MsgArg::Int(n) => n.to_string(),
             MsgArg::Num(v, d) => fmt_num(*v, *d),
             MsgArg::Plain(v) => plain_number(*v),
+            MsgArg::Len(v) => {
+                if planora_i18n::current_unit() == planora_i18n::DisplayUnit::Millimeter {
+                    plain_number(*v)
+                } else {
+                    planora_i18n::len_arg(*v, String::new())
+                }
+            }
+            MsgArg::LenAs(v, mm_text) => planora_i18n::len_arg(*v, mm_text.as_str()),
+            MsgArg::Unit => planora_i18n::unit_symbol().to_string(),
             MsgArg::Msg(m) => m.text(),
             MsgArg::List(l) => l.iter().map(MsgArg::text).collect::<Vec<_>>().join(", "),
         }

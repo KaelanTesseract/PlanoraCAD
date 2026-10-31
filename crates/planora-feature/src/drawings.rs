@@ -11,7 +11,7 @@ use planora_drawing::{
     Drawing, DrawingId, DrawingKind, MAX_SECTIONS, Placement, Projection, SECTION_LETTERS, Scale,
     Sheet, ViewId, ViewKind, align_dir, sections_ok_on,
 };
-use planora_i18n::tr;
+use planora_i18n::{DisplayUnit, tr};
 use std::collections::{BTreeMap, HashSet};
 
 /// Höchstzahl der Zeichnungen in einem Dokument.
@@ -247,7 +247,7 @@ impl Document {
         sheet: Sheet,
         projection: Projection,
     ) -> Result<DrawingId, FeatureError> {
-        self.add_drawing_with(name, sheet, projection, None, None)
+        self.add_drawing_with(name, sheet, projection, None, None, DisplayUnit::Millimeter)
     }
 
     /// Legt eine leere Zeichnung mit Blattangaben an (Datum und Benutzer des Stempels). Gibt es
@@ -258,6 +258,19 @@ impl Document {
         sheet: Sheet,
         projection: Projection,
         stamp: &Stamp,
+    ) -> Result<DrawingId, FeatureError> {
+        self.add_drawing_stamped_in(name, sheet, projection, stamp, DisplayUnit::Millimeter)
+    }
+
+    /// Wie [`Document::add_drawing_stamped`], die Zeichnung aber in der Maßeinheit `unit` (die
+    /// Oberfläche gibt die Einstellung beim Anlegen mit; danach gehört sie der Zeichnung).
+    pub fn add_drawing_stamped_in(
+        &mut self,
+        name: &str,
+        sheet: Sheet,
+        projection: Projection,
+        stamp: &Stamp,
+        unit: DisplayUnit,
     ) -> Result<DrawingId, FeatureError> {
         let project = match self.project_info {
             Some(_) => None,
@@ -270,7 +283,7 @@ impl Document {
         // F4: Die Vorgabe des Schalters wird einmal beim Anlegen festgelegt.
         let mut info = SheetInfo::new(stamp);
         info.parts_list = self.visible_bodies().len() > 1;
-        self.add_drawing_with(name, sheet, projection, Some(info), project)
+        self.add_drawing_with(name, sheet, projection, Some(info), project, unit)
     }
 
     fn add_drawing_with(
@@ -280,6 +293,7 @@ impl Document {
         projection: Projection,
         info: Option<SheetInfo>,
         project: Option<ProjectInfo>,
+        unit: DisplayUnit,
     ) -> Result<DrawingId, FeatureError> {
         if self.drawings.len() >= MAX_DRAWINGS {
             return Err(bad(tr!(
@@ -293,6 +307,7 @@ impl Document {
         let id = DrawingId(self.next_drawing);
         let mut d = Drawing::new(id, name.trim().to_string(), sheet, projection);
         d.info = info;
+        d.unit = unit;
         self.check_drawing(&d)?;
         self.next_drawing += 1;
         self.drawings.push(d);
@@ -329,6 +344,16 @@ impl Document {
     /// Setzt die Blattangaben einer Zeichnung (mit Prüfung).
     pub fn set_sheet_info(&mut self, id: DrawingId, i: SheetInfo) -> Result<(), FeatureError> {
         self.update_drawing(id, |d| d.info = Some(i))
+    }
+
+    /// Setzt die Maßeinheit einer Zeichnung (Maßzahlen, Toleranzen, Vermerk im Schriftfeld).
+    /// Gleiche Einheit ändert nichts.
+    pub fn set_drawing_unit(
+        &mut self,
+        id: DrawingId,
+        unit: DisplayUnit,
+    ) -> Result<(), FeatureError> {
+        self.update_drawing(id, |d| d.unit = unit)
     }
 
     /// Benennt eine Zeichnung um.
