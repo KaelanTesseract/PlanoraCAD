@@ -345,7 +345,8 @@ fn check_section(
     {
         return Err(BlendError::InvalidParameter(tr!(
             "kernel-blend-contact-too-close",
-            mm = super::show_num(min)
+            mm = planora_i18n::len_arg(min, super::show_num(min)),
+            unit = planora_i18n::unit_symbol()
         )));
     }
     Ok(())

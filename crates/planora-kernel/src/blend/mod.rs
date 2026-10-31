@@ -185,8 +185,9 @@ fn check_size(x: f64, what: &str, min: f64) -> Result<(), BlendError> {
         return Err(BlendError::InvalidParameter(tr!(
             "kernel-blend-size-finite",
             what = what,
-            max = format!("{MAX_COORD:e}"),
-            x = show_num(x)
+            max = planora_i18n::len_arg(MAX_COORD, format!("{MAX_COORD:e}")),
+            x = planora_i18n::len_arg(x, show_num(x)),
+            unit = planora_i18n::unit_symbol()
         )));
     }
     if x <= 0.0 {
@@ -199,8 +200,9 @@ fn check_size(x: f64, what: &str, min: f64) -> Result<(), BlendError> {
         return Err(BlendError::InvalidParameter(tr!(
             "kernel-blend-size-min",
             what = what,
-            min = show_num(min),
-            x = show_num(x)
+            min = planora_i18n::len_arg(min, show_num(min)),
+            x = planora_i18n::len_arg(x, show_num(x)),
+            unit = planora_i18n::unit_symbol()
         )));
     }
     Ok(())

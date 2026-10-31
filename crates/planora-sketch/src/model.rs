@@ -110,7 +110,8 @@ pub(crate) fn finite(v: f64, what: impl FnOnce() -> String) -> Result<(), Sketch
         Err(SketchError::InvalidInput(tr!(
             "sketch-err-too-large",
             what = what(),
-            max = format!("{MAX_COORD:e}")
+            max = planora_i18n::len_arg(MAX_COORD, format!("{MAX_COORD:e}")),
+            unit = planora_i18n::unit_symbol()
         )))
     } else {
         Ok(())

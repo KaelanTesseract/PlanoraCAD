@@ -180,8 +180,9 @@ fn check_surface(s: &Surface) -> Result<(), String> {
             } else {
                 bad(&tr!(
                     "kernel-ssi-bad-radius",
-                    radius = radius.to_string(),
-                    min = MIN_RADIUS.to_string()
+                    radius = planora_i18n::len_arg(*radius, radius.to_string()),
+                    min = planora_i18n::len_arg(MIN_RADIUS, MIN_RADIUS.to_string()),
+                    unit = planora_i18n::unit_symbol()
                 ))
             }
         }

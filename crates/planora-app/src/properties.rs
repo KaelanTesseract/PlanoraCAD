@@ -24,7 +24,7 @@ fn closed_at_import_label() -> String {
 /// Bezeichnung der Zahlenfelder für die Lage (die Einheit steht hier, nicht in jedem Feld, damit
 /// die Zahlen in ein Drittel der Feldbreite passen).
 pub fn position_label() -> String {
-    tr!("props-position-label")
+    tr!("props-position-label", unit = planora_i18n::unit_symbol())
 }
 
 /// Bezeichnung der Zahlenfelder für die Drehung eines Netz-Körpers.
@@ -47,12 +47,15 @@ pub fn step_coarse_hint() -> String {
     tr!("props-step-coarse-hint")
 }
 
-/// Genauigkeit in mm für die Anzeige: höchstens vier gültige Stellen, Dezimaltrenner der Sprache,
-/// ohne überflüssige Nullen („0,001 mm“, „0,00000254 mm“), wie in den Meldungen des STEP-Lesers.
-fn tolerance_text(t: f64) -> String {
-    if !t.is_finite() || t <= 0.0 {
-        return "0 mm".into();
+/// Genauigkeit (in mm) für die Anzeige in der Anzeigeeinheit: höchstens vier gültige Stellen,
+/// Dezimaltrenner der Sprache, ohne überflüssige Nullen („0,001 mm“, „0,00000254 mm“), wie in den
+/// Meldungen des STEP-Lesers.
+fn tolerance_text(t_mm: f64) -> String {
+    let unit = current_unit();
+    if !t_mm.is_finite() || t_mm <= 0.0 {
+        return format!("0 {}", unit.symbol());
     }
+    let t = unit.to_display(t_mm);
     let digits = (3 - t.log10().floor() as i32).max(0) as usize;
     let s = format!("{t:.digits$}");
     let s = if s.contains('.') {
@@ -60,7 +63,7 @@ fn tolerance_text(t: f64) -> String {
     } else {
         s
     };
-    format!("{} mm", planora_i18n::localize_decimal(&s))
+    format!("{} {}", planora_i18n::localize_decimal(&s), unit.symbol())
 }
 
 /// Genauigkeit der Datei für die Anzeige; nennt die Datei keine, „unbekannt“ mit dem
@@ -228,16 +231,30 @@ fn xyz_fields(
     dragging
 }
 
+/// Länge (in mm) mit Einheit der Anzeige.
 fn mm(v: f64) -> String {
-    format!("{} mm", format_number(v, 2))
+    planora_i18n::fmt_len(v)
 }
 
+/// Drei Längen (in mm) „x / y / z“ mit Einheit der Anzeige.
 fn triple(v: DVec3) -> String {
     format!(
-        "{} / {} / {} mm",
-        format_number(v.x, 2),
-        format_number(v.y, 2),
-        format_number(v.z, 2)
+        "{} / {} / {} {}",
+        planora_i18n::fmt_len_num(v.x),
+        planora_i18n::fmt_len_num(v.y),
+        planora_i18n::fmt_len_num(v.z),
+        current_unit().symbol()
+    )
+}
+
+/// Drei Längen (in mm) „a × b × c“ mit Einheit der Anzeige.
+fn times(v: DVec3) -> String {
+    format!(
+        "{} × {} × {} {}",
+        planora_i18n::fmt_len_num(v.x),
+        planora_i18n::fmt_len_num(v.y),
+        planora_i18n::fmt_len_num(v.z),
+        current_unit().symbol()
     )
 }
 
@@ -267,15 +284,7 @@ pub fn parameter_rows(state: &AppState, kind: &FeatureKind) -> Vec<(String, Stri
             ]
         }
         FeatureKind::Box { size, origin } => vec![
-            (
-                tr!("props-size"),
-                format!(
-                    "{} × {} × {} mm",
-                    format_number(size.x, 2),
-                    format_number(size.y, 2),
-                    format_number(size.z, 2)
-                ),
-            ),
+            (tr!("props-size"), times(*size)),
             (tr!("props-position"), triple(*origin)),
         ],
         FeatureKind::Cylinder {
@@ -463,12 +472,12 @@ fn mass_rows(ui: &mut egui::Ui, mass: &planora_mesh::MassProperties) {
     row(
         ui,
         &tr!("props-volume"),
-        theme::value(format!("≈ {:.2} mm³", mass.volume)),
+        theme::value(format!("≈ {}", planora_i18n::fmt_volume(mass.volume))),
     );
     row(
         ui,
         &tr!("props-surface"),
-        theme::value(format!("≈ {:.2} mm²", mass.surface_area)),
+        theme::value(format!("≈ {}", planora_i18n::fmt_area(mass.surface_area))),
     );
 }
 
@@ -509,16 +518,9 @@ fn body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
         row(
             ui,
             &tr!("props-centroid"),
-            theme::value(format!(
-                "{:.2} / {:.2} / {:.2} mm",
-                body.mass.centroid.x, body.mass.centroid.y, body.mass.centroid.z
-            )),
+            theme::value(triple(body.mass.centroid)),
         );
-        row(
-            ui,
-            &tr!("props-dimensions"),
-            theme::value(format!("{:.2} × {:.2} × {:.2} mm", size.x, size.y, size.z)),
-        );
+        row(ui, &tr!("props-dimensions"), theme::value(times(size)));
         let (faces, edges) = state.kernel.counts(&body.solid);
         row(
             ui,
@@ -595,7 +597,8 @@ fn body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
                     ui.label(theme::value(tr!(
                         "props-selected-edge",
                         kind = kind.label(),
-                        length = format!("{length:.2}")
+                        length = planora_i18n::fmt_len_num(length),
+                        unit = planora_i18n::unit_symbol()
                     )));
                 }
                 None => {
@@ -647,11 +650,7 @@ fn mesh_body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
         let size = body.bounds.1 - body.bounds.0;
         row(ui, &tr!("props-kind"), theme::value(tr!("props-mesh-body")));
         mass_rows(ui, &body.mass);
-        row(
-            ui,
-            &tr!("props-dimensions"),
-            theme::value(format!("{:.2} × {:.2} × {:.2} mm", size.x, size.y, size.z)),
-        );
+        row(ui, &tr!("props-dimensions"), theme::value(times(size)));
         if let Some(r) = body.mesh_report {
             row(
                 ui,

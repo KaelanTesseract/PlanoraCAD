@@ -128,7 +128,11 @@ fn validate_spec(m: &DimSpec) -> Result<(), String> {
         }
     };
     if !tolerance_ok {
-        return Err(tr!("feature-dim-tolerance", max = MAX_TOL_MM.to_string()));
+        return Err(tr!(
+            "feature-dim-tolerance",
+            max = planora_i18n::len_arg(MAX_TOL_MM, MAX_TOL_MM.to_string()),
+            unit = planora_i18n::unit_symbol()
+        ));
     }
     Ok(())
 }

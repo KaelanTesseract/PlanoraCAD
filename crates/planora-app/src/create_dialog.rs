@@ -1,6 +1,6 @@
 use crate::dialog::{Dialog, DialogSize};
 use crate::formula_field::{FormulaField, names_hint, resolve_kept, value_field_text};
-use crate::sketch_view::{format_length, format_number};
+use crate::sketch_view::format_length;
 use crate::state::AppState;
 use crate::theme;
 use planora_feature::{FeatureId, FieldKey, Formulas, ParamUnit};
@@ -184,12 +184,14 @@ impl CreateDialog {
                 0 => tr!(
                     "create-profile-label",
                     n = i + 1,
-                    area = format_number(area, 2)
+                    area = planora_i18n::fmt_area_num(area),
+                    unit = planora_i18n::current_unit().area_symbol()
                 ),
                 holes => tr!(
                     "create-profile-label-holes",
                     n = i + 1,
-                    area = format_number(area, 2),
+                    area = planora_i18n::fmt_area_num(area),
+                    unit = planora_i18n::current_unit().area_symbol(),
                     holes = holes
                 ),
             };

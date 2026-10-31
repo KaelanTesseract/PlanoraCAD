@@ -13,7 +13,6 @@ use crate::formula_field::{
     value_field_text,
 };
 use crate::msg::{Msg, MsgArg};
-use crate::sketch_view::format_number;
 use crate::state::{AppState, MAX_COORD_MM};
 use crate::theme;
 use planora_feature::expr::number_text;
@@ -196,7 +195,8 @@ fn check_size(label: &MsgArg, v: f64) -> Result<f64, Msg> {
         Err(crate::msg!(
             "edit-too-big",
             label = label.clone(),
-            max = format!("{MAX_COORD_MM:e}")
+            max = MsgArg::LenAs(MAX_COORD_MM, format!("{MAX_COORD_MM:e}")),
+            unit = MsgArg::Unit
         ))
     }
 }
@@ -676,7 +676,11 @@ impl FeatureDialog {
                     self.remove_point(k);
                 }
                 if let Some(min) = self.min_size(state) {
-                    ui.weak(tr!("blend-min-size", min = min_text(min)));
+                    ui.weak(tr!(
+                        "blend-min-size",
+                        min = min_text(min),
+                        unit = planora_i18n::unit_symbol()
+                    ));
                 }
                 let dark = ui.visuals().dark_mode;
                 let own = self.error();
@@ -890,7 +894,8 @@ fn profile_choice(ui: &mut egui::Ui, state: &AppState, sketch: FeatureId, profil
         tr!(
             "create-profile-label",
             n = i + 1,
-            area = format_number(area, 2)
+            area = planora_i18n::fmt_area_num(area),
+            unit = planora_i18n::current_unit().area_symbol()
         )
     };
     let current = if *profile < extracted.profiles.len() {

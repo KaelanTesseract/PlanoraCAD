@@ -182,9 +182,14 @@ pub fn min_size_for(solid: &Solid, variable: bool, tol: &Tolerance) -> f64 {
     min_blend_size_request(solid, &kind, tol)
 }
 
-/// Zahl für Meldungen: Dezimaltrenner der Sprache, ohne überflüssige Nullen.
+/// Zahl für Meldungen, in der Anzeigeeinheit: Dezimaltrenner der Sprache, ohne überflüssige
+/// Nullen (in mm).
 pub fn min_text(v: f64) -> String {
-    crate::msg::plain_number(v)
+    if planora_i18n::current_unit() == planora_i18n::DisplayUnit::Millimeter {
+        crate::msg::plain_number(v)
+    } else {
+        planora_i18n::len_arg(v, String::new())
+    }
 }
 
 /// Prüft die Maße (Radien, Abstände) gegen das Mindestmaß des Kerns.
@@ -209,7 +214,8 @@ pub fn check_min_sizes(art: &BlendArt, min: f64) -> Result<(), Msg> {
         Some((label, _)) => Err(crate::msg!(
             "blend-too-small",
             label = label,
-            min = MsgArg::Plain(min)
+            min = MsgArg::Len(min),
+            unit = MsgArg::Unit
         )),
         None => Ok(()),
     }
@@ -763,7 +769,11 @@ impl BlendDialog {
                         });
                 }
                 if let Some(min) = self.min_size(state) {
-                    ui.weak(tr!("blend-min-size", min = min_text(min)));
+                    ui.weak(tr!(
+                        "blend-min-size",
+                        min = min_text(min),
+                        unit = planora_i18n::unit_symbol()
+                    ));
                 }
                 ui.checkbox(&mut self.tangentenkette, tr!("blend-chain"));
                 let dark = ui.visuals().dark_mode;

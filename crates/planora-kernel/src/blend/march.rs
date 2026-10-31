@@ -582,7 +582,8 @@ fn check_section(st: &Station, tol: &Tolerance) -> Result<(), BlendError> {
     if !(s.pa.distance(st.o) > min && s.pb.distance(st.o) > min && s.pa.distance(s.pb) > min) {
         return Err(BlendError::InvalidParameter(tr!(
             "kernel-blend-contact-too-close",
-            mm = super::show_num(min)
+            mm = planora_i18n::len_arg(min, super::show_num(min)),
+            unit = planora_i18n::unit_symbol()
         )));
     }
     Ok(())

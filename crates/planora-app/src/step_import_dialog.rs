@@ -95,7 +95,15 @@ pub fn nothing_checked() -> String {
 }
 /// Hinweis an der gerundeten Größe.
 pub fn size_hint() -> String {
-    tr!("stepimport-size-hint")
+    let (step, unit) = match planora_i18n::current_unit() {
+        planora_i18n::DisplayUnit::Millimeter => (0.1, "mm"),
+        planora_i18n::DisplayUnit::Zoll => (0.01, "in"),
+    };
+    tr!(
+        "stepimport-size-hint",
+        step = planora_i18n::fmt_num(step, if step < 0.05 { 2 } else { 1 }),
+        unit = unit
+    )
 }
 
 /// Einheit der Oberfläche ↔ Längeneinheit des Lesers (gleiche Namen).
@@ -305,12 +313,33 @@ fn tenth(v: f64) -> String {
     planora_i18n::localize_decimal(s.strip_suffix(".0").unwrap_or(&s))
 }
 
-/// Maße der Hülle, auf 0,1 mm gerundet: „25,4 × 50,8 × 76,2 mm“; ohne Hülle „–“.
+/// Länge (in mm) in der Anzeigeeinheit, gerundet: auf 0,1 mm, in Zoll auf 0,01 in (eine Stelle
+/// mehr); ohne „,0“ bzw. „,00“ am Ende.
+fn rounded(mm: f64) -> String {
+    match planora_i18n::current_unit() {
+        planora_i18n::DisplayUnit::Millimeter => tenth(mm),
+        unit => {
+            let r = (unit.to_display(mm) * 100.0).round() / 100.0;
+            let r = if r == 0.0 { 0.0 } else { r };
+            let s = format!("{r:.2}");
+            planora_i18n::localize_decimal(s.strip_suffix(".00").unwrap_or(&s))
+        }
+    }
+}
+
+/// Maße der Hülle, auf 0,1 mm gerundet: „25,4 × 50,8 × 76,2 mm“ (in Zoll auf 0,01 in:
+/// „1 × 2 × 3 in“); ohne Hülle „–“.
 pub fn size_text(bounds: Option<(DVec3, DVec3)>) -> String {
     match bounds {
         Some((lo, hi)) => {
             let d = (hi - lo).max(DVec3::ZERO);
-            format!("{} × {} × {} mm", tenth(d.x), tenth(d.y), tenth(d.z))
+            format!(
+                "{} × {} × {} {}",
+                rounded(d.x),
+                rounded(d.y),
+                rounded(d.z),
+                planora_i18n::unit_symbol()
+            )
         }
         None => "–".into(),
     }

@@ -89,7 +89,11 @@ impl fmt::Display for FeatureError {
             FeatureError::OutOfRange(what) => tr!(
                 "feature-err-out-of-range",
                 what = what.as_str(),
-                max = format!("{:e}", crate::compute::MAX_COORD_MM)
+                max = planora_i18n::len_arg(
+                    crate::compute::MAX_COORD_MM,
+                    format!("{:e}", crate::compute::MAX_COORD_MM)
+                ),
+                unit = planora_i18n::unit_symbol()
             ),
             FeatureError::Formula(m) => m.clone(),
             FeatureError::ParameterInUse { name, users } => tr!(

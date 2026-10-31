@@ -592,6 +592,42 @@ pub fn fmt_volume(mm3: f64) -> String {
     )
 }
 
+/// Fläche (in mm²) als Zahl in der aktuellen Einheit, ohne Kurzzeichen.
+pub fn fmt_area_num(mm2: f64) -> String {
+    let unit = current_unit();
+    let f = unit.mm_per_unit();
+    fmt_num(mm2 / (f * f), unit.decimals())
+}
+
+/// Volumen (in mm³) als Zahl in der aktuellen Einheit, ohne Kurzzeichen.
+pub fn fmt_volume_num(mm3: f64) -> String {
+    let unit = current_unit();
+    let f = unit.mm_per_unit();
+    fmt_num(mm3 / (f * f * f), unit.decimals())
+}
+
+/// Kurzzeichen der aktuellen Längeneinheit (für `{ $unit }` in Meldungen).
+pub fn unit_symbol() -> &'static str {
+    current_unit().symbol()
+}
+
+/// Länge (in mm) als Zahl für eine Meldung mit `{ $unit }`. In Millimeter bleibt `mm_text`
+/// unverändert (so wie die Meldung die Zahl bisher zeigte); in Zoll wird umgerechnet, mit
+/// mindestens vier gültigen Stellen, damit kleine Werte nicht zu „0,000“ werden.
+pub fn len_arg(mm: f64, mm_text: impl Into<String>) -> String {
+    let unit = current_unit();
+    if unit == DisplayUnit::Millimeter || !mm.is_finite() {
+        return mm_text.into();
+    }
+    let v = unit.to_display(mm);
+    let decimals = if v == 0.0 {
+        unit.decimals()
+    } else {
+        (3 - v.abs().log10().floor() as i32).clamp(unit.decimals() as i32, 12) as usize
+    };
+    fmt_num(v, decimals)
+}
+
 // ---- Texte ----------------------------------------------------------------------------------
 
 /// Wert für einen Platzhalter. Kommazahlen als Text übergeben (siehe [`fmt_num`]);

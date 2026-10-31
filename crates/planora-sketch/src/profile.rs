@@ -416,13 +416,15 @@ impl Sketch {
         if !(len.is_finite() && len > tol) {
             return Err(SketchError::Degenerate(tr!(
                 "sketch-err-ellipse-major-small",
-                tol = tol.to_string()
+                tol = planora_i18n::len_arg(tol, tol.to_string()),
+                unit = planora_i18n::unit_symbol()
             )));
         }
         if !(minor.is_finite() && minor > tol) {
             return Err(SketchError::Degenerate(tr!(
                 "sketch-err-ellipse-minor-small",
-                tol = tol.to_string()
+                tol = planora_i18n::len_arg(tol, tol.to_string()),
+                unit = planora_i18n::unit_symbol()
             )));
         }
         let b = a.perp() / len * minor;
