@@ -487,7 +487,7 @@ pub fn view_names(drawing: &Drawing) -> BTreeMap<ViewId, String> {
 }
 
 /// Mitte einer Ansicht auf dem Blatt (auch wenn noch nichts berechnet ist).
-fn center_of(drawing: &Drawing, id: ViewId, depth: usize) -> Option<DVec2> {
+pub fn center_of(drawing: &Drawing, id: ViewId, depth: usize) -> Option<DVec2> {
     let v = drawing.view(id)?;
     let c = match v.placement {
         Placement::Free { x, y } => DVec2::new(x, y),

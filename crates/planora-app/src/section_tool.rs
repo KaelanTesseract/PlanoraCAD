@@ -9,18 +9,22 @@
 //! als [`SNAP_PX`] daran liegt ([`line_for`]). [`create`] ist genau eine Änderung des Dokuments.
 //!
 //! **Lage der neuen Ansicht (S12):** abhängig von der Quellansicht mit deren Maßstab, im
-//! Vorgabeabstand; liegt schon ein Kind derselben Quellansicht in derselben Richtung, dahinter.
+//! Vorgabeabstand; liegen dort schon Ansichten, dahinter. Ragt sie so auf Schriftfeld, Tabellen
+//! oder über den Rahmen, auf die Gegenseite, enger heran oder mit rückender Ausgangsgruppe
+//! ([`section_spot`]).
 
 use crate::dimension_state::{no_drawing, no_view, views_pending};
 use crate::dimension_tool::sentence;
 use crate::drawing_dialog::sketch_blocked;
 use crate::drawing_state::{default_distance, estimate_view_size};
+use crate::drawing_view;
 use crate::msg::Msg;
 use crate::sketch_view::parse_number;
 use crate::state::AppState;
 use egui::Pos2;
 use planora_drawing::annotate::{
-    Mark, MarkKind, SECTION_ARROW_LEN, SECTION_OVERHANG_MM, SECTION_SHAFT_MM, SectionPen,
+    Mark, MarkKind, SECTION_ARROW_LEN, SECTION_OVERHANG_MM, SECTION_SHAFT_MM, SECTION_TITLE_GAP,
+    SECTION_TITLE_H, SectionPen,
 };
 use planora_drawing::sheet::{SheetTransform, view_transform};
 use planora_drawing::sheet_frame::sheet_scale;
@@ -234,30 +238,175 @@ fn feature_text(e: FeatureError) -> Msg {
     }
 }
 
-/// Abstand der neuen Schnittansicht `kind` aus `parent` (S12).
-fn section_distance(state: &AppState, d: &Drawing, parent: &ViewSpec, kind: ViewKind) -> f64 {
+/// Lage einer neuen Schnittansicht: Abstand zur Quellansicht und, wenn die Ansichtsgruppe dafür
+/// rücken muss, die neue Mitte ihrer frei liegenden Wurzelansicht.
+struct Spot {
+    distance: f64,
+    root_at: Option<(ViewId, DVec2)>,
+}
+
+/// Lage der neuen Schnittansicht `kind` aus `parent` (S12): auf der Ausrichtungsachse im
+/// Vorgabeabstand, hinter Ansichten, die dort schon liegen. Ragt sie so über den Rahmen oder auf
+/// Schriftfeld, Änderungstabelle, Hinweisfeld oder Stückliste, kommt sie auf die Gegenseite der
+/// Quellansicht (negativer Abstand); passt sie auf keiner Seite, wird die Lücke zwischen den
+/// Ansichten von [`GAP_MM`] auf die Hälfte enger. Passt sie auch dann nicht, rückt die Gruppe
+/// der Quellansicht (ihre frei liegende Wurzelansicht mit allem, was daran hängt) längs der Achse
+/// so wenig wie nötig, dass alles im freien Bereich liegt. Geht auch das nicht, die Lage, in der
+/// sie am wenigsten verdeckt (bei Gleichstand die übliche). „Passt“ heißt: mit Abstand
+/// [`SECTION_TITLE_GAP`] zu Rahmen und Tabellen, samt Titel unter der Schnittansicht.
+fn section_spot(state: &AppState, d: &Drawing, parent: &ViewSpec, kind: ViewKind) -> Spot {
     let base = default_distance(&state.bodies, parent.kind, kind, parent.scale, parent.scale);
-    let Some(dir) = align_dir(d.projection, parent.kind, kind) else {
-        return base;
+    let fixed = |distance: f64| Spot {
+        distance,
+        root_at: None,
     };
-    let widest = d
+    let Some((ax, ay)) = align_dir(d.projection, parent.kind, kind) else {
+        return fixed(base);
+    };
+    let dir = DVec2::new(ax, ay);
+    let Some(centre) = drawing_view::center_of(d, parent.id, d.views.len()) else {
+        return fixed(base);
+    };
+    let half = |k: ViewKind, f: f64| {
+        let (w, h) = estimate_view_size(&state.bodies, k);
+        DVec2::new(w, h) * f / 2.0
+    };
+    let size = half(kind, parent.scale.factor());
+    // Frei liegende Wurzel der Gruppe einer Ansicht; Ansichten, die (über ihre Eltern) an ihr
+    // hängen, rücken mit ihr.
+    let root_of = |v: &ViewSpec| {
+        let mut v = v.clone();
+        for _ in 0..d.views.len() {
+            match (v.placement, v.parent.and_then(|p| d.view(p))) {
+                (Placement::Aligned { .. }, Some(p)) => v = p.clone(),
+                _ => break,
+            }
+        }
+        v
+    };
+    let root = root_of(parent);
+    // Geschätzte Blattflächen der vorhandenen Ansichten; `true` für die Gruppe der Quellansicht.
+    let others: Vec<((DVec2, DVec2), bool)> = d
         .views
         .iter()
-        .filter(|c| c.parent == Some(parent.id))
-        .filter(|c| align_dir(d.projection, parent.kind, c.kind) == Some(dir))
-        .filter_map(|c| match c.placement {
-            Placement::Aligned { distance } => Some(distance),
-            Placement::Free { .. } => None,
+        .filter_map(|v| {
+            let c = drawing_view::center_of(d, v.id, d.views.len())?;
+            let h = half(v.kind, v.scale.factor());
+            Some(((c - h, c + h), root_of(v).id == root.id))
         })
-        .fold(None::<f64>, |m, x| Some(m.map_or(x, |m| m.max(x))));
-    match widest {
-        Some(w) => {
-            let (ew, eh) = estimate_view_size(&state.bodies, kind);
-            let ext = if dir.0 != 0.0 { ew } else { eh };
-            base.max(w + ext * parent.scale.factor() + GAP_MM)
+        .collect();
+    let rect = |dist: f64| {
+        let c = centre + dir * dist;
+        (c - size, c + size)
+    };
+    let hit = |a: (DVec2, DVec2), b: &(DVec2, DVec2)| {
+        a.0.x < b.1.x && b.0.x < a.1.x && a.0.y < b.1.y && b.0.y < a.1.y
+    };
+    // Auf einer Seite (`sign`) mit der Lücke `gap` hinter alle Ansichten rücken, die im Weg
+    // liegen.
+    let past = |sign: f64, gap: f64| {
+        let mut dist = sign * (base - GAP_MM + gap);
+        for _ in 0..=others.len() {
+            let r = rect(dist);
+            let Some(far) = others
+                .iter()
+                .filter(|(o, _)| hit(r, o))
+                .map(|(o, _)| {
+                    // Fernste Kante der Ansicht im Weg, gemessen längs `sign · dir` ab `centre`.
+                    let along = |p: DVec2| (p - centre).dot(dir) * sign;
+                    along(o.0).max(along(o.1))
+                })
+                .reduce(f64::max)
+            else {
+                break;
+            };
+            dist = sign * (far + gap + size.dot(dir.abs()));
         }
-        None => base,
+        dist
+    };
+    let layout = drawing_view::placement_layout(state, d);
+    let blocked: Vec<(DVec2, DVec2)> = [Some(layout.title), Some(layout.revisions)]
+        .into_iter()
+        .chain([layout.notes, layout.parts])
+        .flatten()
+        .collect();
+    // Fläche über dem Rahmen hinaus und auf Schriftfeld, Änderungstabelle, Hinweisfeld oder
+    // Stückliste.
+    let outside = |r: (DVec2, DVec2)| {
+        let area = |a: DVec2, b: DVec2| (b.x - a.x).max(0.0) * (b.y - a.y).max(0.0);
+        let cut = |b: &(DVec2, DVec2)| area(r.0.max(b.0), r.1.min(b.1));
+        area(r.0, r.1) - cut(&layout.frame) + blocked.iter().map(cut).sum::<f64>()
+    };
+    // Platz, den eine Ansicht braucht: ihre Fläche mit Abstand [`SECTION_TITLE_GAP`] ringsum,
+    // bei der neuen Schnittansicht dazu ihr Titel darunter.
+    let f = layout.scale;
+    let clear = SECTION_TITLE_GAP * f;
+    let pad = |r: (DVec2, DVec2), below: f64| {
+        (
+            r.0 - DVec2::new(clear, clear + below),
+            r.1 + DVec2::splat(clear),
+        )
+    };
+    let caption = (SECTION_TITLE_GAP + SECTION_TITLE_H) * f;
+    let room = |dist: f64| pad(rect(dist), caption);
+    let candidates: Vec<f64> = [GAP_MM, GAP_MM / 2.0]
+        .into_iter()
+        .flat_map(|gap| [past(1.0, gap), past(-1.0, gap)])
+        .collect();
+    // 1. Ohne Rücken.
+    let clean =
+        |dist: f64| outside(room(dist)) <= 1e-9 && !others.iter().any(|(o, _)| hit(rect(dist), o));
+    if let Some(&dist) = candidates.iter().find(|&&dist| clean(dist)) {
+        return fixed(dist);
     }
+    // 2. Die Gruppe rückt längs der Achse in den freien Bereich.
+    if let Placement::Free { x, y } = root.placement {
+        let axis = dir.abs();
+        let (flo, fhi) = (layout.free.0.dot(axis), layout.free.1.dot(axis));
+        for &dist in &candidates {
+            // (Fläche, Platz) der Gruppe samt neuer Ansicht.
+            let group: Vec<((DVec2, DVec2), (DVec2, DVec2))> = others
+                .iter()
+                .filter(|(_, mine)| *mine)
+                .map(|(o, _)| (*o, pad(*o, 0.0)))
+                .chain([(rect(dist), room(dist))])
+                .collect();
+            let lo = group
+                .iter()
+                .map(|(_, r)| r.0.dot(axis))
+                .fold(f64::INFINITY, f64::min);
+            let hi = group
+                .iter()
+                .map(|(_, r)| r.1.dot(axis))
+                .fold(f64::NEG_INFINITY, f64::max);
+            if hi - lo > fhi - flo {
+                continue;
+            }
+            let t = 0.0_f64.clamp(flo - lo, fhi - hi);
+            let moved = |r: (DVec2, DVec2)| (r.0 + axis * t, r.1 + axis * t);
+            let fits = group.iter().all(|(view, space)| {
+                outside(moved(*space)) <= 1e-9
+                    && !others
+                        .iter()
+                        .any(|(o, mine)| !*mine && hit(moved(*view), o))
+            });
+            if fits {
+                return Spot {
+                    distance: dist,
+                    root_at: Some((root.id, DVec2::new(x, y) + axis * t)),
+                };
+            }
+        }
+    }
+    // 3. Am wenigsten verdeckt.
+    let mut best = (f64::INFINITY, base);
+    for &dist in &candidates {
+        let o = outside(room(dist));
+        if o < best.0 - 1e-9 {
+            best = (o, dist);
+        }
+    }
+    fixed(best.1)
 }
 
 /// Legt eine Schnittansicht aus `parent` an: Schnittlinie `horizontal` bei der Ansichtskoordinate
@@ -283,12 +432,18 @@ pub fn create(
     }
     let kind = section_kind(source.kind, horizontal, false).ok_or_else(not_from_here)?;
     let offset = plane_offset_from_view(source.kind, kind, coord).ok_or_else(not_from_here)?;
-    let distance = section_distance(state, d, source, kind);
+    let spot = section_spot(state, d, source, kind);
     let mut made = None;
     state
         .document
         .update_drawing(drawing, |dr| {
-            made = Some(dr.add_section(parent, kind, offset, distance));
+            // Rücken der Gruppe und neue Ansicht in einem Schritt.
+            if let Some((root, at)) = spot.root_at
+                && let Some(v) = dr.views.iter_mut().find(|v| v.id == root)
+            {
+                v.placement = Placement::Free { x: at.x, y: at.y };
+            }
+            made = Some(dr.add_section(parent, kind, offset, spot.distance));
         })
         .map_err(feature_text)?;
     let id = made
