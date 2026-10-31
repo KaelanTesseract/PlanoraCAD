@@ -33,12 +33,8 @@ pub enum MsgArg {
     Len(f64),
     /// Länge in mm mit eigenem Text für Millimeter (z. B. „1e6“); in Zoll umgerechnet.
     LenAs(f64, String),
-    /// Fläche in mm² als Zahl der Anzeigeeinheit (Kurzzeichen: [`MsgArg::AreaUnit`]).
-    Area(f64),
     /// Kurzzeichen der Längeneinheit der Anzeige, beim Zeichnen gelesen.
     Unit,
-    /// Kurzzeichen der Flächeneinheit der Anzeige, beim Zeichnen gelesen.
-    AreaUnit,
     /// Eine eingebettete Meldung, beim Zeichnen übersetzt.
     Msg(Box<Msg>),
     /// Eine Liste von Werten, beim Zeichnen mit „, “ verbunden.
@@ -61,9 +57,7 @@ impl MsgArg {
                 }
             }
             MsgArg::LenAs(v, mm_text) => planora_i18n::len_arg(*v, mm_text.as_str()),
-            MsgArg::Area(v) => planora_i18n::fmt_area_num(*v),
             MsgArg::Unit => planora_i18n::unit_symbol().to_string(),
-            MsgArg::AreaUnit => planora_i18n::current_unit().area_symbol().to_string(),
             MsgArg::Msg(m) => m.text(),
             MsgArg::List(l) => l.iter().map(MsgArg::text).collect::<Vec<_>>().join(", "),
         }

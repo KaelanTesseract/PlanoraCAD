@@ -95,14 +95,14 @@ pub fn nothing_checked() -> String {
 }
 /// Hinweis an der gerundeten Größe.
 pub fn size_hint() -> String {
-    let (step, unit) = match planora_i18n::current_unit() {
-        planora_i18n::DisplayUnit::Millimeter => (0.1, "mm"),
-        planora_i18n::DisplayUnit::Zoll => (0.01, "in"),
+    let step = match planora_i18n::current_unit() {
+        planora_i18n::DisplayUnit::Millimeter => 0.1,
+        planora_i18n::DisplayUnit::Zoll => 0.01,
     };
     tr!(
         "stepimport-size-hint",
         step = planora_i18n::fmt_num(step, if step < 0.05 { 2 } else { 1 }),
-        unit = unit
+        unit = planora_i18n::unit_symbol()
     )
 }
 

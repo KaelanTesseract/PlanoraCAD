@@ -599,13 +599,6 @@ pub fn fmt_area_num(mm2: f64) -> String {
     fmt_num(mm2 / (f * f), unit.decimals())
 }
 
-/// Volumen (in mm³) als Zahl in der aktuellen Einheit, ohne Kurzzeichen.
-pub fn fmt_volume_num(mm3: f64) -> String {
-    let unit = current_unit();
-    let f = unit.mm_per_unit();
-    fmt_num(mm3 / (f * f * f), unit.decimals())
-}
-
 /// Kurzzeichen der aktuellen Längeneinheit (für `{ $unit }` in Meldungen).
 pub fn unit_symbol() -> &'static str {
     current_unit().symbol()
