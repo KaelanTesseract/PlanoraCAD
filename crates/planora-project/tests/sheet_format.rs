@@ -68,7 +68,7 @@ fn plain_doc() -> Document {
 
 #[test]
 fn format_6_only_with_sheet_data() {
-    assert_eq!(FORMAT_VERSION, 11);
+    assert_eq!(FORMAT_VERSION, 12);
     let d = plain_doc();
     assert_eq!(required_format(&d.snapshot()), 4);
 
@@ -310,7 +310,7 @@ fn rejects_bad_sheet_data() {
 
     // Format 12 ist zu neu
     let t = edited(|v| v["format"] = 12.into());
-    assert!(matches!(bad(&t), ProjectError::TooNew { found: 12, .. }));
+    assert!(matches!(bad(&t), ProjectError::TooNew { found: 13, .. }));
 }
 
 #[test]

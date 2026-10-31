@@ -145,6 +145,7 @@ fn special_texts() -> TitleTexts {
                 "€ 0,10".into(),
             ],
         ],
+        units_note: None,
     }
 }
 

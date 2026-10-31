@@ -4,7 +4,7 @@
 use crate::ViewLines;
 use crate::Visibility;
 use crate::annotate::{
-    DimEntry, GroupBase, Mark, ResolvedDims, group_base, layout_centerline, layout_dimension_in,
+    DimEntry, GroupBase, Mark, ResolvedDims, group_base, layout_centerline, layout_dimension_unit,
     layout_lost_in,
 };
 use crate::dimension::{ChainMode, DimId, Measured};
@@ -14,6 +14,7 @@ use crate::model::{Drawing, Placement, Sheet, ViewId};
 use crate::out2d::{Out2d, piece_to_outs};
 use crate::sheet_marks::SheetFrame;
 use crate::stroke::StrokeOrigin;
+use planora_i18n::DisplayUnit;
 use planora_math::DVec2;
 use std::collections::BTreeMap;
 
@@ -124,7 +125,7 @@ pub fn build_sheet(drawing: &Drawing, results: &BTreeMap<ViewId, &ViewLines>) ->
 /// Wie [`build_sheet`], dazu je Ansicht die Markierungen (`SheetView.marks`): die Mittellinien
 /// der Ansicht (`ViewLines.centerlines`, nur bei `ViewSpec.centerlines`, mit Überstand nach
 /// [`layout_centerline`]) und die Maße aus `dims.by_view` (gemessene nach
-/// [`layout_dimension_in`], fehlgeschlagene als verlorene Maße nach [`layout_lost`] mit der
+/// [`layout_dimension_unit`] in der Einheit der Zeichnung, fehlgeschlagene als verlorene Maße nach [`layout_lost`] mit der
 /// letzten bekannten Lage aus `dims.last_known` und dem Fehlertext als Grund). Gruppen
 /// (`ChainSpec.group`) teilen ihren Bezug quer zur Messrichtung ([`group_base`]); Bezugsmaße
 /// stapeln um `order · DIM_STEP`. Linien und Ausdehnung sind dieselben wie ohne Markierungen.
@@ -164,7 +165,7 @@ pub fn build_sheet_with(
             }
         }
         if let Some(list) = dims.by_view.get(&spec.id) {
-            marks.extend(view_dimension_marks(list, dims, &xf));
+            marks.extend(view_dimension_marks(list, dims, &xf, drawing.unit));
         }
         views.push(SheetView {
             id: spec.id,
@@ -241,7 +242,7 @@ pub fn dimension_marks(
             continue;
         };
         out.extend(
-            per_dimension_marks(list, dims, &xf)
+            per_dimension_marks(list, dims, &xf, drawing.unit)
                 .into_iter()
                 .map(|(id, marks)| DimMarks {
                     view: spec.id,
@@ -258,6 +259,7 @@ fn per_dimension_marks(
     list: &[DimEntry],
     dims: &ResolvedDims,
     xf: &SheetTransform,
+    unit: DisplayUnit,
 ) -> Vec<(DimId, Vec<Mark>)> {
     let mut members: BTreeMap<u64, Vec<&Measured>> = BTreeMap::new();
     for (s, r) in list {
@@ -277,7 +279,7 @@ fn per_dimension_marks(
                 _ => 0,
             };
             let marks = match r {
-                Ok(m) => layout_dimension_in(s, m, xf, level, base),
+                Ok(m) => layout_dimension_unit(s, m, xf, level, base, unit),
                 Err(e) => layout_lost_in(s, dims.last_known.get(&s.id), xf, &e.to_string(), base),
             };
             (s.id, marks)
@@ -286,12 +288,17 @@ fn per_dimension_marks(
 }
 
 /// Markierungen der Maße einer Ansicht (Regeln siehe [`build_sheet_with`]).
-fn view_dimension_marks(list: &[DimEntry], dims: &ResolvedDims, xf: &SheetTransform) -> Vec<Mark> {
+fn view_dimension_marks(
+    list: &[DimEntry],
+    dims: &ResolvedDims,
+    xf: &SheetTransform,
+    unit: DisplayUnit,
+) -> Vec<Mark> {
     let mut marks = Vec::new();
     // Bereits gezeichnete Linien je Gruppe: Hilfslinien an gemeinsamen Punkten einer Kette
     // erscheinen nur einmal.
     let mut drawn: BTreeMap<u64, Vec<Mark>> = BTreeMap::new();
-    for ((s, _), (_, new)) in list.iter().zip(per_dimension_marks(list, dims, xf)) {
+    for ((s, _), (_, new)) in list.iter().zip(per_dimension_marks(list, dims, xf, unit)) {
         match s.chain {
             Some(c) => {
                 let seen = drawn.entry(c.group).or_default();

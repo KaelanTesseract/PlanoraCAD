@@ -93,7 +93,7 @@ fn fmt(d: &Document) -> u32 {
 
 #[test]
 fn format_7_only_with_parts_data() {
-    assert_eq!(FORMAT_VERSION, 11);
+    assert_eq!(FORMAT_VERSION, 12);
 
     // nichts: wie bisher
     assert_eq!(fmt(&with_box()), 1);
@@ -362,7 +362,7 @@ fn rejects_bad_parts_data() {
 
     // Format 12 ist zu neu, Format 7 nicht
     let t = edited(|v| v["format"] = 12.into());
-    assert!(matches!(bad(&t), ProjectError::TooNew { found: 12, .. }));
+    assert!(matches!(bad(&t), ProjectError::TooNew { found: 13, .. }));
     assert!(decode_version(&text7(), "x.json").is_ok());
 
     // 201 Kreise

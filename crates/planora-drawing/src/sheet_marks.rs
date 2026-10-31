@@ -17,7 +17,7 @@ use crate::parts::{PartsCells, parts_head};
 use crate::sheet_frame::{
     GRID_TEXT_H, LABEL_H, NOTE_LINES_MAX, NOTES_LINE_MM, NOTES_PAD_MM, NOTES_TEXT_H, PARTS_ROW_H,
     PROJECTION_CENTRE_Y, PROJECTION_X0, PartsSpace, REV_ROW_H, REV_VISIBLE, SheetLayout, SheetPen,
-    TitleField, VALUE_H, projection_symbol,
+    TitleField, UNITS_NOTE_BASELINE, UNITS_NOTE_W, UNITS_NOTE_X0, VALUE_H, projection_symbol,
 };
 use crate::sheet_info::TitleTexts;
 use planora_i18n::tr;
@@ -343,6 +343,18 @@ fn build_frame(
             end: TAU,
             kind: MarkKind::Sheet(SheetPen::Medium),
         });
+    }
+
+    // Vermerk der Maßeinheit (nur Zeichnungen in Zoll; in mm entsteht hier nichts).
+    if let Some(note) = &texts.units_note {
+        fitted_text(
+            &mut m,
+            p(t0.x + s(UNITS_NOTE_X0), t0.y + s(UNITS_NOTE_BASELINE)),
+            s(LABEL_H),
+            s(UNITS_NOTE_W),
+            widen,
+            note,
+        );
     }
 
     revision_table(&mut m, layout, texts, widen);

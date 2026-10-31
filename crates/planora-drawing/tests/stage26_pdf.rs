@@ -1012,6 +1012,7 @@ fn fitted_texts_carry_their_cell() {
         .collect(),
         revisions: Vec::new(),
         notes: Vec::new(),
+        units_note: None,
     };
     let frame = sheet_frame(&layout, &texts_in, Projection::First);
     let slots = layout.title_slots();

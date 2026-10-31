@@ -12,7 +12,8 @@ use crate::drawing_state::{ViewResult, draw_error_msg};
 use crate::msg::Msg;
 use crate::state::{AppState, Body, BodyKind};
 use planora_drawing::annotate::{
-    ARROW_HALF_W, ARROW_LEN, DEFAULT_OFFSET, DIM_STEP, Mark, ResolvedDims, TextAnchor, text_width,
+    ARROW_HALF_W, ARROW_LEN, DEFAULT_OFFSET, DIM_STEP, Mark, ResolvedDims, TextAnchor,
+    default_decimals, text_width,
 };
 use planora_drawing::dimension::{
     ChainSpec, DimId, DimKind, DimSpec, Geo3, GeoRef, Tolerance as DimTolerance,
@@ -932,7 +933,7 @@ fn candidate_spec<'a>(
         angle: 45.0,
         text_shift: (0.0, 0.0),
         tolerance: DimTolerance::None,
-        decimals: 1,
+        decimals: default_decimals(c.kind, d.unit),
         text_override: None,
         chain,
         suggested: true,

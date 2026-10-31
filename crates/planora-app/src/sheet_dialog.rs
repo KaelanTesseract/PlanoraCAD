@@ -22,13 +22,33 @@ use planora_drawing::sheet_frame::TitleField;
 use planora_drawing::sheet_info::{
     DASH, DEFAULT_TOLERANCE, FieldValue, MAX_FIELD_CHARS, MAX_NOTE_CHARS, MAX_NOTES,
     MAX_REVISION_CHARS, MAX_REVISIONS, MAX_TITLE_CHARS, NotesValue, ProjectInfo, SheetContext,
-    SheetInfo, Stamp, TitleTexts, default_notes, main_scale, resolve_texts, revision_letter,
+    SheetInfo, Stamp, TitleTexts, default_notes_in, main_scale, resolve_texts, revision_letter,
     validate_project_info, validate_sheet_info,
 };
 use planora_drawing::sheet_marks::{field_is_cut, note_is_cut, revision_cell_is_cut};
 use planora_drawing::{Drawing, DrawingId, DrawingKind, PartsRow};
-use planora_i18n::tr;
+use planora_i18n::{DisplayUnit, tr};
 use std::collections::BTreeMap;
+
+/// Name einer Maßeinheit in der Auswahl.
+pub fn unit_name(unit: DisplayUnit) -> String {
+    match unit {
+        DisplayUnit::Millimeter => crate::settings_window::unit_mm(),
+        DisplayUnit::Zoll => crate::settings_window::unit_inch(),
+    }
+}
+
+/// „Maßeinheit“ mit der Auswahl Millimeter oder Zoll.
+fn unit_choice(ui: &mut egui::Ui, unit: &mut DisplayUnit) {
+    ui.label(crate::settings_window::section_unit());
+    egui::ComboBox::from_id_salt("planora-sheet-unit")
+        .selected_text(unit_name(*unit))
+        .show_ui(ui, |ui| {
+            for u in [DisplayUnit::Millimeter, DisplayUnit::Zoll] {
+                ui.selectable_value(unit, u, unit_name(u));
+            }
+        });
+}
 
 /// Titel des Fensters.
 pub fn title() -> String {
@@ -123,6 +143,8 @@ pub struct SheetInfoDialog {
     pub sheet: SheetInfo,
     /// Kopie der eigenen Texte der Stückliste und Papierwahl für das Stücklistenblatt.
     pub parts: PartsDraft,
+    /// Maßeinheit der Zeichnung (Maßzahlen, Toleranzen, Vermerk im Schriftfeld).
+    pub unit: DisplayUnit,
     /// Meldung (zu viele Änderungen, Fehler beim Übernehmen); übersetzt erst beim Zeichnen.
     pub message: Option<Msg>,
     pub last_rect: Option<egui::Rect>,
@@ -165,11 +187,16 @@ impl SheetInfoDialog {
             .drawing(id)
             .and_then(|d| d.info.clone())
             .unwrap_or_else(|| SheetInfo::new(stamp));
+        let unit = state
+            .document
+            .drawing(id)
+            .map_or(DisplayUnit::Millimeter, |d| d.unit);
         SheetInfoDialog {
             drawing: id,
             project,
             sheet,
             parts: PartsDraft::new(state),
+            unit,
             message: None,
             last_rect: None,
             parts_cache: None,
@@ -202,6 +229,11 @@ impl SheetInfoDialog {
         state
             .document
             .set_sheet_info(self.drawing, self.sheet.clone())
+            .map_err(|e| Msg::Raw(e.to_string()))?;
+        // Gleiche Einheit ändert nichts; alles zusammen ist ein Schritt (ein Bild).
+        state
+            .document
+            .set_drawing_unit(self.drawing, self.unit)
             .map_err(|e| Msg::Raw(e.to_string()))?;
         // Erst die entfernten Einträge, dann die übrigen: so wird die Grenze nie kurz
         // überschritten.
@@ -236,6 +268,8 @@ impl SheetInfoDialog {
         ctx: &SheetContext,
         main: Option<planora_drawing::Scale>,
     ) -> (TitleTexts, TitleTexts) {
+        // Die Texte zeigen schon die gewählte Einheit (Kantenbruch, Vermerk).
+        drawing.unit = self.unit;
         let mut auto_sheet = SheetInfo::new(&Stamp {
             date: self.sheet.created.clone(),
             user: String::new(),
@@ -321,6 +355,7 @@ impl SheetInfoDialog {
             parts,
             message,
             last_rect,
+            unit,
             ..
         } = self;
         let response = Dialog::new(title(), DialogSize::Wide)
@@ -380,7 +415,7 @@ impl SheetInfoDialog {
                     ui.label(tr!("sheet-notes-all"));
                     let effective = match &project.notes {
                         NotesValue::Lines(l) => l.clone(),
-                        NotesValue::Auto => default_notes(&tolerance),
+                        NotesValue::Auto => default_notes_in(&tolerance, *unit),
                     };
                     let mut lines = effective.clone();
                     lines_editor(ui, dark, "project-note", &mut lines, &note_cut);
@@ -394,7 +429,7 @@ impl SheetInfoDialog {
                     }
                     let project_notes = match &project.notes {
                         NotesValue::Lines(l) => l.clone(),
-                        NotesValue::Auto => default_notes(&tolerance),
+                        NotesValue::Auto => default_notes_in(&tolerance, *unit),
                     };
 
                     // ---- Dieses Blatt ----
@@ -437,7 +472,13 @@ impl SheetInfoDialog {
                         ui.add_space(theme::SPACE_2);
                         let was_own = matches!(sheet.notes, NotesValue::Lines(_));
                         let mut own = was_own;
-                        ui.add(theme::Toggle::new(&mut own, tr!("sheet-notes-own")));
+                        // In derselben Zeile die Maßeinheit der Zeichnung (das Fenster wird
+                        // dadurch nicht höher; ein Stücklistenblatt hat keine Maße).
+                        ui.horizontal(|ui| {
+                            ui.add(theme::Toggle::new(&mut own, tr!("sheet-notes-own")));
+                            ui.add_space(theme::SPACE_3);
+                            unit_choice(ui, unit);
+                        });
                         if own != was_own {
                             sheet.notes = if own {
                                 NotesValue::Lines(project_notes.clone())

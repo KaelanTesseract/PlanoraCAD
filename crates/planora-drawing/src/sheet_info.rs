@@ -4,7 +4,7 @@
 use crate::model::{Drawing, DrawingKind, Scale};
 use crate::parts::{PartsCells, parts_doc_type};
 use crate::sheet_frame::{REV_VISIBLE, TitleField};
-use planora_i18n::tr;
+use planora_i18n::{DisplayUnit, tr};
 use std::collections::BTreeMap;
 
 pub const MAX_FIELD_CHARS: usize = 80;
@@ -232,11 +232,30 @@ impl SheetInfo {
 /// Die vorbelegten Hinweiszeilen in der aktuellen Sprache (wie die übrigen Vorgaben erst beim
 /// Zeichnen erzeugt; eigene Zeilen bleiben, wie sie sind).
 pub fn default_notes(tolerance: &str) -> Vec<String> {
+    default_notes_in(tolerance, DisplayUnit::Millimeter)
+}
+
+/// Wie [`default_notes`] für eine Zeichnung in `unit`: der Kantenbruch (ein Maß am Teil, nicht
+/// am Papier) steht in Zoll umgerechnet da (0,3 mm ≈ 0,012 in); in mm unverändert.
+pub fn default_notes_in(tolerance: &str, unit: DisplayUnit) -> Vec<String> {
+    let edges = match unit {
+        DisplayUnit::Millimeter => tr!("drawing-note-edges"),
+        DisplayUnit::Zoll => tr!("drawing-note-edges-inch"),
+    };
     vec![
         tr!("drawing-note-tolerance", tolerance = tolerance),
-        tr!("drawing-note-edges"),
+        edges,
         tr!("drawing-note-surfaces"),
     ]
+}
+
+/// Vermerk der Maßeinheit im Schriftfeld: nur bei einer Zeichnung in Zoll („Maße in Zoll“),
+/// in mm keiner (die Zeichnung bleibt wie bisher).
+pub fn units_note(unit: DisplayUnit) -> Option<String> {
+    match unit {
+        DisplayUnit::Millimeter => None,
+        DisplayUnit::Zoll => Some(tr!("drawing-units-inch")),
+    }
 }
 
 /// Prüft einen Text; `what` nennt das Feld (erst im Fehlerfall erzeugt).
@@ -338,6 +357,9 @@ pub struct TitleTexts {
     pub notes: Vec<String>,
     /// Zelltexte der Stückliste (bei [`resolve_texts`] leer; der Aufrufer füllt sie).
     pub parts: Vec<PartsCells>,
+    /// Vermerk der Maßeinheit ([`units_note`]); `None` bei Zeichnungen in mm und auf
+    /// Stücklistenblättern.
+    pub units_note: Option<String>,
 }
 
 impl TitleTexts {
@@ -451,7 +473,7 @@ pub fn resolve_texts(
     });
     let project_notes = match project.map(|p| &p.notes) {
         Some(NotesValue::Lines(l)) => l.clone(),
-        _ => default_notes(tolerance),
+        _ => default_notes_in(tolerance, d.unit),
     };
     let notes = match info.map(|i| &i.notes) {
         Some(NotesValue::Lines(l)) => l.clone(),
@@ -463,5 +485,9 @@ pub fn resolve_texts(
         revisions: rows,
         notes,
         parts: Vec::new(),
+        units_note: match d.kind {
+            DrawingKind::Views => units_note(d.unit),
+            DrawingKind::PartsList { .. } => None,
+        },
     }
 }

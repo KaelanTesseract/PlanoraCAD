@@ -17,7 +17,7 @@ use planora_drawing::stroke::extent_of;
 use planora_drawing::{
     Basis, DrawBody, Drawing, DrawingId, ViewId, ViewKind, dimension_key, measure,
 };
-use planora_i18n::tr;
+use planora_i18n::{DisplayUnit, tr};
 use planora_kernel::Solid;
 use planora_math::{DVec3, Tolerance};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -77,7 +77,7 @@ fn roles_ok(r: &GeoRef) -> bool {
 }
 
 /// Prüft die Zahlen und Texte eines einzelnen Maßes.
-fn validate_spec(m: &DimSpec) -> Result<(), String> {
+fn validate_spec(m: &DimSpec, unit: DisplayUnit) -> Result<(), String> {
     let (lo, hi) = ref_count(m.kind);
     if m.refs.len() < lo || m.refs.len() > hi {
         return Err(tr!("feature-dim-ref-count"));
@@ -128,11 +128,22 @@ fn validate_spec(m: &DimSpec) -> Result<(), String> {
         }
     };
     if !tolerance_ok {
-        return Err(tr!(
-            "feature-dim-tolerance",
-            max = planora_i18n::len_arg(MAX_TOL_MM, MAX_TOL_MM.to_string()),
-            unit = planora_i18n::unit_symbol()
-        ));
+        // Die Toleranzen gelten in der Einheit der Zeichnung (Winkel in Grad), nicht in der
+        // Einstellung der Oberfläche.
+        if m.kind == DimKind::Angle {
+            return Err(tr!(
+                "feature-dim-tolerance",
+                max = MAX_TOL_MM.to_string(),
+                unit = "°"
+            ));
+        }
+        return Err(planora_i18n::with_unit(unit, || {
+            tr!(
+                "feature-dim-tolerance",
+                max = planora_i18n::len_arg(MAX_TOL_MM, MAX_TOL_MM.to_string()),
+                unit = planora_i18n::unit_symbol()
+            )
+        }));
     }
     Ok(())
 }
@@ -167,7 +178,7 @@ pub(crate) fn validate_dimensions(d: &Drawing) -> Result<(), String> {
             }
             Some(_) => {}
         }
-        validate_spec(m)?;
+        validate_spec(m, d.unit)?;
         if let Some(c) = m.chain {
             let first = *groups.entry(c.group).or_insert((m.kind, m.view, c.mode));
             if first.2 != c.mode {

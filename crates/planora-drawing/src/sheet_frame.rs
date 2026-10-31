@@ -60,6 +60,12 @@ pub const SYMBOL_H: f64 = 3.5;
 /// Ecke des Schriftfelds): linke Kante und Mittellinie.
 pub const PROJECTION_X0: f64 = 156.0;
 pub const PROJECTION_CENTRE_Y: f64 = 51.5;
+/// Vermerk der Maßeinheit („Maße in Zoll“, nur bei Zeichnungen in Zoll) in der Zelle
+/// „Projektion“ links neben dem Symbol, unter der Feldbezeichnung (relativ zur linken unteren
+/// Ecke des Schriftfelds): Anfang, Grundlinie und Breite; Höhe wie die Feldbezeichnungen.
+pub const UNITS_NOTE_X0: f64 = 136.0;
+pub const UNITS_NOTE_BASELINE: f64 = 48.5;
+pub const UNITS_NOTE_W: f64 = PROJECTION_X0 - 1.0 - UNITS_NOTE_X0;
 
 /// Linienstärken des Blatts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

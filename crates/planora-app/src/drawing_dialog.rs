@@ -137,7 +137,14 @@ impl NewDrawingDialog {
         let before = state.document.snapshot();
         let id = state
             .document
-            .add_drawing_stamped(&self.name, sheet, self.projection, &Stamp::now())
+            // Die Zeichnung übernimmt die Maßeinheit der Einstellung beim Anlegen.
+            .add_drawing_stamped_in(
+                &self.name,
+                sheet,
+                self.projection,
+                &Stamp::now(),
+                planora_i18n::current_unit(),
+            )
             .map_err(|e| Msg::Raw(e.to_string()))?;
         let free = state
             .document

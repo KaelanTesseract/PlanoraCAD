@@ -16,11 +16,19 @@ use crate::drawing_browser::read_only_hint;
 use crate::state::AppState;
 use crate::theme;
 use planora_drawing::DrawingId;
-use planora_drawing::annotate::dimension_text;
+use planora_drawing::annotate::dimension_text_in;
 use planora_drawing::dimension::{DimId, DimKind, DimSpec, Tolerance};
 use planora_feature::{MAX_DECIMALS, MAX_DIM_TEXT_CHARS, MAX_FIT_CHARS, MAX_TOL_MM};
-use planora_i18n::tr;
+use planora_i18n::{DisplayUnit, tr};
 use std::cell::RefCell;
+
+/// Überschrift der Karte „Toleranz“: in Zoll mit der Einheit, in mm wie bisher.
+pub fn tolerance_title(unit: DisplayUnit) -> String {
+    match unit {
+        DisplayUnit::Millimeter => tr!("dim-card-tolerance"),
+        DisplayUnit::Zoll => tr!("dim-card-tolerance-unit", unit = unit.symbol()),
+    }
+}
 
 /// Meldung, wenn das Maß inzwischen fehlt.
 fn gone() -> String {
@@ -89,8 +97,36 @@ fn number_text(v: f64) -> String {
     planora_i18n::localize_decimal(&format!("{v}"))
 }
 
+/// Toleranz (in mm) als Text in der Einheit `unit` der Zeichnung: in mm wie bisher
+/// ([`number_text`]), in Zoll umgerechnet mit höchstens sechs Nachkommastellen.
+fn tolerance_text(mm: f64, unit: DisplayUnit) -> String {
+    match unit {
+        DisplayUnit::Millimeter => number_text(mm),
+        DisplayUnit::Zoll => crate::msg::plain_number(unit.to_display(mm)),
+    }
+}
+
+/// Toleranz aus einem Eingabefeld in der Einheit `unit`, zurück in mm. Steht im Feld noch der
+/// angezeigte Text (`shown`), bleibt der gespeicherte Wert genau erhalten (kein Rundungsverlust
+/// durch Hin- und Zurückrechnen).
+fn parse_tolerance(text: &str, unit: DisplayUnit, shown: &(String, f64)) -> Result<f64, String> {
+    if unit == DisplayUnit::Millimeter {
+        return parse_number(text);
+    }
+    if text.trim() == shown.0 {
+        return Ok(shown.1);
+    }
+    let v = parse_number_max(text, unit.to_display(MAX_TOL_MM))?;
+    Ok(unit.from_display(v))
+}
+
 /// Zahl aus einem Eingabefeld: deutsches Komma oder Punkt, `−` oder `-`.
 fn parse_number(text: &str) -> Result<f64, String> {
+    parse_number_max(text, MAX_TOL_MM)
+}
+
+/// Wie [`parse_number`] mit der Grenze `max` (im Betrag).
+fn parse_number_max(text: &str, max: f64) -> Result<f64, String> {
     let t = text.trim();
     if t.is_empty() {
         return Err(tr!("dim-err-enter-number"));
@@ -102,11 +138,8 @@ fn parse_number(text: &str) -> Result<f64, String> {
     if !v.is_finite() {
         return Err(tr!("dim-err-not-a-number", text = t));
     }
-    if v.abs() > MAX_TOL_MM {
-        return Err(tr!(
-            "dim-err-too-big",
-            max = crate::msg::plain_number(MAX_TOL_MM)
-        ));
+    if v.abs() > max {
+        return Err(tr!("dim-err-too-big", max = crate::msg::plain_number(max)));
     }
     Ok(v)
 }
@@ -130,6 +163,12 @@ pub struct DimensionDialog {
     pub fit: String,
     /// Eigener Maßtext (leer: der berechnete Wert).
     pub text: String,
+    /// Einheit der Toleranzfelder: die der Zeichnung beim Öffnen; bei Winkeln Grad (wie mm
+    /// ohne Umrechnung).
+    pub unit: DisplayUnit,
+    /// Angezeigte Texte der Felder „Symmetrisch“, „Oben“, „Unten“ mit ihrem Wert in mm
+    /// (unverändert bestätigt bleibt der Wert genau).
+    shown: [(String, f64); 3],
     /// Bedienelemente des letzten Bildes: Bezeichnung und ob sie bedienbar waren.
     pub inputs: Vec<(String, bool)>,
     pub last_rect: Option<egui::Rect>,
@@ -146,12 +185,32 @@ pub fn open(state: &mut AppState, drawing: DrawingId, dim: DimId, read_only: boo
     else {
         return;
     };
-    state.dimension_dialog = Some(DimensionDialog::new(drawing, spec, read_only));
+    let unit = state
+        .document
+        .drawing(drawing)
+        .map_or(DisplayUnit::Millimeter, |d| d.unit);
+    state.dimension_dialog = Some(DimensionDialog::new_in(drawing, spec, read_only, unit));
 }
 
 impl DimensionDialog {
-    /// Entwurf aus dem Maß.
+    /// Entwurf aus dem Maß (Toleranzen in mm).
     pub fn new(drawing: DrawingId, spec: &DimSpec, read_only: bool) -> DimensionDialog {
+        DimensionDialog::new_in(drawing, spec, read_only, DisplayUnit::Millimeter)
+    }
+
+    /// Entwurf aus dem Maß einer Zeichnung in `unit`: Toleranzen von Längenmaßen erscheinen und
+    /// gelten in dieser Einheit; Winkel bleiben in Grad.
+    pub fn new_in(
+        drawing: DrawingId,
+        spec: &DimSpec,
+        read_only: bool,
+        unit: DisplayUnit,
+    ) -> DimensionDialog {
+        let unit = if spec.kind == DimKind::Angle {
+            DisplayUnit::Millimeter
+        } else {
+            unit
+        };
         let zero = || "0".to_string();
         let mut d = DimensionDialog {
             drawing,
@@ -164,6 +223,8 @@ impl DimensionDialog {
             lower: zero(),
             fit: String::new(),
             text: spec.text_override.clone().unwrap_or_default(),
+            unit,
+            shown: [(zero(), 0.0), (zero(), 0.0), (zero(), 0.0)],
             inputs: Vec::new(),
             last_rect: None,
             last_cards: Vec::new(),
@@ -172,17 +233,19 @@ impl DimensionDialog {
             Tolerance::None => {}
             Tolerance::Symmetric(v) => {
                 d.kind = ToleranceKind::Symmetric;
-                d.symmetric = number_text(*v);
+                d.symmetric = tolerance_text(*v, unit);
+                d.shown[0] = (d.symmetric.clone(), *v);
             }
-            Tolerance::Limits { upper, lower } => {
-                d.kind = ToleranceKind::Limits;
-                d.upper = number_text(*upper);
-                d.lower = number_text(*lower);
-            }
-            Tolerance::LimitSizes { upper, lower } => {
-                d.kind = ToleranceKind::LimitSizes;
-                d.upper = number_text(*upper);
-                d.lower = number_text(*lower);
+            Tolerance::Limits { upper, lower } | Tolerance::LimitSizes { upper, lower } => {
+                d.kind = if matches!(spec.tolerance, Tolerance::Limits { .. }) {
+                    ToleranceKind::Limits
+                } else {
+                    ToleranceKind::LimitSizes
+                };
+                d.upper = tolerance_text(*upper, unit);
+                d.lower = tolerance_text(*lower, unit);
+                d.shown[1] = (d.upper.clone(), *upper);
+                d.shown[2] = (d.lower.clone(), *lower);
             }
             Tolerance::Fit(s) => {
                 d.kind = ToleranceKind::Fit;
@@ -196,11 +259,13 @@ impl DimensionDialog {
     #[allow(clippy::type_complexity)]
     pub fn build(&self) -> Result<(u8, Tolerance, Option<String>), Vec<String>> {
         let mut errors = Vec::new();
-        let number = |errors: &mut Vec<String>, label: &str, text: &str| match parse_number(text) {
-            Ok(v) => v,
-            Err(e) => {
-                errors.push(format!("{label}: {e}"));
-                0.0
+        let number = |errors: &mut Vec<String>, label: &str, text: &str, field: usize| {
+            match parse_tolerance(text, self.unit, &self.shown[field]) {
+                Ok(v) => v,
+                Err(e) => {
+                    errors.push(format!("{label}: {e}"));
+                    0.0
+                }
             }
         };
         let deviation = tr!("dim-deviation");
@@ -210,7 +275,7 @@ impl DimensionDialog {
             ToleranceKind::None => Tolerance::None,
             ToleranceKind::Symmetric => {
                 let ok = errors.len();
-                let v = number(&mut errors, &deviation, &self.symmetric);
+                let v = number(&mut errors, &deviation, &self.symmetric, 0);
                 if errors.len() == ok && v < 0.0 {
                     errors.push(tr!("dim-err-negative"));
                 }
@@ -223,8 +288,8 @@ impl DimensionDialog {
                     (tr!("dim-upper-deviation"), tr!("dim-lower-deviation"))
                 };
                 let ok = errors.len();
-                let upper = number(&mut errors, &up, &self.upper);
-                let lower = number(&mut errors, &low, &self.lower);
+                let upper = number(&mut errors, &up, &self.upper, 1);
+                let lower = number(&mut errors, &low, &self.lower, 2);
                 if errors.len() == ok && upper < lower {
                     errors.push(tr!("dim-err-limits-order", label = up));
                 }
@@ -313,12 +378,17 @@ impl DimensionDialog {
                 plain.decimals = self.decimals;
                 plain.text_override = None;
                 plain.tolerance = Tolerance::None;
-                Ok(dimension_text(&plain, m).main)
+                let unit = state
+                    .document
+                    .drawing(self.drawing)
+                    .map_or(DisplayUnit::Millimeter, |d| d.unit);
+                Ok(dimension_text_in(&plain, m, unit).main)
             }
             (reason, _) => Err(reason.unwrap_or_default()),
         };
         let errors = self.errors();
         let read_only = self.read_only;
+        let tolerance_unit = self.unit;
         let inputs: RefCell<Vec<(String, bool)>> = RefCell::new(Vec::new());
         let note = |label: &str, r: &egui::Response| {
             inputs.borrow_mut().push((label.to_string(), r.enabled()));
@@ -389,7 +459,8 @@ impl DimensionDialog {
                     }
                 };
                 let mut tolerance_card = |ui: &mut egui::Ui| {
-                    ui.strong(tr!("dim-card-tolerance"));
+                    // In Zoll steht die Einheit dabei (die Felder sind dann keine mm).
+                    ui.strong(tolerance_title(tolerance_unit));
                     egui::Grid::new("planora-dimension-tolerance")
                         .num_columns(2)
                         .spacing([12.0, 8.0])

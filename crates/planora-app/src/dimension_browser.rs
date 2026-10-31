@@ -19,8 +19,9 @@ use crate::msg::Msg;
 use crate::state::AppState;
 use crate::theme;
 use planora_drawing::DrawingId;
-use planora_drawing::annotate::dimension_text;
+use planora_drawing::annotate::dimension_text_in;
 use planora_drawing::dimension::{DimError, DimId, DimKind, DimSpec, Measured};
+use planora_i18n::DisplayUnit;
 use planora_i18n::tr;
 
 /// Text, solange die Zeichnung kein Maß hat.
@@ -52,10 +53,19 @@ pub struct DimDeletePlan {
 /// Text einer Zeile: Maßtext wie auf dem Blatt (Vorsatz, Wert, Toleranz; gestapelte Werte als
 /// „oben / unten“), bei fehlendem Bezug nur `?`.
 pub fn row_text(spec: &DimSpec, result: &Result<Measured, DimError>) -> String {
+    row_text_in(spec, result, DisplayUnit::Millimeter)
+}
+
+/// Wie [`row_text`] in der Einheit `unit` der Zeichnung.
+pub fn row_text_in(
+    spec: &DimSpec,
+    result: &Result<Measured, DimError>,
+    unit: DisplayUnit,
+) -> String {
     let Ok(m) = result else {
         return "?".into();
     };
-    let t = dimension_text(spec, m);
+    let t = dimension_text_in(spec, m, unit);
     let mut parts = Vec::new();
     if !t.main.is_empty() {
         parts.push(t.main);
@@ -187,7 +197,7 @@ fn groups_of(state: &mut AppState, drawing: DrawingId) -> Vec<Group> {
                     DimRow {
                         id: m.id,
                         kind: m.kind,
-                        text: result.map_or_else(|| "?".into(), |r| row_text(m, r)),
+                        text: result.map_or_else(|| "?".into(), |r| row_text_in(m, r, d.unit)),
                         lost: lost_reason(result),
                     }
                 })
