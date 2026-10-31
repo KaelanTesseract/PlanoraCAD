@@ -7,7 +7,7 @@ use crate::state::AppState;
 use crate::{browser, properties, shell_panels, theme, viewport};
 use egui::{Rect, pos2, vec2};
 use planora_feature::{FeatureId, FeatureKind};
-use planora_i18n::tr;
+use planora_i18n::{DisplayUnit, tr};
 
 /// Kante eines Schrittsymbols.
 const STEP_SIZE: f32 = 30.0;
@@ -598,15 +598,25 @@ fn step_menu(r: &egui::Response, state: &AppState, id: FeatureId, action: &mut O
 }
 
 /// Die wichtigsten Maße eines Schritts für den Hinweis: höchstens [`HOVER_ROWS`] Zeilen aus
-/// [`properties::parameter_rows`], Maße (mm, Grad) zuerst; ohne Maße die ersten Zeilen.
+/// [`properties::parameter_rows`], Maße (Längen, Grad) zuerst; ohne Maße die ersten Zeilen.
 #[doc(hidden)]
 pub fn hover_rows(state: &AppState, kind: &FeatureKind) -> Vec<(String, String)> {
     let (mut rows, rest): (Vec<_>, Vec<_>) = properties::parameter_rows(state, kind)
         .into_iter()
-        .partition(|(_, value)| value.ends_with(" mm") || value.ends_with('°'));
+        .partition(|(_, value)| is_measure(value));
     rows.extend(rest);
     rows.truncate(HOVER_ROWS);
     rows
+}
+
+/// Ist `value` ein Maß: Länge mit dem Zeichen einer Anzeigeeinheit („12,50 mm“, „0,492 in“,
+/// wie es die Formatierer schreiben) oder Winkel? Hängt nicht an der eingestellten Einheit.
+#[doc(hidden)]
+pub fn is_measure(value: &str) -> bool {
+    value.ends_with('°')
+        || [DisplayUnit::Millimeter, DisplayUnit::Zoll]
+            .iter()
+            .any(|u| value.ends_with(&format!(" {}", u.symbol())))
 }
 
 /// Lage der Lücken vor jedem Schritt und hinter dem letzten (die möglichen Markerstellen).

@@ -134,10 +134,10 @@ impl ParamUnit {
         }
     }
 
-    /// Einheitenzeichen hinter einem Wert.
+    /// Einheitenzeichen hinter einem Wert (Länge: in der Anzeigeeinheit).
     pub fn suffix(self) -> &'static str {
         match self {
-            ParamUnit::Length => "mm",
+            ParamUnit::Length => planora_i18n::current_unit().symbol(),
             ParamUnit::Angle => "°",
             ParamUnit::Number => "",
         }

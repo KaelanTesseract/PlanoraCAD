@@ -4,7 +4,7 @@
 //! Fußfeld (Hinweis zum Werkzeug, Zustand der Skizze, „Skizze beenden“). Es wird nur gezeichnet
 //! und an [`SketchSession`] weitergereicht.
 
-use crate::formula_field::{FX, FormulaField, names_hint};
+use crate::formula_field::{FX, FormulaField, formula_text, names_hint, value_field_text};
 use crate::icons::{self, Icon, IconSource};
 use crate::keymap::{Action, with_hint};
 use crate::msg::Msg;
@@ -16,7 +16,7 @@ use crate::state::AppState;
 use crate::theme;
 use egui::RichText;
 use planora_feature::{FeatureId, ParamScope, ParamUnit, SketchFeature, constraint_unit};
-use planora_i18n::tr;
+use planora_i18n::{DisplayUnit, current_unit, tr};
 use planora_math::DVec2;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind};
 use planora_sketch::model::{CurveKind, Sketch};
@@ -135,6 +135,13 @@ struct Editor {
     /// Stand von `SketchSession::history_jumps` beim Öffnen; nach Rückgängig/Wiederholen
     /// gehört das Feld zum alten Stand und schließt (auch wenn es das Maß noch gibt).
     jumps: u64,
+    /// Vorbelegter Text und der Wert (Skizzeneinheit), aus dem er stammt: Wird in einer
+    /// anderen Anzeigeeinheit als mm ein Längenmaß unverändert bestätigt, bleibt das Maß, wie es
+    /// ist (kein Rundungsverlust durch Hin- und Zurückrechnen).
+    shown: String,
+    value: f64,
+    /// Anzeigeeinheit beim Öffnen; nach dem Umstellen schließt das Feld.
+    display: DisplayUnit,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -152,6 +159,8 @@ struct PanelState {
     pattern_dx: String,
     pattern_dy: String,
     pattern_count: String,
+    /// Anzeigeeinheit der Versatztexte; nach dem Umstellen stehen wieder die Vorgaben da.
+    pattern_unit: DisplayUnit,
     /// Eigene Eingabefehler (z. B. keine Zahl), als Grund gespeichert und beim Zeichnen übersetzt.
     error: Option<Msg>,
 }
@@ -162,11 +171,20 @@ impl PanelState {
             sketch,
             editor: None,
             section: None,
-            pattern_dx: "20".into(),
+            pattern_dx: pattern_default(),
             pattern_dy: "0".into(),
             pattern_count: "3".into(),
+            pattern_unit: current_unit(),
             error: None,
         }
+    }
+}
+
+/// Vorgabe des Versatzes x eines Musters in der Anzeigeeinheit (20 mm, in Zoll 1 in).
+fn pattern_default() -> String {
+    match current_unit() {
+        DisplayUnit::Millimeter => "20".into(),
+        _ => "1".into(),
     }
 }
 
@@ -176,21 +194,25 @@ fn panel_id() -> egui::Id {
 
 /// Maßfeld für das bestehende Maß `id`: zeigt die Formel, sonst den Wert (Winkel in Grad,
 /// gerundet). `None`, wenn es kein Maß ist.
-fn existing_editor(se: &SketchSession, sf: &SketchFeature, id: ConstraintId) -> Option<Editor> {
+fn existing_editor(
+    se: &SketchSession,
+    sf: &SketchFeature,
+    id: ConstraintId,
+    scope: &ParamScope,
+) -> Option<Editor> {
     let c = sf.sketch.constraint(id)?;
     if !c.kind.is_dimension() {
         return None;
     }
     let unit = constraint_unit(&c.kind);
+    let value = shown_value(&sf.sketch, &c.kind, c.driven).unwrap_or(0.0);
     let text = match sf.formulas.get(&id).filter(|_| !c.driven) {
-        Some(f) => f.clone(),
-        None => editor_text(
-            shown_value(&sf.sketch, &c.kind, c.driven).unwrap_or(0.0),
-            unit,
-        ),
+        Some(f) => formula_text(f, unit, scope),
+        None => editor_text(value, unit),
     };
     Some(Editor {
         target: EditTarget::Existing(id),
+        shown: text.clone(),
         text,
         unit,
         driven: c.driven,
@@ -198,6 +220,8 @@ fn existing_editor(se: &SketchSession, sf: &SketchFeature, id: ConstraintId) -> 
         reveal: true,
         selection: se.selection.clone(),
         jumps: se.history_jumps,
+        value,
+        display: current_unit(),
     })
 }
 
@@ -205,15 +229,19 @@ fn existing_editor(se: &SketchSession, sf: &SketchFeature, id: ConstraintId) -> 
 fn new_editor(se: &SketchSession, sk: &Sketch, action: ConstraintAction) -> Editor {
     let unit = action.unit();
     let value = se.measure_action(sk, action).unwrap_or(0.0);
+    let text = editor_text(value, unit);
     Editor {
         target: EditTarget::New(action),
-        text: editor_text(value, unit),
+        shown: text.clone(),
+        text,
         unit,
         driven: false,
         focus: true,
         reveal: true,
         selection: se.selection.clone(),
         jumps: se.history_jumps,
+        value,
+        display: current_unit(),
     }
 }
 
@@ -247,7 +275,8 @@ pub fn open_existing_dimension_editor(ctx: &egui::Context, state: &AppState, id:
     let (Some(se), Some(sf)) = (state.sketch_session.as_ref(), state.sketch_draft.as_ref()) else {
         return;
     };
-    let Some(editor) = existing_editor(se, sf, id) else {
+    let scope = state.document.param_scope();
+    let Some(editor) = existing_editor(se, sf, id, &scope) else {
         return;
     };
     let mut panel = load_panel(ctx, se.sketch);
@@ -311,13 +340,17 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     };
     // Das Zahlenfeld gehört zur Auswahl und zum Stand (vor Rückgängig/Wiederholen), mit dem es
     // geöffnet wurde.
-    if panel
-        .editor
-        .as_ref()
-        .is_some_and(|e| e.selection != se.selection || e.jumps != se.history_jumps)
-    {
+    if panel.editor.as_ref().is_some_and(|e| {
+        e.selection != se.selection || e.jumps != se.history_jumps || e.display != current_unit()
+    }) {
         panel.editor = None;
         panel.error = None;
+    }
+    // Anzeigeeinheit umgestellt: Die Versatztexte stünden in der alten Einheit.
+    if panel.pattern_unit != current_unit() {
+        panel.pattern_dx = pattern_default();
+        panel.pattern_dy = "0".into();
+        panel.pattern_unit = current_unit();
     }
     strip_field(ctx, strip, dark, se, &mut sf.sketch);
     side_field(ctx, rects.right, dark, se, sf, &mut panel, &scope);
@@ -582,7 +615,7 @@ fn side_contents(
 
     // Liste der Abhängigkeiten
     theme::section_header(ui, &tr!("sketch-section-list"), theme::SUB_HEADER_H);
-    constraint_list(ui, se, sf, panel);
+    constraint_list(ui, se, sf, panel, scope);
 }
 
 /// Fußfeld: rechts „Skizze beenden“, davor der Zustand der Skizze (Farbe nach Schweregrad und
@@ -658,12 +691,15 @@ fn tool_button(
     })
 }
 
-/// Vorgabetext des Zahlenfelds (Winkel in Grad, eine Nachkommastelle).
+/// Vorgabetext des Zahlenfelds (Winkel in Grad, eine Nachkommastelle; Längen in mm mit zwei
+/// Nachkommastellen, in einer anderen Anzeigeeinheit umgerechnet wie die Formelfelder).
 fn editor_text(value: f64, unit: ParamUnit) -> String {
     if unit == ParamUnit::Angle {
         format_number(value.to_degrees(), 1)
-    } else {
+    } else if current_unit() == DisplayUnit::Millimeter {
         format_number(value, 2)
+    } else {
+        value_field_text(value, unit)
     }
 }
 
@@ -770,11 +806,22 @@ fn value_editor(
         return live;
     }
     panel.error = None;
-    let done = match editor.target {
-        EditTarget::New(action) => se
+    // Unverändert bestätigtes Längenmaß in einer anderen Anzeigeeinheit als mm: Der Text ist
+    // gerundet; das Maß bleibt (bestehend) bzw. bekommt den gemessenen Wert (neu).
+    let kept = editor.unit == ParamUnit::Length
+        && current_unit() != DisplayUnit::Millimeter
+        && editor.text.trim() == editor.shown.trim();
+    let done = match (editor.target, kept) {
+        (EditTarget::New(action), true) => {
+            se.apply_dimension_value(sf, action, editor.value).is_ok()
+        }
+        (EditTarget::Existing(_), true) => true,
+        (EditTarget::New(action), false) => se
             .apply_dimension_input(sf, action, &editor.text, scope)
             .is_ok(),
-        EditTarget::Existing(id) => se.set_dimension_input(sf, id, &editor.text, scope).is_ok(),
+        (EditTarget::Existing(id), false) => {
+            se.set_dimension_input(sf, id, &editor.text, scope).is_ok()
+        }
     };
     if done {
         panel.editor = None;
@@ -814,7 +861,7 @@ fn sections(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch, panel: &
                 ui.horizontal(|ui| {
                     ui.label(label);
                     theme::text_field(ui, egui::TextEdit::singleline(text).desired_width(50.0));
-                    ui.label("mm");
+                    ui.label(current_unit().symbol());
                 });
             }
             ui.horizontal(|ui| {
@@ -826,8 +873,10 @@ fn sections(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch, panel: &
             });
             ui.horizontal(|ui| {
                 if ui.small_button(tr!("create-create")).clicked() {
-                    let dx = parse_number(&panel.pattern_dx);
-                    let dy = parse_number(&panel.pattern_dy);
+                    // Versatz in der Anzeigeeinheit, die Skizze rechnet in mm.
+                    let unit = current_unit();
+                    let dx = parse_number(&panel.pattern_dx).map(|v| unit.from_display(v));
+                    let dy = parse_number(&panel.pattern_dy).map(|v| unit.from_display(v));
                     let count = panel.pattern_count.trim().parse::<usize>().ok();
                     match (dx, dy, count) {
                         (Some(dx), Some(dy), Some(n)) => {
@@ -857,6 +906,7 @@ fn constraint_list(
     se: &mut SketchSession,
     sf: &mut SketchFeature,
     panel: &mut PanelState,
+    scope: &ParamScope,
 ) {
     let sk = &sf.sketch;
     let rows: Vec<(ConstraintId, ConstraintKind, bool)> = sk
@@ -921,12 +971,13 @@ fn constraint_list(
                 if kind.is_dimension() {
                     let mut open = r.double_clicked();
                     if let Some(f) = sf.formulas.get(&id).filter(|_| !driven)
-                        && formula_row(ui, f).clicked()
+                        && formula_row(ui, &formula_text(f, constraint_unit(&kind), scope))
+                            .clicked()
                     {
                         se.selection = vec![item];
                         open = true;
                     }
-                    if open && let Some(editor) = existing_editor(se, sf, id) {
+                    if open && let Some(editor) = existing_editor(se, sf, id, scope) {
                         panel.error = None;
                         panel.editor = Some(editor);
                     }

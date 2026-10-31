@@ -7,9 +7,11 @@
 
 use crate::sketch_view::format_number;
 use crate::theme;
-use planora_feature::expr::{number_text, plain_number};
+use planora_feature::expr::{
+    display_formula, eval_text_unit, number_text, plain_number, rewrite_bare_lengths,
+};
 use planora_feature::{ParamScope, ParamUnit};
-use planora_i18n::{localize_decimal, tr};
+use planora_i18n::{DisplayUnit, current_unit, fmt_len, localize_decimal, tr};
 
 /// Zahl als Text für ein Feld, das aus einem Zahlenwert vorbelegt wird: verlustfrei wie
 /// [`number_text`], aber mit dem Dezimaltrenner der Sprache (wie die Vorgaben der Skizzenfelder).
@@ -57,27 +59,136 @@ pub fn classify(text: &str) -> Option<FieldInput> {
     })
 }
 
-/// Wert und Formel des Feldes: Zahl ohne Formel, Formel mit ihrem Wert (passend zu `unit`),
-/// sonst die Meldung.
+/// Wert und Formel des Feldes, wie getippt (in der Anzeigeeinheit): In Millimeter eine Zahl
+/// ohne Formel, eine Formel mit ihrem Wert (passend zu `unit`), sonst die Meldung. In einer
+/// anderen Anzeigeeinheit zählt jede reine Längenzahl in ihr; gespeichert wird dann der Text
+/// mit ausgeschriebenem Zeichen („2“ → „2 in“, siehe [`rewrite_bare_lengths`]), damit die
+/// gespeicherte Formel (reine Zahl = mm) eindeutig bleibt.
 pub fn resolve(
     text: &str,
     unit: ParamUnit,
     scope: &ParamScope,
 ) -> Result<(f64, Option<String>), String> {
+    let shown = current_unit();
     match classify(text) {
         None => Err(empty()),
-        Some(FieldInput::Number(v)) => Ok((v, None)),
-        Some(FieldInput::Formula(f)) => scope.eval(&f, unit).map(|v| (v, Some(f))),
+        Some(FieldInput::Number(v)) if shown == DisplayUnit::Millimeter => Ok((v, None)),
+        Some(FieldInput::Formula(f)) if shown == DisplayUnit::Millimeter => {
+            scope.eval(&f, unit).map(|v| (v, Some(f)))
+        }
+        Some(FieldInput::Number(v)) if unit != ParamUnit::Length => Ok((v, None)),
+        Some(FieldInput::Number(v)) => {
+            // Auch Schreibweisen, die der Formelleser nicht kennt („1e3“, „5.“), als Zahl.
+            let t = text.trim();
+            let t = if planora_feature::expr::parse(t).is_ok() {
+                t.to_string()
+            } else {
+                planora_feature::expr::value_text(v).map_err(|e| e.0)?
+            };
+            let stored = stored_formula(&t, unit, scope)?;
+            Ok((shown.from_display(v), Some(stored)))
+        }
+        Some(FieldInput::Formula(f)) => {
+            let v = eval_shown(&f, unit, scope)?;
+            Ok((v, Some(stored_formula(&f, unit, scope)?)))
+        }
     }
 }
 
-/// Wert mit Einheit, zwei Nachkommastellen: „40,00 mm“, „45,00°“, „1,50“.
+/// Wie [`resolve`], aber für ein Feld, das mit dem gespeicherten Wert `value` (mm) und der
+/// gespeicherten Formel `formula` vorbelegt wurde: Steht dort unverändert der Text, den
+/// [`stored_text`] dafür zeigt, bleiben Formel (zeichengleich) und Wert, wie sie sind (kein
+/// Rundungsverlust durch Hin- und Zurückrechnen); der Wert einer Formel wird wie gespeichert
+/// ausgewertet. Sonst wie [`resolve`].
+pub fn resolve_kept(
+    text: &str,
+    unit: ParamUnit,
+    scope: &ParamScope,
+    value: f64,
+    formula: Option<&str>,
+) -> Result<(f64, Option<String>), String> {
+    if text.trim() == stored_text(value, formula, unit, scope).trim() {
+        return match formula {
+            Some(f) => scope.eval(f, unit).map(|v| (v, Some(f.to_string()))),
+            None => Ok((value, None)),
+        };
+    }
+    resolve(text, unit, scope)
+}
+
+/// Wertet einen getippten Text (Formel oder Zahl) eines Feldes aus; reine Längenzahlen zählen
+/// in der Anzeigeeinheit.
+pub fn eval_shown(text: &str, unit: ParamUnit, scope: &ParamScope) -> Result<f64, String> {
+    eval_text_unit(text, unit, &|n| scope.lookup(n), current_unit()).map_err(|e| e.0)
+}
+
+/// Text eines Feldes für den gespeicherten Wert `v` (Länge in mm) in der Anzeigeeinheit: in
+/// Millimeter wie [`number_field_text`], sonst umgerechnet auf höchstens sechs
+/// Nachkommastellen („50“ → „1,968504“).
+pub fn value_field_text(v: f64, unit: ParamUnit) -> String {
+    match (unit, current_unit()) {
+        (ParamUnit::Length, u @ DisplayUnit::Zoll) => six_places(u.to_display(v)),
+        _ => number_field_text(v),
+    }
+}
+
+/// Zahl mit höchstens sechs Nachkommastellen, ohne Nullen am Ende, nie „-0“, mit dem
+/// Dezimaltrenner der Sprache.
+fn six_places(v: f64) -> String {
+    let s = format!("{v:.6}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s == "-0" || s.is_empty() {
+        "0".to_string()
+    } else {
+        localize_decimal(s)
+    }
+}
+
+/// Text eines Feldes für die gespeicherte Formel `formula`, sonst den Wert `value` (mm), in
+/// der Anzeigeeinheit (siehe [`display_formula`] und [`value_field_text`]).
+pub fn stored_text(
+    value: f64,
+    formula: Option<&str>,
+    unit: ParamUnit,
+    scope: &ParamScope,
+) -> String {
+    match formula {
+        Some(f) => formula_text(f, unit, scope),
+        None => value_field_text(value, unit),
+    }
+}
+
+/// Anzeige einer gespeicherten Formel in der Anzeigeeinheit (in Millimeter wie gespeichert).
+pub fn formula_text(stored: &str, unit: ParamUnit, scope: &ParamScope) -> String {
+    display_formula(stored, unit, &|n| scope.lookup(n), current_unit())
+}
+
+/// Speichertext für einen geänderten, getippten Formeltext: in Millimeter wie getippt, sonst
+/// mit ausgeschriebenen Längenzeichen ([`rewrite_bare_lengths`]).
+pub fn stored_formula(text: &str, unit: ParamUnit, scope: &ParamScope) -> Result<String, String> {
+    match current_unit() {
+        DisplayUnit::Millimeter => Ok(text.to_string()),
+        u => rewrite_bare_lengths(text, unit, &|n| scope.lookup(n), u).map_err(|e| e.0),
+    }
+}
+
+/// Speichertext eines geänderten, getippten Feldes (Zahl oder Formel), wie ihn das Dokument
+/// liest (reine Zahl = mm): in mm der Text ohne Leerraum am Rand; sonst wie [`resolve`] (eine
+/// Längenzahl „2“ wird „2 in“).
+pub fn stored_input(text: &str, unit: ParamUnit, scope: &ParamScope) -> Result<String, String> {
+    if current_unit() == DisplayUnit::Millimeter {
+        return Ok(text.trim().to_string());
+    }
+    resolve(text, unit, scope).map(|(_, f)| f.unwrap_or_else(|| text.trim().to_string()))
+}
+
+/// Wert mit Einheit: „40,00 mm“ (Länge in der Anzeigeeinheit, etwa „1,575 in“), „45,00°“,
+/// „1,50“.
 pub fn unit_value(v: f64, unit: ParamUnit) -> String {
-    let n = format_number(v, 2);
     match unit {
-        ParamUnit::Length => format!("{n} mm"),
-        ParamUnit::Angle => format!("{n}°"),
-        ParamUnit::Number => n,
+        ParamUnit::Length => fmt_len(v),
+        ParamUnit::Angle => format!("{}°", format_number(v, 2)),
+        ParamUnit::Number => format_number(v, 2),
     }
 }
 
@@ -197,7 +308,7 @@ impl<'a> FormulaField<'a> {
     /// Zeigt das Feld; die Formel wird mit `scope` ausgewertet.
     pub fn show(self, ui: &mut egui::Ui, scope: &ParamScope) -> FieldOutcome {
         let unit = self.unit;
-        self.show_with(ui, &|f| scope.eval(f, unit))
+        self.show_with(ui, &|f| eval_shown(f, unit, scope))
     }
 
     /// Wie [`FormulaField::show`], die Formel wertet aber `eval` aus (etwa mit einer
@@ -251,7 +362,7 @@ impl<'a> FormulaField<'a> {
                     if fx.clicked()
                         && let Some(Ok(v)) = result
                     {
-                        *text = number_field_text(v);
+                        *text = exact_field_text(v, unit);
                         fx_clicked = true;
                     }
                 }
@@ -303,6 +414,14 @@ impl<'a> FormulaField<'a> {
                 _ => None,
             },
         }
+    }
+}
+
+/// Text für den berechneten Wert `v` (etwa nach „fx“): verlustfrei in der Anzeigeeinheit.
+pub fn exact_field_text(v: f64, unit: ParamUnit) -> String {
+    match (unit, current_unit()) {
+        (ParamUnit::Length, u @ DisplayUnit::Zoll) => number_field_text(u.to_display(v)),
+        _ => number_field_text(v),
     }
 }
 

@@ -3,7 +3,9 @@
 
 use crate::browser::error_color;
 use crate::dialog::{Dialog, DialogSize};
-use crate::formula_field::{FieldInput, FormulaField, classify, names_hint};
+use crate::formula_field::{
+    FieldInput, FormulaField, classify, eval_shown, names_hint, resolve, stored_formula,
+};
 use crate::msg::{Msg, MsgArg};
 use crate::sketch_view::{format_number, parse_number};
 use crate::state::{AppState, MAX_COORD_MM};
@@ -12,7 +14,7 @@ use planora_feature::{
     BlendArt, FieldKey, Formulas, MAX_CHAMFER_ANGLE_DEG, MIN_CHAMFER_ANGLE_DEG, ParamScope,
     ParamUnit,
 };
-use planora_i18n::tr;
+use planora_i18n::{DisplayUnit, current_unit, tr};
 use planora_kernel::blend::topo::{edge_uses, face_name, role_label};
 use planora_kernel::blend::{MAX_RADIUS_POINTS, min_blend_size_request};
 use planora_kernel::{BlendKind, Edge, Id, Solid};
@@ -25,7 +27,13 @@ pub fn no_edge() -> Msg {
 }
 
 /// Vorgabe des zweiten Abstands bei „Fase: zwei Abstände“ in mm (wie der erste).
-const DEFAULT_SECOND_DISTANCE: &str = "1";
+/// Vorgabe der Maße (Radius, Abstände) in der Anzeigeeinheit: 1 mm, in Zoll 0,04 in.
+fn default_size() -> String {
+    match current_unit() {
+        DisplayUnit::Millimeter => "1".into(),
+        _ => planora_i18n::localize_decimal("0.04"),
+    }
+}
 /// Vorgabe des Fasenwinkels bei „Fase: Abstand und Winkel“ in Grad.
 const DEFAULT_ANGLE: &str = "45";
 /// Dasselbe als Zahl (Umwandlung einer bestehenden Fase).
@@ -264,14 +272,6 @@ pub fn angle_message(text: &str) -> String {
     angle_msg(text).text()
 }
 
-/// Liest ein Maß (nur Zahlen).
-fn size(label: &Msg, text: &str) -> Result<f64, Msg> {
-    match parse_number(text) {
-        Some(v) if size_ok(v) => Ok(v),
-        _ => Err(size_message(label, text)),
-    }
-}
-
 /// Liest ein Feld: Zahl oder Formel (in `unit`, mit den Parametern `scope`), geprüft mit `ok`;
 /// ein unzulässiger Wert ergibt `bad()`, eine fehlerhafte Formel „{label}: {Meldung}“. Ohne
 /// Parameter gilt ein Text, der sich nicht auswerten lässt, wie bisher als ungültige Zahl
@@ -284,9 +284,14 @@ fn read_field(
     ok: fn(f64) -> bool,
     bad: impl Fn() -> Msg,
 ) -> Result<(f64, Option<String>), Msg> {
+    let display = current_unit();
     if let Some(FieldInput::Formula(f)) = classify(text) {
-        match scope.eval(&f, unit) {
-            Ok(v) if ok(v) => return Ok((v, Some(f))),
+        match eval_shown(&f, unit, scope) {
+            Ok(v) if ok(v) => {
+                let stored = stored_formula(&f, unit, scope)
+                    .map_err(|e| crate::msg!("field-error", label = label.clone(), error = e))?;
+                return Ok((v, Some(stored)));
+            }
             Ok(_) => return Err(bad()),
             Err(e) if !scope.names().is_empty() => {
                 return Err(crate::msg!("field-error", label = label.clone(), error = e));
@@ -295,6 +300,13 @@ fn read_field(
         }
     }
     match parse_number(text) {
+        Some(_) if unit == ParamUnit::Length && display != DisplayUnit::Millimeter => {
+            // Reine Länge in der Anzeigeeinheit: gespeichert mit Zeichen („0,1 in“).
+            match resolve(text, unit, scope) {
+                Ok((mm, formula)) if ok(mm) => Ok((mm, formula)),
+                _ => Err(bad()),
+            }
+        }
         Some(v) if ok(v) => Ok((v, None)),
         _ => Err(bad()),
     }
@@ -304,7 +316,7 @@ impl BlendDialog {
     pub fn fillet() -> Self {
         BlendDialog {
             art: ArtChoice::Rundung,
-            first: "1".into(),
+            first: default_size(),
             second: String::new(),
             tangentenkette: true,
             points: Vec::new(),
@@ -317,7 +329,7 @@ impl BlendDialog {
     pub fn chamfer() -> Self {
         BlendDialog {
             art: ArtChoice::FaseGleich,
-            first: "1".into(),
+            first: default_size(),
             second: DEFAULT_ANGLE.into(),
             tangentenkette: true,
             points: Vec::new(),
@@ -330,7 +342,7 @@ impl BlendDialog {
     pub fn variable() -> Self {
         BlendDialog {
             art: ArtChoice::RundungVariabel,
-            points: vec![("0".into(), "1".into()), ("100".into(), "1".into())],
+            points: vec![("0".into(), default_size()), ("100".into(), default_size())],
             ..BlendDialog::fillet()
         }
     }
@@ -357,7 +369,7 @@ impl BlendDialog {
                     .map(|(p, r)| (format_number(*p, 2), format_number(*r, 3)))
                     .collect();
             }
-            _ => self.points.push(("100".into(), "1".into())),
+            _ => self.points.push(("100".into(), default_size())),
         }
     }
 
@@ -408,7 +420,7 @@ impl BlendDialog {
         }
         self.art = art;
         self.second = match art {
-            ArtChoice::FaseZwei => DEFAULT_SECOND_DISTANCE.into(),
+            ArtChoice::FaseZwei => default_size(),
             ArtChoice::FaseWinkel => DEFAULT_ANGLE.into(),
             ArtChoice::Rundung | ArtChoice::RundungVariabel | ArtChoice::FaseGleich => {
                 String::new()
@@ -505,10 +517,13 @@ impl BlendDialog {
                 let pos = parse_number(p)
                     .filter(|v| (0.0..=100.0).contains(v))
                     .ok_or_else(|| crate::msg!("blend-position-range", n = k + 1))?;
-                punkte.push((
-                    pos,
-                    size(&crate::msg!("blend-field-radius-n", n = k + 1), r)?,
-                ));
+                // Der Radius steht in der Anzeigeeinheit, das Mindestmaß gilt in mm.
+                let label = crate::msg!("blend-field-radius-n", n = k + 1);
+                let radius = parse_number(r)
+                    .map(|v| current_unit().from_display(v))
+                    .filter(|v| size_ok(*v))
+                    .ok_or_else(|| size_message(&label, r))?;
+                punkte.push((pos, radius));
             }
             return Ok((BlendArt::RundungVariabel { punkte }, formulas));
         }

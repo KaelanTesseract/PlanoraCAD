@@ -1,5 +1,5 @@
 use crate::browser::error_color;
-use crate::formula_field::FormulaField;
+use crate::formula_field::{FormulaField, formula_text, stored_input, value_field_text};
 use crate::mesh_body::{euler_degrees, report_text, rotation_from_degrees, warning_color};
 use crate::sketch_view::format_number;
 use crate::state::{AppState, BodyKind, step_label};
@@ -10,7 +10,7 @@ use planora_feature::{
     BlendArt, FeatureId, FeatureKind, FeatureStatus, FieldKey, ParamUnit, SketchPlane,
     StandardPlane, StepShape, field_unit, field_value,
 };
-use planora_i18n::{fmt_num, localize_decimal, tr};
+use planora_i18n::{DisplayUnit, current_unit, fmt_num, localize_decimal, tr};
 use planora_kernel::{BoolOp, Kernel};
 use planora_math::DVec3;
 use planora_render::Pick;
@@ -527,7 +527,18 @@ fn body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
         );
         ui.add_space(theme::SPACE_1);
         // Lage der unteren Ecke der Hülle; Änderungen verschieben den Körper.
-        let mut position = min;
+        // Die Felder zeigen die Anzeigeeinheit (Schritt beim Ziehen 0,5 mm bzw. 0,02 in).
+        let unit = current_unit();
+        let shown = DVec3::new(
+            unit.to_display(min.x),
+            unit.to_display(min.y),
+            unit.to_display(min.z),
+        );
+        let mut position = shown;
+        let speed = match unit {
+            DisplayUnit::Millimeter => 0.5,
+            _ => 0.02,
+        };
         // Verschieben ist eine neue Aktion: bei einem zurückgesetzten Körper gesperrt.
         let lock = state.body_lock(index);
         let fields = ui.add_enabled_ui(lock.is_none(), |ui| {
@@ -536,15 +547,22 @@ fn body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
                 "body-position",
                 &position_label(),
                 [&mut position.x, &mut position.y, &mut position.z],
-                0.5,
+                speed,
             )
         });
         if let Some(why) = lock {
             fields.response.on_disabled_hover_text(why);
         }
         dragging = fields.inner;
-        if position != min {
-            moved = Some(position - min);
+        if position != shown {
+            // Nur geänderte Achsen werden umgerechnet (die anderen bleiben bitgleich).
+            let back = |p: f64, s: f64, m: f64| if p == s { m } else { unit.from_display(p) };
+            let to = DVec3::new(
+                back(position.x, shown.x, min.x),
+                back(position.y, shown.y, min.y),
+                back(position.z, shown.z, min.z),
+            );
+            moved = Some(to - min);
         }
     }
 
@@ -620,7 +638,7 @@ fn mesh_body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
         return;
     };
     let renamed;
-    let mut commit: Option<(FieldKey, String)>;
+    let mut commit: Option<(FieldKey, String, ParamUnit)>;
     {
         let body = &state.bodies[index];
         ui.label(tr!("props-name"));
@@ -691,13 +709,16 @@ fn mesh_body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
     // Ein Formelfeld wirkt bei Enter oder beim Verlassen (P9): eine Zahl setzt den Wert (die
     // Formel dieses Feldes entfällt), sonst wird der Text die Formel des Feldes. Abgelehnt:
     // Text und Meldung bleiben im Feld.
-    if let Some((key, text)) = commit {
+    if let Some((key, text, unit)) = commit {
         let id = mesh_draft_id(fid, key);
-        match state.set_mesh_formula(index, key, &text) {
+        let scope = state.document.param_scope();
+        let stored = stored_input(&text, unit, &scope);
+        match stored.and_then(|t| state.set_mesh_formula(index, key, &t)) {
             Ok(()) => ui.data_mut(|d| d.remove::<MeshDraft>(id)),
             Err(e) => {
                 let draft = MeshDraft {
                     stand: stand(state),
+                    unit: current_unit(),
                     text,
                     error: Some(e),
                 };
@@ -714,6 +735,8 @@ fn mesh_body(ui: &mut egui::Ui, state: &mut AppState, index: usize) {
 #[derive(Clone, Debug)]
 struct MeshDraft {
     stand: (u64, u64),
+    /// Anzeigeeinheit des Entwurfs; nach dem Umstellen gilt er nicht mehr.
+    unit: DisplayUnit,
     text: String,
     error: Option<String>,
 }
@@ -728,7 +751,7 @@ fn mesh_draft_id(fid: FeatureId, key: FieldKey) -> egui::Id {
 }
 
 /// Ein Formelfeld des Netz-Körpers: Feld, Bezeichnung, Einheit und gespeicherter Text (Formel,
-/// sonst der Wert).
+/// sonst der Wert) so, wie das Feld ihn zeigt (in der Anzeigeeinheit).
 struct MeshField {
     key: FieldKey,
     label: String,
@@ -750,18 +773,20 @@ fn mesh_fields(state: &AppState, index: usize) -> Vec<MeshField> {
     ]
     .into_iter()
     .map(|(key, label)| {
+        let unit = f.map_or(ParamUnit::Length, |f| field_unit(&f.kind, key));
+        let scope = state.document.param_scope();
         let saved = f
             .and_then(|f| {
                 f.formulas()
                     .get(&key)
-                    .cloned()
-                    .or_else(|| field_value(&f.kind, key).map(field_text))
+                    .map(|t| formula_text(t, unit, &scope))
+                    .or_else(|| field_value(&f.kind, key).map(|v| mesh_value_text(v, unit)))
             })
             .unwrap_or_default();
         MeshField {
             key,
             label,
-            unit: f.map_or(ParamUnit::Length, |f| field_unit(&f.kind, key)),
+            unit,
             saved,
         }
     })
@@ -789,6 +814,15 @@ fn field_text(v: f64) -> String {
     }
 }
 
+/// Text eines Wertes im Formelfeld des Netz-Körpers: in mm wie [`field_text`], eine Länge in
+/// einer anderen Anzeigeeinheit umgerechnet ([`value_field_text`]).
+fn mesh_value_text(v: f64, unit: ParamUnit) -> String {
+    match (unit, current_unit()) {
+        (ParamUnit::Length, DisplayUnit::Zoll) => value_field_text(v, unit),
+        _ => field_text(v),
+    }
+}
+
 /// Zeilen „Bezeichnung – Formelfeld“; liefert eine Übernahme (Enter oder Verlassen nach einer
 /// Änderung) mit dem Text, wenn er gültig ist und vom gespeicherten Text abweicht.
 fn mesh_formula_rows(
@@ -796,7 +830,7 @@ fn mesh_formula_rows(
     state: &AppState,
     grid: (&'static str, FeatureId),
     fields: &[MeshField],
-) -> Option<(FieldKey, String)> {
+) -> Option<(FieldKey, String, ParamUnit)> {
     let scope = state.document.param_scope();
     let now = stand(state);
     let fid = grid.1;
@@ -806,7 +840,7 @@ fn mesh_formula_rows(
             let id = mesh_draft_id(fid, f.key);
             let draft = ui
                 .data(|d| d.get_temp::<MeshDraft>(id))
-                .filter(|d| d.stand == now);
+                .filter(|d| d.stand == now && d.unit == current_unit());
             let mut text = draft
                 .as_ref()
                 .map_or_else(|| f.saved.clone(), |d| d.text.clone());
@@ -831,13 +865,14 @@ fn mesh_formula_rows(
                 error = None;
             }
             if out.committed && out.error.is_none() && text.trim() != f.saved {
-                commit = Some((f.key, text.clone()));
+                commit = Some((f.key, text.clone(), f.unit));
             }
             if text == f.saved && error.is_none() {
                 ui.data_mut(|d| d.remove::<MeshDraft>(id));
             } else {
                 let draft = MeshDraft {
                     stand: now,
+                    unit: current_unit(),
                     text,
                     error,
                 };

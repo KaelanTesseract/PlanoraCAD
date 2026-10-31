@@ -1863,12 +1863,18 @@ fn section_fields(
 ) -> Option<SectionEdit> {
     let mut edit = None;
     ui.add_space(theme::SPACE_1);
-    ui.add_enabled(editable, egui::Label::new(tr!("drawing-section-position")));
+    ui.add_enabled(
+        editable,
+        egui::Label::new(tr!(
+            "drawing-section-position",
+            unit = planora_i18n::current_unit().symbol()
+        )),
+    );
     if let Some(t) = commit_field(
         ui,
         "offset",
         v.id,
-        &section_tool::field_text(sec.offset),
+        &section_tool::offset_text(sec.offset),
         editable,
     ) {
         edit = Some(SectionEdit::Offset(t));

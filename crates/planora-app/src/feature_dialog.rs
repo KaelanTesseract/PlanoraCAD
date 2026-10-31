@@ -9,7 +9,8 @@ use crate::browser::error_color;
 use crate::create_dialog::axis_candidates;
 use crate::dialog::{Dialog, DialogSize};
 use crate::formula_field::{
-    FieldInput, FormulaField, classify, names_hint, number_field_text, resolve,
+    FieldInput, FormulaField, classify, exact_field_text, names_hint, resolve_kept, stored_text,
+    value_field_text,
 };
 use crate::msg::{Msg, MsgArg};
 use crate::sketch_view::format_number;
@@ -18,9 +19,9 @@ use crate::theme;
 use planora_feature::expr::number_text;
 use planora_feature::{
     BlendArt, BodyRef, FeatureId, FeatureKind, FeatureStatus, FieldKey, Formulas, ParamScope,
-    field_keys, field_label, field_unit, field_value, set_field_value,
+    ParamUnit, field_keys, field_label, field_unit, field_value, set_field_value,
 };
-use planora_i18n::tr;
+use planora_i18n::{DisplayUnit, current_unit, tr};
 use planora_kernel::BoolOp;
 use planora_math::DVec3;
 
@@ -38,6 +39,8 @@ pub struct FeatureDialog {
     error: Option<Msg>,
     /// Stand des Features beim Öffnen (siehe [`planora_feature::Feature::version`]).
     version: u64,
+    /// Anzeigeeinheit der Texte; nach dem Umstellen lädt der Dialog neu.
+    unit: DisplayUnit,
 }
 
 /// Bezeichnung eines Zahlenfelds; der Text entsteht erst beim Zeichnen (Sprache!).
@@ -84,8 +87,23 @@ struct NumberField {
     /// Einheit hinter einem Feld ohne Formel („%“ oder „mm“; Formelfelder zeigen ihre Einheit
     /// selbst).
     suffix: &'static str,
-    /// Eingegebener Text (Zahl oder Formel).
+    /// Eingegebener Text (Zahl oder Formel, in der Anzeigeeinheit).
     text: String,
+    /// Gespeicherter Wert (mm) und gespeicherte Formel, aus denen der Text vorbelegt wurde:
+    /// Bleibt der Text unverändert, bleiben sie es auch.
+    value: f64,
+    formula: Option<String>,
+}
+
+impl NumberField {
+    /// Der Wert eines Längenfelds ohne Formeln (Radius eines Punkts) in mm: unverändert der
+    /// gespeicherte, sonst die getippte Zahl in der Anzeigeeinheit.
+    fn plain_length(&self, label: &MsgArg) -> Result<f64, Msg> {
+        if self.text.trim() == value_field_text(self.value, ParamUnit::Length) {
+            return Ok(self.value);
+        }
+        plain_value(label, &self.text).map(|v| current_unit().from_display(v))
+    }
 }
 
 /// Meldung, wenn sich das Feature geändert hat, seit der Dialog geöffnet wurde.
@@ -101,7 +119,7 @@ pub fn numbers_only(label: impl Into<MsgArg>) -> Msg {
 
 /// Die Zahlenfelder einer Feature-Art: die formelfähigen Felder ([`field_keys`]) mit ihrer
 /// gespeicherten Formel (sonst dem Wert), bei der variablen Rundung die Punkte (nur Zahlen).
-fn fields_of(kind: &FeatureKind, formulas: &Formulas) -> Vec<NumberField> {
+fn fields_of(kind: &FeatureKind, formulas: &Formulas, scope: &ParamScope) -> Vec<NumberField> {
     if let FeatureKind::Verrunden {
         art: BlendArt::RundungVariabel { punkte },
         ..
@@ -113,30 +131,41 @@ fn fields_of(kind: &FeatureKind, formulas: &Formulas) -> Vec<NumberField> {
             .flat_map(|(k, (p, r))| {
                 [
                     // Anteil der Kettenlänge in %.
-                    (FieldLabel::Position(k + 1), "%", *p),
-                    (FieldLabel::Radius(k + 1), "mm", *r),
+                    (FieldLabel::Position(k + 1), "%", *p, ParamUnit::Number),
+                    (
+                        FieldLabel::Radius(k + 1),
+                        ParamUnit::Length.suffix(),
+                        *r,
+                        ParamUnit::Length,
+                    ),
                 ]
             })
-            .map(|(label, suffix, v)| NumberField {
+            .map(|(label, suffix, v, unit)| NumberField {
                 label,
                 key: None,
                 suffix,
-                text: number_field_text(v),
+                text: value_field_text(v, unit),
+                value: v,
+                formula: None,
             })
             .collect();
     }
     field_keys(kind)
         .into_iter()
-        .map(|key| NumberField {
-            label: FieldLabel::Library(key),
-            key: Some(key),
-            suffix: field_unit(kind, key).suffix(),
-            // Eine gespeicherte Formel bleibt, wie sie getippt wurde; ein Wert zeigt den
-            // Dezimaltrenner der Sprache.
-            text: formulas
-                .get(&key)
-                .cloned()
-                .unwrap_or_else(|| number_field_text(field_value(kind, key).unwrap_or(0.0))),
+        .map(|key| {
+            let unit = field_unit(kind, key);
+            let value = field_value(kind, key).unwrap_or(0.0);
+            let formula = formulas.get(&key).cloned();
+            NumberField {
+                label: FieldLabel::Library(key),
+                key: Some(key),
+                suffix: unit.suffix(),
+                // Eine gespeicherte Formel bleibt in Millimeter, wie sie getippt wurde; ein Wert
+                // zeigt den Dezimaltrenner der Sprache, beides in der Anzeigeeinheit.
+                text: stored_text(value, formula.as_deref(), unit, scope),
+                value,
+                formula,
+            }
         })
         .collect()
 }
@@ -196,10 +225,11 @@ impl FeatureDialog {
             id,
             name: f.name.clone(),
             kind: f.kind.clone(),
-            numbers: fields_of(&f.kind, f.formulas()),
+            numbers: fields_of(&f.kind, f.formulas(), &state.document.param_scope()),
             saved: f.formulas().clone(),
             error: None,
             version: f.version(),
+            unit: current_unit(),
         })
     }
 
@@ -257,26 +287,32 @@ impl FeatureDialog {
             .collect()
     }
 
-    /// Die Formeltexte der Felder (Feld mit einer Formel statt einer Zahl).
-    fn formula_texts(&self) -> Formulas {
+    /// Die Felder mit einer Formel statt einer Zahl (Text samt gespeichertem Stand).
+    fn formula_fields(&self) -> Vec<NumberField> {
         self.numbers
             .iter()
-            .filter_map(|f| match (f.key, classify(&f.text)) {
-                (Some(key), Some(FieldInput::Formula(t))) => Some((key, t)),
-                _ => None,
+            .filter(|f| {
+                f.key.is_some() && matches!(classify(&f.text), Some(FieldInput::Formula(_)))
             })
+            .cloned()
             .collect()
     }
 
-    /// Baut die Felder aus der Kopie der Art neu; Formeln in `keep` bleiben bei Feldern, die es
-    /// weiterhin gibt.
-    fn renumber(&mut self, keep: &Formulas) {
-        self.numbers = fields_of(&self.kind, keep);
+    /// Baut die Felder aus der Kopie der Art neu; Formelfelder in `keep` bleiben bei Feldern,
+    /// die es weiterhin gibt.
+    fn renumber(&mut self, keep: &[NumberField]) {
+        let mut numbers = fields_of(&self.kind, &Formulas::new(), &ParamScope::default());
+        for n in numbers.iter_mut().filter(|n| n.key.is_some()) {
+            if let Some(old) = keep.iter().find(|o| o.key == n.key) {
+                *n = old.clone();
+            }
+        }
+        self.numbers = numbers;
     }
 
     /// Übernimmt eingegebene Zahlen, soweit gültig, in die Kopie der Art (vor einem Umbau);
-    /// liefert die Formeltexte, die der Umbau behalten soll.
-    fn absorb(&mut self) -> Formulas {
+    /// liefert die Formelfelder, die der Umbau behalten soll.
+    fn absorb(&mut self) -> Vec<NumberField> {
         let mut kind = self.kind.clone();
         if let FeatureKind::Verrunden {
             art: BlendArt::RundungVariabel { punkte },
@@ -288,15 +324,23 @@ impl FeatureDialog {
             }
         } else {
             for f in &self.numbers {
-                if let (Some(key), Some(FieldInput::Number(v))) = (f.key, classify(&f.text))
-                    && v.abs() <= MAX_COORD_MM
-                {
-                    set_field_value(&mut kind, key, v);
+                if let (Some(key), Some(FieldInput::Number(v))) = (f.key, classify(&f.text)) {
+                    let unit = field_unit(&kind, key);
+                    let v = if f.text.trim() == value_field_text(f.value, unit) {
+                        f.value
+                    } else if unit == ParamUnit::Length {
+                        current_unit().from_display(v)
+                    } else {
+                        v
+                    };
+                    if v.abs() <= MAX_COORD_MM {
+                        set_field_value(&mut kind, key, v);
+                    }
                 }
             }
         }
         self.kind = kind;
-        self.formula_texts()
+        self.formula_fields()
     }
 
     /// Art einer Verrundung wechseln (das erste Maß bleibt).
@@ -389,7 +433,10 @@ impl FeatureDialog {
                 .iter_mut()
                 .find(|f| f.label == FieldLabel::Library(key))
             {
-                f.text = number_text(v);
+                f.text = match current_unit() {
+                    DisplayUnit::Millimeter => number_text(v),
+                    _ => exact_field_text(v, ParamUnit::Length),
+                };
             }
         }
     }
@@ -417,7 +464,11 @@ impl FeatureDialog {
         let mut values = Vec::with_capacity(self.numbers.len());
         for f in &self.numbers {
             let label = f.label.arg(&self.kind);
-            values.push(check_size(&label, plain_value(&label, &f.text)?)?);
+            let v = match f.label {
+                FieldLabel::Radius(_) => f.plain_length(&label)?,
+                _ => plain_value(&label, &f.text)?,
+            };
+            values.push(check_size(&label, v)?);
         }
         Ok(values
             .as_chunks::<2>()
@@ -448,23 +499,25 @@ impl FeatureDialog {
             let Some(key) = f.key else {
                 continue;
             };
-            let (v, formula) = match resolve(&f.text, field_unit(&kind, key), scope) {
-                Ok(r) => r,
-                // Eine gespeicherte kaputte Formel (etwa aus einer Datei) geht unverändert mit;
-                // das Dokument duldet sie (gleiches Feature, Feld und Text), andere Felder lassen
-                // sich trotzdem ändern. Der Wert bleibt der Feldwert.
-                Err(_) if is_kept_broken(&self.saved, key, &f.text) => (
-                    field_value(&kind, key).unwrap_or(0.0),
-                    self.saved.get(&key).cloned(),
-                ),
-                Err(e) => {
-                    return Err(crate::msg!(
-                        "field-error",
-                        label = f.label.arg(&kind),
-                        error = e
-                    ));
-                }
-            };
+            let unit = field_unit(&kind, key);
+            let (v, formula) =
+                match resolve_kept(&f.text, unit, scope, f.value, f.formula.as_deref()) {
+                    Ok(r) => r,
+                    // Eine gespeicherte kaputte Formel (etwa aus einer Datei) geht unverändert mit;
+                    // das Dokument duldet sie (gleiches Feature, Feld und Text), andere Felder lassen
+                    // sich trotzdem ändern. Der Wert bleibt der Feldwert.
+                    Err(_) if is_kept_broken(&self.saved, key, &f.text) => (
+                        field_value(&kind, key).unwrap_or(0.0),
+                        self.saved.get(&key).cloned(),
+                    ),
+                    Err(e) => {
+                        return Err(crate::msg!(
+                            "field-error",
+                            label = f.label.arg(&kind),
+                            error = e
+                        ));
+                    }
+                };
             let checked = check_size(&f.label.arg(&kind), v)?;
             set_field_value(&mut kind, key, checked);
             if let Some(t) = formula {
@@ -525,6 +578,11 @@ impl FeatureDialog {
 
     /// Zeigt den Dialog; `true`, solange er offen bleiben soll.
     pub fn show(&mut self, ctx: &egui::Context, state: &mut AppState) -> bool {
+        // Anzeigeeinheit umgestellt: Die Texte stehen in der alten Einheit; neu laden statt
+        // sie mit dem neuen Zeichen zu zeigen.
+        if self.unit != current_unit() && !self.reload(state) {
+            return false;
+        }
         let mut open = true;
         let (mut apply, mut cancel) = (false, false);
         let scope = state.document.param_scope();
