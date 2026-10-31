@@ -25,7 +25,7 @@ use planora_feature::{
     BlendArt, FeatureId, FeatureKind, FieldKey, Formulas, ParamEdit, ParamId, ParamUnit,
     SketchPlane,
 };
-use planora_i18n::{DisplayUnit, with_unit};
+use planora_i18n::{DisplayUnit, english, with_lang, with_unit};
 use planora_math::DVec3;
 use planora_project::config::Config;
 use planora_project::library::Library;
@@ -330,6 +330,20 @@ fn parameter_rows_show_inches_and_keep_unchanged_text() {
     assert_eq!(s.document.parameter_value(id), Some(50.8));
     let d = ParameterDialog::new(&s);
     assert_eq!(d.text(id, Column::Formula), Some("2 in"));
+}
+
+#[test]
+fn english_parameter_rows_use_the_decimal_point_and_keep_unchanged_text() {
+    let mut s = AppState::new();
+    let id = param(&mut s, "Breite", "50", ParamUnit::Length);
+    with_lang(&english(), || {
+        with_unit(ZOLL, || {
+            let mut d = ParameterDialog::new(&s);
+            assert_eq!(d.text(id, Column::Formula), Some("1.968504"));
+            d.commit(id, &mut s).unwrap();
+        })
+    });
+    assert_eq!(s.document.parameter(id).unwrap().formula, "50");
 }
 
 // ---- Verrunden ------------------------------------------------------------------------------

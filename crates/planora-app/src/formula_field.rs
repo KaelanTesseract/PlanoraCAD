@@ -166,6 +166,13 @@ pub fn stored_text(
 
 /// Anzeige einer gespeicherten Formel in der Anzeigeeinheit (in Millimeter wie gespeichert).
 pub fn formula_text(stored: &str, unit: ParamUnit, scope: &ParamScope) -> String {
+    // Reine Längenzahl in Zoll: derselbe Text (und Dezimaltrenner) wie im Anlegen-Dialog.
+    if unit == ParamUnit::Length
+        && current_unit() == DisplayUnit::Zoll
+        && let Some(v) = plain_number(stored)
+    {
+        return value_field_text(v, unit);
+    }
     display_formula(stored, unit, &|n| scope.lookup(n), current_unit())
 }
 

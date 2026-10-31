@@ -456,7 +456,7 @@ impl DisplayUnit {
 
     /// Einheit zur Kennung; unbekannte Kennungen geben `None`.
     pub fn from_id(id: &str) -> Option<Self> {
-        match id {
+        match id.trim().to_ascii_lowercase().as_str() {
             "mm" => Some(DisplayUnit::Millimeter),
             "in" => Some(DisplayUnit::Zoll),
             _ => None,
@@ -554,20 +554,6 @@ pub fn fmt_len_num(mm: f64) -> String {
 /// Länge (in mm) mit Kurzzeichen, z. B. „12,50 mm“ oder „0,492 in“.
 pub fn fmt_len(mm: f64) -> String {
     format!("{} {}", fmt_len_num(mm), current_unit().symbol())
-}
-
-/// Wie [`fmt_len`], aber mit eigener Stellenzahl für Millimeter; in Zoll kommt eine Stelle dazu.
-pub fn fmt_len_with(mm: f64, decimals_mm: usize) -> String {
-    let unit = current_unit();
-    let decimals = match unit {
-        DisplayUnit::Millimeter => decimals_mm,
-        DisplayUnit::Zoll => decimals_mm + 1,
-    };
-    format!(
-        "{} {}",
-        fmt_num(unit.to_display(mm), decimals),
-        unit.symbol()
-    )
 }
 
 /// Fläche (in mm²) mit Kurzzeichen.

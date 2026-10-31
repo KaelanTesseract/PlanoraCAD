@@ -1,8 +1,8 @@
 //! Tests für die Anzeige-Maßeinheit. Diese Datei ruft nie `set_global_unit` (Millimeter bleibt Grundwert).
 
 use planora_i18n::{
-    DisplayUnit, current_unit, english, fmt_area, fmt_len, fmt_len_num, fmt_len_with, fmt_volume,
-    with_lang, with_unit,
+    DisplayUnit, current_unit, english, fmt_area, fmt_len, fmt_len_num, fmt_volume, with_lang,
+    with_unit,
 };
 
 use DisplayUnit::{Millimeter, Zoll};
@@ -42,10 +42,8 @@ fn inch_formatting() {
         assert_eq!(fmt_area(645.16), "1,000 in²");
         assert_eq!(fmt_volume(16387.064), "1,000 in³");
         assert_eq!(fmt_len(-0.0001), "0,000 in");
-        assert_eq!(fmt_len_with(25.4, 1), "1,00 in");
         with_lang(&english(), || assert_eq!(fmt_len(25.4), "1.000 in"));
     });
-    assert_eq!(fmt_len_with(12.5, 1), "12,5 mm");
 }
 
 #[test]
@@ -57,4 +55,13 @@ fn with_unit_nests_and_restores_after_panic() {
     let r = std::panic::catch_unwind(|| with_unit(Zoll, || panic!("absichtlich")));
     assert!(r.is_err());
     assert_eq!(current_unit(), Millimeter);
+}
+
+#[test]
+fn from_id_ignores_case_and_surrounding_space() {
+    assert_eq!(DisplayUnit::from_id("IN"), Some(Zoll));
+    assert_eq!(DisplayUnit::from_id(" mm "), Some(Millimeter));
+    assert_eq!(DisplayUnit::from_id("Mm"), Some(Millimeter));
+    assert_eq!(DisplayUnit::from_id("cm"), None);
+    assert_eq!(DisplayUnit::from_id(""), None);
 }
