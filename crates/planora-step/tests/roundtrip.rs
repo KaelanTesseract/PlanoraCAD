@@ -882,11 +882,7 @@ fn hand_samples() -> Vec<(&'static str, Vec<Want>)> {
         (
             "seamless_torus_reverse",
             vec![
-                Body(
-                    "Fuss",
-                    6,
-                    1216.0 * PI + 232.0 * PI / 3.0 - 20.0 * PI * PI,
-                ),
+                Body("Fuss", 6, 1216.0 * PI + 232.0 * PI / 3.0 - 20.0 * PI * PI),
                 Body("Rohr", 4, 90.0 * PI * PI),
                 Body("Hohl", 2, 32_000.0 * PI / 3.0 - 180.0 * PI * PI),
                 Body("Meridian", 1, 180.0 * PI * PI),

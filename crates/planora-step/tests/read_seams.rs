@@ -486,7 +486,10 @@ fn torus_band_around_axis_gets_a_meridian_seam() {
     let (face, p) = torus_probe(&s);
     let (u, _) = face.surface.project(p);
     let tube = DVec3::new(8.0 * u.cos(), 8.0 * u.sin(), 38.0);
-    assert!(outward(face, p).dot((p - tube).normalize()) > 1.0 - 1e-9, "Rundung nach außen");
+    assert!(
+        outward(face, p).dot((p - tube).normalize()) > 1.0 - 1e-9,
+        "Rundung nach außen"
+    );
     // Kehle: Innenwand über v = π; Ring R 10…20 × 10 und die linke Hälfte des Rohrkreises r 5
     // um (10; 0) gedreht (Schwerpunkt 10 − 20/(3π)).
     let s = body(&text, "Kehle");
@@ -495,7 +498,10 @@ fn torus_band_around_axis_gets_a_meridian_seam() {
     let (face, p) = torus_probe(&s);
     let (u, _) = face.surface.project(p);
     let tube = DVec3::new(10.0 * u.cos(), 10.0 * u.sin(), 0.0);
-    assert!(outward(face, p).dot((p - tube).normalize()) > 1.0 - 1e-9, "Wand zur Achse");
+    assert!(
+        outward(face, p).dot((p - tube).normalize()) > 1.0 - 1e-9,
+        "Wand zur Achse"
+    );
 }
 
 #[test]
@@ -515,7 +521,10 @@ fn torus_elbow_gets_a_latitude_seam() {
         let (face, p) = torus_probe(&s);
         let (u, _) = face.surface.project(p);
         let tube = DVec3::new(20.0 * u.cos(), 20.0 * u.sin(), 0.0);
-        assert!(outward(face, p).dot((p - tube).normalize()) > 1.0 - 1e-9, "Rohr nach außen");
+        assert!(
+            outward(face, p).dot((p - tube).normalize()) > 1.0 - 1e-9,
+            "Rohr nach außen"
+        );
     }
 }
 
@@ -530,7 +539,10 @@ fn reversed_torus_faces_get_their_seams() {
     assert!(!face.same_sense);
     let (u, _) = face.surface.project(p);
     let tube = DVec3::new(10.0 * u.cos(), 10.0 * u.sin(), 2.0);
-    assert!(outward(face, p).dot((tube - p).normalize()) > 1.0 - 1e-9, "Kehle zur Rohrmitte");
+    assert!(
+        outward(face, p).dot((tube - p).normalize()) > 1.0 - 1e-9,
+        "Kehle zur Rohrmitte"
+    );
     // Hohler Bogen: π (5² − 4²) · 20 · π/2.
     assert_volume(&body(&text, "Rohr"), 90.0 * PI * PI, "Rohr");
     // Kugel R 20 ohne den Ring 10/3.

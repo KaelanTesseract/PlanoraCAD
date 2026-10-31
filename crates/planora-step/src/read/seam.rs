@@ -1159,7 +1159,11 @@ fn free_angle(
         .collect();
     for lp in &f.loops {
         for he in lp {
-            marks.push(wrap(param_of(surface, raw.vertices[raw.he_start(*he)], dir)));
+            marks.push(wrap(param_of(
+                surface,
+                raw.vertices[raw.he_start(*he)],
+                dir,
+            )));
         }
     }
     marks.sort_by(f64::total_cmp);
