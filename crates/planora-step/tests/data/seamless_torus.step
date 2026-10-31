@@ -1,0 +1,181 @@
+ISO-10303-21;
+/* Selbst geschrieben für die Tests von PlanoraCAD (GPL-3.0-only). */
+HEADER;
+FILE_DESCRIPTION(('Torusflächen ohne Naht: Welle mit gerundeter Kante, Ring mit gewölbter Innenwand, Rohrbogen 90 Grad'),'2;1');
+FILE_NAME('seamless_torus.step','2026-10-31T00:00:00',('PlanoraCAD'),(''),'von Hand','von Hand','');
+FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));
+ENDSEC;
+DATA;
+#9=ADVANCED_BREP_SHAPE_REPRESENTATION('Welle',(#20),#105);
+#10=ADVANCED_BREP_SHAPE_REPRESENTATION('Kehle',(#220),#105);
+#11=ADVANCED_BREP_SHAPE_REPRESENTATION('Bogen',(#420),#105);
+#100=(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.METRE.));
+#101=(NAMED_UNIT(*)PLANE_ANGLE_UNIT()SI_UNIT($,.RADIAN.));
+#102=(NAMED_UNIT(*)SI_UNIT($,.STERADIAN.)SOLID_ANGLE_UNIT());
+#103=UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-06),#100,'distance_accuracy_value','');
+#105=(GEOMETRIC_REPRESENTATION_CONTEXT(3)GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#103))
+  GLOBAL_UNIT_ASSIGNED_CONTEXT((#100,#101,#102))REPRESENTATION_CONTEXT('',''));
+#901=DIRECTION('',(1.,0.,0.));
+#902=DIRECTION('',(0.,1.,0.));
+#903=DIRECTION('',(0.,0.,1.));
+#904=DIRECTION('',(-1.,0.,0.));
+#905=DIRECTION('',(0.,-1.,0.));
+/* Welle: Zylinder R 10 von z = 0 bis 38, darüber eine Rundung r 2 (Torus 8/2 um (0; 0; 38),
+   v von 0 bis pi/2) bis zum Deckel R 8 bei z = 40. Alle drei Kreise voll, ihre Ecken bei
+   0, 90 und 180 Grad; Mantel und Rundung ohne Naht */
+#20=MANIFOLD_SOLID_BREP('Welle',#21);
+#21=CLOSED_SHELL('',(#71,#72,#73,#74));
+#31=CARTESIAN_POINT('',(0.,0.,0.));
+#32=CARTESIAN_POINT('',(0.,0.,38.));
+#33=CARTESIAN_POINT('',(0.,0.,40.));
+#34=CARTESIAN_POINT('',(10.,0.,0.));
+#35=CARTESIAN_POINT('',(0.,10.,38.));
+#36=CARTESIAN_POINT('',(-8.,0.,40.));
+#41=VERTEX_POINT('',#34);
+#42=VERTEX_POINT('',#35);
+#43=VERTEX_POINT('',#36);
+#51=AXIS2_PLACEMENT_3D('',#31,#903,#901);
+#52=AXIS2_PLACEMENT_3D('',#32,#903,#901);
+#53=AXIS2_PLACEMENT_3D('',#33,#903,#901);
+#56=CIRCLE('',#51,10.);
+#57=CIRCLE('',#52,10.);
+#58=CIRCLE('',#53,8.);
+#61=EDGE_CURVE('',#41,#41,#56,.T.);
+#62=EDGE_CURVE('',#42,#42,#57,.T.);
+#63=EDGE_CURVE('',#43,#43,#58,.T.);
+#66=PLANE('',#51);
+#67=PLANE('',#53);
+#68=CYLINDRICAL_SURFACE('',#51,10.);
+#69=TOROIDAL_SURFACE('',#52,8.,2.);
+/* Boden (Normale -z) */
+#71=ADVANCED_FACE('',(#75),#66,.F.);
+#75=FACE_OUTER_BOUND('',#76,.T.);
+#76=EDGE_LOOP('',(#77));
+#77=ORIENTED_EDGE('',*,*,#61,.F.);
+/* Deckel (Normale +z) */
+#72=ADVANCED_FACE('',(#78),#67,.T.);
+#78=FACE_OUTER_BOUND('',#79,.T.);
+#79=EDGE_LOOP('',(#80));
+#80=ORIENTED_EDGE('',*,*,#63,.T.);
+/* Mantel: unten vorwärts, oben rückwärts */
+#73=ADVANCED_FACE('',(#81,#82),#68,.T.);
+#81=FACE_BOUND('',#83,.T.);
+#83=EDGE_LOOP('',(#84));
+#84=ORIENTED_EDGE('',*,*,#61,.T.);
+#82=FACE_BOUND('',#85,.T.);
+#85=EDGE_LOOP('',(#86));
+#86=ORIENTED_EDGE('',*,*,#62,.F.);
+/* Rundung: unterer Kreis (v = 0) vorwärts, oberer (v = pi/2) rückwärts */
+#74=ADVANCED_FACE('',(#87,#88),#69,.T.);
+#87=FACE_BOUND('',#89,.T.);
+#89=EDGE_LOOP('',(#90));
+#90=ORIENTED_EDGE('',*,*,#62,.T.);
+#88=FACE_BOUND('',#91,.T.);
+#91=EDGE_LOOP('',(#92));
+#92=ORIENTED_EDGE('',*,*,#63,.F.);
+/* Kehle: Ring von z = -5 bis 5 mit Außenmantel R 20; innen die Innenhälfte eines Torus 10/5
+   um den Ursprung (v von pi/2 über pi bis 3 pi/2, also über die Naht der Parameter des
+   Kernels hinweg); die Innenwand wölbt sich zur Achse. Ecken bei 0, 90, 180 und 270 Grad */
+#220=MANIFOLD_SOLID_BREP('Kehle',#221);
+#221=CLOSED_SHELL('',(#271,#272,#273,#274));
+#231=CARTESIAN_POINT('',(0.,0.,-5.));
+#232=CARTESIAN_POINT('',(0.,0.,5.));
+#233=CARTESIAN_POINT('',(0.,0.,0.));
+#234=CARTESIAN_POINT('',(20.,0.,-5.));
+#235=CARTESIAN_POINT('',(0.,20.,5.));
+#236=CARTESIAN_POINT('',(-10.,0.,5.));
+#237=CARTESIAN_POINT('',(0.,-10.,-5.));
+#241=VERTEX_POINT('',#234);
+#242=VERTEX_POINT('',#235);
+#243=VERTEX_POINT('',#236);
+#244=VERTEX_POINT('',#237);
+#251=AXIS2_PLACEMENT_3D('',#231,#903,#901);
+#252=AXIS2_PLACEMENT_3D('',#232,#903,#901);
+#253=AXIS2_PLACEMENT_3D('',#233,#903,#901);
+#256=CIRCLE('',#251,20.);
+#257=CIRCLE('',#252,20.);
+#258=CIRCLE('',#252,10.);
+#259=CIRCLE('',#251,10.);
+#261=EDGE_CURVE('',#241,#241,#256,.T.);
+#262=EDGE_CURVE('',#242,#242,#257,.T.);
+#263=EDGE_CURVE('',#243,#243,#258,.T.);
+#264=EDGE_CURVE('',#244,#244,#259,.T.);
+#266=PLANE('',#251);
+#267=PLANE('',#252);
+#268=CYLINDRICAL_SURFACE('',#251,20.);
+#269=TOROIDAL_SURFACE('',#253,10.,5.);
+/* Boden (Normale -z): außen R 20, innen R 10 */
+#271=ADVANCED_FACE('',(#275,#276),#266,.F.);
+#275=FACE_OUTER_BOUND('',#277,.T.);
+#277=EDGE_LOOP('',(#278));
+#278=ORIENTED_EDGE('',*,*,#261,.F.);
+#276=FACE_BOUND('',#279,.T.);
+#279=EDGE_LOOP('',(#280));
+#280=ORIENTED_EDGE('',*,*,#264,.T.);
+/* Deckel (Normale +z) */
+#272=ADVANCED_FACE('',(#281,#282),#267,.T.);
+#281=FACE_OUTER_BOUND('',#283,.T.);
+#283=EDGE_LOOP('',(#284));
+#284=ORIENTED_EDGE('',*,*,#262,.T.);
+#282=FACE_BOUND('',#285,.T.);
+#285=EDGE_LOOP('',(#286));
+#286=ORIENTED_EDGE('',*,*,#263,.F.);
+/* Außenmantel */
+#273=ADVANCED_FACE('',(#287,#288),#268,.T.);
+#287=FACE_BOUND('',#289,.T.);
+#289=EDGE_LOOP('',(#290));
+#290=ORIENTED_EDGE('',*,*,#261,.T.);
+#288=FACE_BOUND('',#291,.T.);
+#291=EDGE_LOOP('',(#292));
+#292=ORIENTED_EDGE('',*,*,#262,.F.);
+/* Innenwand: oberer Kreis (v = pi/2) vorwärts, unterer (v = 3 pi/2) rückwärts */
+#274=ADVANCED_FACE('',(#293,#294),#269,.T.);
+#293=FACE_BOUND('',#295,.T.);
+#295=EDGE_LOOP('',(#296));
+#296=ORIENTED_EDGE('',*,*,#263,.T.);
+#294=FACE_BOUND('',#297,.T.);
+#297=EDGE_LOOP('',(#298));
+#298=ORIENTED_EDGE('',*,*,#264,.F.);
+/* Bogen: Rohr r 5 um den Kreis R 20 um die z-Achse, von u = 0 (Ebene y = 0) bis u = pi/2
+   (Ebene x = 0), zwei ebene Deckel. Die Rohrkreise laufen in wachsendem v; ihre Ecken beide
+   bei v = 0 */
+#420=MANIFOLD_SOLID_BREP('Bogen',#421);
+#421=CLOSED_SHELL('',(#471,#472,#473));
+#431=CARTESIAN_POINT('',(0.,0.,0.));
+#432=CARTESIAN_POINT('',(20.,0.,0.));
+#433=CARTESIAN_POINT('',(0.,20.,0.));
+#434=CARTESIAN_POINT('',(25.,0.,0.));
+#435=CARTESIAN_POINT('',(0.,25.,0.));
+#441=VERTEX_POINT('',#434);
+#442=VERTEX_POINT('',#435);
+#451=AXIS2_PLACEMENT_3D('',#431,#903,#901);
+#452=AXIS2_PLACEMENT_3D('',#432,#905,#901);
+#453=AXIS2_PLACEMENT_3D('',#433,#901,#902);
+#454=AXIS2_PLACEMENT_3D('',#433,#904,#902);
+#456=CIRCLE('',#452,5.);
+#457=CIRCLE('',#453,5.);
+#461=EDGE_CURVE('',#441,#441,#456,.T.);
+#462=EDGE_CURVE('',#442,#442,#457,.T.);
+#466=PLANE('',#452);
+#467=PLANE('',#454);
+#469=TOROIDAL_SURFACE('',#451,20.,5.);
+/* Deckel bei u = 0 (Normale -y) */
+#471=ADVANCED_FACE('',(#475),#466,.T.);
+#475=FACE_OUTER_BOUND('',#476,.T.);
+#476=EDGE_LOOP('',(#477));
+#477=ORIENTED_EDGE('',*,*,#461,.T.);
+/* Deckel bei u = pi/2 (Normale -x) */
+#472=ADVANCED_FACE('',(#478),#467,.T.);
+#478=FACE_OUTER_BOUND('',#479,.T.);
+#479=EDGE_LOOP('',(#480));
+#480=ORIENTED_EDGE('',*,*,#462,.F.);
+/* Rohrwand: Rohrkreis bei u = 0 rückwärts, bei u = pi/2 vorwärts */
+#473=ADVANCED_FACE('',(#481,#482),#469,.T.);
+#481=FACE_BOUND('',#483,.T.);
+#483=EDGE_LOOP('',(#484));
+#484=ORIENTED_EDGE('',*,*,#461,.F.);
+#482=FACE_BOUND('',#485,.T.);
+#485=EDGE_LOOP('',(#486));
+#486=ORIENTED_EDGE('',*,*,#462,.T.);
+ENDSEC;
+END-ISO-10303-21;

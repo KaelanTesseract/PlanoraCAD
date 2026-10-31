@@ -1532,7 +1532,7 @@ Die Festlegungen stehen im Kopf des Plans und kurz in der Spec §8. Einzelheiten
 - **P6 Keine Lagefelder:** Verschieben geht über das gewöhnliche Verschieben. *Folge (offen):* Das Menü „Bearbeiten …“ ist für STEP-Körper sichtbar und tut nichts, wie bei Netz-Körpern.
 - **P7 Marken:** „STEP-Fläche n“, Reihenfolge des normalisierten Textes. Nach dem Laden sind sie gleich.
 - **P8 Dreh- und Strangflächen:** Analytisch, wo es geht, sonst Freiform. *Abweichung (Fehler im Plan):* Bei einer Drehfläche ist u der Winkel und v die Kurve (ISO-Reihenfolge), nicht umgekehrt; so steht es im Leser. Eine Drehfläche aus einer schrägen Geraden wird abgelehnt.
-- **P9 Nähte:** Nur Zylinder, Kegel und Kugel ohne Naht. *Folge (Dennis hat am 2026-10-23 entschieden: eigenes Teilprojekt, siehe unten):* Torusbänder ohne Naht werden abgelehnt. Pole werden geometrisch erkannt (nicht nur in der Parameterebene).
+- **P9 Nähte:** Nur Zylinder, Kegel und Kugel ohne Naht. *Folge (Dennis hat am 2026-10-23 entschieden: eigenes Teilprojekt, siehe unten):* Torusbänder ohne Naht wurden abgelehnt; seit dem Teilprojekt „Torusbänder ohne Naht“ (2026-10-31) bekommen Band, Rohrbogen und voller Ring eine Naht. Pole werden geometrisch erkannt (nicht nur in der Parameterebene).
 - **P10 Namen:** Wie geplant. *Abweichung:* Erzeugte Namen „STEP-Körper n“ steigen über die vorhandenen Namen im Dokument und in der Datei (`AppState::step_body_names`), damit die Teileliste nichts zusammenwirft.
 - **P11 Einheit umstellen:** Wie geplant, auch für gemischte Dateien (alle Kontexte auf einmal). Bei Dateien mit mehreren Einheiten gilt: eine gewählte Einheit gilt für alle, die eigene Einheit der Datei hebt die Wahl wieder auf.
 - **P12 Grenzen:** Wie geplant. *Zusatz:* Alle STEP-Formen eines Dokuments zusammen höchstens 200 MiB, schon beim Import geprüft (Meldung) und beim Speichern (eigene Meldung); sonst ließe sich ein Dokument zwar bearbeiten, aber nicht speichern.
@@ -1648,7 +1648,15 @@ Release-Build, Fenster zuerst 1400 × 900. Dateien: Kopien der Proben aus `crate
 - [ ] 24. Hell und Dunkel: Symbol im Menü, Status „wird übernommen“ / „wird ausgelassen“ und die Warnung sind lesbar, Farben stimmen mit dem übrigen Programm; Hinweise (Einheit, gemischt) nicht rot.
 - [ ] 25. Strg+Z und Strg+Y bei offenem Fenster tun nichts am Dokument; nach „Schließen“ wirken sie wieder.
 
-## Teilprojekt (aufgenommen, noch nicht begonnen): Torusbänder ohne Naht beim STEP-Import
+## Teilprojekt: Torusbänder ohne Naht beim STEP-Import
+
+Stand 2026-10-31 (Zweig `feature/torus-naht`, Spec `specs/2026-10-31-torus-naht-design.md`, Plan `plans/2026-10-31-torus-naht.md`). Band zwischen zwei Breitenkreisen, Rohrbogen zwischen zwei Rohrkreisen und voller Ring bekommen eine Naht (`seam.rs`, `torus_seam`). Proben in `tests/data/seamless_torus.step`.
+- **Offen:** Noch keine echte STEP-Datei eines anderen Programms gelesen (nur Handproben). Handtest mit einem Fusion-Export (Welle mit gerundeter Kante, Rohrbogen) steht aus.
+- **Nicht gebaut:** Torus, dessen Ränder alle Löcher sind (voller Ring mit Querbohrung), geht weiter den bisherigen Weg als gewöhnliches Stück; Ränder, die sich in beiden Richtungen winden: ausgelassen („schließt sich nicht“). Eine Probe „Band mit Querbohrung“ fehlt (Schnittkurven wären Freiformkurven, von Hand kaum zu schreiben).
+- **Beobachtet (Vernetzer):** Eine Torusfläche mit geteilten Rändern läuft über die Triangulierung im Parameterraum; dort wächst die Dreieckszahl nicht gleichmäßig mit der Sehne (Rohrbogen r 5: Sehne 0,002 → 156 000 Dreiecke, 0,001 → 63 000). Volumen bleibt im Sehnenfehler, die Hochrechnung aus zwei Sehnen ist dort aber unzuverlässig. Darum hat die Handprobe „Bogen“ beide Rohrkreis-Ecken beim selben Winkel; die geteilte Form prüft `read_seams.rs` mit dem genauen Volumen.
+- **Mit behoben:** Die Ausrichtungsprobe nahm die Größe des Körpers nur aus den Ecken; ein voller Ring (eine Ecke) bekam dadurch ein Netz mit über einer Million Dreiecken. Jetzt zählen Punkte auf den Kanten mit (`rough_bounds` in `topo.rs`).
+
+### Ursprünglicher Auftrag
 
 Entscheidung von Dennis am 2026-10-23: Der STEP-Import soll auch Körper lesen, deren Torusfläche (Rundung zwischen zwei Kreisen, Rohrbogen, Reifen) als rundum gehendes Band ohne Naht in der Datei steht. Bisher wird so ein Körper mit Begründung ausgelassen (P9), die übrigen Körper der Datei kommen an.
 

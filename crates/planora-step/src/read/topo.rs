@@ -1223,7 +1223,7 @@ const VOLUME_REL: f64 = 1e-6;
 fn shell_volumes(solid: &Solid) -> Result<ShellMesh, Skip> {
     // Sehne höchstens [`CLASSIFY_CHORD`], bei kleinen Körpern [`CHORD_REL`] ihrer Größe: Sonst
     // schnitten sich die Netze dünner Wände, und die Probe sähe bei winzigen Körpern nichts.
-    let (lo, hi) = bounds_of(solid.vertices.iter().map(|(_, v)| &v.point));
+    let (lo, hi) = rough_bounds(solid);
     let chord = probe_chord(lo.distance(hi));
     let mesh = tessellate(
         solid,
@@ -1281,6 +1281,26 @@ fn shell_volumes(solid: &Solid) -> Result<ShellMesh, Skip> {
         faces,
         chord,
     })
+}
+
+/// Punkte je Kante für [`rough_bounds`].
+const BOUND_SAMPLES: usize = 8;
+
+/// Quader um die Ecken und um [`BOUND_SAMPLES`] Punkte je Kante: Ein Körper mit nur einer Ecke
+/// (voller Ring mit zwei Nähten) hätte sonst die Größe null, und das Netz der Probe würde viel
+/// zu fein.
+fn rough_bounds(solid: &Solid) -> (DVec3, DVec3) {
+    let n = BOUND_SAMPLES;
+    let along = solid.edges.iter().flat_map(|(_, e)| {
+        (0..=n).map(move |k| e.curve.point(e.t0 + (e.t1 - e.t0) * k as f64 / n as f64))
+    });
+    let points: Vec<DVec3> = solid
+        .vertices
+        .iter()
+        .map(|(_, v)| v.point)
+        .chain(along)
+        .collect();
+    bounds_of(&points)
 }
 
 /// Hüllquader von Punkten.
