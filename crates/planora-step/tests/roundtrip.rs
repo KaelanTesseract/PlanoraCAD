@@ -818,17 +818,16 @@ fn profile_bulge_area() -> f64 {
     simpson(0.0, 0.4, 4000, strip) + simpson(0.4, 1.0, 6000, strip)
 }
 
-/// Erwarteter Körper einer Handprobe: Name, Flächen, Volumen (mm³) oder Grund des Auslassens.
+/// Erwarteter Körper einer Handprobe: Name, Flächen, Volumen (mm³).
 enum Want {
     Body(&'static str, usize, f64),
-    Skipped(&'static str, &'static str),
 }
 
 /// Ein Kubikzoll in mm³.
 const CUBIC_INCH: f64 = 25.4 * 25.4 * 25.4;
 
 fn hand_samples() -> Vec<(&'static str, Vec<Want>)> {
-    use Want::{Body, Skipped};
+    use Want::Body;
     let cap = 144.0 * PI;
     vec![
         ("box_ap214", vec![Body("Würfel", 6, 6000.0)]),
@@ -878,6 +877,19 @@ fn hand_samples() -> Vec<(&'static str, Vec<Want>)> {
                 ),
                 Body("Kehle", 4, 3000.0 * PI + 250.0 * PI * PI - 500.0 * PI / 3.0),
                 Body("Bogen", 3, 250.0 * PI * PI),
+            ],
+        ),
+        (
+            "seamless_torus_reverse",
+            vec![
+                Body(
+                    "Fuss",
+                    6,
+                    1216.0 * PI + 232.0 * PI / 3.0 - 20.0 * PI * PI,
+                ),
+                Body("Rohr", 4, 90.0 * PI * PI),
+                Body("Hohl", 2, 32_000.0 * PI / 3.0 - 180.0 * PI * PI),
+                Body("Meridian", 1, 180.0 * PI * PI),
             ],
         ),
         (
@@ -998,10 +1010,6 @@ fn hand_samples_have_their_values() {
         assert_eq!(imp.bodies.len(), want.len(), "{file}: Körperzahl");
         for (b, w) in imp.bodies.iter().zip(&want) {
             match *w {
-                Want::Skipped(name, why) => {
-                    assert_eq!(b.name, name, "{file}");
-                    assert_eq!(b.outcome.as_ref().err().map(String::as_str), Some(why));
-                }
                 Want::Body(name, faces, volume) => {
                     let what = format!("{file}: {name}");
                     assert_eq!(b.name, name, "{file}");

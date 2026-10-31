@@ -520,6 +520,31 @@ fn torus_elbow_gets_a_latitude_seam() {
 }
 
 #[test]
+fn reversed_torus_faces_get_their_seams() {
+    let text = data("seamless_torus_reverse.step");
+    // Fuß: Flansch 576π, Welle 640π, Kreisring R 8…10 × 2 (72π) ohne die Viertelkreisfläche
+    // r 2 um (10; 2) (Schwerpunkt 10 − 8/(3π)).
+    let s = body(&text, "Fuss");
+    assert_volume(&s, 1216.0 * PI + 232.0 * PI / 3.0 - 20.0 * PI * PI, "Fuss");
+    let (face, p) = torus_probe(&s);
+    assert!(!face.same_sense);
+    let (u, _) = face.surface.project(p);
+    let tube = DVec3::new(10.0 * u.cos(), 10.0 * u.sin(), 2.0);
+    assert!(outward(face, p).dot((tube - p).normalize()) > 1.0 - 1e-9, "Kehle zur Rohrmitte");
+    // Hohler Bogen: π (5² − 4²) · 20 · π/2.
+    assert_volume(&body(&text, "Rohr"), 90.0 * PI * PI, "Rohr");
+    // Kugel R 20 ohne den Ring 10/3.
+    let s = body(&text, "Hohl");
+    assert_eq!(s.shells.len(), 2);
+    let want = 32_000.0 * PI / 3.0 - 180.0 * PI * PI;
+    assert_volume(&s, want, "Hohl");
+    // Ring mit nur einer Nahtkante in zwei Rändern: Die zweite Naht geht einmal ganz herum.
+    let s = body(&text, "Meridian");
+    assert_eq!(s.edges.len(), 2);
+    assert_volume(&s, 180.0 * PI * PI, "Meridian");
+}
+
+#[test]
 fn torus_band_with_a_wrong_circle_is_skipped() {
     let text = data("seamless_torus.step");
     let wrong = swap(

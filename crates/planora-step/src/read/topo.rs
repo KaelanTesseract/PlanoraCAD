@@ -1283,7 +1283,6 @@ fn shell_volumes(solid: &Solid) -> Result<ShellMesh, Skip> {
     })
 }
 
-/// Hüllquader von Punkten.
 /// Punkte je Kante für [`rough_bounds`].
 const BOUND_SAMPLES: usize = 8;
 
@@ -1304,6 +1303,7 @@ fn rough_bounds(solid: &Solid) -> (DVec3, DVec3) {
     bounds_of(&points)
 }
 
+/// Hüllquader von Punkten.
 fn bounds_of<'a>(points: impl IntoIterator<Item = &'a DVec3>) -> (DVec3, DVec3) {
     points
         .into_iter()

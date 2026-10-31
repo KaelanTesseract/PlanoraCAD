@@ -646,10 +646,16 @@ fn torus_seam(
     ) else {
         return Err(no_room(&role));
     };
-    // Die Naht läuft in der anderen Richtung in wachsendem Parameter vom Anfang zum Ende.
+    // Die Naht läuft in der anderen Richtung in wachsendem Parameter vom Anfang zum Ende. Teilen
+    // sich beide Ränder eine Kante (voller Ring, dessen eine Naht die Datei schon nennt), ist es
+    // dieselbe Ecke, und die Naht geht einmal ganz herum.
     let along = 1 - dir;
     let t0 = param_of(&surface, raw.vertices[va], along);
-    let t1 = t0 + (param_of(&surface, raw.vertices[vb], along) - t0).rem_euclid(TAU);
+    let t1 = if va == vb {
+        t0 + TAU
+    } else {
+        t0 + (param_of(&surface, raw.vertices[vb], along) - t0).rem_euclid(TAU)
+    };
     let seam = push_torus_seam(raw, &surface, along, at, (va, t0), (vb, t1), line)?;
     let mut lp = rim_a;
     lp.push(fwd(seam));
