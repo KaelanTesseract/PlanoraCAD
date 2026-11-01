@@ -5,14 +5,19 @@
 use crate::msg::Msg;
 use crate::sketch_state::{SketchSession, Tool, err};
 use planora_math::DVec2;
-use planora_sketch::constraint::ConstraintKind;
+use planora_sketch::constraint::{ConstraintKind, LineOrPoints};
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
 use planora_sketch::snap::{AlignHit, Snap, SnapHit, SnapIndex};
+use planora_sketch::solver::SolveStatus;
 use std::sync::Arc;
 
 /// Reichweite der Ausrichtungslinien relativ zum Fangradius; bei vielen Punkten klebte der Zeiger
 /// sonst ständig an irgendeiner Verlängerung.
 const ALIGN_RADIUS_FACTOR: f64 = 0.6;
+
+/// Winkel, unter dem eine neue Kurve beim Zeichnen als waagerecht, senkrecht, parallel,
+/// rechtwinklig oder tangential gilt.
+const AUTO_AXIS_ANGLE: f64 = 3.0 * std::f64::consts::PI / 180.0;
 
 /// Einstellungen des Zeigers, die von außen kommen.
 #[derive(Clone, Copy, Debug, Default)]
@@ -32,6 +37,20 @@ pub enum AutoConstraint {
     Parallel(CurveId),
     Perpendicular(CurveId),
     Tangent(CurveId),
+}
+
+impl AutoConstraint {
+    /// Die Abhängigkeit an der neuen Kurve `new`.
+    pub(crate) fn kind(self, new: CurveId) -> ConstraintKind {
+        use ConstraintKind as K;
+        match self {
+            AutoConstraint::Horizontal => K::Horizontal(LineOrPoints::Line(new)),
+            AutoConstraint::Vertical => K::Vertical(LineOrPoints::Line(new)),
+            AutoConstraint::Parallel(c) => K::Parallel(new, c),
+            AutoConstraint::Perpendicular(c) => K::Perpendicular(new, c),
+            AutoConstraint::Tangent(c) => K::Tangent(new, c),
+        }
+    }
 }
 
 /// Der aufgelöste Zeiger eines Bildes oder Klicks.
@@ -100,6 +119,159 @@ impl DrawCursor {
     }
 }
 
+/// Richtung, in der die Kurve `c` den Punkt `p` an ihrem Ende verlässt (Fortsetzung über das Ende
+/// hinaus, normiert); `None`, wenn `p` kein Ende von `c` ist.
+fn leaving_direction(sk: &Sketch, c: CurveId, p: PointId) -> Option<DVec2> {
+    let at = sk.point_xy(p).ok()?;
+    let dir = match sk.curve(c)?.kind {
+        CurveKind::Line { a, b } if a == p => at - sk.point_xy(b).ok()?,
+        CurveKind::Line { a, b } if b == p => at - sk.point_xy(a).ok()?,
+        CurveKind::Arc { center, end, .. } if end == p => (at - sk.point_xy(center).ok()?).perp(),
+        CurveKind::Arc { center, start, .. } if start == p => {
+            -(at - sk.point_xy(center).ok()?).perp()
+        }
+        _ => return None,
+    };
+    dir.try_normalize()
+}
+
+/// Winkel zwischen zwei normierten Richtungen, 0…π.
+fn angle_between(a: DVec2, b: DVec2) -> f64 {
+    a.perp_dot(b).abs().atan2(a.dot(b))
+}
+
+/// Fund mit dem kleinsten Winkel bis `limit`, bei Gleichstand der zuerst genannte.
+fn best_within<T>(found: impl Iterator<Item = (f64, T)>, limit: f64) -> Option<T> {
+    found
+        .filter(|(angle, _)| *angle <= limit)
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, v)| v)
+}
+
+/// Linien, die über gemeinsame Endpunkte mit `line` zusammenhängen, samt `line`.
+fn connected_lines(sk: &Sketch, line: CurveId) -> Vec<CurveId> {
+    let mut found = vec![line];
+    let mut next = 0;
+    while let Some(&c) = found.get(next) {
+        next += 1;
+        let Some(CurveKind::Line { a, b }) = sk.curve(c).map(|d| &d.kind) else {
+            continue;
+        };
+        let (a, b) = (*a, *b);
+        for (other, data) in sk.curves() {
+            if let CurveKind::Line { a: p, b: q } = data.kind
+                && (p == a || p == b || q == a || q == b)
+                && !found.contains(&other)
+            {
+                found.push(other);
+            }
+        }
+    }
+    found
+}
+
+/// Richtung einer neuen Linie von `start` zu `raw_end`: H/V vor tangential vor parallel und
+/// rechtwinklig, jeweils innerhalb von 3°; liegt das Ende auf gefangener Geometrie
+/// (`on_geometry`), gilt nur eine Richtung, die schon exakt stimmt, denn dort wird nichts mehr
+/// verschoben. Tangential nur in Laufrichtung des Bogens, der in `start` endet. Bezug sind alle
+/// Linien außer der laufenden Kette (`chain`: ihre letzte Linie). Die Richtung ist normiert und
+/// zeigt zum Zeiger.
+pub fn plan_direction(
+    sk: &Sketch,
+    tool: Tool,
+    start: PointId,
+    chain: Option<CurveId>,
+    raw_end: DVec2,
+    on_geometry: bool,
+) -> Option<(AutoConstraint, DVec2)> {
+    if tool != Tool::Line {
+        return None;
+    }
+    let tol = sk.tolerance();
+    let along = raw_end - sk.point_xy(start).ok()?;
+    if along.length() <= tol.linear {
+        return None;
+    }
+    let d = along.normalize();
+    let limit = if on_geometry {
+        tol.angular
+    } else {
+        AUTO_AXIS_ANGLE
+    };
+    // Eine Gerade hat zwei Richtungen; es zählt die, die zum Zeiger zeigt.
+    let toward = |u: DVec2| if u.dot(d) < 0.0 { -u } else { u };
+    if angle_between(d, toward(DVec2::X)) <= limit {
+        return Some((AutoConstraint::Horizontal, toward(DVec2::X)));
+    }
+    if angle_between(d, toward(DVec2::Y)) <= limit {
+        return Some((AutoConstraint::Vertical, toward(DVec2::Y)));
+    }
+    let tangent = best_within(
+        sk.curves()
+            .filter(|(_, data)| matches!(data.kind, CurveKind::Arc { .. }))
+            .filter_map(|(c, _)| {
+                let forward = leaving_direction(sk, c, start)?;
+                Some((
+                    angle_between(d, forward),
+                    (AutoConstraint::Tangent(c), forward),
+                ))
+            }),
+        limit,
+    );
+    if tangent.is_some() {
+        return tangent;
+    }
+    let skip = chain.map_or_else(Vec::new, |c| connected_lines(sk, c));
+    best_within(
+        sk.curves()
+            .filter(|(c, _)| !skip.contains(c))
+            .filter_map(|(c, data)| {
+                let CurveKind::Line { a, b } = data.kind else {
+                    return None;
+                };
+                let u = (sk.point_xy(b).ok()? - sk.point_xy(a).ok()?).try_normalize()?;
+                Some([
+                    (
+                        angle_between(d, toward(u)),
+                        (AutoConstraint::Parallel(c), toward(u)),
+                    ),
+                    (
+                        angle_between(d, toward(u.perp())),
+                        (AutoConstraint::Perpendicular(c), toward(u.perp())),
+                    ),
+                ])
+            })
+            .flatten(),
+        limit,
+    )
+}
+
+/// Kurve, an der ein Bogen um `center` mit dem Anfang `start` tangential weiterläuft: Linie oder
+/// Bogen, die in `start` enden, gegen den Uhrzeigersinn in dieselbe Richtung. Eine frei gesetzte
+/// Mitte rückt beim Setzen des Anfangs zurecht (bis 3°), eine gebundene muss schon exakt stimmen.
+fn arc_start_tangent(
+    sk: &Sketch,
+    center: PointId,
+    start: PointId,
+    center_free: bool,
+) -> Option<CurveId> {
+    let tol = sk.tolerance();
+    let out = (sk.point_xy(start).ok()? - sk.point_xy(center).ok()?)
+        .perp()
+        .try_normalize()?;
+    let limit = if center_free {
+        AUTO_AXIS_ANGLE
+    } else {
+        tol.angular
+    };
+    best_within(
+        sk.curves()
+            .filter(|(_, data)| matches!(data.kind, CurveKind::Line { .. } | CurveKind::Arc { .. }))
+            .filter_map(|(c, _)| Some((angle_between(out, leaving_direction(sk, c, start)?), c))),
+        limit,
+    )
+}
+
 impl SketchSession {
     /// Zeichnet das aktive Werkzeug neue Geometrie (Fang, Anbindung, Hilfslinien)? Auswahl und
     /// Kantenkopie nicht; Stutzen, Dehnen und Brechen haben ihre eigene Vorschau.
@@ -110,9 +282,10 @@ impl SketchSession {
         )
     }
 
-    /// Bestimmt aus der Rohlage die Lage, die Fangart und die Hilfslinien: Strg ⇒ nichts davon,
-    /// sonst Geometrie-Fang, dann Ausrichtung und je noch freier Achse das Raster. Gleiche
-    /// Eingaben ergeben ohne Änderung der Skizze dasselbe Ergebnis.
+    /// Bestimmt aus der Rohlage die Lage, die Fangart, die Hilfslinien und die automatischen
+    /// Abhängigkeiten: Strg ⇒ nichts davon, sonst Geometrie-Fang, dann Richtung, Ausrichtung und je
+    /// noch freier Achse das Raster. Gleiche Eingaben ergeben ohne Änderung der Skizze dasselbe
+    /// Ergebnis.
     pub fn resolve_cursor(&mut self, sk: &Sketch, raw: DVec2, radius: f64) -> DrawCursor {
         let mut cur = DrawCursor::free(raw);
         if !self.is_drawing_tool() || self.cursor_opts.suppressed || !raw.is_finite() {
@@ -123,29 +296,135 @@ impl SketchSession {
             cur.at = hit.at;
             cur.snap = hit.snap;
             cur.snap_at = Some(hit.at);
-            return cur;
+            cur.autos
+                .extend(self.line_direction(sk, hit.at, true).map(|d| d.0));
+        } else {
+            self.resolve_free(sk, &index, radius, &mut cur);
+        }
+        if self.tool == Tool::Arc && self.auto_allowed() {
+            cur.autos.extend(self.arc_tangent(sk, &cur));
+        }
+        cur
+    }
+
+    /// Zeiger ohne Geometrie-Fang: erst die Richtung (das Ende wird exakt auf sie projiziert),
+    /// dann Ausrichtung und Raster auf den Achsen, die sie frei lässt; eine schräge Richtung lässt
+    /// keine frei.
+    fn resolve_free(&mut self, sk: &Sketch, index: &SnapIndex, radius: f64, cur: &mut DrawCursor) {
+        let raw = cur.raw;
+        let (mut free_x, mut free_y) = (true, true);
+        if let Some((auto, dir)) = self.line_direction(sk, raw, false)
+            && let Some(from) = self.pending.first().and_then(|&p| sk.point_xy(p).ok())
+        {
+            cur.at = from + dir * (raw - from).dot(dir);
+            cur.autos.push(auto);
+            free_x = auto == AutoConstraint::Horizontal;
+            free_y = auto == AutoConstraint::Vertical;
         }
         cur.guides = index.align(raw, radius * ALIGN_RADIUS_FACTOR, &self.align_skip(sk));
+        if !free_x {
+            cur.guides.x = None;
+        }
+        if !free_y {
+            cur.guides.y = None;
+        }
         if let Some((_, x)) = cur.guides.x {
             cur.at.x = x;
         }
         if let Some((_, y)) = cur.guides.y {
             cur.at.y = y;
         }
+        let (grid_x, grid_y) = (
+            free_x && cur.guides.x.is_none(),
+            free_y && cur.guides.y.is_none(),
+        );
         let step = self.cursor_opts.grid_step;
         if let Some(step) = step.filter(|s| s.is_finite() && *s > 0.0)
-            && (cur.guides.x.is_none() || cur.guides.y.is_none())
+            && (grid_x || grid_y)
         {
-            if cur.guides.x.is_none() {
+            if grid_x {
                 cur.at.x = (raw.x / step).round() * step;
             }
-            if cur.guides.y.is_none() {
+            if grid_y {
                 cur.at.y = (raw.y / step).round() * step;
             }
             cur.snap = Snap::Grid;
             cur.snap_at = Some(cur.at);
         }
-        cur
+    }
+
+    /// Darf eine Richtung entstehen? Schalter an und die Skizze nicht ungelöst; was
+    /// [`try_auto`](Self::try_auto) ohnehin verwerfen würde, bekommt gar nicht erst ein Zeichen.
+    fn auto_allowed(&self) -> bool {
+        self.auto_constrain
+            && self
+                .last_report
+                .as_ref()
+                .is_none_or(|r| r.status == SolveStatus::Solved)
+    }
+
+    /// Richtung des laufenden Linienendes.
+    fn line_direction(
+        &self,
+        sk: &Sketch,
+        end: DVec2,
+        on_geometry: bool,
+    ) -> Option<(AutoConstraint, DVec2)> {
+        if !self.auto_allowed() {
+            return None;
+        }
+        let &start = self.pending.first()?;
+        plan_direction(sk, self.tool, start, self.line_chain, end, on_geometry)
+    }
+
+    /// Tangente des Bogens: beim Setzen des Anfangs aus dem Punkt unter dem Zeiger, danach die
+    /// beim Setzen entschiedene.
+    fn arc_tangent(&self, sk: &Sketch, cur: &DrawCursor) -> Option<AutoConstraint> {
+        let tangent = match *self.pending.as_slice() {
+            [center] => {
+                let start = cur.point(sk.tolerance().linear)?;
+                arc_start_tangent(sk, center, start, self.arc_center_free())?
+            }
+            [_, _, ..] => self.auto_tangent.filter(|&c| sk.curve(c).is_some())?,
+            _ => return None,
+        };
+        Some(AutoConstraint::Tangent(tangent))
+    }
+
+    /// Wurde die Mitte des laufenden Bogens frei gesetzt (ohne Bindung an Geometrie)?
+    fn arc_center_free(&self) -> bool {
+        self.pending_snaps
+            .first()
+            .is_some_and(|hit| matches!(hit.snap, Snap::None | Snap::Grid))
+    }
+
+    /// Bogenanfang gesetzt: Zeigt `cur` eine Tangente, gilt sie bis zum Abschluss. Eine freie Mitte
+    /// rückt auf die Senkrechte durch den Anfang, damit das Lösen beim Abschluss nichts bewegt und
+    /// die Vorschau schon stimmt.
+    pub(crate) fn plan_arc_tangent(
+        &mut self,
+        sk: &mut Sketch,
+        center: PointId,
+        start: PointId,
+        cur: &DrawCursor,
+    ) -> Result<(), Msg> {
+        let Some(c) = cur.autos.iter().find_map(|a| match a {
+            AutoConstraint::Tangent(c) => Some(*c),
+            _ => None,
+        }) else {
+            return Ok(());
+        };
+        self.auto_tangent = Some(c);
+        if self.arc_center_free()
+            && let Some(leaving) = leaving_direction(sk, c, start)
+        {
+            let s = sk.point_xy(start).map_err(err)?;
+            let m = sk.point_xy(center).map_err(err)?;
+            let normal = leaving.perp();
+            let exact = s + normal * (m - s).dot(normal);
+            sk.set_point_xy(center, exact.x, exact.y).map_err(err)?;
+        }
+        Ok(())
     }
 
     /// Bestimmt [`draw_cursor`](Self::draw_cursor) für dieses Bild (`None` ohne Zeiger über der

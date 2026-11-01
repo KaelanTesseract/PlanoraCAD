@@ -170,6 +170,72 @@ fn a_circle_tangent_to_a_fixed_line() {
     );
 }
 
+/// Linie unter 0° bis (10, 0), dort der Bogen um (10, 5) weiter.
+fn line_and_arc(arc_starts_there: bool) -> (Sketch, PointId, planora_sketch::model::CurveId) {
+    let mut s = sketch();
+    let a = s.add_point(0.0, 0.0).unwrap();
+    let b = s.add_point(10.0, 0.0).unwrap();
+    let m = s.add_point(10.0, 5.0).unwrap();
+    let other = s.add_point(15.0, 5.0).unwrap();
+    let line = s.add_line(a, b).unwrap();
+    let arc = if arc_starts_there {
+        s.add_arc(m, b, other).unwrap()
+    } else {
+        s.add_arc(m, other, b).unwrap()
+    };
+    s.add_constraint(K::Fixed(a, 0.0, 0.0)).unwrap();
+    s.add_constraint(K::Fixed(b, 10.0, 0.0)).unwrap();
+    s.add_constraint(K::Tangent(line, arc)).unwrap();
+    (s, m, arc)
+}
+
+#[test]
+fn a_tangent_at_a_shared_end_is_no_redundancy_and_holds_the_direction() {
+    for arc_starts_there in [true, false] {
+        let (mut s, m, _) = line_and_arc(arc_starts_there);
+        let free = s.solve();
+        assert_eq!(free.status, SolveStatus::Solved, "{free:?}");
+        assert!(free.redundant.is_empty(), "{free:?}");
+        // Mitte nur noch auf der Senkrechten, anderes Bogenende auf dem Kreis: 2 Freiheitsgrade.
+        assert_eq!(free.dof, 2, "{free:?}");
+        let r = s
+            .drag(&[planora_sketch::solver::Drag {
+                point: m,
+                target: DVec2::new(14.0, 9.0),
+            }])
+            .unwrap();
+        assert_eq!(r.status, SolveStatus::Solved, "{r:?}");
+        assert!((xy(&s, m).x - 10.0).abs() < 1e-7, "{:?}", xy(&s, m));
+    }
+}
+
+#[test]
+fn a_tangent_between_two_arcs_at_a_shared_end_keeps_the_centres_in_line() {
+    let mut s = sketch();
+    let m1 = s.add_point(0.0, 0.0).unwrap();
+    let start = s.add_point(10.0, 0.0).unwrap();
+    let shared = s.add_point(0.0, 10.0).unwrap();
+    let m2 = s.add_point(0.0, 6.0).unwrap();
+    let end = s.add_point(-4.0, 6.0).unwrap();
+    let first = s.add_arc(m1, start, shared).unwrap();
+    let second = s.add_arc(m2, shared, end).unwrap();
+    s.add_constraint(K::Fixed(m1, 0.0, 0.0)).unwrap();
+    s.add_constraint(K::Fixed(start, 10.0, 0.0)).unwrap();
+    s.add_constraint(K::Tangent(second, first)).unwrap();
+    let r = s.solve();
+    assert_eq!(r.status, SolveStatus::Solved, "{r:?}");
+    assert!(r.redundant.is_empty(), "{r:?}");
+    let d = s
+        .drag(&[planora_sketch::solver::Drag {
+            point: m2,
+            target: DVec2::new(3.0, 5.0),
+        }])
+        .unwrap();
+    assert_eq!(d.status, SolveStatus::Solved, "{d:?}");
+    let (p, q) = (xy(&s, shared), xy(&s, m2));
+    assert!(p.perp_dot(q).abs() < 1e-6, "{p:?} {q:?}");
+}
+
 #[test]
 fn an_arc_end_is_pulled_onto_the_circle_through_its_start() {
     let mut s = sketch();

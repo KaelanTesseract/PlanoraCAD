@@ -2,6 +2,7 @@
 //! über der Szene und Weiterleiten der Eingaben an [`SketchSession`]. Die Logik (Werkzeuge, Fang,
 //! Abhängigkeiten) liegt in `sketch_state`; hier wird nur gezeichnet und weitergereicht.
 
+use crate::sketch_cursor::AutoConstraint;
 use crate::sketch_state::{Item, SketchSession, Snap, Tool};
 use crate::state::AppState;
 use crate::theme::{lighten as lighter, sketch_colors as colors};
@@ -215,6 +216,17 @@ fn symbol(ctx: &egui::Context, preferred: &'static str, fallback: &'static str) 
     }
 }
 
+fn parallel_symbol(ctx: &egui::Context) -> &'static str {
+    symbol(ctx, "∥", "||")
+}
+
+fn perpendicular_symbol(ctx: &egui::Context) -> String {
+    match symbol(ctx, "⟂", "") {
+        "" => tr!("sketch-overlay-perpendicular"),
+        sym => sym.to_string(),
+    }
+}
+
 /// Beschriftung einer Abhängigkeit in der Ansicht: Symbol bzw. Maß mit Einheit.
 pub fn overlay_text(
     ctx: &egui::Context,
@@ -227,11 +239,8 @@ pub fn overlay_text(
         K::Coincident(..) | K::ArcRadius(..) | K::EllipticArcEnds(..) => return String::new(),
         K::Horizontal(..) => "H".to_string(),
         K::Vertical(..) => "V".to_string(),
-        K::Parallel(..) => symbol(ctx, "∥", "||").to_string(),
-        K::Perpendicular(..) => match symbol(ctx, "⟂", "") {
-            "" => tr!("sketch-overlay-perpendicular"),
-            sym => sym.to_string(),
-        },
+        K::Parallel(..) => parallel_symbol(ctx).to_string(),
+        K::Perpendicular(..) => perpendicular_symbol(ctx),
         K::Equal(..) => "=".to_string(),
         K::Tangent(..) => "T".to_string(),
         // Der Punkt im Ursprung ist „deckungsgleich mit dem Ursprung“, kein Festsetzen von Hand.
@@ -258,6 +267,41 @@ pub fn overlay_text(
         _ => value_text(kind, v),
     };
     if driven { format!("({text})") } else { text }
+}
+
+/// Zeichen einer automatischen Abhängigkeit, wie später an der fertigen Kurve.
+fn auto_text(ctx: &egui::Context, auto: AutoConstraint) -> String {
+    match auto {
+        AutoConstraint::Horizontal => "H".to_string(),
+        AutoConstraint::Vertical => "V".to_string(),
+        AutoConstraint::Parallel(_) => parallel_symbol(ctx).to_string(),
+        AutoConstraint::Perpendicular(_) => perpendicular_symbol(ctx),
+        AutoConstraint::Tangent(_) => "T".to_string(),
+    }
+}
+
+/// Stellen der Zeichen für die automatischen Abhängigkeiten des Zeigers: an der entstehenden Kurve
+/// (Linie: Mitte, Bogen: am Zeiger) und, wenn es eine gibt, an der Bezugskurve.
+pub fn auto_marks(sk: &Sketch, se: &SketchSession) -> Vec<(DVec2, AutoConstraint)> {
+    let Some(cur) = &se.draw_cursor else {
+        return Vec::new();
+    };
+    let own = match (se.tool, se.pending.last().and_then(|&p| pos(sk, p))) {
+        (Tool::Line, Some(start)) => (start + cur.at) * 0.5,
+        _ => cur.at,
+    };
+    let mut marks = Vec::new();
+    for &auto in &cur.autos {
+        marks.push((own, auto));
+        if let AutoConstraint::Parallel(c)
+        | AutoConstraint::Perpendicular(c)
+        | AutoConstraint::Tangent(c) = auto
+            && let Some(at) = curve_anchor(sk, c)
+        {
+            marks.push((at, auto));
+        }
+    }
+    marks
 }
 
 // ---- Lage der Beschriftungen ----------------------------------------------------------------
@@ -820,6 +864,15 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
                     &mut placed,
                 );
             }
+        }
+    }
+
+    // Zeichen der automatischen Abhängigkeiten, bevor sie entstehen
+    for (at, auto) in auto_marks(sk, se) {
+        if let Some(s) = map.to_screen(at) {
+            let text = auto_text(ui.ctx(), auto);
+            let at = s + vec2(6.0, -18.0);
+            label(&painter, at, &text, col.snap, col.label_bg, &mut placed);
         }
     }
 

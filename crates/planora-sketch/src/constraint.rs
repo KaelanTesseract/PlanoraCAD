@@ -384,6 +384,17 @@ fn line_and_param(sk: &Sketch, a: CurveId, b: CurveId) -> Option<(CurveId, Curve
     }
 }
 
+/// Gemeinsamer Endpunkt zweier Linien oder Bögen.
+fn shared_end(sk: &Sketch, a: CurveId, b: CurveId) -> Option<PointId> {
+    let ends = |c: CurveId| match sk.curves[c].kind {
+        CurveKind::Line { a, b } => Some([a, b]),
+        CurveKind::Arc { start, end, .. } => Some([start, end]),
+        _ => None,
+    };
+    let (ea, eb) = (ends(a)?, ends(b)?);
+    ea.into_iter().find(|p| eb.contains(p))
+}
+
 /// Vorzeichenbehafteter Abstand des Punktes p von der Linie (links der Richtung positiv).
 fn signed_distance(ctx: &Ctx, p: &V2, line: CurveId) -> Dual {
     let (a, d) = line_dir(ctx, line);
@@ -451,6 +462,32 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
             let (_, d) = line_dir(ctx, line);
             let den = norm_len(&dq) * norm_len(&d);
             vec![signed_distance(ctx, &q, line), cross(&dq, &d) / den]
+        }
+        // Am gemeinsamen Ende berührt die Tangente nur in zweiter Ordnung: Ihre Zeile fiele dort
+        // mit `ArcRadius` zusammen (oder wäre null) und hielte die Richtung nicht. Darum zählt hier
+        // die Richtung selbst: Radius senkrecht zur Linie, die Mitten auf einer Geraden durchs Ende.
+        Tangent(c1, c2) if shared_end(sk, *c1, *c2).is_some() => {
+            let Some(p) = shared_end(sk, *c1, *c2) else {
+                unreachable!("checked in the guard")
+            };
+            let at = ctx.pt(p);
+            match (&sk.curves[*c1].kind, &sk.curves[*c2].kind) {
+                (CurveKind::Line { .. }, _) => {
+                    let (m, _) = circle_of(ctx, *c2);
+                    let (_, d) = line_dir(ctx, *c1);
+                    vec![dot(&d, &sub2(&at, &m)) / norm_len(&d)]
+                }
+                (_, CurveKind::Line { .. }) => {
+                    let (m, _) = circle_of(ctx, *c1);
+                    let (_, d) = line_dir(ctx, *c2);
+                    vec![dot(&d, &sub2(&at, &m)) / norm_len(&d)]
+                }
+                _ => {
+                    let ((m1, _), (m2, _)) = (circle_of(ctx, *c1), circle_of(ctx, *c2));
+                    let (u, v) = (sub2(&m1, &at), sub2(&m2, &at));
+                    vec![cross(&u, &v) / norm_len(&u)]
+                }
+            }
         }
         Tangent(c1, c2) => {
             let s = f64::from(data.branch);

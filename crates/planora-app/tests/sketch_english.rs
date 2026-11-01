@@ -226,7 +226,7 @@ fn sketch_speaks_english() {
                 "Mirror …",
                 "Pattern …",
                 "Delete",
-                "Detect\nhorizontal/vertical",
+                "Automatic\nconstraints",
                 "Sketch constraints",
                 "No constraints yet.",
                 "Finish sketch",

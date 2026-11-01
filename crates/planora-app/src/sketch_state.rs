@@ -18,9 +18,6 @@ use std::sync::Arc;
 
 pub use planora_sketch::snap::Snap;
 
-/// Winkel zur Achse, unter dem eine Linie beim Zeichnen als waagerecht/senkrecht gilt.
-const AUTO_AXIS_ANGLE: f64 = 3.0 * std::f64::consts::PI / 180.0;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
     Select,
@@ -176,7 +173,8 @@ pub struct SketchSession {
     /// Noch nicht angelegte Eckpunkte (Rechteck, Ellipse).
     pub pending_pos: Vec<DVec2>,
     /// Fang der noch nicht angelegten Eckpunkte in `pending_pos` (Rechteck: erste Ecke, Ellipse:
-    /// Ende der großen Achse); die Anbindung folgt beim Abschluss.
+    /// Ende der großen Achse); die Anbindung folgt beim Abschluss. Bogen: Fang der Mitte (nur eine
+    /// frei gesetzte Mitte rückt für die Tangente zurecht).
     pub pending_snaps: Vec<SnapHit>,
     pub cursor: Option<DVec2>,
     /// Strg und Raster für den Zeiger ([`resolve_cursor`](Self::resolve_cursor)).
@@ -185,8 +183,13 @@ pub struct SketchSession {
     pub draw_cursor: Option<DrawCursor>,
     /// Fang-Index zum letzten gesehenen Stand der Skizze (nur in Zeichenwerkzeugen gebaut).
     pub snap_index: Option<Arc<SnapIndex>>,
-    /// Beim Zeichnen von Linien automatisch waagerecht/senkrecht ergänzen.
+    /// Beim Zeichnen automatisch waagerecht, senkrecht, parallel, rechtwinklig und tangential
+    /// ergänzen (die Anbindung an Fangziele bleibt auch ohne).
     pub auto_constrain: bool,
+    /// Letzte Linie des laufenden Linienzugs; was mit ihr zusammenhängt, ist kein Richtungsbezug.
+    pub line_chain: Option<CurveId>,
+    /// Bogen: Kurve, an der der gesetzte Anfang tangential weiterläuft; entsteht beim Abschluss.
+    pub auto_tangent: Option<CurveId>,
     pub last_report: Option<SolveReport>,
     /// Meldung zum letzten Schritt; gespeichert als Grund und erst beim Zeichnen übersetzt
     /// ([`message_text`](Self::message_text)).
@@ -215,6 +218,8 @@ struct Backup {
     pending: Vec<PointId>,
     pending_pos: Vec<DVec2>,
     pending_snaps: Vec<SnapHit>,
+    line_chain: Option<CurveId>,
+    auto_tangent: Option<CurveId>,
     selection: Vec<Item>,
     last_report: Option<SolveReport>,
 }
@@ -270,6 +275,8 @@ impl SketchSession {
             draw_cursor: None,
             snap_index: None,
             auto_constrain: true,
+            line_chain: None,
+            auto_tangent: None,
             last_report: None,
             message: None,
             dragging: None,
@@ -297,6 +304,8 @@ impl SketchSession {
         self.pending.clear();
         self.pending_pos.clear();
         self.pending_snaps.clear();
+        self.line_chain = None;
+        self.auto_tangent = None;
     }
 
     /// Wählt `tool` wie der Klick auf seinen Knopf in der Leiste (und sein Tastenkürzel): ist
@@ -347,6 +356,8 @@ impl SketchSession {
             pending: self.pending.clone(),
             pending_pos: self.pending_pos.clone(),
             pending_snaps: self.pending_snaps.clone(),
+            line_chain: self.line_chain,
+            auto_tangent: self.auto_tangent,
             selection: self.selection.clone(),
             last_report: self.last_report.clone(),
         }
@@ -357,6 +368,8 @@ impl SketchSession {
         self.pending = b.pending;
         self.pending_pos = b.pending_pos;
         self.pending_snaps = b.pending_snaps;
+        self.line_chain = b.line_chain;
+        self.auto_tangent = b.auto_tangent;
         self.selection = b.selection;
         self.last_report = b.last_report;
     }
@@ -615,43 +628,39 @@ impl SketchSession {
         };
         let line = sk.add_line(start, p).map_err(err)?;
         self.solve_checked(sk, prior)?;
-        if self.auto_constrain && !self.cursor_opts.suppressed {
-            self.add_auto_axis(sk, line);
+        for auto in &cur.autos {
+            self.try_auto(sk, auto.kind(line));
         }
+        self.line_chain = Some(line);
         self.pending = vec![p];
         Ok(())
     }
 
-    /// Ergänzt bei fast waagerechten/senkrechten Linien `Horizontal`/`Vertical`. Ist die
-    /// Abhängigkeit überzählig oder lässt sich die Skizze damit nicht lösen, entfällt sie.
-    fn add_auto_axis(&mut self, sk: &mut Sketch, line: CurveId) {
-        let Some(CurveKind::Line { a, b }) = sk.curve(line).map(|c| c.kind.clone()) else {
-            return;
-        };
-        let (Ok(pa), Ok(pb)) = (sk.point_xy(a), sk.point_xy(b)) else {
-            return;
-        };
-        let d = pb - pa;
-        let angle = d.y.abs().atan2(d.x.abs());
-        let kind = if angle < AUTO_AXIS_ANGLE {
-            ConstraintKind::Horizontal(LineOrPoints::Line(line))
-        } else if std::f64::consts::FRAC_PI_2 - angle < AUTO_AXIS_ANGLE {
-            ConstraintKind::Vertical(LineOrPoints::Line(line))
-        } else {
-            return;
-        };
-        let before = sk.clone();
-        let before_report = self.last_report.clone();
-        let Ok(id) = sk.add_constraint(kind) else {
-            return;
-        };
-        let report = sk.solve();
-        if status_ok(&report) && !report.redundant.contains(&id) {
-            self.last_report = Some(report);
-        } else {
-            *sk = before;
-            self.last_report = before_report;
+    /// Versucht eine automatische Abhängigkeit an einer Kopie: Sie entfällt still (`false`), wenn
+    /// die Skizze vorher nicht gelöst war, danach nicht gelöst ist, die neue überzählig wäre oder
+    /// ein Punkt sich um mehr als `10·tol.linear` bewegen würde.
+    pub fn try_auto(&mut self, sk: &mut Sketch, kind: ConstraintKind) -> bool {
+        if !self.last_report.as_ref().is_some_and(status_ok) {
+            return false;
         }
+        let mut attempt = sk.clone();
+        let Ok(id) = attempt.add_constraint(kind) else {
+            return false;
+        };
+        let report = attempt.solve();
+        let limit = 10.0 * sk.tolerance().linear;
+        let moved = sk
+            .points()
+            .any(|(p, _)| match (sk.point_xy(p), attempt.point_xy(p)) {
+                (Ok(a), Ok(b)) => a.distance(b) > limit,
+                _ => true,
+            });
+        if !status_ok(&report) || report.redundant.contains(&id) || moved {
+            return false;
+        }
+        *sk = attempt;
+        self.last_report = Some(report);
+        true
     }
 
     fn click_rectangle(
@@ -717,6 +726,7 @@ impl SketchSession {
             [] => {
                 let c = self.attach(sk, None, cur)?;
                 self.pending = vec![c];
+                self.pending_snaps = vec![cur.remember(tol)];
             }
             [center] => {
                 let s = self.attach(sk, None, cur)?;
@@ -730,6 +740,7 @@ impl SketchSession {
                     return Err(crate::msg!("sketch-arc-start-center"));
                 }
                 self.pending.push(s);
+                self.plan_arc_tangent(sk, center, s, cur)?;
             }
             [center, start, ..] => {
                 let m = sk.point_xy(center).map_err(err)?;
@@ -760,8 +771,13 @@ impl SketchSession {
                 if sk.point_xy(end).map_err(err)?.distance(s) <= tol {
                     return Err(on_start());
                 }
-                sk.add_arc(center, start, end).map_err(err)?;
-                self.pending.clear();
+                let arc = sk.add_arc(center, start, end).map_err(err)?;
+                self.clear_pending();
+                self.solve_checked(sk, prior)?;
+                for auto in &cur.autos {
+                    self.try_auto(sk, auto.kind(arc));
+                }
+                return Ok(());
             }
         }
         self.solve_checked(sk, prior)?;

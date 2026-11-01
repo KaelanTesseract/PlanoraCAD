@@ -57,6 +57,8 @@ fn the_line_tool_draws_a_chain_and_adds_horizontal_and_vertical() {
     assert_eq!(sk.curves().count(), 3);
     assert_eq!(sk.points().count(), 3, "Fang auf den ersten Punkt");
     assert!(sk.profiles().profiles.len() == 1, "geschlossenes Dreieck");
+    // Fusion-Verhalten, Skizzen 2: Das Ende auf dem ersten Punkt bleibt ohne Richtung.
+    assert_eq!(sk.constraints().count(), 2, "nur H und V der ersten Linien");
 }
 
 #[test]

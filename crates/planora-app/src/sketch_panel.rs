@@ -1101,7 +1101,7 @@ pub fn auto_axis_hint() -> String {
     tr!("sketch-auto-axis-hint")
 }
 
-/// Schalter für automatisch waagerechte/senkrechte Linien.
+/// Schalter für die automatischen Abhängigkeiten beim Zeichnen.
 pub fn auto_axis() -> String {
     tr!("sketch-auto-axis")
 }

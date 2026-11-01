@@ -474,8 +474,8 @@ fn no_text_is_clipped_at_1400px() {
     ] {
         s.text(must);
     }
-    // Der Schalter „Waagerecht/senkrecht erkennen“ steht in zwei Zeilen.
-    assert_eq!(sketch_panel::auto_axis(), "Waagerecht/senkrecht erkennen");
+    // Der Schalter „Automatische Abhängigkeiten“ steht in zwei Zeilen (Name: Skizzen 2).
+    assert_eq!(sketch_panel::auto_axis(), "Automatische Abhängigkeiten");
     s.text(&sketch_panel::auto_axis_label());
     assert!(
         !sketch_panel::auto_axis_hint().contains("  "),
