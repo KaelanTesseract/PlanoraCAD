@@ -362,6 +362,11 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     // Formeln der Maße nennen Parameter nur lesend (das Fenster „Parameter“ ist gesperrt).
     let scope = state.document.param_scope();
     let mut show_profiles = state.show_sketch_profiles;
+    let mut palette = SketchPalette {
+        grid: state.sketch_show_grid,
+        snap: state.sketch_snap_grid,
+        changed: false,
+    };
     let Some((se, sf)) = state.session_draft_mut() else {
         return;
     };
@@ -384,10 +389,14 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         panel: &mut panel,
         scope: &scope,
         show_profiles: &mut show_profiles,
+        palette: &mut palette,
     };
     side_field(ctx, rects.right, dark, se, sf, side);
     let close = foot_field(ctx, rects.bottom, dark, se, &mut sf.sketch);
     state.show_sketch_profiles = show_profiles;
+    state.sketch_show_grid = palette.grid;
+    state.sketch_snap_grid = palette.snap;
+    state.sketch_grid_changed |= palette.changed;
     ctx.data_mut(|d| d.insert_temp(panel_id(), panel));
     if close {
         state.close_sketch();
@@ -516,12 +525,21 @@ fn strip_button(
     response
 }
 
+/// Schalter „Skizzenraster“ und „Fang“ (wie Fusions Skizzenpalette). `changed`: einer wurde
+/// betätigt.
+struct SketchPalette {
+    grid: bool,
+    snap: bool,
+    changed: bool,
+}
+
 /// Was das Skizzenfeld außer Sitzung und Entwurf braucht.
 struct SideInput<'a> {
     panel: &'a mut PanelState,
     scope: &'a ParamScope,
     /// Schalter „Profil anzeigen“ ([`AppState::show_sketch_profiles`]).
     show_profiles: &'a mut bool,
+    palette: &'a mut SketchPalette,
 }
 
 /// Skizzenfeld rechts (Spaltenbreite 250): Inhalt in einer senkrechten ScrollArea, höchstens so
@@ -559,6 +577,7 @@ fn side_contents(
         panel,
         scope,
         show_profiles,
+        palette,
     } = side;
     // Name, rechts daneben der Schalter „Profil anzeigen“ (wie Fusions Skizzenpalette
     // „Profil“: geschlossene Flächen hell eingefärbt); in einer Zeile, damit die Liste darunter
@@ -568,6 +587,16 @@ fn side_contents(
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.checkbox(show_profiles, tr!("sketch-show-profile"));
         });
+    });
+    // Skizzenraster und Fang in einer eigenen Zeile unter dem Namen.
+    ui.horizontal(|ui| {
+        let grid = ui
+            .checkbox(&mut palette.grid, tr!("sketch-palette-grid"))
+            .on_hover_text(tr!("sketch-palette-grid-hint"));
+        let snap = ui
+            .checkbox(&mut palette.snap, tr!("sketch-palette-snap"))
+            .on_hover_text(tr!("sketch-palette-snap-hint"));
+        palette.changed |= grid.changed() || snap.changed();
     });
     ui.add_space(2.0);
 

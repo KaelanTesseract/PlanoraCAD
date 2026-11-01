@@ -178,6 +178,13 @@ pub struct AppState {
     /// Profile im Skizzen-Modus als helle Flächen zeigen (Skizzenfeld „Profil anzeigen“, wie
     /// Fusions Skizzenpalette „Profil“); Vorgabe an.
     pub show_sketch_profiles: bool,
+    /// Skizzenraster zeigen (Skizzenfeld, wie Fusions Skizzenpalette); Vorgabe an. Ohne Raster
+    /// kein Raster-Fang. Den Stand führt [`crate::workspace::Workspace::sync_sketch_grid`].
+    pub sketch_show_grid: bool,
+    /// Freie Punkte am sichtbaren Raster fangen (Skizzenfeld „Fang“); Vorgabe an.
+    pub sketch_snap_grid: bool,
+    /// Ein Schalter wurde betätigt: Der Arbeitsbereich speichert den Stand und gibt ihn allen Tabs.
+    pub sketch_grid_changed: bool,
     /// Offene Profilwahl eines Dialogs „Extrudieren“/„Drehen“: Die 3D-Ansicht zeigt die Profile
     /// der Skizze und schaltet sie per Klick um (siehe [`ProfilePick`]).
     pub profile_pick: Option<ProfilePick>,
@@ -434,6 +441,9 @@ impl AppState {
             sketch_request: None,
             profile_cache: ProfileCache::default(),
             show_sketch_profiles: true,
+            sketch_show_grid: true,
+            sketch_snap_grid: true,
+            sketch_grid_changed: false,
             profile_pick: None,
             pending_delete: None,
             rename_draft: None,

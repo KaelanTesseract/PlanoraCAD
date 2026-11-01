@@ -8,7 +8,9 @@ mod scene;
 mod viewcube;
 
 pub use camera::OrbitCamera;
-pub use grid::{grid_lines, grid_radius, grid_step};
+pub use grid::{
+    axis_lines, exact_step, grid_lines, grid_radius, grid_step, line_weight, visible_step,
+};
 pub use pick::{EdgeHit, FaceHit, pick_edge, pick_face};
 pub use scene::{
     EdgeRef, FaceRef, FaceVertex, Highlight, LineVertex, Palette, Pick, SceneData, build_scene,

@@ -585,6 +585,9 @@ fn the_overlay_shows_marks_and_guides_without_changing_the_sketch() {
     let mut s = sketch_with(|sk| {
         line(sk, (10.0, 10.0), (30.0, 18.0));
     });
+    // Fusion-Verhalten, Skizzen 2: Hier zählt die Hilfslinie allein; mit Raster-Fang rastete die
+    // freie Achse zusätzlich (das prüft `sketch_grid.rs`).
+    s.sketch_snap_grid = false;
     set_tool(&mut s, Tool::Line);
     let px = unit_per_px(&s);
     let stand = s.session_sketch().unwrap().revision();

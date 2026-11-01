@@ -353,3 +353,33 @@ fn escape_keeps_working_and_typing_in_a_field_blocks_it() {
     frame(&ctx, &mut s, vec![escape()], true);
     assert!(s.selection.is_some(), "Escape im Textfeld wählt nicht ab");
 }
+
+/// Im Skizzenmodus bleibt von der 3D-Szene nur das Achsenkreuz; das Bodenraster läge bei XZ, YZ
+/// und auf Flächen schief. Nach dem Beenden ist es wieder da.
+#[test]
+fn the_floor_grid_is_gone_while_sketching_and_back_afterwards() {
+    let mut s = AppState::new();
+    assert!(viewport::scene_lines(&s).len() > 6, "Boden sichtbar");
+    let id = s
+        .add_sketch(planora_feature::SketchPlane::Standard(
+            planora_app::state::StandardPlane::XZ,
+        ))
+        .unwrap();
+    s.open_sketch(id).unwrap();
+    let parts = |lines: Vec<planora_render::LineVertex>| {
+        lines
+            .iter()
+            .map(|v| (v.position, v.color))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        parts(viewport::scene_lines(&s)),
+        parts(planora_render::axis_lines(
+            s.camera.target,
+            s.camera.distance,
+            &s.palette()
+        ))
+    );
+    s.close_sketch();
+    assert!(viewport::scene_lines(&s).len() > 6, "Boden wieder da");
+}

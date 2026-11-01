@@ -7,8 +7,8 @@ use egui::{Align2, Color32, FontId, Mesh, Pos2, Rect, Sense, Shape, Stroke, pos2
 use glam::{Vec2, Vec3};
 use planora_render::gpu::ViewportCallback;
 use planora_render::{
-    CubePiece, CubeRegion, INSET, OrbitCamera, Palette, Pick, ViewFace, cube_pieces_visible,
-    current_region, face_text_frame, grid_lines, pieces_hit_test,
+    CubePiece, CubeRegion, INSET, LineVertex, OrbitCamera, Palette, Pick, ViewFace, axis_lines,
+    cube_pieces_visible, current_region, face_text_frame, grid_lines, pieces_hit_test,
 };
 
 /// Kantenlänge des Würfelfelds.
@@ -72,6 +72,22 @@ pub fn render_palette(dark: bool) -> Palette {
         axis_y: rgba(p.axis_y),
         axis_z: rgba(p.axis_z),
         ..base
+    }
+}
+
+/// Linien der 3D-Szene: Bodenraster und Achsen; im Skizzenmodus nur die Achsen, das Raster zeichnet
+/// dort die Skizze in ihrer Ebene ([`sketch_view::sketch_grid_shapes`]).
+pub fn scene_lines(state: &AppState) -> Vec<LineVertex> {
+    let cam = &state.camera;
+    if state.sketch_session.is_some() {
+        axis_lines(cam.target, cam.distance, &state.palette())
+    } else {
+        grid_lines(
+            cam.target,
+            cam.distance,
+            planora_i18n::current_unit().mm_per_unit() as f32,
+            &state.palette(),
+        )
     }
 }
 
@@ -778,13 +794,7 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
                 scene: state.scene.clone(),
                 scene_version: state.scene_version,
                 // Raster und Achsen folgen der Kamera: je Bild neu, ohne die Szene anzufassen.
-                // Im Skizzen-Modus unverändert (die gedämpfte Palette lässt beide unberührt).
-                grid: grid_lines(
-                    cam.target,
-                    cam.distance,
-                    planora_i18n::current_unit().mm_per_unit() as f32,
-                    &state.palette(),
-                ),
+                grid: scene_lines(state),
             },
         ),
     );

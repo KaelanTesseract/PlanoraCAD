@@ -313,6 +313,7 @@ pub(crate) fn track(ws: &mut Workspace, a: Action) {
 /// vergessen. Ein Fenster
 /// in einem anderen Tab wartet, bis der Tab wieder vorn ist; ist der Tab zu, entfällt es.
 pub fn observe(ws: &mut Workspace) {
+    ws.sync_sketch_grid();
     observe_sketch(ws);
     let Some(p) = ws.last_command.pending.clone() else {
         return;

@@ -5,13 +5,15 @@
 use crate::sketch_cursor::AutoConstraint;
 use crate::sketch_state::{Item, SketchSession, Snap, Tool};
 use crate::state::AppState;
-use crate::theme::{lighten as lighter, sketch_colors as colors};
+use crate::theme::{self, lighten as lighter, sketch_colors as colors};
 use crate::viewport;
 use egui::{Color32, FontId, Mesh, PointerButton, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2};
 use glam::{Vec2, Vec3};
 use planora_i18n::tr;
 use planora_math::{DVec2, DVec3, Frame};
-use planora_render::{EdgeRef, OrbitCamera, Pick};
+use planora_render::{
+    EdgeRef, OrbitCamera, Pick, exact_step, grid_radius, line_weight, visible_step,
+};
 use planora_sketch::ExtractedProfiles;
 use planora_sketch::constraint::{ConstraintKind, LineOrPoints};
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
@@ -35,6 +37,17 @@ const CURVE_WIDTH: f32 = 2.0;
 const SNAP_MARK_PX: f32 = 5.0;
 /// Strichstärke der Fangzeichen in Pixeln.
 const SNAP_MARK_WIDTH: f32 = 1.5;
+/// Höchstzahl der Rasterlinien je Bild; darüber zeichnet das Raster nur die gröbere Stufe.
+const GRID_MAX_LINES: f64 = 200.0;
+/// Jede wievielte Linie der feinen Stufe zur gröberen gehört.
+const GRID_DECADE: i64 = 10;
+/// Teilstücke einer Rasterlinie: Liegt ein Teil bei geneigter Ansicht hinter der Kamera, bleibt der
+/// Rest sichtbar.
+const GRID_SEGMENTS: usize = 8;
+/// Rasterlinien, die schwächer als dies erscheinen, werden weggelassen.
+const GRID_MIN_ALPHA: f32 = 0.01;
+/// Strichstärke der Rasterlinien in Pixeln.
+const GRID_WIDTH: f32 = 1.0;
 /// Schriftgröße der Abhängigkeitssymbole und Maße.
 const LABEL_SIZE: f32 = 12.0;
 
@@ -520,6 +533,97 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
     out
 }
 
+/// Sichtbarer Bereich der Skizzenebene `(min, max)`: die Ecken der Ansicht auf der Ebene, höchstens
+/// so weit wie das Bodenraster um das Ziel der Kamera reicht (der ganze Umkreis, wenn eine Ecke die
+/// Ebene nicht trifft).
+fn grid_window(map: &Mapper) -> (DVec2, DVec2) {
+    let target = map.frame.to_local(to_dvec3(map.camera.target));
+    let target = DVec2::new(target.x, target.y);
+    let reach = DVec2::splat(f64::from(grid_radius(map.camera.distance)));
+    let (lo, hi) = (target - reach, target + reach);
+    let r = map.rect;
+    let corners: Option<Vec<DVec2>> = [
+        r.left_top(),
+        r.right_top(),
+        r.left_bottom(),
+        r.right_bottom(),
+    ]
+    .into_iter()
+    .map(|c| map.to_sketch(c))
+    .collect();
+    let Some(corners) = corners else {
+        return (lo, hi);
+    };
+    let seen = corners
+        .iter()
+        .fold((hi, lo), |(a, b), &c| (a.min(c), b.max(c)));
+    (seen.0.max(lo), seen.1.min(hi))
+}
+
+/// Skizzenraster in der Ebene der offenen Skizze als Formen (leer, wenn es ausgeschaltet ist): Stufe
+/// und Übergang wie das Bodenraster, jede Linie auf einem Vielfachen der feinen Stufe. Höchstens
+/// [`GRID_MAX_LINES`] Linien. Durch den Ursprung der Welt läuft keine Rasterlinie, dort liegen die
+/// Achsen der 3D-Szene.
+pub fn sketch_grid_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
+    let mut out = Vec::new();
+    let Some(map) = mapper(rect, state).filter(|_| state.sketch_show_grid) else {
+        return out;
+    };
+    let distance = map.camera.distance;
+    if rect.width() < 2.0 || rect.height() < 2.0 || !distance.is_finite() || distance <= 0.0 {
+        return out;
+    }
+    let (fine, blend) = exact_step(distance, planora_i18n::current_unit().mm_per_unit());
+    let (lo, hi) = grid_window(&map);
+    if !(lo.is_finite() && hi.is_finite()) {
+        return out;
+    }
+    let first = |v: f64| (v / fine).ceil() as i64;
+    let last = |v: f64| (v / fine).floor() as i64;
+    let lines = ((last(hi.x) - first(lo.x)) + (last(hi.y) - first(lo.y)) + 2) as f64;
+    let every = if lines > GRID_MAX_LINES {
+        GRID_DECADE
+    } else {
+        1
+    };
+    let colors = theme::palette(state.dark);
+    let through_world_origin = map.frame.origin.length()
+        <= state
+            .session_sketch()
+            .map_or(0.0, |sk| sk.tolerance().linear);
+    for along_x in [true, false] {
+        let (from, to) = if along_x { (lo.y, hi.y) } else { (lo.x, hi.x) };
+        for k in first(from)..=last(to) {
+            if k.rem_euclid(every) != 0 || (k == 0 && through_world_origin) {
+                continue;
+            }
+            let (share, alpha) = line_weight(k, blend);
+            if alpha < GRID_MIN_ALPHA {
+                continue;
+            }
+            let at = k as f64 * fine;
+            let points: Vec<DVec2> = (0..=GRID_SEGMENTS)
+                .map(|i| {
+                    let t = i as f64 / GRID_SEGMENTS as f64;
+                    if along_x {
+                        DVec2::new(lo.x + (hi.x - lo.x) * t, at)
+                    } else {
+                        DVec2::new(at, lo.y + (hi.y - lo.y) * t)
+                    }
+                })
+                .collect();
+            let color = colors
+                .viewport_grid
+                .lerp_to_gamma(colors.viewport_grid_major, share)
+                .gamma_multiply(alpha);
+            for path in map.paths(&points) {
+                out.push(Shape::line(path, Stroke::new(GRID_WIDTH, color)));
+            }
+        }
+    }
+    out
+}
+
 /// Zeichnet die Skizze über die 3D-Ansicht in `rect` und verarbeitet die Eingaben des
 /// Skizzen-Modus. In der Skizzenfläche selbst wird nicht gedreht; Verschieben und Zoomen gelten
 /// dort nach der Tastenbelegung (Voreinstellung: mittlere Maustaste oder Umschalt + Ziehen,
@@ -635,6 +739,14 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     let at = pointer.and_then(|p| map.to_sketch(p));
     let radius = pointer.and_then(|p| map.radius_at(p)).unwrap_or(0.0);
 
+    // Raster-Fang auf der sichtbaren Stufe; ohne Raster oder ohne „Fang“ keiner.
+    let grid_step = (state.sketch_show_grid && state.sketch_snap_grid).then(|| {
+        visible_step(
+            state.camera.distance,
+            planora_i18n::current_unit().mm_per_unit(),
+        )
+    });
+
     // Getippte Werte werden beim Klick zu Maßen; die Formeln darin brauchen die Parameter.
     let commit_scope = (response.clicked_by(PointerButton::Primary)
         && state
@@ -649,6 +761,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         se.cursor = Some(at);
     }
     se.cursor_opts.suppressed = ctrl;
+    se.cursor_opts.grid_step = grid_step;
 
     // Punkt ziehen (Auswahlwerkzeug)
     if response.drag_started_by(PointerButton::Primary) && !shift && !panning {
@@ -788,7 +901,10 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     };
     let report = se.last_report.as_ref();
 
-    // Profile als helle Flächen unter allem anderen („Profil anzeigen“, wie Fusion). Beim
+    // Skizzenraster zuunterst.
+    painter.extend(sketch_grid_shapes(state, rect));
+
+    // Profile als helle Flächen über dem Raster, unter allem anderen („Profil anzeigen“, wie Fusion). Beim
     // Ziehen eines Punkts ändert sich die Skizze in jedem Frame; die Flächen kommen erst danach
     // wieder (sonst würden sie in jedem Frame neu bestimmt).
     if state.show_sketch_profiles && se.dragging.is_none() {
