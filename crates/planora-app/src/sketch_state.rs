@@ -196,6 +196,10 @@ pub struct SketchSession {
     pub edit_label: Option<Msg>,
     /// Letzte Stelle beim Stutzen durch Ziehen (`None`: kein Zug läuft).
     pub trim_drag: Option<DVec2>,
+    /// Zählt die gelungenen Änderungen durch Stutzen, Dehnen und Brechen, mit dem Werkzeug der
+    /// letzten (für „Letztes Skizzenwerkzeug wiederholen“, auch wenn Esc es im selben Bild
+    /// beendet).
+    pub modify_edits: (u64, Option<Tool>),
 }
 
 /// Was vor einer Änderung gesichert wird, um sie bei einem Fehler zurückzunehmen.
@@ -261,6 +265,7 @@ impl SketchSession {
             hover_preview: None,
             edit_label: None,
             trim_drag: None,
+            modify_edits: (0, None),
         }
     }
 
@@ -465,6 +470,7 @@ impl SketchSession {
         self.forget_removed(sk);
         self.hover_preview = None;
         self.edit_label = Some(label);
+        self.modify_edits = (self.modify_edits.0 + 1, Some(self.tool));
         Ok(())
     }
 
@@ -523,20 +529,28 @@ impl SketchSession {
     }
 
     /// Stutzt jede Kurve, die die Strecke `from`–`to` berührt (Proben im Abstand von höchstens
-    /// `radius`). Scheitert ein Stück, steht der Grund in `message`; die übrigen werden
-    /// trotzdem gestutzt.
+    /// `radius`). `from` selbst wird nur geprüft, wenn `from == to` (Beginn des Zugs); sonst
+    /// war es schon die letzte Probe des vorigen Bilds, und eine zweite Probe dort träfe nach
+    /// dem Stutzen das nächstgelegene andere Stück, das der Zug nie überfahren hat. Scheitert
+    /// ein Stück, steht der Grund in `message`; die übrigen werden trotzdem gestutzt.
     fn trim_along(&mut self, sk: &mut Sketch, from: DVec2, to: DVec2, radius: f64) {
         /// Höchstens so viele Proben je Bild (ein sehr schneller Zug über eine kleine Skizze).
         const MAX_SAMPLES: usize = 400;
         let len = from.distance(to);
-        let n = if radius > 0.0 {
-            ((len / radius).ceil() as usize).clamp(1, MAX_SAMPLES)
+        let (first, n) = if len == 0.0 {
+            (0, 0)
+        } else if radius > 0.0 {
+            (1, ((len / radius).ceil() as usize).clamp(1, MAX_SAMPLES))
         } else {
-            1
+            (1, 1)
         };
         let mut failed = None;
-        for k in 0..=n {
-            let p = from.lerp(to, k as f64 / n as f64);
+        for k in first..=n {
+            let p = if n == 0 {
+                from
+            } else {
+                from.lerp(to, k as f64 / n as f64)
+            };
             if sk.pick_curve(p, radius).is_none() {
                 continue;
             }

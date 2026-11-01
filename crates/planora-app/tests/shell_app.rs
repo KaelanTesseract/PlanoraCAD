@@ -809,6 +809,41 @@ fn new_tab_open_document_frame_all_centres_in_the_free_rect() {
     assert_centred(&mut app, BIG, "Skizze geschlossen");
 }
 
+/// In einer alten Version (schreibgeschützt) lässt sich keine Skizze öffnen: der Doppelklick auf
+/// die Skizze im Baum tut nichts, also erreicht auch kein Werkzeug (etwa Stutzen) die Skizze.
+#[test]
+fn a_sketch_of_an_old_version_cannot_be_opened() {
+    let size = vec2(1920.0, 1080.0);
+    let mut w = library_ws();
+    let p = w.library.as_ref().unwrap().create_project("P").unwrap();
+    w.active_tab_mut()
+        .state
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    w.save_as(&p, "Teil", "Anfang").unwrap();
+    w.active_tab_mut()
+        .state
+        .create_box(DVec3::splat(3.0))
+        .unwrap();
+    w.save_active("Stand 2", None).unwrap();
+    versions_panel::open_version(&mut w, 1);
+    assert!(w.active_tab().read_only);
+    let c = context();
+    let mut app = PlanoraApp::for_tests(w);
+    let shot = settle(&c, &mut app, size);
+    let at = shot
+        .all("Skizze 1")
+        .first()
+        .expect("Skizze im Baum")
+        .center();
+    for _ in 0..2 {
+        frame(&c, &mut app, size, vec![moved(at), button(at, true)]);
+        frame(&c, &mut app, size, vec![button(at, false)]);
+    }
+    settle(&c, &mut app, size);
+    assert_eq!(state(&mut app).open_sketch_id(), None);
+}
+
 #[test]
 fn read_only_tab_shows_the_banner_and_centres_in_the_raised_free_rect() {
     let c = context();

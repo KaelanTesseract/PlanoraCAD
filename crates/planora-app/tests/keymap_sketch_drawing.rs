@@ -388,6 +388,45 @@ fn trim_has_t_extend_and_break_are_assignable() {
 }
 
 #[test]
+fn repeat_last_remembers_trim_extend_and_break() {
+    // Linie zum Dehnen links, ein Kreuz rechts zum Stutzen und Brechen.
+    let mut w = sketch_open_ws();
+    {
+        let s = &mut w.active_tab_mut().state;
+        let sk = s.session_sketch_mut().unwrap().1;
+        let mut line = |a: (f64, f64), b: (f64, f64)| {
+            let p = sk.add_point(a.0, a.1).unwrap();
+            let q = sk.add_point(b.0, b.1).unwrap();
+            sk.add_line(p, q).unwrap();
+        };
+        line((-40.0, 0.0), (-30.0, 0.0));
+        line((-20.0, -10.0), (-20.0, 10.0));
+        line((0.0, 0.0), (40.0, 0.0));
+        line((10.0, -10.0), (10.0, 10.0));
+        line((30.0, -10.0), (30.0, 10.0));
+    }
+    let mut rig = Rig::new(w);
+    let cases = [
+        (Action::SketchTrim, Tool::Trim, (35.0, 0.0)),
+        (Action::SketchExtend, Tool::Extend, (-31.0, 0.0)),
+        (Action::SketchBreak, Tool::Break, (20.0, 0.0)),
+    ];
+    for (a, tool, at) in cases {
+        let (se, sk) = rig.st().session_sketch_mut().unwrap();
+        se.set_tool(sk, tool);
+        rig.settle();
+        assert_ne!(rig.sketch_tool_memory(), Some(a), "{a:?}: nur gewählt");
+        rig.sketch_click(at.0, at.1);
+        assert_eq!(rig.sketch_tool_memory(), Some(a), "{a:?}: benutzt");
+        rig.press(Key::Escape, NONE);
+        assert_eq!(rig.tool(), Tool::Select, "{a:?}: Esc beendet");
+        rig.press(Key::Space, NONE);
+        assert_eq!(rig.tool(), tool, "{a:?}: Leertaste wählt es wieder");
+        rig.press(Key::Escape, NONE);
+    }
+}
+
+#[test]
 fn same_letter_means_different_things_in_sketch_and_drawing_and_nothing_in_model() {
     let km = Keymap::defaults();
     let c = chord(Key::C, false);

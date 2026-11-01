@@ -218,9 +218,12 @@ pub fn layout_in_mode(
     let h = STRIP_H.min(r.free.height());
     // Oben auf ganze Pixel (die Leiste ist mit Trennlinie ungerade hoch; Felder liegen auf
     // ganzen Pixeln), ohne die freie Fläche zu verlassen.
+    // `max`/`min` statt `clamp`: bei sehr niedrigen Fenstern kann `bottom - h` durch Rundung
+    // knapp unter `top` liegen, `clamp` bräche dann ab.
     let top = (r.free.center().y - h / 2.0)
         .round()
-        .clamp(r.free.top(), r.free.bottom() - h);
+        .min(r.free.bottom() - h)
+        .max(r.free.top());
     let strip = Rect::from_min_size(pos2(left, top), vec2(STRIP_W, h));
     r.left = Rect::from_min_size(strip.min, vec2(0.0, 0.0));
     r.strip = Some(strip);

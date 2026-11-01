@@ -414,6 +414,18 @@ fn strip_with_twelve_tools_fits_at_1920x1080() {
     assert!(strip.top() >= r.free.top() && strip.bottom() <= r.free.bottom());
 }
 
+#[test]
+fn strip_layout_never_panics_in_tiny_windows() {
+    // Höhen, bei denen die freie Fläche kaum größer oder kleiner als die Leiste ist.
+    for h in (100..700).map(|h| h as f32 + 0.3) {
+        for read_only in [false, true] {
+            let r = sketch_rects(1920.0, h, read_only);
+            let strip = r.strip.unwrap();
+            assert!(strip.height() <= r.free.height().max(0.0) + 0.01, "{h}");
+        }
+    }
+}
+
 // (c)
 #[test]
 fn strip_height_is_limited_to_free_height() {

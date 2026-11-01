@@ -302,6 +302,34 @@ fn esc_while_dragging_ends_the_tool_and_keeps_what_was_trimmed() {
 }
 
 #[test]
+fn dragging_close_past_an_intersection_trims_only_what_the_path_touches() {
+    // Kreuz am Ursprung; Fangradius 1. Der Zug kommt von oben rechts, endet ein Bild lang bei
+    // P = (0,5 | 0,7) (nächste Kurve dort: die senkrechte Linie, ihr oberes Stück wird
+    // gestutzt) und geht dann wieder nach oben rechts. Die waagerechte Linie berührt der Weg nur
+    // an P, wo schon gestutzt wurde: sie bleibt.
+    let (mut s, h, v) = cross();
+    set_tool(&mut s, Tool::Trim);
+    let (se, sk) = s.session_sketch_mut().unwrap();
+    se.begin_trim_drag(sk, DVec2::new(5.0, 5.0), 1.0);
+    se.trim_drag_to(sk, DVec2::new(0.5, 0.7), 1.0);
+    let (a, b) = line_ends(sk, v).unwrap();
+    assert!(
+        a.y.max(b.y).abs() < 1e-6,
+        "oberes Stück der Senkrechten gestutzt"
+    );
+    se.trim_drag_to(sk, DVec2::new(5.0, 5.0), 1.0);
+    se.end_trim_drag();
+    let (a, b) = line_ends(sk, h).unwrap();
+    assert!(a.distance(DVec2::new(-20.0, 0.0)) < 1e-6, "{a:?}");
+    assert!(
+        b.distance(DVec2::new(20.0, 0.0)) < 1e-6,
+        "waagerechte Linie unberührt: {b:?}"
+    );
+    let (a, b) = line_ends(sk, v).unwrap();
+    assert!(a.y.min(b.y) < -19.0, "unteres Stück der Senkrechten bleibt");
+}
+
+#[test]
 fn extend_without_target_shows_the_hint_and_changes_nothing() {
     let ctx = context();
     let mut s = sketch_with(|sk| {
