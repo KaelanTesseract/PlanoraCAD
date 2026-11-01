@@ -32,7 +32,7 @@ use crate::model::{CurveId, CurveKind, Sketch};
 use planora_i18n::tr;
 use planora_kernel::{Profile, ProfileLoop, SampledLoop, Segment, segment_end};
 use planora_math::nurbs::NurbsCurve;
-use planora_math::{DVec2, DVec3, TAU};
+use planora_math::{DVec2, DVec3, TAU, Tolerance};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -105,11 +105,28 @@ pub struct ExtractedProfiles {
     /// Wiederholung.
     pub curve_loops: Vec<Vec<CurveId>>,
     /// Die Anordnung, aus der die Profile stammen (für Stutzen und Profil-Verweise).
-    #[allow(
-        dead_code,
-        reason = "used by trim and profile references (later tasks)"
-    )]
     pub(crate) arrangement: Option<Arc<Arrangement>>,
+    /// Umläufe der Anordnung, die `profiles[i]` begrenzen (für [`ExtractedProfiles::merged`]).
+    pub(crate) faces: Vec<FaceCycles>,
+    /// Natürlicher kubischer Spline je Spline-Kurve der Anordnung (Index in
+    /// `Arrangement::curves`).
+    pub(crate) splines: Arc<HashMap<usize, Result<NurbsCurve, SketchError>>>,
+    /// Toleranz der Skizze.
+    pub(crate) tol: Tolerance,
+}
+
+/// Umläufe der Anordnung, die ein Profil begrenzen: äußerer Umlauf und Löcher.
+#[derive(Clone, Debug)]
+pub(crate) struct FaceCycles {
+    pub(crate) outer: usize,
+    pub(crate) holes: Vec<usize>,
+}
+
+impl FaceCycles {
+    /// Alle Umläufe (äußerer zuerst).
+    pub(crate) fn cycles(&self) -> impl Iterator<Item = usize> + '_ {
+        std::iter::once(self.outer).chain(self.holes.iter().copied())
+    }
 }
 
 impl ExtractedProfiles {
@@ -140,6 +157,7 @@ struct Accepted {
     piece_ref: ProfileRef,
     outline: Vec<Vec<DVec2>>,
     curves: Vec<CurveId>,
+    cycles: FaceCycles,
 }
 
 impl Sketch {
@@ -194,10 +212,17 @@ impl Sketch {
             }
         }
 
-        let mut builder = LoopBuilder {
-            sketch: self,
+        let splines: HashMap<usize, Result<NurbsCurve, SketchError>> = arr
+            .curves
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, g))| matches!(g, Geom::Spline { .. }))
+            .map(|(i, (id, _))| (i, self.natural_spline(*id)))
+            .collect();
+        let builder = LoopBuilder {
+            tol,
             arr: &arr,
-            splines: HashMap::new(),
+            splines: &splines,
         };
         let mut done: Vec<Face> = faces.iter().map(|&f| builder.face(f, &holes[f])).collect();
         done.sort_by(|x, y| {
@@ -214,12 +239,34 @@ impl Sketch {
                     out.refs.push(a.piece_ref);
                     out.outlines.push(a.outline);
                     out.curve_loops.push(a.curves);
+                    out.faces.push(a.cycles);
                 }
                 Err(r) => out.rejected.push(r),
             }
         }
         out.arrangement = Some(Arc::new(arr));
+        out.splines = Arc::new(splines);
+        out.tol = tol;
         out
+    }
+
+    /// Natürlicher kubischer Spline durch die Stützpunkte des Splines `id` mit den Parametern
+    /// `0, 1, …, n − 1` (wie [`Sketch::spline_point`]).
+    fn natural_spline(&self, id: CurveId) -> Result<NurbsCurve, SketchError> {
+        let CurveKind::Spline { points } = &self.curves[id].kind else {
+            return Err(SketchError::Degenerate(tr!("sketch-err-spline-two-points")));
+        };
+        let pts: Vec<DVec3> = points
+            .iter()
+            .map(|&q| {
+                let v = self.pos(q);
+                DVec3::new(v.x, v.y, 0.0)
+            })
+            .collect();
+        let params: Vec<f64> = (0..pts.len()).map(|i| i as f64).collect();
+        NurbsCurve::natural_cubic(&pts, &params).map_err(|e| {
+            SketchError::Degenerate(tr!("sketch-err-spline-invalid", detail = e.to_string()))
+        })
     }
 
     /// Geometrie einer Kurve für die Anordnung; `Err` mit den bisherigen Texten für entartete
@@ -303,7 +350,7 @@ impl Sketch {
 }
 
 /// Normierter Parameter `u` (siehe [`PieceRef`]).
-fn normalized(g: &Geom, t: f64) -> f64 {
+pub(crate) fn normalized(g: &Geom, t: f64) -> f64 {
     match g {
         Geom::Line { .. } | Geom::Spline { .. } => {
             let (lo, hi) = g.domain();
@@ -313,17 +360,45 @@ fn normalized(g: &Geom, t: f64) -> f64 {
     }
 }
 
+/// Teil `[t0, t1]` der Kurve `input` der Anordnung als Stück einer Schleife, vorwärts oder
+/// rückwärts durchlaufen, von Knoten `from` nach Knoten `to`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Run {
+    pub(crate) input: usize,
+    pub(crate) t0: f64,
+    pub(crate) t1: f64,
+    pub(crate) forward: bool,
+    pub(crate) from: usize,
+    pub(crate) to: usize,
+}
+
+impl Run {
+    /// Das Stück der Halbkante `h`.
+    pub(crate) fn of(arr: &Arrangement, h: usize) -> Run {
+        let p = &arr.pieces[h / 2];
+        let (from, to) = arr.ends(h);
+        Run {
+            input: p.input,
+            t0: p.t0,
+            t1: p.t1,
+            forward: h.is_multiple_of(2),
+            from,
+            to,
+        }
+    }
+}
+
 /// Baut Kernel-Schleifen aus Umläufen der Anordnung.
-struct LoopBuilder<'a> {
-    sketch: &'a Sketch,
-    arr: &'a Arrangement,
-    /// Natürlicher kubischer Spline je Kurve der Anordnung (einmal gebaut).
-    splines: HashMap<usize, NurbsCurve>,
+pub(crate) struct LoopBuilder<'a> {
+    pub(crate) tol: Tolerance,
+    pub(crate) arr: &'a Arrangement,
+    /// Natürlicher kubischer Spline je Spline-Kurve der Anordnung.
+    pub(crate) splines: &'a HashMap<usize, Result<NurbsCurve, SketchError>>,
 }
 
 impl LoopBuilder<'_> {
     /// Untersucht die Fläche `f` mit den Löchern `holes` (Umläufe der Anordnung).
-    fn face(&mut self, f: usize, holes: &[usize]) -> Face {
+    fn face(&self, f: usize, holes: &[usize]) -> Face {
         let arr = self.arr;
         let cycle = &arr.cycles[f];
         let (outer, reversed) = self.oriented(&cycle.half_edges);
@@ -366,12 +441,13 @@ impl LoopBuilder<'_> {
                 .then(a.1.y.total_cmp(&b.1.y))
         });
 
+        let runs = |hes: &[usize]| -> Vec<Run> { hes.iter().map(|&h| Run::of(arr, h)).collect() };
         let result = (|| {
-            let tol = self.sketch.tolerance();
-            let outer_lp = self.build(&outer)?;
+            let tol = &self.tol;
+            let outer_lp = self.build(&runs(&outer))?;
             let mut hole_lps = Vec::with_capacity(holes.len());
             for (_, _, _, hes, _) in &holes {
-                hole_lps.push(self.build(hes)?);
+                hole_lps.push(self.build(&runs(hes))?);
             }
             // Entscheidung 3: Ränder, die sich selbst oder einander berühren, kann der Kernel
             // nicht (eingeklemmte Flächen).
@@ -408,6 +484,10 @@ impl LoopBuilder<'_> {
                     piece_ref,
                     outline,
                     curves,
+                    cycles: FaceCycles {
+                        outer: f,
+                        holes: holes.iter().map(|h| h.2).collect(),
+                    },
                 })
             }
         };
@@ -458,38 +538,42 @@ impl LoopBuilder<'_> {
             .collect()
     }
 
-    /// Kernel-Schleife aus den Halbkanten `hes` (erste vorwärts).
-    fn build(&mut self, hes: &[usize]) -> Result<ProfileLoop, SketchError> {
+    /// Kernel-Schleife aus den Stücken `runs` (aneinander anschließend, das erste vorwärts).
+    pub(crate) fn build(&self, runs: &[Run]) -> Result<ProfileLoop, SketchError> {
         let arr = self.arr;
-        let tol = self.sketch.tolerance();
-        if let &[h] = hes
-            && let Some(lp) = self.single(h)?
+        let tol = &self.tol;
+        if let &[run] = runs
+            && let Some(lp) = self.single(run)?
         {
             return Ok(lp);
         }
-        let start = arr.nodes[arr.ends(hes[0]).0];
+        let Some(first) = runs.first() else {
+            return Err(SketchError::Degenerate(arc_off_circle()));
+        };
+        let start = arr.nodes[first.from];
         let mut at = start;
-        let mut segments = Vec::with_capacity(hes.len());
-        for &h in hes {
-            let k = h / 2;
-            let p = &arr.pieces[k];
-            let forward = h.is_multiple_of(2);
-            let target = arr.nodes[arr.ends(h).1];
-            let (seg, off_node) = match arr.geom_of(k) {
+        let mut segments = Vec::with_capacity(runs.len());
+        for &run in runs {
+            let target = arr.nodes[run.to];
+            let (seg, off_node) = match &arr.curves[run.input].1 {
                 Geom::Line { .. } => (Segment::Line { to: target }, arc_off_circle()),
                 Geom::Circle { c, .. } | Geom::Arc { c, .. } => (
                     Segment::Arc {
                         center: *c,
-                        sweep: if forward { p.t1 - p.t0 } else { p.t0 - p.t1 },
+                        sweep: if run.forward {
+                            run.t1 - run.t0
+                        } else {
+                            run.t0 - run.t1
+                        },
                     },
                     arc_off_circle(),
                 ),
                 Geom::Ellipse { c, a, b } | Geom::EllipticArc { c, a, b, .. } => (
-                    nurbs_segment(elliptic(*c, *a, *b, p.t0, p.t1 - p.t0)?, forward)?,
+                    nurbs_segment(elliptic(*c, *a, *b, run.t0, run.t1 - run.t0)?, run.forward)?,
                     elliptic_arc_off_ellipse(),
                 ),
                 Geom::Spline { .. } => (
-                    nurbs_segment(self.spline_piece(k)?, forward)?,
+                    nurbs_segment(self.spline_piece(run)?, run.forward)?,
                     spline_off_node(),
                 ),
             };
@@ -510,55 +594,39 @@ impl LoopBuilder<'_> {
     }
 
     /// Schleife aus einem einzigen geschlossenen Stück: Kreis mit Knoten bei Winkel 0 wie
-    /// [`ProfileLoop::circle`], Ellipse mit Knoten bei Parameter 0 wie bisher, sonst Ellipsen-
-    /// und Splinestücke als geschlossenes Freiformsegment. `None` für die übrigen Stücke, die
-    /// als gewöhnliche Segmente gebaut werden (ein Kreis, den ein einzelner Knoten an anderer
-    /// Stelle teilt, etwa eine Berührung, wird so zu einem `Segment::Arc` mit 2π ab dem Knoten).
-    fn single(&mut self, h: usize) -> Result<Option<ProfileLoop>, SketchError> {
-        let arr = self.arr;
-        let k = h / 2;
-        let p = &arr.pieces[k];
+    /// [`ProfileLoop::circle`], Ellipse (bei Parameter 0 wie [`Sketch::ellipse_loop`]) und
+    /// Splinestücke als geschlossenes Freiformsegment. `None` für die übrigen Stücke, die als
+    /// gewöhnliche Segmente gebaut werden (ein Kreis, den ein einzelner Knoten an anderer Stelle
+    /// teilt, etwa eine Berührung, wird so zu einem `Segment::Arc` mit 2π ab dem Knoten).
+    fn single(&self, run: Run) -> Result<Option<ProfileLoop>, SketchError> {
         let kernel = |e: planora_kernel::KernelError| SketchError::Kernel(e.to_string());
-        let lp = match arr.geom_of(k) {
-            Geom::Circle { c, r } if p.t0 == 0.0 => ProfileLoop::circle(*c, *r),
-            Geom::Ellipse { .. } if p.t0 == 0.0 => self.sketch.ellipse_loop(p.curve)?,
+        let lp = match &self.arr.curves[run.input].1 {
+            Geom::Circle { c, r } if run.t0 == 0.0 => ProfileLoop::circle(*c, *r),
             Geom::Ellipse { c, a, b } => {
-                ProfileLoop::nurbs_loop(elliptic(*c, *a, *b, p.t0, p.t1 - p.t0)?).map_err(kernel)?
+                ProfileLoop::nurbs_loop(elliptic(*c, *a, *b, run.t0, run.t1 - run.t0)?)
+                    .map_err(kernel)?
             }
             Geom::Spline { .. } => {
-                ProfileLoop::nurbs_loop(self.spline_piece(k)?).map_err(kernel)?
+                ProfileLoop::nurbs_loop(self.spline_piece(run)?).map_err(kernel)?
             }
             _ => return Ok(None),
         };
         Ok(Some(lp))
     }
 
-    /// Teil `[t0, t1]` des natürlichen kubischen Splines zu Stück `k` (ganzer Spline, wenn das
-    /// Stück ihn ganz überdeckt).
-    fn spline_piece(&mut self, k: usize) -> Result<NurbsCurve, SketchError> {
-        let arr = self.arr;
-        let p = &arr.pieces[k];
+    /// Teil `[t0, t1]` des natürlichen kubischen Splines zum Stück `run` (ganzer Spline, wenn
+    /// das Stück ihn ganz überdeckt).
+    fn spline_piece(&self, run: Run) -> Result<NurbsCurve, SketchError> {
         let invalid = |e: planora_math::nurbs::NurbsError| {
             SketchError::Degenerate(tr!("sketch-err-spline-invalid", detail = e.to_string()))
         };
-        if !self.splines.contains_key(&p.input) {
-            let CurveKind::Spline { points } = &self.sketch.curves[p.curve].kind else {
-                return Err(SketchError::Degenerate(tr!("sketch-err-spline-two-points")));
-            };
-            let pts: Vec<DVec3> = points
-                .iter()
-                .map(|&q| {
-                    let v = self.sketch.pos(q);
-                    DVec3::new(v.x, v.y, 0.0)
-                })
-                .collect();
-            let params: Vec<f64> = (0..pts.len()).map(|i| i as f64).collect();
-            let curve = NurbsCurve::natural_cubic(&pts, &params).map_err(invalid)?;
-            self.splines.insert(p.input, curve);
-        }
-        let whole = &self.splines[&p.input];
+        let whole = match self.splines.get(&run.input) {
+            Some(Ok(curve)) => curve,
+            Some(Err(e)) => return Err(e.clone()),
+            None => return Err(SketchError::Degenerate(tr!("sketch-err-spline-two-points"))),
+        };
         let (lo, hi) = whole.domain();
-        if p.t0 <= lo && p.t1 >= hi {
+        if run.t0 <= lo && run.t1 >= hi {
             return Ok(whole.clone());
         }
         // Teilungsstellen dicht an einem Stützpunkt (Knoten bei ganzen `t`) auf ihn legen, sonst
@@ -571,7 +639,7 @@ impl LoopBuilder<'_> {
                 t
             }
         };
-        let (t0, t1) = (snap(p.t0.max(lo)), snap(p.t1.min(hi)));
+        let (t0, t1) = (snap(run.t0.max(lo)), snap(run.t1.min(hi)));
         whole.sub_curve(t0, t1).map_err(invalid)
     }
 }

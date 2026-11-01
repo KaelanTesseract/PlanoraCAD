@@ -17,6 +17,7 @@ pub mod linalg;
 pub mod model;
 pub mod profile;
 pub(crate) mod profile_legacy;
+pub(crate) mod profile_ref;
 pub mod query;
 pub mod solid;
 pub mod solver;
