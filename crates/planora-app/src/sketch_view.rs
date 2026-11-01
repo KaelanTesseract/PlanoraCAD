@@ -560,43 +560,119 @@ fn grid_window(map: &Mapper) -> (DVec2, DVec2) {
     (seen.0.max(lo), seen.1.min(hi))
 }
 
+/// Was das Skizzenraster in diesem Bild zeichnet; Zeichnen und Raster-Fang lesen beide von hier.
+struct GridPlan {
+    fine: f64,
+    blend: f32,
+    /// Jede wievielte Linie der feinen Stufe gezeichnet wird: 1, oder [`GRID_DECADE`], wenn es sonst
+    /// mehr als [`GRID_MAX_LINES`] wären (geneigte Ansicht).
+    every: i64,
+    lo: DVec2,
+    hi: DVec2,
+}
+
+impl GridPlan {
+    /// Das Raster dieses Bilds; `None` bei unbrauchbarer Kamera oder Ansicht.
+    fn of(map: &Mapper) -> Option<GridPlan> {
+        let distance = map.camera.distance;
+        if map.rect.width() < 2.0
+            || map.rect.height() < 2.0
+            || !distance.is_finite()
+            || distance <= 0.0
+        {
+            return None;
+        }
+        let (fine, blend) = exact_step(distance, planora_i18n::current_unit().mm_per_unit());
+        let (lo, hi) = grid_window(map);
+        if !(lo.is_finite() && hi.is_finite()) {
+            return None;
+        }
+        let count = |a: f64, b: f64| (b / fine).floor() - (a / fine).ceil() + 1.0;
+        let every = if count(lo.x, hi.x) + count(lo.y, hi.y) > GRID_MAX_LINES {
+            GRID_DECADE
+        } else {
+            1
+        };
+        Some(GridPlan {
+            fine,
+            blend,
+            every,
+            lo,
+            hi,
+        })
+    }
+
+    /// Stufe des Raster-Fangs: die sichtbare ([`visible_step`]); ist das Raster ausgedünnt, bleiben
+    /// nur die Linien der gröberen Stufe zu sehen, also rastet auch der Zeiger nur dort.
+    fn snap_step(&self, distance: f32) -> f64 {
+        if self.every > 1 {
+            self.fine * self.every as f64
+        } else {
+            visible_step(distance, planora_i18n::current_unit().mm_per_unit())
+        }
+    }
+}
+
+/// Stück `from..to` der Rasterlinie durch den Skizzenursprung in Richtung `dir` (Welt), auf dem
+/// keine Achse der 3D-Szene liegt ([`planora_render::axis_lines`]): Die x- und die y-Achse laufen
+/// beidseits des Weltursprungs, die z-Achse nur von dort nach oben. `None`: ganz belegt. Andere
+/// Ebenen behalten die ganze Linie.
+fn zero_line_span(frame: &Frame, dir: DVec3, from: f64, to: f64, tol: f64) -> Option<(f64, f64)> {
+    /// Ab hier läuft eine Richtung der Ebene genau entlang einer Weltachse.
+    const ALIGNED: f64 = 1.0 - 1e-9;
+    if frame.origin.length() > tol {
+        return Some((from, to));
+    }
+    if dir.x.abs() >= ALIGNED || dir.y.abs() >= ALIGNED {
+        return None;
+    }
+    if dir.z >= ALIGNED {
+        return (from < 0.0).then_some((from, to.min(0.0)));
+    }
+    if dir.z <= -ALIGNED {
+        return (to > 0.0).then_some((from.max(0.0), to));
+    }
+    Some((from, to))
+}
+
 /// Skizzenraster in der Ebene der offenen Skizze als Formen (leer, wenn es ausgeschaltet ist): Stufe
 /// und Übergang wie das Bodenraster, jede Linie auf einem Vielfachen der feinen Stufe. Höchstens
-/// [`GRID_MAX_LINES`] Linien. Durch den Ursprung der Welt läuft keine Rasterlinie, dort liegen die
-/// Achsen der 3D-Szene.
+/// [`GRID_MAX_LINES`] Linien. Wo eine Achse der 3D-Szene liegt, läuft keine Rasterlinie.
 pub fn sketch_grid_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
     let mut out = Vec::new();
     let Some(map) = mapper(rect, state).filter(|_| state.sketch_show_grid) else {
         return out;
     };
-    let distance = map.camera.distance;
-    if rect.width() < 2.0 || rect.height() < 2.0 || !distance.is_finite() || distance <= 0.0 {
+    let Some(plan) = GridPlan::of(&map) else {
         return out;
-    }
-    let (fine, blend) = exact_step(distance, planora_i18n::current_unit().mm_per_unit());
-    let (lo, hi) = grid_window(&map);
-    if !(lo.is_finite() && hi.is_finite()) {
-        return out;
-    }
-    let first = |v: f64| (v / fine).ceil() as i64;
-    let last = |v: f64| (v / fine).floor() as i64;
-    let lines = ((last(hi.x) - first(lo.x)) + (last(hi.y) - first(lo.y)) + 2) as f64;
-    let every = if lines > GRID_MAX_LINES {
-        GRID_DECADE
-    } else {
-        1
     };
+    let GridPlan {
+        fine,
+        blend,
+        every,
+        lo,
+        hi,
+    } = plan;
     let colors = theme::palette(state.dark);
-    let through_world_origin = map.frame.origin.length()
-        <= state
-            .session_sketch()
-            .map_or(0.0, |sk| sk.tolerance().linear);
+    let tol = state
+        .session_sketch()
+        .map_or(0.0, |sk| sk.tolerance().linear);
     for along_x in [true, false] {
-        let (from, to) = if along_x { (lo.y, hi.y) } else { (lo.x, hi.x) };
-        for k in first(from)..=last(to) {
-            if k.rem_euclid(every) != 0 || (k == 0 && through_world_origin) {
+        let (first, last) = if along_x { (lo.y, hi.y) } else { (lo.x, hi.x) };
+        let (start, end) = if along_x { (lo.x, hi.x) } else { (lo.y, hi.y) };
+        let dir = if along_x { map.frame.x } else { map.frame.y };
+        for k in (first / fine).ceil() as i64..=(last / fine).floor() as i64 {
+            if k.rem_euclid(every) != 0 {
                 continue;
             }
+            let span = if k == 0 {
+                zero_line_span(&map.frame, dir, start, end, tol)
+            } else {
+                Some((start, end))
+            };
+            let Some((from, to)) = span else {
+                continue;
+            };
             let (share, alpha) = line_weight(k, blend);
             if alpha < GRID_MIN_ALPHA {
                 continue;
@@ -604,11 +680,11 @@ pub fn sketch_grid_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
             let at = k as f64 * fine;
             let points: Vec<DVec2> = (0..=GRID_SEGMENTS)
                 .map(|i| {
-                    let t = i as f64 / GRID_SEGMENTS as f64;
+                    let v = from + (to - from) * i as f64 / GRID_SEGMENTS as f64;
                     if along_x {
-                        DVec2::new(lo.x + (hi.x - lo.x) * t, at)
+                        DVec2::new(v, at)
                     } else {
-                        DVec2::new(at, lo.y + (hi.y - lo.y) * t)
+                        DVec2::new(at, v)
                     }
                 })
                 .collect();
@@ -739,13 +815,12 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     let at = pointer.and_then(|p| map.to_sketch(p));
     let radius = pointer.and_then(|p| map.radius_at(p)).unwrap_or(0.0);
 
-    // Raster-Fang auf der sichtbaren Stufe; ohne Raster oder ohne „Fang“ keiner.
-    let grid_step = (state.sketch_show_grid && state.sketch_snap_grid).then(|| {
-        visible_step(
-            state.camera.distance,
-            planora_i18n::current_unit().mm_per_unit(),
-        )
-    });
+    // Raster-Fang auf der gezeichneten Stufe; ohne Raster oder ohne „Fang“ keiner.
+    let grid_step = if state.sketch_show_grid && state.sketch_snap_grid {
+        GridPlan::of(&map).map(|plan| plan.snap_step(map.camera.distance))
+    } else {
+        None
+    };
 
     // Getippte Werte werden beim Klick zu Maßen; die Formeln darin brauchen die Parameter.
     let commit_scope = (response.clicked_by(PointerButton::Primary)

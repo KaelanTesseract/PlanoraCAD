@@ -13,10 +13,10 @@ use planora_app::workspace::Workspace;
 use planora_app::{fonts, sketch_panel, sketch_view};
 use planora_feature::SketchPlane;
 use planora_i18n::{DisplayUnit, with_unit};
-use planora_math::{DVec2, Frame};
+use planora_math::{DVec2, DVec3, Frame};
 use planora_project::config::Config;
 use planora_project::library::Library;
-use planora_render::visible_step;
+use planora_render::{exact_step, visible_step};
 use std::fs;
 use std::path::PathBuf;
 
@@ -297,6 +297,176 @@ fn the_line_count_stays_bounded_over_the_zoom_range() {
             assert!(most > 30, "{most}");
         }
     }
+}
+
+/// Blick unter `degrees` zur Normalen der Skizzenebene, Ziel im Ursprung.
+fn tilt(s: &mut AppState, degrees: f32) {
+    let frame = frame_of(s);
+    let as_vec3 = |v: planora_math::DVec3| glam::Vec3::new(v.x as f32, v.y as f32, v.z as f32);
+    let (sin, cos) = degrees.to_radians().sin_cos();
+    s.camera.look_along(
+        as_vec3(frame.z) * cos + as_vec3(frame.y) * sin,
+        as_vec3(frame.y),
+    );
+}
+
+/// Lage der Rasterlinien in der Skizze: `(läuft entlang x, Querkoordinate)`, gelesen am
+/// Linienpunkt nächst der Bildmitte (dort rechnet der Bildschirm am genauesten zurück).
+fn drawn_lines(s: &AppState) -> Vec<(bool, f64)> {
+    let frame = frame_of(s);
+    let back =
+        |p: Pos2| sketch_view::screen_to_sketch(&s.camera, &frame, VIEW, glam::Vec2::new(p.x, p.y));
+    grid_paths(s)
+        .iter()
+        .filter_map(|path| {
+            let c = SCREEN.center();
+            let near = path
+                .iter()
+                .min_by(|a, b| a.distance(c).total_cmp(&b.distance(c)))?;
+            let at = back(*near)?;
+            let other = path.iter().find_map(|p| back(*p).filter(|q| *q != at))?;
+            let d = (other - at).abs();
+            Some(if d.y < d.x {
+                (true, at.y)
+            } else {
+                (false, at.x)
+            })
+        })
+        .collect()
+}
+
+/// Spec-Ziel 5, „am sichtbaren Raster“: Jede Stelle, auf die der Zeiger rastet, trägt eine
+/// gezeichnete Linie, auch wenn eine geneigte Ansicht das Raster ausdünnt. Unterhalb des Übergangs
+/// (feine Stufe voll da) liegt umgekehrt jede Linie auf einem Vielfachen der Fangstufe; darüber
+/// laufen die feinen Linien nach Entscheidung 13 noch schwach aus.
+#[test]
+fn the_snap_step_is_the_drawn_step_on_a_tilted_view() {
+    for plane in [StandardPlane::XY, StandardPlane::XZ] {
+        let ctx = context();
+        let mut s = sketching(plane, Tool::Line);
+        tilt(&mut s, 60.0);
+        let mut thinned = 0;
+        let mut d = 5.0_f32;
+        while d < 5000.0 {
+            s.camera.distance = d;
+            play(&ctx, &mut s, vec![]);
+            let step = s
+                .sketch_session
+                .as_ref()
+                .unwrap()
+                .cursor_opts
+                .grid_step
+                .unwrap();
+            let (fine, blend) = exact_step(d, 1.0);
+            if blend < 0.5 && step > fine * 1.5 {
+                thinned += 1;
+            }
+            let lines = drawn_lines(&s);
+            let on = |v: f64, m: f64| (v - m).abs() < 0.05 * step;
+            let mut checked = 0;
+            for along_x in [true, false] {
+                for m in [-2.0, -1.0, 1.0, 2.0] {
+                    // Nur, was im Bild liegt: Die Ansicht zeigt zum Betrachter hin weniger.
+                    let at = if along_x {
+                        DVec2::new(0.0, m * step)
+                    } else {
+                        DVec2::new(m * step, 0.0)
+                    };
+                    if !SCREEN.contains(screen_at(&s, at)) {
+                        continue;
+                    }
+                    checked += 1;
+                    assert!(
+                        lines.iter().any(|&(a, v)| a == along_x && on(v, m * step)),
+                        "{plane:?}, Abstand {d}, Stufe {step}: keine Linie bei {}",
+                        m * step
+                    );
+                }
+            }
+            assert!(checked >= 2, "{plane:?}, Abstand {d}, Stufe {step}");
+            if blend < 0.5 {
+                for (_, v) in &lines {
+                    assert!(on(*v, (*v / step).round() * step), "{d}, {step}: {v}");
+                }
+            }
+            d *= 1.05;
+        }
+        assert!(thinned > 0, "{plane:?}: die Ansicht dünnt nie aus");
+    }
+}
+
+/// Punkte (Welt) der Rasterlinie durch den Skizzenursprung, die entlang `along_x` läuft.
+fn zero_line(s: &AppState, along_x: bool) -> Option<Vec<planora_math::DVec3>> {
+    let frame = frame_of(s);
+    grid_paths(s).iter().find_map(|path| {
+        let local: Vec<DVec2> = path
+            .iter()
+            .filter_map(|p| {
+                sketch_view::screen_to_sketch(&s.camera, &frame, VIEW, glam::Vec2::new(p.x, p.y))
+            })
+            .collect();
+        let (a, b) = (local.first()?, local.last()?);
+        let (across, spread) = if along_x {
+            (a.y.abs().max(b.y.abs()), (a.x - b.x).abs())
+        } else {
+            (a.x.abs().max(b.x.abs()), (a.y - b.y).abs())
+        };
+        (across < 0.5 && spread > 1.0).then(|| local.iter().map(|p| frame.point_2d(*p)).collect())
+    })
+}
+
+#[test]
+fn the_zero_lines_are_left_out_only_where_a_world_axis_lies() {
+    // XY: x- und y-Achse der Welt liegen beide ganz in den Nulllinien.
+    let s = sketching(StandardPlane::XY, Tool::Select);
+    assert!(zero_line(&s, true).is_none());
+    assert!(zero_line(&s, false).is_none());
+
+    // XZ und YZ: Die Achse in der Ebene liegt ganz da; die z-Achse läuft nur von 0 nach oben, also
+    // bleibt die untere Hälfte der anderen Nulllinie.
+    for plane in [StandardPlane::XZ, StandardPlane::YZ] {
+        let s = sketching(plane, Tool::Select);
+        let frame = frame_of(&s);
+        let z_along_x = frame.x.z.abs() > 0.5;
+        assert!(zero_line(&s, !z_along_x).is_none(), "{plane:?}");
+        let line = zero_line(&s, z_along_x).unwrap_or_else(|| panic!("{plane:?}: fehlt"));
+        let lowest = line.iter().map(|p| p.z).fold(f64::MAX, f64::min);
+        let highest = line.iter().map(|p| p.z).fold(f64::MIN, f64::max);
+        assert!(lowest < -10.0, "{plane:?}: {lowest}");
+        assert!(highest < 0.5, "{plane:?}: oben liegt die Achse, {highest}");
+    }
+}
+
+#[test]
+fn a_general_plane_through_the_world_origin_keeps_both_zero_lines() {
+    let mut s = sketching(StandardPlane::XY, Tool::Select);
+    let tilted = Frame::from_origin_normal(DVec3::ZERO, DVec3::new(1.0, 1.0, 1.0));
+    let (_, sk) = s.session_sketch_mut().unwrap();
+    sk.set_frame(tilted).unwrap();
+    tilt(&mut s, 0.0);
+    assert_lines_in_plane(&s, 10.0);
+    for along_x in [true, false] {
+        let line = zero_line(&s, along_x).expect("Nulllinie");
+        // Sie läuft beidseits des Ursprungs: Keine Hälfte ist weggelassen.
+        let dir = if along_x { tilted.x } else { tilted.y };
+        let along: Vec<f64> = line.iter().map(|p| p.dot(dir)).collect();
+        assert!(along.iter().any(|t| *t < -10.0), "{along:?}");
+        assert!(along.iter().any(|t| *t > 10.0), "{along:?}");
+    }
+}
+
+#[test]
+fn a_plane_off_the_world_origin_keeps_both_zero_lines() {
+    let mut s = sketching(StandardPlane::XY, Tool::Select);
+    let (_, sk) = s.session_sketch_mut().unwrap();
+    sk.set_frame(Frame::from_origin_normal(
+        DVec3::new(0.0, 0.0, 5.0),
+        DVec3::Z,
+    ))
+    .unwrap();
+    s.camera.target = glam::Vec3::new(0.0, 0.0, 5.0);
+    assert!(zero_line(&s, true).is_some());
+    assert!(zero_line(&s, false).is_some());
 }
 
 #[test]
