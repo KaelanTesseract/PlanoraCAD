@@ -284,7 +284,7 @@ common-cancel = Cancel
 common-ok = OK
 
 ## Hauptfenster
-shell-sketch-keys-hint = Esc cancels, Enter finishes, Delete removes, middle mouse button pans; when selecting: drag on empty space draws a box, double click selects the chain
+shell-sketch-keys-hint = Esc cancels, Enter sets the point, Delete removes, middle mouse button pans; when selecting: drag on empty space draws a box, double click selects the chain
 shell-old-version-readonly = Nothing can be changed in an old version.
 tab-properties = Properties
 tab-versions = Versions
@@ -1004,7 +1004,7 @@ sketch-field-sweep-redundant = The sweep angle is already determined by other co
 sketch-spline-max = A spline has at most { $max } points; please finish it
 sketch-spline-point-twice = This point is already part of the spline
 sketch-spline-min = A spline needs at least 2 points
-sketch-drag-blocked = That cannot be dragged there because of the constraints.
+sketch-drag-blocked = That cannot be dragged there because of the constraints
 sketch-nothing-selected = Nothing is selected
 sketch-action-mismatch = "{ $action }" does not fit the current selection
 sketch-selection-invalid = The selection is invalid
@@ -1030,7 +1030,7 @@ sketch-tool-select = Select
 sketch-tool-select-hint = Click selects, Shift adds, double click: chain; drag: point, curve or box.
 sketch-tool-point = Point
 sketch-tool-point-hint = Click places a point.
-sketch-tool-line-hint = Click points one after another; Enter, double-click or Esc ends the polyline.
+sketch-tool-line-hint = Click points one after another; Enter sets the point; double-click or Esc ends the polyline.
 sketch-tool-rectangle-hint = Click two opposite corners.
 sketch-tool-circle-hint = Click the center, then a point on the circle.
 sketch-tool-arc = Arc

@@ -284,7 +284,7 @@ common-cancel = Abbrechen
 common-ok = OK
 
 ## Hauptfenster
-shell-sketch-keys-hint = Esc bricht ab, Eingabe beendet, Entf löscht, mittlere Maustaste verschiebt; beim Auswählen: Ziehen auf freier Fläche zieht einen Rahmen, Doppelklick wählt die Kette
+shell-sketch-keys-hint = Esc bricht ab, Eingabe setzt den Punkt, Entf löscht, mittlere Maustaste verschiebt; beim Auswählen: Ziehen auf freier Fläche zieht einen Rahmen, Doppelklick wählt die Kette
 shell-old-version-readonly = In einer alten Version lässt sich nichts ändern.
 tab-properties = Eigenschaften
 tab-versions = Versionen
@@ -987,7 +987,7 @@ sketch-field-sweep-redundant = Der Öffnungswinkel ist schon durch andere Abhän
 sketch-spline-max = Ein Spline hat höchstens { $max } Punkte; bitte abschließen
 sketch-spline-point-twice = Dieser Punkt gehört schon zum Spline
 sketch-spline-min = Ein Spline braucht mindestens 2 Punkte
-sketch-drag-blocked = Das lässt sich wegen der Abhängigkeiten nicht dorthin ziehen.
+sketch-drag-blocked = Das lässt sich wegen der Abhängigkeiten nicht dorthin ziehen
 sketch-nothing-selected = Es ist nichts ausgewählt
 sketch-action-mismatch = „{ $action }“ passt nicht zur aktuellen Auswahl
 sketch-selection-invalid = Die Auswahl ist ungültig
@@ -1013,7 +1013,7 @@ sketch-tool-select = Auswahl
 sketch-tool-select-hint = Klick wählt, Umschalt ergänzt, Doppelklick: Kette; Ziehen: Punkt, Kurve oder Rahmen.
 sketch-tool-point = Punkt
 sketch-tool-point-hint = Klick setzt einen Punkt.
-sketch-tool-line-hint = Punkte nacheinander anklicken; Eingabe, Doppelklick oder Esc beendet den Linienzug.
+sketch-tool-line-hint = Punkte nacheinander anklicken; Eingabe setzt den Punkt; Doppelklick oder Esc beendet den Linienzug.
 sketch-tool-rectangle-hint = Zwei gegenüberliegende Ecken anklicken.
 sketch-tool-circle-hint = Mittelpunkt, dann einen Punkt auf dem Kreis anklicken.
 sketch-tool-arc = Bogen

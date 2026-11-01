@@ -2039,6 +2039,7 @@ Stand 2026-11-01 (Spec `specs/2026-11-01-skizzen-eingabe-design.md`, Plan `plans
 - Die Felder folgen dem Zeiger, nehmen aber keine Mausklicks an, damit sie nie die Zeichnung verdecken. Ihre Namen stehen sichtbar neben dem Feld.
 - Das Feld hat die Tastatur nur beim Erscheinen und danach, wenn sonst niemand sie hat. Wer bewusst mit Tab ins Statusfeld wechselt, löst mit Buchstaben wieder Kürzel aus, solange ein Feld sichtbar ist.
 - Der erste getippte Winkel einer Linie ohne vorige Linie braucht eine Bezugslinie. Dafür legt das Programm einmal je Skizze eine feste Hilfslinie von (0, 0) nach (10, 0) an. Sie ist eine Konstruktionslinie und bleibt in der Skizze.
+- Die Hilfslinie für die Achse ist eine gewöhnliche feste Konstruktionslinie von (0, 0) nach (10, 0): Man kann an ihr Ende und Mitte fangen, sie schneidet beim Stutzen, Profile ignorieren sie, und wer sie löscht, entfernt die getippten Achswinkelmaße.
 - Für den Öffnungswinkel eines Bogens entstehen zwei Hilfslinien (Mitte–Start, Mitte–Ende) mit einem Winkelmaß. Der getippte Wert bleibt erhalten; bei Winkeln über 180° gibt es kein eigenes Anzeigemaß.
 - Ein Öffnungswinkel, der schon durch andere Abhängigkeiten bestimmt ist, wird nicht zu einem anzeigenden Maß. Er entfällt mit einer Meldung, weil ein anzeigendes Maß Hilfslinien bräuchte und über 180° das falsche Vorzeichen zeigen würde.
 - Die Bogenmitte bindet nur „Punkt auf Kurve“, nicht „Mittelpunkt“; den gibt es nur für Linien.
@@ -2046,7 +2047,7 @@ Stand 2026-11-01 (Spec `specs/2026-11-01-skizzen-eingabe-design.md`, Plan `plans
 - Eine Linie auf einen vorhandenen Punkt, die nur fast waagerecht ist, wird nicht mehr geradegezogen (früher schon). Eine Richtung gilt am vorhandenen Punkt nur, wenn sie schon exakt stimmt.
 - Ein Rahmen wählt Kurven und nur freie Punkte, keine Endpunkte von Kurven, weil sonst Abhängigkeiten nicht mehr zur Auswahl passen.
 - Umschalt und Ziehen mit der linken Taste auf freier Fläche wählt im Auswahlwerkzeug einen Rahmen, statt zu schwenken. Fusion schwenkt dort mit der mittleren Taste; in den übrigen Werkzeugen bleibt die bisherige Belegung.
-- Enter beendet den Linienzug nicht mehr (Esc oder Doppelklick tun es). Die Hinweistexte der Werkzeuge nennen „Eingabe“ teils noch als Ende.
+- Enter beendet den Linienzug nicht mehr (Esc oder Doppelklick tun es).
 - Beim Ziehen ganzer Kurven wird ein Bild zurückgenommen, wenn es für die gezogene Geometrie schlechter würde (vorher gelöst, jetzt nicht, oder mehr Widersprüche). Ein schon vorher bestehender fremder Widerspruch hindert das Ziehen nicht.
 - Ein Kreis, Bogen oder eine Ellipse, auf deren eigene Mitte geklickt wird, bringt die bekannte Fehlermeldung, wenn der Abstand unter 8 Bildschirmpunkten liegt (hineinzoomen oder Strg halten).
 
@@ -2076,8 +2077,7 @@ Stand 2026-11-01 (Spec `specs/2026-11-01-skizzen-eingabe-design.md`, Plan `plans
 **Folgeideen**
 - Die Einstellungen als eigener Stand („PendingSettings“) bündeln: Heute berührt jeder neue Schalter neun Stellen.
 - Ein Fenster ohne Textfeld soll dem Zeichenfeld die Tastatur nehmen.
-- Hinweistexte der Werkzeuge an das neue Enter anpassen (Linie, Spline, Tastenzeile) und „Ziehen: Rahmen“ mit „auf freier Fläche“ ergänzen.
 - Fangzeichen zusätzlich für den Fang beim Ziehen im Auswahlwerkzeug.
 - Richtungsvorbild auf die zuletzt überfahrenen Linien einschränken, wenn es in der Praxis zu viele Treffer gibt.
 - Mehr Prüfungen: Mittelpunkt auf Bogen und Ellipsenbogen, Fang auf Splines, doppelte Schnittpunkte, Klick auf eigene Mitte mit Strg als Ausweg.
-- Aufräumen: ein gemeinsames Prüfstück für „Ziehen beginnen“ und „freie Fläche“; veralteter Kommentar bei `assemble`; Meldungsende beim Ziehen (Punkt am Ende).
+- Aufräumen: ein gemeinsames Prüfstück für „Ziehen beginnen“ und „freie Fläche“; Meldungsende beim Ziehen (Punkt am Ende).

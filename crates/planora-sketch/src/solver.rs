@@ -245,7 +245,7 @@ impl Sketch {
         self.solve_with_soft(&[])
     }
 
-    /// Baut Residuen und Jacobi-Matrix der Gruppe an der Stelle `x`, ohne die Abhängigkeit `skip`.
+    /// Baut Residuen und Jacobi-Matrix der Gruppe an der Stelle `x`, je nach `which` (alle, ohne eine Abhängigkeit, oder mit Restwerten für Tangenten).
     fn assemble(
         &self,
         g: &Group,

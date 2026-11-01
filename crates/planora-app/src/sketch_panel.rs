@@ -621,11 +621,7 @@ fn side_contents(
             &label,
             ui.visuals().dark_mode,
         )
-        .on_hover_text(format!(
-            "{label}
-{}",
-            tr!("sketch-look-at-hint")
-        ));
+        .on_hover_text(format!("{label}\n{}", tr!("sketch-look-at-hint")));
         ui.data_mut(|d| d.insert_temp(look_at_key(), look.rect));
         palette.look_at |= look.clicked();
     });
