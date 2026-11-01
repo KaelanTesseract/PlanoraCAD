@@ -5,7 +5,7 @@
 //! und an [`SketchSession`] weitergereicht.
 
 use crate::formula_field::{FX, FormulaField, formula_text, names_hint, value_field_text};
-use crate::icons::{self, Icon, IconSource};
+use crate::icons::{self, HandIcon, Icon, IconSource};
 use crate::keymap::{Action, with_hint};
 use crate::msg::Msg;
 use crate::shell::{self, ShellMode, ShellRects, ShellState};
@@ -317,6 +317,16 @@ pub fn dimension_editor_open(ctx: &egui::Context) -> bool {
         .is_some_and(|p| p.editor.is_some())
 }
 
+fn look_at_key() -> egui::Id {
+    shell_panels::sketch_side_id().with("look-at")
+}
+
+/// Lage des Knopfs „Blick auf“ in der Palettenzeile im letzten Bild (für Tests).
+#[doc(hidden)]
+pub fn look_at_button(ctx: &egui::Context) -> Option<egui::Rect> {
+    ctx.data(|d| d.get_temp::<egui::Rect>(look_at_key()))
+}
+
 fn strip_buttons_key() -> egui::Id {
     shell_panels::sketch_strip_id().with("buttons")
 }
@@ -366,6 +376,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         grid: state.sketch_show_grid,
         snap: state.sketch_snap_grid,
         changed: false,
+        look_at: false,
     };
     let Some((se, sf)) = state.session_draft_mut() else {
         return;
@@ -397,6 +408,9 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     state.sketch_show_grid = palette.grid;
     state.sketch_snap_grid = palette.snap;
     state.sketch_grid_changed |= palette.changed;
+    if palette.look_at {
+        state.look_at_sketch();
+    }
     ctx.data_mut(|d| d.insert_temp(panel_id(), panel));
     if close {
         state.close_sketch();
@@ -531,6 +545,8 @@ struct SketchPalette {
     grid: bool,
     snap: bool,
     changed: bool,
+    /// Der Knopf „Blick auf“ wurde gedrückt.
+    look_at: bool,
 }
 
 /// Was das Skizzenfeld außer Sitzung und Entwurf braucht.
@@ -597,6 +613,21 @@ fn side_contents(
             .checkbox(&mut palette.snap, tr!("sketch-palette-snap"))
             .on_hover_text(tr!("sketch-palette-snap-hint"));
         palette.changed |= grid.changed() || snap.changed();
+        // Nur das Symbol (die Spalte ist schmal); Name und Hinweis im Hinweistext.
+        let label = tr!("sketch-look-at");
+        let look = icons::source_icon_button(
+            ui,
+            IconSource::Hand(HandIcon::LookAt),
+            &label,
+            ui.visuals().dark_mode,
+        )
+        .on_hover_text(format!(
+            "{label}
+{}",
+            tr!("sketch-look-at-hint")
+        ));
+        ui.data_mut(|d| d.insert_temp(look_at_key(), look.rect));
+        palette.look_at |= look.clicked();
     });
     ui.add_space(2.0);
 

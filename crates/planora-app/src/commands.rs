@@ -203,6 +203,18 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                 se.choose_tool(sk, tool);
             }
         }
+        Action::SketchLookAt => ws.active_tab_mut().state.look_at_sketch(),
+        Action::SketchToggleGrid | Action::SketchToggleSnap => {
+            let state = &mut ws.active_tab_mut().state;
+            if state.open_sketch_id().is_some() {
+                if a == Action::SketchToggleGrid {
+                    state.sketch_show_grid = !state.sketch_show_grid;
+                } else {
+                    state.sketch_snap_grid = !state.sketch_snap_grid;
+                }
+                state.sketch_grid_changed = true;
+            }
+        }
         Action::SketchConstruction => {
             if let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut() {
                 se.toggle_construction_if_possible(sk);

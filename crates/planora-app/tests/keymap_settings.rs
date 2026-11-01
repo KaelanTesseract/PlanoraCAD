@@ -12,7 +12,9 @@ use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, Vec2, pos2, vec2};
 use planora_app::app::PlanoraApp;
 use planora_app::keymap::settings_ui::*;
 use planora_app::keymap::text::binding_text;
-use planora_app::keymap::{Action, Area, Binding, Gesture, KeyChord, Keymap, MouseButton, search};
+use planora_app::keymap::{
+    Action, Area, Binding, Gesture, KeyChord, Keymap, MouseButton, SetResult, search,
+};
 use planora_app::settings_window::{Note, RootMessage};
 use planora_app::workspace::Workspace;
 use planora_app::{fonts, theme};
@@ -1047,4 +1049,19 @@ fn bottom_key_row(r: &Rig) -> Option<(Action, Pos2)> {
         .find(|a| a.label() == label.text)?;
     (!is_mouse_action(a) && a != Action::New && a.default_bindings().len() == 1)
         .then(|| (a, change.rect.center()))
+}
+
+#[test]
+fn look_at_grid_and_snap_can_be_bound_and_are_saved() {
+    let mut km = Keymap::defaults();
+    for (a, k) in [
+        (Action::SketchLookAt, Key::H),
+        (Action::SketchToggleGrid, Key::G),
+        (Action::SketchToggleSnap, Key::N),
+    ] {
+        assert!(km.bindings(a).is_empty(), "{a:?} ohne Vorgabetaste");
+        assert_eq!(km.conflict_for(a, &chord(k, false, false, false)), None);
+        assert_eq!(km.set(a, 0, chord(k, false, false, false)), SetResult::Ok);
+        assert_eq!(km.bindings(a), [chord(k, false, false, false)]);
+    }
 }

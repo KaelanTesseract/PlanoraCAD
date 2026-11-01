@@ -110,6 +110,12 @@ action_table! {
     SketchExtend, "skizze.dehnen", "action-sketch-extend", Sketch, [];
     /// Fusion „Brechen“: ohne Vorgabetaste wie in Fusion, belegbar.
     SketchBreak, "skizze.brechen", "action-sketch-break", Sketch, [];
+    /// Fusion „Blick auf“ (Look At): wie der Knopf in der Skizzenpalette; ohne Vorgabetaste.
+    SketchLookAt, "skizze.blick_auf", "action-sketch-look-at", Sketch, [];
+    /// Schalter „Skizzenraster“ der Skizzenpalette; ohne Vorgabetaste.
+    SketchToggleGrid, "skizze.raster", "action-sketch-toggle-grid", Sketch, [];
+    /// Schalter „Fang“ der Skizzenpalette; ohne Vorgabetaste.
+    SketchToggleSnap, "skizze.fang", "action-sketch-toggle-snap", Sketch, [];
     /// Wählt das zuletzt benutzte Skizzenwerkzeug wieder (eigenes Gedächtnis, siehe
     /// `commands::LastCommand`).
     SketchRepeatLast, "skizze.werkzeug_wiederholen", "action-sketch-repeat-last", Sketch,

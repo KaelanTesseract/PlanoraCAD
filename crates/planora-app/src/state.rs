@@ -1871,6 +1871,25 @@ impl AppState {
         Ok(())
     }
 
+    /// Fusion „Blick auf“ (Look At): Die Kamera schaut senkrecht auf die Ebene der offenen
+    /// Skizze, oben ist die y-Achse der Skizze. Nur Richtung und Ziel ändern sich (das Ziel
+    /// wandert in die Ebene), der Abstand bleibt; kein Rückgängig-Schritt. Das Einpassen beim
+    /// Öffnen endet damit, es springt nichts mehr nach. Ohne offene Skizze geschieht nichts.
+    pub fn look_at_sketch(&mut self) {
+        let Some(frame) = self.sketch_draft.as_ref().map(|d| *d.sketch.frame()) else {
+            return;
+        };
+        if self.sketch_session.is_none() {
+            return;
+        }
+        let n = to_vec3(frame.z);
+        let target = self.camera.target;
+        let off = (target - to_vec3(frame.origin)).dot(n);
+        self.camera.target = target - n * off;
+        self.camera.look_along(n, to_vec3(frame.y));
+        self.sketch_fit = None;
+    }
+
     /// Punkte, auf die die Ansicht beim Öffnen einer Skizze eingepasst wird (alle in der
     /// Skizzenebene `frame`):
     /// - Skizze mit Geometrie: ihre Hülle (`extent`), mindestens `MIN_SKETCH_VIEW_MM` groß;
