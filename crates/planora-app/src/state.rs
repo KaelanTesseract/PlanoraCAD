@@ -2328,19 +2328,15 @@ impl AppState {
     }
 
     /// Auswahl des Profils `profile` (Index in `profiles()`) der berechneten Skizze `sketch` für
-    /// ein Feature: die alte Profilnummer, wenn sie genau diese Fläche ergibt (so lässt sich das
-    /// Feature im bisherigen Dateiformat speichern), sonst ein Verweis auf die Fläche.
+    /// ein Feature: ein Verweis auf die Fläche, damit das Feature bei Skizzenänderungen an
+    /// derselben Fläche bleibt (gespeichert wird er als alte Profilnummer, wenn das geht). Nur
+    /// ohne berechnete Skizze oder ohne dieses Profil bleibt die Nummer (das Feature meldet dann
+    /// „Profil gibt es nicht“).
     pub(crate) fn profile_selection(&self, sketch: FeatureId, profile: usize) -> ProfileSel {
-        let Some(sk) = self.document.sketch_of(sketch) else {
-            return ProfileSel::Index(profile);
-        };
-        let Some(r) = self.profile_cache.get(sk).refs.get(profile).cloned() else {
-            return ProfileSel::Index(profile);
-        };
-        match sk.legacy_index_of(std::slice::from_ref(&r)) {
-            Some(n) => ProfileSel::Index(n),
-            None => ProfileSel::Refs(vec![r]),
-        }
+        self.document
+            .sketch_of(sketch)
+            .and_then(|sk| self.profile_cache.get(sk).refs.get(profile).cloned())
+            .map_or(ProfileSel::Index(profile), |r| ProfileSel::Refs(vec![r]))
     }
 
     /// Indizes (in `profiles()` der berechneten Skizze `sketch`) der Profile, die `sel` heute

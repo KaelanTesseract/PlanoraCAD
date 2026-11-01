@@ -74,18 +74,34 @@ fn the_dialogs_draw_and_list_profiles_and_rejections() {
         profile: 0,
         height: 3.0,
     };
-    let mut text = String::new();
-    for _ in 0..2 {
-        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
-            assert!(dialog.show(ui.ctx(), &mut s), "bleibt ohne Klick offen");
-        });
-        text.push_str(&planora_app::testing::collect_texts(&out));
-        out.drop_without_applying_deltas();
-    }
+    let mut texts = |s: &mut AppState| {
+        let mut text = String::new();
+        for _ in 0..2 {
+            let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                assert!(dialog.show(ui.ctx(), s), "bleibt ohne Klick offen");
+            });
+            text.push_str(&planora_app::testing::collect_texts(&out));
+            out.drop_without_applying_deltas();
+        }
+        text
+    };
+    // Fusion-Verhalten, Skizzen 1: Die offene Linie wird übergangen, nicht als „nicht
+    // verwendbar“ gelistet.
+    let text = texts(&mut s);
+    assert!(text.contains("Profil 1"), "{text}");
+    assert!(!text.contains("Nicht verwendbar"), "{text}");
+    // Ein Kreis, der die Unterkante berührt, klemmt die Fläche um ihn ein: Sie wird mit Grund
+    // gelistet.
+    edit_sketch(&mut s, id, |sk| {
+        let c = sk.add_point(5.0, 1.5).unwrap();
+        sk.add_circle(c, 1.5).unwrap();
+    });
+    let text = texts(&mut s);
     assert!(text.contains("Profil 1"), "{text}");
     assert!(
-        text.contains("Nicht verwendbar"),
-        "abgelehnte Kette wird erklärt:\n{text}"
+        text.contains("Nicht verwendbar") && text.contains("berührt"),
+        "eingeklemmte Fläche wird erklärt:
+{text}"
     );
     let mut revolve = CreateDialog::RevolveSketch {
         sketch: id,
@@ -97,6 +113,35 @@ fn the_dialogs_draw_and_list_profiles_and_rejections() {
     })
     .drop_without_applying_deltas();
     assert_eq!(s.bodies.len(), 0);
+}
+
+/// Ein neues Feature merkt sich seine Fläche, nicht die Nummer: Wird ein Kreis davor gelöscht,
+/// bleibt die Extrusion beim gewählten Kreis und springt nicht still zum nächsten.
+#[test]
+fn an_extrusion_stays_on_its_circle_when_an_earlier_circle_is_deleted() {
+    let mut s = AppState::new();
+    let id = new_sketch(&mut s);
+    let a = edit_sketch(&mut s, id, |sk| {
+        let mut circles = Vec::new();
+        for x in [0.0, 20.0, 40.0] {
+            let c = sk.add_point(x, 0.0).unwrap();
+            circles.push(sk.add_circle(c, 2.0).unwrap());
+        }
+        circles[0]
+    });
+    s.extrude_sketch(id, 1, 3.0).unwrap();
+    let centre_x = |s: &AppState| {
+        let (min, max) = s.bodies[0].bounds;
+        (min.x + max.x) / 2.0
+    };
+    assert_eq!(s.bodies.len(), 1);
+    assert!((centre_x(&s) - 20.0).abs() < 1e-6, "Kreis B");
+    edit_sketch(&mut s, id, |sk| sk.remove_curve(a).unwrap());
+    assert_eq!(s.bodies.len(), 1, "{:?}", s.message);
+    assert!(
+        (centre_x(&s) - 20.0).abs() < 1e-6,
+        "weiter Kreis B, nicht C"
+    );
 }
 
 #[test]

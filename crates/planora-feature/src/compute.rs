@@ -479,6 +479,7 @@ fn selected_profiles(
             if let Some(idx) = sk
                 .migrate_profile_index(*n)
                 .and_then(|refs| extracted.resolve(&refs).ok())
+                .filter(|idx| !idx.is_empty())
             {
                 return Ok(extracted.merged(&idx));
             }

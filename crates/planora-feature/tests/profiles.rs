@@ -169,6 +169,42 @@ fn a_profile_split_by_a_sketch_change_is_reported_as_lost() {
 }
 
 #[test]
+fn old_index_of_a_plate_with_a_hole_gives_the_old_body() {
+    let mut sk = new_sketch();
+    sk.add_rectangle(DVec2::ZERO, DVec2::new(20.0, 10.0))
+        .unwrap();
+    let c = sk.add_point(10.0, 5.0).unwrap();
+    sk.add_circle(c, 3.0).unwrap();
+    assert!(sk.migrate_profile_index(0).is_some());
+    let old = sk.legacy_profiles().profiles[0].clone();
+    assert_eq!(old.holes.len(), 1, "altes Profil 0 ist die Platte mit Loch");
+    let h = 4.0;
+    let kernel = planora_kernel::AnalyticKernel::default();
+    let expected = extrude_profile(&kernel, &sk, &old, h).unwrap();
+
+    let mut d = Document::new();
+    let s = d.add_feature("S", sketch_feature(sk)).unwrap();
+    let e = d
+        .add_feature(
+            "E",
+            FeatureKind::Extrude {
+                sketch: s,
+                profiles: ProfileSel::Index(0),
+                height: h,
+            },
+        )
+        .unwrap();
+    assert_ok(&d, e);
+    let bodies = bodies_of(&d, e);
+    assert_eq!(bodies.len(), 1);
+    let v = volume(bodies[0]);
+    assert!((v - volume(&expected)).abs() < 1e-6, "derselbe Körper: {v}");
+    assert!(((v - (200.0 - 9.0 * PI) * h) / v).abs() < 1e-3, "{v}");
+    assert_eq!(bodies[0].faces.len(), expected.faces.len());
+    assert_eq!(bodies[0].edges.len(), expected.edges.len());
+}
+
+#[test]
 fn old_index_of_a_plate_with_a_touched_hole_gives_the_old_body() {
     let mut sk = new_sketch();
     sk.add_rectangle(DVec2::ZERO, DVec2::new(20.0, 10.0))
