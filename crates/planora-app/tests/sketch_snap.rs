@@ -332,6 +332,8 @@ fn a_curve_goes_before_alignment() {
 #[test]
 fn the_running_points_do_not_align() {
     let (mut sk, mut se) = setup(Tool::Line);
+    // Fusion-Verhalten, Skizzen 2: Sonst würde die fast senkrechte Linie exakt senkrecht.
+    se.auto_constrain = false;
     click(&mut se, &mut sk, 100.0, 100.0);
     let cur = se.resolve_cursor(&sk, DVec2::new(102.0, 400.0), R);
     assert_eq!(cur.guides.x, None);

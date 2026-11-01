@@ -236,6 +236,52 @@ fn a_tangent_between_two_arcs_at_a_shared_end_keeps_the_centres_in_line() {
     assert!(p.perp_dot(q).abs() < 1e-6, "{p:?} {q:?}");
 }
 
+/// Alles fest: Linie bis (10, 0), Bogen mit dem Anfang dort, Mitte `off` neben der Senkrechten.
+fn fixed_tangent_off_by(off: f64) -> (Sketch, PointId, PointId) {
+    let mut s = sketch();
+    let a = s.add_point(0.0, 0.0).unwrap();
+    let b = s.add_point(10.0, 0.0).unwrap();
+    let m = s.add_point(10.0 + off, 5.0).unwrap();
+    let other = s.add_point(15.0 + off, 5.0).unwrap();
+    let line = s.add_line(a, b).unwrap();
+    let arc = s.add_arc(m, b, other).unwrap();
+    s.add_constraint(K::Fixed(a, 0.0, 0.0)).unwrap();
+    s.add_constraint(K::Fixed(b, 10.0, 0.0)).unwrap();
+    s.add_constraint(K::Fixed(m, 10.0 + off, 5.0)).unwrap();
+    s.add_constraint(K::Tangent(line, arc)).unwrap();
+    (s, m, other)
+}
+
+#[test]
+fn a_drifted_tangent_at_a_shared_end_of_an_old_sketch_stays_solved() {
+    for off in [1e-4, 1e-5, -1e-4] {
+        let (mut s, m, other) = fixed_tangent_off_by(off);
+        let r = s.solve();
+        assert_eq!(r.status, SolveStatus::Solved, "{off}: {r:?}");
+        assert!(r.conflicting.is_empty(), "{off}: {r:?}");
+        assert_eq!(xy(&s, m), DVec2::new(10.0 + off, 5.0));
+        // Was noch frei ist, lässt sich weiter ziehen.
+        let d = s
+            .drag(&[planora_sketch::solver::Drag {
+                point: other,
+                target: DVec2::new(10.0, 9.0),
+            }])
+            .unwrap();
+        assert_eq!(d.status, SolveStatus::Solved, "{off}: {d:?}");
+        assert!(xy(&s, other).y > 8.0, "{:?}", xy(&s, other));
+    }
+}
+
+#[test]
+fn a_really_wrong_tangent_at_a_shared_end_is_still_a_conflict() {
+    // 0,1 rad bei r = 5: ein halber Millimeter neben der Senkrechten.
+    for off in [0.5, 0.05] {
+        let (mut s, ..) = fixed_tangent_off_by(off);
+        let r = s.solve();
+        assert_eq!(r.status, SolveStatus::Conflicting, "{off}: {r:?}");
+    }
+}
+
 #[test]
 fn an_arc_end_is_pulled_onto_the_circle_through_its_start() {
     let mut s = sketch();
