@@ -7,7 +7,9 @@ pub mod data;
 #[doc(hidden)]
 pub mod dual;
 pub mod error;
+pub(crate) mod geom;
 pub mod helpers;
+pub(crate) mod intersect;
 /// Interne lineare Algebra des Solvers; nur für die Tests öffentlich.
 #[doc(hidden)]
 pub mod linalg;
