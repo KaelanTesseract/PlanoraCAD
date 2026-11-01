@@ -3,7 +3,7 @@
 use crate::error::FeatureError;
 use crate::model::{
     BlendArt, BodyRef, Document, EdgeCopy, FeatureId, FeatureKind, MAX_MESH_SCALE, MIN_MESH_SCALE,
-    ROTATION_NORM_TOL, SketchFeature, SketchPlane,
+    ProfileSel, ROTATION_NORM_TOL, SketchFeature, SketchPlane,
 };
 use crate::refs::{FaceRef, first_face, resolve_edge, resolve_face};
 use planora_exchange::{ExchangeMesh, MeshTransform};
@@ -18,7 +18,9 @@ use planora_mesh::{
     BLEND_REL, BLEND_SLACK_FACTOR, Discretizer, TessellationOptions, blend_volume_plausible,
     boolean_volume_plausible, curved_area, mass_properties, tessellate, tessellate_with,
 };
-use planora_sketch::{Sketch, SolveStatus, extrude_profile, plane_of_face, revolve_profile};
+use planora_sketch::{
+    ExtractedProfiles, Sketch, SolveStatus, extrude_profile, plane_of_face, revolve_profile,
+};
 
 /// Größter Betrag einer Koordinate oder eines Maßes in mm (wie
 /// [`planora_sketch::model::MAX_COORD`]): Darüber ist der Abstand benachbarter `f64`-Werte größer
@@ -241,23 +243,29 @@ fn compute_unchecked(
         } => primitive(doc, kernel.make_cone(*radius, *height), *origin, id.0),
         FeatureKind::Extrude {
             sketch,
-            profile,
+            profiles,
             height,
         } => {
             let sk = input_sketch(doc, *sketch)?;
-            let p = nth_profile(sk, *profile)?;
-            let solid = extrude_profile(kernel, sk, &p, *height).map_err(sketch_error)?;
-            finish(doc, solid, id.0)
+            let mut bodies = Vec::new();
+            for p in selected_profiles(sk, profiles)? {
+                let solid = extrude_profile(kernel, sk, &p, *height).map_err(sketch_error)?;
+                bodies.push(checked(doc, solid, id.0)?);
+            }
+            Ok(Computed::bodies(bodies))
         }
         FeatureKind::Revolve {
             sketch,
-            profile,
+            profiles,
             axis,
         } => {
             let sk = input_sketch(doc, *sketch)?;
-            let p = nth_profile(sk, *profile)?;
-            let solid = revolve_profile(kernel, sk, &p, *axis).map_err(sketch_error)?;
-            finish(doc, solid, id.0)
+            let mut bodies = Vec::new();
+            for p in selected_profiles(sk, profiles)? {
+                let solid = revolve_profile(kernel, sk, &p, *axis).map_err(sketch_error)?;
+                bodies.push(checked(doc, solid, id.0)?);
+            }
+            Ok(Computed::bodies(bodies))
         }
         FeatureKind::Boolean { target, tool, op } => {
             let a = visible_body(doc, visible, *target)?;
@@ -425,12 +433,17 @@ fn primitive(
 }
 
 /// Prüft den Körper mit dem Validator und weist den noch freien Marken die Herkunft zu.
-fn finish(doc: &Document, mut solid: Solid, id: u64) -> Result<Computed, FeatureError> {
+fn finish(doc: &Document, solid: Solid, id: u64) -> Result<Computed, FeatureError> {
+    Ok(Computed::bodies(vec![checked(doc, solid, id)?]))
+}
+
+/// Wie [`finish`], liefert den einzelnen Körper.
+fn checked(doc: &Document, mut solid: Solid, id: u64) -> Result<Solid, FeatureError> {
     doc.kernel
         .validate(&solid)
         .map_err(|e| FeatureError::Kernel(e.to_string()))?;
     solid.assign_origin(id);
-    Ok(Computed::bodies(vec![solid]))
+    Ok(solid)
 }
 
 fn sketch_error(e: planora_sketch::SketchError) -> FeatureError {
@@ -445,13 +458,40 @@ fn input_sketch(doc: &Document, id: crate::model::FeatureId) -> Result<&Sketch, 
     })
 }
 
-/// Profil `n` der Skizze. Gibt es das nicht, nennt die Meldung die Gründe der abgelehnten
-/// Kurvenzüge (etwa eine zu kleine Ellipse), damit die Ursache sichtbar bleibt.
-fn nth_profile(sk: &Sketch, n: usize) -> Result<planora_kernel::Profile, FeatureError> {
+/// Die gewählten Profile der Skizze, zusammengefasst ([`ExtractedProfiles::merged`]): je
+/// Gruppe nebeneinanderliegender Flächen ein Profil, geordnet nach der kleinsten Profilnummer.
+///
+/// `Index(n)` (alte Profilnummer) wird über [`Sketch::migrate_profile_index`] umgerechnet; geht
+/// das nicht, gilt das alte Profil selbst (derselbe Körper wie früher). Gibt es auch das nicht,
+/// nennt die Meldung die Gründe der abgelehnten Kurvenzüge (etwa eine zu kleine Ellipse), damit
+/// die Ursache sichtbar bleibt. Ist ein Verweis verloren, meldet das `feature-profile-lost`.
+fn selected_profiles(
+    sk: &Sketch,
+    sel: &ProfileSel,
+) -> Result<Vec<planora_kernel::Profile>, FeatureError> {
     let extracted = sk.profiles();
-    if let Some(p) = extracted.profiles.into_iter().nth(n) {
-        return Ok(p);
+    match sel {
+        ProfileSel::Refs(refs) => match extracted.resolve(refs) {
+            Ok(idx) if !idx.is_empty() => Ok(extracted.merged(&idx)),
+            _ => Err(FeatureError::InvalidInput(tr!("feature-profile-lost"))),
+        },
+        ProfileSel::Index(n) => {
+            if let Some(idx) = sk
+                .migrate_profile_index(*n)
+                .and_then(|refs| extracted.resolve(&refs).ok())
+            {
+                return Ok(extracted.merged(&idx));
+            }
+            if let Some(p) = sk.legacy_profiles().profiles.into_iter().nth(*n) {
+                return Ok(vec![p]);
+            }
+            Err(no_profile(&extracted, *n))
+        }
     }
+}
+
+/// Meldung „Profil `n` gibt es nicht“ mit den Gründen der abgelehnten Kurvenzüge.
+fn no_profile(extracted: &ExtractedProfiles, n: usize) -> FeatureError {
     let mut reasons: Vec<String> = Vec::new();
     for r in &extracted.rejected {
         let text = r.reason.to_string();
@@ -459,7 +499,7 @@ fn nth_profile(sk: &Sketch, n: usize) -> Result<planora_kernel::Profile, Feature
             reasons.push(text);
         }
     }
-    Err(FeatureError::InvalidInput(if reasons.is_empty() {
+    FeatureError::InvalidInput(if reasons.is_empty() {
         tr!("feature-no-profile", n = n.to_string())
     } else {
         tr!(
@@ -467,7 +507,7 @@ fn nth_profile(sk: &Sketch, n: usize) -> Result<planora_kernel::Profile, Feature
             n = n.to_string(),
             reasons = (reasons.join("; ")).to_string()
         )
-    }))
+    })
 }
 
 /// Der Körper `r`, sofern er vor dem Feature sichtbar ist.

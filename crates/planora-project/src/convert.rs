@@ -23,9 +23,9 @@ use planora_feature::{
     BlendArt, BodyRef, EdgeCopy, EdgeRef, FaceRef, FeatureId, FeatureKind, FieldKey, Formulas,
     MAX_COMMENT_CHARS, MAX_COORD_MM, MAX_DECIMALS, MAX_DIM_TEXT_CHARS, MAX_DRAWINGS, MAX_FIT_CHARS,
     MAX_FORMULA_CHARS, MAX_PARAM_NAME_CHARS, MAX_PARAMETERS, MAX_POS_MM, MAX_ROLE_CHARS,
-    MAX_TOL_MM, MAX_VIEWS, MeshId, ParamId, ParamUnit, Parameter, SketchFeature, SketchFormulas,
-    SketchPlane, Snapshot, SnapshotFeature, StandardPlane, StepShape, StepShapeId, field_keys,
-    step_text_megabytes, step_text_sum_limit, validate_drawing,
+    MAX_TOL_MM, MAX_VIEWS, MeshId, ParamId, ParamUnit, Parameter, ProfileSel, SketchFeature,
+    SketchFormulas, SketchPlane, Snapshot, SnapshotFeature, StandardPlane, StepShape, StepShapeId,
+    field_keys, step_text_megabytes, step_text_sum_limit, validate_drawing,
 };
 use planora_i18n::{DisplayUnit, tr};
 use planora_kernel::BoolOp;
@@ -579,9 +579,25 @@ fn plane_name(p: StandardPlane) -> &'static str {
     }
 }
 
+/// Alte Profilnummer der gewählten Profile für die Datei: `Index(n)` direkt, Verweise nur, wenn
+/// sie genau ein altes Profil der Skizze `sketch` ergeben ([`Sketch::legacy_index_of`]).
+fn profile_number_to(sel: &ProfileSel, sketch: Option<&Sketch>) -> Result<usize> {
+    match sel {
+        ProfileSel::Index(n) => Ok(*n),
+        ProfileSel::Refs(refs) => sketch
+            .and_then(|sk| sk.legacy_index_of(refs))
+            .ok_or_else(|| ProjectError::Invalid(tr!("proj-profile-refs-unwritable"))),
+    }
+}
+
 /// Art eines Features für die Datei; `forms` ordnet jeder Formkennung des Dokuments die
-/// Kennung zu, unter der ihr Text in der Datei steht (siehe [`step_forms_to`]).
-fn kind_to(k: &FeatureKind, forms: &BTreeMap<StepShapeId, u64>) -> Result<KindDto> {
+/// Kennung zu, unter der ihr Text in der Datei steht (siehe [`step_forms_to`]); `sketch_of`
+/// liefert die Skizze eines Skizzen-Features (für Profil-Verweise).
+fn kind_to<'a>(
+    k: &FeatureKind,
+    forms: &BTreeMap<StepShapeId, u64>,
+    sketch_of: impl Fn(FeatureId) -> Option<&'a Sketch>,
+) -> Result<KindDto> {
     Ok(match k {
         FeatureKind::Sketch(s) => KindDto::Skizze(Box::new(SketchFeatureDto {
             skizze: sketch_to(&s.sketch),
@@ -638,20 +654,20 @@ fn kind_to(k: &FeatureKind, forms: &BTreeMap<StepShapeId, u64>) -> Result<KindDt
         },
         FeatureKind::Extrude {
             sketch,
-            profile,
+            profiles,
             height,
         } => KindDto::Extrusion {
             skizze: sketch.0,
-            profil: *profile,
+            profil: profile_number_to(profiles, sketch_of(*sketch))?,
             hoehe: *height,
         },
         FeatureKind::Revolve {
             sketch,
-            profile,
+            profiles,
             axis,
         } => KindDto::Rotation {
             skizze: sketch.0,
-            profil: *profile,
+            profil: profile_number_to(profiles, sketch_of(*sketch))?,
             achse: axis.index(),
         },
         FeatureKind::Boolean { target, tool, op } => KindDto::Boolesch {
@@ -824,7 +840,7 @@ fn kind_from(origin: &str, name: &str, d: &KindDto) -> Result<FeatureKind> {
             hoehe,
         } => FeatureKind::Extrude {
             sketch: FeatureId(*skizze),
-            profile: *profil,
+            profiles: ProfileSel::Index(*profil),
             height: n(|| tr!("proj-l-height"), *hoehe)?,
         },
         KindDto::Rotation {
@@ -833,7 +849,7 @@ fn kind_from(origin: &str, name: &str, d: &KindDto) -> Result<FeatureKind> {
             achse,
         } => FeatureKind::Revolve {
             sketch: FeatureId(*skizze),
-            profile: *profil,
+            profiles: ProfileSel::Index(*profil),
             axis: CurveId::from_index(*achse),
         },
         KindDto::Boolesch {
@@ -2075,6 +2091,15 @@ pub fn encode_version(s: &Snapshot) -> Result<String> {
             max = mb_text(limit)
         )));
     }
+    let sketch_of = |id: FeatureId| {
+        s.features
+            .iter()
+            .find(|f| f.id == id)
+            .and_then(|f| match &f.kind {
+                FeatureKind::Sketch(sf) => Some(&sf.sketch),
+                _ => None,
+            })
+    };
     let file = VersionFile {
         format,
         marker: s.marker,
@@ -2087,7 +2112,7 @@ pub fn encode_version(s: &Snapshot) -> Result<String> {
                     id: f.id.0,
                     name: f.name.clone(),
                     unterdrueckt: f.suppressed,
-                    art: kind_to(&f.kind, &forms)?,
+                    art: kind_to(&f.kind, &forms, sketch_of)?,
                     formeln: f
                         .formulas
                         .iter()

@@ -90,7 +90,7 @@ fn full_document() -> Document {
         "Extrusion 1",
         FeatureKind::Extrude {
             sketch: sid,
-            profile: 0,
+            profiles: ProfileSel::Index(0),
             height: 4.0,
         },
     )
@@ -211,4 +211,66 @@ fn errors_name_the_feature() {
     assert!(e.contains("Abzug") && e.contains("teilen"), "{e}");
     let e = bad(&good.replacen("30.0", "1e300", 1)).to_string();
     assert!(e.contains("Quader 1"), "{e}");
+}
+
+/// Profil-Verweise (Skizzen 1, Task 6): bis zum neuen Feld als alte Profilnummer geschrieben,
+/// wenn sie genau ein altes Profil ergeben; sonst klare Meldung statt eines falschen Profils.
+#[test]
+fn profile_refs_are_written_as_the_old_number_or_rejected() {
+    let doc_with = |sk: planora_sketch::Sketch, sel: fn(&planora_sketch::Sketch) -> ProfileSel| {
+        let profiles = sel(&sk);
+        let mut d = Document::new();
+        let sid = d
+            .add_feature(
+                "Skizze 1",
+                FeatureKind::Sketch(SketchFeature {
+                    sketch: sk,
+                    plane: SketchPlane::Standard(StandardPlane::XY),
+                    copies: vec![],
+                    formulas: Default::default(),
+                }),
+            )
+            .unwrap();
+        d.add_feature(
+            "Extrusion 1",
+            FeatureKind::Extrude {
+                sketch: sid,
+                profiles,
+                height: 4.0,
+            },
+        )
+        .unwrap();
+        d
+    };
+    let new_sketch =
+        || planora_sketch::Sketch::new(StandardPlane::XY.frame(), "Skizze 1", Default::default());
+
+    // Ein Rechteck: der Verweis ist altes Profil 0
+    let mut sk = new_sketch();
+    sk.add_rectangle(DVec2::ZERO, DVec2::new(8.0, 6.0)).unwrap();
+    let d = doc_with(sk, |sk| ProfileSel::Refs(sk.profiles().refs));
+    let text = encode_version(&d.snapshot()).unwrap();
+    let back = Document::from_snapshot(decode_version(&text, "test").unwrap(), 0.05).unwrap();
+    assert!(matches!(
+        back.features()[1].kind,
+        FeatureKind::Extrude {
+            profiles: ProfileSel::Index(0),
+            ..
+        }
+    ));
+    assert_eq!(back.features()[1].status, FeatureStatus::Ok);
+
+    // Ein Dreieck des Rechtecks mit Diagonale gab es als altes Profil nicht
+    let mut sk = new_sketch();
+    let r = sk.add_rectangle(DVec2::ZERO, DVec2::new(8.0, 6.0)).unwrap();
+    sk.add_line(r.points[0], r.points[2]).unwrap();
+    let d = doc_with(sk, |sk| {
+        ProfileSel::Refs(vec![sk.profiles().refs[0].clone()])
+    });
+    assert_eq!(d.features()[1].status, FeatureStatus::Ok);
+    let err = encode_version(&d.snapshot()).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        planora_i18n::tr!("proj-profile-refs-unwritable")
+    );
 }

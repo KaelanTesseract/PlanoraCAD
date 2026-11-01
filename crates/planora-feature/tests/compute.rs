@@ -48,7 +48,7 @@ fn primitives_and_extrusion_produce_bodies_with_origin_tags() {
             "Extrusion 1",
             FeatureKind::Extrude {
                 sketch: s,
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 height: 10.0,
             },
         )
@@ -209,7 +209,7 @@ fn revolve_from_a_sketch_axis() {
             "Rotation",
             FeatureKind::Revolve {
                 sketch: s,
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 axis,
             },
         )
@@ -232,7 +232,7 @@ fn adding_features_validates_references() {
             "X",
             FeatureKind::Extrude {
                 sketch: FeatureId(7),
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 height: 1.0
             }
         ),
@@ -277,7 +277,7 @@ fn a_sketch_on_a_face_follows_the_face_and_moving_the_marker_reuses_results() {
             "E",
             FeatureKind::Extrude {
                 sketch: s,
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 height: 3.0,
             },
         )
@@ -305,7 +305,7 @@ fn a_sketch_on_a_face_follows_the_face_and_moving_the_marker_reuses_results() {
             "X",
             FeatureKind::Extrude {
                 sketch: a,
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 height: 1.0
             }
         )
@@ -346,7 +346,7 @@ fn an_implausible_or_invalid_profile_index_is_an_error_not_a_panic() {
             "E",
             FeatureKind::Extrude {
                 sketch: s,
-                profile: 3,
+                profiles: ProfileSel::Index(3),
                 height: 1.0,
             },
         )

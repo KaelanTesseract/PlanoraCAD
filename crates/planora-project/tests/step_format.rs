@@ -636,7 +636,7 @@ fn reopen_keeps_sketch_on_imported_face() {
             "Extrusion",
             FeatureKind::Extrude {
                 sketch: s,
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 height: 5.0,
             },
         )

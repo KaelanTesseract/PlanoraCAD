@@ -476,7 +476,7 @@ fn convex_and_concave_edges_in_one_feature_pass_the_volume_probe() {
             "Extrusion 1",
             FeatureKind::Extrude {
                 sketch: skf,
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 height: 5.0,
             },
         )

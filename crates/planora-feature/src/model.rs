@@ -6,7 +6,7 @@ use planora_exchange::{ExchangeMesh, MeshTransform};
 use planora_i18n::tr;
 use planora_kernel::{AnalyticKernel, BlendKind, BoolOp, Solid};
 use planora_math::{DQuat, DVec3, Frame};
-use planora_sketch::{ConstraintId, CurveId, Sketch};
+use planora_sketch::{ConstraintId, CurveId, ProfileRef, Sketch};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -212,6 +212,17 @@ impl BlendArt {
     }
 }
 
+/// Gewählte Profile einer Extrusion oder Rotation.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ProfileSel {
+    /// Altes Profil `n` (bisherige Extraktion, nur aus alten Dateien und in Tests); beim
+    /// Berechnen über [`Sketch::migrate_profile_index`] auf die heutigen Flächen umgerechnet.
+    Index(usize),
+    /// Verweise auf Flächen der Skizze ([`planora_sketch::ExtractedProfiles::find`]);
+    /// nebeneinanderliegende Flächen ergeben einen Körper, getrennte je einen (wie Fusion).
+    Refs(Vec<ProfileRef>),
+}
+
 /// Art eines Features mit seinen Parametern (Maße in Millimetern).
 #[derive(Clone, Debug, PartialEq)]
 #[allow(
@@ -240,12 +251,12 @@ pub enum FeatureKind {
     },
     Extrude {
         sketch: FeatureId,
-        profile: usize,
+        profiles: ProfileSel,
         height: f64,
     },
     Revolve {
         sketch: FeatureId,
-        profile: usize,
+        profiles: ProfileSel,
         axis: CurveId,
     },
     Boolean {

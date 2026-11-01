@@ -18,7 +18,7 @@ use crate::theme;
 use planora_feature::expr::number_text;
 use planora_feature::{
     BlendArt, BodyRef, FeatureId, FeatureKind, FeatureStatus, FieldKey, Formulas, ParamScope,
-    ParamUnit, field_keys, field_label, field_unit, field_value, set_field_value,
+    ParamUnit, ProfileSel, field_keys, field_label, field_unit, field_value, set_field_value,
 };
 use planora_i18n::{DisplayUnit, current_unit, tr};
 use planora_kernel::BoolOp;
@@ -723,20 +723,20 @@ impl FeatureDialog {
         let (mut switch, mut add, mut face) = (None, false, None);
         match &mut self.kind {
             FeatureKind::Extrude {
-                sketch, profile, ..
+                sketch, profiles, ..
             } => {
                 if sketch_choice(ui, state, own, sketch) {
-                    *profile = 0;
+                    *profiles = state.profile_selection(*sketch, 0);
                 }
-                profile_choice(ui, state, *sketch, profile);
+                profile_choice(ui, state, *sketch, profiles);
             }
             FeatureKind::Revolve {
                 sketch,
-                profile,
+                profiles,
                 axis,
             } => {
                 if sketch_choice(ui, state, own, sketch) {
-                    *profile = 0;
+                    *profiles = state.profile_selection(*sketch, 0);
                     if let Some(first) = state
                         .document
                         .sketch_of(*sketch)
@@ -745,7 +745,7 @@ impl FeatureDialog {
                         *axis = first;
                     }
                 }
-                profile_choice(ui, state, *sketch, profile);
+                profile_choice(ui, state, *sketch, profiles);
                 let candidates = state
                     .document
                     .sketch_of(*sketch)
@@ -876,8 +876,9 @@ fn sketch_choice(ui: &mut egui::Ui, state: &AppState, own: usize, sketch: &mut F
     *sketch != before
 }
 
-/// Auswahl des Profils der berechneten Skizze.
-fn profile_choice(ui: &mut egui::Ui, state: &AppState, sketch: FeatureId, profile: &mut usize) {
+/// Auswahl des Profils der berechneten Skizze (ein Profil; die heutige Wahl wird angezeigt, wenn
+/// sie genau ein Profil trifft).
+fn profile_choice(ui: &mut egui::Ui, state: &AppState, sketch: FeatureId, sel: &mut ProfileSel) {
     let Some(sk) = state.document.sketch_of(sketch) else {
         ui.weak(tr!("edit-sketch-not-computed"));
         return;
@@ -898,16 +899,19 @@ fn profile_choice(ui: &mut egui::Ui, state: &AppState, sketch: FeatureId, profil
             unit = planora_i18n::current_unit().area_symbol()
         )
     };
-    let current = if *profile < extracted.profiles.len() {
-        label(*profile)
-    } else {
-        tr!("create-choose")
+    let before = match state.selected_profile_indices(sketch, sel).as_slice() {
+        &[i] => Some(i),
+        _ => None,
     };
+    let mut profile = before;
     egui::ComboBox::from_label(tr!("create-profile"))
-        .selected_text(current)
+        .selected_text(profile.map_or_else(|| tr!("create-choose"), label))
         .show_ui(ui, |ui| {
             for i in 0..extracted.profiles.len() {
-                ui.selectable_value(profile, i, label(i));
+                ui.selectable_value(&mut profile, Some(i), label(i));
             }
         });
+    if let Some(i) = profile.filter(|_| profile != before) {
+        *sel = state.profile_selection(sketch, i);
+    }
 }

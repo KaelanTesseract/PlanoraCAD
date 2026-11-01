@@ -132,12 +132,12 @@ fn all_texts() -> Vec<String> {
         },
         FeatureKind::Extrude {
             sketch: FeatureId(1),
-            profile: 0,
+            profiles: ProfileSel::Index(0),
             height: 1.0,
         },
         FeatureKind::Revolve {
             sketch: FeatureId(1),
-            profile: 0,
+            profiles: ProfileSel::Index(0),
             axis: planora_sketch::CurveId::from_index(0),
         },
         FeatureKind::MeshBody {
@@ -318,7 +318,7 @@ fn all_texts() -> Vec<String> {
             "Ext",
             FeatureKind::Extrude {
                 sketch: a,
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 height: 1.0,
             },
         )

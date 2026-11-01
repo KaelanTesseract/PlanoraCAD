@@ -40,7 +40,7 @@ fn freeform_document() -> Document {
             "Extrusion 1",
             FeatureKind::Extrude {
                 sketch: s,
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 height: 4.0,
             },
         )

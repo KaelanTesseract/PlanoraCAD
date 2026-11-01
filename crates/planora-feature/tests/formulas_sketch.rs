@@ -76,7 +76,7 @@ fn hull_of(d: &Document, id: FeatureId) -> (DVec3, DVec3) {
 fn extrude(sketch: FeatureId) -> FeatureKind {
     FeatureKind::Extrude {
         sketch,
-        profile: 0,
+        profiles: ProfileSel::Index(0),
         height: 5.0,
     }
 }

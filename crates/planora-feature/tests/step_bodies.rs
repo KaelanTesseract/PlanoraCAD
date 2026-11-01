@@ -410,7 +410,7 @@ fn works_like_any_exact_body() {
             "Extrusion",
             FeatureKind::Extrude {
                 sketch: s,
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 height: 5.0,
             },
         )

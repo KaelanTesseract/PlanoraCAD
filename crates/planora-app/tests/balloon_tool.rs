@@ -32,7 +32,7 @@ use planora_drawing::{
     BalloonId, BodyKey, DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewId, ViewKind,
     Visibility,
 };
-use planora_feature::{FeatureId, FeatureKind, SketchFeature, SketchPlane};
+use planora_feature::{FeatureId, FeatureKind, ProfileSel, SketchFeature, SketchPlane};
 use planora_math::{DVec2, DVec3, Frame, Tolerance};
 use planora_project::config::Config;
 use planora_project::library::Library;
@@ -429,7 +429,7 @@ fn l_profile(st: &mut AppState) -> FeatureId {
         None,
         FeatureKind::Extrude {
             sketch: s,
-            profile: 0,
+            profiles: ProfileSel::Index(0),
             height: 5.0,
         },
     )

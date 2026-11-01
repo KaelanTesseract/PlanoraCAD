@@ -46,7 +46,7 @@ fn plate() -> Document {
         "Platte",
         FeatureKind::Extrude {
             sketch: s,
-            profile: 0,
+            profiles: ProfileSel::Index(0),
             height: 4.0,
         },
     )

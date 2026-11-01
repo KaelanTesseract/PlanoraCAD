@@ -185,7 +185,7 @@ fn suppressing_an_unrelated_box_recomputes_only_readers_of_the_visible_bodies() 
             "E",
             FeatureKind::Extrude {
                 sketch: s,
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 height: 2.0,
             },
         )

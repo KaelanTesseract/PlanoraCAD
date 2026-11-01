@@ -13,7 +13,9 @@ use planora_app::state::AppState;
 use planora_drawing::dimension::DimKind;
 use planora_drawing::stroke::StrokeOrigin;
 use planora_drawing::{DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewId, ViewKind};
-use planora_feature::{FeatureKind, SketchFeature, SketchPlane, StandardPlane, face_probe_calls};
+use planora_feature::{
+    FeatureKind, ProfileSel, SketchFeature, SketchPlane, StandardPlane, face_probe_calls,
+};
 use planora_kernel::Surface;
 use planora_math::{DVec2, Frame, Tolerance};
 use planora_sketch::model::Sketch;
@@ -58,7 +60,7 @@ fn plate(rows: usize, cols: usize) -> AppState {
         None,
         FeatureKind::Extrude {
             sketch: s,
-            profile: 0,
+            profiles: ProfileSel::Index(0),
             height: 5.0,
         },
     )

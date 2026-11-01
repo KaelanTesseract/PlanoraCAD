@@ -107,7 +107,7 @@ fn extrude_doc(h: &str) -> (Document, ParamId, FeatureId) {
             "Extrusion 1",
             FeatureKind::Extrude {
                 sketch: s,
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 height: 1.0,
             },
             formulas(&[(Hoehe, "h*2")]),
@@ -177,7 +177,7 @@ fn extrude_without_formula_keeps_old_validation() {
             "Extrusion 1",
             FeatureKind::Extrude {
                 sketch: s,
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 height: 0.0,
             },
         )
@@ -525,7 +525,7 @@ fn rename_remove_replace_cover_new_fields() {
 fn keys_and_labels() {
     let ext = FeatureKind::Extrude {
         sketch: FeatureId(1),
-        profile: 0,
+        profiles: ProfileSel::Index(0),
         height: 1.0,
     };
     let mv = FeatureKind::Move {
@@ -571,7 +571,7 @@ fn keys_and_labels() {
 fn every_new_field_maps_to_its_own_field() {
     let mut ext = FeatureKind::Extrude {
         sketch: FeatureId(1),
-        profile: 0,
+        profiles: ProfileSel::Index(0),
         height: 1.0,
     };
     assert!(set_field_value(&mut ext, Hoehe, 4.0));

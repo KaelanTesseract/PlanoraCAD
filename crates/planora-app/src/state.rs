@@ -5,8 +5,8 @@ use glam::{Vec2, Vec3};
 use planora_exchange::{ExchangeMesh, MeshReport, MeshTransform, check_mesh};
 use planora_feature::{
     BlendArt, BodyRef, Document, EdgeCopy, FeatureError, FeatureId, FeatureKind, FeatureStatus,
-    FieldKey, Formulas, MeshId, NewStepBody, ParamEdit, ParamId, RestoreKind, SketchFeature,
-    SketchPlane, StepShape, mesh_locked,
+    FieldKey, Formulas, MeshId, NewStepBody, ParamEdit, ParamId, ProfileSel, RestoreKind,
+    SketchFeature, SketchPlane, StepShape, mesh_locked,
 };
 use planora_i18n::tr;
 use planora_kernel::boolean::BoolOp;
@@ -2327,6 +2327,45 @@ impl AppState {
         Ok(f.name.clone())
     }
 
+    /// Auswahl des Profils `profile` (Index in `profiles()`) der berechneten Skizze `sketch` für
+    /// ein Feature: die alte Profilnummer, wenn sie genau diese Fläche ergibt (so lässt sich das
+    /// Feature im bisherigen Dateiformat speichern), sonst ein Verweis auf die Fläche.
+    pub(crate) fn profile_selection(&self, sketch: FeatureId, profile: usize) -> ProfileSel {
+        let Some(sk) = self.document.sketch_of(sketch) else {
+            return ProfileSel::Index(profile);
+        };
+        let Some(r) = self.profile_cache.get(sk).refs.get(profile).cloned() else {
+            return ProfileSel::Index(profile);
+        };
+        match sk.legacy_index_of(std::slice::from_ref(&r)) {
+            Some(n) => ProfileSel::Index(n),
+            None => ProfileSel::Refs(vec![r]),
+        }
+    }
+
+    /// Indizes (in `profiles()` der berechneten Skizze `sketch`) der Profile, die `sel` heute
+    /// wählt; leer, wenn die Skizze nicht berechnet ist oder kein Profil (mehr) passt.
+    pub(crate) fn selected_profile_indices(
+        &self,
+        sketch: FeatureId,
+        sel: &ProfileSel,
+    ) -> Vec<usize> {
+        let Some(sk) = self.document.sketch_of(sketch) else {
+            return Vec::new();
+        };
+        let refs = match sel {
+            ProfileSel::Refs(r) => r.clone(),
+            ProfileSel::Index(n) => match sk.migrate_profile_index(*n) {
+                Some(r) => r,
+                None => return Vec::new(),
+            },
+        };
+        self.profile_cache
+            .get(sk)
+            .resolve(&refs)
+            .unwrap_or_default()
+    }
+
     /// Legt ein Körper-Feature aus einer Skizze an (Name ohne Zähler). Lässt es sich nicht
     /// berechnen, wird es wieder entfernt; sonst wird die Körperliste aktualisiert.
     fn add_body_from_sketch(
@@ -2372,7 +2411,7 @@ impl AppState {
             tr!("state-extrusion-name", name = name),
             FeatureKind::Extrude {
                 sketch,
-                profile,
+                profiles: self.profile_selection(sketch, profile),
                 height,
             },
             formulas,
@@ -2397,7 +2436,7 @@ impl AppState {
             tr!("state-revolve-name", name = name),
             FeatureKind::Revolve {
                 sketch,
-                profile,
+                profiles: self.profile_selection(sketch, profile),
                 axis,
             },
             Formulas::new(),
