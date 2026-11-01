@@ -1,9 +1,11 @@
 //! Darstellungs- und Auswahlhilfen: Linienzüge der Kurven, Fangen von Punkten und Kurven,
 //! Hülle der Skizze.
 
+use crate::constraint::ConstraintKind;
 use crate::curves::Sampled;
 use crate::model::{CurveId, CurveKind, PointId, Sketch};
 use planora_math::{DVec2, TAU};
+use std::collections::BTreeSet;
 
 /// Kleinste und größte Schrittzahl je Vollkreis für [`Sketch::curve_polyline`].
 const MIN_STEPS_PER_TURN: usize = 4;
@@ -56,6 +58,22 @@ fn arc_points(c: DVec2, r: f64, a0: f64, sweep: f64, steps: usize) -> Vec<DVec2>
 /// Abschnitte für den Winkel `sweep` bei `per_turn` Abschnitten je Vollkreis (mindestens 1).
 fn steps_for(sweep: f64, per_turn: usize) -> usize {
     ((sweep.abs() / TAU * per_turn as f64).ceil() as usize).max(1)
+}
+
+/// Punkte, an denen eine Kurve an eine andere anschließen kann: die Enden; Mitten und innere
+/// Stützpunkte zählen nicht, Kreis und Ellipse haben keine.
+fn chain_ends(kind: &CurveKind) -> Vec<PointId> {
+    match kind {
+        CurveKind::Line { a, b } => vec![*a, *b],
+        CurveKind::Arc { start, end, .. } | CurveKind::EllipticArc { start, end, .. } => {
+            vec![*start, *end]
+        }
+        CurveKind::Spline { points } => match (points.first(), points.last()) {
+            (Some(a), Some(b)) => vec![*a, *b],
+            _ => Vec::new(),
+        },
+        CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => Vec::new(),
+    }
 }
 
 impl Sketch {
@@ -199,6 +217,48 @@ impl Sketch {
             .filter(|&(_, d)| d <= radius)
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(id, _)| id)
+    }
+
+    /// Die zusammenhängende Kette um die lebende Kurve `c`, sortiert und mit `c` (leer, wenn `c`
+    /// nicht lebt): Kurven hängen über gemeinsame Endpunkte und eingeschaltete `Coincident`
+    /// zusammen, Verzweigungen laufen mit. Mitten und `PointOnCurve` verbinden nicht.
+    pub fn connected_chain(&self, c: CurveId) -> Vec<CurveId> {
+        let Some(start) = self.curve(c) else {
+            return Vec::new();
+        };
+        let links: Vec<(PointId, PointId)> = self
+            .constraints()
+            .filter(|(_, data)| data.enabled)
+            .filter_map(|(_, data)| match data.kind {
+                ConstraintKind::Coincident(a, b) => Some((a, b)),
+                _ => None,
+            })
+            .collect();
+        let ends: Vec<(CurveId, Vec<PointId>)> = self
+            .curves()
+            .map(|(id, data)| (id, chain_ends(&data.kind)))
+            .collect();
+        let mut chain = BTreeSet::from([c]);
+        let mut seen = BTreeSet::new();
+        let mut open = chain_ends(&start.kind);
+        while let Some(p) = open.pop() {
+            if !seen.insert(p) {
+                continue;
+            }
+            for &(a, b) in &links {
+                if a == p {
+                    open.push(b);
+                } else if b == p {
+                    open.push(a);
+                }
+            }
+            for (id, points) in &ends {
+                if points.contains(&p) && chain.insert(*id) {
+                    open.extend(points);
+                }
+            }
+        }
+        chain.into_iter().collect()
     }
 
     /// Achsenparallele Hülle `(min, max)` aller lebenden Punkte und Kurven (Kurven über ihren

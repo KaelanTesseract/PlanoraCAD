@@ -15,9 +15,13 @@ use planora_sketch::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
 use planora_sketch::model::{CurveId, CurveKind, MAX_SPLINE_POINTS, PointId, Sketch};
 use planora_sketch::snap::{SnapHit, SnapIndex};
 use planora_sketch::solver::{Drag, SolveReport, SolveStatus};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 pub use planora_sketch::snap::Snap;
+
+/// Schritte je Vollkreis für den Linienzug, gegen den der Auswahlrahmen prüft.
+const BOX_STEPS_PER_TURN: usize = 96;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
@@ -162,6 +166,48 @@ pub enum Severity {
     Error,
 }
 
+/// Laufender Auswahlrahmen, in Bildschirmlagen.
+#[derive(Clone, Copy, Debug)]
+pub struct BoxSelect {
+    pub start: DVec2,
+    pub current: DVec2,
+    /// Umschalt beim Beginn: ergänzt die Auswahl, statt sie zu ersetzen.
+    pub extend: bool,
+}
+
+impl BoxSelect {
+    /// Von links nach rechts: Fenster (durchgezogen); sonst Kreuzung (gestrichelt).
+    pub fn is_window(&self) -> bool {
+        self.start.x <= self.current.x
+    }
+}
+
+/// Liegt `p` im achsenparallelen Rechteck `lo`–`hi` (Rand gehört dazu)?
+fn in_rect(p: DVec2, lo: DVec2, hi: DVec2) -> bool {
+    p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y
+}
+
+/// Hat die Strecke `a`–`b` einen Punkt im Rechteck `lo`–`hi`? (Abschneiden nach Liang–Barsky)
+fn segment_hits_rect(a: DVec2, b: DVec2, lo: DVec2, hi: DVec2) -> bool {
+    let d = b - a;
+    let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
+    for (from, step, min, max) in [(a.x, d.x, lo.x, hi.x), (a.y, d.y, lo.y, hi.y)] {
+        if step == 0.0 {
+            if from < min || from > max {
+                return false;
+            }
+        } else {
+            let (enter, leave) = ((min - from) / step, (max - from) / step);
+            t0 = t0.max(enter.min(leave));
+            t1 = t1.min(enter.max(leave));
+            if t0 > t1 {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 /// Zustand des geöffneten Skizzen-Modus.
 #[derive(Clone, Debug)]
 pub struct SketchSession {
@@ -200,6 +246,12 @@ pub struct SketchSession {
     /// ([`message_text`](Self::message_text)).
     pub message: Option<Msg>,
     pub dragging: Option<PointId>,
+    /// Laufender Auswahlrahmen.
+    pub box_select: Option<BoxSelect>,
+    /// Die rechte Taste hat den Rahmen abgebrochen: Bis alle Maustasten los sind, ist kein Klick
+    /// ein Klick (egui meldet sonst das Loslassen der rechten oder linken Taste als solchen, und
+    /// der leerte die Auswahl).
+    pub box_aborted: bool,
     /// Zählt die Sprünge durch Rückgängig/Wiederholen ([`SketchSession::after_history_jump`]);
     /// Eingabefelder der Oberfläche, die zu einem älteren Zählerstand gehören, schließen.
     pub history_jumps: u64,
@@ -288,6 +340,8 @@ impl SketchSession {
             last_report: None,
             message: None,
             dragging: None,
+            box_select: None,
+            box_aborted: false,
             history_jumps: 0,
             hover_preview: None,
             edit_label: None,
@@ -300,6 +354,7 @@ impl SketchSession {
     /// wie mit [`end_drag`](Self::end_drag) beendet.
     pub fn set_tool(&mut self, sk: &mut Sketch, tool: Tool) {
         self.end_drag(sk);
+        self.box_select = None;
         self.trim_drag = None;
         self.hover_preview = None;
         self.tool = tool;
@@ -336,6 +391,7 @@ impl SketchSession {
         self.draw_cursor = None;
         self.selection.clear();
         self.dragging = None;
+        self.box_select = None;
         self.trim_drag = None;
         self.hover_preview = None;
         self.edit_label = None;
@@ -883,8 +939,12 @@ impl SketchSession {
 
     /// Bricht das laufende Werkzeug ab; im Auswahlwerkzeug wird die Auswahl geleert. Ein
     /// laufendes Ziehen wird wie mit [`end_drag`](Self::end_drag) beendet (der Punkt bleibt,
-    /// wo er ist). Stutzen, Dehnen und Brechen enden ganz (zurück zur Auswahl).
+    /// wo er ist). Stutzen, Dehnen und Brechen enden ganz (zurück zur Auswahl). Ein laufender
+    /// Rahmen fällt allein weg, die alte Auswahl bleibt.
     pub fn cancel(&mut self, sk: &mut Sketch) {
+        if self.box_select.take().is_some() {
+            return;
+        }
         self.end_drag(sk);
         self.clear_pending();
         if self.tool == Tool::Select {
@@ -894,6 +954,113 @@ impl SketchSession {
         // mitten im Ziehen; was schon gestutzt ist, bleibt).
         if self.tool.is_modify() {
             self.set_tool(sk, Tool::Select);
+        }
+    }
+
+    // ---- Rahmen und Kette ----------------------------------------------------------------
+
+    /// Liegt bei `at` nichts, was man greifen oder klicken könnte? Nur dort beginnt ein Rahmen.
+    pub fn is_free_at(&self, sk: &Sketch, at: DVec2, radius: f64) -> bool {
+        matches!(self.snap(sk, at, radius), Snap::None)
+    }
+
+    /// Beginnt im Auswahlwerkzeug den Rahmen an der Bildschirmlage `at`.
+    pub fn begin_box(&mut self, at: DVec2, extend: bool) {
+        if self.tool == Tool::Select && at.is_finite() {
+            self.box_select = Some(BoxSelect {
+                start: at,
+                current: at,
+                extend,
+            });
+        }
+    }
+
+    /// Führt den Rahmen zur Bildschirmlage `at`.
+    pub fn box_to(&mut self, at: DVec2) {
+        if let Some(b) = self.box_select.as_mut().filter(|_| at.is_finite()) {
+            b.current = at;
+        }
+    }
+
+    /// Schließt den Rahmen und wählt, was er erfasst ([`select_rect`](Self::select_rect)).
+    pub fn end_box(&mut self, sk: &Sketch, project: &dyn Fn(DVec2) -> Option<DVec2>) {
+        if let Some(b) = self.box_select.take() {
+            self.select_rect(sk, b.start, b.current, b.extend, project);
+        }
+    }
+
+    /// Bricht den Rahmen mit der rechten Taste ab, siehe [`box_aborted`](Self::box_aborted).
+    pub fn abort_box(&mut self) {
+        if self.box_select.take().is_some() {
+            self.box_aborted = true;
+        }
+    }
+
+    /// Wählt nach einem Rahmen zwischen den Bildschirmlagen `a` und `b` (`project`: Skizze →
+    /// Bildschirm; `None` hinter der Kamera). `a.x <= b.x` ist ein Fenster: Es nimmt Kurven, deren
+    /// Linienzug ganz im Rahmen liegt. Sonst nimmt die Kreuzung auch Kurven mit einer Strecke, die
+    /// den Rahmen schneidet; eine Strecke mit einem Ende hinter der Kamera zählt nicht.
+    /// Von den Punkten zählen nur freie (ohne Kurve), damit jede Abhängigkeit zur Auswahl passt.
+    /// `extend` ergänzt, ohne etwas abzuwählen; sonst ersetzt der Rahmen die Auswahl.
+    pub fn select_rect(
+        &mut self,
+        sk: &Sketch,
+        a: DVec2,
+        b: DVec2,
+        extend: bool,
+        project: &dyn Fn(DVec2) -> Option<DVec2>,
+    ) {
+        let window = a.x <= b.x;
+        let (lo, hi) = (a.min(b), a.max(b));
+        let on_screen = |p: DVec2| project(p).filter(|q| q.is_finite());
+        let mut found = Vec::new();
+        for (c, _) in sk.curves() {
+            let Some(line) = sk.curve_polyline(c, BOX_STEPS_PER_TURN) else {
+                continue;
+            };
+            let line: Vec<Option<DVec2>> = line.into_iter().map(on_screen).collect();
+            let hit = if window {
+                line.iter().all(|p| p.is_some_and(|p| in_rect(p, lo, hi)))
+            } else {
+                line.windows(2).any(|w| match (w[0], w[1]) {
+                    (Some(p), Some(q)) => segment_hits_rect(p, q, lo, hi),
+                    _ => false,
+                })
+            };
+            if hit {
+                found.push(Item::Curve(c));
+            }
+        }
+        let on_curves: BTreeSet<PointId> = sk.curves().flat_map(|(_, c)| c.kind.points()).collect();
+        for (p, _) in sk.points().filter(|(p, _)| !on_curves.contains(p)) {
+            if sk
+                .point_xy(p)
+                .ok()
+                .and_then(on_screen)
+                .is_some_and(|q| in_rect(q, lo, hi))
+            {
+                found.push(Item::Point(p));
+            }
+        }
+        self.take_selection(found, extend);
+    }
+
+    /// Wählt die zusammenhängende Kette um `c` ([`Sketch::connected_chain`]); `extend` ergänzt.
+    pub fn select_chain(&mut self, sk: &Sketch, c: CurveId, extend: bool) {
+        let chain = sk.connected_chain(c);
+        self.take_selection(chain.into_iter().map(Item::Curve).collect(), extend);
+    }
+
+    /// Setzt die Auswahl auf `items` oder ergänzt sie, ohne etwas doppelt aufzunehmen.
+    fn take_selection(&mut self, items: Vec<Item>, extend: bool) {
+        self.message = None;
+        if !extend {
+            self.selection.clear();
+        }
+        for item in items {
+            if !self.selection.contains(&item) {
+                self.selection.push(item);
+            }
         }
     }
 

@@ -251,6 +251,9 @@ fn dragging_a_point_in_the_select_tool_moves_it() {
 fn in_sketch_mode_the_viewport_does_not_orbit_but_still_pans() {
     let ctx = context();
     let mut s = empty_sketch();
+    // Fusion-Verhalten, Skizzen 2: Im Auswahlwerkzeug zieht Umschalt+links auf freier Fläche einen
+    // Rahmen; das Schwenken mit Umschalt+links gilt in den anderen Werkzeugen weiter.
+    set_tool(&mut s, Tool::Rectangle);
     let (yaw, pitch, target) = (s.camera.yaw, s.camera.pitch, s.camera.target);
     let drag = |shift: bool| {
         vec![

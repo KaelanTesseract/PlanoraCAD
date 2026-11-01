@@ -772,6 +772,68 @@ fn cursor_after_fields(rect: Rect, state: &mut AppState, pointer: Option<Pos2>) 
     se.update_cursor(sk, raw, radius);
 }
 
+/// Bildschirmlage als Doppelvektor, wie ihn der Auswahlrahmen führt.
+fn dvec(p: Pos2) -> DVec2 {
+    DVec2::new(f64::from(p.x), f64::from(p.y))
+}
+
+/// Beginnt der eben erkannte Zug mit der linken Taste einen Rahmen? Nur im Auswahlwerkzeug und auf
+/// freier Fläche (eine Lage außerhalb der Skizzenebene ist auch frei). Umschalt+links wählt dort
+/// statt zu schwenken (Fusion schwenkt mit der Mitte); jede andere Schwenk-Belegung bleibt.
+fn box_can_start(
+    ui: &egui::Ui,
+    rect: Rect,
+    state: &AppState,
+    pan_gesture: bool,
+    ctrl: bool,
+) -> bool {
+    let (Some(se), Some(sk)) = (state.sketch_session.as_ref(), state.session_sketch()) else {
+        return false;
+    };
+    let shift_only = ui.input(|i| i.modifiers.shift_only()) && !ctrl;
+    if se.tool != Tool::Select
+        || (pan_gesture && !shift_only)
+        || crate::keymap::settings_ui::is_capturing(ui.ctx())
+    {
+        return false;
+    }
+    let Some(map) = mapper(rect, state) else {
+        return false;
+    };
+    ui.input(|i| i.pointer.press_origin()).is_some_and(|p| {
+        match (map.to_sketch(p), map.radius_at(p)) {
+            (Some(at), Some(radius)) => se.is_free_at(sk, at, radius),
+            _ => true,
+        }
+    })
+}
+
+/// Der laufende Auswahlrahmen: Fläche und Rand; Fenster durchgezogen, Kreuzung gestrichelt.
+pub fn box_select_shapes(state: &AppState) -> Vec<Shape> {
+    let Some(b) = state.sketch_session.as_ref().and_then(|se| se.box_select) else {
+        return Vec::new();
+    };
+    let col = colors(state.dark);
+    let r = Rect::from_two_pos(
+        pos2(b.start.x as f32, b.start.y as f32),
+        pos2(b.current.x as f32, b.current.y as f32),
+    );
+    let corners = vec![
+        r.left_top(),
+        r.right_top(),
+        r.right_bottom(),
+        r.left_bottom(),
+        r.left_top(),
+    ];
+    let mut shapes = vec![Shape::rect_filled(r, 0.0, col.box_fill)];
+    shapes.extend(path_shapes(
+        corners,
+        Stroke::new(1.0, col.selected),
+        !b.is_window(),
+    ));
+    shapes
+}
+
 fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mut AppState) {
     // Umschalt zählt auch, wenn sie nur beim Klick selbst gedrückt war (Ereignis und Loslassen der
     // Taste können im selben Frame ankommen).
@@ -797,12 +859,22 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         .sketch_session
         .as_ref()
         .is_some_and(|s| s.dragging.is_some());
-    // Schwenken nach der Tastenbelegung (Voreinstellung: Mitte oder Umschalt+links); nie
+    // Schwenken nach der Tastenbelegung (Voreinstellung: Mitte oder Umschalt+links, außer auf freier
+    // Fläche im Auswahlwerkzeug, dort zieht Umschalt+links einen Rahmen); nie
     // während ein Punkt gezogen wird. Die linke Taste ohne Umschalttasten bleibt dem Zeichnen.
     // Ein Zug, der als Schwenken beginnt (z. B. Schwenken auf Strg+links umgelegt), zieht keinen
     // Punkt.
     let km = crate::keymap::mouse::current(ui.ctx());
-    let panning = crate::keymap::mouse::pan_2d(&km, ui, response);
+    let pan_gesture = crate::keymap::mouse::pan_2d(&km, ui, response);
+    let starts_box = response.drag_started_by(PointerButton::Primary)
+        && box_can_start(ui, rect, state, pan_gesture, ctrl);
+    // Ein laufender Rahmen schwenkt nicht, auch wenn Umschalt erst währenddessen dazukommt.
+    let boxing = starts_box
+        || state
+            .sketch_session
+            .as_ref()
+            .is_some_and(|s| s.box_select.is_some());
+    let panning = pan_gesture && !boxing;
     if panning && !dragging_point {
         let d = response.drag_motion();
         state.camera.pan(d.x, d.y, rect.height());
@@ -838,8 +910,13 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     se.cursor_opts.suppressed = ctrl;
     se.cursor_opts.grid_step = grid_step;
 
-    // Punkt ziehen (Auswahlwerkzeug)
-    if response.drag_started_by(PointerButton::Primary) && !shift && !panning {
+    // Rahmen auf freier Fläche; alles andere greift (Punkt vor Kurve vor Rahmen).
+    if starts_box {
+        if let Some(origin) = ui.input(|i| i.pointer.press_origin()) {
+            se.begin_box(dvec(origin), shift);
+        }
+    } else if response.drag_started_by(PointerButton::Primary) && !shift && !panning {
+        // Punkt ziehen (Auswahlwerkzeug)
         let origin = ui.input(|i| i.pointer.press_origin());
         if let Some(start) = origin.and_then(|p| map.to_sketch(p)) {
             let r = origin.and_then(|p| map.radius_at(p)).unwrap_or(radius);
@@ -854,6 +931,22 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         }
         if response.drag_stopped() || !response.dragged() {
             se.end_drag(&mut sf.sketch);
+        }
+    }
+
+    let esc = !viewport::typing(ui.ctx()) && ui.input(|i| i.key_pressed(egui::Key::Escape));
+    if se.box_select.is_some() {
+        // Die rechte Taste bricht schon beim Drücken ab: Ein Klick wird es während des Zugs nicht
+        // immer. Esc beendet schon hier den Zug von egui, der Rahmen fällt aber unten weg.
+        if ui.input(|i| i.pointer.button_pressed(PointerButton::Secondary)) {
+            se.abort_box();
+        } else if !esc {
+            if let Some(p) = ui.input(|i| i.pointer.latest_pos()) {
+                se.box_to(dvec(p));
+            }
+            if response.drag_stopped() || !response.dragged() {
+                se.end_box(&sf.sketch, &|q| map.to_screen(q).map(dvec));
+            }
         }
     }
 
@@ -884,8 +977,19 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     // (6 Pixel) vom vorigen Klick entfernt sind. Ein „Dreifachklick“ entsteht schon, wenn zwei
     // schnelle Klicks an derselben Stelle einem Klick anderswo folgen (Zeit zum vorletzten Klick,
     // Abstand nur zum letzten) – das ist für den Nutzer ein Doppelklick und beendet ebenso.
-    if response.double_clicked() || response.triple_clicked() {
-        let _ = se.finish_tool(&mut sf.sketch);
+    if se.box_aborted {
+        // Das Loslassen nach dem Abbruch ist kein Klick.
+    } else if response.double_clicked() || response.triple_clicked() {
+        if se.tool == Tool::Select {
+            // Wie beim einfachen Klick: Punkt vor Kurve.
+            if let Some(at) = at
+                && let Snap::Curve(c) = se.snap(&sf.sketch, at, radius)
+            {
+                se.select_chain(&sf.sketch, c, shift);
+            }
+        } else {
+            let _ = se.finish_tool(&mut sf.sketch);
+        }
     } else if response.clicked_by(PointerButton::Primary)
         && let Some(at) = at
     {
@@ -897,15 +1001,17 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             let _ = se.click(&mut sf.sketch, at, radius, shift);
         }
     }
-    if response.clicked_by(PointerButton::Secondary) {
+    if response.clicked_by(PointerButton::Secondary) && !se.box_aborted {
         se.cancel(&mut sf.sketch);
+    }
+    if !ui.input(|i| i.pointer.any_down()) {
+        se.box_aborted = false;
     }
 
     // Tasten (nicht, solange ein Eingabefeld die Tastatur hat)
     if !viewport::typing(ui.ctx()) {
-        let (esc, enter, delete) = ui.input(|i| {
+        let (enter, delete) = ui.input(|i| {
             (
-                i.key_pressed(egui::Key::Escape),
                 i.key_pressed(egui::Key::Enter),
                 i.key_pressed(egui::Key::Delete),
             )
@@ -1144,6 +1250,8 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     {
         painter.circle_stroke(s, POINT_PX + 5.0, Stroke::new(1.5, col.selected));
     }
+
+    painter.extend(box_select_shapes(state));
 }
 
 /// Zeichen der Fangart am Zeiger, selbst gezeichnet: Quadrat Punkt, Kreis Mitte, Dreieck
