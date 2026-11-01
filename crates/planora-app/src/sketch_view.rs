@@ -855,13 +855,13 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     }
 
     // Navigation: Verschieben und Zoomen; kein Orbit.
-    let dragging_point = state
+    let dragging = state
         .sketch_session
         .as_ref()
-        .is_some_and(|s| s.dragging.is_some());
+        .is_some_and(SketchSession::is_dragging);
     // Schwenken nach der Tastenbelegung (Voreinstellung: Mitte oder Umschalt+links, außer auf freier
     // Fläche im Auswahlwerkzeug, dort zieht Umschalt+links einen Rahmen); nie
-    // während ein Punkt gezogen wird. Die linke Taste ohne Umschalttasten bleibt dem Zeichnen.
+    // während gezogen wird. Die linke Taste ohne Umschalttasten bleibt dem Zeichnen.
     // Ein Zug, der als Schwenken beginnt (z. B. Schwenken auf Strg+links umgelegt), zieht keinen
     // Punkt.
     let km = crate::keymap::mouse::current(ui.ctx());
@@ -875,7 +875,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             .as_ref()
             .is_some_and(|s| s.box_select.is_some());
     let panning = pan_gesture && !boxing;
-    if panning && !dragging_point {
+    if panning && !dragging {
         let d = response.drag_motion();
         state.camera.pan(d.x, d.y, rect.height());
     }
@@ -916,14 +916,14 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             se.begin_box(dvec(origin), shift);
         }
     } else if response.drag_started_by(PointerButton::Primary) && !shift && !panning {
-        // Punkt ziehen (Auswahlwerkzeug)
+        // Punkt oder Kurve ziehen (Auswahlwerkzeug)
         let origin = ui.input(|i| i.pointer.press_origin());
         if let Some(start) = origin.and_then(|p| map.to_sketch(p)) {
             let r = origin.and_then(|p| map.radius_at(p)).unwrap_or(radius);
             se.begin_drag(&mut sf.sketch, start, r);
         }
     }
-    if se.dragging.is_some() {
+    if se.is_dragging() {
         if response.dragged_by(PointerButton::Primary)
             && let Some(at) = at
         {
@@ -1086,9 +1086,9 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     painter.extend(sketch_grid_shapes(state, rect));
 
     // Profile als helle Flächen über dem Raster, unter allem anderen („Profil anzeigen“, wie Fusion). Beim
-    // Ziehen eines Punkts ändert sich die Skizze in jedem Frame; die Flächen kommen erst danach
+    // Ziehen ändert sich die Skizze in jedem Frame; die Flächen kommen erst danach
     // wieder (sonst würden sie in jedem Frame neu bestimmt).
-    if state.show_sketch_profiles && se.dragging.is_none() {
+    if state.show_sketch_profiles && !se.is_dragging() {
         let extracted = state.profile_cache.get(sk);
         painter.extend(profile_fill_shape(&map, &extracted, |_| {
             Some(col.profile_fill)
@@ -1116,7 +1116,7 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         })
     } else {
         pointer
-            .filter(|_| se.dragging.is_none())
+            .filter(|_| !se.is_dragging())
             .and_then(|p| Some((map.to_sketch(p)?, map.radius_at(p)?)))
             .and_then(|(at, r)| match se.snap(sk, at, r) {
                 Snap::Point(p) => Some(Item::Point(p)),

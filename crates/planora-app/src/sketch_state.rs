@@ -11,6 +11,7 @@ use planora_feature::{FeatureId, ParamScope, ParamUnit, SketchFeature, constrain
 use planora_i18n::tr;
 use planora_kernel::{Edge, Id, Solid};
 use planora_math::DVec2;
+use planora_sketch::SketchError;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
 use planora_sketch::model::{CurveId, CurveKind, MAX_SPLINE_POINTS, PointId, Sketch};
 use planora_sketch::snap::{SnapHit, SnapIndex};
@@ -208,6 +209,18 @@ fn segment_hits_rect(a: DVec2, b: DVec2, lo: DVec2, hi: DVec2) -> bool {
     true
 }
 
+/// Laufender Zug an einer Kurve. Die Ziele rechnen immer vom Start aus (`Start + Zeiger − Griff`),
+/// so springt nichts auf den Zeiger.
+#[derive(Clone, Debug)]
+pub struct CurveDrag {
+    /// Wo die Kurve gegriffen wurde.
+    pub grab: DVec2,
+    /// Die bewegten Punkte (ohne Doppelte) mit ihrer Lage beim Greifen.
+    pub start: Vec<(PointId, DVec2)>,
+    /// Einzelner Kreis am Rand: zieht den Radius; dazu Griffabstand von der Mitte minus Radius.
+    pub rim: Option<(CurveId, f64)>,
+}
+
 /// Zustand des geöffneten Skizzen-Modus.
 #[derive(Clone, Debug)]
 pub struct SketchSession {
@@ -246,6 +259,8 @@ pub struct SketchSession {
     /// ([`message_text`](Self::message_text)).
     pub message: Option<Msg>,
     pub dragging: Option<PointId>,
+    /// Laufender Zug an einer Kurve; gegriffene Punkte stehen in [`dragging`](Self::dragging).
+    pub curve_drag: Option<CurveDrag>,
     /// Laufender Auswahlrahmen.
     pub box_select: Option<BoxSelect>,
     /// Die rechte Taste hat den Rahmen abgebrochen: Bis alle Maustasten los sind, ist kein Klick
@@ -340,6 +355,7 @@ impl SketchSession {
             last_report: None,
             message: None,
             dragging: None,
+            curve_drag: None,
             box_select: None,
             box_aborted: false,
             history_jumps: 0,
@@ -391,6 +407,7 @@ impl SketchSession {
         self.draw_cursor = None;
         self.selection.clear();
         self.dragging = None;
+        self.curve_drag = None;
         self.box_select = None;
         self.trim_drag = None;
         self.hover_preview = None;
@@ -960,6 +977,7 @@ impl SketchSession {
     // ---- Rahmen und Kette ----------------------------------------------------------------
 
     /// Liegt bei `at` nichts, was man greifen oder klicken könnte? Nur dort beginnt ein Rahmen.
+    /// Dieselbe Frage wie in [`begin_drag`](Self::begin_drag): [`snap`](Self::snap).
     pub fn is_free_at(&self, sk: &Sketch, at: DVec2, radius: f64) -> bool {
         matches!(self.snap(sk, at, radius), Snap::None)
     }
@@ -1066,18 +1084,71 @@ impl SketchSession {
 
     // ---- Ziehen -------------------------------------------------------------------------
 
-    /// Beginnt im Auswahlwerkzeug das Ziehen des Punktes unter `at`.
+    /// Läuft ein Zug an einem Punkt oder einer Kurve?
+    pub fn is_dragging(&self) -> bool {
+        self.dragging.is_some() || self.curve_drag.is_some()
+    }
+
+    /// Beginnt im Auswahlwerkzeug den Zug an dem, was unter `at` liegt: Punkt vor Kurve
+    /// ([`snap`](Self::snap)); wo nichts liegt, beginnt der Rahmen
+    /// ([`is_free_at`](Self::is_free_at)).
     pub fn begin_drag(&mut self, sk: &mut Sketch, at: DVec2, radius: f64) -> bool {
         if self.tool != Tool::Select || !at.is_finite() {
             return false;
         }
-        self.dragging = sk.pick_point(at, radius);
-        self.dragging.is_some()
+        self.dragging = None;
+        self.curve_drag = None;
+        match self.snap(sk, at, radius) {
+            Snap::Point(p) => self.dragging = Some(p),
+            Snap::Curve(c) => self.begin_curve_drag(sk, c, at),
+            _ => {}
+        }
+        self.is_dragging()
     }
 
-    /// Zieht den gegriffenen Punkt nach `at`. Scheitert der Solver, bleibt die Skizze, und
-    /// `message` erklärt es.
+    /// Greift die Kurve `c` bei `at`. Außerhalb der Auswahl ersetzt sie diese, sonst ziehen alle
+    /// gewählten Kurven und Punkte mit. Ein einzelner Kreis zieht am Rand den Radius.
+    fn begin_curve_drag(&mut self, sk: &Sketch, c: CurveId, at: DVec2) {
+        if !self.selection.contains(&Item::Curve(c)) {
+            self.selection = vec![Item::Curve(c)];
+        }
+        let mut start: Vec<(PointId, DVec2)> = Vec::new();
+        let mut moved_items = 0;
+        for item in &self.selection {
+            let points = match *item {
+                Item::Curve(k) => sk.curve(k).map_or(Vec::new(), |d| d.kind.points()),
+                Item::Point(p) => vec![p],
+                Item::Constraint(_) => continue,
+            };
+            moved_items += 1;
+            for p in points {
+                if !start.iter().any(|&(q, _)| q == p)
+                    && let Ok(xy) = sk.point_xy(p)
+                {
+                    start.push((p, xy));
+                }
+            }
+        }
+        let rim = match (moved_items, sk.curve(c).map(|d| &d.kind), sk.radius(c)) {
+            (1, Some(&CurveKind::Circle { center, .. }), Some(r)) => {
+                sk.point_xy(center).ok().map(|m| (c, m.distance(at) - r))
+            }
+            _ => None,
+        };
+        self.curve_drag = Some(CurveDrag {
+            grab: at,
+            start,
+            rim,
+        });
+    }
+
+    /// Führt den Zug nach `at`. Punkt: Scheitert der Solver, bleibt die Skizze, und `message`
+    /// erklärt es. Kurve: siehe [`curve_drag_to`](Self::curve_drag_to).
     pub fn drag_to(&mut self, sk: &mut Sketch, at: DVec2) {
+        if let Some(drag) = self.curve_drag.clone() {
+            self.curve_drag_to(sk, &drag, at);
+            return;
+        }
         let Some(point) = self.dragging else {
             return;
         };
@@ -1091,12 +1162,69 @@ impl SketchSession {
         }
     }
 
-    /// Beendet das Ziehen. Ein volles Lösen holt dabei die Diagnose nach, die während des
-    /// Ziehens für die gezogene Gruppe entfällt (unveränderte Gruppen kommen aus dem
-    /// Zwischenspeicher des Solvers und kosten nichts).
+    /// Ein Bild des Zugs an einer Kurve. Lässt es sich nicht lösen, gilt wieder der Stand vor
+    /// diesem Bild, und `message` erklärt es. Bewegt es nichts (ohne Bewegung des Zeigers, voll
+    /// bestimmt, Radius mit Maß), bleibt die Skizze bitgleich und ohne neuen Stand, damit daraus
+    /// kein Schritt wird.
+    fn curve_drag_to(&mut self, sk: &mut Sketch, drag: &CurveDrag, at: DVec2) {
+        self.cursor = Some(at);
+        let before = sk.clone();
+        let result = match drag.rim {
+            Some((c, offset)) => {
+                let center = sk.curve(c).and_then(|d| match d.kind {
+                    CurveKind::Circle { center, .. } => sk.point_xy(center).ok(),
+                    _ => None,
+                });
+                center.map_or(Err(SketchError::UnknownObject), |m| {
+                    sk.drag_radius(c, m.distance(at) - offset)
+                })
+            }
+            None => {
+                let delta = at - drag.grab;
+                let drags: Vec<Drag> = drag
+                    .start
+                    .iter()
+                    .map(|&(point, from)| Drag {
+                        point,
+                        target: from + delta,
+                    })
+                    .collect();
+                sk.drag(&drags)
+            }
+        };
+        match result {
+            Ok(report) if status_ok(&report) => {
+                let linear = sk.tolerance().linear;
+                let still = sk
+                    .variables()
+                    .iter()
+                    .zip(before.variables())
+                    .all(|(a, b)| (a - b).abs() <= linear);
+                if still {
+                    *sk = before;
+                } else {
+                    self.last_report = Some(report);
+                }
+                self.message = None;
+            }
+            _ => {
+                *sk = before;
+                self.message = Some(crate::msg!("sketch-drag-blocked"));
+            }
+        }
+    }
+
+    /// Beendet den Zug. Ein volles Lösen holt dabei die Diagnose nach, die während des Ziehens
+    /// für die gezogene Gruppe entfällt (unveränderte Gruppen kommen aus dem Zwischenspeicher des
+    /// Solvers und kosten nichts). Der Zug an einer Kurve benennt den Schritt; hat er nichts
+    /// geändert, verwirft der Verlauf den Namen.
     pub fn end_drag(&mut self, sk: &mut Sketch) {
-        if self.dragging.take().is_some() {
+        let curve = self.curve_drag.take().is_some();
+        if self.dragging.take().is_some() || curve {
             self.last_report = Some(sk.solve());
+        }
+        if curve {
+            self.edit_label = Some(crate::msg!("undo-sketch-move"));
         }
     }
 
@@ -1501,6 +1629,12 @@ impl SketchSession {
         self.pending.retain(|&p| sk.point_xy(p).is_ok());
         if self.dragging.is_some_and(|p| sk.point_xy(p).is_err()) {
             self.dragging = None;
+        }
+        if self.curve_drag.as_ref().is_some_and(|d| {
+            d.start.iter().any(|&(p, _)| sk.point_xy(p).is_err())
+                || d.rim.is_some_and(|(c, _)| sk.curve(c).is_none())
+        }) {
+            self.curve_drag = None;
         }
         self.last_report = Some(sk.solve());
     }

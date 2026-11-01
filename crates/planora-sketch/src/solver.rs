@@ -878,6 +878,30 @@ impl Sketch {
         Ok(self.solve_with_soft(&soft))
     }
 
+    /// Zieht den Radius eines Kreises zu `target` (größer als die Toleranz); harte Abhängigkeiten
+    /// bleiben erfüllt. Liest keine aktive Abhängigkeit den Radius, folgt er direkt.
+    pub fn drag_radius(&mut self, c: CurveId, target: f64) -> Result<SolveReport, SketchError> {
+        self.check_curve(c)?;
+        let CurveKind::Circle { radius, .. } = self.curves[c].kind else {
+            return Err(SketchError::InvalidInput(tr!(
+                "sketch-err-only-whole-circles"
+            )));
+        };
+        crate::model::finite(target, || tr!("sketch-err-what-radius"))?;
+        if target <= self.tolerance().linear {
+            return Err(SketchError::Degenerate(tr!("sketch-radius-positive")));
+        }
+        if !self.build_groups().1[radius] {
+            self.vars[radius] = target;
+            self.touch_values();
+        }
+        Ok(self.solve_with_soft(&[Soft {
+            var: radius,
+            target,
+            weight: DRAG_WEIGHT,
+        }]))
+    }
+
     /// Wahr, wenn keine aktive Abhängigkeit (lebend, eingeschaltet, nicht nur anzeigend, auch
     /// interne) den Punkt direkt oder über eine Kurve benutzt, die ihn enthält.
     fn point_unconstrained(&self, p: PointId) -> bool {

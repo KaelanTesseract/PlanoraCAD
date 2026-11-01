@@ -429,7 +429,9 @@ fn a_drag_on_a_line_or_a_point_starts_no_box() {
     let mut s = two_lines();
     let c = curves(&s);
     select(&mut s, &[Item::Curve(c[1])]);
-    let (on_line, to) = (screen(&s, (0.0, 0.0)), screen(&s, (20.0, 40.0)));
+    // Fusion-Verhalten, Skizzen 2: Der Griff liegt auf der gewählten Linie, sie wird gezogen und
+    // bleibt gewählt; eine andere Linie hätte die Auswahl ersetzt.
+    let (on_line, to) = (screen(&s, (0.0, 20.0)), screen(&s, (20.0, 40.0)));
     play(&ctx, &mut s, drag_frames(on_line, to, LEFT, false));
     assert!(!box_active(&s), "Zug auf der Linie");
     play(
