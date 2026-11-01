@@ -31,6 +31,10 @@ pub(crate) const TIE_EPS: f64 = 1e-6;
 /// Parameter zweier Stücke derselben Kurve, die so nah beieinanderliegen, schließen aneinander
 /// an (sie stammen aus derselben Teilung, sind also praktisch gleich).
 const SAME_PARAM: f64 = 1e-9;
+/// Erlaubte relative Abweichung der Flächen beim Übergang: Beide Seiten sind mit 64 Schritten je
+/// Vollkreis abgetastet, ein Kreis verliert dabei etwa 0,16 % seiner Fläche, je nach Teilung
+/// unterschiedlich viel; eine fehlende Teilfläche ist in der Regel viel größer.
+const AREA_REL: f64 = 5e-3;
 
 impl ExtractedProfiles {
     /// Index des Profils, auf das der Verweis `r` heute zeigt (siehe Modulbeschreibung);
@@ -451,7 +455,7 @@ fn migrate(
         .iter()
         .map(|h| SampledLoop::new(h, CHECK_STEPS, tol))
         .collect();
-    let refs: Vec<ProfileRef> = now
+    let (refs, areas): (Vec<ProfileRef>, Vec<f64>) = now
         .outlines
         .iter()
         .zip(&now.refs)
@@ -459,9 +463,21 @@ fn migrate(
             interior_point(o)
                 .is_some_and(|p| outer.contains(p) && !holes.iter().any(|h| h.contains(p)))
         })
-        .map(|(_, r)| r.clone())
-        .collect();
-    (!refs.is_empty()).then_some(refs)
+        .map(|(o, r)| (r.clone(), net_area(o)))
+        .unzip();
+    // Abgelehnte Flächen (Entscheidung 3) fehlen unter `now`: Deckt die Auswahl nicht die ganze
+    // Fläche des alten Profils, ergäbe sie einen kleineren Körper – verloren.
+    let old_area = old.outer.signed_area().abs()
+        - old.holes.iter().map(|h| h.signed_area().abs()).sum::<f64>();
+    let area: f64 = areas.iter().sum();
+    let slack = AREA_REL * old_area.abs() + tol.linear * tol.linear;
+    (!refs.is_empty() && (area - old_area).abs() <= slack).then_some(refs)
+}
+
+/// Fläche einer Abtastung (`[0]` äußerer Umriss, danach die Löcher) ohne die Löcher.
+fn net_area(outline: &[Vec<DVec2>]) -> f64 {
+    let mut loops = outline.iter().map(|p| polygon_area(p).abs());
+    loops.next().unwrap_or(0.0) - loops.sum::<f64>()
 }
 
 impl Sketch {

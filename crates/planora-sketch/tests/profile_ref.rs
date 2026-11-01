@@ -244,36 +244,37 @@ fn tangent_hole(scale: f64) -> Sketch {
     s
 }
 
-/// Die Skizzen der Tests in `tests/profile.rs` plus Rechteck mit offener Linie quer durch.
-fn scenarios() -> Vec<(&'static str, Sketch)> {
+/// Die Skizzen der Tests in `tests/profile.rs` plus Rechteck mit offener Linie quer durch und
+/// weitere; `true`: die alten Profile lassen sich nicht umrechnen (heutige Flächen abgelehnt).
+fn scenarios() -> Vec<(&'static str, Sketch, bool)> {
     let mut out = Vec::new();
     let mut s = sketch();
     rect(&mut s, 0.0, 0.0, 3.0, 4.0);
-    out.push(("Rechteck", s));
+    out.push(("Rechteck", s, false));
 
     let mut s = sketch();
     rect(&mut s, 0.0, 0.0, 20.0, 20.0);
     let c = s.add_point(10.0, 10.0).unwrap();
     s.add_circle(c, 4.0).unwrap();
-    out.push(("Kreis im Rechteck", s));
+    out.push(("Kreis im Rechteck", s, false));
 
     let mut s = sketch();
     let c = s.add_point(0.0, 0.0).unwrap();
     for r in [10.0, 6.0, 2.0] {
         s.add_circle(c, r).unwrap();
     }
-    out.push(("Schachtelung", s));
+    out.push(("Schachtelung", s, false));
 
     let mut s = sketch();
     rect(&mut s, 0.0, 0.0, 3.0, 3.0);
     rect(&mut s, 10.0, 0.0, 13.0, 3.0);
-    out.push(("zwei Rechtecke", s));
+    out.push(("zwei Rechtecke", s, false));
 
     let mut s = sketch();
     let (p, _) = rect(&mut s, 0.0, 0.0, 3.0, 3.0);
     let diag = s.add_line(p[0], p[2]).unwrap();
     s.set_construction(diag, true).unwrap();
-    out.push(("Konstruktion", s));
+    out.push(("Konstruktion", s, false));
 
     let mut s = sketch();
     let a = s.add_point(0.0, 0.0).unwrap();
@@ -281,18 +282,18 @@ fn scenarios() -> Vec<(&'static str, Sketch)> {
     let c = s.add_point(5.0, 5.0).unwrap();
     s.add_line(a, b).unwrap();
     s.add_line(b, c).unwrap();
-    out.push(("offene Kette", s));
+    out.push(("offene Kette", s, false));
 
     let mut s = sketch();
     let (p, _) = rect(&mut s, 0.0, 0.0, 4.0, 4.0);
     let extra = s.add_point(9.0, 9.0).unwrap();
     s.add_line(p[0], extra).unwrap();
-    out.push(("Diagonale mit Stummel", s));
+    out.push(("Diagonale mit Stummel", s, false));
 
     let mut s = sketch();
     rect(&mut s, 0.0, 0.0, 4.0, 4.0);
     line(&mut s, (1.0, 0.0), (1.0, 4.0));
-    out.push(("T-Stoß", s));
+    out.push(("T-Stoß", s, false));
 
     let mut s = sketch();
     let p = [
@@ -304,12 +305,12 @@ fn scenarios() -> Vec<(&'static str, Sketch)> {
     for i in 0..4 {
         s.add_line(p[i], p[(i + 1) % 4]).unwrap();
     }
-    out.push(("Schleife", s));
+    out.push(("Schleife", s, false));
 
     let mut s = sketch();
     rect(&mut s, 0.0, 0.0, 6.0, 6.0);
     rect(&mut s, 3.0, 3.0, 9.0, 9.0);
-    out.push(("kreuzende Quadrate", s));
+    out.push(("kreuzende Quadrate", s, false));
 
     let mut s = sketch();
     let c = s.add_point(0.0, 0.0).unwrap();
@@ -317,7 +318,7 @@ fn scenarios() -> Vec<(&'static str, Sketch)> {
     let r = s.add_point(1.0, 0.0).unwrap();
     s.add_line(l, r).unwrap();
     s.add_arc(c, r, l).unwrap();
-    out.push(("Halbscheibe", s));
+    out.push(("Halbscheibe", s, false));
 
     let mut s = sketch();
     let a = s.add_point(0.0, 0.0).unwrap();
@@ -330,14 +331,14 @@ fn scenarios() -> Vec<(&'static str, Sketch)> {
     s.add_line(b, c).unwrap();
     s.add_line(c2, d).unwrap();
     s.add_line(d2, a).unwrap();
-    out.push(("fast berührende Enden", s));
+    out.push(("fast berührende Enden", s, false));
 
     let mut s = sketch();
     let a = s.add_point(0.0, 0.0).unwrap();
     let b = s.add_point(5.0, 0.0).unwrap();
     s.add_line(a, b).unwrap();
     s.add_line(b, a).unwrap();
-    out.push(("Hin und zurück", s));
+    out.push(("Hin und zurück", s, false));
 
     let mut s = sketch();
     let c = s.add_point(0.0, 0.0).unwrap();
@@ -346,7 +347,7 @@ fn scenarios() -> Vec<(&'static str, Sketch)> {
     s.add_line(a, c).unwrap();
     s.add_line(c, b).unwrap();
     s.add_arc(c, a, b).unwrap();
-    out.push(("Viertelkreis rückwärts", s));
+    out.push(("Viertelkreis rückwärts", s, false));
 
     let mut s = sketch();
     rect(&mut s, 0.0, 0.0, 30.0, 20.0);
@@ -354,7 +355,7 @@ fn scenarios() -> Vec<(&'static str, Sketch)> {
     let c = s.add_point(22.0, 10.0).unwrap();
     s.add_circle(c, 5.0).unwrap();
     rect(&mut s, 4.0, 4.0, 8.0, 8.0);
-    out.push(("zwei Löcher und Insel", s));
+    out.push(("zwei Löcher und Insel", s, false));
 
     for line_first in [false, true] {
         let mut s = sketch();
@@ -368,7 +369,7 @@ fn scenarios() -> Vec<(&'static str, Sketch)> {
             s.add_arc(c, a, b).unwrap();
             s.add_line(b, a).unwrap();
         }
-        out.push(("Bogenende neben dem Kreis", s));
+        out.push(("Bogenende neben dem Kreis", s, false));
     }
 
     let mut s = sketch();
@@ -379,39 +380,39 @@ fn scenarios() -> Vec<(&'static str, Sketch)> {
     s.add_arc(c, a, b).unwrap();
     s.add_line(b, t).unwrap();
     s.add_line(t, a).unwrap();
-    out.push(("Bogen ohne Winkel", s));
+    out.push(("Bogen ohne Winkel", s, false));
 
-    out.push(("tangentiales Loch", tangent_hole(1.0)));
-    out.push(("tangentiales Loch groß", tangent_hole(1e5)));
+    out.push(("tangentiales Loch", tangent_hole(1.0), false));
+    out.push(("tangentiales Loch groß", tangent_hole(1e5), false));
 
     let mut s = sketch();
     let a = s.add_point(0.0, 0.0).unwrap();
     s.add_circle(a, 10.0).unwrap();
     let b = s.add_point(0.0, 4.0).unwrap();
     s.add_circle(b, 6.0).unwrap();
-    out.push(("innen tangentiale Kreise", s));
+    out.push(("innen tangentiale Kreise", s, false));
 
     let mut s = sketch();
     rect(&mut s, 0.0, 0.0, 40.0, 30.0);
     let m = s.add_point(20.0, 11.0).unwrap();
     s.add_circle(m, 10.0).unwrap();
-    out.push(("Loch mit kleinem Spalt", s));
+    out.push(("Loch mit kleinem Spalt", s, false));
 
-    out.push(("offene Linie quer durch", crossed_rectangle()));
+    out.push(("offene Linie quer durch", crossed_rectangle(), false));
 
     // zusätzlich (nicht aus `tests/profile.rs`): gekrümmte Ränder, von offenen Linien geteilt
     let mut s = sketch();
     let m = s.add_point(0.0, 0.0).unwrap();
     s.add_circle(m, 5.0).unwrap();
     line(&mut s, (-1.0, -6.0), (2.0, 6.0));
-    out.push(("Kreis mit offener Linie", s));
+    out.push(("Kreis mit offener Linie", s, false));
 
     let mut s = sketch();
     let m = s.add_point(1.0, 2.0).unwrap();
     s.add_ellipse(m, DVec2::new(8.0, 3.0), 4.0).unwrap();
     line(&mut s, (-10.0, 1.0), (12.0, 3.0));
     line(&mut s, (0.0, -10.0), (1.0, 12.0));
-    out.push(("Ellipse mit zwei offenen Linien", s));
+    out.push(("Ellipse mit zwei offenen Linien", s, false));
 
     let mut s = sketch();
     let (p, _) = rect(&mut s, 0.0, 0.0, 20.0, 10.0);
@@ -424,7 +425,16 @@ fn scenarios() -> Vec<(&'static str, Sketch)> {
     s.remove_curve(top).unwrap();
     s.add_spline(&[p[2], q, p[3]]).unwrap();
     line(&mut s, (5.0, -3.0), (6.0, 16.0));
-    out.push(("Spline-Kante mit offener Linie", s));
+    out.push(("Spline-Kante mit offener Linie", s, false));
+
+    // Fix-Runde 1: Die offene Linie berührt das Loch; die Fläche darunter ist eingeklemmt und
+    // abgelehnt (Entscheidung 3). Ohne sie wäre der Körper kleiner: verloren.
+    let mut s = sketch();
+    rect(&mut s, 0.0, 0.0, 20.0, 10.0);
+    let m = s.add_point(10.0, 5.0).unwrap();
+    s.add_circle(m, 3.0).unwrap();
+    line(&mut s, (-5.0, 8.0), (25.0, 8.0));
+    out.push(("offene Linie berührt das Loch", s, true));
     out
 }
 
@@ -470,10 +480,18 @@ fn body(s: &Sketch, p: &Profile) -> Body {
 
 #[test]
 fn old_profile_numbers_give_the_same_bodies() {
-    let (mut checked, mut several) = (0, 0);
-    for (name, s) in scenarios() {
+    let (mut checked, mut several, mut lost_checked) = (0, 0, 0);
+    for (name, s, lost) in scenarios() {
         let legacy = s.legacy_profiles();
         let now = s.profiles();
+        if lost {
+            assert!(!legacy.profiles.is_empty(), "{name}");
+            for n in 0..legacy.profiles.len() {
+                assert_eq!(s.migrate_profile_index(n), None, "{name}: Profil {n}");
+                lost_checked += 1;
+            }
+            continue;
+        }
         for (n, old) in legacy.profiles.iter().enumerate() {
             let refs = s
                 .migrate_profile_index(n)
@@ -512,6 +530,7 @@ fn old_profile_numbers_give_the_same_bodies() {
     // T-Stoß (früher offene Linie) und offene Linien quer durch Rechteck, Kreis, Ellipse und
     // Spline-Kante
     assert_eq!(several, 5);
+    assert_eq!(lost_checked, 1);
 }
 
 #[test]
