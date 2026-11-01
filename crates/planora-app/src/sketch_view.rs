@@ -30,6 +30,10 @@ const AXIS_PX: f32 = 28.0;
 const POINT_PX: f32 = 3.5;
 /// Strichstärke normaler Kurven in Pixeln.
 const CURVE_WIDTH: f32 = 2.0;
+/// Halbe Größe der Fangzeichen in Pixeln.
+const SNAP_MARK_PX: f32 = 5.0;
+/// Strichstärke der Fangzeichen in Pixeln.
+const SNAP_MARK_WIDTH: f32 = 1.5;
 /// Schriftgröße der Abhängigkeitssymbole und Maße.
 const LABEL_SIZE: f32 = 12.0;
 
@@ -230,6 +234,8 @@ pub fn overlay_text(
         },
         K::Equal(..) => "=".to_string(),
         K::Tangent(..) => "T".to_string(),
+        // Der Punkt im Ursprung ist „deckungsgleich mit dem Ursprung“, kein Festsetzen von Hand.
+        K::Fixed(_, x, y) if *x == 0.0 && *y == 0.0 => return String::new(),
         K::Fixed(..) => "fix".to_string(),
         K::Midpoint(..) => tr!("sketch-overlay-midpoint"),
         K::Symmetric(..) => tr!("sketch-overlay-symmetric"),
@@ -505,6 +511,13 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
                 |e| matches!(e, egui::Event::PointerButton { modifiers, .. } if modifiers.shift),
             )
     });
+    // Strg ebenso: Sie schaltet Fang, Ausrichtung, Raster und Automatik aus (wie Fusion).
+    let ctrl = ui.input(|i| {
+        i.modifiers.ctrl
+            || i.events.iter().any(
+                |e| matches!(e, egui::Event::PointerButton { modifiers, .. } if modifiers.ctrl),
+            )
+    });
     let Some(frame) = state.session_sketch().map(|sk| *sk.frame()) else {
         return;
     };
@@ -540,6 +553,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     if let Some(at) = at {
         se.cursor = Some(at);
     }
+    se.cursor_opts.suppressed = ctrl;
 
     // Punkt ziehen (Auswahlwerkzeug)
     if response.drag_started_by(PointerButton::Primary) && !shift && !panning {
@@ -625,6 +639,8 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     // dieses Bilds).
     let hover_at = response.hover_pos().and_then(|p| map.to_sketch(p));
     se.update_hover(sk, hover_at, radius);
+    // Aufgelöster Zeiger für Zeichen und Vorschau (nach den Änderungen dieses Bilds).
+    se.update_cursor(sk, at, radius);
     let tool = se.tool;
 
     // Körperkante kopieren: Kante in der 3D-Szene wählen.
@@ -696,15 +712,23 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         }
     }
 
-    // Element unter dem Mauszeiger
-    let hovered: Option<Item> = pointer
-        .filter(|_| se.dragging.is_none())
-        .and_then(|p| Some((map.to_sketch(p)?, map.radius_at(p)?)))
-        .and_then(|(at, r)| match se.snap(sk, at, r) {
-            Snap::Point(p) => Some(Item::Point(p)),
-            Snap::Curve(c) => Some(Item::Curve(c)),
-            Snap::None => None,
-        });
+    // Element unter dem Mauszeiger: beim Zeichnen das Fangziel des aufgelösten Zeigers.
+    let hovered: Option<Item> = if se.is_drawing_tool() {
+        se.draw_cursor.as_ref().and_then(|cur| match cur.snap {
+            Snap::Point(p) | Snap::Center(p) => Some(Item::Point(p)),
+            Snap::Curve(c) | Snap::Midpoint(c) => Some(Item::Curve(c)),
+            _ => None,
+        })
+    } else {
+        pointer
+            .filter(|_| se.dragging.is_none())
+            .and_then(|p| Some((map.to_sketch(p)?, map.radius_at(p)?)))
+            .and_then(|(at, r)| match se.snap(sk, at, r) {
+                Snap::Point(p) => Some(Item::Point(p)),
+                Snap::Curve(c) => Some(Item::Curve(c)),
+                _ => None,
+            })
+    };
 
     // Kurven
     for (c, data) in sk.curves() {
@@ -799,12 +823,59 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         }
     }
 
-    // Fanghinweis unter dem Mauszeiger beim Zeichnen
+    // Hilfslinien vom ausgerichteten Punkt zum Zeiger und Fangzeichen
+    if let Some(cur) = &se.draw_cursor {
+        for (p, _) in [cur.guides.x, cur.guides.y].into_iter().flatten() {
+            let Some(from) = pos(sk, p) else {
+                continue;
+            };
+            for path in map.paths(&[from, cur.at]) {
+                draw_path(&painter, path, Stroke::new(1.0, col.guide), true);
+            }
+        }
+        if let Some(s) = cur.snap_at.and_then(|q| map.to_screen(q)) {
+            paint_snap_mark(&painter, s, cur.snap, col.snap);
+        }
+    }
+
+    // Fanghinweis unter dem Mauszeiger in den übrigen Werkzeugen
     if se.tool != Tool::Select
+        && !se.is_drawing_tool()
         && let Some(Item::Point(p)) = hovered
         && let Some(s) = pos(sk, p).and_then(|q| map.to_screen(q))
     {
         painter.circle_stroke(s, POINT_PX + 5.0, Stroke::new(1.5, col.selected));
+    }
+}
+
+/// Zeichen der Fangart am Zeiger, selbst gezeichnet: Quadrat Punkt, Kreis Mitte, Dreieck
+/// Mittelpunkt, X Schnitt, Sanduhr Kurve, Kreuz im Kreis Ursprung, kleines Plus Raster.
+fn paint_snap_mark(painter: &egui::Painter, at: Pos2, snap: Snap, color: Color32) {
+    let stroke = Stroke::new(SNAP_MARK_WIDTH, color);
+    let s = SNAP_MARK_PX;
+    let closed = |corners: &[(f32, f32)]| {
+        let points = corners.iter().map(|&(x, y)| at + vec2(x, y)).collect();
+        painter.add(Shape::closed_line(points, stroke));
+    };
+    let cross = |dx: f32, dy: f32| {
+        painter.line_segment([at - vec2(dx, dy), at + vec2(dx, dy)], stroke);
+        painter.line_segment([at - vec2(dy, -dx), at + vec2(dy, -dx)], stroke);
+    };
+    match snap {
+        Snap::None => {}
+        Snap::Point(_) => closed(&[(-s, -s), (s, -s), (s, s), (-s, s)]),
+        Snap::Center(_) => {
+            painter.circle_stroke(at, s, stroke);
+        }
+        Snap::Midpoint(_) => closed(&[(0.0, -s), (s, s), (-s, s)]),
+        Snap::Intersection(..) => cross(s, s),
+        // Vier Ecken über Kreuz ergeben die Sanduhr.
+        Snap::Curve(_) => closed(&[(-s, -s), (s, -s), (-s, s), (s, s)]),
+        Snap::Origin => {
+            painter.circle_stroke(at, s + 1.0, stroke);
+            cross(s + 1.0, 0.0);
+        }
+        Snap::Grid => cross(s * 0.6, 0.0),
     }
 }
 
@@ -840,7 +911,8 @@ fn draw_preview(
     se: &SketchSession,
     color: Color32,
 ) {
-    let Some(cursor) = se.cursor else {
+    // Ohne Zeiger über der Skizze bleibt die Vorschau an der letzten Stelle stehen.
+    let Some(cursor) = se.draw_cursor.as_ref().map(|c| c.at).or(se.cursor) else {
         return;
     };
     let stroke = Stroke::new(1.5, color);

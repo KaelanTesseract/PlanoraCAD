@@ -1205,6 +1205,37 @@ fn flag_change_with_open_click_is_its_own_step() {
     assert_eq!(sk_undo_len(&w), n + 1);
 }
 
+/// Skizzen 2: Erster Klick auf die Linienmitte und auf den Ursprung (Punkt samt `Midpoint` bzw.
+/// `Fixed`): bleibt aufgeschoben, die neue Linie ist genau ein Schritt.
+#[test]
+fn first_click_on_a_midpoint_or_the_origin_is_deferred() {
+    let mut w = ws();
+    open_new_sketch(&mut w);
+    tool(&mut w, Tool::Line);
+    click(&mut w, 20.0, 40.0);
+    click(&mut w, 60.0, 50.0);
+    observe(&mut w);
+    tool(&mut w, Tool::Line);
+    for (x, y) in [(40.0, 45.0), (0.0, 0.0)] {
+        let n = sk_undo_len(&w);
+        let constraints = draft(&w).constraints().count();
+        click(&mut w, x, y);
+        observe(&mut w);
+        assert_eq!(draft(&w).constraints().count(), constraints + 1, "{x}, {y}");
+        assert_eq!(sk_undo_len(&w), n, "Fang: noch kein Schritt");
+        click(&mut w, x + 7.0, y + 11.0);
+        observe(&mut w);
+        assert_eq!(sk_undo_len(&w), n + 1);
+        assert_eq!(
+            w.active_tab().undo_label(),
+            Some("Linie zeichnen".to_string())
+        );
+        tab(&mut w).undo().unwrap();
+        assert_eq!(draft(&w).constraints().count(), constraints, "{x}, {y}");
+        tool(&mut w, Tool::Line);
+    }
+}
+
 /// Erster Klick auf den Rand eines Kreises und eines Bogens (Punkt samt Bindung, der Solver
 /// prüft die Gruppe): bleibt aufgeschoben, das Element ist ein Schritt.
 #[test]

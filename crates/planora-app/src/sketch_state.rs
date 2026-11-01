@@ -5,13 +5,18 @@
 
 use crate::formula_field::resolve;
 use crate::msg::Msg;
+use crate::sketch_cursor::{CursorOptions, DrawCursor};
 use planora_feature::{FeatureId, ParamScope, ParamUnit, SketchFeature, constraint_unit};
 use planora_i18n::tr;
 use planora_kernel::{Edge, Id, Solid};
 use planora_math::DVec2;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
 use planora_sketch::model::{CurveId, CurveKind, MAX_SPLINE_POINTS, PointId, Sketch};
+use planora_sketch::snap::{SnapHit, SnapIndex};
 use planora_sketch::solver::{Drag, SolveReport, SolveStatus};
+use std::sync::Arc;
+
+pub use planora_sketch::snap::Snap;
 
 /// Winkel zur Achse, unter dem eine Linie beim Zeichnen als waagerecht/senkrecht gilt.
 const AUTO_AXIS_ANGLE: f64 = 3.0 * std::f64::consts::PI / 180.0;
@@ -49,13 +54,6 @@ pub enum Item {
     Point(PointId),
     Curve(CurveId),
     Constraint(ConstraintId),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Snap {
-    None,
-    Point(PointId),
-    Curve(CurveId),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -177,7 +175,16 @@ pub struct SketchSession {
     pub pending: Vec<PointId>,
     /// Noch nicht angelegte Eckpunkte (Rechteck, Ellipse).
     pub pending_pos: Vec<DVec2>,
+    /// Fang der noch nicht angelegten Eckpunkte in `pending_pos` (Rechteck: erste Ecke, Ellipse:
+    /// Ende der großen Achse); die Anbindung folgt beim Abschluss.
+    pub pending_snaps: Vec<SnapHit>,
     pub cursor: Option<DVec2>,
+    /// Strg und Raster für den Zeiger ([`resolve_cursor`](Self::resolve_cursor)).
+    pub cursor_opts: CursorOptions,
+    /// Aufgelöster Zeiger dieses Bilds ([`update_cursor`](Self::update_cursor)).
+    pub draw_cursor: Option<DrawCursor>,
+    /// Fang-Index zum letzten gesehenen Stand der Skizze (nur in Zeichenwerkzeugen gebaut).
+    pub snap_index: Option<Arc<SnapIndex>>,
     /// Beim Zeichnen von Linien automatisch waagerecht/senkrecht ergänzen.
     pub auto_constrain: bool,
     pub last_report: Option<SolveReport>,
@@ -207,6 +214,7 @@ struct Backup {
     sketch: Sketch,
     pending: Vec<PointId>,
     pending_pos: Vec<DVec2>,
+    pending_snaps: Vec<SnapHit>,
     selection: Vec<Item>,
     last_report: Option<SolveReport>,
 }
@@ -226,7 +234,7 @@ struct Sorted {
 
 /// Fehler einer Bibliothek als Meldung (der Text kommt von dort, bis die Bibliotheken übersetzt
 /// sind).
-fn err(e: impl std::fmt::Display) -> Msg {
+pub(crate) fn err(e: impl std::fmt::Display) -> Msg {
     Msg::Raw(e.to_string())
 }
 
@@ -256,7 +264,11 @@ impl SketchSession {
             selection: Vec::new(),
             pending: Vec::new(),
             pending_pos: Vec::new(),
+            pending_snaps: Vec::new(),
             cursor: None,
+            cursor_opts: CursorOptions::default(),
+            draw_cursor: None,
+            snap_index: None,
             auto_constrain: true,
             last_report: None,
             message: None,
@@ -276,8 +288,15 @@ impl SketchSession {
         self.trim_drag = None;
         self.hover_preview = None;
         self.tool = tool;
+        self.draw_cursor = None;
+        self.clear_pending();
+    }
+
+    /// Vergisst, was das laufende Werkzeug schon gesetzt hat.
+    fn clear_pending(&mut self) {
         self.pending.clear();
         self.pending_pos.clear();
+        self.pending_snaps.clear();
     }
 
     /// Wählt `tool` wie der Klick auf seinen Knopf in der Leiste (und sein Tastenkürzel): ist
@@ -295,8 +314,8 @@ impl SketchSession {
     /// Freiheitsgrade und Färbung kommen aus einem frischen Lösen einer Kopie, damit der Entwurf
     /// selbst (und sein Stand) unverändert bleibt. Werkzeug und Mauszeiger bleiben.
     pub fn after_history_jump(&mut self, sk: &Sketch) {
-        self.pending.clear();
-        self.pending_pos.clear();
+        self.clear_pending();
+        self.draw_cursor = None;
         self.selection.clear();
         self.dragging = None;
         self.trim_drag = None;
@@ -307,7 +326,9 @@ impl SketchSession {
         self.history_jumps += 1;
     }
 
-    /// Fang an der Stelle `at`: Punkte vor Kurven.
+    /// Fang für die Auswahl an der Stelle `at`: Punkte vor Kurven (nur [`Snap::Point`],
+    /// [`Snap::Curve`] und [`Snap::None`]; beim Zeichnen gilt
+    /// [`resolve_cursor`](Self::resolve_cursor)).
     pub fn snap(&self, sk: &Sketch, at: DVec2, radius: f64) -> Snap {
         if let Some(p) = sk.pick_point(at, radius) {
             Snap::Point(p)
@@ -325,6 +346,7 @@ impl SketchSession {
             sketch: sk.clone(),
             pending: self.pending.clone(),
             pending_pos: self.pending_pos.clone(),
+            pending_snaps: self.pending_snaps.clone(),
             selection: self.selection.clone(),
             last_report: self.last_report.clone(),
         }
@@ -334,6 +356,7 @@ impl SketchSession {
         *sk = b.sketch;
         self.pending = b.pending;
         self.pending_pos = b.pending_pos;
+        self.pending_snaps = b.pending_snaps;
         self.selection = b.selection;
         self.last_report = b.last_report;
     }
@@ -385,22 +408,6 @@ impl SketchSession {
 
     // ---- Werkzeuge ----------------------------------------------------------------------
 
-    /// Vorhandener Punkt unter `at` oder ein neuer; auf einer Kurve wird der neue Punkt auf die
-    /// Kurve gesetzt und mit `PointOnCurve` daran gebunden.
-    fn point_at(&mut self, sk: &mut Sketch, at: DVec2, radius: f64) -> Result<PointId, Msg> {
-        match self.snap(sk, at, radius) {
-            Snap::Point(p) => Ok(p),
-            Snap::Curve(c) => {
-                let q = sk.nearest_on_curve(c, at).unwrap_or(at);
-                let p = sk.add_point(q.x, q.y).map_err(err)?;
-                sk.add_constraint(ConstraintKind::PointOnCurve(p, c))
-                    .map_err(err)?;
-                Ok(p)
-            }
-            Snap::None => sk.add_point(at.x, at.y).map_err(err),
-        }
-    }
-
     /// Klick mit dem aktiven Werkzeug an der Stelle `at` (Skizzeneinheiten); `radius` ist der
     /// Fangradius, `extend` erweitert bzw. schaltet die Auswahl um.
     pub fn click(
@@ -417,18 +424,19 @@ impl SketchSession {
             return Err(text);
         }
         self.cursor = Some(at);
+        let cur = self.resolve_cursor(sk, at, radius);
         self.atomic(sk, |se, sk, prior| match se.tool {
             Tool::Select => {
                 se.select_at(sk, at, radius, extend);
                 Ok(())
             }
-            Tool::Point => se.click_point(sk, at, radius, prior),
-            Tool::Line => se.click_line(sk, at, radius, prior),
-            Tool::Rectangle => se.click_rectangle(sk, at, prior),
-            Tool::Circle => se.click_circle(sk, at, radius, prior),
-            Tool::Arc => se.click_arc(sk, at, radius, prior),
-            Tool::Ellipse => se.click_ellipse(sk, at, radius, prior),
-            Tool::Spline => se.click_spline(sk, at, radius, prior),
+            Tool::Point => se.click_point(sk, &cur, prior),
+            Tool::Line => se.click_line(sk, &cur, prior),
+            Tool::Rectangle => se.click_rectangle(sk, &cur, prior),
+            Tool::Circle => se.click_circle(sk, &cur, prior),
+            Tool::Arc => se.click_arc(sk, &cur, prior),
+            Tool::Ellipse => se.click_ellipse(sk, &cur, prior),
+            Tool::Spline => se.click_spline(sk, &cur, prior),
             // Wird von der Oberfläche über `project_edge` gesteuert.
             Tool::ProjectEdge => Ok(()),
             Tool::Trim | Tool::Extend | Tool::Break => se.click_modify(sk, at, radius, prior),
@@ -568,7 +576,7 @@ impl SketchSession {
         let item = match self.snap(sk, at, radius) {
             Snap::Point(p) => Some(Item::Point(p)),
             Snap::Curve(c) => Some(Item::Curve(c)),
-            Snap::None => None,
+            _ => None,
         };
         match (item, extend) {
             (Some(i), true) => {
@@ -587,26 +595,19 @@ impl SketchSession {
     fn click_point(
         &mut self,
         sk: &mut Sketch,
-        at: DVec2,
-        radius: f64,
+        cur: &DrawCursor,
         prior: &Sketch,
     ) -> Result<(), Msg> {
-        if let Snap::Point(_) = self.snap(sk, at, radius) {
+        if cur.point(sk.tolerance().linear).is_some() {
             return Ok(());
         }
-        self.point_at(sk, at, radius)?;
+        self.attach(sk, None, cur)?;
         self.solve_checked(sk, prior)?;
         Ok(())
     }
 
-    fn click_line(
-        &mut self,
-        sk: &mut Sketch,
-        at: DVec2,
-        radius: f64,
-        prior: &Sketch,
-    ) -> Result<(), Msg> {
-        let p = self.point_at(sk, at, radius)?;
+    fn click_line(&mut self, sk: &mut Sketch, cur: &DrawCursor, prior: &Sketch) -> Result<(), Msg> {
+        let p = self.attach(sk, None, cur)?;
         let Some(&start) = self.pending.first() else {
             self.pending = vec![p];
             self.solve_checked(sk, prior)?;
@@ -614,7 +615,7 @@ impl SketchSession {
         };
         let line = sk.add_line(start, p).map_err(err)?;
         self.solve_checked(sk, prior)?;
-        if self.auto_constrain {
+        if self.auto_constrain && !self.cursor_opts.suppressed {
             self.add_auto_axis(sk, line);
         }
         self.pending = vec![p];
@@ -653,13 +654,36 @@ impl SketchSession {
         }
     }
 
-    fn click_rectangle(&mut self, sk: &mut Sketch, at: DVec2, prior: &Sketch) -> Result<(), Msg> {
+    fn click_rectangle(
+        &mut self,
+        sk: &mut Sketch,
+        cur: &DrawCursor,
+        prior: &Sketch,
+    ) -> Result<(), Msg> {
+        let tol = sk.tolerance().linear;
         let Some(&corner) = self.pending_pos.first() else {
-            self.pending_pos = vec![at];
+            self.pending_pos = vec![cur.at];
+            self.pending_snaps = vec![cur.remember(tol)];
             return Ok(());
         };
-        sk.add_rectangle(corner, at).map_err(err)?;
+        let first = self
+            .pending_snaps
+            .first()
+            .map(|&hit| DrawCursor::remembered(hit, sk));
+        let rect = sk.add_rectangle(corner, cur.at).map_err(err)?;
         self.pending_pos.clear();
+        self.pending_snaps.clear();
+        // Das Rechteck legt eigene Ecken an (sortiert); gebunden wird die Ecke an der Lage.
+        for c in first.iter().chain([cur]) {
+            let own = rect
+                .points
+                .iter()
+                .copied()
+                .find(|&p| sk.point_xy(p).is_ok_and(|q| q.distance(c.at) <= tol));
+            if own.is_some() {
+                self.attach(sk, own, c)?;
+            }
+        }
         self.solve_checked(sk, prior)?;
         Ok(())
     }
@@ -667,41 +691,35 @@ impl SketchSession {
     fn click_circle(
         &mut self,
         sk: &mut Sketch,
-        at: DVec2,
-        radius: f64,
+        cur: &DrawCursor,
         prior: &Sketch,
     ) -> Result<(), Msg> {
         let Some(&center) = self.pending.first() else {
-            let c = self.point_at(sk, at, radius)?;
+            let c = self.attach(sk, None, cur)?;
             self.pending = vec![c];
             self.solve_checked(sk, prior)?;
             return Ok(());
         };
-        let r = sk.point_xy(center).map_err(err)?.distance(at);
+        let r = sk.point_xy(center).map_err(err)?.distance(cur.at);
         if r <= sk.tolerance().linear {
             return Err(crate::msg!("sketch-radius-positive"));
         }
-        sk.add_circle(center, r).map_err(err)?;
+        let circle = sk.add_circle(center, r).map_err(err)?;
+        self.bind_rim(sk, circle, cur)?;
         self.pending.clear();
         self.solve_checked(sk, prior)?;
         Ok(())
     }
 
-    fn click_arc(
-        &mut self,
-        sk: &mut Sketch,
-        at: DVec2,
-        radius: f64,
-        prior: &Sketch,
-    ) -> Result<(), Msg> {
+    fn click_arc(&mut self, sk: &mut Sketch, cur: &DrawCursor, prior: &Sketch) -> Result<(), Msg> {
         let tol = sk.tolerance().linear;
         match *self.pending.as_slice() {
             [] => {
-                let c = self.point_at(sk, at, radius)?;
+                let c = self.attach(sk, None, cur)?;
                 self.pending = vec![c];
             }
             [center] => {
-                let s = self.point_at(sk, at, radius)?;
+                let s = self.attach(sk, None, cur)?;
                 if s == center
                     || sk
                         .point_xy(s)
@@ -717,20 +735,26 @@ impl SketchSession {
                 let m = sk.point_xy(center).map_err(err)?;
                 let s = sk.point_xy(start).map_err(err)?;
                 let r = s.distance(m);
-                let dir = at - m;
+                let dir = cur.at - m;
                 if dir.length() <= tol {
                     return Err(crate::msg!("sketch-arc-end-center"));
                 }
                 let on_start = || crate::msg!("sketch-arc-end-on-start");
-                let end = match self.snap(sk, at, radius) {
-                    Snap::Point(p) if p == start => return Err(on_start()),
-                    Snap::Point(p) if p != center => p,
+                let end = match cur.point(tol) {
+                    Some(p) if p == start => return Err(on_start()),
+                    Some(p) if p != center => p,
                     _ => {
+                        // Das Ende liegt auf dem Radius; es bindet nur, wenn es dort das
+                        // Fangziel trifft.
                         let q = m + dir.normalize() * r;
                         if q.distance(s) <= tol {
                             return Err(on_start());
                         }
-                        sk.add_point(q.x, q.y).map_err(err)?
+                        let on_radius = DrawCursor {
+                            at: q,
+                            ..cur.clone()
+                        };
+                        self.attach(sk, None, &on_radius)?
                     }
                 };
                 if sk.point_xy(end).map_err(err)?.distance(s) <= tol {
@@ -747,23 +771,23 @@ impl SketchSession {
     fn click_ellipse(
         &mut self,
         sk: &mut Sketch,
-        at: DVec2,
-        radius: f64,
+        cur: &DrawCursor,
         prior: &Sketch,
     ) -> Result<(), Msg> {
         let tol = sk.tolerance().linear;
         let Some(&center) = self.pending.first() else {
-            let c = self.point_at(sk, at, radius)?;
+            let c = self.attach(sk, None, cur)?;
             self.pending = vec![c];
             self.solve_checked(sk, prior)?;
             return Ok(());
         };
         let m = sk.point_xy(center).map_err(err)?;
         let Some(&major_end) = self.pending_pos.first() else {
-            if (at - m).length() <= tol {
+            if (cur.at - m).length() <= tol {
                 return Err(crate::msg!("sketch-major-axis-positive"));
             }
-            self.pending_pos = vec![at];
+            self.pending_pos = vec![cur.at];
+            self.pending_snaps = vec![cur.remember(tol)];
             return Ok(());
         };
         let major = major_end - m;
@@ -771,13 +795,19 @@ impl SketchSession {
         if len <= tol {
             return Err(crate::msg!("sketch-major-axis-positive"));
         }
-        let minor = (major / len).perp_dot(at - m).abs().min(len);
+        let minor = (major / len).perp_dot(cur.at - m).abs().min(len);
         if minor <= tol {
             return Err(crate::msg!("sketch-minor-axis-positive"));
         }
-        sk.add_ellipse(center, major, minor).map_err(err)?;
-        self.pending.clear();
-        self.pending_pos.clear();
+        let first = self
+            .pending_snaps
+            .first()
+            .map(|&hit| DrawCursor::remembered(hit, sk));
+        let ellipse = sk.add_ellipse(center, major, minor).map_err(err)?;
+        for c in first.iter().chain([cur]) {
+            self.bind_rim(sk, ellipse, c)?;
+        }
+        self.clear_pending();
         self.solve_checked(sk, prior)?;
         Ok(())
     }
@@ -785,14 +815,13 @@ impl SketchSession {
     fn click_spline(
         &mut self,
         sk: &mut Sketch,
-        at: DVec2,
-        radius: f64,
+        cur: &DrawCursor,
         prior: &Sketch,
     ) -> Result<(), Msg> {
         if self.pending.len() >= MAX_SPLINE_POINTS {
             return Err(crate::msg!("sketch-spline-max", max = MAX_SPLINE_POINTS));
         }
-        let p = self.point_at(sk, at, radius)?;
+        let p = self.attach(sk, None, cur)?;
         if self.pending.contains(&p) {
             return Err(crate::msg!("sketch-spline-point-twice"));
         }
@@ -805,8 +834,7 @@ impl SketchSession {
     pub fn finish_tool(&mut self, sk: &mut Sketch) -> Result<(), String> {
         if self.tool != Tool::Spline {
             self.message = None;
-            self.pending.clear();
-            self.pending_pos.clear();
+            self.clear_pending();
             return Ok(());
         }
         self.atomic(sk, |se, sk, prior| {
@@ -825,8 +853,7 @@ impl SketchSession {
     /// wo er ist). Stutzen, Dehnen und Brechen enden ganz (zurück zur Auswahl).
     pub fn cancel(&mut self, sk: &mut Sketch) {
         self.end_drag(sk);
-        self.pending.clear();
-        self.pending_pos.clear();
+        self.clear_pending();
         if self.tool == Tool::Select {
             self.selection.clear();
         }

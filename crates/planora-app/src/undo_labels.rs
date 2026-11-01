@@ -334,8 +334,12 @@ pub fn describe_sketch_change_beside(
     {
         return tr!("undo-point");
     }
-    let open_snap =
-        |k: &ConstraintKind| matches!(k, ConstraintKind::PointOnCurve(p, _) if open.contains(p));
+    let open_snap = |k: &ConstraintKind| match k {
+        ConstraintKind::PointOnCurve(p, _)
+        | ConstraintKind::Midpoint(p, _)
+        | ConstraintKind::Fixed(p, ..) => open.contains(p),
+        _ => false,
+    };
     let new_constraints: Vec<&ConstraintKind> = as_
         .constraints()
         .filter(|(id, c)| bs.constraint(*id).is_none() && !open_snap(&c.kind))

@@ -932,6 +932,10 @@ pub struct SketchColors {
     pub axis_x: Color32,
     /// Y-Achse der Skizze.
     pub axis_y: Color32,
+    /// Fangzeichen am Zeiger.
+    pub snap: Color32,
+    /// Gestrichelte Ausrichtungslinien beim Zeichnen.
+    pub guide: Color32,
 }
 
 /// Skizzenfarben des Themas. Linien erreichen auf dem Viewport mindestens 3 : 1. Dunkel: Auswahl,
@@ -956,6 +960,8 @@ pub fn sketch_colors(dark: bool) -> SketchColors {
             profile_fill_hover: with_alpha(rgb(0x7fb4ff), 0x48),
             axis_x: p.axis_x,
             axis_y: p.axis_y,
+            snap: p.selection,
+            guide: p.text_secondary,
         }
     } else {
         SketchColors {
@@ -974,6 +980,8 @@ pub fn sketch_colors(dark: bool) -> SketchColors {
             profile_fill_hover: with_alpha(p.accent, 0x40),
             axis_x: p.axis_x,
             axis_y: p.axis_y,
+            snap: rgb(0xa86a00),
+            guide: p.text_tertiary,
         }
     }
 }

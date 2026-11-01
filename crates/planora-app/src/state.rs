@@ -20,7 +20,7 @@ use planora_render::{
     pick_edge, pick_face,
 };
 use planora_sketch::constraint::ConstraintKind;
-use planora_sketch::model::{CurveId, Sketch};
+use planora_sketch::model::{CurveId, PointId, Sketch};
 use planora_sketch::{ExtractedProfiles, ProfileRef, plane_of_face};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
@@ -325,10 +325,18 @@ fn deferred_by_tool(se: &SketchSession, before: &SketchFeature, after: &SketchFe
                 && n.branch() == c.branch()
         })
     });
+    // Fangbindungen des offenen Punktes gehören zum Element: auf der Kurve, in der Linienmitte,
+    // im Ursprung.
+    let new_open = |p: &PointId| se.pending.contains(p) && b.point_xy(*p).is_err();
     let only_snaps = a
         .constraints()
         .filter(|(id, _)| b.constraint(*id).is_none())
-        .all(|(_, c)| matches!(c.kind, ConstraintKind::PointOnCurve(..)));
+        .all(|(_, c)| match &c.kind {
+            ConstraintKind::PointOnCurve(..) => true,
+            ConstraintKind::Midpoint(p, _) => new_open(p),
+            ConstraintKind::Fixed(p, x, y) => new_open(p) && *x == 0.0 && *y == 0.0,
+            _ => false,
+        });
     same_curves && points_kept && values_kept && constraints_kept && only_snaps
 }
 
