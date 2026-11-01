@@ -202,6 +202,17 @@ impl Assembled {
     }
 }
 
+/// Welche Zeilen in die Rechnung eingehen.
+#[derive(Clone, Copy)]
+enum Rows<'a> {
+    All,
+    /// Ohne diese Abhängigkeit (Suche nach der Ursache eines Widerspruchs).
+    Without(ConstraintId),
+    /// Diese Tangenten zielen auf ihren Restwert statt auf null
+    /// ([`Sketch::solve_keeping_tangent_drift`]).
+    Keeping(&'a [(ConstraintId, f64)]),
+}
+
 struct Lm {
     converged: bool,
     iterations: usize,
@@ -238,13 +249,20 @@ impl Sketch {
         col: &HashMap<usize, usize>,
         x: &[f64],
         soft: &[Soft],
-        skip: &[ConstraintId],
+        which: Rows,
     ) -> Assembled {
         let mut rows: Vec<(f64, Vec<(usize, f64)>)> = Vec::new();
         let mut owner = Vec::new();
         for (ci, &id) in g.constraints.iter().enumerate() {
-            if skip.contains(&id) {
-                continue;
+            let mut target = 0.0;
+            match which {
+                Rows::Without(skip) if skip == id => continue,
+                Rows::Keeping(kept) => {
+                    if let Some(&(_, rest)) = kept.iter().find(|(c, _)| *c == id) {
+                        target = rest;
+                    }
+                }
+                _ => {}
             }
             // Die Gruppe enthält nur lebende Abhängigkeiten; `None` kann nicht auftreten.
             let Some(ev) = self.evaluate(id, x) else {
@@ -257,7 +275,7 @@ impl Sketch {
                     .enumerate()
                     .filter_map(|(k, v)| col.get(v).map(|&c| (c, res.grad(k))))
                     .collect();
-                rows.push((res.v, entries));
+                rows.push((res.v - target, entries));
                 owner.push(ci);
             }
         }
@@ -291,10 +309,10 @@ impl Sketch {
         col: &HashMap<usize, usize>,
         x: &mut [f64],
         soft: &[Soft],
-        skip: &[ConstraintId],
+        which: Rows,
         tol_r: f64,
     ) -> Lm {
-        let mut a = self.assemble(g, col, x, soft, skip);
+        let mut a = self.assemble(g, col, x, soft, which);
         let mut cost = sumsq(&a.r);
         let mut lambda = INITIAL_LAMBDA;
         let mut iterations = 0;
@@ -325,7 +343,7 @@ impl Sketch {
                     for (c, &v) in g.vars.iter().enumerate() {
                         trial[v] += step[c];
                     }
-                    let t = self.assemble(g, col, &trial, soft, skip);
+                    let t = self.assemble(g, col, &trial, soft, which);
                     let trial_cost = sumsq(&t.r);
                     if trial_cost.is_finite() && trial_cost < cost {
                         let size = g.vars.iter().map(|&v| x[v].abs()).fold(1.0_f64, f64::max);
@@ -356,11 +374,12 @@ impl Sketch {
         }
     }
 
-    /// Scheitert eine Gruppe nur an einer Tangente am gemeinsamen Endpunkt, die im Rahmen von
+    /// Scheitert eine Gruppe, in der eine Tangente am gemeinsamen Endpunkt schon im Rahmen von
     /// [`SHARED_END_TANGENT_DRIFT`] danebenliegt (etwa in einer alten Skizze, deren Mitte fest
-    /// ist), gilt sie trotzdem als gelöst: Die Gruppe wird ohne diese Tangenten gelöst, und sie
-    /// müssen danach noch im Rahmen liegen.
-    fn solve_beside_drifted_tangents(
+    /// ist), wird sie noch einmal gelöst: Diese Tangenten behalten ihre Abweichung, statt sie
+    /// abbauen zu müssen; sie halten ihre Kurven weiter. Exakte Tangenten gelten unverändert
+    /// streng, ein neuer Widerspruch zu ihnen bleibt also einer.
+    fn solve_keeping_tangent_drift(
         &self,
         g: &Group,
         col: &HashMap<usize, usize>,
@@ -368,34 +387,38 @@ impl Sketch {
         soft: &[Soft],
         tol_r: f64,
     ) -> Option<(Vec<f64>, Lm)> {
-        let within = |id: ConstraintId, x: &[f64]| {
-            self.shared_end_tangent_drift(id, x)
-                .is_some_and(|d| d <= SHARED_END_TANGENT_DRIFT)
-        };
-        let drifted: Vec<ConstraintId> = g
+        let kept: Vec<(ConstraintId, f64)> = g
             .constraints
             .iter()
-            .copied()
-            .filter(|&id| within(id, start))
+            .filter_map(|&id| {
+                let drift = self.shared_end_tangent_drift(id, start)?;
+                let rest = self.evaluate(id, start)?.residuals.first()?.v;
+                (rest != 0.0 && drift <= SHARED_END_TANGENT_DRIFT).then_some((id, rest))
+            })
             .collect();
-        if drifted.is_empty() {
+        if kept.is_empty() {
             return None;
         }
+        let which = Rows::Keeping(&kept);
         let mut x = start.to_vec();
         let mut iterations = 0;
         if !soft.is_empty() {
             iterations += self
-                .levenberg_marquardt(g, col, &mut x, soft, &drifted, tol_r)
+                .levenberg_marquardt(g, col, &mut x, soft, which, tol_r)
                 .iterations;
         }
-        let mut lm = self.levenberg_marquardt(g, col, &mut x, &[], &drifted, tol_r);
+        let mut lm = self.levenberg_marquardt(g, col, &mut x, &[], which, tol_r);
         lm.iterations += iterations;
-        (lm.converged && drifted.iter().all(|&id| within(id, &x))).then_some((x, lm))
+        let within = kept.iter().all(|&(id, _)| {
+            self.shared_end_tangent_drift(id, &x)
+                .is_some_and(|d| d <= SHARED_END_TANGENT_DRIFT)
+        });
+        (lm.converged && within).then_some((x, lm))
     }
 
     /// Rang, Redundanz und freie Variablen einer gelösten Gruppe an der Stelle `x`.
     fn analyze(&self, g: &Group, col: &HashMap<usize, usize>, x: &[f64]) -> Analysis {
-        let a = self.assemble(g, col, x, &[], &[]);
+        let a = self.assemble(g, col, x, &[], Rows::All);
         let space = analyze_rows(&a.j, RANK_REL_TOL);
         let mut redundant = Vec::new();
         for (row, independent) in space.independent.iter().enumerate() {
@@ -497,7 +520,7 @@ impl Sketch {
     ) -> (Vec<ConstraintId>, bool) {
         // Erfüllt schon der Start alles und ist dort nichts entartet (etwa beim Ziehen), ist
         // keine Abhängigkeit schuld.
-        let at_start = self.assemble(g, col, start, &[], &[]);
+        let at_start = self.assemble(g, col, start, &[], Rows::All);
         if at_start.hard_inf() <= tol_r
             && self.spline_parameters_outside(g, start).is_empty()
             && !self.degenerate(&g.curves, start)
@@ -517,7 +540,7 @@ impl Sketch {
                 }
                 let mut x = start.to_vec();
                 if self
-                    .levenberg_marquardt(g, col, &mut x, &[], &[id], tol_r)
+                    .levenberg_marquardt(g, col, &mut x, &[], Rows::Without(id), tol_r)
                     .converged
                     && self
                         .spline_parameters_outside(g, &x)
@@ -532,7 +555,7 @@ impl Sketch {
                 return (candidates, true);
             }
         }
-        let a = self.assemble(g, col, failed, &[], &[]);
+        let a = self.assemble(g, col, failed, &[], Rows::All);
         let mut big = Vec::new();
         for (row, v) in a.r[..a.hard_rows].iter().enumerate() {
             let id = g.constraints[a.owner[row]];
@@ -689,29 +712,29 @@ impl Sketch {
             }
             group_solves += 1;
             let mut x = start.clone();
-            let mut lm = self.levenberg_marquardt(g, &col, &mut x, &group_soft, &[], tol_r);
+            let mut lm = self.levenberg_marquardt(g, &col, &mut x, &group_soft, Rows::All, tol_r);
             let mut used = lm.iterations;
             if !group_soft.is_empty() {
                 // Politur: Die weichen Bedingungen liefern nur eine Näherung. Von dort aus wird
                 // ohne sie exakt nachgelöst. Landet ein Spline-Parameter dabei auf der
                 // Fortsetzung, wird er aufs Ende gesetzt und erneut poliert. Gelingt das nicht,
                 // wird ohne Zug vom Start gelöst.
-                lm = self.levenberg_marquardt(g, &col, &mut x, &[], &[], tol_r);
+                lm = self.levenberg_marquardt(g, &col, &mut x, &[], Rows::All, tol_r);
                 used += lm.iterations;
                 if lm.converged && !self.acceptable(g, &lm, &x) {
                     self.clamp_spline_parameters(g, &mut x);
-                    lm = self.levenberg_marquardt(g, &col, &mut x, &[], &[], tol_r);
+                    lm = self.levenberg_marquardt(g, &col, &mut x, &[], Rows::All, tol_r);
                     used += lm.iterations;
                 }
                 if !self.acceptable(g, &lm, &x) {
                     x = start.clone();
-                    lm = self.levenberg_marquardt(g, &col, &mut x, &[], &[], tol_r);
+                    lm = self.levenberg_marquardt(g, &col, &mut x, &[], Rows::All, tol_r);
                     used += lm.iterations;
                 }
             }
             if !lm.converged
                 && let Some((y, retry)) =
-                    self.solve_beside_drifted_tangents(g, &col, &start, &group_soft, tol_r)
+                    self.solve_keeping_tangent_drift(g, &col, &start, &group_soft, tol_r)
             {
                 used += retry.iterations;
                 x = y;

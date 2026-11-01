@@ -702,8 +702,9 @@ impl Sketch {
     /// Regel 7 nach einer Änderung an den Kurven `touched` und den Punkten `points`: Die
     /// Zusatzvariablen von „Punkt auf Kurve“ und „tangential“ an (neu gelegten) Splines
     /// werden neu gesetzt; jede aktive Abhängigkeit an ihnen, die nicht mehr ohne Bewegung
-    /// erfüllt ist, entfällt, ebenso „Mittelpunkt“ an einer geänderten Linie. Nur anzeigende
-    /// und ausgeschaltete Abhängigkeiten bewegen nichts und bleiben.
+    /// erfüllt ist, entfällt, ebenso „Mittelpunkt“ an einer geänderten Linie. Als erfüllt gilt auch
+    /// eine Tangente am gemeinsamen Endpunkt im Rahmen ihrer zulässigen Abweichung (siehe
+    /// `satisfied`). Nur anzeigende und ausgeschaltete Abhängigkeiten bewegen nichts und bleiben.
     pub(crate) fn settle_constraints(&mut self, touched: &[CurveId], points: &[PointId]) {
         let ids: Vec<ConstraintId> = self
             .constraints()

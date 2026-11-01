@@ -282,6 +282,145 @@ fn a_really_wrong_tangent_at_a_shared_end_is_still_a_conflict() {
     }
 }
 
+/// Kette Linie–Bogen–Bogen: Linie und erste Mitte fest, erste Tangente um `off` daneben, die
+/// zweite Mitte frei und die zweite Tangente exakt.
+fn tangent_chain(off: f64) -> (Sketch, [PointId; 3]) {
+    let mut s = sketch();
+    let a = s.add_point(0.0, 0.0).unwrap();
+    let b = s.add_point(10.0, 0.0).unwrap();
+    let m1 = s.add_point(10.0 + off, 5.0).unwrap();
+    let c = s.add_point(15.0 + off, 5.0).unwrap();
+    let m2 = s.add_point(18.0 + off, 5.0).unwrap();
+    let e = s.add_point(18.0 + off, 8.0).unwrap();
+    let line = s.add_line(a, b).unwrap();
+    let first = s.add_arc(m1, b, c).unwrap();
+    let second = s.add_arc(m2, e, c).unwrap();
+    s.add_constraint(K::Fixed(a, 0.0, 0.0)).unwrap();
+    s.add_constraint(K::Fixed(b, 10.0, 0.0)).unwrap();
+    s.add_constraint(K::Fixed(m1, 10.0 + off, 5.0)).unwrap();
+    s.add_constraint(K::Tangent(line, first)).unwrap();
+    s.add_constraint(K::Tangent(first, second)).unwrap();
+    (s, [c, m2, e])
+}
+
+#[test]
+fn free_geometry_in_a_tangent_chain_stays_draggable_beside_a_drifted_tangent() {
+    let targets = [(13.0, 9.0), (20.0, 5.0), (18.0, 9.0)];
+    for off in [0.0, 1e-4] {
+        let (mut s, points) = tangent_chain(off);
+        assert_eq!(s.solve().status, SolveStatus::Solved, "{off}");
+        for (p, t) in points.into_iter().zip(targets) {
+            let mut moved = s.clone();
+            let d = moved
+                .drag(&[planora_sketch::solver::Drag {
+                    point: p,
+                    target: DVec2::new(t.0, t.1),
+                }])
+                .unwrap();
+            assert_eq!(d.status, SolveStatus::Solved, "{off} {t:?}: {d:?}");
+            // Die exakte Tangente bleibt exakt: beide Mitten auf einer Geraden durch den Punkt.
+            let (c, m2) = (xy(&moved, points[0]), xy(&moved, points[1]));
+            let m1 = DVec2::new(10.0 + off, 5.0);
+            let cross = (m1 - c).perp_dot(m2 - c) / (m1 - c).length();
+            assert!(cross.abs() < 1e-6, "{off} {t:?}: {cross}");
+        }
+    }
+}
+
+#[test]
+fn a_dimension_can_still_change_a_tangent_chain_beside_a_drifted_tangent() {
+    for off in [0.0, 1e-4] {
+        let mut s = sketch();
+        let a = s.add_point(0.0, 0.0).unwrap();
+        let b = s.add_point(10.0, 0.0).unwrap();
+        let m = s.add_point(10.0 + off, 5.0).unwrap();
+        let c = s.add_point(15.0 + off, 5.0).unwrap();
+        let d = s.add_point(15.0 + off, 15.0).unwrap();
+        let line = s.add_line(a, b).unwrap();
+        let arc = s.add_arc(m, b, c).unwrap();
+        let next = s.add_line(c, d).unwrap();
+        s.add_constraint(K::Fixed(a, 0.0, 0.0)).unwrap();
+        s.add_constraint(K::Fixed(b, 10.0, 0.0)).unwrap();
+        s.add_constraint(K::Fixed(m, 10.0 + off, 5.0)).unwrap();
+        s.add_constraint(K::Tangent(line, arc)).unwrap();
+        s.add_constraint(K::Tangent(arc, next)).unwrap();
+        let angle = s
+            .add_constraint(K::Angle(line, next, 90f64.to_radians()))
+            .unwrap();
+        assert_eq!(s.solve().status, SolveStatus::Solved, "{off}");
+        s.set_constraint_value(angle, 60f64.to_radians()).unwrap();
+        let r = s.solve();
+        assert_eq!(r.status, SolveStatus::Solved, "{off}: {r:?}");
+        // Die Linie steht unter 60°, ihr Anfang liegt also 30° um die Mitte weiter.
+        let radial = xy(&s, c) - DVec2::new(10.0 + off, 5.0);
+        assert!(
+            (radial.y.atan2(radial.x).abs() - 30f64.to_radians()).abs() < 1e-3,
+            "{off}: {radial:?}"
+        );
+    }
+}
+
+#[test]
+fn a_new_constraint_against_an_exact_tangent_at_a_shared_end_is_a_conflict() {
+    for (radius, off) in [(5.0, 0.004), (1000.0, 0.9)] {
+        let mut s = sketch();
+        let a = s.add_point(0.0, 0.0).unwrap();
+        let b = s.add_point(10.0, 0.0).unwrap();
+        let m = s.add_point(10.0, radius).unwrap();
+        let other = s.add_point(10.0 + radius, radius).unwrap();
+        let line = s.add_line(a, b).unwrap();
+        let arc = s.add_arc(m, b, other).unwrap();
+        s.add_constraint(K::Fixed(a, 0.0, 0.0)).unwrap();
+        s.add_constraint(K::Fixed(b, 10.0, 0.0)).unwrap();
+        s.add_constraint(K::Tangent(line, arc)).unwrap();
+        assert_eq!(s.solve().status, SolveStatus::Solved);
+        s.add_constraint(K::Fixed(m, 10.0 + off, radius)).unwrap();
+        let r = s.solve();
+        assert_eq!(r.status, SolveStatus::Conflicting, "{radius}: {r:?}");
+        assert_eq!(xy(&s, m), DVec2::new(10.0, radius), "nichts bewegt");
+    }
+}
+
+#[test]
+fn a_drifted_tangent_does_not_hide_a_real_conflict_elsewhere() {
+    let (mut s, m, _) = fixed_tangent_off_by(1e-4);
+    let q = s.add_point(10.0, 12.0).unwrap();
+    let b = s.add_point(10.0, 0.0).unwrap();
+    s.add_constraint(K::Fixed(b, 10.0, 0.0)).unwrap();
+    s.add_constraint(K::Distance(m, q, 7.0)).unwrap();
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+    s.add_constraint(K::Distance(q, b, 1.0)).unwrap();
+    assert_ne!(s.solve().status, SolveStatus::Solved);
+}
+
+/// Eine Änderung an der Linie (Regel 7) behält eine alte, im Rahmen abweichende Tangente, eine
+/// wirklich falsche fällt weg.
+#[test]
+fn an_edit_keeps_an_old_drifted_tangent_and_drops_a_wrong_one() {
+    for (off, kept) in [(1e-4, true), (0.5, false)] {
+        let mut s = sketch();
+        let a = s.add_point(0.0, 0.0).unwrap();
+        let b = s.add_point(10.0, 0.0).unwrap();
+        let m = s.add_point(10.0 + off, 5.0).unwrap();
+        let other = s.add_point(15.0 + off, 5.0).unwrap();
+        let line = s.add_line(a, b).unwrap();
+        let arc = s.add_arc(m, b, other).unwrap();
+        let p = s.add_point(-5.0, -5.0).unwrap();
+        let q = s.add_point(-5.0, 5.0).unwrap();
+        s.add_line(p, q).unwrap();
+        s.add_constraint(K::Horizontal(LineOrPoints::Line(line)))
+            .unwrap();
+        s.add_constraint(K::Fixed(b, 10.0, 0.0)).unwrap();
+        s.add_constraint(K::Fixed(m, 10.0 + off, 5.0)).unwrap();
+        let tangent = s.add_constraint(K::Tangent(line, arc)).unwrap();
+        s.solve();
+        // Dehnen: Das freie Ende der Linie läuft bis zur Senkrechten bei x = -5.
+        assert!(s.extend(line, DVec2::new(1.0, 0.0)).unwrap());
+        assert!((xy(&s, a).x + 5.0).abs() < 1e-6, "{:?}", xy(&s, a));
+        assert_eq!(s.constraint(tangent).is_some(), kept, "{off}");
+    }
+}
+
 #[test]
 fn an_arc_end_is_pulled_onto_the_circle_through_its_start() {
     let mut s = sketch();
