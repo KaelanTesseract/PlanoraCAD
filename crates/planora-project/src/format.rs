@@ -850,12 +850,24 @@ pub enum KindDto {
     },
     Extrusion {
         skizze: u64,
-        profil: usize,
+        /// Alte Profilnummer (bisherige Extraktion); genau eins von `profil` und `profile`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profil: Option<usize>,
+        /// Profil-Verweise (ab Format 13, Teilprojekt Skizzen 1), nur wenn sie sich nicht als
+        /// alte Profilnummer schreiben lassen.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<Vec<ProfilVerweisDto>>,
         hoehe: f64,
     },
     Rotation {
         skizze: u64,
-        profil: usize,
+        /// Alte Profilnummer (bisherige Extraktion); genau eins von `profil` und `profile`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profil: Option<usize>,
+        /// Profil-Verweise (ab Format 13, Teilprojekt Skizzen 1), nur wenn sie sich nicht als
+        /// alte Profilnummer schreiben lassen.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<Vec<ProfilVerweisDto>>,
         achse: usize,
     },
     Boolesch {
@@ -886,3 +898,15 @@ pub enum KindDto {
         form: u64,
     },
 }
+
+/// Ein Profil-Verweis: Stücke des äußeren Rands in Umlaufreihenfolge, danach die Stücke aller
+/// Löcher (siehe `planora_sketch::ProfileRef`).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ProfilVerweisDto {
+    pub aussen: Vec<StueckDto>,
+    pub loecher: Vec<StueckDto>,
+}
+
+/// Ein Stück eines Profilrands als Tupel: Kurven-Index, normierter Parameterbereich `u0`, `u1`,
+/// liegt die Fläche links der Kurvenrichtung, Länge in mm.
+pub type StueckDto = (usize, f64, f64, bool, f64);

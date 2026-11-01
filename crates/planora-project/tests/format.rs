@@ -213,10 +213,10 @@ fn errors_name_the_feature() {
     assert!(e.contains("Quader 1"), "{e}");
 }
 
-/// Profil-Verweise (Skizzen 1, Task 6): bis zum neuen Feld als alte Profilnummer geschrieben,
-/// wenn sie genau ein altes Profil ergeben; sonst klare Meldung statt eines falschen Profils.
+/// Profil-Verweise (Skizzen 1, Task 6/7): als alte Profilnummer geschrieben, wenn sie dieselben
+/// Flächen wählen wie ein altes Profil; sonst als Verweise in Format 13.
 #[test]
-fn profile_refs_are_written_as_the_old_number_or_rejected() {
+fn profile_refs_are_written_as_the_old_number_or_as_references() {
     let doc_with = |sk: planora_sketch::Sketch, sel: fn(&planora_sketch::Sketch) -> ProfileSel| {
         let profiles = sel(&sk);
         let mut d = Document::new();
@@ -250,15 +250,18 @@ fn profile_refs_are_written_as_the_old_number_or_rejected() {
     sk.add_rectangle(DVec2::ZERO, DVec2::new(8.0, 6.0)).unwrap();
     let d = doc_with(sk, |sk| ProfileSel::Refs(sk.profiles().refs));
     let text = encode_version(&d.snapshot()).unwrap();
+    assert!(text.contains("\"profil\": 0"), "{text}");
     let back = Document::from_snapshot(decode_version(&text, "test").unwrap(), 0.05).unwrap();
+    // beim Laden wieder Verweise (Übergang der alten Nummer)
     assert!(matches!(
         back.features()[1].kind,
         FeatureKind::Extrude {
-            profiles: ProfileSel::Index(0),
+            profiles: ProfileSel::Refs(_),
             ..
         }
     ));
     assert_eq!(back.features()[1].status, FeatureStatus::Ok);
+    assert_eq!(encode_version(&back.snapshot()).unwrap(), text);
 
     // Ein Dreieck des Rechtecks mit Diagonale gab es als altes Profil nicht
     let mut sk = new_sketch();
@@ -268,9 +271,9 @@ fn profile_refs_are_written_as_the_old_number_or_rejected() {
         ProfileSel::Refs(vec![sk.profiles().refs[0].clone()])
     });
     assert_eq!(d.features()[1].status, FeatureStatus::Ok);
-    let err = encode_version(&d.snapshot()).unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        planora_i18n::tr!("proj-profile-refs-unwritable")
-    );
+    let text = encode_version(&d.snapshot()).unwrap();
+    assert!(text.contains("\"format\": 13"), "{text}");
+    let back = Document::from_snapshot(decode_version(&text, "test").unwrap(), 0.05).unwrap();
+    assert_eq!(back.features()[1].kind, d.features()[1].kind);
+    assert_eq!(back.features()[1].status, FeatureStatus::Ok);
 }

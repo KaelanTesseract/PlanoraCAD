@@ -547,3 +547,49 @@ fn an_open_line_across_an_old_profile_gives_two_faces_and_the_same_body() {
     assert_eq!(s.legacy_index_of(&refs), Some(0));
     assert_eq!(s.legacy_index_of(&refs[..1]), None);
 }
+
+/// Verweise aus der berechneten Skizze weichen nach Formeln oder erneutem Lösen in den letzten
+/// Stellen ab: `legacy_index_of` vergleicht die gewählten Flächen, nicht die Zahlen.
+#[test]
+fn legacy_index_of_compares_the_selected_faces() {
+    let s = crossed_rectangle();
+    let refs = s.migrate_profile_index(0).unwrap();
+    let mut nudged = refs.clone();
+    for r in &mut nudged {
+        for p in r.outer.iter_mut().chain(&mut r.holes) {
+            p.u0 += 1e-12;
+            p.u1 -= 1e-12;
+            p.len *= 1.0 + 1e-12;
+        }
+    }
+    assert_ne!(nudged, refs);
+    assert_eq!(s.legacy_index_of(&nudged), Some(0));
+    // Reihenfolge egal, ein Teil oder doppelte Flächen nicht
+    let reversed: Vec<_> = refs.iter().rev().cloned().collect();
+    assert_eq!(s.legacy_index_of(&reversed), Some(0));
+    assert_eq!(s.legacy_index_of(&nudged[..1]), None);
+    let twice = vec![refs[0].clone(), refs[0].clone(), refs[1].clone()];
+    assert_eq!(s.legacy_index_of(&twice), None);
+    assert_eq!(s.legacy_index_of(&[]), None);
+}
+
+/// Einmal berechnet, für viele Features derselben Skizze: dasselbe Ergebnis wie die
+/// Einzelaufrufe.
+#[test]
+fn the_migration_of_a_sketch_matches_the_single_calls() {
+    for (name, s, _) in scenarios() {
+        let m = s.legacy_migration();
+        let legacy = s.legacy_profiles().profiles.len();
+        for n in 0..=legacy {
+            let one = s.migrate_profile_index(n);
+            assert_eq!(m.migrate(n), one.as_deref(), "{name}: Profil {n}");
+            let resolves = one
+                .as_ref()
+                .is_some_and(|r| s.profiles().resolve(r).is_ok());
+            assert_eq!(m.resolvable(n).is_some(), resolves, "{name}: Profil {n}");
+            if let Some(refs) = one {
+                assert_eq!(m.legacy_index_of(&refs), Some(n), "{name}: Profil {n}");
+            }
+        }
+    }
+}

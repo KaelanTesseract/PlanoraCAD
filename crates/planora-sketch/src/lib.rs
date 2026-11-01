@@ -28,5 +28,6 @@ pub use error::SketchError;
 pub use helpers::{RectIds, plane_of_face};
 pub use model::{CurveData, CurveId, CurveKind, PointData, PointId, Sketch};
 pub use profile::{ExtractedProfiles, PieceRef, ProfileRef, RejectedLoop};
+pub use profile_ref::LegacyMigration;
 pub use solid::{extrude_profile, revolve_profile};
 pub use solver::{Drag, SolveReport, SolveStatus};

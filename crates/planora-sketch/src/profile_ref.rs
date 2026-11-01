@@ -480,6 +480,48 @@ fn net_area(outline: &[Vec<DVec2>]) -> f64 {
     loops.next().unwrap_or(0.0) - loops.sum::<f64>()
 }
 
+/// Übergang alter Profilnummern einer Skizze ([`Sketch::legacy_migration`]): alte und heutige
+/// Profile einmal berechnet, damit viele Features derselben Skizze (Laden und Speichern einer
+/// Datei) die Profile nicht je Aufruf neu bestimmen.
+#[derive(Clone, Debug)]
+pub struct LegacyMigration {
+    /// Heutige Profile der Skizze.
+    now: ExtractedProfiles,
+    /// Umrechnung jedes alten Profils ([`Sketch::migrate_profile_index`]).
+    migrated: Vec<Option<Vec<ProfileRef>>>,
+    /// Gewählte heutige Flächen jedes alten Profils (sortiert); `None`, wenn die Umrechnung
+    /// fehlt oder sich nicht auflösen lässt.
+    faces: Vec<Option<Vec<usize>>>,
+}
+
+impl LegacyMigration {
+    /// Verweise auf die heutigen Flächen des alten Profils `n` (wie
+    /// [`Sketch::migrate_profile_index`]).
+    pub fn migrate(&self, n: usize) -> Option<&[ProfileRef]> {
+        self.migrated.get(n)?.as_deref()
+    }
+
+    /// Umrechnung des alten Profils `n`, wenn sie sich heute auch auflösen lässt
+    /// ([`ExtractedProfiles::resolve`]); sonst `None` (dann gilt beim Berechnen das alte Profil
+    /// selbst).
+    pub fn resolvable(&self, n: usize) -> Option<&[ProfileRef]> {
+        self.faces.get(n)?.as_ref()?;
+        self.migrate(n)
+    }
+
+    /// Alte Profilnummer `n`, deren Umrechnung heute dieselben Flächen wählt wie `refs`
+    /// (Reihenfolge egal; beide müssen sich auflösen lassen). Verglichen werden die Flächen,
+    /// nicht die Zahlen der Verweise: Verweise aus der berechneten Skizze weichen nach Formeln
+    /// oder erneutem Lösen in den letzten Stellen ab. Bei mehreren passenden die kleinste.
+    pub fn legacy_index_of(&self, refs: &[ProfileRef]) -> Option<usize> {
+        let mut sel = self.now.resolve(refs).ok()?;
+        sel.sort_unstable();
+        self.faces
+            .iter()
+            .position(|f| f.as_deref() == Some(sel.as_slice()))
+    }
+}
+
 impl Sketch {
     /// Verweise auf die heutigen Flächen, die das alte Profil `n` (bisherige Extraktion,
     /// [`Sketch::legacy_profiles`]) bedeckt: alle Flächen, deren Innenpunkt in seiner äußeren
@@ -490,16 +532,30 @@ impl Sketch {
         migrate(self, &self.legacy_profiles(), &self.profiles(), n)
     }
 
-    /// Alte Profilnummer `n`, deren Umrechnung ([`Sketch::migrate_profile_index`]) genau die
-    /// Verweise `refs` ergibt (Reihenfolge egal); `None`, wenn es keine gibt.
+    /// Alte Profilnummer, deren Umrechnung heute dieselben Flächen wählt wie `refs`, siehe
+    /// [`LegacyMigration::legacy_index_of`]; für viele Aufrufe [`Sketch::legacy_migration`].
     pub fn legacy_index_of(&self, refs: &[ProfileRef]) -> Option<usize> {
+        self.legacy_migration().legacy_index_of(refs)
+    }
+
+    /// Übergang aller alten Profilnummern der Skizze, einmal berechnet.
+    pub fn legacy_migration(&self) -> LegacyMigration {
         let (legacy, now) = (self.legacy_profiles(), self.profiles());
-        (0..legacy.profiles.len()).find(|&n| {
-            migrate(self, &legacy, &now, n).is_some_and(|m| {
-                m.len() == refs.len()
-                    && m.iter().all(|x| refs.contains(x))
-                    && refs.iter().all(|x| m.contains(x))
+        let migrated: Vec<Option<Vec<ProfileRef>>> = (0..legacy.profiles.len())
+            .map(|n| migrate(self, &legacy, &now, n))
+            .collect();
+        let faces = migrated
+            .iter()
+            .map(|m| {
+                let mut sel = now.resolve(m.as_deref()?).ok()?;
+                sel.sort_unstable();
+                Some(sel)
             })
-        })
+            .collect();
+        LegacyMigration {
+            now,
+            migrated,
+            faces,
+        }
     }
 }

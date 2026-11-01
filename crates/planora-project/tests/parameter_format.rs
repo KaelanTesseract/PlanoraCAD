@@ -398,7 +398,7 @@ fn old_files_unchanged() {
             n += 1;
         }
     }
-    assert_eq!(n, 11, "alle Golden-Dateien");
+    assert_eq!(n, 12, "alle Golden-Dateien");
 
     // Ein Schnitt-Dokument ohne Parameter: Format 8 wie bisher, ohne neue Felder.
     let text = encode_version(&section_document().snapshot()).unwrap();

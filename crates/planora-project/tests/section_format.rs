@@ -235,5 +235,5 @@ fn format_7_files_load_unchanged() {
         );
         n += 1;
     }
-    assert_eq!(n, 7, "alle sieben Fixturen");
+    assert_eq!(n, 8, "alle acht Fixturen");
 }

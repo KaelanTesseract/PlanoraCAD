@@ -1,0 +1,739 @@
+{
+  "format": 1,
+  "marker": 6,
+  "naechste_id": 7,
+  "features": [
+    {
+      "id": 1,
+      "name": "Skizze 1",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "skizze",
+        "skizze": {
+          "name": "Skizze 1",
+          "ebene": {
+            "ursprung": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "x": [
+              1.0,
+              0.0,
+              0.0
+            ],
+            "y": [
+              0.0,
+              1.0,
+              0.0
+            ],
+            "z": [
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          "linear": 1e-6,
+          "winkel": 1e-9,
+          "werte": [
+            0.0,
+            0.0,
+            20.0,
+            0.0,
+            20.0,
+            10.0,
+            0.0,
+            10.0,
+            -5.0,
+            4.0,
+            25.0,
+            6.0
+          ],
+          "punkte": [
+            {
+              "x": 0,
+              "y": 1,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 2,
+              "y": 3,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 4,
+              "y": 5,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 6,
+              "y": 7,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 8,
+              "y": 9,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 10,
+              "y": 11,
+              "konstruktion": false,
+              "aktiv": true
+            }
+          ],
+          "kurven": [
+            {
+              "art": {
+                "typ": "linie",
+                "a": 0,
+                "b": 1
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "linie",
+                "a": 1,
+                "b": 2
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "linie",
+                "a": 2,
+                "b": 3
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "linie",
+                "a": 3,
+                "b": 0
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "linie",
+                "a": 4,
+                "b": 5
+              },
+              "konstruktion": false,
+              "aktiv": true
+            }
+          ],
+          "abhaengigkeiten": [
+            {
+              "art": {
+                "typ": "waagerecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 0
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "senkrecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 1
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "waagerecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 2
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "senkrecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 3
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            }
+          ]
+        },
+        "lage": {
+          "typ": "standard",
+          "ebene": "xy"
+        },
+        "kopien": []
+      }
+    },
+    {
+      "id": 2,
+      "name": "Extrusion 1",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "extrusion",
+        "skizze": 1,
+        "profil": 0,
+        "hoehe": 5.0
+      }
+    },
+    {
+      "id": 3,
+      "name": "Skizze 2",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "skizze",
+        "skizze": {
+          "name": "Skizze 2",
+          "ebene": {
+            "ursprung": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "x": [
+              1.0,
+              0.0,
+              0.0
+            ],
+            "y": [
+              0.0,
+              1.0,
+              0.0
+            ],
+            "z": [
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          "linear": 1e-6,
+          "winkel": 1e-9,
+          "werte": [
+            40.0,
+            0.0,
+            50.0,
+            0.0,
+            50.0,
+            10.0,
+            40.0,
+            10.0,
+            60.0,
+            0.0,
+            80.0,
+            0.0,
+            80.0,
+            10.0,
+            60.0,
+            10.0,
+            70.0,
+            5.0,
+            3.0
+          ],
+          "punkte": [
+            {
+              "x": 0,
+              "y": 1,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 2,
+              "y": 3,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 4,
+              "y": 5,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 6,
+              "y": 7,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 8,
+              "y": 9,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 10,
+              "y": 11,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 12,
+              "y": 13,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 14,
+              "y": 15,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 16,
+              "y": 17,
+              "konstruktion": false,
+              "aktiv": true
+            }
+          ],
+          "kurven": [
+            {
+              "art": {
+                "typ": "linie",
+                "a": 0,
+                "b": 1
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "linie",
+                "a": 1,
+                "b": 2
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "linie",
+                "a": 2,
+                "b": 3
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "linie",
+                "a": 3,
+                "b": 0
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "linie",
+                "a": 4,
+                "b": 5
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "linie",
+                "a": 5,
+                "b": 6
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "linie",
+                "a": 6,
+                "b": 7
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "linie",
+                "a": 7,
+                "b": 4
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "kreis",
+                "mitte": 8,
+                "radius": 18
+              },
+              "konstruktion": false,
+              "aktiv": true
+            }
+          ],
+          "abhaengigkeiten": [
+            {
+              "art": {
+                "typ": "waagerecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 0
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "senkrecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 1
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "waagerecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 2
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "senkrecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 3
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "waagerecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 4
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "senkrecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 5
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "waagerecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 6
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "senkrecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 7
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            }
+          ]
+        },
+        "lage": {
+          "typ": "standard",
+          "ebene": "xy"
+        },
+        "kopien": []
+      }
+    },
+    {
+      "id": 4,
+      "name": "Extrusion 2",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "extrusion",
+        "skizze": 3,
+        "profil": 1,
+        "hoehe": 3.0
+      }
+    },
+    {
+      "id": 5,
+      "name": "Skizze 3",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "skizze",
+        "skizze": {
+          "name": "Skizze 3",
+          "ebene": {
+            "ursprung": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "x": [
+              1.0,
+              0.0,
+              0.0
+            ],
+            "y": [
+              0.0,
+              0.0,
+              1.0
+            ],
+            "z": [
+              -0.0,
+              -1.0,
+              -0.0
+            ]
+          },
+          "linear": 1e-6,
+          "winkel": 1e-9,
+          "werte": [
+            0.0,
+            0.0,
+            5.0,
+            0.0,
+            5.0,
+            8.0,
+            0.0,
+            8.0
+          ],
+          "punkte": [
+            {
+              "x": 0,
+              "y": 1,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 2,
+              "y": 3,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 4,
+              "y": 5,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 6,
+              "y": 7,
+              "konstruktion": false,
+              "aktiv": true
+            }
+          ],
+          "kurven": [
+            {
+              "art": {
+                "typ": "linie",
+                "a": 0,
+                "b": 1
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "linie",
+                "a": 1,
+                "b": 2
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "linie",
+                "a": 2,
+                "b": 3
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "linie",
+                "a": 3,
+                "b": 0
+              },
+              "konstruktion": false,
+              "aktiv": true
+            }
+          ],
+          "abhaengigkeiten": [
+            {
+              "art": {
+                "typ": "waagerecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 0
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "senkrecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 1
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "waagerecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 2
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "senkrecht",
+                "ziel": {
+                  "typ": "linie",
+                  "kurve": 3
+                }
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            }
+          ]
+        },
+        "lage": {
+          "typ": "standard",
+          "ebene": "xz"
+        },
+        "kopien": []
+      }
+    },
+    {
+      "id": 6,
+      "name": "Rotation 1",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "rotation",
+        "skizze": 5,
+        "profil": 0,
+        "achse": 3
+      }
+    }
+  ]
+}

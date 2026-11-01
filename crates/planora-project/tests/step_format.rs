@@ -578,7 +578,7 @@ fn old_files_unchanged() {
             n += 1;
         }
     }
-    assert_eq!(n, 11, "alle Golden-Dateien");
+    assert_eq!(n, 12, "alle Golden-Dateien");
 
     // Ein Dokument ohne STEP-Körper, aber mit Parametern: Format 9 ohne neue Felder.
     let mut d = Document::new();
