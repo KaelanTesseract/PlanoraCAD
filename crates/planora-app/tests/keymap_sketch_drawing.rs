@@ -300,20 +300,25 @@ fn sketch_keys_select_the_tools() {
         rig.click(rig.strip("Auswahl"));
     }
 
-    // Wie ein Klick auf den schon gewählten Knopf: ein laufender Linienzug bleibt.
+    // Fusion-Verhalten, Skizzen 2: Bei laufendem Linienzug gehören die Tasten dem Feld am Zeiger,
+    // der Linienzug und das Werkzeug bleiben. Erst nach Esc wählt die Taste wieder ein Werkzeug.
     rig.press(Key::L, NONE);
     rig.sketch_click(0.0, 0.0);
     assert_eq!(rig.st().sketch_session.as_ref().unwrap().pending.len(), 1);
     rig.press(Key::L, NONE);
     assert_eq!(rig.st().sketch_session.as_ref().unwrap().pending.len(), 1);
-    // Fusion-Verhalten, Skizzen 2: Bei laufendem Linienzug gehört die Taste dem Feld am Zeiger, das
-    // Werkzeug bleibt. Erst nach Esc wählt sie wieder ein Werkzeug.
     rig.press(Key::C, NONE);
     assert_eq!(rig.st().sketch_session.as_ref().unwrap().pending.len(), 1);
     assert_eq!(rig.tool(), Tool::Line);
     rig.press(Key::Escape, NONE);
     rig.settle();
     rig.press(Key::C, NONE);
+    assert_eq!(rig.tool(), Tool::Circle);
+    // Der Knopf eines anderen Werkzeugs bricht einen laufenden Linienzug weiterhin ab.
+    rig.press(Key::L, NONE);
+    rig.sketch_click(0.0, 0.0);
+    assert_eq!(rig.st().sketch_session.as_ref().unwrap().pending.len(), 1);
+    rig.click(rig.strip("Kreis"));
     assert_eq!(rig.tool(), Tool::Circle);
     assert!(rig.st().sketch_session.as_ref().unwrap().pending.is_empty());
 

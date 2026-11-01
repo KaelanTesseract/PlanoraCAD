@@ -9,7 +9,7 @@ use crate::sketch_state::SketchSession;
 use crate::sketch_view::{format_number, pointer_radius};
 use crate::state::AppState;
 use crate::{theme, viewport};
-use egui::{Event, Key, Modifiers, Order, Pos2, Rect, pos2};
+use egui::{Event, ImeEvent, Key, Modifiers, Order, Pos2, Rect, pos2};
 use planora_feature::SketchFeature;
 
 /// Abstand des ersten Felds vom Zeiger, je Richtung.
@@ -76,13 +76,24 @@ fn may_take_keyboard(ctx: &egui::Context, appeared: bool) -> bool {
         || (appeared && !viewport::keyboard_taken(ctx))
 }
 
+/// Bringt das Ereignis Text ins Feld? Das erste ersetzt den Vorschlag. Eine Eingabehilfe (IME)
+/// liefert statt `Text` ihre Vorschau und das Ergebnis.
+fn starts_typing(event: &Event) -> bool {
+    match event {
+        Event::Text(_) | Event::Paste(_) => true,
+        Event::Ime(ImeEvent::Preedit { text, .. } | ImeEvent::Commit(text)) => !text.is_empty(),
+        _ => false,
+    }
+}
+
 /// Zeigt die Felder der aktuellen Stufe und verarbeitet ihre Eingaben. Der Zeiger `pointer` setzt
-/// die Lage; ohne ihn bleiben die Felder, wo sie zuletzt standen.
-pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option<Pos2>) {
+/// die Lage; ohne ihn bleiben die Felder, wo sie zuletzt standen. `true`: Sperren oder Stufe haben
+/// sich geändert, der aufgelöste Zeiger dieses Bilds ist überholt.
+pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option<Pos2>) -> bool {
     let ctx = ui.ctx().clone();
     let radius = pointer.map_or(0.0, |p| pointer_radius(state, rect, p));
     let Some((se, sk)) = state.session_sketch_mut() else {
-        return;
+        return false;
     };
     se.sync_input(sk);
     if se.input.fields.is_empty() {
@@ -94,14 +105,18 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option
                 }
             });
         }
-        return;
+        return false;
     }
     let scope = state.document.param_scope();
     let Some((se, sf)) = state.session_draft_mut() else {
-        return;
+        return false;
     };
 
     if viewport::draw_field_has_keyboard(&ctx) {
+        // Im Bild nach einer Fokusanforderung gilt die Fokussperre noch nicht: egui hat aus Tab oder
+        // einer Pfeiltaste dann schon eine Richtung gemacht und gäbe den Fokus an das nächste
+        // Bedienelement weiter (`consume_key` macht das nicht mehr rückgängig).
+        ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
         let back = ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::Tab));
         if back || ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Tab)) {
             se.next_field(back);
@@ -126,7 +141,7 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option
     ctx.data_mut(|d| d.insert_temp(frame_key, frame));
 
     let rows = se.input.fields.len();
-    let (mut enter, mut esc) = (false, false);
+    let (mut enter, mut esc, mut typed) = (false, false, false);
     for i in 0..rows {
         let (kind, touched) = (se.input.fields[i].kind, se.input.fields[i].touched);
         let error = se.input.fields[i].error.clone();
@@ -139,10 +154,7 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option
         // Das erste Zeichen ersetzt den Vorschlag, die Rücktaste davor leert das Feld.
         let (replace, wipe) = ctx.input(|input| {
             (
-                input
-                    .events
-                    .iter()
-                    .any(|e| matches!(e, Event::Text(_) | Event::Paste(_))),
+                input.events.iter().any(starts_typing),
                 input.key_pressed(Key::Backspace) || input.key_pressed(Key::Delete),
             )
         });
@@ -190,6 +202,7 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option
         ctx.data_mut(|d| d.insert_temp(widget_id_key(kind), response.id));
         if response.changed() || wipe {
             se.type_field(i, &text, &scope);
+            typed = true;
         }
         if response.lost_focus() {
             enter |= ctx.input(|input| input.key_pressed(Key::Enter));
@@ -206,7 +219,7 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option
     }
     if esc {
         se.cancel(&mut sf.sketch);
-        return;
+        return true;
     }
     se.sync_input(&sf.sketch);
     // Nach dem Bearbeiten: Eingabe und ein Klick neben das Feld nehmen ihm den Fokus. Das nächste
@@ -219,4 +232,5 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option
     {
         ctx.memory_mut(|m| m.request_focus(id));
     }
+    typed || enter
 }

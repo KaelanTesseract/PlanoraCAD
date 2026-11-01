@@ -543,8 +543,9 @@ pub fn show_overlay(ui: &mut egui::Ui, rect: Rect, state: &mut AppState) -> bool
     state.camera.set_viewport(rect.width(), rect.height());
     handle_input(ui, &response, rect, state);
     let pointer = response.hover_pos().or(response.interact_pointer_pos());
-    crate::sketch_inline::show(ui, rect, state, pointer);
-    cursor_after_fields(rect, state, pointer);
+    if crate::sketch_inline::show(ui, rect, state, pointer) {
+        cursor_after_fields(rect, state, pointer);
+    }
     draw(ui, rect, state, response.hover_pos());
     response.hovered()
 }
@@ -565,8 +566,15 @@ pub(crate) fn pointer_radius(state: &AppState, rect: Rect, p: Pos2) -> f64 {
         .unwrap_or(0.0)
 }
 
-/// Aufgelöster Zeiger nach den Feldern: Was eben getippt wurde, gilt schon in der Vorschau dieses
-/// Bilds. Ohne Zeiger über der Skizze zählt mit einer Sperre die letzte Lage.
+/// Rohlage des aufgelösten Zeigers: `at`, ohne Zeiger über der Skizze mit einer Sperre die letzte
+/// Lage, damit die Vorschau die Sperre weiter zeigt.
+fn cursor_raw(se: &SketchSession, at: Option<DVec2>) -> Option<DVec2> {
+    let locked = se.input.fields.iter().any(|f| f.locked.is_some());
+    at.or(se.cursor.filter(|_| locked))
+}
+
+/// Aufgelöster Zeiger nach einer Änderung in den Feldern: Was eben getippt wurde, gilt schon in der
+/// Vorschau dieses Bilds.
 fn cursor_after_fields(rect: Rect, state: &mut AppState, pointer: Option<Pos2>) {
     let Some(map) = mapper(rect, state) else {
         return;
@@ -580,8 +588,7 @@ fn cursor_after_fields(rect: Rect, state: &mut AppState, pointer: Option<Pos2>) 
     if se.input.fields.is_empty() {
         return;
     }
-    let locked = se.input.fields.iter().any(|f| f.locked.is_some());
-    let raw = at.or(se.cursor.filter(|_| locked));
+    let raw = cursor_raw(se, at);
     se.update_cursor(sk, raw, radius);
 }
 
@@ -730,7 +737,8 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     let hover_at = response.hover_pos().and_then(|p| map.to_sketch(p));
     se.update_hover(&sf.sketch, hover_at, radius);
     // Aufgelöster Zeiger für Zeichen und Vorschau (nach den Änderungen dieses Bilds).
-    se.update_cursor(&sf.sketch, at, radius);
+    let raw = cursor_raw(se, at);
+    se.update_cursor(&sf.sketch, raw, radius);
     let tool = se.tool;
 
     // Körperkante kopieren: Kante in der 3D-Szene wählen.

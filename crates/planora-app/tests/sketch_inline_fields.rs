@@ -659,6 +659,107 @@ fn the_field_never_covers_the_pointer() {
     }
 }
 
+// ---- Fokus bleibt in den Feldern --------------------------------------------------------------
+
+/// Taste im Bild direkt nach einer Fokusanforderung (langsames Bild, gehaltene Taste): Dort gilt
+/// die Fokussperre noch nicht, egui würde den Fokus weiterreichen. Linie mit zwei Feldern, Kreis
+/// mit einem; gleich nach dem Erscheinen, nach einem Tab und nach Eingabe.
+#[test]
+fn tab_in_adjacent_frames_stays_in_the_fields() {
+    let tab = || vec![key(Key::Tab, NONE)];
+    for (tool, active_after_two) in [(Tool::Line, 0), (Tool::Circle, 0)] {
+        let mut rig = AppRig::new();
+        set_tool(rig.st(), tool);
+        let at = START + vec2(120.0, 70.0);
+        rig.frames(vec![vec![moved(START)], vec![button(START, true)]]);
+        // Im Bild des Loslassens erscheinen die Felder, das nächste hat schon Tab.
+        rig.frames(vec![
+            vec![button(START, false)],
+            tab(),
+            tab(),
+            vec![],
+            vec![],
+        ]);
+        assert!(
+            viewport::draw_field_has_keyboard(&rig.ctx),
+            "{tool:?}: Fokus nach Tab direkt beim Erscheinen"
+        );
+        assert_eq!(
+            rig.st().sketch_session.as_ref().unwrap().input.active,
+            active_after_two,
+            "{tool:?}"
+        );
+        // Danach noch einmal, mit Umschalt zurück; das Getippte landet im aktiven Feld.
+        rig.frames(vec![
+            tab(),
+            vec![key(Key::Tab, Modifiers::SHIFT)],
+            vec![],
+            vec![],
+        ]);
+        assert!(
+            viewport::draw_field_has_keyboard(&rig.ctx),
+            "{tool:?}: Fokus nach Tab und Umschalt+Tab"
+        );
+        rig.frames(vec![vec![moved(at)], vec![text("7")], vec![], vec![]]);
+        let se = rig.st().sketch_session.as_ref().unwrap();
+        assert_eq!(se.input.active, 0, "{tool:?}");
+        assert_eq!(se.input.fields[0].text, "7", "{tool:?}");
+    }
+}
+
+/// Dasselbe direkt nach Eingabe, auch mit Pfeiltaste: Der Fokus springt nicht zu einem Knopf.
+#[test]
+fn keys_right_after_enter_stay_in_the_fields() {
+    for k in [Key::Tab, Key::ArrowLeft, Key::ArrowDown] {
+        let mut rig = AppRig::new();
+        set_tool(rig.st(), Tool::Line);
+        rig.click(START);
+        rig.frames(vec![vec![moved(START + vec2(200.0, -130.0))], vec![]]);
+        rig.frames(vec![
+            vec![key(Key::Enter, NONE)],
+            vec![key(k, NONE)],
+            vec![],
+            vec![],
+        ]);
+        assert_eq!(rig.line_count(), 1, "{k:?}");
+        assert!(viewport::draw_field_has_keyboard(&rig.ctx), "{k:?}");
+    }
+}
+
+#[test]
+fn a_click_with_invalid_text_is_refused_like_enter() {
+    let mut o = line_started();
+    o.type_text("zzz");
+    o.click(START + vec2(300.0, -210.0));
+    assert!(lines(o.sk()).is_empty(), "abgelehnt");
+    assert_eq!(o.se().pending.len(), 1);
+    assert_eq!(o.se().input.fields[0].text, "zzz", "Text bleibt");
+    assert!(o.se().message.is_some(), "Meldung");
+    assert!(viewport::draw_field_has_keyboard(&o.ctx));
+}
+
+/// Eine Eingabehilfe (IME) liefert kein `Text`; auch ihr erstes Zeichen ersetzt den Vorschlag.
+#[test]
+fn an_ime_commit_replaces_the_suggestion() {
+    let mut o = line_started();
+    assert!(!o.se().input.fields[0].touched);
+    o.frame(vec![Event::Ime(egui::ImeEvent::Commit("8".to_string()))]);
+    let f = &o.se().input.fields[0];
+    assert_eq!(f.text, "8");
+    assert_eq!(f.locked, Some(8.0));
+}
+
+/// Ohne Zeiger über der Skizze zeigt die Vorschau die Sperre weiter (letzte Zeigerlage).
+#[test]
+fn a_lock_keeps_the_preview_without_a_pointer() {
+    let mut o = line_started();
+    o.type_text("25");
+    o.frames(vec![vec![Event::PointerGone], vec![], vec![]]);
+    assert!((o.preview_length() - 25.0).abs() < 1e-9);
+    o.type_text("0");
+    assert!((o.preview_length() - 250.0).abs() < 1e-9);
+}
+
 // ---- Rückgängig ------------------------------------------------------------------------------
 
 #[test]
