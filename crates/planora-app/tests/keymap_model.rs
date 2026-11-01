@@ -237,7 +237,6 @@ fn bottom_button(ctx: &egui::Context, label: &str) -> Rect {
         .1
 }
 
-/// Eine Skizze mit Rechteck (geschlossenes Profil), im Baum gewählt.
 /// Das Fenster „Skizze extrudieren“ zur Skizze aus [`sketch_ws`]: Ihr einziges Profil (das
 /// Rechteck) ist vorgewählt.
 fn extrude_dialog(sk: FeatureId) -> CreateDialog {
@@ -248,6 +247,7 @@ fn extrude_dialog(sk: FeatureId) -> CreateDialog {
     }
 }
 
+/// Eine Skizze mit Rechteck (geschlossenes Profil), im Baum gewählt.
 fn sketch_ws() -> (Workspace, FeatureId) {
     let mut w = ws();
     let s = &mut w.active_tab_mut().state;

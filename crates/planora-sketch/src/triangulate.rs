@@ -82,6 +82,18 @@ fn crosses(p1: DVec2, p2: DVec2, q1: DVec2, q2: DVec2, eps: f64) -> bool {
         && ((d3 > eps && d4 < -eps) || (d3 < -eps && d4 > eps))
 }
 
+/// Liegt `v` auf der Strecke `p m` zwischen den Enden (nicht an einem Ende)?
+fn passes_through(p: DVec2, m: DVec2, v: DVec2, eps: f64) -> bool {
+    let d = m - p;
+    let len2 = d.length_squared();
+    if v.distance_squared(p) <= eps || v.distance_squared(m) <= eps || len2 <= eps {
+        return false;
+    }
+    let t = (v - p).dot(d) / len2;
+    // Abstand zur Geraden höchstens 1e-9 der Brückenlänge
+    orient(p, m, v).abs() <= 1e-9 * len2 && t > 0.0 && t < 1.0
+}
+
 /// Liegt `m` vom Punkt `v` (Vorgänger `a`, Nachfolger `c`, gegen den Uhrzeigersinn) aus im
 /// Inneren der Ecke?
 fn in_cone(a: DVec2, v: DVec2, c: DVec2, m: DVec2) -> bool {
@@ -116,10 +128,19 @@ fn bridge(poly: &mut Vec<DVec2>, hole: &[DVec2], others: &[Vec<DVec2>], eps: f64
     for o in others {
         edges.extend(edges_of(o));
     }
+    let h = hole.len();
+    let (hole_prev, hole_next) = (hole[(mi + h - 1) % h], hole[(mi + 1) % h]);
+    let vertices = || poly.iter().chain(hole).chain(others.iter().flatten());
+    // Die Brücke `p → m` muss an beiden Enden in die Fläche zeigen (an `m` aus dem Loch heraus;
+    // das Loch läuft im Uhrzeigersinn, die Fläche liegt also wie beim äußeren Rand links), darf
+    // keinen Rand kreuzen und durch keinen anderen Punkt laufen (dort könnte sie unbemerkt in ein
+    // Loch oder aus der Fläche treten).
     let visible = |pi: usize| {
         let p = poly[pi];
         in_cone(poly[(pi + n - 1) % n], p, poly[(pi + 1) % n], m)
+            && in_cone(hole_prev, m, hole_next, p)
             && !edges.iter().any(|&(a, b)| crosses(p, m, a, b, eps))
+            && !vertices().any(|&v| passes_through(p, m, v, eps))
     };
     let pi = order
         .iter()

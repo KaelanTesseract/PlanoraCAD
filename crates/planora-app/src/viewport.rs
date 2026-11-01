@@ -523,7 +523,6 @@ pub fn typing(ctx: &egui::Context) -> bool {
             .unwrap_or(false)
 }
 
-/// 3D-Ansicht im ganzen verfügbaren Bereich ohne freies Rechteck (siehe [`show_in`]).
 /// Profil der Skizze aus `state.profile_pick` unter dem Bildschirmpunkt `p` der Ansicht `rect`:
 /// Sehstrahl ∩ Skizzenebene, dann [`planora_sketch::ExtractedProfiles::profile_at`].
 pub fn profile_under(state: &AppState, rect: Rect, p: Pos2) -> Option<usize> {
@@ -538,6 +537,7 @@ pub fn profile_under(state: &AppState, rect: Rect, p: Pos2) -> Option<usize> {
     state.profile_cache.get(sk).profile_at(at)
 }
 
+/// 3D-Ansicht im ganzen verfügbaren Bereich ohne freies Rechteck (siehe [`show_in`]).
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     show_in(ui, state, None);
 }

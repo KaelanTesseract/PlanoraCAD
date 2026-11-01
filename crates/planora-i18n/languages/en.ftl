@@ -719,7 +719,8 @@ edit-tool = Tool
 edit-body = Body: { $name }
 edit-edges = Edges: { $n }
 edit-sketch-not-computed = The sketch has not been computed.
-edit-profile-legacy = The feature uses profile { $n } from an older version; it matches no current area. Select a profile to replace it.
+edit-profile-lost = The selected profile no longer exists. Please select a profile.
+edit-profile-legacy = The feature uses profile { $n } from an older version; it matches no current area. Please select a profile to replace it.
 
 ## Boolean operation
 boolean-title = Boolean operation

@@ -711,7 +711,8 @@ edit-tool = Werkzeug
 edit-body = Körper: { $name }
 edit-edges = Kanten: { $n }
 edit-sketch-not-computed = Die Skizze ist nicht berechnet.
-edit-profile-legacy = Das Feature nutzt Profil { $n } aus einer älteren Version; es entspricht keiner heutigen Fläche. Wähle ein Profil, um es zu ersetzen.
+edit-profile-lost = Das gewählte Profil ist nicht mehr vorhanden. Bitte ein Profil wählen.
+edit-profile-legacy = Das Feature nutzt Profil { $n } aus einer älteren Version; es entspricht keiner heutigen Fläche. Bitte ein Profil wählen, um es zu ersetzen.
 
 ## Boolesche Operation
 boolean-title = Boolesche Operation

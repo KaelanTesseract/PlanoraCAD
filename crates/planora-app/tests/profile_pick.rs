@@ -467,7 +467,7 @@ fn editing_a_feature_with_a_lost_profile_explains_it_and_allows_a_new_pick() {
         out.drop_without_applying_deltas();
     }
     assert!(
-        text.contains("Ein Profil der Skizze ist nicht mehr vorhanden"),
+        text.contains("Das gewählte Profil ist nicht mehr vorhanden. Bitte ein Profil wählen."),
         "{text}"
     );
     assert!(text.contains("Profil 1"), "{text}");
@@ -589,4 +589,49 @@ fn without_a_profile_dialog_the_app_forgets_the_pick() {
     tab.dialog = None;
     planora_app::app::clear_profile_pick_without_dialog(tab);
     assert!(tab.state.profile_pick.is_none(), "ohne Dialog: gelöscht");
+}
+
+#[test]
+fn a_click_on_a_profile_over_a_body_toggles_the_profile_not_the_body() {
+    let ctx = context();
+    let (mut s, id) = two_rectangles();
+    s.extrude_sketch(id, 0, 3.0).unwrap();
+    assert_eq!(s.bodies.len(), 1, "Körper über Rechteck A");
+    aim(&mut s, false);
+    let mut dialog = CreateDialog::extrude_sketch(&s, id);
+    frame(&ctx, &mut s, &mut dialog, vec![]);
+    frame(&ctx, &mut s, &mut dialog, vec![]);
+    let a = screen(&s, id, A);
+    assert!(!dialog_rect(&ctx).contains(a));
+    // Ohne Profilwahl träfe der Zeiger dort den Körper.
+    let cursor = glam::Vec2::new(a.x, a.y);
+    assert!(
+        s.pick(cursor, glam::Vec2::new(W, H)).is_some(),
+        "Körper unter dem Zeiger"
+    );
+    click(&ctx, &mut s, &mut dialog, a);
+    assert_eq!(picked(&dialog), vec![0], "Profil A umgeschaltet");
+    assert!(s.selection.is_none(), "kein Körper gewählt");
+    assert!(s.hover.is_none(), "kein Körper überfahren");
+}
+
+#[test]
+fn old_profile_numbers_are_counted_again_only_after_a_change() {
+    let (mut s, id) = two_rectangles();
+    let count = |s: &AppState| {
+        s.profile_cache
+            .legacy_count(s.document.sketch_of(id).unwrap())
+    };
+    assert_eq!(count(&s), 2);
+    assert_eq!(count(&s), 2);
+    assert_eq!(s.profile_cache.legacy_computations(), 1, "aus dem Speicher");
+    s.open_sketch(id).unwrap();
+    s.session_sketch_mut()
+        .unwrap()
+        .1
+        .add_rectangle(DVec2::new(0.0, 0.0), DVec2::new(5.0, 5.0))
+        .unwrap();
+    s.close_sketch();
+    assert_eq!(count(&s), 3);
+    assert_eq!(s.profile_cache.legacy_computations(), 2);
 }

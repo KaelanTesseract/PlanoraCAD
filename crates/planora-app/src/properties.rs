@@ -273,7 +273,7 @@ fn profile_numbers(state: &AppState, sketch: FeatureId, sel: &ProfileSel) -> Str
             .join(", ");
     }
     match (sel, state.document.sketch_of(sketch)) {
-        (ProfileSel::Index(n), Some(sk)) if *n < sk.legacy_profiles().profiles.len() => {
+        (ProfileSel::Index(n), Some(sk)) if *n < state.profile_cache.legacy_count(sk) => {
             tr!("props-profile-legacy", n = n + 1)
         }
         _ => tr!("props-profile-lost"),

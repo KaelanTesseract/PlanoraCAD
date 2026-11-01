@@ -516,8 +516,6 @@ fn strip_button(
     response
 }
 
-/// Skizzenfeld rechts (Spaltenbreite 250): Inhalt in einer senkrechten ScrollArea, höchstens so
-/// hoch wie die Spalte.
 /// Was das Skizzenfeld außer Sitzung und Entwurf braucht.
 struct SideInput<'a> {
     panel: &'a mut PanelState,
@@ -526,6 +524,8 @@ struct SideInput<'a> {
     show_profiles: &'a mut bool,
 }
 
+/// Skizzenfeld rechts (Spaltenbreite 250): Inhalt in einer senkrechten ScrollArea, höchstens so
+/// hoch wie die Spalte.
 fn side_field(
     ctx: &egui::Context,
     rect: egui::Rect,

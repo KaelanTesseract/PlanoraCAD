@@ -246,6 +246,9 @@ pub struct ProfilePick {
 pub struct ProfileCache {
     entry: RefCell<Option<(u64, Arc<ExtractedProfiles>)>>,
     computed: Cell<usize>,
+    /// Zahl der Profile nach dem alten Algorithmus ([`Sketch::legacy_profiles`]) zum Stand.
+    legacy: Cell<Option<(u64, usize)>>,
+    legacy_computed: Cell<usize>,
 }
 
 impl ProfileCache {
@@ -266,6 +269,25 @@ impl ProfileCache {
     /// Wie oft bisher tatsächlich berechnet wurde (für Tests).
     pub fn computations(&self) -> usize {
         self.computed.get()
+    }
+
+    /// Zahl der Profile von `sk` nach dem alten Algorithmus (für alte Profilnummern, die keiner
+    /// heutigen Fläche entsprechen); neu gezählt nur nach einer Änderung der Skizze.
+    pub fn legacy_count(&self, sk: &Sketch) -> usize {
+        if let Some((rev, n)) = self.legacy.get()
+            && rev == sk.revision()
+        {
+            return n;
+        }
+        let n = sk.legacy_profiles().profiles.len();
+        self.legacy_computed.set(self.legacy_computed.get() + 1);
+        self.legacy.set(Some((sk.revision(), n)));
+        n
+    }
+
+    /// Wie oft die alten Profile bisher gezählt wurden (für Tests).
+    pub fn legacy_computations(&self) -> usize {
+        self.legacy_computed.get()
     }
 }
 

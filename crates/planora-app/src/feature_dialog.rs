@@ -76,7 +76,7 @@ impl ProfileChoice {
         ) {
             (false, _, _) | (true, None, _) => None,
             (true, Some(sk), ProfileSel::Index(n)) => {
-                Some((*n < sk.legacy_profiles().profiles.len()).then_some(*n))
+                Some((*n < state.profile_cache.legacy_count(sk)).then_some(*n))
             }
             (true, Some(_), ProfileSel::Refs(_)) => Some(None),
         };
@@ -91,7 +91,7 @@ impl ProfileChoice {
     fn hint(&self) -> Option<String> {
         match self.lost.filter(|_| !self.changed)? {
             Some(n) => Some(tr!("edit-profile-legacy", n = n + 1)),
-            None => Some(tr!("feature-profile-lost")),
+            None => Some(tr!("edit-profile-lost")),
         }
     }
 

@@ -145,3 +145,59 @@ fn nothing_to_fill_gives_no_triangles() {
     let e = sketch().profiles();
     assert!(e.fill(0).is_empty());
 }
+
+/// Prüft die Füllung des Rings `outer` mit dem Rechteckloch `hole` auf einem Raster (Punkte
+/// neben allen Kanten): kein Punkt im Loch bedeckt, jeder Punkt der Ringfläche genau einmal.
+fn assert_ring_cover(outer: (f64, f64, f64, f64), hole: (f64, f64, f64, f64)) {
+    let mut s = sketch();
+    s.add_rectangle(DVec2::new(outer.0, outer.1), DVec2::new(outer.2, outer.3))
+        .unwrap();
+    s.add_rectangle(DVec2::new(hole.0, hole.1), DVec2::new(hole.2, hole.3))
+        .unwrap();
+    let e = s.profiles();
+    let what = format!("{outer:?} / {hole:?}");
+    assert_eq!(e.profiles.len(), 2, "{what}");
+    assert_fills(&e, &what);
+    let ring = (0..2).find(|&i| e.outlines[i].len() == 2).unwrap();
+    let tris = e.fill(ring);
+    let want = (outer.2 - outer.0) * (outer.3 - outer.1) - (hole.2 - hole.0) * (hole.3 - hole.1);
+    let sum: f64 = tris.iter().map(triangle_area).sum();
+    assert!((sum - want).abs() < 1e-9, "{what}: {sum} statt {want}");
+    let inside = |t: &[DVec2; 3], p: DVec2| {
+        let o = |a: DVec2, b: DVec2| (b - a).perp_dot(p - a) > 0.0;
+        o(t[0], t[1]) && o(t[1], t[2]) && o(t[2], t[0])
+    };
+    let (mut in_hole, mut twice, mut missing) = (0, 0, 0);
+    let step = 0.25;
+    let mut y = outer.1 + 0.1309;
+    while y < outer.3 {
+        let mut x = outer.0 + 0.1171;
+        while x < outer.2 {
+            let p = DVec2::new(x, y);
+            let n = tris.iter().filter(|t| inside(t, p)).count();
+            let hole_p = x > hole.0 && x < hole.2 && y > hole.1 && y < hole.3;
+            match (hole_p, n) {
+                (true, 0) | (false, 1) => {}
+                (true, _) => in_hole += 1,
+                (false, 0) => missing += 1,
+                (false, _) => twice += 1,
+            }
+            x += step;
+        }
+        y += step;
+    }
+    assert_eq!(
+        (in_hole, twice, missing),
+        (0, 0, 0),
+        "{what}: im Loch, doppelt, fehlend"
+    );
+}
+
+#[test]
+fn a_square_hole_is_left_open_wherever_it_sits() {
+    assert_ring_cover((0.0, 0.0, 20.0, 20.0), (2.0, 2.0, 8.0, 8.0));
+    assert_ring_cover((0.0, 0.0, 20.0, 20.0), (5.0, 5.0, 10.0, 10.0));
+    assert_ring_cover((0.0, 0.0, 30.0, 30.0), (5.0, 5.0, 10.0, 10.0));
+    assert_ring_cover((0.0, 0.0, 20.0, 20.0), (12.0, 12.0, 18.0, 18.0));
+    assert_ring_cover((0.0, 0.0, 20.0, 20.0), (7.0, 7.0, 13.0, 13.0));
+}
