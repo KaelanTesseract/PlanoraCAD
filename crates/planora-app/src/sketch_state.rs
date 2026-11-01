@@ -219,6 +219,45 @@ pub struct CurveDrag {
     pub start: Vec<(PointId, DVec2)>,
     /// Einzelner Kreis am Rand: zieht den Radius; dazu Griffabstand von der Mitte minus Radius.
     pub rim: Option<(CurveId, f64)>,
+    /// Die Skizze beim Greifen: Kommt der Zug ohne Änderung dorthin zurück, gilt wieder sie.
+    /// `None`, sobald mitten im Zug noch etwas anderes geändert wurde.
+    origin: Option<Sketch>,
+    /// Lösungsbericht zu `origin`: Was schon dort scheiterte, hält den Zug nicht auf.
+    baseline: SolveReport,
+    /// Stand nach dem letzten Bild; ein anderer heißt, dass mitten im Zug noch etwas geändert wurde.
+    frame_revision: u64,
+}
+
+impl CurveDrag {
+    /// Hat seit dem letzten Bild etwas anderes die Skizze geändert (etwa „Konstruktion“ per Taste),
+    /// gibt es keinen Stand mehr, zu dem der Zug zurückkehren dürfte, und der Vergleich gilt ab jetzt.
+    fn note_foreign_change(&mut self, sk: &Sketch) {
+        if sk.revision() != self.frame_revision {
+            self.origin = None;
+            self.baseline = sk.clone().solve();
+        }
+    }
+}
+
+/// Macht ein Bild des Zugs die Lage schlechter als beim Greifen? Ein schon vorhandener Widerspruch
+/// in einer fremden Gruppe zählt nicht.
+fn frame_is_worse(report: &SolveReport, baseline: &SolveReport) -> bool {
+    report.drag_failed
+        || (status_ok(baseline) && !status_ok(report))
+        || report
+            .conflicting
+            .iter()
+            .any(|c| !baseline.conflicting.contains(c))
+}
+
+/// Gleichen sich die Werte zweier Stände derselben Skizze bis auf die Toleranz?
+fn same_values(a: &Sketch, b: &Sketch) -> bool {
+    let linear = a.tolerance().linear;
+    a.variables().len() == b.variables().len()
+        && a.variables()
+            .iter()
+            .zip(b.variables())
+            .all(|(x, y)| (x - y).abs() <= linear)
 }
 
 /// Zustand des geöffneten Skizzen-Modus.
@@ -1139,14 +1178,20 @@ impl SketchSession {
             grab: at,
             start,
             rim,
+            origin: Some(sk.clone()),
+            baseline: sk.clone().solve(),
+            frame_revision: sk.revision(),
         });
     }
 
     /// Führt den Zug nach `at`. Punkt: Scheitert der Solver, bleibt die Skizze, und `message`
     /// erklärt es. Kurve: siehe [`curve_drag_to`](Self::curve_drag_to).
     pub fn drag_to(&mut self, sk: &mut Sketch, at: DVec2) {
-        if let Some(drag) = self.curve_drag.clone() {
+        if let Some(mut drag) = self.curve_drag.take() {
+            drag.note_foreign_change(sk);
             self.curve_drag_to(sk, &drag, at);
+            drag.frame_revision = sk.revision();
+            self.curve_drag = Some(drag);
             return;
         }
         let Some(point) = self.dragging else {
@@ -1162,8 +1207,8 @@ impl SketchSession {
         }
     }
 
-    /// Ein Bild des Zugs an einer Kurve. Lässt es sich nicht lösen, gilt wieder der Stand vor
-    /// diesem Bild, und `message` erklärt es. Bewegt es nichts (ohne Bewegung des Zeigers, voll
+    /// Ein Bild des Zugs an einer Kurve. Macht es die Lage schlechter ([`frame_is_worse`]), gilt
+    /// wieder der Stand vor diesem Bild, und `message` erklärt es. Bewegt es nichts (ohne Bewegung des Zeigers, voll
     /// bestimmt, Radius mit Maß), bleibt die Skizze bitgleich und ohne neuen Stand, damit daraus
     /// kein Schritt wird.
     fn curve_drag_to(&mut self, sk: &mut Sketch, drag: &CurveDrag, at: DVec2) {
@@ -1193,14 +1238,8 @@ impl SketchSession {
             }
         };
         match result {
-            Ok(report) if status_ok(&report) => {
-                let linear = sk.tolerance().linear;
-                let still = sk
-                    .variables()
-                    .iter()
-                    .zip(before.variables())
-                    .all(|(a, b)| (a - b).abs() <= linear);
-                if still {
+            Ok(report) if !frame_is_worse(&report, &drag.baseline) => {
+                if same_values(sk, &before) {
                     *sk = before;
                 } else {
                     self.last_report = Some(report);
@@ -1216,15 +1255,25 @@ impl SketchSession {
 
     /// Beendet den Zug. Ein volles Lösen holt dabei die Diagnose nach, die während des Ziehens
     /// für die gezogene Gruppe entfällt (unveränderte Gruppen kommen aus dem Zwischenspeicher des
-    /// Solvers und kosten nichts). Der Zug an einer Kurve benennt den Schritt; hat er nichts
-    /// geändert, verwirft der Verlauf den Namen.
+    /// Solvers und kosten nichts). Der Zug an einer Kurve benennt den Schritt. Steht danach alles
+    /// wie beim Greifen, gilt wieder die Skizze von damals (gleicher Stand), und es entsteht
+    /// kein Schritt.
     pub fn end_drag(&mut self, sk: &mut Sketch) {
-        let curve = self.curve_drag.take().is_some();
-        if self.dragging.take().is_some() || curve {
-            self.last_report = Some(sk.solve());
+        if let Some(mut drag) = self.curve_drag.take() {
+            drag.note_foreign_change(sk);
+            match drag.origin.filter(|origin| same_values(sk, origin)) {
+                Some(origin) => {
+                    *sk = origin;
+                    self.last_report = Some(drag.baseline);
+                }
+                None => {
+                    self.last_report = Some(sk.solve());
+                    self.edit_label = Some(crate::msg!("undo-sketch-move"));
+                }
+            }
         }
-        if curve {
-            self.edit_label = Some(crate::msg!("undo-sketch-move"));
+        if self.dragging.take().is_some() {
+            self.last_report = Some(sk.solve());
         }
     }
 
@@ -1630,12 +1679,7 @@ impl SketchSession {
         if self.dragging.is_some_and(|p| sk.point_xy(p).is_err()) {
             self.dragging = None;
         }
-        if self.curve_drag.as_ref().is_some_and(|d| {
-            d.start.iter().any(|&(p, _)| sk.point_xy(p).is_err())
-                || d.rim.is_some_and(|(c, _)| sk.curve(c).is_none())
-        }) {
-            self.curve_drag = None;
-        }
+        self.curve_drag = None;
         self.last_report = Some(sk.solve());
     }
 

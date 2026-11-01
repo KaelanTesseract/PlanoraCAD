@@ -492,3 +492,45 @@ fn drag_radius_rejects_other_curves_and_bad_targets() {
     );
     assert_eq!(s.radius(c), Some(10.0));
 }
+
+// ---- Gescheiterte Gruppen beim Ziehen (Skizzen 2) -------------------------------------------
+
+#[test]
+fn drag_failed_names_only_the_groups_that_use_the_dragged_values() {
+    let mut s = sketch();
+    let unrelated = unrelated_groups(&mut s);
+    let free = s.add_point(-5.0, -5.0).unwrap();
+    let r = s
+        .drag(&[Drag {
+            point: free,
+            target: DVec2::new(1.0, 2.0),
+        }])
+        .unwrap();
+    assert_eq!(r.status, SolveStatus::Conflicting);
+    assert!(!r.drag_failed, "der Widerspruch ist fremd: {r:?}");
+    let r = s
+        .drag(&[Drag {
+            point: unrelated[0],
+            target: DVec2::new(21.0, 0.0),
+        }])
+        .unwrap();
+    assert!(r.drag_failed, "{r:?}");
+    assert!(!s.solve().drag_failed, "ohne Zug nie");
+}
+
+#[test]
+fn drag_failed_sees_a_free_point_that_collapses_a_line_of_a_group() {
+    let mut s = sketch();
+    let b = s.add_point(0.0, 0.0).unwrap();
+    let c = s.add_point(5.0, 5.0).unwrap();
+    s.add_constraint(K::Fixed(b, 0.0, 0.0)).unwrap();
+    s.add_line(b, c).unwrap();
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+    let r = s
+        .drag(&[Drag {
+            point: c,
+            target: DVec2::ZERO,
+        }])
+        .unwrap();
+    assert!(r.drag_failed, "{r:?}");
+}

@@ -75,6 +75,9 @@ pub enum SolveStatus {
 /// Bericht eines Solver-Laufs.
 #[derive(Clone, Debug)]
 pub struct SolveReport {
+    /// Beim Ziehen: Eine Gruppe, die gezogene Werte benutzt, ließ sich nicht lösen. Fremde
+    /// Gruppen, die schon vorher scheiterten, zählen nicht.
+    pub drag_failed: bool,
     pub status: SolveStatus,
     /// Verbleibende Freiheitsgrade (nur gelöste Gruppen und freie Variablen).
     pub dof: usize,
@@ -655,6 +658,8 @@ impl Sketch {
         let mut dof = 0;
         let mut iterations = 0;
         let mut group_solves = 0;
+        let mut drag_failed = false;
+        let touched = |g: &Group| soft.iter().any(|s| g.reads.binary_search(&s.var).is_ok());
         let start = self.vars.clone();
         let mut committed = self.vars.clone();
         let old_cache = std::mem::take(&mut self.solve_cache);
@@ -694,6 +699,7 @@ impl Sketch {
                         found,
                         iterations: used,
                     } => {
+                        drag_failed |= touched(g);
                         iterations = iterations.max(*used);
                         if *conflict {
                             status = SolveStatus::Conflicting;
@@ -771,6 +777,7 @@ impl Sketch {
             } else {
                 // Beim Ziehen sucht die Diagnose für die gezogene Gruppe nicht nach der
                 // Ursache; das holt das volle Lösen am Ende des Ziehens nach.
+                drag_failed |= touched(g);
                 let full = group_soft.is_empty();
                 let (found, conflict) = self.diagnose(g, &col, &start, &x, tol_r, full);
                 // Widerspruch gewinnt gegen „nicht konvergiert“.
@@ -831,6 +838,7 @@ impl Sketch {
             .map(|(i, _)| i)
             .collect();
         SolveReport {
+            drag_failed,
             status,
             dof,
             redundant,

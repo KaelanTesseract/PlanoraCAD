@@ -356,30 +356,208 @@ fn a_fully_determined_line_stays_bit_for_bit_and_makes_no_step() {
     assert!(se(&s).edit_label.is_none());
 }
 
+/// Zwei Punkte, die zugleich 3 und 5 auseinander sein sollen; schon vor dem Zug da.
+fn add_conflict(s: &mut AppState) {
+    let sk = s.session_sketch_mut().unwrap().1;
+    let c = sk.add_point(40.0, 0.0).unwrap();
+    let d = sk.add_point(44.0, 0.0).unwrap();
+    sk.add_constraint(K::Distance(c, d, 3.0)).unwrap();
+    sk.add_constraint(K::Distance(c, d, 5.0)).unwrap();
+    let report = sk.solve();
+    assert_eq!(report.status, SolveStatus::Conflicting);
+    assert!(!report.conflicting.is_empty());
+    s.observe_sketch(false);
+}
+
 #[test]
-fn a_frame_that_cannot_be_solved_keeps_the_state_before_it() {
-    // Eine widersprüchliche Gruppe daneben: Kein Bild ist `Solved`, jedes bleibt beim Stand davor.
+fn an_unrelated_conflict_does_not_block_the_drag() {
+    let mut s = sketch_with(|sk| {
+        line(sk, (0.0, 0.0), (20.0, 0.0));
+    });
+    add_conflict(&mut s);
+    let (a, b) = ends(sk(&s), curves(&s)[0]);
+    let conflict: Vec<u64> = sk(&s).variables()[4..]
+        .iter()
+        .map(|v| v.to_bits())
+        .collect();
+    let expected = sk(&s).clone().solve().conflicting;
+    let steps = undo_len(&s);
+    assert!(begin(&mut s, v(10.0, 0.0)));
+    for (i, y) in [2.0, 5.0, 9.0].into_iter().enumerate() {
+        drag_to(&mut s, v(10.0, y));
+        assert_eq!(message(&s), None, "Bild {i}");
+        assert_eq!(sk(&s).point_xy(a).unwrap(), v(0.0, y));
+        assert_eq!(sk(&s).point_xy(b).unwrap(), v(20.0, y));
+        // Inhalt und Reihenfolge bleiben über die Bilder gleich.
+        let report = se(&s).last_report.as_ref().unwrap();
+        assert_eq!(report.conflicting, expected, "Bild {i}");
+        assert_eq!(report.status, SolveStatus::Conflicting);
+        s.observe_sketch(true);
+    }
+    end(&mut s);
+    s.observe_sketch(false);
+    assert_eq!(undo_len(&s), steps + 1);
+    let after: Vec<u64> = sk(&s).variables()[4..]
+        .iter()
+        .map(|v| v.to_bits())
+        .collect();
+    assert_eq!(after, conflict, "der Widerspruch bleibt, wie er war");
+    assert_eq!(se(&s).last_report.as_ref().unwrap().conflicting, expected);
+}
+
+/// Linie b–c hängt am festen b, Linie c–d ist frei; zieht man c–d so, dass c auf b liegt, entartet
+/// b–c, und die Gruppe von b lässt sich nicht lösen.
+fn collapsing_line(s: &mut AppState) -> (CurveId, PointId) {
+    let sk = s.session_sketch_mut().unwrap().1;
+    let b = sk.add_point(0.0, 0.0).unwrap();
+    let c = sk.add_point(5.0, 5.0).unwrap();
+    let d = sk.add_point(25.0, 5.0).unwrap();
+    sk.add_constraint(K::Fixed(b, 0.0, 0.0)).unwrap();
+    sk.add_line(b, c).unwrap();
+    let dragged = sk.add_line(c, d).unwrap();
+    sk.solve();
+    s.observe_sketch(false);
+    (dragged, c)
+}
+
+#[test]
+fn a_failure_in_the_dragged_geometry_keeps_the_state_before_the_frame() {
+    let mut s = sketch_with(|_| {});
+    let (_, c) = collapsing_line(&mut s);
+    assert!(begin(&mut s, v(15.0, 5.0)));
+    drag_to(&mut s, v(16.0, 6.0));
+    assert_eq!(message(&s), None);
+    let before = bits(&s);
+    let revision = sk(&s).revision();
+    drag_to(&mut s, v(10.0, 0.0));
+    assert_eq!(bits(&s), before, "Stand vor diesem Bild");
+    assert_eq!(sk(&s).revision(), revision);
+    assert_eq!(message(&s), blocked());
+    drag_to(&mut s, v(17.0, 7.0));
+    assert_eq!(message(&s), None, "wieder möglich");
+    assert_eq!(sk(&s).point_xy(c).unwrap(), v(7.0, 7.0));
+    end(&mut s);
+    assert_eq!(status(&s), SolveStatus::Solved);
+}
+
+/// Auch neben einem fremden Widerspruch: Der Status war schon vorher schlecht, und die Entartung
+/// nennt keine neue Abhängigkeit; trotzdem scheitert die gezogene Gruppe.
+#[test]
+fn a_failure_in_the_dragged_geometry_blocks_beside_an_unrelated_conflict_too() {
+    let mut s = sketch_with(|_| {});
+    let (_, c) = collapsing_line(&mut s);
+    add_conflict(&mut s);
+    assert!(begin(&mut s, v(15.0, 5.0)));
+    drag_to(&mut s, v(16.0, 6.0));
+    assert_eq!(message(&s), None);
+    assert_eq!(sk(&s).point_xy(c).unwrap(), v(6.0, 6.0));
+    drag_to(&mut s, v(10.0, 0.0));
+    assert_eq!(sk(&s).point_xy(c).unwrap(), v(6.0, 6.0));
+    assert_eq!(message(&s), blocked());
+    end(&mut s);
+}
+
+#[test]
+fn a_conflict_inside_the_dragged_group_keeps_the_state_in_every_frame() {
     let mut s = sketch_with(|sk| {
         line(sk, (0.0, 0.0), (20.0, 0.0));
     });
     {
         let sk = s.session_sketch_mut().unwrap().1;
-        let c = sk.add_point(40.0, 0.0).unwrap();
-        let d = sk.add_point(44.0, 0.0).unwrap();
-        sk.add_constraint(K::Distance(c, d, 3.0)).unwrap();
-        sk.add_constraint(K::Distance(c, d, 5.0)).unwrap();
-        sk.solve();
+        let (a, b) = ends(sk, sk.curves().next().unwrap().0);
+        sk.add_constraint(K::Distance(a, b, 3.0)).unwrap();
+        sk.add_constraint(K::Distance(a, b, 5.0)).unwrap();
+        assert_eq!(sk.solve().status, SolveStatus::Conflicting);
     }
     s.observe_sketch(false);
     let before = bits(&s);
+    let revision = sk(&s).revision();
     let steps = undo_len(&s);
     assert!(begin(&mut s, v(10.0, 0.0)));
-    drag_to(&mut s, v(10.0, 5.0));
-    assert_eq!(bits(&s), before);
-    assert_eq!(message(&s), blocked());
+    for y in [2.0, 5.0, 9.0] {
+        drag_to(&mut s, v(10.0, y));
+        assert_eq!(bits(&s), before);
+        assert_eq!(message(&s), blocked());
+    }
     end(&mut s);
     s.observe_sketch(false);
+    assert_eq!(sk(&s).revision(), revision);
     assert_eq!(undo_len(&s), steps);
+}
+
+// ---- Hin und zurück -----------------------------------------------------------------------
+
+#[test]
+fn dragging_away_and_exactly_back_makes_no_step() {
+    let mut s = sketch_with(|sk| {
+        line(sk, (0.0, 0.0), (20.0, 0.0));
+    });
+    let before = bits(&s);
+    let revision = sk(&s).revision();
+    let steps = undo_len(&s);
+    let label = s.sketch_undo_label();
+    let grab = v(10.0, 0.0);
+    assert!(begin(&mut s, grab));
+    drag_to(&mut s, v(14.0, 9.0));
+    s.observe_sketch(true);
+    assert_ne!(bits(&s), before);
+    drag_to(&mut s, grab);
+    s.observe_sketch(true);
+    end(&mut s);
+    s.observe_sketch(false);
+    assert_eq!(bits(&s), before);
+    assert_eq!(sk(&s).revision(), revision, "wieder der Stand von vorher");
+    assert_eq!(undo_len(&s), steps);
+    assert!(se(&s).edit_label.is_none());
+    assert_eq!(s.sketch_undo_label(), label);
+}
+
+#[test]
+fn a_constrained_curve_dragged_back_restores_the_exact_values() {
+    let mut s = sketch_with(|sk| {
+        let c = line(sk, (0.0, 0.0), (20.0, 0.0));
+        let (a, b) = ends(sk, c);
+        sk.add_constraint(K::Distance(a, b, 20.0)).unwrap();
+        sk.add_constraint(K::Horizontal(LineOrPoints::Line(c)))
+            .unwrap();
+    });
+    let before = bits(&s);
+    let steps = undo_len(&s);
+    assert!(begin(&mut s, v(10.0, 0.0)));
+    drag_to(&mut s, v(14.0, 9.0));
+    drag_to(&mut s, v(10.0, 0.0));
+    end(&mut s);
+    s.observe_sketch(false);
+    assert_eq!(bits(&s), before);
+    assert_eq!(undo_len(&s), steps);
+}
+
+#[test]
+fn a_change_made_during_the_drag_survives_dragging_back() {
+    let mut s = sketch_with(|sk| {
+        line(sk, (0.0, 0.0), (20.0, 0.0));
+    });
+    let c = curves(&s)[0];
+    let grab = v(10.0, 0.0);
+    assert!(begin(&mut s, grab));
+    drag_to(&mut s, v(14.0, 9.0));
+    {
+        let (se, sk) = s.session_sketch_mut().unwrap();
+        se.toggle_construction(sk);
+    }
+    drag_to(&mut s, grab);
+    end(&mut s);
+    assert!(sk(&s).curve(c).unwrap().construction);
+    // Dasselbe, wenn die Änderung erst nach dem letzten Bild kommt.
+    assert!(begin(&mut s, grab));
+    drag_to(&mut s, v(14.0, 9.0));
+    drag_to(&mut s, grab);
+    {
+        let (se, sk) = s.session_sketch_mut().unwrap();
+        se.toggle_construction(sk);
+    }
+    end(&mut s);
+    assert!(!sk(&s).curve(c).unwrap().construction);
 }
 
 // ---- Auswahl -------------------------------------------------------------------------------
@@ -508,6 +686,31 @@ fn deleting_the_dragged_curve_ends_the_drag() {
         se.delete_selection(sk);
     }
     assert!(!se(&s).is_dragging());
+}
+
+#[test]
+fn deleting_one_side_of_a_triangle_ends_the_drag() {
+    let mut s = sketch_with(|sk| {
+        let a = sk.add_point(0.0, 0.0).unwrap();
+        let b = sk.add_point(20.0, 0.0).unwrap();
+        let c = sk.add_point(10.0, 15.0).unwrap();
+        sk.add_line(a, b).unwrap();
+        sk.add_line(b, c).unwrap();
+        sk.add_line(c, a).unwrap();
+    });
+    let sides = curves(&s);
+    assert!(begin(&mut s, v(10.0, 0.0)));
+    drag_to(&mut s, v(10.0, 2.0));
+    {
+        let (se, sk) = s.session_sketch_mut().unwrap();
+        // Beide Enden der Seite leben in den anderen Seiten weiter.
+        se.delete_selection(sk);
+    }
+    assert!(!se(&s).is_dragging());
+    assert_eq!(curves(&s), sides[1..].to_vec());
+    let before = bits(&s);
+    drag_to(&mut s, v(10.0, 9.0));
+    assert_eq!(bits(&s), before, "kein Zug mehr");
 }
 
 #[test]
