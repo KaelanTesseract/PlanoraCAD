@@ -110,23 +110,40 @@ impl Sketch {
         let Some(g) = self.geom(c) else {
             return Vec::new();
         };
+        let ts = self.cuts(c, &g, with_construction);
+        clean_params(
+            &g,
+            ts.into_iter().map(|(t, _)| t).collect(),
+            self.tolerance().linear,
+        )
+    }
+
+    /// Rohe Schnittparameter der lebenden Kurve `c` mit der Geometrie `g` (wie bei
+    /// [`Sketch::split_params`], aber weder normiert noch entdoppelt) samt schneidender Kurve;
+    /// `None` bei Selbstschnitten.
+    pub(crate) fn cuts(
+        &self,
+        c: CurveId,
+        g: &Geom,
+        with_construction: bool,
+    ) -> Vec<(f64, Option<CurveId>)> {
         let tol = self.tolerance().linear;
         let mut ts = Vec::new();
-        let pg = Prepared::new(&g);
+        let pg = Prepared::new(g);
         for (id, data) in self.curves() {
             if id == c || (data.construction && !with_construction) {
                 continue;
             }
             if let Some(h) = self.geom(id) {
                 let hits = intersect_prepared(&pg, &Prepared::new(&h), tol);
-                ts.extend(hits.into_iter().map(|(t, _)| t));
+                ts.extend(hits.into_iter().map(|(t, _)| (t, Some(id))));
             }
         }
-        for (a, b) in self_intersect(&g, tol) {
-            ts.push(a);
-            ts.push(b);
+        for (a, b) in self_intersect(g, tol) {
+            ts.push((a, None));
+            ts.push((b, None));
         }
-        clean_params(&g, ts, tol)
+        ts
     }
 }
 

@@ -1507,6 +1507,7 @@ sketch-err-what-x = The x coordinate
 sketch-err-what-y = The y coordinate
 sketch-err-line-zero = The line would have zero length
 sketch-err-arc-center = Start and end must not be at the center
+sketch-err-trim-degenerate = The curve is degenerate and cannot be trimmed
 sketch-err-minor-range = The minor semi-axis must be greater than zero and at most as long as the major one
 sketch-err-spline-count = A spline needs 2 to { $max } points
 sketch-err-point-twice = A point is selected more than once

@@ -255,6 +255,13 @@ impl Sketch {
         })
     }
 
+    /// Ersetzt die Art einer lebenden Kurve (Stutzen, Dehnen, Brechen). Prüft nichts; interne
+    /// Abhängigkeiten der neuen Art legt der Aufrufer an.
+    pub(crate) fn set_curve_kind(&mut self, c: CurveId, kind: CurveKind) {
+        self.touch_structure();
+        self.curves[c].kind = kind;
+    }
+
     pub fn add_line(&mut self, a: PointId, b: PointId) -> Result<CurveId, SketchError> {
         self.check_point(a)?;
         self.check_point(b)?;
@@ -351,6 +358,12 @@ impl Sketch {
         self.check_point(start)?;
         self.check_point(end)?;
         self.check_ellipse_axes(major, minor)?;
+        let c = self.pos(center);
+        if self.pos(start).distance(c) <= self.tol.linear
+            || self.pos(end).distance(c) <= self.tol.linear
+        {
+            return Err(SketchError::Degenerate(tr!("sketch-err-arc-center")));
+        }
         let (ax, ay, mi) = (
             self.new_var(major.x),
             self.new_var(major.y),

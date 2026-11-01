@@ -956,6 +956,32 @@ impl Sketch {
         }
     }
 
+    /// Ist die lebende Abhängigkeit an den aktuellen Werten ohne Bewegung erfüllt? Alle Residuen
+    /// höchstens `factor · tol.linear`, Winkelzeilen (parallel, rechtwinklig, Winkel,
+    /// Ellipsenwinkel, Richtung bei Tangente Linie–Ellipse/Spline) höchstens
+    /// `factor · tol.angular`.
+    pub(crate) fn satisfied(&self, id: ConstraintId, factor: f64) -> bool {
+        use ConstraintKind::*;
+        let Some(ev) = self.evaluate(id, &self.vars) else {
+            return false;
+        };
+        let kind = &self.constraints[id].kind;
+        let angular_row = |row: usize| match kind {
+            Parallel(..) | Perpendicular(..) | Angle(..) | EllipseAngle(..) => true,
+            Tangent(a, b) => row == 1 && line_and_param(self, *a, *b).is_some(),
+            _ => false,
+        };
+        let tol = self.tolerance();
+        ev.residuals.iter().enumerate().all(|(row, r)| {
+            let limit = if angular_row(row) {
+                tol.angular
+            } else {
+                tol.linear
+            };
+            r.v.abs() <= factor * limit
+        })
+    }
+
     /// Braucht die (geprüfte) Abhängigkeit eine Zusatzvariable? Dieselbe Regel wie in
     /// `extra_start`: Punkt auf Spline, Tangente zwischen Linie und Ellipse/Spline.
     pub(crate) fn needs_extra(&self, kind: &ConstraintKind) -> bool {
@@ -970,7 +996,7 @@ impl Sketch {
 
     /// Startwert der Zusatzvariablen einer (geprüften) parametrischen Abhängigkeit: der
     /// nächstgelegene Kurvenparameter. `None`, wenn die Abhängigkeit keine braucht.
-    fn extra_start(&self, kind: &ConstraintKind) -> Option<f64> {
+    pub(crate) fn extra_start(&self, kind: &ConstraintKind) -> Option<f64> {
         match kind {
             ConstraintKind::PointOnCurve(p, c)
                 if matches!(self.curves[*c].kind, CurveKind::Spline { .. }) =>

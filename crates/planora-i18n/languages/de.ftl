@@ -1490,6 +1490,7 @@ sketch-err-what-x = Die x-Koordinate
 sketch-err-what-y = Die y-Koordinate
 sketch-err-line-zero = Die Linie hätte die Länge null
 sketch-err-arc-center = Start und Ende dürfen nicht in der Mitte liegen
+sketch-err-trim-degenerate = Die Kurve ist entartet und lässt sich nicht stutzen
 sketch-err-minor-range = Die kleine Halbachse muss größer als null und höchstens so lang wie die große sein
 sketch-err-spline-count = Ein Spline braucht 2 bis { $max } Punkte
 sketch-err-point-twice = Ein Punkt ist mehrfach ausgewählt
