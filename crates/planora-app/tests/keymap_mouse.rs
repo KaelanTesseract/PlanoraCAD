@@ -5,6 +5,7 @@
 
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, pos2, vec2};
 use planora_app::keymap::{Action, Binding, Gesture, Keymap, MouseButton, mouse};
+use planora_app::sketch_state::Tool;
 use planora_app::state::{AppState, StandardPlane};
 use planora_app::{drawing_view, fonts, sketch_view, viewport};
 use planora_drawing::sheet_info::Stamp;
@@ -463,6 +464,12 @@ fn sketch_and_drawing_have_no_orbit() {
     ] {
         let mut r = Rig::new(View::Model);
         let mut s = sketch();
+        // Fusion-Verhalten, Skizzen 2: Im Auswahlwerkzeug zieht Umschalt+links auf freier Fläche
+        // einen Rahmen; in den anderen Werkzeugen schwenkt es weiter.
+        if button == PointerButton::Primary {
+            let (se, sk) = s.session_sketch_mut().unwrap();
+            se.set_tool(sk, Tool::Rectangle);
+        }
         r.frame(&mut s, NONE, vec![]);
         let (a, t) = (angles(&s), s.camera.target);
         r.drag(&mut s, button, mods, IN_VIEW, IN_VIEW_TO);

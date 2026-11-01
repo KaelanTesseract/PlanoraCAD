@@ -281,7 +281,7 @@ common-cancel = Abbrechen
 common-ok = OK
 
 ## Hauptfenster
-shell-sketch-keys-hint = Esc bricht ab, Eingabe beendet, Entf löscht, mittlere Maustaste oder Umschalt + Ziehen verschiebt
+shell-sketch-keys-hint = Esc bricht ab, Eingabe beendet, Entf löscht, mittlere Maustaste verschiebt; beim Auswählen: Ziehen auf freier Fläche zieht einen Rahmen, Doppelklick wählt die Kette
 shell-old-version-readonly = In einer alten Version lässt sich nichts ändern.
 tab-properties = Eigenschaften
 tab-versions = Versionen
@@ -1006,7 +1006,7 @@ sketch-status-redundant = , { $n } überzählig
 sketch-status-conflict = Widerspruch zwischen { $n } Abhängigkeiten
 sketch-status-unsolvable = Nicht lösbar
 sketch-tool-select = Auswahl
-sketch-tool-select-hint = Klick wählt, Umschalt + Klick ergänzt; Punkte lassen sich ziehen.
+sketch-tool-select-hint = Klick wählt, Umschalt ergänzt, Ziehen: Rahmen, Doppelklick: Kette; Punkte lassen sich ziehen.
 sketch-tool-point = Punkt
 sketch-tool-point-hint = Klick setzt einen Punkt.
 sketch-tool-line-hint = Punkte nacheinander anklicken; Eingabe, Doppelklick oder Esc beendet den Linienzug.

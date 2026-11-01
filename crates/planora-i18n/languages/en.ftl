@@ -281,7 +281,7 @@ common-cancel = Cancel
 common-ok = OK
 
 ## Hauptfenster
-shell-sketch-keys-hint = Esc cancels, Enter finishes, Delete removes, middle mouse button or Shift + drag pans
+shell-sketch-keys-hint = Esc cancels, Enter finishes, Delete removes, middle mouse button pans; when selecting: drag on empty space draws a box, double click selects the chain
 shell-old-version-readonly = Nothing can be changed in an old version.
 tab-properties = Properties
 tab-versions = Versions
@@ -1023,7 +1023,7 @@ sketch-status-redundant = , { $n } redundant
 sketch-status-conflict = Contradiction between { $n } constraints
 sketch-status-unsolvable = Cannot be solved
 sketch-tool-select = Select
-sketch-tool-select-hint = Click selects, Shift + click adds to the selection; points can be dragged.
+sketch-tool-select-hint = Click selects, Shift adds, drag: box, double click: chain; points can be dragged.
 sketch-tool-point = Point
 sketch-tool-point-hint = Click places a point.
 sketch-tool-line-hint = Click points one after another; Enter, double-click or Esc ends the polyline.
