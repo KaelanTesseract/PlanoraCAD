@@ -246,7 +246,7 @@ impl Sketch {
         Ok(())
     }
 
-    fn push_curve(&mut self, kind: CurveKind) -> CurveId {
+    pub(crate) fn push_curve(&mut self, kind: CurveKind) -> CurveId {
         self.touch_structure();
         self.curves.push(CurveData {
             kind,

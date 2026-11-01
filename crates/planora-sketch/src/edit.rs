@@ -1,15 +1,19 @@
-//! Ändern der Skizze wie in Fusion: Stutzen (hier), Dehnen und Brechen.
+//! Ändern der Skizze wie in Fusion: Stutzen, Dehnen und Brechen.
 //!
 //! Stutzen löscht das Stück einer Kurve zwischen den Schnittpunkten links und rechts der
 //! Klickstelle (mit allen Kurven, auch Konstruktion; bei Kreis und Ellipse umlaufend); hat die
-//! Kurve keinen Schnitt, wird sie ganz gelöscht. Abhängigkeiten nach Entscheidung 7 des Plans:
-//! Erhalten bleibt, was danach ohne Bewegung erfüllt ist, so bewegt sich nie etwas; neue Enden
-//! hängen „deckungsgleich“ an einem Punkt der schneidenden Kurve oder „Punkt auf Kurve“ an ihr.
+//! Kurve keinen Schnitt, wird sie ganz gelöscht. Brechen teilt die Kurve an denselben beiden
+//! Stellen, ohne etwas zu löschen; die Teile hängen an getrennten Punkten deckungsgleich
+//! zusammen (Entscheidung 9). Dehnen verlängert ein offenes Ende einer Linie, eines Bogens oder
+//! Ellipsenbogens bis zum nächsten Schnitt mit einer anderen Kurve (Entscheidung 8).
+//! Abhängigkeiten nach Entscheidung 7 des Plans: Erhalten bleibt, was danach ohne Bewegung
+//! erfüllt ist, so bewegt sich nie etwas; neue Enden hängen „deckungsgleich“ an einem Punkt der
+//! schneidenden Kurve oder „Punkt auf Kurve“ an ihr.
 
 use crate::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
 use crate::error::SketchError;
 use crate::geom::Geom;
-use crate::intersect::clean_params;
+use crate::intersect::{Prepared, clean_params, intersect_prepared};
 use crate::model::{CurveId, CurveKind, PointId, Sketch};
 use planora_i18n::tr;
 use planora_math::{DVec2, TAU};
@@ -51,6 +55,19 @@ struct Bounds {
 /// Neues Ende: Punkt, schneidende Kurve und Schnittstelle.
 type NewEnd = (PointId, Option<CurveId>, DVec2);
 
+/// Ziel des Dehnens an einem Ende.
+struct ExtendTarget {
+    /// Der Endpunkt, der wandert.
+    point: PointId,
+    /// Seine neue Lage (Schnitt, oder ein Punkt der schneidenden Kurve höchstens `tol.linear`
+    /// daneben).
+    to: DVec2,
+    /// Die schneidende Kurve (bei mehreren an derselben Stelle die mit kleinster Id).
+    cutter: CurveId,
+    /// Linienzug vom alten zum neuen Ende.
+    path: Vec<DVec2>,
+}
+
 /// Abstand zweier Parameter, bei periodischen Kurven über den kürzeren Weg.
 fn param_gap(g: &Geom, a: f64, b: f64) -> f64 {
     let d = (a - b).abs();
@@ -90,11 +107,191 @@ impl Sketch {
             return Err(SketchError::Degenerate(tr!("sketch-err-trim-degenerate")));
         };
         let backup = self.clone();
-        let result = self.apply_trim(c, &g, &b);
+        let result = self.apply_split(c, &g, &b, false);
         if result.is_err() {
             *self = backup;
         }
         result
+    }
+
+    /// Der Weg, den [`Sketch::extend`] an derselben Stelle das Ende verlängern würde, vom alten
+    /// zum neuen Ende (Vorschau beim Überfahren). `None`, wenn nichts zu dehnen ist.
+    pub fn extend_preview(&self, c: CurveId, at: DVec2) -> Option<Vec<DVec2>> {
+        self.locate_extend(c, at).map(|x| x.path)
+    }
+
+    /// Dehnt die Linie, den Bogen oder Ellipsenbogen `c` an dem Ende, das `at` näher liegt, bis
+    /// zum nächsten Schnitt mit einer anderen lebenden Kurve (auch Konstruktion): Der Endpunkt
+    /// wandert dorthin und behält seine Id, Abhängigkeiten nach Entscheidung 7. Eine Linie
+    /// wächst geradeaus, ein Bogen auf seinem Kreis bzw. seiner Ellipse (höchstens bis kurz vor
+    /// den eigenen Anfang). `Ok(false)` und die Skizze bleibt unverändert, wenn das Ende nicht
+    /// offen ist (andere Kurve am Punkt oder „deckungsgleich“), die Kurve keine dieser Arten ist
+    /// oder es kein Ziel gibt. Bei einem Fehler bleibt die Skizze unverändert.
+    pub fn extend(&mut self, c: CurveId, at: DVec2) -> Result<bool, SketchError> {
+        self.check_curve(c)?;
+        if !at.is_finite() {
+            return Err(SketchError::InvalidInput(tr!("sketch-err-target-finite")));
+        }
+        let Some(x) = self.locate_extend(c, at) else {
+            return Ok(false);
+        };
+        let backup = self.clone();
+        let result = self.apply_extend(c, &x);
+        if result.is_err() {
+            *self = backup;
+        }
+        result.map(|()| true)
+    }
+
+    /// Bricht die Kurve `c` an den beiden Schnittstellen um die Klickstelle `at` (dieselben wie
+    /// beim Stutzen, siehe [`Sketch::trim_piece`]): Linie, Bogen, Ellipsenbogen und Spline
+    /// zerfallen in zwei oder drei Teile, ein Kreis in zwei Bögen, eine Ellipse in zwei
+    /// Ellipsenbögen (Kreis und Ellipse brauchen dazu mindestens zwei Schnitte). An jeder
+    /// Trennstelle hat jedes Teil seinen eigenen Punkt, beide sind deckungsgleich verbunden.
+    /// Gibt die Teile zurück, `c` zuerst (bei offenen Kurven in Kurvenrichtung); ohne Schnitt
+    /// `vec![c]` und die Skizze bleibt unverändert. Bei einem Fehler bleibt sie ebenfalls
+    /// unverändert.
+    pub fn break_curve(&mut self, c: CurveId, at: DVec2) -> Result<Vec<CurveId>, SketchError> {
+        self.check_curve(c)?;
+        if !at.is_finite() {
+            return Err(SketchError::InvalidInput(tr!("sketch-err-target-finite")));
+        }
+        let Some((g, b)) = self.locate_trim(c, at) else {
+            return Err(SketchError::Degenerate(tr!("sketch-err-break-degenerate")));
+        };
+        let backup = self.clone();
+        let result = self.apply_split(c, &g, &b, true);
+        if result.is_err() {
+            *self = backup;
+        }
+        result
+    }
+
+    /// Ziel des Dehnens der Kurve `c` an dem Ende, das `at` näher liegt (siehe
+    /// [`Sketch::extend`]).
+    fn locate_extend(&self, c: CurveId, at: DVec2) -> Option<ExtendTarget> {
+        if !at.is_finite() {
+            return None;
+        }
+        let g = self.geom(c)?;
+        let (first, last) = match self.curves[c].kind {
+            CurveKind::Line { a, b } => (a, b),
+            CurveKind::Arc { start, end, .. } | CurveKind::EllipticArc { start, end, .. } => {
+                (start, end)
+            }
+            _ => return None,
+        };
+        let at_end = at.distance(self.pos(last)) < at.distance(self.pos(first));
+        let (point, other) = if at_end { (last, first) } else { (first, last) };
+        if !self.is_open_end(c, point) {
+            return None;
+        }
+        let tol = self.tolerance().linear;
+        let (from, fixed) = (self.pos(point), self.pos(other));
+        let (lo, hi) = g.domain();
+        // Suchkurve ab dem Ende und Weg längs der Verlängerung bis zum Parameter `t` (`None`
+        // hinter dem Ende bzw. für einen Bogen jenseits des eigenen Anfangs).
+        let (search, length) = match g {
+            Geom::Line { .. } => {
+                let dir = (from - fixed).normalize_or_zero();
+                let (min, max) = self.extent()?;
+                let len = 2.0 * min.distance(max);
+                if dir == DVec2::ZERO || !len.is_finite() || len <= 0.0 {
+                    return None;
+                }
+                (
+                    Geom::Line {
+                        a: from,
+                        b: from + dir * len,
+                    },
+                    None,
+                )
+            }
+            Geom::Arc { c: m, r, .. } => (Geom::Circle { c: m, r }, Some(hi - lo)),
+            Geom::EllipticArc { c: m, a, b, .. } => (Geom::Ellipse { c: m, a, b }, Some(hi - lo)),
+            _ => return None,
+        };
+        let ahead = |t: f64| -> Option<f64> {
+            let q = search.eval(t).0;
+            if q.distance(from) <= tol || q.distance(fixed) <= tol {
+                return None;
+            }
+            match length {
+                None => (t > 0.0).then_some(t),
+                Some(sweep) => {
+                    let gap = if at_end {
+                        (t - hi).rem_euclid(TAU)
+                    } else {
+                        (lo - t).rem_euclid(TAU)
+                    };
+                    (gap < TAU - sweep).then_some(gap)
+                }
+            }
+        };
+        let ps = Prepared::new(&search);
+        let mut hits: Vec<(f64, f64, CurveId)> = Vec::new();
+        for (id, _) in self.curves() {
+            if id == c {
+                continue;
+            }
+            let Some(h) = self.geom(id) else { continue };
+            for (t, _) in intersect_prepared(&ps, &Prepared::new(&h), tol) {
+                if let Some(d) = ahead(t) {
+                    hits.push((d, t, id));
+                }
+            }
+        }
+        let &(gap, t, _) = hits.iter().min_by(|x, y| x.0.total_cmp(&y.0))?;
+        let hit = search.eval(t).0;
+        let cutter = hits
+            .iter()
+            .filter(|h| search.eval(h.1).0.distance(hit) <= tol)
+            .map(|h| h.2)
+            .min()?;
+        let to = self
+            .cutter_point_at(cutter, hit)
+            .map_or(hit, |q| self.pos(q));
+        let mut path = match length {
+            None => vec![from, to],
+            Some(_) if at_end => search.polyline(hi, hi + gap, PREVIEW_STEPS_PER_TURN),
+            Some(_) => {
+                let mut p = search.polyline(lo - gap, lo, PREVIEW_STEPS_PER_TURN);
+                p.reverse();
+                p
+            }
+        };
+        let n = path.len();
+        path[0] = from;
+        path[n - 1] = to;
+        Some(ExtendTarget {
+            point,
+            to,
+            cutter,
+            path,
+        })
+    }
+
+    /// Offenes Ende (Entscheidung 8): keine andere lebende Kurve benutzt den Punkt `p`, und er
+    /// hat kein „deckungsgleich“.
+    fn is_open_end(&self, c: CurveId, p: PointId) -> bool {
+        let shared = self
+            .curves()
+            .any(|(id, d)| id != c && d.kind.points().contains(&p));
+        let coincident = self
+            .constraints()
+            .any(|(_, d)| matches!(d.kind, ConstraintKind::Coincident(a, b) if a == p || b == p));
+        !shared && !coincident
+    }
+
+    /// Setzt den Endpunkt auf das Ziel, dann Regel 7 und die Abhängigkeit an der schneidenden
+    /// Kurve.
+    fn apply_extend(&mut self, c: CurveId, x: &ExtendTarget) -> Result<(), SketchError> {
+        let (vx, vy) = (self.points[x.point].x, self.points[x.point].y);
+        self.vars[vx] = x.to.x;
+        self.vars[vy] = x.to.y;
+        self.touch_values();
+        self.settle_constraints(&[c], &[x.point]);
+        self.end_constraint(x.point, x.cutter, x.to)
     }
 
     /// Geometrie der Kurve und Grenzen des Stücks um den Kurvenpunkt, der `at` am nächsten ist.
@@ -183,20 +380,35 @@ impl Sketch {
         Some((g, b))
     }
 
-    fn apply_trim(
+    /// Stutzt (`keep == false`: das Stück `b` fällt weg) oder bricht (`keep == true`: das
+    /// Stück `b` wird eine eigene Kurve, die Teile hängen an getrennten, deckungsgleichen
+    /// Punkten zusammen) die Kurve `c`. Rückgabe: die Teile, `c` zuerst; beim Brechen einer
+    /// offenen Kurve in Kurvenrichtung.
+    fn apply_split(
         &mut self,
         c: CurveId,
         g: &Geom,
         b: &Bounds,
+        keep: bool,
     ) -> Result<Vec<CurveId>, SketchError> {
         let kind = self.curves[c].kind.clone();
         let old_points = kind.points();
         if b.whole {
+            if keep {
+                return Ok(vec![c]);
+            }
             self.remove_curve(c)?;
             self.drop_orphans(&old_points)?;
             return Ok(Vec::new());
         }
         let mut ends: Vec<NewEnd> = Vec::new();
+        // Getrennte Punkte an einer Trennstelle beim Brechen (werden deckungsgleich).
+        let mut joins: Vec<(PointId, PointId)> = Vec::new();
+        // Interne Abhängigkeit des zweiten Bogens beim Brechen von Kreis und Ellipse: Mit beiden
+        // Trennstellen deckungsgleich folgt sie aus der des ersten. Zuletzt angelegt meldet die
+        // Rangprüfung sie als die überzählige, und interne meldet sie nicht; sonst träfe es
+        // „deckungsgleich“ oder „Punkt auf Kurve“.
+        let mut deferred: Option<ConstraintKind> = None;
         let mut out = vec![c];
         match kind {
             CurveKind::Circle { center, .. } => {
@@ -204,6 +416,17 @@ impl Sketch {
                 let end = self.cut_point(g, b.t0, b.cutter0, &mut ends)?;
                 self.set_curve_kind(c, CurveKind::Arc { center, start, end });
                 self.push_internal(ConstraintKind::ArcRadius(c));
+                if keep {
+                    let s = self.twin(end, &mut joins)?;
+                    let e = self.twin(start, &mut joins)?;
+                    let n = self.push_curve(CurveKind::Arc {
+                        center,
+                        start: s,
+                        end: e,
+                    });
+                    deferred = Some(ConstraintKind::ArcRadius(n));
+                    out.push(n);
+                }
             }
             CurveKind::Ellipse {
                 center,
@@ -225,6 +448,20 @@ impl Sketch {
                     },
                 );
                 self.push_internal(ConstraintKind::EllipticArcEnds(c));
+                if keep {
+                    let s = self.twin(end, &mut joins)?;
+                    let e = self.twin(start, &mut joins)?;
+                    let n = self.push_curve(CurveKind::EllipticArc {
+                        center,
+                        ax,
+                        ay,
+                        minor,
+                        start: s,
+                        end: e,
+                    });
+                    deferred = Some(ConstraintKind::EllipticArcEnds(n));
+                    out.push(n);
+                }
             }
             open => {
                 let (lo, hi) = g.domain();
@@ -238,13 +475,27 @@ impl Sketch {
                     }
                 };
                 let mut pieces = Vec::new();
-                if b.cut0 {
-                    let e = self.cut_point(g, b.t0, b.cutter0, &mut ends)?;
-                    pieces.push((first, e, lo, b.t0));
-                }
-                if b.cut1 {
-                    let s = self.cut_point(g, b.t1, b.cutter1, &mut ends)?;
-                    pieces.push((s, last, b.t1, hi));
+                if keep {
+                    // Kette der Teile: an jeder Schnittstelle endet ein Teil, das nächste
+                    // beginnt an einem eigenen Punkt.
+                    let (mut s, mut u0) = (first, lo);
+                    for (cut, t, cutter) in [(b.cut0, b.t0, b.cutter0), (b.cut1, b.t1, b.cutter1)] {
+                        if cut {
+                            let e = self.cut_point(g, t, cutter, &mut ends)?;
+                            pieces.push((s, e, u0, t));
+                            (s, u0) = (self.twin(e, &mut joins)?, t);
+                        }
+                    }
+                    pieces.push((s, last, u0, hi));
+                } else {
+                    if b.cut0 {
+                        let e = self.cut_point(g, b.t0, b.cutter0, &mut ends)?;
+                        pieces.push((first, e, lo, b.t0));
+                    }
+                    if b.cut1 {
+                        let s = self.cut_point(g, b.t1, b.cutter1, &mut ends)?;
+                        pieces.push((s, last, b.t1, hi));
+                    }
                 }
                 for (k, (s, e, u0, u1)) in pieces.into_iter().enumerate() {
                     let piece = match &open {
@@ -285,15 +536,33 @@ impl Sketch {
         }
         self.drop_orphans(&old_points)?;
         self.settle_constraints(&[c], &[]);
-        if let Some(&n) = out.get(1) {
-            self.link_pieces(c, n)?;
+        for &n in &out[1..] {
+            self.link_pieces(c, n, !keep)?;
+        }
+        for (p, q) in joins {
+            self.add_constraint(ConstraintKind::Coincident(p, q))?;
         }
         for (p, cutter, at) in ends {
             if let Some(k) = cutter {
-                self.end_constraint(p, k, at);
+                self.end_constraint(p, k, at)?;
             }
         }
+        if let Some(k) = deferred {
+            self.push_internal(k);
+        }
         Ok(out)
+    }
+
+    /// Neuer Punkt genau auf `p` (Trennstelle beim Brechen), vermerkt für „deckungsgleich“.
+    fn twin(
+        &mut self,
+        p: PointId,
+        joins: &mut Vec<(PointId, PointId)>,
+    ) -> Result<PointId, SketchError> {
+        let v = self.pos(p);
+        let q = self.add_point(v.x, v.y)?;
+        joins.push((p, q));
+        Ok(q)
     }
 
     /// Neuer Punkt der Kurve beim Parameter `t`, vermerkt als neues Ende. Liegt dort ein Punkt
@@ -388,7 +657,9 @@ impl Sketch {
     /// Abhängigkeiten zwischen Original `c` und neuem Teilstück `n` (Entscheidung 7): Linie
     /// waagerecht/senkrecht wie das Original, sonst parallel, und ihr Anfang auf dem Original
     /// (zusammen kollinear); Bogen gleich groß; Ellipsenbogen teilt ohnehin die Variablen.
-    fn link_pieces(&mut self, c: CurveId, n: CurveId) -> Result<(), SketchError> {
+    /// Hängen die Teile deckungsgleich zusammen (Brechen, `apart == false`), folgen „Punkt auf
+    /// Kurve“ und „gleich“ schon daraus und entfallen, sonst wären sie überzählig.
+    fn link_pieces(&mut self, c: CurveId, n: CurveId, apart: bool) -> Result<(), SketchError> {
         match self.curves[n].kind {
             CurveKind::Line { a, .. } => {
                 let line = LineOrPoints::Line(c);
@@ -404,9 +675,11 @@ impl Sketch {
                     ConstraintKind::Parallel(c, n)
                 };
                 self.add_constraint(direction)?;
-                self.add_constraint(ConstraintKind::PointOnCurve(a, c))?;
+                if apart {
+                    self.add_constraint(ConstraintKind::PointOnCurve(a, c))?;
+                }
             }
-            CurveKind::Arc { .. } => {
+            CurveKind::Arc { .. } if apart => {
                 self.add_constraint(ConstraintKind::Equal(c, n))?;
             }
             _ => {}
@@ -473,7 +746,12 @@ impl Sketch {
     /// Abhängigkeit des neuen Endes `p` an der schneidenden Kurve `cutter` (Schnitt bei `at`):
     /// „deckungsgleich“ mit einem Punkt der Kurve, der höchstens `tol.linear` entfernt liegt
     /// (`p` kommt genau auf ihn), sonst „Punkt auf Kurve“.
-    pub(crate) fn end_constraint(&mut self, p: PointId, cutter: CurveId, at: DVec2) {
+    pub(crate) fn end_constraint(
+        &mut self,
+        p: PointId,
+        cutter: CurveId,
+        at: DVec2,
+    ) -> Result<(), SketchError> {
         let kind = match self.cutter_point_at(cutter, at).filter(|&q| q != p) {
             Some(q) => {
                 let v = self.pos(q);
@@ -487,7 +765,7 @@ impl Sketch {
             }
             None => ConstraintKind::PointOnCurve(p, cutter),
         };
-        // Beide Arten passen zu jeder Kurve; ein Fehler kann nur bei ungültigen Ids entstehen.
-        let _ = self.add_constraint(kind);
+        self.add_constraint(kind)?;
+        Ok(())
     }
 }
