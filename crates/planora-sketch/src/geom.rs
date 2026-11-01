@@ -139,7 +139,6 @@ impl Geom {
     }
 
     /// Vorzeichenbehaftete Krümmung (positiv bei Linksdrehung); 0, wo die Ableitung verschwindet.
-    #[allow(dead_code, reason = "used by profiles, trim and extend (later tasks)")]
     pub(crate) fn curvature(&self, t: f64) -> f64 {
         let (_, d) = self.eval(t);
         let len = d.length();
@@ -151,7 +150,7 @@ impl Geom {
     }
 
     /// Länge der ganzen Kurve.
-    #[allow(dead_code, reason = "used by profiles, trim and extend (later tasks)")]
+    #[allow(dead_code, reason = "used by trim and extend (later tasks)")]
     pub(crate) fn length(&self) -> f64 {
         let (lo, hi) = self.domain();
         self.arc_length(lo, hi)
@@ -295,7 +294,6 @@ impl Geom {
     }
 
     /// Linienzug von `t0` nach `t1` (Teilung siehe [`Geom::polyline_params`]).
-    #[allow(dead_code, reason = "used by profiles, trim and extend (later tasks)")]
     pub(crate) fn polyline(&self, t0: f64, t1: f64, steps_per_turn: usize) -> Vec<DVec2> {
         self.polyline_params(t0, t1, steps_per_turn)
             .into_iter()

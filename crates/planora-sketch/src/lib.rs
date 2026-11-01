@@ -1,5 +1,6 @@
 //! 2D-Skizzen mit Constraint-Solver für PlanoraCAD.
 
+pub(crate) mod arrangement;
 pub mod constraint;
 pub(crate) mod curves;
 pub mod data;
@@ -15,6 +16,7 @@ pub(crate) mod intersect;
 pub mod linalg;
 pub mod model;
 pub mod profile;
+pub(crate) mod profile_legacy;
 pub mod query;
 pub mod solid;
 pub mod solver;
@@ -24,6 +26,6 @@ pub use data::{ConstraintRecord, CurveRecord, PointRecord, SketchData};
 pub use error::SketchError;
 pub use helpers::{RectIds, plane_of_face};
 pub use model::{CurveData, CurveId, CurveKind, PointData, PointId, Sketch};
-pub use profile::{ExtractedProfiles, RejectedLoop};
+pub use profile::{ExtractedProfiles, PieceRef, ProfileRef, RejectedLoop};
 pub use solid::{extrude_profile, revolve_profile};
 pub use solver::{Drag, SolveReport, SolveStatus};

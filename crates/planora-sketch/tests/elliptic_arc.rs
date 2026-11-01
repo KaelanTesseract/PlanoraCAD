@@ -227,11 +227,13 @@ fn an_elliptic_arc_and_its_chord_form_a_profile() {
                 .unwrap();
             s.add_line(b, a).unwrap();
         }
-        let ex = s.profiles();
-        assert!(ex.rejected.is_empty(), "{:?}", ex.rejected);
-        assert_eq!(ex.profiles.len(), 1);
-        let area = ex.profiles[0].outer.signed_area().abs();
-        assert!((area - expected).abs() < 0.1, "{area} statt {expected}");
+        // bisheriger Algorithmus und Anordnung (Skizzen 1) ergeben dieselbe Fläche
+        for ex in [s.legacy_profiles(), s.profiles()] {
+            assert!(ex.rejected.is_empty(), "{:?}", ex.rejected);
+            assert_eq!(ex.profiles.len(), 1);
+            let area = ex.profiles[0].outer.signed_area().abs();
+            assert!((area - expected).abs() < 0.1, "{area} statt {expected}");
+        }
     }
 }
 

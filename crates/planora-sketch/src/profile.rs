@@ -1,47 +1,58 @@
-//! Profil-Extraktion: geschlossene Ketten aus Linien, Bögen, Ellipsenbögen und Splines sowie
-//! Kreise und Ellipsen werden zu Kernel-Profilen.
+//! Profil-Extraktion wie in Fusion: Jede Fläche, die von nicht-konstruktiven Kurven vollständig
+//! umschlossen ist, ist ein Profil.
 //!
-//! Regeln: Es zählen lebende Kurven, die keine Konstruktionsgeometrie sind. Endpunkte im Abstand
-//! `≤ tol.linear` bilden denselben Knoten. Kreise und Ellipsen sind eigene Schleifen (Ellipsen als
-//! ein geschlossenes Freiformsegment), Linien, Bögen, Ellipsenbögen (als Freiformsegment) und
-//! Splines bilden einen Graphen, dessen
-//! Zusammenhangskomponenten je ein einfacher Kreis sein müssen. Splines werden zu natürlichen
-//! kubischen Freiformkurven mit derselben Parametrisierung wie in der Skizze (Stützpunkt `i` bei
-//! `t = i`); ein Spline, dessen Enden zusammenfallen, ist allein eine Schleife. Schleifen, die
-//! sich selbst oder andere schneiden oder
-//! berühren, werden abgelehnt; die übrigen werden nach Schachtelungstiefe zu äußeren Schleifen
-//! (gerade Tiefe) und Löchern (ungerade Tiefe) sortiert.
+//! Grundlage ist die ebene Anordnung aller lebenden, nicht-konstruktiven Kurven
+//! (`arrangement.rs`): Kurven werden an allen Schnitt- und Berührpunkten geteilt, Stummel,
+//! offene Ketten und doppelte Stücke fallen still weg. Jede beschränkte Fläche der Anordnung ist
+//! ein Profil; eine Fläche innerhalb einer anderen (Kreis im Rechteck) ergibt zwei Profile, den
+//! Ring (mit Loch) und die innere Fläche. Kreuzungen, T-Stöße und offene Ketten werden nicht
+//! gemeldet.
 //!
-//! „Berühren“ heißt: näher als `tol.linear` plus die Sehnenabweichung der Abtastung
-//! (`planora_kernel::SampledLoop`, dieselbe Prüfung wie im Kernel). Ein tangential an eine
-//! Kante gelegtes Loch wird so in jedem Maßstab abgelehnt; sehr knappe echte Abstände (unter
-//! etwa 0,12 % des Radius beteiligter Bögen) gelten ebenfalls als Berührung.
+//! Abgelehnt werden entartete Kurven (Bogen ohne Winkel oder mit Ende neben seinem Kreis,
+//! Ellipsenbogen mit Ende neben seiner Ellipse, zu kleine Ellipse, Spline mit zusammengefallenen
+//! Nachbarpunkten; sie fallen aus der Anordnung) und Flächen, deren Rand sich selbst berührt
+//! (Loch berührt den Rand in einem Punkt, innen tangentiale Kreise): Der Kernel kann solche
+//! Schleifen nicht, Fusion schon (Abweichung, siehe `docs/superpowers/offene-punkte.md`).
+//! „Berühren“ heißt wie im Kernel: näher als `tol.linear` plus die Sehnenabweichung der
+//! Abtastung (`planora_kernel::SampledLoop`).
+//!
+//! Schleifen der Profile: Linie → `Segment::Line`, Kreis- und Bogenstück → `Segment::Arc`,
+//! Ellipsenstück → `NurbsCurve::elliptic_arc`, Splinestück → Teil des natürlichen kubischen
+//! Splines mit derselben Parametrisierung wie in der Skizze. Ein ungeteilter Kreis wird zu
+//! [`ProfileLoop::circle`], eine ungeteilte Ellipse zum geschlossenen Freiformsegment ab
+//! Parameter 0 (wie bisher). Jede Schleife beginnt beim Stück mit dem kleinsten
+//! (Kurven-Index, `u0`) und durchläuft es in Kurvenrichtung.
+//!
+//! Die bisherige Extraktion bleibt als [`Sketch::legacy_profiles`] (`profile_legacy.rs`).
 
+use crate::arrangement::{Arrangement, polygon_area, polygon_centroid, polygon_contains};
 use crate::error::SketchError;
+use crate::geom::Geom;
 use crate::model::{CurveId, CurveKind, Sketch};
 use planora_i18n::tr;
 use planora_kernel::{Profile, ProfileLoop, SampledLoop, Segment, segment_end};
 use planora_math::nurbs::NurbsCurve;
-use planora_math::{DVec2, DVec3, TAU, Tolerance};
+use planora_math::{DVec2, DVec3, TAU};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Meldung für Bögen, deren Endpunkte nicht auf demselben Kreis um die Mitte liegen.
-fn arc_off_circle() -> String {
+pub(crate) fn arc_off_circle() -> String {
     tr!("sketch-err-arc-off-circle")
 }
 
 /// Meldung für Ellipsenbögen, deren Endpunkte nicht auf ihrer Ellipse liegen.
-fn elliptic_arc_off_ellipse() -> String {
+pub(crate) fn elliptic_arc_off_ellipse() -> String {
     tr!("sketch-err-elliptic-arc-off-ellipse")
 }
 
 /// Meldung für Splines, deren Kurvenenden nicht an den Knoten der Schleife liegen.
-fn spline_off_node() -> String {
+pub(crate) fn spline_off_node() -> String {
     tr!("sketch-err-spline-off-node")
 }
 
 /// Abtastschritte je Vollkreis für Schnitt- und Enthaltensein-Prüfungen (wie im Kernel).
-const CHECK_STEPS: usize = 64;
+pub(crate) const CHECK_STEPS: usize = 64;
 
 /// Eine Schleife (oder Kurvengruppe), die nicht zu einem Profil werden kann, mit Grund.
 #[derive(Clone, Debug, PartialEq)]
@@ -50,375 +61,544 @@ pub struct RejectedLoop {
     pub reason: SketchError,
 }
 
+/// Stück einer Kurve am Rand eines Profils.
+///
+/// Normierter Parameter `u`: bei Kreis, Bogen, Ellipse und Ellipsenbogen der absolute Winkel
+/// bzw. Ellipsenparameter (siehe [`Sketch::curve_eval`]) geteilt durch 2π, damit ein Kreis und
+/// der später aus ihm gestutzte Bogen dieselbe Grundlage haben; bei Linie und Spline
+/// `u = (t − lo)/(hi − lo)` über [`Sketch::curve_domain`]. Es gilt `u0 < u1`; bei Kreis und
+/// Ellipse reicht `u1` bis `u0 + 1`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PieceRef {
+    pub curve: CurveId,
+    pub u0: f64,
+    pub u1: f64,
+    /// Liegt die Fläche links der Kurvenrichtung?
+    pub left: bool,
+    /// Länge des Stücks in mm.
+    pub len: f64,
+}
+
+/// Begrenzende Stücke eines Profils: äußerer Rand in Umlaufreihenfolge, danach die Stücke
+/// aller Löcher.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProfileRef {
+    pub outer: Vec<PieceRef>,
+    pub holes: Vec<PieceRef>,
+}
+
 /// Ergebnis von [`Sketch::profiles`].
 #[derive(Clone, Debug, Default)]
 pub struct ExtractedProfiles {
     pub profiles: Vec<Profile>,
+    /// Begrenzende Stücke von `profiles[i]`.
+    pub refs: Vec<ProfileRef>,
+    /// Abtastung von `profiles[i]` (64 Schritte je Vollkreis): `[0]` äußerer Umriss gegen den
+    /// Uhrzeigersinn, danach die Löcher im Uhrzeigersinn; geschlossen gedacht.
+    pub outlines: Vec<Vec<Vec<DVec2>>>,
     pub rejected: Vec<RejectedLoop>,
-    /// Kurven der äußeren Schleife von `profiles[i]` in Durchlaufreihenfolge.
+    /// Kurven des äußeren Rands von `profiles[i]` in Umlaufreihenfolge ohne direkte
+    /// Wiederholung.
     pub curve_loops: Vec<Vec<CurveId>>,
+    /// Die Anordnung, aus der die Profile stammen (für Stutzen und Profil-Verweise).
+    #[allow(
+        dead_code,
+        reason = "used by trim and profile references (later tasks)"
+    )]
+    pub(crate) arrangement: Option<Arc<Arrangement>>,
 }
 
-/// Geschlossene Schleife, die alle Topologieprüfungen bestanden hat.
-struct Candidate {
+impl ExtractedProfiles {
+    /// Index des Profils, das `p` enthält (bei mehreren das mit der kleinsten Fläche).
+    pub fn profile_at(&self, p: DVec2) -> Option<usize> {
+        self.outlines
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| {
+                o.first().is_some_and(|outer| polygon_contains(outer, p))
+                    && !o[1..].iter().any(|h| polygon_contains(h, p))
+            })
+            .map(|(i, o)| (i, polygon_area(&o[0]).abs()))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i)
+    }
+}
+
+/// Fertig untersuchte Fläche der Anordnung.
+struct Face {
+    /// Sortierschlüssel: kleinster Kurven-Index des äußeren Rands, Schwerpunkt x, y.
+    key: (usize, f64, f64),
+    result: Result<Accepted, RejectedLoop>,
+}
+
+struct Accepted {
+    profile: Profile,
+    piece_ref: ProfileRef,
+    outline: Vec<Vec<DVec2>>,
     curves: Vec<CurveId>,
-    lp: ProfileLoop,
-    /// Abtastung mit Fehlerschranke je Sehne (gemeinsame Prüfung mit dem Kernel).
-    sampled: SampledLoop,
-}
-
-/// Kante des Kurvengraphen: Kurve von Knoten `a` nach Knoten `b` (in Kurvenrichtung).
-struct Edge {
-    curve: CurveId,
-    a: usize,
-    b: usize,
 }
 
 impl Sketch {
-    /// Zerlegt die Skizze in extrudierbare Profile und abgelehnte Schleifen mit Begründung.
+    /// Zerlegt die Skizze in Profile wie Fusion (siehe Modulbeschreibung) und meldet entartete
+    /// Kurven sowie Flächen, die der Kernel nicht kann.
     ///
-    /// Die Reihenfolge ist deterministisch: Profile nach kleinster Kurven-Id ihrer äußeren
-    /// Schleife, Löcher ebenso.
+    /// Reihenfolge: Profile nach (kleinster Kurven-Id des äußeren Rands, Schwerpunkt x,
+    /// Schwerpunkt y); abgelehnte Kurven in Id-Reihenfolge vor abgelehnten Flächen.
     pub fn profiles(&self) -> ExtractedProfiles {
-        let tol = self.tolerance().linear;
+        let tol = *self.tolerance();
         let mut out = ExtractedProfiles::default();
-        let mut candidates: Vec<Candidate> = Vec::new();
+        let mut input: Vec<(CurveId, Geom)> = Vec::new();
+        for (id, _) in self.curves().filter(|(_, c)| !c.construction) {
+            match self.arrangement_geom(id) {
+                Ok(Some(g)) => input.push((id, g)),
+                Ok(None) => {}
+                Err(reason) => out.rejected.push(RejectedLoop {
+                    curves: vec![id],
+                    reason,
+                }),
+            }
+        }
+        let arr = Arrangement::build(input, tol.linear);
+        let min_area = tol.linear * tol.linear;
 
-        // Knoten: Endpunkte im Abstand <= tol fallen zusammen (erster Punkt ist Vertreter).
-        let mut reps: Vec<DVec2> = Vec::new();
-        let mut node = |pos: DVec2| -> usize {
-            reps.iter()
-                .position(|r| r.distance(pos) <= tol)
-                .unwrap_or_else(|| {
-                    reps.push(pos);
-                    reps.len() - 1
-                })
-        };
-
-        // Kreise und Ellipsen sind eigene Schleifen; Linien, Bögen, Ellipsenbögen und Splines
-        // bilden den Graphen (Splines hängen mit ihren Endpunkten daran).
-        let mut edges: Vec<Edge> = Vec::new();
-        for (id, c) in self.curves().filter(|(_, c)| !c.construction) {
-            match &c.kind {
-                CurveKind::Circle { center, radius } => {
-                    let r = self.vars[*radius];
-                    if !(r.is_finite() && r > tol) {
-                        out.rejected.push(RejectedLoop {
-                            curves: vec![id],
-                            reason: SketchError::Degenerate(tr!("sketch-radius-positive")),
-                        });
-                        continue;
-                    }
-                    let lp = ProfileLoop::circle(self.pos(*center), r);
-                    candidates.push(Candidate::new(vec![id], lp, self.tolerance()));
-                }
-                CurveKind::Line { a, b }
-                | CurveKind::Arc {
-                    start: a, end: b, ..
-                }
-                | CurveKind::EllipticArc {
-                    start: a, end: b, ..
-                } => {
-                    let (na, nb) = (node(self.pos(*a)), node(self.pos(*b)));
-                    edges.push(Edge {
-                        curve: id,
-                        a: na,
-                        b: nb,
-                    });
-                }
-                CurveKind::Ellipse { .. } => match self.ellipse_loop(id) {
-                    Ok(lp) => candidates.push(Candidate::new(vec![id], lp, self.tolerance())),
-                    Err(reason) => out.rejected.push(RejectedLoop {
-                        curves: vec![id],
-                        reason,
-                    }),
-                },
-                CurveKind::Spline { points } => match (points.first(), points.last()) {
-                    (Some(first), Some(last)) if points.len() >= 2 => {
-                        let (na, nb) = (node(self.pos(*first)), node(self.pos(*last)));
-                        edges.push(Edge {
-                            curve: id,
-                            a: na,
-                            b: nb,
-                        });
-                    }
-                    // Kann bei einer gültigen Skizze nicht auftreten (`add_spline` und das Laden
-                    // verlangen zwei Punkte); zur Sicherheit benannt statt einer Panik.
-                    _ => out.rejected.push(RejectedLoop {
-                        curves: vec![id],
-                        reason: SketchError::Degenerate(tr!("sketch-err-spline-two-points")),
-                    }),
-                },
-            }
-        }
-        let node_count = reps.len();
-
-        // Zusammenhangskomponenten (Union-Find über die Knoten).
-        let mut parent: Vec<usize> = (0..node_count).collect();
-        fn find(parent: &mut [usize], mut x: usize) -> usize {
-            while parent[x] != x {
-                parent[x] = parent[parent[x]];
-                x = parent[x];
-            }
-            x
-        }
-        for e in &edges {
-            let (ra, rb) = (find(&mut parent, e.a), find(&mut parent, e.b));
-            if ra != rb {
-                parent[ra.max(rb)] = ra.min(rb);
-            }
-        }
-        // Komponenten in Reihenfolge ihrer ersten Kante (Kanten liegen nach Kurven-Id sortiert).
-        let mut comp_index: Vec<Option<usize>> = vec![None; node_count];
-        let mut comps: Vec<Vec<usize>> = Vec::new();
-        for (ei, e) in edges.iter().enumerate() {
-            let root = find(&mut parent, e.a);
-            let ci = *comp_index[root].get_or_insert_with(|| {
-                comps.push(Vec::new());
-                comps.len() - 1
-            });
-            comps[ci].push(ei);
-        }
-
-        for comp in comps {
-            let curves: Vec<CurveId> = comp.iter().map(|&e| edges[e].curve).collect();
-            match self.trace_loop(&comp, &edges, &reps) {
-                Ok(lp_curves) => {
-                    let (order, lp) = lp_curves;
-                    candidates.push(Candidate::new(order, lp, self.tolerance()));
-                }
-                Err(reason) => out.rejected.push(RejectedLoop { curves, reason }),
-            }
-        }
-
-        // Selbstschnitt und Schnitt zwischen Schleifen.
-        let n = candidates.len();
-        let mut bad = vec![false; n];
-        for i in 0..n {
-            if candidates[i].sampled.touches_itself(tol) {
-                bad[i] = true;
-            }
-            for j in i + 1..n {
-                if candidates[i].sampled.touches(&candidates[j].sampled, tol) {
-                    bad[i] = true;
-                    bad[j] = true;
-                }
-            }
-        }
-        let mut good: Vec<usize> = Vec::new();
-        for (i, c) in candidates.iter().enumerate() {
-            if bad[i] {
-                out.rejected.push(RejectedLoop {
-                    curves: c.curves.clone(),
-                    reason: SketchError::SelfIntersecting,
-                });
-            } else if c.lp.signed_area().abs() <= tol * tol {
-                // Zwei Linien zwischen denselben Knoten (Hin- und Rückweg) oder kollineare
-                // Punkte schließen keine Fläche ein. Erst nach der Schnittprüfung, weil sich bei
-                // einer Achterschleife die Teilflächen aufheben. Schwelle: Quadrat der Kante tol.
-                out.rejected.push(RejectedLoop {
-                    curves: c.curves.clone(),
-                    reason: SketchError::Degenerate(tr!("sketch-err-loop-no-area")),
-                });
-            } else {
-                good.push(i);
-            }
-        }
-
-        // Schachtelung: Tiefe = Zahl der umschließenden Schleifen. Da sich die übrigen
-        // Schleifen nicht berühren, entscheidet ein beliebiger Abtastpunkt.
-        good.sort_by_key(|&i| candidates[i].curves.iter().map(|c| c.index()).min());
-        let containers: Vec<Vec<usize>> = good
-            .iter()
-            .map(|&i| {
-                good.iter()
-                    .copied()
-                    .filter(|&j| {
-                        j != i
-                            && candidates[i]
-                                .sampled
-                                .boxes_near(&candidates[j].sampled, tol)
-                            && candidates[j]
-                                .sampled
-                                .contains(candidates[i].sampled.points[0])
-                    })
-                    .collect()
-            })
+        // Löcher: Außenrand einer Komponente in der kleinsten umschließenden Fläche einer
+        // anderen Komponente (Komponenten berühren sich nicht, ein Randpunkt entscheidet).
+        let faces: Vec<usize> = (0..arr.cycles.len())
+            .filter(|&c| arr.cycles[c].area > min_area)
             .collect();
-        let mut profile_of: Vec<Option<usize>> = vec![None; n];
-        for (k, &i) in good.iter().enumerate() {
-            if containers[k].len().is_multiple_of(2) {
-                profile_of[i] = Some(out.profiles.len());
-                out.profiles.push(Profile {
-                    outer: candidates[i].lp.clone(),
-                    holes: Vec::new(),
-                });
-                out.curve_loops.push(candidates[i].curves.clone());
+        let mut holes: Vec<Vec<usize>> = vec![Vec::new(); arr.cycles.len()];
+        for (ci, c) in arr.cycles.iter().enumerate() {
+            let Some(&p) = c.polygon.first() else {
+                continue;
+            };
+            if !(c.area.is_finite() && c.area < -min_area) {
+                continue;
+            }
+            let host = faces
+                .iter()
+                .copied()
+                .filter(|&f| {
+                    let fc = &arr.cycles[f];
+                    fc.component != c.component
+                        && p.cmpge(fc.bbox.0).all()
+                        && p.cmple(fc.bbox.1).all()
+                        && polygon_contains(&fc.polygon, p)
+                })
+                .min_by(|&a, &b| arr.cycles[a].area.total_cmp(&arr.cycles[b].area));
+            if let Some(f) = host {
+                holes[f].push(ci);
             }
         }
-        let area = |i: usize| candidates[i].lp.signed_area().abs();
-        for (k, &i) in good.iter().enumerate() {
-            if !containers[k].len().is_multiple_of(2) {
-                // Unmittelbar umschließende Schleife = kleinste Fläche unter den Umschließenden;
-                // sie hat gerade Tiefe und ist damit eine äußere Schleife.
-                let direct = containers[k]
-                    .iter()
-                    .copied()
-                    .min_by(|&a, &b| area(a).total_cmp(&area(b)));
-                match direct.and_then(|p| profile_of[p]) {
-                    Some(pi) => out.profiles[pi].holes.push(candidates[i].lp.clone()),
-                    None => out.rejected.push(RejectedLoop {
-                        curves: candidates[i].curves.clone(),
-                        reason: SketchError::AmbiguousNesting,
-                    }),
+
+        let mut builder = LoopBuilder {
+            sketch: self,
+            arr: &arr,
+            splines: HashMap::new(),
+        };
+        let mut done: Vec<Face> = faces.iter().map(|&f| builder.face(f, &holes[f])).collect();
+        done.sort_by(|x, y| {
+            x.key
+                .0
+                .cmp(&y.key.0)
+                .then(x.key.1.total_cmp(&y.key.1))
+                .then(x.key.2.total_cmp(&y.key.2))
+        });
+        for face in done {
+            match face.result {
+                Ok(a) => {
+                    out.profiles.push(a.profile);
+                    out.refs.push(a.piece_ref);
+                    out.outlines.push(a.outline);
+                    out.curve_loops.push(a.curves);
                 }
+                Err(r) => out.rejected.push(r),
             }
         }
+        out.arrangement = Some(Arc::new(arr));
         out
     }
 
-    /// Prüft eine Zusammenhangskomponente des Kurvengraphen und baut daraus die Schleife.
-    /// Liefert die Kurven in Durchlaufreihenfolge und die Kernel-Schleife.
-    fn trace_loop(
-        &self,
-        comp: &[usize],
-        edges: &[Edge],
-        reps: &[DVec2],
-    ) -> Result<(Vec<CurveId>, ProfileLoop), SketchError> {
+    /// Geometrie einer Kurve für die Anordnung; `Err` mit den bisherigen Texten für entartete
+    /// Kurven, `Ok(None)` für Kurven, die still entfallen (Linie ohne Länge, nicht endlich).
+    fn arrangement_geom(&self, id: CurveId) -> Result<Option<Geom>, SketchError> {
         let tol = self.tolerance();
-        let is_spline =
-            |e: usize| matches!(self.curves[edges[e].curve].kind, CurveKind::Spline { .. });
-        // Ein Spline, dessen Enden zusammenfallen, ist allein eine geschlossene Schleife (ein
-        // geschlossenes Freiformsegment wie eine Vollellipse). Hängen an diesem Knoten weitere
-        // Kurven, ist das keine einfache Schleife.
-        if let Some(&e) = comp.iter().find(|&&e| edges[e].a == edges[e].b)
-            && !(comp.len() == 1 && is_spline(e))
-        {
-            let msg = match self.curves[edges[e].curve].kind {
-                CurveKind::Arc { .. } | CurveKind::EllipticArc { .. } => {
-                    tr!("sketch-err-arc-closed")
+        let no_angle = |phi: f64| phi <= tol.angular || phi >= TAU - tol.angular;
+        match &self.curves[id].kind {
+            CurveKind::Line { a, b } => {
+                let len = self.pos(*a).distance(self.pos(*b));
+                if !(len.is_finite() && len > tol.linear) {
+                    return Ok(None);
                 }
-                CurveKind::Spline { .. } => {
-                    tr!("sketch-err-spline-closed-branch")
+            }
+            CurveKind::Circle { radius, .. } => {
+                let r = self.vars[*radius];
+                if !(r.is_finite() && r > tol.linear) {
+                    return Err(SketchError::Degenerate(tr!("sketch-radius-positive")));
                 }
-                _ => tr!("sketch-err-line-zero-length"),
-            };
-            return Err(SketchError::Degenerate(msg));
-        }
-        let mut degree = vec![0usize; reps.len()];
-        for &e in comp {
-            degree[edges[e].a] += 1;
-            degree[edges[e].b] += 1;
-        }
-        // Verzweigungen zuerst: Ein Stummel an einer Ecke hat Grad 1 *und* 3 und ist mehrdeutig,
-        // nicht „offen“.
-        if degree.iter().any(|&d| d >= 3) {
-            return Err(SketchError::AmbiguousTopology(tr!("sketch-err-t-junction")));
-        }
-        if degree.contains(&1) {
-            return Err(SketchError::OpenLoop);
-        }
-
-        // Kreis durchlaufen: Alle Knoten haben Grad 2, die Komponente ist zusammenhängend,
-        // also ein einziger Kreis über alle Kanten.
-        let first = comp[0];
-        let mut used = vec![false; edges.len()];
-        used[first] = true;
-        let mut order: Vec<(usize, bool)> = vec![(first, true)];
-        let mut at_node = edges[first].b;
-        while at_node != edges[first].a {
-            let next = comp
-                .iter()
-                .copied()
-                .find(|&e| !used[e] && (edges[e].a == at_node || edges[e].b == at_node))
-                .ok_or(SketchError::OpenLoop)?;
-            used[next] = true;
-            let forward = edges[next].a == at_node;
-            order.push((next, forward));
-            at_node = if forward {
-                edges[next].b
-            } else {
-                edges[next].a
-            };
-        }
-        if order.len() != comp.len() {
-            // Kann bei Grad 2 überall nicht auftreten; zur Sicherheit statt einer Panik.
-            return Err(SketchError::AmbiguousTopology(tr!(
-                "sketch-err-loops-in-group"
-            )));
-        }
-
-        let start = reps[edges[first].a];
-        let mut segments = Vec::with_capacity(order.len());
-        // Laufender Endpunkt, wie der Kernel ihn berechnet: Linien springen auf ihr absolutes
-        // Ziel, Bögen drehen den vorigen Endpunkt. Jedes Segmentende muss deshalb einzeln
-        // mit seinem Zielknoten übereinstimmen, sonst wiche das Profil still von der Skizze ab.
-        let mut at = start;
-        for &(e, forward) in &order {
-            let edge = &edges[e];
-            let target = reps[if forward { edge.b } else { edge.a }];
-            let seg = match &self.curves[edge.curve].kind {
-                CurveKind::Spline { points } => self.spline_segment(points, forward)?,
-                CurveKind::EllipticArc { .. } => {
-                    self.elliptic_arc_segment(edge.curve, reps[edge.a], reps[edge.b], forward)?
+            }
+            &CurveKind::Arc { center, start, end } => {
+                let c = self.pos(center);
+                let (a, b) = (self.pos(start), self.pos(end));
+                let (ra, rb) = ((a - c).length(), (b - c).length());
+                if !(ra.is_finite() && ra > tol.linear) {
+                    return Err(SketchError::Degenerate(tr!("sketch-radius-positive")));
                 }
-                &CurveKind::Arc { center, .. } => {
-                    // Der Bogen läuft gegen den Uhrzeigersinn vom Knoten `a` (Start) zu `b` (Ende).
-                    let c = self.pos(center);
-                    let (ra, rb) = ((reps[edge.a] - c).length(), (reps[edge.b] - c).length());
-                    if (ra - rb).abs() > tol.linear {
-                        return Err(SketchError::Degenerate(arc_off_circle()));
-                    }
-                    let angle = |p: DVec2| (p - c).y.atan2((p - c).x);
-                    let phi = (angle(reps[edge.b]) - angle(reps[edge.a])).rem_euclid(TAU);
-                    // Der Kernel verlangt tol.angular < |sweep| ≤ 2π; ein Bogen zwischen zwei
-                    // verschiedenen Knoten, der (fast) null oder eine volle Drehung überstreicht,
-                    // ist entartet.
-                    if phi <= tol.angular || phi >= TAU - tol.angular {
-                        return Err(SketchError::Degenerate(tr!("sketch-err-arc-no-angle")));
-                    }
-                    Segment::Arc {
-                        center: c,
-                        sweep: if forward { phi } else { -phi },
-                    }
+                if (ra - rb).abs() > tol.linear {
+                    return Err(SketchError::Degenerate(arc_off_circle()));
                 }
-                _ => Segment::Line { to: target },
-            };
-            let off_node = if let Segment::Nurbs { curve } = &seg {
-                let msg = if matches!(self.curves[edge.curve].kind, CurveKind::EllipticArc { .. }) {
-                    elliptic_arc_off_ellipse()
-                } else {
-                    spline_off_node()
+                let angle = |p: DVec2| (p - c).y.atan2((p - c).x);
+                // wie bisher: (fast) kein oder ein voller Umlauf ist entartet
+                if no_angle((angle(b) - angle(a)).rem_euclid(TAU)) {
+                    return Err(SketchError::Degenerate(tr!("sketch-err-arc-no-angle")));
+                }
+            }
+            CurveKind::Ellipse { .. } => {
+                self.ellipse_frame(id)?;
+            }
+            &CurveKind::EllipticArc { start, end, .. } => {
+                self.ellipse_frame(id)?;
+                let (a, b) = (self.pos(start), self.pos(end));
+                let (Some(t0), Some(t1)) =
+                    (self.ellipse_param_of(id, a), self.ellipse_param_of(id, b))
+                else {
+                    return Err(SketchError::Degenerate(elliptic_arc_off_ellipse()));
                 };
-                // Der Kernel verlangt, dass ein Freiformsegment am Ende des vorigen beginnt.
-                let p = curve.point(curve.domain().0);
-                if at.distance(DVec2::new(p.x, p.y)) > tol.linear {
-                    return Err(SketchError::Degenerate(msg));
+                if no_angle((t1 - t0).rem_euclid(TAU)) {
+                    return Err(SketchError::Degenerate(tr!("sketch-err-arc-no-angle")));
                 }
-                msg
-            } else {
-                arc_off_circle()
+                let on = |t: f64, p: DVec2| {
+                    self.ellipse_point(id, t)
+                        .is_some_and(|q| q.distance(p) <= tol.linear)
+                };
+                if !(on(t0, a) && on(t1, b)) {
+                    return Err(SketchError::Degenerate(elliptic_arc_off_ellipse()));
+                }
+            }
+            CurveKind::Spline { points } => {
+                if points.len() < 2 {
+                    // Kann bei einer gültigen Skizze nicht auftreten (`add_spline` und das Laden
+                    // verlangen zwei Punkte); zur Sicherheit benannt statt einer Panik.
+                    return Err(SketchError::Degenerate(tr!("sketch-err-spline-two-points")));
+                }
+                // `add_spline` prüft das beim Anlegen; das Lösen kann Punkte danach zusammenlegen.
+                if points
+                    .windows(2)
+                    .any(|w| self.pos(w[0]).distance(self.pos(w[1])) <= tol.linear)
+                {
+                    return Err(SketchError::Degenerate(tr!("sketch-err-spline-neighbours")));
+                }
+            }
+        }
+        let Some(g) = self.geom(id) else {
+            return Ok(None);
+        };
+        let (lo, hi) = g.domain();
+        let finite = g.eval(lo).0.is_finite() && g.eval(hi).0.is_finite() && g.bbox().0.is_finite();
+        Ok(finite.then_some(g))
+    }
+}
+
+/// Normierter Parameter `u` (siehe [`PieceRef`]).
+fn normalized(g: &Geom, t: f64) -> f64 {
+    match g {
+        Geom::Line { .. } | Geom::Spline { .. } => {
+            let (lo, hi) = g.domain();
+            (t - lo) / (hi - lo)
+        }
+        _ => t / TAU,
+    }
+}
+
+/// Baut Kernel-Schleifen aus Umläufen der Anordnung.
+struct LoopBuilder<'a> {
+    sketch: &'a Sketch,
+    arr: &'a Arrangement,
+    /// Natürlicher kubischer Spline je Kurve der Anordnung (einmal gebaut).
+    splines: HashMap<usize, NurbsCurve>,
+}
+
+impl LoopBuilder<'_> {
+    /// Untersucht die Fläche `f` mit den Löchern `holes` (Umläufe der Anordnung).
+    fn face(&mut self, f: usize, holes: &[usize]) -> Face {
+        let arr = self.arr;
+        let cycle = &arr.cycles[f];
+        let (outer, reversed) = self.oriented(&cycle.half_edges);
+        let mut curves: Vec<CurveId> = Vec::new();
+        for &h in &outer {
+            let c = arr.pieces[h / 2].curve;
+            if curves.last() != Some(&c) {
+                curves.push(c);
+            }
+        }
+        if curves.len() > 1 && curves.first() == curves.last() {
+            curves.pop();
+        }
+        let centroid = polygon_centroid(&cycle.polygon);
+        let key = (
+            curves.iter().map(|c| c.index()).min().unwrap_or(usize::MAX),
+            centroid.x,
+            centroid.y,
+        );
+        let reject = |reason: SketchError| RejectedLoop {
+            curves: curves.clone(),
+            reason,
+        };
+        // Löcher nach (kleinster Kurven-Index, Schwerpunkt)
+        let mut holes: Vec<(usize, DVec2, usize, Vec<usize>, bool)> = holes
+            .iter()
+            .map(|&h| {
+                let (hes, rev) = self.oriented(&arr.cycles[h].half_edges);
+                let min = hes
+                    .iter()
+                    .map(|&e| arr.pieces[e / 2].curve.index())
+                    .min()
+                    .unwrap_or(usize::MAX);
+                (min, polygon_centroid(&arr.cycles[h].polygon), h, hes, rev)
+            })
+            .collect();
+        holes.sort_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then(a.1.x.total_cmp(&b.1.x))
+                .then(a.1.y.total_cmp(&b.1.y))
+        });
+
+        let result = (|| {
+            let tol = self.sketch.tolerance();
+            let outer_lp = self.build(&outer)?;
+            let mut hole_lps = Vec::with_capacity(holes.len());
+            for (_, _, _, hes, _) in &holes {
+                hole_lps.push(self.build(hes)?);
+            }
+            // Entscheidung 3: Ränder, die sich selbst oder einander berühren, kann der Kernel
+            // nicht (eingeklemmte Flächen).
+            let sampled: Vec<SampledLoop> = std::iter::once(&outer_lp)
+                .chain(&hole_lps)
+                .map(|lp| SampledLoop::new(lp, CHECK_STEPS, tol))
+                .collect();
+            let touching = (0..sampled.len()).any(|i| {
+                sampled[i].touches_itself(tol.linear)
+                    || (i + 1..sampled.len()).any(|j| sampled[i].touches(&sampled[j], tol.linear))
+            });
+            if touching {
+                return Err(SketchError::SelfIntersecting);
+            }
+            Ok((outer_lp, hole_lps))
+        })();
+        let result = match result {
+            Err(reason) => Err(reject(reason)),
+            Ok((outer_lp, hole_lps)) => {
+                let mut piece_ref = ProfileRef {
+                    outer: self.piece_refs(&outer, reversed),
+                    holes: Vec::new(),
+                };
+                let mut outline = vec![cycle.polygon.clone()];
+                for (_, _, h, hes, rev) in &holes {
+                    piece_ref.holes.extend(self.piece_refs(hes, *rev));
+                    outline.push(arr.cycles[*h].polygon.clone());
+                }
+                Ok(Accepted {
+                    profile: Profile {
+                        outer: outer_lp,
+                        holes: hole_lps,
+                    },
+                    piece_ref,
+                    outline,
+                    curves,
+                })
+            }
+        };
+        Face { key, result }
+    }
+
+    /// Umlauf als Schleife: beginnt beim Stück mit kleinstem (Kurven-Index, `u0`) und
+    /// durchläuft es vorwärts; `true`, wenn dafür der Umlauf umgekehrt wurde.
+    fn oriented(&self, hes: &[usize]) -> (Vec<usize>, bool) {
+        let arr = self.arr;
+        let rank = |h: usize| {
+            let p = &arr.pieces[h / 2];
+            (p.curve.index(), normalized(arr.geom_of(h / 2), p.t0), h % 2)
+        };
+        let Some(first) = hes.iter().copied().min_by(|&x, &y| {
+            let (a, b) = (rank(x), rank(y));
+            a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.cmp(&b.2))
+        }) else {
+            return (Vec::new(), false);
+        };
+        let reversed = first % 2 == 1;
+        let mut out: Vec<usize> = if reversed {
+            hes.iter().rev().map(|&h| h ^ 1).collect()
+        } else {
+            hes.to_vec()
+        };
+        let want = if reversed { first ^ 1 } else { first };
+        let at = out.iter().position(|&h| h == want).unwrap_or(0);
+        out.rotate_left(at);
+        (out, reversed)
+    }
+
+    /// Verweise der Stücke einer Schleife; `reversed`: die Schleife läuft gegen den Umlauf mit
+    /// der Fläche links.
+    fn piece_refs(&self, hes: &[usize], reversed: bool) -> Vec<PieceRef> {
+        hes.iter()
+            .map(|&h| {
+                let p = &self.arr.pieces[h / 2];
+                let g = self.arr.geom_of(h / 2);
+                PieceRef {
+                    curve: p.curve,
+                    u0: normalized(g, p.t0),
+                    u1: normalized(g, p.t1),
+                    left: h.is_multiple_of(2) != reversed,
+                    len: p.len,
+                }
+            })
+            .collect()
+    }
+
+    /// Kernel-Schleife aus den Halbkanten `hes` (erste vorwärts).
+    fn build(&mut self, hes: &[usize]) -> Result<ProfileLoop, SketchError> {
+        let arr = self.arr;
+        let tol = self.sketch.tolerance();
+        if let &[h] = hes
+            && let Some(lp) = self.single(h)?
+        {
+            return Ok(lp);
+        }
+        let start = arr.nodes[arr.ends(hes[0]).0];
+        let mut at = start;
+        let mut segments = Vec::with_capacity(hes.len());
+        for &h in hes {
+            let k = h / 2;
+            let p = &arr.pieces[k];
+            let forward = h.is_multiple_of(2);
+            let target = arr.nodes[arr.ends(h).1];
+            let (seg, off_node) = match arr.geom_of(k) {
+                Geom::Line { .. } => (Segment::Line { to: target }, arc_off_circle()),
+                Geom::Circle { c, .. } | Geom::Arc { c, .. } => (
+                    Segment::Arc {
+                        center: *c,
+                        sweep: if forward { p.t1 - p.t0 } else { p.t0 - p.t1 },
+                    },
+                    arc_off_circle(),
+                ),
+                Geom::Ellipse { c, a, b } | Geom::EllipticArc { c, a, b, .. } => (
+                    nurbs_segment(elliptic(*c, *a, *b, p.t0, p.t1 - p.t0)?, forward)?,
+                    elliptic_arc_off_ellipse(),
+                ),
+                Geom::Spline { .. } => (
+                    nurbs_segment(self.spline_piece(k)?, forward)?,
+                    spline_off_node(),
+                ),
             };
+            if let Segment::Nurbs { curve } = &seg {
+                // Der Kernel verlangt, dass ein Freiformsegment am Ende des vorigen beginnt.
+                let q = curve.point(curve.domain().0);
+                if at.distance(DVec2::new(q.x, q.y)) > tol.linear {
+                    return Err(SketchError::Degenerate(off_node));
+                }
+            }
             at = segment_end(at, &seg);
             if at.distance(target) > tol.linear {
                 return Err(SketchError::Degenerate(off_node));
             }
             segments.push(seg);
         }
-        let lp = ProfileLoop { start, segments };
-        if !lp.is_closed(tol) {
-            // Durch die Prüfung je Segment eigentlich ausgeschlossen; zur Sicherheit.
-            return Err(SketchError::Degenerate(arc_off_circle()));
-        }
-        Ok((order.iter().map(|&(e, _)| edges[e].curve).collect(), lp))
+        Ok(ProfileLoop { start, segments })
     }
+
+    /// Schleife aus einem einzigen geschlossenen Stück: ungeteilter Kreis wie
+    /// [`ProfileLoop::circle`], ungeteilte Ellipse wie bisher, sonst geschlossenes
+    /// Freiformsegment; `None` für Stücke, die als gewöhnliche Segmente gebaut werden.
+    fn single(&mut self, h: usize) -> Result<Option<ProfileLoop>, SketchError> {
+        let arr = self.arr;
+        let k = h / 2;
+        let p = &arr.pieces[k];
+        let kernel = |e: planora_kernel::KernelError| SketchError::Kernel(e.to_string());
+        let lp = match arr.geom_of(k) {
+            Geom::Circle { c, r } if p.t0 == 0.0 => ProfileLoop::circle(*c, *r),
+            Geom::Ellipse { .. } if p.t0 == 0.0 => self.sketch.ellipse_loop(p.curve)?,
+            Geom::Ellipse { c, a, b } => {
+                ProfileLoop::nurbs_loop(elliptic(*c, *a, *b, p.t0, p.t1 - p.t0)?).map_err(kernel)?
+            }
+            Geom::Spline { .. } => {
+                ProfileLoop::nurbs_loop(self.spline_piece(k)?).map_err(kernel)?
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(lp))
+    }
+
+    /// Teil `[t0, t1]` des natürlichen kubischen Splines zu Stück `k` (ganzer Spline, wenn das
+    /// Stück ihn ganz überdeckt).
+    fn spline_piece(&mut self, k: usize) -> Result<NurbsCurve, SketchError> {
+        let arr = self.arr;
+        let p = &arr.pieces[k];
+        let invalid = |e: planora_math::nurbs::NurbsError| {
+            SketchError::Degenerate(tr!("sketch-err-spline-invalid", detail = e.to_string()))
+        };
+        if !self.splines.contains_key(&p.input) {
+            let CurveKind::Spline { points } = &self.sketch.curves[p.curve].kind else {
+                return Err(SketchError::Degenerate(tr!("sketch-err-spline-two-points")));
+            };
+            let pts: Vec<DVec3> = points
+                .iter()
+                .map(|&q| {
+                    let v = self.sketch.pos(q);
+                    DVec3::new(v.x, v.y, 0.0)
+                })
+                .collect();
+            let params: Vec<f64> = (0..pts.len()).map(|i| i as f64).collect();
+            let curve = NurbsCurve::natural_cubic(&pts, &params).map_err(invalid)?;
+            self.splines.insert(p.input, curve);
+        }
+        let whole = &self.splines[&p.input];
+        let (lo, hi) = whole.domain();
+        if p.t0 <= lo && p.t1 >= hi {
+            return Ok(whole.clone());
+        }
+        whole.sub_curve(p.t0.max(lo), p.t1.min(hi)).map_err(invalid)
+    }
+}
+
+/// Ellipsenstück `c + a·cos t + b·sin t` ab `t0` über `sweep` als Freiformkurve.
+fn elliptic(c: DVec2, a: DVec2, b: DVec2, t0: f64, sweep: f64) -> Result<NurbsCurve, SketchError> {
+    NurbsCurve::elliptic_arc(
+        DVec3::new(c.x, c.y, 0.0),
+        DVec3::new(a.x, a.y, 0.0),
+        DVec3::new(b.x, b.y, 0.0),
+        t0,
+        sweep,
+    )
+    .map_err(|e| SketchError::Degenerate(tr!("sketch-err-ellipse-invalid", detail = e.to_string())))
+}
+
+/// Freiformsegment, bei `forward == false` umgekehrt (wie im Kernel).
+fn nurbs_segment(curve: NurbsCurve, forward: bool) -> Result<Segment, SketchError> {
+    let start = curve.point(curve.domain().0);
+    let seg = Segment::Nurbs {
+        curve: Arc::new(curve),
+    };
+    if forward {
+        return Ok(seg);
+    }
+    let single = ProfileLoop {
+        start: DVec2::new(start.x, start.y),
+        segments: vec![seg],
+    };
+    let reversed = single
+        .try_reversed()
+        .map_err(|e| SketchError::Kernel(e.to_string()))?;
+    reversed
+        .segments
+        .into_iter()
+        .next()
+        .ok_or_else(|| SketchError::Degenerate(tr!("sketch-err-spline-reverse")))
 }
 
 impl Sketch {
     /// Schleife aus einer Ellipse der Skizze: ein geschlossenes Freiformsegment
     /// `c + a·cos t + b·sin t` mit `b = minor · (−ay, ax)/|a|` (gegen den Uhrzeigersinn, wie
     /// [`Sketch::ellipse_point`]).
-    fn ellipse_loop(&self, id: CurveId) -> Result<ProfileLoop, SketchError> {
+    pub(crate) fn ellipse_loop(&self, id: CurveId) -> Result<ProfileLoop, SketchError> {
         let (c, a, b) = self.ellipse_frame(id)?;
         let curve = NurbsCurve::elliptic_arc(
             DVec3::new(c.x, c.y, 0.0),
@@ -435,7 +615,7 @@ impl Sketch {
 
     /// Mittelpunkt `c` und Halbachsen `a`, `b = minor · (−ay, ax)/|a|` einer Ellipse oder eines
     /// Ellipsenbogens; beide Halbachsen müssen länger als `tol.linear` sein.
-    fn ellipse_frame(&self, id: CurveId) -> Result<(DVec2, DVec2, DVec2), SketchError> {
+    pub(crate) fn ellipse_frame(&self, id: CurveId) -> Result<(DVec2, DVec2, DVec2), SketchError> {
         let (c, a, minor) = self
             .ellipse_axes(id)
             .ok_or_else(|| SketchError::WrongType(tr!("sketch-err-not-ellipse")))?;
@@ -463,7 +643,7 @@ impl Sketch {
     /// Starts als Startwinkel und dem Parameterabstand zum Ende als Öffnungswinkel; umgekehrt,
     /// wenn die Schleife ihn gegen seine Richtung durchläuft. Liegen die Knoten nicht auf der
     /// Ellipse, beginnt oder endet das Segment neben ihnen (das prüft der Aufrufer).
-    fn elliptic_arc_segment(
+    pub(crate) fn elliptic_arc_segment(
         &self,
         id: CurveId,
         from: DVec2,
@@ -517,7 +697,7 @@ impl Sketch {
     /// Freiformsegment eines Splines: natürlicher kubischer Spline durch die Stützpunkte mit
     /// den Parametern `0, 1, …, n − 1` (wie [`Sketch::spline_point`]); umgekehrt, wenn die
     /// Schleife ihn gegen seine Richtung durchläuft.
-    fn spline_segment(
+    pub(crate) fn spline_segment(
         &self,
         points: &[crate::model::PointId],
         forward: bool,
@@ -552,16 +732,5 @@ impl Sketch {
             .into_iter()
             .next()
             .ok_or_else(|| SketchError::Degenerate(tr!("sketch-err-spline-reverse")))
-    }
-}
-
-impl Candidate {
-    fn new(curves: Vec<CurveId>, lp: ProfileLoop, tol: &Tolerance) -> Candidate {
-        let sampled = SampledLoop::new(&lp, CHECK_STEPS, tol);
-        Candidate {
-            curves,
-            lp,
-            sampled,
-        }
     }
 }
