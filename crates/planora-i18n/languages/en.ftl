@@ -996,6 +996,7 @@ sketch-field-angle-range = The angle must be between 0° and 180°
 sketch-field-sweep-range = The sweep angle must be greater than 0° and less than 360°
 sketch-field-minor-too-big = The minor semi-axis must not be larger than the major one
 sketch-field-rejected = The typed dimension conflicts with existing constraints; nothing was drawn
+sketch-field-sweep-redundant = The sweep angle is already determined by other constraints; no dimension was added
 sketch-spline-max = A spline has at most { $max } points; please finish it
 sketch-spline-point-twice = This point is already part of the spline
 sketch-spline-min = A spline needs at least 2 points

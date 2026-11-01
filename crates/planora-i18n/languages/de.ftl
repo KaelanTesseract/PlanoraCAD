@@ -979,6 +979,7 @@ sketch-field-angle-range = Der Winkel muss zwischen 0° und 180° liegen
 sketch-field-sweep-range = Der Öffnungswinkel muss größer als 0° und kleiner als 360° sein
 sketch-field-minor-too-big = Die kleine Halbachse darf nicht größer als die große sein
 sketch-field-rejected = Das getippte Maß widerspricht vorhandenen Abhängigkeiten; es wurde nichts gezeichnet
+sketch-field-sweep-redundant = Der Öffnungswinkel ist schon durch andere Abhängigkeiten bestimmt; es wurde kein Maß angelegt
 sketch-spline-max = Ein Spline hat höchstens { $max } Punkte; bitte abschließen
 sketch-spline-point-twice = Dieser Punkt gehört schon zum Spline
 sketch-spline-min = Ein Spline braucht mindestens 2 Punkte

@@ -685,7 +685,6 @@ fn arc_with_carried_radius(w: &mut Workspace) {
 
 /// Ein neuer Bogen ohne Tippen darf kein altes Radiusmaß mehr bekommen.
 fn assert_no_radius_after_restart(w: &mut Workspace) {
-    tool(w, Tool::Arc);
     let m = v(70.0, 70.0);
     commit(w, m).unwrap();
     commit(w, m + v(9.0, 1.0)).unwrap();
@@ -697,18 +696,25 @@ fn assert_no_radius_after_restart(w: &mut Workspace) {
 }
 
 #[test]
-fn cancel_set_tool_and_history_jump_forget_carried_values() {
+fn cancel_forgets_carried_values() {
     let mut w = rig();
     arc_with_carried_radius(&mut w);
     let (se, sf, _) = parts(&mut w);
     se.cancel(&mut sf.sketch);
     assert_no_radius_after_restart(&mut w);
+}
 
+#[test]
+fn set_tool_forgets_carried_values() {
     let mut w = rig();
     arc_with_carried_radius(&mut w);
     tool(&mut w, Tool::Line);
+    tool(&mut w, Tool::Arc);
     assert_no_radius_after_restart(&mut w);
+}
 
+#[test]
+fn history_jump_forgets_carried_values() {
     let mut w = rig();
     arc_with_carried_radius(&mut w);
     let (se, sf, _) = parts(&mut w);
@@ -830,4 +836,135 @@ fn minor_axis_equal_to_major_is_allowed() {
     commit(&mut w, m + v(1.0, 5.0)).unwrap();
     assert_eq!(dims(sk(&w)).len(), 2);
     assert_eq!(sk(&w).clone().solve().status, SolveStatus::Solved);
+}
+
+// ---- Sperre gegen Automatik -----------------------------------------------------------------
+
+#[test]
+fn axis_angle_zero_replaces_the_horizontal_automatic() {
+    let mut w = rig();
+    let start = line_started(&mut w);
+    type_in(&mut w, F::Angle, "0");
+    let raw = start + v(30.0, 0.5);
+    let (se, sf, _) = parts(&mut w);
+    assert!(se.resolve_cursor(&sf.sketch, raw, R).autos.is_empty());
+    commit(&mut w, raw).unwrap();
+    let sk = sk(&w);
+    assert!(
+        !sk.constraints()
+            .any(|(_, c)| matches!(c.kind, K::Horizontal(_))),
+        "keine Automatik neben dem Winkel"
+    );
+    let (id, _) = dims(sk)
+        .into_iter()
+        .find(|(_, k)| matches!(k, K::Angle(..)))
+        .unwrap();
+    assert!(!sk.constraint(id).unwrap().driven, "der Winkel bestimmt");
+}
+
+#[test]
+fn locked_radius_off_the_point_is_not_tangent() {
+    let mut w = rig();
+    // Linie endet in (20, 0); ein Bogen um (20, 10) liefe dort tangential weiter.
+    let end = v(20.0, 0.0);
+    {
+        let (_, sf, _) = parts(&mut w);
+        let a = sf.sketch.add_point(0.0, 0.0).unwrap();
+        let b = sf.sketch.add_point(end.x, end.y).unwrap();
+        sf.sketch.add_line(a, b).unwrap();
+    }
+    tool(&mut w, Tool::Arc);
+    let m = v(20.0, 10.0);
+    commit(&mut w, m).unwrap();
+    let (se, sf, _) = parts(&mut w);
+    assert!(
+        !se.resolve_cursor(&sf.sketch, end, R).autos.is_empty(),
+        "ohne Sperre tangential"
+    );
+    type_in(&mut w, F::Radius, "5");
+    let (se, sf, _) = parts(&mut w);
+    let cur = se.resolve_cursor(&sf.sketch, end, R);
+    assert!(cur.autos.is_empty(), "{:?}", cur.autos);
+    assert!(cur.at.distance(v(20.0, 5.0)) < EPS);
+    commit(&mut w, end).unwrap();
+    assert_eq!(parts(&mut w).0.auto_tangent, None);
+    commit(&mut w, m + v(5.0, 1.0)).unwrap();
+    assert!(
+        !sk(&w)
+            .constraints()
+            .any(|(_, c)| matches!(c.kind, K::Tangent(..)))
+    );
+}
+
+#[test]
+fn pointer_behind_the_ray_keeps_its_distance_as_length() {
+    let mut w = rig();
+    let start = line_started(&mut w);
+    type_in(&mut w, F::Angle, "120");
+    // Zeiger fast waagerecht rechts: hinter dem Strahl, der nach links oben zeigt.
+    let raw = start + v(20.0, 3.0);
+    let end = at(&mut w, raw);
+    let ray = DVec2::from_angle(120f64.to_radians());
+    assert!(
+        (end - start).dot(ray) > 0.0,
+        "auf dem Strahl, nicht dahinter"
+    );
+    assert!((end - start).perp_dot(ray).abs() < EPS);
+    assert!((end.distance(start) - raw.distance(start)).abs() < EPS);
+    commit(&mut w, raw).unwrap();
+    let line = lines(sk(&w), false)[0];
+    assert!((sk(&w).line_length(line).unwrap() - raw.distance(start)).abs() < EPS);
+}
+
+#[test]
+fn angles_at_the_ends_of_the_range_commit() {
+    for (text, deg) in [("0", 0.0f64), ("180", 180.0)] {
+        let mut w = rig();
+        let start = line_started(&mut w);
+        type_in(&mut w, F::Angle, text);
+        commit(&mut w, start + v(20.0, 10.0)).unwrap();
+        let sk = sk(&w);
+        let (id, kind) = dims(sk).remove(0);
+        assert!(
+            matches!(kind, K::Angle(_, _, a) if (a - deg.to_radians()).abs() < EPS),
+            "{text}: {kind:?}"
+        );
+        assert!(!sk.constraint(id).unwrap().driven, "{text}");
+        let (a, b) = ends(sk, lines(sk, false)[0]);
+        let want = if deg == 0.0 { 1.0 } else { -1.0 };
+        assert!((b - a).x * want > 0.0 && (b.y - a.y).abs() < 1e-9, "{text}");
+        assert_eq!(sk.clone().solve().status, SolveStatus::Solved, "{text}");
+    }
+}
+
+#[test]
+fn superfluous_sweep_leaves_no_helper_lines() {
+    let mut w = rig();
+    // Mitte, Anfang und Ende fest: Der Öffnungswinkel ist schon bestimmt.
+    let m = v(100.0, 100.0);
+    let (start, end) = (v(110.0, 100.0), v(100.0, 110.0));
+    fixed_points(&mut w, m, start);
+    fixed_points(&mut w, end, v(200.0, 200.0));
+    tool(&mut w, Tool::Arc);
+    commit(&mut w, m).unwrap();
+    commit(&mut w, start).unwrap();
+    type_in(&mut w, F::Sweep, "90");
+    commit(&mut w, end).unwrap();
+    w.observe_history(false);
+    let sk = sk(&w);
+    assert_eq!(
+        sk.curves()
+            .filter(|(_, c)| matches!(c.kind, CurveKind::Arc { .. }))
+            .count(),
+        1
+    );
+    assert!(lines(sk, true).is_empty(), "keine Hilfslinien");
+    assert!(dims(sk).is_empty(), "{:?}", dims(sk));
+    assert_eq!(sk.clone().solve().status, SolveStatus::Solved);
+    assert_eq!(
+        w.active_tab().state.sketch_undo_label(),
+        Some(tr!("undo-arc"))
+    );
+    let (se, _, _) = parts(&mut w);
+    assert_eq!(se.message_text(), Some(tr!("sketch-field-sweep-redundant")));
 }

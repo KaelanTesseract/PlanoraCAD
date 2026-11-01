@@ -464,7 +464,7 @@ impl SketchSession {
     ) -> Result<(), Msg> {
         let key = self.input.key.clone();
         let chain = self.line_chain;
-        let mut typed = std::mem::take(&mut self.input.carried);
+        let mut typed = self.input.carried.clone();
         typed.extend(
             self.input
                 .fields
@@ -498,7 +498,8 @@ impl SketchSession {
     }
 
     /// Legt das Maß eines getippten Werts an. Widerspruch ist ein Fehler; `Some`: das Maß war
-    /// überzählig und ist anzeigend, das ist die Meldung dazu.
+    /// überzählig und ist anzeigend, das ist die Meldung dazu. Ein überzähliger Öffnungswinkel
+    /// entfällt samt seinen beiden Hilfslinien, die sonst keinen Zweck hätten.
     fn add_typed_dimension(
         &mut self,
         sf: &mut SketchFeature,
@@ -509,18 +510,24 @@ impl SketchSession {
         scope: &ParamScope,
     ) -> Result<Option<Msg>, Msg> {
         let (value, _) = dimension_input(text, kind.unit(), scope)?;
+        let prior = sf.sketch.clone();
         let dim = dimension_kind(&mut sf.sketch, created, kind, chain)?;
         let dim = checked_value(&sf.sketch, &dim, value)?;
-        let prior = sf.sketch.clone();
         let id = sf.sketch.add_constraint(dim).map_err(err)?;
         let before = self.last_report.take();
         let report = sf.sketch.solve();
         let problem = check_change(&report, before.as_ref(), &prior, Some(id));
         let redundant = report.redundant.contains(&id);
-        self.last_report = Some(report);
         if problem.is_some() {
+            self.last_report = Some(report);
             return Err(crate::msg!("sketch-field-rejected"));
         }
+        if redundant && kind == FieldKind::Sweep {
+            sf.sketch = prior;
+            self.last_report = before;
+            return Ok(Some(crate::msg!("sketch-field-sweep-redundant")));
+        }
+        self.last_report = Some(report);
         if redundant {
             self.make_driven(&mut sf.sketch, id)?;
             return Ok(self.message.take());
