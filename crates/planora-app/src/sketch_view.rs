@@ -542,8 +542,47 @@ pub fn show_overlay(ui: &mut egui::Ui, rect: Rect, state: &mut AppState) -> bool
     viewport::focus_is_not_typing(ui.ctx(), response.id);
     state.camera.set_viewport(rect.width(), rect.height());
     handle_input(ui, &response, rect, state);
+    let pointer = response.hover_pos().or(response.interact_pointer_pos());
+    crate::sketch_inline::show(ui, rect, state, pointer);
+    cursor_after_fields(rect, state, pointer);
     draw(ui, rect, state, response.hover_pos());
     response.hovered()
+}
+
+/// Die Abbildung auf die Skizze im Rechteck `rect` für dieses Bild.
+fn mapper(rect: Rect, state: &AppState) -> Option<Mapper> {
+    Some(Mapper {
+        camera: state.camera,
+        frame: *state.session_sketch()?.frame(),
+        rect,
+    })
+}
+
+/// Fangradius in Skizzeneinheiten am Zeiger `p`.
+pub(crate) fn pointer_radius(state: &AppState, rect: Rect, p: Pos2) -> f64 {
+    mapper(rect, state)
+        .and_then(|map| map.radius_at(p))
+        .unwrap_or(0.0)
+}
+
+/// Aufgelöster Zeiger nach den Feldern: Was eben getippt wurde, gilt schon in der Vorschau dieses
+/// Bilds. Ohne Zeiger über der Skizze zählt mit einer Sperre die letzte Lage.
+fn cursor_after_fields(rect: Rect, state: &mut AppState, pointer: Option<Pos2>) {
+    let Some(map) = mapper(rect, state) else {
+        return;
+    };
+    let at = pointer.and_then(|p| map.to_sketch(p));
+    let radius = pointer.and_then(|p| map.radius_at(p)).unwrap_or(0.0);
+    let Some((se, sk)) = state.session_sketch_mut() else {
+        return;
+    };
+    se.sync_input(sk);
+    if se.input.fields.is_empty() {
+        return;
+    }
+    let locked = se.input.fields.iter().any(|f| f.locked.is_some());
+    let raw = at.or(se.cursor.filter(|_| locked));
+    se.update_cursor(sk, raw, radius);
 }
 
 fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mut AppState) {
@@ -562,9 +601,9 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
                 |e| matches!(e, egui::Event::PointerButton { modifiers, .. } if modifiers.ctrl),
             )
     });
-    let Some(frame) = state.session_sketch().map(|sk| *sk.frame()) else {
+    if state.session_sketch().is_none() {
         return;
-    };
+    }
 
     // Navigation: Verschieben und Zoomen; kein Orbit.
     let dragging_point = state
@@ -582,16 +621,21 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         state.camera.pan(d.x, d.y, rect.height());
     }
 
-    let map = Mapper {
-        camera: state.camera,
-        frame,
-        rect,
+    let Some(map) = mapper(rect, state) else {
+        return;
     };
     let pointer = response.hover_pos().or(response.interact_pointer_pos());
     let at = pointer.and_then(|p| map.to_sketch(p));
     let radius = pointer.and_then(|p| map.radius_at(p)).unwrap_or(0.0);
 
-    let Some((se, sk)) = state.session_sketch_mut() else {
+    // Getippte Werte werden beim Klick zu Maßen; die Formeln darin brauchen die Parameter.
+    let commit_scope = (response.clicked_by(PointerButton::Primary)
+        && state
+            .sketch_session
+            .as_ref()
+            .is_some_and(SketchSession::is_drawing_tool))
+    .then(|| state.document.param_scope());
+    let Some((se, sf)) = state.session_draft_mut() else {
         return;
     };
     if let Some(at) = at {
@@ -604,17 +648,17 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         let origin = ui.input(|i| i.pointer.press_origin());
         if let Some(start) = origin.and_then(|p| map.to_sketch(p)) {
             let r = origin.and_then(|p| map.radius_at(p)).unwrap_or(radius);
-            se.begin_drag(sk, start, r);
+            se.begin_drag(&mut sf.sketch, start, r);
         }
     }
     if se.dragging.is_some() {
         if response.dragged_by(PointerButton::Primary)
             && let Some(at) = at
         {
-            se.drag_to(sk, at);
+            se.drag_to(&mut sf.sketch, at);
         }
         if response.drag_stopped() || !response.dragged() {
-            se.end_drag(sk);
+            se.end_drag(&mut sf.sketch);
         }
     }
 
@@ -625,14 +669,14 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             let origin = ui.input(|i| i.pointer.press_origin());
             if let Some(start) = origin.and_then(|p| map.to_sketch(p)) {
                 let r = origin.and_then(|p| map.radius_at(p)).unwrap_or(radius);
-                se.begin_trim_drag(sk, start, r);
+                se.begin_trim_drag(&mut sf.sketch, start, r);
             }
         }
         if se.trim_drag.is_some()
             && response.dragged_by(PointerButton::Primary)
             && let Some(at) = at
         {
-            se.trim_drag_to(sk, at, radius);
+            se.trim_drag_to(&mut sf.sketch, at, radius);
         }
     }
     if se.trim_drag.is_some() && (response.drag_stopped() || !response.dragged()) {
@@ -646,18 +690,20 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     // schnelle Klicks an derselben Stelle einem Klick anderswo folgen (Zeit zum vorletzten Klick,
     // Abstand nur zum letzten) – das ist für den Nutzer ein Doppelklick und beendet ebenso.
     if response.double_clicked() || response.triple_clicked() {
-        let _ = se.finish_tool(sk);
+        let _ = se.finish_tool(&mut sf.sketch);
     } else if response.clicked_by(PointerButton::Primary)
         && let Some(at) = at
     {
         if se.tool == Tool::ProjectEdge {
             project_at = pointer;
+        } else if let Some(scope) = &commit_scope {
+            let _ = se.commit_input(sf, at, radius, shift, scope);
         } else {
-            let _ = se.click(sk, at, radius, shift);
+            let _ = se.click(&mut sf.sketch, at, radius, shift);
         }
     }
     if response.clicked_by(PointerButton::Secondary) {
-        se.cancel(sk);
+        se.cancel(&mut sf.sketch);
     }
 
     // Tasten (nicht, solange ein Eingabefeld die Tastatur hat)
@@ -670,21 +716,21 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             )
         });
         if esc {
-            se.cancel(sk);
+            se.cancel(&mut sf.sketch);
         }
         if enter {
-            let _ = se.finish_tool(sk);
+            let _ = se.finish_tool(&mut sf.sketch);
         }
         if delete {
-            se.delete_selection(sk);
+            se.delete_selection(&mut sf.sketch);
         }
     }
     // Vorschau von Stutzen, Dehnen und Brechen unter dem Mauszeiger (nach den Änderungen
     // dieses Bilds).
     let hover_at = response.hover_pos().and_then(|p| map.to_sketch(p));
-    se.update_hover(sk, hover_at, radius);
+    se.update_hover(&sf.sketch, hover_at, radius);
     // Aufgelöster Zeiger für Zeichen und Vorschau (nach den Änderungen dieses Bilds).
-    se.update_cursor(sk, at, radius);
+    se.update_cursor(&sf.sketch, at, radius);
     let tool = se.tool;
 
     // Körperkante kopieren: Kante in der 3D-Szene wählen.

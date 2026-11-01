@@ -1177,7 +1177,15 @@ impl PlanoraApp {
     /// Wiederholen zuletzt; sie sind zusätzlich gesperrt, solange eine Maustaste gedrückt ist
     /// ([`PlanoraApp::undo_keys`]).
     fn shortcuts(&mut self, ctx: &egui::Context) {
-        if viewport::typing(ctx) || self.ws.prompt.is_some() || ctx.current_pass_index() != 0 {
+        if self.ws.prompt.is_some() || ctx.current_pass_index() != 0 {
+            return;
+        }
+        if viewport::typing(ctx) {
+            // In einem Feld am Zeiger gehört alles dem Feld, nur Rückgängig und Wiederholen nehmen
+            // wie sonst den letzten Skizzenschritt (das Textfeld sieht die Taste dann nicht).
+            if viewport::draw_field_has_keyboard(ctx) {
+                self.undo_keys(ctx);
+            }
             return;
         }
         // Nur mit dem Feature `absturz-test` (nie in Release-Builds, nicht in der Übersicht der
@@ -2581,7 +2589,7 @@ impl eframe::App for PlanoraApp {
         // Tippen je ein Schritt sind. Vor `remember_keyboard_focus` zählt dabei auch das vorige
         // Bild; das verschiebt den Schritt nach Enter nur um ein Bild (beides ein Schritt).
         let gesture = ctx.input(|i| i.pointer.any_down())
-            || viewport::typing(&ctx)
+            || viewport::typing_for_history(&ctx)
             || crate::history_bar::is_playing(&ctx);
         self.ws.observe_history(gesture);
         viewport::remember_keyboard_focus(&ctx);

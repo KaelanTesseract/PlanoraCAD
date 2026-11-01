@@ -499,9 +499,15 @@ fn enter_finishes_a_spline() {
     assert!(s.sketch_session.as_ref().unwrap().pending.is_empty());
 }
 
+/// Fusion-Verhalten, Skizzen 2: Bei laufendem Linienwerkzeug gehört Entf dem Feld am Zeiger und
+/// löscht nichts; ohne offene Punkte löscht Entf die Auswahl.
 #[test]
 fn delete_removes_the_selection() {
     let mut s = with_line_and_pending();
+    press_key_in_overlay(&mut s, egui::Key::Delete, false);
+    assert_eq!(s.session_sketch().unwrap().curves().count(), 1);
+
+    s.sketch_session.as_mut().unwrap().pending.clear();
     press_key_in_overlay(&mut s, egui::Key::Delete, false);
     assert_eq!(s.session_sketch().unwrap().curves().count(), 0);
     assert!(s.sketch_session.as_ref().unwrap().selection.is_empty());

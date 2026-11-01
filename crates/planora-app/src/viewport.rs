@@ -503,23 +503,74 @@ pub(crate) fn keyboard_taken(ctx: &egui::Context) -> bool {
     })
 }
 
+fn draw_field_ids_key() -> egui::Id {
+    egui::Id::new("planora-draw-field-ids")
+}
+
+fn history_focus_id() -> egui::Id {
+    egui::Id::new("planora-history-focus-last-frame")
+}
+
+/// Meldet ein Feld am Zeiger beim Zeichnen ([`crate::sketch_inline`]): Es liest Tasten wie jedes
+/// Eingabefeld, zählt für den Verlauf aber nicht als Geste ([`typing_for_history`]).
+pub fn set_draw_field(ctx: &egui::Context, id: egui::Id) {
+    ctx.data_mut(|d| {
+        let ids = d.get_temp_mut_or_default::<Vec<egui::Id>>(draw_field_ids_key());
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    });
+}
+
+/// Hat ein Feld am Zeiger gerade die Tastatur?
+pub fn draw_field_has_keyboard(ctx: &egui::Context) -> bool {
+    let Some(focused) = ctx.memory(|m| m.focused()) else {
+        return false;
+    };
+    ctx.data(|d| {
+        d.get_temp::<Vec<egui::Id>>(draw_field_ids_key())
+            .is_some_and(|ids| ids.contains(&focused))
+    })
+}
+
+/// Hat ein anderes Eingabefeld als die am Zeiger die Tastatur?
+fn other_field_has_keyboard(ctx: &egui::Context) -> bool {
+    keyboard_taken(ctx) && !draw_field_has_keyboard(ctx)
+}
+
 /// Merkt sich am Ende eines Frames, ob ein Eingabefeld die Tastatur hatte. Wird von der App nach
 /// dem Aufbau aller Bereiche aufgerufen.
 pub fn remember_keyboard_focus(ctx: &egui::Context) {
     let focused = keyboard_taken(ctx);
-    ctx.data_mut(|d| d.insert_temp(keyboard_focus_id(), focused));
+    let other = other_field_has_keyboard(ctx);
+    ctx.data_mut(|d| {
+        d.insert_temp(keyboard_focus_id(), focused);
+        d.insert_temp(history_focus_id(), other);
+    });
 }
 
 /// Hat ein Eingabefeld die Tastatur (in diesem oder im vorigen Frame)? Dann sind Tastenkürzel
 /// der Ansicht gesperrt. egui nimmt bei Escape den Fokus schon zu Beginn des Frames weg; deshalb
-/// zählt auch, ob im vorigen Frame ein Eingabefeld (z. B. der Name) die Tastatur hatte. Ebenso
+/// zählt auch, ob im vorigen Frame ein Eingabefeld (z. B. der Name) die Tastatur hatte, solange
+/// der Fokus nicht schon auf einer Fläche liegt, die keinen Text liest. Ebenso
 /// gesperrt, solange die Einstellungen eine neue Belegung erfassen
 /// ([`crate::keymap::settings_ui::is_capturing`]): die erfasste Taste löst nichts aus.
 pub fn typing(ctx: &egui::Context) -> bool {
     keyboard_taken(ctx)
         || crate::keymap::settings_ui::is_capturing(ctx)
+        || (ctx.memory(|m| m.focused()).is_none()
+            && ctx
+                .data(|d| d.get_temp::<bool>(keyboard_focus_id()))
+                .unwrap_or(false))
+}
+
+/// Wie [`typing`], aber ein Feld am Zeiger zählt nicht: Für den Verlauf ist Tippen dort keine
+/// Geste, sonst wäre ein ganzer Linienzug ein einziger Schritt.
+pub fn typing_for_history(ctx: &egui::Context) -> bool {
+    other_field_has_keyboard(ctx)
+        || crate::keymap::settings_ui::is_capturing(ctx)
         || ctx
-            .data(|d| d.get_temp::<bool>(keyboard_focus_id()))
+            .data(|d| d.get_temp::<bool>(history_focus_id()))
             .unwrap_or(false)
 }
 

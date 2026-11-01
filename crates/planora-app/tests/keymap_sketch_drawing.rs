@@ -306,8 +306,15 @@ fn sketch_keys_select_the_tools() {
     assert_eq!(rig.st().sketch_session.as_ref().unwrap().pending.len(), 1);
     rig.press(Key::L, NONE);
     assert_eq!(rig.st().sketch_session.as_ref().unwrap().pending.len(), 1);
-    // Ein anderes Werkzeug bricht ihn ab (wie der Knopf).
+    // Fusion-Verhalten, Skizzen 2: Bei laufendem Linienzug gehört die Taste dem Feld am Zeiger, das
+    // Werkzeug bleibt. Erst nach Esc wählt sie wieder ein Werkzeug.
     rig.press(Key::C, NONE);
+    assert_eq!(rig.st().sketch_session.as_ref().unwrap().pending.len(), 1);
+    assert_eq!(rig.tool(), Tool::Line);
+    rig.press(Key::Escape, NONE);
+    rig.settle();
+    rig.press(Key::C, NONE);
+    assert_eq!(rig.tool(), Tool::Circle);
     assert!(rig.st().sketch_session.as_ref().unwrap().pending.is_empty());
 
     // Tooltips der Leiste nennen die Taste, nach dem Ändern die neue.
@@ -586,6 +593,21 @@ fn esc_enter_delete_in_sketch_unchanged() {
     rig.press(Key::Escape, NONE);
     assert!(rig.st().sketch_session.as_ref().unwrap().pending.is_empty());
     assert_eq!(rig.tool(), Tool::Line);
+    // Fusion-Verhalten, Skizzen 2: Enter setzt im Linienwerkzeug den Punkt, der Linienzug läuft.
+    rig.sketch_click(0.0, 0.0);
+    rig.frame(vec![Event::PointerMoved(egui::pos2(800.0, 300.0))]);
+    rig.settle();
+    let lines = rig.st().session_sketch().unwrap().curves().count();
+    rig.press(Key::Enter, NONE);
+    rig.settle();
+    assert_eq!(
+        rig.st().session_sketch().unwrap().curves().count(),
+        lines + 1,
+        "Enter setzt den Punkt"
+    );
+    assert_eq!(rig.st().sketch_session.as_ref().unwrap().pending.len(), 1);
+    rig.press(Key::Escape, NONE);
+    rig.settle();
     // Enter legt einen Spline an (Werkzeug über die Leiste, ohne Kürzel).
     rig.click(rig.strip("Spline"));
     assert_eq!(rig.tool(), Tool::Spline);
