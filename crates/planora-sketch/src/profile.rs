@@ -51,6 +51,10 @@ pub(crate) fn spline_off_node() -> String {
     tr!("sketch-err-spline-off-node")
 }
 
+/// Teilungsstellen eines Splines, die relativ zum Parameterbereich höchstens so nah an einem
+/// Stützpunkt liegen, werden auf ihn gelegt (deutlich über `MIN_KNOT_GAP_RATIO` = 1e-9).
+const KNOT_SNAP: f64 = 1e-7;
+
 /// Abtastschritte je Vollkreis für Schnitt- und Enthaltensein-Prüfungen (wie im Kernel).
 pub(crate) const CHECK_STEPS: usize = 64;
 
@@ -505,9 +509,11 @@ impl LoopBuilder<'_> {
         Ok(ProfileLoop { start, segments })
     }
 
-    /// Schleife aus einem einzigen geschlossenen Stück: ungeteilter Kreis wie
-    /// [`ProfileLoop::circle`], ungeteilte Ellipse wie bisher, sonst geschlossenes
-    /// Freiformsegment; `None` für Stücke, die als gewöhnliche Segmente gebaut werden.
+    /// Schleife aus einem einzigen geschlossenen Stück: Kreis mit Knoten bei Winkel 0 wie
+    /// [`ProfileLoop::circle`], Ellipse mit Knoten bei Parameter 0 wie bisher, sonst Ellipsen-
+    /// und Splinestücke als geschlossenes Freiformsegment. `None` für die übrigen Stücke, die
+    /// als gewöhnliche Segmente gebaut werden (ein Kreis, den ein einzelner Knoten an anderer
+    /// Stelle teilt, etwa eine Berührung, wird so zu einem `Segment::Arc` mit 2π ab dem Knoten).
     fn single(&mut self, h: usize) -> Result<Option<ProfileLoop>, SketchError> {
         let arr = self.arr;
         let k = h / 2;
@@ -555,7 +561,18 @@ impl LoopBuilder<'_> {
         if p.t0 <= lo && p.t1 >= hi {
             return Ok(whole.clone());
         }
-        whole.sub_curve(p.t0.max(lo), p.t1.min(hi)).map_err(invalid)
+        // Teilungsstellen dicht an einem Stützpunkt (Knoten bei ganzen `t`) auf ihn legen, sonst
+        // entstünden zu nahe Knoten (Grenze `MIN_KNOT_GAP_RATIO` der NURBS).
+        let snap = |t: f64| {
+            let r = t.round();
+            if (t - r).abs() <= KNOT_SNAP * (hi - lo) {
+                r
+            } else {
+                t
+            }
+        };
+        let (t0, t1) = (snap(p.t0.max(lo)), snap(p.t1.min(hi)));
+        whole.sub_curve(t0, t1).map_err(invalid)
     }
 }
 

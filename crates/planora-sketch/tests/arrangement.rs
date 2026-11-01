@@ -328,3 +328,128 @@ fn the_legacy_extraction_keeps_the_old_rules() {
     assert!(e.profiles.is_empty());
     assert_eq!(e.rejected.len(), 2);
 }
+
+// ---- Fix-Runde 1: numerisch gefundene Berührungen und Brücken ------------------------------
+
+/// Gedrehte Ellipse (große Halbachse 4, kleine 2, Winkel `angle`) innen tangential an der
+/// Unterkante des Quadrats (−10,−10)–(10,10).
+fn tilted_ellipse_on_the_floor(angle: f64) -> (Sketch, CurveId) {
+    let mut s = sketch();
+    rect(&mut s, -10.0, -10.0, 10.0, 10.0);
+    let (a, b) = (4.0, 2.0);
+    let (sn, cs) = angle.sin_cos();
+    let h = ((a * sn).powi(2) + (b * cs).powi(2)).sqrt();
+    let c = s.add_point(0.0, -10.0 + h).unwrap();
+    let e = s.add_ellipse(c, DVec2::new(a * cs, a * sn), b).unwrap();
+    (s, e)
+}
+
+#[test]
+fn a_tilted_ellipse_touching_an_edge_keeps_its_disk() {
+    for angle in [0.0, 0.5, 1.3] {
+        let (s, ellipse) = tilted_ellipse_on_the_floor(angle);
+        let e = extract(&s);
+        assert_eq!(e.profiles.len(), 1, "Winkel {angle}: {:?}", e.rejected);
+        assert_eq!(e.curve_loops[0], vec![ellipse], "Winkel {angle}");
+        assert!(
+            (area(&e.profiles[0]) - PI * 8.0).abs() < 0.1,
+            "Winkel {angle}: {}",
+            area(&e.profiles[0])
+        );
+        // die eingeklemmte Fläche drumherum: Entscheidung 3
+        assert_eq!(e.rejected.len(), 1, "Winkel {angle}: {:?}", e.rejected);
+        assert_eq!(
+            e.rejected[0].reason,
+            planora_sketch::SketchError::SelfIntersecting,
+            "Winkel {angle}"
+        );
+    }
+}
+
+#[test]
+fn a_spline_touching_a_line_splits_cleanly() {
+    // Rechteck 10 × 4, Spline von der linken zur rechten Kante, berührt die Unterkante in der
+    // Mitte; alles um 0,5 rad gedreht, damit die Berührung numerisch gefunden wird.
+    let rot = |x: f64, y: f64| {
+        let (sn, cs) = 0.5f64.sin_cos();
+        (x * cs - y * sn, x * sn + y * cs)
+    };
+    let mut s = sketch();
+    let corners: Vec<PointId> = [(0.0, 0.0), (10.0, 0.0), (10.0, 4.0), (0.0, 4.0)]
+        .iter()
+        .map(|&(x, y)| {
+            let (x, y) = rot(x, y);
+            s.add_point(x, y).unwrap()
+        })
+        .collect();
+    let mid_r = s.add_point(rot(10.0, 2.0).0, rot(10.0, 2.0).1).unwrap();
+    let mid_l = s.add_point(rot(0.0, 2.0).0, rot(0.0, 2.0).1).unwrap();
+    s.add_line(corners[0], corners[1]).unwrap();
+    s.add_line(corners[1], mid_r).unwrap();
+    s.add_line(mid_r, corners[2]).unwrap();
+    s.add_line(corners[2], corners[3]).unwrap();
+    s.add_line(corners[3], mid_l).unwrap();
+    s.add_line(mid_l, corners[0]).unwrap();
+    let low = s.add_point(rot(5.0, 0.0).0, rot(5.0, 0.0).1).unwrap();
+    let sp = s.add_spline(&[mid_l, low, mid_r]).unwrap();
+    let e = extract(&s);
+    // Fläche über dem Spline: 40 minus die Fläche unter dem Spline (Spline y(x) über [0, 10])
+    let under: f64 = {
+        let n = 4000;
+        let pts: Vec<DVec2> = (0..=n)
+            .map(|i| s.spline_point(sp, 2.0 * i as f64 / n as f64).unwrap())
+            .map(|p| {
+                let (sn, cs) = (-0.5f64).sin_cos();
+                DVec2::new(p.x * cs - p.y * sn, p.x * sn + p.y * cs)
+            })
+            .collect();
+        pts.windows(2)
+            .map(|w| (w[1].x - w[0].x) * 0.5 * (w[0].y + w[1].y))
+            .sum()
+    };
+    let top = e
+        .profile_at(DVec2::new(rot(5.0, 3.0).0, rot(5.0, 3.0).1))
+        .unwrap_or_else(|| panic!("{:?} {:?} {:?}", areas(&e), e.curve_loops, e.rejected));
+    assert!(
+        (area(&e.profiles[top]) - (40.0 - under)).abs() < 0.05,
+        "{} statt {}",
+        area(&e.profiles[top]),
+        40.0 - under
+    );
+}
+
+#[test]
+fn a_bridge_from_a_hole_to_the_edge_keeps_the_ring() {
+    // Kreis r = 3 im Quadrat, mit einer Linie zur rechten Kante verbunden (Fusion: Ring + Kreis)
+    let mut s = sketch();
+    rect(&mut s, -10.0, -10.0, 10.0, 10.0);
+    let c = circle(&mut s, 0.0, 0.0, 3.0);
+    line(&mut s, (3.0, 0.0), (10.0, 0.0));
+    let e = extract(&s);
+    assert!(e.rejected.is_empty(), "{:?}", e.rejected);
+    assert_eq!(e.profiles.len(), 2);
+    assert_eq!(e.profiles[0].holes.len(), 1, "Ring");
+    assert_eq!(e.curve_loops[1], vec![c]);
+    assert_areas(&e, &[400.0 - PI * 9.0, PI * 9.0], 0.1);
+
+    // Linie vom Kreis Richtung Kante, die nichts anderes berührt (Stummel)
+    let mut s = sketch();
+    rect(&mut s, -10.0, -10.0, 10.0, 10.0);
+    circle(&mut s, 0.0, 0.0, 3.0);
+    line(&mut s, (3.0, 0.0), (7.0, 0.0));
+    let e = extract(&s);
+    assert!(e.rejected.is_empty(), "{:?}", e.rejected);
+    assert_areas(&e, &[400.0 - PI * 9.0, PI * 9.0], 0.1);
+
+    // zwei Brücken hintereinander über einen Zwischenkreis
+    let mut s = sketch();
+    rect(&mut s, -10.0, -10.0, 10.0, 10.0);
+    circle(&mut s, 0.0, 0.0, 2.0);
+    circle(&mut s, 6.0, 0.0, 1.0);
+    line(&mut s, (2.0, 0.0), (5.0, 0.0));
+    line(&mut s, (7.0, 0.0), (10.0, 0.0));
+    let e = extract(&s);
+    assert!(e.rejected.is_empty(), "{:?}", e.rejected);
+    assert_eq!(e.profiles.len(), 3);
+    assert_eq!(e.profiles[0].holes.len(), 2, "Ring mit zwei Löchern");
+}

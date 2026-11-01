@@ -217,11 +217,25 @@ fn a_spline_sketch_extrudes_and_a_bad_spline_reports_an_error() {
         .unwrap();
     assert_eq!(d.feature(e).unwrap().status, FeatureStatus::Ok);
 
-    // Der mittlere Punkt wandert unter die Grundlinie: Das Profil schneidet sich, es gibt
-    // kein Profil 0 mehr, die Extrusion trägt einen Fehler statt eines Absturzes.
+    // Fusion-Verhalten, Skizzen 1: Der mittlere Punkt wandert unter die Grundlinie, der
+    // Spline kreuzt sie und teilt die Fläche; Profil 0 gibt es weiter, die Extrusion bleibt
+    // gültig.
     d.update(s, |k| {
         if let FeatureKind::Sketch(sf) = k {
             sf.sketch.add_constraint(K::Fixed(mid, 5.0, -3.0)).unwrap();
+        }
+    })
+    .unwrap();
+    assert_eq!(d.feature(e).unwrap().status, FeatureStatus::Ok);
+    assert_eq!(d.visible_bodies().len(), 1);
+    d.check_invariants().unwrap();
+
+    // Ein entarteter Spline (Nachbarpunkte fallen zusammen) fällt aus der Skizze: Es bleibt
+    // kein Profil 0, die Extrusion trägt einen Fehler statt eines Absturzes.
+    let last = p[4];
+    d.update(s, |k| {
+        if let FeatureKind::Sketch(sf) = k {
+            sf.sketch.add_constraint(K::Coincident(mid, last)).unwrap();
         }
     })
     .unwrap();

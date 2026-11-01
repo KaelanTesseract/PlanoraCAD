@@ -5,21 +5,28 @@
 //! (Gitter-Hash). Doppelte Stücke (gleiche Knoten, Mittelpunkte näher als `10·tol`) zählen
 //! einmal, das der kleineren Kurve bleibt. Stummel fallen durch wiederholtes Entfernen von
 //! Knoten mit Grad 1 weg. An jedem Knoten werden die abgehenden Halbkanten nach Richtung
-//! geordnet, bei Gleichstand (Winkeldifferenz `< 1e-9`) nach Krümmung (stärker links gekrümmt
-//! liegt weiter gegen den Uhrzeigersinn). Die Umläufe mit der Fläche links ergeben mit positiver
-//! Fläche die Flächen der Anordnung, mit negativer Fläche den Außenrand je Zusammenhangskomponente.
+//! geordnet. Fast gleiche Richtungen (Winkeldifferenz zur ersten der Gruppe `< 1e-2`, etwa bei
+//! numerisch gefundenen Berührungen, deren Knoten bis `√(tol/κ)` neben der Berührstelle liegt)
+//! ordnet die Richtung zu einem Punkt in gleicher Bogenlänge längs jedes Stücks (ein Viertel des
+//! kürzesten Stücks der Gruppe; Stücke kreuzen sich nicht, also gilt dort die echte Reihenfolge),
+//! danach die Krümmung (stärker links gekrümmt liegt weiter gegen den Uhrzeigersinn).
+//! Die Umläufe mit der Fläche links ergeben mit positiver Fläche die Flächen der Anordnung, mit
+//! negativer Fläche den Außenrand je Zusammenhangskomponente. Brücken (Stücke, deren beide
+//! Seiten im selben Umlauf liegen, etwa eine Linie von einem inneren Kreis zum Rand) begrenzen
+//! keine Fläche und fallen wie Stummel weg; danach wird neu umlaufen.
 
 use crate::geom::Geom;
 use crate::intersect::{Prepared, intersect_prepared, self_intersect};
 use crate::model::CurveId;
-use planora_math::{DVec2, TAU};
+use planora_math::{DVec2, PI, TAU};
 use std::collections::HashMap;
 
 /// Abschnitte je Vollkreis der Linienzüge für Flächen und Enthaltensein (Splines 16 je
 /// Segment, siehe [`Geom::polyline_params`]).
 pub(crate) const STEPS_PER_TURN: usize = 64;
-/// Richtungen, die sich um weniger unterscheiden, gelten als gleich (dann zählt die Krümmung).
-const TIE_ANGLE: f64 = 1e-9;
+/// Abgangsrichtungen, die sich um weniger unterscheiden, sind fast gleich (dann zählt die
+/// Richtung zu einem Punkt weiter längs des Stücks).
+const NEAR_ANGLE: f64 = 1e-2;
 /// Stellen einer Kurve am selben Knoten, die längs der Kurve höchstens so viele Toleranzen
 /// auseinanderliegen, sind dieselbe Teilungsstelle.
 const SAME_SPLIT: f64 = 4.0;
@@ -39,7 +46,7 @@ pub(crate) struct Piece {
     pub(crate) b: usize,
     /// Länge in mm.
     pub(crate) len: f64,
-    /// Begrenzt Flächen: weder Doppel eines anderen Stücks noch Stummel.
+    /// Begrenzt Flächen: weder Doppel eines anderen Stücks noch Stummel oder Brücke.
     pub(crate) active: bool,
 }
 
@@ -144,7 +151,30 @@ impl Arrangement {
             pieces,
             cycles: Vec::new(),
         };
-        arr.cycles = arr.trace();
+        loop {
+            arr.cycles = arr.trace();
+            // Brücken: beide Halbkanten im selben Umlauf
+            let mut cycle_of = vec![usize::MAX; 2 * arr.pieces.len()];
+            for (ci, c) in arr.cycles.iter().enumerate() {
+                for &h in &c.half_edges {
+                    cycle_of[h] = ci;
+                }
+            }
+            let bridges: Vec<usize> = (0..arr.pieces.len())
+                .filter(|&k| {
+                    arr.pieces[k].active
+                        && cycle_of[2 * k] != usize::MAX
+                        && cycle_of[2 * k] == cycle_of[2 * k + 1]
+                })
+                .collect();
+            if bridges.is_empty() {
+                break;
+            }
+            for k in bridges {
+                arr.pieces[k].active = false;
+            }
+            remove_stubs(&mut arr.pieces, arr.nodes.len());
+        }
         arr
     }
 
@@ -180,7 +210,7 @@ impl Arrangement {
         let mut slot = vec![usize::MAX; he_count];
         let mut order: Vec<Vec<usize>> = Vec::with_capacity(self.nodes.len());
         for list in around {
-            let sorted = sort_around(list);
+            let sorted = self.sort_around(list);
             for (i, &h) in sorted.iter().enumerate() {
                 slot[h] = i;
             }
@@ -273,6 +303,79 @@ impl Arrangement {
         let angle = dir.y.atan2(dir.x).rem_euclid(TAU);
         let angle = if angle >= TAU { 0.0 } else { angle };
         (angle, g.curvature(t) * sign)
+    }
+
+    /// Ordnet die abgehenden Halbkanten `(Winkel, Krümmung, Halbkante)` eines Knotens gegen den
+    /// Uhrzeigersinn: nach Winkel; Gruppen fast gleicher Winkel (zur ersten der Gruppe
+    /// `< NEAR_ANGLE`) nach der Richtung zum Punkt in gleicher Bogenlänge, dann nach Krümmung.
+    fn sort_around(&self, mut list: Vec<(f64, f64, usize)>) -> Vec<usize> {
+        let n = list.len();
+        if n == 0 {
+            return Vec::new();
+        }
+        list.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.2.cmp(&y.2)));
+        // Beginn hinter der größten Lücke (auch über den Umlauf), damit keine Gruppe über 2π
+        // reicht.
+        let gap = |i: usize| {
+            let (a, b) = (list[i].0, list[(i + 1) % n].0);
+            if i + 1 == n { b + TAU - a } else { b - a }
+        };
+        let widest = (0..n)
+            .max_by(|&i, &j| gap(i).total_cmp(&gap(j)))
+            .unwrap_or(0);
+        list.rotate_left((widest + 1) % n);
+        let mut out = Vec::with_capacity(n);
+        let mut i = 0;
+        while i < n {
+            let mut j = i + 1;
+            while j < n && (list[j].0 - list[i].0).rem_euclid(TAU) < NEAR_ANGLE {
+                j += 1;
+            }
+            if j == i + 1 {
+                out.push(list[i].2);
+            } else {
+                let reference = list[i].0;
+                let s = list[i..j]
+                    .iter()
+                    .map(|e| self.pieces[e.2 / 2].len)
+                    .fold(f64::INFINITY, f64::min)
+                    / 4.0;
+                let mut group: Vec<(f64, f64, usize)> = list[i..j]
+                    .iter()
+                    .map(|&(_, k, h)| (self.secant_angle(h, s, reference), k, h))
+                    .collect();
+                group.sort_by(|x, y| {
+                    x.0.total_cmp(&y.0)
+                        .then(x.1.total_cmp(&y.1))
+                        .then(x.2.cmp(&y.2))
+                });
+                out.extend(group.into_iter().map(|(_, _, h)| h));
+            }
+            i = j;
+        }
+        out
+    }
+
+    /// Winkel (in `(−π, π]`, relativ zu `reference`) der Richtung vom Anfang der Halbkante `h`
+    /// zu ihrem Punkt nach etwa der Bogenlänge `s` (Parameter anteilig zur Stücklänge).
+    fn secant_angle(&self, h: usize, s: f64, reference: f64) -> f64 {
+        let p = &self.pieces[h / 2];
+        let g = self.geom_of(h / 2);
+        let frac = if p.len > 0.0 {
+            (s / p.len).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let span = p.t1 - p.t0;
+        let (from, to) = if h.is_multiple_of(2) {
+            (p.t0, p.t0 + frac * span)
+        } else {
+            (p.t1, p.t1 - frac * span)
+        };
+        let v = g.eval(to).0 - g.eval(from).0;
+        let a = v.y.atan2(v.x) - reference;
+        let a = (a + PI).rem_euclid(TAU) - PI;
+        if a.is_finite() { a } else { 0.0 }
     }
 
     /// Zusammenhangskomponente je Knoten (über die aktiven Stücke).
@@ -414,38 +517,6 @@ fn remove_stubs(pieces: &mut [Piece], node_count: usize) {
             stack.push(other);
         }
     }
-}
-
-/// Ordnet die abgehenden Halbkanten `(Winkel, Krümmung, Halbkante)` eines Knotens gegen den
-/// Uhrzeigersinn: nach Winkel, Gruppen mit Winkeldifferenz `< TIE_ANGLE` nach Krümmung.
-fn sort_around(mut list: Vec<(f64, f64, usize)>) -> Vec<usize> {
-    let n = list.len();
-    if n == 0 {
-        return Vec::new();
-    }
-    list.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.2.cmp(&y.2)));
-    // Beginn hinter der größten Lücke (auch über den Umlauf), damit keine Gruppe über 2π reicht.
-    let gap = |i: usize| {
-        let (a, b) = (list[i].0, list[(i + 1) % n].0);
-        if i + 1 == n { b + TAU - a } else { b - a }
-    };
-    let widest = (0..n)
-        .max_by(|&i, &j| gap(i).total_cmp(&gap(j)))
-        .unwrap_or(0);
-    list.rotate_left((widest + 1) % n);
-    let mut out = Vec::with_capacity(n);
-    let mut i = 0;
-    while i < n {
-        let mut j = i + 1;
-        while j < n && (list[j].0 - list[j - 1].0).rem_euclid(TAU) < TIE_ANGLE {
-            j += 1;
-        }
-        let mut group = list[i..j].to_vec();
-        group.sort_by(|x, y| x.1.total_cmp(&y.1).then(x.2.cmp(&y.2)));
-        out.extend(group.into_iter().map(|(_, _, h)| h));
-        i = j;
-    }
-    out
 }
 
 /// Vorzeichenbehaftete Fläche eines geschlossen gedachten Linienzugs.
