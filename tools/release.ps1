@@ -130,8 +130,9 @@ $dirty = & git status --porcelain
 if ($dirty) { Stop-Release 'Es gibt uncommittete Aenderungen. Erst committen, dann veroeffentlichen.' }
 Write-Output 'Arbeitsverzeichnis: sauber.'
 
-$checks = @(
-    'cargo fmt --all --check',
+# Je Crate: Mit --all wird die Befehlszeile unter Windows zu lang (os error 206).
+$fmtChecks = Get-ChildItem crates -Directory | ForEach-Object { "cargo fmt -p $($_.Name) --check" }
+$checks = @($fmtChecks) + @(
     'cargo clippy --workspace --all-targets -- -D warnings',
     'cargo test --workspace --no-fail-fast',
     'cargo deny check'
