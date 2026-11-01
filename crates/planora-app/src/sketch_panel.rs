@@ -361,6 +361,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     let mut panel = load_panel(ctx, index);
     // Formeln der Maße nennen Parameter nur lesend (das Fenster „Parameter“ ist gesperrt).
     let scope = state.document.param_scope();
+    let mut show_profiles = state.show_sketch_profiles;
     let Some((se, sf)) = state.session_draft_mut() else {
         return;
     };
@@ -379,8 +380,14 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         panel.pattern_unit = current_unit();
     }
     strip_field(ctx, strip, dark, se, &mut sf.sketch);
-    side_field(ctx, rects.right, dark, se, sf, &mut panel, &scope);
+    let side = SideInput {
+        panel: &mut panel,
+        scope: &scope,
+        show_profiles: &mut show_profiles,
+    };
+    side_field(ctx, rects.right, dark, se, sf, side);
     let close = foot_field(ctx, rects.bottom, dark, se, &mut sf.sketch);
+    state.show_sketch_profiles = show_profiles;
     ctx.data_mut(|d| d.insert_temp(panel_id(), panel));
     if close {
         state.close_sketch();
@@ -511,14 +518,21 @@ fn strip_button(
 
 /// Skizzenfeld rechts (Spaltenbreite 250): Inhalt in einer senkrechten ScrollArea, höchstens so
 /// hoch wie die Spalte.
+/// Was das Skizzenfeld außer Sitzung und Entwurf braucht.
+struct SideInput<'a> {
+    panel: &'a mut PanelState,
+    scope: &'a ParamScope,
+    /// Schalter „Profil anzeigen“ ([`AppState::show_sketch_profiles`]).
+    show_profiles: &'a mut bool,
+}
+
 fn side_field(
     ctx: &egui::Context,
     rect: egui::Rect,
     dark: bool,
     se: &mut SketchSession,
     sf: &mut SketchFeature,
-    panel: &mut PanelState,
-    scope: &ParamScope,
+    side: SideInput,
 ) {
     let frame = theme::panel_frame(dark);
     let inner = shell_panels::inner_size(&frame, rect.size());
@@ -529,7 +543,7 @@ fn side_field(
                 .id_salt("planora-field-sketch-side-scroll")
                 .max_height(inner.y)
                 .auto_shrink([false, true]);
-            theme::scroll_area(ui, area, |ui| side_contents(ui, se, sf, panel, scope));
+            theme::scroll_area(ui, area, |ui| side_contents(ui, se, sf, side));
         });
     });
 }
@@ -539,10 +553,22 @@ fn side_contents(
     ui: &mut egui::Ui,
     se: &mut SketchSession,
     sf: &mut SketchFeature,
-    panel: &mut PanelState,
-    scope: &ParamScope,
+    side: SideInput,
 ) {
-    ui.strong(&sf.sketch.name);
+    let SideInput {
+        panel,
+        scope,
+        show_profiles,
+    } = side;
+    // Name, rechts daneben der Schalter „Profil anzeigen“ (wie Fusions Skizzenpalette
+    // „Profil“: geschlossene Flächen hell eingefärbt); in einer Zeile, damit die Liste darunter
+    // nicht nach unten rutscht.
+    ui.horizontal(|ui| {
+        ui.strong(&sf.sketch.name);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.checkbox(show_profiles, tr!("sketch-show-profile"));
+        });
+    });
     ui.add_space(2.0);
 
     // Abhängigkeiten

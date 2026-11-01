@@ -6,11 +6,12 @@ use crate::sketch_state::{Item, SketchSession, Snap, Tool};
 use crate::state::AppState;
 use crate::theme::{lighten as lighter, sketch_colors as colors};
 use crate::viewport;
-use egui::{Color32, FontId, PointerButton, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2};
+use egui::{Color32, FontId, Mesh, PointerButton, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2};
 use glam::{Vec2, Vec3};
 use planora_i18n::tr;
 use planora_math::{DVec2, DVec3, Frame};
 use planora_render::{EdgeRef, OrbitCamera, Pick};
+use planora_sketch::ExtractedProfiles;
 use planora_sketch::constraint::{ConstraintKind, LineOrPoints};
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
 use planora_sketch::solver::{SolveReport, SolveStatus};
@@ -378,6 +379,36 @@ fn draw_path(painter: &egui::Painter, path: Vec<Pos2>, stroke: Stroke, dashed: b
     painter.extend(path_shapes(path, stroke, dashed));
 }
 
+/// Flächen der Profile als ein Dreiecksnetz (Füllung aus [`ExtractedProfiles::fill`]), Farbe je
+/// Profil aus `color` (`None`: nicht zeichnen). Leer, wenn nichts zu zeichnen ist.
+fn profile_fill_shape(
+    map: &Mapper,
+    extracted: &ExtractedProfiles,
+    color: impl Fn(usize) -> Option<Color32>,
+) -> Option<Shape> {
+    let mut mesh = Mesh::default();
+    for i in 0..extracted.profiles.len() {
+        let Some(c) = color(i) else {
+            continue;
+        };
+        for t in extracted.fill(i) {
+            let (Some(a), Some(b), Some(d)) = (
+                map.to_screen(t[0]),
+                map.to_screen(t[1]),
+                map.to_screen(t[2]),
+            ) else {
+                continue;
+            };
+            let base = mesh.vertices.len() as u32;
+            for q in [a, b, d] {
+                mesh.colored_vertex(q, c);
+            }
+            mesh.add_triangle(base, base + 1, base + 2);
+        }
+    }
+    (!mesh.is_empty()).then(|| Shape::mesh(mesh))
+}
+
 /// Strichstärke fertiger Skizzen in der 3D-Ansicht (dünner als im Skizzen-Modus).
 const FINISHED_WIDTH: f32 = 1.2;
 /// Strichstärke der Konstruktionsgeometrie fertiger Skizzen.
@@ -385,8 +416,10 @@ const FINISHED_CONSTRUCTION_WIDTH: f32 = 1.0;
 
 /// Fertige (nicht geöffnete) Skizzen als dünne Linien über der 3D-Ansicht in `rect`;
 /// Konstruktionsgeometrie grau und gestrichelt. Die geöffnete Skizze zeichnet
-/// [`show_overlay`]. Nur Anzeige: Skizzenkurven lassen sich in 3D nicht anklicken, und die
-/// Linien liegen immer über den Körpern (keine Verdeckung).
+/// [`show_overlay`]. Skizzenkurven lassen sich in 3D nicht anklicken, und die Linien liegen
+/// immer über den Körpern (keine Verdeckung). Wählt ein Dialog Profile
+/// ([`AppState::profile_pick`]), liegen die Flächen dieser Skizze unter ihren Linien: gewählte
+/// kräftiger, die unter dem Mauszeiger heller.
 pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
     let mut out = Vec::new();
     if rect.width() < 2.0 || rect.height() < 2.0 {
@@ -408,6 +441,18 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
             frame: *sk.frame(),
             rect,
         };
+        if let Some(pick) = state.profile_pick.as_ref().filter(|p| p.sketch == id) {
+            let extracted = state.profile_cache.get(sk);
+            out.extend(profile_fill_shape(&map, &extracted, |i| {
+                Some(if pick.hover == Some(i) {
+                    col.profile_fill_hover
+                } else if pick.selected.contains(&i) {
+                    col.profile_fill_selected
+                } else {
+                    col.profile_fill
+                })
+            }));
+        }
         for (c, data) in sk.curves() {
             let Some(pl) = sk.curve_polyline(c, STEPS_PER_TURN) else {
                 continue;
@@ -628,6 +673,14 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         rect,
     };
     let report = se.last_report.as_ref();
+
+    // Profile als helle Flächen unter allem anderen („Profil anzeigen“, wie Fusion).
+    if state.show_sketch_profiles {
+        let extracted = state.profile_cache.get(sk);
+        painter.extend(profile_fill_shape(&map, &extracted, |_| {
+            Some(col.profile_fill)
+        }));
+    }
 
     // Achsenkreuz im Skizzenursprung
     if let Some(o) = map.to_screen(DVec2::ZERO) {

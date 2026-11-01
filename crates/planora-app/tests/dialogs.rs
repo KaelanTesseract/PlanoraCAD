@@ -461,7 +461,8 @@ fn cases() -> Vec<Case> {
             "Skizze extrudieren",
             |r| {
                 let sk = r.sketch;
-                r.app.ws_mut().active_tab_mut().dialog = Some(CreateDialog::extrude_sketch(sk))
+                let tab = r.app.ws_mut().active_tab_mut();
+                tab.dialog = Some(CreateDialog::extrude_sketch(&tab.state, sk))
             },
             |r| r.app.ws_mut().active_tab().dialog.is_some(),
         ),

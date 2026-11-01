@@ -40,6 +40,65 @@ pub struct FeatureDialog {
     version: u64,
     /// Anzeigeeinheit der Texte; nach dem Umstellen lädt der Dialog neu.
     unit: DisplayUnit,
+    /// Profilwahl einer Extrusion oder Rotation (Indizes in `profiles()` der Skizze; siehe
+    /// [`crate::profile_pick`]).
+    profiles: ProfileChoice,
+}
+
+/// Profilwahl des Dialogs: anfangs die Flächen, die die gespeicherten Verweise heute treffen.
+#[derive(Clone, Debug, Default)]
+struct ProfileChoice {
+    picked: Vec<usize>,
+    /// Wahl oder Skizze geändert: Beim Übernehmen werden die Verweise neu geschrieben, sonst
+    /// bleibt die gespeicherte Wahl unverändert (auch eine alte Profilnummer).
+    changed: bool,
+    /// Die gespeicherte Wahl trifft heute keine Fläche: `Some(n)` bei einer alten
+    /// Profilnummer, die nur noch der alte Algorithmus kennt (Profil `n`, ab 0), `None` sonst.
+    lost: Option<Option<usize>>,
+}
+
+impl ProfileChoice {
+    fn of(state: &AppState, kind: &FeatureKind) -> ProfileChoice {
+        let (FeatureKind::Extrude {
+            sketch, profiles, ..
+        }
+        | FeatureKind::Revolve {
+            sketch, profiles, ..
+        }) = kind
+        else {
+            return ProfileChoice::default();
+        };
+        let picked = state.selected_profile_indices(*sketch, profiles);
+        let lost = match (
+            picked.is_empty(),
+            state.document.sketch_of(*sketch),
+            profiles,
+        ) {
+            (false, _, _) | (true, None, _) => None,
+            (true, Some(sk), ProfileSel::Index(n)) => {
+                Some((*n < sk.legacy_profiles().profiles.len()).then_some(*n))
+            }
+            (true, Some(_), ProfileSel::Refs(_)) => Some(None),
+        };
+        ProfileChoice {
+            picked,
+            changed: false,
+            lost,
+        }
+    }
+
+    /// Meldung unter der Liste zur gespeicherten Wahl, solange sie nicht ersetzt wurde.
+    fn hint(&self) -> Option<String> {
+        match self.lost.filter(|_| !self.changed)? {
+            Some(n) => Some(tr!("edit-profile-legacy", n = n + 1)),
+            None => Some(tr!("feature-profile-lost")),
+        }
+    }
+
+    /// Fehler beim Übernehmen: eine neue, leere Wahl.
+    fn problem(&self) -> Option<Msg> {
+        (self.changed && self.picked.is_empty()).then(|| crate::msg!("create-pick-profile"))
+    }
 }
 
 /// Bezeichnung eines Zahlenfelds; der Text entsteht erst beim Zeichnen (Sprache!).
@@ -230,7 +289,34 @@ impl FeatureDialog {
             error: None,
             version: f.version(),
             unit: current_unit(),
+            profiles: ProfileChoice::of(state, &f.kind),
         })
+    }
+
+    /// Wählt das Feature Profile einer Skizze (Extrusion, Rotation)?
+    pub fn picks_profiles(&self) -> bool {
+        self.profile_sketch().is_some()
+    }
+
+    /// Skizze der Profilwahl (Extrusion, Rotation).
+    fn profile_sketch(&self) -> Option<FeatureId> {
+        match &self.kind {
+            FeatureKind::Extrude { sketch, .. } | FeatureKind::Revolve { sketch, .. } => {
+                Some(*sketch)
+            }
+            _ => None,
+        }
+    }
+
+    /// Die gewählten Profile (Indizes in `profiles()` der Skizze; für Tests).
+    pub fn picked_profiles(&self) -> &[usize] {
+        &self.profiles.picked
+    }
+
+    /// Schaltet Profil `i` um (wie ein Häkchen in der Liste).
+    pub fn toggle_profile(&mut self, i: usize) {
+        crate::profile_pick::toggle(&mut self.profiles.picked, i);
+        self.profiles.changed = true;
     }
 
     /// Lädt den aktuellen Stand des Features neu (Eingaben gehen verloren); `false`, wenn es
@@ -545,10 +631,23 @@ impl FeatureDialog {
             Err(m)
         }
         let scope = state.document.param_scope();
-        let (kind, formulas) = match self.edited(&scope) {
+        let (mut kind, formulas) = match self.edited(&scope) {
             Ok(k) => k,
             Err(e) => return fail(state, e),
         };
+        if let Some(e) = self.profiles.problem() {
+            return fail(state, e);
+        }
+        if self.profiles.changed
+            && let FeatureKind::Extrude {
+                sketch, profiles, ..
+            }
+            | FeatureKind::Revolve {
+                sketch, profiles, ..
+            } = &mut kind
+        {
+            *profiles = state.profiles_selection(*sketch, &self.profiles.picked);
+        }
         if let FeatureKind::Verrunden { art, .. } = &kind
             && let Some(min) = self.min_size(state)
             && let Err(e) = check_min_sizes(art, min)
@@ -586,6 +685,12 @@ impl FeatureDialog {
         let mut open = true;
         let (mut apply, mut cancel) = (false, false);
         let scope = state.document.param_scope();
+        // Klick in die 3D-Ansicht schaltet ein Profil um (wie die Liste).
+        if let Some(sketch) = self.profile_sketch()
+            && crate::profile_pick::take_click(state, sketch, &mut self.profiles.picked)
+        {
+            self.profiles.changed = true;
+        }
         Dialog::new(tr!("edit-title", name = &self.name), DialogSize::Normal)
             .id(egui::Id::new(("feature_dialog", self.id)))
             .open(&mut open)
@@ -690,8 +795,9 @@ impl FeatureDialog {
                 }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
+                    let ready = errors.is_empty() && self.profiles.problem().is_none();
                     if ui
-                        .add_enabled(errors.is_empty(), egui::Button::new(tr!("tree-apply")))
+                        .add_enabled(ready, egui::Button::new(tr!("tree-apply")))
                         .clicked()
                     {
                         apply = true;
@@ -701,6 +807,9 @@ impl FeatureDialog {
                     }
                 });
             });
+        if let Some(sketch) = self.profile_sketch() {
+            crate::profile_pick::publish(state, sketch, &self.profiles.picked);
+        }
         if apply {
             return match self.apply_msg(state) {
                 Ok(()) => false,
@@ -722,21 +831,17 @@ impl FeatureDialog {
         let choices = self.body_choices(state);
         let (mut switch, mut add, mut face) = (None, false, None);
         match &mut self.kind {
-            FeatureKind::Extrude {
-                sketch, profiles, ..
-            } => {
+            FeatureKind::Extrude { sketch, .. } => {
                 if sketch_choice(ui, state, own, sketch) {
-                    *profiles = state.profile_selection(*sketch, 0);
+                    self.profiles.picked = state.default_profiles(*sketch);
+                    self.profiles.changed = true;
                 }
-                profile_choice(ui, state, *sketch, profiles);
+                profile_choice(ui, state, *sketch, &mut self.profiles);
             }
-            FeatureKind::Revolve {
-                sketch,
-                profiles,
-                axis,
-            } => {
+            FeatureKind::Revolve { sketch, axis, .. } => {
                 if sketch_choice(ui, state, own, sketch) {
-                    *profiles = state.profile_selection(*sketch, 0);
+                    self.profiles.picked = state.default_profiles(*sketch);
+                    self.profiles.changed = true;
                     if let Some(first) = state
                         .document
                         .sketch_of(*sketch)
@@ -745,7 +850,7 @@ impl FeatureDialog {
                         *axis = first;
                     }
                 }
-                profile_choice(ui, state, *sketch, profiles);
+                profile_choice(ui, state, *sketch, &mut self.profiles);
                 let candidates = state
                     .document
                     .sketch_of(*sketch)
@@ -876,42 +981,18 @@ fn sketch_choice(ui: &mut egui::Ui, state: &AppState, own: usize, sketch: &mut F
     *sketch != before
 }
 
-/// Auswahl des Profils der berechneten Skizze (ein Profil; die heutige Wahl wird angezeigt, wenn
-/// sie genau ein Profil trifft).
-fn profile_choice(ui: &mut egui::Ui, state: &AppState, sketch: FeatureId, sel: &mut ProfileSel) {
+/// Profilwahl der berechneten Skizze: Liste mit Häkchen ([`crate::profile_pick::list`]), darunter
+/// die Meldung, wenn die gespeicherte Wahl heute keine Fläche trifft.
+fn profile_choice(ui: &mut egui::Ui, state: &AppState, sketch: FeatureId, c: &mut ProfileChoice) {
     let Some(sk) = state.document.sketch_of(sketch) else {
         ui.weak(tr!("edit-sketch-not-computed"));
         return;
     };
-    let extracted = state.profile_cache.get(sk);
-    if extracted.profiles.is_empty() {
-        ui.weak(tr!("create-no-profile"));
-        return;
+    if crate::profile_pick::list(ui, &state.profile_cache.get(sk), &mut c.picked) {
+        c.changed = true;
     }
-    let label = |i: usize| -> String {
-        let p = &extracted.profiles[i];
-        let area = p.outer.signed_area().abs()
-            - p.holes.iter().map(|h| h.signed_area().abs()).sum::<f64>();
-        tr!(
-            "create-profile-label",
-            n = i + 1,
-            area = planora_i18n::fmt_area_num(area),
-            unit = planora_i18n::current_unit().area_symbol()
-        )
-    };
-    let before = match state.selected_profile_indices(sketch, sel).as_slice() {
-        &[i] => Some(i),
-        _ => None,
-    };
-    let mut profile = before;
-    egui::ComboBox::from_label(tr!("create-profile"))
-        .selected_text(profile.map_or_else(|| tr!("create-choose"), label))
-        .show_ui(ui, |ui| {
-            for i in 0..extracted.profiles.len() {
-                ui.selectable_value(&mut profile, Some(i), label(i));
-            }
-        });
-    if let Some(i) = profile.filter(|_| profile != before) {
-        *sel = state.profile_selection(sketch, i);
+    if let Some(hint) = c.hint() {
+        ui.colored_label(error_color(ui.visuals().dark_mode), hint);
     }
+    ui.add_space(4.0);
 }

@@ -969,7 +969,7 @@ pub fn sketch_colors(dark: bool) -> SketchColors {
             label_bg: with_alpha(p.bg_panel, 0xe0),
             preview: p.axis_z,
             trim_highlight: p.error,
-            profile_fill: with_alpha(p.accent, 0x28),
+            profile_fill: with_alpha(p.accent, 0x20),
             profile_fill_selected: with_alpha(rgb(0xa86a00), 0x48),
             profile_fill_hover: with_alpha(p.accent, 0x40),
             axis_x: p.axis_x,

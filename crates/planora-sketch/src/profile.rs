@@ -29,12 +29,13 @@ use crate::arrangement::{Arrangement, polygon_area, polygon_centroid, polygon_co
 use crate::error::SketchError;
 use crate::geom::Geom;
 use crate::model::{CurveId, CurveKind, Sketch};
+use crate::triangulate::triangulate;
 use planora_i18n::tr;
 use planora_kernel::{Profile, ProfileLoop, SampledLoop, Segment, segment_end};
 use planora_math::nurbs::NurbsCurve;
 use planora_math::{DVec2, DVec3, TAU, Tolerance};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// Meldung für Bögen, deren Endpunkte nicht auf demselben Kreis um die Mitte liegen.
 pub(crate) fn arc_off_circle() -> String {
@@ -113,6 +114,8 @@ pub struct ExtractedProfiles {
     pub(crate) splines: Arc<HashMap<usize, Result<NurbsCurve, SketchError>>>,
     /// Toleranz der Skizze.
     pub(crate) tol: Tolerance,
+    /// Dreiecke der Füllung je Profil, erst bei Bedarf berechnet ([`ExtractedProfiles::fill`]).
+    pub(crate) fills: Vec<OnceLock<Vec<[DVec2; 3]>>>,
 }
 
 /// Umläufe der Anordnung, die ein Profil begrenzen: äußerer Umlauf und Löcher.
@@ -142,6 +145,20 @@ impl ExtractedProfiles {
             .map(|(i, o)| (i, polygon_area(&o[0]).abs()))
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(i, _)| i)
+    }
+
+    /// Dreiecke, die die Fläche von Profil `i` füllen (aus `outlines[i]`, beim ersten Aufruf
+    /// berechnet); leer für ein unbekanntes Profil.
+    pub fn fill(&self, i: usize) -> &[[DVec2; 3]] {
+        match (self.fills.get(i), self.outlines.get(i)) {
+            (Some(cell), Some(outline)) => cell.get_or_init(|| triangulate(outline)),
+            _ => &[],
+        }
+    }
+
+    /// Legt die leeren Speicher der Füllungen an (eine je Profil).
+    pub(crate) fn reset_fills(&mut self) {
+        self.fills = (0..self.profiles.len()).map(|_| OnceLock::new()).collect();
     }
 }
 
@@ -247,6 +264,7 @@ impl Sketch {
         out.arrangement = Some(Arc::new(arr));
         out.splines = Arc::new(splines);
         out.tol = tol;
+        out.reset_fills();
         out
     }
 

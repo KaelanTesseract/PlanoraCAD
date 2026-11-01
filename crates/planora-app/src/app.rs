@@ -1974,7 +1974,7 @@ pub fn do_create(ws: &mut Workspace, kind: CreateKind) {
             tab.dialog = Some(if kind == CreateKind::Revolution {
                 CreateDialog::revolve_sketch(&tab.state, i)
             } else {
-                CreateDialog::extrude_sketch(i)
+                CreateDialog::extrude_sketch(&tab.state, i)
             });
             return;
         }
@@ -2334,11 +2334,27 @@ pub fn drop_dialogs_in_sketch_mode(
     }
 }
 
+/// Ohne offenen Dialog mit Profilwahl (Extrudieren, Drehen, Bearbeiten einer Extrusion oder
+/// Rotation) zeigt die 3D-Ansicht keine Profile zum Anklicken.
+pub fn clear_profile_pick_without_dialog(tab: &mut crate::workspace::DocTab) {
+    let picking = tab
+        .dialog
+        .as_ref()
+        .is_some_and(|d| d.profile_choice().is_some())
+        || tab
+            .feature_dialog
+            .as_ref()
+            .is_some_and(FeatureDialog::picks_profiles);
+    if !picking {
+        tab.state.profile_pick = None;
+    }
+}
+
 /// Setzt einen Dialogwunsch aus dem Browser (Kontextmenü einer Skizze) in den passenden Dialog um
 /// und löscht ihn. Der Browser hat die offene Skizze dann bereits beendet.
 pub fn dialog_for_request(state: &mut AppState) -> Option<CreateDialog> {
     match state.sketch_request.take()? {
-        SketchRequest::Extrude(i) => Some(CreateDialog::extrude_sketch(i)),
+        SketchRequest::Extrude(i) => Some(CreateDialog::extrude_sketch(state, i)),
         SketchRequest::Revolve(i) => Some(CreateDialog::revolve_sketch(state, i)),
     }
 }
@@ -2484,6 +2500,7 @@ impl eframe::App for PlanoraApp {
         {
             tab.feature_dialog = Some(dialog);
         }
+        clear_profile_pick_without_dialog(tab);
         if let Some(mut dialog) = tab.boolean_dialog.take()
             && dialog.show(&ctx, &mut tab.state)
         {

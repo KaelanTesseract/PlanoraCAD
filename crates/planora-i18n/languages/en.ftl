@@ -670,6 +670,7 @@ create-rejected = Not usable: { $reason }
 create-no-axis = The sketch has no line that can serve as the axis of revolution.
 create-create = Create
 create-pick-axis = Please choose an axis of revolution (a line of the sketch).
+create-pick-profile = Please select a profile: click in the view or in the list.
 create-axis-gone = The chosen axis of revolution no longer exists in this sketch; please choose again.
 
 ## Fillet and chamfer
@@ -718,6 +719,7 @@ edit-tool = Tool
 edit-body = Body: { $name }
 edit-edges = Edges: { $n }
 edit-sketch-not-computed = The sketch has not been computed.
+edit-profile-legacy = The feature uses profile { $n } from an older version; it matches no current area. Select a profile to replace it.
 
 ## Boolean operation
 boolean-title = Boolean operation
@@ -796,6 +798,8 @@ props-radius = Radius
 props-height = Height
 props-sketch = Sketch
 props-profile = Profile
+props-profile-legacy = old profile { $n }
+props-profile-lost = no longer present
 props-axis = Axis of revolution
 props-curve-n = Curve { $n }
 props-operation = Operation
@@ -1021,6 +1025,7 @@ sketch-tool-extend-hint = Click near an open end; the curve is extended to the n
 sketch-tool-break-hint = Click a piece; the curve is split at the intersections around that piece. Esc ends.
 sketch-strip-modify = Modify → { $tool }
 sketch-extend-no-hit = No curve to extend to in this direction.
+sketch-show-profile = Show Profile
 sketch-section-constraints = Constraints
 sketch-not-fitting = Does not fit the current selection.
 sketch-section-edit = Edit

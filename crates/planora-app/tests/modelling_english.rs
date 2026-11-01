@@ -307,7 +307,7 @@ fn create_dialogs_speak_english() {
         // Skizzen: Extrudieren und Drehen.
         let mut s = AppState::new();
         let sk = closed_sketch(&mut s);
-        let mut extrude = CreateDialog::extrude_sketch(sk);
+        let mut extrude = CreateDialog::extrude_sketch(&s, sk);
         let seen = d.show(&mut |ctx| {
             extrude.show(ctx, &mut s);
         });
@@ -336,7 +336,7 @@ fn create_dialogs_speak_english() {
             ],
         );
         // Ohne Skizze und ohne Profil.
-        let mut gone = CreateDialog::extrude_sketch(FeatureId(999));
+        let mut gone = CreateDialog::extrude_sketch(&s, FeatureId(999));
         let seen = d.show(&mut |ctx| {
             gone.show(ctx, &mut s);
         });
@@ -349,7 +349,7 @@ fn create_dialogs_speak_english() {
         let sk = empty
             .add_sketch(SketchPlane::Standard(StandardPlane::XY))
             .unwrap();
-        let mut dialog = CreateDialog::extrude_sketch(sk);
+        let mut dialog = CreateDialog::extrude_sketch(&s, sk);
         let seen = d.show(&mut |ctx| {
             dialog.show(ctx, &mut empty);
         });
@@ -369,7 +369,7 @@ fn create_dialogs_speak_english() {
         let sk = closed_sketch(&mut s);
         let no_axis = CreateDialog::RevolveSketch {
             sketch: sk,
-            profile: 0,
+            profiles: vec![0],
             axis: None,
         };
         assert!(!no_axis.create(&mut s));

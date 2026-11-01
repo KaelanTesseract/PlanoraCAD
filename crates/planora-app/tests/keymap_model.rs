@@ -238,6 +238,16 @@ fn bottom_button(ctx: &egui::Context, label: &str) -> Rect {
 }
 
 /// Eine Skizze mit Rechteck (geschlossenes Profil), im Baum gewählt.
+/// Das Fenster „Skizze extrudieren“ zur Skizze aus [`sketch_ws`]: Ihr einziges Profil (das
+/// Rechteck) ist vorgewählt.
+fn extrude_dialog(sk: FeatureId) -> CreateDialog {
+    CreateDialog::ExtrudeSketch {
+        sketch: sk,
+        profiles: vec![0],
+        height: planora_app::create_dialog::DEFAULT_SKETCH_HEIGHT,
+    }
+}
+
 fn sketch_ws() -> (Workspace, FeatureId) {
     let mut w = ws();
     let s = &mut w.active_tab_mut().state;
@@ -381,7 +391,7 @@ fn each_model_key_runs_its_command() {
     let (mut twin, _) = sketch_ws();
     commands::run_action(&mut twin, Action::ExtrudeSketch);
     assert_eq!(by_key, twin.active_tab().dialog);
-    assert_eq!(by_key, Some(CreateDialog::extrude_sketch(sk)));
+    assert_eq!(by_key, Some(extrude_dialog(sk)));
 
     // F: wie „Bearbeiten → Verrunden …“.
     let (w, _) = box_ws();
@@ -571,10 +581,7 @@ fn space_repeats_the_last_command_via_menu_and_via_key() {
     // Die Leertaste startet Extrudieren wieder wie das Menü (ohne gewählte Skizze: die letzte).
     rig.st().selected_feature = None;
     rig.press(Key::Space, NONE);
-    assert_eq!(
-        rig.ws().active_tab().dialog,
-        Some(CreateDialog::extrude_sketch(sk))
-    );
+    assert_eq!(rig.ws().active_tab().dialog, Some(extrude_dialog(sk)));
 
     // Über den Menüweg (`run_action`, wie „Bearbeiten → Verrunden …“).
     let (w, _) = box_ws();
@@ -695,10 +702,7 @@ fn space_after_clicking_a_history_step_repeats_and_does_not_press_the_marker() {
         !rig.left_over,
         "Leertaste vor dem Marker verbraucht (kein Ersatzklick)"
     );
-    assert_eq!(
-        rig.ws().active_tab().dialog,
-        Some(CreateDialog::extrude_sketch(sk))
-    );
+    assert_eq!(rig.ws().active_tab().dialog, Some(extrude_dialog(sk)));
     assert_eq!(rig.st().selected_feature, Some(e), "Auswahl unverändert");
 }
 
@@ -863,7 +867,7 @@ fn erzeugen_menu_extrude_is_remembered_and_space_repeats_it() {
     rig.menu("Erzeugen", &app::CreateKind::Extrusion.label());
     assert_eq!(
         rig.ws().active_tab().dialog,
-        Some(CreateDialog::extrude_sketch(sk)),
+        Some(extrude_dialog(sk)),
         "Menüeintrag öffnet das Fenster"
     );
     assert_eq!(rig.last(), None, "erst beim Abschluss");
@@ -872,10 +876,7 @@ fn erzeugen_menu_extrude_is_remembered_and_space_repeats_it() {
     assert_eq!(rig.last(), Some(Action::ExtrudeSketch));
     rig.st().selected_feature = None;
     rig.press(Key::Space, NONE);
-    assert_eq!(
-        rig.ws().active_tab().dialog,
-        Some(CreateDialog::extrude_sketch(sk))
-    );
+    assert_eq!(rig.ws().active_tab().dialog, Some(extrude_dialog(sk)));
 }
 
 #[test]
@@ -900,10 +901,7 @@ fn tree_context_menu_extrude_is_remembered() {
     rig.st()
         .request_sketch_dialog(planora_app::state::SketchRequest::Extrude(sk));
     rig.settle();
-    assert_eq!(
-        rig.ws().active_tab().dialog,
-        Some(CreateDialog::extrude_sketch(sk))
-    );
+    assert_eq!(rig.ws().active_tab().dialog, Some(extrude_dialog(sk)));
     rig.click_text("Erzeugen");
     assert_eq!(rig.last(), Some(Action::ExtrudeSketch));
 }

@@ -647,7 +647,7 @@ fn move_and_extrude() {
         .unwrap();
     s.close_sketch();
     let texts: BTreeMap<FieldKey, String> = [(FieldKey::Hoehe, "Breite/8".to_string())].into();
-    assert!(CreateDialog::extrude_sketch(sk).create_with(&mut s, &texts));
+    assert!(CreateDialog::extrude_sketch(&s, sk).create_with(&mut s, &texts));
     let e = s.document.features().last().unwrap().id;
     match &s.document.feature(e).unwrap().kind {
         FeatureKind::Extrude { height, .. } => assert_eq!(*height, 5.0),

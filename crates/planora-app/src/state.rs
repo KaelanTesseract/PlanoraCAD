@@ -21,7 +21,7 @@ use planora_render::{
 };
 use planora_sketch::constraint::ConstraintKind;
 use planora_sketch::model::{CurveId, Sketch};
-use planora_sketch::{ExtractedProfiles, plane_of_face};
+use planora_sketch::{ExtractedProfiles, ProfileRef, plane_of_face};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -175,6 +175,12 @@ pub struct AppState {
     pub sketch_request: Option<SketchRequest>,
     /// Zuletzt berechnete Profile (für die Dialoge, die jedes Bild neu zeichnen).
     pub profile_cache: ProfileCache,
+    /// Profile im Skizzen-Modus als helle Flächen zeigen (Skizzenfeld „Profil anzeigen“, wie
+    /// Fusions Skizzenpalette „Profil“); Vorgabe an.
+    pub show_sketch_profiles: bool,
+    /// Offene Profilwahl eines Dialogs „Extrudieren“/„Drehen“: Die 3D-Ansicht zeigt die Profile
+    /// der Skizze und schaltet sie per Klick um (siehe [`ProfilePick`]).
+    pub profile_pick: Option<ProfilePick>,
     /// Offene Rückfrage „Löschen mit Folgen“ aus dem Feature-Baum.
     pub pending_delete: Option<crate::browser::DeletePlan>,
     /// Offenes Fenster „Umbenennen“: Feature und Entwurf des Namens.
@@ -219,6 +225,18 @@ pub struct AppState {
     /// Kennung dieses Zustands (jedes Tab hat einen eigenen; eindeutig im Programm). Trennt die
     /// programmweiten Zwischenspeicher der Zeichnungsansicht nach Dokumenten.
     pub instance: u64,
+}
+
+/// Profilwahl eines offenen Dialogs „Extrudieren“/„Drehen“ (wie in Fusion: Klick in die Ansicht
+/// schaltet ein Profil um). Der Dialog legt Skizze und Wahl in jedem Bild ab; die 3D-Ansicht
+/// trägt das Profil unter dem Mauszeiger (`hover`) und ein angeklicktes (`clicked`) ein, das der
+/// Dialog im selben Bild umschaltet und löscht. Indizes in `profiles()` der berechneten Skizze.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProfilePick {
+    pub sketch: FeatureId,
+    pub selected: Vec<usize>,
+    pub hover: Option<usize>,
+    pub clicked: Option<usize>,
 }
 
 /// Merkt sich die Profile der zuletzt gefragten Skizze zu ihrem Stand
@@ -385,6 +403,8 @@ impl AppState {
             fit_pending: false,
             sketch_request: None,
             profile_cache: ProfileCache::default(),
+            show_sketch_profiles: true,
+            profile_pick: None,
             pending_delete: None,
             rename_draft: None,
             pending_delete_drawing: None,
@@ -2325,9 +2345,14 @@ impl AppState {
         self.sketch_request = Some(request);
     }
 
-    /// Prüft, dass `sketch` eine berechnete Skizze mit dem Profil `profile` (Index in
-    /// `profiles()`) ist; liefert den Namen des Skizzen-Features.
-    fn check_profile(&self, sketch: FeatureId, profile: usize) -> Result<String, String> {
+    /// Prüft, dass `sketch` eine berechnete Skizze ist und `sel` (Indizes in `profiles()`)
+    /// mindestens ein vorhandenes Profil wählt; liefert den Namen des Skizzen-Features und die
+    /// Verweise der gewählten Profile (ohne Wiederholung).
+    fn check_profiles(
+        &self,
+        sketch: FeatureId,
+        sel: &[usize],
+    ) -> Result<(String, Vec<ProfileRef>), String> {
         let f = self
             .document
             .feature(sketch)
@@ -2340,22 +2365,48 @@ impl AppState {
                 reason = status_message(Some(f.status.clone()))
             )
         })?;
-        if profile >= self.profile_cache.get(sk).profiles.len() {
-            return Err(tr!("state-profile-not-found"));
+        if sel.is_empty() {
+            return Err(tr!("create-pick-profile"));
         }
-        Ok(f.name.clone())
+        let extracted = self.profile_cache.get(sk);
+        let mut refs = Vec::with_capacity(sel.len());
+        for (k, &i) in sel.iter().enumerate() {
+            let r = extracted
+                .refs
+                .get(i)
+                .ok_or_else(|| tr!("state-profile-not-found"))?;
+            if !sel[..k].contains(&i) {
+                refs.push(r.clone());
+            }
+        }
+        Ok((f.name.clone(), refs))
     }
 
-    /// Auswahl des Profils `profile` (Index in `profiles()`) der berechneten Skizze `sketch` für
-    /// ein Feature: ein Verweis auf die Fläche, damit das Feature bei Skizzenänderungen an
-    /// derselben Fläche bleibt (gespeichert wird er als alte Profilnummer, wenn das geht). Nur
-    /// ohne berechnete Skizze oder ohne dieses Profil bleibt die Nummer (das Feature meldet dann
-    /// „Profil gibt es nicht“).
-    pub(crate) fn profile_selection(&self, sketch: FeatureId, profile: usize) -> ProfileSel {
-        self.document
+    /// Auswahl der Profile `sel` (Indizes in `profiles()`) der berechneten Skizze `sketch` für ein
+    /// Feature: Verweise auf die Flächen, damit das Feature bei Skizzenänderungen an denselben
+    /// Flächen bleibt (gespeichert als alte Profilnummer, wenn das geht). Unbekannte Indizes
+    /// entfallen; ohne berechnete Skizze ist die Wahl leer.
+    pub(crate) fn profiles_selection(&self, sketch: FeatureId, sel: &[usize]) -> ProfileSel {
+        let refs = self
+            .document
             .sketch_of(sketch)
-            .and_then(|sk| self.profile_cache.get(sk).refs.get(profile).cloned())
-            .map_or(ProfileSel::Index(profile), |r| ProfileSel::Refs(vec![r]))
+            .map(|sk| {
+                let extracted = self.profile_cache.get(sk);
+                sel.iter()
+                    .filter_map(|&i| extracted.refs.get(i).cloned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        ProfileSel::Refs(refs)
+    }
+
+    /// Vorgabe der Profilwahl für die Skizze `sketch` wie in Fusion: Hat sie genau ein Profil,
+    /// ist es gewählt, sonst keins.
+    pub fn default_profiles(&self, sketch: FeatureId) -> Vec<usize> {
+        match self.document.sketch_of(sketch) {
+            Some(sk) if self.profile_cache.get(sk).profiles.len() == 1 => vec![0],
+            _ => Vec::new(),
+        }
     }
 
     /// Indizes (in `profiles()` der berechneten Skizze `sketch`) der Profile, die `sel` heute
@@ -2395,15 +2446,14 @@ impl AppState {
     }
 
     /// Extrudiert Profil `profile` des Skizzen-Features `sketch` um `height` entlang der
-    /// Skizzennormalen; der Körper entsteht an Ort und Stelle. Eine offene Skizze wird vorher
-    /// beendet. Bei einem Fehler bleibt das Dokument unverändert.
+    /// Skizzennormalen (Kurzform von [`AppState::extrude_profiles`] für ein Profil).
     pub fn extrude_sketch(
         &mut self,
         sketch: FeatureId,
         profile: usize,
         height: f64,
     ) -> Result<FeatureId, String> {
-        self.extrude_sketch_with(sketch, profile, height, Formulas::new())
+        self.extrude_profiles(sketch, &[profile], height, Formulas::new())
     }
 
     /// Wie [`AppState::extrude_sketch`], mit Formeln (Höhe).
@@ -2414,44 +2464,70 @@ impl AppState {
         height: f64,
         formulas: Formulas,
     ) -> Result<FeatureId, String> {
+        self.extrude_profiles(sketch, &[profile], height, formulas)
+    }
+
+    /// Extrudiert die Profile `sel` (Indizes in `profiles()`) des Skizzen-Features `sketch` um
+    /// `height` entlang der Skizzennormalen; der Körper entsteht an Ort und Stelle.
+    /// Nebeneinanderliegende Profile werden ein Körper, getrennte mehrere (wie Fusion).
+    /// `formulas` sind die Formeln der Felder (Höhe). Eine offene Skizze wird vorher beendet.
+    /// Bei einem Fehler bleibt das Dokument unverändert.
+    pub fn extrude_profiles(
+        &mut self,
+        sketch: FeatureId,
+        sel: &[usize],
+        height: f64,
+        formulas: Formulas,
+    ) -> Result<FeatureId, String> {
         self.try_close_sketch()?;
         if !(height.is_finite() && height > self.kernel.tolerance.linear) {
             return self.fail(tr!("state-height-positive"));
         }
-        let name = match self.check_profile(sketch, profile) {
-            Ok(n) => n,
+        let (name, refs) = match self.check_profiles(sketch, sel) {
+            Ok(r) => r,
             Err(e) => return self.fail(e),
         };
         self.add_body_from_sketch(
             tr!("state-extrusion-name", name = name),
             FeatureKind::Extrude {
                 sketch,
-                profiles: self.profile_selection(sketch, profile),
+                profiles: ProfileSel::Refs(refs),
                 height,
             },
             formulas,
         )
     }
 
-    /// Dreht Profil `profile` des Skizzen-Features `sketch` um die Linie `axis` (360°); der
-    /// Körper entsteht an Ort und Stelle. Eine offene Skizze wird vorher beendet. Bei einem
-    /// Fehler bleibt das Dokument unverändert.
+    /// Dreht Profil `profile` des Skizzen-Features `sketch` um die Linie `axis` (Kurzform von
+    /// [`AppState::revolve_profiles`] für ein Profil).
     pub fn revolve_sketch(
         &mut self,
         sketch: FeatureId,
         profile: usize,
         axis: CurveId,
     ) -> Result<FeatureId, String> {
+        self.revolve_profiles(sketch, &[profile], axis)
+    }
+
+    /// Dreht die Profile `sel` (Indizes in `profiles()`) des Skizzen-Features `sketch` um die
+    /// Linie `axis` (360°); der Körper entsteht an Ort und Stelle. Eine offene Skizze wird
+    /// vorher beendet. Bei einem Fehler bleibt das Dokument unverändert.
+    pub fn revolve_profiles(
+        &mut self,
+        sketch: FeatureId,
+        sel: &[usize],
+        axis: CurveId,
+    ) -> Result<FeatureId, String> {
         self.try_close_sketch()?;
-        let name = match self.check_profile(sketch, profile) {
-            Ok(n) => n,
+        let (name, refs) = match self.check_profiles(sketch, sel) {
+            Ok(r) => r,
             Err(e) => return self.fail(e),
         };
         self.add_body_from_sketch(
             tr!("state-revolve-name", name = name),
             FeatureKind::Revolve {
                 sketch,
-                profiles: self.profile_selection(sketch, profile),
+                profiles: ProfileSel::Refs(refs),
                 axis,
             },
             Formulas::new(),

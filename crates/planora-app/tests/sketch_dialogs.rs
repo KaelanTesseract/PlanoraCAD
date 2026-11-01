@@ -47,7 +47,7 @@ fn the_extrude_dialog_creates_a_body_and_stays_open_on_errors() {
     let (mut s, id) = state_with_sketch();
     let ok = CreateDialog::ExtrudeSketch {
         sketch: id,
-        profile: 0,
+        profiles: vec![0],
         height: 3.0,
     };
     ok.create(&mut s);
@@ -57,7 +57,7 @@ fn the_extrude_dialog_creates_a_body_and_stays_open_on_errors() {
 
     let bad = CreateDialog::ExtrudeSketch {
         sketch: id,
-        profile: 7,
+        profiles: vec![7],
         height: 3.0,
     };
     bad.create(&mut s);
@@ -71,7 +71,7 @@ fn the_dialogs_draw_and_list_profiles_and_rejections() {
     let (mut s, id) = state_with_sketch();
     let mut dialog = CreateDialog::ExtrudeSketch {
         sketch: id,
-        profile: 0,
+        profiles: vec![0],
         height: 3.0,
     };
     let mut texts = |s: &mut AppState| {
@@ -105,7 +105,7 @@ fn the_dialogs_draw_and_list_profiles_and_rejections() {
     );
     let mut revolve = CreateDialog::RevolveSketch {
         sketch: id,
-        profile: 0,
+        profiles: vec![0],
         axis: None,
     };
     ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -149,7 +149,7 @@ fn revolve_dialog_reports_a_missing_axis() {
     let (mut s, id) = state_with_sketch();
     let d = CreateDialog::RevolveSketch {
         sketch: id,
-        profile: 0,
+        profiles: vec![0],
         axis: None,
     };
     d.create(&mut s);
@@ -238,7 +238,7 @@ fn browser_requests_become_sketch_dialogs() {
     s.sketch_request = Some(SketchRequest::Extrude(id));
     assert_eq!(
         dialog_for_request(&mut s),
-        Some(CreateDialog::extrude_sketch(id))
+        Some(CreateDialog::extrude_sketch(&s, id))
     );
     assert_eq!(s.sketch_request, None, "der Wunsch wird verbraucht");
 
@@ -255,7 +255,7 @@ fn browser_requests_become_sketch_dialogs() {
         dialog_for_request(&mut s),
         Some(CreateDialog::RevolveSketch {
             sketch: id,
-            profile: 0,
+            profiles: vec![0],
             axis: Some(axis),
         })
     );
@@ -364,7 +364,7 @@ fn the_browser_context_menu_deletes_and_edits() {
 fn the_browser_context_menu_clears_the_body_selection() {
     for entry in ["Extrudieren", "Drehen"] {
         let (mut s, id) = state_with_sketch();
-        assert!(CreateDialog::extrude_sketch(id).create(&mut s));
+        assert!(CreateDialog::extrude_sketch(&s, id).create(&mut s));
         s.selected_body = Some(0);
         use_context_menu(&mut s, entry);
         assert!(s.sketch_request.is_some(), "{entry}");
@@ -402,7 +402,7 @@ fn a_stale_revolve_axis_is_rejected() {
     });
     let foreign = CreateDialog::RevolveSketch {
         sketch: j,
-        profile: 0,
+        profiles: vec![0],
         axis: Some(planora_kernel::Id::from_index(40)),
     };
     assert!(!foreign.create(&mut s));
@@ -413,7 +413,7 @@ fn a_stale_revolve_axis_is_rejected() {
 fn profiles_are_computed_again_only_after_a_change() {
     let (mut s, id) = state_with_sketch();
     let ctx = context();
-    let mut d = CreateDialog::extrude_sketch(id);
+    let mut d = CreateDialog::extrude_sketch(&s, id);
     for _ in 0..3 {
         let out = ctx.run_ui(raw(vec![]), |ui| {
             d.show(ui.ctx(), &mut s);

@@ -22,6 +22,7 @@ pub(crate) mod profile_ref;
 pub mod query;
 pub mod solid;
 pub mod solver;
+pub mod triangulate;
 
 pub use constraint::{ConstraintData, ConstraintId, ConstraintKind, Evaluation, LineOrPoints};
 pub use data::{ConstraintRecord, CurveRecord, PointRecord, SketchData};

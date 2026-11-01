@@ -259,7 +259,9 @@ fn times(v: DVec3) -> String {
 }
 
 /// Nummern (ab 1) der heute gewählten Profile, durch Komma getrennt. Passt keins, steht bei
-/// einer alten Profilnummer diese, sonst „(bitte wählen)“.
+/// einer alten Profilnummer, die nur noch der alte Algorithmus kennt, „altes Profil n“ (so wird
+/// der Körper berechnet; die Nummer ist keine der heutigen Liste), sonst „nicht mehr
+/// vorhanden“.
 fn profile_numbers(state: &AppState, sketch: FeatureId, sel: &ProfileSel) -> String {
     let mut found = state.selected_profile_indices(sketch, sel);
     if !found.is_empty() {
@@ -270,9 +272,11 @@ fn profile_numbers(state: &AppState, sketch: FeatureId, sel: &ProfileSel) -> Str
             .collect::<Vec<_>>()
             .join(", ");
     }
-    match sel {
-        ProfileSel::Index(n) => (n + 1).to_string(),
-        ProfileSel::Refs(_) => tr!("create-choose"),
+    match (sel, state.document.sketch_of(sketch)) {
+        (ProfileSel::Index(n), Some(sk)) if *n < sk.legacy_profiles().profiles.len() => {
+            tr!("props-profile-legacy", n = n + 1)
+        }
+        _ => tr!("props-profile-lost"),
     }
 }
 

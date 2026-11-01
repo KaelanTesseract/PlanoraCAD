@@ -524,6 +524,20 @@ pub fn typing(ctx: &egui::Context) -> bool {
 }
 
 /// 3D-Ansicht im ganzen verfügbaren Bereich ohne freies Rechteck (siehe [`show_in`]).
+/// Profil der Skizze aus `state.profile_pick` unter dem Bildschirmpunkt `p` der Ansicht `rect`:
+/// Sehstrahl ∩ Skizzenebene, dann [`planora_sketch::ExtractedProfiles::profile_at`].
+pub fn profile_under(state: &AppState, rect: Rect, p: Pos2) -> Option<usize> {
+    let pick = state.profile_pick.as_ref()?;
+    let sk = state.document.sketch_of(pick.sketch)?;
+    let at = sketch_view::screen_to_sketch(
+        &state.camera,
+        sk.frame(),
+        Vec2::new(rect.width(), rect.height()),
+        Vec2::new(p.x - rect.left(), p.y - rect.top()),
+    )?;
+    state.profile_cache.get(sk).profile_at(at)
+}
+
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     show_in(ui, state, None);
 }
@@ -662,7 +676,20 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
     }
     home_response.on_hover_text(planora_i18n::tr!("view-home-hint"));
 
-    if !sketching {
+    if !sketching && state.profile_pick.is_some() {
+        // Profilwahl eines Dialogs: Klick ohne Ziehen schaltet das Profil unter dem Zeiger um
+        // (wie Fusion); Körper werden dabei nicht gewählt.
+        state.set_hover(None);
+        let at = response
+            .hover_pos()
+            .and_then(|p| profile_under(state, rect, p));
+        if let Some(pick) = state.profile_pick.as_mut() {
+            pick.hover = at;
+            if response.clicked() && at.is_some() {
+                pick.clicked = at;
+            }
+        }
+    } else if !sketching {
         // Auswahl (nicht über dem Würfel; dort ist die Ansicht nicht „hovered“)
         match response.hover_pos() {
             Some(p) => {

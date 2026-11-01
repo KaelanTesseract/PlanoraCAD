@@ -662,6 +662,7 @@ create-rejected = Nicht verwendbar: { $reason }
 create-no-axis = Die Skizze enthält keine Linie, die als Drehachse dienen kann.
 create-create = Erzeugen
 create-pick-axis = Bitte eine Drehachse wählen (eine Linie der Skizze).
+create-pick-profile = Bitte ein Profil wählen: Klick in die Ansicht oder in die Liste.
 create-axis-gone = Die gewählte Drehachse gibt es in dieser Skizze nicht mehr; bitte neu wählen.
 
 ## Verrunden und Fase
@@ -710,6 +711,7 @@ edit-tool = Werkzeug
 edit-body = Körper: { $name }
 edit-edges = Kanten: { $n }
 edit-sketch-not-computed = Die Skizze ist nicht berechnet.
+edit-profile-legacy = Das Feature nutzt Profil { $n } aus einer älteren Version; es entspricht keiner heutigen Fläche. Wähle ein Profil, um es zu ersetzen.
 
 ## Boolesche Operation
 boolean-title = Boolesche Operation
@@ -788,6 +790,8 @@ props-radius = Radius
 props-height = Höhe
 props-sketch = Skizze
 props-profile = Profil
+props-profile-legacy = altes Profil { $n }
+props-profile-lost = nicht mehr vorhanden
 props-axis = Drehachse
 props-curve-n = Kurve { $n }
 props-operation = Operation
@@ -1004,6 +1008,7 @@ sketch-tool-extend-hint = Nahe einem offenen Ende anklicken; die Kurve wird bis 
 sketch-tool-break-hint = Ein Stück anklicken; die Kurve wird an den Schnittpunkten um dieses Stück geteilt. Esc beendet.
 sketch-strip-modify = Ändern → { $tool }
 sketch-extend-no-hit = Keine Kurve zum Dehnen in dieser Richtung.
+sketch-show-profile = Profil anzeigen
 sketch-section-constraints = Abhängigkeiten
 sketch-not-fitting = Passt nicht zur aktuellen Auswahl.
 sketch-section-edit = Bearbeiten
