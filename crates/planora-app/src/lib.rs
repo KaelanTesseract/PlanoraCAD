@@ -58,6 +58,7 @@ pub mod sheet_dialog;
 pub mod shell;
 pub mod shell_panels;
 pub mod sketch_cursor;
+pub mod sketch_input;
 pub mod sketch_panel;
 pub mod sketch_state;
 pub mod sketch_view;

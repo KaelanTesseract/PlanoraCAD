@@ -6,6 +6,7 @@
 use crate::formula_field::resolve;
 use crate::msg::Msg;
 use crate::sketch_cursor::{CursorOptions, DrawCursor};
+use crate::sketch_input::{Created, DrawInput};
 use planora_feature::{FeatureId, ParamScope, ParamUnit, SketchFeature, constraint_unit};
 use planora_i18n::tr;
 use planora_kernel::{Edge, Id, Solid};
@@ -140,7 +141,7 @@ pub fn formula_problem(sf: &SketchFeature, report: Option<&SolveReport>) -> Opti
 }
 
 /// Wert für die Skizze (Winkel in Bogenmaß) und Formel aus dem Text eines Maßfelds.
-fn dimension_input(
+pub(crate) fn dimension_input(
     text: &str,
     unit: ParamUnit,
     scope: &ParamScope,
@@ -190,6 +191,10 @@ pub struct SketchSession {
     pub line_chain: Option<CurveId>,
     /// Bogen: Kurve, an der der gesetzte Anfang tangential weiterläuft; entsteht beim Abschluss.
     pub auto_tangent: Option<CurveId>,
+    /// Felder am Zeiger mit den getippten Werten (siehe [`crate::sketch_input`]).
+    pub input: DrawInput,
+    /// Was der letzte Klick fertig angelegt hat.
+    pub created: Option<Created>,
     pub last_report: Option<SolveReport>,
     /// Meldung zum letzten Schritt; gespeichert als Grund und erst beim Zeichnen übersetzt
     /// ([`message_text`](Self::message_text)).
@@ -220,6 +225,7 @@ struct Backup {
     pending_snaps: Vec<SnapHit>,
     line_chain: Option<CurveId>,
     auto_tangent: Option<CurveId>,
+    input: DrawInput,
     selection: Vec<Item>,
     last_report: Option<SolveReport>,
 }
@@ -277,6 +283,8 @@ impl SketchSession {
             auto_constrain: true,
             line_chain: None,
             auto_tangent: None,
+            input: DrawInput::default(),
+            created: None,
             last_report: None,
             message: None,
             dragging: None,
@@ -299,13 +307,14 @@ impl SketchSession {
         self.clear_pending();
     }
 
-    /// Vergisst, was das laufende Werkzeug schon gesetzt hat.
+    /// Vergisst, was das laufende Werkzeug schon gesetzt und getippt hat.
     fn clear_pending(&mut self) {
         self.pending.clear();
         self.pending_pos.clear();
         self.pending_snaps.clear();
         self.line_chain = None;
         self.auto_tangent = None;
+        self.input = DrawInput::default();
     }
 
     /// Wählt `tool` wie der Klick auf seinen Knopf in der Leiste (und sein Tastenkürzel): ist
@@ -358,6 +367,7 @@ impl SketchSession {
             pending_snaps: self.pending_snaps.clone(),
             line_chain: self.line_chain,
             auto_tangent: self.auto_tangent,
+            input: self.input.clone(),
             selection: self.selection.clone(),
             last_report: self.last_report.clone(),
         }
@@ -370,6 +380,7 @@ impl SketchSession {
         self.pending_snaps = b.pending_snaps;
         self.line_chain = b.line_chain;
         self.auto_tangent = b.auto_tangent;
+        self.input = b.input;
         self.selection = b.selection;
         self.last_report = b.last_report;
     }
@@ -437,6 +448,7 @@ impl SketchSession {
             return Err(text);
         }
         self.cursor = Some(at);
+        self.created = None;
         let cur = self.resolve_cursor(sk, at, radius);
         self.atomic(sk, |se, sk, prior| match se.tool {
             Tool::Select => {
@@ -633,6 +645,7 @@ impl SketchSession {
         }
         self.line_chain = Some(line);
         self.pending = vec![p];
+        self.created = Some(Created::Line(line));
         Ok(())
     }
 
@@ -694,6 +707,7 @@ impl SketchSession {
             }
         }
         self.solve_checked(sk, prior)?;
+        self.created = Some(Created::Rectangle(rect));
         Ok(())
     }
 
@@ -717,6 +731,7 @@ impl SketchSession {
         self.bind_rim(sk, circle, cur)?;
         self.pending.clear();
         self.solve_checked(sk, prior)?;
+        self.created = Some(Created::Circle(circle));
         Ok(())
     }
 
@@ -777,6 +792,7 @@ impl SketchSession {
                 for auto in &cur.autos {
                     self.try_auto(sk, auto.kind(arc));
                 }
+                self.created = Some(Created::Arc(arc));
                 return Ok(());
             }
         }
@@ -825,6 +841,7 @@ impl SketchSession {
         }
         self.clear_pending();
         self.solve_checked(sk, prior)?;
+        self.created = Some(Created::Ellipse(ellipse));
         Ok(())
     }
 
@@ -1063,12 +1080,7 @@ impl SketchSession {
             }
             if report.redundant.contains(&id) {
                 if action.is_dimension() {
-                    sk.set_driven(id, true).map_err(err)?;
-                    if let Some(v) = sk.constraint(id).and_then(|c| sk.measure(&c.kind)) {
-                        sk.set_constraint_value(id, v).map_err(err)?;
-                    }
-                    se.last_report = Some(sk.solve());
-                    se.message = Some(crate::msg!("sketch-became-driven"));
+                    se.make_driven(sk, id)?;
                 } else {
                     se.message = Some(crate::msg!("sketch-redundant"));
                 }
@@ -1076,6 +1088,17 @@ impl SketchSession {
             se.warn_if_unsolved();
             Ok(id)
         })
+    }
+
+    /// Macht das überzählige Maß `id` anzeigend (es zeigt den aktuellen Wert) und sagt es.
+    pub(crate) fn make_driven(&mut self, sk: &mut Sketch, id: ConstraintId) -> Result<(), Msg> {
+        sk.set_driven(id, true).map_err(err)?;
+        if let Some(v) = sk.constraint(id).and_then(|c| sk.measure(&c.kind)) {
+            sk.set_constraint_value(id, v).map_err(err)?;
+        }
+        self.last_report = Some(sk.solve());
+        self.message = Some(crate::msg!("sketch-became-driven"));
+        Ok(())
     }
 
     /// Aktueller Wert des Maßes `action` für die Auswahl (Vorgabe des Zahlenfelds); `None`, wenn
@@ -1434,7 +1457,7 @@ impl SketchSession {
 /// Grenze: Der Bericht nennt bei nicht lösbaren Gruppen nur Abhängigkeiten mit zu großem
 /// Residuum; eine neue nicht lösbare Gruppe neben einem schon bestehenden Widerspruch wird nur
 /// erkannt, wenn sie dabei neue Abhängigkeiten nennt.
-fn check_change(
+pub(crate) fn check_change(
     report: &SolveReport,
     before: Option<&SolveReport>,
     prior: &Sketch,
@@ -1479,7 +1502,11 @@ pub fn with_checked_value(
 }
 
 /// Wie [`with_checked_value`], mit der Meldung als Grund (zum Speichern).
-fn checked_value(sk: &Sketch, kind: &ConstraintKind, value: f64) -> Result<ConstraintKind, Msg> {
+pub(crate) fn checked_value(
+    sk: &Sketch,
+    kind: &ConstraintKind,
+    value: f64,
+) -> Result<ConstraintKind, Msg> {
     if !value.is_finite() {
         return Err(crate::msg!("sketch-enter-number"));
     }

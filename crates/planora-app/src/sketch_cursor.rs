@@ -121,7 +121,7 @@ impl DrawCursor {
 
 /// Richtung, in der die Kurve `c` den Punkt `p` an ihrem Ende verlässt (Fortsetzung über das Ende
 /// hinaus, normiert); `None`, wenn `p` kein Ende von `c` ist.
-fn leaving_direction(sk: &Sketch, c: CurveId, p: PointId) -> Option<DVec2> {
+pub(crate) fn leaving_direction(sk: &Sketch, c: CurveId, p: PointId) -> Option<DVec2> {
     let at = sk.point_xy(p).ok()?;
     let dir = match sk.curve(c)?.kind {
         CurveKind::Line { a, b } if a == p => at - sk.point_xy(b).ok()?,
@@ -284,9 +284,18 @@ impl SketchSession {
 
     /// Bestimmt aus der Rohlage die Lage, die Fangart, die Hilfslinien und die automatischen
     /// Abhängigkeiten: Strg ⇒ nichts davon, sonst Geometrie-Fang, dann Richtung, Ausrichtung und je
-    /// noch freier Achse das Raster. Gleiche Eingaben ergeben ohne Änderung der Skizze dasselbe
-    /// Ergebnis.
+    /// noch freier Achse das Raster; zuletzt, auch mit Strg, die gesperrten Größen. Gleiche
+    /// Eingaben ergeben ohne Änderung der Skizze dasselbe Ergebnis.
     pub fn resolve_cursor(&mut self, sk: &Sketch, raw: DVec2, radius: f64) -> DrawCursor {
+        let mut cur = self.resolve_unlocked(sk, raw, radius);
+        if raw.is_finite() {
+            self.apply_locks(sk, &mut cur);
+        }
+        cur
+    }
+
+    /// [`resolve_cursor`](Self::resolve_cursor) ohne die gesperrten Größen.
+    fn resolve_unlocked(&mut self, sk: &Sketch, raw: DVec2, radius: f64) -> DrawCursor {
         let mut cur = DrawCursor::free(raw);
         if !self.is_drawing_tool() || self.cursor_opts.suppressed || !raw.is_finite() {
             return cur;
