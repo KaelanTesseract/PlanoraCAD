@@ -2030,3 +2030,54 @@ Stand 2026-11-01 (Spec `specs/2026-10-31-skizzen-profile-design.md`, Plan `plans
 - Profilfarben in 3D hinter Körpern verdecken.
 - Beim Brechen und Stutzen merken, aus welcher Kurve ein Teil stammt, und Profil-Verweise darauf umschreiben (damit das Profil erhalten bleibt wie in Fusion).
 - Aufräumen: veraltete Kommentare „zu neu ist jetzt 13“ in den Dateiformat-Tests; der Zwischenspeicher der Profile hält nur einen Eintrag; die Füllung der Profile fällt bei Brücken ohne sichtbaren Kandidaten still auf den ersten zurück.
+
+## Teilprojekt Skizzen 2
+
+Stand 2026-11-01 (Spec `specs/2026-11-01-skizzen-eingabe-design.md`, Plan `plans/2026-11-01-skizzen-eingabe.md`): Felder am Zeiger mit getippten Maßen, mehr Fang, Ausrichtungslinien, automatische Abhängigkeiten mit Zeichen, Skizzenraster mit Fang, Rahmenauswahl, Kettenauswahl, Ganze Kurven ziehen, „Blick auf“. Beschreibung in `docs/funktionen.md`, Abschnitt „Skizzen“. Das Dateiformat ist unverändert.
+
+**Abweichungen von Fusion**
+- Die Felder folgen dem Zeiger, nehmen aber keine Mausklicks an, damit sie nie die Zeichnung verdecken. Ihre Namen stehen sichtbar neben dem Feld.
+- Das Feld hat die Tastatur nur beim Erscheinen und danach, wenn sonst niemand sie hat. Wer bewusst mit Tab ins Statusfeld wechselt, löst mit Buchstaben wieder Kürzel aus, solange ein Feld sichtbar ist.
+- Der erste getippte Winkel einer Linie ohne vorige Linie braucht eine Bezugslinie. Dafür legt das Programm einmal je Skizze eine feste Hilfslinie von (0, 0) nach (10, 0) an. Sie ist eine Konstruktionslinie und bleibt in der Skizze.
+- Für den Öffnungswinkel eines Bogens entstehen zwei Hilfslinien (Mitte–Start, Mitte–Ende) mit einem Winkelmaß. Der getippte Wert bleibt erhalten; bei Winkeln über 180° gibt es kein eigenes Anzeigemaß.
+- Ein Öffnungswinkel, der schon durch andere Abhängigkeiten bestimmt ist, wird nicht zu einem anzeigenden Maß. Er entfällt mit einer Meldung, weil ein anzeigendes Maß Hilfslinien bräuchte und über 180° das falsche Vorzeichen zeigen würde.
+- Die Bogenmitte bindet nur „Punkt auf Kurve“, nicht „Mittelpunkt“; den gibt es nur für Linien.
+- Der Ursprung wird als neuer fester Punkt bei (0, 0) angelegt („fest“), nicht als echter Ursprungspunkt, den es im Modell nicht gibt. Das Zeichen „fest“ wird dort nicht gezeichnet. Ein von Hand dort gesetzter fester Punkt zeigt ebenfalls keine Beschriftung.
+- Eine Linie auf einen vorhandenen Punkt, die nur fast waagerecht ist, wird nicht mehr geradegezogen (früher schon). Eine Richtung gilt am vorhandenen Punkt nur, wenn sie schon exakt stimmt.
+- Ein Rahmen wählt Kurven und nur freie Punkte, keine Endpunkte von Kurven, weil sonst Abhängigkeiten nicht mehr zur Auswahl passen.
+- Umschalt und Ziehen mit der linken Taste auf freier Fläche wählt im Auswahlwerkzeug einen Rahmen, statt zu schwenken. Fusion schwenkt dort mit der mittleren Taste; in den übrigen Werkzeugen bleibt die bisherige Belegung.
+- Enter beendet den Linienzug nicht mehr (Esc oder Doppelklick tun es). Die Hinweistexte der Werkzeuge nennen „Eingabe“ teils noch als Ende.
+- Beim Ziehen ganzer Kurven wird ein Bild zurückgenommen, wenn es für die gezogene Geometrie schlechter würde (vorher gelöst, jetzt nicht, oder mehr Widersprüche). Ein schon vorher bestehender fremder Widerspruch hindert das Ziehen nicht.
+- Ein Kreis, Bogen oder eine Ellipse, auf deren eigene Mitte geklickt wird, bringt die bekannte Fehlermeldung, wenn der Abstand unter 8 Bildschirmpunkten liegt (hineinzoomen oder Strg halten).
+
+**Annahmen** (wie Fusion sich verhält, ist aus dem Gedächtnis beschrieben und nicht geprüft)
+- Als Vorbild für parallel und rechtwinklig zählt jede lebende Linie außer der laufenden Kette, nicht bevorzugt die zuletzt überfahrene; das Zeichen zeigt sie.
+- Der Winkel einer Kettenlinie zählt von der vorigen Linie in Vorwärtsrichtung (90 = rechtwinklig, 30 = 30° Knick), sonst von der x-Achse der Skizze. Er liegt zwischen 0 und 180°, die Zeigerseite bestimmt das Vorzeichen.
+- Der Ursprung gilt wie ein Punkt, der mit dem Ursprungspunkt deckungsgleich ist.
+- Das Raster fängt nur, wenn es sichtbar ist; Raster aus bedeutet kein Rasterfang. Die Fangstufe ist die sichtbare Stufe (fein, ab einem Übergang die zehnfache).
+- Der Kreisrand bindet nur, wenn dort ein vorhandener Punkt gefangen wird; sonst entsteht keine Abhängigkeit.
+- Bögen und Ellipsen am Rand werden als Ganzes verschoben (nur der Kreis ändert den Radius).
+- „Blick auf“ ändert nur Richtung und Ziel, der Zoom bleibt.
+- Die Feldnamen stehen sichtbar neben dem Feld; ob Fusion sie zeigt, ist nicht geprüft.
+
+**Grenzen**
+- Die Suche für den Fang wird nach jeder Änderung der Skizze neu aufgebaut; das kostet bei sehr großen Skizzen ein Bild. Gemessen: Suche bei 200 Kurven im Release unter 4 ms.
+- Der Fang wirkt nur in den Zeichenwerkzeugen, nicht beim Ziehen im Auswahlwerkzeug.
+- Als Richtungsvorbild kommen alle Linien in Frage, nicht nur die in der Nähe.
+- Ein Tangente-Eintrag an einem gemeinsamen Ende gilt als erfüllt, wenn er bis etwa 0,06° abweicht. Ein vorher freier Bogenmittelpunkt kann sich beim nächsten Lösen um etwa 0,0003 mm bewegen; er rückt auf die genaue Senkrechte.
+- Beim Bogen wird die Seite am gemeinsamen Ende nicht festgehalten. Das Zeichen kann auch für verworfene automatische Abhängigkeiten erscheinen.
+- Als „verbunden“ zählen nur gleiche Punkt-Ids am Ende, nicht räumlich zusammenfallende Punkte. Linien, die an der Kette hängen, werden als Vorbild weiträumig ausgeschlossen.
+- Ein echter Widerspruch neben einer leicht abweichenden Tangente meldet „nicht gelöst“ mit weiter Zuordnung. Es wird abgelehnt und nichts bewegt, nur die Meldung ist ungenauer. Eine neue Tangente auf ganz festgelegter Geometrie wird bis 0,06° Abweichung akzeptiert.
+- Ein Fenster ohne Textfeld lässt dem Zeichenfeld die Tastatur: Enter setzt dann einen Punkt hinter dem Fenster.
+- Auf geneigten Ansichten springt die Rasterstufe mit der Zahl der gezeichneten Linien. Bei einer längengesperrten Linie rastet das Raster die Richtung ein (im Handtest prüfen).
+- Schlägt das Speichern der Einstellungen (Raster und Fang) fehl, gibt es keine Meldung.
+- Während eines laufenden Zugs trägt Rückgängig einen allgemeinen Namen. Der Hinweis „blockiert“ bleibt nach dem Loslassen stehen.
+
+**Folgeideen**
+- Die Einstellungen als eigener Stand („PendingSettings“) bündeln: Heute berührt jeder neue Schalter neun Stellen.
+- Ein Fenster ohne Textfeld soll dem Zeichenfeld die Tastatur nehmen.
+- Hinweistexte der Werkzeuge an das neue Enter anpassen (Linie, Spline, Tastenzeile) und „Ziehen: Rahmen“ mit „auf freier Fläche“ ergänzen.
+- Fangzeichen zusätzlich für den Fang beim Ziehen im Auswahlwerkzeug.
+- Richtungsvorbild auf die zuletzt überfahrenen Linien einschränken, wenn es in der Praxis zu viele Treffer gibt.
+- Mehr Prüfungen: Mittelpunkt auf Bogen und Ellipsenbogen, Fang auf Splines, doppelte Schnittpunkte, Klick auf eigene Mitte mit Strg als Ausweg.
+- Aufräumen: ein gemeinsames Prüfstück für „Ziehen beginnen“ und „freie Fläche“; veralteter Kommentar bei `assemble`; Meldungsende beim Ziehen (Punkt am Ende).
