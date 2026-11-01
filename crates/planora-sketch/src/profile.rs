@@ -545,10 +545,18 @@ impl LoopBuilder<'_> {
             .map(|&h| {
                 let p = &self.arr.pieces[h / 2];
                 let g = self.arr.geom_of(h / 2);
+                let u0 = normalized(g, p.t0);
+                // Ein voller Umlauf (Kreis oder Ellipse mit einem Knoten) endet genau bei
+                // `u0 + 1`; einzeln umgerechnet läge `u1` oft ein ulp darüber.
+                let full_turn = g.periodic() && p.t1 - p.t0 >= TAU - 1e-9;
                 PieceRef {
                     curve: p.curve,
-                    u0: normalized(g, p.t0),
-                    u1: normalized(g, p.t1),
+                    u0,
+                    u1: if full_turn {
+                        u0 + 1.0
+                    } else {
+                        normalized(g, p.t1)
+                    },
                     left: h.is_multiple_of(2) != reversed,
                     len: p.len,
                 }

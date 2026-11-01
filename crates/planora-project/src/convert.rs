@@ -704,7 +704,8 @@ fn profile_sel_from(
             && u1.is_finite()
             && len.is_finite()
             && u0 < u1
-            && u1 <= u0 + 1.0
+            // Dateien vor der Nachbesserung schrieben einen vollen Umlauf mitunter ein ulp zu lang
+            && u1 <= u0 + 1.0 + 1e-9
             && len >= 0.0;
         if !ok {
             return Err(err(tr!("proj-profile-piece-invalid")));
@@ -712,7 +713,7 @@ fn profile_sel_from(
         Ok(PieceRef {
             curve: CurveId::from_index(curve),
             u0,
-            u1,
+            u1: u1.min(u0 + 1.0),
             left,
             len,
         })

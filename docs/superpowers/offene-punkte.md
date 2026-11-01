@@ -1997,7 +1997,7 @@ Abgeschlossen 2026-10-31 (gemergt in master als 99c72fa; Spec `specs/2026-10-31-
 
 ## Teilprojekt Skizzen 1
 
-Gebaut auf dem Zweig `feature/skizzen-profile` (Spec `specs/2026-10-31-skizzen-profile-design.md`, Plan `plans/2026-11-01-skizzen-profile.md`): Profile wie Fusion, Anklicken der Profile, mehrere Körper in einem Schritt, Stutzen, Dehnen, Brechen, Ellipsenbogen. Beschreibung in `docs/funktionen.md`, Abschnitt „Skizzen“. Alle automatischen Prüfungen (Format, Clippy, Tests, beide Messtests im Release, cargo deny) sind grün.
+Stand 2026-11-01 (Spec `specs/2026-10-31-skizzen-profile-design.md`, Plan `plans/2026-11-01-skizzen-profile.md`): Profile wie Fusion, Anklicken der Profile, mehrere Körper in einem Schritt, Stutzen, Dehnen, Brechen, Ellipsenbogen. Beschreibung in `docs/funktionen.md`, Abschnitt „Skizzen“. Alle automatischen Prüfungen (Format, Clippy, Tests, beide Messtests im Release, cargo deny) sind grün.
 
 **Stand:** Offen: Handtest in der App.
 
@@ -2006,9 +2006,10 @@ Gebaut auf dem Zweig `feature/skizzen-profile` (Spec `specs/2026-10-31-skizzen-p
 - Splines werden beim Stutzen neu durch die übrig bleibenden Stützpunkte und den neuen Endpunkt gelegt; die Form ändert sich dabei leicht. Fusion behält sie genauer.
 - „Kollinear“ gibt es hier noch nicht. Ein Stück einer gestutzten Linie bekommt dafür „parallel“ (oder „waagerecht“/„senkrecht“ vom Original) und „Punkt auf Kurve“. Das ist eine Annahme, wie Fusion es macht.
 - Ein Kreis oder eine Ellipse mit nur einem Schnittpunkt wird beim Stutzen ganz gelöscht (Annahme).
-- Dehnen entfernt ein Längenmaß, das durch das Verlängern verletzt würde, statt das Dehnen zu verhindern (Annahme).
+- Dehnen entfernt ein Maß oder eine Abhängigkeit, die nach dem Verlängern nicht mehr erfüllt wäre, statt das Dehnen zu verhindern (Annahme).
 - Brechen setzt zwischen den Teilen nur „deckungsgleich“, nicht zusätzlich „Punkt auf Kurve“ oder „gleich“; beides ergibt sich aus den Verbindungen. Bei Kreis und Ellipse hängt die eine überzählige innere Abhängigkeit von der Reihenfolge beim Anlegen ab.
 - Beim Stutzen bleibt der Abstand zwischen zwei Punkten einer geteilten Linie erhalten (Regel wörtlich umgesetzt); beim Stutzen eines Splines in der Mitte geht „Punkt auf Kurve“ für das rechte Stück verloren.
+- Brechen oder Stutzen in der Mitte macht aus dem zweiten Teil eine neue Kurve. Ein Profil, das vor allem an diesem Teil hängt, gilt danach als nicht mehr vorhanden und muss neu gewählt werden. Fusion behält es.
 - Die Profilfarben in der 3D-Ansicht werden nicht von Körpern verdeckt (Fusion verdeckt sie). Beim Überfahren hat die Hervorhebung Vorrang vor der Farbe „gewählt“.
 
 **Grenzen**
@@ -2019,10 +2020,13 @@ Gebaut auf dem Zweig `feature/skizzen-profile` (Spec `specs/2026-10-31-skizzen-p
 - Der Abgleich der Richtung an Knoten arbeitet mit einer Toleranz von 0,01 rad (etwa 0,6°); zwei wirklich verschiedene Richtungen darunter könnten vertauscht werden. Bei Ellipse und Spline mit fast tangentialem Verlauf wird die Richtung nach Parameter statt nach Bogenlänge abgetastet.
 - Alte Dateien: Ist ein altes Profil nicht eindeutig auf die neuen Flächen abbildbar, bleibt das Feature bei seiner alten Nummer und rechnet wie früher.
 - Das Format 13 wird nur geschrieben, wenn es nötig ist; eine ältere Datei, die einen Ellipsenbogen enthält, wird beim Laden nicht abgewiesen.
+- Ein Kreis, den nur ein einziger Punkt berührt (eine Linie oder ein anderer Kreis), ist im Profil ein Bogen über den ganzen Umlauf. Das Extrudieren geht trotzdem.
+- Eine Datei, in der ein Feature eine leere Profilwahl hat, lädt ohne Fehler; das Feature meldet dann, dass das Profil nicht mehr vorhanden ist.
 
 **Folgeideen**
 - „Kollinear“ als eigene Abhängigkeit.
 - Splines mit Parameterbereich (Stutzen ohne Formänderung) und Dehnen von Splines (Teilprojekt 7).
 - Eingeklemmte Flächen im Kernel erlauben.
 - Profilfarben in 3D hinter Körpern verdecken.
+- Beim Brechen und Stutzen merken, aus welcher Kurve ein Teil stammt, und Profil-Verweise darauf umschreiben (damit das Profil erhalten bleibt wie in Fusion).
 - Aufräumen: veraltete Kommentare „zu neu ist jetzt 13“ in den Dateiformat-Tests; der Zwischenspeicher der Profile hält nur einen Eintrag; die Füllung der Profile fällt bei Brücken ohne sichtbaren Kandidaten still auf den ersten zurück.

@@ -674,8 +674,10 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     };
     let report = se.last_report.as_ref();
 
-    // Profile als helle Flächen unter allem anderen („Profil anzeigen“, wie Fusion).
-    if state.show_sketch_profiles {
+    // Profile als helle Flächen unter allem anderen („Profil anzeigen“, wie Fusion). Beim
+    // Ziehen eines Punkts ändert sich die Skizze in jedem Frame; die Flächen kommen erst danach
+    // wieder (sonst würden sie in jedem Frame neu bestimmt).
+    if state.show_sketch_profiles && se.dragging.is_none() {
         let extracted = state.profile_cache.get(sk);
         painter.extend(profile_fill_shape(&map, &extracted, |_| {
             Some(col.profile_fill)

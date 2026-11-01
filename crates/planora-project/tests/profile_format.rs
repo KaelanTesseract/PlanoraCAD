@@ -432,3 +432,113 @@ fn broken_references_give_named_errors() {
         &planora_i18n::tr!("proj-err-profile-field"),
     );
 }
+
+/// Dreieck (0,0),(20,10),(20,-10) mit einem Kreis innen, der die Hypotenuse berührt.
+fn tangent_circle_sketch(s_par: f64, r: f64) -> Sketch {
+    let mut s = new_sketch(StandardPlane::XY, "Skizze 1");
+    line(&mut s, (0.0, 0.0), (20.0, 10.0));
+    line(&mut s, (20.0, 10.0), (20.0, -10.0));
+    line(&mut s, (20.0, -10.0), (0.0, 0.0));
+    let n = DVec2::new(1.0, -2.0).normalize();
+    let c = DVec2::new(2.0 * s_par, s_par) + n * r;
+    let m = s.add_point(c.x, c.y).unwrap();
+    s.add_circle(m, r).unwrap();
+    s
+}
+
+/// Zwei Kreise, die sich von außen in Richtung `angle` berühren.
+fn touching_circles_sketch(angle: f64) -> Sketch {
+    let mut s = new_sketch(StandardPlane::XY, "Skizze 1");
+    let m = s.add_point(0.0, 0.0).unwrap();
+    s.add_circle(m, 3.0).unwrap();
+    let c = DVec2::new(angle.cos(), angle.sin()) * 5.0;
+    let m = s.add_point(c.x, c.y).unwrap();
+    s.add_circle(m, 2.0).unwrap();
+    s
+}
+
+/// Gesamtprüfung C1: Ein Kreis mit genau einem Knoten (berührt eine Linie oder einen anderen
+/// Kreis) ist ein Stück über einen vollen Umlauf. Sein Verweis muss sich speichern und laden
+/// lassen; früher lag `u1` je nach Lage des Knotens um ein ulp über `u0 + 1`.
+#[test]
+fn a_disc_bounded_by_a_circle_with_one_node_saves_and_loads() {
+    let mut sketches: Vec<Sketch> = (0..40)
+        .map(|i| tangent_circle_sketch(4.0 + 0.1 * i as f64, 2.0 + 0.05 * i as f64))
+        .collect();
+    sketches.extend((0..24).map(|i| touching_circles_sketch(0.37 + i as f64 * 0.26)));
+    let (mut discs, mut ulp_cases) = (0, 0);
+    for sk in sketches {
+        let refs = sk.profiles().refs;
+        for r in refs
+            .iter()
+            .filter(|r| r.outer.len() == 1 && r.holes.is_empty())
+        {
+            let p = &r.outer[0];
+            assert_eq!(p.u1, p.u0 + 1.0, "voller Umlauf: {p:?}");
+            let t0 = p.u0 * std::f64::consts::TAU;
+            if (t0 + std::f64::consts::TAU) / std::f64::consts::TAU > p.u0 + 1.0 {
+                ulp_cases += 1;
+            }
+            discs += 1;
+            let mut d = Document::new();
+            let sid = add_sketch(&mut d, "Skizze 1", sk.clone(), StandardPlane::XY);
+            d.add_feature(
+                "Extrusion 1",
+                FeatureKind::Extrude {
+                    sketch: sid,
+                    profiles: ProfileSel::Refs(vec![r.clone()]),
+                    height: 5.0,
+                },
+            )
+            .unwrap();
+            assert_eq!(d.features()[1].status, FeatureStatus::Ok);
+            let text = encode_version(&d.snapshot()).unwrap();
+            let back = load(&text).unwrap();
+            assert_eq!(back.features()[1].status, FeatureStatus::Ok);
+            let b = |doc: &Document| {
+                body(
+                    doc.body(BodyRef {
+                        feature: doc.features()[1].id,
+                        index: 0,
+                    })
+                    .unwrap(),
+                )
+            };
+            let (x, y) = (b(&d), b(&back));
+            assert_eq!((x.volume, x.hull, x.faces), (y.volume, y.hull, y.faces));
+        }
+    }
+    assert!(discs >= 40, "{discs} Scheiben");
+    assert!(ulp_cases > 0, "die Lagen treffen den ulp-Fall nicht");
+}
+
+/// Ein Stück über einen vollen Umlauf mit `u1` ein ulp über `u0 + 1` (so schrieb es das
+/// Programm vor der Nachbesserung) lädt trotzdem.
+#[test]
+fn a_full_turn_piece_one_ulp_too_long_still_loads() {
+    let mut d = Document::new();
+    let sk = touching_circles_sketch(0.5);
+    let r = sk
+        .profiles()
+        .refs
+        .into_iter()
+        .find(|r| r.outer.len() == 1)
+        .unwrap();
+    let sid = add_sketch(&mut d, "Skizze 1", sk, StandardPlane::XY);
+    d.add_feature(
+        "Extrusion 1",
+        FeatureKind::Extrude {
+            sketch: sid,
+            profiles: ProfileSel::Refs(vec![r]),
+            height: 5.0,
+        },
+    )
+    .unwrap();
+    let text = encode_version(&d.snapshot()).unwrap();
+    let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let piece = &mut v["features"][1]["art"]["profile"][0]["aussen"][0];
+    let u0 = piece[1].as_f64().unwrap();
+    piece[2] = serde_json::json!(f64::from_bits((u0 + 1.0).to_bits() + 1));
+    let back = load(&serde_json::to_string(&v).unwrap()).unwrap();
+    assert_eq!(back.features()[1].status, FeatureStatus::Ok);
+}

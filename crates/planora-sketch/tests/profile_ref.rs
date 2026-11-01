@@ -1,6 +1,8 @@
 //! Profil-Verweise wiederfinden (Entscheidung 4), Flächen zusammenfassen und alte Profilnummern
 //! umrechnen (Entscheidung 5).
 
+use std::f64::consts::PI;
+
 use planora_kernel::{AnalyticKernel, Kernel, Profile, Solid};
 use planora_math::{DVec2, DVec3, Frame, Tolerance};
 use planora_mesh::{TessellationOptions, mass_properties, tessellate};
@@ -592,4 +594,54 @@ fn the_migration_of_a_sketch_matches_the_single_calls() {
             }
         }
     }
+}
+
+// ---- Verweise nach dem Stutzen (Gesamtprüfung) --------------------------------------------
+
+/// Index des Profils, dessen Außenrand im Mittel links (`left`) bzw. rechts von x = 20 liegt
+/// und dessen Fläche `area` ± 2 ist.
+fn face_at(e: &planora_sketch::ExtractedProfiles, left: bool, area: f64) -> usize {
+    (0..e.profiles.len())
+        .find(|&i| {
+            let o = &e.outlines[i][0];
+            let c = o.iter().fold(DVec2::ZERO, |a, p| a + *p) / o.len() as f64;
+            (c.x < 20.0) == left && (e.profiles[i].outer.signed_area().abs() - area).abs() < 2.0
+        })
+        .unwrap_or_else(|| panic!("keine Fläche links={left} mit {area}"))
+}
+
+/// Rechteck (0,0)–(20,10) mit einer Kurve um (20, 5), die die rechte Kante kreuzt; der äußere
+/// Teil wird gestutzt. Die innere Hälfte und die restliche Fläche des Rechtecks bleiben
+/// dieselben Flächen.
+fn refs_survive_trimming_the_outer_part(
+    add: impl FnOnce(&mut Sketch, PointId) -> CurveId,
+    half: f64,
+) {
+    let mut s = sketch();
+    rect(&mut s, 0.0, 0.0, 20.0, 10.0);
+    let m = s.add_point(20.0, 5.0).unwrap();
+    let c = add(&mut s, m);
+    let before = s.profiles();
+    assert_eq!(before.profiles.len(), 3);
+    let inner = before.refs[face_at(&before, true, half)].clone();
+    let rest = before.refs[face_at(&before, true, 200.0 - half)].clone();
+    s.trim(c, DVec2::new(22.9, 5.0)).unwrap();
+    let after = s.profiles();
+    assert_eq!(after.profiles.len(), 2);
+    assert_eq!(after.find(&inner), Some(face_at(&after, true, half)));
+    assert_eq!(after.find(&rest), Some(face_at(&after, true, 200.0 - half)));
+}
+
+#[test]
+fn refs_survive_trimming_a_circle_to_an_arc() {
+    refs_survive_trimming_the_outer_part(|s, m| s.add_circle(m, 3.0).unwrap(), PI * 4.5);
+}
+
+#[test]
+fn refs_survive_trimming_an_ellipse_to_an_elliptic_arc() {
+    // Halbachsen 3 (waagrecht) und 2: halbe Fläche π · 3 · 2 / 2
+    refs_survive_trimming_the_outer_part(
+        |s, m| s.add_ellipse(m, DVec2::new(3.0, 0.0), 2.0).unwrap(),
+        PI * 3.0,
+    );
 }

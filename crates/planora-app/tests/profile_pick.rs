@@ -635,3 +635,59 @@ fn old_profile_numbers_are_counted_again_only_after_a_change() {
     assert_eq!(count(&s), 3);
     assert_eq!(s.profile_cache.legacy_computations(), 2);
 }
+
+/// Gesamtprüfung I2: Löst sich die Wahl beim Übernehmen in keine Profile auf (Skizze nicht
+/// berechnet, Profil inzwischen weg), schreibt der Dialog keine leere Wahl ins Feature, sondern
+/// bittet um ein Profil.
+#[test]
+fn editing_refuses_a_pick_that_resolves_to_no_profile() {
+    let (mut s, id) = two_rectangles();
+    let e = s.extrude_sketch(id, 0, 2.0).unwrap();
+    let before = s.document.feature(e).unwrap().kind.clone();
+    let mut d = FeatureDialog::new(&s, e).unwrap();
+    d.toggle_profile(0);
+    d.toggle_profile(7);
+    assert_eq!(d.picked_profiles(), [7]);
+    let err = d.apply(&mut s).unwrap_err();
+    assert!(err.contains("Profil wählen"), "{err}");
+    assert_eq!(s.document.feature(e).unwrap().kind, before);
+    assert_eq!(s.document.feature(e).unwrap().status, FeatureStatus::Ok);
+}
+
+/// Gesamtprüfung Minor 1: Während ein Punkt gezogen wird, ändert sich die Skizze in jedem Frame;
+/// die Profilflächen werden dann nicht neu bestimmt und erst nach dem Ziehen wieder gezeigt.
+#[test]
+fn show_profile_pauses_while_a_point_is_dragged() {
+    let ctx = context();
+    let (mut s, id, ()) = sketch_with(|sk| {
+        sk.add_rectangle(DVec2::new(-60.0, 0.0), DVec2::new(-50.0, 10.0))
+            .unwrap();
+    });
+    s.open_sketch(id).unwrap();
+    aim(&mut s, false);
+    let col = theme::sketch_colors(s.dark);
+    let run = |s: &mut AppState, events: Vec<egui::Event>| {
+        let out = ctx.run_ui(raw(events), |ui| {
+            sketch_view::show_overlay(ui, SCREEN, s);
+        });
+        let shapes = all_shapes(&out.shapes);
+        out.drop_without_applying_deltas();
+        filled_triangles(&shapes, col.profile_fill)
+    };
+    run(&mut s, vec![]);
+    assert!(run(&mut s, vec![]) >= 2, "vor dem Ziehen gefüllt");
+    let p = screen(&s, id, DVec2::new(-50.0, 10.0));
+    let at = |d: f32| egui::Event::PointerMoved(p + egui::vec2(d, -d));
+    run(&mut s, vec![egui::Event::PointerMoved(p)]);
+    run(&mut s, vec![button(p, true)]);
+    run(&mut s, vec![at(6.0)]);
+    let during = run(&mut s, vec![at(12.0)]);
+    assert!(
+        s.sketch_session.as_ref().unwrap().dragging.is_some(),
+        "der Punkt wird gezogen"
+    );
+    assert_eq!(during, 0, "beim Ziehen keine Flächen");
+    run(&mut s, vec![button(p + egui::vec2(12.0, -12.0), false)]);
+    assert!(s.sketch_session.as_ref().unwrap().dragging.is_none());
+    assert!(run(&mut s, vec![]) >= 2, "nach dem Ziehen wieder gefüllt");
+}

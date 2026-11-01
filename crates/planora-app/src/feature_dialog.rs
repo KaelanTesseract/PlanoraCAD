@@ -647,6 +647,10 @@ impl FeatureDialog {
             } = &mut kind
         {
             *profiles = state.profiles_selection(*sketch, &self.profiles.picked);
+            // Skizze nicht berechnet oder Profile inzwischen weg: keine leere Wahl schreiben.
+            if matches!(profiles, ProfileSel::Refs(refs) if refs.is_empty()) {
+                return fail(state, crate::msg!("create-pick-profile"));
+            }
         }
         if let FeatureKind::Verrunden { art, .. } = &kind
             && let Some(min) = self.min_size(state)
