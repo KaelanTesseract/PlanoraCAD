@@ -20,8 +20,8 @@ use planora_drawing::dimension::{DimId, DimKind, DimSpec, GeoRef, Tolerance as D
 use planora_drawing::{DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewId, ViewKind};
 use planora_exchange::ExchangeMesh;
 use planora_feature::{
-    BlendArt, BodyRef, Document, FeatureId, FeatureKind, FeatureStatus, SketchFeature, SketchPlane,
-    StandardPlane, geo_ref_for_edge,
+    BlendArt, BodyRef, Document, FeatureId, FeatureKind, FeatureStatus, ProfileSel, SketchFeature,
+    SketchPlane, StandardPlane, geo_ref_for_edge,
 };
 use planora_kernel::{BoolOp, Edge, Id, SurfaceKind};
 use planora_math::{DVec3, Frame, Tolerance};
@@ -135,7 +135,7 @@ fn plate(st: &mut AppState, rows: usize, cols: usize) -> FeatureId {
         None,
         FeatureKind::Extrude {
             sketch: s,
-            profile: 0,
+            profiles: ProfileSel::Index(0),
             height: 5.0,
         },
     )
@@ -158,7 +158,7 @@ fn spline_body(st: &mut AppState) -> FeatureId {
         None,
         FeatureKind::Extrude {
             sketch: s,
-            profile: 0,
+            profiles: ProfileSel::Index(0),
             height: 2.0,
         },
     )

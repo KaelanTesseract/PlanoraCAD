@@ -43,7 +43,8 @@ fn a_circle_inside_a_rectangle_becomes_a_hole() {
     let c = s.add_point(10.0, 10.0).unwrap();
     s.add_circle(c, 4.0).unwrap();
     let e = s.profiles();
-    assert_eq!(e.profiles.len(), 1);
+    // Fusion-Verhalten, Skizzen 1: Ring und Kreisfläche sind je ein Profil.
+    assert_eq!(e.profiles.len(), 2);
     assert_eq!(e.profiles[0].holes.len(), 1);
     // das Profil lässt sich wirklich extrudieren
     let solid = AnalyticKernel::default()
@@ -61,7 +62,8 @@ fn nesting_alternates_outer_and_hole() {
     s.add_circle(c, 2.0).unwrap();
     let e = s.profiles();
     assert!(e.rejected.is_empty(), "{:?}", e.rejected);
-    assert_eq!(e.profiles.len(), 2, "Ring plus innere Insel");
+    // Fusion-Verhalten, Skizzen 1: zwei Ringe und die innere Kreisfläche.
+    assert_eq!(e.profiles.len(), 3, "zwei Ringe plus innere Insel");
     let ring = e.profiles.iter().find(|p| !p.holes.is_empty()).unwrap();
     assert_eq!(ring.holes.len(), 1);
     let island = e.profiles.iter().find(|p| p.holes.is_empty()).unwrap();
@@ -92,8 +94,9 @@ fn construction_geometry_is_ignored() {
     assert_eq!(e.profiles.len(), 1);
 }
 
+// Fusion-Verhalten, Skizzen 1: offene Ketten werden still übergangen, T-Stöße teilen Flächen.
 #[test]
-fn open_chains_and_t_junctions_are_rejected_with_a_reason() {
+fn open_chains_are_ignored_and_t_junctions_split_faces() {
     let mut s = sketch();
     let a = s.add_point(0.0, 0.0).unwrap();
     let b = s.add_point(5.0, 0.0).unwrap();
@@ -102,24 +105,47 @@ fn open_chains_and_t_junctions_are_rejected_with_a_reason() {
     s.add_line(b, c).unwrap();
     let e = s.profiles();
     assert!(e.profiles.is_empty());
-    assert_eq!(e.rejected.len(), 1);
-    assert_eq!(e.rejected[0].reason, SketchError::OpenLoop);
+    assert!(e.rejected.is_empty(), "{:?}", e.rejected);
 
+    // Linie von einer Ecke durch die gegenüberliegende Ecke hinaus: Diagonale plus Stummel
     let mut s = sketch();
     let p = rect(&mut s, 0.0, 0.0, 4.0, 4.0);
     let extra = s.add_point(9.0, 9.0).unwrap();
     s.add_line(p[0], extra).unwrap();
     let e = s.profiles();
-    assert!(e.profiles.is_empty());
-    assert!(
-        matches!(e.rejected[0].reason, SketchError::AmbiguousTopology(_)),
-        "{:?}",
-        e.rejected
-    );
+    assert!(e.rejected.is_empty(), "{:?}", e.rejected);
+    assert_eq!(e.profiles.len(), 2);
+    for p in &e.profiles {
+        assert!((p.outer.signed_area().abs() - 8.0).abs() < 1e-9);
+    }
+
+    // T-Stoß: Linie von der Unterkante zur Oberkante
+    let mut s = sketch();
+    rect(&mut s, 0.0, 0.0, 4.0, 4.0);
+    let m = s.add_point(1.0, 0.0).unwrap();
+    let t = s.add_point(1.0, 4.0).unwrap();
+    s.add_line(m, t).unwrap();
+    let e = s.profiles();
+    assert!(e.rejected.is_empty(), "{:?}", e.rejected);
+    let mut areas: Vec<f64> = e
+        .profiles
+        .iter()
+        .map(|p| p.outer.signed_area().abs())
+        .collect();
+    areas.sort_by(f64::total_cmp);
+    assert_eq!(areas.len(), 2);
+    assert!((areas[0] - 4.0).abs() < 1e-9 && (areas[1] - 12.0).abs() < 1e-9);
+    for p in &e.profiles {
+        let solid = AnalyticKernel::default()
+            .extrude(p, s.frame(), 1.0)
+            .unwrap();
+        AnalyticKernel::default().validate(&solid).unwrap();
+    }
 }
 
+// Fusion-Verhalten, Skizzen 1: Schleife und kreuzende Quadrate ergeben ihre Teilflächen.
 #[test]
-fn bow_ties_and_crossing_loops_are_rejected() {
+fn bow_ties_and_crossing_loops_give_faces() {
     let mut s = sketch();
     let p = [
         s.add_point(0.0, 0.0).unwrap(),
@@ -131,20 +157,26 @@ fn bow_ties_and_crossing_loops_are_rejected() {
         s.add_line(p[i], p[(i + 1) % 4]).unwrap();
     }
     let e = s.profiles();
-    assert!(e.profiles.is_empty());
-    assert_eq!(e.rejected[0].reason, SketchError::SelfIntersecting);
+    assert!(e.rejected.is_empty(), "{:?}", e.rejected);
+    assert_eq!(e.profiles.len(), 2);
+    for p in &e.profiles {
+        assert!((p.outer.signed_area().abs() - 4.0).abs() < 1e-9);
+    }
 
     let mut s = sketch();
     rect(&mut s, 0.0, 0.0, 6.0, 6.0);
     rect(&mut s, 3.0, 3.0, 9.0, 9.0);
     let e = s.profiles();
-    assert!(e.profiles.is_empty());
-    assert_eq!(e.rejected.len(), 2);
-    assert!(
-        e.rejected
-            .iter()
-            .all(|r| r.reason == SketchError::SelfIntersecting)
-    );
+    assert!(e.rejected.is_empty(), "{:?}", e.rejected);
+    assert_eq!(e.profiles.len(), 3);
+    let total: f64 = e.profiles.iter().map(|p| p.outer.signed_area().abs()).sum();
+    assert!((total - 63.0).abs() < 1e-9, "{total}");
+    for p in &e.profiles {
+        let solid = AnalyticKernel::default()
+            .extrude(p, s.frame(), 1.0)
+            .unwrap();
+        AnalyticKernel::default().validate(&solid).unwrap();
+    }
 }
 
 #[test]
@@ -207,6 +239,7 @@ fn nearly_touching_endpoints_are_the_same_node() {
 
 // Zusätzliche Tests (nicht aus dem Plan).
 
+// Fusion-Verhalten, Skizzen 1: Hin- und Rückweg sind dasselbe Stück: keine Fläche, keine Meldung.
 #[test]
 fn a_line_back_and_forth_encloses_no_area() {
     let mut s = sketch();
@@ -216,12 +249,7 @@ fn a_line_back_and_forth_encloses_no_area() {
     s.add_line(b, a).unwrap();
     let e = s.profiles();
     assert!(e.profiles.is_empty());
-    assert_eq!(e.rejected.len(), 1);
-    assert!(
-        matches!(e.rejected[0].reason, SketchError::Degenerate(_)),
-        "{:?}",
-        e.rejected
-    );
+    assert!(e.rejected.is_empty(), "{:?}", e.rejected);
 }
 
 #[test]
@@ -264,7 +292,9 @@ fn two_holes_and_an_island_extrude() {
     rect(&mut s, 4.0, 4.0, 8.0, 8.0);
     let e = s.profiles();
     assert!(e.rejected.is_empty(), "{:?}", e.rejected);
-    assert_eq!(e.profiles.len(), 2);
+    // Fusion-Verhalten, Skizzen 1: auch die Löcher sind Profile (inneres Rechteck als Ring um
+    // die Insel, Kreisfläche, Insel).
+    assert_eq!(e.profiles.len(), 4);
     assert_eq!(e.profiles[0].holes.len(), 2);
     assert_eq!(e.curve_loops[0].len(), 4);
     for p in &e.profiles {
@@ -360,44 +390,53 @@ fn tangent_hole(scale: f64) -> (Sketch, planora_sketch::CurveId) {
     (s, c)
 }
 
+// Fusion-Verhalten, Skizzen 1: Die Kreisfläche ist ein Profil; die eingeklemmte Fläche drumherum
+// berührt sich selbst und wird abgelehnt (Entscheidung 3), in jedem Maßstab.
 #[test]
-fn a_hole_tangent_to_an_edge_is_rejected_at_every_scale() {
+fn a_hole_tangent_to_an_edge_pinches_the_face_at_every_scale() {
     for scale in [1.0, 1e5] {
         let (s, c) = tangent_hole(scale);
         let e = s.profiles();
-        assert!(e.profiles.is_empty(), "Maßstab {scale}: {:?}", e.profiles);
+        assert_eq!(e.profiles.len(), 1, "Maßstab {scale}: {:?}", e.rejected);
+        assert_eq!(e.curve_loops, vec![vec![c]], "Maßstab {scale}");
+        assert!(e.profiles[0].holes.is_empty());
         let reasons: Vec<_> = e.rejected.iter().map(|r| r.reason.clone()).collect();
         assert_eq!(
             reasons,
-            vec![SketchError::SelfIntersecting, SketchError::SelfIntersecting],
+            vec![SketchError::SelfIntersecting],
             "Maßstab {scale}"
         );
-        assert!(e.rejected.iter().any(|r| r.curves == vec![c]));
+        assert!(e.rejected[0].curves.contains(&c), "Maßstab {scale}");
+        let solid = AnalyticKernel::default()
+            .extrude(&e.profiles[0], s.frame(), scale)
+            .unwrap();
+        AnalyticKernel::default().validate(&solid).unwrap();
     }
 }
 
+// Fusion-Verhalten, Skizzen 1: Die innere Kreisfläche ist ein Profil, die Sichel berührt sich
+// selbst und wird abgelehnt; bei kleinem Spalt bleibt der Ring (plus die Kreisfläche).
 #[test]
-fn internally_tangent_circles_are_rejected_and_a_small_gap_is_fine() {
+fn internally_tangent_circles_give_the_inner_disk_and_a_small_gap_is_fine() {
     let mut s = sketch();
     let a = s.add_point(0.0, 0.0).unwrap();
     s.add_circle(a, 10.0).unwrap();
     let b = s.add_point(0.0, 4.0).unwrap();
-    s.add_circle(b, 6.0).unwrap();
+    let inner = s.add_circle(b, 6.0).unwrap();
     let e = s.profiles();
-    assert!(e.profiles.is_empty());
-    assert!(
-        e.rejected
-            .iter()
-            .all(|r| r.reason == SketchError::SelfIntersecting)
-    );
+    assert_eq!(e.profiles.len(), 1, "{:?}", e.rejected);
+    assert_eq!(e.curve_loops, vec![vec![inner]]);
+    assert!((e.profiles[0].outer.signed_area().abs() - PI * 36.0).abs() < 0.2);
+    assert_eq!(e.rejected.len(), 1);
+    assert_eq!(e.rejected[0].reason, SketchError::SelfIntersecting);
 
-    // Loch mit 1 mm Abstand zur Kante (r = 10): ein Profil mit einem Loch.
+    // Loch mit 1 mm Abstand zur Kante (r = 10): Ring mit einem Loch und die Kreisfläche.
     let mut s = sketch();
     rect(&mut s, 0.0, 0.0, 40.0, 30.0);
     let m = s.add_point(20.0, 11.0).unwrap();
     s.add_circle(m, 10.0).unwrap();
     let e = s.profiles();
-    assert_eq!(e.profiles.len(), 1, "{:?}", e.rejected);
+    assert_eq!(e.profiles.len(), 2, "{:?}", e.rejected);
     assert_eq!(e.profiles[0].holes.len(), 1);
     assert!(e.rejected.is_empty());
     let k = AnalyticKernel::default();

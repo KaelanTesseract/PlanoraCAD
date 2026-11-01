@@ -423,6 +423,45 @@ impl NurbsCurve {
         NurbsCurve::new(p, kn, control, weights)
     }
 
+    /// Teilkurve zwischen den Parametern `u0` und `u1` (`domain().0 ≤ u0 < u1 ≤ domain().1`, sonst
+    /// Fehler). Die Parametrisierung bleibt erhalten: die Domäne der Teilkurve ist `(u0, u1)`.
+    pub fn sub_curve(&self, u0: f64, u1: f64) -> Result<NurbsCurve, NurbsError> {
+        let (a, b) = self.domain();
+        if !(u0.is_finite() && u1.is_finite() && a <= u0 && u0 < u1 && u1 <= b) {
+            return Err(NurbsError::Input(tr!(
+                "math-subcurve-range",
+                u0 = u0.to_string(),
+                u1 = u1.to_string(),
+                a = a.to_string(),
+                b = b.to_string()
+            )));
+        }
+        let p = self.degree();
+        let mut c = self.clone();
+        for u in [u0, u1] {
+            if u > a && u < b {
+                let (_, s) = span_and_multiplicity(c.knots().knots(), p, u);
+                if s < p {
+                    c = c.insert_knot(u, p - s)?;
+                }
+            }
+        }
+        let k = c.knots().knots();
+        // Letzter Knoten gleich u0 und erster Knoten gleich u1.
+        let last_u0 = k.iter().rposition(|&x| x == u0).unwrap_or(p);
+        let first_u1 = k.iter().position(|&x| x == u1).unwrap_or(k.len() - p - 1);
+        let mut knots = vec![u0; p + 1];
+        knots.extend_from_slice(&k[last_u0 + 1..first_u1]);
+        knots.extend(std::iter::repeat_n(u1, p + 1));
+        let range = last_u0 - p..first_u1;
+        NurbsCurve::new(
+            p,
+            knots,
+            c.control_points()[range.clone()].to_vec(),
+            c.weights()[range].to_vec(),
+        )
+    }
+
     /// Zerlegung in rationale Bézier-Stücke (je ein Stück pro nichtleerem Knotenabschnitt).
     pub fn bezier_segments(&self) -> Vec<BezierSegment> {
         let p = self.degree();

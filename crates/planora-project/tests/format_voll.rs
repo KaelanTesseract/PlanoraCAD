@@ -168,7 +168,7 @@ fn rich_document() -> Document {
         "Rotation 1",
         FeatureKind::Revolve {
             sketch: rid,
-            profile: 0,
+            profiles: ProfileSel::Index(0),
             axis,
         },
     )
@@ -203,7 +203,7 @@ fn rich_document() -> Document {
             "Extrusion 1",
             FeatureKind::Extrude {
                 sketch: sid,
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 height: 10.0,
             },
         )

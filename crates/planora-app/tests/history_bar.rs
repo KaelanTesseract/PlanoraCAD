@@ -5,7 +5,7 @@ use planora_app::history_bar::{self, StepState, lock_hint};
 use planora_app::icons::FeatureIcon;
 use planora_app::state::*;
 use planora_app::theme;
-use planora_feature::{FeatureId, FeatureKind, SketchPlane};
+use planora_feature::{FeatureId, FeatureKind, ProfileSel, SketchPlane};
 use planora_kernel::boolean::BoolOp;
 use planora_math::{DVec2, DVec3};
 
@@ -82,8 +82,8 @@ fn steps_lists_chain_in_order_with_states() {
     let (mut s, [_, e, m]) = chain_model();
     s.document
         .update(e, |k| {
-            if let FeatureKind::Extrude { profile, .. } = k {
-                *profile = 7;
+            if let FeatureKind::Extrude { profiles, .. } = k {
+                *profiles = ProfileSel::Index(7);
             }
         })
         .unwrap();

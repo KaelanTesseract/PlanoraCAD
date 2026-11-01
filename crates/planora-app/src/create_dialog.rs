@@ -1,5 +1,6 @@
 use crate::dialog::{Dialog, DialogSize};
 use crate::formula_field::{FormulaField, names_hint, resolve_kept, value_field_text};
+use crate::profile_pick;
 use crate::sketch_view::format_length;
 use crate::state::AppState;
 use crate::theme;
@@ -51,17 +52,17 @@ pub enum CreateDialog {
         radius: f64,
         height: f64,
     },
-    /// Profil `profile` (Index in `Sketch::profiles()`) der Skizze `sketch` um `height` entlang
-    /// der Skizzennormalen extrudieren.
+    /// Profile `profiles` (Indizes in `Sketch::profiles()`) der Skizze `sketch` um `height`
+    /// entlang der Skizzennormalen extrudieren.
     ExtrudeSketch {
         sketch: FeatureId,
-        profile: usize,
+        profiles: Vec<usize>,
         height: f64,
     },
-    /// Profil `profile` der Skizze `sketch` um die Linie `axis` der Skizze drehen (360°).
+    /// Profile `profiles` der Skizze `sketch` um die Linie `axis` der Skizze drehen (360°).
     RevolveSketch {
         sketch: FeatureId,
-        profile: usize,
+        profiles: Vec<usize>,
         axis: Option<CurveId>,
     },
 }
@@ -98,17 +99,18 @@ pub fn axis_candidates(sk: &Sketch) -> Vec<(CurveId, String)> {
 }
 
 impl CreateDialog {
-    /// Dialog „Skizze extrudieren“ für die Skizze `sketch` mit voreingestellten Werten.
-    pub fn extrude_sketch(sketch: FeatureId) -> Self {
+    /// Dialog „Skizze extrudieren“ für die Skizze `sketch` mit voreingestellten Werten; ein
+    /// einziges Profil ist vorgewählt, bei mehreren keins (wie Fusion).
+    pub fn extrude_sketch(state: &AppState, sketch: FeatureId) -> Self {
         CreateDialog::ExtrudeSketch {
             sketch,
-            profile: 0,
+            profiles: state.default_profiles(sketch),
             height: DEFAULT_SKETCH_HEIGHT,
         }
     }
 
     /// Dialog „Skizze drehen“ für die Skizze `sketch`; als Achse ist die erste Konstruktionslinie
-    /// (sonst die erste Linie) vorgewählt.
+    /// (sonst die erste Linie) vorgewählt, Profile wie bei [`CreateDialog::extrude_sketch`].
     pub fn revolve_sketch(state: &AppState, sketch: FeatureId) -> Self {
         let axis = state
             .document
@@ -116,8 +118,21 @@ impl CreateDialog {
             .and_then(|sk| axis_candidates(sk).first().map(|(id, _)| *id));
         CreateDialog::RevolveSketch {
             sketch,
-            profile: 0,
+            profiles: state.default_profiles(sketch),
             axis,
+        }
+    }
+
+    /// Skizze und Profilwahl eines Dialogs aus einer Skizze; `None` bei den Grundkörpern.
+    pub fn profile_choice(&self) -> Option<(FeatureId, &[usize])> {
+        match self {
+            CreateDialog::ExtrudeSketch {
+                sketch, profiles, ..
+            }
+            | CreateDialog::RevolveSketch {
+                sketch, profiles, ..
+            } => Some((*sketch, profiles)),
+            _ => None,
         }
     }
 
@@ -163,43 +178,15 @@ impl CreateDialog {
         *sketch != before
     }
 
-    /// Liste der Profile der Skizze zum Auswählen, darunter die nicht verwendbaren Schleifen
-    /// mit Grund.
-    fn profile_list(ui: &mut egui::Ui, state: &AppState, sketch: FeatureId, profile: &mut usize) {
+    /// Liste der Profile der Skizze mit Häkchen ([`profile_pick::list`]).
+    fn profile_list(ui: &mut egui::Ui, state: &AppState, sketch: FeatureId, sel: &mut Vec<usize>) {
         // Die berechnete Skizze (aufgelöste Ebene, nachgeführte Kantenkopien).
         let Some(sk) = state.document.sketch_of(sketch) else {
             ui.weak(tr!("create-sketch-missing"));
             return;
         };
         // Zwischengespeichert je Stand der Skizze: neu berechnet nur nach einer Änderung.
-        let extracted = state.profile_cache.get(sk);
-        ui.label(tr!("create-profile"));
-        if extracted.profiles.is_empty() {
-            ui.weak(tr!("create-no-profile"));
-        }
-        for (i, p) in extracted.profiles.iter().enumerate() {
-            let area = p.outer.signed_area().abs()
-                - p.holes.iter().map(|h| h.signed_area().abs()).sum::<f64>();
-            let label = match p.holes.len() {
-                0 => tr!(
-                    "create-profile-label",
-                    n = i + 1,
-                    area = planora_i18n::fmt_area_num(area),
-                    unit = planora_i18n::current_unit().area_symbol()
-                ),
-                holes => tr!(
-                    "create-profile-label-holes",
-                    n = i + 1,
-                    area = planora_i18n::fmt_area_num(area),
-                    unit = planora_i18n::current_unit().area_symbol(),
-                    holes = holes
-                ),
-            };
-            ui.selectable_value(profile, i, label);
-        }
-        for r in &extracted.rejected {
-            ui.weak(tr!("create-rejected", reason = r.reason.to_string()));
-        }
+        profile_pick::list(ui, &state.profile_cache.get(sk), sel);
     }
 
     /// Auswahl der Drehachse (Linien der Skizze, Konstruktionslinien zuerst).
@@ -314,6 +301,16 @@ impl CreateDialog {
         let mut texts = self.texts(ctx, state);
         let fields = self.fields();
         let scope = state.document.param_scope();
+        // Klick in die 3D-Ansicht schaltet ein Profil um (wie die Liste).
+        if let CreateDialog::ExtrudeSketch {
+            sketch, profiles, ..
+        }
+        | CreateDialog::RevolveSketch {
+            sketch, profiles, ..
+        } = self
+        {
+            profile_pick::take_click(state, *sketch, profiles);
+        }
         Dialog::new(title, DialogSize::Normal)
             .id(egui::Id::new(("create_dialog", key)))
             .open(&mut open)
@@ -324,27 +321,27 @@ impl CreateDialog {
                     | CreateDialog::Sphere { .. }
                     | CreateDialog::Cone { .. } => {}
                     CreateDialog::ExtrudeSketch {
-                        sketch, profile, ..
+                        sketch, profiles, ..
                     } => {
                         if Self::sketch_choice(ui, state, sketch) {
-                            *profile = 0;
+                            *profiles = state.default_profiles(*sketch);
                         }
-                        Self::profile_list(ui, state, *sketch, profile);
+                        Self::profile_list(ui, state, *sketch, profiles);
                         ui.add_space(4.0);
                     }
                     CreateDialog::RevolveSketch {
                         sketch,
-                        profile,
+                        profiles,
                         axis,
                     } => {
                         if Self::sketch_choice(ui, state, sketch) {
-                            *profile = 0;
+                            *profiles = state.default_profiles(*sketch);
                             *axis = state
                                 .document
                                 .sketch_of(*sketch)
                                 .and_then(|sk| axis_candidates(sk).first().map(|(id, _)| *id));
                         }
-                        Self::profile_list(ui, state, *sketch, profile);
+                        Self::profile_list(ui, state, *sketch, profiles);
                         ui.add_space(4.0);
                         Self::axis_choice(ui, state, *sketch, axis);
                     }
@@ -383,9 +380,12 @@ impl CreateDialog {
                     ui.colored_label(theme::palette(ui.visuals().dark_mode).error, e);
                 }
                 ui.add_space(6.0);
+                // Ohne gewähltes Profil gibt es nichts zu erzeugen (Hinweis unter der Liste).
+                let ready = errors.is_empty()
+                    && self.profile_choice().is_none_or(|(_, sel)| !sel.is_empty());
                 ui.horizontal(|ui| {
                     if ui
-                        .add_enabled(errors.is_empty(), egui::Button::new(tr!("create-create")))
+                        .add_enabled(ready, egui::Button::new(tr!("create-create")))
                         .clicked()
                     {
                         create = true;
@@ -395,6 +395,9 @@ impl CreateDialog {
                     }
                 });
             });
+        if let Some((sketch, sel)) = self.profile_choice() {
+            profile_pick::publish(state, sketch, sel);
+        }
         let id = self.texts_id(state);
         let keep = if create {
             // Bei einem Fehler (Meldung in der Statuszeile) bleibt das Fenster offen.
@@ -454,12 +457,12 @@ impl CreateDialog {
             // Körper aus Skizzen entstehen an Ort und Stelle; Fehler legt `AppState` ab.
             (
                 CreateDialog::ExtrudeSketch {
-                    sketch, profile, ..
+                    sketch, profiles, ..
                 },
                 [h],
             ) => {
                 return state
-                    .extrude_sketch_with(*sketch, *profile, *h, formulas)
+                    .extrude_profiles(*sketch, profiles, *h, formulas)
                     .is_ok();
             }
             (CreateDialog::ExtrudeSketch { .. }, _)
@@ -470,7 +473,7 @@ impl CreateDialog {
             (
                 CreateDialog::RevolveSketch {
                     sketch,
-                    profile,
+                    profiles,
                     axis,
                 },
                 _,
@@ -489,7 +492,7 @@ impl CreateDialog {
                     state.message = Some(tr!("create-axis-gone"));
                     return false;
                 }
-                return state.revolve_sketch(*sketch, *profile, *axis).is_ok();
+                return state.revolve_profiles(*sketch, profiles, *axis).is_ok();
             }
         };
         // Ein Feature mit Fehler gilt nicht als Erfolg (die Meldung steht in `message`).
@@ -500,6 +503,7 @@ impl CreateDialog {
 #[cfg(test)]
 mod tests {
     use super::{CreateDialog, KEYS};
+    use crate::state::AppState;
     use planora_feature::FeatureId;
 
     #[test]
@@ -519,10 +523,10 @@ mod tests {
                 radius: 1.0,
                 height: 1.0,
             },
-            CreateDialog::extrude_sketch(FeatureId(1)),
+            CreateDialog::extrude_sketch(&AppState::new(), FeatureId(1)),
             CreateDialog::RevolveSketch {
                 sketch: FeatureId(1),
-                profile: 0,
+                profiles: vec![0],
                 axis: None,
             },
         ];

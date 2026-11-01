@@ -27,6 +27,21 @@ pub enum Tool {
     Ellipse,
     Spline,
     ProjectEdge,
+    /// Fusion „Stutzen“: Klick oder Ziehen löscht das Kurvenstück zwischen den nächsten
+    /// Schnittpunkten.
+    Trim,
+    /// Fusion „Dehnen“: verlängert ein offenes Ende bis zur nächsten Kurve.
+    Extend,
+    /// Fusion „Brechen“: teilt eine Kurve an den Schnittpunkten um die Klickstelle.
+    Break,
+}
+
+impl Tool {
+    /// Werkzeuge unter „Ändern“ (Stutzen, Dehnen, Brechen): ohne offene Punkte, Esc beendet
+    /// sie.
+    pub fn is_modify(self) -> bool {
+        matches!(self, Tool::Trim | Tool::Extend | Tool::Break)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -173,6 +188,18 @@ pub struct SketchSession {
     /// Zählt die Sprünge durch Rückgängig/Wiederholen ([`SketchSession::after_history_jump`]);
     /// Eingabefelder der Oberfläche, die zu einem älteren Zählerstand gehören, schließen.
     pub history_jumps: u64,
+    /// Vorschau unter dem Mauszeiger (Stutzen und Brechen: das Stück, Dehnen: der Weg zum neuen
+    /// Ende), je Bild neu bestimmt ([`update_hover`](Self::update_hover)).
+    pub hover_preview: Option<Vec<DVec2>>,
+    /// Name des nächsten Schritts für Rückgängig, wenn ein Werkzeug ihn besser kennt als der
+    /// Vergleich der Stände (Stutzen, Dehnen, Brechen); der Verlauf nimmt und leert ihn.
+    pub edit_label: Option<Msg>,
+    /// Letzte Stelle beim Stutzen durch Ziehen (`None`: kein Zug läuft).
+    pub trim_drag: Option<DVec2>,
+    /// Zählt die gelungenen Änderungen durch Stutzen, Dehnen und Brechen, mit dem Werkzeug der
+    /// letzten (für „Letztes Skizzenwerkzeug wiederholen“, auch wenn Esc es im selben Bild
+    /// beendet).
+    pub modify_edits: (u64, Option<Tool>),
 }
 
 /// Was vor einer Änderung gesichert wird, um sie bei einem Fehler zurückzunehmen.
@@ -235,6 +262,10 @@ impl SketchSession {
             message: None,
             dragging: None,
             history_jumps: 0,
+            hover_preview: None,
+            edit_label: None,
+            trim_drag: None,
+            modify_edits: (0, None),
         }
     }
 
@@ -242,6 +273,8 @@ impl SketchSession {
     /// wie mit [`end_drag`](Self::end_drag) beendet.
     pub fn set_tool(&mut self, sk: &mut Sketch, tool: Tool) {
         self.end_drag(sk);
+        self.trim_drag = None;
+        self.hover_preview = None;
         self.tool = tool;
         self.pending.clear();
         self.pending_pos.clear();
@@ -266,6 +299,9 @@ impl SketchSession {
         self.pending_pos.clear();
         self.selection.clear();
         self.dragging = None;
+        self.trim_drag = None;
+        self.hover_preview = None;
+        self.edit_label = None;
         self.message = None;
         self.last_report = Some(sk.clone().solve());
         self.history_jumps += 1;
@@ -395,7 +431,137 @@ impl SketchSession {
             Tool::Spline => se.click_spline(sk, at, radius, prior),
             // Wird von der Oberfläche über `project_edge` gesteuert.
             Tool::ProjectEdge => Ok(()),
+            Tool::Trim | Tool::Extend | Tool::Break => se.click_modify(sk, at, radius, prior),
         })
+    }
+
+    /// Stutzen, Dehnen oder Brechen der Kurve unter `at`. Ohne Kurve dort passiert nichts;
+    /// Dehnen ohne Ziel meldet `sketch-extend-no-hit` und ändert nichts.
+    fn click_modify(
+        &mut self,
+        sk: &mut Sketch,
+        at: DVec2,
+        radius: f64,
+        prior: &Sketch,
+    ) -> Result<(), Msg> {
+        let Some(c) = sk.pick_curve(at, radius) else {
+            return Ok(());
+        };
+        let label = match self.tool {
+            Tool::Trim => {
+                sk.trim(c, at).map_err(err)?;
+                crate::msg!("undo-trim")
+            }
+            Tool::Extend => {
+                if !sk.extend(c, at).map_err(err)? {
+                    return Err(crate::msg!("sketch-extend-no-hit"));
+                }
+                crate::msg!("undo-extend")
+            }
+            Tool::Break => {
+                if sk.break_curve(c, at).map_err(err)?.len() < 2 {
+                    return Ok(());
+                }
+                crate::msg!("undo-break")
+            }
+            _ => return Ok(()),
+        };
+        self.solve_checked(sk, prior)?;
+        self.forget_removed(sk);
+        self.hover_preview = None;
+        self.edit_label = Some(label);
+        self.modify_edits = (self.modify_edits.0 + 1, Some(self.tool));
+        Ok(())
+    }
+
+    /// Auswahl und offene Punkte ohne die Elemente, die es nicht mehr gibt.
+    fn forget_removed(&mut self, sk: &Sketch) {
+        self.selection.retain(|i| match *i {
+            Item::Point(p) => sk.point_xy(p).is_ok(),
+            Item::Curve(c) => sk.curve(c).is_some(),
+            Item::Constraint(k) => sk.constraint(k).is_some(),
+        });
+        self.pending.retain(|&p| sk.point_xy(p).is_ok());
+    }
+
+    /// Vorschau unter dem Mauszeiger `at` (siehe [`hover_preview`](Self::hover_preview)):
+    /// nur bei Stutzen, Dehnen und Brechen.
+    pub fn update_hover(&mut self, sk: &Sketch, at: Option<DVec2>, radius: f64) {
+        self.hover_preview = at
+            .filter(|a| a.is_finite() && self.tool.is_modify())
+            .and_then(|at| {
+                let c = sk.pick_curve(at, radius)?;
+                match self.tool {
+                    Tool::Extend => sk.extend_preview(c, at),
+                    _ => Some(sk.trim_piece(c, at)?.polyline),
+                }
+            })
+            .filter(|pl| pl.len() >= 2);
+    }
+
+    /// Stutzen durch Ziehen: beginnt bei `at` (die Stelle des Drückens) und stutzt dort.
+    pub fn begin_trim_drag(&mut self, sk: &mut Sketch, at: DVec2, radius: f64) {
+        if self.tool != Tool::Trim || !at.is_finite() {
+            return;
+        }
+        self.trim_drag = Some(at);
+        self.trim_along(sk, at, at, radius);
+    }
+
+    /// Stutzen durch Ziehen bis `at`: jede Kurve, die der Weg seit der letzten Stelle überfährt,
+    /// wird an der überfahrenen Stelle gestutzt. Alles zusammen wird ein Schritt, weil der
+    /// Verlauf erst nach dem Loslassen der Maustaste fortgeschrieben wird.
+    pub fn trim_drag_to(&mut self, sk: &mut Sketch, at: DVec2, radius: f64) {
+        let Some(from) = self.trim_drag else {
+            return;
+        };
+        if self.tool != Tool::Trim || !at.is_finite() {
+            self.trim_drag = None;
+            return;
+        }
+        self.trim_along(sk, from, at, radius);
+        self.trim_drag = Some(at);
+    }
+
+    /// Beendet das Stutzen durch Ziehen.
+    pub fn end_trim_drag(&mut self) {
+        self.trim_drag = None;
+    }
+
+    /// Stutzt jede Kurve, die die Strecke `from`–`to` berührt (Proben im Abstand von höchstens
+    /// `radius`). `from` selbst wird nur geprüft, wenn `from == to` (Beginn des Zugs); sonst
+    /// war es schon die letzte Probe des vorigen Bilds, und eine zweite Probe dort träfe nach
+    /// dem Stutzen das nächstgelegene andere Stück, das der Zug nie überfahren hat. Scheitert
+    /// ein Stück, steht der Grund in `message`; die übrigen werden trotzdem gestutzt.
+    fn trim_along(&mut self, sk: &mut Sketch, from: DVec2, to: DVec2, radius: f64) {
+        /// Höchstens so viele Proben je Bild (ein sehr schneller Zug über eine kleine Skizze).
+        const MAX_SAMPLES: usize = 400;
+        let len = from.distance(to);
+        let (first, n) = if len == 0.0 {
+            (0, 0)
+        } else if radius > 0.0 {
+            (1, ((len / radius).ceil() as usize).clamp(1, MAX_SAMPLES))
+        } else {
+            (1, 1)
+        };
+        let mut failed = None;
+        for k in first..=n {
+            let p = if n == 0 {
+                from
+            } else {
+                from.lerp(to, k as f64 / n as f64)
+            };
+            if sk.pick_curve(p, radius).is_none() {
+                continue;
+            }
+            if self.click(sk, p, radius, false).is_err() {
+                failed = self.message.take();
+            }
+        }
+        if failed.is_some() {
+            self.message = failed;
+        }
+        self.cursor = Some(to);
     }
 
     fn select_at(&mut self, sk: &Sketch, at: DVec2, radius: f64, extend: bool) {
@@ -656,13 +822,18 @@ impl SketchSession {
 
     /// Bricht das laufende Werkzeug ab; im Auswahlwerkzeug wird die Auswahl geleert. Ein
     /// laufendes Ziehen wird wie mit [`end_drag`](Self::end_drag) beendet (der Punkt bleibt,
-    /// wo er ist).
+    /// wo er ist). Stutzen, Dehnen und Brechen enden ganz (zurück zur Auswahl).
     pub fn cancel(&mut self, sk: &mut Sketch) {
         self.end_drag(sk);
         self.pending.clear();
         self.pending_pos.clear();
         if self.tool == Tool::Select {
             self.selection.clear();
+        }
+        // Stutzen, Dehnen und Brechen haben nichts Offenes: Esc beendet sie wie in Fusion (auch
+        // mitten im Ziehen; was schon gestutzt ist, bleibt).
+        if self.tool.is_modify() {
+            self.set_tool(sk, Tool::Select);
         }
     }
 
@@ -716,7 +887,9 @@ impl SketchSession {
                     match sk.curve(c)?.kind {
                         CurveKind::Line { .. } => s.lines.push(c),
                         CurveKind::Circle { .. } | CurveKind::Arc { .. } => s.rounds.push(c),
-                        CurveKind::Ellipse { .. } | CurveKind::Spline { .. } => s.others.push(c),
+                        CurveKind::Ellipse { .. }
+                        | CurveKind::EllipticArc { .. }
+                        | CurveKind::Spline { .. } => s.others.push(c),
                     }
                     s.curves.push(c);
                 }

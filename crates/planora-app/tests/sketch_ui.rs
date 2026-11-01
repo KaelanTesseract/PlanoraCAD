@@ -130,6 +130,9 @@ fn every_tool_and_a_selection_can_be_drawn() {
         Tool::Ellipse,
         Tool::Spline,
         Tool::ProjectEdge,
+        Tool::Trim,
+        Tool::Extend,
+        Tool::Break,
     ] {
         {
             set_tool(&mut s, tool);

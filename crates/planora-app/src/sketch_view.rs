@@ -6,11 +6,12 @@ use crate::sketch_state::{Item, SketchSession, Snap, Tool};
 use crate::state::AppState;
 use crate::theme::{lighten as lighter, sketch_colors as colors};
 use crate::viewport;
-use egui::{Color32, FontId, PointerButton, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2};
+use egui::{Color32, FontId, Mesh, PointerButton, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2};
 use glam::{Vec2, Vec3};
 use planora_i18n::tr;
 use planora_math::{DVec2, DVec3, Frame};
 use planora_render::{EdgeRef, OrbitCamera, Pick};
+use planora_sketch::ExtractedProfiles;
 use planora_sketch::constraint::{ConstraintKind, LineOrPoints};
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
 use planora_sketch::solver::{SolveReport, SolveStatus};
@@ -183,6 +184,7 @@ pub fn kind_label(kind: &ConstraintKind) -> String {
         K::Diameter(..) => tr!("sketch-constraint-diameter"),
         K::Angle(..) => tr!("sketch-constraint-angle"),
         K::ArcRadius(..) => tr!("sketch-constraint-arc-radius"),
+        K::EllipticArcEnds(..) => tr!("sketch-constraint-elliptic-arc-ends"),
         K::EllipseMajor(..) => tr!("sketch-constraint-ellipse-major"),
         K::EllipseMinor(..) => tr!("sketch-constraint-ellipse-minor"),
         K::EllipseAngle(..) => tr!("sketch-constraint-ellipse-angle"),
@@ -218,7 +220,7 @@ pub fn overlay_text(
 ) -> String {
     use ConstraintKind as K;
     let plain = match kind {
-        K::Coincident(..) | K::ArcRadius(..) => return String::new(),
+        K::Coincident(..) | K::ArcRadius(..) | K::EllipticArcEnds(..) => return String::new(),
         K::Horizontal(..) => "H".to_string(),
         K::Vertical(..) => "V".to_string(),
         K::Parallel(..) => symbol(ctx, "∥", "||").to_string(),
@@ -300,6 +302,7 @@ fn anchors(sk: &Sketch, kind: &ConstraintKind) -> Vec<DVec2> {
         K::Radius(c, _)
         | K::Diameter(c, _)
         | K::ArcRadius(c)
+        | K::EllipticArcEnds(c)
         | K::EllipseMajor(c, _)
         | K::EllipseMinor(c, _)
         | K::EllipseAngle(c, _) => vec![curve_anchor(sk, *c)],
@@ -376,6 +379,36 @@ fn draw_path(painter: &egui::Painter, path: Vec<Pos2>, stroke: Stroke, dashed: b
     painter.extend(path_shapes(path, stroke, dashed));
 }
 
+/// Flächen der Profile als ein Dreiecksnetz (Füllung aus [`ExtractedProfiles::fill`]), Farbe je
+/// Profil aus `color` (`None`: nicht zeichnen). Leer, wenn nichts zu zeichnen ist.
+fn profile_fill_shape(
+    map: &Mapper,
+    extracted: &ExtractedProfiles,
+    color: impl Fn(usize) -> Option<Color32>,
+) -> Option<Shape> {
+    let mut mesh = Mesh::default();
+    for i in 0..extracted.profiles.len() {
+        let Some(c) = color(i) else {
+            continue;
+        };
+        for t in extracted.fill(i) {
+            let (Some(a), Some(b), Some(d)) = (
+                map.to_screen(t[0]),
+                map.to_screen(t[1]),
+                map.to_screen(t[2]),
+            ) else {
+                continue;
+            };
+            let base = mesh.vertices.len() as u32;
+            for q in [a, b, d] {
+                mesh.colored_vertex(q, c);
+            }
+            mesh.add_triangle(base, base + 1, base + 2);
+        }
+    }
+    (!mesh.is_empty()).then(|| Shape::mesh(mesh))
+}
+
 /// Strichstärke fertiger Skizzen in der 3D-Ansicht (dünner als im Skizzen-Modus).
 const FINISHED_WIDTH: f32 = 1.2;
 /// Strichstärke der Konstruktionsgeometrie fertiger Skizzen.
@@ -383,8 +416,10 @@ const FINISHED_CONSTRUCTION_WIDTH: f32 = 1.0;
 
 /// Fertige (nicht geöffnete) Skizzen als dünne Linien über der 3D-Ansicht in `rect`;
 /// Konstruktionsgeometrie grau und gestrichelt. Die geöffnete Skizze zeichnet
-/// [`show_overlay`]. Nur Anzeige: Skizzenkurven lassen sich in 3D nicht anklicken, und die
-/// Linien liegen immer über den Körpern (keine Verdeckung).
+/// [`show_overlay`]. Skizzenkurven lassen sich in 3D nicht anklicken, und die Linien liegen
+/// immer über den Körpern (keine Verdeckung). Wählt ein Dialog Profile
+/// ([`AppState::profile_pick`]), liegen die Flächen dieser Skizze unter ihren Linien: gewählte
+/// kräftiger, die unter dem Mauszeiger heller.
 pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
     let mut out = Vec::new();
     if rect.width() < 2.0 || rect.height() < 2.0 {
@@ -406,6 +441,18 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
             frame: *sk.frame(),
             rect,
         };
+        if let Some(pick) = state.profile_pick.as_ref().filter(|p| p.sketch == id) {
+            let extracted = state.profile_cache.get(sk);
+            out.extend(profile_fill_shape(&map, &extracted, |i| {
+                Some(if pick.hover == Some(i) {
+                    col.profile_fill_hover
+                } else if pick.selected.contains(&i) {
+                    col.profile_fill_selected
+                } else {
+                    col.profile_fill
+                })
+            }));
+        }
         for (c, data) in sk.curves() {
             let Some(pl) = sk.curve_polyline(c, STEPS_PER_TURN) else {
                 continue;
@@ -513,6 +560,27 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         }
     }
 
+    // Stutzen durch Ziehen: jede überfahrene Kurve wird gestutzt (ein Schritt, da der Verlauf
+    // erst nach dem Loslassen fortgeschrieben wird).
+    if se.tool == Tool::Trim && !panning {
+        if response.drag_started_by(PointerButton::Primary) && !shift {
+            let origin = ui.input(|i| i.pointer.press_origin());
+            if let Some(start) = origin.and_then(|p| map.to_sketch(p)) {
+                let r = origin.and_then(|p| map.radius_at(p)).unwrap_or(radius);
+                se.begin_trim_drag(sk, start, r);
+            }
+        }
+        if se.trim_drag.is_some()
+            && response.dragged_by(PointerButton::Primary)
+            && let Some(at) = at
+        {
+            se.trim_drag_to(sk, at, radius);
+        }
+    }
+    if se.trim_drag.is_some() && (response.drag_stopped() || !response.dragged()) {
+        se.end_trim_drag();
+    }
+
     // Klicks
     let mut project_at = None;
     // egui zählt Klicks nur als Doppel-/Dreifachklick, wenn sie höchstens `max_click_dist`
@@ -553,6 +621,10 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             se.delete_selection(sk);
         }
     }
+    // Vorschau von Stutzen, Dehnen und Brechen unter dem Mauszeiger (nach den Änderungen
+    // dieses Bilds).
+    let hover_at = response.hover_pos().and_then(|p| map.to_sketch(p));
+    se.update_hover(sk, hover_at, radius);
     let tool = se.tool;
 
     // Körperkante kopieren: Kante in der 3D-Szene wählen.
@@ -601,6 +673,16 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         rect,
     };
     let report = se.last_report.as_ref();
+
+    // Profile als helle Flächen unter allem anderen („Profil anzeigen“, wie Fusion). Beim
+    // Ziehen eines Punkts ändert sich die Skizze in jedem Frame; die Flächen kommen erst danach
+    // wieder (sonst würden sie in jedem Frame neu bestimmt).
+    if state.show_sketch_profiles && se.dragging.is_none() {
+        let extracted = state.profile_cache.get(sk);
+        painter.extend(profile_fill_shape(&map, &extracted, |_| {
+            Some(col.profile_fill)
+        }));
+    }
 
     // Achsenkreuz im Skizzenursprung
     if let Some(o) = map.to_screen(DVec2::ZERO) {
@@ -675,6 +757,14 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     }
 
     draw_preview(&painter, &map, sk, se, col.preview);
+
+    // Stutzen/Brechen: das Stück rot; Dehnen: der Weg zum neuen Ende rot gestrichelt.
+    if let Some(pl) = &se.hover_preview {
+        let stroke = Stroke::new(CURVE_WIDTH + 1.0, col.trim_highlight);
+        for path in map.paths(pl) {
+            draw_path(&painter, path, stroke, se.tool == Tool::Extend);
+        }
+    }
 
     // Abhängigkeiten und Maße
     let mut placed: Vec<Rect> = Vec::new();

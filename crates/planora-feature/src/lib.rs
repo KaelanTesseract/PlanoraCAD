@@ -45,7 +45,8 @@ pub use meshes::VisibleMesh;
 pub use model::{
     BlendArt, BodyRef, Document, EdgeCopy, Feature, FeatureId, FeatureKind, FeatureStatus,
     MAX_CHAMFER_ANGLE_DEG, MAX_MESH_SCALE, MIN_CHAMFER_ANGLE_DEG, MIN_MESH_SCALE, MeshId,
-    ROTATION_NORM_TOL, SketchFeature, SketchFormulas, SketchPlane, StandardPlane, mesh_locked,
+    ProfileSel, ROTATION_NORM_TOL, SketchFeature, SketchFormulas, SketchPlane, StandardPlane,
+    mesh_locked,
 };
 pub use params::{ParamEdit, ParamId, ParamScope, Parameter};
 pub use parts_sheets::{

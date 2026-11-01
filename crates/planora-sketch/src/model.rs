@@ -44,6 +44,18 @@ pub enum CurveKind {
     Spline {
         points: Vec<PointId>,
     },
+    /// Gegen den Uhrzeigersinn von `start` nach `end` auf der Ellipse
+    /// `center + a·cos t + b̂·minor·sin t` (große Halbachse `a = (ax, ay)`, siehe
+    /// [`Sketch::ellipse_point`]). Die interne Abhängigkeit `EllipticArcEnds` hält beide Enden
+    /// auf der Ellipse.
+    EllipticArc {
+        center: PointId,
+        ax: usize,
+        ay: usize,
+        minor: usize,
+        start: PointId,
+        end: PointId,
+    },
 }
 
 impl CurveKind {
@@ -54,6 +66,9 @@ impl CurveKind {
             CurveKind::Circle { center, .. } | CurveKind::Ellipse { center, .. } => vec![*center],
             CurveKind::Arc { center, start, end } => vec![*center, *start, *end],
             CurveKind::Spline { points } => points.clone(),
+            CurveKind::EllipticArc {
+                center, start, end, ..
+            } => vec![*center, *start, *end],
         }
     }
 }
@@ -231,13 +246,20 @@ impl Sketch {
         Ok(())
     }
 
-    fn push_curve(&mut self, kind: CurveKind) -> CurveId {
+    pub(crate) fn push_curve(&mut self, kind: CurveKind) -> CurveId {
         self.touch_structure();
         self.curves.push(CurveData {
             kind,
             construction: false,
             alive: true,
         })
+    }
+
+    /// Ersetzt die Art einer lebenden Kurve (Stutzen, Dehnen, Brechen). Prüft nichts; interne
+    /// Abhängigkeiten der neuen Art legt der Aufrufer an.
+    pub(crate) fn set_curve_kind(&mut self, c: CurveId, kind: CurveKind) {
+        self.touch_structure();
+        self.curves[c].kind = kind;
     }
 
     pub fn add_line(&mut self, a: PointId, b: PointId) -> Result<CurveId, SketchError> {
@@ -290,16 +312,7 @@ impl Sketch {
         minor: f64,
     ) -> Result<CurveId, SketchError> {
         self.check_point(center)?;
-        finite(major.x, || tr!("sketch-err-what-major"))?;
-        finite(major.y, || tr!("sketch-err-what-major"))?;
-        finite(minor, || tr!("sketch-err-what-minor"))?;
-        let len = major.length();
-        if len <= self.tol.linear {
-            return Err(SketchError::Degenerate(tr!("sketch-major-axis-positive")));
-        }
-        if minor <= self.tol.linear || minor > len {
-            return Err(SketchError::Degenerate(tr!("sketch-err-minor-range")));
-        }
+        self.check_ellipse_axes(major, minor)?;
         let (ax, ay, mi) = (
             self.new_var(major.x),
             self.new_var(major.y),
@@ -311,6 +324,75 @@ impl Sketch {
             ay,
             minor: mi,
         }))
+    }
+
+    /// Prüft die Halbachsen einer neuen Ellipse: endlich, große Halbachse länger als
+    /// `tol.linear`, kleine Halbachse in `(tol.linear, |major|]`.
+    fn check_ellipse_axes(&self, major: DVec2, minor: f64) -> Result<(), SketchError> {
+        finite(major.x, || tr!("sketch-err-what-major"))?;
+        finite(major.y, || tr!("sketch-err-what-major"))?;
+        finite(minor, || tr!("sketch-err-what-minor"))?;
+        let len = major.length();
+        if len <= self.tol.linear {
+            return Err(SketchError::Degenerate(tr!("sketch-major-axis-positive")));
+        }
+        if minor <= self.tol.linear || minor > len {
+            return Err(SketchError::Degenerate(tr!("sketch-err-minor-range")));
+        }
+        Ok(())
+    }
+
+    /// Ellipsenbogen um `center` mit großer Halbachse `major` (Vektor) und kleiner Halbachse
+    /// `minor` (Prüfungen wie [`Sketch::add_ellipse`]), gegen den Uhrzeigersinn von `start` nach
+    /// `end`. Liegen die Enden nicht auf der Ellipse, zieht der Solver sie dorthin (interne
+    /// Abhängigkeit `EllipticArcEnds`).
+    pub fn add_elliptic_arc(
+        &mut self,
+        center: PointId,
+        major: DVec2,
+        minor: f64,
+        start: PointId,
+        end: PointId,
+    ) -> Result<CurveId, SketchError> {
+        self.check_point(center)?;
+        self.check_point(start)?;
+        self.check_point(end)?;
+        self.check_ellipse_axes(major, minor)?;
+        let c = self.pos(center);
+        if self.pos(start).distance(c) <= self.tol.linear
+            || self.pos(end).distance(c) <= self.tol.linear
+        {
+            return Err(SketchError::Degenerate(tr!("sketch-err-arc-center")));
+        }
+        let (ax, ay, mi) = (
+            self.new_var(major.x),
+            self.new_var(major.y),
+            self.new_var(minor),
+        );
+        Ok(self.add_elliptic_arc_vars(center, ax, ay, mi, start, end))
+    }
+
+    /// Ellipsenbogen auf vorhandenen Variablen (etwa geteilt mit der Ellipse, aus der er
+    /// entsteht); legt die interne Abhängigkeit `EllipticArcEnds` an. Prüft nichts.
+    pub(crate) fn add_elliptic_arc_vars(
+        &mut self,
+        center: PointId,
+        ax: usize,
+        ay: usize,
+        minor: usize,
+        start: PointId,
+        end: PointId,
+    ) -> CurveId {
+        let id = self.push_curve(CurveKind::EllipticArc {
+            center,
+            ax,
+            ay,
+            minor,
+            start,
+            end,
+        });
+        self.push_internal(crate::constraint::ConstraintKind::EllipticArcEnds(id));
+        id
     }
 
     /// Natürlicher kubischer Spline durch 2 bis [`MAX_SPLINE_POINTS`] verschiedene Punkte;
@@ -340,26 +422,55 @@ impl Sketch {
     }
 
     /// Punkt der Ellipse beim Parameter `t`: `center + a·cos t + b̂·minor·sin t` mit der großen
-    /// Halbachse `a = (ax, ay)` und `b̂ = (−ay, ax)/|a|`. `None` für andere Kurven.
+    /// Halbachse `a = (ax, ay)` und `b̂ = (−ay, ax)/|a|`; bei einem Ellipsenbogen der Punkt seiner
+    /// ganzen Ellipse. `None` für andere Kurven.
     pub fn ellipse_point(&self, c: CurveId, t: f64) -> Option<DVec2> {
-        let CurveKind::Ellipse {
+        let (m, a, minor) = self.ellipse_axes(c)?;
+        if !t.is_finite() || a.length() == 0.0 {
+            return None;
+        }
+        Some(crate::curves::Sampled::ellipse(m, a, minor).eval(t).0)
+    }
+
+    /// Parameter `t` (siehe [`Sketch::ellipse_point`]) des Punktes `p` auf einer Ellipse oder
+    /// einem Ellipsenbogen: `atan2` der Achskoordinaten `(x/|a|, y/minor)`, Wert in `(−π, π]`.
+    /// Für Punkte neben der Ellipse der Parameter des Strahls von der Mitte in Achskoordinaten.
+    /// `None` für andere Kurven, entartete Halbachsen oder `p` in der Mitte.
+    pub fn ellipse_param_of(&self, c: CurveId, p: DVec2) -> Option<f64> {
+        let (m, a, minor) = self.ellipse_axes(c)?;
+        let len = a.length();
+        if !(p.is_finite() && len > 0.0 && minor > 0.0) {
+            return None;
+        }
+        let d = p - m;
+        let (x, y) = (d.dot(a) / (len * len), a.perp_dot(d) / (len * minor));
+        (x != 0.0 || y != 0.0).then(|| y.atan2(x))
+    }
+
+    /// Mittelpunkt, große Halbachse (Vektor) und kleine Halbachse einer lebenden Ellipse oder
+    /// eines Ellipsenbogens; `None` für andere Kurven.
+    pub(crate) fn ellipse_axes(&self, c: CurveId) -> Option<(DVec2, DVec2, f64)> {
+        let (CurveKind::Ellipse {
             center,
             ax,
             ay,
             minor,
-        } = self.curve(c)?.kind
+        }
+        | CurveKind::EllipticArc {
+            center,
+            ax,
+            ay,
+            minor,
+            ..
+        }) = self.curve(c)?.kind
         else {
             return None;
         };
-        let a = DVec2::new(self.vars[ax], self.vars[ay]);
-        if !t.is_finite() || a.length() == 0.0 {
-            return None;
-        }
-        Some(
-            crate::curves::Sampled::ellipse(self.pos(center), a, self.vars[minor])
-                .eval(t)
-                .0,
-        )
+        Some((
+            self.pos(center),
+            DVec2::new(self.vars[ax], self.vars[ay]),
+            self.vars[minor],
+        ))
     }
 
     /// Punkt des Splines beim Parameter `t` (auf `[0, n − 1]` geklemmt). `None` für andere

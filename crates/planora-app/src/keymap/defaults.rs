@@ -96,14 +96,20 @@ action_table! {
     /// Öffnet das Fenster „Tastenkürzel“ mit aktivem Suchfeld (Fusion „Shortcuts“); wie
     /// „Ansicht → Tastenkürzel …“. In der Skizze gilt [`Action::SketchShowShortcuts`].
     ShowShortcuts, "ansicht.tastenkuerzel", "action-show-shortcuts", Model, [key(Key::S)];
-    // Skizze: nur Werkzeuge, die es gibt (wie der Klick auf den Knopf der Leiste). Versatz O,
-    // Stutzen T und Skizzenbemaßung D kommen erst mit ihrer Funktion. Esc, Enter und Entf der
-    // Skizze sind fest (`sketch_view`), nicht in der Tabelle.
+    // Skizze: nur Werkzeuge, die es gibt (wie der Klick auf den Knopf der Leiste). Versatz O
+    // und Skizzenbemaßung D kommen erst mit ihrer Funktion. Esc, Enter und Entf der Skizze sind
+    // fest (`sketch_view`), nicht in der Tabelle.
     SketchLine, "skizze.linie", "action-sketch-line", Sketch, [key(Key::L)];
     SketchRectangle, "skizze.rechteck", "action-sketch-rectangle", Sketch, [key(Key::R)];
     SketchCircle, "skizze.kreis", "action-sketch-circle", Sketch, [key(Key::C)];
     /// Fusion „Projizieren“.
     SketchProjectEdge, "skizze.projizieren", "action-sketch-project-edge", Sketch, [key(Key::P)];
+    /// Fusion „Stutzen“ (T).
+    SketchTrim, "skizze.stutzen", "action-sketch-trim", Sketch, [key(Key::T)];
+    /// Fusion „Dehnen“: ohne Vorgabetaste wie in Fusion, belegbar.
+    SketchExtend, "skizze.dehnen", "action-sketch-extend", Sketch, [];
+    /// Fusion „Brechen“: ohne Vorgabetaste wie in Fusion, belegbar.
+    SketchBreak, "skizze.brechen", "action-sketch-break", Sketch, [];
     /// Wählt das zuletzt benutzte Skizzenwerkzeug wieder (eigenes Gedächtnis, siehe
     /// `commands::LastCommand`).
     SketchRepeatLast, "skizze.werkzeug_wiederholen", "action-sketch-repeat-last", Sketch,
@@ -139,6 +145,9 @@ impl Action {
             Action::SketchRectangle => Some(Tool::Rectangle),
             Action::SketchCircle => Some(Tool::Circle),
             Action::SketchProjectEdge => Some(Tool::ProjectEdge),
+            Action::SketchTrim => Some(Tool::Trim),
+            Action::SketchExtend => Some(Tool::Extend),
+            Action::SketchBreak => Some(Tool::Break),
             _ => None,
         }
     }

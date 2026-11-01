@@ -80,6 +80,7 @@ pub fn ellipse_eval(c: &V2, a: &V2, a_len: &Dual, minor: &Dual, t: &Dual) -> (V2
 }
 
 /// Eine Ellipse oder ein Spline in Gleitkommazahlen (zum Abtasten).
+#[derive(Clone, Debug)]
 pub(crate) enum Sampled {
     Ellipse {
         c: DVec2,

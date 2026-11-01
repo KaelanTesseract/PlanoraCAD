@@ -51,7 +51,7 @@ fn changing_a_sketch_or_a_height_updates_the_whole_chain() {
             "Extrusion 1",
             FeatureKind::Extrude {
                 sketch: s,
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 height: 10.0,
             },
         )
@@ -106,7 +106,7 @@ fn a_sketch_on_a_face_follows_the_body() {
             "Extrusion 1",
             FeatureKind::Extrude {
                 sketch: s1,
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 height: 10.0,
             },
         )
@@ -128,7 +128,7 @@ fn a_sketch_on_a_face_follows_the_body() {
             "Extrusion 2",
             FeatureKind::Extrude {
                 sketch: s2,
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 height: 5.0,
             },
         )
@@ -206,7 +206,7 @@ fn a_lost_face_is_reported_at_its_feature_and_dependents_are_skipped() {
             "Extrusion 1",
             FeatureKind::Extrude {
                 sketch: s1,
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 height: 10.0,
             },
         )
@@ -229,7 +229,7 @@ fn a_lost_face_is_reported_at_its_feature_and_dependents_are_skipped() {
             "Extrusion 2",
             FeatureKind::Extrude {
                 sketch: s2,
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 height: 5.0,
             },
         )
@@ -324,7 +324,7 @@ fn deleting_an_extrusion_removes_the_sketch_on_its_face_and_the_extrusion_on_it(
             "Extrusion 1",
             FeatureKind::Extrude {
                 sketch: s1,
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 height: 10.0,
             },
         )
@@ -346,7 +346,7 @@ fn deleting_an_extrusion_removes_the_sketch_on_its_face_and_the_extrusion_on_it(
             "Extrusion 2",
             FeatureKind::Extrude {
                 sketch: s2,
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 height: 5.0,
             },
         )

@@ -154,7 +154,7 @@ fn sketch_model() -> (Document, FeatureId, FeatureId) {
             "Extrusion 1",
             FeatureKind::Extrude {
                 sketch: s,
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 height: 10.0,
             },
         )

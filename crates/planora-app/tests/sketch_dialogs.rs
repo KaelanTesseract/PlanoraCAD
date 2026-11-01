@@ -47,7 +47,7 @@ fn the_extrude_dialog_creates_a_body_and_stays_open_on_errors() {
     let (mut s, id) = state_with_sketch();
     let ok = CreateDialog::ExtrudeSketch {
         sketch: id,
-        profile: 0,
+        profiles: vec![0],
         height: 3.0,
     };
     ok.create(&mut s);
@@ -57,7 +57,7 @@ fn the_extrude_dialog_creates_a_body_and_stays_open_on_errors() {
 
     let bad = CreateDialog::ExtrudeSketch {
         sketch: id,
-        profile: 7,
+        profiles: vec![7],
         height: 3.0,
     };
     bad.create(&mut s);
@@ -71,25 +71,41 @@ fn the_dialogs_draw_and_list_profiles_and_rejections() {
     let (mut s, id) = state_with_sketch();
     let mut dialog = CreateDialog::ExtrudeSketch {
         sketch: id,
-        profile: 0,
+        profiles: vec![0],
         height: 3.0,
     };
-    let mut text = String::new();
-    for _ in 0..2 {
-        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
-            assert!(dialog.show(ui.ctx(), &mut s), "bleibt ohne Klick offen");
-        });
-        text.push_str(&planora_app::testing::collect_texts(&out));
-        out.drop_without_applying_deltas();
-    }
+    let mut texts = |s: &mut AppState| {
+        let mut text = String::new();
+        for _ in 0..2 {
+            let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                assert!(dialog.show(ui.ctx(), s), "bleibt ohne Klick offen");
+            });
+            text.push_str(&planora_app::testing::collect_texts(&out));
+            out.drop_without_applying_deltas();
+        }
+        text
+    };
+    // Fusion-Verhalten, Skizzen 1: Die offene Linie wird übergangen, nicht als „nicht
+    // verwendbar“ gelistet.
+    let text = texts(&mut s);
+    assert!(text.contains("Profil 1"), "{text}");
+    assert!(!text.contains("Nicht verwendbar"), "{text}");
+    // Ein Kreis, der die Unterkante berührt, klemmt die Fläche um ihn ein: Sie wird mit Grund
+    // gelistet.
+    edit_sketch(&mut s, id, |sk| {
+        let c = sk.add_point(5.0, 1.5).unwrap();
+        sk.add_circle(c, 1.5).unwrap();
+    });
+    let text = texts(&mut s);
     assert!(text.contains("Profil 1"), "{text}");
     assert!(
-        text.contains("Nicht verwendbar"),
-        "abgelehnte Kette wird erklärt:\n{text}"
+        text.contains("Nicht verwendbar") && text.contains("berührt"),
+        "eingeklemmte Fläche wird erklärt:
+{text}"
     );
     let mut revolve = CreateDialog::RevolveSketch {
         sketch: id,
-        profile: 0,
+        profiles: vec![0],
         axis: None,
     };
     ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -99,12 +115,41 @@ fn the_dialogs_draw_and_list_profiles_and_rejections() {
     assert_eq!(s.bodies.len(), 0);
 }
 
+/// Ein neues Feature merkt sich seine Fläche, nicht die Nummer: Wird ein Kreis davor gelöscht,
+/// bleibt die Extrusion beim gewählten Kreis und springt nicht still zum nächsten.
+#[test]
+fn an_extrusion_stays_on_its_circle_when_an_earlier_circle_is_deleted() {
+    let mut s = AppState::new();
+    let id = new_sketch(&mut s);
+    let a = edit_sketch(&mut s, id, |sk| {
+        let mut circles = Vec::new();
+        for x in [0.0, 20.0, 40.0] {
+            let c = sk.add_point(x, 0.0).unwrap();
+            circles.push(sk.add_circle(c, 2.0).unwrap());
+        }
+        circles[0]
+    });
+    s.extrude_sketch(id, 1, 3.0).unwrap();
+    let centre_x = |s: &AppState| {
+        let (min, max) = s.bodies[0].bounds;
+        (min.x + max.x) / 2.0
+    };
+    assert_eq!(s.bodies.len(), 1);
+    assert!((centre_x(&s) - 20.0).abs() < 1e-6, "Kreis B");
+    edit_sketch(&mut s, id, |sk| sk.remove_curve(a).unwrap());
+    assert_eq!(s.bodies.len(), 1, "{:?}", s.message);
+    assert!(
+        (centre_x(&s) - 20.0).abs() < 1e-6,
+        "weiter Kreis B, nicht C"
+    );
+}
+
 #[test]
 fn revolve_dialog_reports_a_missing_axis() {
     let (mut s, id) = state_with_sketch();
     let d = CreateDialog::RevolveSketch {
         sketch: id,
-        profile: 0,
+        profiles: vec![0],
         axis: None,
     };
     d.create(&mut s);
@@ -193,7 +238,7 @@ fn browser_requests_become_sketch_dialogs() {
     s.sketch_request = Some(SketchRequest::Extrude(id));
     assert_eq!(
         dialog_for_request(&mut s),
-        Some(CreateDialog::extrude_sketch(id))
+        Some(CreateDialog::extrude_sketch(&s, id))
     );
     assert_eq!(s.sketch_request, None, "der Wunsch wird verbraucht");
 
@@ -210,7 +255,7 @@ fn browser_requests_become_sketch_dialogs() {
         dialog_for_request(&mut s),
         Some(CreateDialog::RevolveSketch {
             sketch: id,
-            profile: 0,
+            profiles: vec![0],
             axis: Some(axis),
         })
     );
@@ -319,7 +364,7 @@ fn the_browser_context_menu_deletes_and_edits() {
 fn the_browser_context_menu_clears_the_body_selection() {
     for entry in ["Extrudieren", "Drehen"] {
         let (mut s, id) = state_with_sketch();
-        assert!(CreateDialog::extrude_sketch(id).create(&mut s));
+        assert!(CreateDialog::extrude_sketch(&s, id).create(&mut s));
         s.selected_body = Some(0);
         use_context_menu(&mut s, entry);
         assert!(s.sketch_request.is_some(), "{entry}");
@@ -357,7 +402,7 @@ fn a_stale_revolve_axis_is_rejected() {
     });
     let foreign = CreateDialog::RevolveSketch {
         sketch: j,
-        profile: 0,
+        profiles: vec![0],
         axis: Some(planora_kernel::Id::from_index(40)),
     };
     assert!(!foreign.create(&mut s));
@@ -368,7 +413,7 @@ fn a_stale_revolve_axis_is_rejected() {
 fn profiles_are_computed_again_only_after_a_change() {
     let (mut s, id) = state_with_sketch();
     let ctx = context();
-    let mut d = CreateDialog::extrude_sketch(id);
+    let mut d = CreateDialog::extrude_sketch(&s, id);
     for _ in 0..3 {
         let out = ctx.run_ui(raw(vec![]), |ui| {
             d.show(ui.ctx(), &mut s);

@@ -510,6 +510,59 @@ fn sketch_colors_are_legible_on_the_viewport_in_both_themes() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// Profilflächen (Skizzen 1): hell und halbtransparent; die Linien, die auf ihnen liegen,
+/// bleiben lesbar (≥ 3 : 1 auf Fläche über dem Viewport): im Skizzen-Modus alle Skizzenfarben
+/// auf `profile_fill`, in der 3D-Ansicht (Profilwahl der Dialoge) die Linien fertiger Skizzen
+/// auf allen drei Flächen. Gewählte und überfahrene Flächen heben sich sichtbar ab.
+#[test]
+fn profile_fills_keep_the_sketch_lines_legible_in_both_themes() {
+    let mut failures = Vec::new();
+    for dark in BOTH {
+        let c = theme::sketch_colors(dark);
+        let bg = theme::viewport_background(dark);
+        for (fill_name, fill) in [
+            ("profile_fill", c.profile_fill),
+            ("profile_fill_selected", c.profile_fill_selected),
+            ("profile_fill_hover", c.profile_fill_hover),
+        ] {
+            assert!(
+                fill.a() < 0xff,
+                "{} {fill_name}: halbtransparent",
+                name(dark)
+            );
+            let under = over(fill, bg);
+            let mut lines = vec![("finished", c.finished)];
+            if fill == c.profile_fill {
+                lines.extend([
+                    ("free", c.free),
+                    ("determined", c.determined),
+                    ("selected", c.selected),
+                    ("error", c.error),
+                    ("preview", c.preview),
+                    ("trim_highlight", c.trim_highlight),
+                ]);
+            }
+            for (what, color) in lines {
+                let r = theme::contrast_ratio(color, under);
+                if r < 3.0 {
+                    failures.push(format!("{} {what} auf {fill_name}: {r:.2} < 3", name(dark)));
+                }
+            }
+        }
+        let plain = over(c.profile_fill, bg);
+        for (what, fill) in [
+            ("selected", c.profile_fill_selected),
+            ("hover", c.profile_fill_hover),
+        ] {
+            let r = theme::contrast_ratio(over(fill, bg), plain);
+            if r < 1.1 {
+                failures.push(format!("{} Fläche {what} kaum anders: {r:.2}", name(dark)));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 #[test]
 fn the_3d_scene_takes_grid_axes_and_selection_from_the_theme() {
     let rgba = |c: Color32| {

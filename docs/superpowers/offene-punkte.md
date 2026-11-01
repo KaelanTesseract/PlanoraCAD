@@ -1838,7 +1838,7 @@ Hat Fusion für eine neue Funktion ein Kürzel, gilt: **Taste eintragen, sobald 
 ### Fusion-Kürzel ohne Funktion (nicht belegt, Grund: Funktion fehlt)
 - Modell: M Verschieben (kein Verschieben-Werkzeug, nur Positionsfelder), H Bohrung, I Messen, Q Drücken/Ziehen, A Erscheinungsbild, Strg+B Alles neu berechnen, 1 / 2 / 3 Auswahlarten.
 - Überall: Strg+C / Strg+X / Strg+V (Kopieren, Ausschneiden, Einfügen), Strg+Umschalt+S (Wiederherstellungs-Sicherung).
-- Skizze: O Versatz, T Stutzen, D Bemaßung.
+- Skizze: O Versatz, D Bemaßung. (T Stutzen ist seit Skizzen 1 belegt.)
 - Zeichnung: C Mittelpunktmarke, M Verschieben, P Projizierte Ansicht, T Text.
 - Maus: „Um Punkt drehen“ (Umschalt+Klick, dann mittlere Taste halten) ist nicht gebaut.
 
@@ -1994,3 +1994,39 @@ Abgeschlossen 2026-10-31 (gemergt in master als 99c72fa; Spec `specs/2026-10-31-
   - Das Feld „Lage des Schnitts“ in der Zeichnungsansicht folgt der Einstellung, nicht der Zeichnungseinheit (es ist eine Modelllänge; Zahl und Zeichen passen zusammen).
   - Die Einheitenwahl im Blattangaben-Fenster steht in der Zeile mit den eigenen Hinweisen (Platz bei 1920×1080).
   - Code: Die ausstehenden Einstellungen werden an 8 Stellen in `workspace.rs` gemischt; eine gemeinsame Hilfe `apply_pending` wäre sauberer.
+
+## Teilprojekt Skizzen 1
+
+Stand 2026-11-01 (Spec `specs/2026-10-31-skizzen-profile-design.md`, Plan `plans/2026-11-01-skizzen-profile.md`): Profile wie Fusion, Anklicken der Profile, mehrere Körper in einem Schritt, Stutzen, Dehnen, Brechen, Ellipsenbogen. Beschreibung in `docs/funktionen.md`, Abschnitt „Skizzen“. Alle automatischen Prüfungen (Format, Clippy, Tests, beide Messtests im Release, cargo deny) sind grün.
+
+**Stand:** Offen: Handtest in der App.
+
+**Abweichungen von Fusion**
+- Eingeklemmte Flächen (ein Loch berührt den Rand in einem Punkt, zwei Kreise berühren sich innen, sehr flache Ellipse) erscheinen als Profil, werden aber beim Extrudieren abgelehnt, weil der Kernel sich selbst berührende Umrisse nicht kann.
+- Splines werden beim Stutzen neu durch die übrig bleibenden Stützpunkte und den neuen Endpunkt gelegt; die Form ändert sich dabei leicht. Fusion behält sie genauer.
+- „Kollinear“ gibt es hier noch nicht. Ein Stück einer gestutzten Linie bekommt dafür „parallel“ (oder „waagerecht“/„senkrecht“ vom Original) und „Punkt auf Kurve“. Das ist eine Annahme, wie Fusion es macht.
+- Ein Kreis oder eine Ellipse mit nur einem Schnittpunkt wird beim Stutzen ganz gelöscht (Annahme).
+- Dehnen entfernt ein Maß oder eine Abhängigkeit, die nach dem Verlängern nicht mehr erfüllt wäre, statt das Dehnen zu verhindern (Annahme).
+- Brechen setzt zwischen den Teilen nur „deckungsgleich“, nicht zusätzlich „Punkt auf Kurve“ oder „gleich“; beides ergibt sich aus den Verbindungen. Bei Kreis und Ellipse hängt die eine überzählige innere Abhängigkeit von der Reihenfolge beim Anlegen ab.
+- Beim Stutzen bleibt der Abstand zwischen zwei Punkten einer geteilten Linie erhalten (Regel wörtlich umgesetzt); beim Stutzen eines Splines in der Mitte geht „Punkt auf Kurve“ für das rechte Stück verloren.
+- Brechen oder Stutzen in der Mitte macht aus dem zweiten Teil eine neue Kurve. Ein Profil, das vor allem an diesem Teil hängt, gilt danach als nicht mehr vorhanden und muss neu gewählt werden. Fusion behält es.
+- Die Profilfarben in der 3D-Ansicht werden nicht von Körpern verdeckt (Fusion verdeckt sie). Beim Überfahren hat die Hervorhebung Vorrang vor der Farbe „gewählt“.
+
+**Grenzen**
+- Profile lassen sich nur in der 3D-Ansicht anklicken, nachdem die Skizze beendet ist (Fusion verlässt die Skizze beim Extrudieren ebenfalls).
+- Tangential und „Punkt auf Kurve“ an einem Ellipsenbogen wirken auf die ganze Ellipse (wie beim Bogen). Gespiegelte und gemusterte Ellipsenbögen sind nicht an gleiche Halbachsen gebunden, weil es „gleich“ für Ellipsen nicht gibt.
+- Der Dialog wählt nur dann ein Profil vor, wenn es genau eins gibt (wie Fusion); sonst bleibt OK gesperrt, bis man klickt.
+- Sehr kurze Linien (kürzer als zweimal die Toleranz), die eine lange Linie kreuzen, gelten als deckungsgleich und können einen Splitter ergeben. Die Ellipsenbogen-Hüllbox deckt die ganze Ellipse.
+- Der Abgleich der Richtung an Knoten arbeitet mit einer Toleranz von 0,01 rad (etwa 0,6°); zwei wirklich verschiedene Richtungen darunter könnten vertauscht werden. Bei Ellipse und Spline mit fast tangentialem Verlauf wird die Richtung nach Parameter statt nach Bogenlänge abgetastet.
+- Alte Dateien: Ist ein altes Profil nicht eindeutig auf die neuen Flächen abbildbar, bleibt das Feature bei seiner alten Nummer und rechnet wie früher.
+- Das Format 13 wird nur geschrieben, wenn es nötig ist; eine ältere Datei, die einen Ellipsenbogen enthält, wird beim Laden nicht abgewiesen.
+- Ein Kreis, den nur ein einziger Punkt berührt (eine Linie oder ein anderer Kreis), ist im Profil ein Bogen über den ganzen Umlauf. Das Extrudieren geht trotzdem.
+- Eine Datei, in der ein Feature eine leere Profilwahl hat, lädt ohne Fehler; das Feature meldet dann, dass das Profil nicht mehr vorhanden ist.
+
+**Folgeideen**
+- „Kollinear“ als eigene Abhängigkeit.
+- Splines mit Parameterbereich (Stutzen ohne Formänderung) und Dehnen von Splines (Teilprojekt 7).
+- Eingeklemmte Flächen im Kernel erlauben.
+- Profilfarben in 3D hinter Körpern verdecken.
+- Beim Brechen und Stutzen merken, aus welcher Kurve ein Teil stammt, und Profil-Verweise darauf umschreiben (damit das Profil erhalten bleibt wie in Fusion).
+- Aufräumen: veraltete Kommentare „zu neu ist jetzt 13“ in den Dateiformat-Tests; der Zwischenspeicher der Profile hält nur einen Eintrag; die Füllung der Profile fällt bei Brücken ohne sichtbaren Kandidaten still auf den ersten zurück.

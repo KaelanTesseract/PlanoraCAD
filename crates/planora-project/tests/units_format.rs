@@ -57,8 +57,8 @@ fn load(text: &str) -> Result<Document, ProjectError> {
 }
 
 #[test]
-fn format_version_is_12() {
-    assert_eq!(FORMAT_VERSION, 12);
+fn format_version_is_13() {
+    assert_eq!(FORMAT_VERSION, 13);
 }
 
 #[test]

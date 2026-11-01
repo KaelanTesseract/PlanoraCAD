@@ -61,7 +61,8 @@ fn steps_for(sweep: f64, per_turn: usize) -> usize {
 impl Sketch {
     /// Linienzug einer lebenden Kurve: Linie 2 Punkte; Kreis und Ellipse geschlossen (letzter
     /// Punkt = erster); Bogen gegen den Uhrzeigersinn von Start nach Ende mit den exakten
-    /// Endpunkten; Spline 16 Punkte je Segment. `steps_per_turn` wird auf `4..=4096` geklemmt.
+    /// Endpunkten, Ellipsenbogen ebenso; Spline 16 Punkte je Segment. `steps_per_turn` wird auf
+    /// `4..=4096` geklemmt.
     pub fn curve_polyline(&self, c: CurveId, steps_per_turn: usize) -> Option<Vec<DVec2>> {
         let per_turn = steps_per_turn.clamp(MIN_STEPS_PER_TURN, MAX_STEPS_PER_TURN);
         let tol = self.tolerance();
@@ -94,6 +95,22 @@ impl Sketch {
                 pl[per_turn] = pl[0];
                 pl
             }
+            CurveKind::EllipticArc { start, end, .. } => {
+                let (s, e) = (self.pos(*start), self.pos(*end));
+                let t0 = self.ellipse_param_of(c, s)?;
+                let mut sweep = (self.ellipse_param_of(c, e)? - t0).rem_euclid(TAU);
+                // Start und Ende in derselben Richtung: voller Umlauf (wie beim Bogen).
+                if sweep <= tol.angular {
+                    sweep = TAU;
+                }
+                let steps = steps_for(sweep, per_turn);
+                let mut pl: Vec<DVec2> = (0..=steps)
+                    .map(|k| self.ellipse_point(c, t0 + sweep * k as f64 / steps as f64))
+                    .collect::<Option<_>>()?;
+                pl[0] = s;
+                pl[steps] = e;
+                pl
+            }
             CurveKind::Spline { points } => {
                 let xy: Vec<DVec2> = points.iter().map(|&p| self.pos(p)).collect();
                 let sampled = Sampled::spline(&xy);
@@ -122,7 +139,7 @@ impl Sketch {
 
     /// Punkt der lebenden Kurve `c`, der `at` am nächsten liegt: exakt für Linien (auf der
     /// unbegrenzten Geraden) sowie Kreise und Bögen (auf dem ganzen Kreis), für Ellipsen und
-    /// Splines auf dem Linienzug.
+    /// Splines auf dem Linienzug, für Ellipsenbögen auf dem Linienzug ihrer ganzen Ellipse.
     pub fn nearest_on_curve(&self, c: CurveId, at: DVec2) -> Option<DVec2> {
         if !at.is_finite() {
             return None;
@@ -155,6 +172,13 @@ impl Sketch {
             }
             CurveKind::Ellipse { .. } | CurveKind::Spline { .. } => {
                 polyline_closest(&self.curve_polyline(c, MAX_STEPS_PER_TURN)?, at)
+            }
+            CurveKind::EllipticArc { .. } => {
+                // wie beim Bogen auf der ganzen Kurve
+                let ring: Vec<DVec2> = (0..=MAX_STEPS_PER_TURN)
+                    .map(|k| self.ellipse_point(c, TAU * k as f64 / MAX_STEPS_PER_TURN as f64))
+                    .collect::<Option<_>>()?;
+                polyline_closest(&ring, at)
             }
         }
     }

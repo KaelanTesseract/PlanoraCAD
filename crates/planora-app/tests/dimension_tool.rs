@@ -25,7 +25,7 @@ use planora_drawing::stroke::StrokeOrigin;
 use planora_drawing::{DrawingId, Paper, Placement, Projection, Scale, Sheet, ViewId, ViewKind};
 use planora_exchange::ExchangeMesh;
 use planora_feature::{
-    BlendArt, FeatureId, FeatureKind, SketchFeature, SketchPlane, StandardPlane,
+    BlendArt, FeatureId, FeatureKind, ProfileSel, SketchFeature, SketchPlane, StandardPlane,
 };
 use planora_kernel::blend::topo::{edge_uses, face_name};
 use planora_kernel::{Edge, Id, Solid};
@@ -336,7 +336,7 @@ fn extruded(st: &mut AppState, build: impl FnOnce(&mut Sketch)) {
         None,
         FeatureKind::Extrude {
             sketch: s,
-            profile: 0,
+            profiles: ProfileSel::Index(0),
             height: 5.0,
         },
     )

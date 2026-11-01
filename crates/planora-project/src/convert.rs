@@ -23,38 +23,50 @@ use planora_feature::{
     BlendArt, BodyRef, EdgeCopy, EdgeRef, FaceRef, FeatureId, FeatureKind, FieldKey, Formulas,
     MAX_COMMENT_CHARS, MAX_COORD_MM, MAX_DECIMALS, MAX_DIM_TEXT_CHARS, MAX_DRAWINGS, MAX_FIT_CHARS,
     MAX_FORMULA_CHARS, MAX_PARAM_NAME_CHARS, MAX_PARAMETERS, MAX_POS_MM, MAX_ROLE_CHARS,
-    MAX_TOL_MM, MAX_VIEWS, MeshId, ParamId, ParamUnit, Parameter, SketchFeature, SketchFormulas,
-    SketchPlane, Snapshot, SnapshotFeature, StandardPlane, StepShape, StepShapeId, field_keys,
-    step_text_megabytes, step_text_sum_limit, validate_drawing,
+    MAX_TOL_MM, MAX_VIEWS, MeshId, ParamId, ParamUnit, Parameter, ProfileSel, SketchFeature,
+    SketchFormulas, SketchPlane, Snapshot, SnapshotFeature, StandardPlane, StepShape, StepShapeId,
+    field_keys, step_text_megabytes, step_text_sum_limit, validate_drawing,
 };
 use planora_i18n::{DisplayUnit, tr};
 use planora_kernel::BoolOp;
 use planora_math::{DQuat, DVec3, Frame, Tolerance};
 use planora_sketch::{
-    ConstraintId, ConstraintKind, ConstraintRecord, CurveId, CurveKind, CurveRecord, LineOrPoints,
-    PointId, PointRecord, Sketch, SketchData,
+    ConstraintId, ConstraintKind, ConstraintRecord, CurveId, CurveKind, CurveRecord,
+    LegacyMigration, LineOrPoints, PieceRef, PointId, PointRecord, ProfileRef, Sketch, SketchData,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Höchste lesbare Formatnummer der Versionsdateien (P7, P12, F7).
-pub const FORMAT_VERSION: u32 = 12;
+pub const FORMAT_VERSION: u32 = 13;
 /// Formatnummer der Rahmendateien `dokument.json` und `.autosave.json`; ihre Struktur ist seit
 /// Format 1 unverändert, ältere Programme öffnen das Projekt deshalb weiter (P7).
 pub const CONTAINER_FORMAT: u32 = 1;
 /// Größte Summe der dekodierten Netzdaten eines Dokuments (wie die Dateigrenze beim Import).
 const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 
-/// Kleinste Formatnummer, die den Stand darstellt: 12 mit einer Zeichnung in Zoll (als erste
-/// Regel geprüft), 11 mit Rückrollstellen, 10 mit einem STEP-Körper (auch unterdrückt: sein Text muss in der Datei stehen),
+/// Kleinste Formatnummer, die den Stand darstellt: 13 mit einem Ellipsenbogen in einer Skizze
+/// (auch einem gelöschten Kurveneintrag; als erste Regel geprüft) oder mit Profil-Verweisen,
+/// die sich nicht als alte Profilnummer schreiben lassen ([`ProfileField`]), 12 mit einer Zeichnung in
+/// Zoll, 11 mit Rückrollstellen, 10 mit einem STEP-Körper (auch unterdrückt: sein Text muss in der Datei stehen),
 /// 9 mit Parametern, Feature-Formeln oder Skizzenformeln, 8 mit Schnittansichten, 7 mit
 /// Stücklisten-Daten (eigene Zeilentexte, Stücklistenblatt, Nummernkreise oder eingeschalteter
 /// Stückliste auf einem Blatt), 6 mit Blatt- oder Projektangaben, 5 mit Maßen oder
 /// eingeschalteten Mittellinien, 4 mit Zeichnungen, 3 mit Netz-Körpern, 2 mit Rundungen oder
-/// Fasen, sonst 1 (P7, P12, F7, Teilprojekt 12 P11, Teilprojekt STEP-Import, Verlaufsleiste).
+/// Fasen, sonst 1 (P7, P12, F7, Teilprojekt 12 P11, Teilprojekt STEP-Import, Verlaufsleiste,
+/// Teilprojekt Zoll, Teilprojekt Skizzen 1).
 pub fn required_format(s: &Snapshot) -> u32 {
+    format_with(s, &profile_fields(s))
+}
+
+/// [`required_format`] mit den schon bestimmten Profilfeldern `fields` (eins je Feature).
+fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
     let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
-    if s.drawings.iter().any(|d| d.unit != DisplayUnit::Millimeter) {
+    if has(|k| matches!(k, FeatureKind::Sketch(sf) if has_elliptic_arc(&sf.sketch)))
+        || fields.iter().any(|f| f.profile.is_some())
+    {
+        13
+    } else if s.drawings.iter().any(|d| d.unit != DisplayUnit::Millimeter) {
         12
     } else if !s.rollbacks.is_empty() {
         11
@@ -86,6 +98,12 @@ pub fn required_format(s: &Snapshot) -> u32 {
     } else {
         1
     }
+}
+/// Hat die Skizze einen Ellipsenbogen (auch einen gelöschten Kurveneintrag, er steht in der
+/// Datei)?
+fn has_elliptic_arc(s: &Sketch) -> bool {
+    s.curve_entries()
+        .any(|k| matches!(k, CurveKind::EllipticArc { .. }))
 }
 /// Eine Zeichnung braucht Format 7, wenn sie ein Stücklistenblatt ist, Nummernkreise hat oder die
 /// Stückliste auf dem Blatt eingeschaltet ist.
@@ -276,6 +294,21 @@ fn curve_to(k: &CurveKind) -> CurveKindDto {
         CurveKind::Spline { points } => CurveKindDto::Spline {
             punkte: points.iter().map(|p| p.index()).collect(),
         },
+        CurveKind::EllipticArc {
+            center,
+            ax,
+            ay,
+            minor,
+            start,
+            end,
+        } => CurveKindDto::Ellipsenbogen {
+            mitte: center.index(),
+            ax: *ax,
+            ay: *ay,
+            klein: *minor,
+            start: start.index(),
+            ende: end.index(),
+        },
     }
 }
 
@@ -305,6 +338,21 @@ fn curve_from(d: &CurveKindDto) -> CurveKind {
         },
         CurveKindDto::Spline { punkte } => CurveKind::Spline {
             points: punkte.iter().map(|i| p(*i)).collect(),
+        },
+        CurveKindDto::Ellipsenbogen {
+            mitte,
+            ax,
+            ay,
+            klein,
+            start,
+            ende,
+        } => CurveKind::EllipticArc {
+            center: p(*mitte),
+            ax: *ax,
+            ay: *ay,
+            minor: *klein,
+            start: p(*start),
+            end: p(*ende),
         },
     }
 }
@@ -363,6 +411,7 @@ fn constraint_to(k: &ConstraintKind) -> ConstraintKindDto {
             wert: *v,
         },
         K::ArcRadius(k) => D::BogenRadius { kurve: c(k) },
+        K::EllipticArcEnds(k) => D::EllipsenbogenEnden { kurve: c(k) },
         K::EllipseMajor(k, v) => D::EllipseGross {
             kurve: c(k),
             wert: *v,
@@ -402,6 +451,7 @@ fn constraint_from(d: &ConstraintKindDto) -> ConstraintKind {
         D::Durchmesser { kurve, wert } => K::Diameter(c(*kurve), *wert),
         D::Winkel { a, b, wert } => K::Angle(c(*a), c(*b), *wert),
         D::BogenRadius { kurve } => K::ArcRadius(c(*kurve)),
+        D::EllipsenbogenEnden { kurve } => K::EllipticArcEnds(c(*kurve)),
         D::EllipseGross { kurve, wert } => K::EllipseMajor(c(*kurve), *wert),
         D::EllipseKlein { kurve, wert } => K::EllipseMinor(c(*kurve), *wert),
         D::EllipseWinkel { kurve, wert } => K::EllipseAngle(c(*kurve), *wert),
@@ -537,9 +587,217 @@ fn plane_name(p: StandardPlane) -> &'static str {
     }
 }
 
+/// Profilfelder einer Extrusion oder Rotation in der Datei: genau eins von `profil` (alte
+/// Profilnummer) und `profile` (Verweise, ab Format 13); bei anderen Features beide leer.
+#[derive(Clone, Debug, Default)]
+struct ProfileField {
+    profil: Option<usize>,
+    profile: Option<Vec<ProfilVerweisDto>>,
+}
+
+/// Übergang alter Profilnummern je Skizzen-Feature, für einen Lade- oder Speichervorgang einmal
+/// berechnet (die Profile einer Skizze werden nicht je Feature neu bestimmt). Verwendet wird
+/// immer die gespeicherte Skizze des Skizzen-Features, beim Laden wie beim Speichern.
+struct Migrations<'a> {
+    sketches: HashMap<FeatureId, &'a Sketch>,
+    cache: HashMap<FeatureId, LegacyMigration>,
+}
+
+impl<'a> Migrations<'a> {
+    fn new(features: &'a [SnapshotFeature]) -> Self {
+        let sketches = features
+            .iter()
+            .filter_map(|f| match &f.kind {
+                FeatureKind::Sketch(sf) => Some((f.id, &sf.sketch)),
+                _ => None,
+            })
+            .collect();
+        Self {
+            sketches,
+            cache: HashMap::new(),
+        }
+    }
+
+    /// Übergang der Skizze `id`; `None`, wenn `id` kein Skizzen-Feature ist.
+    fn of(&mut self, id: FeatureId) -> Option<&LegacyMigration> {
+        let sketch = *self.sketches.get(&id)?;
+        Some(
+            self.cache
+                .entry(id)
+                .or_insert_with(|| sketch.legacy_migration()),
+        )
+    }
+
+    /// Profilfelder für die gewählten Profile `sel` der Skizze `sketch`: `Index(n)` als
+    /// `profil: n`; Verweise, die heute dieselben Flächen wählen wie ein altes Profil `n`, auch
+    /// als `profil: n` (die Datei bleibt auf ihrem Format); sonst als `profile`.
+    fn field(&mut self, sketch: FeatureId, sel: &ProfileSel) -> ProfileField {
+        let number = |n| ProfileField {
+            profil: Some(n),
+            profile: None,
+        };
+        match sel {
+            ProfileSel::Index(n) => number(*n),
+            ProfileSel::Refs(refs) => match self.of(sketch).and_then(|m| m.legacy_index_of(refs)) {
+                Some(n) => number(n),
+                None => ProfileField {
+                    profil: None,
+                    profile: Some(refs.iter().map(profile_ref_to).collect()),
+                },
+            },
+        }
+    }
+}
+
+/// Profilfelder jedes Features des Stands (in derselben Reihenfolge).
+fn profile_fields(s: &Snapshot) -> Vec<ProfileField> {
+    let mut migrations = Migrations::new(&s.features);
+    s.features
+        .iter()
+        .map(|f| match &f.kind {
+            FeatureKind::Extrude {
+                sketch, profiles, ..
+            }
+            | FeatureKind::Revolve {
+                sketch, profiles, ..
+            } => migrations.field(*sketch, profiles),
+            _ => ProfileField::default(),
+        })
+        .collect()
+}
+
+fn piece_to(p: &PieceRef) -> StueckDto {
+    (p.curve.index(), p.u0, p.u1, p.left, p.len)
+}
+
+fn profile_ref_to(r: &ProfileRef) -> ProfilVerweisDto {
+    ProfilVerweisDto {
+        aussen: r.outer.iter().map(piece_to).collect(),
+        loecher: r.holes.iter().map(piece_to).collect(),
+    }
+}
+
+/// Gewählte Profile aus den Feldern `profil`/`profile` (genau eins muss da sein). Geprüft werden
+/// hier die Anzahl der Stücke und ihre Zahlen (endlich, `u0 < u1 ≤ u0 + 1`, Länge nicht
+/// negativ); die Kurven-Indizes prüft [`migrate_profiles`] gegen die Skizze.
+fn profile_sel_from(
+    origin: &str,
+    name: &str,
+    profil: Option<usize>,
+    profile: Option<&[ProfilVerweisDto]>,
+) -> Result<ProfileSel> {
+    let err = |msg: String| {
+        ProjectError::corrupt(origin, tr!("proj-ctx-feature", name = name, msg = msg))
+    };
+    let list = match (profil, profile) {
+        (Some(n), None) => return Ok(ProfileSel::Index(n)),
+        (None, Some(list)) => list,
+        _ => return Err(err(tr!("proj-err-profile-field"))),
+    };
+    let pieces = list.iter().fold(list.len(), |sum, r| {
+        sum.saturating_add(r.aussen.len())
+            .saturating_add(r.loecher.len())
+    });
+    check_len(origin, &|| tr!("proj-l-profile-pieces"), pieces)?;
+    let piece = |&(curve, u0, u1, left, len): &StueckDto| -> Result<PieceRef> {
+        let ok = u0.is_finite()
+            && u1.is_finite()
+            && len.is_finite()
+            && u0 < u1
+            // Dateien vor der Nachbesserung schrieben einen vollen Umlauf mitunter ein ulp zu lang
+            && u1 <= u0 + 1.0 + 1e-9
+            && len >= 0.0;
+        if !ok {
+            return Err(err(tr!("proj-profile-piece-invalid")));
+        }
+        Ok(PieceRef {
+            curve: CurveId::from_index(curve),
+            u0,
+            u1: u1.min(u0 + 1.0),
+            left,
+            len,
+        })
+    };
+    let refs = list
+        .iter()
+        .map(|r| {
+            Ok(ProfileRef {
+                outer: r.aussen.iter().map(piece).collect::<Result<_>>()?,
+                holes: r.loecher.iter().map(piece).collect::<Result<_>>()?,
+            })
+        })
+        .collect::<Result<_>>()?;
+    Ok(ProfileSel::Refs(refs))
+}
+
+/// Nach dem Lesen aller Features: Verweise müssen Kurven ihrer (gespeicherten) Skizze nennen;
+/// alte Profilnummern `Index(n)` werden auf Verweise der heutigen Flächen umgerechnet
+/// ([`LegacyMigration::resolvable`]). Lässt sich ein altes Profil nicht umrechnen, bleibt
+/// `Index(n)` (beim Berechnen gilt dann das alte Profil selbst).
+fn migrate_profiles(origin: &str, features: &mut [SnapshotFeature]) -> Result<()> {
+    let mut replace: Vec<(usize, ProfileSel)> = Vec::new();
+    let mut migrations = Migrations::new(features);
+    for (i, f) in features.iter().enumerate() {
+        let (FeatureKind::Extrude {
+            sketch, profiles, ..
+        }
+        | FeatureKind::Revolve {
+            sketch, profiles, ..
+        }) = &f.kind
+        else {
+            continue;
+        };
+        match profiles {
+            ProfileSel::Refs(refs) => {
+                // Ohne Skizze meldet `Document::from_snapshot` den Fehler.
+                let Some(sk) = migrations.sketches.get(sketch) else {
+                    continue;
+                };
+                let count = sk.curve_entries().count();
+                if let Some(p) = refs
+                    .iter()
+                    .flat_map(|r| r.outer.iter().chain(&r.holes))
+                    .find(|p| p.curve.index() >= count)
+                {
+                    return Err(ProjectError::corrupt(
+                        origin,
+                        tr!(
+                            "proj-ctx-feature",
+                            name = f.name.as_str(),
+                            msg = tr!(
+                                "proj-profile-curve-unknown",
+                                curve = p.curve.index().to_string()
+                            )
+                        ),
+                    ));
+                }
+            }
+            ProfileSel::Index(n) => {
+                if let Some(refs) = migrations.of(*sketch).and_then(|m| m.resolvable(*n)) {
+                    replace.push((i, ProfileSel::Refs(refs.to_vec())));
+                }
+            }
+        }
+    }
+    drop(migrations);
+    for (i, sel) in replace {
+        if let FeatureKind::Extrude { profiles, .. } | FeatureKind::Revolve { profiles, .. } =
+            &mut features[i].kind
+        {
+            *profiles = sel;
+        }
+    }
+    Ok(())
+}
+
 /// Art eines Features für die Datei; `forms` ordnet jeder Formkennung des Dokuments die
-/// Kennung zu, unter der ihr Text in der Datei steht (siehe [`step_forms_to`]).
-fn kind_to(k: &FeatureKind, forms: &BTreeMap<StepShapeId, u64>) -> Result<KindDto> {
+/// Kennung zu, unter der ihr Text in der Datei steht (siehe [`step_forms_to`]); `profile` sind
+/// die Profilfelder einer Extrusion oder Rotation ([`profile_fields`]).
+fn kind_to(
+    k: &FeatureKind,
+    forms: &BTreeMap<StepShapeId, u64>,
+    profile: ProfileField,
+) -> Result<KindDto> {
     Ok(match k {
         FeatureKind::Sketch(s) => KindDto::Skizze(Box::new(SketchFeatureDto {
             skizze: sketch_to(&s.sketch),
@@ -594,22 +852,16 @@ fn kind_to(k: &FeatureKind, forms: &BTreeMap<StepShapeId, u64>) -> Result<KindDt
             hoehe: *height,
             ursprung: v3(*origin),
         },
-        FeatureKind::Extrude {
-            sketch,
-            profile,
-            height,
-        } => KindDto::Extrusion {
+        FeatureKind::Extrude { sketch, height, .. } => KindDto::Extrusion {
             skizze: sketch.0,
-            profil: *profile,
+            profil: profile.profil,
+            profile: profile.profile,
             hoehe: *height,
         },
-        FeatureKind::Revolve {
-            sketch,
-            profile,
-            axis,
-        } => KindDto::Rotation {
+        FeatureKind::Revolve { sketch, axis, .. } => KindDto::Rotation {
             skizze: sketch.0,
-            profil: *profile,
+            profil: profile.profil,
+            profile: profile.profile,
             achse: axis.index(),
         },
         FeatureKind::Boolean { target, tool, op } => KindDto::Boolesch {
@@ -779,19 +1031,21 @@ fn kind_from(origin: &str, name: &str, d: &KindDto) -> Result<FeatureKind> {
         KindDto::Extrusion {
             skizze,
             profil,
+            profile,
             hoehe,
         } => FeatureKind::Extrude {
             sketch: FeatureId(*skizze),
-            profile: *profil,
+            profiles: profile_sel_from(origin, name, *profil, profile.as_deref())?,
             height: n(|| tr!("proj-l-height"), *hoehe)?,
         },
         KindDto::Rotation {
             skizze,
             profil,
+            profile,
             achse,
         } => FeatureKind::Revolve {
             sketch: FeatureId(*skizze),
-            profile: *profil,
+            profiles: profile_sel_from(origin, name, *profil, profile.as_deref())?,
             axis: CurveId::from_index(*achse),
         },
         KindDto::Boolesch {
@@ -2018,7 +2272,8 @@ fn mb_text(bytes: usize) -> String {
 /// JSON-Text einer Versionsdatei. Enthält der Snapshot eine nicht endliche Zahl, ist das ein
 /// Fehler (das Dokument wird dann nicht geschrieben).
 pub fn encode_version(s: &Snapshot) -> Result<String> {
-    let format = required_format(s);
+    let profiles = profile_fields(s);
+    let format = format_with(s, &profiles);
     let (step_formen, forms) = step_forms_to(s);
     // Mehr STEP-Text, als sich lesen ließe: eigene Meldung statt „ungültige Werte“. Der Import
     // lässt das nicht zu; die Prüfung hier schützt vor jedem anderen Weg dorthin.
@@ -2040,12 +2295,13 @@ pub fn encode_version(s: &Snapshot) -> Result<String> {
         features: s
             .features
             .iter()
-            .map(|f| {
+            .zip(profiles)
+            .map(|(f, profile)| {
                 Ok(FeatureDto {
                     id: f.id.0,
                     name: f.name.clone(),
                     unterdrueckt: f.suppressed,
-                    art: kind_to(&f.kind, &forms)?,
+                    art: kind_to(&f.kind, &forms, profile)?,
                     formeln: f
                         .formulas
                         .iter()
@@ -2197,6 +2453,28 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
             ),
         ));
     }
+    let has_profile_refs = file.features.iter().any(|f| {
+        matches!(
+            f.art,
+            KindDto::Extrusion {
+                profile: Some(_),
+                ..
+            } | KindDto::Rotation {
+                profile: Some(_),
+                ..
+            }
+        )
+    });
+    if file.format < 13 && has_profile_refs {
+        return Err(ProjectError::corrupt(
+            origin,
+            tr!(
+                "proj-since-format",
+                what = tr!("proj-feat-profile-refs"),
+                format = "13"
+            ),
+        ));
+    }
     let rollbacks = rollbacks_from(origin, &file)?;
     let (parameters, next_param) = parameters_from(origin, &file)?;
     let parts_overrides = overrides_from(origin, &file.stueckliste)?;
@@ -2250,6 +2528,7 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
             formulas,
         });
     }
+    migrate_profiles(origin, &mut features)?;
     Ok(Snapshot {
         features,
         marker: file.marker,

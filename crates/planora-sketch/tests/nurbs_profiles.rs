@@ -102,7 +102,8 @@ fn an_ellipse_with_a_rectangle_hole_and_as_a_hole() {
     s.add_ellipse(c, DVec2::new(4.0, 0.0), 2.0).unwrap();
     let ex = s.profiles();
     assert!(ex.rejected.is_empty(), "{:?}", ex.rejected);
-    assert_eq!(ex.profiles.len(), 1);
+    // Fusion-Verhalten, Skizzen 1: Ring und Ellipsenfläche sind je ein Profil.
+    assert_eq!(ex.profiles.len(), 2);
     assert_eq!(ex.profiles[0].holes.len(), 1);
     let solid = extrude_profile(&k(), &s, &ex.profiles[0], 2.0).unwrap();
     k().validate(&solid).unwrap();
@@ -239,9 +240,33 @@ fn a_spline_closed_on_itself_is_a_loop() {
     assert_rel(volume(&solid), area.abs() * 1.5, "geschlossener Spline");
 }
 
+/// Fein abgetastete Fläche einer Schleife (`signed_area` tastet mit 64 Schritten je Vollkreis
+/// ab, zu grob für 1e-3).
+fn fine_area(lp: &ProfileLoop) -> f64 {
+    let pts = lp.sample(4096);
+    let n = pts.len();
+    ((0..n)
+        .map(|i| pts[i].perp_dot(pts[(i + 1) % n]))
+        .sum::<f64>()
+        / 2.0)
+        .abs()
+}
+
+/// Nettofläche eines Profils (äußerer Rand minus Löcher).
+fn net_area(p: &Profile) -> f64 {
+    fine_area(&p.outer) - p.holes.iter().map(fine_area).sum::<f64>()
+}
+
+fn extrudes(s: &Sketch, p: &Profile) {
+    let solid = extrude_profile(&k(), s, p, 1.0).unwrap();
+    k().validate(&solid).unwrap();
+}
+
+// Fusion-Verhalten, Skizzen 1: Ein Spline, der den Rand kreuzt, teilt die Fläche.
 #[test]
-fn a_spline_crossing_the_profile_is_rejected_as_self_intersecting() {
-    // Der Spline taucht unter die Grundlinie und schneidet sie.
+fn a_spline_crossing_the_profile_splits_it() {
+    // Der Spline taucht unter die Grundlinie und schneidet sie: linke und rechte Fläche plus
+    // die Linse unter der Grundlinie, zusammen ∫ |y| dx längs des Splines.
     let mut s = sketch();
     let p0 = s.add_point(0.0, 0.0).unwrap();
     let p1 = s.add_point(10.0, 0.0).unwrap();
@@ -250,12 +275,21 @@ fn a_spline_crossing_the_profile_is_rejected_as_self_intersecting() {
     let p3 = s.add_point(0.0, 5.0).unwrap();
     s.add_line(p0, p1).unwrap();
     s.add_line(p1, p2).unwrap();
-    s.add_spline(&[p2, m, p3]).unwrap();
+    let sp = s.add_spline(&[p2, m, p3]).unwrap();
     s.add_line(p3, p0).unwrap();
     let ex = s.profiles();
-    assert!(ex.profiles.is_empty());
-    assert_eq!(ex.rejected.len(), 1);
-    assert_eq!(ex.rejected[0].reason, SketchError::SelfIntersecting);
+    assert!(ex.rejected.is_empty(), "{:?}", ex.rejected);
+    assert_eq!(ex.profiles.len(), 3);
+    let pts = spline_samples(&s, sp, 2);
+    let total: f64 = pts
+        .windows(2)
+        .map(|w| 0.5 * (w[0].y.abs() + w[1].y.abs()) * (w[1].x - w[0].x).abs())
+        .sum();
+    let sum: f64 = ex.profiles.iter().map(net_area).sum();
+    assert!((sum - total).abs() < 1e-3, "{sum} statt {total}");
+    for p in &ex.profiles {
+        extrudes(&s, p);
+    }
 
     // Ein Spline mit Schlaufe schneidet sich selbst.
     let mut s = sketch();
@@ -266,21 +300,33 @@ fn a_spline_crossing_the_profile_is_rejected_as_self_intersecting() {
     s.add_spline(&p).unwrap();
     s.add_line(p[4], p[0]).unwrap();
     let ex = s.profiles();
-    assert!(ex.profiles.is_empty());
-    assert_eq!(ex.rejected[0].reason, SketchError::SelfIntersecting);
+    assert!(ex.rejected.is_empty(), "{:?}", ex.rejected);
+    // Die Schlaufe kreuzt den Hin- und den Rückweg: drei Selbstschnitte, vier Flächen.
+    assert_eq!(ex.profiles.len(), 4);
+    for p in &ex.profiles {
+        extrudes(&s, p);
+    }
 
-    // Ein Spline, der eine Ellipse daneben schneidet: beide abgelehnt.
-    let (mut s, _) = spline_top_sketch();
+    // Ein Spline, der eine Ellipse daneben schneidet: Fläche unter dem Spline ohne die
+    // Ellipse, Ellipsenteil unter und über dem Spline.
+    let (mut s, top) = spline_top_sketch();
+    let below: f64 = spline_samples(&s, top, 3)
+        .windows(2)
+        .map(|w| (w[0].x - w[1].x) * 0.5 * (w[0].y + w[1].y))
+        .sum();
     let c = s.add_point(5.0, 6.0).unwrap();
     s.add_ellipse(c, DVec2::new(3.0, 0.0), 1.0).unwrap();
     let ex = s.profiles();
-    assert!(ex.profiles.is_empty());
-    assert_eq!(ex.rejected.len(), 2);
-    assert!(
-        ex.rejected
-            .iter()
-            .all(|r| r.reason == SketchError::SelfIntersecting)
-    );
+    assert!(ex.rejected.is_empty(), "{:?}", ex.rejected);
+    assert_eq!(ex.profiles.len(), 3);
+    let a: Vec<f64> = ex.profiles.iter().map(net_area).collect();
+    let pair =
+        |want: f64| (0..3).any(|i| (0..3).any(|j| i != j && (a[i] + a[j] - want).abs() < 1e-3));
+    assert!(pair(below), "{a:?}: Fläche unter dem Spline {below}");
+    assert!(pair(PI * 3.0), "{a:?}: Ellipse");
+    for p in &ex.profiles {
+        extrudes(&s, p);
+    }
 }
 
 #[test]

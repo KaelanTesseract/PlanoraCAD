@@ -274,8 +274,8 @@ fn sketch_keys_select_the_tools() {
         assert_eq!(a.label(), label, "Name wie der Werkzeugknopf");
         assert_eq!(km.action_for_key(Area::Sketch, &chord(k, false)), Some(a));
     }
-    // Versatz O, Stutzen T, Skizzenbemaßung D: gibt es (noch) nicht.
-    for k in [Key::O, Key::T, Key::D] {
+    // Versatz O, Skizzenbemaßung D: gibt es (noch) nicht.
+    for k in [Key::O, Key::D] {
         assert_eq!(
             km.action_for_key(Area::Sketch, &chord(k, false)),
             None,
@@ -327,6 +327,103 @@ fn sketch_keys_select_the_tools() {
     // Werkzeuge ohne Kürzel: nur der Name.
     let texts = rig.hover(rig.strip("Bogen"));
     assert!(texts.iter().any(|t| t == "Bogen"), "{texts:?}");
+}
+
+#[test]
+fn trim_has_t_extend_and_break_are_assignable() {
+    let km = Keymap::defaults();
+    assert_eq!(Action::SketchTrim.id(), "skizze.stutzen");
+    assert_eq!(Action::SketchExtend.id(), "skizze.dehnen");
+    assert_eq!(Action::SketchBreak.id(), "skizze.brechen");
+    for a in [
+        Action::SketchTrim,
+        Action::SketchExtend,
+        Action::SketchBreak,
+    ] {
+        assert_eq!(a.area(), Area::Sketch, "{a:?}");
+        assert!(Action::ALL.contains(&a), "{a:?} in den Einstellungen");
+    }
+    assert_eq!(km.bindings(Action::SketchTrim), [plain(Key::T)]);
+    assert!(
+        km.bindings(Action::SketchExtend).is_empty(),
+        "Dehnen ohne Vorgabe"
+    );
+    assert!(
+        km.bindings(Action::SketchBreak).is_empty(),
+        "Brechen ohne Vorgabe"
+    );
+    assert_eq!(Action::SketchTrim.sketch_tool(), Some(Tool::Trim));
+    assert_eq!(Action::SketchExtend.sketch_tool(), Some(Tool::Extend));
+    assert_eq!(Action::SketchBreak.sketch_tool(), Some(Tool::Break));
+
+    let mut rig = Rig::new(sketch_open_ws());
+    rig.press(Key::T, NONE);
+    assert!(!rig.left_over, "T verbraucht");
+    assert_eq!(rig.tool(), Tool::Trim);
+    rig.settle();
+    let texts = rig.hover(rig.strip("Stutzen"));
+    assert!(texts.iter().any(|t| t == "Stutzen (T)"), "{texts:?}");
+    // Der Menüweg wie in Fusion steht im Hinweis.
+    assert!(texts.iter().any(|t| t.contains("Ändern")), "{texts:?}");
+
+    // Dehnen und Brechen belegen (wie im Fenster Tastenkürzel) und auslösen.
+    let mut km = rig.ws().keymap.clone();
+    assert_eq!(
+        km.set(Action::SketchExtend, 0, plain(Key::J)),
+        SetResult::Ok
+    );
+    assert_eq!(km.set(Action::SketchBreak, 0, plain(Key::K)), SetResult::Ok);
+    rig.ws().keymap = km;
+    rig.press(Key::J, NONE);
+    assert!(!rig.left_over, "J verbraucht");
+    assert_eq!(rig.tool(), Tool::Extend);
+    rig.press(Key::K, NONE);
+    assert_eq!(rig.tool(), Tool::Break);
+    rig.settle();
+    let texts = rig.hover(rig.strip("Dehnen"));
+    assert!(texts.iter().any(|t| t == "Dehnen (J)"), "{texts:?}");
+    // Esc beendet das Werkzeug (wie Fusion).
+    rig.press(Key::Escape, NONE);
+    assert_eq!(rig.tool(), Tool::Select);
+}
+
+#[test]
+fn repeat_last_remembers_trim_extend_and_break() {
+    // Linie zum Dehnen links, ein Kreuz rechts zum Stutzen und Brechen.
+    let mut w = sketch_open_ws();
+    {
+        let s = &mut w.active_tab_mut().state;
+        let sk = s.session_sketch_mut().unwrap().1;
+        let mut line = |a: (f64, f64), b: (f64, f64)| {
+            let p = sk.add_point(a.0, a.1).unwrap();
+            let q = sk.add_point(b.0, b.1).unwrap();
+            sk.add_line(p, q).unwrap();
+        };
+        line((-40.0, 0.0), (-30.0, 0.0));
+        line((-20.0, -10.0), (-20.0, 10.0));
+        line((0.0, 0.0), (40.0, 0.0));
+        line((10.0, -10.0), (10.0, 10.0));
+        line((30.0, -10.0), (30.0, 10.0));
+    }
+    let mut rig = Rig::new(w);
+    let cases = [
+        (Action::SketchTrim, Tool::Trim, (35.0, 0.0)),
+        (Action::SketchExtend, Tool::Extend, (-31.0, 0.0)),
+        (Action::SketchBreak, Tool::Break, (20.0, 0.0)),
+    ];
+    for (a, tool, at) in cases {
+        let (se, sk) = rig.st().session_sketch_mut().unwrap();
+        se.set_tool(sk, tool);
+        rig.settle();
+        assert_ne!(rig.sketch_tool_memory(), Some(a), "{a:?}: nur gewählt");
+        rig.sketch_click(at.0, at.1);
+        assert_eq!(rig.sketch_tool_memory(), Some(a), "{a:?}: benutzt");
+        rig.press(Key::Escape, NONE);
+        assert_eq!(rig.tool(), Tool::Select, "{a:?}: Esc beendet");
+        rig.press(Key::Space, NONE);
+        assert_eq!(rig.tool(), tool, "{a:?}: Leertaste wählt es wieder");
+        rig.press(Key::Escape, NONE);
+    }
 }
 
 #[test]

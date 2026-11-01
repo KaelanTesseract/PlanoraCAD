@@ -751,7 +751,7 @@ fn a_patterned_rectangle_shows_no_redundant_constraints_in_the_status() {
 }
 
 #[test]
-fn a_hole_tangent_to_an_edge_explains_why_it_is_not_usable() {
+fn a_hole_tangent_to_an_edge_leaves_the_circle_usable() {
     let (mut sk, mut se) = setup();
     se.set_tool(&mut sk, Tool::Rectangle);
     click(&mut se, &mut sk, 0.0, 0.0);
@@ -773,7 +773,10 @@ fn a_hole_tangent_to_an_edge_explains_why_it_is_not_usable() {
     se.selection = vec![Item::Curve(bottom), Item::Curve(circle)];
     se.apply(&mut sk, ConstraintAction::Tangent, None).unwrap();
     let e = sk.profiles();
-    assert!(e.profiles.is_empty());
+    // Fusion-Verhalten, Skizzen 1: Die Kreisfläche ist ein Profil, nur die eingeklemmte Fläche
+    // um den Kreis ist nicht verwendbar und nennt den Grund.
+    assert_eq!(e.profiles.len(), 1, "{:?}", e.rejected);
+    assert_eq!(e.curve_loops, vec![vec![circle]]);
     let text = e.rejected[0].reason.to_string();
     assert!(text.contains("berührt"), "{text}");
 }

@@ -359,7 +359,9 @@ fn sketch_mode_rects_do_not_overlap_at_five_sizes() {
             let strip = r.strip.unwrap();
             assert_eq!(strip.left(), SHELL_INSET);
             assert_eq!(strip.width(), STRIP_W);
-            assert!((strip.center().y - r.free.center().y).abs() < 0.01);
+            // Mittig, oben auf ganze Pixel gerundet.
+            assert!((strip.center().y - r.free.center().y).abs() <= 0.5);
+            assert_eq!(strip.top(), strip.top().round());
             // Der Würfel liegt in der freien Fläche und damit unter keinem Feld.
             let cube = cube_rect(r.free);
             for (name, rect) in all.iter().filter(|(n, _)| *n != "free") {
@@ -404,11 +406,31 @@ fn sketch_free_rect_margins() {
     assert_eq!(model.free.left(), 278.0);
 }
 
+#[test]
+fn strip_with_twelve_tools_fits_at_1920x1080() {
+    let r = sketch_rects(1920.0, 1080.0, false);
+    let strip = r.strip.unwrap();
+    assert_eq!(strip.height(), STRIP_H, "alle zwölf Knöpfe ohne Rollen");
+    assert!(strip.top() >= r.free.top() && strip.bottom() <= r.free.bottom());
+}
+
+#[test]
+fn strip_layout_never_panics_in_tiny_windows() {
+    // Höhen, bei denen die freie Fläche kaum größer oder kleiner als die Leiste ist.
+    for h in (100..700).map(|h| h as f32 + 0.3) {
+        for read_only in [false, true] {
+            let r = sketch_rects(1920.0, h, read_only);
+            let strip = r.strip.unwrap();
+            assert!(strip.height() <= r.free.height().max(0.0) + 0.01, "{h}");
+        }
+    }
+}
+
 // (c)
 #[test]
 fn strip_height_is_limited_to_free_height() {
-    // Genug Platz: 9 Knöpfe zu 36, 8 Abstände zu 4, Rand 2 × 4.
-    assert_eq!(STRIP_H, 9.0 * 36.0 + 8.0 * 4.0 + 8.0);
+    // Genug Platz: 12 Knöpfe zu 36, 11 Abstände zu 4, Trennlinie 9, Rand 2 × 4.
+    assert_eq!(STRIP_H, 12.0 * 36.0 + 11.0 * 4.0 + 9.0 + 8.0);
     let r = sketch_rects(1400.0, 900.0, false);
     assert_eq!(r.strip.unwrap().height(), STRIP_H);
     // Niedrige Fenster: höchstens so hoch wie die freie Fläche.

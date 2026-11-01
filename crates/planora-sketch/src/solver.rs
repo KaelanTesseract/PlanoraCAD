@@ -5,9 +5,9 @@
 //! Gruppe; jede Gruppe wird für sich gelöst. Nur gelöste Gruppen schreiben ihre Werte zurück.
 //!
 //! Eine Lösung zählt nur, wenn die Geometrie der Gruppe dabei nicht entartet (Spec §4.5):
-//! Kreisradius, Bogenradius (Start und Ende), Linienlänge und beide Ellipsen-Halbachsen müssen
-//! größer als `tol.linear` sein. Sonst gilt die Gruppe als nicht gelöst und bleibt im letzten
-//! Zustand; die Diagnose nennt die Ursache.
+//! Kreisradius, Bogenradius (Start und Ende), Linienlänge und beide Halbachsen von Ellipsen und
+//! Ellipsenbögen müssen größer als `tol.linear` sein. Sonst gilt die Gruppe als nicht gelöst und
+//! bleibt im letzten Zustand; die Diagnose nennt die Ursache.
 //!
 //! Zwischenspeicher: Das Ergebnis jeder Gruppe wird mit den Werten aller Variablen gemerkt,
 //! die es bestimmen: ihre eigenen und sämtliche Variablen ihrer Kurven, auch solche außerhalb
@@ -413,7 +413,7 @@ impl Sketch {
     }
 
     /// Ist eine der Kurven `curves` an der Stelle `x` entartet? Kreis- und Bogenradius,
-    /// Linienlänge und beide Halbachsen einer Ellipse müssen größer als `tol.linear` sein (NaN
+    /// Linienlänge und beide Halbachsen einer Ellipse oder eines Ellipsenbogens müssen größer als `tol.linear` sein (NaN
     /// zählt als entartet). Ein negativer Kreisradius (gespiegelter Kreis, etwa bei einer
     /// Tangente durch die Linie hindurch) ist ebenfalls entartet.
     fn degenerate(&self, curves: &[CurveId], x: &[f64]) -> bool {
@@ -427,7 +427,8 @@ impl Sketch {
                 let m = at(*center);
                 !(ok(at(*start).distance(m)) && ok(at(*end).distance(m)))
             }
-            CurveKind::Ellipse { ax, ay, minor, .. } => {
+            CurveKind::Ellipse { ax, ay, minor, .. }
+            | CurveKind::EllipticArc { ax, ay, minor, .. } => {
                 !(ok(DVec2::new(x[*ax], x[*ay]).length()) && ok(x[*minor]))
             }
             CurveKind::Spline { .. } => false,
@@ -841,7 +842,9 @@ impl Sketch {
 fn own_vars(kind: &CurveKind) -> Vec<usize> {
     match kind {
         CurveKind::Circle { radius, .. } => vec![*radius],
-        CurveKind::Ellipse { ax, ay, minor, .. } => vec![*ax, *ay, *minor],
+        CurveKind::Ellipse { ax, ay, minor, .. } | CurveKind::EllipticArc { ax, ay, minor, .. } => {
+            vec![*ax, *ay, *minor]
+        }
         _ => Vec::new(),
     }
 }
@@ -910,5 +913,20 @@ mod tests {
         let mut x = s.vars.clone();
         x[s.points[b].x] = 0.0;
         assert!(s.degenerate(&[l], &x));
+        let p = s.add_point(0.0, 1.0).unwrap();
+        let q = s.add_point(-3.0, 0.0).unwrap();
+        let arc = s
+            .add_elliptic_arc(m, DVec2::new(3.0, 0.0), 1.0, p, q)
+            .unwrap();
+        let CurveKind::EllipticArc { ay, minor, .. } = s.curves[arc].kind else {
+            unreachable!()
+        };
+        assert!(!s.degenerate(&[arc], &s.vars));
+        let mut x = s.vars.clone();
+        x[minor] = 0.0;
+        assert!(s.degenerate(&[arc], &x));
+        let mut x = s.vars.clone();
+        x[ay] = f64::NAN;
+        assert!(s.degenerate(&[arc], &x));
     }
 }

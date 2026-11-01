@@ -205,7 +205,7 @@ const NEW_KEYS: [&str; 3] = ["\"parameter\"", "\"formeln\"", "\"naechster_parame
 
 #[test]
 fn format_9_only_with_parameters_or_formulas() {
-    assert_eq!(FORMAT_VERSION, 12);
+    assert_eq!(FORMAT_VERSION, 13);
     let mut d = quader();
     assert_eq!(required_format(&d.snapshot()), 1);
 
@@ -398,7 +398,7 @@ fn old_files_unchanged() {
             n += 1;
         }
     }
-    assert_eq!(n, 11, "alle Golden-Dateien");
+    assert_eq!(n, 12, "alle Golden-Dateien");
 
     // Ein Schnitt-Dokument ohne Parameter: Format 8 wie bisher, ohne neue Felder.
     let text = encode_version(&section_document().snapshot()).unwrap();
@@ -841,10 +841,10 @@ fn limits_count_characters_not_bytes() {
 #[test]
 fn too_new() {
     let good = encode_version(&full_document().snapshot()).unwrap();
-    let e = bad(&good.replacen("\"format\": 9", "\"format\": 13", 1));
-    assert!(matches!(e, ProjectError::TooNew { found: 13, .. }), "{e:?}");
-    let e = bad("{\"format\": 13, \"parameter\": \"ganz anders\"}");
-    assert!(matches!(e, ProjectError::TooNew { found: 13, .. }), "{e:?}");
+    let e = bad(&good.replacen("\"format\": 9", "\"format\": 14", 1));
+    assert!(matches!(e, ProjectError::TooNew { found: 14, .. }), "{e:?}");
+    let e = bad("{\"format\": 14, \"parameter\": \"ganz anders\"}");
+    assert!(matches!(e, ProjectError::TooNew { found: 14, .. }), "{e:?}");
     // Format 9 selbst ist nicht zu neu.
     assert!(decode_version(&good, "x").is_ok());
 }

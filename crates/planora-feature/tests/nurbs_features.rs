@@ -62,7 +62,7 @@ fn an_ellipse_sketch_extrudes_and_follows_its_dimension() {
             "Extrusion 1",
             FeatureKind::Extrude {
                 sketch: s,
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 height: 3.0,
             },
         )
@@ -168,7 +168,7 @@ fn a_spline_sketch_revolves() {
             "Rotation 1",
             FeatureKind::Revolve {
                 sketch: s,
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 axis,
             },
         )
@@ -203,6 +203,7 @@ fn a_spline_sketch_extrudes_and_a_bad_spline_reports_an_error() {
     sk.add_spline(&p[2..5]).unwrap();
     sk.add_line(p[4], p[0]).unwrap();
     let mid = p[3];
+    let first = sk.profiles().refs[0].clone();
     let mut d = Document::new();
     let s = d.add_feature("Skizze 1", feature_sketch(sk)).unwrap();
     let e = d
@@ -210,18 +211,37 @@ fn a_spline_sketch_extrudes_and_a_bad_spline_reports_an_error() {
             "Extrusion 1",
             FeatureKind::Extrude {
                 sketch: s,
-                profile: 0,
+                profiles: ProfileSel::Refs(vec![first]),
                 height: 2.0,
             },
         )
         .unwrap();
     assert_eq!(d.feature(e).unwrap().status, FeatureStatus::Ok);
 
-    // Der mittlere Punkt wandert unter die Grundlinie: Das Profil schneidet sich, es gibt
-    // kein Profil 0 mehr, die Extrusion trägt einen Fehler statt eines Absturzes.
+    // Fusion-Verhalten, Skizzen 1: Der mittlere Punkt wandert unter die Grundlinie, der
+    // Spline kreuzt sie und teilt die Fläche; das gewählte Profil ist damit verloren (Task 6:
+    // Profil-Verweise), die Extrusion meldet das statt still eine Teilfläche zu nehmen.
     d.update(s, |k| {
         if let FeatureKind::Sketch(sf) = k {
             sf.sketch.add_constraint(K::Fixed(mid, 5.0, -3.0)).unwrap();
+        }
+    })
+    .unwrap();
+    assert_eq!(
+        d.feature(e).unwrap().status,
+        FeatureStatus::Error(
+            FeatureError::InvalidInput(planora_i18n::tr!("feature-profile-lost")).to_string()
+        )
+    );
+    assert!(d.visible_bodies().is_empty());
+    d.check_invariants().unwrap();
+
+    // Ein entarteter Spline (Nachbarpunkte fallen zusammen) fällt aus der Skizze: Es bleibt
+    // kein Profil 0, die Extrusion trägt einen Fehler statt eines Absturzes.
+    let last = p[4];
+    d.update(s, |k| {
+        if let FeatureKind::Sketch(sf) = k {
+            sf.sketch.add_constraint(K::Coincident(mid, last)).unwrap();
         }
     })
     .unwrap();
@@ -259,7 +279,7 @@ fn old_documents_may_extrude_a_different_profile() {
             "Extrusion 1",
             FeatureKind::Extrude {
                 sketch: s,
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 height: 3.0,
             },
         )
@@ -303,7 +323,7 @@ fn ellipse_and_box(depth: f64) -> (Document, FeatureId, FeatureId, FeatureId, Co
             "Extrusion 1",
             FeatureKind::Extrude {
                 sketch: s,
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 height: 4.0,
             },
         )
@@ -483,7 +503,7 @@ fn a_flat_ellipse_united_with_a_sphere_passes_the_volume_check() {
                 "Extrusion 1",
                 FeatureKind::Extrude {
                     sketch: s,
-                    profile: 0,
+                    profiles: ProfileSel::Index(0),
                     height: 0.5,
                 },
             )
@@ -531,7 +551,7 @@ fn a_tiny_freeform_part_far_from_the_origin_is_united() {
             "Extrusion 1",
             FeatureKind::Extrude {
                 sketch: s,
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 height: 0.03,
             },
         )
@@ -599,7 +619,7 @@ fn a_rejected_ellipse_names_its_reason_at_the_extrusion() {
             "Extrusion 1",
             FeatureKind::Extrude {
                 sketch: s,
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 height: 1.0,
             },
         )

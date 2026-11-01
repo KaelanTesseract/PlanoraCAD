@@ -901,6 +901,12 @@ pub enum HandIcon {
     Midpoint,
     PointOnCurve,
     DistancePointLine,
+    /// Stutzen: zwei gekreuzte Linien, ein Arm fehlt (nur angedeutet, dünn gestrichelt).
+    Trim,
+    /// Dehnen: eine Linie, gestrichelt verlängert bis an eine senkrechte Grenze.
+    Extend,
+    /// Brechen: eine Linie mit einer Lücke an einer kreuzenden Linie.
+    Break,
 }
 
 /// Alle gezeichneten Symbole aus [`HandIcon`].
@@ -913,6 +919,9 @@ pub const HAND_DRAWN: &[HandIcon] = &[
     HandIcon::Midpoint,
     HandIcon::PointOnCurve,
     HandIcon::DistancePointLine,
+    HandIcon::Trim,
+    HandIcon::Extend,
+    HandIcon::Break,
 ];
 
 /// Zeichnet ein [`HandIcon`] in `rect` (Strichbreite 1,5, runde Enden).
@@ -1010,6 +1019,44 @@ pub fn paint_hand_icon(painter: &Painter, rect: Rect, icon: HandIcon, color: Col
                 stroke,
             );
         }
+        HandIcon::Trim => {
+            // Senkrechte Schneide, waagerechter Arm links; rechts der weggestutzte Arm dünn
+            // gestrichelt.
+            seg(painter, [c + vec2(0.0, -r), c + vec2(0.0, r)], stroke);
+            seg(painter, [c + vec2(-r, 0.0), c], stroke);
+            let thin = Stroke::new(1.0, color);
+            painter.extend(egui::Shape::dashed_line(
+                &[c + vec2(r * 0.25, 0.0), c + vec2(r, 0.0)],
+                thin,
+                2.0,
+                2.0,
+            ));
+        }
+        HandIcon::Extend => {
+            // Grenze rechts, Linie von links, dünn gestrichelt bis an die Grenze verlängert.
+            seg(painter, [c + vec2(r, -r), c + vec2(r, r)], stroke);
+            seg(painter, [c + vec2(-r, 0.0), c + vec2(0.0, 0.0)], stroke);
+            let thin = Stroke::new(1.0, color);
+            painter.extend(egui::Shape::dashed_line(
+                &[c + vec2(r * 0.15, 0.0), c + vec2(r * 0.9, 0.0)],
+                thin,
+                2.0,
+                2.0,
+            ));
+        }
+        HandIcon::Break => {
+            // Kreuzende Linie schräg, die waagerechte Linie an ihr in zwei Teile gebrochen.
+            seg(
+                painter,
+                [c + vec2(-r * 0.4, r), c + vec2(r * 0.4, -r)],
+                stroke,
+            );
+            let gap = r * 0.3;
+            seg(painter, [c + vec2(-r, 0.0), c + vec2(-gap, 0.0)], stroke);
+            seg(painter, [c + vec2(gap, 0.0), c + vec2(r, 0.0)], stroke);
+            painter.circle_filled(c + vec2(-gap, 0.0), 1.8, color);
+            painter.circle_filled(c + vec2(gap, 0.0), 1.8, color);
+        }
     }
 }
 
@@ -1055,6 +1102,9 @@ pub fn sketch_tool_icon(tool: crate::sketch_state::Tool) -> IconSource {
         T::Ellipse => IconSource::Hand(HandIcon::Ellipse),
         T::Spline => IconSource::Font(Icon::ToolSpline),
         T::ProjectEdge => IconSource::Font(Icon::ToolProjectEdge),
+        T::Trim => IconSource::Hand(HandIcon::Trim),
+        T::Extend => IconSource::Hand(HandIcon::Extend),
+        T::Break => IconSource::Hand(HandIcon::Break),
     }
 }
 

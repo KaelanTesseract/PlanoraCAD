@@ -7,7 +7,7 @@ use crate::theme;
 use planora_exchange::MeshTransform;
 use planora_feature::expr::number_text;
 use planora_feature::{
-    BlendArt, FeatureId, FeatureKind, FeatureStatus, FieldKey, ParamUnit, SketchPlane,
+    BlendArt, FeatureId, FeatureKind, FeatureStatus, FieldKey, ParamUnit, ProfileSel, SketchPlane,
     StandardPlane, StepShape, field_unit, field_value,
 };
 use planora_i18n::{DisplayUnit, current_unit, fmt_num, localize_decimal, tr};
@@ -258,6 +258,28 @@ fn times(v: DVec3) -> String {
     )
 }
 
+/// Nummern (ab 1) der heute gewählten Profile, durch Komma getrennt. Passt keins, steht bei
+/// einer alten Profilnummer, die nur noch der alte Algorithmus kennt, „altes Profil n“ (so wird
+/// der Körper berechnet; die Nummer ist keine der heutigen Liste), sonst „nicht mehr
+/// vorhanden“.
+fn profile_numbers(state: &AppState, sketch: FeatureId, sel: &ProfileSel) -> String {
+    let mut found = state.selected_profile_indices(sketch, sel);
+    if !found.is_empty() {
+        found.sort_unstable();
+        return found
+            .iter()
+            .map(|i| (i + 1).to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+    }
+    match (sel, state.document.sketch_of(sketch)) {
+        (ProfileSel::Index(n), Some(sk)) if *n < state.profile_cache.legacy_count(sk) => {
+            tr!("props-profile-legacy", n = n + 1)
+        }
+        _ => tr!("props-profile-lost"),
+    }
+}
+
 /// Parameter eines Features als Text (Bezeichnung, Wert).
 pub fn parameter_rows(state: &AppState, kind: &FeatureKind) -> Vec<(String, String)> {
     let doc = &state.document;
@@ -309,20 +331,26 @@ pub fn parameter_rows(state: &AppState, kind: &FeatureKind) -> Vec<(String, Stri
         }
         FeatureKind::Extrude {
             sketch,
-            profile,
+            profiles,
             height,
         } => vec![
             (tr!("props-sketch"), feature_name(*sketch)),
-            (tr!("props-profile"), (profile + 1).to_string()),
+            (
+                tr!("props-profile"),
+                profile_numbers(state, *sketch, profiles),
+            ),
             (tr!("props-height"), mm(*height)),
         ],
         FeatureKind::Revolve {
             sketch,
-            profile,
+            profiles,
             axis,
         } => vec![
             (tr!("props-sketch"), feature_name(*sketch)),
-            (tr!("props-profile"), (profile + 1).to_string()),
+            (
+                tr!("props-profile"),
+                profile_numbers(state, *sketch, profiles),
+            ),
             (
                 tr!("props-axis"),
                 tr!("props-curve-n", n = axis.index() + 1),

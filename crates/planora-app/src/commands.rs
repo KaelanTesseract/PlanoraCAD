@@ -47,13 +47,17 @@ pub struct LastCommand {
 }
 
 /// Was [`observe`] von der offenen Skizze zuletzt gesehen hat: ein Bild später mehr Kurven in
-/// derselben Skizze, ohne Rückgängig/Wiederholen dazwischen, heißt „das Werkzeug wurde benutzt“.
+/// derselben Skizze (bei Stutzen, Dehnen und Brechen: eine Änderung durch sie), ohne
+/// Rückgängig/Wiederholen dazwischen, heißt „das Werkzeug wurde benutzt“.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SketchSeen {
     tab: u64,
     sketch: FeatureId,
     jumps: u64,
     curves: usize,
+    /// Zähler der Änderungen durch Stutzen, Dehnen und Brechen
+    /// ([`SketchSession::modify_edits`](crate::sketch_state::SketchSession::modify_edits)).
+    modify_edits: u64,
 }
 
 /// Ein gestarteter Befehl, dessen Fenster noch offen ist.
@@ -189,7 +193,10 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
         Action::SketchLine
         | Action::SketchRectangle
         | Action::SketchCircle
-        | Action::SketchProjectEdge => {
+        | Action::SketchProjectEdge
+        | Action::SketchTrim
+        | Action::SketchExtend
+        | Action::SketchBreak => {
             if let Some(tool) = a.sketch_tool()
                 && let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut()
             {
@@ -349,14 +356,19 @@ fn observe_sketch(ws: &mut Workspace) {
         sketch: se.sketch,
         jumps: se.history_jumps,
         curves: sk.curves().count(),
+        modify_edits: se.modify_edits.0,
     };
-    let used = ws.last_command.sketch_seen.is_some_and(|before| {
-        before.tab == now.tab
-            && before.sketch == now.sketch
-            && before.jumps == now.jumps
-            && now.curves > before.curves
+    let same = ws.last_command.sketch_seen.filter(|before| {
+        before.tab == now.tab && before.sketch == now.sketch && before.jumps == now.jumps
     });
-    if used && let Some(a) = Action::for_sketch_tool(se.tool) {
+    // Stutzen, Dehnen und Brechen zählen, sobald sie etwas geändert haben (die Kurvenzahl
+    // sinkt oder bleibt dabei oft); die Zeichenwerkzeuge, sobald eine Kurve dazukam.
+    let tool = match same {
+        Some(before) if now.modify_edits > before.modify_edits => se.modify_edits.1,
+        Some(before) if now.curves > before.curves && !se.tool.is_modify() => Some(se.tool),
+        _ => None,
+    };
+    if let Some(a) = tool.and_then(Action::for_sketch_tool) {
         ws.last_command.remember(a);
     }
     ws.last_command.sketch_seen = Some(now);

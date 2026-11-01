@@ -332,7 +332,7 @@ const NEW_KEYS: [&str; 2] = ["\"step_formen\"", "step_koerper"];
 
 #[test]
 fn roundtrip_keeps_text_and_tolerance() {
-    assert_eq!(FORMAT_VERSION, 12);
+    assert_eq!(FORMAT_VERSION, 13);
     let (d, [q, w]) = two_bodies();
     let snap = d.snapshot();
     assert_eq!(required_format(&snap), 10);
@@ -578,7 +578,7 @@ fn old_files_unchanged() {
             n += 1;
         }
     }
-    assert_eq!(n, 11, "alle Golden-Dateien");
+    assert_eq!(n, 12, "alle Golden-Dateien");
 
     // Ein Dokument ohne STEP-Körper, aber mit Parametern: Format 9 ohne neue Felder.
     let mut d = Document::new();
@@ -603,8 +603,8 @@ fn old_files_unchanged() {
     let s = decode_version(&ten, "x.json").unwrap();
     assert!(s.step_shapes.is_empty());
     assert!(matches!(
-        bad(&text.replacen("\"format\": 9", "\"format\": 13", 1)),
-        ProjectError::TooNew { found: 13, .. }
+        bad(&text.replacen("\"format\": 9", "\"format\": 14", 1)),
+        ProjectError::TooNew { found: 14, .. }
     ));
 }
 
@@ -636,7 +636,7 @@ fn reopen_keeps_sketch_on_imported_face() {
             "Extrusion",
             FeatureKind::Extrude {
                 sketch: s,
-                profile: 0,
+                profiles: ProfileSel::Index(0),
                 height: 5.0,
             },
         )
@@ -789,8 +789,8 @@ fn hostile_step_data() {
     }));
     msg(&edited(&good, |v| v["step_formen"] = json!("ganz anders")));
     // Zu neu.
-    let e = bad(&good.replacen("\"format\": 10", "\"format\": 13", 1));
-    assert!(matches!(e, ProjectError::TooNew { found: 13, .. }), "{e:?}");
+    let e = bad(&good.replacen("\"format\": 10", "\"format\": 14", 1));
+    assert!(matches!(e, ProjectError::TooNew { found: 14, .. }), "{e:?}");
 
     // Gültiger Kopf, kaputter Körper: die Datei lädt, nur der STEP-Körper hat den Fehler (P14).
     let broken = edited(&good, |v| {
