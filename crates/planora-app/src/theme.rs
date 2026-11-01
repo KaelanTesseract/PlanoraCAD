@@ -919,6 +919,15 @@ pub struct SketchColors {
     pub label_bg: Color32,
     /// Vorschau beim Zeichnen.
     pub preview: Color32,
+    /// Stück, das Stutzen oder Brechen unter dem Mauszeiger trifft, und Weg beim Dehnen (rot
+    /// wie in Fusion).
+    pub trim_highlight: Color32,
+    /// Fläche eines Profils (geschlossene Fläche der Skizze), halbtransparent.
+    pub profile_fill: Color32,
+    /// Fläche eines gewählten Profils.
+    pub profile_fill_selected: Color32,
+    /// Fläche eines Profils unter dem Mauszeiger.
+    pub profile_fill_hover: Color32,
     /// X-Achse der Skizze.
     pub axis_x: Color32,
     /// Y-Achse der Skizze.
@@ -941,6 +950,10 @@ pub fn sketch_colors(dark: bool) -> SketchColors {
             text: p.text_primary,
             label_bg: with_alpha(p.bg_panel, 0xd8),
             preview: rgb(0xa8ccff),
+            trim_highlight: p.error,
+            profile_fill: with_alpha(rgb(0x4c9aff), 0x30),
+            profile_fill_selected: with_alpha(p.selection, 0x50),
+            profile_fill_hover: with_alpha(rgb(0x7fb4ff), 0x48),
             axis_x: p.axis_x,
             axis_y: p.axis_y,
         }
@@ -955,6 +968,10 @@ pub fn sketch_colors(dark: bool) -> SketchColors {
             text: p.text_primary,
             label_bg: with_alpha(p.bg_panel, 0xe0),
             preview: p.axis_z,
+            trim_highlight: p.error,
+            profile_fill: with_alpha(p.accent, 0x28),
+            profile_fill_selected: with_alpha(rgb(0xa86a00), 0x48),
+            profile_fill_hover: with_alpha(p.accent, 0x40),
             axis_x: p.axis_x,
             axis_y: p.axis_y,
         }

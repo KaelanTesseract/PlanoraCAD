@@ -39,10 +39,14 @@ pub const TOOL_H: f32 = 76.0;
 /// Höhe der Verlaufsleiste über dem Befehlsfeld (nur im Modell).
 pub const HISTORY_H: f32 = theme::TOOLBAR_H;
 /// Anzahl der Werkzeuge in der Leiste.
-pub const STRIP_TOOLS: usize = 9;
-/// Höhe der Leiste mit allen Werkzeugen: 9 × 36, 8 Abstände, oben und unten der Rand.
+pub const STRIP_TOOLS: usize = 12;
+/// Zusätzliche Höhe der Trennlinie vor der Gruppe „Ändern“ (Stutzen, Dehnen, Brechen).
+pub const STRIP_SEPARATOR_H: f32 = 9.0;
+/// Höhe der Leiste mit allen Werkzeugen: 12 × 36, 11 Abstände, die Trennlinie, oben und unten
+/// der Rand.
 pub const STRIP_H: f32 = STRIP_TOOLS as f32 * STRIP_BUTTON
     + (STRIP_TOOLS as f32 - 1.0) * STRIP_SPACING
+    + STRIP_SEPARATOR_H
     + 2.0 * STRIP_PAD;
 
 /// Was die Oberfläche gerade zeigt; bestimmt, welche Felder es gibt.
@@ -212,7 +216,12 @@ pub fn layout_in_mode(
     let status_right = (r.bottom.left() - GAP).max(r.status.left());
     r.status.max.x = r.status.max.x.min(status_right);
     let h = STRIP_H.min(r.free.height());
-    let strip = Rect::from_min_size(pos2(left, r.free.center().y - h / 2.0), vec2(STRIP_W, h));
+    // Oben auf ganze Pixel (die Leiste ist mit Trennlinie ungerade hoch; Felder liegen auf
+    // ganzen Pixeln), ohne die freie Fläche zu verlassen.
+    let top = (r.free.center().y - h / 2.0)
+        .round()
+        .clamp(r.free.top(), r.free.bottom() - h);
+    let strip = Rect::from_min_size(pos2(left, top), vec2(STRIP_W, h));
     r.left = Rect::from_min_size(strip.min, vec2(0.0, 0.0));
     r.strip = Some(strip);
     r

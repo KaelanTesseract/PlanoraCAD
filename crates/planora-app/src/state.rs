@@ -2088,6 +2088,12 @@ impl AppState {
             return;
         }
         let Some((h, draft, false)) = self.sketch_open_change() else {
+            // Kein Schritt: ein Schrittname eines Werkzeugs gehört zu keiner Änderung mehr.
+            if self.sketch_open_change().is_none()
+                && let Some(se) = self.sketch_session.as_mut()
+            {
+                se.edit_label = None;
+            }
             return;
         };
         let label = self.sketch_label(h.current(), draft);
@@ -2098,6 +2104,9 @@ impl AppState {
         let bytes = sketch_bytes(&after);
         if let Some(h) = self.sketch_history.as_mut() {
             h.record(after, bytes, label);
+        }
+        if let Some(se) = self.sketch_session.as_mut() {
+            se.edit_label = None;
         }
     }
 
@@ -2168,7 +2177,17 @@ impl AppState {
 
     /// Name eines Skizzenschritts; offene Punkte des laufenden Werkzeugs gehören zum nächsten
     /// Element und benennen ihn nicht.
+    ///
+    /// Hat ein Werkzeug den Namen gesetzt (Stutzen, Dehnen, Brechen: `edit_label`), gilt
+    /// dieser; [`observe_sketch`](Self::observe_sketch) leert ihn mit dem Schritt.
     fn sketch_label(&self, before: &SketchFeature, after: &SketchFeature) -> String {
+        if let Some(label) = self
+            .sketch_session
+            .as_ref()
+            .and_then(|se| se.edit_label.as_ref())
+        {
+            return label.text();
+        }
         let open = self
             .sketch_session
             .as_ref()

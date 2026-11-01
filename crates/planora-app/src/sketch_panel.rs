@@ -24,7 +24,7 @@ use planora_sketch::model::{CurveKind, Sketch};
 const _: () = assert!(TOOL_ORDER.len() == crate::shell::STRIP_TOOLS);
 
 /// Werkzeuge der Skizzenleiste in der Reihenfolge der Leiste.
-pub const TOOL_ORDER: [Tool; 9] = [
+pub const TOOL_ORDER: [Tool; 12] = [
     Tool::Select,
     Tool::Point,
     Tool::Line,
@@ -34,7 +34,14 @@ pub const TOOL_ORDER: [Tool; 9] = [
     Tool::Ellipse,
     Tool::Spline,
     Tool::ProjectEdge,
+    Tool::Trim,
+    Tool::Extend,
+    Tool::Break,
 ];
+
+/// Erstes Werkzeug der Gruppe „Ändern“ (Fusion „Ändern“); davor steht in der Leiste eine
+/// Trennlinie.
+const MODIFY_FIRST: Tool = Tool::Trim;
 
 /// Beschriftung eines Werkzeugs in der aktuellen Sprache.
 pub fn tool_label(tool: Tool) -> String {
@@ -48,6 +55,9 @@ pub fn tool_label(tool: Tool) -> String {
         Tool::Ellipse => tr!("sketch-tool-ellipse"),
         Tool::Spline => tr!("sketch-tool-spline"),
         Tool::ProjectEdge => tr!("action-sketch-project-edge"),
+        Tool::Trim => tr!("action-sketch-trim"),
+        Tool::Extend => tr!("action-sketch-extend"),
+        Tool::Break => tr!("action-sketch-break"),
     }
 }
 
@@ -63,11 +73,14 @@ pub fn tool_hint(tool: Tool) -> String {
         Tool::Ellipse => tr!("sketch-tool-ellipse-hint"),
         Tool::Spline => tr!("sketch-tool-spline-hint"),
         Tool::ProjectEdge => tr!("sketch-tool-project-edge-hint"),
+        Tool::Trim => tr!("sketch-tool-trim-hint"),
+        Tool::Extend => tr!("sketch-tool-extend-hint"),
+        Tool::Break => tr!("sketch-tool-break-hint"),
     }
 }
 
 /// Werkzeuge der Skizzenleiste: Werkzeug, Beschriftung, Hinweis (in der aktuellen Sprache).
-pub fn tools() -> [(Tool, String, String); 9] {
+pub fn tools() -> [(Tool, String, String); 12] {
     TOOL_ORDER.map(|t| (t, tool_label(t), tool_hint(t)))
 }
 
@@ -375,7 +388,8 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     }
 }
 
-/// Werkzeugleiste: die neun Werkzeuge als Symbolknöpfe untereinander. Name (mit Taste, soweit
+/// Werkzeugleiste: die zwölf Werkzeuge als Symbolknöpfe untereinander, vor Stutzen, Dehnen und
+/// Brechen (Fusion „Ändern“) eine Trennlinie. Name (mit Taste, soweit
 /// das Werkzeug ein Kürzel hat) und Hinweis stehen im Hinweistext, der Name (für
 /// Bildschirmleser) in der Knopfbeschreibung. Ein Klick wählt wie die Taste
 /// ([`SketchSession::choose_tool`]).
@@ -410,6 +424,9 @@ fn strip_field(
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = shell::STRIP_SPACING;
                     for (tool, label, hint) in tools() {
+                        if tool == MODIFY_FIRST {
+                            strip_separator(ui, dark);
+                        }
                         let selected = se.tool == tool;
                         // Name mit Taste („Linie (L)“), ohne Eintrag in der Tabelle nur der
                         // Name.
@@ -421,6 +438,9 @@ fn strip_field(
                             strip_button(ui, icons::sketch_tool_icon(tool), &label, selected, dark)
                                 .on_hover_ui(|ui| {
                                     ui.strong(&title);
+                                    if tool.is_modify() {
+                                        ui.label(tr!("sketch-strip-modify", tool = label.clone()));
+                                    }
                                     ui.label(&hint);
                                 });
                         if r.clicked() {
@@ -432,6 +452,20 @@ fn strip_field(
         },
     );
     ctx.data_mut(|d| d.insert_temp(strip_buttons_key(), seen));
+}
+
+/// Trennlinie der Leiste: [`shell::STRIP_SEPARATOR_H`] hoch (zusätzlich zum Abstand der
+/// Knöpfe), mittig ein waagerechter Strich in der Randfarbe.
+fn strip_separator(ui: &mut egui::Ui, dark: bool) {
+    let top = ui.cursor().top() - shell::STRIP_SPACING;
+    ui.add_space(shell::STRIP_SEPARATOR_H);
+    let y = (top + ui.cursor().top()) / 2.0;
+    let x = ui.max_rect().x_range();
+    ui.painter().hline(
+        x.min + 4.0..=x.max - 4.0,
+        y,
+        egui::Stroke::new(1.0, theme::palette(dark).border_subtle),
+    );
 }
 
 /// Knopf der Werkzeugleiste: 36 × 36, nur Symbol; gewählt mit neutraler Fläche `bg_active`,

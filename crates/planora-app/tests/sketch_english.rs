@@ -248,11 +248,14 @@ fn sketch_speaks_english() {
                 "Arc",
                 "Ellipse",
                 "Spline",
-                "Copy body edge"
+                "Copy body edge",
+                "Trim",
+                "Extend",
+                "Break"
             ]
         );
         let buttons = sketch_panel::strip_buttons(&c);
-        assert_eq!(buttons.len(), 9);
+        assert_eq!(buttons.len(), 12);
         for (tool, label, hint) in tools {
             let (_, r) = buttons.iter().find(|(l, _)| *l == label).unwrap();
             frame(&c, &mut app, vec![moved(r.center())]);

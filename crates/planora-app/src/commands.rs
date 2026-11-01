@@ -189,7 +189,10 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
         Action::SketchLine
         | Action::SketchRectangle
         | Action::SketchCircle
-        | Action::SketchProjectEdge => {
+        | Action::SketchProjectEdge
+        | Action::SketchTrim
+        | Action::SketchExtend
+        | Action::SketchBreak => {
             if let Some(tool) = a.sketch_tool()
                 && let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut()
             {

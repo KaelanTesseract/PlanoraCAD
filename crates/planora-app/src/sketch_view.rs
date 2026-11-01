@@ -515,6 +515,27 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         }
     }
 
+    // Stutzen durch Ziehen: jede überfahrene Kurve wird gestutzt (ein Schritt, da der Verlauf
+    // erst nach dem Loslassen fortgeschrieben wird).
+    if se.tool == Tool::Trim && !panning {
+        if response.drag_started_by(PointerButton::Primary) && !shift {
+            let origin = ui.input(|i| i.pointer.press_origin());
+            if let Some(start) = origin.and_then(|p| map.to_sketch(p)) {
+                let r = origin.and_then(|p| map.radius_at(p)).unwrap_or(radius);
+                se.begin_trim_drag(sk, start, r);
+            }
+        }
+        if se.trim_drag.is_some()
+            && response.dragged_by(PointerButton::Primary)
+            && let Some(at) = at
+        {
+            se.trim_drag_to(sk, at, radius);
+        }
+    }
+    if se.trim_drag.is_some() && (response.drag_stopped() || !response.dragged()) {
+        se.end_trim_drag();
+    }
+
     // Klicks
     let mut project_at = None;
     // egui zählt Klicks nur als Doppel-/Dreifachklick, wenn sie höchstens `max_click_dist`
@@ -555,6 +576,10 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             se.delete_selection(sk);
         }
     }
+    // Vorschau von Stutzen, Dehnen und Brechen unter dem Mauszeiger (nach den Änderungen
+    // dieses Bilds).
+    let hover_at = response.hover_pos().and_then(|p| map.to_sketch(p));
+    se.update_hover(sk, hover_at, radius);
     let tool = se.tool;
 
     // Körperkante kopieren: Kante in der 3D-Szene wählen.
@@ -677,6 +702,14 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     }
 
     draw_preview(&painter, &map, sk, se, col.preview);
+
+    // Stutzen/Brechen: das Stück rot; Dehnen: der Weg zum neuen Ende rot gestrichelt.
+    if let Some(pl) = &se.hover_preview {
+        let stroke = Stroke::new(CURVE_WIDTH + 1.0, col.trim_highlight);
+        for path in map.paths(pl) {
+            draw_path(&painter, path, stroke, se.tool == Tool::Extend);
+        }
+    }
 
     // Abhängigkeiten und Maße
     let mut placed: Vec<Rect> = Vec::new();
