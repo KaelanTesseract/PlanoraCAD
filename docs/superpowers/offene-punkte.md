@@ -1999,7 +1999,7 @@ Abgeschlossen 2026-10-31 (gemergt in master als 99c72fa; Spec `specs/2026-10-31-
 
 Stand 2026-11-01 (Spec `specs/2026-10-31-skizzen-profile-design.md`, Plan `plans/2026-11-01-skizzen-profile.md`): Profile wie Fusion, Anklicken der Profile, mehrere Körper in einem Schritt, Stutzen, Dehnen, Brechen, Ellipsenbogen. Beschreibung in `docs/funktionen.md`, Abschnitt „Skizzen“. Alle automatischen Prüfungen (Format, Clippy, Tests, beide Messtests im Release, cargo deny) sind grün.
 
-**Stand:** Offen: Handtest in der App.
+**Stand:** Abgeschlossen 2026-11-01 (gemergt in master als 9c9db5a). Handtest in der App und GitHub-CI (Windows und Ubuntu) bestanden.
 
 **Abweichungen von Fusion**
 - Eingeklemmte Flächen (ein Loch berührt den Rand in einem Punkt, zwei Kreise berühren sich innen, sehr flache Ellipse) erscheinen als Profil, werden aber beim Extrudieren abgelehnt, weil der Kernel sich selbst berührende Umrisse nicht kann.
