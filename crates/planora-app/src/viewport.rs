@@ -86,9 +86,11 @@ pub fn scene_lines(state: &AppState) -> Vec<LineVertex> {
     if state.sketch_session.is_some() {
         let view = (cam.eye() - cam.target).normalize_or_zero();
         axis_lines(cam.target, cam.distance, &state.palette())
-            .chunks_exact(2)
-            .filter(|pair| {
-                let along = Vec3::from(pair[1].position) - Vec3::from(pair[0].position);
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .filter(|[from, to]| {
+                let along = Vec3::from(to.position) - Vec3::from(from.position);
                 along.normalize_or_zero().dot(view).abs() < AXIS_TOWARD_VIEWER
             })
             .flatten()
