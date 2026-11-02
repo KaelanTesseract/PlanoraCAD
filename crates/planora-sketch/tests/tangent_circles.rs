@@ -1,6 +1,5 @@
-//! Tangentialkreise (Skizzen 3, Task 3): Der Zeiger wählt die Lösung, Linien rechnen analytisch,
-//! alles andere über den Solver in einer Wegwerfskizze. Der Solver der echten Skizze nimmt danach
-//! nie still eine andere Lösung.
+//! Tangentialkreise (Skizzen 3, Task 3): Der Zeiger wählt unter allen Lösungen, gerechnet wird
+//! analytisch. Der Solver der echten Skizze nimmt danach nie still eine andere Lösung.
 
 use planora_math::{DVec2, Frame, Tolerance};
 use planora_sketch::ConstraintKind as K;
@@ -344,10 +343,10 @@ fn mixed_solution_touches_all_three_and_follows_the_pointer() {
         let e = tangent_error(&s, c, m, r);
         assert!(e < 1e-6, "Abweichung {e}");
     }
-    // Außen an beiden runden Kurven; von Hand aus den drei Gleichungen: r ≈ 13,4 auf der Seite des
-    // Zeigers. Die Lösung, die beide Rundungen umschließt (r ≈ 24,9), liegt weiter weg.
-    assert!(m.distance(v(16.49, 13.4)) < 0.02, "{m:?}");
-    assert!((r - 13.4).abs() < 0.02, "{r}");
+    assert_closest((m, r), v(15.0, 10.0), &by_hand(0.0));
+    // Von Hand: Diese Lösung umschließt den Kreis und liegt außen am Bogen.
+    assert!(m.distance(v(27.114, 19.189)) < 0.01, "{m:?}");
+    assert!((r - 19.189).abs() < 0.01, "{r}");
 }
 
 #[test]
@@ -471,8 +470,7 @@ fn result_stays_put_in_the_real_sketch_parallel_and_crossing() {
 fn result_stays_put_in_the_real_sketch_mixed() {
     let mut s = sketch();
     let t = mixed(&mut s);
-    let seen = check_grid(&s, t, 1.0);
-    assert!(seen > pointers().len() / 2, "nur {seen} Lösungen");
+    assert_eq!(check_grid(&s, t, 1.0), pointers().len(), "immer lösbar");
 }
 
 #[test]
@@ -483,13 +481,12 @@ fn result_stays_put_in_the_real_sketch_circles_and_arcs_only() {
         arc(&mut s, (25.0, 3.0), 5.0, 1.0, 4.0),
         arc(&mut s, (10.0, 28.0), 7.0, 3.0, 6.0),
     ];
-    let seen = check_grid(&s, t, 1.0);
-    assert!(seen > pointers().len() / 2, "nur {seen} Lösungen");
+    assert_eq!(check_grid(&s, t, 1.0), pointers().len(), "immer lösbar");
 }
 
 #[test]
 fn result_stays_put_far_from_the_origin() {
-    // 100 m vom Ursprung: Die strengere Toleranz der Wegwerfskizze darf hier nicht scheitern.
+    // 100 m vom Ursprung: Auch dort reicht die Genauigkeit für jede der acht Lösungen.
     let o = 1e5;
     let mut s = sketch();
     let t = [
@@ -497,9 +494,180 @@ fn result_stays_put_far_from_the_origin() {
         circle(&mut s, (o, o + 30.0), 10.0),
         arc(&mut s, (o + 30.0, o + 30.0), 8.0, 2.0, 5.0),
     ];
-    let (m, r) = tangent_circle_three(&s, t, v(o + 15.0, o + 10.0)).expect("Lösung");
-    assert!(m.distance(v(o + 16.49, o + 13.4)) < 0.02, "{m:?}");
-    assert_stays(&s, t, m, r, "weit draußen");
+    let all = by_hand(o);
+    let got = tangent_circle_three(&s, t, v(o + 15.0, o + 10.0)).expect("Lösung");
+    assert_closest(got, v(o + 15.0, o + 10.0), &all);
+    for &(m, r) in &all {
+        let p = m + v(0.6, 0.8) * r;
+        let got = tangent_circle_three(&s, t, p).expect("Lösung");
+        assert_closest(got, p, &all);
+        assert_stays(&s, t, got.0, got.1, &format!("weit draußen, r {r}"));
+    }
+}
+
+// ---------- Alle Lösungen gegen die Rechnung von Hand ----------
+
+/// Alle Lösungen des Probelauf-Beispiels, um `o` in beide Richtungen verschoben, unabhängig vom
+/// Modul aus den acht Vorzeichen: Die Linie gibt `y = s·r`, die Differenz der Kreisgleichungen
+/// `x` linear in `r`, der Rest eine quadratische Gleichung in `r`.
+fn by_hand(o: f64) -> Vec<(DVec2, f64)> {
+    let mut out: Vec<(DVec2, f64)> = Vec::new();
+    for s in [1.0, -1.0] {
+        for s1 in [1.0, -1.0] {
+            for s2 in [1.0, -1.0] {
+                // x² + (s·r − 30)² = (r + 10·s1)² und (x − 30)² + (s·r − 30)² = (r + 8·s2)²
+                let (p, q) = (936.0 / 60.0, (20.0 * s1 - 16.0 * s2) / 60.0);
+                let (a, b, c) = (q * q, 2.0 * p * q - 60.0 * s - 20.0 * s1, p * p + 800.0);
+                let disc: f64 = b * b - 4.0 * a * c;
+                if disc < 0.0 {
+                    continue;
+                }
+                for r in [
+                    (-b + disc.sqrt()) / (2.0 * a),
+                    (-b - disc.sqrt()) / (2.0 * a),
+                ] {
+                    if r > TOL {
+                        out.push((v(o + p + q * r, o + s * r), r));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Die Regel aus Entscheidung 8, hier zur Probe von Hand über alle Lösungen.
+fn assert_closest(got: (DVec2, f64), p: DVec2, all: &[(DVec2, f64)]) {
+    let rim = |&(m, r): &(DVec2, f64)| (m.distance(p) - r).abs();
+    let best_rim = all.iter().map(rim).fold(f64::INFINITY, f64::min);
+    let best = all
+        .iter()
+        .filter(|c| rim(c) <= best_rim + TOL)
+        .min_by(|a, b| a.0.distance(p).total_cmp(&b.0.distance(p)))
+        .unwrap();
+    assert!(
+        got.0.distance(best.0) < 1e-6 && (got.1 - best.1).abs() < 1e-6,
+        "Zeiger {p:?}: bekommen {got:?}, am nächsten liegt {best:?}"
+    );
+}
+
+#[test]
+fn the_example_has_eight_solutions_by_hand() {
+    let all = by_hand(0.0);
+    assert_eq!(all.len(), 8, "{all:?}");
+    let mut s = sketch();
+    let t = mixed(&mut s);
+    for &(m, r) in &all {
+        for c in t {
+            let e = tangent_error(&s, c, m, r);
+            assert!(e < 1e-6, "{m:?} r {r}: Abweichung {e}");
+        }
+    }
+}
+
+#[test]
+fn pointer_on_a_ring_gets_the_closest_of_all_solutions() {
+    let all = by_hand(0.0);
+    let mut s = sketch();
+    let t = mixed(&mut s);
+    for radius in [5.0, 25.0, 60.0] {
+        for k in 0..24 {
+            let a = f64::from(k) * std::f64::consts::TAU / 24.0;
+            let p = v(15.0, 20.0) + v(a.cos(), a.sin()) * radius;
+            let got = tangent_circle_three(&s, t, p).expect("Lösung");
+            assert_closest(got, p, &all);
+        }
+    }
+}
+
+#[test]
+fn pointer_on_the_rim_of_any_solution_gets_that_solution() {
+    let all = by_hand(0.0);
+    let mut s = sketch();
+    let t = mixed(&mut s);
+    for &(m, r) in &all {
+        for k in 0..24 {
+            let a = f64::from(k) * std::f64::consts::TAU / 24.0;
+            let p = m + v(a.cos(), a.sin()) * r;
+            let got = tangent_circle_three(&s, t, p).expect("Lösung");
+            assert_closest(got, p, &all);
+            assert!(
+                got.0.distance(m) < 1e-6 && (got.1 - r).abs() < 1e-6,
+                "Zeiger {p:?} auf der Kreislinie von {m:?} r {r}: bekommen {got:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn every_branch_of_the_example_is_held_by_the_real_solver() {
+    let mut s = sketch();
+    let t = mixed(&mut s);
+    for (m, r) in by_hand(0.0) {
+        // Die Werte, die die Funktion liefert, nicht die der Probe.
+        let got = tangent_circle_three(&s, t, m + v(0.0, r)).expect("Lösung");
+        assert!(got.0.distance(m) < 1e-6, "{got:?} statt {m:?}");
+        let what = format!("Lösung {m:?} r {r}");
+        assert_stays(&s, t, got.0, got.1, &what);
+        assert_fully_defined(&s, t, got.0, got.1, &what);
+    }
+}
+
+#[test]
+fn the_example_always_has_a_result() {
+    let mut s = sketch();
+    let t = mixed(&mut s);
+    let mut none = 0;
+    let mut total = 0;
+    for i in -40..=70 {
+        for j in -60..=80 {
+            total += 1;
+            let p = v(f64::from(i) + 0.37, f64::from(j) + 0.11);
+            if tangent_circle_three(&s, t, p).is_none() {
+                none += 1;
+            }
+        }
+    }
+    assert_eq!(none, 0, "{none} von {total} Zeigerlagen ohne Ergebnis");
+}
+
+#[test]
+fn degenerate_arrangements_still_give_their_solutions() {
+    // Alle Mitten auf einer Geraden: gespiegelte Lösungen oben und unten.
+    let mut s = sketch();
+    let t = [
+        circle(&mut s, (0.0, 0.0), 2.0),
+        circle(&mut s, (10.0, 0.0), 2.0),
+        circle(&mut s, (20.0, 0.0), 2.0),
+    ];
+    for sign in [1.0, -1.0] {
+        let p = v(5.0, sign * 6.0);
+        let (m, r) = tangent_circle_three(&s, t, p).expect("Lösung");
+        for c in t {
+            let e = tangent_error(&s, c, m, r);
+            assert!(e < 1e-9, "{m:?} r {r}: Abweichung {e}");
+        }
+        assert_stays(&s, t, m, r, "Mitten auf einer Geraden");
+    }
+    // Zwei parallele Linien und ein Kreis dazwischen: r = halber Abstand; der Zeiger wählt die Lösung außen am Kreis.
+    let mut s = sketch();
+    let t = [
+        line(&mut s, (-50.0, 0.0), (50.0, 0.0)),
+        line(&mut s, (50.0, 10.0), (-50.0, 10.0)),
+        circle(&mut s, (0.0, 5.0), 2.0),
+    ];
+    let x = 7.0;
+    assert_circle(tangent_circle_three(&s, t, v(13.0, 5.0)), (x, 5.0), 5.0);
+    assert_circle(tangent_circle_three(&s, t, v(-13.0, 5.0)), (-x, 5.0), 5.0);
+    assert_stays(&s, t, v(x, 5.0), 5.0, "parallel und Kreis");
+    // Der Kreis liegt weit außerhalb des Streifens: Es gibt keine Lösung.
+    let mut s = sketch();
+    let t = [
+        line(&mut s, (-50.0, 0.0), (50.0, 0.0)),
+        line(&mut s, (-50.0, 10.0), (50.0, 10.0)),
+        circle(&mut s, (0.0, 40.0), 2.0),
+    ];
+    assert_eq!(tangent_circle_three(&s, t, v(3.0, 5.0)), None);
 }
 
 // ---------- Rein und reproduzierbar ----------

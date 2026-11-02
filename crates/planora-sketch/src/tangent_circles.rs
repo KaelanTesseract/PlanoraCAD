@@ -1,22 +1,19 @@
 //! Tangentialkreise: zwei Linien mit Zeiger, drei Kurven (Linie, Kreis, Bogen) mit Zeiger.
 //!
-//! Reine Funktionen: Die Skizze bleibt unverändert, gleiche Eingabe gibt bitgleich dasselbe; so
-//! rechnen Vorschau und Klick dasselbe. Nur Linien rechnen analytisch, alles andere der Solver in
-//! einer Wegwerfskizze mit festen Kopien der Kurven, damit nichts Vorhandenes rutscht.
+//! Reine Funktionen und durchweg analytisch: Die Skizze bleibt unverändert, gleiche Eingabe gibt
+//! bitgleich dasselbe; so rechnen Vorschau und Klick dasselbe.
 //!
 //! Eine Linie gilt als unbegrenzt, ein Bogen als ganzer Kreis, genau wie bei `Tangent`.
 
-use crate::constraint::ConstraintKind;
 use crate::model::{CurveId, CurveKind, MAX_COORD, Sketch};
-use planora_math::{DVec2, Frame, Tolerance};
+use planora_math::{DVec2, Tolerance};
 
-/// Untere Grenze des Startradius im Solver (mm).
-const MIN_START_RADIUS: f64 = 1e-3;
-/// Die Wegwerfskizze rechnet um diesen Faktor strenger als die echte Skizze. Der Solver hält auch
-/// `Fixed` und `Radius` nur im Rahmen seiner Residuengrenze, die Kopien dürfen also ein wenig
-/// wandern. Bei gleicher Toleranz läge das Ergebnis an den echten Kurven knapp über der Grenze
-/// (gemessen 1,06e-8 mm bei 1e-8), und `solve` in der echten Skizze schöbe alle freien Kurven nach.
-const THROWAWAY_TOLERANCE: f64 = 1e-2;
+/// Anteil von `tol.linear`, bis zu dem eine Lösung die Kurven treffen muss; der Solver rechnet
+/// erst darüber und schöbe sonst freie Kurven in der echten Skizze nach.
+const HELD_RESIDUAL: f64 = 1e-2;
+/// Betrag der Determinante der drei Berührgleichungen (Zeilen etwa Länge 1), bis zu dem eine
+/// Lösung als nicht bestimmt gilt.
+const MIN_DETERMINANT: f64 = 1e-7;
 
 /// Kurve, die ein Tangentialkreis berühren kann.
 #[derive(Clone, Copy)]
@@ -175,112 +172,167 @@ pub fn tangent_circle_three(
     }
     let shapes = [shape_of(sk, c0)?, shape_of(sk, c1)?, shape_of(sk, c2)?];
     let tol = sk.tolerance();
-    let solutions = if shapes.iter().all(|s| matches!(s, Shape::Line { .. })) {
-        three_lines(&shapes, tol)
-    } else {
-        through_solver(&shapes, pointer, tol)
-    };
-    nearest_to_pointer(&solutions, pointer, tol.linear)
+    nearest_to_pointer(&all_solutions(&shapes, tol), pointer, tol.linear)
 }
 
-/// Alle acht Vorzeichen der Gleichungen `sᵢ·(nᵢ·m − oᵢ) = r`; die Zeile 0 von den anderen
-/// abgezogen bleibt ein 2×2-System für die Mitte.
-fn three_lines(shapes: &[Shape; 3], tol: &Tolerance) -> Vec<(DVec2, f64)> {
-    let row = |s: &Shape| match *s {
-        Shape::Line { a, normal, .. } => (normal, normal.dot(a)),
-        Shape::Round { .. } => unreachable!("only called with lines"),
-    };
-    let rows = [row(&shapes[0]), row(&shapes[1]), row(&shapes[2])];
-    let mut out: Vec<(DVec2, f64)> = Vec::new();
-    for mask in 0..8u8 {
-        let sign = |i: u8| if mask & (1 << i) == 0 { 1.0 } else { -1.0 };
-        let (s0, s1, s2) = (sign(0), sign(1), sign(2));
-        let (n0, o0) = rows[0];
-        let (n1, o1) = rows[1];
-        let (n2, o2) = rows[2];
-        let (u, w) = (n1 * s1 - n0 * s0, n2 * s2 - n0 * s0);
-        let det = u.perp_dot(w);
-        if det.abs() <= tol.angular {
-            continue;
-        }
-        let (e1, e2) = (s1 * o1 - s0 * o0, s2 * o2 - s0 * o0);
-        let center = DVec2::new(e1 * w.y - e2 * u.y, u.x * e2 - w.x * e1) / det;
-        let radius = s0 * (n0.dot(center) - o0);
-        if acceptable(shapes, center, radius, tol.linear) {
-            push_unique(&mut out, center, radius, tol.linear);
-        }
-    }
-    out
-}
-
-/// Löst aus zwei Startlagen: Mitte am Zeiger, Radius = kleinster und größter Abstand zu den Kurven.
-fn through_solver(shapes: &[Shape; 3], pointer: DVec2, tol: &Tolerance) -> Vec<(DVec2, f64)> {
-    let dist = shapes.map(|s| s.distance(pointer));
-    let least = dist[0].min(dist[1]).min(dist[2]).max(MIN_START_RADIUS);
-    let most = dist[0].max(dist[1]).max(dist[2]).max(MIN_START_RADIUS);
+/// Alle Kreise an den drei Kurven, nach Art des Apollonios: je Kurve ein Vorzeichen `s`.
+/// Eine Linie gibt `n·m − d = s·r`, ein Kreis `|m − o|² = (r + s·ρ)²`. Mit `q = |m|² − r²` sind das
+/// drei lineare Gleichungen in `(x, y, r, q)`, ihre Lösungen eine Gerade; darauf ergibt
+/// `q = |m|² − r²` eine quadratische Gleichung. Gerechnet wird um die Mitte der Kurven und in
+/// deren Größe, damit Lage und Maßstab die Genauigkeit nicht drücken.
+fn all_solutions(shapes: &[Shape; 3], tol: &Tolerance) -> Vec<(DVec2, f64)> {
+    let (origin, scale) = frame_of(shapes);
     let mut out = Vec::new();
-    for start in [least, most] {
-        if let Some((center, radius)) = solve_from(shapes, pointer, start, tol) {
-            push_unique(&mut out, center, radius, tol.linear);
+    for mask in 0..8u8 {
+        let signs = [0, 1, 2].map(|i| if mask & (1 << i) == 0 { 1.0 } else { -1.0 });
+        let rows = [0, 1, 2].map(|i| equation(&shapes[i], signs[i], origin, scale));
+        let Some((point, dir)) = solution_line(rows, tol.angular) else {
+            continue;
+        };
+        let at = |t: f64| std::array::from_fn::<f64, 4, _>(|k| point[k] + t * dir[k]);
+        // |m|² − r² − q = 0 entlang der Geraden.
+        let form = |u: &[f64; 4], w: &[f64; 4]| u[0] * w[0] + u[1] * w[1] - u[2] * w[2];
+        let a = form(&dir, &dir);
+        let b = 2.0 * form(&point, &dir) - dir[3];
+        let c = form(&point, &point) - point[3];
+        for t in quadratic_roots(a, b, c) {
+            let [x, y, r, _] = at(t);
+            let (center, radius) = (origin + DVec2::new(x, y) * scale, r * scale);
+            if touches_all(shapes, signs, center, radius, tol.linear) {
+                push_unique(&mut out, center, radius, tol.linear);
+            }
         }
     }
     out
 }
 
-/// Ein Lauf in der Wegwerfskizze. Zählt nur, wenn der Kreis voll bestimmt ist und nicht mit einer
-/// der vorgegebenen Kurven zusammenfällt.
-fn solve_from(
-    shapes: &[Shape; 3],
-    center: DVec2,
-    radius: f64,
-    tol: &Tolerance,
-) -> Option<(DVec2, f64)> {
-    let strict = Tolerance {
-        linear: tol.linear * THROWAWAY_TOLERANCE,
-        ..*tol
+/// Bezugspunkt und Maßstab: Schwerpunkt der Kurven, größte vorkommende Länge.
+fn frame_of(shapes: &[Shape; 3]) -> (DVec2, f64) {
+    let reference = |s: &Shape| match *s {
+        Shape::Line { a, b, .. } => (a + b) / 2.0,
+        Shape::Round { center, .. } => center,
     };
-    let mut t = Sketch::new(Frame::WORLD, "", strict);
-    let mut copies = Vec::with_capacity(3);
-    for s in shapes {
-        let copy = match *s {
-            Shape::Line { a, b, .. } => {
-                let (pa, pb) = (t.add_point(a.x, a.y).ok()?, t.add_point(b.x, b.y).ok()?);
-                t.add_constraint(ConstraintKind::Fixed(pa, a.x, a.y)).ok()?;
-                t.add_constraint(ConstraintKind::Fixed(pb, b.x, b.y)).ok()?;
-                t.add_line(pa, pb).ok()?
+    let origin = shapes.iter().map(reference).sum::<DVec2>() / 3.0;
+    let scale = shapes
+        .iter()
+        .map(|s| match *s {
+            Shape::Line { a, normal, .. } => normal.dot(a - origin).abs(),
+            Shape::Round { center, radius } => center.distance(origin).max(radius),
+        })
+        .fold(0.0, f64::max);
+    (origin, if scale > 0.0 { scale } else { 1.0 })
+}
+
+/// Zeile `[x, y, r, q, rechte Seite]` im Rahmen aus [`frame_of`], Koeffizienten auf Länge 1.
+fn equation(shape: &Shape, s: f64, origin: DVec2, scale: f64) -> [f64; 5] {
+    let row = match *shape {
+        Shape::Line { a, normal, .. } => {
+            [normal.x, normal.y, -s, 0.0, normal.dot(a - origin) / scale]
+        }
+        Shape::Round { center, radius } => {
+            let (m, rho) = ((center - origin) / scale, radius / scale);
+            [
+                -2.0 * m.x,
+                -2.0 * m.y,
+                -2.0 * s * rho,
+                1.0,
+                rho * rho - m.dot(m),
+            ]
+        }
+    };
+    let len = row[..4].iter().map(|v| v * v).sum::<f64>().sqrt();
+    row.map(|v| v / len)
+}
+
+/// Lösungsgerade `Punkt + t·Richtung` von drei Gleichungen in vier Unbekannten, Gauß-Jordan mit
+/// voller Pivotsuche. `None` bei Rang unter 3 (Pivot ≤ `min_pivot`): Dann gibt es keine oder keine
+/// bestimmte Lösung, etwa bei parallelen Linien mit gleichem Vorzeichen oder gleichen Kreisen.
+fn solution_line(mut m: [[f64; 5]; 3], min_pivot: f64) -> Option<([f64; 4], [f64; 4])> {
+    let mut columns = [0, 1, 2, 3];
+    for k in 0..3 {
+        let (mut row, mut col, mut best) = (k, k, -1.0);
+        for (i, line) in m.iter().enumerate().skip(k) {
+            for (j, &c) in columns.iter().enumerate().skip(k) {
+                if line[c].abs() > best {
+                    (row, col, best) = (i, j, line[c].abs());
+                }
             }
-            Shape::Round { center, radius } => {
-                let m = t.add_point(center.x, center.y).ok()?;
-                t.add_constraint(ConstraintKind::Fixed(m, center.x, center.y))
-                    .ok()?;
-                let c = t.add_circle(m, radius).ok()?;
-                t.add_constraint(ConstraintKind::Radius(c, radius)).ok()?;
-                c
+        }
+        if best <= min_pivot {
+            return None;
+        }
+        m.swap(k, row);
+        columns.swap(k, col);
+        let pivot_line = m[k].map(|v| v / m[k][columns[k]]);
+        m[k] = pivot_line;
+        for (i, line) in m.iter_mut().enumerate() {
+            if i != k {
+                let f = line[columns[k]];
+                for (v, p) in line.iter_mut().zip(pivot_line) {
+                    *v -= f * p;
+                }
+            }
+        }
+    }
+    let free = columns[3];
+    let (mut point, mut dir) = ([0.0; 4], [0.0; 4]);
+    dir[free] = 1.0;
+    for k in 0..3 {
+        point[columns[k]] = m[k][4];
+        dir[columns[k]] = -m[k][free];
+    }
+    Some((point, dir))
+}
+
+/// Nullstellen von `a·t² + b·t + c`, in der stabilen Form; nicht endliche Werte bei `a = 0` oder
+/// doppelter Null fallen später in [`touches_all`] heraus.
+fn quadratic_roots(a: f64, b: f64, c: f64) -> Vec<f64> {
+    let disc = b * b - 4.0 * a * c;
+    if disc.is_nan() || disc < 0.0 {
+        return Vec::new();
+    }
+    let w = -(b + disc.sqrt().copysign(b)) / 2.0;
+    vec![w / a, c / w]
+}
+
+/// Berührt der Kreis alle drei Kurven mit diesen Vorzeichen so genau, dass der Solver der echten
+/// Skizze nichts mehr zu tun hat, und ist er dabei bestimmt? Eine vorgegebene Kurve selbst zählt
+/// nicht, auch keine Lösung, an der die Gleichungen abhängig werden (doppelte Nullstelle): Der
+/// Solver sähe dort eine überzählige Abhängigkeit.
+fn touches_all(shapes: &[Shape; 3], signs: [f64; 3], center: DVec2, radius: f64, tol: f64) -> bool {
+    if !acceptable(&[], center, radius, tol) {
+        return false;
+    }
+    let mut gradient = [[0.0; 3]; 3];
+    for (i, shape) in shapes.iter().enumerate() {
+        let s = signs[i];
+        let residual = match *shape {
+            Shape::Line { a, normal, .. } => {
+                gradient[i] = [normal.x, normal.y, -s];
+                normal.dot(center - a) - s * radius
+            }
+            Shape::Round {
+                center: o,
+                radius: rho,
+            } => {
+                let to = center - o;
+                let dist = to.length();
+                if dist <= tol {
+                    return false;
+                }
+                let reach = radius + s * rho;
+                gradient[i] = [to.x / dist, to.y / dist, -reach.signum()];
+                dist - reach.abs()
             }
         };
-        copies.push(copy);
+        if residual.abs() > HELD_RESIDUAL * tol {
+            return false;
+        }
     }
-    let m = t.add_point(center.x, center.y).ok()?;
-    let k = t.add_circle(m, radius).ok()?;
-    for copy in copies {
-        t.add_constraint(ConstraintKind::Tangent(copy, k)).ok()?;
-    }
-    let report = t.solve();
-    if report.status != crate::solver::SolveStatus::Solved
-        || report.dof != 0
-        || !report.redundant.is_empty()
-    {
-        return None;
-    }
-    let (center, radius) = (t.point_xy(m).ok()?, t.radius(k)?);
-    let is_given = shapes.iter().any(|s| match *s {
-        Shape::Round {
-            center: c,
-            radius: r,
-        } => c.distance(center) <= tol.linear && (r - radius).abs() <= tol.linear,
-        Shape::Line { .. } => false,
-    });
-    (!is_given && acceptable(&[], center, radius, tol.linear)).then_some((center, radius))
+    let [u, v, w] = gradient;
+    let det = u[0] * (v[1] * w[2] - v[2] * w[1]) - u[1] * (v[0] * w[2] - v[2] * w[0])
+        + u[2] * (v[0] * w[1] - v[1] * w[0]);
+    det.abs() > MIN_DETERMINANT
 }
 
 fn push_unique(out: &mut Vec<(DVec2, f64)>, center: DVec2, radius: f64, tol: f64) {

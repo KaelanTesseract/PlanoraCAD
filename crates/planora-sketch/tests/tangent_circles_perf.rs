@@ -1,4 +1,4 @@
-//! Messtest: Tangentialkreis über den Solver, 200 Zeigerlagen.
+//! Messtest: Tangentialkreis an Linie, Kreis und Bogen, 200 Zeigerlagen.
 //! `cargo test --release -p planora-sketch --test tangent_circles_perf -- --ignored --nocapture`
 
 use planora_math::{DVec2, Frame, Tolerance};
