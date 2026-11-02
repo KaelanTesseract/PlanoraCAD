@@ -14,6 +14,9 @@ const HELD_RESIDUAL: f64 = 1e-2;
 /// Betrag der Determinante der drei Berührgleichungen (Zeilen etwa Länge 1), bis zu dem eine
 /// Lösung als nicht bestimmt gilt.
 const MIN_DETERMINANT: f64 = 1e-7;
+/// Gewicht des Radius bei der Auswahl: Die Linie eines riesigen Kreises läuft fast gerade durch die
+/// Zeichnung und läge oft am nächsten am Zeiger, gemeint ist aber fast immer ein kleiner Kreis.
+const RADIUS_WEIGHT: f64 = 0.05;
 
 /// Kurve, die ein Tangentialkreis berühren kann.
 #[derive(Clone, Copy)]
@@ -158,9 +161,9 @@ pub fn tangent_circle_two_lines(
     acceptable(&[s0, s1], center, radius, tol.linear).then_some((center, radius))
 }
 
-/// Kreis an drei Kurven (Linie, Kreis, Bogen). Von allen Lösungen gilt die mit dem kleinsten
-/// Abstand Zeiger–Kreislinie, bei Gleichstand (≤ `tol.linear`) die mit dem kleinsten Abstand
-/// Zeiger–Mitte. `None`, wenn es keine gibt oder eine Kurve nicht taugt.
+/// Kreis an drei Kurven (Linie, Kreis, Bogen). Von allen Lösungen gilt die mit der kleinsten
+/// Wertung `Abstand Zeiger–Kreislinie + RADIUS_WEIGHT · r`, bei Gleichstand (≤ `tol.linear`) die mit
+/// dem kleinsten Abstand Zeiger–Mitte. `None`, wenn es keine gibt oder eine Kurve nicht taugt.
 pub fn tangent_circle_three(
     sk: &Sketch,
     curves: [CurveId; 3],
@@ -172,7 +175,7 @@ pub fn tangent_circle_three(
     }
     let shapes = [shape_of(sk, c0)?, shape_of(sk, c1)?, shape_of(sk, c2)?];
     let tol = sk.tolerance();
-    nearest_to_pointer(&all_solutions(&shapes, tol), pointer, tol.linear)
+    best_for_pointer(&all_solutions(&shapes, tol), pointer, tol.linear)
 }
 
 /// Alle Kreise an den drei Kurven, nach Art des Apollonios: je Kurve ein Vorzeichen `s`.
@@ -344,16 +347,27 @@ fn push_unique(out: &mut Vec<(DVec2, f64)>, center: DVec2, radius: f64, tol: f64
     }
 }
 
-fn nearest_to_pointer(
-    solutions: &[(DVec2, f64)],
-    pointer: DVec2,
-    tol: f64,
-) -> Option<(DVec2, f64)> {
-    let rim = |&(c, r): &(DVec2, f64)| (c.distance(pointer) - r).abs();
-    let best_rim = solutions.iter().map(rim).min_by(f64::total_cmp)?;
+fn best_for_pointer(solutions: &[(DVec2, f64)], pointer: DVec2, tol: f64) -> Option<(DVec2, f64)> {
+    let score = |&(c, r): &(DVec2, f64)| (c.distance(pointer) - r).abs() + RADIUS_WEIGHT * r;
+    let best = solutions.iter().map(score).min_by(f64::total_cmp)?;
     solutions
         .iter()
-        .filter(|s| rim(s) <= best_rim + tol)
+        .filter(|s| score(s) <= best + tol)
         .min_by(|a, b| a.0.distance(pointer).total_cmp(&b.0.distance(pointer)))
         .copied()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_single_huge_solution_still_comes_back() {
+        let only = (DVec2::new(0.0, 1e6), 1e6);
+        assert_eq!(
+            best_for_pointer(&[only], DVec2::new(3.0, 5.0), 1e-6),
+            Some(only)
+        );
+        assert_eq!(best_for_pointer(&[], DVec2::new(3.0, 5.0), 1e-6), None);
+    }
 }

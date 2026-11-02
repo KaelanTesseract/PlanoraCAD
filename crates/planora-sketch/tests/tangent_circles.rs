@@ -1,5 +1,5 @@
-//! Tangentialkreise (Skizzen 3, Task 3): Der Zeiger wählt unter allen Lösungen, gerechnet wird
-//! analytisch. Der Solver der echten Skizze nimmt danach nie still eine andere Lösung.
+//! Tangentialkreise (Skizzen 3, Task 3): Der Zeiger wählt per Wertung unter allen Lösungen,
+//! gerechnet wird analytisch. Der Solver der echten Skizze nimmt danach nie still eine andere Lösung.
 
 use planora_math::{DVec2, Frame, Tolerance};
 use planora_sketch::ConstraintKind as K;
@@ -281,24 +281,28 @@ fn triangle_pointer_outside_gives_the_excircle_of_that_side() {
     let t = triangle(&mut s);
     // Hinter der Seite auf der x-Achse, der schrägen Seite und der Seite auf der y-Achse.
     assert_circle(tangent_circle_three(&s, t, v(1.5, -1.0)), (2.0, -2.0), 2.0);
-    assert_circle(tangent_circle_three(&s, t, v(4.0, 4.0)), (6.0, 6.0), 6.0);
+    assert_circle(tangent_circle_three(&s, t, v(5.0, 2.5)), (6.0, 6.0), 6.0);
     assert_circle(tangent_circle_three(&s, t, v(-1.0, 1.5)), (-3.0, 3.0), 3.0);
 }
 
 #[test]
-fn equal_rim_distance_prefers_the_nearer_center() {
+fn equal_score_prefers_the_nearer_center() {
+    // Zwei Lösungen mit gleichem Radius, (5,5) und (−5,5). Zwischen ihnen hat jeder Zeiger auf
+    // y = 5 denselben Abstand zu beiden Kreislinien, die Wertung ist also gleich. Beide Seiten
+    // zusammen schließen aus, dass nur die Reihenfolge der Lösungen entscheidet.
     let mut s = sketch();
-    let t = triangle(&mut s);
-    // Auf der Verbindung zwischen Inkreis (1,1) und Ankreis (6,6), außerhalb beider Kreise mit
-    // gleichem Abstand zur Kreislinie.
-    let along = 3.5 - 5.0 / (2.0 * 2f64.sqrt());
-    let p = v(along, along);
-    assert_circle(tangent_circle_three(&s, t, p), (1.0, 1.0), 1.0);
+    let t = [
+        line(&mut s, (0.0, 0.0), (20.0, 0.0)),
+        line(&mut s, (0.0, 10.0), (20.0, 10.0)),
+        line(&mut s, (0.0, 0.0), (0.0, 10.0)),
+    ];
+    assert_circle(tangent_circle_three(&s, t, v(2.0, 5.0)), (5.0, 5.0), 5.0);
+    assert_circle(tangent_circle_three(&s, t, v(-2.0, 5.0)), (-5.0, 5.0), 5.0);
     // Die Reihenfolge der Kurven entscheidet nichts.
     assert_circle(
-        tangent_circle_three(&s, [t[2], t[0], t[1]], p),
-        (1.0, 1.0),
-        1.0,
+        tangent_circle_three(&s, [t[2], t[0], t[1]], v(2.0, 5.0)),
+        (5.0, 5.0),
+        5.0,
     );
 }
 
@@ -498,9 +502,10 @@ fn result_stays_put_far_from_the_origin() {
     let got = tangent_circle_three(&s, t, v(o + 15.0, o + 10.0)).expect("Lösung");
     assert_closest(got, v(o + 15.0, o + 10.0), &all);
     for &(m, r) in &all {
-        let p = m + v(0.6, 0.8) * r;
+        let p = m + v(0.0, r);
         let got = tangent_circle_three(&s, t, p).expect("Lösung");
         assert_closest(got, p, &all);
+        assert!(got.0.distance(m) < 1e-6, "{got:?} statt {m:?}");
         assert_stays(&s, t, got.0, got.1, &format!("weit draußen, r {r}"));
     }
 }
@@ -536,18 +541,18 @@ fn by_hand(o: f64) -> Vec<(DVec2, f64)> {
     out
 }
 
-/// Die Regel aus Entscheidung 8, hier zur Probe von Hand über alle Lösungen.
+/// Die Wertung aus Entscheidung 8, hier zur Probe von Hand über alle Lösungen.
 fn assert_closest(got: (DVec2, f64), p: DVec2, all: &[(DVec2, f64)]) {
-    let rim = |&(m, r): &(DVec2, f64)| (m.distance(p) - r).abs();
-    let best_rim = all.iter().map(rim).fold(f64::INFINITY, f64::min);
+    let score = |&(m, r): &(DVec2, f64)| (m.distance(p) - r).abs() + 0.05 * r;
+    let best_score = all.iter().map(score).fold(f64::INFINITY, f64::min);
     let best = all
         .iter()
-        .filter(|c| rim(c) <= best_rim + TOL)
+        .filter(|c| score(c) <= best_score + TOL)
         .min_by(|a, b| a.0.distance(p).total_cmp(&b.0.distance(p)))
         .unwrap();
     assert!(
         got.0.distance(best.0) < 1e-6 && (got.1 - best.1).abs() < 1e-6,
-        "Zeiger {p:?}: bekommen {got:?}, am nächsten liegt {best:?}"
+        "Zeiger {p:?}: bekommen {got:?}, am besten liegt {best:?}"
     );
 }
 
@@ -566,7 +571,7 @@ fn the_example_has_eight_solutions_by_hand() {
 }
 
 #[test]
-fn pointer_on_a_ring_gets_the_closest_of_all_solutions() {
+fn pointer_on_a_ring_gets_the_best_score_of_all_solutions() {
     let all = by_hand(0.0);
     let mut s = sketch();
     let t = mixed(&mut s);
@@ -581,7 +586,7 @@ fn pointer_on_a_ring_gets_the_closest_of_all_solutions() {
 }
 
 #[test]
-fn pointer_on_the_rim_of_any_solution_gets_that_solution() {
+fn pointer_on_the_rim_of_any_solution_gets_the_best_score() {
     let all = by_hand(0.0);
     let mut s = sketch();
     let t = mixed(&mut s);
@@ -591,12 +596,73 @@ fn pointer_on_the_rim_of_any_solution_gets_that_solution() {
             let p = m + v(a.cos(), a.sin()) * r;
             let got = tangent_circle_three(&s, t, p).expect("Lösung");
             assert_closest(got, p, &all);
-            assert!(
-                got.0.distance(m) < 1e-6 && (got.1 - r).abs() < 1e-6,
-                "Zeiger {p:?} auf der Kreislinie von {m:?} r {r}: bekommen {got:?}"
-            );
         }
     }
+}
+
+#[test]
+fn every_solution_can_still_be_reached_with_the_pointer() {
+    // Auch die sehr großen: ganz oben auf ihrer Kreislinie, also weit weg von den übrigen.
+    let all = by_hand(0.0);
+    let mut s = sketch();
+    let t = mixed(&mut s);
+    for &(m, r) in &all {
+        let got = tangent_circle_three(&s, t, m + v(0.0, r)).expect("Lösung");
+        assert!(
+            got.0.distance(m) < 1e-6 && (got.1 - r).abs() < 1e-6,
+            "oben auf {m:?} r {r}: bekommen {got:?}"
+        );
+    }
+}
+
+#[test]
+fn near_the_curves_the_winner_is_not_a_huge_circle() {
+    let all = by_hand(0.0);
+    let smallest = all.iter().map(|c| c.1).fold(f64::INFINITY, f64::min);
+    let mut s = sketch();
+    let t = mixed(&mut s);
+    let (mut near, mut over_100, mut over_1000, mut largest) = (0, 0, 0, 0.0f64);
+    for i in -40..=70 {
+        for j in -60..=80 {
+            let p = v(f64::from(i) + 0.37, f64::from(j) + 0.11);
+            let to_curves = t
+                .iter()
+                .map(|&c| s.distance_to_curve(c, p).unwrap())
+                .fold(f64::INFINITY, f64::min);
+            if to_curves >= 15.0 {
+                continue;
+            }
+            near += 1;
+            let (_, r) = tangent_circle_three(&s, t, p).expect("Lösung");
+            largest = largest.max(r);
+            over_100 += usize::from(r >= 100.0);
+            over_1000 += usize::from(r > 1000.0);
+        }
+    }
+    println!("nah {near}, r >= 100: {over_100}, r > 1000: {over_1000}, größtes r {largest}");
+    assert_eq!(near, 5514);
+    assert!(smallest < 100.0);
+    assert_eq!(over_1000, 0, "größtes r {largest}");
+    // Das Gewicht 0,05 lässt r ≈ 143 und r ≈ 151 an 685 Lagen gewinnen, vor allem neben den Enden
+    // der Linie; unter 100 bleibt es hier erst ab etwa 0,3. Festgehalten, damit es auffällt.
+    assert_eq!(over_100, 685);
+    assert!(largest < 200.0, "größtes r {largest}");
+}
+
+#[test]
+fn only_huge_solutions_still_come_back() {
+    // Zwei parallele Linien im Abstand 20 m und eine Querlinie: Es gibt nur Kreise mit r = 10 m.
+    let mut s = sketch();
+    let t = [
+        line(&mut s, (0.0, 0.0), (20.0, 0.0)),
+        line(&mut s, (0.0, 20000.0), (20.0, 20000.0)),
+        line(&mut s, (0.0, 0.0), (0.0, 10.0)),
+    ];
+    assert_circle(
+        tangent_circle_three(&s, t, v(3.0, 5.0)),
+        (10000.0, 10000.0),
+        10000.0,
+    );
 }
 
 #[test]
@@ -604,7 +670,8 @@ fn every_branch_of_the_example_is_held_by_the_real_solver() {
     let mut s = sketch();
     let t = mixed(&mut s);
     for (m, r) in by_hand(0.0) {
-        // Die Werte, die die Funktion liefert, nicht die der Probe.
+        // Die Werte, die die Funktion liefert, nicht die der Probe: ganz oben auf der Kreislinie
+        // gewinnt jede Lösung.
         let got = tangent_circle_three(&s, t, m + v(0.0, r)).expect("Lösung");
         assert!(got.0.distance(m) < 1e-6, "{got:?} statt {m:?}");
         let what = format!("Lösung {m:?} r {r}");
