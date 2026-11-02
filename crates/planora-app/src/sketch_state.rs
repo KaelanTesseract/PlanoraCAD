@@ -5,16 +5,24 @@
 
 use crate::formula_field::resolve;
 use crate::msg::Msg;
+use crate::sketch_cursor::{CursorOptions, DrawCursor};
+use crate::sketch_input::{Created, DrawInput};
 use planora_feature::{FeatureId, ParamScope, ParamUnit, SketchFeature, constraint_unit};
 use planora_i18n::tr;
 use planora_kernel::{Edge, Id, Solid};
 use planora_math::DVec2;
+use planora_sketch::SketchError;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
 use planora_sketch::model::{CurveId, CurveKind, MAX_SPLINE_POINTS, PointId, Sketch};
+use planora_sketch::snap::{SnapHit, SnapIndex};
 use planora_sketch::solver::{Drag, SolveReport, SolveStatus};
+use std::collections::BTreeSet;
+use std::sync::Arc;
 
-/// Winkel zur Achse, unter dem eine Linie beim Zeichnen als waagerecht/senkrecht gilt.
-const AUTO_AXIS_ANGLE: f64 = 3.0 * std::f64::consts::PI / 180.0;
+pub use planora_sketch::snap::Snap;
+
+/// Schritte je Vollkreis für den Linienzug, gegen den der Auswahlrahmen prüft.
+const BOX_STEPS_PER_TURN: usize = 96;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
@@ -49,13 +57,6 @@ pub enum Item {
     Point(PointId),
     Curve(CurveId),
     Constraint(ConstraintId),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Snap {
-    None,
-    Point(PointId),
-    Curve(CurveId),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -145,7 +146,7 @@ pub fn formula_problem(sf: &SketchFeature, report: Option<&SolveReport>) -> Opti
 }
 
 /// Wert für die Skizze (Winkel in Bogenmaß) und Formel aus dem Text eines Maßfelds.
-fn dimension_input(
+pub(crate) fn dimension_input(
     text: &str,
     unit: ParamUnit,
     scope: &ParamScope,
@@ -166,6 +167,99 @@ pub enum Severity {
     Error,
 }
 
+/// Laufender Auswahlrahmen, in Bildschirmlagen.
+#[derive(Clone, Copy, Debug)]
+pub struct BoxSelect {
+    pub start: DVec2,
+    pub current: DVec2,
+    /// Umschalt beim Beginn: ergänzt die Auswahl, statt sie zu ersetzen.
+    pub extend: bool,
+}
+
+impl BoxSelect {
+    /// Von links nach rechts: Fenster (durchgezogen); sonst Kreuzung (gestrichelt).
+    pub fn is_window(&self) -> bool {
+        self.start.x <= self.current.x
+    }
+}
+
+/// Liegt `p` im achsenparallelen Rechteck `lo`–`hi` (Rand gehört dazu)?
+fn in_rect(p: DVec2, lo: DVec2, hi: DVec2) -> bool {
+    p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y
+}
+
+/// Hat die Strecke `a`–`b` einen Punkt im Rechteck `lo`–`hi`? (Abschneiden nach Liang–Barsky)
+fn segment_hits_rect(a: DVec2, b: DVec2, lo: DVec2, hi: DVec2) -> bool {
+    let d = b - a;
+    let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
+    for (from, step, min, max) in [(a.x, d.x, lo.x, hi.x), (a.y, d.y, lo.y, hi.y)] {
+        if step == 0.0 {
+            if from < min || from > max {
+                return false;
+            }
+        } else {
+            let (enter, leave) = ((min - from) / step, (max - from) / step);
+            t0 = t0.max(enter.min(leave));
+            t1 = t1.min(enter.max(leave));
+            if t0 > t1 {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Laufender Zug an einer Kurve. Die Ziele rechnen immer vom Start aus (`Start + Zeiger − Griff`),
+/// so springt nichts auf den Zeiger.
+#[derive(Clone, Debug)]
+pub struct CurveDrag {
+    /// Wo die Kurve gegriffen wurde.
+    pub grab: DVec2,
+    /// Die bewegten Punkte (ohne Doppelte) mit ihrer Lage beim Greifen.
+    pub start: Vec<(PointId, DVec2)>,
+    /// Einzelner Kreis am Rand: zieht den Radius; dazu Griffabstand von der Mitte minus Radius.
+    pub rim: Option<(CurveId, f64)>,
+    /// Die Skizze beim Greifen: Kommt der Zug ohne Änderung dorthin zurück, gilt wieder sie.
+    /// `None`, sobald mitten im Zug noch etwas anderes geändert wurde.
+    origin: Option<Sketch>,
+    /// Lösungsbericht zu `origin`: Was schon dort scheiterte, hält den Zug nicht auf.
+    baseline: SolveReport,
+    /// Stand nach dem letzten Bild; ein anderer heißt, dass mitten im Zug noch etwas geändert wurde.
+    frame_revision: u64,
+}
+
+impl CurveDrag {
+    /// Hat seit dem letzten Bild etwas anderes die Skizze geändert (etwa „Konstruktion“ per Taste),
+    /// gibt es keinen Stand mehr, zu dem der Zug zurückkehren dürfte, und der Vergleich gilt ab jetzt.
+    fn note_foreign_change(&mut self, sk: &Sketch) {
+        if sk.revision() != self.frame_revision {
+            self.origin = None;
+            self.baseline = sk.clone().solve();
+        }
+    }
+}
+
+/// Macht ein Bild des Zugs die Lage schlechter als beim Greifen? Ein schon vorhandener Widerspruch
+/// in einer fremden Gruppe zählt nicht.
+fn frame_is_worse(report: &SolveReport, baseline: &SolveReport) -> bool {
+    report.drag_failed
+        || (status_ok(baseline) && !status_ok(report))
+        || report
+            .conflicting
+            .iter()
+            .any(|c| !baseline.conflicting.contains(c))
+}
+
+/// Gleichen sich die Werte zweier Stände derselben Skizze bis auf die Toleranz?
+fn same_values(a: &Sketch, b: &Sketch) -> bool {
+    let linear = a.tolerance().linear;
+    a.variables().len() == b.variables().len()
+        && a.variables()
+            .iter()
+            .zip(b.variables())
+            .all(|(x, y)| (x - y).abs() <= linear)
+}
+
 /// Zustand des geöffneten Skizzen-Modus.
 #[derive(Clone, Debug)]
 pub struct SketchSession {
@@ -177,14 +271,41 @@ pub struct SketchSession {
     pub pending: Vec<PointId>,
     /// Noch nicht angelegte Eckpunkte (Rechteck, Ellipse).
     pub pending_pos: Vec<DVec2>,
+    /// Fang der noch nicht angelegten Eckpunkte in `pending_pos` (Rechteck: erste Ecke, Ellipse:
+    /// Ende der großen Achse); die Anbindung folgt beim Abschluss. Bogen: Fang der Mitte (nur eine
+    /// frei gesetzte Mitte rückt für die Tangente zurecht).
+    pub pending_snaps: Vec<SnapHit>,
     pub cursor: Option<DVec2>,
-    /// Beim Zeichnen von Linien automatisch waagerecht/senkrecht ergänzen.
+    /// Strg und Raster für den Zeiger ([`resolve_cursor`](Self::resolve_cursor)).
+    pub cursor_opts: CursorOptions,
+    /// Aufgelöster Zeiger dieses Bilds ([`update_cursor`](Self::update_cursor)).
+    pub draw_cursor: Option<DrawCursor>,
+    /// Fang-Index zum letzten gesehenen Stand der Skizze (nur in Zeichenwerkzeugen gebaut).
+    pub snap_index: Option<Arc<SnapIndex>>,
+    /// Beim Zeichnen automatisch waagerecht, senkrecht, parallel, rechtwinklig und tangential
+    /// ergänzen (die Anbindung an Fangziele bleibt auch ohne).
     pub auto_constrain: bool,
+    /// Letzte Linie des laufenden Linienzugs; was mit ihr zusammenhängt, ist kein Richtungsbezug.
+    pub line_chain: Option<CurveId>,
+    /// Bogen: Kurve, an der der gesetzte Anfang tangential weiterläuft; entsteht beim Abschluss.
+    pub auto_tangent: Option<CurveId>,
+    /// Felder am Zeiger mit den getippten Werten (siehe [`crate::sketch_input`]).
+    pub input: DrawInput,
+    /// Was der letzte Klick fertig angelegt hat.
+    pub created: Option<Created>,
     pub last_report: Option<SolveReport>,
     /// Meldung zum letzten Schritt; gespeichert als Grund und erst beim Zeichnen übersetzt
     /// ([`message_text`](Self::message_text)).
     pub message: Option<Msg>,
     pub dragging: Option<PointId>,
+    /// Laufender Zug an einer Kurve; gegriffene Punkte stehen in [`dragging`](Self::dragging).
+    pub curve_drag: Option<CurveDrag>,
+    /// Laufender Auswahlrahmen.
+    pub box_select: Option<BoxSelect>,
+    /// Die rechte Taste hat den Rahmen abgebrochen: Bis alle Maustasten los sind, ist kein Klick
+    /// ein Klick (egui meldet sonst das Loslassen der rechten oder linken Taste als solchen, und
+    /// der leerte die Auswahl).
+    pub box_aborted: bool,
     /// Zählt die Sprünge durch Rückgängig/Wiederholen ([`SketchSession::after_history_jump`]);
     /// Eingabefelder der Oberfläche, die zu einem älteren Zählerstand gehören, schließen.
     pub history_jumps: u64,
@@ -207,6 +328,10 @@ struct Backup {
     sketch: Sketch,
     pending: Vec<PointId>,
     pending_pos: Vec<DVec2>,
+    pending_snaps: Vec<SnapHit>,
+    line_chain: Option<CurveId>,
+    auto_tangent: Option<CurveId>,
+    input: DrawInput,
     selection: Vec<Item>,
     last_report: Option<SolveReport>,
 }
@@ -226,7 +351,7 @@ struct Sorted {
 
 /// Fehler einer Bibliothek als Meldung (der Text kommt von dort, bis die Bibliotheken übersetzt
 /// sind).
-fn err(e: impl std::fmt::Display) -> Msg {
+pub(crate) fn err(e: impl std::fmt::Display) -> Msg {
     Msg::Raw(e.to_string())
 }
 
@@ -256,11 +381,22 @@ impl SketchSession {
             selection: Vec::new(),
             pending: Vec::new(),
             pending_pos: Vec::new(),
+            pending_snaps: Vec::new(),
             cursor: None,
+            cursor_opts: CursorOptions::default(),
+            draw_cursor: None,
+            snap_index: None,
             auto_constrain: true,
+            line_chain: None,
+            auto_tangent: None,
+            input: DrawInput::default(),
+            created: None,
             last_report: None,
             message: None,
             dragging: None,
+            curve_drag: None,
+            box_select: None,
+            box_aborted: false,
             history_jumps: 0,
             hover_preview: None,
             edit_label: None,
@@ -273,11 +409,22 @@ impl SketchSession {
     /// wie mit [`end_drag`](Self::end_drag) beendet.
     pub fn set_tool(&mut self, sk: &mut Sketch, tool: Tool) {
         self.end_drag(sk);
+        self.box_select = None;
         self.trim_drag = None;
         self.hover_preview = None;
         self.tool = tool;
+        self.draw_cursor = None;
+        self.clear_pending();
+    }
+
+    /// Vergisst, was das laufende Werkzeug schon gesetzt und getippt hat.
+    fn clear_pending(&mut self) {
         self.pending.clear();
         self.pending_pos.clear();
+        self.pending_snaps.clear();
+        self.line_chain = None;
+        self.auto_tangent = None;
+        self.input = DrawInput::default();
     }
 
     /// Wählt `tool` wie der Klick auf seinen Knopf in der Leiste (und sein Tastenkürzel): ist
@@ -295,10 +442,12 @@ impl SketchSession {
     /// Freiheitsgrade und Färbung kommen aus einem frischen Lösen einer Kopie, damit der Entwurf
     /// selbst (und sein Stand) unverändert bleibt. Werkzeug und Mauszeiger bleiben.
     pub fn after_history_jump(&mut self, sk: &Sketch) {
-        self.pending.clear();
-        self.pending_pos.clear();
+        self.clear_pending();
+        self.draw_cursor = None;
         self.selection.clear();
         self.dragging = None;
+        self.curve_drag = None;
+        self.box_select = None;
         self.trim_drag = None;
         self.hover_preview = None;
         self.edit_label = None;
@@ -307,7 +456,9 @@ impl SketchSession {
         self.history_jumps += 1;
     }
 
-    /// Fang an der Stelle `at`: Punkte vor Kurven.
+    /// Fang für die Auswahl an der Stelle `at`: Punkte vor Kurven (nur [`Snap::Point`],
+    /// [`Snap::Curve`] und [`Snap::None`]; beim Zeichnen gilt
+    /// [`resolve_cursor`](Self::resolve_cursor)).
     pub fn snap(&self, sk: &Sketch, at: DVec2, radius: f64) -> Snap {
         if let Some(p) = sk.pick_point(at, radius) {
             Snap::Point(p)
@@ -325,6 +476,10 @@ impl SketchSession {
             sketch: sk.clone(),
             pending: self.pending.clone(),
             pending_pos: self.pending_pos.clone(),
+            pending_snaps: self.pending_snaps.clone(),
+            line_chain: self.line_chain,
+            auto_tangent: self.auto_tangent,
+            input: self.input.clone(),
             selection: self.selection.clone(),
             last_report: self.last_report.clone(),
         }
@@ -334,6 +489,10 @@ impl SketchSession {
         *sk = b.sketch;
         self.pending = b.pending;
         self.pending_pos = b.pending_pos;
+        self.pending_snaps = b.pending_snaps;
+        self.line_chain = b.line_chain;
+        self.auto_tangent = b.auto_tangent;
+        self.input = b.input;
         self.selection = b.selection;
         self.last_report = b.last_report;
     }
@@ -385,22 +544,6 @@ impl SketchSession {
 
     // ---- Werkzeuge ----------------------------------------------------------------------
 
-    /// Vorhandener Punkt unter `at` oder ein neuer; auf einer Kurve wird der neue Punkt auf die
-    /// Kurve gesetzt und mit `PointOnCurve` daran gebunden.
-    fn point_at(&mut self, sk: &mut Sketch, at: DVec2, radius: f64) -> Result<PointId, Msg> {
-        match self.snap(sk, at, radius) {
-            Snap::Point(p) => Ok(p),
-            Snap::Curve(c) => {
-                let q = sk.nearest_on_curve(c, at).unwrap_or(at);
-                let p = sk.add_point(q.x, q.y).map_err(err)?;
-                sk.add_constraint(ConstraintKind::PointOnCurve(p, c))
-                    .map_err(err)?;
-                Ok(p)
-            }
-            Snap::None => sk.add_point(at.x, at.y).map_err(err),
-        }
-    }
-
     /// Klick mit dem aktiven Werkzeug an der Stelle `at` (Skizzeneinheiten); `radius` ist der
     /// Fangradius, `extend` erweitert bzw. schaltet die Auswahl um.
     pub fn click(
@@ -417,18 +560,20 @@ impl SketchSession {
             return Err(text);
         }
         self.cursor = Some(at);
+        self.created = None;
+        let cur = self.resolve_cursor(sk, at, radius);
         self.atomic(sk, |se, sk, prior| match se.tool {
             Tool::Select => {
                 se.select_at(sk, at, radius, extend);
                 Ok(())
             }
-            Tool::Point => se.click_point(sk, at, radius, prior),
-            Tool::Line => se.click_line(sk, at, radius, prior),
-            Tool::Rectangle => se.click_rectangle(sk, at, prior),
-            Tool::Circle => se.click_circle(sk, at, radius, prior),
-            Tool::Arc => se.click_arc(sk, at, radius, prior),
-            Tool::Ellipse => se.click_ellipse(sk, at, radius, prior),
-            Tool::Spline => se.click_spline(sk, at, radius, prior),
+            Tool::Point => se.click_point(sk, &cur, prior),
+            Tool::Line => se.click_line(sk, &cur, prior),
+            Tool::Rectangle => se.click_rectangle(sk, &cur, prior),
+            Tool::Circle => se.click_circle(sk, &cur, prior),
+            Tool::Arc => se.click_arc(sk, &cur, prior),
+            Tool::Ellipse => se.click_ellipse(sk, &cur, prior),
+            Tool::Spline => se.click_spline(sk, &cur, prior),
             // Wird von der Oberfläche über `project_edge` gesteuert.
             Tool::ProjectEdge => Ok(()),
             Tool::Trim | Tool::Extend | Tool::Break => se.click_modify(sk, at, radius, prior),
@@ -568,7 +713,7 @@ impl SketchSession {
         let item = match self.snap(sk, at, radius) {
             Snap::Point(p) => Some(Item::Point(p)),
             Snap::Curve(c) => Some(Item::Curve(c)),
-            Snap::None => None,
+            _ => None,
         };
         match (item, extend) {
             (Some(i), true) => {
@@ -587,26 +732,19 @@ impl SketchSession {
     fn click_point(
         &mut self,
         sk: &mut Sketch,
-        at: DVec2,
-        radius: f64,
+        cur: &DrawCursor,
         prior: &Sketch,
     ) -> Result<(), Msg> {
-        if let Snap::Point(_) = self.snap(sk, at, radius) {
+        if cur.point(sk.tolerance().linear).is_some() {
             return Ok(());
         }
-        self.point_at(sk, at, radius)?;
+        self.attach(sk, None, cur)?;
         self.solve_checked(sk, prior)?;
         Ok(())
     }
 
-    fn click_line(
-        &mut self,
-        sk: &mut Sketch,
-        at: DVec2,
-        radius: f64,
-        prior: &Sketch,
-    ) -> Result<(), Msg> {
-        let p = self.point_at(sk, at, radius)?;
+    fn click_line(&mut self, sk: &mut Sketch, cur: &DrawCursor, prior: &Sketch) -> Result<(), Msg> {
+        let p = self.attach(sk, None, cur)?;
         let Some(&start) = self.pending.first() else {
             self.pending = vec![p];
             self.solve_checked(sk, prior)?;
@@ -614,94 +752,111 @@ impl SketchSession {
         };
         let line = sk.add_line(start, p).map_err(err)?;
         self.solve_checked(sk, prior)?;
-        if self.auto_constrain {
-            self.add_auto_axis(sk, line);
+        for auto in &cur.autos {
+            self.try_auto(sk, auto.kind(line));
         }
+        self.line_chain = Some(line);
         self.pending = vec![p];
+        self.created = Some(Created::Line(line));
         Ok(())
     }
 
-    /// Ergänzt bei fast waagerechten/senkrechten Linien `Horizontal`/`Vertical`. Ist die
-    /// Abhängigkeit überzählig oder lässt sich die Skizze damit nicht lösen, entfällt sie.
-    fn add_auto_axis(&mut self, sk: &mut Sketch, line: CurveId) {
-        let Some(CurveKind::Line { a, b }) = sk.curve(line).map(|c| c.kind.clone()) else {
-            return;
-        };
-        let (Ok(pa), Ok(pb)) = (sk.point_xy(a), sk.point_xy(b)) else {
-            return;
-        };
-        let d = pb - pa;
-        let angle = d.y.abs().atan2(d.x.abs());
-        let kind = if angle < AUTO_AXIS_ANGLE {
-            ConstraintKind::Horizontal(LineOrPoints::Line(line))
-        } else if std::f64::consts::FRAC_PI_2 - angle < AUTO_AXIS_ANGLE {
-            ConstraintKind::Vertical(LineOrPoints::Line(line))
-        } else {
-            return;
-        };
-        let before = sk.clone();
-        let before_report = self.last_report.clone();
-        let Ok(id) = sk.add_constraint(kind) else {
-            return;
-        };
-        let report = sk.solve();
-        if status_ok(&report) && !report.redundant.contains(&id) {
-            self.last_report = Some(report);
-        } else {
-            *sk = before;
-            self.last_report = before_report;
+    /// Versucht eine automatische Abhängigkeit an einer Kopie: Sie entfällt still (`false`), wenn
+    /// die Skizze vorher nicht gelöst war, danach nicht gelöst ist, die neue überzählig wäre oder
+    /// ein Punkt sich um mehr als `10·tol.linear` bewegen würde.
+    pub fn try_auto(&mut self, sk: &mut Sketch, kind: ConstraintKind) -> bool {
+        if !self.last_report.as_ref().is_some_and(status_ok) {
+            return false;
         }
+        let mut attempt = sk.clone();
+        let Ok(id) = attempt.add_constraint(kind) else {
+            return false;
+        };
+        let report = attempt.solve();
+        let limit = 10.0 * sk.tolerance().linear;
+        let moved = sk
+            .points()
+            .any(|(p, _)| match (sk.point_xy(p), attempt.point_xy(p)) {
+                (Ok(a), Ok(b)) => a.distance(b) > limit,
+                _ => true,
+            });
+        if !status_ok(&report) || report.redundant.contains(&id) || moved {
+            return false;
+        }
+        *sk = attempt;
+        self.last_report = Some(report);
+        true
     }
 
-    fn click_rectangle(&mut self, sk: &mut Sketch, at: DVec2, prior: &Sketch) -> Result<(), Msg> {
+    fn click_rectangle(
+        &mut self,
+        sk: &mut Sketch,
+        cur: &DrawCursor,
+        prior: &Sketch,
+    ) -> Result<(), Msg> {
+        let tol = sk.tolerance().linear;
         let Some(&corner) = self.pending_pos.first() else {
-            self.pending_pos = vec![at];
+            self.pending_pos = vec![cur.at];
+            self.pending_snaps = vec![cur.remember(tol)];
             return Ok(());
         };
-        sk.add_rectangle(corner, at).map_err(err)?;
+        let first = self
+            .pending_snaps
+            .first()
+            .map(|&hit| DrawCursor::remembered(hit, sk));
+        let rect = sk.add_rectangle(corner, cur.at).map_err(err)?;
         self.pending_pos.clear();
+        self.pending_snaps.clear();
+        // Das Rechteck legt eigene Ecken an (sortiert); gebunden wird die Ecke an der Lage.
+        for c in first.iter().chain([cur]) {
+            let own = rect
+                .points
+                .iter()
+                .copied()
+                .find(|&p| sk.point_xy(p).is_ok_and(|q| q.distance(c.at) <= tol));
+            if own.is_some() {
+                self.attach(sk, own, c)?;
+            }
+        }
         self.solve_checked(sk, prior)?;
+        self.created = Some(Created::Rectangle(rect));
         Ok(())
     }
 
     fn click_circle(
         &mut self,
         sk: &mut Sketch,
-        at: DVec2,
-        radius: f64,
+        cur: &DrawCursor,
         prior: &Sketch,
     ) -> Result<(), Msg> {
         let Some(&center) = self.pending.first() else {
-            let c = self.point_at(sk, at, radius)?;
+            let c = self.attach(sk, None, cur)?;
             self.pending = vec![c];
             self.solve_checked(sk, prior)?;
             return Ok(());
         };
-        let r = sk.point_xy(center).map_err(err)?.distance(at);
+        let r = sk.point_xy(center).map_err(err)?.distance(cur.at);
         if r <= sk.tolerance().linear {
             return Err(crate::msg!("sketch-radius-positive"));
         }
-        sk.add_circle(center, r).map_err(err)?;
+        let circle = sk.add_circle(center, r).map_err(err)?;
+        self.bind_rim(sk, circle, cur)?;
         self.pending.clear();
         self.solve_checked(sk, prior)?;
+        self.created = Some(Created::Circle(circle));
         Ok(())
     }
 
-    fn click_arc(
-        &mut self,
-        sk: &mut Sketch,
-        at: DVec2,
-        radius: f64,
-        prior: &Sketch,
-    ) -> Result<(), Msg> {
+    fn click_arc(&mut self, sk: &mut Sketch, cur: &DrawCursor, prior: &Sketch) -> Result<(), Msg> {
         let tol = sk.tolerance().linear;
         match *self.pending.as_slice() {
             [] => {
-                let c = self.point_at(sk, at, radius)?;
+                let c = self.attach(sk, None, cur)?;
                 self.pending = vec![c];
+                self.pending_snaps = vec![cur.remember(tol)];
             }
             [center] => {
-                let s = self.point_at(sk, at, radius)?;
+                let s = self.attach(sk, None, cur)?;
                 if s == center
                     || sk
                         .point_xy(s)
@@ -712,32 +867,45 @@ impl SketchSession {
                     return Err(crate::msg!("sketch-arc-start-center"));
                 }
                 self.pending.push(s);
+                self.plan_arc_tangent(sk, center, s, cur)?;
             }
             [center, start, ..] => {
                 let m = sk.point_xy(center).map_err(err)?;
                 let s = sk.point_xy(start).map_err(err)?;
                 let r = s.distance(m);
-                let dir = at - m;
+                let dir = cur.at - m;
                 if dir.length() <= tol {
                     return Err(crate::msg!("sketch-arc-end-center"));
                 }
                 let on_start = || crate::msg!("sketch-arc-end-on-start");
-                let end = match self.snap(sk, at, radius) {
-                    Snap::Point(p) if p == start => return Err(on_start()),
-                    Snap::Point(p) if p != center => p,
+                let end = match cur.point(tol) {
+                    Some(p) if p == start => return Err(on_start()),
+                    Some(p) if p != center => p,
                     _ => {
+                        // Das Ende liegt auf dem Radius; es bindet nur, wenn es dort das
+                        // Fangziel trifft.
                         let q = m + dir.normalize() * r;
                         if q.distance(s) <= tol {
                             return Err(on_start());
                         }
-                        sk.add_point(q.x, q.y).map_err(err)?
+                        let on_radius = DrawCursor {
+                            at: q,
+                            ..cur.clone()
+                        };
+                        self.attach(sk, None, &on_radius)?
                     }
                 };
                 if sk.point_xy(end).map_err(err)?.distance(s) <= tol {
                     return Err(on_start());
                 }
-                sk.add_arc(center, start, end).map_err(err)?;
-                self.pending.clear();
+                let arc = sk.add_arc(center, start, end).map_err(err)?;
+                self.clear_pending();
+                self.solve_checked(sk, prior)?;
+                for auto in &cur.autos {
+                    self.try_auto(sk, auto.kind(arc));
+                }
+                self.created = Some(Created::Arc(arc));
+                return Ok(());
             }
         }
         self.solve_checked(sk, prior)?;
@@ -747,23 +915,23 @@ impl SketchSession {
     fn click_ellipse(
         &mut self,
         sk: &mut Sketch,
-        at: DVec2,
-        radius: f64,
+        cur: &DrawCursor,
         prior: &Sketch,
     ) -> Result<(), Msg> {
         let tol = sk.tolerance().linear;
         let Some(&center) = self.pending.first() else {
-            let c = self.point_at(sk, at, radius)?;
+            let c = self.attach(sk, None, cur)?;
             self.pending = vec![c];
             self.solve_checked(sk, prior)?;
             return Ok(());
         };
         let m = sk.point_xy(center).map_err(err)?;
         let Some(&major_end) = self.pending_pos.first() else {
-            if (at - m).length() <= tol {
+            if (cur.at - m).length() <= tol {
                 return Err(crate::msg!("sketch-major-axis-positive"));
             }
-            self.pending_pos = vec![at];
+            self.pending_pos = vec![cur.at];
+            self.pending_snaps = vec![cur.remember(tol)];
             return Ok(());
         };
         let major = major_end - m;
@@ -771,28 +939,34 @@ impl SketchSession {
         if len <= tol {
             return Err(crate::msg!("sketch-major-axis-positive"));
         }
-        let minor = (major / len).perp_dot(at - m).abs().min(len);
+        let minor = (major / len).perp_dot(cur.at - m).abs().min(len);
         if minor <= tol {
             return Err(crate::msg!("sketch-minor-axis-positive"));
         }
-        sk.add_ellipse(center, major, minor).map_err(err)?;
-        self.pending.clear();
-        self.pending_pos.clear();
+        let first = self
+            .pending_snaps
+            .first()
+            .map(|&hit| DrawCursor::remembered(hit, sk));
+        let ellipse = sk.add_ellipse(center, major, minor).map_err(err)?;
+        for c in first.iter().chain([cur]) {
+            self.bind_rim(sk, ellipse, c)?;
+        }
+        self.clear_pending();
         self.solve_checked(sk, prior)?;
+        self.created = Some(Created::Ellipse(ellipse));
         Ok(())
     }
 
     fn click_spline(
         &mut self,
         sk: &mut Sketch,
-        at: DVec2,
-        radius: f64,
+        cur: &DrawCursor,
         prior: &Sketch,
     ) -> Result<(), Msg> {
         if self.pending.len() >= MAX_SPLINE_POINTS {
             return Err(crate::msg!("sketch-spline-max", max = MAX_SPLINE_POINTS));
         }
-        let p = self.point_at(sk, at, radius)?;
+        let p = self.attach(sk, None, cur)?;
         if self.pending.contains(&p) {
             return Err(crate::msg!("sketch-spline-point-twice"));
         }
@@ -805,8 +979,7 @@ impl SketchSession {
     pub fn finish_tool(&mut self, sk: &mut Sketch) -> Result<(), String> {
         if self.tool != Tool::Spline {
             self.message = None;
-            self.pending.clear();
-            self.pending_pos.clear();
+            self.clear_pending();
             return Ok(());
         }
         self.atomic(sk, |se, sk, prior| {
@@ -822,11 +995,14 @@ impl SketchSession {
 
     /// Bricht das laufende Werkzeug ab; im Auswahlwerkzeug wird die Auswahl geleert. Ein
     /// laufendes Ziehen wird wie mit [`end_drag`](Self::end_drag) beendet (der Punkt bleibt,
-    /// wo er ist). Stutzen, Dehnen und Brechen enden ganz (zurück zur Auswahl).
+    /// wo er ist). Stutzen, Dehnen und Brechen enden ganz (zurück zur Auswahl). Ein laufender
+    /// Rahmen fällt allein weg, die alte Auswahl bleibt.
     pub fn cancel(&mut self, sk: &mut Sketch) {
+        if self.box_select.take().is_some() {
+            return;
+        }
         self.end_drag(sk);
-        self.pending.clear();
-        self.pending_pos.clear();
+        self.clear_pending();
         if self.tool == Tool::Select {
             self.selection.clear();
         }
@@ -837,20 +1013,187 @@ impl SketchSession {
         }
     }
 
+    // ---- Rahmen und Kette ----------------------------------------------------------------
+
+    /// Liegt bei `at` nichts, was man greifen oder klicken könnte? Nur dort beginnt ein Rahmen.
+    /// Dieselbe Frage wie in [`begin_drag`](Self::begin_drag): [`snap`](Self::snap).
+    pub fn is_free_at(&self, sk: &Sketch, at: DVec2, radius: f64) -> bool {
+        matches!(self.snap(sk, at, radius), Snap::None)
+    }
+
+    /// Beginnt im Auswahlwerkzeug den Rahmen an der Bildschirmlage `at`.
+    pub fn begin_box(&mut self, at: DVec2, extend: bool) {
+        if self.tool == Tool::Select && at.is_finite() {
+            self.box_select = Some(BoxSelect {
+                start: at,
+                current: at,
+                extend,
+            });
+        }
+    }
+
+    /// Führt den Rahmen zur Bildschirmlage `at`.
+    pub fn box_to(&mut self, at: DVec2) {
+        if let Some(b) = self.box_select.as_mut().filter(|_| at.is_finite()) {
+            b.current = at;
+        }
+    }
+
+    /// Schließt den Rahmen und wählt, was er erfasst ([`select_rect`](Self::select_rect)).
+    pub fn end_box(&mut self, sk: &Sketch, project: &dyn Fn(DVec2) -> Option<DVec2>) {
+        if let Some(b) = self.box_select.take() {
+            self.select_rect(sk, b.start, b.current, b.extend, project);
+        }
+    }
+
+    /// Bricht den Rahmen mit der rechten Taste ab, siehe [`box_aborted`](Self::box_aborted).
+    pub fn abort_box(&mut self) {
+        if self.box_select.take().is_some() {
+            self.box_aborted = true;
+        }
+    }
+
+    /// Wählt nach einem Rahmen zwischen den Bildschirmlagen `a` und `b` (`project`: Skizze →
+    /// Bildschirm; `None` hinter der Kamera). `a.x <= b.x` ist ein Fenster: Es nimmt Kurven, deren
+    /// Linienzug ganz im Rahmen liegt. Sonst nimmt die Kreuzung auch Kurven mit einer Strecke, die
+    /// den Rahmen schneidet; eine Strecke mit einem Ende hinter der Kamera zählt nicht.
+    /// Von den Punkten zählen nur freie (ohne Kurve), damit jede Abhängigkeit zur Auswahl passt.
+    /// `extend` ergänzt, ohne etwas abzuwählen; sonst ersetzt der Rahmen die Auswahl.
+    pub fn select_rect(
+        &mut self,
+        sk: &Sketch,
+        a: DVec2,
+        b: DVec2,
+        extend: bool,
+        project: &dyn Fn(DVec2) -> Option<DVec2>,
+    ) {
+        let window = a.x <= b.x;
+        let (lo, hi) = (a.min(b), a.max(b));
+        let on_screen = |p: DVec2| project(p).filter(|q| q.is_finite());
+        let mut found = Vec::new();
+        for (c, _) in sk.curves() {
+            let Some(line) = sk.curve_polyline(c, BOX_STEPS_PER_TURN) else {
+                continue;
+            };
+            let line: Vec<Option<DVec2>> = line.into_iter().map(on_screen).collect();
+            let hit = if window {
+                line.iter().all(|p| p.is_some_and(|p| in_rect(p, lo, hi)))
+            } else {
+                line.windows(2).any(|w| match (w[0], w[1]) {
+                    (Some(p), Some(q)) => segment_hits_rect(p, q, lo, hi),
+                    _ => false,
+                })
+            };
+            if hit {
+                found.push(Item::Curve(c));
+            }
+        }
+        let on_curves: BTreeSet<PointId> = sk.curves().flat_map(|(_, c)| c.kind.points()).collect();
+        for (p, _) in sk.points().filter(|(p, _)| !on_curves.contains(p)) {
+            if sk
+                .point_xy(p)
+                .ok()
+                .and_then(on_screen)
+                .is_some_and(|q| in_rect(q, lo, hi))
+            {
+                found.push(Item::Point(p));
+            }
+        }
+        self.take_selection(found, extend);
+    }
+
+    /// Wählt die zusammenhängende Kette um `c` ([`Sketch::connected_chain`]); `extend` ergänzt.
+    pub fn select_chain(&mut self, sk: &Sketch, c: CurveId, extend: bool) {
+        let chain = sk.connected_chain(c);
+        self.take_selection(chain.into_iter().map(Item::Curve).collect(), extend);
+    }
+
+    /// Setzt die Auswahl auf `items` oder ergänzt sie, ohne etwas doppelt aufzunehmen.
+    fn take_selection(&mut self, items: Vec<Item>, extend: bool) {
+        self.message = None;
+        if !extend {
+            self.selection.clear();
+        }
+        for item in items {
+            if !self.selection.contains(&item) {
+                self.selection.push(item);
+            }
+        }
+    }
+
     // ---- Ziehen -------------------------------------------------------------------------
 
-    /// Beginnt im Auswahlwerkzeug das Ziehen des Punktes unter `at`.
+    /// Läuft ein Zug an einem Punkt oder einer Kurve?
+    pub fn is_dragging(&self) -> bool {
+        self.dragging.is_some() || self.curve_drag.is_some()
+    }
+
+    /// Beginnt im Auswahlwerkzeug den Zug an dem, was unter `at` liegt: Punkt vor Kurve
+    /// ([`snap`](Self::snap)); wo nichts liegt, beginnt der Rahmen
+    /// ([`is_free_at`](Self::is_free_at)).
     pub fn begin_drag(&mut self, sk: &mut Sketch, at: DVec2, radius: f64) -> bool {
         if self.tool != Tool::Select || !at.is_finite() {
             return false;
         }
-        self.dragging = sk.pick_point(at, radius);
-        self.dragging.is_some()
+        self.dragging = None;
+        self.curve_drag = None;
+        match self.snap(sk, at, radius) {
+            Snap::Point(p) => self.dragging = Some(p),
+            Snap::Curve(c) => self.begin_curve_drag(sk, c, at),
+            _ => {}
+        }
+        self.is_dragging()
     }
 
-    /// Zieht den gegriffenen Punkt nach `at`. Scheitert der Solver, bleibt die Skizze, und
-    /// `message` erklärt es.
+    /// Greift die Kurve `c` bei `at`. Außerhalb der Auswahl ersetzt sie diese, sonst ziehen alle
+    /// gewählten Kurven und Punkte mit. Ein einzelner Kreis zieht am Rand den Radius.
+    fn begin_curve_drag(&mut self, sk: &Sketch, c: CurveId, at: DVec2) {
+        if !self.selection.contains(&Item::Curve(c)) {
+            self.selection = vec![Item::Curve(c)];
+        }
+        let mut start: Vec<(PointId, DVec2)> = Vec::new();
+        let mut moved_items = 0;
+        for item in &self.selection {
+            let points = match *item {
+                Item::Curve(k) => sk.curve(k).map_or(Vec::new(), |d| d.kind.points()),
+                Item::Point(p) => vec![p],
+                Item::Constraint(_) => continue,
+            };
+            moved_items += 1;
+            for p in points {
+                if !start.iter().any(|&(q, _)| q == p)
+                    && let Ok(xy) = sk.point_xy(p)
+                {
+                    start.push((p, xy));
+                }
+            }
+        }
+        let rim = match (moved_items, sk.curve(c).map(|d| &d.kind), sk.radius(c)) {
+            (1, Some(&CurveKind::Circle { center, .. }), Some(r)) => {
+                sk.point_xy(center).ok().map(|m| (c, m.distance(at) - r))
+            }
+            _ => None,
+        };
+        self.curve_drag = Some(CurveDrag {
+            grab: at,
+            start,
+            rim,
+            origin: Some(sk.clone()),
+            baseline: sk.clone().solve(),
+            frame_revision: sk.revision(),
+        });
+    }
+
+    /// Führt den Zug nach `at`. Punkt: Scheitert der Solver, bleibt die Skizze, und `message`
+    /// erklärt es. Kurve: siehe [`curve_drag_to`](Self::curve_drag_to).
     pub fn drag_to(&mut self, sk: &mut Sketch, at: DVec2) {
+        if let Some(mut drag) = self.curve_drag.take() {
+            drag.note_foreign_change(sk);
+            self.curve_drag_to(sk, &drag, at);
+            drag.frame_revision = sk.revision();
+            self.curve_drag = Some(drag);
+            return;
+        }
         let Some(point) = self.dragging else {
             return;
         };
@@ -864,10 +1207,71 @@ impl SketchSession {
         }
     }
 
-    /// Beendet das Ziehen. Ein volles Lösen holt dabei die Diagnose nach, die während des
-    /// Ziehens für die gezogene Gruppe entfällt (unveränderte Gruppen kommen aus dem
-    /// Zwischenspeicher des Solvers und kosten nichts).
+    /// Ein Bild des Zugs an einer Kurve. Macht es die Lage schlechter ([`frame_is_worse`]), gilt
+    /// wieder der Stand vor diesem Bild, und `message` erklärt es. Bewegt es nichts (ohne Bewegung des Zeigers, voll
+    /// bestimmt, Radius mit Maß), bleibt die Skizze bitgleich und ohne neuen Stand, damit daraus
+    /// kein Schritt wird.
+    fn curve_drag_to(&mut self, sk: &mut Sketch, drag: &CurveDrag, at: DVec2) {
+        self.cursor = Some(at);
+        let before = sk.clone();
+        let result = match drag.rim {
+            Some((c, offset)) => {
+                let center = sk.curve(c).and_then(|d| match d.kind {
+                    CurveKind::Circle { center, .. } => sk.point_xy(center).ok(),
+                    _ => None,
+                });
+                center.map_or(Err(SketchError::UnknownObject), |m| {
+                    sk.drag_radius(c, m.distance(at) - offset)
+                })
+            }
+            None => {
+                let delta = at - drag.grab;
+                let drags: Vec<Drag> = drag
+                    .start
+                    .iter()
+                    .map(|&(point, from)| Drag {
+                        point,
+                        target: from + delta,
+                    })
+                    .collect();
+                sk.drag(&drags)
+            }
+        };
+        match result {
+            Ok(report) if !frame_is_worse(&report, &drag.baseline) => {
+                if same_values(sk, &before) {
+                    *sk = before;
+                } else {
+                    self.last_report = Some(report);
+                }
+                self.message = None;
+            }
+            _ => {
+                *sk = before;
+                self.message = Some(crate::msg!("sketch-drag-blocked"));
+            }
+        }
+    }
+
+    /// Beendet den Zug. Ein volles Lösen holt dabei die Diagnose nach, die während des Ziehens
+    /// für die gezogene Gruppe entfällt (unveränderte Gruppen kommen aus dem Zwischenspeicher des
+    /// Solvers und kosten nichts). Der Zug an einer Kurve benennt den Schritt. Steht danach alles
+    /// wie beim Greifen, gilt wieder die Skizze von damals (gleicher Stand), und es entsteht
+    /// kein Schritt.
     pub fn end_drag(&mut self, sk: &mut Sketch) {
+        if let Some(mut drag) = self.curve_drag.take() {
+            drag.note_foreign_change(sk);
+            match drag.origin.filter(|origin| same_values(sk, origin)) {
+                Some(origin) => {
+                    *sk = origin;
+                    self.last_report = Some(drag.baseline);
+                }
+                None => {
+                    self.last_report = Some(sk.solve());
+                    self.edit_label = Some(crate::msg!("undo-sketch-move"));
+                }
+            }
+        }
         if self.dragging.take().is_some() {
             self.last_report = Some(sk.solve());
         }
@@ -1020,12 +1424,7 @@ impl SketchSession {
             }
             if report.redundant.contains(&id) {
                 if action.is_dimension() {
-                    sk.set_driven(id, true).map_err(err)?;
-                    if let Some(v) = sk.constraint(id).and_then(|c| sk.measure(&c.kind)) {
-                        sk.set_constraint_value(id, v).map_err(err)?;
-                    }
-                    se.last_report = Some(sk.solve());
-                    se.message = Some(crate::msg!("sketch-became-driven"));
+                    se.make_driven(sk, id)?;
                 } else {
                     se.message = Some(crate::msg!("sketch-redundant"));
                 }
@@ -1033,6 +1432,17 @@ impl SketchSession {
             se.warn_if_unsolved();
             Ok(id)
         })
+    }
+
+    /// Macht das überzählige Maß `id` anzeigend (es zeigt den aktuellen Wert) und sagt es.
+    pub(crate) fn make_driven(&mut self, sk: &mut Sketch, id: ConstraintId) -> Result<(), Msg> {
+        sk.set_driven(id, true).map_err(err)?;
+        if let Some(v) = sk.constraint(id).and_then(|c| sk.measure(&c.kind)) {
+            sk.set_constraint_value(id, v).map_err(err)?;
+        }
+        self.last_report = Some(sk.solve());
+        self.message = Some(crate::msg!("sketch-became-driven"));
+        Ok(())
     }
 
     /// Aktueller Wert des Maßes `action` für die Auswahl (Vorgabe des Zahlenfelds); `None`, wenn
@@ -1269,6 +1679,7 @@ impl SketchSession {
         if self.dragging.is_some_and(|p| sk.point_xy(p).is_err()) {
             self.dragging = None;
         }
+        self.curve_drag = None;
         self.last_report = Some(sk.solve());
     }
 
@@ -1391,7 +1802,7 @@ impl SketchSession {
 /// Grenze: Der Bericht nennt bei nicht lösbaren Gruppen nur Abhängigkeiten mit zu großem
 /// Residuum; eine neue nicht lösbare Gruppe neben einem schon bestehenden Widerspruch wird nur
 /// erkannt, wenn sie dabei neue Abhängigkeiten nennt.
-fn check_change(
+pub(crate) fn check_change(
     report: &SolveReport,
     before: Option<&SolveReport>,
     prior: &Sketch,
@@ -1436,7 +1847,11 @@ pub fn with_checked_value(
 }
 
 /// Wie [`with_checked_value`], mit der Meldung als Grund (zum Speichern).
-fn checked_value(sk: &Sketch, kind: &ConstraintKind, value: f64) -> Result<ConstraintKind, Msg> {
+pub(crate) fn checked_value(
+    sk: &Sketch,
+    kind: &ConstraintKind,
+    value: f64,
+) -> Result<ConstraintKind, Msg> {
     if !value.is_finite() {
         return Err(crate::msg!("sketch-enter-number"));
     }

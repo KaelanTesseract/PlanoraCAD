@@ -61,6 +61,20 @@ pub fn grid_step(distance: f32, unit_mm: f32) -> (f32, f32) {
     (step(exp) * unit, t * t * (3.0 - 2.0 * t))
 }
 
+/// Wie [`grid_step`], aber die feine Stufe genau in `f64`: über den gerundeten Exponenten aus der
+/// Anzeigeeinheit gerechnet, damit Zoll keine `f32`-Fehler mitbringt. Das zweite Feld ist der
+/// Übergang. Ungültige Einheit → 1.
+pub fn exact_step(distance: f32, unit_mm: f64) -> (f64, f32) {
+    let unit = if unit_mm.is_finite() && unit_mm > 0.0 {
+        unit_mm
+    } else {
+        1.0
+    };
+    let (fine, blend) = grid_step(distance, unit as f32);
+    let exp = (f64::from(fine) / unit).log10().round() as i32;
+    (10.0_f64.powi(exp) * unit, blend)
+}
+
 /// Radius, an dem das Raster bei Kameraabstand `distance` ausgeblendet ist.
 pub fn grid_radius(distance: f32) -> f32 {
     distance * RIM_FACTOR
@@ -105,6 +119,47 @@ fn line_style(k: i64, blend: f32, palette: &Palette) -> ([f32; 3], f32) {
     }
     let rgb = [0, 1, 2].map(|i| (c1[i] * a1 + c2[i] * a2) / sum);
     (rgb, a1.max(a2))
+}
+
+/// Mischung der Linie Nr. `k` (Position `k · fein`) beim Übergang `blend`: `(Anteil der
+/// Hauptlinienfarbe, Deckkraft)` für Farben ohne eigene Deckkraft, nach denselben Stufen wie
+/// [`line_style`]. Für das Raster, das die Oberfläche selbst zeichnet.
+pub fn line_weight(k: i64, blend: f32) -> (f32, f32) {
+    let part = |index: i64, weight: f32| {
+        let (major, s) = strength(index);
+        (if major { weight * s } else { 0.0 }, weight * s)
+    };
+    let (m1, a1) = part(k, 1.0 - blend);
+    let (m2, a2) = if k.rem_euclid(DECADE) == 0 {
+        part(k / DECADE, blend)
+    } else {
+        (0.0, 0.0)
+    };
+    let sum = a1 + a2;
+    if sum <= 0.0 {
+        return (0.0, 0.0);
+    }
+    ((m1 + m2) / sum, a1.max(a2))
+}
+
+/// Die Achsen allein: durch den Ursprung, lang genug für das ganze sichtbare Raster um `target`
+/// (die z-Achse zeigt nach oben), als Linienliste wie bei [`grid_lines`]. Ungültige Kamera → leer.
+pub fn axis_lines(target: Vec3, distance: f32, palette: &Palette) -> Vec<LineVertex> {
+    if !target.is_finite() || !distance.is_finite() || distance <= 0.0 {
+        return Vec::new();
+    }
+    let l = target.length() + grid_radius(distance);
+    let axis = |a: [f32; 3], b: [f32; 3], color: [f32; 4]| {
+        [
+            LineVertex { position: a, color },
+            LineVertex { position: b, color },
+        ]
+    };
+    let mut out = Vec::with_capacity(6);
+    out.extend(axis([-l, 0.0, 0.0], [l, 0.0, 0.0], palette.axis_x));
+    out.extend(axis([0.0, -l, 0.0], [0.0, l, 0.0], palette.axis_y));
+    out.extend(axis([0.0, 0.0, 0.0], [0.0, 0.0, l], palette.axis_z));
+    out
 }
 
 /// Bodenraster (ausgeblendet) und Achsen (nicht ausgeblendet) für eine Kamera mit Ziel `target`
@@ -166,17 +221,7 @@ pub fn grid_lines(target: Vec3, distance: f32, unit_mm: f32, palette: &Palette) 
         }
     }
 
-    // Achsen: durch den Ursprung, lang genug für das ganze sichtbare Raster.
-    let l = target.length() + radius;
-    let axis = |a: [f32; 3], b: [f32; 3], color: [f32; 4]| {
-        [
-            LineVertex { position: a, color },
-            LineVertex { position: b, color },
-        ]
-    };
-    out.extend(axis([-l, 0.0, 0.0], [l, 0.0, 0.0], palette.axis_x));
-    out.extend(axis([0.0, -l, 0.0], [0.0, l, 0.0], palette.axis_y));
-    out.extend(axis([0.0, 0.0, 0.0], [0.0, 0.0, l], palette.axis_z));
+    out.extend(axis_lines(target, distance, palette));
     out
 }
 
@@ -495,5 +540,32 @@ mod tests {
     fn invalid_unit_falls_back_to_millimetre() {
         assert_eq!(grid_step(150.0, 0.0), grid_step(150.0, 1.0));
         assert_eq!(grid_step(150.0, f32::NAN), grid_step(150.0, 1.0));
+    }
+
+    #[test]
+    fn axis_lines_are_the_axes_of_the_grid_lines() {
+        for p in palettes() {
+            for target in [Vec3::ZERO, Vec3::new(500.0, -300.0, 10.0)] {
+                let all = grid_lines(target, 150.0, 1.0, &p);
+                let parts = |v: &LineVertex| (v.position, v.color);
+                let want: Vec<_> = all.iter().filter(|v| is_axis(v, &p)).map(parts).collect();
+                let got: Vec<_> = axis_lines(target, 150.0, &p).iter().map(parts).collect();
+                assert_eq!(got.len(), 6);
+                assert_eq!(got, want);
+            }
+            assert!(axis_lines(Vec3::ZERO, f32::NAN, &p).is_empty());
+            assert!(axis_lines(Vec3::ZERO, 0.0, &p).is_empty());
+        }
+    }
+
+    #[test]
+    fn the_line_weight_follows_the_two_levels() {
+        // Keine Mischung: jede fünfte Hauptfarbe, die übrigen gedämpft.
+        assert_eq!(line_weight(5, 0.0), (1.0, 1.0));
+        assert_eq!(line_weight(3, 0.0), (0.0, MINOR_STRENGTH));
+        // Ganz gröber: nur jede zehnte Linie bleibt; die fünfte davon ist Hauptfarbe.
+        assert_eq!(line_weight(3, 1.0).1, 0.0);
+        assert_eq!(line_weight(50, 1.0), (1.0, 1.0));
+        assert_eq!(line_weight(10, 1.0), (0.0, MINOR_STRENGTH));
     }
 }

@@ -599,6 +599,10 @@ pub struct Workspace {
     /// Die Maßeinheit in `config.length_unit` konnte noch nicht gespeichert werden; sie wird beim
     /// nächsten gelungenen Schreiben der Konfiguration mit geschrieben (wie `language_pending`).
     pub length_unit_pending: bool,
+    /// Die Schalter `config.sketch_grid` und `config.sketch_snap` konnten noch nicht gespeichert
+    /// werden; sie werden beim nächsten gelungenen Schreiben der Konfiguration mit geschrieben
+    /// (wie `length_unit_pending`).
+    pub sketch_grid_pending: bool,
     /// Für „Letzten Befehl wiederholen“ (Leertaste): der zuletzt abgeschlossene Befehl, über
     /// alle Tabs.
     pub last_command: crate::commands::LastCommand,
@@ -655,6 +659,7 @@ impl Workspace {
             theme_pending: false,
             language_pending: false,
             length_unit_pending: false,
+            sketch_grid_pending: false,
             last_command: Default::default(),
             prompt: None,
             quit: false,
@@ -1344,6 +1349,7 @@ impl Workspace {
         let theme = self.pending_theme();
         let language = self.pending_language();
         let length_unit = self.pending_length_unit();
+        let sketch_grid = self.pending_sketch_grid();
         let mut full = None;
         let written = Config::update_at(&self.config_path, |c| {
             c.root = root;
@@ -1366,6 +1372,10 @@ impl Workspace {
             if let Some(u) = length_unit {
                 c.length_unit = u;
             }
+            if let Some((grid, snap)) = sketch_grid {
+                c.sketch_grid = grid;
+                c.sketch_snap = snap;
+            }
         });
         match written {
             Ok(disk) => {
@@ -1379,6 +1389,7 @@ impl Workspace {
                 self.theme_pending = false;
                 self.language_pending = false;
                 self.length_unit_pending = false;
+                self.sketch_grid_pending = false;
                 true
             }
             Err(_) => {
@@ -1392,6 +1403,7 @@ impl Workspace {
                     self.theme_pending = false;
                     self.language_pending = false;
                     self.length_unit_pending = false;
+                    self.sketch_grid_pending = false;
                 } else {
                     self.favorites_pending = pending;
                 }
@@ -1419,6 +1431,7 @@ impl Workspace {
         let theme = self.pending_theme();
         let language = self.pending_language();
         let length_unit = self.pending_length_unit();
+        let sketch_grid = self.pending_sketch_grid();
         let written = Config::update_at(&self.config_path, |c| {
             c.panel_transparency = percent;
             if let Some(k) = keys {
@@ -1436,6 +1449,10 @@ impl Workspace {
             if let Some(u) = length_unit {
                 c.length_unit = u;
             }
+            if let Some((grid, snap)) = sketch_grid {
+                c.sketch_grid = grid;
+                c.sketch_snap = snap;
+            }
         })
         .is_ok();
         self.panel_transparency_pending = !written;
@@ -1445,6 +1462,7 @@ impl Workspace {
             self.theme_pending = false;
             self.language_pending = false;
             self.length_unit_pending = false;
+            self.sketch_grid_pending = false;
         }
         written
     }
@@ -1470,6 +1488,7 @@ impl Workspace {
         let updates = self.pending_update_settings();
         let language = self.pending_language();
         let length_unit = self.pending_length_unit();
+        let sketch_grid = self.pending_sketch_grid();
         let written = Config::update_at(&self.config_path, |c| {
             c.theme = Some(name.to_string());
             if let Some(t) = transparency {
@@ -1487,6 +1506,10 @@ impl Workspace {
             if let Some(u) = length_unit {
                 c.length_unit = u;
             }
+            if let Some((grid, snap)) = sketch_grid {
+                c.sketch_grid = grid;
+                c.sketch_snap = snap;
+            }
         })
         .is_ok();
         self.theme_pending = !written;
@@ -1496,6 +1519,7 @@ impl Workspace {
             self.update_settings_pending = false;
             self.language_pending = false;
             self.length_unit_pending = false;
+            self.sketch_grid_pending = false;
         }
         written
     }
@@ -1526,8 +1550,13 @@ impl Workspace {
         let updates = self.pending_update_settings();
         let theme = self.pending_theme();
         let language = self.pending_language();
+        let sketch_grid = self.pending_sketch_grid();
         let written = Config::update_at(&self.config_path, |c| {
             c.length_unit = Some(id);
+            if let Some((grid, snap)) = sketch_grid {
+                c.sketch_grid = grid;
+                c.sketch_snap = snap;
+            }
             if let Some(t) = transparency {
                 c.panel_transparency = t;
             }
@@ -1547,6 +1576,7 @@ impl Workspace {
         .is_ok();
         self.length_unit_pending = !written;
         if written {
+            self.sketch_grid_pending = false;
             self.panel_transparency_pending = false;
             self.keys_pending = false;
             self.update_settings_pending = false;
@@ -1554,6 +1584,84 @@ impl Workspace {
             self.language_pending = false;
         }
         written
+    }
+
+    /// Die Schalter von Skizzenraster und Fang, wenn sie zum Schreiben vorgemerkt sind.
+    fn pending_sketch_grid(&self) -> Option<(bool, bool)> {
+        self.sketch_grid_pending
+            .then_some((self.config.sketch_grid, self.config.sketch_snap))
+    }
+
+    /// Stellt Skizzenraster und Fang ein und speichert beide gleich in
+    /// [`Workspace::config_path`] (Felder `sketch_grid`, `sketch_snap`); `true`, wenn geschrieben
+    /// wurde. Sonst gilt die Wahl für die Sitzung und kommt beim nächsten gelungenen Schreiben mit
+    /// ([`Workspace::sketch_grid_pending`]). Wie [`Workspace::set_length_unit`].
+    pub fn set_sketch_grid(&mut self, grid: bool, snap: bool) -> bool {
+        self.config.sketch_grid = grid;
+        self.config.sketch_snap = snap;
+        let transparency = self
+            .panel_transparency_pending
+            .then(|| self.panel_transparency());
+        let keys = self.pending_keys();
+        let updates = self.pending_update_settings();
+        let theme = self.pending_theme();
+        let language = self.pending_language();
+        let length_unit = self.pending_length_unit();
+        let written = Config::update_at(&self.config_path, |c| {
+            c.sketch_grid = grid;
+            c.sketch_snap = snap;
+            if let Some(t) = transparency {
+                c.panel_transparency = t;
+            }
+            if let Some(k) = keys {
+                c.keys = k;
+            }
+            if let Some(u) = updates {
+                u.apply(c);
+            }
+            if let Some(t) = theme {
+                c.theme = t;
+            }
+            if let Some(l) = language {
+                c.language = l;
+            }
+            if let Some(u) = length_unit {
+                c.length_unit = u;
+            }
+        })
+        .is_ok();
+        self.sketch_grid_pending = !written;
+        if written {
+            self.panel_transparency_pending = false;
+            self.keys_pending = false;
+            self.update_settings_pending = false;
+            self.theme_pending = false;
+            self.language_pending = false;
+            self.length_unit_pending = false;
+        }
+        written
+    }
+
+    /// Je Bild: Hat ein Tab einen Schalter betätigt ([`AppState::sketch_grid_changed`]), wird sein
+    /// Stand gespeichert und in alle Tabs kopiert; sonst bekommt der aktive Tab den Stand der
+    /// Konfiguration (so übernehmen ihn auch neue Tabs).
+    pub fn sync_sketch_grid(&mut self) {
+        let changed = self.tabs.iter_mut().find_map(|t| {
+            std::mem::take(&mut t.state.sketch_grid_changed)
+                .then_some((t.state.sketch_show_grid, t.state.sketch_snap_grid))
+        });
+        if let Some((grid, snap)) = changed {
+            self.set_sketch_grid(grid, snap);
+            for tab in &mut self.tabs {
+                tab.state.sketch_show_grid = grid;
+                tab.state.sketch_snap_grid = snap;
+            }
+        } else {
+            let (grid, snap) = (self.config.sketch_grid, self.config.sketch_snap);
+            let state = &mut self.active_tab_mut().state;
+            state.sketch_show_grid = grid;
+            state.sketch_snap_grid = snap;
+        }
     }
 
     /// Die Sprache, wenn sie zum Schreiben vorgemerkt ist.
@@ -1581,11 +1689,16 @@ impl Workspace {
         let keys = self.pending_keys();
         let updates = self.pending_update_settings();
         let length_unit = self.pending_length_unit();
+        let sketch_grid = self.pending_sketch_grid();
         let theme = self.pending_theme();
         let written = Config::update_at(&self.config_path, |c| {
             c.language = Some(id);
             if let Some(u) = length_unit {
                 c.length_unit = u;
+            }
+            if let Some((grid, snap)) = sketch_grid {
+                c.sketch_grid = grid;
+                c.sketch_snap = snap;
             }
             if let Some(t) = transparency {
                 c.panel_transparency = t;
@@ -1607,6 +1720,7 @@ impl Workspace {
             self.keys_pending = false;
             self.update_settings_pending = false;
             self.length_unit_pending = false;
+            self.sketch_grid_pending = false;
             self.theme_pending = false;
         }
         written
@@ -1729,6 +1843,7 @@ impl Workspace {
         let theme = self.pending_theme();
         let language = self.pending_language();
         let length_unit = self.pending_length_unit();
+        let sketch_grid = self.pending_sketch_grid();
         let written = Config::update_at(&self.config_path, |c| {
             if all {
                 current.apply(c);
@@ -1750,6 +1865,10 @@ impl Workspace {
             if let Some(u) = length_unit {
                 c.length_unit = u;
             }
+            if let Some((grid, snap)) = sketch_grid {
+                c.sketch_grid = grid;
+                c.sketch_snap = snap;
+            }
         })
         .is_ok();
         self.update_settings_pending = !written;
@@ -1757,6 +1876,7 @@ impl Workspace {
             self.theme_pending = false;
             self.language_pending = false;
             self.length_unit_pending = false;
+            self.sketch_grid_pending = false;
             self.panel_transparency_pending = false;
             self.keys_pending = false;
         }
@@ -1783,6 +1903,7 @@ impl Workspace {
         let theme = self.pending_theme();
         let language = self.pending_language();
         let length_unit = self.pending_length_unit();
+        let sketch_grid = self.pending_sketch_grid();
         let written = Config::update_at(&self.config_path, |c| {
             c.keys = keys;
             if let Some(t) = transparency {
@@ -1800,6 +1921,10 @@ impl Workspace {
             if let Some(u) = length_unit {
                 c.length_unit = u;
             }
+            if let Some((grid, snap)) = sketch_grid {
+                c.sketch_grid = grid;
+                c.sketch_snap = snap;
+            }
         })
         .is_ok();
         self.keys_pending = !written;
@@ -1809,6 +1934,7 @@ impl Workspace {
             self.theme_pending = false;
             self.language_pending = false;
             self.length_unit_pending = false;
+            self.sketch_grid_pending = false;
             self.key_notes.clear();
         }
         written
@@ -1863,6 +1989,7 @@ impl Workspace {
         let theme = self.pending_theme();
         let language = self.pending_language();
         let length_unit = self.pending_length_unit();
+        let sketch_grid = self.pending_sketch_grid();
         let written = Config::update_at(&self.config_path, |c| {
             full = apply_changes(&all, &mut c.favorites);
             if let Some(t) = transparency {
@@ -1883,6 +2010,10 @@ impl Workspace {
             if let Some(u) = length_unit {
                 c.length_unit = u;
             }
+            if let Some((grid, snap)) = sketch_grid {
+                c.sketch_grid = grid;
+                c.sketch_snap = snap;
+            }
         });
         match written {
             Ok(disk) => {
@@ -1894,6 +2025,7 @@ impl Workspace {
                 self.theme_pending = false;
                 self.language_pending = false;
                 self.length_unit_pending = false;
+                self.sketch_grid_pending = false;
                 true
             }
             Err(_) => {

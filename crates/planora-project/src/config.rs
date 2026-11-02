@@ -70,7 +70,7 @@ pub struct Config {
     #[serde(
         default = "default_true",
         skip_serializing_if = "is_true",
-        deserialize_with = "lenient_update_check"
+        deserialize_with = "lenient_bool_true"
     )]
     pub update_check: bool,
     /// Zeitpunkt der letzten Prüfung in Sekunden seit 1970 (UTC). Keine ganze Zahl ab 0 →
@@ -133,6 +133,22 @@ pub struct Config {
         deserialize_with = "lenient_language"
     )]
     pub length_unit: Option<String>,
+    /// Skizzenraster anzeigen (Skizzenfeld; Voreinstellung an, nur „aus“ wird geschrieben). Kein
+    /// Wahrheitswert → an.
+    #[serde(
+        default = "default_true",
+        skip_serializing_if = "is_true",
+        deserialize_with = "lenient_bool_true"
+    )]
+    pub sketch_grid: bool,
+    /// Am Skizzenraster fangen (Skizzenfeld „Fang“; Voreinstellung an, nur „aus“ wird
+    /// geschrieben). Kein Wahrheitswert → an.
+    #[serde(
+        default = "default_true",
+        skip_serializing_if = "is_true",
+        deserialize_with = "lenient_bool_true"
+    )]
+    pub sketch_snap: bool,
 }
 
 /// Voreinstellung des Update-Kanals (Kennung).
@@ -243,6 +259,8 @@ impl Default for Config {
             verbose_log: false,
             language: None,
             length_unit: None,
+            sketch_grid: true,
+            sketch_snap: true,
         }
     }
 }
@@ -287,8 +305,8 @@ fn lenient_update_channel<'de, D: Deserializer<'de>>(
     Ok(id.to_string())
 }
 
-/// Liest `update_check` aus jedem JSON-Wert: kein Wahrheitswert → an.
-fn lenient_update_check<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<bool, D::Error> {
+/// Liest einen Schalter mit Voreinstellung „an“ aus jedem JSON-Wert: kein Wahrheitswert → an.
+fn lenient_bool_true<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<bool, D::Error> {
     Ok(serde_json::Value::deserialize(d)?.as_bool().unwrap_or(true))
 }
 

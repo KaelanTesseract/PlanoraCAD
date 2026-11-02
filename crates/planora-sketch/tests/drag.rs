@@ -398,3 +398,139 @@ fn drag_rejects_targets_beyond_max_coord() {
     }
     assert_eq!(s.point_xy(b).unwrap(), DVec2::new(4.0, 0.0));
 }
+
+// ---- Kreisradius am Rand (Skizzen 2) --------------------------------------------------------
+
+#[test]
+fn drag_radius_sets_a_free_circle_exactly_and_keeps_the_center() {
+    let mut s = sketch();
+    let m = s.add_point(3.0, 4.0).unwrap();
+    let c = s.add_circle(m, 10.0).unwrap();
+    let r = s.drag_radius(c, 12.5).unwrap();
+    assert_eq!(r.status, SolveStatus::Solved, "{r:?}");
+    assert_eq!(s.radius(c), Some(12.5));
+    assert_eq!(s.point_xy(m).unwrap(), DVec2::new(3.0, 4.0));
+}
+
+#[test]
+fn drag_radius_ignores_constraints_that_do_not_read_the_radius() {
+    // Feste Mitte: Der Radius bleibt frei und wird direkt gesetzt. Ein abgeschaltetes Maß zählt
+    // nicht.
+    let mut s = sketch();
+    let m = s.add_point(0.0, 0.0).unwrap();
+    let c = s.add_circle(m, 10.0).unwrap();
+    s.add_constraint(K::Fixed(m, 0.0, 0.0)).unwrap();
+    let d = s.add_constraint(K::Radius(c, 10.0)).unwrap();
+    s.set_enabled(d, false).unwrap();
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+    assert_eq!(s.drag_radius(c, 7.25).unwrap().status, SolveStatus::Solved);
+    assert_eq!(s.radius(c), Some(7.25));
+}
+
+#[test]
+fn drag_radius_keeps_a_radius_dimension() {
+    let mut s = sketch();
+    let m = s.add_point(0.0, 0.0).unwrap();
+    let c = s.add_circle(m, 10.0).unwrap();
+    s.add_constraint(K::Radius(c, 10.0)).unwrap();
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+    let r = s.drag_radius(c, 15.0).unwrap();
+    assert_eq!(r.status, SolveStatus::Solved, "{r:?}");
+    assert!((s.radius(c).unwrap() - 10.0).abs() < 1e-6);
+    assert!(s.point_xy(m).unwrap().length() < 1e-6);
+}
+
+#[test]
+fn drag_radius_pulls_through_constraints_that_read_it() {
+    // Ein Punkt auf dem Kreis, die Mitte fest: Der Radius folgt, der Punkt bleibt auf dem Kreis.
+    let mut s = sketch();
+    let m = s.add_point(0.0, 0.0).unwrap();
+    let p = s.add_point(10.0, 0.0).unwrap();
+    let c = s.add_circle(m, 10.0).unwrap();
+    s.add_constraint(K::Fixed(m, 0.0, 0.0)).unwrap();
+    s.add_constraint(K::PointOnCurve(p, c)).unwrap();
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+    let r = s.drag_radius(c, 15.0).unwrap();
+    assert_eq!(r.status, SolveStatus::Solved, "{r:?}");
+    let radius = s.radius(c).unwrap();
+    assert!(radius > 11.0, "{radius}");
+    assert!((s.point_xy(p).unwrap().length() - radius).abs() < 1e-6);
+}
+
+#[test]
+fn drag_radius_rejects_other_curves_and_bad_targets() {
+    let mut s = sketch();
+    let m = s.add_point(0.0, 0.0).unwrap();
+    let c = s.add_circle(m, 10.0).unwrap();
+    let a = s.add_point(10.0, 0.0).unwrap();
+    let b = s.add_point(0.0, 10.0).unwrap();
+    let arc = s.add_arc(m, a, b).unwrap();
+    let line = s.add_line(a, b).unwrap();
+    for other in [arc, line] {
+        assert!(matches!(
+            s.drag_radius(other, 5.0),
+            Err(SketchError::InvalidInput(_))
+        ));
+    }
+    let tiny = s.tolerance().linear;
+    for target in [0.0, -1.0, tiny] {
+        assert!(matches!(
+            s.drag_radius(c, target),
+            Err(SketchError::Degenerate(_))
+        ));
+    }
+    for target in [f64::NAN, f64::INFINITY, 2e9] {
+        assert!(matches!(
+            s.drag_radius(c, target),
+            Err(SketchError::InvalidInput(_))
+        ));
+    }
+    assert_eq!(
+        s.drag_radius(planora_kernel::Id::from_index(42), 5.0)
+            .unwrap_err(),
+        SketchError::UnknownObject
+    );
+    assert_eq!(s.radius(c), Some(10.0));
+}
+
+// ---- Gescheiterte Gruppen beim Ziehen (Skizzen 2) -------------------------------------------
+
+#[test]
+fn drag_failed_names_only_the_groups_that_use_the_dragged_values() {
+    let mut s = sketch();
+    let unrelated = unrelated_groups(&mut s);
+    let free = s.add_point(-5.0, -5.0).unwrap();
+    let r = s
+        .drag(&[Drag {
+            point: free,
+            target: DVec2::new(1.0, 2.0),
+        }])
+        .unwrap();
+    assert_eq!(r.status, SolveStatus::Conflicting);
+    assert!(!r.drag_failed, "der Widerspruch ist fremd: {r:?}");
+    let r = s
+        .drag(&[Drag {
+            point: unrelated[0],
+            target: DVec2::new(21.0, 0.0),
+        }])
+        .unwrap();
+    assert!(r.drag_failed, "{r:?}");
+    assert!(!s.solve().drag_failed, "ohne Zug nie");
+}
+
+#[test]
+fn drag_failed_sees_a_free_point_that_collapses_a_line_of_a_group() {
+    let mut s = sketch();
+    let b = s.add_point(0.0, 0.0).unwrap();
+    let c = s.add_point(5.0, 5.0).unwrap();
+    s.add_constraint(K::Fixed(b, 0.0, 0.0)).unwrap();
+    s.add_line(b, c).unwrap();
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+    let r = s
+        .drag(&[Drag {
+            point: c,
+            target: DVec2::ZERO,
+        }])
+        .unwrap();
+    assert!(r.drag_failed, "{r:?}");
+}

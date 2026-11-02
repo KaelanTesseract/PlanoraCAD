@@ -1131,3 +1131,38 @@ fn ellipse_angle_formula_in_degrees() {
     assert!((measure(&d) - 60f64.to_radians()).abs() <= 1e-9);
     d.check_invariants().unwrap();
 }
+
+/// Alte Skizze: Die Tangente am gemeinsamen Punkt war mit der früheren Zeile um eine Spur ungenau,
+/// „fest“ hat die Mitte so gespeichert. Ein Maß mit Formel im selben Verbund rechnet weiter.
+#[test]
+fn a_drifted_tangent_at_a_shared_end_still_rebuilds_with_formulas() {
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze", Tolerance::default());
+    let a = sk.add_point(0.0, 0.0).unwrap();
+    let b = sk.add_point(10.0, 0.0).unwrap();
+    let m = sk.add_point(10.0001, 5.0).unwrap();
+    let other = sk.add_point(15.0001, 5.0).unwrap();
+    let q = sk.add_point(10.0001, 12.0).unwrap();
+    let line = sk.add_line(a, b).unwrap();
+    let arc = sk.add_arc(m, b, other).unwrap();
+    for (p, x, y) in [(a, 0.0, 0.0), (b, 10.0, 0.0), (m, 10.0001, 5.0)] {
+        sk.add_constraint(ConstraintKind::Fixed(p, x, y)).unwrap();
+    }
+    sk.add_constraint(ConstraintKind::Tangent(line, arc))
+        .unwrap();
+    let distance = sk
+        .add_constraint(ConstraintKind::Distance(m, q, 7.0))
+        .unwrap();
+
+    let mut d = Document::new();
+    let l = d.add_parameter("L", "7", Length, "").unwrap();
+    let s = d
+        .add_feature(
+            "Skizze 1",
+            FeatureKind::Sketch(on_xy(sk, one(distance, "L"))),
+        )
+        .unwrap();
+    assert_eq!(status(&d, s), FeatureStatus::Ok);
+    d.set_parameter(l, edit(&d, l, "9")).unwrap();
+    assert_eq!(status(&d, s), FeatureStatus::Ok);
+    assert_eq!(stored(&d, s, distance), 9.0);
+}

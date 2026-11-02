@@ -384,6 +384,23 @@ fn line_and_param(sk: &Sketch, a: CurveId, b: CurveId) -> Option<(CurveId, Curve
     }
 }
 
+/// Winkel (rad), um den eine Tangente an einem gemeinsamen Endpunkt danebenliegen darf, ohne als
+/// Widerspruch zu gelten. Die frühere Zeile hielt die Richtung nur in zweiter Ordnung; der Solver
+/// blieb etwa 5e-5 rad davor stehen (Mitte rund 3e-4 mm daneben bei r = 5), und „fest“ oder ein
+/// gemessenes Maß haben diese Lage gespeichert. Solche alten Skizzen bleiben lösbar.
+pub(crate) const SHARED_END_TANGENT_DRIFT: f64 = 1e-3;
+
+/// Gemeinsamer Endpunkt zweier Linien oder Bögen.
+fn shared_end(sk: &Sketch, a: CurveId, b: CurveId) -> Option<PointId> {
+    let ends = |c: CurveId| match sk.curves[c].kind {
+        CurveKind::Line { a, b } => Some([a, b]),
+        CurveKind::Arc { start, end, .. } => Some([start, end]),
+        _ => None,
+    };
+    let (ea, eb) = (ends(a)?, ends(b)?);
+    ea.into_iter().find(|p| eb.contains(p))
+}
+
 /// Vorzeichenbehafteter Abstand des Punktes p von der Linie (links der Richtung positiv).
 fn signed_distance(ctx: &Ctx, p: &V2, line: CurveId) -> Dual {
     let (a, d) = line_dir(ctx, line);
@@ -451,6 +468,32 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
             let (_, d) = line_dir(ctx, line);
             let den = norm_len(&dq) * norm_len(&d);
             vec![signed_distance(ctx, &q, line), cross(&dq, &d) / den]
+        }
+        // Am gemeinsamen Ende berührt die Tangente nur in zweiter Ordnung: Ihre Zeile fiele dort
+        // mit `ArcRadius` zusammen (oder wäre null) und hielte die Richtung nicht. Darum zählt hier
+        // die Richtung selbst: Radius senkrecht zur Linie, die Mitten auf einer Geraden durchs Ende.
+        Tangent(c1, c2) if shared_end(sk, *c1, *c2).is_some() => {
+            let Some(p) = shared_end(sk, *c1, *c2) else {
+                unreachable!("checked in the guard")
+            };
+            let at = ctx.pt(p);
+            match (&sk.curves[*c1].kind, &sk.curves[*c2].kind) {
+                (CurveKind::Line { .. }, _) => {
+                    let (m, _) = circle_of(ctx, *c2);
+                    let (_, d) = line_dir(ctx, *c1);
+                    vec![dot(&d, &sub2(&at, &m)) / norm_len(&d)]
+                }
+                (_, CurveKind::Line { .. }) => {
+                    let (m, _) = circle_of(ctx, *c1);
+                    let (_, d) = line_dir(ctx, *c2);
+                    vec![dot(&d, &sub2(&at, &m)) / norm_len(&d)]
+                }
+                _ => {
+                    let ((m1, _), (m2, _)) = (circle_of(ctx, *c1), circle_of(ctx, *c2));
+                    let (u, v) = (sub2(&m1, &at), sub2(&m2, &at));
+                    vec![cross(&u, &v) / norm_len(&u)]
+                }
+            }
         }
         Tangent(c1, c2) => {
             let s = f64::from(data.branch);
@@ -956,12 +999,42 @@ impl Sketch {
         }
     }
 
+    /// Abweichung (rad, ohne Vorzeichen) der Tangente `id` an einem gemeinsamen Endpunkt an den
+    /// Werten `x`; `None`, wenn `id` keine solche Tangente ist.
+    pub(crate) fn shared_end_tangent_drift(&self, id: ConstraintId, x: &[f64]) -> Option<f64> {
+        let ConstraintKind::Tangent(a, b) = self.constraints[id].kind else {
+            return None;
+        };
+        let end = shared_end(self, a, b)?;
+        // Die Zeile ist „Radius · sin(Abweichung)“, mit dem Radius der hinteren Kurve, wenn sie ein
+        // Bogen ist (Linie–Bogen: immer der Bogen).
+        let round = if is_line_kind(&self.curves[b].kind) {
+            a
+        } else {
+            b
+        };
+        let CurveKind::Arc { center, .. } = self.curves[round].kind else {
+            return None;
+        };
+        let at = |p: PointId| DVec2::new(x[self.points[p].x], x[self.points[p].y]);
+        let radius = at(end).distance(at(center));
+        let row = self.evaluate(id, x)?.residuals.first()?.v;
+        (radius > 0.0).then(|| (row / radius).abs())
+    }
+
     /// Ist die lebende Abhängigkeit an den aktuellen Werten ohne Bewegung erfüllt? Alle Residuen
     /// höchstens `factor · tol.linear`, Winkelzeilen (parallel, rechtwinklig, Winkel,
     /// Ellipsenwinkel, Richtung bei Tangente Linie–Ellipse/Spline) höchstens
-    /// `factor · tol.angular`.
+    /// `factor · tol.angular`; eine Tangente am gemeinsamen Endpunkt innerhalb von
+    /// [`SHARED_END_TANGENT_DRIFT`].
     pub(crate) fn satisfied(&self, id: ConstraintId, factor: f64) -> bool {
         use ConstraintKind::*;
+        if self
+            .shared_end_tangent_drift(id, &self.vars)
+            .is_some_and(|d| d <= SHARED_END_TANGENT_DRIFT)
+        {
+            return true;
+        }
         let Some(ev) = self.evaluate(id, &self.vars) else {
             return false;
         };

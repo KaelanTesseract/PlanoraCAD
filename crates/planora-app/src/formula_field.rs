@@ -257,6 +257,7 @@ pub struct FieldOutcome {
 /// - `error_below(false)`: Die Meldung steht nicht unter dem Feld (gleich hohe Zeilen in einer
 ///   Tabelle); der Aufrufer zeigt [`FieldOutcome::error`] selbst.
 /// - `label`: Name für Bildschirmleser.
+/// - `lock_focus(true)`: Tab und Umschalt+Tab springen nicht aus dem Feld; der Aufrufer liest sie.
 /// - `saved`: der übernommene Text (etwa aus dem Dokument). Dann übernimmt das Verlassen des
 ///   Feldes, sobald der Text davon abweicht, auch wenn die Änderung schon vor dem letzten
 ///   Fokus getippt wurde (sonst nur nach einer Änderung seit dem Fokus).
@@ -271,6 +272,7 @@ pub struct FormulaField<'a> {
     width: f32,
     enabled: bool,
     error_below: bool,
+    lock_focus: bool,
     label: Option<String>,
     saved: Option<&'a str>,
 }
@@ -288,6 +290,7 @@ impl<'a> FormulaField<'a> {
             width: 90.0,
             enabled: true,
             error_below: true,
+            lock_focus: false,
             label: None,
             saved: None,
         }
@@ -305,6 +308,11 @@ impl<'a> FormulaField<'a> {
 
     pub fn error_below(mut self, below: bool) -> Self {
         self.error_below = below;
+        self
+    }
+
+    pub fn lock_focus(mut self, lock: bool) -> Self {
+        self.lock_focus = lock;
         self
     }
 
@@ -339,6 +347,7 @@ impl<'a> FormulaField<'a> {
             width,
             enabled,
             error_below,
+            lock_focus,
             label,
             saved,
         } = self;
@@ -384,6 +393,7 @@ impl<'a> FormulaField<'a> {
                     enabled,
                     egui::TextEdit::singleline(text)
                         .id_salt(id_salt)
+                        .lock_focus(lock_focus)
                         .desired_width(width),
                 );
                 if let Some(l) = &label {

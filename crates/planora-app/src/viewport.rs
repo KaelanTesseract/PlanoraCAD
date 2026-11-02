@@ -7,10 +7,12 @@ use egui::{Align2, Color32, FontId, Mesh, Pos2, Rect, Sense, Shape, Stroke, pos2
 use glam::{Vec2, Vec3};
 use planora_render::gpu::ViewportCallback;
 use planora_render::{
-    CubePiece, CubeRegion, INSET, OrbitCamera, Palette, Pick, ViewFace, cube_pieces_visible,
-    current_region, face_text_frame, grid_lines, pieces_hit_test,
+    CubePiece, CubeRegion, INSET, LineVertex, OrbitCamera, Palette, Pick, ViewFace, axis_lines,
+    cube_pieces_visible, current_region, face_text_frame, grid_lines, pieces_hit_test,
 };
 
+/// Ab hier zeigt eine Achse fast auf den Betrachter (cos 15°).
+const AXIS_TOWARD_VIEWER: f32 = 0.966;
 /// Kantenlänge des Würfelfelds.
 pub const CUBE_SIZE: f32 = 100.0;
 /// Abstand des Würfelfelds zum Rand der freien Fläche (rechts und oben).
@@ -72,6 +74,35 @@ pub fn render_palette(dark: bool) -> Palette {
         axis_y: rgba(p.axis_y),
         axis_z: rgba(p.axis_z),
         ..base
+    }
+}
+
+/// Linien der 3D-Szene: Bodenraster und Achsen; im Skizzenmodus nur die Achsen, das Raster zeichnet
+/// dort die Skizze in ihrer Ebene ([`sketch_view::sketch_grid_shapes`]). Eine Achse, die fast auf
+/// den Betrachter zeigt, entfällt dort: Perspektivisch liefe sie sonst als lange Linie vom Ursprung
+/// quer durchs Bild und sähe aus wie Geometrie der Skizze.
+pub fn scene_lines(state: &AppState) -> Vec<LineVertex> {
+    let cam = &state.camera;
+    if state.sketch_session.is_some() {
+        let view = (cam.eye() - cam.target).normalize_or_zero();
+        axis_lines(cam.target, cam.distance, &state.palette())
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .filter(|[from, to]| {
+                let along = Vec3::from(to.position) - Vec3::from(from.position);
+                along.normalize_or_zero().dot(view).abs() < AXIS_TOWARD_VIEWER
+            })
+            .flatten()
+            .copied()
+            .collect()
+    } else {
+        grid_lines(
+            cam.target,
+            cam.distance,
+            planora_i18n::current_unit().mm_per_unit() as f32,
+            &state.palette(),
+        )
     }
 }
 
@@ -503,23 +534,74 @@ pub(crate) fn keyboard_taken(ctx: &egui::Context) -> bool {
     })
 }
 
+fn draw_field_ids_key() -> egui::Id {
+    egui::Id::new("planora-draw-field-ids")
+}
+
+fn history_focus_id() -> egui::Id {
+    egui::Id::new("planora-history-focus-last-frame")
+}
+
+/// Meldet ein Feld am Zeiger beim Zeichnen ([`crate::sketch_inline`]): Es liest Tasten wie jedes
+/// Eingabefeld, zählt für den Verlauf aber nicht als Geste ([`typing_for_history`]).
+pub fn set_draw_field(ctx: &egui::Context, id: egui::Id) {
+    ctx.data_mut(|d| {
+        let ids = d.get_temp_mut_or_default::<Vec<egui::Id>>(draw_field_ids_key());
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    });
+}
+
+/// Hat ein Feld am Zeiger gerade die Tastatur?
+pub fn draw_field_has_keyboard(ctx: &egui::Context) -> bool {
+    let Some(focused) = ctx.memory(|m| m.focused()) else {
+        return false;
+    };
+    ctx.data(|d| {
+        d.get_temp::<Vec<egui::Id>>(draw_field_ids_key())
+            .is_some_and(|ids| ids.contains(&focused))
+    })
+}
+
+/// Hat ein anderes Eingabefeld als die am Zeiger die Tastatur?
+fn other_field_has_keyboard(ctx: &egui::Context) -> bool {
+    keyboard_taken(ctx) && !draw_field_has_keyboard(ctx)
+}
+
 /// Merkt sich am Ende eines Frames, ob ein Eingabefeld die Tastatur hatte. Wird von der App nach
 /// dem Aufbau aller Bereiche aufgerufen.
 pub fn remember_keyboard_focus(ctx: &egui::Context) {
     let focused = keyboard_taken(ctx);
-    ctx.data_mut(|d| d.insert_temp(keyboard_focus_id(), focused));
+    let other = other_field_has_keyboard(ctx);
+    ctx.data_mut(|d| {
+        d.insert_temp(keyboard_focus_id(), focused);
+        d.insert_temp(history_focus_id(), other);
+    });
 }
 
 /// Hat ein Eingabefeld die Tastatur (in diesem oder im vorigen Frame)? Dann sind Tastenkürzel
 /// der Ansicht gesperrt. egui nimmt bei Escape den Fokus schon zu Beginn des Frames weg; deshalb
-/// zählt auch, ob im vorigen Frame ein Eingabefeld (z. B. der Name) die Tastatur hatte. Ebenso
+/// zählt auch, ob im vorigen Frame ein Eingabefeld (z. B. der Name) die Tastatur hatte, solange
+/// der Fokus nicht schon auf einer Fläche liegt, die keinen Text liest. Ebenso
 /// gesperrt, solange die Einstellungen eine neue Belegung erfassen
 /// ([`crate::keymap::settings_ui::is_capturing`]): die erfasste Taste löst nichts aus.
 pub fn typing(ctx: &egui::Context) -> bool {
     keyboard_taken(ctx)
         || crate::keymap::settings_ui::is_capturing(ctx)
+        || (ctx.memory(|m| m.focused()).is_none()
+            && ctx
+                .data(|d| d.get_temp::<bool>(keyboard_focus_id()))
+                .unwrap_or(false))
+}
+
+/// Wie [`typing`], aber ein Feld am Zeiger zählt nicht: Für den Verlauf ist Tippen dort keine
+/// Geste, sonst wäre ein ganzer Linienzug ein einziger Schritt.
+pub fn typing_for_history(ctx: &egui::Context) -> bool {
+    other_field_has_keyboard(ctx)
+        || crate::keymap::settings_ui::is_capturing(ctx)
         || ctx
-            .data(|d| d.get_temp::<bool>(keyboard_focus_id()))
+            .data(|d| d.get_temp::<bool>(history_focus_id()))
             .unwrap_or(false)
 }
 
@@ -727,13 +809,7 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
                 scene: state.scene.clone(),
                 scene_version: state.scene_version,
                 // Raster und Achsen folgen der Kamera: je Bild neu, ohne die Szene anzufassen.
-                // Im Skizzen-Modus unverändert (die gedämpfte Palette lässt beide unberührt).
-                grid: grid_lines(
-                    cam.target,
-                    cam.distance,
-                    planora_i18n::current_unit().mm_per_unit() as f32,
-                    &state.palette(),
-                ),
+                grid: scene_lines(state),
             },
         ),
     );

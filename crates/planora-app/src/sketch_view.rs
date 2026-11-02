@@ -2,15 +2,16 @@
 //! über der Szene und Weiterleiten der Eingaben an [`SketchSession`]. Die Logik (Werkzeuge, Fang,
 //! Abhängigkeiten) liegt in `sketch_state`; hier wird nur gezeichnet und weitergereicht.
 
+use crate::sketch_cursor::AutoConstraint;
 use crate::sketch_state::{Item, SketchSession, Snap, Tool};
 use crate::state::AppState;
-use crate::theme::{lighten as lighter, sketch_colors as colors};
+use crate::theme::{self, lighten as lighter, sketch_colors as colors};
 use crate::viewport;
 use egui::{Color32, FontId, Mesh, PointerButton, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2};
 use glam::{Vec2, Vec3};
 use planora_i18n::tr;
 use planora_math::{DVec2, DVec3, Frame};
-use planora_render::{EdgeRef, OrbitCamera, Pick};
+use planora_render::{EdgeRef, OrbitCamera, Pick, exact_step, grid_radius, line_weight};
 use planora_sketch::ExtractedProfiles;
 use planora_sketch::constraint::{ConstraintKind, LineOrPoints};
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
@@ -30,6 +31,24 @@ const AXIS_PX: f32 = 28.0;
 const POINT_PX: f32 = 3.5;
 /// Strichstärke normaler Kurven in Pixeln.
 const CURVE_WIDTH: f32 = 2.0;
+/// Halbe Größe der Fangzeichen in Pixeln.
+const SNAP_MARK_PX: f32 = 5.0;
+/// Strichstärke der Fangzeichen in Pixeln.
+const SNAP_MARK_WIDTH: f32 = 1.5;
+/// Höchstzahl der Rasterlinien je Bild; darüber zeichnet das Raster nur die gröbere Stufe.
+const GRID_MAX_LINES: f64 = 300.0;
+/// Höchster Übergang zur gröberen Stufe: Die feinen Linien, auf denen der Zeiger rastet, bleiben
+/// so immer schwach zu sehen.
+const GRID_MAX_BLEND: f32 = 0.6;
+/// Jede wievielte Linie der feinen Stufe zur gröberen gehört.
+const GRID_DECADE: i64 = 10;
+/// Teilstücke einer Rasterlinie: Liegt ein Teil bei geneigter Ansicht hinter der Kamera, bleibt der
+/// Rest sichtbar.
+const GRID_SEGMENTS: usize = 8;
+/// Rasterlinien, die schwächer als dies erscheinen, werden weggelassen.
+const GRID_MIN_ALPHA: f32 = 0.01;
+/// Strichstärke der Rasterlinien in Pixeln.
+const GRID_WIDTH: f32 = 1.0;
 /// Schriftgröße der Abhängigkeitssymbole und Maße.
 const LABEL_SIZE: f32 = 12.0;
 
@@ -211,6 +230,17 @@ fn symbol(ctx: &egui::Context, preferred: &'static str, fallback: &'static str) 
     }
 }
 
+fn parallel_symbol(ctx: &egui::Context) -> &'static str {
+    symbol(ctx, "∥", "||")
+}
+
+fn perpendicular_symbol(ctx: &egui::Context) -> String {
+    match symbol(ctx, "⟂", "") {
+        "" => tr!("sketch-overlay-perpendicular"),
+        sym => sym.to_string(),
+    }
+}
+
 /// Beschriftung einer Abhängigkeit in der Ansicht: Symbol bzw. Maß mit Einheit.
 pub fn overlay_text(
     ctx: &egui::Context,
@@ -223,13 +253,12 @@ pub fn overlay_text(
         K::Coincident(..) | K::ArcRadius(..) | K::EllipticArcEnds(..) => return String::new(),
         K::Horizontal(..) => "H".to_string(),
         K::Vertical(..) => "V".to_string(),
-        K::Parallel(..) => symbol(ctx, "∥", "||").to_string(),
-        K::Perpendicular(..) => match symbol(ctx, "⟂", "") {
-            "" => tr!("sketch-overlay-perpendicular"),
-            sym => sym.to_string(),
-        },
+        K::Parallel(..) => parallel_symbol(ctx).to_string(),
+        K::Perpendicular(..) => perpendicular_symbol(ctx),
         K::Equal(..) => "=".to_string(),
         K::Tangent(..) => "T".to_string(),
+        // Der Punkt im Ursprung ist „deckungsgleich mit dem Ursprung“, kein Festsetzen von Hand.
+        K::Fixed(_, x, y) if *x == 0.0 && *y == 0.0 => return String::new(),
         K::Fixed(..) => "fix".to_string(),
         K::Midpoint(..) => tr!("sketch-overlay-midpoint"),
         K::Symmetric(..) => tr!("sketch-overlay-symmetric"),
@@ -252,6 +281,41 @@ pub fn overlay_text(
         _ => value_text(kind, v),
     };
     if driven { format!("({text})") } else { text }
+}
+
+/// Zeichen einer automatischen Abhängigkeit, wie später an der fertigen Kurve.
+fn auto_text(ctx: &egui::Context, auto: AutoConstraint) -> String {
+    match auto {
+        AutoConstraint::Horizontal => "H".to_string(),
+        AutoConstraint::Vertical => "V".to_string(),
+        AutoConstraint::Parallel(_) => parallel_symbol(ctx).to_string(),
+        AutoConstraint::Perpendicular(_) => perpendicular_symbol(ctx),
+        AutoConstraint::Tangent(_) => "T".to_string(),
+    }
+}
+
+/// Stellen der Zeichen für die automatischen Abhängigkeiten des Zeigers: an der entstehenden Kurve
+/// (Linie: Mitte, Bogen: am Zeiger) und, wenn es eine gibt, an der Bezugskurve.
+pub fn auto_marks(sk: &Sketch, se: &SketchSession) -> Vec<(DVec2, AutoConstraint)> {
+    let Some(cur) = &se.draw_cursor else {
+        return Vec::new();
+    };
+    let own = match (se.tool, se.pending.last().and_then(|&p| pos(sk, p))) {
+        (Tool::Line, Some(start)) => (start + cur.at) * 0.5,
+        _ => cur.at,
+    };
+    let mut marks = Vec::new();
+    for &auto in &cur.autos {
+        marks.push((own, auto));
+        if let AutoConstraint::Parallel(c)
+        | AutoConstraint::Perpendicular(c)
+        | AutoConstraint::Tangent(c) = auto
+            && let Some(at) = curve_anchor(sk, c)
+        {
+            marks.push((at, auto));
+        }
+    }
+    marks
 }
 
 // ---- Lage der Beschriftungen ----------------------------------------------------------------
@@ -470,6 +534,169 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
     out
 }
 
+/// Sichtbarer Bereich der Skizzenebene `(min, max)`: die Ecken der Ansicht auf der Ebene, höchstens
+/// so weit wie das Bodenraster um das Ziel der Kamera reicht (der ganze Umkreis, wenn eine Ecke die
+/// Ebene nicht trifft).
+fn grid_window(map: &Mapper) -> (DVec2, DVec2) {
+    let target = map.frame.to_local(to_dvec3(map.camera.target));
+    let target = DVec2::new(target.x, target.y);
+    let reach = DVec2::splat(f64::from(grid_radius(map.camera.distance)));
+    let (lo, hi) = (target - reach, target + reach);
+    let r = map.rect;
+    let corners: Option<Vec<DVec2>> = [
+        r.left_top(),
+        r.right_top(),
+        r.left_bottom(),
+        r.right_bottom(),
+    ]
+    .into_iter()
+    .map(|c| map.to_sketch(c))
+    .collect();
+    let Some(corners) = corners else {
+        return (lo, hi);
+    };
+    let seen = corners
+        .iter()
+        .fold((hi, lo), |(a, b), &c| (a.min(c), b.max(c)));
+    (seen.0.max(lo), seen.1.min(hi))
+}
+
+/// Was das Skizzenraster in diesem Bild zeichnet; Zeichnen und Raster-Fang lesen beide von hier.
+struct GridPlan {
+    fine: f64,
+    blend: f32,
+    /// Jede wievielte Linie der feinen Stufe gezeichnet wird: 1, oder [`GRID_DECADE`], wenn es sonst
+    /// mehr als [`GRID_MAX_LINES`] wären (geneigte Ansicht).
+    every: i64,
+    lo: DVec2,
+    hi: DVec2,
+}
+
+impl GridPlan {
+    /// Das Raster dieses Bilds; `None` bei unbrauchbarer Kamera oder Ansicht.
+    fn of(map: &Mapper) -> Option<GridPlan> {
+        let distance = map.camera.distance;
+        if map.rect.width() < 2.0
+            || map.rect.height() < 2.0
+            || !distance.is_finite()
+            || distance <= 0.0
+        {
+            return None;
+        }
+        let (fine, blend) = exact_step(distance, planora_i18n::current_unit().mm_per_unit());
+        let (lo, hi) = grid_window(map);
+        if !(lo.is_finite() && hi.is_finite()) {
+            return None;
+        }
+        let count = |a: f64, b: f64| (b / fine).floor() - (a / fine).ceil() + 1.0;
+        let every = if count(lo.x, hi.x) + count(lo.y, hi.y) > GRID_MAX_LINES {
+            GRID_DECADE
+        } else {
+            1
+        };
+        Some(GridPlan {
+            fine,
+            blend,
+            every,
+            lo,
+            hi,
+        })
+    }
+
+    /// Stufe des Raster-Fangs: die feinste gezeichnete; ist das Raster ausgedünnt, bleiben nur die
+    /// Linien der gröberen Stufe zu sehen, also rastet auch der Zeiger nur dort.
+    fn snap_step(&self) -> f64 {
+        self.fine * self.every as f64
+    }
+}
+
+/// Stück `from..to` der Rasterlinie durch den Skizzenursprung in Richtung `dir` (Welt), auf dem
+/// keine Achse der 3D-Szene liegt ([`planora_render::axis_lines`]): Die x- und die y-Achse laufen
+/// beidseits des Weltursprungs, die z-Achse nur von dort nach oben. `None`: ganz belegt. Andere
+/// Ebenen behalten die ganze Linie.
+fn zero_line_span(frame: &Frame, dir: DVec3, from: f64, to: f64, tol: f64) -> Option<(f64, f64)> {
+    /// Ab hier läuft eine Richtung der Ebene genau entlang einer Weltachse.
+    const ALIGNED: f64 = 1.0 - 1e-9;
+    if frame.origin.length() > tol {
+        return Some((from, to));
+    }
+    if dir.x.abs() >= ALIGNED || dir.y.abs() >= ALIGNED {
+        return None;
+    }
+    if dir.z >= ALIGNED {
+        return (from < 0.0).then_some((from, to.min(0.0)));
+    }
+    if dir.z <= -ALIGNED {
+        return (to > 0.0).then_some((from.max(0.0), to));
+    }
+    Some((from, to))
+}
+
+/// Skizzenraster in der Ebene der offenen Skizze als Formen (leer, wenn es ausgeschaltet ist): Stufe
+/// und Übergang wie das Bodenraster, jede Linie auf einem Vielfachen der feinen Stufe. Höchstens
+/// [`GRID_MAX_LINES`] Linien. Wo eine Achse der 3D-Szene liegt, läuft keine Rasterlinie.
+pub fn sketch_grid_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
+    let mut out = Vec::new();
+    let Some(map) = mapper(rect, state).filter(|_| state.sketch_show_grid) else {
+        return out;
+    };
+    let Some(plan) = GridPlan::of(&map) else {
+        return out;
+    };
+    let GridPlan {
+        fine,
+        blend,
+        every,
+        lo,
+        hi,
+    } = plan;
+    let colors = theme::palette(state.dark);
+    let tol = state
+        .session_sketch()
+        .map_or(0.0, |sk| sk.tolerance().linear);
+    for along_x in [true, false] {
+        let (first, last) = if along_x { (lo.y, hi.y) } else { (lo.x, hi.x) };
+        let (start, end) = if along_x { (lo.x, hi.x) } else { (lo.y, hi.y) };
+        let dir = if along_x { map.frame.x } else { map.frame.y };
+        for k in (first / fine).ceil() as i64..=(last / fine).floor() as i64 {
+            if k.rem_euclid(every) != 0 {
+                continue;
+            }
+            let span = if k == 0 {
+                zero_line_span(&map.frame, dir, start, end, tol)
+            } else {
+                Some((start, end))
+            };
+            let Some((from, to)) = span else {
+                continue;
+            };
+            let (share, alpha) = line_weight(k, blend.min(GRID_MAX_BLEND));
+            if alpha < GRID_MIN_ALPHA {
+                continue;
+            }
+            let at = k as f64 * fine;
+            let points: Vec<DVec2> = (0..=GRID_SEGMENTS)
+                .map(|i| {
+                    let v = from + (to - from) * i as f64 / GRID_SEGMENTS as f64;
+                    if along_x {
+                        DVec2::new(v, at)
+                    } else {
+                        DVec2::new(at, v)
+                    }
+                })
+                .collect();
+            let color = colors
+                .viewport_grid
+                .lerp_to_gamma(colors.viewport_grid_major, share)
+                .gamma_multiply(alpha);
+            for path in map.paths(&points) {
+                out.push(Shape::line(path, Stroke::new(GRID_WIDTH, color)));
+            }
+        }
+    }
+    out
+}
+
 /// Zeichnet die Skizze über die 3D-Ansicht in `rect` und verarbeitet die Eingaben des
 /// Skizzen-Modus. In der Skizzenfläche selbst wird nicht gedreht; Verschieben und Zoomen gelten
 /// dort nach der Tastenbelegung (Voreinstellung: mittlere Maustaste oder Umschalt + Ziehen,
@@ -492,8 +719,116 @@ pub fn show_overlay(ui: &mut egui::Ui, rect: Rect, state: &mut AppState) -> bool
     viewport::focus_is_not_typing(ui.ctx(), response.id);
     state.camera.set_viewport(rect.width(), rect.height());
     handle_input(ui, &response, rect, state);
+    let pointer = response.hover_pos().or(response.interact_pointer_pos());
+    if crate::sketch_inline::show(ui, rect, state, pointer) {
+        cursor_after_fields(rect, state, pointer);
+    }
     draw(ui, rect, state, response.hover_pos());
     response.hovered()
+}
+
+/// Die Abbildung auf die Skizze im Rechteck `rect` für dieses Bild.
+fn mapper(rect: Rect, state: &AppState) -> Option<Mapper> {
+    Some(Mapper {
+        camera: state.camera,
+        frame: *state.session_sketch()?.frame(),
+        rect,
+    })
+}
+
+/// Fangradius in Skizzeneinheiten am Zeiger `p`.
+pub(crate) fn pointer_radius(state: &AppState, rect: Rect, p: Pos2) -> f64 {
+    mapper(rect, state)
+        .and_then(|map| map.radius_at(p))
+        .unwrap_or(0.0)
+}
+
+/// Rohlage des aufgelösten Zeigers: `at`, ohne Zeiger über der Skizze mit einer Sperre die letzte
+/// Lage, damit die Vorschau die Sperre weiter zeigt.
+fn cursor_raw(se: &SketchSession, at: Option<DVec2>) -> Option<DVec2> {
+    let locked = se.input.fields.iter().any(|f| f.locked.is_some());
+    at.or(se.cursor.filter(|_| locked))
+}
+
+/// Aufgelöster Zeiger nach einer Änderung in den Feldern: Was eben getippt wurde, gilt schon in der
+/// Vorschau dieses Bilds.
+fn cursor_after_fields(rect: Rect, state: &mut AppState, pointer: Option<Pos2>) {
+    let Some(map) = mapper(rect, state) else {
+        return;
+    };
+    let at = pointer.and_then(|p| map.to_sketch(p));
+    let radius = pointer.and_then(|p| map.radius_at(p)).unwrap_or(0.0);
+    let Some((se, sk)) = state.session_sketch_mut() else {
+        return;
+    };
+    se.sync_input(sk);
+    if se.input.fields.is_empty() {
+        return;
+    }
+    let raw = cursor_raw(se, at);
+    se.update_cursor(sk, raw, radius);
+}
+
+/// Bildschirmlage als Doppelvektor, wie ihn der Auswahlrahmen führt.
+fn dvec(p: Pos2) -> DVec2 {
+    DVec2::new(f64::from(p.x), f64::from(p.y))
+}
+
+/// Beginnt der eben erkannte Zug mit der linken Taste einen Rahmen? Nur im Auswahlwerkzeug und auf
+/// freier Fläche (eine Lage außerhalb der Skizzenebene ist auch frei). Umschalt+links wählt dort
+/// statt zu schwenken (Fusion schwenkt mit der Mitte); jede andere Schwenk-Belegung bleibt.
+fn box_can_start(
+    ui: &egui::Ui,
+    rect: Rect,
+    state: &AppState,
+    pan_gesture: bool,
+    ctrl: bool,
+) -> bool {
+    let (Some(se), Some(sk)) = (state.sketch_session.as_ref(), state.session_sketch()) else {
+        return false;
+    };
+    let shift_only = ui.input(|i| i.modifiers.shift_only()) && !ctrl;
+    if se.tool != Tool::Select
+        || (pan_gesture && !shift_only)
+        || crate::keymap::settings_ui::is_capturing(ui.ctx())
+    {
+        return false;
+    }
+    let Some(map) = mapper(rect, state) else {
+        return false;
+    };
+    ui.input(|i| i.pointer.press_origin()).is_some_and(|p| {
+        match (map.to_sketch(p), map.radius_at(p)) {
+            (Some(at), Some(radius)) => se.is_free_at(sk, at, radius),
+            _ => true,
+        }
+    })
+}
+
+/// Der laufende Auswahlrahmen: Fläche und Rand; Fenster durchgezogen, Kreuzung gestrichelt.
+pub fn box_select_shapes(state: &AppState) -> Vec<Shape> {
+    let Some(b) = state.sketch_session.as_ref().and_then(|se| se.box_select) else {
+        return Vec::new();
+    };
+    let col = colors(state.dark);
+    let r = Rect::from_two_pos(
+        pos2(b.start.x as f32, b.start.y as f32),
+        pos2(b.current.x as f32, b.current.y as f32),
+    );
+    let corners = vec![
+        r.left_top(),
+        r.right_top(),
+        r.right_bottom(),
+        r.left_bottom(),
+        r.left_top(),
+    ];
+    let mut shapes = vec![Shape::rect_filled(r, 0.0, col.box_fill)];
+    shapes.extend(path_shapes(
+        corners,
+        Stroke::new(1.0, col.selected),
+        !b.is_window(),
+    ));
+    shapes
 }
 
 fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mut AppState) {
@@ -505,58 +840,110 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
                 |e| matches!(e, egui::Event::PointerButton { modifiers, .. } if modifiers.shift),
             )
     });
-    let Some(frame) = state.session_sketch().map(|sk| *sk.frame()) else {
+    // Strg ebenso: Sie schaltet Fang, Ausrichtung, Raster und Automatik aus (wie Fusion).
+    let ctrl = ui.input(|i| {
+        i.modifiers.ctrl
+            || i.events.iter().any(
+                |e| matches!(e, egui::Event::PointerButton { modifiers, .. } if modifiers.ctrl),
+            )
+    });
+    if state.session_sketch().is_none() {
         return;
-    };
+    }
 
     // Navigation: Verschieben und Zoomen; kein Orbit.
-    let dragging_point = state
+    let dragging = state
         .sketch_session
         .as_ref()
-        .is_some_and(|s| s.dragging.is_some());
-    // Schwenken nach der Tastenbelegung (Voreinstellung: Mitte oder Umschalt+links); nie
-    // während ein Punkt gezogen wird. Die linke Taste ohne Umschalttasten bleibt dem Zeichnen.
+        .is_some_and(SketchSession::is_dragging);
+    // Schwenken nach der Tastenbelegung (Voreinstellung: Mitte oder Umschalt+links, außer auf freier
+    // Fläche im Auswahlwerkzeug, dort zieht Umschalt+links einen Rahmen); nie
+    // während gezogen wird. Die linke Taste ohne Umschalttasten bleibt dem Zeichnen.
     // Ein Zug, der als Schwenken beginnt (z. B. Schwenken auf Strg+links umgelegt), zieht keinen
     // Punkt.
     let km = crate::keymap::mouse::current(ui.ctx());
-    let panning = crate::keymap::mouse::pan_2d(&km, ui, response);
-    if panning && !dragging_point {
+    let pan_gesture = crate::keymap::mouse::pan_2d(&km, ui, response);
+    let starts_box = response.drag_started_by(PointerButton::Primary)
+        && box_can_start(ui, rect, state, pan_gesture, ctrl);
+    // Ein laufender Rahmen schwenkt nicht, auch wenn Umschalt erst währenddessen dazukommt.
+    let boxing = starts_box
+        || state
+            .sketch_session
+            .as_ref()
+            .is_some_and(|s| s.box_select.is_some());
+    let panning = pan_gesture && !boxing;
+    if panning && !dragging {
         let d = response.drag_motion();
         state.camera.pan(d.x, d.y, rect.height());
     }
 
-    let map = Mapper {
-        camera: state.camera,
-        frame,
-        rect,
+    let Some(map) = mapper(rect, state) else {
+        return;
     };
     let pointer = response.hover_pos().or(response.interact_pointer_pos());
     let at = pointer.and_then(|p| map.to_sketch(p));
     let radius = pointer.and_then(|p| map.radius_at(p)).unwrap_or(0.0);
 
-    let Some((se, sk)) = state.session_sketch_mut() else {
+    // Raster-Fang auf der gezeichneten Stufe; ohne Raster oder ohne „Fang“ keiner.
+    let grid_step = if state.sketch_show_grid && state.sketch_snap_grid {
+        GridPlan::of(&map).map(|plan| plan.snap_step())
+    } else {
+        None
+    };
+
+    // Getippte Werte werden beim Klick zu Maßen; die Formeln darin brauchen die Parameter.
+    let commit_scope = (response.clicked_by(PointerButton::Primary)
+        && state
+            .sketch_session
+            .as_ref()
+            .is_some_and(SketchSession::is_drawing_tool))
+    .then(|| state.document.param_scope());
+    let Some((se, sf)) = state.session_draft_mut() else {
         return;
     };
     if let Some(at) = at {
         se.cursor = Some(at);
     }
+    se.cursor_opts.suppressed = ctrl;
+    se.cursor_opts.grid_step = grid_step;
 
-    // Punkt ziehen (Auswahlwerkzeug)
-    if response.drag_started_by(PointerButton::Primary) && !shift && !panning {
+    // Rahmen auf freier Fläche; alles andere greift (Punkt vor Kurve vor Rahmen).
+    if starts_box {
+        if let Some(origin) = ui.input(|i| i.pointer.press_origin()) {
+            se.begin_box(dvec(origin), shift);
+        }
+    } else if response.drag_started_by(PointerButton::Primary) && !shift && !panning {
+        // Punkt oder Kurve ziehen (Auswahlwerkzeug)
         let origin = ui.input(|i| i.pointer.press_origin());
         if let Some(start) = origin.and_then(|p| map.to_sketch(p)) {
             let r = origin.and_then(|p| map.radius_at(p)).unwrap_or(radius);
-            se.begin_drag(sk, start, r);
+            se.begin_drag(&mut sf.sketch, start, r);
         }
     }
-    if se.dragging.is_some() {
+    if se.is_dragging() {
         if response.dragged_by(PointerButton::Primary)
             && let Some(at) = at
         {
-            se.drag_to(sk, at);
+            se.drag_to(&mut sf.sketch, at);
         }
         if response.drag_stopped() || !response.dragged() {
-            se.end_drag(sk);
+            se.end_drag(&mut sf.sketch);
+        }
+    }
+
+    let esc = !viewport::typing(ui.ctx()) && ui.input(|i| i.key_pressed(egui::Key::Escape));
+    if se.box_select.is_some() {
+        // Die rechte Taste bricht schon beim Drücken ab: Ein Klick wird es während des Zugs nicht
+        // immer. Esc beendet schon hier den Zug von egui, der Rahmen fällt aber unten weg.
+        if ui.input(|i| i.pointer.button_pressed(PointerButton::Secondary)) {
+            se.abort_box();
+        } else if !esc {
+            if let Some(p) = ui.input(|i| i.pointer.latest_pos()) {
+                se.box_to(dvec(p));
+            }
+            if response.drag_stopped() || !response.dragged() {
+                se.end_box(&sf.sketch, &|q| map.to_screen(q).map(dvec));
+            }
         }
     }
 
@@ -567,14 +954,14 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             let origin = ui.input(|i| i.pointer.press_origin());
             if let Some(start) = origin.and_then(|p| map.to_sketch(p)) {
                 let r = origin.and_then(|p| map.radius_at(p)).unwrap_or(radius);
-                se.begin_trim_drag(sk, start, r);
+                se.begin_trim_drag(&mut sf.sketch, start, r);
             }
         }
         if se.trim_drag.is_some()
             && response.dragged_by(PointerButton::Primary)
             && let Some(at) = at
         {
-            se.trim_drag_to(sk, at, radius);
+            se.trim_drag_to(&mut sf.sketch, at, radius);
         }
     }
     if se.trim_drag.is_some() && (response.drag_stopped() || !response.dragged()) {
@@ -587,44 +974,62 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     // (6 Pixel) vom vorigen Klick entfernt sind. Ein „Dreifachklick“ entsteht schon, wenn zwei
     // schnelle Klicks an derselben Stelle einem Klick anderswo folgen (Zeit zum vorletzten Klick,
     // Abstand nur zum letzten) – das ist für den Nutzer ein Doppelklick und beendet ebenso.
-    if response.double_clicked() || response.triple_clicked() {
-        let _ = se.finish_tool(sk);
+    if se.box_aborted {
+        // Das Loslassen nach dem Abbruch ist kein Klick.
+    } else if response.double_clicked() || response.triple_clicked() {
+        if se.tool == Tool::Select {
+            // Wie beim einfachen Klick: Punkt vor Kurve.
+            if let Some(at) = at
+                && let Snap::Curve(c) = se.snap(&sf.sketch, at, radius)
+            {
+                se.select_chain(&sf.sketch, c, shift);
+            }
+        } else {
+            let _ = se.finish_tool(&mut sf.sketch);
+        }
     } else if response.clicked_by(PointerButton::Primary)
         && let Some(at) = at
     {
         if se.tool == Tool::ProjectEdge {
             project_at = pointer;
+        } else if let Some(scope) = &commit_scope {
+            let _ = se.commit_input(sf, at, radius, shift, scope);
         } else {
-            let _ = se.click(sk, at, radius, shift);
+            let _ = se.click(&mut sf.sketch, at, radius, shift);
         }
     }
-    if response.clicked_by(PointerButton::Secondary) {
-        se.cancel(sk);
+    if response.clicked_by(PointerButton::Secondary) && !se.box_aborted {
+        se.cancel(&mut sf.sketch);
+    }
+    if !ui.input(|i| i.pointer.any_down()) {
+        se.box_aborted = false;
     }
 
     // Tasten (nicht, solange ein Eingabefeld die Tastatur hat)
     if !viewport::typing(ui.ctx()) {
-        let (esc, enter, delete) = ui.input(|i| {
+        let (enter, delete) = ui.input(|i| {
             (
-                i.key_pressed(egui::Key::Escape),
                 i.key_pressed(egui::Key::Enter),
                 i.key_pressed(egui::Key::Delete),
             )
         });
         if esc {
-            se.cancel(sk);
+            se.cancel(&mut sf.sketch);
         }
         if enter {
-            let _ = se.finish_tool(sk);
+            let _ = se.finish_tool(&mut sf.sketch);
         }
         if delete {
-            se.delete_selection(sk);
+            se.delete_selection(&mut sf.sketch);
         }
     }
     // Vorschau von Stutzen, Dehnen und Brechen unter dem Mauszeiger (nach den Änderungen
     // dieses Bilds).
     let hover_at = response.hover_pos().and_then(|p| map.to_sketch(p));
-    se.update_hover(sk, hover_at, radius);
+    se.update_hover(&sf.sketch, hover_at, radius);
+    // Aufgelöster Zeiger für Zeichen und Vorschau (nach den Änderungen dieses Bilds).
+    let raw = cursor_raw(se, at);
+    se.update_cursor(&sf.sketch, raw, radius);
     let tool = se.tool;
 
     // Körperkante kopieren: Kante in der 3D-Szene wählen.
@@ -674,10 +1079,13 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     };
     let report = se.last_report.as_ref();
 
-    // Profile als helle Flächen unter allem anderen („Profil anzeigen“, wie Fusion). Beim
-    // Ziehen eines Punkts ändert sich die Skizze in jedem Frame; die Flächen kommen erst danach
+    // Skizzenraster zuunterst.
+    painter.extend(sketch_grid_shapes(state, rect));
+
+    // Profile als helle Flächen über dem Raster, unter allem anderen („Profil anzeigen“, wie Fusion). Beim
+    // Ziehen ändert sich die Skizze in jedem Frame; die Flächen kommen erst danach
     // wieder (sonst würden sie in jedem Frame neu bestimmt).
-    if state.show_sketch_profiles && se.dragging.is_none() {
+    if state.show_sketch_profiles && !se.is_dragging() {
         let extracted = state.profile_cache.get(sk);
         painter.extend(profile_fill_shape(&map, &extracted, |_| {
             Some(col.profile_fill)
@@ -696,15 +1104,23 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         }
     }
 
-    // Element unter dem Mauszeiger
-    let hovered: Option<Item> = pointer
-        .filter(|_| se.dragging.is_none())
-        .and_then(|p| Some((map.to_sketch(p)?, map.radius_at(p)?)))
-        .and_then(|(at, r)| match se.snap(sk, at, r) {
-            Snap::Point(p) => Some(Item::Point(p)),
-            Snap::Curve(c) => Some(Item::Curve(c)),
-            Snap::None => None,
-        });
+    // Element unter dem Mauszeiger: beim Zeichnen das Fangziel des aufgelösten Zeigers.
+    let hovered: Option<Item> = if se.is_drawing_tool() {
+        se.draw_cursor.as_ref().and_then(|cur| match cur.snap {
+            Snap::Point(p) | Snap::Center(p) => Some(Item::Point(p)),
+            Snap::Curve(c) | Snap::Midpoint(c) => Some(Item::Curve(c)),
+            _ => None,
+        })
+    } else {
+        pointer
+            .filter(|_| !se.is_dragging())
+            .and_then(|p| Some((map.to_sketch(p)?, map.radius_at(p)?)))
+            .and_then(|(at, r)| match se.snap(sk, at, r) {
+                Snap::Point(p) => Some(Item::Point(p)),
+                Snap::Curve(c) => Some(Item::Curve(c)),
+                _ => None,
+            })
+    };
 
     // Kurven
     for (c, data) in sk.curves() {
@@ -799,12 +1215,70 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         }
     }
 
-    // Fanghinweis unter dem Mauszeiger beim Zeichnen
+    // Zeichen der automatischen Abhängigkeiten, bevor sie entstehen
+    for (at, auto) in auto_marks(sk, se) {
+        if let Some(s) = map.to_screen(at) {
+            let text = auto_text(ui.ctx(), auto);
+            let at = s + vec2(6.0, -18.0);
+            label(&painter, at, &text, col.snap, col.label_bg, &mut placed);
+        }
+    }
+
+    // Hilfslinien vom ausgerichteten Punkt zum Zeiger und Fangzeichen
+    if let Some(cur) = &se.draw_cursor {
+        for (p, _) in [cur.guides.x, cur.guides.y].into_iter().flatten() {
+            let Some(from) = pos(sk, p) else {
+                continue;
+            };
+            for path in map.paths(&[from, cur.at]) {
+                draw_path(&painter, path, Stroke::new(1.0, col.guide), true);
+            }
+        }
+        if let Some(s) = cur.snap_at.and_then(|q| map.to_screen(q)) {
+            paint_snap_mark(&painter, s, cur.snap, col.snap);
+        }
+    }
+
+    // Fanghinweis unter dem Mauszeiger in den übrigen Werkzeugen
     if se.tool != Tool::Select
+        && !se.is_drawing_tool()
         && let Some(Item::Point(p)) = hovered
         && let Some(s) = pos(sk, p).and_then(|q| map.to_screen(q))
     {
         painter.circle_stroke(s, POINT_PX + 5.0, Stroke::new(1.5, col.selected));
+    }
+
+    painter.extend(box_select_shapes(state));
+}
+
+/// Zeichen der Fangart am Zeiger, selbst gezeichnet: Quadrat Punkt, Kreis Mitte, Dreieck
+/// Mittelpunkt, X Schnitt, Sanduhr Kurve, Kreuz im Kreis Ursprung, kleines Plus Raster.
+fn paint_snap_mark(painter: &egui::Painter, at: Pos2, snap: Snap, color: Color32) {
+    let stroke = Stroke::new(SNAP_MARK_WIDTH, color);
+    let s = SNAP_MARK_PX;
+    let closed = |corners: &[(f32, f32)]| {
+        let points = corners.iter().map(|&(x, y)| at + vec2(x, y)).collect();
+        painter.add(Shape::closed_line(points, stroke));
+    };
+    let cross = |dx: f32, dy: f32| {
+        painter.line_segment([at - vec2(dx, dy), at + vec2(dx, dy)], stroke);
+        painter.line_segment([at - vec2(dy, -dx), at + vec2(dy, -dx)], stroke);
+    };
+    match snap {
+        Snap::None => {}
+        Snap::Point(_) => closed(&[(-s, -s), (s, -s), (s, s), (-s, s)]),
+        Snap::Center(_) => {
+            painter.circle_stroke(at, s, stroke);
+        }
+        Snap::Midpoint(_) => closed(&[(0.0, -s), (s, s), (-s, s)]),
+        Snap::Intersection(..) => cross(s, s),
+        // Vier Ecken über Kreuz ergeben die Sanduhr.
+        Snap::Curve(_) => closed(&[(-s, -s), (s, -s), (-s, s), (s, s)]),
+        Snap::Origin => {
+            painter.circle_stroke(at, s + 1.0, stroke);
+            cross(s + 1.0, 0.0);
+        }
+        Snap::Grid => cross(s * 0.6, 0.0),
     }
 }
 
@@ -840,7 +1314,8 @@ fn draw_preview(
     se: &SketchSession,
     color: Color32,
 ) {
-    let Some(cursor) = se.cursor else {
+    // Ohne Zeiger über der Skizze bleibt die Vorschau an der letzten Stelle stehen.
+    let Some(cursor) = se.draw_cursor.as_ref().map(|c| c.at).or(se.cursor) else {
         return;
     };
     let stroke = Stroke::new(1.5, color);

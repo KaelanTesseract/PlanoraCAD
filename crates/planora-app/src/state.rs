@@ -20,7 +20,7 @@ use planora_render::{
     pick_edge, pick_face,
 };
 use planora_sketch::constraint::ConstraintKind;
-use planora_sketch::model::{CurveId, Sketch};
+use planora_sketch::model::{CurveId, PointId, Sketch};
 use planora_sketch::{ExtractedProfiles, ProfileRef, plane_of_face};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
@@ -178,6 +178,13 @@ pub struct AppState {
     /// Profile im Skizzen-Modus als helle Flächen zeigen (Skizzenfeld „Profil anzeigen“, wie
     /// Fusions Skizzenpalette „Profil“); Vorgabe an.
     pub show_sketch_profiles: bool,
+    /// Skizzenraster zeigen (Skizzenfeld, wie Fusions Skizzenpalette); Vorgabe an. Ohne Raster
+    /// kein Raster-Fang. Den Stand führt [`crate::workspace::Workspace::sync_sketch_grid`].
+    pub sketch_show_grid: bool,
+    /// Freie Punkte am sichtbaren Raster fangen (Skizzenfeld „Fang“); Vorgabe an.
+    pub sketch_snap_grid: bool,
+    /// Ein Schalter wurde betätigt: Der Arbeitsbereich speichert den Stand und gibt ihn allen Tabs.
+    pub sketch_grid_changed: bool,
     /// Offene Profilwahl eines Dialogs „Extrudieren“/„Drehen“: Die 3D-Ansicht zeigt die Profile
     /// der Skizze und schaltet sie per Klick um (siehe [`ProfilePick`]).
     pub profile_pick: Option<ProfilePick>,
@@ -325,10 +332,18 @@ fn deferred_by_tool(se: &SketchSession, before: &SketchFeature, after: &SketchFe
                 && n.branch() == c.branch()
         })
     });
+    // Fangbindungen des offenen Punktes gehören zum Element: auf der Kurve, in der Linienmitte,
+    // im Ursprung.
+    let new_open = |p: &PointId| se.pending.contains(p) && b.point_xy(*p).is_err();
     let only_snaps = a
         .constraints()
         .filter(|(id, _)| b.constraint(*id).is_none())
-        .all(|(_, c)| matches!(c.kind, ConstraintKind::PointOnCurve(..)));
+        .all(|(_, c)| match &c.kind {
+            ConstraintKind::PointOnCurve(..) => true,
+            ConstraintKind::Midpoint(p, _) => new_open(p),
+            ConstraintKind::Fixed(p, x, y) => new_open(p) && *x == 0.0 && *y == 0.0,
+            _ => false,
+        });
     same_curves && points_kept && values_kept && constraints_kept && only_snaps
 }
 
@@ -426,6 +441,9 @@ impl AppState {
             sketch_request: None,
             profile_cache: ProfileCache::default(),
             show_sketch_profiles: true,
+            sketch_show_grid: true,
+            sketch_snap_grid: true,
+            sketch_grid_changed: false,
             profile_pick: None,
             pending_delete: None,
             rename_draft: None,
@@ -1851,6 +1869,25 @@ impl AppState {
         });
         self.rebuild_scene();
         Ok(())
+    }
+
+    /// Fusion „Blick auf“ (Look At): Die Kamera schaut senkrecht auf die Ebene der offenen
+    /// Skizze, oben ist die y-Achse der Skizze. Nur Richtung und Ziel ändern sich (das Ziel
+    /// wandert in die Ebene), der Abstand bleibt; kein Rückgängig-Schritt. Das Einpassen beim
+    /// Öffnen endet damit, es springt nichts mehr nach. Ohne offene Skizze geschieht nichts.
+    pub fn look_at_sketch(&mut self) {
+        let Some(frame) = self.sketch_draft.as_ref().map(|d| *d.sketch.frame()) else {
+            return;
+        };
+        if self.sketch_session.is_none() {
+            return;
+        }
+        let n = to_vec3(frame.z);
+        let target = self.camera.target;
+        let off = (target - to_vec3(frame.origin)).dot(n);
+        self.camera.target = target - n * off;
+        self.camera.look_along(n, to_vec3(frame.y));
+        self.sketch_fit = None;
     }
 
     /// Punkte, auf die die Ansicht beim Öffnen einer Skizze eingepasst wird (alle in der

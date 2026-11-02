@@ -36,8 +36,10 @@ fn edit_sketch<T>(s: &mut AppState, id: FeatureId, f: impl FnOnce(&mut Sketch) -
 fn the_line_tool_draws_a_chain_and_adds_horizontal_and_vertical() {
     let (mut sk, mut se) = setup();
     se.set_tool(&mut sk, Tool::Line);
-    click(&mut se, &mut sk, 0.0, 0.0);
-    click(&mut se, &mut sk, 10.0, 0.1);
+    // Fusion-Verhalten, Skizzen 2: Ein Klick auf den Ursprung bindet mit `Fixed`; hier geht es
+    // um anderes, darum beginnt die Linie daneben.
+    click(&mut se, &mut sk, 1.0, 1.0);
+    click(&mut se, &mut sk, 11.0, 1.1);
     assert_eq!(sk.curves().count(), 1);
     assert_eq!(sk.constraints().count(), 1, "fast waagerecht → Horizontal");
     let (a, b) = match sk.curves().next().unwrap().1.kind {
@@ -48,13 +50,15 @@ fn the_line_tool_draws_a_chain_and_adds_horizontal_and_vertical() {
         (sk.point_xy(a).unwrap().y - sk.point_xy(b).unwrap().y).abs() < 1e-7,
         "durch Lösen exakt waagerecht"
     );
-    click(&mut se, &mut sk, 10.0, 10.0);
+    click(&mut se, &mut sk, 11.0, 11.0);
     assert_eq!(sk.curves().count(), 2);
     assert_eq!(sk.points().count(), 3, "der Endpunkt wird zum neuen Anfang");
-    click(&mut se, &mut sk, 0.05, 0.0); // schließt am ersten Punkt
+    click(&mut se, &mut sk, 1.05, 1.0); // schließt am ersten Punkt
     assert_eq!(sk.curves().count(), 3);
     assert_eq!(sk.points().count(), 3, "Fang auf den ersten Punkt");
     assert!(sk.profiles().profiles.len() == 1, "geschlossenes Dreieck");
+    // Fusion-Verhalten, Skizzen 2: Das Ende auf dem ersten Punkt bleibt ohne Richtung.
+    assert_eq!(sk.constraints().count(), 2, "nur H und V der ersten Linien");
 }
 
 #[test]
@@ -62,8 +66,10 @@ fn auto_constraints_can_be_switched_off() {
     let (mut sk, mut se) = setup();
     se.auto_constrain = false;
     se.set_tool(&mut sk, Tool::Line);
-    click(&mut se, &mut sk, 0.0, 0.0);
-    click(&mut se, &mut sk, 10.0, 0.1);
+    // Fusion-Verhalten, Skizzen 2: Ein Klick auf den Ursprung bindet mit `Fixed`; hier geht es
+    // um anderes, darum beginnt die Linie daneben.
+    click(&mut se, &mut sk, 1.0, 1.0);
+    click(&mut se, &mut sk, 11.0, 1.1);
     assert_eq!(sk.constraints().count(), 0);
 }
 
@@ -74,7 +80,9 @@ fn rectangle_circle_and_arc_tools() {
     click(&mut se, &mut sk, 0.0, 0.0);
     assert!(se.pending_pos.len() == 1);
     click(&mut se, &mut sk, 8.0, 5.0);
-    assert_eq!((sk.curves().count(), sk.constraints().count()), (4, 4));
+    // Fusion-Verhalten, Skizzen 2: Die Ecke auf dem Ursprung bekommt `Fixed` zu den vier
+    // Abhängigkeiten des Rechtecks.
+    assert_eq!((sk.curves().count(), sk.constraints().count()), (4, 5));
     assert!(se.pending_pos.is_empty());
 
     se.set_tool(&mut sk, Tool::Circle);
@@ -225,8 +233,10 @@ fn contradicting_and_redundant_dimensions_are_handled() {
 fn delete_cascades_and_status_texts() {
     let (mut sk, mut se) = setup();
     se.set_tool(&mut sk, Tool::Rectangle);
-    click(&mut se, &mut sk, 0.0, 0.0);
-    click(&mut se, &mut sk, 8.0, 5.0);
+    // Fusion-Verhalten, Skizzen 2: Ein Klick auf den Ursprung bindet mit `Fixed`; hier geht es
+    // um anderes, darum liegt das Rechteck daneben.
+    click(&mut se, &mut sk, 1.0, 1.0);
+    click(&mut se, &mut sk, 9.0, 6.0);
     let (text, sev) = se.status(&sk);
     assert!(text.contains("Freiheitsgrade"), "{text}");
     assert!(matches!(sev, Severity::Info));

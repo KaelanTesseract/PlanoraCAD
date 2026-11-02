@@ -134,7 +134,7 @@ Unter Linux werden zusätzlich die System-Bibliotheken aus `.github/workflows/ci
 
 ### Entwicklung
 
-    cargo fmt --all --check
+    cargo fmt --all --check   # unter Windows je Crate: cargo fmt -p <crate> --check
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
     cargo deny check

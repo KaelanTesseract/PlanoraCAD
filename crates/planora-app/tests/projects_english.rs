@@ -275,7 +275,9 @@ fn projects_window_speaks_english() {
         assert_has("Ebene 2 mit Inhalt", &seen, &["1 folder · 1 document", "F"]);
         assert_english("Ebene 2 mit Inhalt", &seen, &[], &[]);
 
-        // Lesefehler: das Verzeichnis ist verschwunden.
+        // Lesefehler: das Verzeichnis ist verschwunden. Erst wenn die Miniaturen fertig sind, sonst
+        // legt der Hintergrund noch `vorschau.*` in den Ordner, während er gelöscht wird.
+        assert!(pw.w.wait_for_thumbnails(std::time::Duration::from_secs(60)));
         let root = lib(&pw.ws).root().path().to_path_buf();
         std::fs::remove_dir_all(&root).unwrap();
         pw.w.ui.invalidate();

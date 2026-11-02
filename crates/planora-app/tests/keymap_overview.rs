@@ -529,3 +529,29 @@ fn overview_follows_window_exclusion_rules() {
     r.click(&icons::glyph(Icon::Close).to_string());
     assert!(!r.is_open(), "✕ schließt");
 }
+
+#[test]
+fn look_at_grid_and_snap_are_listed_in_german_and_english() {
+    use planora_i18n::{english, german, with_lang};
+    let km = Keymap::defaults();
+    let new = [
+        (Action::SketchLookAt, "Blick auf", "Look At"),
+        (
+            Action::SketchToggleGrid,
+            "Skizzenraster ein/aus",
+            "Sketch Grid on/off",
+        ),
+        (Action::SketchToggleSnap, "Fang ein/aus", "Snap on/off"),
+    ];
+    for (a, de, en) in new {
+        assert!(
+            shown_actions(&km, "").contains(&a),
+            "{a:?} in der Übersicht"
+        );
+        assert_eq!(with_lang(&german(), || a.label()), de);
+        assert_eq!(with_lang(&english(), || a.label()), en);
+        // Die Suche findet sie nach Namen, auch ohne Taste.
+        assert!(with_lang(&german(), || shown_actions(&km, de).contains(&a)));
+        assert!(with_lang(&english(), || shown_actions(&km, en).contains(&a)));
+    }
+}

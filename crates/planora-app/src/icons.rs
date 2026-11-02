@@ -907,6 +907,8 @@ pub enum HandIcon {
     Extend,
     /// Brechen: eine Linie mit einer Lücke an einer kreuzenden Linie.
     Break,
+    /// Blick auf: die Skizzenebene als Quadrat mit Fadenkreuz, senkrecht gesehen.
+    LookAt,
 }
 
 /// Alle gezeichneten Symbole aus [`HandIcon`].
@@ -922,6 +924,7 @@ pub const HAND_DRAWN: &[HandIcon] = &[
     HandIcon::Trim,
     HandIcon::Extend,
     HandIcon::Break,
+    HandIcon::LookAt,
 ];
 
 /// Zeichnet ein [`HandIcon`] in `rect` (Strichbreite 1,5, runde Enden).
@@ -1056,6 +1059,24 @@ pub fn paint_hand_icon(painter: &Painter, rect: Rect, icon: HandIcon, color: Col
             seg(painter, [c + vec2(gap, 0.0), c + vec2(r, 0.0)], stroke);
             painter.circle_filled(c + vec2(-gap, 0.0), 1.8, color);
             painter.circle_filled(c + vec2(gap, 0.0), 1.8, color);
+        }
+        HandIcon::LookAt => {
+            painter.rect_stroke(
+                Rect::from_center_size(c, vec2(r * 2.0, r * 2.0)),
+                1.0,
+                stroke,
+                egui::StrokeKind::Middle,
+            );
+            seg(
+                painter,
+                [c + vec2(-r * 0.5, 0.0), c + vec2(r * 0.5, 0.0)],
+                stroke,
+            );
+            seg(
+                painter,
+                [c + vec2(0.0, -r * 0.5), c + vec2(0.0, r * 0.5)],
+                stroke,
+            );
         }
     }
 }

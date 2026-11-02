@@ -23,7 +23,9 @@ use planora_project::library::Library;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind as K};
 use planora_sketch::model::{CurveId, PointId};
 
-const SIZE: Vec2 = vec2(1400.0, 900.0);
+// Fusion-Verhalten, Skizzen 2: Die Zeile „Skizzenraster/Fang“ schiebt die Liste tiefer; bei 900 px
+// Höhe rollten die unteren Zeilen aus dem Feld. Geprüft wird in der Standardgröße.
+const SIZE: Vec2 = vec2(1920.0, 1080.0);
 const MEDIUM: Vec2 = vec2(1100.0, 700.0);
 const SMALL: Vec2 = vec2(800.0, 600.0);
 

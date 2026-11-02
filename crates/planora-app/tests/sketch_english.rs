@@ -226,7 +226,8 @@ fn sketch_speaks_english() {
                 "Mirror …",
                 "Pattern …",
                 "Delete",
-                "Detect\nhorizontal/vertical",
+                // Fusion-Verhalten, Skizzen 2
+                "Automatic\nconstraints",
                 "Sketch constraints",
                 "No constraints yet.",
                 "Finish sketch",

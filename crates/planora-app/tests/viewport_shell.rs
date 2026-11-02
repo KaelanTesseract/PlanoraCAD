@@ -353,3 +353,53 @@ fn escape_keeps_working_and_typing_in_a_field_blocks_it() {
     frame(&ctx, &mut s, vec![escape()], true);
     assert!(s.selection.is_some(), "Escape im Textfeld wählt nicht ab");
 }
+
+/// Im Skizzenmodus bleibt von der 3D-Szene nur das Achsenkreuz; das Bodenraster läge bei XZ, YZ
+/// und auf Flächen schief. Nach dem Beenden ist es wieder da.
+#[test]
+fn the_floor_grid_is_gone_while_sketching_and_back_afterwards() {
+    let mut s = AppState::new();
+    assert!(viewport::scene_lines(&s).len() > 6, "Boden sichtbar");
+    let id = s
+        .add_sketch(planora_feature::SketchPlane::Standard(
+            planora_app::state::StandardPlane::XZ,
+        ))
+        .unwrap();
+    s.open_sketch(id).unwrap();
+    let parts = |lines: Vec<planora_render::LineVertex>| {
+        lines
+            .iter()
+            .map(|v| (v.position, v.color))
+            .collect::<Vec<_>>()
+    };
+    // Die Skizze öffnet mit Blick auf ihre Ebene: Die Achse zum Betrachter fehlt.
+    let seen = parts(viewport::scene_lines(&s));
+    let axes = parts(planora_render::axis_lines(
+        s.camera.target,
+        s.camera.distance,
+        &s.palette(),
+    ));
+    assert_eq!(seen.len(), 4);
+    assert!(seen.iter().all(|line| axes.contains(line)));
+    s.close_sketch();
+    assert!(viewport::scene_lines(&s).len() > 6, "Boden wieder da");
+}
+
+/// Handtest: Beim Blick auf die Skizze lief die Achse zum Betrachter als lange Linie vom Ursprung
+/// quer durchs Bild. Sie entfällt, sobald sie fast auf den Betrachter zeigt.
+#[test]
+fn the_axis_toward_the_viewer_is_left_out_while_sketching() {
+    let mut s = AppState::new();
+    let id = s
+        .add_sketch(planora_feature::SketchPlane::Standard(
+            planora_app::state::StandardPlane::XY,
+        ))
+        .unwrap();
+    s.open_sketch(id).unwrap();
+    s.camera.look_along(glam::Vec3::Z, glam::Vec3::Y);
+    assert_eq!(viewport::scene_lines(&s).len(), 4, "x und y bleiben");
+    let (sin, cos) = 30.0_f32.to_radians().sin_cos();
+    s.camera
+        .look_along(glam::Vec3::new(0.0, sin, cos), glam::Vec3::Y);
+    assert_eq!(viewport::scene_lines(&s).len(), 6, "geneigt: alle drei");
+}
