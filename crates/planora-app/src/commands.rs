@@ -411,13 +411,11 @@ fn observe_sketch(ws: &mut Workspace) {
         Some(before) if now.curves > before.curves && !se.tool.is_modify() => Some(se.tool),
         _ => None,
     };
-    let action = tool
-        .and_then(|t| {
-            se.kind_of(t)
-                .map(Action::for_kind)
-                .or_else(|| Action::for_sketch_tool(t))
-        })
-        .filter(|&a| a != Action::SketchArcCenter);
+    let action = tool.and_then(|t| {
+        se.kind_of(t)
+            .map(Action::for_kind)
+            .or_else(|| Action::for_sketch_tool(t))
+    });
     if let Some(a) = action {
         ws.last_command.remember(a);
     }

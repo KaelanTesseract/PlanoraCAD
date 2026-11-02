@@ -6,7 +6,7 @@
 
 use crate::keymap::Action;
 use crate::msg::Msg;
-use crate::sketch_cursor::DrawCursor;
+use crate::sketch_cursor::{DrawCursor, leaving_direction, tangent_start_curve};
 use crate::sketch_input::{Created, FieldKind, locked_ray, toward_pointer};
 use crate::sketch_state::{SketchSession, Snap, Tool, err};
 use planora_i18n::tr;
@@ -192,6 +192,8 @@ impl ToolKind {
             Circle2P => crate::msg!("sketch-radius-positive"),
             Circle3P => crate::msg!("sketch-circle-collinear"),
             Circle2T | Circle3T => crate::msg!("sketch-tangent-no-solution"),
+            Arc3P => crate::msg!("sketch-arc-end-on-start"),
+            ArcTangent => crate::msg!("sketch-arc-tangent-start"),
             _ => crate::msg!("sketch-kind-pending"),
         }
     }
@@ -245,6 +247,34 @@ fn check_pick(sk: &Sketch, kind: ToolKind, c: CurveId) -> Result<(), Msg> {
         return Err(crate::msg!("sketch-tangent-kinds"));
     }
     Ok(())
+}
+
+/// Reicht der Radius `r` über die Sehne `start`–`end`? (Sie darf höchstens ein Durchmesser sein.)
+fn radius_spans(start: DVec2, end: DVec2, r: f64, tol: f64) -> bool {
+    r >= start.distance(end) / 2.0 - tol
+}
+
+/// Durchgangspunkt eines Bogens mit dem Radius `r` über der Sehne: auf der Mittelsenkrechten, die
+/// Seite vom Zeiger. Liegt der Zeiger weiter als `r` von der Sehnenmitte, gilt der große Bogen.
+fn through_at_radius(start: DVec2, end: DVec2, r: f64, pointer: DVec2, tol: f64) -> Option<DVec2> {
+    if !radius_spans(start, end, r, tol) {
+        return None;
+    }
+    let mid = (start + end) / 2.0;
+    let half = start.distance(end) / 2.0;
+    let normal = (end - start).try_normalize()?.perp();
+    let side = if normal.dot(pointer - mid) < 0.0 {
+        -1.0
+    } else {
+        1.0
+    };
+    let long = r + (r * r - half * half).max(0.0).sqrt();
+    let rise = if pointer.distance(mid) > r {
+        long
+    } else {
+        half * half / long
+    };
+    Some(mid + normal * (side * rise))
 }
 
 impl SketchSession {
@@ -309,6 +339,9 @@ impl SketchSession {
         if self.kind_stage() + 1 >= kind.stages().len() {
             return self.finish_kind(sk, kind, cur, prior);
         }
+        if kind == ToolKind::ArcTangent {
+            return self.begin_tangent_arc(sk, cur);
+        }
         if self.picks_curves() {
             return self.pick_curve(sk, kind, cur);
         }
@@ -334,6 +367,76 @@ impl SketchSession {
         Ok(())
     }
 
+    /// Erster Klick des tangentialen Bogens: Er braucht einen gefangenen Punkt, an dem eine Linie
+    /// oder ein Bogen endet.
+    fn begin_tangent_arc(&mut self, sk: &Sketch, cur: &DrawCursor) -> Result<(), Msg> {
+        let tol = sk.tolerance().linear;
+        let prev = cur
+            .point(tol)
+            .and_then(|p| tangent_start_curve(sk, p, None))
+            .ok_or_else(|| ToolKind::ArcTangent.refusal())?;
+        self.pending_pos.push(cur.at);
+        self.pending_snaps.push(cur.remember(tol));
+        self.auto_tangent = Some(prev);
+        Ok(())
+    }
+
+    /// Anfang des laufenden tangentialen Bogens: Punkt und Vorgänger, Lage und Abgangsrichtung.
+    fn tangent_start(&self, sk: &Sketch) -> Option<(PointId, CurveId, DVec2, DVec2)> {
+        let prev = self.auto_tangent?;
+        let hit = *self.pending_snaps.first()?;
+        let start = DrawCursor::remembered(hit, sk).point(sk.tolerance().linear)?;
+        let leaving = leaving_direction(sk, prev, start)?;
+        Some((start, prev, sk.point_xy(start).ok()?, leaving))
+    }
+
+    /// Die Meldung, wenn der letzte Klick keinen Plan ergibt.
+    fn finish_refusal(&self, sk: &Sketch, kind: ToolKind) -> Msg {
+        match kind {
+            ToolKind::Arc3P if self.input.locked(FieldKind::Radius).is_some() => {
+                crate::msg!("sketch-arc-radius-chord")
+            }
+            ToolKind::Arc3P => crate::msg!("sketch-circle-collinear"),
+            ToolKind::ArcTangent if self.tangent_start(sk).is_some() => {
+                crate::msg!("sketch-arc-tangent-straight")
+            }
+            _ => kind.refusal(),
+        }
+    }
+
+    /// Tangentialer Bogen ab `start`, das Ende an der Lage von `cur`: Mitte und Ende anlegen, bei
+    /// getauschter Lage (der Bogen läuft gegen den Uhrzeigersinn) `start` als Ende, dann die Tangente
+    /// an `prev`, der Fang am Ende, lösen. Setzt `created` und `edit_label`.
+    pub(crate) fn create_tangent_arc(
+        &mut self,
+        sk: &mut Sketch,
+        start: PointId,
+        prev: CurveId,
+        cur: &DrawCursor,
+        prior: &Sketch,
+    ) -> Result<CurveId, Msg> {
+        let straight = || crate::msg!("sketch-arc-tangent-straight");
+        let from = sk.point_xy(start).map_err(err)?;
+        let leaving = leaving_direction(sk, prev, start).ok_or_else(straight)?;
+        let plan = shapes::tangent_arc(from, leaving, cur.at, sk.tolerance().linear)
+            .ok_or_else(straight)?;
+        let center = sk.add_point(plan.center.x, plan.center.y).map_err(err)?;
+        let end = self.attach(sk, None, cur)?;
+        let arc = if plan.start == from {
+            sk.add_arc(center, start, end)
+        } else {
+            sk.add_arc(center, end, start)
+        }
+        .map_err(err)?;
+        sk.add_constraint(ConstraintKind::Tangent(arc, prev))
+            .map_err(err)?;
+        self.solve_checked(sk, prior)?;
+        let created = Created::Arc(arc);
+        self.edit_label = Some(created.undo_label());
+        self.created = Some(created);
+        Ok(arc)
+    }
+
     /// Legt die Form in einem Zug an, bindet und löst, setzt `created` und `edit_label` und ruft
     /// `clear_pending`. Wird aus den Lagen keine Form, bleibt alles bis auf die Meldung, wie es war.
     fn finish_kind(
@@ -355,7 +458,7 @@ impl SketchSession {
         let at = if third.is_some() { cur.raw } else { cur.at };
         let plan = self
             .plan_with(sk, kind, at, third)
-            .ok_or_else(|| kind.refusal())?;
+            .ok_or_else(|| self.finish_refusal(sk, kind))?;
         let mut hits: Vec<DrawCursor> = self
             .pending_snaps
             .iter()
@@ -390,6 +493,24 @@ impl SketchSession {
                 }
                 self.solve_checked(sk, prior)?;
                 Created::Circle(circle)
+            }
+            (ToolKind::Arc3P, ShapePlan::Arc(arc)) => {
+                let center = sk.add_point(arc.center.x, arc.center.y).map_err(err)?;
+                let first = self.attach(sk, None, &hits[0])?;
+                let second = self.attach(sk, None, &hits[1])?;
+                let curve = if arc.start == self.pending_pos[0] {
+                    sk.add_arc(center, first, second)
+                } else {
+                    sk.add_arc(center, second, first)
+                }
+                .map_err(err)?;
+                self.bind_rim(sk, curve, &hits[2])?;
+                self.solve_checked(sk, prior)?;
+                Created::Arc(curve)
+            }
+            (ToolKind::ArcTangent, ShapePlan::Arc(_)) => {
+                let (start, prev, ..) = self.tangent_start(sk).ok_or_else(|| kind.refusal())?;
+                Created::Arc(self.create_tangent_arc(sk, start, prev, cur, prior)?)
             }
             _ => return Err(kind.refusal()),
         };
@@ -468,6 +589,17 @@ impl SketchSession {
             (ToolKind::Circle3T, _, &[c0, c1]) => {
                 tangent_circles::tangent_circle_three(sk, [c0, c1, third?], at).map(circle)
             }
+            (ToolKind::Arc3P, &[start, end], _) => {
+                let radius = self.input.locked(FieldKind::Radius);
+                if radius.is_some_and(|r| !radius_spans(start, end, r, tol)) {
+                    return None;
+                }
+                shapes::arc_through(start, end, at, tol).map(ShapePlan::Arc)
+            }
+            (ToolKind::ArcTangent, &[_], _) => {
+                let (.., from, leaving) = self.tangent_start(sk)?;
+                shapes::tangent_arc(from, leaving, at, tol).map(ShapePlan::Arc)
+            }
             _ => None,
         }
     }
@@ -524,6 +656,23 @@ impl SketchSession {
                     tangent_circles::tangent_circle_two_lines(sk, l0, l1, cur.raw, Some(d))?;
                 Some(m)
             }
+            (ToolKind::Arc3P, &[start, end]) => {
+                let tol = sk.tolerance().linear;
+                through_at_radius(start, end, locked(F::Radius)?, cur.raw, tol)
+            }
+            (ToolKind::ArcTangent, &[_]) => {
+                let (radius, sweep) = (locked(F::Radius), locked(F::Sweep));
+                if radius.is_none() && sweep.is_none() {
+                    return None;
+                }
+                let (.., from, leaving) = self.tangent_start(sk)?;
+                let tol = sk.tolerance().linear;
+                // Ohne Lage (Zeiger auf der Tangente) bleibt nur der Anfang: kein Bogen, kein Plan.
+                Some(
+                    shapes::tangent_arc_locked(from, leaving, radius, sweep, cur.raw, tol)
+                        .unwrap_or(from),
+                )
+            }
             _ => None,
         }
     }
@@ -551,6 +700,13 @@ impl SketchSession {
                 ShapePlan::Circle(_, r) => Some(2.0 * r),
                 _ => None,
             },
+            (ToolKind::Arc3P | ToolKind::ArcTangent, _, F::Radius | F::Sweep) => {
+                match self.kind_plan(sk, at)? {
+                    ShapePlan::Arc(arc) if kind == F::Radius => Some(arc.radius()),
+                    ShapePlan::Arc(arc) => Some(arc.sweep()),
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }

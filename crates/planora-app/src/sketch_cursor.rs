@@ -136,6 +136,24 @@ pub(crate) fn leaving_direction(sk: &Sketch, c: CurveId, p: PointId) -> Option<D
     dir.try_normalize()
 }
 
+/// Kurve, an der ein tangentialer Bogen in `p` anläuft: `prefer`, wenn sie dort endet, sonst die
+/// jüngste Linie oder der jüngste Bogen, die in `p` enden. Konstruktionslinien nur, wenn sonst nichts
+/// dort endet: Die Hilfslinien eines Öffnungswinkels sind immer jünger als ihr Bogen.
+pub(crate) fn tangent_start_curve(
+    sk: &Sketch,
+    p: PointId,
+    prefer: Option<CurveId>,
+) -> Option<CurveId> {
+    let ends_here = |c: CurveId| leaving_direction(sk, c, p).is_some();
+    prefer.filter(|&c| ends_here(c)).or_else(|| {
+        sk.curves()
+            .filter(|&(c, _)| ends_here(c))
+            // Bei Gleichstand nimmt `max_by_key` den letzten, also den jüngsten.
+            .max_by_key(|(_, data)| !data.construction)
+            .map(|(c, _)| c)
+    })
+}
+
 /// Winkel zwischen zwei normierten Richtungen, 0…π.
 fn angle_between(a: DVec2, b: DVec2) -> f64 {
     a.perp_dot(b).abs().atan2(a.dot(b))

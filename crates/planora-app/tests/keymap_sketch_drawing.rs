@@ -13,6 +13,7 @@ use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, Vec2, vec2};
 use planora_app::app::PlanoraApp;
 use planora_app::commands::LastCommand;
 use planora_app::keymap::{Action, Area, Binding, KeyChord, Keymap, SetResult, shortcut_hint};
+use planora_app::sketch_kinds::ToolKind;
 use planora_app::sketch_state::{ConstraintAction, Item, Tool};
 use planora_app::state::AppState;
 use planora_app::workspace::Workspace;
@@ -806,15 +807,19 @@ fn repeat_last_remembers_sketch_tools() {
     rig.sketch_click(20.0, 20.0);
     rig.sketch_click(30.0, 30.0);
     assert_eq!(rig.sketch_tool_memory(), Some(Action::SketchRectangle));
-    // Ein Werkzeug ohne Eintrag in der Tabelle (Bogen) ersetzt das Gedächtnis nicht.
+    // Skizzen 3: Der Mittelpunkt-Bogen hat jetzt eine Aktion und wird gemerkt wie jede Art.
     rig.click(rig.strip("Bogen"));
     rig.sketch_click(50.0, 0.0);
     rig.sketch_click(55.0, 0.0);
     rig.sketch_click(50.0, 5.0);
-    assert_eq!(rig.sketch_tool_memory(), Some(Action::SketchRectangle));
+    assert_eq!(rig.sketch_tool_memory(), Some(Action::SketchArcCenter));
     rig.click(rig.strip("Auswahl"));
     rig.press(Key::Space, NONE);
-    assert_eq!(rig.tool(), Tool::Rectangle);
+    assert_eq!(rig.tool(), Tool::Arc);
+    assert_eq!(
+        rig.st().sketch_session.as_ref().unwrap().kind_of(Tool::Arc),
+        Some(ToolKind::ArcCenter)
+    );
 
     // Rückgängig und Wiederholen mit gewähltem Werkzeug zählen nicht als Benutzen.
     rig.press(Key::C, NONE);
@@ -822,7 +827,7 @@ fn repeat_last_remembers_sketch_tools() {
     rig.settle();
     rig.press(Key::Y, Modifiers::COMMAND);
     rig.settle();
-    assert_eq!(rig.sketch_tool_memory(), Some(Action::SketchRectangle));
+    assert_eq!(rig.sketch_tool_memory(), Some(Action::SketchArcCenter));
 
     // Beim Tippen im Maßfeld gehört die Leertaste dem Feld.
     rig.click(rig.strip("Auswahl"));

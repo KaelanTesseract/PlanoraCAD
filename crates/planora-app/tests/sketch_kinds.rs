@@ -515,7 +515,7 @@ fn repeat_last_chooses_the_used_kind() {
     assert_eq!(rig.se().planned_kind(), Some(ToolKind::Rect3P));
 }
 
-/// Der Mittelpunkt-Bogen merkt sich wie heute nichts (Vorgabe wie heute), ein 3-Punkt-Bogen schon.
+/// Auch der 3-Punkt-Bogen wird gemerkt; sobald eine Kurve dazukommt, zählt die aktive Art.
 #[test]
 fn planned_arc_kind_is_remembered() {
     let mut rig = Rig::new();
@@ -608,8 +608,8 @@ fn active_hint_names_the_kind_and_the_default_says_what_it_said() {
 #[test]
 fn stages_collect_positions_and_the_last_click_refuses_for_now() {
     let (mut se, mut sk) = session();
-    // Skizzen 3, Task 6: Das 3-Punkt-Rechteck ist fertig; es zeigt der 3-Punkt-Bogen.
-    se.choose_kind(&mut sk, ToolKind::Arc3P);
+    // Skizzen 3, Task 7: Der 3-Punkt-Bogen ist fertig; es zeigt das Kantenpolygon.
+    se.choose_kind(&mut sk, ToolKind::PolygonEdge);
     let start = bits(&sk);
     assert_eq!(se.kind_stage(), 0);
     se.click(&mut sk, at(0.0, 0.0), R, false).unwrap();
