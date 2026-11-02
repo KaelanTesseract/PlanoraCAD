@@ -9,6 +9,7 @@ pub mod data;
 pub mod dual;
 pub(crate) mod edit;
 pub mod error;
+pub mod fillet;
 pub(crate) mod geom;
 pub mod helpers;
 pub(crate) mod intersect;
@@ -31,6 +32,7 @@ pub use constraint::{ConstraintData, ConstraintId, ConstraintKind, Evaluation, L
 pub use data::{ConstraintRecord, CurveRecord, PointRecord, SketchData};
 pub use edit::TrimPiece;
 pub use error::SketchError;
+pub use fillet::{ChamferKind, ChamferPlan, CurvePick, EndMove, FilletPlan};
 pub use helpers::{RectIds, plane_of_face};
 pub use model::{CurveData, CurveId, CurveKind, LineStyle, PointData, PointId, Sketch};
 pub use profile::{ExtractedProfiles, PieceRef, ProfileRef, RejectedLoop};
