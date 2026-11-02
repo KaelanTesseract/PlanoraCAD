@@ -501,23 +501,23 @@ pub struct PolygonIds {
     pub lines: Vec<CurveId>,
 }
 
-/// Art eines geraden Langlochs: woran seine Länge hängt.
+/// Art eines geraden Langlochs in der Skizze. Die Gesamtlänge gibt es nur bei der Eingabe
+/// ([`slot_overall`]) und ergibt ein `CenterToCenter`: Äußere Punkte auf den Enden könnten auf die
+/// Innenseite springen, weil `PointOnCurve` einen Bogen als ganzen Kreis sieht.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SlotStyle {
     CenterToCenter,
-    Overall,
     CenterPoint,
 }
 
-/// Ids eines geraden Langlochs. `length_points` sind die Punkte des Längenmaßes: die Mitten der
-/// Endkreise, bei `Overall` die äußersten Enden. `mid` gibt es nur bei `CenterPoint`.
+/// Ids eines geraden Langlochs; das Längenmaß liegt an `centers`. `mid` gibt es nur bei
+/// `CenterPoint`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SlotIds {
     pub centers: [PointId; 2],
     pub sides: [CurveId; 2],
     pub caps: [CurveId; 2],
     pub axis: CurveId,
-    pub length_points: [PointId; 2],
     pub mid: Option<PointId>,
 }
 
@@ -644,7 +644,7 @@ impl Sketch {
     }
 
     /// Gerades Langloch, 5 Freiheitsgrade. Die Bögen laufen gegen den Uhrzeigersinn außen um die
-    /// Enden; `style` bestimmt die Konstruktion, an der die Länge hängt.
+    /// Enden; `CenterPoint` hat zusätzlich einen Punkt in der Mitte der Achse.
     pub fn add_slot(&mut self, plan: &SlotPlan, style: SlotStyle) -> Result<SlotIds, SketchError> {
         if !plan.radius.is_finite() || plan.radius <= self.tolerance().linear {
             return Err(SketchError::Degenerate(tr!("sketch-radius-positive")));
@@ -656,8 +656,7 @@ impl Sketch {
             if along.length() <= s.tolerance().linear {
                 return Err(SketchError::Degenerate(tr!("sketch-err-line-zero")));
             }
-            let dir = along.normalize();
-            let n = dir.perp() * plan.radius;
+            let n = along.normalize().perp() * plan.radius;
             let p1 = s.add_point_at(plan.a + n)?;
             let p2 = s.add_point_at(plan.b + n)?;
             let p3 = s.add_point_at(plan.b - n)?;
@@ -666,44 +665,24 @@ impl Sketch {
             let s1 = s.add_line(p3, p4)?;
             let e0 = s.add_arc(a, p1, p4)?;
             let e1 = s.add_arc(b, p3, p2)?;
-            let (axis, length_points, mid) = match style {
-                SlotStyle::CenterToCenter => (s.add_construction_line(a, b)?, [a, b], None),
-                SlotStyle::Overall => {
-                    let o0 = s.add_point_at(plan.a - dir * plan.radius)?;
-                    let o1 = s.add_point_at(plan.b + dir * plan.radius)?;
-                    (s.add_construction_line(o0, o1)?, [o0, o1], None)
-                }
-                SlotStyle::CenterPoint => {
-                    let c = s.add_point_at((plan.a + plan.b) * 0.5)?;
-                    (s.add_construction_line(a, b)?, [a, b], Some(c))
-                }
+            let axis = s.add_construction_line(a, b)?;
+            let mid = match style {
+                SlotStyle::CenterToCenter => None,
+                SlotStyle::CenterPoint => Some(s.add_point_at((plan.a + plan.b) * 0.5)?),
             };
             s.add_constraint(ConstraintKind::Tangent(s0, e0))?;
             s.add_constraint(ConstraintKind::Tangent(s0, e1))?;
             s.add_constraint(ConstraintKind::Tangent(s1, e1))?;
             s.add_constraint(ConstraintKind::Tangent(s1, e0))?;
             s.add_constraint(ConstraintKind::Equal(e0, e1))?;
-            match style {
-                SlotStyle::CenterToCenter => {}
-                SlotStyle::Overall => {
-                    let [o0, o1] = length_points;
-                    s.add_constraint(ConstraintKind::PointOnCurve(a, axis))?;
-                    s.add_constraint(ConstraintKind::PointOnCurve(b, axis))?;
-                    s.add_constraint(ConstraintKind::PointOnCurve(o0, e0))?;
-                    s.add_constraint(ConstraintKind::PointOnCurve(o1, e1))?;
-                }
-                SlotStyle::CenterPoint => {
-                    if let Some(c) = mid {
-                        s.add_constraint(ConstraintKind::Midpoint(c, axis))?;
-                    }
-                }
+            if let Some(c) = mid {
+                s.add_constraint(ConstraintKind::Midpoint(c, axis))?;
             }
             Ok(SlotIds {
                 centers: [a, b],
                 sides: [s0, s1],
                 caps: [e0, e1],
                 axis,
-                length_points,
                 mid,
             })
         })

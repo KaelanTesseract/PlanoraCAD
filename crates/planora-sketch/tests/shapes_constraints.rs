@@ -12,11 +12,7 @@ use planora_sketch::{
 use std::time::Instant;
 
 const TOL: f64 = 1e-6;
-const SLOTS: [SlotStyle; 3] = [
-    SlotStyle::CenterToCenter,
-    SlotStyle::Overall,
-    SlotStyle::CenterPoint,
-];
+const SLOTS: [SlotStyle; 2] = [SlotStyle::CenterToCenter, SlotStyle::CenterPoint];
 
 fn v(x: f64, y: f64) -> DVec2 {
     DVec2::new(x, y)
@@ -196,15 +192,10 @@ fn slot_points_lie_where_the_plan_says() {
     let d = DVec2::from_angle(0.5);
     let a = v(2.0, 1.0);
 
-    let (s, ids) = slot(SlotStyle::Overall);
+    let (s, ids) = slot(SlotStyle::CenterPoint);
     close_v(at(&s, ids.centers[0]), a);
     close_v(at(&s, ids.centers[1]), a + d * 40.0);
-    close_v(at(&s, ids.length_points[0]), a - d * 5.0);
-    close_v(at(&s, ids.length_points[1]), a + d * 45.0);
-
-    let (s, ids) = slot(SlotStyle::CenterPoint);
     close_v(at(&s, ids.mid.unwrap()), a + d * 20.0);
-    assert_eq!(ids.length_points, ids.centers);
 
     // Der Bogen läuft außen um das Ende: gegen den Uhrzeigersinn über die Spitze.
     for (cap, tip) in [(ids.caps[0], a - d * 5.0), (ids.caps[1], a + d * 45.0)] {
@@ -357,14 +348,11 @@ fn dragging_a_polygon_corner_keeps_it_regular() {
 }
 
 #[track_caller]
-fn assert_slot(s: &Sketch, ids: &SlotIds) {
+fn assert_slot(s: &Sketch, ids: &SlotIds, drawn_along: DVec2) {
     let (a, b) = (at(s, ids.centers[0]), at(s, ids.centers[1]));
     let axis = (b - a).normalize();
     // Nicht umgeklappt: Die Mitten liegen noch in der Richtung, in der die Form angelegt wurde.
-    assert!(
-        axis.dot(DVec2::from_angle(0.5)) > 0.0,
-        "umgeklappt: {axis:?}"
-    );
+    assert!(axis.dot(drawn_along) > 0.0, "umgeklappt: {axis:?}");
     let radius = s.radius(ids.caps[0]).unwrap();
     close(s.radius(ids.caps[1]).unwrap(), radius);
     for side in ids.sides {
@@ -392,24 +380,51 @@ fn slot_stays_tangent_when_dimensioned() {
         for value in [30.0, 2.0] {
             set(&mut s, id, value);
             close(s.radius(ids.caps[0]).unwrap(), value / 2.0);
-            assert_slot(&s, &ids);
+            assert_slot(&s, &ids, DVec2::from_angle(0.5));
         }
         s.remove_constraint(id).unwrap();
 
-        // Der Durchmesser ist jetzt 2, also bleibt auch die Gesamtlänge 5 gültig.
-        let [p, q] = ids.length_points;
+        let [p, q] = ids.centers;
         let start = at(&s, p).distance(at(&s, q));
         let id = s.add_constraint(K::Distance(p, q, start)).unwrap();
         for value in [100.0, 5.0] {
             set(&mut s, id, value);
             close(at(&s, p).distance(at(&s, q)), value);
-            assert_slot(&s, &ids);
+            assert_slot(&s, &ids, DVec2::from_angle(0.5));
         }
         if let Some(mid) = ids.mid {
             let m = (at(&s, ids.centers[0]) + at(&s, ids.centers[1])) * 0.5;
             close_v(at(&s, mid), m);
         }
     }
+}
+
+/// Die Art „Gesamt“ gibt es nur bei der Eingabe: `slot_overall` macht aus den beiden äußeren
+/// Klicks die Mitten und den Radius, die Skizze kennt nur das Langloch von Mitte zu Mitte.
+#[test]
+fn a_slot_from_two_outer_clicks_is_a_plain_slot_and_does_not_fold() {
+    let plan = slot_overall(v(0.0, 0.0), v(40.0, 0.0), v(20.0, 6.0), TOL).unwrap();
+    let mut s = sketch();
+    let ids = s.add_slot(&plan, SlotStyle::CenterToCenter).unwrap();
+    close_v(at(&s, ids.centers[0]), v(6.0, 0.0));
+    close_v(at(&s, ids.centers[1]), v(34.0, 0.0));
+    close(s.radius(ids.caps[0]).unwrap(), 6.0);
+    assert_fresh(&mut s, 5);
+    assert_eq!(s.profiles().profiles.len(), 1);
+
+    let width = s.add_constraint(K::Diameter(ids.caps[0], 12.0)).unwrap();
+    set(&mut s, width, 20.0);
+    close(s.radius(ids.caps[0]).unwrap(), 10.0);
+    assert_slot(&s, &ids, v(1.0, 0.0));
+    assert_eq!(s.profiles().profiles.len(), 1);
+
+    let [a, b] = ids.centers;
+    let length = s.add_constraint(K::Distance(a, b, 28.0)).unwrap();
+    set(&mut s, length, 10.0);
+    close(at(&s, a).distance(at(&s, b)), 10.0);
+    close(s.radius(ids.caps[0]).unwrap(), 10.0);
+    assert_slot(&s, &ids, v(1.0, 0.0));
+    assert_eq!(s.profiles().profiles.len(), 1);
 }
 
 #[track_caller]
@@ -442,20 +457,6 @@ fn arc_slot_stays_concentric_when_dimensioned() {
     }
 }
 
-/// Gesamtlänge 50 mit dem Durchmesser `width`: ab 50 gäbe es keine Langloch-Länge mehr.
-#[track_caller]
-fn assert_slot_width_refused(width: f64) {
-    let (mut s, ids) = slot(SlotStyle::Overall);
-    let [p, q] = ids.length_points;
-    s.add_constraint(K::Distance(p, q, 50.0)).unwrap();
-    let id = s.add_constraint(K::Diameter(ids.caps[0], 10.0)).unwrap();
-    assert_eq!(s.solve().status, SolveStatus::Solved);
-    let before = state(&s);
-    s.set_constraint_value(id, width).unwrap();
-    assert_ne!(s.solve().status, SolveStatus::Solved, "Breite {width}");
-    assert_eq!(state(&s), before);
-}
-
 /// Achsenradius 60 mit der Breite `width`: ab 120 gäbe es keinen Innenradius mehr.
 #[track_caller]
 fn assert_arc_slot_width_refused(width: f64) {
@@ -471,8 +472,25 @@ fn assert_arc_slot_width_refused(width: f64) {
 
 #[test]
 fn a_width_at_the_limit_is_not_solved_and_the_shape_stays() {
-    assert_slot_width_refused(50.0);
     assert_arc_slot_width_refused(120.0);
+}
+
+/// Das gerade Langloch hat keine Breitengrenze mehr, seine Grenze ist die Länge null: Null und
+/// Werte unter der Toleranz lehnt schon die Wertprüfung des Maßes ab.
+#[test]
+fn a_slot_length_of_zero_is_refused_and_the_shape_stays() {
+    for style in SLOTS {
+        let (mut s, ids) = slot(style);
+        let [p, q] = ids.centers;
+        let id = s.add_constraint(K::Distance(p, q, 40.0)).unwrap();
+        assert_eq!(s.solve().status, SolveStatus::Solved);
+        let before = state(&s);
+        for value in [0.0, 1e-9] {
+            assert!(s.set_constraint_value(id, value).is_err(), "{style:?}");
+            assert_eq!(s.solve().status, SolveStatus::Solved, "{style:?}");
+            assert_eq!(state(&s), before);
+        }
+    }
 }
 
 #[test]
@@ -501,7 +519,7 @@ fn a_rejected_shape_leaves_the_sketch_as_it_was() {
     let far = v(9.0, 0.0);
     for (b, radius) in [(a, 5.0), (far, 0.0), (far, -1.0), (far, f64::NAN)] {
         let plan = SlotPlan { a, b, radius };
-        assert!(s.add_slot(&plan, SlotStyle::Overall).is_err());
+        assert!(s.add_slot(&plan, SlotStyle::CenterToCenter).is_err());
     }
     let axis = ArcPlan {
         center: a,
