@@ -251,14 +251,29 @@ fn drawing_ws_with(view: Option<ViewKind>) -> Workspace {
     w
 }
 
-const SKETCH_KEYS: [(Action, Key, Tool, &str); 4] = [
-    (Action::SketchLine, Key::L, Tool::Line, "Linie"),
-    (Action::SketchRectangle, Key::R, Tool::Rectangle, "Rechteck"),
-    (Action::SketchCircle, Key::C, Tool::Circle, "Kreis"),
+/// Aktion, Taste, Werkzeug, Name des Knopfs, Name der Aktion (Skizzen 3: bei Rechteck und Kreis
+/// der Name der Art, der Knopf heißt weiter nach der Form).
+const SKETCH_KEYS: [(Action, Key, Tool, &str, &str); 4] = [
+    (Action::SketchLine, Key::L, Tool::Line, "Linie", "Linie"),
+    (
+        Action::SketchRectangle,
+        Key::R,
+        Tool::Rectangle,
+        "Rechteck",
+        "2-Punkt-Rechteck",
+    ),
+    (
+        Action::SketchCircle,
+        Key::C,
+        Tool::Circle,
+        "Kreis",
+        "Mittelpunkt-Durchmesser-Kreis",
+    ),
     (
         Action::SketchProjectEdge,
         Key::P,
         Tool::ProjectEdge,
+        "Körperkante kopieren",
         "Körperkante kopieren",
     ),
 ];
@@ -268,10 +283,10 @@ const SKETCH_KEYS: [(Action, Key, Tool, &str); 4] = [
 #[test]
 fn sketch_keys_select_the_tools() {
     let km = Keymap::defaults();
-    for (a, k, _, label) in SKETCH_KEYS {
+    for (a, k, _, _, name) in SKETCH_KEYS {
         assert_eq!(a.area(), Area::Sketch, "{a:?}");
         assert_eq!(km.bindings(a), [plain(k)], "{a:?}");
-        assert_eq!(a.label(), label, "Name wie der Werkzeugknopf");
+        assert_eq!(a.label(), name, "Name der Art");
         assert_eq!(km.action_for_key(Area::Sketch, &chord(k, false)), Some(a));
     }
     // Versatz O, Skizzenbemaßung D: gibt es (noch) nicht.
@@ -285,7 +300,7 @@ fn sketch_keys_select_the_tools() {
 
     let mut rig = Rig::new(sketch_open_ws());
     assert_eq!(rig.tool(), Tool::Select);
-    for (_, k, tool, label) in SKETCH_KEYS {
+    for (_, k, tool, label, _) in SKETCH_KEYS {
         rig.press(k, NONE);
         assert!(!rig.left_over, "{k:?} verbraucht");
         assert_eq!(rig.tool(), tool, "{k:?}");

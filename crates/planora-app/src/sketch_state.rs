@@ -7,6 +7,7 @@ use crate::formula_field::resolve;
 use crate::msg::Msg;
 use crate::sketch_cursor::{CursorOptions, DrawCursor};
 use crate::sketch_input::{Created, DrawInput};
+use crate::sketch_kinds::ToolKinds;
 use planora_feature::{FeatureId, ParamScope, ParamUnit, SketchFeature, constraint_unit};
 use planora_i18n::tr;
 use planora_kernel::{Edge, Id, Solid};
@@ -32,6 +33,10 @@ pub enum Tool {
     Rectangle,
     Circle,
     Arc,
+    /// Fusion „Polygon“; die Art steht in [`SketchSession::kinds`].
+    Polygon,
+    /// Fusion „Langloch“; die Art steht in [`SketchSession::kinds`].
+    Slot,
     Ellipse,
     Spline,
     ProjectEdge,
@@ -260,12 +265,21 @@ fn same_values(a: &Sketch, b: &Sketch) -> bool {
             .all(|(x, y)| (x - y).abs() <= linear)
 }
 
+/// Laufender Zug auf dem letzten Punkt des Linienzugs: wird ein tangentialer Bogen.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LineArcDrag {
+    pub start: PointId,
+    pub prev: CurveId,
+}
+
 /// Zustand des geöffneten Skizzen-Modus.
 #[derive(Clone, Debug)]
 pub struct SketchSession {
     /// Das bearbeitete Skizzen-Feature (die Sitzung arbeitet auf seinem Entwurf).
     pub sketch: FeatureId,
     pub tool: Tool,
+    /// Je Form die zuletzt gewählte Art; gilt für diese Sitzung.
+    pub kinds: ToolKinds,
     pub selection: Vec<Item>,
     /// Punkte des laufenden Werkzeugs.
     pub pending: Vec<PointId>,
@@ -275,6 +289,14 @@ pub struct SketchSession {
     /// Ende der großen Achse); die Anbindung folgt beim Abschluss. Bogen: Fang der Mitte (nur eine
     /// frei gesetzte Mitte rückt für die Tangente zurecht).
     pub pending_snaps: Vec<SnapHit>,
+    /// Schon gewählte Kurven einer Art, die Kurven wählt (`picks_curves`).
+    pub pending_curves: Vec<CurveId>,
+    /// Zuletzt abgeschlossene Seitenzahl eines Polygons; ein abgebrochenes zählt nicht.
+    pub polygon_sides: usize,
+    /// Laufender Zug auf dem letzten Punkt des Linienzugs.
+    pub line_arc: Option<LineArcDrag>,
+    /// Bogen aus dem Linienzug, an dem die nächste Linie tangential weiterläuft.
+    pub line_after_arc: Option<CurveId>,
     pub cursor: Option<DVec2>,
     /// Strg und Raster für den Zeiger ([`resolve_cursor`](Self::resolve_cursor)).
     pub cursor_opts: CursorOptions,
@@ -329,6 +351,9 @@ struct Backup {
     pending: Vec<PointId>,
     pending_pos: Vec<DVec2>,
     pending_snaps: Vec<SnapHit>,
+    pending_curves: Vec<CurveId>,
+    line_arc: Option<LineArcDrag>,
+    line_after_arc: Option<CurveId>,
     line_chain: Option<CurveId>,
     auto_tangent: Option<CurveId>,
     input: DrawInput,
@@ -378,10 +403,15 @@ impl SketchSession {
         SketchSession {
             sketch,
             tool: Tool::Select,
+            kinds: ToolKinds::default(),
             selection: Vec::new(),
             pending: Vec::new(),
             pending_pos: Vec::new(),
             pending_snaps: Vec::new(),
+            pending_curves: Vec::new(),
+            polygon_sides: 6,
+            line_arc: None,
+            line_after_arc: None,
             cursor: None,
             cursor_opts: CursorOptions::default(),
             draw_cursor: None,
@@ -418,10 +448,13 @@ impl SketchSession {
     }
 
     /// Vergisst, was das laufende Werkzeug schon gesetzt und getippt hat.
-    fn clear_pending(&mut self) {
+    pub(crate) fn clear_pending(&mut self) {
         self.pending.clear();
         self.pending_pos.clear();
         self.pending_snaps.clear();
+        self.pending_curves.clear();
+        self.line_arc = None;
+        self.line_after_arc = None;
         self.line_chain = None;
         self.auto_tangent = None;
         self.input = DrawInput::default();
@@ -477,6 +510,9 @@ impl SketchSession {
             pending: self.pending.clone(),
             pending_pos: self.pending_pos.clone(),
             pending_snaps: self.pending_snaps.clone(),
+            pending_curves: self.pending_curves.clone(),
+            line_arc: self.line_arc,
+            line_after_arc: self.line_after_arc,
             line_chain: self.line_chain,
             auto_tangent: self.auto_tangent,
             input: self.input.clone(),
@@ -490,6 +526,9 @@ impl SketchSession {
         self.pending = b.pending;
         self.pending_pos = b.pending_pos;
         self.pending_snaps = b.pending_snaps;
+        self.pending_curves = b.pending_curves;
+        self.line_arc = b.line_arc;
+        self.line_after_arc = b.line_after_arc;
         self.line_chain = b.line_chain;
         self.auto_tangent = b.auto_tangent;
         self.input = b.input;
@@ -519,7 +558,11 @@ impl SketchSession {
 
     /// Löst die Skizze und merkt sich den Bericht. Macht die Änderung die Skizze widersprüchlich
     /// oder unlösbar, ist das ein Fehler (siehe [`check_change`]).
-    fn solve_checked(&mut self, sk: &mut Sketch, prior: &Sketch) -> Result<SolveReport, Msg> {
+    pub(crate) fn solve_checked(
+        &mut self,
+        sk: &mut Sketch,
+        prior: &Sketch,
+    ) -> Result<SolveReport, Msg> {
         let before = self.last_report.take();
         let report = sk.solve();
         self.last_report = Some(report.clone());
@@ -562,21 +605,27 @@ impl SketchSession {
         self.cursor = Some(at);
         self.created = None;
         let cur = self.resolve_cursor(sk, at, radius);
-        self.atomic(sk, |se, sk, prior| match se.tool {
-            Tool::Select => {
-                se.select_at(sk, at, radius, extend);
-                Ok(())
+        self.atomic(sk, |se, sk, prior| {
+            if se.planned_kind().is_some() {
+                return se.click_kind(sk, &cur, prior);
             }
-            Tool::Point => se.click_point(sk, &cur, prior),
-            Tool::Line => se.click_line(sk, &cur, prior),
-            Tool::Rectangle => se.click_rectangle(sk, &cur, prior),
-            Tool::Circle => se.click_circle(sk, &cur, prior),
-            Tool::Arc => se.click_arc(sk, &cur, prior),
-            Tool::Ellipse => se.click_ellipse(sk, &cur, prior),
-            Tool::Spline => se.click_spline(sk, &cur, prior),
-            // Wird von der Oberfläche über `project_edge` gesteuert.
-            Tool::ProjectEdge => Ok(()),
-            Tool::Trim | Tool::Extend | Tool::Break => se.click_modify(sk, at, radius, prior),
+            match se.tool {
+                Tool::Select => {
+                    se.select_at(sk, at, radius, extend);
+                    Ok(())
+                }
+                Tool::Point => se.click_point(sk, &cur, prior),
+                Tool::Line => se.click_line(sk, &cur, prior),
+                Tool::Rectangle => se.click_rectangle(sk, &cur, prior),
+                Tool::Circle => se.click_circle(sk, &cur, prior),
+                Tool::Arc => se.click_arc(sk, &cur, prior),
+                Tool::Ellipse => se.click_ellipse(sk, &cur, prior),
+                Tool::Spline => se.click_spline(sk, &cur, prior),
+                // Haben nur geplante Arten (oben); die Kantenkopie steuert die Oberfläche über
+                // `project_edge`.
+                Tool::Polygon | Tool::Slot | Tool::ProjectEdge => Ok(()),
+                Tool::Trim | Tool::Extend | Tool::Break => se.click_modify(sk, at, radius, prior),
+            }
         })
     }
 
@@ -627,6 +676,7 @@ impl SketchSession {
             Item::Constraint(k) => sk.constraint(k).is_some(),
         });
         self.pending.retain(|&p| sk.point_xy(p).is_ok());
+        self.pending_curves.retain(|&c| sk.curve(c).is_some());
     }
 
     /// Vorschau unter dem Mauszeiger `at` (siehe [`hover_preview`](Self::hover_preview)):
@@ -800,24 +850,18 @@ impl SketchSession {
             self.pending_snaps = vec![cur.remember(tol)];
             return Ok(());
         };
-        let first = self
+        let mut hits: Vec<DrawCursor> = self
             .pending_snaps
-            .first()
-            .map(|&hit| DrawCursor::remembered(hit, sk));
+            .iter()
+            .take(1)
+            .map(|&hit| DrawCursor::remembered(hit, sk))
+            .collect();
+        hits.push(cur.clone());
         let rect = sk.add_rectangle(corner, cur.at).map_err(err)?;
         self.pending_pos.clear();
         self.pending_snaps.clear();
         // Das Rechteck legt eigene Ecken an (sortiert); gebunden wird die Ecke an der Lage.
-        for c in first.iter().chain([cur]) {
-            let own = rect
-                .points
-                .iter()
-                .copied()
-                .find(|&p| sk.point_xy(p).is_ok_and(|q| q.distance(c.at) <= tol));
-            if own.is_some() {
-                self.attach(sk, own, c)?;
-            }
-        }
+        self.bind_own(sk, &rect.points, &hits)?;
         self.solve_checked(sk, prior)?;
         self.created = Some(Created::Rectangle(rect));
         Ok(())
@@ -975,8 +1019,12 @@ impl SketchSession {
         Ok(())
     }
 
-    /// Schließt das laufende Werkzeug ab: legt den Spline an bzw. beendet den Linienzug.
+    /// Schließt das laufende Werkzeug ab: legt den Spline an bzw. beendet den Linienzug. Eine
+    /// geplante Art schließt nur ihr letzter Klick ab: Doppelklick und Enter lassen die Lagen.
     pub fn finish_tool(&mut self, sk: &mut Sketch) -> Result<(), String> {
+        if self.planned_kind().is_some() {
+            return Ok(());
+        }
         if self.tool != Tool::Spline {
             self.message = None;
             self.clear_pending();
@@ -1676,6 +1724,7 @@ impl SketchSession {
         }
         sk.prune_points(&orphans);
         self.pending.retain(|&p| sk.point_xy(p).is_ok());
+        self.pending_curves.retain(|&c| sk.curve(c).is_some());
         if self.dragging.is_some_and(|p| sk.point_xy(p).is_err()) {
             self.dragging = None;
         }

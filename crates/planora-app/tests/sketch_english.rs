@@ -247,6 +247,8 @@ fn sketch_speaks_english() {
                 "Rectangle",
                 "Circle",
                 "Arc",
+                "Polygon",
+                "Slot",
                 "Ellipse",
                 "Spline",
                 "Copy body edge",
@@ -256,7 +258,7 @@ fn sketch_speaks_english() {
             ]
         );
         let buttons = sketch_panel::strip_buttons(&c);
-        assert_eq!(buttons.len(), 12);
+        assert_eq!(buttons.len(), 14);
         for (tool, label, hint) in tools {
             let (_, r) = buttons.iter().find(|(l, _)| *l == label).unwrap();
             frame(&c, &mut app, vec![moved(r.center())]);

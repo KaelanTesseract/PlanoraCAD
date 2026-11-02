@@ -56,9 +56,10 @@ fn field_pos(rect: Rect, anchor: Pos2, width: f32, row: usize, rows: usize) -> P
 }
 
 /// Der aktuelle Wert gerundet, wie ihn das Feld vor dem ersten Zeichen zeigt: Länge wie
-/// [`planora_i18n::fmt_len`] ohne Einheit, Winkel mit einer Stelle.
+/// [`planora_i18n::fmt_len`] ohne Einheit, Winkel mit einer Stelle, die Seitenzahl ganz.
 fn suggestion(se: &SketchSession, sf: &SketchFeature, kind: FieldKind) -> String {
     match se.field_value(&sf.sketch, kind) {
+        Some(v) if kind == FieldKind::Sides => format!("{v:.0}"),
         Some(v) if matches!(kind, FieldKind::Angle | FieldKind::Sweep) => {
             format_number(v.to_degrees(), 1)
         }

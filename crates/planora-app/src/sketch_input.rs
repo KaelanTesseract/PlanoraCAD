@@ -5,6 +5,7 @@
 use crate::formula_field::resolve;
 use crate::msg::Msg;
 use crate::sketch_cursor::{DrawCursor, leaving_direction};
+use crate::sketch_kinds::ToolKind;
 use crate::sketch_state::{SketchSession, Tool, check_change, checked_value, dimension_input, err};
 use planora_feature::{ParamScope, ParamUnit, SketchFeature};
 use planora_i18n::tr;
@@ -12,6 +13,7 @@ use planora_math::DVec2;
 use planora_sketch::constraint::ConstraintKind;
 use planora_sketch::helpers::RectIds;
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
+use planora_sketch::shapes::{ArcSlotIds, PolygonIds, SlotIds};
 
 /// Länge der Achshilfe (Skizzen-x-Achse) für Winkel ohne vorige Linie.
 const AXIS_HELPER_LENGTH: f64 = 10.0;
@@ -28,13 +30,18 @@ pub enum FieldKind {
     Sweep,
     MajorAxis,
     MinorAxis,
+    /// Tiefe (3-Punkt-Rechteck).
+    Depth,
+    /// Seitenzahl eines Polygons: ganzzahlig 3 bis 64, wird nie ein Maß.
+    Sides,
 }
 
 impl FieldKind {
-    /// Einheit, in der das Feld gelesen wird (Winkel in Grad, sonst Länge).
+    /// Einheit, in der das Feld gelesen wird (Winkel in Grad, Seitenzahl ohne, sonst Länge).
     pub fn unit(self) -> ParamUnit {
         match self {
             FieldKind::Angle | FieldKind::Sweep => ParamUnit::Angle,
+            FieldKind::Sides => ParamUnit::Number,
             _ => ParamUnit::Length,
         }
     }
@@ -51,6 +58,8 @@ impl FieldKind {
             FieldKind::Sweep => tr!("sketch-field-sweep"),
             FieldKind::MajorAxis => tr!("sketch-field-major"),
             FieldKind::MinorAxis => tr!("sketch-field-minor"),
+            FieldKind::Depth => tr!("sketch-field-depth"),
+            FieldKind::Sides => tr!("sketch-field-sides"),
         }
     }
 }
@@ -72,8 +81,18 @@ pub struct DrawField {
 pub struct DrawInput {
     pub fields: Vec<DrawField>,
     pub active: usize,
-    /// Werkzeug und Stand, zu dem die Felder gehören; ändert er sich, sind die Felder leer.
-    key: (Option<Tool>, Vec<PointId>, usize),
+    /// Getippte Seitenzahl des laufenden Polygons; gilt über die Stufen bis zum Abschluss.
+    pub sides: Option<usize>,
+    /// Werkzeug, Art und Stand (Punkte, Lagen, Kurven, Bogenzug), zu dem die Felder gehören;
+    /// ändert er sich, sind die Felder leer.
+    key: (
+        Option<Tool>,
+        Option<ToolKind>,
+        Vec<PointId>,
+        usize,
+        usize,
+        bool,
+    ),
     /// Getippte Werte früherer Stufen (Bogenradius, große Achse) bis zum Abschluss.
     carried: Vec<(FieldKind, String)>,
     /// Größte kleine Halbachse dieser Stufe (die große Halbachse mit Toleranz).
@@ -97,6 +116,9 @@ pub enum Created {
     Circle(CurveId),
     Arc(CurveId),
     Ellipse(CurveId),
+    Polygon { ids: PolygonIds, inscribed: bool },
+    Slot(SlotIds),
+    ArcSlot(ArcSlotIds),
 }
 
 impl Created {
@@ -107,6 +129,8 @@ impl Created {
             Created::Circle(_) => crate::msg!("undo-circle"),
             Created::Arc(_) => crate::msg!("undo-arc"),
             Created::Ellipse(_) => crate::msg!("undo-ellipse"),
+            Created::Polygon { .. } => crate::msg!("undo-polygon"),
+            Created::Slot(_) | Created::ArcSlot(_) => crate::msg!("undo-slot"),
         }
     }
 }
@@ -128,6 +152,9 @@ fn read_field(
     }
     let (v, _) = resolve(text, kind.unit(), scope)?;
     match kind {
+        FieldKind::Sides if !(3.0..=64.0).contains(&v) || v.fract() != 0.0 => {
+            Err(tr!("sketch-field-sides-range"))
+        }
         FieldKind::Angle if !(0.0..=180.0).contains(&v) => Err(tr!("sketch-field-angle-range")),
         FieldKind::Sweep if !(v > 0.0 && v < 360.0) => Err(tr!("sketch-field-sweep-range")),
         FieldKind::Angle | FieldKind::Sweep => Ok(Some(v.to_radians())),
@@ -190,14 +217,18 @@ impl SketchSession {
     pub fn sync_input(&mut self, sk: &Sketch) {
         let key = (
             Some(self.tool),
+            self.planned_kind(),
             self.pending.clone(),
             self.pending_pos.len(),
+            self.pending_curves.len(),
+            self.line_arc.is_some(),
         );
         if self.input.key == key {
             return;
         }
         // Ohne offene Punkte läuft kein Werkzeug mehr; was es getippt hatte, gilt nicht mehr.
-        if self.pending.is_empty() && self.pending_pos.is_empty() {
+        if self.pending.is_empty() && self.pending_pos.is_empty() && self.pending_curves.is_empty()
+        {
             self.input.carried.clear();
         }
         self.input.fields = self
@@ -220,6 +251,9 @@ impl SketchSession {
     /// erst Radius, dann Öffnungswinkel, Ellipse erst große, dann kleine Halbachse.
     fn stage_fields(&self) -> &'static [FieldKind] {
         use FieldKind as F;
+        if let Some(kind) = self.planned_kind() {
+            return kind.stages().get(self.kind_stage()).copied().unwrap_or(&[]);
+        }
         let (pts, pos) = (self.pending.len(), self.pending_pos.len());
         match self.tool {
             Tool::Line if pts > 0 => &[F::Length, F::Angle],
@@ -260,6 +294,9 @@ impl SketchSession {
                 field.error = Some(e);
             }
         }
+        if field.kind == FieldKind::Sides {
+            self.input.sides = field.locked.map(|v| v as usize);
+        }
     }
 
     /// Nächstes oder (`back`) voriges Feld; die Sperren bleiben.
@@ -278,6 +315,9 @@ impl SketchSession {
         let field = self.input.fields.iter().find(|f| f.kind == kind)?;
         if field.locked.is_some() {
             return field.locked;
+        }
+        if self.planned_kind().is_some() {
+            return self.kind_field_value(sk, kind);
         }
         let at = self.draw_cursor.as_ref()?.at;
         if matches!(kind, F::Width | F::Height) {
@@ -305,7 +345,7 @@ impl SketchSession {
                 let major = (*self.pending_pos.first()? - from).try_normalize()?;
                 major.perp_dot(along).abs()
             }
-            F::Width | F::Height => return None,
+            F::Width | F::Height | F::Depth | F::Sides => return None,
         })
     }
 
@@ -340,6 +380,9 @@ impl SketchSession {
     /// Lage mit allen gesperrten Größen; `None` ohne Sperre.
     fn locked_position(&self, sk: &Sketch, cur: &DrawCursor) -> Option<DVec2> {
         use FieldKind as F;
+        if self.planned_kind().is_some() {
+            return self.kind_locked_position(sk, cur);
+        }
         let input = &self.input;
         let first = self
             .pending
@@ -475,7 +518,8 @@ impl SketchSession {
             self.input
                 .fields
                 .iter()
-                .filter(|f| f.locked.is_some())
+                // Die Seitenzahl ist kein Maß; sie steht in `DrawInput::sides`.
+                .filter(|f| f.locked.is_some() && f.kind != FieldKind::Sides)
                 .map(|f| (f.kind, f.text.clone())),
         );
         if let Err(text) = self.click(&mut sf.sketch, raw, radius, extend) {

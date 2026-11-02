@@ -950,6 +950,10 @@ fn sketch_mode_clicks_and_wheel_on_a_field_do_not_reach_the_sketch() {
         d,
         "Mausrad in der freien Fläche zoomt"
     );
+    // Skizzen 3: Die Mitte der Leiste trifft einen Knopf (jetzt „Langloch“, das bis zum letzten
+    // Klick keinen Punkt anlegt); die Gegenprobe gilt wieder dem Punktwerkzeug.
+    let (se, sk) = state(&mut app).session_sketch_mut().unwrap();
+    se.set_tool(sk, Tool::Point);
     click(&c, &mut app, BIG, p);
     assert_eq!(
         points(&mut app),

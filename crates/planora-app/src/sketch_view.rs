@@ -1139,7 +1139,8 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         let Some(pl) = sk.curve_polyline(c, STEPS_PER_TURN) else {
             continue;
         };
-        let selected = se.selection.contains(&Item::Curve(c));
+        // Die schon gewählten Kurven einer laufenden Art leuchten wie die Auswahl.
+        let selected = se.selection.contains(&Item::Curve(c)) || se.pending_curves.contains(&c);
         let mut color = if selected {
             col.selected
         } else if data.construction {
@@ -1331,6 +1332,14 @@ fn draw_preview(
         return;
     };
     let stroke = Stroke::new(1.5, color);
+    if se.planned_kind().is_some() {
+        for line in se.kind_preview(sk, cursor).unwrap_or_default() {
+            for path in map.paths(&line) {
+                draw_path(painter, path, stroke, true);
+            }
+        }
+        return;
+    }
     let pending: Vec<DVec2> = se.pending.iter().filter_map(|&p| pos(sk, p)).collect();
     let circle = |m: DVec2, r: f64| -> Vec<DVec2> {
         (0..=STEPS_PER_TURN)

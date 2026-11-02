@@ -300,6 +300,15 @@ impl SketchSession {
         if !self.is_drawing_tool() || self.cursor_opts.suppressed || !raw.is_finite() {
             return cur;
         }
+        // Wer Kurven wählt, sieht nur Kurven: kein Punkt davor, keine Hilfslinie, kein Raster.
+        if self.picks_curves() {
+            if let Some(c) = sk.pick_curve(raw, radius) {
+                cur.at = sk.nearest_on_curve(c, raw).unwrap_or(raw);
+                cur.snap = Snap::Curve(c);
+                cur.snap_at = Some(cur.at);
+            }
+            return cur;
+        }
         let index = self.current_index(sk);
         if let Some(hit) = index.find(raw, radius) {
             cur.at = hit.at;
@@ -456,19 +465,20 @@ impl SketchSession {
         }
     }
 
-    /// Punkte, an denen sich der Zeiger nicht ausrichtet: die laufenden und die erste Ecke des
-    /// Rechtecks (die gibt es nur als Lage).
+    /// Punkte, an denen sich der Zeiger nicht ausrichtet: die laufenden und die, die auf einer
+    /// gemerkten Lage des Rechtecks oder einer geplanten Art liegen (die Form gibt es nur als
+    /// Lagen).
     fn align_skip(&self, sk: &Sketch) -> Vec<PointId> {
         let mut skip = self.pending.clone();
-        if self.tool == Tool::Rectangle
-            && let Some(&corner) = self.pending_pos.first()
-        {
+        if self.tool == Tool::Rectangle || self.planned_kind().is_some() {
             let tol = sk.tolerance().linear;
-            skip.extend(
-                sk.points()
-                    .map(|(p, _)| p)
-                    .filter(|&p| sk.point_xy(p).is_ok_and(|q| q.distance(corner) <= tol)),
-            );
+            for &spot in &self.pending_pos {
+                skip.extend(
+                    sk.points()
+                        .map(|(p, _)| p)
+                        .filter(|&p| sk.point_xy(p).is_ok_and(|q| q.distance(spot) <= tol)),
+                );
+            }
         }
         skip
     }

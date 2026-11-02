@@ -24,13 +24,15 @@ use planora_sketch::model::{CurveKind, Sketch};
 const _: () = assert!(TOOL_ORDER.len() == crate::shell::STRIP_TOOLS);
 
 /// Werkzeuge der Skizzenleiste in der Reihenfolge der Leiste.
-pub const TOOL_ORDER: [Tool; 12] = [
+pub const TOOL_ORDER: [Tool; 14] = [
     Tool::Select,
     Tool::Point,
     Tool::Line,
     Tool::Rectangle,
     Tool::Circle,
     Tool::Arc,
+    Tool::Polygon,
+    Tool::Slot,
     Tool::Ellipse,
     Tool::Spline,
     Tool::ProjectEdge,
@@ -52,6 +54,8 @@ pub fn tool_label(tool: Tool) -> String {
         Tool::Rectangle => tr!("action-sketch-rectangle"),
         Tool::Circle => tr!("action-sketch-circle"),
         Tool::Arc => tr!("sketch-tool-arc"),
+        Tool::Polygon => tr!("sketch-tool-polygon"),
+        Tool::Slot => tr!("sketch-tool-slot"),
         Tool::Ellipse => tr!("sketch-tool-ellipse"),
         Tool::Spline => tr!("sketch-tool-spline"),
         Tool::ProjectEdge => tr!("action-sketch-project-edge"),
@@ -70,6 +74,8 @@ pub fn tool_hint(tool: Tool) -> String {
         Tool::Rectangle => tr!("sketch-tool-rectangle-hint"),
         Tool::Circle => tr!("sketch-tool-circle-hint"),
         Tool::Arc => tr!("sketch-tool-arc-hint"),
+        Tool::Polygon => tr!("sketch-tool-polygon-hint"),
+        Tool::Slot => tr!("sketch-tool-slot-hint"),
         Tool::Ellipse => tr!("sketch-tool-ellipse-hint"),
         Tool::Spline => tr!("sketch-tool-spline-hint"),
         Tool::ProjectEdge => tr!("sketch-tool-project-edge-hint"),
@@ -80,7 +86,7 @@ pub fn tool_hint(tool: Tool) -> String {
 }
 
 /// Werkzeuge der Skizzenleiste: Werkzeug, Beschriftung, Hinweis (in der aktuellen Sprache).
-pub fn tools() -> [(Tool, String, String); 12] {
+pub fn tools() -> [(Tool, String, String); 14] {
     TOOL_ORDER.map(|t| (t, tool_label(t), tool_hint(t)))
 }
 
@@ -786,7 +792,7 @@ fn foot_field(
         Severity::Warning => p.warning,
         Severity::Error => p.error,
     };
-    let hint = tool_hint(se.tool);
+    let hint = se.active_hint();
     let mut close = false;
     shell_panels::field(ctx, shell_panels::sketch_foot_id(), rect.min, frame, |ui| {
         ui.set_width(inner.x);

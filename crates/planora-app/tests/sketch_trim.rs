@@ -382,7 +382,7 @@ fn break_splits_the_clicked_curve_with_undo_name() {
 }
 
 #[test]
-fn the_strip_shows_twelve_tools_that_fit_at_1080() {
+fn the_strip_shows_fourteen_tools_that_fit_at_1080() {
     let ctx = context();
     let (mut s, _, _) = cross();
     for _ in 0..3 {
@@ -395,16 +395,17 @@ fn the_strip_shows_twelve_tools_that_fit_at_1080() {
     }
     let buttons = sketch_panel::strip_buttons(&ctx);
     let names: Vec<&str> = buttons.iter().map(|(n, _)| n.as_str()).collect();
-    assert_eq!(names.len(), 12, "{names:?}");
-    assert_eq!(&names[9..], ["Stutzen", "Dehnen", "Brechen"]);
+    // Skizzen 3: Polygon und Langloch kamen dazu.
+    assert_eq!(names.len(), 14, "{names:?}");
+    assert_eq!(&names[11..], ["Stutzen", "Dehnen", "Brechen"]);
     for (name, r) in &buttons {
         assert!(r.top() >= 0.0 && r.bottom() <= H, "{name}: {r:?}");
         assert_eq!(r.height(), 36.0, "{name}");
     }
     // Trennlinie vor „Stutzen“: größerer Abstand als zwischen den übrigen Knöpfen.
     let gap = |i: usize| buttons[i + 1].1.top() - buttons[i].1.bottom();
-    assert!((gap(7) - 4.0).abs() < 0.01, "{}", gap(7));
-    assert!((gap(8) - 13.0).abs() < 0.01, "{}", gap(8));
+    assert!((gap(9) - 4.0).abs() < 0.01, "{}", gap(9));
+    assert!((gap(10) - 13.0).abs() < 0.01, "{}", gap(10));
 }
 
 #[test]
