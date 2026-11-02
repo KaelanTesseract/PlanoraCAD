@@ -183,7 +183,7 @@ pub struct ChamferIds {
 
 /// Gerade oder Kreis (Versatzkurven und Kurven selbst).
 #[derive(Clone, Copy, Debug)]
-enum Shape {
+pub(crate) enum Shape {
     Line { a: DVec2, d: DVec2 },
     Round { c: DVec2, r: f64 },
 }
@@ -215,7 +215,7 @@ fn offset_shape(s: Shape, sign: f64, r: f64, tol: f64) -> Option<Shape> {
 }
 
 /// Schnittpunkte zweier Geraden/Kreise (unbegrenzt, Kreise ganz).
-fn meet(a: Shape, b: Shape) -> Vec<DVec2> {
+pub(crate) fn meet(a: Shape, b: Shape) -> Vec<DVec2> {
     match (a, b) {
         (Shape::Line { a: p, d }, Shape::Line { a: q, d: e }) => {
             let den = d.perp_dot(e);
@@ -317,7 +317,7 @@ fn total_of(g: &Geom) -> Option<f64> {
     }
 }
 
-fn wrap_pi(x: f64) -> f64 {
+pub(crate) fn wrap_pi(x: f64) -> f64 {
     let w = x.rem_euclid(TAU);
     if w > PI { w - TAU } else { w }
 }

@@ -17,6 +17,7 @@ pub(crate) mod intersect;
 #[doc(hidden)]
 pub mod linalg;
 pub mod model;
+pub mod offset;
 pub mod profile;
 pub(crate) mod profile_legacy;
 pub(crate) mod profile_ref;

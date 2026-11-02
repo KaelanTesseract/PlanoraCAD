@@ -401,14 +401,14 @@ impl Arrangement {
 }
 
 /// Knoten mit Zusammenlegen im Abstand `≤ tol` über ein Gitter mit Zellweite `tol`.
-struct Nodes {
+pub(crate) struct Nodes {
     tol: f64,
-    pos: Vec<DVec2>,
+    pub(crate) pos: Vec<DVec2>,
     grid: HashMap<(i64, i64), Vec<usize>>,
 }
 
 impl Nodes {
-    fn new(tol: f64) -> Nodes {
+    pub(crate) fn new(tol: f64) -> Nodes {
         Nodes {
             tol: if tol > 0.0 { tol } else { f64::MIN_POSITIVE },
             pos: Vec::new(),
@@ -425,7 +425,7 @@ impl Nodes {
     }
 
     /// Knoten bei `p`: der älteste vorhandene im Abstand `≤ tol`, sonst ein neuer.
-    fn get(&mut self, p: DVec2) -> usize {
+    pub(crate) fn get(&mut self, p: DVec2) -> usize {
         let (cx, cy) = self.cell(p);
         let mut best: Option<usize> = None;
         for dx in -1..=1 {
@@ -450,7 +450,7 @@ impl Nodes {
 /// Teilungsstellen einer Kurve zu Stücken `(t0, t1, a, b)`: Parameter in den Bereich gebracht
 /// und sortiert; Stellen am selben Knoten, die längs der Kurve höchstens `SAME_SPLIT·tol`
 /// auseinanderliegen, zählen einmal (die Enden offener Kurven behalten ihren Parameter).
-fn split(g: &Geom, ev: Vec<(f64, usize)>, tol: f64) -> Vec<(f64, f64, usize, usize)> {
+pub(crate) fn split(g: &Geom, ev: Vec<(f64, usize)>, tol: f64) -> Vec<(f64, f64, usize, usize)> {
     let (_, hi) = g.domain();
     let mut ev: Vec<(f64, usize)> = ev
         .into_iter()
