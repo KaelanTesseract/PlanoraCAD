@@ -606,7 +606,7 @@ fn active_hint_names_the_kind_and_the_default_says_what_it_said() {
 // ---- Stufenmaschine -------------------------------------------------------------------------
 
 #[test]
-fn stages_collect_positions_and_the_last_click_refuses_for_now() {
+fn stages_collect_positions_and_a_last_click_without_a_shape_refuses() {
     let (mut se, mut sk) = session();
     // Skizzen 3, Task 9: Das Polygon ist fertig; es zeigt das Langloch.
     se.choose_kind(&mut sk, ToolKind::SlotCenterToCenter);

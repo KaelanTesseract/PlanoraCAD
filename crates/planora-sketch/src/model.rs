@@ -283,6 +283,7 @@ impl Sketch {
     pub(crate) fn set_curve_kind(&mut self, c: CurveId, kind: CurveKind) {
         self.touch_structure();
         self.curves[c].kind = kind;
+        self.refresh_shared_signs(Some(c));
     }
 
     pub fn add_line(&mut self, a: PointId, b: PointId) -> Result<CurveId, SketchError> {

@@ -213,6 +213,7 @@ impl Sketch {
             constraints.push(ConstraintData {
                 kind: c.kind,
                 branch: c.branch,
+                shared_sign: 0,
                 driven: c.driven,
                 enabled: c.enabled,
                 internal: c.internal,
@@ -238,6 +239,8 @@ impl Sketch {
                 s.check_constraint_value(&c.kind)?;
             }
         }
+        // Die Tangenten an gemeinsamen Enden bleiben, wie die gespeicherte Geometrie sie zeigt.
+        s.refresh_shared_signs(None);
         Ok(s)
     }
 }

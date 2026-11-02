@@ -1095,6 +1095,7 @@ sketch-kind-slot-center-point-hint = Click the slot center, an arc center, then 
 sketch-kind-slot-arc-3p-hint = Click start, end and a point on the center arc, then the width.
 sketch-kind-slot-arc-center-hint = Click center, start and end of the center arc, then the width.
 sketch-slot-too-wide = This width does not fit: the slot would be too wide or have no width at all
+sketch-angle-range = An angle dimension must be greater than 0° and less than 180°; the dimension was not changed
 sketch-dimension-folds = This value would fold the shape over; the dimension was not changed
 sketch-circle-collinear = The three points are on one line or coincide, so they make no circle
 sketch-polygon-edge-side = The pointer is on the first side; click the side the polygon should lie on

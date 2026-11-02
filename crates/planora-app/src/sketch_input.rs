@@ -648,19 +648,18 @@ impl SketchSession {
         let unsolved = sf.sketch.clone();
         let before = self.last_report.take();
         let report = sf.sketch.solve();
-        let problem = check_change(&report, before.as_ref(), &prior, Some(id));
+        let direct = match check_change(&report, before.as_ref(), &prior, Some(id)) {
+            Some(_) => Err(crate::msg!("sketch-field-rejected")),
+            None => Ok(()),
+        };
         let redundant = report.redundant.contains(&id);
-        if problem.is_some() {
-            self.last_report = Some(report);
-            return Err(crate::msg!("sketch-field-rejected"));
-        }
-        if redundant && kind == FieldKind::Sweep {
+        if direct.is_ok() && redundant && kind == FieldKind::Sweep {
             sf.sketch = prior;
             self.last_report = before;
             return Ok(Some(crate::msg!("sketch-field-sweep-redundant")));
         }
         self.last_report = Some(report);
-        self.keep_unfolded(&mut sf.sketch, id, old, &unsolved)?;
+        self.guard_length(&mut sf.sketch, id, old, &unsolved, direct)?;
         if redundant {
             self.make_driven(&mut sf.sketch, id)?;
             return Ok(self.message.take());

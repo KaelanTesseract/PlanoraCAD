@@ -25,8 +25,8 @@ pub use planora_sketch::snap::Snap;
 
 /// Schritte je Vollkreis für den Linienzug, gegen den der Auswahlrahmen prüft.
 const BOX_STEPS_PER_TURN: usize = 96;
-/// Schritte, in denen der Falt-Wächter ein Längenmaß noch einmal setzt.
-const FOLD_RETRY_STEPS: usize = 8;
+/// So viele Schritte für den ganzen Weg nimmt der Falt-Wächter höchstens (kleinste Schrittweite).
+const FOLD_MAX_STEPS: f64 = 128.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
@@ -1470,15 +1470,18 @@ impl SketchSession {
             let before = se.last_report.take();
             let report = sk.solve();
             se.last_report = Some(report.clone());
-            if let Some(problem) = check_change(&report, before.as_ref(), prior, Some(id)) {
-                return Err(match problem {
-                    SolveStatus::Conflicting => {
-                        crate::msg!("sketch-apply-conflict", action = action.label_msg())
-                    }
-                    _ => crate::msg!("sketch-apply-unsolved", action = action.label_msg()),
-                });
-            }
-            se.keep_unfolded(sk, id, old, &unsolved)?;
+            let direct = match check_change(&report, before.as_ref(), prior, Some(id)) {
+                Some(SolveStatus::Conflicting) => Err(crate::msg!(
+                    "sketch-apply-conflict",
+                    action = action.label_msg()
+                )),
+                Some(_) => Err(crate::msg!(
+                    "sketch-apply-unsolved",
+                    action = action.label_msg()
+                )),
+                None => Ok(()),
+            };
+            se.guard_length(sk, id, old, &unsolved, direct)?;
             if se
                 .last_report
                 .as_ref()
@@ -1532,54 +1535,67 @@ impl SketchSession {
                 .map(|c| c.kind.clone())
                 .ok_or_else(|| crate::msg!("sketch-constraint-missing"))?;
             checked_value(sk, &kind, value)?;
+            // Ein Winkelmaß gilt nur bis auf 180°: Darüber zeigte es einen Wert, den die Form nicht
+            // hat. Unverändert bestätigen geht immer (ein getippter Öffnungswinkel darf größer sein).
+            if matches!(kind, ConstraintKind::Angle(_, _, v) if v != value)
+                && !(value > 0.0 && value < std::f64::consts::PI)
+            {
+                return Err(crate::msg!("sketch-angle-range"));
+            }
             let old = sk.measure(&kind);
             sk.set_constraint_value(id, value).map_err(err)?;
             let unsolved = sk.clone();
-            se.solve_checked(sk, prior)?;
-            se.keep_unfolded(sk, id, old, &unsolved)
+            let direct = se.solve_checked(sk, prior).map(|_| ());
+            se.guard_length(sk, id, old, &unsolved, direct)
         })
     }
 
-    /// Falt-Wächter für das Längenmaß `id` (Skizzen 3): Hat das Lösen die Skizze gegenüber
-    /// `unsolved` (Stand vor dem Lösen, das Maß hat schon seinen neuen Wert) umgeklappt, geht es
-    /// noch einmal von dort in [`FOLD_RETRY_STEPS`] gleichen Schritten ab dem alten Wert `old`: Ein
-    /// großer Sprung lässt den Löser umklappen, in kleinen Schritten bleibt die Lage. Klappt es dann
-    /// immer noch, ist das ein Fehler. Winkelmaße prüft er nicht.
-    pub(crate) fn keep_unfolded(
+    /// Falt-Wächter für das Längenmaß `id` (Skizzen 3): `direct` ist das Ergebnis des direkten
+    /// Lösens, `unsolved` der Stand davor (das Maß hat schon seinen neuen Wert). Ist es gescheitert
+    /// oder hat die Skizze umgeklappt, geht es von dort ab dem alten Wert `old` in Schritten, die sich
+    /// bei jedem Umklappen halbieren, bis auf [`FOLD_MAX_STEPS`] Schritte für den ganzen Weg: Ein
+    /// großer Sprung lässt den Löser scheitern, in kleinen Schritten bleibt die Lage. Kommt es nicht
+    /// ans Ziel, bleibt es beim Fehler aus `direct` (ein echter Widerspruch), sonst
+    /// `sketch-dimension-folds`. Andere Maße bleiben unberührt.
+    pub(crate) fn guard_length(
         &mut self,
         sk: &mut Sketch,
         id: ConstraintId,
         old: Option<f64>,
         unsolved: &Sketch,
+        direct: Result<(), Msg>,
     ) -> Result<(), Msg> {
         let Some(new) = sk.constraint(id).and_then(|c| c.kind.length_value()) else {
-            return Ok(());
+            return direct;
         };
-        if !self.last_report.as_ref().is_some_and(status_ok) || !folded_over(unsolved, sk) {
+        let solved = self.last_report.as_ref().is_some_and(status_ok);
+        if direct.is_ok() && !(solved && folded_over(unsolved, sk)) {
             return Ok(());
         }
-        let refused = || crate::msg!("sketch-dimension-folds");
-        let old = old.ok_or_else(refused)?;
-        *sk = unsolved.clone();
-        for i in 1..=FOLD_RETRY_STEPS {
-            let share = i as f64 / FOLD_RETRY_STEPS as f64;
-            let value = if i == FOLD_RETRY_STEPS {
-                new
-            } else {
-                old + (new - old) * share
-            };
-            sk.set_constraint_value(id, value).map_err(err)?;
-            let report = sk.solve();
-            let ok = status_ok(&report);
+        let stuck = direct.and(Err(crate::msg!("sketch-dimension-folds")));
+        let Some(old) = old.filter(|o| *o != new) else {
+            return stuck;
+        };
+        let smallest = (new - old).abs() / FOLD_MAX_STEPS;
+        let (mut current, mut at, mut step) = (unsolved.clone(), old, (new - old) / 2.0);
+        while step.abs() >= smallest {
+            let last = (new - at).abs() <= step.abs();
+            let value = if last { new } else { at + step };
+            let mut trial = current.clone();
+            trial.set_constraint_value(id, value).map_err(err)?;
+            let report = trial.solve();
+            if !status_ok(&report) || folded_over(unsolved, &trial) {
+                step /= 2.0;
+                continue;
+            }
             self.last_report = Some(report);
-            if !ok {
-                return Err(refused());
+            (current, at) = (trial, value);
+            if last {
+                *sk = current;
+                return Ok(());
             }
         }
-        if folded_over(unsolved, sk) {
-            return Err(refused());
-        }
-        Ok(())
+        stuck
     }
 
     /// Zahl oder Formel `text` für das bestehende Maß `id` des Entwurfs `sf`: auswerten mit den

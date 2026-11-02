@@ -625,13 +625,69 @@ fn arc_after_line_length(y: f64, length: f64) -> (Stored, DVec2, DVec2) {
 
 #[test]
 fn tangent_stays_tangent_when_the_line_gets_a_length() {
-    // Skizzen 3, Task 10: Auch bei 100 läuft er in derselben Richtung weiter. Die Zeile am
-    // gemeinsamen Ende hält nur die Richtung, nicht die Seite (Entscheidung 1); im großen Sprung
-    // springt der Löser, und der Falt-Wächter geht dann in kleinen Schritten.
+    // Skizzen 3, Task 10: Auch bei 100 läuft er in derselben Richtung weiter: Die Zeile am
+    // gemeinsamen Ende hat nur noch eine Nullstelle, die Spitze ist keine.
     for y in [5.0, -5.0] {
         for length in [12.0, 20.0, 50.0, 100.0, 300.0] {
             let (arc, pa, pb) = arc_after_line_length(y, length);
             assert_leaves_along(&arc, pb, (pb - pa).normalize());
+        }
+    }
+}
+
+/// Kein Zusammenfallen: Der Radius bleibt über `least` und wächst bei langer Linie mit ihr (eine
+/// Spitze zöge ihn auf wenige Millimeter), ohne sie zu überholen.
+#[track_caller]
+fn assert_sensible_radius(r: f64, least: f64, length: f64, y: f64) {
+    assert!(r > least && r < length, "y={y} L={length}: r={r}");
+    assert!(
+        length < 100.0 || r > 0.2 * length,
+        "y={y} L={length}: r={r}"
+    );
+}
+
+/// Jede Länge bis 120 und jede zehnte bis 300; je Fall ein frischer Stand bei 8 mm.
+fn dense_lengths() -> impl Iterator<Item = f64> {
+    (9..=120).chain((130..=300).step_by(10)).map(f64::from)
+}
+
+#[test]
+fn a_line_length_sweep_never_refuses_and_keeps_the_direction_of_a_tangent_arc() {
+    for y in [5.0, -5.0, 2.0, -2.0] {
+        for length in dense_lengths() {
+            let (arc, pa, pb) = arc_after_line_length(y, length);
+            assert_leaves_along(&arc, pb, (pb - pa).normalize());
+            let r = arc.center.distance(pb);
+            assert_sensible_radius(r, 1.0, length, y);
+        }
+    }
+}
+
+#[test]
+fn a_line_length_sweep_never_refuses_and_keeps_the_direction_of_a_center_arc() {
+    for y in [5.0, -5.0, 2.0, -2.0] {
+        for length in dense_lengths() {
+            // Mittelpunkt-Bogen wie der tangentiale: Mitte über dem Linienende, Lage von `y`.
+            let (mut se, mut sk, l, a, b) = tangent_on_line();
+            let center = sk.add_point(10.0, y).unwrap();
+            let free = sk.add_point(10.0 + y.abs(), y).unwrap();
+            let arc = if y > 0.0 {
+                sk.add_arc(center, b, free).unwrap()
+            } else {
+                sk.add_arc(center, free, b).unwrap()
+            };
+            sk.add_constraint(K::Tangent(arc, l)).unwrap();
+            let id = sk.add_constraint(K::Distance(a, b, 8.0)).unwrap();
+            assert_eq!(sk.solve().status, SolveStatus::Solved);
+            se.set_dimension_value(&mut sk, id, length)
+                .unwrap_or_else(|e| panic!("y={y} L={length}: {e}"));
+            assert_eq!(sk.clone().solve().status, SolveStatus::Solved);
+            let (pa, pb) = (xy(&sk, a), xy(&sk, b));
+            assert!((pa.distance(pb) - length).abs() < 1e-6, "y={y} L={length}");
+            let stored = last_arc(&sk);
+            assert_leaves_along(&stored, pb, (pb - pa).normalize());
+            let r = stored.center.distance(pb);
+            assert_sensible_radius(r, 0.25 * y.abs(), length, y);
         }
     }
 }

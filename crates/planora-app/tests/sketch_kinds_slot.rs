@@ -13,7 +13,7 @@ use planora_app::sketch_state::{ConstraintAction, Item, SketchSession, Tool};
 use planora_app::state::{AppState, StandardPlane};
 use planora_app::workspace::Workspace;
 use planora_app::{fonts, theme};
-use planora_feature::{FeatureId, ParamScope, SketchFeature, SketchPlane};
+use planora_feature::{FeatureId, ParamEdit, ParamScope, ParamUnit, SketchFeature, SketchPlane};
 use planora_i18n::t;
 use planora_math::{DVec2, Frame, Tolerance};
 use planora_project::config::Config;
@@ -1176,14 +1176,13 @@ fn arc_slot_r60() -> (SketchSession, Sketch, ArcSlotIds) {
 fn an_arc_slot_width_of_130_at_radius_60_is_refused_and_the_state_is_bit_equal() {
     let (mut se, mut sk, ids) = arc_slot_r60();
     let id = sk.add_constraint(K::Diameter(ids.caps[0], 20.0)).unwrap();
+    sk.add_constraint(K::Radius(ids.axis, 60.0)).unwrap();
     assert_eq!(sk.solve().status, SolveStatus::Solved);
     let before = bits(&sk);
+    // Die Tangenten haben nur noch eine Lösung: Innen kein Platz mehr ist ein echter Widerspruch.
     let text = se.set_dimension_value(&mut sk, id, 130.0).unwrap_err();
-    assert_eq!(text, t("sketch-dimension-folds"));
-    assert_eq!(
-        se.message_text().as_deref(),
-        Some(t("sketch-dimension-folds").as_str())
-    );
+    assert_eq!(text, t("sketch-change-conflict"));
+    assert_eq!(se.message_text().as_deref(), Some(text.as_str()));
     assert_eq!(bits(&sk), before);
     assert!(matches!(
         sk.constraint(id).unwrap().kind,
@@ -1195,19 +1194,70 @@ fn an_arc_slot_width_of_130_at_radius_60_is_refused_and_the_state_is_bit_equal()
     assert_arc_slot(&sk, &ids, 60.0, 15.0);
 }
 
+/// Ohne Maß am Radius klappt nichts um: Die Tangenten haben nur noch eine Lösung, also wächst der
+/// Radius mit, und das Langloch bleibt eine gültige Form.
 #[test]
-fn a_new_dimension_that_folds_is_refused_too() {
+fn an_arc_slot_with_a_free_radius_grows_with_its_width() {
     let (mut se, mut sk, ids) = arc_slot_r60();
+    let id = sk.add_constraint(K::Diameter(ids.caps[0], 20.0)).unwrap();
+    assert_eq!(sk.solve().status, SolveStatus::Solved);
+    se.set_dimension_value(&mut sk, id, 130.0).unwrap();
+    assert_solved(&sk);
+    let big_r = sk.radius(ids.axis).unwrap();
+    assert!(big_r > 65.0, "{big_r}");
+    assert_arc_slot(&sk, &ids, big_r, 65.0);
+    assert_eq!(sk.profiles().profiles.len(), 1);
+}
+
+#[test]
+fn a_new_dimension_past_the_limit_is_refused_too() {
+    let (mut se, mut sk, ids) = arc_slot_r60();
+    sk.add_constraint(K::Radius(ids.axis, 60.0)).unwrap();
+    assert_eq!(sk.solve().status, SolveStatus::Solved);
     se.set_tool(&mut sk, Tool::Select);
     se.selection = vec![Item::Curve(ids.caps[0])];
     let before = bits(&sk);
     let constraints = sk.constraints().count();
-    let text = se
-        .apply(&mut sk, ConstraintAction::Diameter, Some(130.0))
-        .unwrap_err();
-    assert_eq!(text, t("sketch-dimension-folds"));
+    assert!(
+        se.apply(&mut sk, ConstraintAction::Diameter, Some(130.0))
+            .is_err()
+    );
     assert_eq!(bits(&sk), before);
     assert_eq!(sk.constraints().count(), constraints);
+}
+
+/// Fest (0,0) und (30,0), dazwischen `b` auf der x-Achse: Die Linie `b`–`q` kehrt um, sobald `b`
+/// über `q` hinausläuft, und das meldet der Löser als gelöst.
+fn line_past_its_fixed_end() -> (SketchSession, Sketch, PointId, PointId, CurveId) {
+    let (se, mut sk) = session(ToolKind::ArcCenter);
+    let a = sk.add_point(0.0, 0.0).unwrap();
+    let far = sk.add_point(100.0, 0.0).unwrap();
+    let axis = sk.add_line(a, far).unwrap();
+    sk.set_construction(axis, true).unwrap();
+    sk.add_constraint(K::Fixed(a, 0.0, 0.0)).unwrap();
+    sk.add_constraint(K::Fixed(far, 100.0, 0.0)).unwrap();
+    let b = sk.add_point(20.0, 0.0).unwrap();
+    sk.add_constraint(K::PointOnCurve(b, axis)).unwrap();
+    let q = sk.add_point(30.0, 0.0).unwrap();
+    sk.add_constraint(K::Fixed(q, 30.0, 0.0)).unwrap();
+    let line = sk.add_line(b, q).unwrap();
+    assert_eq!(sk.solve().status, SolveStatus::Solved);
+    (se, sk, a, b, line)
+}
+
+#[test]
+fn a_length_that_reverses_a_line_is_refused_in_all_steps_and_the_state_stays() {
+    let (mut se, mut sk, a, b, line) = line_past_its_fixed_end();
+    let id = sk.add_constraint(K::Distance(a, b, 20.0)).unwrap();
+    assert_eq!(sk.solve().status, SolveStatus::Solved);
+    let before = bits(&sk);
+    let text = se.set_dimension_value(&mut sk, id, 50.0).unwrap_err();
+    assert_eq!(text, t("sketch-dimension-folds"));
+    assert_eq!(bits(&sk), before);
+    // Bis kurz vor den festen Punkt geht es.
+    se.set_dimension_value(&mut sk, id, 29.0).unwrap();
+    let (from, to) = line_ends(&sk, line);
+    assert!((to - from).x > 0.0, "{from:?} {to:?}");
 }
 
 #[test]
@@ -1227,7 +1277,7 @@ fn a_straight_slot_wider_than_its_center_distance_stays_allowed() {
 }
 
 #[test]
-fn the_guard_leaves_a_large_angle_change_alone() {
+fn the_guard_does_not_look_at_an_angle_inside_its_range() {
     let (mut se, mut sk) = session(ToolKind::ArcCenter);
     let f = sk.add_point(0.0, 0.0).unwrap();
     let g = sk.add_point(10.0, 0.0).unwrap();
@@ -1246,6 +1296,101 @@ fn the_guard_leaves_a_large_angle_change_alone() {
         .unwrap();
     assert!(se.message_text().is_none());
     assert_solved(&sk);
+}
+
+#[test]
+fn a_typed_dimension_that_folds_is_refused_and_nothing_stays() {
+    // Der Parameter hat beim Abschluss einen anderen Wert als beim Tippen, also trifft die Länge
+    // nicht mehr die Lage: Der Endpunkt müsste über den festen Punkt hinaus.
+    let scope_with = |formula: &str| {
+        let mut s = AppState::new();
+        let id = s.add_parameter().unwrap();
+        s.edit_parameter(
+            id,
+            ParamEdit {
+                name: "Laenge".into(),
+                formula: formula.into(),
+                unit: ParamUnit::Length,
+                comment: String::new(),
+            },
+        )
+        .unwrap();
+        s.document.param_scope()
+    };
+    let (typed, changed) = (scope_with("20"), scope_with("50"));
+    let mut w = rig(ToolKind::SlotCenterToCenter);
+    let (a, b) = {
+        let (se, sf, _) = parts(&mut w);
+        let (_, built, a, b, _) = line_past_its_fixed_end();
+        sf.sketch = built;
+        se.set_tool(&mut sf.sketch, Tool::Line);
+        (a, b)
+    };
+    let start = xy(sk(&w), a);
+    let end = xy(sk(&w), b);
+    let (se, sf, _) = parts(&mut w);
+    se.commit_input(sf, start + at(0.05, 0.05), R, false, &typed)
+        .unwrap();
+    se.sync_input(&sf.sketch);
+    se.type_field(0, "Laenge", &typed);
+    let before = bits(sk(&w));
+    let (se, sf, _) = parts(&mut w);
+    let text = se
+        .commit_input(sf, end + at(0.05, 0.05), R, false, &changed)
+        .unwrap_err();
+    assert_eq!(text, t("sketch-dimension-folds"));
+    assert_eq!(bits(sk(&w)), before);
+    assert_eq!(dims(sk(&w)).len(), 0);
+}
+
+#[test]
+fn a_sweep_dimension_outside_0_to_180_is_refused_and_150_goes_through() {
+    let mut w = center_arc_with_fields(0.0);
+    let ids = arc_slot_ids(sk(&w));
+    let sweep = dim_id(sk(&w), |k| matches!(k, K::Angle(..)));
+    let before = bits(sk(&w));
+    for text in ["180", "200", "270", "300", "0", "-30"] {
+        let refused = set(&mut w, sweep, text).unwrap_err();
+        assert_eq!(refused, t("sketch-angle-range"), "{text}");
+        assert_eq!(
+            parts(&mut w).0.message_text().as_deref(),
+            Some(t("sketch-angle-range").as_str())
+        );
+        assert_eq!(bits(sk(&w)), before, "{text}");
+    }
+    set(&mut w, sweep, "150").unwrap();
+    assert_solved(sk(&w));
+    assert_arc_slot(sk(&w), &ids, 50.0, 5.0);
+    let (m, start, end) = arc_ends(sk(&w), ids.axis);
+    near(
+        ((end - m).to_angle() - (start - m).to_angle()).rem_euclid(TAU),
+        150f64.to_radians(),
+    );
+}
+
+#[test]
+fn a_typed_sweep_above_180_is_correct_when_it_is_created() {
+    for degrees in [200.0_f64, 270.0, 300.0] {
+        let mut w = rig(ToolKind::SlotCenterPointArc);
+        commit(&mut w, place(0.0, 0.0, 0.0)).unwrap();
+        type_in(&mut w, F::Radius, "50");
+        commit(&mut w, place(0.0, 80.0, 0.0)).unwrap();
+        type_in(&mut w, F::Sweep, &degrees.to_string());
+        commit(&mut w, place(0.0, 30.0, 30.0)).unwrap();
+        type_in(&mut w, F::Width, "10");
+        commit(&mut w, place(0.0, 60.0, 60.0)).unwrap();
+        let ids = arc_slot_ids(sk(&w));
+        assert_solved(sk(&w));
+        assert_arc_slot(sk(&w), &ids, 50.0, 5.0);
+        let (m, start, end) = arc_ends(sk(&w), ids.axis);
+        near(
+            ((end - m).to_angle() - (start - m).to_angle()).rem_euclid(TAU),
+            degrees.to_radians(),
+        );
+        // Dasselbe Maß unverändert bestätigen ändert nichts, das Maß steht ja schon so da.
+        let sweep = dim_id(sk(&w), |k| matches!(k, K::Angle(..)));
+        set(&mut w, sweep, &degrees.to_string()).unwrap();
+    }
 }
 
 // ---- Fahrt über Rohereignisse bei 1920×1080, Review-Focus 3 ---------------------------------------

@@ -38,6 +38,17 @@ impl Dual {
         }
     }
 
+    /// Winkel `atan2(self, x)`; an der Stelle (0, 0) ohne Gradient.
+    pub fn atan2(&self, x: &Dual) -> Dual {
+        let den = self.v * self.v + x.v * x.v;
+        let (cy, cx) = if den > 0.0 {
+            (x.v / den, -self.v / den)
+        } else {
+            (0.0, 0.0)
+        };
+        lin(self, cy, x, cx, self.v.atan2(x.v))
+    }
+
     /// Sinus; Ableitung `cos · Gradient`.
     pub fn sin(&self) -> Dual {
         let c = self.v.cos();

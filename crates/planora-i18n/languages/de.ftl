@@ -1078,6 +1078,7 @@ sketch-kind-slot-center-point-hint = Mitte des Langlochs, eine Bogenmitte, dann 
 sketch-kind-slot-arc-3p-hint = Start, Ende und einen Punkt auf dem Mittelbogen, dann die Breite anklicken.
 sketch-kind-slot-arc-center-hint = Mitte, Start und Ende des Mittelbogens, dann die Breite anklicken.
 sketch-slot-too-wide = Diese Breite passt nicht: Das Langloch wäre zu breit oder hätte gar keine Breite
+sketch-angle-range = Ein Winkelmaß muss größer als 0° und kleiner als 180° sein; das Maß wurde nicht geändert
 sketch-dimension-folds = Mit diesem Wert klappt die Form um; das Maß wurde nicht geändert
 sketch-circle-collinear = Die drei Punkte liegen auf einer Geraden oder fallen zusammen; daraus wird kein Kreis
 sketch-polygon-edge-side = Der Zeiger liegt auf der ersten Seite; klicke die Seite an, auf der das Polygon liegen soll
