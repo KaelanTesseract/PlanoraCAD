@@ -302,14 +302,104 @@ fn assert_good_closed(s: &Sketch, curves: &[CurveId], plan: &OffsetPlan, d: f64,
     }
 }
 
+/// Stichprobe um die Vorlage: Punkt, Abstand zur Vorlage, innen. Dazu die größte Gehrung je
+/// Abstand: Ein Punkt weiter als `d·reach` von der Vorlage liegt in keiner Gehrung.
+struct Samples {
+    points: Vec<(DVec2, f64, bool)>,
+    reach: f64,
+    slack: f64,
+}
+
+impl Samples {
+    fn new(s: &Sketch, curves: &[CurveId]) -> Samples {
+        let mut source = source_polyline(s, curves);
+        source.push(source[0]);
+        let in_source = |p: DVec2| point_in(std::slice::from_ref(&source), p);
+        let (lo, hi) = source
+            .iter()
+            .fold((DVec2::INFINITY, DVec2::NEG_INFINITY), |(l, h), p| {
+                (l.min(*p), h.max(*p))
+            });
+        let n = source.len() - 1;
+        // Die Gehrung innen kommt von Ecken, an denen eine Kette gegen den Uhrzeigersinn nach
+        // rechts dreht.
+        let reach = (0..n)
+            .map(|k| {
+                let (a, b, c) = (source[(k + n - 1) % n], source[k], source[(k + 1) % n]);
+                let (u, w) = ((b - a).normalize_or_zero(), (c - b).normalize_or_zero());
+                let turn = u.perp_dot(w).atan2(u.dot(w));
+                if turn < -0.05 {
+                    1.0 / (turn.abs() / 2.0).cos()
+                } else {
+                    1.0
+                }
+            })
+            .fold(1.0, f64::max);
+        let points = (0..900)
+            .map(|k| {
+                let f = v(
+                    ((k % 30) as f64 + 0.37) / 30.0,
+                    ((k / 30) as f64 + 0.61) / 30.0,
+                );
+                let p = lo + (hi - lo) * f;
+                let dist = source
+                    .windows(2)
+                    .map(|w| {
+                        let e = w[1] - w[0];
+                        let t = ((p - w[0]).dot(e) / e.length_squared()).clamp(0.0, 1.0);
+                        p.distance(w[0] + e * t)
+                    })
+                    .fold(f64::INFINITY, f64::min);
+                (p, dist, in_source(p))
+            })
+            .collect();
+        Samples {
+            points,
+            reach,
+            slack: 0.05 + (hi - lo).length() * 1e-3,
+        }
+    }
+
+    /// Vollständig: Innen liegt jeder Punkt, der weit über `d` von der Vorlage weg ist, im Ergebnis;
+    /// außen liegt die Vorlage samt allem näher als `d` im Ergebnis.
+    fn assert_complete(&self, plan: &OffsetPlan, d: f64, outward: bool, label: &str) {
+        let outline = plan.outline(128);
+        for &(p, dist, inside) in &self.points {
+            let must = if outward {
+                inside || dist < d - self.slack
+            } else {
+                inside && dist > self.reach * d + self.slack
+            };
+            assert!(
+                !must || point_in(&outline, p),
+                "{label} d={d} außen={outward}: {p} (Abstand {dist}) fehlt im Ergebnis"
+            );
+        }
+    }
+}
+
+fn point_in(polys: &[Vec<DVec2>], p: DVec2) -> bool {
+    let mut inside = false;
+    for pts in polys {
+        for w in pts.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
+                inside = !inside;
+            }
+        }
+    }
+    inside
+}
+
 /// Dichte Folge: 200 Schritte von 0,1 bis `limit`. Die Vorlagen laufen gegen den Uhrzeigersinn,
 /// außen ist also rechts, negativ. Bis `exact_to` muss die Stückmitte genau `|d|` von der Vorlage
 /// liegen; dahinter liegt sie über der Gehrung einer Ecke, also weiter weg, und nur der Träger
-/// und „nirgends näher“ gelten.
+/// und „nirgends näher“ gelten. Jeder Schritt ist vollständig.
 fn sweep(s: &Sketch, curves: &[CurveId], limit: f64, exact_to: f64, outward: bool, label: &str) {
     let sign = if outward { -1.0 } else { 1.0 };
     let mut last: Option<f64> = None;
     let base = area_of_source(s, curves);
+    let samples = Samples::new(s, curves);
     for k in 0..200 {
         let d = 0.1 + (limit - 0.1) * k as f64 / 199.0;
         let plan = plan_of(s, curves, sign * d)
@@ -319,6 +409,7 @@ fn sweep(s: &Sketch, curves: &[CurveId], limit: f64, exact_to: f64, outward: boo
         } else {
             assert_clean_closed(s, curves, &plan, sign * d, label);
         }
+        samples.assert_complete(&plan, d, outward, label);
         let a = area(&plan);
         if outward {
             assert!(
@@ -342,7 +433,8 @@ fn sweep(s: &Sketch, curves: &[CurveId], limit: f64, exact_to: f64, outward: boo
     }
 }
 
-fn area_of_source(s: &Sketch, curves: &[CurveId]) -> f64 {
+/// Linienzug der Vorlage in Richtung ihrer Kette, ohne Wiederholung des ersten Punkts.
+fn source_polyline(s: &Sketch, curves: &[CurveId]) -> Vec<DVec2> {
     let chains = chain_of(s, curves);
     let mut pts: Vec<DVec2> = Vec::new();
     for (c, rev) in &chains[0].items {
@@ -350,8 +442,19 @@ fn area_of_source(s: &Sketch, curves: &[CurveId]) -> f64 {
         if *rev {
             pl.reverse();
         }
+        if pts.last() == pl.first() {
+            pl.remove(0);
+        }
         pts.extend(pl);
     }
+    if pts.len() > 1 && pts.first() == pts.last() {
+        pts.pop();
+    }
+    pts
+}
+
+fn area_of_source(s: &Sketch, curves: &[CurveId]) -> f64 {
+    let pts = source_polyline(s, curves);
     let n = pts.len();
     (0..n)
         .map(|i| pts[i].perp_dot(pts[(i + 1) % n]))
@@ -835,6 +938,9 @@ fn an_arc_its_neighbour_no_longer_reaches_drops() {
                 area(&plan)
             }
             Err(OffsetProblem::Vanished) => 0.0,
+            // Kurz bevor der Bogen ganz weg ist, liegt sein winziger Rest noch richtig, und seine
+            // Nachbarn treffen ihn nicht: gemeldet, nicht still verloren.
+            Err(OffsetProblem::NoJoin) if (18.8..19.2).contains(&d) => last,
             Err(e) => panic!("d={d}: {e:?}"),
         };
         assert!(a <= last + 1e-6, "d={d}: {a} nach {last}");
@@ -842,6 +948,110 @@ fn an_arc_its_neighbour_no_longer_reaches_drops() {
     }
     assert!(seen_drop);
     assert_eq!(last, 0.0);
+}
+
+/// Körper x −60…−10, y −30…30, Hals halbe Breite 4, Bogen r 15 um (30,0) über rund 330°, scharfe
+/// Fugen.
+fn keyhole(s: &mut Sketch) -> Vec<CurveId> {
+    let x = 30.0 - (225.0f64 - 16.0).sqrt();
+    let c = s.add_point(30.0, 0.0).unwrap();
+    let p: Vec<_> = [
+        (-60.0, -30.0),
+        (-10.0, -30.0),
+        (-10.0, -4.0),
+        (x, -4.0),
+        (x, 4.0),
+        (-10.0, 4.0),
+        (-10.0, 30.0),
+        (-60.0, 30.0),
+    ]
+    .iter()
+    .map(|q| s.add_point(q.0, q.1).unwrap())
+    .collect();
+    let mut q = Vec::new();
+    for k in 0..3 {
+        q.push(s.add_line(p[k], p[k + 1]).unwrap());
+    }
+    q.push(s.add_arc(c, p[3], p[4]).unwrap());
+    for k in 4..8 {
+        q.push(s.add_line(p[k], p[(k + 1) % 8]).unwrap());
+    }
+    q
+}
+
+#[test]
+fn a_keyhole_keeps_body_and_bulb_when_the_neck_vanishes() {
+    let mut s = sketch();
+    let q = keyhole(&mut s);
+    let chain = chain_of(&s, &q).remove(0);
+    let back = OrderedChain {
+        items: chain.items.iter().rev().map(|(c, r)| (*c, !*r)).collect(),
+        closed: true,
+    };
+    let samples = Samples::new(&s, &q);
+    let mut ds: Vec<f64> = (0..400).map(|k| 4.5 + 10.4 * k as f64 / 399.0).collect();
+    ds.extend([8.0, 8.17, 9.5, 10.0, 14.9]);
+    for d in ds {
+        // Vorwärts ist innen links, rückwärts rechts.
+        for (c, side, label) in [(&chain, d, "vorwärts"), (&back, -d, "rückwärts")] {
+            let plan = s
+                .offset_plan(std::slice::from_ref(c), side)
+                .unwrap_or_else(|e| panic!("{label} d={d}: {e:?}"));
+            assert_eq!(plan.loops.len(), 2, "{label} d={d}");
+            assert!(plan.is_closed_like_source(), "{label} d={d}");
+            assert_eq!(crossings(&plan), 0, "{label} d={d}");
+            samples.assert_complete(&plan, d, false, label);
+            let want_radius = 15.0 - d;
+            let bulb = plan.loops.iter().find(|l| l.pieces.len() == 1).unwrap();
+            assert_eq!(bulb.pieces[0].source, q[3]);
+            match &bulb.pieces[0].geom {
+                OffsetGeom::Circle { center, radius } => {
+                    assert!(center.distance(v(30.0, 0.0)) < 1e-9, "{label} d={d}");
+                    assert!((radius - want_radius).abs() < 1e-9, "{label} d={d}");
+                }
+                g => panic!("{label} d={d}: {g:?}"),
+            }
+            let want = (50.0 - 2.0 * d) * (60.0 - 2.0 * d)
+                + std::f64::consts::PI * want_radius * want_radius;
+            assert!(
+                (area(&plan) - want).abs() < 1e-2 * (1.0 + want_radius),
+                "{label} d={d}: {} statt {want}",
+                area(&plan)
+            );
+            for l in &plan.loops {
+                for p in &l.pieces {
+                    if let OffsetGeom::Arc(a) = &p.geom {
+                        assert_ne!(a.start, a.end, "{label} d={d}: Bogen schließt sich");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_small_arc_does_not_close_to_a_circle_and_outward_nothing_vanishes() {
+    // Vier hohle Bögen mit Spitzen: Außen treffen sie sich ab d ≈ 1 nicht mehr. Das ist eine
+    // Meldung, weder ein Kreis um die Bogenmitte noch „verschwunden“.
+    let mut s = sketch();
+    let p: Vec<_> = [(40.0, 0.0), (0.0, 40.0), (-40.0, 0.0), (0.0, -40.0)]
+        .iter()
+        .map(|q| s.add_point(q.0, q.1).unwrap())
+        .collect();
+    let c: Vec<_> = [(50.0, 50.0), (-50.0, 50.0), (-50.0, -50.0), (50.0, -50.0)]
+        .iter()
+        .map(|q| s.add_point(q.0, q.1).unwrap())
+        .collect();
+    let q: Vec<_> = (0..4)
+        .map(|k| s.add_arc(c[k], p[(k + 1) % 4], p[k]).unwrap())
+        .collect();
+    let chain = chain_of(&s, &q).remove(0);
+    let inside = s.offset_side(&chain, v(0.0, 0.0)).unwrap().signum();
+    for k in 0..400 {
+        let d = 1.1 + 200.0 * k as f64 / 399.0;
+        let r = s.offset_plan(std::slice::from_ref(&chain), -inside * d);
+        assert_eq!(r, Err(OffsetProblem::NoJoin), "d={d}");
+    }
 }
 
 #[test]

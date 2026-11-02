@@ -19,7 +19,10 @@
 //! Treffen sich zwei Nachbarn nicht, bleiben ihre rohen Enden stehen: Liegen sie im Bereich, den
 //! das Trimmen entfernt (Steg, Schenkel, die verschwinden), ist alles gut; sonst `NoJoin`. Zwei
 //! Linien auf derselben Geraden laufen durch; ein kleiner werdender Bogen, den sein Nachbar nicht
-//! mehr trifft, entfällt.
+//! mehr trifft, entfällt, wenn er selbst zu nah an der Vorlage liegt; liegt sein Nachbar zu nah,
+//! entfällt der. Bleibt ein Bogen über 180° so an beiden Enden ohne Nachbarn und passt sein ganzer
+//! Kreis, ist er eine eigene Schleife (Schlüsselloch). Nach außen verschwindet nie etwas: Bleibt
+//! dort nichts, heißt das `NoJoin`.
 
 use crate::arrangement::{Nodes, polygon_contains, split};
 use crate::curves::Sampled;
@@ -44,6 +47,10 @@ const CUSP_STEPS_PER_SEGMENT: usize = 64;
 const SLACK: f64 = 10.0;
 /// Geschlossene Teilstücke bis zu so vielen Toleranzen Länge sind keine Stücke.
 const TINY_LOOP: f64 = 4.0;
+/// Ein Bogen schließt sich zum Kreis, wenn sein fehlender Teil höchstens so viel weiter als `|d|`
+/// von der Vorlage liegt (relativ), geprüft an so vielen Stellen.
+const ISLAND_SEAM: f64 = 0.05;
+const ISLAND_SAMPLES: usize = 8;
 /// `1 − κ·d` ab hier gilt als Spitze.
 const CUSP_MARGIN: f64 = 1e-9;
 
@@ -88,6 +95,7 @@ pub struct OffsetPlan {
 
 impl OffsetPlan {
     /// Linienzug je Schleife in deren Richtung; bei geschlossenen ist der letzte Punkt der erste.
+    /// Ein Stück `Circle` trägt keine Richtung und läuft immer gegen den Uhrzeigersinn.
     pub fn outline(&self, steps_per_turn: usize) -> Vec<Vec<DVec2>> {
         self.loops
             .iter()
@@ -324,7 +332,7 @@ impl Sketch {
         const BAD: OffsetProblem = OffsetProblem::Degenerate;
         let (lo, hi) = g.domain();
         let shrink = |r: f64| if against { r + d } else { r - d };
-        let finish = |kind: RawKind, points: Option<&Vec<(DVec2, DVec2, DVec2)>>| {
+        let finish = |kind: RawKind| {
             let ends = open_ends(self, c).ok_or(BAD)?;
             let (from, to) = if against {
                 (ends[1], ends[0])
@@ -334,10 +342,6 @@ impl Sketch {
             let (t_from, t_to) = if against { (hi, lo) } else { (lo, hi) };
             let dir_from = unit_tangent(g, t_from, against).ok_or(BAD)?;
             let dir_to = unit_tangent(g, t_to, against).ok_or(BAD)?;
-            let (raw_from, raw_to) = match points {
-                Some(s) => (s[0].2, s[s.len() - 1].2),
-                None => (from + dir_from.perp() * d, to + dir_to.perp() * d),
-            };
             Ok(Raw {
                 source: c,
                 kind,
@@ -346,12 +350,12 @@ impl Sketch {
                 to,
                 dir_from,
                 dir_to,
-                raw_from,
-                raw_to,
+                raw_from: from + dir_from.perp() * d,
+                raw_to: to + dir_to.perp() * d,
             })
         };
         match g {
-            Geom::Line { .. } => Ok(vec![finish(RawKind::Line, None)?]),
+            Geom::Line { .. } => Ok(vec![finish(RawKind::Line)?]),
             Geom::Arc { c: m, r, a0, sweep } => {
                 let rr = shrink(*r);
                 if rr <= tol {
@@ -364,7 +368,7 @@ impl Sketch {
                     sweep: *sweep,
                     shrinks: rr < *r,
                 };
-                Ok(vec![finish(kind, None)?])
+                Ok(vec![finish(kind)?])
             }
             Geom::Circle { c: m, r } => {
                 let rr = shrink(*r);
@@ -553,6 +557,9 @@ fn join_of(p: &Raw, q: &Raw, adjacent: bool, d: f64, tol: &Tolerance) -> Join {
 
 /// Rohstück mit gefügten Enden.
 struct Cut {
+    /// Enden in Laufrichtung.
+    start: DVec2,
+    end: DVec2,
     geom: Geom,
     points: Option<Vec<DVec2>>,
     /// Länge in Laufrichtung, kleiner oder gleich 0: umgekehrt.
@@ -564,6 +571,8 @@ struct Cut {
 fn cut(raw: &Raw, js: DVec2, je: DVec2, tol: f64) -> Cut {
     match &raw.kind {
         RawKind::Line => Cut {
+            start: js,
+            end: je,
             geom: Geom::Line { a: js, b: je },
             points: None,
             length: (je - js).dot(raw.dir_from),
@@ -577,19 +586,30 @@ fn cut(raw: &Raw, js: DVec2, je: DVec2, tol: f64) -> Cut {
             let t0 = a0 + wrap_pi((start - *c).to_angle() - a0);
             let t1 = a_end + wrap_pi((end - *c).to_angle() - a_end);
             let span = t1 - t0;
-            Cut {
-                geom: Geom::Arc {
+            // Reichen die Fugen um den ganzen Kreis, läuft der Bogen über sich selbst: ein Kreis, den
+            // die Nachbarn schneiden.
+            let geom = if span >= TAU {
+                Geom::Circle { c: *c, r: *r }
+            } else {
+                Geom::Arc {
                     c: *c,
                     r: *r,
                     a0: t0,
                     sweep: span,
-                },
+                }
+            };
+            Cut {
+                start: js,
+                end: je,
+                geom,
                 points: None,
                 length: span * r,
                 full: sweep * r,
             }
         }
         RawKind::Whole { c, r } => Cut {
+            start: js,
+            end: je,
             geom: Geom::Circle { c: *c, r: *r },
             points: None,
             length: TAU * r,
@@ -627,6 +647,8 @@ fn cut_approx(points: &[DVec2], js: DVec2, je: DVec2, tol: f64) -> Cut {
     let length = (te - ts) * full / last as f64;
     let n_ok = te > ts && kept.len() >= 2 && js != je;
     Cut {
+        start: js,
+        end: je,
         geom: if n_ok {
             spline_geom(&kept)
         } else {
@@ -642,16 +664,23 @@ fn cut_approx(points: &[DVec2], js: DVec2, je: DVec2, tol: f64) -> Cut {
 struct Kite {
     points: [DVec2; 5],
     bbox: (DVec2, DVec2),
+    /// Die beiden Vorlagen der Fuge. Ihre Stücke zählen hier nicht: Bei einem Bogen ist der Rand
+    /// der Gehrung nur seine Sehne, und der Bogen läge scheinbar in seiner eigenen Gehrung.
+    owners: [CurveId; 2],
 }
 
 impl Kite {
-    fn new(points: [DVec2; 5]) -> Kite {
+    fn new(points: [DVec2; 5], owners: [CurveId; 2]) -> Kite {
         let bbox = points
             .iter()
             .fold((DVec2::INFINITY, DVec2::NEG_INFINITY), |(lo, hi), p| {
                 (lo.min(*p), hi.max(*p))
             });
-        Kite { points, bbox }
+        Kite {
+            points,
+            bbox,
+            owners,
+        }
     }
 
     /// Echt innen, mit Abstand `margin` zum Rand.
@@ -699,7 +728,12 @@ fn turn_between(raws: &[Raw], i: usize, j: usize) -> f64 {
         if next == j {
             return sum;
         }
-        sum += angle(raws[next].dir_from, raws[next].dir_to);
+        sum += match raws[next].kind {
+            // Über 180° trägt der Winkel zwischen den Tangenten nicht.
+            RawKind::Round { sweep, .. } if raws[next].against => -sweep,
+            RawKind::Round { sweep, .. } => sweep,
+            _ => angle(raws[next].dir_from, raws[next].dir_to),
+        };
         k = next;
     }
 }
@@ -716,8 +750,7 @@ fn check_rejoin(join: Join, raws: &[Raw], i: usize, j: usize) -> Join {
 /// Fügt eine Kette; Stücke, die umkehren, entfallen, das zuerst zusammengelaufene zuerst.
 fn settle_chain(
     raws: &[Raw],
-    closed: bool,
-    chain: usize,
+    (closed, chain, geoms): (bool, usize, &[Geom]),
     d: f64,
     tol: &Tolerance,
     out: &mut Vec<Settled>,
@@ -725,9 +758,11 @@ fn settle_chain(
 ) {
     let n = raws.len();
     let mut alive: Vec<usize> = (0..n).collect();
+    let mut islands: Vec<usize> = Vec::new();
     loop {
         let m = alive.len();
         if m == 0 {
+            push_islands(&islands, raws, chain, out);
             return;
         }
         let single_whole = m == 1 && matches!(raws[alive[0]].kind, RawKind::Whole { .. });
@@ -770,26 +805,22 @@ fn settle_chain(
                 })
             })
             .collect();
-        // Ein kleiner werdender Bogen, den der Nachbar nicht mehr trifft, ist vorher verschwunden.
+        // Trifft ein kleiner werdender Bogen seinen Nachbarn nicht mehr, entfällt, wer zu nah an
+        // der Vorlage liegt: der Nachbar oder der Bogen. Liegen beide richtig, entfällt keiner.
         for (k, join) in joins.iter().enumerate() {
             if *join != Some(Join::Gap) {
                 continue;
             }
             let next = (k + 1) % m;
-            let shrinking = |i: usize| match raws[alive[i]].kind {
-                RawKind::Round {
-                    r, shrinks: true, ..
-                } => Some(r),
-                _ => None,
-            };
-            let victim = match (shrinking(k), shrinking(next)) {
-                (Some(a), Some(b)) => Some(if a <= b { k } else { next }),
-                (Some(_), None) => Some(k),
-                (None, Some(_)) => Some(next),
-                (None, None) => None,
-            };
-            if let Some(v) = victim {
-                collapse[v] = Some(collapse[v].unwrap_or(d.abs()));
+            let shrinks =
+                |i: usize| matches!(raws[alive[i]].kind, RawKind::Round { shrinks: true, .. });
+            if !shrinks(k) && !shrinks(next) {
+                continue;
+            }
+            for i in [k, next] {
+                if too_close_to_chain(&cuts[i].geom, geoms, d, tol.linear) {
+                    collapse[i] = Some(collapse[i].unwrap_or(d.abs()));
+                }
             }
         }
         let first = collapse
@@ -807,14 +838,25 @@ fn settle_chain(
             });
             continue;
         }
+        // Ein Bogen ohne Nachbarn an beiden Enden, dessen Kreis passt, schließt sich zum Kreis und
+        // ist eine eigene Schleife; seine Nachbarn werden neu gefügt.
+        if closed {
+            let island = (0..m).find(|&k| {
+                joins[k] == Some(Join::Gap)
+                    && before(k) == Some(Join::Gap)
+                    && circle_fits(&raws[alive[k]], geoms, d, tol.linear)
+            });
+            if let Some(k) = island {
+                islands.push(alive.remove(k));
+                continue;
+            }
+        }
         let base = out.len();
         let m_raw = cuts.into_iter().enumerate();
         for (k, c) in m_raw {
             let raw = &raws[alive[k]];
             let before_join = before(k);
             let after_join = joins[k];
-            let js = before_join.and_then(Join::at).unwrap_or(raw.raw_from);
-            let je = after_join.and_then(Join::at).unwrap_or(raw.raw_to);
             let next = base + (k + 1) % m;
             out.push(Settled {
                 source: raw.source,
@@ -824,8 +866,8 @@ fn settle_chain(
                     && matches!(raw.kind, RawKind::Round { .. } | RawKind::Whole { .. }),
                 geom: c.geom,
                 points: c.points,
-                start: js,
-                end: je,
+                start: c.start,
+                end: c.end,
                 gap_start: before_join == Some(Join::Gap),
                 gap_end: after_join == Some(Join::Gap),
                 tangent_next: matches!(after_join, Some(Join::Shared(_))).then_some(next),
@@ -834,11 +876,78 @@ fn settle_chain(
                 let q = &raws[alive[(k + 1) % m]];
                 let (i, j) = (alive[k], alive[(k + 1) % m]);
                 if d * turn_between(raws, i, j) < 0.0 {
-                    kites.push(Kite::new([raw.to, raw.raw_to, x, q.raw_from, q.from]));
+                    kites.push(Kite::new(
+                        [raw.to, raw.raw_to, x, q.raw_from, q.from],
+                        [raw.source, q.source],
+                    ));
                 }
             }
         }
+        push_islands(&islands, raws, chain, out);
         return;
+    }
+}
+
+/// Liegt die Mitte des Stücks näher als `|d|` an der Kette?
+fn too_close_to_chain(g: &Geom, geoms: &[Geom], d: f64, tol: f64) -> bool {
+    let (lo, hi) = g.domain();
+    let mid = g.eval(0.5 * (lo + hi)).0;
+    let limit = d.abs() - SLACK * tol;
+    geoms
+        .iter()
+        .any(|t| t.eval(t.nearest(mid)).0.distance(mid) < limit)
+}
+
+/// Passt der ganze Kreis eines Bogens? Der fehlende Teil muss überall im Abstand `|d|` liegen,
+/// bis auf den schmalen Saum neben einer Öffnung. Liegt er weiter weg, ist die Fläche dort größer
+/// als der Kreis, und das Ergebnis wäre unvollständig.
+fn circle_fits(raw: &Raw, geoms: &[Geom], d: f64, tol: f64) -> bool {
+    let RawKind::Round {
+        c,
+        r,
+        a0,
+        sweep,
+        shrinks: true,
+    } = raw.kind
+    else {
+        return false;
+    };
+    // Bei einem kleinen Bogen sagt der Abstand nichts: Nahe seiner Mitte liegt alles gleich weit.
+    if sweep < PI {
+        return false;
+    }
+    let (near, far) = (d.abs() - SLACK * tol, d.abs() * (1.0 + ISLAND_SEAM));
+    (1..ISLAND_SAMPLES).all(|k| {
+        let a = a0 + sweep + (TAU - sweep) * k as f64 / ISLAND_SAMPLES as f64;
+        let p = c + DVec2::from_angle(a) * r;
+        let dist = geoms
+            .iter()
+            .map(|t| t.eval(t.nearest(p)).0.distance(p))
+            .fold(f64::INFINITY, f64::min);
+        (near..=far).contains(&dist)
+    })
+}
+
+/// Die zum Kreis geschlossenen Bögen als eigene Stücke.
+fn push_islands(islands: &[usize], raws: &[Raw], chain: usize, out: &mut Vec<Settled>) {
+    for &i in islands {
+        let raw = &raws[i];
+        let RawKind::Round { c, r, .. } = raw.kind else {
+            continue;
+        };
+        let at = c + DVec2::new(r, 0.0);
+        out.push(Settled {
+            source: raw.source,
+            chain,
+            against: raw.against,
+            geom: Geom::Circle { c, r },
+            points: None,
+            start: at,
+            end: at,
+            gap_start: false,
+            gap_end: false,
+            tangent_next: None,
+        });
     }
 }
 
@@ -968,7 +1077,7 @@ fn trim(input: &TrimInput) -> Result<Vec<OffsetLoop>, OffsetProblem> {
             }
             let (from, to) = if p.against { (b, a) } else { (a, b) };
             let (check, own) = check_point(p, t0, t1);
-            if valid_mid(input, check, own.then_some(p.source), p.chain) {
+            if valid_mid(input, check, own, p) {
                 subs.push(Sub {
                     parent: i,
                     t0,
@@ -1074,7 +1183,9 @@ fn check_point(p: &Settled, t0: f64, t1: f64) -> (DVec2, bool) {
 
 /// Liegt der Punkt auf der richtigen Seite, weder näher als `|d|` an der Vorlage noch in einer
 /// Gehrung?
-fn valid_mid(input: &TrimInput, p: DVec2, skip: Option<CurveId>, chain: usize) -> bool {
+fn valid_mid(input: &TrimInput, p: DVec2, skip_own: bool, piece: &Settled) -> bool {
+    let chain = piece.chain;
+    let skip = skip_own.then_some(piece.source);
     let reach = input.d.abs();
     let limit = reach - SLACK * input.tol;
     // Über eine Gehrung kann ein Stück auf die andere Seite einer geschlossenen Kette geraten.
@@ -1094,7 +1205,11 @@ fn valid_mid(input: &TrimInput, p: DVec2, skip: Option<CurveId>, chain: usize) -
             && boxes_touch((p, p), t.bbox, reach)
             && t.geom.eval(t.geom.nearest(p)).0.distance(p) < limit
     });
-    !close && !input.kites.iter().any(|k| k.contains(p, SLACK * input.tol))
+    !close
+        && !input
+            .kites
+            .iter()
+            .any(|k| !k.owners.contains(&piece.source) && k.contains(p, SLACK * input.tol))
 }
 
 /// Teilstücke auf denselben Knoten und derselben Lage: gleich gerichtet eines, gegenläufig keines.
@@ -1149,7 +1264,7 @@ fn build_loop(
         let (a, b) = (nodes[from], nodes[to]);
         let geom = match &p.geom {
             Geom::Line { .. } => OffsetGeom::Line { a, b },
-            Geom::Circle { c, r } if from == to => OffsetGeom::Circle {
+            Geom::Circle { c, r } | Geom::Arc { c, r, .. } if from == to => OffsetGeom::Circle {
                 center: *c,
                 radius: *r,
             },
@@ -1191,6 +1306,23 @@ fn build_loop(
         pieces: out,
         closed,
     }
+}
+
+/// Führt der Versatz nach links um `d` aus der geschlossenen Kette hinaus?
+fn runs_outward(chain: &OrderedChain, geoms: &[Geom], d: f64) -> bool {
+    let mut area = 0.0;
+    let mut last: Option<DVec2> = None;
+    for (g, (_, against)) in geoms.iter().zip(&chain.items) {
+        let (lo, hi) = g.domain();
+        let (t0, t1) = if *against { (hi, lo) } else { (lo, hi) };
+        for q in g.polyline(t0, t1, 64) {
+            if let Some(p) = last {
+                area += p.perp_dot(q);
+            }
+            last = Some(q);
+        }
+    }
+    area * d < 0.0
 }
 
 /// Abstand zur Kette mit Vorzeichen, positiv links. Am Knick zählt die Summe der Tangenten beider
@@ -1425,19 +1557,29 @@ impl Sketch {
                 caps.push(end_of(chain.items[0], false)?);
                 caps.push(end_of(chain.items[chain.items.len() - 1], true)?);
             }
+            let geoms_of_chain = geoms.clone();
             chain_geoms.push(geoms);
             settle_chain(
                 &raws,
-                chain.closed,
-                index,
+                (chain.closed, index, geoms_of_chain.as_slice()),
                 d,
                 &tolerance,
                 &mut pieces,
                 &mut kites,
             );
         }
+        // Nach außen ist immer Platz: Verschwindet dort alles, fehlt nur die Verbindung.
+        let vanished = if chains
+            .iter()
+            .zip(&chain_geoms)
+            .any(|(c, g)| c.closed && runs_outward(c, g, d))
+        {
+            OffsetProblem::NoJoin
+        } else {
+            OffsetProblem::Vanished
+        };
         if pieces.is_empty() {
-            return Err(OffsetProblem::Vanished);
+            return Err(vanished);
         }
         let loops = trim(&TrimInput {
             pieces: &pieces,
@@ -1448,6 +1590,13 @@ impl Sketch {
             chain_geoms: &chain_geoms,
             d,
             tol,
+        })
+        .map_err(|e| {
+            if e == OffsetProblem::Vanished {
+                vanished
+            } else {
+                e
+            }
         })?;
         let all: HashSet<CurveId> = templates.iter().map(|t| t.source).collect();
         let kept: HashSet<CurveId> = loops
