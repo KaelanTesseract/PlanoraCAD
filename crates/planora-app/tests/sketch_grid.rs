@@ -16,7 +16,7 @@ use planora_i18n::{DisplayUnit, with_unit};
 use planora_math::{DVec2, DVec3, Frame};
 use planora_project::config::Config;
 use planora_project::library::Library;
-use planora_render::{exact_step, visible_step};
+use planora_render::exact_step;
 use std::fs;
 use std::path::PathBuf;
 
@@ -194,11 +194,11 @@ fn switching_snap_or_grid_off_means_no_grid_snap() {
 #[test]
 fn inch_snap_is_an_exact_multiple() {
     with_unit(DisplayUnit::Zoll, || {
-        for (distance, step) in [(40.0_f32, 2.54), (150.0, 25.4), (150.0 * 25.4, 254.0)] {
+        for (distance, step) in [(40.0_f32, 2.54), (150.0, 2.54), (150.0 * 25.4, 254.0)] {
             let ctx = context();
             let mut s = sketching(StandardPlane::XY, Tool::Point);
             s.camera.distance = distance;
-            let got = visible_step(distance, 25.4);
+            let got = exact_step(distance, 25.4).0;
             assert!((got - step).abs() < 1e-9, "{distance}: {got}");
             play(&ctx, &mut s, vec![]);
             let at = DVec2::new(3.3 * step, 2.1 * step);
@@ -290,7 +290,7 @@ fn the_line_count_stays_bounded_over_the_zoom_range() {
             while d < 1.0e6 {
                 s.camera.distance = d;
                 let n = sketch_view::sketch_grid_shapes(&s, SCREEN).len();
-                assert!(n <= 200, "{plane:?}, Neigung {tilt}, Abstand {d}: {n}");
+                assert!(n <= 300, "{plane:?}, Neigung {tilt}, Abstand {d}: {n}");
                 most = most.max(n);
                 d *= 1.01;
             }
@@ -336,15 +336,14 @@ fn drawn_lines(s: &AppState) -> Vec<(bool, f64)> {
 }
 
 /// Spec-Ziel 5, „am sichtbaren Raster“: Jede Stelle, auf die der Zeiger rastet, trägt eine
-/// gezeichnete Linie, auch wenn eine geneigte Ansicht das Raster ausdünnt. Unterhalb des Übergangs
-/// (feine Stufe voll da) liegt umgekehrt jede Linie auf einem Vielfachen der Fangstufe; darüber
-/// laufen die feinen Linien nach Entscheidung 13 noch schwach aus.
+/// gezeichnete Linie, auch wenn eine geneigte Ansicht das Raster ausdünnt. Umgekehrt liegt jede
+/// Linie auf einem Vielfachen der Fangstufe.
 #[test]
 fn the_snap_step_is_the_drawn_step_on_a_tilted_view() {
     for plane in [StandardPlane::XY, StandardPlane::XZ] {
         let ctx = context();
         let mut s = sketching(plane, Tool::Line);
-        tilt(&mut s, 60.0);
+        tilt(&mut s, 75.0);
         let mut thinned = 0;
         let mut d = 5.0_f32;
         while d < 5000.0 {
@@ -357,8 +356,8 @@ fn the_snap_step_is_the_drawn_step_on_a_tilted_view() {
                 .cursor_opts
                 .grid_step
                 .unwrap();
-            let (fine, blend) = exact_step(d, 1.0);
-            if blend < 0.5 && step > fine * 1.5 {
+            let (fine, _) = exact_step(d, 1.0);
+            if step > fine * 1.5 {
                 thinned += 1;
             }
             let lines = drawn_lines(&s);
@@ -384,10 +383,8 @@ fn the_snap_step_is_the_drawn_step_on_a_tilted_view() {
                 }
             }
             assert!(checked >= 2, "{plane:?}, Abstand {d}, Stufe {step}");
-            if blend < 0.5 {
-                for (_, v) in &lines {
-                    assert!(on(*v, (*v / step).round() * step), "{d}, {step}: {v}");
-                }
+            for (_, v) in &lines {
+                assert!(on(*v, (*v / step).round() * step), "{d}, {step}: {v}");
             }
             d *= 1.05;
         }

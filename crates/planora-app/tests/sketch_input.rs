@@ -968,3 +968,18 @@ fn superfluous_sweep_leaves_no_helper_lines() {
     let (se, _, _) = parts(&mut w);
     assert_eq!(se.message_text(), Some(tr!("sketch-field-sweep-redundant")));
 }
+
+/// Handtest: Mit festgehaltener Länge sprang die Richtung von Rasterpunkt zu Rasterpunkt, weit weg
+/// vom Zeiger.
+#[test]
+fn a_locked_length_aims_at_the_pointer_not_at_the_grid() {
+    let mut w = rig();
+    let from = line_started(&mut w);
+    parts(&mut w).0.cursor_opts.grid_step = Some(10.0);
+    type_in(&mut w, F::Length, "30");
+    let raw = from + v(16.0, 13.0);
+    let got = at(&mut w, raw);
+    assert!(((got - from).length() - 30.0).abs() < 1e-9, "{got}");
+    let (aim, seen) = ((raw - from).normalize(), (got - from).normalize());
+    assert!(aim.distance(seen) < 1e-9, "{aim} {seen}");
+}

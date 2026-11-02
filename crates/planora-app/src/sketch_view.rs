@@ -11,9 +11,7 @@ use egui::{Color32, FontId, Mesh, PointerButton, Pos2, Rect, Sense, Shape, Strok
 use glam::{Vec2, Vec3};
 use planora_i18n::tr;
 use planora_math::{DVec2, DVec3, Frame};
-use planora_render::{
-    EdgeRef, OrbitCamera, Pick, exact_step, grid_radius, line_weight, visible_step,
-};
+use planora_render::{EdgeRef, OrbitCamera, Pick, exact_step, grid_radius, line_weight};
 use planora_sketch::ExtractedProfiles;
 use planora_sketch::constraint::{ConstraintKind, LineOrPoints};
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
@@ -38,7 +36,10 @@ const SNAP_MARK_PX: f32 = 5.0;
 /// Strichstärke der Fangzeichen in Pixeln.
 const SNAP_MARK_WIDTH: f32 = 1.5;
 /// Höchstzahl der Rasterlinien je Bild; darüber zeichnet das Raster nur die gröbere Stufe.
-const GRID_MAX_LINES: f64 = 200.0;
+const GRID_MAX_LINES: f64 = 300.0;
+/// Höchster Übergang zur gröberen Stufe: Die feinen Linien, auf denen der Zeiger rastet, bleiben
+/// so immer schwach zu sehen.
+const GRID_MAX_BLEND: f32 = 0.6;
 /// Jede wievielte Linie der feinen Stufe zur gröberen gehört.
 const GRID_DECADE: i64 = 10;
 /// Teilstücke einer Rasterlinie: Liegt ein Teil bei geneigter Ansicht hinter der Kamera, bleibt der
@@ -602,14 +603,10 @@ impl GridPlan {
         })
     }
 
-    /// Stufe des Raster-Fangs: die sichtbare ([`visible_step`]); ist das Raster ausgedünnt, bleiben
-    /// nur die Linien der gröberen Stufe zu sehen, also rastet auch der Zeiger nur dort.
-    fn snap_step(&self, distance: f32) -> f64 {
-        if self.every > 1 {
-            self.fine * self.every as f64
-        } else {
-            visible_step(distance, planora_i18n::current_unit().mm_per_unit())
-        }
+    /// Stufe des Raster-Fangs: die feinste gezeichnete; ist das Raster ausgedünnt, bleiben nur die
+    /// Linien der gröberen Stufe zu sehen, also rastet auch der Zeiger nur dort.
+    fn snap_step(&self) -> f64 {
+        self.fine * self.every as f64
     }
 }
 
@@ -673,7 +670,7 @@ pub fn sketch_grid_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
             let Some((from, to)) = span else {
                 continue;
             };
-            let (share, alpha) = line_weight(k, blend);
+            let (share, alpha) = line_weight(k, blend.min(GRID_MAX_BLEND));
             if alpha < GRID_MIN_ALPHA {
                 continue;
             }
@@ -889,7 +886,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
 
     // Raster-Fang auf der gezeichneten Stufe; ohne Raster oder ohne „Fang“ keiner.
     let grid_step = if state.sketch_show_grid && state.sketch_snap_grid {
-        GridPlan::of(&map).map(|plan| plan.snap_step(map.camera.distance))
+        GridPlan::of(&map).map(|plan| plan.snap_step())
     } else {
         None
     };

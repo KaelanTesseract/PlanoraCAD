@@ -345,9 +345,15 @@ impl SketchSession {
             .pending
             .first()
             .and_then(|&p| sk.point_xy(p).ok().map(|xy| (p, xy)));
-        // Richtung von `from` zum Zeiger, bei gleicher Lage entlang der x-Achse.
+        // Richtung von `from` zum Zeiger, bei gleicher Lage entlang der x-Achse. Das Raster zählt
+        // dabei nicht: Die Richtung liefe sonst in groben Sprüngen von Rasterpunkt zu Rasterpunkt.
+        let aim = if matches!(cur.snap, crate::sketch_state::Snap::Grid) && cur.autos.is_empty() {
+            cur.raw
+        } else {
+            cur.at
+        };
         let toward = |from: DVec2| {
-            (cur.at - from)
+            (aim - from)
                 .try_normalize()
                 .or((cur.raw - from).try_normalize())
                 .unwrap_or(DVec2::X)

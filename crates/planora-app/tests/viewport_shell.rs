@@ -372,14 +372,34 @@ fn the_floor_grid_is_gone_while_sketching_and_back_afterwards() {
             .map(|v| (v.position, v.color))
             .collect::<Vec<_>>()
     };
-    assert_eq!(
-        parts(viewport::scene_lines(&s)),
-        parts(planora_render::axis_lines(
-            s.camera.target,
-            s.camera.distance,
-            &s.palette()
-        ))
-    );
+    // Die Skizze öffnet mit Blick auf ihre Ebene: Die Achse zum Betrachter fehlt.
+    let seen = parts(viewport::scene_lines(&s));
+    let axes = parts(planora_render::axis_lines(
+        s.camera.target,
+        s.camera.distance,
+        &s.palette(),
+    ));
+    assert_eq!(seen.len(), 4);
+    assert!(seen.iter().all(|line| axes.contains(line)));
     s.close_sketch();
     assert!(viewport::scene_lines(&s).len() > 6, "Boden wieder da");
+}
+
+/// Handtest: Beim Blick auf die Skizze lief die Achse zum Betrachter als lange Linie vom Ursprung
+/// quer durchs Bild. Sie entfällt, sobald sie fast auf den Betrachter zeigt.
+#[test]
+fn the_axis_toward_the_viewer_is_left_out_while_sketching() {
+    let mut s = AppState::new();
+    let id = s
+        .add_sketch(planora_feature::SketchPlane::Standard(
+            planora_app::state::StandardPlane::XY,
+        ))
+        .unwrap();
+    s.open_sketch(id).unwrap();
+    s.camera.look_along(glam::Vec3::Z, glam::Vec3::Y);
+    assert_eq!(viewport::scene_lines(&s).len(), 4, "x und y bleiben");
+    let (sin, cos) = 30.0_f32.to_radians().sin_cos();
+    s.camera
+        .look_along(glam::Vec3::new(0.0, sin, cos), glam::Vec3::Y);
+    assert_eq!(viewport::scene_lines(&s).len(), 6, "geneigt: alle drei");
 }

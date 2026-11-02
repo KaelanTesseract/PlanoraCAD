@@ -11,6 +11,8 @@ use planora_render::{
     cube_pieces_visible, current_region, face_text_frame, grid_lines, pieces_hit_test,
 };
 
+/// Ab hier zeigt eine Achse fast auf den Betrachter (cos 15°).
+const AXIS_TOWARD_VIEWER: f32 = 0.966;
 /// Kantenlänge des Würfelfelds.
 pub const CUBE_SIZE: f32 = 100.0;
 /// Abstand des Würfelfelds zum Rand der freien Fläche (rechts und oben).
@@ -76,11 +78,22 @@ pub fn render_palette(dark: bool) -> Palette {
 }
 
 /// Linien der 3D-Szene: Bodenraster und Achsen; im Skizzenmodus nur die Achsen, das Raster zeichnet
-/// dort die Skizze in ihrer Ebene ([`sketch_view::sketch_grid_shapes`]).
+/// dort die Skizze in ihrer Ebene ([`sketch_view::sketch_grid_shapes`]). Eine Achse, die fast auf
+/// den Betrachter zeigt, entfällt dort: Perspektivisch liefe sie sonst als lange Linie vom Ursprung
+/// quer durchs Bild und sähe aus wie Geometrie der Skizze.
 pub fn scene_lines(state: &AppState) -> Vec<LineVertex> {
     let cam = &state.camera;
     if state.sketch_session.is_some() {
+        let view = (cam.eye() - cam.target).normalize_or_zero();
         axis_lines(cam.target, cam.distance, &state.palette())
+            .chunks_exact(2)
+            .filter(|pair| {
+                let along = Vec3::from(pair[1].position) - Vec3::from(pair[0].position);
+                along.normalize_or_zero().dot(view).abs() < AXIS_TOWARD_VIEWER
+            })
+            .flatten()
+            .copied()
+            .collect()
     } else {
         grid_lines(
             cam.target,

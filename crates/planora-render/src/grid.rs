@@ -75,13 +75,6 @@ pub fn exact_step(distance: f32, unit_mm: f64) -> (f64, f32) {
     (10.0_f64.powi(exp) * unit, blend)
 }
 
-/// Sichtbare Rasterstufe in mm, auf der der Raster-Fang rastet: die feine, ab einem Übergang von
-/// 0,5 die zehnfache. `unit_mm` wie bei [`exact_step`].
-pub fn visible_step(distance: f32, unit_mm: f64) -> f64 {
-    let (fine, blend) = exact_step(distance, unit_mm);
-    if blend >= 0.5 { fine * 10.0 } else { fine }
-}
-
 /// Radius, an dem das Raster bei Kameraabstand `distance` ausgeblendet ist.
 pub fn grid_radius(distance: f32) -> f32 {
     distance * RIM_FACTOR
@@ -547,49 +540,6 @@ mod tests {
     fn invalid_unit_falls_back_to_millimetre() {
         assert_eq!(grid_step(150.0, 0.0), grid_step(150.0, 1.0));
         assert_eq!(grid_step(150.0, f32::NAN), grid_step(150.0, 1.0));
-    }
-
-    #[test]
-    fn visible_step_is_the_fine_step_until_the_blend_reaches_one_half() {
-        assert_eq!(visible_step(150.0, 1.0), 10.0);
-        let mut d = 150.0_f32;
-        let mut seen_coarse = false;
-        while d < 1400.0 {
-            let (fine, blend) = grid_step(d, 1.0);
-            let want = if blend >= 0.5 { fine * 10.0 } else { fine };
-            seen_coarse |= blend >= 0.5;
-            assert_eq!(visible_step(d, 1.0) as f32, want, "{d}: {blend}");
-            d *= 1.01;
-        }
-        assert!(seen_coarse);
-    }
-
-    #[test]
-    fn visible_step_of_an_inch_is_exact() {
-        assert!((visible_step(150.0 * 25.4, 25.4) - 254.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn visible_step_is_a_decade_of_the_unit_over_the_whole_zoom_range() {
-        for unit in [1.0, 25.4] {
-            let mut d = 0.5_f32;
-            while d < 1.0e6 {
-                let q = (visible_step(d, unit) / unit).log10();
-                assert!((q - q.round()).abs() < 1e-12, "{unit}, {d}: {q}");
-                assert_eq!(
-                    visible_step(d, unit),
-                    10.0_f64.powi(q.round() as i32) * unit,
-                    "{unit}, {d}"
-                );
-                d *= 1.01;
-            }
-        }
-    }
-
-    #[test]
-    fn visible_step_falls_back_on_an_invalid_unit_like_the_grid() {
-        assert_eq!(visible_step(150.0, 0.0), 10.0);
-        assert_eq!(visible_step(150.0, f64::NAN), 10.0);
     }
 
     #[test]
