@@ -885,3 +885,71 @@ fn a_new_angle_dimension_below_0_or_above_180_is_refused() {
         .unwrap();
     assert_eq!(sk.constraints().count(), 1);
 }
+
+fn two_lines(second_end: (f64, f64)) -> (Sketch, SketchSession) {
+    let (mut sk, mut se) = setup();
+    let p: Vec<_> = [(0.0, 0.0), (10.0, 0.0), (0.0, 0.0), second_end]
+        .iter()
+        .map(|&(x, y)| sk.add_point(x, y).unwrap())
+        .collect();
+    let l1 = sk.add_line(p[0], p[1]).unwrap();
+    let l2 = sk.add_line(p[2], p[3]).unwrap();
+    se.selection = vec![Item::Curve(l1), Item::Curve(l2)];
+    (sk, se)
+}
+
+#[test]
+fn a_clockwise_pair_keeps_its_negative_angle_in_the_dialog() {
+    let (mut sk, mut se) = two_lines((0.0, -10.0));
+    let shown = se.measure_action(&sk, ConstraintAction::Angle).unwrap();
+    assert!(shown < 0.0, "im Uhrzeigersinn: {shown}");
+    // Der vorbelegte Wert, unverändert bestätigt.
+    let id = se
+        .apply(&mut sk, ConstraintAction::Angle, Some(shown))
+        .unwrap();
+    // Ein geänderter negativer Wert geht ebenfalls.
+    se.set_dimension_value(&mut sk, id, -30f64.to_radians())
+        .unwrap();
+    assert!(
+        (sk.measure(&sk.constraint(id).unwrap().kind.clone())
+            .unwrap()
+            + 30f64.to_radians())
+        .abs()
+            < 1e-6
+    );
+    // Über 180° im Betrag nicht.
+    let before = sk.variables().to_vec();
+    for deg in [-200.0f64, 200.0] {
+        let err = se
+            .set_dimension_value(&mut sk, id, deg.to_radians())
+            .unwrap_err();
+        assert_eq!(err, planora_i18n::tr!("sketch-angle-range"), "{deg}");
+        assert_eq!(sk.variables().to_vec(), before, "{deg}");
+    }
+}
+
+#[test]
+fn a_negative_angle_on_a_counterclockwise_pair_is_refused() {
+    let (mut sk, mut se) = two_lines((0.0, 10.0));
+    let before = (sk.variables().to_vec(), sk.constraints().count());
+    let err = se
+        .apply(&mut sk, ConstraintAction::Angle, Some(-10f64.to_radians()))
+        .unwrap_err();
+    assert_eq!(err, planora_i18n::tr!("sketch-angle-range"));
+    assert_eq!((sk.variables().to_vec(), sk.constraints().count()), before);
+}
+
+#[test]
+fn dialog_angles_0_and_180_reach_the_solver() {
+    for deg in [0.0f64, 180.0] {
+        let (mut sk, mut se) = two_lines((0.0, 10.0));
+        let before = (sk.variables().to_vec(), sk.constraints().count());
+        match se.apply(&mut sk, ConstraintAction::Angle, Some(deg.to_radians())) {
+            Ok(_) => {}
+            Err(e) => {
+                assert_ne!(e, planora_i18n::tr!("sketch-angle-range"), "{deg}");
+                assert_eq!((sk.variables().to_vec(), sk.constraints().count()), before);
+            }
+        }
+    }
+}

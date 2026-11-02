@@ -1468,7 +1468,7 @@ impl SketchSession {
                 // Ein getippter Winkel gilt nur bis auf 180° (wie bei `set_dimension_value`).
                 if value.is_some()
                     && matches!(kind, ConstraintKind::Angle(..))
-                    && !(0.0..=std::f64::consts::PI).contains(&v)
+                    && !angle_value_ok(sk.measure(&kind), v)
                 {
                     return Err(crate::msg!("sketch-angle-range"));
                 }
@@ -1544,10 +1544,10 @@ impl SketchSession {
                 .map(|c| c.kind.clone())
                 .ok_or_else(|| crate::msg!("sketch-constraint-missing"))?;
             checked_value(sk, &kind, value)?;
-            // Ein Winkelmaß gilt nur von 0° bis 180°: Darüber zeigte es einen Wert, den die Form nicht
+            // Ein Winkelmaß gilt nur bis 180° im Betrag: Darüber zeigte es einen Wert, den die Form nicht
             // hat. Unverändert bestätigen geht immer (ein getippter Öffnungswinkel darf größer sein).
             if matches!(kind, ConstraintKind::Angle(_, _, v) if v != value)
-                && !(0.0..=std::f64::consts::PI).contains(&value)
+                && !angle_value_ok(sk.measure(&kind), value)
             {
                 return Err(crate::msg!("sketch-angle-range"));
             }
@@ -1994,6 +1994,12 @@ pub fn with_checked_value(
     value: f64,
 ) -> Result<ConstraintKind, String> {
     checked_value(sk, kind, value).map_err(|m| m.text())
+}
+
+/// Darf ein Winkelmaß den Wert `value` bekommen? Der Betrag ist höchstens 180°; ein negativer
+/// Wert nur, wenn der Winkel jetzt schon negativ gemessen wird (`measured`, im Uhrzeigersinn).
+fn angle_value_ok(measured: Option<f64>, value: f64) -> bool {
+    value.abs() <= std::f64::consts::PI && (value >= 0.0 || measured.is_some_and(|m| m < 0.0))
 }
 
 /// Wie [`with_checked_value`], mit der Meldung als Grund (zum Speichern).
