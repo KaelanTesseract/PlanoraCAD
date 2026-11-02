@@ -96,6 +96,18 @@ impl ConstraintKind {
         )
     }
 
+    /// Der Wert, wenn das ein Längenmaß ist (für den Falt-Wächter, siehe
+    /// [`crate::shapes::folded_over`]).
+    pub fn length_value(&self) -> Option<f64> {
+        use ConstraintKind::*;
+        match *self {
+            Distance(_, _, v) | DistancePointLine(_, _, v) | Radius(_, v) | Diameter(_, v) => {
+                Some(v)
+            }
+            _ => None,
+        }
+    }
+
     /// Dieselbe Abhängigkeit mit dem Zahlenwert `v`; `None`, wenn sie kein Maß ist. Prüft
     /// nichts (dafür gibt es [`Sketch::check_constraint_value`]).
     pub fn with_value(&self, v: f64) -> Option<ConstraintKind> {

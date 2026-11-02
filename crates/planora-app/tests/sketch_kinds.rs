@@ -1,6 +1,6 @@
 //! Skizzen 3, Task 5: Die Arten eines Werkzeugs als Daten, die Stufenmaschine, die 17 neuen
-//! Aktionen und die beiden neuen Werkzeuge der Leiste. Die Arten selbst füllen spätere Tasks; hier
-//! lehnt der letzte Klick mit `sketch-kind-pending` ab.
+//! Aktionen und die beiden neuen Werkzeuge der Leiste. Die Arten selbst stehen in den
+//! `sketch_kinds_*`-Tests.
 //!
 //! Mit echten Bildern der ganzen App bei 1920×1080 (`PlanoraApp::for_tests`), wo es um Tasten,
 //! Knöpfe und Mausereignisse geht, sonst ohne Oberfläche.
@@ -619,9 +619,10 @@ fn stages_collect_positions_and_the_last_click_refuses_for_now() {
     assert_eq!(se.pending_pos, [at(0.0, 0.0), at(10.0, 0.0)]);
     assert_eq!(se.pending_snaps.len(), 2);
     assert_eq!(bits(&sk), start, "die Skizze bleibt bis zum letzten Klick");
-    // Der letzte Klick lehnt ab; die Form läuft weiter.
-    let refused = se.click(&mut sk, at(3.0, 4.0), R, false).unwrap_err();
-    assert_eq!(refused, t("sketch-kind-pending"));
+    // Skizzen 3, Task 10: Alle Arten sind fertig; ein letzter Klick ohne Form lehnt ab, und die
+    // Form läuft weiter.
+    let refused = se.click(&mut sk, at(3.0, 0.0), R, false).unwrap_err();
+    assert_eq!(refused, t("sketch-slot-too-wide"));
     assert_eq!(se.message_text().as_deref(), Some(refused.as_str()));
     assert_eq!(se.pending_pos.len(), 2);
     assert_eq!(bits(&sk), start);
@@ -866,7 +867,6 @@ fn field_texts_exist_in_both_languages() {
                 "sketch-field-sides",
                 "sketch-field-sides-range",
                 "sketch-field-radius-or-sweep",
-                "sketch-kind-pending",
             ] {
                 assert!(!t(key).is_empty() && t(key) != key, "{key}");
             }

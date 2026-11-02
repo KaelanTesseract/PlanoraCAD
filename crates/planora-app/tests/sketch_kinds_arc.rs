@@ -609,8 +609,11 @@ fn arc_after_line_length(y: f64, length: f64) -> (Stored, DVec2, DVec2) {
     let (mut se, mut sk, _, a, b) = tangent_on_line();
     click(&mut se, &mut sk, 10.0, 0.0);
     click(&mut se, &mut sk, 15.0, y);
-    sk.add_constraint(K::Distance(a, b, length)).unwrap();
-    let r = sk.solve();
+    // Skizzen 3, Task 10: über die App, also mit dem Falt-Wächter.
+    let id = sk.add_constraint(K::Distance(a, b, 8.0)).unwrap();
+    assert_eq!(sk.solve().status, SolveStatus::Solved);
+    se.set_dimension_value(&mut sk, id, length).unwrap();
+    let r = sk.clone().solve();
     assert_eq!(r.status, SolveStatus::Solved);
     assert!(r.redundant.is_empty(), "{:?}", r.redundant);
     let (pa, pb) = (xy(&sk, a), xy(&sk, b));
@@ -622,16 +625,34 @@ fn arc_after_line_length(y: f64, length: f64) -> (Stored, DVec2, DVec2) {
 
 #[test]
 fn tangent_stays_tangent_when_the_line_gets_a_length() {
-    for y in [5.0, -5.0] {
-        let (arc, pa, pb) = arc_after_line_length(y, 100.0);
-        assert_tangent(&arc, pb, (pb - pa).normalize());
-        // Bei kleineren Änderungen läuft er auch in derselben Richtung weiter. Bei 100 kann der
-        // Löser auf die andere Seite springen, wie beim Mittelpunkt-Bogen mit Tangente: Die Zeile
-        // am gemeinsamen Ende hält nur die Richtung, nicht die Seite (Entscheidung 1).
-        for length in [12.0, 20.0, 50.0] {
-            let (arc, pa, pb) = arc_after_line_length(y, length);
-            assert_leaves_along(&arc, pb, (pb - pa).normalize());
-        }
+    // Skizzen 3, Task 10: Auch bei 100 läuft er in derselben Richtung weiter. Die Zeile am
+    // gemeinsamen Ende hält nur die Richtung, nicht die Seite (Entscheidung 1); im großen Sprung
+    // springt der Löser, und der Falt-Wächter geht dann in kleinen Schritten.
+    for length in [12.0, 20.0, 50.0, 100.0, 300.0] {
+        let (arc, pa, pb) = arc_after_line_length(5.0, length);
+        assert_leaves_along(&arc, pb, (pb - pa).normalize());
+    }
+    for length in [12.0, 20.0, 30.0] {
+        let (arc, pa, pb) = arc_after_line_length(-5.0, length);
+        assert_leaves_along(&arc, pb, (pb - pa).normalize());
+    }
+}
+
+/// Offen (Bericht Task 10): Bogen nach rechts, also getauscht: Sein Start ist das freie Ende. Der
+/// Löser hält die Richtung am Anschluss auch in 8 Schritten, aber der Vektor Mitte→Start dreht über
+/// 90°, weil der Anschluss am freien Ende vorbeiläuft. Der Wächter lehnt darum ab 40 mm ab.
+#[test]
+fn the_guard_refuses_a_swapped_tangent_arc_from_40_mm_on() {
+    for length in [40.0, 50.0, 100.0, 300.0] {
+        let (mut se, mut sk, _, a, b) = tangent_on_line();
+        click(&mut se, &mut sk, 10.0, 0.0);
+        click(&mut se, &mut sk, 15.0, -5.0);
+        let id = sk.add_constraint(K::Distance(a, b, 8.0)).unwrap();
+        assert_eq!(sk.solve().status, SolveStatus::Solved);
+        let before = sk.variables().to_vec();
+        let text = se.set_dimension_value(&mut sk, id, length).unwrap_err();
+        assert_eq!(text, t("sketch-dimension-folds"), "{length}");
+        assert_eq!(sk.variables(), &before[..]);
     }
 }
 

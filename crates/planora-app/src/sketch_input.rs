@@ -346,6 +346,21 @@ impl SketchSession {
         if field.kind == FieldKind::Sides {
             self.input.sides = field.locked.map(|v| v as usize);
         }
+        self.limit_radius_or_sweep(i);
+    }
+
+    /// Start und Ende legen die Sehne fest, also bestimmt beim 3-Punkt-Bogen-Langloch Radius oder
+    /// Öffnungswinkel den Bogen: Das zweite getippte Feld `i` nennt die Regel.
+    fn limit_radius_or_sweep(&mut self, i: usize) {
+        if self.planned_kind() != Some(ToolKind::SlotThreePointArc) {
+            return;
+        }
+        let both = self.input.locked(FieldKind::Radius).is_some()
+            && self.input.locked(FieldKind::Sweep).is_some();
+        if both && let Some(field) = self.input.fields.get_mut(i) {
+            field.locked = None;
+            field.error = Some(tr!("sketch-field-radius-or-sweep"));
+        }
     }
 
     /// Nächstes oder (`back`) voriges Feld; die Sperren bleiben.
@@ -558,8 +573,9 @@ impl SketchSession {
         };
         let mut note = None;
         for (kind, text) in &typed {
+            let overall = self.overall_center_distance(sf, &created, *kind, &typed, scope)?;
             note = self
-                .add_typed_dimension(sf, &created, *kind, text, chain, scope)?
+                .add_typed_dimension(sf, &created, *kind, text, overall, chain, scope)?
                 .or(note);
         }
         if note.is_some() {
@@ -570,23 +586,66 @@ impl SketchSession {
         Ok(())
     }
 
+    /// Der Mittenabstand `L − W` zur getippten Gesamtlänge eines Langlochs „Gesamt“ (Ruling Task 2:
+    /// Die Gesamtlänge ist kein eigenes Maß); `W` ist die getippte Breite oder die vom Zeiger. `None`
+    /// für jedes andere Maß.
+    fn overall_center_distance(
+        &self,
+        sf: &SketchFeature,
+        created: &Created,
+        kind: FieldKind,
+        typed: &[(FieldKind, String)],
+        scope: &ParamScope,
+    ) -> Result<Option<f64>, Msg> {
+        let (Some(ToolKind::SlotOverall), Created::Slot(ids), FieldKind::Length) =
+            (self.planned_kind(), created, kind)
+        else {
+            return Ok(None);
+        };
+        let value_of = |wanted: FieldKind| {
+            typed
+                .iter()
+                .find(|(k, _)| *k == wanted)
+                .map(|(k, text)| dimension_input(text, k.unit(), scope).map(|(v, _)| v))
+                .transpose()
+        };
+        let length =
+            value_of(FieldKind::Length)?.ok_or_else(|| crate::msg!("sketch-field-rejected"))?;
+        let width = match value_of(FieldKind::Width)? {
+            Some(w) => w,
+            None => {
+                2.0 * sf
+                    .sketch
+                    .radius(ids.caps[0])
+                    .ok_or_else(|| crate::msg!("sketch-field-rejected"))?
+            }
+        };
+        Ok(Some(length - width))
+    }
+
     /// Legt das Maß eines getippten Werts an. Widerspruch ist ein Fehler; `Some`: das Maß war
     /// überzählig und ist anzeigend, das ist die Meldung dazu. Ein überzähliger Öffnungswinkel
-    /// entfällt samt seinen beiden Hilfslinien, die sonst keinen Zweck hätten.
+    /// entfällt samt seinen beiden Hilfslinien, die sonst keinen Zweck hätten. `computed` ersetzt den
+    /// getippten Wert; das Maß bekommt dann weder Formel noch Speichertext.
+    #[allow(clippy::too_many_arguments)]
     fn add_typed_dimension(
         &mut self,
         sf: &mut SketchFeature,
         created: &Created,
         kind: FieldKind,
         text: &str,
+        computed: Option<f64>,
         chain: Option<CurveId>,
         scope: &ParamScope,
     ) -> Result<Option<Msg>, Msg> {
-        let (value, _) = dimension_input(text, kind.unit(), scope)?;
+        let (typed, _) = dimension_input(text, kind.unit(), scope)?;
+        let value = computed.unwrap_or(typed);
         let prior = sf.sketch.clone();
         let dim = dimension_kind(&mut sf.sketch, created, kind, chain)?;
         let dim = checked_value(&sf.sketch, &dim, value)?;
+        let old = sf.sketch.measure(&dim);
         let id = sf.sketch.add_constraint(dim).map_err(err)?;
+        let unsolved = sf.sketch.clone();
         let before = self.last_report.take();
         let report = sf.sketch.solve();
         let problem = check_change(&report, before.as_ref(), &prior, Some(id));
@@ -601,9 +660,13 @@ impl SketchSession {
             return Ok(Some(crate::msg!("sketch-field-sweep-redundant")));
         }
         self.last_report = Some(report);
+        self.keep_unfolded(&mut sf.sketch, id, old, &unsolved)?;
         if redundant {
             self.make_driven(&mut sf.sketch, id)?;
             return Ok(self.message.take());
+        }
+        if computed.is_some() {
+            return Ok(None);
         }
         if let Err(text) = self.set_dimension_input(sf, id, text, scope) {
             return Err(self.message.take().unwrap_or(Msg::Raw(text)));
@@ -634,17 +697,7 @@ fn dimension_kind(
         (Created::Rectangle(r), F::Angle) => line_angle(sk, r.lines[0], chain)?,
         (Created::Circle(c), F::Diameter) => K::Diameter(*c, 0.0),
         (Created::Arc(c), F::Radius) => K::Radius(*c, 0.0),
-        (Created::Arc(c), F::Sweep) => {
-            let Some(CurveKind::Arc { center, start, end }) = sk.curve(*c).map(|d| d.kind.clone())
-            else {
-                return Err(crate::msg!("sketch-field-rejected"));
-            };
-            let first = sk.add_line(center, start).map_err(err)?;
-            let second = sk.add_line(center, end).map_err(err)?;
-            sk.set_construction(first, true).map_err(err)?;
-            sk.set_construction(second, true).map_err(err)?;
-            K::Angle(first, second, 0.0)
-        }
+        (Created::Arc(c), F::Sweep) => sweep_dimension(sk, *c)?,
         // Umbeschrieben gibt die Größe den Abstand Mitte–Seite an, einbeschrieben den Radius.
         (
             Created::Polygon {
@@ -657,10 +710,27 @@ fn dimension_kind(
             K::DistancePointLine(ids.center, ids.lines[0], 0.0)
         }
         (Created::Polygon { ids, .. }, F::Length) => K::Distance(ids.points[0], ids.points[1], 0.0),
+        (Created::Slot(ids), F::Length) => K::Distance(ids.centers[0], ids.centers[1], 0.0),
+        (Created::Slot(ids), F::Width) => K::Diameter(ids.caps[0], 0.0),
+        (Created::ArcSlot(ids), F::Radius) => K::Radius(ids.axis, 0.0),
+        (Created::ArcSlot(ids), F::Sweep) => sweep_dimension(sk, ids.axis)?,
+        (Created::ArcSlot(ids), F::Width) => K::Diameter(ids.caps[0], 0.0),
         (Created::Ellipse(c), F::MajorAxis) => K::EllipseMajor(*c, 0.0),
         (Created::Ellipse(c), F::MinorAxis) => K::EllipseMinor(*c, 0.0),
         _ => return Err(crate::msg!("sketch-field-rejected")),
     })
+}
+
+/// Der Öffnungswinkel des Bogens `arc`: über zwei neue Konstruktionslinien Mitte→Start und Mitte→Ende.
+fn sweep_dimension(sk: &mut Sketch, arc: CurveId) -> Result<ConstraintKind, Msg> {
+    let Some(CurveKind::Arc { center, start, end }) = sk.curve(arc).map(|d| d.kind.clone()) else {
+        return Err(crate::msg!("sketch-field-rejected"));
+    };
+    let first = sk.add_line(center, start).map_err(err)?;
+    let second = sk.add_line(center, end).map_err(err)?;
+    sk.set_construction(first, true).map_err(err)?;
+    sk.set_construction(second, true).map_err(err)?;
+    Ok(ConstraintKind::Angle(first, second, 0.0))
 }
 
 /// Der Winkel der Linie zur vorigen Linie der Kette, sonst zur Achshilfe.

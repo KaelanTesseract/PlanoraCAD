@@ -547,3 +547,69 @@ fn changing_the_radius_of_a_64_gon_takes_under_20_ms() {
     println!("64-Eck, Radius ändern: {took:?}");
     assert!(took.as_millis() < 20, "{took:?}");
 }
+
+// ---- Falt-Wächter (Ruling Task 2) ----------------------------------------------------------------
+
+#[test]
+fn folded_over_sees_a_reversed_line_and_a_reversed_arc_only() {
+    let mut s = sketch();
+    let a = s.add_point(0.0, 0.0).unwrap();
+    let b = s.add_point(10.0, 0.0).unwrap();
+    let line = s.add_line(a, b).unwrap();
+    let m = s.add_point(0.0, 20.0).unwrap();
+    let st = s.add_point(5.0, 20.0).unwrap();
+    let en = s.add_point(0.0, 25.0).unwrap();
+    let arc = s.add_arc(m, st, en).unwrap();
+    assert!(!folded_over(&s, &s.clone()));
+
+    let moved = |p: PointId, to: DVec2| {
+        let mut t = s.clone();
+        t.set_point_xy(p, to.x, to.y).unwrap();
+        t
+    };
+    // Länger, kürzer und bis 90° gedreht: keine Umkehr.
+    assert!(!folded_over(&s, &moved(b, v(100.0, 0.0))));
+    assert!(!folded_over(&s, &moved(b, v(1.0, 0.0))));
+    assert!(!folded_over(&s, &moved(b, v(1.0, 50.0))));
+    // Darüber hinaus ist die Linie umgekehrt; ein Punkt ohne Richtung ist es nicht.
+    assert!(folded_over(&s, &moved(b, v(-1.0, 0.0))));
+    assert!(!folded_over(&s, &moved(b, v(0.0, 0.0))));
+    // Der Bogen: Vektor Mitte→Start.
+    assert!(!folded_over(&s, &moved(st, v(1.0, 40.0))));
+    assert!(folded_over(&s, &moved(st, v(-3.0, 20.0))));
+    // Das Ende zählt nicht: Ein Öffnungswinkel darf wachsen.
+    assert!(!folded_over(&s, &moved(en, v(-5.0, 15.0))));
+
+    // Gelöschte Kurven zählen nicht.
+    let mut gone = moved(b, v(-1.0, 0.0));
+    gone.remove_curve(line).unwrap();
+    assert!(!folded_over(&s, &gone));
+    let mut gone = moved(st, v(-3.0, 20.0));
+    gone.remove_curve(arc).unwrap();
+    assert!(!folded_over(&s, &gone));
+}
+
+#[test]
+fn only_length_dimensions_have_a_length_value() {
+    let mut s = sketch();
+    let a = s.add_point(0.0, 0.0).unwrap();
+    let b = s.add_point(10.0, 0.0).unwrap();
+    let l = s.add_line(a, b).unwrap();
+    let m = s.add_point(0.0, 20.0).unwrap();
+    let c = s.add_circle(m, 5.0).unwrap();
+    for kind in [
+        K::Distance(a, b, 1.0),
+        K::DistancePointLine(m, l, 1.0),
+        K::Radius(c, 1.0),
+        K::Diameter(c, 1.0),
+    ] {
+        assert_eq!(kind.length_value(), Some(1.0), "{kind:?}");
+    }
+    for kind in [
+        K::Angle(l, l, 1.0),
+        K::Fixed(a, 0.0, 0.0),
+        K::Coincident(a, b),
+    ] {
+        assert_eq!(kind.length_value(), None, "{kind:?}");
+    }
+}

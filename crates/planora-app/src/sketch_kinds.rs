@@ -13,7 +13,7 @@ use planora_i18n::tr;
 use planora_math::DVec2;
 use planora_sketch::constraint::ConstraintKind;
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
-use planora_sketch::shapes::{self, ShapePlan};
+use planora_sketch::shapes::{self, ArcPlan, ShapePlan, SlotIds, SlotStyle};
 use planora_sketch::tangent_circles;
 
 /// Schritte je Vollkreis für die Vorschau einer Form.
@@ -184,20 +184,39 @@ impl ToolKind {
         self == ToolKind::Circle2T
     }
 
-    /// Die Meldung, wenn aus den Lagen keine Form wird. Die Arten späterer Tasks lehnen noch ab.
+    /// Die Meldung, wenn aus den Lagen keine Form wird.
     fn refusal(self) -> Msg {
         use ToolKind::*;
         match self {
-            Rect3P | RectCenter => crate::msg!("sketch-err-rect-size"),
-            Circle2P => crate::msg!("sketch-radius-positive"),
+            Rect2P | Rect3P | RectCenter => crate::msg!("sketch-err-rect-size"),
+            CircleCenter | Circle2P => crate::msg!("sketch-radius-positive"),
             Circle3P => crate::msg!("sketch-circle-collinear"),
             Circle2T | Circle3T => crate::msg!("sketch-tangent-no-solution"),
-            Arc3P => crate::msg!("sketch-arc-end-on-start"),
+            ArcCenter | Arc3P | SlotThreePointArc | SlotCenterPointArc => {
+                crate::msg!("sketch-arc-end-on-start")
+            }
             ArcTangent => crate::msg!("sketch-arc-tangent-start"),
             PolygonCircumscribed | PolygonInscribed => crate::msg!("sketch-radius-positive"),
-            PolygonEdge => crate::msg!("sketch-err-line-zero"),
-            _ => crate::msg!("sketch-kind-pending"),
+            PolygonEdge | SlotCenterToCenter | SlotOverall | SlotCenterPoint => {
+                crate::msg!("sketch-err-line-zero")
+            }
         }
+    }
+
+    /// Ein gerades Langloch?
+    fn is_straight_slot(self) -> bool {
+        matches!(
+            self,
+            ToolKind::SlotCenterToCenter | ToolKind::SlotOverall | ToolKind::SlotCenterPoint
+        )
+    }
+
+    /// Ein Bogenlangloch?
+    fn is_arc_slot(self) -> bool {
+        matches!(
+            self,
+            ToolKind::SlotThreePointArc | ToolKind::SlotCenterPointArc
+        )
     }
 }
 
@@ -279,6 +298,35 @@ fn through_at_radius(start: DVec2, end: DVec2, r: f64, pointer: DVec2, tol: f64)
     Some(mid + normal * (side * rise))
 }
 
+/// Durchgangspunkt eines Bogens mit dem Öffnungswinkel `sweep` über der Sehne, die Seite vom Zeiger.
+fn through_at_sweep(start: DVec2, end: DVec2, sweep: f64, pointer: DVec2) -> Option<DVec2> {
+    let mid = (start + end) / 2.0;
+    let normal = (end - start).try_normalize()?.perp();
+    let side = if normal.dot(pointer - mid) < 0.0 {
+        -1.0
+    } else {
+        1.0
+    };
+    let half = sweep / 2.0;
+    let r = start.distance(end) / 2.0 / half.sin();
+    Some(mid + normal * (side * r * (1.0 - half.cos())))
+}
+
+/// Mittelbogen eines Bogenlanglochs aus den ersten beiden Lagen und der dritten: `SlotThreePointArc`
+/// Start, Ende, Durchgang; `SlotCenterPointArc` Mitte, Start, Richtung des Endes (gegen den
+/// Uhrzeigersinn).
+fn slot_axis(kind: ToolKind, a: DVec2, b: DVec2, c: DVec2, tol: f64) -> Option<ArcPlan> {
+    if kind == ToolKind::SlotThreePointArc {
+        return shapes::arc_through(a, b, c, tol);
+    }
+    let end = a + (c - a).try_normalize()? * a.distance(b);
+    (end.distance(b) > tol).then_some(ArcPlan {
+        center: a,
+        start: b,
+        end,
+    })
+}
+
 impl SketchSession {
     /// Die zuletzt gewählte Art von `tool`; `None`, wenn es nur einen Weg gibt.
     pub fn kind_of(&self, tool: Tool) -> Option<ToolKind> {
@@ -356,6 +404,13 @@ impl SketchSession {
         if self.pending_pos.iter().any(|p| p.distance(cur.at) <= tol) {
             return Err(kind.refusal());
         }
+        // Die Stufe des Mittelbogens: Ohne Bogen wird es nie eine Form.
+        if kind.is_arc_slot()
+            && self.pending_pos.len() == 2
+            && self.plan_with(sk, kind, cur.at, None).is_none()
+        {
+            return Err(self.finish_refusal(sk, kind));
+        }
         self.pending_pos.push(cur.at);
         self.pending_snaps.push(cur.remember(tol));
         Ok(())
@@ -407,6 +462,21 @@ impl SketchSession {
             ToolKind::PolygonEdge => crate::msg!("sketch-polygon-edge-side"),
             ToolKind::ArcTangent if self.tangent_start(sk).is_some() => {
                 crate::msg!("sketch-arc-tangent-straight")
+            }
+            // Die Stufe des Mittelbogens, siehe `click_kind`.
+            ToolKind::SlotThreePointArc | ToolKind::SlotCenterPointArc
+                if self.pending_pos.len() == 2 =>
+            {
+                match kind {
+                    ToolKind::SlotCenterPointArc => kind.refusal(),
+                    _ if self.input.locked(FieldKind::Radius).is_some() => {
+                        crate::msg!("sketch-arc-radius-chord")
+                    }
+                    _ => crate::msg!("sketch-circle-collinear"),
+                }
+            }
+            _ if kind.is_straight_slot() || kind.is_arc_slot() => {
+                crate::msg!("sketch-slot-too-wide")
             }
             _ => kind.refusal(),
         }
@@ -611,11 +681,54 @@ impl SketchSession {
                     inscribed: kind == ToolKind::PolygonInscribed,
                 }
             }
+            (_, ShapePlan::Slot(plan)) => {
+                let style = if kind == ToolKind::SlotCenterPoint {
+                    SlotStyle::CenterPoint
+                } else {
+                    SlotStyle::CenterToCenter
+                };
+                let ids = sk.add_slot(&plan, style).map_err(err)?;
+                self.bind_slot(sk, kind, &ids, &hits[..hits.len() - 1])?;
+                self.solve_checked(sk, prior)?;
+                Created::Slot(ids)
+            }
+            (_, ShapePlan::ArcSlot(plan)) => {
+                let ids = sk.add_arc_slot(&plan).map_err(err)?;
+                let own = [ids.center, ids.ends[0], ids.ends[1]];
+                self.bind_own(sk, &own, &hits[..hits.len() - 1])?;
+                self.solve_checked(sk, prior)?;
+                Created::ArcSlot(ids)
+            }
             _ => return Err(kind.refusal()),
         };
         self.edit_label = Some(created.undo_label());
         self.created = Some(created);
         self.clear_pending();
+        Ok(())
+    }
+
+    /// Bindet die ersten Klicks eines geraden Langlochs (die Breite bindet nie). „Gesamt“ hat an den
+    /// äußeren Enden keine eigenen Punkte (Ruling Task 2): Der gefangene Punkt liegt auf dem Ende.
+    fn bind_slot(
+        &mut self,
+        sk: &mut Sketch,
+        kind: ToolKind,
+        ids: &SlotIds,
+        hits: &[DrawCursor],
+    ) -> Result<(), Msg> {
+        if kind != ToolKind::SlotOverall {
+            let mut own = ids.centers.to_vec();
+            own.extend(ids.mid);
+            return self.bind_own(sk, &own, hits);
+        }
+        let tol = sk.tolerance().linear;
+        for (hit, cap) in hits.iter().zip(ids.caps) {
+            if !matches!(hit.remember(tol).snap, Snap::None | Snap::Grid) {
+                let q = self.attach(sk, None, hit)?;
+                sk.add_constraint(ConstraintKind::PointOnCurve(q, cap))
+                    .map_err(err)?;
+            }
+        }
         Ok(())
     }
 
@@ -646,7 +759,8 @@ impl SketchSession {
 
     /// Der Plan der laufenden Form mit dem Zeiger an `at`; `None`, solange (oder wenn) daraus keine
     /// Form wird. Beim letzten Klick von `3 tangential` ist `at` die Rohlage, die dritte Kurve steht
-    /// im Zeiger dieses Bilds ([`update_cursor`](Self::update_cursor)).
+    /// im Zeiger dieses Bilds ([`update_cursor`](Self::update_cursor)). Ein Bogenlangloch zeigt in der
+    /// Stufe seines Mittelbogens diesen Bogen.
     pub fn kind_plan(&self, sk: &Sketch, at: DVec2) -> Option<ShapePlan> {
         let third = self.draw_cursor.as_ref().and_then(|c| match c.snap {
             Snap::Curve(curve) => Some(curve),
@@ -710,16 +824,42 @@ impl SketchSession {
                 let (.., from, leaving) = self.tangent_start(sk)?;
                 shapes::tangent_arc(from, leaving, at, tol).map(ShapePlan::Arc)
             }
+            (ToolKind::SlotCenterToCenter, &[a, b], _) => {
+                shapes::slot_center_to_center(a, b, at, tol).map(ShapePlan::Slot)
+            }
+            (ToolKind::SlotOverall, &[a, b], _) => {
+                shapes::slot_overall(a, b, at, tol).map(ShapePlan::Slot)
+            }
+            (ToolKind::SlotCenterPoint, &[c, end], _) => {
+                shapes::slot_center_point(c, end, at, tol).map(ShapePlan::Slot)
+            }
+            (ToolKind::SlotThreePointArc | ToolKind::SlotCenterPointArc, &[a, b], _) => {
+                let radius = self.input.locked(FieldKind::Radius);
+                if radius.is_some_and(|r| !radius_spans(a, b, r, tol)) {
+                    return None;
+                }
+                slot_axis(kind, a, b, at, tol).map(ShapePlan::Arc)
+            }
+            (ToolKind::SlotThreePointArc | ToolKind::SlotCenterPointArc, &[a, b, c], _) => {
+                let axis = slot_axis(kind, a, b, c, tol)?;
+                shapes::arc_slot(axis, at, tol).map(ShapePlan::ArcSlot)
+            }
             _ => None,
         }
     }
 
     /// Vorschau der laufenden Form, aus demselben Plan wie das Ergebnis. Vor dem Plan zeigen
-    /// `Rect3P`, `Circle3P` und `PolygonEdge` die Linie zum Zeiger.
+    /// `Rect3P`, `Circle3P`, `PolygonEdge` und alle Langlöcher die Linie zum Zeiger.
     pub fn kind_preview(&self, sk: &Sketch, at: DVec2) -> Option<Vec<Vec<DVec2>>> {
-        if let (Some(ToolKind::Rect3P | ToolKind::Circle3P | ToolKind::PolygonEdge), &[from]) =
-            (self.planned_kind(), self.pending_pos.as_slice())
-        {
+        let shows_line = self.planned_kind().is_some_and(|k| {
+            k.is_straight_slot()
+                || k.is_arc_slot()
+                || matches!(
+                    k,
+                    ToolKind::Rect3P | ToolKind::Circle3P | ToolKind::PolygonEdge
+                )
+        });
+        if let (true, &[from]) = (shows_line, self.pending_pos.as_slice()) {
             return (from.distance(at) > sk.tolerance().linear).then(|| vec![vec![from, at]]);
         }
         Some(self.kind_plan(sk, at)?.outline(PREVIEW_STEPS_PER_TURN))
@@ -789,6 +929,39 @@ impl SketchSession {
                         .unwrap_or(from),
                 )
             }
+            (ToolKind::SlotCenterToCenter | ToolKind::SlotOverall, &[from]) => {
+                Some(from + toward_pointer(cur, from) * locked(F::Length)?)
+            }
+            // Die Länge ist immer Mitte zu Mitte, der Zeiger gibt nur die Hälfte.
+            (ToolKind::SlotCenterPoint, &[mid]) => {
+                Some(mid + toward_pointer(cur, mid) * (locked(F::Length)? / 2.0))
+            }
+            (kind, &[a, b]) if kind.is_straight_slot() => {
+                let half = locked(F::Width)? / 2.0;
+                let normal = (b - a).try_normalize()?.perp();
+                let side = normal.dot(cur.raw - a).signum();
+                Some(cur.at + normal * (side * half - normal.dot(cur.at - a)))
+            }
+            (ToolKind::SlotThreePointArc, &[start, end]) => match locked(F::Radius) {
+                Some(r) => through_at_radius(start, end, r, cur.raw, sk.tolerance().linear),
+                None => through_at_sweep(start, end, locked(F::Sweep)?, cur.raw),
+            },
+            (ToolKind::SlotCenterPointArc, &[center]) => {
+                Some(center + toward_pointer(cur, center) * locked(F::Radius)?)
+            }
+            (ToolKind::SlotCenterPointArc, &[center, start]) => {
+                Some(center + DVec2::from_angle(locked(F::Sweep)?).rotate(start - center))
+            }
+            (kind, &[a, b, c]) if kind.is_arc_slot() => {
+                let half = locked(F::Width)? / 2.0;
+                let axis = slot_axis(kind, a, b, c, sk.tolerance().linear)?;
+                let (m, r) = (axis.center, axis.radius());
+                let along = (cur.raw - m).try_normalize()?;
+                // Innen geht es nur, solange der Radius für die halbe Breite reicht; sonst käme die
+                // Lage auf die andere Seite der Mitte und ergäbe still eine andere Breite.
+                let inside = cur.raw.distance(m) < r && half < r;
+                Some(m + along * if inside { r - half } else { r + half })
+            }
             _ => None,
         }
     }
@@ -820,13 +993,28 @@ impl SketchSession {
                 ShapePlan::Circle(_, r) => Some(2.0 * r),
                 _ => None,
             },
-            (ToolKind::Arc3P | ToolKind::ArcTangent, _, F::Radius | F::Sweep) => {
-                match self.kind_plan(sk, at)? {
-                    ShapePlan::Arc(arc) if kind == F::Radius => Some(arc.radius()),
-                    ShapePlan::Arc(arc) => Some(arc.sweep()),
-                    _ => None,
-                }
+            (ToolKind::SlotCenterToCenter | ToolKind::SlotOverall, &[from], F::Length) => {
+                Some(from.distance(at))
             }
+            (ToolKind::SlotCenterPoint, &[mid], F::Length) => Some(2.0 * mid.distance(at)),
+            (_, &[a, b], F::Width) => Some(2.0 * (b - a).try_normalize()?.perp().dot(at - a).abs()),
+            (ToolKind::SlotCenterPointArc, &[center], F::Radius) => Some(center.distance(at)),
+            (slot, &[a, b, c], F::Width) => {
+                let axis = slot_axis(slot, a, b, c, sk.tolerance().linear)?;
+                Some(2.0 * (axis.center.distance(at) - axis.radius()).abs())
+            }
+            (
+                ToolKind::Arc3P
+                | ToolKind::ArcTangent
+                | ToolKind::SlotThreePointArc
+                | ToolKind::SlotCenterPointArc,
+                _,
+                F::Radius | F::Sweep,
+            ) => match self.kind_plan(sk, at)? {
+                ShapePlan::Arc(arc) if kind == F::Radius => Some(arc.radius()),
+                ShapePlan::Arc(arc) => Some(arc.sweep()),
+                _ => None,
+            },
             _ => None,
         }
     }

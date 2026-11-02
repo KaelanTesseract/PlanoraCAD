@@ -15,6 +15,7 @@ use planora_math::DVec2;
 use planora_sketch::SketchError;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
 use planora_sketch::model::{CurveId, CurveKind, MAX_SPLINE_POINTS, PointId, Sketch};
+use planora_sketch::shapes::folded_over;
 use planora_sketch::snap::{SnapHit, SnapIndex};
 use planora_sketch::solver::{Drag, SolveReport, SolveStatus};
 use std::collections::BTreeSet;
@@ -24,6 +25,8 @@ pub use planora_sketch::snap::Snap;
 
 /// Schritte je Vollkreis für den Linienzug, gegen den der Auswahlrahmen prüft.
 const BOX_STEPS_PER_TURN: usize = 96;
+/// Schritte, in denen der Falt-Wächter ein Längenmaß noch einmal setzt.
+const FOLD_RETRY_STEPS: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
@@ -1461,7 +1464,9 @@ impl SketchSession {
                 };
                 kind = checked_value(sk, &kind, v)?;
             }
+            let old = sk.measure(&kind);
             let id = sk.add_constraint(kind).map_err(err)?;
+            let unsolved = sk.clone();
             let before = se.last_report.take();
             let report = sk.solve();
             se.last_report = Some(report.clone());
@@ -1473,7 +1478,14 @@ impl SketchSession {
                     _ => crate::msg!("sketch-apply-unsolved", action = action.label_msg()),
                 });
             }
-            if report.redundant.contains(&id) {
+            se.keep_unfolded(sk, id, old, &unsolved)?;
+            if se
+                .last_report
+                .as_ref()
+                .unwrap_or(&report)
+                .redundant
+                .contains(&id)
+            {
                 if action.is_dimension() {
                     se.make_driven(sk, id)?;
                 } else {
@@ -1520,10 +1532,54 @@ impl SketchSession {
                 .map(|c| c.kind.clone())
                 .ok_or_else(|| crate::msg!("sketch-constraint-missing"))?;
             checked_value(sk, &kind, value)?;
+            let old = sk.measure(&kind);
             sk.set_constraint_value(id, value).map_err(err)?;
+            let unsolved = sk.clone();
             se.solve_checked(sk, prior)?;
-            Ok(())
+            se.keep_unfolded(sk, id, old, &unsolved)
         })
+    }
+
+    /// Falt-Wächter für das Längenmaß `id` (Skizzen 3): Hat das Lösen die Skizze gegenüber
+    /// `unsolved` (Stand vor dem Lösen, das Maß hat schon seinen neuen Wert) umgeklappt, geht es
+    /// noch einmal von dort in [`FOLD_RETRY_STEPS`] gleichen Schritten ab dem alten Wert `old`: Ein
+    /// großer Sprung lässt den Löser umklappen, in kleinen Schritten bleibt die Lage. Klappt es dann
+    /// immer noch, ist das ein Fehler. Winkelmaße prüft er nicht.
+    pub(crate) fn keep_unfolded(
+        &mut self,
+        sk: &mut Sketch,
+        id: ConstraintId,
+        old: Option<f64>,
+        unsolved: &Sketch,
+    ) -> Result<(), Msg> {
+        let Some(new) = sk.constraint(id).and_then(|c| c.kind.length_value()) else {
+            return Ok(());
+        };
+        if !self.last_report.as_ref().is_some_and(status_ok) || !folded_over(unsolved, sk) {
+            return Ok(());
+        }
+        let refused = || crate::msg!("sketch-dimension-folds");
+        let old = old.ok_or_else(refused)?;
+        *sk = unsolved.clone();
+        for i in 1..=FOLD_RETRY_STEPS {
+            let share = i as f64 / FOLD_RETRY_STEPS as f64;
+            let value = if i == FOLD_RETRY_STEPS {
+                new
+            } else {
+                old + (new - old) * share
+            };
+            sk.set_constraint_value(id, value).map_err(err)?;
+            let report = sk.solve();
+            let ok = status_ok(&report);
+            self.last_report = Some(report);
+            if !ok {
+                return Err(refused());
+            }
+        }
+        if folded_over(unsolved, sk) {
+            return Err(refused());
+        }
+        Ok(())
     }
 
     /// Zahl oder Formel `text` für das bestehende Maß `id` des Entwurfs `sf`: auswerten mit den

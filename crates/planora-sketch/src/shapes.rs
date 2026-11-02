@@ -11,7 +11,7 @@
 use crate::constraint::{ConstraintKind, LineOrPoints};
 use crate::error::SketchError;
 use crate::helpers::RectIds;
-use crate::model::{CurveId, PointId, Sketch};
+use crate::model::{CurveId, CurveKind, PointId, Sketch};
 use planora_i18n::tr;
 use planora_math::{DVec2, PI, TAU};
 
@@ -392,6 +392,33 @@ pub fn arc_slot(axis: ArcPlan, width_at: DVec2, tol: f64) -> Option<ArcSlotPlan>
     Some(ArcSlotPlan {
         axis,
         half_width: h,
+    })
+}
+
+/// Richtung, die sich beim Umklappen einer Kurve umkehrt: bei der Linie von `a` nach `b`, beim
+/// Bogen von der Mitte zum Start. Andere Kurven haben keine.
+fn fold_direction(sk: &Sketch, kind: &CurveKind) -> Option<DVec2> {
+    let (from, to) = match *kind {
+        CurveKind::Line { a, b } => (a, b),
+        CurveKind::Arc { center, start, .. } => (center, start),
+        _ => return None,
+    };
+    Some(sk.point_xy(to).ok()? - sk.point_xy(from).ok()?)
+}
+
+/// Hat ein Maß die Skizze umgeklappt? Wahr, wenn von `before` nach `after` die Richtung einer
+/// lebenden Linie oder der Vektor Mitte→Start eines lebenden Bogens umkehrt (Skalarprodukt < 0). Der
+/// Löser meldet so etwas als gelöst, wenn alle Abhängigkeiten auch in der umgeklappten Lage gelten.
+pub fn folded_over(before: &Sketch, after: &Sketch) -> bool {
+    after.curves().any(|(c, data)| {
+        let old = before.curve(c).filter(|d| d.kind == data.kind);
+        match (
+            old.and_then(|d| fold_direction(before, &d.kind)),
+            fold_direction(after, &data.kind),
+        ) {
+            (Some(was), Some(now)) => was.dot(now) < 0.0,
+            _ => false,
+        }
     })
 }
 
