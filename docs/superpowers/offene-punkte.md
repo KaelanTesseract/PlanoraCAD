@@ -2089,6 +2089,8 @@ Abgeschlossen 2026-11-02, gemergt in 1a8a9a0 (Spec `specs/2026-11-01-skizzen-ein
 
 ## Teilprojekt Skizzen 3
 
+Abgeschlossen 2026-11-02, gemergt in f4cf203. Handtest bei 1920×1080 bestanden, zwei Korrekturen daraus. Offen auf Dennis' Wort: Beim Langloch „gesamt“ die Gesamtlänge als eigenes Maß halten, Prüfung in Teilprojekt 5 bei den neuen Maßen.
+
 Umgesetzt 2026-11-02 auf dem Zweig `feature/skizzen-zeichenvarianten` (Spec `specs/2026-11-02-skizzen-zeichenvarianten-design.md`, Plan `plans/2026-11-02-skizzen-zeichenvarianten.md`): Arten für Rechteck, Kreis und Bogen, Polygon, Langloch, Liste an der Leiste, tangentialer Bogen durch Ziehen im Linienwerkzeug, Mittellinie. Beschreibung in `docs/funktionen.md`, Abschnitt „Skizzen“. Das Dateiformat steigt auf 14, aber nur für Skizzen mit Mittellinie; alle anderen Dateien werden bytegleich wie bisher geschrieben. Der Handtest bei 1920×1080 steht noch aus.
 
 **Abweichungen von Fusion**
