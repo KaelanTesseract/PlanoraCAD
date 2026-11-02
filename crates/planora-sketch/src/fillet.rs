@@ -10,12 +10,18 @@
 //! werden bis zum Berührpunkt verlängert (ihr nahes Ende wandert).
 //!
 //! **Fase** (`chamfer_plan`): nur Linien, drei Arten.
+//!
+//! **Anlegen** (`add_fillet`, `add_chamfer`): atomar, die Punkte kommen bitgleich aus dem Plan.
+//! Die Enden der Vorlage wandern auf die Berührpunkte wie beim Stutzen; es bleibt, was danach
+//! ohne Bewegung erfüllt ist. Reihenfolge immer: Kurven, Tangenten, Ecke, Maß.
 
-use crate::constraint::ConstraintKind;
+use crate::constraint::{ConstraintId, ConstraintKind};
+use crate::error::SketchError;
 use crate::geom::Geom;
 use crate::intersect::intersect;
 use crate::model::{CurveId, CurveKind, PointId, Sketch};
 use crate::shapes::ArcPlan;
+use planora_i18n::tr;
 use planora_math::{DVec2, PI, TAU};
 
 /// Sinus des Winkels, unter dem zwei Richtungen als parallel (oder tangential) gelten.
@@ -78,6 +84,35 @@ pub struct ChamferPlan {
     pub corner: Option<PointId>,
     pub corner_at: DVec2,
     pub kind: ChamferKind,
+}
+
+/// Was [`Sketch::add_fillet`] angelegt hat.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FilletIds {
+    pub arc: CurveId,
+    pub center: PointId,
+    /// Berührpunkte; `touch[i]` gehört zu `picks[i]` des Plans.
+    pub touch: [PointId; 2],
+    /// Die alte Ecke, wenn sie bleibt.
+    pub corner: Option<PointId>,
+    /// Die Konstruktionslinie an einer Kurve, die ganz bleibt. Bleiben beide ganz, gibt es zwei
+    /// Linien, hier steht die der ersten.
+    pub helper: Option<CurveId>,
+    /// Das Radiusmaß; `None` bei einer weiteren Rundung mit `Equal`.
+    pub radius_dim: Option<ConstraintId>,
+}
+
+/// Was [`Sketch::add_chamfer`] angelegt hat.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChamferIds {
+    pub line: CurveId,
+    /// Enden der Fase; `touch[i]` gehört zu `picks[i]` des Plans.
+    pub touch: [PointId; 2],
+    pub corner: PointId,
+    /// Konstruktionslinien Ecke–Ende (nur bei gleichem Abstand).
+    pub helpers: Option<[CurveId; 2]>,
+    /// Die Maße in der Reihenfolge der Art.
+    pub dims: Vec<ConstraintId>,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -659,6 +694,234 @@ impl Sketch {
             corner: corner.shared,
             corner_at: corner.at,
             kind,
+        })
+    }
+
+    /// Hängt das Ende `from` der Linie, des Bogens oder des Ellipsenbogens `c` auf `to` um.
+    /// Ein Plan, der nicht mehr zur Skizze passt, ergibt einen Fehler.
+    fn rehang_end(&mut self, c: CurveId, from: PointId, to: PointId) -> Result<(), SketchError> {
+        self.check_curve(c)?;
+        let swap = |p: PointId| if p == from { to } else { p };
+        let kind = match self.curves[c].kind.clone() {
+            CurveKind::Line { a, b } if a == from || b == from => CurveKind::Line {
+                a: swap(a),
+                b: swap(b),
+            },
+            CurveKind::Arc { center, start, end } if start == from || end == from => {
+                CurveKind::Arc {
+                    center,
+                    start: swap(start),
+                    end: swap(end),
+                }
+            }
+            CurveKind::EllipticArc {
+                center,
+                ax,
+                ay,
+                minor,
+                start,
+                end,
+            } if start == from || end == from => CurveKind::EllipticArc {
+                center,
+                ax,
+                ay,
+                minor,
+                start: swap(start),
+                end: swap(end),
+            },
+            _ => return Err(SketchError::UnknownObject),
+        };
+        self.set_curve_kind(c, kind);
+        Ok(())
+    }
+
+    fn fillet_helper_line(&mut self, a: PointId, b: PointId) -> Result<CurveId, SketchError> {
+        let line = self.add_line(a, b)?;
+        self.set_construction(line, true)?;
+        Ok(line)
+    }
+
+    /// Die Ecke `p` bleibt als Konstruktionspunkt auf beiden Kurven.
+    fn hold_corner(&mut self, p: PointId, curves: [CurveId; 2]) -> Result<(), SketchError> {
+        self.points[p].construction = true;
+        for c in curves {
+            self.add_constraint(ConstraintKind::PointOnCurve(p, c))?;
+        }
+        Ok(())
+    }
+
+    /// Bindung der Rundung `arc` (Mitte `m`) an die Kurve `c`, die ganz bleibt, im Berührpunkt
+    /// `t`. Gibt die Hilfslinie zurück, falls es eine braucht.
+    ///
+    /// Linie: tangential ohne gemeinsames Ende, Hilfslinie Mitte–Berührpunkt rechtwinklig.
+    /// Kreis, Bogen: tangential, `t` auf der Verbindung der Mitten. Ellipse, Spline: nur `t` auf
+    /// der Kurve, denn `Tangent(Bogen, Ellipse)` gibt es nicht.
+    fn bind_whole(
+        &mut self,
+        c: CurveId,
+        arc: CurveId,
+        m: PointId,
+        t: PointId,
+    ) -> Result<Option<CurveId>, SketchError> {
+        Ok(match self.curves[c].kind {
+            CurveKind::Line { .. } => {
+                self.add_constraint(ConstraintKind::Tangent(c, arc))?;
+                let h = self.fillet_helper_line(m, t)?;
+                self.add_constraint(ConstraintKind::Perpendicular(c, h))?;
+                Some(h)
+            }
+            CurveKind::Circle { center, .. } | CurveKind::Arc { center, .. } => {
+                self.add_constraint(ConstraintKind::Tangent(arc, c))?;
+                let h = self.fillet_helper_line(center, m)?;
+                self.add_constraint(ConstraintKind::PointOnCurve(t, h))?;
+                Some(h)
+            }
+            _ => {
+                self.add_constraint(ConstraintKind::PointOnCurve(t, c))?;
+                None
+            }
+        })
+    }
+
+    /// Legt die Rundung aus `plan` an (Entscheidung 1 und 2 des Plans): Bogen mit eigener Mitte
+    /// und eigenen Berührpunkten, Abhängigkeiten je nach Kurve und das Radiusmaß. Mit `equal_to`
+    /// statt des Maßes `Equal` zu diesem Bogen; `plan` muss dann mit dessen Radius gerechnet
+    /// sein, sonst bewegt das nächste Lösen die Skizze. Bei einem Fehler bleibt die Skizze
+    /// unverändert.
+    pub fn add_fillet(
+        &mut self,
+        plan: &FilletPlan,
+        equal_to: Option<CurveId>,
+    ) -> Result<FilletIds, SketchError> {
+        self.atomically(|s| {
+            let curves = plan.picks.map(|p| p.curve);
+            for c in curves {
+                s.check_curve(c)?;
+            }
+            let touch = [
+                s.add_point(plan.touch[0].x, plan.touch[0].y)?,
+                s.add_point(plan.touch[1].x, plan.touch[1].y)?,
+            ];
+            let center = s.add_point(plan.arc.center.x, plan.arc.center.y)?;
+            let first = usize::from(plan.arc.start != plan.touch[0]);
+            let arc = s.add_arc(center, touch[first], touch[1 - first])?;
+
+            let mut touched = Vec::new();
+            let mut moved = Vec::new();
+            for i in 0..2 {
+                if let EndMove::Replace(p) = plan.moves[i] {
+                    s.rehang_end(curves[i], p, touch[i])?;
+                    touched.push(curves[i]);
+                    moved.push(p);
+                }
+            }
+            s.settle_constraints(&touched, &[]);
+
+            let mut helper = None;
+            for i in 0..2 {
+                let elliptic = matches!(s.curves[curves[i]].kind, CurveKind::EllipticArc { .. });
+                match plan.moves[i] {
+                    // Ein Ellipsenbogen hält sein neues Ende selbst auf der Ellipse.
+                    EndMove::Replace(_) if elliptic => {}
+                    EndMove::Replace(_) => {
+                        s.add_constraint(ConstraintKind::Tangent(curves[i], arc))?;
+                    }
+                    EndMove::Whole => {
+                        let h = s.bind_whole(curves[i], arc, center, touch[i])?;
+                        helper = helper.or(h);
+                    }
+                }
+            }
+
+            // Hängt nach dem Umhängen noch etwas an der Ecke, bleibt sie; sonst entfällt sie
+            // mit den übrigen verwaisten Enden. Ohne Umhängen ist sie weiter das Ende beider.
+            let corner = plan.corner.filter(|p| {
+                !moved.contains(p)
+                    || s.curves().any(|(_, d)| d.kind.points().contains(p))
+                    || s.constraints().any(|(_, d)| d.kind.points().contains(p))
+            });
+            if let Some(p) = corner
+                && moved.contains(&p)
+            {
+                s.hold_corner(p, curves)?;
+            } else {
+                s.drop_orphans(&moved)?;
+            }
+
+            let radius_dim = match equal_to {
+                Some(f0) => {
+                    s.add_constraint(ConstraintKind::Equal(f0, arc))?;
+                    None
+                }
+                None => Some(s.add_constraint(ConstraintKind::Radius(arc, plan.radius))?),
+            };
+            Ok(FilletIds {
+                arc,
+                center,
+                touch,
+                corner,
+                helper,
+                radius_dim,
+            })
+        })
+    }
+
+    /// Legt die Fase aus `plan` an (Entscheidung 9 des Plans): Linie zwischen den Enden, die
+    /// Ecke bleibt immer als Konstruktionspunkt auf beiden Linien, weil die Maße von ihr aus
+    /// zählen. Den Winkel misst sie aus der Lage. Bei einem Fehler bleibt die Skizze unverändert.
+    pub fn add_chamfer(&mut self, plan: &ChamferPlan) -> Result<ChamferIds, SketchError> {
+        self.atomically(|s| {
+            let curves = plan.picks.map(|p| p.curve);
+            for c in curves {
+                s.check_curve(c)?;
+            }
+            let touch = [
+                s.add_point(plan.touch[0].x, plan.touch[0].y)?,
+                s.add_point(plan.touch[1].x, plan.touch[1].y)?,
+            ];
+            let line = s.add_line(touch[0], touch[1])?;
+            for i in 0..2 {
+                s.rehang_end(curves[i], plan.moves[i], touch[i])?;
+            }
+            s.settle_constraints(&curves, &[]);
+
+            let corner = match plan.corner {
+                Some(p) => p,
+                None => s.add_point(plan.corner_at.x, plan.corner_at.y)?,
+            };
+            s.hold_corner(corner, curves)?;
+            let orphans: Vec<PointId> = plan.moves.into_iter().filter(|p| *p != corner).collect();
+            s.drop_orphans(&orphans)?;
+
+            let mut helpers = None;
+            let mut dims = Vec::new();
+            match plan.kind {
+                ChamferKind::Equal(d) => {
+                    let h1 = s.fillet_helper_line(corner, touch[0])?;
+                    let h2 = s.fillet_helper_line(corner, touch[1])?;
+                    s.add_constraint(ConstraintKind::Equal(h1, h2))?;
+                    helpers = Some([h1, h2]);
+                    dims.push(s.add_constraint(ConstraintKind::Distance(corner, touch[0], d))?);
+                }
+                ChamferKind::TwoDistances(d1, d2) => {
+                    dims.push(s.add_constraint(ConstraintKind::Distance(corner, touch[0], d1))?);
+                    dims.push(s.add_constraint(ConstraintKind::Distance(corner, touch[1], d2))?);
+                }
+                ChamferKind::DistanceAngle(d, _) => {
+                    dims.push(s.add_constraint(ConstraintKind::Distance(corner, touch[0], d))?);
+                    let value = s
+                        .measure(&ConstraintKind::Angle(curves[0], line, 0.0))
+                        .ok_or_else(|| SketchError::Degenerate(tr!("sketch-err-line-zero")))?;
+                    dims.push(s.add_constraint(ConstraintKind::Angle(curves[0], line, value))?);
+                }
+            }
+            Ok(ChamferIds {
+                line,
+                touch,
+                corner,
+                helpers,
+                dims,
+            })
         })
     }
 

@@ -695,7 +695,7 @@ impl Sketch {
 
     /// Entfernt die Punkte aus `points`, die keine lebende Kurve mehr benutzt (samt ihren
     /// Abhängigkeiten).
-    fn drop_orphans(&mut self, points: &[PointId]) -> Result<(), SketchError> {
+    pub(crate) fn drop_orphans(&mut self, points: &[PointId]) -> Result<(), SketchError> {
         let used: HashSet<PointId> = self.curves().flat_map(|(_, d)| d.kind.points()).collect();
         for &p in points {
             if !used.contains(&p) && self.check_point(p).is_ok() {
