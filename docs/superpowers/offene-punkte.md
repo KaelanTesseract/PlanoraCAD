@@ -2055,8 +2055,9 @@ Stand 2026-11-01 (Spec `specs/2026-11-01-skizzen-eingabe-design.md`, Plan `plans
 - Als Vorbild für parallel und rechtwinklig zählt jede lebende Linie außer der laufenden Kette, nicht bevorzugt die zuletzt überfahrene; das Zeichen zeigt sie.
 - Der Winkel einer Kettenlinie zählt von der vorigen Linie in Vorwärtsrichtung (90 = rechtwinklig, 30 = 30° Knick), sonst von der x-Achse der Skizze. Er liegt zwischen 0 und 180°, die Zeigerseite bestimmt das Vorzeichen.
 - Der Ursprung gilt wie ein Punkt, der mit dem Ursprungspunkt deckungsgleich ist.
-- Das Raster fängt nur, wenn es sichtbar ist; Raster aus bedeutet kein Rasterfang. Die Fangstufe ist die sichtbare Stufe (fein, ab einem Übergang die zehnfache).
+- Das Raster fängt nur, wenn es sichtbar ist; Raster aus bedeutet kein Rasterfang. Die Fangstufe ist die feine Stufe, deren Linien im Skizzenraster immer schwach zu sehen bleiben (Handtest: Mit der zehnfachen Stufe sprang der Zeiger bis zu 75 Bildpunkte weit); nur ein ausgedünntes Raster in stark geneigter Ansicht rastet gröber.
 - Der Kreisrand bindet nur, wenn dort ein vorhandener Punkt gefangen wird; sonst entsteht keine Abhängigkeit.
+- Eine neue Linie, die am Endpunkt einer vorhandenen Linie beginnt, ohne zu deren Kette zu gehören, misst ihren Winkel von der x-Achse. Fusion misst dort vermutlich von der vorhandenen Linie; das ist nicht geprüft.
 - Bögen und Ellipsen am Rand werden als Ganzes verschoben (nur der Kreis ändert den Radius).
 - „Blick auf“ ändert nur Richtung und Ziel, der Zoom bleibt.
 - Die Feldnamen stehen sichtbar neben dem Feld; ob Fusion sie zeigt, ist nicht geprüft.
@@ -2081,3 +2082,7 @@ Stand 2026-11-01 (Spec `specs/2026-11-01-skizzen-eingabe-design.md`, Plan `plans
 - Richtungsvorbild auf die zuletzt überfahrenen Linien einschränken, wenn es in der Praxis zu viele Treffer gibt.
 - Mehr Prüfungen: Mittelpunkt auf Bogen und Ellipsenbogen, Fang auf Splines, doppelte Schnittpunkte, Klick auf eigene Mitte mit Strg als Ausweg.
 - Aufräumen: ein gemeinsames Prüfstück für „Ziehen beginnen“ und „freie Fläche“; Meldungsende beim Ziehen (Punkt am Ende).
+
+**Handtest 2026-11-02** (1920×1080): Felder, Fang, Strg, Lot, parallel, tangential, Ausrichtungslinien, Rahmen, Kette, Kurve ziehen, Blick auf, Schalter und Rückgängig laufen. Drei Korrekturen daraus: Richtung bei festgehaltener Länge folgt dem Zeiger, Raster fängt auf der feinen Stufe, die Achse zum Betrachter entfällt im Skizzenmodus. Nicht von Hand geprüft: Öffnen einer alten Datei (Format unverändert, automatische Tests decken es ab).
+
+**Wackeliger Test:** `settings_window::a_favorite_added_in_the_settings_chooser_is_written_to_the_config_file` schlägt unter hoher Last selten fehl (4 von 120 Läufen). Der Zweig hat die zugehörigen Dateien nicht geändert. Vermutung, nicht bewiesen: Die Laufwerkssuche im Hintergrund verschiebt die Liste, während das Kontextmenü aufgeht.
