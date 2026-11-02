@@ -1468,7 +1468,7 @@ impl SketchSession {
                 // Ein getippter Winkel gilt nur bis auf 180° (wie bei `set_dimension_value`).
                 if value.is_some()
                     && matches!(kind, ConstraintKind::Angle(..))
-                    && !(v > 0.0 && v < std::f64::consts::PI)
+                    && !(0.0..=std::f64::consts::PI).contains(&v)
                 {
                     return Err(crate::msg!("sketch-angle-range"));
                 }
@@ -1544,10 +1544,10 @@ impl SketchSession {
                 .map(|c| c.kind.clone())
                 .ok_or_else(|| crate::msg!("sketch-constraint-missing"))?;
             checked_value(sk, &kind, value)?;
-            // Ein Winkelmaß gilt nur bis auf 180°: Darüber zeigte es einen Wert, den die Form nicht
+            // Ein Winkelmaß gilt nur von 0° bis 180°: Darüber zeigte es einen Wert, den die Form nicht
             // hat. Unverändert bestätigen geht immer (ein getippter Öffnungswinkel darf größer sein).
             if matches!(kind, ConstraintKind::Angle(_, _, v) if v != value)
-                && !(value > 0.0 && value < std::f64::consts::PI)
+                && !(0.0..=std::f64::consts::PI).contains(&value)
             {
                 return Err(crate::msg!("sketch-angle-range"));
             }

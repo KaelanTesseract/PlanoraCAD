@@ -860,7 +860,7 @@ fn a_sketch_on_a_body_face_is_extruded_on_that_face() {
 }
 
 #[test]
-fn a_new_angle_dimension_outside_0_to_180_is_refused() {
+fn a_new_angle_dimension_below_0_or_above_180_is_refused() {
     let (mut sk, mut se) = setup();
     let p: Vec<_> = [(0.0, 0.0), (10.0, 0.0), (0.0, 0.0), (0.0, 10.0)]
         .iter()
@@ -870,7 +870,7 @@ fn a_new_angle_dimension_outside_0_to_180_is_refused() {
     let l2 = sk.add_line(p[2], p[3]).unwrap();
     se.selection = vec![Item::Curve(l1), Item::Curve(l2)];
     let before = (sk.variables().to_vec(), sk.constraints().count());
-    for deg in [200.0f64, 270.0, 180.0, 0.0] {
+    for deg in [200.0f64, 270.0, 300.0, -10.0] {
         let err = se
             .apply(&mut sk, ConstraintAction::Angle, Some(deg.to_radians()))
             .unwrap_err();

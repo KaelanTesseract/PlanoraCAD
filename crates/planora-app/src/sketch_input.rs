@@ -199,7 +199,7 @@ fn read_field(
         FieldKind::Sides if !(3.0..=64.0).contains(&v) || v.fract() != 0.0 => {
             Err(tr!("sketch-field-sides-range"))
         }
-        FieldKind::Angle if !(v > 0.0 && v < 180.0) => Err(tr!("sketch-field-angle-range")),
+        FieldKind::Angle if !(0.0..=180.0).contains(&v) => Err(tr!("sketch-field-angle-range")),
         FieldKind::Sweep if !(v > 0.0 && v < 360.0) => Err(tr!("sketch-field-sweep-range")),
         FieldKind::Angle | FieldKind::Sweep => Ok(Some(v.to_radians())),
         _ if !v.is_finite() || v <= 0.0 => Err(tr!("sketch-field-positive")),

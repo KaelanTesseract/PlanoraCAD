@@ -1349,13 +1349,19 @@ fn a_sweep_dimension_outside_0_to_180_is_refused_and_150_goes_through() {
     let ids = arc_slot_ids(sk(&w));
     let sweep = dim_id(sk(&w), |k| matches!(k, K::Angle(..)));
     let before = bits(sk(&w));
-    for text in ["180", "200", "270", "300", "0", "-30"] {
+    for text in ["200", "270", "300", "-10"] {
         let refused = set(&mut w, sweep, text).unwrap_err();
         assert_eq!(refused, t("sketch-angle-range"), "{text}");
         assert_eq!(
             parts(&mut w).0.message_text().as_deref(),
             Some(t("sketch-angle-range").as_str())
         );
+        assert_eq!(bits(sk(&w)), before, "{text}");
+    }
+    // Genau 180° und 0° gehen zum Löser; erreicht er sie nicht, lehnt der Widerspruchsweg ab.
+    for text in ["180", "0"] {
+        let refused = set(&mut w, sweep, text).unwrap_err();
+        assert_ne!(refused, t("sketch-angle-range"), "{text}");
         assert_eq!(bits(sk(&w)), before, "{text}");
     }
     set(&mut w, sweep, "150").unwrap();
