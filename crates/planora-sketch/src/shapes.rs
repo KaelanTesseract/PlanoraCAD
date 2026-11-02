@@ -395,28 +395,30 @@ pub fn arc_slot(axis: ArcPlan, width_at: DVec2, tol: f64) -> Option<ArcSlotPlan>
     })
 }
 
-/// Richtung, die sich beim Umklappen einer Kurve umkehrt: bei der Linie von `a` nach `b`, beim
-/// Bogen von der Mitte zum Start. Andere Kurven haben keine.
-fn fold_direction(sk: &Sketch, kind: &CurveKind) -> Option<DVec2> {
-    let (from, to) = match *kind {
-        CurveKind::Line { a, b } => (a, b),
-        CurveKind::Arc { center, start, .. } => (center, start),
-        _ => return None,
-    };
-    Some(sk.point_xy(to).ok()? - sk.point_xy(from).ok()?)
+/// Kehrt der Vektor `from`→`to` von `before` nach `after` um (Skalarprodukt < 0)?
+fn reversed(before: &Sketch, after: &Sketch, from: PointId, to: PointId) -> bool {
+    let vector = |sk: &Sketch| Some(sk.point_xy(to).ok()? - sk.point_xy(from).ok()?);
+    match (vector(before), vector(after)) {
+        (Some(was), Some(now)) => was.dot(now) < 0.0,
+        _ => false,
+    }
 }
 
 /// Hat ein Maß die Skizze umgeklappt? Wahr, wenn von `before` nach `after` die Richtung einer
-/// lebenden Linie oder der Vektor Mitte→Start eines lebenden Bogens umkehrt (Skalarprodukt < 0). Der
-/// Löser meldet so etwas als gelöst, wenn alle Abhängigkeiten auch in der umgeklappten Lage gelten.
+/// lebenden Linie umkehrt oder bei einem lebenden Bogen die Vektoren Mitte→Start und Mitte→Ende
+/// beide. Der Löser meldet so etwas als gelöst, wenn alle Abhängigkeiten auch in der umgeklappten
+/// Lage gelten. Beim Bogen reicht ein Ende nicht: Läuft der Anschluss eines tangentialen Bogens an
+/// seinem freien Ende vorbei, dreht dessen Vektor über 90°, und die Richtung stimmt trotzdem.
 pub fn folded_over(before: &Sketch, after: &Sketch) -> bool {
     after.curves().any(|(c, data)| {
-        let old = before.curve(c).filter(|d| d.kind == data.kind);
-        match (
-            old.and_then(|d| fold_direction(before, &d.kind)),
-            fold_direction(after, &data.kind),
-        ) {
-            (Some(was), Some(now)) => was.dot(now) < 0.0,
+        if before.curve(c).is_none_or(|d| d.kind != data.kind) {
+            return false;
+        }
+        match data.kind {
+            CurveKind::Line { a, b } => reversed(before, after, a, b),
+            CurveKind::Arc { center, start, end } => {
+                reversed(before, after, center, start) && reversed(before, after, center, end)
+            }
             _ => false,
         }
     })

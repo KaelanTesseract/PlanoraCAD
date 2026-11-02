@@ -574,17 +574,23 @@ fn folded_over_sees_a_reversed_line_and_a_reversed_arc_only() {
     // Darüber hinaus ist die Linie umgekehrt; ein Punkt ohne Richtung ist es nicht.
     assert!(folded_over(&s, &moved(b, v(-1.0, 0.0))));
     assert!(!folded_over(&s, &moved(b, v(0.0, 0.0))));
-    // Der Bogen: Vektor Mitte→Start.
+    // Der Bogen: Erst wenn Mitte→Start und Mitte→Ende beide umkehren. Ein Ende allein ist keine
+    // Umkehr (Ruling Task 10): Ein Öffnungswinkel darf wachsen, ein tangentialer Bogen weit drehen.
     assert!(!folded_over(&s, &moved(st, v(1.0, 40.0))));
-    assert!(folded_over(&s, &moved(st, v(-3.0, 20.0))));
-    // Das Ende zählt nicht: Ein Öffnungswinkel darf wachsen.
+    assert!(!folded_over(&s, &moved(st, v(-3.0, 20.0))));
     assert!(!folded_over(&s, &moved(en, v(-5.0, 15.0))));
+    let both_ends = {
+        let mut t = moved(st, v(-3.0, 20.0));
+        t.set_point_xy(en, 0.0, 15.0).unwrap();
+        t
+    };
+    assert!(folded_over(&s, &both_ends));
 
     // Gelöschte Kurven zählen nicht.
     let mut gone = moved(b, v(-1.0, 0.0));
     gone.remove_curve(line).unwrap();
     assert!(!folded_over(&s, &gone));
-    let mut gone = moved(st, v(-3.0, 20.0));
+    let mut gone = both_ends;
     gone.remove_curve(arc).unwrap();
     assert!(!folded_over(&s, &gone));
 }
