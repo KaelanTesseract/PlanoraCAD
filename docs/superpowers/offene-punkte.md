@@ -2033,7 +2033,7 @@ Stand 2026-11-01 (Spec `specs/2026-10-31-skizzen-profile-design.md`, Plan `plans
 
 ## Teilprojekt Skizzen 2
 
-Stand 2026-11-01 (Spec `specs/2026-11-01-skizzen-eingabe-design.md`, Plan `plans/2026-11-01-skizzen-eingabe.md`): Felder am Zeiger mit getippten Maßen, mehr Fang, Ausrichtungslinien, automatische Abhängigkeiten mit Zeichen, Skizzenraster mit Fang, Rahmenauswahl, Kettenauswahl, Ganze Kurven ziehen, „Blick auf“. Beschreibung in `docs/funktionen.md`, Abschnitt „Skizzen“. Das Dateiformat ist unverändert.
+Abgeschlossen 2026-11-02, gemergt in 1a8a9a0 (Spec `specs/2026-11-01-skizzen-eingabe-design.md`, Plan `plans/2026-11-01-skizzen-eingabe.md`): Felder am Zeiger mit getippten Maßen, mehr Fang, Ausrichtungslinien, automatische Abhängigkeiten mit Zeichen, Skizzenraster mit Fang, Rahmenauswahl, Kettenauswahl, Ganze Kurven ziehen, „Blick auf“. Beschreibung in `docs/funktionen.md`, Abschnitt „Skizzen“. Das Dateiformat ist unverändert.
 
 **Abweichungen von Fusion**
 - Die Felder folgen dem Zeiger, nehmen aber keine Mausklicks an, damit sie nie die Zeichnung verdecken. Ihre Namen stehen sichtbar neben dem Feld.
