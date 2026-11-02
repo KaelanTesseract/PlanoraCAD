@@ -1333,7 +1333,12 @@ fn draw_preview(
     };
     let stroke = Stroke::new(1.5, color);
     if se.planned_kind().is_some() {
-        for line in se.kind_preview(sk, cursor).unwrap_or_default() {
+        // Wer Kurven wählt, rechnet mit der Rohlage, wie der Klick auch.
+        let at = match &se.draw_cursor {
+            Some(c) if se.picks_curves() => c.raw,
+            _ => cursor,
+        };
+        for line in se.kind_preview(sk, at).unwrap_or_default() {
             for path in map.paths(&line) {
                 draw_path(painter, path, stroke, true);
             }

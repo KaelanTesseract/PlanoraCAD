@@ -100,7 +100,7 @@ pub struct DrawInput {
 }
 
 impl DrawInput {
-    fn locked(&self, kind: FieldKind) -> Option<f64> {
+    pub(crate) fn locked(&self, kind: FieldKind) -> Option<f64> {
         self.fields
             .iter()
             .find(|f| f.kind == kind)
@@ -122,7 +122,7 @@ pub enum Created {
 }
 
 impl Created {
-    fn undo_label(&self) -> Msg {
+    pub(crate) fn undo_label(&self) -> Msg {
         match self {
             Created::Line(_) => crate::msg!("undo-line"),
             Created::Rectangle(_) => crate::msg!("undo-rectangle"),
@@ -138,6 +138,46 @@ impl Created {
 /// `d` um `angle` gegen den Uhrzeigersinn gedreht.
 fn rotated(d: DVec2, angle: f64) -> DVec2 {
     DVec2::from_angle(angle).rotate(d)
+}
+
+/// Richtung von `from` zum Zeiger, bei gleicher Lage entlang der x-Achse. Das Raster zählt dabei
+/// nicht: Die Richtung liefe sonst in groben Sprüngen von Rasterpunkt zu Rasterpunkt.
+pub(crate) fn toward_pointer(cur: &DrawCursor, from: DVec2) -> DVec2 {
+    let aim = if matches!(cur.snap, crate::sketch_state::Snap::Grid) && cur.autos.is_empty() {
+        cur.raw
+    } else {
+        cur.at
+    };
+    (aim - from)
+        .try_normalize()
+        .or((cur.raw - from).try_normalize())
+        .unwrap_or(DVec2::X)
+}
+
+/// Ende auf dem Strahl ab `from` im Winkel `angle` zu `basis`; der Zeiger wählt die Seite und, ohne
+/// `len`, die Länge.
+pub(crate) fn locked_ray(
+    from: DVec2,
+    basis: DVec2,
+    cur: &DrawCursor,
+    len: Option<f64>,
+    angle: f64,
+) -> DVec2 {
+    let side = if basis.perp_dot(cur.raw - from) < 0.0 {
+        -1.0
+    } else {
+        1.0
+    };
+    let ray = rotated(basis, side * angle);
+    let projected = (cur.raw - from).dot(ray);
+    // Auf der Rückseite des Strahls (stumpfer Winkel) hätte die Linie sonst keine Länge; dann zählt
+    // der Abstand des Zeigers.
+    let free = if projected > 0.0 {
+        projected
+    } else {
+        cur.raw.distance(from)
+    };
+    from + ray * len.unwrap_or(free)
 }
 
 /// Der Wert eines getippten Textes (mm oder Bogenmaß), geprüft; leer ergibt `None`.
@@ -388,19 +428,7 @@ impl SketchSession {
             .pending
             .first()
             .and_then(|&p| sk.point_xy(p).ok().map(|xy| (p, xy)));
-        // Richtung von `from` zum Zeiger, bei gleicher Lage entlang der x-Achse. Das Raster zählt
-        // dabei nicht: Die Richtung liefe sonst in groben Sprüngen von Rasterpunkt zu Rasterpunkt.
-        let aim = if matches!(cur.snap, crate::sketch_state::Snap::Grid) && cur.autos.is_empty() {
-            cur.raw
-        } else {
-            cur.at
-        };
-        let toward = |from: DVec2| {
-            (aim - from)
-                .try_normalize()
-                .or((cur.raw - from).try_normalize())
-                .unwrap_or(DVec2::X)
-        };
+        let toward = |from: DVec2| toward_pointer(cur, from);
         match self.tool {
             Tool::Line => {
                 let (start, from) = first?;
@@ -409,21 +437,7 @@ impl SketchSession {
                     return Some(from + toward(from) * len?);
                 };
                 let basis = basis_direction(sk, self.line_chain, start);
-                let side = if basis.perp_dot(cur.raw - from) < 0.0 {
-                    -1.0
-                } else {
-                    1.0
-                };
-                let ray = rotated(basis, side * angle);
-                let projected = (cur.raw - from).dot(ray);
-                // Auf der Rückseite des Strahls (stumpfer Winkel) hätte die Linie sonst keine
-                // Länge; dann zählt der Abstand des Zeigers.
-                let free = if projected > 0.0 {
-                    projected
-                } else {
-                    cur.raw.distance(from)
-                };
-                Some(from + ray * len.unwrap_or(free))
+                Some(locked_ray(from, basis, cur, len, angle))
             }
             Tool::Rectangle => {
                 let &corner = self.pending_pos.first()?;
@@ -605,24 +619,10 @@ fn dimension_kind(
             let (a, b) = line_ends(sk, *line)?;
             K::Distance(a, b, 0.0)
         }
-        (Created::Line(line), F::Angle) => {
-            let (a, b) = line_ends(sk, *line)?;
-            let (from, to) = (sk.point_xy(a).map_err(err)?, sk.point_xy(b).map_err(err)?);
-            if from.distance(to) <= sk.tolerance().linear {
-                return Err(crate::msg!("sketch-field-positive"));
-            }
-            let (basis, dir) = match chain_basis(sk, chain, a) {
-                Some(found) => found,
-                None => (axis_reference(sk)?, DVec2::X),
-            };
-            if dir.perp_dot(to - from) < 0.0 {
-                K::Angle(*line, basis, 0.0)
-            } else {
-                K::Angle(basis, *line, 0.0)
-            }
-        }
+        (Created::Line(line), F::Angle) => line_angle(sk, *line, chain)?,
         (Created::Rectangle(r), F::Width) => K::Distance(r.points[0], r.points[1], 0.0),
-        (Created::Rectangle(r), F::Height) => K::Distance(r.points[1], r.points[2], 0.0),
+        (Created::Rectangle(r), F::Height | F::Depth) => K::Distance(r.points[1], r.points[2], 0.0),
+        (Created::Rectangle(r), F::Angle) => line_angle(sk, r.lines[0], chain)?,
         (Created::Circle(c), F::Diameter) => K::Diameter(*c, 0.0),
         (Created::Arc(c), F::Radius) => K::Radius(*c, 0.0),
         (Created::Arc(c), F::Sweep) => {
@@ -639,6 +639,28 @@ fn dimension_kind(
         (Created::Ellipse(c), F::MajorAxis) => K::EllipseMajor(*c, 0.0),
         (Created::Ellipse(c), F::MinorAxis) => K::EllipseMinor(*c, 0.0),
         _ => return Err(crate::msg!("sketch-field-rejected")),
+    })
+}
+
+/// Der Winkel der Linie zur vorigen Linie der Kette, sonst zur Achshilfe.
+fn line_angle(
+    sk: &mut Sketch,
+    line: CurveId,
+    chain: Option<CurveId>,
+) -> Result<ConstraintKind, Msg> {
+    let (a, b) = line_ends(sk, line)?;
+    let (from, to) = (sk.point_xy(a).map_err(err)?, sk.point_xy(b).map_err(err)?);
+    if from.distance(to) <= sk.tolerance().linear {
+        return Err(crate::msg!("sketch-field-positive"));
+    }
+    let (basis, dir) = match chain_basis(sk, chain, a) {
+        Some(found) => found,
+        None => (axis_reference(sk)?, DVec2::X),
+    };
+    Ok(if dir.perp_dot(to - from) < 0.0 {
+        ConstraintKind::Angle(line, basis, 0.0)
+    } else {
+        ConstraintKind::Angle(basis, line, 0.0)
     })
 }
 

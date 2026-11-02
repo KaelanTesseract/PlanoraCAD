@@ -3,6 +3,7 @@
 //! ohne Oberfläche; der Fang-Index wird nur neu gebaut, wenn sich die Skizze geändert hat.
 
 use crate::msg::Msg;
+use crate::sketch_kinds::ToolKind;
 use crate::sketch_state::{SketchSession, Tool, err};
 use planora_math::DVec2;
 use planora_sketch::constraint::{ConstraintKind, LineOrPoints};
@@ -297,16 +298,22 @@ impl SketchSession {
     /// [`resolve_cursor`](Self::resolve_cursor) ohne die gesperrten Größen.
     fn resolve_unlocked(&mut self, sk: &Sketch, raw: DVec2, radius: f64) -> DrawCursor {
         let mut cur = DrawCursor::free(raw);
-        if !self.is_drawing_tool() || self.cursor_opts.suppressed || !raw.is_finite() {
+        if !self.is_drawing_tool() || !raw.is_finite() {
             return cur;
         }
-        // Wer Kurven wählt, sieht nur Kurven: kein Punkt davor, keine Hilfslinie, kein Raster.
+        // Wer Kurven wählt, sieht nur Kurven: kein Punkt davor, keine Hilfslinie, kein Raster. Eine
+        // Kurve wählen ist kein Fang, also geht das auch mit Strg.
         if self.picks_curves() {
             if let Some(c) = sk.pick_curve(raw, radius) {
                 cur.at = sk.nearest_on_curve(c, raw).unwrap_or(raw);
                 cur.snap = Snap::Curve(c);
                 cur.snap_at = Some(cur.at);
             }
+            return cur;
+        }
+        // Beim 2-Tangenten-Kreis wählt der letzte Klick nur den Sektor: Fang auf einer der Linien
+        // ergäbe gar keinen.
+        if self.cursor_opts.suppressed || self.planned_kind() == Some(ToolKind::Circle2T) {
             return cur;
         }
         let index = self.current_index(sk);

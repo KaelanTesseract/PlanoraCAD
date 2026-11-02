@@ -7,12 +7,14 @@
 use crate::keymap::Action;
 use crate::msg::Msg;
 use crate::sketch_cursor::DrawCursor;
-use crate::sketch_input::FieldKind;
-use crate::sketch_state::{SketchSession, Snap, Tool};
+use crate::sketch_input::{Created, FieldKind, locked_ray, toward_pointer};
+use crate::sketch_state::{SketchSession, Snap, Tool, err};
 use planora_i18n::tr;
 use planora_math::DVec2;
-use planora_sketch::model::{CurveKind, PointId, Sketch};
-use planora_sketch::shapes::ShapePlan;
+use planora_sketch::constraint::ConstraintKind;
+use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
+use planora_sketch::shapes::{self, ShapePlan};
+use planora_sketch::tangent_circles;
 
 /// Schritte je Vollkreis für die Vorschau einer Form.
 const PREVIEW_STEPS_PER_TURN: usize = 96;
@@ -181,6 +183,18 @@ impl ToolKind {
     pub fn picks_lines_only(self) -> bool {
         self == ToolKind::Circle2T
     }
+
+    /// Die Meldung, wenn aus den Lagen keine Form wird. Die Arten späterer Tasks lehnen noch ab.
+    fn refusal(self) -> Msg {
+        use ToolKind::*;
+        match self {
+            Rect3P | RectCenter => crate::msg!("sketch-err-rect-size"),
+            Circle2P => crate::msg!("sketch-radius-positive"),
+            Circle3P => crate::msg!("sketch-circle-collinear"),
+            Circle2T | Circle3T => crate::msg!("sketch-tangent-no-solution"),
+            _ => crate::msg!("sketch-kind-pending"),
+        }
+    }
 }
 
 /// Je Form die zuletzt gewählte Art (gilt für die Sitzung).
@@ -217,6 +231,20 @@ impl ToolKinds {
             _ => {}
         }
     }
+}
+
+/// Taugt die Kurve für diese Art? Sonst die Meldung dazu.
+fn check_pick(sk: &Sketch, kind: ToolKind, c: CurveId) -> Result<(), Msg> {
+    let is_line = sk
+        .curve(c)
+        .is_some_and(|d| matches!(d.kind, CurveKind::Line { .. }));
+    if kind.picks_lines_only() && !is_line {
+        return Err(crate::msg!("sketch-tangent-lines-only"));
+    }
+    if !tangent_circles::is_tangent_candidate(sk, c) {
+        return Err(crate::msg!("sketch-tangent-kinds"));
+    }
+    Ok(())
 }
 
 impl SketchSession {
@@ -282,58 +310,249 @@ impl SketchSession {
             return self.finish_kind(sk, kind, cur, prior);
         }
         if self.picks_curves() {
-            self.pick_curve(sk, kind, cur);
-        } else {
-            self.pending_pos.push(cur.at);
-            self.pending_snaps.push(cur.remember(sk.tolerance().linear));
+            return self.pick_curve(sk, kind, cur);
+        }
+        let tol = sk.tolerance().linear;
+        if self.pending_pos.iter().any(|p| p.distance(cur.at) <= tol) {
+            return Err(kind.refusal());
+        }
+        self.pending_pos.push(cur.at);
+        self.pending_snaps.push(cur.remember(tol));
+        Ok(())
+    }
+
+    /// Nimmt die Kurve unter dem Zeiger: ohne Kurve oder bei einer schon gewählten passiert nichts,
+    /// eine unpassende Art ergibt eine Meldung.
+    fn pick_curve(&mut self, sk: &Sketch, kind: ToolKind, cur: &DrawCursor) -> Result<(), Msg> {
+        let Snap::Curve(c) = cur.snap else {
+            return Ok(());
+        };
+        check_pick(sk, kind, c)?;
+        if !self.pending_curves.contains(&c) {
+            self.pending_curves.push(c);
         }
         Ok(())
     }
 
-    /// Nimmt die Kurve unter dem Zeiger; ohne passende Kurve passiert nichts.
-    fn pick_curve(&mut self, sk: &Sketch, kind: ToolKind, cur: &DrawCursor) {
-        let Snap::Curve(c) = cur.snap else {
-            return;
-        };
-        let is_line = sk
-            .curve(c)
-            .is_some_and(|d| matches!(d.kind, CurveKind::Line { .. }));
-        if (is_line || !kind.picks_lines_only()) && !self.pending_curves.contains(&c) {
-            self.pending_curves.push(c);
-        }
-    }
-
     /// Legt die Form in einem Zug an, bindet und löst, setzt `created` und `edit_label` und ruft
-    /// `clear_pending`. Die Arten füllen spätere Tasks; bis dahin lehnt es ab.
+    /// `clear_pending`. Wird aus den Lagen keine Form, bleibt alles bis auf die Meldung, wie es war.
     fn finish_kind(
         &mut self,
-        _sk: &mut Sketch,
-        _kind: ToolKind,
-        _cur: &DrawCursor,
-        _prior: &Sketch,
+        sk: &mut Sketch,
+        kind: ToolKind,
+        cur: &DrawCursor,
+        prior: &Sketch,
     ) -> Result<(), Msg> {
-        Err(crate::msg!("sketch-kind-pending"))
+        // Beim letzten Klick von `3 tangential` zählt die Kurve unter dem Zeiger.
+        let third = match (kind, cur.snap) {
+            (ToolKind::Circle3T, Snap::Curve(c)) if !self.pending_curves.contains(&c) => {
+                check_pick(sk, kind, c)?;
+                Some(c)
+            }
+            (ToolKind::Circle3T, _) => return Ok(()),
+            _ => None,
+        };
+        let at = if third.is_some() { cur.raw } else { cur.at };
+        let plan = self
+            .plan_with(sk, kind, at, third)
+            .ok_or_else(|| kind.refusal())?;
+        let mut hits: Vec<DrawCursor> = self
+            .pending_snaps
+            .iter()
+            .map(|&hit| DrawCursor::remembered(hit, sk))
+            .collect();
+        hits.push(cur.clone());
+        let created = match (kind, plan) {
+            (ToolKind::Rect3P, ShapePlan::Quad(corners)) => {
+                let rect = sk.add_rect_three_point(corners).map_err(err)?;
+                self.bind_own(sk, &rect.points, &hits)?;
+                self.solve_checked(sk, prior)?;
+                Created::Rectangle(rect)
+            }
+            (ToolKind::RectCenter, ShapePlan::Quad(_)) => {
+                let ids = sk.add_rect_center(self.pending_pos[0], at).map_err(err)?;
+                let mut own = vec![ids.center];
+                own.extend(ids.rect.points);
+                self.bind_own(sk, &own, &hits)?;
+                self.solve_checked(sk, prior)?;
+                Created::Rectangle(ids.rect)
+            }
+            (ToolKind::Circle2T | ToolKind::Circle3T, ShapePlan::Circle(m, r)) => {
+                let mut curves = self.pending_curves.clone();
+                curves.extend(third);
+                Created::Circle(self.add_tangent_circle(sk, m, r, &curves, prior)?)
+            }
+            (_, ShapePlan::Circle(m, r)) => {
+                let center = sk.add_point(m.x, m.y).map_err(err)?;
+                let circle = sk.add_circle(center, r).map_err(err)?;
+                for hit in &hits {
+                    self.bind_rim(sk, circle, hit)?;
+                }
+                self.solve_checked(sk, prior)?;
+                Created::Circle(circle)
+            }
+            _ => return Err(kind.refusal()),
+        };
+        self.edit_label = Some(created.undo_label());
+        self.created = Some(created);
+        self.clear_pending();
+        Ok(())
+    }
+
+    /// Kreis exakt an der gerechneten Lage, dann die Tangenten. Wandert seine Mitte beim Lösen, wäre
+    /// es eine andere Lösung als die Vorschau: abgelehnt.
+    fn add_tangent_circle(
+        &mut self,
+        sk: &mut Sketch,
+        m: DVec2,
+        r: f64,
+        curves: &[CurveId],
+        prior: &Sketch,
+    ) -> Result<CurveId, Msg> {
+        let center = sk.add_point(m.x, m.y).map_err(err)?;
+        let circle = sk.add_circle(center, r).map_err(err)?;
+        for &c in curves {
+            sk.add_constraint(ConstraintKind::Tangent(c, circle))
+                .map_err(err)?;
+        }
+        let refused = || ToolKind::Circle3T.refusal();
+        self.solve_checked(sk, prior).map_err(|_| refused())?;
+        let moved = sk.point_xy(center).map_err(err)?.distance(m);
+        if moved > 10.0 * sk.tolerance().linear {
+            return Err(refused());
+        }
+        Ok(circle)
     }
 
     /// Der Plan der laufenden Form mit dem Zeiger an `at`; `None`, solange (oder wenn) daraus keine
-    /// Form wird.
-    pub fn kind_plan(&self, _sk: &Sketch, _at: DVec2) -> Option<ShapePlan> {
-        None
+    /// Form wird. Beim letzten Klick von `3 tangential` ist `at` die Rohlage, die dritte Kurve steht
+    /// im Zeiger dieses Bilds ([`update_cursor`](Self::update_cursor)).
+    pub fn kind_plan(&self, sk: &Sketch, at: DVec2) -> Option<ShapePlan> {
+        let third = self.draw_cursor.as_ref().and_then(|c| match c.snap {
+            Snap::Curve(curve) => Some(curve),
+            _ => None,
+        });
+        self.plan_with(sk, self.planned_kind()?, at, third)
     }
 
-    /// Vorschau der laufenden Form, aus demselben Plan wie das Ergebnis.
+    /// Dieselbe Rechnung für Vorschau und Klick.
+    fn plan_with(
+        &self,
+        sk: &Sketch,
+        kind: ToolKind,
+        at: DVec2,
+        third: Option<CurveId>,
+    ) -> Option<ShapePlan> {
+        let tol = sk.tolerance().linear;
+        let circle = |(m, r)| ShapePlan::Circle(m, r);
+        match (
+            kind,
+            self.pending_pos.as_slice(),
+            self.pending_curves.as_slice(),
+        ) {
+            (ToolKind::Rect3P, &[a, b], _) => {
+                shapes::rect_three_point(a, b, at, tol).map(ShapePlan::Quad)
+            }
+            (ToolKind::RectCenter, &[center], _) => {
+                shapes::rect_center(center, at, tol).map(ShapePlan::Quad)
+            }
+            (ToolKind::Circle2P, &[a], _) => {
+                let r = a.distance(at) / 2.0;
+                (r > tol && r.is_finite()).then(|| ShapePlan::Circle((a + at) / 2.0, r))
+            }
+            (ToolKind::Circle3P, &[a, b], _) => shapes::circle_through(a, b, at, tol).map(circle),
+            (ToolKind::Circle2T, _, &[l0, l1]) => {
+                let diameter = self.input.locked(FieldKind::Diameter);
+                tangent_circles::tangent_circle_two_lines(sk, l0, l1, at, diameter).map(circle)
+            }
+            (ToolKind::Circle3T, _, &[c0, c1]) => {
+                tangent_circles::tangent_circle_three(sk, [c0, c1, third?], at).map(circle)
+            }
+            _ => None,
+        }
+    }
+
+    /// Vorschau der laufenden Form, aus demselben Plan wie das Ergebnis. Vor dem Plan zeigen
+    /// `Rect3P` und `Circle3P` die Linie zum Zeiger.
     pub fn kind_preview(&self, sk: &Sketch, at: DVec2) -> Option<Vec<Vec<DVec2>>> {
+        if let (Some(ToolKind::Rect3P | ToolKind::Circle3P), &[from]) =
+            (self.planned_kind(), self.pending_pos.as_slice())
+        {
+            return (from.distance(at) > sk.tolerance().linear).then(|| vec![vec![from, at]]);
+        }
         Some(self.kind_plan(sk, at)?.outline(PREVIEW_STEPS_PER_TURN))
     }
 
     /// Lage mit den gesperrten Größen der laufenden Form; `None` ohne Sperre.
-    pub(crate) fn kind_locked_position(&self, _sk: &Sketch, _cur: &DrawCursor) -> Option<DVec2> {
-        None
+    pub(crate) fn kind_locked_position(&self, sk: &Sketch, cur: &DrawCursor) -> Option<DVec2> {
+        use FieldKind as F;
+        let locked = |kind| self.input.locked(kind);
+        match (self.planned_kind()?, self.pending_pos.as_slice()) {
+            (ToolKind::Rect3P, &[from]) => {
+                let len = locked(F::Width);
+                match locked(F::Angle) {
+                    Some(angle) => Some(locked_ray(from, DVec2::X, cur, len, angle)),
+                    None => Some(from + toward_pointer(cur, from) * len?),
+                }
+            }
+            (ToolKind::Rect3P, &[a, b]) => {
+                let depth = locked(F::Depth)?;
+                let normal = (b - a).try_normalize()?.perp();
+                let side = normal.dot(cur.raw - a).signum();
+                Some(cur.at + normal * (side * depth - normal.dot(cur.at - a)))
+            }
+            (ToolKind::RectCenter, &[center]) => {
+                let (w, h) = (locked(F::Width), locked(F::Height));
+                if w.is_none() && h.is_none() {
+                    return None;
+                }
+                let size = cur.at - center;
+                Some(DVec2::new(
+                    w.map_or(cur.at.x, |w| center.x + size.x.signum() * w / 2.0),
+                    h.map_or(cur.at.y, |h| center.y + size.y.signum() * h / 2.0),
+                ))
+            }
+            (ToolKind::Circle2P, &[from]) => {
+                Some(from + toward_pointer(cur, from) * locked(F::Diameter)?)
+            }
+            (ToolKind::Circle2T, _) => {
+                let d = locked(F::Diameter)?;
+                let &[l0, l1] = self.pending_curves.as_slice() else {
+                    return None;
+                };
+                let (m, _) =
+                    tangent_circles::tangent_circle_two_lines(sk, l0, l1, cur.raw, Some(d))?;
+                Some(m)
+            }
+            _ => None,
+        }
     }
 
     /// Wert, den das Feld `kind` der laufenden Form vor dem ersten Zeichen zeigt.
-    pub(crate) fn kind_field_value(&self, _sk: &Sketch, kind: FieldKind) -> Option<f64> {
-        (kind == FieldKind::Sides).then(|| self.input.sides.unwrap_or(self.polygon_sides) as f64)
+    pub(crate) fn kind_field_value(&self, sk: &Sketch, kind: FieldKind) -> Option<f64> {
+        use FieldKind as F;
+        if kind == F::Sides {
+            return Some(self.input.sides.unwrap_or(self.polygon_sides) as f64);
+        }
+        let at = self.draw_cursor.as_ref()?.at;
+        match (self.planned_kind()?, self.pending_pos.as_slice(), kind) {
+            (ToolKind::Rect3P, &[from], F::Width) => Some(from.distance(at)),
+            (ToolKind::Rect3P, &[from], F::Angle) => {
+                let along = at - from;
+                Some(along.y.abs().atan2(along.x))
+            }
+            (ToolKind::Rect3P, &[a, b], F::Depth) => {
+                Some((b - a).try_normalize()?.perp().dot(at - a).abs())
+            }
+            (ToolKind::RectCenter, &[center], F::Width) => Some(2.0 * (at.x - center.x).abs()),
+            (ToolKind::RectCenter, &[center], F::Height) => Some(2.0 * (at.y - center.y).abs()),
+            (ToolKind::Circle2P, &[from], F::Diameter) => Some(from.distance(at)),
+            (ToolKind::Circle2T, _, F::Diameter) => match self.kind_plan(sk, at)? {
+                ShapePlan::Circle(_, r) => Some(2.0 * r),
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     /// Bindet die eigenen Punkte `own` an die Fangziele `hits`: gebunden wird der Punkt an der Lage

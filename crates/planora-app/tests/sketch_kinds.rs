@@ -608,7 +608,8 @@ fn active_hint_names_the_kind_and_the_default_says_what_it_said() {
 #[test]
 fn stages_collect_positions_and_the_last_click_refuses_for_now() {
     let (mut se, mut sk) = session();
-    se.choose_kind(&mut sk, ToolKind::Rect3P);
+    // Skizzen 3, Task 6: Das 3-Punkt-Rechteck ist fertig; es zeigt der 3-Punkt-Bogen.
+    se.choose_kind(&mut sk, ToolKind::Arc3P);
     let start = bits(&sk);
     assert_eq!(se.kind_stage(), 0);
     se.click(&mut sk, at(0.0, 0.0), R, false).unwrap();
