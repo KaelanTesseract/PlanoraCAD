@@ -459,6 +459,7 @@ impl Sketch {
                 }
             }
             s.touch_structure();
+            s.refresh_shared_signs(Some(curve));
             Ok(())
         })
     }

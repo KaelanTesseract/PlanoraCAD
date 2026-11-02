@@ -56,6 +56,8 @@ const LAMBDA_FACTOR: f64 = 10.0;
 const MIN_DIAG: f64 = 1e-9;
 /// Relative Schrittweite bzw. Kostensenkung, unter der ein Schritt als Stillstand gilt.
 const STALL_REL: f64 = 1e-14;
+/// So viele Schritte für den ganzen Weg nimmt [`Sketch::solve_in_steps`] höchstens.
+const MAX_VALUE_STEPS: f64 = 128.0;
 /// Nullraumanteil, ab dem eine Variable als frei gilt.
 const FREE_COMPONENT: f64 = 1e-6;
 /// Versuche mit steigender Dämpfung innerhalb eines Schritts.
@@ -240,6 +242,40 @@ fn find(parent: &mut [usize], mut i: usize) -> usize {
 }
 
 impl Sketch {
+    /// Führt die Maße `targets` (Abhängigkeit, alter Wert, neuer Wert) gemeinsam in Schritten von der
+    /// aktuellen Lage zum Ziel, wenn ein direktes Lösen gescheitert ist: Ein großer Sprung überwiegt
+    /// in den Kosten die Winkel der Tangenten am gemeinsamen Endpunkt, sie laufen an ihre Grenze bei
+    /// ±π, und dort bleibt der Löser hängen. Beginnt mit dem halben Weg; was `accept` nicht annimmt,
+    /// halbiert den Schritt, bis auf [`MAX_VALUE_STEPS`] Schritte für den ganzen Weg. `None`, wenn es
+    /// nicht ans Ziel kommt; sonst die Skizze am Ziel und ihr letzter Bericht.
+    pub fn solve_in_steps(
+        &self,
+        targets: &[(ConstraintId, f64, f64)],
+        accept: impl Fn(&Sketch, &SolveReport) -> bool,
+    ) -> Option<(Sketch, SolveReport)> {
+        let mut current = self.clone();
+        let (mut at, mut step) = (0.0_f64, 0.5_f64);
+        while step >= 1.0 / MAX_VALUE_STEPS {
+            let last = 1.0 - at <= step;
+            let next = if last { 1.0 } else { at + step };
+            let mut trial = current.clone();
+            for &(id, from, to) in targets {
+                let value = if last { to } else { from + (to - from) * next };
+                trial.set_constraint_value(id, value).ok()?;
+            }
+            let found = trial.solve();
+            if !accept(&trial, &found) {
+                step /= 2.0;
+                continue;
+            }
+            if last {
+                return Some((trial, found));
+            }
+            (current, at) = (trial, next);
+        }
+        None
+    }
+
     /// Löst alle aktiven Abhängigkeiten. Nicht lösbare Gruppen bleiben unverändert.
     pub fn solve(&mut self) -> SolveReport {
         self.solve_with_soft(&[])

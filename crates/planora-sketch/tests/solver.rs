@@ -573,3 +573,36 @@ fn a_point_almost_above_a_fixed_point_converges() {
         assert_eq!(r.dof, 1, "b kann sich noch um a drehen");
     }
 }
+
+/// Skizzen 3, Task 10: Schritte bis zum Ziel, und was `accept` nicht annimmt, halbiert sie.
+#[test]
+fn solve_in_steps_reaches_the_target_or_gives_up_at_the_smallest_step() {
+    let mut s = sketch();
+    let a = s.add_point(0.0, 0.0).unwrap();
+    let b = s.add_point(10.0, 0.0).unwrap();
+    s.add_line(a, b).unwrap();
+    s.add_constraint(K::Fixed(a, 0.0, 0.0)).unwrap();
+    let d = s.add_constraint(K::Distance(a, b, 10.0)).unwrap();
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+
+    let tries = std::cell::Cell::new(0);
+    let (done, report) = s
+        .solve_in_steps(&[(d, 10.0, 90.0)], |_, r| {
+            tries.set(tries.get() + 1);
+            r.status == SolveStatus::Solved
+        })
+        .unwrap();
+    assert_eq!(report.status, SolveStatus::Solved);
+    assert_eq!(tries.get(), 2, "halber Weg, dann der Rest");
+    assert!((xy(&done, b).distance(xy(&done, a)) - 90.0).abs() < 1e-6);
+
+    tries.set(0);
+    assert!(
+        s.solve_in_steps(&[(d, 10.0, 90.0)], |_, _| {
+            tries.set(tries.get() + 1);
+            false
+        })
+        .is_none()
+    );
+    assert_eq!(tries.get(), 7, "1/2 bis 1/128");
+}

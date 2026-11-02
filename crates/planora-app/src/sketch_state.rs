@@ -25,8 +25,6 @@ pub use planora_sketch::snap::Snap;
 
 /// Schritte je Vollkreis für den Linienzug, gegen den der Auswahlrahmen prüft.
 const BOX_STEPS_PER_TURN: usize = 96;
-/// So viele Schritte für den ganzen Weg nimmt der Falt-Wächter höchstens (kleinste Schrittweite).
-const FOLD_MAX_STEPS: f64 = 128.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
@@ -1552,9 +1550,9 @@ impl SketchSession {
 
     /// Falt-Wächter für das Längenmaß `id` (Skizzen 3): `direct` ist das Ergebnis des direkten
     /// Lösens, `unsolved` der Stand davor (das Maß hat schon seinen neuen Wert). Ist es gescheitert
-    /// oder hat die Skizze umgeklappt, geht es von dort ab dem alten Wert `old` in Schritten, die sich
-    /// bei jedem Umklappen halbieren, bis auf [`FOLD_MAX_STEPS`] Schritte für den ganzen Weg: Ein
-    /// großer Sprung lässt den Löser scheitern, in kleinen Schritten bleibt die Lage. Kommt es nicht
+    /// oder hat die Skizze umgeklappt, geht es von dort ab dem alten Wert `old` in Schritten
+    /// ([`Sketch::solve_in_steps`]): Ein großer Sprung lässt den Löser scheitern, in kleinen
+    /// Schritten bleibt die Lage. Kommt es nicht
     /// ans Ziel, bleibt es beim Fehler aus `direct` (ein echter Widerspruch), sonst
     /// `sketch-dimension-folds`. Andere Maße bleiben unberührt.
     pub(crate) fn guard_length(
@@ -1576,26 +1574,15 @@ impl SketchSession {
         let Some(old) = old.filter(|o| *o != new) else {
             return stuck;
         };
-        let smallest = (new - old).abs() / FOLD_MAX_STEPS;
-        let (mut current, mut at, mut step) = (unsolved.clone(), old, (new - old) / 2.0);
-        while step.abs() >= smallest {
-            let last = (new - at).abs() <= step.abs();
-            let value = if last { new } else { at + step };
-            let mut trial = current.clone();
-            trial.set_constraint_value(id, value).map_err(err)?;
-            let report = trial.solve();
-            if !status_ok(&report) || folded_over(unsolved, &trial) {
-                step /= 2.0;
-                continue;
-            }
-            self.last_report = Some(report);
-            (current, at) = (trial, value);
-            if last {
-                *sk = current;
-                return Ok(());
-            }
-        }
-        stuck
+        let accept = |trial: &Sketch, report: &SolveReport| {
+            status_ok(report) && !folded_over(unsolved, trial)
+        };
+        let Some((done, report)) = unsolved.solve_in_steps(&[(id, old, new)], accept) else {
+            return stuck;
+        };
+        *sk = done;
+        self.last_report = Some(report);
+        Ok(())
     }
 
     /// Zahl oder Formel `text` für das bestehende Maß `id` des Entwurfs `sf`: auswerten mit den
