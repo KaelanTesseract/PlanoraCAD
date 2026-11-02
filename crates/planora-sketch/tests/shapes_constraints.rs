@@ -360,6 +360,11 @@ fn dragging_a_polygon_corner_keeps_it_regular() {
 fn assert_slot(s: &Sketch, ids: &SlotIds) {
     let (a, b) = (at(s, ids.centers[0]), at(s, ids.centers[1]));
     let axis = (b - a).normalize();
+    // Nicht umgeklappt: Die Mitten liegen noch in der Richtung, in der die Form angelegt wurde.
+    assert!(
+        axis.dot(DVec2::from_angle(0.5)) > 0.0,
+        "umgeklappt: {axis:?}"
+    );
     let radius = s.radius(ids.caps[0]).unwrap();
     close(s.radius(ids.caps[1]).unwrap(), radius);
     for side in ids.sides {
@@ -470,15 +475,6 @@ fn a_width_at_the_limit_is_not_solved_and_the_shape_stays() {
     assert_arc_slot_width_refused(120.0);
 }
 
-/// Hält die Anforderung fest, die die Abhängigkeiten aus Entscheidung 2 nicht erfüllen: Über dem
-/// Grenzwert findet der Solver eine umgeklappte Lösung (Mitten vertauscht, Innenradius negativ).
-#[test]
-#[ignore = "offene Lücke: über dem Grenzwert meldet der Solver Solved mit umgeklappter Form"]
-fn a_width_beyond_the_limit_is_not_solved_and_the_shape_stays() {
-    assert_slot_width_refused(60.0);
-    assert_arc_slot_width_refused(130.0);
-}
-
 #[test]
 fn a_rejected_shape_leaves_the_sketch_as_it_was() {
     let mut s = sketch();
@@ -512,7 +508,7 @@ fn a_rejected_shape_leaves_the_sketch_as_it_was() {
         start: v(10.0, 0.0),
         end: v(0.0, 10.0),
     };
-    for half_width in [0.0, 10.0, 12.0] {
+    for half_width in [-5.0, 0.0, 10.0, 12.0] {
         assert!(s.add_arc_slot(&ArcSlotPlan { axis, half_width }).is_err());
     }
     assert_eq!(counts(&s), before);

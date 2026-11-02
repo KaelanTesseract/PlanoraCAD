@@ -718,7 +718,10 @@ impl Sketch {
         let radial_start = (axis.start - axis.center) / r;
         // Dieselbe Prüfung wie beim Plan: Breite, Radius, Lücke zwischen den Enden.
         let width_at = axis.center + radial_start * (r + h);
-        if h.is_nan() || arc_slot(axis, width_at, self.tolerance().linear).is_none() {
+        // `arc_slot` nimmt den Betrag; ein Plan mit negativer Breite käme sonst durch.
+        if !(h.is_finite() && h > 0.0)
+            || arc_slot(axis, width_at, self.tolerance().linear).is_none()
+        {
             return Err(SketchError::Degenerate(tr!("sketch-radius-positive")));
         }
         let radial_end = (axis.end - axis.center).normalize();
