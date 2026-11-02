@@ -538,7 +538,7 @@ impl SketchSession {
 
     /// Führt `f` atomar aus: Bei einem Fehler wird alles zurückgesetzt und die Meldung in
     /// `message` abgelegt. Vorher wird `message` geleert.
-    fn atomic<T>(
+    pub(crate) fn atomic<T>(
         &mut self,
         sk: &mut Sketch,
         f: impl FnOnce(&mut Self, &mut Sketch, &Sketch) -> Result<T, Msg>,
@@ -806,6 +806,7 @@ impl SketchSession {
             self.try_auto(sk, auto.kind(line));
         }
         self.line_chain = Some(line);
+        self.line_after_arc = None;
         self.pending = vec![p];
         self.created = Some(Created::Line(line));
         Ok(())
@@ -1044,9 +1045,10 @@ impl SketchSession {
     /// Bricht das laufende Werkzeug ab; im Auswahlwerkzeug wird die Auswahl geleert. Ein
     /// laufendes Ziehen wird wie mit [`end_drag`](Self::end_drag) beendet (der Punkt bleibt,
     /// wo er ist). Stutzen, Dehnen und Brechen enden ganz (zurück zur Auswahl). Ein laufender
-    /// Rahmen fällt allein weg, die alte Auswahl bleibt.
+    /// Rahmen fällt allein weg, die alte Auswahl bleibt; ebenso ein laufender Zug auf dem letzten
+    /// Punkt, der Linienzug bleibt.
     pub fn cancel(&mut self, sk: &mut Sketch) {
-        if self.box_select.take().is_some() {
+        if self.box_select.take().is_some() || self.line_arc.take().is_some() {
             return;
         }
         self.end_drag(sk);
@@ -1094,9 +1096,10 @@ impl SketchSession {
         }
     }
 
-    /// Bricht den Rahmen mit der rechten Taste ab, siehe [`box_aborted`](Self::box_aborted).
+    /// Bricht den Rahmen oder den Zug auf dem letzten Punkt mit der rechten Taste ab, siehe
+    /// [`box_aborted`](Self::box_aborted).
     pub fn abort_box(&mut self) {
-        if self.box_select.take().is_some() {
+        if self.box_select.take().is_some() || self.line_arc.take().is_some() {
             self.box_aborted = true;
         }
     }
@@ -1725,6 +1728,9 @@ impl SketchSession {
         sk.prune_points(&orphans);
         self.pending.retain(|&p| sk.point_xy(p).is_ok());
         self.pending_curves.retain(|&c| sk.curve(c).is_some());
+        self.line_arc = self
+            .line_arc
+            .filter(|d| sk.point_xy(d.start).is_ok() && sk.curve(d.prev).is_some());
         if self.dragging.is_some_and(|p| sk.point_xy(p).is_err()) {
             self.dragging = None;
         }

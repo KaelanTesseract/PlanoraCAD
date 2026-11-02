@@ -406,17 +406,26 @@ impl SketchSession {
                 .is_none_or(|r| r.status == SolveStatus::Solved)
     }
 
-    /// Richtung des laufenden Linienendes.
+    /// Richtung des laufenden Linienendes. Während des Zugs auf dem letzten Punkt keine; nach einem
+    /// Bogen aus dem Linienzug läuft die Linie unabhängig von der 3°-Grenze tangential, solange der
+    /// Zeiger vor dem Bogenende liegt und das Ende nicht auf gefangener Geometrie.
     fn line_direction(
         &self,
         sk: &Sketch,
         end: DVec2,
         on_geometry: bool,
     ) -> Option<(AutoConstraint, DVec2)> {
-        if !self.auto_allowed() {
+        if !self.auto_allowed() || self.line_arc.is_some() {
             return None;
         }
         let &start = self.pending.first()?;
+        if !on_geometry
+            && let Some(arc) = self.line_after_arc
+            && let Some(forward) = leaving_direction(sk, arc, start)
+            && forward.dot(end - sk.point_xy(start).ok()?) > sk.tolerance().linear
+        {
+            return Some((AutoConstraint::Tangent(arc), forward));
+        }
         plan_direction(sk, self.tool, start, self.line_chain, end, on_geometry)
     }
 

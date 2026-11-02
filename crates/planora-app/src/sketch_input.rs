@@ -241,9 +241,11 @@ pub(crate) fn axis_reference(sk: &mut Sketch) -> Result<CurveId, Msg> {
     Ok(line)
 }
 
-/// Winkelbezug einer Linie ab `start`: die vorige Linie der Kette in Vorwärtsrichtung.
+/// Winkelbezug einer Linie ab `start`: die vorige Linie der Kette in Vorwärtsrichtung. Ein Bogen ist
+/// keiner, denn ein Winkelmaß gibt es nur zwischen Linien.
 fn chain_basis(sk: &Sketch, chain: Option<CurveId>, start: PointId) -> Option<(CurveId, DVec2)> {
-    let c = chain?;
+    let c =
+        chain.filter(|&c| matches!(sk.curve(c).map(|d| &d.kind), Some(CurveKind::Line { .. })))?;
     Some((c, leaving_direction(sk, c, start)?))
 }
 
@@ -291,6 +293,9 @@ impl SketchSession {
     /// erst Radius, dann Öffnungswinkel, Ellipse erst große, dann kleine Halbachse.
     fn stage_fields(&self) -> &'static [FieldKind] {
         use FieldKind as F;
+        if self.line_arc.is_some() {
+            return &[];
+        }
         if let Some(kind) = self.planned_kind() {
             return kind.stages().get(self.kind_stage()).copied().unwrap_or(&[]);
         }

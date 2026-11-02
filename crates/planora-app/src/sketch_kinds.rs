@@ -8,7 +8,7 @@ use crate::keymap::Action;
 use crate::msg::Msg;
 use crate::sketch_cursor::{DrawCursor, leaving_direction, tangent_start_curve};
 use crate::sketch_input::{Created, FieldKind, locked_ray, toward_pointer};
-use crate::sketch_state::{SketchSession, Snap, Tool, err};
+use crate::sketch_state::{LineArcDrag, SketchSession, Snap, Tool, err};
 use planora_i18n::tr;
 use planora_math::DVec2;
 use planora_sketch::constraint::ConstraintKind;
@@ -435,6 +435,68 @@ impl SketchSession {
         self.edit_label = Some(created.undo_label());
         self.created = Some(created);
         Ok(arc)
+    }
+
+    /// Drücken auf dem letzten Punkt des Linienzugs wird beim Ziehen ein tangentialer Bogen: Greift
+    /// nur im Linienwerkzeug, wenn `at` im Fangradius des Punkts liegt und dort eine Kurve endet.
+    pub fn begin_line_arc(&mut self, sk: &Sketch, at: DVec2, radius: f64) -> bool {
+        if self.tool != Tool::Line || !at.is_finite() {
+            return false;
+        }
+        let Some(&start) = self.pending.first() else {
+            return false;
+        };
+        if sk.point_xy(start).map_or(true, |p| p.distance(at) > radius) {
+            return false;
+        }
+        let Some(prev) = tangent_start_curve(sk, start, self.line_chain) else {
+            return false;
+        };
+        self.line_arc = Some(LineArcDrag { start, prev });
+        true
+    }
+
+    /// Loslassen: legt den Bogen wie der tangentiale Bogen an, der Linienzug läuft von dessen Ende
+    /// weiter. Der Zug endet in jedem Fall; wird kein Bogen daraus, bleibt der Linienzug, wie er
+    /// war, und `message` erklärt es.
+    pub fn finish_line_arc(
+        &mut self,
+        sk: &mut Sketch,
+        raw: DVec2,
+        radius: f64,
+    ) -> Result<(), String> {
+        if self.line_arc.is_none() || !raw.is_finite() {
+            self.line_arc = None;
+            return Ok(());
+        }
+        self.cursor = Some(raw);
+        self.created = None;
+        // Noch während des Zugs auflösen: ohne Felder und ohne Richtung.
+        let cur = self.resolve_cursor(sk, raw, radius);
+        let Some(drag) = self.line_arc.take() else {
+            return Ok(());
+        };
+        self.atomic(sk, |se, sk, prior| {
+            let arc = se.create_tangent_arc(sk, drag.start, drag.prev, &cur, prior)?;
+            let far_end = match sk.curve(arc).map(|d| &d.kind) {
+                Some(&CurveKind::Arc { start, end, .. }) if start == drag.start => end,
+                Some(&CurveKind::Arc { start, .. }) => start,
+                _ => return Err(ToolKind::ArcTangent.refusal()),
+            };
+            se.pending = vec![far_end];
+            se.line_chain = Some(arc);
+            se.line_after_arc = Some(arc);
+            Ok(())
+        })
+    }
+
+    /// Vorschau des laufenden Zugs auf dem letzten Punkt: der tangentiale Bogen bis `at`.
+    pub fn line_arc_preview(&self, sk: &Sketch, at: DVec2) -> Option<Vec<Vec<DVec2>>> {
+        let drag = self.line_arc?;
+        let from = sk.point_xy(drag.start).ok()?;
+        let leaving = leaving_direction(sk, drag.prev, drag.start)?;
+        let arc = shapes::tangent_arc(from, leaving, at, sk.tolerance().linear)?;
+        Some(ShapePlan::Arc(arc).outline(PREVIEW_STEPS_PER_TURN))
     }
 
     /// Legt die Form in einem Zug an, bindet und löst, setzt `created` und `edit_label` und ruft

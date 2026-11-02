@@ -877,12 +877,13 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     let pan_gesture = crate::keymap::mouse::pan_2d(&km, ui, response);
     let starts_box = response.drag_started_by(PointerButton::Primary)
         && box_can_start(ui, rect, state, pan_gesture, ctrl);
-    // Ein laufender Rahmen schwenkt nicht, auch wenn Umschalt erst währenddessen dazukommt.
+    // Ein laufender Rahmen schwenkt nicht, auch wenn Umschalt erst währenddessen dazukommt; ein
+    // Zug auf dem letzten Punkt des Linienzugs ebenso.
     let boxing = starts_box
         || state
             .sketch_session
             .as_ref()
-            .is_some_and(|s| s.box_select.is_some());
+            .is_some_and(|s| s.box_select.is_some() || s.line_arc.is_some());
     let panning = pan_gesture && !boxing;
     if panning && !dragging {
         let d = response.drag_motion();
@@ -925,11 +926,12 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             se.begin_box(dvec(origin), shift);
         }
     } else if response.drag_started_by(PointerButton::Primary) && !shift && !panning {
-        // Punkt oder Kurve ziehen (Auswahlwerkzeug)
+        // Punkt oder Kurve ziehen (Auswahlwerkzeug), tangentialer Bogen (Linienwerkzeug)
         let origin = ui.input(|i| i.pointer.press_origin());
         if let Some(start) = origin.and_then(|p| map.to_sketch(p)) {
             let r = origin.and_then(|p| map.radius_at(p)).unwrap_or(radius);
             se.begin_drag(&mut sf.sketch, start, r);
+            se.begin_line_arc(&sf.sketch, start, r);
         }
     }
     if se.is_dragging() {
@@ -956,6 +958,23 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             if response.drag_stopped() || !response.dragged() {
                 se.end_box(&sf.sketch, &|q| map.to_screen(q).map(dvec));
             }
+        }
+    }
+
+    // Zug auf dem letzten Punkt: wie beim Rahmen bricht die rechte Taste schon beim Drücken ab, und
+    // Esc beendet schon hier den Zug von egui, der Bogenzug fällt aber unten weg.
+    if se.line_arc.is_some() {
+        if ui.input(|i| i.pointer.button_pressed(PointerButton::Secondary)) {
+            se.abort_box();
+        } else if !esc && response.drag_stopped() {
+            match at.or(se.cursor) {
+                Some(end) => {
+                    let _ = se.finish_line_arc(&mut sf.sketch, end, radius);
+                }
+                None => se.line_arc = None,
+            }
+        } else if !esc && !response.dragged() {
+            se.line_arc = None;
         }
     }
 
@@ -1332,6 +1351,14 @@ fn draw_preview(
         return;
     };
     let stroke = Stroke::new(1.5, color);
+    if se.line_arc.is_some() {
+        for line in se.line_arc_preview(sk, cursor).unwrap_or_default() {
+            for path in map.paths(&line) {
+                draw_path(painter, path, stroke, true);
+            }
+        }
+        return;
+    }
     if se.planned_kind().is_some() {
         // Wer Kurven wählt, rechnet mit der Rohlage, wie der Klick auch.
         let at = match &se.draw_cursor {
