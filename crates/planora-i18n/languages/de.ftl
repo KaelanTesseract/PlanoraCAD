@@ -1574,6 +1574,7 @@ sketch-err-data-constraint-deleted = Eine Abhängigkeit verweist auf ein gelösc
 sketch-err-data-constraint-extra = Einer Abhängigkeit fehlt ihre Zusatzvariable
 sketch-err-data-centerline = Eine Mittellinie ist keine Konstruktionslinie oder keine Linie
 sketch-err-centerline-type = Nur Linien können Mittellinien sein
+sketch-err-fillet-equal-radius = Der Radius muss dem der ersten Rundung entsprechen
 sketch-err-object-twice = Ein Objekt ist mehrfach ausgewählt
 sketch-err-copy-kinds = Nur Linien, Kreise, Bögen und Ellipsenbögen können kopiert werden
 sketch-err-corners-finite = Die Ecken müssen endliche Zahlen sein

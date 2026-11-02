@@ -19,7 +19,7 @@ use crate::constraint::{ConstraintId, ConstraintKind};
 use crate::error::SketchError;
 use crate::geom::Geom;
 use crate::intersect::intersect;
-use crate::model::{CurveId, CurveKind, PointId, Sketch};
+use crate::model::{CurveId, CurveKind, MAX_COORD, PointId, Sketch};
 use crate::shapes::ArcPlan;
 use planora_i18n::tr;
 use planora_math::{DVec2, PI, TAU};
@@ -84,6 +84,36 @@ pub struct ChamferPlan {
     pub corner: Option<PointId>,
     pub corner_at: DVec2,
     pub kind: ChamferKind,
+}
+
+/// Was [`Sketch::prepare_dimension_change`] getan hat.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DimensionChange {
+    /// Kein Bogen dieser Form oder kein neuer Wert: Es bleibt beim normalen Lösen.
+    Untouched,
+    /// Die Bögen liegen schon richtig, das Lösen bewegt nichts mehr.
+    Refitted,
+    /// Der Wert passt nicht zwischen die Nachbarn; die Skizze ist unverändert, der Aufrufer
+    /// lehnt ab.
+    DoesNotFit,
+}
+
+/// Neue Lage eines Bogens, der an beiden Enden tangential an Nachbarn hängt.
+enum Refit {
+    /// Die Nachbarn bestimmen die Lage nicht: keine solche Form, oder parallele Linien und
+    /// konzentrische Bögen (Langloch), bei denen sich der Radius nur mit den Nachbarn ändert.
+    NotThisShape,
+    NoFit,
+    /// Punkte des Bogens und ihre neue Lage: Mitte, Start, Ende.
+    Fit([(PointId, DVec2); 3]),
+}
+
+/// Ein Ende des Bogens und die Kurve, die dort tangential anschließt.
+pub(crate) struct TangentEnd {
+    neighbour: CurveId,
+    /// Das gemeinsame Ende.
+    near: PointId,
+    far: PointId,
 }
 
 /// Was [`Sketch::add_fillet`] angelegt hat.
@@ -186,6 +216,14 @@ fn meet(a: Shape, b: Shape) -> Vec<DVec2> {
             let base = c1 + u * x;
             vec![base + u.perp() * h, base - u.perp() * h]
         }
+    }
+}
+
+/// Berührpunkt eines Bogens mit Mitte `m` auf einer Geraden oder einem Kreis.
+fn touch_point(s: Shape, m: DVec2) -> Option<DVec2> {
+    match s {
+        Shape::Line { a, d } => Some(a + d * (m - a).dot(d)),
+        Shape::Round { c, r } => (m - c).try_normalize().map(|u| c + u * r),
     }
 }
 
@@ -471,10 +509,6 @@ impl Sketch {
         let (Some(sa), Some(sb)) = (shape(&a.g), shape(&b.g)) else {
             return Vec::new();
         };
-        let touch = |s: Shape, m: DVec2| match s {
-            Shape::Line { a, d } => Some(a + d * (m - a).dot(d)),
-            Shape::Round { c, r } => (m - c).try_normalize().map(|u| c + u * r),
-        };
         let mut out = Vec::new();
         for s1 in [1.0, -1.0] {
             for s2 in [1.0, -1.0] {
@@ -484,7 +518,7 @@ impl Sketch {
                     continue;
                 };
                 for m in meet(oa, ob) {
-                    if let (Some(t1), Some(t2)) = (touch(sa, m), touch(sb, m)) {
+                    if let (Some(t1), Some(t2)) = (touch_point(sa, m), touch_point(sb, m)) {
                         out.push(Cand { m, t: [t1, t2] });
                     }
                 }
@@ -741,13 +775,36 @@ impl Sketch {
         Ok(line)
     }
 
-    /// Die Ecke `p` bleibt als Konstruktionspunkt auf beiden Kurven.
-    fn hold_corner(&mut self, p: PointId, curves: [CurveId; 2]) -> Result<(), SketchError> {
+    /// Der Punkt `p` bleibt als Konstruktionspunkt auf den Kurven `curves`.
+    fn hold_point(&mut self, p: PointId, curves: &[CurveId]) -> Result<(), SketchError> {
         self.points[p].construction = true;
-        for c in curves {
+        for &c in curves {
             self.add_constraint(ConstraintKind::PointOnCurve(p, c))?;
         }
         Ok(())
+    }
+
+    /// Hängt noch eine lebende Kurve oder nicht interne Abhängigkeit an `p`?
+    fn point_in_use(&self, p: PointId) -> bool {
+        self.curves().any(|(_, d)| d.kind.points().contains(&p))
+            || self
+                .constraints()
+                .any(|(_, d)| d.kind.points().contains(&p))
+    }
+
+    /// Alte Enden, die kein gemeinsamer Punkt sind: Hängt noch etwas an einem, bleibt er als
+    /// Konstruktionspunkt auf seiner eigenen Kurve (zwei deckungsgleiche Enden liegen so je auf
+    /// ihrer Kurve, ohne überzählige Zeile); sonst entfällt er.
+    fn settle_old_ends(&mut self, ends: &[(PointId, CurveId)]) -> Result<(), SketchError> {
+        let mut orphans = Vec::new();
+        for &(p, c) in ends {
+            if self.point_in_use(p) {
+                self.hold_point(p, &[c])?;
+            } else {
+                orphans.push(p);
+            }
+        }
+        self.drop_orphans(&orphans)
     }
 
     /// Bindung der Rundung `arc` (Mitte `m`) an die Kurve `c`, die ganz bleibt, im Berührpunkt
@@ -798,6 +855,14 @@ impl Sketch {
             for c in curves {
                 s.check_curve(c)?;
             }
+            if let Some(f0) = equal_to
+                && s.radius(f0)
+                    .is_some_and(|r| (r - plan.radius).abs() > s.tolerance().linear)
+            {
+                return Err(SketchError::InvalidInput(tr!(
+                    "sketch-err-fillet-equal-radius"
+                )));
+            }
             let touch = [
                 s.add_point(plan.touch[0].x, plan.touch[0].y)?,
                 s.add_point(plan.touch[1].x, plan.touch[1].y)?,
@@ -833,19 +898,28 @@ impl Sketch {
                 }
             }
 
-            // Hängt nach dem Umhängen noch etwas an der Ecke, bleibt sie; sonst entfällt sie
-            // mit den übrigen verwaisten Enden. Ohne Umhängen ist sie weiter das Ende beider.
-            let corner = plan.corner.filter(|p| {
-                !moved.contains(p)
-                    || s.curves().any(|(_, d)| d.kind.points().contains(p))
-                    || s.constraints().any(|(_, d)| d.kind.points().contains(p))
-            });
-            if let Some(p) = corner
-                && moved.contains(&p)
-            {
-                s.hold_corner(p, curves)?;
-            } else {
-                s.drop_orphans(&moved)?;
+            // Hängt nach dem Umhängen noch etwas an der Ecke, bleibt sie; sonst entfällt sie.
+            // Ohne Umhängen ist sie weiter das Ende beider. Andere alte Enden je für sich.
+            let corner = plan
+                .corner
+                .filter(|p| !moved.contains(p) || s.point_in_use(*p));
+            match plan.corner {
+                Some(p) if moved.contains(&p) => {
+                    if corner.is_some() {
+                        s.hold_point(p, &curves)?;
+                    } else {
+                        s.drop_orphans(&[p])?;
+                    }
+                }
+                _ => {
+                    let ends: Vec<(PointId, CurveId)> = (0..2)
+                        .filter_map(|i| match plan.moves[i] {
+                            EndMove::Replace(p) => Some((p, curves[i])),
+                            EndMove::Whole => None,
+                        })
+                        .collect();
+                    s.settle_old_ends(&ends)?;
+                }
             }
 
             let radius_dim = match equal_to {
@@ -889,9 +963,14 @@ impl Sketch {
                 Some(p) => p,
                 None => s.add_point(plan.corner_at.x, plan.corner_at.y)?,
             };
-            s.hold_corner(corner, curves)?;
-            let orphans: Vec<PointId> = plan.moves.into_iter().filter(|p| *p != corner).collect();
-            s.drop_orphans(&orphans)?;
+            s.hold_point(corner, &curves)?;
+            let ends: Vec<(PointId, CurveId)> = plan
+                .moves
+                .into_iter()
+                .zip(curves)
+                .filter(|(p, _)| *p != corner)
+                .collect();
+            s.settle_old_ends(&ends)?;
 
             let mut helpers = None;
             let mut dims = Vec::new();
@@ -923,6 +1002,241 @@ impl Sketch {
                 dims,
             })
         })
+    }
+
+    /// Die beiden tangentialen Enden des Bogens `arc`, `[Start, Ende]`, mit Linien oder Bögen als
+    /// Nachbarn. `None`, wenn es eine andere Form ist: ein Ende ohne oder mit mehreren aktiven
+    /// Tangenten, eine Tangente ohne gemeinsames Ende, ein anderer Nachbar.
+    pub(crate) fn tangent_ends(&self, arc: CurveId) -> Option<[TangentEnd; 2]> {
+        let CurveKind::Arc { start, end, .. } = self.curve(arc)?.kind else {
+            return None;
+        };
+        let mut found: [Option<TangentEnd>; 2] = [None, None];
+        for (_, d) in self.constraints() {
+            let ConstraintKind::Tangent(x, y) = d.kind else {
+                continue;
+            };
+            if !(x == arc || y == arc) || !d.enabled || d.driven {
+                continue;
+            }
+            let neighbour = if x == arc { y } else { x };
+            let [a, b] = match self.curve(neighbour)?.kind {
+                CurveKind::Line { a, b } => [a, b],
+                CurveKind::Arc { start, end, .. } => [start, end],
+                _ => return None,
+            };
+            let slot = match ([a, b].contains(&start), [a, b].contains(&end)) {
+                (true, false) => 0,
+                (false, true) => 1,
+                _ => return None,
+            };
+            let near = if slot == 0 { start } else { end };
+            let far = if a == near { b } else { a };
+            let end_of_arc = TangentEnd {
+                neighbour,
+                near,
+                far,
+            };
+            if found[slot].replace(end_of_arc).is_some() {
+                return None;
+            }
+        }
+        let [Some(first), Some(second)] = found else {
+            return None;
+        };
+        Some([first, second])
+    }
+
+    /// Bleibt das Ende `end` diesseits des fernen Endes seines Nachbarn, wenn es nach `to`
+    /// wandert? Der Nachbar wird dabei wenn nötig verlängert.
+    fn stays_before_far_end(&self, end: &TangentEnd, to: DVec2) -> bool {
+        let tol = self.tolerance().linear;
+        let (near, far) = (self.pos(end.near), self.pos(end.far));
+        match self.curves[end.neighbour].kind {
+            CurveKind::Arc { center, start, .. } => {
+                let c = self.pos(center);
+                let r = c.distance(near);
+                let moved = wrap_pi((to - c).to_angle() - (near - c).to_angle());
+                let then = if start == end.far {
+                    let span = ArcPlan {
+                        center: c,
+                        start: far,
+                        end: near,
+                    };
+                    span.sweep() + moved
+                } else {
+                    let span = ArcPlan {
+                        center: c,
+                        start: near,
+                        end: far,
+                    };
+                    span.sweep() - moved
+                };
+                then * r > tol && (TAU - then) * r > tol
+            }
+            _ => match (near - far).try_normalize() {
+                Some(d) => (to - far).dot(d) > tol,
+                None => false,
+            },
+        }
+    }
+
+    /// Die Lage des Bogens `arc` für den Radius `radius` bei unveränderten, wenn nötig
+    /// verlängerten Nachbarn, mit denselben Versatzkurven wie [`Sketch::fillet_plan`]. Die Mitte
+    /// bleibt auf ihrer Seite jedes Nachbarn; bleiben zwei Stellen, gilt die nähere. Reine
+    /// Geometrie, die Skizze wird nur gelesen.
+    fn refit_geometry(&self, arc: CurveId, radius: f64) -> Refit {
+        let tol = self.tolerance().linear;
+        let Some(ends) = self.tangent_ends(arc) else {
+            return Refit::NotThisShape;
+        };
+        let CurveKind::Arc { center, start, end } = self.curves[arc].kind else {
+            return Refit::NotThisShape;
+        };
+        let shape_of = |c: CurveId| self.geom(c).as_ref().and_then(shape);
+        let (Some(s0), Some(s1)) = (shape_of(ends[0].neighbour), shape_of(ends[1].neighbour))
+        else {
+            return Refit::NotThisShape;
+        };
+        match (s0, s1) {
+            (Shape::Line { d, .. }, Shape::Line { d: e, .. }) if d.perp_dot(e).abs() < PARALLEL => {
+                return Refit::NotThisShape;
+            }
+            (Shape::Round { c, .. }, Shape::Round { c: k, .. }) if c.distance(k) <= tol => {
+                return Refit::NotThisShape;
+            }
+            _ => {}
+        }
+        if !(radius.is_finite() && radius > tol) {
+            return Refit::NoFit;
+        }
+        let m_now = self.pos(center);
+        let side = |s: Shape| match s {
+            Shape::Line { a, d } if d.perp_dot(m_now - a) < 0.0 => -1.0,
+            Shape::Round { c, r } if m_now.distance(c) < r => -1.0,
+            _ => 1.0,
+        };
+        let (Some(o0), Some(o1)) = (
+            offset_shape(s0, side(s0), radius, tol),
+            offset_shape(s1, side(s1), radius, tol),
+        ) else {
+            return Refit::NoFit;
+        };
+        let Some(m) = meet(o0, o1)
+            .into_iter()
+            .filter(|p| p.is_finite())
+            .min_by(|p, q| p.distance(m_now).total_cmp(&q.distance(m_now)))
+        else {
+            return Refit::NoFit;
+        };
+        let (Some(t0), Some(t1)) = (touch_point(s0, m), touch_point(s1, m)) else {
+            return Refit::NoFit;
+        };
+        let in_range = [m, t0, t1]
+            .iter()
+            .all(|p| p.is_finite() && p.abs().max_element() <= MAX_COORD);
+        if !in_range
+            || t0.distance(t1) <= tol
+            || !self.stays_before_far_end(&ends[0], t0)
+            || !self.stays_before_far_end(&ends[1], t1)
+        {
+            return Refit::NoFit;
+        }
+        let sweep_now = ArcPlan {
+            center: m_now,
+            start: self.pos(start),
+            end: self.pos(end),
+        }
+        .sweep();
+        let sweep = ArcPlan {
+            center: m,
+            start: t0,
+            end: t1,
+        }
+        .sweep();
+        if (sweep - sweep_now).abs() > PI || (sweep_now <= PI && sweep > PI) {
+            return Refit::NoFit;
+        }
+        Refit::Fit([(center, m), (start, t0), (end, t1)])
+    }
+
+    fn apply_refit(&mut self, points: &[(PointId, DVec2); 3]) {
+        for &(p, at) in points {
+            let (x, y) = (self.points[p].x, self.points[p].y);
+            self.vars[x] = at.x;
+            self.vars[y] = at.y;
+        }
+        self.touch_values();
+    }
+
+    /// Setzt Mitte und Berührpunkte des Bogens `arc`, der an beiden Enden tangential an Linien
+    /// oder Bögen hängt, exakt auf die Lage für den Radius `radius`; die Nachbarn bleiben und
+    /// werden höchstens verlängert. So beginnt das Lösen an der richtigen Stelle; aus der alten
+    /// Lage fände es zu einem großen Radius Schleifen und ausgebeulte Bögen, die alle
+    /// Abhängigkeiten erfüllen. `false` und nichts geändert, wenn es keine Lösung gibt, ein
+    /// Berührpunkt das ferne Ende eines Nachbarn überschreitet oder der Bogen keine solche Form
+    /// hat (auch Ellipse und Spline als Nachbarn). Ohne Lösen.
+    pub fn refit_tangent_arc(&mut self, arc: CurveId, radius: f64) -> bool {
+        match self.refit_geometry(arc, radius) {
+            Refit::Fit(points) => {
+                self.apply_refit(&points);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Vor dem Lösen eines neuen Werts `value` für das Maß `c` aufzurufen: Bei `Radius` und
+    /// `Diameter` an einem Bogen, der tangential zwischen zwei Nachbarn liegt, setzt es diesen
+    /// und alle über `Equal` verbundenen Bögen derselben Form auf die neue Lage. Bleibt der Wert
+    /// gleich oder ist das Maß nur anzeigend, geschieht nichts.
+    pub fn prepare_dimension_change(&mut self, c: ConstraintId, value: f64) -> DimensionChange {
+        let Some(d) = self.constraint(c).filter(|d| d.enabled && !d.driven) else {
+            return DimensionChange::Untouched;
+        };
+        let (first, radius) = match d.kind {
+            ConstraintKind::Radius(a, _) => (a, value),
+            ConstraintKind::Diameter(a, _) => (a, value / 2.0),
+            _ => return DimensionChange::Untouched,
+        };
+        let same = self
+            .radius(first)
+            .is_some_and(|r| (r - radius).abs() <= self.tolerance().linear);
+        if same {
+            return DimensionChange::Untouched;
+        }
+        let mut arcs = vec![first];
+        let mut next = 0;
+        while let Some(&a) = arcs.get(next) {
+            next += 1;
+            for (_, d) in self.constraints().filter(|(_, d)| d.enabled && !d.driven) {
+                if let ConstraintKind::Equal(x, y) = d.kind
+                    && (x == a || y == a)
+                {
+                    let other = if x == a { y } else { x };
+                    if !arcs.contains(&other) {
+                        arcs.push(other);
+                    }
+                }
+            }
+        }
+        let mut trial = self.clone();
+        let mut refitted = false;
+        for a in arcs {
+            match trial.refit_geometry(a, radius) {
+                Refit::NotThisShape => {}
+                Refit::NoFit => return DimensionChange::DoesNotFit,
+                Refit::Fit(points) => {
+                    trial.apply_refit(&points);
+                    refitted = true;
+                }
+            }
+        }
+        if !refitted {
+            return DimensionChange::Untouched;
+        }
+        *self = trial;
+        DimensionChange::Refitted
     }
 
     /// Lebende Linien, Bögen und Ellipsenbögen, die in `p` enden (nicht die, deren Mitte `p` ist).

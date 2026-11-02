@@ -1591,6 +1591,7 @@ sketch-err-data-constraint-deleted = A constraint refers to a deleted object
 sketch-err-data-constraint-extra = A constraint is missing its extra variable
 sketch-err-data-centerline = A centerline is not a construction line or not a line
 sketch-err-centerline-type = Only lines can be centerlines
+sketch-err-fillet-equal-radius = The radius must match the first fillet
 sketch-err-object-twice = An object is selected more than once
 sketch-err-copy-kinds = Only lines, circles, arcs and elliptical arcs can be copied
 sketch-err-corners-finite = The corners must be finite numbers

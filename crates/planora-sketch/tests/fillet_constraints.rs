@@ -4,10 +4,11 @@
 use planora_math::{DVec2, Frame, PI, Tolerance};
 use planora_sketch::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
 use planora_sketch::fillet::{
-    ChamferIds, ChamferKind, ChamferPlan, CurvePick, EndMove, FilletIds, FilletPlan,
+    ChamferIds, ChamferKind, ChamferPlan, CurvePick, DimensionChange, EndMove, FilletIds,
+    FilletPlan,
 };
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
-use planora_sketch::shapes::folded_over;
+use planora_sketch::shapes::{ArcPlan, folded_over};
 use planora_sketch::solver::{SolveReport, SolveStatus};
 
 fn sketch() -> Sketch {
@@ -121,10 +122,14 @@ fn tangent_error(s: &Sketch, ids: &FilletIds, lines: [CurveId; 2]) -> f64 {
     worst
 }
 
-/// Setzt ein Längenmaß wie der Falt-Wächter der Oberfläche: direkt, sonst in Schritten.
-/// `None`: abgelehnt.
+/// Setzt ein Längenmaß wie die Oberfläche: tangentialen Bogen neu legen, direkt lösen, sonst in
+/// Schritten. `None`: abgelehnt.
 fn change(s: &Sketch, id: ConstraintId, old: f64, new: f64) -> Option<Sketch> {
     let mut trial = s.clone();
+    if trial.prepare_dimension_change(id, new) == DimensionChange::DoesNotFit {
+        assert_eq!(trial.to_data(), s.to_data(), "bitgleich");
+        return None;
+    }
     trial.set_constraint_value(id, new).unwrap();
     let unsolved = trial.clone();
     let r = trial.solve();
@@ -1012,4 +1017,579 @@ fn the_data_round_trip_is_equal() {
     let back = Sketch::from_data(data.clone()).unwrap();
     assert_eq!(back.to_data(), data);
     assert_still(&back);
+}
+
+// ---- Bogen neu legen: Folgen hoch und runter, Öffnungswinkel nach jeder Änderung ------------
+
+fn sweep_of(s: &Sketch, arc: CurveId) -> f64 {
+    let CurveKind::Arc { center, start, end } = s.curve(arc).unwrap().kind else {
+        panic!("kein Bogen")
+    };
+    ArcPlan {
+        center: at(s, center),
+        start: at(s, start),
+        end: at(s, end),
+    }
+    .sweep()
+}
+
+/// Die Folge aus `free_lines_solve_...` hoch und wieder runter, aufgelaufen, nicht ab der Basis.
+fn up_and_down(lim: f64) -> Vec<f64> {
+    let up: Vec<f64> = (1..=60).map(|i| lim * f64::from(i) / 61.0).collect();
+    up.iter().chain(up.iter().rev()).copied().collect()
+}
+
+fn direction(s: &Sketch, l: CurveId) -> DVec2 {
+    let (a, b) = line_ends(s, l);
+    (at(s, b) - at(s, a)).normalize()
+}
+
+#[test]
+fn accumulated_radius_sequences_keep_the_sweep_for_free_and_fixed_far_ends() {
+    for fixed in [false, true] {
+        for sign in [1.0, -1.0] {
+            for step in 1..=35 {
+                let phi = f64::from(step) * 5.0_f64.to_radians();
+                let lim = limit(phi);
+                let r0 = 0.2 * lim;
+                let mut v = vee(sign * phi);
+                let (a, b) = (at(&v.s, v.a), at(&v.s, v.b));
+                if fixed {
+                    v.s.add_constraint(ConstraintKind::Fixed(v.a, a.x, a.y))
+                        .unwrap();
+                    v.s.add_constraint(ConstraintKind::Fixed(v.b, b.x, b.y))
+                        .unwrap();
+                }
+                let (d1, d2) = (direction(&v.s, v.l1), direction(&v.s, v.l2));
+                let (_, ids) = round(&mut v, r0);
+                let radius = ids.radius_dim.unwrap();
+                let sweep0 = sweep_of(&v.s, ids.arc);
+                assert!(sweep0 <= PI);
+                let mut state = v.s.clone();
+                let mut old = r0;
+                for r in up_and_down(lim) {
+                    let tag = format!("fest {fixed} {step} {sign} r {r}");
+                    let next = change(&state, radius, old, r).unwrap_or_else(|| panic!("{tag}"));
+                    assert!(!folded_over(&state, &next), "{tag}");
+                    let sweep = sweep_of(&next, ids.arc);
+                    assert!((sweep - sweep0).abs() < 1e-6, "{tag}: {sweep} {sweep0}");
+                    assert!(direction(&next, v.l1).distance(d1) < 1e-9, "{tag}");
+                    assert!(direction(&next, v.l2).distance(d2) < 1e-9, "{tag}");
+                    assert!(at(&next, v.a).distance(a) < 1e-9, "{tag}");
+                    assert!(at(&next, v.b).distance(b) < 1e-9, "{tag}");
+                    let m = at(&next, ids.center);
+                    let want = (a.normalize() + b.normalize()).normalize() * r / (0.5 * phi).sin();
+                    assert!(m.distance(want) < 1e-6, "{tag}: {m:?} {want:?}");
+                    state = next;
+                    old = r;
+                }
+            }
+        }
+    }
+}
+
+/// Die zwei Fälle aus dem Review, mit den Werten von dort.
+#[test]
+fn the_reviewed_loops_do_not_come_back() {
+    let mut v = vee(170.0_f64.to_radians());
+    let (_, ids) = round(&mut v, 20.0);
+    let next = change(&v.s, ids.radius_dim.unwrap(), 20.0, 5.0).unwrap();
+    assert!((sweep_of(&next, ids.arc) - 10.0_f64.to_radians()).abs() < 1e-9);
+
+    let mut v = vee(0.5 * PI);
+    let (a, b) = (at(&v.s, v.a), at(&v.s, v.b));
+    v.s.add_constraint(ConstraintKind::Fixed(v.a, a.x, a.y))
+        .unwrap();
+    v.s.add_constraint(ConstraintKind::Fixed(v.b, b.x, b.y))
+        .unwrap();
+    let (_, ids) = round(&mut v, 5.0);
+    let next = change(&v.s, ids.radius_dim.unwrap(), 5.0, 30.0).unwrap();
+    assert!((sweep_of(&next, ids.arc) - 0.5 * PI).abs() < 1e-9);
+    assert!(at(&next, ids.center).distance(DVec2::new(30.0, 30.0)) < 1e-9);
+}
+
+#[test]
+fn a_radius_larger_than_fits_is_refused_bit_equal() {
+    for fixed in [false, true] {
+        let mut v = vee(0.5 * PI);
+        if fixed {
+            let (a, b) = (at(&v.s, v.a), at(&v.s, v.b));
+            v.s.add_constraint(ConstraintKind::Fixed(v.a, a.x, a.y))
+                .unwrap();
+            v.s.add_constraint(ConstraintKind::Fixed(v.b, b.x, b.y))
+                .unwrap();
+        }
+        let (_, ids) = round(&mut v, 5.0);
+        let radius = ids.radius_dim.unwrap();
+        for r in [40.0, 40.5, 60.0, 1000.0] {
+            let mut trial = v.s.clone();
+            assert_eq!(
+                trial.prepare_dimension_change(radius, r),
+                DimensionChange::DoesNotFit,
+                "r {r}"
+            );
+            assert_eq!(trial.to_data(), v.s.to_data());
+            assert_eq!(trial.variables(), v.s.variables());
+            assert!(!trial.refit_tangent_arc(ids.arc, r), "r {r}");
+            assert_eq!(trial.variables(), v.s.variables());
+        }
+        // Gleich bis auf die Toleranz: nichts zu tun.
+        let mut same = v.s.clone();
+        assert_eq!(
+            same.prepare_dimension_change(radius, 5.0),
+            DimensionChange::Untouched
+        );
+        assert_eq!(same.variables(), v.s.variables());
+    }
+}
+
+#[test]
+fn a_diameter_refits_with_half_the_value() {
+    let mut v = vee(0.5 * PI);
+    let (_, ids) = round(&mut v, 5.0);
+    v.s.remove_constraint(ids.radius_dim.unwrap()).unwrap();
+    let dim =
+        v.s.add_constraint(ConstraintKind::Diameter(ids.arc, 10.0))
+            .unwrap();
+    assert_eq!(
+        v.s.prepare_dimension_change(dim, 24.0),
+        DimensionChange::Refitted
+    );
+    assert!((v.s.radius(ids.arc).unwrap() - 12.0).abs() < 1e-12);
+    assert!(at(&v.s, ids.center).distance(DVec2::new(12.0, 12.0)) < 1e-12);
+}
+
+#[test]
+fn a_driven_radius_and_parallel_neighbours_stay_with_the_solver() {
+    let mut v = vee(0.5 * PI);
+    let (_, ids) = round(&mut v, 5.0);
+    let dim = ids.radius_dim.unwrap();
+    v.s.set_driven(dim, true).unwrap();
+    assert_eq!(
+        v.s.prepare_dimension_change(dim, 9.0),
+        DimensionChange::Untouched
+    );
+    // Halbkreis zwischen parallelen Linien, wie am Langloch
+    let mut s = sketch();
+    let m = pt(&mut s, 0.0, 0.0);
+    let p1 = pt(&mut s, 0.0, -5.0);
+    let p2 = pt(&mut s, 0.0, 5.0);
+    let arc = s.add_arc(m, p1, p2).unwrap();
+    let q1 = pt(&mut s, -30.0, -5.0);
+    let q2 = pt(&mut s, -30.0, 5.0);
+    let l1 = s.add_line(q1, p1).unwrap();
+    let l2 = s.add_line(p2, q2).unwrap();
+    s.add_constraint(ConstraintKind::Tangent(l1, arc)).unwrap();
+    s.add_constraint(ConstraintKind::Tangent(l2, arc)).unwrap();
+    let dim = s.add_constraint(ConstraintKind::Radius(arc, 5.0)).unwrap();
+    assert_eq!(
+        s.prepare_dimension_change(dim, 7.0),
+        DimensionChange::Untouched
+    );
+    assert!(!s.refit_tangent_arc(arc, 7.0));
+}
+
+/// Linie und Bogen bleiben stehen; `make` liefert Skizze, Kurven, Plan und die Radien.
+fn assert_neighbours_stay(
+    mut s: Sketch,
+    plan: FilletPlan,
+    r0: f64,
+    radii: &[f64],
+    keep: &[PointId],
+    what: &str,
+) {
+    let ids = s.add_fillet(&plan, None).unwrap();
+    let radius = ids.radius_dim.unwrap();
+    let kept: Vec<DVec2> = keep.iter().map(|&p| at(&s, p)).collect();
+    let sweep0 = sweep_of(&s, ids.arc);
+    let mut state = s.clone();
+    let mut old = r0;
+    let mut sweep_was = sweep0;
+    for &r in radii.iter().chain(radii.iter().rev()) {
+        let tag = format!("{what} r {r}");
+        let next = change(&state, radius, old, r).unwrap_or_else(|| panic!("{tag} abgelehnt"));
+        assert!(!folded_over(&state, &next), "{tag}");
+        assert!((next.radius(ids.arc).unwrap() - r).abs() < 1e-6, "{tag}");
+        let sweep = sweep_of(&next, ids.arc);
+        assert!(sweep > 0.0 && sweep <= PI, "{tag}: {sweep}");
+        assert!(
+            (sweep - sweep_was).abs() < 0.5 * PI,
+            "{tag}: {sweep} {sweep_was}"
+        );
+        for (p, q) in keep.iter().zip(&kept) {
+            assert!(at(&next, *p).distance(*q) < 1e-9, "{tag}");
+        }
+        sweep_was = sweep;
+        state = next;
+        old = r;
+    }
+}
+
+#[test]
+fn line_arc_and_arc_arc_neighbours_stay_over_the_sequence_up_and_down() {
+    let (s, line, arc, _) = line_arc();
+    let (a, b) = line_arc_picks(line, arc);
+    let plan = s.fillet_plan(a, b, 4.0).expect("Plan");
+    let (la, _) = line_ends(&s, line);
+    let CurveKind::Arc { center, start, .. } = s.curve(arc).unwrap().kind else {
+        panic!()
+    };
+    let radii: Vec<f64> = (1..=120).map(|i| 0.1 * f64::from(i)).collect();
+    assert_neighbours_stay(s, plan, 4.0, &radii, &[la, center, start], "Linie-Bogen");
+
+    let mut s = sketch();
+    let m1 = pt(&mut s, -20.0, 0.0);
+    let s1 = pt(&mut s, -20.0, -20.0);
+    let corner = pt(&mut s, 0.0, 0.0);
+    let a1 = s.add_arc(m1, s1, corner).unwrap();
+    let m2 = pt(&mut s, 0.0, 20.0);
+    let e2 = pt(&mut s, 20.0, 20.0);
+    let a2 = s.add_arc(m2, corner, e2).unwrap();
+    let u = 0.25_f64 * PI;
+    let plan = s
+        .fillet_plan(
+            pick(a1, -20.0 + 20.0 * u.cos(), -20.0 * u.sin()),
+            pick(a2, 20.0 * u.sin(), 20.0 - 20.0 * u.cos()),
+            4.0,
+        )
+        .expect("Plan");
+    assert_neighbours_stay(s, plan, 4.0, &radii, &[m1, s1, m2, e2], "Bogen-Bogen");
+}
+
+#[test]
+fn folded_over_reports_a_tangent_arc_whose_sweep_jumps_past_half_a_turn() {
+    let mut v = vee(0.5 * PI);
+    let (_, ids) = round(&mut v, 5.0);
+    let CurveKind::Arc { end, .. } = v.s.curve(ids.arc).unwrap().kind else {
+        panic!()
+    };
+    let m = at(&v.s, ids.center);
+    let before = v.s.clone();
+    let sweep0 = sweep_of(&before, ids.arc);
+    assert!((sweep0 - 0.5 * PI).abs() < 1e-9);
+    let CurveKind::Arc { start, .. } = v.s.curve(ids.arc).unwrap().kind else {
+        panic!()
+    };
+    let s_angle = (at(&v.s, start) - m).to_angle();
+    let at_sweep = |sweep: f64| m + DVec2::from_angle(s_angle + sweep) * 5.0;
+    // Über eine halbe Drehung mehr: eine Schleife, auch wenn nur ein Ende wandert.
+    let e = at_sweep(0.5 * PI + 3.3);
+    v.s.set_point_xy(end, e.x, e.y).unwrap();
+    assert!(folded_over(&before, &v.s));
+    // Darunter bleibt es, wie es war.
+    let mut t = before.clone();
+    let e = at_sweep(0.5 * PI + 3.0);
+    t.set_point_xy(end, e.x, e.y).unwrap();
+    assert!(!folded_over(&before, &t));
+    // Mit einem freien Ende darf er das.
+    let mut free = sketch();
+    let c = pt(&mut free, 0.0, 0.0);
+    let a = pt(&mut free, 10.0, 0.0);
+    let b = pt(&mut free, 0.0, 10.0);
+    free.add_arc(c, a, b).unwrap();
+    let was = free.clone();
+    let e = DVec2::from_angle(-5.0_f64.to_radians()) * 10.0;
+    free.set_point_xy(b, e.x, e.y).unwrap();
+    assert!(!folded_over(&was, &free));
+}
+
+#[test]
+fn equal_arcs_move_together_and_a_later_fillet_with_another_radius_is_refused() {
+    let (s, _, ids, _) = rounded_rect(5.0);
+    let mut t = s.clone();
+    assert_eq!(
+        t.prepare_dimension_change(ids[0].radius_dim.unwrap(), 12.0),
+        DimensionChange::Refitted
+    );
+    for f in &ids {
+        assert!((t.radius(f.arc).unwrap() - 12.0).abs() < 1e-9);
+    }
+    assert_eq!(
+        t.clone()
+            .prepare_dimension_change(ids[0].radius_dim.unwrap(), 15.0),
+        DimensionChange::DoesNotFit
+    );
+
+    let mut v = vee(1.0);
+    let n0 = pt(&mut v.s, 100.0, 0.0);
+    let n1 = pt(&mut v.s, 140.0, 0.0);
+    let n2 = pt(&mut v.s, 100.0, 40.0);
+    let m1 = v.s.add_line(n1, n0).unwrap();
+    let m2 = v.s.add_line(n0, n2).unwrap();
+    let (_, first) = round(&mut v, 5.0);
+    let plan =
+        v.s.fillet_plan(pick(m1, 120.0, 0.0), pick(m2, 100.0, 20.0), 6.0)
+            .unwrap();
+    let data = v.s.to_data();
+    assert!(matches!(
+        v.s.add_fillet(&plan, Some(first.arc)),
+        Err(planora_sketch::SketchError::InvalidInput(_))
+    ));
+    assert_eq!(v.s.to_data(), data);
+}
+
+// ---- Alte Enden ohne gemeinsamen Punkt ------------------------------------------------------
+
+/// Zwei Linien, die sich im Ursprung nur treffen, mit getrennten Enden `e1`, `e2` nahe daran.
+struct Apart {
+    s: Sketch,
+    a: PointId,
+    e1: PointId,
+    e2: PointId,
+    l1: CurveId,
+    l2: CurveId,
+}
+
+fn apart(gap: f64) -> Apart {
+    let mut s = sketch();
+    let a = pt(&mut s, 40.0, 0.0);
+    let e1 = pt(&mut s, gap, 0.0);
+    let l1 = s.add_line(a, e1).unwrap();
+    let b = pt(&mut s, 0.0, 40.0);
+    let e2 = pt(&mut s, 0.0, gap);
+    let l2 = s.add_line(e2, b).unwrap();
+    Apart {
+        s,
+        a,
+        e1,
+        e2,
+        l1,
+        l2,
+    }
+}
+
+fn apart_fillet(t: &mut Apart, r: f64) -> FilletIds {
+    let plan =
+        t.s.fillet_plan(pick(t.l1, 20.0, 0.0), pick(t.l2, 0.0, 20.0), r)
+            .expect("Plan");
+    t.s.add_fillet(&plan, None).unwrap()
+}
+
+fn apart_chamfer(t: &mut Apart, d: f64) -> ChamferIds {
+    let plan =
+        t.s.chamfer_plan(
+            pick(t.l1, 20.0, 0.0),
+            pick(t.l2, 0.0, 20.0),
+            ChamferKind::Equal(d),
+        )
+        .expect("Plan");
+    t.s.add_chamfer(&plan).unwrap()
+}
+
+/// Radiusfolge hoch und runter: nie umgeklappt, die Linien drehen sich nicht.
+fn assert_radius_sweep(t: &Apart, ids: &FilletIds) {
+    let radius = ids.radius_dim.unwrap();
+    let (d1, d2) = (direction(&t.s, t.l1), direction(&t.s, t.l2));
+    let mut state = t.s.clone();
+    let mut old = state.radius(ids.arc).unwrap();
+    let radii: Vec<f64> = (1..=300).map(|i| 0.1 * f64::from(i)).collect();
+    for &r in radii.iter().chain(radii.iter().rev()) {
+        let next = change(&state, radius, old, r).unwrap_or_else(|| panic!("r {r}"));
+        assert!(!folded_over(&state, &next), "r {r}");
+        assert!(direction(&next, t.l1).distance(d1) < 1e-6, "r {r}");
+        assert!(direction(&next, t.l2).distance(d2) < 1e-6, "r {r}");
+        assert!(next.point_xy(t.a).is_ok());
+        state = next;
+        old = r;
+    }
+}
+
+#[test]
+fn a_dimension_on_an_old_end_survives() {
+    let mut t = apart(3.0);
+    let dim =
+        t.s.add_constraint(ConstraintKind::Distance(t.a, t.e1, 37.0))
+            .unwrap();
+    let ids = apart_fillet(&mut t, 5.0);
+    assert!(t.s.constraint(dim).is_some());
+    assert!(t.s.points().any(|(p, d)| p == t.e1 && d.construction));
+    assert!(has(&t.s, ConstraintKind::PointOnCurve(t.e1, t.l1)));
+    assert!(t.s.point_xy(t.e2).is_err(), "das unbenutzte Ende entfällt");
+    assert_still(&t.s);
+    assert_radius_sweep(&t, &ids);
+
+    let mut t = apart(3.0);
+    let dim =
+        t.s.add_constraint(ConstraintKind::Distance(t.a, t.e1, 37.0))
+            .unwrap();
+    apart_chamfer(&mut t, 5.0);
+    assert!(t.s.constraint(dim).is_some());
+    assert!(has(&t.s, ConstraintKind::PointOnCurve(t.e1, t.l1)));
+    assert!(t.s.point_xy(t.e2).is_err());
+    assert_still(&t.s);
+}
+
+#[test]
+fn coincident_old_ends_and_their_dimension_survive_with_the_same_freedom() {
+    let build = || {
+        let mut t = apart(0.0);
+        let bind =
+            t.s.add_constraint(ConstraintKind::Coincident(t.e1, t.e2))
+                .unwrap();
+        let dim =
+            t.s.add_constraint(ConstraintKind::Distance(t.a, t.e1, 40.0))
+                .unwrap();
+        (t, bind, dim)
+    };
+    let (mut t, bind, dim) = build();
+    let before = dof(&t.s);
+    assert_eq!(before, 5);
+    let ids = apart_fillet(&mut t, 5.0);
+    assert!(t.s.constraint(bind).is_some());
+    assert!(t.s.constraint(dim).is_some());
+    assert_eq!(ids.corner, None, "kein gemeinsamer Punkt");
+    assert_eq!(assert_still(&t.s).dof, before);
+    assert_radius_sweep(&t, &ids);
+
+    let (mut t, bind, dim) = build();
+    apart_chamfer(&mut t, 5.0);
+    assert!(t.s.constraint(bind).is_some());
+    assert!(t.s.constraint(dim).is_some());
+    assert_eq!(assert_still(&t.s).dof, before);
+}
+
+#[test]
+fn a_third_line_at_an_old_end_stays_attached_to_its_curve() {
+    let build = || {
+        let mut t = apart(3.0);
+        let c = pt(&mut t.s, 3.0, -30.0);
+        let third = t.s.add_line(t.e1, c).unwrap();
+        (t, third, c)
+    };
+    let (mut t, third, c) = build();
+    let ids = apart_fillet(&mut t, 2.0);
+    assert_eq!(line_ends(&t.s, third), (t.e1, c));
+    assert!(has(&t.s, ConstraintKind::PointOnCurve(t.e1, t.l1)));
+    assert_still(&t.s);
+    assert_radius_sweep(&t, &ids);
+
+    let (mut t, third, c) = build();
+    apart_chamfer(&mut t, 2.0);
+    assert_eq!(line_ends(&t.s, third), (t.e1, c));
+    assert!(has(&t.s, ConstraintKind::PointOnCurve(t.e1, t.l1)));
+    assert_still(&t.s);
+}
+
+// ---- Weitere Fälle aus dem Review -----------------------------------------------------------
+
+#[test]
+fn a_chamfer_keeps_a_foreign_dimension_on_the_corner() {
+    for kind in [
+        ChamferKind::Equal(5.0),
+        ChamferKind::TwoDistances(5.0, 8.0),
+        ChamferKind::DistanceAngle(5.0, 0.6),
+    ] {
+        let mut v = vee(1.2);
+        let dim =
+            v.s.add_constraint(ConstraintKind::Distance(v.a, v.p, 40.0))
+                .unwrap();
+        let before = dof(&v.s);
+        let (_, ids) = chamfer(&mut v, kind);
+        assert_eq!(assert_still(&v.s).dof, before, "{kind:?}");
+        assert_eq!(ids.corner, v.p);
+        assert!(v.s.constraint(dim).is_some(), "{kind:?}");
+        for i in 0..=100 {
+            let d = 30.0 + 0.1 * f64::from(i);
+            let next = change(&v.s, dim, 40.0, d).unwrap_or_else(|| panic!("{kind:?} {d}"));
+            assert!(!folded_over(&v.s, &next), "{kind:?} {d}");
+        }
+    }
+}
+
+#[test]
+fn arc_arc_keeps_a_dimension_on_the_corner() {
+    let mut s = sketch();
+    let m1 = pt(&mut s, -20.0, 0.0);
+    let s1 = pt(&mut s, -20.0, -20.0);
+    let corner = pt(&mut s, 0.0, 0.0);
+    let a1 = s.add_arc(m1, s1, corner).unwrap();
+    let m2 = pt(&mut s, 0.0, 20.0);
+    let e2 = pt(&mut s, 20.0, 20.0);
+    let a2 = s.add_arc(m2, corner, e2).unwrap();
+    let far = pt(&mut s, 0.0, 50.0);
+    let dim = s
+        .add_constraint(ConstraintKind::Distance(far, corner, 50.0))
+        .unwrap();
+    let before = dof(&s);
+    let u = 0.25_f64 * PI;
+    let plan = s
+        .fillet_plan(
+            pick(a1, -20.0 + 20.0 * u.cos(), -20.0 * u.sin()),
+            pick(a2, 20.0 * u.sin(), 20.0 - 20.0 * u.cos()),
+            4.0,
+        )
+        .expect("Plan");
+    let ids = s.add_fillet(&plan, None).unwrap();
+    assert_eq!(ids.corner, Some(corner));
+    assert!(s.constraint(dim).is_some());
+    assert_eq!(assert_still(&s).dof, before);
+    assert!(has(&s, ConstraintKind::PointOnCurve(corner, a1)));
+    assert!(has(&s, ConstraintKind::PointOnCurve(corner, a2)));
+}
+
+/// Für `offene-punkte.md`: Linie am Endpunkt eines Splines, gemeinsamer Punkt: rel +1, weil keine
+/// Zeile die Tangente am Spline hält; das alte Ende bleibt am Spline und auf der Linie.
+#[test]
+fn line_spline_at_a_shared_end_measures_its_freedom() {
+    let mut s = sketch();
+    let pts: Vec<PointId> = [(0.0, 0.0), (20.0, 3.0), (40.0, -3.0), (60.0, 0.0)]
+        .iter()
+        .map(|&(x, y)| pt(&mut s, x, y))
+        .collect();
+    let sp = s.add_spline(&pts).unwrap();
+    let a = pt(&mut s, 0.0, 40.0);
+    let l = s.add_line(a, pts[0]).unwrap();
+    let before = dof(&s);
+    let plan = s
+        .fillet_plan(pick(l, 0.0, 20.0), pick(sp, 20.0, 3.0), 3.0)
+        .expect("Plan");
+    assert_eq!(plan.moves[1], EndMove::Whole);
+    s.add_fillet(&plan, None).unwrap();
+    assert!(s.point_xy(pts[0]).is_ok(), "der Spline behält seinen Punkt");
+    let r = s.clone().solve();
+    assert_clean(&r);
+    assert_eq!(r.dof, before + 1, "gemessen, steht in offene-punkte.md");
+}
+
+/// Linie-Kreis und feste Linie laufen weiter über den Löser, der Bogen darf dort nicht ausbeulen.
+#[test]
+fn whole_neighbours_keep_the_sweep_over_the_sequence_up_and_down() {
+    let radii: Vec<f64> = (1..=300).map(|i| 0.1 * f64::from(i)).collect();
+    let run = |s: &Sketch, ids: &FilletIds, what: &str| {
+        let radius = ids.radius_dim.unwrap();
+        let mut state = s.clone();
+        let mut old = 4.0;
+        let mut worst = sweep_of(s, ids.arc);
+        for &r in radii.iter().chain(radii.iter().rev()) {
+            let next = change(&state, radius, old, r).unwrap_or_else(|| panic!("{what} r {r}"));
+            assert!(!folded_over(&state, &next), "{what} r {r}");
+            worst = worst.max(sweep_of(&next, ids.arc));
+            state = next;
+            old = r;
+        }
+        assert!(worst <= PI, "{what}: größter Öffnungswinkel {worst}");
+    };
+    let (mut s, l, k, _, _) = line_circle();
+    let plan = s
+        .fillet_plan(pick(l, 30.0, 16.0), pick(k, 20.0, 0.0), 4.0)
+        .expect("Plan");
+    let ids = s.add_fillet(&plan, None).unwrap();
+    run(&s, &ids, "Linie-Kreis");
+
+    let mut s = sketch();
+    let f0 = pt(&mut s, 0.0, 0.0);
+    let f1 = pt(&mut s, 200.0, 0.0);
+    let fixed = s.add_line(f0, f1).unwrap();
+    s.add_constraint(ConstraintKind::Fixed(f0, 0.0, 0.0))
+        .unwrap();
+    s.add_constraint(ConstraintKind::Fixed(f1, 200.0, 0.0))
+        .unwrap();
+    let a = pt(&mut s, 30.0, 80.0);
+    let e = pt(&mut s, 30.0, 1.0);
+    let free = s.add_line(a, e).unwrap();
+    let plan = s
+        .fillet_plan(pick(fixed, 10.0, 0.0), pick(free, 30.0, 40.0), 4.0)
+        .expect("Plan");
+    let ids = s.add_fillet(&plan, None).unwrap();
+    run(&s, &ids, "feste Linie");
 }

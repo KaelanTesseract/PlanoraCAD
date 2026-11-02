@@ -1552,6 +1552,7 @@ impl SketchSession {
                 return Err(crate::msg!("sketch-angle-range"));
             }
             let old = sk.measure(&kind);
+            prepare_arc(sk, id, value)?;
             sk.set_constraint_value(id, value).map_err(err)?;
             let unsolved = sk.clone();
             let direct = se.solve_checked(sk, prior).map(|_| ());
@@ -1983,6 +1984,15 @@ pub(crate) fn check_change(
     let worse =
         before.status == SolveStatus::Conflicting && report.status == SolveStatus::NotConverged;
     (grown || worse).then_some(report.status)
+}
+
+/// Setzt einen tangentialen Bogen vor dem Lösen auf die Lage für den neuen Wert `value` des Maßes
+/// `id` (Skizzen 4); passt der Wert nicht zwischen die Nachbarn, wird er abgelehnt.
+fn prepare_arc(sk: &mut Sketch, id: ConstraintId, value: f64) -> Result<(), Msg> {
+    match sk.prepare_dimension_change(id, value) {
+        planora_sketch::DimensionChange::DoesNotFit => Err(crate::msg!("sketch-dimension-folds")),
+        _ => Ok(()),
+    }
 }
 
 /// Das Maß `kind` mit dem Wert `value`, geprüft nach der gemeinsamen Regel der Skizze

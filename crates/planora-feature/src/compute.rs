@@ -575,6 +575,9 @@ fn check_volume(
 /// Sprung ist, geht es von den bisherigen Werten in Schritten dorthin; gelingt das auch nicht, bleibt
 /// es beim Status des direkten Lösens. Gelingt das direkte Lösen, entsteht keine Mehrarbeit.
 fn solve_formulas(sketch: &mut Sketch, sf: &SketchFeature) -> SolveStatus {
+    if !refit_formula_arcs(sketch, sf) {
+        return SolveStatus::NotConverged;
+    }
     let direct = sketch.solve().status;
     if direct == SolveStatus::Solved {
         return direct;
@@ -600,6 +603,47 @@ fn solve_formulas(sketch: &mut Sketch, sf: &SketchFeature) -> SolveStatus {
         }
         None => direct,
     }
+}
+
+/// Setzt tangentiale Bögen vor dem Lösen auf die Lage für ihren neuen Formelradius (siehe
+/// [`Sketch::prepare_dimension_change`]). Passt ein Radius nicht zwischen die Nachbarn, kann ein
+/// anderes Formelmaß erst Platz schaffen: Dann gehen zuerst die anderen Maße durch den Löser, mit
+/// dem alten Radius. `false`, wenn der Radius auch dann nicht passt.
+fn refit_formula_arcs(sketch: &mut Sketch, sf: &SketchFeature) -> bool {
+    use planora_sketch::{ConstraintId, DimensionChange};
+    let targets: Vec<(ConstraintId, f64)> = sf
+        .formulas
+        .keys()
+        .filter_map(|&id| Some((id, sketch.constraint(id)?.kind.length_value()?)))
+        .collect();
+    let refused: Vec<(ConstraintId, f64)> = targets
+        .into_iter()
+        .filter(|&(id, value)| {
+            sketch.prepare_dimension_change(id, value) == DimensionChange::DoesNotFit
+        })
+        .collect();
+    if refused.is_empty() {
+        return true;
+    }
+    let mut trial = sketch.clone();
+    for &(id, _) in &refused {
+        let measured = trial.constraint(id).and_then(|c| trial.measure(&c.kind));
+        if measured.is_none_or(|old| trial.set_constraint_value(id, old).is_err()) {
+            return false;
+        }
+    }
+    if trial.solve().status != SolveStatus::Solved {
+        return false;
+    }
+    for &(id, value) in &refused {
+        if trial.set_constraint_value(id, value).is_err()
+            || trial.prepare_dimension_change(id, value) == DimensionChange::DoesNotFit
+        {
+            return false;
+        }
+    }
+    *sketch = trial;
+    true
 }
 
 /// Skizze: Ebene auflösen, Kantenkopien nachführen, lösen.

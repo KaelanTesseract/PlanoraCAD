@@ -977,3 +977,61 @@ fn accessibility_names_of_field_and_fx() {
     assert_eq!(node(&fx_label()).role(), Role::Button);
     assert_eq!(node("Abstand").role(), Role::TextInput);
 }
+
+// ---- Rundung: Radius über einen Parameter (Skizzen 4) ----------------------------------------
+
+#[test]
+fn a_fillet_radius_follows_its_parameter_without_moving_the_lines() {
+    use planora_sketch::fillet::CurvePick;
+    let mut app = PlanoraApp::for_tests(library_ws());
+    let s = state(&mut app);
+    let radius = param(s, "R", "5", ParamUnit::Length);
+    let sketch = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    s.open_sketch(sketch).unwrap();
+    let (_, sf) = s.session_draft_mut().unwrap();
+    let sk = &mut sf.sketch;
+    let a = sk.add_point(40.0, 0.0).unwrap();
+    let p = sk.add_point(0.0, 0.0).unwrap();
+    let b = sk.add_point(0.0, 40.0).unwrap();
+    let l1 = sk.add_line(a, p).unwrap();
+    let l2 = sk.add_line(p, b).unwrap();
+    let plan = sk
+        .fillet_plan(
+            CurvePick {
+                curve: l1,
+                at: planora_math::DVec2::new(20.0, 0.0),
+            },
+            CurvePick {
+                curve: l2,
+                at: planora_math::DVec2::new(0.0, 20.0),
+            },
+            5.0,
+        )
+        .unwrap();
+    let ids = sk.add_fillet(&plan, None).unwrap();
+    sf.formulas.insert(ids.radius_dim.unwrap(), "R".to_string());
+    s.close_sketch();
+    for (value, text) in [(30.0, "30"), (2.0, "2"), (39.0, "39")] {
+        set_param(s, radius, text);
+        let sk = s.document.sketch_of(sketch).unwrap();
+        let m = sk.point_xy(ids.center).unwrap();
+        assert!(
+            m.distance(planora_math::DVec2::splat(value)) < 1e-9,
+            "{text}: {m:?}"
+        );
+        assert!(
+            sk.point_xy(a)
+                .unwrap()
+                .distance(planora_math::DVec2::new(40.0, 0.0))
+                < 1e-9
+        );
+        assert!(
+            sk.point_xy(b)
+                .unwrap()
+                .distance(planora_math::DVec2::new(0.0, 40.0))
+                < 1e-9
+        );
+    }
+}

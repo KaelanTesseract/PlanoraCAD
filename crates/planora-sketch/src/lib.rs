@@ -32,7 +32,10 @@ pub use constraint::{ConstraintData, ConstraintId, ConstraintKind, Evaluation, L
 pub use data::{ConstraintRecord, CurveRecord, PointRecord, SketchData};
 pub use edit::TrimPiece;
 pub use error::SketchError;
-pub use fillet::{ChamferIds, ChamferKind, ChamferPlan, CurvePick, EndMove, FilletIds, FilletPlan};
+pub use fillet::{
+    ChamferIds, ChamferKind, ChamferPlan, CurvePick, DimensionChange, EndMove, FilletIds,
+    FilletPlan,
+};
 pub use helpers::{RectIds, plane_of_face};
 pub use model::{CurveData, CurveId, CurveKind, LineStyle, PointData, PointId, Sketch};
 pub use profile::{ExtractedProfiles, PieceRef, ProfileRef, RejectedLoop};

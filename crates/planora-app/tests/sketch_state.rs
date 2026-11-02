@@ -953,3 +953,68 @@ fn dialog_angles_0_and_180_reach_the_solver() {
         }
     }
 }
+
+// ---- Rundung: Radius über das Maß (Skizzen 4) ------------------------------------------------
+
+/// Zwei Linien der Länge 40 im rechten Winkel, Ecke im Ursprung, gerundet mit Radius 5.
+fn rounded_corner(
+    sk: &mut Sketch,
+    fixed: bool,
+) -> (planora_sketch::FilletIds, planora_sketch::PointId) {
+    use planora_sketch::fillet::CurvePick;
+    let a = sk.add_point(40.0, 0.0).unwrap();
+    let p = sk.add_point(0.0, 0.0).unwrap();
+    let b = sk.add_point(0.0, 40.0).unwrap();
+    let l1 = sk.add_line(a, p).unwrap();
+    let l2 = sk.add_line(p, b).unwrap();
+    if fixed {
+        sk.add_constraint(K::Fixed(a, 40.0, 0.0)).unwrap();
+        sk.add_constraint(K::Fixed(b, 0.0, 40.0)).unwrap();
+    }
+    let plan = sk
+        .fillet_plan(
+            CurvePick {
+                curve: l1,
+                at: DVec2::new(20.0, 0.0),
+            },
+            CurvePick {
+                curve: l2,
+                at: DVec2::new(0.0, 20.0),
+            },
+            5.0,
+        )
+        .unwrap();
+    (sk.add_fillet(&plan, None).unwrap(), a)
+}
+
+#[test]
+fn a_fillet_radius_dimension_moves_the_arc_and_leaves_the_lines() {
+    for fixed in [false, true] {
+        let (mut sk, mut se) = setup();
+        let (ids, a) = rounded_corner(&mut sk, fixed);
+        let dim = ids.radius_dim.unwrap();
+        for r in [30.0, 2.0, 39.0, 0.5, 20.0] {
+            se.set_dimension_value(&mut sk, dim, r).unwrap();
+            let m = sk.point_xy(ids.center).unwrap();
+            assert!(m.distance(DVec2::splat(r)) < 1e-9, "{fixed} r {r}: {m:?}");
+            assert!(
+                sk.point_xy(ids.touch[1])
+                    .unwrap()
+                    .distance(DVec2::new(0.0, r))
+                    < 1e-9
+            );
+            assert!(sk.point_xy(a).unwrap().distance(DVec2::new(40.0, 0.0)) < 1e-9);
+        }
+    }
+}
+
+#[test]
+fn a_fillet_radius_that_does_not_fit_is_refused_and_changes_nothing() {
+    let (mut sk, mut se) = setup();
+    let (ids, _) = rounded_corner(&mut sk, false);
+    let dim = ids.radius_dim.unwrap();
+    let before = sk.to_data();
+    let text = se.set_dimension_value(&mut sk, dim, 45.0).unwrap_err();
+    assert_eq!(text, planora_i18n::tr!("sketch-dimension-folds"));
+    assert_eq!(sk.to_data(), before);
+}

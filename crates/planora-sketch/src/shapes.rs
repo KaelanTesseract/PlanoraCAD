@@ -404,11 +404,38 @@ fn reversed(before: &Sketch, after: &Sketch, from: PointId, to: PointId) -> bool
     }
 }
 
+/// Ändert sich der Öffnungswinkel des Bogens von `before` nach `after` um mehr als π?
+fn sweep_jumped(
+    before: &Sketch,
+    after: &Sketch,
+    center: PointId,
+    start: PointId,
+    end: PointId,
+) -> bool {
+    let sweep = |sk: &Sketch| {
+        Some(
+            ArcPlan {
+                center: sk.point_xy(center).ok()?,
+                start: sk.point_xy(start).ok()?,
+                end: sk.point_xy(end).ok()?,
+            }
+            .sweep(),
+        )
+    };
+    match (sweep(before), sweep(after)) {
+        (Some(was), Some(now)) => (was - now).abs() > PI,
+        _ => false,
+    }
+}
+
 /// Hat ein Maß die Skizze umgeklappt? Wahr, wenn von `before` nach `after` die Richtung einer
 /// lebenden Linie umkehrt oder bei einem lebenden Bogen die Vektoren Mitte→Start und Mitte→Ende
 /// beide. Der Löser meldet so etwas als gelöst, wenn alle Abhängigkeiten auch in der umgeklappten
 /// Lage gelten. Beim Bogen reicht ein Ende nicht: Läuft der Anschluss eines tangentialen Bogens an
-/// seinem freien Ende vorbei, dreht dessen Vektor über 90°, und die Richtung stimmt trotzdem.
+/// seinem freien Ende vorbei, dreht dessen Vektor über 90°, und die Richtung stimmt trotzdem. Ein
+/// Bogen, der an beiden Enden tangential anschließt, hat auch umgeklappt, wenn sich sein
+/// Öffnungswinkel um mehr als π ändert (eine Schleife). Mit einem freien Ende darf er das: Wird die
+/// Linie vor einem tangentialen Bogen länger, läuft der Bogen weiter um sein festes Ende herum.
 pub fn folded_over(before: &Sketch, after: &Sketch) -> bool {
     after.curves().any(|(c, data)| {
         if before.curve(c).is_none_or(|d| d.kind != data.kind) {
@@ -417,7 +444,9 @@ pub fn folded_over(before: &Sketch, after: &Sketch) -> bool {
         match data.kind {
             CurveKind::Line { a, b } => reversed(before, after, a, b),
             CurveKind::Arc { center, start, end } => {
-                reversed(before, after, center, start) && reversed(before, after, center, end)
+                (reversed(before, after, center, start) && reversed(before, after, center, end))
+                    || (after.tangent_ends(c).is_some()
+                        && sweep_jumped(before, after, center, start, end))
             }
             _ => false,
         }

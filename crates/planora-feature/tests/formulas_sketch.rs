@@ -1252,3 +1252,94 @@ fn a_big_parameter_jump_keeps_a_rounded_rectangle_with_its_tangents() {
         assert!((done.radius(arc1).unwrap() - r).abs() < 1e-6, "{value}");
     }
 }
+
+// ---- Rundung mit Formelradius (Skizzen 4) ----------------------------------------------------
+
+/// Zwei Linien der Länge 40 im rechten Winkel, Ecke im Ursprung, gerundet mit Radius 5.
+fn rounded_corner(fixed: bool) -> (Sketch, planora_sketch::FilletIds, [ConstraintId; 2]) {
+    use planora_sketch::fillet::CurvePick;
+    let mut sk = Sketch::new(StandardPlane::XY.frame(), "S", Tolerance::default());
+    let a = sk.add_point(40.0, 0.0).unwrap();
+    let p = sk.add_point(0.0, 0.0).unwrap();
+    let b = sk.add_point(0.0, 40.0).unwrap();
+    let l1 = sk.add_line(a, p).unwrap();
+    let l2 = sk.add_line(p, b).unwrap();
+    if fixed {
+        sk.add_constraint(ConstraintKind::Fixed(a, 40.0, 0.0))
+            .unwrap();
+        sk.add_constraint(ConstraintKind::Fixed(b, 0.0, 40.0))
+            .unwrap();
+    }
+    let corner = [
+        sk.add_constraint(ConstraintKind::Distance(a, p, 40.0))
+            .unwrap(),
+        sk.add_constraint(ConstraintKind::Distance(b, p, 40.0))
+            .unwrap(),
+    ];
+    let plan = sk
+        .fillet_plan(
+            CurvePick {
+                curve: l1,
+                at: DVec2::new(20.0, 0.0),
+            },
+            CurvePick {
+                curve: l2,
+                at: DVec2::new(0.0, 20.0),
+            },
+            5.0,
+        )
+        .unwrap();
+    let ids = sk.add_fillet(&plan, None).unwrap();
+    (sk, ids, corner)
+}
+
+#[test]
+fn a_fillet_radius_formula_refits_the_arc_and_refuses_what_does_not_fit() {
+    let (sk, ids, _) = rounded_corner(true);
+    let dim = ids.radius_dim.unwrap();
+    let mut d = Document::new();
+    let r = d.add_parameter("R", "5", Length, "").unwrap();
+    let s = d
+        .add_feature("Skizze 1", FeatureKind::Sketch(on_xy(sk, one(dim, "R"))))
+        .unwrap();
+    assert_eq!(status(&d, s), FeatureStatus::Ok);
+    for (value, text) in [(30.0, "30"), (2.0, "2"), (39.0, "39"), (5.0, "5")] {
+        d.set_parameter(r, edit(&d, r, text)).unwrap();
+        assert_eq!(status(&d, s), FeatureStatus::Ok, "{text}");
+        let got = d.sketch_of(s).unwrap();
+        let m = got.point_xy(ids.center).unwrap();
+        assert!(m.distance(DVec2::splat(value)) < 1e-6, "{text}: {m:?}");
+        assert!(
+            got.point_xy(ids.touch[0])
+                .unwrap()
+                .distance(DVec2::new(value, 0.0))
+                < 1e-6
+        );
+    }
+    d.set_parameter(r, edit(&d, r, "45")).unwrap();
+    assert!(error_text(&d, s).contains(&planora_i18n::tr!("sketch-formula-unsolvable")));
+}
+
+/// Passt der Radius erst, wenn eine andere Formel die Linie verlängert hat, geht es auch.
+#[test]
+fn a_longer_line_makes_room_for_the_formula_radius() {
+    let (sk, ids, corner) = rounded_corner(false);
+    let dim = ids.radius_dim.unwrap();
+    let mut d = Document::new();
+    let x = d.add_parameter("X", "40", Length, "").unwrap();
+    let formulas: SketchFormulas = [
+        (corner[0], "X".to_string()),
+        (corner[1], "X".to_string()),
+        (dim, "X / 8".to_string()),
+    ]
+    .into_iter()
+    .collect();
+    let s = d
+        .add_feature("Skizze 1", FeatureKind::Sketch(on_xy(sk, formulas)))
+        .unwrap();
+    assert_eq!(status(&d, s), FeatureStatus::Ok);
+    d.set_parameter(x, edit(&d, x, "400")).unwrap();
+    assert_eq!(status(&d, s), FeatureStatus::Ok);
+    let got = d.sketch_of(s).unwrap();
+    assert!((got.radius(ids.arc).unwrap() - 50.0).abs() < 1e-6);
+}

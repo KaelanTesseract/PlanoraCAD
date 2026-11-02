@@ -66,13 +66,16 @@ fn a_fillet_needs_no_new_format_and_the_copy_brings_everything_back() {
     let (mut sk, l1, l2) = corner();
     let copy = sk.clone();
     let format = format_of(&sk);
+    let text = encode_version(&document(&sk).snapshot()).unwrap();
     let (a, b) = picks(l1, l2);
     let plan = sk.fillet_plan(a, b, 5.0).unwrap();
     sk.add_fillet(&plan, None).unwrap();
     assert_eq!(format_of(&sk), format);
     assert_round_trip(&sk);
-    let sk = copy.clone();
-    assert_eq!(sk.to_data(), copy.to_data());
+    assert_ne!(encode_version(&document(&sk).snapshot()).unwrap(), text);
+    // Zurück über die Kopie: bytegleich wie vor der Rundung.
+    let sk = copy;
+    assert_eq!(encode_version(&document(&sk).snapshot()).unwrap(), text);
     assert_eq!(format_of(&sk), format);
     assert_round_trip(&sk);
 }
