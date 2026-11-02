@@ -56,7 +56,7 @@ fn unsupported(what: String) -> SketchError {
 
 impl Sketch {
     /// Führt `f` aus; bei einem Fehler wird der vorherige Zustand wiederhergestellt.
-    fn atomically<T>(
+    pub(crate) fn atomically<T>(
         &mut self,
         f: impl FnOnce(&mut Sketch) -> Result<T, SketchError>,
     ) -> Result<T, SketchError> {

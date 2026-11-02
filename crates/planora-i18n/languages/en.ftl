@@ -1530,6 +1530,7 @@ sketch-err-object-twice = An object is selected more than once
 sketch-err-copy-kinds = Only lines, circles, arcs and elliptical arcs can be copied
 sketch-err-corners-finite = The corners must be finite numbers
 sketch-err-rect-size = Width and height of the rectangle must be greater than zero
+sketch-err-polygon-sides = A polygon has 3 to 64 sides
 sketch-err-mirror-line = The mirror axis must be a line
 sketch-err-mirror-self = The mirror axis cannot be mirrored itself
 sketch-err-mirror-zero = The mirror axis has zero length

@@ -1513,6 +1513,7 @@ sketch-err-object-twice = Ein Objekt ist mehrfach ausgewählt
 sketch-err-copy-kinds = Nur Linien, Kreise, Bögen und Ellipsenbögen können kopiert werden
 sketch-err-corners-finite = Die Ecken müssen endliche Zahlen sein
 sketch-err-rect-size = Breite und Höhe des Rechtecks müssen größer als null sein
+sketch-err-polygon-sides = Ein Polygon hat 3 bis 64 Seiten
 sketch-err-mirror-line = Die Spiegelachse muss eine Linie sein
 sketch-err-mirror-self = Die Spiegelachse kann nicht selbst gespiegelt werden
 sketch-err-mirror-zero = Die Spiegelachse hat die Länge null

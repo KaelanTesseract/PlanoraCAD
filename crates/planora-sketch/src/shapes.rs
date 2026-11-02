@@ -1,9 +1,18 @@
-//! Reine Geometrie der Zeichenvarianten (Rechteck, Kreis, Bogen, Polygon, Langloch).
+//! Zeichenvarianten (Rechteck, Kreis, Bogen, Polygon, Langloch): reine Geometrie und das Anlegen
+//! je Form.
 //!
-//! Alle Funktionen rechnen nur mit Lagen und kennen die Skizze nicht; Vorschau und Anlegen
+//! Die freien Funktionen rechnen nur mit Lagen und kennen die Skizze nicht; Vorschau und Anlegen
 //! nehmen denselben Plan. `tol` ist die lineare Toleranz. Bei Entartung (zusammenfallende oder
 //! auf einer Geraden liegende Punkte, Größe null) liefern sie `None`.
+//!
+//! Die `Sketch::add_…` legen je Form Punkte, Kurven und Abhängigkeiten atomar an: Bei einem Fehler
+//! bleibt die Skizze unverändert.
 
+use crate::constraint::{ConstraintKind, LineOrPoints};
+use crate::error::SketchError;
+use crate::helpers::RectIds;
+use crate::model::{CurveId, PointId, Sketch};
+use planora_i18n::tr;
 use planora_math::{DVec2, PI, TAU};
 
 fn all_finite(points: &[DVec2]) -> bool {
@@ -471,5 +480,274 @@ impl ShapePlan {
             }
         }
         vec![out]
+    }
+}
+
+/// Ids eines Rechtecks um eine Mitte: dazu die Mitte und die beiden Konstruktionsdiagonalen.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CenterRectIds {
+    pub rect: RectIds,
+    pub center: PointId,
+    pub diagonals: [CurveId; 2],
+}
+
+/// Ids eines Polygons: Mitte, Konstruktionskreis durch die Ecken, Ecken und Seiten (Seite `i`
+/// läuft von Ecke `i` nach Ecke `i + 1`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PolygonIds {
+    pub center: PointId,
+    pub circle: CurveId,
+    pub points: Vec<PointId>,
+    pub lines: Vec<CurveId>,
+}
+
+/// Art eines geraden Langlochs: woran seine Länge hängt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SlotStyle {
+    CenterToCenter,
+    Overall,
+    CenterPoint,
+}
+
+/// Ids eines geraden Langlochs. `length_points` sind die Punkte des Längenmaßes: die Mitten der
+/// Endkreise, bei `Overall` die äußersten Enden. `mid` gibt es nur bei `CenterPoint`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SlotIds {
+    pub centers: [PointId; 2],
+    pub sides: [CurveId; 2],
+    pub caps: [CurveId; 2],
+    pub axis: CurveId,
+    pub length_points: [PointId; 2],
+    pub mid: Option<PointId>,
+}
+
+/// Ids eines Bogenlanglochs; `ends` sind die Enden der Achse und zugleich die Mitten von `caps`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ArcSlotIds {
+    pub center: PointId,
+    pub ends: [PointId; 2],
+    pub axis: CurveId,
+    pub outer: CurveId,
+    pub inner: CurveId,
+    pub caps: [CurveId; 2],
+}
+
+impl Sketch {
+    fn add_point_at(&mut self, p: DVec2) -> Result<PointId, SketchError> {
+        self.add_point(p.x, p.y)
+    }
+
+    fn add_construction_line(&mut self, a: PointId, b: PointId) -> Result<CurveId, SketchError> {
+        let line = self.add_line(a, b)?;
+        self.set_construction(line, true)?;
+        Ok(line)
+    }
+
+    /// Vier Ecken und die Linien `L0..L3` (Linie `i` von Ecke `i` nach Ecke `i + 1`).
+    fn add_quad(&mut self, corners: [DVec2; 4]) -> Result<RectIds, SketchError> {
+        let points = [
+            self.add_point_at(corners[0])?,
+            self.add_point_at(corners[1])?,
+            self.add_point_at(corners[2])?,
+            self.add_point_at(corners[3])?,
+        ];
+        let lines = [
+            self.add_line(points[0], points[1])?,
+            self.add_line(points[1], points[2])?,
+            self.add_line(points[2], points[3])?,
+            self.add_line(points[3], points[0])?,
+        ];
+        Ok(RectIds { points, lines })
+    }
+
+    /// Rechteck aus den Ecken von [`rect_three_point`]. Schräg, darum rechtwinklig über
+    /// `Perpendicular` und zweimal `Parallel`; bleibt frei drehbar (5 Freiheitsgrade).
+    pub fn add_rect_three_point(&mut self, corners: [DVec2; 4]) -> Result<RectIds, SketchError> {
+        self.atomically(|s| {
+            let r = s.add_quad(corners)?;
+            let [l0, l1, l2, l3] = r.lines;
+            s.add_constraint(ConstraintKind::Perpendicular(l0, l1))?;
+            s.add_constraint(ConstraintKind::Parallel(l0, l2))?;
+            s.add_constraint(ConstraintKind::Parallel(l1, l3))?;
+            Ok(r)
+        })
+    }
+
+    /// Achsenparalleles Rechteck um `center` (4 Freiheitsgrade). Zwei halbierende Diagonalen
+    /// machen schon ein Parallelogramm, also tragen nur `L0` und `L1` waagerecht und senkrecht;
+    /// ein zweites Paar wäre überzählig.
+    pub fn add_rect_center(
+        &mut self,
+        center: DVec2,
+        corner: DVec2,
+    ) -> Result<CenterRectIds, SketchError> {
+        if !(center.is_finite() && corner.is_finite()) {
+            return Err(SketchError::InvalidInput(tr!("sketch-err-corners-finite")));
+        }
+        let corners = rect_center(center, corner, self.tolerance().linear)
+            .ok_or_else(|| SketchError::Degenerate(tr!("sketch-err-rect-size")))?;
+        self.atomically(|s| {
+            let rect = s.add_quad(corners)?;
+            let [c0, c1, c2, c3] = rect.points;
+            let diagonals = [
+                s.add_construction_line(c0, c2)?,
+                s.add_construction_line(c1, c3)?,
+            ];
+            let m = s.add_point_at(center)?;
+            s.add_constraint(ConstraintKind::Horizontal(LineOrPoints::Line(
+                rect.lines[0],
+            )))?;
+            s.add_constraint(ConstraintKind::Vertical(LineOrPoints::Line(rect.lines[1])))?;
+            s.add_constraint(ConstraintKind::Midpoint(m, diagonals[0]))?;
+            s.add_constraint(ConstraintKind::Midpoint(m, diagonals[1]))?;
+            Ok(CenterRectIds {
+                rect,
+                center: m,
+                diagonals,
+            })
+        })
+    }
+
+    /// Regelmäßiges Vieleck aus einem Plan, genau 4 Freiheitsgrade (Mitte, Größe, Drehung). Der
+    /// Konstruktionskreis läuft bei allen Arten durch die Ecken: Seiten tangential am Inkreis
+    /// ließen bei gerader Seitenzahl eine Raute zu.
+    pub fn add_polygon(&mut self, plan: &PolygonPlan) -> Result<PolygonIds, SketchError> {
+        let n = plan.corners.len();
+        if !sides_ok(n) {
+            return Err(SketchError::InvalidInput(tr!("sketch-err-polygon-sides")));
+        }
+        self.atomically(|s| {
+            let points = plan
+                .corners
+                .iter()
+                .map(|&c| s.add_point_at(c))
+                .collect::<Result<Vec<_>, _>>()?;
+            let lines = (0..n)
+                .map(|i| s.add_line(points[i], points[(i + 1) % n]))
+                .collect::<Result<Vec<_>, _>>()?;
+            let center = s.add_point_at(plan.center)?;
+            let circle = s.add_circle(center, plan.corners[0].distance(plan.center))?;
+            s.set_construction(circle, true)?;
+            for &c in &points {
+                s.add_constraint(ConstraintKind::PointOnCurve(c, circle))?;
+            }
+            for &l in &lines[1..] {
+                s.add_constraint(ConstraintKind::Equal(lines[0], l))?;
+            }
+            Ok(PolygonIds {
+                center,
+                circle,
+                points,
+                lines,
+            })
+        })
+    }
+
+    /// Gerades Langloch, 5 Freiheitsgrade. Die Bögen laufen gegen den Uhrzeigersinn außen um die
+    /// Enden; `style` bestimmt die Konstruktion, an der die Länge hängt.
+    pub fn add_slot(&mut self, plan: &SlotPlan, style: SlotStyle) -> Result<SlotIds, SketchError> {
+        if !plan.radius.is_finite() || plan.radius <= self.tolerance().linear {
+            return Err(SketchError::Degenerate(tr!("sketch-radius-positive")));
+        }
+        self.atomically(|s| {
+            let a = s.add_point_at(plan.a)?;
+            let b = s.add_point_at(plan.b)?;
+            let along = plan.b - plan.a;
+            if along.length() <= s.tolerance().linear {
+                return Err(SketchError::Degenerate(tr!("sketch-err-line-zero")));
+            }
+            let dir = along.normalize();
+            let n = dir.perp() * plan.radius;
+            let p1 = s.add_point_at(plan.a + n)?;
+            let p2 = s.add_point_at(plan.b + n)?;
+            let p3 = s.add_point_at(plan.b - n)?;
+            let p4 = s.add_point_at(plan.a - n)?;
+            let s0 = s.add_line(p1, p2)?;
+            let s1 = s.add_line(p3, p4)?;
+            let e0 = s.add_arc(a, p1, p4)?;
+            let e1 = s.add_arc(b, p3, p2)?;
+            let (axis, length_points, mid) = match style {
+                SlotStyle::CenterToCenter => (s.add_construction_line(a, b)?, [a, b], None),
+                SlotStyle::Overall => {
+                    let o0 = s.add_point_at(plan.a - dir * plan.radius)?;
+                    let o1 = s.add_point_at(plan.b + dir * plan.radius)?;
+                    (s.add_construction_line(o0, o1)?, [o0, o1], None)
+                }
+                SlotStyle::CenterPoint => {
+                    let c = s.add_point_at((plan.a + plan.b) * 0.5)?;
+                    (s.add_construction_line(a, b)?, [a, b], Some(c))
+                }
+            };
+            s.add_constraint(ConstraintKind::Tangent(s0, e0))?;
+            s.add_constraint(ConstraintKind::Tangent(s0, e1))?;
+            s.add_constraint(ConstraintKind::Tangent(s1, e1))?;
+            s.add_constraint(ConstraintKind::Tangent(s1, e0))?;
+            s.add_constraint(ConstraintKind::Equal(e0, e1))?;
+            match style {
+                SlotStyle::CenterToCenter => {}
+                SlotStyle::Overall => {
+                    let [o0, o1] = length_points;
+                    s.add_constraint(ConstraintKind::PointOnCurve(a, axis))?;
+                    s.add_constraint(ConstraintKind::PointOnCurve(b, axis))?;
+                    s.add_constraint(ConstraintKind::PointOnCurve(o0, e0))?;
+                    s.add_constraint(ConstraintKind::PointOnCurve(o1, e1))?;
+                }
+                SlotStyle::CenterPoint => {
+                    if let Some(c) = mid {
+                        s.add_constraint(ConstraintKind::Midpoint(c, axis))?;
+                    }
+                }
+            }
+            Ok(SlotIds {
+                centers: [a, b],
+                sides: [s0, s1],
+                caps: [e0, e1],
+                axis,
+                length_points,
+                mid,
+            })
+        })
+    }
+
+    /// Bogenlangloch, 6 Freiheitsgrade (Mitte, Radius, Startwinkel, Öffnungswinkel, Breite). Erst
+    /// alle Bögen, dann die Tangenten; `Equal` der Enden wäre überzählig, weil die konzentrischen
+    /// Radien voneinander abhängen.
+    pub fn add_arc_slot(&mut self, plan: &ArcSlotPlan) -> Result<ArcSlotIds, SketchError> {
+        let (axis, h) = (plan.axis, plan.half_width);
+        let r = axis.radius();
+        let radial_start = (axis.start - axis.center) / r;
+        // Dieselbe Prüfung wie beim Plan: Breite, Radius, Lücke zwischen den Enden.
+        let width_at = axis.center + radial_start * (r + h);
+        if h.is_nan() || arc_slot(axis, width_at, self.tolerance().linear).is_none() {
+            return Err(SketchError::Degenerate(tr!("sketch-radius-positive")));
+        }
+        let radial_end = (axis.end - axis.center).normalize();
+        self.atomically(|s| {
+            let m = s.add_point_at(axis.center)?;
+            let start = s.add_point_at(axis.start)?;
+            let end = s.add_point_at(axis.center + radial_end * r)?;
+            let os = s.add_point_at(axis.center + radial_start * (r + h))?;
+            let oe = s.add_point_at(axis.center + radial_end * (r + h))?;
+            let is = s.add_point_at(axis.center + radial_start * (r - h))?;
+            let ie = s.add_point_at(axis.center + radial_end * (r - h))?;
+            let axis_arc = s.add_arc(m, start, end)?;
+            s.set_construction(axis_arc, true)?;
+            let outer = s.add_arc(m, os, oe)?;
+            let inner = s.add_arc(m, is, ie)?;
+            let e0 = s.add_arc(start, is, os)?;
+            let e1 = s.add_arc(end, oe, ie)?;
+            s.add_constraint(ConstraintKind::Tangent(outer, e0))?;
+            s.add_constraint(ConstraintKind::Tangent(outer, e1))?;
+            s.add_constraint(ConstraintKind::Tangent(inner, e0))?;
+            s.add_constraint(ConstraintKind::Tangent(inner, e1))?;
+            Ok(ArcSlotIds {
+                center: m,
+                ends: [start, end],
+                axis: axis_arc,
+                outer,
+                inner,
+                caps: [e0, e1],
+            })
+        })
     }
 }

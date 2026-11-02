@@ -34,6 +34,7 @@ pub use helpers::{RectIds, plane_of_face};
 pub use model::{CurveData, CurveId, CurveKind, PointData, PointId, Sketch};
 pub use profile::{ExtractedProfiles, PieceRef, ProfileRef, RejectedLoop};
 pub use profile_ref::LegacyMigration;
+pub use shapes::{ArcSlotIds, CenterRectIds, PolygonIds, SlotIds, SlotStyle};
 pub use snap::{AlignHit, Snap, SnapHit, SnapIndex};
 pub use solid::{extrude_profile, revolve_profile};
 pub use solver::{Drag, SolveReport, SolveStatus};
