@@ -1593,3 +1593,168 @@ fn whole_neighbours_keep_the_sweep_over_the_sequence_up_and_down() {
     let ids = s.add_fillet(&plan, None).unwrap();
     run(&s, &ids, "feste Linie");
 }
+
+// ---- Bögen als Nachbarn, auch umschließend (alte und von Hand gebaute Skizzen) ---------------
+
+/// Tangentiale Arcs von Hand: Oval aus vier Bögen, Mitten der kleinen bei (±30, 0), Radius 10; der
+/// obere und der untere umschließen die kleinen. `[rechts, oben, links, unten]`.
+fn oval() -> (Sketch, [CurveId; 4]) {
+    let mut s = sketch();
+    let big = 30.0 * 2.0_f64.sqrt() + 10.0;
+    let (x, y) = (big * 0.5_f64.sqrt(), 10.0 * 0.5_f64.sqrt());
+    let right = pt(&mut s, 30.0, 0.0);
+    let left = pt(&mut s, -30.0, 0.0);
+    let top = pt(&mut s, 0.0, -30.0);
+    let bottom = pt(&mut s, 0.0, 30.0);
+    let (ne, nw) = (pt(&mut s, x, y), pt(&mut s, -x, y));
+    let (sw, se) = (pt(&mut s, -x, -y), pt(&mut s, x, -y));
+    let arcs = [
+        s.add_arc(right, se, ne).unwrap(),
+        s.add_arc(top, ne, nw).unwrap(),
+        s.add_arc(left, nw, sw).unwrap(),
+        s.add_arc(bottom, sw, se).unwrap(),
+    ];
+    for i in 0..4 {
+        s.add_constraint(ConstraintKind::Tangent(arcs[i], arcs[(i + 1) % 4]))
+            .unwrap();
+    }
+    (s, arcs)
+}
+
+#[test]
+fn an_oval_with_an_enclosing_arc_keeps_its_shape_over_the_radius_sequence() {
+    let (mut s, arcs) = oval();
+    let big = s.radius(arcs[1]).unwrap();
+    let dim = s
+        .add_constraint(ConstraintKind::Radius(arcs[1], big))
+        .unwrap();
+    assert_still(&s);
+    // 42 bis 67 hoch und runter, aufgelaufen
+    let radii: Vec<f64> = (0..=250).map(|i| 42.0 + 0.1 * f64::from(i)).collect();
+    let mut state = change(&s, dim, big, 42.0).expect("erster Sprung");
+    let mut old = 42.0;
+    for &r in radii.iter().chain(radii.iter().rev()) {
+        let mut trial = state.clone();
+        let want_how = if r == old {
+            DimensionChange::Untouched
+        } else {
+            DimensionChange::Refitted
+        };
+        assert_eq!(trial.prepare_dimension_change(dim, r), want_how, "R {r}");
+        let next = change(&state, dim, old, r).unwrap_or_else(|| panic!("R {r}"));
+        assert!(!folded_over(&state, &next), "R {r}");
+        assert_clean(&next.clone().solve());
+        assert!((next.radius(arcs[1]).unwrap() - r).abs() < 1e-6, "R {r}");
+        // Die Nachbarn behalten Radius und Mitte, der Bogen oben folgt dem Dreieck der Mitten.
+        for k in [0, 2] {
+            assert!((next.radius(arcs[k]).unwrap() - 10.0).abs() < 1e-6, "R {r}");
+        }
+        let want = 2.0 * (30.0 / (r - 10.0)).asin();
+        assert!((sweep_of(&next, arcs[1]) - want).abs() < 1e-6, "R {r}");
+        for (k, &arc) in arcs.iter().enumerate() {
+            assert!(sweep_of(&next, arc) < PI, "R {r} Bogen {k}");
+            assert!(
+                (sweep_of(&next, arc) - sweep_of(&state, arc)).abs() < 0.2,
+                "R {r} Bogen {k}"
+            );
+        }
+        state = next;
+        old = r;
+    }
+}
+
+#[test]
+fn an_oval_small_radius_does_not_refuse_and_a_radius_that_cannot_fit_stays_with_the_solver() {
+    let (mut s, arcs) = oval();
+    let small = s
+        .add_constraint(ConstraintKind::Radius(arcs[0], 10.0))
+        .unwrap();
+    let big = s.radius(arcs[1]).unwrap();
+    let top = s
+        .add_constraint(ConstraintKind::Radius(arcs[1], big))
+        .unwrap();
+    for r in [11.0, 15.0, 25.0, 8.0, 3.0] {
+        let next = change(&s, small, 10.0, r).unwrap_or_else(|| panic!("r {r}"));
+        assert_clean(&next.clone().solve());
+        assert!((next.radius(arcs[0]).unwrap() - r).abs() < 1e-6, "r {r}");
+    }
+    // Mit R 27,4 reicht das Dreieck der Mitten nicht mehr: nichts wird gesetzt, kein Nein.
+    let mut trial = s.clone();
+    assert_eq!(
+        trial.prepare_dimension_change(top, 27.4),
+        DimensionChange::Untouched
+    );
+    assert_eq!(trial.variables(), s.variables());
+}
+
+/// Linie, Bogen um den Ursprung (R 30), der einen kleinen Bogen (r 8) umschließt.
+fn line_enclosing_arc() -> (Sketch, CurveId, CurveId, CurveId) {
+    let mut s = sketch();
+    let far = pt(&mut s, 30.0, -60.0);
+    let t0 = pt(&mut s, 30.0, 0.0);
+    let line = s.add_line(far, t0).unwrap();
+    let m = pt(&mut s, 0.0, 0.0);
+    let t1 = pt(&mut s, 0.0, 30.0);
+    let arc = s.add_arc(m, t0, t1).unwrap();
+    let c = pt(&mut s, 0.0, 22.0);
+    let e = pt(&mut s, -8.0, 22.0);
+    let small = s.add_arc(c, t1, e).unwrap();
+    s.add_constraint(ConstraintKind::Tangent(line, arc))
+        .unwrap();
+    s.add_constraint(ConstraintKind::Tangent(arc, small))
+        .unwrap();
+    (s, line, arc, small)
+}
+
+#[test]
+fn a_line_and_an_enclosing_arc_keep_the_shape() {
+    let (mut s, line, arc, small) = line_enclosing_arc();
+    let dim = s.add_constraint(ConstraintKind::Radius(arc, 30.0)).unwrap();
+    assert_still(&s);
+    let d = direction(&s, line);
+    let mut state = s.clone();
+    let mut old = 30.0;
+    let mut refit_part = true;
+    for r in [31.0, 35.0, 45.0, 28.0, 20.0, 15.0, 12.0, 20.0, 30.0] {
+        let next = change(&state, dim, old, r).unwrap_or_else(|| panic!("R {r}"));
+        assert!(!folded_over(&state, &next), "R {r}");
+        assert_clean(&next.clone().solve());
+        assert!((next.radius(arc).unwrap() - r).abs() < 1e-6, "R {r}");
+        let sweep = sweep_of(&next, arc);
+        assert!(sweep < PI, "R {r}: {}", sweep.to_degrees());
+        // Ab R unter 19 passt der Bogen nicht mehr zwischen Linie und kleinen Bogen: Dort löst der
+        // normale Weg und darf die Nachbarn bewegen, danach gilt das nicht mehr.
+        refit_part &= r >= 19.0;
+        if refit_part {
+            assert!((next.radius(small).unwrap() - 8.0).abs() < 1e-6, "R {r}");
+            assert!(direction(&next, line).distance(d) < 1e-6, "R {r}");
+        }
+        state = next;
+        old = r;
+    }
+}
+
+#[test]
+fn an_unclear_touch_leaves_it_to_the_solver() {
+    // Mitte des Bogens gleich Mitte des Nachbarn, gleicher Radius: keine Art lässt sich ablesen.
+    let mut s = sketch();
+    let far = pt(&mut s, 30.0, -60.0);
+    let t0 = pt(&mut s, 30.0, 0.0);
+    let line = s.add_line(far, t0).unwrap();
+    let m = pt(&mut s, 0.0, 0.0);
+    let t1 = pt(&mut s, 0.0, 30.0);
+    let arc = s.add_arc(m, t0, t1).unwrap();
+    let c = pt(&mut s, 0.0, 0.0);
+    let e = pt(&mut s, -30.0, 0.0);
+    let other = s.add_arc(c, t1, e).unwrap();
+    s.add_constraint(ConstraintKind::Tangent(line, arc))
+        .unwrap();
+    s.add_constraint(ConstraintKind::Tangent(arc, other))
+        .unwrap();
+    assert!(!s.refit_tangent_arc(arc, 20.0));
+    let dim = s.add_constraint(ConstraintKind::Radius(arc, 30.0)).unwrap();
+    assert_eq!(
+        s.prepare_dimension_change(dim, 20.0),
+        DimensionChange::Untouched
+    );
+}

@@ -1474,7 +1474,11 @@ impl SketchSession {
                 }
             }
             let old = sk.measure(&kind);
+            let value_of = kind.length_value();
             let id = sk.add_constraint(kind).map_err(err)?;
+            if let Some(v) = value_of {
+                prepare_arc(sk, id, v)?;
+            }
             let unsolved = sk.clone();
             let before = se.last_report.take();
             let report = sk.solve();

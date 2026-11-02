@@ -1018,3 +1018,90 @@ fn a_fillet_radius_that_does_not_fit_is_refused_and_changes_nothing() {
     assert_eq!(text, planora_i18n::tr!("sketch-dimension-folds"));
     assert_eq!(sk.to_data(), before);
 }
+
+/// Skizzen 4: Das gelöschte Radiusmaß neu anlegen geht denselben Weg wie das Ändern.
+#[test]
+fn a_new_radius_dimension_on_a_fillet_moves_the_arc_and_leaves_the_lines() {
+    for (action, value, r) in [
+        (ConstraintAction::Radius, 30.0, 30.0),
+        (ConstraintAction::Diameter, 60.0, 30.0),
+        (ConstraintAction::Radius, 2.0, 2.0),
+    ] {
+        for fixed in [false, true] {
+            let (mut sk, mut se) = setup();
+            let (ids, a) = rounded_corner(&mut sk, fixed);
+            sk.remove_constraint(ids.radius_dim.unwrap()).unwrap();
+            se.selection = vec![Item::Curve(ids.arc)];
+            se.apply(&mut sk, action, Some(value)).unwrap();
+            let m = sk.point_xy(ids.center).unwrap();
+            assert!(m.distance(DVec2::splat(r)) < 1e-9, "{fixed} {r}: {m:?}");
+            assert!(sk.point_xy(a).unwrap().distance(DVec2::new(40.0, 0.0)) < 1e-9);
+        }
+    }
+    let (mut sk, mut se) = setup();
+    let (ids, _) = rounded_corner(&mut sk, true);
+    sk.remove_constraint(ids.radius_dim.unwrap()).unwrap();
+    let before = sk.to_data();
+    se.selection = vec![Item::Curve(ids.arc)];
+    let text = se
+        .apply(&mut sk, ConstraintAction::Radius, Some(45.0))
+        .unwrap_err();
+    assert_eq!(text, planora_i18n::tr!("sketch-dimension-folds"));
+    assert_eq!(sk.to_data(), before);
+}
+
+/// Skizzen 4: Radius auf einer Folgerundung (`Equal`, ohne eigenes Maß): beide Bögen gehen mit.
+#[test]
+fn a_radius_on_an_equal_follower_moves_both_fillets() {
+    use planora_sketch::fillet::CurvePick;
+    let (mut sk, mut se) = setup();
+    let (first, _) = rounded_corner(&mut sk, true);
+    let a = sk.add_point(140.0, 0.0).unwrap();
+    let p = sk.add_point(100.0, 0.0).unwrap();
+    let b = sk.add_point(100.0, 40.0).unwrap();
+    let l1 = sk.add_line(a, p).unwrap();
+    let l2 = sk.add_line(p, b).unwrap();
+    sk.add_constraint(K::Fixed(a, 140.0, 0.0)).unwrap();
+    sk.add_constraint(K::Fixed(b, 100.0, 40.0)).unwrap();
+    let plan = sk
+        .fillet_plan(
+            CurvePick {
+                curve: l1,
+                at: DVec2::new(120.0, 0.0),
+            },
+            CurvePick {
+                curve: l2,
+                at: DVec2::new(100.0, 20.0),
+            },
+            5.0,
+        )
+        .unwrap();
+    let second = sk.add_fillet(&plan, Some(first.arc)).unwrap();
+
+    // Das Maß der ersten steht noch: Ein anderer Wert auf der Folgerundung widerspricht ihm.
+    let before = sk.to_data();
+    se.selection = vec![Item::Curve(second.arc)];
+    assert!(
+        se.apply(&mut sk, ConstraintAction::Radius, Some(30.0))
+            .is_err()
+    );
+    assert_eq!(sk.to_data(), before);
+
+    // Ohne das Maß geht es, beide liegen richtig.
+    sk.remove_constraint(first.radius_dim.unwrap()).unwrap();
+    se.selection = vec![Item::Curve(second.arc)];
+    se.apply(&mut sk, ConstraintAction::Radius, Some(30.0))
+        .unwrap();
+    assert!(
+        sk.point_xy(first.center)
+            .unwrap()
+            .distance(DVec2::splat(30.0))
+            < 1e-9
+    );
+    assert!(
+        sk.point_xy(second.center)
+            .unwrap()
+            .distance(DVec2::new(130.0, 30.0))
+            < 1e-9
+    );
+}

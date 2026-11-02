@@ -93,8 +93,9 @@ pub enum DimensionChange {
     Untouched,
     /// Die Bögen liegen schon richtig, das Lösen bewegt nichts mehr.
     Refitted,
-    /// Der Wert passt nicht zwischen die Nachbarn; die Skizze ist unverändert, der Aufrufer
-    /// lehnt ab.
+    /// Der Wert passt nicht zwischen zwei Linien; die Skizze ist unverändert, der Aufrufer lehnt
+    /// ab. Mit einem Bogen als Nachbarn passiert das nicht: Dort bleibt es beim normalen Lösen,
+    /// so wird keine alte Skizze neu abgelehnt, die der Löser schafft.
     DoesNotFit,
 }
 
@@ -106,6 +107,37 @@ enum Refit {
     NoFit,
     /// Punkte des Bogens und ihre neue Lage: Mitte, Start, Ende.
     Fit([(PointId, DVec2); 3]),
+}
+
+/// Abstand zum Nachbarn (Radius `big`), so wie die Berührung heute liegt, und für den neuen Radius.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Touching {
+    /// Außen: `|m − c| = big + r`.
+    Outside,
+    /// Der Bogen liegt im Nachbarn: `|m − c| = big − r`.
+    Inside,
+    /// Der Bogen umschließt den Nachbarn: `|m − c| = r − big`.
+    Enclosing,
+}
+
+impl Touching {
+    fn center_distance(self, big: f64, r: f64) -> f64 {
+        match self {
+            Touching::Outside => big + r,
+            Touching::Inside => big - r,
+            Touching::Enclosing => r - big,
+        }
+    }
+
+    /// Die Art, die für die Mitte `dist` und den Radius `r` gilt. `None`, wenn es keine oder
+    /// mehrere sein könnten.
+    fn read(dist: f64, big: f64, r: f64, limit: f64) -> Option<Touching> {
+        let mut holds = [Touching::Outside, Touching::Inside, Touching::Enclosing]
+            .into_iter()
+            .filter(|t| (t.center_distance(big, r) - dist).abs() <= limit);
+        let first = holds.next()?;
+        holds.next().is_none().then_some(first)
+    }
 }
 
 /// Ein Ende des Bogens und die Kurve, die dort tangential anschließt.
@@ -1047,6 +1079,14 @@ impl Sketch {
         Some([first, second])
     }
 
+    /// Liegt der Bogen tangential zwischen zwei Linien (die eigentliche Rundung)?
+    fn between_two_lines(&self, arc: CurveId) -> bool {
+        self.tangent_ends(arc).is_some_and(|ends| {
+            ends.iter()
+                .all(|e| matches!(self.curves[e.neighbour].kind, CurveKind::Line { .. }))
+        })
+    }
+
     /// Bleibt das Ende `end` diesseits des fernen Endes seines Nachbarn, wenn es nach `to`
     /// wandert? Der Nachbar wird dabei wenn nötig verlängert.
     fn stays_before_far_end(&self, end: &TangentEnd, to: DVec2) -> bool {
@@ -1111,15 +1151,33 @@ impl Sketch {
             return Refit::NoFit;
         }
         let m_now = self.pos(center);
-        let side = |s: Shape| match s {
-            Shape::Line { a, d } if d.perp_dot(m_now - a) < 0.0 => -1.0,
-            Shape::Round { c, r } if m_now.distance(c) < r => -1.0,
-            _ => 1.0,
+        let r_now = m_now.distance(self.pos(start));
+        // Art der Berührung je Nachbar, aus der heutigen Lage (1e-4 mm: alte Skizzen sind nur so
+        // genau gelöst); ist sie nicht eindeutig, bleibt es beim normalen Lösen.
+        let limit = 100.0 * tol;
+        let kept = |s: Shape| match s {
+            Shape::Line { a, d } => {
+                let sign = if d.perp_dot(m_now - a) < 0.0 {
+                    -1.0
+                } else {
+                    1.0
+                };
+                Ok((offset_shape(s, sign, radius, tol), None))
+            }
+            Shape::Round { c, r: big } => {
+                let Some(how) = Touching::read(m_now.distance(c), big, r_now, limit) else {
+                    return Err(Refit::NotThisShape);
+                };
+                let dist = how.center_distance(big, radius);
+                let offset = (dist > tol).then_some(Shape::Round { c, r: dist });
+                Ok((offset, Some(how)))
+            }
         };
-        let (Some(o0), Some(o1)) = (
-            offset_shape(s0, side(s0), radius, tol),
-            offset_shape(s1, side(s1), radius, tol),
-        ) else {
+        let ((o0, how0), (o1, how1)) = match (kept(s0), kept(s1)) {
+            (Ok(a), Ok(b)) => (a, b),
+            (Err(e), _) | (_, Err(e)) => return e,
+        };
+        let (Some(o0), Some(o1)) = (o0, o1) else {
             return Refit::NoFit;
         };
         let Some(m) = meet(o0, o1)
@@ -1129,7 +1187,14 @@ impl Sketch {
         else {
             return Refit::NoFit;
         };
-        let (Some(t0), Some(t1)) = (touch_point(s0, m), touch_point(s1, m)) else {
+        // Umschließt der Bogen den Nachbarn, liegt der Berührpunkt auf dessen abgewandter Seite.
+        let touch = |s: Shape, how: Option<Touching>| match (s, how) {
+            (Shape::Round { c, .. }, Some(Touching::Enclosing)) => {
+                touch_point(s, m).map(|t| c * 2.0 - t)
+            }
+            _ => touch_point(s, m),
+        };
+        let (Some(t0), Some(t1)) = (touch(s0, how0), touch(s1, how1)) else {
             return Refit::NoFit;
         };
         let in_range = [m, t0, t1]
@@ -1189,7 +1254,9 @@ impl Sketch {
     /// Vor dem Lösen eines neuen Werts `value` für das Maß `c` aufzurufen: Bei `Radius` und
     /// `Diameter` an einem Bogen, der tangential zwischen zwei Nachbarn liegt, setzt es diesen
     /// und alle über `Equal` verbundenen Bögen derselben Form auf die neue Lage. Bleibt der Wert
-    /// gleich oder ist das Maß nur anzeigend, geschieht nichts.
+    /// gleich oder ist das Maß nur anzeigend, geschieht nichts. Passt der Wert bei einem dieser
+    /// Bögen nicht, siehe [`DimensionChange`]: Zwischen zwei Linien ist das eine Ablehnung, sonst
+    /// bleibt alles beim normalen Lösen.
     pub fn prepare_dimension_change(&mut self, c: ConstraintId, value: f64) -> DimensionChange {
         let Some(d) = self.constraint(c).filter(|d| d.enabled && !d.driven) else {
             return DimensionChange::Untouched;
@@ -1222,17 +1289,19 @@ impl Sketch {
         }
         let mut trial = self.clone();
         let mut refitted = false;
+        let mut plain = false;
         for a in arcs {
             match trial.refit_geometry(a, radius) {
                 Refit::NotThisShape => {}
-                Refit::NoFit => return DimensionChange::DoesNotFit,
+                Refit::NoFit if trial.between_two_lines(a) => return DimensionChange::DoesNotFit,
+                Refit::NoFit => plain = true,
                 Refit::Fit(points) => {
                     trial.apply_refit(&points);
                     refitted = true;
                 }
             }
         }
-        if !refitted {
+        if plain || !refitted {
             return DimensionChange::Untouched;
         }
         *self = trial;

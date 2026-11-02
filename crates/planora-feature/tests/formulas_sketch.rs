@@ -1343,3 +1343,46 @@ fn a_longer_line_makes_room_for_the_formula_radius() {
     let got = d.sketch_of(s).unwrap();
     assert!((got.radius(ids.arc).unwrap() - 50.0).abs() < 1e-6);
 }
+
+/// Oval aus vier Bögen von Hand, der obere umschließt die kleinen; sein Radius über eine Formel.
+#[test]
+fn a_formula_radius_on_an_oval_with_enclosing_arcs_solves() {
+    let mut sk = Sketch::new(StandardPlane::XY.frame(), "S", Tolerance::default());
+    let big = 30.0 * 2.0_f64.sqrt() + 10.0;
+    let (x, y) = (big * 0.5_f64.sqrt(), 10.0 * 0.5_f64.sqrt());
+    let mut pt = |x: f64, y: f64| sk.add_point(x, y).unwrap();
+    let (right, left, top, bottom) = (pt(30.0, 0.0), pt(-30.0, 0.0), pt(0.0, -30.0), pt(0.0, 30.0));
+    let (ne, nw, sw, se) = (pt(x, y), pt(-x, y), pt(-x, -y), pt(x, -y));
+    let arcs = [
+        sk.add_arc(right, se, ne).unwrap(),
+        sk.add_arc(top, ne, nw).unwrap(),
+        sk.add_arc(left, nw, sw).unwrap(),
+        sk.add_arc(bottom, sw, se).unwrap(),
+    ];
+    for i in 0..4 {
+        sk.add_constraint(ConstraintKind::Tangent(arcs[i], arcs[(i + 1) % 4]))
+            .unwrap();
+    }
+    let dim = sk
+        .add_constraint(ConstraintKind::Radius(arcs[1], big))
+        .unwrap();
+    let mut d = Document::new();
+    let r = d.add_parameter("R", &big.to_string(), Length, "").unwrap();
+    let s = d
+        .add_feature("Skizze 1", FeatureKind::Sketch(on_xy(sk, one(dim, "R"))))
+        .unwrap();
+    assert_eq!(status(&d, s), FeatureStatus::Ok);
+    for value in [53.0, 55.0, 60.0, 67.0, 50.0, 45.0, 42.0] {
+        d.set_parameter(r, edit(&d, r, &value.to_string())).unwrap();
+        assert_eq!(status(&d, s), FeatureStatus::Ok, "R {value}");
+        let got = d.sketch_of(s).unwrap();
+        assert!(
+            (got.radius(arcs[1]).unwrap() - value).abs() < 1e-6,
+            "R {value}"
+        );
+        assert!(
+            (got.radius(arcs[0]).unwrap() - 10.0).abs() < 1e-6,
+            "R {value}"
+        );
+    }
+}
