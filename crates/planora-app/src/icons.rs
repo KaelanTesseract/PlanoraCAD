@@ -411,6 +411,20 @@ pub fn atom(icon: Icon) -> egui::RichText {
     text(icon, LABEL_ICON_SIZE, Color32::PLACEHOLDER)
 }
 
+/// Untermenü-Knopf mit Symbol und Text. egui setzt den Pfeil am rechten Rand als Zeichen `⏵`, das
+/// die Schriften der App nicht haben (es erschiene als „?“); hier steht dafür das Phosphor-Symbol
+/// in der Farbe des Knopftexts (dasselbe Symbol wie der Pfadtrenner).
+pub fn submenu<R>(
+    ui: &mut egui::Ui,
+    atoms: impl egui::IntoAtoms<'static>,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<Option<R>> {
+    let button = egui::Button::new(atoms).right_text(atom(Icon::PathSeparator));
+    let (response, inner) =
+        egui::containers::menu::SubMenuButton::from_button(button).ui(ui, add_contents);
+    egui::InnerResponse::new(inner.map(|i| i.inner), response)
+}
+
 /// Knopf mit Symbol und Text (Menüeinträge, Leistenschalter).
 pub fn button<'a>(icon: Icon, label: impl Into<egui::WidgetText>) -> egui::Button<'a> {
     egui::Button::new((atom(icon), label.into()))

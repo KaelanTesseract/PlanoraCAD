@@ -2261,7 +2261,7 @@ fn sketch_kinds_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
         .into_iter()
         .filter(|t| sketch_panel::has_flyout(*t));
     for tool in tools {
-        ui.menu_button(sketch_panel::tool_label(tool), |ui| {
+        icons::submenu(ui, sketch_panel::tool_label(tool), |ui| {
             for kind in crate::sketch_kinds::ToolKind::of(tool) {
                 let keys = keymap::shortcut_hint(&ws.keymap, kind.action());
                 let source = icons::sketch_tool_icon(tool);

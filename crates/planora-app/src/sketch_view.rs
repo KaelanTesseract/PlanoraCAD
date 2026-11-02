@@ -16,6 +16,7 @@ use planora_sketch::ExtractedProfiles;
 use planora_sketch::constraint::{ConstraintKind, LineOrPoints};
 use planora_sketch::model::{CurveId, CurveKind, LineStyle, PointId, Sketch};
 use planora_sketch::solver::{SolveReport, SolveStatus};
+use std::collections::HashSet;
 use std::f64::consts::{FRAC_PI_4, TAU};
 
 /// Fangradius in Pixeln für Klicks und Hervorhebung.
@@ -337,6 +338,19 @@ fn curve_anchor(sk: &Sketch, c: CurveId) -> Option<DVec2> {
             let pl = sk.curve_polyline(c, STEPS_PER_TURN)?;
             pl.get(pl.len() / 2).copied()
         }
+    }
+}
+
+/// Die Kurven, an denen eine reine Zeichen-Abhängigkeit (H, V, ∥, ⟂, =, T) ihr Zeichen zeigt; nur
+/// dafür gilt „je Kurve und Art einmal“. Maße und Abhängigkeiten an Punkten: `None`.
+fn marked_curves(kind: &ConstraintKind) -> Option<Vec<CurveId>> {
+    use ConstraintKind as K;
+    match kind {
+        K::Horizontal(LineOrPoints::Line(c)) | K::Vertical(LineOrPoints::Line(c)) => Some(vec![*c]),
+        K::Parallel(a, b) | K::Perpendicular(a, b) | K::Equal(a, b) | K::Tangent(a, b) => {
+            Some(vec![*a, *b])
+        }
+        _ => None,
     }
 }
 
@@ -1235,9 +1249,21 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     let bad: Vec<_> = report
         .map(|r| r.conflicting.iter().chain(&r.redundant).copied().collect())
         .unwrap_or_default();
-    for (id, c) in sk.constraints() {
+    // Skizzen 3: Eine Kurve zeigt jede Art Zeichen höchstens einmal (n-1 gleiche Abhängigkeiten
+    // einer Vieleck-Linie ergäben sonst eine lange Spalte). Fehlerhafte zuerst, damit ihre rote
+    // Farbe nicht von einer unauffälligen Doppelung verdeckt wird.
+    let mut shown: HashSet<(CurveId, String)> = HashSet::new();
+    let mut constraints: Vec<_> = sk.constraints().collect();
+    constraints.sort_by_key(|(id, _)| !bad.contains(id));
+    for (id, c) in constraints {
         let text = overlay_text(ui.ctx(), sk, &c.kind, c.driven);
         if text.is_empty() {
+            continue;
+        }
+        // „auf“ an einer Hilfskurve (z. B. dem Hilfskreis des Vielecks) wäre nur Lärm.
+        if let ConstraintKind::PointOnCurve(_, curve) = &c.kind
+            && sk.curve(*curve).is_some_and(|d| d.construction)
+        {
             continue;
         }
         let color = if bad.contains(&id) {
@@ -1249,7 +1275,15 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         } else {
             col.text
         };
-        for a in anchors(sk, &c.kind) {
+        let places: Vec<DVec2> = match marked_curves(&c.kind) {
+            Some(curves) => curves
+                .into_iter()
+                .filter(|&curve| shown.insert((curve, text.clone())))
+                .filter_map(|curve| curve_anchor(sk, curve))
+                .collect(),
+            None => anchors(sk, &c.kind),
+        };
+        for a in places {
             if let Some(s) = map.to_screen(a) {
                 label(
                     &painter,

@@ -36,6 +36,8 @@ struct Shot {
     texts: Vec<Seen>,
     /// Gefüllte Dreiecke (Eckpunkte, Füllung).
     triangles: Vec<(Vec<Pos2>, Color32)>,
+    /// Jedes gezeigte Textstück mit der Schriftfamilie, in der es gesetzt ist.
+    runs: Vec<(String, egui::FontFamily)>,
 }
 
 fn walk(shape: &Shape, s: &mut Shot) {
@@ -49,6 +51,17 @@ fn walk(shape: &Shape, s: &mut Shot) {
             }
             if let Some(c) = t.override_text_color {
                 color = c;
+            }
+            let whole = t.galley.text();
+            for sec in &t.galley.job.sections {
+                // Unsichtbarer Text (der Platzhalter für das Änderungszeichen im Tab) zählt nicht.
+                if sec.format.color == Color32::TRANSPARENT {
+                    continue;
+                }
+                if let Some(run) = whole.get(sec.byte_range.start.0..sec.byte_range.end.0) {
+                    s.runs
+                        .push((run.to_string(), sec.format.font_id.family.clone()));
+                }
             }
             s.texts.push(Seen {
                 text: t.galley.text().to_string(),
@@ -667,6 +680,58 @@ fn the_create_menu_lists_all_kinds_while_a_sketch_is_open() {
         assert!(!shot.has(&last.label()), "Menü zu");
     }
     assert_eq!(count, 19);
+}
+
+/// Hat die Schrift in ihrer Zeichentabelle einen Eintrag für `c`? (Wie in tests/icons.rs.)
+fn font_has_char(bytes: &[u8], c: char) -> bool {
+    use skrifa::MetadataProvider;
+    skrifa::FontRef::new(bytes)
+        .expect("gültige Schriftdatei")
+        .charmap()
+        .map(c)
+        .is_some()
+}
+
+/// Kein gezeigter Text enthält ein Zeichen, das keine Schrift der Familie hat (es erschiene als
+/// „?“ oder Kästchen).
+fn assert_no_missing_glyphs(shot: &Shot, what: &str) {
+    let defs = fonts::definitions();
+    for (run, family) in &shot.runs {
+        let chain = &defs.families[family];
+        for c in run.chars().filter(|c| !c.is_whitespace()) {
+            let found = chain
+                .iter()
+                .any(|name| font_has_char(&defs.font_data[name].font, c));
+            assert!(
+                found,
+                "{what}: {c:?} (U+{:04X}) in „{run}“ fehlt in {family:?}",
+                c as u32
+            );
+        }
+    }
+}
+
+#[test]
+fn the_submenu_arrows_of_the_create_menu_use_a_glyph_the_fonts_have() {
+    let mut rig = Rig::new();
+    let shot = rig.settle();
+    let menu = shot.find("Erzeugen").rect.center();
+    let shot = rig.click(menu);
+    assert_no_missing_glyphs(&shot, "Menü Erzeugen");
+    // Alle fünf Untermenüs mit Pfeil stehen im offenen Menü.
+    let arrow = planora_app::icons::glyph(planora_app::icons::Icon::PathSeparator).to_string();
+    let arrows = shot.texts.iter().filter(|t| t.text == arrow).count();
+    assert_eq!(arrows, 5, "ein Pfeil je Untermenü");
+    // Auch mit offenem Untermenü.
+    let sub = shot
+        .texts
+        .iter()
+        .rfind(|t| t.text == "Rechteck")
+        .expect("Untermenü Rechteck")
+        .rect
+        .center();
+    let shot = rig.click(sub);
+    assert_no_missing_glyphs(&shot, "Untermenü Rechteck");
 }
 
 #[test]
