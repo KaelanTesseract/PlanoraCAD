@@ -122,6 +122,9 @@ action_table! {
         [key(Key::Space)];
     /// Wie der Knopf im Skizzenfeld (Fusion „Normal / Hilfslinie“): nur mit ausgewählten Kurven.
     SketchConstruction, "skizze.konstruktion", "action-sketch-construction", Sketch, [key(Key::X)];
+    /// Wie der Knopf im Skizzenfeld: schaltet die ausgewählten Linien zwischen Mittellinie und
+    /// normal um (ohne Vorgabetaste).
+    SketchCenterline, "skizze.mittellinie", "action-sketch-centerline", Sketch, [];
     /// Wie [`Action::ShowShortcuts`], in der offenen Skizze (eine Aktion hat nur einen Bereich).
     SketchShowShortcuts, "skizze.tastenkuerzel", "action-sketch-show-shortcuts", Sketch,
         [key(Key::S)];

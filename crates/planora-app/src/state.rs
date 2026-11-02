@@ -312,8 +312,9 @@ fn deferred_by_tool(se: &SketchSession, before: &SketchFeature, after: &SketchFe
     let (b, a) = (&before.sketch, &after.sketch);
     let same_curves = a.curves().count() == b.curves().count()
         && b.curves().all(|(id, c)| {
-            a.curve(id)
-                .is_some_and(|n| n.kind == c.kind && n.construction == c.construction)
+            a.curve(id).is_some_and(|n| {
+                n.kind == c.kind && n.construction == c.construction && n.centerline == c.centerline
+            })
         });
     let bits = |v: DVec2| (v.x.to_bits(), v.y.to_bits());
     let points_kept = b.points().all(

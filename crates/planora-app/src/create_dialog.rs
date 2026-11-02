@@ -7,7 +7,7 @@ use crate::theme;
 use planora_feature::{FeatureId, FieldKey, Formulas, ParamUnit};
 use planora_i18n::tr;
 use planora_math::DVec3;
-use planora_sketch::model::{CurveId, CurveKind, Sketch};
+use planora_sketch::model::{CurveId, CurveKind, LineStyle, Sketch};
 use std::collections::BTreeMap;
 
 /// Voreingestellte Höhe für „Skizze extrudieren“ in Millimetern.
@@ -70,28 +70,39 @@ pub enum CreateDialog {
 /// Linien der Skizze, die als Drehachse taugen: Konstruktionslinien zuerst, dann die übrigen,
 /// jeweils in der Reihenfolge der Kurven. Dazu der Name für die Auswahlliste.
 pub fn axis_candidates(sk: &Sketch) -> Vec<(CurveId, String)> {
-    let mut lines: Vec<(CurveId, bool)> = sk
+    let mut lines: Vec<(CurveId, LineStyle)> = sk
         .curves()
         .filter(|(_, c)| matches!(c.kind, CurveKind::Line { .. }))
-        .map(|(id, c)| (id, c.construction))
+        .map(|(id, c)| (id, c.style()))
         .collect();
     // stabil: innerhalb der Gruppen bleibt die Kurvenreihenfolge
-    lines.sort_by_key(|&(_, construction)| !construction);
-    let (mut n_construction, mut n_line) = (0, 0);
+    lines.sort_by_key(|&(_, style)| match style {
+        LineStyle::Construction => 0,
+        LineStyle::Centerline => 1,
+        LineStyle::Normal => 2,
+    });
+    let (mut n_construction, mut n_centerline, mut n_line) = (0, 0, 0);
     lines
         .into_iter()
-        .map(|(id, construction)| {
+        .map(|(id, style)| {
             let length = sk.line_length(id).map(format_length).unwrap_or_default();
-            let name = if construction {
-                n_construction += 1;
-                tr!(
-                    "create-axis-construction",
-                    n = n_construction,
-                    length = length
-                )
-            } else {
-                n_line += 1;
-                tr!("create-axis-line", n = n_line, length = length)
+            let name = match style {
+                LineStyle::Construction => {
+                    n_construction += 1;
+                    tr!(
+                        "create-axis-construction",
+                        n = n_construction,
+                        length = length
+                    )
+                }
+                LineStyle::Centerline => {
+                    n_centerline += 1;
+                    tr!("create-axis-centerline", n = n_centerline, length = length)
+                }
+                LineStyle::Normal => {
+                    n_line += 1;
+                    tr!("create-axis-line", n = n_line, length = length)
+                }
             };
             (id, name)
         })

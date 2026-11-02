@@ -679,6 +679,9 @@ pub enum CurveKindDto {
 pub struct CurveDto {
     pub art: CurveKindDto,
     pub konstruktion: bool,
+    /// Mittellinie (ab Format 14); fehlt in Dateien ohne Mittellinie.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mittellinie: bool,
     pub aktiv: bool,
 }
 

@@ -23,6 +23,7 @@ pub struct PointRecord {
 pub struct CurveRecord {
     pub kind: CurveKind,
     pub construction: bool,
+    pub centerline: bool,
     pub alive: bool,
 }
 
@@ -81,6 +82,7 @@ impl Sketch {
                 .map(|(_, c)| CurveRecord {
                     kind: c.kind.clone(),
                     construction: c.construction,
+                    centerline: c.centerline,
                     alive: c.alive,
                 })
                 .collect(),
@@ -139,6 +141,9 @@ impl Sketch {
             let pts = c.kind.points();
             if pts.iter().any(|p| !point_ok(*p)) {
                 return Err(bad(tr!("sketch-err-data-curve-point")));
+            }
+            if c.centerline && !(c.construction && matches!(c.kind, CurveKind::Line { .. })) {
+                return Err(bad(tr!("sketch-err-data-centerline")));
             }
             match &c.kind {
                 CurveKind::Circle { radius, .. } if !var_ok(*radius) => {
@@ -199,6 +204,7 @@ impl Sketch {
             curves.push(CurveData {
                 kind: c.kind,
                 construction: c.construction,
+                centerline: c.centerline,
                 alive: c.alive,
             });
         }

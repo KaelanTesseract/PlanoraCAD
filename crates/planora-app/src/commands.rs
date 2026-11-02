@@ -220,6 +220,11 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                 se.toggle_construction_if_possible(sk);
             }
         }
+        Action::SketchCenterline => {
+            if let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut() {
+                se.toggle_centerline_if_possible(sk);
+            }
+        }
         Action::SketchRepeatLast => {
             if let Some(last) = ws.last_command.sketch_tool() {
                 return run_action(ws, last);

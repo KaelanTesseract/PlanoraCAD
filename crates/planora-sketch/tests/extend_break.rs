@@ -4,7 +4,7 @@
 
 use planora_math::{DVec2, Frame, PI, Tolerance};
 use planora_sketch::constraint::{ConstraintKind as K, LineOrPoints};
-use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
+use planora_sketch::model::{CurveId, CurveKind, LineStyle, PointId, Sketch};
 use planora_sketch::solver::SolveStatus;
 
 fn sketch() -> Sketch {
@@ -448,4 +448,24 @@ fn breaking_a_spline_keeps_its_knots_in_the_pieces() {
     assert!(coincident(&s, *m.last().unwrap(), b[0]), "{:?}", kinds(&s));
     assert!((xy(&s, m[0]).x - 3.0).abs() < 1e-9);
     assert!((xy(&s, b[0]).x - 7.0).abs() < 1e-9);
+}
+
+// Skizzen 3, Fund: Teilstücke übernehmen den Stil des Originals.
+#[test]
+fn breaking_the_middle_of_construction_and_centerline_keeps_the_style_on_all_pieces() {
+    for style in [LineStyle::Construction, LineStyle::Centerline] {
+        let mut s = sketch();
+        let (h, _, _) = line(&mut s, 0.0, 0.0, 10.0, 0.0);
+        line(&mut s, 3.0, -5.0, 3.0, 5.0);
+        line(&mut s, 7.0, -5.0, 7.0, 5.0);
+        match style {
+            LineStyle::Centerline => s.set_centerline(h, true).unwrap(),
+            _ => s.set_construction(h, true).unwrap(),
+        }
+        let out = s.break_curve(h, DVec2::new(5.0, 0.2)).unwrap();
+        assert_eq!(out.len(), 3, "{out:?}");
+        for c in out {
+            assert_eq!(s.curve(c).unwrap().style(), style);
+        }
+    }
 }

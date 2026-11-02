@@ -685,6 +685,12 @@ fn side_contents(
         Action::SketchConstruction,
         &construction,
     );
+    let centerline = centerline();
+    let centerline_tip = with_hint(
+        &crate::keymap::mouse::current(ui.ctx()),
+        Action::SketchCenterline,
+        &centerline,
+    );
     ui.horizontal_wrapped(|ui| {
         if tool_button(
             ui,
@@ -697,6 +703,18 @@ fn side_contents(
         .clicked()
         {
             se.toggle_construction_if_possible(sk);
+        }
+        if tool_button(
+            ui,
+            IconSource::Hand(HandIcon::Centerline),
+            &centerline,
+            se.can_toggle_centerline(sk),
+        )
+        .on_hover_text(centerline_tip)
+        .on_disabled_hover_text(tr!("sketch-select-lines-first"))
+        .clicked()
+        {
+            se.toggle_centerline_if_possible(sk);
         }
         if tool_button(
             ui,
@@ -1160,6 +1178,11 @@ pub fn auto_axis_hint() -> String {
 /// Schalter für die automatischen Abhängigkeiten beim Zeichnen.
 pub fn auto_axis() -> String {
     tr!("sketch-auto-axis")
+}
+
+/// Beschriftung des Knopfs „Mittellinie“ (gleich dem Namen seiner Aktion).
+pub fn centerline() -> String {
+    Action::SketchCenterline.label()
 }
 
 /// Beschriftung des Knopfs „Konstruktion umschalten“ (gleich dem Namen seiner Aktion).

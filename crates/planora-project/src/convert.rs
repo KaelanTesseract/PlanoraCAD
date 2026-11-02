@@ -38,14 +38,15 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Höchste lesbare Formatnummer der Versionsdateien (P7, P12, F7).
-pub const FORMAT_VERSION: u32 = 13;
+pub const FORMAT_VERSION: u32 = 14;
 /// Formatnummer der Rahmendateien `dokument.json` und `.autosave.json`; ihre Struktur ist seit
 /// Format 1 unverändert, ältere Programme öffnen das Projekt deshalb weiter (P7).
 pub const CONTAINER_FORMAT: u32 = 1;
 /// Größte Summe der dekodierten Netzdaten eines Dokuments (wie die Dateigrenze beim Import).
 const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 
-/// Kleinste Formatnummer, die den Stand darstellt: 13 mit einem Ellipsenbogen in einer Skizze
+/// Kleinste Formatnummer, die den Stand darstellt: 14 mit einer Mittellinie in einer Skizze
+/// (auch einem gelöschten Kurveneintrag; als erste Regel geprüft), 13 mit einem Ellipsenbogen in einer Skizze
 /// (auch einem gelöschten Kurveneintrag; als erste Regel geprüft) oder mit Profil-Verweisen,
 /// die sich nicht als alte Profilnummer schreiben lassen ([`ProfileField`]), 12 mit einer Zeichnung in
 /// Zoll, 11 mit Rückrollstellen, 10 mit einem STEP-Körper (auch unterdrückt: sein Text muss in der Datei stehen),
@@ -62,7 +63,9 @@ pub fn required_format(s: &Snapshot) -> u32 {
 /// [`required_format`] mit den schon bestimmten Profilfeldern `fields` (eins je Feature).
 fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
     let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
-    if has(|k| matches!(k, FeatureKind::Sketch(sf) if has_elliptic_arc(&sf.sketch)))
+    if has(|k| matches!(k, FeatureKind::Sketch(sf) if sf.sketch.has_centerline_entry())) {
+        14
+    } else if has(|k| matches!(k, FeatureKind::Sketch(sf) if has_elliptic_arc(&sf.sketch)))
         || fields.iter().any(|f| f.profile.is_some())
     {
         13
@@ -482,6 +485,7 @@ fn sketch_to(s: &Sketch) -> SketchDto {
             .map(|c| CurveDto {
                 art: curve_to(&c.kind),
                 konstruktion: c.construction,
+                mittellinie: c.centerline,
                 aktiv: c.alive,
             })
             .collect(),
@@ -557,6 +561,7 @@ fn sketch_from(origin: &str, feature: &str, d: &SketchDto) -> Result<Sketch> {
             .map(|c| CurveRecord {
                 kind: curve_from(&c.art),
                 construction: c.konstruktion,
+                centerline: c.mittellinie,
                 alive: c.aktiv,
             })
             .collect(),

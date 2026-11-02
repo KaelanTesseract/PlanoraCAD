@@ -1708,6 +1708,31 @@ impl SketchSession {
         }
     }
 
+    /// Lässt sich „Mittellinie umschalten“ anwenden (mindestens eine Linie ausgewählt)? Gilt
+    /// für den Knopf im Skizzenfeld und die Aktion.
+    pub fn can_toggle_centerline(&self, sk: &Sketch) -> bool {
+        self.selection.iter().any(|i| {
+            matches!(i, Item::Curve(c)
+                if sk.curve(*c).is_some_and(|d| matches!(d.kind, CurveKind::Line { .. })))
+        })
+    }
+
+    /// „Mittellinie umschalten“ wie Knopf und Aktion: nur, wenn
+    /// [`can_toggle_centerline`](Self::can_toggle_centerline) gilt. Jede ausgewählte Linie wird
+    /// einzeln umgeschaltet (Mittellinie ⇄ normal), andere Kurven bleiben, wie sie sind.
+    pub fn toggle_centerline_if_possible(&mut self, sk: &mut Sketch) {
+        if !self.can_toggle_centerline(sk) {
+            return;
+        }
+        for item in &self.selection {
+            if let Item::Curve(c) = *item
+                && let Some(on) = sk.curve(c).map(|d| d.centerline)
+            {
+                let _ = sk.set_centerline(c, !on);
+            }
+        }
+    }
+
     /// Statuszeile: Freiheitsgrade, Widerspruch, überzählige Abhängigkeiten.
     pub fn status(&self, sk: &Sketch) -> (String, Severity) {
         let report = match &self.last_report {

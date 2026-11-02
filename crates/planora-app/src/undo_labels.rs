@@ -353,6 +353,12 @@ pub fn describe_sketch_change_beside(
             tr!("undo-constraint")
         };
     }
+    if as_
+        .curves()
+        .any(|(id, c)| bs.curve(id).is_some_and(|o| o.centerline != c.centerline))
+    {
+        return tr!("undo-centerline");
+    }
     if as_.curves().any(|(id, c)| {
         bs.curve(id)
             .is_some_and(|o| o.construction != c.construction)

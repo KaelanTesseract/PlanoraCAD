@@ -247,3 +247,39 @@ fn any_extra_change_never_panics_in_load_or_solve() {
         }
     }
 }
+
+#[test]
+fn a_centerline_survives_the_round_trip() {
+    let mut s = rich_sketch();
+    let a = s.add_point(0.0, 40.0).unwrap();
+    let b = s.add_point(9.0, 40.0).unwrap();
+    let l = s.add_line(a, b).unwrap();
+    s.set_centerline(l, true).unwrap();
+    let d = s.to_data();
+    assert!(d.curves.iter().any(|c| c.centerline && c.construction));
+    let back = Sketch::from_data(d.clone()).unwrap();
+    assert_eq!(back.to_data(), d);
+    assert_eq!(back.curve(l).unwrap().style(), LineStyle::Centerline);
+}
+
+#[test]
+fn from_data_rejects_a_centerline_without_construction_or_on_an_arc() {
+    let mut s = rich_sketch();
+    let a = s.add_point(0.0, 40.0).unwrap();
+    let b = s.add_point(9.0, 40.0).unwrap();
+    let l = s.add_line(a, b).unwrap();
+    s.set_centerline(l, true).unwrap();
+    let mut d = s.to_data();
+    d.curves[l.index()].construction = false;
+    assert!(Sketch::from_data(d).is_err());
+
+    let mut d = rich_sketch().to_data();
+    let arc = d
+        .curves
+        .iter()
+        .position(|c| matches!(c.kind, CurveKind::Arc { .. }))
+        .unwrap();
+    d.curves[arc].construction = true;
+    d.curves[arc].centerline = true;
+    assert!(Sketch::from_data(d).is_err());
+}

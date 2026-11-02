@@ -32,7 +32,7 @@ pub use data::{ConstraintRecord, CurveRecord, PointRecord, SketchData};
 pub use edit::TrimPiece;
 pub use error::SketchError;
 pub use helpers::{RectIds, plane_of_face};
-pub use model::{CurveData, CurveId, CurveKind, PointData, PointId, Sketch};
+pub use model::{CurveData, CurveId, CurveKind, LineStyle, PointData, PointId, Sketch};
 pub use profile::{ExtractedProfiles, PieceRef, ProfileRef, RejectedLoop};
 pub use profile_ref::LegacyMigration;
 pub use shapes::{ArcSlotIds, CenterRectIds, PolygonIds, SlotIds, SlotStyle};

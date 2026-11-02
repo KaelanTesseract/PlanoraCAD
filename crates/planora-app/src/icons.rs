@@ -909,6 +909,8 @@ pub enum HandIcon {
     Break,
     /// Blick auf: die Skizzenebene als Quadrat mit Fadenkreuz, senkrecht gesehen.
     LookAt,
+    /// Mittellinie: Strich, Punkt, Strich in einer Linie.
+    Centerline,
 }
 
 /// Alle gezeichneten Symbole aus [`HandIcon`].
@@ -925,6 +927,7 @@ pub const HAND_DRAWN: &[HandIcon] = &[
     HandIcon::Extend,
     HandIcon::Break,
     HandIcon::LookAt,
+    HandIcon::Centerline,
 ];
 
 /// Zeichnet ein [`HandIcon`] in `rect` (Strichbreite 1,5, runde Enden).
@@ -1059,6 +1062,19 @@ pub fn paint_hand_icon(painter: &Painter, rect: Rect, icon: HandIcon, color: Col
             seg(painter, [c + vec2(gap, 0.0), c + vec2(r, 0.0)], stroke);
             painter.circle_filled(c + vec2(-gap, 0.0), 1.8, color);
             painter.circle_filled(c + vec2(gap, 0.0), 1.8, color);
+        }
+        HandIcon::Centerline => {
+            seg(
+                painter,
+                [c + vec2(-r, 0.0), c + vec2(-r * 0.45, 0.0)],
+                stroke,
+            );
+            seg(
+                painter,
+                [c + vec2(-r * 0.1, 0.0), c + vec2(r * 0.1, 0.0)],
+                stroke,
+            );
+            seg(painter, [c + vec2(r * 0.45, 0.0), c + vec2(r, 0.0)], stroke);
         }
         HandIcon::LookAt => {
             painter.rect_stroke(

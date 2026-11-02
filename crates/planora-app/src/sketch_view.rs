@@ -14,7 +14,7 @@ use planora_math::{DVec2, DVec3, Frame};
 use planora_render::{EdgeRef, OrbitCamera, Pick, exact_step, grid_radius, line_weight};
 use planora_sketch::ExtractedProfiles;
 use planora_sketch::constraint::{ConstraintKind, LineOrPoints};
-use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
+use planora_sketch::model::{CurveId, CurveKind, LineStyle, PointId, Sketch};
 use planora_sketch::solver::{SolveReport, SolveStatus};
 use std::f64::consts::{FRAC_PI_4, TAU};
 
@@ -443,6 +443,18 @@ fn draw_path(painter: &egui::Painter, path: Vec<Pos2>, stroke: Stroke, dashed: b
     painter.extend(path_shapes(path, stroke, dashed));
 }
 
+/// Linienzug im Stil der Kurve: durchgezogen, gestrichelt (Konstruktion) oder als Strichpunkt
+/// (Mittellinie: lange und kurze Striche im Wechsel).
+pub fn style_shapes(path: Vec<Pos2>, stroke: Stroke, style: LineStyle) -> Vec<Shape> {
+    match style {
+        LineStyle::Normal => path_shapes(path, stroke, false),
+        LineStyle::Construction => path_shapes(path, stroke, true),
+        LineStyle::Centerline => {
+            Shape::dashed_line_with_offset(&path, stroke, &[12.0, 2.0], &[3.0, 3.0], 0.0)
+        }
+    }
+}
+
 /// Flächen der Profile als ein Dreiecksnetz (Füllung aus [`ExtractedProfiles::fill`]), Farbe je
 /// Profil aus `color` (`None`: nicht zeichnen). Leer, wenn nichts zu zeichnen ist.
 fn profile_fill_shape(
@@ -527,7 +539,7 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
                 Stroke::new(FINISHED_WIDTH, col.finished)
             };
             for path in map.paths(&pl) {
-                out.extend(path_shapes(path, stroke, data.construction));
+                out.extend(style_shapes(path, stroke, data.style()));
             }
         }
     }
@@ -1142,7 +1154,7 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         }
         let width = if data.construction { 1.2 } else { CURVE_WIDTH };
         for path in map.paths(&pl) {
-            draw_path(&painter, path, Stroke::new(width, color), data.construction);
+            painter.extend(style_shapes(path, Stroke::new(width, color), data.style()));
         }
     }
 

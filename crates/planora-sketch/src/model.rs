@@ -73,11 +73,33 @@ impl CurveKind {
     }
 }
 
+/// Linienstil: normal, Konstruktion oder Mittellinie (Strichpunkt).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineStyle {
+    Normal,
+    Construction,
+    Centerline,
+}
+
 #[derive(Clone, Debug)]
 pub struct CurveData {
     pub kind: CurveKind,
     pub construction: bool,
+    /// Mittellinie: nur an Linien, setzt `construction` voraus.
+    pub centerline: bool,
     pub(crate) alive: bool,
+}
+
+impl CurveData {
+    pub fn style(&self) -> LineStyle {
+        if self.centerline {
+            LineStyle::Centerline
+        } else if self.construction {
+            LineStyle::Construction
+        } else {
+            LineStyle::Normal
+        }
+    }
 }
 pub type CurveId = Id<CurveData>;
 
@@ -251,6 +273,7 @@ impl Sketch {
         self.curves.push(CurveData {
             kind,
             construction: false,
+            centerline: false,
             alive: true,
         })
     }
@@ -511,8 +534,28 @@ impl Sketch {
     pub fn set_construction(&mut self, c: CurveId, construction: bool) -> Result<(), SketchError> {
         self.check_curve(c)?;
         self.curves[c].construction = construction;
+        self.curves[c].centerline = false;
         self.touch_structure();
         Ok(())
+    }
+
+    /// Schaltet die Mittellinie um (nur Linien): an ⇒ Konstruktion und Mittellinie, aus ⇒
+    /// beides aus.
+    pub fn set_centerline(&mut self, c: CurveId, on: bool) -> Result<(), SketchError> {
+        self.check_curve(c)?;
+        if !matches!(self.curves[c].kind, CurveKind::Line { .. }) {
+            return Err(SketchError::WrongType(tr!("sketch-err-centerline-type")));
+        }
+        self.curves[c].construction = on;
+        self.curves[c].centerline = on;
+        self.touch_structure();
+        Ok(())
+    }
+
+    /// Gibt es einen Kurveneintrag mit Mittellinie, auch einen gelöschten? Dann braucht die
+    /// Datei Format 14.
+    pub fn has_centerline_entry(&self) -> bool {
+        self.curves.iter().any(|(_, c)| c.centerline)
     }
 
     /// Alle lebenden Punkte.
