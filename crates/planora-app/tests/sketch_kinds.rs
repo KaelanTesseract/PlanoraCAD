@@ -608,8 +608,8 @@ fn active_hint_names_the_kind_and_the_default_says_what_it_said() {
 #[test]
 fn stages_collect_positions_and_the_last_click_refuses_for_now() {
     let (mut se, mut sk) = session();
-    // Skizzen 3, Task 7: Der 3-Punkt-Bogen ist fertig; es zeigt das Kantenpolygon.
-    se.choose_kind(&mut sk, ToolKind::PolygonEdge);
+    // Skizzen 3, Task 9: Das Polygon ist fertig; es zeigt das Langloch.
+    se.choose_kind(&mut sk, ToolKind::SlotCenterToCenter);
     let start = bits(&sk);
     assert_eq!(se.kind_stage(), 0);
     se.click(&mut sk, at(0.0, 0.0), R, false).unwrap();

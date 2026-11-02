@@ -190,7 +190,11 @@ fn read_field(
     if text.trim().is_empty() {
         return Ok(None);
     }
-    let (v, _) = resolve(text, kind.unit(), scope)?;
+    // Bei der Seitenzahl ist jeder unlesbare Text (auch ein unbekannter Name) ein Bereichsfehler.
+    let (v, _) = match resolve(text, kind.unit(), scope) {
+        Err(_) if kind == FieldKind::Sides => return Err(tr!("sketch-field-sides-range")),
+        found => found?,
+    };
     match kind {
         FieldKind::Sides if !(3.0..=64.0).contains(&v) || v.fract() != 0.0 => {
             Err(tr!("sketch-field-sides-range"))
@@ -641,6 +645,18 @@ fn dimension_kind(
             sk.set_construction(second, true).map_err(err)?;
             K::Angle(first, second, 0.0)
         }
+        // Umbeschrieben gibt die Größe den Abstand Mitte–Seite an, einbeschrieben den Radius.
+        (
+            Created::Polygon {
+                ids,
+                inscribed: true,
+            },
+            F::Radius,
+        ) => K::Radius(ids.circle, 0.0),
+        (Created::Polygon { ids, .. }, F::Radius) => {
+            K::DistancePointLine(ids.center, ids.lines[0], 0.0)
+        }
+        (Created::Polygon { ids, .. }, F::Length) => K::Distance(ids.points[0], ids.points[1], 0.0),
         (Created::Ellipse(c), F::MajorAxis) => K::EllipseMajor(*c, 0.0),
         (Created::Ellipse(c), F::MinorAxis) => K::EllipseMinor(*c, 0.0),
         _ => return Err(crate::msg!("sketch-field-rejected")),

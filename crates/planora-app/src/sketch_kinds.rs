@@ -194,6 +194,8 @@ impl ToolKind {
             Circle2T | Circle3T => crate::msg!("sketch-tangent-no-solution"),
             Arc3P => crate::msg!("sketch-arc-end-on-start"),
             ArcTangent => crate::msg!("sketch-arc-tangent-start"),
+            PolygonCircumscribed | PolygonInscribed => crate::msg!("sketch-radius-positive"),
+            PolygonEdge => crate::msg!("sketch-err-line-zero"),
             _ => crate::msg!("sketch-kind-pending"),
         }
     }
@@ -319,6 +321,11 @@ impl SketchSession {
         }
     }
 
+    /// Seitenzahl des laufenden Polygons: die getippte, sonst die zuletzt abgeschlossene.
+    pub fn current_sides(&self) -> usize {
+        self.input.sides.unwrap_or(self.polygon_sides)
+    }
+
     /// Hinweis zum aktiven Werkzeug in seiner aktiven Art.
     pub fn active_hint(&self) -> String {
         self.kind_of(self.tool)
@@ -397,6 +404,7 @@ impl SketchSession {
                 crate::msg!("sketch-arc-radius-chord")
             }
             ToolKind::Arc3P => crate::msg!("sketch-circle-collinear"),
+            ToolKind::PolygonEdge => crate::msg!("sketch-polygon-edge-side"),
             ToolKind::ArcTangent if self.tangent_start(sk).is_some() => {
                 crate::msg!("sketch-arc-tangent-straight")
             }
@@ -574,6 +582,35 @@ impl SketchSession {
                 let (start, prev, ..) = self.tangent_start(sk).ok_or_else(|| kind.refusal())?;
                 Created::Arc(self.create_tangent_arc(sk, start, prev, cur, prior)?)
             }
+            (
+                ToolKind::PolygonInscribed | ToolKind::PolygonCircumscribed | ToolKind::PolygonEdge,
+                ShapePlan::Polygon(poly),
+            ) => {
+                let ids = sk.add_polygon(&poly).map_err(err)?;
+                let tol = sk.tolerance().linear;
+                let circumscribed = kind == ToolKind::PolygonCircumscribed;
+                let own = [ids.center, ids.points[0], ids.points[1]];
+                // Umbeschrieben liegt der letzte Klick an der Seitenmitte, nicht an einem eigenen Punkt.
+                let bound = if circumscribed {
+                    &hits[..hits.len() - 1]
+                } else {
+                    &hits[..]
+                };
+                self.bind_own(sk, &own, bound)?;
+                if let Some(q) = cur
+                    .point(tol)
+                    .filter(|q| circumscribed && *q != ids.center && !ids.points.contains(q))
+                {
+                    sk.add_constraint(ConstraintKind::Midpoint(q, ids.lines[0]))
+                        .map_err(err)?;
+                }
+                self.solve_checked(sk, prior)?;
+                self.polygon_sides = self.current_sides();
+                Created::Polygon {
+                    ids,
+                    inscribed: kind == ToolKind::PolygonInscribed,
+                }
+            }
             _ => return Err(kind.refusal()),
         };
         self.edit_label = Some(created.undo_label());
@@ -651,6 +688,17 @@ impl SketchSession {
             (ToolKind::Circle3T, _, &[c0, c1]) => {
                 tangent_circles::tangent_circle_three(sk, [c0, c1, third?], at).map(circle)
             }
+            (ToolKind::PolygonInscribed, &[center], _) => {
+                shapes::polygon_inscribed(center, at, self.current_sides(), tol)
+                    .map(ShapePlan::Polygon)
+            }
+            (ToolKind::PolygonCircumscribed, &[center], _) => {
+                shapes::polygon_circumscribed(center, at, self.current_sides(), tol)
+                    .map(ShapePlan::Polygon)
+            }
+            (ToolKind::PolygonEdge, &[a, b], _) => {
+                shapes::polygon_edge(a, b, at, self.current_sides(), tol).map(ShapePlan::Polygon)
+            }
             (ToolKind::Arc3P, &[start, end], _) => {
                 let radius = self.input.locked(FieldKind::Radius);
                 if radius.is_some_and(|r| !radius_spans(start, end, r, tol)) {
@@ -667,9 +715,9 @@ impl SketchSession {
     }
 
     /// Vorschau der laufenden Form, aus demselben Plan wie das Ergebnis. Vor dem Plan zeigen
-    /// `Rect3P` und `Circle3P` die Linie zum Zeiger.
+    /// `Rect3P`, `Circle3P` und `PolygonEdge` die Linie zum Zeiger.
     pub fn kind_preview(&self, sk: &Sketch, at: DVec2) -> Option<Vec<Vec<DVec2>>> {
-        if let (Some(ToolKind::Rect3P | ToolKind::Circle3P), &[from]) =
+        if let (Some(ToolKind::Rect3P | ToolKind::Circle3P | ToolKind::PolygonEdge), &[from]) =
             (self.planned_kind(), self.pending_pos.as_slice())
         {
             return (from.distance(at) > sk.tolerance().linear).then(|| vec![vec![from, at]]);
@@ -718,6 +766,12 @@ impl SketchSession {
                     tangent_circles::tangent_circle_two_lines(sk, l0, l1, cur.raw, Some(d))?;
                 Some(m)
             }
+            (ToolKind::PolygonInscribed | ToolKind::PolygonCircumscribed, &[center]) => {
+                Some(center + toward_pointer(cur, center) * locked(F::Radius)?)
+            }
+            (ToolKind::PolygonEdge, &[from]) => {
+                Some(from + toward_pointer(cur, from) * locked(F::Length)?)
+            }
             (ToolKind::Arc3P, &[start, end]) => {
                 let tol = sk.tolerance().linear;
                 through_at_radius(start, end, locked(F::Radius)?, cur.raw, tol)
@@ -743,7 +797,7 @@ impl SketchSession {
     pub(crate) fn kind_field_value(&self, sk: &Sketch, kind: FieldKind) -> Option<f64> {
         use FieldKind as F;
         if kind == F::Sides {
-            return Some(self.input.sides.unwrap_or(self.polygon_sides) as f64);
+            return Some(self.current_sides() as f64);
         }
         let at = self.draw_cursor.as_ref()?.at;
         match (self.planned_kind()?, self.pending_pos.as_slice(), kind) {
@@ -758,6 +812,10 @@ impl SketchSession {
             (ToolKind::RectCenter, &[center], F::Width) => Some(2.0 * (at.x - center.x).abs()),
             (ToolKind::RectCenter, &[center], F::Height) => Some(2.0 * (at.y - center.y).abs()),
             (ToolKind::Circle2P, &[from], F::Diameter) => Some(from.distance(at)),
+            (ToolKind::PolygonInscribed | ToolKind::PolygonCircumscribed, &[c], F::Radius) => {
+                Some(c.distance(at))
+            }
+            (ToolKind::PolygonEdge, &[from], F::Length) => Some(from.distance(at)),
             (ToolKind::Circle2T, _, F::Diameter) => match self.kind_plan(sk, at)? {
                 ShapePlan::Circle(_, r) => Some(2.0 * r),
                 _ => None,
