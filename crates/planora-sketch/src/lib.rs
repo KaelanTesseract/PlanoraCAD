@@ -20,6 +20,7 @@ pub mod profile;
 pub(crate) mod profile_legacy;
 pub(crate) mod profile_ref;
 pub mod query;
+pub mod shapes;
 pub mod snap;
 pub mod solid;
 pub mod solver;
