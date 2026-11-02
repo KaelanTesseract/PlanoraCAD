@@ -182,10 +182,10 @@ Die Freiheitsgrade und Zustände unten sind mit einem Probelauf gegen den heutig
 - Test: `crates/planora-sketch/tests/tangent_circles.rs` (neu), `crates/planora-sketch/tests/tangent_circles_perf.rs` (neu, `#[ignore]`)
 
 **Interfaces:**
-- Consumes: `Sketch::solve`, `add_constraint`, `geom`.
+- Consumes: `geom`.
 - Produces:
   - `pub fn tangent_circle_two_lines(sk: &Sketch, l0: CurveId, l1: CurveId, pointer: DVec2, diameter: Option<f64>) -> Option<(DVec2, f64)>` (Entscheidung 8)
-  - `pub fn tangent_circle_three(sk: &Sketch, curves: [CurveId; 3], pointer: DVec2) -> Option<(DVec2, f64)>`: nur Linien analytisch (alle acht Vorzeichen, Determinante fast 0 entfällt, r > tol, ohne Doppelte), sonst numerisch; Auswahl nach Entscheidung 8
+  - `pub fn tangent_circle_three(sk: &Sketch, curves: [CurveId; 3], pointer: DVec2) -> Option<(DVec2, f64)>`: analytisch für jede Mischung (alle acht Vorzeichen, Determinante fast 0 entfällt, r > tol, ohne Doppelte); Auswahl nach Entscheidung 8
   - `pub fn is_tangent_candidate(sk: &Sketch, c: CurveId) -> bool` (Linie, Kreis, Bogen)
 
 - [ ] **Step 1: Tests** – Zwei Linien: x-Achse und y-Achse, Zeiger (3,5): Mitte auf (t,t), Sektor des Zeigers; Zeiger (−3,5) anderer Sektor; `diameter` 10 ⇒ r = 5 genau; parallele Linien y = 0 und y = 10: r = 5, Mitte (Zeiger.x, 5); Zeiger auf der Linie `None`. Drei Linien (3-4-5-Dreieck): Zeiger innen ⇒ Inkreis r = 1; Zeiger außen ⇒ Ankreis der Seite; zwei parallele und eine Querlinie: zwei Lösungen, Zeiger wählt; drei parallele `None`. Gemischt (Linie, Kreis, Bogen, Werte aus dem Probelauf: Linie y = 0, Kreis (0,30) r 10, Bogen um (30,30) r 8, Startwert (15,10)): Lösung erfüllt alle drei unter 1e-6 und liegt am Zeiger. **Keine stille andere Lösung:** Der Rückgabewert, als Kreis mit drei `Tangent` in die echte Skizze gelegt, wandert beim `solve` unter `10·tol`, `redundant` leer, `dof` des Kreises 0; die vorhandenen Kurven bewegen sich nicht, auch wenn sie frei sind. Gleiche Eingabe ergibt bitgleich dasselbe; `sk` bleibt unverändert (`revision`). Keine Lösung (drei konzentrische Kreise) `None`. Messtest: 200 Zeigerlagen, Median < 4 ms im Release.
