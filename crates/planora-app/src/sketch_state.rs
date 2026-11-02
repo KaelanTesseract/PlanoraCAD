@@ -15,7 +15,7 @@ use planora_math::DVec2;
 use planora_sketch::SketchError;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
 use planora_sketch::model::{CurveId, CurveKind, MAX_SPLINE_POINTS, PointId, Sketch};
-use planora_sketch::shapes::folded_over;
+use planora_sketch::shapes::{folded_over, sweep_crossed_half_turn};
 use planora_sketch::snap::{SnapHit, SnapIndex};
 use planora_sketch::solver::{Drag, SolveReport, SolveStatus};
 use std::collections::BTreeSet;
@@ -1582,17 +1582,20 @@ impl SketchSession {
         let Some(new) = sk.constraint(id).and_then(|c| c.kind.length_value()) else {
             return direct;
         };
+        // Ein Radius darf einen tangentialen Bogen auch nicht über 180° ausbeulen (Skizzen 4).
+        let radius = sk.constraint(id).is_some_and(|c| c.kind.is_radius());
+        let folds = |trial: &Sketch| {
+            folded_over(unsolved, trial) || (radius && sweep_crossed_half_turn(unsolved, trial))
+        };
         let solved = self.last_report.as_ref().is_some_and(status_ok);
-        if direct.is_ok() && !(solved && folded_over(unsolved, sk)) {
+        if direct.is_ok() && !(solved && folds(sk)) {
             return Ok(());
         }
         let stuck = direct.and(Err(crate::msg!("sketch-dimension-folds")));
         let Some(old) = old.filter(|o| *o != new) else {
             return stuck;
         };
-        let accept = |trial: &Sketch, report: &SolveReport| {
-            status_ok(report) && !folded_over(unsolved, trial)
-        };
+        let accept = |trial: &Sketch, report: &SolveReport| status_ok(report) && !folds(trial);
         let Some((done, report)) = unsolved.solve_in_steps(&[(id, old, new)], accept) else {
             return stuck;
         };

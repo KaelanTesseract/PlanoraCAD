@@ -8,7 +8,7 @@ use planora_sketch::fillet::{
     FilletPlan,
 };
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
-use planora_sketch::shapes::{ArcPlan, folded_over};
+use planora_sketch::shapes::{ArcPlan, folded_over, sweep_crossed_half_turn};
 use planora_sketch::solver::{SolveReport, SolveStatus};
 
 fn sketch() -> Sketch {
@@ -132,12 +132,14 @@ fn change(s: &Sketch, id: ConstraintId, old: f64, new: f64) -> Option<Sketch> {
     }
     trial.set_constraint_value(id, new).unwrap();
     let unsolved = trial.clone();
+    let radius = unsolved.constraint(id).unwrap().kind.is_radius();
+    let folds =
+        |t: &Sketch| folded_over(&unsolved, t) || (radius && sweep_crossed_half_turn(&unsolved, t));
     let r = trial.solve();
-    if r.status == SolveStatus::Solved && !folded_over(&unsolved, &trial) {
+    if r.status == SolveStatus::Solved && !folds(&trial) {
         return Some(trial);
     }
-    let accept =
-        |t: &Sketch, r: &SolveReport| r.status == SolveStatus::Solved && !folded_over(&unsolved, t);
+    let accept = |t: &Sketch, r: &SolveReport| r.status == SolveStatus::Solved && !folds(t);
     unsolved
         .solve_in_steps(&[(id, old, new)], accept)
         .map(|(done, _)| done)
@@ -1757,4 +1759,132 @@ fn an_unclear_touch_leaves_it_to_the_solver() {
         s.prepare_dimension_change(dim, 20.0),
         DimensionChange::Untouched
     );
+}
+
+// ---- Normaler Weg nach „passt nicht“: kein Ausbeulen über 180° -------------------------------
+
+/// Linie an einem Bogen, gerundet: Ist der Radius zu groß für die Nachbarn, löst der normale Weg,
+/// aber kein Stand geht über 180°, weder Schritt für Schritt noch im Sprung von der Basis.
+#[test]
+fn the_plain_path_never_opens_a_line_arc_fillet_past_half_a_turn() {
+    let (mut refit, mut plain, mut refused, mut over) = (0, 0, 0, 0);
+    for rr in [8.0, 20.0, 60.0] {
+        for ccw in [true, false] {
+            for k in 0..24 {
+                let ang = f64::from(k) * 15.0_f64.to_radians() + 0.05;
+                let mut s = sketch();
+                let c = pt(&mut s, 0.0, 0.0);
+                let corner = DVec2::new(0.0, rr);
+                let cp = pt(&mut s, corner.x, corner.y);
+                let op = pt(&mut s, rr, 0.0);
+                let arc = if ccw {
+                    s.add_arc(c, op, cp).unwrap()
+                } else {
+                    s.add_arc(c, cp, op).unwrap()
+                };
+                let far = corner + DVec2::from_angle(ang) * 40.0;
+                let fp = pt(&mut s, far.x, far.y);
+                let l = s.add_line(fp, cp).unwrap();
+                let on = if ccw {
+                    DVec2::from_angle(PI / 4.0) * rr
+                } else {
+                    DVec2::from_angle(PI) * rr
+                };
+                let r0 = (rr * 0.1_f64).min(2.0);
+                let mid = (far + corner) * 0.5;
+                let Some(plan) = s.fillet_plan(pick(l, mid.x, mid.y), pick(arc, on.x, on.y), r0)
+                else {
+                    continue;
+                };
+                let ids = s.add_fillet(&plan, None).unwrap();
+                let dim = ids.radius_dim.unwrap();
+                let sweep0 = sweep_of(&s, ids.arc);
+                let mut state = s.clone();
+                let mut old = r0;
+                for i in 1..=100 {
+                    let r = rr * f64::from(i) / 100.0;
+                    let how = state.clone().prepare_dimension_change(dim, r);
+                    // Im Sprung von der Basis
+                    if let Some(jump) = change(&s, dim, r0, r)
+                        && sweep0 <= PI
+                        && sweep_of(&jump, ids.arc) > PI
+                    {
+                        over += 1;
+                    }
+                    // Aufgelaufen
+                    let Some(next) = change(&state, dim, old, r) else {
+                        refused += 1;
+                        assert_ne!(how, DimensionChange::Refitted, "rr {rr} k {k} r {r}");
+                        continue;
+                    };
+                    if how == DimensionChange::Refitted {
+                        refit += 1;
+                    } else {
+                        plain += 1;
+                    }
+                    if sweep0 <= PI && sweep_of(&next, ids.arc) > PI {
+                        over += 1;
+                    }
+                    state = next;
+                    old = r;
+                }
+            }
+        }
+    }
+    println!("Linie-Bogen: neu gelegt {refit}, normal gelöst {plain}, abgelehnt {refused}");
+    assert_eq!(over, 0);
+    assert!(refit > 0 && plain > 0 && refused > 0);
+}
+
+#[test]
+fn a_tangent_arc_crossing_half_a_turn_counts_only_from_under() {
+    let mut v = vee(0.5 * PI);
+    let (_, ids) = round(&mut v, 5.0);
+    let CurveKind::Arc { start, end, .. } = v.s.curve(ids.arc).unwrap().kind else {
+        panic!()
+    };
+    let m = at(&v.s, ids.center);
+    let s_angle = (at(&v.s, start) - m).to_angle();
+    let at_sweep = |sweep: f64| m + DVec2::from_angle(s_angle + sweep) * 5.0;
+    let with_sweep = |sweep: f64| {
+        let mut t = v.s.clone();
+        let e = at_sweep(sweep);
+        t.set_point_xy(end, e.x, e.y).unwrap();
+        t
+    };
+    assert!(sweep_crossed_half_turn(&v.s, &with_sweep(PI + 0.01)));
+    assert!(!sweep_crossed_half_turn(&v.s, &with_sweep(PI - 0.01)));
+    // Schon darüber oder auf 180° gestartet: bleibt erlaubt.
+    assert!(!sweep_crossed_half_turn(
+        &with_sweep(PI + 0.2),
+        &with_sweep(PI + 0.4)
+    ));
+    assert!(!sweep_crossed_half_turn(
+        &with_sweep(PI),
+        &with_sweep(PI + 0.2)
+    ));
+}
+
+/// Das Oval, Radius zu klein für die kleinen Bögen: Der direkte Weg beulte bei R 27,4 auf 198° aus,
+/// in Schritten bleibt er bei 172°; bei R 8 geht es gar nicht.
+#[test]
+fn an_oval_radius_too_small_stays_under_half_a_turn_or_is_refused() {
+    let (mut s, arcs) = oval();
+    let big = s.radius(arcs[1]).unwrap();
+    let dim = s
+        .add_constraint(ConstraintKind::Radius(arcs[1], big))
+        .unwrap();
+    let mut direct = s.clone();
+    direct.set_constraint_value(dim, 27.4).unwrap();
+    assert_eq!(direct.solve().status, SolveStatus::Solved);
+    assert!(
+        sweep_of(&direct, arcs[1]) > PI,
+        "sonst prüft das hier nichts"
+    );
+    let next = change(&s, dim, big, 27.4).expect("in Schritten");
+    assert!((next.radius(arcs[1]).unwrap() - 27.4).abs() < 1e-6);
+    for k in arcs {
+        assert!(sweep_of(&next, k) < PI);
+    }
+    assert!(change(&s, dim, big, 8.0).is_none());
 }

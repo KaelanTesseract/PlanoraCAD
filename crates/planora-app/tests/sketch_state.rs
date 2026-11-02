@@ -1105,3 +1105,43 @@ fn a_radius_on_an_equal_follower_moves_both_fillets() {
             < 1e-9
     );
 }
+
+/// Skizzen 4: Passt ein Radius nicht zwischen die Bögen, löst der normale Weg; beult er den Bogen
+/// dabei über 180° aus, lehnt die App ab und nichts ändert sich.
+#[test]
+fn a_radius_that_would_bulge_an_oval_arc_is_refused_bit_equal() {
+    let (mut sk, mut se) = setup();
+    let big = 30.0 * 2.0_f64.sqrt() + 10.0;
+    let (x, y) = (big * 0.5_f64.sqrt(), 10.0 * 0.5_f64.sqrt());
+    let mut pt = |x: f64, y: f64| sk.add_point(x, y).unwrap();
+    let (right, left, top, bottom) = (pt(30.0, 0.0), pt(-30.0, 0.0), pt(0.0, -30.0), pt(0.0, 30.0));
+    let (ne, nw, sw, s_e) = (pt(x, y), pt(-x, y), pt(-x, -y), pt(x, -y));
+    let arcs = [
+        sk.add_arc(right, s_e, ne).unwrap(),
+        sk.add_arc(top, ne, nw).unwrap(),
+        sk.add_arc(left, nw, sw).unwrap(),
+        sk.add_arc(bottom, sw, s_e).unwrap(),
+    ];
+    for i in 0..4 {
+        sk.add_constraint(K::Tangent(arcs[i], arcs[(i + 1) % 4]))
+            .unwrap();
+    }
+    let dim = sk.add_constraint(K::Radius(arcs[1], big)).unwrap();
+    let before = sk.to_data();
+    let text = se.set_dimension_value(&mut sk, dim, 8.0).unwrap_err();
+    assert_eq!(text, planora_i18n::tr!("sketch-dimension-folds"));
+    assert_eq!(sk.to_data(), before);
+    // Direkt beulte R 27,4 auf 198° aus, in Schritten bleibt der Bogen darunter.
+    se.set_dimension_value(&mut sk, dim, 27.4).unwrap();
+    assert!((sk.radius(arcs[1]).unwrap() - 27.4).abs() < 1e-6);
+    let CurveKind::Arc { center, start, end } = sk.curve(arcs[1]).unwrap().kind else {
+        panic!()
+    };
+    let sweep = planora_sketch::shapes::ArcPlan {
+        center: sk.point_xy(center).unwrap(),
+        start: sk.point_xy(start).unwrap(),
+        end: sk.point_xy(end).unwrap(),
+    }
+    .sweep();
+    assert!(sweep < std::f64::consts::PI, "{sweep}");
+}

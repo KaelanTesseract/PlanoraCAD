@@ -1372,6 +1372,14 @@ fn a_formula_radius_on_an_oval_with_enclosing_arcs_solves() {
         .add_feature("Skizze 1", FeatureKind::Sketch(on_xy(sk, one(dim, "R"))))
         .unwrap();
     assert_eq!(status(&d, s), FeatureStatus::Ok);
+    // Passt nicht: bei 8 ein Fehler statt still falscher Form, bei 27,4 (direkt 198°) in Schritten
+    // unter 180°.
+    d.set_parameter(r, edit(&d, r, "8")).unwrap();
+    assert!(error_text(&d, s).contains(&planora_i18n::tr!("sketch-formula-unsolvable")));
+    d.set_parameter(r, edit(&d, r, "27.4")).unwrap();
+    assert_eq!(status(&d, s), FeatureStatus::Ok);
+    let got = d.sketch_of(s).unwrap();
+    assert!((got.radius(arcs[1]).unwrap() - 27.4).abs() < 1e-6);
     for value in [53.0, 55.0, 60.0, 67.0, 50.0, 45.0, 42.0] {
         d.set_parameter(r, edit(&d, r, &value.to_string())).unwrap();
         assert_eq!(status(&d, s), FeatureStatus::Ok, "R {value}");

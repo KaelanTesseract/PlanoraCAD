@@ -96,6 +96,14 @@ impl ConstraintKind {
         )
     }
 
+    /// Ist das ein Radius oder Durchmesser?
+    pub fn is_radius(&self) -> bool {
+        matches!(
+            self,
+            ConstraintKind::Radius(..) | ConstraintKind::Diameter(..)
+        )
+    }
+
     /// Der Wert, wenn das ein Längenmaß ist (für den Falt-Wächter, siehe
     /// [`crate::shapes::folded_over`]).
     pub fn length_value(&self) -> Option<f64> {

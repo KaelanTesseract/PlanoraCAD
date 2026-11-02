@@ -578,9 +578,22 @@ fn solve_formulas(sketch: &mut Sketch, sf: &SketchFeature) -> SolveStatus {
     if !refit_formula_arcs(sketch, sf) {
         return SolveStatus::NotConverged;
     }
-    let direct = sketch.solve().status;
+    let unsolved = sketch.clone();
+    let radius_formula = sf
+        .formulas
+        .keys()
+        .any(|&id| sketch.constraint(id).is_some_and(|c| c.kind.is_radius()));
+    let bulges = |after: &Sketch| {
+        radius_formula && planora_sketch::shapes::sweep_crossed_half_turn(&unsolved, after)
+    };
+    let mut direct = sketch.solve().status;
     if direct == SolveStatus::Solved {
-        return direct;
+        if !bulges(sketch) {
+            return direct;
+        }
+        // Wie beim Falt-Wächter: In Schritten bleibt die Lage vielleicht.
+        *sketch = unsolved.clone();
+        direct = SolveStatus::NotConverged;
     }
     let targets: Vec<_> = sf
         .formulas
@@ -594,8 +607,9 @@ fn solve_formulas(sketch: &mut Sketch, sf: &SketchFeature) -> SolveStatus {
     if targets.is_empty() {
         return direct;
     }
-    let accept =
-        |_: &Sketch, report: &planora_sketch::SolveReport| report.status == SolveStatus::Solved;
+    let accept = |trial: &Sketch, report: &planora_sketch::SolveReport| {
+        report.status == SolveStatus::Solved && !bulges(trial)
+    };
     match sketch.solve_in_steps(&targets, accept) {
         Some((done, report)) => {
             *sketch = done;

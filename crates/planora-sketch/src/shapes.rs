@@ -428,6 +428,37 @@ fn sweep_jumped(
     }
 }
 
+/// Abstand unter 180°, ab dem ein Bogen als „darunter“ gilt: Ein Halbkreis (Langloch) rauscht beim
+/// Lösen um wenige 1e-12 rad um 180°, das ist kein Überschreiten.
+const HALF_TURN_MARGIN: f64 = 1e-6;
+
+/// Öffnet sich ein Bogen, der an beiden Enden tangential anschließt, von unter 180° auf über 180°?
+/// Das prüft, wer einen Radius ohne die Lage aus [`Sketch::prepare_dimension_change`] gelöst hat:
+/// Der Löser findet dort ausgebeulte Bögen, die alle Abhängigkeiten erfüllen und zu klein für
+/// [`folded_over`] sind.
+pub fn sweep_crossed_half_turn(before: &Sketch, after: &Sketch) -> bool {
+    after.curves().any(|(c, data)| {
+        let CurveKind::Arc { center, start, end } = data.kind else {
+            return false;
+        };
+        if before.curve(c).is_none_or(|d| d.kind != data.kind) || after.tangent_ends(c).is_none() {
+            return false;
+        }
+        let sweep = |sk: &Sketch| {
+            Some(
+                ArcPlan {
+                    center: sk.point_xy(center).ok()?,
+                    start: sk.point_xy(start).ok()?,
+                    end: sk.point_xy(end).ok()?,
+                }
+                .sweep(),
+            )
+        };
+        matches!((sweep(before), sweep(after)),
+            (Some(was), Some(now)) if was < PI - HALF_TURN_MARGIN && now > PI)
+    })
+}
+
 /// Hat ein Maß die Skizze umgeklappt? Wahr, wenn von `before` nach `after` die Richtung einer
 /// lebenden Linie umkehrt oder bei einem lebenden Bogen die Vektoren Mitte→Start und Mitte→Ende
 /// beide. Der Löser meldet so etwas als gelöst, wenn alle Abhängigkeiten auch in der umgeklappten
