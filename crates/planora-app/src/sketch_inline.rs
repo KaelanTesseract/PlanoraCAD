@@ -211,14 +211,16 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option
         }
     }
 
-    if enter {
+    // Offene Liste der Arten: Eingabe und Esc gehören ihr, nicht der Form.
+    let flyout = crate::sketch_panel::flyout_open(&ctx);
+    if enter && !flyout {
         let raw = se.draw_cursor.as_ref().map(|c| c.raw).or(se.cursor);
         if let Some(raw) = raw {
             // Fehler stehen in der Meldung der Sitzung und im Feld.
             let _ = se.commit_input(sf, raw, radius, false, &scope);
         }
     }
-    if esc {
+    if esc && !flyout {
         se.cancel(&mut sf.sketch);
         return true;
     }

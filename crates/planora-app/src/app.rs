@@ -2041,6 +2041,7 @@ pub fn create_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     }
     ui.separator();
     sketch_menu(ui, ws);
+    sketch_kinds_menu(ui, ws);
     ui.separator();
     // Körper aus Skizzen: die gewählte (sonst die geöffnete, sonst die letzte) Skizze.
     for kind in &CreateKind::ALL[4..] {
@@ -2251,6 +2252,32 @@ fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) -> b
 }
 
 /// Einträge „Skizze auf …“ im Menü „Erzeugen“ (ohne Untermenü).
+/// Bei offener Skizze je Form mit Arten ein Untermenü: dieselben Einträge wie die Liste an der
+/// Skizzenleiste, gewählt über die Aktion der Art.
+fn sketch_kinds_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
+    if ws.active_tab().state.open_sketch_id().is_none() {
+        return;
+    }
+    let tools = sketch_panel::TOOL_ORDER
+        .into_iter()
+        .filter(|t| sketch_panel::has_flyout(*t));
+    for tool in tools {
+        ui.menu_button(sketch_panel::tool_label(tool), |ui| {
+            for kind in crate::sketch_kinds::ToolKind::of(tool) {
+                let keys = keymap::shortcut_hint(&ws.keymap, kind.action());
+                let source = icons::sketch_tool_icon(tool);
+                if icons::source_entry_keys(ui, source, &kind.label(), &keys, true)
+                    .on_hover_text(kind.hint())
+                    .clicked()
+                {
+                    commands::run_action(ws, kind.action());
+                    ui.close();
+                }
+            }
+        });
+    }
+}
+
 fn sketch_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     let state = &mut ws.active_tab_mut().state;
     for (label, name, plane) in [

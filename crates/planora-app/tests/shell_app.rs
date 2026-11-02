@@ -922,6 +922,9 @@ fn sketch_mode_clicks_and_wheel_on_a_field_do_not_reach_the_sketch() {
         ("Status", field(&c, "Status").center()),
         ("Fuß", field(&c, "Fuß").left_center() + vec2(6.0, 0.0)),
     ] {
+        // Der Klick auf die Leiste wählt ein anderes Werkzeug; jeder Klick prüft mit dem Punkt.
+        let (se, sk) = state(&mut app).session_sketch_mut().unwrap();
+        se.set_tool(sk, Tool::Point);
         assert_eq!(
             c.layer_id_at(p).unwrap().order,
             egui::Order::Middle,

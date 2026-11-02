@@ -352,9 +352,11 @@ fn sketch_keys_select_the_tools() {
     rig.ws().keymap = km;
     let texts = rig.hover(rig.strip("Linie"));
     assert!(texts.iter().any(|t| t == "Linie (K)"), "{texts:?}");
-    // Werkzeuge ohne Kürzel: nur der Name.
+    // Werkzeuge ohne Kürzel: nur der Name (Skizzen 3: bei Formen der Name der zuletzt benutzten Art).
     let texts = rig.hover(rig.strip("Bogen"));
-    assert!(texts.iter().any(|t| t == "Bogen"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "Mittelpunkt-Bogen"), "{texts:?}");
+    let texts = rig.hover(rig.strip("Auswahl"));
+    assert!(texts.iter().any(|t| t == "Auswahl"), "{texts:?}");
 }
 
 #[test]

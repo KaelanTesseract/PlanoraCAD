@@ -329,6 +329,9 @@ pub struct SketchSession {
     /// ein Klick (egui meldet sonst das Loslassen der rechten oder linken Taste als solchen, und
     /// der leerte die Auswahl).
     pub box_aborted: bool,
+    /// Ein Drücken hat die offene Liste der Arten geschlossen: Der nächste Klick zählt einfach,
+    /// auch wenn egui ihn mit dem verschluckten zum Doppelklick zusammenzählt.
+    pub click_after_flyout: bool,
     /// Zählt die Sprünge durch Rückgängig/Wiederholen ([`SketchSession::after_history_jump`]);
     /// Eingabefelder der Oberfläche, die zu einem älteren Zählerstand gehören, schließen.
     pub history_jumps: u64,
@@ -428,6 +431,7 @@ impl SketchSession {
             curve_drag: None,
             box_select: None,
             box_aborted: false,
+            click_after_flyout: false,
             history_jumps: 0,
             hover_preview: None,
             edit_label: None,

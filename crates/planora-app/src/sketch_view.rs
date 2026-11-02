@@ -862,6 +862,17 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     if state.session_sketch().is_none() {
         return;
     }
+    // Offene Liste der Arten (die Leiste kommt in diesem Bild erst nach der Ansicht): Esc und
+    // Eingabe gehören ihr, ein Drücken schließt nur sie und setzt weder Punkt noch Zug.
+    let flyout = crate::sketch_panel::flyout_open(ui.ctx());
+    if flyout
+        && ui.input(|i| i.pointer.any_pressed())
+        && let Some(se) = state.sketch_session.as_mut()
+    {
+        se.box_aborted = true;
+        se.click_after_flyout = true;
+    }
+    let aborted = state.sketch_session.as_ref().is_some_and(|s| s.box_aborted);
 
     // Navigation: Verschieben und Zoomen; kein Orbit.
     let dragging = state
@@ -876,6 +887,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     let km = crate::keymap::mouse::current(ui.ctx());
     let pan_gesture = crate::keymap::mouse::pan_2d(&km, ui, response);
     let starts_box = response.drag_started_by(PointerButton::Primary)
+        && !aborted
         && box_can_start(ui, rect, state, pan_gesture, ctrl);
     // Ein laufender Rahmen schwenkt nicht, auch wenn Umschalt erst währenddessen dazukommt; ein
     // Zug auf dem letzten Punkt des Linienzugs ebenso.
@@ -925,7 +937,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         if let Some(origin) = ui.input(|i| i.pointer.press_origin()) {
             se.begin_box(dvec(origin), shift);
         }
-    } else if response.drag_started_by(PointerButton::Primary) && !shift && !panning {
+    } else if response.drag_started_by(PointerButton::Primary) && !shift && !panning && !aborted {
         // Punkt oder Kurve ziehen (Auswahlwerkzeug), tangentialer Bogen (Linienwerkzeug)
         let origin = ui.input(|i| i.pointer.press_origin());
         if let Some(start) = origin.and_then(|p| map.to_sketch(p)) {
@@ -945,7 +957,8 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         }
     }
 
-    let esc = !viewport::typing(ui.ctx()) && ui.input(|i| i.key_pressed(egui::Key::Escape));
+    let esc =
+        !flyout && !viewport::typing(ui.ctx()) && ui.input(|i| i.key_pressed(egui::Key::Escape));
     if se.box_select.is_some() {
         // Die rechte Taste bricht schon beim Drücken ab: Ein Klick wird es während des Zugs nicht
         // immer. Esc beendet schon hier den Zug von egui, der Rahmen fällt aber unten weg.
@@ -981,7 +994,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     // Stutzen durch Ziehen: jede überfahrene Kurve wird gestutzt (ein Schritt, da der Verlauf
     // erst nach dem Loslassen fortgeschrieben wird).
     if se.tool == Tool::Trim && !panning {
-        if response.drag_started_by(PointerButton::Primary) && !shift {
+        if response.drag_started_by(PointerButton::Primary) && !shift && !aborted {
             let origin = ui.input(|i| i.pointer.press_origin());
             if let Some(start) = origin.and_then(|p| map.to_sketch(p)) {
                 let r = origin.and_then(|p| map.radius_at(p)).unwrap_or(radius);
@@ -1007,7 +1020,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     // Abstand nur zum letzten) – das ist für den Nutzer ein Doppelklick und beendet ebenso.
     if se.box_aborted {
         // Das Loslassen nach dem Abbruch ist kein Klick.
-    } else if response.double_clicked() || response.triple_clicked() {
+    } else if (response.double_clicked() || response.triple_clicked()) && !se.click_after_flyout {
         if se.tool == Tool::Select {
             // Wie beim einfachen Klick: Punkt vor Kurve.
             if let Some(at) = at
@@ -1029,6 +1042,9 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             let _ = se.click(&mut sf.sketch, at, radius, shift);
         }
     }
+    if response.clicked_by(PointerButton::Primary) && !se.box_aborted {
+        se.click_after_flyout = false;
+    }
     if response.clicked_by(PointerButton::Secondary) && !se.box_aborted {
         se.cancel(&mut sf.sketch);
     }
@@ -1047,7 +1063,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         if esc {
             se.cancel(&mut sf.sketch);
         }
-        if enter {
+        if enter && !flyout {
             let _ = se.finish_tool(&mut sf.sketch);
         }
         if delete {

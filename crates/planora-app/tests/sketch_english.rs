@@ -264,6 +264,9 @@ fn sketch_speaks_english() {
             frame(&c, &mut app, vec![moved(r.center())]);
             frame(&c, &mut app, vec![moved(r.center())]);
             let tip = frame(&c, &mut app, vec![]);
+            // Skizzen 3: Formen mit Arten zeigen den Hinweis der zuletzt benutzten Art.
+            let se = state(&mut app).sketch_session.as_ref().unwrap();
+            let hint = se.kind_of(tool).map_or(hint, |k| k.hint());
             assert!(tip.has(&hint), "Hinweis zu {tool:?}: {:?}", tip.all());
             tip.assert_english(&format!("Hinweis {tool:?}"));
         }
