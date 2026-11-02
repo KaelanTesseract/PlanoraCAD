@@ -4,7 +4,7 @@
 use planora_math::{DVec2, Frame, TAU, Tolerance};
 use planora_sketch::SketchError;
 use planora_sketch::constraint::{ConstraintKind as K, LineOrPoints};
-use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
+use planora_sketch::model::{CurveId, CurveKind, LineStyle, PointId, Sketch};
 use planora_sketch::solver::{Drag, SolveStatus};
 
 fn sketch() -> Sketch {
@@ -504,4 +504,24 @@ fn an_elliptic_arc_cannot_start_or_end_at_its_center() {
     assert!(matches!(r, Err(SketchError::Degenerate(_))), "{r:?}");
     let r = s.add_elliptic_arc(m, DVec2::new(10.0, 0.0), 5.0, a, m);
     assert!(matches!(r, Err(SketchError::Degenerate(_))), "{r:?}");
+}
+
+// Skizzen 3, Fund: Teilstücke übernehmen den Stil des Originals.
+#[test]
+fn trimming_the_middle_of_construction_and_centerline_keeps_the_style_on_both_pieces() {
+    for style in [LineStyle::Construction, LineStyle::Centerline] {
+        let mut s = sketch();
+        let (h, _, _) = line(&mut s, -10.0, 0.0, 10.0, 0.0);
+        line(&mut s, -3.0, -5.0, -3.0, 5.0);
+        line(&mut s, 3.0, -5.0, 3.0, 5.0);
+        match style {
+            LineStyle::Centerline => s.set_centerline(h, true).unwrap(),
+            _ => s.set_construction(h, true).unwrap(),
+        }
+        let out = s.trim(h, DVec2::new(0.0, 0.0)).unwrap();
+        assert_eq!(out.len(), 2, "{out:?}");
+        for c in out {
+            assert_eq!(s.curve(c).unwrap().style(), style);
+        }
+    }
 }

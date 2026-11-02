@@ -304,10 +304,10 @@ fn all_nine_tools_are_buttons_with_tooltips_and_widget_info() {
         frame(&c, &mut app, SIZE, vec![moved(r.center())]);
         frame(&c, &mut app, SIZE, vec![moved(r.center())]);
         let shot = frame(&c, &mut app, SIZE, vec![]);
-        let title = match planora_app::keymap::Action::for_sketch_tool(tool) {
-            Some(a) => planora_app::keymap::with_hint(&km, a, &label),
-            None => label.to_string(),
-        };
+        // Skizzen 3: Formen mit Arten nennen die zuletzt benutzte Art und deren Hinweis.
+        let se = state(&mut app).sketch_session.as_ref().unwrap();
+        let title = sketch_panel::strip_title(&km, se, tool);
+        let hint = se.kind_of(tool).map_or(hint, |k| k.hint());
         assert!(shot.has(&title), "Hinweistext „{title}“ fehlt");
         assert!(shot.has(&hint), "Hinweis zu „{label}“ fehlt");
     }

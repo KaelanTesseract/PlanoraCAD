@@ -272,6 +272,50 @@ fn a_drifted_tangent_at_a_shared_end_of_an_old_sketch_stays_solved() {
     }
 }
 
+/// Skizzen 3, Task 10: Linie und Bogen am gemeinsamen Ende, die Tangente hat genau eine Lösung; die
+/// Spitze (Richtung umgekehrt) ist keine.
+#[test]
+fn a_tangent_at_a_shared_end_has_no_root_at_the_cusp() {
+    let mut s = sketch();
+    let a = s.add_point(0.0, 0.0).unwrap();
+    let b = s.add_point(10.0, 0.0).unwrap();
+    let m = s.add_point(10.0, 5.0).unwrap();
+    let e = s.add_point(15.0, 5.0).unwrap();
+    let line = s.add_line(a, b).unwrap();
+    let arc = s.add_arc(m, b, e).unwrap();
+    let t = s.add_constraint(K::Tangent(line, arc)).unwrap();
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+    let row = |s: &Sketch| s.evaluate(t, s.variables()).unwrap().residuals[0].v;
+    assert!(row(&s).abs() < 1e-9);
+    // Mitte auf die andere Seite: Das wäre die Spitze, die Zeile ist dort so weit weg, wie es geht.
+    s.set_point_xy(m, 10.0, -5.0).unwrap();
+    s.set_point_xy(e, 15.0, -5.0).unwrap();
+    assert!(row(&s).abs() > 3.0, "{}", row(&s));
+}
+
+/// Eine Spitze, die eine alte Datei schon so gespeichert hat, bleibt beim Laden, wie sie ist: Die
+/// Lage kommt aus der Geometrie, die Datei ändert sich nicht.
+#[test]
+fn an_old_sketch_with_a_cusp_keeps_it_and_its_data_when_loaded() {
+    let mut s = sketch();
+    let a = s.add_point(0.0, 0.0).unwrap();
+    let b = s.add_point(10.0, 0.0).unwrap();
+    let m = s.add_point(10.0, 5.0).unwrap();
+    let e = s.add_point(15.0, 5.0).unwrap();
+    let line = s.add_line(a, b).unwrap();
+    let arc = s.add_arc(m, b, e).unwrap();
+    s.add_constraint(K::Tangent(line, arc)).unwrap();
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+    s.set_point_xy(m, 10.0, -5.0).unwrap();
+    s.set_point_xy(e, 15.0, -5.0).unwrap();
+    let saved = s.to_data();
+    let mut loaded = Sketch::from_data(saved.clone()).unwrap();
+    assert_eq!(loaded.to_data(), saved, "die Daten bleiben bitgleich");
+    let r = loaded.solve();
+    assert_eq!(r.status, SolveStatus::Solved, "{r:?}");
+    assert_eq!(xy(&loaded, m), DVec2::new(10.0, -5.0));
+}
+
 #[test]
 fn a_really_wrong_tangent_at_a_shared_end_is_still_a_conflict() {
     // 0,1 rad bei r = 5: ein halber Millimeter neben der Senkrechten.
@@ -528,4 +572,37 @@ fn a_point_almost_above_a_fixed_point_converges() {
         assert!((xy(&s, b).length() - 10.0).abs() < 1e-7, "bx = {bx}");
         assert_eq!(r.dof, 1, "b kann sich noch um a drehen");
     }
+}
+
+/// Skizzen 3, Task 10: Schritte bis zum Ziel, und was `accept` nicht annimmt, halbiert sie.
+#[test]
+fn solve_in_steps_reaches_the_target_or_gives_up_at_the_smallest_step() {
+    let mut s = sketch();
+    let a = s.add_point(0.0, 0.0).unwrap();
+    let b = s.add_point(10.0, 0.0).unwrap();
+    s.add_line(a, b).unwrap();
+    s.add_constraint(K::Fixed(a, 0.0, 0.0)).unwrap();
+    let d = s.add_constraint(K::Distance(a, b, 10.0)).unwrap();
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+
+    let tries = std::cell::Cell::new(0);
+    let (done, report) = s
+        .solve_in_steps(&[(d, 10.0, 90.0)], |_, r| {
+            tries.set(tries.get() + 1);
+            r.status == SolveStatus::Solved
+        })
+        .unwrap();
+    assert_eq!(report.status, SolveStatus::Solved);
+    assert_eq!(tries.get(), 2, "halber Weg, dann der Rest");
+    assert!((xy(&done, b).distance(xy(&done, a)) - 90.0).abs() < 1e-6);
+
+    tries.set(0);
+    assert!(
+        s.solve_in_steps(&[(d, 10.0, 90.0)], |_, _| {
+            tries.set(tries.get() + 1);
+            false
+        })
+        .is_none()
+    );
+    assert_eq!(tries.get(), 7, "1/2 bis 1/128");
 }

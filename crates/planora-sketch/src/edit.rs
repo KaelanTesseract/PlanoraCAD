@@ -534,6 +534,12 @@ impl Sketch {
                 }
             }
         }
+        // Skizzen 3: Jedes Teilstück übernimmt den Stil des Originals (Konstruktion, Mittellinie).
+        let (construction, centerline) = (self.curves[c].construction, self.curves[c].centerline);
+        for &n in &out[1..] {
+            self.curves[n].construction = construction;
+            self.curves[n].centerline = centerline;
+        }
         self.drop_orphans(&old_points)?;
         self.settle_constraints(&[c], &[]);
         for &n in &out[1..] {

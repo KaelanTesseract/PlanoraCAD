@@ -7,6 +7,7 @@ use crate::formula_field::resolve;
 use crate::msg::Msg;
 use crate::sketch_cursor::{CursorOptions, DrawCursor};
 use crate::sketch_input::{Created, DrawInput};
+use crate::sketch_kinds::ToolKinds;
 use planora_feature::{FeatureId, ParamScope, ParamUnit, SketchFeature, constraint_unit};
 use planora_i18n::tr;
 use planora_kernel::{Edge, Id, Solid};
@@ -14,6 +15,7 @@ use planora_math::DVec2;
 use planora_sketch::SketchError;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
 use planora_sketch::model::{CurveId, CurveKind, MAX_SPLINE_POINTS, PointId, Sketch};
+use planora_sketch::shapes::folded_over;
 use planora_sketch::snap::{SnapHit, SnapIndex};
 use planora_sketch::solver::{Drag, SolveReport, SolveStatus};
 use std::collections::BTreeSet;
@@ -32,6 +34,10 @@ pub enum Tool {
     Rectangle,
     Circle,
     Arc,
+    /// Fusion „Polygon“; die Art steht in [`SketchSession::kinds`].
+    Polygon,
+    /// Fusion „Langloch“; die Art steht in [`SketchSession::kinds`].
+    Slot,
     Ellipse,
     Spline,
     ProjectEdge,
@@ -260,12 +266,21 @@ fn same_values(a: &Sketch, b: &Sketch) -> bool {
             .all(|(x, y)| (x - y).abs() <= linear)
 }
 
+/// Laufender Zug auf dem letzten Punkt des Linienzugs: wird ein tangentialer Bogen.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LineArcDrag {
+    pub start: PointId,
+    pub prev: CurveId,
+}
+
 /// Zustand des geöffneten Skizzen-Modus.
 #[derive(Clone, Debug)]
 pub struct SketchSession {
     /// Das bearbeitete Skizzen-Feature (die Sitzung arbeitet auf seinem Entwurf).
     pub sketch: FeatureId,
     pub tool: Tool,
+    /// Je Form die zuletzt gewählte Art; gilt für diese Sitzung.
+    pub kinds: ToolKinds,
     pub selection: Vec<Item>,
     /// Punkte des laufenden Werkzeugs.
     pub pending: Vec<PointId>,
@@ -275,6 +290,14 @@ pub struct SketchSession {
     /// Ende der großen Achse); die Anbindung folgt beim Abschluss. Bogen: Fang der Mitte (nur eine
     /// frei gesetzte Mitte rückt für die Tangente zurecht).
     pub pending_snaps: Vec<SnapHit>,
+    /// Schon gewählte Kurven einer Art, die Kurven wählt (`picks_curves`).
+    pub pending_curves: Vec<CurveId>,
+    /// Zuletzt abgeschlossene Seitenzahl eines Polygons; ein abgebrochenes zählt nicht.
+    pub polygon_sides: usize,
+    /// Laufender Zug auf dem letzten Punkt des Linienzugs.
+    pub line_arc: Option<LineArcDrag>,
+    /// Bogen aus dem Linienzug, an dem die nächste Linie tangential weiterläuft.
+    pub line_after_arc: Option<CurveId>,
     pub cursor: Option<DVec2>,
     /// Strg und Raster für den Zeiger ([`resolve_cursor`](Self::resolve_cursor)).
     pub cursor_opts: CursorOptions,
@@ -306,6 +329,9 @@ pub struct SketchSession {
     /// ein Klick (egui meldet sonst das Loslassen der rechten oder linken Taste als solchen, und
     /// der leerte die Auswahl).
     pub box_aborted: bool,
+    /// Ein Drücken hat die offene Liste der Arten geschlossen: Der nächste Klick zählt einfach,
+    /// auch wenn egui ihn mit dem verschluckten zum Doppelklick zusammenzählt.
+    pub click_after_flyout: bool,
     /// Zählt die Sprünge durch Rückgängig/Wiederholen ([`SketchSession::after_history_jump`]);
     /// Eingabefelder der Oberfläche, die zu einem älteren Zählerstand gehören, schließen.
     pub history_jumps: u64,
@@ -329,6 +355,9 @@ struct Backup {
     pending: Vec<PointId>,
     pending_pos: Vec<DVec2>,
     pending_snaps: Vec<SnapHit>,
+    pending_curves: Vec<CurveId>,
+    line_arc: Option<LineArcDrag>,
+    line_after_arc: Option<CurveId>,
     line_chain: Option<CurveId>,
     auto_tangent: Option<CurveId>,
     input: DrawInput,
@@ -378,10 +407,15 @@ impl SketchSession {
         SketchSession {
             sketch,
             tool: Tool::Select,
+            kinds: ToolKinds::default(),
             selection: Vec::new(),
             pending: Vec::new(),
             pending_pos: Vec::new(),
             pending_snaps: Vec::new(),
+            pending_curves: Vec::new(),
+            polygon_sides: 6,
+            line_arc: None,
+            line_after_arc: None,
             cursor: None,
             cursor_opts: CursorOptions::default(),
             draw_cursor: None,
@@ -397,6 +431,7 @@ impl SketchSession {
             curve_drag: None,
             box_select: None,
             box_aborted: false,
+            click_after_flyout: false,
             history_jumps: 0,
             hover_preview: None,
             edit_label: None,
@@ -418,10 +453,13 @@ impl SketchSession {
     }
 
     /// Vergisst, was das laufende Werkzeug schon gesetzt und getippt hat.
-    fn clear_pending(&mut self) {
+    pub(crate) fn clear_pending(&mut self) {
         self.pending.clear();
         self.pending_pos.clear();
         self.pending_snaps.clear();
+        self.pending_curves.clear();
+        self.line_arc = None;
+        self.line_after_arc = None;
         self.line_chain = None;
         self.auto_tangent = None;
         self.input = DrawInput::default();
@@ -477,6 +515,9 @@ impl SketchSession {
             pending: self.pending.clone(),
             pending_pos: self.pending_pos.clone(),
             pending_snaps: self.pending_snaps.clone(),
+            pending_curves: self.pending_curves.clone(),
+            line_arc: self.line_arc,
+            line_after_arc: self.line_after_arc,
             line_chain: self.line_chain,
             auto_tangent: self.auto_tangent,
             input: self.input.clone(),
@@ -490,6 +531,9 @@ impl SketchSession {
         self.pending = b.pending;
         self.pending_pos = b.pending_pos;
         self.pending_snaps = b.pending_snaps;
+        self.pending_curves = b.pending_curves;
+        self.line_arc = b.line_arc;
+        self.line_after_arc = b.line_after_arc;
         self.line_chain = b.line_chain;
         self.auto_tangent = b.auto_tangent;
         self.input = b.input;
@@ -499,7 +543,7 @@ impl SketchSession {
 
     /// Führt `f` atomar aus: Bei einem Fehler wird alles zurückgesetzt und die Meldung in
     /// `message` abgelegt. Vorher wird `message` geleert.
-    fn atomic<T>(
+    pub(crate) fn atomic<T>(
         &mut self,
         sk: &mut Sketch,
         f: impl FnOnce(&mut Self, &mut Sketch, &Sketch) -> Result<T, Msg>,
@@ -519,7 +563,11 @@ impl SketchSession {
 
     /// Löst die Skizze und merkt sich den Bericht. Macht die Änderung die Skizze widersprüchlich
     /// oder unlösbar, ist das ein Fehler (siehe [`check_change`]).
-    fn solve_checked(&mut self, sk: &mut Sketch, prior: &Sketch) -> Result<SolveReport, Msg> {
+    pub(crate) fn solve_checked(
+        &mut self,
+        sk: &mut Sketch,
+        prior: &Sketch,
+    ) -> Result<SolveReport, Msg> {
         let before = self.last_report.take();
         let report = sk.solve();
         self.last_report = Some(report.clone());
@@ -562,21 +610,27 @@ impl SketchSession {
         self.cursor = Some(at);
         self.created = None;
         let cur = self.resolve_cursor(sk, at, radius);
-        self.atomic(sk, |se, sk, prior| match se.tool {
-            Tool::Select => {
-                se.select_at(sk, at, radius, extend);
-                Ok(())
+        self.atomic(sk, |se, sk, prior| {
+            if se.planned_kind().is_some() {
+                return se.click_kind(sk, &cur, prior);
             }
-            Tool::Point => se.click_point(sk, &cur, prior),
-            Tool::Line => se.click_line(sk, &cur, prior),
-            Tool::Rectangle => se.click_rectangle(sk, &cur, prior),
-            Tool::Circle => se.click_circle(sk, &cur, prior),
-            Tool::Arc => se.click_arc(sk, &cur, prior),
-            Tool::Ellipse => se.click_ellipse(sk, &cur, prior),
-            Tool::Spline => se.click_spline(sk, &cur, prior),
-            // Wird von der Oberfläche über `project_edge` gesteuert.
-            Tool::ProjectEdge => Ok(()),
-            Tool::Trim | Tool::Extend | Tool::Break => se.click_modify(sk, at, radius, prior),
+            match se.tool {
+                Tool::Select => {
+                    se.select_at(sk, at, radius, extend);
+                    Ok(())
+                }
+                Tool::Point => se.click_point(sk, &cur, prior),
+                Tool::Line => se.click_line(sk, &cur, prior),
+                Tool::Rectangle => se.click_rectangle(sk, &cur, prior),
+                Tool::Circle => se.click_circle(sk, &cur, prior),
+                Tool::Arc => se.click_arc(sk, &cur, prior),
+                Tool::Ellipse => se.click_ellipse(sk, &cur, prior),
+                Tool::Spline => se.click_spline(sk, &cur, prior),
+                // Haben nur geplante Arten (oben); die Kantenkopie steuert die Oberfläche über
+                // `project_edge`.
+                Tool::Polygon | Tool::Slot | Tool::ProjectEdge => Ok(()),
+                Tool::Trim | Tool::Extend | Tool::Break => se.click_modify(sk, at, radius, prior),
+            }
         })
     }
 
@@ -627,6 +681,7 @@ impl SketchSession {
             Item::Constraint(k) => sk.constraint(k).is_some(),
         });
         self.pending.retain(|&p| sk.point_xy(p).is_ok());
+        self.pending_curves.retain(|&c| sk.curve(c).is_some());
     }
 
     /// Vorschau unter dem Mauszeiger `at` (siehe [`hover_preview`](Self::hover_preview)):
@@ -756,6 +811,7 @@ impl SketchSession {
             self.try_auto(sk, auto.kind(line));
         }
         self.line_chain = Some(line);
+        self.line_after_arc = None;
         self.pending = vec![p];
         self.created = Some(Created::Line(line));
         Ok(())
@@ -800,24 +856,18 @@ impl SketchSession {
             self.pending_snaps = vec![cur.remember(tol)];
             return Ok(());
         };
-        let first = self
+        let mut hits: Vec<DrawCursor> = self
             .pending_snaps
-            .first()
-            .map(|&hit| DrawCursor::remembered(hit, sk));
+            .iter()
+            .take(1)
+            .map(|&hit| DrawCursor::remembered(hit, sk))
+            .collect();
+        hits.push(cur.clone());
         let rect = sk.add_rectangle(corner, cur.at).map_err(err)?;
         self.pending_pos.clear();
         self.pending_snaps.clear();
         // Das Rechteck legt eigene Ecken an (sortiert); gebunden wird die Ecke an der Lage.
-        for c in first.iter().chain([cur]) {
-            let own = rect
-                .points
-                .iter()
-                .copied()
-                .find(|&p| sk.point_xy(p).is_ok_and(|q| q.distance(c.at) <= tol));
-            if own.is_some() {
-                self.attach(sk, own, c)?;
-            }
-        }
+        self.bind_own(sk, &rect.points, &hits)?;
         self.solve_checked(sk, prior)?;
         self.created = Some(Created::Rectangle(rect));
         Ok(())
@@ -975,8 +1025,12 @@ impl SketchSession {
         Ok(())
     }
 
-    /// Schließt das laufende Werkzeug ab: legt den Spline an bzw. beendet den Linienzug.
+    /// Schließt das laufende Werkzeug ab: legt den Spline an bzw. beendet den Linienzug. Eine
+    /// geplante Art schließt nur ihr letzter Klick ab: Doppelklick und Enter lassen die Lagen.
     pub fn finish_tool(&mut self, sk: &mut Sketch) -> Result<(), String> {
+        if self.planned_kind().is_some() {
+            return Ok(());
+        }
         if self.tool != Tool::Spline {
             self.message = None;
             self.clear_pending();
@@ -996,9 +1050,10 @@ impl SketchSession {
     /// Bricht das laufende Werkzeug ab; im Auswahlwerkzeug wird die Auswahl geleert. Ein
     /// laufendes Ziehen wird wie mit [`end_drag`](Self::end_drag) beendet (der Punkt bleibt,
     /// wo er ist). Stutzen, Dehnen und Brechen enden ganz (zurück zur Auswahl). Ein laufender
-    /// Rahmen fällt allein weg, die alte Auswahl bleibt.
+    /// Rahmen fällt allein weg, die alte Auswahl bleibt; ebenso ein laufender Zug auf dem letzten
+    /// Punkt, der Linienzug bleibt.
     pub fn cancel(&mut self, sk: &mut Sketch) {
-        if self.box_select.take().is_some() {
+        if self.box_select.take().is_some() || self.line_arc.take().is_some() {
             return;
         }
         self.end_drag(sk);
@@ -1046,9 +1101,10 @@ impl SketchSession {
         }
     }
 
-    /// Bricht den Rahmen mit der rechten Taste ab, siehe [`box_aborted`](Self::box_aborted).
+    /// Bricht den Rahmen oder den Zug auf dem letzten Punkt mit der rechten Taste ab, siehe
+    /// [`box_aborted`](Self::box_aborted).
     pub fn abort_box(&mut self) {
-        if self.box_select.take().is_some() {
+        if self.box_select.take().is_some() || self.line_arc.take().is_some() {
             self.box_aborted = true;
         }
     }
@@ -1409,20 +1465,39 @@ impl SketchSession {
                         .ok_or_else(|| crate::msg!("sketch-cannot-measure"))?,
                 };
                 kind = checked_value(sk, &kind, v)?;
+                // Ein getippter Winkel gilt nur bis auf 180° (wie bei `set_dimension_value`).
+                if value.is_some()
+                    && matches!(kind, ConstraintKind::Angle(..))
+                    && !angle_value_ok(sk.measure(&kind), v)
+                {
+                    return Err(crate::msg!("sketch-angle-range"));
+                }
             }
+            let old = sk.measure(&kind);
             let id = sk.add_constraint(kind).map_err(err)?;
+            let unsolved = sk.clone();
             let before = se.last_report.take();
             let report = sk.solve();
             se.last_report = Some(report.clone());
-            if let Some(problem) = check_change(&report, before.as_ref(), prior, Some(id)) {
-                return Err(match problem {
-                    SolveStatus::Conflicting => {
-                        crate::msg!("sketch-apply-conflict", action = action.label_msg())
-                    }
-                    _ => crate::msg!("sketch-apply-unsolved", action = action.label_msg()),
-                });
-            }
-            if report.redundant.contains(&id) {
+            let direct = match check_change(&report, before.as_ref(), prior, Some(id)) {
+                Some(SolveStatus::Conflicting) => Err(crate::msg!(
+                    "sketch-apply-conflict",
+                    action = action.label_msg()
+                )),
+                Some(_) => Err(crate::msg!(
+                    "sketch-apply-unsolved",
+                    action = action.label_msg()
+                )),
+                None => Ok(()),
+            };
+            se.guard_length(sk, id, old, &unsolved, direct)?;
+            if se
+                .last_report
+                .as_ref()
+                .unwrap_or(&report)
+                .redundant
+                .contains(&id)
+            {
                 if action.is_dimension() {
                     se.make_driven(sk, id)?;
                 } else {
@@ -1469,10 +1544,56 @@ impl SketchSession {
                 .map(|c| c.kind.clone())
                 .ok_or_else(|| crate::msg!("sketch-constraint-missing"))?;
             checked_value(sk, &kind, value)?;
+            // Ein Winkelmaß gilt nur bis 180° im Betrag: Darüber zeigte es einen Wert, den die Form nicht
+            // hat. Unverändert bestätigen geht immer (ein getippter Öffnungswinkel darf größer sein).
+            if matches!(kind, ConstraintKind::Angle(_, _, v) if v != value)
+                && !angle_value_ok(sk.measure(&kind), value)
+            {
+                return Err(crate::msg!("sketch-angle-range"));
+            }
+            let old = sk.measure(&kind);
             sk.set_constraint_value(id, value).map_err(err)?;
-            se.solve_checked(sk, prior)?;
-            Ok(())
+            let unsolved = sk.clone();
+            let direct = se.solve_checked(sk, prior).map(|_| ());
+            se.guard_length(sk, id, old, &unsolved, direct)
         })
+    }
+
+    /// Falt-Wächter für das Längenmaß `id` (Skizzen 3): `direct` ist das Ergebnis des direkten
+    /// Lösens, `unsolved` der Stand davor (das Maß hat schon seinen neuen Wert). Ist es gescheitert
+    /// oder hat die Skizze umgeklappt, geht es von dort ab dem alten Wert `old` in Schritten
+    /// ([`Sketch::solve_in_steps`]): Ein großer Sprung lässt den Löser scheitern, in kleinen
+    /// Schritten bleibt die Lage. Kommt es nicht
+    /// ans Ziel, bleibt es beim Fehler aus `direct` (ein echter Widerspruch), sonst
+    /// `sketch-dimension-folds`. Andere Maße bleiben unberührt.
+    pub(crate) fn guard_length(
+        &mut self,
+        sk: &mut Sketch,
+        id: ConstraintId,
+        old: Option<f64>,
+        unsolved: &Sketch,
+        direct: Result<(), Msg>,
+    ) -> Result<(), Msg> {
+        let Some(new) = sk.constraint(id).and_then(|c| c.kind.length_value()) else {
+            return direct;
+        };
+        let solved = self.last_report.as_ref().is_some_and(status_ok);
+        if direct.is_ok() && !(solved && folded_over(unsolved, sk)) {
+            return Ok(());
+        }
+        let stuck = direct.and(Err(crate::msg!("sketch-dimension-folds")));
+        let Some(old) = old.filter(|o| *o != new) else {
+            return stuck;
+        };
+        let accept = |trial: &Sketch, report: &SolveReport| {
+            status_ok(report) && !folded_over(unsolved, trial)
+        };
+        let Some((done, report)) = unsolved.solve_in_steps(&[(id, old, new)], accept) else {
+            return stuck;
+        };
+        *sk = done;
+        self.last_report = Some(report);
+        Ok(())
     }
 
     /// Zahl oder Formel `text` für das bestehende Maß `id` des Entwurfs `sf`: auswerten mit den
@@ -1676,6 +1797,10 @@ impl SketchSession {
         }
         sk.prune_points(&orphans);
         self.pending.retain(|&p| sk.point_xy(p).is_ok());
+        self.pending_curves.retain(|&c| sk.curve(c).is_some());
+        self.line_arc = self
+            .line_arc
+            .filter(|d| sk.point_xy(d.start).is_ok() && sk.curve(d.prev).is_some());
         if self.dragging.is_some_and(|p| sk.point_xy(p).is_err()) {
             self.dragging = None;
         }
@@ -1704,6 +1829,31 @@ impl SketchSession {
                 && let Some(construction) = sk.curve(c).map(|d| d.construction)
             {
                 let _ = sk.set_construction(c, !construction);
+            }
+        }
+    }
+
+    /// Lässt sich „Mittellinie umschalten“ anwenden (mindestens eine Linie ausgewählt)? Gilt
+    /// für den Knopf im Skizzenfeld und die Aktion.
+    pub fn can_toggle_centerline(&self, sk: &Sketch) -> bool {
+        self.selection.iter().any(|i| {
+            matches!(i, Item::Curve(c)
+                if sk.curve(*c).is_some_and(|d| matches!(d.kind, CurveKind::Line { .. })))
+        })
+    }
+
+    /// „Mittellinie umschalten“ wie Knopf und Aktion: nur, wenn
+    /// [`can_toggle_centerline`](Self::can_toggle_centerline) gilt. Jede ausgewählte Linie wird
+    /// einzeln umgeschaltet (Mittellinie ⇄ normal), andere Kurven bleiben, wie sie sind.
+    pub fn toggle_centerline_if_possible(&mut self, sk: &mut Sketch) {
+        if !self.can_toggle_centerline(sk) {
+            return;
+        }
+        for item in &self.selection {
+            if let Item::Curve(c) = *item
+                && let Some(on) = sk.curve(c).map(|d| d.centerline)
+            {
+                let _ = sk.set_centerline(c, !on);
             }
         }
     }
@@ -1844,6 +1994,12 @@ pub fn with_checked_value(
     value: f64,
 ) -> Result<ConstraintKind, String> {
     checked_value(sk, kind, value).map_err(|m| m.text())
+}
+
+/// Darf ein Winkelmaß den Wert `value` bekommen? Der Betrag ist höchstens 180°; ein negativer
+/// Wert nur, wenn der Winkel jetzt schon negativ gemessen wird (`measured`, im Uhrzeigersinn).
+fn angle_value_ok(measured: Option<f64>, value: f64) -> bool {
+    value.abs() <= std::f64::consts::PI && (value >= 0.0 || measured.is_some_and(|m| m < 0.0))
 }
 
 /// Wie [`with_checked_value`], mit der Meldung als Grund (zum Speichern).

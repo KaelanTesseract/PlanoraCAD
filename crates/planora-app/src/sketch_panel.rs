@@ -6,10 +6,11 @@
 
 use crate::formula_field::{FX, FormulaField, formula_text, names_hint, value_field_text};
 use crate::icons::{self, HandIcon, Icon, IconSource};
-use crate::keymap::{Action, with_hint};
+use crate::keymap::{Action, Keymap, shortcut_hint, with_hint};
 use crate::msg::Msg;
 use crate::shell::{self, ShellMode, ShellRects, ShellState};
 use crate::shell_panels;
+use crate::sketch_kinds::ToolKind;
 use crate::sketch_state::{ConstraintAction, Item, Severity, SketchSession, Tool, formula_problem};
 use crate::sketch_view::{constraint_name, format_number, parse_number, shown_value};
 use crate::state::AppState;
@@ -24,13 +25,15 @@ use planora_sketch::model::{CurveKind, Sketch};
 const _: () = assert!(TOOL_ORDER.len() == crate::shell::STRIP_TOOLS);
 
 /// Werkzeuge der Skizzenleiste in der Reihenfolge der Leiste.
-pub const TOOL_ORDER: [Tool; 12] = [
+pub const TOOL_ORDER: [Tool; 14] = [
     Tool::Select,
     Tool::Point,
     Tool::Line,
     Tool::Rectangle,
     Tool::Circle,
     Tool::Arc,
+    Tool::Polygon,
+    Tool::Slot,
     Tool::Ellipse,
     Tool::Spline,
     Tool::ProjectEdge,
@@ -52,6 +55,8 @@ pub fn tool_label(tool: Tool) -> String {
         Tool::Rectangle => tr!("action-sketch-rectangle"),
         Tool::Circle => tr!("action-sketch-circle"),
         Tool::Arc => tr!("sketch-tool-arc"),
+        Tool::Polygon => tr!("sketch-tool-polygon"),
+        Tool::Slot => tr!("sketch-tool-slot"),
         Tool::Ellipse => tr!("sketch-tool-ellipse"),
         Tool::Spline => tr!("sketch-tool-spline"),
         Tool::ProjectEdge => tr!("action-sketch-project-edge"),
@@ -70,6 +75,8 @@ pub fn tool_hint(tool: Tool) -> String {
         Tool::Rectangle => tr!("sketch-tool-rectangle-hint"),
         Tool::Circle => tr!("sketch-tool-circle-hint"),
         Tool::Arc => tr!("sketch-tool-arc-hint"),
+        Tool::Polygon => tr!("sketch-tool-polygon-hint"),
+        Tool::Slot => tr!("sketch-tool-slot-hint"),
         Tool::Ellipse => tr!("sketch-tool-ellipse-hint"),
         Tool::Spline => tr!("sketch-tool-spline-hint"),
         Tool::ProjectEdge => tr!("sketch-tool-project-edge-hint"),
@@ -80,7 +87,7 @@ pub fn tool_hint(tool: Tool) -> String {
 }
 
 /// Werkzeuge der Skizzenleiste: Werkzeug, Beschriftung, Hinweis (in der aktuellen Sprache).
-pub fn tools() -> [(Tool, String, String); 12] {
+pub fn tools() -> [(Tool, String, String); 14] {
     TOOL_ORDER.map(|t| (t, tool_label(t), tool_hint(t)))
 }
 
@@ -109,6 +116,14 @@ pub const ACTIONS: [ConstraintAction; 16] = {
 
 /// Größe der Symbole in der Werkzeugleiste.
 const STRIP_ICON: f32 = 20.0;
+/// So lange (Sekunden) gedrückt, öffnet ein Knopf mit Arten seine Liste.
+const FLYOUT_HOLD_SECS: f64 = 0.4;
+/// Abstand der Prüfung, ob das Halten lange genug war (ohne Eingabe zeichnet egui sonst nicht neu).
+const FLYOUT_HOLD_REPAINT_SECS: f32 = 0.05;
+/// Kantenlänge des Dreiecks auf einem Knopf mit Arten.
+const FLYOUT_TRIANGLE: f32 = 5.0;
+/// Abstand des Dreiecks von der Ecke des Knopfs.
+const FLYOUT_TRIANGLE_INSET: f32 = 2.0;
 /// Schmalster Platz, in dem der Werkzeughinweis im Fuß noch gezeigt wird.
 const MIN_HINT_W: f32 = 60.0;
 /// Breite des Maßfelds (Text; davor bei einer Formel „fx“, dahinter Einheit bzw. „= Wert“,
@@ -338,6 +353,65 @@ pub fn strip_buttons(ctx: &egui::Context) -> Vec<(String, egui::Rect)> {
         .unwrap_or_default()
 }
 
+/// Hat das Werkzeug eine Liste von Arten (und darum ein Dreieck auf dem Knopf)?
+pub fn has_flyout(tool: Tool) -> bool {
+    !ToolKind::of(tool).is_empty()
+}
+
+fn flyout_id(tool: Tool) -> egui::Id {
+    shell_panels::sketch_strip_id()
+        .with("flyout")
+        .with(tool as usize)
+}
+
+/// Ist eine Liste von Arten offen? Die Ansicht läuft im Bild vor der Leiste und liest das, damit
+/// Esc, Eingabe und ein Drücken in die Zeichnung nur die Liste treffen.
+pub fn flyout_open(ctx: &egui::Context) -> bool {
+    TOOL_ORDER
+        .iter()
+        .any(|t| has_flyout(*t) && egui::Popup::is_id_open(ctx, flyout_id(*t)))
+}
+
+fn close_flyouts(ctx: &egui::Context) {
+    for tool in TOOL_ORDER.into_iter().filter(|t| has_flyout(*t)) {
+        egui::Popup::close_id(ctx, flyout_id(tool));
+    }
+}
+
+fn flyout_entries_key() -> egui::Id {
+    shell_panels::sketch_strip_id().with("flyout-entries")
+}
+
+/// Werkzeug und Art beim Öffnen der Liste; ändert eine Taste sie, schließt die Liste.
+fn flyout_origin_key() -> egui::Id {
+    shell_panels::sketch_strip_id().with("flyout-origin")
+}
+
+/// Die Liste ging durch Halten auf: Das Loslassen danach ist kein Klick auf den Knopf.
+fn flyout_held_key() -> egui::Id {
+    shell_panels::sketch_strip_id().with("flyout-held")
+}
+
+/// Name und Lage der Einträge der offenen Liste im letzten Bild (für Tests).
+#[doc(hidden)]
+pub fn flyout_entries(ctx: &egui::Context) -> Vec<(String, egui::Rect)> {
+    ctx.data(|d| d.get_temp::<Vec<(String, egui::Rect)>>(flyout_entries_key()))
+        .unwrap_or_default()
+}
+
+/// Titel im Hinweistext der Leiste: Bei Formen mit Arten Name und Taste der zuletzt benutzten Art,
+/// sonst Name und, falls belegt, Taste des Werkzeugs.
+pub fn strip_title(km: &Keymap, se: &SketchSession, tool: Tool) -> String {
+    if let Some(kind) = se.kind_of(tool) {
+        return with_hint(km, kind.action(), &kind.label());
+    }
+    let label = tool_label(tool);
+    match Action::for_sketch_tool(tool) {
+        Some(a) => with_hint(km, a, &label),
+        None => label,
+    }
+}
+
 /// Rechtecke der Skizzenfelder: aus dem Layout der Shell in diesem Bild (die App zeichnet die
 /// Felder vorher), sonst – ohne Shell, z. B. in Tests – aus [`shell::layout_in_mode`] über das
 /// ganze Fenster.
@@ -418,11 +492,12 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     }
 }
 
-/// Werkzeugleiste: die zwölf Werkzeuge als Symbolknöpfe untereinander, vor Stutzen, Dehnen und
+/// Werkzeugleiste: die Werkzeuge als Symbolknöpfe untereinander, vor Stutzen, Dehnen und
 /// Brechen (Fusion „Ändern“) eine Trennlinie. Name (mit Taste, soweit
 /// das Werkzeug ein Kürzel hat) und Hinweis stehen im Hinweistext, der Name (für
 /// Bildschirmleser) in der Knopfbeschreibung. Ein Klick wählt wie die Taste
-/// ([`SketchSession::choose_tool`]).
+/// ([`SketchSession::choose_tool`]). Formen mit Arten tragen ein Dreieck; rechter Klick oder Halten
+/// öffnet ihre Liste, siehe [`flyout_gesture`].
 fn strip_field(
     ctx: &egui::Context,
     rect: egui::Rect,
@@ -435,8 +510,14 @@ fn strip_field(
     ));
     let inner = shell_panels::inner_size(&frame, rect.size());
     let mut seen: Vec<(String, egui::Rect)> = Vec::new();
+    let mut entries: Vec<(String, egui::Rect)> = Vec::new();
     // Die Tastenbelegung dieses Bilds (für die Taste im Hinweistext).
     let km = crate::keymap::mouse::current(ctx);
+    // Eine Taste hat Werkzeug oder Art gewechselt: Die Liste gehört zum alten Stand.
+    let origin = (se.tool, se.kind_of(se.tool));
+    if flyout_open(ctx) && ctx.data(|d| d.get_temp(flyout_origin_key())) != Some(origin) {
+        close_flyouts(ctx);
+    }
     shell_panels::field(
         ctx,
         shell_panels::sketch_strip_id(),
@@ -459,29 +540,116 @@ fn strip_field(
                         }
                         let selected = se.tool == tool;
                         // Name mit Taste („Linie (L)“), ohne Eintrag in der Tabelle nur der
-                        // Name.
-                        let title = match Action::for_sketch_tool(tool) {
-                            Some(a) => with_hint(&km, a, &label),
-                            None => label.clone(),
-                        };
-                        let r =
-                            strip_button(ui, icons::sketch_tool_icon(tool), &label, selected, dark)
-                                .on_hover_ui(|ui| {
-                                    ui.strong(&title);
-                                    if tool.is_modify() {
-                                        ui.label(tr!("sketch-strip-modify", tool = label.clone()));
-                                    }
-                                    ui.label(&hint);
-                                });
-                        if r.clicked() {
+                        // Name; bei Formen die zuletzt benutzte Art.
+                        let title = strip_title(&km, se, tool);
+                        let hint = se.kind_of(tool).map_or(hint, ToolKind::hint);
+                        let flyout = has_flyout(tool);
+                        let source = icons::sketch_tool_icon(tool);
+                        let r = strip_button(ui, source, &label, selected, flyout, dark)
+                            .on_hover_ui(|ui| {
+                                ui.strong(&title);
+                                if tool.is_modify() {
+                                    ui.label(tr!("sketch-strip-modify", tool = label.clone()));
+                                }
+                                ui.label(&hint);
+                            });
+                        if flyout {
+                            flyout_gesture(ctx, &r, tool, origin);
+                        }
+                        let held = ctx.data(|d| d.get_temp(flyout_held_key())).unwrap_or(false);
+                        if r.clicked() && !held {
                             se.choose_tool(sk, tool);
+                            egui::Popup::close_id(ctx, flyout_id(tool));
+                        }
+                        if flyout && let Some(kind) = flyout_list(&r, tool, &km, &mut entries) {
+                            se.choose_kind(sk, kind);
                         }
                         seen.push((label, r.rect));
                     }
                 });
         },
     );
-    ctx.data_mut(|d| d.insert_temp(strip_buttons_key(), seen));
+    if !ctx.input(|i| i.pointer.any_down()) {
+        ctx.data_mut(|d| d.remove_temp::<bool>(flyout_held_key()));
+    }
+    ctx.data_mut(|d| {
+        d.insert_temp(strip_buttons_key(), seen);
+        d.insert_temp(flyout_entries_key(), entries);
+    });
+}
+
+/// Öffnet die Liste des Knopfs `r` bei rechtem Klick oder nach [`FLYOUT_HOLD_SECS`] Halten mit der
+/// linken Taste. Das Loslassen nach dem Halten wählt nichts ([`flyout_held_key`]).
+fn flyout_gesture(
+    ctx: &egui::Context,
+    r: &egui::Response,
+    tool: Tool,
+    origin: (Tool, Option<ToolKind>),
+) {
+    let mut open = r.secondary_clicked();
+    let holding = r.is_pointer_button_down_on()
+        && r.contains_pointer()
+        && ctx.input(|i| i.pointer.primary_down());
+    if holding {
+        ctx.request_repaint_after_secs(FLYOUT_HOLD_REPAINT_SECS);
+        let long_enough = ctx.input(|i| {
+            i.pointer
+                .press_start_time()
+                .is_some_and(|t| i.time - t >= FLYOUT_HOLD_SECS)
+        });
+        if long_enough {
+            ctx.data_mut(|d| d.insert_temp(flyout_held_key(), true));
+            open = true;
+        }
+    }
+    if open {
+        egui::Popup::open_id(ctx, flyout_id(tool));
+        ctx.data_mut(|d| d.insert_temp(flyout_origin_key(), origin));
+    }
+}
+
+/// Zeigt die Liste des Knopfs `r`, wenn sie offen ist: alle Arten mit Namen und Kürzel, rechts
+/// neben dem Knopf. Sie schließt bei einem Eintrag, bei Esc (macht `Popup` selbst) und bei einem
+/// Drücken außerhalb von Liste und Knopf; `CloseOnClick` taugt nicht, das Loslassen nach dem Halten
+/// schlösse sie sofort. Liefert die gewählte Art.
+fn flyout_list(
+    r: &egui::Response,
+    tool: Tool,
+    km: &Keymap,
+    entries: &mut Vec<(String, egui::Rect)>,
+) -> Option<ToolKind> {
+    let id = flyout_id(tool);
+    let mut picked = None;
+    let shown = egui::Popup::menu(r)
+        .id(id)
+        .open_memory(None)
+        .align(egui::RectAlign::RIGHT_START)
+        .close_behavior(egui::PopupCloseBehavior::IgnoreClicks)
+        .show(|ui| {
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+            for kind in ToolKind::of(tool) {
+                let keys = shortcut_hint(km, kind.action());
+                let source = icons::sketch_tool_icon(tool);
+                let label = kind.label();
+                let entry = icons::source_entry_keys(ui, source, &label, &keys, true)
+                    .on_hover_text(kind.hint());
+                if entry.clicked() {
+                    picked = Some(*kind);
+                    ui.close();
+                }
+                entries.push((label, entry.rect));
+            }
+        })?;
+    let outside = r.ctx.input(|i| {
+        i.pointer.any_pressed()
+            && i.pointer
+                .interact_pos()
+                .is_some_and(|p| !shown.response.rect.contains(p) && !r.rect.contains(p))
+    });
+    if outside {
+        egui::Popup::close_id(&r.ctx, id);
+    }
+    picked
 }
 
 /// Trennlinie der Leiste: [`shell::STRIP_SEPARATOR_H`] hoch (zusätzlich zum Abstand der
@@ -499,12 +667,13 @@ fn strip_separator(ui: &mut egui::Ui, dark: bool) {
 }
 
 /// Knopf der Werkzeugleiste: 36 × 36, nur Symbol; gewählt mit neutraler Fläche `bg_active`,
-/// beim Überfahren `bg_field`.
+/// beim Überfahren `bg_field`. `flyout`: unten rechts ein gefülltes Dreieck in der Farbe des Symbols.
 fn strip_button(
     ui: &mut egui::Ui,
     source: IconSource,
     label: &str,
     selected: bool,
+    flyout: bool,
     dark: bool,
 ) -> egui::Response {
     let (rect, response) =
@@ -534,6 +703,18 @@ fn strip_button(
         };
         let icon = egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(STRIP_ICON));
         icons::paint_source(ui.painter(), icon, source, color);
+        if flyout {
+            let corner = rect.right_bottom() - egui::Vec2::splat(FLYOUT_TRIANGLE_INSET);
+            ui.painter().add(egui::Shape::convex_polygon(
+                vec![
+                    corner,
+                    corner - egui::vec2(FLYOUT_TRIANGLE, 0.0),
+                    corner - egui::vec2(0.0, FLYOUT_TRIANGLE),
+                ],
+                color,
+                egui::Stroke::NONE,
+            ));
+        }
     }
     theme::focus_ring(ui, &response);
     response
@@ -685,6 +866,12 @@ fn side_contents(
         Action::SketchConstruction,
         &construction,
     );
+    let centerline = centerline();
+    let centerline_tip = with_hint(
+        &crate::keymap::mouse::current(ui.ctx()),
+        Action::SketchCenterline,
+        &centerline,
+    );
     ui.horizontal_wrapped(|ui| {
         if tool_button(
             ui,
@@ -697,6 +884,18 @@ fn side_contents(
         .clicked()
         {
             se.toggle_construction_if_possible(sk);
+        }
+        if tool_button(
+            ui,
+            IconSource::Hand(HandIcon::Centerline),
+            &centerline,
+            se.can_toggle_centerline(sk),
+        )
+        .on_hover_text(centerline_tip)
+        .on_disabled_hover_text(tr!("sketch-select-lines-first"))
+        .clicked()
+        {
+            se.toggle_centerline_if_possible(sk);
         }
         if tool_button(
             ui,
@@ -768,7 +967,7 @@ fn foot_field(
         Severity::Warning => p.warning,
         Severity::Error => p.error,
     };
-    let hint = tool_hint(se.tool);
+    let hint = se.active_hint();
     let mut close = false;
     shell_panels::field(ctx, shell_panels::sketch_foot_id(), rect.min, frame, |ui| {
         ui.set_width(inner.x);
@@ -1160,6 +1359,11 @@ pub fn auto_axis_hint() -> String {
 /// Schalter für die automatischen Abhängigkeiten beim Zeichnen.
 pub fn auto_axis() -> String {
     tr!("sketch-auto-axis")
+}
+
+/// Beschriftung des Knopfs „Mittellinie“ (gleich dem Namen seiner Aktion).
+pub fn centerline() -> String {
+    Action::SketchCenterline.label()
 }
 
 /// Beschriftung des Knopfs „Konstruktion umschalten“ (gleich dem Namen seiner Aktion).

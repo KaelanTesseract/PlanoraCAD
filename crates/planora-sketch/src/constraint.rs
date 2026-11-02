@@ -96,6 +96,18 @@ impl ConstraintKind {
         )
     }
 
+    /// Der Wert, wenn das ein Längenmaß ist (für den Falt-Wächter, siehe
+    /// [`crate::shapes::folded_over`]).
+    pub fn length_value(&self) -> Option<f64> {
+        use ConstraintKind::*;
+        match *self {
+            Distance(_, _, v) | DistancePointLine(_, _, v) | Radius(_, v) | Diameter(_, v) => {
+                Some(v)
+            }
+            _ => None,
+        }
+    }
+
     /// Dieselbe Abhängigkeit mit dem Zahlenwert `v`; `None`, wenn sie kein Maß ist. Prüft
     /// nichts (dafür gibt es [`Sketch::check_constraint_value`]).
     pub fn with_value(&self, v: f64) -> Option<ConstraintKind> {
@@ -160,6 +172,9 @@ pub struct ConstraintData {
     pub kind: ConstraintKind,
     /// Gewählte Lage bei mehrdeutigen Abhängigkeiten (Tangente, Abstand Punkt–Linie).
     pub(crate) branch: i8,
+    /// Tangente an einem gemeinsamen Endpunkt: Vorzeichen, unter dem die Richtung gilt, aus der
+    /// Geometrie beim Anlegen, Laden oder Ändern der Kurve (`0` sonst). Steht nicht in der Datei.
+    pub(crate) shared_sign: i8,
     /// Nur anzeigen, nicht erzwingen.
     pub driven: bool,
     pub enabled: bool,
@@ -385,7 +400,7 @@ fn line_and_param(sk: &Sketch, a: CurveId, b: CurveId) -> Option<(CurveId, Curve
 }
 
 /// Winkel (rad), um den eine Tangente an einem gemeinsamen Endpunkt danebenliegen darf, ohne als
-/// Widerspruch zu gelten. Die frühere Zeile hielt die Richtung nur in zweiter Ordnung; der Solver
+/// Widerspruch zu gelten. Eine frühere Zeile hielt die Richtung nur in zweiter Ordnung; der Solver
 /// blieb etwa 5e-5 rad davor stehen (Mitte rund 3e-4 mm daneben bei r = 5), und „fest“ oder ein
 /// gemessenes Maß haben diese Lage gespeichert. Solche alten Skizzen bleiben lösbar.
 pub(crate) const SHARED_END_TANGENT_DRIFT: f64 = 1e-3;
@@ -399,6 +414,28 @@ fn shared_end(sk: &Sketch, a: CurveId, b: CurveId) -> Option<PointId> {
     };
     let (ea, eb) = (ends(a)?, ends(b)?);
     ea.into_iter().find(|p| eb.contains(p))
+}
+
+/// Sinus- und Kosinusanteil der Tangente `c1`–`c2` an ihrem gemeinsamen Endpunkt `p`: Der Sinusanteil
+/// ist null, wenn sie sich berühren, der Kosinusanteil sagt, in welcher der beiden Lagen.
+fn shared_end_parts(ctx: &Ctx, c1: CurveId, c2: CurveId, p: PointId) -> (Dual, Dual) {
+    let sk = ctx.sk;
+    let at = ctx.pt(p);
+    let line_arc = |line: CurveId, arc: CurveId| {
+        let (m, _) = circle_of(ctx, arc);
+        let (_, d) = line_dir(ctx, line);
+        let radial = sub2(&at, &m);
+        (dot(&d, &radial), cross(&d, &radial))
+    };
+    match (&sk.curves[c1].kind, &sk.curves[c2].kind) {
+        (CurveKind::Line { .. }, _) => line_arc(c1, c2),
+        (_, CurveKind::Line { .. }) => line_arc(c2, c1),
+        _ => {
+            let ((m1, _), (m2, _)) = (circle_of(ctx, c1), circle_of(ctx, c2));
+            let (u, v) = (sub2(&m1, &at), sub2(&m2, &at));
+            (cross(&u, &v), dot(&u, &v))
+        }
+    }
 }
 
 /// Vorzeichenbehafteter Abstand des Punktes p von der Linie (links der Richtung positiv).
@@ -471,29 +508,15 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
         }
         // Am gemeinsamen Ende berührt die Tangente nur in zweiter Ordnung: Ihre Zeile fiele dort
         // mit `ArcRadius` zusammen (oder wäre null) und hielte die Richtung nicht. Darum zählt hier
-        // die Richtung selbst: Radius senkrecht zur Linie, die Mitten auf einer Geraden durchs Ende.
+        // die Richtung selbst, als Winkel: Radius senkrecht zur Linie, die Mitten auf einer Geraden
+        // durchs Ende. Die umgekehrte Richtung (die Spitze) ist keine Nullstelle, sie liegt bei ±π.
         Tangent(c1, c2) if shared_end(sk, *c1, *c2).is_some() => {
             let Some(p) = shared_end(sk, *c1, *c2) else {
                 unreachable!("checked in the guard")
             };
-            let at = ctx.pt(p);
-            match (&sk.curves[*c1].kind, &sk.curves[*c2].kind) {
-                (CurveKind::Line { .. }, _) => {
-                    let (m, _) = circle_of(ctx, *c2);
-                    let (_, d) = line_dir(ctx, *c1);
-                    vec![dot(&d, &sub2(&at, &m)) / norm_len(&d)]
-                }
-                (_, CurveKind::Line { .. }) => {
-                    let (m, _) = circle_of(ctx, *c1);
-                    let (_, d) = line_dir(ctx, *c2);
-                    vec![dot(&d, &sub2(&at, &m)) / norm_len(&d)]
-                }
-                _ => {
-                    let ((m1, _), (m2, _)) = (circle_of(ctx, *c1), circle_of(ctx, *c2));
-                    let (u, v) = (sub2(&m1, &at), sub2(&m2, &at));
-                    vec![cross(&u, &v) / norm_len(&u)]
-                }
-            }
+            let (sin, cos) = shared_end_parts(ctx, *c1, *c2, p);
+            let s = if data.shared_sign < 0 { -1.0 } else { 1.0 };
+            vec![sin.atan2(&(cos * s))]
         }
         Tangent(c1, c2) => {
             let s = f64::from(data.branch);
@@ -664,6 +687,7 @@ impl Sketch {
         self.constraints.push(ConstraintData {
             kind,
             branch: 0,
+            shared_sign: 0,
             driven: false,
             enabled: true,
             internal: true,
@@ -936,6 +960,40 @@ impl Sketch {
         })
     }
 
+    /// Vorzeichen der Tangente `kind` an einem gemeinsamen Endpunkt, aus der aktuellen Geometrie:
+    /// die nächste Nullstelle. `0`, wenn `kind` keine solche Tangente ist.
+    pub(crate) fn shared_end_sign(&self, kind: &ConstraintKind) -> i8 {
+        let ConstraintKind::Tangent(a, b) = *kind else {
+            return 0;
+        };
+        let Some(p) = shared_end(self, a, b) else {
+            return 0;
+        };
+        let ctx = Ctx::collecting(self, &self.vars);
+        if shared_end_parts(&ctx, a, b, p).1.v < 0.0 {
+            -1
+        } else {
+            1
+        }
+    }
+
+    /// Bestimmt die Vorzeichen aller Tangenten neu, die an `curve` hängen (`None`: aller).
+    pub(crate) fn refresh_shared_signs(&mut self, curve: Option<CurveId>) {
+        let found: Vec<(ConstraintId, i8)> = self
+            .constraints
+            .iter()
+            .filter(|(_, c)| {
+                c.alive
+                    && matches!(c.kind, ConstraintKind::Tangent(a, b)
+                        if curve.is_none_or(|x| x == a || x == b))
+            })
+            .map(|(id, c)| (id, self.shared_end_sign(&c.kind)))
+            .collect();
+        for (id, sign) in found {
+            self.constraints[id].shared_sign = sign;
+        }
+    }
+
     /// Lage bei mehrdeutigen Abhängigkeiten, bestimmt aus der aktuellen Geometrie.
     fn initial_branch(&self, kind: &ConstraintKind) -> i8 {
         use ConstraintKind::*;
@@ -1005,21 +1063,9 @@ impl Sketch {
         let ConstraintKind::Tangent(a, b) = self.constraints[id].kind else {
             return None;
         };
-        let end = shared_end(self, a, b)?;
-        // Die Zeile ist „Radius · sin(Abweichung)“, mit dem Radius der hinteren Kurve, wenn sie ein
-        // Bogen ist (Linie–Bogen: immer der Bogen).
-        let round = if is_line_kind(&self.curves[b].kind) {
-            a
-        } else {
-            b
-        };
-        let CurveKind::Arc { center, .. } = self.curves[round].kind else {
-            return None;
-        };
-        let at = |p: PointId| DVec2::new(x[self.points[p].x], x[self.points[p].y]);
-        let radius = at(end).distance(at(center));
-        let row = self.evaluate(id, x)?.residuals.first()?.v;
-        (radius > 0.0).then(|| (row / radius).abs())
+        shared_end(self, a, b)?;
+        // Die Zeile ist die Abweichung selbst.
+        Some(self.evaluate(id, x)?.residuals.first()?.v.abs())
     }
 
     /// Ist die lebende Abhängigkeit an den aktuellen Werten ohne Bewegung erfüllt? Alle Residuen
@@ -1100,12 +1146,14 @@ impl Sketch {
         }
         self.check_refs(&kind)?;
         let branch = self.initial_branch(&kind);
+        let shared_sign = self.shared_end_sign(&kind);
         // Erst nach allen Prüfungen anlegen, damit ein Fehler nichts hinterlässt.
         let extra = self.extra_start(&kind).map(|t| self.new_var(t));
         self.touch_structure();
         Ok(self.constraints.push(ConstraintData {
             kind,
             branch,
+            shared_sign,
             driven: false,
             enabled: true,
             internal: false,

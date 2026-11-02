@@ -571,6 +571,37 @@ fn check_volume(
     }
 }
 
+/// Löst eine Skizze mit Formeln. Scheitert das direkte Lösen, weil ein neuer Formelwert ein großer
+/// Sprung ist, geht es von den bisherigen Werten in Schritten dorthin; gelingt das auch nicht, bleibt
+/// es beim Status des direkten Lösens. Gelingt das direkte Lösen, entsteht keine Mehrarbeit.
+fn solve_formulas(sketch: &mut Sketch, sf: &SketchFeature) -> SolveStatus {
+    let direct = sketch.solve().status;
+    if direct == SolveStatus::Solved {
+        return direct;
+    }
+    let targets: Vec<_> = sf
+        .formulas
+        .keys()
+        .filter_map(|&id| {
+            let kind = &sketch.constraint(id)?.kind;
+            let (from, to) = (sketch.measure(kind)?, kind.length_value()?);
+            (from != to).then_some((id, from, to))
+        })
+        .collect();
+    if targets.is_empty() {
+        return direct;
+    }
+    let accept =
+        |_: &Sketch, report: &planora_sketch::SolveReport| report.status == SolveStatus::Solved;
+    match sketch.solve_in_steps(&targets, accept) {
+        Some((done, report)) => {
+            *sketch = done;
+            report.status
+        }
+        None => direct,
+    }
+}
+
 /// Skizze: Ebene auflösen, Kantenkopien nachführen, lösen.
 fn compute_sketch(
     doc: &Document,
@@ -620,7 +651,7 @@ fn compute_sketch(
         // Skizze schon vorher ungelöst war: Ein Parameter kann sie still in eine andere Lage
         // kippen lassen, das Modell darf dann nicht still falsch werden. Eine unterbestimmte
         // Skizze gilt als gelöst.
-        match sketch.solve().status {
+        match solve_formulas(&mut sketch, sf) {
             SolveStatus::Solved => {}
             SolveStatus::Conflicting => {
                 return Err(FeatureError::Sketch(tr!("sketch-formula-conflict")));

@@ -3,6 +3,7 @@
 //! ohne Oberfläche; der Fang-Index wird nur neu gebaut, wenn sich die Skizze geändert hat.
 
 use crate::msg::Msg;
+use crate::sketch_kinds::ToolKind;
 use crate::sketch_state::{SketchSession, Tool, err};
 use planora_math::DVec2;
 use planora_sketch::constraint::{ConstraintKind, LineOrPoints};
@@ -133,6 +134,24 @@ pub(crate) fn leaving_direction(sk: &Sketch, c: CurveId, p: PointId) -> Option<D
         _ => return None,
     };
     dir.try_normalize()
+}
+
+/// Kurve, an der ein tangentialer Bogen in `p` anläuft: `prefer`, wenn sie dort endet, sonst die
+/// jüngste Linie oder der jüngste Bogen, die in `p` enden. Konstruktionslinien nur, wenn sonst nichts
+/// dort endet: Die Hilfslinien eines Öffnungswinkels sind immer jünger als ihr Bogen.
+pub(crate) fn tangent_start_curve(
+    sk: &Sketch,
+    p: PointId,
+    prefer: Option<CurveId>,
+) -> Option<CurveId> {
+    let ends_here = |c: CurveId| leaving_direction(sk, c, p).is_some();
+    prefer.filter(|&c| ends_here(c)).or_else(|| {
+        sk.curves()
+            .filter(|&(c, _)| ends_here(c))
+            // Bei Gleichstand nimmt `max_by_key` den letzten, also den jüngsten.
+            .max_by_key(|(_, data)| !data.construction)
+            .map(|(c, _)| c)
+    })
 }
 
 /// Winkel zwischen zwei normierten Richtungen, 0…π.
@@ -297,7 +316,22 @@ impl SketchSession {
     /// [`resolve_cursor`](Self::resolve_cursor) ohne die gesperrten Größen.
     fn resolve_unlocked(&mut self, sk: &Sketch, raw: DVec2, radius: f64) -> DrawCursor {
         let mut cur = DrawCursor::free(raw);
-        if !self.is_drawing_tool() || self.cursor_opts.suppressed || !raw.is_finite() {
+        if !self.is_drawing_tool() || !raw.is_finite() {
+            return cur;
+        }
+        // Wer Kurven wählt, sieht nur Kurven: kein Punkt davor, keine Hilfslinie, kein Raster. Eine
+        // Kurve wählen ist kein Fang, also geht das auch mit Strg.
+        if self.picks_curves() {
+            if let Some(c) = sk.pick_curve(raw, radius) {
+                cur.at = sk.nearest_on_curve(c, raw).unwrap_or(raw);
+                cur.snap = Snap::Curve(c);
+                cur.snap_at = Some(cur.at);
+            }
+            return cur;
+        }
+        // Beim 2-Tangenten-Kreis wählt der letzte Klick nur den Sektor: Fang auf einer der Linien
+        // ergäbe gar keinen.
+        if self.cursor_opts.suppressed || self.planned_kind() == Some(ToolKind::Circle2T) {
             return cur;
         }
         let index = self.current_index(sk);
@@ -372,17 +406,26 @@ impl SketchSession {
                 .is_none_or(|r| r.status == SolveStatus::Solved)
     }
 
-    /// Richtung des laufenden Linienendes.
+    /// Richtung des laufenden Linienendes. Während des Zugs auf dem letzten Punkt keine; nach einem
+    /// Bogen aus dem Linienzug läuft die Linie unabhängig von der 3°-Grenze tangential, solange der
+    /// Zeiger vor dem Bogenende liegt und das Ende nicht auf gefangener Geometrie.
     fn line_direction(
         &self,
         sk: &Sketch,
         end: DVec2,
         on_geometry: bool,
     ) -> Option<(AutoConstraint, DVec2)> {
-        if !self.auto_allowed() {
+        if !self.auto_allowed() || self.line_arc.is_some() {
             return None;
         }
         let &start = self.pending.first()?;
+        if !on_geometry
+            && let Some(arc) = self.line_after_arc
+            && let Some(forward) = leaving_direction(sk, arc, start)
+            && forward.dot(end - sk.point_xy(start).ok()?) > sk.tolerance().linear
+        {
+            return Some((AutoConstraint::Tangent(arc), forward));
+        }
         plan_direction(sk, self.tool, start, self.line_chain, end, on_geometry)
     }
 
@@ -456,19 +499,20 @@ impl SketchSession {
         }
     }
 
-    /// Punkte, an denen sich der Zeiger nicht ausrichtet: die laufenden und die erste Ecke des
-    /// Rechtecks (die gibt es nur als Lage).
+    /// Punkte, an denen sich der Zeiger nicht ausrichtet: die laufenden und die, die auf einer
+    /// gemerkten Lage des Rechtecks oder einer geplanten Art liegen (die Form gibt es nur als
+    /// Lagen).
     fn align_skip(&self, sk: &Sketch) -> Vec<PointId> {
         let mut skip = self.pending.clone();
-        if self.tool == Tool::Rectangle
-            && let Some(&corner) = self.pending_pos.first()
-        {
+        if self.tool == Tool::Rectangle || self.planned_kind().is_some() {
             let tol = sk.tolerance().linear;
-            skip.extend(
-                sk.points()
-                    .map(|(p, _)| p)
-                    .filter(|&p| sk.point_xy(p).is_ok_and(|q| q.distance(corner) <= tol)),
-            );
+            for &spot in &self.pending_pos {
+                skip.extend(
+                    sk.points()
+                        .map(|(p, _)| p)
+                        .filter(|&p| sk.point_xy(p).is_ok_and(|q| q.distance(spot) <= tol)),
+                );
+            }
         }
         skip
     }

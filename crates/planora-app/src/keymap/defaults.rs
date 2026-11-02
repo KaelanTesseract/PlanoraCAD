@@ -100,8 +100,33 @@ action_table! {
     // und Skizzenbemaßung D kommen erst mit ihrer Funktion. Esc, Enter und Entf der Skizze sind
     // fest (`sketch_view`), nicht in der Tabelle.
     SketchLine, "skizze.linie", "action-sketch-line", Sketch, [key(Key::L)];
-    SketchRectangle, "skizze.rechteck", "action-sketch-rectangle", Sketch, [key(Key::R)];
-    SketchCircle, "skizze.kreis", "action-sketch-circle", Sketch, [key(Key::C)];
+    // Die Arten der Formen (`sketch_kinds::ToolKind`): Der Name ist der Name der Art, der Knopf
+    // der Leiste heißt weiter nach der Form (`sketch_panel::tool_label`). Nur Rechteck und Kreis
+    // haben eine Vorgabetaste.
+    SketchRectangle, "skizze.rechteck", "action-sketch-rect-2p", Sketch, [key(Key::R)];
+    SketchCircle, "skizze.kreis", "action-sketch-circle-center", Sketch, [key(Key::C)];
+    SketchRect3P, "skizze.rechteck_3p", "action-sketch-rect-3p", Sketch, [];
+    SketchRectCenter, "skizze.rechteck_mitte", "action-sketch-rect-center", Sketch, [];
+    SketchCircle2P, "skizze.kreis_2p", "action-sketch-circle-2p", Sketch, [];
+    SketchCircle3P, "skizze.kreis_3p", "action-sketch-circle-3p", Sketch, [];
+    SketchCircle2T, "skizze.kreis_2t", "action-sketch-circle-2t", Sketch, [];
+    SketchCircle3T, "skizze.kreis_3t", "action-sketch-circle-3t", Sketch, [];
+    SketchArcCenter, "skizze.bogen_mitte", "action-sketch-arc-center", Sketch, [];
+    SketchArc3P, "skizze.bogen_3p", "action-sketch-arc-3p", Sketch, [];
+    SketchArcTangent, "skizze.bogen_tangential", "action-sketch-arc-tangent", Sketch, [];
+    SketchPolygonCircumscribed, "skizze.polygon_umbeschrieben",
+        "action-sketch-polygon-circumscribed", Sketch, [];
+    SketchPolygonInscribed, "skizze.polygon_einbeschrieben", "action-sketch-polygon-inscribed",
+        Sketch, [];
+    SketchPolygonEdge, "skizze.polygon_kante", "action-sketch-polygon-edge", Sketch, [];
+    SketchSlotCenterToCenter, "skizze.langloch_mitte_mitte", "action-sketch-slot-center-center",
+        Sketch, [];
+    SketchSlotOverall, "skizze.langloch_gesamt", "action-sketch-slot-overall", Sketch, [];
+    SketchSlotCenterPoint, "skizze.langloch_mittelpunkt", "action-sketch-slot-center-point",
+        Sketch, [];
+    SketchSlotThreePointArc, "skizze.langloch_bogen_3p", "action-sketch-slot-arc-3p", Sketch, [];
+    SketchSlotCenterPointArc, "skizze.langloch_bogen_mitte", "action-sketch-slot-arc-center",
+        Sketch, [];
     /// Fusion „Projizieren“.
     SketchProjectEdge, "skizze.projizieren", "action-sketch-project-edge", Sketch, [key(Key::P)];
     /// Fusion „Stutzen“ (T).
@@ -122,6 +147,9 @@ action_table! {
         [key(Key::Space)];
     /// Wie der Knopf im Skizzenfeld (Fusion „Normal / Hilfslinie“): nur mit ausgewählten Kurven.
     SketchConstruction, "skizze.konstruktion", "action-sketch-construction", Sketch, [key(Key::X)];
+    /// Wie der Knopf im Skizzenfeld: schaltet die ausgewählten Linien zwischen Mittellinie und
+    /// normal um (ohne Vorgabetaste).
+    SketchCenterline, "skizze.mittellinie", "action-sketch-centerline", Sketch, [];
     /// Wie [`Action::ShowShortcuts`], in der offenen Skizze (eine Aktion hat nur einen Bereich).
     SketchShowShortcuts, "skizze.tastenkuerzel", "action-sketch-show-shortcuts", Sketch,
         [key(Key::S)];
@@ -148,17 +176,29 @@ impl Action {
         use crate::sketch_state::Tool;
         match self {
             Action::SketchLine => Some(Tool::Line),
-            Action::SketchRectangle => Some(Tool::Rectangle),
-            Action::SketchCircle => Some(Tool::Circle),
             Action::SketchProjectEdge => Some(Tool::ProjectEdge),
             Action::SketchTrim => Some(Tool::Trim),
             Action::SketchExtend => Some(Tool::Extend),
             Action::SketchBreak => Some(Tool::Break),
-            _ => None,
+            _ => self.sketch_kind().map(crate::sketch_kinds::ToolKind::tool),
         }
     }
 
-    /// Die Aktion, die das Skizzenwerkzeug `tool` wählt (nicht jedes Werkzeug hat eine).
+    /// Die Art einer Form, die diese Aktion wählt.
+    pub fn sketch_kind(self) -> Option<crate::sketch_kinds::ToolKind> {
+        crate::sketch_kinds::ToolKind::ALL
+            .iter()
+            .copied()
+            .find(|k| k.action() == self)
+    }
+
+    /// Die Aktion, die die Art `kind` wählt.
+    pub fn for_kind(kind: crate::sketch_kinds::ToolKind) -> Action {
+        kind.action()
+    }
+
+    /// Die Aktion, die das Skizzenwerkzeug `tool` wählt (nicht jedes Werkzeug hat eine); bei
+    /// einer Form die ihrer ersten Art.
     pub fn for_sketch_tool(tool: crate::sketch_state::Tool) -> Option<Action> {
         Action::ALL
             .iter()

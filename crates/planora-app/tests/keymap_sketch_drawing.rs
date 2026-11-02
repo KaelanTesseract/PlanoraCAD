@@ -13,6 +13,7 @@ use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, Vec2, vec2};
 use planora_app::app::PlanoraApp;
 use planora_app::commands::LastCommand;
 use planora_app::keymap::{Action, Area, Binding, KeyChord, Keymap, SetResult, shortcut_hint};
+use planora_app::sketch_kinds::ToolKind;
 use planora_app::sketch_state::{ConstraintAction, Item, Tool};
 use planora_app::state::AppState;
 use planora_app::workspace::Workspace;
@@ -251,14 +252,29 @@ fn drawing_ws_with(view: Option<ViewKind>) -> Workspace {
     w
 }
 
-const SKETCH_KEYS: [(Action, Key, Tool, &str); 4] = [
-    (Action::SketchLine, Key::L, Tool::Line, "Linie"),
-    (Action::SketchRectangle, Key::R, Tool::Rectangle, "Rechteck"),
-    (Action::SketchCircle, Key::C, Tool::Circle, "Kreis"),
+/// Aktion, Taste, Werkzeug, Name des Knopfs, Name der Aktion (Skizzen 3: bei Rechteck und Kreis
+/// der Name der Art, der Knopf heißt weiter nach der Form).
+const SKETCH_KEYS: [(Action, Key, Tool, &str, &str); 4] = [
+    (Action::SketchLine, Key::L, Tool::Line, "Linie", "Linie"),
+    (
+        Action::SketchRectangle,
+        Key::R,
+        Tool::Rectangle,
+        "Rechteck",
+        "2-Punkt-Rechteck",
+    ),
+    (
+        Action::SketchCircle,
+        Key::C,
+        Tool::Circle,
+        "Kreis",
+        "Mittelpunkt-Durchmesser-Kreis",
+    ),
     (
         Action::SketchProjectEdge,
         Key::P,
         Tool::ProjectEdge,
+        "Körperkante kopieren",
         "Körperkante kopieren",
     ),
 ];
@@ -268,10 +284,10 @@ const SKETCH_KEYS: [(Action, Key, Tool, &str); 4] = [
 #[test]
 fn sketch_keys_select_the_tools() {
     let km = Keymap::defaults();
-    for (a, k, _, label) in SKETCH_KEYS {
+    for (a, k, _, _, name) in SKETCH_KEYS {
         assert_eq!(a.area(), Area::Sketch, "{a:?}");
         assert_eq!(km.bindings(a), [plain(k)], "{a:?}");
-        assert_eq!(a.label(), label, "Name wie der Werkzeugknopf");
+        assert_eq!(a.label(), name, "Name der Art");
         assert_eq!(km.action_for_key(Area::Sketch, &chord(k, false)), Some(a));
     }
     // Versatz O, Skizzenbemaßung D: gibt es (noch) nicht.
@@ -285,7 +301,7 @@ fn sketch_keys_select_the_tools() {
 
     let mut rig = Rig::new(sketch_open_ws());
     assert_eq!(rig.tool(), Tool::Select);
-    for (_, k, tool, label) in SKETCH_KEYS {
+    for (_, k, tool, label, _) in SKETCH_KEYS {
         rig.press(k, NONE);
         assert!(!rig.left_over, "{k:?} verbraucht");
         assert_eq!(rig.tool(), tool, "{k:?}");
@@ -336,9 +352,11 @@ fn sketch_keys_select_the_tools() {
     rig.ws().keymap = km;
     let texts = rig.hover(rig.strip("Linie"));
     assert!(texts.iter().any(|t| t == "Linie (K)"), "{texts:?}");
-    // Werkzeuge ohne Kürzel: nur der Name.
+    // Werkzeuge ohne Kürzel: nur der Name (Skizzen 3: bei Formen der Name der zuletzt benutzten Art).
     let texts = rig.hover(rig.strip("Bogen"));
-    assert!(texts.iter().any(|t| t == "Bogen"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "Mittelpunkt-Bogen"), "{texts:?}");
+    let texts = rig.hover(rig.strip("Auswahl"));
+    assert!(texts.iter().any(|t| t == "Auswahl"), "{texts:?}");
 }
 
 #[test]
@@ -791,15 +809,19 @@ fn repeat_last_remembers_sketch_tools() {
     rig.sketch_click(20.0, 20.0);
     rig.sketch_click(30.0, 30.0);
     assert_eq!(rig.sketch_tool_memory(), Some(Action::SketchRectangle));
-    // Ein Werkzeug ohne Eintrag in der Tabelle (Bogen) ersetzt das Gedächtnis nicht.
+    // Skizzen 3: Der Mittelpunkt-Bogen hat jetzt eine Aktion und wird gemerkt wie jede Art.
     rig.click(rig.strip("Bogen"));
     rig.sketch_click(50.0, 0.0);
     rig.sketch_click(55.0, 0.0);
     rig.sketch_click(50.0, 5.0);
-    assert_eq!(rig.sketch_tool_memory(), Some(Action::SketchRectangle));
+    assert_eq!(rig.sketch_tool_memory(), Some(Action::SketchArcCenter));
     rig.click(rig.strip("Auswahl"));
     rig.press(Key::Space, NONE);
-    assert_eq!(rig.tool(), Tool::Rectangle);
+    assert_eq!(rig.tool(), Tool::Arc);
+    assert_eq!(
+        rig.st().sketch_session.as_ref().unwrap().kind_of(Tool::Arc),
+        Some(ToolKind::ArcCenter)
+    );
 
     // Rückgängig und Wiederholen mit gewähltem Werkzeug zählen nicht als Benutzen.
     rig.press(Key::C, NONE);
@@ -807,7 +829,7 @@ fn repeat_last_remembers_sketch_tools() {
     rig.settle();
     rig.press(Key::Y, Modifiers::COMMAND);
     rig.settle();
-    assert_eq!(rig.sketch_tool_memory(), Some(Action::SketchRectangle));
+    assert_eq!(rig.sketch_tool_memory(), Some(Action::SketchArcCenter));
 
     // Beim Tippen im Maßfeld gehört die Leertaste dem Feld.
     rig.click(rig.strip("Auswahl"));

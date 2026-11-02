@@ -5,6 +5,7 @@
 use crate::formula_field::resolve;
 use crate::msg::Msg;
 use crate::sketch_cursor::{DrawCursor, leaving_direction};
+use crate::sketch_kinds::ToolKind;
 use crate::sketch_state::{SketchSession, Tool, check_change, checked_value, dimension_input, err};
 use planora_feature::{ParamScope, ParamUnit, SketchFeature};
 use planora_i18n::tr;
@@ -12,6 +13,7 @@ use planora_math::DVec2;
 use planora_sketch::constraint::ConstraintKind;
 use planora_sketch::helpers::RectIds;
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
+use planora_sketch::shapes::{ArcSlotIds, PolygonIds, SlotIds};
 
 /// Länge der Achshilfe (Skizzen-x-Achse) für Winkel ohne vorige Linie.
 const AXIS_HELPER_LENGTH: f64 = 10.0;
@@ -28,13 +30,18 @@ pub enum FieldKind {
     Sweep,
     MajorAxis,
     MinorAxis,
+    /// Tiefe (3-Punkt-Rechteck).
+    Depth,
+    /// Seitenzahl eines Polygons: ganzzahlig 3 bis 64, wird nie ein Maß.
+    Sides,
 }
 
 impl FieldKind {
-    /// Einheit, in der das Feld gelesen wird (Winkel in Grad, sonst Länge).
+    /// Einheit, in der das Feld gelesen wird (Winkel in Grad, Seitenzahl ohne, sonst Länge).
     pub fn unit(self) -> ParamUnit {
         match self {
             FieldKind::Angle | FieldKind::Sweep => ParamUnit::Angle,
+            FieldKind::Sides => ParamUnit::Number,
             _ => ParamUnit::Length,
         }
     }
@@ -51,6 +58,8 @@ impl FieldKind {
             FieldKind::Sweep => tr!("sketch-field-sweep"),
             FieldKind::MajorAxis => tr!("sketch-field-major"),
             FieldKind::MinorAxis => tr!("sketch-field-minor"),
+            FieldKind::Depth => tr!("sketch-field-depth"),
+            FieldKind::Sides => tr!("sketch-field-sides"),
         }
     }
 }
@@ -72,8 +81,18 @@ pub struct DrawField {
 pub struct DrawInput {
     pub fields: Vec<DrawField>,
     pub active: usize,
-    /// Werkzeug und Stand, zu dem die Felder gehören; ändert er sich, sind die Felder leer.
-    key: (Option<Tool>, Vec<PointId>, usize),
+    /// Getippte Seitenzahl des laufenden Polygons; gilt über die Stufen bis zum Abschluss.
+    pub sides: Option<usize>,
+    /// Werkzeug, Art und Stand (Punkte, Lagen, Kurven, Bogenzug), zu dem die Felder gehören;
+    /// ändert er sich, sind die Felder leer.
+    key: (
+        Option<Tool>,
+        Option<ToolKind>,
+        Vec<PointId>,
+        usize,
+        usize,
+        bool,
+    ),
     /// Getippte Werte früherer Stufen (Bogenradius, große Achse) bis zum Abschluss.
     carried: Vec<(FieldKind, String)>,
     /// Größte kleine Halbachse dieser Stufe (die große Halbachse mit Toleranz).
@@ -81,7 +100,7 @@ pub struct DrawInput {
 }
 
 impl DrawInput {
-    fn locked(&self, kind: FieldKind) -> Option<f64> {
+    pub(crate) fn locked(&self, kind: FieldKind) -> Option<f64> {
         self.fields
             .iter()
             .find(|f| f.kind == kind)
@@ -97,16 +116,21 @@ pub enum Created {
     Circle(CurveId),
     Arc(CurveId),
     Ellipse(CurveId),
+    Polygon { ids: PolygonIds, inscribed: bool },
+    Slot(SlotIds),
+    ArcSlot(ArcSlotIds),
 }
 
 impl Created {
-    fn undo_label(&self) -> Msg {
+    pub(crate) fn undo_label(&self) -> Msg {
         match self {
             Created::Line(_) => crate::msg!("undo-line"),
             Created::Rectangle(_) => crate::msg!("undo-rectangle"),
             Created::Circle(_) => crate::msg!("undo-circle"),
             Created::Arc(_) => crate::msg!("undo-arc"),
             Created::Ellipse(_) => crate::msg!("undo-ellipse"),
+            Created::Polygon { .. } => crate::msg!("undo-polygon"),
+            Created::Slot(_) | Created::ArcSlot(_) => crate::msg!("undo-slot"),
         }
     }
 }
@@ -114,6 +138,46 @@ impl Created {
 /// `d` um `angle` gegen den Uhrzeigersinn gedreht.
 fn rotated(d: DVec2, angle: f64) -> DVec2 {
     DVec2::from_angle(angle).rotate(d)
+}
+
+/// Richtung von `from` zum Zeiger, bei gleicher Lage entlang der x-Achse. Das Raster zählt dabei
+/// nicht: Die Richtung liefe sonst in groben Sprüngen von Rasterpunkt zu Rasterpunkt.
+pub(crate) fn toward_pointer(cur: &DrawCursor, from: DVec2) -> DVec2 {
+    let aim = if matches!(cur.snap, crate::sketch_state::Snap::Grid) && cur.autos.is_empty() {
+        cur.raw
+    } else {
+        cur.at
+    };
+    (aim - from)
+        .try_normalize()
+        .or((cur.raw - from).try_normalize())
+        .unwrap_or(DVec2::X)
+}
+
+/// Ende auf dem Strahl ab `from` im Winkel `angle` zu `basis`; der Zeiger wählt die Seite und, ohne
+/// `len`, die Länge.
+pub(crate) fn locked_ray(
+    from: DVec2,
+    basis: DVec2,
+    cur: &DrawCursor,
+    len: Option<f64>,
+    angle: f64,
+) -> DVec2 {
+    let side = if basis.perp_dot(cur.raw - from) < 0.0 {
+        -1.0
+    } else {
+        1.0
+    };
+    let ray = rotated(basis, side * angle);
+    let projected = (cur.raw - from).dot(ray);
+    // Auf der Rückseite des Strahls (stumpfer Winkel) hätte die Linie sonst keine Länge; dann zählt
+    // der Abstand des Zeigers.
+    let free = if projected > 0.0 {
+        projected
+    } else {
+        cur.raw.distance(from)
+    };
+    from + ray * len.unwrap_or(free)
 }
 
 /// Der Wert eines getippten Textes (mm oder Bogenmaß), geprüft; leer ergibt `None`.
@@ -126,8 +190,15 @@ fn read_field(
     if text.trim().is_empty() {
         return Ok(None);
     }
-    let (v, _) = resolve(text, kind.unit(), scope)?;
+    // Bei der Seitenzahl ist jeder unlesbare Text (auch ein unbekannter Name) ein Bereichsfehler.
+    let (v, _) = match resolve(text, kind.unit(), scope) {
+        Err(_) if kind == FieldKind::Sides => return Err(tr!("sketch-field-sides-range")),
+        found => found?,
+    };
     match kind {
+        FieldKind::Sides if !(3.0..=64.0).contains(&v) || v.fract() != 0.0 => {
+            Err(tr!("sketch-field-sides-range"))
+        }
         FieldKind::Angle if !(0.0..=180.0).contains(&v) => Err(tr!("sketch-field-angle-range")),
         FieldKind::Sweep if !(v > 0.0 && v < 360.0) => Err(tr!("sketch-field-sweep-range")),
         FieldKind::Angle | FieldKind::Sweep => Ok(Some(v.to_radians())),
@@ -174,9 +245,11 @@ pub(crate) fn axis_reference(sk: &mut Sketch) -> Result<CurveId, Msg> {
     Ok(line)
 }
 
-/// Winkelbezug einer Linie ab `start`: die vorige Linie der Kette in Vorwärtsrichtung.
+/// Winkelbezug einer Linie ab `start`: die vorige Linie der Kette in Vorwärtsrichtung. Ein Bogen ist
+/// keiner, denn ein Winkelmaß gibt es nur zwischen Linien.
 fn chain_basis(sk: &Sketch, chain: Option<CurveId>, start: PointId) -> Option<(CurveId, DVec2)> {
-    let c = chain?;
+    let c =
+        chain.filter(|&c| matches!(sk.curve(c).map(|d| &d.kind), Some(CurveKind::Line { .. })))?;
     Some((c, leaving_direction(sk, c, start)?))
 }
 
@@ -190,14 +263,18 @@ impl SketchSession {
     pub fn sync_input(&mut self, sk: &Sketch) {
         let key = (
             Some(self.tool),
+            self.planned_kind(),
             self.pending.clone(),
             self.pending_pos.len(),
+            self.pending_curves.len(),
+            self.line_arc.is_some(),
         );
         if self.input.key == key {
             return;
         }
         // Ohne offene Punkte läuft kein Werkzeug mehr; was es getippt hatte, gilt nicht mehr.
-        if self.pending.is_empty() && self.pending_pos.is_empty() {
+        if self.pending.is_empty() && self.pending_pos.is_empty() && self.pending_curves.is_empty()
+        {
             self.input.carried.clear();
         }
         self.input.fields = self
@@ -220,6 +297,12 @@ impl SketchSession {
     /// erst Radius, dann Öffnungswinkel, Ellipse erst große, dann kleine Halbachse.
     fn stage_fields(&self) -> &'static [FieldKind] {
         use FieldKind as F;
+        if self.line_arc.is_some() {
+            return &[];
+        }
+        if let Some(kind) = self.planned_kind() {
+            return kind.stages().get(self.kind_stage()).copied().unwrap_or(&[]);
+        }
         let (pts, pos) = (self.pending.len(), self.pending_pos.len());
         match self.tool {
             Tool::Line if pts > 0 => &[F::Length, F::Angle],
@@ -260,6 +343,25 @@ impl SketchSession {
                 field.error = Some(e);
             }
         }
+        // Solange die Seitenzahl im Fehler steht, bleibt die letzte gültige (keine springende Vorschau).
+        if field.kind == FieldKind::Sides && (field.locked.is_some() || text.trim().is_empty()) {
+            self.input.sides = field.locked.map(|v| v as usize);
+        }
+        self.limit_radius_or_sweep(i);
+    }
+
+    /// Start und Ende legen die Sehne fest, also bestimmt beim 3-Punkt-Bogen-Langloch Radius oder
+    /// Öffnungswinkel den Bogen: Das zweite getippte Feld `i` nennt die Regel.
+    fn limit_radius_or_sweep(&mut self, i: usize) {
+        if self.planned_kind() != Some(ToolKind::SlotThreePointArc) {
+            return;
+        }
+        let both = self.input.locked(FieldKind::Radius).is_some()
+            && self.input.locked(FieldKind::Sweep).is_some();
+        if both && let Some(field) = self.input.fields.get_mut(i) {
+            field.locked = None;
+            field.error = Some(tr!("sketch-field-radius-or-sweep"));
+        }
     }
 
     /// Nächstes oder (`back`) voriges Feld; die Sperren bleiben.
@@ -278,6 +380,9 @@ impl SketchSession {
         let field = self.input.fields.iter().find(|f| f.kind == kind)?;
         if field.locked.is_some() {
             return field.locked;
+        }
+        if self.planned_kind().is_some() {
+            return self.kind_field_value(sk, kind);
         }
         let at = self.draw_cursor.as_ref()?.at;
         if matches!(kind, F::Width | F::Height) {
@@ -305,7 +410,7 @@ impl SketchSession {
                 let major = (*self.pending_pos.first()? - from).try_normalize()?;
                 major.perp_dot(along).abs()
             }
-            F::Width | F::Height => return None,
+            F::Width | F::Height | F::Depth | F::Sides => return None,
         })
     }
 
@@ -340,24 +445,15 @@ impl SketchSession {
     /// Lage mit allen gesperrten Größen; `None` ohne Sperre.
     fn locked_position(&self, sk: &Sketch, cur: &DrawCursor) -> Option<DVec2> {
         use FieldKind as F;
+        if self.planned_kind().is_some() {
+            return self.kind_locked_position(sk, cur);
+        }
         let input = &self.input;
         let first = self
             .pending
             .first()
             .and_then(|&p| sk.point_xy(p).ok().map(|xy| (p, xy)));
-        // Richtung von `from` zum Zeiger, bei gleicher Lage entlang der x-Achse. Das Raster zählt
-        // dabei nicht: Die Richtung liefe sonst in groben Sprüngen von Rasterpunkt zu Rasterpunkt.
-        let aim = if matches!(cur.snap, crate::sketch_state::Snap::Grid) && cur.autos.is_empty() {
-            cur.raw
-        } else {
-            cur.at
-        };
-        let toward = |from: DVec2| {
-            (aim - from)
-                .try_normalize()
-                .or((cur.raw - from).try_normalize())
-                .unwrap_or(DVec2::X)
-        };
+        let toward = |from: DVec2| toward_pointer(cur, from);
         match self.tool {
             Tool::Line => {
                 let (start, from) = first?;
@@ -366,21 +462,7 @@ impl SketchSession {
                     return Some(from + toward(from) * len?);
                 };
                 let basis = basis_direction(sk, self.line_chain, start);
-                let side = if basis.perp_dot(cur.raw - from) < 0.0 {
-                    -1.0
-                } else {
-                    1.0
-                };
-                let ray = rotated(basis, side * angle);
-                let projected = (cur.raw - from).dot(ray);
-                // Auf der Rückseite des Strahls (stumpfer Winkel) hätte die Linie sonst keine
-                // Länge; dann zählt der Abstand des Zeigers.
-                let free = if projected > 0.0 {
-                    projected
-                } else {
-                    cur.raw.distance(from)
-                };
-                Some(from + ray * len.unwrap_or(free))
+                Some(locked_ray(from, basis, cur, len, angle))
             }
             Tool::Rectangle => {
                 let &corner = self.pending_pos.first()?;
@@ -475,7 +557,8 @@ impl SketchSession {
             self.input
                 .fields
                 .iter()
-                .filter(|f| f.locked.is_some())
+                // Die Seitenzahl ist kein Maß; sie steht in `DrawInput::sides`.
+                .filter(|f| f.locked.is_some() && f.kind != FieldKind::Sides)
                 .map(|f| (f.kind, f.text.clone())),
         );
         if let Err(text) = self.click(&mut sf.sketch, raw, radius, extend) {
@@ -491,8 +574,9 @@ impl SketchSession {
         };
         let mut note = None;
         for (kind, text) in &typed {
+            let overall = self.overall_center_distance(sf, &created, *kind, &typed, scope)?;
             note = self
-                .add_typed_dimension(sf, &created, *kind, text, chain, scope)?
+                .add_typed_dimension(sf, &created, *kind, text, overall, chain, scope)?
                 .or(note);
         }
         if note.is_some() {
@@ -503,40 +587,86 @@ impl SketchSession {
         Ok(())
     }
 
+    /// Der Mittenabstand `L − W` zur getippten Gesamtlänge eines Langlochs „Gesamt“ (Ruling Task 2:
+    /// Die Gesamtlänge ist kein eigenes Maß); `W` ist die getippte Breite oder die vom Zeiger. `None`
+    /// für jedes andere Maß.
+    fn overall_center_distance(
+        &self,
+        sf: &SketchFeature,
+        created: &Created,
+        kind: FieldKind,
+        typed: &[(FieldKind, String)],
+        scope: &ParamScope,
+    ) -> Result<Option<f64>, Msg> {
+        let (Some(ToolKind::SlotOverall), Created::Slot(ids), FieldKind::Length) =
+            (self.planned_kind(), created, kind)
+        else {
+            return Ok(None);
+        };
+        let value_of = |wanted: FieldKind| {
+            typed
+                .iter()
+                .find(|(k, _)| *k == wanted)
+                .map(|(k, text)| dimension_input(text, k.unit(), scope).map(|(v, _)| v))
+                .transpose()
+        };
+        let length =
+            value_of(FieldKind::Length)?.ok_or_else(|| crate::msg!("sketch-field-rejected"))?;
+        let width = match value_of(FieldKind::Width)? {
+            Some(w) => w,
+            None => {
+                2.0 * sf
+                    .sketch
+                    .radius(ids.caps[0])
+                    .ok_or_else(|| crate::msg!("sketch-field-rejected"))?
+            }
+        };
+        Ok(Some(length - width))
+    }
+
     /// Legt das Maß eines getippten Werts an. Widerspruch ist ein Fehler; `Some`: das Maß war
     /// überzählig und ist anzeigend, das ist die Meldung dazu. Ein überzähliger Öffnungswinkel
-    /// entfällt samt seinen beiden Hilfslinien, die sonst keinen Zweck hätten.
+    /// entfällt samt seinen beiden Hilfslinien, die sonst keinen Zweck hätten. `computed` ersetzt den
+    /// getippten Wert; das Maß bekommt dann weder Formel noch Speichertext.
+    #[allow(clippy::too_many_arguments)]
     fn add_typed_dimension(
         &mut self,
         sf: &mut SketchFeature,
         created: &Created,
         kind: FieldKind,
         text: &str,
+        computed: Option<f64>,
         chain: Option<CurveId>,
         scope: &ParamScope,
     ) -> Result<Option<Msg>, Msg> {
-        let (value, _) = dimension_input(text, kind.unit(), scope)?;
+        let (typed, _) = dimension_input(text, kind.unit(), scope)?;
+        let value = computed.unwrap_or(typed);
         let prior = sf.sketch.clone();
         let dim = dimension_kind(&mut sf.sketch, created, kind, chain)?;
         let dim = checked_value(&sf.sketch, &dim, value)?;
+        let old = sf.sketch.measure(&dim);
         let id = sf.sketch.add_constraint(dim).map_err(err)?;
+        let unsolved = sf.sketch.clone();
         let before = self.last_report.take();
         let report = sf.sketch.solve();
-        let problem = check_change(&report, before.as_ref(), &prior, Some(id));
+        let direct = match check_change(&report, before.as_ref(), &prior, Some(id)) {
+            Some(_) => Err(crate::msg!("sketch-field-rejected")),
+            None => Ok(()),
+        };
         let redundant = report.redundant.contains(&id);
-        if problem.is_some() {
-            self.last_report = Some(report);
-            return Err(crate::msg!("sketch-field-rejected"));
-        }
-        if redundant && kind == FieldKind::Sweep {
+        if direct.is_ok() && redundant && kind == FieldKind::Sweep {
             sf.sketch = prior;
             self.last_report = before;
             return Ok(Some(crate::msg!("sketch-field-sweep-redundant")));
         }
         self.last_report = Some(report);
+        self.guard_length(&mut sf.sketch, id, old, &unsolved, direct)?;
         if redundant {
             self.make_driven(&mut sf.sketch, id)?;
             return Ok(self.message.take());
+        }
+        if computed.is_some() {
+            return Ok(None);
         }
         if let Err(text) = self.set_dimension_input(sf, id, text, scope) {
             return Err(self.message.take().unwrap_or(Msg::Raw(text)));
@@ -561,40 +691,67 @@ fn dimension_kind(
             let (a, b) = line_ends(sk, *line)?;
             K::Distance(a, b, 0.0)
         }
-        (Created::Line(line), F::Angle) => {
-            let (a, b) = line_ends(sk, *line)?;
-            let (from, to) = (sk.point_xy(a).map_err(err)?, sk.point_xy(b).map_err(err)?);
-            if from.distance(to) <= sk.tolerance().linear {
-                return Err(crate::msg!("sketch-field-positive"));
-            }
-            let (basis, dir) = match chain_basis(sk, chain, a) {
-                Some(found) => found,
-                None => (axis_reference(sk)?, DVec2::X),
-            };
-            if dir.perp_dot(to - from) < 0.0 {
-                K::Angle(*line, basis, 0.0)
-            } else {
-                K::Angle(basis, *line, 0.0)
-            }
-        }
+        (Created::Line(line), F::Angle) => line_angle(sk, *line, chain)?,
         (Created::Rectangle(r), F::Width) => K::Distance(r.points[0], r.points[1], 0.0),
-        (Created::Rectangle(r), F::Height) => K::Distance(r.points[1], r.points[2], 0.0),
+        (Created::Rectangle(r), F::Height | F::Depth) => K::Distance(r.points[1], r.points[2], 0.0),
+        (Created::Rectangle(r), F::Angle) => line_angle(sk, r.lines[0], chain)?,
         (Created::Circle(c), F::Diameter) => K::Diameter(*c, 0.0),
         (Created::Arc(c), F::Radius) => K::Radius(*c, 0.0),
-        (Created::Arc(c), F::Sweep) => {
-            let Some(CurveKind::Arc { center, start, end }) = sk.curve(*c).map(|d| d.kind.clone())
-            else {
-                return Err(crate::msg!("sketch-field-rejected"));
-            };
-            let first = sk.add_line(center, start).map_err(err)?;
-            let second = sk.add_line(center, end).map_err(err)?;
-            sk.set_construction(first, true).map_err(err)?;
-            sk.set_construction(second, true).map_err(err)?;
-            K::Angle(first, second, 0.0)
+        (Created::Arc(c), F::Sweep) => sweep_dimension(sk, *c)?,
+        // Umbeschrieben gibt die Größe den Abstand Mitte–Seite an, einbeschrieben den Radius.
+        (
+            Created::Polygon {
+                ids,
+                inscribed: true,
+            },
+            F::Radius,
+        ) => K::Radius(ids.circle, 0.0),
+        (Created::Polygon { ids, .. }, F::Radius) => {
+            K::DistancePointLine(ids.center, ids.lines[0], 0.0)
         }
+        (Created::Polygon { ids, .. }, F::Length) => K::Distance(ids.points[0], ids.points[1], 0.0),
+        (Created::Slot(ids), F::Length) => K::Distance(ids.centers[0], ids.centers[1], 0.0),
+        (Created::Slot(ids), F::Width) => K::Diameter(ids.caps[0], 0.0),
+        (Created::ArcSlot(ids), F::Radius) => K::Radius(ids.axis, 0.0),
+        (Created::ArcSlot(ids), F::Sweep) => sweep_dimension(sk, ids.axis)?,
+        (Created::ArcSlot(ids), F::Width) => K::Diameter(ids.caps[0], 0.0),
         (Created::Ellipse(c), F::MajorAxis) => K::EllipseMajor(*c, 0.0),
         (Created::Ellipse(c), F::MinorAxis) => K::EllipseMinor(*c, 0.0),
         _ => return Err(crate::msg!("sketch-field-rejected")),
+    })
+}
+
+/// Der Öffnungswinkel des Bogens `arc`: über zwei neue Konstruktionslinien Mitte→Start und Mitte→Ende.
+fn sweep_dimension(sk: &mut Sketch, arc: CurveId) -> Result<ConstraintKind, Msg> {
+    let Some(CurveKind::Arc { center, start, end }) = sk.curve(arc).map(|d| d.kind.clone()) else {
+        return Err(crate::msg!("sketch-field-rejected"));
+    };
+    let first = sk.add_line(center, start).map_err(err)?;
+    let second = sk.add_line(center, end).map_err(err)?;
+    sk.set_construction(first, true).map_err(err)?;
+    sk.set_construction(second, true).map_err(err)?;
+    Ok(ConstraintKind::Angle(first, second, 0.0))
+}
+
+/// Der Winkel der Linie zur vorigen Linie der Kette, sonst zur Achshilfe.
+fn line_angle(
+    sk: &mut Sketch,
+    line: CurveId,
+    chain: Option<CurveId>,
+) -> Result<ConstraintKind, Msg> {
+    let (a, b) = line_ends(sk, line)?;
+    let (from, to) = (sk.point_xy(a).map_err(err)?, sk.point_xy(b).map_err(err)?);
+    if from.distance(to) <= sk.tolerance().linear {
+        return Err(crate::msg!("sketch-field-positive"));
+    }
+    let (basis, dir) = match chain_basis(sk, chain, a) {
+        Some(found) => found,
+        None => (axis_reference(sk)?, DVec2::X),
+    };
+    Ok(if dir.perp_dot(to - from) < 0.0 {
+        ConstraintKind::Angle(line, basis, 0.0)
+    } else {
+        ConstraintKind::Angle(basis, line, 0.0)
     })
 }
 

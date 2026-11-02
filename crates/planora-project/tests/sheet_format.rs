@@ -68,7 +68,7 @@ fn plain_doc() -> Document {
 
 #[test]
 fn format_6_only_with_sheet_data() {
-    assert_eq!(FORMAT_VERSION, 13);
+    assert_eq!(FORMAT_VERSION, 14);
     let d = plain_doc();
     assert_eq!(required_format(&d.snapshot()), 4);
 
@@ -308,9 +308,9 @@ fn rejects_bad_sheet_data() {
     let t = edited(|v| v["zeichnungen"][0]["blattangaben"]["nummer"] = "a\u{1}b".into());
     assert!(msg(bad(&t)).contains("Zeichnung „Blatt A“"));
 
-    // Format 14 ist zu neu
-    let t = edited(|v| v["format"] = 14.into());
-    assert!(matches!(bad(&t), ProjectError::TooNew { found: 14, .. }));
+    // Format 15 ist zu neu
+    let t = edited(|v| v["format"] = 15.into());
+    assert!(matches!(bad(&t), ProjectError::TooNew { found: 15, .. }));
 }
 
 #[test]

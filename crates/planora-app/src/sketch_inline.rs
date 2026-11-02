@@ -56,9 +56,10 @@ fn field_pos(rect: Rect, anchor: Pos2, width: f32, row: usize, rows: usize) -> P
 }
 
 /// Der aktuelle Wert gerundet, wie ihn das Feld vor dem ersten Zeichen zeigt: Länge wie
-/// [`planora_i18n::fmt_len`] ohne Einheit, Winkel mit einer Stelle.
+/// [`planora_i18n::fmt_len`] ohne Einheit, Winkel mit einer Stelle, die Seitenzahl ganz.
 fn suggestion(se: &SketchSession, sf: &SketchFeature, kind: FieldKind) -> String {
     match se.field_value(&sf.sketch, kind) {
+        Some(v) if kind == FieldKind::Sides => format!("{v:.0}"),
         Some(v) if matches!(kind, FieldKind::Angle | FieldKind::Sweep) => {
             format_number(v.to_degrees(), 1)
         }
@@ -210,14 +211,16 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option
         }
     }
 
-    if enter {
+    // Offene Liste der Arten: Eingabe und Esc gehören ihr, nicht der Form.
+    let flyout = crate::sketch_panel::flyout_open(&ctx);
+    if enter && !flyout {
         let raw = se.draw_cursor.as_ref().map(|c| c.raw).or(se.cursor);
         if let Some(raw) = raw {
             // Fehler stehen in der Meldung der Sitzung und im Feld.
             let _ = se.commit_input(sf, raw, radius, false, &scope);
         }
     }
-    if esc {
+    if esc && !flyout {
         se.cancel(&mut sf.sketch);
         return true;
     }

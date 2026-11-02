@@ -411,6 +411,20 @@ pub fn atom(icon: Icon) -> egui::RichText {
     text(icon, LABEL_ICON_SIZE, Color32::PLACEHOLDER)
 }
 
+/// Untermenü-Knopf mit Symbol und Text. egui setzt den Pfeil am rechten Rand als Zeichen `⏵`, das
+/// die Schriften der App nicht haben (es erschiene als „?“); hier steht dafür das Phosphor-Symbol
+/// in der Farbe des Knopftexts (dasselbe Symbol wie der Pfadtrenner).
+pub fn submenu<R>(
+    ui: &mut egui::Ui,
+    atoms: impl egui::IntoAtoms<'static>,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<Option<R>> {
+    let button = egui::Button::new(atoms).right_text(atom(Icon::PathSeparator));
+    let (response, inner) =
+        egui::containers::menu::SubMenuButton::from_button(button).ui(ui, add_contents);
+    egui::InnerResponse::new(inner.map(|i| i.inner), response)
+}
+
 /// Knopf mit Symbol und Text (Menüeinträge, Leistenschalter).
 pub fn button<'a>(icon: Icon, label: impl Into<egui::WidgetText>) -> egui::Button<'a> {
     egui::Button::new((atom(icon), label.into()))
@@ -909,6 +923,12 @@ pub enum HandIcon {
     Break,
     /// Blick auf: die Skizzenebene als Quadrat mit Fadenkreuz, senkrecht gesehen.
     LookAt,
+    /// Mittellinie: Strich, Punkt, Strich in einer Linie.
+    Centerline,
+    /// Polygon: ein Sechseck.
+    Polygon,
+    /// Langloch: zwei Seiten, zwei halbrunde Enden.
+    Slot,
 }
 
 /// Alle gezeichneten Symbole aus [`HandIcon`].
@@ -925,6 +945,9 @@ pub const HAND_DRAWN: &[HandIcon] = &[
     HandIcon::Extend,
     HandIcon::Break,
     HandIcon::LookAt,
+    HandIcon::Centerline,
+    HandIcon::Polygon,
+    HandIcon::Slot,
 ];
 
 /// Zeichnet ein [`HandIcon`] in `rect` (Strichbreite 1,5, runde Enden).
@@ -1060,6 +1083,36 @@ pub fn paint_hand_icon(painter: &Painter, rect: Rect, icon: HandIcon, color: Col
             painter.circle_filled(c + vec2(-gap, 0.0), 1.8, color);
             painter.circle_filled(c + vec2(gap, 0.0), 1.8, color);
         }
+        HandIcon::Polygon => {
+            let corner = |i: i32| {
+                let a = std::f32::consts::FRAC_PI_3 * i as f32;
+                c + vec2(a.cos(), -a.sin()) * r * 1.1
+            };
+            for i in 0..6 {
+                seg(painter, [corner(i), corner(i + 1)], stroke);
+            }
+        }
+        HandIcon::Slot => {
+            let (half, h) = (r * 0.6, r * 0.5);
+            let pi = std::f32::consts::PI;
+            seg(painter, [c + vec2(-half, -h), c + vec2(half, -h)], stroke);
+            seg(painter, [c + vec2(-half, h), c + vec2(half, h)], stroke);
+            arc(c + vec2(-half, 0.0), h, pi / 2.0, pi * 1.5);
+            arc(c + vec2(half, 0.0), h, -pi / 2.0, pi / 2.0);
+        }
+        HandIcon::Centerline => {
+            seg(
+                painter,
+                [c + vec2(-r, 0.0), c + vec2(-r * 0.45, 0.0)],
+                stroke,
+            );
+            seg(
+                painter,
+                [c + vec2(-r * 0.1, 0.0), c + vec2(r * 0.1, 0.0)],
+                stroke,
+            );
+            seg(painter, [c + vec2(r * 0.45, 0.0), c + vec2(r, 0.0)], stroke);
+        }
         HandIcon::LookAt => {
             painter.rect_stroke(
                 Rect::from_center_size(c, vec2(r * 2.0, r * 2.0)),
@@ -1120,6 +1173,8 @@ pub fn sketch_tool_icon(tool: crate::sketch_state::Tool) -> IconSource {
         T::Rectangle => IconSource::Font(Icon::ToolRectangle),
         T::Circle => IconSource::Font(Icon::ToolCircle),
         T::Arc => IconSource::Hand(HandIcon::Arc),
+        T::Polygon => IconSource::Hand(HandIcon::Polygon),
+        T::Slot => IconSource::Hand(HandIcon::Slot),
         T::Ellipse => IconSource::Hand(HandIcon::Ellipse),
         T::Spline => IconSource::Font(Icon::ToolSpline),
         T::ProjectEdge => IconSource::Font(Icon::ToolProjectEdge),

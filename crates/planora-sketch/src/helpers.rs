@@ -56,7 +56,7 @@ fn unsupported(what: String) -> SketchError {
 
 impl Sketch {
     /// Führt `f` aus; bei einem Fehler wird der vorherige Zustand wiederhergestellt.
-    fn atomically<T>(
+    pub(crate) fn atomically<T>(
         &mut self,
         f: impl FnOnce(&mut Sketch) -> Result<T, SketchError>,
     ) -> Result<T, SketchError> {
@@ -129,6 +129,7 @@ impl Sketch {
     ) -> Result<CurveId, SketchError> {
         let swap_arc = mirror.is_some();
         let construction = self.curves[source].construction;
+        let centerline = self.curves[source].centerline;
         let id = match self.curves[source].kind.clone() {
             CurveKind::Line { a, b } => self.add_line(map[&a], map[&b])?,
             CurveKind::Circle { center, radius } => {
@@ -165,6 +166,7 @@ impl Sketch {
             }
         };
         self.curves[id].construction = construction;
+        self.curves[id].centerline = centerline;
         Ok(id)
     }
 
@@ -457,6 +459,7 @@ impl Sketch {
                 }
             }
             s.touch_structure();
+            s.refresh_shared_signs(Some(curve));
             Ok(())
         })
     }

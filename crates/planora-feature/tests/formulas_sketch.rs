@@ -1166,3 +1166,89 @@ fn a_drifted_tangent_at_a_shared_end_still_rebuilds_with_formulas() {
     assert_eq!(status(&d, s), FeatureStatus::Ok);
     assert_eq!(stored(&d, s, distance), 9.0);
 }
+
+/// Skizzen 3, Task 10: Abgerundetes Rechteck mit 8 Tangenten am gemeinsamen Ende, voll bemaßt. Ein
+/// großer Sprung über einen Parameter scheitert direkt und gelingt in Schritten.
+#[test]
+fn a_big_parameter_jump_keeps_a_rounded_rectangle_with_its_tangents() {
+    let (w, h, r) = (40.0, 30.0, 5.0);
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze", Tolerance::default());
+    let mut p = |x: f64, y: f64| sk.add_point(x, y).unwrap();
+    let (a0, a1, b0, b1) = (p(r, 0.0), p(w - r, 0.0), p(w, r), p(w, h - r));
+    let (c0, c1, d0, d1) = (p(w - r, h), p(r, h), p(0.0, h - r), p(0.0, r));
+    let (m1, m2, m3, m4) = (p(w - r, r), p(w - r, h - r), p(r, h - r), p(r, r));
+    let bottom = sk.add_line(a0, a1).unwrap();
+    let right = sk.add_line(b0, b1).unwrap();
+    let top = sk.add_line(c0, c1).unwrap();
+    let left = sk.add_line(d0, d1).unwrap();
+    let arc1 = sk.add_arc(m1, a1, b0).unwrap();
+    let arc2 = sk.add_arc(m2, b1, c0).unwrap();
+    let arc3 = sk.add_arc(m3, c1, d0).unwrap();
+    let arc4 = sk.add_arc(m4, d1, a0).unwrap();
+    let mut tangents = Vec::new();
+    for (x, y) in [
+        (bottom, arc1),
+        (arc1, right),
+        (right, arc2),
+        (arc2, top),
+        (top, arc3),
+        (arc3, left),
+        (left, arc4),
+        (arc4, bottom),
+    ] {
+        tangents.push(sk.add_constraint(ConstraintKind::Tangent(x, y)).unwrap());
+    }
+    use planora_sketch::constraint::LineOrPoints::Line;
+    for kind in [
+        ConstraintKind::Horizontal(Line(bottom)),
+        ConstraintKind::Vertical(Line(right)),
+        ConstraintKind::Horizontal(Line(top)),
+        ConstraintKind::Vertical(Line(left)),
+        ConstraintKind::Equal(arc1, arc2),
+        ConstraintKind::Equal(arc1, arc3),
+        ConstraintKind::Equal(arc1, arc4),
+        ConstraintKind::Fixed(a0, r, 0.0),
+        ConstraintKind::Radius(arc1, r),
+        ConstraintKind::Distance(a0, c1, h),
+    ] {
+        sk.add_constraint(kind).unwrap();
+    }
+    let width = sk
+        .add_constraint(ConstraintKind::Distance(d1, b0, w))
+        .unwrap();
+    assert_eq!(
+        sk.solve().status,
+        planora_sketch::solver::SolveStatus::Solved
+    );
+
+    let mut d = Document::new();
+    let b = d.add_parameter("Breite", "40", Length, "").unwrap();
+    let s = d
+        .add_feature(
+            "Skizze 1",
+            FeatureKind::Sketch(on_xy(sk, one(width, "Breite"))),
+        )
+        .unwrap();
+    for value in [60.0_f64, 600.0, 1000.0, 2000.0, 5000.0, 40.0] {
+        d.set_parameter(b, edit(&d, b, &value.to_string())).unwrap();
+        assert_eq!(status(&d, s), FeatureStatus::Ok, "{value}");
+        assert_eq!(stored(&d, s, width), value);
+        let done = d.sketch_of(s).unwrap();
+        let x = done.variables();
+        for &t in &tangents {
+            let row = done.evaluate(t, x).unwrap().residuals[0].v;
+            assert!(row.abs() < 1e-6, "{value}: Tangente {row}");
+        }
+        assert!(
+            (done
+                .point_xy(d1)
+                .unwrap()
+                .distance(done.point_xy(b0).unwrap())
+                - value)
+                .abs()
+                < 1e-6,
+            "{value}"
+        );
+        assert!((done.radius(arc1).unwrap() - r).abs() < 1e-6, "{value}");
+    }
+}

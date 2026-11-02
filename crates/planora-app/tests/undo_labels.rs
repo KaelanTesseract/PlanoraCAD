@@ -1181,6 +1181,13 @@ fn sketch_labels() {
     // Hilfslinie, gezogener Punkt.
     let got = changed(&base, |s| s.set_construction(line, true).unwrap());
     assert_eq!(got, "Hilfslinie umschalten");
+    // Skizzen 3: Mittellinie hat einen eigenen Namen, auch aus einer Hilfslinie heraus.
+    let got = changed(&base, |s| s.set_centerline(line, true).unwrap());
+    assert_eq!(got, "Mittellinie umschalten");
+    let mut construction = base.clone();
+    construction.sketch.set_construction(line, true).unwrap();
+    let got = changed(&construction, |s| s.set_centerline(line, true).unwrap());
+    assert_eq!(got, "Mittellinie umschalten");
     let got = changed(&base, |s| s.set_point_xy(b, 7.0, 7.0).unwrap());
     assert_eq!(got, "Skizze ändern", "Punkt gezogen");
     assert_eq!(

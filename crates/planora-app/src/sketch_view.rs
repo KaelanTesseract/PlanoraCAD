@@ -14,8 +14,9 @@ use planora_math::{DVec2, DVec3, Frame};
 use planora_render::{EdgeRef, OrbitCamera, Pick, exact_step, grid_radius, line_weight};
 use planora_sketch::ExtractedProfiles;
 use planora_sketch::constraint::{ConstraintKind, LineOrPoints};
-use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
+use planora_sketch::model::{CurveId, CurveKind, LineStyle, PointId, Sketch};
 use planora_sketch::solver::{SolveReport, SolveStatus};
+use std::collections::HashSet;
 use std::f64::consts::{FRAC_PI_4, TAU};
 
 /// Fangradius in Pixeln für Klicks und Hervorhebung.
@@ -340,6 +341,19 @@ fn curve_anchor(sk: &Sketch, c: CurveId) -> Option<DVec2> {
     }
 }
 
+/// Die Kurven, an denen eine reine Zeichen-Abhängigkeit (H, V, ∥, ⟂, =, T) ihr Zeichen zeigt; nur
+/// dafür gilt „je Kurve und Art einmal“. Maße und Abhängigkeiten an Punkten: `None`.
+fn marked_curves(kind: &ConstraintKind) -> Option<Vec<CurveId>> {
+    use ConstraintKind as K;
+    match kind {
+        K::Horizontal(LineOrPoints::Line(c)) | K::Vertical(LineOrPoints::Line(c)) => Some(vec![*c]),
+        K::Parallel(a, b) | K::Perpendicular(a, b) | K::Equal(a, b) | K::Tangent(a, b) => {
+            Some(vec![*a, *b])
+        }
+        _ => None,
+    }
+}
+
 /// Stellen (Skizzenkoordinaten), an denen die Beschriftung einer Abhängigkeit erscheint.
 fn anchors(sk: &Sketch, kind: &ConstraintKind) -> Vec<DVec2> {
     use ConstraintKind as K;
@@ -443,6 +457,18 @@ fn draw_path(painter: &egui::Painter, path: Vec<Pos2>, stroke: Stroke, dashed: b
     painter.extend(path_shapes(path, stroke, dashed));
 }
 
+/// Linienzug im Stil der Kurve: durchgezogen, gestrichelt (Konstruktion) oder als Strichpunkt
+/// (Mittellinie: lange und kurze Striche im Wechsel).
+pub fn style_shapes(path: Vec<Pos2>, stroke: Stroke, style: LineStyle) -> Vec<Shape> {
+    match style {
+        LineStyle::Normal => path_shapes(path, stroke, false),
+        LineStyle::Construction => path_shapes(path, stroke, true),
+        LineStyle::Centerline => {
+            Shape::dashed_line_with_offset(&path, stroke, &[12.0, 2.0], &[3.0, 3.0], 0.0)
+        }
+    }
+}
+
 /// Flächen der Profile als ein Dreiecksnetz (Füllung aus [`ExtractedProfiles::fill`]), Farbe je
 /// Profil aus `color` (`None`: nicht zeichnen). Leer, wenn nichts zu zeichnen ist.
 fn profile_fill_shape(
@@ -527,7 +553,7 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
                 Stroke::new(FINISHED_WIDTH, col.finished)
             };
             for path in map.paths(&pl) {
-                out.extend(path_shapes(path, stroke, data.construction));
+                out.extend(style_shapes(path, stroke, data.style()));
             }
         }
     }
@@ -850,6 +876,17 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     if state.session_sketch().is_none() {
         return;
     }
+    // Offene Liste der Arten (die Leiste kommt in diesem Bild erst nach der Ansicht): Esc und
+    // Eingabe gehören ihr, ein Drücken schließt nur sie und setzt weder Punkt noch Zug.
+    let flyout = crate::sketch_panel::flyout_open(ui.ctx());
+    if flyout
+        && ui.input(|i| i.pointer.any_pressed())
+        && let Some(se) = state.sketch_session.as_mut()
+    {
+        se.box_aborted = true;
+        se.click_after_flyout = true;
+    }
+    let aborted = state.sketch_session.as_ref().is_some_and(|s| s.box_aborted);
 
     // Navigation: Verschieben und Zoomen; kein Orbit.
     let dragging = state
@@ -864,13 +901,15 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     let km = crate::keymap::mouse::current(ui.ctx());
     let pan_gesture = crate::keymap::mouse::pan_2d(&km, ui, response);
     let starts_box = response.drag_started_by(PointerButton::Primary)
+        && !aborted
         && box_can_start(ui, rect, state, pan_gesture, ctrl);
-    // Ein laufender Rahmen schwenkt nicht, auch wenn Umschalt erst währenddessen dazukommt.
+    // Ein laufender Rahmen schwenkt nicht, auch wenn Umschalt erst währenddessen dazukommt; ein
+    // Zug auf dem letzten Punkt des Linienzugs ebenso.
     let boxing = starts_box
         || state
             .sketch_session
             .as_ref()
-            .is_some_and(|s| s.box_select.is_some());
+            .is_some_and(|s| s.box_select.is_some() || s.line_arc.is_some());
     let panning = pan_gesture && !boxing;
     if panning && !dragging {
         let d = response.drag_motion();
@@ -912,12 +951,13 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         if let Some(origin) = ui.input(|i| i.pointer.press_origin()) {
             se.begin_box(dvec(origin), shift);
         }
-    } else if response.drag_started_by(PointerButton::Primary) && !shift && !panning {
-        // Punkt oder Kurve ziehen (Auswahlwerkzeug)
+    } else if response.drag_started_by(PointerButton::Primary) && !shift && !panning && !aborted {
+        // Punkt oder Kurve ziehen (Auswahlwerkzeug), tangentialer Bogen (Linienwerkzeug)
         let origin = ui.input(|i| i.pointer.press_origin());
         if let Some(start) = origin.and_then(|p| map.to_sketch(p)) {
             let r = origin.and_then(|p| map.radius_at(p)).unwrap_or(radius);
             se.begin_drag(&mut sf.sketch, start, r);
+            se.begin_line_arc(&sf.sketch, start, r);
         }
     }
     if se.is_dragging() {
@@ -931,7 +971,8 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         }
     }
 
-    let esc = !viewport::typing(ui.ctx()) && ui.input(|i| i.key_pressed(egui::Key::Escape));
+    let esc =
+        !flyout && !viewport::typing(ui.ctx()) && ui.input(|i| i.key_pressed(egui::Key::Escape));
     if se.box_select.is_some() {
         // Die rechte Taste bricht schon beim Drücken ab: Ein Klick wird es während des Zugs nicht
         // immer. Esc beendet schon hier den Zug von egui, der Rahmen fällt aber unten weg.
@@ -947,10 +988,27 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         }
     }
 
+    // Zug auf dem letzten Punkt: wie beim Rahmen bricht die rechte Taste schon beim Drücken ab, und
+    // Esc beendet schon hier den Zug von egui, der Bogenzug fällt aber unten weg.
+    if se.line_arc.is_some() {
+        if ui.input(|i| i.pointer.button_pressed(PointerButton::Secondary)) {
+            se.abort_box();
+        } else if !esc && response.drag_stopped() {
+            match at.or(se.cursor) {
+                Some(end) => {
+                    let _ = se.finish_line_arc(&mut sf.sketch, end, radius);
+                }
+                None => se.line_arc = None,
+            }
+        } else if !esc && !response.dragged() {
+            se.line_arc = None;
+        }
+    }
+
     // Stutzen durch Ziehen: jede überfahrene Kurve wird gestutzt (ein Schritt, da der Verlauf
     // erst nach dem Loslassen fortgeschrieben wird).
     if se.tool == Tool::Trim && !panning {
-        if response.drag_started_by(PointerButton::Primary) && !shift {
+        if response.drag_started_by(PointerButton::Primary) && !shift && !aborted {
             let origin = ui.input(|i| i.pointer.press_origin());
             if let Some(start) = origin.and_then(|p| map.to_sketch(p)) {
                 let r = origin.and_then(|p| map.radius_at(p)).unwrap_or(radius);
@@ -976,7 +1034,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     // Abstand nur zum letzten) – das ist für den Nutzer ein Doppelklick und beendet ebenso.
     if se.box_aborted {
         // Das Loslassen nach dem Abbruch ist kein Klick.
-    } else if response.double_clicked() || response.triple_clicked() {
+    } else if (response.double_clicked() || response.triple_clicked()) && !se.click_after_flyout {
         if se.tool == Tool::Select {
             // Wie beim einfachen Klick: Punkt vor Kurve.
             if let Some(at) = at
@@ -998,6 +1056,9 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             let _ = se.click(&mut sf.sketch, at, radius, shift);
         }
     }
+    if response.clicked_by(PointerButton::Primary) && !se.box_aborted {
+        se.click_after_flyout = false;
+    }
     if response.clicked_by(PointerButton::Secondary) && !se.box_aborted {
         se.cancel(&mut sf.sketch);
     }
@@ -1016,7 +1077,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         if esc {
             se.cancel(&mut sf.sketch);
         }
-        if enter {
+        if enter && !flyout {
             let _ = se.finish_tool(&mut sf.sketch);
         }
         if delete {
@@ -1127,7 +1188,8 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         let Some(pl) = sk.curve_polyline(c, STEPS_PER_TURN) else {
             continue;
         };
-        let selected = se.selection.contains(&Item::Curve(c));
+        // Die schon gewählten Kurven einer laufenden Art leuchten wie die Auswahl.
+        let selected = se.selection.contains(&Item::Curve(c)) || se.pending_curves.contains(&c);
         let mut color = if selected {
             col.selected
         } else if data.construction {
@@ -1142,7 +1204,7 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         }
         let width = if data.construction { 1.2 } else { CURVE_WIDTH };
         for path in map.paths(&pl) {
-            draw_path(&painter, path, Stroke::new(width, color), data.construction);
+            painter.extend(style_shapes(path, Stroke::new(width, color), data.style()));
         }
     }
 
@@ -1187,9 +1249,21 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     let bad: Vec<_> = report
         .map(|r| r.conflicting.iter().chain(&r.redundant).copied().collect())
         .unwrap_or_default();
-    for (id, c) in sk.constraints() {
+    // Skizzen 3: Eine Kurve zeigt jede Art Zeichen höchstens einmal (n-1 gleiche Abhängigkeiten
+    // einer Vieleck-Linie ergäben sonst eine lange Spalte). Fehlerhafte zuerst, damit ihre rote
+    // Farbe nicht von einer unauffälligen Doppelung verdeckt wird.
+    let mut shown: HashSet<(CurveId, String)> = HashSet::new();
+    let mut constraints: Vec<_> = sk.constraints().collect();
+    constraints.sort_by_key(|(id, _)| !bad.contains(id));
+    for (id, c) in constraints {
         let text = overlay_text(ui.ctx(), sk, &c.kind, c.driven);
         if text.is_empty() {
+            continue;
+        }
+        // „auf“ an einer Hilfskurve (z. B. dem Hilfskreis des Vielecks) wäre nur Lärm.
+        if let ConstraintKind::PointOnCurve(_, curve) = &c.kind
+            && sk.curve(*curve).is_some_and(|d| d.construction)
+        {
             continue;
         }
         let color = if bad.contains(&id) {
@@ -1201,7 +1275,15 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         } else {
             col.text
         };
-        for a in anchors(sk, &c.kind) {
+        let places: Vec<DVec2> = match marked_curves(&c.kind) {
+            Some(curves) => curves
+                .into_iter()
+                .filter(|&curve| shown.insert((curve, text.clone())))
+                .filter_map(|curve| curve_anchor(sk, curve))
+                .collect(),
+            None => anchors(sk, &c.kind),
+        };
+        for a in places {
             if let Some(s) = map.to_screen(a) {
                 label(
                     &painter,
@@ -1319,6 +1401,27 @@ fn draw_preview(
         return;
     };
     let stroke = Stroke::new(1.5, color);
+    if se.line_arc.is_some() {
+        for line in se.line_arc_preview(sk, cursor).unwrap_or_default() {
+            for path in map.paths(&line) {
+                draw_path(painter, path, stroke, true);
+            }
+        }
+        return;
+    }
+    if se.planned_kind().is_some() {
+        // Wer Kurven wählt, rechnet mit der Rohlage, wie der Klick auch.
+        let at = match &se.draw_cursor {
+            Some(c) if se.picks_curves() => c.raw,
+            _ => cursor,
+        };
+        for line in se.kind_preview(sk, at).unwrap_or_default() {
+            for path in map.paths(&line) {
+                draw_path(painter, path, stroke, true);
+            }
+        }
+        return;
+    }
     let pending: Vec<DVec2> = se.pending.iter().filter_map(|&p| pos(sk, p)).collect();
     let circle = |m: DVec2, r: f64| -> Vec<DVec2> {
         (0..=STEPS_PER_TURN)
