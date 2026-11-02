@@ -59,7 +59,7 @@ Heute gibt es je Form genau einen Weg: Rechteck über zwei Ecken, Kreis über Mi
 
 - Geometrie der neuen Arten rein und ohne egui, damit sie testbar ist: Umkreis aus 3 Punkten, Tangentialkreise, Polygonecken und Langloch-Umriss in `planora-sketch`; das Anlegen samt Abhängigkeiten als eine Operation je Form, sodass Vorschau und Ergebnis aus derselben Rechnung kommen.
 - Die Art einer Form als Daten am Werkzeug, nicht als je eine neue Zweigkette durch alle `match`-Stellen. Die letzte Art je Form wird in der Sitzung gemerkt.
-- Tangentialkreise analytisch für Linien, sonst numerisch über den vorhandenen Löser mit dem Startwert aus dem Zeiger. Findet er keine Lösung, sagt die Statuszeile das und es entsteht nichts.
+- Tangentialkreise analytisch für Linie, Kreis und Bogen, über alle Vorzeichen-Kombinationen. Gibt es keine Lösung, sagt die Statuszeile das und es entsteht nichts.
 - Mittellinie als neuer Wert des Linienstils; Dateiformat 14 nur, wenn sie vorkommt (gleiche Regel wie Format 13 in Teilprojekt 1). Alle Stellen, die heute `construction` lesen (Profile, Stutzen, Export, Zeichnung), behandeln sie wie Konstruktion.
 - Tests bei 1920×1080, nie 800×600.
 
