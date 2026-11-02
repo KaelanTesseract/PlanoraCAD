@@ -2251,7 +2251,6 @@ fn view_menu(ui: &mut egui::Ui, ws: &mut Workspace, shell: &mut ShellState) -> b
     shortcuts
 }
 
-/// Einträge „Skizze auf …“ im Menü „Erzeugen“ (ohne Untermenü).
 /// Bei offener Skizze je Form mit Arten ein Untermenü: dieselben Einträge wie die Liste an der
 /// Skizzenleiste, gewählt über die Aktion der Art.
 fn sketch_kinds_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
@@ -2278,6 +2277,7 @@ fn sketch_kinds_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     }
 }
 
+/// Einträge „Skizze auf …“ im Menü „Erzeugen“ (ohne Untermenü).
 fn sketch_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     let state = &mut ws.active_tab_mut().state;
     for (label, name, plane) in [

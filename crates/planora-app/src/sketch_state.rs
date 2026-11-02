@@ -1465,6 +1465,13 @@ impl SketchSession {
                         .ok_or_else(|| crate::msg!("sketch-cannot-measure"))?,
                 };
                 kind = checked_value(sk, &kind, v)?;
+                // Ein getippter Winkel gilt nur bis auf 180° (wie bei `set_dimension_value`).
+                if value.is_some()
+                    && matches!(kind, ConstraintKind::Angle(..))
+                    && !(v > 0.0 && v < std::f64::consts::PI)
+                {
+                    return Err(crate::msg!("sketch-angle-range"));
+                }
             }
             let old = sk.measure(&kind);
             let id = sk.add_constraint(kind).map_err(err)?;

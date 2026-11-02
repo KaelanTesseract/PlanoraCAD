@@ -817,6 +817,7 @@ fn sides_field_is_a_whole_number_from_three_to_sixty_four() {
         .position(|f| f.kind == F::Sides)
         .expect("Feld Seitenzahl");
     assert_eq!(se.field_value(&sk, F::Sides), Some(6.0), "zuletzt benutzt");
+    let sides_before = se.input.sides;
     for bad in ["2", "65", "6.5", "-3"] {
         se.type_field(i, bad, &scope);
         assert_eq!(
@@ -824,8 +825,13 @@ fn sides_field_is_a_whole_number_from_three_to_sixty_four() {
             Some(t("sketch-field-sides-range").as_str()),
             "{bad}"
         );
-        assert_eq!(se.input.sides, None, "{bad}");
+        assert_eq!(se.input.sides, sides_before, "{bad}");
     }
+    // Ungültiger Text hält die letzte gültige Zahl, die Vorschau springt nicht zurück.
+    se.type_field(i, "8", &scope);
+    se.type_field(i, "99", &scope);
+    assert!(se.input.fields[i].error.is_some());
+    assert_eq!(se.input.sides, Some(8));
     for (good, n) in [("3", 3), ("64", 64), ("8", 8)] {
         se.type_field(i, good, &scope);
         assert_eq!(se.input.fields[i].error, None, "{good}");

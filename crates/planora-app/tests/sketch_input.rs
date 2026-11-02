@@ -577,6 +577,8 @@ fn out_of_range_values_give_a_message() {
         (F::Length, "-5", &positive),
         (F::Angle, "200", &range),
         (F::Angle, "-1", &range),
+        (F::Angle, "0", &range),
+        (F::Angle, "180", &range),
     ] {
         type_in(&mut w, kind, text);
         let f = field(&mut w, kind);
@@ -584,7 +586,7 @@ fn out_of_range_values_give_a_message() {
         assert_eq!(f.error.as_ref(), Some(want), "{text}");
         type_in(&mut w, kind, "");
     }
-    for ok in ["0", "180"] {
+    for ok in ["0.5", "90", "179.5"] {
         type_in(&mut w, F::Angle, ok);
         assert_eq!(field(&mut w, F::Angle).error, None, "{ok}");
     }
@@ -841,10 +843,10 @@ fn minor_axis_equal_to_major_is_allowed() {
 // ---- Sperre gegen Automatik -----------------------------------------------------------------
 
 #[test]
-fn axis_angle_zero_replaces_the_horizontal_automatic() {
+fn a_small_angle_replaces_the_horizontal_automatic() {
     let mut w = rig();
     let start = line_started(&mut w);
-    type_in(&mut w, F::Angle, "0");
+    type_in(&mut w, F::Angle, "0.5");
     let raw = start + v(30.0, 0.5);
     let (se, sf, _) = parts(&mut w);
     assert!(se.resolve_cursor(&sf.sketch, raw, R).autos.is_empty());
@@ -917,8 +919,8 @@ fn pointer_behind_the_ray_keeps_its_distance_as_length() {
 }
 
 #[test]
-fn angles_at_the_ends_of_the_range_commit() {
-    for (text, deg) in [("0", 0.0f64), ("180", 180.0)] {
+fn angles_near_the_ends_of_the_range_commit() {
+    for (text, deg) in [("0.5", 0.5f64), ("179.5", 179.5)] {
         let mut w = rig();
         let start = line_started(&mut w);
         type_in(&mut w, F::Angle, text);
@@ -931,8 +933,8 @@ fn angles_at_the_ends_of_the_range_commit() {
         );
         assert!(!sk.constraint(id).unwrap().driven, "{text}");
         let (a, b) = ends(sk, lines(sk, false)[0]);
-        let want = if deg == 0.0 { 1.0 } else { -1.0 };
-        assert!((b - a).x * want > 0.0 && (b.y - a.y).abs() < 1e-9, "{text}");
+        let want = if deg < 90.0 { 1.0 } else { -1.0 };
+        assert!((b - a).x * want > 0.0, "{text}");
         assert_eq!(sk.clone().solve().status, SolveStatus::Solved, "{text}");
     }
 }

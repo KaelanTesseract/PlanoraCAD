@@ -639,7 +639,6 @@ fn near_the_curves_the_winner_is_not_a_huge_circle() {
             over_1000 += usize::from(r > 1000.0);
         }
     }
-    println!("nah {near}, r >= 100: {over_100}, r > 1000: {over_1000}, größtes r {largest}");
     assert_eq!(near, 5514);
     assert!(smallest < 100.0);
     assert_eq!(over_1000, 0, "größtes r {largest}");

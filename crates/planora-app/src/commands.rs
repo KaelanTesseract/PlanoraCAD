@@ -382,9 +382,9 @@ pub fn observe(ws: &mut Workspace) {
 /// es über Taste, Knopf oder Leertaste gewählt wurde. Nur wählen und mit Esc oder einem anderen
 /// Werkzeug verlassen merkt nichts (wie ein abgebrochenes Fenster); Rückgängig/Wiederholen in
 /// der Skizze zählt nicht als Benutzen. Eine Form merkt sich ihre aktive Art
-/// ([`Action::for_kind`]). Ein Werkzeug ohne Eintrag in der Tabelle (Spline, …) ersetzt das
-/// Gedächtnis nicht, und ebenso wenig wie bisher der Mittelpunkt-Bogen, der Vorgabe-Bogen
-/// (Skizzen 3: Vorgabe wie heute). Das Gedächtnis des Modells bleibt in jedem Fall.
+/// ([`Action::for_kind`]); auch der Mittelpunkt-Bogen wird gemerkt (Skizzen 3). Ein Werkzeug ohne
+/// Eintrag in der Tabelle (Spline, …) ersetzt das Gedächtnis nicht. Das Gedächtnis des Modells
+/// bleibt in jedem Fall.
 fn observe_sketch(ws: &mut Workspace) {
     let tab = ws.active_tab();
     let (Some(se), Some(sk)) = (

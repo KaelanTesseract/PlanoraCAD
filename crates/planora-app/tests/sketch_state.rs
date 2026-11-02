@@ -858,3 +858,30 @@ fn a_sketch_on_a_body_face_is_extruded_on_that_face() {
     assert!(s.document.features().len() < count);
     assert!(s.bodies.is_empty());
 }
+
+#[test]
+fn a_new_angle_dimension_outside_0_to_180_is_refused() {
+    let (mut sk, mut se) = setup();
+    let p: Vec<_> = [(0.0, 0.0), (10.0, 0.0), (0.0, 0.0), (0.0, 10.0)]
+        .iter()
+        .map(|&(x, y)| sk.add_point(x, y).unwrap())
+        .collect();
+    let l1 = sk.add_line(p[0], p[1]).unwrap();
+    let l2 = sk.add_line(p[2], p[3]).unwrap();
+    se.selection = vec![Item::Curve(l1), Item::Curve(l2)];
+    let before = (sk.variables().to_vec(), sk.constraints().count());
+    for deg in [200.0f64, 270.0, 180.0, 0.0] {
+        let err = se
+            .apply(&mut sk, ConstraintAction::Angle, Some(deg.to_radians()))
+            .unwrap_err();
+        assert_eq!(err, planora_i18n::tr!("sketch-angle-range"), "{deg}");
+        assert_eq!(
+            (sk.variables().to_vec(), sk.constraints().count()),
+            before,
+            "{deg}"
+        );
+    }
+    se.apply(&mut sk, ConstraintAction::Angle, Some(150f64.to_radians()))
+        .unwrap();
+    assert_eq!(sk.constraints().count(), 1);
+}

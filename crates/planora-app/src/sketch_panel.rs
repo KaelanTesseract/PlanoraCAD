@@ -492,7 +492,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     }
 }
 
-/// Werkzeugleiste: die zwölf Werkzeuge als Symbolknöpfe untereinander, vor Stutzen, Dehnen und
+/// Werkzeugleiste: die Werkzeuge als Symbolknöpfe untereinander, vor Stutzen, Dehnen und
 /// Brechen (Fusion „Ändern“) eine Trennlinie. Name (mit Taste, soweit
 /// das Werkzeug ein Kürzel hat) und Hinweis stehen im Hinweistext, der Name (für
 /// Bildschirmleser) in der Knopfbeschreibung. Ein Klick wählt wie die Taste
