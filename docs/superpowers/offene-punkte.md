@@ -2143,6 +2143,8 @@ Umgesetzt 2026-11-02 auf dem Zweig `feature/skizzen-zeichenvarianten` (Spec `spe
 
 ## Teilprojekt Skizzen 4
 
+Abgeschlossen 2026-11-03, gemergt in 0fff041. Dennis hat mit den drei bekannten Abweichungen gemergt: Versatzmaß über Formel bewegt die Vorlage, Ketten über 64 Stücke folgen nicht, Rundung über ihrer Grenze kann überraschende Formen geben.
+
 **Handtest 2026-11-03** (1920×1080): Liste an der Leiste, Rundung mit Radiusfeld, zweite Rundung mit „gleich“, Radius ändern über die Liste, Fase gleicher Abstand, Versatz einer gerundeten Kette, Griffe zum Verschieben und Drehen, Kopie mit getipptem Versatz, Vorlage verschieben nimmt die Versatzkopie mit, Maßstab 0,5 mit mitskalierten Maßen, Rückgängig, Menü „Bearbeiten → Ändern“. Kein Fehler in diesen Abläufen. Nicht von Hand geprüft: Versatzmaß ändern, Fase mit Winkel und mit zwei Abständen, Formeln, Griff des Maßstabs, alte Dateien.
 
 **Beobachtungen aus dem Handtest:**
