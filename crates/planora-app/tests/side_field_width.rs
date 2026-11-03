@@ -497,3 +497,50 @@ fn the_move_copy_options_fit_the_sketch_field() {
         });
     }
 }
+
+#[test]
+fn the_scale_options_fit_the_sketch_field() {
+    let size = vec2(1920.0, 1080.0);
+    for lang in [planora_i18n::german(), planora_i18n::english()] {
+        planora_i18n::with_lang(&lang, || {
+            let mut app = PlanoraApp::for_tests(library_ws());
+            let s = &mut app.ws_mut().active_tab_mut().state;
+            let id = s
+                .add_sketch(planora_feature::SketchPlane::Standard(
+                    planora_app::state::StandardPlane::XY,
+                ))
+                .unwrap();
+            s.open_sketch(id).unwrap();
+            let (se, sk) = s.session_sketch_mut().unwrap();
+            se.set_tool(sk, planora_app::sketch_state::Tool::Scale);
+            let c = context(true);
+            let mut texts = Vec::new();
+            for _ in 0..4 {
+                let out = c.run_ui(input(size), |ui| {
+                    shell_panels::show_fields(ui.ctx(), &mut app);
+                    planora_app::sketch_panel::show(
+                        ui.ctx(),
+                        &mut app.ws_mut().active_tab_mut().state,
+                    );
+                });
+                texts = texts_of(&out.shapes);
+                out.drop_without_applying_deltas();
+            }
+            let right = shell_panels::last_layout(&c).unwrap().right;
+            for key in [
+                "sketch-scale-hint",
+                "sketch-move-set-base",
+                "common-ok",
+                "common-cancel",
+            ] {
+                let label = planora_i18n::t(key);
+                let t = texts
+                    .iter()
+                    .find(|t| t.text == label && right.contains(t.rect.center()))
+                    .unwrap_or_else(|| panic!("„{label}“ fehlt im Skizzenfeld"));
+                assert!(t.rect.right() <= right.right() + 0.5, "{t:?} in {right:?}");
+                assert!(t.clip.expand(0.5).contains_rect(t.rect), "{t:?}");
+            }
+        });
+    }
+}

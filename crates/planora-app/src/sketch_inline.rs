@@ -57,7 +57,7 @@ fn field_pos(rect: Rect, anchor: Pos2, width: f32, row: usize, rows: usize) -> P
 
 /// Der aktuelle Wert gerundet, wie ihn das Feld vor dem ersten Zeichen zeigt: Länge wie
 /// [`planora_i18n::fmt_len`] ohne Einheit, Winkel mit einer Stelle, die Seitenzahl ganz.
-fn suggestion(se: &SketchSession, sf: &SketchFeature, kind: FieldKind) -> String {
+pub fn suggestion(se: &SketchSession, sf: &SketchFeature, kind: FieldKind) -> String {
     match se.field_value(&sf.sketch, kind) {
         Some(v) if kind == FieldKind::Sides => format!("{v:.0}"),
         Some(v)
@@ -68,8 +68,22 @@ fn suggestion(se: &SketchSession, sf: &SketchFeature, kind: FieldKind) -> String
         {
             format_number(v.to_degrees(), 1)
         }
+        // Der Faktor hat keine Einheit: Zoll darf ihn nicht umrechnen.
+        Some(v) if kind == FieldKind::ScaleFactor => format_factor(v),
         Some(v) => planora_i18n::fmt_len_num(v),
         None => String::new(),
+    }
+}
+
+/// Der Faktor des Maßstabs als Zahl ohne Einheit, ohne überflüssige Nullen.
+fn format_factor(v: f64) -> String {
+    let text = format_number(v, 4);
+    if text.contains(['.', ',']) {
+        text.trim_end_matches('0')
+            .trim_end_matches(['.', ','])
+            .to_string()
+    } else {
+        text
     }
 }
 

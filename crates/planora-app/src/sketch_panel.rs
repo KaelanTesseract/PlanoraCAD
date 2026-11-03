@@ -784,7 +784,21 @@ fn tool_options(ui: &mut egui::Ui, se: &mut SketchSession, sf: &mut SketchFeatur
         ui.checkbox(&mut se.offset_chain, tr!("sketch-offset-chain"));
     }
     if se.runs_transform() {
-        ui.checkbox(&mut se.transform.copy, tr!("sketch-move-copy"));
+        if se.tool == Tool::Scale {
+            // Der Maßstab kopiert nicht; er sagt, was Eingabe jetzt tut.
+            match se.transform.stage {
+                TransformStage::Picking if !se.selection.is_empty() => {}
+                TransformStage::Picking => {
+                    ui.label(RichText::new(tr!("sketch-scale-hint")).small().weak());
+                }
+                TransformStage::SetBase => {
+                    ui.label(RichText::new(tr!("sketch-scale-base")).small().weak());
+                }
+                TransformStage::Active => {}
+            }
+        } else {
+            ui.checkbox(&mut se.transform.copy, tr!("sketch-move-copy"));
+        }
         let active = se.transform.stage == TransformStage::Active;
         if ui
             .add_enabled(active, egui::Button::new(tr!("sketch-move-set-base")))

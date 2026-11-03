@@ -185,6 +185,12 @@ pub fn unwrapped_angle(previous: f64, raw: f64) -> f64 {
     previous + d.sin().atan2(d.cos())
 }
 
+/// Der Text eines Maßes mit Formel nach dem Skalieren um `k`: `(alt) * k`, `k` in kürzester
+/// Schreibweise mit Punkt als Dezimaltrenner. So stimmt der Wert, und die Parameter bleiben am Maß.
+pub(crate) fn scaled_formula(text: &str, k: f64) -> String {
+    format!("({}) * {k}", text.trim())
+}
+
 /// Warum die Bewegung nicht geht, als Meldung.
 fn block_message(block: TransformBlock) -> Msg {
     match block {
@@ -211,10 +217,9 @@ fn hull_center(sk: &Sketch, curves: &[CurveId], points: &[PointId]) -> Option<DV
 }
 
 impl SketchSession {
-    /// Geht die Stufenfolge von Verschieben/Kopieren für dieses Werkzeug? Der Maßstab kommt mit
-    /// Task 10 dazu.
+    /// Geht die Stufenfolge von Verschieben/Kopieren und Maßstab für dieses Werkzeug?
     pub fn runs_transform(&self) -> bool {
-        self.tool == Tool::MoveCopy
+        matches!(self.tool, Tool::MoveCopy | Tool::Scale)
     }
 
     /// Wird gerade gewählt? Dann gilt der Rahmen wie im Auswahlwerkzeug.
@@ -266,15 +271,48 @@ impl SketchSession {
         }
     }
 
-    /// Mit Vorauswahl aktiv, Bezugspunkt in der Mitte der Hülle; ohne bleibt die Stufe beim Wählen.
-    /// Der Haken „Kopie erstellen“ bleibt, wie er ist.
+    /// Mit Vorauswahl geht es weiter, Bezugspunkt in der Mitte der Hülle; ohne bleibt die Stufe beim
+    /// Wählen. Verschieben/Kopieren ist gleich aktiv, der Maßstab wartet auf den Bezugspunkt. Der
+    /// Haken „Kopie erstellen“ bleibt, wie er ist.
     pub fn begin_transform(&mut self, sk: &Sketch) {
         let set = self.selected_set(sk);
+        self.start_transform(sk, set, false);
+    }
+
+    /// Maßstab ohne Auswahl: die ganze Skizze ohne feste Geometrie, dann der Bezugspunkt. Leer lässt
+    /// die Stufe, wie sie ist.
+    fn begin_whole(&mut self, sk: &Sketch) {
+        let whole = sk.whole_sketch_set();
+        let set = TransformSet {
+            curves: whole.curves,
+            points: whole.points,
+        };
+        self.start_transform(sk, set, true);
+    }
+
+    /// Eingabe beim Wählen: mit Auswahl weiter, beim Maßstab ohne Auswahl die ganze Skizze; sonst die
+    /// Meldung, dass nichts gewählt ist.
+    pub(crate) fn leave_picking(&mut self, sk: &Sketch) {
+        self.begin_transform(sk);
+        if self.transform.stage == TransformStage::Picking && self.tool == Tool::Scale {
+            self.begin_whole(sk);
+        }
+        if self.transform.stage == TransformStage::Picking {
+            self.message = Some(crate::msg!("sketch-nothing-selected"));
+        }
+    }
+
+    fn start_transform(&mut self, sk: &Sketch, set: TransformSet, whole: bool) {
         let Some(center) = hull_center(sk, &set.curves, &set.points) else {
             self.transform.stage = TransformStage::Picking;
             return;
         };
-        self.transform.stage = TransformStage::Active;
+        self.transform.stage = if self.tool == Tool::Scale {
+            TransformStage::SetBase
+        } else {
+            TransformStage::Active
+        };
+        self.transform.whole = whole;
         self.transform.set = set;
         self.transform.base = Some(center);
         self.transform.offset = DVec2::ZERO;
@@ -437,16 +475,21 @@ impl SketchSession {
             self.message = Some(Msg::Raw(e.clone()));
             return Err(e);
         }
-        let copied = self.atomic(&mut sf.sketch, |se, sk, prior| {
+        let scale = self.tool == Tool::Scale;
+        let (copied, scaled) = self.atomic(&mut sf.sketch, |se, sk, prior| {
             let (Some(now), Some(set)) = (se.transform_now(), se.sketch_set(sk)) else {
                 return Err(crate::msg!("sketch-nothing-selected"));
             };
             let mut notes = Vec::new();
             let mut copied = None;
+            let mut scaled = Vec::new();
             if se.transform.copy {
                 copied = Some(sk.copy_transformed(&set, &now).map_err(err)?);
             } else {
                 let report = sk.apply_transform(&set, &now).map_err(block_message)?;
+                if scale {
+                    scaled = report.scaled.iter().map(|&id| (id, now.factor)).collect();
+                }
                 if !report.dropped.is_empty() {
                     notes.push(crate::msg!("sketch-move-dropped", n = report.dropped.len()));
                 }
@@ -462,10 +505,20 @@ impl SketchSession {
                 0 | 1 => notes.pop(),
                 _ => Some(Msg::Join(notes)),
             };
-            se.edit_label = Some(crate::msg!("undo-move-copy"));
+            se.edit_label = Some(if scale {
+                crate::msg!("undo-scale")
+            } else {
+                crate::msg!("undo-move-copy")
+            });
             se.modify_edits = (se.modify_edits.0 + 1, Some(se.tool));
-            Ok(copied)
+            Ok((copied, scaled))
         })?;
+        // Eine Formel am Maß bleibt eine Formel: Sie nimmt den Faktor mit.
+        for (id, k) in scaled {
+            if let Some(text) = sf.formulas.get_mut(&id) {
+                *text = scaled_formula(text, k);
+            }
+        }
         if let Some(map) = &copied {
             self.take_copies(sf, map);
         }
@@ -490,10 +543,15 @@ impl SketchSession {
             .collect();
     }
 
-    /// Die gewählte Menge samt mitgezogener Hilfsgeometrie; `None` ohne Menge.
+    /// Die gewählte Menge samt mitgezogener Hilfsgeometrie (beim Maßstab ohne Auswahl die ganze
+    /// Skizze); `None` ohne Menge.
     fn sketch_set(&self, sk: &Sketch) -> Option<SketchTransformSet> {
         let t = &self.transform.set;
-        let set = sk.transform_set(&t.curves, &t.points);
+        let set = if self.transform.whole {
+            sk.whole_sketch_set()
+        } else {
+            sk.transform_set(&t.curves, &t.points)
+        };
         (!set.points.is_empty()).then_some(set)
     }
 
@@ -542,5 +600,19 @@ impl SketchSession {
             FieldKind::ScaleFactor => Some(t.factor),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scaled_formula;
+
+    #[test]
+    fn the_formula_gets_old_times_k_with_the_shortest_number_and_a_point() {
+        assert_eq!(scaled_formula("Breite / 2", 3.0), "(Breite / 2) * 3");
+        assert_eq!(scaled_formula(" a ", 0.5), "(a) * 0.5");
+        assert_eq!(scaled_formula("1 in", 12.25), "(1 in) * 12.25");
+        assert_eq!(scaled_formula("x", 1e-7), "(x) * 0.0000001");
+        assert_eq!(scaled_formula("(x) * 3", 2.0), "((x) * 3) * 2");
     }
 }

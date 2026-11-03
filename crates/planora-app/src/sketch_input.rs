@@ -383,6 +383,7 @@ impl SketchSession {
             Tool::MoveCopy if self.transform.stage == TransformStage::Active => {
                 &[F::MoveX, F::MoveY, F::MoveAngle]
             }
+            Tool::Scale if self.transform.stage == TransformStage::Active => &[F::ScaleFactor],
             Tool::Line if pts > 0 => &[F::Length, F::Angle],
             Tool::Rectangle if pos > 0 => &[F::Width, F::Height],
             Tool::Circle if pts > 0 => &[F::Diameter],

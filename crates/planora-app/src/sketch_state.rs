@@ -768,13 +768,12 @@ impl SketchSession {
                 Tool::Polygon | Tool::Slot | Tool::ProjectEdge => Ok(()),
                 Tool::Trim | Tool::Extend | Tool::Break => se.click_modify(sk, at, radius, prior),
                 Tool::Offset => se.click_offset(sk, &cur, prior),
-                Tool::MoveCopy => {
+                Tool::MoveCopy | Tool::Scale => {
                     se.click_transform(sk, &cur);
                     Ok(())
                 }
-                // Stümpfe: Rundung und Fase laufen über ihre Arten (`click_kind`), den Maßstab füllt
-                // eine spätere Aufgabe.
-                Tool::Fillet | Tool::Scale => Ok(()),
+                // Rundung und Fase laufen über ihre Arten (`click_kind`).
+                Tool::Fillet => Ok(()),
             }
         })
     }
@@ -1297,12 +1296,7 @@ impl SketchSession {
         if self.runs_transform() {
             self.message = None;
             match self.transform.stage {
-                TransformStage::Picking => {
-                    self.begin_transform(sk);
-                    if self.transform.stage == TransformStage::Picking {
-                        self.message = Some(crate::msg!("sketch-nothing-selected"));
-                    }
-                }
+                TransformStage::Picking => self.leave_picking(sk),
                 TransformStage::SetBase => self.transform.stage = TransformStage::Active,
                 TransformStage::Active => {}
             }
