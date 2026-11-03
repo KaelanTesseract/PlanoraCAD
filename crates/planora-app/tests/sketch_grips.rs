@@ -492,38 +492,255 @@ fn dragging_beside_the_grips_does_nothing_while_active() {
     assert_eq!(revision(&s), rev);
 }
 
-#[test]
-fn while_picking_a_box_selects_and_the_grips_come_only_afterwards() {
+/// Quadrat ohne Vorauswahl, Werkzeug aktiv, per Rahmen gewählt: Griffe stehen, die Stufe ist noch
+/// die Wahl.
+fn boxed_square(ctx: &egui::Context) -> AppState {
     let (mut s, _) = square();
-    let ctx = context();
     {
         let (se, sk) = s.session_sketch_mut().unwrap();
         se.selection.clear();
         se.set_tool(sk, Tool::MoveCopy);
         assert_eq!(se.transform.stage, TransformStage::Picking);
     }
-    frame(&ctx, &mut s, vec![]);
+    frame(ctx, &mut s, vec![]);
     assert!(grips(&s).is_none(), "ohne Menge keine Griffe");
     let from = screen(&s, v(-20.0, 20.0));
     let to = screen(&s, v(20.0, -20.0));
-    press_and_move(&ctx, &mut s, from, to, 6);
+    press_and_move(ctx, &mut s, from, to, 6);
     assert!(s.sketch_session.as_ref().unwrap().box_select.is_some());
-    assert!(grips(&s).is_none());
-    release(&ctx, &mut s, to);
+    assert!(grips(&s).is_none(), "während des Rahmens noch nicht");
+    release(ctx, &mut s, to);
+    s
+}
+
+#[test]
+fn while_picking_the_grips_come_as_soon_as_something_is_selected() {
+    let ctx = context();
+    let mut s = boxed_square(&ctx);
     {
         let se = s.sketch_session.as_ref().unwrap();
         assert_eq!(se.selection.len(), 4, "der Rahmen wählt");
         assert_eq!(se.transform.stage, TransformStage::Picking);
+        let base = se.transform.base.unwrap();
+        assert!(base.distance(v(0.0, 0.0)) < 1e-9, "Mitte der Hülle: {base}");
+        assert!(se.transform_preview(s.session_sketch().unwrap()).is_none());
     }
-    assert!(grips(&s).is_none());
+    let l = grips(&s).expect("Griffe gleich nach dem Rahmen");
+    assert!((l.center - screen(&s, DVec2::ZERO)).length() < 1e-3);
     frame(&ctx, &mut s, vec![key(Key::Enter)]);
     frame(&ctx, &mut s, vec![]);
     let se = s.sketch_session.as_ref().unwrap();
     assert_eq!(se.transform.stage, TransformStage::Active);
     assert_eq!(se.transform.set.curves.len(), 4);
-    let base = se.transform.base.unwrap();
-    assert!(base.distance(v(0.0, 0.0)) < 1e-9, "Mitte der Hülle: {base}");
     assert!(grips(&s).is_some());
+}
+
+#[test]
+fn a_grip_right_after_the_box_works_and_only_a_finished_one_ends_the_choice() {
+    let ctx = context();
+    let mut s = boxed_square(&ctx);
+    let (rev, center) = (revision(&s), grips(&s).unwrap().center);
+    // Abgebrochen: Die Wahl bleibt offen.
+    let to = center + vec2(100.0, 0.0);
+    press_and_move(&ctx, &mut s, center, to, 5);
+    {
+        let se = s.sketch_session.as_ref().unwrap();
+        assert_eq!(se.grip_drag.map(|d| d.grip), Some(Grip::Free));
+        assert!(se.box_select.is_none(), "der Griff geht vor dem Rahmen");
+        assert!(se.transform_preview(s.session_sketch().unwrap()).is_some());
+    }
+    frame(
+        &ctx,
+        &mut s,
+        vec![pointer(to, PointerButton::Secondary, true, false)],
+    );
+    frame(
+        &ctx,
+        &mut s,
+        vec![
+            left(to, false),
+            pointer(to, PointerButton::Secondary, false, false),
+        ],
+    );
+    frame(&ctx, &mut s, vec![]);
+    {
+        let se = s.sketch_session.as_ref().unwrap();
+        assert_eq!(se.transform.stage, TransformStage::Picking);
+        assert_eq!(se.transform.offset, DVec2::ZERO);
+    }
+    // Zu Ende gezogen: weiter mit den Feldern.
+    press_and_move(&ctx, &mut s, center, to, 5);
+    release(&ctx, &mut s, to);
+    let se = s.sketch_session.as_ref().unwrap();
+    assert_eq!(se.transform.stage, TransformStage::Active);
+    assert!(se.transform.offset.length() > 0.0);
+    assert_eq!(se.input.fields.len(), 3);
+    assert_eq!(revision(&s), rev);
+}
+
+#[test]
+fn a_click_on_a_grip_does_not_toggle_and_shift_adds_to_the_selection() {
+    let (mut s, ids) = square();
+    let ctx = context();
+    {
+        let (se, sk) = s.session_sketch_mut().unwrap();
+        se.selection.clear();
+        se.set_tool(sk, Tool::MoveCopy);
+    }
+    frame(&ctx, &mut s, vec![]);
+    let click = |ctx: &egui::Context, s: &mut AppState, p: Pos2, shift: bool| {
+        frame_with(ctx, s, vec![Event::PointerMoved(p)], shift);
+        frame_with(
+            ctx,
+            s,
+            vec![pointer(p, PointerButton::Primary, true, shift)],
+            shift,
+        );
+        frame_with(
+            ctx,
+            s,
+            vec![pointer(p, PointerButton::Primary, false, shift)],
+            shift,
+        );
+    };
+    // Abstand zum vorigen Klick, sonst wäre es für egui ein Doppelklick.
+    let pause = |ctx: &egui::Context, s: &mut AppState| {
+        for _ in 0..40 {
+            frame(ctx, s, vec![]);
+        }
+    };
+    let side = screen(&s, v(0.0, -5.0));
+    click(&ctx, &mut s, side, false);
+    let one = s.sketch_session.as_ref().unwrap().selection.clone();
+    assert_eq!(one.len(), 1);
+    assert!(matches!(one[0], Item::Curve(c) if c == ids[0]));
+    let l = grips(&s).expect("Griffe nach dem ersten Klick");
+    assert!((l.center - side).length() < 1e-3, "Mitte der Linie");
+    // Derselbe Fleck liegt jetzt auf dem Griff: kein Umschalten.
+    pause(&ctx, &mut s);
+    click(&ctx, &mut s, side, false);
+    assert_eq!(s.sketch_session.as_ref().unwrap().selection, one);
+    // Umschalt mit einer zweiten Kurve abseits der Griffe ergänzt; der Griff rückt nach.
+    pause(&ctx, &mut s);
+    let other = screen(&s, v(0.0, 5.0));
+    assert!(sketch_grips_hit(&s, other).is_none());
+    click(&ctx, &mut s, other, true);
+    let se = s.sketch_session.as_ref().unwrap();
+    assert_eq!(se.selection.len(), 2);
+    assert!(se.transform.base.unwrap().distance(v(0.0, 0.0)) < 1e-9);
+    assert_eq!(se.transform.set.curves.len(), 2);
+    // Umschalt+Rahmen ergänzt ebenso.
+    frame(&ctx, &mut s, vec![]);
+    let (from, to) = (screen(&s, v(-20.0, 20.0)), screen(&s, v(20.0, -20.0)));
+    frame_with(&ctx, &mut s, vec![Event::PointerMoved(from)], true);
+    frame_with(
+        &ctx,
+        &mut s,
+        vec![pointer(from, PointerButton::Primary, true, true)],
+        true,
+    );
+    frame_with(&ctx, &mut s, vec![Event::PointerMoved(to)], true);
+    frame_with(
+        &ctx,
+        &mut s,
+        vec![pointer(to, PointerButton::Primary, false, true)],
+        true,
+    );
+    assert_eq!(s.sketch_session.as_ref().unwrap().selection.len(), 4);
+}
+
+fn sketch_grips_hit(s: &AppState, p: Pos2) -> Option<Grip> {
+    hit(&grips(s)?, p)
+}
+
+#[test]
+fn enter_and_delete_wait_for_the_end_of_a_grip_or_a_box() {
+    // Griff.
+    let (mut s, _) = active_square();
+    let ctx = context();
+    frame(&ctx, &mut s, vec![]);
+    let (rev, undo) = (revision(&s), undo_len(&s));
+    let l = grips(&s).unwrap();
+    let to = l.center + vec2(100.0, 0.0);
+    press_and_move(&ctx, &mut s, l.center, to, 5);
+    frame(&ctx, &mut s, vec![key(Key::Enter)]);
+    frame(&ctx, &mut s, vec![key(Key::Delete)]);
+    {
+        let se = s.sketch_session.as_ref().unwrap();
+        assert_eq!(se.tool, Tool::MoveCopy, "keine halbe Bewegung");
+        assert!(se.grip_drag.is_some());
+        assert_eq!(s.session_sketch().unwrap().curves().count(), 4);
+    }
+    assert_eq!(revision(&s), rev);
+    assert_eq!(undo_len(&s), undo);
+    release(&ctx, &mut s, to);
+
+    // Rahmen beim Wählen, mit einer Wahl davor.
+    let (mut s, ids) = square();
+    {
+        let (se, sk) = s.session_sketch_mut().unwrap();
+        se.selection.clear();
+        se.set_tool(sk, Tool::MoveCopy);
+        se.click(sk, v(0.0, -5.0), 0.5, false).unwrap();
+    }
+    frame(&ctx, &mut s, vec![]);
+    let (from, to) = (screen(&s, v(-20.0, 20.0)), screen(&s, v(20.0, -20.0)));
+    press_and_move(&ctx, &mut s, from, to, 5);
+    assert!(s.sketch_session.as_ref().unwrap().box_select.is_some());
+    frame(&ctx, &mut s, vec![key(Key::Enter)]);
+    frame(&ctx, &mut s, vec![key(Key::Delete)]);
+    {
+        let se = s.sketch_session.as_ref().unwrap();
+        assert_eq!(
+            se.transform.stage,
+            TransformStage::Picking,
+            "die Menge steht nicht fest"
+        );
+        assert_eq!(se.selection, vec![Item::Curve(ids[0])]);
+        assert_eq!(s.session_sketch().unwrap().curves().count(), 4);
+    }
+    release(&ctx, &mut s, to);
+    let se = s.sketch_session.as_ref().unwrap();
+    assert_eq!(se.selection.len(), 4);
+    assert_eq!(se.transform.set.curves.len(), 4);
+
+    // Danach gilt die Eingabe wieder.
+    frame(&ctx, &mut s, vec![key(Key::Enter)]);
+    frame(&ctx, &mut s, vec![]);
+    assert_eq!(
+        s.sketch_session.as_ref().unwrap().transform.stage,
+        TransformStage::Active
+    );
+}
+
+#[test]
+fn esc_gives_back_the_selection_from_before_the_command() {
+    let (mut s, ids) = square();
+    let ctx = context();
+    {
+        let (se, sk) = s.session_sketch_mut().unwrap();
+        se.selection.clear();
+        se.set_tool(sk, Tool::MoveCopy);
+    }
+    frame(&ctx, &mut s, vec![]);
+    let (from, to) = (screen(&s, v(-20.0, 20.0)), screen(&s, v(20.0, -20.0)));
+    press_and_move(&ctx, &mut s, from, to, 5);
+    release(&ctx, &mut s, to);
+    assert_eq!(s.sketch_session.as_ref().unwrap().selection.len(), 4);
+    frame(&ctx, &mut s, vec![key(Key::Escape)]);
+    frame(&ctx, &mut s, vec![]);
+    {
+        let se = s.sketch_session.as_ref().unwrap();
+        assert_eq!(se.tool, Tool::Select);
+        assert!(se.selection.is_empty(), "die Wahl im Befehl bleibt nicht");
+    }
+    // Mit Vorauswahl: Sie bleibt die Vorauswahl, auch nach Enter und mehr Wahl dazwischen nicht anders.
+    let (se, sk) = s.session_sketch_mut().unwrap();
+    se.selection = vec![Item::Curve(ids[1])];
+    se.set_tool(sk, Tool::MoveCopy);
+    se.selection = vec![Item::Curve(ids[2])];
+    se.cancel(sk);
+    assert_eq!(se.selection, vec![Item::Curve(ids[1])]);
 }
 
 #[test]
@@ -1206,6 +1423,37 @@ fn esc_with_the_field_focused_takes_back_only_the_grip() {
         Tool::MoveCopy
     );
     rig.frame(vec![key(Key::Escape)]);
+    rig.settle();
+    assert_eq!(rig.st().sketch_session.as_ref().unwrap().tool, Tool::Select);
+}
+
+/// Das Feld hat die Tastatur: Eingabe im Griffzug schließt auch über das Feld nicht ab.
+#[test]
+fn enter_with_the_field_focused_waits_for_the_end_of_the_grip() {
+    let mut rig = Rig::new();
+    let center = rig.pixel_of(DVec2::ZERO);
+    let to = center + vec2(100.0, 0.0);
+    rig.drag_from(center, to);
+    assert!(
+        rig.st()
+            .sketch_session
+            .as_ref()
+            .unwrap()
+            .grip_drag
+            .is_some()
+    );
+    let rev = rig.st().session_sketch().unwrap().revision();
+    rig.frame(vec![key(Key::Enter)]);
+    rig.frame(vec![]);
+    {
+        let st = rig.st();
+        let se = st.sketch_session.as_ref().unwrap();
+        assert_eq!(se.tool, Tool::MoveCopy);
+        assert!(se.grip_drag.is_some());
+        assert_eq!(st.session_sketch().unwrap().revision(), rev);
+    }
+    rig.release(to);
+    rig.frame(vec![key(Key::Enter)]);
     rig.settle();
     assert_eq!(rig.st().sketch_session.as_ref().unwrap().tool, Tool::Select);
 }

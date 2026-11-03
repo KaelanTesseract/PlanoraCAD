@@ -2325,3 +2325,48 @@ fn a_copy_of_a_visible_selection_takes_the_helpers_along() {
     let r = assert_still(&s);
     assert!(r.redundant.is_empty(), "{r:?}");
 }
+
+#[test]
+fn the_report_counts_the_points_split_from_outside_curves() {
+    let mut s = sketch();
+    let r = s.add_rectangle(v(0.0, 0.0), v(20.0, 10.0)).unwrap();
+    let one = s.transform_set(&[r.lines[0]], &[]);
+    let report = s
+        .clone()
+        .apply_transform(&one, &moved(v(0.0, -7.0)))
+        .unwrap();
+    assert_eq!(report.split, 2);
+    let all = s.transform_set(&r.lines, &[]);
+    let report = s.apply_transform(&all, &moved(v(0.0, -7.0))).unwrap();
+    assert_eq!(report.split, 0);
+}
+
+/// Unter der Grenze, bis zu der eine Bindung als erfüllt gilt, bewirken Winkel und Weg nichts.
+#[test]
+fn a_turn_or_shift_below_the_settle_limit_counts_as_none() {
+    let mut s = sketch();
+    let a = pt(&mut s, 0.0, 0.0);
+    let b = pt(&mut s, 26.0, 0.0);
+    let line = s.add_line(a, b).unwrap();
+    let set = s.transform_set(&[line], &[]);
+    let tiny = Similarity {
+        angle: 1e-7,
+        ..moved(v(50.0, 0.0))
+    };
+    let mut t = s.clone();
+    t.apply_transform(&set, &tiny).unwrap();
+    assert_eq!(at(&t, a), v(50.0, 0.0));
+    assert_eq!(at(&t, b), v(76.0, 0.0));
+    let mut t = s.clone();
+    let map = t.copy_transformed(&set, &tiny).unwrap();
+    assert_eq!(at(&t, map.points[&b]), v(76.0, 0.0));
+    for offset in [v(5e-6, 0.0), v(0.0, -9e-6)] {
+        assert_eq!(
+            s.check_transform(&set, &moved(offset)),
+            Err(TransformBlock::NothingToDo)
+        );
+    }
+    let mut t = s.clone();
+    t.apply_transform(&set, &moved(v(2e-5, 0.0))).unwrap();
+    assert_eq!(at(&t, a), v(2e-5, 0.0));
+}

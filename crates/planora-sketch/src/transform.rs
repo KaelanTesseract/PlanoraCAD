@@ -98,6 +98,9 @@ pub struct TransformReport {
     pub dropped: Vec<ConstraintId>,
     /// Längenmaße, deren Wert mit dem Maßstab multipliziert wurde.
     pub scaled: Vec<ConstraintId>,
+    /// So viele bewegte Punkte hat eine fremde Kurve mitbenutzt und sind nun getrennt: Dort ist eine
+    /// Ecke aufgegangen.
+    pub split: usize,
 }
 
 /// Original und Kopie der Objekte aus [`Sketch::copy_transformed`].
@@ -658,6 +661,7 @@ impl Sketch {
         if set.points.is_empty() {
             return Err(SketchError::InvalidInput(tr!("sketch-nothing-selected")));
         }
+        let s = &self.settled(&set, s);
         self.atomically(|sk| {
             let mut points = HashMap::new();
             for &p in &set.points {
@@ -788,6 +792,40 @@ impl Sketch {
         Ok(map)
     }
 
+    /// Die Ähnlichkeit ohne Anteile, die nichts bewirken dürfen. Eine Abhängigkeit gilt bis
+    /// `SETTLE_FACTOR` mal der Toleranz als erfüllt und bleibt; das Lösen danach zöge die Punkte um
+    /// diesen Rest zurück, und das Ergebnis wiche von der Vorschau ab. Darum zählt ein Winkel unter
+    /// dieser Grenze als null, gemessen als Winkel und als Weg des fernsten Punkts (eine Ellipse dreht
+    /// auch um ihre Mitte, darum zählt ihre große Halbachse dazu), und eine Verschiebung ebenso.
+    fn settled(&self, set: &TransformSet, s: &Similarity) -> Similarity {
+        let limit = SETTLE_FACTOR * self.tol.linear;
+        let lever = set
+            .points
+            .iter()
+            .map(|&p| self.pos(p).distance(s.base))
+            .fold(0.0, f64::max);
+        let axis = set
+            .curves
+            .iter()
+            .map(|&c| match self.curves[c].kind {
+                CurveKind::Ellipse { ax, ay, .. } | CurveKind::EllipticArc { ax, ay, .. } => {
+                    DVec2::new(self.vars[ax], self.vars[ay]).length()
+                }
+                _ => 0.0,
+            })
+            .fold(0.0, f64::max);
+        let lever = lever + axis;
+        let turn = wrap_pi(s.angle).abs();
+        let mut out = *s;
+        if turn <= SETTLE_FACTOR * self.tol.angular || turn * lever * s.factor <= limit {
+            out.angle = 0.0;
+        }
+        if s.offset.length() <= limit {
+            out.offset = DVec2::ZERO;
+        }
+        out
+    }
+
     /// Die eine Rechnung hinter Prüfung, Vorschau und Ergebnis: die bewegte Skizze als Kopie.
     fn transformed(
         &self,
@@ -798,6 +836,7 @@ impl Sketch {
             return Err(TransformBlock::Degenerate);
         }
         let set = self.transform_set(&set.curves, &set.points);
+        let s = &self.settled(&set, s);
         if set.points.is_empty() || s.is_identity(self.tol.linear) {
             return Err(TransformBlock::NothingToDo);
         }
@@ -856,9 +895,10 @@ impl Sketch {
             .collect();
 
         let mut out = self.clone();
-        out.split_from_outsiders(&scope)?;
+        let split = out.split_from_outsiders(&scope)?;
         out.write_positions(&set.curves, &targets, s)?;
-        let report = out.settle_after_transform(&scope, &held, &held_before, &severed, s)?;
+        let mut report = out.settle_after_transform(&scope, &held, &held_before, &severed, s)?;
+        report.split = split;
         if set.curves.iter().any(|&c| out.collapsed(c)) {
             return Err(TransformBlock::Degenerate);
         }
@@ -868,8 +908,8 @@ impl Sketch {
 
     /// Fremde Kurven an bewegten Punkten oder geteilten Halbachsen bekommen eigene an der alten
     /// Lage. Eine Abhängigkeit, die an einem getrennten Punkt und sonst nur an Fremdem hängt, gehört
-    /// zur fremden Seite und wandert mit auf den neuen Punkt.
-    fn split_from_outsiders(&mut self, scope: &Scope) -> Result<(), TransformBlock> {
+    /// zur fremden Seite und wandert mit auf den neuen Punkt. Liefert die Zahl der getrennten Punkte.
+    fn split_from_outsiders(&mut self, scope: &Scope) -> Result<usize, TransformBlock> {
         let mut shared_vars = HashSet::new();
         for &c in &scope.curves {
             shared_vars.extend(size_vars(&self.curves[c].kind));
@@ -906,7 +946,7 @@ impl Sketch {
             }
         }
         if new_points.is_empty() {
-            return Ok(());
+            return Ok(0);
         }
         let rehung: Vec<(ConstraintId, ConstraintKind)> = self
             .constraints()
@@ -926,7 +966,7 @@ impl Sketch {
         for (id, kind) in rehung {
             self.constraints[id].kind = kind;
         }
-        Ok(())
+        Ok(new_points.len())
     }
 
     /// Schreibt die neuen Lagen, Radien und Halbachsen. Geteilte Halbachsen nur einmal.
@@ -983,6 +1023,7 @@ impl Sketch {
         let mut report = TransformReport {
             dropped: Vec::new(),
             scaled: Vec::new(),
+            split: 0,
         };
         let touched: Vec<ConstraintId> = self
             .constraints()

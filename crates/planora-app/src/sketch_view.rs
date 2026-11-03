@@ -824,6 +824,14 @@ fn box_can_start(
     let Some(map) = mapper(rect, state) else {
         return false;
     };
+    // Ein Griff geht vor dem Rahmen.
+    if let (Some(l), Some(p)) = (
+        grip_layout(state, rect),
+        ui.input(|i| i.pointer.press_origin()),
+    ) && sketch_grips::hit(&l, p).is_some()
+    {
+        return false;
+    }
     ui.input(|i| i.pointer.press_origin()).is_some_and(|p| {
         match (map.to_sketch(p), map.radius_at(p)) {
             (Some(at), Some(radius)) => se.is_free_at(sk, at, radius),
@@ -982,6 +990,12 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         None
     };
 
+    // Ein Klick auf einen Griff schaltet beim Wählen nichts in der Auswahl.
+    let click_on_grip = response.clicked_by(PointerButton::Primary)
+        && pointer
+            .zip(grip_layout(state, rect))
+            .is_some_and(|(p, l)| sketch_grips::hit(&l, p).is_some());
+
     // Getippte Werte werden beim Klick zu Maßen; die Formeln darin brauchen die Parameter.
     let commit_scope = (response.clicked_by(PointerButton::Primary)
         && state
@@ -1122,6 +1136,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             let _ = se.finish_tool(&mut sf.sketch);
         }
     } else if response.clicked_by(PointerButton::Primary)
+        && !click_on_grip
         && let Some(at) = at
     {
         if se.tool == Tool::ProjectEdge {
@@ -1158,14 +1173,16 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             }
             se.cancel(&mut sf.sketch);
         }
-        if enter && !flyout {
+        // Mitten in einem Griff oder Rahmen gelten Eingabe und Entf nicht.
+        let gesture = se.in_gesture();
+        if enter && !flyout && !gesture {
             let _ = if se.runs_transform() {
                 se.confirm_transform(sf)
             } else {
                 se.finish_tool(&mut sf.sketch)
             };
         }
-        if delete {
+        if delete && !gesture {
             se.delete_selection(&mut sf.sketch);
         }
     }
@@ -1176,6 +1193,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     // Aufgelöster Zeiger für Zeichen und Vorschau (nach den Änderungen dieses Bilds).
     let raw = cursor_raw(se, at);
     se.update_cursor(&sf.sketch, raw, radius);
+    se.update_transform_block(&sf.sketch);
     let tool = se.tool;
 
     // Körperkante kopieren: Kante in der 3D-Szene wählen.

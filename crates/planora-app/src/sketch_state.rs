@@ -107,6 +107,10 @@ pub struct TransformState {
     pub factor: f64,
     pub copy: bool,
     pub whole: bool,
+    /// Die Auswahl vor dem Befehl: Abbrechen stellt sie wieder her.
+    pub selection_before: Vec<Item>,
+    /// `message` sagt gerade, dass die Bewegung nicht geht ([`SketchSession::update_transform_block`]).
+    pub blocked_note: bool,
 }
 
 impl Default for TransformState {
@@ -120,6 +124,8 @@ impl Default for TransformState {
             factor: 1.0,
             copy: false,
             whole: false,
+            selection_before: Vec::new(),
+            blocked_note: false,
         }
     }
 }
@@ -539,6 +545,9 @@ impl SketchSession {
         self.trim_drag = None;
         self.hover_preview = None;
         self.fillet_run = None;
+        if self.transform.blocked_note {
+            self.message = None;
+        }
         self.transform = TransformState::default();
         self.grip_drag = None;
         self.tool = tool;
@@ -558,6 +567,7 @@ impl SketchSession {
         }
         // Verschieben/Kopieren: Eine Vorauswahl ist schon die Menge.
         if self.runs_transform() {
+            self.transform.selection_before = self.selection.clone();
             self.begin_transform(sk);
         }
     }
@@ -1326,7 +1336,8 @@ impl SketchSession {
     /// laufendes Ziehen wird wie mit [`end_drag`](Self::end_drag) beendet (der Punkt bleibt,
     /// wo er ist). Stutzen, Dehnen und Brechen enden ganz (zurück zur Auswahl). Ein laufender
     /// Rahmen fällt allein weg, die alte Auswahl bleibt; ebenso ein laufender Zug auf dem letzten
-    /// Punkt, der Linienzug bleibt, und ein laufender Griff, das Werkzeug bleibt.
+    /// Punkt, der Linienzug bleibt, und ein laufender Griff, das Werkzeug bleibt. Verschieben/Kopieren
+    /// hinterlässt auch in der Auswahl nichts.
     pub fn cancel(&mut self, sk: &mut Sketch) {
         if self.grip_drag.is_some() {
             self.abort_grip();
@@ -1339,6 +1350,10 @@ impl SketchSession {
         self.clear_pending();
         if self.tool == Tool::Select {
             self.selection.clear();
+        }
+        if self.runs_transform() {
+            self.selection = self.transform.selection_before.clone();
+            self.forget_removed(sk);
         }
         // Stutzen, Dehnen und Brechen haben nichts Offenes: Esc beendet sie wie in Fusion (auch
         // mitten im Ziehen; was schon gestutzt ist, bleibt).
@@ -1436,12 +1451,14 @@ impl SketchSession {
             }
         }
         self.take_selection(found, extend);
+        self.sync_picked(sk);
     }
 
     /// Wählt die zusammenhängende Kette um `c` ([`Sketch::connected_chain`]); `extend` ergänzt.
     pub fn select_chain(&mut self, sk: &Sketch, c: CurveId, extend: bool) {
         let chain = sk.connected_chain(c);
         self.take_selection(chain.into_iter().map(Item::Curve).collect(), extend);
+        self.sync_picked(sk);
     }
 
     /// Setzt die Auswahl auf `items` oder ergänzt sie, ohne etwas doppelt aufzunehmen.

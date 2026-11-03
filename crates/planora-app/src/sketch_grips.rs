@@ -223,16 +223,25 @@ impl SketchSession {
             && self.transform.stage == TransformStage::Picking
     }
 
-    /// Sind Griffe zu sehen? Nur in der aktiven Stufe mit gesetzter Menge.
+    /// Sind Griffe zu sehen? Sobald eine Menge gesetzt ist, auch beim Wählen; beim Setzen des
+    /// Bezugspunkts nicht.
     pub fn grips_shown(&self) -> bool {
         matches!(self.tool, Tool::MoveCopy | Tool::Scale)
-            && self.transform.stage == TransformStage::Active
-            && !(self.transform.set.curves.is_empty() && self.transform.set.points.is_empty())
+            && self.transform.stage != TransformStage::SetBase
+            && self.has_set()
     }
 
-    /// Mit Vorauswahl aktiv, Bezugspunkt in der Mitte der Hülle; ohne bleibt die Stufe beim Wählen.
-    /// Der Haken „Kopie erstellen“ bleibt, wie er ist.
-    pub fn begin_transform(&mut self, sk: &Sketch) {
+    fn has_set(&self) -> bool {
+        !(self.transform.set.curves.is_empty() && self.transform.set.points.is_empty())
+    }
+
+    /// Läuft ein Zug mit der Maus, der mit dem Abschluss und dem Löschen nichts zu tun hat?
+    pub fn in_gesture(&self) -> bool {
+        self.grip_drag.is_some() || self.box_select.is_some()
+    }
+
+    /// Die Kurven und Punkte der Auswahl als Menge.
+    fn selected_set(&self, sk: &Sketch) -> TransformSet {
         let mut set = TransformSet::default();
         for item in &self.selection {
             match *item {
@@ -241,6 +250,26 @@ impl SketchSession {
                 _ => {}
             }
         }
+        set
+    }
+
+    /// Beim Wählen folgen Menge und Bezugspunkt der Auswahl: Die Griffe erscheinen, sobald etwas
+    /// gewählt ist, in der Mitte der Hülle. Beim Maßstab kommt das mit Task 10.
+    pub(crate) fn sync_picked(&mut self, sk: &Sketch) {
+        if !self.runs_transform() || self.transform.stage != TransformStage::Picking {
+            return;
+        }
+        let set = self.selected_set(sk);
+        if set != self.transform.set {
+            self.transform.base = hull_center(sk, &set.curves, &set.points);
+            self.transform.set = set;
+        }
+    }
+
+    /// Mit Vorauswahl aktiv, Bezugspunkt in der Mitte der Hülle; ohne bleibt die Stufe beim Wählen.
+    /// Der Haken „Kopie erstellen“ bleibt, wie er ist.
+    pub fn begin_transform(&mut self, sk: &Sketch) {
+        let set = self.selected_set(sk);
         let Some(center) = hull_center(sk, &set.curves, &set.points) else {
             self.transform.stage = TransformStage::Picking;
             return;
@@ -253,10 +282,10 @@ impl SketchSession {
         self.transform.factor = 1.0;
     }
 
-    /// Die Bewegung dieses Bilds: Gesperrte Felder gehen vor dem Griff. `None`, solange gewählt wird.
+    /// Die Bewegung dieses Bilds: Gesperrte Felder gehen vor dem Griff. `None` ohne Menge.
     pub fn transform_now(&self) -> Option<Similarity> {
         let t = &self.transform;
-        if t.stage == TransformStage::Picking {
+        if !self.has_set() {
             return None;
         }
         let input = &self.input;
@@ -297,9 +326,39 @@ impl SketchSession {
         self.transform.factor = factor;
     }
 
-    /// Beendet den Griff; der Stand bleibt in `transform`.
+    /// Beendet den Griff; der Stand bleibt in `transform`. War noch die Wahl offen, ist sie damit zu
+    /// Ende, denn ein neuer Bezugspunkt nähme der Bewegung ihren Sinn.
     pub fn end_grip(&mut self) {
-        self.grip_drag = None;
+        if self.grip_drag.take().is_some() && self.transform.stage == TransformStage::Picking {
+            self.transform.stage = TransformStage::Active;
+        }
+    }
+
+    /// Geht die Bewegung nicht, sagt `message` das schon, sobald die Vorschau fehlt, und nicht erst
+    /// beim Abschluss; geht sie wieder, verschwindet die Meldung. Eine Kopie ist frei und bleibt ohne.
+    pub fn update_transform_block(&mut self, sk: &Sketch) {
+        if !self.runs_transform() {
+            return;
+        }
+        let block = match (
+            self.transform.copy,
+            self.transform_now(),
+            self.sketch_set(sk),
+        ) {
+            (false, Some(now), Some(set)) => sk.check_transform(&set, &now).err(),
+            _ => None,
+        };
+        match block {
+            None | Some(TransformBlock::NothingToDo) => {
+                if std::mem::take(&mut self.transform.blocked_note) {
+                    self.message = None;
+                }
+            }
+            Some(block) => {
+                self.message = Some(block_message(block));
+                self.transform.blocked_note = true;
+            }
+        }
     }
 
     /// Nimmt nur den laufenden Griff zurück; bis alle Tasten los sind, ist nichts ein Klick oder ein
@@ -345,6 +404,7 @@ impl SketchSession {
                     }
                     None => self.selection.push(item),
                 }
+                self.sync_picked(sk);
             }
             TransformStage::SetBase => {
                 self.transform.base = Some(cur.at);
@@ -357,6 +417,10 @@ impl SketchSession {
     /// Eingabe im Werkzeug: Beim Wählen weiter zu den Griffen, beim Bezugspunkt zurück, sonst
     /// abschließen.
     pub fn confirm_transform(&mut self, sf: &mut SketchFeature) -> Result<(), String> {
+        // Mitten in einem Zug würde sonst eine halbe Bewegung oder eine halbe Wahl fest.
+        if self.in_gesture() {
+            return Ok(());
+        }
         if self.transform.stage == TransformStage::Active {
             self.finish_transform(sf)
         } else {
@@ -377,20 +441,27 @@ impl SketchSession {
             let (Some(now), Some(set)) = (se.transform_now(), se.sketch_set(sk)) else {
                 return Err(crate::msg!("sketch-nothing-selected"));
             };
-            let mut note = None;
+            let mut notes = Vec::new();
             let mut copied = None;
             if se.transform.copy {
                 copied = Some(sk.copy_transformed(&set, &now).map_err(err)?);
             } else {
                 let report = sk.apply_transform(&set, &now).map_err(block_message)?;
                 if !report.dropped.is_empty() {
-                    note = Some(crate::msg!("sketch-move-dropped", n = report.dropped.len()));
+                    notes.push(crate::msg!("sketch-move-dropped", n = report.dropped.len()));
+                }
+                if report.split > 0 {
+                    notes.push(crate::msg!("sketch-move-split", n = report.split));
                 }
             }
             se.solve_checked(sk, prior)?;
-            if note.is_some() {
-                se.message = note;
-            }
+            se.transform.blocked_note = false;
+            // Was das Lösen zu sagen hatte, bleibt neben dem, was die Bewegung zu sagen hat.
+            notes.extend(se.message.take());
+            se.message = match notes.len() {
+                0 | 1 => notes.pop(),
+                _ => Some(Msg::Join(notes)),
+            };
             se.edit_label = Some(crate::msg!("undo-move-copy"));
             se.modify_edits = (se.modify_edits.0 + 1, Some(se.tool));
             Ok(copied)
@@ -436,6 +507,10 @@ impl SketchSession {
     /// [`transform_preview`](Self::transform_preview) mit dem Stil jeder Kurve: Mitgezogene
     /// Hilfsgeometrie erscheint gestrichelt wie auf dem Blatt.
     pub fn transform_preview_styled(&self, sk: &Sketch) -> Option<Vec<(LineStyle, Vec<DVec2>)>> {
+        // Beim Wählen steht noch nichts in Bewegung, auch mit dem Haken „Kopie erstellen“.
+        if self.transform.stage == TransformStage::Picking && self.grip_drag.is_none() {
+            return None;
+        }
         let now = self.transform_now()?;
         let set = self.sketch_set(sk)?;
         let mut out = sk.clone();

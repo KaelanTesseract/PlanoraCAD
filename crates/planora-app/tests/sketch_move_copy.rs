@@ -391,13 +391,53 @@ fn sample_sketch() -> (AppState, Vec<CurveId>) {
     (s, ids)
 }
 
+/// Dasselbe mit Maßen und Tangenten: Das Lösen nach dem Abschluss darf nichts mehr bewegen.
+fn dimensioned_sketch() -> (AppState, Vec<CurveId>) {
+    let mut ids = Vec::new();
+    let s = sketch_with(|sk| {
+        let r = sk.add_rectangle(v(0.0, 0.0), v(20.0, 10.0)).unwrap();
+        ids.extend(r.lines);
+        sk.add_constraint(K::Distance(r.points[0], r.points[1], 20.0))
+            .unwrap();
+        sk.add_constraint(K::Distance(r.points[1], r.points[2], 10.0))
+            .unwrap();
+        let m = sk.add_point(40.0, 5.0).unwrap();
+        let circle = sk.add_circle(m, 4.0).unwrap();
+        sk.add_constraint(K::Radius(circle, 4.0)).unwrap();
+        let a = sk.add_point(30.0, 9.0).unwrap();
+        let b = sk.add_point(50.0, 9.0).unwrap();
+        let line = sk.add_line(a, b).unwrap();
+        sk.add_constraint(K::Tangent(line, circle)).unwrap();
+        ids.extend([circle, line]);
+        // Bogen, der tangential aus dem Ende einer Linie läuft.
+        let (p, q) = (
+            sk.add_point(60.0, 0.0).unwrap(),
+            sk.add_point(70.0, 0.0).unwrap(),
+        );
+        let lead = sk.add_line(p, q).unwrap();
+        let (c, e) = (
+            sk.add_point(70.0, 5.0).unwrap(),
+            sk.add_point(75.0, 5.0).unwrap(),
+        );
+        let arc = sk.add_arc(c, q, e).unwrap();
+        sk.add_constraint(K::Tangent(lead, arc)).unwrap();
+        sk.add_constraint(K::Radius(arc, 5.0)).unwrap();
+        ids.extend([lead, arc]);
+    });
+    (s, ids)
+}
+
 /// Dichte Folge von Griffzügen: In jedem Stand ist die Vorschau das Ergebnis.
 #[test]
 fn the_preview_is_the_result_over_a_dense_sequence() {
     for copy in [false, true] {
         for k in 0..60 {
             let t = f64::from(k) * 0.37 - 11.0;
-            let (mut s, ids) = sample_sketch();
+            let (mut s, ids) = if k % 2 == 0 {
+                sample_sketch()
+            } else {
+                dimensioned_sketch()
+            };
             preselect(&mut s, curves_of(&ids));
             let original = sketch(&s).clone();
             let lines = {
@@ -424,6 +464,61 @@ fn the_preview_is_the_result_over_a_dense_sequence() {
             }
             assert_eq!(selected.len(), ids.len());
             assert_same_lines(&lines, &polylines(sk, selected));
+        }
+    }
+}
+
+/// Fast keine Bewegung: Eine Bindung nach außen gilt bis zur zehnfachen Toleranz als erfüllt und das
+/// Lösen zöge den Rest zurück. Dichte Folge von Winkeln und Wegen: Die Vorschau bleibt das Ergebnis,
+/// oder beide lehnen ab.
+#[test]
+fn a_tiny_turn_or_shift_never_separates_preview_and_result() {
+    let build = || {
+        let mut line = None;
+        let s = sketch_with(|sk| {
+            let a = sk.add_point(-200.0, 0.0).unwrap();
+            let b = sk.add_point(200.0, 0.0).unwrap();
+            let edge = sk.add_line(a, b).unwrap();
+            sk.add_constraint(K::Fixed(a, -200.0, 0.0)).unwrap();
+            sk.add_constraint(K::Fixed(b, 200.0, 0.0)).unwrap();
+            let p = sk.add_point(0.0, 0.0).unwrap();
+            let q = sk.add_point(26.0, 13.0).unwrap();
+            line = Some(sk.add_line(p, q).unwrap());
+            sk.add_constraint(K::PointOnCurve(p, edge)).unwrap();
+        });
+        (s, line.unwrap())
+    };
+    // Der Fall aus der Prüfung genau, dann die Folge.
+    let mut cases = vec![(1e-7, v(50.0, 0.0))];
+    for k in 0..=80 {
+        let e = 10f64.powf(-10.0 + f64::from(k) * 0.075);
+        cases.push((e, v(50.0, 0.0)));
+        cases.push((-e, v(50.0, 0.0)));
+        cases.push((0.0, v(e, 0.0)));
+        cases.push((0.0, v(0.0, e)));
+        cases.push((0.0, v(50.0, 0.0)));
+    }
+    for (angle, offset) in cases {
+        let (mut s, line) = build();
+        preselect(&mut s, vec![Item::Curve(line)]);
+        let before = snapshot(sketch(&s));
+        let lines = {
+            let (se, sk) = s.session_sketch_mut().unwrap();
+            se.transform.angle = angle;
+            se.transform.offset = offset;
+            se.transform_preview(sk)
+        };
+        let done = finish(&mut s);
+        match lines {
+            Some(lines) => {
+                done.unwrap();
+                let result = polylines(sketch(&s), [line]);
+                assert_same_lines(&lines, &result);
+            }
+            None => {
+                assert!(done.is_err(), "{angle} {offset}");
+                assert_eq!(snapshot(sketch(&s)), before);
+            }
         }
     }
 }
@@ -628,11 +723,123 @@ fn a_line_alone_leaves_its_neighbours_and_the_message_names_the_count() {
     for (&c, old) in ids.lines[1..].iter().zip(&others) {
         assert_eq!(line_pts(sk, c), *old, "Nachbarn bleiben");
     }
-    assert_eq!(
-        message(&s).expect("Meldung"),
-        planora_i18n::tr!("sketch-move-dropped", n = 1)
+    // Beide Enden der Linie hat ein Nachbar mitbenutzt: Das sagt die Meldung neben dem Maß.
+    let text = message(&s).expect("Meldung");
+    assert!(
+        text.contains(&planora_i18n::tr!("sketch-move-dropped", n = 1)),
+        "{text}"
+    );
+    assert!(
+        text.contains(&planora_i18n::tr!("sketch-move-split", n = 2)),
+        "{text}"
     );
     assert!(se(&s).selection.contains(&Item::Curve(moved)));
+}
+
+#[test]
+fn a_split_alone_is_reported_and_a_whole_shape_reports_nothing() {
+    let (mut s, ids) = rectangle();
+    preselect(&mut s, vec![Item::Curve(ids.lines[0])]);
+    type_in(&mut s, F::MoveY, "-7");
+    finish(&mut s).unwrap();
+    assert_eq!(
+        message(&s).unwrap(),
+        planora_i18n::tr!("sketch-move-split", n = 2)
+    );
+    // Das ganze Rechteck trennt nichts und sagt nichts.
+    let (mut s, _) = active_rectangle();
+    type_in(&mut s, F::MoveY, "-7");
+    finish(&mut s).unwrap();
+    assert_eq!(message(&s), None);
+}
+
+#[test]
+fn the_note_of_the_move_keeps_the_warning_of_the_solver() {
+    let mut s = AppState::new();
+    let i = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    s.open_sketch(i).unwrap();
+    let moved = {
+        let (se, sk) = s.session_sketch_mut().unwrap();
+        let r = sk.add_rectangle(v(0.0, 0.0), v(20.0, 10.0)).unwrap();
+        // Abseits ein Widerspruch, der schon vorher besteht.
+        let (a, b) = (
+            sk.add_point(100.0, 0.0).unwrap(),
+            sk.add_point(110.0, 0.0).unwrap(),
+        );
+        sk.add_line(a, b).unwrap();
+        sk.add_constraint(K::Distance(a, b, 10.0)).unwrap();
+        sk.add_constraint(K::Distance(a, b, 20.0)).unwrap();
+        let report = sk.solve();
+        assert_eq!(report.status, SolveStatus::Conflicting);
+        se.last_report = Some(report);
+        r.lines[0]
+    };
+    s.observe_sketch(false);
+    preselect(&mut s, vec![Item::Curve(moved)]);
+    type_in(&mut s, F::MoveY, "-7");
+    finish(&mut s).unwrap();
+    let text = message(&s).unwrap();
+    assert!(text.contains(&t("sketch-still-conflicting")), "{text}");
+    assert!(
+        text.contains(&planora_i18n::tr!("sketch-move-split", n = 2)),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_blocked_move_says_so_at_once_and_stops_saying_it_when_it_goes() {
+    let mut line = None;
+    let mut s = sketch_with(|sk| {
+        let a = sk.add_point(0.0, 0.0).unwrap();
+        let b = sk.add_point(10.0, 0.0).unwrap();
+        line = Some(sk.add_line(a, b).unwrap());
+        sk.add_constraint(K::Fixed(a, 0.0, 0.0)).unwrap();
+    });
+    preselect(&mut s, vec![Item::Curve(line.unwrap())]);
+    let update = |s: &mut AppState| {
+        let (se, sk) = s.session_sketch_mut().unwrap();
+        se.update_transform_block(sk);
+    };
+    update(&mut s);
+    assert_eq!(message(&s), None, "ohne Bewegung noch nichts");
+    type_in(&mut s, F::MoveX, "5");
+    update(&mut s);
+    assert_eq!(message(&s).unwrap(), t("sketch-move-fixed"));
+    // Als Kopie geht es, die Meldung verschwindet; zurück kommt sie wieder.
+    s.sketch_session.as_mut().unwrap().transform.copy = true;
+    update(&mut s);
+    assert_eq!(message(&s), None);
+    s.sketch_session.as_mut().unwrap().transform.copy = false;
+    update(&mut s);
+    assert_eq!(message(&s).unwrap(), t("sketch-move-fixed"));
+    // Eine andere Meldung bleibt unberührt, wenn die Sperre weg ist nur die eigene.
+    type_in(&mut s, F::MoveX, "");
+    update(&mut s);
+    assert_eq!(message(&s), None);
+    s.sketch_session.as_mut().unwrap().message = Some(planora_app::msg::Msg::Raw("x".into()));
+    update(&mut s);
+    assert_eq!(message(&s).as_deref(), Some("x"));
+    // Esc nimmt die Meldung der Sperre mit.
+    type_in(&mut s, F::MoveX, "5");
+    update(&mut s);
+    let (se, sk) = s.session_sketch_mut().unwrap();
+    se.cancel(sk);
+    assert_eq!(se.message, None);
+}
+
+#[test]
+fn a_turn_by_half_a_circle_drops_axis_bindings_with_a_neutral_message() {
+    let (mut s, _) = active_rectangle();
+    type_in(&mut s, F::MoveAngle, "180");
+    finish(&mut s).unwrap();
+    let text = message(&s).unwrap();
+    assert!(
+        text.contains(&planora_i18n::tr!("sketch-move-dropped", n = 4)),
+        "{text}"
+    );
+    assert!(!text.to_lowercase().contains("mehr"), "{text}");
 }
 
 #[test]
@@ -741,6 +948,7 @@ fn esc_in_every_stage_leaves_no_trace() {
             }
         }
         assert_eq!(se(&s).transform.stage, stage);
+        let selection = se(&s).transform.selection_before.clone();
         let (rev, undo, before) = (sketch(&s).revision(), undo_len(&s), snapshot(sketch(&s)));
         {
             let (se, sk) = s.session_sketch_mut().unwrap();
@@ -752,6 +960,7 @@ fn esc_in_every_stage_leaves_no_trace() {
         assert_eq!(undo_len(&s), undo, "{stage:?}");
         assert_eq!(snapshot(sketch(&s)), before, "{stage:?}");
         assert_eq!(se(&s).transform.offset, DVec2::ZERO);
+        assert_eq!(se(&s).selection, selection, "{stage:?}");
     }
 }
 
