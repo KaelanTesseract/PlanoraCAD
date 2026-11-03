@@ -318,8 +318,12 @@ fn model_defaults_and_conflicts_with_all_actions() {
         // In Skizze, Zeichnung und „Überall“ gilt die Modelltaste nicht (die Leertaste hat in
         // der Skizze ihre eigene Aktion).
         for area in [Area::Sketch, Area::Drawing, Area::All] {
-            let want = (a == Action::RepeatLast && area == Area::Sketch)
-                .then_some(Action::SketchRepeatLast);
+            // Skizzen 4: Das F der Skizze ist die Skizzenrundung.
+            let want = match (a, area) {
+                (Action::RepeatLast, Area::Sketch) => Some(Action::SketchRepeatLast),
+                (Action::Fillet, Area::Sketch) => Some(Action::SketchFillet),
+                _ => None,
+            };
             assert_eq!(km.action_for_key(area, &c), want, "{a:?} in {area:?}");
         }
     }

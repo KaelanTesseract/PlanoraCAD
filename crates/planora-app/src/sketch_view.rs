@@ -3,6 +3,7 @@
 //! Abhängigkeiten) liegt in `sketch_state`; hier wird nur gezeichnet und weitergereicht.
 
 use crate::sketch_cursor::AutoConstraint;
+use crate::sketch_grips::{self, Grip, GripLayout};
 use crate::sketch_state::{Item, SketchSession, Snap, Tool};
 use crate::state::AppState;
 use crate::theme::{self, lighten as lighter, sketch_colors as colors};
@@ -814,7 +815,7 @@ fn box_can_start(
         return false;
     };
     let shift_only = ui.input(|i| i.modifiers.shift_only()) && !ctrl;
-    if se.tool != Tool::Select
+    if (se.tool != Tool::Select && !se.transform_picking())
         || (pan_gesture && !shift_only)
         || crate::keymap::settings_ui::is_capturing(ui.ctx())
     {
@@ -823,12 +824,63 @@ fn box_can_start(
     let Some(map) = mapper(rect, state) else {
         return false;
     };
+    // Ein Griff geht vor dem Rahmen.
+    if let (Some(l), Some(p)) = (
+        grip_layout(state, rect),
+        ui.input(|i| i.pointer.press_origin()),
+    ) && sketch_grips::hit(&l, p).is_some()
+    {
+        return false;
+    }
     ui.input(|i| i.pointer.press_origin()).is_some_and(|p| {
         match (map.to_sketch(p), map.radius_at(p)) {
             (Some(at), Some(radius)) => se.is_free_at(sk, at, radius),
             _ => true,
         }
     })
+}
+
+/// Lage der Griffe in diesem Bild; `None`, wenn keine zu sehen sind oder die Ansicht ihre Mitte nicht
+/// zeigt. Die Pfeile folgen dem Bild der Skizzenachsen an der Mitte, also auch auf gekippten Ansichten.
+pub fn grip_layout(state: &AppState, rect: Rect) -> Option<GripLayout> {
+    let se = state.sketch_session.as_ref()?;
+    if !se.grips_shown() {
+        return None;
+    }
+    let now = se.transform_now()?;
+    let map = mapper(rect, state)?;
+    let at = now.base + now.offset;
+    let center = map.to_screen(at)?;
+    // Ein kleiner Schritt, der auf dem Bildschirm etwa so lang ist wie der Fangradius: Eine feste
+    // Länge läge bei starkem Zoom hinter der Kamera.
+    let step = map.radius_at(center).filter(|r| *r > 0.0)?;
+    let dir = |axis: DVec2| {
+        map.to_screen(at + axis * step)
+            .map(|q| (q - center).normalized())
+    };
+    Some(sketch_grips::layout(
+        center,
+        dir(DVec2::X)?,
+        dir(DVec2::Y)?,
+        se.tool == Tool::Scale,
+    ))
+}
+
+/// Der Griff, den der eben erkannte Zug mit der linken Taste greift. Wie beim Rahmen zählt nur die
+/// Lage des Drückens, und Umschalt+links greift statt zu schwenken; jede andere Schwenk-Belegung bleibt.
+fn grip_can_start(
+    ui: &egui::Ui,
+    rect: Rect,
+    state: &AppState,
+    pan_gesture: bool,
+    ctrl: bool,
+) -> Option<Grip> {
+    let shift_only = ui.input(|i| i.modifiers.shift_only()) && !ctrl;
+    if (pan_gesture && !shift_only) || crate::keymap::settings_ui::is_capturing(ui.ctx()) {
+        return None;
+    }
+    let l = grip_layout(state, rect)?;
+    sketch_grips::hit(&l, ui.input(|i| i.pointer.press_origin())?)
 }
 
 /// Der laufende Auswahlrahmen: Fläche und Rand; Fenster durchgezogen, Kreuzung gestrichelt.
@@ -900,17 +952,25 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     // Punkt.
     let km = crate::keymap::mouse::current(ui.ctx());
     let pan_gesture = crate::keymap::mouse::pan_2d(&km, ui, response);
-    let starts_box = response.drag_started_by(PointerButton::Primary)
-        && !aborted
-        && box_can_start(ui, rect, state, pan_gesture, ctrl);
+    let primary_start = response.drag_started_by(PointerButton::Primary) && !aborted;
+    let starts_box = primary_start && box_can_start(ui, rect, state, pan_gesture, ctrl);
+    let starts_grip = primary_start
+        .then(|| grip_can_start(ui, rect, state, pan_gesture, ctrl))
+        .flatten();
     // Ein laufender Rahmen schwenkt nicht, auch wenn Umschalt erst währenddessen dazukommt; ein
-    // Zug auf dem letzten Punkt des Linienzugs ebenso.
+    // Zug auf dem letzten Punkt des Linienzugs ebenso. Beim Griff schwenkt die Mitte trotzdem.
+    let gripping = starts_grip.is_some()
+        || state
+            .sketch_session
+            .as_ref()
+            .is_some_and(|s| s.grip_drag.is_some());
     let boxing = starts_box
         || state
             .sketch_session
             .as_ref()
             .is_some_and(|s| s.box_select.is_some() || s.line_arc.is_some());
-    let panning = pan_gesture && !boxing;
+    let middle = response.dragged_by(PointerButton::Middle);
+    let panning = pan_gesture && !boxing && (!gripping || middle);
     if panning && !dragging {
         let d = response.drag_motion();
         state.camera.pan(d.x, d.y, rect.height());
@@ -930,8 +990,16 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         None
     };
 
-    // Getippte Werte werden beim Klick zu Maßen; die Formeln darin brauchen die Parameter.
-    let commit_scope = (response.clicked_by(PointerButton::Primary)
+    // Ein Klick auf einen Griff schaltet beim Wählen nichts in der Auswahl.
+    let click_on_grip = response.clicked_by(PointerButton::Primary)
+        && pointer
+            .zip(grip_layout(state, rect))
+            .is_some_and(|(p, l)| sketch_grips::hit(&l, p).is_some());
+
+    // Getippte Werte werden beim Klick und bei der Eingabe zu Maßen; die Formeln darin brauchen die
+    // Parameter.
+    let commit_scope = ((response.clicked_by(PointerButton::Primary)
+        || ui.input(|i| i.key_pressed(egui::Key::Enter)))
         && state
             .sketch_session
             .as_ref()
@@ -950,6 +1018,11 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     if starts_box {
         if let Some(origin) = ui.input(|i| i.pointer.press_origin()) {
             se.begin_box(dvec(origin), shift);
+        }
+    } else if let Some(grip) = starts_grip {
+        let origin = ui.input(|i| i.pointer.press_origin());
+        if let Some(start) = origin.and_then(|p| map.to_sketch(p)) {
+            se.begin_grip(grip, start);
         }
     } else if response.drag_started_by(PointerButton::Primary) && !shift && !panning && !aborted {
         // Punkt oder Kurve ziehen (Auswahlwerkzeug), tangentialer Bogen (Linienwerkzeug)
@@ -1005,6 +1078,23 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         }
     }
 
+    // Griff: Die Skizze bleibt unberührt, der Zug führt nur `transform`. Wie beim Rahmen bricht die
+    // rechte Taste schon beim Drücken ab, und Esc beendet schon hier den Zug von egui, der Griff fällt
+    // aber unten weg; hat ein Feld die Tastatur, dort in den Feldern.
+    if se.grip_drag.is_some() {
+        if ui.input(|i| i.pointer.button_pressed(PointerButton::Secondary)) {
+            se.abort_grip();
+        } else if !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            let latest = ui.input(|i| i.pointer.latest_pos());
+            if let Some(p) = latest.and_then(|p| map.to_sketch(p)) {
+                se.grip_to(p);
+            }
+            if response.drag_stopped() || !response.dragged() {
+                se.end_grip();
+            }
+        }
+    }
+
     // Stutzen durch Ziehen: jede überfahrene Kurve wird gestutzt (ein Schritt, da der Verlauf
     // erst nach dem Loslassen fortgeschrieben wird).
     if se.tool == Tool::Trim && !panning {
@@ -1035,17 +1125,20 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     if se.box_aborted {
         // Das Loslassen nach dem Abbruch ist kein Klick.
     } else if (response.double_clicked() || response.triple_clicked()) && !se.click_after_flyout {
-        if se.tool == Tool::Select {
+        if se.tool == Tool::Select || se.transform_picking() {
             // Wie beim einfachen Klick: Punkt vor Kurve.
             if let Some(at) = at
                 && let Snap::Curve(c) = se.snap(&sf.sketch, at, radius)
             {
                 se.select_chain(&sf.sketch, c, shift);
             }
-        } else {
+        } else if !matches!(se.tool, Tool::Offset | Tool::MoveCopy | Tool::Scale) {
+            // Beim Versatz hat der erste Klick schon alles getan; der zweite läge dicht an der Kurve
+            // und ergäbe eine hauchdünne Kopie. Verschieben schließt nur Eingabe oder OK ab.
             let _ = se.finish_tool(&mut sf.sketch);
         }
     } else if response.clicked_by(PointerButton::Primary)
+        && !click_on_grip
         && let Some(at) = at
     {
         if se.tool == Tool::ProjectEdge {
@@ -1075,12 +1168,26 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             )
         });
         if esc {
+            // Nimmt Esc nur den Griff zurück, sehen die Felder sie nicht mehr: Sonst beendete sie
+            // dort im selben Bild auch das Werkzeug.
+            if se.grip_drag.is_some() {
+                ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+            }
             se.cancel(&mut sf.sketch);
         }
-        if enter && !flyout {
-            let _ = se.finish_tool(&mut sf.sketch);
+        // Mitten in einem Griff oder Rahmen gelten Eingabe und Entf nicht.
+        let gesture = se.in_gesture();
+        if enter && !flyout && !gesture {
+            let _ = match &commit_scope {
+                // Felder da, aber ohne Fokus: derselbe Weg wie die Eingabe im Feld.
+                Some(scope) if !se.runs_transform() && !se.input.fields.is_empty() => {
+                    se.commit_at_cursor(sf, radius, scope)
+                }
+                _ if se.runs_transform() => se.confirm_transform(sf),
+                _ => se.finish_tool(&mut sf.sketch),
+            };
         }
-        if delete {
+        if delete && !gesture {
             se.delete_selection(&mut sf.sketch);
         }
     }
@@ -1091,6 +1198,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     // Aufgelöster Zeiger für Zeichen und Vorschau (nach den Änderungen dieses Bilds).
     let raw = cursor_raw(se, at);
     se.update_cursor(&sf.sketch, raw, radius);
+    se.update_transform_block(&sf.sketch);
     let tool = se.tool;
 
     // Körperkante kopieren: Kante in der 3D-Szene wählen.
@@ -1235,6 +1343,14 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     }
 
     draw_preview(&painter, &map, sk, se, col.preview);
+
+    if let Some(l) = grip_layout(state, rect) {
+        let hot = se
+            .grip_drag
+            .map(|d| d.grip)
+            .or(pointer.and_then(|p| sketch_grips::hit(&l, p)));
+        sketch_grips::paint(&painter, &l, hot, col.selected, lighter(col.selected));
+    }
 
     // Stutzen/Brechen: das Stück rot; Dehnen: der Weg zum neuen Ende rot gestrichelt.
     if let Some(pl) = &se.hover_preview {
@@ -1396,11 +1512,30 @@ fn draw_preview(
     se: &SketchSession,
     color: Color32,
 ) {
+    // Verschieben/Kopieren und Maßstab brauchen keinen Zeiger; mitgezogene Hilfsgeometrie erscheint
+    // in ihrem Stil.
+    if matches!(se.tool, Tool::MoveCopy | Tool::Scale) {
+        let stroke = Stroke::new(CURVE_WIDTH, color);
+        for (style, line) in se.transform_preview_styled(sk).unwrap_or_default() {
+            for path in map.paths(&line) {
+                painter.extend(style_shapes(path, stroke, style));
+            }
+        }
+        return;
+    }
     // Ohne Zeiger über der Skizze bleibt die Vorschau an der letzten Stelle stehen.
     let Some(cursor) = se.draw_cursor.as_ref().map(|c| c.at).or(se.cursor) else {
         return;
     };
     let stroke = Stroke::new(1.5, color);
+    if let Some(lines) = se.offset_preview(sk, cursor) {
+        for line in lines {
+            for path in map.paths(&line) {
+                draw_path(painter, path, stroke, true);
+            }
+        }
+        return;
+    }
     if se.line_arc.is_some() {
         for line in se.line_arc_preview(sk, cursor).unwrap_or_default() {
             for path in map.paths(&line) {

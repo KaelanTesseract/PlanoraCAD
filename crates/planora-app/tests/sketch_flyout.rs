@@ -273,7 +273,7 @@ fn only_shapes_with_kinds_have_a_triangle() {
     for tool in TOOL_ORDER {
         let expected = matches!(
             tool,
-            Tool::Rectangle | Tool::Circle | Tool::Arc | Tool::Polygon | Tool::Slot
+            Tool::Rectangle | Tool::Circle | Tool::Arc | Tool::Polygon | Tool::Slot | Tool::Fillet
         );
         assert_eq!(sketch_panel::has_flyout(tool), expected, "{tool:?}");
     }
@@ -645,9 +645,10 @@ fn another_kind_of_the_same_shape_drops_positions_the_same_kind_keeps_them() {
 fn the_create_menu_lists_all_kinds_while_a_sketch_is_open() {
     let mut rig = Rig::new();
     let mut count = 0;
+    // Skizzen 4: Rundung und Fasen stehen unter „Bearbeiten → Ändern“, nicht hier.
     for tool in TOOL_ORDER
         .into_iter()
-        .filter(|t| sketch_panel::has_flyout(*t))
+        .filter(|t| sketch_panel::has_flyout(*t) && *t != Tool::Fillet)
     {
         let label = sketch_panel::tool_label(tool);
         let shot = rig.settle();

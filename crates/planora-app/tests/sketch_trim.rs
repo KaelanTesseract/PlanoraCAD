@@ -395,9 +395,21 @@ fn the_strip_shows_fourteen_tools_that_fit_at_1080() {
     }
     let buttons = sketch_panel::strip_buttons(&ctx);
     let names: Vec<&str> = buttons.iter().map(|(n, _)| n.as_str()).collect();
-    // Skizzen 3: Polygon und Langloch kamen dazu.
-    assert_eq!(names.len(), 14, "{names:?}");
-    assert_eq!(&names[11..], ["Stutzen", "Dehnen", "Brechen"]);
+    // Skizzen 3: Polygon und Langloch kamen dazu, Skizzen 4: Rundung, Versatz, Verschieben und
+    // Maßstab.
+    assert_eq!(names.len(), 18, "{names:?}");
+    assert_eq!(
+        &names[11..],
+        [
+            "Stutzen",
+            "Dehnen",
+            "Brechen",
+            "Rundung",
+            "Versatz",
+            "Verschieben/Kopieren",
+            "Skizzenmaßstab"
+        ]
+    );
     for (name, r) in &buttons {
         assert!(r.top() >= 0.0 && r.bottom() <= H, "{name}: {r:?}");
         assert_eq!(r.height(), 36.0, "{name}");

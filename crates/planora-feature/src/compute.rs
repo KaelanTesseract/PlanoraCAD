@@ -574,10 +574,41 @@ fn check_volume(
 /// Löst eine Skizze mit Formeln. Scheitert das direkte Lösen, weil ein neuer Formelwert ein großer
 /// Sprung ist, geht es von den bisherigen Werten in Schritten dorthin; gelingt das auch nicht, bleibt
 /// es beim Status des direkten Lösens. Gelingt das direkte Lösen, entsteht keine Mehrarbeit.
+///
+/// Ändert eine Formel einen Radius, geht das wie beim Maß in der Oberfläche: tangentiale Bögen neu
+/// legen, wenn es geht, und jedes Ergebnis auf Falten und Bögen über 180° prüfen, gegen den Stand
+/// davor. Von diesem Stand gehen auch die Schritte aus. Ohne geänderten Radius gibt es all das nicht.
 fn solve_formulas(sketch: &mut Sketch, sf: &SketchFeature) -> SolveStatus {
-    let direct = sketch.solve().status;
+    use planora_sketch::shapes::{folded_over, sweep_crossed_half_turn};
+    let tol = sketch.tolerance().linear;
+    let radius_changes = sf.formulas.keys().any(|&id| {
+        sketch.constraint(id).is_some_and(|c| {
+            c.kind.is_radius()
+                && match (sketch.measure(&c.kind), c.kind.length_value()) {
+                    (Some(now), Some(to)) => (now - to).abs() > tol,
+                    _ => true,
+                }
+        })
+    });
+    let unsolved = radius_changes.then(|| sketch.clone());
+    if radius_changes {
+        refit_formula_arcs(sketch, sf);
+    }
+    let folds = |after: &Sketch| {
+        unsolved
+            .as_ref()
+            .is_some_and(|u| folded_over(u, after) || sweep_crossed_half_turn(u, after))
+    };
+    let mut direct = sketch.solve().status;
     if direct == SolveStatus::Solved {
-        return direct;
+        if !folds(sketch) {
+            return direct;
+        }
+        // Wie beim Falt-Wächter: In Schritten bleibt die Lage vielleicht.
+        direct = SolveStatus::NotConverged;
+    }
+    if let Some(unsolved) = &unsolved {
+        *sketch = unsolved.clone();
     }
     let targets: Vec<_> = sf
         .formulas
@@ -591,8 +622,9 @@ fn solve_formulas(sketch: &mut Sketch, sf: &SketchFeature) -> SolveStatus {
     if targets.is_empty() {
         return direct;
     }
-    let accept =
-        |_: &Sketch, report: &planora_sketch::SolveReport| report.status == SolveStatus::Solved;
+    let accept = |trial: &Sketch, report: &planora_sketch::SolveReport| {
+        report.status == SolveStatus::Solved && !folds(trial)
+    };
     match sketch.solve_in_steps(&targets, accept) {
         Some((done, report)) => {
             *sketch = done;
@@ -600,6 +632,47 @@ fn solve_formulas(sketch: &mut Sketch, sf: &SketchFeature) -> SolveStatus {
         }
         None => direct,
     }
+}
+
+/// Setzt tangentiale Bögen vor dem Lösen auf die Lage für ihren neuen Formelradius (siehe
+/// [`Sketch::prepare_dimension_change`]). Passt ein Radius nicht zwischen die Nachbarn, kann ein
+/// anderes Formelmaß erst Platz schaffen: Dann gehen zuerst die anderen Maße durch den Löser, mit
+/// dem alten Radius. Passt er auch dann nicht, bleibt die Skizze, und es entscheidet das normale
+/// Lösen.
+fn refit_formula_arcs(sketch: &mut Sketch, sf: &SketchFeature) {
+    use planora_sketch::{ConstraintId, DimensionChange};
+    let targets: Vec<(ConstraintId, f64)> = sf
+        .formulas
+        .keys()
+        .filter_map(|&id| Some((id, sketch.constraint(id)?.kind.length_value()?)))
+        .collect();
+    let refused: Vec<(ConstraintId, f64)> = targets
+        .into_iter()
+        .filter(|&(id, value)| {
+            sketch.prepare_dimension_change(id, value) == DimensionChange::DoesNotFit
+        })
+        .collect();
+    if refused.is_empty() {
+        return;
+    }
+    let mut trial = sketch.clone();
+    for &(id, _) in &refused {
+        let measured = trial.constraint(id).and_then(|c| trial.measure(&c.kind));
+        if measured.is_none_or(|old| trial.set_constraint_value(id, old).is_err()) {
+            return;
+        }
+    }
+    if trial.solve().status != SolveStatus::Solved {
+        return;
+    }
+    for &(id, value) in &refused {
+        if trial.set_constraint_value(id, value).is_err()
+            || trial.prepare_dimension_change(id, value) == DimensionChange::DoesNotFit
+        {
+            return;
+        }
+    }
+    *sketch = trial;
 }
 
 /// Skizze: Ebene auflösen, Kantenkopien nachführen, lösen.

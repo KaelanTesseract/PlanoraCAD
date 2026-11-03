@@ -6,8 +6,9 @@
 use crate::formula_field::resolve;
 use crate::msg::Msg;
 use crate::sketch_cursor::{CursorOptions, DrawCursor};
-use crate::sketch_input::{Created, DrawInput};
-use crate::sketch_kinds::ToolKinds;
+use crate::sketch_grips::GripDrag;
+use crate::sketch_input::{Created, DrawInput, FieldKind};
+use crate::sketch_kinds::{PREVIEW_STEPS_PER_TURN, ToolKinds};
 use planora_feature::{FeatureId, ParamScope, ParamUnit, SketchFeature, constraint_unit};
 use planora_i18n::tr;
 use planora_kernel::{Edge, Id, Solid};
@@ -15,7 +16,8 @@ use planora_math::DVec2;
 use planora_sketch::SketchError;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
 use planora_sketch::model::{CurveId, CurveKind, MAX_SPLINE_POINTS, PointId, Sketch};
-use planora_sketch::shapes::folded_over;
+use planora_sketch::offset::{OffsetPlan, OffsetProblem};
+use planora_sketch::shapes::{folded_over, sweep_crossed_half_turn};
 use planora_sketch::snap::{SnapHit, SnapIndex};
 use planora_sketch::solver::{Drag, SolveReport, SolveStatus};
 use std::collections::BTreeSet;
@@ -48,13 +50,83 @@ pub enum Tool {
     Extend,
     /// Fusion „Brechen“: teilt eine Kurve an den Schnittpunkten um die Klickstelle.
     Break,
+    /// Fusion „Skizzenrundung“ und „Skizzenfase“; die Art steht in [`SketchSession::kinds`].
+    Fillet,
+    /// Fusion „Versatz“.
+    Offset,
+    /// Fusion „Verschieben/Kopieren“.
+    MoveCopy,
+    /// Fusion „Skizzenmaßstab“.
+    Scale,
 }
 
 impl Tool {
-    /// Werkzeuge unter „Ändern“ (Stutzen, Dehnen, Brechen): ohne offene Punkte, Esc beendet
-    /// sie.
+    /// Werkzeuge unter „Ändern“ (Stutzen, Dehnen, Brechen, Rundung und Fase, Versatz,
+    /// Verschieben/Kopieren, Maßstab): ohne offene Punkte, Esc beendet sie.
     pub fn is_modify(self) -> bool {
-        matches!(self, Tool::Trim | Tool::Extend | Tool::Break)
+        matches!(
+            self,
+            Tool::Trim
+                | Tool::Extend
+                | Tool::Break
+                | Tool::Fillet
+                | Tool::Offset
+                | Tool::MoveCopy
+                | Tool::Scale
+        )
+    }
+}
+
+/// Stufe von Verschieben/Kopieren und Maßstab.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum TransformStage {
+    /// Kurven und Punkte werden gewählt.
+    #[default]
+    Picking,
+    /// Der Bezugspunkt wird gesetzt.
+    SetBase,
+    /// Die Griffe und Felder wirken.
+    Active,
+}
+
+/// Die gewählte Menge von Verschieben/Kopieren und Maßstab.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct TransformSet {
+    pub curves: Vec<CurveId>,
+    pub points: Vec<PointId>,
+}
+
+/// Zustand von Verschieben/Kopieren und Maßstab; die Logik steht in [`crate::sketch_grips`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct TransformState {
+    pub stage: TransformStage,
+    pub set: TransformSet,
+    pub base: Option<DVec2>,
+    pub offset: DVec2,
+    pub angle: f64,
+    pub factor: f64,
+    pub copy: bool,
+    pub whole: bool,
+    /// Die Auswahl vor dem Befehl: Abbrechen stellt sie wieder her.
+    pub selection_before: Vec<Item>,
+    /// `message` sagt gerade, dass die Bewegung nicht geht ([`SketchSession::update_transform_block`]).
+    pub blocked_note: bool,
+}
+
+impl Default for TransformState {
+    fn default() -> TransformState {
+        TransformState {
+            stage: TransformStage::default(),
+            set: TransformSet::default(),
+            base: None,
+            offset: DVec2::ZERO,
+            angle: 0.0,
+            factor: 1.0,
+            copy: false,
+            whole: false,
+            selection_before: Vec::new(),
+            blocked_note: false,
+        }
     }
 }
 
@@ -347,6 +419,19 @@ pub struct SketchSession {
     /// letzten (für „Letztes Skizzenwerkzeug wiederholen“, auch wenn Esc es im selben Bild
     /// beendet).
     pub modify_edits: (u64, Option<Tool>),
+    /// Rundung/Fase: die zuletzt gerundete Kurve und ihr Radius; die nächste Rundung derselben
+    /// Sitzung schließt mit dem zweiten Klick ab.
+    pub fillet_run: Option<(CurveId, f64)>,
+    /// Versatz: die ganze tangentiale Kette nehmen (Vorgabe).
+    pub offset_chain: bool,
+    /// Klicklagen der gewählten Kurven von Rundung und Fase (zählen nicht in `kind_stage`).
+    pub pick_points: Vec<DVec2>,
+    /// Fangradius zu `pick_points`.
+    pub pick_radius: f64,
+    /// Verschieben/Kopieren und Maßstab.
+    pub transform: TransformState,
+    /// Laufender Zug an einem Griff.
+    pub grip_drag: Option<GripDrag>,
 }
 
 /// Was vor einer Änderung gesichert wird, um sie bei einem Fehler zurückzunehmen.
@@ -363,6 +448,12 @@ struct Backup {
     input: DrawInput,
     selection: Vec<Item>,
     last_report: Option<SolveReport>,
+    fillet_run: Option<(CurveId, f64)>,
+    offset_chain: bool,
+    pick_points: Vec<DVec2>,
+    pick_radius: f64,
+    transform: TransformState,
+    grip_drag: Option<GripDrag>,
 }
 
 /// Auswahl nach Art getrennt (jeweils in Auswahlreihenfolge).
@@ -437,6 +528,12 @@ impl SketchSession {
             edit_label: None,
             trim_drag: None,
             modify_edits: (0, None),
+            fillet_run: None,
+            offset_chain: true,
+            pick_points: Vec::new(),
+            pick_radius: 0.0,
+            transform: TransformState::default(),
+            grip_drag: None,
         }
     }
 
@@ -447,9 +544,32 @@ impl SketchSession {
         self.box_select = None;
         self.trim_drag = None;
         self.hover_preview = None;
+        self.fillet_run = None;
+        if self.transform.blocked_note {
+            self.message = None;
+        }
+        self.transform = TransformState::default();
+        self.grip_drag = None;
         self.tool = tool;
         self.draw_cursor = None;
         self.clear_pending();
+        // Versatz: Eine Vorauswahl mit Kurven ist schon die Kette, es geht gleich mit dem Abstand weiter.
+        if tool == Tool::Offset {
+            let curves: Vec<CurveId> = self
+                .selection
+                .iter()
+                .filter_map(|i| match *i {
+                    Item::Curve(c) if sk.curve(c).is_some() => Some(c),
+                    _ => None,
+                })
+                .collect();
+            self.pending_curves = offset_preselection(sk, curves);
+        }
+        // Verschieben/Kopieren: Eine Vorauswahl ist schon die Menge.
+        if self.runs_transform() {
+            self.transform.selection_before = self.selection.clone();
+            self.begin_transform(sk);
+        }
     }
 
     /// Vergisst, was das laufende Werkzeug schon gesetzt und getippt hat.
@@ -462,6 +582,7 @@ impl SketchSession {
         self.line_after_arc = None;
         self.line_chain = None;
         self.auto_tangent = None;
+        self.pick_points.clear();
         self.input = DrawInput::default();
     }
 
@@ -488,6 +609,9 @@ impl SketchSession {
         self.box_select = None;
         self.trim_drag = None;
         self.hover_preview = None;
+        self.fillet_run = None;
+        self.transform = TransformState::default();
+        self.grip_drag = None;
         self.edit_label = None;
         self.message = None;
         self.last_report = Some(sk.clone().solve());
@@ -523,6 +647,12 @@ impl SketchSession {
             input: self.input.clone(),
             selection: self.selection.clone(),
             last_report: self.last_report.clone(),
+            fillet_run: self.fillet_run,
+            offset_chain: self.offset_chain,
+            pick_points: self.pick_points.clone(),
+            pick_radius: self.pick_radius,
+            transform: self.transform.clone(),
+            grip_drag: self.grip_drag,
         }
     }
 
@@ -539,6 +669,12 @@ impl SketchSession {
         self.input = b.input;
         self.selection = b.selection;
         self.last_report = b.last_report;
+        self.fillet_run = b.fillet_run;
+        self.offset_chain = b.offset_chain;
+        self.pick_points = b.pick_points;
+        self.pick_radius = b.pick_radius;
+        self.transform = b.transform;
+        self.grip_drag = b.grip_drag;
     }
 
     /// Führt `f` atomar aus: Bei einem Fehler wird alles zurückgesetzt und die Meldung in
@@ -609,6 +745,7 @@ impl SketchSession {
         }
         self.cursor = Some(at);
         self.created = None;
+        self.pick_radius = radius;
         let cur = self.resolve_cursor(sk, at, radius);
         self.atomic(sk, |se, sk, prior| {
             if se.planned_kind().is_some() {
@@ -630,8 +767,106 @@ impl SketchSession {
                 // `project_edge`.
                 Tool::Polygon | Tool::Slot | Tool::ProjectEdge => Ok(()),
                 Tool::Trim | Tool::Extend | Tool::Break => se.click_modify(sk, at, radius, prior),
+                Tool::Offset => se.click_offset(sk, &cur, prior),
+                Tool::MoveCopy | Tool::Scale => {
+                    se.click_transform(sk, &cur);
+                    Ok(())
+                }
+                // Rundung und Fase laufen über ihre Arten (`click_kind`).
+                Tool::Fillet => Ok(()),
             }
         })
+    }
+
+    /// Klick des Versatzes: Ohne Kette wählt er die Kurve unter dem Zeiger (mit
+    /// [`offset_chain`](Self::offset_chain) ihre Kette), sonst legt er die Kopie aus dem Plan der
+    /// Vorschau an. Danach bleibt das Werkzeug aktiv, ohne Kette. Unmögliches ergibt eine Meldung,
+    /// und die Stufe bleibt ([`atomic`](Self::atomic)).
+    fn click_offset(
+        &mut self,
+        sk: &mut Sketch,
+        cur: &DrawCursor,
+        prior: &Sketch,
+    ) -> Result<(), Msg> {
+        if self.pending_curves.is_empty() {
+            let Snap::Curve(c) = cur.snap else {
+                return Ok(());
+            };
+            self.pending_curves = if self.offset_chain {
+                offset_chain_of(sk, c)?
+            } else {
+                vec![c]
+            };
+            return Ok(());
+        }
+        let plan = match self.offset_plan_at(sk, cur.raw) {
+            Ok(plan) => plan,
+            // Kein Abstand (Zeiger auf der Kette): Dieser Klick sagt nichts.
+            Err(OffsetProblem::Degenerate) => return Ok(()),
+            Err(problem) => return Err(offset_problem_message(problem)),
+        };
+        let ids = sk.add_offset(&plan).map_err(err)?;
+        self.solve_checked(sk, prior)?;
+        if !ids.tied {
+            self.message = Some(crate::msg!("sketch-offset-not-tied"));
+        } else if plan.dropped > 0 {
+            self.message = Some(crate::msg!("sketch-offset-dropped", n = plan.dropped));
+        }
+        let created = Created::Offset(ids);
+        self.modify_edits = (self.modify_edits.0 + 1, Some(self.tool));
+        self.edit_label = Some(created.undo_label());
+        self.created = Some(created);
+        self.selection.clear();
+        self.clear_pending();
+        Ok(())
+    }
+
+    /// Plan des Versatzes für den Zeiger `at`, für Vorschau und Klick. Betrag: das Feld, sonst der
+    /// Abstand des Zeigers zur nächsten Kette. Seite: je Kette die des Zeigers, ein negativer Wert
+    /// wechselt sie. `offset_plan` nimmt einen Abstand für alle Ketten; darum läuft eine Kette, bei
+    /// der der Zeiger auf der anderen Seite liegt als bei der nächsten, andersherum.
+    pub fn offset_plan_at(&self, sk: &Sketch, at: DVec2) -> Result<OffsetPlan, OffsetProblem> {
+        let mut chains = sk.ordered_chains(&self.pending_curves)?;
+        let sides: Vec<Option<f64>> = chains.iter().map(|c| sk.offset_side(c, at)).collect();
+        let nearest = sides
+            .iter()
+            .flatten()
+            .copied()
+            .min_by(|a, b| a.abs().total_cmp(&b.abs()));
+        let toward = nearest.map_or(1.0, f64::signum);
+        let distance = match self.input.locked(FieldKind::OffsetDistance) {
+            Some(typed) => toward * typed,
+            None => nearest.ok_or(OffsetProblem::Degenerate)?,
+        };
+        for (chain, side) in chains.iter_mut().zip(sides) {
+            if side.is_some_and(|s| s.signum() != toward) {
+                chain.items.reverse();
+                for item in &mut chain.items {
+                    item.1 = !item.1;
+                }
+            }
+        }
+        sk.offset_plan(&chains, distance)
+    }
+
+    /// Vorschau des Versatzes als Linienzüge: dieselbe Rechnung wie der Klick. `None`, solange
+    /// keine Kette gewählt ist oder der Versatz nicht geht.
+    pub fn offset_preview(&self, sk: &Sketch, at: DVec2) -> Option<Vec<Vec<DVec2>>> {
+        if self.tool != Tool::Offset || self.pending_curves.is_empty() {
+            return None;
+        }
+        let plan = self.offset_plan_at(sk, at).ok()?;
+        Some(plan.outline(PREVIEW_STEPS_PER_TURN))
+    }
+
+    /// Abstand des Zeigers `at` zur nächsten gewählten Kette.
+    pub(crate) fn offset_pointer_distance(&self, sk: &Sketch, at: DVec2) -> Option<f64> {
+        let chains = sk.ordered_chains(&self.pending_curves).ok()?;
+        chains
+            .iter()
+            .filter_map(|c| sk.offset_side(c, at))
+            .map(f64::abs)
+            .min_by(f64::total_cmp)
     }
 
     /// Stutzen, Dehnen oder Brechen der Kurve unter `at`. Ohne Kurve dort passiert nichts;
@@ -674,21 +909,46 @@ impl SketchSession {
     }
 
     /// Auswahl und offene Punkte ohne die Elemente, die es nicht mehr gibt.
-    fn forget_removed(&mut self, sk: &Sketch) {
+    pub(crate) fn forget_removed(&mut self, sk: &Sketch) {
         self.selection.retain(|i| match *i {
             Item::Point(p) => sk.point_xy(p).is_ok(),
             Item::Curve(c) => sk.curve(c).is_some(),
             Item::Constraint(k) => sk.constraint(k).is_some(),
         });
         self.pending.retain(|&p| sk.point_xy(p).is_ok());
+        self.forget_removed_curves(sk);
+    }
+
+    /// Gewählte Kurven samt ihren Klickstellen, der Lauf der Rundung und die Menge von
+    /// Verschieben/Kopieren ohne das, was es nicht mehr gibt. Bleibt von der Menge nichts, wird wieder
+    /// gewählt.
+    fn forget_removed_curves(&mut self, sk: &Sketch) {
+        let mut curves = self.pending_curves.iter();
+        self.pick_points
+            .retain(|_| curves.next().is_some_and(|&c| sk.curve(c).is_some()));
         self.pending_curves.retain(|&c| sk.curve(c).is_some());
+        if self.fillet_run.is_some_and(|(c, _)| sk.curve(c).is_none()) {
+            self.fillet_run = None;
+        }
+        let set = &mut self.transform.set;
+        set.curves.retain(|&c| sk.curve(c).is_some());
+        set.points.retain(|&p| sk.point_xy(p).is_ok());
+        if set.curves.is_empty()
+            && set.points.is_empty()
+            && self.transform.stage != TransformStage::Picking
+        {
+            self.transform.stage = TransformStage::Picking;
+            self.grip_drag = None;
+        }
     }
 
     /// Vorschau unter dem Mauszeiger `at` (siehe [`hover_preview`](Self::hover_preview)):
     /// nur bei Stutzen, Dehnen und Brechen.
     pub fn update_hover(&mut self, sk: &Sketch, at: Option<DVec2>, radius: f64) {
         self.hover_preview = at
-            .filter(|a| a.is_finite() && self.tool.is_modify())
+            .filter(|a| {
+                a.is_finite() && matches!(self.tool, Tool::Trim | Tool::Extend | Tool::Break)
+            })
             .and_then(|at| {
                 let c = sk.pick_curve(at, radius)?;
                 match self.tool {
@@ -1031,6 +1291,25 @@ impl SketchSession {
         if self.planned_kind().is_some() {
             return Ok(());
         }
+        // Verschieben/Kopieren: Beim Wählen geht es weiter zu den Griffen, beim Bezugspunkt zurück.
+        // Den Abschluss macht `finish_transform`, er braucht auch die Formeln.
+        if self.runs_transform() {
+            self.message = None;
+            match self.transform.stage {
+                TransformStage::Picking => self.leave_picking(sk),
+                TransformStage::SetBase => self.transform.stage = TransformStage::Active,
+                TransformStage::Active => {}
+            }
+            return Ok(());
+        }
+        // Versatz: Eingabe schließt ab wie ein Klick.
+        if self.tool == Tool::Offset && !self.pending_curves.is_empty() {
+            let raw = self.draw_cursor.as_ref().map(|c| c.raw).or(self.cursor);
+            return match raw {
+                Some(raw) => self.click(sk, raw, self.pick_radius, false),
+                None => Ok(()),
+            };
+        }
         if self.tool != Tool::Spline {
             self.message = None;
             self.clear_pending();
@@ -1051,8 +1330,13 @@ impl SketchSession {
     /// laufendes Ziehen wird wie mit [`end_drag`](Self::end_drag) beendet (der Punkt bleibt,
     /// wo er ist). Stutzen, Dehnen und Brechen enden ganz (zurück zur Auswahl). Ein laufender
     /// Rahmen fällt allein weg, die alte Auswahl bleibt; ebenso ein laufender Zug auf dem letzten
-    /// Punkt, der Linienzug bleibt.
+    /// Punkt, der Linienzug bleibt, und ein laufender Griff, das Werkzeug bleibt. Verschieben/Kopieren
+    /// hinterlässt auch in der Auswahl nichts.
     pub fn cancel(&mut self, sk: &mut Sketch) {
+        if self.grip_drag.is_some() {
+            self.abort_grip();
+            return;
+        }
         if self.box_select.take().is_some() || self.line_arc.take().is_some() {
             return;
         }
@@ -1060,6 +1344,10 @@ impl SketchSession {
         self.clear_pending();
         if self.tool == Tool::Select {
             self.selection.clear();
+        }
+        if self.runs_transform() {
+            self.selection = self.transform.selection_before.clone();
+            self.forget_removed(sk);
         }
         // Stutzen, Dehnen und Brechen haben nichts Offenes: Esc beendet sie wie in Fusion (auch
         // mitten im Ziehen; was schon gestutzt ist, bleibt).
@@ -1076,9 +1364,10 @@ impl SketchSession {
         matches!(self.snap(sk, at, radius), Snap::None)
     }
 
-    /// Beginnt im Auswahlwerkzeug den Rahmen an der Bildschirmlage `at`.
+    /// Beginnt im Auswahlwerkzeug oder beim Wählen von Verschieben/Kopieren und Maßstab den Rahmen an
+    /// der Bildschirmlage `at`.
     pub fn begin_box(&mut self, at: DVec2, extend: bool) {
-        if self.tool == Tool::Select && at.is_finite() {
+        if (self.tool == Tool::Select || self.transform_picking()) && at.is_finite() {
             self.box_select = Some(BoxSelect {
                 start: at,
                 current: at,
@@ -1156,12 +1445,14 @@ impl SketchSession {
             }
         }
         self.take_selection(found, extend);
+        self.sync_picked(sk);
     }
 
     /// Wählt die zusammenhängende Kette um `c` ([`Sketch::connected_chain`]); `extend` ergänzt.
     pub fn select_chain(&mut self, sk: &Sketch, c: CurveId, extend: bool) {
         let chain = sk.connected_chain(c);
         self.take_selection(chain.into_iter().map(Item::Curve).collect(), extend);
+        self.sync_picked(sk);
     }
 
     /// Setzt die Auswahl auf `items` oder ergänzt sie, ohne etwas doppelt aufzunehmen.
@@ -1474,8 +1765,13 @@ impl SketchSession {
                 }
             }
             let old = sk.measure(&kind);
+            let value_of = kind.length_value();
             let id = sk.add_constraint(kind).map_err(err)?;
+            // Der Stand vor dem Neulegen: Davon gehen Wächter und Schritte aus.
             let unsolved = sk.clone();
+            if let Some(v) = value_of {
+                sk.prepare_dimension_change(id, v);
+            }
             let before = se.last_report.take();
             let report = sk.solve();
             se.last_report = Some(report.clone());
@@ -1553,14 +1849,54 @@ impl SketchSession {
             }
             let old = sk.measure(&kind);
             sk.set_constraint_value(id, value).map_err(err)?;
+            // Der Stand vor dem Neulegen: Davon gehen Wächter und Schritte aus.
             let unsolved = sk.clone();
+            sk.prepare_dimension_change(id, value);
+            // Versatzmaß: Die Vorlage bleibt stehen, wenn das geht. Gelingt es nicht, ist nichts
+            // passiert und es läuft das normale Lösen. So oder so prüft der Wächter gegen den Stand
+            // davor, das Halten umgeht also keine Prüfung auf Umklappen.
+            let hold = sk.offset_hold_points(id);
+            // Was der Plan zum Wert sagt, nur für den Text einer Ablehnung und, bei „geht nicht“,
+            // statt der teuren Schritte.
+            let problem = hold
+                .as_ref()
+                .and_then(|_| unsolved.offset_problem_at(id, value));
+            if let Some(hold) = &hold {
+                match old.filter(|_| problem.is_none()) {
+                    Some(old) => sk.solve_holding_in_steps(id, hold, old, value),
+                    None => sk.solve_holding(hold),
+                };
+            }
             let direct = se.solve_checked(sk, prior).map(|_| ());
-            se.guard_length(sk, id, old, &unsolved, direct)
+            let vanished = problem == Some(OffsetProblem::Vanished);
+            if let Err(e) = se.guard_length(sk, id, old, &unsolved, direct) {
+                return Err(if vanished {
+                    crate::msg!("sketch-offset-vanished")
+                } else {
+                    e
+                });
+            }
+            // Geht es nur, indem die Vorlage nachgibt (ein freier Bogen wüchse mit), passt der Wert
+            // nicht: Sie bleibt stehen, das ist der Sinn dieses Maßes.
+            let tol = sk.tolerance().linear;
+            let moved = |p: &PointId| match (unsolved.point_xy(*p), sk.point_xy(*p)) {
+                (Ok(a), Ok(b)) => a.distance(b) > tol,
+                _ => true,
+            };
+            if hold.is_some_and(|h| h.iter().any(moved)) {
+                return Err(if vanished {
+                    crate::msg!("sketch-offset-vanished")
+                } else {
+                    crate::msg!("sketch-change-conflict")
+                });
+            }
+            Ok(())
         })
     }
 
     /// Falt-Wächter für das Längenmaß `id` (Skizzen 3): `direct` ist das Ergebnis des direkten
-    /// Lösens, `unsolved` der Stand davor (das Maß hat schon seinen neuen Wert). Ist es gescheitert
+    /// Lösens, `unsolved` der Stand davor (das Maß hat schon seinen neuen Wert, ein tangentialer
+    /// Bogen aber noch seine alte Lage, siehe [`Sketch::prepare_dimension_change`]). Ist es gescheitert
     /// oder hat die Skizze umgeklappt, geht es von dort ab dem alten Wert `old` in Schritten
     /// ([`Sketch::solve_in_steps`]): Ein großer Sprung lässt den Löser scheitern, in kleinen
     /// Schritten bleibt die Lage. Kommt es nicht
@@ -1575,19 +1911,29 @@ impl SketchSession {
         direct: Result<(), Msg>,
     ) -> Result<(), Msg> {
         let Some(new) = sk.constraint(id).and_then(|c| c.kind.length_value()) else {
+            // Ein Winkelmaß hat keinen Weg in Schritten; über die Ecke einer Fase geht es trotzdem nicht.
+            let solved = self.last_report.as_ref().is_some_and(status_ok);
+            if direct.is_ok() && solved && unsolved.chamfer_left_its_side(sk) {
+                return Err(crate::msg!("sketch-dimension-folds"));
+            }
             return direct;
         };
+        // Ein Radius darf einen tangentialen Bogen auch nicht über 180° ausbeulen (Skizzen 4).
+        let radius = sk.constraint(id).is_some_and(|c| c.kind.is_radius());
+        let folds = |trial: &Sketch| {
+            folded_over(unsolved, trial)
+                || unsolved.chamfer_left_its_side(trial)
+                || (radius && sweep_crossed_half_turn(unsolved, trial))
+        };
         let solved = self.last_report.as_ref().is_some_and(status_ok);
-        if direct.is_ok() && !(solved && folded_over(unsolved, sk)) {
+        if direct.is_ok() && !(solved && folds(sk)) {
             return Ok(());
         }
         let stuck = direct.and(Err(crate::msg!("sketch-dimension-folds")));
         let Some(old) = old.filter(|o| *o != new) else {
             return stuck;
         };
-        let accept = |trial: &Sketch, report: &SolveReport| {
-            status_ok(report) && !folded_over(unsolved, trial)
-        };
+        let accept = |trial: &Sketch, report: &SolveReport| status_ok(report) && !folds(trial);
         let Some((done, report)) = unsolved.solve_in_steps(&[(id, old, new)], accept) else {
             return stuck;
         };
@@ -1797,7 +2143,7 @@ impl SketchSession {
         }
         sk.prune_points(&orphans);
         self.pending.retain(|&p| sk.point_xy(p).is_ok());
-        self.pending_curves.retain(|&c| sk.curve(c).is_some());
+        self.forget_removed_curves(sk);
         self.line_arc = self
             .line_arc
             .filter(|d| sk.point_xy(d.start).is_ok() && sk.curve(d.prev).is_some());
@@ -1983,6 +2329,62 @@ pub(crate) fn check_change(
     let worse =
         before.status == SolveStatus::Conflicting && report.status == SolveStatus::NotConverged;
     (grown || worse).then_some(report.status)
+}
+
+/// Die Kette um `c`, wie sie der Versatz nimmt: Querlinien und Rollkreise eines früheren Versatzes
+/// verbinden nicht, also bleibt nur die Kette, in der `c` selbst liegt. Ist `c` selbst eine solche
+/// Hilfe, nur `c`.
+fn offset_chain_of(sk: &Sketch, c: CurveId) -> Result<Vec<CurveId>, Msg> {
+    let chains = sk
+        .ordered_chains(&sk.connected_chain(c))
+        .map_err(offset_problem_message)?;
+    let own = chains
+        .iter()
+        .find(|chain| chain.items.iter().any(|item| item.0 == c));
+    Ok(own.map_or_else(
+        || vec![c],
+        |chain| chain.items.iter().map(|item| item.0).collect(),
+    ))
+}
+
+/// Die Kette einer Vorauswahl: Hilfen eines früheren Versatzes (Konstruktionskurven neben normalen
+/// Kurven) zählen nicht, und von Ketten, die über solche Hilfen zusammenhängen (Vorlage und Kopie),
+/// bleibt die erste, wie beim Klick. Getrennte Ketten bleiben. Verzweigt sich die Auswahl, bleibt sie
+/// ganz; die Meldung kommt mit dem Klick.
+fn offset_preselection(sk: &Sketch, curves: Vec<CurveId>) -> Vec<CurveId> {
+    let is_helper = |c: &CurveId| sk.curve(*c).is_some_and(|d| d.construction);
+    let curves: Vec<CurveId> = if curves.iter().all(is_helper) {
+        curves
+    } else {
+        curves.into_iter().filter(|c| !is_helper(c)).collect()
+    };
+    let Ok(chains) = sk.ordered_chains(&curves) else {
+        return curves;
+    };
+    let mut kept: Vec<CurveId> = Vec::new();
+    let mut linked: Vec<CurveId> = Vec::new();
+    for chain in &chains {
+        if chain.items.iter().any(|item| linked.contains(&item.0)) {
+            continue;
+        }
+        kept.extend(chain.items.iter().map(|item| item.0));
+        if let Some(first) = chain.items.first() {
+            linked.extend(sk.connected_chain(first.0));
+        }
+    }
+    kept
+}
+
+/// Die Meldung zu einem Versatz, der nicht geht.
+fn offset_problem_message(problem: OffsetProblem) -> Msg {
+    match problem {
+        OffsetProblem::Branching => crate::msg!("sketch-offset-branching"),
+        OffsetProblem::Vanished => crate::msg!("sketch-offset-vanished"),
+        OffsetProblem::NoJoin => crate::msg!("sketch-offset-no-join"),
+        OffsetProblem::SelfCrossing => crate::msg!("sketch-offset-crossing"),
+        OffsetProblem::Cusp => crate::msg!("sketch-offset-cusp"),
+        OffsetProblem::Degenerate => crate::msg!("sketch-field-rejected"),
+    }
 }
 
 /// Das Maß `kind` mit dem Wert `value`, geprüft nach der gemeinsamen Regel der Skizze

@@ -4,7 +4,7 @@
 
 use crate::msg::Msg;
 use crate::sketch_kinds::ToolKind;
-use crate::sketch_state::{SketchSession, Tool, err};
+use crate::sketch_state::{SketchSession, Tool, TransformStage, err};
 use planora_math::DVec2;
 use planora_sketch::constraint::{ConstraintKind, LineOrPoints};
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
@@ -319,6 +319,16 @@ impl SketchSession {
         if !self.is_drawing_tool() || !raw.is_finite() {
             return cur;
         }
+        // Verschieben/Kopieren und Maßstab: Nur der Bezugspunkt fängt. Beim Wählen zeigt der Zeiger
+        // nur, was der Klick träfe, ganz ohne Fang; die Griffe rechnen mit der Rohlage.
+        if matches!(self.tool, Tool::MoveCopy | Tool::Scale)
+            && self.transform.stage != TransformStage::SetBase
+        {
+            if self.transform.stage == TransformStage::Picking {
+                cur.snap = self.snap(sk, raw, radius);
+            }
+            return cur;
+        }
         // Wer Kurven wählt, sieht nur Kurven: kein Punkt davor, keine Hilfslinie, kein Raster. Eine
         // Kurve wählen ist kein Fang, also geht das auch mit Strg.
         if self.picks_curves() {
@@ -330,8 +340,12 @@ impl SketchSession {
             return cur;
         }
         // Beim 2-Tangenten-Kreis wählt der letzte Klick nur den Sektor: Fang auf einer der Linien
-        // ergäbe gar keinen.
-        if self.cursor_opts.suppressed || self.planned_kind() == Some(ToolKind::Circle2T) {
+        // ergäbe gar keinen. Bei Rundung und Fase gibt der Zeiger nur den Abstand zur Ecke an, beim
+        // Versatz Abstand und Seite zur Kette.
+        if self.cursor_opts.suppressed
+            || self.planned_kind() == Some(ToolKind::Circle2T)
+            || matches!(self.tool, Tool::Fillet | Tool::Offset)
+        {
             return cur;
         }
         let index = self.current_index(sk);

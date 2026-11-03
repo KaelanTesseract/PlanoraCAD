@@ -205,7 +205,8 @@ const R: f64 = 0.5;
 
 #[test]
 fn kinds_cover_their_tools_without_gaps() {
-    assert_eq!(ToolKind::ALL.len(), 19);
+    // Skizzen 4: Rundung und die drei Fasen kamen dazu (19 → 23).
+    assert_eq!(ToolKind::ALL.len(), 23);
     let mut seen = Vec::new();
     for tool in [
         Tool::Rectangle,
@@ -213,6 +214,7 @@ fn kinds_cover_their_tools_without_gaps() {
         Tool::Arc,
         Tool::Polygon,
         Tool::Slot,
+        Tool::Fillet,
     ] {
         assert!(!ToolKind::of(tool).is_empty(), "{tool:?}");
         for &k in ToolKind::of(tool) {
@@ -221,7 +223,7 @@ fn kinds_cover_their_tools_without_gaps() {
             seen.push(k);
         }
     }
-    assert_eq!(seen.len(), 19);
+    assert_eq!(seen.len(), 23);
     for tool in [
         Tool::Select,
         Tool::Point,
@@ -232,6 +234,9 @@ fn kinds_cover_their_tools_without_gaps() {
         Tool::Trim,
         Tool::Extend,
         Tool::Break,
+        Tool::Offset,
+        Tool::MoveCopy,
+        Tool::Scale,
     ] {
         assert!(ToolKind::of(tool).is_empty(), "{tool:?}");
     }
@@ -256,6 +261,7 @@ fn kinds_cover_their_tools_without_gaps() {
             arc: ToolKind::ArcCenter,
             polygon: ToolKind::PolygonCircumscribed,
             slot: ToolKind::SlotCenterToCenter,
+            fillet: ToolKind::Fillet,
         }
     );
     let lines_only: Vec<ToolKind> = ToolKind::ALL
@@ -393,7 +399,7 @@ fn stages_follow_the_table() {
 // ---- Belegbar -------------------------------------------------------------------------------
 
 #[test]
-fn default_keys_stay_and_seventeen_actions_have_none() {
+fn default_keys_stay_and_twenty_actions_have_none() {
     let km = Keymap::defaults();
     assert_eq!(
         km.action_for_key(Area::Sketch, &chord(Key::R)),
@@ -407,7 +413,8 @@ fn default_keys_stay_and_seventeen_actions_have_none() {
         .iter()
         .filter(|k| k.action().default_bindings().is_empty())
         .count();
-    assert_eq!(free, 17);
+    // Skizzen 4: Die Rundung hat F, die drei Fasen keine Taste (17 → 20).
+    assert_eq!(free, 20);
     assert!(km.to_overrides().is_empty(), "Konfiguration bleibt leer");
 }
 
@@ -535,7 +542,7 @@ fn planned_arc_kind_is_remembered() {
 // ---- Leiste und Hinweis ---------------------------------------------------------------------
 
 #[test]
-fn strip_has_fourteen_tools_and_fits_at_full_hd() {
+fn strip_has_eighteen_tools_and_fits_at_full_hd() {
     assert_eq!(
         sketch_panel::TOOL_ORDER,
         [
@@ -553,11 +560,16 @@ fn strip_has_fourteen_tools_and_fits_at_full_hd() {
             Tool::Trim,
             Tool::Extend,
             Tool::Break,
+            // Skizzen 4
+            Tool::Fillet,
+            Tool::Offset,
+            Tool::MoveCopy,
+            Tool::Scale,
         ]
     );
     let rig = Rig::new();
     let buttons = sketch_panel::strip_buttons(&rig.ctx);
-    assert_eq!(buttons.len(), 14);
+    assert_eq!(buttons.len(), 18);
     for (label, r) in &buttons {
         assert!(
             r.top() >= 0.0 && r.bottom() < SIZE.y - planora_app::shell::BOTTOM_H,

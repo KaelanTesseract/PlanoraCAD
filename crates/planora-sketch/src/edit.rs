@@ -23,7 +23,7 @@ use std::collections::HashSet;
 const PREVIEW_STEPS_PER_TURN: usize = 64;
 /// Vielfaches von `tol.linear` bzw. `tol.angular`, bis zu dem eine Abhängigkeit nach dem
 /// Ändern als erfüllt gilt (Entscheidung 7).
-const SETTLE_FACTOR: f64 = 10.0;
+pub(crate) const SETTLE_FACTOR: f64 = 10.0;
 
 /// Das Stück, das [`Sketch::trim`] an derselben Stelle löschen würde.
 #[derive(Clone, Debug, PartialEq)]
@@ -695,7 +695,7 @@ impl Sketch {
 
     /// Entfernt die Punkte aus `points`, die keine lebende Kurve mehr benutzt (samt ihren
     /// Abhängigkeiten).
-    fn drop_orphans(&mut self, points: &[PointId]) -> Result<(), SketchError> {
+    pub(crate) fn drop_orphans(&mut self, points: &[PointId]) -> Result<(), SketchError> {
         let used: HashSet<PointId> = self.curves().flat_map(|(_, d)| d.kind.points()).collect();
         for &p in points {
             if !used.contains(&p) && self.check_point(p).is_ok() {
@@ -745,7 +745,7 @@ impl Sketch {
         }
     }
 
-    fn drop_constraint(&mut self, id: ConstraintId) {
+    pub(crate) fn drop_constraint(&mut self, id: ConstraintId) {
         self.constraints[id].alive = false;
         self.touch_structure();
     }

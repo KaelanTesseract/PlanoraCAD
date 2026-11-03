@@ -2208,6 +2208,14 @@ impl AppState {
     }
 
     fn sketch_jump(&mut self, back: bool) -> bool {
+        // Mitten im Griffzug nimmt Rückgängig nur den Zug zurück: Die Skizze hat er nicht berührt.
+        if back
+            && let Some(se) = self.sketch_session.as_mut()
+            && se.grip_drag.is_some()
+        {
+            se.abort_grip();
+            return true;
+        }
         self.observe_sketch(false);
         let AppState {
             sketch_session: Some(se),

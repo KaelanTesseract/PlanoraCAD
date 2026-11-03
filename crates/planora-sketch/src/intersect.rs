@@ -174,7 +174,7 @@ pub(crate) fn clean_params(g: &Geom, ts: Vec<f64>, tol: f64) -> Vec<f64> {
 }
 
 /// Überlappen sich die Hüllrechtecke mit Spielraum `margin`?
-fn boxes_touch(a: (DVec2, DVec2), b: (DVec2, DVec2), margin: f64) -> bool {
+pub(crate) fn boxes_touch(a: (DVec2, DVec2), b: (DVec2, DVec2), margin: f64) -> bool {
     a.0.x <= b.1.x + margin
         && b.0.x <= a.1.x + margin
         && a.0.y <= b.1.y + margin

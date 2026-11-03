@@ -57,14 +57,33 @@ fn field_pos(rect: Rect, anchor: Pos2, width: f32, row: usize, rows: usize) -> P
 
 /// Der aktuelle Wert gerundet, wie ihn das Feld vor dem ersten Zeichen zeigt: Länge wie
 /// [`planora_i18n::fmt_len`] ohne Einheit, Winkel mit einer Stelle, die Seitenzahl ganz.
-fn suggestion(se: &SketchSession, sf: &SketchFeature, kind: FieldKind) -> String {
+pub fn suggestion(se: &SketchSession, sf: &SketchFeature, kind: FieldKind) -> String {
     match se.field_value(&sf.sketch, kind) {
         Some(v) if kind == FieldKind::Sides => format!("{v:.0}"),
-        Some(v) if matches!(kind, FieldKind::Angle | FieldKind::Sweep) => {
+        Some(v)
+            if matches!(
+                kind,
+                FieldKind::Angle | FieldKind::Sweep | FieldKind::MoveAngle
+            ) =>
+        {
             format_number(v.to_degrees(), 1)
         }
+        // Der Faktor hat keine Einheit: Zoll darf ihn nicht umrechnen.
+        Some(v) if kind == FieldKind::ScaleFactor => format_factor(v),
         Some(v) => planora_i18n::fmt_len_num(v),
         None => String::new(),
+    }
+}
+
+/// Der Faktor des Maßstabs als Zahl ohne Einheit, ohne überflüssige Nullen.
+fn format_factor(v: f64) -> String {
+    let text = format_number(v, 4);
+    if text.contains(['.', ',']) {
+        text.trim_end_matches('0')
+            .trim_end_matches(['.', ','])
+            .to_string()
+    } else {
+        text
     }
 }
 
@@ -213,12 +232,12 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option
 
     // Offene Liste der Arten: Eingabe und Esc gehören ihr, nicht der Form.
     let flyout = crate::sketch_panel::flyout_open(&ctx);
-    if enter && !flyout {
-        let raw = se.draw_cursor.as_ref().map(|c| c.raw).or(se.cursor);
-        if let Some(raw) = raw {
-            // Fehler stehen in der Meldung der Sitzung und im Feld.
-            let _ = se.commit_input(sf, raw, radius, false, &scope);
-        }
+    if enter && !flyout && se.runs_transform() {
+        // Fehler stehen in der Meldung der Sitzung und im Feld.
+        let _ = se.confirm_transform(sf);
+    } else if enter && !flyout {
+        // Fehler stehen in der Meldung der Sitzung und im Feld.
+        let _ = se.commit_at_cursor(sf, radius, &scope);
     }
     if esc && !flyout {
         se.cancel(&mut sf.sketch);

@@ -6,13 +6,17 @@ use crate::formula_field::resolve;
 use crate::msg::Msg;
 use crate::sketch_cursor::{DrawCursor, leaving_direction};
 use crate::sketch_kinds::ToolKind;
-use crate::sketch_state::{SketchSession, Tool, check_change, checked_value, dimension_input, err};
+use crate::sketch_state::{
+    SketchSession, Tool, TransformStage, check_change, checked_value, dimension_input, err,
+};
 use planora_feature::{ParamScope, ParamUnit, SketchFeature};
 use planora_i18n::tr;
 use planora_math::DVec2;
-use planora_sketch::constraint::ConstraintKind;
+use planora_sketch::constraint::{ConstraintId, ConstraintKind};
+use planora_sketch::fillet::{ChamferIds, FilletIds};
 use planora_sketch::helpers::RectIds;
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
+use planora_sketch::offset::OffsetIds;
 use planora_sketch::shapes::{ArcSlotIds, PolygonIds, SlotIds};
 
 /// Länge der Achshilfe (Skizzen-x-Achse) für Winkel ohne vorige Linie.
@@ -34,14 +38,28 @@ pub enum FieldKind {
     Depth,
     /// Seitenzahl eines Polygons: ganzzahlig 3 bis 64, wird nie ein Maß.
     Sides,
+    /// Abstand der Fase (Skizzen 4).
+    Distance,
+    /// Zweiter Abstand der Fase.
+    Distance2,
+    /// Versatz: Vorzeichen erlaubt (wechselt die Seite), nie null.
+    OffsetDistance,
+    /// Verschiebung in x: Vorzeichen und null erlaubt.
+    MoveX,
+    /// Verschiebung in y: Vorzeichen und null erlaubt.
+    MoveY,
+    /// Drehung in Grad: Vorzeichen erlaubt.
+    MoveAngle,
+    /// Faktor des Maßstabs: größer als null, ohne Einheit.
+    ScaleFactor,
 }
 
 impl FieldKind {
     /// Einheit, in der das Feld gelesen wird (Winkel in Grad, Seitenzahl ohne, sonst Länge).
     pub fn unit(self) -> ParamUnit {
         match self {
-            FieldKind::Angle | FieldKind::Sweep => ParamUnit::Angle,
-            FieldKind::Sides => ParamUnit::Number,
+            FieldKind::Angle | FieldKind::Sweep | FieldKind::MoveAngle => ParamUnit::Angle,
+            FieldKind::Sides | FieldKind::ScaleFactor => ParamUnit::Number,
             _ => ParamUnit::Length,
         }
     }
@@ -60,6 +78,13 @@ impl FieldKind {
             FieldKind::MinorAxis => tr!("sketch-field-minor"),
             FieldKind::Depth => tr!("sketch-field-depth"),
             FieldKind::Sides => tr!("sketch-field-sides"),
+            FieldKind::Distance => tr!("sketch-field-distance"),
+            FieldKind::Distance2 => tr!("sketch-field-distance2"),
+            FieldKind::OffsetDistance => tr!("sketch-field-offset"),
+            FieldKind::MoveX => tr!("sketch-field-move-x"),
+            FieldKind::MoveY => tr!("sketch-field-move-y"),
+            FieldKind::MoveAngle => tr!("sketch-field-move-angle"),
+            FieldKind::ScaleFactor => tr!("sketch-field-scale-factor"),
         }
     }
 }
@@ -92,6 +117,7 @@ pub struct DrawInput {
         usize,
         usize,
         bool,
+        TransformStage,
     ),
     /// Getippte Werte früherer Stufen (Bogenradius, große Achse) bis zum Abschluss.
     carried: Vec<(FieldKind, String)>,
@@ -119,6 +145,9 @@ pub enum Created {
     Polygon { ids: PolygonIds, inscribed: bool },
     Slot(SlotIds),
     ArcSlot(ArcSlotIds),
+    Fillet(FilletIds),
+    Chamfer(ChamferIds),
+    Offset(OffsetIds),
 }
 
 impl Created {
@@ -131,6 +160,21 @@ impl Created {
             Created::Ellipse(_) => crate::msg!("undo-ellipse"),
             Created::Polygon { .. } => crate::msg!("undo-polygon"),
             Created::Slot(_) | Created::ArcSlot(_) => crate::msg!("undo-slot"),
+            Created::Fillet(_) => crate::msg!("undo-fillet"),
+            Created::Chamfer(_) => crate::msg!("undo-chamfer"),
+            Created::Offset(_) => crate::msg!("undo-offset"),
+        }
+    }
+
+    /// Das schon angelegte Maß zum Feld `kind`: Rundung und Fase legen ihre Maße selbst an.
+    fn existing_dimension(&self, kind: FieldKind) -> Option<ConstraintId> {
+        match (self, kind) {
+            (Created::Fillet(ids), FieldKind::Radius) => ids.radius_dim,
+            (Created::Chamfer(ids), FieldKind::Distance) => ids.dims.first().copied(),
+            (Created::Chamfer(ids), FieldKind::Distance2 | FieldKind::Angle) => {
+                ids.dims.get(1).copied()
+            }
+            _ => None,
         }
     }
 }
@@ -202,12 +246,41 @@ fn read_field(
         FieldKind::Angle if !(0.0..=180.0).contains(&v) => Err(tr!("sketch-field-angle-range")),
         FieldKind::Sweep if !(v > 0.0 && v < 360.0) => Err(tr!("sketch-field-sweep-range")),
         FieldKind::Angle | FieldKind::Sweep => Ok(Some(v.to_radians())),
+        // Skizzen 4: Vorzeichen erlaubt, nur endlich (und der Versatz nicht null).
+        FieldKind::OffsetDistance if !v.is_finite() || v == 0.0 => {
+            Err(tr!("sketch-field-offset-nonzero"))
+        }
+        FieldKind::MoveX | FieldKind::MoveY if !v.is_finite() => {
+            Err(tr!("sketch-err-value-finite"))
+        }
+        FieldKind::MoveAngle if !v.is_finite() => Err(tr!("sketch-err-value-finite")),
+        FieldKind::MoveAngle => Ok(Some(v.to_radians())),
+        FieldKind::ScaleFactor if !v.is_finite() || v <= 0.0 => {
+            Err(tr!("sketch-field-factor-positive"))
+        }
+        FieldKind::OffsetDistance | FieldKind::MoveX | FieldKind::MoveY => Ok(Some(v)),
         _ if !v.is_finite() || v <= 0.0 => Err(tr!("sketch-field-positive")),
         FieldKind::MinorAxis if minor_limit.is_some_and(|l| v > l) => {
             Err(tr!("sketch-field-minor-too-big"))
         }
         _ => Ok(Some(v)),
     }
+}
+
+/// Der getippte Versatz als Text des Maßes: Ein Maß hat kein Vorzeichen, das Minus hat schon die
+/// Seite gewechselt. Eine Formel bleibt eine Formel, nur ohne das Minus.
+fn magnitude_text(text: &str, scope: &ParamScope) -> Result<String, Msg> {
+    let unit = FieldKind::OffsetDistance.unit();
+    let (value, _) = resolve(text, unit, scope)?;
+    if value >= 0.0 {
+        return Ok(text.to_string());
+    }
+    // „-a + b“ ohne Minus wäre etwas anderes; darum zählt der nachgerechnete Wert.
+    let bare = text.trim().trim_start_matches(['-', '\u{2212}']).trim();
+    [bare.to_string(), format!("-({text})")]
+        .into_iter()
+        .find(|t| resolve(t, unit, scope).is_ok_and(|(v, _)| v == -value))
+        .ok_or_else(|| crate::msg!("sketch-field-rejected"))
 }
 
 /// Die Hilfslinie entlang der Skizzen-x-Achse: einmal je Skizze eine Konstruktionslinie
@@ -268,6 +341,7 @@ impl SketchSession {
             self.pending_pos.len(),
             self.pending_curves.len(),
             self.line_arc.is_some(),
+            self.transform.stage,
         );
         if self.input.key == key {
             return;
@@ -305,6 +379,11 @@ impl SketchSession {
         }
         let (pts, pos) = (self.pending.len(), self.pending_pos.len());
         match self.tool {
+            Tool::Offset if !self.pending_curves.is_empty() => &[F::OffsetDistance],
+            Tool::MoveCopy if self.transform.stage == TransformStage::Active => {
+                &[F::MoveX, F::MoveY, F::MoveAngle]
+            }
+            Tool::Scale if self.transform.stage == TransformStage::Active => &[F::ScaleFactor],
             Tool::Line if pts > 0 => &[F::Length, F::Angle],
             Tool::Rectangle if pos > 0 => &[F::Width, F::Height],
             Tool::Circle if pts > 0 => &[F::Diameter],
@@ -384,7 +463,13 @@ impl SketchSession {
         if self.planned_kind().is_some() {
             return self.kind_field_value(sk, kind);
         }
+        if matches!(kind, F::MoveX | F::MoveY | F::MoveAngle | F::ScaleFactor) {
+            return self.transform_field_value(kind);
+        }
         let at = self.draw_cursor.as_ref()?.at;
+        if kind == F::OffsetDistance {
+            return self.offset_pointer_distance(sk, at);
+        }
         if matches!(kind, F::Width | F::Height) {
             let size = at - *self.pending_pos.first()?;
             return Some(if kind == F::Width { size.x } else { size.y }.abs());
@@ -410,7 +495,18 @@ impl SketchSession {
                 let major = (*self.pending_pos.first()? - from).try_normalize()?;
                 major.perp_dot(along).abs()
             }
-            F::Width | F::Height | F::Depth | F::Sides => return None,
+            // Die Felder von Skizzen 4 zeigen ihre Vorschau selbst.
+            F::Width
+            | F::Height
+            | F::Depth
+            | F::Sides
+            | F::Distance
+            | F::Distance2
+            | F::OffsetDistance
+            | F::MoveX
+            | F::MoveY
+            | F::MoveAngle
+            | F::ScaleFactor => return None,
         })
     }
 
@@ -542,6 +638,20 @@ impl SketchSession {
         }
     }
 
+    /// Eingabe: [`commit_input`](Self::commit_input) dort, wo die Vorschau steht; ohne Zeiger nichts.
+    pub fn commit_at_cursor(
+        &mut self,
+        sf: &mut SketchFeature,
+        radius: f64,
+        scope: &ParamScope,
+    ) -> Result<(), String> {
+        let raw = self.draw_cursor.as_ref().map(|c| c.raw).or(self.cursor);
+        match raw {
+            Some(raw) => self.commit_input(sf, raw, radius, false, scope),
+            None => Ok(()),
+        }
+    }
+
     fn commit_typed(
         &mut self,
         sf: &mut SketchFeature,
@@ -557,8 +667,19 @@ impl SketchSession {
             self.input
                 .fields
                 .iter()
-                // Die Seitenzahl ist kein Maß; sie steht in `DrawInput::sides`.
-                .filter(|f| f.locked.is_some() && f.kind != FieldKind::Sides)
+                // Die Seitenzahl ist kein Maß; sie steht in `DrawInput::sides`. Verschieben und
+                // Maßstab lesen ihre Felder selbst.
+                .filter(|f| {
+                    f.locked.is_some()
+                        && !matches!(
+                            f.kind,
+                            FieldKind::Sides
+                                | FieldKind::MoveX
+                                | FieldKind::MoveY
+                                | FieldKind::MoveAngle
+                                | FieldKind::ScaleFactor
+                        )
+                })
                 .map(|f| (f.kind, f.text.clone())),
         );
         if let Err(text) = self.click(&mut sf.sketch, raw, radius, extend) {
@@ -572,8 +693,33 @@ impl SketchSession {
             }
             return Ok(());
         };
+        // Der Versatz legt sein Maß selbst an (oder keins): Der getippte Text wird dessen Wert und
+        // Formel, und was der Klick zu sagen hatte, bleibt stehen.
+        if let Created::Offset(ids) = &created {
+            let note = self.message.take();
+            let text = typed.iter().find(|(k, _)| *k == FieldKind::OffsetDistance);
+            if let (Some(id), Some((_, text))) = (ids.distance_dim, text) {
+                let text = magnitude_text(text, scope)?;
+                if let Err(text) = self.set_dimension_input(sf, id, &text, scope) {
+                    return Err(self.message.take().unwrap_or(Msg::Raw(text)));
+                }
+            }
+            if note.is_some() {
+                self.message = note;
+            }
+            self.edit_label = Some(created.undo_label());
+            self.sync_input(&sf.sketch);
+            return Ok(());
+        }
         let mut note = None;
         for (kind, text) in &typed {
+            // Rundung und Fase: Wert und Formel gehören an das Maß, das schon da ist.
+            if let Some(id) = created.existing_dimension(*kind) {
+                if let Err(text) = self.set_dimension_input(sf, id, text, scope) {
+                    return Err(self.message.take().unwrap_or(Msg::Raw(text)));
+                }
+                continue;
+            }
             let overall = self.overall_center_distance(sf, &created, *kind, &typed, scope)?;
             note = self
                 .add_typed_dimension(sf, &created, *kind, text, overall, chain, scope)?

@@ -18,7 +18,7 @@
 //! Änderung an Objekten oder Abhängigkeiten leert den Speicher. So rechnet beim Ziehen nur die
 //! Gruppe mit dem gezogenen Punkt.
 
-use crate::constraint::{ConstraintId, SHARED_END_TANGENT_DRIFT};
+use crate::constraint::{ConstraintId, ConstraintKind, SHARED_END_TANGENT_DRIFT};
 use crate::error::SketchError;
 use crate::linalg::{Matrix, analyze_rows, cholesky_solve};
 use crate::model::{CurveId, CurveKind, PointId, Sketch};
@@ -62,6 +62,12 @@ const MAX_VALUE_STEPS: f64 = 128.0;
 const FREE_COMPONENT: f64 = 1e-6;
 /// Versuche mit steigender Dämpfung innerhalb eines Schritts.
 const DAMPING_TRIES: usize = 30;
+/// So oft setzt [`Sketch::solve_holding`] die gehaltenen Punkte zurück und löst nach.
+const HOLD_ROUNDS: usize = 8;
+/// Um so viel genauer zieht [`Sketch::solve_holding`] zum Schluss nach.
+const HOLD_POLISH: f64 = 1e-2;
+/// So oft halbiert [`Sketch::solve_holding_in_steps`] den Schritt höchstens.
+const HOLD_HALVINGS: usize = 6;
 
 /// Ergebnis eines Solver-Laufs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -279,6 +285,145 @@ impl Sketch {
     /// Löst alle aktiven Abhängigkeiten. Nicht lösbare Gruppen bleiben unverändert.
     pub fn solve(&mut self) -> SolveReport {
         self.solve_with_soft(&[])
+    }
+
+    /// Löst bei festgehaltenen Punkten `hold`, ohne dass sie sich auch nur im letzten Bit bewegen:
+    /// auf einer Kopie mit vorübergehendem `Fixed`. Gelöst: Die Werte werden übernommen, `true`.
+    /// Sonst `false`, und die Skizze bleibt, wie sie ist.
+    ///
+    /// Die Schranke des Lösers reicht hier nicht: Ein Winkelfehler von 1e-8 ist an einer Linie von
+    /// 150 mm schon 1,5e-6 mm Abstand. Darum wird genauer nachgezogen; gelingt das nicht, gilt der
+    /// Lauf als gescheitert, statt ein ungenaues Ergebnis als gelöst zu melden.
+    pub fn solve_holding(&mut self, hold: &[PointId]) -> bool {
+        let mut trial = self.clone();
+        let mut pins = Vec::with_capacity(hold.len());
+        for &p in hold {
+            let Ok(at) = self.point_xy(p) else {
+                return false;
+            };
+            match trial.add_constraint(ConstraintKind::Fixed(p, at.x, at.y)) {
+                Ok(id) => pins.push(id),
+                Err(_) => return false,
+            }
+        }
+        let pinned: Vec<(usize, f64)> = self
+            .held_variables(hold)
+            .into_iter()
+            .map(|v| (v, self.vars[v]))
+            .collect();
+        if !trial.settle_holding(&pinned) {
+            return false;
+        }
+        trial.tol.linear *= HOLD_POLISH;
+        trial.drop_rows_between_held(&pinned, &pins);
+        trial.touch_structure();
+        if !trial.settle_holding(&pinned) {
+            return false;
+        }
+        self.vars = trial.vars;
+        self.touch_values();
+        true
+    }
+
+    /// Wie [`solve_holding`](Self::solve_holding) für das Maß `dim`, das schon den neuen Wert `to`
+    /// trägt und vorher `from` hatte: Ein großer Sprung lässt den Löser nah an der Grenze scheitern,
+    /// in kleineren Schritten bleibt die Lage. Halbiert höchstens [`HOLD_HALVINGS`]-mal.
+    pub fn solve_holding_in_steps(
+        &mut self,
+        dim: ConstraintId,
+        hold: &[PointId],
+        from: f64,
+        to: f64,
+    ) -> bool {
+        if self.solve_holding(hold) {
+            return true;
+        }
+        let mut trial = self.clone();
+        if !trial.hold_by_halves(dim, hold, from, to, HOLD_HALVINGS) {
+            return false;
+        }
+        self.vars = trial.vars;
+        self.touch_values();
+        true
+    }
+
+    /// Geht von `from` nach `to`; `self` steht bei `from`-Lage, das Maß danach auf `to`.
+    fn hold_by_halves(
+        &mut self,
+        dim: ConstraintId,
+        hold: &[PointId],
+        from: f64,
+        to: f64,
+        depth: usize,
+    ) -> bool {
+        if self.set_constraint_value(dim, to).is_err() {
+            return false;
+        }
+        if self.solve_holding(hold) {
+            return true;
+        }
+        if depth == 0 {
+            return false;
+        }
+        let mid = 0.5 * (from + to);
+        self.hold_by_halves(dim, hold, from, mid, depth - 1)
+            && self.hold_by_halves(dim, hold, mid, to, depth - 1)
+    }
+
+    /// Schaltet Abhängigkeiten ab, die nur gehaltene Werte lesen: Sie sind schon im Rahmen der
+    /// gewöhnlichen Schranke erfüllt, und bewegen darf sie niemand mehr. Die Zeilen `pins` bleiben.
+    fn drop_rows_between_held(&mut self, pinned: &[(usize, f64)], pins: &[ConstraintId]) {
+        let held: HashSet<usize> = pinned.iter().map(|p| p.0).collect();
+        let idle: Vec<ConstraintId> = self
+            .constraints
+            .iter()
+            .filter(|(id, c)| c.alive && c.enabled && !pins.contains(id))
+            .map(|(id, _)| id)
+            .filter(|&id| {
+                self.evaluate(id, &self.vars)
+                    .is_some_and(|ev| ev.locals.iter().all(|v| held.contains(v)))
+            })
+            .collect();
+        for id in idle {
+            self.constraints[id].enabled = false;
+        }
+    }
+
+    /// Löst, setzt `pinned` zurück und löst nach, bis sich nichts mehr rührt: Der Löser kommt nur
+    /// bis auf seine Schranke an die festen Werte heran. `false`, wenn es nicht gelingt.
+    fn settle_holding(&mut self, pinned: &[(usize, f64)]) -> bool {
+        for _ in 0..HOLD_ROUNDS {
+            let report = self.solve();
+            if report.status != SolveStatus::Solved {
+                return false;
+            }
+            if report.iterations == 0 {
+                return true;
+            }
+            for &(v, value) in pinned {
+                self.vars[v] = value;
+            }
+        }
+        false
+    }
+
+    /// Die Variablen von `hold` und die Radien der Kreise, die durch sie schon feststehen (Mitte
+    /// und ein Punkt mit `PointOnCurve` in `hold`).
+    fn held_variables(&self, hold: &[PointId]) -> Vec<usize> {
+        let mut vars: Vec<usize> = Vec::with_capacity(hold.len() * 2);
+        for &p in hold {
+            vars.extend([self.points[p].x, self.points[p].y]);
+        }
+        for (_, d) in self.constraints().filter(|(_, d)| d.enabled) {
+            if let ConstraintKind::PointOnCurve(p, c) = d.kind
+                && hold.contains(&p)
+                && let CurveKind::Circle { center, radius } = self.curves[c].kind
+                && hold.contains(&center)
+            {
+                vars.push(radius);
+            }
+        }
+        vars
     }
 
     /// Baut Residuen und Jacobi-Matrix der Gruppe an der Stelle `x`, je nach `which` (alle, ohne eine Abhängigkeit, oder mit Restwerten für Tangenten).

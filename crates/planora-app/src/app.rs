@@ -19,6 +19,7 @@ use crate::project_actions::ProjectsUi;
 use crate::projects_window::{ProjectsEvent, ProjectsWindow};
 use crate::settings_window::{CheckHint, SettingsEvent, SettingsWindow};
 use crate::shell::ShellState;
+use crate::sketch_state::Tool;
 use crate::state::{AppState, BodyKind, SketchRequest, StandardPlane};
 use crate::step_import_dialog::{self, StepImportDialog};
 use crate::update_check::{self, CheckRequest, CheckResult, NoNetwork, UpdateChecker};
@@ -1249,7 +1250,24 @@ impl PlanoraApp {
     /// Bild zusammen nur einer (der Verteiler verbraucht sie alle). Kommen beide in einem Bild,
     /// erst Rückgängig, dann Wiederholen.
     fn undo_keys(&mut self, ctx: &egui::Context) {
-        if self.windows_open() || ctx.input(|i| i.pointer.any_down()) {
+        if self.windows_open() {
+            return;
+        }
+        if ctx.input(|i| i.pointer.any_down()) {
+            // Ein Griffzug hat die Skizze nicht berührt: Rückgängig nimmt nur ihn zurück.
+            let state = &self.ws.active_tab().state;
+            if state
+                .sketch_session
+                .as_ref()
+                .is_some_and(|se| se.grip_drag.is_some())
+            {
+                let area = keymap::dispatch::current_area(state);
+                let pressed =
+                    keymap::dispatch::pressed_if(ctx, &self.ws.keymap, area, is_history_key);
+                if pressed.contains(&Action::Undo) {
+                    self.ws.active_tab_mut().state.undo_sketch();
+                }
+            }
             return;
         }
         let area = keymap::dispatch::current_area(&self.ws.active_tab().state);
@@ -2181,6 +2199,7 @@ pub fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
             ui.close();
         }
     }
+    sketch_modify_menu(ui, ws);
     ui.separator();
     let tab = ws.active_tab_mut();
     let rolled_back = tab.state.document.marker() < tab.state.document.features().len();
@@ -2259,7 +2278,8 @@ fn sketch_kinds_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     }
     let tools = sketch_panel::TOOL_ORDER
         .into_iter()
-        .filter(|t| sketch_panel::has_flyout(*t));
+        // Die Rundung und die Fasen stehen unter „Bearbeiten → Ändern“.
+        .filter(|t| sketch_panel::has_flyout(*t) && *t != Tool::Fillet);
     for tool in tools {
         icons::submenu(ui, sketch_panel::tool_label(tool), |ui| {
             for kind in crate::sketch_kinds::ToolKind::of(tool) {
@@ -2275,6 +2295,41 @@ fn sketch_kinds_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
             }
         });
     }
+}
+
+/// Die Werkzeuge im Untermenü „Ändern“ nach Rundung und Fasen (Versatz wie in Fusions „Modify“).
+pub const SKETCH_MODIFY_TOOLS: [Tool; 3] = [Tool::Offset, Tool::MoveCopy, Tool::Scale];
+
+/// Bei offener Skizze das Untermenü „Ändern“ im Menü „Bearbeiten“: Skizzenrundung, die drei
+/// Fasen, Versatz, Verschieben/Kopieren und Skizzenmaßstab.
+fn sketch_modify_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
+    if ws.active_tab().state.open_sketch_id().is_none() {
+        return;
+    }
+    ui.separator();
+    icons::submenu(ui, tr!("menu-sketch-modify"), |ui| {
+        let kinds = crate::sketch_kinds::ToolKind::of(Tool::Fillet)
+            .iter()
+            .map(|k| (k.action(), icons::sketch_kind_icon(*k), k.hint()));
+        let tools = SKETCH_MODIFY_TOOLS.map(|t| {
+            let action = Action::for_sketch_tool(t).unwrap_or(Action::SketchMoveCopy);
+            (
+                action,
+                icons::sketch_tool_icon(t),
+                sketch_panel::tool_hint(t),
+            )
+        });
+        for (action, source, hint) in kinds.chain(tools) {
+            let keys = keymap::shortcut_hint(&ws.keymap, action);
+            if icons::source_entry_keys(ui, source, &action.label(), &keys, true)
+                .on_hover_text(hint)
+                .clicked()
+            {
+                commands::run_action(ws, action);
+                ui.close();
+            }
+        }
+    });
 }
 
 /// Einträge „Skizze auf …“ im Menü „Erzeugen“ (ohne Untermenü).

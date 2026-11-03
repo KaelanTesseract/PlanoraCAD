@@ -1252,3 +1252,329 @@ fn a_big_parameter_jump_keeps_a_rounded_rectangle_with_its_tangents() {
         assert!((done.radius(arc1).unwrap() - r).abs() < 1e-6, "{value}");
     }
 }
+
+// ---- Rundung mit Formelradius (Skizzen 4) ----------------------------------------------------
+
+/// Zwei Linien der Länge 40 im rechten Winkel, Ecke im Ursprung, gerundet mit Radius 5.
+fn rounded_corner(fixed: bool) -> (Sketch, planora_sketch::FilletIds, [ConstraintId; 2]) {
+    use planora_sketch::fillet::CurvePick;
+    let mut sk = Sketch::new(StandardPlane::XY.frame(), "S", Tolerance::default());
+    let a = sk.add_point(40.0, 0.0).unwrap();
+    let p = sk.add_point(0.0, 0.0).unwrap();
+    let b = sk.add_point(0.0, 40.0).unwrap();
+    let l1 = sk.add_line(a, p).unwrap();
+    let l2 = sk.add_line(p, b).unwrap();
+    if fixed {
+        sk.add_constraint(ConstraintKind::Fixed(a, 40.0, 0.0))
+            .unwrap();
+        sk.add_constraint(ConstraintKind::Fixed(b, 0.0, 40.0))
+            .unwrap();
+    }
+    let corner = [
+        sk.add_constraint(ConstraintKind::Distance(a, p, 40.0))
+            .unwrap(),
+        sk.add_constraint(ConstraintKind::Distance(b, p, 40.0))
+            .unwrap(),
+    ];
+    let plan = sk
+        .fillet_plan(
+            CurvePick {
+                curve: l1,
+                at: DVec2::new(20.0, 0.0),
+            },
+            CurvePick {
+                curve: l2,
+                at: DVec2::new(0.0, 20.0),
+            },
+            5.0,
+        )
+        .unwrap();
+    let ids = sk.add_fillet(&plan, None).unwrap();
+    (sk, ids, corner)
+}
+
+#[test]
+fn a_fillet_radius_formula_refits_the_arc_and_refuses_what_does_not_fit() {
+    let (sk, ids, _) = rounded_corner(true);
+    let dim = ids.radius_dim.unwrap();
+    let mut d = Document::new();
+    let r = d.add_parameter("R", "5", Length, "").unwrap();
+    let s = d
+        .add_feature("Skizze 1", FeatureKind::Sketch(on_xy(sk, one(dim, "R"))))
+        .unwrap();
+    assert_eq!(status(&d, s), FeatureStatus::Ok);
+    for (value, text) in [(30.0, "30"), (2.0, "2"), (39.0, "39"), (5.0, "5")] {
+        d.set_parameter(r, edit(&d, r, text)).unwrap();
+        assert_eq!(status(&d, s), FeatureStatus::Ok, "{text}");
+        let got = d.sketch_of(s).unwrap();
+        let m = got.point_xy(ids.center).unwrap();
+        assert!(m.distance(DVec2::splat(value)) < 1e-6, "{text}: {m:?}");
+        assert!(
+            got.point_xy(ids.touch[0])
+                .unwrap()
+                .distance(DVec2::new(value, 0.0))
+                < 1e-6
+        );
+    }
+    // Skizzen 4: Über der Grenze entscheidet der normale Löser; hier widerspricht er, denn Ecke und
+    // Fernenden liegen fest.
+    d.set_parameter(r, edit(&d, r, "45")).unwrap();
+    assert!(error_text(&d, s).contains(&planora_i18n::tr!("sketch-formula-conflict")));
+}
+
+/// Passt der Radius erst, wenn eine andere Formel die Linie verlängert hat, geht es auch.
+#[test]
+fn a_longer_line_makes_room_for_the_formula_radius() {
+    let (sk, ids, corner) = rounded_corner(false);
+    let dim = ids.radius_dim.unwrap();
+    let mut d = Document::new();
+    let x = d.add_parameter("X", "40", Length, "").unwrap();
+    let formulas: SketchFormulas = [
+        (corner[0], "X".to_string()),
+        (corner[1], "X".to_string()),
+        (dim, "X / 8".to_string()),
+    ]
+    .into_iter()
+    .collect();
+    let s = d
+        .add_feature("Skizze 1", FeatureKind::Sketch(on_xy(sk, formulas)))
+        .unwrap();
+    assert_eq!(status(&d, s), FeatureStatus::Ok);
+    d.set_parameter(x, edit(&d, x, "400")).unwrap();
+    assert_eq!(status(&d, s), FeatureStatus::Ok);
+    let got = d.sketch_of(s).unwrap();
+    assert!((got.radius(ids.arc).unwrap() - 50.0).abs() < 1e-6);
+}
+
+/// Oval aus vier Bögen von Hand, der obere umschließt die kleinen; sein Radius über eine Formel.
+#[test]
+fn a_formula_radius_on_an_oval_with_enclosing_arcs_solves() {
+    let mut sk = Sketch::new(StandardPlane::XY.frame(), "S", Tolerance::default());
+    let big = 30.0 * 2.0_f64.sqrt() + 10.0;
+    let (x, y) = (big * 0.5_f64.sqrt(), 10.0 * 0.5_f64.sqrt());
+    let mut pt = |x: f64, y: f64| sk.add_point(x, y).unwrap();
+    let (right, left, top, bottom) = (pt(30.0, 0.0), pt(-30.0, 0.0), pt(0.0, -30.0), pt(0.0, 30.0));
+    let (ne, nw, sw, se) = (pt(x, y), pt(-x, y), pt(-x, -y), pt(x, -y));
+    let arcs = [
+        sk.add_arc(right, se, ne).unwrap(),
+        sk.add_arc(top, ne, nw).unwrap(),
+        sk.add_arc(left, nw, sw).unwrap(),
+        sk.add_arc(bottom, sw, se).unwrap(),
+    ];
+    for i in 0..4 {
+        sk.add_constraint(ConstraintKind::Tangent(arcs[i], arcs[(i + 1) % 4]))
+            .unwrap();
+    }
+    let dim = sk
+        .add_constraint(ConstraintKind::Radius(arcs[1], big))
+        .unwrap();
+    let mut d = Document::new();
+    let r = d.add_parameter("R", &big.to_string(), Length, "").unwrap();
+    let s = d
+        .add_feature("Skizze 1", FeatureKind::Sketch(on_xy(sk, one(dim, "R"))))
+        .unwrap();
+    assert_eq!(status(&d, s), FeatureStatus::Ok);
+    // Passt nicht: bei 8 ein Fehler statt still falscher Form, bei 27,4 (direkt 198°) in Schritten
+    // unter 180°.
+    d.set_parameter(r, edit(&d, r, "8")).unwrap();
+    assert!(error_text(&d, s).contains(&planora_i18n::tr!("sketch-formula-unsolvable")));
+    d.set_parameter(r, edit(&d, r, "27.4")).unwrap();
+    assert_eq!(status(&d, s), FeatureStatus::Ok);
+    let got = d.sketch_of(s).unwrap();
+    assert!((got.radius(arcs[1]).unwrap() - 27.4).abs() < 1e-6);
+    for value in [53.0, 55.0, 60.0, 67.0, 50.0, 45.0, 42.0] {
+        d.set_parameter(r, edit(&d, r, &value.to_string())).unwrap();
+        assert_eq!(status(&d, s), FeatureStatus::Ok, "R {value}");
+        let got = d.sketch_of(s).unwrap();
+        assert!(
+            (got.radius(arcs[1]).unwrap() - value).abs() < 1e-6,
+            "R {value}"
+        );
+        assert!(
+            (got.radius(arcs[0]).unwrap() - 10.0).abs() < 1e-6,
+            "R {value}"
+        );
+    }
+}
+
+// ---- Radiusformeln nach der Gesamtprüfung (Skizzen 4) -----------------------------------------
+
+/// Bogen um den Ursprung, tangential an zwei freie Linien, Radiusmaß.
+fn hand_built_corner() -> (
+    Sketch,
+    ConstraintId,
+    planora_sketch::CurveId,
+    [PointId; 2],
+    PointId,
+) {
+    let mut sk = Sketch::new(StandardPlane::XY.frame(), "S", Tolerance::default());
+    let m = sk.add_point(0.0, 0.0).unwrap();
+    let t0 = sk.add_point(5.0, 0.0).unwrap();
+    let t1 = sk.add_point(0.0, 5.0).unwrap();
+    let far0 = sk.add_point(5.0, -30.0).unwrap();
+    let far1 = sk.add_point(-30.0, 5.0).unwrap();
+    let arc = sk.add_arc(m, t0, t1).unwrap();
+    let l0 = sk.add_line(far0, t0).unwrap();
+    let l1 = sk.add_line(t1, far1).unwrap();
+    sk.add_constraint(ConstraintKind::Tangent(l0, arc)).unwrap();
+    sk.add_constraint(ConstraintKind::Tangent(l1, arc)).unwrap();
+    let dim = sk.add_constraint(ConstraintKind::Radius(arc, 5.0)).unwrap();
+    (sk, dim, arc, [far0, far1], m)
+}
+
+fn sweep_of(s: &Sketch, arc: planora_sketch::CurveId) -> f64 {
+    let planora_sketch::CurveKind::Arc { center, start, end } = s.curve(arc).unwrap().kind else {
+        panic!("kein Bogen")
+    };
+    planora_sketch::shapes::ArcPlan {
+        center: s.point_xy(center).unwrap(),
+        start: s.point_xy(start).unwrap(),
+        end: s.point_xy(end).unwrap(),
+    }
+    .sweep()
+}
+
+/// Mitte fest: Der Parameter geht denselben Weg wie das Maß, alle 24 Schritte lösen.
+#[test]
+fn a_radius_formula_on_an_anchored_centre_solves_every_step() {
+    let (mut sk, dim, arc, _, m) = hand_built_corner();
+    sk.add_constraint(ConstraintKind::Fixed(m, 0.0, 0.0))
+        .unwrap();
+    let mut d = Document::new();
+    let r = d.add_parameter("R", "5", Length, "").unwrap();
+    let s = d
+        .add_feature("Skizze 1", FeatureKind::Sketch(on_xy(sk, one(dim, "R"))))
+        .unwrap();
+    for step in 6..=29 {
+        d.set_parameter(r, edit(&d, r, &step.to_string())).unwrap();
+        assert_eq!(status(&d, s), FeatureStatus::Ok, "r {step}");
+        let got = d.sketch_of(s).unwrap();
+        assert!(got.point_xy(m).unwrap().length() < 1e-6, "r {step}");
+        assert!((got.radius(arc).unwrap() - f64::from(step)).abs() < 1e-6);
+        assert!(sweep_of(got, arc) < std::f64::consts::PI, "r {step}");
+    }
+}
+
+/// Freie Rundung über ihrer Grenze: Der normale Löser läuft, statt die Skizze gleich abzulehnen.
+#[test]
+fn a_radius_formula_past_the_limit_runs_the_plain_solver() {
+    use planora_sketch::fillet::CurvePick;
+    let mut sk = Sketch::new(StandardPlane::XY.frame(), "S", Tolerance::default());
+    let a = sk.add_point(40.0, 0.0).unwrap();
+    let p = sk.add_point(0.0, 0.0).unwrap();
+    let b = sk.add_point(0.0, 40.0).unwrap();
+    let l1 = sk.add_line(a, p).unwrap();
+    let l2 = sk.add_line(p, b).unwrap();
+    let plan = sk
+        .fillet_plan(
+            CurvePick {
+                curve: l1,
+                at: DVec2::new(20.0, 0.0),
+            },
+            CurvePick {
+                curve: l2,
+                at: DVec2::new(0.0, 20.0),
+            },
+            5.0,
+        )
+        .unwrap();
+    let ids = sk.add_fillet(&plan, None).unwrap();
+    let dim = ids.radius_dim.unwrap();
+    let base = sk.clone();
+    let mut d = Document::new();
+    let r = d.add_parameter("R", "5", Length, "").unwrap();
+    let s = d
+        .add_feature("Skizze 1", FeatureKind::Sketch(on_xy(sk, one(dim, "R"))))
+        .unwrap();
+    d.set_parameter(r, edit(&d, r, "45")).unwrap();
+    assert_eq!(status(&d, s), FeatureStatus::Ok);
+    let got = d.sketch_of(s).unwrap();
+    assert!((got.radius(ids.arc).unwrap() - 45.0).abs() < 1e-6);
+    assert!(!planora_sketch::shapes::folded_over(&base, got));
+    assert!(!planora_sketch::shapes::sweep_crossed_half_turn(&base, got));
+}
+
+/// Die Prüfung auf 180° gilt nur, wenn sich ein Radius ändert: Ein Abstand darf einen Bogen weiter
+/// aufziehen, auch wenn am Bogen eine Radiusformel hängt, die gleich bleibt.
+#[test]
+fn an_unchanged_radius_formula_does_not_guard_a_length_formula() {
+    let (mut sk, dim, arc, far, m) = hand_built_corner();
+    sk.add_constraint(ConstraintKind::Fixed(m, 0.0, 0.0))
+        .unwrap();
+    sk.add_constraint(ConstraintKind::Fixed(far[0], 5.0, -30.0))
+        .unwrap();
+    let span = 50.0_f64;
+    let length = sk
+        .add_constraint(ConstraintKind::Distance(far[0], far[1], span))
+        .unwrap();
+    let formulas: SketchFormulas = [(dim, "R".to_string()), (length, "D".to_string())]
+        .into_iter()
+        .collect();
+    let mut d = Document::new();
+    let _r = d.add_parameter("R", "5", Length, "").unwrap();
+    let l = d.add_parameter("D", &span.to_string(), Length, "").unwrap();
+    let s = d
+        .add_feature("Skizze 1", FeatureKind::Sketch(on_xy(sk, formulas)))
+        .unwrap();
+    assert_eq!(status(&d, s), FeatureStatus::Ok);
+    let mut past = false;
+    let mut value = span;
+    while value > 8.0 {
+        value -= 2.0;
+        d.set_parameter(l, edit(&d, l, &value.to_string())).unwrap();
+        assert_eq!(status(&d, s), FeatureStatus::Ok, "D {value}");
+        let got = d.sketch_of(s).unwrap();
+        past |= sweep_of(got, arc) > std::f64::consts::PI;
+    }
+    assert!(past, "sonst prüft das hier nichts");
+}
+
+/// Das Neulegen passt, aber ein Längenmaß lässt den Berührpunkt nicht dorthin: Der Parameter kommt wie
+/// das Maß in Schritten ans Ziel, vom Stand vor dem Neulegen aus.
+#[test]
+fn a_radius_formula_steps_from_the_geometry_before_the_refit() {
+    use planora_sketch::fillet::CurvePick;
+    let mut sk = Sketch::new(StandardPlane::XY.frame(), "S", Tolerance::default());
+    let (x, y) = (40.0 * 0.47_f64.cos(), 40.0 * 0.47_f64.sin());
+    let p = sk.add_point(0.0, 0.0).unwrap();
+    let a = sk.add_point(40.0, 0.0).unwrap();
+    let b = sk.add_point(x, y).unwrap();
+    let l1 = sk.add_line(a, p).unwrap();
+    let l2 = sk.add_line(p, b).unwrap();
+    let plan = sk
+        .fillet_plan(
+            CurvePick {
+                curve: l1,
+                at: DVec2::new(20.0, 0.0),
+            },
+            CurvePick {
+                curve: l2,
+                at: DVec2::new(x / 2.0, y / 2.0),
+            },
+            5.0,
+        )
+        .unwrap();
+    let ids = sk.add_fillet(&plan, None).unwrap();
+    sk.add_constraint(ConstraintKind::Fixed(a, 40.0, 0.0))
+        .unwrap();
+    let length = sk
+        .point_xy(ids.touch[0])
+        .unwrap()
+        .distance(DVec2::new(40.0, 0.0))
+        .min(30.0);
+    sk.add_constraint(ConstraintKind::Distance(a, ids.touch[0], length))
+        .unwrap();
+    sk.solve();
+    let base = sk.clone();
+    let mut d = Document::new();
+    let r = d.add_parameter("R", "5", Length, "").unwrap();
+    let dim = ids.radius_dim.unwrap();
+    let s = d
+        .add_feature("Skizze 1", FeatureKind::Sketch(on_xy(sk, one(dim, "R"))))
+        .unwrap();
+    d.set_parameter(r, edit(&d, r, "8")).unwrap();
+    assert_eq!(status(&d, s), FeatureStatus::Ok);
+    let got = d.sketch_of(s).unwrap();
+    assert!((got.radius(ids.arc).unwrap() - 8.0).abs() < 1e-6);
+    assert!(!planora_sketch::shapes::folded_over(&base, got));
+}

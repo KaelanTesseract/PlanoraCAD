@@ -11,7 +11,9 @@ use crate::msg::Msg;
 use crate::shell::{self, ShellMode, ShellRects, ShellState};
 use crate::shell_panels;
 use crate::sketch_kinds::ToolKind;
-use crate::sketch_state::{ConstraintAction, Item, Severity, SketchSession, Tool, formula_problem};
+use crate::sketch_state::{
+    ConstraintAction, Item, Severity, SketchSession, Tool, TransformStage, formula_problem,
+};
 use crate::sketch_view::{constraint_name, format_number, parse_number, shown_value};
 use crate::state::AppState;
 use crate::theme;
@@ -25,7 +27,7 @@ use planora_sketch::model::{CurveKind, Sketch};
 const _: () = assert!(TOOL_ORDER.len() == crate::shell::STRIP_TOOLS);
 
 /// Werkzeuge der Skizzenleiste in der Reihenfolge der Leiste.
-pub const TOOL_ORDER: [Tool; 14] = [
+pub const TOOL_ORDER: [Tool; 18] = [
     Tool::Select,
     Tool::Point,
     Tool::Line,
@@ -40,6 +42,10 @@ pub const TOOL_ORDER: [Tool; 14] = [
     Tool::Trim,
     Tool::Extend,
     Tool::Break,
+    Tool::Fillet,
+    Tool::Offset,
+    Tool::MoveCopy,
+    Tool::Scale,
 ];
 
 /// Erstes Werkzeug der Gruppe „Ändern“ (Fusion „Ändern“); davor steht in der Leiste eine
@@ -63,6 +69,10 @@ pub fn tool_label(tool: Tool) -> String {
         Tool::Trim => tr!("action-sketch-trim"),
         Tool::Extend => tr!("action-sketch-extend"),
         Tool::Break => tr!("action-sketch-break"),
+        Tool::Fillet => tr!("sketch-tool-fillet"),
+        Tool::Offset => tr!("action-sketch-offset"),
+        Tool::MoveCopy => tr!("action-sketch-move-copy"),
+        Tool::Scale => tr!("action-sketch-scale"),
     }
 }
 
@@ -83,11 +93,15 @@ pub fn tool_hint(tool: Tool) -> String {
         Tool::Trim => tr!("sketch-tool-trim-hint"),
         Tool::Extend => tr!("sketch-tool-extend-hint"),
         Tool::Break => tr!("sketch-tool-break-hint"),
+        Tool::Fillet => tr!("sketch-tool-fillet-hint"),
+        Tool::Offset => tr!("sketch-tool-offset-hint"),
+        Tool::MoveCopy => tr!("sketch-tool-move-copy-hint"),
+        Tool::Scale => tr!("sketch-tool-scale-hint"),
     }
 }
 
 /// Werkzeuge der Skizzenleiste: Werkzeug, Beschriftung, Hinweis (in der aktuellen Sprache).
-pub fn tools() -> [(Tool, String, String); 14] {
+pub fn tools() -> [(Tool, String, String); 18] {
     TOOL_ORDER.map(|t| (t, tool_label(t), tool_hint(t)))
 }
 
@@ -629,7 +643,7 @@ fn flyout_list(
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
             for kind in ToolKind::of(tool) {
                 let keys = shortcut_hint(km, kind.action());
-                let source = icons::sketch_tool_icon(tool);
+                let source = icons::sketch_kind_icon(*kind);
                 let label = kind.label();
                 let entry = icons::source_entry_keys(ui, source, &label, &keys, true)
                     .on_hover_text(kind.hint());
@@ -763,6 +777,47 @@ fn side_field(
     });
 }
 
+/// Einstellungen des aktiven Werkzeugs: beim Versatz der Haken „Kette“, beim Verschieben der Haken
+/// „Kopie erstellen“, „Bezugspunkt setzen“, OK und Abbrechen.
+fn tool_options(ui: &mut egui::Ui, se: &mut SketchSession, sf: &mut SketchFeature) {
+    if se.tool == Tool::Offset {
+        ui.checkbox(&mut se.offset_chain, tr!("sketch-offset-chain"));
+    }
+    if se.runs_transform() {
+        if se.tool == Tool::Scale {
+            // Der Maßstab kopiert nicht; er sagt, was Eingabe jetzt tut.
+            match se.transform.stage {
+                TransformStage::Picking if !se.selection.is_empty() => {}
+                TransformStage::Picking => {
+                    ui.label(RichText::new(tr!("sketch-scale-hint")).small().weak());
+                }
+                TransformStage::SetBase => {
+                    ui.label(RichText::new(tr!("sketch-scale-base")).small().weak());
+                }
+                TransformStage::Active => {}
+            }
+        } else {
+            ui.checkbox(&mut se.transform.copy, tr!("sketch-move-copy"));
+        }
+        let active = se.transform.stage == TransformStage::Active;
+        if ui
+            .add_enabled(active, egui::Button::new(tr!("sketch-move-set-base")))
+            .clicked()
+        {
+            se.begin_set_base();
+        }
+        ui.horizontal(|ui| {
+            if ui.button(tr!("common-ok")).clicked() {
+                // Fehler stehen in der Meldung der Sitzung.
+                let _ = se.confirm_transform(sf);
+            }
+            if ui.button(tr!("common-cancel")).clicked() {
+                se.cancel(&mut sf.sketch);
+            }
+        });
+    }
+}
+
 /// Inhalt des Skizzenfelds: Name, Abhängigkeiten mit Maßeingabe, Bearbeiten, Liste.
 fn side_contents(
     ui: &mut egui::Ui,
@@ -806,6 +861,7 @@ fn side_contents(
         ui.data_mut(|d| d.insert_temp(look_at_key(), look.rect));
         palette.look_at |= look.clicked();
     });
+    tool_options(ui, se, sf);
     ui.add_space(2.0);
 
     // Abhängigkeiten
