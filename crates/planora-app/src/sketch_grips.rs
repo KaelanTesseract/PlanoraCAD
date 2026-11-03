@@ -185,10 +185,107 @@ pub fn unwrapped_angle(previous: f64, raw: f64) -> f64 {
     previous + d.sin().atan2(d.cos())
 }
 
-/// Der Text eines Maßes mit Formel nach dem Skalieren um `k`: `(alt) * k`, `k` in kürzester
-/// Schreibweise mit Punkt als Dezimaltrenner. So stimmt der Wert, und die Parameter bleiben am Maß.
-pub(crate) fn scaled_formula(text: &str, k: f64) -> String {
-    format!("({}) * {k}", text.trim())
+/// Zahl auf höchstens 12 gültige Stellen als Text mit Punkt; `None`, wenn sie nicht positiv und
+/// endlich ist, mehr als 1e-9 (relativ) abweicht oder der Text lang würde (winzige und riesige
+/// Zahlen): Dann steht die Formel nicht in kurzer Form da.
+fn short_factor(p: f64) -> Option<String> {
+    if !(p.is_finite() && p > 0.0) {
+        return None;
+    }
+    let r: f64 = format!("{p:.11e}").parse().ok()?;
+    if (r - p).abs() > 1e-9 * p {
+        return None;
+    }
+    let text = format!("{r}");
+    (text.chars().count() <= FACTOR_TEXT_MAX).then_some(text)
+}
+
+/// Längster Text eines Faktors in einer Formel.
+const FACTOR_TEXT_MAX: usize = 30;
+
+/// Ein Name oder eine Zahl ohne Operator, Leerraum oder Klammer: braucht keine Klammern.
+fn is_plain(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | ','))
+}
+
+/// Steht der ganze Text in einem Klammerpaar, das sich erst am Ende schließt?
+fn is_wrapped(s: &str) -> bool {
+    if !(s.starts_with('(') && s.ends_with(')')) {
+        return false;
+    }
+    let mut depth = 0usize;
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return i + 1 == s.len();
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Trennt `kopf * zahl` ab, wenn der Kopf ein Name, eine Zahl oder ein Klammerausdruck ist und
+/// `zahl` eine reine Zahl: nur dann darf der Faktor mit einem neuen zusammengefasst werden.
+fn split_factor(text: &str) -> Option<(&str, f64)> {
+    let i = text.rfind(" * ")?;
+    let (head, tail) = (&text[..i], &text[i + 3..]);
+    if !(is_plain(head) || is_wrapped(head))
+        || tail.is_empty()
+        || !tail
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '.' | ','))
+    {
+        return None;
+    }
+    let n: f64 = tail.replace(',', ".").parse().ok()?;
+    Some((head, n))
+}
+
+/// Der Text eines Maßes mit Formel nach dem Skalieren um `k`: `(alt) * k` mit `k` in kurzer
+/// Schreibweise und Punkt als Dezimaltrenner. So stimmt der Wert, und die Parameter bleiben am Maß.
+/// Ein Faktor am Ende wird zusammengefasst (`(alt) * n` wird `(alt) * n·k`), damit die Formel bei
+/// vielem Skalieren nicht wächst; ein Name oder eine Zahl bekommt keine Klammern. `None`, wenn
+/// der Faktor nicht kurz zu schreiben ist.
+pub(crate) fn scaled_formula(text: &str, k: f64) -> Option<String> {
+    let text = text.trim();
+    if let Some((head, n)) = split_factor(text) {
+        return Some(format!("{head} * {}", short_factor(n * k)?));
+    }
+    let m = short_factor(k)?;
+    Some(if is_plain(text) {
+        format!("{text} * {m}")
+    } else {
+        format!("({text}) * {m}")
+    })
+}
+
+/// Wert eines Längenmaßes.
+fn length_of(kind: &planora_sketch::constraint::ConstraintKind) -> Option<f64> {
+    use planora_sketch::constraint::ConstraintKind as K;
+    match *kind {
+        K::EllipseMajor(_, v) | K::EllipseMinor(_, v) => Some(v),
+        ref k => k.length_value(),
+    }
+}
+
+/// Die Formel nach dem Skalieren, oder `None`, wenn sie nicht mehr als Formel taugt (zu lang, nicht
+/// lesbar): Dann steht der Wert des Maßes statt ihrer da, und es sind keine Parameter mehr dran.
+fn scaled_or_value(text: &str, k: f64, value: Option<f64>) -> (Option<String>, bool) {
+    let kept = scaled_formula(text, k).filter(|t| planora_feature::expr::parse(t).is_ok());
+    match kept {
+        Some(t) => (Some(t), false),
+        None => (
+            value.and_then(|v| planora_feature::expr::value_text(v).ok()),
+            true,
+        ),
+    }
 }
 
 /// Warum die Bewegung nicht geht, als Meldung.
@@ -476,19 +573,36 @@ impl SketchSession {
             return Err(e);
         }
         let scale = self.tool == Tool::Scale;
-        let (copied, scaled) = self.atomic(&mut sf.sketch, |se, sk, prior| {
+        let mut formulas = sf.formulas.clone();
+        let copied = self.atomic(&mut sf.sketch, |se, sk, prior| {
             let (Some(now), Some(set)) = (se.transform_now(), se.sketch_set(sk)) else {
                 return Err(crate::msg!("sketch-nothing-selected"));
             };
             let mut notes = Vec::new();
             let mut copied = None;
-            let mut scaled = Vec::new();
             if se.transform.copy {
                 copied = Some(sk.copy_transformed(&set, &now).map_err(err)?);
             } else {
                 let report = sk.apply_transform(&set, &now).map_err(block_message)?;
                 if scale {
-                    scaled = report.scaled.iter().map(|&id| (id, now.factor)).collect();
+                    // Die Formeln nehmen den Faktor mit; was dabei nicht mehr als Formel taugt,
+                    // wird durch den Wert ersetzt (das Skalieren selbst scheitert daran nie).
+                    let mut replaced = 0;
+                    for &id in &report.scaled {
+                        let Some(text) = formulas.get(&id).cloned() else {
+                            continue;
+                        };
+                        let value = sk.constraint(id).and_then(|c| length_of(&c.kind));
+                        let (new, plain) = scaled_or_value(&text, now.factor, value);
+                        replaced += usize::from(plain);
+                        match new {
+                            Some(t) => formulas.insert(id, t),
+                            None => formulas.remove(&id),
+                        };
+                    }
+                    if replaced > 0 {
+                        notes.push(crate::msg!("sketch-scale-formulas-replaced", n = replaced));
+                    }
                 }
                 if !report.dropped.is_empty() {
                     notes.push(crate::msg!("sketch-move-dropped", n = report.dropped.len()));
@@ -511,13 +625,10 @@ impl SketchSession {
                 crate::msg!("undo-move-copy")
             });
             se.modify_edits = (se.modify_edits.0 + 1, Some(se.tool));
-            Ok((copied, scaled))
+            Ok(copied)
         })?;
-        // Eine Formel am Maß bleibt eine Formel: Sie nimmt den Faktor mit.
-        for (id, k) in scaled {
-            if let Some(text) = sf.formulas.get_mut(&id) {
-                *text = scaled_formula(text, k);
-            }
+        if scale {
+            sf.formulas = formulas;
         }
         if let Some(map) = &copied {
             self.take_copies(sf, map);
@@ -608,11 +719,39 @@ mod tests {
     use super::scaled_formula;
 
     #[test]
-    fn the_formula_gets_old_times_k_with_the_shortest_number_and_a_point() {
-        assert_eq!(scaled_formula("Breite / 2", 3.0), "(Breite / 2) * 3");
-        assert_eq!(scaled_formula(" a ", 0.5), "(a) * 0.5");
-        assert_eq!(scaled_formula("1 in", 12.25), "(1 in) * 12.25");
-        assert_eq!(scaled_formula("x", 1e-7), "(x) * 0.0000001");
-        assert_eq!(scaled_formula("(x) * 3", 2.0), "((x) * 3) * 2");
+    fn the_formula_gets_old_times_k_with_a_short_number_and_a_point() {
+        let f = |t: &str, k: f64| scaled_formula(t, k).unwrap();
+        assert_eq!(f("Breite / 2", 3.0), "(Breite / 2) * 3");
+        assert_eq!(f(" a ", 0.5), "a * 0.5");
+        assert_eq!(f("20", 2.0), "20 * 2");
+        assert_eq!(f("1 in", 12.25), "(1 in) * 12.25");
+        assert_eq!(f("x", 1e-7), "x * 0.0000001");
+    }
+
+    #[test]
+    fn a_trailing_factor_is_folded_so_the_formula_does_not_grow() {
+        let f = |t: &str, k: f64| scaled_formula(t, k).unwrap();
+        assert_eq!(f("(x) * 3", 2.0), "(x) * 6");
+        assert_eq!(f("(Breite / 2) * 3", 0.5), "(Breite / 2) * 1.5");
+        assert_eq!(f("a * 4", 0.25), "a * 1");
+        // Kein Kopf, dem man den Faktor ansehen darf: Klammern drum.
+        assert_eq!(f("a + b * 3", 2.0), "(a + b * 3) * 2");
+        assert_eq!(f("(a) + (b) * 3", 2.0), "((a) + (b) * 3) * 2");
+        let mut t = "Breite / 2".to_string();
+        for i in 0..40 {
+            t = f(&t, 1.0 + f64::from(i) * 0.1234567891234);
+        }
+        assert!(t.chars().count() < 60, "{t}");
+        assert!(planora_feature::expr::parse(&t).is_ok());
+    }
+
+    #[test]
+    fn a_factor_without_a_short_form_gives_none() {
+        assert_eq!(scaled_formula("x", 1e-200), None);
+        assert_eq!(scaled_formula("x", 1e40), None);
+        assert_eq!(scaled_formula("x * 0", 2.0), None);
+        // Viele Stellen werden auf zwölf gerundet, weit unter einem Milliardstel.
+        let text = scaled_formula("x", 0.123_456_789_012_345_68).unwrap();
+        assert_eq!(text, "x * 0.123456789012");
     }
 }

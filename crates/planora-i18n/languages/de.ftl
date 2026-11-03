@@ -1136,6 +1136,7 @@ sketch-move-copy = Kopie erstellen
 sketch-move-set-base = Bezugspunkt setzen
 sketch-scale-hint = Enter nimmt die ganze Skizze
 sketch-scale-base = Bezugspunkt anklicken oder mit Enter in der Mitte bleiben
+sketch-scale-formulas-replaced = Formeln durch ihren Wert ersetzt: { $n }. Sie waren nach dem Skalieren zu lang.
 sketch-move-dropped = Abhängigkeiten entfallen: { $n }.
 sketch-move-split = Getrennte Ecken: { $n }. Die anderen Kurven bleiben stehen, ein Profil kann dort offen sein.
 sketch-move-fixed = Das geht nicht: Etwas in der Auswahl ist festgehalten oder an festgehaltene Geometrie gebunden

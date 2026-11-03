@@ -1153,6 +1153,7 @@ sketch-move-copy = Create copy
 sketch-move-set-base = Set base point
 sketch-scale-hint = Enter takes the whole sketch
 sketch-scale-base = Click the base point or press Enter to keep the middle
+sketch-scale-formulas-replaced = Formulas replaced by their value: { $n }. They would have become too long after scaling.
 sketch-move-dropped = Constraints removed: { $n }.
 sketch-move-split = Corners split: { $n }. The other curves stay where they are, so a profile may be open there.
 sketch-move-fixed = Not possible: something in the selection is fixed or bound to fixed geometry

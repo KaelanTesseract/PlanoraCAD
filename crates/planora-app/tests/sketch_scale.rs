@@ -3,6 +3,7 @@
 
 use planora_app::sketch_grips::Grip;
 use planora_app::sketch_input::FieldKind as F;
+use planora_app::sketch_kinds::ToolKind;
 use planora_app::sketch_state::{Item, Tool, TransformStage};
 use planora_app::state::{AppState, StandardPlane};
 use planora_feature::{ParamEdit, ParamUnit, SketchPlane};
@@ -482,7 +483,7 @@ fn a_formula_dimension_becomes_old_times_k_and_follows_its_parameter() {
     scale_about(&mut s, curves_of(&curves), v(0.0, 0.0));
     type_in(&mut s, F::ScaleFactor, "0,5");
     finish(&mut s).unwrap();
-    assert_eq!(formulas(&s)[&sh.width], "((Breite / 2) * 3) * 0.5");
+    assert_eq!(formulas(&s)[&sh.width], "(Breite / 2) * 1.5", "gefaltet");
     assert_eq!(value_of(sketch(&s), sh.width), 30.0);
 
     // Der Parameter treibt weiter: Breite 50 gibt 25 · 3 · 0,5.
@@ -967,4 +968,248 @@ fn undo_clears_a_running_scale() {
     let se = s.sketch_session.as_ref().unwrap();
     assert_eq!(se.transform.stage, TransformStage::Picking);
     assert!(!se.transform.whole && se.grip_drag.is_none());
+}
+
+// ---- Formeln: Länge, Grenzen, Hilfsgeometrie ----------------------------------------------------
+
+/// Wie die Oberfläche: Klick über `commit_input`, danach der Verlauf.
+fn click_in(s: &mut AppState, at: DVec2) -> Result<(), String> {
+    let scope = s.document.param_scope();
+    let (se, sf) = s.session_draft_mut().unwrap();
+    se.update_cursor(&sf.sketch, Some(at), PICK);
+    let result = se.commit_input(sf, at, PICK, false, &scope);
+    s.observe_sketch(false);
+    result
+}
+
+fn length_param(s: &mut AppState, name: &str, formula: &str) -> planora_feature::ParamId {
+    let id = s.add_parameter().unwrap();
+    s.edit_parameter(
+        id,
+        ParamEdit {
+            name: name.into(),
+            formula: formula.into(),
+            unit: ParamUnit::Length,
+            comment: String::new(),
+        },
+    )
+    .unwrap();
+    id
+}
+
+/// Die ganze Skizze mit dem Faktor `k` um den Punkt bei (0, 0), aus dem Auswahlwerkzeug.
+fn scale_whole(s: &mut AppState, k: f64) -> Result<(), String> {
+    {
+        let (se, sk) = s.session_sketch_mut().unwrap();
+        se.set_tool(sk, Tool::Select);
+        se.selection.clear();
+    }
+    to_whole(s, v(0.0, 0.0));
+    s.sketch_session.as_mut().unwrap().transform.factor = k;
+    finish(s)
+}
+
+#[test]
+fn many_scalings_with_many_digits_keep_the_formula_short_and_exact() {
+    let (mut s, sh, id, breite) = formula_scene();
+    let mut product = 1.0;
+    for i in 0..10 {
+        let sign = if i % 2 == 0 { 1.0 } else { -0.37 };
+        let k = 1.0 + 0.0123456789012345 * f64::from(i % 5 + 1) * sign;
+        product *= k;
+        scale_about(&mut s, curves_of(&sh.rect.lines), v(0.0, 0.0));
+        s.sketch_session.as_mut().unwrap().transform.factor = k;
+        finish(&mut s).unwrap();
+        let text = formulas(&s)[&sh.width].clone();
+        assert!(text.chars().count() < 40, "{i}: {text}");
+        assert!(planora_feature::expr::parse(&text).is_ok(), "{text}");
+        assert_eq!(message(&s), None, "{i}");
+    }
+    let now = value_of(sketch(&s), sh.width);
+    assert!((now - 20.0 * product).abs() < 1e-9 * now, "{now}");
+    // Der Parameter treibt weiter, und die Formel ergibt den Wert auf ein Milliardstel.
+    s.close_sketch();
+    set_breite(&mut s, breite, "60");
+    let sk = s.document.sketch_of(id).unwrap();
+    let driven = value_of(sk, sh.width);
+    assert!((driven - 30.0 * product).abs() < 1e-9 * driven, "{driven}");
+    assert_eq!(sk.clone().solve().status, SolveStatus::Solved);
+}
+
+#[test]
+fn a_factor_without_a_short_form_does_not_break_the_scale() {
+    let (mut s, sh, _, _) = formula_scene();
+    scale_about(&mut s, curves_of(&sh.rect.lines), v(0.0, 0.0));
+    s.sketch_session.as_mut().unwrap().transform.factor = 1e-200;
+    let before = snapshot(sketch(&s));
+    let f = formulas(&s);
+    assert!(
+        finish(&mut s).is_err(),
+        "die Größe ist außerhalb des Bereichs"
+    );
+    assert_eq!(snapshot(sketch(&s)), before);
+    assert_eq!(formulas(&s), f, "die Formeln bleiben");
+}
+
+#[test]
+fn a_formula_that_gets_too_long_is_replaced_by_its_value_and_the_scale_goes_on() {
+    let (mut s, sh) = shapes();
+    let long = format!("Breite{}", " + Breite".repeat(21));
+    assert!(long.chars().count() <= 200 && long.chars().count() + 7 > 200);
+    let id = s.open_sketch_id().unwrap();
+    s.close_sketch();
+    length_param(&mut s, "Breite", "1");
+    s.open_sketch(id).unwrap();
+    let scope = s.document.param_scope();
+    {
+        let (se, sf) = s.session_draft_mut().unwrap();
+        se.set_dimension_input(sf, sh.width, &long, &scope).unwrap();
+    }
+    s.observe_sketch(false);
+    assert_eq!(value_of(sketch(&s), sh.width), 22.0);
+    scale_about(&mut s, curves_of(&sh.rect.lines), v(0.0, 0.0));
+    type_in(&mut s, F::ScaleFactor, "2");
+    let undo = undo_len(&s);
+    finish(&mut s).unwrap();
+    assert_eq!(value_of(sketch(&s), sh.width), 44.0);
+    assert_eq!(
+        formulas(&s)[&sh.width],
+        "44",
+        "der Wert steht statt der Formel"
+    );
+    assert!(
+        message(&s)
+            .unwrap()
+            .contains(&planora_i18n::tr!("sketch-scale-formulas-replaced", n = 1))
+    );
+    assert_eq!(undo_len(&s), undo + 1);
+    assert!(s.undo_sketch());
+    assert_eq!(
+        formulas(&s)[&sh.width],
+        long,
+        "Rückgängig bringt sie zurück"
+    );
+}
+
+#[test]
+fn a_formula_on_an_offset_distance_scales_and_the_copy_follows_the_parameter() {
+    let mut s = AppState::new();
+    let breite = length_param(&mut s, "Breite", "20");
+    let i = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    s.open_sketch(i).unwrap();
+    {
+        let sk = s.session_sketch_mut().unwrap().1;
+        let pts: Vec<PointId> = [(0.0, 0.0), (40.0, 0.0), (40.0, 40.0), (0.0, 40.0)]
+            .iter()
+            .map(|c| sk.add_point(c.0, c.1).unwrap())
+            .collect();
+        for k in 0..4 {
+            sk.add_line(pts[k], pts[(k + 1) % 4]).unwrap();
+        }
+        sk.solve();
+    }
+    s.observe_sketch(false);
+    {
+        let (se, sk) = s.session_sketch_mut().unwrap();
+        se.set_tool(sk, Tool::Offset);
+        se.offset_chain = true;
+    }
+    click_in(&mut s, v(20.0, 0.0)).unwrap();
+    type_in(&mut s, F::OffsetDistance, "-Breite / 4");
+    click_in(&mut s, v(20.0, 2.0)).unwrap();
+    let roller = sketch(&s)
+        .constraints()
+        .find(|(_, c)| matches!(c.kind, K::Radius(..)))
+        .map(|(id, _)| id)
+        .expect("Rollkreis");
+    assert_eq!(formulas(&s)[&roller], "Breite / 4");
+    assert_eq!(value_of(sketch(&s), roller), 5.0);
+
+    scale_whole(&mut s, 2.5).unwrap();
+    assert_eq!(formulas(&s)[&roller], "(Breite / 4) * 2.5");
+    assert_eq!(value_of(sketch(&s), roller), 12.5);
+
+    s.close_sketch();
+    set_breite(&mut s, breite, "40");
+    let sk = s.document.sketch_of(i).unwrap();
+    assert_eq!(value_of(sk, roller), 25.0, "der Rollkreis folgt");
+    assert_eq!(sk.clone().solve().status, SolveStatus::Solved);
+    // Der Weg über Formeln hält die Vorlage nicht fest (Entscheidung 4 des Plans), also ändert sie
+    // ihre Größe; die Kopie bleibt aber überall 25 weiter außen: Seiten um 50 länger.
+    let mut lengths: Vec<i64> = sk
+        .curves()
+        .filter(|(_, c)| !c.construction)
+        .filter_map(|(c, _)| match sk.curve(c).unwrap().kind {
+            CurveKind::Line { .. } => {
+                let (a, b) = line_ends(sk, c);
+                Some((a.distance(b) * 1000.0).round() as i64)
+            }
+            _ => None,
+        })
+        .collect();
+    lengths.sort_unstable();
+    assert_eq!(lengths.len(), 8);
+    for (inner, outer) in lengths[..4].iter().zip(&lengths[4..]) {
+        assert!((outer - inner - 50_000).abs() <= 2, "{lengths:?}");
+    }
+}
+
+#[test]
+fn a_formula_on_a_fillet_radius_scales_and_the_arc_stays_tangent() {
+    let mut s = AppState::new();
+    let breite = length_param(&mut s, "Breite", "20");
+    let i = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    s.open_sketch(i).unwrap();
+    {
+        let sk = s.session_sketch_mut().unwrap().1;
+        let a = sk.add_point(40.0, 0.0).unwrap();
+        let p = sk.add_point(0.0, 0.0).unwrap();
+        let b = sk.add_point(0.0, 40.0).unwrap();
+        sk.add_line(a, p).unwrap();
+        sk.add_line(p, b).unwrap();
+        sk.solve();
+    }
+    s.observe_sketch(false);
+    {
+        let (se, sk) = s.session_sketch_mut().unwrap();
+        se.choose_kind(sk, ToolKind::Fillet);
+    }
+    click_in(&mut s, v(20.0, 0.0)).unwrap();
+    click_in(&mut s, v(0.0, 20.0)).unwrap();
+    type_in(&mut s, F::Radius, "Breite / 2");
+    click_in(&mut s, v(5.0, 5.0)).unwrap();
+    let arc = sketch(&s)
+        .curves()
+        .find(|(_, c)| matches!(c.kind, CurveKind::Arc { .. }))
+        .map(|(c, _)| c)
+        .expect("Bogen");
+    let dim = sketch(&s)
+        .constraints()
+        .find(|(_, c)| matches!(c.kind, K::Radius(a, _) if a == arc))
+        .map(|(id, _)| id)
+        .expect("Radiusmaß");
+    assert_eq!(formulas(&s)[&dim], "Breite / 2");
+
+    scale_whole(&mut s, 2.5).unwrap();
+    assert_eq!(formulas(&s)[&dim], "(Breite / 2) * 2.5");
+    assert_eq!(value_of(sketch(&s), dim), 25.0);
+
+    s.close_sketch();
+    set_breite(&mut s, breite, "30");
+    let sk = s.document.sketch_of(i).unwrap();
+    assert_eq!(value_of(sk, dim), 37.5);
+    assert_eq!(sk.clone().solve().status, SolveStatus::Solved);
+    let CurveKind::Arc { center, start, end } = sk.curve(arc).unwrap().kind else {
+        panic!()
+    };
+    let (m, t1, t2) = (pos(sk, center), pos(sk, start), pos(sk, end));
+    assert!(m.distance(v(37.5, 37.5)) < 1e-6, "{m}");
+    let mut ends = [t1, t2];
+    ends.sort_by(|a, b| a.x.total_cmp(&b.x));
+    assert!(ends[0].distance(v(0.0, 37.5)) < 1e-6, "{ends:?}");
+    assert!(ends[1].distance(v(37.5, 0.0)) < 1e-6, "{ends:?}");
 }
