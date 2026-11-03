@@ -775,6 +775,13 @@ fn side_field(
     });
 }
 
+/// Einstellungen des aktiven Werkzeugs: beim Versatz der Haken „Kette“.
+fn tool_options(ui: &mut egui::Ui, se: &mut SketchSession) {
+    if se.tool == Tool::Offset {
+        ui.checkbox(&mut se.offset_chain, tr!("sketch-offset-chain"));
+    }
+}
+
 /// Inhalt des Skizzenfelds: Name, Abhängigkeiten mit Maßeingabe, Bearbeiten, Liste.
 fn side_contents(
     ui: &mut egui::Ui,
@@ -818,6 +825,7 @@ fn side_contents(
         ui.data_mut(|d| d.insert_temp(look_at_key(), look.rect));
         palette.look_at |= look.clicked();
     });
+    tool_options(ui, se);
     ui.add_space(2.0);
 
     // Abhängigkeiten

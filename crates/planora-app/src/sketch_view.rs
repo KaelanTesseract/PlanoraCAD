@@ -1401,6 +1401,14 @@ fn draw_preview(
         return;
     };
     let stroke = Stroke::new(1.5, color);
+    if let Some(lines) = se.offset_preview(sk, cursor) {
+        for line in lines {
+            for path in map.paths(&line) {
+                draw_path(painter, path, stroke, true);
+            }
+        }
+        return;
+    }
     if se.line_arc.is_some() {
         for line in se.line_arc_preview(sk, cursor).unwrap_or_default() {
             for path in map.paths(&line) {

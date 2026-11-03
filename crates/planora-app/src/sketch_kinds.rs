@@ -18,7 +18,7 @@ use planora_sketch::shapes::{self, ArcPlan, ShapePlan, SlotIds, SlotStyle};
 use planora_sketch::tangent_circles;
 
 /// Schritte je Vollkreis für die Vorschau einer Form.
-const PREVIEW_STEPS_PER_TURN: usize = 96;
+pub(crate) const PREVIEW_STEPS_PER_TURN: usize = 96;
 /// Winkel der Fase „Abstand und Winkel“, solange keiner getippt ist (Annahme: Vorgabe von Fusion).
 const CHAMFER_ANGLE_DEFAULT: f64 = std::f64::consts::FRAC_PI_4;
 /// Faktor für die Probe, ob eine vom Löser abgelehnte Rundung oder Fase kleiner ginge.
@@ -484,6 +484,9 @@ impl SketchSession {
 
     /// Wählt der nächste Klick eine Kurve statt einer Lage?
     pub fn picks_curves(&self) -> bool {
+        if self.tool == Tool::Offset {
+            return self.pending_curves.is_empty();
+        }
         match self.planned_kind() {
             Some(ToolKind::Circle3T) => true,
             Some(ToolKind::Circle2T) => self.kind_stage() < 2,

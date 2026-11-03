@@ -16,6 +16,7 @@ use planora_sketch::constraint::{ConstraintId, ConstraintKind};
 use planora_sketch::fillet::{ChamferIds, FilletIds};
 use planora_sketch::helpers::RectIds;
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
+use planora_sketch::offset::OffsetIds;
 use planora_sketch::shapes::{ArcSlotIds, PolygonIds, SlotIds};
 
 /// Länge der Achshilfe (Skizzen-x-Achse) für Winkel ohne vorige Linie.
@@ -146,6 +147,7 @@ pub enum Created {
     ArcSlot(ArcSlotIds),
     Fillet(FilletIds),
     Chamfer(ChamferIds),
+    Offset(OffsetIds),
 }
 
 impl Created {
@@ -160,6 +162,7 @@ impl Created {
             Created::Slot(_) | Created::ArcSlot(_) => crate::msg!("undo-slot"),
             Created::Fillet(_) => crate::msg!("undo-fillet"),
             Created::Chamfer(_) => crate::msg!("undo-chamfer"),
+            Created::Offset(_) => crate::msg!("undo-offset"),
         }
     }
 
@@ -264,6 +267,22 @@ fn read_field(
     }
 }
 
+/// Der getippte Versatz als Text des Maßes: Ein Maß hat kein Vorzeichen, das Minus hat schon die
+/// Seite gewechselt. Eine Formel bleibt eine Formel, nur ohne das Minus.
+fn magnitude_text(text: &str, scope: &ParamScope) -> Result<String, Msg> {
+    let unit = FieldKind::OffsetDistance.unit();
+    let (value, _) = resolve(text, unit, scope)?;
+    if value >= 0.0 {
+        return Ok(text.to_string());
+    }
+    // „-a + b“ ohne Minus wäre etwas anderes; darum zählt der nachgerechnete Wert.
+    let bare = text.trim().trim_start_matches(['-', '\u{2212}']).trim();
+    [bare.to_string(), format!("-({text})")]
+        .into_iter()
+        .find(|t| resolve(t, unit, scope).is_ok_and(|(v, _)| v == -value))
+        .ok_or_else(|| crate::msg!("sketch-field-rejected"))
+}
+
 /// Die Hilfslinie entlang der Skizzen-x-Achse: einmal je Skizze eine Konstruktionslinie
 /// (0,0)-(10,0) mit festen Enden, also ohne Freiheitsgrad, weil `Angle` zwei Linien braucht und
 /// das Dateiformat keine Achse kennt.
@@ -360,6 +379,7 @@ impl SketchSession {
         }
         let (pts, pos) = (self.pending.len(), self.pending_pos.len());
         match self.tool {
+            Tool::Offset if !self.pending_curves.is_empty() => &[F::OffsetDistance],
             Tool::Line if pts > 0 => &[F::Length, F::Angle],
             Tool::Rectangle if pos > 0 => &[F::Width, F::Height],
             Tool::Circle if pts > 0 => &[F::Diameter],
@@ -440,6 +460,9 @@ impl SketchSession {
             return self.kind_field_value(sk, kind);
         }
         let at = self.draw_cursor.as_ref()?.at;
+        if kind == F::OffsetDistance {
+            return self.offset_pointer_distance(sk, at);
+        }
         if matches!(kind, F::Width | F::Height) {
             let size = at - *self.pending_pos.first()?;
             return Some(if kind == F::Width { size.x } else { size.y }.abs());
@@ -638,6 +661,24 @@ impl SketchSession {
             }
             return Ok(());
         };
+        // Der Versatz legt sein Maß selbst an (oder keins): Der getippte Text wird dessen Wert und
+        // Formel, und was der Klick zu sagen hatte, bleibt stehen.
+        if let Created::Offset(ids) = &created {
+            let note = self.message.take();
+            let text = typed.iter().find(|(k, _)| *k == FieldKind::OffsetDistance);
+            if let (Some(id), Some((_, text))) = (ids.distance_dim, text) {
+                let text = magnitude_text(text, scope)?;
+                if let Err(text) = self.set_dimension_input(sf, id, &text, scope) {
+                    return Err(self.message.take().unwrap_or(Msg::Raw(text)));
+                }
+            }
+            if note.is_some() {
+                self.message = note;
+            }
+            self.edit_label = Some(created.undo_label());
+            self.sync_input(&sf.sketch);
+            return Ok(());
+        }
         let mut note = None;
         for (kind, text) in &typed {
             // Rundung und Fase: Wert und Formel gehören an das Maß, das schon da ist.
