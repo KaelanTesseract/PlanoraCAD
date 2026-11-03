@@ -2060,7 +2060,6 @@ pub fn create_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     ui.separator();
     sketch_menu(ui, ws);
     sketch_kinds_menu(ui, ws);
-    sketch_offset_entry(ui, ws);
     ui.separator();
     // Körper aus Skizzen: die gewählte (sonst die geöffnete, sonst die letzte) Skizze.
     for kind in &CreateKind::ALL[4..] {
@@ -2298,25 +2297,11 @@ fn sketch_kinds_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     }
 }
 
-/// Bei offener Skizze „Versatz“ im Menü „Erzeugen“ (wie in Fusion), gewählt über seine Aktion.
-fn sketch_offset_entry(ui: &mut egui::Ui, ws: &mut Workspace) {
-    if ws.active_tab().state.open_sketch_id().is_none() {
-        return;
-    }
-    let action = Action::SketchOffset;
-    let keys = keymap::shortcut_hint(&ws.keymap, action);
-    let source = icons::sketch_tool_icon(Tool::Offset);
-    if icons::source_entry_keys(ui, source, &action.label(), &keys, true)
-        .on_hover_text(sketch_panel::tool_hint(Tool::Offset))
-        .clicked()
-    {
-        commands::run_action(ws, action);
-        ui.close();
-    }
-}
+/// Die Werkzeuge im Untermenü „Ändern“ nach Rundung und Fasen (Versatz wie in Fusions „Modify“).
+pub const SKETCH_MODIFY_TOOLS: [Tool; 3] = [Tool::Offset, Tool::MoveCopy, Tool::Scale];
 
 /// Bei offener Skizze das Untermenü „Ändern“ im Menü „Bearbeiten“: Skizzenrundung, die drei
-/// Fasen, Verschieben/Kopieren und Skizzenmaßstab.
+/// Fasen, Versatz, Verschieben/Kopieren und Skizzenmaßstab.
 fn sketch_modify_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     if ws.active_tab().state.open_sketch_id().is_none() {
         return;
@@ -2326,7 +2311,7 @@ fn sketch_modify_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
         let kinds = crate::sketch_kinds::ToolKind::of(Tool::Fillet)
             .iter()
             .map(|k| (k.action(), icons::sketch_kind_icon(*k), k.hint()));
-        let tools = [Tool::MoveCopy, Tool::Scale].map(|t| {
+        let tools = SKETCH_MODIFY_TOOLS.map(|t| {
             let action = Action::for_sketch_tool(t).unwrap_or(Action::SketchMoveCopy);
             (
                 action,

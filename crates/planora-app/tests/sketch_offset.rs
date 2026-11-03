@@ -316,10 +316,17 @@ struct Rig {
     ctx: egui::Context,
     app: PlanoraApp,
     time: f64,
+    /// Eine Fläche, die wie die Statuszeile den Fokus annimmt, aber keine Tasten liest.
+    surface: Option<egui::Id>,
 }
 
 impl Rig {
     fn new() -> Rig {
+        Rig::with_params(&[])
+    }
+
+    /// Mit Parametern: Bei offener Skizze lassen sie sich nicht mehr anlegen.
+    fn with_params(params: &[(&str, &str)]) -> Rig {
         let ctx = egui::Context::default();
         ctx.set_fonts(fonts::definitions());
         theme::apply(&ctx, true);
@@ -328,6 +335,9 @@ impl Rig {
         let mut w = Workspace::new(Some(Library::open(&root).unwrap()), Config::default());
         w.config_path = root.join("config.toml");
         let s = &mut w.active_tab_mut().state;
+        for (name, formula) in params {
+            param(s, name, formula);
+        }
         let sk = s
             .add_sketch(SketchPlane::Standard(StandardPlane::XY))
             .unwrap();
@@ -337,9 +347,21 @@ impl Rig {
             ctx,
             app: PlanoraApp::for_tests(w),
             time: 0.0,
+            surface: None,
         };
         rig.settle();
         rig
+    }
+
+    /// Nimmt dem Feld am Zeiger den Fokus: Er liegt danach auf einer Fläche, die nicht tippt.
+    fn focus_elsewhere(&mut self) {
+        let id = egui::Id::new("planora-test-surface");
+        self.surface = Some(id);
+        planora_app::viewport::focus_is_not_typing(&self.ctx, id);
+        self.frame(vec![]);
+        self.ctx.memory_mut(|m| m.request_focus(id));
+        self.settle();
+        assert!(self.ctx.memory(|m| m.has_focus(id)), "Fokus woanders");
     }
 
     fn st(&mut self) -> &mut AppState {
@@ -356,8 +378,18 @@ impl Rig {
         };
         let mut f = eframe::Frame::_new_kittest();
         let app = &mut self.app;
+        let surface = self.surface;
         self.ctx
-            .run_ui(raw, |ui| app.ui(ui, &mut f))
+            .run_ui(raw, |ui| {
+                if let Some(id) = surface {
+                    planora_app::viewport::focus_is_not_typing(ui.ctx(), id);
+                }
+                app.ui(ui, &mut f);
+                if let Some(id) = surface {
+                    let spot = Rect::from_min_size(pos2(W - 4.0, H - 4.0), Vec2::splat(2.0));
+                    ui.interact(spot, id, egui::Sense::click());
+                }
+            })
             .drop_without_applying_deltas();
     }
 
@@ -438,6 +470,91 @@ fn the_whole_trip_with_o_a_click_a_typed_distance_and_enter() {
     let se = rig.st().sketch_session.as_ref().unwrap();
     assert_eq!(se.tool, Tool::Offset, "das Werkzeug bleibt");
     assert!(se.pending_curves.is_empty(), "ohne Kette");
+}
+
+/// Rechteck zeichnen und die Mitte seiner Unterkante, die Mitte seiner linken Kante und einen Punkt
+/// innen als Pixel liefern.
+fn drawn_rectangle(rig: &mut Rig) -> [Pos2; 3] {
+    rig.press(Key::R);
+    rig.click(pos2(800.0, 350.0));
+    rig.click(pos2(1200.0, 700.0));
+    rig.press(Key::Escape);
+    assert_eq!(sketch(rig.st()).curves().count(), 4);
+    let (x0, y0) = (
+        rig.at_pixel(pos2(900.0, 500.0)),
+        rig.at_pixel(pos2(1100.0, 600.0)),
+    );
+    let pixel = |p: DVec2| {
+        let tx = (p.x - x0.x) / (y0.x - x0.x);
+        let ty = (p.y - x0.y) / (y0.y - x0.y);
+        pos2(900.0 + 200.0 * tx as f32, 500.0 + 100.0 * ty as f32)
+    };
+    let (lo, hi) = {
+        let sk = sketch(rig.st());
+        let xy: Vec<DVec2> = sk.points().map(|(p, _)| sk.point_xy(p).unwrap()).collect();
+        lo_hi(&xy)
+    };
+    [
+        pixel(v((lo.x + hi.x) / 2.0, lo.y)),
+        pixel(v(lo.x, (lo.y + hi.y) / 2.0)),
+        pixel(v((lo.x + hi.x) / 2.0, lo.y + 1.0)),
+    ]
+}
+
+fn formulas_of(rig: &mut Rig) -> Vec<String> {
+    let (_, sf) = rig.st().session_draft_mut().unwrap();
+    sf.formulas.values().cloned().collect()
+}
+
+/// Gesamtprüfung Skizzen 4: Hat das Feld den Fokus nicht mehr, nimmt die Eingabe auf der
+/// Zeichenfläche denselben Weg wie die im Feld: Die Formel bleibt am Maß.
+#[test]
+fn enter_outside_the_field_keeps_the_formula_of_an_offset() {
+    let mut rig = Rig::with_params(&[("d", "2")]);
+    let [bottom, _, inside] = drawn_rectangle(&mut rig);
+    rig.press(Key::O);
+    rig.click(bottom);
+    assert_eq!(picked(rig.st()), 4);
+    rig.frame(vec![Event::PointerMoved(inside)]);
+    rig.settle();
+    rig.frame(vec![Event::Text("d*2".into())]);
+    rig.settle();
+    rig.focus_elsewhere();
+    let steps = undo_len(rig.st());
+    rig.press(Key::Enter);
+
+    assert_eq!(formulas_of(&mut rig), vec!["d*2".to_string()]);
+    let sk = sketch(rig.st()).clone();
+    assert_eq!(radius_of(&sk, distance_dim(&sk)), 4.0);
+    assert_eq!(undo_len(rig.st()), steps + 1, "ein Schritt");
+}
+
+#[test]
+fn enter_outside_the_field_keeps_the_formula_of_a_fillet() {
+    let mut rig = Rig::with_params(&[("d", "2")]);
+    let [bottom, left, inside] = drawn_rectangle(&mut rig);
+    rig.press(Key::F);
+    rig.click(bottom);
+    rig.click(left);
+    let fields = rig.st().sketch_session.as_ref().unwrap().input.fields[0].kind;
+    assert_eq!(fields, F::Radius);
+    rig.frame(vec![Event::PointerMoved(inside)]);
+    rig.settle();
+    rig.frame(vec![Event::Text("d*2".into())]);
+    rig.settle();
+    rig.focus_elsewhere();
+    rig.press(Key::Enter);
+
+    assert_eq!(formulas_of(&mut rig), vec!["d*2".to_string()]);
+    let sk = sketch(rig.st()).clone();
+    let radius = sk
+        .constraints()
+        .find_map(|(_, c)| match c.kind {
+            K::Radius(_, r) => Some(r),
+            _ => None,
+        })
+        .expect("Radiusmaß");
+    assert_eq!(radius, 4.0);
 }
 
 // ---- Wählen und Abschließen ---------------------------------------------------------------------

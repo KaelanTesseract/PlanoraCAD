@@ -1767,10 +1767,11 @@ impl SketchSession {
             let old = sk.measure(&kind);
             let value_of = kind.length_value();
             let id = sk.add_constraint(kind).map_err(err)?;
-            if let Some(v) = value_of {
-                prepare_arc(sk, id, v)?;
-            }
+            // Der Stand vor dem Neulegen: Davon gehen Wächter und Schritte aus.
             let unsolved = sk.clone();
+            if let Some(v) = value_of {
+                sk.prepare_dimension_change(id, v);
+            }
             let before = se.last_report.take();
             let report = sk.solve();
             se.last_report = Some(report.clone());
@@ -1847,9 +1848,10 @@ impl SketchSession {
                 return Err(crate::msg!("sketch-angle-range"));
             }
             let old = sk.measure(&kind);
-            prepare_arc(sk, id, value)?;
             sk.set_constraint_value(id, value).map_err(err)?;
+            // Der Stand vor dem Neulegen: Davon gehen Wächter und Schritte aus.
             let unsolved = sk.clone();
+            sk.prepare_dimension_change(id, value);
             // Versatzmaß: Die Vorlage bleibt stehen, wenn das geht. Gelingt es nicht, ist nichts
             // passiert und es läuft das normale Lösen. So oder so prüft der Wächter gegen den Stand
             // davor, das Halten umgeht also keine Prüfung auf Umklappen.
@@ -1893,7 +1895,8 @@ impl SketchSession {
     }
 
     /// Falt-Wächter für das Längenmaß `id` (Skizzen 3): `direct` ist das Ergebnis des direkten
-    /// Lösens, `unsolved` der Stand davor (das Maß hat schon seinen neuen Wert). Ist es gescheitert
+    /// Lösens, `unsolved` der Stand davor (das Maß hat schon seinen neuen Wert, ein tangentialer
+    /// Bogen aber noch seine alte Lage, siehe [`Sketch::prepare_dimension_change`]). Ist es gescheitert
     /// oder hat die Skizze umgeklappt, geht es von dort ab dem alten Wert `old` in Schritten
     /// ([`Sketch::solve_in_steps`]): Ein großer Sprung lässt den Löser scheitern, in kleinen
     /// Schritten bleibt die Lage. Kommt es nicht
@@ -2386,13 +2389,6 @@ fn offset_problem_message(problem: OffsetProblem) -> Msg {
 
 /// Setzt einen tangentialen Bogen vor dem Lösen auf die Lage für den neuen Wert `value` des Maßes
 /// `id` (Skizzen 4); passt der Wert nicht zwischen die Nachbarn, wird er abgelehnt.
-fn prepare_arc(sk: &mut Sketch, id: ConstraintId, value: f64) -> Result<(), Msg> {
-    match sk.prepare_dimension_change(id, value) {
-        planora_sketch::DimensionChange::DoesNotFit => Err(crate::msg!("sketch-dimension-folds")),
-        _ => Ok(()),
-    }
-}
-
 /// Das Maß `kind` mit dem Wert `value`, geprüft nach der gemeinsamen Regel der Skizze
 /// ([`Sketch::check_constraint_value`]). Nicht endliche Eingaben ergeben die Meldung des
 /// Zahlenfelds.

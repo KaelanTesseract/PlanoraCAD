@@ -236,11 +236,8 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option
         // Fehler stehen in der Meldung der Sitzung und im Feld.
         let _ = se.confirm_transform(sf);
     } else if enter && !flyout {
-        let raw = se.draw_cursor.as_ref().map(|c| c.raw).or(se.cursor);
-        if let Some(raw) = raw {
-            // Fehler stehen in der Meldung der Sitzung und im Feld.
-            let _ = se.commit_input(sf, raw, radius, false, &scope);
-        }
+        // Fehler stehen in der Meldung der Sitzung und im Feld.
+        let _ = se.commit_at_cursor(sf, radius, &scope);
     }
     if esc && !flyout {
         se.cancel(&mut sf.sketch);

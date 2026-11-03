@@ -996,8 +996,10 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             .zip(grip_layout(state, rect))
             .is_some_and(|(p, l)| sketch_grips::hit(&l, p).is_some());
 
-    // Getippte Werte werden beim Klick zu Maßen; die Formeln darin brauchen die Parameter.
-    let commit_scope = (response.clicked_by(PointerButton::Primary)
+    // Getippte Werte werden beim Klick und bei der Eingabe zu Maßen; die Formeln darin brauchen die
+    // Parameter.
+    let commit_scope = ((response.clicked_by(PointerButton::Primary)
+        || ui.input(|i| i.key_pressed(egui::Key::Enter)))
         && state
             .sketch_session
             .as_ref()
@@ -1176,10 +1178,13 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         // Mitten in einem Griff oder Rahmen gelten Eingabe und Entf nicht.
         let gesture = se.in_gesture();
         if enter && !flyout && !gesture {
-            let _ = if se.runs_transform() {
-                se.confirm_transform(sf)
-            } else {
-                se.finish_tool(&mut sf.sketch)
+            let _ = match &commit_scope {
+                // Felder da, aber ohne Fokus: derselbe Weg wie die Eingabe im Feld.
+                Some(scope) if !se.runs_transform() && !se.input.fields.is_empty() => {
+                    se.commit_at_cursor(sf, radius, scope)
+                }
+                _ if se.runs_transform() => se.confirm_transform(sf),
+                _ => se.finish_tool(&mut sf.sketch),
             };
         }
         if delete && !gesture {

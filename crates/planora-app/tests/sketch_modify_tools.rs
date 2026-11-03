@@ -458,17 +458,25 @@ fn menus_show_the_modify_entries_only_with_an_open_sketch() {
     let mut open = workspace(true);
     let lines = menu_lines(&mut open, true);
     assert!(lines.iter().any(|l| l == "Ändern"), "{lines:?}");
+    // Skizzen 4: Der Versatz steht wie in Fusion unter „Ändern“, nicht mehr in „Erzeugen“.
     let lines = menu_lines(&mut open, false);
-    assert!(lines.iter().any(|l| l == "Versatz"), "{lines:?}");
     assert!(
         !lines
             .iter()
-            .any(|l| l == "Rundung" || l == "Skizzenrundung"),
-        "Rundung und Fasen stehen unter „Ändern“: {lines:?}"
+            .any(|l| l == "Versatz" || l == "Rundung" || l == "Skizzenrundung"),
+        "Versatz, Rundung und Fasen stehen unter „Ändern“: {lines:?}"
     );
-    assert!(
-        lines.iter().any(|l| l == "O"),
-        "Taste des Versatzes: {lines:?}"
+    assert_eq!(
+        app::SKETCH_MODIFY_TOOLS,
+        [Tool::Offset, Tool::MoveCopy, Tool::Scale],
+        "Untermenü „Ändern“, nach Rundung und Fasen"
+    );
+    for tool in app::SKETCH_MODIFY_TOOLS {
+        assert!(Action::for_sketch_tool(tool).is_some(), "{tool:?}");
+    }
+    assert_eq!(
+        Action::for_sketch_tool(Tool::Offset),
+        Some(Action::SketchOffset)
     );
 
     let mut closed = workspace(false);

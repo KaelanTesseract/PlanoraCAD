@@ -122,16 +122,16 @@ fn tangent_error(s: &Sketch, ids: &FilletIds, lines: [CurveId; 2]) -> f64 {
     worst
 }
 
-/// Setzt ein Längenmaß wie die Oberfläche: tangentialen Bogen neu legen, direkt lösen, sonst in
-/// Schritten. `None`: abgelehnt.
+/// Setzt ein Längenmaß wie die Oberfläche: tangentialen Bogen neu legen, wenn es geht, direkt lösen,
+/// sonst in Schritten ab dem Stand vor dem Neulegen. `None`: abgelehnt. Skizzen 4: „passt nicht“ ist
+/// keine Ablehnung mehr, es entscheidet das normale Lösen.
 fn change(s: &Sketch, id: ConstraintId, old: f64, new: f64) -> Option<Sketch> {
     let mut trial = s.clone();
-    if trial.prepare_dimension_change(id, new) == DimensionChange::DoesNotFit {
-        assert_eq!(trial.to_data(), s.to_data(), "bitgleich");
-        return None;
-    }
     trial.set_constraint_value(id, new).unwrap();
     let unsolved = trial.clone();
+    if trial.prepare_dimension_change(id, new) == DimensionChange::DoesNotFit {
+        assert_eq!(trial.variables(), unsolved.variables(), "bitgleich");
+    }
     let radius = unsolved.constraint(id).unwrap().kind.is_radius();
     let folds =
         |t: &Sketch| folded_over(&unsolved, t) || (radius && sweep_crossed_half_turn(&unsolved, t));
@@ -1136,8 +1136,10 @@ fn the_reviewed_loops_do_not_come_back() {
     assert!(at(&next, ids.center).distance(DVec2::new(30.0, 30.0)) < 1e-9);
 }
 
+/// Skizzen 4: Das Neulegen sagt „passt nicht“ und ändert nichts; abgelehnt wird dadurch nicht mehr,
+/// es läuft das normale Lösen (`past_the_limit_between_two_lines_...`).
 #[test]
-fn a_radius_larger_than_fits_is_refused_bit_equal() {
+fn a_radius_larger_than_fits_is_not_refitted_and_changes_nothing() {
     for fixed in [false, true] {
         let mut v = vee(0.5 * PI);
         if fixed {
@@ -1913,4 +1915,190 @@ fn an_oval_radius_too_small_stays_under_half_a_turn_or_is_refused() {
         assert!(sweep_of(&next, k) < PI);
     }
     assert!(change(&s, dim, big, 8.0).is_none());
+}
+
+// ---- Bogen mit gebundener Mitte (Gesamtprüfung Skizzen 4) ------------------------------------
+
+/// Von Hand gebauter Bogen um den Ursprung, Radius 5, an beiden Enden tangential an freie Linien,
+/// mit Radiusmaß. Ohne Bindung an der Mitte.
+fn hand_built_corner() -> (Sketch, CurveId, ConstraintId, PointId, [CurveId; 2]) {
+    let mut s = sketch();
+    let m = pt(&mut s, 0.0, 0.0);
+    let t0 = pt(&mut s, 5.0, 0.0);
+    let t1 = pt(&mut s, 0.0, 5.0);
+    let far0 = pt(&mut s, 5.0, -30.0);
+    let far1 = pt(&mut s, -30.0, 5.0);
+    let arc = s.add_arc(m, t0, t1).unwrap();
+    let l0 = s.add_line(far0, t0).unwrap();
+    let l1 = s.add_line(t1, far1).unwrap();
+    s.add_constraint(ConstraintKind::Tangent(l0, arc)).unwrap();
+    s.add_constraint(ConstraintKind::Tangent(l1, arc)).unwrap();
+    let dim = s.add_constraint(ConstraintKind::Radius(arc, 5.0)).unwrap();
+    assert_clean(&s.clone().solve());
+    (s, arc, dim, m, [l0, l1])
+}
+
+/// Gemessen in der Gesamtprüfung: Mitte fest, Radius 5 bis 29. Das Neulegen lehnte 13 von 24
+/// Schritten ab, das normale Lösen schafft alle, und die Linien kippen dabei.
+#[test]
+fn an_anchored_centre_solves_every_radius_step_and_stays_put() {
+    let (mut s, arc, dim, m, lines) = hand_built_corner();
+    s.add_constraint(ConstraintKind::Fixed(m, 0.0, 0.0))
+        .unwrap();
+    let start = direction(&s, lines[0]);
+    let mut state = s.clone();
+    let mut old = 5.0;
+    for step in 6..=29 {
+        let r = f64::from(step);
+        let mut prepared = state.clone();
+        assert_eq!(
+            prepared.prepare_dimension_change(dim, r),
+            DimensionChange::Untouched,
+            "r {r}"
+        );
+        assert_eq!(prepared.variables(), state.variables(), "r {r}: bitgleich");
+        let next = change(&state, dim, old, r).unwrap_or_else(|| panic!("r {r}"));
+        assert!(at(&next, m).length() < 1e-9, "r {r}");
+        assert!((next.radius(arc).unwrap() - r).abs() < 1e-6, "r {r}");
+        assert!(!folded_over(&state, &next), "r {r}");
+        assert!(sweep_of(&next, arc) < PI, "r {r}");
+        state = next;
+        old = r;
+    }
+    assert!(
+        direction(&state, lines[0]).distance(start) > 0.1,
+        "die Linien geben nach"
+    );
+}
+
+/// Jede Bindung an die Mitte lässt das Neulegen aus; ein anzeigendes Maß bindet nichts.
+#[test]
+fn any_position_binding_on_the_centre_skips_the_refit() {
+    type Bind = fn(&mut Sketch, PointId) -> ConstraintKind;
+    fn line(s: &mut Sketch, y: f64) -> CurveId {
+        let (a, b) = (pt(s, -9.0, y), pt(s, 9.0, y));
+        s.add_line(a, b).unwrap()
+    }
+    let bindings: [(&str, Bind); 8] = [
+        ("Fest", |_, m| ConstraintKind::Fixed(m, 0.0, 0.0)),
+        ("Deckend", |s, m| {
+            ConstraintKind::Coincident(m, pt(s, 0.0, 0.0))
+        }),
+        ("Auf Kurve", |s, m| {
+            ConstraintKind::PointOnCurve(m, line(s, 0.0))
+        }),
+        ("Abstand", |s, m| {
+            ConstraintKind::Distance(m, pt(s, -9.0, 0.0), 9.0)
+        }),
+        ("Abstand zur Linie", |s, m| {
+            ConstraintKind::DistancePointLine(m, line(s, -9.0), 9.0)
+        }),
+        ("Mittelpunkt", |s, m| {
+            ConstraintKind::Midpoint(m, line(s, 0.0))
+        }),
+        ("Waagerecht", |s, m| {
+            ConstraintKind::Horizontal(LineOrPoints::Points(m, pt(s, -9.0, 0.0)))
+        }),
+        ("Symmetrisch", |s, m| {
+            let other = pt(s, 0.0, 0.0);
+            ConstraintKind::Symmetric(m, other, line(s, 0.0))
+        }),
+    ];
+    for (name, bind) in bindings {
+        let (mut s, arc, dim, m, _) = hand_built_corner();
+        let kind = bind(&mut s, m);
+        s.add_constraint(kind).unwrap();
+        let mut trial = s.clone();
+        assert_eq!(
+            trial.prepare_dimension_change(dim, 7.0),
+            DimensionChange::Untouched,
+            "{name}"
+        );
+        assert_eq!(trial.variables(), s.variables(), "{name}");
+        assert!(!trial.refit_tangent_arc(arc, 7.0), "{name}");
+    }
+
+    let (mut s, _, dim, m, _) = hand_built_corner();
+    let other = pt(&mut s, -9.0, 0.0);
+    let shown = s
+        .add_constraint(ConstraintKind::Distance(m, other, 9.0))
+        .unwrap();
+    s.set_driven(shown, true).unwrap();
+    assert_eq!(
+        s.prepare_dimension_change(dim, 7.0),
+        DimensionChange::Refitted,
+        "ein anzeigendes Maß bindet nichts"
+    );
+}
+
+/// Über der Grenze zwischen zwei Linien: Das Neulegen geht nicht, aber das normale Lösen läuft, und
+/// über eine dichte Folge entsteht nie eine Falte oder ein Bogen über 180°.
+#[test]
+fn past_the_limit_between_two_lines_the_plain_solve_runs_and_never_folds() {
+    let (mut solved, mut refused) = (0, 0);
+    for k in 0..12 {
+        let angle = 0.3 + 0.2 * f64::from(k);
+        for fixed in [false, true] {
+            let mut v = vee(angle);
+            if fixed {
+                let (a, b) = (at(&v.s, v.a), at(&v.s, v.b));
+                v.s.add_constraint(ConstraintKind::Fixed(v.a, a.x, a.y))
+                    .unwrap();
+                v.s.add_constraint(ConstraintKind::Fixed(v.b, b.x, b.y))
+                    .unwrap();
+            }
+            let (_, ids) = round(&mut v, 2.0);
+            let dim = ids.radius_dim.unwrap();
+            for step in 1..=30 {
+                let r = 2.0 + f64::from(step) * 4.0;
+                let Some(next) = change(&v.s, dim, 2.0, r) else {
+                    refused += 1;
+                    continue;
+                };
+                solved += 1;
+                let label = format!("Winkel {angle} fest {fixed} r {r}");
+                assert!(!folded_over(&v.s, &next), "{label}");
+                assert!(!sweep_crossed_half_turn(&v.s, &next), "{label}");
+                assert!((next.radius(ids.arc).unwrap() - r).abs() < 1e-6, "{label}");
+                assert!(sweep_of(&next, ids.arc) < PI, "{label}");
+            }
+        }
+    }
+    println!("Über der Grenze: gelöst {solved}, abgelehnt {refused}");
+    assert!(solved > 0 && refused > 0);
+}
+
+/// Das Neulegen passt, aber ein Längenmaß lässt den Berührpunkt nicht dorthin: Direkt klappt es um,
+/// und aus der neuen Lage kommen auch die Schritte nicht ans Ziel, nur aus dem Stand davor.
+#[test]
+fn the_steps_start_from_the_geometry_before_the_refit() {
+    let mut v = vee(0.47);
+    let (_, ids) = round(&mut v, 5.0);
+    let dim = ids.radius_dim.unwrap();
+    let a = at(&v.s, v.a);
+    v.s.add_constraint(ConstraintKind::Fixed(v.a, a.x, a.y))
+        .unwrap();
+    let length = a.distance(at(&v.s, ids.touch[0])).min(30.0);
+    v.s.add_constraint(ConstraintKind::Distance(v.a, ids.touch[0], length))
+        .unwrap();
+    assert_eq!(v.s.solve().status, SolveStatus::Solved);
+
+    let mut before = v.s.clone();
+    before.set_constraint_value(dim, 8.0).unwrap();
+    let mut refitted = before.clone();
+    assert_eq!(
+        refitted.prepare_dimension_change(dim, 8.0),
+        DimensionChange::Refitted
+    );
+    let folds = |t: &Sketch| folded_over(&before, t) || sweep_crossed_half_turn(&before, t);
+    let accept = |t: &Sketch, r: &SolveReport| r.status == SolveStatus::Solved && !folds(t);
+    assert!(
+        refitted
+            .solve_in_steps(&[(dim, 5.0, 8.0)], accept)
+            .is_none(),
+        "sonst prüft das hier nichts"
+    );
+    let next = change(&v.s, dim, 5.0, 8.0).expect("in Schritten ab dem Stand davor");
+    assert!((next.radius(ids.arc).unwrap() - 8.0).abs() < 1e-6);
+    assert!(!folds(&next));
 }

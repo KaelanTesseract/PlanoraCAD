@@ -93,16 +93,17 @@ pub enum DimensionChange {
     Untouched,
     /// Die Bögen liegen schon richtig, das Lösen bewegt nichts mehr.
     Refitted,
-    /// Der Wert passt nicht zwischen zwei Linien; die Skizze ist unverändert, der Aufrufer lehnt
-    /// ab. Mit einem Bogen als Nachbarn passiert das nicht: Dort bleibt es beim normalen Lösen,
-    /// so wird keine alte Skizze neu abgelehnt, die der Löser schafft.
+    /// Der Wert passt nicht zwischen zwei unveränderte Linien; die Skizze ist unverändert. Das ist
+    /// keine Ablehnung: Der Aufrufer kann erst anderen Maßen Platz lassen, und am Ende entscheidet
+    /// das normale Lösen mit Falt- und 180°-Prüfung, ab dem Stand vor diesem Aufruf.
     DoesNotFit,
 }
 
 /// Neue Lage eines Bogens, der an beiden Enden tangential an Nachbarn hängt.
 enum Refit {
-    /// Die Nachbarn bestimmen die Lage nicht: keine solche Form, oder parallele Linien und
-    /// konzentrische Bögen (Langloch), bei denen sich der Radius nur mit den Nachbarn ändert.
+    /// Die Nachbarn bestimmen die Lage nicht: keine solche Form, parallele Linien und konzentrische
+    /// Bögen (Langloch), bei denen sich der Radius nur mit den Nachbarn ändert, oder eine Mitte, die
+    /// selbst gebunden ist.
     NotThisShape,
     NoFit,
     /// Punkte des Bogens und ihre neue Lage: Mitte, Start, Ende.
@@ -1207,10 +1208,19 @@ impl Sketch {
         }
     }
 
+    /// Hängt an der Mitte `center` eine Abhängigkeit, die ihre Lage bindet (fest, deckend, auf einer
+    /// Kurve, ein Abstand und dergleichen)? Dann bestimmt nicht die Form der Nachbarn, wo sie liegt,
+    /// und die Nachbarn müssen beim Lösen nachgeben dürfen. Anzeigende Maße binden nichts.
+    fn center_is_bound(&self, center: PointId) -> bool {
+        self.constraints()
+            .filter(|(_, d)| d.enabled && !d.driven)
+            .any(|(_, d)| d.kind.points().contains(&center))
+    }
+
     /// Die Lage des Bogens `arc` für den Radius `radius` bei unveränderten, wenn nötig
     /// verlängerten Nachbarn, mit denselben Versatzkurven wie [`Sketch::fillet_plan`]. Die Mitte
-    /// bleibt auf ihrer Seite jedes Nachbarn; bleiben zwei Stellen, gilt die nähere. Reine
-    /// Geometrie, die Skizze wird nur gelesen.
+    /// bleibt auf ihrer Seite jedes Nachbarn; bleiben zwei Stellen, gilt die nähere. Eine gebundene
+    /// Mitte bleibt dem Löser überlassen. Reine Geometrie, die Skizze wird nur gelesen.
     fn refit_geometry(&self, arc: CurveId, radius: f64) -> Refit {
         let tol = self.tolerance().linear;
         let Some(ends) = self.tangent_ends(arc) else {
@@ -1219,6 +1229,9 @@ impl Sketch {
         let CurveKind::Arc { center, start, end } = self.curves[arc].kind else {
             return Refit::NotThisShape;
         };
+        if self.center_is_bound(center) {
+            return Refit::NotThisShape;
+        }
         let shape_of = |c: CurveId| self.geom(c).as_ref().and_then(shape);
         let (Some(s0), Some(s1)) = (shape_of(ends[0].neighbour), shape_of(ends[1].neighbour))
         else {
@@ -1325,8 +1338,8 @@ impl Sketch {
     /// werden höchstens verlängert. So beginnt das Lösen an der richtigen Stelle; aus der alten
     /// Lage fände es zu einem großen Radius Schleifen und ausgebeulte Bögen, die alle
     /// Abhängigkeiten erfüllen. `false` und nichts geändert, wenn es keine Lösung gibt, ein
-    /// Berührpunkt das ferne Ende eines Nachbarn überschreitet oder der Bogen keine solche Form
-    /// hat (auch Ellipse und Spline als Nachbarn). Ohne Lösen.
+    /// Berührpunkt das ferne Ende eines Nachbarn überschreitet, die Mitte gebunden ist oder der
+    /// Bogen keine solche Form hat (auch Ellipse und Spline als Nachbarn). Ohne Lösen.
     pub fn refit_tangent_arc(&mut self, arc: CurveId, radius: f64) -> bool {
         match self.refit_geometry(arc, radius) {
             Refit::Fit(points) => {
@@ -1341,8 +1354,9 @@ impl Sketch {
     /// `Diameter` an einem Bogen, der tangential zwischen zwei Nachbarn liegt, setzt es diesen
     /// und alle über `Equal` verbundenen Bögen derselben Form auf die neue Lage. Bleibt der Wert
     /// gleich oder ist das Maß nur anzeigend, geschieht nichts. Passt der Wert bei einem dieser
-    /// Bögen nicht, siehe [`DimensionChange`]: Zwischen zwei Linien ist das eine Ablehnung, sonst
-    /// bleibt alles beim normalen Lösen.
+    /// Bögen nicht, siehe [`DimensionChange`]: Es bleibt beim normalen Lösen. Der Aufrufer behält
+    /// den Stand davor, denn scheitert das Lösen aus der neuen Lage oder klappt es um, zählt der
+    /// Weg in Schritten ab dort.
     pub fn prepare_dimension_change(&mut self, c: ConstraintId, value: f64) -> DimensionChange {
         let Some(d) = self.constraint(c).filter(|d| d.enabled && !d.driven) else {
             return DimensionChange::Untouched;

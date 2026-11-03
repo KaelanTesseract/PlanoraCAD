@@ -4,7 +4,7 @@
 
 use planora_math::{DVec2, Frame, PI, TAU, Tolerance};
 use planora_sketch::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
-use planora_sketch::fillet::{ChamferKind, CurvePick, DimensionChange, FilletIds};
+use planora_sketch::fillet::{ChamferKind, CurvePick, FilletIds};
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
 use planora_sketch::offset::OffsetIds;
 use planora_sketch::shapes::{
@@ -445,18 +445,18 @@ fn a_rounded_rectangle_stays_exact_over_a_dense_motion() {
 /// Setzt ein Maß wie die Oberfläche: tangentialen Bogen neu legen, direkt lösen, sonst in Schritten.
 fn change(s: &Sketch, id: ConstraintId, old: f64, new: f64) -> Option<Sketch> {
     let mut trial = s.clone();
-    if trial.prepare_dimension_change(id, new) == DimensionChange::DoesNotFit {
-        return None;
-    }
     trial.set_constraint_value(id, new).unwrap();
     let unsolved = trial.clone();
+    trial.prepare_dimension_change(id, new);
     let folds = |t: &Sketch| folded_over(&unsolved, t) || sweep_crossed_half_turn(&unsolved, t);
     let r = trial.solve();
     if r.status == SolveStatus::Solved && !folds(&trial) {
         return Some(trial);
     }
     let accept = |t: &Sketch, r: &SolveReport| r.status == SolveStatus::Solved && !folds(t);
-    s.solve_in_steps(&[(id, old, new)], accept).map(|x| x.0)
+    unsolved
+        .solve_in_steps(&[(id, old, new)], accept)
+        .map(|x| x.0)
 }
 
 /// Wie eine Tangente am gemeinsamen Ende: Nach Drehen und Skalieren gilt ihr Vorzeichen weiter, und

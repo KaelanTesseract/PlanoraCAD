@@ -1008,15 +1008,126 @@ fn a_fillet_radius_dimension_moves_the_arc_and_leaves_the_lines() {
     }
 }
 
+/// Skizzen 4: Über der Grenze läuft das normale Lösen. Es löst ohne Falte und ohne Bogen über 180°
+/// oder lehnt ab und lässt alles, wie es war.
 #[test]
-fn a_fillet_radius_that_does_not_fit_is_refused_and_changes_nothing() {
+fn a_fillet_radius_past_its_limit_goes_to_the_plain_solve_without_a_fold() {
+    let (mut solved, mut refused) = (0, 0);
+    for fixed in [false, true] {
+        for r in [41.0, 45.0, 60.0, 100.0, 300.0] {
+            let (mut sk, mut se) = setup();
+            let (ids, _) = rounded_corner(&mut sk, fixed);
+            let dim = ids.radius_dim.unwrap();
+            let (before, vars) = (sk.clone(), sk.variables().to_vec());
+            match se.set_dimension_value(&mut sk, dim, r) {
+                Ok(()) => {
+                    solved += 1;
+                    assert!((sk.radius(ids.arc).unwrap() - r).abs() < 1e-6, "{r}");
+                    assert!(!planora_sketch::shapes::folded_over(&before, &sk), "{r}");
+                    assert!(
+                        !planora_sketch::shapes::sweep_crossed_half_turn(&before, &sk),
+                        "{r}"
+                    );
+                }
+                Err(text) => {
+                    refused += 1;
+                    assert_eq!(text, planora_i18n::tr!("sketch-dimension-folds"), "{r}");
+                    assert_eq!(sk.to_data(), before.to_data(), "{r}");
+                    assert_eq!(sk.variables(), vars.as_slice(), "{r}");
+                }
+            }
+        }
+    }
+    assert!(solved > 0, "freie Linien geben nach");
+    println!("Über der Grenze: gelöst {solved}, abgelehnt {refused}");
+}
+
+/// Von Hand gebauter Bogen um den Ursprung mit fester Mitte, tangential an zwei freie Linien, mit
+/// Radiusmaß.
+fn anchored_corner(
+    sk: &mut Sketch,
+) -> (
+    planora_sketch::model::CurveId,
+    planora_sketch::constraint::ConstraintId,
+    planora_sketch::model::PointId,
+    planora_sketch::model::CurveId,
+) {
+    let m = sk.add_point(0.0, 0.0).unwrap();
+    let t0 = sk.add_point(5.0, 0.0).unwrap();
+    let t1 = sk.add_point(0.0, 5.0).unwrap();
+    let far0 = sk.add_point(5.0, -30.0).unwrap();
+    let far1 = sk.add_point(-30.0, 5.0).unwrap();
+    let arc = sk.add_arc(m, t0, t1).unwrap();
+    let l0 = sk.add_line(far0, t0).unwrap();
+    let l1 = sk.add_line(t1, far1).unwrap();
+    sk.add_constraint(K::Tangent(l0, arc)).unwrap();
+    sk.add_constraint(K::Tangent(l1, arc)).unwrap();
+    sk.add_constraint(K::Fixed(m, 0.0, 0.0)).unwrap();
+    let dim = sk.add_constraint(K::Radius(arc, 5.0)).unwrap();
+    sk.solve();
+    (arc, dim, m, l0)
+}
+
+/// Die Schritte des Wächters gehen vom Stand vor dem Neulegen aus: Aus der neuen Lage kämen sie nicht
+/// ans Ziel, und das Maß würde abgelehnt.
+#[test]
+fn the_guard_steps_from_the_geometry_before_the_refit() {
+    use planora_sketch::fillet::CurvePick;
     let (mut sk, mut se) = setup();
-    let (ids, _) = rounded_corner(&mut sk, false);
+    let (x, y) = (40.0 * 0.47_f64.cos(), 40.0 * 0.47_f64.sin());
+    let p = sk.add_point(0.0, 0.0).unwrap();
+    let a = sk.add_point(40.0, 0.0).unwrap();
+    let b = sk.add_point(x, y).unwrap();
+    let l1 = sk.add_line(a, p).unwrap();
+    let l2 = sk.add_line(p, b).unwrap();
+    let plan = sk
+        .fillet_plan(
+            CurvePick {
+                curve: l1,
+                at: DVec2::new(20.0, 0.0),
+            },
+            CurvePick {
+                curve: l2,
+                at: DVec2::new(x / 2.0, y / 2.0),
+            },
+            5.0,
+        )
+        .unwrap();
+    let ids = sk.add_fillet(&plan, None).unwrap();
     let dim = ids.radius_dim.unwrap();
-    let before = sk.to_data();
-    let text = se.set_dimension_value(&mut sk, dim, 45.0).unwrap_err();
-    assert_eq!(text, planora_i18n::tr!("sketch-dimension-folds"));
-    assert_eq!(sk.to_data(), before);
+    sk.add_constraint(K::Fixed(a, 40.0, 0.0)).unwrap();
+    let length = sk
+        .point_xy(ids.touch[0])
+        .unwrap()
+        .distance(DVec2::new(40.0, 0.0))
+        .min(30.0);
+    sk.add_constraint(K::Distance(a, ids.touch[0], length))
+        .unwrap();
+    sk.solve();
+    let before = sk.clone();
+    se.set_dimension_value(&mut sk, dim, 8.0).unwrap();
+    assert!((sk.radius(ids.arc).unwrap() - 8.0).abs() < 1e-6);
+    assert!(!planora_sketch::shapes::folded_over(&before, &sk));
+}
+
+/// Gesamtprüfung Skizzen 4, gemessen: Der Weg über das Neulegen lehnte 13 von 24 Schritten ab.
+#[test]
+fn a_radius_on_an_arc_with_an_anchored_centre_solves_every_step() {
+    let (mut sk, mut se) = setup();
+    let (arc, dim, m, _) = anchored_corner(&mut sk);
+    for step in 6..=29 {
+        let r = f64::from(step);
+        let before = sk.clone();
+        se.set_dimension_value(&mut sk, dim, r)
+            .unwrap_or_else(|e| panic!("r {r}: {e}"));
+        assert!(sk.point_xy(m).unwrap().length() < 1e-9, "r {r}");
+        assert!((sk.radius(arc).unwrap() - r).abs() < 1e-6, "r {r}");
+        assert!(!planora_sketch::shapes::folded_over(&before, &sk), "r {r}");
+        assert!(
+            !planora_sketch::shapes::sweep_crossed_half_turn(&before, &sk),
+            "r {r}"
+        );
+    }
 }
 
 /// Skizzen 4: Das gelöschte Radiusmaß neu anlegen geht denselben Weg wie das Ändern.
@@ -1038,16 +1149,22 @@ fn a_new_radius_dimension_on_a_fillet_moves_the_arc_and_leaves_the_lines() {
             assert!(sk.point_xy(a).unwrap().distance(DVec2::new(40.0, 0.0)) < 1e-9);
         }
     }
-    let (mut sk, mut se) = setup();
-    let (ids, _) = rounded_corner(&mut sk, true);
-    sk.remove_constraint(ids.radius_dim.unwrap()).unwrap();
-    let before = sk.to_data();
-    se.selection = vec![Item::Curve(ids.arc)];
-    let text = se
-        .apply(&mut sk, ConstraintAction::Radius, Some(45.0))
-        .unwrap_err();
-    assert_eq!(text, planora_i18n::tr!("sketch-dimension-folds"));
-    assert_eq!(sk.to_data(), before);
+    // Skizzen 4: Über der Grenze läuft auch hier das normale Lösen: gelöst ohne Falte, oder abgelehnt
+    // und bitgleich.
+    for r in [45.0, 300.0] {
+        let (mut sk, mut se) = setup();
+        let (ids, _) = rounded_corner(&mut sk, true);
+        sk.remove_constraint(ids.radius_dim.unwrap()).unwrap();
+        let before = sk.clone();
+        se.selection = vec![Item::Curve(ids.arc)];
+        match se.apply(&mut sk, ConstraintAction::Radius, Some(r)) {
+            Ok(_) => {
+                assert!((sk.radius(ids.arc).unwrap() - r).abs() < 1e-6);
+                assert!(!planora_sketch::shapes::folded_over(&before, &sk));
+            }
+            Err(_) => assert_eq!(sk.to_data(), before.to_data()),
+        }
+    }
 }
 
 /// Skizzen 4: Radius auf einer Folgerundung (`Equal`, ohne eigenes Maß): beide Bögen gehen mit.

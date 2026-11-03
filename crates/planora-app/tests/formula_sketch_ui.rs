@@ -1035,3 +1035,92 @@ fn a_fillet_radius_follows_its_parameter_without_moving_the_lines() {
         );
     }
 }
+
+// ---- Radius: derselbe Weg über Maß und Parameter (Gesamtprüfung Skizzen 4) ---------------------
+
+/// Bogen um den Ursprung, tangential an zwei freie Linien, Radiusmaß, wahlweise feste Mitte.
+fn radius_corner(
+    anchored: bool,
+) -> (
+    planora_sketch::model::Sketch,
+    ConstraintId,
+    CurveId,
+    PointId,
+) {
+    let mut sk = planora_sketch::model::Sketch::new(
+        StandardPlane::XY.frame(),
+        "S",
+        planora_math::Tolerance::default(),
+    );
+    let m = sk.add_point(0.0, 0.0).unwrap();
+    let t0 = sk.add_point(5.0, 0.0).unwrap();
+    let t1 = sk.add_point(0.0, 5.0).unwrap();
+    let far0 = sk.add_point(5.0, -30.0).unwrap();
+    let far1 = sk.add_point(-30.0, 5.0).unwrap();
+    let arc = sk.add_arc(m, t0, t1).unwrap();
+    let l0 = sk.add_line(far0, t0).unwrap();
+    let l1 = sk.add_line(t1, far1).unwrap();
+    sk.add_constraint(K::Tangent(l0, arc)).unwrap();
+    sk.add_constraint(K::Tangent(l1, arc)).unwrap();
+    if anchored {
+        sk.add_constraint(K::Fixed(m, 0.0, 0.0)).unwrap();
+    }
+    let dim = sk.add_constraint(K::Radius(arc, 5.0)).unwrap();
+    sk.solve();
+    (sk, dim, arc, m)
+}
+
+/// Ein Radius kommt über das Maß und über den Parameter zum selben Ergebnis: dieselbe Lage oder
+/// beide lehnen ab. Auch über der Grenze der freien Rundung.
+#[test]
+fn a_radius_gives_the_same_shape_through_the_dimension_and_through_a_parameter() {
+    use planora_app::sketch_state::SketchSession;
+    use planora_feature::{Document, FeatureStatus, SketchFormulas};
+    let (mut solved, mut refused) = (0, 0);
+    for anchored in [true, false] {
+        for r in [6.0, 9.0, 15.0, 21.0, 29.0, 34.0, 45.0, 80.0] {
+            let (base, dim, arc, _) = radius_corner(anchored);
+            let label = format!("fest {anchored} r {r}");
+
+            let mut by_dim = base.clone();
+            let mut se = SketchSession::new(FeatureId(0));
+            let dim_result = se.set_dimension_value(&mut by_dim, dim, r);
+
+            let mut doc = Document::new();
+            let p = doc.add_parameter("R", "5", ParamUnit::Length, "").unwrap();
+            let formulas: SketchFormulas = [(dim, "R".to_string())].into_iter().collect();
+            let sf = planora_feature::SketchFeature {
+                sketch: base.clone(),
+                plane: SketchPlane::Standard(StandardPlane::XY),
+                copies: vec![],
+                formulas,
+            };
+            let s = doc
+                .add_feature("Skizze 1", FeatureKind::Sketch(sf))
+                .unwrap();
+            let edit = ParamEdit {
+                name: "R".into(),
+                formula: r.to_string(),
+                unit: ParamUnit::Length,
+                comment: String::new(),
+            };
+            doc.set_parameter(p, edit).unwrap();
+            let by_param = doc.feature(s).unwrap().status == FeatureStatus::Ok;
+
+            assert_eq!(dim_result.is_ok(), by_param, "{label}: {dim_result:?}");
+            if by_param {
+                solved += 1;
+                let got = doc.sketch_of(s).unwrap();
+                assert!((got.radius(arc).unwrap() - r).abs() < 1e-6, "{label}");
+                for (q, _) in by_dim.points() {
+                    let (x, y) = (by_dim.point_xy(q).unwrap(), got.point_xy(q).unwrap());
+                    assert!(x.distance(y) < 1e-6, "{label}: {x:?} {y:?}");
+                }
+            } else {
+                refused += 1;
+            }
+        }
+    }
+    println!("Maß und Parameter gleich: gelöst {solved}, abgelehnt {refused}");
+    assert!(solved > 0);
+}

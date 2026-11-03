@@ -638,6 +638,20 @@ impl SketchSession {
         }
     }
 
+    /// Eingabe: [`commit_input`](Self::commit_input) dort, wo die Vorschau steht; ohne Zeiger nichts.
+    pub fn commit_at_cursor(
+        &mut self,
+        sf: &mut SketchFeature,
+        radius: f64,
+        scope: &ParamScope,
+    ) -> Result<(), String> {
+        let raw = self.draw_cursor.as_ref().map(|c| c.raw).or(self.cursor);
+        match raw {
+            Some(raw) => self.commit_input(sf, raw, radius, false, scope),
+            None => Ok(()),
+        }
+    }
+
     fn commit_typed(
         &mut self,
         sf: &mut SketchFeature,
