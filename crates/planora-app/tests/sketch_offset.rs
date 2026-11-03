@@ -539,6 +539,42 @@ fn a_double_clicked_chain_goes_straight_to_the_distance() {
     assert!(se.picks_curves(), "der nächste Klick wählt");
 }
 
+/// Doppelklick auf eine Linie mit früherem Versatz: Die Auswahl hat Vorlage, Querlinien und Kopie;
+/// genommen wird eine Kette wie beim Klick.
+#[test]
+fn a_preselection_over_cross_lines_is_one_chain_without_helpers() {
+    let mut s = open_line();
+    pick_with(&mut s, v(20.0, 0.0), true);
+    click(&mut s, v(20.0, 5.0)).unwrap();
+    let template = normal_lines(sketch(&s))[0];
+    set_tool(&mut s, Tool::Select);
+    {
+        let (se, sk) = s.session_sketch_mut().unwrap();
+        se.select_chain(sk, template, false);
+        assert!(se.selection.len() >= 3, "{:?}", se.selection);
+    }
+    set_tool(&mut s, Tool::Offset);
+    assert_eq!(picked(&s), 1);
+    assert!(preview(&mut s, v(20.0, -7.0)).is_some());
+    click(&mut s, v(20.0, -7.0)).unwrap();
+    assert_eq!(normal_lines(sketch(&s)).len(), 3);
+
+    // Rollkreise und Querlinien in einem Rahmen mit Linien: Sie stören nicht.
+    set_tool(&mut s, Tool::Select);
+    {
+        let (se, sk) = s.session_sketch_mut().unwrap();
+        let all = sk
+            .curves()
+            .map(|(c, _)| planora_app::sketch_state::Item::Curve(c));
+        se.selection = all.collect();
+    }
+    set_tool(&mut s, Tool::Offset);
+    assert_eq!(picked(&s), 1);
+    assert_eq!(message(&s), None);
+    let shown = preview(&mut s, v(20.0, -9.0));
+    assert!(shown.is_some(), "keine Kreuzung");
+}
+
 /// Zwei Ketten mit entgegengesetztem Umlauf: Der Zeiger zählt je Kette, die Richtung nicht.
 #[test]
 fn two_preselected_chains_go_to_the_pointer_side_whatever_their_direction() {
@@ -903,6 +939,131 @@ fn a_hand_circle_at_a_line_end_touching_a_parallel_counts_as_roller() {
     );
 }
 
+/// Innen bis fast an die Grenze: Auch ein großer Sprung geht, die Vorlage steht; darüber sagt der
+/// Text immer dasselbe.
+#[test]
+fn the_inner_square_reaches_its_limit_and_says_the_same_beyond_it() {
+    for (from, to) in [(19.0, 19.99), (5.0, 19.99), (1.0, 19.99), (0.5, 19.9)] {
+        let mut s = free_square();
+        pick_with(&mut s, v(20.0, 0.0), true);
+        type_in(&mut s, 0, &format!("{from}"));
+        click(&mut s, v(20.0, 2.0)).unwrap();
+        let dim = distance_dim(sketch(&s));
+        let template = line_bits(sketch(&s), 4);
+        set_value(&mut s, dim, to).unwrap();
+        assert_eq!(line_bits(sketch(&s), 4), template, "{from} {to}");
+        assert_clean(sketch(&s));
+    }
+    let mut s = free_square();
+    pick_with(&mut s, v(20.0, 0.0), true);
+    type_in(&mut s, 0, "5");
+    click(&mut s, v(20.0, 2.0)).unwrap();
+    let dim = distance_dim(sketch(&s));
+    let before = snapshot(&s);
+    for d in [20.0, 21.0, 25.0, 100.0] {
+        assert!(set_value(&mut s, dim, d).is_err(), "{d}");
+        assert_eq!(message(&s).unwrap(), t("sketch-offset-vanished"), "{d}");
+        assert_eq!(snapshot(&s), before, "{d}");
+    }
+}
+
+/// Der Wert passt, nur eine feste Ecke der Kopie lässt ihn nicht zu: Das ist ein Widerspruch, nicht
+/// „nichts bleibt übrig“.
+#[test]
+fn a_fixed_corner_on_the_copy_is_a_conflict_not_a_vanished_offset() {
+    let mut s = free_square();
+    pick_with(&mut s, v(20.0, 0.0), true);
+    type_in(&mut s, 0, "5");
+    click(&mut s, v(20.0, -2.0)).unwrap();
+    let dim = distance_dim(sketch(&s));
+    {
+        let sk = s.session_sketch_mut().unwrap().1;
+        let copy = normal_lines(sk)[4];
+        let CurveKind::Line { a, .. } = sk.curve(copy).unwrap().kind else {
+            panic!()
+        };
+        let at = sk.point_xy(a).unwrap();
+        sk.add_constraint(K::Fixed(a, at.x, at.y)).unwrap();
+        sk.solve();
+    }
+    s.observe_sketch(false);
+    let before = snapshot(&s);
+    assert!(set_value(&mut s, dim, 6.0).is_err());
+    assert_eq!(message(&s).unwrap(), t("sketch-change-conflict"));
+    assert_eq!(snapshot(&s), before);
+}
+
+/// Zwei eigene Linien schließen Vorlage und Kopie, und eine trägt `Parallel` zur anderen oder zu
+/// einer anderen Linie der Vorlage: Die Vorlage bleibt trotzdem stehen.
+#[test]
+fn parallel_closing_lines_do_not_let_the_template_move() {
+    let build = |corners: &[(f64, f64)], at: DVec2, side: DVec2| {
+        let mut s = sketch_with(|sk| {
+            let points: Vec<PointId> = corners
+                .iter()
+                .map(|c| sk.add_point(c.0, c.1).unwrap())
+                .collect();
+            for w in points.windows(2) {
+                sk.add_line(w[0], w[1]).unwrap();
+            }
+        });
+        pick_with(&mut s, at, true);
+        type_in(&mut s, 0, "5");
+        click(&mut s, side).unwrap();
+        s
+    };
+    type Close = fn(&mut Sketch, CurveId, CurveId, CurveId);
+    let walls_parallel: Close = |sk, w1, w2, _| {
+        sk.add_constraint(K::Parallel(w1, w2)).unwrap();
+    };
+    let reversed: Close = |sk, w1, w2, _| {
+        sk.add_constraint(K::Parallel(w2, w1)).unwrap();
+    };
+    let to_template: Close = |sk, _, w2, far| {
+        sk.add_constraint(K::Parallel(far, w2)).unwrap();
+    };
+    for close_up in [walls_parallel, reversed, to_template] {
+        // Eine Linie; dann ein U, dessen Schenkel parallel zu den Wänden stehen können.
+        let u = [(0.0, 40.0), (0.0, 0.0), (60.0, 0.0), (60.0, 40.0)];
+        let line = [(0.0, 0.0), (60.0, 0.0)];
+        for (corners, at, side) in [
+            (&line[..], v(30.0, 0.0), v(30.0, -2.0)),
+            (&u[..], v(30.0, 0.0), v(30.0, -2.0)),
+        ] {
+            let mut s = build(corners, at, side);
+            let n = corners.len() - 1;
+            {
+                let sk = s.session_sketch_mut().unwrap().1;
+                let lines = normal_lines(sk);
+                let ends = |sk: &Sketch, c: CurveId| match sk.curve(c).unwrap().kind {
+                    CurveKind::Line { a, b } => [a, b],
+                    _ => panic!(),
+                };
+                let (first_q, last_q) = (ends(sk, lines[0])[0], ends(sk, lines[n - 1])[1]);
+                let (first_k, last_k) = (ends(sk, lines[n])[0], ends(sk, lines[2 * n - 1])[1]);
+                let w1 = sk.add_line(first_q, first_k).unwrap();
+                let w2 = sk.add_line(last_q, last_k).unwrap();
+                close_up(sk, w1, w2, lines[0]);
+                sk.solve();
+            }
+            s.observe_sketch(false);
+            let dim = sketch(&s)
+                .constraints()
+                .find(|(_, c)| matches!(c.kind, K::Radius(..)))
+                .unwrap()
+                .0;
+            assert!(sketch(&s).offset_hold_points(dim).is_some(), "erkannt");
+            let template = line_bits(sketch(&s), n);
+            for d in [12.0, 7.5, 20.0, 3.0] {
+                if set_value(&mut s, dim, d).is_ok() {
+                    assert_eq!(radius_of(sketch(&s), dim), d);
+                }
+                assert_eq!(line_bits(sketch(&s), n), template, "n {n}, Wert {d}");
+            }
+        }
+    }
+}
+
 // ---- Review-Focus 1: unmögliche Eingaben ---------------------------------------------------------
 
 #[test]
@@ -1020,10 +1181,55 @@ fn changing_the_tool_or_undoing_drops_the_chain() {
     assert_eq!(picked(&s), 0);
 }
 
-/// Eingabe ohne Feld schließt ab wie ein Klick; der zweite Klick eines Doppelklicks auf die Kurve
-/// nimmt die Kette nicht wieder weg und legt nichts an.
+/// Rohereignisse, der Zeiger ein Bildpunkt neben der Linie: Der zweite Klick eines Doppelklicks
+/// legt keine hauchdünne Kopie an, und die Kette bleibt.
 #[test]
-fn enter_commits_and_a_double_click_on_the_curve_keeps_the_chain() {
+fn a_double_click_beside_the_curve_picks_the_chain_and_commits_nothing() {
+    let ctx = context();
+    let mut s = free_square();
+    set_tool(&mut s, Tool::Offset);
+    play(&ctx, &mut s, vec![vec![]]);
+    let before = snapshot(&s);
+    let on_line = screen(&s, v(20.0, 0.0));
+    let p = pos2(on_line.x, on_line.y + 1.0);
+    play(
+        &ctx,
+        &mut s,
+        vec![
+            vec![Event::PointerMoved(p)],
+            vec![button(p, true)],
+            vec![button(p, false)],
+            vec![button(p, true)],
+            vec![button(p, false)],
+            vec![],
+        ],
+    );
+    assert_eq!(picked(&s), 4, "die Kette ist gewählt");
+    assert_eq!(snapshot(&s), before, "keine Kopie");
+    assert_eq!(normal_lines(sketch(&s)).len(), 4);
+
+    // Ein Doppelklick in der Abstandsstufe legt genau eine Kopie an.
+    let (lo, _) = lo_hi(&[v(20.0, -5.0)]);
+    let q = screen(&s, lo);
+    play(
+        &ctx,
+        &mut s,
+        vec![
+            vec![Event::PointerMoved(q)],
+            vec![button(q, true)],
+            vec![button(q, false)],
+            vec![button(q, true)],
+            vec![button(q, false)],
+            vec![],
+        ],
+    );
+    assert_eq!(normal_lines(sketch(&s)).len(), 8, "eine Kopie");
+    assert_eq!(picked(&s), 0);
+}
+
+/// Eingabe ohne Feld schließt ab wie ein Klick; genau auf der Kette gibt es keinen Abstand.
+#[test]
+fn enter_commits_from_the_pointer() {
     let mut s = free_square();
     pick_with(&mut s, v(20.0, 0.0), true);
     let before = snapshot(&s);

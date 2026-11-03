@@ -1042,7 +1042,9 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             {
                 se.select_chain(&sf.sketch, c, shift);
             }
-        } else {
+        } else if se.tool != Tool::Offset {
+            // Beim Versatz hat der erste Klick schon alles getan; der zweite läge dicht an der Kurve
+            // und ergäbe eine hauchdünne Kopie.
             let _ = se.finish_tool(&mut sf.sketch);
         }
     } else if response.clicked_by(PointerButton::Primary)

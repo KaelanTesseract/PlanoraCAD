@@ -2122,22 +2122,21 @@ impl Sketch {
     /// teilt als Bogen die Mitte mit `x`, oder ist eine Näherung (die trägt gar nichts).
     pub(crate) fn continues_copy(&self, x: CurveId, c: CurveId) -> bool {
         let points = self.curves[c].kind.points();
+        self.joins_copy(x, c)
+            || self.constraints().any(|(_, d)| {
+                d.enabled
+                    && matches!(d.kind, ConstraintKind::Parallel(q, k) if k == c
+                        && !self.curves[q].kind.points().iter().any(|p| points.contains(p)))
+            })
+    }
+
+    /// Der feste Teil von [`continues_copy`](Self::continues_copy): alles außer `Parallel`, das
+    /// auch eine eigene Linie des Nutzers tragen kann.
+    fn joins_copy(&self, x: CurveId, c: CurveId) -> bool {
         let bound = self.constraints().any(|(_, d)| {
             d.enabled
-                && match d.kind {
-                    ConstraintKind::Tangent(a, b) | ConstraintKind::Equal(a, b) => {
-                        (a, b) == (x, c) || (a, b) == (c, x)
-                    }
-                    ConstraintKind::Parallel(q, k) => {
-                        k == c
-                            && !self.curves[q]
-                                .kind
-                                .points()
-                                .iter()
-                                .any(|p| points.contains(p))
-                    }
-                    _ => false,
-                }
+                && matches!(d.kind, ConstraintKind::Tangent(a, b) | ConstraintKind::Equal(a, b)
+                    if (a, b) == (x, c) || (a, b) == (c, x))
         });
         bound
             || match (&self.curves[x].kind, &self.curves[c].kind) {
@@ -2145,6 +2144,34 @@ impl Sketch {
                 (_, CurveKind::Spline { .. }) => true,
                 _ => false,
             }
+    }
+
+    /// Die Enden der Vorlagen von `copies`: Linien, zu denen ein Stück parallel ist, und Bögen um
+    /// dieselbe Mitte. Eine Linie, die hier endet und an der Kopie hängt, schließt die Wand von Hand
+    /// und ist kein Stück der Kopie, was immer sie sonst bindet.
+    fn source_ends(&self, copies: &[CurveId], centers: &[PointId]) -> HashSet<PointId> {
+        let mut out: HashSet<PointId> = centers.iter().copied().collect();
+        for (_, d) in self.constraints().filter(|(_, d)| d.enabled) {
+            if let ConstraintKind::Parallel(q, k) = d.kind
+                && copies.contains(&k)
+                && !copies.contains(&q)
+            {
+                out.extend(ends_of(&self.curves[q].kind));
+            }
+        }
+        for &k in copies {
+            if let CurveKind::Arc { center: m, .. } = self.curves[k].kind {
+                for (q, d) in self.curves() {
+                    if let CurveKind::Arc { center, .. } = d.kind
+                        && center == m
+                        && !copies.contains(&q)
+                    {
+                        out.extend(ends_of(&d.kind));
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// Die Punkte der Vorlage, die stehen bleiben, wenn sich das Versatzmaß `dim` ändert. `None`,
@@ -2157,6 +2184,51 @@ impl Sketch {
     /// Kurven, deren Kopie ja normal ist; nie über Querlinien und nie über eine Kurve, die an einem
     /// Punkt der Kopie hängt, also nie zur Kopie hinüber.
     pub fn offset_hold_points(&self, dim: ConstraintId) -> Option<Vec<PointId>> {
+        self.offset_parts(dim).map(|parts| parts.hold)
+    }
+
+    /// Was der Plan zum Versatzmaß `dim` beim Wert `value` sagt: die Vorlagen aus
+    /// [`offset_hold_points`](Self::offset_hold_points), die Seite je Kette von der Kopie. `None`,
+    /// wenn `dim` kein Versatzmaß ist oder der Plan aufgeht.
+    pub fn offset_problem_at(&self, dim: ConstraintId, value: f64) -> Option<OffsetProblem> {
+        let parts = self.offset_parts(dim)?;
+        let on_copy: Vec<DVec2> = parts
+            .touched
+            .iter()
+            .flat_map(|&k| ends_of(&self.curves[k].kind))
+            .map(|p| self.pos(p))
+            .collect();
+        let chains = match self.ordered_chains(&parts.sources) {
+            Ok(chains) => chains,
+            Err(problem) => return Some(problem),
+        };
+        chains.iter().find_map(|chain| {
+            // Die Stelle der Kopie, die dieser Kette am nächsten liegt, sagt die Seite. Kreise haben
+            // keine Enden; dort entscheidet ihr Radius.
+            let side = on_copy
+                .iter()
+                .filter_map(|&p| self.offset_side(chain, p))
+                .min_by(|a, b| a.abs().total_cmp(&b.abs()))
+                .or_else(|| self.circle_copy_side(chain, &parts.touched))?;
+            let plan = self.offset_plan(std::slice::from_ref(chain), side.signum() * value);
+            plan.err()
+        })
+    }
+
+    /// Seite einer Kopie, die ein ganzer Kreis um die Mitte der Kette ist, wie bei `offset_side`.
+    fn circle_copy_side(&self, chain: &OrderedChain, touched: &[CurveId]) -> Option<f64> {
+        touched.iter().find_map(|&k| match self.curves[k].kind {
+            CurveKind::Circle { center, radius } => {
+                let at = self.pos(center) + DVec2::new(self.vars[radius], 0.0);
+                self.offset_side(chain, at)
+            }
+            _ => None,
+        })
+    }
+
+    /// Die Teile eines Versatzmaßes; `None` wie bei
+    /// [`offset_hold_points`](Self::offset_hold_points).
+    fn offset_parts(&self, dim: ConstraintId) -> Option<OffsetParts> {
         let ConstraintKind::Radius(first, _) = self.constraint(dim)?.kind else {
             return None;
         };
@@ -2200,6 +2272,7 @@ impl Sketch {
             })
             .collect();
         let mut copies: Vec<CurveId> = group.iter().flat_map(|&c| touching(c)).collect();
+        let touched = copies.clone();
         if !group.iter().any(|&c| self.rolls_on_source(c, &touching(c))) {
             return None;
         }
@@ -2216,20 +2289,29 @@ impl Sketch {
                 })
         };
         // Die ganze Kopie: Stücke ohne Rollkreis hängen über gemeinsame Enden an einem mit. Eine
-        // eigene Linie des Nutzers zwischen Kopie und Vorlage (Wandstärke) gehört nicht dazu.
-        let mut next = 0;
-        while let Some(&x) = copies.get(next) {
-            next += 1;
-            let ends = ends_of(&self.curves[x].kind);
-            for (c, d) in self.curves() {
-                if !copies.contains(&c)
-                    && !group.contains(&c)
-                    && !cross_line(c)
-                    && ends_of(&d.kind).iter().any(|p| ends.contains(p))
-                    && !ends_of(&d.kind).iter().any(|p| centers.contains(p))
-                    && self.continues_copy(x, c)
-                {
-                    copies.push(c);
+        // eigene Linie des Nutzers zwischen Kopie und Vorlage (Wandstärke) gehört nicht dazu, auch
+        // nicht, wenn sie eine Abhängigkeit trägt: Sie endet auf der Vorlage. Erst die festen Fugen,
+        // denn `Parallel` kann auch zwischen zwei solchen Linien stehen und sagte sonst, was Vorlage ist.
+        for firm in [true, false] {
+            let mut next = 0;
+            while let Some(&x) = copies.get(next) {
+                next += 1;
+                let ends = ends_of(&self.curves[x].kind);
+                let source = self.source_ends(&copies, &centers);
+                for (c, d) in self.curves() {
+                    if !copies.contains(&c)
+                        && !group.contains(&c)
+                        && !cross_line(c)
+                        && ends_of(&d.kind).iter().any(|p| ends.contains(p))
+                        && !ends_of(&d.kind).iter().any(|p| source.contains(p))
+                        && (if firm {
+                            self.joins_copy(x, c)
+                        } else {
+                            self.continues_copy(x, c)
+                        })
+                    {
+                        copies.push(c);
+                    }
                 }
             }
         }
@@ -2272,12 +2354,26 @@ impl Sketch {
         if reached.is_empty() {
             return None;
         }
-        let mut out = centers;
-        for c in reached {
-            out.extend(self.curves[c].kind.points());
+        let mut hold = centers;
+        for &c in &reached {
+            hold.extend(self.curves[c].kind.points());
         }
-        out.sort();
-        out.dedup();
-        Some(out)
+        hold.sort();
+        hold.dedup();
+        Some(OffsetParts {
+            hold,
+            sources: reached,
+            touched,
+        })
     }
+}
+
+/// Die Teile eines Versatzmaßes.
+struct OffsetParts {
+    /// Punkte der Vorlage, die stehen bleiben.
+    hold: Vec<PointId>,
+    /// Die Vorlagekurven.
+    sources: Vec<CurveId>,
+    /// Die Stücke der Kopie, die einen Rollkreis berühren.
+    touched: Vec<CurveId>,
 }

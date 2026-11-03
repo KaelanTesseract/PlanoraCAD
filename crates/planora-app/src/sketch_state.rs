@@ -537,7 +537,7 @@ impl SketchSession {
         self.clear_pending();
         // Versatz: Eine Vorauswahl mit Kurven ist schon die Kette, es geht gleich mit dem Abstand weiter.
         if tool == Tool::Offset {
-            self.pending_curves = self
+            let curves: Vec<CurveId> = self
                 .selection
                 .iter()
                 .filter_map(|i| match *i {
@@ -545,6 +545,7 @@ impl SketchSession {
                     _ => None,
                 })
                 .collect();
+            self.pending_curves = offset_preselection(sk, curves);
         }
     }
 
@@ -1258,8 +1259,7 @@ impl SketchSession {
         if self.planned_kind().is_some() {
             return Ok(());
         }
-        // Versatz: Eingabe schließt ab wie ein Klick, und der zweite Klick eines Doppelklicks nimmt
-        // die gerade gewählte Kette nicht wieder weg.
+        // Versatz: Eingabe schließt ab wie ein Klick.
         if self.tool == Tool::Offset && !self.pending_curves.is_empty() {
             let raw = self.draw_cursor.as_ref().map(|c| c.raw).or(self.cursor);
             return match raw {
@@ -1799,20 +1799,39 @@ impl SketchSession {
             // passiert und es läuft das normale Lösen. So oder so prüft der Wächter gegen den Stand
             // davor, das Halten umgeht also keine Prüfung auf Umklappen.
             let hold = sk.offset_hold_points(id);
+            // Was der Plan zum Wert sagt, nur für den Text einer Ablehnung und, bei „geht nicht“,
+            // statt der teuren Schritte.
+            let problem = hold
+                .as_ref()
+                .and_then(|_| unsolved.offset_problem_at(id, value));
             if let Some(hold) = &hold {
-                sk.solve_holding(hold);
+                match old.filter(|_| problem.is_none()) {
+                    Some(old) => sk.solve_holding_in_steps(id, hold, old, value),
+                    None => sk.solve_holding(hold),
+                };
             }
             let direct = se.solve_checked(sk, prior).map(|_| ());
-            se.guard_length(sk, id, old, &unsolved, direct)?;
+            let vanished = problem == Some(OffsetProblem::Vanished);
+            if let Err(e) = se.guard_length(sk, id, old, &unsolved, direct) {
+                return Err(if vanished {
+                    crate::msg!("sketch-offset-vanished")
+                } else {
+                    e
+                });
+            }
             // Geht es nur, indem die Vorlage nachgibt (ein freier Bogen wüchse mit), passt der Wert
-            // nicht: Die Kopie verschwände sonst.
+            // nicht: Sie bleibt stehen, das ist der Sinn dieses Maßes.
             let tol = sk.tolerance().linear;
             let moved = |p: &PointId| match (unsolved.point_xy(*p), sk.point_xy(*p)) {
                 (Ok(a), Ok(b)) => a.distance(b) > tol,
                 _ => true,
             };
             if hold.is_some_and(|h| h.iter().any(moved)) {
-                return Err(crate::msg!("sketch-offset-vanished"));
+                return Err(if vanished {
+                    crate::msg!("sketch-offset-vanished")
+                } else {
+                    crate::msg!("sketch-change-conflict")
+                });
             }
             Ok(())
         })
@@ -2268,6 +2287,34 @@ fn offset_chain_of(sk: &Sketch, c: CurveId) -> Result<Vec<CurveId>, Msg> {
         || vec![c],
         |chain| chain.items.iter().map(|item| item.0).collect(),
     ))
+}
+
+/// Die Kette einer Vorauswahl: Hilfen eines früheren Versatzes (Konstruktionskurven neben normalen
+/// Kurven) zählen nicht, und von Ketten, die über solche Hilfen zusammenhängen (Vorlage und Kopie),
+/// bleibt die erste, wie beim Klick. Getrennte Ketten bleiben. Verzweigt sich die Auswahl, bleibt sie
+/// ganz; die Meldung kommt mit dem Klick.
+fn offset_preselection(sk: &Sketch, curves: Vec<CurveId>) -> Vec<CurveId> {
+    let is_helper = |c: &CurveId| sk.curve(*c).is_some_and(|d| d.construction);
+    let curves: Vec<CurveId> = if curves.iter().all(is_helper) {
+        curves
+    } else {
+        curves.into_iter().filter(|c| !is_helper(c)).collect()
+    };
+    let Ok(chains) = sk.ordered_chains(&curves) else {
+        return curves;
+    };
+    let mut kept: Vec<CurveId> = Vec::new();
+    let mut linked: Vec<CurveId> = Vec::new();
+    for chain in &chains {
+        if chain.items.iter().any(|item| linked.contains(&item.0)) {
+            continue;
+        }
+        kept.extend(chain.items.iter().map(|item| item.0));
+        if let Some(first) = chain.items.first() {
+            linked.extend(sk.connected_chain(first.0));
+        }
+    }
+    kept
 }
 
 /// Die Meldung zu einem Versatz, der nicht geht.

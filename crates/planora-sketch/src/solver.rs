@@ -66,6 +66,8 @@ const DAMPING_TRIES: usize = 30;
 const HOLD_ROUNDS: usize = 8;
 /// Um so viel genauer zieht [`Sketch::solve_holding`] zum Schluss nach.
 const HOLD_POLISH: f64 = 1e-2;
+/// So oft halbiert [`Sketch::solve_holding_in_steps`] den Schritt höchstens.
+const HOLD_HALVINGS: usize = 6;
 
 /// Ergebnis eines Solver-Laufs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -321,6 +323,51 @@ impl Sketch {
         self.vars = trial.vars;
         self.touch_values();
         true
+    }
+
+    /// Wie [`solve_holding`](Self::solve_holding) für das Maß `dim`, das schon den neuen Wert `to`
+    /// trägt und vorher `from` hatte: Ein großer Sprung lässt den Löser nah an der Grenze scheitern,
+    /// in kleineren Schritten bleibt die Lage. Halbiert höchstens [`HOLD_HALVINGS`]-mal.
+    pub fn solve_holding_in_steps(
+        &mut self,
+        dim: ConstraintId,
+        hold: &[PointId],
+        from: f64,
+        to: f64,
+    ) -> bool {
+        if self.solve_holding(hold) {
+            return true;
+        }
+        let mut trial = self.clone();
+        if !trial.hold_by_halves(dim, hold, from, to, HOLD_HALVINGS) {
+            return false;
+        }
+        self.vars = trial.vars;
+        self.touch_values();
+        true
+    }
+
+    /// Geht von `from` nach `to`; `self` steht bei `from`-Lage, das Maß danach auf `to`.
+    fn hold_by_halves(
+        &mut self,
+        dim: ConstraintId,
+        hold: &[PointId],
+        from: f64,
+        to: f64,
+        depth: usize,
+    ) -> bool {
+        if self.set_constraint_value(dim, to).is_err() {
+            return false;
+        }
+        if self.solve_holding(hold) {
+            return true;
+        }
+        if depth == 0 {
+            return false;
+        }
+        let mid = 0.5 * (from + to);
+        self.hold_by_halves(dim, hold, from, mid, depth - 1)
+            && self.hold_by_halves(dim, hold, mid, to, depth - 1)
     }
 
     /// Schaltet Abhängigkeiten ab, die nur gehaltene Werte lesen: Sie sind schon im Rahmen der

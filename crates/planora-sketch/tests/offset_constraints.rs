@@ -1382,6 +1382,59 @@ fn a_wall_closed_by_hand_keeps_the_copy_out_of_the_hold_points() {
     }
 }
 
+/// Eine eigene Linie, die `Parallel` trägt, schließt die Wand wie eine ohne: Sie ist kein Stück der
+/// Kopie, und die Vorlage bleibt unter den Haltepunkten.
+#[test]
+fn a_closing_line_with_parallel_stays_out_of_the_copy() {
+    for (shape, what) in [
+        (single_line as fn() -> (Sketch, Vec<CurveId>), "Linie"),
+        (u_profile, "U"),
+        (open_chain, "mit Bogen"),
+        (hook, "Haken"),
+    ] {
+        for flip in [false, true] {
+            let mut b = Bench::new(shape(), 3.0);
+            let source_ends = open_ends_of(&b.s, &b.sources);
+            let copy_ends = open_ends_of(&b.s, &b.ids.curves);
+            let mut walls = Vec::new();
+            for &q in &source_ends {
+                let near = |k: &&PointId| at(&b.s, **k).distance(at(&b.s, q));
+                let k = *copy_ends
+                    .iter()
+                    .min_by(|x, y| near(x).total_cmp(&near(y)))
+                    .unwrap();
+                walls.push(b.s.add_line(q, k).unwrap());
+            }
+            let (x, y) = if flip {
+                (walls[1], walls[0])
+            } else {
+                (walls[0], walls[1])
+            };
+            // Die Wände stehen nicht unbedingt parallel; hier zählt nur, was das Muster erkennt.
+            b.s.add_constraint(ConstraintKind::Parallel(x, y)).unwrap();
+            let hold = b.s.offset_hold_points(b.dim()).expect(what);
+            for &q in &b.sources {
+                for p in b.s.curve(q).unwrap().kind.points() {
+                    assert!(hold.contains(&p), "{what}: Vorlage fehlt");
+                }
+            }
+            for &k in &b.ids.curves {
+                for p in ends_of_curve(&b.s, k) {
+                    assert!(!hold.contains(&p), "{what}: Kopie gehalten");
+                }
+            }
+        }
+    }
+}
+
+fn ends_of_curve(s: &Sketch, c: CurveId) -> Vec<PointId> {
+    match s.curve(c).unwrap().kind {
+        CurveKind::Line { a, b } => vec![a, b],
+        CurveKind::Arc { start, end, .. } => vec![start, end],
+        ref k => panic!("{k:?}"),
+    }
+}
+
 #[test]
 fn a_spoke_between_closed_source_and_copy_is_not_walked() {
     let mut b = Bench::new(polygon(4, 50.0), -5.0);
