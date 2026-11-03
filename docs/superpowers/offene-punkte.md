@@ -2143,6 +2143,14 @@ Umgesetzt 2026-11-02 auf dem Zweig `feature/skizzen-zeichenvarianten` (Spec `spe
 
 ## Teilprojekt Skizzen 4
 
+**Handtest 2026-11-03** (1920×1080): Liste an der Leiste, Rundung mit Radiusfeld, zweite Rundung mit „gleich“, Radius ändern über die Liste, Fase gleicher Abstand, Versatz einer gerundeten Kette, Griffe zum Verschieben und Drehen, Kopie mit getipptem Versatz, Vorlage verschieben nimmt die Versatzkopie mit, Maßstab 0,5 mit mitskalierten Maßen, Rückgängig, Menü „Bearbeiten → Ändern“. Kein Fehler in diesen Abläufen. Nicht von Hand geprüft: Versatzmaß ändern, Fase mit Winkel und mit zwei Abständen, Formeln, Griff des Maßstabs, alte Dateien.
+
+**Beobachtungen aus dem Handtest:**
+- Rundung an einem Rechteck ohne Maße, Radius genau an der Grenze (zwei Bögen füllen die Seite): Die Seiten wandern nach außen, das Rechteck wächst. Es ist gelöst, aber nicht abgelehnt.
+- Eine Linie, deren Start 8,5 Bildpunkte neben einem vorhandenen Punkt liegt, rastet am Raster genau auf derselben Stelle ein und bekommt einen eigenen, nicht verbundenen Punkt. An dieser Ecke meldet die Rundung dann „genau zwei Kurven“. Das Verhalten stammt aus Teilprojekt 2; Folgeidee: Ein Rasterpunkt, auf dem schon ein Punkt liegt, bindet an ihn.
+- Doppelklick auf ein Maß in der Zeichnung öffnet kein Feld, nur die Liste tut das. Fusion öffnet es dort. Folgeidee.
+
+
 Umgesetzt 2026-11-02 und 2026-11-03 auf dem Zweig `feature/skizzen-aendern` (Spec `specs/2026-11-02-skizzen-aendern-design.md`, Plan `plans/2026-11-02-skizzen-aendern.md`): Skizzenrundung (Kürzel F), Fase in drei Arten, Versatz (O), Verschieben/Kopieren (M) und Skizzenmaßstab. Beschreibung in `docs/funktionen.md`, Abschnitt „Skizzen“. Das Dateiformat bleibt 14: Die neuen Befehle legen nur Kurven und Abhängigkeiten an, die es schon gab. Der Handtest bei 1920×1080 steht noch aus. Wo eine spätere Regelung eine frühere ersetzt („replaces“), steht hier der Stand nach der letzten.
 
 **Abweichungen von Fusion**
