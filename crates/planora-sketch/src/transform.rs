@@ -6,12 +6,18 @@
 //! Die fremde Kurve bekommt einen neuen Punkt an der alten Lage und bleibt, wo sie war. Es bleibt,
 //! was danach ohne Bewegung erfüllt ist; Horizontal und Vertikal entfallen beim Drehen immer. Eine
 //! Ähnlichkeit erhält Zweige und Vorzeichen der Abhängigkeiten, weil sie nicht spiegelt.
+//!
+//! **Hilfsgeometrie folgt der sichtbaren Auswahl** ([`Sketch::transform_set`]): Konstruktionskurven
+//! und -punkte, die nur an der Menge hängen, gehören dazu, sonst bliebe die Form an der alten Lage
+//! gebunden. Beim Versatz zieht die Vorlage ihre Rollkreise und damit ihre Kopie mit; wird nur die
+//! Kopie bewegt, bleiben Vorlage und Rollkreise stehen und die Kopie hört auf zu folgen.
 
 use crate::constraint::{ConstraintData, ConstraintId, ConstraintKind, LineOrPoints};
 use crate::edit::SETTLE_FACTOR;
 use crate::error::SketchError;
 use crate::fillet::wrap_pi;
 use crate::model::{CurveId, CurveKind, MAX_COORD, PointId, Sketch};
+use crate::offset::ends_of;
 use planora_i18n::tr;
 use planora_math::DVec2;
 use std::collections::{HashMap, HashSet};
@@ -64,7 +70,7 @@ impl Similarity {
 }
 
 /// Was bewegt wird: Kurven und Punkte. Über [`Sketch::transform_set`] enthält `points` auch die
-/// Punkte der Kurven.
+/// Punkte der Kurven, und die Hilfsgeometrie der Auswahl gehört dazu.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct TransformSet {
     pub points: Vec<PointId>,
@@ -257,27 +263,321 @@ fn map_curve(
 
 impl Sketch {
     /// Die Menge zu den gewählten Kurven und Punkten: nur lebende Objekte, jedes einmal, in `points`
-    /// auch die Punkte der Kurven.
+    /// auch die Punkte der Kurven. Wiederholt, bis sich nichts mehr ändert, kommt dazu:
+    /// - Hilfsgeometrie, deren Bindungen alle in die Menge gehen (`helpers_of`);
+    /// - zu einer gewählten Vorlage ihre Rollkreise samt den Stücken der Kopie, die sie tragen
+    ///   (`rollers_of`). Die Kopie allein zieht weder Vorlage noch Rollkreis mit.
     pub fn transform_set(&self, curves: &[CurveId], points: &[PointId]) -> TransformSet {
-        let mut set = TransformSet::default();
-        let mut seen_points = HashSet::new();
-        let mut seen_curves = HashSet::new();
+        let mut set = Collected::default();
         for &c in curves {
-            if self.check_curve(c).is_ok() && seen_curves.insert(c) {
-                set.curves.push(c);
-                for p in self.curves[c].kind.points() {
-                    if seen_points.insert(p) {
-                        set.points.push(p);
-                    }
-                }
+            if self.check_curve(c).is_ok() {
+                set.add_curve(self, c);
             }
         }
         for &p in points {
-            if self.check_point(p).is_ok() && seen_points.insert(p) {
-                set.points.push(p);
+            if self.check_point(p).is_ok() {
+                set.add_point(p);
             }
         }
-        set
+        if set.out.points.is_empty() {
+            return set.out;
+        }
+        loop {
+            let before = set.out.points.len() + set.out.curves.len();
+            let (helper_curves, helper_points) = self.helpers_of(&set);
+            for c in helper_curves {
+                set.add_curve(self, c);
+            }
+            for p in helper_points {
+                set.add_point(p);
+            }
+            for c in self.rollers_of(&set) {
+                set.add_curve(self, c);
+            }
+            if set.out.points.len() + set.out.curves.len() == before {
+                return set.out;
+            }
+        }
+    }
+
+    /// Konstruktionskurven und -punkte außerhalb der Menge, deren aktive Abhängigkeiten nur in die
+    /// Menge oder zu ebensolcher Hilfsgeometrie gehen, die keine fremde Kurve benutzt, die kein
+    /// `Fixed` tragen und die über gemeinsame Punkte oder Abhängigkeiten an der Menge hängen.
+    /// Dazu zählt der freie Mittelpunkt eines Langlochs, ein einfacher Punkt nur mit `Midpoint`.
+    fn helpers_of(&self, set: &Collected) -> (Vec<CurveId>, Vec<PointId>) {
+        let mut curves: HashSet<CurveId> = self
+            .curves()
+            .filter(|(c, d)| d.construction && !set.curves.contains(c))
+            .map(|(c, _)| c)
+            .collect();
+        let active: Vec<&ConstraintData> = self
+            .constraints()
+            .map(|(_, d)| d)
+            .filter(|d| is_active(d))
+            .collect();
+        let mut users: HashMap<PointId, Vec<CurveId>> = HashMap::new();
+        for (c, d) in self.curves() {
+            for p in d.kind.points() {
+                users.entry(p).or_default().push(c);
+            }
+        }
+        let mut bound: HashMap<PointId, Vec<&ConstraintKind>> = HashMap::new();
+        for d in &active {
+            for p in d.kind.points() {
+                bound.entry(p).or_default().push(&d.kind);
+            }
+        }
+        let mut points: HashSet<PointId> = self
+            .points()
+            .filter(|&(p, d)| {
+                let used = users.get(&p);
+                let by_helper = used.is_some_and(|u| u.iter().any(|c| curves.contains(c)));
+                let at_middle = used.is_none()
+                    && bound.get(&p).is_some_and(|b| {
+                        b.iter().all(|k| matches!(k, ConstraintKind::Midpoint(..)))
+                    });
+                !set.points.contains(&p) && (d.construction || by_helper || at_middle)
+            })
+            .map(|(p, _)| p)
+            .collect();
+        for d in &active {
+            if let ConstraintKind::Fixed(p, ..) = d.kind {
+                points.remove(&p);
+            }
+        }
+        loop {
+            let before = curves.len() + points.len();
+            curves.retain(|&c| {
+                self.curves[c]
+                    .kind
+                    .points()
+                    .iter()
+                    .all(|p| set.points.contains(p) || points.contains(p))
+            });
+            points.retain(|p| {
+                users.get(p).is_none_or(|u| {
+                    u.iter()
+                        .all(|c| set.curves.contains(c) || curves.contains(c))
+                })
+            });
+            for d in &active {
+                let (ps, cs) = (d.kind.points(), d.kind.curves());
+                let inside = ps
+                    .iter()
+                    .all(|p| set.points.contains(p) || points.contains(p))
+                    && cs
+                        .iter()
+                        .all(|c| set.curves.contains(c) || curves.contains(c));
+                if !inside {
+                    for p in &ps {
+                        points.remove(p);
+                    }
+                    for c in &cs {
+                        curves.remove(c);
+                    }
+                }
+            }
+            if curves.len() + points.len() == before {
+                break;
+            }
+        }
+        // Nur, was an der Menge hängt: Ein freier Konstruktionskreis daneben bleibt.
+        let mut reached_curves = HashSet::new();
+        let mut reached_points = HashSet::new();
+        loop {
+            let before = reached_curves.len() + reached_points.len();
+            for &c in &curves {
+                let kind_points = self.curves[c].kind.points();
+                if kind_points
+                    .iter()
+                    .any(|p| set.points.contains(p) || reached_points.contains(p))
+                {
+                    reached_curves.insert(c);
+                }
+                if reached_curves.contains(&c) {
+                    reached_points.extend(kind_points.into_iter().filter(|p| points.contains(p)));
+                }
+            }
+            for d in &active {
+                let (ps, cs) = (d.kind.points(), d.kind.curves());
+                let linked = ps
+                    .iter()
+                    .any(|p| set.points.contains(p) || reached_points.contains(p))
+                    || cs
+                        .iter()
+                        .any(|c| set.curves.contains(c) || reached_curves.contains(c));
+                if linked {
+                    reached_points.extend(ps.into_iter().filter(|p| points.contains(p)));
+                    reached_curves.extend(cs.into_iter().filter(|c| curves.contains(c)));
+                }
+            }
+            if reached_curves.len() + reached_points.len() == before {
+                break;
+            }
+        }
+        let helper_curves = self
+            .curves()
+            .map(|(c, _)| c)
+            .filter(|c| reached_curves.contains(c))
+            .collect();
+        let helper_points = self
+            .points()
+            .map(|(p, _)| p)
+            .filter(|p| reached_points.contains(p))
+            .collect();
+        (helper_curves, helper_points)
+    }
+
+    /// Die Kurven, die an einem Konstruktionskreis `roller` tangential hängen.
+    fn touching_roller(&self, roller: CurveId) -> Vec<CurveId> {
+        self.constraints()
+            .filter(|(_, d)| is_active(d))
+            .filter_map(|(_, d)| match d.kind {
+                ConstraintKind::Tangent(x, y) if x == roller => Some(y),
+                ConstraintKind::Tangent(x, y) if y == roller => Some(x),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Rollkreise außerhalb der Menge, die auf einer gewählten Vorlage sitzen, und die Stücke der
+    /// Kopie, die sie tragen (siehe `rolls_on_source`).
+    fn rollers_of(&self, set: &Collected) -> Vec<CurveId> {
+        let mut out = Vec::new();
+        for (roller, d) in self.curves() {
+            let CurveKind::Circle { center, .. } = d.kind else {
+                continue;
+            };
+            if !d.construction || set.curves.contains(&roller) {
+                continue;
+            }
+            let on_set_curve = set
+                .curves
+                .iter()
+                .any(|&q| self.curves[q].kind.points().contains(&center))
+                || self.constraints().any(|(_, k)| {
+                    is_active(k)
+                        && matches!(k.kind, ConstraintKind::PointOnCurve(p, q)
+                            if p == center && set.curves.contains(&q))
+                });
+            if !on_set_curve {
+                continue;
+            }
+            let touched = self.touching_roller(roller);
+            if touched.is_empty() || !self.rolls_on_source(roller, &touched) {
+                continue;
+            }
+            out.push(roller);
+            out.extend(self.copy_run(
+                &touched,
+                |c| !set.curves.contains(&c),
+                |q| set.curves.contains(&q),
+            ));
+        }
+        out
+    }
+
+    /// Die Stücke einer Kopie ab `start`, über gemeinsame Enden: Tangente oder `Equal` zum Nachbarn
+    /// oder sonst alles, was `continues_copy` nennt. Ein Nachbar, der nur über `Parallel` zu seiner
+    /// Vorlage als Stück erkennbar ist (scharfe Fuge, eigener Lauf), zählt nur, wenn `source` für
+    /// diese Vorlage gilt. Nur Kurven, für die `allowed` gilt; Rollkreise und Querlinien nie.
+    fn copy_run(
+        &self,
+        start: &[CurveId],
+        allowed: impl Fn(CurveId) -> bool,
+        source: impl Fn(CurveId) -> bool,
+    ) -> Vec<CurveId> {
+        let mut run: Vec<CurveId> = start.to_vec();
+        let mut next = 0;
+        while let Some(&x) = run.get(next) {
+            next += 1;
+            let ends = ends_of(&self.curves[x].kind);
+            for (c, d) in self.curves() {
+                if run.contains(&c)
+                    || !allowed(c)
+                    || matches!(d.kind, CurveKind::Circle { .. })
+                    || self.is_cross_line(c)
+                    || !ends_of(&d.kind).iter().any(|p| ends.contains(p))
+                    || !self.continues_copy(x, c)
+                {
+                    continue;
+                }
+                let joined = self.constraints().any(|(_, k)| {
+                    is_active(k)
+                        && matches!(k.kind, ConstraintKind::Tangent(a, b) | ConstraintKind::Equal(a, b)
+                            if (a, b) == (x, c) || (a, b) == (c, x))
+                });
+                let foreign_source = self.constraints().any(|(_, k)| {
+                    is_active(k)
+                        && matches!(k.kind, ConstraintKind::Parallel(q, y) if y == c && !source(q))
+                });
+                if joined || !foreign_source {
+                    run.push(c);
+                }
+            }
+        }
+        run
+    }
+
+    /// Querlinie eines Versatzes: Konstruktionslinie mit `Perpendicular` oder einem Punkt darauf.
+    fn is_cross_line(&self, c: CurveId) -> bool {
+        let d = &self.curves[c];
+        matches!(d.kind, CurveKind::Line { .. })
+            && d.construction
+            && self.constraints().any(|(_, k)| {
+                is_active(k)
+                    && matches!(k.kind,
+                        ConstraintKind::Perpendicular(_, x) | ConstraintKind::PointOnCurve(_, x)
+                            if x == c)
+            })
+    }
+
+    /// Wird nur die Kopie bewegt, hört sie auf zu folgen: Ihre Bindungen an Rollkreis, Vorlage und
+    /// Querlinien entfallen, auch wenn sie nach dieser Bewegung zufällig noch gelten.
+    fn severed_copy_bindings(&self, scope: &Scope) -> HashSet<ConstraintId> {
+        let mut severed = HashSet::new();
+        for (roller, d) in self.curves() {
+            if !d.construction
+                || !matches!(d.kind, CurveKind::Circle { .. })
+                || scope.curves.contains(&roller)
+            {
+                continue;
+            }
+            let touched = self.touching_roller(roller);
+            let moving: Vec<CurveId> = touched
+                .iter()
+                .copied()
+                .filter(|c| scope.curves.contains(c))
+                .collect();
+            if moving.is_empty() || !self.rolls_on_source(roller, &touched) {
+                continue;
+            }
+            let run = self.copy_run(&moving, |c| scope.curves.contains(&c), |_| true);
+            let run_points: HashSet<PointId> = run
+                .iter()
+                .flat_map(|&c| self.curves[c].kind.points())
+                .collect();
+            for (id, k) in self.constraints().filter(|(_, k)| is_active(k)) {
+                let cut = match k.kind {
+                    ConstraintKind::Tangent(a, b) => {
+                        (a == roller && moving.contains(&b)) || (b == roller && moving.contains(&a))
+                    }
+                    ConstraintKind::Parallel(q, y) => {
+                        run.contains(&y) && !scope.curves.contains(&q)
+                    }
+                    ConstraintKind::PointOnCurve(p, line) => {
+                        run_points.contains(&p)
+                            && !scope.curves.contains(&line)
+                            && self.is_cross_line(line)
+                    }
+                    _ => false,
+                };
+                if cut {
+                    severed.insert(id);
+                }
+            }
+        }
+        severed
     }
 
     /// Alle Kurven und freien Punkte ohne feste Geometrie, also ohne Achshilfslinie, Kantenkopien
@@ -502,6 +802,25 @@ impl Sketch {
             return Err(TransformBlock::NothingToDo);
         }
         let held = self.held_points();
+        let turning = wrap_pi(s.angle).abs() > self.tol.angular;
+        let stretching = s.factor != 1.0;
+        // Eine feste Kurve behält auch Größe und Lage ihrer Achsen, wenn die Mitte stehen bleibt.
+        for &c in &set.curves {
+            if !self.is_held_curve(c, &held) {
+                continue;
+            }
+            match self.curves[c].kind {
+                CurveKind::Circle { center, .. } if stretching => {
+                    return Err(TransformBlock::FixedInSet(center));
+                }
+                CurveKind::Ellipse { center, .. } | CurveKind::EllipticArc { center, .. }
+                    if stretching || turning =>
+                {
+                    return Err(TransformBlock::FixedInSet(center));
+                }
+                _ => {}
+            }
+        }
         let mut targets = Vec::with_capacity(set.points.len());
         for &p in &set.points {
             let (from, to) = (self.pos(p), s.apply(self.pos(p)));
@@ -516,11 +835,20 @@ impl Sketch {
                 targets.push((p, to));
             }
         }
+        let resizes = set.curves.iter().any(|&c| match self.curves[c].kind {
+            CurveKind::Circle { .. } => stretching,
+            CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. } => stretching || turning,
+            _ => false,
+        });
+        if targets.is_empty() && !resizes {
+            return Err(TransformBlock::NothingToDo);
+        }
         let scope = Scope {
             points: set.points.iter().copied().collect(),
             curves: set.curves.iter().copied().collect(),
             moved: targets.iter().map(|t| t.0).collect(),
         };
+        let severed = self.severed_copy_bindings(&scope);
         let held_before: HashSet<ConstraintId> = self
             .constraints()
             .filter(|&(id, d)| scope.touches(&d.kind) && self.satisfied(id, SETTLE_FACTOR))
@@ -530,7 +858,7 @@ impl Sketch {
         let mut out = self.clone();
         out.split_from_outsiders(&scope)?;
         out.write_positions(&set.curves, &targets, s)?;
-        let report = out.settle_after_transform(&scope, &held, &held_before, s)?;
+        let report = out.settle_after_transform(&scope, &held, &held_before, &severed, s)?;
         if set.curves.iter().any(|&c| out.collapsed(c)) {
             return Err(TransformBlock::Degenerate);
         }
@@ -647,6 +975,7 @@ impl Sketch {
         scope: &Scope,
         held: &HashSet<PointId>,
         held_before: &HashSet<ConstraintId>,
+        severed: &HashSet<ConstraintId>,
         s: &Similarity,
     ) -> Result<TransformReport, TransformBlock> {
         let turning = wrap_pi(s.angle).abs() > self.tol.angular;
@@ -681,7 +1010,7 @@ impl Sketch {
             if !is_active(&self.constraints[id]) {
                 continue;
             }
-            if turning && is_axis_binding(&kind) {
+            if severed.contains(&id) || (turning && is_axis_binding(&kind)) {
                 self.drop_constraint(id);
                 report.dropped.push(id);
                 continue;
@@ -765,6 +1094,31 @@ impl Sketch {
     fn axes_collapsed(&self, ax: usize, ay: usize, minor: usize) -> bool {
         let tol = self.tol.linear;
         DVec2::new(self.vars[ax], self.vars[ay]).length() <= tol || self.vars[minor] <= tol
+    }
+}
+
+/// Die Menge im Aufbau: in Wahlreihenfolge, jedes Objekt einmal.
+#[derive(Default)]
+struct Collected {
+    out: TransformSet,
+    points: HashSet<PointId>,
+    curves: HashSet<CurveId>,
+}
+
+impl Collected {
+    fn add_curve(&mut self, sk: &Sketch, c: CurveId) {
+        if self.curves.insert(c) {
+            self.out.curves.push(c);
+            for p in sk.curves[c].kind.points() {
+                self.add_point(p);
+            }
+        }
+    }
+
+    fn add_point(&mut self, p: PointId) {
+        if self.points.insert(p) {
+            self.out.points.push(p);
+        }
     }
 }
 

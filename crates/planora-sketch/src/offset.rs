@@ -351,6 +351,18 @@ fn check_cusp(g: &Geom, against: bool, d: f64) -> Result<(), OffsetProblem> {
     Ok(())
 }
 
+/// Die offenen Enden einer Kurve (Kreis und Ellipse haben keine).
+pub(crate) fn ends_of(kind: &CurveKind) -> Vec<PointId> {
+    match kind {
+        CurveKind::Line { a, b } => vec![*a, *b],
+        CurveKind::Arc { start, end, .. } | CurveKind::EllipticArc { start, end, .. } => {
+            vec![*start, *end]
+        }
+        CurveKind::Spline { points } => vec![points[0], points[points.len() - 1]],
+        CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => Vec::new(),
+    }
+}
+
 impl Sketch {
     /// Rohstücke einer Kurve (eins, bei der Ellipse zwei, keins bei zu kleinem Radius).
     fn raw_pieces(
@@ -2068,7 +2080,7 @@ impl Sketch {
     /// Berührte parallel ist. Rund: Die Mitte ist Anfang eines Bogens oder liegt auf einem Kreis,
     /// und die Berührte teilt dessen Mitte. So bleibt ein von Hand gezeichneter Kreis, der nur an
     /// einem Linienende sitzt und eine andere Linie berührt, draußen.
-    fn rolls_on_source(&self, roller: CurveId, touched: &[CurveId]) -> bool {
+    pub(crate) fn rolls_on_source(&self, roller: CurveId, touched: &[CurveId]) -> bool {
         let CurveKind::Circle { center: s, .. } = self.curves[roller].kind else {
             return false;
         };
@@ -2108,7 +2120,7 @@ impl Sketch {
     /// Ist `c`, das ein Ende mit dem Stück `x` der Kopie teilt, ein weiteres Stück von ihr? Es
     /// trägt `Tangent` oder `Equal` zu `x` oder `Parallel` zu einer Kurve, die es nicht berührt,
     /// teilt als Bogen die Mitte mit `x`, oder ist eine Näherung (die trägt gar nichts).
-    fn continues_copy(&self, x: CurveId, c: CurveId) -> bool {
+    pub(crate) fn continues_copy(&self, x: CurveId, c: CurveId) -> bool {
         let points = self.curves[c].kind.points();
         let bound = self.constraints().any(|(_, d)| {
             d.enabled
@@ -2202,16 +2214,6 @@ impl Sketch {
                     }
                     _ => false,
                 })
-        };
-        let ends_of = |kind: &CurveKind| -> Vec<PointId> {
-            match kind {
-                CurveKind::Line { a, b } => vec![*a, *b],
-                CurveKind::Arc { start, end, .. } | CurveKind::EllipticArc { start, end, .. } => {
-                    vec![*start, *end]
-                }
-                CurveKind::Spline { points } => vec![points[0], points[points.len() - 1]],
-                CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => Vec::new(),
-            }
         };
         // Die ganze Kopie: Stücke ohne Rollkreis hängen über gemeinsame Enden an einem mit. Eine
         // eigene Linie des Nutzers zwischen Kopie und Vorlage (Wandstärke) gehört nicht dazu.
