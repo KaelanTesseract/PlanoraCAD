@@ -1308,3 +1308,243 @@ fn a_chamfer_over_raw_events_needs_two_clicks_and_a_third_at_the_pointer() {
     assert_clean(sk);
     assert_eq!(undo_len(&s), steps + 1);
 }
+
+// ---- Fase über die Ecke hinaus (Korrekturrunde 1) --------------------------------------------------
+
+/// Rechteck für die Fase; `dims`: mit Breite und Höhe ganz bestimmt, sonst frei bis auf H und V.
+fn chamfer_rectangle(dims: bool) -> AppState {
+    let mut s = rectangle();
+    if dims {
+        let sk = s.session_sketch_mut().unwrap().1;
+        for at in [v(50.0, 15.0), v(25.0, 0.0)] {
+            let CurveKind::Line { a, b } = sk.curve(line_through(sk, at)).unwrap().kind else {
+                panic!();
+            };
+            let length = sk.point_xy(a).unwrap().distance(sk.point_xy(b).unwrap());
+            sk.add_constraint(K::Distance(a, b, length)).unwrap();
+        }
+        sk.solve();
+        s.observe_sketch(false);
+    }
+    s
+}
+
+/// Der gehaltene Eckpunkt und die beiden Linien, auf denen er liegt.
+fn held_corner(sk: &Sketch) -> (planora_sketch::model::PointId, CurveId, CurveId) {
+    let on: Vec<_> = sk
+        .constraints()
+        .filter_map(|(_, c)| match c.kind {
+            K::PointOnCurve(p, l) => Some((p, l)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(on.len(), 2, "{on:?}");
+    assert_eq!(on[0].0, on[1].0);
+    (on[0].0, on[0].1, on[1].1)
+}
+
+/// Liegen beide Enden der Fase auf der behaltenen Seite der Ecke? Das behaltene Stück ist je Linie
+/// das Ende, das auch die Fase trägt, bis zum anderen Ende.
+fn ends_on_kept_side(sk: &Sketch) -> bool {
+    let (p, l1, l2) = held_corner(sk);
+    let corner = sk.point_xy(p).unwrap();
+    let ends = |c: CurveId| match sk.curve(c).unwrap().kind {
+        CurveKind::Line { a, b } => [a, b],
+        _ => panic!(),
+    };
+    let chamfer = sk
+        .curves()
+        .filter(|(id, d)| !d.construction && *id != l1 && *id != l2)
+        .find_map(|(_, d)| match d.kind {
+            CurveKind::Line { a, b }
+                if (ends(l1).contains(&a) && ends(l2).contains(&b))
+                    || (ends(l1).contains(&b) && ends(l2).contains(&a)) =>
+            {
+                Some([a, b])
+            }
+            _ => None,
+        })
+        .expect("Fase");
+    [l1, l2].iter().all(|&l| {
+        let [a, b] = ends(l);
+        let (t, far) = if chamfer.contains(&a) { (a, b) } else { (b, a) };
+        let (t, far) = (sk.point_xy(t).unwrap(), sk.point_xy(far).unwrap());
+        let along = (t - corner).dot((far - corner).normalize());
+        along > 0.0 && along < corner.distance(far)
+    })
+}
+
+fn state_bits(s: &AppState) -> (u64, String) {
+    (sketch(s).revision(), snapshot(s))
+}
+
+/// Setzt das Maß. Geht es, liegen die Enden noch richtig; sonst ist die Skizze bitgleich.
+fn step_dimension(s: &mut AppState, dim: ConstraintId, value: f64) -> bool {
+    let before = state_bits(s);
+    let (se, sk) = s.session_sketch_mut().unwrap();
+    let accepted = se.set_dimension_value(sk, dim, value).is_ok();
+    if accepted {
+        assert!(ends_on_kept_side(sketch(s)), "{value}: Fase über die Ecke");
+    } else {
+        assert_eq!(state_bits(s), before, "{value}: abgelehnt, also bitgleich");
+    }
+    accepted
+}
+
+fn angle_dim(sk: &Sketch) -> ConstraintId {
+    sk.constraints()
+        .find(|(_, c)| matches!(c.kind, K::Angle(..)))
+        .expect("Winkelmaß")
+        .0
+}
+
+/// Die Abstandsmaße der Fase: Sie zählen von der Ecke und sind kürzer als die Rechteckmaße, die
+/// ebenfalls an der Ecke hängen.
+fn corner_dims(sk: &Sketch) -> Vec<ConstraintId> {
+    let (p, ..) = held_corner(sk);
+    sk.constraints()
+        .filter(|(_, c)| matches!(c.kind, K::Distance(a, b, d) if (a == p || b == p) && d < 20.0))
+        .map(|(id, _)| id)
+        .collect()
+}
+
+/// Fase rechts unten mit den getippten Werten.
+fn chamfered(dims: bool, kind: ToolKind, flip: bool, typed: &[&str]) -> AppState {
+    let mut s = chamfer_rectangle(dims);
+    chamfer_picks(&mut s, kind, flip);
+    for (i, text) in typed.iter().enumerate() {
+        type_in(&mut s, i, text);
+    }
+    click(&mut s, v(40.0, 10.0)).unwrap();
+    assert!(ends_on_kept_side(sketch(&s)));
+    s
+}
+
+#[test]
+fn the_chamfer_angle_walks_up_to_the_limit_and_is_refused_past_the_corner() {
+    for dims in [true, false] {
+        for flip in [false, true] {
+            let mut s = chamfered(dims, ToolKind::ChamferDistanceAngle, flip, &["6", "45"]);
+            let dim = angle_dim(sketch(&s));
+            let mut accepted_below = 0;
+            for i in 0..=268 {
+                let deg = 45.5 + 0.5 * f64::from(i);
+                let accepted = step_dimension(&mut s, dim, deg.to_radians());
+                if deg > 90.0 {
+                    assert!(!accepted, "{dims} {flip}: {deg}° ist hinter der Ecke");
+                } else if accepted {
+                    accepted_below += 1;
+                }
+            }
+            assert!(accepted_below >= 60, "{dims} {flip}: {accepted_below}");
+            // Der Sprung ist genauso wenig erlaubt, mit der Meldung dazu.
+            let mut s = chamfered(dims, ToolKind::ChamferDistanceAngle, flip, &["6", "45"]);
+            let dim = angle_dim(sketch(&s));
+            assert!(
+                !step_dimension(&mut s, dim, 170_f64.to_radians()),
+                "{dims} {flip}"
+            );
+            assert_eq!(message(&s), Some(t("sketch-dimension-folds")));
+            // Und was passt, geht danach noch.
+            assert!(
+                step_dimension(&mut s, dim, 30_f64.to_radians()),
+                "{dims} {flip}"
+            );
+        }
+    }
+}
+
+#[test]
+fn chamfer_distances_walk_up_to_the_limit_and_never_cross_the_corner() {
+    let kinds: [(ToolKind, &[&str]); 3] = [
+        (ToolKind::ChamferEqual, &["5"]),
+        (ToolKind::ChamferTwoDistances, &["5", "7"]),
+        (ToolKind::ChamferDistanceAngle, &["5", "45"]),
+    ];
+    for dims in [true, false] {
+        for flip in [false, true] {
+            for (kind, typed) in kinds {
+                let probe = chamfered(dims, kind, flip, typed);
+                for which in 0..corner_dims(sketch(&probe)).len() {
+                    let mut s = chamfered(dims, kind, flip, typed);
+                    let dim = corner_dims(sketch(&s))[which];
+                    let start = sketch(&s)
+                        .constraint(dim)
+                        .unwrap()
+                        .kind
+                        .length_value()
+                        .unwrap();
+                    let (mut refused_at, mut refused) = (None, 0);
+                    for i in 1..=320 {
+                        let d = start + 0.25 * f64::from(i);
+                        if !step_dimension(&mut s, dim, d) {
+                            refused_at.get_or_insert(d);
+                            // Ablehnen ist teuer (Schritte des Wächters); ein paar reichen.
+                            refused += 1;
+                            if refused == 4 {
+                                break;
+                            }
+                        }
+                    }
+                    if dims {
+                        // Länger als die Linie geht im ganz bestimmten Rechteck nicht.
+                        let limit = refused_at.expect("Grenze");
+                        assert!(limit <= 50.25, "{kind:?} {flip} {which}: {limit}");
+                    }
+                    // Der große Sprung und zurück.
+                    let mut s = chamfered(dims, kind, flip, typed);
+                    let dim = corner_dims(sketch(&s))[which];
+                    step_dimension(&mut s, dim, 200.0);
+                    step_dimension(&mut s, dim, 2.0);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn the_old_corner_of_a_chamfer_counts_only_normal_curves() {
+    let mut s = rectangle();
+    chamfer_picks(&mut s, ToolKind::ChamferEqual, false);
+    type_in(&mut s, 0, "5");
+    click(&mut s, v(40.0, 10.0)).unwrap();
+    let before = state_bits(&s);
+    set_tool(&mut s, Tool::Select);
+    choose(&mut s, ToolKind::Fillet);
+    assert!(click(&mut s, v(50.0, 0.0)).is_err());
+    assert_eq!(message(&s), Some(t("sketch-fillet-point-curves")));
+    assert_eq!(stage(&s), 0);
+    assert_eq!(state_bits(&s), before);
+}
+
+#[test]
+fn at_stage_one_the_shared_point_picks_the_other_curve() {
+    for kind in [ToolKind::Fillet, ToolKind::ChamferEqual] {
+        let mut s = corner();
+        choose(&mut s, kind);
+        click(&mut s, v(20.0, 0.0)).unwrap();
+        let first = s.sketch_session.as_ref().unwrap().pending_curves[0];
+        click(&mut s, v(0.0, 0.0)).unwrap();
+        assert_eq!(stage(&s), 2, "{kind:?}: {:?}", message(&s));
+        let se = s.sketch_session.as_ref().unwrap();
+        assert_eq!(se.pending_curves[0], first);
+        assert_ne!(se.pending_curves[1], first);
+        type_in(&mut s, 0, "5");
+        click(&mut s, v(10.0, 10.0)).unwrap();
+        assert_clean(sketch(&s));
+    }
+
+    // Enden dort mehrere andere Kurven, ist nicht klar, welche gemeint ist.
+    let mut s = sketch_with(|sk| {
+        let p = sk.add_point(0.0, 0.0).unwrap();
+        for to in [(30.0, 0.0), (0.0, 30.0), (-30.0, -30.0)] {
+            let q = sk.add_point(to.0, to.1).unwrap();
+            sk.add_line(p, q).unwrap();
+        }
+    });
+    choose(&mut s, ToolKind::Fillet);
+    click(&mut s, v(20.0, 0.0)).unwrap();
+    assert!(click(&mut s, v(0.0, 0.0)).is_err());
+    assert_eq!(message(&s), Some(t("sketch-fillet-point-curves")));
+    assert_eq!(stage(&s), 1);
+}

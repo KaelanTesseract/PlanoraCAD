@@ -1055,6 +1055,73 @@ impl Sketch {
         })
     }
 
+    /// Die Enden der Fasen dieser Skizze als `(Ecke, Ende, fernes Ende)`. Eine Fase erkennt man an
+    /// ihrer Form: ein Punkt liegt per `PointOnCurve` auf zwei Linien, und eine weitere Linie
+    /// verbindet je ein Ende der beiden. Ohne gehaltene Ecke gibt es keine Bezugslage.
+    fn chamfer_ends(&self) -> Vec<(PointId, PointId, PointId)> {
+        let line_ends = |c: CurveId| match self.curve(c).map(|d| &d.kind) {
+            Some(&CurveKind::Line { a, b }) => Some([a, b]),
+            _ => None,
+        };
+        let on: Vec<(PointId, CurveId, [PointId; 2])> = self
+            .constraints()
+            .filter(|(_, d)| d.enabled && !d.driven)
+            .filter_map(|(_, d)| match d.kind {
+                ConstraintKind::PointOnCurve(p, c) => Some((p, c, line_ends(c)?)),
+                _ => None,
+            })
+            .collect();
+        let mut out = Vec::new();
+        for (i, &(p, l1, e1)) in on.iter().enumerate() {
+            for &(q, l2, e2) in &on[i + 1..] {
+                if p != q || l1 == l2 {
+                    continue;
+                }
+                for (c, _) in self.curves() {
+                    let Some([a, b]) = line_ends(c) else { continue };
+                    if c == l1 || c == l2 || a == p || b == p {
+                        continue;
+                    }
+                    let ends = if e1.contains(&a) && e2.contains(&b) {
+                        [a, b]
+                    } else if e1.contains(&b) && e2.contains(&a) {
+                        [b, a]
+                    } else {
+                        continue;
+                    };
+                    for (t, e) in ends.into_iter().zip([e1, e2]) {
+                        out.push((p, t, if e[0] == t { e[1] } else { e[0] }));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Liegt `t` auf dem behaltenen Stück zwischen der Ecke und dem fernen Ende?
+    fn on_kept_side(&self, corner: PointId, t: PointId, far: PointId) -> bool {
+        let tol = self.tolerance().linear;
+        let (Ok(p), Ok(t), Ok(f)) = (self.point_xy(corner), self.point_xy(t), self.point_xy(far))
+        else {
+            return true;
+        };
+        let Some(along) = (f - p).try_normalize() else {
+            return true;
+        };
+        let at = (t - p).dot(along);
+        at > tol && at < p.distance(f) - tol
+    }
+
+    /// Hat in `after` ein Ende einer Fase, das in dieser Skizze auf dem behaltenen Stück lag, die
+    /// gehaltene Ecke oder das ferne Ende überschritten? `chamfer_plan` lehnte diese Lage ab, und
+    /// `folded_over` sieht sie nicht, wenn die Linie ihre Richtung behält. `after` muss denselben
+    /// Aufbau haben, also nur gelöst sein.
+    pub fn chamfer_left_its_side(&self, after: &Sketch) -> bool {
+        self.chamfer_ends().into_iter().any(|(corner, t, far)| {
+            self.on_kept_side(corner, t, far) && !after.on_kept_side(corner, t, far)
+        })
+    }
+
     /// Die beiden tangentialen Enden des Bogens `arc`, `[Start, Ende]`, mit Linien oder Bögen als
     /// Nachbarn. `None`, wenn es eine andere Form ist: ein Ende ohne oder mit mehreren aktiven
     /// Tangenten, eine Tangente ohne gemeinsames Ende, ein anderer Nachbar.

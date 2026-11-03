@@ -8,7 +8,7 @@ use crate::keymap::Action;
 use crate::msg::Msg;
 use crate::sketch_cursor::{DrawCursor, leaving_direction, tangent_start_curve};
 use crate::sketch_input::{Created, FieldKind, locked_ray, toward_pointer};
-use crate::sketch_state::{LineArcDrag, SketchSession, Snap, Tool, err};
+use crate::sketch_state::{LineArcDrag, SketchSession, Snap, Tool, check_change, err};
 use planora_i18n::tr;
 use planora_math::DVec2;
 use planora_sketch::constraint::ConstraintKind;
@@ -21,6 +21,8 @@ use planora_sketch::tangent_circles;
 const PREVIEW_STEPS_PER_TURN: usize = 96;
 /// Winkel der Fase „Abstand und Winkel“, solange keiner getippt ist (Annahme: Vorgabe von Fusion).
 const CHAMFER_ANGLE_DEFAULT: f64 = std::f64::consts::FRAC_PI_4;
+/// Faktor für die Probe, ob eine vom Löser abgelehnte Rundung oder Fase kleiner ginge.
+const SMALLER: f64 = 0.01;
 
 /// Eine Art, eine Form zu zeichnen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -322,6 +324,12 @@ fn check_fillet_pick(sk: &Sketch, kind: ToolKind, c: CurveId) -> Result<(), Msg>
     Ok(())
 }
 
+/// Löst sich die Skizze `trial` ohne neuen Widerspruch gegenüber `prior`? Dient der Frage, ob eine
+/// abgelehnte Rundung oder Fase mit kleinerem Maß ginge, also die Größe schuld ist.
+fn solves_like_before(mut trial: Sketch, prior: &Sketch) -> bool {
+    check_change(&trial.solve(), None, prior, None).is_none()
+}
+
 /// Lässt sich an den beiden Linien überhaupt eine Fase legen? Ein winziger Abstand scheitert nur
 /// noch daran, dass das Ende an der Ecke festgehalten ist.
 fn chamfer_possible(sk: &Sketch, a: CurvePick, b: CurvePick) -> bool {
@@ -349,6 +357,22 @@ fn is_exact_curve(sk: &Sketch, c: CurveId) -> bool {
             CurveKind::Line { .. } | CurveKind::Arc { .. } | CurveKind::Circle { .. }
         )
     })
+}
+
+/// Die normalen Kurven, die in `p` enden: Hilfslinien einer Fase oder eines Versatzes zählen nicht.
+fn normal_curves_at(sk: &Sketch, p: PointId) -> Vec<CurveId> {
+    sk.curves_at_point(p)
+        .into_iter()
+        .filter(|&c| sk.curve(c).is_some_and(|d| !d.construction))
+        .collect()
+}
+
+/// Die Kurve `curve`, gewählt über ihren Punkt `p`.
+fn pick_from_point(sk: &Sketch, curve: CurveId, p: PointId) -> Result<CurvePick, Msg> {
+    let corner = sk.point_xy(p).map_err(err)?;
+    spot_from_corner(sk, curve, corner)
+        .map(|at| CurvePick { curve, at })
+        .ok_or_else(|| crate::msg!("sketch-fillet-no-corner"))
 }
 
 /// Ein Punkt auf `c` ein Viertel des Wegs von der Ecke zum anderen Ende: Beim Klick auf den
@@ -535,17 +559,13 @@ impl SketchSession {
             .then(|| sk.pick_point(cur.raw, self.pick_radius))
             .flatten();
         let picked: Vec<CurvePick> = if let Some(p) = corner_hit {
-            let curves = sk.curves_at_point(p);
+            let curves = normal_curves_at(sk, p);
             let &[a, b] = curves.as_slice() else {
                 return Err(crate::msg!("sketch-fillet-point-curves"));
             };
-            let corner = sk.point_xy(p).map_err(err)?;
-            let pick = |curve| {
-                spot_from_corner(sk, curve, corner)
-                    .map(|at| CurvePick { curve, at })
-                    .ok_or_else(|| crate::msg!("sketch-fillet-no-corner"))
-            };
-            vec![pick(a)?, pick(b)?]
+            vec![pick_from_point(sk, a, p)?, pick_from_point(sk, b, p)?]
+        } else if let Some(pick) = self.other_curve_at_point(sk, cur)? {
+            vec![pick]
         } else {
             let Snap::Curve(curve) = cur.snap else {
                 return Ok(());
@@ -568,6 +588,32 @@ impl SketchSession {
             return self.finish_kind(sk, kind, cur, prior);
         }
         Ok(())
+    }
+
+    /// Stufe 1, Klick auf einen Punkt der schon gewählten Kurve: gemeint ist die andere Kurve, die
+    /// dort endet. Enden dort mehrere, ist das nicht eindeutig; endet dort keine, gilt der Klick
+    /// wie auf die Kurve.
+    fn other_curve_at_point(
+        &self,
+        sk: &Sketch,
+        cur: &DrawCursor,
+    ) -> Result<Option<CurvePick>, Msg> {
+        let &[first] = self.pending_curves.as_slice() else {
+            return Ok(None);
+        };
+        let Some(p) = sk.pick_point(cur.raw, self.pick_radius) else {
+            return Ok(None);
+        };
+        let curves = normal_curves_at(sk, p);
+        if !curves.contains(&first) {
+            return Ok(None);
+        }
+        let others: Vec<CurveId> = curves.into_iter().filter(|&c| c != first).collect();
+        match others.as_slice() {
+            [] => Ok(None),
+            &[other] => pick_from_point(sk, other, p).map(Some),
+            _ => Err(crate::msg!("sketch-fillet-point-curves")),
+        }
     }
 
     /// Die beiden gewählten Kurven samt Klickstellen.
@@ -640,7 +686,17 @@ impl SketchSession {
             let ids = sk
                 .add_fillet(&plan, self.fillet_run.map(|(arc, _)| arc))
                 .map_err(err)?;
-            self.solve_checked(sk, prior).map_err(|_| kind.refusal())?;
+            self.solve_checked(sk, prior).map_err(|e| {
+                let small = prior.clone();
+                let fits = |mut t: Sketch| {
+                    let tiny = plan.radius * SMALLER;
+                    let added = t
+                        .fillet_plan(plan.picks[0], plan.picks[1], tiny)
+                        .is_some_and(|p| t.add_fillet(&p, None).is_ok());
+                    added && solves_like_before(t, prior)
+                };
+                if fits(small) { kind.refusal() } else { e }
+            })?;
             self.fillet_run.get_or_insert((ids.arc, plan.radius));
             return Ok(Created::Fillet(ids));
         }
@@ -648,7 +704,23 @@ impl SketchSession {
             .chamfer_plan_at(sk, kind, at)
             .ok_or_else(|| self.chamfer_refusal(sk, kind))?;
         let ids = sk.add_chamfer(&plan).map_err(err)?;
-        self.solve_checked(sk, prior).map_err(|_| kind.refusal())?;
+        self.solve_checked(sk, prior).map_err(|e| {
+            let small = prior.clone();
+            let fits = |mut t: Sketch| {
+                let shape = match plan.kind {
+                    ChamferKind::Equal(d) => ChamferKind::Equal(d * SMALLER),
+                    ChamferKind::TwoDistances(d, e) => {
+                        ChamferKind::TwoDistances(d * SMALLER, e * SMALLER)
+                    }
+                    ChamferKind::DistanceAngle(d, a) => ChamferKind::DistanceAngle(d * SMALLER, a),
+                };
+                let added = t
+                    .chamfer_plan(plan.picks[0], plan.picks[1], shape)
+                    .is_some_and(|p| t.add_chamfer(&p).is_ok());
+                added && solves_like_before(t, prior)
+            };
+            if fits(small) { kind.refusal() } else { e }
+        })?;
         Ok(Created::Chamfer(ids))
     }
 

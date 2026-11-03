@@ -1703,12 +1703,19 @@ impl SketchSession {
         direct: Result<(), Msg>,
     ) -> Result<(), Msg> {
         let Some(new) = sk.constraint(id).and_then(|c| c.kind.length_value()) else {
+            // Ein Winkelmaß hat keinen Weg in Schritten; über die Ecke einer Fase geht es trotzdem nicht.
+            let solved = self.last_report.as_ref().is_some_and(status_ok);
+            if direct.is_ok() && solved && unsolved.chamfer_left_its_side(sk) {
+                return Err(crate::msg!("sketch-dimension-folds"));
+            }
             return direct;
         };
         // Ein Radius darf einen tangentialen Bogen auch nicht über 180° ausbeulen (Skizzen 4).
         let radius = sk.constraint(id).is_some_and(|c| c.kind.is_radius());
         let folds = |trial: &Sketch| {
-            folded_over(unsolved, trial) || (radius && sweep_crossed_half_turn(unsolved, trial))
+            folded_over(unsolved, trial)
+                || unsolved.chamfer_left_its_side(trial)
+                || (radius && sweep_crossed_half_turn(unsolved, trial))
         };
         let solved = self.last_report.as_ref().is_some_and(status_ok);
         if direct.is_ok() && !(solved && folds(sk)) {
