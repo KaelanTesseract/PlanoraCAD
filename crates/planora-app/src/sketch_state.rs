@@ -48,14 +48,70 @@ pub enum Tool {
     Extend,
     /// Fusion „Brechen“: teilt eine Kurve an den Schnittpunkten um die Klickstelle.
     Break,
+    /// Fusion „Skizzenrundung“ und „Skizzenfase“; die Art steht in [`SketchSession::kinds`].
+    Fillet,
+    /// Fusion „Versatz“.
+    Offset,
+    /// Fusion „Verschieben/Kopieren“.
+    MoveCopy,
+    /// Fusion „Skizzenmaßstab“.
+    Scale,
 }
 
 impl Tool {
-    /// Werkzeuge unter „Ändern“ (Stutzen, Dehnen, Brechen): ohne offene Punkte, Esc beendet
-    /// sie.
+    /// Werkzeuge unter „Ändern“ (Stutzen, Dehnen, Brechen, Rundung und Fase, Versatz,
+    /// Verschieben/Kopieren, Maßstab): ohne offene Punkte, Esc beendet sie.
     pub fn is_modify(self) -> bool {
-        matches!(self, Tool::Trim | Tool::Extend | Tool::Break)
+        matches!(
+            self,
+            Tool::Trim
+                | Tool::Extend
+                | Tool::Break
+                | Tool::Fillet
+                | Tool::Offset
+                | Tool::MoveCopy
+                | Tool::Scale
+        )
     }
+}
+
+/// Stufe von Verschieben/Kopieren und Maßstab.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum TransformStage {
+    /// Kurven und Punkte werden gewählt.
+    #[default]
+    Picking,
+    /// Der Bezugspunkt wird gesetzt.
+    SetBase,
+    /// Die Griffe und Felder wirken.
+    Active,
+}
+
+/// Die gewählte Menge von Verschieben/Kopieren und Maßstab.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct TransformSet {
+    pub curves: Vec<CurveId>,
+    pub points: Vec<PointId>,
+}
+
+/// Zustand von Verschieben/Kopieren und Maßstab (Skizzen 4, Task 9 und 10 füllen die Logik).
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct TransformState {
+    pub stage: TransformStage,
+    pub set: TransformSet,
+    pub base: Option<DVec2>,
+    pub offset: DVec2,
+    pub angle: f64,
+    pub factor: f64,
+    pub copy: bool,
+    pub whole: bool,
+}
+
+/// Laufender Zug an einem Griff von Verschieben/Kopieren oder Maßstab (Task 9 füllt ihn).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GripDrag {
+    /// Stelle des Drückens in Skizzeneinheiten.
+    pub start: DVec2,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -347,6 +403,19 @@ pub struct SketchSession {
     /// letzten (für „Letztes Skizzenwerkzeug wiederholen“, auch wenn Esc es im selben Bild
     /// beendet).
     pub modify_edits: (u64, Option<Tool>),
+    /// Rundung/Fase: die zuletzt gerundete Kurve und ihr Radius; die nächste Rundung derselben
+    /// Sitzung schließt mit dem zweiten Klick ab.
+    pub fillet_run: Option<(CurveId, f64)>,
+    /// Versatz: die ganze tangentiale Kette nehmen (Vorgabe).
+    pub offset_chain: bool,
+    /// Klicklagen der gewählten Kurven von Rundung und Fase (zählen nicht in `kind_stage`).
+    pub pick_points: Vec<DVec2>,
+    /// Fangradius zu `pick_points`.
+    pub pick_radius: f64,
+    /// Verschieben/Kopieren und Maßstab.
+    pub transform: TransformState,
+    /// Laufender Zug an einem Griff.
+    pub grip_drag: Option<GripDrag>,
 }
 
 /// Was vor einer Änderung gesichert wird, um sie bei einem Fehler zurückzunehmen.
@@ -363,6 +432,12 @@ struct Backup {
     input: DrawInput,
     selection: Vec<Item>,
     last_report: Option<SolveReport>,
+    fillet_run: Option<(CurveId, f64)>,
+    offset_chain: bool,
+    pick_points: Vec<DVec2>,
+    pick_radius: f64,
+    transform: TransformState,
+    grip_drag: Option<GripDrag>,
 }
 
 /// Auswahl nach Art getrennt (jeweils in Auswahlreihenfolge).
@@ -437,6 +512,12 @@ impl SketchSession {
             edit_label: None,
             trim_drag: None,
             modify_edits: (0, None),
+            fillet_run: None,
+            offset_chain: true,
+            pick_points: Vec::new(),
+            pick_radius: 0.0,
+            transform: TransformState::default(),
+            grip_drag: None,
         }
     }
 
@@ -447,6 +528,9 @@ impl SketchSession {
         self.box_select = None;
         self.trim_drag = None;
         self.hover_preview = None;
+        self.fillet_run = None;
+        self.transform = TransformState::default();
+        self.grip_drag = None;
         self.tool = tool;
         self.draw_cursor = None;
         self.clear_pending();
@@ -462,6 +546,7 @@ impl SketchSession {
         self.line_after_arc = None;
         self.line_chain = None;
         self.auto_tangent = None;
+        self.pick_points.clear();
         self.input = DrawInput::default();
     }
 
@@ -488,6 +573,9 @@ impl SketchSession {
         self.box_select = None;
         self.trim_drag = None;
         self.hover_preview = None;
+        self.fillet_run = None;
+        self.transform = TransformState::default();
+        self.grip_drag = None;
         self.edit_label = None;
         self.message = None;
         self.last_report = Some(sk.clone().solve());
@@ -523,6 +611,12 @@ impl SketchSession {
             input: self.input.clone(),
             selection: self.selection.clone(),
             last_report: self.last_report.clone(),
+            fillet_run: self.fillet_run,
+            offset_chain: self.offset_chain,
+            pick_points: self.pick_points.clone(),
+            pick_radius: self.pick_radius,
+            transform: self.transform.clone(),
+            grip_drag: self.grip_drag,
         }
     }
 
@@ -539,6 +633,12 @@ impl SketchSession {
         self.input = b.input;
         self.selection = b.selection;
         self.last_report = b.last_report;
+        self.fillet_run = b.fillet_run;
+        self.offset_chain = b.offset_chain;
+        self.pick_points = b.pick_points;
+        self.pick_radius = b.pick_radius;
+        self.transform = b.transform;
+        self.grip_drag = b.grip_drag;
     }
 
     /// Führt `f` atomar aus: Bei einem Fehler wird alles zurückgesetzt und die Meldung in
@@ -630,6 +730,9 @@ impl SketchSession {
                 // `project_edge`.
                 Tool::Polygon | Tool::Slot | Tool::ProjectEdge => Ok(()),
                 Tool::Trim | Tool::Extend | Tool::Break => se.click_modify(sk, at, radius, prior),
+                // Stümpfe: Rundung und Fase laufen über ihre Arten (`click_kind`), Versatz,
+                // Verschieben/Kopieren und Maßstab füllen spätere Aufgaben.
+                Tool::Fillet | Tool::Offset | Tool::MoveCopy | Tool::Scale => Ok(()),
             }
         })
     }
@@ -682,13 +785,23 @@ impl SketchSession {
         });
         self.pending.retain(|&p| sk.point_xy(p).is_ok());
         self.pending_curves.retain(|&c| sk.curve(c).is_some());
+        if self.fillet_run.is_some_and(|(c, _)| sk.curve(c).is_none()) {
+            self.fillet_run = None;
+        }
+        self.transform.set.curves.retain(|&c| sk.curve(c).is_some());
+        self.transform
+            .set
+            .points
+            .retain(|&p| sk.point_xy(p).is_ok());
     }
 
     /// Vorschau unter dem Mauszeiger `at` (siehe [`hover_preview`](Self::hover_preview)):
     /// nur bei Stutzen, Dehnen und Brechen.
     pub fn update_hover(&mut self, sk: &Sketch, at: Option<DVec2>, radius: f64) {
         self.hover_preview = at
-            .filter(|a| a.is_finite() && self.tool.is_modify())
+            .filter(|a| {
+                a.is_finite() && matches!(self.tool, Tool::Trim | Tool::Extend | Tool::Break)
+            })
             .and_then(|at| {
                 let c = sk.pick_curve(at, radius)?;
                 match self.tool {

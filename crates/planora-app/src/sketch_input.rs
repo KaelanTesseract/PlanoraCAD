@@ -6,7 +6,9 @@ use crate::formula_field::resolve;
 use crate::msg::Msg;
 use crate::sketch_cursor::{DrawCursor, leaving_direction};
 use crate::sketch_kinds::ToolKind;
-use crate::sketch_state::{SketchSession, Tool, check_change, checked_value, dimension_input, err};
+use crate::sketch_state::{
+    SketchSession, Tool, TransformStage, check_change, checked_value, dimension_input, err,
+};
 use planora_feature::{ParamScope, ParamUnit, SketchFeature};
 use planora_i18n::tr;
 use planora_math::DVec2;
@@ -34,14 +36,28 @@ pub enum FieldKind {
     Depth,
     /// Seitenzahl eines Polygons: ganzzahlig 3 bis 64, wird nie ein Maß.
     Sides,
+    /// Abstand der Fase (Skizzen 4).
+    Distance,
+    /// Zweiter Abstand der Fase.
+    Distance2,
+    /// Versatz: Vorzeichen erlaubt (wechselt die Seite), nie null.
+    OffsetDistance,
+    /// Verschiebung in x: Vorzeichen und null erlaubt.
+    MoveX,
+    /// Verschiebung in y: Vorzeichen und null erlaubt.
+    MoveY,
+    /// Drehung in Grad: Vorzeichen erlaubt.
+    MoveAngle,
+    /// Faktor des Maßstabs: größer als null, ohne Einheit.
+    ScaleFactor,
 }
 
 impl FieldKind {
     /// Einheit, in der das Feld gelesen wird (Winkel in Grad, Seitenzahl ohne, sonst Länge).
     pub fn unit(self) -> ParamUnit {
         match self {
-            FieldKind::Angle | FieldKind::Sweep => ParamUnit::Angle,
-            FieldKind::Sides => ParamUnit::Number,
+            FieldKind::Angle | FieldKind::Sweep | FieldKind::MoveAngle => ParamUnit::Angle,
+            FieldKind::Sides | FieldKind::ScaleFactor => ParamUnit::Number,
             _ => ParamUnit::Length,
         }
     }
@@ -60,6 +76,13 @@ impl FieldKind {
             FieldKind::MinorAxis => tr!("sketch-field-minor"),
             FieldKind::Depth => tr!("sketch-field-depth"),
             FieldKind::Sides => tr!("sketch-field-sides"),
+            FieldKind::Distance => tr!("sketch-field-distance"),
+            FieldKind::Distance2 => tr!("sketch-field-distance2"),
+            FieldKind::OffsetDistance => tr!("sketch-field-offset"),
+            FieldKind::MoveX => tr!("sketch-field-move-x"),
+            FieldKind::MoveY => tr!("sketch-field-move-y"),
+            FieldKind::MoveAngle => tr!("sketch-field-move-angle"),
+            FieldKind::ScaleFactor => tr!("sketch-field-scale-factor"),
         }
     }
 }
@@ -92,6 +115,7 @@ pub struct DrawInput {
         usize,
         usize,
         bool,
+        TransformStage,
     ),
     /// Getippte Werte früherer Stufen (Bogenradius, große Achse) bis zum Abschluss.
     carried: Vec<(FieldKind, String)>,
@@ -202,6 +226,19 @@ fn read_field(
         FieldKind::Angle if !(0.0..=180.0).contains(&v) => Err(tr!("sketch-field-angle-range")),
         FieldKind::Sweep if !(v > 0.0 && v < 360.0) => Err(tr!("sketch-field-sweep-range")),
         FieldKind::Angle | FieldKind::Sweep => Ok(Some(v.to_radians())),
+        // Skizzen 4: Vorzeichen erlaubt, nur endlich (und der Versatz nicht null).
+        FieldKind::OffsetDistance if !v.is_finite() || v == 0.0 => {
+            Err(tr!("sketch-field-offset-nonzero"))
+        }
+        FieldKind::MoveX | FieldKind::MoveY if !v.is_finite() => {
+            Err(tr!("sketch-err-value-finite"))
+        }
+        FieldKind::MoveAngle if !v.is_finite() => Err(tr!("sketch-err-value-finite")),
+        FieldKind::MoveAngle => Ok(Some(v.to_radians())),
+        FieldKind::ScaleFactor if !v.is_finite() || v <= 0.0 => {
+            Err(tr!("sketch-field-factor-positive"))
+        }
+        FieldKind::OffsetDistance | FieldKind::MoveX | FieldKind::MoveY => Ok(Some(v)),
         _ if !v.is_finite() || v <= 0.0 => Err(tr!("sketch-field-positive")),
         FieldKind::MinorAxis if minor_limit.is_some_and(|l| v > l) => {
             Err(tr!("sketch-field-minor-too-big"))
@@ -268,6 +305,7 @@ impl SketchSession {
             self.pending_pos.len(),
             self.pending_curves.len(),
             self.line_arc.is_some(),
+            self.transform.stage,
         );
         if self.input.key == key {
             return;
@@ -410,7 +448,18 @@ impl SketchSession {
                 let major = (*self.pending_pos.first()? - from).try_normalize()?;
                 major.perp_dot(along).abs()
             }
-            F::Width | F::Height | F::Depth | F::Sides => return None,
+            // Die Felder von Skizzen 4 zeigen ihre Vorschau selbst (Task 7 bis 10).
+            F::Width
+            | F::Height
+            | F::Depth
+            | F::Sides
+            | F::Distance
+            | F::Distance2
+            | F::OffsetDistance
+            | F::MoveX
+            | F::MoveY
+            | F::MoveAngle
+            | F::ScaleFactor => return None,
         })
     }
 

@@ -208,7 +208,11 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
         | Action::SketchSlotOverall
         | Action::SketchSlotCenterPoint
         | Action::SketchSlotThreePointArc
-        | Action::SketchSlotCenterPointArc => {
+        | Action::SketchSlotCenterPointArc
+        | Action::SketchFillet
+        | Action::SketchChamferEqual
+        | Action::SketchChamferDistanceAngle
+        | Action::SketchChamferTwoDistances => {
             if let Some(kind) = a.sketch_kind()
                 && let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut()
             {
@@ -219,7 +223,10 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
         | Action::SketchProjectEdge
         | Action::SketchTrim
         | Action::SketchExtend
-        | Action::SketchBreak => {
+        | Action::SketchBreak
+        | Action::SketchOffset
+        | Action::SketchMoveCopy
+        | Action::SketchScale => {
             if let Some(tool) = a.sketch_tool()
                 && let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut()
             {
@@ -404,7 +411,7 @@ fn observe_sketch(ws: &mut Workspace) {
     let same = ws.last_command.sketch_seen.filter(|before| {
         before.tab == now.tab && before.sketch == now.sketch && before.jumps == now.jumps
     });
-    // Stutzen, Dehnen und Brechen zählen, sobald sie etwas geändert haben (die Kurvenzahl
+    // Stutzen, Dehnen, Brechen und die Werkzeuge von Skizzen 4 zählen, sobald sie etwas geändert haben (die Kurvenzahl
     // sinkt oder bleibt dabei oft); die Zeichenwerkzeuge, sobald eine Kurve dazukam.
     let tool = match same {
         Some(before) if now.modify_edits > before.modify_edits => se.modify_edits.1,

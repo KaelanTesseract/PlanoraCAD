@@ -254,7 +254,7 @@ fn drawing_ws_with(view: Option<ViewKind>) -> Workspace {
 
 /// Aktion, Taste, Werkzeug, Name des Knopfs, Name der Aktion (Skizzen 3: bei Rechteck und Kreis
 /// der Name der Art, der Knopf heißt weiter nach der Form).
-const SKETCH_KEYS: [(Action, Key, Tool, &str, &str); 4] = [
+const SKETCH_KEYS: [(Action, Key, Tool, &str, &str); 7] = [
     (Action::SketchLine, Key::L, Tool::Line, "Linie", "Linie"),
     (
         Action::SketchRectangle,
@@ -277,6 +277,28 @@ const SKETCH_KEYS: [(Action, Key, Tool, &str, &str); 4] = [
         "Körperkante kopieren",
         "Körperkante kopieren",
     ),
+    // Skizzen 4 (F, O und M sind Annahmen nach Fusion).
+    (
+        Action::SketchFillet,
+        Key::F,
+        Tool::Fillet,
+        "Rundung",
+        "Skizzenrundung",
+    ),
+    (
+        Action::SketchOffset,
+        Key::O,
+        Tool::Offset,
+        "Versatz",
+        "Versatz",
+    ),
+    (
+        Action::SketchMoveCopy,
+        Key::M,
+        Tool::MoveCopy,
+        "Verschieben/Kopieren",
+        "Verschieben/Kopieren",
+    ),
 ];
 
 // ---- Tests ----------------------------------------------------------------------------------
@@ -290,14 +312,12 @@ fn sketch_keys_select_the_tools() {
         assert_eq!(a.label(), name, "Name der Art");
         assert_eq!(km.action_for_key(Area::Sketch, &chord(k, false)), Some(a));
     }
-    // Versatz O, Skizzenbemaßung D: gibt es (noch) nicht.
-    for k in [Key::O, Key::D] {
-        assert_eq!(
-            km.action_for_key(Area::Sketch, &chord(k, false)),
-            None,
-            "{k:?}"
-        );
-    }
+    // Skizzenbemaßung D: gibt es (noch) nicht (Versatz O gibt es seit Skizzen 4).
+    assert_eq!(
+        km.action_for_key(Area::Sketch, &chord(Key::D, false)),
+        None,
+        "D"
+    );
 
     let mut rig = Rig::new(sketch_open_ws());
     assert_eq!(rig.tool(), Tool::Select);

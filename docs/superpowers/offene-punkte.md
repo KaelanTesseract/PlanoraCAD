@@ -1838,7 +1838,7 @@ Hat Fusion für eine neue Funktion ein Kürzel, gilt: **Taste eintragen, sobald 
 ### Fusion-Kürzel ohne Funktion (nicht belegt, Grund: Funktion fehlt)
 - Modell: M Verschieben (kein Verschieben-Werkzeug, nur Positionsfelder), H Bohrung, I Messen, Q Drücken/Ziehen, A Erscheinungsbild, Strg+B Alles neu berechnen, 1 / 2 / 3 Auswahlarten.
 - Überall: Strg+C / Strg+X / Strg+V (Kopieren, Ausschneiden, Einfügen), Strg+Umschalt+S (Wiederherstellungs-Sicherung).
-- Skizze: O Versatz, D Bemaßung. (T Stutzen ist seit Skizzen 1 belegt.)
+- Skizze: D Bemaßung. (T Stutzen ist seit Skizzen 1 belegt; O Versatz, F Skizzenrundung und M Verschieben/Kopieren kommen mit Skizzen 4, Eintrag mit Task 11.)
 - Zeichnung: C Mittelpunktmarke, M Verschieben, P Projizierte Ansicht, T Text.
 - Maus: „Um Punkt drehen“ (Umschalt+Klick, dann mittlere Taste halten) ist nicht gebaut.
 

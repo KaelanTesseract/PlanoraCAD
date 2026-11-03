@@ -25,7 +25,7 @@ use planora_sketch::model::{CurveKind, Sketch};
 const _: () = assert!(TOOL_ORDER.len() == crate::shell::STRIP_TOOLS);
 
 /// Werkzeuge der Skizzenleiste in der Reihenfolge der Leiste.
-pub const TOOL_ORDER: [Tool; 14] = [
+pub const TOOL_ORDER: [Tool; 18] = [
     Tool::Select,
     Tool::Point,
     Tool::Line,
@@ -40,6 +40,10 @@ pub const TOOL_ORDER: [Tool; 14] = [
     Tool::Trim,
     Tool::Extend,
     Tool::Break,
+    Tool::Fillet,
+    Tool::Offset,
+    Tool::MoveCopy,
+    Tool::Scale,
 ];
 
 /// Erstes Werkzeug der Gruppe „Ändern“ (Fusion „Ändern“); davor steht in der Leiste eine
@@ -63,6 +67,10 @@ pub fn tool_label(tool: Tool) -> String {
         Tool::Trim => tr!("action-sketch-trim"),
         Tool::Extend => tr!("action-sketch-extend"),
         Tool::Break => tr!("action-sketch-break"),
+        Tool::Fillet => tr!("sketch-tool-fillet"),
+        Tool::Offset => tr!("action-sketch-offset"),
+        Tool::MoveCopy => tr!("action-sketch-move-copy"),
+        Tool::Scale => tr!("action-sketch-scale"),
     }
 }
 
@@ -83,11 +91,15 @@ pub fn tool_hint(tool: Tool) -> String {
         Tool::Trim => tr!("sketch-tool-trim-hint"),
         Tool::Extend => tr!("sketch-tool-extend-hint"),
         Tool::Break => tr!("sketch-tool-break-hint"),
+        Tool::Fillet => tr!("sketch-tool-fillet-hint"),
+        Tool::Offset => tr!("sketch-tool-offset-hint"),
+        Tool::MoveCopy => tr!("sketch-tool-move-copy-hint"),
+        Tool::Scale => tr!("sketch-tool-scale-hint"),
     }
 }
 
 /// Werkzeuge der Skizzenleiste: Werkzeug, Beschriftung, Hinweis (in der aktuellen Sprache).
-pub fn tools() -> [(Tool, String, String); 14] {
+pub fn tools() -> [(Tool, String, String); 18] {
     TOOL_ORDER.map(|t| (t, tool_label(t), tool_hint(t)))
 }
 
@@ -629,7 +641,7 @@ fn flyout_list(
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
             for kind in ToolKind::of(tool) {
                 let keys = shortcut_hint(km, kind.action());
-                let source = icons::sketch_tool_icon(tool);
+                let source = icons::sketch_kind_icon(*kind);
                 let label = kind.label();
                 let entry = icons::source_entry_keys(ui, source, &label, &keys, true)
                     .on_hover_text(kind.hint());

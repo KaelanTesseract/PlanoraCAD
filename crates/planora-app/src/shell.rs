@@ -39,11 +39,11 @@ pub const TOOL_H: f32 = 76.0;
 /// Höhe der Verlaufsleiste über dem Befehlsfeld (nur im Modell).
 pub const HISTORY_H: f32 = theme::TOOLBAR_H;
 /// Anzahl der Werkzeuge in der Leiste.
-pub const STRIP_TOOLS: usize = 14;
-/// Zusätzliche Höhe der Trennlinie vor der Gruppe „Ändern“ (Stutzen, Dehnen, Brechen).
+pub const STRIP_TOOLS: usize = 18;
+/// Zusätzliche Höhe der Trennlinie vor der Gruppe „Ändern“ (Stutzen bis Maßstab).
 pub const STRIP_SEPARATOR_H: f32 = 9.0;
-/// Höhe der Leiste mit allen Werkzeugen: 14 × 36, 13 Abstände, die Trennlinie, oben und unten
-/// der Rand.
+/// Höhe der Leiste mit allen Werkzeugen: 18 × 36, 17 Abstände, die Trennlinie, oben und unten
+/// der Rand (733 px; bei 1920×1080 passt sie ohne Liste ins Fenster).
 pub const STRIP_H: f32 = STRIP_TOOLS as f32 * STRIP_BUTTON
     + (STRIP_TOOLS as f32 - 1.0) * STRIP_SPACING
     + STRIP_SEPARATOR_H

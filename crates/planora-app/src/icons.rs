@@ -929,6 +929,16 @@ pub enum HandIcon {
     Polygon,
     /// Langloch: zwei Seiten, zwei halbrunde Enden.
     Slot,
+    /// Skizzenrundung: zwei Linien, die Ecke ist ein Viertelbogen.
+    Fillet,
+    /// Skizzenfase: zwei Linien, die Ecke ist eine schräge Linie.
+    Chamfer,
+    /// Versatz: eine Linie und ihre parallele Kopie in Abstand.
+    Offset,
+    /// Verschieben/Kopieren: ein Kreuz mit vier Pfeilspitzen.
+    MoveCopy,
+    /// Skizzenmaßstab: ein kleines Quadrat in einem großen, mit Pfeil nach außen.
+    Scale,
 }
 
 /// Alle gezeichneten Symbole aus [`HandIcon`].
@@ -948,6 +958,11 @@ pub const HAND_DRAWN: &[HandIcon] = &[
     HandIcon::Centerline,
     HandIcon::Polygon,
     HandIcon::Slot,
+    HandIcon::Fillet,
+    HandIcon::Chamfer,
+    HandIcon::Offset,
+    HandIcon::MoveCopy,
+    HandIcon::Scale,
 ];
 
 /// Zeichnet ein [`HandIcon`] in `rect` (Strichbreite 1,5, runde Enden).
@@ -1100,6 +1115,77 @@ pub fn paint_hand_icon(painter: &Painter, rect: Rect, icon: HandIcon, color: Col
             arc(c + vec2(-half, 0.0), h, pi / 2.0, pi * 1.5);
             arc(c + vec2(half, 0.0), h, -pi / 2.0, pi / 2.0);
         }
+        HandIcon::Fillet => {
+            // Senkrechte und waagerechte Linie, die Ecke rechts oben ein Viertelbogen.
+            let k = r * 0.7;
+            seg(painter, [c + vec2(-r, r), c + vec2(-r, -r + k)], stroke);
+            arc(
+                c + vec2(-r + k, -r + k),
+                k,
+                std::f32::consts::FRAC_PI_2,
+                std::f32::consts::PI,
+            );
+            seg(painter, [c + vec2(-r + k, -r), c + vec2(r, -r)], stroke);
+        }
+        HandIcon::Chamfer => {
+            let k = r * 0.7;
+            seg(painter, [c + vec2(-r, r), c + vec2(-r, -r + k)], stroke);
+            seg(
+                painter,
+                [c + vec2(-r, -r + k), c + vec2(-r + k, -r)],
+                stroke,
+            );
+            seg(painter, [c + vec2(-r + k, -r), c + vec2(r, -r)], stroke);
+        }
+        HandIcon::Offset => {
+            seg(
+                painter,
+                [c + vec2(-r, r * 0.5), c + vec2(r, r * 0.5)],
+                stroke,
+            );
+            let thin = Stroke::new(1.0, color);
+            painter.extend(egui::Shape::dashed_line(
+                &[c + vec2(-r, -r * 0.5), c + vec2(r, -r * 0.5)],
+                thin,
+                2.0,
+                2.0,
+            ));
+            seg(
+                painter,
+                [c + vec2(0.0, r * 0.3), c + vec2(0.0, -r * 0.3)],
+                thin,
+            );
+        }
+        HandIcon::MoveCopy => {
+            seg(painter, [c + vec2(-r, 0.0), c + vec2(r, 0.0)], stroke);
+            seg(painter, [c + vec2(0.0, -r), c + vec2(0.0, r)], stroke);
+            let h = r * 0.35;
+            for (d, p) in [
+                (vec2(1.0, 0.0), vec2(0.0, 1.0)),
+                (vec2(-1.0, 0.0), vec2(0.0, 1.0)),
+                (vec2(0.0, 1.0), vec2(1.0, 0.0)),
+                (vec2(0.0, -1.0), vec2(1.0, 0.0)),
+            ] {
+                let tip = c + d * r;
+                seg(painter, [tip, tip - d * h + p * h], stroke);
+                seg(painter, [tip, tip - d * h - p * h], stroke);
+            }
+        }
+        HandIcon::Scale => {
+            painter.rect_stroke(
+                Rect::from_center_size(c + vec2(-r * 0.35, r * 0.35), vec2(r * 0.9, r * 0.9)),
+                0.0,
+                stroke,
+                egui::StrokeKind::Middle,
+            );
+            seg(
+                painter,
+                [c + vec2(-r * 0.1, r * 0.1), c + vec2(r, -r)],
+                stroke,
+            );
+            seg(painter, [c + vec2(r, -r), c + vec2(r * 0.4, -r)], stroke);
+            seg(painter, [c + vec2(r, -r), c + vec2(r, -r * 0.4)], stroke);
+        }
         HandIcon::Centerline => {
             seg(
                 painter,
@@ -1181,6 +1267,22 @@ pub fn sketch_tool_icon(tool: crate::sketch_state::Tool) -> IconSource {
         T::Trim => IconSource::Hand(HandIcon::Trim),
         T::Extend => IconSource::Hand(HandIcon::Extend),
         T::Break => IconSource::Hand(HandIcon::Break),
+        T::Fillet => IconSource::Hand(HandIcon::Fillet),
+        T::Offset => IconSource::Hand(HandIcon::Offset),
+        T::MoveCopy => IconSource::Hand(HandIcon::MoveCopy),
+        T::Scale => IconSource::Hand(HandIcon::Scale),
+    }
+}
+
+/// Symbol einer Art in der Liste eines Knopfs: die Fasen haben ihr eigenes, sonst das des
+/// Werkzeugs.
+pub fn sketch_kind_icon(kind: crate::sketch_kinds::ToolKind) -> IconSource {
+    use crate::sketch_kinds::ToolKind as K;
+    match kind {
+        K::ChamferEqual | K::ChamferDistanceAngle | K::ChamferTwoDistances => {
+            IconSource::Hand(HandIcon::Chamfer)
+        }
+        _ => sketch_tool_icon(kind.tool()),
     }
 }
 

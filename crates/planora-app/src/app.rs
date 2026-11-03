@@ -19,6 +19,7 @@ use crate::project_actions::ProjectsUi;
 use crate::projects_window::{ProjectsEvent, ProjectsWindow};
 use crate::settings_window::{CheckHint, SettingsEvent, SettingsWindow};
 use crate::shell::ShellState;
+use crate::sketch_state::Tool;
 use crate::state::{AppState, BodyKind, SketchRequest, StandardPlane};
 use crate::step_import_dialog::{self, StepImportDialog};
 use crate::update_check::{self, CheckRequest, CheckResult, NoNetwork, UpdateChecker};
@@ -2042,6 +2043,7 @@ pub fn create_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     ui.separator();
     sketch_menu(ui, ws);
     sketch_kinds_menu(ui, ws);
+    sketch_offset_entry(ui, ws);
     ui.separator();
     // Körper aus Skizzen: die gewählte (sonst die geöffnete, sonst die letzte) Skizze.
     for kind in &CreateKind::ALL[4..] {
@@ -2181,6 +2183,7 @@ pub fn edit_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
             ui.close();
         }
     }
+    sketch_modify_menu(ui, ws);
     ui.separator();
     let tab = ws.active_tab_mut();
     let rolled_back = tab.state.document.marker() < tab.state.document.features().len();
@@ -2259,7 +2262,8 @@ fn sketch_kinds_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     }
     let tools = sketch_panel::TOOL_ORDER
         .into_iter()
-        .filter(|t| sketch_panel::has_flyout(*t));
+        // Die Rundung und die Fasen stehen unter „Bearbeiten → Ändern“.
+        .filter(|t| sketch_panel::has_flyout(*t) && *t != Tool::Fillet);
     for tool in tools {
         icons::submenu(ui, sketch_panel::tool_label(tool), |ui| {
             for kind in crate::sketch_kinds::ToolKind::of(tool) {
@@ -2275,6 +2279,55 @@ fn sketch_kinds_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
             }
         });
     }
+}
+
+/// Bei offener Skizze „Versatz“ im Menü „Erzeugen“ (wie in Fusion), gewählt über seine Aktion.
+fn sketch_offset_entry(ui: &mut egui::Ui, ws: &mut Workspace) {
+    if ws.active_tab().state.open_sketch_id().is_none() {
+        return;
+    }
+    let action = Action::SketchOffset;
+    let keys = keymap::shortcut_hint(&ws.keymap, action);
+    let source = icons::sketch_tool_icon(Tool::Offset);
+    if icons::source_entry_keys(ui, source, &action.label(), &keys, true)
+        .on_hover_text(sketch_panel::tool_hint(Tool::Offset))
+        .clicked()
+    {
+        commands::run_action(ws, action);
+        ui.close();
+    }
+}
+
+/// Bei offener Skizze das Untermenü „Ändern“ im Menü „Bearbeiten“: Skizzenrundung, die drei
+/// Fasen, Verschieben/Kopieren und Skizzenmaßstab.
+fn sketch_modify_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
+    if ws.active_tab().state.open_sketch_id().is_none() {
+        return;
+    }
+    ui.separator();
+    icons::submenu(ui, tr!("menu-sketch-modify"), |ui| {
+        let kinds = crate::sketch_kinds::ToolKind::of(Tool::Fillet)
+            .iter()
+            .map(|k| (k.action(), icons::sketch_kind_icon(*k), k.hint()));
+        let tools = [Tool::MoveCopy, Tool::Scale].map(|t| {
+            let action = Action::for_sketch_tool(t).unwrap_or(Action::SketchMoveCopy);
+            (
+                action,
+                icons::sketch_tool_icon(t),
+                sketch_panel::tool_hint(t),
+            )
+        });
+        for (action, source, hint) in kinds.chain(tools) {
+            let keys = keymap::shortcut_hint(&ws.keymap, action);
+            if icons::source_entry_keys(ui, source, &action.label(), &keys, true)
+                .on_hover_text(hint)
+                .clicked()
+            {
+                commands::run_action(ws, action);
+                ui.close();
+            }
+        }
+    });
 }
 
 /// Einträge „Skizze auf …“ im Menü „Erzeugen“ (ohne Untermenü).

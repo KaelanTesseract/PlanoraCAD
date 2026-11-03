@@ -96,8 +96,8 @@ action_table! {
     /// Öffnet das Fenster „Tastenkürzel“ mit aktivem Suchfeld (Fusion „Shortcuts“); wie
     /// „Ansicht → Tastenkürzel …“. In der Skizze gilt [`Action::SketchShowShortcuts`].
     ShowShortcuts, "ansicht.tastenkuerzel", "action-show-shortcuts", Model, [key(Key::S)];
-    // Skizze: nur Werkzeuge, die es gibt (wie der Klick auf den Knopf der Leiste). Versatz O
-    // und Skizzenbemaßung D kommen erst mit ihrer Funktion. Esc, Enter und Entf der Skizze sind
+    // Skizze: nur Werkzeuge, die es gibt (wie der Klick auf den Knopf der Leiste). Die
+    // Skizzenbemaßung D kommt erst mit ihrer Funktion. Esc, Enter und Entf der Skizze sind
     // fest (`sketch_view`), nicht in der Tabelle.
     SketchLine, "skizze.linie", "action-sketch-line", Sketch, [key(Key::L)];
     // Die Arten der Formen (`sketch_kinds::ToolKind`): Der Name ist der Name der Art, der Knopf
@@ -135,6 +135,24 @@ action_table! {
     SketchExtend, "skizze.dehnen", "action-sketch-extend", Sketch, [];
     /// Fusion „Brechen“: ohne Vorgabetaste wie in Fusion, belegbar.
     SketchBreak, "skizze.brechen", "action-sketch-break", Sketch, [];
+    // Skizzen 4 (Ändern). F, O und M sind Annahmen nach Fusion; `F` kollidiert nicht mit dem
+    // Verrunden des Modells, weil der Bereich ein anderer ist.
+    /// Fusion „Skizzenrundung“ (Art Rundung der Liste).
+    SketchFillet, "skizze.rundung", "action-sketch-fillet", Sketch, [key(Key::F)];
+    /// Art „Gleicher Abstand“ der Skizzenfase.
+    SketchChamferEqual, "skizze.fase_gleich", "action-sketch-chamfer-equal", Sketch, [];
+    /// Art „Abstand und Winkel“ der Skizzenfase.
+    SketchChamferDistanceAngle, "skizze.fase_winkel", "action-sketch-chamfer-distance-angle",
+        Sketch, [];
+    /// Art „Zwei Abstände“ der Skizzenfase.
+    SketchChamferTwoDistances, "skizze.fase_zwei", "action-sketch-chamfer-two-distances",
+        Sketch, [];
+    /// Fusion „Versatz“ (O).
+    SketchOffset, "skizze.versatz", "action-sketch-offset", Sketch, [key(Key::O)];
+    /// Fusion „Verschieben/Kopieren“ (M).
+    SketchMoveCopy, "skizze.verschieben", "action-sketch-move-copy", Sketch, [key(Key::M)];
+    /// Fusion „Skizzenmaßstab“: ohne Vorgabetaste, belegbar.
+    SketchScale, "skizze.massstab", "action-sketch-scale", Sketch, [];
     /// Fusion „Blick auf“ (Look At): wie der Knopf in der Skizzenpalette; ohne Vorgabetaste.
     SketchLookAt, "skizze.blick_auf", "action-sketch-look-at", Sketch, [];
     /// Schalter „Skizzenraster“ der Skizzenpalette; ohne Vorgabetaste.
@@ -180,6 +198,9 @@ impl Action {
             Action::SketchTrim => Some(Tool::Trim),
             Action::SketchExtend => Some(Tool::Extend),
             Action::SketchBreak => Some(Tool::Break),
+            Action::SketchOffset => Some(Tool::Offset),
+            Action::SketchMoveCopy => Some(Tool::MoveCopy),
+            Action::SketchScale => Some(Tool::Scale),
             _ => self.sketch_kind().map(crate::sketch_kinds::ToolKind::tool),
         }
     }

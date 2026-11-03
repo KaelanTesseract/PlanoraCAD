@@ -429,8 +429,8 @@ fn strip_layout_never_panics_in_tiny_windows() {
 // (c)
 #[test]
 fn strip_height_is_limited_to_free_height() {
-    // Genug Platz: 14 Knöpfe zu 36, 13 Abstände zu 4, Trennlinie 9, Rand 2 × 4 (Skizzen 3).
-    assert_eq!(STRIP_H, 14.0 * 36.0 + 13.0 * 4.0 + 9.0 + 8.0);
+    // Genug Platz: 18 Knöpfe zu 36, 17 Abstände zu 4, Trennlinie 9, Rand 2 × 4 (Skizzen 4).
+    assert_eq!(STRIP_H, 18.0 * 36.0 + 17.0 * 4.0 + 9.0 + 8.0);
     let r = sketch_rects(1400.0, 900.0, false);
     assert_eq!(r.strip.unwrap().height(), STRIP_H);
     // Niedrige Fenster: höchstens so hoch wie die freie Fläche.

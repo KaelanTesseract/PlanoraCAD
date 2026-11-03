@@ -41,6 +41,14 @@ pub enum ToolKind {
     SlotCenterPoint,
     SlotThreePointArc,
     SlotCenterPointArc,
+    /// Skizzenrundung.
+    Fillet,
+    /// Skizzenfase mit gleichem Abstand.
+    ChamferEqual,
+    /// Skizzenfase mit Abstand und Winkel.
+    ChamferDistanceAngle,
+    /// Skizzenfase mit zwei Abständen.
+    ChamferTwoDistances,
 }
 
 impl ToolKind {
@@ -65,6 +73,10 @@ impl ToolKind {
         ToolKind::SlotCenterPoint,
         ToolKind::SlotThreePointArc,
         ToolKind::SlotCenterPointArc,
+        ToolKind::Fillet,
+        ToolKind::ChamferEqual,
+        ToolKind::ChamferDistanceAngle,
+        ToolKind::ChamferTwoDistances,
     ];
 
     /// Das Werkzeug, zu dem die Art gehört.
@@ -77,6 +89,7 @@ impl ToolKind {
             PolygonCircumscribed | PolygonInscribed | PolygonEdge => Tool::Polygon,
             SlotCenterToCenter | SlotOverall | SlotCenterPoint | SlotThreePointArc
             | SlotCenterPointArc => Tool::Slot,
+            Fillet | ChamferEqual | ChamferDistanceAngle | ChamferTwoDistances => Tool::Fillet,
         }
     }
 
@@ -89,6 +102,7 @@ impl ToolKind {
             Tool::Arc => &all[8..11],
             Tool::Polygon => &all[11..14],
             Tool::Slot => &all[14..19],
+            Tool::Fillet => &all[19..23],
             _ => &[],
         }
     }
@@ -119,6 +133,10 @@ impl ToolKind {
             SlotCenterToCenter | SlotOverall | SlotCenterPoint => &[&[], &[F::Length], &[F::Width]],
             SlotThreePointArc => &[&[], &[], &[F::Radius, F::Sweep], &[F::Width]],
             SlotCenterPointArc => &[&[], &[F::Radius], &[F::Sweep], &[F::Width]],
+            Fillet => &[&[], &[], &[F::Radius]],
+            ChamferEqual => &[&[], &[], &[F::Distance]],
+            ChamferDistanceAngle => &[&[], &[], &[F::Distance, F::Angle]],
+            ChamferTwoDistances => &[&[], &[], &[F::Distance, F::Distance2]],
         }
     }
 
@@ -150,6 +168,10 @@ impl ToolKind {
             SlotCenterPoint => tr!("sketch-kind-slot-center-point-hint"),
             SlotThreePointArc => tr!("sketch-kind-slot-arc-3p-hint"),
             SlotCenterPointArc => tr!("sketch-kind-slot-arc-center-hint"),
+            Fillet => tr!("sketch-kind-fillet-hint"),
+            ChamferEqual => tr!("sketch-kind-chamfer-equal-hint"),
+            ChamferDistanceAngle => tr!("sketch-kind-chamfer-distance-angle-hint"),
+            ChamferTwoDistances => tr!("sketch-kind-chamfer-two-distances-hint"),
         }
     }
 
@@ -176,6 +198,10 @@ impl ToolKind {
             SlotCenterPoint => Action::SketchSlotCenterPoint,
             SlotThreePointArc => Action::SketchSlotThreePointArc,
             SlotCenterPointArc => Action::SketchSlotCenterPointArc,
+            Fillet => Action::SketchFillet,
+            ChamferEqual => Action::SketchChamferEqual,
+            ChamferDistanceAngle => Action::SketchChamferDistanceAngle,
+            ChamferTwoDistances => Action::SketchChamferTwoDistances,
         }
     }
 
@@ -199,6 +225,10 @@ impl ToolKind {
             PolygonCircumscribed | PolygonInscribed => crate::msg!("sketch-radius-positive"),
             PolygonEdge | SlotCenterToCenter | SlotOverall | SlotCenterPoint => {
                 crate::msg!("sketch-err-line-zero")
+            }
+            // Stümpfe bis Skizzen 4, Task 7 und 8.
+            Fillet | ChamferEqual | ChamferDistanceAngle | ChamferTwoDistances => {
+                crate::msg!("sketch-field-rejected")
             }
         }
     }
@@ -228,6 +258,7 @@ pub struct ToolKinds {
     pub arc: ToolKind,
     pub polygon: ToolKind,
     pub slot: ToolKind,
+    pub fillet: ToolKind,
 }
 
 impl Default for ToolKinds {
@@ -239,6 +270,7 @@ impl Default for ToolKinds {
             // Annahme: Vorgabe von Fusion.
             polygon: ToolKind::PolygonCircumscribed,
             slot: ToolKind::SlotCenterToCenter,
+            fillet: ToolKind::Fillet,
         }
     }
 }
@@ -251,6 +283,7 @@ impl ToolKinds {
             Tool::Arc => self.arc = kind,
             Tool::Polygon => self.polygon = kind,
             Tool::Slot => self.slot = kind,
+            Tool::Fillet => self.fillet = kind,
             _ => {}
         }
     }
@@ -336,6 +369,7 @@ impl SketchSession {
             Tool::Arc => Some(self.kinds.arc),
             Tool::Polygon => Some(self.kinds.polygon),
             Tool::Slot => Some(self.kinds.slot),
+            Tool::Fillet => Some(self.kinds.fillet),
             _ => None,
         }
     }
@@ -391,6 +425,10 @@ impl SketchSession {
         let Some(kind) = self.planned_kind() else {
             return Ok(());
         };
+        // Stumpf: Rundung und Fase füllen Skizzen 4, Task 7 und 8.
+        if kind.tool() == Tool::Fillet {
+            return Ok(());
+        }
         if self.kind_stage() + 1 >= kind.stages().len() {
             return self.finish_kind(sk, kind, cur, prior);
         }
