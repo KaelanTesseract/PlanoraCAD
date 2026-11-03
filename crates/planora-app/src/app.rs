@@ -1250,7 +1250,24 @@ impl PlanoraApp {
     /// Bild zusammen nur einer (der Verteiler verbraucht sie alle). Kommen beide in einem Bild,
     /// erst Rückgängig, dann Wiederholen.
     fn undo_keys(&mut self, ctx: &egui::Context) {
-        if self.windows_open() || ctx.input(|i| i.pointer.any_down()) {
+        if self.windows_open() {
+            return;
+        }
+        if ctx.input(|i| i.pointer.any_down()) {
+            // Ein Griffzug hat die Skizze nicht berührt: Rückgängig nimmt nur ihn zurück.
+            let state = &self.ws.active_tab().state;
+            if state
+                .sketch_session
+                .as_ref()
+                .is_some_and(|se| se.grip_drag.is_some())
+            {
+                let area = keymap::dispatch::current_area(state);
+                let pressed =
+                    keymap::dispatch::pressed_if(ctx, &self.ws.keymap, area, is_history_key);
+                if pressed.contains(&Action::Undo) {
+                    self.ws.active_tab_mut().state.undo_sketch();
+                }
+            }
             return;
         }
         let area = keymap::dispatch::current_area(&self.ws.active_tab().state);

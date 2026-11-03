@@ -380,6 +380,9 @@ impl SketchSession {
         let (pts, pos) = (self.pending.len(), self.pending_pos.len());
         match self.tool {
             Tool::Offset if !self.pending_curves.is_empty() => &[F::OffsetDistance],
+            Tool::MoveCopy if self.transform.stage == TransformStage::Active => {
+                &[F::MoveX, F::MoveY, F::MoveAngle]
+            }
             Tool::Line if pts > 0 => &[F::Length, F::Angle],
             Tool::Rectangle if pos > 0 => &[F::Width, F::Height],
             Tool::Circle if pts > 0 => &[F::Diameter],
@@ -459,6 +462,9 @@ impl SketchSession {
         if self.planned_kind().is_some() {
             return self.kind_field_value(sk, kind);
         }
+        if matches!(kind, F::MoveX | F::MoveY | F::MoveAngle | F::ScaleFactor) {
+            return self.transform_field_value(kind);
+        }
         let at = self.draw_cursor.as_ref()?.at;
         if kind == F::OffsetDistance {
             return self.offset_pointer_distance(sk, at);
@@ -488,7 +494,7 @@ impl SketchSession {
                 let major = (*self.pending_pos.first()? - from).try_normalize()?;
                 major.perp_dot(along).abs()
             }
-            // Die Felder von Skizzen 4 zeigen ihre Vorschau selbst (Task 7 bis 10).
+            // Die Felder von Skizzen 4 zeigen ihre Vorschau selbst.
             F::Width
             | F::Height
             | F::Depth
@@ -646,8 +652,19 @@ impl SketchSession {
             self.input
                 .fields
                 .iter()
-                // Die Seitenzahl ist kein Maß; sie steht in `DrawInput::sides`.
-                .filter(|f| f.locked.is_some() && f.kind != FieldKind::Sides)
+                // Die Seitenzahl ist kein Maß; sie steht in `DrawInput::sides`. Verschieben und
+                // Maßstab lesen ihre Felder selbst.
+                .filter(|f| {
+                    f.locked.is_some()
+                        && !matches!(
+                            f.kind,
+                            FieldKind::Sides
+                                | FieldKind::MoveX
+                                | FieldKind::MoveY
+                                | FieldKind::MoveAngle
+                                | FieldKind::ScaleFactor
+                        )
+                })
                 .map(|f| (f.kind, f.text.clone())),
         );
         if let Err(text) = self.click(&mut sf.sketch, raw, radius, extend) {

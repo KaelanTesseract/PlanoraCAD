@@ -11,7 +11,9 @@ use crate::msg::Msg;
 use crate::shell::{self, ShellMode, ShellRects, ShellState};
 use crate::shell_panels;
 use crate::sketch_kinds::ToolKind;
-use crate::sketch_state::{ConstraintAction, Item, Severity, SketchSession, Tool, formula_problem};
+use crate::sketch_state::{
+    ConstraintAction, Item, Severity, SketchSession, Tool, TransformStage, formula_problem,
+};
 use crate::sketch_view::{constraint_name, format_number, parse_number, shown_value};
 use crate::state::AppState;
 use crate::theme;
@@ -775,10 +777,30 @@ fn side_field(
     });
 }
 
-/// Einstellungen des aktiven Werkzeugs: beim Versatz der Haken „Kette“.
-fn tool_options(ui: &mut egui::Ui, se: &mut SketchSession) {
+/// Einstellungen des aktiven Werkzeugs: beim Versatz der Haken „Kette“, beim Verschieben der Haken
+/// „Kopie erstellen“, „Bezugspunkt setzen“, OK und Abbrechen.
+fn tool_options(ui: &mut egui::Ui, se: &mut SketchSession, sf: &mut SketchFeature) {
     if se.tool == Tool::Offset {
         ui.checkbox(&mut se.offset_chain, tr!("sketch-offset-chain"));
+    }
+    if se.runs_transform() {
+        ui.checkbox(&mut se.transform.copy, tr!("sketch-move-copy"));
+        let active = se.transform.stage == TransformStage::Active;
+        if ui
+            .add_enabled(active, egui::Button::new(tr!("sketch-move-set-base")))
+            .clicked()
+        {
+            se.begin_set_base();
+        }
+        ui.horizontal(|ui| {
+            if ui.button(tr!("common-ok")).clicked() {
+                // Fehler stehen in der Meldung der Sitzung.
+                let _ = se.confirm_transform(sf);
+            }
+            if ui.button(tr!("common-cancel")).clicked() {
+                se.cancel(&mut sf.sketch);
+            }
+        });
     }
 }
 
@@ -825,7 +847,7 @@ fn side_contents(
         ui.data_mut(|d| d.insert_temp(look_at_key(), look.rect));
         palette.look_at |= look.clicked();
     });
-    tool_options(ui, se);
+    tool_options(ui, se, sf);
     ui.add_space(2.0);
 
     // Abhängigkeiten

@@ -6,6 +6,7 @@
 use crate::formula_field::resolve;
 use crate::msg::Msg;
 use crate::sketch_cursor::{CursorOptions, DrawCursor};
+use crate::sketch_grips::GripDrag;
 use crate::sketch_input::{Created, DrawInput, FieldKind};
 use crate::sketch_kinds::{PREVIEW_STEPS_PER_TURN, ToolKinds};
 use planora_feature::{FeatureId, ParamScope, ParamUnit, SketchFeature, constraint_unit};
@@ -95,8 +96,8 @@ pub struct TransformSet {
     pub points: Vec<PointId>,
 }
 
-/// Zustand von Verschieben/Kopieren und Maßstab (Skizzen 4, Task 9 und 10 füllen die Logik).
-#[derive(Clone, Debug, PartialEq, Default)]
+/// Zustand von Verschieben/Kopieren und Maßstab; die Logik steht in [`crate::sketch_grips`].
+#[derive(Clone, Debug, PartialEq)]
 pub struct TransformState {
     pub stage: TransformStage,
     pub set: TransformSet,
@@ -108,11 +109,19 @@ pub struct TransformState {
     pub whole: bool,
 }
 
-/// Laufender Zug an einem Griff von Verschieben/Kopieren oder Maßstab (Task 9 füllt ihn).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct GripDrag {
-    /// Stelle des Drückens in Skizzeneinheiten.
-    pub start: DVec2,
+impl Default for TransformState {
+    fn default() -> TransformState {
+        TransformState {
+            stage: TransformStage::default(),
+            set: TransformSet::default(),
+            base: None,
+            offset: DVec2::ZERO,
+            angle: 0.0,
+            factor: 1.0,
+            copy: false,
+            whole: false,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -547,6 +556,10 @@ impl SketchSession {
                 .collect();
             self.pending_curves = offset_preselection(sk, curves);
         }
+        // Verschieben/Kopieren: Eine Vorauswahl ist schon die Menge.
+        if self.runs_transform() {
+            self.begin_transform(sk);
+        }
     }
 
     /// Vergisst, was das laufende Werkzeug schon gesetzt und getippt hat.
@@ -745,9 +758,13 @@ impl SketchSession {
                 Tool::Polygon | Tool::Slot | Tool::ProjectEdge => Ok(()),
                 Tool::Trim | Tool::Extend | Tool::Break => se.click_modify(sk, at, radius, prior),
                 Tool::Offset => se.click_offset(sk, &cur, prior),
-                // Stümpfe: Rundung und Fase laufen über ihre Arten (`click_kind`),
-                // Verschieben/Kopieren und Maßstab füllen spätere Aufgaben.
-                Tool::Fillet | Tool::MoveCopy | Tool::Scale => Ok(()),
+                Tool::MoveCopy => {
+                    se.click_transform(sk, &cur);
+                    Ok(())
+                }
+                // Stümpfe: Rundung und Fase laufen über ihre Arten (`click_kind`), den Maßstab füllt
+                // eine spätere Aufgabe.
+                Tool::Fillet | Tool::Scale => Ok(()),
             }
         })
     }
@@ -883,7 +900,7 @@ impl SketchSession {
     }
 
     /// Auswahl und offene Punkte ohne die Elemente, die es nicht mehr gibt.
-    fn forget_removed(&mut self, sk: &Sketch) {
+    pub(crate) fn forget_removed(&mut self, sk: &Sketch) {
         self.selection.retain(|i| match *i {
             Item::Point(p) => sk.point_xy(p).is_ok(),
             Item::Curve(c) => sk.curve(c).is_some(),
@@ -891,15 +908,11 @@ impl SketchSession {
         });
         self.pending.retain(|&p| sk.point_xy(p).is_ok());
         self.forget_removed_curves(sk);
-        self.transform.set.curves.retain(|&c| sk.curve(c).is_some());
-        self.transform
-            .set
-            .points
-            .retain(|&p| sk.point_xy(p).is_ok());
     }
 
-    /// Gewählte Kurven samt ihren Klickstellen und der Lauf der Rundung ohne die Kurven, die es
-    /// nicht mehr gibt.
+    /// Gewählte Kurven samt ihren Klickstellen, der Lauf der Rundung und die Menge von
+    /// Verschieben/Kopieren ohne das, was es nicht mehr gibt. Bleibt von der Menge nichts, wird wieder
+    /// gewählt.
     fn forget_removed_curves(&mut self, sk: &Sketch) {
         let mut curves = self.pending_curves.iter();
         self.pick_points
@@ -907,6 +920,16 @@ impl SketchSession {
         self.pending_curves.retain(|&c| sk.curve(c).is_some());
         if self.fillet_run.is_some_and(|(c, _)| sk.curve(c).is_none()) {
             self.fillet_run = None;
+        }
+        let set = &mut self.transform.set;
+        set.curves.retain(|&c| sk.curve(c).is_some());
+        set.points.retain(|&p| sk.point_xy(p).is_ok());
+        if set.curves.is_empty()
+            && set.points.is_empty()
+            && self.transform.stage != TransformStage::Picking
+        {
+            self.transform.stage = TransformStage::Picking;
+            self.grip_drag = None;
         }
     }
 
@@ -1259,6 +1282,22 @@ impl SketchSession {
         if self.planned_kind().is_some() {
             return Ok(());
         }
+        // Verschieben/Kopieren: Beim Wählen geht es weiter zu den Griffen, beim Bezugspunkt zurück.
+        // Den Abschluss macht `finish_transform`, er braucht auch die Formeln.
+        if self.runs_transform() {
+            self.message = None;
+            match self.transform.stage {
+                TransformStage::Picking => {
+                    self.begin_transform(sk);
+                    if self.transform.stage == TransformStage::Picking {
+                        self.message = Some(crate::msg!("sketch-nothing-selected"));
+                    }
+                }
+                TransformStage::SetBase => self.transform.stage = TransformStage::Active,
+                TransformStage::Active => {}
+            }
+            return Ok(());
+        }
         // Versatz: Eingabe schließt ab wie ein Klick.
         if self.tool == Tool::Offset && !self.pending_curves.is_empty() {
             let raw = self.draw_cursor.as_ref().map(|c| c.raw).or(self.cursor);
@@ -1287,8 +1326,12 @@ impl SketchSession {
     /// laufendes Ziehen wird wie mit [`end_drag`](Self::end_drag) beendet (der Punkt bleibt,
     /// wo er ist). Stutzen, Dehnen und Brechen enden ganz (zurück zur Auswahl). Ein laufender
     /// Rahmen fällt allein weg, die alte Auswahl bleibt; ebenso ein laufender Zug auf dem letzten
-    /// Punkt, der Linienzug bleibt.
+    /// Punkt, der Linienzug bleibt, und ein laufender Griff, das Werkzeug bleibt.
     pub fn cancel(&mut self, sk: &mut Sketch) {
+        if self.grip_drag.is_some() {
+            self.abort_grip();
+            return;
+        }
         if self.box_select.take().is_some() || self.line_arc.take().is_some() {
             return;
         }
@@ -1312,9 +1355,10 @@ impl SketchSession {
         matches!(self.snap(sk, at, radius), Snap::None)
     }
 
-    /// Beginnt im Auswahlwerkzeug den Rahmen an der Bildschirmlage `at`.
+    /// Beginnt im Auswahlwerkzeug oder beim Wählen von Verschieben/Kopieren und Maßstab den Rahmen an
+    /// der Bildschirmlage `at`.
     pub fn begin_box(&mut self, at: DVec2, extend: bool) {
-        if self.tool == Tool::Select && at.is_finite() {
+        if (self.tool == Tool::Select || self.transform_picking()) && at.is_finite() {
             self.box_select = Some(BoxSelect {
                 start: at,
                 current: at,

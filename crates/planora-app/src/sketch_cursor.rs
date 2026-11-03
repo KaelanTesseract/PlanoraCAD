@@ -4,7 +4,7 @@
 
 use crate::msg::Msg;
 use crate::sketch_kinds::ToolKind;
-use crate::sketch_state::{SketchSession, Tool, err};
+use crate::sketch_state::{SketchSession, Tool, TransformStage, err};
 use planora_math::DVec2;
 use planora_sketch::constraint::{ConstraintKind, LineOrPoints};
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
@@ -317,6 +317,16 @@ impl SketchSession {
     fn resolve_unlocked(&mut self, sk: &Sketch, raw: DVec2, radius: f64) -> DrawCursor {
         let mut cur = DrawCursor::free(raw);
         if !self.is_drawing_tool() || !raw.is_finite() {
+            return cur;
+        }
+        // Verschieben/Kopieren und Maßstab: Nur der Bezugspunkt fängt. Beim Wählen zeigt der Zeiger
+        // nur, was der Klick träfe, ganz ohne Fang; die Griffe rechnen mit der Rohlage.
+        if matches!(self.tool, Tool::MoveCopy | Tool::Scale)
+            && self.transform.stage != TransformStage::SetBase
+        {
+            if self.transform.stage == TransformStage::Picking {
+                cur.snap = self.snap(sk, raw, radius);
+            }
             return cur;
         }
         // Wer Kurven wählt, sieht nur Kurven: kein Punkt davor, keine Hilfslinie, kein Raster. Eine

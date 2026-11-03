@@ -60,7 +60,12 @@ fn field_pos(rect: Rect, anchor: Pos2, width: f32, row: usize, rows: usize) -> P
 fn suggestion(se: &SketchSession, sf: &SketchFeature, kind: FieldKind) -> String {
     match se.field_value(&sf.sketch, kind) {
         Some(v) if kind == FieldKind::Sides => format!("{v:.0}"),
-        Some(v) if matches!(kind, FieldKind::Angle | FieldKind::Sweep) => {
+        Some(v)
+            if matches!(
+                kind,
+                FieldKind::Angle | FieldKind::Sweep | FieldKind::MoveAngle
+            ) =>
+        {
             format_number(v.to_degrees(), 1)
         }
         Some(v) => planora_i18n::fmt_len_num(v),
@@ -213,7 +218,10 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option
 
     // Offene Liste der Arten: Eingabe und Esc gehören ihr, nicht der Form.
     let flyout = crate::sketch_panel::flyout_open(&ctx);
-    if enter && !flyout {
+    if enter && !flyout && se.runs_transform() {
+        // Fehler stehen in der Meldung der Sitzung und im Feld.
+        let _ = se.confirm_transform(sf);
+    } else if enter && !flyout {
         let raw = se.draw_cursor.as_ref().map(|c| c.raw).or(se.cursor);
         if let Some(raw) = raw {
             // Fehler stehen in der Meldung der Sitzung und im Feld.
