@@ -719,9 +719,35 @@ fn the_angle_of_the_chamfer_is_measured_from_the_layout() {
     let ConstraintKind::Angle(l, c, value) = kind.clone() else {
         panic!()
     };
-    assert_eq!((l, c), (v.l1, ids.line));
+    // Skizzen 4, Task 7: Der Wert ist der Winkel des Plans, darum darf das Maß auch andersherum stehen.
+    assert!((l, c) == (v.l1, ids.line) || (l, c) == (ids.line, v.l1));
     assert_eq!(value, v.s.measure(&kind).unwrap());
     assert_eq!(plan.kind, ChamferKind::DistanceAngle(5.0, 0.7));
+}
+
+#[test]
+fn the_chamfer_angle_dimension_shows_the_angle_of_the_plan_for_every_layout() {
+    for i in 0..60 {
+        let phi = 0.3 + 0.04 * f64::from(i);
+        for swap in [false, true] {
+            let mut v = vee(phi);
+            let (a, b) = picks(&v);
+            let (a, b) = if swap { (b, a) } else { (a, b) };
+            let theta = 0.3;
+            let plan =
+                v.s.chamfer_plan(a, b, ChamferKind::DistanceAngle(5.0, theta))
+                    .expect("Plan");
+            let ids = v.s.add_chamfer(&plan).unwrap();
+            let ConstraintKind::Angle(_, _, value) = v.s.constraint(ids.dims[1]).unwrap().kind
+            else {
+                panic!()
+            };
+            assert!((value - theta).abs() < 1e-9, "{phi} {swap}: {value}");
+            let unsolved = v.s.clone();
+            assert_clean(&v.s.solve());
+            assert!(!folded_over(&unsolved, &v.s), "{phi} {swap}");
+        }
+    }
 }
 
 // ---- Abhängigkeiten wie beim Stutzen --------------------------------------------------------

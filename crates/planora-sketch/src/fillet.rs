@@ -978,7 +978,9 @@ impl Sketch {
 
     /// Legt die Fase aus `plan` an (Entscheidung 9 des Plans): Linie zwischen den Enden, die
     /// Ecke bleibt immer als Konstruktionspunkt auf beiden Linien, weil die Maße von ihr aus
-    /// zählen. Den Winkel misst sie aus der Lage. Bei einem Fehler bleibt die Skizze unverändert.
+    /// zählen. Den Winkel misst sie aus der Lage; Richtung der Fase und Reihenfolge im Maß sind so
+    /// gewählt, dass sein Wert der Winkel `θ` des Plans ist, positiv wie das getippte Feld. Bei
+    /// einem Fehler bleibt die Skizze unverändert.
     pub fn add_chamfer(&mut self, plan: &ChamferPlan) -> Result<ChamferIds, SketchError> {
         self.atomically(|s| {
             let curves = plan.picks.map(|p| p.curve);
@@ -989,7 +991,16 @@ impl Sketch {
                 s.add_point(plan.touch[0].x, plan.touch[0].y)?,
                 s.add_point(plan.touch[1].x, plan.touch[1].y)?,
             ];
-            let line = s.add_line(touch[0], touch[1])?;
+            // Läuft die erste Linie von der Ecke weg, läuft die Fase mit dem Winkel zu `T1` hin.
+            let leaves_corner = matches!(
+                s.curves[curves[0]].kind,
+                CurveKind::Line { a, .. } if a == plan.moves[0]
+            );
+            let line = if leaves_corner && matches!(plan.kind, ChamferKind::DistanceAngle(..)) {
+                s.add_line(touch[1], touch[0])?
+            } else {
+                s.add_line(touch[0], touch[1])?
+            };
             for i in 0..2 {
                 s.rehang_end(curves[i], plan.moves[i], touch[i])?;
             }
@@ -1027,7 +1038,11 @@ impl Sketch {
                     let value = s
                         .measure(&ConstraintKind::Angle(curves[0], line, 0.0))
                         .ok_or_else(|| SketchError::Degenerate(tr!("sketch-err-line-zero")))?;
-                    dims.push(s.add_constraint(ConstraintKind::Angle(curves[0], line, value))?);
+                    dims.push(s.add_constraint(if value < 0.0 {
+                        ConstraintKind::Angle(line, curves[0], -value)
+                    } else {
+                        ConstraintKind::Angle(curves[0], line, value)
+                    })?);
                 }
             }
             Ok(ChamferIds {

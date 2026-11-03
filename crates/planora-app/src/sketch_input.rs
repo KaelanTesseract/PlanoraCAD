@@ -12,7 +12,8 @@ use crate::sketch_state::{
 use planora_feature::{ParamScope, ParamUnit, SketchFeature};
 use planora_i18n::tr;
 use planora_math::DVec2;
-use planora_sketch::constraint::ConstraintKind;
+use planora_sketch::constraint::{ConstraintId, ConstraintKind};
+use planora_sketch::fillet::{ChamferIds, FilletIds};
 use planora_sketch::helpers::RectIds;
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
 use planora_sketch::shapes::{ArcSlotIds, PolygonIds, SlotIds};
@@ -143,6 +144,8 @@ pub enum Created {
     Polygon { ids: PolygonIds, inscribed: bool },
     Slot(SlotIds),
     ArcSlot(ArcSlotIds),
+    Fillet(FilletIds),
+    Chamfer(ChamferIds),
 }
 
 impl Created {
@@ -155,6 +158,20 @@ impl Created {
             Created::Ellipse(_) => crate::msg!("undo-ellipse"),
             Created::Polygon { .. } => crate::msg!("undo-polygon"),
             Created::Slot(_) | Created::ArcSlot(_) => crate::msg!("undo-slot"),
+            Created::Fillet(_) => crate::msg!("undo-fillet"),
+            Created::Chamfer(_) => crate::msg!("undo-chamfer"),
+        }
+    }
+
+    /// Das schon angelegte Maß zum Feld `kind`: Rundung und Fase legen ihre Maße selbst an.
+    fn existing_dimension(&self, kind: FieldKind) -> Option<ConstraintId> {
+        match (self, kind) {
+            (Created::Fillet(ids), FieldKind::Radius) => ids.radius_dim,
+            (Created::Chamfer(ids), FieldKind::Distance) => ids.dims.first().copied(),
+            (Created::Chamfer(ids), FieldKind::Distance2 | FieldKind::Angle) => {
+                ids.dims.get(1).copied()
+            }
+            _ => None,
         }
     }
 }
@@ -623,6 +640,13 @@ impl SketchSession {
         };
         let mut note = None;
         for (kind, text) in &typed {
+            // Rundung und Fase: Wert und Formel gehören an das Maß, das schon da ist.
+            if let Some(id) = created.existing_dimension(*kind) {
+                if let Err(text) = self.set_dimension_input(sf, id, text, scope) {
+                    return Err(self.message.take().unwrap_or(Msg::Raw(text)));
+                }
+                continue;
+            }
             let overall = self.overall_center_distance(sf, &created, *kind, &typed, scope)?;
             note = self
                 .add_typed_dimension(sf, &created, *kind, text, overall, chain, scope)?

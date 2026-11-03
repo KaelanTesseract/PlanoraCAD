@@ -330,8 +330,11 @@ impl SketchSession {
             return cur;
         }
         // Beim 2-Tangenten-Kreis wählt der letzte Klick nur den Sektor: Fang auf einer der Linien
-        // ergäbe gar keinen.
-        if self.cursor_opts.suppressed || self.planned_kind() == Some(ToolKind::Circle2T) {
+        // ergäbe gar keinen. Bei Rundung und Fase gibt der Zeiger nur den Abstand zur Ecke an.
+        if self.cursor_opts.suppressed
+            || self.planned_kind() == Some(ToolKind::Circle2T)
+            || self.tool == Tool::Fillet
+        {
             return cur;
         }
         let index = self.current_index(sk);

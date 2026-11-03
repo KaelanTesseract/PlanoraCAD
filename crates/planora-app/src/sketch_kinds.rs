@@ -12,12 +12,15 @@ use crate::sketch_state::{LineArcDrag, SketchSession, Snap, Tool, err};
 use planora_i18n::tr;
 use planora_math::DVec2;
 use planora_sketch::constraint::ConstraintKind;
+use planora_sketch::fillet::{ChamferKind, ChamferPlan, CurvePick, FilletPlan};
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
 use planora_sketch::shapes::{self, ArcPlan, ShapePlan, SlotIds, SlotStyle};
 use planora_sketch::tangent_circles;
 
 /// Schritte je Vollkreis für die Vorschau einer Form.
 const PREVIEW_STEPS_PER_TURN: usize = 96;
+/// Winkel der Fase „Abstand und Winkel“, solange keiner getippt ist (Annahme: Vorgabe von Fusion).
+const CHAMFER_ANGLE_DEFAULT: f64 = std::f64::consts::FRAC_PI_4;
 
 /// Eine Art, eine Form zu zeichnen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -226,11 +229,16 @@ impl ToolKind {
             PolygonEdge | SlotCenterToCenter | SlotOverall | SlotCenterPoint => {
                 crate::msg!("sketch-err-line-zero")
             }
-            // Stümpfe bis Skizzen 4, Task 7 und 8.
-            Fillet | ChamferEqual | ChamferDistanceAngle | ChamferTwoDistances => {
-                crate::msg!("sketch-field-rejected")
+            Fillet => crate::msg!("sketch-fillet-too-big"),
+            ChamferEqual | ChamferDistanceAngle | ChamferTwoDistances => {
+                crate::msg!("sketch-chamfer-too-big")
             }
         }
+    }
+
+    /// Rundung oder eine der Fasen?
+    fn is_fillet_or_chamfer(self) -> bool {
+        self.tool() == Tool::Fillet
     }
 
     /// Ein gerades Langloch?
@@ -301,6 +309,62 @@ fn check_pick(sk: &Sketch, kind: ToolKind, c: CurveId) -> Result<(), Msg> {
         return Err(crate::msg!("sketch-tangent-kinds"));
     }
     Ok(())
+}
+
+/// Taugt die Kurve für Rundung oder Fase? Die Fase nimmt nur Linien; die Rundung jede Kurve.
+fn check_fillet_pick(sk: &Sketch, kind: ToolKind, c: CurveId) -> Result<(), Msg> {
+    let is_line = sk
+        .curve(c)
+        .is_some_and(|d| matches!(d.kind, CurveKind::Line { .. }));
+    if kind != ToolKind::Fillet && !is_line {
+        return Err(crate::msg!("sketch-chamfer-lines"));
+    }
+    Ok(())
+}
+
+/// Lässt sich an den beiden Linien überhaupt eine Fase legen? Ein winziger Abstand scheitert nur
+/// noch daran, dass das Ende an der Ecke festgehalten ist.
+fn chamfer_possible(sk: &Sketch, a: CurvePick, b: CurvePick) -> bool {
+    let probe = 2.0 * sk.tolerance().linear;
+    sk.chamfer_plan(a, b, ChamferKind::Equal(probe)).is_some()
+}
+
+/// Passen die beiden Kurven zusammen? Dieselbe Kurve zweimal, parallele und tangentiale Kurven
+/// haben keine Ecke; die Fase braucht außerdem ein freies Ende an der Ecke.
+fn check_fillet_pair(sk: &Sketch, kind: ToolKind, a: CurvePick, b: CurvePick) -> Result<(), Msg> {
+    if sk.fillet_corner(a, b).is_none() {
+        return Err(crate::msg!("sketch-fillet-no-corner"));
+    }
+    if kind != ToolKind::Fillet && !chamfer_possible(sk, a, b) {
+        return Err(crate::msg!("sketch-chamfer-fixed"));
+    }
+    Ok(())
+}
+
+/// Linie, Bogen oder Kreis (exakt gerechnet)?
+fn is_exact_curve(sk: &Sketch, c: CurveId) -> bool {
+    sk.curve(c).is_some_and(|d| {
+        matches!(
+            d.kind,
+            CurveKind::Line { .. } | CurveKind::Arc { .. } | CurveKind::Circle { .. }
+        )
+    })
+}
+
+/// Ein Punkt auf `c` ein Viertel des Wegs von der Ecke zum anderen Ende: Beim Klick auf den
+/// gemeinsamen Punkt steht er für die Klickstelle, und von zwei gemeinsamen Enden gilt das nähere.
+fn spot_from_corner(sk: &Sketch, c: CurveId, corner: DVec2) -> Option<DVec2> {
+    let line = sk.curve_polyline(c, PREVIEW_STEPS_PER_TURN)?;
+    let last = line.len().checked_sub(1).filter(|n| *n > 0)?;
+    let share = if line[0].distance(corner) <= line[last].distance(corner) {
+        0.25
+    } else {
+        0.75
+    };
+    let along = share * last as f64;
+    let i = (along as usize).min(last - 1);
+    let spot = line[i].lerp(line[i + 1], along - i as f64);
+    sk.nearest_on_curve(c, spot)
 }
 
 /// Reicht der Radius `r` über die Sehne `start`–`end`? (Sie darf höchstens ein Durchmesser sein.)
@@ -399,6 +463,7 @@ impl SketchSession {
         match self.planned_kind() {
             Some(ToolKind::Circle3T) => true,
             Some(ToolKind::Circle2T) => self.kind_stage() < 2,
+            Some(k) if k.is_fillet_or_chamfer() => self.kind_stage() < 2,
             _ => false,
         }
     }
@@ -425,9 +490,8 @@ impl SketchSession {
         let Some(kind) = self.planned_kind() else {
             return Ok(());
         };
-        // Stumpf: Rundung und Fase füllen Skizzen 4, Task 7 und 8.
-        if kind.tool() == Tool::Fillet {
-            return Ok(());
+        if kind.is_fillet_or_chamfer() {
+            return self.click_fillet(sk, kind, cur, prior);
         }
         if self.kind_stage() + 1 >= kind.stages().len() {
             return self.finish_kind(sk, kind, cur, prior);
@@ -452,6 +516,157 @@ impl SketchSession {
         self.pending_pos.push(cur.at);
         self.pending_snaps.push(cur.remember(tol));
         Ok(())
+    }
+
+    /// Klick von Rundung und Fase: Stufe 0 und 1 wählen Kurven samt Klickstelle (ein Punkt, an dem
+    /// genau zwei Kurven enden, wählt in Stufe 0 beide), Stufe 2 schließt ab. Eine weitere Rundung
+    /// derselben Sitzung schließt schon mit der zweiten Kurve ab. Klick ins Leere: nichts.
+    fn click_fillet(
+        &mut self,
+        sk: &mut Sketch,
+        kind: ToolKind,
+        cur: &DrawCursor,
+        prior: &Sketch,
+    ) -> Result<(), Msg> {
+        if self.kind_stage() >= 2 {
+            return self.finish_kind(sk, kind, cur, prior);
+        }
+        let corner_hit = (self.kind_stage() == 0)
+            .then(|| sk.pick_point(cur.raw, self.pick_radius))
+            .flatten();
+        let picked: Vec<CurvePick> = if let Some(p) = corner_hit {
+            let curves = sk.curves_at_point(p);
+            let &[a, b] = curves.as_slice() else {
+                return Err(crate::msg!("sketch-fillet-point-curves"));
+            };
+            let corner = sk.point_xy(p).map_err(err)?;
+            let pick = |curve| {
+                spot_from_corner(sk, curve, corner)
+                    .map(|at| CurvePick { curve, at })
+                    .ok_or_else(|| crate::msg!("sketch-fillet-no-corner"))
+            };
+            vec![pick(a)?, pick(b)?]
+        } else {
+            let Snap::Curve(curve) = cur.snap else {
+                return Ok(());
+            };
+            vec![CurvePick { curve, at: cur.at }]
+        };
+        for pick in &picked {
+            check_fillet_pick(sk, kind, pick.curve)?;
+        }
+        for pick in picked {
+            if let (Some(&curve), Some(&at)) =
+                (self.pending_curves.first(), self.pick_points.first())
+            {
+                check_fillet_pair(sk, kind, CurvePick { curve, at }, pick)?;
+            }
+            self.pending_curves.push(pick.curve);
+            self.pick_points.push(pick.at);
+        }
+        if self.kind_stage() >= 2 && kind == ToolKind::Fillet && self.fillet_run.is_some() {
+            return self.finish_kind(sk, kind, cur, prior);
+        }
+        Ok(())
+    }
+
+    /// Die beiden gewählten Kurven samt Klickstellen.
+    fn curve_picks(&self) -> Option<[CurvePick; 2]> {
+        match (self.pending_curves.as_slice(), self.pick_points.as_slice()) {
+            (&[a, b], &[p, q]) => {
+                Some([CurvePick { curve: a, at: p }, CurvePick { curve: b, at: q }])
+            }
+            _ => None,
+        }
+    }
+
+    /// Abstand des Zeigers `at` zur Ecke der gewählten Kurven.
+    fn pointer_to_corner(&self, sk: &Sketch, at: DVec2) -> Option<f64> {
+        let [a, b] = self.curve_picks()?;
+        Some(sk.fillet_corner(a, b)?.distance(at))
+    }
+
+    /// Länge aus dem Feld `field`, sonst der Abstand des Zeigers zur Ecke.
+    fn length_at(&self, sk: &Sketch, field: FieldKind, at: DVec2) -> Option<f64> {
+        self.input
+            .locked(field)
+            .or_else(|| self.pointer_to_corner(sk, at))
+    }
+
+    /// Plan der Rundung, für Vorschau und Klick: Im Lauf gilt der heutige Radius der ersten
+    /// Rundung (`Equal` nimmt keinen anderen), sonst Feld oder Zeiger.
+    fn fillet_plan_at(&self, sk: &Sketch, at: DVec2) -> Option<FilletPlan> {
+        let [a, b] = self.curve_picks()?;
+        let radius = match self.fillet_run {
+            Some((arc, r)) => sk.radius(arc).unwrap_or(r),
+            None => self.length_at(sk, FieldKind::Radius, at)?,
+        };
+        sk.fillet_plan(a, b, radius)
+    }
+
+    /// Plan der Fase, für Vorschau und Klick: Längen aus den Feldern, sonst vom Zeiger; der Winkel
+    /// aus dem Feld, sonst die Vorgabe.
+    fn chamfer_plan_at(&self, sk: &Sketch, kind: ToolKind, at: DVec2) -> Option<ChamferPlan> {
+        use FieldKind as F;
+        let [a, b] = self.curve_picks()?;
+        let first = self.length_at(sk, F::Distance, at)?;
+        let shape = match kind {
+            ToolKind::ChamferEqual => ChamferKind::Equal(first),
+            ToolKind::ChamferDistanceAngle => ChamferKind::DistanceAngle(
+                first,
+                self.input.locked(F::Angle).unwrap_or(CHAMFER_ANGLE_DEFAULT),
+            ),
+            ToolKind::ChamferTwoDistances => {
+                ChamferKind::TwoDistances(first, self.length_at(sk, F::Distance2, at)?)
+            }
+            _ => return None,
+        };
+        sk.chamfer_plan(a, b, shape)
+    }
+
+    /// Legt Rundung oder Fase mit dem Plan der Vorschau an und löst. Fehler ändern nichts
+    /// ([`atomic`](Self::atomic)), die Stufe bleibt.
+    fn create_fillet(
+        &mut self,
+        sk: &mut Sketch,
+        kind: ToolKind,
+        at: DVec2,
+        prior: &Sketch,
+    ) -> Result<Created, Msg> {
+        if kind == ToolKind::Fillet {
+            let plan = self
+                .fillet_plan_at(sk, at)
+                .ok_or_else(|| self.fillet_refusal(sk))?;
+            let ids = sk
+                .add_fillet(&plan, self.fillet_run.map(|(arc, _)| arc))
+                .map_err(err)?;
+            self.solve_checked(sk, prior).map_err(|_| kind.refusal())?;
+            self.fillet_run.get_or_insert((ids.arc, plan.radius));
+            return Ok(Created::Fillet(ids));
+        }
+        let plan = self
+            .chamfer_plan_at(sk, kind, at)
+            .ok_or_else(|| self.chamfer_refusal(sk, kind))?;
+        let ids = sk.add_chamfer(&plan).map_err(err)?;
+        self.solve_checked(sk, prior).map_err(|_| kind.refusal())?;
+        Ok(Created::Chamfer(ids))
+    }
+
+    /// Die Meldung, wenn zur letzten Stufe keine Rundung passt: Ellipse und Spline haben ihre eigene.
+    fn fillet_refusal(&self, sk: &Sketch) -> Msg {
+        if self.pending_curves.iter().all(|&c| is_exact_curve(sk, c)) {
+            ToolKind::Fillet.refusal()
+        } else {
+            crate::msg!("sketch-fillet-kinds")
+        }
+    }
+
+    /// Die Meldung, wenn zur letzten Stufe keine Fase passt.
+    fn chamfer_refusal(&self, sk: &Sketch, kind: ToolKind) -> Msg {
+        match self.curve_picks() {
+            Some([a, b]) if !chamfer_possible(sk, a, b) => crate::msg!("sketch-chamfer-fixed"),
+            _ => kind.refusal(),
+        }
     }
 
     /// Nimmt die Kurve unter dem Zeiger: ohne Kurve oder bei einer schon gewählten passiert nichts,
@@ -624,6 +839,14 @@ impl SketchSession {
         cur: &DrawCursor,
         prior: &Sketch,
     ) -> Result<(), Msg> {
+        if kind.is_fillet_or_chamfer() {
+            let created = self.create_fillet(sk, kind, cur.at, prior)?;
+            self.modify_edits = (self.modify_edits.0 + 1, Some(self.tool));
+            self.edit_label = Some(created.undo_label());
+            self.created = Some(created);
+            self.clear_pending();
+            return Ok(());
+        }
         // Beim letzten Klick von `3 tangential` zählt die Kurve unter dem Zeiger.
         let third = match (kind, cur.snap) {
             (ToolKind::Circle3T, Snap::Curve(c)) if !self.pending_curves.contains(&c) => {
@@ -822,6 +1045,7 @@ impl SketchSession {
             self.pending_pos.as_slice(),
             self.pending_curves.as_slice(),
         ) {
+            (ToolKind::Fillet, _, _) => self.fillet_plan_at(sk, at).map(|p| ShapePlan::Arc(p.arc)),
             (ToolKind::Rect3P, &[a, b], _) => {
                 shapes::rect_three_point(a, b, at, tol).map(ShapePlan::Quad)
             }
@@ -889,6 +1113,13 @@ impl SketchSession {
     /// Vorschau der laufenden Form, aus demselben Plan wie das Ergebnis. Vor dem Plan zeigen
     /// `Rect3P`, `Circle3P`, `PolygonEdge` und alle Langlöcher die Linie zum Zeiger.
     pub fn kind_preview(&self, sk: &Sketch, at: DVec2) -> Option<Vec<Vec<DVec2>>> {
+        if let Some(kind) = self
+            .planned_kind()
+            .filter(|&k| k.is_fillet_or_chamfer() && k != ToolKind::Fillet)
+        {
+            let plan = self.chamfer_plan_at(sk, kind, at)?;
+            return Some(vec![plan.touch.to_vec()]);
+        }
         let shows_line = self.planned_kind().is_some_and(|k| {
             k.is_straight_slot()
                 || k.is_arc_slot()
@@ -1012,6 +1243,10 @@ impl SketchSession {
         }
         let at = self.draw_cursor.as_ref()?.at;
         match (self.planned_kind()?, self.pending_pos.as_slice(), kind) {
+            (k, _, F::Radius | F::Distance | F::Distance2) if k.is_fillet_or_chamfer() => {
+                self.pointer_to_corner(sk, at)
+            }
+            (ToolKind::ChamferDistanceAngle, _, F::Angle) => Some(CHAMFER_ANGLE_DEFAULT),
             (ToolKind::Rect3P, &[from], F::Width) => Some(from.distance(at)),
             (ToolKind::Rect3P, &[from], F::Angle) => {
                 let along = at - from;

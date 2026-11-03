@@ -709,6 +709,7 @@ impl SketchSession {
         }
         self.cursor = Some(at);
         self.created = None;
+        self.pick_radius = radius;
         let cur = self.resolve_cursor(sk, at, radius);
         self.atomic(sk, |se, sk, prior| {
             if se.planned_kind().is_some() {
@@ -784,15 +785,24 @@ impl SketchSession {
             Item::Constraint(k) => sk.constraint(k).is_some(),
         });
         self.pending.retain(|&p| sk.point_xy(p).is_ok());
-        self.pending_curves.retain(|&c| sk.curve(c).is_some());
-        if self.fillet_run.is_some_and(|(c, _)| sk.curve(c).is_none()) {
-            self.fillet_run = None;
-        }
+        self.forget_removed_curves(sk);
         self.transform.set.curves.retain(|&c| sk.curve(c).is_some());
         self.transform
             .set
             .points
             .retain(|&p| sk.point_xy(p).is_ok());
+    }
+
+    /// Gewählte Kurven samt ihren Klickstellen und der Lauf der Rundung ohne die Kurven, die es
+    /// nicht mehr gibt.
+    fn forget_removed_curves(&mut self, sk: &Sketch) {
+        let mut curves = self.pending_curves.iter();
+        self.pick_points
+            .retain(|_| curves.next().is_some_and(|&c| sk.curve(c).is_some()));
+        self.pending_curves.retain(|&c| sk.curve(c).is_some());
+        if self.fillet_run.is_some_and(|(c, _)| sk.curve(c).is_none()) {
+            self.fillet_run = None;
+        }
     }
 
     /// Vorschau unter dem Mauszeiger `at` (siehe [`hover_preview`](Self::hover_preview)):
@@ -1918,7 +1928,7 @@ impl SketchSession {
         }
         sk.prune_points(&orphans);
         self.pending.retain(|&p| sk.point_xy(p).is_ok());
-        self.pending_curves.retain(|&c| sk.curve(c).is_some());
+        self.forget_removed_curves(sk);
         self.line_arc = self
             .line_arc
             .filter(|d| sk.point_xy(d.start).is_ok() && sk.curve(d.prev).is_some());
