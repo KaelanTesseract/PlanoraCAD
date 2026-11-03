@@ -2387,8 +2387,6 @@ fn offset_problem_message(problem: OffsetProblem) -> Msg {
     }
 }
 
-/// Setzt einen tangentialen Bogen vor dem Lösen auf die Lage für den neuen Wert `value` des Maßes
-/// `id` (Skizzen 4); passt der Wert nicht zwischen die Nachbarn, wird er abgelehnt.
 /// Das Maß `kind` mit dem Wert `value`, geprüft nach der gemeinsamen Regel der Skizze
 /// ([`Sketch::check_constraint_value`]). Nicht endliche Eingaben ergeben die Meldung des
 /// Zahlenfelds.
