@@ -66,6 +66,8 @@ const CUSP_MARGIN: f64 = 1e-9;
 /// Bis zu so vielen Stücken bekommt eine Kopie Abhängigkeiten. Jedes Lösen rechnet den Rang der
 /// ganzen Gruppe dicht; darüber entsteht sie als reine Geometrie mit gemeinsamen Punkten.
 pub const OFFSET_TIED_MAX: usize = 64;
+/// Sinus, bis zu dem eine Linie am Rollkreis als parallel zur Vorlage gilt.
+const ROLLER_PARALLEL: f64 = 1e-6;
 
 /// Gerichtete Kette. `bool`: gegen die Kurvenrichtung.
 #[derive(Clone, Debug, PartialEq)]
@@ -2061,14 +2063,87 @@ impl Sketch {
         })
     }
 
+    /// Sitzt der Rollkreis `roller` so auf der Vorlage, wie `add_offset` ihn anlegt, und berührt er
+    /// eine ihrer Kopien (eine aus `touched`)? Linie: Die Mitte ist Ende einer Linie, zu der die
+    /// Berührte parallel ist. Rund: Die Mitte ist Anfang eines Bogens oder liegt auf einem Kreis,
+    /// und die Berührte teilt dessen Mitte. So bleibt ein von Hand gezeichneter Kreis, der nur an
+    /// einem Linienende sitzt und eine andere Linie berührt, draußen.
+    fn rolls_on_source(&self, roller: CurveId, touched: &[CurveId]) -> bool {
+        let CurveKind::Circle { center: s, .. } = self.curves[roller].kind else {
+            return false;
+        };
+        let on_circle = |q: CurveId| {
+            self.constraints().any(|(_, d)| {
+                d.enabled
+                    && matches!(d.kind, ConstraintKind::PointOnCurve(p, c) if p == s && c == q)
+            })
+        };
+        touched.iter().any(|&k| match self.curves[k].kind {
+            CurveKind::Line { a, b } => {
+                let dir = self.pos(b) - self.pos(a);
+                self.curves().any(|(q, d)| match d.kind {
+                    CurveKind::Line { a: x, b: y } if q != k && (x == s || y == s) => {
+                        let sine = (self.pos(y) - self.pos(x))
+                            .normalize_or_zero()
+                            .perp_dot(dir.normalize_or_zero());
+                        sine.abs() <= ROLLER_PARALLEL
+                            || self
+                                .constraints()
+                                .any(|(_, c)| c.enabled && c.kind == ConstraintKind::Parallel(q, k))
+                    }
+                    _ => false,
+                })
+            }
+            CurveKind::Arc { center: m, .. } | CurveKind::Circle { center: m, .. } => {
+                self.curves().any(|(q, d)| match d.kind {
+                    CurveKind::Arc { center, start, .. } => q != k && center == m && start == s,
+                    CurveKind::Circle { center, .. } => q != k && center == m && on_circle(q),
+                    _ => false,
+                })
+            }
+            _ => false,
+        })
+    }
+
+    /// Ist `c`, das ein Ende mit dem Stück `x` der Kopie teilt, ein weiteres Stück von ihr? Es
+    /// trägt `Tangent` oder `Equal` zu `x` oder `Parallel` zu einer Kurve, die es nicht berührt,
+    /// teilt als Bogen die Mitte mit `x`, oder ist eine Näherung (die trägt gar nichts).
+    fn continues_copy(&self, x: CurveId, c: CurveId) -> bool {
+        let points = self.curves[c].kind.points();
+        let bound = self.constraints().any(|(_, d)| {
+            d.enabled
+                && match d.kind {
+                    ConstraintKind::Tangent(a, b) | ConstraintKind::Equal(a, b) => {
+                        (a, b) == (x, c) || (a, b) == (c, x)
+                    }
+                    ConstraintKind::Parallel(q, k) => {
+                        k == c
+                            && !self.curves[q]
+                                .kind
+                                .points()
+                                .iter()
+                                .any(|p| points.contains(p))
+                    }
+                    _ => false,
+                }
+        });
+        bound
+            || match (&self.curves[x].kind, &self.curves[c].kind) {
+                (CurveKind::Arc { center: m, .. }, CurveKind::Arc { center: n, .. }) => m == n,
+                (_, CurveKind::Spline { .. }) => true,
+                _ => false,
+            }
+    }
+
     /// Die Punkte der Vorlage, die stehen bleiben, wenn sich das Versatzmaß `dim` ändert. `None`,
     /// wenn `dim` kein solches Maß ist: ein `Radius` an einem Konstruktionskreis, der tangential an
-    /// einer Kurve hängt und dessen Mitte zu einer Vorlage gehört.
+    /// einer Kurve hängt und auf deren Vorlage sitzt ([`Sketch::rolls_on_source`]).
     ///
     /// Das Ergebnis sind alle Punkte aller Kurven, die über gemeinsame Enden von den Mitten der
     /// ganzen `Equal`-Gruppe aus erreichbar sind, samt diesen Mitten. Gelaufen wird im Stil der
     /// Kopie (bei einer Vorlage aus Konstruktionskurven über Konstruktionskurven) und über feste
-    /// Kurven, deren Kopie ja normal ist; nie über Querlinien, also nie zur Kopie hinüber.
+    /// Kurven, deren Kopie ja normal ist; nie über Querlinien und nie über eine Kurve, die an einem
+    /// Punkt der Kopie hängt, also nie zur Kopie hinüber.
     pub fn offset_hold_points(&self, dim: ConstraintId) -> Option<Vec<PointId>> {
         let ConstraintKind::Radius(first, _) = self.constraint(dim)?.kind else {
             return None;
@@ -2105,8 +2180,15 @@ impl Sketch {
                 })
                 .collect()
         };
-        let copies: Vec<CurveId> = group.iter().flat_map(|&c| touching(c)).collect();
-        if copies.is_empty() {
+        let centers: Vec<PointId> = group
+            .iter()
+            .filter_map(|&c| match self.curves[c].kind {
+                CurveKind::Circle { center, .. } => Some(center),
+                _ => None,
+            })
+            .collect();
+        let mut copies: Vec<CurveId> = group.iter().flat_map(|&c| touching(c)).collect();
+        if !group.iter().any(|&c| self.rolls_on_source(c, &touching(c))) {
             return None;
         }
         // Der Stil der Vorlage: normal, sobald eine Kopie normal ist.
@@ -2131,6 +2213,29 @@ impl Sketch {
                 CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => Vec::new(),
             }
         };
+        // Die ganze Kopie: Stücke ohne Rollkreis hängen über gemeinsame Enden an einem mit. Eine
+        // eigene Linie des Nutzers zwischen Kopie und Vorlage (Wandstärke) gehört nicht dazu.
+        let mut next = 0;
+        while let Some(&x) = copies.get(next) {
+            next += 1;
+            let ends = ends_of(&self.curves[x].kind);
+            for (c, d) in self.curves() {
+                if !copies.contains(&c)
+                    && !group.contains(&c)
+                    && !cross_line(c)
+                    && ends_of(&d.kind).iter().any(|p| ends.contains(p))
+                    && !ends_of(&d.kind).iter().any(|p| centers.contains(p))
+                    && self.continues_copy(x, c)
+                {
+                    copies.push(c);
+                }
+            }
+        }
+        // Was an einem Punkt der Kopie hängt, gehört nicht zur Vorlage und trägt sie nicht weiter.
+        let barrier: HashSet<PointId> = copies
+            .iter()
+            .flat_map(|&c| ends_of(&self.curves[c].kind))
+            .collect();
         let walkable: Vec<(CurveId, Vec<PointId>)> = self
             .curves()
             .filter(|(c, d)| {
@@ -2140,13 +2245,7 @@ impl Sketch {
                     && !cross_line(*c)
             })
             .map(|(c, d)| (c, ends_of(&d.kind)))
-            .collect();
-        let centers: Vec<PointId> = group
-            .iter()
-            .filter_map(|&c| match self.curves[c].kind {
-                CurveKind::Circle { center, .. } => Some(center),
-                _ => None,
-            })
+            .filter(|(_, ends)| !ends.iter().any(|p| barrier.contains(p)))
             .collect();
         let mut reached: Vec<CurveId> = Vec::new();
         // Der Rollkreis eines Kreises sitzt auf einem Hilfspunkt, der nur auf der Vorlage liegt.

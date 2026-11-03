@@ -757,36 +757,6 @@ fn dragging_a_source_corner_keeps_the_distance() {
     }
 }
 
-/// Grenze, die im Bericht steht: Ohne Tangenten an der Vorlage geht beim Ziehen die Berührung der
-/// Vorlage selbst verloren. Die Kopie bleibt rundum tangential, kann also nicht überall stimmen,
-/// aber nichts scheitert oder klappt um.
-#[test]
-fn dragging_a_source_without_tangents_stays_solved() {
-    let mut b = Bench::new(rounded_rect(), -3.0);
-    let corner = b
-        .sources
-        .iter()
-        .find_map(|&c| match b.s.curve(c).unwrap().kind {
-            CurveKind::Line { a, .. } => Some(a),
-            _ => None,
-        })
-        .unwrap();
-    let start = at(&b.s, corner);
-    for k in 1..=40 {
-        let before = b.s.clone();
-        let target = start + DVec2::new(0.1, 0.05) * k as f64;
-        let r =
-            b.s.drag(&[Drag {
-                point: corner,
-                target,
-            }])
-            .unwrap();
-        assert!(!r.drag_failed, "{r:?}");
-        assert_eq!(r.status, SolveStatus::Solved, "{r:?}");
-        assert!(!folded_over(&before, &b.s), "k = {k}");
-    }
-}
-
 #[test]
 fn a_dimension_on_the_source_line_is_followed() {
     let mut b = Bench::new(single_line(), 5.0);
@@ -1332,4 +1302,235 @@ fn an_open_end_cut_by_the_trimming_stays_free() {
     assert_still(&s);
     assert_eq!(dof(&s), dof_before + 1, "das gekürzte Ende ist frei");
     assert_eq!(ids.rollers.len(), 1);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Vorlage und Kopie von Hand verbunden (Wandstärke)
+// ---------------------------------------------------------------------------------------------
+
+fn u_profile() -> (Sketch, Vec<CurveId>) {
+    let mut s = sketch();
+    let p: Vec<_> = [(0., 60.), (0., 0.), (80., 0.), (80., 60.)]
+        .iter()
+        .map(|q| s.add_point(q.0, q.1).unwrap())
+        .collect();
+    let cs = (0..3)
+        .map(|k| s.add_line(p[k], p[k + 1]).unwrap())
+        .collect();
+    (s, cs)
+}
+
+/// Linie, Bogen, Linie: Das letzte Stück beginnt keinen Lauf, also hängt kein Rollkreis daran.
+fn hook() -> (Sketch, Vec<CurveId>) {
+    let mut s = sketch();
+    let (a, b) = (s.add_point(0., 0.).unwrap(), s.add_point(50., 0.).unwrap());
+    let (c, m) = (
+        s.add_point(60., 10.).unwrap(),
+        s.add_point(50., 10.).unwrap(),
+    );
+    let d = s.add_point(60., 50.).unwrap();
+    let cs = vec![
+        s.add_line(a, b).unwrap(),
+        s.add_arc(m, b, c).unwrap(),
+        s.add_line(c, d).unwrap(),
+    ];
+    (s, cs)
+}
+
+/// Punkte, an denen genau eine der Kurven endet.
+fn open_ends_of(s: &Sketch, curves: &[CurveId]) -> Vec<PointId> {
+    let ends: Vec<PointId> = curves
+        .iter()
+        .flat_map(|&c| match s.curve(c).unwrap().kind {
+            CurveKind::Line { a, b } => vec![a, b],
+            CurveKind::Arc { start, end, .. } => vec![start, end],
+            ref k => panic!("{k:?}"),
+        })
+        .collect();
+    ends.iter()
+        .copied()
+        .filter(|p| ends.iter().filter(|q| *q == p).count() == 1)
+        .collect()
+}
+
+/// Schließt Vorlage und Kopie mit `lines` eigenen Linien an den offenen Enden, wie das Linienwerkzeug
+/// mit gefangenen Punkten; beides hält das Maß nicht auf, die Vorlage bleibt stehen.
+fn check_closed_wall(shape: fn() -> (Sketch, Vec<CurveId>), lines: usize, what: &str) {
+    let mut b = Bench::new(shape(), 3.0);
+    let source_ends = open_ends_of(&b.s, &b.sources);
+    let copy_ends = open_ends_of(&b.s, &b.ids.curves);
+    for &q in source_ends.iter().take(lines) {
+        let near = |k: &&PointId| at(&b.s, **k).distance(at(&b.s, q));
+        let k = *copy_ends
+            .iter()
+            .min_by(|x, y| near(x).total_cmp(&near(y)))
+            .unwrap();
+        b.s.add_line(q, k).unwrap();
+    }
+    assert_still(&b.s);
+    check_hold_cover(&b, what);
+    b.sweep_held(values(3.0, 6.0, 12), what);
+}
+
+#[test]
+fn a_wall_closed_by_hand_keeps_the_copy_out_of_the_hold_points() {
+    for lines in [1, 2] {
+        check_closed_wall(single_line, lines, "Linie");
+        check_closed_wall(u_profile, lines, "U");
+        check_closed_wall(open_chain, lines, "mit Bogen");
+        check_closed_wall(hook, lines, "Haken");
+    }
+}
+
+#[test]
+fn a_spoke_between_closed_source_and_copy_is_not_walked() {
+    let mut b = Bench::new(polygon(4, 50.0), -5.0);
+    let corner = |s: &Sketch, c: CurveId| s.curve(c).unwrap().kind.points()[0];
+    let (q, k) = (corner(&b.s, b.sources[0]), corner(&b.s, b.ids.curves[0]));
+    b.s.add_line(q, k).unwrap();
+    check_hold_cover(&b, "Speiche");
+    b.sweep_held(values(5.0, 9.0, 8), "Speiche");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Gemessene Grenzen: Knickt die Vorlage, hält nicht jedes Stück seinen Abstand
+// ---------------------------------------------------------------------------------------------
+
+/// Größter Fehler im Abstand nach dem Zug einer Ecke um `by`, in Schritten von 0,5 mm.
+fn dragged_error(b: &mut Bench, corner: PointId, by: DVec2) -> f64 {
+    let start = at(&b.s, corner);
+    let steps = (by.length() / 0.5).ceil() as usize;
+    for k in 1..=steps {
+        let target = start + by * k as f64 / steps as f64;
+        let r =
+            b.s.drag(&[Drag {
+                point: corner,
+                target,
+            }])
+            .unwrap();
+        assert!(!r.drag_failed, "{r:?}");
+        assert_eq!(r.status, SolveStatus::Solved, "{r:?}");
+    }
+    let mut worst = 0.0_f64;
+    for (i, &(q, k)) in b.pairs.iter().enumerate() {
+        for p in samples(&b.s, k) {
+            worst = worst.max((to_carrier(&b.s, q, p) - b.sides[i] * b.d).abs());
+        }
+    }
+    worst
+}
+
+/// Die Fuge zweier Linien auf einer Geraden hat keinen zweiten Rollkreis, der wäre dort singulär.
+#[test]
+fn bending_a_collinear_source_loses_the_distance_within_the_measured_bound() {
+    let pts = [(0., 0.), (40., 0.), (100., 0.), (100., 50.), (0., 50.)];
+    for (by, bound) in [(2.0, 0.016), (6.0, 0.14), (10.0, 0.38)] {
+        let mut b = Bench::new(plain_polygon(&pts), -5.0);
+        let joint = b.s.curve(b.sources[0]).unwrap().kind.points()[1];
+        let e = dragged_error(&mut b, joint, DVec2::new(0.0, by));
+        assert!(e < bound, "{by} mm: Fehler {e}");
+    }
+}
+
+#[test]
+fn bending_a_dumbbell_web_loses_the_distance_within_the_measured_bound() {
+    let pts = [
+        (0.0, 0.0),
+        (40.0, 0.0),
+        (40.0, 17.0),
+        (60.0, 17.0),
+        (60.0, 0.0),
+        (100.0, 0.0),
+        (100.0, 40.0),
+        (60.0, 40.0),
+        (60.0, 23.0),
+        (40.0, 23.0),
+        (40.0, 40.0),
+        (0.0, 40.0),
+    ];
+    let mut b = Bench::new(plain_polygon(&pts), 5.0);
+    let web = b.s.curve(b.sources[1]).unwrap().kind.points()[1];
+    let e = dragged_error(&mut b, web, DVec2::new(-3.0, 0.0));
+    assert!(e < 1.85, "Fehler {e}");
+}
+
+#[test]
+fn dragging_a_source_without_tangents_stays_within_the_measured_bound() {
+    let mut b = Bench::new(rounded_rect(), -3.0);
+    let corner = b
+        .sources
+        .iter()
+        .find_map(|&c| match b.s.curve(c).unwrap().kind {
+            CurveKind::Line { a, .. } => Some(a),
+            _ => None,
+        })
+        .unwrap();
+    let e = dragged_error(&mut b, corner, DVec2::new(4.0, 2.0));
+    assert!(e < 1.2, "Fehler {e}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Halten nach einer Änderung der Vorlage
+// ---------------------------------------------------------------------------------------------
+
+/// Vorlagenmaß und Versatzmaß im Wechsel: `solve_holding` meldet nur, was auch stimmt. Ohne das
+/// Abschalten der Zeilen zwischen gehaltenen Werten scheiterte das Nachziehen hier, und das grobe
+/// Ergebnis lag ab 132,8 mm Länge über 1e-6.
+#[test]
+fn holding_after_a_source_dimension_is_accurate() {
+    for free in [true, false] {
+        let mut s = sketch();
+        s.add_rectangle(DVec2::new(0., 0.), DVec2::new(100., 50.))
+            .unwrap();
+        let cs: Vec<CurveId> = s.curves().map(|(c, _)| c).collect();
+        if free {
+            let ids: Vec<ConstraintId> = s.constraints().map(|(i, _)| i).collect();
+            for id in ids {
+                s.remove_constraint(id).unwrap();
+            }
+        }
+        let (a, c) = match s.curve(cs[0]).unwrap().kind {
+            CurveKind::Line { a, b } => (a, b),
+            _ => unreachable!(),
+        };
+        let len = s
+            .add_constraint(ConstraintKind::Distance(a, c, 100.0))
+            .unwrap();
+        assert_clean(&s.solve());
+        let b = Bench::new((s, cs), -5.0);
+        let (dim, hold) = (b.dim(), b.hold());
+        let mut s = b.s.clone();
+        for l in values(30.0, 152.4, 17).chain([132.8]) {
+            s.set_constraint_value(len, l).unwrap();
+            assert_eq!(s.solve().status, SolveStatus::Solved);
+            for d in values(1.0, 18.0, 17) {
+                s.set_constraint_value(dim, d).unwrap();
+                let state = b.source_state(&s);
+                assert!(s.solve_holding(&hold), "L = {l}, d = {d}");
+                assert_eq!(b.source_state(&s), state, "L = {l}, d = {d}");
+                b.check_distance(&s, d, 1e-6, "Wechsel");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_hand_drawn_circle_on_a_line_end_is_no_offset_dimension() {
+    // Mitte auf einem Linienende, tangential an eine andere, nicht parallele Linie.
+    let mut s = sketch();
+    let (a, b) = (s.add_point(0., 0.).unwrap(), s.add_point(40., 0.).unwrap());
+    let (c, d) = (
+        s.add_point(-5., -20.).unwrap(),
+        s.add_point(-5., 20.).unwrap(),
+    );
+    s.add_line(a, b).unwrap();
+    let other = s.add_line(c, d).unwrap();
+    let circle = s.add_circle(a, 5.).unwrap();
+    s.set_construction(circle, true).unwrap();
+    s.add_constraint(ConstraintKind::Tangent(other, circle))
+        .unwrap();
+    let dim = s
+        .add_constraint(ConstraintKind::Radius(circle, 5.0))
+        .unwrap();
+    assert_eq!(s.offset_hold_points(dim), None);
 }

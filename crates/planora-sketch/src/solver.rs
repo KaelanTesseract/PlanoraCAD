@@ -288,17 +288,20 @@ impl Sketch {
     /// Löst bei festgehaltenen Punkten `hold`, ohne dass sie sich auch nur im letzten Bit bewegen:
     /// auf einer Kopie mit vorübergehendem `Fixed`. Gelöst: Die Werte werden übernommen, `true`.
     /// Sonst `false`, und die Skizze bleibt, wie sie ist.
+    ///
+    /// Die Schranke des Lösers reicht hier nicht: Ein Winkelfehler von 1e-8 ist an einer Linie von
+    /// 150 mm schon 1,5e-6 mm Abstand. Darum wird genauer nachgezogen; gelingt das nicht, gilt der
+    /// Lauf als gescheitert, statt ein ungenaues Ergebnis als gelöst zu melden.
     pub fn solve_holding(&mut self, hold: &[PointId]) -> bool {
         let mut trial = self.clone();
+        let mut pins = Vec::with_capacity(hold.len());
         for &p in hold {
             let Ok(at) = self.point_xy(p) else {
                 return false;
             };
-            if trial
-                .add_constraint(ConstraintKind::Fixed(p, at.x, at.y))
-                .is_err()
-            {
-                return false;
+            match trial.add_constraint(ConstraintKind::Fixed(p, at.x, at.y)) {
+                Ok(id) => pins.push(id),
+                Err(_) => return false,
             }
         }
         let pinned: Vec<(usize, f64)> = self
@@ -309,16 +312,34 @@ impl Sketch {
         if !trial.settle_holding(&pinned) {
             return false;
         }
-        // Lange Kopien sammeln den Rest der Zeilen auf: einmal genauer nachziehen, wenn es geht.
-        let mut fine = trial.clone();
-        fine.tol.linear *= HOLD_POLISH;
-        fine.touch_structure();
-        if fine.settle_holding(&pinned) {
-            trial.vars = fine.vars;
+        trial.tol.linear *= HOLD_POLISH;
+        trial.drop_rows_between_held(&pinned, &pins);
+        trial.touch_structure();
+        if !trial.settle_holding(&pinned) {
+            return false;
         }
         self.vars = trial.vars;
         self.touch_values();
         true
+    }
+
+    /// Schaltet Abhängigkeiten ab, die nur gehaltene Werte lesen: Sie sind schon im Rahmen der
+    /// gewöhnlichen Schranke erfüllt, und bewegen darf sie niemand mehr. Die Zeilen `pins` bleiben.
+    fn drop_rows_between_held(&mut self, pinned: &[(usize, f64)], pins: &[ConstraintId]) {
+        let held: HashSet<usize> = pinned.iter().map(|p| p.0).collect();
+        let idle: Vec<ConstraintId> = self
+            .constraints
+            .iter()
+            .filter(|(id, c)| c.alive && c.enabled && !pins.contains(id))
+            .map(|(id, _)| id)
+            .filter(|&id| {
+                self.evaluate(id, &self.vars)
+                    .is_some_and(|ev| ev.locals.iter().all(|v| held.contains(v)))
+            })
+            .collect();
+        for id in idle {
+            self.constraints[id].enabled = false;
+        }
     }
 
     /// Löst, setzt `pinned` zurück und löst nach, bis sich nichts mehr rührt: Der Löser kommt nur
