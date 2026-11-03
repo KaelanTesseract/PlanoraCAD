@@ -23,13 +23,23 @@
 //! entfällt der. Bleibt ein Bogen über 180° so an beiden Enden ohne Nachbarn und passt sein ganzer
 //! Kreis, ist er eine eigene Schleife (Schlüsselloch). Nach außen verschwindet nie etwas: Bleibt
 //! dort nichts, heißt das `NoJoin`.
+//!
+//! **Abhängigkeiten** (`add_offset`): Die Kopie bekommt keine neue Art von Zeile. Ein
+//! Konstruktionskreis um einen Punkt der Vorlage (Rollkreis), der die Kopie berührt, hält den
+//! Abstand; der Zweig der Tangente steht beim Anlegen fest, also wechselt die Seite nie. Einen
+//! Rollkreis gibt es je Lauf (Stücke zwischen zwei scharfen Fugen), alle gleich groß über `Equal`,
+//! am ersten das Maß. Linien tragen `Parallel`, Bögen und Kreise teilen die Mitte der Vorlage,
+//! tangentiale Fugen `Tangent`, offene Enden eine Querlinie. Näherungen tragen nichts und folgen
+//! nicht.
 
 use crate::arrangement::{Nodes, polygon_contains, split};
+use crate::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
 use crate::curves::Sampled;
+use crate::error::SketchError;
 use crate::fillet::{Shape, meet, wrap_pi};
 use crate::geom::Geom;
 use crate::intersect::{Prepared, boxes_touch, intersect, intersect_prepared, self_intersect};
-use crate::model::{CurveId, CurveKind, MAX_COORD, Sketch};
+use crate::model::{CurveId, CurveKind, MAX_COORD, PointId, Sketch};
 use crate::shapes::ArcPlan;
 use planora_math::{DVec2, PI, TAU, Tolerance};
 use std::collections::{HashMap, HashSet};
@@ -53,6 +63,9 @@ const ISLAND_SEAM: f64 = 0.05;
 const ISLAND_SAMPLES: usize = 8;
 /// `1 − κ·d` ab hier gilt als Spitze.
 const CUSP_MARGIN: f64 = 1e-9;
+/// Bis zu so vielen Stücken bekommt eine Kopie Abhängigkeiten. Jedes Lösen rechnet den Rang der
+/// ganzen Gruppe dicht; darüber entsteht sie als reine Geometrie mit gemeinsamen Punkten.
+pub const OFFSET_TIED_MAX: usize = 64;
 
 /// Gerichtete Kette. `bool`: gegen die Kurvenrichtung.
 #[derive(Clone, Debug, PartialEq)]
@@ -117,6 +130,18 @@ impl OffsetPlan {
             l.closed == from_closed
         })
     }
+}
+
+/// Was [`Sketch::add_offset`] angelegt hat.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OffsetIds {
+    /// Die Stücke der Kopie, in der Reihenfolge des Plans.
+    pub curves: Vec<CurveId>,
+    pub rollers: Vec<CurveId>,
+    /// Das Maß des Abstands, der Radius am ersten Rollkreis.
+    pub distance_dim: Option<ConstraintId>,
+    /// Die Kopie folgt der Vorlage: Es gibt mindestens einen Rollkreis.
+    pub tied: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -199,23 +224,28 @@ fn piece_polyline(p: &OffsetPiece, steps: usize) -> Vec<DVec2> {
     }
 }
 
+/// Durchläuft die Schleife den Bogen, ihr Stück `i`, gegen seine Richtung? `prev`: wo der Lauf
+/// gerade steht. Am Anfang der Schleife entscheidet das nächste Stück.
+fn arc_runs_backwards(arc: &ArcPlan, prev: Option<DVec2>, l: &OffsetLoop, i: usize) -> bool {
+    let n = l.pieces.len();
+    match prev {
+        Some(prev) => arc.start != prev && arc.end == prev,
+        None if n > 1 && (l.closed || i + 1 < n) => {
+            let next = start_points(&l.pieces[(i + 1) % n]);
+            !next.contains(&arc.end) && next.contains(&arc.start)
+        }
+        None => false,
+    }
+}
+
 fn loop_outline(l: &OffsetLoop, steps: usize) -> Vec<DVec2> {
     let mut out: Vec<DVec2> = Vec::new();
-    let n = l.pieces.len();
     for (i, p) in l.pieces.iter().enumerate() {
         let mut pl = piece_polyline(p, steps);
-        if let OffsetGeom::Arc(arc) = &p.geom {
-            let backwards = match out.last() {
-                Some(prev) => arc.start != *prev && arc.end == *prev,
-                None if n > 1 && (l.closed || i + 1 < n) => {
-                    let next = start_points(&l.pieces[(i + 1) % n]);
-                    !next.contains(&arc.end) && next.contains(&arc.start)
-                }
-                None => false,
-            };
-            if backwards {
-                pl.reverse();
-            }
+        if let OffsetGeom::Arc(arc) = &p.geom
+            && arc_runs_backwards(arc, out.last().copied(), l, i)
+        {
+            pl.reverse();
         }
         let skip = usize::from(out.last() == pl.first());
         out.extend_from_slice(&pl[skip..]);
@@ -1609,5 +1639,544 @@ impl Sketch {
             dropped: all.len() - kept.len(),
             closed_sources,
         })
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Abhängigkeiten
+// ---------------------------------------------------------------------------------------------
+
+/// Anfang und Ende jedes Stücks im Lauf der Schleife.
+fn travel(l: &OffsetLoop) -> Vec<(DVec2, DVec2)> {
+    let mut out: Vec<(DVec2, DVec2)> = Vec::with_capacity(l.pieces.len());
+    for (i, p) in l.pieces.iter().enumerate() {
+        let way = match &p.geom {
+            OffsetGeom::Line { a, b } => (*a, *b),
+            OffsetGeom::Arc(arc) if arc_runs_backwards(arc, out.last().map(|w| w.1), l, i) => {
+                (arc.end, arc.start)
+            }
+            OffsetGeom::Arc(arc) => (arc.start, arc.end),
+            OffsetGeom::Circle { center, radius } => {
+                let at = *center + DVec2::new(*radius, 0.0);
+                (at, at)
+            }
+            OffsetGeom::Approx { points } => (points[0], points[points.len() - 1]),
+        };
+        out.push(way);
+    }
+    out
+}
+
+/// Einheitsrichtung, in der das Stück den Endpunkt `at` verlässt. Näherungen und Kreise: `None`,
+/// sie haben keine tangentiale Fuge mit Abhängigkeit.
+fn leaving(geom: &OffsetGeom, at: DVec2) -> Option<DVec2> {
+    match geom {
+        OffsetGeom::Line { a, b } => (if *a == at { *b - *a } else { *a - *b }).try_normalize(),
+        OffsetGeom::Arc(arc) => {
+            let radial = (at - arc.center).try_normalize()?;
+            Some(if arc.start == at {
+                radial.perp()
+            } else {
+                -radial.perp()
+            })
+        }
+        OffsetGeom::Circle { .. } | OffsetGeom::Approx { .. } => None,
+    }
+}
+
+/// Läuft die Schleife von `p` in `at` tangential nach `q` weiter? Dieselbe Regel wie beim Fügen.
+fn tangent_joint(p: &OffsetGeom, q: &OffsetGeom, at: DVec2, d: f64, tol: &Tolerance) -> bool {
+    let (Some(u), Some(v)) = (leaving(p, at), leaving(q, at)) else {
+        return false;
+    };
+    let sine = u.perp_dot(v).abs();
+    u.dot(v) < 0.0 && (sine <= tol.angular || sine * d.abs() <= tol.linear)
+}
+
+/// Zwei Linien auf einer Geraden, die sich in `at` tangential treffen.
+fn is_bridge(p: &OffsetPiece, q: &OffsetPiece, at: DVec2, d: f64, tol: &Tolerance) -> bool {
+    matches!(
+        (&p.geom, &q.geom),
+        (OffsetGeom::Line { .. }, OffsetGeom::Line { .. })
+    ) && tangent_joint(&p.geom, &q.geom, at, d, tol)
+}
+
+/// Liegen die Stücke auf demselben Träger (Linien auf einer Geraden, Bögen um dieselbe Mitte)?
+/// Dann hält keine Zeile die Fuge an ihrem Platz: Sie kann auf dem Träger gleiten.
+fn same_carrier(p: &OffsetGeom, q: &OffsetGeom) -> bool {
+    match (p, q) {
+        (OffsetGeom::Line { .. }, OffsetGeom::Line { .. }) => true,
+        (OffsetGeom::Arc(x), OffsetGeom::Arc(y)) => x.center == y.center,
+        _ => false,
+    }
+}
+
+/// Punkte der Fugen: Gleiche Knoten sind bitgleich, also genügt die Lage als Schlüssel.
+#[derive(Default)]
+struct Joints(HashMap<(u64, u64), PointId>);
+
+impl Joints {
+    /// Die Fuge an der Lage `at` des Plans ist schon angelegt, als `id`.
+    fn seed(&mut self, at: DVec2, id: PointId) {
+        self.0.insert((at.x.to_bits(), at.y.to_bits()), id);
+    }
+
+    fn at(&mut self, s: &mut Sketch, p: DVec2) -> Result<PointId, SketchError> {
+        let key = (p.x.to_bits(), p.y.to_bits());
+        if let Some(&id) = self.0.get(&key) {
+            return Ok(id);
+        }
+        let id = s.add_point(p.x, p.y)?;
+        self.0.insert(key, id);
+        Ok(id)
+    }
+}
+
+impl Sketch {
+    /// Mitte des Bogens oder Kreises `c`; sie muss noch an der Lage `at` des Plans stehen.
+    fn offset_center(&self, c: CurveId, at: DVec2) -> Result<PointId, SketchError> {
+        match self.curves[c].kind {
+            CurveKind::Arc { center, .. } | CurveKind::Circle { center, .. }
+                if self.pos(center).distance(at) <= self.tolerance().linear =>
+            {
+                Ok(center)
+            }
+            _ => Err(SketchError::UnknownObject),
+        }
+    }
+
+    /// Legt ein Stück an. Eine gebundene Kopie teilt die Mitte mit der Vorlage, eine freie nicht.
+    fn add_offset_piece(
+        &mut self,
+        piece: &OffsetPiece,
+        tied: bool,
+        joints: &mut Joints,
+    ) -> Result<CurveId, SketchError> {
+        let center = |s: &mut Sketch, at: DVec2| {
+            if tied {
+                s.offset_center(piece.source, at)
+            } else {
+                s.add_point(at.x, at.y)
+            }
+        };
+        let curve = match &piece.geom {
+            OffsetGeom::Line { a, b } => {
+                let (a, b) = (joints.at(self, *a)?, joints.at(self, *b)?);
+                self.add_line(a, b)?
+            }
+            OffsetGeom::Arc(arc) => {
+                let m = center(self, arc.center)?;
+                let (start, end) = (joints.at(self, arc.start)?, joints.at(self, arc.end)?);
+                self.add_arc(m, start, end)?
+            }
+            OffsetGeom::Circle { center: c, radius } => {
+                let m = center(self, *c)?;
+                self.add_circle(m, *radius)?
+            }
+            OffsetGeom::Approx { points } => {
+                let last = points.len() - 1;
+                let mut ids = Vec::with_capacity(points.len());
+                for (k, p) in points.iter().enumerate() {
+                    ids.push(if k == 0 || k == last {
+                        joints.at(self, *p)?
+                    } else {
+                        self.add_point(p.x, p.y)?
+                    });
+                }
+                self.add_spline(&ids)?
+            }
+        };
+        // Stil wie die Vorlage; die Kopie einer festen Kurve (projizierte Kante) ist normal.
+        let source = &self.curves[piece.source];
+        let (construction, centerline) = (source.construction, source.centerline);
+        if !self.curve_has_fixed_point(piece.source) {
+            self.set_construction(curve, construction)?;
+            if centerline {
+                self.set_centerline(curve, true)?;
+            }
+        }
+        Ok(curve)
+    }
+
+    fn curve_has_fixed_point(&self, c: CurveId) -> bool {
+        let points = self.curves[c].kind.points();
+        self.constraints()
+            .any(|(_, d)| matches!(d.kind, ConstraintKind::Fixed(p, ..) if points.contains(&p)))
+    }
+
+    /// Der Punkt der Vorlage `source`, um den der Rollkreis läuft. Am Kreis ein neuer
+    /// Konstruktionspunkt, denn dort gibt es keinen.
+    fn roller_center(
+        &mut self,
+        source: CurveId,
+        created: &mut Vec<ConstraintId>,
+    ) -> Result<PointId, SketchError> {
+        match self.curves[source].kind {
+            CurveKind::Line { a, .. } => Ok(a),
+            CurveKind::Arc { start, .. } => Ok(start),
+            CurveKind::Circle { center, radius } => {
+                let m = self.pos(center);
+                let helper = self.add_point(m.x + self.vars[radius], m.y)?;
+                self.points[helper].construction = true;
+                created.push(self.add_constraint(ConstraintKind::Horizontal(
+                    LineOrPoints::Points(center, helper),
+                ))?);
+                created.push(self.add_constraint(ConstraintKind::PointOnCurve(helper, source))?);
+                Ok(helper)
+            }
+            _ => Err(SketchError::UnknownObject),
+        }
+    }
+
+    /// Querlinie am offenen Ende oder an der gleitenden Fuge `at` der Kopie, wenn sie genau
+    /// gegenüber einem Ende der Vorlage liegt, und ob es sie gibt. Ein vom Trimmen gekürztes Ende
+    /// bleibt frei: Dort gäbe es keine Lage ohne Bewegung.
+    fn add_cross_line(
+        &mut self,
+        source: CurveId,
+        at: DVec2,
+        distance: f64,
+        joints: &mut Joints,
+        created: &mut Vec<ConstraintId>,
+    ) -> Result<bool, SketchError> {
+        let tol = self.tolerance().linear;
+        let joint = joints.at(self, at)?;
+        match self.curves[source].kind {
+            CurveKind::Line { .. } => {
+                let Some(q) = self.opposite_line_end(source, at, distance) else {
+                    return Ok(false);
+                };
+                let line = self.fillet_helper_line(q, joint)?;
+                created.push(self.add_constraint(ConstraintKind::Perpendicular(source, line))?);
+            }
+            CurveKind::Arc { center, start, end } => {
+                let m = self.pos(center);
+                let opposite = [start, end].into_iter().find(|&q| {
+                    (self.pos(q) - m).try_normalize().is_some_and(|dir| {
+                        let v = at - m;
+                        v.dot(dir) > 0.0 && dir.perp_dot(v).abs() <= tol
+                    })
+                });
+                let Some(q) = opposite else {
+                    return Ok(false);
+                };
+                let line = self.fillet_helper_line(center, q)?;
+                created.push(self.add_constraint(ConstraintKind::PointOnCurve(joint, line))?);
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    /// Das Ende der Linie `source`, dem `at` im Abstand `distance` genau gegenüberliegt.
+    fn opposite_line_end(&self, source: CurveId, at: DVec2, distance: f64) -> Option<PointId> {
+        let tol = self.tolerance().linear;
+        let CurveKind::Line { a, b } = self.curves[source].kind else {
+            return None;
+        };
+        let dir = (self.pos(b) - self.pos(a)).try_normalize()?;
+        [a, b].into_iter().find(|&q| {
+            let v = at - self.pos(q);
+            v.dot(dir).abs() <= tol && (v.length() - distance).abs() <= tol
+        })
+    }
+
+    /// Eine Fuge zweier Linien auf einer Geraden, zwischen denen Stücke entfallen sind, liegt
+    /// nirgends gegenüber der Vorlage. Der Plan setzt sie irgendwo auf die Gerade, und schon beim
+    /// nächsten Maß läge sie hinter einem der anderen Enden. Sie kommt in die Mitte der beiden
+    /// Linien, an der Lage der Kurven ändert das nichts, und `Equal` hält sie dort.
+    fn seed_bridge_joints(
+        &mut self,
+        l: &OffsetLoop,
+        distance: f64,
+        joints: &mut Joints,
+    ) -> Result<(), SketchError> {
+        let n = l.pieces.len();
+        let way = travel(l);
+        let tolerance = *self.tolerance();
+        for i in 0..n {
+            let j = (i + 1) % n;
+            let (p, q) = (&l.pieces[i], &l.pieces[j]);
+            if (l.closed || i + 1 < n)
+                && i != j
+                && is_bridge(p, q, way[i].1, distance, &tolerance)
+                && self
+                    .opposite_line_end(p.source, way[i].1, distance)
+                    .is_none()
+                && self
+                    .opposite_line_end(q.source, way[i].1, distance)
+                    .is_none()
+            {
+                let mid = (way[i].0 + way[j].1) * 0.5;
+                let id = self.add_point(mid.x, mid.y)?;
+                joints.seed(way[i].1, id);
+            }
+        }
+        Ok(())
+    }
+
+    /// Legt den Versatz aus `plan` an (Entscheidung 3, 5, 7 und 8 des Plans): erst alle Kurven,
+    /// dann `Parallel`, `Tangent`, Rollkreise und Querlinien. Was dabei überzählig ist (bei
+    /// rundum tangentialer Kette eine Zeile), wird wieder entfernt. Die Werte der Skizze bleiben
+    /// dabei unberührt. Über [`OFFSET_TIED_MAX`] Stücken nur die Kurven. Bei einem Fehler bleibt
+    /// die Skizze unverändert.
+    pub fn add_offset(&mut self, plan: &OffsetPlan) -> Result<OffsetIds, SketchError> {
+        self.atomically(|s| {
+            let tolerance = *s.tolerance();
+            let tied = plan.piece_count() <= OFFSET_TIED_MAX;
+            let mut joints = Joints::default();
+            let mut curves = Vec::with_capacity(plan.piece_count());
+            let mut built = Vec::with_capacity(plan.loops.len());
+            for l in &plan.loops {
+                for piece in &l.pieces {
+                    s.check_curve(piece.source)?;
+                }
+                if tied {
+                    s.seed_bridge_joints(l, plan.distance.abs(), &mut joints)?;
+                }
+                let mut ids = Vec::with_capacity(l.pieces.len());
+                for piece in &l.pieces {
+                    ids.push(s.add_offset_piece(piece, tied, &mut joints)?);
+                }
+                curves.extend_from_slice(&ids);
+                built.push(ids);
+            }
+            if !tied {
+                return Ok(OffsetIds {
+                    curves,
+                    rollers: Vec::new(),
+                    distance_dim: None,
+                    tied: false,
+                });
+            }
+
+            let mut created = Vec::new();
+            for (l, ids) in plan.loops.iter().zip(&built) {
+                for (piece, &k) in l.pieces.iter().zip(ids) {
+                    if matches!(piece.geom, OffsetGeom::Line { .. }) {
+                        created.push(s.add_constraint(ConstraintKind::Parallel(piece.source, k))?);
+                    }
+                }
+            }
+            // Je Schleife die Stücke, die einen Lauf beginnen, und die Fugen, die gleiten könnten.
+            let mut leads = Vec::with_capacity(built.len());
+            let mut sliding = Vec::new();
+            for (l, ids) in plan.loops.iter().zip(&built) {
+                let n = l.pieces.len();
+                let way = travel(l);
+                let tangent: Vec<bool> = (0..n)
+                    .map(|i| {
+                        (l.closed || i + 1 < n)
+                            && tangent_joint(
+                                &l.pieces[i].geom,
+                                &l.pieces[(i + 1) % n].geom,
+                                way[i].1,
+                                plan.distance,
+                                &tolerance,
+                            )
+                    })
+                    .collect();
+                for i in (0..n).filter(|&i| tangent[i]) {
+                    if same_carrier(&l.pieces[i].geom, &l.pieces[(i + 1) % n].geom) {
+                        sliding.push((
+                            &l.pieces[i],
+                            &l.pieces[(i + 1) % n],
+                            ids[i],
+                            ids[(i + 1) % n],
+                            way[i].1,
+                        ));
+                    } else {
+                        let kind = ConstraintKind::Tangent(ids[i], ids[(i + 1) % n]);
+                        created.push(s.add_constraint(kind)?);
+                    }
+                }
+                let mut starts: Vec<usize> =
+                    (0..n).filter(|&i| !tangent[(i + n - 1) % n]).collect();
+                if starts.is_empty() {
+                    starts.push(0);
+                }
+                leads.push(starts);
+            }
+
+            let mut rollers: Vec<CurveId> = Vec::new();
+            let mut distance_dim = None;
+            let rho = plan.distance.abs();
+            for ((l, ids), starts) in plan.loops.iter().zip(&built).zip(&leads) {
+                for &i in starts {
+                    let piece = &l.pieces[i];
+                    if matches!(piece.geom, OffsetGeom::Approx { .. }) {
+                        continue;
+                    }
+                    let center = s.roller_center(piece.source, &mut created)?;
+                    let roller = s.add_circle(center, rho)?;
+                    s.set_construction(roller, true)?;
+                    match rollers.first() {
+                        None => {
+                            distance_dim =
+                                Some(s.add_constraint(ConstraintKind::Radius(roller, rho))?);
+                        }
+                        Some(&first) => {
+                            created.push(s.add_constraint(ConstraintKind::Equal(first, roller))?);
+                        }
+                    }
+                    let touch = if matches!(piece.geom, OffsetGeom::Line { .. }) {
+                        ConstraintKind::Tangent(ids[i], roller)
+                    } else {
+                        ConstraintKind::Tangent(roller, ids[i])
+                    };
+                    created.push(s.add_constraint(touch)?);
+                    rollers.push(roller);
+                }
+            }
+            for l in plan.loops.iter().filter(|l| !l.closed) {
+                let way = travel(l);
+                let (first, last) = (&l.pieces[0], &l.pieces[l.pieces.len() - 1]);
+                s.add_cross_line(first.source, way[0].0, rho, &mut joints, &mut created)?;
+                let end = way[way.len() - 1].1;
+                s.add_cross_line(last.source, end, rho, &mut joints, &mut created)?;
+            }
+            for (p, q, x, y, at) in sliding {
+                if !s.add_cross_line(p.source, at, rho, &mut joints, &mut created)?
+                    && !s.add_cross_line(q.source, at, rho, &mut joints, &mut created)?
+                    && is_bridge(p, q, at, plan.distance, &tolerance)
+                {
+                    created.push(s.add_constraint(ConstraintKind::Equal(x, y))?);
+                }
+            }
+
+            // Auf einer Kopie gelöst: Hier soll sich nichts bewegen.
+            let report = s.clone().solve();
+            for id in report.redundant {
+                if created.contains(&id) {
+                    s.remove_constraint(id)?;
+                }
+            }
+            let tied = !rollers.is_empty();
+            Ok(OffsetIds {
+                curves,
+                rollers,
+                distance_dim,
+                tied,
+            })
+        })
+    }
+
+    /// Die Punkte der Vorlage, die stehen bleiben, wenn sich das Versatzmaß `dim` ändert. `None`,
+    /// wenn `dim` kein solches Maß ist: ein `Radius` an einem Konstruktionskreis, der tangential an
+    /// einer Kurve hängt und dessen Mitte zu einer Vorlage gehört.
+    ///
+    /// Das Ergebnis sind alle Punkte aller Kurven, die über gemeinsame Enden von den Mitten der
+    /// ganzen `Equal`-Gruppe aus erreichbar sind, samt diesen Mitten. Gelaufen wird im Stil der
+    /// Kopie (bei einer Vorlage aus Konstruktionskurven über Konstruktionskurven) und über feste
+    /// Kurven, deren Kopie ja normal ist; nie über Querlinien, also nie zur Kopie hinüber.
+    pub fn offset_hold_points(&self, dim: ConstraintId) -> Option<Vec<PointId>> {
+        let ConstraintKind::Radius(first, _) = self.constraint(dim)?.kind else {
+            return None;
+        };
+        let is_roller = |c: CurveId| {
+            self.curve(c)
+                .is_some_and(|d| d.construction && matches!(d.kind, CurveKind::Circle { .. }))
+        };
+        if !is_roller(first) {
+            return None;
+        }
+        let active = || self.constraints().filter(|(_, d)| d.enabled && !d.driven);
+        let mut group = vec![first];
+        let mut next = 0;
+        while let Some(&c) = group.get(next) {
+            next += 1;
+            for (_, d) in active() {
+                if let ConstraintKind::Equal(x, y) = d.kind
+                    && (x == c || y == c)
+                {
+                    let other = if x == c { y } else { x };
+                    if is_roller(other) && !group.contains(&other) {
+                        group.push(other);
+                    }
+                }
+            }
+        }
+        let touching = |c: CurveId| -> Vec<CurveId> {
+            active()
+                .filter_map(|(_, d)| match d.kind {
+                    ConstraintKind::Tangent(x, y) if x == c => Some(y),
+                    ConstraintKind::Tangent(x, y) if y == c => Some(x),
+                    _ => None,
+                })
+                .collect()
+        };
+        let copies: Vec<CurveId> = group.iter().flat_map(|&c| touching(c)).collect();
+        if copies.is_empty() {
+            return None;
+        }
+        // Der Stil der Vorlage: normal, sobald eine Kopie normal ist.
+        let construction = !copies.iter().any(|&c| !self.curves[c].construction);
+        let cross_line = |c: CurveId| {
+            matches!(self.curves[c].kind, CurveKind::Line { .. })
+                && self.curves[c].construction
+                && active().any(|(_, d)| match d.kind {
+                    ConstraintKind::Perpendicular(_, x) | ConstraintKind::PointOnCurve(_, x) => {
+                        x == c
+                    }
+                    _ => false,
+                })
+        };
+        let ends_of = |kind: &CurveKind| -> Vec<PointId> {
+            match kind {
+                CurveKind::Line { a, b } => vec![*a, *b],
+                CurveKind::Arc { start, end, .. } | CurveKind::EllipticArc { start, end, .. } => {
+                    vec![*start, *end]
+                }
+                CurveKind::Spline { points } => vec![points[0], points[points.len() - 1]],
+                CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => Vec::new(),
+            }
+        };
+        let walkable: Vec<(CurveId, Vec<PointId>)> = self
+            .curves()
+            .filter(|(c, d)| {
+                (d.construction == construction || self.curve_has_fixed_point(*c))
+                    && !group.contains(c)
+                    && !copies.contains(c)
+                    && !cross_line(*c)
+            })
+            .map(|(c, d)| (c, ends_of(&d.kind)))
+            .collect();
+        let centers: Vec<PointId> = group
+            .iter()
+            .filter_map(|&c| match self.curves[c].kind {
+                CurveKind::Circle { center, .. } => Some(center),
+                _ => None,
+            })
+            .collect();
+        let mut reached: Vec<CurveId> = Vec::new();
+        // Der Rollkreis eines Kreises sitzt auf einem Hilfspunkt, der nur auf der Vorlage liegt.
+        for (_, d) in active() {
+            if let ConstraintKind::PointOnCurve(p, q) = d.kind
+                && centers.contains(&p)
+                && (self.curves[q].construction == construction || self.curve_has_fixed_point(q))
+                && matches!(self.curves[q].kind, CurveKind::Circle { .. })
+            {
+                reached.push(q);
+            }
+        }
+        let mut frontier = centers.clone();
+        while let Some(p) = frontier.pop() {
+            for (c, ends) in &walkable {
+                if ends.contains(&p) && !reached.contains(c) {
+                    reached.push(*c);
+                    frontier.extend(ends.iter().copied());
+                }
+            }
+        }
+        if reached.is_empty() {
+            return None;
+        }
+        let mut out = centers;
+        for c in reached {
+            out.extend(self.curves[c].kind.points());
+        }
+        out.sort();
+        out.dedup();
+        Some(out)
     }
 }

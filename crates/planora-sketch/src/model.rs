@@ -108,7 +108,7 @@ pub type CurveId = Id<CurveData>;
 pub struct Sketch {
     pub name: String,
     frame: Frame,
-    tol: Tolerance,
+    pub(crate) tol: Tolerance,
     pub(crate) vars: Vec<f64>,
     pub(crate) points: Arena<PointData>,
     pub(crate) curves: Arena<CurveData>,

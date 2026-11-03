@@ -18,7 +18,7 @@
 //! Änderung an Objekten oder Abhängigkeiten leert den Speicher. So rechnet beim Ziehen nur die
 //! Gruppe mit dem gezogenen Punkt.
 
-use crate::constraint::{ConstraintId, SHARED_END_TANGENT_DRIFT};
+use crate::constraint::{ConstraintId, ConstraintKind, SHARED_END_TANGENT_DRIFT};
 use crate::error::SketchError;
 use crate::linalg::{Matrix, analyze_rows, cholesky_solve};
 use crate::model::{CurveId, CurveKind, PointId, Sketch};
@@ -62,6 +62,10 @@ const MAX_VALUE_STEPS: f64 = 128.0;
 const FREE_COMPONENT: f64 = 1e-6;
 /// Versuche mit steigender Dämpfung innerhalb eines Schritts.
 const DAMPING_TRIES: usize = 30;
+/// So oft setzt [`Sketch::solve_holding`] die gehaltenen Punkte zurück und löst nach.
+const HOLD_ROUNDS: usize = 8;
+/// Um so viel genauer zieht [`Sketch::solve_holding`] zum Schluss nach.
+const HOLD_POLISH: f64 = 1e-2;
 
 /// Ergebnis eines Solver-Laufs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -279,6 +283,79 @@ impl Sketch {
     /// Löst alle aktiven Abhängigkeiten. Nicht lösbare Gruppen bleiben unverändert.
     pub fn solve(&mut self) -> SolveReport {
         self.solve_with_soft(&[])
+    }
+
+    /// Löst bei festgehaltenen Punkten `hold`, ohne dass sie sich auch nur im letzten Bit bewegen:
+    /// auf einer Kopie mit vorübergehendem `Fixed`. Gelöst: Die Werte werden übernommen, `true`.
+    /// Sonst `false`, und die Skizze bleibt, wie sie ist.
+    pub fn solve_holding(&mut self, hold: &[PointId]) -> bool {
+        let mut trial = self.clone();
+        for &p in hold {
+            let Ok(at) = self.point_xy(p) else {
+                return false;
+            };
+            if trial
+                .add_constraint(ConstraintKind::Fixed(p, at.x, at.y))
+                .is_err()
+            {
+                return false;
+            }
+        }
+        let pinned: Vec<(usize, f64)> = self
+            .held_variables(hold)
+            .into_iter()
+            .map(|v| (v, self.vars[v]))
+            .collect();
+        if !trial.settle_holding(&pinned) {
+            return false;
+        }
+        // Lange Kopien sammeln den Rest der Zeilen auf: einmal genauer nachziehen, wenn es geht.
+        let mut fine = trial.clone();
+        fine.tol.linear *= HOLD_POLISH;
+        fine.touch_structure();
+        if fine.settle_holding(&pinned) {
+            trial.vars = fine.vars;
+        }
+        self.vars = trial.vars;
+        self.touch_values();
+        true
+    }
+
+    /// Löst, setzt `pinned` zurück und löst nach, bis sich nichts mehr rührt: Der Löser kommt nur
+    /// bis auf seine Schranke an die festen Werte heran. `false`, wenn es nicht gelingt.
+    fn settle_holding(&mut self, pinned: &[(usize, f64)]) -> bool {
+        for _ in 0..HOLD_ROUNDS {
+            let report = self.solve();
+            if report.status != SolveStatus::Solved {
+                return false;
+            }
+            if report.iterations == 0 {
+                return true;
+            }
+            for &(v, value) in pinned {
+                self.vars[v] = value;
+            }
+        }
+        false
+    }
+
+    /// Die Variablen von `hold` und die Radien der Kreise, die durch sie schon feststehen (Mitte
+    /// und ein Punkt mit `PointOnCurve` in `hold`).
+    fn held_variables(&self, hold: &[PointId]) -> Vec<usize> {
+        let mut vars: Vec<usize> = Vec::with_capacity(hold.len() * 2);
+        for &p in hold {
+            vars.extend([self.points[p].x, self.points[p].y]);
+        }
+        for (_, d) in self.constraints().filter(|(_, d)| d.enabled) {
+            if let ConstraintKind::PointOnCurve(p, c) = d.kind
+                && hold.contains(&p)
+                && let CurveKind::Circle { center, radius } = self.curves[c].kind
+                && hold.contains(&center)
+            {
+                vars.push(radius);
+            }
+        }
+        vars
     }
 
     /// Baut Residuen und Jacobi-Matrix der Gruppe an der Stelle `x`, je nach `which` (alle, ohne eine Abhängigkeit, oder mit Restwerten für Tangenten).

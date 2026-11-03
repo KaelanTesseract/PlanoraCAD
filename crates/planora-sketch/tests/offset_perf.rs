@@ -929,3 +929,85 @@ fn trimming_sweep_report() {
     assert_eq!(total.false_vanish, 0);
     assert_eq!(total.asymmetric, 0);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Versatz mit Abhängigkeiten
+// ---------------------------------------------------------------------------------------------
+
+fn regular(n: usize, big: f64) -> (Sketch, Vec<CurveId>) {
+    let pts: Vec<(f64, f64)> = (0..n)
+        .map(|k| {
+            let a = TAU * k as f64 / n as f64;
+            (big * a.cos(), big * a.sin())
+        })
+        .collect();
+    rounded(&pts, &[0.0])
+}
+
+#[test]
+#[ignore = "Messtest, nur im Release-Build sinnvoll"]
+fn tied_offset_of_64_pieces_under_100_ms() {
+    let (s, curves) = regular(64, 200.0);
+    let chains = s.ordered_chains(&curves).unwrap();
+    let plan = s.offset_plan(&chains, -5.0).unwrap();
+    let mut times = Vec::new();
+    for _ in 0..11 {
+        let mut t = s.clone();
+        let start = Instant::now();
+        let ids = t.add_offset(&plan).unwrap();
+        times.push(start.elapsed().as_secs_f64() * 1e3);
+        assert!(ids.tied);
+        assert_eq!(ids.rollers.len(), 64);
+    }
+    times.sort_by(f64::total_cmp);
+    let ms = times[times.len() / 2];
+    println!("n = 64 anlegen: Median {ms:.1} ms");
+    assert!(ms < 100.0, "Median {ms:.1} ms");
+}
+
+/// Die ganze Folge von `distance_sweep_on_a_polygon_of_64` in `offset_constraints`, beide Seiten.
+#[test]
+#[ignore = "Messtest, nur im Release-Build sinnvoll"]
+fn distance_sweep_of_64_pieces() {
+    for sign in [1.0, -1.0] {
+        let (mut s, curves) = regular(64, 200.0);
+        let chains = s.ordered_chains(&curves).unwrap();
+        let plan = s.offset_plan(&chains, sign * 5.0).unwrap();
+        let ids = s.add_offset(&plan).unwrap();
+        let dim = ids.distance_dim.unwrap();
+        let hold = s.offset_hold_points(dim).unwrap();
+        let held: Vec<DVec2> = hold.iter().map(|&p| s.point_xy(p).unwrap()).collect();
+        let source = |sk: &Sketch, k: usize| match sk.curve(curves[k]).unwrap().kind {
+            planora_sketch::model::CurveKind::Line { a, b } => {
+                (sk.point_xy(a).unwrap(), sk.point_xy(b).unwrap())
+            }
+            _ => unreachable!(),
+        };
+        let start = Instant::now();
+        for k in 0..=100 {
+            let v = 0.5 + 49.5 * k as f64 / 100.0;
+            let before = s.clone();
+            s.set_constraint_value(dim, v).unwrap();
+            assert!(s.solve_holding(&hold), "d = {v}");
+            assert!(!planora_sketch::shapes::folded_over(&before, &s), "d = {v}");
+            let now: Vec<DVec2> = hold.iter().map(|&p| s.point_xy(p).unwrap()).collect();
+            assert_eq!(now, held, "d = {v}");
+            for (i, &c) in ids.curves.iter().enumerate() {
+                let planora_sketch::model::CurveKind::Line { a, b } = s.curve(c).unwrap().kind
+                else {
+                    unreachable!()
+                };
+                let (q0, q1) = source(&s, i);
+                let dir = (q1 - q0).normalize();
+                for p in [s.point_xy(a).unwrap(), s.point_xy(b).unwrap()] {
+                    let e = dir.perp_dot(p - q0);
+                    assert!((e - sign * v).abs() < 1e-6, "d = {v}, Stück {i}: {e}");
+                }
+            }
+        }
+        println!(
+            "n = 64, Seite {sign}: {:.1} ms je Maßänderung",
+            start.elapsed().as_secs_f64() * 1e3 / 101.0
+        );
+    }
+}

@@ -801,7 +801,11 @@ impl Sketch {
         Ok(())
     }
 
-    fn fillet_helper_line(&mut self, a: PointId, b: PointId) -> Result<CurveId, SketchError> {
+    pub(crate) fn fillet_helper_line(
+        &mut self,
+        a: PointId,
+        b: PointId,
+    ) -> Result<CurveId, SketchError> {
         let line = self.add_line(a, b)?;
         self.set_construction(line, true)?;
         Ok(line)
