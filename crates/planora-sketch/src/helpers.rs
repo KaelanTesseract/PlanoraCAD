@@ -171,7 +171,11 @@ impl Sketch {
     }
 
     /// Neuer Punkt an `xy` mit der Konstruktionseigenschaft von `like`.
-    fn add_point_like(&mut self, like: PointId, xy: DVec2) -> Result<PointId, SketchError> {
+    pub(crate) fn add_point_like(
+        &mut self,
+        like: PointId,
+        xy: DVec2,
+    ) -> Result<PointId, SketchError> {
         let p = self.add_point(xy.x, xy.y)?;
         self.points[p].construction = self.points[like].construction;
         Ok(p)

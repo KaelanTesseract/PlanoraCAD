@@ -23,7 +23,7 @@ use std::collections::HashSet;
 const PREVIEW_STEPS_PER_TURN: usize = 64;
 /// Vielfaches von `tol.linear` bzw. `tol.angular`, bis zu dem eine Abhängigkeit nach dem
 /// Ändern als erfüllt gilt (Entscheidung 7).
-const SETTLE_FACTOR: f64 = 10.0;
+pub(crate) const SETTLE_FACTOR: f64 = 10.0;
 
 /// Das Stück, das [`Sketch::trim`] an derselben Stelle löschen würde.
 #[derive(Clone, Debug, PartialEq)]
@@ -745,7 +745,7 @@ impl Sketch {
         }
     }
 
-    fn drop_constraint(&mut self, id: ConstraintId) {
+    pub(crate) fn drop_constraint(&mut self, id: ConstraintId) {
         self.constraints[id].alive = false;
         self.touch_structure();
     }

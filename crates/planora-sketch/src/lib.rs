@@ -27,6 +27,7 @@ pub mod snap;
 pub mod solid;
 pub mod solver;
 pub mod tangent_circles;
+pub mod transform;
 pub mod triangulate;
 
 pub use constraint::{ConstraintData, ConstraintId, ConstraintKind, Evaluation, LineOrPoints};
@@ -45,3 +46,4 @@ pub use shapes::{ArcSlotIds, CenterRectIds, PolygonIds, SlotIds, SlotStyle};
 pub use snap::{AlignHit, Snap, SnapHit, SnapIndex};
 pub use solid::{extrude_profile, revolve_profile};
 pub use solver::{Drag, SolveReport, SolveStatus};
+pub use transform::{CopyMap, Similarity, TransformBlock, TransformReport, TransformSet};
