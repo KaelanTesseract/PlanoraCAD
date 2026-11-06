@@ -2806,14 +2806,25 @@ pub(crate) fn checked_value(
 
 /// Kleinster Abstand der Breite eines Langlochs „Gesamt“ unter seiner Gesamtlänge, als Anteil der
 /// Gesamtlänge. Darunter liegen die Mitten fast aufeinander, und `|a − b|` der Zeile
-/// `SlotOverall` ist bei a = b nicht differenzierbar: Gemessen (dichte Folgen, L 11…60) scheiterten
-/// Änderungen der Breite bis zu einem Abstand von 0,03 % der Gesamtlänge mit einer irreführenden
-/// Meldung („Widerspruch“ oder „klappt um“), auch auf dem Rückweg.
+/// `SlotOverall` ist bei a = b nicht differenzierbar: Gemessen (dichte Folgen hin und zurück,
+/// L 0,5…60) scheiterten Änderungen von Breite oder Gesamtlänge mit einer irreführenden Meldung
+/// („Widerspruch“ oder „klappt um“) bis zu einem Abstand von 0,016 mm bei L 60 (0,03 %).
 const SLOT_OVERALL_MIN_GAP: f64 = 1e-3;
+/// Untergrenze des Abstands in mm für kleine Langlöcher: Dort scheiterte es bis etwa 0,0096 mm
+/// (L 0,5), 0,0072 mm (L 1), 0,0067 mm (L 10), unabhängig von der Größe; doppelter Spielraum.
+const SLOT_OVERALL_MIN_GAP_ABS: f64 = 0.02;
+
+/// Kleinster erlaubter Abstand `L − W` beim Langloch „Gesamt“ mit Gesamtlänge `l` (mm):
+/// `max(0,1 % · l, 0,02 mm)`.
+#[doc(hidden)]
+pub fn slot_overall_min_gap(l: f64) -> f64 {
+    (SLOT_OVERALL_MIN_GAP * l).max(SLOT_OVERALL_MIN_GAP_ABS)
+}
 
 /// Lässt das Maß `kind` (neuer Wert) zwischen Gesamtlänge und Breite eines Langlochs „Gesamt“
-/// genug Abstand (siehe [`SLOT_OVERALL_MIN_GAP`])? Geprüft wird die Gesamtlänge gegen ein
-/// bestimmendes Durchmesser- oder Radiusmaß ihrer Kappe; ohne ein solches Maß ist die Breite frei.
+/// genug Abstand ([`slot_overall_min_gap`])? Geprüft wird die Gesamtlänge gegen ein
+/// bestimmendes Durchmesser- oder Radiusmaß ihrer Kappe, ohne ein solches Maß gegen die gemessene
+/// Breite.
 fn slot_overall_gap_ok(sk: &Sketch, kind: &ConstraintKind) -> Result<(), Msg> {
     use ConstraintKind as K;
     let width_of = |cap: CurveId| {
@@ -2835,12 +2846,17 @@ fn slot_overall_gap_ok(sk: &Sketch, kind: &ConstraintKind) -> Result<(), Msg> {
             .collect()
     };
     let pairs: Vec<(f64, f64)> = match *kind {
-        K::SlotOverall(_, _, cap, l) => width_of(cap).map(|w| (l, w)).into_iter().collect(),
+        // Ohne Breitenmaß gilt die gemessene Breite: Sonst schrumpfte der Löser die freie Breite.
+        K::SlotOverall(_, _, cap, l) => width_of(cap)
+            .or_else(|| sk.radius(cap).map(|r| 2.0 * r))
+            .map(|w| (l, w))
+            .into_iter()
+            .collect(),
         K::Diameter(cap, d) => lengths_of(cap, d),
         K::Radius(cap, r) => lengths_of(cap, 2.0 * r),
         _ => Vec::new(),
     };
-    if pairs.iter().any(|&(l, w)| l - w < SLOT_OVERALL_MIN_GAP * l) {
+    if pairs.iter().any(|&(l, w)| l - w < slot_overall_min_gap(l)) {
         return Err(crate::msg!("sketch-slot-overall-gap"));
     }
     Ok(())

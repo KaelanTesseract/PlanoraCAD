@@ -418,12 +418,18 @@ impl SketchSession {
             cur.snap_at = Some(cur.at);
             // Liegt auf dem Rasterpunkt schon ein Punkt, bindet die Kurve an ihn, statt einen
             // zweiten daraufzulegen (Skizzen 5, Entscheidung 17); Strg schaltet das mit dem Raster ab.
-            if let Some(p) = sk.point_at(cur.at, sk.tolerance().linear)
+            // Ohne Punkt im Ursprung bindet der Rasterpunkt dort wie der Ursprungsfang (fest auf 0, 0).
+            let tol = sk.tolerance().linear;
+            if let Some(p) = sk.point_at(cur.at, tol)
                 && let Ok(at) = sk.point_xy(p)
             {
                 cur.at = at;
                 cur.snap = Snap::Point(p);
                 cur.snap_at = Some(at);
+            } else if cur.at.length() <= tol {
+                cur.at = DVec2::ZERO;
+                cur.snap = Snap::Origin;
+                cur.snap_at = Some(DVec2::ZERO);
             }
         }
     }

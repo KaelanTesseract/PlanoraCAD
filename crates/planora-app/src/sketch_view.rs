@@ -11,6 +11,7 @@ use crate::theme::{self, lighten as lighter, sketch_colors as colors};
 use crate::viewport;
 use egui::{Color32, FontId, Mesh, PointerButton, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2};
 use glam::{Vec2, Vec3};
+use planora_feature::FeatureId;
 use planora_i18n::tr;
 use planora_math::{DVec2, DVec3, Frame};
 use planora_render::{EdgeRef, OrbitCamera, Pick, exact_step, grid_radius, line_weight};
@@ -1312,7 +1313,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     } else if (response.double_clicked() || response.triple_clicked()) && !se.click_after_flyout {
         let label = pointer
             .filter(|_| se.tool == Tool::Select)
-            .and_then(|p| label_at(ui.ctx(), p))
+            .and_then(|p| label_at(ui.ctx(), se.sketch, p))
             .filter(|&id| {
                 sf.sketch
                     .constraint(id)
@@ -1692,7 +1693,8 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         }
     }
     // Für den Doppelklick im nächsten Bild (die Eingabe kommt vor dem Zeichnen).
-    ui.ctx().data_mut(|d| d.insert_temp(label_hits_id(), hits));
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(label_hits_id(se.sketch), hits));
 
     // Zeichen der automatischen Abhängigkeiten, bevor sie entstehen
     for (at, auto) in auto_marks(sk, se) {
@@ -1836,23 +1838,26 @@ pub(crate) struct LabelHit {
     pub rect: Rect,
 }
 
-fn label_hits_id() -> egui::Id {
-    egui::Id::new("planora-sketch-label-hits")
+/// Ablage der Maßtexte je Skizze: Nach einem Wechsel des Tabs oder der Skizze trifft kein
+/// Rechteck einer anderen Skizze.
+fn label_hits_id(sketch: FeatureId) -> egui::Id {
+    egui::Id::new("planora-sketch-label-hits").with(sketch)
 }
 
-/// Das Maß, dessen Text im letzten Bild unter `p` stand (der zuletzt gezeichnete zuerst).
-fn label_at(ctx: &egui::Context, p: Pos2) -> Option<ConstraintId> {
-    ctx.data(|d| d.get_temp::<Vec<LabelHit>>(label_hits_id()))?
+/// Das Maß der Skizze `sketch`, dessen Text im letzten Bild unter `p` stand (der zuletzt
+/// gezeichnete zuerst).
+fn label_at(ctx: &egui::Context, sketch: FeatureId, p: Pos2) -> Option<ConstraintId> {
+    ctx.data(|d| d.get_temp::<Vec<LabelHit>>(label_hits_id(sketch)))?
         .iter()
         .rev()
         .find(|h| h.rect.contains(p))
         .map(|h| h.id)
 }
 
-/// Maßtexte des letzten Bilds mit ihren Rechtecken (für Tests).
+/// Maßtexte der Skizze `sketch` im letzten Bild mit ihren Rechtecken (für Tests).
 #[doc(hidden)]
-pub fn label_hits(ctx: &egui::Context) -> Vec<(ConstraintId, Rect)> {
-    ctx.data(|d| d.get_temp::<Vec<LabelHit>>(label_hits_id()))
+pub fn label_hits(ctx: &egui::Context, sketch: FeatureId) -> Vec<(ConstraintId, Rect)> {
+    ctx.data(|d| d.get_temp::<Vec<LabelHit>>(label_hits_id(sketch)))
         .unwrap_or_default()
         .into_iter()
         .map(|h| (h.id, h.rect))

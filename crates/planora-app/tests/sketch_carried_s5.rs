@@ -240,17 +240,19 @@ fn a_formula_on_the_overall_length_follows_its_parameter() {
     }
 }
 
-/// Mindestabstand der Breite unter der Gesamtlänge (0,1 % der Gesamtlänge, wie die App).
-const MIN_GAP: f64 = 1e-3;
+/// Mindestabstand der Breite unter der Gesamtlänge `l`, dieselbe Rechnung wie die App
+/// (`max(0,1 % · l, 0,02 mm)`).
+fn min_gap(l: f64) -> f64 {
+    planora_app::sketch_state::slot_overall_min_gap(l)
+}
 
-/// Liegt `gap` so dicht an der Grenze `MIN_GAP · l`, dass Rundung entscheidet? Diese Proben
-/// fallen aus.
+/// Liegt `gap` so dicht an der Grenze, dass Rundung entscheidet? Diese Proben fallen aus.
 fn at_the_limit(l: f64, gap: f64) -> bool {
-    (gap - MIN_GAP * l).abs() < 1e-6
+    (gap - min_gap(l)).abs() < 1e-6
 }
 
 /// Ruling Task 1: `|a − b|` ist bei a = b nicht differenzierbar. Dicht an L = W über das Werkzeug:
-/// ab 0,1 % Abstand entsteht das Langloch mit genau dieser Gesamtlänge, darunter wird es mit
+/// ab der Grenze entsteht das Langloch mit genau dieser Gesamtlänge, darunter wird es mit
 /// Meldung abgelehnt und nichts bleibt.
 #[test]
 fn overall_lengths_densely_above_the_width_are_exact_or_refused_with_a_message() {
@@ -281,7 +283,7 @@ fn overall_lengths_densely_above_the_width_are_exact_or_refused_with_a_message()
         se.type_field(i, "10", &scope);
         let before = bits(&sf.sketch);
         let result = se.commit_input(&mut sf, v(30.0, 20.0), R, false, &scope);
-        if gap >= MIN_GAP * length {
+        if gap >= min_gap(length) {
             result.unwrap_or_else(|e| panic!("{length}: {e}"));
             made += 1;
             assert_solved(&sf.sketch);
@@ -303,7 +305,7 @@ fn overall_lengths_densely_above_the_width_are_exact_or_refused_with_a_message()
             assert_eq!(bits(&sf.sketch), before, "{length}: nichts bleibt");
         }
     }
-    assert!(made > 300 && refused > 30, "{made} {refused}");
+    assert!(made > 250 && refused > 70, "{made} {refused}");
 }
 
 /// Ein Wert über das Maßfeld (wie die Liste) an einem frischen Stand.
@@ -317,11 +319,24 @@ fn set_on(
     se.set_dimension_input(sf, id, &format!("{value}"), scope)
 }
 
-/// Dicht an W = L über die Maßfelder von Breite und Gesamtlänge, jeweils hin und zurück: ab 0,1 %
-/// Abstand genau, darunter abgelehnt mit Meldung, die Lage bleibt dann bitgleich.
+/// Dicht an W = L über die Maßfelder von Breite und Gesamtlänge, jeweils hin und zurück: ab der
+/// Grenze `max(0,1 % · L, 0,02 mm)` genau, darunter abgelehnt mit Meldung, die Lage bleibt dann
+/// bitgleich. Kleine Langlöcher (L 1, 2, 5) prüfen die feste Untergrenze (Korrektur Task 11).
 #[test]
 fn widths_and_lengths_densely_at_the_limit_are_exact_or_refused_and_the_state_stays() {
-    for (l0, w0) in [(20.0, 10.0), (60.0, 10.0), (11.0, 1.0)] {
+    // Abstände fein bis 0,04 mm, danach gröber bis 0,54 mm.
+    let gaps: Vec<f64> = (1..=800)
+        .map(|k| f64::from(k) * 0.000_05)
+        .chain((1..=2000).map(|k| 0.04 + f64::from(k) * 0.000_25))
+        .collect();
+    for (l0, w0) in [
+        (1.0, 0.5),
+        (2.0, 1.0),
+        (5.0, 2.0),
+        (20.0, 10.0),
+        (60.0, 10.0),
+        (11.0, 1.0),
+    ] {
         let (mut w, _) = slot_rig(&[]);
         overall_slot(&mut w, &format!("{l0}"), &format!("{w0}")).unwrap();
         let base = parts(&mut w).1.clone();
@@ -344,53 +359,64 @@ fn widths_and_lengths_densely_at_the_limit_are_exact_or_refused_and_the_state_st
             assert!(pb.x > pa.x, "{l} {wd}: vertauscht");
         };
         let (mut ok, mut refused) = (0, 0);
-        for k in 1..=2000 {
-            let gap = f64::from(k) * 0.000_25;
-            if at_the_limit(l0, gap) || at_the_limit(w0 + gap, gap) {
-                continue;
-            }
-            // Breite bis dicht an die Gesamtlänge und zurück.
-            let mut sf = base.clone();
-            let before = bits(&sf.sketch);
-            match set_on(&mut sf, width, l0 - gap, &scope) {
-                Ok(()) => {
-                    assert!(gap >= MIN_GAP * l0, "{l0} {gap}: unter der Grenze angelegt");
-                    exact(&sf, l0, l0 - gap);
-                    set_on(&mut sf, width, w0, &scope)
-                        .unwrap_or_else(|e| panic!("{l0} {gap} zurück: {e}"));
-                    exact(&sf, l0, w0);
-                    ok += 1;
+        for &gap in gaps.iter().filter(|&&g| g < w0) {
+            // Breite bis dicht an die Gesamtlänge und zurück, dann die Gesamtlänge bis dicht an
+            // die Breite und zurück.
+            for (id, l, wd, back) in [(width, l0, l0 - gap, w0), (length, w0 + gap, w0, l0)] {
+                if at_the_limit(l, gap) {
+                    continue;
                 }
-                Err(e) => {
-                    assert!(gap < MIN_GAP * l0, "{l0} {gap}: {e}");
-                    assert_eq!(e, t("sketch-slot-overall-gap"));
-                    assert_eq!(bits(&sf.sketch), before);
-                    refused += 1;
-                }
-            }
-            // Gesamtlänge bis dicht an die Breite und zurück.
-            let mut sf = base.clone();
-            let before = bits(&sf.sketch);
-            let l = w0 + gap;
-            match set_on(&mut sf, length, l, &scope) {
-                Ok(()) => {
-                    assert!(gap >= MIN_GAP * l, "{l}: unter der Grenze angelegt");
-                    exact(&sf, l, w0);
-                    set_on(&mut sf, length, l0, &scope)
-                        .unwrap_or_else(|e| panic!("{l} zurück: {e}"));
-                    exact(&sf, l0, w0);
-                    ok += 1;
-                }
-                Err(e) => {
-                    assert!(gap < MIN_GAP * l, "{l}: {e}");
-                    assert_eq!(e, t("sketch-slot-overall-gap"));
-                    assert_eq!(bits(&sf.sketch), before);
-                    refused += 1;
+                let mut sf = base.clone();
+                let before = bits(&sf.sketch);
+                let out = if id == width { wd } else { l };
+                match set_on(&mut sf, id, out, &scope) {
+                    Ok(()) => {
+                        assert!(gap >= min_gap(l), "{l} {gap}: unter der Grenze angelegt");
+                        exact(&sf, l, wd);
+                        set_on(&mut sf, id, back, &scope)
+                            .unwrap_or_else(|e| panic!("{l} {wd} zurück auf {back}: {e}"));
+                        exact(&sf, l0, w0);
+                        ok += 1;
+                    }
+                    Err(e) => {
+                        assert!(gap < min_gap(l), "{l} {wd}: {e}");
+                        assert_eq!(e, t("sketch-slot-overall-gap"));
+                        assert_eq!(bits(&sf.sketch), before);
+                        refused += 1;
+                    }
                 }
             }
         }
-        assert!(ok > 3000 && refused > 0, "{l0}: {ok} {refused}");
+        assert!(ok > 1000 && refused > 500, "{l0}: {ok} {refused}");
     }
+}
+
+/// Nur die Länge getippt, die Breite vom Zeiger ohne Maß: Die Grenze gilt gegen die gemessene
+/// Breite, sonst schrumpfte der Löser die freie Breite (Korrektur Task 11).
+#[test]
+fn a_free_pointer_width_is_not_shrunk_by_an_overall_length_near_it() {
+    let (mut w, _) = slot_rig(&[]);
+    commit(&mut w, v(5.0, -3.0)).unwrap();
+    type_in(&mut w, F::Length, "40");
+    commit(&mut w, v(95.0, -3.0)).unwrap();
+    commit(&mut w, v(25.0, 3.0)).unwrap();
+    let ([_, _], cap) = slot_parts(sk(&w));
+    let free = 2.0 * sk(&w).radius(cap).unwrap();
+    near(free, 12.0);
+    let length = dims(sk(&w))
+        .into_iter()
+        .find(|(_, k)| matches!(k, K::SlotOverall(..)))
+        .unwrap()
+        .0;
+    for l in [12.0, 12.01, 12.0 + 0.019] {
+        let before = bits(sk(&w));
+        let e = set(&mut w, length, &format!("{l}")).unwrap_err();
+        assert_eq!(e, t("sketch-slot-overall-gap"), "{l}");
+        assert_eq!(bits(sk(&w)), before, "{l}");
+    }
+    set(&mut w, length, "30").unwrap();
+    assert_solved(sk(&w));
+    near(outer_length(sk(&w)), 30.0);
 }
 
 // ---- Rasterfang bindet --------------------------------------------------------------------------
@@ -573,6 +599,36 @@ fn a_circle_centered_on_a_grid_point_over_a_point_takes_that_point() {
         .expect("Kreis");
     assert_eq!(circle, p, "die Mitte ist der vorhandene Punkt");
     assert_eq!(sk.points().count(), 1);
+}
+
+#[test]
+fn a_grid_point_on_the_empty_origin_binds_like_the_origin_snap() {
+    let mut s = sketch_with(|_| {});
+    set_tool(&mut s, Tool::Line);
+    grid(&mut s, false);
+    {
+        let (se, sk) = s.session_sketch_mut().unwrap();
+        let cur = se.resolve_cursor(sk, DVec2::splat(0.3), PICK);
+        assert_eq!(cur.snap, Snap::Origin);
+        assert_eq!(cur.at, DVec2::ZERO);
+    }
+    click(&mut s, DVec2::splat(0.3)).unwrap();
+    click(&mut s, v(20.0, 7.0)).unwrap();
+    let sk = sketch(&s);
+    let start = line_ends(sk, lines(sk)[0]).0;
+    assert_eq!(xy(sk, start), DVec2::ZERO);
+    assert!(
+        sk.constraints()
+            .any(|(_, c)| c.kind == K::Fixed(start, 0.0, 0.0)),
+        "fest im Ursprung"
+    );
+    // Mit Strg: frei an der Rohlage.
+    let mut s = sketch_with(|_| {});
+    set_tool(&mut s, Tool::Line);
+    grid(&mut s, true);
+    let (se, sk) = s.session_sketch_mut().unwrap();
+    let cur = se.resolve_cursor(sk, DVec2::splat(0.3), PICK);
+    assert_eq!(cur.snap, Snap::None);
 }
 
 #[test]
@@ -788,7 +844,10 @@ fn a_double_click_on_the_diameter_text_opens_its_field_like_the_list() {
         let (c, dia, _, _) = circle_and_line(&mut rig);
         let px = rig.pixels();
         let shot = rig.settle();
-        let hits = sketch_view::label_hits(&rig.ctx);
+        let feature = rig.se().sketch;
+        let hits = sketch_view::label_hits(&rig.ctx, feature);
+        // Je Skizze abgelegt: eine andere Skizze sieht keine Rechtecke.
+        assert!(sketch_view::label_hits(&rig.ctx, FeatureId(feature.0 + 1)).is_empty());
         let rect = hits
             .iter()
             .find(|(id, _)| *id == dia)
@@ -830,7 +889,8 @@ fn a_double_click_beside_the_text_selects_the_chain_as_before() {
         let (_, _, l, len) = circle_and_line(&mut rig);
         let px = rig.pixels();
         rig.settle();
-        let rect = sketch_view::label_hits(&rig.ctx)
+        let feature = rig.se().sketch;
+        let rect = sketch_view::label_hits(&rig.ctx, feature)
             .into_iter()
             .find(|(id, _)| *id == len)
             .map(|(_, r)| r)
@@ -879,5 +939,82 @@ fn enter_after_a_refused_click_away_keeps_plan_and_text_and_says_why() {
         assert_eq!(rig.se().dim.text.as_deref(), Some("0"));
         assert_eq!(rig.se().message_text(), refused);
         assert_eq!(bits(rig.sk()), before);
+    });
+}
+
+/// Gesetztes Maß der Skizzenbemaßung mit getipptem `text`; danach hat kein Feld die Tastatur.
+fn planned_without_focus(rig: &mut Rig, text: &str) -> usize {
+    rig.sk().add_point(0.0, 0.0).unwrap();
+    rig.sk().add_point(40.0, 0.0).unwrap();
+    rig.settle();
+    rig.press(Key::D);
+    let px = rig.pixels();
+    rig.click(px(v(0.0, 0.0)));
+    rig.click(px(v(40.0, 0.0)));
+    rig.click(px(v(20.0, 15.0)));
+    assert!(rig.editor_open());
+    rig.type_text(text);
+    rig.settle();
+    rig.ctx.memory_mut(|m| {
+        if let Some(f) = m.focused() {
+            m.surrender_focus(f);
+        }
+    });
+    rig.settle();
+    assert!(rig.ctx.memory(|m| m.focused()).is_none());
+    assert!(rig.se().dim.plan.is_some());
+    rig.st().sketch_history().unwrap().undo_len()
+}
+
+#[test]
+fn enter_without_focus_creates_the_planned_dimension_once() {
+    with_lang(&german(), || {
+        let mut rig = Rig::new();
+        let steps = planned_without_focus(&mut rig, "55");
+        rig.press(Key::Enter);
+        let live: Vec<K> = rig
+            .sk()
+            .constraints()
+            .map(|(_, c)| c.kind.clone())
+            .collect();
+        assert!(
+            matches!(live.as_slice(), [K::DistanceX(_, _, d)] if *d == 55.0),
+            "{live:?}"
+        );
+        assert!(!rig.editor_open());
+        assert!(rig.se().dim.plan.is_none());
+        assert_eq!(rig.st().sketch_history().unwrap().undo_len(), steps + 1);
+        // Eine zweite Eingabe legt nichts mehr an.
+        let before = bits(rig.sk());
+        rig.press(Key::Enter);
+        assert_eq!(rig.sk().constraints().count(), 1);
+        assert_eq!(bits(rig.sk()), before);
+        assert_eq!(rig.st().sketch_history().unwrap().undo_len(), steps + 1);
+    });
+}
+
+#[test]
+fn escape_then_enter_creates_nothing() {
+    with_lang(&german(), || {
+        let mut rig = Rig::new();
+        rig.sk().add_point(0.0, 0.0).unwrap();
+        rig.sk().add_point(40.0, 0.0).unwrap();
+        rig.settle();
+        rig.press(Key::D);
+        let px = rig.pixels();
+        rig.click(px(v(0.0, 0.0)));
+        rig.click(px(v(40.0, 0.0)));
+        rig.click(px(v(20.0, 15.0)));
+        assert!(rig.editor_open());
+        rig.type_text("55");
+        let steps = rig.st().sketch_history().unwrap().undo_len();
+        let before = bits(rig.sk());
+        rig.press(Key::Escape);
+        assert!(!rig.editor_open());
+        assert!(rig.se().dim.plan.is_none());
+        rig.press(Key::Enter);
+        assert_eq!(rig.sk().constraints().count(), 0);
+        assert_eq!(bits(rig.sk()), before);
+        assert_eq!(rig.st().sketch_history().unwrap().undo_len(), steps);
     });
 }
