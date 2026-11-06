@@ -782,6 +782,43 @@ pub enum ConstraintKindDto {
     EllipsenbogenEnden {
         kurve: usize,
     },
+    /// Ab Format 15: zwei Linien auf derselben Geraden.
+    Kollinear {
+        a: usize,
+        b: usize,
+    },
+    /// Ab Format 15: glatter Übergang, Kurve und ihr Ende, Kurve und ihr Ende.
+    Glatt {
+        a: usize,
+        punkt_a: usize,
+        b: usize,
+        punkt_b: usize,
+    },
+    /// Ab Format 15: waagerechter Abstand zweier Punkte.
+    AbstandWaagerecht {
+        a: usize,
+        b: usize,
+        wert: f64,
+    },
+    /// Ab Format 15: senkrechter Abstand zweier Punkte.
+    AbstandSenkrecht {
+        a: usize,
+        b: usize,
+        wert: f64,
+    },
+    /// Ab Format 15: doppelter Abstand eines Punktes von einer Mittellinie.
+    DurchmesserZurAchse {
+        punkt: usize,
+        kurve: usize,
+        wert: f64,
+    },
+    /// Ab Format 15: Gesamtlänge eines geraden Langlochs (Mitten a, b, eine Kappe).
+    LanglochGesamt {
+        a: usize,
+        b: usize,
+        kappe: usize,
+        wert: f64,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

@@ -559,6 +559,14 @@ impl Sketch {
         self.curves.iter().any(|(_, c)| c.centerline)
     }
 
+    /// Gibt es einen Abhängigkeitseintrag, der Format 15 braucht, auch einen gelöschten? Dann
+    /// braucht die Datei Format 15. Task 5 ergänzt die Mustereinträge.
+    pub fn needs_format_15(&self) -> bool {
+        self.constraints
+            .iter()
+            .any(|(_, c)| c.kind.needs_format_15())
+    }
+
     /// Alle lebenden Punkte.
     pub fn points(&self) -> impl Iterator<Item = (PointId, &PointData)> {
         self.points.iter().filter(|(_, p)| p.alive)

@@ -38,14 +38,15 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Höchste lesbare Formatnummer der Versionsdateien (P7, P12, F7).
-pub const FORMAT_VERSION: u32 = 14;
+pub const FORMAT_VERSION: u32 = 15;
 /// Formatnummer der Rahmendateien `dokument.json` und `.autosave.json`; ihre Struktur ist seit
 /// Format 1 unverändert, ältere Programme öffnen das Projekt deshalb weiter (P7).
 pub const CONTAINER_FORMAT: u32 = 1;
 /// Größte Summe der dekodierten Netzdaten eines Dokuments (wie die Dateigrenze beim Import).
 const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 
-/// Kleinste Formatnummer, die den Stand darstellt: 14 mit einer Mittellinie in einer Skizze
+/// Kleinste Formatnummer, die den Stand darstellt: 15 mit einer der Abhängigkeitsarten aus
+/// Skizzen 5 in einer Skizze (auch einem gelöschten Eintrag; als erste Regel geprüft), 14 mit einer Mittellinie in einer Skizze
 /// (auch einem gelöschten Kurveneintrag; als erste Regel geprüft), 13 mit einem Ellipsenbogen in einer Skizze
 /// (auch einem gelöschten Kurveneintrag; als erste Regel geprüft) oder mit Profil-Verweisen,
 /// die sich nicht als alte Profilnummer schreiben lassen ([`ProfileField`]), 12 mit einer Zeichnung in
@@ -63,7 +64,9 @@ pub fn required_format(s: &Snapshot) -> u32 {
 /// [`required_format`] mit den schon bestimmten Profilfeldern `fields` (eins je Feature).
 fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
     let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
-    if has(|k| matches!(k, FeatureKind::Sketch(sf) if sf.sketch.has_centerline_entry())) {
+    if has(|k| matches!(k, FeatureKind::Sketch(sf) if sf.sketch.needs_format_15())) {
+        15
+    } else if has(|k| matches!(k, FeatureKind::Sketch(sf) if sf.sketch.has_centerline_entry())) {
         14
     } else if has(|k| matches!(k, FeatureKind::Sketch(sf) if has_elliptic_arc(&sf.sketch)))
         || fields.iter().any(|f| f.profile.is_some())
@@ -427,6 +430,34 @@ fn constraint_to(k: &ConstraintKind) -> ConstraintKindDto {
             kurve: c(k),
             wert: *v,
         },
+        K::Collinear(a, b) => D::Kollinear { a: c(a), b: c(b) },
+        K::Smooth(a, pa, b, pb) => D::Glatt {
+            a: c(a),
+            punkt_a: p(pa),
+            b: c(b),
+            punkt_b: p(pb),
+        },
+        K::DistanceX(a, b, v) => D::AbstandWaagerecht {
+            a: p(a),
+            b: p(b),
+            wert: *v,
+        },
+        K::DistanceY(a, b, v) => D::AbstandSenkrecht {
+            a: p(a),
+            b: p(b),
+            wert: *v,
+        },
+        K::CenterlineDiameter(a, k, v) => D::DurchmesserZurAchse {
+            punkt: p(a),
+            kurve: c(k),
+            wert: *v,
+        },
+        K::SlotOverall(a, b, k, v) => D::LanglochGesamt {
+            a: p(a),
+            b: p(b),
+            kappe: c(k),
+            wert: *v,
+        },
     }
 }
 
@@ -458,6 +489,19 @@ fn constraint_from(d: &ConstraintKindDto) -> ConstraintKind {
         D::EllipseGross { kurve, wert } => K::EllipseMajor(c(*kurve), *wert),
         D::EllipseKlein { kurve, wert } => K::EllipseMinor(c(*kurve), *wert),
         D::EllipseWinkel { kurve, wert } => K::EllipseAngle(c(*kurve), *wert),
+        D::Kollinear { a, b } => K::Collinear(c(*a), c(*b)),
+        D::Glatt {
+            a,
+            punkt_a,
+            b,
+            punkt_b,
+        } => K::Smooth(c(*a), p(*punkt_a), c(*b), p(*punkt_b)),
+        D::AbstandWaagerecht { a, b, wert } => K::DistanceX(p(*a), p(*b), *wert),
+        D::AbstandSenkrecht { a, b, wert } => K::DistanceY(p(*a), p(*b), *wert),
+        D::DurchmesserZurAchse { punkt, kurve, wert } => {
+            K::CenterlineDiameter(p(*punkt), c(*kurve), *wert)
+        }
+        D::LanglochGesamt { a, b, kappe, wert } => K::SlotOverall(p(*a), p(*b), c(*kappe), *wert),
     }
 }
 

@@ -209,6 +209,12 @@ pub fn kind_label(kind: &ConstraintKind) -> String {
         K::EllipseMajor(..) => tr!("sketch-constraint-ellipse-major"),
         K::EllipseMinor(..) => tr!("sketch-constraint-ellipse-minor"),
         K::EllipseAngle(..) => tr!("sketch-constraint-ellipse-angle"),
+        K::Collinear(..) => tr!("sketch-constraint-collinear"),
+        K::Smooth(..) => tr!("sketch-constraint-smooth"),
+        K::DistanceX(..) => tr!("sketch-constraint-distance-x"),
+        K::DistanceY(..) => tr!("sketch-constraint-distance-y"),
+        K::CenterlineDiameter(..) => tr!("sketch-constraint-centerline-diameter"),
+        K::SlotOverall(..) => tr!("sketch-constraint-slot-overall"),
     }
 }
 
@@ -365,16 +371,24 @@ fn anchors(sk: &Sketch, kind: &ConstraintKind) -> Vec<DVec2> {
         }
         K::Horizontal(LineOrPoints::Points(a, b))
         | K::Vertical(LineOrPoints::Points(a, b))
-        | K::Distance(a, b, _) => vec![mid(pos(sk, *a), pos(sk, *b))],
-        K::Parallel(a, b) | K::Perpendicular(a, b) | K::Equal(a, b) | K::Tangent(a, b) => {
+        | K::Distance(a, b, _)
+        | K::DistanceX(a, b, _)
+        | K::DistanceY(a, b, _)
+        | K::SlotOverall(a, b, ..) => vec![mid(pos(sk, *a), pos(sk, *b))],
+        K::Parallel(a, b)
+        | K::Perpendicular(a, b)
+        | K::Equal(a, b)
+        | K::Tangent(a, b)
+        | K::Collinear(a, b) => {
             vec![curve_anchor(sk, *a), curve_anchor(sk, *b)]
         }
+        K::Smooth(_, a, _, b) => vec![pos(sk, *a), pos(sk, *b)],
         K::Angle(a, b, _) => vec![mid(curve_anchor(sk, *a), curve_anchor(sk, *b))],
         K::Fixed(p, ..) | K::Midpoint(p, _) | K::PointOnCurve(p, _) | K::Coincident(p, _) => {
             vec![pos(sk, *p)]
         }
         K::Symmetric(a, b, _) => vec![pos(sk, *a), pos(sk, *b)],
-        K::DistancePointLine(p, c, _) => {
+        K::DistancePointLine(p, c, _) | K::CenterlineDiameter(p, c, _) => {
             let at = pos(sk, *p);
             vec![mid(at, at.and_then(|q| sk.nearest_on_curve(*c, q)))]
         }
