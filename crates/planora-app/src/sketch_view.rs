@@ -15,6 +15,7 @@ use planora_math::{DVec2, DVec3, Frame};
 use planora_render::{EdgeRef, OrbitCamera, Pick, exact_step, grid_radius, line_weight};
 use planora_sketch::ExtractedProfiles;
 use planora_sketch::constraint::{ConstraintKind, LineOrPoints};
+use planora_sketch::dimension::{DimPick, DimPlan};
 use planora_sketch::model::{CurveId, CurveKind, LineStyle, PointId, Sketch};
 use planora_sketch::solver::{SolveReport, SolveStatus};
 use std::collections::HashSet;
@@ -161,7 +162,11 @@ pub fn stored_value(kind: &ConstraintKind) -> Option<f64> {
         | K::Angle(_, _, v)
         | K::EllipseMajor(_, v)
         | K::EllipseMinor(_, v)
-        | K::EllipseAngle(_, v) => Some(*v),
+        | K::EllipseAngle(_, v)
+        | K::DistanceX(_, _, v)
+        | K::DistanceY(_, _, v)
+        | K::CenterlineDiameter(_, _, v)
+        | K::SlotOverall(_, _, _, v) => Some(*v),
         _ => None,
     }
 }
@@ -184,39 +189,44 @@ pub fn value_text(kind: &ConstraintKind, v: f64) -> String {
     }
 }
 
-/// Name der Abhängigkeitsart in der aktuellen Sprache.
-pub fn kind_label(kind: &ConstraintKind) -> String {
+/// Name der Abhängigkeitsart als gespeicherte Meldung (wechselt mit der Sprache).
+pub fn kind_msg(kind: &ConstraintKind) -> crate::msg::Msg {
     use ConstraintKind as K;
     match kind {
-        K::Coincident(..) => tr!("sketch-constraint-coincident"),
-        K::PointOnCurve(..) => tr!("sketch-constraint-point-on-curve"),
-        K::Horizontal(..) => tr!("sketch-constraint-horizontal"),
-        K::Vertical(..) => tr!("sketch-constraint-vertical"),
-        K::Parallel(..) => tr!("sketch-constraint-parallel"),
-        K::Perpendicular(..) => tr!("sketch-constraint-perpendicular"),
-        K::Tangent(..) => tr!("sketch-constraint-tangent"),
-        K::Equal(..) => tr!("sketch-constraint-equal"),
-        K::Fixed(..) => tr!("sketch-constraint-fixed"),
-        K::Symmetric(..) => tr!("sketch-constraint-symmetric"),
-        K::Midpoint(..) => tr!("sketch-constraint-midpoint"),
-        K::Distance(..) => tr!("sketch-constraint-distance"),
-        K::DistancePointLine(..) => tr!("sketch-constraint-distance-point-line"),
-        K::Radius(..) => tr!("sketch-constraint-radius"),
-        K::Diameter(..) => tr!("sketch-constraint-diameter"),
-        K::Angle(..) => tr!("sketch-constraint-angle"),
-        K::ArcRadius(..) => tr!("sketch-constraint-arc-radius"),
-        K::EllipticArcEnds(..) => tr!("sketch-constraint-elliptic-arc-ends"),
-        K::EllipseMajor(..) => tr!("sketch-constraint-ellipse-major"),
-        K::EllipseMinor(..) => tr!("sketch-constraint-ellipse-minor"),
-        K::EllipseAngle(..) => tr!("sketch-constraint-ellipse-angle"),
-        K::Collinear(..) => tr!("sketch-constraint-collinear"),
-        K::Smooth(..) => tr!("sketch-constraint-smooth"),
-        K::DistanceX(..) => tr!("sketch-constraint-distance-x"),
-        K::DistanceY(..) => tr!("sketch-constraint-distance-y"),
-        K::CenterlineDiameter(..) => tr!("sketch-constraint-centerline-diameter"),
-        K::SlotOverall(..) => tr!("sketch-constraint-slot-overall"),
-        K::PatternValue(..) => tr!("sketch-constraint-pattern-value"),
+        K::Coincident(..) => crate::msg!("sketch-constraint-coincident"),
+        K::PointOnCurve(..) => crate::msg!("sketch-constraint-point-on-curve"),
+        K::Horizontal(..) => crate::msg!("sketch-constraint-horizontal"),
+        K::Vertical(..) => crate::msg!("sketch-constraint-vertical"),
+        K::Parallel(..) => crate::msg!("sketch-constraint-parallel"),
+        K::Perpendicular(..) => crate::msg!("sketch-constraint-perpendicular"),
+        K::Tangent(..) => crate::msg!("sketch-constraint-tangent"),
+        K::Equal(..) => crate::msg!("sketch-constraint-equal"),
+        K::Fixed(..) => crate::msg!("sketch-constraint-fixed"),
+        K::Symmetric(..) => crate::msg!("sketch-constraint-symmetric"),
+        K::Midpoint(..) => crate::msg!("sketch-constraint-midpoint"),
+        K::Distance(..) => crate::msg!("sketch-constraint-distance"),
+        K::DistancePointLine(..) => crate::msg!("sketch-constraint-distance-point-line"),
+        K::Radius(..) => crate::msg!("sketch-constraint-radius"),
+        K::Diameter(..) => crate::msg!("sketch-constraint-diameter"),
+        K::Angle(..) => crate::msg!("sketch-constraint-angle"),
+        K::ArcRadius(..) => crate::msg!("sketch-constraint-arc-radius"),
+        K::EllipticArcEnds(..) => crate::msg!("sketch-constraint-elliptic-arc-ends"),
+        K::EllipseMajor(..) => crate::msg!("sketch-constraint-ellipse-major"),
+        K::EllipseMinor(..) => crate::msg!("sketch-constraint-ellipse-minor"),
+        K::EllipseAngle(..) => crate::msg!("sketch-constraint-ellipse-angle"),
+        K::Collinear(..) => crate::msg!("sketch-constraint-collinear"),
+        K::Smooth(..) => crate::msg!("sketch-constraint-smooth"),
+        K::DistanceX(..) => crate::msg!("sketch-constraint-distance-x"),
+        K::DistanceY(..) => crate::msg!("sketch-constraint-distance-y"),
+        K::CenterlineDiameter(..) => crate::msg!("sketch-constraint-centerline-diameter"),
+        K::SlotOverall(..) => crate::msg!("sketch-constraint-slot-overall"),
+        K::PatternValue(..) => crate::msg!("sketch-constraint-pattern-value"),
     }
+}
+
+/// Name der Abhängigkeitsart in der aktuellen Sprache.
+pub fn kind_label(kind: &ConstraintKind) -> String {
+    kind_msg(kind).text()
 }
 
 /// Mitten aller Kreise, Bögen, Ellipsen und Ellipsenbögen: einmal je Bild oder Liste gebaut, damit
@@ -359,7 +369,7 @@ pub fn overlay_text(
         K::Radius(..) => format!("R {}", format_length(v)),
         // Ø ohne Ersatz: Montserrat hat das Zeichen (tests/fonts.rs prüft das), und die
         // Glyphenabfrage von egui meldete es fälschlich als fehlend.
-        K::Diameter(..) => format!("Ø {}", format_length(v)),
+        K::Diameter(..) | K::CenterlineDiameter(..) => format!("Ø {}", format_length(v)),
         K::EllipseMajor(..) => format!("a {}", format_length(v)),
         K::EllipseMinor(..) => format!("b {}", format_length(v)),
         _ => value_text(kind, v),
@@ -1398,7 +1408,9 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
             continue;
         };
         // Die schon gewählten Kurven einer laufenden Art leuchten wie die Auswahl.
-        let selected = se.selection.contains(&Item::Curve(c)) || se.pending_curves.contains(&c);
+        let selected = se.selection.contains(&Item::Curve(c))
+            || se.pending_curves.contains(&c)
+            || dim_picked(se, Item::Curve(c));
         let mut color = if selected {
             col.selected
         } else if data.construction {
@@ -1422,7 +1434,9 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         let Some(s) = pos(sk, p).and_then(|q| map.to_screen(q)) else {
             continue;
         };
-        let selected = se.selection.contains(&Item::Point(p)) || se.dragging == Some(p);
+        let selected = se.selection.contains(&Item::Point(p))
+            || se.dragging == Some(p)
+            || dim_picked(se, Item::Point(p));
         let determined = point_determined(report, p);
         let mut color = if selected {
             col.selected
@@ -1444,6 +1458,27 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     }
 
     draw_preview(&painter, &map, sk, se, col.preview);
+    let mut placed: Vec<Rect> = Vec::new();
+    // Skizzenbemaßung: Hilfsstriche und der Wert am Anker (dem Zeiger bzw. der gesetzten Stelle).
+    if let Some(plan) = se.dimension_preview(sk) {
+        let stroke = Stroke::new(1.0, col.preview);
+        for line in dimension_helpers(sk, &plan) {
+            for path in map.paths(&line) {
+                draw_path(&painter, path, stroke, true);
+            }
+        }
+        if let Some(s) = map.to_screen(plan.anchor) {
+            let text = dimension_text(ui.ctx(), sk, &plan);
+            label(
+                &painter,
+                s + vec2(6.0, -18.0),
+                &text,
+                col.preview,
+                col.label_bg,
+                &mut placed,
+            );
+        }
+    }
 
     if let Some(l) = grip_layout(state, rect) {
         let hot = se
@@ -1462,7 +1497,6 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     }
 
     // Abhängigkeiten und Maße
-    let mut placed: Vec<Rect> = Vec::new();
     let bad: Vec<_> = report
         .map(|r| r.conflicting.iter().chain(&r.redundant).copied().collect())
         .unwrap_or_default();
@@ -1551,6 +1585,57 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     }
 
     painter.extend(box_select_shapes(state));
+}
+
+/// Gehört `item` zu den gewählten Objekten der Skizzenbemaßung?
+fn dim_picked(se: &SketchSession, item: Item) -> bool {
+    se.tool == Tool::Dimension
+        && se.dim.picks.iter().any(|p| match (*p, item) {
+            (DimPick::Point(a), Item::Point(b)) => a == b,
+            (DimPick::Curve(a, _), Item::Curve(b)) => a == b,
+            _ => false,
+        })
+}
+
+/// Text der Vorschau der Skizzenbemaßung, wie das Maß später in der Ansicht steht
+/// (etwa „40,00 mm“, „Ø 30,00 mm“, „R 5,00 mm“, „30,0°“).
+pub fn dimension_text(ctx: &egui::Context, sk: &Sketch, plan: &DimPlan) -> String {
+    overlay_text(ctx, sk, &plan.kind, false)
+}
+
+/// Hilfsstriche der Vorschau der Skizzenbemaßung (Skizzenkoordinaten): waagerecht und senkrecht
+/// zwei Maßhilfslinien von den Punkten bis auf die Höhe (bzw. Lage) des Ankers und die Maßlinie
+/// dazwischen; ausgerichtet und zur Linie die Verbindung. Kreis, Bogen, Ellipse und Winkel: keine.
+pub fn dimension_helpers(sk: &Sketch, plan: &DimPlan) -> Vec<Vec<DVec2>> {
+    use ConstraintKind as K;
+    let at = plan.anchor;
+    match plan.kind {
+        K::DistanceX(a, b, _) => {
+            let (Some(a), Some(b)) = (pos(sk, a), pos(sk, b)) else {
+                return Vec::new();
+            };
+            let (ea, eb) = (DVec2::new(a.x, at.y), DVec2::new(b.x, at.y));
+            vec![vec![a, ea], vec![b, eb], vec![ea, eb]]
+        }
+        K::DistanceY(a, b, _) => {
+            let (Some(a), Some(b)) = (pos(sk, a), pos(sk, b)) else {
+                return Vec::new();
+            };
+            let (ea, eb) = (DVec2::new(at.x, a.y), DVec2::new(at.x, b.y));
+            vec![vec![a, ea], vec![b, eb], vec![ea, eb]]
+        }
+        K::Distance(a, b, _) => match (pos(sk, a), pos(sk, b)) {
+            (Some(a), Some(b)) => vec![vec![a, b]],
+            _ => Vec::new(),
+        },
+        K::DistancePointLine(p, l, _) | K::CenterlineDiameter(p, l, _) => {
+            match pos(sk, p).and_then(|q| Some((q, sk.nearest_on_curve(l, q)?))) {
+                Some((q, foot)) => vec![vec![q, foot]],
+                None => Vec::new(),
+            }
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// Zeichen der Fangart am Zeiger, selbst gezeichnet: Quadrat Punkt, Kreis Mitte, Dreieck

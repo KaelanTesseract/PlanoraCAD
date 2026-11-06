@@ -1198,8 +1198,19 @@ impl PlanoraApp {
                 panic!("Crash test: triggered on purpose");
             }
         }
-        let area = keymap::dispatch::current_area(&self.ws.active_tab().state);
         let windows = self.windows_open() || self.projects.is_open();
+        // Skizzenbemaßung: Tab schaltet Ø/R der Vorschau um, statt den Fokus weiterzugeben. Hier
+        // vor dem Aufbau der Bedienelemente, sonst nähme schon das erste den Fokus.
+        if !windows
+            && let Some((se, sk)) = self.ws.active_tab_mut().state.session_sketch_mut()
+            && se.tool == crate::sketch_state::Tool::Dimension
+            && se.dim.plan.is_none()
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab))
+        {
+            ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+            se.toggle_dimension_preview(sk);
+        }
+        let area = keymap::dispatch::current_area(&self.ws.active_tab().state);
         let pressed = keymap::dispatch::pressed_if(ctx, &self.ws.keymap, area, |a| {
             !is_history_key(a) && !(windows && a.area() != keymap::Area::All)
         });

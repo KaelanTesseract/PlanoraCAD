@@ -405,7 +405,11 @@ fn dimension_value(kind: &ConstraintKind) -> Option<f64> {
         | Diameter(_, v)
         | EllipseMajor(_, v)
         | EllipseMinor(_, v)
-        | EllipseAngle(_, v) => Some(*v),
+        | EllipseAngle(_, v)
+        | DistanceX(_, _, v)
+        | DistanceY(_, _, v)
+        | CenterlineDiameter(_, _, v)
+        | SlotOverall(_, _, _, v) => Some(*v),
         _ => None,
     }
 }

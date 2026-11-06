@@ -312,12 +312,13 @@ fn sketch_keys_select_the_tools() {
         assert_eq!(a.label(), name, "Name der Art");
         assert_eq!(km.action_for_key(Area::Sketch, &chord(k, false)), Some(a));
     }
-    // Skizzenbemaßung D: gibt es (noch) nicht (Versatz O gibt es seit Skizzen 4).
+    // Skizzen 5: Skizzenbemaßung D gibt es jetzt (Versatz O seit Skizzen 4).
     assert_eq!(
         km.action_for_key(Area::Sketch, &chord(Key::D, false)),
-        None,
+        Some(Action::SketchDimension),
         "D"
     );
+    assert_eq!(Action::SketchDimension.sketch_tool(), Some(Tool::Dimension));
 
     let mut rig = Rig::new(sketch_open_ws());
     assert_eq!(rig.tool(), Tool::Select);
@@ -488,13 +489,16 @@ fn same_letter_means_different_things_in_sketch_and_drawing_and_nothing_in_model
     assert_eq!(km.action_for_key(Area::Drawing, &c), None);
     assert_eq!(km.action_for_key(Area::Model, &c), None);
     assert_eq!(km.action_for_key(Area::All, &c), None);
-    // D: Maß in der Zeichnung, nichts in Skizze und Modell.
+    // D: Maß in der Zeichnung, Skizzenbemaßung in der Skizze (Skizzen 5), nichts im Modell.
     let d = chord(Key::D, false);
     assert_eq!(
         km.action_for_key(Area::Drawing, &d),
         Some(Action::DrawingDimension)
     );
-    assert_eq!(km.action_for_key(Area::Sketch, &d), None);
+    assert_eq!(
+        km.action_for_key(Area::Sketch, &d),
+        Some(Action::SketchDimension)
+    );
     assert_eq!(km.action_for_key(Area::Model, &d), None);
 
     // Gleiche Taste in Skizze und Zeichnung ist erlaubt: B (Position) auf L legen.

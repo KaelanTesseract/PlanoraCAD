@@ -1314,6 +1314,7 @@ pub fn sketch_tool_icon(tool: crate::sketch_state::Tool) -> IconSource {
         T::Offset => IconSource::Hand(HandIcon::Offset),
         T::MoveCopy => IconSource::Hand(HandIcon::MoveCopy),
         T::Scale => IconSource::Hand(HandIcon::Scale),
+        T::Dimension => IconSource::Font(Icon::DimensionTool),
     }
 }
 

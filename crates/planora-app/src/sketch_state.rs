@@ -15,6 +15,7 @@ use planora_kernel::{Edge, Id, Solid};
 use planora_math::DVec2;
 use planora_sketch::SketchError;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
+use planora_sketch::dimension::{DimPick, DimPlan};
 use planora_sketch::model::{CurveId, CurveKind, MAX_SPLINE_POINTS, PointId, Sketch};
 use planora_sketch::offset::{OffsetPlan, OffsetProblem};
 use planora_sketch::shapes::{folded_over, sweep_crossed_half_turn};
@@ -58,6 +59,9 @@ pub enum Tool {
     MoveCopy,
     /// Fusion „Skizzenmaßstab“.
     Scale,
+    /// Fusion „Skizzenbemaßung“ (Skizzen 5): Objekte wählen, der Zeiger wählt die Art, ein Klick
+    /// setzt das Maß und öffnet sein Feld ([`crate::sketch_dimension`]).
+    Dimension,
 }
 
 impl Tool {
@@ -75,6 +79,18 @@ impl Tool {
                 | Tool::Scale
         )
     }
+}
+
+/// Zustand der Skizzenbemaßung ([`crate::sketch_dimension`]): die gewählten Objekte, das gesetzte
+/// Maß, dessen Feld offen ist, und der Umschalter Ø/R der Vorschau.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct DimToolState {
+    pub picks: Vec<DimPick>,
+    /// Gesetzt, noch nicht angelegt: Das Maßfeld im Skizzenfeld ist offen
+    /// (`EditTarget::Planned`). Die Ansicht zeigt es an seinem Anker.
+    pub plan: Option<DimPlan>,
+    /// Ø/R umgeschaltet (Tab oder Knopf), solange gewählt wird.
+    pub toggled: bool,
 }
 
 /// Stufe von Verschieben/Kopieren und Maßstab.
@@ -444,6 +460,8 @@ pub struct SketchSession {
     pub transform: TransformState,
     /// Laufender Zug an einem Griff.
     pub grip_drag: Option<GripDrag>,
+    /// Skizzenbemaßung.
+    pub dim: DimToolState,
 }
 
 /// Was vor einer Änderung gesichert wird, um sie bei einem Fehler zurückzunehmen.
@@ -467,6 +485,7 @@ struct Backup {
     curve_picks: CurvePicks,
     transform: TransformState,
     grip_drag: Option<GripDrag>,
+    dim: DimToolState,
 }
 
 /// Klicklagen der Kurven, die das Auswählen per Klick gewählt hat, und die Auswahl gleich nach
@@ -557,6 +576,7 @@ impl SketchSession {
             pick_radius: 0.0,
             transform: TransformState::default(),
             grip_drag: None,
+            dim: DimToolState::default(),
         }
     }
 
@@ -609,6 +629,8 @@ impl SketchSession {
         self.auto_tangent = None;
         self.pick_points.clear();
         self.input = DrawInput::default();
+        // Bemaßen: Wahl und gesetztes Maß (sein Feld schließt) entfallen, nichts bleibt.
+        self.dim = DimToolState::default();
     }
 
     /// Wählt `tool` wie der Klick auf seinen Knopf in der Leiste (und sein Tastenkürzel): ist
@@ -680,6 +702,7 @@ impl SketchSession {
             pick_radius: self.pick_radius,
             transform: self.transform.clone(),
             grip_drag: self.grip_drag,
+            dim: self.dim.clone(),
         }
     }
 
@@ -703,6 +726,7 @@ impl SketchSession {
         self.pick_radius = b.pick_radius;
         self.transform = b.transform;
         self.grip_drag = b.grip_drag;
+        self.dim = b.dim;
     }
 
     /// Führt `f` atomar aus: Bei einem Fehler wird alles zurückgesetzt und die Meldung in
@@ -802,6 +826,10 @@ impl SketchSession {
                 }
                 // Rundung und Fase laufen über ihre Arten (`click_kind`).
                 Tool::Fillet => Ok(()),
+                Tool::Dimension => {
+                    se.click_dimension(sk, at, radius);
+                    Ok(())
+                }
             }
         })
     }
@@ -1905,47 +1933,58 @@ impl SketchSession {
                 sk.add_constraint(ConstraintKind::Coincident(pa, pb))
                     .map_err(err)?;
             }
-            let on_arc = smooth_on_arc(sk, &kind);
-            let old = sk.measure(&kind);
-            let value_of = kind.length_value();
-            let id = sk.add_constraint(kind).map_err(err)?;
-            // Der Stand vor dem Neulegen: Davon gehen Wächter und Schritte aus.
-            let unsolved = sk.clone();
-            if let Some(v) = value_of {
-                sk.prepare_dimension_change(id, v);
-            }
-            let before = se.last_report.take();
-            // Freiheitsgrade davor: Fällt einer weg, war die neue Abhängigkeit nur teilweise
-            // überzählig (etwa Kollinear an zwei waagerechten Linien).
-            let report = sk.solve();
-            se.last_report = Some(report.clone());
-            let direct = match check_change(&report, before.as_ref(), prior, Some(id)) {
-                Some(SolveStatus::Conflicting) => Err(crate::msg!(
-                    "sketch-apply-conflict",
-                    action = action.label_msg()
-                )),
-                Some(_) => Err(crate::msg!(
-                    "sketch-apply-unsolved",
-                    action = action.label_msg()
-                )),
-                None => Ok(()),
-            };
-            se.guard_length(sk, id, old, &unsolved, direct)?;
-            let after = se.last_report.as_ref().unwrap_or(&report);
-            if after.redundant.contains(&id) {
-                if action.is_dimension() {
-                    se.make_driven(sk, id)?;
-                } else if after.dof < dof_of(prior) {
-                    se.message = Some(crate::msg!("sketch-redundant-partly"));
-                } else {
-                    se.message = Some(crate::msg!("sketch-redundant"));
-                }
-            } else if on_arc {
-                se.message = Some(crate::msg!("sketch-smooth-arc-g1"));
-            }
-            se.warn_if_unsolved();
-            Ok(id)
+            se.add_checked(sk, prior, kind, action.label_msg())
         })
+    }
+
+    /// Legt `kind` an und löst, mit den Wächtern von [`apply`](Self::apply): Widerspruch oder
+    /// nicht lösbar ⇒ Fehler (`label` nennt die Abhängigkeit), Falt-Wächter für Längen,
+    /// überzähliges Maß ⇒ anzeigend. Läuft in [`atomic`](Self::atomic); `prior` ist der Stand davor.
+    pub(crate) fn add_checked(
+        &mut self,
+        sk: &mut Sketch,
+        prior: &Sketch,
+        kind: ConstraintKind,
+        label: Msg,
+    ) -> Result<ConstraintId, Msg> {
+        let se = self;
+        let dimension = kind.is_dimension();
+        let on_arc = smooth_on_arc(sk, &kind);
+        let old = sk.measure(&kind);
+        let value_of = kind.length_value();
+        let id = sk.add_constraint(kind).map_err(err)?;
+        // Der Stand vor dem Neulegen: Davon gehen Wächter und Schritte aus.
+        let unsolved = sk.clone();
+        if let Some(v) = value_of {
+            sk.prepare_dimension_change(id, v);
+        }
+        let before = se.last_report.take();
+        // Freiheitsgrade davor: Fällt einer weg, war die neue Abhängigkeit nur teilweise
+        // überzählig (etwa Kollinear an zwei waagerechten Linien).
+        let report = sk.solve();
+        se.last_report = Some(report.clone());
+        let direct = match check_change(&report, before.as_ref(), prior, Some(id)) {
+            Some(SolveStatus::Conflicting) => {
+                Err(crate::msg!("sketch-apply-conflict", action = label.clone()))
+            }
+            Some(_) => Err(crate::msg!("sketch-apply-unsolved", action = label.clone())),
+            None => Ok(()),
+        };
+        se.guard_length(sk, id, old, &unsolved, direct)?;
+        let after = se.last_report.as_ref().unwrap_or(&report);
+        if after.redundant.contains(&id) {
+            if dimension {
+                se.make_driven(sk, id)?;
+            } else if after.dof < dof_of(prior) {
+                se.message = Some(crate::msg!("sketch-redundant-partly"));
+            } else {
+                se.message = Some(crate::msg!("sketch-redundant"));
+            }
+        } else if on_arc {
+            se.message = Some(crate::msg!("sketch-smooth-arc-g1"));
+        }
+        se.warn_if_unsolved();
+        Ok(id)
     }
 
     /// Macht das überzählige Maß `id` anzeigend (es zeigt den aktuellen Wert) und sagt es.
@@ -2205,7 +2244,7 @@ impl SketchSession {
     /// Lässt sich eine Skizze mit Formeln nach einer erlaubten Änderung nicht lösen (der Fehler
     /// bestand schon vorher), steht der Fehler, den sie beim Beenden bekommt (Plan P12), als
     /// Meldung da, sofern keine andere ansteht oder nur der allgemeine Hinweis.
-    fn note_formula_problem(&mut self, sf: &SketchFeature) {
+    pub(crate) fn note_formula_problem(&mut self, sf: &SketchFeature) {
         if let Some(p) = formula_problem(sf, self.last_report.as_ref())
             && (self.message.is_none() || self.message == unsolved_hint(self.last_report.as_ref()))
         {
@@ -2645,7 +2684,7 @@ fn smooth_on_arc(sk: &Sketch, kind: &ConstraintKind) -> bool {
 
 /// Darf ein Winkelmaß den Wert `value` bekommen? Der Betrag ist höchstens 180°; ein negativer
 /// Wert nur, wenn der Winkel jetzt schon negativ gemessen wird (`measured`, im Uhrzeigersinn).
-fn angle_value_ok(measured: Option<f64>, value: f64) -> bool {
+pub(crate) fn angle_value_ok(measured: Option<f64>, value: f64) -> bool {
     value.abs() <= std::f64::consts::PI && (value >= 0.0 || measured.is_some_and(|m| m < 0.0))
 }
 

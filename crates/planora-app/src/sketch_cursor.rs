@@ -329,6 +329,11 @@ impl SketchSession {
             }
             return cur;
         }
+        // Bemaßen: Der Zeiger zeigt nur, was der Klick wählte; die Art wählt die Rohlage.
+        if self.tool == Tool::Dimension {
+            cur.snap = self.snap(sk, raw, radius);
+            return cur;
+        }
         // Wer Kurven wählt, sieht nur Kurven: kein Punkt davor, keine Hilfslinie, kein Raster. Eine
         // Kurve wählen ist kein Fang, also geht das auch mit Strg.
         if self.picks_curves() {

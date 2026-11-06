@@ -15,7 +15,7 @@ use crate::sketch_state::{
     ConstraintAction, Item, Severity, SketchSession, Tool, TransformStage, formula_problem,
 };
 use crate::sketch_view::{
-    constraint_name_among, format_number, parse_number, round_centers, shown_value,
+    constraint_name_among, format_number, parse_number, round_centers, shown_value, stored_value,
 };
 use crate::state::AppState;
 use crate::theme;
@@ -75,6 +75,7 @@ pub fn tool_label(tool: Tool) -> String {
         Tool::Offset => tr!("action-sketch-offset"),
         Tool::MoveCopy => tr!("action-sketch-move-copy"),
         Tool::Scale => tr!("action-sketch-scale"),
+        Tool::Dimension => tr!("action-sketch-dimension"),
     }
 }
 
@@ -99,6 +100,7 @@ pub fn tool_hint(tool: Tool) -> String {
         Tool::Offset => tr!("sketch-tool-offset-hint"),
         Tool::MoveCopy => tr!("sketch-tool-move-copy-hint"),
         Tool::Scale => tr!("sketch-tool-scale-hint"),
+        Tool::Dimension => tr!("sketch-tool-dimension-hint"),
     }
 }
 
@@ -169,12 +171,15 @@ pub fn list_fx_label() -> String {
 /// Höhe der Abhängigkeitsliste, ab der sie rollt.
 const LIST_HEIGHT: f32 = 180.0;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum EditTarget {
     /// Neues Maß aus der Auswahl.
     New(ConstraintAction),
     /// Vorhandenes Maß ändern.
     Existing(ConstraintId),
+    /// Von der Skizzenbemaßung gesetztes, noch nicht angelegtes Maß (Skizzen 5); gehört zu
+    /// `SketchSession::dim.plan`, Esc legt nichts an.
+    Planned(ConstraintKind),
 }
 
 #[derive(Clone, Debug)]
@@ -313,6 +318,49 @@ fn new_editor(se: &SketchSession, sk: &Sketch, action: ConstraintAction) -> Edit
         jumps: se.history_jumps,
         value,
         display: current_unit(),
+    }
+}
+
+/// Maßfeld für das von der Skizzenbemaßung gesetzte Maß `kind` (Vorgabe: der gemessene Wert).
+fn planned_editor(se: &SketchSession, kind: &ConstraintKind) -> Editor {
+    let unit = constraint_unit(kind);
+    let value = stored_value(kind).unwrap_or(0.0);
+    let text = editor_text(value, unit);
+    Editor {
+        target: EditTarget::Planned(kind.clone()),
+        shown: text.clone(),
+        text,
+        unit,
+        driven: false,
+        focus: true,
+        reveal: true,
+        selection: se.selection.clone(),
+        jumps: se.history_jumps,
+        value,
+        display: current_unit(),
+    }
+}
+
+/// Das Maßfeld folgt dem gesetzten Maß der Skizzenbemaßung: Ist eins gesetzt, öffnet es (auch
+/// nach dem Umschalten Ø/R mit dem neuen Wert); ist es fort (Esc, anderes Werkzeug, neuer Klick,
+/// Rückgängig), schließt ein Feld dafür.
+fn follow_planned(panel: &mut PanelState, se: &SketchSession) {
+    let planned = se.dim.plan.as_ref().map(|p| &p.kind);
+    let open = match panel.editor.as_ref().map(|e| &e.target) {
+        Some(EditTarget::Planned(k)) => Some(k),
+        _ => None,
+    };
+    match (planned, open) {
+        (Some(k), Some(o)) if k == o => {}
+        (Some(k), _) => {
+            panel.error = None;
+            panel.editor = Some(planned_editor(se, k));
+        }
+        (None, Some(_)) => {
+            panel.editor = None;
+            panel.error = None;
+        }
+        (None, None) => {}
     }
 }
 
@@ -493,6 +541,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         panel.editor = None;
         panel.error = None;
     }
+    follow_planned(&mut panel, se);
     // Anzeigeeinheit umgestellt: Die Versatztexte stünden in der alten Einheit.
     if panel.pattern_unit != current_unit() {
         panel.pattern_dx = pattern_default();
@@ -1132,16 +1181,29 @@ fn value_editor(
     scope: &ParamScope,
 ) -> Option<String> {
     let editor = panel.editor.as_mut()?;
-    let title = match editor.target {
+    let title = match &editor.target {
         EditTarget::New(a) => a.label(),
-        EditTarget::Existing(id) => match sf.sketch.constraint(id) {
+        EditTarget::Existing(id) => match sf.sketch.constraint(*id) {
             Some(c) => crate::sketch_view::kind_label(&c.kind),
             None => {
                 panel.editor = None;
                 return None;
             }
         },
+        EditTarget::Planned(k) => crate::sketch_view::kind_label(k),
     };
+    let planned = matches!(editor.target, EditTarget::Planned(_));
+    let toggles = match &editor.target {
+        EditTarget::Planned(k) => crate::sketch_dimension::toggles(&sf.sketch, k),
+        _ => false,
+    };
+    // Gesetztes Maß: Tab schaltet Ø/R um und lässt dem Feld die Tastatur (egui hat aus Tab schon
+    // eine Fokusrichtung gemacht).
+    let mut toggle =
+        toggles && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab));
+    if toggle {
+        ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+    }
     let (mut ok, mut cancel) = (false, false);
     let mut live = None;
     // Untereinander, damit es in die Feldbreite 250 passt: Name, Feld mit Einheit bzw. Wert,
@@ -1184,6 +1246,11 @@ fn value_editor(
     if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
         ok = true;
     }
+    // Esc im Feld eines gesetzten Maßes: nichts anlegen; die Ansicht sieht die Taste nicht mehr.
+    if planned && response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+        cancel = true;
+    }
     ui.horizontal(|ui| {
         if ui
             .add_enabled(live.is_none(), egui::Button::new(tr!("common-ok")).small())
@@ -1195,7 +1262,22 @@ fn value_editor(
         if ui.small_button(tr!("common-cancel")).clicked() {
             cancel = true;
         }
+        if toggles
+            && ui
+                .small_button(toggle_label())
+                .on_hover_text(tr!("sketch-toggle-radius-diameter-hint"))
+                .clicked()
+        {
+            toggle = true;
+        }
     });
+    if toggle && se.toggle_dimension_preview(&sf.sketch) {
+        // Das Feld folgt dem umgeschalteten Maß mit seinem Wert.
+        if let Some(plan) = &se.dim.plan {
+            *editor = planned_editor(se, &plan.kind);
+        }
+        return live;
+    }
     // Frisch geöffnet: Name, Zahl und Knöpfe ins Bild rollen (in kleinen Fenstern liegt das
     // Zahlenfeld sonst unter dem sichtbaren Teil des Skizzenfelds).
     if editor.reveal {
@@ -1206,6 +1288,9 @@ fn value_editor(
         }
     }
     if cancel {
+        if planned {
+            se.cancel_planned();
+        }
         panel.editor = None;
         panel.error = None;
         return None;
@@ -1219,7 +1304,7 @@ fn value_editor(
     let kept = editor.unit == ParamUnit::Length
         && current_unit() != DisplayUnit::Millimeter
         && editor.text.trim() == editor.shown.trim();
-    let done = match (editor.target, kept) {
+    let done = match (editor.target.clone(), kept) {
         (EditTarget::New(action), true) => {
             se.apply_dimension_value(sf, action, editor.value).is_ok()
         }
@@ -1229,6 +1314,10 @@ fn value_editor(
             .is_ok(),
         (EditTarget::Existing(id), false) => {
             se.set_dimension_input(sf, id, &editor.text, scope).is_ok()
+        }
+        (EditTarget::Planned(kind), true) => se.apply_planned_value(sf, kind, editor.value).is_ok(),
+        (EditTarget::Planned(kind), false) => {
+            se.apply_planned(sf, kind, &editor.text, scope).is_ok()
         }
     };
     if done {
@@ -1393,14 +1482,28 @@ fn constraint_list(
                         panel.editor = Some(editor);
                     }
                     let mut d = driven;
-                    if ui
-                        .checkbox(&mut d, tr!("sketch-driven"))
-                        .on_hover_text(tr!("sketch-driven-hint"))
-                        .changed()
-                        && se.set_driven(&mut sf.sketch, id, d).is_ok()
-                    {
+                    let mut flip = false;
+                    let toggles = crate::sketch_dimension::toggles(&sf.sketch, &kind);
+                    let changed = ui
+                        .horizontal(|ui| {
+                            let r = ui
+                                .checkbox(&mut d, tr!("sketch-driven"))
+                                .on_hover_text(tr!("sketch-driven-hint"));
+                            // Radius und Durchmesser umschalten (auch zur Mittellinie).
+                            flip = toggles
+                                && ui
+                                    .small_button(toggle_label())
+                                    .on_hover_text(tr!("sketch-toggle-radius-diameter-hint"))
+                                    .clicked();
+                            r.changed()
+                        })
+                        .inner;
+                    if changed && se.set_driven(&mut sf.sketch, id, d).is_ok() {
                         // Ein anzeigendes Maß bestimmt nichts und hat keine Formel.
                         sf.prune_formulas();
+                    }
+                    if flip {
+                        let _ = se.toggle_radius_diameter(sf, id);
                     }
                 }
                 if delete {
@@ -1429,6 +1532,11 @@ fn formula_row(ui: &mut egui::Ui, formula: &str) -> egui::Response {
         fx
     })
     .inner
+}
+
+/// Beschriftung des Knopfs, der ein Maß zwischen Radius und Durchmesser umschaltet („Ø/R“).
+pub fn toggle_label() -> String {
+    tr!("sketch-toggle-radius-diameter")
 }
 
 /// Beschriftung des Schalters [`auto_axis`] in zwei Zeilen (nach dem ersten Wort umbrochen).

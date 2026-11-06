@@ -226,7 +226,8 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
         | Action::SketchBreak
         | Action::SketchOffset
         | Action::SketchMoveCopy
-        | Action::SketchScale => {
+        | Action::SketchScale
+        | Action::SketchDimension => {
             if let Some(tool) = a.sketch_tool()
                 && let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut()
             {
