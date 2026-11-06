@@ -4,6 +4,7 @@ pub(crate) mod arrangement;
 pub mod constraint;
 pub(crate) mod curves;
 pub mod data;
+pub mod dimension;
 /// Interne Hilfe des Solvers (Dual-Zahlen); nur für die Tests öffentlich.
 #[doc(hidden)]
 pub mod dual;
@@ -33,6 +34,7 @@ pub mod triangulate;
 
 pub use constraint::{ConstraintData, ConstraintId, ConstraintKind, Evaluation, LineOrPoints};
 pub use data::{ConstraintRecord, CurveRecord, PatternRecord, PointRecord, SketchData};
+pub use dimension::{DimMode, DimPick, DimPlan};
 pub use edit::TrimPiece;
 pub use error::SketchError;
 pub use fillet::{
