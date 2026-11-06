@@ -2800,5 +2800,48 @@ pub(crate) fn checked_value(
         .with_value(value)
         .ok_or_else(|| crate::msg!("sketch-not-dimension"))?;
     sk.check_constraint_value(&changed).map_err(err)?;
+    slot_overall_gap_ok(sk, &changed)?;
     Ok(changed)
+}
+
+/// Kleinster Abstand der Breite eines Langlochs „Gesamt“ unter seiner Gesamtlänge, als Anteil der
+/// Gesamtlänge. Darunter liegen die Mitten fast aufeinander, und `|a − b|` der Zeile
+/// `SlotOverall` ist bei a = b nicht differenzierbar: Gemessen (dichte Folgen, L 11…60) scheiterten
+/// Änderungen der Breite bis zu einem Abstand von 0,03 % der Gesamtlänge mit einer irreführenden
+/// Meldung („Widerspruch“ oder „klappt um“), auch auf dem Rückweg.
+const SLOT_OVERALL_MIN_GAP: f64 = 1e-3;
+
+/// Lässt das Maß `kind` (neuer Wert) zwischen Gesamtlänge und Breite eines Langlochs „Gesamt“
+/// genug Abstand (siehe [`SLOT_OVERALL_MIN_GAP`])? Geprüft wird die Gesamtlänge gegen ein
+/// bestimmendes Durchmesser- oder Radiusmaß ihrer Kappe; ohne ein solches Maß ist die Breite frei.
+fn slot_overall_gap_ok(sk: &Sketch, kind: &ConstraintKind) -> Result<(), Msg> {
+    use ConstraintKind as K;
+    let width_of = |cap: CurveId| {
+        sk.constraints()
+            .filter(|(_, c)| !c.driven)
+            .find_map(|(_, c)| match c.kind {
+                K::Diameter(k, d) if k == cap => Some(d),
+                K::Radius(k, r) if k == cap => Some(2.0 * r),
+                _ => None,
+            })
+    };
+    let lengths_of = |cap: CurveId, w: f64| -> Vec<(f64, f64)> {
+        sk.constraints()
+            .filter(|(_, c)| !c.driven)
+            .filter_map(|(_, c)| match c.kind {
+                K::SlotOverall(_, _, k, l) if k == cap => Some((l, w)),
+                _ => None,
+            })
+            .collect()
+    };
+    let pairs: Vec<(f64, f64)> = match *kind {
+        K::SlotOverall(_, _, cap, l) => width_of(cap).map(|w| (l, w)).into_iter().collect(),
+        K::Diameter(cap, d) => lengths_of(cap, d),
+        K::Radius(cap, r) => lengths_of(cap, 2.0 * r),
+        _ => Vec::new(),
+    };
+    if pairs.iter().any(|&(l, w)| l - w < SLOT_OVERALL_MIN_GAP * l) {
+        return Err(crate::msg!("sketch-slot-overall-gap"));
+    }
+    Ok(())
 }

@@ -15,7 +15,7 @@ use planora_i18n::tr;
 use planora_math::{DVec2, DVec3, Frame};
 use planora_render::{EdgeRef, OrbitCamera, Pick, exact_step, grid_radius, line_weight};
 use planora_sketch::ExtractedProfiles;
-use planora_sketch::constraint::{ConstraintKind, LineOrPoints};
+use planora_sketch::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
 use planora_sketch::dimension::{DimPick, DimPlan};
 use planora_sketch::model::{CurveId, CurveKind, LineStyle, PointId, Sketch};
 use planora_sketch::pattern::PatternSlot;
@@ -1300,6 +1300,9 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
 
     // Klicks
     let mut project_at = None;
+    // Doppelklick auf einen Maßtext im Auswahlwerkzeug: öffnet sein Feld wie die Liste (das Feld
+    // braucht den ganzen Stand und öffnet darum erst nach der Eingabe dieses Bilds).
+    let mut open_label = None;
     // egui zählt Klicks nur als Doppel-/Dreifachklick, wenn sie höchstens `max_click_dist`
     // (6 Pixel) vom vorigen Klick entfernt sind. Ein „Dreifachklick“ entsteht schon, wenn zwei
     // schnelle Klicks an derselben Stelle einem Klick anderswo folgen (Zeit zum vorletzten Klick,
@@ -1307,7 +1310,21 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     if se.box_aborted {
         // Das Loslassen nach dem Abbruch ist kein Klick.
     } else if (response.double_clicked() || response.triple_clicked()) && !se.click_after_flyout {
-        if se.tool == Tool::Select || se.transform_picking() {
+        let label = pointer
+            .filter(|_| se.tool == Tool::Select)
+            .and_then(|p| label_at(ui.ctx(), p))
+            .filter(|&id| {
+                sf.sketch
+                    .constraint(id)
+                    .is_some_and(|c| c.kind.is_dimension())
+            });
+        if let Some(id) = label {
+            // Wie ein Doppelklick in der Liste: nur dieses Maß gewählt, ohne Klicklage auf einer
+            // Kurve (Skizzen 5, Task 7: eine Klicklage gehört nur zu ihrer Auswahl).
+            se.drop_curve_picks();
+            se.selection = vec![Item::Constraint(id)];
+            open_label = Some(id);
+        } else if se.tool == Tool::Select || se.transform_picking() {
             // Wie beim einfachen Klick: Punkt vor Kurve. Ein Exemplar oder eine Vorlage eines
             // Musters öffnet im Auswahlwerkzeug das Muster zum Bearbeiten (Skizzen 5).
             if let Some(at) = at {
@@ -1375,6 +1392,12 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         let gesture = se.in_gesture();
         if enter && !flyout && !gesture {
             let _ = match &commit_scope {
+                // Gesetztes Maß, dessen Feld die Tastatur nicht mehr hat (etwa nach einem
+                // abgelehnten Klick daneben): Eingabe legt es an wie dieser Klick; geht das nicht,
+                // bleiben Maß, Text und Meldung, statt stumm zu verfallen.
+                Some(scope) if se.tool == Tool::Dimension && se.dim.plan.is_some() => {
+                    se.accept_planned(sf, scope)
+                }
                 // Felder da, aber ohne Fokus: derselbe Weg wie die Eingabe im Feld.
                 Some(scope)
                     if !se.runs_transform()
@@ -1413,6 +1436,9 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         None
     };
     state.set_hover(hover);
+    if let Some(id) = open_label {
+        crate::sketch_panel::open_existing_dimension_editor(ui.ctx(), state, id);
+    }
     if let Some(p) = project_at {
         match state.pick(map.local(p), map.viewport()) {
             // Fehler (etwa ein Körper, der erst nach der Skizze entsteht) stehen in der
@@ -1616,6 +1642,7 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     let mut constraints: Vec<_> = sk.constraints().collect();
     constraints.sort_by_key(|(id, _)| !bad.contains(id));
     let centers = round_centers(sk);
+    let mut hits: Vec<LabelHit> = Vec::new();
     for (id, c) in constraints {
         let mark = overlay_mark(&centers, &c.kind);
         let text = match mark {
@@ -1654,11 +1681,18 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
                 let at = s + vec2(6.0, -18.0);
                 match mark {
                     Some(m) => mark_label(&painter, at, m, color, col.label_bg, &mut placed),
-                    None => label(&painter, at, &text, color, col.label_bg, &mut placed),
+                    None => {
+                        let rect = label(&painter, at, &text, color, col.label_bg, &mut placed);
+                        if c.kind.is_dimension() {
+                            hits.push(LabelHit { id, rect });
+                        }
+                    }
                 }
             }
         }
     }
+    // Für den Doppelklick im nächsten Bild (die Eingabe kommt vor dem Zeichnen).
+    ui.ctx().data_mut(|d| d.insert_temp(label_hits_id(), hits));
 
     // Zeichen der automatischen Abhängigkeiten, bevor sie entstehen
     for (at, auto) in auto_marks(sk, se) {
@@ -1779,6 +1813,7 @@ fn paint_snap_mark(painter: &egui::Painter, at: Pos2, snap: Snap, color: Color32
 }
 
 /// Kleine Beschriftung mit Hintergrund; weicht bereits gesetzten Beschriftungen nach unten aus.
+/// Liefert das Rechteck samt Hintergrund.
 fn label(
     painter: &egui::Painter,
     at: Pos2,
@@ -1786,11 +1821,42 @@ fn label(
     color: Color32,
     bg: Color32,
     placed: &mut Vec<Rect>,
-) {
+) -> Rect {
     let galley = painter.layout_no_wrap(text.to_string(), FontId::proportional(LABEL_SIZE), color);
     let r = place_label(Rect::from_min_size(at, galley.size()).expand(2.0), placed);
     painter.rect_filled(r, 3.0, bg);
     painter.galley(r.min + vec2(2.0, 2.0), galley, color);
+    r
+}
+
+/// Ein gezeichneter Maßtext im Bild: Maß und Rechteck des Texts samt Hintergrund (Bildschirm).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LabelHit {
+    pub id: ConstraintId,
+    pub rect: Rect,
+}
+
+fn label_hits_id() -> egui::Id {
+    egui::Id::new("planora-sketch-label-hits")
+}
+
+/// Das Maß, dessen Text im letzten Bild unter `p` stand (der zuletzt gezeichnete zuerst).
+fn label_at(ctx: &egui::Context, p: Pos2) -> Option<ConstraintId> {
+    ctx.data(|d| d.get_temp::<Vec<LabelHit>>(label_hits_id()))?
+        .iter()
+        .rev()
+        .find(|h| h.rect.contains(p))
+        .map(|h| h.id)
+}
+
+/// Maßtexte des letzten Bilds mit ihren Rechtecken (für Tests).
+#[doc(hidden)]
+pub fn label_hits(ctx: &egui::Context) -> Vec<(ConstraintId, Rect)> {
+    ctx.data(|d| d.get_temp::<Vec<LabelHit>>(label_hits_id()))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|h| (h.id, h.rect))
+        .collect()
 }
 
 /// Wie [`label`], aber mit einem gezeichneten Zeichen statt Text: ein Feld in Texthöhe, darin das

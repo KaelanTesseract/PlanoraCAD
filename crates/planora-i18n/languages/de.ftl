@@ -1142,6 +1142,7 @@ sketch-kind-pattern-circular-hint = Kurven wählen, Eingabe, dann die Mitte ankl
 sketch-pattern-pick-direction-hint = Eine Linie für die Richtung anklicken.
 sketch-pattern-pick-center-hint = Die Mitte anklicken: einen Punkt oder eine Stelle (Fang und Raster, Strg ohne Fang).
 sketch-slot-too-wide = Diese Breite passt nicht: Das Langloch wäre zu breit oder hätte gar keine Breite
+sketch-slot-overall-gap = Breite und Gesamtlänge des Langlochs liegen zu dicht beieinander: Die Breite muss mindestens 0,1 % unter der Gesamtlänge bleiben; das Maß wurde nicht geändert
 sketch-angle-range = Der Betrag eines Winkelmaßes darf höchstens 180° sein, und ein negativer Wert ist nur bei einem schon negativ gemessenen Winkel erlaubt; das Maß wurde nicht geändert
 sketch-dimension-folds = Mit diesem Wert klappt die Form um; das Maß wurde nicht geändert
 sketch-circle-collinear = Die drei Punkte liegen auf einer Geraden oder fallen zusammen; daraus wird kein Kreis

@@ -831,9 +831,8 @@ impl SketchSession {
                 }
                 continue;
             }
-            let overall = self.overall_center_distance(sf, &created, *kind, &typed, scope)?;
             note = self
-                .add_typed_dimension(sf, &created, *kind, text, overall, chain, scope)?
+                .add_typed_dimension(sf, &created, *kind, text, chain, scope)?
                 .or(note);
         }
         if note.is_some() {
@@ -844,62 +843,22 @@ impl SketchSession {
         Ok(())
     }
 
-    /// Der Mittenabstand `L − W` zur getippten Gesamtlänge eines Langlochs „Gesamt“ (Ruling Task 2:
-    /// Die Gesamtlänge ist kein eigenes Maß); `W` ist die getippte Breite oder die vom Zeiger. `None`
-    /// für jedes andere Maß.
-    fn overall_center_distance(
-        &self,
-        sf: &SketchFeature,
-        created: &Created,
-        kind: FieldKind,
-        typed: &[(FieldKind, String)],
-        scope: &ParamScope,
-    ) -> Result<Option<f64>, Msg> {
-        let (Some(ToolKind::SlotOverall), Created::Slot(ids), FieldKind::Length) =
-            (self.planned_kind(), created, kind)
-        else {
-            return Ok(None);
-        };
-        let value_of = |wanted: FieldKind| {
-            typed
-                .iter()
-                .find(|(k, _)| *k == wanted)
-                .map(|(k, text)| dimension_input(text, k.unit(), scope).map(|(v, _)| v))
-                .transpose()
-        };
-        let length =
-            value_of(FieldKind::Length)?.ok_or_else(|| crate::msg!("sketch-field-rejected"))?;
-        let width = match value_of(FieldKind::Width)? {
-            Some(w) => w,
-            None => {
-                2.0 * sf
-                    .sketch
-                    .radius(ids.caps[0])
-                    .ok_or_else(|| crate::msg!("sketch-field-rejected"))?
-            }
-        };
-        Ok(Some(length - width))
-    }
-
     /// Legt das Maß eines getippten Werts an. Widerspruch ist ein Fehler; `Some`: das Maß war
     /// überzählig und ist anzeigend, das ist die Meldung dazu. Ein überzähliger Öffnungswinkel
-    /// entfällt samt seinen beiden Hilfslinien, die sonst keinen Zweck hätten. `computed` ersetzt den
-    /// getippten Wert; das Maß bekommt dann weder Formel noch Speichertext.
-    #[allow(clippy::too_many_arguments)]
+    /// entfällt samt seinen beiden Hilfslinien, die sonst keinen Zweck hätten.
     fn add_typed_dimension(
         &mut self,
         sf: &mut SketchFeature,
         created: &Created,
         kind: FieldKind,
         text: &str,
-        computed: Option<f64>,
         chain: Option<CurveId>,
         scope: &ParamScope,
     ) -> Result<Option<Msg>, Msg> {
-        let (typed, _) = dimension_input(text, kind.unit(), scope)?;
-        let value = computed.unwrap_or(typed);
+        let (value, _) = dimension_input(text, kind.unit(), scope)?;
         let prior = sf.sketch.clone();
-        let dim = dimension_kind(&mut sf.sketch, created, kind, chain)?;
+        let overall = self.planned_kind() == Some(ToolKind::SlotOverall);
+        let dim = dimension_kind(&mut sf.sketch, created, kind, chain, overall)?;
         let dim = checked_value(&sf.sketch, &dim, value)?;
         let old = sf.sketch.measure(&dim);
         let id = sf.sketch.add_constraint(dim).map_err(err)?;
@@ -922,9 +881,6 @@ impl SketchSession {
             self.make_driven(&mut sf.sketch, id)?;
             return Ok(self.message.take());
         }
-        if computed.is_some() {
-            return Ok(None);
-        }
         if let Err(text) = self.set_dimension_input(sf, id, text, scope) {
             return Err(self.message.take().unwrap_or(Msg::Raw(text)));
         }
@@ -934,12 +890,14 @@ impl SketchSession {
 
 /// Das Maß der Art `kind` an der fertigen Kurve, noch ohne Wert. Winkel: `Angle(bezug, linie)`
 /// oder `Angle(linie, bezug)`, je nachdem, zu welcher Seite die Linie abgeht, damit der Wert
-/// positiv bleibt. Öffnungswinkel: zwei Konstruktionslinien Mitte→Start und Mitte→Ende.
+/// positiv bleibt. Öffnungswinkel: zwei Konstruktionslinien Mitte→Start und Mitte→Ende. `overall`:
+/// das Langloch „Gesamt“, seine Länge ist die Gesamtlänge (Skizzen 5, Entscheidung 12).
 fn dimension_kind(
     sk: &mut Sketch,
     created: &Created,
     kind: FieldKind,
     chain: Option<CurveId>,
+    overall: bool,
 ) -> Result<ConstraintKind, Msg> {
     use ConstraintKind as K;
     use FieldKind as F;
@@ -967,6 +925,9 @@ fn dimension_kind(
             K::DistancePointLine(ids.center, ids.lines[0], 0.0)
         }
         (Created::Polygon { ids, .. }, F::Length) => K::Distance(ids.points[0], ids.points[1], 0.0),
+        (Created::Slot(ids), F::Length) if overall => {
+            K::SlotOverall(ids.centers[0], ids.centers[1], ids.caps[0], 0.0)
+        }
         (Created::Slot(ids), F::Length) => K::Distance(ids.centers[0], ids.centers[1], 0.0),
         (Created::Slot(ids), F::Width) => K::Diameter(ids.caps[0], 0.0),
         (Created::ArcSlot(ids), F::Radius) => K::Radius(ids.axis, 0.0),

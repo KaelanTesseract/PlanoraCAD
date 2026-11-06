@@ -416,6 +416,15 @@ impl SketchSession {
             }
             cur.snap = Snap::Grid;
             cur.snap_at = Some(cur.at);
+            // Liegt auf dem Rasterpunkt schon ein Punkt, bindet die Kurve an ihn, statt einen
+            // zweiten daraufzulegen (Skizzen 5, Entscheidung 17); Strg schaltet das mit dem Raster ab.
+            if let Some(p) = sk.point_at(cur.at, sk.tolerance().linear)
+                && let Ok(at) = sk.point_xy(p)
+            {
+                cur.at = at;
+                cur.snap = Snap::Point(p);
+                cur.snap_at = Some(at);
+            }
         }
     }
 

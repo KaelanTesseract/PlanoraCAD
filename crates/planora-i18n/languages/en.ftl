@@ -1159,6 +1159,7 @@ sketch-kind-pattern-circular-hint = Choose curves, Enter, then click the center 
 sketch-pattern-pick-direction-hint = Click a line for the direction.
 sketch-pattern-pick-center-hint = Click the center: a point or a spot (snapping and grid, Ctrl without snapping).
 sketch-slot-too-wide = This width does not fit: the slot would be too wide or have no width at all
+sketch-slot-overall-gap = The width and overall length of the slot are too close: the width must stay at least 0.1 % below the overall length; the dimension was not changed
 sketch-angle-range = The amount of an angle dimension must not exceed 180°, and a negative value is only allowed for an angle that already measures negative; the dimension was not changed
 sketch-dimension-folds = This value would fold the shape over; the dimension was not changed
 sketch-circle-collinear = The three points are on one line or coincide, so they make no circle
