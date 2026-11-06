@@ -537,6 +537,7 @@ fn pattern_to(m: &PatternRecord) -> PatternDto {
         PatternDir::SketchX => MusterRichtungDto::SkizzeX,
         PatternDir::SketchY => MusterRichtungDto::SkizzeY,
         PatternDir::Line(l) => MusterRichtungDto::Linie { kurve: l.index() },
+        PatternDir::Perpendicular => MusterRichtungDto::Senkrecht,
     };
     PatternDto {
         art: match m.kind {
@@ -608,6 +609,7 @@ fn patterns_from(origin: &str, feature: &str, d: &SketchDto) -> Result<Vec<Patte
             MusterRichtungDto::SkizzeX => PatternDir::SketchX,
             MusterRichtungDto::SkizzeY => PatternDir::SketchY,
             MusterRichtungDto::Linie { kurve } => PatternDir::Line(curve(kurve)?),
+            MusterRichtungDto::Senkrecht => PatternDir::Perpendicular,
         })
     };
     check_len(origin, &|| tr!("proj-l-patterns"), d.muster.len())?;

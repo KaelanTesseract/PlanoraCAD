@@ -152,13 +152,27 @@ pub fn paint_pattern_grips(
 
 /// Laufender Zug an einem Griff: Stelle des Drückens, Wert davor, Teiler (Zahl der Schritte bis
 /// zum letzten Exemplar, beim Abstand `n − 1`, bei der Gesamtlänge 1) und Mitte des Kreismusters.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PatternGripDrag {
     pub grip: PatternGrip,
     pub press: DVec2,
     pub start: f64,
     pub divisor: f64,
     pub center: DVec2,
+    /// Das Feld dieses Werts vor dem Zug (samt Formel): Abbrechen stellt es wieder her.
+    pub saved: Option<SavedField>,
+}
+
+/// Stand eines Felds der Anordnung vor einem Griffzug.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SavedField {
+    pub kind: FieldKind,
+    pub text: String,
+    pub touched: bool,
+    pub locked: Option<f64>,
+    pub error: Option<String>,
+    /// Die gemerkte Formel des Felds (`None`: keine gemerkt).
+    pub formula: Option<(PatternSlot, Option<String>)>,
 }
 
 /// Neuer Wert des Griffs für den Zeiger `now`, rein: Der Pfeil folgt der Projektion des Zugs auf
@@ -238,8 +252,17 @@ pub(crate) fn instance_of_item(sk: &Sketch, item: Item) -> Option<(PatternId, [i
     }
 }
 
-/// Einheitsvektor einer Richtung (eine Linie zum Zeitpunkt der Rechnung).
-fn dir_unit(sk: &Sketch, dir: PatternDir) -> Option<DVec2> {
+/// Einheitsvektor der Richtung `k` (eine Linie zum Zeitpunkt der Rechnung; „senkrecht“ ist die
+/// erste Richtung um 90° gedreht, wie `pattern_lattice`).
+fn dir_unit(sk: &Sketch, dirs: [PatternDir; 2], k: usize) -> Option<DVec2> {
+    match (k, dirs[k.min(1)]) {
+        (1, PatternDir::Perpendicular) => Some(axis_unit(sk, dirs[0])?.perp()),
+        (_, dir) => axis_unit(sk, dir),
+    }
+}
+
+/// Einheitsvektor einer Achse oder Linie; „senkrecht“ allein hat keinen.
+fn axis_unit(sk: &Sketch, dir: PatternDir) -> Option<DVec2> {
     match dir {
         PatternDir::SketchX => Some(DVec2::X),
         PatternDir::SketchY => Some(DVec2::Y),
@@ -249,6 +272,7 @@ fn dir_unit(sk: &Sketch, dir: PatternDir) -> Option<DVec2> {
             }
             _ => None,
         },
+        PatternDir::Perpendicular => None,
     }
 }
 
@@ -285,7 +309,8 @@ fn default_rect_plan(sk: &Sketch, sources: Vec<CurveId>) -> Option<PatternPlan> 
     let tol = sk.tolerance().linear;
     Some(PatternPlan {
         kind: PatternKind::Rect {
-            dirs: [PatternDir::SketchX, PatternDir::SketchY],
+            // Wie Fusion: Die zweite Richtung steht senkrecht zur ersten (hier zunächst y).
+            dirs: [PatternDir::SketchX, PatternDir::Perpendicular],
             extent: [false; 2],
             symmetric: [false; 2],
         },
@@ -412,10 +437,26 @@ impl SketchSession {
     /// Doppelklick auf die Kurve `c` im Auswahlwerkzeug: Gehört sie zu einem Muster, öffnet das
     /// Werkzeug es zum Bearbeiten (`true`).
     pub fn begin_pattern_edit_at(&mut self, sk: &mut Sketch, c: CurveId) -> bool {
-        match sk.pattern_of_curve(c) {
-            Some((id, _)) if self.tool == Tool::Select => self.begin_pattern_edit(sk, id),
-            _ => false,
+        self.begin_pattern_edit_item(sk, Item::Curve(c))
+    }
+
+    /// Wie [`begin_pattern_edit_at`](Self::begin_pattern_edit_at) für Kurve oder Punkt (ein
+    /// Doppelklick nahe einer Ecke fängt den Punkt): Punkte eines Exemplars oder der Vorlage
+    /// öffnen ihr Muster.
+    pub fn begin_pattern_edit_item(&mut self, sk: &mut Sketch, item: Item) -> bool {
+        if self.tool != Tool::Select {
+            return false;
         }
+        let id = match item {
+            Item::Curve(c) => sk.pattern_of_curve(c).map(|(id, _)| id),
+            Item::Point(p) => instance_of_item(sk, item).map(|(id, _)| id).or_else(|| {
+                sk.patterns()
+                    .find(|(_, d)| d.source_points.contains(&p))
+                    .map(|(id, _)| id)
+            }),
+            Item::Constraint(_) => None,
+        };
+        id.is_some_and(|id| self.begin_pattern_edit(sk, id))
     }
 
     /// Klick der Anordnung: Beim Wählen schaltet er Kurve oder Punkt unter dem Zeiger, beim
@@ -467,7 +508,6 @@ impl SketchSession {
                 match line {
                     Some(c) => {
                         self.set_pattern_direction(
-                            sk,
                             self.pattern.direction_slot,
                             PatternDir::Line(c),
                         );
@@ -496,10 +536,10 @@ impl SketchSession {
         }
     }
 
-    /// Setzt die Richtung `slot` des Rechteckmusters. Liegt die andere Richtung auf einer
-    /// Skizzenachse, die der neuen fast gleich läuft, nimmt sie die andere Achse (die zweite
-    /// Richtung bleibt so quer zur ersten, **Annahme** wie Fusion).
-    pub fn set_pattern_direction(&mut self, sk: &Sketch, slot: usize, dir: PatternDir) {
+    /// Setzt die Richtung `slot` des Rechteckmusters. Bekommt die erste Richtung eine Linie und
+    /// war die zweite keine eigene Linie, steht die zweite senkrecht zur ersten (wie Fusion) und
+    /// folgt ihr, auch wenn die Linie sich später dreht.
+    pub fn set_pattern_direction(&mut self, slot: usize, dir: PatternDir) {
         let Some(plan) = self.pattern.plan.as_mut() else {
             return;
         };
@@ -509,16 +549,12 @@ impl SketchSession {
         if slot > 1 {
             return;
         }
+        if slot == 0 && dir == PatternDir::Perpendicular {
+            return;
+        }
         dirs[slot] = dir;
-        let other = 1 - slot;
-        if let (Some(u), PatternDir::SketchX | PatternDir::SketchY) =
-            (dir_unit(sk, dir), dirs[other])
-        {
-            dirs[other] = if u.x.abs() >= u.y.abs() {
-                PatternDir::SketchY
-            } else {
-                PatternDir::SketchX
-            };
+        if slot == 0 && !matches!(dirs[1], PatternDir::Line(_)) {
+            dirs[1] = PatternDir::Perpendicular;
         }
     }
 
@@ -671,7 +707,7 @@ impl SketchSession {
         let origin = (lo + hi) * 0.5;
         let mut arrows = [None; 2];
         for k in 0..2 {
-            let Some(unit) = dir_unit(sk, dirs[k]) else {
+            let Some(unit) = dir_unit(sk, dirs, k) else {
                 continue;
             };
             let n = plan.counts[k].max(1);
@@ -705,6 +741,24 @@ impl SketchSession {
             PatternGrip::Angle => (PatternSlot::Angle, FieldKind::PatternAngle),
         };
         let start = slot_value(&now, slot);
+        let saved = self
+            .input
+            .fields
+            .iter()
+            .find(|f| f.kind == field)
+            .map(|f| SavedField {
+                kind: f.kind,
+                text: f.text.clone(),
+                touched: f.touched,
+                locked: f.locked,
+                error: f.error.clone(),
+                formula: self
+                    .pattern
+                    .formulas
+                    .iter()
+                    .find(|(s, _)| *s == slot)
+                    .cloned(),
+            });
         if let Some(plan) = self.pattern.plan.as_mut() {
             *plan = with_slot(plan.clone(), slot, start);
         }
@@ -740,6 +794,7 @@ impl SketchSession {
             start,
             divisor,
             center,
+            saved,
         });
     }
 
@@ -756,7 +811,7 @@ impl SketchSession {
 
     /// Führt den Griff zum Zeiger `at`: Der Abstand folgt der Projektion des Zugs auf die Richtung.
     pub fn pattern_grip_to(&mut self, sk: &Sketch, at: DVec2) {
-        let Some(d) = self.pattern.drag else {
+        let Some(d) = self.pattern.drag.clone() else {
             return;
         };
         let Some(plan) = self.pattern.plan.as_mut() else {
@@ -764,7 +819,7 @@ impl SketchSession {
         };
         match (d.grip, plan.kind) {
             (PatternGrip::Arrow(k), PatternKind::Rect { dirs, .. }) => {
-                let Some(dir) = dir_unit(sk, dirs[k.min(1)]) else {
+                let Some(dir) = dir_unit(sk, dirs, k.min(1)) else {
                     return;
                 };
                 plan.values[k.min(1)] = pattern_motion(&d, dir, at);
@@ -794,6 +849,18 @@ impl SketchSession {
                 PatternGrip::Angle => PatternSlot::Angle,
             };
             *plan = with_slot(plan.clone(), slot, d.start);
+        }
+        // Das Feld wie vor dem Zug, samt getippter Formel.
+        if let Some(saved) = d.saved {
+            if let Some(f) = self.input.fields.iter_mut().find(|f| f.kind == saved.kind) {
+                f.text = saved.text;
+                f.touched = saved.touched;
+                f.locked = saved.locked;
+                f.error = saved.error;
+            }
+            if let Some((slot, formula)) = saved.formula {
+                self.pattern.typed_formula(slot, formula);
+            }
         }
         self.box_aborted = true;
     }

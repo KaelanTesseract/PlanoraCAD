@@ -703,6 +703,25 @@ fn a_line_direction_round_trips() {
     file_round_trip(&s, "Richtungslinie");
 }
 
+/// Fix-Runde Task 9: „senkrecht zu Richtung 1“ steht als eigene Richtung in der Datei.
+#[test]
+fn a_perpendicular_second_direction_round_trips() {
+    let mut s = new_sketch();
+    let (dir, _, _) = line(&mut s, (0.0, -20.0), (10.0, -15.0));
+    let r = s
+        .add_rectangle(DVec2::new(0.0, 0.0), DVec2::new(10.0, 6.0))
+        .unwrap();
+    let mut plan = rect_plan(
+        r.lines.to_vec(),
+        [PatternDir::Line(dir), PatternDir::Perpendicular],
+    );
+    plan.counts = [2, 2];
+    s.add_pattern(&plan).unwrap();
+    let text = encode_version(&document(s.clone()).snapshot()).unwrap();
+    assert!(text.contains("\"typ\": \"senkrecht\""), "{text}");
+    file_round_trip(&s, "Senkrecht zu Richtung 1");
+}
+
 #[test]
 fn an_arc_or_elliptic_arc_closing_a_pattern_loop_is_refused_and_files_stay_loadable() {
     let mut s = new_sketch();

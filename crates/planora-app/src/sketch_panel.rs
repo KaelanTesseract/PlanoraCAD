@@ -907,6 +907,7 @@ fn pattern_options(ui: &mut egui::Ui, se: &mut SketchSession, sf: &mut SketchFea
                         PatternDir::SketchX => tr!("sketch-pattern-axis-x"),
                         PatternDir::SketchY => tr!("sketch-pattern-axis-y"),
                         PatternDir::Line(_) => tr!("sketch-pattern-line"),
+                        PatternDir::Perpendicular => tr!("sketch-pattern-perpendicular"),
                     };
                     let n = (k + 1).to_string();
                     ui.label(format!(
@@ -1143,7 +1144,8 @@ fn side_contents(
             ui,
             IconSource::Font(Icon::Delete),
             &tr!("action-delete"),
-            !se.selection.is_empty(),
+            // In der Anordnung gehört die Auswahl der Vorlage (wie Entf in der Ansicht).
+            !se.selection.is_empty() && !se.runs_pattern(),
         )
         .on_disabled_hover_text(tr!("sketch-delete-disabled"))
         .clicked()
@@ -1616,7 +1618,7 @@ fn constraint_list(
                         let _ = se.toggle_radius_diameter(sf, id);
                     }
                 }
-                if delete {
+                if delete && !se.runs_pattern() {
                     se.selection = vec![item];
                     se.delete_selection(&mut sf.sketch);
                 }

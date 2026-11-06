@@ -31,12 +31,15 @@ pub const PATTERN_MAX_CURVES: usize = 3600;
 /// geändert hat (Entscheidung 5).
 pub(crate) const PATTERN_ROUNDS: usize = 3;
 
-/// Richtung eines Rechteckmusters: die Achsen der Skizze oder eine Linie (folgt ihr).
+/// Richtung eines Rechteckmusters: die Achsen der Skizze, eine Linie (folgt ihr) oder, nur als
+/// zweite Richtung, senkrecht zur ersten (Fusion; folgt der ersten, auch einer drehenden Linie).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PatternDir {
     SketchX,
     SketchY,
     Line(CurveId),
+    /// Die erste Richtung um 90° gegen den Uhrzeigersinn gedreht; nur in `dirs[1]`.
+    Perpendicular,
 }
 
 /// Feld eines Musterwerts: Anzahl und Abstand je Richtung (Rechteck), Anzahl und Winkel (Kreis).
@@ -640,6 +643,8 @@ impl Sketch {
         match dir {
             PatternDir::SketchX => Ok(DVec2::X),
             PatternDir::SketchY => Ok(DVec2::Y),
+            // Braucht die erste Richtung; `pattern_lattice` dreht sie.
+            PatternDir::Perpendicular => Err(PatternProblem::BadDirection),
             PatternDir::Line(l) => {
                 let Some(CurveKind::Line { a, b }) = self.curve(l).map(|c| &c.kind) else {
                     return Err(PatternProblem::BadDirection);
@@ -710,7 +715,10 @@ impl Sketch {
                     if n[k] > 1 && s.abs() <= tol.linear {
                         return Err(PatternProblem::ZeroStep);
                     }
-                    unit[k] = self.pattern_dir(dirs[k])?;
+                    unit[k] = match (k, dirs[k]) {
+                        (1, PatternDir::Perpendicular) => unit[0].perp(),
+                        _ => self.pattern_dir(dirs[k])?,
+                    };
                     step[k] = unit[k] * s;
                 }
                 if hi[0] > lo[0] && hi[1] > lo[1] && unit[0].perp_dot(unit[1]).abs() <= tol.angular

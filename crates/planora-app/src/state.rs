@@ -3097,6 +3097,7 @@ impl AppState {
             .map(|f| f.id)
             .collect();
         let count = self.document.edit_count();
+        let constraints_before = self.sketch_constraint_counts();
         let out = match act(&mut self.document) {
             Ok(out) => out,
             Err(e) => return self.fail(e.to_string()),
@@ -3105,6 +3106,19 @@ impl AppState {
             return Ok(out);
         }
         self.refresh();
+        // Skizzen 5: Senkt eine Formel die Anzahl eines Musters, entfallen die Abhängigkeiten an
+        // den wegfallenden Exemplaren; die Meldung nennt ihre Zahl wie im Werkzeug.
+        let after = self.sketch_constraint_counts();
+        let dropped: usize = constraints_before
+            .iter()
+            .filter_map(|(id, n)| {
+                let now = after.iter().find(|(f, _)| f == id)?.1;
+                Some(n.saturating_sub(now))
+            })
+            .sum();
+        if dropped > 0 {
+            self.message = Some(tr!("sketch-pattern-dropped", n = dropped));
+        }
         let newly_failed = self
             .document
             .features()
@@ -3116,8 +3130,24 @@ impl AppState {
                 _ => None,
             });
         if let Some(m) = newly_failed {
-            self.message = Some(m);
+            self.message = Some(match self.message.take() {
+                Some(note) if dropped > 0 => format!("{m} {note}"),
+                _ => m,
+            });
         }
         Ok(out)
+    }
+
+    /// Zahl der Abhängigkeiten (ohne interne) je Skizzen-Feature, für die Meldung nach einer
+    /// Parameteränderung.
+    fn sketch_constraint_counts(&self) -> Vec<(FeatureId, usize)> {
+        self.document
+            .features()
+            .iter()
+            .filter_map(|f| {
+                let sk = self.document.sketch_of(f.id)?;
+                Some((f.id, sk.constraints().count()))
+            })
+            .collect()
     }
 }

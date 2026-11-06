@@ -410,6 +410,48 @@ fn instances_follow_a_turning_direction_line() {
     }
 }
 
+/// Fix-Runde Task 9: Richtung 2 „senkrecht zu Richtung 1“ (Fusion) folgt der drehenden Linie;
+/// als erste Richtung geht sie nicht.
+#[test]
+fn a_perpendicular_second_direction_turns_with_the_line() {
+    let mut s = sketch();
+    let (src, _, _) = dimensioned_rect(&mut s);
+    let a = s.add_point(-50.0, -50.0).unwrap();
+    let b = s.add_point(-30.0, -50.0).unwrap();
+    let l = s.add_line(a, b).unwrap();
+    let mut plan = rect_plan(src, [2, 3], [15.0, 10.0]);
+    plan.kind = PatternKind::Rect {
+        dirs: [PatternDir::Line(l), PatternDir::Perpendicular],
+        extent: [false, false],
+        symmetric: [false, false],
+    };
+    let id = s.add_pattern(&plan).unwrap();
+    for deg in -180..=180 {
+        let r = (deg as f64).to_radians();
+        s.set_point_xy(b, -50.0 + 20.0 * r.cos(), -50.0 + 20.0 * r.sin())
+            .unwrap();
+        solved(&mut s);
+        let data = s.pattern(id).unwrap();
+        let src0 = at(&s, data.source_points[0]);
+        let (u, n) = (v(r.cos(), r.sin()), v(-r.sin(), r.cos()));
+        for inst in &data.instances {
+            let want = src0 + u * (15.0 * inst.at[0] as f64) + n * (10.0 * inst.at[1] as f64);
+            assert!(close(at(&s, inst.points[0]), want, 1e-9), "{deg}");
+        }
+    }
+    // Als erste Richtung gibt es kein „senkrecht“.
+    let mut bad = current_plan(&s, id);
+    bad.kind = PatternKind::Rect {
+        dirs: [PatternDir::Perpendicular, PatternDir::SketchY],
+        extent: [false, false],
+        symmetric: [false, false],
+    };
+    assert_eq!(
+        s.pattern_transforms(&bad).unwrap_err(),
+        PatternProblem::BadDirection
+    );
+}
+
 #[test]
 fn instances_follow_a_moving_center() {
     let mut s = sketch();

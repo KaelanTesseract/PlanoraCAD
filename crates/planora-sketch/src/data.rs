@@ -330,9 +330,12 @@ fn check_patterns(d: &SketchData) -> Result<(), SketchError> {
     let (np, nc, nk) = (d.points.len(), d.curves.len(), d.constraints.len());
     for m in &d.patterns {
         let refs_ok = match m.kind {
-            PatternKind::Rect { dirs, .. } => dirs
-                .iter()
-                .all(|dir| !matches!(dir, PatternDir::Line(l) if l.index() >= nc)),
+            PatternKind::Rect { dirs, .. } => {
+                dirs[0] != PatternDir::Perpendicular
+                    && dirs
+                        .iter()
+                        .all(|dir| !matches!(dir, PatternDir::Line(l) if l.index() >= nc))
+            }
             PatternKind::Circular { center, .. } => center.index() < np,
         };
         let points_ok = m

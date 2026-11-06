@@ -411,10 +411,15 @@ fn rect_pattern_previews_follows_fields_suppresses_by_click_and_is_one_step() {
         assert!(rig.st().redo_sketch());
         assert_eq!(data(rig.sk()), after, "Wiederholen bitgleich");
 
-        // Esc, Rechtsklick und ein Werkzeugwechsel lassen nichts zurück.
+        // Esc, Rechtsklick und ein Werkzeugwechsel lassen nichts zurück; je ein frisches Rechteck
+        // (nicht die Vorlage des eben angelegten Musters).
         rig.settle();
         for leave in 0..3 {
-            rig.select(lines(&ids));
+            let y = -12.0 - 8.0 * f64::from(leave);
+            let fresh = rig.sk().add_rectangle(v(0.0, y), v(10.0, y + 5.0)).unwrap();
+            rig.sk().solve();
+            rig.settle();
+            rig.select(lines(&fresh));
             let steps = rig.undo_len();
             let rev = rig.sk().revision();
             rig.action(Action::SketchPatternRect);
@@ -424,7 +429,7 @@ fn rect_pattern_previews_follows_fields_suppresses_by_click_and_is_one_step() {
                     rig.press(Key::Escape);
                 }
                 1 => {
-                    rig.click_with(px(v(20.0, -20.0)), PointerButton::Secondary);
+                    rig.click_with(px(v(30.0, 20.0)), PointerButton::Secondary);
                 }
                 _ => {
                     // Die Tastatur hat das Feld; der Knopf der Leiste wechselt.
@@ -438,9 +443,85 @@ fn rect_pattern_previews_follows_fields_suppresses_by_click_and_is_one_step() {
             assert_eq!(rig.sk().pattern_count(), 1, "{leave}");
             if leave < 2 {
                 let sel = rig.st().sketch_session.as_ref().unwrap().selection.clone();
-                assert_eq!(sel, lines(&ids), "die Auswahl bleibt, {leave}");
+                assert_eq!(sel, lines(&fresh), "die Auswahl bleibt, {leave}");
             }
+            assert!(
+                fresh
+                    .lines
+                    .iter()
+                    .all(|&c| rig.sk().pattern_of_curve(c).is_none()),
+                "{leave}"
+            );
         }
+    });
+}
+
+/// Fix-Runde Task 9 (I1): Ein abgebrochener Griffzug lässt die getippte Formel stehen.
+#[test]
+fn a_cancelled_grip_drag_keeps_the_typed_formula() {
+    with_lang(&german(), || {
+        let mut rig = Rig::new(&[("b", "10", ParamUnit::Length)]);
+        let ids = rig.sk().add_rectangle(v(0.0, 0.0), v(10.0, 5.0)).unwrap();
+        rig.settle();
+        let (px, _) = rig.pixels();
+        rig.select(lines(&ids));
+        rig.action(Action::SketchPatternRect);
+        rig.press(Key::Tab);
+        rig.type_text("b * 2");
+        rig.settle();
+        assert_eq!(rig.now().unwrap().values[0], 20.0);
+        let (last, _) = {
+            let s = rig.st();
+            let se = s.sketch_session.as_ref().unwrap();
+            se.pattern_handles(s.session_sketch().unwrap())
+                .unwrap()
+                .arrows[0]
+                .unwrap()
+        };
+        rig.drag(px(last) + vec2(30.0, 0.0), vec2(80.0, 0.0), true);
+        assert_eq!(rig.now().unwrap().values[0], 20.0);
+        rig.press(Key::Enter);
+        assert_eq!(rig.tool(), Tool::Select);
+        let (id, _) = the_pattern(rig.sk());
+        let (c, value) = value_id(rig.sk(), id, PatternSlot::Spacing1);
+        assert_eq!(value, 20.0);
+        let formula = rig
+            .st()
+            .sketch_draft
+            .as_ref()
+            .unwrap()
+            .formulas
+            .get(&c)
+            .cloned();
+        assert_eq!(formula.as_deref(), Some("b * 2"));
+        rig.st().close_sketch();
+        let b = rig.st().document.parameters()[0].id;
+        set_param(rig.st(), b, "30", ParamUnit::Length);
+        let feature = rig.sketch;
+        let sk = rig.st().document.sketch_of(feature).unwrap().clone();
+        let first = sk.pattern(id).unwrap().instances[0].points[0];
+        assert!(sk.point_xy(first).unwrap().distance(v(60.0, 0.0)) < 1e-9);
+    });
+}
+
+/// Fix-Runde Task 9: Ein Doppelklick auf eine Ecke eines Exemplars (der Fang nimmt den Punkt)
+/// öffnet das Muster ebenso.
+#[test]
+fn double_click_on_an_instance_corner_opens_the_pattern() {
+    with_lang(&german(), || {
+        let mut rig = Rig::new(&[]);
+        let ids = rig.sk().add_rectangle(v(0.0, 0.0), v(5.0, 2.5)).unwrap();
+        let plan = rect_plan(ids.lines.to_vec(), [4, 1], [10.0, 5.0]);
+        let id = rig.sk().add_pattern(&plan).unwrap();
+        rig.sk().solve();
+        rig.settle();
+        let at = rig.exact(v(35.0, 2.5));
+        rig.double_click(at);
+        assert_eq!(rig.tool(), Tool::Pattern);
+        assert_eq!(
+            rig.st().sketch_session.as_ref().unwrap().pattern.editing,
+            Some(id)
+        );
     });
 }
 
@@ -765,12 +846,28 @@ fn slanted_line(s: &mut AppState) -> CurveId {
 fn assert_preview_is_result(s: &mut AppState, setup: impl FnOnce(&mut AppState)) {
     setup(s);
     let pre = session_preview(s);
+    // Die gezeichnete Vorschau ohne die abgewählten Lagen ist dieselbe.
+    let drawn = {
+        let se = s.sketch_session.as_ref().unwrap();
+        se.pattern_preview_all(s.session_sketch().unwrap()).unwrap()
+    };
+    let drawn: Vec<([i32; 2], Vec<Vec<DVec2>>)> = drawn
+        .into_iter()
+        .filter(|(_, suppressed, _)| !suppressed)
+        .map(|(at, _, l)| (at, l))
+        .collect();
+    let editing = s.sketch_session.as_ref().unwrap().pattern.editing;
     finish(s).unwrap();
     let sk = s.session_sketch().unwrap();
-    let (id, _) = sk.patterns().last().expect("Muster");
+    let id = editing.unwrap_or_else(|| sk.patterns().last().expect("Muster").0);
+    assert_same_lines(sk, id, &pre);
+    assert_same_lines(sk, id, &drawn);
+}
+
+fn assert_same_lines(sk: &Sketch, id: PatternId, pre: &[([i32; 2], Vec<Vec<DVec2>>)]) {
     let d = sk.pattern(id).unwrap();
     assert_eq!(pre.len(), d.instances.len());
-    for (at, lines) in &pre {
+    for (at, lines) in pre {
         let inst = d.instances.iter().find(|i| i.at == *at).expect("Exemplar");
         assert_eq!(lines.len(), inst.curves.len());
         for (line, &c) in lines.iter().zip(&inst.curves) {
@@ -818,6 +915,32 @@ fn the_preview_is_the_result_for_axes_symmetric_extent_lines_and_suppressed() {
     });
 }
 
+/// Fix-Runde Task 9: Auch beim Bearbeiten ist die Vorschau das Ergebnis.
+#[test]
+fn the_preview_is_the_result_when_editing() {
+    with_lang(&german(), || {
+        let (mut s, _) = sketch_with(&[], mixed);
+        finish(&mut s).unwrap();
+        let (id, _) = the_pattern(s.session_sketch().unwrap());
+        let l = slanted_line(&mut s);
+        {
+            let (se, sk) = s.session_sketch_mut().unwrap();
+            assert!(se.begin_pattern_edit(sk, id));
+        }
+        assert_preview_is_result(&mut s, |s| {
+            type_field(s, FieldKind::PatternCount1, "4");
+            type_field(s, FieldKind::PatternCount2, "2");
+            let p = plan_mut(s);
+            p.kind = PatternKind::Rect {
+                dirs: [PatternDir::Line(l), PatternDir::Perpendicular],
+                extent: [false, true],
+                symmetric: [true, false],
+            };
+            p.suppressed = vec![[-1, 1], [2, 0]];
+        });
+    });
+}
+
 #[test]
 fn direction_from_a_slanted_line_extent_and_symmetric_place_like_the_model() {
     with_lang(&german(), || {
@@ -843,10 +966,15 @@ fn direction_from_a_slanted_line_extent_and_symmetric_place_like_the_model() {
             assert!(!se.pattern.picking_direction);
         }
         let plan = s.sketch_session.as_ref().unwrap().pattern_now().unwrap();
+        // Fix-Runde Task 9: Die zweite Richtung steht senkrecht zur ersten (Fusion).
         assert!(matches!(
             plan.kind,
-            PatternKind::Rect { dirs: [PatternDir::Line(x), PatternDir::SketchY], .. } if x == l
+            PatternKind::Rect { dirs: [PatternDir::Line(x), PatternDir::Perpendicular], .. } if x == l
         ));
+        type_field(&mut s, FieldKind::PatternCount2, "2");
+        let pre = session_preview(&s);
+        assert!(first(&pre, [0, 1]).distance(unit.perp() * 7.5) < 1e-9);
+        type_field(&mut s, FieldKind::PatternCount2, "1");
         // Abstand: Lage k bei k · 15 längs der Linie (der Rechteckpunkt (0, 0) zuerst).
         let pre = session_preview(&s);
         for (k, at) in [(1.0, [1, 0]), (2.0, [2, 0])] {
@@ -973,6 +1101,92 @@ fn over_nine_hundred_shows_the_message_instead_of_a_preview_and_finish_refuses()
     });
 }
 
+/// Fix-Runde Task 9 (B): Senkt ein Parameter die Anzahl, nennt die Meldung die entfallene
+/// Abhängigkeit genau einmal, wie im Werkzeug.
+#[test]
+fn a_parameter_lowering_the_count_says_how_many_constraints_dropped() {
+    with_lang(&german(), || {
+        let (mut s, feature) = sketch_with(&[("n", "5", ParamUnit::Number)], |sk| {
+            sk.add_rectangle(v(0.0, 0.0), v(10.0, 5.0))
+                .unwrap()
+                .lines
+                .to_vec()
+        });
+        finish(&mut s).unwrap();
+        let (id, _) = the_pattern(s.session_sketch().unwrap());
+        let (count, _) = value_id(s.session_sketch().unwrap(), id, PatternSlot::Count1);
+        {
+            let scope = s.document.param_scope();
+            let (se, sf) = s.session_draft_mut().unwrap();
+            se.set_dimension_input(sf, count, "n", &scope).unwrap();
+            let corner = sf.sketch.pattern(id).unwrap().instances[3].points[0];
+            let f = sf.sketch.add_point(60.0, -10.0).unwrap();
+            sf.sketch.add_constraint(K::Coincident(f, corner)).unwrap();
+            sf.sketch.solve();
+        }
+        s.observe_sketch(false);
+        s.close_sketch();
+        s.message = None;
+        let n = s.document.parameters()[0].id;
+        set_param(&mut s, n, "2", ParamUnit::Number);
+        assert_eq!(s.message, Some(tr!("sketch-pattern-dropped", n = 1)));
+        assert_eq!(
+            the_pattern(s.document.sketch_of(feature).unwrap()).1.len(),
+            1
+        );
+        // Wieder mehr: keine Meldung.
+        s.message = None;
+        set_param(&mut s, n, "5", ParamUnit::Number);
+        assert_eq!(s.message, None);
+    });
+}
+
+/// Fix-Runde Task 9: Eine Datei mit einer Schleife lädt über `convert.rs`, das Muster wird
+/// aufgelöst, und die Meldung nach dem Öffnen nennt es.
+#[test]
+fn a_file_with_a_pattern_loop_loads_dissolved_and_says_so() {
+    with_lang(&german(), || {
+        let mut corner = None;
+        let (mut s, _) = sketch_with(&[], |sk| {
+            let r = sk.add_rectangle(v(0.0, 0.0), v(10.0, 6.0)).unwrap();
+            corner = Some(r.points[0]);
+            r.lines.to_vec()
+        });
+        type_field(&mut s, FieldKind::PatternCount2, "2");
+        finish(&mut s).unwrap();
+        let arc = {
+            let (_, sk) = s.session_sketch_mut().unwrap();
+            let (id, _) = the_pattern(sk);
+            let m = sk.pattern(id).unwrap().clone();
+            let k = m
+                .source_points
+                .iter()
+                .position(|&p| Some(p) == corner)
+                .unwrap();
+            let at = |x: [i32; 2]| m.instances.iter().find(|i| i.at == x).unwrap().points[k];
+            let free = sk.add_point(30.0, 30.0).unwrap();
+            let arc = sk.add_arc(free, at([1, 0]), at([0, 1])).unwrap();
+            sk.solve();
+            arc
+        };
+        s.observe_sketch(false);
+        s.close_sketch();
+        let text = planora_project::encode_version(&s.document.snapshot()).unwrap();
+        let mut j: serde_json::Value = serde_json::from_str(&text).unwrap();
+        // Die Bogenmitte auf die Vorlagenecke: Vorlage und eigenes Exemplar hängen zusammen.
+        j["features"][0]["art"]["skizze"]["kurven"][arc.index()]["art"]["mitte"] =
+            corner.unwrap().index().into();
+        let text = serde_json::to_string_pretty(&j).unwrap();
+        let snap = planora_project::decode_version(&text, "x.json").unwrap();
+        assert_eq!(snap.dissolved_patterns, 1);
+        let loaded = AppState::from_snapshot(snap).unwrap();
+        assert_eq!(
+            loaded.message,
+            Some(tr!("state-patterns-dissolved-on-load", n = 1))
+        );
+    });
+}
+
 #[test]
 fn opening_a_file_with_a_dissolved_loop_says_so() {
     with_lang(&german(), || {
@@ -1011,6 +1225,7 @@ fn pure_grip_layout_hit_and_motion() {
         start: 15.0,
         divisor: 2.0,
         center: DVec2::ZERO,
+        saved: None,
     };
     // Dichte Folge: Der Wert folgt der Projektion, quer zur Richtung nichts.
     for k in -200..=200 {
@@ -1026,6 +1241,7 @@ fn pure_grip_layout_hit_and_motion() {
         start: 1.0,
         divisor: 1.0,
         center: DVec2::ZERO,
+        saved: None,
     };
     let quarter = pattern_motion(&a, DVec2::ZERO, v(0.0, 10.0));
     assert!((quarter - (1.0 + std::f64::consts::FRAC_PI_2)).abs() < 1e-12);

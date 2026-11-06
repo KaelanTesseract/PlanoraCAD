@@ -1176,6 +1176,7 @@ sketch-move-dropped = Abhängigkeiten entfallen: { $n }.
 sketch-pattern-direction-n = Richtung { $n }
 sketch-pattern-axis-x = x-Achse
 sketch-pattern-axis-y = y-Achse
+sketch-pattern-perpendicular = Senkrecht zu Richtung 1
 sketch-pattern-line = Linie
 sketch-pattern-pick-line = Linie wählen
 sketch-pattern-pick-line-hint = Die Richtung folgt der Linie, die Sie danach anklicken

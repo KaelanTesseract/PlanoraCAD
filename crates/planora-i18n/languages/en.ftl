@@ -1193,6 +1193,7 @@ sketch-move-dropped = Constraints removed: { $n }.
 sketch-pattern-direction-n = Direction { $n }
 sketch-pattern-axis-x = X axis
 sketch-pattern-axis-y = Y axis
+sketch-pattern-perpendicular = Perpendicular to direction 1
 sketch-pattern-line = Line
 sketch-pattern-pick-line = Select line
 sketch-pattern-pick-line-hint = The direction follows the line you click next

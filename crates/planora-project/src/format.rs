@@ -871,7 +871,11 @@ pub struct SketchDto {
 pub enum MusterRichtungDto {
     SkizzeX,
     SkizzeY,
-    Linie { kurve: usize },
+    Linie {
+        kurve: usize,
+    },
+    /// Senkrecht zur ersten Richtung (nur als zweite Richtung).
+    Senkrecht,
 }
 
 /// Art eines Kreismusters (ab Format 15).

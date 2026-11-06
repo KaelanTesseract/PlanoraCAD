@@ -1301,11 +1301,17 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         if se.tool == Tool::Select || se.transform_picking() {
             // Wie beim einfachen Klick: Punkt vor Kurve. Ein Exemplar oder eine Vorlage eines
             // Musters öffnet im Auswahlwerkzeug das Muster zum Bearbeiten (Skizzen 5).
-            if let Some(at) = at
-                && let Snap::Curve(c) = se.snap(&sf.sketch, at, radius)
-                && !se.begin_pattern_edit_at(&mut sf.sketch, c)
-            {
-                se.select_chain(&sf.sketch, c, shift);
+            if let Some(at) = at {
+                let snap = se.snap(&sf.sketch, at, radius);
+                let item = match snap {
+                    Snap::Point(p) => Some(Item::Point(p)),
+                    Snap::Curve(c) => Some(Item::Curve(c)),
+                    _ => None,
+                };
+                let edited = item.is_some_and(|i| se.begin_pattern_edit_item(&mut sf.sketch, i));
+                if !edited && let Snap::Curve(c) = snap {
+                    se.select_chain(&sf.sketch, c, shift);
+                }
             }
         } else if se.runs_pattern() {
             // Anordnung: Der zweite schnelle Klick schaltet das nächste Exemplar wie jeder Klick
@@ -1576,6 +1582,7 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         let hot = se
             .pattern
             .drag
+            .as_ref()
             .map(|d| d.grip)
             .or(pointer.and_then(|p| sketch_pattern::pattern_hit(&l, p)));
         sketch_pattern::paint_pattern_grips(&painter, &l, hot, col.selected, lighter(col.selected));
