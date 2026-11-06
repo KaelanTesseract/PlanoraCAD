@@ -895,18 +895,26 @@ impl Sketch {
         }
     }
 
+    /// Wird die Abhängigkeit dadurch wieder erzwungen, gilt die Prüfung auf eine Schleife
+    /// zwischen Vorlage und eigenem Exemplar wie bei [`Sketch::add_constraint`].
     pub fn set_driven(&mut self, id: ConstraintId, driven: bool) -> Result<(), SketchError> {
         self.checked_constraint(id)?;
         if driven {
             self.check_not_pattern_value(id)?;
+        } else if self.constraints[id].driven && self.constraints[id].enabled {
+            self.check_activation_cycle(id)?;
         }
         self.constraints[id].driven = driven;
         self.touch_structure();
         Ok(())
     }
 
+    /// Beim Einschalten gilt die Prüfung auf eine Schleife wie bei [`Sketch::add_constraint`].
     pub fn set_enabled(&mut self, id: ConstraintId, enabled: bool) -> Result<(), SketchError> {
         self.checked_constraint(id)?;
+        if enabled && !self.constraints[id].enabled && !self.constraints[id].driven {
+            self.check_activation_cycle(id)?;
+        }
         self.constraints[id].enabled = enabled;
         self.touch_structure();
         Ok(())
@@ -1481,6 +1489,22 @@ impl Sketch {
             extra: None,
             alive: true,
         }))
+    }
+
+    /// Schlösse die (gerade nicht aktive) Abhängigkeit `id`, wieder aktiv, eine Schleife zwischen
+    /// Vorlage und eigenem Exemplar? Dann `PatternProblem::Cycle` (Entscheidung 6).
+    fn check_activation_cycle(&self, id: ConstraintId) -> Result<(), SketchError> {
+        if self.patterns().next().is_none() {
+            return Ok(());
+        }
+        let Some(ev) = self.evaluate(id, &self.vars) else {
+            return Ok(());
+        };
+        if self.pattern_cycle(Some(&ev.locals)) {
+            Err(PatternProblem::Cycle.error())
+        } else {
+            Ok(())
+        }
     }
 
     /// Musterwerte bleiben, solange ihr Muster lebt: nicht löschen, nicht anzeigend schalten.

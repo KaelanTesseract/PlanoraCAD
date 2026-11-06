@@ -888,7 +888,17 @@ impl Sketch {
         let held = self.pattern_vars();
         let (mut report, mut reads) = self.solve_round(soft, &held);
         let mut rounds = 1;
-        while self.refresh_patterns() && reads && rounds < PATTERN_ROUNDS {
+        loop {
+            let moved = self.refresh_patterns();
+            if !(moved && reads) {
+                break;
+            }
+            if rounds >= PATTERN_ROUNDS {
+                // Die letzte Nachführung hat Exemplare bewegt, die eine Gruppe liest (etwa eine
+                // Kette über mehr Muster als Runden): Deren Lösung ist überholt.
+                self.flag_stale_pattern_reads(&held, &mut report);
+                break;
+            }
             let (next, again) = self.solve_round(soft, &held);
             rounds += 1;
             reads = again;
@@ -900,6 +910,33 @@ impl Sketch {
             };
         }
         report
+    }
+
+    /// Prüft die Gruppen, die Exemplare lesen, an den aktuellen Werten: Verletzte Abhängigkeiten
+    /// kommen nach `conflicting`, und ein „gelöst“ wird „nicht lösbar“ (kein Widerspruch: der
+    /// nächste Lauf führt weiter).
+    fn flag_stale_pattern_reads(&self, held: &HashSet<usize>, report: &mut SolveReport) {
+        let tol_r = RESIDUAL_FRACTION * self.tolerance().linear;
+        let (groups, _) = self.build_groups_holding(held, None);
+        let mut violated = false;
+        for g in groups.iter().filter(|g| !g.pattern_reads.is_empty()) {
+            for &id in &g.constraints {
+                let Some(ev) = self.evaluate(id, &self.vars) else {
+                    continue;
+                };
+                // `!(|r| <= tol_r)` zählt auch NaN als verletzt.
+                if ev.residuals.iter().all(|r| r.v.abs() <= tol_r) {
+                    continue;
+                }
+                violated = true;
+                if !self.constraints[id].internal && !report.conflicting.contains(&id) {
+                    report.conflicting.push(id);
+                }
+            }
+        }
+        if violated && report.status == SolveStatus::Solved {
+            report.status = SolveStatus::NotConverged;
+        }
     }
 
     /// Ein Lauf über alle Gruppen; `held` sind die Exemplarvariablen (Konstanten). Der zweite
@@ -1215,7 +1252,8 @@ impl Sketch {
     /// Wahr, wenn keine aktive Abhängigkeit (lebend, eingeschaltet, nicht nur anzeigend, auch
     /// interne) den Punkt direkt oder über eine Kurve benutzt, die ihn enthält.
     fn point_unconstrained(&self, p: PointId) -> bool {
-        if self.instance_source_point(p).is_some() {
+        // Ein Exemplarpunkt hält das Muster; mit gelöschter Vorlage zählt er wie jeder Punkt.
+        if self.instance_drag_target(p, DVec2::ZERO).is_some() {
             return false;
         }
         !self

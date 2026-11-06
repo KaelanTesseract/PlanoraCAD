@@ -824,3 +824,228 @@ fn ellipse_elliptic_arc_and_spline_turn_with_the_circular_pattern() {
     solved(&mut s);
     assert_instances_follow(&s, id, 1e-9);
 }
+
+// ---- Korrekturrunde 1 ------------------------------------------------------------------------
+
+#[test]
+fn switching_a_constraint_back_on_cannot_close_a_cycle() {
+    for via_driven in [false, true] {
+        let mut s = sketch();
+        let (src, pts, _) = dimensioned_rect(&mut s);
+        let id = s
+            .add_pattern(&rect_plan(src, [2, 1], [15.0, 10.0]))
+            .unwrap();
+        let q = s.pattern(id).unwrap().instances[0].points[1];
+        let f = s.add_point(40.0, 40.0).unwrap();
+        let a = s.add_constraint(K::Distance(pts[0], f, 3.0)).unwrap();
+        if via_driven {
+            s.set_driven(a, true).unwrap();
+        } else {
+            s.set_enabled(a, false).unwrap();
+        }
+        // Ohne die abgeschaltete Bindung ist das keine Schleife.
+        s.add_constraint(K::Coincident(f, q)).unwrap();
+        solved(&mut s);
+        let rev = s.revision();
+        let err = if via_driven {
+            s.set_driven(a, false).unwrap_err()
+        } else {
+            s.set_enabled(a, true).unwrap_err()
+        };
+        assert_eq!(err, PatternProblem::Cycle.error());
+        assert_eq!(s.revision(), rev, "Skizze unverändert");
+        let d = s.constraint(a).unwrap();
+        assert!(d.driven == via_driven && d.enabled == via_driven);
+        solved(&mut s);
+        assert!(close(at(&s, f), at(&s, q), 1e-9));
+        // Ab- und wieder einschalten ohne Schleife geht weiter.
+        let g = s.add_point(90.0, 40.0).unwrap();
+        let b = s.add_constraint(K::Distance(g, q, 3.0)).unwrap();
+        s.set_enabled(b, false).unwrap();
+        s.set_enabled(b, true).unwrap();
+        s.set_driven(b, true).unwrap();
+        s.set_driven(b, false).unwrap();
+        solved(&mut s);
+    }
+}
+
+/// `links` Linien, jede ein Muster mit einem Exemplar 10 weiter rechts; der Anfang der nächsten
+/// Linie liegt auf dem Exemplar des Anfangs der vorigen. Der erste Anfang hängt über ein Maß an
+/// einem festen Punkt.
+fn pattern_chain(s: &mut Sketch, links: usize) -> (ConstraintId, Vec<PointId>) {
+    let o = s.add_point(0.0, 0.0).unwrap();
+    s.add_constraint(K::Fixed(o, 0.0, 0.0)).unwrap();
+    let mut starts = Vec::new();
+    let mut prev: Option<PointId> = None;
+    let mut dim = None;
+    for k in 0..links {
+        let x = 5.0 + 10.0 * k as f64;
+        let a = s.add_point(x, 0.0).unwrap();
+        let b = s.add_point(x, 5.0).unwrap();
+        let l = s.add_line(a, b).unwrap();
+        s.add_constraint(K::Vertical(LineOrPoints::Line(l)))
+            .unwrap();
+        s.add_constraint(K::Distance(a, b, 5.0)).unwrap();
+        match prev {
+            None => {
+                s.add_constraint(K::Horizontal(LineOrPoints::Points(o, a)))
+                    .unwrap();
+                dim = Some(s.add_constraint(K::Distance(o, a, 5.0)).unwrap());
+            }
+            Some(q) => {
+                s.add_constraint(K::Coincident(a, q)).unwrap();
+            }
+        }
+        let id = s
+            .add_pattern(&rect_plan(vec![l], [2, 1], [10.0, 10.0]))
+            .unwrap();
+        let data = s.pattern(id).unwrap();
+        let k0 = data.source_points.iter().position(|&p| p == a).unwrap();
+        prev = Some(data.instances[0].points[k0]);
+        starts.push(a);
+    }
+    (dim.unwrap(), starts)
+}
+
+#[test]
+fn a_chain_longer_than_the_rounds_is_not_reported_as_solved() {
+    let mut s = sketch();
+    let (dim, starts) = pattern_chain(&mut s, 5);
+    solved(&mut s);
+    s.set_constraint_value(dim, 25.0).unwrap();
+    let r = s.solve();
+    // Drei Runden tragen die Änderung über drei Glieder; das vierte ist überholt.
+    assert_eq!(r.status, SolveStatus::NotConverged, "{r:?}");
+    assert!(!r.conflicting.is_empty(), "{r:?}");
+    // Weitere Läufe führen weiter, bis alles stimmt.
+    let mut last = r;
+    for _ in 0..3 {
+        if last.status == SolveStatus::Solved {
+            break;
+        }
+        last = s.solve();
+    }
+    assert_eq!(last.status, SolveStatus::Solved, "{last:?}");
+    assert!(last.conflicting.is_empty());
+    for (k, &a) in starts.iter().enumerate() {
+        assert!(
+            close(at(&s, a), v(25.0 + 10.0 * k as f64, 0.0), 1e-6),
+            "{k} {:?} {last:?}",
+            at(&s, a)
+        );
+    }
+    // Drei Glieder schafft ein Lauf mit drei Runden.
+    let mut s = sketch();
+    let (dim, starts) = pattern_chain(&mut s, 3);
+    solved(&mut s);
+    s.set_constraint_value(dim, 25.0).unwrap();
+    solved(&mut s);
+    assert!(close(at(&s, starts[2]), v(45.0, 0.0), 1e-6));
+}
+
+#[test]
+fn preview_reports_the_real_error_of_an_instance() {
+    let mut s = sketch();
+    let src = rect(&mut s, v(0.0, 0.0));
+    // Koordinaten über MAX_COORD (1e9) beim zweiten Exemplar.
+    let plan = rect_plan(src, [3, 1], [6e8, 10.0]);
+    let preview = s.pattern_preview(&plan, 64).unwrap_err();
+    let created = s.add_pattern(&plan).unwrap_err();
+    assert_eq!(preview, created);
+    assert_ne!(preview, PatternProblem::Empty.error());
+    assert_eq!(s.pattern_count(), 0);
+    let bad = rect_plan(Vec::new(), [3, 1], [6.0, 10.0]);
+    assert_eq!(
+        s.pattern_preview(&bad, 64).unwrap_err(),
+        PatternProblem::Empty.error()
+    );
+}
+
+#[test]
+fn dragging_an_instance_point_of_a_deleted_source_point_moves_the_point_itself() {
+    let mut s = sketch();
+    let src = rect(&mut s, v(0.0, 0.0));
+    let id = s
+        .add_pattern(&rect_plan(src, [2, 1], [15.0, 10.0]))
+        .unwrap();
+    let data = s.pattern(id).unwrap().clone();
+    let (p, q) = (data.source_points[0], data.instances[0].points[0]);
+    s.remove_point(p).unwrap();
+    let target = at(&s, q) + v(1.0, 2.0);
+    s.drag(&[Drag { point: q, target }]).unwrap();
+    assert!(close(at(&s, q), target, 1e-9), "{:?}", at(&s, q));
+}
+
+#[test]
+fn circular_angle_sweep_with_an_arc_source() {
+    let mut s = sketch();
+    let (m, a0, a1) = (
+        s.add_point(20.0, 0.0).unwrap(),
+        s.add_point(24.0, 0.0).unwrap(),
+        s.add_point(20.0, 4.0).unwrap(),
+    );
+    let arc = s.add_arc(m, a0, a1).unwrap();
+    s.add_constraint(K::Fixed(m, 20.0, 0.0)).unwrap();
+    s.add_constraint(K::Fixed(a0, 24.0, 0.0)).unwrap();
+    solved(&mut s);
+    let c = s.add_point(0.0, 0.0).unwrap();
+    s.add_constraint(K::Fixed(c, 0.0, 0.0)).unwrap();
+    let n = 4u32;
+    let id = s
+        .add_pattern(&circ_plan(
+            vec![arc],
+            c,
+            CircularMode::Angle,
+            n,
+            90f64.to_radians(),
+        ))
+        .unwrap();
+    let angle = value_id(&s, id, PatternSlot::Angle);
+    let pts = [m, a0, a1];
+    for deg in -360..=360 {
+        if deg == 0 {
+            assert!(s.set_constraint_value(angle, 0.0).is_err());
+            continue;
+        }
+        let theta = (deg as f64).to_radians();
+        s.set_constraint_value(angle, theta).unwrap();
+        solved(&mut s);
+        let step = if theta.abs() >= TAU - 1e-9 {
+            theta.signum() * TAU / n as f64
+        } else {
+            theta / (n - 1) as f64
+        };
+        let data = s.pattern(id).unwrap();
+        assert_eq!(data.instances.len(), (n - 1) as usize);
+        for inst in &data.instances {
+            let turn = step * inst.at[0] as f64;
+            let rot = |p: DVec2| {
+                DVec2::new(
+                    p.x * turn.cos() - p.y * turn.sin(),
+                    p.x * turn.sin() + p.y * turn.cos(),
+                )
+            };
+            let copy = inst.curves[0];
+            let CurveKind::Arc { center, start, end } = s.curve(copy).unwrap().kind else {
+                panic!("kein Bogen");
+            };
+            for (src, got) in pts.iter().zip([center, start, end]) {
+                assert!(
+                    close(rot(at(&s, *src)), at(&s, got), 1e-9),
+                    "{deg} {:?}",
+                    inst.at
+                );
+            }
+            assert!((s.radius(copy).unwrap() - 4.0).abs() < 1e-9);
+            // Der Bogen klappt nicht um: derselbe Öffnungswinkel wie die Vorlage.
+            let sweep = |c: CurveId| {
+                let CurveKind::Arc { center, start, end } = s.curve(c).unwrap().kind else {
+                    unreachable!()
+                };
+                let (m, a, b) = (at(&s, center), at(&s, start), at(&s, end));
+                ((b - m).to_angle() - (a - m).to_angle()).rem_euclid(TAU)
+            };
+            assert!((sweep(copy) - sweep(arc)).abs() < 1e-9, "{deg}");
+        }
+    }
+}

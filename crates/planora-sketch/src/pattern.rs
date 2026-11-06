@@ -246,20 +246,22 @@ impl Sketch {
     }
 
     /// Linienzüge der Exemplare je Lage (wie [`Sketch::curve_polyline`]), aus derselben Rechnung
-    /// wie [`Sketch::add_pattern`]: Die Exemplare werden auf einer Kopie angelegt.
+    /// wie [`Sketch::add_pattern`]: Die Exemplare werden auf einer Kopie angelegt. Fehler wie
+    /// `add_pattern`: ein [`PatternProblem`] als [`PatternProblem::error`], sonst der Fehler beim
+    /// Anlegen eines Exemplars (etwa Koordinaten über `MAX_COORD`).
     pub fn pattern_preview(
         &self,
         plan: &PatternPlan,
         steps_per_turn: usize,
-    ) -> Result<PatternPreview, PatternProblem> {
-        let transforms = self.pattern_transforms(plan)?;
+    ) -> Result<PatternPreview, SketchError> {
+        let transforms = self
+            .pattern_transforms(plan)
+            .map_err(PatternProblem::error)?;
         let mut s = self.clone();
         let source_points = points_of(&s, &plan.sources);
         let mut out = Vec::with_capacity(transforms.len());
         for (at, t) in &transforms {
-            let inst = s
-                .add_instance(&plan.sources, &source_points, *at, t)
-                .map_err(|_| PatternProblem::Empty)?;
+            let inst = s.add_instance(&plan.sources, &source_points, *at, t)?;
             let lines = inst
                 .curves
                 .iter()
@@ -559,7 +561,10 @@ impl Sketch {
         p: PointId,
         target: DVec2,
     ) -> Option<(PointId, DVec2)> {
-        let (source, t) = self.instance_source_point(p)?;
+        // Ist der Vorlagenpunkt gelöscht, zieht der Zug den Punkt selbst.
+        let (source, t) = self
+            .instance_source_point(p)
+            .filter(|(s, _)| self.points[*s].alive)?;
         Some((source, inverse_apply(&t, target)))
     }
 
