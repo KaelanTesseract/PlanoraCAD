@@ -710,7 +710,8 @@ impl Sketch {
     /// werden neu gesetzt; jede aktive Abhängigkeit an ihnen, die nicht mehr ohne Bewegung
     /// erfüllt ist, entfällt, ebenso „Mittelpunkt“ an einer geänderten Linie. Als erfüllt gilt auch
     /// eine Tangente am gemeinsamen Endpunkt im Rahmen ihrer zulässigen Abweichung (siehe
-    /// `satisfied`). Nur anzeigende und ausgeschaltete Abhängigkeiten bewegen nichts und bleiben.
+    /// `satisfied`). Nur anzeigende und ausgeschaltete Abhängigkeiten bewegen nichts und bleiben,
+    /// außer einem Glatt, dessen Punkt kein Ende seiner Kurve mehr ist.
     pub(crate) fn settle_constraints(&mut self, touched: &[CurveId], points: &[PointId]) {
         let ids: Vec<ConstraintId> = self
             .constraints()
@@ -725,6 +726,12 @@ impl Sketch {
             if let ConstraintKind::Midpoint(_, l) = kind
                 && touched.contains(&l)
             {
+                self.drop_constraint(id);
+                continue;
+            }
+            // Skizzen 5: Glatt an einem Punkt, der kein Ende mehr ist, entfällt immer, auch nur
+            // anzeigend oder ausgeschaltet (die Datei lüde sonst nicht mehr).
+            if !self.smooth_ends_hold(&kind) {
                 self.drop_constraint(id);
                 continue;
             }

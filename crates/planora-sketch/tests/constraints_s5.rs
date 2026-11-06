@@ -844,3 +844,82 @@ fn moving_turning_and_scaling_keep_or_drop_the_new_kinds() {
     let r = solved(&mut s);
     assert!(r.redundant.is_empty(), "{r:?}");
 }
+
+// ---- Glatt nach Stutzen, Brechen und Rundung (Korrektur 1) -------------------------------
+
+/// Linie bis zur Verbindung, Spline ab dort, Glatt an der Verbindung und eine senkrechte Linie,
+/// die die erste bei x = −5 kreuzt. `joint_first`: die Verbindung ist Punkt `a` der Linie.
+fn smooth_joint(joint_first: bool) -> (Sketch, CurveId, CurveId, PointId, ConstraintId) {
+    let mut s = sketch();
+    let (far, joint) = (pt(&mut s, -10.0, 0.0), pt(&mut s, 0.0, 0.0));
+    let l = if joint_first {
+        s.add_line(joint, far).unwrap()
+    } else {
+        s.add_line(far, joint).unwrap()
+    };
+    let q = [pt(&mut s, 5.0, 3.0), pt(&mut s, 10.0, 0.0)];
+    let sp = s.add_spline(&[joint, q[0], q[1]]).unwrap();
+    let id = s.add_constraint(K::Smooth(l, joint, sp, joint)).unwrap();
+    line(&mut s, v(-5.0, -3.0), v(-5.0, 3.0));
+    solved(&mut s);
+    (s, l, sp, joint, id)
+}
+
+/// Glatt ist weg oder gilt noch an echten Enden; die Skizze lädt nach dem Speichern wieder.
+fn smooth_gone_or_valid(s: &Sketch, id: ConstraintId, what: &str) {
+    if let Some(d) = s.constraint(id) {
+        let K::Smooth(a, pa, b, pb) = d.kind else {
+            panic!("{what}: {:?}", d.kind)
+        };
+        assert_eq!(s.smooth_ends(a, b, None), Some((pa, pb)), "{what}");
+    }
+    for (cid, d) in s.constraints() {
+        if let K::Smooth(a, pa, b, pb) = d.kind {
+            assert_eq!(s.smooth_ends(a, b, None), Some((pa, pb)), "{what}: {cid:?}");
+        }
+    }
+    Sketch::from_data(s.to_data()).unwrap_or_else(|e| panic!("{what}: lädt nicht: {e}"));
+}
+
+#[test]
+fn smooth_does_not_keep_a_stale_end_after_trim_break_or_fillet() {
+    for joint_first in [false, true] {
+        // Stück zwischen Kreuzung und Verbindung weg: Glatt entfällt.
+        let (mut s, l, _, _, id) = smooth_joint(joint_first);
+        s.trim(l, v(-2.5, 0.0)).unwrap();
+        assert!(s.constraint(id).is_none(), "{joint_first}");
+        smooth_gone_or_valid(&s, id, "trim innen");
+        // Das äußere Stück weg: Glatt bleibt an der Verbindung.
+        let (mut s, l, _, _, id) = smooth_joint(joint_first);
+        s.trim(l, v(-7.5, 0.0)).unwrap();
+        assert!(s.constraint(id).is_some(), "{joint_first}");
+        smooth_gone_or_valid(&s, id, "trim außen");
+        solved(&mut s);
+        // Brechen an der Kreuzung
+        let (mut s, l, _, _, id) = smooth_joint(joint_first);
+        s.break_curve(l, v(-5.0, 0.0)).unwrap();
+        smooth_gone_or_valid(&s, id, "break");
+        solved(&mut s);
+        // Rundung an der Verbindung mit einer zweiten Linie
+        let (mut s, l, _, joint, id) = smooth_joint(joint_first);
+        let down = pt(&mut s, 0.0, -10.0);
+        let m = s.add_line(joint, down).unwrap();
+        solved(&mut s);
+        let plan = s
+            .fillet_plan(
+                planora_sketch::CurvePick {
+                    curve: l,
+                    at: v(-3.0, 0.0),
+                },
+                planora_sketch::CurvePick {
+                    curve: m,
+                    at: v(0.0, -3.0),
+                },
+                1.0,
+            )
+            .expect("Plan");
+        s.add_fillet(&plan, None).unwrap();
+        assert!(s.constraint(id).is_none(), "{joint_first}");
+        smooth_gone_or_valid(&s, id, "fillet");
+    }
+}

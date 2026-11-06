@@ -538,9 +538,14 @@ fn lines_share_point(sk: &Sketch, l1: CurveId, l2: CurveId) -> bool {
     [a2, b2].into_iter().any(|p| p == a1 || p == b1)
 }
 
-/// Richtung aus dem (geprüften) Ende `p` in die Linie, den Bogen oder den Spline `c` hinein.
-fn into_curve(ctx: &Ctx, c: CurveId, p: PointId) -> V2 {
-    match &ctx.sk.curves[c].kind {
+/// Richtung aus dem Ende `p` in die Linie, den Bogen oder den Spline `c` hinein; `None`, wenn `p`
+/// (nicht mehr) ein Ende von `c` ist, etwa nach Stutzen, Brechen oder Rundung.
+fn into_curve(ctx: &Ctx, c: CurveId, p: PointId) -> Option<V2> {
+    let [first, last] = curve_ends(&ctx.sk.curves[c].kind)?;
+    if p != first && p != last {
+        return None;
+    }
+    Some(match &ctx.sk.curves[c].kind {
         CurveKind::Line { a, b } => {
             let (pa, pb) = (ctx.pt(*a), ctx.pt(*b));
             if p == *a {
@@ -559,16 +564,16 @@ fn into_curve(ctx: &Ctx, c: CurveId, p: PointId) -> V2 {
             }
         }
         CurveKind::Spline { points } => {
-            if p == points[0] {
+            if p == first {
                 param_curve(ctx, c, &Dual::constant(0.0)).1
             } else {
-                let last = (points.len() - 1) as f64;
-                let (_, d) = param_curve(ctx, c, &Dual::constant(last));
+                let end = (points.len() - 1) as f64;
+                let (_, d) = param_curve(ctx, c, &Dual::constant(end));
                 (-&d.0, -&d.1)
             }
         }
-        _ => unreachable!("type was checked"),
-    }
+        _ => return None,
+    })
 }
 
 fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
@@ -740,7 +745,8 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
             let ((_, d1), (_, d2)) = (line_dir(ctx, *l1), line_dir(ctx, *l2));
             let den = norm_len(&d1) * norm_len(&d2);
             let Some(q) = collinear_point(sk, *l1, *l2) else {
-                unreachable!("type was checked")
+                debug_assert!(false, "type was checked");
+                return Vec::new();
             };
             let angle = cross(&d1, &d2) / den;
             // Mit gemeinsamem Ende ist der Abstand von `q` nur die Winkelzeile mal `|d2|`: Eine
@@ -753,9 +759,12 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
         }
         // Wie die Tangente am gemeinsamen Ende als Winkel: Die Spitze liegt bei ±π und ist keine
         // Nullstelle.
+        // Ohne gültige Enden keine Zeile; `settle_constraints` und `satisfied` sorgen dafür, dass
+        // ein solches Glatt entfällt.
         Smooth(c1, p1, c2, p2) => {
-            let u = into_curve(ctx, *c1, *p1);
-            let v = into_curve(ctx, *c2, *p2);
+            let (Some(u), Some(v)) = (into_curve(ctx, *c1, *p1), into_curve(ctx, *c2, *p2)) else {
+                return Vec::new();
+            };
             let w = (-&v.0, -&v.1);
             vec![cross(&u, &w).atan2(&dot(&u, &w))]
         }
@@ -947,7 +956,14 @@ impl Sketch {
         for c in kind.curves() {
             self.check_curve(c)?;
         }
-        self.check_types(kind)
+        self.check_types(kind)?;
+        // Nicht in `check_types`: Ein gelöschtes Glatt behält nach Stutzen oder Rundung einen
+        // Punkt, der kein Ende mehr ist, und die Datei muss trotzdem laden.
+        if self.smooth_ends_hold(kind) {
+            Ok(())
+        } else {
+            Err(SketchError::WrongType(tr!("sketch-err-smooth-end")))
+        }
     }
 
     /// Prüft nur die Objekttypen und Entartungen; die Ids müssen im Bereich der Arenen liegen
@@ -1021,7 +1037,7 @@ impl Sketch {
                 degenerate(tr!("sketch-err-two-objects"))
             }
             Smooth(a, _, b, _) if a == b => degenerate(tr!("sketch-err-two-objects")),
-            Smooth(a, pa, b, pb) => {
+            Smooth(a, _, b, _) => {
                 let kind = |c: CurveId| &self.curves[c].kind;
                 let spline = |c: CurveId| matches!(kind(c), CurveKind::Spline { .. });
                 let allowed = |c: CurveId| {
@@ -1030,12 +1046,8 @@ impl Sketch {
                         CurveKind::Line { .. } | CurveKind::Arc { .. } | CurveKind::Spline { .. }
                     )
                 };
-                let is_end =
-                    |c: CurveId, p: PointId| curve_ends(kind(c)).is_some_and(|e| e.contains(&p));
                 if !(allowed(*a) && allowed(*b) && (spline(*a) || spline(*b))) {
                     wrong(tr!("sketch-smooth-kinds"))
-                } else if !(is_end(*a, *pa) && is_end(*b, *pb)) {
-                    wrong(tr!("sketch-err-smooth-end"))
                 } else {
                     Ok(())
                 }
@@ -1288,6 +1300,9 @@ impl Sketch {
     /// [`SHARED_END_TANGENT_DRIFT`].
     pub(crate) fn satisfied(&self, id: ConstraintId, factor: f64) -> bool {
         use ConstraintKind::*;
+        if !self.smooth_ends_hold(&self.constraints[id].kind) {
+            return false;
+        }
         if self
             .shared_end_tangent_drift(id, &self.vars)
             .is_some_and(|d| d <= SHARED_END_TANGENT_DRIFT)
@@ -1410,11 +1425,27 @@ impl Sketch {
         Ok(())
     }
 
+    /// Sind die Punkte eines Glatt noch Enden ihrer Kurven? `true` für alle anderen Arten. Nach
+    /// Stutzen, Brechen oder Rundung kann ein Punkt aufhören, Ende zu sein; dann entfällt Glatt
+    /// (`settle_constraints`), sonst bliebe ein lebendes Glatt ohne Zeile, das `add_constraint`
+    /// ablehnen würde.
+    pub(crate) fn smooth_ends_hold(&self, kind: &ConstraintKind) -> bool {
+        let ConstraintKind::Smooth(a, pa, b, pb) = *kind else {
+            return true;
+        };
+        let is_end = |c: CurveId, p: PointId| {
+            curve_ends(&self.curves[c].kind).is_some_and(|e| e.contains(&p))
+        };
+        is_end(a, pa) && is_end(b, pb)
+    }
+
     /// Die Enden, an denen Glatt die Kurven `a` und `b` verbindet: zuerst ein gemeinsamer Punkt,
     /// sonst das nächste Endenpaar (**Annahme** zu Fusion). Mit `near` zählen nur Enden, die
     /// höchstens die halbe Sehne ihrer Kurve von `near` entfernt sind; bei mehreren gemeinsamen
     /// Punkten gewinnt der nächste an `near`. `None` für dieselbe Kurve, Kurven ohne Enden oder
-    /// wenn kein Ende in Reichweite liegt.
+    /// wenn kein Ende in Reichweite liegt. Die Kurvenarten prüft der Aufrufer (oder
+    /// `add_constraint`): Auch eine Linie und ein Bogen liefern Enden, obwohl Glatt einen Spline
+    /// braucht.
     pub fn smooth_ends(
         &self,
         a: CurveId,
