@@ -239,7 +239,7 @@ fn size_vars(kind: &CurveKind) -> Vec<usize> {
 }
 
 /// Die Art mit abgebildeten Punkten und Variablen.
-fn map_curve(
+pub(crate) fn map_curve(
     kind: &CurveKind,
     p: impl Fn(PointId) -> PointId,
     v: impl Fn(usize) -> usize,

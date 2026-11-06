@@ -5,7 +5,7 @@
 
 use planora_math::{DVec2, Frame, PI, Tolerance};
 use planora_sketch::constraint::{ConstraintId, ConstraintKind as K};
-use planora_sketch::fillet::CurvePick;
+use planora_sketch::fillet::{ChamferKind, CurvePick};
 use planora_sketch::model::{CurveId, PointId, Sketch};
 use planora_sketch::pattern::{
     CircularMode, PatternDir, PatternEdit, PatternId, PatternKind, PatternPlan, PatternSlot,
@@ -327,6 +327,16 @@ fn suppressing_removes_and_restores_an_instance() {
 /// Löst die Handlung `act` das Muster auf, bleiben die Exemplare bitgleich, ihre Variablen werden
 /// frei und die Skizze bleibt gelöst.
 fn assert_dissolves(s: &mut Sketch, id: PatternId, act: impl FnOnce(&mut Sketch)) {
+    assert_dissolves_except(s, id, &[], act);
+}
+
+/// Wie `assert_dissolves`; die Punkte `moving` darf die Handlung bewegen (Dehnen).
+fn assert_dissolves_except(
+    s: &mut Sketch,
+    id: PatternId,
+    moving: &[PointId],
+    act: impl FnOnce(&mut Sketch),
+) {
     let before = solved(s).dof;
     let kept: Vec<(PointId, DVec2)> = s
         .pattern(id)
@@ -334,6 +344,7 @@ fn assert_dissolves(s: &mut Sketch, id: PatternId, act: impl FnOnce(&mut Sketch)
         .instances
         .iter()
         .flat_map(|i| i.points.clone())
+        .filter(|p| !moving.contains(p))
         .map(|p| (p, at(s, p)))
         .collect();
     let count = s.pattern_count();
@@ -810,4 +821,149 @@ fn clicking_picks_an_instance_but_not_the_source() {
         s.pattern_instance_at(&plan, v(35.0, 10.2), 0.5),
         Some([2, 1])
     );
+}
+
+// ---- Korrektur 1 -----------------------------------------------------------------------------
+
+#[test]
+fn extend_and_chamfer_at_source_or_instance_dissolve() {
+    // Eine freie Linie (0,0)–(5,0) als Vorlage, Exemplare bei y = 10 und 20, eine feste
+    // senkrechte Linie bei x = 8 als Ziel des Dehnens.
+    let build = || {
+        let mut s = sketch();
+        let a = s.add_point(0.0, 0.0).unwrap();
+        let b = s.add_point(5.0, 0.0).unwrap();
+        let line = s.add_line(a, b).unwrap();
+        let (c, d) = (
+            s.add_point(8.0, -5.0).unwrap(),
+            s.add_point(8.0, 25.0).unwrap(),
+        );
+        s.add_line(c, d).unwrap();
+        s.add_constraint(K::Fixed(c, 8.0, -5.0)).unwrap();
+        s.add_constraint(K::Fixed(d, 8.0, 25.0)).unwrap();
+        let id = s
+            .add_pattern(&rect_plan(vec![line], [1, 3], [15.0, 10.0]))
+            .unwrap();
+        solved(&mut s);
+        (s, id, line)
+    };
+    let (mut s, id, line) = build();
+    assert_dissolves(&mut s, id, |s| {
+        assert!(s.extend(line, v(4.0, 0.0)).unwrap())
+    });
+    let (mut s, id, _) = build();
+    let inst = s.pattern(id).unwrap().instances[0].clone();
+    assert_eq!(inst.at, [0, 1]);
+    assert_dissolves_except(&mut s, id, &[inst.points[1]], |s| {
+        assert!(s.extend(inst.curves[0], v(4.0, 10.0)).unwrap());
+    });
+    // Fase an einer Ecke des Exemplars (1,0) unten rechts bei (25, 0) und an der Vorlage.
+    let (mut s, id, _) = bench();
+    let (bottom, right) = (
+        instance_curve(&s, id, [1, 0], 0),
+        instance_curve(&s, id, [1, 0], 1),
+    );
+    let plan = s
+        .chamfer_plan(
+            pick(bottom, 23.0, 0.0),
+            pick(right, 25.0, 2.0),
+            ChamferKind::Equal(1.0),
+        )
+        .unwrap();
+    assert_dissolves(&mut s, id, |s| {
+        s.add_chamfer(&plan).unwrap();
+    });
+    let (mut s, id, src) = bench();
+    let plan = s
+        .chamfer_plan(
+            pick(src[1], 10.0, 4.0),
+            pick(src[2], 8.0, 6.0),
+            ChamferKind::Equal(1.0),
+        )
+        .unwrap();
+    assert_dissolves(&mut s, id, |s| {
+        s.add_chamfer(&plan).unwrap();
+    });
+}
+
+/// Muster 3×1 und eine fremde Linie, die am Punkt 0 des Exemplars (2,0) beginnt (wie es ein
+/// Zeichenwerkzeug mit Fang anlegt). Liefert Skizze, Muster, Linie, ihren freien Punkt und die
+/// alte Lage des geteilten Endes.
+fn shared_corner() -> (Sketch, PatternId, CurveId, PointId, DVec2) {
+    let mut s = sketch();
+    let (src, _, _) = dimensioned_rect(&mut s);
+    let id = s
+        .add_pattern(&rect_plan(src, [3, 1], [15.0, 10.0]))
+        .unwrap();
+    let corner = s.pattern(id).unwrap().instances[1].points[0];
+    let q = s.add_point(30.0, -20.0).unwrap();
+    let line = s.add_line(corner, q).unwrap();
+    solved(&mut s);
+    let old = at(&s, corner);
+    (s, id, line, q, old)
+}
+
+/// Die Linie lebt noch, ihr Ende liegt an der alten Lage, kein Punkt ist verwaist, gelöst.
+fn assert_line_kept(s: &mut Sketch, line: CurveId, q: PointId, old: DVec2) {
+    let Some(planora_sketch::model::CurveKind::Line { a, b }) =
+        s.curve(line).map(|d| d.kind.clone())
+    else {
+        panic!("Linie gelöscht");
+    };
+    assert_eq!(b, q);
+    assert!(close(at(s, a), old, 1e-9), "{:?}", at(s, a));
+    solved(s);
+    assert!(close(at(s, a), old, 1e-9), "{:?}", at(s, a));
+    assert_eq!(s.prune_unused_points(), 0, "kein verwaister Punkt");
+}
+
+#[test]
+fn a_foreign_line_at_a_dropped_instance_keeps_its_end() {
+    // (a) Anzahl 3 → 2 über den Wert und über `edit_pattern`.
+    let (mut s, id, line, q, old) = shared_corner();
+    let count = value_id(&s, id, PatternSlot::Count1);
+    s.set_constraint_value(count, 2.0).unwrap();
+    assert_line_kept(&mut s, line, q, old);
+    let (mut s, id, line, q, old) = shared_corner();
+    let mut plan = current_plan(&s, id);
+    plan.counts[0] = 2;
+    let edit = s.edit_pattern(id, &plan).unwrap();
+    assert_eq!(edit.removed, 1);
+    assert_eq!(edit.dropped_constraints, 0);
+    assert_line_kept(&mut s, line, q, old);
+    // (b) Abwählen; wieder angewählt entsteht ein neues Exemplar, die Linie bleibt lose.
+    let (mut s, id, line, q, old) = shared_corner();
+    s.suppress_instance(id, [2, 0], true).unwrap();
+    assert_line_kept(&mut s, line, q, old);
+    s.suppress_instance(id, [2, 0], false).unwrap();
+    assert_line_kept(&mut s, line, q, old);
+    // Eine Abhängigkeit zwischen der Linie und dem Punkt des Exemplars geht mit dem Exemplar.
+    let (mut s, id, line, q, old) = shared_corner();
+    let inst = s.pattern(id).unwrap().instances[1].clone();
+    let other = inst.points[2];
+    let tie = s.add_constraint(K::Distance(q, other, 20.0)).unwrap();
+    solved(&mut s);
+    let edit = {
+        let mut plan = current_plan(&s, id);
+        plan.counts[0] = 2;
+        s.edit_pattern(id, &plan).unwrap()
+    };
+    assert_eq!(edit.dropped_constraints, 1);
+    assert!(s.constraint(tie).is_none());
+    assert_line_kept(&mut s, line, q, old);
+    // (c) Auflösen behält ohnehin alles.
+    let (mut s, id, line, q, old) = shared_corner();
+    s.dissolve_pattern(id).unwrap();
+    let Some(planora_sketch::model::CurveKind::Line { a, .. }) =
+        s.curve(line).map(|d| d.kind.clone())
+    else {
+        panic!("Linie gelöscht");
+    };
+    assert_eq!(a, inst_point(&shared_corner()));
+    assert_line_kept(&mut s, line, q, old);
+}
+
+/// Der geteilte Punkt in einer frischen Skizze von `shared_corner` (Ids sind gleich gebaut).
+fn inst_point(bench: &(Sketch, PatternId, CurveId, PointId, DVec2)) -> PointId {
+    bench.0.pattern(bench.1).unwrap().instances[1].points[0]
 }

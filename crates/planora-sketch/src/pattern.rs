@@ -936,14 +936,38 @@ impl Sketch {
     }
 
     /// Entfernt die Kurven und Punkte eines Exemplars, das schon nicht mehr zum Muster gehört,
-    /// samt ihren Abhängigkeiten. Liefert die Zahl der entfallenen (nicht internen)
-    /// Abhängigkeiten.
+    /// samt ihren Abhängigkeiten. Eine fremde Kurve, die einen Punkt des Exemplars benutzt (ein
+    /// Zeichenwerkzeug mit Fang legt sie so an), bekommt vorher einen eigenen Punkt an derselben
+    /// Lage und bleibt, wo sie ist (wie `split_from_outsiders` beim Verschieben); Abhängigkeiten
+    /// am Punkt des Exemplars gehen mit dem Exemplar. Liefert die Zahl der entfallenen (nicht
+    /// internen) Abhängigkeiten.
     fn drop_instance(&mut self, inst: &PatternInstance) -> Result<usize, SketchError> {
         let before: Vec<ConstraintId> = self
             .constraints()
             .filter(|(_, d)| !d.internal)
             .map(|(c, _)| c)
             .collect();
+        let own_points: HashSet<PointId> = inst.points.iter().copied().collect();
+        let foreign: Vec<CurveId> = self
+            .curves()
+            .filter(|(c, d)| {
+                !inst.curves.contains(c) && d.kind.points().iter().any(|p| own_points.contains(p))
+            })
+            .map(|(c, _)| c)
+            .collect();
+        let mut fresh: HashMap<PointId, PointId> = HashMap::new();
+        for c in foreign {
+            let kind = self.curves[c].kind.clone();
+            for p in kind.points() {
+                if own_points.contains(&p) && !fresh.contains_key(&p) {
+                    let q = self.add_point_like(p, self.pos(p))?;
+                    fresh.insert(p, q);
+                }
+            }
+            let mapped =
+                crate::transform::map_curve(&kind, |p| fresh.get(&p).copied().unwrap_or(p), |v| v);
+            self.set_curve_kind(c, mapped);
+        }
         for &c in &inst.curves {
             if self.check_curve(c).is_ok() {
                 self.remove_curve(c)?;

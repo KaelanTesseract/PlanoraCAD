@@ -2207,3 +2207,12 @@ Umgesetzt 2026-11-02 und 2026-11-03 auf dem Zweig `feature/skizzen-aendern` (Spe
 - Das Halten der Vorlage auch bei Rundung und Fase, und beim Versatzmaß auch dann, wenn eine Formel oder ein Parameter es treibt (löst den Konflikt mit dem Anti-Ziel).
 - Die Hilfen dünner anzeigen.
 - Eine Gehrungsgrenze oder ein Bogen an scharfen Ecken beim Versatz; Umlaufzahlen, damit weniger Schritte „kreuzt sich“ melden.
+
+## Teilprojekt Skizzen 5
+
+In Arbeit auf dem Zweig `feature/skizzen-muster` (Spec `specs/2026-11-03-skizzen-muster-design.md`, Plan `plans/2026-11-03-skizzen-muster.md`). Der Abschnitt wächst mit den Tasks; Task 13 sammelt ihn.
+
+**Annahmen zu Mustern (Task 4)**
+- **Annahme:** Wird eine fremde Kurve verschoben, die einen Punkt mit einer Ecke der Vorlage teilt (oder nur ein Teil der Vorlage), trennt das Verschieben diese Ecke auf. Dabei ändert sich die Vorlage, und das Muster wird aufgelöst; die Exemplare bleiben als lose Geometrie liegen.
+- **Annahme:** Wird die ganze Skizze gedreht, drehen die Vorlagen eines Rechteckmusters mit den Richtungen „Skizze X/Y“ mit, die Richtungen des Gitters bleiben aber auf den Achsen der Skizze. Mit einer Richtungslinie folgt das Gitter dieser Linie.
+- **Annahme:** Wird die Anzahl kleiner, vergisst das Muster abgewählte Lagen, die außerhalb des Gitters liegen. Anzahl 3 → 2 → 3 bringt eine Abwahl an (2,0) also nicht zurück.
