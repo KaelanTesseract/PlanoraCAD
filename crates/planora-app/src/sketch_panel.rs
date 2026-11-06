@@ -1366,6 +1366,8 @@ fn constraint_list(
                 });
                 let r = name.expect("Zeile gezeichnet");
                 if r.clicked() {
+                    // Die Liste wählt ohne Klicklage auf einer Kurve.
+                    se.drop_curve_picks();
                     if shift {
                         if selected {
                             se.selection.retain(|i| *i != item);
@@ -1382,6 +1384,7 @@ fn constraint_list(
                         && formula_row(ui, &formula_text(f, constraint_unit(&kind), scope))
                             .clicked()
                     {
+                        se.drop_curve_picks();
                         se.selection = vec![item];
                         open = true;
                     }

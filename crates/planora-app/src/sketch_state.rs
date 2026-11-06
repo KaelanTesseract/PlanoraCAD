@@ -438,8 +438,8 @@ pub struct SketchSession {
     /// Fangradius zu `pick_points`.
     pub pick_radius: f64,
     /// Klicklagen der im Auswählen gewählten Kurven (Skizzen 5): Glatt setzt am Ende an, das der
-    /// Klickstelle am nächsten liegt. Gilt nur für Kurven, die noch gewählt sind.
-    pub curve_picks: Vec<(CurveId, DVec2)>,
+    /// Klickstelle am nächsten liegt. Ein Klick gehört nur zu der Auswahl, die er gemacht hat.
+    pub curve_picks: CurvePicks,
     /// Verschieben/Kopieren und Maßstab.
     pub transform: TransformState,
     /// Laufender Zug an einem Griff.
@@ -464,9 +464,18 @@ struct Backup {
     offset_chain: bool,
     pick_points: Vec<DVec2>,
     pick_radius: f64,
-    curve_picks: Vec<(CurveId, DVec2)>,
+    curve_picks: CurvePicks,
     transform: TransformState,
     grip_drag: Option<GripDrag>,
+}
+
+/// Klicklagen der Kurven, die das Auswählen per Klick gewählt hat, und die Auswahl gleich nach
+/// dem letzten solchen Klick. Hat sich die Auswahl seitdem anders geändert (Liste, Rahmen, Kette,
+/// Werkzeugwechsel, Rückgängig, Löschen …), gelten die Klicks nicht mehr.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CurvePicks {
+    pub at: Vec<(CurveId, DVec2)>,
+    pub selection: Vec<Item>,
 }
 
 /// Auswahl nach Art getrennt (jeweils in Auswahlreihenfolge).
@@ -544,7 +553,7 @@ impl SketchSession {
             fillet_run: None,
             offset_chain: true,
             pick_points: Vec::new(),
-            curve_picks: Vec::new(),
+            curve_picks: CurvePicks::default(),
             pick_radius: 0.0,
             transform: TransformState::default(),
             grip_drag: None,
@@ -565,6 +574,8 @@ impl SketchSession {
         self.transform = TransformState::default();
         self.grip_drag = None;
         self.tool = tool;
+        // Ein Werkzeugwechsel beendet die Klick-Auswahl.
+        self.drop_curve_picks();
         self.draw_cursor = None;
         self.clear_pending();
         // Versatz: Eine Vorauswahl mit Kurven ist schon die Kette, es geht gleich mit dem Abstand weiter.
@@ -618,6 +629,7 @@ impl SketchSession {
         self.clear_pending();
         self.draw_cursor = None;
         self.selection.clear();
+        self.drop_curve_picks();
         self.dragging = None;
         self.curve_drag = None;
         self.box_select = None;
@@ -833,6 +845,7 @@ impl SketchSession {
         self.edit_label = Some(created.undo_label());
         self.created = Some(created);
         self.selection.clear();
+        self.drop_curve_picks();
         self.clear_pending();
         Ok(())
     }
@@ -926,6 +939,7 @@ impl SketchSession {
 
     /// Auswahl und offene Punkte ohne die Elemente, die es nicht mehr gibt.
     pub(crate) fn forget_removed(&mut self, sk: &Sketch) {
+        self.drop_curve_picks();
         self.selection.retain(|i| match *i {
             Item::Point(p) => sk.point_xy(p).is_ok(),
             Item::Curve(c) => sk.curve(c).is_some(),
@@ -1041,6 +1055,7 @@ impl SketchSession {
     }
 
     fn select_at(&mut self, sk: &Sketch, at: DVec2, radius: f64, extend: bool) {
+        self.forget_stale_picks();
         let item = match self.snap(sk, at, radius) {
             Snap::Point(p) => Some(Item::Point(p)),
             Snap::Curve(c) => Some(Item::Curve(c)),
@@ -1058,31 +1073,54 @@ impl SketchSession {
             (None, true) => {}
             (None, false) => self.selection.clear(),
         }
-        if let Some(Item::Curve(c)) = item {
-            self.note_curve_pick(c, at);
+        match item {
+            Some(Item::Curve(c)) => self.note_curve_pick(c, at),
+            _ => self.sync_picks(),
         }
-        self.forget_stale_picks();
     }
 
-    /// Merkt sich die Klicklage `at` auf der Kurve `c` (die letzte gilt).
+    /// Merkt sich die Klicklage `at` auf der Kurve `c` (die letzte gilt), nachdem ein Klick die
+    /// Auswahl geändert hat.
     fn note_curve_pick(&mut self, c: CurveId, at: DVec2) {
-        self.curve_picks.retain(|(k, _)| *k != c);
-        self.curve_picks.push((c, at));
+        self.curve_picks.at.retain(|(k, _)| *k != c);
+        self.curve_picks.at.push((c, at));
+        self.sync_picks();
     }
 
-    /// Klicklagen von Kurven, die nicht mehr gewählt sind, entfallen.
-    fn forget_stale_picks(&mut self) {
+    /// Nach einer Auswahländerung durch einen Klick: Die Auswahl ist die der Klicks, Klicklagen
+    /// abgewählter Kurven entfallen.
+    fn sync_picks(&mut self) {
         let selection = &self.selection;
         self.curve_picks
+            .at
             .retain(|(c, _)| selection.contains(&Item::Curve(*c)));
+        self.curve_picks.selection = self.selection.clone();
     }
 
-    /// Klicklage der gewählten Kurve `c`, wenn sie per Klick gewählt wurde.
+    /// Vergisst alle Klicklagen. Jede Auswahländerung außer einem Klick im Auswählen
+    /// ([`select_at`](Self::select_at), [`begin_curve_drag`](Self::begin_curve_drag)) ruft das;
+    /// [`forget_stale_picks`](Self::forget_stale_picks) fängt Stellen, die es vergessen.
+    pub(crate) fn drop_curve_picks(&mut self) {
+        self.curve_picks = CurvePicks::default();
+    }
+
+    /// Hat sich die Auswahl seit dem letzten Klick anders geändert, gelten die Klicklagen nicht
+    /// mehr (ein Klick gehört nur zu der Auswahl, die er gemacht hat).
+    pub(crate) fn forget_stale_picks(&mut self) {
+        if self.curve_picks.selection != self.selection {
+            self.drop_curve_picks();
+        }
+    }
+
+    /// Klicklage der gewählten Kurve `c`, wenn sie per Klick gewählt wurde und die Auswahl seitdem
+    /// nur durch Klicks geändert wurde.
     fn pick_of(&self, c: CurveId) -> Option<DVec2> {
-        if !self.selection.contains(&Item::Curve(c)) {
+        if self.curve_picks.selection != self.selection || !self.selection.contains(&Item::Curve(c))
+        {
             return None;
         }
         self.curve_picks
+            .at
             .iter()
             .rev()
             .find(|(k, _)| *k == c)
@@ -1389,9 +1427,11 @@ impl SketchSession {
         self.clear_pending();
         if self.tool == Tool::Select {
             self.selection.clear();
+            self.drop_curve_picks();
         }
         if self.runs_transform() {
             self.selection = self.transform.selection_before.clone();
+            self.drop_curve_picks();
             self.forget_removed(sk);
         }
         // Stutzen, Dehnen und Brechen haben nichts Offenes: Esc beendet sie wie in Fusion (auch
@@ -1503,6 +1543,8 @@ impl SketchSession {
     /// Setzt die Auswahl auf `items` oder ergänzt sie, ohne etwas doppelt aufzunehmen.
     fn take_selection(&mut self, items: Vec<Item>, extend: bool) {
         self.message = None;
+        // Rahmen und Kette wählen ohne Klicklage, auch wenn die Auswahl gleich bleibt.
+        self.drop_curve_picks();
         if !extend {
             self.selection.clear();
         }
@@ -1540,10 +1582,10 @@ impl SketchSession {
     /// Greift die Kurve `c` bei `at`. Außerhalb der Auswahl ersetzt sie diese, sonst ziehen alle
     /// gewählten Kurven und Punkte mit. Ein einzelner Kreis zieht am Rand den Radius.
     fn begin_curve_drag(&mut self, sk: &Sketch, c: CurveId, at: DVec2) {
+        self.forget_stale_picks();
         if !self.selection.contains(&Item::Curve(c)) {
             self.selection = vec![Item::Curve(c)];
             self.note_curve_pick(c, at);
-            self.forget_stale_picks();
         }
         let mut start: Vec<(PointId, DVec2)> = Vec::new();
         let mut moved_items = 0;
@@ -1831,6 +1873,8 @@ impl SketchSession {
         action: ConstraintAction,
         value: Option<f64>,
     ) -> Result<ConstraintId, String> {
+        // Sicherheitsnetz: Klicklagen aus einer anders geänderten Auswahl zählen nicht.
+        self.forget_stale_picks();
         self.atomic(sk, |se, sk, prior| {
             let mut kind = se.build(sk, action)?;
             if action.is_dimension() {
@@ -1873,9 +1917,6 @@ impl SketchSession {
             let before = se.last_report.take();
             // Freiheitsgrade davor: Fällt einer weg, war die neue Abhängigkeit nur teilweise
             // überzählig (etwa Kollinear an zwei waagerechten Linien).
-            // Frisch gerechnet, nicht aus `last_report`: Der Bericht kann älter sein als die
-            // Skizze (etwa nach Änderungen ohne Sitzung).
-            let dof_before = prior.clone().solve().dof;
             let report = sk.solve();
             se.last_report = Some(report.clone());
             let direct = match check_change(&report, before.as_ref(), prior, Some(id)) {
@@ -1894,7 +1935,7 @@ impl SketchSession {
             if after.redundant.contains(&id) {
                 if action.is_dimension() {
                     se.make_driven(sk, id)?;
-                } else if after.dof < dof_before {
+                } else if after.dof < dof_of(prior) {
                     se.message = Some(crate::msg!("sketch-redundant-partly"));
                 } else {
                     se.message = Some(crate::msg!("sketch-redundant"));
@@ -2220,6 +2261,7 @@ impl SketchSession {
     pub fn delete_selection(&mut self, sk: &mut Sketch) {
         self.message = None;
         let mut orphans: Vec<PointId> = Vec::new();
+        self.drop_curve_picks();
         for item in std::mem::take(&mut self.selection) {
             match item {
                 Item::Constraint(c) => {
@@ -2524,6 +2566,11 @@ fn smooth_kinds_ok(sk: &Sketch, a: CurveId, b: CurveId) -> bool {
     a != b && ((spline(kind(a)) && partner(kind(b))) || (spline(kind(b)) && partner(kind(a))))
 }
 
+/// Freiheitsgrade von `sk`, frisch gerechnet (nicht aus einem möglicherweise älteren Bericht).
+fn dof_of(sk: &Sketch) -> usize {
+    sk.clone().solve().dof
+}
+
 /// Die beiden Enden einer Kurve, an denen Glatt ansetzen kann (Linie, Bogen, Spline,
 /// Ellipsenbogen); `None` für Kreis und Ellipse.
 fn curve_end_points(sk: &Sketch, c: CurveId) -> Option<[PointId; 2]> {
@@ -2542,7 +2589,8 @@ fn curve_end_points(sk: &Sketch, c: CurveId) -> Option<[PointId; 2]> {
 /// Klick (etwa Rahmenauswahl) das Ende, das am nächsten an einem Ende der anderen Kurve liegt
 /// (ein gemeinsames Ende zuerst). Die Weite ist nicht begrenzt: Getrennte Enden legt der Befehl
 /// mit einem `Coincident` zusammen. Die Wahl hängt nicht von der Reihenfolge der Auswahl ab
-/// (Gleichstand: das Paar mit den kleineren Punktnummern). `None`, wenn eine Kurve keine Enden hat.
+/// (Gleichstand: zuerst ein wirklich gemeinsamer Punkt vor zwei deckenden, dann das Paar mit den
+/// kleineren Punktnummern). `None`, wenn eine Kurve keine Enden hat.
 fn smooth_joint(
     sk: &Sketch,
     a: CurveId,
@@ -2579,6 +2627,8 @@ fn smooth_joint(
         .min_by(|&(p, q), &(r, t)| {
             gap(p, q)
                 .total_cmp(&gap(r, t))
+                // Ein wirklich gemeinsamer Punkt vor zwei deckenden Punkten.
+                .then_with(|| (p != q).cmp(&(r != t)))
                 .then_with(|| key(p, q).cmp(&key(r, t)))
         })
 }

@@ -535,6 +535,7 @@ impl SketchSession {
                     Snap::Curve(c) => Item::Curve(c),
                     _ => return,
                 };
+                self.drop_curve_picks();
                 match self.selection.iter().position(|&s| s == item) {
                     Some(k) => {
                         self.selection.remove(k);
@@ -650,6 +651,7 @@ impl SketchSession {
         }
         let curves = self.transform.set.curves.iter();
         let points = self.transform.set.points.iter();
+        self.curve_picks = Default::default();
         self.selection = curves
             .filter_map(|c| map.curves.get(c).map(|&c| Item::Curve(c)))
             .chain(points.filter_map(|p| map.points.get(p).map(|&p| Item::Point(p))))

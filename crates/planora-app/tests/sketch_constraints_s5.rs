@@ -761,3 +761,154 @@ fn the_concentric_mark_is_painted_in_the_view() {
         assert_eq!(after, before + 2, "zwei Kreise des Zeichens");
     });
 }
+
+// ---- Korrektur 2 ------------------------------------------------------------------------------
+
+/// Die Enden des zuletzt angelegten Glatt.
+fn last_joint(app: &mut PlanoraApp) -> (PointId, PointId) {
+    live(app)
+        .iter()
+        .rev()
+        .find_map(|k| match k {
+            K::Smooth(_, a, _, b) => Some((*a, *b)),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("kein Glatt: {:?}", message(app)))
+}
+
+/// Wie sich die Auswahl nach den Klicks ändert (nicht durch einen Klick im Auswählen).
+#[derive(Clone, Copy, Debug)]
+enum Reselect {
+    /// Nur den Bogen anklicken, dann beide direkt setzen (wie Liste oder Code ohne Klick).
+    Direct,
+    /// Über die Kette (Doppelklick).
+    Chain,
+    /// Über einen Rahmen um beide Kurven.
+    Box,
+    /// Werkzeugwechsel und zurück, dann neu gesetzt.
+    ToolChange,
+}
+
+#[test]
+fn a_click_counts_only_for_the_selection_it_made() {
+    with_lang(&german(), || {
+        let c = context();
+        // Ohne Klick: der Ersatz (kleinste Lücke, bei Gleichstand nach Punktnummer).
+        let mut app = sketching();
+        let (arc, sp, st, en) = closed_loop(&mut app);
+        settle(&c, &mut app);
+        select(&mut app, vec![Item::Curve(arc), Item::Curve(sp)]);
+        press(&c, &mut app, "Glatt");
+        let fallback = last_joint(&mut app);
+        // Die Klicks unten liegen am anderen Ende, sonst bewiese der Test nichts.
+        let clicked = if fallback.0 == en { st } else { en };
+        let (ta, ts) = if clicked == en {
+            (0.8, 0.15)
+        } else {
+            (0.2, 0.85)
+        };
+
+        for how in [
+            Reselect::Direct,
+            Reselect::Chain,
+            Reselect::Box,
+            Reselect::ToolChange,
+        ] {
+            let mut app = sketching();
+            let (arc, sp, ..) = closed_loop(&mut app);
+            settle(&c, &mut app);
+            let clicks = [on_curve(&mut app, arc, ta), on_curve(&mut app, sp, ts)];
+            match how {
+                Reselect::Direct => click_curves(&mut app, &clicks[..1]),
+                _ => click_curves(&mut app, &clicks),
+            }
+            {
+                let (se, s) = state(&mut app).session_sketch_mut().unwrap();
+                match how {
+                    Reselect::Direct => se.selection = vec![Item::Curve(arc), Item::Curve(sp)],
+                    Reselect::Chain => se.select_chain(s, arc, false),
+                    Reselect::Box => se.select_rect(
+                        s,
+                        DVec2::new(-20.0, -20.0),
+                        DVec2::new(20.0, 20.0),
+                        false,
+                        &|p| Some(p),
+                    ),
+                    // Die Auswahl bleibt beim Werkzeugwechsel, die Klicklagen nicht.
+                    Reselect::ToolChange => {
+                        se.set_tool(s, planora_app::sketch_state::Tool::Line);
+                        se.set_tool(s, planora_app::sketch_state::Tool::Select);
+                    }
+                }
+                let mut picked = se.selection.clone();
+                picked.sort_by_key(|i| format!("{i:?}"));
+                let mut want = vec![Item::Curve(arc), Item::Curve(sp)];
+                want.sort_by_key(|i| format!("{i:?}"));
+                assert_eq!(picked, want, "{how:?}");
+            }
+            press(&c, &mut app, "Glatt");
+            assert_eq!(last_joint(&mut app), fallback, "{how:?}");
+        }
+
+        // Gegenprobe: Ohne Umweg gilt der Klick.
+        let mut app = sketching();
+        let (arc, sp, ..) = closed_loop(&mut app);
+        settle(&c, &mut app);
+        let clicks = [on_curve(&mut app, arc, ta), on_curve(&mut app, sp, ts)];
+        click_curves(&mut app, &clicks);
+        press(&c, &mut app, "Glatt");
+        assert_eq!(last_joint(&mut app), (clicked, clicked));
+    });
+}
+
+#[test]
+fn a_curve_clicked_off_and_on_again_takes_the_new_click() {
+    with_lang(&german(), || {
+        let c = context();
+        let mut app = sketching();
+        let (arc, sp, st, _) = closed_loop(&mut app);
+        settle(&c, &mut app);
+        let (a_en, a_st) = (on_curve(&mut app, arc, 0.8), on_curve(&mut app, arc, 0.2));
+        let s_st = on_curve(&mut app, sp, 0.85);
+        // Bogen nahe en, Spline nahe st; dann den Bogen ab- und nahe st wieder anwählen.
+        click_curves(&mut app, &[a_en, s_st]);
+        {
+            let (se, s) = state(&mut app).session_sketch_mut().unwrap();
+            se.click(s, a_en, 0.3, true).unwrap();
+            se.click(s, a_st, 0.3, true).unwrap();
+        }
+        press(&c, &mut app, "Glatt");
+        assert_eq!(last_joint(&mut app), (st, st));
+    });
+}
+
+#[test]
+fn smooth_prefers_a_shared_point_over_coincident_twins() {
+    with_lang(&german(), || {
+        let c = context();
+        // Geschlossener Spline mit zwei deckenden Enden (Deckungsgleich), die Linie endet am
+        // zweiten: Glatt nimmt genau diesen gemeinsamen Punkt.
+        let mut app = sketching();
+        let a0 = pt(&mut app, 0.0, 0.0);
+        let q1 = pt(&mut app, 5.0, 5.0);
+        let q2 = pt(&mut app, 10.0, 0.0);
+        let a1 = pt(&mut app, 0.0, 0.0);
+        let sp = sk(&mut app).add_spline(&[a0, q1, q2, a1]).unwrap();
+        sk(&mut app).add_constraint(K::Coincident(a0, a1)).unwrap();
+        let e = pt(&mut app, -10.0, 0.0);
+        let l = sk(&mut app).add_line(e, a1).unwrap();
+        settle(&c, &mut app);
+        let before = live(&mut app).len();
+        for order in [[sp, l], [l, sp]] {
+            select(&mut app, order.map(Item::Curve).to_vec());
+            press(&c, &mut app, "Glatt");
+            assert_eq!(last_joint(&mut app), (a1, a1), "{order:?}");
+            assert_eq!(
+                live(&mut app).len(),
+                before + 1,
+                "kein neues Deckungsgleich"
+            );
+            undo(&mut app);
+        }
+    });
+}
