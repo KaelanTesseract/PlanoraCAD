@@ -258,7 +258,11 @@ fn constraint_numbers_ok(k: &ConstraintKind) -> bool {
         | Angle(_, _, v)
         | EllipseMajor(_, v)
         | EllipseMinor(_, v)
-        | EllipseAngle(_, v) => ok(*v),
+        | EllipseAngle(_, v)
+        | DistanceX(_, _, v)
+        | DistanceY(_, _, v)
+        | CenterlineDiameter(_, _, v)
+        | SlotOverall(_, _, _, v) => ok(*v),
         _ => true,
     }
 }

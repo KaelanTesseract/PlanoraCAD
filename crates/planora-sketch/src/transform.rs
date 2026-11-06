@@ -144,6 +144,12 @@ fn map_ids(
         EllipseMinor(x, v) => EllipseMinor(c(*x), *v),
         EllipseAngle(x, v) => EllipseAngle(c(*x), *v),
         EllipticArcEnds(x) => EllipticArcEnds(c(*x)),
+        Collinear(a, b) => Collinear(c(*a), c(*b)),
+        Smooth(a, pa, b, pb) => Smooth(c(*a), p(*pa), c(*b), p(*pb)),
+        DistanceX(a, b, v) => DistanceX(p(*a), p(*b), *v),
+        DistanceY(a, b, v) => DistanceY(p(*a), p(*b), *v),
+        CenterlineDiameter(a, x, v) => CenterlineDiameter(p(*a), c(*x), *v),
+        SlotOverall(a, b, x, v) => SlotOverall(p(*a), p(*b), c(*x), *v),
     }
 }
 
@@ -157,7 +163,11 @@ fn transformed_value(kind: &ConstraintKind, s: &Similarity) -> (ConstraintKind, 
         | Radius(_, v)
         | Diameter(_, v)
         | EllipseMajor(_, v)
-        | EllipseMinor(_, v) => (
+        | EllipseMinor(_, v)
+        | DistanceX(_, _, v)
+        | DistanceY(_, _, v)
+        | CenterlineDiameter(_, _, v)
+        | SlotOverall(_, _, _, v) => (
             kind.with_value(v * s.factor)
                 .unwrap_or_else(|| kind.clone()),
             true,
@@ -180,7 +190,11 @@ fn length_in_range(kind: &ConstraintKind, tol: f64) -> bool {
         | Radius(_, v)
         | Diameter(_, v)
         | EllipseMajor(_, v)
-        | EllipseMinor(_, v) => v > tol && v <= MAX_COORD,
+        | EllipseMinor(_, v)
+        | DistanceX(_, _, v)
+        | DistanceY(_, _, v)
+        | CenterlineDiameter(_, _, v)
+        | SlotOverall(_, _, _, v) => v > tol && v <= MAX_COORD,
         _ => true,
     }
 }
@@ -193,10 +207,15 @@ fn is_position_binding(kind: &ConstraintKind) -> bool {
     )
 }
 
+/// Bindet an die Achsen der Skizze: waagerecht und senkrecht, auch als Abstand (Skizzen 5).
+/// Beim Drehen entfällt sie.
 fn is_axis_binding(kind: &ConstraintKind) -> bool {
     matches!(
         kind,
-        ConstraintKind::Horizontal(_) | ConstraintKind::Vertical(_)
+        ConstraintKind::Horizontal(_)
+            | ConstraintKind::Vertical(_)
+            | ConstraintKind::DistanceX(..)
+            | ConstraintKind::DistanceY(..)
     )
 }
 

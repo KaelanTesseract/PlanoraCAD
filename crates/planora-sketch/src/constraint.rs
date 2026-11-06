@@ -78,6 +78,21 @@ pub enum ConstraintKind {
     EllipseAngle(CurveId, f64),
     /// Intern: Start und Ende eines Ellipsenbogens liegen auf seiner Ellipse.
     EllipticArcEnds(CurveId),
+    /// Zwei Linien auf derselben Geraden, auch mit Abstand zwischen ihnen (ab Format 15).
+    Collinear(CurveId, CurveId),
+    /// Glatter Übergang: Kurve, ihr Ende, Kurve, ihr Ende. Mindestens eine Kurve ist ein Spline,
+    /// die andere Linie, Bogen oder Spline (ab Format 15).
+    Smooth(CurveId, PointId, CurveId, PointId),
+    /// Waagerechter Abstand `|b − a|ₓ` zweier Punkte; die Seite steht in `branch` (ab Format 15).
+    DistanceX(PointId, PointId, f64),
+    /// Senkrechter Abstand `|b − a|ᵧ` zweier Punkte; die Seite steht in `branch` (ab Format 15).
+    DistanceY(PointId, PointId, f64),
+    /// Doppelter Abstand eines Punktes von einer Mittellinie (Durchmesser eines Drehteils, ab
+    /// Format 15). Angelegt wird es nur an Mittellinien.
+    CenterlineDiameter(PointId, CurveId, f64),
+    /// Gesamtlänge eines geraden Langlochs: Abstand der Mitten plus Durchmesser der Kappe (ab
+    /// Format 15).
+    SlotOverall(PointId, PointId, CurveId, f64),
 }
 
 impl ConstraintKind {
@@ -93,6 +108,23 @@ impl ConstraintKind {
                 | ConstraintKind::EllipseMajor(..)
                 | ConstraintKind::EllipseMinor(..)
                 | ConstraintKind::EllipseAngle(..)
+                | ConstraintKind::DistanceX(..)
+                | ConstraintKind::DistanceY(..)
+                | ConstraintKind::CenterlineDiameter(..)
+                | ConstraintKind::SlotOverall(..)
+        )
+    }
+
+    /// Braucht ein Eintrag dieser Art Dateiformat 15? Gilt für die Arten aus Skizzen 5.
+    pub fn needs_format_15(&self) -> bool {
+        matches!(
+            self,
+            ConstraintKind::Collinear(..)
+                | ConstraintKind::Smooth(..)
+                | ConstraintKind::DistanceX(..)
+                | ConstraintKind::DistanceY(..)
+                | ConstraintKind::CenterlineDiameter(..)
+                | ConstraintKind::SlotOverall(..)
         )
     }
 
@@ -109,9 +141,14 @@ impl ConstraintKind {
     pub fn length_value(&self) -> Option<f64> {
         use ConstraintKind::*;
         match *self {
-            Distance(_, _, v) | DistancePointLine(_, _, v) | Radius(_, v) | Diameter(_, v) => {
-                Some(v)
-            }
+            Distance(_, _, v)
+            | DistancePointLine(_, _, v)
+            | Radius(_, v)
+            | Diameter(_, v)
+            | DistanceX(_, _, v)
+            | DistanceY(_, _, v)
+            | CenterlineDiameter(_, _, v)
+            | SlotOverall(_, _, _, v) => Some(v),
             _ => None,
         }
     }
@@ -129,7 +166,11 @@ impl ConstraintKind {
             | Diameter(_, x)
             | EllipseMajor(_, x)
             | EllipseMinor(_, x)
-            | EllipseAngle(_, x) => *x = v,
+            | EllipseAngle(_, x)
+            | DistanceX(_, _, x)
+            | DistanceY(_, _, x)
+            | CenterlineDiameter(_, _, x)
+            | SlotOverall(_, _, _, x) => *x = v,
             _ => return None,
         }
         Some(kind)
@@ -139,13 +180,21 @@ impl ConstraintKind {
     pub fn points(&self) -> Vec<PointId> {
         use ConstraintKind::*;
         match self {
-            Coincident(a, b) | Distance(a, b, _) | Symmetric(a, b, _) => vec![*a, *b],
+            Coincident(a, b)
+            | Distance(a, b, _)
+            | Symmetric(a, b, _)
+            | DistanceX(a, b, _)
+            | DistanceY(a, b, _)
+            | SlotOverall(a, b, ..)
+            | Smooth(_, a, _, b) => vec![*a, *b],
             Horizontal(LineOrPoints::Points(a, b)) | Vertical(LineOrPoints::Points(a, b)) => {
                 vec![*a, *b]
             }
-            PointOnCurve(p, _) | Fixed(p, ..) | Midpoint(p, _) | DistancePointLine(p, ..) => {
-                vec![*p]
-            }
+            PointOnCurve(p, _)
+            | Fixed(p, ..)
+            | Midpoint(p, _)
+            | DistancePointLine(p, ..)
+            | CenterlineDiameter(p, ..) => vec![*p],
             _ => vec![],
         }
     }
@@ -166,10 +215,16 @@ impl ConstraintKind {
             | EllipseAngle(c, _)
             | Symmetric(_, _, c)
             | Horizontal(LineOrPoints::Line(c))
-            | Vertical(LineOrPoints::Line(c)) => vec![*c],
-            Parallel(a, b) | Perpendicular(a, b) | Tangent(a, b) | Equal(a, b) | Angle(a, b, _) => {
-                vec![*a, *b]
-            }
+            | Vertical(LineOrPoints::Line(c))
+            | CenterlineDiameter(_, c, _)
+            | SlotOverall(_, _, c, _) => vec![*c],
+            Parallel(a, b)
+            | Perpendicular(a, b)
+            | Tangent(a, b)
+            | Equal(a, b)
+            | Angle(a, b, _)
+            | Collinear(a, b)
+            | Smooth(a, _, b, _) => vec![*a, *b],
             _ => vec![],
         }
     }
@@ -452,6 +507,70 @@ fn signed_distance(ctx: &Ctx, p: &V2, line: CurveId) -> Dual {
     cross(&d, &sub2(p, &a)) / norm_len(&d)
 }
 
+/// Die Enden einer Linie, eines Bogens oder eines Splines (sonst `None`).
+pub(crate) fn curve_ends(kind: &CurveKind) -> Option<[PointId; 2]> {
+    match kind {
+        CurveKind::Line { a, b } => Some([*a, *b]),
+        CurveKind::Arc { start, end, .. } => Some([*start, *end]),
+        CurveKind::Spline { points } => Some([*points.first()?, *points.last()?]),
+        _ => None,
+    }
+}
+
+/// Der Punkt der Linie `l2`, der kein Punkt der Linie `l1` ist (für Kollinear); `None`, wenn
+/// beide Punkte geteilt sind oder eine der Kurven keine Linie ist.
+fn collinear_point(sk: &Sketch, l1: CurveId, l2: CurveId) -> Option<PointId> {
+    let (CurveKind::Line { a: a1, b: b1 }, CurveKind::Line { a: a2, b: b2 }) =
+        (&sk.curves[l1].kind, &sk.curves[l2].kind)
+    else {
+        return None;
+    };
+    [*a2, *b2].into_iter().find(|p| p != a1 && p != b1)
+}
+
+/// Teilen die (geprüften) Linien `l1` und `l2` einen Punkt?
+fn lines_share_point(sk: &Sketch, l1: CurveId, l2: CurveId) -> bool {
+    let (CurveKind::Line { a: a1, b: b1 }, CurveKind::Line { a: a2, b: b2 }) =
+        (&sk.curves[l1].kind, &sk.curves[l2].kind)
+    else {
+        return false;
+    };
+    [a2, b2].into_iter().any(|p| p == a1 || p == b1)
+}
+
+/// Richtung aus dem (geprüften) Ende `p` in die Linie, den Bogen oder den Spline `c` hinein.
+fn into_curve(ctx: &Ctx, c: CurveId, p: PointId) -> V2 {
+    match &ctx.sk.curves[c].kind {
+        CurveKind::Line { a, b } => {
+            let (pa, pb) = (ctx.pt(*a), ctx.pt(*b));
+            if p == *a {
+                sub2(&pb, &pa)
+            } else {
+                sub2(&pa, &pb)
+            }
+        }
+        // Bögen laufen gegen den Uhrzeigersinn vom Start zum Ende.
+        CurveKind::Arc { center, start, .. } => {
+            let r = sub2(&ctx.pt(p), &ctx.pt(*center));
+            if p == *start {
+                (-&r.1, r.0)
+            } else {
+                (r.1, -&r.0)
+            }
+        }
+        CurveKind::Spline { points } => {
+            if p == points[0] {
+                param_curve(ctx, c, &Dual::constant(0.0)).1
+            } else {
+                let last = (points.len() - 1) as f64;
+                let (_, d) = param_curve(ctx, c, &Dual::constant(last));
+                (-&d.0, -&d.1)
+            }
+        }
+        _ => unreachable!("type was checked"),
+    }
+}
+
 fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
     use ConstraintKind::*;
     let sk = ctx.sk;
@@ -617,6 +736,46 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
             let dir = (Dual::constant(v.cos()), Dual::constant(v.sin()));
             vec![cross(&a, &dir) / len]
         }
+        Collinear(l1, l2) => {
+            let ((_, d1), (_, d2)) = (line_dir(ctx, *l1), line_dir(ctx, *l2));
+            let den = norm_len(&d1) * norm_len(&d2);
+            let Some(q) = collinear_point(sk, *l1, *l2) else {
+                unreachable!("type was checked")
+            };
+            let angle = cross(&d1, &d2) / den;
+            // Mit gemeinsamem Ende ist der Abstand von `q` nur die Winkelzeile mal `|d2|`: Eine
+            // zweite Zeile wäre stets abhängig und meldete die Abhängigkeit als überzählig.
+            if lines_share_point(sk, *l1, *l2) {
+                vec![angle]
+            } else {
+                vec![angle, signed_distance(ctx, &ctx.pt(q), *l1)]
+            }
+        }
+        // Wie die Tangente am gemeinsamen Ende als Winkel: Die Spitze liegt bei ±π und ist keine
+        // Nullstelle.
+        Smooth(c1, p1, c2, p2) => {
+            let u = into_curve(ctx, *c1, *p1);
+            let v = into_curve(ctx, *c2, *p2);
+            let w = (-&v.0, -&v.1);
+            vec![cross(&u, &w).atan2(&dot(&u, &w))]
+        }
+        DistanceX(a, b, v) | DistanceY(a, b, v) => {
+            let d = sub2(&ctx.pt(*b), &ctx.pt(*a));
+            let along = if matches!(data.kind, DistanceX(..)) {
+                d.0
+            } else {
+                d.1
+            };
+            vec![f64::from(data.branch) * along - *v]
+        }
+        CenterlineDiameter(p, line, v) => {
+            let pp = ctx.pt(*p);
+            vec![2.0 * f64::from(data.branch) * signed_distance(ctx, &pp, *line) - *v]
+        }
+        SlotOverall(a, b, cap, v) => {
+            let gap = length(&sub2(&ctx.pt(*a), &ctx.pt(*b)));
+            vec![gap + 2.0 * circle_of(ctx, *cap).1 - *v]
+        }
     }
 }
 
@@ -763,6 +922,12 @@ impl Sketch {
                 let (_, a, _, _) = ellipse_of(&ctx, *c);
                 a.1.v.atan2(a.0.v)
             }
+            DistanceX(a, b, _) => (ctx.pt(*b).0.v - ctx.pt(*a).0.v).abs(),
+            DistanceY(a, b, _) => (ctx.pt(*b).1.v - ctx.pt(*a).1.v).abs(),
+            CenterlineDiameter(p, l, _) => 2.0 * signed_distance(&ctx, &ctx.pt(*p), *l).v.abs(),
+            SlotOverall(a, b, cap, _) => {
+                length(&sub2(&ctx.pt(*a), &ctx.pt(*b))).v + 2.0 * circle_of(&ctx, *cap).1.v
+            }
             _ => return None,
         };
         v.is_finite().then_some(v)
@@ -851,6 +1016,35 @@ impl Sketch {
             {
                 wrong(tr!("sketch-err-only-ellipses"))
             }
+            Collinear(a, b) if !(is_line(*a) && is_line(*b)) => wrong(tr!("sketch-err-only-lines")),
+            Collinear(a, b) if a == b || collinear_point(self, *a, *b).is_none() => {
+                degenerate(tr!("sketch-err-two-objects"))
+            }
+            Smooth(a, _, b, _) if a == b => degenerate(tr!("sketch-err-two-objects")),
+            Smooth(a, pa, b, pb) => {
+                let kind = |c: CurveId| &self.curves[c].kind;
+                let spline = |c: CurveId| matches!(kind(c), CurveKind::Spline { .. });
+                let allowed = |c: CurveId| {
+                    matches!(
+                        kind(c),
+                        CurveKind::Line { .. } | CurveKind::Arc { .. } | CurveKind::Spline { .. }
+                    )
+                };
+                let is_end =
+                    |c: CurveId, p: PointId| curve_ends(kind(c)).is_some_and(|e| e.contains(&p));
+                if !(allowed(*a) && allowed(*b) && (spline(*a) || spline(*b))) {
+                    wrong(tr!("sketch-smooth-kinds"))
+                } else if !(is_end(*a, *pa) && is_end(*b, *pb)) {
+                    wrong(tr!("sketch-err-smooth-end"))
+                } else {
+                    Ok(())
+                }
+            }
+            DistanceX(a, b, _) | DistanceY(a, b, _) | SlotOverall(a, b, ..) if a == b => {
+                degenerate(tr!("sketch-err-two-points"))
+            }
+            CenterlineDiameter(_, l, _) if !is_line(*l) => wrong(tr!("sketch-err-only-lines")),
+            SlotOverall(_, _, cap, _) if !is_round(*cap) => wrong(tr!("sketch-err-only-circles")),
             _ => Ok(()),
         }
     }
@@ -860,7 +1054,8 @@ impl Sketch {
     /// [`Sketch::set_constraint_value`] und die Eingabe in der Oberfläche:
     /// - alle Werte endlich, Längen und Koordinaten betragsmäßig höchstens
     ///   [`MAX_COORD`](crate::model::MAX_COORD);
-    /// - Abstand zweier Punkte, Radius, Durchmesser und Halbachsen größer als `tol.linear`
+    /// - Abstand zweier Punkte (auch waagerecht und senkrecht), Radius, Durchmesser (auch zur
+    ///   Mittellinie), Gesamtlänge des Langlochs und Halbachsen größer als `tol.linear`
     ///   (ein Abstand null ließe eine Linie zu einem Punkt zusammenfallen; dafür gibt es
     ///   „deckungsgleich“);
     /// - Abstand Punkt–Linie nicht negativ (null heißt: Punkt auf der Linie);
@@ -869,7 +1064,13 @@ impl Sketch {
     pub fn check_constraint_value(&self, kind: &ConstraintKind) -> Result<(), SketchError> {
         use ConstraintKind::*;
         match kind {
-            Distance(_, _, v) | Radius(_, v) | Diameter(_, v) => self.check_positive(*v),
+            Distance(_, _, v)
+            | Radius(_, v)
+            | Diameter(_, v)
+            | DistanceX(_, _, v)
+            | DistanceY(_, _, v)
+            | CenterlineDiameter(_, _, v)
+            | SlotOverall(_, _, _, v) => self.check_positive(*v),
             DistancePointLine(_, _, v) => {
                 finite(*v)?;
                 if *v < 0.0 {
@@ -1031,7 +1232,11 @@ impl Sketch {
                         .map_or(0, |c| c.0)
                 }
             },
-            DistancePointLine(p, l, _) => sign(signed_distance(&ctx, &ctx.pt(*p), *l).v),
+            DistancePointLine(p, l, _) | CenterlineDiameter(p, l, _) => {
+                sign(signed_distance(&ctx, &ctx.pt(*p), *l).v)
+            }
+            DistanceX(a, b, _) => sign(self.pos(*b).x - self.pos(*a).x),
+            DistanceY(a, b, _) => sign(self.pos(*b).y - self.pos(*a).y),
             _ => 0,
         }
     }
@@ -1078,7 +1283,7 @@ impl Sketch {
 
     /// Ist die lebende Abhängigkeit an den aktuellen Werten ohne Bewegung erfüllt? Alle Residuen
     /// höchstens `factor · tol.linear`, Winkelzeilen (parallel, rechtwinklig, Winkel,
-    /// Ellipsenwinkel, Richtung bei Tangente Linie–Ellipse/Spline) höchstens
+    /// Ellipsenwinkel, Richtung bei Tangente Linie–Ellipse/Spline, Kollinear und Glatt) höchstens
     /// `factor · tol.angular`; eine Tangente am gemeinsamen Endpunkt innerhalb von
     /// [`SHARED_END_TANGENT_DRIFT`].
     pub(crate) fn satisfied(&self, id: ConstraintId, factor: f64) -> bool {
@@ -1095,6 +1300,7 @@ impl Sketch {
         let kind = &self.constraints[id].kind;
         let angular_row = |row: usize| match kind {
             Parallel(..) | Perpendicular(..) | Angle(..) | EllipseAngle(..) => true,
+            Collinear(..) | Smooth(..) => row == 0,
             Tangent(a, b) => row == 1 && line_and_param(self, *a, *b).is_some(),
             _ => false,
         };
@@ -1153,6 +1359,7 @@ impl Sketch {
             )));
         }
         self.check_refs(&kind)?;
+        self.check_centerline(&kind)?;
         let branch = self.initial_branch(&kind);
         let shared_sign = self.shared_end_sign(&kind);
         // Erst nach allen Prüfungen anlegen, damit ein Fehler nichts hinterlässt.
@@ -1168,6 +1375,82 @@ impl Sketch {
             extra,
             alive: true,
         }))
+    }
+
+    /// Ein neuer Durchmesser zur Mittellinie braucht eine Mittellinie. Nur beim Anlegen und
+    /// Umschalten geprüft: Wer die Mittellinie später ausschaltet, behält ein lösbares Maß, und
+    /// eine solche Datei lädt weiter.
+    fn check_centerline(&self, kind: &ConstraintKind) -> Result<(), SketchError> {
+        match kind {
+            ConstraintKind::CenterlineDiameter(_, l, _) if !self.curves[*l].centerline => {
+                Err(SketchError::WrongType(tr!("sketch-diameter-centerline")))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Schaltet ein Maß zwischen Radius und Durchmesser um: `Radius(c, v) ↔ Diameter(c, 2v)`,
+    /// `DistancePointLine(p, L, v) ↔ CenterlineDiameter(p, L, 2v)` (nur an Mittellinien). Id,
+    /// `branch`, `driven` und `enabled` bleiben; zweimal umgeschaltet ist der Wert bitgleich. Bei
+    /// einem Fehler bleibt die Skizze unverändert.
+    pub fn toggle_radius_diameter(&mut self, id: ConstraintId) -> Result<(), SketchError> {
+        use ConstraintKind::*;
+        self.checked_constraint(id)?;
+        let kind = match self.constraints[id].kind {
+            Radius(c, v) => Diameter(c, 2.0 * v),
+            Diameter(c, v) => Radius(c, 0.5 * v),
+            DistancePointLine(p, l, v) => CenterlineDiameter(p, l, 2.0 * v),
+            CenterlineDiameter(p, l, v) => DistancePointLine(p, l, 0.5 * v),
+            _ => return Err(SketchError::WrongType(tr!("sketch-err-toggle-kinds"))),
+        };
+        self.check_refs(&kind)?;
+        self.check_centerline(&kind)?;
+        self.constraints[id].kind = kind;
+        self.touch_structure();
+        Ok(())
+    }
+
+    /// Die Enden, an denen Glatt die Kurven `a` und `b` verbindet: zuerst ein gemeinsamer Punkt,
+    /// sonst das nächste Endenpaar (**Annahme** zu Fusion). Mit `near` zählen nur Enden, die
+    /// höchstens die halbe Sehne ihrer Kurve von `near` entfernt sind; bei mehreren gemeinsamen
+    /// Punkten gewinnt der nächste an `near`. `None` für dieselbe Kurve, Kurven ohne Enden oder
+    /// wenn kein Ende in Reichweite liegt.
+    pub fn smooth_ends(
+        &self,
+        a: CurveId,
+        b: CurveId,
+        near: Option<DVec2>,
+    ) -> Option<(PointId, PointId)> {
+        if a == b {
+            return None;
+        }
+        let (ca, cb) = (self.curve(a)?, self.curve(b)?);
+        let (ea, eb) = (curve_ends(&ca.kind)?, curve_ends(&cb.kind)?);
+        let in_reach = |ends: [PointId; 2], p: PointId| {
+            near.is_none_or(|q| {
+                let reach = 0.5 * self.pos(ends[0]).distance(self.pos(ends[1]));
+                self.pos(p).distance(q) <= reach
+            })
+        };
+        let to_near = |p: PointId| near.map_or(0.0, |q| self.pos(p).distance(q));
+        let shared = ea
+            .into_iter()
+            .filter(|p| eb.contains(p) && in_reach(ea, *p) && in_reach(eb, *p))
+            .min_by(|x, y| to_near(*x).total_cmp(&to_near(*y)));
+        if let Some(p) = shared {
+            return Some((p, p));
+        }
+        ea.into_iter()
+            .filter(|&p| in_reach(ea, p))
+            .flat_map(|p| {
+                eb.into_iter()
+                    .filter(move |&q| in_reach(eb, q))
+                    .map(move |q| (p, q))
+            })
+            .min_by(|x, y| {
+                let d = |(p, q): (PointId, PointId)| self.pos(p).distance(self.pos(q));
+                d(*x).total_cmp(&d(*y))
+            })
     }
 
     /// Entfernt eine (nicht interne) Abhängigkeit.

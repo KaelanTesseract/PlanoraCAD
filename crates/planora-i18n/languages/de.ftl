@@ -1698,6 +1698,10 @@ sketch-err-unsupported-solid = Dieses Profil enthält { $what } und kann noch ni
 sketch-err-unsupported-projection = Diese Kante kann noch nicht in die Skizze kopiert werden: { $detail }
 sketch-err-kernel = Der Kernel hat das Profil abgelehnt: { $detail }
 sketch-err-tangent-kinds = Tangential geht nur zwischen Linie und Kreis/Bogen/Ellipse/Spline oder zwei Kreisen/Bögen
+sketch-smooth-kinds = Glatt geht nur zwischen einem Spline und einer Linie, einem Bogen oder einem zweiten Spline
+sketch-err-smooth-end = Glatt braucht ein Ende jeder Kurve
+sketch-diameter-centerline = Ein Durchmesser zur Achse geht nur an einer Mittellinie
+sketch-err-toggle-kinds = Umschalten geht nur zwischen Radius und Durchmesser
 sketch-err-not-finite = { $what } muss eine endliche Zahl sein
 sketch-err-too-large = { $what } ist zu groß (Betrag höchstens { $max } { $unit })
 

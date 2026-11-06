@@ -1715,6 +1715,10 @@ sketch-err-unsupported-solid = This profile contains { $what } and cannot become
 sketch-err-unsupported-projection = This edge cannot be copied into the sketch yet: { $detail }
 sketch-err-kernel = The kernel rejected the profile: { $detail }
 sketch-err-tangent-kinds = Tangent only works between a line and a circle/arc/ellipse/spline, or between two circles/arcs
+sketch-smooth-kinds = Smooth only works between a spline and a line, an arc or a second spline
+sketch-err-smooth-end = Smooth needs an end of each curve
+sketch-diameter-centerline = A diameter to the axis only works on a centerline
+sketch-err-toggle-kinds = Toggling only works between radius and diameter
 sketch-err-not-finite = { $what } must be a finite number
 sketch-err-too-large = { $what } is too large (absolute value at most { $max } { $unit })
 
