@@ -24,7 +24,8 @@ use planora_math::{DVec2, DVec3};
 use planora_project::config::Config;
 use planora_project::library::Library;
 
-const SIZE: Vec2 = vec2(1400.0, 900.0);
+// Skizzen 5: Die Leiste mit 20 Knöpfen passt erst bei 1920×1080 ohne Rollen (Standard).
+const SIZE: Vec2 = vec2(1920.0, 1080.0);
 const NONE: Modifiers = Modifiers::NONE;
 
 // ---- Hilfen ---------------------------------------------------------------------------------

@@ -407,10 +407,10 @@ fn sketch_free_rect_margins() {
 }
 
 #[test]
-fn strip_with_twelve_tools_fits_at_1920x1080() {
+fn strip_with_all_tools_fits_at_1920x1080() {
     let r = sketch_rects(1920.0, 1080.0, false);
     let strip = r.strip.unwrap();
-    assert_eq!(strip.height(), STRIP_H, "alle zwölf Knöpfe ohne Rollen");
+    assert_eq!(strip.height(), STRIP_H, "alle 20 Knöpfe ohne Rollen");
     assert!(strip.top() >= r.free.top() && strip.bottom() <= r.free.bottom());
 }
 
@@ -429,9 +429,10 @@ fn strip_layout_never_panics_in_tiny_windows() {
 // (c)
 #[test]
 fn strip_height_is_limited_to_free_height() {
-    // Genug Platz: 18 Knöpfe zu 36, 17 Abstände zu 4, Trennlinie 9, Rand 2 × 4 (Skizzen 4).
-    assert_eq!(STRIP_H, 18.0 * 36.0 + 17.0 * 4.0 + 9.0 + 8.0);
-    let r = sketch_rects(1400.0, 900.0, false);
+    // Genug Platz: 20 Knöpfe zu 36, 19 Abstände zu 4, Trennlinie 9, Rand 2 × 4 (Skizzen 5).
+    assert_eq!(STRIP_H, 20.0 * 36.0 + 19.0 * 4.0 + 9.0 + 8.0);
+    assert_eq!(STRIP_H, 813.0);
+    let r = sketch_rects(1920.0, 1080.0, false);
     assert_eq!(r.strip.unwrap().height(), STRIP_H);
     // Niedrige Fenster: höchstens so hoch wie die freie Fläche.
     for h in [300.0, 400.0, 480.0, 520.0] {

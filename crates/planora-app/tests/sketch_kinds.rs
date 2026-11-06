@@ -547,7 +547,7 @@ fn planned_arc_kind_is_remembered() {
 // ---- Leiste und Hinweis ---------------------------------------------------------------------
 
 #[test]
-fn strip_has_eighteen_tools_and_fits_at_full_hd() {
+fn strip_has_twenty_tools_and_fits_at_full_hd() {
     assert_eq!(
         sketch_panel::TOOL_ORDER,
         [
@@ -562,6 +562,9 @@ fn strip_has_eighteen_tools_and_fits_at_full_hd() {
             Tool::Ellipse,
             Tool::Spline,
             Tool::ProjectEdge,
+            // Skizzen 5
+            Tool::Pattern,
+            Tool::Dimension,
             Tool::Trim,
             Tool::Extend,
             Tool::Break,
@@ -574,7 +577,7 @@ fn strip_has_eighteen_tools_and_fits_at_full_hd() {
     );
     let rig = Rig::new();
     let buttons = sketch_panel::strip_buttons(&rig.ctx);
-    assert_eq!(buttons.len(), 18);
+    assert_eq!(buttons.len(), 20);
     for (label, r) in &buttons {
         assert!(
             r.top() >= 0.0 && r.bottom() < SIZE.y - planora_app::shell::BOTTOM_H,

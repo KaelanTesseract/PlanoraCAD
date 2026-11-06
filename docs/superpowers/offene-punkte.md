@@ -2227,7 +2227,7 @@ In Arbeit auf dem Zweig `feature/skizzen-muster` (Spec `specs/2026-11-03-skizzen
 - Abweichung: Das Feld steht im Skizzenfeld, nicht am Maßtext in der Zeichnung; die Lage des Texts wird nicht gespeichert (Entscheidung 13).
 
 **Rechteckige Anordnung (Task 9)**
-- Richtung 2 steht als Vorgabe senkrecht zu Richtung 1 (`PatternDir::Perpendicular`, wie Fusion) und folgt ihr, auch einer drehenden Linie. Wurde für Richtung 2 eine eigene Linie gewählt, gibt es im Skizzenfeld noch keinen Knopf zurück zu „senkrecht“ (Abbrechen und neu beginnen).
+- Richtung 2 steht als Vorgabe senkrecht zu Richtung 1 (`PatternDir::Perpendicular`, wie Fusion) und folgt ihr, auch einer drehenden Linie. Nach einer eigenen Linie für Richtung 2 stellt der Knopf „Senkrecht zu 1“ im Skizzenfeld sie zurück.
 - **Annahme:** Ein zweiter schneller Klick auf ein Exemplar der Vorschau (Doppelklick) schaltet es wie jeder Klick; der Doppelklick schließt nichts ab.
 - **Annahme:** Ein Griffzug am Pfeil nimmt einen getippten Abstand dieser Richtung als Startwert; danach folgt das Feld dem Griff, die getippte Formel entfällt.
 - Abweichung: Entf löscht nichts, solange die Anordnung läuft (die Auswahl ist dort die Vorlage). Im Auswahlwerkzeug wählt Entf auf einem Exemplar es ab, das Muster bleibt.

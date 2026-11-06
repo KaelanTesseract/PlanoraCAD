@@ -256,6 +256,8 @@ fn sketch_speaks_english() {
                 "Ellipse",
                 "Spline",
                 "Copy body edge",
+                "Pattern",
+                "Sketch Dimension",
                 "Trim",
                 "Extend",
                 "Break",
@@ -267,7 +269,7 @@ fn sketch_speaks_english() {
             ]
         );
         let buttons = sketch_panel::strip_buttons(&c);
-        assert_eq!(buttons.len(), 18);
+        assert_eq!(buttons.len(), 20);
         for (tool, label, hint) in tools {
             let (_, r) = buttons.iter().find(|(l, _)| *l == label).unwrap();
             frame(&c, &mut app, vec![moved(r.center())]);

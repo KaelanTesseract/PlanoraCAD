@@ -29,7 +29,7 @@ use planora_sketch::model::{CurveKind, Sketch};
 const _: () = assert!(TOOL_ORDER.len() == crate::shell::STRIP_TOOLS);
 
 /// Werkzeuge der Skizzenleiste in der Reihenfolge der Leiste.
-pub const TOOL_ORDER: [Tool; 18] = [
+pub const TOOL_ORDER: [Tool; 20] = [
     Tool::Select,
     Tool::Point,
     Tool::Line,
@@ -41,6 +41,9 @@ pub const TOOL_ORDER: [Tool; 18] = [
     Tool::Ellipse,
     Tool::Spline,
     Tool::ProjectEdge,
+    // Skizzen 5 (Entscheidung 15): Muster mit Liste der Arten, dann die Skizzenbemaßung.
+    Tool::Pattern,
+    Tool::Dimension,
     Tool::Trim,
     Tool::Extend,
     Tool::Break,
@@ -76,7 +79,8 @@ pub fn tool_label(tool: Tool) -> String {
         Tool::MoveCopy => tr!("action-sketch-move-copy"),
         Tool::Scale => tr!("action-sketch-scale"),
         Tool::Dimension => tr!("action-sketch-dimension"),
-        Tool::Pattern => tr!("action-sketch-pattern-rect"),
+        // Der Knopf mit Liste heißt wie in Fusion „Muster“; die Arten nennen sich selbst.
+        Tool::Pattern => tr!("sketch-tool-pattern"),
     }
 }
 
@@ -107,7 +111,7 @@ pub fn tool_hint(tool: Tool) -> String {
 }
 
 /// Werkzeuge der Skizzenleiste: Werkzeug, Beschriftung, Hinweis (in der aktuellen Sprache).
-pub fn tools() -> [(Tool, String, String); 18] {
+pub fn tools() -> [(Tool, String, String); 20] {
     TOOL_ORDER.map(|t| (t, tool_label(t), tool_hint(t)))
 }
 
@@ -625,7 +629,11 @@ fn strip_field(
                         let title = strip_title(&km, se, tool);
                         let hint = se.kind_of(tool).map_or(hint, ToolKind::hint);
                         let flyout = has_flyout(tool);
-                        let source = icons::sketch_tool_icon(tool);
+                        // Das Muster zeigt das Symbol der zuletzt benutzten Art.
+                        let source = match se.kind_of(tool) {
+                            Some(kind) if tool == Tool::Pattern => icons::sketch_kind_icon(kind),
+                            _ => icons::sketch_tool_icon(tool),
+                        };
                         let r = strip_button(ui, source, &label, selected, flyout, dark)
                             .on_hover_ui(|ui| {
                                 ui.strong(&title);
@@ -902,6 +910,7 @@ fn pattern_options(ui: &mut egui::Ui, se: &mut SketchSession, sf: &mut SketchFea
                 mut symmetric,
             } => {
                 let mut pick = None;
+                let mut perpendicular = false;
                 for k in 0..2 {
                     let name = match dirs[k] {
                         PatternDir::SketchX => tr!("sketch-pattern-axis-x"),
@@ -924,6 +933,18 @@ fn pattern_options(ui: &mut egui::Ui, se: &mut SketchSession, sf: &mut SketchFea
                         {
                             pick = Some(k);
                         }
+                        // Richtung 2 zurück auf die Vorgabe „senkrecht zu Richtung 1“.
+                        if k == 1
+                            && ui
+                                .selectable_label(
+                                    dirs[1] == PatternDir::Perpendicular,
+                                    tr!("sketch-pattern-perpendicular-button"),
+                                )
+                                .on_hover_text(tr!("sketch-pattern-perpendicular-button-hint"))
+                                .clicked()
+                        {
+                            perpendicular = true;
+                        }
                         ui.checkbox(&mut extent[k], tr!("sketch-pattern-extent"))
                             .on_hover_text(tr!("sketch-pattern-extent-hint"));
                         ui.checkbox(&mut symmetric[k], tr!("sketch-pattern-symmetric"))
@@ -936,6 +957,10 @@ fn pattern_options(ui: &mut egui::Ui, se: &mut SketchSession, sf: &mut SketchFea
                         extent,
                         symmetric,
                     };
+                }
+                if perpendicular {
+                    se.pattern.picking_direction = false;
+                    se.set_pattern_direction(1, PatternDir::Perpendicular);
                 }
                 if let Some(k) = pick {
                     se.pick_pattern_direction(k);
@@ -1147,7 +1172,11 @@ fn side_contents(
             // In der Anordnung gehört die Auswahl der Vorlage (wie Entf in der Ansicht).
             !se.selection.is_empty() && !se.runs_pattern(),
         )
-        .on_disabled_hover_text(tr!("sketch-delete-disabled"))
+        .on_disabled_hover_text(if se.runs_pattern() {
+            tr!("sketch-delete-in-pattern")
+        } else {
+            tr!("sketch-delete-disabled")
+        })
         .clicked()
         {
             se.delete_selection(sk);
@@ -1547,14 +1576,20 @@ fn constraint_list(
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let dark = ui.visuals().dark_mode;
                         let delete_row = tr!("sketch-delete-row");
-                        delete = icons::source_icon_button(
-                            ui,
-                            IconSource::Font(Icon::Delete),
-                            &delete_row,
-                            dark,
-                        )
-                        .on_hover_text(&delete_row)
-                        .clicked();
+                        // In der Anordnung gehört die Auswahl der Vorlage: gesperrt wie der Knopf
+                        // „Löschen“ im Skizzenfeld.
+                        delete = ui
+                            .add_enabled(!se.runs_pattern(), |ui: &mut egui::Ui| {
+                                icons::source_icon_button(
+                                    ui,
+                                    IconSource::Font(Icon::Delete),
+                                    &delete_row,
+                                    dark,
+                                )
+                            })
+                            .on_hover_text(&delete_row)
+                            .on_disabled_hover_text(tr!("sketch-delete-in-pattern"))
+                            .clicked();
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                             name = Some(ui.selectable_label(selected, text));
                         });

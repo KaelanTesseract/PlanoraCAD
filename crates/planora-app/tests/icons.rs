@@ -259,7 +259,11 @@ fn every_sketch_tool_and_action_has_an_icon_source() {
     use icons::IconSource;
     use planora_app::sketch_panel::{ACTIONS, tools};
     // Skizzen 4: Rundung, Versatz, Verschieben/Kopieren und Maßstab kamen dazu.
-    assert_eq!(tools().len(), 18);
+    assert_eq!(
+        tools().len(),
+        18 + 2,
+        "Skizzen 5: Muster und Skizzenbemaßung"
+    );
     // Skizzen 5: Konzentrisch, Kollinear und Glatt kamen dazu.
     assert_eq!(ACTIONS.len(), 19);
     let mut sources = Vec::new();

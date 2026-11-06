@@ -240,6 +240,8 @@ fn press_in_side(c: &egui::Context, app: &mut PlanoraApp, label: &str) -> Shot {
 #[test]
 fn all_nine_tools_are_buttons_with_tooltips_and_widget_info() {
     use egui::accesskit::{Role, Toggled};
+    // Skizzen 5: Alle 20 Knöpfe ohne Rollen erst bei 1920×1080 (Standard der Tests).
+    const SIZE: Vec2 = vec2(1920.0, 1080.0);
     let c = context();
     c.enable_accesskit();
     let mut app = sketching(0);

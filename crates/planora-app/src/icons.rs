@@ -945,6 +945,14 @@ pub enum HandIcon {
     Collinear,
     /// Glatt: eine Linie, die ohne Knick in eine Kurve übergeht, Punkt am Übergang.
     Smooth,
+    /// Rechteckige Anordnung: 2 × 2 kleine Quadrate, das erste (die Vorlage) kräftig, die
+    /// Kopien dünn.
+    PatternRect,
+    /// Kreisförmige Anordnung: kleine Kreise auf einem Kreis um eine Mitte, der erste (die
+    /// Vorlage) kräftig.
+    PatternCircular,
+    /// Skizzenbemaßung: zwei Hilfslinien, dazwischen die Maßlinie mit zwei Pfeilspitzen.
+    SketchDimension,
 }
 
 /// Alle gezeichneten Symbole aus [`HandIcon`].
@@ -972,6 +980,9 @@ pub const HAND_DRAWN: &[HandIcon] = &[
     HandIcon::Concentric,
     HandIcon::Collinear,
     HandIcon::Smooth,
+    HandIcon::PatternRect,
+    HandIcon::PatternCircular,
+    HandIcon::SketchDimension,
 ];
 
 /// Zeichnet ein [`HandIcon`] in `rect` (Strichbreite 1,5, runde Enden).
@@ -1229,6 +1240,47 @@ pub fn paint_hand_icon(painter: &Painter, rect: Rect, icon: HandIcon, color: Col
             painter.add(egui::Shape::line(pts, stroke));
             painter.circle_filled(joint, 2.2, color);
         }
+        HandIcon::PatternRect => {
+            // Vorlage oben links kräftig, die drei Kopien dünn (wie Fusion).
+            let (k, half) = (r * 0.55, r * 0.35);
+            let thin = Stroke::new(1.0, color);
+            for (i, d) in [vec2(-k, -k), vec2(k, -k), vec2(-k, k), vec2(k, k)]
+                .into_iter()
+                .enumerate()
+            {
+                painter.rect_stroke(
+                    Rect::from_center_size(c + d, vec2(half * 2.0, half * 2.0)),
+                    0.0,
+                    if i == 0 { stroke } else { thin },
+                    egui::StrokeKind::Middle,
+                );
+            }
+        }
+        HandIcon::PatternCircular => {
+            // Sechs kleine Kreise um die Mitte, der obere (die Vorlage) kräftig.
+            let thin = Stroke::new(1.0, color);
+            painter.circle_filled(c, 1.6, color);
+            for i in 0..6 {
+                let a = std::f32::consts::FRAC_PI_2 + std::f32::consts::FRAC_PI_3 * i as f32;
+                let at = c + vec2(a.cos(), -a.sin()) * r * 0.8;
+                painter.circle_stroke(at, r * 0.26, if i == 0 { stroke } else { thin });
+            }
+        }
+        HandIcon::SketchDimension => {
+            // Unten die bemaßte Kante, darüber zwei dünne Hilfslinien und die Maßlinie mit
+            // Pfeilspitzen nach außen.
+            seg(painter, [c + vec2(-r, r), c + vec2(r, r)], stroke);
+            let thin = Stroke::new(1.0, color);
+            seg(painter, [c + vec2(-r, r * 0.6), c + vec2(-r, -r)], thin);
+            seg(painter, [c + vec2(r, r * 0.6), c + vec2(r, -r)], thin);
+            let y = -r * 0.45;
+            seg(painter, [c + vec2(-r, y), c + vec2(r, y)], stroke);
+            let h = r * 0.35;
+            for (tip, d) in [(c + vec2(-r, y), 1.0), (c + vec2(r, y), -1.0)] {
+                seg(painter, [tip, tip + vec2(d * h, -h * 0.7)], stroke);
+                seg(painter, [tip, tip + vec2(d * h, h * 0.7)], stroke);
+            }
+        }
         HandIcon::Centerline => {
             seg(
                 painter,
@@ -1314,20 +1366,21 @@ pub fn sketch_tool_icon(tool: crate::sketch_state::Tool) -> IconSource {
         T::Offset => IconSource::Hand(HandIcon::Offset),
         T::MoveCopy => IconSource::Hand(HandIcon::MoveCopy),
         T::Scale => IconSource::Hand(HandIcon::Scale),
-        T::Dimension => IconSource::Font(Icon::DimensionTool),
-        // Vorläufig das Symbol „Muster …“; eigene Symbole je Art kommen mit der Leiste (Task 12).
-        T::Pattern => IconSource::Font(Icon::Pattern),
+        T::Dimension => IconSource::Hand(HandIcon::SketchDimension),
+        // Der Knopf zeigt die zuletzt benutzte Art (`sketch_kind_icon`); das hier ist die erste.
+        T::Pattern => IconSource::Hand(HandIcon::PatternRect),
     }
 }
 
-/// Symbol einer Art in der Liste eines Knopfs: die Fasen haben ihr eigenes, sonst das des
-/// Werkzeugs.
+/// Symbol einer Art in der Liste eines Knopfs: die Fasen und die kreisförmige Anordnung haben
+/// ihr eigenes, sonst das des Werkzeugs.
 pub fn sketch_kind_icon(kind: crate::sketch_kinds::ToolKind) -> IconSource {
     use crate::sketch_kinds::ToolKind as K;
     match kind {
         K::ChamferEqual | K::ChamferDistanceAngle | K::ChamferTwoDistances => {
             IconSource::Hand(HandIcon::Chamfer)
         }
+        K::PatternCircular => IconSource::Hand(HandIcon::PatternCircular),
         _ => sketch_tool_icon(kind.tool()),
     }
 }
