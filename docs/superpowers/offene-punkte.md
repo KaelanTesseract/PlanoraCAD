@@ -2149,8 +2149,8 @@ Abgeschlossen 2026-11-03, gemergt in 0fff041. Dennis hat mit den drei bekannten 
 
 **Beobachtungen aus dem Handtest:**
 - Rundung an einem Rechteck ohne Maße, Radius genau an der Grenze (zwei Bögen füllen die Seite): Die Seiten wandern nach außen, das Rechteck wächst. Es ist gelöst, aber nicht abgelehnt.
-- Eine Linie, deren Start 8,5 Bildpunkte neben einem vorhandenen Punkt liegt, rastet am Raster genau auf derselben Stelle ein und bekommt einen eigenen, nicht verbundenen Punkt. An dieser Ecke meldet die Rundung dann „genau zwei Kurven“. Das Verhalten stammt aus Teilprojekt 2; Folgeidee: Ein Rasterpunkt, auf dem schon ein Punkt liegt, bindet an ihn.
-- Doppelklick auf ein Maß in der Zeichnung öffnet kein Feld, nur die Liste tut das. Fusion öffnet es dort. Folgeidee.
+- Eine Linie, deren Start 8,5 Bildpunkte neben einem vorhandenen Punkt liegt, rastet am Raster genau auf derselben Stelle ein und bekommt einen eigenen, nicht verbundenen Punkt. An dieser Ecke meldet die Rundung dann „genau zwei Kurven“. Das Verhalten stammt aus Teilprojekt 2; Folgeidee: Ein Rasterpunkt, auf dem schon ein Punkt liegt, bindet an ihn. Erledigt in Skizzen 5 (Task 11): Der Rasterfang bindet jetzt an einen lebenden Punkt auf dem Rasterpunkt.
+- ~~Doppelklick auf ein Maß in der Zeichnung öffnet kein Feld, nur die Liste tut das. Fusion öffnet es dort. Folgeidee.~~ Erledigt in Skizzen 5 (Task 11).
 
 
 Umgesetzt 2026-11-02 und 2026-11-03 auf dem Zweig `feature/skizzen-aendern` (Spec `specs/2026-11-02-skizzen-aendern-design.md`, Plan `plans/2026-11-02-skizzen-aendern.md`): Skizzenrundung (Kürzel F), Fase in drei Arten, Versatz (O), Verschieben/Kopieren (M) und Skizzenmaßstab. Beschreibung in `docs/funktionen.md`, Abschnitt „Skizzen“. Das Dateiformat bleibt 14: Die neuen Befehle legen nur Kurven und Abhängigkeiten an, die es schon gab. Der Handtest bei 1920×1080 steht noch aus. Wo eine spätere Regelung eine frühere ersetzt („replaces“), steht hier der Stand nach der letzten.
@@ -2210,7 +2210,7 @@ Umgesetzt 2026-11-02 und 2026-11-03 auf dem Zweig `feature/skizzen-aendern` (Spe
 
 ## Teilprojekt Skizzen 5
 
-In Arbeit auf dem Zweig `feature/skizzen-muster` (Spec `specs/2026-11-03-skizzen-muster-design.md`, Plan `plans/2026-11-03-skizzen-muster.md`). Der Abschnitt wächst mit den Tasks; Task 13 sammelt ihn.
+Umgesetzt 2026-11-03 bis 2026-11-06 auf dem Zweig `feature/skizzen-muster` (Spec `specs/2026-11-03-skizzen-muster-design.md`, Plan `plans/2026-11-03-skizzen-muster.md`): Rechteckige und Kreisförmige Anordnung, Konzentrisch, Kollinear, Glatt, Skizzenbemaßung mit waagerechtem, senkrechtem und Durchmessermaß zur Mittellinie, dazu Gesamtlänge des Langlochs als Maß, Doppelklick auf Maße und Rasterbindung. Beschreibung in `docs/funktionen.md`, Abschnitt „Skizzen“. Das Dateiformat steigt auf 15, aber nur für Skizzen mit Muster oder einer der neuen Abhängigkeiten (auch gelöscht); alle anderen Dateien werden bytegleich wie vorher geschrieben. Die Handprüfung steht noch aus (nur auf Dennis' Wort), die Gesamtläufe unter Windows und in WSL folgen nach der Abschlussprüfung. Die Abschnitte unten sind nach Tasks geordnet; die Sammlung am Ende fasst Abweichungen, Grenzen, Annahmen und Offenes zusammen.
 
 **Annahmen zu Mustern (Task 4)**
 - **Annahme:** Wird eine fremde Kurve verschoben, die einen Punkt mit einer Ecke der Vorlage teilt (oder nur ein Teil der Vorlage), trennt das Verschieben diese Ecke auf. Dabei ändert sich die Vorlage, und das Muster wird aufgelöst; die Exemplare bleiben als lose Geometrie liegen.
@@ -2233,7 +2233,7 @@ In Arbeit auf dem Zweig `feature/skizzen-muster` (Spec `specs/2026-11-03-skizzen
 - Abweichung: Entf löscht nichts, solange die Anordnung läuft (die Auswahl ist dort die Vorlage). Im Auswahlwerkzeug wählt Entf auf einem Exemplar es ab, das Muster bleibt.
 - Abweichung: `PatternToolState` hat neben den Feldern aus dem Plan noch die gewählte Richtung für „Linie wählen“, den laufenden Griff, die Formeln der getippten Felder und den Stand der Meldung.
 - Erledigt mit Task 10: Fang, Raster und neue Punkte als Mitte, der Winkelgriff am Bogen und die Felder des Kreismusters (siehe unten).
-- Offen (Task 12): Knopf in der Leiste, Menüeintrag und eigenes Symbol. Vorläufig zeigt `sketch_tool_icon` das Symbol „Muster …“, `tool_label(Tool::Pattern)` heißt „Rechteckige Anordnung“.
+- Erledigt mit Task 12: Leistenknopf „Muster“ mit Liste der zwei Arten, Einträge im Menü „Erzeugen“, eigene Symbole, Kürzel.
 
 **Kreisförmige Anordnung (Task 10)**
 - **Annahme:** „Winkel“ mit vollem Umlauf (±360°) verteilt wie „Voll“: n Lagen im Abstand 360°/n, keine liegt auf der Vorlage (360° bei 4: Exemplare bei 90°, 180°, 270°). „Symmetrisch“ mit vollem Umlauf verteilt die 2n − 1 Lagen gleichmäßig im Abstand 360°/(2n − 1) (360° bei 3: ±72°, ±144°), statt dass sich die äußeren Exemplare bei ±180° decken.
@@ -2250,3 +2250,44 @@ In Arbeit auf dem Zweig `feature/skizzen-muster` (Spec `specs/2026-11-03-skizzen
 - Der Rasterfang bindet: Liegt auf dem Rasterpunkt (innerhalb `tol.linear`) schon ein lebender Punkt, beginnt bzw. endet die neue Kurve an ihm (`Snap::Point`), statt einen zweiten Punkt daraufzulegen. Das gilt für alle Zeichenwerkzeuge über `resolve_free`, auch für die Mitte des Kreismusters. Strg schaltet es wie jeden Fang ab. Gibt nur eine Achse das Raster und die andere eine Ausrichtung, gilt dasselbe, wenn die Endlage genau auf einem Punkt liegt. Ohne Punkt im Ursprung bindet ein Rasterpunkt dort wie der Ursprungsfang (fest auf 0, 0).
 - Folge der Rasterbindung: Ein Rasterpunkt auf einem Exemplarpunkt eines Musters bindet wie der Punktfang; eine Kreismuster-Mitte dort wird darum mit `sketch-pattern-instance-source` abgelehnt. Mit Strg entsteht ein freier Punkt.
 - Eingabe nach einem abgelehnten Klick neben das Feld der Skizzenbemaßung (das Feld hat die Tastatur dann nicht mehr) versucht das gesetzte Maß erneut anzulegen; geht es nicht, bleiben Maß, getippter Text und Meldung, statt stumm zu verfallen (geparkt aus Task 8).
+
+**Sammlung zum Abschluss (Task 13; die Abschlussprüfung kann einzelnes davon noch beheben)**
+
+*Abweichungen von der Spec und von Fusion*
+- **Obergrenze lehnt ab.** Mehr als 900 Lagen (Vorlage mitgezählt) oder 3600 Kurven je Muster werden mit `sketch-pattern-too-many` abgelehnt; die Spec wollte lose Geometrie mit Meldung. Gemessen kostet lose Geometrie bei der Flächensuche genauso viel (10 000 Rechtecke 4,7 s), sie hülfe also nicht. Folge: sehr große Muster gehen nicht.
+- **Der Winkel zwischen zwei Linien liegt immer in (0, π).** Fusion wählt über die Lage des Zeigers zwischen Winkel und Gegenwinkel; das bräuchte ein Winkelmaß mit Vorzeichen und würde bestehende Dateien ändern. Wer den Gegenwinkel will, wählt das andere Linienpaar. Bewusst angenommen.
+- **Eine einzelne Linie folgt der Zeigerregel** (waagerecht, senkrecht oder direkt), wie in Fusion; geplant war nur die Länge, geändert in Task 6.
+- **Glatt am Bogen ist nur tangential (G1)**, weil der Spline am Ende noch keine Krümmung hat (bis Teilprojekt 7); die Meldung `sketch-smooth-arc-g1` sagt das. An Linie und Spline gilt Glatt in der gerechneten Form echt.
+- **Die Textlage der Maße wird nicht gespeichert.** Das Maß steht am gerechneten Anker, nicht dort, wo man klickt (Fusion legt den Text dort ab). Ein Format für Textlagen wäre ein eigener Schritt.
+- **Konzentrisch sind deckende Mitten** (`Coincident` der Mitten) mit eigenem Namen und gezeichnetem Zeichen, keine eigene Art im Format.
+- **Bindungen an Exemplare sind einseitig:** Der Löser liest die Exemplare, ändert sie aber nicht. Eine Abhängigkeit zwischen Vorlage und eigenem Exemplar wird abgelehnt. Ein Maß oder eine Abhängigkeit, die nur Exemplare liest (zum Beispiel ein Abstand zwischen zwei Exemplarpunkten), entfällt mit der Meldung `sketch-pattern-instance-dropped` (mit Zahl).
+- **Kollinear lehnt große Sprünge ab**, statt sie immer zu erreichen: Springt eine Linie weit weg, bleibt der Stand mit Meldung stehen, oder das Programm fährt in Schritten an. Dichte Folgen (Winkel ±170°, Lücke 0,5 bis 200) gingen alle ohne Umklappen.
+- **Eigene Abhängigkeitsarten:** `DistanceX`, `DistanceY`, `CenterlineDiameter`, `SlotOverall`, `Collinear` und `Smooth` sind eigene Arten, damit kein Hilfspunkt nötig ist und die Liste einen Eintrag zeigt. Das Ausschalten einer Mittellinie, an der ein Durchmesser hängt, wird nicht verhindert und nicht gemeldet; das Maß bleibt gültig.
+
+*Grenzen, wie sie jetzt gelten*
+- **Anzahl über Formel oder Parameter:** Sinkt die Anzahl, entfallen die Abhängigkeiten der wegfallenden Exemplare, und die Meldung `sketch-pattern-dropped` nennt die Zahl (Eingabe, Liste, Formel und Parameter gehen denselben Weg). Grenze: Die Zahl wird aus dem Zustand der Skizze vor und nach dem Lauf gebildet; war die Skizze vorher im Fehlerzustand, werden dabei entfallene Abhängigkeiten nicht mitgezählt (vorgemerkt: stattdessen aus der Definition des Features bilden).
+- **Teilweise überzählige Abhängigkeit:** Nimmt eine neue Abhängigkeit Freiheitsgrade, ist aber zum Teil schon bestimmt (zum Beispiel Kollinear nach zwei Waagerecht-Abhängigkeiten, 6 → 5), kommt die eigene Meldung `sketch-redundant-partly` statt „überzählig“.
+- **Schleifen:** Ein Bogen zwischen einer Vorlage und ihrem eigenen Exemplar wird beim Zeichnen abgelehnt. Änderungen am Muster (Bearbeiten, Anzahl, Abwählen, Wiedereinschalten einer Abhängigkeit), die ein Muster zur Schleife machen würden, werden abgelehnt, die Skizze bleibt unverändert. Auflösen und die Befehle, die ein Muster implizit auflösen, lösen jedes dadurch zyklische Muster mit auf (Kaskade, Geometrie bleibt). Beim Laden werden Muster in einer Schleife aufgelöst, und eine Meldung nennt die Zahl. Bekannte Grenzen: eine Schleife über zwei Muster (A liest B, B liest A) wird nicht erkannt (der Löser hört nach `PATTERN_ROUNDS` = 3 Runden auf); Ketten über mehr als drei Muster melden `NotConverged`, bis weitere Läufe sie beruhigen; `push_internal` in Stutzen, Brechen und Dehnen hat keine eigene Schleifenprüfung.
+- **Langloch „Gesamt“:** Die Breite muss um mindestens `max(0,1 % der Länge, 0,02 mm)` unter der Gesamtlänge bleiben (siehe Task 11). Der Weg über Parameter ist nicht geschützt und führt in den Fehlerzustand der Skizze.
+- **Waagerechte und senkrechte Maße** fahren wie andere Längenmaße in Schritten an; klappt die Form trotzdem um, wird mit Meldung abgelehnt.
+- **Leiste:** 20 Werkzeuge brauchen 813 px Höhe und passen bei 1920×1080 ohne Rollen; bei 1400×900 rollt die Leiste (wie vorher schon bei kleineren Fenstern).
+
+*Annahmen über Fusion (aus dem Gedächtnis, nicht geprüft; ergänzen die Listen oben)*
+- **Annahme:** Bei „Symmetrisch“ zählt die Anzahl je Seite einschließlich der Vorlage. Vorgaben: Richtung 1 Anzahl 3, Richtung 2 Anzahl 1, Abstand 1,5 × Ausdehnung der Auswahl; Kreismuster Anzahl 6, „Voll“.
+- **Annahme:** Ein Zug an einem Exemplar bewegt die Vorlage. Konstruktion oder Mittellinie an einem Exemplar gilt für Vorlage und alle Exemplare.
+- **Annahme:** Stutzen, Dehnen, Brechen, Rundung und Fase an einer Vorlage oder einem Exemplar lösen das Muster auf, die Exemplare bleiben als lose Geometrie. Dasselbe gilt beim Löschen einer Vorlage, Richtungslinie oder Mitte.
+- **Annahme:** Glatt verbindet bei getrennten Enden die Enden nahe an den Klickstellen (ohne Abstandsgrenze) und legt dafür „deckungsgleich“ an.
+- **Annahme:** Zeigerregel für das Bemaßen: Zeiger in der x-Spanne der Punkte und außerhalb der y-Spanne ergibt waagerecht, umgekehrt senkrecht, sonst direkt. Eine Ellipse nimmt die Halbachse, die dem Zeiger näher liegt. Eine Kurve gegen eine Mittellinie misst über ihre Mitte (Kreis, Bogen) bzw. ihren ersten Punkt (Linie).
+- **Annahme:** Tab und der Knopf „Ø/R“ schalten Radius und Durchmesser (Fusion macht es über das Kontextmenü); Taste D für „Skizzenbemaßung“; die Namen der sechs neuen Befehle in Deutsch und Englisch.
+- **Annahme:** Ein Rasterpunkt auf einem Punkt bindet wie der Punktfang (am Ursprung fest auf 0, 0); auf einem Exemplarpunkt bindet er genauso.
+
+*Noch offen nach Skizzen 5 (geparkt, nicht behoben; der Controller führt die Liste nach der Abschlussprüfung nach)*
+- Die Handprüfung bei 1920×1080 steht aus (nur auf Dennis' Wort), ebenso die Gesamtläufe unter Windows und in WSL, `cargo deny check` und die Messtests im Release.
+- `Id::from_index` schneidet große Indizes still ab (schon vorher, betrifft auch `MusterWert`). Härten.
+- Ein lebendes Glatt mit veraltetem Ende aus einer von Hand geänderten Datei lädt still und liefert keine Zeile; mögliche Härtung in `from_data`.
+- Löser: Die Vorschau klont die Skizze je Bild; `add_constraint` baut die Gruppen für die Schleifenprüfung neu (im schlimmsten Fall quadratisch); Gleitkommarauschen in einer Rückkopplung könnte ein falsches `NotConverged` geben, und `dof` wird im gemeldeten Fall nicht neu berechnet.
+- `set_curve_kind` an einer fremden Kurve kann ein anderes Muster auflösen (selten); die Version zählt bei einem Befehl mehrfach hoch (kostet höchstens ein Neuzeichnen).
+- Eine Anzahl mit Formel 0 meldet „mm“ statt einer Zahl. Die Ladenmeldung zu „Senkrecht“ als Richtung 1 ist umständlich formuliert.
+- Kreismuster: Liegt die Mitte auf der Mitte der Vorlage selbst, fehlt ein Hinweis (Fusion erlaubt es). Fang auf Kurven prüft nicht, ob die Kurve ein Exemplar ist (**Annahme** steht). Bei `attach_point` fehlt ein `debug_assert`.
+- Testlücken: Richtung 2 zurück auf senkrecht (Vorschau, Rückgängig, Bearbeiten), englischer Hovertext, Meldung bei einem Tastenkonflikt, Kürzel D in einem Bereich.
+- Die neuen Symbole sind nur ohne Fenster geprüft (kein Test in der laufenden App).
