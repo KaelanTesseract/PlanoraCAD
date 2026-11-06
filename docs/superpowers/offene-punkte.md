@@ -2220,3 +2220,8 @@ In Arbeit auf dem Zweig `feature/skizzen-muster` (Spec `specs/2026-11-03-skizzen
 **Bekannte Grenzen der Schleifenprüfung (Task 5)**
 - Eine Schleife zwischen Vorlage und eigenem Exemplar wird je Muster erkannt: Beim Anlegen einer Abhängigkeit, eines Bogens oder Ellipsenbogens wird sie abgelehnt, ebenso beim Ändern eines Musters, bei der Anzahl und beim Abwählen. Beim Auflösen und beim Laden werden die betroffenen Muster mit aufgelöst. Nicht erkannt wird eine Schleife über zwei Muster (A liest Exemplare von B, B liest Exemplare von A). Der Löser hört dann nach `PATTERN_ROUNDS` = 3 Runden auf.
 - Stutzen, Brechen und Dehnen legen ihre internen Abhängigkeiten (`push_internal` in `edit.rs`) ohne eigene Schleifenprüfung an. Diese Wege lösen vorher die Muster der berührten Kurven auf. Ein erreichbarer Fall mit Schleife ist nicht bekannt.
+
+**Annahmen zur Skizzenbemaßung (Task 8)**
+- **Annahme:** Ein Klick in die Zeichnung, während das Feld eines gesetzten Maßes offen ist, legt dieses Maß mit dem Wert im Feld an (getippt, sonst der gemessene), wie Fusion beim Wegklicken; derselbe Klick wählt danach wie gewohnt neu. Das Anlegen ist ein Rückgängig-Schritt.
+- **Annahme:** Tab oder „Ø/R“ im Feld eines gesetzten Maßes behält eine getippte Zahl; nur ein unveränderter Vorschlag folgt dem umgeschalteten Wert.
+- Abweichung: Das Feld steht im Skizzenfeld, nicht am Maßtext in der Zeichnung; die Lage des Texts wird nicht gespeichert (Entscheidung 13).

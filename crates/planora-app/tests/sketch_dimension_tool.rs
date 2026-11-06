@@ -795,3 +795,188 @@ fn a_second_object_without_a_dimension_does_not_count() {
         assert_eq!(message(&s), Some(tr!("sketch-dimension-none")));
     });
 }
+
+// ---- Korrekturrunde 1 ---------------------------------------------------------------------------
+
+#[test]
+fn toggling_twice_gives_the_formula_back_byte_for_byte() {
+    with_lang(&german(), || {
+        let mut ids = (None, None);
+        let mut s = sketch_with(&[("d", "30")], |sk| {
+            let m = sk.add_point(0.0, 0.0).unwrap();
+            let c = sk.add_circle(m, 15.0).unwrap();
+            ids = (
+                Some(c),
+                Some(sk.add_constraint(K::Diameter(c, 30.0)).unwrap()),
+            );
+        });
+        let (c, id) = (ids.0.unwrap(), ids.1.unwrap());
+        for formula in [
+            "1 in",
+            "d + 5",
+            "2 * d",
+            "(d)",
+            "d / 2",
+            "d",
+            "d * 2",
+            "(d + 5) * 0.5",
+        ] {
+            s.sketch_draft
+                .as_mut()
+                .unwrap()
+                .formulas
+                .insert(id, formula.to_string());
+            let mut seen = Vec::new();
+            for _ in 0..4 {
+                let (se, sf) = s.session_draft_mut().unwrap();
+                se.toggle_radius_diameter(sf, id).unwrap();
+                let text = sf.formulas.get(&id).cloned().unwrap();
+                assert!(planora_feature::expr::parse(&text).is_ok(), "{text}");
+                seen.push(text);
+            }
+            assert_eq!(seen[1], formula, "zweimal: {seen:?}");
+            assert_eq!(seen[3], formula, "viermal: {seen:?}");
+            assert_eq!(seen[0], seen[2], "{seen:?}");
+            assert_eq!(
+                s.session_sketch().unwrap().constraint(id).unwrap().kind,
+                K::Diameter(c, 30.0)
+            );
+        }
+    });
+}
+
+#[test]
+fn a_formula_that_cannot_be_rewritten_refuses_the_toggle_with_a_message() {
+    with_lang(&german(), || {
+        let mut ids = (None, None);
+        let mut s = sketch_with(&[], |sk| {
+            let m = sk.add_point(0.0, 0.0).unwrap();
+            let c = sk.add_circle(m, 15.0).unwrap();
+            ids = (
+                Some(c),
+                Some(sk.add_constraint(K::Radius(c, 15.0)).unwrap()),
+            );
+        });
+        let (c, id) = (ids.0.unwrap(), ids.1.unwrap());
+        // Ein Text, der schon nicht lesbar ist (etwa aus einer älteren Datei).
+        s.sketch_draft
+            .as_mut()
+            .unwrap()
+            .formulas
+            .insert(id, "d +".into());
+        let rev = s.session_sketch().unwrap().revision();
+        let (se, sf) = s.session_draft_mut().unwrap();
+        assert!(se.toggle_radius_diameter(sf, id).is_err());
+        assert_eq!(sf.formulas.get(&id).map(String::as_str), Some("d +"));
+        assert_eq!(sf.sketch.constraint(id).unwrap().kind, K::Radius(c, 15.0));
+        assert_eq!(sf.sketch.revision(), rev);
+        assert_eq!(message(&s), Some(tr!("sketch-toggle-formula-failed")));
+    });
+}
+
+#[test]
+fn a_click_beside_the_open_field_creates_the_dimension_in_one_step_and_picks_anew() {
+    with_lang(&german(), || {
+        let mut rig = Rig::new(&[]);
+        let a = rig.sk().add_point(0.0, 0.0).unwrap();
+        let b = rig.sk().add_point(40.0, 0.0).unwrap();
+        // a fest: Der Klick daneben trifft a auch nach dem Anlegen.
+        rig.sk().add_constraint(K::Fixed(a, 0.0, 0.0)).unwrap();
+        let c = rig.sk().add_point(-40.0, 10.0).unwrap();
+        let d = rig.sk().add_point(-20.0, 10.0).unwrap();
+        rig.settle();
+        rig.press(Key::D);
+        let px = rig.pixels();
+        let steps = rig.undo_len();
+        rig.click(px(v(0.0, 0.0)));
+        rig.click(px(v(40.0, 0.0)));
+        rig.click(px(v(20.0, 15.0)));
+        assert!(rig.editor_open());
+        rig.type_text("55");
+        // Klick auf den Punkt a: legt an und wählt a neu.
+        rig.click(px(v(0.0, 0.0)));
+        let live = rig.live();
+        assert!(
+            matches!(live.as_slice(), [_, K::DistanceX(p, q, w)] if (*p, *q) == (a, b) && *w == 55.0),
+            "{live:?}"
+        );
+        assert!(!rig.editor_open());
+        assert_eq!(rig.picks(), 1);
+        assert_eq!(rig.undo_len(), steps + 1);
+        // Unverändert: der gemessene Wert, genau, auch mit einem Klick ins Leere.
+        rig.click_with(px(v(20.0, 20.0)), PointerButton::Secondary);
+        assert_eq!(rig.picks(), 0);
+        rig.click(px(v(-40.0, 10.0)));
+        rig.click(px(v(-20.0, 10.0)));
+        rig.click(px(v(-30.0, 18.0)));
+        assert!(rig.editor_open());
+        rig.click(px(v(-30.0, 25.0)));
+        assert!(!rig.editor_open());
+        assert_eq!(rig.live()[2], K::DistanceX(c, d, 20.0), "{:?}", rig.live());
+        assert_eq!(rig.undo_len(), steps + 2);
+        assert!(rig.st().undo_sketch());
+        assert_eq!(rig.live().len(), 2);
+    });
+}
+
+#[test]
+fn tab_keeps_a_typed_number_in_the_planned_field() {
+    with_lang(&german(), || {
+        let mut rig = Rig::new(&[]);
+        let l0 = rig.sk().add_point(-50.0, 0.0).unwrap();
+        let l1 = rig.sk().add_point(50.0, 0.0).unwrap();
+        let l = rig.sk().add_line(l0, l1).unwrap();
+        rig.sk().set_centerline(l, true).unwrap();
+        let p = rig.sk().add_point(10.0, 15.0).unwrap();
+        rig.settle();
+        rig.press(Key::D);
+        let px = rig.pixels();
+        rig.click(px(v(10.0, 15.0)));
+        rig.click(px(v(-30.0, 0.0)));
+        rig.click(px(v(30.0, 25.0)));
+        rig.type_text("40");
+        let shot = rig.press(Key::Tab);
+        assert!(shot.has("40"), "{:?}", shot.texts);
+        assert_eq!(
+            rig.st()
+                .sketch_session
+                .as_ref()
+                .unwrap()
+                .dim
+                .plan
+                .as_ref()
+                .unwrap()
+                .kind,
+            K::DistancePointLine(p, l, 15.0)
+        );
+        rig.press(Key::Enter);
+        assert_eq!(rig.live(), vec![K::DistancePointLine(p, l, 40.0)]);
+    });
+}
+
+#[test]
+fn tab_in_an_open_list_field_is_not_taken_by_the_dimension_preview() {
+    with_lang(&german(), || {
+        let mut rig = Rig::new(&[]);
+        let m = rig.sk().add_point(0.0, 0.0).unwrap();
+        let c = rig.sk().add_circle(m, 15.0).unwrap();
+        let q = rig.sk().add_point(60.0, 0.0).unwrap();
+        let id = rig.sk().add_constraint(K::Distance(m, q, 60.0)).unwrap();
+        rig.settle();
+        rig.press(Key::D);
+        let px = rig.pixels();
+        rig.click(px(v(15.0, 0.0)));
+        rig.hover(px(v(30.0, 30.0)));
+        assert_eq!(rig.preview().unwrap().kind, K::Diameter(c, 30.0));
+        let ctx = rig.ctx.clone();
+        sketch_panel::open_existing_dimension_editor(&ctx, rig.st(), id);
+        rig.settle();
+        assert!(
+            rig.ctx.memory(|mem| mem.focused()).is_some(),
+            "Feld hat die Tastatur"
+        );
+        rig.press(Key::Tab);
+        assert!(!rig.st().sketch_session.as_ref().unwrap().dim.toggled);
+        assert_eq!(rig.preview().unwrap().kind, K::Diameter(c, 30.0));
+    });
+}

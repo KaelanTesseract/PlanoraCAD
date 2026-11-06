@@ -1204,6 +1204,7 @@ sketch-driven = driven
 sketch-driven-hint = Driven dimension (does not constrain anything)
 sketch-toggle-radius-diameter = Ø/R
 sketch-toggle-radius-diameter-hint = Switch between radius and diameter
+sketch-toggle-formula-failed = The formula cannot be converted; the dimension stays as it is
 sketch-delete-row = Delete constraint
 sketch-fx-label = Edit formula
 sketch-fx-hint = This dimension follows a formula. Click to open the dimension field.

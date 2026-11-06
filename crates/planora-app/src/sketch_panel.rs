@@ -1272,11 +1272,22 @@ fn value_editor(
         }
     });
     if toggle && se.toggle_dimension_preview(&sf.sketch) {
-        // Das Feld folgt dem umgeschalteten Maß mit seinem Wert.
+        // Das Feld folgt dem umgeschalteten Maß mit seinem Wert; eine getippte Zahl bleibt
+        // (wie Fusion die Eingabe behält, **Annahme**).
+        let typed = editor.text.trim() != editor.shown.trim();
         if let Some(plan) = &se.dim.plan {
+            let text = std::mem::take(&mut editor.text);
             *editor = planned_editor(se, &plan.kind);
+            if typed {
+                editor.text = text;
+            }
         }
+        se.dim.text = typed.then(|| editor.text.clone());
         return live;
+    }
+    // Der getippte Text gilt auch für einen Klick neben das Feld.
+    if planned {
+        se.dim.text = (editor.text.trim() != editor.shown.trim()).then(|| editor.text.clone());
     }
     // Frisch geöffnet: Name, Zahl und Knöpfe ins Bild rollen (in kleinen Fenstern liegt das
     // Zahlenfeld sonst unter dem sichtbaren Teil des Skizzenfelds).

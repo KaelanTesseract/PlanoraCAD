@@ -188,7 +188,7 @@ pub fn unwrapped_angle(previous: f64, raw: f64) -> f64 {
 /// Zahl auf höchstens 12 gültige Stellen als Text mit Punkt; `None`, wenn sie nicht positiv und
 /// endlich ist, mehr als 1e-9 (relativ) abweicht oder der Text lang würde (winzige und riesige
 /// Zahlen): Dann steht die Formel nicht in kurzer Form da.
-fn short_factor(p: f64) -> Option<String> {
+pub(crate) fn short_factor(p: f64) -> Option<String> {
     if !(p.is_finite() && p > 0.0) {
         return None;
     }
@@ -204,14 +204,14 @@ fn short_factor(p: f64) -> Option<String> {
 const FACTOR_TEXT_MAX: usize = 30;
 
 /// Ein Name oder eine Zahl ohne Operator, Leerraum oder Klammer: braucht keine Klammern.
-fn is_plain(s: &str) -> bool {
+pub(crate) fn is_plain(s: &str) -> bool {
     !s.is_empty()
         && s.chars()
             .all(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | ','))
 }
 
 /// Steht der ganze Text in einem Klammerpaar, das sich erst am Ende schließt?
-fn is_wrapped(s: &str) -> bool {
+pub(crate) fn is_wrapped(s: &str) -> bool {
     if !(s.starts_with('(') && s.ends_with(')')) {
         return false;
     }
@@ -233,7 +233,7 @@ fn is_wrapped(s: &str) -> bool {
 
 /// Trennt `kopf * zahl` ab, wenn der Kopf ein Name, eine Zahl oder ein Klammerausdruck ist und
 /// `zahl` eine reine Zahl: nur dann darf der Faktor mit einem neuen zusammengefasst werden.
-fn split_factor(text: &str) -> Option<(&str, f64)> {
+pub(crate) fn split_factor(text: &str) -> Option<(&str, f64)> {
     let i = text.rfind(" * ")?;
     let (head, tail) = (&text[..i], &text[i + 3..]);
     if !(is_plain(head) || is_wrapped(head))

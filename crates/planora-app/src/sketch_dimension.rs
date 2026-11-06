@@ -5,7 +5,7 @@
 //! Maßfeld im Skizzenfeld (`EditTarget::Planned`); erst Eingabe oder OK legt das Maß an
 //! ([`SketchSession::apply_planned`], ein Rückgängig-Schritt), Esc lässt nichts zurück.
 
-use crate::sketch_grips::scaled_formula;
+use crate::sketch_grips::{is_plain, is_wrapped, short_factor, split_factor};
 use crate::sketch_state::{
     SketchSession, Snap, Tool, angle_value_ok, checked_value, dimension_input, err,
 };
@@ -14,6 +14,38 @@ use planora_math::DVec2;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind};
 use planora_sketch::dimension::{DimPick, DimPlan};
 use planora_sketch::model::Sketch;
+
+/// Die Formel eines Maßes nach dem Umschalten Ø/R mit dem Faktor `k` (2 oder 0,5). Zweimal
+/// umgeschaltet ist der Text bytegleich (Entscheidung 11): Vorwärts wird `text * k` (ein Text, der
+/// kein Name und keine Zahl ist, in Klammern), ein Faktor am Ende wird zusammengefasst; ergibt
+/// das 1, wird genau dieser Schritt zurückgenommen (Kopf ohne die Klammern, die er bekommen hat).
+/// Ein Kopf in Klammern um einen bloßen Namen oder eine Zahl stammt nie aus diesem Schritt und
+/// wird darum nicht ausgepackt, sondern wie jeder Text weiter multipliziert. Getrimmt; `None`,
+/// wenn der Faktor nicht kurz zu schreiben ist.
+pub(crate) fn toggled_formula(text: &str, k: f64) -> Option<String> {
+    let text = text.trim();
+    if let Some((head, n)) = split_factor(text) {
+        let m = n * k;
+        if m != 1.0 {
+            return Some(format!("{head} * {}", short_factor(m)?));
+        }
+        if is_plain(head) {
+            return Some(head.to_string());
+        }
+        if is_wrapped(head) {
+            let inner = &head[1..head.len() - 1];
+            if !is_plain(inner) {
+                return Some(inner.to_string());
+            }
+        }
+    }
+    let f = short_factor(k)?;
+    Some(if is_plain(text) {
+        format!("{text} * {f}")
+    } else {
+        format!("({text}) * {f}")
+    })
+}
 
 /// Dasselbe Objekt? Eine Kurve zählt unabhängig von der Klickstelle.
 fn same_object(a: &DimPick, b: &DimPick) -> bool {
@@ -39,8 +71,9 @@ pub fn toggles(sk: &Sketch, kind: &ConstraintKind) -> bool {
 impl SketchSession {
     /// Klick der Skizzenbemaßung an der Stelle `at` (Fangradius `radius`): wählt ein Objekt
     /// (Punkt vor Kurve) oder setzt das Maß der Vorschau an dieser Stelle (siehe
-    /// [`crate::sketch_dimension`]). Ein gesetztes Maß, dessen Feld noch offen ist, verwirft der
-    /// Klick und beginnt neu. Die Skizze bleibt unberührt.
+    /// [`crate::sketch_dimension`]). Die Skizze bleibt unberührt: Über die Oberfläche
+    /// (`commit_input`) hat [`accept_planned`](Self::accept_planned) ein gesetztes Maß schon
+    /// angelegt; ist hier noch eins gesetzt, verwirft der Klick es und beginnt neu.
     pub fn click_dimension(&mut self, sk: &Sketch, at: DVec2, radius: f64) {
         if self.tool != Tool::Dimension || !at.is_finite() {
             return;
@@ -62,7 +95,9 @@ impl SketchSession {
         if place {
             match self.planned_at(sk, at) {
                 Some(plan) => {
-                    self.message = None;
+                    if self.message == Some(crate::msg!("sketch-dimension-none")) {
+                        self.message = None;
+                    }
                     self.dim.plan = Some(plan);
                     self.dim.picks.clear();
                     self.dim.toggled = false;
@@ -79,7 +114,8 @@ impl SketchSession {
         if self.dim.picks.len() == 2 && sk.dimension_plan(&self.dim.picks, at).is_none() {
             self.dim.picks.pop();
             self.message = Some(crate::msg!("sketch-dimension-none"));
-        } else {
+        } else if self.message == Some(crate::msg!("sketch-dimension-none")) {
+            // Nur die eigene Meldung fällt weg; die zum eben angelegten Maß bleibt stehen.
             self.message = None;
         }
     }
@@ -128,6 +164,32 @@ impl SketchSession {
             }
             _ => false,
         }
+    }
+
+    /// Legt das gesetzte Maß der Skizzenbemaßung an, wenn eins da ist: mit dem getippten Text
+    /// (`dim.text`), sonst mit dem gemessenen Wert. Für den Klick neben das offene Feld (Fusion
+    /// übernimmt den Wert beim Wegklicken, **Annahme**). Ohne gesetztes Maß nichts.
+    pub fn accept_planned(
+        &mut self,
+        sf: &mut SketchFeature,
+        scope: &ParamScope,
+    ) -> Result<(), String> {
+        let Some(plan) = self
+            .dim
+            .plan
+            .clone()
+            .filter(|_| self.tool == Tool::Dimension)
+        else {
+            return Ok(());
+        };
+        match self.dim.text.clone() {
+            Some(text) => self.apply_planned(sf, plan.kind, &text, scope)?,
+            None => {
+                let value = plan.kind.value().unwrap_or(0.0);
+                self.apply_planned_value(sf, plan.kind, value)?
+            }
+        };
+        Ok(())
     }
 
     /// Verwirft das gesetzte Maß (Esc oder Abbrechen im Feld); die Wahl beginnt neu, nichts bleibt.
@@ -227,24 +289,28 @@ impl SketchSession {
             Some(ConstraintKind::Diameter(..) | ConstraintKind::CenterlineDiameter(..)) => 0.5,
             _ => 1.0,
         };
+        // Die Formel zuerst: Lässt sie sich nicht umschreiben, wird gar nicht umgeschaltet.
+        let formula = match sf.formulas.get(&id) {
+            None => None,
+            Some(text) => match toggled_formula(text, factor)
+                .filter(|t| planora_feature::expr::parse(t).is_ok())
+            {
+                Some(t) => Some(t),
+                None => {
+                    let e = crate::msg!("sketch-toggle-formula-failed");
+                    let text = e.text();
+                    self.message = Some(e);
+                    return Err(text);
+                }
+            },
+        };
         self.atomic(&mut sf.sketch, |se, sk, prior| {
             sk.toggle_radius_diameter(id).map_err(err)?;
             se.solve_checked(sk, prior)?;
             Ok(())
         })?;
-        if let Some(text) = sf.formulas.get(&id).cloned() {
-            // Hin und zurück ergibt `d * 1`: Dann bleibt nur der Rest.
-            let scaled = scaled_formula(&text, factor)
-                .map(|t| t.strip_suffix(" * 1").map_or(t.clone(), str::to_string))
-                .filter(|t| planora_feature::expr::parse(t).is_ok());
-            match scaled {
-                Some(t) => {
-                    sf.formulas.insert(id, t);
-                }
-                None => {
-                    sf.formulas.remove(&id);
-                }
-            }
+        if let Some(t) = formula {
+            sf.formulas.insert(id, t);
         }
         self.note_formula_problem(sf);
         Ok(())

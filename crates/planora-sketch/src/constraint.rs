@@ -160,6 +160,28 @@ impl ConstraintKind {
         }
     }
 
+    /// Der gespeicherte Zahlenwert eines Maßes (dieselben Arten wie
+    /// [`with_value`](Self::with_value)); `None` für Abhängigkeiten ohne Zahlenwert.
+    pub fn value(&self) -> Option<f64> {
+        use ConstraintKind::*;
+        match *self {
+            Distance(_, _, x)
+            | DistancePointLine(_, _, x)
+            | Angle(_, _, x)
+            | Radius(_, x)
+            | Diameter(_, x)
+            | EllipseMajor(_, x)
+            | EllipseMinor(_, x)
+            | EllipseAngle(_, x)
+            | DistanceX(_, _, x)
+            | DistanceY(_, _, x)
+            | CenterlineDiameter(_, _, x)
+            | SlotOverall(_, _, _, x)
+            | PatternValue(_, _, x) => Some(x),
+            _ => None,
+        }
+    }
+
     /// Dieselbe Abhängigkeit mit dem Zahlenwert `v`; `None`, wenn sie kein Maß ist. Prüft
     /// nichts (dafür gibt es [`Sketch::check_constraint_value`]).
     pub fn with_value(&self, v: f64) -> Option<ConstraintKind> {

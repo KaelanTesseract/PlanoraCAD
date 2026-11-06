@@ -1205,6 +1205,7 @@ impl PlanoraApp {
             && let Some((se, sk)) = self.ws.active_tab_mut().state.session_sketch_mut()
             && se.tool == crate::sketch_state::Tool::Dimension
             && se.dim.plan.is_none()
+            && !ctx.egui_wants_keyboard_input()
             && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab))
         {
             ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));

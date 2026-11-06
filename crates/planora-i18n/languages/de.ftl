@@ -1187,6 +1187,7 @@ sketch-driven = anzeigend
 sketch-driven-hint = Nur anzeigendes Maß (bestimmt nichts)
 sketch-toggle-radius-diameter = Ø/R
 sketch-toggle-radius-diameter-hint = Zwischen Radius und Durchmesser umschalten
+sketch-toggle-formula-failed = Die Formel lässt sich nicht umrechnen; das Maß bleibt, wie es ist
 sketch-delete-row = Abhängigkeit löschen
 sketch-fx-label = Formel bearbeiten
 sketch-fx-hint = Dieses Maß folgt einer Formel. Klicken öffnet das Maßfeld.

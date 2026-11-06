@@ -394,23 +394,12 @@ pub fn constraint_unit(kind: &ConstraintKind) -> ParamUnit {
     }
 }
 
-/// Gespeicherter Zahlenwert eines Maßes; `None` für Abhängigkeiten ohne Zahlenwert.
+/// Gespeicherter Zahlenwert eines Maßes ([`ConstraintKind::value`]); `None` für Abhängigkeiten ohne
+/// Zahlenwert. Musterwerte bleiben bis zu ihrer Aufgabe (Skizzen 5, Task 9) außen vor.
 fn dimension_value(kind: &ConstraintKind) -> Option<f64> {
-    use ConstraintKind::*;
     match kind {
-        Distance(_, _, v)
-        | DistancePointLine(_, _, v)
-        | Angle(_, _, v)
-        | Radius(_, v)
-        | Diameter(_, v)
-        | EllipseMajor(_, v)
-        | EllipseMinor(_, v)
-        | EllipseAngle(_, v)
-        | DistanceX(_, _, v)
-        | DistanceY(_, _, v)
-        | CenterlineDiameter(_, _, v)
-        | SlotOverall(_, _, _, v) => Some(*v),
-        _ => None,
+        ConstraintKind::PatternValue(..) => None,
+        k => k.value(),
     }
 }
 

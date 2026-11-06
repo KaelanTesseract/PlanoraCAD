@@ -614,6 +614,9 @@ impl SketchSession {
         extend: bool,
         scope: &ParamScope,
     ) -> Result<(), String> {
+        // Skizzenbemaßung: Ein Klick daneben übernimmt das gesetzte Maß mit dem Wert im Feld (wie
+        // Fusion); geht das nicht, bleibt das Feld offen und der Klick wählt nichts.
+        self.accept_planned(sf, scope)?;
         self.sync_input(&sf.sketch);
         if let Some(e) = self.input.fields.iter().find_map(|f| f.error.clone()) {
             self.message = Some(Msg::Raw(e.clone()));

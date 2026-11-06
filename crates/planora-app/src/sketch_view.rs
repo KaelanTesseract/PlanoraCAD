@@ -151,23 +151,12 @@ pub fn is_angle(kind: &ConstraintKind) -> bool {
     )
 }
 
-/// Gespeicherter Wert eines Maßes.
+/// Gespeicherter Wert eines Maßes ([`ConstraintKind::value`]). Musterwerte zeigt erst das
+/// Musterwerkzeug (Task 9).
 pub fn stored_value(kind: &ConstraintKind) -> Option<f64> {
-    use ConstraintKind as K;
     match kind {
-        K::Distance(_, _, v)
-        | K::DistancePointLine(_, _, v)
-        | K::Radius(_, v)
-        | K::Diameter(_, v)
-        | K::Angle(_, _, v)
-        | K::EllipseMajor(_, v)
-        | K::EllipseMinor(_, v)
-        | K::EllipseAngle(_, v)
-        | K::DistanceX(_, _, v)
-        | K::DistanceY(_, _, v)
-        | K::CenterlineDiameter(_, _, v)
-        | K::SlotOverall(_, _, _, v) => Some(*v),
-        _ => None,
+        ConstraintKind::PatternValue(..) => None,
+        k => k.value(),
     }
 }
 

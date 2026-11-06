@@ -91,6 +91,9 @@ pub struct DimToolState {
     pub plan: Option<DimPlan>,
     /// Ø/R umgeschaltet (Tab oder Knopf), solange gewählt wird.
     pub toggled: bool,
+    /// Im Feld des gesetzten Maßes getippter Text (`None`: unverändert, es gilt der gemessene
+    /// Wert). Das Skizzenfeld schreibt ihn in jedem Bild; ein Klick daneben legt damit an.
+    pub text: Option<String>,
 }
 
 /// Stufe von Verschieben/Kopieren und Maßstab.
