@@ -215,6 +215,7 @@ pub fn kind_label(kind: &ConstraintKind) -> String {
         K::DistanceY(..) => tr!("sketch-constraint-distance-y"),
         K::CenterlineDiameter(..) => tr!("sketch-constraint-centerline-diameter"),
         K::SlotOverall(..) => tr!("sketch-constraint-slot-overall"),
+        K::PatternValue(..) => tr!("sketch-constraint-pattern-value"),
     }
 }
 
@@ -399,6 +400,8 @@ fn anchors(sk: &Sketch, kind: &ConstraintKind) -> Vec<DVec2> {
         | K::EllipseMajor(c, _)
         | K::EllipseMinor(c, _)
         | K::EllipseAngle(c, _) => vec![curve_anchor(sk, *c)],
+        // Musterwerte stehen in der Liste; in der Ansicht zeigt sie erst das Musterwerkzeug.
+        K::PatternValue(..) => Vec::new(),
     };
     found.into_iter().flatten().collect()
 }

@@ -32,7 +32,8 @@ use planora_kernel::BoolOp;
 use planora_math::{DQuat, DVec3, Frame, Tolerance};
 use planora_sketch::{
     ConstraintId, ConstraintKind, ConstraintRecord, CurveId, CurveKind, CurveRecord,
-    LegacyMigration, LineOrPoints, PieceRef, PointId, PointRecord, ProfileRef, Sketch, SketchData,
+    LegacyMigration, LineOrPoints, PatternId, PatternSlot, PieceRef, PointId, PointRecord,
+    ProfileRef, Sketch, SketchData,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -458,6 +459,18 @@ fn constraint_to(k: &ConstraintKind) -> ConstraintKindDto {
             kappe: c(k),
             wert: *v,
         },
+        K::PatternValue(m, slot, v) => D::MusterWert {
+            muster: m.index(),
+            feld: match slot {
+                PatternSlot::Count1 => MusterFeldDto::Anzahl1,
+                PatternSlot::Spacing1 => MusterFeldDto::Abstand1,
+                PatternSlot::Count2 => MusterFeldDto::Anzahl2,
+                PatternSlot::Spacing2 => MusterFeldDto::Abstand2,
+                PatternSlot::Count => MusterFeldDto::Anzahl,
+                PatternSlot::Angle => MusterFeldDto::Winkel,
+            },
+            wert: *v,
+        },
     }
 }
 
@@ -502,6 +515,18 @@ fn constraint_from(d: &ConstraintKindDto) -> ConstraintKind {
             K::CenterlineDiameter(p(*punkt), c(*kurve), *wert)
         }
         D::LanglochGesamt { a, b, kappe, wert } => K::SlotOverall(p(*a), p(*b), c(*kappe), *wert),
+        D::MusterWert { muster, feld, wert } => K::PatternValue(
+            PatternId::from_index(*muster),
+            match feld {
+                MusterFeldDto::Anzahl1 => PatternSlot::Count1,
+                MusterFeldDto::Abstand1 => PatternSlot::Spacing1,
+                MusterFeldDto::Anzahl2 => PatternSlot::Count2,
+                MusterFeldDto::Abstand2 => PatternSlot::Spacing2,
+                MusterFeldDto::Anzahl => PatternSlot::Count,
+                MusterFeldDto::Winkel => PatternSlot::Angle,
+            },
+            *wert,
+        ),
     }
 }
 

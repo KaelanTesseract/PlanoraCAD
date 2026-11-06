@@ -1009,6 +1009,7 @@ sketch-constraint-distance-x = Horizontal distance
 sketch-constraint-distance-y = Vertical distance
 sketch-constraint-centerline-diameter = Diameter to centerline
 sketch-constraint-slot-overall = Slot overall length
+sketch-constraint-pattern-value = Pattern value
 sketch-overlay-midpoint = Mid
 sketch-overlay-symmetric = Sym
 sketch-overlay-on-curve = on
@@ -1727,6 +1728,16 @@ sketch-diameter-centerline = A diameter to the axis only works on a centerline
 sketch-err-toggle-kinds = Toggling only works between radius and diameter
 sketch-err-not-finite = { $what } must be a finite number
 sketch-err-too-large = { $what } is too large (absolute value at most { $max } { $unit })
+sketch-pattern-empty = The pattern has no objects (or the quantity is 0)
+sketch-pattern-too-many = Too many instances: at most { $max } positions and { $curves } curves per pattern
+sketch-pattern-zero-step = The distance or angle of a pattern cannot be zero
+sketch-pattern-direction = The direction or center of the pattern is missing, or both directions are parallel
+sketch-pattern-instance-source = An instance of a pattern cannot be an object, direction or center of a pattern
+sketch-pattern-cycle = This constraint ties the objects of a pattern to one of its own instances
+sketch-pattern-slot = This value does not fit the kind of pattern
+sketch-pattern-count-range = The quantity must be a whole number from 1 to { $max }
+sketch-pattern-angle-range = The pattern angle must be between 0° and 360° and cannot be 0°
+sketch-pattern-value-keep = The values of a pattern stay as long as the pattern exists
 
 ## Math error messages
 math-subcurve-range = the sub-range ({ $u0 }, { $u1 }) is not inside the curve ({ $a }, { $b }) or is empty

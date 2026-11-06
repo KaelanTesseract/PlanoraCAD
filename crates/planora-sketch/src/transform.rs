@@ -56,7 +56,7 @@ impl Similarity {
     }
 
     /// Der Anteil ohne Verschiebung, für Vektoren wie die große Halbachse.
-    fn linear(&self, v: DVec2) -> DVec2 {
+    pub(crate) fn linear(&self, v: DVec2) -> DVec2 {
         let (sin, cos) = self.angle.sin_cos();
         DVec2::new(v.x * cos - v.y * sin, v.x * sin + v.y * cos) * self.factor
     }
@@ -150,6 +150,7 @@ fn map_ids(
         DistanceY(a, b, v) => DistanceY(p(*a), p(*b), *v),
         CenterlineDiameter(a, x, v) => CenterlineDiameter(p(*a), c(*x), *v),
         SlotOverall(a, b, x, v) => SlotOverall(p(*a), p(*b), c(*x), *v),
+        PatternValue(m, slot, v) => PatternValue(*m, *slot, *v),
     }
 }
 
@@ -782,8 +783,11 @@ impl Sketch {
         let inner: Vec<(ConstraintId, ConstraintData, bool)> = self
             .constraints()
             .filter(|(_, d)| {
-                !matches!(d.kind, ConstraintKind::Fixed(..))
-                    && d.kind.points().iter().all(|p| points.contains_key(p))
+                // Musterwerte gehören zum Muster, nicht zur Geometrie: Kopien sind lose.
+                !matches!(
+                    d.kind,
+                    ConstraintKind::Fixed(..) | ConstraintKind::PatternValue(..)
+                ) && d.kind.points().iter().all(|p| points.contains_key(p))
                     && d.kind.curves().iter().all(|c| curves.contains_key(c))
             })
             .map(|(id, d)| (id, d.clone(), self.satisfied(id, SETTLE_FACTOR)))

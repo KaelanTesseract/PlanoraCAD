@@ -18,6 +18,7 @@ pub(crate) mod intersect;
 pub mod linalg;
 pub mod model;
 pub mod offset;
+pub mod pattern;
 pub mod profile;
 pub(crate) mod profile_legacy;
 pub(crate) mod profile_ref;
@@ -40,6 +41,10 @@ pub use fillet::{
 };
 pub use helpers::{RectIds, plane_of_face};
 pub use model::{CurveData, CurveId, CurveKind, LineStyle, PointData, PointId, Sketch};
+pub use pattern::{
+    CircularMode, PatternData, PatternDir, PatternId, PatternInstance, PatternKind, PatternPlan,
+    PatternProblem, PatternSlot,
+};
 pub use profile::{ExtractedProfiles, PieceRef, ProfileRef, RejectedLoop};
 pub use profile_ref::LegacyMigration;
 pub use shapes::{ArcSlotIds, CenterRectIds, PolygonIds, SlotIds, SlotStyle};

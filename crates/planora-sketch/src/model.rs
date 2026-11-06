@@ -113,6 +113,8 @@ pub struct Sketch {
     pub(crate) points: Arena<PointData>,
     pub(crate) curves: Arena<CurveData>,
     pub(crate) constraints: Arena<crate::constraint::ConstraintData>,
+    /// Muster (auch gelöschte), siehe `pattern.rs`.
+    pub(crate) patterns: Arena<crate::pattern::PatternData>,
     /// Stand der Skizze, siehe [`Sketch::revision`].
     revision: u64,
     /// Ergebnisse der letzten Solver-Läufe je Gruppe (siehe `solver.rs`). Jede Änderung an
@@ -165,6 +167,7 @@ impl Sketch {
             points: Arena::new(),
             curves: Arena::new(),
             constraints: Arena::new(),
+            patterns: Arena::new(),
             revision: next_revision(),
             solve_cache: SolveCache::default(),
         }
@@ -559,8 +562,8 @@ impl Sketch {
         self.curves.iter().any(|(_, c)| c.centerline)
     }
 
-    /// Gibt es einen Abhängigkeitseintrag, der Format 15 braucht, auch einen gelöschten? Dann
-    /// braucht die Datei Format 15. Task 5 ergänzt die Mustereinträge.
+    /// Gibt es einen Abhängigkeitseintrag, der Format 15 braucht, auch einen gelöschten (auch
+    /// einen Musterwert)? Dann braucht die Datei Format 15. Task 5 ergänzt die Mustereinträge.
     pub fn needs_format_15(&self) -> bool {
         self.constraints
             .iter()

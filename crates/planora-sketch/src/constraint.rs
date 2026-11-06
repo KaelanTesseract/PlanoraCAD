@@ -5,6 +5,7 @@ use crate::curves::{Sampled, ellipse_eval, spline_eval, spline_second_derivative
 use crate::dual::Dual;
 use crate::error::SketchError;
 use crate::model::{CurveId, CurveKind, PointId, Sketch};
+use crate::pattern::{PATTERN_MAX_INSTANCES, PatternId, PatternProblem, PatternSlot};
 use planora_i18n::tr;
 use planora_kernel::Id;
 use planora_math::DVec2;
@@ -93,6 +94,10 @@ pub enum ConstraintKind {
     /// Gesamtlänge eines geraden Langlochs: Abstand der Mitten plus Durchmesser der Kappe (ab
     /// Format 15).
     SlotOverall(PointId, PointId, CurveId, f64),
+    /// Wert eines Musters (Anzahl, Abstand oder Winkel): ein Maß ohne Zeile, das nur
+    /// [`Sketch::add_pattern`] anlegt (ab Format 15). Die Lage der Exemplare folgt daraus, siehe
+    /// `pattern.rs`.
+    PatternValue(PatternId, PatternSlot, f64),
 }
 
 impl ConstraintKind {
@@ -112,6 +117,7 @@ impl ConstraintKind {
                 | ConstraintKind::DistanceY(..)
                 | ConstraintKind::CenterlineDiameter(..)
                 | ConstraintKind::SlotOverall(..)
+                | ConstraintKind::PatternValue(..)
         )
     }
 
@@ -125,6 +131,7 @@ impl ConstraintKind {
                 | ConstraintKind::DistanceY(..)
                 | ConstraintKind::CenterlineDiameter(..)
                 | ConstraintKind::SlotOverall(..)
+                | ConstraintKind::PatternValue(..)
         )
     }
 
@@ -170,7 +177,8 @@ impl ConstraintKind {
             | DistanceX(_, _, x)
             | DistanceY(_, _, x)
             | CenterlineDiameter(_, _, x)
-            | SlotOverall(_, _, _, x) => *x = v,
+            | SlotOverall(_, _, _, x)
+            | PatternValue(_, _, x) => *x = v,
             _ => return None,
         }
         Some(kind)
@@ -785,6 +793,8 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
             let gap = length(&sub2(&ctx.pt(*a), &ctx.pt(*b)));
             vec![gap + 2.0 * circle_of(ctx, *cap).1 - *v]
         }
+        // Keine Zeile: Die Exemplare hält der Löser selbst (`refresh_patterns`).
+        PatternValue(..) => Vec::new(),
     }
 }
 
@@ -819,7 +829,12 @@ impl Sketch {
         {
             return None;
         }
-        let data = &self.constraints[id];
+        Some(self.evaluate_data(&self.constraints[id], x))
+    }
+
+    /// Wertet `data` an `x` aus (auch eine noch nicht angelegte Abhängigkeit); `x` muss alle
+    /// Variablen von `data` enthalten.
+    fn evaluate_data(&self, data: &ConstraintData, x: &[f64]) -> Evaluation {
         let first = Ctx::collecting(self, x);
         let _ = eval_kind(&first, data);
         let locals = first.locals.into_inner();
@@ -830,10 +845,10 @@ impl Sketch {
             collecting: false,
         };
         let residuals = eval_kind(&second, data);
-        Some(Evaluation {
+        Evaluation {
             locals: second.locals.into_inner(),
             residuals,
-        })
+        }
     }
 
     /// Eine lebende, nicht interne Abhängigkeit.
@@ -882,6 +897,9 @@ impl Sketch {
 
     pub fn set_driven(&mut self, id: ConstraintId, driven: bool) -> Result<(), SketchError> {
         self.checked_constraint(id)?;
+        if driven {
+            self.check_not_pattern_value(id)?;
+        }
         self.constraints[id].driven = driven;
         self.touch_structure();
         Ok(())
@@ -937,6 +955,8 @@ impl Sketch {
             SlotOverall(a, b, cap, _) => {
                 length(&sub2(&ctx.pt(*a), &ctx.pt(*b))).v + 2.0 * circle_of(&ctx, *cap).1.v
             }
+            // Der gespeicherte Wert des Musters ist sein Wert.
+            PatternValue(m, slot, _) => self.pattern_value(*m, *slot)?,
             _ => return None,
         };
         v.is_finite().then_some(v)
@@ -1057,6 +1077,11 @@ impl Sketch {
             }
             CenterlineDiameter(_, l, _) if !is_line(*l) => wrong(tr!("sketch-err-only-lines")),
             SlotOverall(_, _, cap, _) if !is_round(*cap) => wrong(tr!("sketch-err-only-circles")),
+            PatternValue(m, slot, _) => match self.patterns.get(*m) {
+                None => Err(SketchError::UnknownObject),
+                Some(d) if !slot.fits(&d.kind) => wrong(tr!("sketch-pattern-slot")),
+                Some(_) => Ok(()),
+            },
             _ => Ok(()),
         }
     }
@@ -1096,11 +1121,42 @@ impl Sketch {
                 self.check_axis_pair(kind, *e, *v)
             }
             Angle(_, _, v) | EllipseAngle(_, v) => finite_angle(*v),
+            PatternValue(_, slot, v) => self.check_pattern_value(*slot, *v),
             Fixed(_, x, y) => {
                 finite(*x)?;
                 finite(*y)
             }
             _ => Ok(()),
+        }
+    }
+
+    /// Musterwerte (Entscheidung 3): Anzahl ganzzahlig 1 bis [`PATTERN_MAX_INSTANCES`]; Abstand
+    /// endlich, Betrag über `tol.linear` und höchstens `MAX_COORD` (das Vorzeichen kehrt die
+    /// Richtung um); Winkel endlich, nicht null, Betrag höchstens 2π.
+    fn check_pattern_value(&self, slot: PatternSlot, v: f64) -> Result<(), SketchError> {
+        if slot.is_count() {
+            if v.is_finite()
+                && v.fract() == 0.0
+                && (1.0..=PATTERN_MAX_INSTANCES as f64).contains(&v)
+            {
+                Ok(())
+            } else {
+                Err(SketchError::InvalidInput(tr!(
+                    "sketch-pattern-count-range",
+                    max = PATTERN_MAX_INSTANCES.to_string()
+                )))
+            }
+        } else if slot.is_spacing() {
+            finite(v)?;
+            self.check_positive(v.abs())
+        } else {
+            finite_angle(v)?;
+            let tol = self.tolerance().angular;
+            if v.abs() > tol && v.abs() <= planora_math::TAU + tol {
+                Ok(())
+            } else {
+                Err(SketchError::Degenerate(tr!("sketch-pattern-angle-range")))
+            }
         }
     }
 
@@ -1367,7 +1423,9 @@ impl Sketch {
     pub fn add_constraint(&mut self, kind: ConstraintKind) -> Result<ConstraintId, SketchError> {
         if matches!(
             kind,
-            ConstraintKind::ArcRadius(_) | ConstraintKind::EllipticArcEnds(_)
+            ConstraintKind::ArcRadius(_)
+                | ConstraintKind::EllipticArcEnds(_)
+                | ConstraintKind::PatternValue(..)
         ) {
             return Err(SketchError::WrongType(tr!(
                 "sketch-err-internal-constraint"
@@ -1378,18 +1436,60 @@ impl Sketch {
         let branch = self.initial_branch(&kind);
         let shared_sign = self.shared_end_sign(&kind);
         // Erst nach allen Prüfungen anlegen, damit ein Fehler nichts hinterlässt.
-        let extra = self.extra_start(&kind).map(|t| self.new_var(t));
-        self.touch_structure();
-        Ok(self.constraints.push(ConstraintData {
+        let start = self.extra_start(&kind);
+        let mut data = ConstraintData {
             kind,
             branch,
             shared_sign,
             driven: false,
             enabled: true,
             internal: false,
-            extra,
+            extra: start.map(|_| self.vars.len()),
+            alive: true,
+        };
+        // Mit Mustern: Schlösse die Abhängigkeit eine Schleife zwischen Vorlage und eigenem
+        // Exemplar, wird sie abgelehnt (Entscheidung 6). Die Zusatzvariable ist neu und verbindet
+        // nichts; sie zählt für die Prüfung nicht.
+        if self.patterns().next().is_some() {
+            let mut x = self.vars.clone();
+            x.extend(start);
+            let mut locals = self.evaluate_data(&data, &x).locals;
+            locals.retain(|&v| v < self.vars.len());
+            if self.pattern_cycle(Some(&locals)) {
+                return Err(PatternProblem::Cycle.error());
+            }
+        }
+        data.extra = start.map(|t| self.new_var(t));
+        self.touch_structure();
+        Ok(self.constraints.push(data))
+    }
+
+    /// Legt einen Musterwert an (nur `add_pattern`). Prüft Wert und Feld.
+    pub(crate) fn push_pattern_value(
+        &mut self,
+        kind: ConstraintKind,
+    ) -> Result<ConstraintId, SketchError> {
+        self.check_refs(&kind)?;
+        self.touch_structure();
+        Ok(self.constraints.push(ConstraintData {
+            kind,
+            branch: 0,
+            shared_sign: 0,
+            driven: false,
+            enabled: true,
+            internal: false,
+            extra: None,
             alive: true,
         }))
+    }
+
+    /// Musterwerte bleiben, solange ihr Muster lebt: nicht löschen, nicht anzeigend schalten.
+    fn check_not_pattern_value(&self, id: ConstraintId) -> Result<(), SketchError> {
+        if matches!(self.constraints[id].kind, ConstraintKind::PatternValue(..)) {
+            Err(SketchError::InvalidInput(tr!("sketch-pattern-value-keep")))
+        } else {
+            Ok(())
+        }
     }
 
     /// Ein neuer Durchmesser zur Mittellinie braucht eine Mittellinie. Nur beim Anlegen und
@@ -1487,6 +1587,7 @@ impl Sketch {
     /// Entfernt eine (nicht interne) Abhängigkeit.
     pub fn remove_constraint(&mut self, id: ConstraintId) -> Result<(), SketchError> {
         self.checked_constraint(id)?;
+        self.check_not_pattern_value(id)?;
         self.constraints[id].alive = false;
         self.touch_structure();
         Ok(())

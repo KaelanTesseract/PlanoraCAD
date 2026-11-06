@@ -262,7 +262,8 @@ fn constraint_numbers_ok(k: &ConstraintKind) -> bool {
         | DistanceX(_, _, v)
         | DistanceY(_, _, v)
         | CenterlineDiameter(_, _, v)
-        | SlotOverall(_, _, _, v) => ok(*v),
+        | SlotOverall(_, _, _, v)
+        | PatternValue(_, _, v) => ok(*v),
         _ => true,
     }
 }

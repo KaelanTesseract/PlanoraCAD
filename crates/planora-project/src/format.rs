@@ -819,6 +819,24 @@ pub enum ConstraintKindDto {
         kappe: usize,
         wert: f64,
     },
+    /// Ab Format 15: ein Wert eines Musters (Index des Musters, Feld, Wert).
+    MusterWert {
+        muster: usize,
+        feld: MusterFeldDto,
+        wert: f64,
+    },
+}
+
+/// Feld eines Musterwerts.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MusterFeldDto {
+    Anzahl1,
+    Abstand1,
+    Anzahl2,
+    Abstand2,
+    Anzahl,
+    Winkel,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
