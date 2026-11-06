@@ -2281,7 +2281,7 @@ Umgesetzt 2026-11-03 bis 2026-11-06 auf dem Zweig `feature/skizzen-muster` (Spec
 - **Annahme:** Tab und der Knopf „Ø/R“ schalten Radius und Durchmesser (Fusion macht es über das Kontextmenü); Taste D für „Skizzenbemaßung“; die Namen der sechs neuen Befehle in Deutsch und Englisch.
 - **Annahme:** Ein Rasterpunkt auf einem Punkt bindet wie der Punktfang (am Ursprung fest auf 0, 0); auf einem Exemplarpunkt bindet er genauso.
 
-*Noch offen nach Skizzen 5 (geparkt, nicht behoben; der Controller führt die Liste nach der Abschlussprüfung nach)*
+*Noch offen nach Skizzen 5 (geparkt, nicht behoben; Stand nach der Abschlussprüfung)*
 - Die Handprüfung bei 1920×1080 steht aus (nur auf Dennis' Wort), ebenso die Gesamtläufe unter Windows und in WSL, `cargo deny check` und die Messtests im Release.
 - `Id::from_index` schneidet große Indizes still ab (schon vorher, betrifft auch `MusterWert`). Härten.
 - Ein lebendes Glatt mit veraltetem Ende aus einer von Hand geänderten Datei lädt still und liefert keine Zeile; mögliche Härtung in `from_data`.
@@ -2291,3 +2291,9 @@ Umgesetzt 2026-11-03 bis 2026-11-06 auf dem Zweig `feature/skizzen-muster` (Spec
 - Eine Anzahl mit Formel 0 meldet „mm“ statt einer Zahl.
 - Kreismuster: Liegt die Mitte auf der Mitte der Vorlage selbst, fehlt ein Hinweis (Fusion erlaubt es). Fang auf Kurven prüft nicht, ob die Kurve ein Exemplar ist (**Annahme** steht).
 - Die neuen Symbole sind nur ohne Fenster geprüft (kein Test in der laufenden App).
+- Aus der letzten Nachprüfung (klein, nicht behoben):
+  - Eine abgeschaltete Abhängigkeit nur zwischen Exemplaren mit Zusatzgröße (Punkt auf Spline, Tangente an Ellipse oder Spline) aus einer alten Datei ließe sich wieder einschalten und wirkte dann nicht.
+  - Scheitert das Gitter eines Musters, kommt nur das allgemeine „ließ sich nicht lösen“, ohne den Grund (zum Beispiel parallele Richtungslinien).
+  - Für ein anzeigendes Maß zwischen Exemplaren öffnet das Bemaßen trotzdem das Wertfeld; eine getippte Zahl wird durch den gemessenen Wert ersetzt, die Meldung sagt das.
+  - Bei jedem anzeigenden Maß (schon vor Skizzen 5) wird eine getippte Zahl still gespeichert, angezeigt wird der gemessene Wert.
+  - Glatt zwischen Spline und elliptischem Bogen wird abgelehnt; ob Fusion es erlaubt, ist nicht geprüft (**Annahme**).
