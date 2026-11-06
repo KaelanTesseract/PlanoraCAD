@@ -798,6 +798,21 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
     }
 }
 
+/// Radius und Durchmesser umgeschaltet: `Radius(c, v) ↔ Diameter(c, 2v)`,
+/// `DistancePointLine(p, L, v) ↔ CenterlineDiameter(p, L, 2v)`. Ob die Linie eine Mittellinie
+/// ist, prüft der Aufrufer. Die Faktoren sind exakt, zweimal umgeschaltet ist der Wert bitgleich.
+/// `None` für andere Arten.
+pub(crate) fn toggled_kind(kind: &ConstraintKind) -> Option<ConstraintKind> {
+    use ConstraintKind::*;
+    Some(match *kind {
+        Radius(c, v) => Diameter(c, 2.0 * v),
+        Diameter(c, v) => Radius(c, 0.5 * v),
+        DistancePointLine(p, l, v) => CenterlineDiameter(p, l, 2.0 * v),
+        CenterlineDiameter(p, l, v) => DistancePointLine(p, l, 0.5 * v),
+        _ => return None,
+    })
+}
+
 /// Endliche Länge oder Koordinate mit Betrag höchstens `MAX_COORD`.
 fn finite(v: f64) -> Result<(), SketchError> {
     crate::model::finite(v, || tr!("sketch-err-what-value"))
@@ -1467,11 +1482,26 @@ impl Sketch {
         }
         self.check_refs(&kind)?;
         self.check_centerline(&kind)?;
+        // Erst nach allen Prüfungen anlegen, damit ein Fehler nichts hinterlässt.
+        let (mut data, start) = self.new_constraint_data(kind);
+        // Mit Mustern: Schlösse die Abhängigkeit eine Schleife zwischen Vorlage und eigenem
+        // Exemplar, wird sie abgelehnt (Entscheidung 6).
+        if self.data_closes_pattern_cycle(&data, start) {
+            return Err(PatternProblem::Cycle.error());
+        }
+        data.extra = start.map(|t| self.new_var(t));
+        self.touch_structure();
+        Ok(self.constraints.push(data))
+    }
+
+    /// Die Daten einer neuen Abhängigkeit `kind` (geprüft) mit der Lage aus der aktuellen
+    /// Geometrie, dazu der Startwert ihrer Zusatzvariable. `extra` zeigt auf die nächste freie
+    /// Variable; angelegt ist sie noch nicht.
+    fn new_constraint_data(&self, kind: ConstraintKind) -> (ConstraintData, Option<f64>) {
         let branch = self.initial_branch(&kind);
         let shared_sign = self.shared_end_sign(&kind);
-        // Erst nach allen Prüfungen anlegen, damit ein Fehler nichts hinterlässt.
         let start = self.extra_start(&kind);
-        let mut data = ConstraintData {
+        let data = ConstraintData {
             kind,
             branch,
             shared_sign,
@@ -1481,21 +1511,32 @@ impl Sketch {
             extra: start.map(|_| self.vars.len()),
             alive: true,
         };
-        // Mit Mustern: Schlösse die Abhängigkeit eine Schleife zwischen Vorlage und eigenem
-        // Exemplar, wird sie abgelehnt (Entscheidung 6). Die Zusatzvariable ist neu und verbindet
-        // nichts; sie zählt für die Prüfung nicht.
-        if self.patterns().next().is_some() {
-            let mut x = self.vars.clone();
-            x.extend(start);
-            let mut locals = self.evaluate_data(&data, &x).locals;
-            locals.retain(|&v| v < self.vars.len());
-            if self.pattern_cycle(&locals) {
-                return Err(PatternProblem::Cycle.error());
-            }
+        (data, start)
+    }
+
+    /// Schlösse die neue Abhängigkeit `data` eine Schleife zwischen Vorlage und eigenem Exemplar
+    /// (Entscheidung 6)? Ohne Muster `false` ohne Rechnung. Die Zusatzvariable ist neu und
+    /// verbindet nichts; sie zählt für die Prüfung nicht.
+    fn data_closes_pattern_cycle(&self, data: &ConstraintData, start: Option<f64>) -> bool {
+        if self.patterns().next().is_none() {
+            return false;
         }
-        data.extra = start.map(|t| self.new_var(t));
-        self.touch_structure();
-        Ok(self.constraints.push(data))
+        let mut x = self.vars.clone();
+        x.extend(start);
+        let mut locals = self.evaluate_data(data, &x).locals;
+        locals.retain(|&v| v < self.vars.len());
+        self.pattern_cycle(&locals)
+    }
+
+    /// Lehnte [`Sketch::add_constraint`] die geprüfte Abhängigkeit `kind` wegen einer Schleife
+    /// zwischen Vorlage und eigenem Exemplar ab? Dieselbe Prüfung, ohne die Skizze zu ändern;
+    /// ohne Muster kostet sie nichts.
+    pub(crate) fn closes_pattern_cycle(&self, kind: &ConstraintKind) -> bool {
+        if self.patterns().next().is_none() {
+            return false;
+        }
+        let (data, start) = self.new_constraint_data(kind.clone());
+        self.data_closes_pattern_cycle(&data, start)
     }
 
     /// Legt einen Musterwert an (nur `add_pattern`). Prüft Wert und Feld.
@@ -1560,15 +1601,9 @@ impl Sketch {
     /// `branch`, `driven` und `enabled` bleiben; zweimal umgeschaltet ist der Wert bitgleich. Bei
     /// einem Fehler bleibt die Skizze unverändert.
     pub fn toggle_radius_diameter(&mut self, id: ConstraintId) -> Result<(), SketchError> {
-        use ConstraintKind::*;
         self.checked_constraint(id)?;
-        let kind = match self.constraints[id].kind {
-            Radius(c, v) => Diameter(c, 2.0 * v),
-            Diameter(c, v) => Radius(c, 0.5 * v),
-            DistancePointLine(p, l, v) => CenterlineDiameter(p, l, 2.0 * v),
-            CenterlineDiameter(p, l, v) => DistancePointLine(p, l, 0.5 * v),
-            _ => return Err(SketchError::WrongType(tr!("sketch-err-toggle-kinds"))),
-        };
+        let kind = toggled_kind(&self.constraints[id].kind)
+            .ok_or_else(|| SketchError::WrongType(tr!("sketch-err-toggle-kinds")))?;
         self.check_refs(&kind)?;
         self.check_centerline(&kind)?;
         self.constraints[id].kind = kind;

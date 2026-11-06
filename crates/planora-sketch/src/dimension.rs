@@ -9,6 +9,8 @@ use crate::model::{CurveId, CurveKind, PointId, Sketch};
 use planora_math::DVec2;
 
 /// Ein gewähltes Objekt: ein Punkt oder eine Kurve mit der Stelle, an der sie gewählt wurde.
+/// Die Stelle bei `Curve` nutzt [`Sketch::dimension_plan`] noch nicht; keine Regel braucht sie
+/// bisher.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum DimPick {
     Point(PointId),
@@ -48,16 +50,12 @@ impl DimPlan {
     /// Zweimal umgeschaltet ist der Plan bitgleich. `None` für andere Maße.
     pub fn toggled(&self, sk: &Sketch) -> Option<DimPlan> {
         use ConstraintKind::*;
-        let (kind, mode) = match self.kind {
-            Radius(c, v) => (Diameter(c, 2.0 * v), DimMode::Diameter),
-            Diameter(c, v) => (Radius(c, 0.5 * v), DimMode::Radius),
-            DistancePointLine(p, l, v) if sk.is_centerline(l) => (
-                CenterlineDiameter(p, l, 2.0 * v),
-                DimMode::CenterlineDiameter,
-            ),
-            CenterlineDiameter(p, l, v) => {
-                (DistancePointLine(p, l, 0.5 * v), DimMode::CenterlineRadius)
-            }
+        let kind = crate::constraint::toggled_kind(&self.kind)?;
+        let mode = match kind {
+            Radius(..) => DimMode::Radius,
+            Diameter(..) => DimMode::Diameter,
+            CenterlineDiameter(_, l, _) if sk.is_centerline(l) => DimMode::CenterlineDiameter,
+            DistancePointLine(..) => DimMode::CenterlineRadius,
             _ => return None,
         };
         Some(DimPlan {
@@ -84,7 +82,8 @@ impl Sketch {
 
     /// Das Maß zu den gewählten Objekten `picks` bei der Zeigerlage `pointer` (Entscheidung 13):
     ///
-    /// - Linie allein: Länge; Kreis: Durchmesser; Bogen: Radius; Ellipse oder Ellipsenbogen: die
+    /// - Linie allein: Länge nach der Zeigerregel wie zwei Punkte (waagerecht, senkrecht oder
+    ///   ausgerichtet, wie Fusion); Kreis: Durchmesser; Bogen: Radius; Ellipse oder Ellipsenbogen: die
     ///   Halbachse, deren Achse dem Zeiger näher liegt (**Annahme**).
     /// - Zwei Punkte (auch Mitten von Kreisen und Bögen): Zeiger in der x-Spanne und außerhalb
     ///   der y-Spanne ⇒ waagerecht (`DistanceX`), in der y-Spanne und außerhalb der x-Spanne ⇒
@@ -94,10 +93,13 @@ impl Sketch {
     ///   `CenterlineDiameter`.
     /// - Zwei Linien: parallel (innerhalb `10 · tol.angular`) ⇒ `DistancePointLine(L2.a, L1)`,
     ///   mit einer Mittellinie `CenterlineDiameter` vom ersten Punkt der anderen; sonst `Angle`,
-    ///   so geordnet, dass der Wert positiv ist.
+    ///   so geordnet, dass der Wert positiv ist. Den Ergänzungswinkel kann der Zeiger nicht
+    ///   wählen: `Angle` misst zwischen den gerichteten Linien, `π − θ` wäre nur als
+    ///   `Angle(L2, L1, π − θ)` mit dem Messwert `−θ` zu haben (Zeile erfüllt, Anzeige falsch).
     ///
-    /// Der Wert ist der gemessene; `None`, wenn er null wäre, die Auswahl nicht passt oder ein
-    /// Objekt nicht lebt. Die Skizze bleibt unberührt.
+    /// Der Wert ist der gemessene; `None`, wenn er null wäre, die Auswahl nicht passt, ein
+    /// Objekt nicht lebt oder [`Sketch::add_constraint`] das Maß als Schleife zwischen Vorlage
+    /// und eigenem Exemplar eines Musters ablehnen würde. Die Skizze bleibt unberührt.
     pub fn dimension_plan(&self, picks: &[DimPick], pointer: DVec2) -> Option<DimPlan> {
         if !pointer.is_finite() {
             return None;
@@ -119,8 +121,12 @@ impl Sketch {
         if !(measured.is_finite() && measured > small) {
             return None;
         }
+        let kind = kind.with_value(measured)?;
+        if self.closes_pattern_cycle(&kind) {
+            return None;
+        }
         Some(DimPlan {
-            kind: kind.with_value(measured)?,
+            kind,
             mode,
             anchor: pointer,
         })
@@ -130,7 +136,7 @@ impl Sketch {
     fn single_curve(&self, c: CurveId, pointer: DVec2) -> Option<(ConstraintKind, DimMode)> {
         use ConstraintKind::*;
         Some(match self.curve(c)?.kind {
-            CurveKind::Line { a, b } => (Distance(a, b, 0.0), DimMode::Aligned),
+            CurveKind::Line { a, b } => self.two_points(a, b, pointer)?,
             CurveKind::Circle { .. } => (Diameter(c, 0.0), DimMode::Diameter),
             CurveKind::Arc { .. } => (Radius(c, 0.0), DimMode::Radius),
             CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. } => {
@@ -176,12 +182,7 @@ impl Sketch {
             }
         };
         Some(match (a, b) {
-            (Item::Spot(p), Item::Spot(q)) => {
-                if p == q {
-                    return None;
-                }
-                self.two_points(p, q, pointer)
-            }
+            (Item::Spot(p), Item::Spot(q)) => self.two_points(p, q, pointer)?,
             (Item::Spot(p), Item::Line(l, ..)) | (Item::Line(l, ..), Item::Spot(p)) => {
                 to_line(p, l)
             }
@@ -208,20 +209,29 @@ impl Sketch {
         })
     }
 
-    /// Zeigerregel zwischen zwei Punkten: waagerecht, senkrecht oder ausgerichtet.
-    fn two_points(&self, p: PointId, q: PointId, pointer: DVec2) -> (ConstraintKind, DimMode) {
+    /// Zeigerregel zwischen zwei Punkten: waagerecht, senkrecht oder ausgerichtet. `None` für
+    /// denselben Punkt zweimal.
+    fn two_points(
+        &self,
+        p: PointId,
+        q: PointId,
+        pointer: DVec2,
+    ) -> Option<(ConstraintKind, DimMode)> {
         use ConstraintKind::*;
+        if p == q {
+            return None;
+        }
         let (a, b) = (self.pos(p), self.pos(q));
         let within = |v: f64, s: f64, t: f64| s.min(t) <= v && v <= s.max(t);
         let in_x = within(pointer.x, a.x, b.x);
         let in_y = within(pointer.y, a.y, b.y);
         let tol = self.tol.linear;
-        if in_x && !in_y && (b.x - a.x).abs() > tol {
+        Some(if in_x && !in_y && (b.x - a.x).abs() > tol {
             (DistanceX(p, q, 0.0), DimMode::Horizontal)
         } else if in_y && !in_x && (b.y - a.y).abs() > tol {
             (DistanceY(p, q, 0.0), DimMode::Vertical)
         } else {
             (Distance(p, q, 0.0), DimMode::Aligned)
-        }
+        })
     }
 }

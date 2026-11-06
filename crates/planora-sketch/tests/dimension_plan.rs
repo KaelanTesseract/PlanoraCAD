@@ -7,6 +7,7 @@ use planora_math::{DVec2, Frame, Tolerance};
 use planora_sketch::constraint::ConstraintKind as K;
 use planora_sketch::dimension::{DimMode, DimPick, DimPlan};
 use planora_sketch::model::{CurveId, PointId, Sketch};
+use planora_sketch::pattern::{PatternDir, PatternKind, PatternPlan};
 
 fn sketch() -> Sketch {
     Sketch::new(Frame::WORLD, "S", Tolerance::default())
@@ -89,19 +90,21 @@ fn two_points_follow_the_pointer() {
     }
 }
 
-/// Dichtes Gitter 200×200 um die Punkte: Die Art wechselt nur dort, wo eine Kante der x- oder
-/// y-Spanne zwischen zwei benachbarten Zeigerlagen liegt.
-#[test]
-fn dense_pointer_grid_switches_only_at_span_edges() {
-    let mut s = sketch();
-    let (a, b) = (pt(&mut s, 0.0, 0.0), pt(&mut s, 40.0, 30.0));
-    let picks = [DimPick::Point(a), DimPick::Point(b)];
-    let n = 200;
-    let coord = |i: usize, lo: f64, hi: f64| lo + (hi - lo) * i as f64 / (n - 1) as f64;
+/// Dichtes Gitter `n`×`n` über dem Bereich `lo..hi`: Die Art wechselt nur dort, wo eine Kante
+/// der x- oder y-Spanne von `a` und `b` zwischen zwei benachbarten Zeigerlagen liegt. Liefert die
+/// gesehenen Arten.
+fn edge_grid(
+    s: &Sketch,
+    picks: &[DimPick],
+    (a, b): (DVec2, DVec2),
+    (lo, hi): (DVec2, DVec2),
+    n: usize,
+) -> std::collections::HashSet<String> {
+    let coord = |i: usize, l: f64, h: f64| l + (h - l) * i as f64 / (n - 1) as f64;
     let grid: Vec<Vec<DimMode>> = (0..n)
         .map(|i| {
             (0..n)
-                .map(|j| plan(&s, &picks, v(coord(i, -40.0, 80.0), coord(j, -30.0, 60.0))).mode)
+                .map(|j| plan(s, picks, v(coord(i, lo.x, hi.x), coord(j, lo.y, hi.y))).mode)
                 .collect()
         })
         .collect();
@@ -115,16 +118,81 @@ fn dense_pointer_grid_switches_only_at_span_edges() {
         for j in 0..n {
             seen.insert(format!("{:?}", grid[i][j]));
             if i + 1 < n && grid[i][j] != grid[i + 1][j] {
-                let (x0, x1) = (coord(i, -40.0, 80.0), coord(i + 1, -40.0, 80.0));
-                assert!(crosses(x0, x1, [0.0, 40.0]), "Sprung bei x {x0}..{x1}");
+                let (x0, x1) = (coord(i, lo.x, hi.x), coord(i + 1, lo.x, hi.x));
+                assert!(crosses(x0, x1, [a.x, b.x]), "Sprung bei x {x0}..{x1}");
             }
             if j + 1 < n && grid[i][j] != grid[i][j + 1] {
-                let (y0, y1) = (coord(j, -30.0, 60.0), coord(j + 1, -30.0, 60.0));
-                assert!(crosses(y0, y1, [0.0, 30.0]), "Sprung bei y {y0}..{y1}");
+                let (y0, y1) = (coord(j, lo.y, hi.y), coord(j + 1, lo.y, hi.y));
+                assert!(crosses(y0, y1, [a.y, b.y]), "Sprung bei y {y0}..{y1}");
             }
         }
     }
+    seen
+}
+
+/// Gitter `n`×`n` über `lo..hi`, jeder Plan wird angelegt und gelöst: nichts bewegt sich.
+fn commit_grid(s: &Sketch, picks: &[DimPick], (lo, hi): (DVec2, DVec2), n: usize) {
+    for i in 0..n {
+        for j in 0..n {
+            let x = lo.x + (hi.x - lo.x) * i as f64 / (n - 1) as f64;
+            let y = lo.y + (hi.y - lo.y) * j as f64 / (n - 1) as f64;
+            commits_still(s, &plan(s, picks, v(x, y)));
+        }
+    }
+}
+
+/// Dichtes Gitter 200×200 um die Punkte, dazu 50×50 angelegt.
+#[test]
+fn dense_pointer_grid_switches_only_at_span_edges() {
+    let mut s = sketch();
+    let (a, b) = (pt(&mut s, 0.0, 0.0), pt(&mut s, 40.0, 30.0));
+    let picks = [DimPick::Point(a), DimPick::Point(b)];
+    let area = (v(-40.0, -30.0), v(80.0, 60.0));
+    let seen = edge_grid(&s, &picks, (v(0.0, 0.0), v(40.0, 30.0)), area, 200);
     assert_eq!(seen.len(), 3, "{seen:?}");
+    commit_grid(&s, &picks, area, 50);
+}
+
+/// Eine Linie allein folgt der Zeigerregel ihrer Enden wie zwei Punkte (Korrektur 1, A).
+#[test]
+fn single_line_follows_the_pointer() {
+    let mut s = sketch();
+    let (l, a, b) = line(&mut s, v(0.0, 0.0), v(40.0, 30.0));
+    let pick = [DimPick::Curve(l, v(20.0, 15.0))];
+    let h = plan(&s, &pick, v(20.0, 50.0));
+    assert_eq!(
+        (h.mode, h.kind.clone()),
+        (DimMode::Horizontal, K::DistanceX(a, b, 40.0))
+    );
+    let vt = plan(&s, &pick, v(60.0, 15.0));
+    assert_eq!(
+        (vt.mode, vt.kind.clone()),
+        (DimMode::Vertical, K::DistanceY(a, b, 30.0))
+    );
+    let al = plan(&s, &pick, v(60.0, 50.0));
+    assert_eq!(al.mode, DimMode::Aligned);
+    assert!(matches!(al.kind, K::Distance(p, q, _) if p == a && q == b));
+    let area = (v(-40.0, -30.0), v(80.0, 60.0));
+    let seen = edge_grid(&s, &pick, (v(0.0, 0.0), v(40.0, 30.0)), area, 200);
+    assert_eq!(seen.len(), 3, "{seen:?}");
+    commit_grid(&s, &pick, area, 50);
+
+    // Waagerechte Linie: nie senkrecht; senkrechte Linie: nie waagerecht.
+    let (hl, ..) = line(&mut s, v(0.0, 100.0), v(30.0, 100.0));
+    let (vl, ..) = line(&mut s, v(100.0, 0.0), v(100.0, 30.0));
+    let n = 50;
+    for i in 0..n {
+        for j in 0..n {
+            let x = -20.0 + 70.0 * i as f64 / (n - 1) as f64;
+            let y = -20.0 + 70.0 * j as f64 / (n - 1) as f64;
+            let p = plan(&s, &[DimPick::Curve(hl, v(10.0, 100.0))], v(x, 80.0 + y));
+            assert_ne!(p.mode, DimMode::Vertical, "{p:?}");
+            commits_still(&s, &p);
+            let p = plan(&s, &[DimPick::Curve(vl, v(100.0, 10.0))], v(80.0 + x, y));
+            assert_ne!(p.mode, DimMode::Horizontal, "{p:?}");
+            commits_still(&s, &p);
+        }
+    }
 }
 
 #[test]
@@ -410,4 +478,115 @@ fn plan_does_not_touch_the_sketch() {
     }
     assert_eq!(s.revision(), rev);
     assert_eq!(s.points().count(), n);
+}
+
+/// Winkel zweier Linien bei Zeigerlagen rundum: immer derselbe positive Wert in (0, π), und das
+/// Anlegen bewegt nichts. Den Ergänzungswinkel wählt der Zeiger nicht (Korrektur 1, B:
+/// `Angle` kann `π − θ` nicht mit passendem Messwert ausdrücken).
+#[test]
+fn angle_quadrant_sweep_commits_still() {
+    let mut s = sketch();
+    let (l1, _, _) = line(&mut s, v(0.0, 0.0), v(50.0, 0.0));
+    let (l2, _, _) = line(&mut s, v(0.0, 0.0), v(20.0, 30.0));
+    let theta = 30.0f64.atan2(20.0);
+    for picks in [
+        [
+            DimPick::Curve(l1, v(5.0, 0.0)),
+            DimPick::Curve(l2, v(2.0, 3.0)),
+        ],
+        [
+            DimPick::Curve(l2, v(2.0, 3.0)),
+            DimPick::Curve(l1, v(5.0, 0.0)),
+        ],
+    ] {
+        for k in 0..360 {
+            let a = (k as f64).to_radians();
+            let p = plan(&s, &picks, v(25.0 * a.cos(), 25.0 * a.sin()));
+            assert_eq!(p.mode, DimMode::Angle);
+            let x = value(&p.kind);
+            assert!(x > 0.0 && x < std::f64::consts::PI, "{p:?}");
+            assert!((x - theta).abs() < 1e-12, "{p:?}");
+            if k % 10 == 0 {
+                commits_still(&s, &p);
+            }
+        }
+    }
+}
+
+#[test]
+fn elliptic_arc_axis_follows_the_pointer() {
+    let mut s = sketch();
+    let m = pt(&mut s, 0.0, 0.0);
+    // Große Halbachse (12, 16), Länge 20, kleine 8; Viertelbogen von t = 0 bis t = π/2.
+    let a = v(12.0, 16.0);
+    let b = v(-16.0, 12.0) / 20.0 * 8.0;
+    let (st, en) = (pt(&mut s, a.x, a.y), pt(&mut s, b.x, b.y));
+    let e = s.add_elliptic_arc(m, a, 8.0, st, en).unwrap();
+    let pick = [DimPick::Curve(e, a)];
+    let p = plan(&s, &pick, a * 1.5 + b * 0.1);
+    assert_eq!(p.mode, DimMode::Major);
+    assert!(matches!(p.kind, K::EllipseMajor(c, _) if c == e));
+    assert!((value(&p.kind) - 20.0).abs() < 1e-12);
+    commits_still(&s, &p);
+    let p = plan(&s, &pick, b * 2.0 + a * 0.05);
+    assert_eq!(p.mode, DimMode::Minor);
+    assert!(matches!(p.kind, K::EllipseMinor(c, _) if c == e));
+    assert!((value(&p.kind) - 8.0).abs() < 1e-12);
+    commits_still(&s, &p);
+}
+
+/// Was `add_constraint` als Schleife zwischen Vorlage und eigenem Exemplar ablehnt, plant das
+/// Bemaßen nicht (Korrektur 1, I1); zwischen Exemplaren und von freien Punkten geht es.
+#[test]
+fn no_plan_that_closes_a_pattern_cycle() {
+    let mut s = sketch();
+    let r = s.add_rectangle(v(0.0, 0.0), v(10.0, 6.0)).unwrap();
+    let id = s
+        .add_pattern(&PatternPlan {
+            kind: PatternKind::Rect {
+                dirs: [PatternDir::SketchX, PatternDir::SketchY],
+                extent: [false, false],
+                symmetric: [false, false],
+            },
+            sources: r.lines.to_vec(),
+            counts: [3, 1],
+            values: [20.0, 10.0],
+            suppressed: vec![],
+        })
+        .unwrap();
+    s.solve();
+    let d = s.pattern(id).unwrap().clone();
+    let src = r.points[0];
+    let k = d.source_points.iter().position(|&x| x == src).unwrap();
+    let inst = |at: [i32; 2]| d.instances.iter().find(|i| i.at == at).unwrap();
+    let (i1, i2) = (inst([1, 0]).points[k], inst([2, 0]).points[k]);
+    let pointer = v(20.0, 30.0);
+
+    // Vorlagenecke und eigenes Exemplar: add_constraint lehnt ab, also kein Plan.
+    let picks = [DimPick::Point(src), DimPick::Point(i1)];
+    assert!(
+        s.clone()
+            .add_constraint(K::Distance(src, i1, 20.0))
+            .is_err()
+    );
+    assert_eq!(s.dimension_plan(&picks, pointer), None);
+    // Vorlagenpunkt und Exemplarlinie.
+    let line_of_instance = inst([1, 0]).curves[0];
+    let picks = [
+        DimPick::Point(src),
+        DimPick::Curve(line_of_instance, v(25.0, 0.0)),
+    ];
+    assert_eq!(s.dimension_plan(&picks, pointer), None);
+
+    // Exemplar zu Exemplar, freier Punkt zu Exemplar: geplant und angelegt.
+    let free = pt(&mut s, -20.0, 30.0);
+    s.solve();
+    for picks in [
+        [DimPick::Point(i1), DimPick::Point(i2)],
+        [DimPick::Point(free), DimPick::Point(i1)],
+    ] {
+        for pointer in [v(30.0, 40.0), v(60.0, 15.0), v(-40.0, -40.0)] {
+            commits_still(&s, &plan(&s, &picks, pointer));
+        }
+    }
 }
