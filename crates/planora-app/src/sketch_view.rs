@@ -981,12 +981,21 @@ pub fn grip_layout(state: &AppState, rect: Rect) -> Option<GripLayout> {
     ))
 }
 
-/// Lage der Griffe der Anordnung in diesem Bild (Pfeil je Richtung am letzten Exemplar); `None`,
-/// wenn keine zu sehen sind.
+/// Lage der Griffe der Anordnung in diesem Bild (Pfeil je Richtung am letzten Exemplar, beim
+/// Kreismuster der Winkelgriff am Ende des Bogens); `None`, wenn keine zu sehen sind.
 pub fn pattern_grip_layout(state: &AppState, rect: Rect) -> Option<PatternGripLayout> {
     let (se, sk) = (state.sketch_session.as_ref()?, state.session_sketch()?);
-    let handles = se.pattern_handles(sk)?;
     let map = mapper(rect, state)?;
+    // Kreismuster: der Winkelgriff am Ende des Bogens.
+    if let Some((center, tip)) = se.pattern_angle_handle(sk) {
+        let tip = map.to_screen(tip)?;
+        return Some(sketch_pattern::pattern_layout(
+            map.to_screen(center)?,
+            [None; 2],
+            Some(tip),
+        ));
+    }
+    let handles = se.pattern_handles(sk)?;
     let origin = map.to_screen(handles.origin)?;
     let step = map.radius_at(origin).filter(|r| *r > 0.0)?;
     let tips = handles.arrows.map(|a| {
@@ -1853,6 +1862,10 @@ fn draw_preview(
                     draw_path(painter, path, stroke, suppressed);
                 }
             }
+        }
+        // Die Mitte des Kreismusters, die erst das Anlegen als Punkt setzt.
+        if let Some(at) = se.pattern.new_center.and_then(|hit| map.to_screen(hit.at)) {
+            painter.circle_filled(at, 3.0, color);
         }
         return;
     }

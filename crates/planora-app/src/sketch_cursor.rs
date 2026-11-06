@@ -330,8 +330,11 @@ impl SketchSession {
             return cur;
         }
         // Bemaßen und Muster: Der Zeiger zeigt nur, was der Klick wählte; die Art wählt die
-        // Rohlage, das Muster rechnet ohne Fang.
-        if matches!(self.tool, Tool::Dimension | Tool::Pattern) {
+        // Rohlage, das Muster rechnet ohne Fang. Nur die Mitte des Kreismusters fängt wie ein
+        // gezeichneter Punkt (Fang, Raster, Strg).
+        if self.tool == Tool::Dimension
+            || (self.tool == Tool::Pattern && self.pattern.stage != TransformStage::SetBase)
+        {
             cur.snap = self.snap(sk, raw, radius);
             return cur;
         }
@@ -548,35 +551,7 @@ impl SketchSession {
         p: Option<PointId>,
         cur: &DrawCursor,
     ) -> Result<PointId, Msg> {
-        use ConstraintKind as K;
-        let snap = cur.binding(sk.tolerance().linear);
-        if let Snap::Point(q) | Snap::Center(q) = snap {
-            let Some(own) = p else {
-                return Ok(q);
-            };
-            if own != q {
-                sk.add_constraint(K::Coincident(own, q)).map_err(err)?;
-            }
-            return Ok(own);
-        }
-        let own = match p {
-            Some(own) => own,
-            None => sk.add_point(cur.at.x, cur.at.y).map_err(err)?,
-        };
-        let kinds = match snap {
-            Snap::Curve(c) => vec![K::PointOnCurve(own, c)],
-            Snap::Midpoint(c) => match sk.curve(c).map(|d| &d.kind) {
-                Some(CurveKind::Line { .. }) => vec![K::Midpoint(own, c)],
-                _ => vec![K::PointOnCurve(own, c)],
-            },
-            Snap::Intersection(a, b) => vec![K::PointOnCurve(own, a), K::PointOnCurve(own, b)],
-            Snap::Origin => vec![K::Fixed(own, 0.0, 0.0)],
-            _ => Vec::new(),
-        };
-        for kind in kinds {
-            sk.add_constraint(kind).map_err(err)?;
-        }
-        Ok(own)
+        attach_point(sk, p, cur)
     }
 
     /// Kreis oder Ellipse: Nur ein gefangener Punkt bindet, und nur, wenn er wirklich auf der
@@ -601,4 +576,42 @@ impl SketchSession {
         }
         Ok(())
     }
+}
+
+/// [`SketchSession::attach`] ohne Sitzung (die Anordnung legt ihre Mitte erst beim Anlegen an und
+/// zeigt sie vorher in einer Kopie der Skizze).
+pub(crate) fn attach_point(
+    sk: &mut Sketch,
+    p: Option<PointId>,
+    cur: &DrawCursor,
+) -> Result<PointId, Msg> {
+    use ConstraintKind as K;
+    let snap = cur.binding(sk.tolerance().linear);
+    if let Snap::Point(q) | Snap::Center(q) = snap {
+        let Some(own) = p else {
+            return Ok(q);
+        };
+        if own != q {
+            sk.add_constraint(K::Coincident(own, q)).map_err(err)?;
+        }
+        return Ok(own);
+    }
+    let own = match p {
+        Some(own) => own,
+        None => sk.add_point(cur.at.x, cur.at.y).map_err(err)?,
+    };
+    let kinds = match snap {
+        Snap::Curve(c) => vec![K::PointOnCurve(own, c)],
+        Snap::Midpoint(c) => match sk.curve(c).map(|d| &d.kind) {
+            Some(CurveKind::Line { .. }) => vec![K::Midpoint(own, c)],
+            _ => vec![K::PointOnCurve(own, c)],
+        },
+        Snap::Intersection(a, b) => vec![K::PointOnCurve(own, a), K::PointOnCurve(own, b)],
+        Snap::Origin => vec![K::Fixed(own, 0.0, 0.0)],
+        _ => Vec::new(),
+    };
+    for kind in kinds {
+        sk.add_constraint(kind).map_err(err)?;
+    }
+    Ok(own)
 }

@@ -1155,9 +1155,9 @@ sketch-kind-chamfer-equal-hint = Click two lines, then the distance.
 sketch-kind-chamfer-distance-angle-hint = Click two lines, then distance and angle.
 sketch-kind-chamfer-two-distances-hint = Click two lines, then both distances.
 sketch-kind-pattern-rect-hint = Choose curves, Enter; then quantity and distance per direction. Clicking an instance suppresses or restores it. Enter creates, Esc cancels.
-sketch-kind-pattern-circular-hint = Choose curves, Enter, then click a point as the center; then the quantity. Enter creates, Esc cancels.
+sketch-kind-pattern-circular-hint = Choose curves, Enter, then click the center (a point or a spot with snapping and grid, Ctrl without snapping); then quantity, type and angle. Clicking an instance suppresses or restores it. Enter creates, Esc cancels.
 sketch-pattern-pick-direction-hint = Click a line for the direction.
-sketch-pattern-pick-center-hint = Click a point as the center.
+sketch-pattern-pick-center-hint = Click the center: a point or a spot (snapping and grid, Ctrl without snapping).
 sketch-slot-too-wide = This width does not fit: the slot would be too wide or have no width at all
 sketch-angle-range = The amount of an angle dimension must not exceed 180°, and a negative value is only allowed for an angle that already measures negative; the dimension was not changed
 sketch-dimension-folds = This value would fold the shape over; the dimension was not changed
@@ -1796,7 +1796,6 @@ sketch-pattern-dissolved = { $n ->
 sketch-pattern-dropped = Constraints removed with the dropped instances: { $n }.
 sketch-pattern-instance-dropped = Constraints on the pattern instance removed: { $n }.
 sketch-pattern-direction-line = Please click a line for the direction
-sketch-pattern-center-point = Please click a point for the center
 state-patterns-dissolved-on-load = { $n ->
     [one] On opening, a pattern was dissolved because it linked its original to one of its own instances. The geometry stays.
    *[other] On opening, { $n } patterns were dissolved because they linked their original to one of their own instances. The geometry stays.

@@ -1138,9 +1138,9 @@ sketch-kind-chamfer-equal-hint = Zwei Linien anklicken, dann den Abstand.
 sketch-kind-chamfer-distance-angle-hint = Zwei Linien anklicken, dann Abstand und Winkel.
 sketch-kind-chamfer-two-distances-hint = Zwei Linien anklicken, dann beide Abstände.
 sketch-kind-pattern-rect-hint = Kurven wählen, Eingabe; dann Anzahl und Abstand je Richtung. Klick auf ein Exemplar wählt es ab oder wieder an. Eingabe legt an, Esc bricht ab.
-sketch-kind-pattern-circular-hint = Kurven wählen, Eingabe, dann einen Punkt als Mitte anklicken; dann die Anzahl. Eingabe legt an, Esc bricht ab.
+sketch-kind-pattern-circular-hint = Kurven wählen, Eingabe, dann die Mitte anklicken (ein Punkt oder eine Stelle mit Fang und Raster, Strg ohne Fang); dann Anzahl, Art und Winkel. Ein Klick auf ein Exemplar wählt es ab oder wieder an. Eingabe legt an, Esc bricht ab.
 sketch-pattern-pick-direction-hint = Eine Linie für die Richtung anklicken.
-sketch-pattern-pick-center-hint = Einen Punkt als Mitte anklicken.
+sketch-pattern-pick-center-hint = Die Mitte anklicken: einen Punkt oder eine Stelle (Fang und Raster, Strg ohne Fang).
 sketch-slot-too-wide = Diese Breite passt nicht: Das Langloch wäre zu breit oder hätte gar keine Breite
 sketch-angle-range = Der Betrag eines Winkelmaßes darf höchstens 180° sein, und ein negativer Wert ist nur bei einem schon negativ gemessenen Winkel erlaubt; das Maß wurde nicht geändert
 sketch-dimension-folds = Mit diesem Wert klappt die Form um; das Maß wurde nicht geändert
@@ -1779,7 +1779,6 @@ sketch-pattern-dissolved = { $n ->
 sketch-pattern-dropped = Mit den weggefallenen Exemplaren entfallen Abhängigkeiten: { $n }.
 sketch-pattern-instance-dropped = Abhängigkeiten am Muster-Exemplar entfallen: { $n }.
 sketch-pattern-direction-line = Für die Richtung bitte eine Linie anklicken
-sketch-pattern-center-point = Für die Mitte bitte einen Punkt anklicken
 state-patterns-dissolved-on-load = { $n ->
     [one] Beim Öffnen wurde ein Muster aufgelöst, weil es seine Vorlage mit einem eigenen Exemplar verband. Die Geometrie bleibt.
    *[other] Beim Öffnen wurden { $n } Muster aufgelöst, weil sie ihre Vorlage mit einem eigenen Exemplar verbanden. Die Geometrie bleibt.

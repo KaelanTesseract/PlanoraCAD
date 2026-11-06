@@ -9,7 +9,8 @@
 //! ([`Sketch::pattern_preview`] und [`Sketch::add_pattern`] über `pattern_transforms`).
 
 use crate::msg::Msg;
-use crate::sketch_cursor::DrawCursor;
+use crate::sketch_cursor::{DrawCursor, attach_point};
+use crate::sketch_grips::unwrapped_angle;
 use crate::sketch_grips::{GRIP_ARROW_PX, GRIP_HIT_PX};
 use crate::sketch_input::FieldKind;
 use crate::sketch_kinds::{PREVIEW_STEPS_PER_TURN, ToolKind};
@@ -22,7 +23,10 @@ use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
 use planora_sketch::pattern::{
     CircularMode, PatternDir, PatternId, PatternKind, PatternPlan, PatternPreview, PatternSlot,
 };
+use planora_sketch::snap::SnapHit;
+use std::borrow::Cow;
 use std::collections::HashSet;
+use std::f64::consts::TAU;
 
 /// Vorgabe des Abstands: so viel mal die Ausdehnung der Vorlage in der Richtung (Entscheidung 15).
 pub const PATTERN_SPACING_FACTOR: f64 = 1.5;
@@ -220,6 +224,13 @@ pub struct PatternToolState {
     pub blocked_note: bool,
     /// Plan, zu dem die Meldung zuletzt geprüft wurde.
     noted: Option<PatternPlan>,
+    /// Die Mitte des Kreismusters, die erst das Anlegen als Punkt setzt (Klick neben jeden Punkt:
+    /// Raster, Kurve, Ursprung oder frei), mit ihrer Anbindung. Bis dahin rechnen Vorschau und
+    /// Griffe in einer Kopie der Skizze mit diesem Punkt ([`SketchSession::pattern_sketch`]).
+    pub(crate) new_center: Option<SnapHit>,
+    /// Beim Winkelgriff der bisher überstrichene Winkel um die Mitte, ungekappt: So läuft der Zug
+    /// über ±180° hinweg weiter, auch wenn der Wert schon an ±360° anliegt.
+    grip_turned: f64,
 }
 
 impl PatternToolState {
@@ -416,9 +427,18 @@ impl SketchSession {
     /// Öffnet das Werkzeug mit dem bestehenden Muster `id` in der aktiven Stufe (Doppelklick auf ein
     /// Exemplar oder eine Vorlage). `false`, wenn es das Muster nicht gibt.
     pub fn begin_pattern_edit(&mut self, sk: &mut Sketch, id: PatternId) -> bool {
-        let Some(plan) = sk.pattern_plan(id) else {
+        let Some(mut plan) = sk.pattern_plan(id) else {
             return false;
         };
+        // „Voll“ speichert keinen Winkel; wechselt die Art, beginnt der Winkel wie beim Anlegen
+        // bei 360°.
+        if let PatternKind::Circular {
+            mode: CircularMode::Full,
+            ..
+        } = plan.kind
+        {
+            plan.values[0] = TAU;
+        }
         let before = std::mem::take(&mut self.selection);
         self.drop_curve_picks();
         self.kinds.pattern = match plan.kind {
@@ -480,12 +500,30 @@ impl SketchSession {
                 }
             }
             TransformStage::SetBase => {
-                let Snap::Point(center) = self.snap(sk, cur.raw, radius) else {
-                    self.message = Some(crate::msg!("sketch-pattern-center-point"));
-                    return;
+                // Wie ein gezeichneter Punkt: auf einem Punkt bindet die Mitte an ihn, sonst
+                // entsteht beim Anlegen ein neuer an der gefangenen Stelle (Raster, Strg).
+                let tol = sk.tolerance().linear;
+                let (center, new_center) = match cur.point(tol) {
+                    Some(p) => (p, None),
+                    None => {
+                        let hit = cur.remember(tol);
+                        let mut staged = sk.clone();
+                        match attach_point(&mut staged, None, &DrawCursor::remembered(hit, sk)) {
+                            Ok(p) => (p, Some(hit)),
+                            Err(e) => {
+                                self.message = Some(e);
+                                return;
+                            }
+                        }
+                    }
                 };
+                if new_center.is_none() && instance_of_item(sk, Item::Point(center)).is_some() {
+                    self.message = Some(crate::msg!("sketch-pattern-instance-source"));
+                    return;
+                }
                 let sources = self.picked_sources(sk);
                 self.message = None;
+                self.pattern.new_center = new_center;
                 self.pattern.plan = Some(PatternPlan {
                     kind: PatternKind::Circular {
                         center,
@@ -521,7 +559,8 @@ impl SketchSession {
                 let Some(now) = self.pattern_now() else {
                     return;
                 };
-                let Some(at) = sk.pattern_instance_at(&now, cur.raw, radius) else {
+                let staged = self.pattern_sketch(sk);
+                let Some(at) = staged.pattern_instance_at(&now, cur.raw, radius) else {
                     return;
                 };
                 if let Some(plan) = self.pattern.plan.as_mut() {
@@ -621,7 +660,8 @@ impl SketchSession {
         if self.pattern.stage != TransformStage::Active {
             return None;
         }
-        sk.pattern_preview(&self.pattern_now()?, PREVIEW_STEPS_PER_TURN)
+        self.pattern_sketch(sk)
+            .pattern_preview(&self.pattern_now()?, PREVIEW_STEPS_PER_TURN)
             .ok()
     }
 
@@ -633,7 +673,10 @@ impl SketchSession {
         let now = self.pattern_now()?;
         let mut all = now.clone();
         all.suppressed.clear();
-        let lines = sk.pattern_preview(&all, PREVIEW_STEPS_PER_TURN).ok()?;
+        let lines = self
+            .pattern_sketch(sk)
+            .pattern_preview(&all, PREVIEW_STEPS_PER_TURN)
+            .ok()?;
         Some(
             lines
                 .into_iter()
@@ -676,9 +719,10 @@ impl SketchSession {
         if now == self.pattern.noted {
             return;
         }
+        let staged = self.pattern_sketch(sk);
         let problem = now
             .as_ref()
-            .and_then(|p| sk.pattern_preview(p, PREVIEW_STEPS_PER_TURN).err());
+            .and_then(|p| staged.pattern_preview(p, PREVIEW_STEPS_PER_TURN).err());
         self.pattern.noted = now;
         match problem {
             None => {
@@ -691,6 +735,53 @@ impl SketchSession {
                 self.pattern.blocked_note = true;
             }
         }
+    }
+
+    /// Die Skizze, in der der Plan gilt: mit der neuen Mitte des Kreismusters, die erst das
+    /// Anlegen setzt (dann eine Kopie), sonst `sk` selbst.
+    pub(crate) fn pattern_sketch<'a>(&self, sk: &'a Sketch) -> Cow<'a, Sketch> {
+        let Some(hit) = self.pattern.new_center else {
+            return Cow::Borrowed(sk);
+        };
+        let mut staged = sk.clone();
+        // Ging das nicht, hätte der Klick die Mitte nicht gesetzt.
+        let _ = attach_point(&mut staged, None, &DrawCursor::remembered(hit, sk));
+        Cow::Owned(staged)
+    }
+
+    /// Lage der Mitte des Kreismusters (auch die neue, noch nicht angelegte).
+    fn pattern_center_xy(&self, sk: &Sketch, center: PointId) -> Option<DVec2> {
+        match self.pattern.new_center {
+            Some(hit) => Some(hit.at),
+            None => sk.point_xy(center).ok(),
+        }
+    }
+
+    /// Winkelgriff des Kreismusters in der Skizze: Mitte und Griffpunkt am Ende des Bogens (die
+    /// Mitte der Vorlage um den Winkel gedreht, symmetrisch um den halben). Bei „Voll“ und ohne
+    /// Abstand der Vorlage zur Mitte keiner.
+    pub(crate) fn pattern_angle_handle(&self, sk: &Sketch) -> Option<(DVec2, DVec2)> {
+        if self.pattern.stage != TransformStage::Active {
+            return None;
+        }
+        let plan = self.pattern_now()?;
+        let PatternKind::Circular { center, mode } = plan.kind else {
+            return None;
+        };
+        let theta = match mode {
+            CircularMode::Full => return None,
+            CircularMode::Angle => plan.values[0],
+            CircularMode::Symmetric => 0.5 * plan.values[0],
+        };
+        let c = self.pattern_center_xy(sk, center)?;
+        let (lo, hi) = bounds(sk, &plan.sources)?;
+        let arm = (lo + hi) * 0.5 - c;
+        if arm.length() <= sk.tolerance().linear || !theta.is_finite() {
+            return None;
+        }
+        let (sin, cos) = theta.sin_cos();
+        let tip = c + DVec2::new(arm.x * cos - arm.y * sin, arm.x * sin + arm.y * cos);
+        tip.is_finite().then_some((c, tip))
     }
 
     /// Griffpunkte in der Skizze (nur Rechteckmuster): die Mitte der Vorlage und je Richtung das
@@ -774,7 +865,7 @@ impl SketchSession {
                 (steps, DVec2::ZERO)
             }
             (PatternGrip::Angle, PatternKind::Circular { center, mode }) => {
-                let Ok(c) = sk.point_xy(center) else {
+                let Some(c) = self.pattern_center_xy(sk, center) else {
                     return;
                 };
                 (
@@ -788,6 +879,7 @@ impl SketchSession {
             }
             _ => return,
         };
+        self.pattern.grip_turned = 0.0;
         self.pattern.drag = Some(PatternGripDrag {
             grip,
             press: at,
@@ -825,7 +917,12 @@ impl SketchSession {
                 plan.values[k.min(1)] = pattern_motion(&d, dir, at);
             }
             (PatternGrip::Angle, PatternKind::Circular { .. }) => {
-                plan.values[0] = pattern_motion(&d, DVec2::ZERO, at);
+                // Der Zug zählt den überstrichenen Winkel über ±180° hinweg weiter
+                // (`unwrapped_angle` wie beim Drehgriff); mehr als ein Umlauf geht nicht.
+                let raw = (pattern_motion(&d, DVec2::ZERO, at) - d.start) * d.divisor;
+                let turned = unwrapped_angle(self.pattern.grip_turned, raw);
+                self.pattern.grip_turned = turned;
+                plan.values[0] = (d.start + turned / d.divisor).clamp(-TAU, TAU);
             }
             _ => {}
         }
@@ -914,7 +1011,14 @@ impl SketchSession {
         let editing = self.pattern.editing;
         let before = editing.and_then(|id| sf.sketch.pattern_plan(id));
         let circular = matches!(plan.kind, PatternKind::Circular { .. });
+        let new_center = self.pattern.new_center;
+        let mut plan = plan;
         let id = self.atomic(&mut sf.sketch, |se, sk, prior| {
+            // Die neue Mitte entsteht im selben Schritt wie das Muster.
+            if let (Some(hit), PatternKind::Circular { mode, .. }) = (new_center, plan.kind) {
+                let center = attach_point(sk, None, &DrawCursor::remembered(hit, prior))?;
+                plan.kind = PatternKind::Circular { center, mode };
+            }
             let id = match editing {
                 Some(id) => {
                     let edit = sk.edit_pattern(id, &plan).map_err(err)?;

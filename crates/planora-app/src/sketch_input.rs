@@ -422,15 +422,25 @@ impl SketchSession {
         {
             self.input.carried.clear();
         }
+        // Muster: Wechselt nur die Art des Kreismusters (Voll ohne Winkel), bleibt, was in den
+        // Feldern steht, die es weiter gibt.
+        let mut old = if self.tool == Tool::Pattern {
+            std::mem::take(&mut self.input.fields)
+        } else {
+            Vec::new()
+        };
         self.input.fields = self
             .stage_fields()
             .iter()
-            .map(|&kind| DrawField {
-                kind,
-                text: String::new(),
-                touched: false,
-                locked: None,
-                error: None,
+            .map(|&kind| match old.iter().position(|f| f.kind == kind) {
+                Some(i) => old.swap_remove(i),
+                None => DrawField {
+                    kind,
+                    text: String::new(),
+                    touched: false,
+                    locked: None,
+                    error: None,
+                },
             })
             .collect();
         self.input.active = 0;
