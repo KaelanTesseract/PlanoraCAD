@@ -939,6 +939,12 @@ pub enum HandIcon {
     MoveCopy,
     /// Skizzenmaßstab: ein kleines Quadrat in einem großen, mit Pfeil nach außen.
     Scale,
+    /// Konzentrisch: zwei Kreise um dieselbe Mitte.
+    Concentric,
+    /// Kollinear: zwei Strecken mit Lücke auf einer schrägen Geraden.
+    Collinear,
+    /// Glatt: eine Linie, die ohne Knick in eine Kurve übergeht, Punkt am Übergang.
+    Smooth,
 }
 
 /// Alle gezeichneten Symbole aus [`HandIcon`].
@@ -963,6 +969,9 @@ pub const HAND_DRAWN: &[HandIcon] = &[
     HandIcon::Offset,
     HandIcon::MoveCopy,
     HandIcon::Scale,
+    HandIcon::Concentric,
+    HandIcon::Collinear,
+    HandIcon::Smooth,
 ];
 
 /// Zeichnet ein [`HandIcon`] in `rect` (Strichbreite 1,5, runde Enden).
@@ -1186,6 +1195,40 @@ pub fn paint_hand_icon(painter: &Painter, rect: Rect, icon: HandIcon, color: Col
             seg(painter, [c + vec2(r, -r), c + vec2(r * 0.4, -r)], stroke);
             seg(painter, [c + vec2(r, -r), c + vec2(r, -r * 0.4)], stroke);
         }
+        HandIcon::Concentric => {
+            painter.circle_stroke(c, r, stroke);
+            painter.circle_stroke(c, r * 0.45, stroke);
+        }
+        HandIcon::Collinear => {
+            seg(
+                painter,
+                [c + vec2(-r, r), c + vec2(-r * 0.2, r * 0.2)],
+                stroke,
+            );
+            seg(
+                painter,
+                [c + vec2(r * 0.2, -r * 0.2), c + vec2(r, -r)],
+                stroke,
+            );
+        }
+        HandIcon::Smooth => {
+            // Linie bis zum Übergang, dann eine Kurve mit derselben Richtung (quadratisch).
+            let joint = c + vec2(-r * 0.1, r * 0.6);
+            seg(painter, [c + vec2(-r, r * 0.6), joint], stroke);
+            let (ctrl, end) = (c + vec2(r * 0.8, r * 0.6), c + vec2(r, -r));
+            let pts: Vec<Pos2> = (0..=12_i32)
+                .map(|i| {
+                    let t = i as f32 / 12.0;
+                    let u = 1.0 - t;
+                    (joint.to_vec2() * (u * u)
+                        + ctrl.to_vec2() * (2.0 * u * t)
+                        + end.to_vec2() * (t * t))
+                        .to_pos2()
+                })
+                .collect();
+            painter.add(egui::Shape::line(pts, stroke));
+            painter.circle_filled(joint, 2.2, color);
+        }
         HandIcon::Centerline => {
             seg(
                 painter,
@@ -1307,6 +1350,9 @@ pub fn sketch_action_icon(action: crate::sketch_state::ConstraintAction) -> Icon
         A::Radius => IconSource::Dimension(DimKind::Radius),
         A::Diameter => IconSource::Dimension(DimKind::Diameter),
         A::Angle => IconSource::Font(Icon::Angle),
+        A::Concentric => IconSource::Hand(HandIcon::Concentric),
+        A::Collinear => IconSource::Hand(HandIcon::Collinear),
+        A::Smooth => IconSource::Hand(HandIcon::Smooth),
     }
 }
 

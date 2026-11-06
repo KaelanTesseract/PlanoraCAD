@@ -168,6 +168,13 @@ action_table! {
     /// Wie der Knopf im Skizzenfeld: schaltet die ausgewählten Linien zwischen Mittellinie und
     /// normal um (ohne Vorgabetaste).
     SketchCenterline, "skizze.mittellinie", "action-sketch-centerline", Sketch, [];
+    // Skizzen 5: wie die Knöpfe im Skizzenfeld, auf die Auswahl; ohne Vorgabetaste wie in Fusion.
+    /// Fusion „Konzentrisch“.
+    SketchConcentric, "skizze.konzentrisch", "action-sketch-concentric", Sketch, [];
+    /// Fusion „Kollinear“.
+    SketchCollinear, "skizze.kollinear", "action-sketch-collinear", Sketch, [];
+    /// Fusion „Glatt“.
+    SketchSmooth, "skizze.glatt", "action-sketch-smooth", Sketch, [];
     /// Wie [`Action::ShowShortcuts`], in der offenen Skizze (eine Aktion hat nur einen Bereich).
     SketchShowShortcuts, "skizze.tastenkuerzel", "action-sketch-show-shortcuts", Sketch,
         [key(Key::S)];

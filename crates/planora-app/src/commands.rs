@@ -255,6 +255,18 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                 se.toggle_centerline_if_possible(sk);
             }
         }
+        Action::SketchConcentric | Action::SketchCollinear | Action::SketchSmooth => {
+            use crate::sketch_state::ConstraintAction as C;
+            let action = match a {
+                Action::SketchConcentric => C::Concentric,
+                Action::SketchCollinear => C::Collinear,
+                _ => C::Smooth,
+            };
+            if let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut() {
+                // Passt die Auswahl nicht, steht der Grund in der Meldung des Skizzenfelds.
+                let _ = se.apply(sk, action, None);
+            }
+        }
         Action::SketchRepeatLast => {
             if let Some(last) = ws.last_command.sketch_tool() {
                 return run_action(ws, last);

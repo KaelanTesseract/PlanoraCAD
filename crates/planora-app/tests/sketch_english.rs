@@ -217,6 +217,10 @@ fn sketch_speaks_english() {
                 "Midpoint",
                 "Symmetric",
                 "Point on curve",
+                // Skizzen 5
+                "Concentric",
+                "Collinear",
+                "Smooth",
                 "Distance …",
                 "Point–line distance …",
                 "Radius …",

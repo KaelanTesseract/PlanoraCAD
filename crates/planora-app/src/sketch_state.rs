@@ -155,6 +155,12 @@ pub enum ConstraintAction {
     Radius,
     Diameter,
     Angle,
+    /// Fusion „Konzentrisch“: ein `Coincident` der beiden Mitten (Skizzen 5).
+    Concentric,
+    /// Fusion „Kollinear“.
+    Collinear,
+    /// Fusion „Glatt“ (G2; an einem Bogen bis Teilprojekt 7 nur G1).
+    Smooth,
 }
 
 impl ConstraintAction {
@@ -178,6 +184,9 @@ impl ConstraintAction {
             Radius => crate::msg!("sketch-constraint-radius"),
             Diameter => crate::msg!("sketch-constraint-diameter"),
             Angle => crate::msg!("sketch-constraint-angle"),
+            Concentric => crate::msg!("sketch-constraint-concentric"),
+            Collinear => crate::msg!("sketch-constraint-collinear"),
+            Smooth => crate::msg!("sketch-constraint-smooth"),
         }
     }
 
@@ -1656,7 +1665,7 @@ impl SketchSession {
         let Some(s) = self.sorted(sk) else {
             return Vec::new();
         };
-        match (
+        let mut found = match (
             s.points.len(),
             s.lines.len(),
             s.rounds.len(),
@@ -1665,7 +1674,7 @@ impl SketchSession {
             (1, 0, 0, 0) => vec![Fixed],
             (2, 0, 0, 0) => vec![Coincident, Horizontal, Vertical, Distance],
             (0, 1, 0, 0) => vec![Horizontal, Vertical, Distance],
-            (0, 2, 0, 0) => vec![Parallel, Perpendicular, Equal, Angle],
+            (0, 2, 0, 0) => vec![Parallel, Perpendicular, Equal, Angle, Collinear],
             (0, 1, 1, 0) | (0, 1, 0, 1) => vec![Tangent],
             (0, 0, 2, 0) => vec![Tangent, Equal],
             (0, 0, 1, 0) => vec![Radius, Diameter],
@@ -1673,7 +1682,18 @@ impl SketchSession {
             (1, 0, 1, 0) | (1, 0, 0, 1) => vec![PointOnCurve],
             (2, 1, 0, 0) => vec![Symmetric],
             _ => Vec::new(),
+        };
+        if let [a, b] = s.curves[..]
+            && s.points.is_empty()
+        {
+            if round_center(sk, a).is_some() && round_center(sk, b).is_some() {
+                found.push(Concentric);
+            }
+            if smooth_kinds_ok(sk, a, b) {
+                found.push(Smooth);
+            }
         }
+        found
     }
 
     /// Baut die Abhängigkeit aus der Auswahl (Maße mit Platzhalterwert 0).
@@ -1684,10 +1704,17 @@ impl SketchSession {
             return Err(crate::msg!("sketch-nothing-selected"));
         }
         if !self.available_actions(sk).contains(&action) {
-            return Err(crate::msg!(
-                "sketch-action-mismatch",
-                action = action.label_msg()
-            ));
+            // Zwei Kurven der falschen Art: Die Meldung sagt, welche gehen.
+            let two_curves = self
+                .sorted(sk)
+                .is_some_and(|s| s.points.is_empty() && s.curves.len() == 2);
+            return Err(match action {
+                ConstraintAction::Concentric if two_curves => {
+                    crate::msg!("sketch-concentric-kinds")
+                }
+                ConstraintAction::Smooth if two_curves => crate::msg!("sketch-smooth-kinds"),
+                _ => crate::msg!("sketch-action-mismatch", action = action.label_msg()),
+            });
         }
         let s = self
             .sorted(sk)
@@ -1695,6 +1722,27 @@ impl SketchSession {
         let p = &s.points;
         let c = &s.curves;
         Ok(match action {
+            A::Concentric => {
+                let (Some(m1), Some(m2)) = (round_center(sk, c[0]), round_center(sk, c[1])) else {
+                    return Err(crate::msg!("sketch-concentric-kinds"));
+                };
+                let tied = sk.constraints().any(|(_, k)| {
+                    k.enabled
+                        && matches!(k.kind, K::Coincident(x, y)
+                            if (x, y) == (m1, m2) || (x, y) == (m2, m1))
+                });
+                if m1 == m2 || tied {
+                    return Err(crate::msg!("sketch-concentric-already"));
+                }
+                K::Coincident(m1, m2)
+            }
+            A::Collinear => K::Collinear(c[0], c[1]),
+            A::Smooth => {
+                let (pa, pb) = sk
+                    .smooth_ends(c[0], c[1], None)
+                    .ok_or_else(|| crate::msg!("sketch-smooth-kinds"))?;
+                K::Smooth(c[0], pa, c[1], pb)
+            }
             A::Fixed => {
                 let xy = sk.point_xy(p[0]).map_err(err)?;
                 K::Fixed(p[0], xy.x, xy.y)
@@ -1764,6 +1812,19 @@ impl SketchSession {
                     return Err(crate::msg!("sketch-angle-range"));
                 }
             }
+            // Glatt an getrennten Enden: erst die Enden zusammen (im selben Schritt).
+            if let ConstraintKind::Smooth(_, pa, _, pb) = kind
+                && pa != pb
+                && !sk.constraints().any(|(_, k)| {
+                    k.enabled
+                        && matches!(k.kind, ConstraintKind::Coincident(x, y)
+                            if (x, y) == (pa, pb) || (x, y) == (pb, pa))
+                })
+            {
+                sk.add_constraint(ConstraintKind::Coincident(pa, pb))
+                    .map_err(err)?;
+            }
+            let on_arc = smooth_on_arc(sk, &kind);
             let old = sk.measure(&kind);
             let value_of = kind.length_value();
             let id = sk.add_constraint(kind).map_err(err)?;
@@ -1773,6 +1834,12 @@ impl SketchSession {
                 sk.prepare_dimension_change(id, v);
             }
             let before = se.last_report.take();
+            // Freiheitsgrade davor: Fällt einer weg, war die neue Abhängigkeit nur teilweise
+            // überzählig (etwa Kollinear an zwei waagerechten Linien).
+            let dof_before = match &before {
+                Some(b) => b.dof,
+                None => prior.clone().solve().dof,
+            };
             let report = sk.solve();
             se.last_report = Some(report.clone());
             let direct = match check_change(&report, before.as_ref(), prior, Some(id)) {
@@ -1787,18 +1854,17 @@ impl SketchSession {
                 None => Ok(()),
             };
             se.guard_length(sk, id, old, &unsolved, direct)?;
-            if se
-                .last_report
-                .as_ref()
-                .unwrap_or(&report)
-                .redundant
-                .contains(&id)
-            {
+            let after = se.last_report.as_ref().unwrap_or(&report);
+            if after.redundant.contains(&id) {
                 if action.is_dimension() {
                     se.make_driven(sk, id)?;
+                } else if after.dof < dof_before {
+                    se.message = Some(crate::msg!("sketch-redundant-partly"));
                 } else {
                     se.message = Some(crate::msg!("sketch-redundant"));
                 }
+            } else if on_arc {
+                se.message = Some(crate::msg!("sketch-smooth-arc-g1"));
             }
             se.warn_if_unsolved();
             Ok(id)
@@ -2400,6 +2466,40 @@ pub fn with_checked_value(
 
 /// Darf ein Winkelmaß den Wert `value` bekommen? Der Betrag ist höchstens 180°; ein negativer
 /// Wert nur, wenn der Winkel jetzt schon negativ gemessen wird (`measured`, im Uhrzeigersinn).
+/// Mitte eines Kreises, Bogens, einer Ellipse oder eines Ellipsenbogens (Konzentrisch).
+pub(crate) fn round_center(sk: &Sketch, c: CurveId) -> Option<PointId> {
+    match sk.curve(c)?.kind {
+        CurveKind::Circle { center, .. }
+        | CurveKind::Arc { center, .. }
+        | CurveKind::Ellipse { center, .. }
+        | CurveKind::EllipticArc { center, .. } => Some(center),
+        CurveKind::Line { .. } | CurveKind::Spline { .. } => None,
+    }
+}
+
+/// Geht Glatt zwischen `a` und `b`? Ein Spline und eine Linie, ein Bogen oder ein zweiter Spline.
+fn smooth_kinds_ok(sk: &Sketch, a: CurveId, b: CurveId) -> bool {
+    let kind = |c: CurveId| sk.curve(c).map(|d| &d.kind);
+    let spline = |k: Option<&CurveKind>| matches!(k, Some(CurveKind::Spline { .. }));
+    let partner = |k: Option<&CurveKind>| {
+        matches!(
+            k,
+            Some(CurveKind::Spline { .. } | CurveKind::Line { .. } | CurveKind::Arc { .. })
+        )
+    };
+    a != b && ((spline(kind(a)) && partner(kind(b))) || (spline(kind(b)) && partner(kind(a))))
+}
+
+/// Glatt an einem Bogen: bis Teilprojekt 7 nur tangential (G1), das sagt die Meldung.
+fn smooth_on_arc(sk: &Sketch, kind: &ConstraintKind) -> bool {
+    let ConstraintKind::Smooth(a, _, b, _) = *kind else {
+        return false;
+    };
+    [a, b]
+        .into_iter()
+        .any(|c| matches!(sk.curve(c).map(|d| &d.kind), Some(CurveKind::Arc { .. })))
+}
+
 fn angle_value_ok(measured: Option<f64>, value: f64) -> bool {
     value.abs() <= std::f64::consts::PI && (value >= 0.0 || measured.is_some_and(|m| m < 0.0))
 }

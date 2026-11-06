@@ -106,7 +106,7 @@ pub fn tools() -> [(Tool, String, String); 18] {
 }
 
 /// Abhängigkeiten, die die Skizzenleiste anbietet.
-pub const ACTIONS: [ConstraintAction; 16] = {
+pub const ACTIONS: [ConstraintAction; 19] = {
     use ConstraintAction::*;
     [
         Coincident,
@@ -120,6 +120,10 @@ pub const ACTIONS: [ConstraintAction; 16] = {
         Midpoint,
         Symmetric,
         PointOnCurve,
+        // Skizzen 5
+        Concentric,
+        Collinear,
+        Smooth,
         Distance,
         DistancePointLine,
         Radius,
@@ -127,6 +131,16 @@ pub const ACTIONS: [ConstraintAction; 16] = {
         Angle,
     ]
 };
+
+/// Die Aktion der Tastenbelegung zu einem Knopf der Abhängigkeiten, soweit es eine gibt.
+fn bindable_action(action: ConstraintAction) -> Option<Action> {
+    match action {
+        ConstraintAction::Concentric => Some(Action::SketchConcentric),
+        ConstraintAction::Collinear => Some(Action::SketchCollinear),
+        ConstraintAction::Smooth => Some(Action::SketchSmooth),
+        _ => None,
+    }
+}
 
 /// Größe der Symbole in der Werkzeugleiste.
 const STRIP_ICON: f32 = 20.0;
@@ -876,7 +890,15 @@ fn side_contents(
             } else {
                 action.label().to_string()
             };
-            if tool_button(ui, icons::sketch_action_icon(action), &label, enabled)
+            let mut button = tool_button(ui, icons::sketch_action_icon(action), &label, enabled);
+            // Belegbare Abhängigkeiten (Skizzen 5) nennen ihre Taste im Hinweistext.
+            let km = crate::keymap::mouse::current(ui.ctx());
+            if let Some(bound) = bindable_action(action)
+                && !shortcut_hint(&km, bound).is_empty()
+            {
+                button = button.on_hover_text(with_hint(&km, bound, &label));
+            }
+            if button
                 .on_disabled_hover_text(tr!("sketch-not-fitting"))
                 .clicked()
             {

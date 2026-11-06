@@ -219,9 +219,32 @@ pub fn kind_label(kind: &ConstraintKind) -> String {
     }
 }
 
+/// Ist `kind` ein Konzentrisch (Skizzen 5)? Fusion „Konzentrisch“ ist hier ein `Coincident`
+/// zweier Punkte, die beide Mitte eines Kreises, Bogens, einer Ellipse oder eines
+/// Ellipsenbogens sind; Liste und Ansicht nennen es so.
+pub fn is_concentric(sk: &Sketch, kind: &ConstraintKind) -> bool {
+    let ConstraintKind::Coincident(a, b) = *kind else {
+        return false;
+    };
+    let is_center = |p: PointId| {
+        sk.curves()
+            .any(|(c, _)| crate::sketch_state::round_center(sk, c) == Some(p))
+    };
+    a != b && is_center(a) && is_center(b)
+}
+
+/// Name einer Abhängigkeit in Liste und Meldungen: wie [`kind_label`], ein Konzentrisch heißt so.
+pub fn constraint_label(sk: &Sketch, kind: &ConstraintKind) -> String {
+    if is_concentric(sk, kind) {
+        tr!("sketch-constraint-concentric")
+    } else {
+        kind_label(kind)
+    }
+}
+
 /// Eintrag der Abhängigkeitsliste, z. B. „Abstand 40,00 mm“; anzeigende Maße in Klammern.
 pub fn constraint_name(sk: &Sketch, kind: &ConstraintKind, driven: bool) -> String {
-    let label = kind_label(kind);
+    let label = constraint_label(sk, kind);
     match shown_value(sk, kind, driven) {
         Some(v) if driven => format!("{label} ({})", value_text(kind, v)),
         Some(v) => format!("{label} {}", value_text(kind, v)),
@@ -259,6 +282,7 @@ pub fn overlay_text(
 ) -> String {
     use ConstraintKind as K;
     let plain = match kind {
+        K::Coincident(..) if is_concentric(sk, kind) => symbol(ctx, "◎", "(o)").to_string(),
         K::Coincident(..) | K::ArcRadius(..) | K::EllipticArcEnds(..) => return String::new(),
         K::Horizontal(..) => "H".to_string(),
         K::Vertical(..) => "V".to_string(),
