@@ -860,6 +860,66 @@ pub struct SketchDto {
     pub punkte: Vec<PointDto>,
     pub kurven: Vec<CurveDto>,
     pub abhaengigkeiten: Vec<ConstraintDto>,
+    /// Muster (ab Format 15), auch aufgelöste; fehlt in Skizzen ohne Muster.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub muster: Vec<PatternDto>,
+}
+
+/// Richtung eines Rechteckmusters (ab Format 15).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(tag = "typ", rename_all = "snake_case")]
+pub enum MusterRichtungDto {
+    SkizzeX,
+    SkizzeY,
+    Linie { kurve: usize },
+}
+
+/// Art eines Kreismusters (ab Format 15).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum KreisArtDto {
+    Voll,
+    Winkel,
+    Symmetrisch,
+}
+
+/// Art eines Musters (ab Format 15). `gesamt`: der Wert ist die Gesamtlänge statt des Abstands.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[serde(tag = "typ", rename_all = "snake_case")]
+pub enum MusterArtDto {
+    Rechteck {
+        richtungen: [MusterRichtungDto; 2],
+        gesamt: [bool; 2],
+        symmetrisch: [bool; 2],
+    },
+    Kreis {
+        mitte: usize,
+        art: KreisArtDto,
+    },
+}
+
+/// Ein Exemplar eines Musters an seiner Lage im Gitter: Punkte parallel zu den Vorlagenpunkten,
+/// Kurven parallel zu den Vorlagen (ab Format 15).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ExemplarDto {
+    pub lage: [i32; 2],
+    pub punkte: Vec<usize>,
+    pub kurven: Vec<usize>,
+}
+
+/// Ein Muster (ab Format 15): Punkte, Kurven und Werte (`muster_wert`) als Indizes. Die Exemplare
+/// stehen mit ihren Ids in der Datei, damit Bindungen an sie bleiben.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct PatternDto {
+    pub art: MusterArtDto,
+    pub vorlagen: Vec<usize>,
+    pub vorlagenpunkte: Vec<usize>,
+    pub werte: Vec<usize>,
+    pub exemplare: Vec<ExemplarDto>,
+    /// Abgewählte Lagen im Gitter.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub abgewaehlt: Vec<[i32; 2]>,
+    pub lebt: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

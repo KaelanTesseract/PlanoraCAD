@@ -570,12 +570,15 @@ impl Sketch {
         self.curves.iter().any(|(_, c)| c.centerline)
     }
 
-    /// Gibt es einen Abhängigkeitseintrag, der Format 15 braucht, auch einen gelöschten (auch
-    /// einen Musterwert)? Dann braucht die Datei Format 15. Task 5 ergänzt die Mustereinträge.
+    /// Gibt es einen Mustereintrag oder einen Abhängigkeitseintrag, der Format 15 braucht, auch
+    /// einen gelöschten (ein aufgelöstes Muster, ein Musterwert)? Dann braucht die Datei Format
+    /// 15.
     pub fn needs_format_15(&self) -> bool {
-        self.constraints
-            .iter()
-            .any(|(_, c)| c.kind.needs_format_15())
+        !self.patterns.is_empty()
+            || self
+                .constraints
+                .iter()
+                .any(|(_, c)| c.kind.needs_format_15())
     }
 
     /// Alle lebenden Punkte.

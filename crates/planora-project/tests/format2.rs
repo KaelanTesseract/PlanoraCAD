@@ -134,7 +134,7 @@ fn documents_without_blends_still_write_format_1() {
             .contains("\"format\": 1")
     );
     assert_eq!(required_format(&blend_document().snapshot()), 2);
-    assert_eq!(FORMAT_VERSION, 15); // seit dem Ellipsenbogen
+    assert_eq!(FORMAT_VERSION, 15); // seit Skizzen 5 (Muster und neue Abhängigkeiten)
 }
 
 #[test]

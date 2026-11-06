@@ -32,7 +32,7 @@ pub mod transform;
 pub mod triangulate;
 
 pub use constraint::{ConstraintData, ConstraintId, ConstraintKind, Evaluation, LineOrPoints};
-pub use data::{ConstraintRecord, CurveRecord, PointRecord, SketchData};
+pub use data::{ConstraintRecord, CurveRecord, PatternRecord, PointRecord, SketchData};
 pub use edit::TrimPiece;
 pub use error::SketchError;
 pub use fillet::{
