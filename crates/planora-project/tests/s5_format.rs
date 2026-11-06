@@ -727,11 +727,9 @@ fn an_arc_or_elliptic_arc_closing_a_pattern_loop_is_refused_and_files_stay_loada
     assert_eq!(s.to_data(), before, "nichts angelegt");
     // Ein Bogen, der nur Exemplare liest, geht und wird gespeichert.
     let free = s.add_point(30.0, 30.0).unwrap();
-    let arc = s.add_arc(free, inst[0], inst[1]).unwrap();
+    s.add_arc(free, inst[0], inst[1]).unwrap();
     s.solve();
     file_round_trip(&s, "Bogen an Exemplaren");
-
-    let _ = arc;
     // Ohne Schleife in der Skizze wird eine neue Schleife über eine Abhängigkeit weiter
     // abgelehnt.
     let e = s

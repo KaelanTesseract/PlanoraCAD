@@ -938,10 +938,18 @@ impl Sketch {
                 .with_value(slot, v);
             self.pattern_lattice(&plan).map_err(PatternProblem::error)?;
             return self.atomically(|s| {
+                // Eine neue Anzahl kann Exemplare wegnehmen und so ein Muster in eine Schleife
+                // bringen (siehe `refuse_new_cycles`); ein Abstand oder Winkel nicht.
+                let before = if slot.is_count() {
+                    s.cyclic_patterns()
+                } else {
+                    Vec::new()
+                };
                 s.constraints[id].kind = kind;
                 s.touch_structure();
                 if slot.is_count() {
                     s.sync_pattern(m)?;
+                    s.refuse_new_cycles(&before)?;
                 }
                 Ok(())
             });

@@ -312,17 +312,7 @@ impl Sketch {
         // des Benutzers, interne oder beide) liefe im Löser nie zusammen und sperrte die Skizze.
         // Es wird aufgelöst, die Geometrie bleibt; so lädt und löst die Datei. Nach jedem
         // Auflösen neu prüfen: Dann sind andere Variablen gehalten.
-        let mut dissolved = 0;
-        loop {
-            let cyclic = s.cyclic_patterns();
-            if cyclic.is_empty() {
-                break;
-            }
-            for id in cyclic {
-                s.dissolve(id);
-                dissolved += 1;
-            }
-        }
+        let dissolved = s.dissolve_cycles();
         // Die Tangenten an gemeinsamen Enden bleiben, wie die gespeicherte Geometrie sie zeigt.
         s.refresh_shared_signs(None);
         Ok((s, dissolved))

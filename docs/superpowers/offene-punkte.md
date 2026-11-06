@@ -2216,3 +2216,7 @@ In Arbeit auf dem Zweig `feature/skizzen-muster` (Spec `specs/2026-11-03-skizzen
 - **Annahme:** Wird eine fremde Kurve verschoben, die einen Punkt mit einer Ecke der Vorlage teilt (oder nur ein Teil der Vorlage), trennt das Verschieben diese Ecke auf. Dabei ändert sich die Vorlage, und das Muster wird aufgelöst; die Exemplare bleiben als lose Geometrie liegen.
 - **Annahme:** Wird die ganze Skizze gedreht, drehen die Vorlagen eines Rechteckmusters mit den Richtungen „Skizze X/Y“ mit, die Richtungen des Gitters bleiben aber auf den Achsen der Skizze. Mit einer Richtungslinie folgt das Gitter dieser Linie.
 - **Annahme:** Wird die Anzahl kleiner, vergisst das Muster abgewählte Lagen, die außerhalb des Gitters liegen. Anzahl 3 → 2 → 3 bringt eine Abwahl an (2,0) also nicht zurück.
+
+**Bekannte Grenzen der Schleifenprüfung (Task 5)**
+- Eine Schleife zwischen Vorlage und eigenem Exemplar wird je Muster erkannt: Beim Anlegen einer Abhängigkeit, eines Bogens oder Ellipsenbogens wird sie abgelehnt, ebenso beim Ändern eines Musters, bei der Anzahl und beim Abwählen. Beim Auflösen und beim Laden werden die betroffenen Muster mit aufgelöst. Nicht erkannt wird eine Schleife über zwei Muster (A liest Exemplare von B, B liest Exemplare von A). Der Löser hört dann nach `PATTERN_ROUNDS` = 3 Runden auf.
+- Stutzen, Brechen und Dehnen legen ihre internen Abhängigkeiten (`push_internal` in `edit.rs`) ohne eigene Schleifenprüfung an. Diese Wege lösen vorher die Muster der berührten Kurven auf. Ein erreichbarer Fall mit Schleife ist nicht bekannt.

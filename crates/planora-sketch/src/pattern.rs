@@ -828,6 +828,7 @@ impl Sketch {
             return Ok(PatternEdit::default());
         }
         self.atomically(|s| {
+            let before = s.cyclic_patterns();
             let mut edit = PatternEdit::default();
             if s.patterns[id].sources != wanted.sources {
                 // Andere Vorlagen: Die Exemplare passen nicht mehr, alle werden neu angelegt.
@@ -846,9 +847,7 @@ impl Sketch {
             edit.added += sync.added;
             edit.removed += sync.removed;
             edit.dropped_constraints += sync.dropped_constraints;
-            if s.pattern_in_cycle(id) {
-                return Err(PatternProblem::Cycle.error());
-            }
+            s.refuse_new_cycles(&before)?;
             s.touch_structure();
             s.solve();
             Ok(edit)
@@ -1004,6 +1003,7 @@ impl Sketch {
             return Ok(());
         }
         self.atomically(|s| {
+            let before = s.cyclic_patterns();
             let list = &mut s.patterns[id].suppressed;
             if on {
                 list.push(at);
@@ -1011,18 +1011,51 @@ impl Sketch {
                 list.retain(|x| *x != at);
             }
             s.touch_structure();
-            s.sync_pattern(id).map(|_| ())
+            s.sync_pattern(id)?;
+            s.refuse_new_cycles(&before)
         })
     }
 
     /// Löst das Muster auf: Muster und Werte verschwinden, die Exemplare bleiben als lose
-    /// Geometrie an ihrer Stelle (bitgleich), ihre Variablen sind danach frei.
+    /// Geometrie an ihrer Stelle (bitgleich), ihre Variablen sind danach frei. Gerät dadurch ein
+    /// anderes Muster in eine Schleife (ein frei gewordener Exemplarpunkt verbindet seine Vorlage
+    /// mit einem eigenen Exemplar), wird es ebenfalls aufgelöst, wie beim Laden.
     pub fn dissolve_pattern(&mut self, id: PatternId) -> Result<(), SketchError> {
         if self.pattern(id).is_none() {
             return Err(SketchError::UnknownObject);
         }
         self.dissolve(id);
+        self.dissolve_cycles();
         Ok(())
+    }
+
+    /// Lehnt ab (`sketch-pattern-cycle`), wenn jetzt ein Muster in einer Schleife liegt, das in
+    /// `before` (den Mustern in Schleifen vor der Änderung) nicht stand. Für Befehle, die Muster
+    /// ändern: Fallen Exemplare weg, bekommen fremde Kurven freie Punkte, und das verbindet
+    /// Gruppen, auch die eines anderen Musters.
+    pub(crate) fn refuse_new_cycles(&self, before: &[PatternId]) -> Result<(), SketchError> {
+        if self.cyclic_patterns().iter().any(|id| !before.contains(id)) {
+            Err(PatternProblem::Cycle.error())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Löst jedes Muster in einer Schleife auf, bis keins mehr in einer liegt (nach jedem Auflösen
+    /// sind andere Variablen gehalten). Die Geometrie bleibt. Liefert die Zahl der aufgelösten
+    /// Muster.
+    pub(crate) fn dissolve_cycles(&mut self) -> usize {
+        let mut n = 0;
+        loop {
+            let cyclic = self.cyclic_patterns();
+            if cyclic.is_empty() {
+                return n;
+            }
+            for id in cyclic {
+                self.dissolve(id);
+                n += 1;
+            }
+        }
     }
 
     pub(crate) fn dissolve(&mut self, id: PatternId) {
@@ -1040,9 +1073,13 @@ impl Sketch {
             .filter(|(_, d)| hit(d))
             .map(|(id, _)| id)
             .collect();
+        if ids.is_empty() {
+            return;
+        }
         for id in ids {
             self.dissolve(id);
         }
+        self.dissolve_cycles();
     }
 
     /// Vor Stutzen, Dehnen, Brechen, Rundung und Fase und beim Ändern der Art einer Kurve: Muster,
@@ -1199,5 +1236,82 @@ impl Sketch {
             .filter(|(_, d)| *d <= radius)
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(index, _)| index)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use planora_math::{Frame, Tolerance};
+
+    fn plan(sources: Vec<CurveId>, n: u32, spacing: f64) -> PatternPlan {
+        PatternPlan {
+            kind: PatternKind::Rect {
+                dirs: [PatternDir::SketchX, PatternDir::SketchY],
+                extent: [false, false],
+                symmetric: [false, false],
+            },
+            sources,
+            counts: [n, 1],
+            values: [spacing, 10.0],
+            suppressed: vec![],
+        }
+    }
+
+    fn corner(s: &Sketch, id: PatternId, src: PointId, at: [i32; 2]) -> PointId {
+        let d = &s.patterns[id];
+        let k = d.source_points.iter().position(|&x| x == src).unwrap();
+        d.instances.iter().find(|i| i.at == at).unwrap().points[k]
+    }
+
+    /// Eine Skizze, die schon ein Muster Q in einer Schleife hält (nur über eine Entwicklerdatei
+    /// oder ein Auflösen ohne Nachprüfung erreichbar): Befehle an einem anderen Muster R, die
+    /// keine neue Schleife schaffen, gehen weiter; Q bleibt, wie es ist.
+    #[test]
+    fn edits_of_another_pattern_work_beside_an_existing_loop() {
+        let mut s = Sketch::new(Frame::WORLD, "S", Tolerance::default());
+        let rq = s
+            .add_rectangle(DVec2::new(0.0, 0.0), DVec2::new(10.0, 6.0))
+            .unwrap();
+        let q = s.add_pattern(&plan(rq.lines.to_vec(), 3, 20.0)).unwrap();
+        let src = rq.points[0];
+        let qi1 = corner(&s, q, src, [1, 0]);
+        let rp = s
+            .add_rectangle(DVec2::new(10.0, 50.0), DVec2::new(14.0, 54.0))
+            .unwrap();
+        let p = s.add_pattern(&plan(rp.lines.to_vec(), 3, 10.0)).unwrap();
+        let vpt = corner(&s, p, rp.points[0], [1, 0]);
+        let d0 = s.pos(vpt).distance(s.pos(src));
+        s.add_constraint(ConstraintKind::Distance(src, vpt, d0))
+            .unwrap();
+        let d1 = s.pos(vpt).distance(s.pos(qi1));
+        s.add_constraint(ConstraintKind::Distance(vpt, qi1, d1))
+            .unwrap();
+        let rr = s
+            .add_rectangle(DVec2::new(-300.0, 0.0), DVec2::new(-290.0, 5.0))
+            .unwrap();
+        let r = s.add_pattern(&plan(rr.lines.to_vec(), 3, 15.0)).unwrap();
+        // P ohne Nachprüfung auflösen: Q liegt danach in einer Schleife.
+        s.dissolve(p);
+        assert_eq!(s.cyclic_patterns(), vec![q]);
+
+        s.edit_pattern(r, &plan(rr.lines.to_vec(), 4, 15.0))
+            .unwrap();
+        let count = s.patterns[r]
+            .values
+            .iter()
+            .copied()
+            .find(|&c| {
+                matches!(
+                    s.constraints[c].kind,
+                    ConstraintKind::PatternValue(_, PatternSlot::Count1, _)
+                )
+            })
+            .unwrap();
+        s.set_constraint_value(count, 2.0).unwrap();
+        s.suppress_instance(r, [1, 0], true).unwrap();
+        assert!(s.pattern(r).unwrap().instances.is_empty());
+        assert!(s.pattern(q).is_some(), "Q bleibt");
+        assert_eq!(s.cyclic_patterns(), vec![q]);
     }
 }

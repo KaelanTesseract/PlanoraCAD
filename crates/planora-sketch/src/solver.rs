@@ -902,12 +902,8 @@ impl Sketch {
             .is_empty()
     }
 
-    /// Liegt das Muster `id` in einer Schleife (nach `edit_pattern`)?
-    pub(crate) fn pattern_in_cycle(&self, id: PatternId) -> bool {
-        self.patterns_in_cycles(None, None).contains(&id)
-    }
-
-    /// Alle lebenden Muster in einer Schleife (beim Laden).
+    /// Alle lebenden Muster in einer Schleife (beim Laden, vor und nach Befehlen, die Muster
+    /// ändern oder auflösen).
     pub(crate) fn cyclic_patterns(&self) -> Vec<PatternId> {
         self.patterns_in_cycles(None, None)
     }
