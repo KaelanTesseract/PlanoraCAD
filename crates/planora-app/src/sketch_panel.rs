@@ -14,7 +14,9 @@ use crate::sketch_kinds::ToolKind;
 use crate::sketch_state::{
     ConstraintAction, Item, Severity, SketchSession, Tool, TransformStage, formula_problem,
 };
-use crate::sketch_view::{constraint_name, format_number, parse_number, shown_value};
+use crate::sketch_view::{
+    constraint_name_among, format_number, parse_number, round_centers, shown_value,
+};
 use crate::state::AppState;
 use crate::theme;
 use egui::RichText;
@@ -882,6 +884,7 @@ fn side_contents(
     theme::section_header(ui, &tr!("sketch-section-constraints"), theme::SUB_HEADER_H);
     let sk = &mut sf.sketch;
     let available = se.available_actions(sk);
+    let km = crate::keymap::mouse::current(ui.ctx());
     ui.horizontal_wrapped(|ui| {
         for action in ACTIONS {
             let enabled = available.contains(&action);
@@ -892,7 +895,6 @@ fn side_contents(
             };
             let mut button = tool_button(ui, icons::sketch_action_icon(action), &label, enabled);
             // Belegbare Abhängigkeiten (Skizzen 5) nennen ihre Taste im Hinweistext.
-            let km = crate::keymap::mouse::current(ui.ctx());
             if let Some(bound) = bindable_action(action)
                 && !shortcut_hint(&km, bound).is_empty()
             {
@@ -1327,6 +1329,7 @@ fn constraint_list(
         .map(|r| r.conflicting.iter().chain(&r.redundant).copied().collect())
         .unwrap_or_default();
     let shift = ui.input(|i| i.modifiers.shift);
+    let centers = round_centers(sk);
     theme::scroll_area(
         ui,
         egui::ScrollArea::vertical()
@@ -1336,7 +1339,8 @@ fn constraint_list(
             for (id, kind, driven) in rows {
                 let item = Item::Constraint(id);
                 let selected = se.selection.contains(&item);
-                let mut text = RichText::new(constraint_name(&sf.sketch, &kind, driven));
+                let mut text =
+                    RichText::new(constraint_name_among(&sf.sketch, &centers, &kind, driven));
                 if bad.contains(&id) {
                     text = text.color(theme::palette(ui.visuals().dark_mode).error);
                 }

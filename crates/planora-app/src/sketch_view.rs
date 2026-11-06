@@ -219,23 +219,30 @@ pub fn kind_label(kind: &ConstraintKind) -> String {
     }
 }
 
+/// Mitten aller Kreise, Bögen, Ellipsen und Ellipsenbögen: einmal je Bild oder Liste gebaut, damit
+/// [`is_concentric_among`] nicht für jedes `Coincident` alle Kurven durchsucht.
+pub fn round_centers(sk: &Sketch) -> HashSet<PointId> {
+    sk.curves()
+        .filter_map(|(c, _)| crate::sketch_state::round_center(sk, c))
+        .collect()
+}
+
 /// Ist `kind` ein Konzentrisch (Skizzen 5)? Fusion „Konzentrisch“ ist hier ein `Coincident`
 /// zweier Punkte, die beide Mitte eines Kreises, Bogens, einer Ellipse oder eines
-/// Ellipsenbogens sind; Liste und Ansicht nennen es so.
+/// Ellipsenbogens sind; Liste und Ansicht nennen es so. `centers` aus [`round_centers`].
+pub fn is_concentric_among(centers: &HashSet<PointId>, kind: &ConstraintKind) -> bool {
+    matches!(*kind, ConstraintKind::Coincident(a, b)
+        if a != b && centers.contains(&a) && centers.contains(&b))
+}
+
+/// Wie [`is_concentric_among`] für eine einzelne Abhängigkeit.
 pub fn is_concentric(sk: &Sketch, kind: &ConstraintKind) -> bool {
-    let ConstraintKind::Coincident(a, b) = *kind else {
-        return false;
-    };
-    let is_center = |p: PointId| {
-        sk.curves()
-            .any(|(c, _)| crate::sketch_state::round_center(sk, c) == Some(p))
-    };
-    a != b && is_center(a) && is_center(b)
+    matches!(kind, ConstraintKind::Coincident(..)) && is_concentric_among(&round_centers(sk), kind)
 }
 
 /// Name einer Abhängigkeit in Liste und Meldungen: wie [`kind_label`], ein Konzentrisch heißt so.
-pub fn constraint_label(sk: &Sketch, kind: &ConstraintKind) -> String {
-    if is_concentric(sk, kind) {
+pub fn constraint_label(centers: &HashSet<PointId>, kind: &ConstraintKind) -> String {
+    if is_concentric_among(centers, kind) {
         tr!("sketch-constraint-concentric")
     } else {
         kind_label(kind)
@@ -244,11 +251,56 @@ pub fn constraint_label(sk: &Sketch, kind: &ConstraintKind) -> String {
 
 /// Eintrag der Abhängigkeitsliste, z. B. „Abstand 40,00 mm“; anzeigende Maße in Klammern.
 pub fn constraint_name(sk: &Sketch, kind: &ConstraintKind, driven: bool) -> String {
-    let label = constraint_label(sk, kind);
+    constraint_name_among(sk, &round_centers(sk), kind, driven)
+}
+
+/// Wie [`constraint_name`] mit den Mitten aus [`round_centers`] (für die ganze Liste einmal).
+pub fn constraint_name_among(
+    sk: &Sketch,
+    centers: &HashSet<PointId>,
+    kind: &ConstraintKind,
+    driven: bool,
+) -> String {
+    let label = constraint_label(centers, kind);
     match shown_value(sk, kind, driven) {
         Some(v) if driven => format!("{label} ({})", value_text(kind, v)),
         Some(v) => format!("{label} {}", value_text(kind, v)),
         None => label,
+    }
+}
+
+/// Gezeichnetes Zeichen einer Abhängigkeit in der Ansicht (Skizzen 5), im Stil der
+/// Symbole aus [`crate::icons::HandIcon`] statt eines Schriftzeichens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PaintedMark {
+    /// Zwei Kreise um dieselbe Mitte.
+    Concentric,
+    /// Zwei Strecken auf einer Geraden.
+    Collinear,
+    /// Linie, die ohne Knick in eine Kurve übergeht.
+    Smooth,
+}
+
+impl PaintedMark {
+    fn icon(self) -> crate::icons::HandIcon {
+        use crate::icons::HandIcon;
+        match self {
+            PaintedMark::Concentric => HandIcon::Concentric,
+            PaintedMark::Collinear => HandIcon::Collinear,
+            PaintedMark::Smooth => HandIcon::Smooth,
+        }
+    }
+}
+
+/// Das gezeichnete Zeichen von `kind`, wenn es eins hat (sonst steht dort [`overlay_text`]).
+pub fn overlay_mark(centers: &HashSet<PointId>, kind: &ConstraintKind) -> Option<PaintedMark> {
+    match kind {
+        ConstraintKind::Coincident(..) if is_concentric_among(centers, kind) => {
+            Some(PaintedMark::Concentric)
+        }
+        ConstraintKind::Collinear(..) => Some(PaintedMark::Collinear),
+        ConstraintKind::Smooth(..) => Some(PaintedMark::Smooth),
+        _ => None,
     }
 }
 
@@ -282,7 +334,6 @@ pub fn overlay_text(
 ) -> String {
     use ConstraintKind as K;
     let plain = match kind {
-        K::Coincident(..) if is_concentric(sk, kind) => symbol(ctx, "◎", "(o)").to_string(),
         K::Coincident(..) | K::ArcRadius(..) | K::EllipticArcEnds(..) => return String::new(),
         K::Horizontal(..) => "H".to_string(),
         K::Vertical(..) => "V".to_string(),
@@ -379,9 +430,11 @@ fn marked_curves(kind: &ConstraintKind) -> Option<Vec<CurveId>> {
     use ConstraintKind as K;
     match kind {
         K::Horizontal(LineOrPoints::Line(c)) | K::Vertical(LineOrPoints::Line(c)) => Some(vec![*c]),
-        K::Parallel(a, b) | K::Perpendicular(a, b) | K::Equal(a, b) | K::Tangent(a, b) => {
-            Some(vec![*a, *b])
-        }
+        K::Parallel(a, b)
+        | K::Perpendicular(a, b)
+        | K::Equal(a, b)
+        | K::Tangent(a, b)
+        | K::Collinear(a, b) => Some(vec![*a, *b]),
         _ => None,
     }
 }
@@ -407,7 +460,14 @@ fn anchors(sk: &Sketch, kind: &ConstraintKind) -> Vec<DVec2> {
         | K::Collinear(a, b) => {
             vec![curve_anchor(sk, *a), curve_anchor(sk, *b)]
         }
-        K::Smooth(_, a, _, b) => vec![pos(sk, *a), pos(sk, *b)],
+        // Am gemeinsamen (oder zusammengelegten) Ende ein Zeichen, nicht zwei übereinander.
+        K::Smooth(_, a, _, b) => {
+            let (pa, pb) = (pos(sk, *a), pos(sk, *b));
+            match pa.zip(pb) {
+                Some((x, y)) if x.distance(y) <= sk.tolerance().linear => vec![pa],
+                _ => vec![pa, pb],
+            }
+        }
         K::Angle(a, b, _) => vec![mid(curve_anchor(sk, *a), curve_anchor(sk, *b))],
         K::Fixed(p, ..) | K::Midpoint(p, _) | K::PointOnCurve(p, _) | K::Coincident(p, _) => {
             vec![pos(sk, *p)]
@@ -1412,8 +1472,14 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     let mut shown: HashSet<(CurveId, String)> = HashSet::new();
     let mut constraints: Vec<_> = sk.constraints().collect();
     constraints.sort_by_key(|(id, _)| !bad.contains(id));
+    let centers = round_centers(sk);
     for (id, c) in constraints {
-        let text = overlay_text(ui.ctx(), sk, &c.kind, c.driven);
+        let mark = overlay_mark(&centers, &c.kind);
+        let text = match mark {
+            // Nur als Schlüssel für „je Kurve und Art einmal“; gezeichnet wird das Symbol.
+            Some(m) => format!("{m:?}"),
+            None => overlay_text(ui.ctx(), sk, &c.kind, c.driven),
+        };
         if text.is_empty() {
             continue;
         }
@@ -1442,14 +1508,11 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         };
         for a in places {
             if let Some(s) = map.to_screen(a) {
-                label(
-                    &painter,
-                    s + vec2(6.0, -18.0),
-                    &text,
-                    color,
-                    col.label_bg,
-                    &mut placed,
-                );
+                let at = s + vec2(6.0, -18.0);
+                match mark {
+                    Some(m) => mark_label(&painter, at, m, color, col.label_bg, &mut placed),
+                    None => label(&painter, at, &text, color, col.label_bg, &mut placed),
+                }
             }
         }
     }
@@ -1530,10 +1593,39 @@ fn label(
     bg: Color32,
     placed: &mut Vec<Rect>,
 ) {
+    let galley = painter.layout_no_wrap(text.to_string(), FontId::proportional(LABEL_SIZE), color);
+    let r = place_label(Rect::from_min_size(at, galley.size()).expand(2.0), placed);
+    painter.rect_filled(r, 3.0, bg);
+    painter.galley(r.min + vec2(2.0, 2.0), galley, color);
+}
+
+/// Wie [`label`], aber mit einem gezeichneten Zeichen statt Text: ein Feld in Texthöhe, darin das
+/// Symbol.
+fn mark_label(
+    painter: &egui::Painter,
+    at: Pos2,
+    mark: PaintedMark,
+    color: Color32,
+    bg: Color32,
+    placed: &mut Vec<Rect>,
+) {
+    let size = painter
+        .layout_no_wrap("H".to_string(), FontId::proportional(LABEL_SIZE), color)
+        .size()
+        .y;
+    let r = place_label(
+        Rect::from_min_size(at, vec2(size, size)).expand(2.0),
+        placed,
+    );
+    painter.rect_filled(r, 3.0, bg);
+    crate::icons::paint_hand_icon(painter, r.shrink(1.0), mark.icon(), color);
+}
+
+/// Schiebt `r` nach unten, bis es keine schon gesetzte Beschriftung überdeckt (höchstens einige
+/// Male), und merkt es sich.
+fn place_label(mut r: Rect, placed: &mut Vec<Rect>) -> Rect {
     /// Höchstens so oft wird einer Überlappung ausgewichen.
     const MAX_SHIFTS: usize = 8;
-    let galley = painter.layout_no_wrap(text.to_string(), FontId::proportional(LABEL_SIZE), color);
-    let mut r = Rect::from_min_size(at, galley.size()).expand(2.0);
     for _ in 0..MAX_SHIFTS {
         if !placed.iter().any(|q| q.intersects(r)) {
             break;
@@ -1541,8 +1633,7 @@ fn label(
         r = r.translate(vec2(0.0, r.height() + 1.0));
     }
     placed.push(r);
-    painter.rect_filled(r, 3.0, bg);
-    painter.galley(r.min + vec2(2.0, 2.0), galley, color);
+    r
 }
 
 /// Vorschau des laufenden Werkzeugs vom zuletzt gesetzten Punkt zum Mauszeiger.

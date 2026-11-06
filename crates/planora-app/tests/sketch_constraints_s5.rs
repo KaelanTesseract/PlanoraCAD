@@ -14,6 +14,7 @@ use planora_app::workspace::Workspace;
 use planora_app::{fonts, sketch_view, theme};
 use planora_feature::SketchPlane;
 use planora_i18n::{english, german, tr, with_lang};
+use planora_math::DVec2;
 use planora_project::config::Config;
 use planora_project::library::Library;
 use planora_sketch::constraint::ConstraintKind as K;
@@ -212,16 +213,21 @@ fn concentric_ties_two_circles_and_is_one_undo_step() {
         assert!(sketch_view::is_concentric(s, &kind));
         assert_eq!(s.clone().solve().status, SolveStatus::Solved);
         assert_eq!(dof(&mut app), dof_before - 2);
-        // Liste und Ansicht nennen es „Konzentrisch“ bzw. zeigen ◎.
+        // Die Liste nennt es „Konzentrisch“, die Ansicht zeichnet zwei Kreise (kein Schriftzeichen,
+        // Korrektur 1: kein Ersatz „(o)“ mehr).
         let s = sk(&mut app).clone();
         assert_eq!(
             sketch_view::constraint_name(&s, &kind, false),
             "Konzentrisch"
         );
         assert!(shot.count("Konzentrisch") >= 2, "Knopf und Listeneintrag");
-        let mark = sketch_view::overlay_text(&c, &s, &kind, false);
-        assert!(mark == "◎" || mark == "(o)", "{mark}");
-        assert!(shot.count(&mark) >= 1, "Zeichen in der Ansicht");
+        let centers = sketch_view::round_centers(&s);
+        assert_eq!(
+            sketch_view::overlay_mark(&centers, &kind),
+            Some(sketch_view::PaintedMark::Concentric)
+        );
+        assert_eq!(sketch_view::overlay_text(&c, &s, &kind, false), "");
+        assert_eq!(shot.count("(o)") + shot.count("◎"), 0);
         // Ein gewöhnliches Deckungsgleich bleibt es.
         let p = pt(&mut app, 1.0, 1.0);
         let q = pt(&mut app, 2.0, 2.0);
@@ -229,8 +235,8 @@ fn concentric_ties_two_circles_and_is_one_undo_step() {
         assert!(!sketch_view::is_concentric(&s, &K::Coincident(p, q)));
         assert!(!sketch_view::is_concentric(&s, &K::Coincident(m1, p)));
         settle(&c, &mut app);
+        // Das erste Rückgängig nimmt die zwei Punkte eben, das zweite Konzentrisch.
         undo(&mut app);
-        // Ein Rückgängig nimmt Konzentrisch zurück.
         undo(&mut app);
         assert_eq!(live(&mut app).len(), before);
         let s = sk(&mut app);
@@ -502,5 +508,256 @@ fn the_new_buttons_speak_english() {
             "Smooth",
             "wie der Name in der Liste"
         );
+    });
+}
+
+// ---- Korrektur 1 ------------------------------------------------------------------------------
+
+/// Wählt die Kurven mit Klicks im Auswahlwerkzeug an den Stellen `at` (wie die Maus).
+fn click_curves(app: &mut PlanoraApp, at: &[DVec2]) {
+    let (se, s) = state(app).session_sketch_mut().unwrap();
+    se.set_tool(s, planora_app::sketch_state::Tool::Select);
+    for (i, &p) in at.iter().enumerate() {
+        se.click(s, p, 0.3, i > 0).unwrap();
+    }
+}
+
+/// Punkt auf der Kurve `c` beim Anteil `t` ihres Linienzugs.
+fn on_curve(app: &mut PlanoraApp, c: CurveId, t: f64) -> DVec2 {
+    let pl = sk(app).curve_polyline(c, 256).unwrap();
+    pl[((pl.len() - 1) as f64 * t).round() as usize]
+}
+
+/// Bogen und Spline, die beide Enden teilen (geschlossene Schleife).
+fn closed_loop(app: &mut PlanoraApp) -> (CurveId, CurveId, PointId, PointId) {
+    let (m, st, en) = (pt(app, 0.0, 0.0), pt(app, 5.0, 0.0), pt(app, 0.0, 5.0));
+    let arc = sk(app).add_arc(m, st, en).unwrap();
+    let mid = pt(app, -6.0, -6.0);
+    let sp = sk(app).add_spline(&[en, mid, st]).unwrap();
+    (arc, sp, st, en)
+}
+
+#[test]
+fn smooth_in_a_closed_loop_takes_the_clicked_end_in_any_order() {
+    with_lang(&german(), || {
+        let c = context();
+        for near_end in [true, false] {
+            for arc_first in [true, false] {
+                let mut app = sketching();
+                let (arc, sp, st, en) = closed_loop(&mut app);
+                settle(&c, &mut app);
+                // Klick auf beide Kurven nahe dem gewünschten Ende (nicht auf dem Punkt selbst).
+                let (ta, ts) = if near_end { (0.8, 0.15) } else { (0.2, 0.85) };
+                let on_arc = on_curve(&mut app, arc, ta);
+                let on_sp = on_curve(&mut app, sp, ts);
+                let clicks = if arc_first {
+                    [on_arc, on_sp]
+                } else {
+                    [on_sp, on_arc]
+                };
+                click_curves(&mut app, &clicks);
+                let want = if near_end { en } else { st };
+                let picked = state(&mut app)
+                    .sketch_session
+                    .as_ref()
+                    .unwrap()
+                    .selection
+                    .clone();
+                assert_eq!(picked.len(), 2, "{picked:?}");
+                press(&c, &mut app, "Glatt");
+                let Some(K::Smooth(_, pa, _, pb)) = live(&mut app).last().cloned() else {
+                    panic!("kein Glatt: {:?}", message(&mut app));
+                };
+                assert_eq!(
+                    (pa, pb),
+                    (want, want),
+                    "Ende {near_end}, Bogen zuerst {arc_first}"
+                );
+                assert!(
+                    !live(&mut app)
+                        .iter()
+                        .any(|k| matches!(k, K::Coincident(..))),
+                    "gemeinsames Ende: kein Deckungsgleich"
+                );
+            }
+        }
+    });
+}
+
+#[test]
+fn smooth_joins_far_apart_curves_at_the_clicked_ends_in_one_undo_step() {
+    with_lang(&german(), || {
+        let c = context();
+        let mut app = sketching();
+        let (_, a, _) = line(&mut app, (-10.0, 0.0), (0.0, 0.0));
+        let s0 = pt(&mut app, 200.0, 150.0);
+        let r = [pt(&mut app, 206.0, 154.0), pt(&mut app, 212.0, 150.0)];
+        let sp = sk(&mut app).add_spline(&[s0, r[0], r[1]]).unwrap();
+        settle(&c, &mut app);
+        let before = live(&mut app).len();
+        // Klick auf die Linie nahe ihrem Anfang, auf den Spline nahe seinem Ende.
+        let on_sp = on_curve(&mut app, sp, 0.9);
+        click_curves(&mut app, &[DVec2::new(-8.0, 0.0), on_sp]);
+        press(&c, &mut app, "Glatt");
+        let now = live(&mut app);
+        assert_eq!(now.len(), before + 2, "{:?}", message(&mut app));
+        let end = r[1];
+        assert!(now.iter().any(
+            |k| matches!(k, K::Coincident(x, y) if [*x, *y] == [a, end] || [*x, *y] == [end, a])
+        ));
+        assert!(now.iter().any(|k| matches!(k, K::Smooth(..))));
+        let s = sk(&mut app);
+        assert!(s.point_xy(a).unwrap().distance(s.point_xy(end).unwrap()) < 1e-8);
+        assert_eq!(s.clone().solve().status, SolveStatus::Solved);
+        // Ein Rückgängig nimmt Deckungsgleich und Glatt zusammen.
+        undo(&mut app);
+        assert_eq!(live(&mut app).len(), before);
+        let s = sk(&mut app);
+        assert!(s.point_xy(a).unwrap().distance(s.point_xy(end).unwrap()) > 100.0);
+    });
+}
+
+#[test]
+fn a_refused_concentric_leaves_no_undo_step_and_the_revision() {
+    with_lang(&german(), || {
+        let c = context();
+        let mut app = sketching();
+        let (c1, m1) = circle(&mut app, 0.0, 0.0, 5.0);
+        let (c2, m2) = circle(&mut app, 30.0, 10.0, 8.0);
+        sk(&mut app).add_constraint(K::Fixed(m1, 0.0, 0.0)).unwrap();
+        sk(&mut app)
+            .add_constraint(K::Fixed(m2, 30.0, 10.0))
+            .unwrap();
+        settle(&c, &mut app);
+        let n = live(&mut app).len();
+        let rev = sk(&mut app).revision();
+        select(&mut app, vec![Item::Curve(c1), Item::Curve(c2)]);
+        press(&c, &mut app, "Konzentrisch");
+        assert!(message(&mut app).is_some());
+        assert_eq!(sk(&mut app).revision(), rev);
+        assert_eq!(live(&mut app).len(), n);
+        // Rückgängig nimmt den letzten echten Schritt (die Kreise samt Festsetzen), keinen leeren.
+        undo(&mut app);
+        assert!(live(&mut app).len() < n);
+    });
+}
+
+#[test]
+fn concentric_between_a_pattern_source_and_its_instance_is_refused() {
+    use planora_sketch::pattern::{PatternDir, PatternKind, PatternPlan};
+    with_lang(&german(), || {
+        let c = context();
+        let mut app = sketching();
+        let (src, _) = circle(&mut app, 0.0, 0.0, 3.0);
+        let pid = sk(&mut app)
+            .add_pattern(&PatternPlan {
+                kind: PatternKind::Rect {
+                    dirs: [PatternDir::SketchX, PatternDir::SketchY],
+                    extent: [false, false],
+                    symmetric: [false, false],
+                },
+                sources: vec![src],
+                counts: [2, 1],
+                values: [20.0, 10.0],
+                suppressed: vec![],
+            })
+            .unwrap();
+        sk(&mut app).solve();
+        let inst = sk(&mut app).pattern(pid).unwrap().instances[0].curves[0];
+        settle(&c, &mut app);
+        let n = live(&mut app).len();
+        let rev = sk(&mut app).revision();
+        select(&mut app, vec![Item::Curve(src), Item::Curve(inst)]);
+        press(&c, &mut app, "Konzentrisch");
+        // Der Text kommt aus der Bibliothek (mit „Ungültige Eingabe: …“ davor).
+        let text = message(&mut app).unwrap_or_default();
+        assert!(text.contains(&tr!("sketch-pattern-cycle")), "{text}");
+        assert_eq!(sk(&mut app).revision(), rev);
+        assert_eq!(live(&mut app).len(), n);
+    });
+}
+
+#[test]
+fn collinear_works_with_a_centerline() {
+    with_lang(&german(), || {
+        let c = context();
+        let mut app = sketching();
+        let (l1, ..) = line(&mut app, (0.0, 0.0), (10.0, 1.0));
+        let (axis, ..) = line(&mut app, (20.0, 5.0), (30.0, 9.0));
+        sk(&mut app).set_centerline(axis, true).unwrap();
+        settle(&c, &mut app);
+        select(&mut app, vec![Item::Curve(l1), Item::Curve(axis)]);
+        assert!(available(&mut app).contains(&ConstraintAction::Collinear));
+        let dof_before = dof(&mut app);
+        press(&c, &mut app, "Kollinear");
+        assert!(matches!(live(&mut app).last(), Some(K::Collinear(..))));
+        assert_eq!(dof(&mut app), dof_before - 2);
+        assert_eq!(message(&mut app), None);
+        let s = sk(&mut app).clone();
+        let centers = sketch_view::round_centers(&s);
+        let kind = live(&mut app).last().cloned().unwrap();
+        assert_eq!(
+            sketch_view::overlay_mark(&centers, &kind),
+            Some(sketch_view::PaintedMark::Collinear)
+        );
+    });
+}
+
+#[test]
+fn smooth_without_clicks_does_not_depend_on_the_selection_order() {
+    with_lang(&german(), || {
+        let c = context();
+        let mut joints = Vec::new();
+        for arc_first in [true, false] {
+            let mut app = sketching();
+            let (arc, sp, ..) = closed_loop(&mut app);
+            settle(&c, &mut app);
+            let order = if arc_first { [arc, sp] } else { [sp, arc] };
+            // Ohne Klicklage, wie nach einer Rahmenauswahl.
+            select(&mut app, order.map(Item::Curve).to_vec());
+            press(&c, &mut app, "Glatt");
+            let Some(K::Smooth(_, pa, _, pb)) = live(&mut app).last().cloned() else {
+                panic!("kein Glatt: {:?}", message(&mut app));
+            };
+            assert_eq!(pa, pb);
+            joints.push(pa);
+        }
+        assert_eq!(joints[0], joints[1]);
+    });
+}
+
+/// Kreise ohne Füllung im Bild (die gezeichneten Zeichen; Punkte sind gefüllt).
+fn open_circles(c: &egui::Context, app: &mut PlanoraApp) -> usize {
+    fn walk(shape: &Shape, n: &mut usize) {
+        match shape {
+            Shape::Vec(v) => v.iter().for_each(|x| walk(x, n)),
+            Shape::Circle(k) if k.fill == egui::Color32::TRANSPARENT => *n += 1,
+            _ => {}
+        }
+    }
+    settle(c, app);
+    let mut f = eframe::Frame::_new_kittest();
+    let out = c.run_ui(input(vec![]), |ui| app.ui(ui, &mut f));
+    let mut n = 0;
+    for s in &out.shapes {
+        walk(&s.shape, &mut n);
+    }
+    out.drop_without_applying_deltas();
+    n
+}
+
+#[test]
+fn the_concentric_mark_is_painted_in_the_view() {
+    with_lang(&german(), || {
+        let c = context();
+        let mut app = sketching();
+        let (c1, _) = circle(&mut app, 0.0, 0.0, 5.0);
+        let (c2, _) = circle(&mut app, 30.0, 10.0, 8.0);
+        let before = open_circles(&c, &mut app);
+        select(&mut app, vec![Item::Curve(c1), Item::Curve(c2)]);
+        press(&c, &mut app, "Konzentrisch");
+        select(&mut app, vec![]);
+        let after = open_circles(&c, &mut app);
+        assert_eq!(after, before + 2, "zwei Kreise des Zeichens");
     });
 }

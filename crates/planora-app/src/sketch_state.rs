@@ -437,6 +437,9 @@ pub struct SketchSession {
     pub pick_points: Vec<DVec2>,
     /// Fangradius zu `pick_points`.
     pub pick_radius: f64,
+    /// Klicklagen der im Auswählen gewählten Kurven (Skizzen 5): Glatt setzt am Ende an, das der
+    /// Klickstelle am nächsten liegt. Gilt nur für Kurven, die noch gewählt sind.
+    pub curve_picks: Vec<(CurveId, DVec2)>,
     /// Verschieben/Kopieren und Maßstab.
     pub transform: TransformState,
     /// Laufender Zug an einem Griff.
@@ -461,6 +464,7 @@ struct Backup {
     offset_chain: bool,
     pick_points: Vec<DVec2>,
     pick_radius: f64,
+    curve_picks: Vec<(CurveId, DVec2)>,
     transform: TransformState,
     grip_drag: Option<GripDrag>,
 }
@@ -540,6 +544,7 @@ impl SketchSession {
             fillet_run: None,
             offset_chain: true,
             pick_points: Vec::new(),
+            curve_picks: Vec::new(),
             pick_radius: 0.0,
             transform: TransformState::default(),
             grip_drag: None,
@@ -659,6 +664,7 @@ impl SketchSession {
             fillet_run: self.fillet_run,
             offset_chain: self.offset_chain,
             pick_points: self.pick_points.clone(),
+            curve_picks: self.curve_picks.clone(),
             pick_radius: self.pick_radius,
             transform: self.transform.clone(),
             grip_drag: self.grip_drag,
@@ -681,6 +687,7 @@ impl SketchSession {
         self.fillet_run = b.fillet_run;
         self.offset_chain = b.offset_chain;
         self.pick_points = b.pick_points;
+        self.curve_picks = b.curve_picks;
         self.pick_radius = b.pick_radius;
         self.transform = b.transform;
         self.grip_drag = b.grip_drag;
@@ -1051,6 +1058,35 @@ impl SketchSession {
             (None, true) => {}
             (None, false) => self.selection.clear(),
         }
+        if let Some(Item::Curve(c)) = item {
+            self.note_curve_pick(c, at);
+        }
+        self.forget_stale_picks();
+    }
+
+    /// Merkt sich die Klicklage `at` auf der Kurve `c` (die letzte gilt).
+    fn note_curve_pick(&mut self, c: CurveId, at: DVec2) {
+        self.curve_picks.retain(|(k, _)| *k != c);
+        self.curve_picks.push((c, at));
+    }
+
+    /// Klicklagen von Kurven, die nicht mehr gewählt sind, entfallen.
+    fn forget_stale_picks(&mut self) {
+        let selection = &self.selection;
+        self.curve_picks
+            .retain(|(c, _)| selection.contains(&Item::Curve(*c)));
+    }
+
+    /// Klicklage der gewählten Kurve `c`, wenn sie per Klick gewählt wurde.
+    fn pick_of(&self, c: CurveId) -> Option<DVec2> {
+        if !self.selection.contains(&Item::Curve(c)) {
+            return None;
+        }
+        self.curve_picks
+            .iter()
+            .rev()
+            .find(|(k, _)| *k == c)
+            .map(|(_, at)| *at)
     }
 
     fn click_point(
@@ -1506,6 +1542,8 @@ impl SketchSession {
     fn begin_curve_drag(&mut self, sk: &Sketch, c: CurveId, at: DVec2) {
         if !self.selection.contains(&Item::Curve(c)) {
             self.selection = vec![Item::Curve(c)];
+            self.note_curve_pick(c, at);
+            self.forget_stale_picks();
         }
         let mut start: Vec<(PointId, DVec2)> = Vec::new();
         let mut moved_items = 0;
@@ -1738,9 +1776,8 @@ impl SketchSession {
             }
             A::Collinear => K::Collinear(c[0], c[1]),
             A::Smooth => {
-                let (pa, pb) = sk
-                    .smooth_ends(c[0], c[1], None)
-                    .ok_or_else(|| crate::msg!("sketch-smooth-kinds"))?;
+                let (pa, pb) = smooth_joint(sk, c[0], self.pick_of(c[0]), c[1], self.pick_of(c[1]))
+                    .ok_or_else(|| crate::msg!("sketch-err-smooth-end"))?;
                 K::Smooth(c[0], pa, c[1], pb)
             }
             A::Fixed => {
@@ -1836,10 +1873,9 @@ impl SketchSession {
             let before = se.last_report.take();
             // Freiheitsgrade davor: Fällt einer weg, war die neue Abhängigkeit nur teilweise
             // überzählig (etwa Kollinear an zwei waagerechten Linien).
-            let dof_before = match &before {
-                Some(b) => b.dof,
-                None => prior.clone().solve().dof,
-            };
+            // Frisch gerechnet, nicht aus `last_report`: Der Bericht kann älter sein als die
+            // Skizze (etwa nach Änderungen ohne Sitzung).
+            let dof_before = prior.clone().solve().dof;
             let report = sk.solve();
             se.last_report = Some(report.clone());
             let direct = match check_change(&report, before.as_ref(), prior, Some(id)) {
@@ -2464,8 +2500,6 @@ pub fn with_checked_value(
     checked_value(sk, kind, value).map_err(|m| m.text())
 }
 
-/// Darf ein Winkelmaß den Wert `value` bekommen? Der Betrag ist höchstens 180°; ein negativer
-/// Wert nur, wenn der Winkel jetzt schon negativ gemessen wird (`measured`, im Uhrzeigersinn).
 /// Mitte eines Kreises, Bogens, einer Ellipse oder eines Ellipsenbogens (Konzentrisch).
 pub(crate) fn round_center(sk: &Sketch, c: CurveId) -> Option<PointId> {
     match sk.curve(c)?.kind {
@@ -2490,6 +2524,65 @@ fn smooth_kinds_ok(sk: &Sketch, a: CurveId, b: CurveId) -> bool {
     a != b && ((spline(kind(a)) && partner(kind(b))) || (spline(kind(b)) && partner(kind(a))))
 }
 
+/// Die beiden Enden einer Kurve, an denen Glatt ansetzen kann (Linie, Bogen, Spline,
+/// Ellipsenbogen); `None` für Kreis und Ellipse.
+fn curve_end_points(sk: &Sketch, c: CurveId) -> Option<[PointId; 2]> {
+    match &sk.curve(c)?.kind {
+        CurveKind::Line { a, b } => Some([*a, *b]),
+        CurveKind::Arc { start, end, .. } | CurveKind::EllipticArc { start, end, .. } => {
+            Some([*start, *end])
+        }
+        CurveKind::Spline { points } => Some([*points.first()?, *points.last()?]),
+        CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => None,
+    }
+}
+
+/// Die Enden, an denen Glatt `a` und `b` verbindet, wie in Fusion an der Klickstelle: Wurde eine
+/// Kurve per Klick gewählt (`at_a`, `at_b`), gilt ihr Ende, das dem Klick am nächsten liegt; ohne
+/// Klick (etwa Rahmenauswahl) das Ende, das am nächsten an einem Ende der anderen Kurve liegt
+/// (ein gemeinsames Ende zuerst). Die Weite ist nicht begrenzt: Getrennte Enden legt der Befehl
+/// mit einem `Coincident` zusammen. Die Wahl hängt nicht von der Reihenfolge der Auswahl ab
+/// (Gleichstand: das Paar mit den kleineren Punktnummern). `None`, wenn eine Kurve keine Enden hat.
+fn smooth_joint(
+    sk: &Sketch,
+    a: CurveId,
+    at_a: Option<DVec2>,
+    b: CurveId,
+    at_b: Option<DVec2>,
+) -> Option<(PointId, PointId)> {
+    if a == b {
+        return None;
+    }
+    let (ea, eb) = (curve_end_points(sk, a)?, curve_end_points(sk, b)?);
+    let xy = |p: PointId| sk.point_xy(p).ok();
+    let dist = |p: PointId, q: DVec2| xy(p).map_or(f64::INFINITY, |x| x.distance(q));
+    // Mit Klick bleibt nur das Ende nächst dem Klick.
+    let clicked = |ends: [PointId; 2], at: Option<DVec2>| -> Vec<PointId> {
+        match at {
+            Some(q) => ends
+                .into_iter()
+                .min_by(|x, y| dist(*x, q).total_cmp(&dist(*y, q)).then(x.cmp(y)))
+                .into_iter()
+                .collect(),
+            None => ends.to_vec(),
+        }
+    };
+    let (ca, cb) = (clicked(ea, at_a), clicked(eb, at_b));
+    let gap = |p: PointId, q: PointId| match (p == q, xy(q)) {
+        (true, _) => 0.0,
+        (false, Some(y)) => dist(p, y),
+        (false, None) => f64::INFINITY,
+    };
+    let key = |p: PointId, q: PointId| (p.min(q), p.max(q));
+    ca.iter()
+        .flat_map(|&p| cb.iter().map(move |&q| (p, q)))
+        .min_by(|&(p, q), &(r, t)| {
+            gap(p, q)
+                .total_cmp(&gap(r, t))
+                .then_with(|| key(p, q).cmp(&key(r, t)))
+        })
+}
+
 /// Glatt an einem Bogen: bis Teilprojekt 7 nur tangential (G1), das sagt die Meldung.
 fn smooth_on_arc(sk: &Sketch, kind: &ConstraintKind) -> bool {
     let ConstraintKind::Smooth(a, _, b, _) = *kind else {
@@ -2500,6 +2593,8 @@ fn smooth_on_arc(sk: &Sketch, kind: &ConstraintKind) -> bool {
         .any(|c| matches!(sk.curve(c).map(|d| &d.kind), Some(CurveKind::Arc { .. })))
 }
 
+/// Darf ein Winkelmaß den Wert `value` bekommen? Der Betrag ist höchstens 180°; ein negativer
+/// Wert nur, wenn der Winkel jetzt schon negativ gemessen wird (`measured`, im Uhrzeigersinn).
 fn angle_value_ok(measured: Option<f64>, value: f64) -> bool {
     value.abs() <= std::f64::consts::PI && (value >= 0.0 || measured.is_some_and(|m| m < 0.0))
 }
