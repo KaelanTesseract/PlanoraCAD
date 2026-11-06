@@ -59,11 +59,24 @@ fn field_pos(rect: Rect, anchor: Pos2, width: f32, row: usize, rows: usize) -> P
 /// [`planora_i18n::fmt_len`] ohne Einheit, Winkel mit einer Stelle, die Seitenzahl ganz.
 pub fn suggestion(se: &SketchSession, sf: &SketchFeature, kind: FieldKind) -> String {
     match se.field_value(&sf.sketch, kind) {
-        Some(v) if kind == FieldKind::Sides => format!("{v:.0}"),
         Some(v)
             if matches!(
                 kind,
-                FieldKind::Angle | FieldKind::Sweep | FieldKind::MoveAngle
+                FieldKind::Sides
+                    | FieldKind::PatternCount1
+                    | FieldKind::PatternCount2
+                    | FieldKind::PatternCount
+            ) =>
+        {
+            format!("{v:.0}")
+        }
+        Some(v)
+            if matches!(
+                kind,
+                FieldKind::Angle
+                    | FieldKind::Sweep
+                    | FieldKind::MoveAngle
+                    | FieldKind::PatternAngle
             ) =>
         {
             format_number(v.to_degrees(), 1)
@@ -235,6 +248,8 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option
     if enter && !flyout && se.runs_transform() {
         // Fehler stehen in der Meldung der Sitzung und im Feld.
         let _ = se.confirm_transform(sf);
+    } else if enter && !flyout && se.runs_pattern() {
+        let _ = se.confirm_pattern(sf);
     } else if enter && !flyout {
         // Fehler stehen in der Meldung der Sitzung und im Feld.
         let _ = se.commit_at_cursor(sf, radius, &scope);

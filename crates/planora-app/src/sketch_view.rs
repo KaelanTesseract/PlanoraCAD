@@ -4,6 +4,7 @@
 
 use crate::sketch_cursor::AutoConstraint;
 use crate::sketch_grips::{self, Grip, GripLayout};
+use crate::sketch_pattern::{self, PatternGrip, PatternGripLayout};
 use crate::sketch_state::{Item, SketchSession, Snap, Tool};
 use crate::state::AppState;
 use crate::theme::{self, lighten as lighter, sketch_colors as colors};
@@ -17,6 +18,7 @@ use planora_sketch::ExtractedProfiles;
 use planora_sketch::constraint::{ConstraintKind, LineOrPoints};
 use planora_sketch::dimension::{DimPick, DimPlan};
 use planora_sketch::model::{CurveId, CurveKind, LineStyle, PointId, Sketch};
+use planora_sketch::pattern::PatternSlot;
 use planora_sketch::solver::{SolveReport, SolveStatus};
 use std::collections::HashSet;
 use std::f64::consts::{FRAC_PI_4, TAU};
@@ -147,17 +149,21 @@ pub fn format_angle(rad: f64) -> String {
 pub fn is_angle(kind: &ConstraintKind) -> bool {
     matches!(
         kind,
-        ConstraintKind::Angle(..) | ConstraintKind::EllipseAngle(..)
+        ConstraintKind::Angle(..)
+            | ConstraintKind::EllipseAngle(..)
+            | ConstraintKind::PatternValue(_, PatternSlot::Angle, _)
     )
 }
 
-/// Gespeicherter Wert eines Maßes ([`ConstraintKind::value`]). Musterwerte zeigt erst das
-/// Musterwerkzeug (Task 9).
+/// Eine Anzahl eines Musters (ohne Einheit, ganzzahlig)?
+pub fn is_count(kind: &ConstraintKind) -> bool {
+    matches!(kind, ConstraintKind::PatternValue(_, slot, _) if slot.is_count())
+}
+
+/// Gespeicherter Wert eines Maßes ([`ConstraintKind::value`]), auch eines Musterwerts (Skizzen 5:
+/// Liste, Doppelklick und Formeln gehen denselben Weg wie bei jedem Maß).
 pub fn stored_value(kind: &ConstraintKind) -> Option<f64> {
-    match kind {
-        ConstraintKind::PatternValue(..) => None,
-        k => k.value(),
-    }
+    kind.value()
 }
 
 /// Anzuzeigender Wert eines Maßes: bei anzeigenden (`driven`) Maßen der gemessene Wert.
@@ -173,6 +179,8 @@ pub fn shown_value(sk: &Sketch, kind: &ConstraintKind, driven: bool) -> Option<f
 pub fn value_text(kind: &ConstraintKind, v: f64) -> String {
     if is_angle(kind) {
         format_angle(v)
+    } else if is_count(kind) {
+        format_number(v, 0)
     } else {
         format_length(v)
     }
@@ -209,7 +217,14 @@ pub fn kind_msg(kind: &ConstraintKind) -> crate::msg::Msg {
         K::DistanceY(..) => crate::msg!("sketch-constraint-distance-y"),
         K::CenterlineDiameter(..) => crate::msg!("sketch-constraint-centerline-diameter"),
         K::SlotOverall(..) => crate::msg!("sketch-constraint-slot-overall"),
-        K::PatternValue(..) => crate::msg!("sketch-constraint-pattern-value"),
+        K::PatternValue(_, slot, _) => match slot {
+            PatternSlot::Count1 => crate::msg!("sketch-pattern-slot-count1"),
+            PatternSlot::Spacing1 => crate::msg!("sketch-pattern-slot-spacing1"),
+            PatternSlot::Count2 => crate::msg!("sketch-pattern-slot-count2"),
+            PatternSlot::Spacing2 => crate::msg!("sketch-pattern-slot-spacing2"),
+            PatternSlot::Count => crate::msg!("sketch-pattern-slot-count"),
+            PatternSlot::Angle => crate::msg!("sketch-pattern-slot-angle"),
+        },
     }
 }
 
@@ -966,6 +981,37 @@ pub fn grip_layout(state: &AppState, rect: Rect) -> Option<GripLayout> {
     ))
 }
 
+/// Lage der Griffe der Anordnung in diesem Bild (Pfeil je Richtung am letzten Exemplar); `None`,
+/// wenn keine zu sehen sind.
+pub fn pattern_grip_layout(state: &AppState, rect: Rect) -> Option<PatternGripLayout> {
+    let (se, sk) = (state.sketch_session.as_ref()?, state.session_sketch()?);
+    let handles = se.pattern_handles(sk)?;
+    let map = mapper(rect, state)?;
+    let origin = map.to_screen(handles.origin)?;
+    let step = map.radius_at(origin).filter(|r| *r > 0.0)?;
+    let tips = handles.arrows.map(|a| {
+        let (at, out) = a?;
+        sketch_pattern::screen_arrow(|q| map.to_screen(q), at, out, step)
+    });
+    Some(sketch_pattern::pattern_layout(origin, tips, None))
+}
+
+/// Der Griff der Anordnung, den der eben erkannte Zug mit der linken Taste greift.
+fn pattern_grip_can_start(
+    ui: &egui::Ui,
+    rect: Rect,
+    state: &AppState,
+    pan_gesture: bool,
+    ctrl: bool,
+) -> Option<PatternGrip> {
+    let shift_only = ui.input(|i| i.modifiers.shift_only()) && !ctrl;
+    if (pan_gesture && !shift_only) || crate::keymap::settings_ui::is_capturing(ui.ctx()) {
+        return None;
+    }
+    let l = pattern_grip_layout(state, rect)?;
+    sketch_pattern::pattern_hit(&l, ui.input(|i| i.pointer.press_origin())?)
+}
+
 /// Der Griff, den der eben erkannte Zug mit der linken Taste greift. Wie beim Rahmen zählt nur die
 /// Lage des Drückens, und Umschalt+links greift statt zu schwenken; jede andere Schwenk-Belegung bleibt.
 fn grip_can_start(
@@ -1057,13 +1103,17 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     let starts_grip = primary_start
         .then(|| grip_can_start(ui, rect, state, pan_gesture, ctrl))
         .flatten();
+    let starts_pattern_grip = primary_start
+        .then(|| pattern_grip_can_start(ui, rect, state, pan_gesture, ctrl))
+        .flatten();
     // Ein laufender Rahmen schwenkt nicht, auch wenn Umschalt erst währenddessen dazukommt; ein
     // Zug auf dem letzten Punkt des Linienzugs ebenso. Beim Griff schwenkt die Mitte trotzdem.
     let gripping = starts_grip.is_some()
+        || starts_pattern_grip.is_some()
         || state
             .sketch_session
             .as_ref()
-            .is_some_and(|s| s.grip_drag.is_some());
+            .is_some_and(|s| s.grip_drag.is_some() || s.pattern.drag.is_some());
     let boxing = starts_box
         || state
             .sketch_session
@@ -1092,9 +1142,12 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
 
     // Ein Klick auf einen Griff schaltet beim Wählen nichts in der Auswahl.
     let click_on_grip = response.clicked_by(PointerButton::Primary)
-        && pointer
+        && (pointer
             .zip(grip_layout(state, rect))
-            .is_some_and(|(p, l)| sketch_grips::hit(&l, p).is_some());
+            .is_some_and(|(p, l)| sketch_grips::hit(&l, p).is_some())
+            || pointer
+                .zip(pattern_grip_layout(state, rect))
+                .is_some_and(|(p, l)| sketch_pattern::pattern_hit(&l, p).is_some()));
 
     // Getippte Werte werden beim Klick und bei der Eingabe zu Maßen; die Formeln darin brauchen die
     // Parameter.
@@ -1123,6 +1176,11 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         let origin = ui.input(|i| i.pointer.press_origin());
         if let Some(start) = origin.and_then(|p| map.to_sketch(p)) {
             se.begin_grip(grip, start);
+        }
+    } else if let Some(grip) = starts_pattern_grip {
+        let origin = ui.input(|i| i.pointer.press_origin());
+        if let Some(start) = origin.and_then(|p| map.to_sketch(p)) {
+            se.begin_pattern_grip(&sf.sketch, grip, start);
         }
     } else if response.drag_started_by(PointerButton::Primary) && !shift && !panning && !aborted {
         // Punkt oder Kurve ziehen (Auswahlwerkzeug), tangentialer Bogen (Linienwerkzeug)
@@ -1195,6 +1253,21 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         }
     }
 
+    // Griff der Anordnung: Der Zug führt nur den Plan; Rechtsklick nimmt ihn zurück wie oben.
+    if se.pattern.drag.is_some() {
+        if ui.input(|i| i.pointer.button_pressed(PointerButton::Secondary)) {
+            se.abort_pattern_grip();
+        } else if !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            let latest = ui.input(|i| i.pointer.latest_pos());
+            if let Some(p) = latest.and_then(|p| map.to_sketch(p)) {
+                se.pattern_grip_to(&sf.sketch, p);
+            }
+            if response.drag_stopped() || !response.dragged() {
+                se.end_pattern_grip();
+            }
+        }
+    }
+
     // Stutzen durch Ziehen: jede überfahrene Kurve wird gestutzt (ein Schritt, da der Verlauf
     // erst nach dem Loslassen fortgeschrieben wird).
     if se.tool == Tool::Trim && !panning {
@@ -1226,11 +1299,19 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         // Das Loslassen nach dem Abbruch ist kein Klick.
     } else if (response.double_clicked() || response.triple_clicked()) && !se.click_after_flyout {
         if se.tool == Tool::Select || se.transform_picking() {
-            // Wie beim einfachen Klick: Punkt vor Kurve.
+            // Wie beim einfachen Klick: Punkt vor Kurve. Ein Exemplar oder eine Vorlage eines
+            // Musters öffnet im Auswahlwerkzeug das Muster zum Bearbeiten (Skizzen 5).
             if let Some(at) = at
                 && let Snap::Curve(c) = se.snap(&sf.sketch, at, radius)
+                && !se.begin_pattern_edit_at(&mut sf.sketch, c)
             {
                 se.select_chain(&sf.sketch, c, shift);
+            }
+        } else if se.runs_pattern() {
+            // Anordnung: Der zweite schnelle Klick schaltet das nächste Exemplar wie jeder Klick
+            // (ein Doppelklick schließt nichts ab).
+            if let Some(at) = at {
+                let _ = se.click(&mut sf.sketch, at, radius, shift);
             }
         } else if !matches!(se.tool, Tool::Offset | Tool::MoveCopy | Tool::Scale) {
             // Beim Versatz hat der erste Klick schon alles getan; der zweite läge dicht an der Kurve
@@ -1280,14 +1361,20 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         if enter && !flyout && !gesture {
             let _ = match &commit_scope {
                 // Felder da, aber ohne Fokus: derselbe Weg wie die Eingabe im Feld.
-                Some(scope) if !se.runs_transform() && !se.input.fields.is_empty() => {
+                Some(scope)
+                    if !se.runs_transform()
+                        && !se.runs_pattern()
+                        && !se.input.fields.is_empty() =>
+                {
                     se.commit_at_cursor(sf, radius, scope)
                 }
                 _ if se.runs_transform() => se.confirm_transform(sf),
+                _ if se.runs_pattern() => se.confirm_pattern(sf),
                 _ => se.finish_tool(&mut sf.sketch),
             };
         }
-        if delete && !gesture {
+        // In der Anordnung gehört die Auswahl der Vorlage; Entf löscht dort nichts.
+        if delete && !gesture && !se.runs_pattern() {
             se.delete_selection(&mut sf.sketch);
         }
     }
@@ -1299,6 +1386,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     let raw = cursor_raw(se, at);
     se.update_cursor(&sf.sketch, raw, radius);
     se.update_transform_block(&sf.sketch);
+    se.update_pattern_note(&sf.sketch);
     let tool = se.tool;
 
     // Körperkante kopieren: Kante in der 3D-Szene wählen.
@@ -1391,8 +1479,13 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
             })
     };
 
-    // Kurven
+    // Kurven (beim Bearbeiten eines Musters ohne seine Exemplare: An ihrer Stelle steht die
+    // Vorschau).
+    let (hidden, hidden_points) = se.pattern_hidden(sk);
     for (c, data) in sk.curves() {
+        if hidden.contains(&c) {
+            continue;
+        }
         let Some(pl) = sk.curve_polyline(c, STEPS_PER_TURN) else {
             continue;
         };
@@ -1420,6 +1513,9 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
 
     // Punkte
     for (p, _) in sk.points() {
+        if hidden_points.contains(&p) {
+            continue;
+        }
         let Some(s) = pos(sk, p).and_then(|q| map.to_screen(q)) else {
             continue;
         };
@@ -1475,6 +1571,14 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
             .map(|d| d.grip)
             .or(pointer.and_then(|p| sketch_grips::hit(&l, p)));
         sketch_grips::paint(&painter, &l, hot, col.selected, lighter(col.selected));
+    }
+    if let Some(l) = pattern_grip_layout(state, rect) {
+        let hot = se
+            .pattern
+            .drag
+            .map(|d| d.grip)
+            .or(pointer.and_then(|p| sketch_pattern::pattern_hit(&l, p)));
+        sketch_pattern::paint_pattern_grips(&painter, &l, hot, col.selected, lighter(col.selected));
     }
 
     // Stutzen/Brechen: das Stück rot; Dehnen: der Weg zum neuen Ende rot gestrichelt.
@@ -1725,6 +1829,22 @@ fn draw_preview(
         for (style, line) in se.transform_preview_styled(sk).unwrap_or_default() {
             for path in map.paths(&line) {
                 painter.extend(style_shapes(path, stroke, style));
+            }
+        }
+        return;
+    }
+    // Anordnung: die Exemplare, die Eingabe anlegt; abgewählte gestrichelt und dünn.
+    if se.runs_pattern() {
+        for (_, suppressed, lines) in se.pattern_preview_all(sk).unwrap_or_default() {
+            let stroke = if suppressed {
+                Stroke::new(1.0, color)
+            } else {
+                Stroke::new(CURVE_WIDTH, color)
+            };
+            for line in lines {
+                for path in map.paths(&line) {
+                    draw_path(painter, path, stroke, suppressed);
+                }
             }
         }
         return;

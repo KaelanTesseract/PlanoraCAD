@@ -76,6 +76,7 @@ pub fn tool_label(tool: Tool) -> String {
         Tool::MoveCopy => tr!("action-sketch-move-copy"),
         Tool::Scale => tr!("action-sketch-scale"),
         Tool::Dimension => tr!("action-sketch-dimension"),
+        Tool::Pattern => tr!("action-sketch-pattern-rect"),
     }
 }
 
@@ -101,6 +102,7 @@ pub fn tool_hint(tool: Tool) -> String {
         Tool::MoveCopy => tr!("sketch-tool-move-copy-hint"),
         Tool::Scale => tr!("sketch-tool-scale-hint"),
         Tool::Dimension => tr!("sketch-tool-dimension-hint"),
+        Tool::Pattern => tr!("sketch-tool-pattern-hint"),
     }
 }
 
@@ -848,6 +850,9 @@ fn tool_options(ui: &mut egui::Ui, se: &mut SketchSession, sf: &mut SketchFeatur
     if se.tool == Tool::Offset {
         ui.checkbox(&mut se.offset_chain, tr!("sketch-offset-chain"));
     }
+    if se.runs_pattern() {
+        pattern_options(ui, se, sf);
+    }
     if se.runs_transform() {
         if se.tool == Tool::Scale {
             // Der Maßstab kopiert nicht; er sagt, was Eingabe jetzt tut.
@@ -881,6 +886,92 @@ fn tool_options(ui: &mut egui::Ui, se: &mut SketchSession, sf: &mut SketchFeatur
             }
         });
     }
+}
+
+/// Einstellungen der Anordnung (Skizzen 5): je Richtung Art (Achse oder Linie, „Linie wählen“),
+/// „Gesamtlänge“ und „Symmetrisch“; beim Kreismuster „Voll“, „Winkel“, „Symmetrisch“; OK und
+/// Abbrechen.
+fn pattern_options(ui: &mut egui::Ui, se: &mut SketchSession, sf: &mut SketchFeature) {
+    use planora_sketch::pattern::{CircularMode, PatternDir, PatternKind};
+    let active = se.pattern.stage == TransformStage::Active;
+    if let Some(kind) = se.pattern.plan.as_ref().map(|p| p.kind).filter(|_| active) {
+        match kind {
+            PatternKind::Rect {
+                dirs,
+                mut extent,
+                mut symmetric,
+            } => {
+                let mut pick = None;
+                for k in 0..2 {
+                    let name = match dirs[k] {
+                        PatternDir::SketchX => tr!("sketch-pattern-axis-x"),
+                        PatternDir::SketchY => tr!("sketch-pattern-axis-y"),
+                        PatternDir::Line(_) => tr!("sketch-pattern-line"),
+                    };
+                    let n = (k + 1).to_string();
+                    ui.label(format!(
+                        "{}: {name}",
+                        tr!("sketch-pattern-direction-n", n = n)
+                    ));
+                    ui.horizontal_wrapped(|ui| {
+                        let picking =
+                            se.pattern.picking_direction && se.pattern.direction_slot == k;
+                        if ui
+                            .selectable_label(picking, tr!("sketch-pattern-pick-line"))
+                            .on_hover_text(tr!("sketch-pattern-pick-line-hint"))
+                            .clicked()
+                        {
+                            pick = Some(k);
+                        }
+                        ui.checkbox(&mut extent[k], tr!("sketch-pattern-extent"))
+                            .on_hover_text(tr!("sketch-pattern-extent-hint"));
+                        ui.checkbox(&mut symmetric[k], tr!("sketch-pattern-symmetric"))
+                            .on_hover_text(tr!("sketch-pattern-symmetric-hint"));
+                    });
+                }
+                if let Some(plan) = se.pattern.plan.as_mut() {
+                    plan.kind = PatternKind::Rect {
+                        dirs,
+                        extent,
+                        symmetric,
+                    };
+                }
+                if let Some(k) = pick {
+                    se.pick_pattern_direction(k);
+                }
+            }
+            PatternKind::Circular { center, mode } => {
+                let mut m = mode;
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut m, CircularMode::Full, tr!("sketch-pattern-full"));
+                    ui.radio_value(
+                        &mut m,
+                        CircularMode::Angle,
+                        tr!("sketch-pattern-angle-mode"),
+                    );
+                    ui.radio_value(
+                        &mut m,
+                        CircularMode::Symmetric,
+                        tr!("sketch-pattern-symmetric"),
+                    );
+                });
+                if m != mode
+                    && let Some(plan) = se.pattern.plan.as_mut()
+                {
+                    plan.kind = PatternKind::Circular { center, mode: m };
+                }
+            }
+        }
+    }
+    ui.horizontal(|ui| {
+        if ui.button(tr!("common-ok")).clicked() {
+            // Fehler stehen in der Meldung der Sitzung.
+            let _ = se.confirm_pattern(sf);
+        }
+        if ui.button(tr!("common-cancel")).clicked() {
+            se.cancel(&mut sf.sketch);
+        }
+    });
 }
 
 /// Inhalt des Skizzenfelds: Name, Abhängigkeiten mit Maßeingabe, Bearbeiten, Liste.
@@ -1151,7 +1242,10 @@ fn tool_button(
 /// Vorgabetext des Zahlenfelds (Winkel in Grad, eine Nachkommastelle; Längen in mm mit zwei
 /// Nachkommastellen, in einer anderen Anzeigeeinheit umgerechnet wie die Formelfelder).
 fn editor_text(value: f64, unit: ParamUnit) -> String {
-    if unit == ParamUnit::Angle {
+    if unit == ParamUnit::Number {
+        // Die Anzahl eines Musters: ganzzahlig, ohne Einheit.
+        format_number(value, 0)
+    } else if unit == ParamUnit::Angle {
         format_number(value.to_degrees(), 1)
     } else if current_unit() == DisplayUnit::Millimeter {
         format_number(value, 2)
@@ -1495,8 +1589,13 @@ fn constraint_list(
                     let mut d = driven;
                     let mut flip = false;
                     let toggles = crate::sketch_dimension::toggles(&sf.sketch, &kind);
+                    // Ein Musterwert lässt sich nicht anzeigend schalten (Entscheidung 3).
+                    let pattern_value = matches!(kind, ConstraintKind::PatternValue(..));
                     let changed = ui
                         .horizontal(|ui| {
+                            if pattern_value {
+                                return false;
+                            }
                             let r = ui
                                 .checkbox(&mut d, tr!("sketch-driven"))
                                 .on_hover_text(tr!("sketch-driven-hint"));

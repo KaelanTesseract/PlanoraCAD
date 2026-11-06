@@ -329,8 +329,9 @@ impl SketchSession {
             }
             return cur;
         }
-        // Bemaßen: Der Zeiger zeigt nur, was der Klick wählte; die Art wählt die Rohlage.
-        if self.tool == Tool::Dimension {
+        // Bemaßen und Muster: Der Zeiger zeigt nur, was der Klick wählte; die Art wählt die
+        // Rohlage, das Muster rechnet ohne Fang.
+        if matches!(self.tool, Tool::Dimension | Tool::Pattern) {
             cur.snap = self.snap(sk, raw, radius);
             return cur;
         }

@@ -62,6 +62,9 @@ pub enum Tool {
     /// Fusion „Skizzenbemaßung“ (Skizzen 5): Objekte wählen, der Zeiger wählt die Art, ein Klick
     /// setzt das Maß und öffnet sein Feld ([`crate::sketch_dimension`]).
     Dimension,
+    /// Fusion „Rechteckige Anordnung“ und „Kreisförmige Anordnung“ (Skizzen 5); die Art steht in
+    /// [`SketchSession::kinds`], der Ablauf in [`crate::sketch_pattern`].
+    Pattern,
 }
 
 impl Tool {
@@ -465,6 +468,8 @@ pub struct SketchSession {
     pub grip_drag: Option<GripDrag>,
     /// Skizzenbemaßung.
     pub dim: DimToolState,
+    /// Rechteckige und Kreisförmige Anordnung.
+    pub pattern: crate::sketch_pattern::PatternToolState,
 }
 
 /// Was vor einer Änderung gesichert wird, um sie bei einem Fehler zurückzunehmen.
@@ -489,6 +494,7 @@ struct Backup {
     transform: TransformState,
     grip_drag: Option<GripDrag>,
     dim: DimToolState,
+    pattern: crate::sketch_pattern::PatternToolState,
 }
 
 /// Klicklagen der Kurven, die das Auswählen per Klick gewählt hat, und die Auswahl gleich nach
@@ -580,6 +586,7 @@ impl SketchSession {
             transform: TransformState::default(),
             grip_drag: None,
             dim: DimToolState::default(),
+            pattern: Default::default(),
         }
     }
 
@@ -591,11 +598,13 @@ impl SketchSession {
         self.trim_drag = None;
         self.hover_preview = None;
         self.fillet_run = None;
-        if self.transform.blocked_note {
+        if self.transform.blocked_note || self.pattern.blocked_note {
             self.message = None;
         }
         self.transform = TransformState::default();
         self.grip_drag = None;
+        // Muster: Plan, Abwahl und Griff gehören zum Werkzeug, nichts bleibt.
+        self.pattern = Default::default();
         self.tool = tool;
         // Ein Werkzeugwechsel beendet die Klick-Auswahl.
         self.drop_curve_picks();
@@ -617,6 +626,11 @@ impl SketchSession {
         if self.runs_transform() {
             self.transform.selection_before = self.selection.clone();
             self.begin_transform(sk);
+        }
+        // Muster: Eine Vorauswahl mit Kurven ist schon die Vorlage.
+        if tool == Tool::Pattern {
+            self.pattern.selection_before = self.selection.clone();
+            self.begin_pattern(sk);
         }
     }
 
@@ -663,6 +677,7 @@ impl SketchSession {
         self.fillet_run = None;
         self.transform = TransformState::default();
         self.grip_drag = None;
+        self.pattern.reset_after_jump();
         self.edit_label = None;
         self.message = None;
         self.last_report = Some(sk.clone().solve());
@@ -706,6 +721,7 @@ impl SketchSession {
             transform: self.transform.clone(),
             grip_drag: self.grip_drag,
             dim: self.dim.clone(),
+            pattern: self.pattern.clone(),
         }
     }
 
@@ -730,6 +746,7 @@ impl SketchSession {
         self.transform = b.transform;
         self.grip_drag = b.grip_drag;
         self.dim = b.dim;
+        self.pattern = b.pattern;
     }
 
     /// Führt `f` atomar aus: Bei einem Fehler wird alles zurückgesetzt und die Meldung in
@@ -742,7 +759,15 @@ impl SketchSession {
         self.message = None;
         let b = self.backup(sk);
         match f(self, sk, &b.sketch) {
-            Ok(v) => Ok(v),
+            Ok(v) => {
+                // Hat der Befehl Muster aufgelöst (Löschen einer Vorlage, Stutzen, Rundung …, auch
+                // in Folge), sagt die Meldung es (Entscheidung 6 des Plans Skizzen 5).
+                let dissolved = b.sketch.pattern_count().saturating_sub(sk.pattern_count());
+                if dissolved > 0 {
+                    self.add_note(crate::msg!("sketch-pattern-dissolved", n = dissolved));
+                }
+                Ok(v)
+            }
             Err(e) => {
                 self.restore(sk, b);
                 let text = e.text();
@@ -750,6 +775,18 @@ impl SketchSession {
                 Err(text)
             }
         }
+    }
+
+    /// Hängt `note` an die Meldung an (oder setzt sie, wenn keine ansteht).
+    pub(crate) fn add_note(&mut self, note: Msg) {
+        self.message = Some(match self.message.take() {
+            None => note,
+            Some(Msg::Join(mut all)) => {
+                all.push(note);
+                Msg::Join(all)
+            }
+            Some(m) => Msg::Join(vec![m, note]),
+        });
     }
 
     /// Löst die Skizze und merkt sich den Bericht. Macht die Änderung die Skizze widersprüchlich
@@ -831,6 +868,10 @@ impl SketchSession {
                 Tool::Fillet => Ok(()),
                 Tool::Dimension => {
                     se.click_dimension(sk, at, radius);
+                    Ok(())
+                }
+                Tool::Pattern => {
+                    se.click_pattern(sk, &cur);
                     Ok(())
                 }
             }
@@ -1416,6 +1457,15 @@ impl SketchSession {
             }
             return Ok(());
         }
+        // Muster: Beim Wählen geht es weiter zu Feldern und Griffen; den Abschluss macht
+        // `finish_pattern`, er braucht auch die Formeln.
+        if self.tool == Tool::Pattern {
+            self.message = None;
+            if self.pattern.stage == TransformStage::Picking {
+                self.leave_pattern_picking(sk);
+            }
+            return Ok(());
+        }
         // Versatz: Eingabe schließt ab wie ein Klick.
         if self.tool == Tool::Offset && !self.pending_curves.is_empty() {
             let raw = self.draw_cursor.as_ref().map(|c| c.raw).or(self.cursor);
@@ -1451,7 +1501,19 @@ impl SketchSession {
             self.abort_grip();
             return;
         }
+        if self.pattern.drag.is_some() {
+            self.abort_pattern_grip();
+            return;
+        }
         if self.box_select.take().is_some() || self.line_arc.take().is_some() {
+            return;
+        }
+        // Muster: Esc und Rechtsklick lassen nichts zurück, auch keine Auswahl.
+        if self.tool == Tool::Pattern {
+            self.selection = std::mem::take(&mut self.pattern.selection_before);
+            self.drop_curve_picks();
+            self.set_tool(sk, Tool::Select);
+            self.forget_removed(sk);
             return;
         }
         self.end_drag(sk);
@@ -2033,7 +2095,11 @@ impl SketchSession {
                 return Err(crate::msg!("sketch-angle-range"));
             }
             let old = sk.measure(&kind);
+            let users = sk.constraints().count();
             sk.set_constraint_value(id, value).map_err(err)?;
+            // Eine kleinere Anzahl eines Musters nimmt die Abhängigkeiten der wegfallenden
+            // Exemplare mit; die Meldung nennt ihre Zahl (Skizzen 5).
+            let dropped = users.saturating_sub(sk.constraints().count());
             // Der Stand vor dem Neulegen: Davon gehen Wächter und Schritte aus.
             let unsolved = sk.clone();
             sk.prepare_dimension_change(id, value);
@@ -2074,6 +2140,9 @@ impl SketchSession {
                 } else {
                     crate::msg!("sketch-change-conflict")
                 });
+            }
+            if dropped > 0 {
+                se.add_note(crate::msg!("sketch-pattern-dropped", n = dropped));
             }
             Ok(())
         })
@@ -2304,10 +2373,30 @@ impl SketchSession {
         self.message = None;
         let mut orphans: Vec<PointId> = Vec::new();
         self.drop_curve_picks();
+        let patterns = sk.pattern_count();
+        // Abhängigkeiten, die mit abgewählten Exemplaren entfallen.
+        let mut dropped = 0;
         for item in std::mem::take(&mut self.selection) {
+            // Ein Exemplar eines Musters wird abgewählt, das Muster bleibt (Entscheidung 6 des
+            // Plans Skizzen 5); seine anderen Kurven und Punkte sind danach fort.
+            if let Some((id, at)) = crate::sketch_pattern::instance_of_item(sk, item) {
+                let users = sk.constraints().count();
+                match sk.suppress_instance(id, at, true) {
+                    Ok(()) => dropped += users.saturating_sub(sk.constraints().count()),
+                    Err(e) => self.message = Some(err(e)),
+                }
+                continue;
+            }
             match item {
                 Item::Constraint(c) => {
-                    let _ = sk.remove_constraint(c);
+                    if let Err(e) = sk.remove_constraint(c)
+                        && matches!(
+                            sk.constraint(c).map(|d| &d.kind),
+                            Some(ConstraintKind::PatternValue(..))
+                        )
+                    {
+                        self.message = Some(err(e));
+                    }
                 }
                 Item::Curve(c) => {
                     if let Some(d) = sk.curve(c) {
@@ -2338,6 +2427,13 @@ impl SketchSession {
         }
         self.curve_drag = None;
         self.last_report = Some(sk.solve());
+        if dropped > 0 {
+            self.add_note(crate::msg!("sketch-pattern-instance-dropped", n = dropped));
+        }
+        let dissolved = patterns.saturating_sub(sk.pattern_count());
+        if dissolved > 0 {
+            self.add_note(crate::msg!("sketch-pattern-dissolved", n = dissolved));
+        }
     }
 
     /// Lässt sich „Konstruktion umschalten“ anwenden (mindestens eine Kurve ausgewählt)? Gilt

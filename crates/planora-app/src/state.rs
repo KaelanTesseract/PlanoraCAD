@@ -681,6 +681,7 @@ impl AppState {
     /// fortsetzen, Körper ableiten, Ansicht einpassen.
     pub fn from_snapshot(snapshot: planora_feature::Snapshot) -> Result<AppState, String> {
         let mut s = AppState::new();
+        let dissolved = snapshot.dissolved_patterns;
         s.document =
             Document::from_snapshot(snapshot, s.chord_tolerance).map_err(|e| e.to_string())?;
         s.rebuild_name_counters();
@@ -688,6 +689,10 @@ impl AppState {
         s.frame_all();
         // Die frische Kamera kennt das freie Rechteck noch nicht.
         s.fit_pending = true;
+        // Skizzen 5: Muster in einer Schleife hat das Laden aufgelöst; die Meldung sagt es.
+        if dissolved > 0 {
+            s.message = Some(tr!("state-patterns-dissolved-on-load", n = dissolved));
+        }
         Ok(s)
     }
 

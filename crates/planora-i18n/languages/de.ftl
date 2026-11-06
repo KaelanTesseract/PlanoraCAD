@@ -113,6 +113,8 @@ action-sketch-concentric = Konzentrisch
 action-sketch-collinear = Kollinear
 action-sketch-smooth = Glatt
 action-sketch-dimension = Skizzenbemaßung
+action-sketch-pattern-rect = Rechteckige Anordnung
+action-sketch-pattern-circular = Kreisförmige Anordnung
 action-sketch-show-shortcuts = Tastenkürzel in der Skizze anzeigen
 action-drawing-dimension = Maß
 action-drawing-balloon = Position
@@ -490,6 +492,9 @@ undo-break = Brechen
 undo-offset = Versatz
 undo-move-copy = Verschieben/Kopieren
 undo-scale = Skizzenmaßstab
+undo-pattern-rect = Rechteckige Anordnung
+undo-pattern-circular = Kreisförmige Anordnung
+undo-pattern-edit = Muster bearbeiten
 
 ## Projekte-Fenster
 projects-title = Projekte
@@ -998,6 +1003,12 @@ sketch-constraint-distance-y = Senkrechter Abstand
 sketch-constraint-centerline-diameter = Durchmesser zur Mittellinie
 sketch-constraint-slot-overall = Gesamtlänge Langloch
 sketch-constraint-pattern-value = Musterwert
+sketch-pattern-slot-count1 = Anzahl 1
+sketch-pattern-slot-spacing1 = Abstand 1
+sketch-pattern-slot-count2 = Anzahl 2
+sketch-pattern-slot-spacing2 = Abstand 2
+sketch-pattern-slot-count = Anzahl
+sketch-pattern-slot-angle = Gesamtwinkel
 sketch-overlay-midpoint = Mitte
 sketch-overlay-symmetric = Sym
 sketch-overlay-on-curve = auf
@@ -1038,6 +1049,7 @@ sketch-field-move-x = Verschiebung X
 sketch-field-move-y = Verschiebung Y
 sketch-field-move-angle = Drehung
 sketch-field-scale-factor = Faktor
+sketch-field-pattern-spacing = Der Abstand darf nicht null sein
 sketch-field-offset-nonzero = Der Versatz darf nicht null sein
 sketch-field-factor-positive = Der Faktor muss größer als null sein
 sketch-field-sweep-range = Der Öffnungswinkel muss größer als 0° und kleiner als 360° sein
@@ -1100,6 +1112,7 @@ sketch-tool-offset-hint = Kurve oder Kette anklicken, dann den Abstand; Esc been
 sketch-tool-move-copy-hint = Kurven wählen, Bezugspunkt setzen, dann verschieben, drehen oder kopieren. Esc beendet.
 sketch-tool-scale-hint = Kurven wählen, Bezugspunkt setzen, dann den Faktor eingeben. Esc beendet.
 sketch-tool-dimension-hint = Ein oder zwei Objekte wählen; der Zeiger wählt die Art (waagerecht, senkrecht, ausgerichtet). Klick setzt das Maß, Tab schaltet Ø/R um.
+sketch-tool-pattern-hint = Kurven wählen, Eingabe; dann Anzahl und Abstand je Richtung. Klick auf ein Exemplar wählt es ab oder wieder an. Eingabe legt an, Esc bricht ab.
 sketch-dimension-none = Für diese Auswahl gibt es kein Maß
 sketch-kind-rect-2p-hint = Zwei gegenüberliegende Ecken anklicken.
 sketch-kind-rect-3p-hint = Zwei Punkte der ersten Kante, dann die Tiefe anklicken.
@@ -1124,6 +1137,10 @@ sketch-kind-fillet-hint = Zwei Kurven anklicken, dann den Radius.
 sketch-kind-chamfer-equal-hint = Zwei Linien anklicken, dann den Abstand.
 sketch-kind-chamfer-distance-angle-hint = Zwei Linien anklicken, dann Abstand und Winkel.
 sketch-kind-chamfer-two-distances-hint = Zwei Linien anklicken, dann beide Abstände.
+sketch-kind-pattern-rect-hint = Kurven wählen, Eingabe; dann Anzahl und Abstand je Richtung. Klick auf ein Exemplar wählt es ab oder wieder an. Eingabe legt an, Esc bricht ab.
+sketch-kind-pattern-circular-hint = Kurven wählen, Eingabe, dann einen Punkt als Mitte anklicken; dann die Anzahl. Eingabe legt an, Esc bricht ab.
+sketch-pattern-pick-direction-hint = Eine Linie für die Richtung anklicken.
+sketch-pattern-pick-center-hint = Einen Punkt als Mitte anklicken.
 sketch-slot-too-wide = Diese Breite passt nicht: Das Langloch wäre zu breit oder hätte gar keine Breite
 sketch-angle-range = Der Betrag eines Winkelmaßes darf höchstens 180° sein, und ein negativer Wert ist nur bei einem schon negativ gemessenen Winkel erlaubt; das Maß wurde nicht geändert
 sketch-dimension-folds = Mit diesem Wert klappt die Form um; das Maß wurde nicht geändert
@@ -1156,6 +1173,18 @@ sketch-scale-hint = Enter nimmt die ganze Skizze
 sketch-scale-base = Bezugspunkt anklicken oder mit Enter in der Mitte bleiben
 sketch-scale-formulas-replaced = Formeln durch ihren Wert ersetzt: { $n }. Sie waren nach dem Skalieren zu lang.
 sketch-move-dropped = Abhängigkeiten entfallen: { $n }.
+sketch-pattern-direction-n = Richtung { $n }
+sketch-pattern-axis-x = x-Achse
+sketch-pattern-axis-y = y-Achse
+sketch-pattern-line = Linie
+sketch-pattern-pick-line = Linie wählen
+sketch-pattern-pick-line-hint = Die Richtung folgt der Linie, die Sie danach anklicken
+sketch-pattern-extent = Gesamtlänge
+sketch-pattern-extent-hint = Der Abstand gilt für das ganze Muster statt von Exemplar zu Exemplar
+sketch-pattern-symmetric = Symmetrisch
+sketch-pattern-symmetric-hint = Exemplare zu beiden Seiten der Vorlage; die Anzahl zählt je Seite
+sketch-pattern-full = Voll
+sketch-pattern-angle-mode = Winkel
 sketch-move-split = Getrennte Ecken: { $n }. Die anderen Kurven bleiben stehen, ein Profil kann dort offen sein.
 sketch-move-fixed = Das geht nicht: Etwas in der Auswahl ist festgehalten oder an festgehaltene Geometrie gebunden
 sketch-move-nothing = Nichts zu tun: Die Auswahl bleibt, wo sie ist
@@ -1742,6 +1771,18 @@ sketch-pattern-count-range = Die Anzahl muss eine ganze Zahl von 1 bis { $max } 
 sketch-pattern-angle-range = Der Winkel des Musters muss zwischen 0° und 360° liegen und darf nicht 0° sein
 sketch-pattern-value-keep = Werte eines Musters bleiben, solange das Muster besteht
 sketch-pattern-no-instance = An dieser Stelle hat das Muster kein Exemplar
+sketch-pattern-dissolved = { $n ->
+    [one] Ein Muster wurde aufgelöst; seine Exemplare bleiben als lose Geometrie.
+   *[other] { $n } Muster wurden aufgelöst; ihre Exemplare bleiben als lose Geometrie.
+}
+sketch-pattern-dropped = Mit den weggefallenen Exemplaren entfallen Abhängigkeiten: { $n }.
+sketch-pattern-instance-dropped = Abhängigkeiten am Muster-Exemplar entfallen: { $n }.
+sketch-pattern-direction-line = Für die Richtung bitte eine Linie anklicken
+sketch-pattern-center-point = Für die Mitte bitte einen Punkt anklicken
+state-patterns-dissolved-on-load = { $n ->
+    [one] Beim Öffnen wurde ein Muster aufgelöst, weil es seine Vorlage mit einem eigenen Exemplar verband. Die Geometrie bleibt.
+   *[other] Beim Öffnen wurden { $n } Muster aufgelöst, weil sie ihre Vorlage mit einem eigenen Exemplar verbanden. Die Geometrie bleibt.
+}
 
 ## Fehlermeldungen der Mathematik
 math-subcurve-range = der Teilbereich ({ $u0 }, { $u1 }) liegt nicht in der Kurve ({ $a }, { $b }) oder ist leer

@@ -323,8 +323,9 @@ impl SketchSession {
 
     /// Wird gerade gewählt? Dann gilt der Rahmen wie im Auswahlwerkzeug.
     pub fn transform_picking(&self) -> bool {
-        matches!(self.tool, Tool::MoveCopy | Tool::Scale)
-            && self.transform.stage == TransformStage::Picking
+        (matches!(self.tool, Tool::MoveCopy | Tool::Scale)
+            && self.transform.stage == TransformStage::Picking)
+            || self.pattern_picking()
     }
 
     /// Sind Griffe zu sehen? Sobald eine Menge gesetzt ist, auch beim Wählen; beim Setzen des
@@ -341,7 +342,7 @@ impl SketchSession {
 
     /// Läuft ein Zug mit der Maus, der mit dem Abschluss und dem Löschen nichts zu tun hat?
     pub fn in_gesture(&self) -> bool {
-        self.grip_drag.is_some() || self.box_select.is_some()
+        self.grip_drag.is_some() || self.box_select.is_some() || self.pattern.drag.is_some()
     }
 
     /// Die Kurven und Punkte der Auswahl als Menge.

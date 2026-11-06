@@ -155,6 +155,10 @@ action_table! {
     /// Fusion „Skizzenbemaßung“ (D, Skizzen 5). Das D der Zeichnung gilt in einem anderen
     /// Bereich, die beiden stoßen sich nicht.
     SketchDimension, "skizze.bemassen", "action-sketch-dimension", Sketch, [key(Key::D)];
+    /// Fusion „Rechteckige Anordnung“ (Skizzen 5): ohne Vorgabetaste wie in Fusion, belegbar.
+    SketchPatternRect, "skizze.muster_rechteck", "action-sketch-pattern-rect", Sketch, [];
+    /// Fusion „Kreisförmige Anordnung“ (Skizzen 5): ohne Vorgabetaste wie in Fusion, belegbar.
+    SketchPatternCircular, "skizze.muster_kreis", "action-sketch-pattern-circular", Sketch, [];
     /// Fusion „Blick auf“ (Look At): wie der Knopf in der Skizzenpalette; ohne Vorgabetaste.
     SketchLookAt, "skizze.blick_auf", "action-sketch-look-at", Sketch, [];
     /// Schalter „Skizzenraster“ der Skizzenpalette; ohne Vorgabetaste.

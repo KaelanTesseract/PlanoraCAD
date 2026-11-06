@@ -726,7 +726,9 @@ fn sketch_to(s: &Sketch) -> SketchDto {
     }
 }
 
-fn sketch_from(origin: &str, feature: &str, d: &SketchDto) -> Result<Sketch> {
+/// Liest eine Skizze; dazu die Zahl der Muster, die beim Laden aufgelöst wurden, weil sie in einer
+/// Schleife lagen (`Sketch::from_data_counted`, Skizzen 5).
+fn sketch_from(origin: &str, feature: &str, d: &SketchDto) -> Result<(Sketch, usize)> {
     let ctx =
         |m: String| ProjectError::corrupt(origin, tr!("proj-ctx-sketch", name = feature, msg = m));
     check_len(origin, &|| tr!("proj-l-values"), d.werte.len())?;
@@ -801,7 +803,7 @@ fn sketch_from(origin: &str, feature: &str, d: &SketchDto) -> Result<Sketch> {
             .collect(),
         patterns: patterns_from(origin, feature, d)?,
     };
-    Sketch::from_data(data).map_err(|e| ctx(e.to_string()))
+    Sketch::from_data_counted(data).map_err(|e| ctx(e.to_string()))
 }
 
 // ---- Feature-Arten ----------------------------------------------------------------------
@@ -1186,13 +1188,15 @@ fn art_from(origin: &str, name: &str, d: &BlendArtDto) -> Result<BlendArt> {
     })
 }
 
-fn kind_from(origin: &str, name: &str, d: &KindDto) -> Result<FeatureKind> {
+/// Liest die Art eines Features; `dissolved` zählt die beim Laden aufgelösten Muster mit.
+fn kind_from(origin: &str, name: &str, d: &KindDto, dissolved: &mut usize) -> Result<FeatureKind> {
     let n = |label: Label, x: f64| num(origin, &|| field_label(name, label()), x);
     let v = |label: Label, x: V3| dv3(origin, &|| field_label(name, label()), x);
     Ok(match d {
         KindDto::Skizze(s) => {
             check_len(origin, &|| tr!("proj-l-edge-copies"), s.kopien.len())?;
-            let sketch = sketch_from(origin, name, &s.skizze)?;
+            let (sketch, n) = sketch_from(origin, name, &s.skizze)?;
+            *dissolved += n;
             let formulas = sketch_formulas_from(origin, name, s, &sketch)?;
             FeatureKind::Sketch(SketchFeature {
                 sketch,
@@ -2744,8 +2748,9 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
     }
     check_len(origin, &|| tr!("proj-l-features"), file.features.len())?;
     let mut features = Vec::with_capacity(file.features.len());
+    let mut dissolved_patterns = 0;
     for f in &file.features {
-        let kind = kind_from(origin, &f.name, &f.art)?;
+        let kind = kind_from(origin, &f.name, &f.art, &mut dissolved_patterns)?;
         let formulas = feature_formulas_from(origin, f, &kind)?;
         features.push(SnapshotFeature {
             id: FeatureId(f.id),
@@ -2769,6 +2774,7 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
         parameters,
         next_param,
         rollbacks,
+        dissolved_patterns,
     })
 }
 

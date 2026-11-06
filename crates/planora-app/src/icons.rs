@@ -1315,6 +1315,8 @@ pub fn sketch_tool_icon(tool: crate::sketch_state::Tool) -> IconSource {
         T::MoveCopy => IconSource::Hand(HandIcon::MoveCopy),
         T::Scale => IconSource::Hand(HandIcon::Scale),
         T::Dimension => IconSource::Font(Icon::DimensionTool),
+        // Vorläufig das Symbol „Muster …“; eigene Symbole je Art kommen mit der Leiste (Task 12).
+        T::Pattern => IconSource::Font(Icon::Pattern),
     }
 }
 

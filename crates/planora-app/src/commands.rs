@@ -212,7 +212,9 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
         | Action::SketchFillet
         | Action::SketchChamferEqual
         | Action::SketchChamferDistanceAngle
-        | Action::SketchChamferTwoDistances => {
+        | Action::SketchChamferTwoDistances
+        | Action::SketchPatternRect
+        | Action::SketchPatternCircular => {
             if let Some(kind) = a.sketch_kind()
                 && let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut()
             {

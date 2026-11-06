@@ -113,6 +113,8 @@ action-sketch-concentric = Concentric
 action-sketch-collinear = Collinear
 action-sketch-smooth = Smooth
 action-sketch-dimension = Sketch Dimension
+action-sketch-pattern-rect = Rectangular Pattern
+action-sketch-pattern-circular = Circular Pattern
 action-sketch-show-shortcuts = Show keyboard shortcuts in sketch
 action-drawing-dimension = Dimension
 action-drawing-balloon = Balloon
@@ -498,6 +500,9 @@ undo-break = Break
 undo-offset = Offset
 undo-move-copy = Move/Copy
 undo-scale = Sketch scale
+undo-pattern-rect = Rectangular pattern
+undo-pattern-circular = Circular pattern
+undo-pattern-edit = Edit pattern
 
 ## Projects window
 projects-title = Projects
@@ -1015,6 +1020,12 @@ sketch-constraint-distance-y = Vertical distance
 sketch-constraint-centerline-diameter = Diameter to centerline
 sketch-constraint-slot-overall = Slot overall length
 sketch-constraint-pattern-value = Pattern value
+sketch-pattern-slot-count1 = Quantity 1
+sketch-pattern-slot-spacing1 = Distance 1
+sketch-pattern-slot-count2 = Quantity 2
+sketch-pattern-slot-spacing2 = Distance 2
+sketch-pattern-slot-count = Quantity
+sketch-pattern-slot-angle = Total angle
 sketch-overlay-midpoint = Mid
 sketch-overlay-symmetric = Sym
 sketch-overlay-on-curve = on
@@ -1055,6 +1066,7 @@ sketch-field-move-x = Move X
 sketch-field-move-y = Move Y
 sketch-field-move-angle = Rotation
 sketch-field-scale-factor = Factor
+sketch-field-pattern-spacing = The distance must not be zero
 sketch-field-offset-nonzero = The offset must not be zero
 sketch-field-factor-positive = The factor must be greater than zero
 sketch-field-sweep-range = The sweep angle must be greater than 0° and less than 360°
@@ -1117,6 +1129,7 @@ sketch-tool-offset-hint = Click a curve or chain, then the distance. Esc ends.
 sketch-tool-move-copy-hint = Choose curves, set a base point, then move, rotate or copy. Esc ends.
 sketch-tool-scale-hint = Choose curves, set a base point, then enter the factor. Esc ends.
 sketch-tool-dimension-hint = Choose one or two objects; the pointer picks the type (horizontal, vertical, aligned). Click places the dimension, Tab toggles Ø/R.
+sketch-tool-pattern-hint = Choose curves, Enter; then quantity and distance per direction. Clicking an instance suppresses or restores it. Enter creates, Esc cancels.
 sketch-dimension-none = There is no dimension for this selection
 sketch-kind-rect-2p-hint = Click two opposite corners.
 sketch-kind-rect-3p-hint = Click two points of the first edge, then the depth.
@@ -1141,6 +1154,10 @@ sketch-kind-fillet-hint = Click two curves, then the radius.
 sketch-kind-chamfer-equal-hint = Click two lines, then the distance.
 sketch-kind-chamfer-distance-angle-hint = Click two lines, then distance and angle.
 sketch-kind-chamfer-two-distances-hint = Click two lines, then both distances.
+sketch-kind-pattern-rect-hint = Choose curves, Enter; then quantity and distance per direction. Clicking an instance suppresses or restores it. Enter creates, Esc cancels.
+sketch-kind-pattern-circular-hint = Choose curves, Enter, then click a point as the center; then the quantity. Enter creates, Esc cancels.
+sketch-pattern-pick-direction-hint = Click a line for the direction.
+sketch-pattern-pick-center-hint = Click a point as the center.
 sketch-slot-too-wide = This width does not fit: the slot would be too wide or have no width at all
 sketch-angle-range = The amount of an angle dimension must not exceed 180°, and a negative value is only allowed for an angle that already measures negative; the dimension was not changed
 sketch-dimension-folds = This value would fold the shape over; the dimension was not changed
@@ -1173,6 +1190,18 @@ sketch-scale-hint = Enter takes the whole sketch
 sketch-scale-base = Click the base point or press Enter to keep the middle
 sketch-scale-formulas-replaced = Formulas replaced by their value: { $n }. They would have become too long after scaling.
 sketch-move-dropped = Constraints removed: { $n }.
+sketch-pattern-direction-n = Direction { $n }
+sketch-pattern-axis-x = X axis
+sketch-pattern-axis-y = Y axis
+sketch-pattern-line = Line
+sketch-pattern-pick-line = Select line
+sketch-pattern-pick-line-hint = The direction follows the line you click next
+sketch-pattern-extent = Extent
+sketch-pattern-extent-hint = The distance spans the whole pattern instead of instance to instance
+sketch-pattern-symmetric = Symmetric
+sketch-pattern-symmetric-hint = Instances on both sides of the original; the quantity counts per side
+sketch-pattern-full = Full
+sketch-pattern-angle-mode = Angle
 sketch-move-split = Corners split: { $n }. The other curves stay where they are, so a profile may be open there.
 sketch-move-fixed = Not possible: something in the selection is fixed or bound to fixed geometry
 sketch-move-nothing = Nothing to do: the selection stays where it is
@@ -1759,6 +1788,18 @@ sketch-pattern-count-range = The quantity must be a whole number from 1 to { $ma
 sketch-pattern-angle-range = The pattern angle must be between 0° and 360° and cannot be 0°
 sketch-pattern-value-keep = The values of a pattern stay as long as the pattern exists
 sketch-pattern-no-instance = The pattern has no instance at this position
+sketch-pattern-dissolved = { $n ->
+    [one] A pattern was dissolved; its instances stay as loose geometry.
+   *[other] { $n } patterns were dissolved; their instances stay as loose geometry.
+}
+sketch-pattern-dropped = Constraints removed with the dropped instances: { $n }.
+sketch-pattern-instance-dropped = Constraints on the pattern instance removed: { $n }.
+sketch-pattern-direction-line = Please click a line for the direction
+sketch-pattern-center-point = Please click a point for the center
+state-patterns-dissolved-on-load = { $n ->
+    [one] On opening, a pattern was dissolved because it linked its original to one of its own instances. The geometry stays.
+   *[other] On opening, { $n } patterns were dissolved because they linked their original to one of their own instances. The geometry stays.
+}
 
 ## Math error messages
 math-subcurve-range = the sub-range ({ $u0 }, { $u1 }) is not inside the curve ({ $a }, { $b }) or is empty

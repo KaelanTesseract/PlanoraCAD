@@ -54,6 +54,10 @@ pub enum ToolKind {
     ChamferDistanceAngle,
     /// Skizzenfase mit zwei Abständen.
     ChamferTwoDistances,
+    /// Fusion „Rechteckige Anordnung“ (Skizzen 5, [`crate::sketch_pattern`]).
+    PatternRect,
+    /// Fusion „Kreisförmige Anordnung“ (Skizzen 5).
+    PatternCircular,
 }
 
 impl ToolKind {
@@ -82,6 +86,8 @@ impl ToolKind {
         ToolKind::ChamferEqual,
         ToolKind::ChamferDistanceAngle,
         ToolKind::ChamferTwoDistances,
+        ToolKind::PatternRect,
+        ToolKind::PatternCircular,
     ];
 
     /// Das Werkzeug, zu dem die Art gehört.
@@ -95,6 +101,7 @@ impl ToolKind {
             SlotCenterToCenter | SlotOverall | SlotCenterPoint | SlotThreePointArc
             | SlotCenterPointArc => Tool::Slot,
             Fillet | ChamferEqual | ChamferDistanceAngle | ChamferTwoDistances => Tool::Fillet,
+            PatternRect | PatternCircular => Tool::Pattern,
         }
     }
 
@@ -108,6 +115,7 @@ impl ToolKind {
             Tool::Polygon => &all[11..14],
             Tool::Slot => &all[14..19],
             Tool::Fillet => &all[19..23],
+            Tool::Pattern => &all[23..25],
             _ => &[],
         }
     }
@@ -118,6 +126,12 @@ impl ToolKind {
             self,
             ToolKind::Rect2P | ToolKind::CircleCenter | ToolKind::ArcCenter
         )
+    }
+
+    /// Eine Art der Muster? Sie hat ihren eigenen Ablauf ([`crate::sketch_pattern`]), nicht die
+    /// Stufen der Formen.
+    pub fn is_pattern(self) -> bool {
+        self.tool() == Tool::Pattern
     }
 
     /// Felder je Stufe (Index = Stufe, die letzte Stufe schließt ab, Stufe 0 hat nie welche).
@@ -142,6 +156,8 @@ impl ToolKind {
             ChamferEqual => &[&[], &[], &[F::Distance]],
             ChamferDistanceAngle => &[&[], &[], &[F::Distance, F::Angle]],
             ChamferTwoDistances => &[&[], &[], &[F::Distance, F::Distance2]],
+            // Die Muster haben ihren eigenen Ablauf (`sketch_pattern::pattern_fields`).
+            PatternRect | PatternCircular => &[&[]],
         }
     }
 
@@ -177,6 +193,8 @@ impl ToolKind {
             ChamferEqual => tr!("sketch-kind-chamfer-equal-hint"),
             ChamferDistanceAngle => tr!("sketch-kind-chamfer-distance-angle-hint"),
             ChamferTwoDistances => tr!("sketch-kind-chamfer-two-distances-hint"),
+            PatternRect => tr!("sketch-kind-pattern-rect-hint"),
+            PatternCircular => tr!("sketch-kind-pattern-circular-hint"),
         }
     }
 
@@ -207,6 +225,8 @@ impl ToolKind {
             ChamferEqual => Action::SketchChamferEqual,
             ChamferDistanceAngle => Action::SketchChamferDistanceAngle,
             ChamferTwoDistances => Action::SketchChamferTwoDistances,
+            PatternRect => Action::SketchPatternRect,
+            PatternCircular => Action::SketchPatternCircular,
         }
     }
 
@@ -235,6 +255,7 @@ impl ToolKind {
             ChamferEqual | ChamferDistanceAngle | ChamferTwoDistances => {
                 crate::msg!("sketch-chamfer-too-big")
             }
+            PatternRect | PatternCircular => crate::msg!("sketch-pattern-empty"),
         }
     }
 
@@ -269,6 +290,8 @@ pub struct ToolKinds {
     pub polygon: ToolKind,
     pub slot: ToolKind,
     pub fillet: ToolKind,
+    /// Rechteckige oder Kreisförmige Anordnung (Skizzen 5).
+    pub pattern: ToolKind,
 }
 
 impl Default for ToolKinds {
@@ -281,6 +304,7 @@ impl Default for ToolKinds {
             polygon: ToolKind::PolygonCircumscribed,
             slot: ToolKind::SlotCenterToCenter,
             fillet: ToolKind::Fillet,
+            pattern: ToolKind::PatternRect,
         }
     }
 }
@@ -294,6 +318,7 @@ impl ToolKinds {
             Tool::Polygon => self.polygon = kind,
             Tool::Slot => self.slot = kind,
             Tool::Fillet => self.fillet = kind,
+            Tool::Pattern => self.pattern = kind,
             _ => {}
         }
     }
@@ -458,13 +483,15 @@ impl SketchSession {
             Tool::Polygon => Some(self.kinds.polygon),
             Tool::Slot => Some(self.kinds.slot),
             Tool::Fillet => Some(self.kinds.fillet),
+            Tool::Pattern => Some(self.kinds.pattern),
             _ => None,
         }
     }
 
     /// Die aktive Art, wenn sie über die Stufenmaschine läuft (nicht klassisch).
     pub fn planned_kind(&self) -> Option<ToolKind> {
-        self.kind_of(self.tool).filter(|k| !k.is_classic())
+        self.kind_of(self.tool)
+            .filter(|k| !k.is_classic() && !k.is_pattern())
     }
 
     /// Wählt `kind` wie ihre Aktion: Ist sie schon gewählt, bleibt alles; sonst bricht das wie
@@ -473,8 +500,9 @@ impl SketchSession {
         if self.tool == kind.tool() && self.kind_of(self.tool) == Some(kind) {
             return;
         }
-        self.set_tool(sk, kind.tool());
+        // Erst merken: Das Muster beginnt beim Wechsel schon in seiner Art.
         self.kinds.remember(kind);
+        self.set_tool(sk, kind.tool());
     }
 
     /// Stufe der laufenden Form: gesetzte Lagen und gewählte Kurven.
@@ -502,6 +530,9 @@ impl SketchSession {
 
     /// Hinweis zum aktiven Werkzeug in seiner aktiven Art.
     pub fn active_hint(&self) -> String {
+        if let Some(hint) = self.pattern_hint() {
+            return hint;
+        }
         self.kind_of(self.tool)
             .map_or_else(|| crate::sketch_panel::tool_hint(self.tool), ToolKind::hint)
     }

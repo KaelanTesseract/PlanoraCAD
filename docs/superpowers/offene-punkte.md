@@ -2225,3 +2225,13 @@ In Arbeit auf dem Zweig `feature/skizzen-muster` (Spec `specs/2026-11-03-skizzen
 - **Annahme:** Ein Klick in die Zeichnung, während das Feld eines gesetzten Maßes offen ist, legt dieses Maß mit dem Wert im Feld an (getippt, sonst der gemessene), wie Fusion beim Wegklicken; derselbe Klick wählt danach wie gewohnt neu. Das Anlegen ist ein Rückgängig-Schritt.
 - **Annahme:** Tab oder „Ø/R“ im Feld eines gesetzten Maßes behält eine getippte Zahl; nur ein unveränderter Vorschlag folgt dem umgeschalteten Wert.
 - Abweichung: Das Feld steht im Skizzenfeld, nicht am Maßtext in der Zeichnung; die Lage des Texts wird nicht gespeichert (Entscheidung 13).
+
+**Rechteckige Anordnung (Task 9)**
+- **Annahme:** Wird für Richtung 1 eine Linie gewählt und liegt Richtung 2 auf einer Skizzenachse, nimmt Richtung 2 die Achse, die quer zur Linie steht (die x-Achse, wenn die Linie steiler als 45° ist, sonst die y-Achse). Eine Richtung „senkrecht zu einer Linie“ kennt das Modell nicht (`PatternDir`); Fusion stellt die zweite Richtung senkrecht zur ersten.
+- **Annahme:** Ein zweiter schneller Klick auf ein Exemplar der Vorschau (Doppelklick) schaltet es wie jeder Klick; der Doppelklick schließt nichts ab.
+- **Annahme:** Ein Griffzug am Pfeil nimmt einen getippten Abstand dieser Richtung als Startwert; danach folgt das Feld dem Griff, die getippte Formel entfällt.
+- Abweichung: Entf löscht nichts, solange die Anordnung läuft (die Auswahl ist dort die Vorlage). Im Auswahlwerkzeug wählt Entf auf einem Exemplar es ab, das Muster bleibt.
+- Abweichung: `PatternToolState` hat neben den Feldern aus dem Plan noch die gewählte Richtung für „Linie wählen“, den laufenden Griff, die Formeln der getippten Felder und den Stand der Meldung.
+- Offen (Task 10): Das Kreismuster läuft schon durch dieselben Stufen (Mitte ist ein vorhandener Punkt, Vorgabe 6, voll); Fang auf Raster und neue Punkte als Mitte, der Winkelgriff am Bogen und die Prüfung der Felder im Kreismuster kommen mit Task 10.
+- Offen (Task 12): Knopf in der Leiste, Menüeintrag und eigenes Symbol. Vorläufig zeigt `sketch_tool_icon` das Symbol „Muster …“, `tool_label(Tool::Pattern)` heißt „Rechteckige Anordnung“.
+- Offen: Ändert ein Parameter die Anzahl über eine Formel, entfallen Abhängigkeiten an wegfallenden Exemplaren ohne Meldung (der Weg über die Formeln läuft im Dokument, nicht in der Sitzung). Über das Werkzeug und die Liste kommt die Meldung `sketch-pattern-dropped`.

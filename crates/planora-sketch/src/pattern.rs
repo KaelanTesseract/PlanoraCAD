@@ -375,8 +375,9 @@ impl Sketch {
             })
     }
 
-    /// Der Plan eines lebenden Musters aus seinen gespeicherten Werten.
-    pub(crate) fn pattern_plan(&self, id: PatternId) -> Option<PatternPlan> {
+    /// Der Plan eines lebenden Musters aus seinen gespeicherten Werten (das Werkzeug bearbeitet
+    /// ihn und gibt ihn an [`Sketch::edit_pattern`]).
+    pub fn pattern_plan(&self, id: PatternId) -> Option<PatternPlan> {
         let d = self.pattern(id)?;
         let value = |slot: PatternSlot| self.pattern_value(id, slot);
         let count = |v: f64| {
