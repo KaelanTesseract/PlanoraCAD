@@ -550,3 +550,208 @@ fn from_data_refuses_broken_patterns() {
     });
     assert!(m.contains("Musterwert"), "{m}");
 }
+
+// ---------------------------------------------------------------------------------------------
+// Korrektur 1: Rundläufe nach `edit_pattern`, alle Richtungs- und Kreisarten, Schleifen
+// ---------------------------------------------------------------------------------------------
+
+/// Datei-Rundlauf: Format 15, gleiche Bytes, gleiche Rohdaten; danach lösen ohne Schritt,
+/// Lagen bitgleich. Liefert die geladene Skizze.
+fn file_round_trip(s: &Sketch, tag: &str) -> Sketch {
+    let doc = document(s.clone());
+    let text = encode_version(&doc.snapshot()).unwrap();
+    assert!(text.contains("\"format\": 15"), "{tag}");
+    let back = load(&text).unwrap_or_else(|e| panic!("{tag}: {e:?}"));
+    assert_eq!(encode_version(&back.snapshot()).unwrap(), text, "{tag}");
+    let FeatureKind::Sketch(sf) = &back.features()[0].kind else {
+        panic!("keine Skizze")
+    };
+    assert_eq!(sf.sketch.to_data(), s.to_data(), "{tag}");
+    let mut sk = sf.sketch.clone();
+    let before = bits(&sk);
+    let r = sk.solve();
+    assert_eq!(r.iterations, 0, "{tag}: {r:?}");
+    assert_eq!(bits(&sk), before, "{tag}");
+    sk
+}
+
+fn circular(
+    sources: Vec<CurveId>,
+    center: PointId,
+    mode: CircularMode,
+    n: u32,
+    angle: f64,
+) -> PatternPlan {
+    PatternPlan {
+        kind: PatternKind::Circular { center, mode },
+        sources,
+        counts: [n, 1],
+        values: [angle, 0.0],
+        suppressed: vec![],
+    }
+}
+
+fn rect_plan(sources: Vec<CurveId>, dirs: [PatternDir; 2]) -> PatternPlan {
+    PatternPlan {
+        kind: PatternKind::Rect {
+            dirs,
+            extent: [false, false],
+            symmetric: [false, false],
+        },
+        sources,
+        counts: [3, 2],
+        values: [15.0, 10.0],
+        suppressed: vec![],
+    }
+}
+
+#[test]
+fn circular_modes_angle_full_symmetric_round_trip_after_edits() {
+    let mut s = new_sketch();
+    let c = s.add_point(100.0, 0.0).unwrap();
+    let m = s.add_point(120.0, 0.0).unwrap();
+    let circle = s.add_circle(m, 3.0).unwrap();
+    let mut plan = circular(vec![circle], c, CircularMode::Angle, 5, 1.5);
+    let id = s.add_pattern(&plan).unwrap();
+    let text = encode_version(&document(s.clone()).snapshot()).unwrap();
+    assert!(text.contains("\"art\": \"winkel\""), "{text}");
+    file_round_trip(&s, "Winkel");
+    // Winkel -> Voll: Der Winkelwert bleibt als gelöschter Eintrag mit einem Feld, das nicht mehr
+    // zur Art passt.
+    plan.kind = PatternKind::Circular {
+        center: c,
+        mode: CircularMode::Full,
+    };
+    s.edit_pattern(id, &plan).unwrap();
+    assert!(
+        s.to_data()
+            .constraints
+            .iter()
+            .any(|r| !r.alive && matches!(r.kind, K::PatternValue(_, PatternSlot::Angle, _)))
+    );
+    file_round_trip(&s, "Voll nach Winkel");
+    plan.kind = PatternKind::Circular {
+        center: c,
+        mode: CircularMode::Symmetric,
+    };
+    plan.values = [1.0, 0.0];
+    s.edit_pattern(id, &plan).unwrap();
+    let text = encode_version(&document(s.clone()).snapshot()).unwrap();
+    assert!(text.contains("\"art\": \"symmetrisch\""), "{text}");
+    s.suppress_instance(id, [1, 0], true).unwrap();
+    let mut back = file_round_trip(&s, "Symmetrisch mit Abwahl");
+    back.suppress_instance(id, [1, 0], false).unwrap();
+    file_round_trip(&back, "wieder angewählt nach dem Laden");
+}
+
+#[test]
+fn kind_and_source_changes_round_trip_after_edits() {
+    let mut s = new_sketch();
+    let r = s
+        .add_rectangle(DVec2::new(0.0, 0.0), DVec2::new(10.0, 6.0))
+        .unwrap();
+    let src = r.lines.to_vec();
+    let id = s
+        .add_pattern(&rect_plan(
+            src.clone(),
+            [PatternDir::SketchX, PatternDir::SketchY],
+        ))
+        .unwrap();
+    let c = s.add_point(100.0, 0.0).unwrap();
+    // Rechteck -> Kreis: die Werte des Rechtecks bleiben gelöscht mit Rechteckfeldern.
+    s.edit_pattern(id, &circular(src.clone(), c, CircularMode::Full, 4, 0.0))
+        .unwrap();
+    file_round_trip(&s, "Rechteck -> Kreis");
+    // Kreis -> Rechteck.
+    s.edit_pattern(
+        id,
+        &rect_plan(src.clone(), [PatternDir::SketchX, PatternDir::SketchY]),
+    )
+    .unwrap();
+    file_round_trip(&s, "Kreis -> Rechteck");
+    // Andere Vorlagen: alle Exemplare neu.
+    let other = s
+        .add_rectangle(DVec2::new(0.0, 30.0), DVec2::new(4.0, 34.0))
+        .unwrap();
+    s.edit_pattern(
+        id,
+        &rect_plan(
+            other.lines.to_vec(),
+            [PatternDir::SketchX, PatternDir::SketchY],
+        ),
+    )
+    .unwrap();
+    assert_eq!(s.pattern(id).unwrap().sources, other.lines.to_vec());
+    file_round_trip(&s, "andere Vorlagen");
+}
+
+#[test]
+fn a_line_direction_round_trips() {
+    let mut s = new_sketch();
+    let (dir, _, _) = line(&mut s, (0.0, -20.0), (10.0, -15.0));
+    let r = s
+        .add_rectangle(DVec2::new(0.0, 0.0), DVec2::new(10.0, 6.0))
+        .unwrap();
+    s.add_pattern(&rect_plan(
+        r.lines.to_vec(),
+        [PatternDir::Line(dir), PatternDir::SketchY],
+    ))
+    .unwrap();
+    let text = encode_version(&document(s.clone()).snapshot()).unwrap();
+    assert!(text.contains("\"typ\": \"linie\""), "{text}");
+    file_round_trip(&s, "Richtungslinie");
+}
+
+#[test]
+fn an_arc_or_elliptic_arc_closing_a_pattern_loop_is_refused_and_files_stay_loadable() {
+    let mut s = new_sketch();
+    let r = s
+        .add_rectangle(DVec2::new(0.0, 0.0), DVec2::new(10.0, 6.0))
+        .unwrap();
+    let id = s
+        .add_pattern(&rect_plan(
+            r.lines.to_vec(),
+            [PatternDir::SketchX, PatternDir::SketchY],
+        ))
+        .unwrap();
+    let inst = s.pattern(id).unwrap().instances[0].points.clone();
+    let before = s.to_data();
+    // Bogen um einen Vorlagenpunkt mit Enden auf einem Exemplar (der Fang bietet das an).
+    let e = s.add_arc(r.points[0], inst[0], inst[1]).unwrap_err();
+    assert!(e.to_string().contains("eigenen Exemplar"), "{e}");
+    let e = s
+        .add_elliptic_arc(r.points[0], DVec2::new(20.0, 0.0), 5.0, inst[0], inst[1])
+        .unwrap_err();
+    assert!(e.to_string().contains("eigenen Exemplar"), "{e}");
+    assert_eq!(s.to_data(), before, "nichts angelegt");
+    // Ein Bogen, der nur Exemplare liest, geht und wird gespeichert.
+    let free = s.add_point(30.0, 30.0).unwrap();
+    let arc = s.add_arc(free, inst[0], inst[1]).unwrap();
+    s.solve();
+    file_round_trip(&s, "Bogen an Exemplaren");
+
+    // Eine Schleife allein über eine interne Abhängigkeit (etwa aus Stutzen oder Brechen) lädt;
+    // dieselbe Schleife über eine Abhängigkeit des Benutzers nicht.
+    let mut d = s.to_data();
+    let CurveKind::Arc { start, end, .. } = d.curves[arc.index()].kind else {
+        panic!("kein Bogen")
+    };
+    d.curves[arc.index()].kind = CurveKind::Arc {
+        center: r.points[0],
+        start,
+        end,
+    };
+    assert!(Sketch::from_data(d.clone()).is_ok());
+    let mut user = s.clone();
+    user.add_constraint(K::Distance(free, inst[0], 5.0))
+        .unwrap();
+    let mut d = user.to_data();
+    let k = d
+        .constraints
+        .iter()
+        .position(|c| matches!(c.kind, K::Distance(a, _, _) if a == free))
+        .unwrap();
+    d.constraints[k].kind = K::Distance(r.points[0], inst[0], 5.0);
+    let e = Sketch::from_data(d).unwrap_err();
+    assert!(e.to_string().contains("eigenen Exemplar"), "{e}");
+}

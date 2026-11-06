@@ -614,6 +614,14 @@ fn patterns_from(origin: &str, feature: &str, d: &SketchDto) -> Result<Vec<Patte
     let mut out = Vec::with_capacity(d.muster.len());
     for m in &d.muster {
         check_len(origin, &|| tr!("proj-l-instances"), m.exemplare.len())?;
+        check_len(origin, &|| tr!("proj-l-instances"), m.abgewaehlt.len())?;
+        check_len(origin, &|| tr!("proj-l-curves"), m.vorlagen.len())?;
+        check_len(origin, &|| tr!("proj-l-points"), m.vorlagenpunkte.len())?;
+        check_len(origin, &|| tr!("proj-l-constraints"), m.werte.len())?;
+        for e in &m.exemplare {
+            check_len(origin, &|| tr!("proj-l-points"), e.punkte.len())?;
+            check_len(origin, &|| tr!("proj-l-curves"), e.kurven.len())?;
+        }
         let kind = match m.art {
             MusterArtDto::Rechteck {
                 richtungen,

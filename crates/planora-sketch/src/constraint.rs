@@ -873,7 +873,7 @@ impl Sketch {
             .filter(|(_, c)| c.alive && c.internal)
     }
 
-    pub(crate) fn push_internal(&mut self, kind: ConstraintKind) {
+    pub(crate) fn push_internal(&mut self, kind: ConstraintKind) -> ConstraintId {
         self.touch_structure();
         self.constraints.push(ConstraintData {
             kind,
@@ -884,7 +884,7 @@ impl Sketch {
             internal: true,
             extra: None,
             alive: true,
-        });
+        })
     }
 
     fn checked_constraint(&self, id: ConstraintId) -> Result<(), SketchError> {
@@ -1510,8 +1510,9 @@ impl Sketch {
     }
 
     /// Schlösse die (gerade nicht aktive) Abhängigkeit `id`, wieder aktiv, eine Schleife zwischen
-    /// Vorlage und eigenem Exemplar? Dann `PatternProblem::Cycle` (Entscheidung 6).
-    fn check_activation_cycle(&self, id: ConstraintId) -> Result<(), SketchError> {
+    /// Vorlage und eigenem Exemplar? Dann `PatternProblem::Cycle` (Entscheidung 6). Gilt auch für
+    /// die interne Abhängigkeit einer neuen Kurve (`add_arc`, `add_elliptic_arc`).
+    pub(crate) fn check_activation_cycle(&self, id: ConstraintId) -> Result<(), SketchError> {
         if self.patterns().next().is_none() {
             return Ok(());
         }

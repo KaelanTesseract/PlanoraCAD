@@ -327,9 +327,30 @@ impl Sketch {
         {
             return Err(SketchError::Degenerate(tr!("sketch-err-arc-center")));
         }
-        let id = self.push_curve(CurveKind::Arc { center, start, end });
-        self.push_internal(crate::constraint::ConstraintKind::ArcRadius(id));
-        Ok(id)
+        self.with_internal_checked(|s| {
+            let id = s.push_curve(CurveKind::Arc { center, start, end });
+            let k = s.push_internal(crate::constraint::ConstraintKind::ArcRadius(id));
+            (id, k)
+        })
+    }
+
+    /// Legt eine Kurve mit ihrer internen Abhängigkeit an (`make` liefert beide Ids). Mit Mustern
+    /// wird abgelehnt, wenn die interne Abhängigkeit Vorlage und eigenes Exemplar verbände (etwa
+    /// ein Bogen um einen Vorlagenpunkt mit Enden auf einem Exemplar, wie der Fang sie anbietet):
+    /// Die Exemplare folgten der Vorlage, die Vorlage wieder dem Bogen, und der Löser liefe nie
+    /// zusammen. Dann bleibt die Skizze unverändert.
+    fn with_internal_checked(
+        &mut self,
+        make: impl FnOnce(&mut Sketch) -> (CurveId, crate::constraint::ConstraintId),
+    ) -> Result<CurveId, SketchError> {
+        if self.patterns().next().is_none() {
+            return Ok(make(self).0);
+        }
+        self.atomically(|s| {
+            let (id, k) = make(s);
+            s.check_activation_cycle(k)?;
+            Ok(id)
+        })
     }
 
     /// Ellipse um `center` mit großer Halbachse `major` (Vektor) und kleiner Halbachse `minor`
@@ -393,12 +414,13 @@ impl Sketch {
         {
             return Err(SketchError::Degenerate(tr!("sketch-err-arc-center")));
         }
-        let (ax, ay, mi) = (
-            self.new_var(major.x),
-            self.new_var(major.y),
-            self.new_var(minor),
-        );
-        Ok(self.add_elliptic_arc_vars(center, ax, ay, mi, start, end))
+        self.with_internal_checked(|s| {
+            let (ax, ay, mi) = (s.new_var(major.x), s.new_var(major.y), s.new_var(minor));
+            let id = s.add_elliptic_arc_vars(center, ax, ay, mi, start, end);
+            // `add_elliptic_arc_vars` legt als Letztes die interne Abhängigkeit an.
+            let k = crate::constraint::ConstraintId::from_index(s.constraints.len() - 1);
+            (id, k)
+        })
     }
 
     /// Ellipsenbogen auf vorhandenen Variablen (etwa geteilt mit der Ellipse, aus der er

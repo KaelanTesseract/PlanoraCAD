@@ -285,6 +285,12 @@ impl Sketch {
         // Typen und Entartungen aller Abhängigkeiten (auch gelöschter) wie bei add_constraint
         // prüfen, sonst könnten spätere Solver-Läufe auf falschen Objekttypen abstürzen.
         for (_, c) in s.constraints.iter() {
+            // Ein gelöschter Musterwert darf ein Feld haben, das nicht mehr zur Art seines Musters
+            // passt: `edit_pattern` lässt ihn so zurück, wenn Art oder Kreisart wechseln. Den
+            // Index des Musters hat die Prüfung oben schon gesehen.
+            if !c.alive && matches!(c.kind, ConstraintKind::PatternValue(..)) {
+                continue;
+            }
             s.check_types(&c.kind)?;
             if c.alive {
                 if c.extra.is_none() && s.needs_extra(&c.kind) {
@@ -293,10 +299,24 @@ impl Sketch {
                 s.check_constraint_value(&c.kind)?;
             }
         }
-        // Keine Abhängigkeit darf Vorlage und eigenes Exemplar eines Musters verbinden, sonst
-        // liefe der Löser nie zusammen (wie bei `add_constraint`).
+        // Keine Abhängigkeit des Benutzers darf Vorlage und eigenes Exemplar eines Musters
+        // verbinden, sonst liefe der Löser nie zusammen (wie bei `add_constraint`). Interne
+        // Abhängigkeiten zählen hier nicht: Laden nimmt jeden Stand an, den die Bearbeitung
+        // erzeugen kann, und manche Wege (Stutzen, Brechen) legen sie ohne diese Prüfung an.
         if s.pattern_cycle(None) {
-            return Err(PatternProblem::Cycle.error());
+            let mut user = s.clone();
+            let internal: Vec<ConstraintId> = user
+                .constraints
+                .iter()
+                .filter(|(_, c)| c.internal)
+                .map(|(id, _)| id)
+                .collect();
+            for id in internal {
+                user.constraints[id].enabled = false;
+            }
+            if user.pattern_cycle(None) {
+                return Err(PatternProblem::Cycle.error());
+            }
         }
         // Die Tangenten an gemeinsamen Enden bleiben, wie die gespeicherte Geometrie sie zeigt.
         s.refresh_shared_signs(None);
@@ -345,16 +365,19 @@ fn check_patterns(d: &SketchData) -> Result<(), SketchError> {
     let mut inst_points: HashSet<PointId> = HashSet::new();
     for (k, m) in d.patterns.iter().enumerate().filter(|(_, m)| m.alive) {
         // Vorlagen: lebend, ohne Doppelte; ihre Punkte genau `source_points`.
+        // Mengen statt Listensuche: Die Daten kommen aus einer Datei und können groß sein.
         let mut own_points: Vec<PointId> = Vec::new();
-        for (i, &c) in m.sources.iter().enumerate() {
-            if m.sources[..i].contains(&c) {
+        let mut seen_points: HashSet<PointId> = HashSet::new();
+        let mut seen_sources: HashSet<CurveId> = HashSet::new();
+        for &c in &m.sources {
+            if !seen_sources.insert(c) {
                 return Err(instance());
             }
             if !curve_alive(c) {
                 return Err(deleted());
             }
             for p in d.curves[c.index()].kind.points() {
-                if !own_points.contains(&p) {
+                if seen_points.insert(p) {
                     own_points.push(p);
                 }
             }
@@ -380,12 +403,13 @@ fn check_patterns(d: &SketchData) -> Result<(), SketchError> {
             }
         }
         // Exemplare: so viele Punkte und Kurven wie die Vorlage, lebend, je eine eigene Lage.
+        let suppressed: HashSet<[i32; 2]> = m.suppressed.iter().copied().collect();
         let mut lattice: HashSet<[i32; 2]> = HashSet::new();
         for inst in &m.instances {
             if inst.points.len() != m.source_points.len()
                 || inst.curves.len() != m.sources.len()
                 || inst.at == [0, 0]
-                || m.suppressed.contains(&inst.at)
+                || suppressed.contains(&inst.at)
                 || !lattice.insert(inst.at)
             {
                 return Err(instance());
