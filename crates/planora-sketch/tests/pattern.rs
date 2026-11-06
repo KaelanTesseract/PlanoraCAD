@@ -450,6 +450,16 @@ fn a_perpendicular_second_direction_turns_with_the_line() {
         s.pattern_transforms(&bad).unwrap_err(),
         PatternProblem::BadDirection
     );
+    // Eine Datei mit „senkrecht“ als erster Richtung lädt nicht, und die Meldung sagt, warum
+    // (Schlusskorrektur: nicht „fehlendes Objekt“).
+    let mut data = s.to_data();
+    data.patterns[id.index()].kind = bad.kind;
+    let e = Sketch::from_data(data).unwrap_err();
+    let text = e.to_string();
+    assert!(
+        text.contains(&planora_i18n::tr!("sketch-err-data-pattern-direction")),
+        "{text}"
+    );
 }
 
 #[test]
@@ -949,40 +959,54 @@ fn pattern_chain(s: &mut Sketch, links: usize) -> (ConstraintId, Vec<PointId>) {
     (dim.unwrap(), starts)
 }
 
+/// Schlusskorrektur I2: Die Runden reichen für jede Kette ohne Schleife (mindestens Zahl der
+/// Muster + 1); fünf Glieder löst ein Lauf.
 #[test]
-fn a_chain_longer_than_the_rounds_is_not_reported_as_solved() {
-    let mut s = sketch();
-    let (dim, starts) = pattern_chain(&mut s, 5);
-    solved(&mut s);
-    s.set_constraint_value(dim, 25.0).unwrap();
-    let r = s.solve();
-    // Drei Runden tragen die Änderung über drei Glieder; das vierte ist überholt.
-    assert_eq!(r.status, SolveStatus::NotConverged, "{r:?}");
-    assert!(!r.conflicting.is_empty(), "{r:?}");
-    // Weitere Läufe führen weiter, bis alles stimmt.
-    let mut last = r;
-    for _ in 0..3 {
-        if last.status == SolveStatus::Solved {
-            break;
+fn a_chain_longer_than_the_old_rounds_is_solved_in_one_run() {
+    for links in [3, 5, 7] {
+        let mut s = sketch();
+        let (dim, starts) = pattern_chain(&mut s, links);
+        solved(&mut s);
+        for value in [25.0, 3.0, 40.0] {
+            s.set_constraint_value(dim, value).unwrap();
+            solved(&mut s);
+            for (k, &a) in starts.iter().enumerate() {
+                assert!(
+                    close(at(&s, a), v(value + 10.0 * k as f64, 0.0), 1e-6),
+                    "{links} {value} {k} {:?}",
+                    at(&s, a)
+                );
+            }
         }
-        last = s.solve();
     }
-    assert_eq!(last.status, SolveStatus::Solved, "{last:?}");
-    assert!(last.conflicting.is_empty());
-    for (k, &a) in starts.iter().enumerate() {
-        assert!(
-            close(at(&s, a), v(25.0 + 10.0 * k as f64, 0.0), 1e-6),
-            "{k} {:?} {last:?}",
-            at(&s, a)
-        );
-    }
-    // Drei Glieder schafft ein Lauf mit drei Runden.
+}
+
+/// Schlusskorrektur (Minor 6): Geht die Lage eines Musters nicht (die zweite Richtungslinie
+/// wird parallel zur ersten), bleibt nichts still überholt: Der Lauf meldet „nicht lösbar“.
+#[test]
+fn a_pattern_whose_lattice_fails_is_reported_not_solved() {
     let mut s = sketch();
-    let (dim, starts) = pattern_chain(&mut s, 3);
+    let src = rect(&mut s, v(0.0, 0.0));
+    let line = |s: &mut Sketch, a: DVec2, b: DVec2| {
+        let (p, q) = (
+            s.add_point(a.x, a.y).unwrap(),
+            s.add_point(b.x, b.y).unwrap(),
+        );
+        s.add_line(p, q).unwrap()
+    };
+    let d1 = line(&mut s, v(0.0, -20.0), v(10.0, -20.0));
+    let d2 = line(&mut s, v(-20.0, 0.0), v(-14.0, 10.0));
+    let mut plan = rect_plan(src, [3, 2], [15.0, 10.0]);
+    plan.kind = PatternKind::Rect {
+        dirs: [PatternDir::Line(d1), PatternDir::Line(d2)],
+        extent: [false, false],
+        symmetric: [false, false],
+    };
+    s.add_pattern(&plan).unwrap();
     solved(&mut s);
-    s.set_constraint_value(dim, 25.0).unwrap();
-    solved(&mut s);
-    assert!(close(at(&s, starts[2]), v(45.0, 0.0), 1e-6));
+    s.add_constraint(K::Parallel(d1, d2)).unwrap();
+    let r = s.solve();
+    assert_eq!(r.status, SolveStatus::NotConverged, "{r:?}");
 }
 
 #[test]
@@ -1090,4 +1114,112 @@ fn circular_angle_sweep_with_an_arc_source() {
             assert!((sweep(copy) - sweep(arc)).abs() < 1e-9, "{deg}");
         }
     }
+}
+
+/// Exemplare eines 3×1-Musters des bemaßten Rechtecks (Abstand 15): die Ecke unten links des
+/// ersten und zweiten Exemplars und die untere Linie des ersten.
+fn instance_corners(s: &mut Sketch) -> (PatternId, PointId, PointId, CurveId) {
+    let (src, [p0, ..], _) = dimensioned_rect(s);
+    let id = s
+        .add_pattern(&rect_plan(src.clone(), [3, 1], [15.0, 10.0]))
+        .unwrap();
+    solved(s);
+    let d = s.pattern(id).unwrap().clone();
+    let k = d.source_points.iter().position(|&x| x == p0).unwrap();
+    let inst = |at: [i32; 2]| d.instances.iter().find(|i| i.at == at).unwrap().clone();
+    let (i1, i2) = (inst([1, 0]), inst([2, 0]));
+    (id, i1.points[k], i2.points[k], i1.curves[0])
+}
+
+/// Schlusskorrektur I1: Ein Maß, das nur Exemplare liest, wird anzeigend und zeigt den
+/// gemessenen Wert; der getippte Wert täte nichts.
+#[test]
+fn a_dimension_between_two_instances_becomes_driven_with_the_real_value() {
+    let mut s = sketch();
+    let (_, a, b, _) = instance_corners(&mut s);
+    assert!(close(at(&s, b) - at(&s, a), v(15.0, 0.0), 1e-9));
+    for kind in [
+        K::Distance(a, b, 50.0),
+        K::DistanceX(a, b, 50.0),
+        K::Distance(b, a, 3.0),
+    ] {
+        let id = s.add_constraint(kind).unwrap();
+        let c = s.constraint(id).unwrap();
+        assert!(c.driven, "{:?}", c.kind);
+        assert!(
+            (c.kind.value().unwrap() - 15.0).abs() < 1e-9,
+            "{:?}",
+            c.kind
+        );
+        let r = solved(&mut s);
+        assert!(r.redundant.is_empty() && r.conflicting.is_empty(), "{r:?}");
+        assert!(close(at(&s, b) - at(&s, a), v(15.0, 0.0), 1e-9));
+        // Wieder erzwingen ginge ohne Wirkung: abgelehnt, Stand unverändert.
+        let rev = s.revision();
+        let e = s.set_driven(id, false).unwrap_err();
+        assert_eq!(e, PatternProblem::InstanceOnly.error());
+        assert_eq!(s.revision(), rev);
+        assert!(s.constraint(id).unwrap().driven);
+    }
+}
+
+/// Schlusskorrektur I1: Eine geometrische Abhängigkeit nur an Exemplaren wird abgelehnt; die
+/// Skizze bleibt, wie sie war.
+#[test]
+fn a_geometric_constraint_on_instances_only_is_refused() {
+    let mut s = sketch();
+    let (_, a, b, line) = instance_corners(&mut s);
+    let count = s.constraints().count();
+    for kind in [
+        K::Horizontal(LineOrPoints::Line(line)),
+        K::Coincident(a, b),
+        K::Fixed(a, 0.0, 0.0),
+    ] {
+        let rev = s.revision();
+        let e = s.add_constraint(kind.clone()).unwrap_err();
+        assert_eq!(e, PatternProblem::InstanceOnly.error(), "{kind:?}");
+        assert_eq!(s.revision(), rev, "{kind:?}");
+        assert_eq!(s.constraints().count(), count);
+    }
+}
+
+/// Exemplar und freier Punkt: wie bisher ein treibendes Maß, der freie Punkt folgt.
+#[test]
+fn an_instance_and_a_free_point_still_drive() {
+    let mut s = sketch();
+    let (_, a, _, _) = instance_corners(&mut s);
+    let f = s.add_point(at(&s, a).x, 30.0).unwrap();
+    s.add_constraint(K::Vertical(LineOrPoints::Points(a, f)))
+        .unwrap();
+    let id = s.add_constraint(K::Distance(a, f, 20.0)).unwrap();
+    assert!(!s.constraint(id).unwrap().driven);
+    solved(&mut s);
+    assert!((at(&s, f).distance(at(&s, a)) - 20.0).abs() < 1e-9);
+    s.set_constraint_value(id, 25.0).unwrap();
+    solved(&mut s);
+    assert!((at(&s, f).distance(at(&s, a)) - 25.0).abs() < 1e-9);
+}
+
+/// Alte Dateien mit einem treibenden Maß nur an Exemplaren laden weiter; ein neuer Wert für so
+/// ein Maß wird mit der Meldung abgelehnt statt still gespeichert.
+#[test]
+fn an_old_driving_instance_dimension_loads_but_takes_no_new_value() {
+    let mut s = sketch();
+    let (_, a, b, _) = instance_corners(&mut s);
+    let id = s.add_constraint(K::Distance(a, b, 50.0)).unwrap();
+    let mut data = s.to_data();
+    let rec = &mut data.constraints[id.index()];
+    rec.driven = false;
+    rec.kind = K::Distance(a, b, 50.0);
+    let mut old = Sketch::from_data(data).unwrap();
+    assert!(!old.constraint(id).unwrap().driven);
+    old.solve();
+    let rev = old.revision();
+    let e = old.set_constraint_value(id, 70.0).unwrap_err();
+    assert_eq!(e, PatternProblem::InstanceOnly.error());
+    assert_eq!(old.revision(), rev);
+    assert_eq!(old.constraint(id).unwrap().kind, K::Distance(a, b, 50.0));
+    // Anzeigend schalten geht und zeigt dann den gemessenen Wert.
+    old.set_driven(id, true).unwrap();
+    old.set_constraint_value(id, 15.0).unwrap();
 }

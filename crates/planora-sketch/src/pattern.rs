@@ -31,6 +31,15 @@ pub const PATTERN_MAX_CURVES: usize = 3600;
 /// geändert hat (Entscheidung 5).
 pub(crate) const PATTERN_ROUNDS: usize = 3;
 
+/// Ergebnis von [`Sketch::refresh_patterns`].
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PatternRefresh {
+    /// Ein Wert hat sich geändert (dann neuer Stand).
+    pub moved: bool,
+    /// Die Lage eines lebenden Musters ging nicht; seine Exemplare stehen noch an der alten Lage.
+    pub failed: bool,
+}
+
 /// Richtung eines Rechteckmusters: die Achsen der Skizze, eine Linie (folgt ihr) oder, nur als
 /// zweite Richtung, senkrecht zur ersten (Fusion; folgt der ersten, auch einer drehenden Linie).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -153,8 +162,9 @@ pub struct PatternEdit {
 }
 
 impl PatternPlan {
-    /// Der Plan mit dem Wert `v` im Feld `slot` (eine Anzahl ist schon geprüft ganzzahlig).
-    pub(crate) fn with_value(mut self, slot: PatternSlot, v: f64) -> PatternPlan {
+    /// Der Plan mit dem Wert `v` im Feld `slot`; eine Anzahl wird gerundet (auf 0 bis
+    /// `u32::MAX` begrenzt). Auch für die Felder des Musterwerkzeugs.
+    pub fn with_value(mut self, slot: PatternSlot, v: f64) -> PatternPlan {
         let count = v.round().clamp(0.0, u32::MAX as f64) as u32;
         match slot {
             PatternSlot::Count1 | PatternSlot::Count => self.counts[0] = count,
@@ -181,6 +191,9 @@ pub enum PatternProblem {
     InstanceAsSource,
     /// Eine Abhängigkeit verbindet Vorlage, Richtung oder Mitte mit einem eigenen Exemplar.
     Cycle,
+    /// Eine (nicht interne) Abhängigkeit liest nur Exemplare: Sie hätte keine Wirkung, weil
+    /// Exemplare der Vorlage folgen (Schlusskorrektur I1). Maße werden stattdessen anzeigend.
+    InstanceOnly,
 }
 
 impl PatternProblem {
@@ -197,6 +210,7 @@ impl PatternProblem {
             PatternProblem::BadDirection => tr!("sketch-pattern-direction"),
             PatternProblem::InstanceAsSource => tr!("sketch-pattern-instance-source"),
             PatternProblem::Cycle => tr!("sketch-pattern-cycle"),
+            PatternProblem::InstanceOnly => tr!("sketch-pattern-instance-only"),
         }
     }
 
@@ -421,16 +435,19 @@ impl Sketch {
 
     /// Schreibt die Variablen aller Exemplare aus der aktuellen Vorlage und den Musterwerten neu.
     /// Exemplare, Vorlagen und Punkte, die nicht mehr leben oder deren Art nicht mehr passt,
-    /// bleiben, wie sie sind; ebenso Muster, deren Lage gerade nicht geht. `true`, wenn sich ein
-    /// Wert geändert hat (dann neuer Stand).
-    pub(crate) fn refresh_patterns(&mut self) -> bool {
+    /// bleiben, wie sie sind; ebenso Muster, deren Lage gerade nicht geht (etwa eine
+    /// Richtungslinie der Länge null): Das sagt [`PatternRefresh::failed`], damit kein Exemplar
+    /// still überholt bleibt.
+    pub(crate) fn refresh_patterns(&mut self) -> PatternRefresh {
         let ids: Vec<PatternId> = self.patterns().map(|(id, _)| id).collect();
         let mut writes: Vec<(usize, f64)> = Vec::new();
+        let mut failed = false;
         for id in ids {
             let Some(plan) = self.pattern_plan(id) else {
                 continue;
             };
             let Ok(lattice) = self.pattern_lattice(&plan) else {
+                failed = true;
                 continue;
             };
             let lattice: HashMap<[i32; 2], Similarity> = lattice.into_iter().collect();
@@ -496,7 +513,10 @@ impl Sketch {
         if changed {
             self.touch_values();
         }
-        changed
+        PatternRefresh {
+            moved: changed,
+            failed,
+        }
     }
 
     /// Die Variablen aller lebenden Exemplare (Punkte, Radien, Halbachsen): für den Löser
@@ -1294,8 +1314,11 @@ mod tests {
         s.add_constraint(ConstraintKind::Distance(src, vpt, d0))
             .unwrap();
         let d1 = s.pos(vpt).distance(s.pos(qi1));
-        s.add_constraint(ConstraintKind::Distance(vpt, qi1, d1))
+        // Nur Exemplare: `add_constraint` legt es anzeigend an; treibend wie aus einer alten Datei.
+        let between = s
+            .add_constraint(ConstraintKind::Distance(vpt, qi1, d1))
             .unwrap();
+        s.constraints[between].driven = false;
         let rr = s
             .add_rectangle(DVec2::new(-300.0, 0.0), DVec2::new(-290.0, 5.0))
             .unwrap();

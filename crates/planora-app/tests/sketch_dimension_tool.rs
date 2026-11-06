@@ -980,3 +980,115 @@ fn tab_in_an_open_list_field_is_not_taken_by_the_dimension_preview() {
         assert_eq!(rig.preview().unwrap().kind, K::Diameter(c, 30.0));
     });
 }
+
+/// Schlusskorrektur I1: Ein Maß zwischen zwei Exemplaren eines Musters hätte als treibendes Maß
+/// keine Wirkung. Die Vorschau sagt „anzeigend“ und zeigt den gemessenen Wert; das Anlegen ergibt
+/// genau das: anzeigend, gemessener Wert (auch wenn 50 getippt wird), mit der Meldung, ein Schritt.
+#[test]
+fn a_dimension_between_two_instances_previews_and_commits_driven() {
+    use planora_sketch::pattern::{PatternDir, PatternKind, PatternPlan};
+    with_lang(&german(), || {
+        let mut s = sketch_with(&[], |sk| {
+            let r = sk.add_rectangle(v(0.0, 0.0), v(10.0, 6.0)).unwrap();
+            sk.add_constraint(K::Fixed(r.points[0], 0.0, 0.0)).unwrap();
+            sk.add_pattern(&PatternPlan {
+                kind: PatternKind::Rect {
+                    dirs: [PatternDir::SketchX, PatternDir::SketchY],
+                    extent: [false, false],
+                    symmetric: [false, false],
+                },
+                sources: r.lines.to_vec(),
+                counts: [3, 1],
+                values: [15.0, 10.0],
+                suppressed: vec![],
+            })
+            .unwrap();
+        });
+        // Untere linke Ecken der Exemplare bei (15, 0) und (30, 0).
+        pick(&mut s, v(15.0, 0.0));
+        pick(&mut s, v(30.0, 0.0));
+        let preview = point_to(&mut s, v(22.0, -20.0)).unwrap();
+        assert!(preview.driven, "{preview:?}");
+        assert!(matches!(preview.kind, K::DistanceX(_, _, x) if (x - 15.0).abs() < 1e-9));
+        pick(&mut s, v(22.0, -20.0));
+        assert_eq!(planned(&s), Some(preview.clone()));
+        let undo = s.sketch_history().unwrap().undo_len();
+        let id = apply(&mut s, preview.kind.clone(), "50").unwrap();
+        let sf = s.sketch_draft.as_ref().unwrap();
+        let made = sf.sketch.constraint(id).unwrap();
+        assert!(made.driven);
+        assert_eq!(made.kind, preview.kind, "Vorschau = Ergebnis");
+        assert!(!sf.formulas.contains_key(&id));
+        assert_eq!(message(&s), Some(tr!("sketch-became-driven")));
+        let report = sf.sketch.clone().solve();
+        assert_eq!(report.status, planora_sketch::solver::SolveStatus::Solved);
+        assert_eq!(s.sketch_history().unwrap().undo_len(), undo + 1);
+    });
+}
+
+/// Schlusskorrektur I2: Eine Kette aus fünf Mustern (jede Linie hängt am Exemplar der vorigen)
+/// lässt sich über das Kopfmaß in der App ändern: ein Lauf genügt, gelöst, alle Glieder folgen.
+#[test]
+fn the_head_dimension_of_a_five_link_pattern_chain_can_be_edited() {
+    use planora_sketch::constraint::LineOrPoints;
+    use planora_sketch::pattern::{PatternDir, PatternKind, PatternPlan};
+    let mut head = None;
+    let mut starts = Vec::new();
+    let mut s = sketch_with(&[], |sk| {
+        let o = sk.add_point(0.0, 0.0).unwrap();
+        sk.add_constraint(K::Fixed(o, 0.0, 0.0)).unwrap();
+        let mut prev: Option<PointId> = None;
+        for k in 0..5 {
+            let x = 5.0 + 10.0 * k as f64;
+            let a = sk.add_point(x, 0.0).unwrap();
+            let b = sk.add_point(x, 5.0).unwrap();
+            let l = sk.add_line(a, b).unwrap();
+            sk.add_constraint(K::Vertical(LineOrPoints::Line(l)))
+                .unwrap();
+            sk.add_constraint(K::Distance(a, b, 5.0)).unwrap();
+            match prev {
+                None => {
+                    sk.add_constraint(K::Horizontal(LineOrPoints::Points(o, a)))
+                        .unwrap();
+                    head = Some(sk.add_constraint(K::Distance(o, a, 5.0)).unwrap());
+                }
+                Some(q) => {
+                    sk.add_constraint(K::Coincident(a, q)).unwrap();
+                }
+            }
+            let id = sk
+                .add_pattern(&PatternPlan {
+                    kind: PatternKind::Rect {
+                        dirs: [PatternDir::SketchX, PatternDir::SketchY],
+                        extent: [false, false],
+                        symmetric: [false, false],
+                    },
+                    sources: vec![l],
+                    counts: [2, 1],
+                    values: [10.0, 10.0],
+                    suppressed: vec![],
+                })
+                .unwrap();
+            let d = sk.pattern(id).unwrap();
+            let k0 = d.source_points.iter().position(|&p| p == a).unwrap();
+            prev = Some(d.instances[0].points[k0]);
+            starts.push(a);
+        }
+    });
+    let head = head.unwrap();
+    for value in [25.0, 3.0] {
+        let (se, sk) = s.session_sketch_mut().unwrap();
+        se.set_dimension_value(sk, head, value).unwrap();
+        assert_eq!(
+            se.last_report.as_ref().unwrap().status,
+            planora_sketch::solver::SolveStatus::Solved
+        );
+        for (k, &a) in starts.iter().enumerate() {
+            let p = xy(sk, a);
+            assert!(
+                (p - v(value + 10.0 * k as f64, 0.0)).length() < 1e-6,
+                "{k} {p:?}"
+            );
+        }
+    }
+}

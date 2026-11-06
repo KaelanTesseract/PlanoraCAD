@@ -438,7 +438,7 @@ fn constraint_actions_and_edit_buttons_work_like_before() {
 
     // Muster: drei Kopien der Linie.
     let curves = |app: &mut PlanoraApp| state(app).session_sketch().unwrap().curves().count();
-    press_in_side(&c, &mut app, "Muster …");
+    press_in_side(&c, &mut app, "Lineares Muster …");
     press_in_side(&c, &mut app, "Erzeugen");
     assert_eq!(curves(&mut app), 4, "Linie und drei Kopien");
 

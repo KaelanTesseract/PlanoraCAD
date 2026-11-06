@@ -20,7 +20,7 @@ use planora_app::sketch_state::{Item, Tool, TransformStage};
 use planora_app::state::{AppState, StandardPlane};
 use planora_app::workspace::Workspace;
 use planora_app::{fonts, theme};
-use planora_feature::{FeatureId, ParamEdit, ParamUnit, SketchPlane};
+use planora_feature::{FeatureId, FeatureStatus, ParamEdit, ParamUnit, SketchPlane};
 use planora_i18n::{DisplayUnit, german, tr, with_lang, with_unit};
 use planora_math::DVec2;
 use planora_project::config::Config;
@@ -1141,6 +1141,53 @@ fn a_parameter_lowering_the_count_says_how_many_constraints_dropped() {
     });
 }
 
+/// Schlusskorrektur (Task 9, zurückgestellt): Die Zählung vorher kommt aus der Definition der
+/// Skizze, nicht aus dem Ergebnis. So zählt auch eine Skizze, die gerade einen Fehler hat:
+/// Anzahl 5 → 0 (Fehler) → 2 nennt die zwei entfallenen Abhängigkeiten.
+#[test]
+fn a_sketch_in_error_still_counts_its_dropped_constraints() {
+    with_lang(&german(), || {
+        let (mut s, feature) = sketch_with(&[("n", "5", ParamUnit::Number)], |sk| {
+            sk.add_rectangle(v(0.0, 0.0), v(10.0, 5.0))
+                .unwrap()
+                .lines
+                .to_vec()
+        });
+        finish(&mut s).unwrap();
+        let (id, _) = the_pattern(s.session_sketch().unwrap());
+        let (count, _) = value_id(s.session_sketch().unwrap(), id, PatternSlot::Count1);
+        {
+            let scope = s.document.param_scope();
+            let (se, sf) = s.session_draft_mut().unwrap();
+            se.set_dimension_input(sf, count, "n", &scope).unwrap();
+            for k in [2, 3] {
+                let corner = sf.sketch.pattern(id).unwrap().instances[k].points[0];
+                let f = sf.sketch.add_point(60.0 + k as f64, -10.0).unwrap();
+                sf.sketch.add_constraint(K::Coincident(f, corner)).unwrap();
+            }
+            sf.sketch.solve();
+        }
+        s.observe_sketch(false);
+        s.close_sketch();
+        let n = s.document.parameters()[0].id;
+        set_param(&mut s, n, "0", ParamUnit::Number);
+        assert!(
+            s.document
+                .features()
+                .iter()
+                .any(|f| f.id == feature && matches!(f.status, FeatureStatus::Error(_))),
+            "Anzahl 0 ist ein Fehler"
+        );
+        s.message = None;
+        set_param(&mut s, n, "2", ParamUnit::Number);
+        assert_eq!(s.message, Some(tr!("sketch-pattern-dropped", n = 2)));
+        assert_eq!(
+            the_pattern(s.document.sketch_of(feature).unwrap()).1.len(),
+            1
+        );
+    });
+}
+
 /// Fix-Runde Task 9: Eine Datei mit einer Schleife lädt über `convert.rs`, das Muster wird
 /// aufgelöst, und die Meldung nach dem Öffnen nennt es.
 #[test]
@@ -1274,5 +1321,69 @@ fn ten_by_ten_then_changing_the_spacing_solves_under_100_ms() {
         let report = sf.sketch.clone().solve();
         assert!(report.conflicting.is_empty());
         assert!(ms < 100.0, "{ms} ms");
+    });
+}
+
+/// Schlusskorrektur (Minor 8): Ein geöffnetes Muster, unverändert bestätigt, setzt keinen
+/// Schrittnamen und keinen Schritt; eine echte Änderung heißt „Muster bearbeiten“.
+#[test]
+fn confirming_an_unchanged_pattern_edit_names_no_step() {
+    with_lang(&german(), || {
+        let mut rig = Rig::new(&[]);
+        let ids = rig.sk().add_rectangle(v(0.0, 0.0), v(5.0, 2.5)).unwrap();
+        let plan = rect_plan(ids.lines.to_vec(), [4, 1], [10.0, 5.0]);
+        let id = rig.sk().add_pattern(&plan).unwrap();
+        rig.sk().solve();
+        rig.settle();
+        let steps = rig.undo_len();
+        let at = rig.exact(v(35.0, 2.5));
+        rig.double_click(at);
+        assert_eq!(
+            rig.st().sketch_session.as_ref().unwrap().pattern.editing,
+            Some(id)
+        );
+        {
+            let (se, sf) = rig.st().session_draft_mut().unwrap();
+            se.finish_pattern(sf).unwrap();
+            assert_eq!(se.edit_label, None, "nichts geändert, kein Name");
+        }
+        rig.settle();
+        assert_eq!(rig.undo_len(), steps);
+        // Mit Änderung: der Name des Schritts.
+        rig.double_click(at);
+        rig.type_text("2");
+        {
+            let (se, sf) = rig.st().session_draft_mut().unwrap();
+            se.finish_pattern(sf).unwrap();
+            assert_eq!(se.edit_label, Some(planora_app::msg!("undo-pattern-edit")));
+        }
+        rig.settle();
+        assert_eq!(rig.undo_len(), steps + 1);
+    });
+}
+
+/// Schlusskorrektur (Task 12, Testlücke): Richtung 2 erst auf eine Linie, dann zurück auf
+/// „Senkrecht zu 1“ (wie der Knopf): Die Vorschau ist das Ergebnis, das Anlegen ist ein Schritt,
+/// und Richtung 2 folgt danach der ersten.
+#[test]
+fn direction_two_back_to_perpendicular_previews_the_result_in_one_step() {
+    with_lang(&german(), || {
+        let (mut s, _) = sketch_with(&[], mixed);
+        let l = slanted_line(&mut s);
+        let steps = s.sketch_history().unwrap().undo_len();
+        assert_preview_is_result(&mut s, |s| {
+            type_field(s, FieldKind::PatternCount2, "2");
+            let se = s.sketch_session.as_mut().unwrap();
+            se.set_pattern_direction(0, PatternDir::Line(l));
+            se.set_pattern_direction(1, PatternDir::Line(l));
+            se.set_pattern_direction(1, PatternDir::Perpendicular);
+        });
+        assert_eq!(s.sketch_history().unwrap().undo_len(), steps + 1);
+        let (id, _) = the_pattern(s.session_sketch().unwrap());
+        let PatternKind::Rect { dirs, .. } = s.session_sketch().unwrap().pattern(id).unwrap().kind
+        else {
+            panic!("rechteckig")
+        };
+        assert_eq!(dirs, [PatternDir::Line(l), PatternDir::Perpendicular]);
     });
 }

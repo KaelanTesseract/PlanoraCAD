@@ -940,6 +940,7 @@ impl Sketch {
             self.check_not_pattern_value(id)?;
         } else if self.constraints[id].driven && self.constraints[id].enabled {
             self.check_activation_cycle(id)?;
+            self.check_not_instance_only(id)?;
         }
         self.constraints[id].driven = driven;
         self.touch_structure();
@@ -951,6 +952,7 @@ impl Sketch {
         self.checked_constraint(id)?;
         if enabled && !self.constraints[id].enabled && !self.constraints[id].driven {
             self.check_activation_cycle(id)?;
+            self.check_not_instance_only(id)?;
         }
         self.constraints[id].enabled = enabled;
         self.touch_structure();
@@ -968,6 +970,12 @@ impl Sketch {
             .with_value(v)
             .ok_or_else(|| SketchError::WrongType(tr!("sketch-not-dimension")))?;
         self.check_refs(&kind)?;
+        // Ein treibendes Maß nur an Exemplaren (aus einer alten Datei) bekäme einen Wert ohne
+        // Wirkung: abgelehnt (Schlusskorrektur I1). Anzeigend darf es den Messwert speichern.
+        let d = &self.constraints[id];
+        if d.enabled && !d.driven {
+            self.check_not_instance_only(id)?;
+        }
         if let ConstraintKind::PatternValue(m, slot, v) = kind {
             let plan = self
                 .pattern_plan(m)
@@ -1511,6 +1519,22 @@ impl Sketch {
         if self.data_closes_pattern_cycle(&data, start) {
             return Err(PatternProblem::Cycle.error());
         }
+        // Liest sie nur Exemplare, hätte sie keine Wirkung (Schlusskorrektur I1): Ein Maß wird
+        // anzeigend und zeigt den gemessenen Wert (wie Fusion bei einem überzähligen Maß), eine
+        // geometrische Abhängigkeit wird abgelehnt.
+        if self.data_reads_only_instances(&data, start) {
+            if !data.kind.is_dimension() {
+                return Err(PatternProblem::InstanceOnly.error());
+            }
+            data.driven = true;
+            if let Some(kind) = self
+                .measure(&data.kind)
+                .and_then(|v| data.kind.with_value(v))
+                .filter(|k| self.check_constraint_value(k).is_ok())
+            {
+                data.kind = kind;
+            }
+        }
         data.extra = start.map(|t| self.new_var(t));
         self.touch_structure();
         Ok(self.constraints.push(data))
@@ -1543,11 +1567,61 @@ impl Sketch {
         if self.patterns().next().is_none() {
             return false;
         }
+        self.pattern_cycle(&self.data_locals(data, start))
+    }
+
+    /// Die Variablen der neuen Abhängigkeit `data` ohne ihre (neue) Zusatzvariable.
+    fn data_locals(&self, data: &ConstraintData, start: Option<f64>) -> Vec<usize> {
         let mut x = self.vars.clone();
         x.extend(start);
         let mut locals = self.evaluate_data(data, &x).locals;
         locals.retain(|&v| v < self.vars.len());
-        self.pattern_cycle(&locals)
+        locals
+    }
+
+    /// Läse die neue Abhängigkeit `data` nur Exemplare eines Musters (Schlusskorrektur I1)? Ohne
+    /// Muster `false` ohne Rechnung.
+    fn data_reads_only_instances(&self, data: &ConstraintData, start: Option<f64>) -> bool {
+        if self.patterns().next().is_none() {
+            return false;
+        }
+        self.reads_only_instances(&self.data_locals(data, start))
+    }
+
+    /// Sind die Variablen `locals` alle gehaltene Exemplarvariablen? Dann hätte eine
+    /// Abhängigkeit darauf keine Wirkung: Der Löser hält Exemplare fest, sie folgen der Vorlage.
+    fn reads_only_instances(&self, locals: &[usize]) -> bool {
+        if locals.is_empty() || self.patterns().next().is_none() {
+            return false;
+        }
+        let held = self.pattern_vars();
+        locals.iter().all(|v| held.contains(v))
+    }
+
+    /// Wird das geprüfte Maß `kind`, angelegt mit [`Sketch::add_constraint`], anzeigend, weil es
+    /// nur Exemplare liest? Dieselbe Prüfung, ohne die Skizze zu ändern (für die Vorschau).
+    pub(crate) fn plans_driven(&self, kind: &ConstraintKind) -> bool {
+        if self.patterns().next().is_none() {
+            return false;
+        }
+        let (data, start) = self.new_constraint_data(kind.clone());
+        self.data_reads_only_instances(&data, start)
+    }
+
+    /// Liest die bestehende (nicht interne) Abhängigkeit `id` nur Exemplare? Dann wäre sie
+    /// treibend ohne Wirkung: `PatternProblem::InstanceOnly` (Schlusskorrektur I1).
+    fn check_not_instance_only(&self, id: ConstraintId) -> Result<(), SketchError> {
+        if self.constraints[id].internal || self.patterns().next().is_none() {
+            return Ok(());
+        }
+        let Some(ev) = self.evaluate(id, &self.vars) else {
+            return Ok(());
+        };
+        if self.reads_only_instances(&ev.locals) {
+            Err(PatternProblem::InstanceOnly.error())
+        } else {
+            Ok(())
+        }
     }
 
     /// Lehnte [`Sketch::add_constraint`] die geprüfte Abhängigkeit `kind` wegen einer Schleife
@@ -1647,48 +1721,54 @@ impl Sketch {
         is_end(a, pa) && is_end(b, pb)
     }
 
-    /// Die Enden, an denen Glatt die Kurven `a` und `b` verbindet: zuerst ein gemeinsamer Punkt,
-    /// sonst das nächste Endenpaar (**Annahme** zu Fusion). Mit `near` zählen nur Enden, die
-    /// höchstens die halbe Sehne ihrer Kurve von `near` entfernt sind; bei mehreren gemeinsamen
-    /// Punkten gewinnt der nächste an `near`. `None` für dieselbe Kurve, Kurven ohne Enden oder
-    /// wenn kein Ende in Reichweite liegt. Die Kurvenarten prüft der Aufrufer (oder
-    /// `add_constraint`): Auch eine Linie und ein Bogen liefern Enden, obwohl Glatt einen Spline
-    /// braucht.
+    /// Die Enden, an denen Glatt die Kurven `a` und `b` verbindet, wie in Fusion an der
+    /// Klickstelle: Wurde eine Kurve per Klick gewählt (`at_a`, `at_b`), gilt ihr Ende, das dem
+    /// Klick am nächsten liegt; ohne Klick (etwa Rahmenauswahl) das Ende, das am nächsten an einem
+    /// Ende der anderen Kurve liegt (ein gemeinsames Ende zuerst). Die Weite ist nicht begrenzt:
+    /// Getrennte Enden legt der Befehl der Oberfläche mit einem `Coincident` zusammen. Die Wahl
+    /// hängt nicht von der Reihenfolge ab (Gleichstand: zuerst ein wirklich gemeinsamer Punkt vor
+    /// zwei deckenden, dann das Paar mit den kleineren Punktnummern). `None` für dieselbe Kurve
+    /// oder Kurven ohne Enden (wie bei [`curve_ends`]). Die Kurvenarten prüft
+    /// [`Sketch::add_constraint`]: Auch eine Linie und ein Bogen liefern Enden.
     pub fn smooth_ends(
         &self,
         a: CurveId,
+        at_a: Option<DVec2>,
         b: CurveId,
-        near: Option<DVec2>,
+        at_b: Option<DVec2>,
     ) -> Option<(PointId, PointId)> {
         if a == b {
             return None;
         }
-        let (ca, cb) = (self.curve(a)?, self.curve(b)?);
-        let (ea, eb) = (curve_ends(&ca.kind)?, curve_ends(&cb.kind)?);
-        let in_reach = |ends: [PointId; 2], p: PointId| {
-            near.is_none_or(|q| {
-                let reach = 0.5 * self.pos(ends[0]).distance(self.pos(ends[1]));
-                self.pos(p).distance(q) <= reach
-            })
+        let (ea, eb) = (
+            curve_ends(&self.curve(a)?.kind)?,
+            curve_ends(&self.curve(b)?.kind)?,
+        );
+        let dist = |p: PointId, q: DVec2| self.pos(p).distance(q);
+        // Mit Klick bleibt nur das Ende nächst dem Klick.
+        let clicked = |ends: [PointId; 2], at: Option<DVec2>| -> Vec<PointId> {
+            match at {
+                Some(q) => ends
+                    .into_iter()
+                    .min_by(|x, y| dist(*x, q).total_cmp(&dist(*y, q)).then(x.cmp(y)))
+                    .into_iter()
+                    .collect(),
+                None => ends.to_vec(),
+            }
         };
-        let to_near = |p: PointId| near.map_or(0.0, |q| self.pos(p).distance(q));
-        let shared = ea
-            .into_iter()
-            .filter(|p| eb.contains(p) && in_reach(ea, *p) && in_reach(eb, *p))
-            .min_by(|x, y| to_near(*x).total_cmp(&to_near(*y)));
-        if let Some(p) = shared {
-            return Some((p, p));
-        }
-        ea.into_iter()
-            .filter(|&p| in_reach(ea, p))
-            .flat_map(|p| {
-                eb.into_iter()
-                    .filter(move |&q| in_reach(eb, q))
-                    .map(move |q| (p, q))
-            })
-            .min_by(|x, y| {
-                let d = |(p, q): (PointId, PointId)| self.pos(p).distance(self.pos(q));
-                d(*x).total_cmp(&d(*y))
+        let (ca, cb) = (clicked(ea, at_a), clicked(eb, at_b));
+        let gap = |p: PointId, q: PointId| {
+            if p == q { 0.0 } else { dist(p, self.pos(q)) }
+        };
+        let key = |p: PointId, q: PointId| (p.min(q), p.max(q));
+        ca.iter()
+            .flat_map(|&p| cb.iter().map(move |&q| (p, q)))
+            .min_by(|&(p, q), &(r, t)| {
+                gap(p, q)
+                    .total_cmp(&gap(r, t))
+                    // Ein wirklich gemeinsamer Punkt vor zwei deckenden Punkten.
+                    .then_with(|| (p != q).cmp(&(r != t)))
+                    .then_with(|| key(p, q).cmp(&key(r, t)))
             })
     }
 

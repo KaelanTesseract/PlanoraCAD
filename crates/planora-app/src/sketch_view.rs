@@ -1006,11 +1006,11 @@ pub fn pattern_grip_layout(state: &AppState, rect: Rect) -> Option<PatternGripLa
     Some(sketch_pattern::pattern_layout(origin, tips, None))
 }
 
-/// Der Griff der Anordnung, den der eben erkannte Zug mit der linken Taste greift.
+/// Der Griff der Anordnung, den der eben erkannte Zug mit der linken Taste greift (`layout`: die
+/// Lage der Griffe in diesem Bild).
 fn pattern_grip_can_start(
     ui: &egui::Ui,
-    rect: Rect,
-    state: &AppState,
+    layout: Option<&PatternGripLayout>,
     pan_gesture: bool,
     ctrl: bool,
 ) -> Option<PatternGrip> {
@@ -1018,8 +1018,7 @@ fn pattern_grip_can_start(
     if (pan_gesture && !shift_only) || crate::keymap::settings_ui::is_capturing(ui.ctx()) {
         return None;
     }
-    let l = pattern_grip_layout(state, rect)?;
-    sketch_pattern::pattern_hit(&l, ui.input(|i| i.pointer.press_origin())?)
+    sketch_pattern::pattern_hit(layout?, ui.input(|i| i.pointer.press_origin())?)
 }
 
 /// Der Griff, den der eben erkannte Zug mit der linken Taste greift. Wie beim Rahmen zählt nur die
@@ -1109,12 +1108,19 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     let km = crate::keymap::mouse::current(ui.ctx());
     let pan_gesture = crate::keymap::mouse::pan_2d(&km, ui, response);
     let primary_start = response.drag_started_by(PointerButton::Primary) && !aborted;
+    let primary_click = response.clicked_by(PointerButton::Primary);
+    // Die Griffe der Anordnung einmal je Bild und nur, wenn gedrückt oder geklickt wurde: vor jeder
+    // Änderung durch die Eingabe. Ein Zug, der schwenkt, ist kein Klick; ein gegriffener Griff
+    // schwenkt nicht. So gilt die Lage für den Zugbeginn und den Klick gleichermaßen.
+    let pattern_layout = (primary_start || primary_click)
+        .then(|| pattern_grip_layout(state, rect))
+        .flatten();
     let starts_box = primary_start && box_can_start(ui, rect, state, pan_gesture, ctrl);
     let starts_grip = primary_start
         .then(|| grip_can_start(ui, rect, state, pan_gesture, ctrl))
         .flatten();
     let starts_pattern_grip = primary_start
-        .then(|| pattern_grip_can_start(ui, rect, state, pan_gesture, ctrl))
+        .then(|| pattern_grip_can_start(ui, pattern_layout.as_ref(), pan_gesture, ctrl))
         .flatten();
     // Ein laufender Rahmen schwenkt nicht, auch wenn Umschalt erst währenddessen dazukommt; ein
     // Zug auf dem letzten Punkt des Linienzugs ebenso. Beim Griff schwenkt die Mitte trotzdem.
@@ -1151,13 +1157,13 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     };
 
     // Ein Klick auf einen Griff schaltet beim Wählen nichts in der Auswahl.
-    let click_on_grip = response.clicked_by(PointerButton::Primary)
+    let click_on_grip = primary_click
         && (pointer
             .zip(grip_layout(state, rect))
             .is_some_and(|(p, l)| sketch_grips::hit(&l, p).is_some())
             || pointer
-                .zip(pattern_grip_layout(state, rect))
-                .is_some_and(|(p, l)| sketch_pattern::pattern_hit(&l, p).is_some()));
+                .zip(pattern_layout.as_ref())
+                .is_some_and(|(p, l)| sketch_pattern::pattern_hit(l, p).is_some()));
 
     // Getippte Werte werden beim Klick und bei der Eingabe zu Maßen; die Formeln darin brauchen die
     // Parameter.
@@ -1743,9 +1749,9 @@ fn dim_picked(se: &SketchSession, item: Item) -> bool {
 }
 
 /// Text der Vorschau der Skizzenbemaßung, wie das Maß später in der Ansicht steht
-/// (etwa „40,00 mm“, „Ø 30,00 mm“, „R 5,00 mm“, „30,0°“).
+/// (etwa „40,00 mm“, „Ø 30,00 mm“, „R 5,00 mm“, „30,0°“); ein anzeigendes wie in der Ansicht.
 pub fn dimension_text(ctx: &egui::Context, sk: &Sketch, plan: &DimPlan) -> String {
-    overlay_text(ctx, sk, &plan.kind, false)
+    overlay_text(ctx, sk, &plan.kind, plan.driven)
 }
 
 /// Hilfsstriche der Vorschau der Skizzenbemaßung (Skizzenkoordinaten): waagerecht und senkrecht

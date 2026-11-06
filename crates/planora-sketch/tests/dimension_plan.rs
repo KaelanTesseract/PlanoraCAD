@@ -586,7 +586,16 @@ fn no_plan_that_closes_a_pattern_cycle() {
         [DimPick::Point(free), DimPick::Point(i1)],
     ] {
         for pointer in [v(30.0, 40.0), v(60.0, 15.0), v(-40.0, -40.0)] {
-            commits_still(&s, &plan(&s, &picks, pointer));
+            let p = plan(&s, &picks, pointer);
+            commits_still(&s, &p);
+            // Schlusskorrektur I1: Nur Exemplare ⇒ anzeigend; Vorschau = Ergebnis.
+            let only_instances = matches!(picks[0], DimPick::Point(x) if x == i1);
+            assert_eq!(p.driven, only_instances, "{p:?}");
+            let mut c = s.clone();
+            let id = c.add_constraint(p.kind.clone()).unwrap();
+            let made = c.constraint(id).unwrap();
+            assert_eq!(made.driven, p.driven, "{p:?}");
+            assert_eq!(made.kind, p.kind, "{p:?}");
         }
     }
 }

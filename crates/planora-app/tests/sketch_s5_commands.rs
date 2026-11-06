@@ -28,6 +28,8 @@ struct Shot {
     texts: Vec<(String, Rect)>,
     /// Beschriftung und „gesperrt“ jedes Knotens für Bildschirmleser.
     nodes: Vec<(String, bool)>,
+    /// Beschriftung und Lage jedes Knotens mit Lage.
+    bounds: Vec<(String, Rect)>,
 }
 
 fn walk(shape: &Shape, out: &mut Vec<(String, Rect)>) {
@@ -50,6 +52,7 @@ impl Shot {
         Shot {
             texts,
             nodes: Vec::new(),
+            bounds: Vec::new(),
         }
     }
 
@@ -150,6 +153,13 @@ impl Rig {
             for (_, node) in &update.nodes {
                 if let Some(label) = node.label() {
                     shot.nodes.push((label.to_string(), node.is_disabled()));
+                    if let Some(b) = node.bounds() {
+                        let r = Rect::from_min_max(
+                            Pos2::new(b.x0 as f32, b.y0 as f32),
+                            Pos2::new(b.x1 as f32, b.y1 as f32),
+                        );
+                        shot.bounds.push((label.to_string(), r));
+                    }
                 }
             }
         }
@@ -649,4 +659,125 @@ fn the_row_delete_icon_is_disabled_while_the_pattern_runs() {
         assert!(!rows.is_empty());
         assert!(rows.iter().all(|d| *d), "gesperrt: {rows:?}");
     });
+}
+
+/// Schlusskorrektur (Task 12, Testlücke): Der gesperrte Löschknopf der Zeile sagt auch auf
+/// Englisch, warum.
+#[test]
+fn the_disabled_row_delete_explains_itself_in_english() {
+    with_lang(&english(), || {
+        let mut rig = Rig::new();
+        rig.ctx
+            .all_styles_mut(|s| s.interaction.tooltip_delay = 0.0);
+        let a = rig.sk().add_point(0.0, 0.0).unwrap();
+        let b = rig.sk().add_point(10.0, 0.0).unwrap();
+        let l = rig.sk().add_line(a, b).unwrap();
+        rig.sk()
+            .add_constraint(planora_sketch::constraint::ConstraintKind::Horizontal(
+                planora_sketch::constraint::LineOrPoints::Line(l),
+            ))
+            .unwrap();
+        running_rect_pattern(&mut rig);
+        let shot = rig.settle();
+        let label = planora_i18n::tr!("sketch-delete-row");
+        assert_eq!(label, "Delete constraint");
+        let at = shot
+            .bounds
+            .iter()
+            .find(|(t, _)| *t == label)
+            .unwrap_or_else(|| panic!("„{label}“ fehlt"))
+            .1
+            .center();
+        rig.frame(vec![Event::PointerMoved(at)]);
+        let shot = rig.frame(vec![Event::PointerMoved(at)]);
+        let hint = planora_i18n::tr!("sketch-delete-in-pattern");
+        assert!(hint.starts_with("Nothing can be deleted"), "{hint}");
+        assert!(shot.has(&hint), "Hinweis fehlt: {:?}", shot.texts);
+    });
+}
+
+/// Schlusskorrektur (Task 12, Testlücke): Eine belegte Taste bei unpassender Auswahl legt nichts
+/// an und zeigt dieselbe Meldung wie der Knopf.
+#[test]
+fn a_bound_key_with_an_unfitting_selection_says_why() {
+    with_lang(&german(), || {
+        let mut by_button = Rig::new();
+        let curves = three_pairs(by_button.sk());
+        by_button.settle();
+        // Zwei Linien sind nicht konzentrisch.
+        by_button.select(curves[1].iter().map(|&c| Item::Curve(c)).collect());
+        let want = {
+            let (se, sk) = by_button.st().session_sketch_mut().unwrap();
+            assert!(se.apply(sk, ConstraintAction::Concentric, None).is_err());
+            se.message_text()
+        };
+        assert!(want.is_some());
+
+        let mut by_key = Rig::new();
+        assert_eq!(
+            by_key
+                .app
+                .ws_mut()
+                .keymap
+                .set(Action::SketchConcentric, 0, plain(Key::F6)),
+            SetResult::Ok
+        );
+        let curves = three_pairs(by_key.sk());
+        by_key.settle();
+        by_key.select(curves[1].iter().map(|&c| Item::Curve(c)).collect());
+        let before = data(by_key.sk());
+        by_key.press(Key::F6);
+        assert_eq!(data(by_key.sk()), before, "nichts angelegt");
+        assert_eq!(by_key.se().message_text(), want);
+    });
+}
+
+/// Schlusskorrektur (Task 12, Testlücke): D ist in der Skizze und in der Zeichnung je eine eigene
+/// Belegung; legt man eine um, bleibt die andere.
+#[test]
+fn rebinding_d_in_one_area_leaves_the_other() {
+    let d = KeyChord {
+        key: Key::D,
+        ctrl: false,
+        shift: false,
+        alt: false,
+    };
+    let f9 = KeyChord { key: Key::F9, ..d };
+    let mut km = Keymap::defaults();
+    assert_eq!(
+        km.set(Action::SketchDimension, 0, plain(Key::F9)),
+        SetResult::Ok
+    );
+    assert_eq!(
+        km.action_for_key(Area::Sketch, &f9),
+        Some(Action::SketchDimension)
+    );
+    assert_eq!(km.action_for_key(Area::Sketch, &d), None);
+    assert_eq!(
+        km.action_for_key(Area::Drawing, &d),
+        Some(Action::DrawingDimension)
+    );
+    assert_eq!(
+        km.bindings(Action::DrawingDimension),
+        [plain(Key::D)].as_slice()
+    );
+
+    let mut km = Keymap::defaults();
+    assert_eq!(
+        km.set(Action::DrawingDimension, 0, plain(Key::F9)),
+        SetResult::Ok
+    );
+    assert_eq!(
+        km.action_for_key(Area::Drawing, &f9),
+        Some(Action::DrawingDimension)
+    );
+    assert_eq!(km.action_for_key(Area::Drawing, &d), None);
+    assert_eq!(
+        km.action_for_key(Area::Sketch, &d),
+        Some(Action::SketchDimension)
+    );
+    assert_eq!(
+        km.bindings(Action::SketchDimension),
+        [plain(Key::D)].as_slice()
+    );
 }

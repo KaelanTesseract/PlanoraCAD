@@ -913,24 +913,32 @@ impl Sketch {
     ///
     /// Mit Mustern (Entscheidung 5): Vor dem Lauf werden die Exemplare aus der Vorlage
     /// nachgeführt, danach erneut. Hat sich dabei ein Exemplar bewegt und liest eine Gruppe
-    /// Exemplare, folgt noch ein Lauf, insgesamt höchstens [`PATTERN_ROUNDS`]; die Exemplare
-    /// stehen am Ende immer an der Lage der gelösten Vorlage.
+    /// Exemplare, folgt noch ein Lauf, insgesamt höchstens `max(PATTERN_ROUNDS, Muster + 1)`:
+    /// Jede Runde bringt in einer Kette ohne Schleife mindestens ein weiteres Glied zur Ruhe, so
+    /// reicht das für jede solche Kette (Schlusskorrektur I2). Die Exemplare stehen am Ende immer
+    /// an der Lage der gelösten Vorlage. Geht die Lage eines Musters nicht, ist ein „gelöst“
+    /// „nicht lösbar“: Seine Exemplare stünden sonst still an der alten Lage.
     pub(crate) fn solve_with_soft(&mut self, soft: &[Soft]) -> SolveReport {
         if self.patterns().next().is_none() {
             return self.solve_round(soft, &HashSet::new()).0;
         }
         self.refresh_patterns();
         let held = self.pattern_vars();
+        let max_rounds = PATTERN_ROUNDS.max(self.patterns().count() + 1);
         let (mut report, mut reads) = self.solve_round(soft, &held);
         let mut rounds = 1;
         loop {
-            let moved = self.refresh_patterns();
-            if !(moved && reads) {
+            let refresh = self.refresh_patterns();
+            if refresh.failed && report.status == SolveStatus::Solved {
+                report.status = SolveStatus::NotConverged;
+            }
+            if !(refresh.moved && reads) {
                 break;
             }
-            if rounds >= PATTERN_ROUNDS {
+            if rounds >= max_rounds {
                 // Die letzte Nachführung hat Exemplare bewegt, die eine Gruppe liest (etwa eine
-                // Kette über mehr Muster als Runden): Deren Lösung ist überholt.
+                // Schleife über mehrere Muster, die die Prüfung nicht kennt): Deren Lösung ist
+                // überholt.
                 self.flag_stale_pattern_reads(&held, &mut report);
                 break;
             }

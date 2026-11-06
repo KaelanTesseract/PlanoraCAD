@@ -37,11 +37,14 @@ pub enum DimMode {
 }
 
 /// Ein geplantes Maß: Art mit gemessenem Wert, Anzeigeart und Lage des Texts (der Zeiger).
+/// `driven`: Das Maß liest nur Exemplare eines Musters und wird beim Anlegen anzeigend
+/// ([`Sketch::add_constraint`], Schlusskorrektur I1).
 #[derive(Clone, Debug, PartialEq)]
 pub struct DimPlan {
     pub kind: ConstraintKind,
     pub mode: DimMode,
     pub anchor: DVec2,
+    pub driven: bool,
 }
 
 impl DimPlan {
@@ -59,6 +62,7 @@ impl DimPlan {
             _ => return None,
         };
         Some(DimPlan {
+            driven: sk.plans_driven(&kind),
             kind,
             mode,
             anchor: self.anchor,
@@ -97,6 +101,9 @@ impl Sketch {
     ///   wählen: `Angle` misst zwischen den gerichteten Linien, `π − θ` wäre nur als
     ///   `Angle(L2, L1, π − θ)` mit dem Messwert `−θ` zu haben (Zeile erfüllt, Anzeige falsch).
     ///
+    /// Liest das Maß nur Exemplare eines Musters, ist der Plan `driven`: So legt ihn
+    /// [`Sketch::add_constraint`] an (Schlusskorrektur I1).
+    ///
     /// Der Wert ist der gemessene; `None`, wenn er null wäre, die Auswahl nicht passt, ein
     /// Objekt nicht lebt oder [`Sketch::add_constraint`] das Maß als Schleife zwischen Vorlage
     /// und eigenem Exemplar eines Musters ablehnen würde. Die Skizze bleibt unberührt.
@@ -126,6 +133,7 @@ impl Sketch {
             return None;
         }
         Some(DimPlan {
+            driven: self.plans_driven(&kind),
             kind,
             mode,
             anchor: pointer,

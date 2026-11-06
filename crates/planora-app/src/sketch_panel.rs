@@ -1462,7 +1462,7 @@ fn value_editor(
     live
 }
 
-/// Eingaben für „Spiegeln …“ und „Muster …“.
+/// Eingaben für „Spiegeln …“ und „Lineares Muster …“.
 fn sections(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch, panel: &mut PanelState) {
     match panel.section {
         Some(Section::Mirror) => {

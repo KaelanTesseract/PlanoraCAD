@@ -1911,7 +1911,8 @@ impl SketchSession {
             }
             A::Collinear => K::Collinear(c[0], c[1]),
             A::Smooth => {
-                let (pa, pb) = smooth_joint(sk, c[0], self.pick_of(c[0]), c[1], self.pick_of(c[1]))
+                let (pa, pb) = sk
+                    .smooth_ends(c[0], self.pick_of(c[0]), c[1], self.pick_of(c[1]))
                     .ok_or_else(|| crate::msg!("sketch-err-smooth-end"))?;
                 K::Smooth(c[0], pa, c[1], pb)
             }
@@ -2018,9 +2019,12 @@ impl SketchSession {
         let old = sk.measure(&kind);
         let value_of = kind.length_value();
         let id = sk.add_constraint(kind).map_err(err)?;
+        // Ein Maß nur an Exemplaren eines Musters legt die Skizze anzeigend an (es hätte sonst
+        // keine Wirkung, Schlusskorrektur I1); sein Wert ist der gemessene.
+        let driven = sk.constraint(id).is_some_and(|c| c.driven);
         // Der Stand vor dem Neulegen: Davon gehen Wächter und Schritte aus.
         let unsolved = sk.clone();
-        if let Some(v) = value_of {
+        if let Some(v) = value_of.filter(|_| !driven) {
             sk.prepare_dimension_change(id, v);
         }
         let before = se.last_report.take();
@@ -2045,6 +2049,8 @@ impl SketchSession {
             } else {
                 se.message = Some(crate::msg!("sketch-redundant"));
             }
+        } else if driven {
+            se.message = Some(crate::msg!("sketch-became-driven"));
         } else if on_arc {
             se.message = Some(crate::msg!("sketch-smooth-arc-g1"));
         }
@@ -2370,70 +2376,68 @@ impl SketchSession {
     /// mitgelöschter) Kurven, die danach nichts mehr benutzt, werden mit entfernt; andere freie
     /// Punkte bleiben.
     pub fn delete_selection(&mut self, sk: &mut Sketch) {
-        self.message = None;
-        let mut orphans: Vec<PointId> = Vec::new();
-        self.drop_curve_picks();
-        let patterns = sk.pattern_count();
-        // Abhängigkeiten, die mit abgewählten Exemplaren entfallen.
-        let mut dropped = 0;
-        for item in std::mem::take(&mut self.selection) {
-            // Ein Exemplar eines Musters wird abgewählt, das Muster bleibt (Entscheidung 6 des
-            // Plans Skizzen 5); seine anderen Kurven und Punkte sind danach fort.
-            if let Some((id, at)) = crate::sketch_pattern::instance_of_item(sk, item) {
-                let users = sk.constraints().count();
-                match sk.suppress_instance(id, at, true) {
-                    Ok(()) => dropped += users.saturating_sub(sk.constraints().count()),
-                    Err(e) => self.message = Some(err(e)),
+        // Eine Einheit: Lehnt die Skizze einen Teil ab (das Abwählen eines Exemplars brächte ein
+        // Muster in eine Schleife, ein Musterwert bleibt), bleibt alles, wie es war, und die
+        // Meldung nennt den Grund. `atomic` meldet aufgelöste Muster.
+        let _ = self.atomic(sk, |se, sk, _| {
+            let mut orphans: Vec<PointId> = Vec::new();
+            se.drop_curve_picks();
+            // Abhängigkeiten, die mit abgewählten Exemplaren entfallen.
+            let mut dropped = 0;
+            for item in std::mem::take(&mut se.selection) {
+                // Ein Exemplar eines Musters wird abgewählt, das Muster bleibt (Entscheidung 6 des
+                // Plans Skizzen 5); seine anderen Kurven und Punkte sind danach fort.
+                if let Some((id, at)) = crate::sketch_pattern::instance_of_item(sk, item) {
+                    let users = sk.constraints().count();
+                    sk.suppress_instance(id, at, true).map_err(err)?;
+                    dropped += users.saturating_sub(sk.constraints().count());
+                    continue;
                 }
-                continue;
-            }
-            match item {
-                Item::Constraint(c) => {
-                    if let Err(e) = sk.remove_constraint(c)
-                        && matches!(
-                            sk.constraint(c).map(|d| &d.kind),
-                            Some(ConstraintKind::PatternValue(..))
-                        )
-                    {
-                        self.message = Some(err(e));
+                match item {
+                    Item::Constraint(c) => {
+                        if let Err(e) = sk.remove_constraint(c)
+                            && matches!(
+                                sk.constraint(c).map(|d| &d.kind),
+                                Some(ConstraintKind::PatternValue(..))
+                            )
+                        {
+                            return Err(err(e));
+                        }
+                    }
+                    Item::Curve(c) => {
+                        if let Some(d) = sk.curve(c) {
+                            orphans.extend(d.kind.points());
+                        }
+                        let _ = sk.remove_curve(c);
+                    }
+                    Item::Point(p) => {
+                        // Andere Punkte der mitgelöschten Kurven werden ebenso geprüft.
+                        orphans.extend(
+                            sk.curves()
+                                .map(|(_, c)| c.kind.points())
+                                .filter(|pts| pts.contains(&p))
+                                .flatten(),
+                        );
+                        let _ = sk.remove_point(p);
                     }
                 }
-                Item::Curve(c) => {
-                    if let Some(d) = sk.curve(c) {
-                        orphans.extend(d.kind.points());
-                    }
-                    let _ = sk.remove_curve(c);
-                }
-                Item::Point(p) => {
-                    // Andere Punkte der mitgelöschten Kurven werden ebenso geprüft.
-                    orphans.extend(
-                        sk.curves()
-                            .map(|(_, c)| c.kind.points())
-                            .filter(|pts| pts.contains(&p))
-                            .flatten(),
-                    );
-                    let _ = sk.remove_point(p);
-                }
             }
-        }
-        sk.prune_points(&orphans);
-        self.pending.retain(|&p| sk.point_xy(p).is_ok());
-        self.forget_removed_curves(sk);
-        self.line_arc = self
-            .line_arc
-            .filter(|d| sk.point_xy(d.start).is_ok() && sk.curve(d.prev).is_some());
-        if self.dragging.is_some_and(|p| sk.point_xy(p).is_err()) {
-            self.dragging = None;
-        }
-        self.curve_drag = None;
-        self.last_report = Some(sk.solve());
-        if dropped > 0 {
-            self.add_note(crate::msg!("sketch-pattern-instance-dropped", n = dropped));
-        }
-        let dissolved = patterns.saturating_sub(sk.pattern_count());
-        if dissolved > 0 {
-            self.add_note(crate::msg!("sketch-pattern-dissolved", n = dissolved));
-        }
+            sk.prune_points(&orphans);
+            se.pending.retain(|&p| sk.point_xy(p).is_ok());
+            se.forget_removed_curves(sk);
+            se.line_arc = se
+                .line_arc
+                .filter(|d| sk.point_xy(d.start).is_ok() && sk.curve(d.prev).is_some());
+            if se.dragging.is_some_and(|p| sk.point_xy(p).is_err()) {
+                se.dragging = None;
+            }
+            se.curve_drag = None;
+            se.last_report = Some(sk.solve());
+            if dropped > 0 {
+                se.add_note(crate::msg!("sketch-pattern-instance-dropped", n = dropped));
+            }
+            Ok(())
+        });
     }
 
     /// Lässt sich „Konstruktion umschalten“ anwenden (mindestens eine Kurve ausgewählt)? Gilt
@@ -2707,68 +2711,6 @@ fn smooth_kinds_ok(sk: &Sketch, a: CurveId, b: CurveId) -> bool {
 /// Freiheitsgrade von `sk`, frisch gerechnet (nicht aus einem möglicherweise älteren Bericht).
 fn dof_of(sk: &Sketch) -> usize {
     sk.clone().solve().dof
-}
-
-/// Die beiden Enden einer Kurve, an denen Glatt ansetzen kann (Linie, Bogen, Spline,
-/// Ellipsenbogen); `None` für Kreis und Ellipse.
-fn curve_end_points(sk: &Sketch, c: CurveId) -> Option<[PointId; 2]> {
-    match &sk.curve(c)?.kind {
-        CurveKind::Line { a, b } => Some([*a, *b]),
-        CurveKind::Arc { start, end, .. } | CurveKind::EllipticArc { start, end, .. } => {
-            Some([*start, *end])
-        }
-        CurveKind::Spline { points } => Some([*points.first()?, *points.last()?]),
-        CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => None,
-    }
-}
-
-/// Die Enden, an denen Glatt `a` und `b` verbindet, wie in Fusion an der Klickstelle: Wurde eine
-/// Kurve per Klick gewählt (`at_a`, `at_b`), gilt ihr Ende, das dem Klick am nächsten liegt; ohne
-/// Klick (etwa Rahmenauswahl) das Ende, das am nächsten an einem Ende der anderen Kurve liegt
-/// (ein gemeinsames Ende zuerst). Die Weite ist nicht begrenzt: Getrennte Enden legt der Befehl
-/// mit einem `Coincident` zusammen. Die Wahl hängt nicht von der Reihenfolge der Auswahl ab
-/// (Gleichstand: zuerst ein wirklich gemeinsamer Punkt vor zwei deckenden, dann das Paar mit den
-/// kleineren Punktnummern). `None`, wenn eine Kurve keine Enden hat.
-fn smooth_joint(
-    sk: &Sketch,
-    a: CurveId,
-    at_a: Option<DVec2>,
-    b: CurveId,
-    at_b: Option<DVec2>,
-) -> Option<(PointId, PointId)> {
-    if a == b {
-        return None;
-    }
-    let (ea, eb) = (curve_end_points(sk, a)?, curve_end_points(sk, b)?);
-    let xy = |p: PointId| sk.point_xy(p).ok();
-    let dist = |p: PointId, q: DVec2| xy(p).map_or(f64::INFINITY, |x| x.distance(q));
-    // Mit Klick bleibt nur das Ende nächst dem Klick.
-    let clicked = |ends: [PointId; 2], at: Option<DVec2>| -> Vec<PointId> {
-        match at {
-            Some(q) => ends
-                .into_iter()
-                .min_by(|x, y| dist(*x, q).total_cmp(&dist(*y, q)).then(x.cmp(y)))
-                .into_iter()
-                .collect(),
-            None => ends.to_vec(),
-        }
-    };
-    let (ca, cb) = (clicked(ea, at_a), clicked(eb, at_b));
-    let gap = |p: PointId, q: PointId| match (p == q, xy(q)) {
-        (true, _) => 0.0,
-        (false, Some(y)) => dist(p, y),
-        (false, None) => f64::INFINITY,
-    };
-    let key = |p: PointId, q: PointId| (p.min(q), p.max(q));
-    ca.iter()
-        .flat_map(|&p| cb.iter().map(move |&q| (p, q)))
-        .min_by(|&(p, q), &(r, t)| {
-            gap(p, q)
-                .total_cmp(&gap(r, t))
-                // Ein wirklich gemeinsamer Punkt vor zwei deckenden Punkten.
-                .then_with(|| (p != q).cmp(&(r != t)))
-                .then_with(|| key(p, q).cmp(&key(r, t)))
-        })
 }
 
 /// Glatt an einem Bogen: bis Teilprojekt 7 nur tangential (G1), das sagt die Meldung.

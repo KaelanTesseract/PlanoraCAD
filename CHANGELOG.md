@@ -5,7 +5,7 @@ Hier steht, was sich in jeder Version geändert hat. Die neueste Version steht o
 ## Unreleased
 
 ### Neu
-- Skizzen: Muster wie in Fusion. „Rechteckige Anordnung“ legt Kopien in zwei Richtungen mit Anzahl und Abstand an, „Kreisförmige Anordnung“ um eine Mitte, voll, über einen Winkel oder symmetrisch. Du siehst die Kopien vorab, kannst einzelne abwählen und das Muster später wieder öffnen oder über die Maße ändern; ändert man die Vorlage, folgen die Kopien. Ein Muster darf höchstens 900 Kopien haben.
+- Skizzen: Muster wie in Fusion. „Rechteckige Anordnung“ legt Kopien in zwei Richtungen mit Anzahl und Abstand an, „Kreisförmige Anordnung“ um eine Mitte, voll, über einen Winkel oder symmetrisch. Du siehst die Kopien vorab, kannst einzelne abwählen und das Muster später wieder öffnen oder über die Maße ändern; ändert man die Vorlage, folgen die Kopien. Ein Muster hat höchstens 900 Plätze, die Vorlage mitgezählt, und alle Kopien zusammen höchstens 3600 Kurven. Der ältere Knopf „Muster …“ im Skizzenfeld (Kopien mit Versatz) heißt jetzt „Lineares Muster …“.
 - Skizzen: Die Skizzenbemaßung (Taste D) sucht sich das passende Maß selbst: direkt, waagerecht oder senkrecht je nach Lage des Zeigers, Durchmesser, Radius, Halbachse oder Winkel. Gegen eine Mittellinie entsteht ein Durchmessermaß; Tab oder der Knopf „Ø/R“ wechselt zwischen Durchmesser und Radius. Ein Doppelklick auf den Maßtext in der Zeichnung öffnet sein Feld.
 - Skizzen: Drei neue Abhängigkeiten, „Konzentrisch“, „Kollinear“ und „Glatt“, mit Knöpfen im Skizzenfeld; alle lassen sich in den Einstellungen belegen.
 - Skizzen: Das Langloch „Gesamt“ merkt sich die Gesamtlänge als eigenes Maß. Der Rasterfang bindet an einen Punkt, der schon auf dem Rasterpunkt liegt, statt einen zweiten daraufzulegen.

@@ -138,7 +138,13 @@ fn dissolving_p_dissolves_q_when_q_would_be_in_a_loop() {
     let d0 = s.point_xy(vpt).unwrap().distance(s.point_xy(src).unwrap());
     s.add_constraint(K::Distance(src, vpt, d0)).unwrap();
     let d1 = s.point_xy(vpt).unwrap().distance(s.point_xy(qi1).unwrap());
-    s.add_constraint(K::Distance(vpt, qi1, d1)).unwrap();
+    // Nur Exemplare: `add_constraint` legt es anzeigend an (Schlusskorrektur I1). Treibend nur
+    // aus einer alten Datei; die lädt weiter.
+    let between = s.add_constraint(K::Distance(vpt, qi1, d1)).unwrap();
+    assert!(s.constraint(between).unwrap().driven);
+    let mut data = s.to_data();
+    data.constraints[between.index()].driven = false;
+    let mut s = Sketch::from_data(data).unwrap();
     assert_eq!(s.solve().status, SolveStatus::Solved);
     let positions: Vec<DVec2> = s.points().map(|(id, _)| s.point_xy(id).unwrap()).collect();
 

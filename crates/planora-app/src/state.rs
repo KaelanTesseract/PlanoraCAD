@@ -3139,14 +3139,16 @@ impl AppState {
     }
 
     /// Zahl der Abhängigkeiten (ohne interne) je Skizzen-Feature, für die Meldung nach einer
-    /// Parameteränderung.
+    /// Parameteränderung. Aus der Definition, nicht aus dem Ergebnis: Eine Skizze mit Fehler hat
+    /// kein Ergebnis, ihre Abhängigkeiten zählen trotzdem (die Anzahl eines Musters schreibt der
+    /// Formel-Durchgang in die Definition).
     fn sketch_constraint_counts(&self) -> Vec<(FeatureId, usize)> {
         self.document
             .features()
             .iter()
-            .filter_map(|f| {
-                let sk = self.document.sketch_of(f.id)?;
-                Some((f.id, sk.constraints().count()))
+            .filter_map(|f| match &f.kind {
+                FeatureKind::Sketch(sf) => Some((f.id, sf.sketch.constraints().count())),
+                _ => None,
             })
             .collect()
     }

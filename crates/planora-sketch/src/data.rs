@@ -329,13 +329,15 @@ impl Sketch {
 fn check_patterns(d: &SketchData) -> Result<(), SketchError> {
     let (np, nc, nk) = (d.points.len(), d.curves.len(), d.constraints.len());
     for m in &d.patterns {
+        // „Senkrecht zu Richtung 1“ gibt es nur als zweite Richtung.
+        if matches!(m.kind, PatternKind::Rect { dirs, .. } if dirs[0] == PatternDir::Perpendicular)
+        {
+            return Err(bad(tr!("sketch-err-data-pattern-direction")));
+        }
         let refs_ok = match m.kind {
-            PatternKind::Rect { dirs, .. } => {
-                dirs[0] != PatternDir::Perpendicular
-                    && dirs
-                        .iter()
-                        .all(|dir| !matches!(dir, PatternDir::Line(l) if l.index() >= nc))
-            }
+            PatternKind::Rect { dirs, .. } => dirs
+                .iter()
+                .all(|dir| !matches!(dir, PatternDir::Line(l) if l.index() >= nc)),
             PatternKind::Circular { center, .. } => center.index() < np,
         };
         let points_ok = m

@@ -603,27 +603,36 @@ fn smooth_ends_finds_shared_or_nearest_ends() {
     let (l, _, joint) = line(&mut s, v(-10.0, 0.0), v(0.0, 0.0));
     let q = [pt(&mut s, 5.0, 3.0), pt(&mut s, 10.0, 0.0)];
     let sp = s.add_spline(&[joint, q[0], q[1]]).unwrap();
-    assert_eq!(s.smooth_ends(l, sp, None), Some((joint, joint)));
+    assert_eq!(s.smooth_ends(l, None, sp, None), Some((joint, joint)));
     assert_eq!(
-        s.smooth_ends(sp, l, Some(v(0.5, 0.2))),
+        s.smooth_ends(sp, Some(v(0.5, 0.2)), l, None),
         Some((joint, joint))
     );
 
-    // getrennt: das nächste Endenpaar
+    // getrennt: das nächste Endenpaar, in beiden Reihenfolgen
     let mut s = sketch();
-    let (l, _, lb) = line(&mut s, v(-10.0, 0.0), v(-1.0, 0.0));
+    let (l, la, lb) = line(&mut s, v(-10.0, 0.0), v(-1.0, 0.0));
     let (sp, p) = spline(&mut s, &[v(0.0, 0.5), v(5.0, 3.0), v(10.0, 0.0)]);
-    assert_eq!(s.smooth_ends(l, sp, None), Some((lb, p[0])));
-    assert_eq!(s.smooth_ends(sp, l, None), Some((p[0], lb)));
-    assert_eq!(s.smooth_ends(l, sp, Some(v(-0.5, 0.2))), Some((lb, p[0])));
-    // kein Ende in Reichweite (weiter als die halbe Sehne der Kurve vom Ende)
-    assert_eq!(s.smooth_ends(l, sp, Some(v(0.0, 200.0))), None);
-    assert_eq!(s.smooth_ends(l, sp, Some(v(-0.5, 6.0))), None);
+    assert_eq!(s.smooth_ends(l, None, sp, None), Some((lb, p[0])));
+    assert_eq!(s.smooth_ends(sp, None, l, None), Some((p[0], lb)));
+    assert_eq!(
+        s.smooth_ends(l, Some(v(-0.5, 0.2)), sp, None),
+        Some((lb, p[0]))
+    );
+    // Der Klick wählt das Ende, auch weit weg (Fusion: das Ende nächst dem Klick).
+    assert_eq!(
+        s.smooth_ends(l, Some(v(-9.5, 0.0)), sp, None),
+        Some((la, p[0]))
+    );
+    assert_eq!(
+        s.smooth_ends(l, Some(v(-9.5, 0.0)), sp, Some(v(9.0, 0.5))),
+        Some((la, p[2]))
+    );
     // Kurven ohne Enden und dieselbe Kurve
     let m = pt(&mut s, 50.0, 50.0);
     let c = s.add_circle(m, 2.0).unwrap();
-    assert_eq!(s.smooth_ends(c, sp, None), None);
-    assert_eq!(s.smooth_ends(sp, sp, None), None);
+    assert_eq!(s.smooth_ends(c, None, sp, None), None);
+    assert_eq!(s.smooth_ends(sp, None, sp, None), None);
 }
 
 // ---- Umschalter Radius/Durchmesser -------------------------------------------------------
@@ -871,11 +880,15 @@ fn smooth_gone_or_valid(s: &Sketch, id: ConstraintId, what: &str) {
         let K::Smooth(a, pa, b, pb) = d.kind else {
             panic!("{what}: {:?}", d.kind)
         };
-        assert_eq!(s.smooth_ends(a, b, None), Some((pa, pb)), "{what}");
+        assert_eq!(s.smooth_ends(a, None, b, None), Some((pa, pb)), "{what}");
     }
     for (cid, d) in s.constraints() {
         if let K::Smooth(a, pa, b, pb) = d.kind {
-            assert_eq!(s.smooth_ends(a, b, None), Some((pa, pb)), "{what}: {cid:?}");
+            assert_eq!(
+                s.smooth_ends(a, None, b, None),
+                Some((pa, pb)),
+                "{what}: {cid:?}"
+            );
         }
     }
     Sketch::from_data(s.to_data()).unwrap_or_else(|e| panic!("{what}: lädt nicht: {e}"));

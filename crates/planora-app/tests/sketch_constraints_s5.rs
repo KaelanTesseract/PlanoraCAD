@@ -18,7 +18,7 @@ use planora_math::DVec2;
 use planora_project::config::Config;
 use planora_project::library::Library;
 use planora_sketch::constraint::ConstraintKind as K;
-use planora_sketch::model::{CurveId, PointId, Sketch};
+use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
 use planora_sketch::solver::SolveStatus;
 
 const SIZE: Vec2 = vec2(1920.0, 1080.0);
@@ -910,5 +910,131 @@ fn smooth_prefers_a_shared_point_over_coincident_twins() {
             );
             undo(&mut app);
         }
+    });
+}
+
+/// Schlusskorrektur I1: Waagerecht nur an einer Exemplarlinie hätte keine Wirkung; der Knopf
+/// lehnt mit der Meldung ab, die Skizze bleibt (auch die Revision).
+#[test]
+fn horizontal_on_an_instance_line_is_refused_with_a_message() {
+    use planora_sketch::pattern::{PatternDir, PatternKind, PatternPlan};
+    for lang in [german(), english()] {
+        with_lang(&lang, || {
+            let c = context();
+            let mut app = sketching();
+            let (src, _, _) = line(&mut app, (0.0, 0.0), (10.0, 4.0));
+            let pid = sk(&mut app)
+                .add_pattern(&PatternPlan {
+                    kind: PatternKind::Rect {
+                        dirs: [PatternDir::SketchX, PatternDir::SketchY],
+                        extent: [false, false],
+                        symmetric: [false, false],
+                    },
+                    sources: vec![src],
+                    counts: [2, 1],
+                    values: [20.0, 10.0],
+                    suppressed: vec![],
+                })
+                .unwrap();
+            sk(&mut app).solve();
+            let inst = sk(&mut app).pattern(pid).unwrap().instances[0].curves[0];
+            settle(&c, &mut app);
+            let n = live(&mut app).len();
+            let rev = sk(&mut app).revision();
+            select(&mut app, vec![Item::Curve(inst)]);
+            press(&c, &mut app, &tr!("sketch-constraint-horizontal"));
+            let text = message(&mut app).unwrap_or_default();
+            assert!(
+                text.contains(&tr!("sketch-pattern-instance-only")),
+                "{text}"
+            );
+            assert_eq!(sk(&mut app).revision(), rev);
+            assert_eq!(live(&mut app).len(), n);
+            // An der Vorlage geht es, und das Exemplar folgt.
+            select(&mut app, vec![Item::Curve(src)]);
+            press(&c, &mut app, &tr!("sketch-constraint-horizontal"));
+            assert_eq!(live(&mut app).len(), n + 1);
+            let s = sk(&mut app);
+            let CurveKind::Line { a, b } = s.curve(inst).unwrap().kind else {
+                panic!("Linie")
+            };
+            let (pa, pb) = (s.point_xy(a).unwrap(), s.point_xy(b).unwrap());
+            assert!((pa.y - pb.y).abs() < 1e-9, "{pa:?} {pb:?}");
+        });
+    }
+}
+
+/// Schlusskorrektur (Minor 7): Löschen ist eine Einheit. Lehnt die Skizze das Abwählen eines
+/// Exemplars ab (es brächte ein anderes Muster in eine Schleife), bleibt alles stehen, auch die
+/// anderen gewählten Kurven; die Meldung nennt den Grund.
+#[test]
+fn delete_is_one_unit_when_a_suppression_is_refused() {
+    use planora_sketch::pattern::{PatternDir, PatternKind, PatternPlan};
+    let plan = |sources: Vec<CurveId>, spacing: f64| PatternPlan {
+        kind: PatternKind::Rect {
+            dirs: [PatternDir::SketchX, PatternDir::SketchY],
+            extent: [false, false],
+            symmetric: [false, false],
+        },
+        sources,
+        counts: [3, 1],
+        values: [spacing, 10.0],
+        suppressed: vec![],
+    };
+    with_lang(&german(), || {
+        let mut app = sketching();
+        let s = sk(&mut app);
+        let rq = s
+            .add_rectangle(DVec2::new(0.0, 0.0), DVec2::new(10.0, 6.0))
+            .unwrap();
+        let q = s.add_pattern(&plan(rq.lines.to_vec(), 20.0)).unwrap();
+        let corner = |s: &Sketch, id, src: PointId, at: [i32; 2]| {
+            let d = s.pattern(id).unwrap();
+            let k = d.source_points.iter().position(|&x| x == src).unwrap();
+            d.instances
+                .iter()
+                .find(|i| i.at == at)
+                .unwrap()
+                .clone()
+                .points[k]
+        };
+        let src = rq.points[0];
+        let (qi1, qi2) = (corner(s, q, src, [1, 0]), corner(s, q, src, [2, 0]));
+        let rp = s
+            .add_rectangle(DVec2::new(10.0, 50.0), DVec2::new(14.0, 54.0))
+            .unwrap();
+        let p = s.add_pattern(&plan(rp.lines.to_vec(), 10.0)).unwrap();
+        let vpt = corner(s, p, rp.points[0], [2, 0]);
+        s.add_arc(vpt, qi1, qi2).unwrap();
+        let e = s.add_point(-30.0, 50.0).unwrap();
+        s.add_arc(src, vpt, e).unwrap();
+        s.solve();
+        let inst = s
+            .pattern(p)
+            .unwrap()
+            .instances
+            .iter()
+            .find(|i| i.at == [2, 0])
+            .unwrap()
+            .curves[0];
+        let (free, _, _) = line(&mut app, (-50.0, -50.0), (-40.0, -50.0));
+        let rev = sk(&mut app).revision();
+        let curves = sk(&mut app).curves().count();
+        select(&mut app, vec![Item::Curve(free), Item::Curve(inst)]);
+        {
+            let (se, s) = state(&mut app).session_sketch_mut().unwrap();
+            se.delete_selection(s);
+        }
+        let text = message(&mut app).unwrap_or_default();
+        assert!(text.contains(&tr!("sketch-pattern-cycle")), "{text}");
+        assert_eq!(sk(&mut app).revision(), rev, "nichts gelöscht");
+        assert_eq!(sk(&mut app).curves().count(), curves);
+        assert!(sk(&mut app).curve(free).is_some());
+        assert_eq!(sk(&mut app).pattern(p).unwrap().instances.len(), 2);
+        // Ohne das Exemplar geht das Löschen der Linie.
+        select(&mut app, vec![Item::Curve(free)]);
+        let (se, s) = state(&mut app).session_sketch_mut().unwrap();
+        se.delete_selection(s);
+        assert!(s.curve(free).is_none());
     });
 }

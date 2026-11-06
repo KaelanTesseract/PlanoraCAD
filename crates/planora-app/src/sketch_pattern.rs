@@ -335,18 +335,6 @@ fn default_rect_plan(sk: &Sketch, sources: Vec<CurveId>) -> Option<PatternPlan> 
     })
 }
 
-/// Der Plan mit dem Wert `v` im Feld `slot` (eine Anzahl gerundet).
-fn with_slot(mut plan: PatternPlan, slot: PatternSlot, v: f64) -> PatternPlan {
-    let count = v.round().clamp(0.0, f64::from(u32::MAX)) as u32;
-    match slot {
-        PatternSlot::Count1 | PatternSlot::Count => plan.counts[0] = count,
-        PatternSlot::Count2 => plan.counts[1] = count,
-        PatternSlot::Spacing1 | PatternSlot::Angle => plan.values[0] = v,
-        PatternSlot::Spacing2 => plan.values[1] = v,
-    }
-    plan
-}
-
 /// Der Wert des Plans im Feld `slot`.
 fn slot_value(plan: &PatternPlan, slot: PatternSlot) -> f64 {
     match slot {
@@ -613,7 +601,7 @@ impl SketchSession {
         }
         for f in &self.input.fields {
             if let (Some(slot), Some(v)) = (f.kind.pattern_slot(), f.locked) {
-                plan = with_slot(plan, slot, v);
+                plan = plan.with_value(slot, v);
             }
         }
         Some(plan)
@@ -745,7 +733,8 @@ impl SketchSession {
         };
         let mut staged = sk.clone();
         // Ging das nicht, hätte der Klick die Mitte nicht gesetzt.
-        let _ = attach_point(&mut staged, None, &DrawCursor::remembered(hit, sk));
+        let r = attach_point(&mut staged, None, &DrawCursor::remembered(hit, sk));
+        debug_assert!(r.is_ok(), "{r:?}");
         Cow::Owned(staged)
     }
 
@@ -851,7 +840,7 @@ impl SketchSession {
                     .cloned(),
             });
         if let Some(plan) = self.pattern.plan.as_mut() {
-            *plan = with_slot(plan.clone(), slot, start);
+            *plan = plan.clone().with_value(slot, start);
         }
         self.unlock_field(field, slot);
         let (divisor, center) = match (grip, now.kind) {
@@ -945,7 +934,7 @@ impl SketchSession {
                 PatternGrip::Arrow(_) => PatternSlot::Spacing2,
                 PatternGrip::Angle => PatternSlot::Angle,
             };
-            *plan = with_slot(plan.clone(), slot, d.start);
+            *plan = plan.clone().with_value(slot, d.start);
         }
         // Das Feld wie vor dem Zug, samt getippter Formel.
         if let Some(saved) = d.saved {
@@ -1010,6 +999,9 @@ impl SketchSession {
             .collect();
         let editing = self.pattern.editing;
         let before = editing.and_then(|id| sf.sketch.pattern_plan(id));
+        // Beim Bearbeiten: der Entwurf davor, damit ein unverändertes Bestätigen keinen
+        // Schrittnamen setzt.
+        let untouched = editing.map(|_| (sf.sketch.to_data(), sf.formulas.clone()));
         let circular = matches!(plan.kind, PatternKind::Circular { .. });
         let new_center = self.pattern.new_center;
         let mut plan = plan;
@@ -1075,6 +1067,11 @@ impl SketchSession {
             }
         }
         sf.prune_formulas();
+        if untouched
+            .is_some_and(|(data, formulas)| data == sf.sketch.to_data() && formulas == sf.formulas)
+        {
+            self.edit_label = None;
+        }
         self.note_formula_problem(sf);
         let note = self.message.take();
         self.pattern.blocked_note = false;
