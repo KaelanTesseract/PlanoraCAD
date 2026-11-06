@@ -920,7 +920,10 @@ impl Sketch {
         Ok(())
     }
 
-    /// Ändert den Zahlenwert eines Maßes. Die gewählte Lage (`branch`) bleibt erhalten.
+    /// Ändert den Zahlenwert eines Maßes. Die gewählte Lage (`branch`) bleibt erhalten. Ein
+    /// Musterwert muss eine gültige Lage ergeben; eine neue Anzahl gleicht die Exemplare an
+    /// (`sync_pattern`): Bleibende behalten ihre Ids, wegfallende nehmen ihre Abhängigkeiten mit.
+    /// Bei einem Fehler bleibt die Skizze unverändert.
     pub fn set_constraint_value(&mut self, id: ConstraintId, v: f64) -> Result<(), SketchError> {
         self.checked_constraint(id)?;
         let kind = self.constraints[id]
@@ -928,6 +931,21 @@ impl Sketch {
             .with_value(v)
             .ok_or_else(|| SketchError::WrongType(tr!("sketch-not-dimension")))?;
         self.check_refs(&kind)?;
+        if let ConstraintKind::PatternValue(m, slot, v) = kind {
+            let plan = self
+                .pattern_plan(m)
+                .ok_or(SketchError::UnknownObject)?
+                .with_value(slot, v);
+            self.pattern_lattice(&plan).map_err(PatternProblem::error)?;
+            return self.atomically(|s| {
+                s.constraints[id].kind = kind;
+                s.touch_structure();
+                if slot.is_count() {
+                    s.sync_pattern(m)?;
+                }
+                Ok(())
+            });
+        }
         self.constraints[id].kind = kind;
         self.touch_structure();
         Ok(())
@@ -971,7 +989,7 @@ impl Sketch {
     }
 
     /// Prüft Ids, Objekttypen und Zahlenwerte einer Abhängigkeit.
-    fn check_refs(&self, kind: &ConstraintKind) -> Result<(), SketchError> {
+    pub(crate) fn check_refs(&self, kind: &ConstraintKind) -> Result<(), SketchError> {
         self.check_structure(kind)?;
         self.check_constraint_value(kind)
     }
@@ -1618,8 +1636,11 @@ impl Sketch {
     }
 
     /// Entfernt die Kurve samt allen Abhängigkeiten, die sie benutzen (auch interne).
+    /// Ist sie Vorlage, Exemplar oder Richtungslinie eines Musters, wird das Muster aufgelöst;
+    /// ein einzelnes Exemplar löscht die Oberfläche über [`Sketch::suppress_instance`].
     pub fn remove_curve(&mut self, c: CurveId) -> Result<(), SketchError> {
         self.check_curve(c)?;
+        self.dissolve_patterns_of_curve(c);
         self.touch_structure();
         self.curves[c].alive = false;
         let dead: Vec<ConstraintId> = self
@@ -1635,8 +1656,10 @@ impl Sketch {
     }
 
     /// Entfernt den Punkt samt allen Kurven und Abhängigkeiten, die ihn benutzen.
+    /// Ist er Mitte, Vorlagen- oder Exemplarpunkt eines Musters, wird das Muster aufgelöst.
     pub fn remove_point(&mut self, p: PointId) -> Result<(), SketchError> {
         self.check_point(p)?;
+        self.dissolve_patterns_of_point(p);
         self.touch_structure();
         self.points[p].alive = false;
         let curves: Vec<CurveId> = self
@@ -1677,6 +1700,8 @@ impl Sketch {
         for (_, k) in self.constraints() {
             used.extend(k.kind.points());
         }
+        // Die Mitte eines Kreismusters ist benutzt, auch als freier Punkt.
+        used.extend(self.pattern_centers());
         let mut removed = 0;
         for &p in candidates {
             if self.check_point(p).is_ok() && !used.contains(&p) {

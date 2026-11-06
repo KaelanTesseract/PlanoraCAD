@@ -1149,6 +1149,7 @@ sketch-move-split = Getrennte Ecken: { $n }. Die anderen Kurven bleiben stehen, 
 sketch-move-fixed = Das geht nicht: Etwas in der Auswahl ist festgehalten oder an festgehaltene Geometrie gebunden
 sketch-move-nothing = Nichts zu tun: Die Auswahl bleibt, wo sie ist
 sketch-move-degenerate = Das geht nicht: Die Lage wäre zu weit draußen oder eine Kurve zu klein
+sketch-move-pattern-instance = Das geht nicht: Ein Exemplar eines Musters folgt seiner Vorlage. Verschieben Sie die Vorlage oder lösen Sie das Muster auf
 sketch-strip-modify = Ändern → { $tool }
 sketch-extend-no-hit = Keine Kurve zum Dehnen in dieser Richtung.
 sketch-show-profile = Profil anzeigen
@@ -1721,6 +1722,7 @@ sketch-pattern-slot = Dieser Wert passt nicht zur Art des Musters
 sketch-pattern-count-range = Die Anzahl muss eine ganze Zahl von 1 bis { $max } sein
 sketch-pattern-angle-range = Der Winkel des Musters muss zwischen 0° und 360° liegen und darf nicht 0° sein
 sketch-pattern-value-keep = Werte eines Musters bleiben, solange das Muster besteht
+sketch-pattern-no-instance = An dieser Stelle hat das Muster kein Exemplar
 
 ## Fehlermeldungen der Mathematik
 math-subcurve-range = der Teilbereich ({ $u0 }, { $u1 }) liegt nicht in der Kurve ({ $a }, { $b }) oder ist leer

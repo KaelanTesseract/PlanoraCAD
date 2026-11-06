@@ -1166,6 +1166,7 @@ sketch-move-split = Corners split: { $n }. The other curves stay where they are,
 sketch-move-fixed = Not possible: something in the selection is fixed or bound to fixed geometry
 sketch-move-nothing = Nothing to do: the selection stays where it is
 sketch-move-degenerate = Not possible: the position would be too far out or a curve too small
+sketch-move-pattern-instance = Not possible: a pattern instance follows its source. Move the source or dissolve the pattern
 sketch-strip-modify = Modify → { $tool }
 sketch-extend-no-hit = No curve to extend to in this direction.
 sketch-show-profile = Show Profile
@@ -1738,6 +1739,7 @@ sketch-pattern-slot = This value does not fit the kind of pattern
 sketch-pattern-count-range = The quantity must be a whole number from 1 to { $max }
 sketch-pattern-angle-range = The pattern angle must be between 0° and 360° and cannot be 0°
 sketch-pattern-value-keep = The values of a pattern stay as long as the pattern exists
+sketch-pattern-no-instance = The pattern has no instance at this position
 
 ## Math error messages
 math-subcurve-range = the sub-range ({ $u0 }, { $u1 }) is not inside the curve ({ $a }, { $b }) or is empty

@@ -882,6 +882,7 @@ impl Sketch {
     /// statt des Maßes `Equal` zu diesem Bogen; `plan` muss dann mit dessen Radius gerechnet
     /// sein, sonst bewegt das nächste Lösen die Skizze. Bei einem Fehler bleibt die Skizze
     /// unverändert.
+    /// Muster an den beiden Kurven werden vorher aufgelöst.
     pub fn add_fillet(
         &mut self,
         plan: &FilletPlan,
@@ -892,6 +893,7 @@ impl Sketch {
             for c in curves {
                 s.check_curve(c)?;
             }
+            s.dissolve_patterns_at(&curves);
             if let Some(f0) = equal_to
                 && s.radius(f0)
                     .is_some_and(|r| (r - plan.radius).abs() > s.tolerance().linear)
@@ -982,12 +984,14 @@ impl Sketch {
     /// zählen. Den Winkel misst sie aus der Lage; Richtung der Fase und Reihenfolge im Maß sind so
     /// gewählt, dass sein Wert der Winkel `θ` des Plans ist, positiv wie das getippte Feld. Bei
     /// einem Fehler bleibt die Skizze unverändert.
+    /// Muster an den beiden Kurven werden vorher aufgelöst.
     pub fn add_chamfer(&mut self, plan: &ChamferPlan) -> Result<ChamferIds, SketchError> {
         self.atomically(|s| {
             let curves = plan.picks.map(|p| p.curve);
             for c in curves {
                 s.check_curve(c)?;
             }
+            s.dissolve_patterns_at(&curves);
             let touch = [
                 s.add_point(plan.touch[0].x, plan.touch[0].y)?,
                 s.add_point(plan.touch[1].x, plan.touch[1].y)?,

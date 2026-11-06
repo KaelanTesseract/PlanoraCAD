@@ -139,6 +139,30 @@ pub struct PatternPlan {
     pub suppressed: Vec<[i32; 2]>,
 }
 
+/// Was [`Sketch::edit_pattern`] oder das Angleichen an eine neue Anzahl geändert hat:
+/// angelegte und entfernte Exemplare und die Abhängigkeiten, die mit entfernten Exemplaren
+/// entfallen sind (Meldung `sketch-pattern-dropped`).
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct PatternEdit {
+    pub added: usize,
+    pub removed: usize,
+    pub dropped_constraints: usize,
+}
+
+impl PatternPlan {
+    /// Der Plan mit dem Wert `v` im Feld `slot` (eine Anzahl ist schon geprüft ganzzahlig).
+    pub(crate) fn with_value(mut self, slot: PatternSlot, v: f64) -> PatternPlan {
+        let count = v.round().clamp(0.0, u32::MAX as f64) as u32;
+        match slot {
+            PatternSlot::Count1 | PatternSlot::Count => self.counts[0] = count,
+            PatternSlot::Count2 => self.counts[1] = count,
+            PatternSlot::Spacing1 | PatternSlot::Angle => self.values[0] = v,
+            PatternSlot::Spacing2 => self.values[1] = v,
+        }
+        self
+    }
+}
+
 /// Warum ein Muster nicht geht.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PatternProblem {
@@ -202,6 +226,40 @@ fn inverse_apply(t: &Similarity, p: DVec2) -> DVec2 {
     let v = (p - t.base - t.offset) / t.factor;
     let (sin, cos) = (-t.angle).sin_cos();
     t.base + DVec2::new(v.x * cos - v.y * sin, v.x * sin + v.y * cos)
+}
+
+/// Die Musterwerte eines Plans: bei „Voll“ ohne Winkel, beim Rechteck auch Anzahl und Abstand
+/// der zweiten Richtung bei Anzahl 1.
+fn pattern_slots(plan: &PatternPlan) -> Vec<(PatternSlot, f64)> {
+    let count = |n: u32| f64::from(n);
+    match plan.kind {
+        PatternKind::Rect { .. } => vec![
+            (PatternSlot::Count1, count(plan.counts[0])),
+            (PatternSlot::Spacing1, plan.values[0]),
+            (PatternSlot::Count2, count(plan.counts[1])),
+            (PatternSlot::Spacing2, plan.values[1]),
+        ],
+        PatternKind::Circular {
+            mode: CircularMode::Full,
+            ..
+        } => vec![(PatternSlot::Count, count(plan.counts[0]))],
+        PatternKind::Circular { .. } => vec![
+            (PatternSlot::Count, count(plan.counts[0])),
+            (PatternSlot::Angle, plan.values[0]),
+        ],
+    }
+}
+
+/// Die Abwahl eines Plans, wie sie gespeichert wird: nur Lagen des Gitters, ohne Doppelte, in der
+/// Reihenfolge des Plans.
+fn suppressed_in(plan: &PatternPlan, lattice: &[([i32; 2], Similarity)]) -> Vec<[i32; 2]> {
+    let mut out: Vec<[i32; 2]> = Vec::new();
+    for at in &plan.suppressed {
+        if lattice.iter().any(|(x, _)| x == at) && !out.contains(at) {
+            out.push(*at);
+        }
+    }
+    out
 }
 
 impl Sketch {
@@ -279,23 +337,13 @@ impl Sketch {
         let transforms = self
             .pattern_transforms(plan)
             .map_err(PatternProblem::error)?;
-        let lattice: Vec<[i32; 2]> = self
-            .pattern_lattice(plan)
-            .map_err(PatternProblem::error)?
-            .into_iter()
-            .map(|(at, _)| at)
-            .collect();
+        let lattice = self.pattern_lattice(plan).map_err(PatternProblem::error)?;
+        let suppressed = suppressed_in(plan, &lattice);
         self.atomically(|s| {
             let source_points = points_of(s, &plan.sources);
             let mut instances = Vec::with_capacity(transforms.len());
             for (at, t) in &transforms {
                 instances.push(s.add_instance(&plan.sources, &source_points, *at, t)?);
-            }
-            let mut suppressed: Vec<[i32; 2]> = Vec::new();
-            for at in &plan.suppressed {
-                if lattice.contains(at) && !suppressed.contains(at) {
-                    suppressed.push(*at);
-                }
             }
             let id = s.patterns.push(PatternData {
                 kind: plan.kind,
@@ -306,24 +354,7 @@ impl Sketch {
                 suppressed,
                 alive: true,
             });
-            let count = |n: u32| f64::from(n);
-            let slots: Vec<(PatternSlot, f64)> = match plan.kind {
-                PatternKind::Rect { .. } => vec![
-                    (PatternSlot::Count1, count(plan.counts[0])),
-                    (PatternSlot::Spacing1, plan.values[0]),
-                    (PatternSlot::Count2, count(plan.counts[1])),
-                    (PatternSlot::Spacing2, plan.values[1]),
-                ],
-                PatternKind::Circular {
-                    mode: CircularMode::Full,
-                    ..
-                } => vec![(PatternSlot::Count, count(plan.counts[0]))],
-                PatternKind::Circular { .. } => vec![
-                    (PatternSlot::Count, count(plan.counts[0])),
-                    (PatternSlot::Angle, plan.values[0]),
-                ],
-            };
-            for (slot, v) in slots {
+            for (slot, v) in pattern_slots(plan) {
                 let c = s.push_pattern_value(ConstraintKind::PatternValue(id, slot, v))?;
                 s.patterns[id].values.push(c);
             }
@@ -766,5 +797,383 @@ impl Sketch {
             curves.push(self.copy_curve(c, &map, crate::helpers::CopyHow::Pattern(*t))?);
         }
         Ok(PatternInstance { at, points, curves })
+    }
+}
+
+/// Ändern, Abwählen und Auflösen (Entscheidung 6).
+impl Sketch {
+    /// Bearbeitet ein Muster nach `plan` (Werte, Art, Abwahl, auch Vorlagen) als ein Befehl:
+    /// Bleibende Exemplare behalten ihre Ids samt Bindungen, wegfallende nehmen ihre
+    /// Abhängigkeiten mit; dann einmal lösen wie [`Sketch::add_pattern`]. Gleicht der Plan dem
+    /// gespeicherten, ändert sich nichts. Bei einem Fehler bleibt die Skizze unverändert.
+    pub fn edit_pattern(
+        &mut self,
+        id: PatternId,
+        plan: &PatternPlan,
+    ) -> Result<PatternEdit, SketchError> {
+        let current = self.pattern_plan(id).ok_or(SketchError::UnknownObject)?;
+        self.pattern_transforms(plan)
+            .map_err(PatternProblem::error)?;
+        let lattice = self.pattern_lattice(plan).map_err(PatternProblem::error)?;
+        let mut wanted = plan.clone();
+        wanted.suppressed = suppressed_in(plan, &lattice);
+        if let PatternKind::Circular { mode, .. } = wanted.kind {
+            wanted.counts[1] = 1;
+            wanted.values[1] = 0.0;
+            if mode == CircularMode::Full {
+                wanted.values[0] = 0.0;
+            }
+        }
+        if wanted == current {
+            return Ok(PatternEdit::default());
+        }
+        self.atomically(|s| {
+            let mut edit = PatternEdit::default();
+            if s.patterns[id].sources != wanted.sources {
+                // Andere Vorlagen: Die Exemplare passen nicht mehr, alle werden neu angelegt.
+                let gone = std::mem::take(&mut s.patterns[id].instances);
+                for inst in &gone {
+                    edit.removed += 1;
+                    edit.dropped_constraints += s.drop_instance(inst)?;
+                }
+                s.patterns[id].sources = wanted.sources.clone();
+                s.patterns[id].source_points = points_of(s, &wanted.sources);
+            }
+            s.patterns[id].kind = wanted.kind;
+            s.patterns[id].suppressed = wanted.suppressed.clone();
+            s.write_pattern_values(id, &wanted)?;
+            let sync = s.sync_pattern(id)?;
+            edit.added += sync.added;
+            edit.removed += sync.removed;
+            edit.dropped_constraints += sync.dropped_constraints;
+            if s.pattern_cycle(None) {
+                return Err(PatternProblem::Cycle.error());
+            }
+            s.touch_structure();
+            s.solve();
+            Ok(edit)
+        })
+    }
+
+    /// Schreibt die Werte des Plans in die `PatternValue` des Musters: Ein Feld, das bleibt,
+    /// behält seine Id (und damit eine Formel); neue Felder kommen dazu, überzählige entfallen.
+    fn write_pattern_values(
+        &mut self,
+        id: PatternId,
+        plan: &PatternPlan,
+    ) -> Result<(), SketchError> {
+        let old = std::mem::take(&mut self.patterns[id].values);
+        let mut values = Vec::new();
+        for (slot, v) in pattern_slots(plan) {
+            let kind = ConstraintKind::PatternValue(id, slot, v);
+            let kept = old.iter().copied().find(|&c| {
+                matches!(self.constraints[c].kind, ConstraintKind::PatternValue(_, x, _) if x == slot)
+            });
+            match kept {
+                Some(c) => {
+                    self.check_refs(&kind)?;
+                    self.constraints[c].kind = kind;
+                    values.push(c);
+                }
+                None => values.push(self.push_pattern_value(kind)?),
+            }
+        }
+        for c in old {
+            if !values.contains(&c) {
+                self.constraints[c].alive = false;
+            }
+        }
+        self.patterns[id].values = values;
+        self.touch_structure();
+        Ok(())
+    }
+
+    /// Gleicht die Exemplare eines Musters an seine gespeicherten Werte und seine Abwahl an:
+    /// Lagen, die es nicht mehr gibt oder die abgewählt sind, verlieren ihr Exemplar samt
+    /// Abhängigkeiten; neue Lagen bekommen eins. Bleibende behalten ihre Ids. Abgewählte Lagen
+    /// außerhalb des Gitters werden vergessen. Bei einem Fehler (etwa Koordinaten über
+    /// `MAX_COORD`) stellt der Aufrufer den Stand davor wieder her.
+    pub(crate) fn sync_pattern(&mut self, id: PatternId) -> Result<PatternEdit, SketchError> {
+        let plan = self.pattern_plan(id).ok_or(SketchError::UnknownObject)?;
+        let lattice = self.pattern_lattice(&plan).map_err(PatternProblem::error)?;
+        let suppressed = suppressed_in(&plan, &lattice);
+        let order: HashMap<[i32; 2], usize> = lattice
+            .iter()
+            .filter(|(at, _)| !suppressed.contains(at))
+            .enumerate()
+            .map(|(k, (at, _))| (*at, k))
+            .collect();
+        let mut edit = PatternEdit::default();
+        let (keep, gone): (Vec<PatternInstance>, Vec<PatternInstance>) =
+            std::mem::take(&mut self.patterns[id].instances)
+                .into_iter()
+                .partition(|inst| order.contains_key(&inst.at));
+        self.patterns[id].instances = keep;
+        for inst in &gone {
+            edit.removed += 1;
+            edit.dropped_constraints += self.drop_instance(inst)?;
+        }
+        let have: HashSet<[i32; 2]> = self.patterns[id].instances.iter().map(|i| i.at).collect();
+        let (sources, source_points) = {
+            let d = &self.patterns[id];
+            (d.sources.clone(), d.source_points.clone())
+        };
+        for (at, t) in &lattice {
+            if order.contains_key(at) && !have.contains(at) {
+                let inst = self.add_instance(&sources, &source_points, *at, t)?;
+                self.patterns[id].instances.push(inst);
+                edit.added += 1;
+            }
+        }
+        self.patterns[id]
+            .instances
+            .sort_by_key(|inst| order[&inst.at]);
+        if self.patterns[id].suppressed != suppressed {
+            self.patterns[id].suppressed = suppressed;
+            self.touch_structure();
+        }
+        Ok(edit)
+    }
+
+    /// Entfernt die Kurven und Punkte eines Exemplars, das schon nicht mehr zum Muster gehört,
+    /// samt ihren Abhängigkeiten. Liefert die Zahl der entfallenen (nicht internen)
+    /// Abhängigkeiten.
+    fn drop_instance(&mut self, inst: &PatternInstance) -> Result<usize, SketchError> {
+        let before: Vec<ConstraintId> = self
+            .constraints()
+            .filter(|(_, d)| !d.internal)
+            .map(|(c, _)| c)
+            .collect();
+        for &c in &inst.curves {
+            if self.check_curve(c).is_ok() {
+                self.remove_curve(c)?;
+            }
+        }
+        for &p in &inst.points {
+            if self.check_point(p).is_ok() {
+                self.remove_point(p)?;
+            }
+        }
+        Ok(before
+            .into_iter()
+            .filter(|&c| self.constraint(c).is_none())
+            .count())
+    }
+
+    /// Wählt das Exemplar an der Lage `at` ab (`on`) oder wieder an: Abgewählt hat es keine
+    /// Kurven, seine Abhängigkeiten entfallen; wieder angewählt entsteht es neu an seiner Lage.
+    /// So löscht die Oberfläche ein Exemplar, das Muster bleibt. Ist die Lage schon so, ändert
+    /// sich nichts. Die Vorlage und Lagen außerhalb des Gitters gehen nicht. Bei einem Fehler
+    /// bleibt die Skizze unverändert.
+    pub fn suppress_instance(
+        &mut self,
+        id: PatternId,
+        at: [i32; 2],
+        on: bool,
+    ) -> Result<(), SketchError> {
+        let plan = self.pattern_plan(id).ok_or(SketchError::UnknownObject)?;
+        let lattice = self.pattern_lattice(&plan).map_err(PatternProblem::error)?;
+        if !lattice.iter().any(|(x, _)| *x == at) {
+            return Err(SketchError::InvalidInput(tr!("sketch-pattern-no-instance")));
+        }
+        if plan.suppressed.contains(&at) == on {
+            return Ok(());
+        }
+        self.atomically(|s| {
+            let list = &mut s.patterns[id].suppressed;
+            if on {
+                list.push(at);
+            } else {
+                list.retain(|x| *x != at);
+            }
+            s.touch_structure();
+            s.sync_pattern(id).map(|_| ())
+        })
+    }
+
+    /// Löst das Muster auf: Muster und Werte verschwinden, die Exemplare bleiben als lose
+    /// Geometrie an ihrer Stelle (bitgleich), ihre Variablen sind danach frei.
+    pub fn dissolve_pattern(&mut self, id: PatternId) -> Result<(), SketchError> {
+        if self.pattern(id).is_none() {
+            return Err(SketchError::UnknownObject);
+        }
+        self.dissolve(id);
+        Ok(())
+    }
+
+    fn dissolve(&mut self, id: PatternId) {
+        self.patterns[id].alive = false;
+        for c in self.patterns[id].values.clone() {
+            self.constraints[c].alive = false;
+        }
+        self.touch_structure();
+    }
+
+    /// Löst jedes lebende Muster auf, für das `hit` gilt.
+    fn dissolve_where(&mut self, hit: impl Fn(&PatternData) -> bool) {
+        let ids: Vec<PatternId> = self
+            .patterns()
+            .filter(|(_, d)| hit(d))
+            .map(|(id, _)| id)
+            .collect();
+        for id in ids {
+            self.dissolve(id);
+        }
+    }
+
+    /// Vor Stutzen, Dehnen, Brechen, Rundung und Fase und beim Ändern der Art einer Kurve: Muster,
+    /// deren Vorlage oder Exemplar eine der Kurven ist, werden aufgelöst (**Annahme**: Fusion
+    /// löst die Verbindung dort ebenfalls).
+    pub(crate) fn dissolve_patterns_at(&mut self, curves: &[CurveId]) {
+        if self.patterns().next().is_none() {
+            return;
+        }
+        self.dissolve_where(|d| {
+            curves
+                .iter()
+                .any(|c| d.sources.contains(c) || d.instances.iter().any(|i| i.curves.contains(c)))
+        });
+    }
+
+    /// Beim Löschen der Kurve `c`: Muster, deren Vorlage, Exemplar oder Richtungslinie sie ist,
+    /// werden aufgelöst.
+    pub(crate) fn dissolve_patterns_of_curve(&mut self, c: CurveId) {
+        if self.patterns().next().is_none() {
+            return;
+        }
+        self.dissolve_where(|d| {
+            let direction = matches!(d.kind, PatternKind::Rect { dirs, .. }
+                if dirs.contains(&PatternDir::Line(c)));
+            direction || d.sources.contains(&c) || d.instances.iter().any(|i| i.curves.contains(&c))
+        });
+    }
+
+    /// Beim Löschen des Punkts `p`: Muster, deren Mitte, Vorlagen- oder Exemplarpunkt er ist,
+    /// werden aufgelöst.
+    pub(crate) fn dissolve_patterns_of_point(&mut self, p: PointId) {
+        if self.patterns().next().is_none() {
+            return;
+        }
+        self.dissolve_where(|d| {
+            let center = matches!(d.kind, PatternKind::Circular { center, .. } if center == p);
+            center
+                || d.source_points.contains(&p)
+                || d.instances.iter().any(|i| i.points.contains(&p))
+        });
+    }
+
+    /// Die Mitten aller lebenden Kreismuster: Sie gelten als benutzt, auch ohne Kurve.
+    pub(crate) fn pattern_centers(&self) -> Vec<PointId> {
+        self.patterns()
+            .filter_map(|(_, d)| match d.kind {
+                PatternKind::Circular { center, .. } => Some(center),
+                PatternKind::Rect { .. } => None,
+            })
+            .collect()
+    }
+
+    /// Kurven und Punkte aller Exemplare lebender Muster.
+    pub(crate) fn instance_parts(&self) -> (HashSet<CurveId>, HashSet<PointId>) {
+        let mut curves = HashSet::new();
+        let mut points = HashSet::new();
+        for (_, d) in self.patterns() {
+            for inst in &d.instances {
+                curves.extend(inst.curves.iter().copied());
+                points.extend(inst.points.iter().copied());
+            }
+        }
+        (curves, points)
+    }
+
+    /// Die Kurven, die den Stil der Kurve `c` teilen: Vorlage und alle ihre Exemplare, wenn `c`
+    /// eins davon ist („Stil wie die Vorlage, auch nach späterem Umschalten“), sonst nur `c`.
+    pub(crate) fn pattern_style_group(&self, c: CurveId) -> Vec<CurveId> {
+        for (_, d) in self.patterns() {
+            let k = d.sources.iter().position(|&x| x == c).or_else(|| {
+                d.instances
+                    .iter()
+                    .find_map(|i| i.curves.iter().position(|&x| x == c))
+            });
+            if let Some(k) = k {
+                let mut out = vec![d.sources[k]];
+                out.extend(d.instances.iter().map(|i| i.curves[k]));
+                return out;
+            }
+        }
+        vec![c]
+    }
+
+    /// Multipliziert die Abstände der Rechteckmuster mit `factor`, deren Vorlagen alle in
+    /// `curves` liegen und deren Richtungslinien in `curves` liegen oder festgehalten sind
+    /// (`held_line`). Anzahl und Winkel bleiben. Liefert die geänderten Werte; `None`, wenn ein
+    /// Abstand aus dem erlaubten Bereich fiele.
+    pub(crate) fn scale_pattern_spacings(
+        &mut self,
+        curves: &HashSet<CurveId>,
+        held_line: impl Fn(CurveId) -> bool,
+        factor: f64,
+    ) -> Option<Vec<ConstraintId>> {
+        let mut out = Vec::new();
+        let ids: Vec<PatternId> = self.patterns().map(|(id, _)| id).collect();
+        for id in ids {
+            let d = &self.patterns[id];
+            let PatternKind::Rect { dirs, .. } = d.kind else {
+                continue;
+            };
+            let lines_ok = dirs.iter().all(|dir| match *dir {
+                PatternDir::Line(l) => curves.contains(&l) || held_line(l),
+                _ => true,
+            });
+            if !lines_ok || !d.sources.iter().all(|c| curves.contains(c)) {
+                continue;
+            }
+            for c in d.values.clone() {
+                if let ConstraintKind::PatternValue(m, slot, v) = self.constraints[c].kind
+                    && slot.is_spacing()
+                {
+                    let w = v * factor;
+                    if !(w.is_finite() && w.abs() > self.tol.linear && w.abs() <= MAX_COORD) {
+                        return None;
+                    }
+                    self.constraints[c].kind = ConstraintKind::PatternValue(m, slot, w);
+                    out.push(c);
+                }
+            }
+        }
+        if !out.is_empty() {
+            self.touch_structure();
+        }
+        Some(out)
+    }
+
+    /// Welches Exemplar des Plans liegt an der Stelle `at` (Abstand höchstens `radius`)? Auch
+    /// abgewählte Lagen zählen, damit ein Klick sie wieder anwählt. `None` auf der Vorlage (sie hat
+    /// Vorrang) und ins Leere. Rein; geht ohne angelegtes Muster (Vorschau).
+    pub fn pattern_instance_at(
+        &self,
+        plan: &PatternPlan,
+        at: DVec2,
+        radius: f64,
+    ) -> Option<[i32; 2]> {
+        if !(at.is_finite() && radius.is_finite()) {
+            return None;
+        }
+        self.check_pattern_refs(plan).ok()?;
+        let lattice = self.pattern_lattice(plan).ok()?;
+        let to_source = |q: DVec2| {
+            plan.sources
+                .iter()
+                .filter_map(|&c| self.distance_to_curve(c, q))
+                .fold(f64::INFINITY, f64::min)
+        };
+        if to_source(at) <= radius {
+            return None;
+        }
+        lattice
+            .iter()
+            .map(|(index, t)| (*index, to_source(inverse_apply(t, at)) * t.factor))
+            .filter(|(_, d)| *d <= radius)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(index, _)| index)
     }
 }

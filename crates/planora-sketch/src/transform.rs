@@ -89,6 +89,9 @@ pub enum TransformBlock {
     /// Ungültige Zahlen (Maßstab nicht über null, nicht endlich), oder eine Kurve oder ein Maß
     /// fiele unter die Toleranz oder Koordinaten über die Grenze.
     Degenerate,
+    /// In der Menge ist ein Exemplar eines Musters: Seine Lage folgt aus Vorlage und Musterwerten
+    /// (Meldung `sketch-move-pattern-instance`). Kopieren geht.
+    PatternInstance,
 }
 
 /// Was eine Bewegung an den Abhängigkeiten geändert hat.
@@ -305,14 +308,20 @@ impl Sketch {
         if set.out.points.is_empty() {
             return set.out;
         }
+        // Exemplare kommen nie als Hilfsgeometrie dazu; gewählt sperren sie die Bewegung.
+        let (instance_curves, instance_points) = self.instance_parts();
         loop {
             let before = set.out.points.len() + set.out.curves.len();
             let (helper_curves, helper_points) = self.helpers_of(&set);
             for c in helper_curves {
-                set.add_curve(self, c);
+                if !instance_curves.contains(&c) {
+                    set.add_curve(self, c);
+                }
             }
             for p in helper_points {
-                set.add_point(p);
+                if !instance_points.contains(&p) {
+                    set.add_point(p);
+                }
             }
             for c in self.rollers_of(&set) {
                 set.add_curve(self, c);
@@ -604,13 +613,14 @@ impl Sketch {
     }
 
     /// Alle Kurven und freien Punkte ohne feste Geometrie, also ohne Achshilfslinie, Kantenkopien
-    /// und festen Ursprung.
+    /// und festen Ursprung, und ohne Exemplare von Mustern (sie folgen ihrer Vorlage).
     pub fn whole_sketch_set(&self) -> TransformSet {
         let held = self.held_points();
+        let (instances, _) = self.instance_parts();
         let curves: Vec<CurveId> = self
             .curves()
             .map(|(c, _)| c)
-            .filter(|&c| !self.is_held_curve(c, &held))
+            .filter(|&c| !self.is_held_curve(c, &held) && !instances.contains(&c))
             .collect();
         let used: HashSet<PointId> = self.curves().flat_map(|(_, d)| d.kind.points()).collect();
         let points: Vec<PointId> = self
@@ -859,6 +869,12 @@ impl Sketch {
             return Err(TransformBlock::Degenerate);
         }
         let set = self.transform_set(&set.curves, &set.points);
+        let (instance_curves, instance_points) = self.instance_parts();
+        if set.curves.iter().any(|c| instance_curves.contains(c))
+            || set.points.iter().any(|p| instance_points.contains(p))
+        {
+            return Err(TransformBlock::PatternInstance);
+        }
         let s = &self.settled(&set, s);
         if set.points.is_empty() || s.is_identity(self.tol.linear) {
             return Err(TransformBlock::NothingToDo);
@@ -920,7 +936,18 @@ impl Sketch {
         let mut out = self.clone();
         let split = out.split_from_outsiders(&scope)?;
         out.write_positions(&set.curves, &targets, s)?;
+        // Muster: Abstände mit dem Maßstab, wenn die ganze Vorlage samt Richtungslinien mitgeht;
+        // dann die Exemplare an die neue Lage, damit Bindungen an ihnen richtig geprüft werden.
+        let mut scaled_spacings = Vec::new();
+        if stretching {
+            let held_line = |l: CurveId| self.is_held_curve(l, &held);
+            scaled_spacings = out
+                .scale_pattern_spacings(&scope.curves, held_line, s.factor)
+                .ok_or(TransformBlock::Degenerate)?;
+        }
+        out.refresh_patterns();
         let mut report = out.settle_after_transform(&scope, &held, &held_before, &severed, s)?;
+        report.scaled.extend(scaled_spacings);
         report.split = split;
         if set.curves.iter().any(|&c| out.collapsed(c)) {
             return Err(TransformBlock::Degenerate);

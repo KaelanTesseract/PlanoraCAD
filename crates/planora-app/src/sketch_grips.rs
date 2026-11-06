@@ -266,11 +266,12 @@ pub(crate) fn scaled_formula(text: &str, k: f64) -> Option<String> {
     })
 }
 
-/// Wert eines Längenmaßes.
+/// Wert eines Längenmaßes (auch des Abstands eines Musters, Skizzen 5).
 fn length_of(kind: &planora_sketch::constraint::ConstraintKind) -> Option<f64> {
     use planora_sketch::constraint::ConstraintKind as K;
     match *kind {
         K::EllipseMajor(_, v) | K::EllipseMinor(_, v) => Some(v),
+        K::PatternValue(_, slot, v) if slot.is_spacing() => Some(v),
         ref k => k.length_value(),
     }
 }
@@ -296,6 +297,7 @@ fn block_message(block: TransformBlock) -> Msg {
         }
         TransformBlock::NothingToDo => crate::msg!("sketch-move-nothing"),
         TransformBlock::Degenerate => crate::msg!("sketch-move-degenerate"),
+        TransformBlock::PatternInstance => crate::msg!("sketch-move-pattern-instance"),
     }
 }
 

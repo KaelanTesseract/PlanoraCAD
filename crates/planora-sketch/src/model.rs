@@ -282,8 +282,10 @@ impl Sketch {
     }
 
     /// Ersetzt die Art einer lebenden Kurve (Stutzen, Dehnen, Brechen). Prüft nichts; interne
-    /// Abhängigkeiten der neuen Art legt der Aufrufer an.
+    /// Abhängigkeiten der neuen Art legt der Aufrufer an. Ist die Kurve Vorlage oder Exemplar
+    /// eines Musters, wird das Muster aufgelöst.
     pub(crate) fn set_curve_kind(&mut self, c: CurveId, kind: CurveKind) {
+        self.dissolve_patterns_at(&[c]);
         self.touch_structure();
         self.curves[c].kind = kind;
         self.refresh_shared_signs(Some(c));
@@ -535,23 +537,29 @@ impl Sketch {
         }
     }
 
+    /// Gehört die Kurve zu einem Muster, gilt der Stil für die Vorlage und alle ihre Exemplare
+    /// (Stil wie die Vorlage, auch nach späterem Umschalten).
     pub fn set_construction(&mut self, c: CurveId, construction: bool) -> Result<(), SketchError> {
         self.check_curve(c)?;
-        self.curves[c].construction = construction;
-        self.curves[c].centerline = false;
+        for x in self.pattern_style_group(c) {
+            self.curves[x].construction = construction;
+            self.curves[x].centerline = false;
+        }
         self.touch_structure();
         Ok(())
     }
 
     /// Schaltet die Mittellinie um (nur Linien): an ⇒ Konstruktion und Mittellinie, aus ⇒
-    /// beides aus.
+    /// beides aus. Im Muster wie [`Sketch::set_construction`].
     pub fn set_centerline(&mut self, c: CurveId, on: bool) -> Result<(), SketchError> {
         self.check_curve(c)?;
         if !matches!(self.curves[c].kind, CurveKind::Line { .. }) {
             return Err(SketchError::WrongType(tr!("sketch-err-centerline-type")));
         }
-        self.curves[c].construction = on;
-        self.curves[c].centerline = on;
+        for x in self.pattern_style_group(c) {
+            self.curves[x].construction = on;
+            self.curves[x].centerline = on;
+        }
         self.touch_structure();
         Ok(())
     }
