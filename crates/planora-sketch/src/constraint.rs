@@ -1481,7 +1481,7 @@ impl Sketch {
             x.extend(start);
             let mut locals = self.evaluate_data(&data, &x).locals;
             locals.retain(|&v| v < self.vars.len());
-            if self.pattern_cycle(Some(&locals)) {
+            if self.pattern_cycle(&locals) {
                 return Err(PatternProblem::Cycle.error());
             }
         }
@@ -1519,7 +1519,7 @@ impl Sketch {
         let Some(ev) = self.evaluate(id, &self.vars) else {
             return Ok(());
         };
-        if self.pattern_cycle(Some(&ev.locals)) {
+        if self.pattern_cycle(&ev.locals) {
             Err(PatternProblem::Cycle.error())
         } else {
             Ok(())

@@ -1722,6 +1722,7 @@ sketch-pattern-zero-step = Abstand oder Winkel des Musters darf nicht null sein
 sketch-pattern-direction = Die Richtung oder die Mitte des Musters fehlt, oder beide Richtungen sind parallel
 sketch-pattern-instance-source = Ein Exemplar eines Musters kann keine Vorlage, Richtung oder Mitte sein
 sketch-pattern-cycle = Diese Abhängigkeit verbindet die Vorlage eines Musters mit einem eigenen Exemplar
+sketch-pattern-cycle-arc = Dieser Bogen verbindet die Vorlage eines Musters mit einem eigenen Exemplar
 sketch-pattern-slot = Dieser Wert passt nicht zur Art des Musters
 sketch-pattern-count-range = Die Anzahl muss eine ganze Zahl von 1 bis { $max } sein
 sketch-pattern-angle-range = Der Winkel des Musters muss zwischen 0° und 360° liegen und darf nicht 0° sein

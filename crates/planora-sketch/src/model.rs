@@ -348,7 +348,9 @@ impl Sketch {
         }
         self.atomically(|s| {
             let (id, k) = make(s);
-            s.check_activation_cycle(k)?;
+            if s.check_activation_cycle(k).is_err() {
+                return Err(SketchError::InvalidInput(tr!("sketch-pattern-cycle-arc")));
+            }
             Ok(id)
         })
     }
@@ -416,15 +418,12 @@ impl Sketch {
         }
         self.with_internal_checked(|s| {
             let (ax, ay, mi) = (s.new_var(major.x), s.new_var(major.y), s.new_var(minor));
-            let id = s.add_elliptic_arc_vars(center, ax, ay, mi, start, end);
-            // `add_elliptic_arc_vars` legt als Letztes die interne Abhängigkeit an.
-            let k = crate::constraint::ConstraintId::from_index(s.constraints.len() - 1);
-            (id, k)
+            s.add_elliptic_arc_vars(center, ax, ay, mi, start, end)
         })
     }
 
     /// Ellipsenbogen auf vorhandenen Variablen (etwa geteilt mit der Ellipse, aus der er
-    /// entsteht); legt die interne Abhängigkeit `EllipticArcEnds` an. Prüft nichts.
+    /// entsteht); legt die interne Abhängigkeit `EllipticArcEnds` an und liefert beide Ids. Prüft nichts.
     pub(crate) fn add_elliptic_arc_vars(
         &mut self,
         center: PointId,
@@ -433,7 +432,7 @@ impl Sketch {
         minor: usize,
         start: PointId,
         end: PointId,
-    ) -> CurveId {
+    ) -> (CurveId, crate::constraint::ConstraintId) {
         let id = self.push_curve(CurveKind::EllipticArc {
             center,
             ax,
@@ -442,8 +441,8 @@ impl Sketch {
             start,
             end,
         });
-        self.push_internal(crate::constraint::ConstraintKind::EllipticArcEnds(id));
-        id
+        let k = self.push_internal(crate::constraint::ConstraintKind::EllipticArcEnds(id));
+        (id, k)
     }
 
     /// Natürlicher kubischer Spline durch 2 bis [`MAX_SPLINE_POINTS`] verschiedene Punkte;

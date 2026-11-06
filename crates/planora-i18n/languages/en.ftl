@@ -1739,6 +1739,7 @@ sketch-pattern-zero-step = The distance or angle of a pattern cannot be zero
 sketch-pattern-direction = The direction or center of the pattern is missing, or both directions are parallel
 sketch-pattern-instance-source = An instance of a pattern cannot be an object, direction or center of a pattern
 sketch-pattern-cycle = This constraint ties the objects of a pattern to one of its own instances
+sketch-pattern-cycle-arc = This arc ties the objects of a pattern to one of its own instances
 sketch-pattern-slot = This value does not fit the kind of pattern
 sketch-pattern-count-range = The quantity must be a whole number from 1 to { $max }
 sketch-pattern-angle-range = The pattern angle must be between 0° and 360° and cannot be 0°

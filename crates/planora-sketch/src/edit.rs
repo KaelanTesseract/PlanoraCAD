@@ -658,7 +658,9 @@ impl Sketch {
                 minor,
                 start,
                 end,
-            } => Ok(self.add_elliptic_arc_vars(center, ax, ay, minor, start, end)),
+            } => Ok(self
+                .add_elliptic_arc_vars(center, ax, ay, minor, start, end)
+                .0),
             CurveKind::Spline { points } => self.add_spline(&points),
             CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => {
                 unreachable!("pieces are open curves")

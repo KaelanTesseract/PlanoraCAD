@@ -846,7 +846,7 @@ impl Sketch {
             edit.added += sync.added;
             edit.removed += sync.removed;
             edit.dropped_constraints += sync.dropped_constraints;
-            if s.pattern_cycle(None) {
+            if s.pattern_in_cycle(id) {
                 return Err(PatternProblem::Cycle.error());
             }
             s.touch_structure();
@@ -1025,7 +1025,7 @@ impl Sketch {
         Ok(())
     }
 
-    fn dissolve(&mut self, id: PatternId) {
+    pub(crate) fn dissolve(&mut self, id: PatternId) {
         self.patterns[id].alive = false;
         for c in self.patterns[id].values.clone() {
             self.constraints[c].alive = false;

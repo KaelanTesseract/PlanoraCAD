@@ -12,6 +12,7 @@ use planora_sketch::pattern::{
     CircularMode, PatternDir, PatternId, PatternKind, PatternPlan, PatternSlot,
 };
 use planora_sketch::shapes::{SlotPlan, SlotStyle};
+use planora_sketch::solver::SolveStatus;
 use planora_sketch::{ConstraintId, CurveId, CurveKind, PointId, Sketch, SketchData};
 
 fn new_sketch() -> Sketch {
@@ -730,28 +731,158 @@ fn an_arc_or_elliptic_arc_closing_a_pattern_loop_is_refused_and_files_stay_loada
     s.solve();
     file_round_trip(&s, "Bogen an Exemplaren");
 
-    // Eine Schleife allein über eine interne Abhängigkeit (etwa aus Stutzen oder Brechen) lädt;
-    // dieselbe Schleife über eine Abhängigkeit des Benutzers nicht.
+    let _ = arc;
+    // Ohne Schleife in der Skizze wird eine neue Schleife über eine Abhängigkeit weiter
+    // abgelehnt.
+    let e = s
+        .add_constraint(K::Distance(r.points[0], inst[0], 5.0))
+        .unwrap_err();
+    assert!(e.to_string().contains("Diese Abhängigkeit"), "{e}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Korrektur 2: Muster in einer Schleife werden beim Laden aufgelöst
+// ---------------------------------------------------------------------------------------------
+
+/// Zwei Rechteckmuster A (unten) und B (oben, weit weg), dazu ein Bogen mit freier Mitte, dessen
+/// Enden auf Exemplarpunkten von A liegen (geht ohne Schleife). Liefert Skizze, A, B, den Bogen,
+/// die freie Mitte und eine Vorlagenecke von A.
+fn two_patterns_and_an_arc() -> (Sketch, PatternId, PatternId, CurveId, PointId, PointId) {
+    let mut s = new_sketch();
+    let ra = s
+        .add_rectangle(DVec2::new(0.0, 0.0), DVec2::new(10.0, 6.0))
+        .unwrap();
+    let a = s
+        .add_pattern(&rect_plan(
+            ra.lines.to_vec(),
+            [PatternDir::SketchX, PatternDir::SketchY],
+        ))
+        .unwrap();
+    let rb = s
+        .add_rectangle(DVec2::new(0.0, 200.0), DVec2::new(10.0, 206.0))
+        .unwrap();
+    let b = s
+        .add_pattern(&rect_plan(
+            rb.lines.to_vec(),
+            [PatternDir::SketchX, PatternDir::SketchY],
+        ))
+        .unwrap();
+    // Enden: die Ecke `ra.points[0]` in den Exemplaren an [1, 0] und [0, 1] (ein Viertelbogen
+    // um die Vorlagenecke, wenn die Mitte dorthin wandert).
+    let m = s.pattern(a).unwrap().clone();
+    let k = m
+        .source_points
+        .iter()
+        .position(|&p| p == ra.points[0])
+        .unwrap();
+    let at = |x: [i32; 2]| m.instances.iter().find(|i| i.at == x).unwrap().points[k];
+    let free = s.add_point(30.0, 30.0).unwrap();
+    let arc = s.add_arc(free, at([1, 0]), at([0, 1])).unwrap();
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+    (s, a, b, arc, free, ra.points[0])
+}
+
+/// Nach dem Laden einer Skizze mit Schleife: A aufgelöst, B lebt, die Skizze löst, und Befehle
+/// fern der früheren Schleife gehen.
+fn assert_loaded_without_the_loop(mut s: Sketch, a: PatternId, b: PatternId, tag: &str) {
+    assert!(s.pattern(a).is_none(), "{tag}: A aufgelöst");
+    assert!(s.pattern(b).is_some(), "{tag}: B lebt");
+    let r = s.solve();
+    assert_eq!(r.status, SolveStatus::Solved, "{tag}: {r:?}");
+    let c = s.add_point(-100.0, -100.0).unwrap();
+    let p = s.add_point(-90.0, -100.0).unwrap();
+    let q = s.add_point(-100.0, -90.0).unwrap();
+    s.add_arc(c, p, q).unwrap();
+    let (e1, e2) = (
+        s.add_point(-150.0, -100.0).unwrap(),
+        s.add_point(-160.0, -90.0).unwrap(),
+    );
+    s.add_elliptic_arc(c, DVec2::new(60.0, 0.0), 20.0, e1, e2)
+        .unwrap();
+    let rect = s
+        .add_rectangle(DVec2::new(-300.0, 0.0), DVec2::new(-290.0, 5.0))
+        .unwrap();
+    s.add_constraint(K::Distance(rect.points[0], rect.points[1], 10.0))
+        .unwrap();
+    let mut plan = rect_plan(
+        s.pattern(b).unwrap().sources.clone(),
+        [PatternDir::SketchX, PatternDir::SketchY],
+    );
+    plan.counts = [4, 2];
+    s.edit_pattern(b, &plan).unwrap();
+    assert_eq!(s.pattern(b).unwrap().instances.len(), 7, "{tag}");
+    let r = s.solve();
+    assert_eq!(r.status, SolveStatus::Solved, "{tag}: {r:?}");
+}
+
+#[test]
+fn a_pattern_in_an_internal_loop_is_dissolved_on_load_and_the_sketch_stays_usable() {
+    let (s, a, b, arc, _, corner) = two_patterns_and_an_arc();
+    // Bogenmitte auf eine Vorlagenecke von A: Schleife nur über die interne `ArcRadius`.
     let mut d = s.to_data();
     let CurveKind::Arc { start, end, .. } = d.curves[arc.index()].kind else {
         panic!("kein Bogen")
     };
     d.curves[arc.index()].kind = CurveKind::Arc {
-        center: r.points[0],
+        center: corner,
         start,
         end,
     };
-    assert!(Sketch::from_data(d.clone()).is_ok());
-    let mut user = s.clone();
-    user.add_constraint(K::Distance(free, inst[0], 5.0))
-        .unwrap();
-    let mut d = user.to_data();
+    let (loaded, dissolved) = Sketch::from_data_counted(d).unwrap();
+    assert_eq!(dissolved, 1);
+    assert_loaded_without_the_loop(loaded, a, b, "intern");
+
+    // Dasselbe über die Datei.
+    let text = encode_version(&document(s.clone()).snapshot()).unwrap();
+    let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    v["features"][0]["art"]["skizze"]["kurven"][arc.index()]["art"]["mitte"] =
+        corner.index().into();
+    let doc = load(&serde_json::to_string_pretty(&v).unwrap()).unwrap();
+    let FeatureKind::Sketch(sf) = &doc.features()[0].kind else {
+        panic!("keine Skizze")
+    };
+    assert_loaded_without_the_loop(sf.sketch.clone(), a, b, "Datei");
+}
+
+#[test]
+fn a_pattern_in_a_mixed_loop_is_dissolved_on_load() {
+    let (mut s, a, b, _, free, corner) = two_patterns_and_an_arc();
+    // Abhängigkeit des Benutzers von der freien Bogenmitte zu einem freien Punkt; in den Daten
+    // dann zur Vorlagenecke von A: Schleife über `Distance` und die interne `ArcRadius`.
+    let other = s.add_point(40.0, 30.0).unwrap();
+    s.add_constraint(K::Distance(free, other, 10.0)).unwrap();
+    let mut d = s.to_data();
     let k = d
         .constraints
         .iter()
-        .position(|c| matches!(c.kind, K::Distance(a, _, _) if a == free))
+        .position(|c| matches!(c.kind, K::Distance(x, y, _) if x == free && y == other))
         .unwrap();
-    d.constraints[k].kind = K::Distance(r.points[0], inst[0], 5.0);
-    let e = Sketch::from_data(d).unwrap_err();
-    assert!(e.to_string().contains("eigenen Exemplar"), "{e}");
+    let at = s.point_xy(free).unwrap() - s.point_xy(corner).unwrap();
+    d.constraints[k].kind = K::Distance(free, corner, at.length());
+    let (loaded, dissolved) = Sketch::from_data_counted(d).unwrap();
+    assert_eq!(dissolved, 1);
+    assert_loaded_without_the_loop(loaded, a, b, "gemischt");
+}
+
+#[test]
+fn a_user_loop_is_dissolved_on_load_too() {
+    let (s, a, b, _, _, corner) = two_patterns_and_an_arc();
+    let inst = s.pattern(a).unwrap().instances[0].points[0];
+    let mut s2 = s.clone();
+    let p = s2.add_point(70.0, 70.0).unwrap();
+    s2.add_constraint(K::Distance(p, inst, 5.0)).unwrap();
+    let mut d = s2.to_data();
+    let k = d
+        .constraints
+        .iter()
+        .position(|c| matches!(c.kind, K::Distance(x, _, _) if x == p))
+        .unwrap();
+    let dist = s2
+        .point_xy(corner)
+        .unwrap()
+        .distance(s2.point_xy(inst).unwrap());
+    d.constraints[k].kind = K::Distance(corner, inst, dist);
+    let (loaded, dissolved) = Sketch::from_data_counted(d).unwrap();
+    assert_eq!(dissolved, 1);
+    assert_loaded_without_the_loop(loaded, a, b, "Benutzer");
 }

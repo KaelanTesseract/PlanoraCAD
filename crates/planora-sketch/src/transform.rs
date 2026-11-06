@@ -750,7 +750,10 @@ impl Sketch {
                         minor,
                         start,
                         end,
-                    } => self.add_elliptic_arc_vars(center, ax, ay, minor, start, end),
+                    } => {
+                        self.add_elliptic_arc_vars(center, ax, ay, minor, start, end)
+                            .0
+                    }
                     other => self.push_curve(other),
                 }
             }

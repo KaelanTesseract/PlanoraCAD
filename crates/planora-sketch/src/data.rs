@@ -136,8 +136,17 @@ impl Sketch {
     }
 
     /// Baut eine Skizze aus Rohdaten auf. Prüft alles (Zahlen endlich und im Bereich, Indizes
-    /// vorhanden, lebende Objekte verweisen nur auf lebende); löst und rechnet nichts.
+    /// vorhanden, lebende Objekte verweisen nur auf lebende); löst und rechnet nichts. Muster in
+    /// einer Schleife zwischen Vorlage und eigenem Exemplar werden aufgelöst, siehe
+    /// [`Sketch::from_data_counted`].
     pub fn from_data(d: SketchData) -> Result<Sketch, SketchError> {
+        Sketch::from_data_counted(d).map(|(s, _)| s)
+    }
+
+    /// Wie [`Sketch::from_data`]; liefert dazu die Zahl der Muster, die beim Laden aufgelöst
+    /// wurden, weil sie in einer Schleife zwischen Vorlage und eigenem Exemplar lagen (für eine
+    /// Meldung).
+    pub fn from_data_counted(d: SketchData) -> Result<(Sketch, usize), SketchError> {
         if !(d.tolerance.linear.is_finite()
             && d.tolerance.linear > 0.0
             && d.tolerance.angular.is_finite()
@@ -299,28 +308,24 @@ impl Sketch {
                 s.check_constraint_value(&c.kind)?;
             }
         }
-        // Keine Abhängigkeit des Benutzers darf Vorlage und eigenes Exemplar eines Musters
-        // verbinden, sonst liefe der Löser nie zusammen (wie bei `add_constraint`). Interne
-        // Abhängigkeiten zählen hier nicht: Laden nimmt jeden Stand an, den die Bearbeitung
-        // erzeugen kann, und manche Wege (Stutzen, Brechen) legen sie ohne diese Prüfung an.
-        if s.pattern_cycle(None) {
-            let mut user = s.clone();
-            let internal: Vec<ConstraintId> = user
-                .constraints
-                .iter()
-                .filter(|(_, c)| c.internal)
-                .map(|(id, _)| id)
-                .collect();
-            for id in internal {
-                user.constraints[id].enabled = false;
+        // Ein Muster in einer Schleife zwischen Vorlage und eigenem Exemplar (über Abhängigkeiten
+        // des Benutzers, interne oder beide) liefe im Löser nie zusammen und sperrte die Skizze.
+        // Es wird aufgelöst, die Geometrie bleibt; so lädt und löst die Datei. Nach jedem
+        // Auflösen neu prüfen: Dann sind andere Variablen gehalten.
+        let mut dissolved = 0;
+        loop {
+            let cyclic = s.cyclic_patterns();
+            if cyclic.is_empty() {
+                break;
             }
-            if user.pattern_cycle(None) {
-                return Err(PatternProblem::Cycle.error());
+            for id in cyclic {
+                s.dissolve(id);
+                dissolved += 1;
             }
         }
         // Die Tangenten an gemeinsamen Enden bleiben, wie die gespeicherte Geometrie sie zeigt.
         s.refresh_shared_signs(None);
-        Ok(s)
+        Ok((s, dissolved))
     }
 }
 

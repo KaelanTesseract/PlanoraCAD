@@ -22,7 +22,7 @@ use crate::constraint::{ConstraintId, ConstraintKind, SHARED_END_TANGENT_DRIFT};
 use crate::error::SketchError;
 use crate::linalg::{Matrix, analyze_rows, cholesky_solve};
 use crate::model::{CurveId, CurveKind, PointId, Sketch};
-use crate::pattern::PATTERN_ROUNDS;
+use crate::pattern::{PATTERN_ROUNDS, PatternId};
 use planora_i18n::tr;
 use planora_math::DVec2;
 use std::collections::{HashMap, HashSet};
@@ -850,27 +850,66 @@ impl Sketch {
         (groups, in_constraint)
     }
 
-    /// Verbindet eine Gruppe Vorlage, Richtungslinie oder Mitte eines Musters mit einem eigenen
-    /// Exemplar (sie enthält ein Eingangsvariable und liest eine Exemplarvariable desselben
-    /// Musters)? Dann liefe das Nachführen nie zusammen (Entscheidung 6). `extra`: die Variablen
-    /// einer Abhängigkeit, die erst angelegt werden soll.
-    pub(crate) fn pattern_cycle(&self, extra: Option<&[usize]>) -> bool {
+    /// Die lebenden Muster in einer Schleife: Eine Gruppe enthält eine Eingangsvariable (Vorlage,
+    /// Richtungslinie oder Mitte) und liest eine Exemplarvariable desselben Musters. Dann liefe das
+    /// Nachführen nie zusammen (Entscheidung 6). `extra`: die Variablen einer Abhängigkeit, die
+    /// erst angelegt werden soll; `touching`: nur Gruppen, die eine dieser Variablen enthalten
+    /// (`None`: alle Gruppen).
+    fn patterns_in_cycles(
+        &self,
+        extra: Option<&[usize]>,
+        touching: Option<&[usize]>,
+    ) -> Vec<PatternId> {
         let held = self.pattern_vars();
         if held.is_empty() {
-            return false;
+            return Vec::new();
         }
         let (groups, _) = self.build_groups_holding(&held, extra);
-        let io: Vec<(HashSet<usize>, HashSet<usize>)> =
-            self.patterns().map(|(id, _)| self.pattern_io(id)).collect();
-        groups
-            .iter()
-            .filter(|g| !g.pattern_reads.is_empty())
-            .any(|g| {
-                io.iter().any(|(inputs, outputs)| {
-                    g.pattern_reads.iter().any(|v| outputs.contains(v))
-                        && g.vars.iter().any(|v| inputs.contains(v))
-                })
+        let io: Vec<(PatternId, HashSet<usize>, HashSet<usize>)> = self
+            .patterns()
+            .map(|(id, _)| {
+                let (inputs, outputs) = self.pattern_io(id);
+                (id, inputs, outputs)
             })
+            .collect();
+        let touching: Option<HashSet<usize>> = touching.map(|t| t.iter().copied().collect());
+        let mut out: Vec<PatternId> = Vec::new();
+        for g in groups.iter().filter(|g| !g.pattern_reads.is_empty()) {
+            if let Some(t) = &touching
+                && !g.vars.iter().any(|v| t.contains(v))
+            {
+                continue;
+            }
+            for (id, inputs, outputs) in &io {
+                if !out.contains(id)
+                    && g.pattern_reads.iter().any(|v| outputs.contains(v))
+                    && g.vars.iter().any(|v| inputs.contains(v))
+                {
+                    out.push(*id);
+                }
+            }
+        }
+        out
+    }
+
+    /// Schlösse die Abhängigkeit mit den Variablen `locals` (noch nicht angelegt oder gerade
+    /// angelegt) eine neue Schleife zwischen Vorlage und eigenem Exemplar? Geprüft werden nur die
+    /// Gruppen, in denen sie liegt: Eine Schleife anderswo in der Skizze (etwa aus einer alten
+    /// Datei) sperrt fremde Befehle nicht.
+    pub(crate) fn pattern_cycle(&self, locals: &[usize]) -> bool {
+        !self
+            .patterns_in_cycles(Some(locals), Some(locals))
+            .is_empty()
+    }
+
+    /// Liegt das Muster `id` in einer Schleife (nach `edit_pattern`)?
+    pub(crate) fn pattern_in_cycle(&self, id: PatternId) -> bool {
+        self.patterns_in_cycles(None, None).contains(&id)
+    }
+
+    /// Alle lebenden Muster in einer Schleife (beim Laden).
+    pub(crate) fn cyclic_patterns(&self) -> Vec<PatternId> {
+        self.patterns_in_cycles(None, None)
     }
 
     /// Löst mit weichen Zusatzbedingungen (zum Ziehen). Harte Abhängigkeiten werden danach
