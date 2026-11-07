@@ -2319,3 +2319,5 @@ Umgesetzt 2026-11-03 bis 2026-11-06 auf dem Zweig `feature/skizzen-muster` (Spec
 - Das Klappmenü „Projizieren/Einschließen“ hat vorerst nur den Eintrag „Projizieren“; „Schneiden“ und „Silhouette“ kommen mit Task 10 dazu.
 - Freiformkanten (Splines) werden beim Projizieren übersprungen und in der Meldung gezählt; genau geht das erst mit Splines über Kontrollpunkte (Teilprojekt 7).
 - Projizierte Kanten folgen dem Körper über dieselbe Projektion wie beim Anlegen (`reproject_curve`); schräg liegende Kreisbögen werden so auch beim Nachführen Ellipsenbögen (vorher ging dabei der Bezug verloren).
+- Mit ausgeschalteter „Projektionsverknüpfung“ kann dasselbe zweimal projiziert deckungsgleiche Doppelte anlegen: Ohne Eintrag in den Kopien weiß die App nicht, was schon projiziert wurde (der Abgleich läuft nur gegen verknüpfte Projektionen).
+- Kreise und Bögen, deren Ebene senkrecht auf der Skizzenebene steht (etwa ein Querloch), werden wie in Fusion zu Linien (ganzer Kreis: Durchmesser; Bogen: seine Ausdehnung). Übersprungene Kanten zählt die Meldung getrennt nach Freiform und anderen Gründen.

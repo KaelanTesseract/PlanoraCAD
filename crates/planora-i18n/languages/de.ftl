@@ -469,7 +469,7 @@ undo-dim-change = Maß ändern
 undo-balloon-add = Positionsnummer anlegen
 undo-balloon-delete = Positionsnummer löschen
 undo-balloon-move = Positionsnummer verschieben
-undo-edge-project = Kante übernehmen
+undo-edge-project = Projizieren
 undo-delete = Löschen
 undo-line = Linie zeichnen
 undo-circle = Kreis zeichnen
@@ -1205,6 +1205,10 @@ sketch-project-link-hint = An: Die Kurven folgen dem Körper. Aus: feste Geometr
 sketch-project-skipped = { $count ->
     [one] Eine Kante wurde übersprungen (Freiformkanten lassen sich noch nicht projizieren)
    *[other] { $count } Kanten wurden übersprungen (Freiformkanten lassen sich noch nicht projizieren)
+}
+sketch-project-skipped-other = { $count ->
+    [one] Eine Kante ließ sich nicht projizieren und wurde übersprungen
+   *[other] { $count } Kanten ließen sich nicht projizieren und wurden übersprungen
 }
 sketch-project-nothing-new = Nichts Neues: Diese Kanten sind schon projiziert oder ergeben nur Punkte
 sketch-offset-vanished = Bei diesem Abstand bleibt vom Versatz nichts übrig

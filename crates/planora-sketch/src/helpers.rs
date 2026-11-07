@@ -8,7 +8,7 @@ use crate::error::SketchError;
 use crate::model::{CurveId, CurveKind, PointId, Sketch, finite};
 use planora_i18n::tr;
 use planora_kernel::{Curve, Edge, Face, Id, Solid, Surface};
-use planora_math::{DVec2, DVec3, Frame, TAU};
+use planora_math::{DVec2, DVec3, Frame, PI, TAU};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
@@ -723,6 +723,13 @@ impl Sketch {
                 Err(unsupported(tr!("sketch-err-arc-not-parallel")))
             }
             Curve::Ellipse { .. } if !full => Err(unsupported(tr!("sketch-err-ellipse-arc"))),
+            // Hochkant stehende Kreise und Ellipsen lehnt die alte Kantenkopie weiter ab; erst die
+            // neue Projektion macht sie zu Linien (Skizzen 6).
+            Curve::Circle { frame: cf, .. } | Curve::Ellipse { frame: cf, .. }
+                if cf.z.dot(self.frame().z).abs() <= tol.angular =>
+            {
+                Err(unsupported(tr!("sketch-err-curve-perpendicular")))
+            }
             _ => self.project_curve(&e.curve, e.t0, e.t1),
         }
     }
@@ -749,6 +756,9 @@ impl Sketch {
                 frame: cf,
                 radius: r,
             } => {
+                if cf.z.dot(frame.z).abs() <= tol.angular {
+                    return self.project_edge_on(curve, (cf, *r, *r), t0, t1, full);
+                }
                 if cf.z.cross(frame.z).length() > tol.angular {
                     return self.project_ellipse_piece(curve, (cf, *r, *r), t0, t1, full);
                 }
@@ -766,9 +776,74 @@ impl Sketch {
                 frame: cf,
                 major,
                 minor,
+            } if cf.z.dot(frame.z).abs() <= tol.angular => {
+                self.project_edge_on(curve, (cf, *major, *minor), t0, t1, full)
+            }
+            Curve::Ellipse {
+                frame: cf,
+                major,
+                minor,
             } => self.project_ellipse_piece(curve, (cf, *major, *minor), t0, t1, full),
             Curve::Nurbs(_) => Err(unsupported(tr!("sketch-err-freeform-edge"))),
         }
+    }
+
+    /// Projiziert ein Kreis- oder Ellipsenstück, dessen Ebene senkrecht auf der Skizzenebene
+    /// steht (wie Fusion): Es wird eine Linie. Die Projektion `c + A·cos t + B·sin t` liegt
+    /// dann auf einer Geraden durch `c`; die Linie reicht vom kleinsten bis zum größten Wert
+    /// entlang dieser Geraden, beim ganzen Kreis zwischen den beiden äußersten Punkten, beim
+    /// Bogen über seine Enden und jede Spitze innerhalb seines Bereichs.
+    fn project_edge_on(
+        &self,
+        curve: &Curve,
+        (cf, major, minor): (&Frame, f64, f64),
+        t0: f64,
+        t1: f64,
+        full: bool,
+    ) -> Result<Projected, SketchError> {
+        let frame = *self.frame();
+        let tol = *self.tolerance();
+        let in_plane = |v: DVec3| DVec2::new(v.dot(frame.x), v.dot(frame.y));
+        let center = frame.to_local(cf.origin).truncate();
+        let big_a = in_plane(cf.x) * major;
+        let big_b = in_plane(cf.y) * minor;
+        let dir = if big_a.length() >= big_b.length() {
+            big_a
+        } else {
+            big_b
+        };
+        let u = dir.normalize_or_zero();
+        if u == DVec2::ZERO {
+            return Err(unsupported(tr!("sketch-err-curve-perpendicular")));
+        }
+        let (a, b) = (big_a.dot(u), big_b.dot(u));
+        // Wert entlang der Geraden bei `t` (über den Punkt der Kurve, damit Parameter und Lage
+        // genau zur Kante passen).
+        let along = |t: f64| (frame.to_local(curve.point(t)).truncate() - center).dot(u);
+        let (lo, hi) = if full {
+            let amp = a.hypot(b);
+            (-amp, amp)
+        } else {
+            let (from, to) = (t0.min(t1), t0.max(t1));
+            let mut vals = vec![along(t0), along(t1)];
+            // Spitzen bei `t = atan2(b, a) + k·π`.
+            let base = b.atan2(a);
+            let k0 = ((from - base) / PI).floor() as i64;
+            let k1 = ((to - base) / PI).ceil() as i64;
+            for k in k0..=k1 {
+                let t = base + k as f64 * PI;
+                if t > from && t < to {
+                    vals.push(along(t));
+                }
+            }
+            let lo = vals.iter().copied().fold(f64::INFINITY, f64::min);
+            let hi = vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            (lo, hi)
+        };
+        if !(lo.is_finite() && hi.is_finite()) || hi - lo <= tol.linear {
+            return Err(unsupported(tr!("sketch-err-curve-perpendicular")));
+        }
+        Ok(Projected::Line(center + u * lo, center + u * hi))
     }
 
     /// Projiziert das Stück `t0 … t1` der Ellipse `curve` mit `(Rahmen, große, kleine

@@ -2,7 +2,7 @@
 //! profilfähige Projektionen (`construction: false`).
 
 use planora_kernel::Curve;
-use planora_math::{DVec2, DVec3, Frame, PI, Tolerance};
+use planora_math::{DVec2, DVec3, Frame, PI, TAU, Tolerance};
 use planora_sketch::SketchError;
 use planora_sketch::constraint::ConstraintKind as K;
 use planora_sketch::helpers::ProjectStyle;
@@ -293,14 +293,114 @@ fn freeform_and_degenerate_pieces_are_rejected() {
         s.add_projected_curve(&flat, 1.0, 1.0, LINKED),
         Err(SketchError::Degenerate(_))
     ));
-    // Ein Kreis, der hochkant zur Skizze steht, wäre nur eine Strecke.
-    let edge_on = Curve::Circle {
-        frame: Frame::from_origin_normal(DVec3::ZERO, DVec3::X),
-        radius: 1.0,
-    };
-    assert!(matches!(
-        s.add_projected_curve(&edge_on, 0.0, 1.0, LINKED),
-        Err(SketchError::UnsupportedProjection(_))
-    ));
+    // Skizzen 6 (Korrektur 1): Ein Kreis, der hochkant zur Skizze steht, wird wie in Fusion
+    // eine Linie (`edge_on_*` unten); abgelehnt bleiben Freiform und Punkte.
     assert_eq!(s.points().count(), 0);
+}
+
+/// Kreis vom Radius `r` um `center` in einer Ebene senkrecht zur Skizze (Normale x).
+fn edge_on_circle(center: DVec3, r: f64) -> Curve {
+    Curve::Circle {
+        frame: Frame::from_origin_normal(center, DVec3::X),
+        radius: r,
+    }
+}
+
+fn line_ends(s: &Sketch, c: CurveId) -> (DVec2, DVec2) {
+    match s.curve(c).unwrap().kind {
+        CurveKind::Line { a, b } => (s.point_xy(a).unwrap(), s.point_xy(b).unwrap()),
+        ref k => panic!("keine Linie: {k:?}"),
+    }
+}
+
+/// Die Strecke von `a` nach `b`, Richtung egal.
+fn same_segment((p, q): (DVec2, DVec2), a: DVec2, b: DVec2) -> bool {
+    let near = |x: DVec2, y: DVec2| x.distance(y) < 1e-9;
+    (near(p, a) && near(q, b)) || (near(p, b) && near(q, a))
+}
+
+#[test]
+fn edge_on_full_circle_projects_to_a_line_of_its_diameter() {
+    let mut s = sketch();
+    let circle = edge_on_circle(DVec3::new(3.0, 4.0, 2.0), 2.5);
+    let c = s.add_projected_curve(&circle, 0.0, TAU, LINKED).unwrap();
+    assert!(matches!(s.curve(c).unwrap().kind, CurveKind::Line { .. }));
+    assert!((s.line_length(c).unwrap() - 5.0).abs() < 1e-9, "Länge 2r");
+    let (p, q) = line_ends(&s, c);
+    // Die Kreisebene steht senkrecht auf x: die Linie läuft in y durch die Mitte.
+    assert!(same_segment(
+        (p, q),
+        DVec2::new(3.0, 1.5),
+        DVec2::new(3.0, 6.5)
+    ));
+    assert!(!s.curve(c).unwrap().construction);
+    assert_solved_rigid(&mut s);
+}
+
+#[test]
+fn edge_on_half_arc_projects_to_its_extent() {
+    let mut s = sketch();
+    let circle = edge_on_circle(DVec3::ZERO, 2.0);
+    let Curve::Circle { frame, .. } = circle else {
+        unreachable!()
+    };
+    // Projektion von `cf.x`, `cf.y` in die Skizze: die Richtung der Linie.
+    let ax = DVec2::new(frame.x.x, frame.x.y);
+    let ay = DVec2::new(frame.y.x, frame.y.y);
+    let (u, a, b) = if ax.length() >= ay.length() {
+        (
+            ax.normalize(),
+            2.0 * ax.length(),
+            2.0 * ay.dot(ax.normalize()),
+        )
+    } else {
+        (
+            ay.normalize(),
+            2.0 * ax.dot(ay.normalize()),
+            2.0 * ay.length(),
+        )
+    };
+    // Werte entlang der Linie für eine dichte Abtastung des Halbbogens.
+    let along = |t: f64| a * t.cos() + b * t.sin();
+    for (t0, t1) in [
+        (0.0, PI),
+        (FRAC_PI_2, FRAC_PI_2 + PI),
+        (0.3, 1.2),
+        (-2.0, 0.5),
+    ] {
+        let c = s.add_projected_curve(&circle, t0, t1, LINKED).unwrap();
+        let steps = 4000;
+        let vals: Vec<f64> = (0..=steps)
+            .map(|k| along(t0 + (t1 - t0) * k as f64 / steps as f64))
+            .collect();
+        let lo = vals.iter().copied().fold(f64::INFINITY, f64::min);
+        let hi = vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let (p, q) = line_ends(&s, c);
+        let got = (p.dot(u).min(q.dot(u)), p.dot(u).max(q.dot(u)));
+        assert!(
+            (got.0 - lo).abs() < 1e-5 && (got.1 - hi).abs() < 1e-5,
+            "{t0}…{t1}: {got:?} ≠ ({lo}, {hi})"
+        );
+        // Auf der Geraden durch die Mitte.
+        assert!(p.perp_dot(u).abs() < 1e-9 && q.perp_dot(u).abs() < 1e-9);
+    }
+}
+
+#[test]
+fn edge_on_circle_line_reprojects_when_radius_changes() {
+    let mut s = sketch();
+    let c = s
+        .add_projected_curve(&edge_on_circle(DVec3::ZERO, 2.0), 0.0, TAU, LINKED)
+        .unwrap();
+    s.reproject_curve(c, &edge_on_circle(DVec3::ZERO, 3.0), 0.0, TAU)
+        .unwrap();
+    assert!((s.line_length(c).unwrap() - 6.0).abs() < 1e-9);
+    assert_solved_rigid(&mut s);
+    // Gekippt ist es eine Ellipse: Artwechsel ist ein Fehler, die Linie bleibt.
+    let tilted = Curve::Circle {
+        frame: Frame::from_origin_normal(DVec3::ZERO, DVec3::new(1.0, 0.0, 1.0).normalize()),
+        radius: 3.0,
+    };
+    assert!(s.reproject_curve(c, &tilted, 0.0, TAU).is_err());
+    assert!((s.line_length(c).unwrap() - 6.0).abs() < 1e-9);
 }

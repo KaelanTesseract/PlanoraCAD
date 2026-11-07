@@ -804,7 +804,7 @@ fn labels_route_by_mode() {
     ));
 }
 
-/// „Kante übernehmen“: Kurve und Verweis (Kopie) sind zusammen ein Schritt; Rückgängig nimmt
+/// „Projizieren“ (Skizzen 6, früher „Kante übernehmen“): Kurve und Verweis (Kopie) sind zusammen ein Schritt; Rückgängig nimmt
 /// beide zurück, „Skizze beenden“ schreibt den zurückgeholten Stand.
 #[test]
 fn projected_edge_is_a_step_with_its_copy() {
@@ -822,10 +822,7 @@ fn projected_edge_is_a_step_with_its_copy() {
     }
     assert_eq!(done, 2);
     assert_eq!(sk_undo_len(&w), 2);
-    assert_eq!(
-        w.active_tab().undo_label(),
-        Some("Kante übernehmen".to_string())
-    );
+    assert_eq!(w.active_tab().undo_label(), Some("Projizieren".to_string()));
     let copies = |w: &Workspace| {
         w.active_tab()
             .state
@@ -1094,10 +1091,7 @@ fn rejected_commit_keeps_the_sketch_history() {
     assert!(st(&mut w).try_close_sketch().is_err());
     assert!(st(&mut w).sketch_session.is_some());
     assert_eq!(sk_undo_len(&w), 1, "der Verlauf bleibt");
-    assert_eq!(
-        w.active_tab().undo_label(),
-        Some("Kante übernehmen".to_string())
-    );
+    assert_eq!(w.active_tab().undo_label(), Some("Projizieren".to_string()));
     tab(&mut w).undo().unwrap();
     tab(&mut w).undo().unwrap();
     assert_eq!(draft(&w).points().count(), 0);

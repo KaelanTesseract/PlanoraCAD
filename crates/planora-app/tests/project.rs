@@ -137,11 +137,18 @@ fn project_box_body_gives_four_lines_without_duplicates() {
         s.project_into_sketch(ProjectTarget::Face(0, top), true)
             .is_err()
     );
-    let edge = s.bodies[0].solid.edges.iter().next().unwrap().0;
-    assert!(
-        s.project_into_sketch(ProjectTarget::Edge(0, edge), true)
-            .is_err()
-    );
+    // Eine waagerechte Kante (keine senkrechte, die wäre nur ein Punkt).
+    let edge = s.bodies[0]
+        .solid
+        .edges
+        .iter()
+        .find(|(_, e)| (e.curve.point(e.t0).z - e.curve.point(e.t1).z).abs() < 1e-9)
+        .unwrap()
+        .0;
+    let err = s
+        .project_into_sketch(ProjectTarget::Edge(0, edge), true)
+        .unwrap_err();
+    assert_eq!(err, tr!("sketch-project-nothing-new"));
     s.observe_sketch(false);
     assert_eq!(undo_len(&s), steps, "kein Schritt");
     // Beim Beenden bleibt alles stehen, die Skizze folgt dem Körper ohne Warnung.
@@ -257,6 +264,9 @@ fn link_off_creates_no_copy() {
     assert_eq!(n, 4);
     assert_eq!(kinds(&s).len(), 4);
     assert!(draft(&s).copies.is_empty(), "feste Geometrie ohne Bezug");
+    // Auch ohne Verknüpfung heißt der Schritt „Projizieren“.
+    s.observe_sketch(false);
+    assert_eq!(s.sketch_undo_label().as_deref(), Some("Projizieren"));
     let sk = &draft(&s).sketch;
     assert!(sk.curves().all(|(_, c)| !c.construction));
 }
@@ -291,6 +301,7 @@ fn freeform_edge_is_skipped_with_count() {
         text.contains(&tr!("sketch-project-skipped", count = 2)),
         "unten und oben je ein Spline: {text}"
     );
+    assert!(!text.contains("ließen sich nicht"), "nur Freiform: {text}");
     // Die Freiformkante allein: Fehler mit dem Grund.
     let solid = s.bodies[body].solid.clone();
     let spline = solid
@@ -321,12 +332,109 @@ fn freeform_edge_is_skipped_with_count() {
 }
 
 #[test]
+fn cross_hole_gives_lines_and_nothing_skipped() {
+    // Quader 20 × 20 × 10 mit senkrechtem Loch r = 2 (Kreise in waagerechten Ebenen); die
+    // Skizze liegt auf der Seitenfläche y = 0, steht also senkrecht auf den Kreisen. Wie in
+    // Fusion werden die Kreise Linien (Durchmesser), nichts wird übersprungen.
+    let mut s = AppState::new();
+    s.document
+        .add_feature(
+            "Quader",
+            FeatureKind::Box {
+                size: DVec3::new(20.0, 20.0, 10.0),
+                origin: DVec3::ZERO,
+            },
+        )
+        .unwrap();
+    s.document
+        .add_feature(
+            "Zylinder",
+            FeatureKind::Cylinder {
+                radius: 2.0,
+                height: 14.0,
+                origin: DVec3::new(10.0, 10.0, -2.0),
+            },
+        )
+        .unwrap();
+    s.refresh();
+    s.add_boolean(0, 1, planora_kernel::boolean::BoolOp::Difference)
+        .unwrap();
+    let body = s.bodies.len() - 1;
+    let side = {
+        let solid = &s.bodies[body].solid;
+        solid
+            .faces
+            .iter()
+            .find(|(id, _)| {
+                planora_sketch::plane_of_face(solid, *id)
+                    .is_some_and(|f| f.z.y < -0.5 && f.origin.y.abs() < 1e-9)
+            })
+            .map(|(id, _)| id)
+            .expect("Seitenfläche y = 0")
+    };
+    let id = s.new_sketch_on_face(body, side).unwrap();
+    s.open_sketch(id).unwrap();
+    s.observe_sketch(false);
+    let n = s
+        .project_into_sketch(ProjectTarget::Body(body), true)
+        .unwrap();
+    assert!(
+        s.sketch_session.as_ref().unwrap().message.is_none(),
+        "{:?}",
+        s.sketch_session.as_ref().unwrap().message_text()
+    );
+    assert_eq!(kinds(&s), vec!["Linie"; n]);
+    let sk = &draft(&s).sketch;
+    let mut lengths: Vec<f64> = sk.curves().filter_map(|(c, _)| sk.line_length(c)).collect();
+    lengths.sort_by(f64::total_cmp);
+    // Rand der Seite (20, 20, 10, 10) und die beiden Lochkreise als Linien der Länge 4.
+    assert_eq!(n, 6, "{lengths:?}");
+    assert!(
+        (lengths[0] - 4.0).abs() < 1e-9 && (lengths[1] - 4.0).abs() < 1e-9,
+        "{lengths:?}"
+    );
+}
+
+#[test]
+fn skip_reasons_are_counted_separately() {
+    use planora_app::sketch_project::ProjectOutcome;
+    let mut s = box_with_sketch_on_top();
+    let (se, sk) = s.session_sketch_mut().unwrap();
+    let line = planora_kernel::Curve::Line {
+        origin: DVec3::new(0.0, 0.0, 5.0),
+        dir: DVec3::X,
+    };
+    // Ein Stück ohne endlichen Bereich geht nicht, ist aber keine Freiform.
+    let out = se
+        .project_pieces(
+            sk,
+            &[(line.clone(), 0.0, f64::INFINITY), (line, 0.0, 3.0)],
+            &[],
+            false,
+        )
+        .unwrap();
+    assert_eq!(out.skipped_freeform, 0);
+    assert_eq!(out.skipped_other, 1);
+    assert_eq!(out.added.len(), 1);
+    assert_ne!(out, ProjectOutcome::default());
+    // Die Texte sind verschieden; „andere“ nennt keine Freiform.
+    let other = tr!("sketch-project-skipped-other", count = 1);
+    assert_ne!(other, tr!("sketch-project-skipped", count = 1));
+    assert!(!other.contains("Freiform"), "{other}");
+    let en = planora_i18n::with_lang(&planora_i18n::english(), || {
+        tr!("sketch-project-skipped-other", count = 2)
+    });
+    assert!(en.contains('2') && !en.contains("freeform"), "{en}");
+}
+
+#[test]
 fn project_click_is_one_undo_step() {
     let mut s = box_with_sketch_on_top();
     let steps = undo_len(&s);
     s.project_into_sketch(ProjectTarget::Body(0), true).unwrap();
     s.observe_sketch(false);
     assert_eq!(undo_len(&s), steps + 1, "ein Schritt für den ganzen Klick");
+    assert_eq!(s.sketch_undo_label().as_deref(), Some("Projizieren"));
     assert!(s.undo_sketch());
     assert!(kinds(&s).is_empty());
     assert!(draft(&s).copies.is_empty());

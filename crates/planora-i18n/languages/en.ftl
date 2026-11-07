@@ -477,7 +477,7 @@ undo-dim-change = Change dimension
 undo-balloon-add = Add balloon
 undo-balloon-delete = Delete balloon
 undo-balloon-move = Move balloon
-undo-edge-project = Copy body edge
+undo-edge-project = Project
 undo-delete = Delete
 undo-line = Draw line
 undo-circle = Draw circle
@@ -1222,6 +1222,10 @@ sketch-project-link-hint = On: the curves follow the body. Off: fixed geometry w
 sketch-project-skipped = { $count ->
     [one] One edge was skipped (freeform edges cannot be projected yet)
    *[other] { $count } edges were skipped (freeform edges cannot be projected yet)
+}
+sketch-project-skipped-other = { $count ->
+    [one] One edge could not be projected and was skipped
+   *[other] { $count } edges could not be projected and were skipped
 }
 sketch-project-nothing-new = Nothing new: these edges are already projected or only give points
 sketch-offset-vanished = At this distance nothing is left of the offset

@@ -48,15 +48,18 @@ const PROJECTED: ProjectStyle = ProjectStyle {
 pub struct ProjectOutcome {
     /// Je neue Kurve der Index ihres Stücks und die Kurve.
     pub added: Vec<(usize, CurveId)>,
-    /// Stücke, die sich nicht projizieren lassen (Freiform).
-    pub skipped: usize,
+    /// Freiformkurven, die sich noch nicht projizieren lassen.
+    pub skipped_freeform: usize,
+    /// Andere Stücke, die sich nicht projizieren lassen.
+    pub skipped_other: usize,
 }
 
 impl SketchSession {
     /// Legt die Kurvenstücke `pieces` (Kurve, Anfang, Ende) als feste, normale Kurven in die
     /// Skizze, alles in einem Schritt. Stücke, die nur ein Punkt wären, entfallen; eine
     /// Projektion, die mit einer Kurve aus `known` oder einer schon in diesem Aufruf angelegten
-    /// deckungsgleich ist, ebenfalls. Stücke, die nicht gehen, zählen als übersprungen.
+    /// deckungsgleich ist, ebenfalls. Stücke, die nicht gehen, zählen als übersprungen (Freiform
+    /// und andere getrennt).
     /// `single`: Es geht um genau eine gewählte Kante; dann ist jeder Fehler ein Fehler (mit
     /// seinem Grund in der Meldung), wie früher beim Kopieren einer Kante. Ohne neue Kurve bleibt
     /// die Skizze unverändert.
@@ -81,8 +84,12 @@ impl SketchSession {
                 let key = match probe.add_projected_curve(curve, *t0, *t1, PROJECTED) {
                     Ok(c) => key_of(&probe, c),
                     Err(e) if single => return Err(err(e)),
+                    Err(_) if matches!(curve, Curve::Nurbs(_)) => {
+                        out.skipped_freeform += 1;
+                        continue;
+                    }
                     Err(_) => {
-                        out.skipped += 1;
+                        out.skipped_other += 1;
                         continue;
                     }
                 };

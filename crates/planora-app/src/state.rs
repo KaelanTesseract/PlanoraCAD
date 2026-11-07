@@ -2519,7 +2519,8 @@ impl AppState {
         // übersprungen, bei einer einzelnen Kante ist das ein Fehler wie früher.
         let mut pieces = Vec::with_capacity(edges.len());
         let mut refs = Vec::with_capacity(edges.len());
-        let mut skipped = 0;
+        // Übersprungene Kanten: Freiform und andere (etwa ohne Verweis) getrennt gezählt.
+        let mut skipped_other = 0;
         for e in edges {
             let edge_ref = if link {
                 match planora_feature::EdgeRef::from_edge(&solid, e, &tol) {
@@ -2531,7 +2532,7 @@ impl AppState {
                         ));
                     }
                     Err(_) => {
-                        skipped += 1;
+                        skipped_other += 1;
                         continue;
                     }
                 }
@@ -2554,12 +2555,26 @@ impl AppState {
             Ok(o) => o,
             Err(e) => return Err(se.message.clone().unwrap_or(Msg::Raw(e))),
         };
-        skipped += outcome.skipped;
+        skipped_other += outcome.skipped_other;
+        let skipped_freeform = outcome.skipped_freeform;
+        let mut notes = Vec::new();
+        if skipped_freeform > 0 {
+            notes.push(crate::msg!(
+                "sketch-project-skipped",
+                count = skipped_freeform
+            ));
+        }
+        if skipped_other > 0 {
+            notes.push(crate::msg!(
+                "sketch-project-skipped-other",
+                count = skipped_other
+            ));
+        }
         if outcome.added.is_empty() {
-            return Err(if skipped > 0 {
-                crate::msg!("sketch-project-skipped", count = skipped)
-            } else {
-                crate::msg!("sketch-project-nothing-new")
+            return Err(match notes.len() {
+                0 => crate::msg!("sketch-project-nothing-new"),
+                1 => notes.remove(0),
+                _ => Msg::Join(notes),
             });
         }
         for &(i, curve) in &outcome.added {
@@ -2570,9 +2585,11 @@ impl AppState {
                 });
             }
         }
-        if skipped > 0 {
-            se.add_note(crate::msg!("sketch-project-skipped", count = skipped));
+        for note in notes {
+            se.add_note(note);
         }
+        // Der Schritt heißt wie der Befehl (Fusion „Projizieren“), auch ohne Verknüpfung.
+        se.edit_label = Some(crate::msg!("undo-edge-project"));
         Ok(outcome.added.len())
     }
 
