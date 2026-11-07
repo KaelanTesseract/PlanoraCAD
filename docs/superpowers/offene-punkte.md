@@ -2285,7 +2285,7 @@ Umgesetzt 2026-11-03 bis 2026-11-06 auf dem Zweig `feature/skizzen-muster` (Spec
 - Gesamtläufe unter Windows (4bb3c76) und in WSL (d586ae0), `cargo deny check` und die Messtests im Release sind grün.
 - Handprüfung am 2026-11-07 bei 1920×1080 (Testordner, Release-Build d586ae0): in Ordnung waren Rechteckmuster 10×10 mit Abwählen, Muster wieder öffnen und ändern, Rückgängig, Kreismuster mit Winkel 90° und Änderung auf 180°, Bemaßen waagerecht, senkrecht und Ø zur Mittellinie mit Ø/R-Umschalter (Zahl bleibt), Doppelklick auf einen Maßtext, Konzentrisch, Kollinear, Glatt (Spline an Linie), Langloch gesamt mit eigenem Gesamtmaß, Raster bindet an den vorhandenen Punkt, alte Datei (Format 1) öffnen und speichern: neue Version bytegleich. Die Leiste passt bei 1080 Pixeln ganz.
 - Beobachtungen aus der Handprüfung (nicht behoben):
-  - Esc beendet die Skizzenbemaßung (D) nicht, auch nicht zweimal; nur ein anderes Werkzeug beendet sie. In Fusion beendet Esc den Befehl.
+  - ~~Esc beendet die Skizzenbemaßung (D) nicht, auch nicht zweimal; nur ein anderes Werkzeug beendet sie. In Fusion beendet Esc den Befehl.~~ Behoben (a657201): Esc und Rechtsklick verwerfen erst ein offenes Maß, danach beenden sie das Werkzeug.
   - Die Felder des Musters (Anzahl, Abstand) wandern mit der Vorschau; wächst das Muster, liegen sie über Exemplaren, und ein Klick auf die alte Stelle trifft daneben.
   - Ein freies, mit nichts verbundenes Teil (ein Bogen) verschiebt sich bei jedem Lösen um einige Pixel, auch bei Abhängigkeiten an ganz anderen Kurven (bei Glatt etwa 10 Pixel). Vermutlich älter als Skizzen 5.
   - Ein Kreis, dessen zweiter Klick auf den eigenen Mittelpunkt fängt, wird abgelehnt (Radius 0), lässt aber den Mittelpunkt als Punkt stehen (aus Teilprojekt 2/3).
