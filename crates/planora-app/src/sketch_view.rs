@@ -4,18 +4,22 @@
 
 use crate::sketch_cursor::AutoConstraint;
 use crate::sketch_grips::{self, Grip, GripLayout};
+use crate::sketch_pattern::{self, PatternGrip, PatternGripLayout};
 use crate::sketch_state::{Item, SketchSession, Snap, Tool};
 use crate::state::AppState;
 use crate::theme::{self, lighten as lighter, sketch_colors as colors};
 use crate::viewport;
 use egui::{Color32, FontId, Mesh, PointerButton, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2};
 use glam::{Vec2, Vec3};
+use planora_feature::FeatureId;
 use planora_i18n::tr;
 use planora_math::{DVec2, DVec3, Frame};
 use planora_render::{EdgeRef, OrbitCamera, Pick, exact_step, grid_radius, line_weight};
 use planora_sketch::ExtractedProfiles;
-use planora_sketch::constraint::{ConstraintKind, LineOrPoints};
+use planora_sketch::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
+use planora_sketch::dimension::{DimPick, DimPlan};
 use planora_sketch::model::{CurveId, CurveKind, LineStyle, PointId, Sketch};
+use planora_sketch::pattern::PatternSlot;
 use planora_sketch::solver::{SolveReport, SolveStatus};
 use std::collections::HashSet;
 use std::f64::consts::{FRAC_PI_4, TAU};
@@ -146,24 +150,21 @@ pub fn format_angle(rad: f64) -> String {
 pub fn is_angle(kind: &ConstraintKind) -> bool {
     matches!(
         kind,
-        ConstraintKind::Angle(..) | ConstraintKind::EllipseAngle(..)
+        ConstraintKind::Angle(..)
+            | ConstraintKind::EllipseAngle(..)
+            | ConstraintKind::PatternValue(_, PatternSlot::Angle, _)
     )
 }
 
-/// Gespeicherter Wert eines Maßes.
+/// Eine Anzahl eines Musters (ohne Einheit, ganzzahlig)?
+pub fn is_count(kind: &ConstraintKind) -> bool {
+    matches!(kind, ConstraintKind::PatternValue(_, slot, _) if slot.is_count())
+}
+
+/// Gespeicherter Wert eines Maßes ([`ConstraintKind::value`]), auch eines Musterwerts (Skizzen 5:
+/// Liste, Doppelklick und Formeln gehen denselben Weg wie bei jedem Maß).
 pub fn stored_value(kind: &ConstraintKind) -> Option<f64> {
-    use ConstraintKind as K;
-    match kind {
-        K::Distance(_, _, v)
-        | K::DistancePointLine(_, _, v)
-        | K::Radius(_, v)
-        | K::Diameter(_, v)
-        | K::Angle(_, _, v)
-        | K::EllipseMajor(_, v)
-        | K::EllipseMinor(_, v)
-        | K::EllipseAngle(_, v) => Some(*v),
-        _ => None,
-    }
+    kind.value()
 }
 
 /// Anzuzeigender Wert eines Maßes: bei anzeigenden (`driven`) Maßen der gemessene Wert.
@@ -179,46 +180,142 @@ pub fn shown_value(sk: &Sketch, kind: &ConstraintKind, driven: bool) -> Option<f
 pub fn value_text(kind: &ConstraintKind, v: f64) -> String {
     if is_angle(kind) {
         format_angle(v)
+    } else if is_count(kind) {
+        format_number(v, 0)
     } else {
         format_length(v)
     }
 }
 
-/// Name der Abhängigkeitsart in der aktuellen Sprache.
-pub fn kind_label(kind: &ConstraintKind) -> String {
+/// Name der Abhängigkeitsart als gespeicherte Meldung (wechselt mit der Sprache).
+pub fn kind_msg(kind: &ConstraintKind) -> crate::msg::Msg {
     use ConstraintKind as K;
     match kind {
-        K::Coincident(..) => tr!("sketch-constraint-coincident"),
-        K::PointOnCurve(..) => tr!("sketch-constraint-point-on-curve"),
-        K::Horizontal(..) => tr!("sketch-constraint-horizontal"),
-        K::Vertical(..) => tr!("sketch-constraint-vertical"),
-        K::Parallel(..) => tr!("sketch-constraint-parallel"),
-        K::Perpendicular(..) => tr!("sketch-constraint-perpendicular"),
-        K::Tangent(..) => tr!("sketch-constraint-tangent"),
-        K::Equal(..) => tr!("sketch-constraint-equal"),
-        K::Fixed(..) => tr!("sketch-constraint-fixed"),
-        K::Symmetric(..) => tr!("sketch-constraint-symmetric"),
-        K::Midpoint(..) => tr!("sketch-constraint-midpoint"),
-        K::Distance(..) => tr!("sketch-constraint-distance"),
-        K::DistancePointLine(..) => tr!("sketch-constraint-distance-point-line"),
-        K::Radius(..) => tr!("sketch-constraint-radius"),
-        K::Diameter(..) => tr!("sketch-constraint-diameter"),
-        K::Angle(..) => tr!("sketch-constraint-angle"),
-        K::ArcRadius(..) => tr!("sketch-constraint-arc-radius"),
-        K::EllipticArcEnds(..) => tr!("sketch-constraint-elliptic-arc-ends"),
-        K::EllipseMajor(..) => tr!("sketch-constraint-ellipse-major"),
-        K::EllipseMinor(..) => tr!("sketch-constraint-ellipse-minor"),
-        K::EllipseAngle(..) => tr!("sketch-constraint-ellipse-angle"),
+        K::Coincident(..) => crate::msg!("sketch-constraint-coincident"),
+        K::PointOnCurve(..) => crate::msg!("sketch-constraint-point-on-curve"),
+        K::Horizontal(..) => crate::msg!("sketch-constraint-horizontal"),
+        K::Vertical(..) => crate::msg!("sketch-constraint-vertical"),
+        K::Parallel(..) => crate::msg!("sketch-constraint-parallel"),
+        K::Perpendicular(..) => crate::msg!("sketch-constraint-perpendicular"),
+        K::Tangent(..) => crate::msg!("sketch-constraint-tangent"),
+        K::Equal(..) => crate::msg!("sketch-constraint-equal"),
+        K::Fixed(..) => crate::msg!("sketch-constraint-fixed"),
+        K::Symmetric(..) => crate::msg!("sketch-constraint-symmetric"),
+        K::Midpoint(..) => crate::msg!("sketch-constraint-midpoint"),
+        K::Distance(..) => crate::msg!("sketch-constraint-distance"),
+        K::DistancePointLine(..) => crate::msg!("sketch-constraint-distance-point-line"),
+        K::Radius(..) => crate::msg!("sketch-constraint-radius"),
+        K::Diameter(..) => crate::msg!("sketch-constraint-diameter"),
+        K::Angle(..) => crate::msg!("sketch-constraint-angle"),
+        K::ArcRadius(..) => crate::msg!("sketch-constraint-arc-radius"),
+        K::EllipticArcEnds(..) => crate::msg!("sketch-constraint-elliptic-arc-ends"),
+        K::EllipseMajor(..) => crate::msg!("sketch-constraint-ellipse-major"),
+        K::EllipseMinor(..) => crate::msg!("sketch-constraint-ellipse-minor"),
+        K::EllipseAngle(..) => crate::msg!("sketch-constraint-ellipse-angle"),
+        K::Collinear(..) => crate::msg!("sketch-constraint-collinear"),
+        K::Smooth(..) => crate::msg!("sketch-constraint-smooth"),
+        K::DistanceX(..) => crate::msg!("sketch-constraint-distance-x"),
+        K::DistanceY(..) => crate::msg!("sketch-constraint-distance-y"),
+        K::CenterlineDiameter(..) => crate::msg!("sketch-constraint-centerline-diameter"),
+        K::SlotOverall(..) => crate::msg!("sketch-constraint-slot-overall"),
+        K::PatternValue(_, slot, _) => match slot {
+            PatternSlot::Count1 => crate::msg!("sketch-pattern-slot-count1"),
+            PatternSlot::Spacing1 => crate::msg!("sketch-pattern-slot-spacing1"),
+            PatternSlot::Count2 => crate::msg!("sketch-pattern-slot-count2"),
+            PatternSlot::Spacing2 => crate::msg!("sketch-pattern-slot-spacing2"),
+            PatternSlot::Count => crate::msg!("sketch-pattern-slot-count"),
+            PatternSlot::Angle => crate::msg!("sketch-pattern-slot-angle"),
+        },
+    }
+}
+
+/// Name der Abhängigkeitsart in der aktuellen Sprache.
+pub fn kind_label(kind: &ConstraintKind) -> String {
+    kind_msg(kind).text()
+}
+
+/// Mitten aller Kreise, Bögen, Ellipsen und Ellipsenbögen: einmal je Bild oder Liste gebaut, damit
+/// [`is_concentric_among`] nicht für jedes `Coincident` alle Kurven durchsucht.
+pub fn round_centers(sk: &Sketch) -> HashSet<PointId> {
+    sk.curves()
+        .filter_map(|(c, _)| crate::sketch_state::round_center(sk, c))
+        .collect()
+}
+
+/// Ist `kind` ein Konzentrisch (Skizzen 5)? Fusion „Konzentrisch“ ist hier ein `Coincident`
+/// zweier Punkte, die beide Mitte eines Kreises, Bogens, einer Ellipse oder eines
+/// Ellipsenbogens sind; Liste und Ansicht nennen es so. `centers` aus [`round_centers`].
+pub fn is_concentric_among(centers: &HashSet<PointId>, kind: &ConstraintKind) -> bool {
+    matches!(*kind, ConstraintKind::Coincident(a, b)
+        if a != b && centers.contains(&a) && centers.contains(&b))
+}
+
+/// Wie [`is_concentric_among`] für eine einzelne Abhängigkeit.
+pub fn is_concentric(sk: &Sketch, kind: &ConstraintKind) -> bool {
+    matches!(kind, ConstraintKind::Coincident(..)) && is_concentric_among(&round_centers(sk), kind)
+}
+
+/// Name einer Abhängigkeit in Liste und Meldungen: wie [`kind_label`], ein Konzentrisch heißt so.
+pub fn constraint_label(centers: &HashSet<PointId>, kind: &ConstraintKind) -> String {
+    if is_concentric_among(centers, kind) {
+        tr!("sketch-constraint-concentric")
+    } else {
+        kind_label(kind)
     }
 }
 
 /// Eintrag der Abhängigkeitsliste, z. B. „Abstand 40,00 mm“; anzeigende Maße in Klammern.
 pub fn constraint_name(sk: &Sketch, kind: &ConstraintKind, driven: bool) -> String {
-    let label = kind_label(kind);
+    constraint_name_among(sk, &round_centers(sk), kind, driven)
+}
+
+/// Wie [`constraint_name`] mit den Mitten aus [`round_centers`] (für die ganze Liste einmal).
+pub fn constraint_name_among(
+    sk: &Sketch,
+    centers: &HashSet<PointId>,
+    kind: &ConstraintKind,
+    driven: bool,
+) -> String {
+    let label = constraint_label(centers, kind);
     match shown_value(sk, kind, driven) {
         Some(v) if driven => format!("{label} ({})", value_text(kind, v)),
         Some(v) => format!("{label} {}", value_text(kind, v)),
         None => label,
+    }
+}
+
+/// Gezeichnetes Zeichen einer Abhängigkeit in der Ansicht (Skizzen 5), im Stil der
+/// Symbole aus [`crate::icons::HandIcon`] statt eines Schriftzeichens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PaintedMark {
+    /// Zwei Kreise um dieselbe Mitte.
+    Concentric,
+    /// Zwei Strecken auf einer Geraden.
+    Collinear,
+    /// Linie, die ohne Knick in eine Kurve übergeht.
+    Smooth,
+}
+
+impl PaintedMark {
+    fn icon(self) -> crate::icons::HandIcon {
+        use crate::icons::HandIcon;
+        match self {
+            PaintedMark::Concentric => HandIcon::Concentric,
+            PaintedMark::Collinear => HandIcon::Collinear,
+            PaintedMark::Smooth => HandIcon::Smooth,
+        }
+    }
+}
+
+/// Das gezeichnete Zeichen von `kind`, wenn es eins hat (sonst steht dort [`overlay_text`]).
+pub fn overlay_mark(centers: &HashSet<PointId>, kind: &ConstraintKind) -> Option<PaintedMark> {
+    match kind {
+        ConstraintKind::Coincident(..) if is_concentric_among(centers, kind) => {
+            Some(PaintedMark::Concentric)
+        }
+        ConstraintKind::Collinear(..) => Some(PaintedMark::Collinear),
+        ConstraintKind::Smooth(..) => Some(PaintedMark::Smooth),
+        _ => None,
     }
 }
 
@@ -277,7 +374,7 @@ pub fn overlay_text(
         K::Radius(..) => format!("R {}", format_length(v)),
         // Ø ohne Ersatz: Montserrat hat das Zeichen (tests/fonts.rs prüft das), und die
         // Glyphenabfrage von egui meldete es fälschlich als fehlend.
-        K::Diameter(..) => format!("Ø {}", format_length(v)),
+        K::Diameter(..) | K::CenterlineDiameter(..) => format!("Ø {}", format_length(v)),
         K::EllipseMajor(..) => format!("a {}", format_length(v)),
         K::EllipseMinor(..) => format!("b {}", format_length(v)),
         _ => value_text(kind, v),
@@ -348,9 +445,11 @@ fn marked_curves(kind: &ConstraintKind) -> Option<Vec<CurveId>> {
     use ConstraintKind as K;
     match kind {
         K::Horizontal(LineOrPoints::Line(c)) | K::Vertical(LineOrPoints::Line(c)) => Some(vec![*c]),
-        K::Parallel(a, b) | K::Perpendicular(a, b) | K::Equal(a, b) | K::Tangent(a, b) => {
-            Some(vec![*a, *b])
-        }
+        K::Parallel(a, b)
+        | K::Perpendicular(a, b)
+        | K::Equal(a, b)
+        | K::Tangent(a, b)
+        | K::Collinear(a, b) => Some(vec![*a, *b]),
         _ => None,
     }
 }
@@ -365,16 +464,31 @@ fn anchors(sk: &Sketch, kind: &ConstraintKind) -> Vec<DVec2> {
         }
         K::Horizontal(LineOrPoints::Points(a, b))
         | K::Vertical(LineOrPoints::Points(a, b))
-        | K::Distance(a, b, _) => vec![mid(pos(sk, *a), pos(sk, *b))],
-        K::Parallel(a, b) | K::Perpendicular(a, b) | K::Equal(a, b) | K::Tangent(a, b) => {
+        | K::Distance(a, b, _)
+        | K::DistanceX(a, b, _)
+        | K::DistanceY(a, b, _)
+        | K::SlotOverall(a, b, ..) => vec![mid(pos(sk, *a), pos(sk, *b))],
+        K::Parallel(a, b)
+        | K::Perpendicular(a, b)
+        | K::Equal(a, b)
+        | K::Tangent(a, b)
+        | K::Collinear(a, b) => {
             vec![curve_anchor(sk, *a), curve_anchor(sk, *b)]
+        }
+        // Am gemeinsamen (oder zusammengelegten) Ende ein Zeichen, nicht zwei übereinander.
+        K::Smooth(_, a, _, b) => {
+            let (pa, pb) = (pos(sk, *a), pos(sk, *b));
+            match pa.zip(pb) {
+                Some((x, y)) if x.distance(y) <= sk.tolerance().linear => vec![pa],
+                _ => vec![pa, pb],
+            }
         }
         K::Angle(a, b, _) => vec![mid(curve_anchor(sk, *a), curve_anchor(sk, *b))],
         K::Fixed(p, ..) | K::Midpoint(p, _) | K::PointOnCurve(p, _) | K::Coincident(p, _) => {
             vec![pos(sk, *p)]
         }
         K::Symmetric(a, b, _) => vec![pos(sk, *a), pos(sk, *b)],
-        K::DistancePointLine(p, c, _) => {
+        K::DistancePointLine(p, c, _) | K::CenterlineDiameter(p, c, _) => {
             let at = pos(sk, *p);
             vec![mid(at, at.and_then(|q| sk.nearest_on_curve(*c, q)))]
         }
@@ -385,6 +499,8 @@ fn anchors(sk: &Sketch, kind: &ConstraintKind) -> Vec<DVec2> {
         | K::EllipseMajor(c, _)
         | K::EllipseMinor(c, _)
         | K::EllipseAngle(c, _) => vec![curve_anchor(sk, *c)],
+        // Musterwerte stehen in der Liste; in der Ansicht zeigt sie erst das Musterwerkzeug.
+        K::PatternValue(..) => Vec::new(),
     };
     found.into_iter().flatten().collect()
 }
@@ -866,6 +982,58 @@ pub fn grip_layout(state: &AppState, rect: Rect) -> Option<GripLayout> {
     ))
 }
 
+/// Lage der Griffe der Anordnung in diesem Bild (Pfeil je Richtung am letzten Exemplar, beim
+/// Kreismuster der Winkelgriff am Ende des Bogens); `None`, wenn keine zu sehen sind.
+pub fn pattern_grip_layout(state: &AppState, rect: Rect) -> Option<PatternGripLayout> {
+    let (se, sk) = (state.sketch_session.as_ref()?, state.session_sketch()?);
+    let map = mapper(rect, state)?;
+    // Kreismuster: der Winkelgriff am Ende des Bogens.
+    if let Some((center, tip)) = se.pattern_angle_handle(sk) {
+        let tip = map.to_screen(tip)?;
+        return Some(sketch_pattern::pattern_layout(
+            map.to_screen(center)?,
+            [None; 2],
+            Some(tip),
+        ));
+    }
+    let handles = se.pattern_handles(sk)?;
+    let origin = map.to_screen(handles.origin)?;
+    let step = map.radius_at(origin).filter(|r| *r > 0.0)?;
+    let tips = handles.arrows.map(|a| {
+        let (at, out) = a?;
+        sketch_pattern::screen_arrow(|q| map.to_screen(q), at, out, step)
+    });
+    Some(sketch_pattern::pattern_layout(origin, tips, None))
+}
+
+/// Fester Platz der Felder der Anordnung in diesem Bild: der Ankerpunkt auf dem Bildschirm und die
+/// Bildschirmrichtung, in die die Felder von ihm weg stehen. Er folgt Schwenken und Zoomen, nicht
+/// der Vorschau; `None` ohne laufende Anordnung.
+pub fn pattern_field_place(state: &AppState, rect: Rect) -> Option<(Pos2, egui::Vec2)> {
+    let (se, sk) = (state.sketch_session.as_ref()?, state.session_sketch()?);
+    let anchor = se.pattern_field_anchor(sk)?;
+    let map = mapper(rect, state)?;
+    let at = map.to_screen(anchor.at)?;
+    let step = map.radius_at(at).filter(|r| *r > 0.0)?;
+    let away = map.to_screen(anchor.at + anchor.away * step)? - at;
+    (away.length() > 0.0).then_some((at, away))
+}
+
+/// Der Griff der Anordnung, den der eben erkannte Zug mit der linken Taste greift (`layout`: die
+/// Lage der Griffe in diesem Bild).
+fn pattern_grip_can_start(
+    ui: &egui::Ui,
+    layout: Option<&PatternGripLayout>,
+    pan_gesture: bool,
+    ctrl: bool,
+) -> Option<PatternGrip> {
+    let shift_only = ui.input(|i| i.modifiers.shift_only()) && !ctrl;
+    if (pan_gesture && !shift_only) || crate::keymap::settings_ui::is_capturing(ui.ctx()) {
+        return None;
+    }
+    sketch_pattern::pattern_hit(layout?, ui.input(|i| i.pointer.press_origin())?)
+}
+
 /// Der Griff, den der eben erkannte Zug mit der linken Taste greift. Wie beim Rahmen zählt nur die
 /// Lage des Drückens, und Umschalt+links greift statt zu schwenken; jede andere Schwenk-Belegung bleibt.
 fn grip_can_start(
@@ -953,17 +1121,28 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     let km = crate::keymap::mouse::current(ui.ctx());
     let pan_gesture = crate::keymap::mouse::pan_2d(&km, ui, response);
     let primary_start = response.drag_started_by(PointerButton::Primary) && !aborted;
+    let primary_click = response.clicked_by(PointerButton::Primary);
+    // Die Griffe der Anordnung einmal je Bild und nur, wenn gedrückt oder geklickt wurde: vor jeder
+    // Änderung durch die Eingabe. Ein Zug, der schwenkt, ist kein Klick; ein gegriffener Griff
+    // schwenkt nicht. So gilt die Lage für den Zugbeginn und den Klick gleichermaßen.
+    let pattern_layout = (primary_start || primary_click)
+        .then(|| pattern_grip_layout(state, rect))
+        .flatten();
     let starts_box = primary_start && box_can_start(ui, rect, state, pan_gesture, ctrl);
     let starts_grip = primary_start
         .then(|| grip_can_start(ui, rect, state, pan_gesture, ctrl))
         .flatten();
+    let starts_pattern_grip = primary_start
+        .then(|| pattern_grip_can_start(ui, pattern_layout.as_ref(), pan_gesture, ctrl))
+        .flatten();
     // Ein laufender Rahmen schwenkt nicht, auch wenn Umschalt erst währenddessen dazukommt; ein
     // Zug auf dem letzten Punkt des Linienzugs ebenso. Beim Griff schwenkt die Mitte trotzdem.
     let gripping = starts_grip.is_some()
+        || starts_pattern_grip.is_some()
         || state
             .sketch_session
             .as_ref()
-            .is_some_and(|s| s.grip_drag.is_some());
+            .is_some_and(|s| s.grip_drag.is_some() || s.pattern.drag.is_some());
     let boxing = starts_box
         || state
             .sketch_session
@@ -991,10 +1170,21 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     };
 
     // Ein Klick auf einen Griff schaltet beim Wählen nichts in der Auswahl.
-    let click_on_grip = response.clicked_by(PointerButton::Primary)
-        && pointer
+    let click_on_grip = primary_click
+        && (pointer
             .zip(grip_layout(state, rect))
-            .is_some_and(|(p, l)| sketch_grips::hit(&l, p).is_some());
+            .is_some_and(|(p, l)| sketch_grips::hit(&l, p).is_some())
+            || pointer
+                .zip(pattern_layout.as_ref())
+                .is_some_and(|(p, l)| sketch_pattern::pattern_hit(l, p).is_some()));
+    // Ein Klick auf ein Feld der Anordnung (die Felder nehmen keine Mausereignisse an) schaltet
+    // kein Exemplar darunter (Handtest Skizzen 5). Die anderen Befehle führen ihre Felder neben
+    // dem Zeiger, dort trifft ein Klick nie ein Feld.
+    let click_on_field = (primary_click || response.double_clicked() || response.triple_clicked())
+        && state.sketch_session.as_ref().is_some_and(|se| {
+            se.runs_pattern()
+                && pointer.is_some_and(|p| crate::sketch_inline::over_field(ui.ctx(), se, p))
+        });
 
     // Getippte Werte werden beim Klick und bei der Eingabe zu Maßen; die Formeln darin brauchen die
     // Parameter.
@@ -1023,6 +1213,11 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         let origin = ui.input(|i| i.pointer.press_origin());
         if let Some(start) = origin.and_then(|p| map.to_sketch(p)) {
             se.begin_grip(grip, start);
+        }
+    } else if let Some(grip) = starts_pattern_grip {
+        let origin = ui.input(|i| i.pointer.press_origin());
+        if let Some(start) = origin.and_then(|p| map.to_sketch(p)) {
+            se.begin_pattern_grip(&sf.sketch, grip, start);
         }
     } else if response.drag_started_by(PointerButton::Primary) && !shift && !panning && !aborted {
         // Punkt oder Kurve ziehen (Auswahlwerkzeug), tangentialer Bogen (Linienwerkzeug)
@@ -1095,6 +1290,21 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         }
     }
 
+    // Griff der Anordnung: Der Zug führt nur den Plan; Rechtsklick nimmt ihn zurück wie oben.
+    if se.pattern.drag.is_some() {
+        if ui.input(|i| i.pointer.button_pressed(PointerButton::Secondary)) {
+            se.abort_pattern_grip();
+        } else if !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            let latest = ui.input(|i| i.pointer.latest_pos());
+            if let Some(p) = latest.and_then(|p| map.to_sketch(p)) {
+                se.pattern_grip_to(&sf.sketch, p);
+            }
+            if response.drag_stopped() || !response.dragged() {
+                se.end_pattern_grip();
+            }
+        }
+    }
+
     // Stutzen durch Ziehen: jede überfahrene Kurve wird gestutzt (ein Schritt, da der Verlauf
     // erst nach dem Loslassen fortgeschrieben wird).
     if se.tool == Tool::Trim && !panning {
@@ -1118,19 +1328,61 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
 
     // Klicks
     let mut project_at = None;
+    // Doppelklick auf einen Maßtext im Auswahlwerkzeug: öffnet sein Feld wie die Liste (das Feld
+    // braucht den ganzen Stand und öffnet darum erst nach der Eingabe dieses Bilds).
+    let mut open_label = None;
     // egui zählt Klicks nur als Doppel-/Dreifachklick, wenn sie höchstens `max_click_dist`
     // (6 Pixel) vom vorigen Klick entfernt sind. Ein „Dreifachklick“ entsteht schon, wenn zwei
     // schnelle Klicks an derselben Stelle einem Klick anderswo folgen (Zeit zum vorletzten Klick,
     // Abstand nur zum letzten) – das ist für den Nutzer ein Doppelklick und beendet ebenso.
     if se.box_aborted {
         // Das Loslassen nach dem Abbruch ist kein Klick.
+    } else if click_on_field {
+        // Der Klick gehört dem Feld der Anordnung.
     } else if (response.double_clicked() || response.triple_clicked()) && !se.click_after_flyout {
-        if se.tool == Tool::Select || se.transform_picking() {
-            // Wie beim einfachen Klick: Punkt vor Kurve.
+        let label = pointer
+            .filter(|_| se.tool == Tool::Select)
+            .and_then(|p| label_at(ui.ctx(), se.sketch, p))
+            .filter(|&id| {
+                sf.sketch
+                    .constraint(id)
+                    .is_some_and(|c| c.kind.is_dimension())
+            });
+        if let Some(id) = label {
+            // Wie ein Doppelklick in der Liste: nur dieses Maß gewählt, ohne Klicklage auf einer
+            // Kurve (Skizzen 5, Task 7: eine Klicklage gehört nur zu ihrer Auswahl).
+            se.drop_curve_picks();
+            se.selection = vec![Item::Constraint(id)];
+            open_label = Some(id);
+        } else if se.tool == Tool::Select || se.transform_picking() {
+            // Wie beim einfachen Klick: Punkt vor Kurve. Ein Exemplar oder eine Vorlage eines
+            // Musters öffnet im Auswahlwerkzeug das Muster zum Bearbeiten (Skizzen 5).
+            if let Some(at) = at {
+                let snap = se.snap(&sf.sketch, at, radius);
+                let item = match snap {
+                    Snap::Point(p) => Some(Item::Point(p)),
+                    Snap::Curve(c) => Some(Item::Curve(c)),
+                    _ => None,
+                };
+                let edited = item.is_some_and(|i| se.begin_pattern_edit_item(&mut sf.sketch, i));
+                if !edited && let Snap::Curve(c) = snap {
+                    se.select_chain(&sf.sketch, c, shift);
+                }
+            }
+        } else if matches!(se.tool, Tool::Constraint(_)) {
+            // Abhängigkeitsbefehl: Trifft der schnelle zweite Klick etwas anderes (zwei nahe
+            // Punkte für Deckungsgleich), wählt er es wie jeder Klick; derselbe Bezug wird nicht
+            // wieder abgewählt, und nichts schließt ab.
             if let Some(at) = at
-                && let Snap::Curve(c) = se.snap(&sf.sketch, at, radius)
+                && se.constraint_second_click_counts(&sf.sketch, at, radius)
             {
-                se.select_chain(&sf.sketch, c, shift);
+                let _ = se.click(&mut sf.sketch, at, radius, shift);
+            }
+        } else if se.runs_pattern() {
+            // Anordnung: Der zweite schnelle Klick schaltet das nächste Exemplar wie jeder Klick
+            // (ein Doppelklick schließt nichts ab).
+            if let Some(at) = at {
+                let _ = se.click(&mut sf.sketch, at, radius, shift);
             }
         } else if !matches!(se.tool, Tool::Offset | Tool::MoveCopy | Tool::Scale) {
             // Beim Versatz hat der erste Klick schon alles getan; der zweite läge dicht an der Kurve
@@ -1179,15 +1431,27 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         let gesture = se.in_gesture();
         if enter && !flyout && !gesture {
             let _ = match &commit_scope {
+                // Gesetztes Maß, dessen Feld die Tastatur nicht mehr hat (etwa nach einem
+                // abgelehnten Klick daneben): Eingabe legt es an wie dieser Klick; geht das nicht,
+                // bleiben Maß, Text und Meldung, statt stumm zu verfallen.
+                Some(scope) if se.tool == Tool::Dimension && se.dim.plan.is_some() => {
+                    se.accept_planned(sf, scope)
+                }
                 // Felder da, aber ohne Fokus: derselbe Weg wie die Eingabe im Feld.
-                Some(scope) if !se.runs_transform() && !se.input.fields.is_empty() => {
+                Some(scope)
+                    if !se.runs_transform()
+                        && !se.runs_pattern()
+                        && !se.input.fields.is_empty() =>
+                {
                     se.commit_at_cursor(sf, radius, scope)
                 }
                 _ if se.runs_transform() => se.confirm_transform(sf),
+                _ if se.runs_pattern() => se.confirm_pattern(sf),
                 _ => se.finish_tool(&mut sf.sketch),
             };
         }
-        if delete && !gesture {
+        // In der Anordnung gehört die Auswahl der Vorlage; Entf löscht dort nichts.
+        if delete && !gesture && !se.runs_pattern() {
             se.delete_selection(&mut sf.sketch);
         }
     }
@@ -1199,6 +1463,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     let raw = cursor_raw(se, at);
     se.update_cursor(&sf.sketch, raw, radius);
     se.update_transform_block(&sf.sketch);
+    se.update_pattern_note(&sf.sketch);
     let tool = se.tool;
 
     // Körperkante kopieren: Kante in der 3D-Szene wählen.
@@ -1210,6 +1475,9 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         None
     };
     state.set_hover(hover);
+    if let Some(id) = open_label {
+        crate::sketch_panel::open_existing_dimension_editor(ui.ctx(), state, id);
+    }
     if let Some(p) = project_at {
         match state.pick(map.local(p), map.viewport()) {
             // Fehler (etwa ein Körper, der erst nach der Skizze entsteht) stehen in der
@@ -1280,6 +1548,12 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
             Snap::Curve(c) | Snap::Midpoint(c) => Some(Item::Curve(c)),
             _ => None,
         })
+    } else if matches!(se.tool, Tool::Constraint(_)) {
+        // Abhängigkeitsbefehl: hervorgehoben ist, was der Klick wählen würde (passt der Punkt
+        // nicht, die Kurve darunter), und nichts, was er ablehnt.
+        pointer
+            .and_then(|p| Some((map.to_sketch(p)?, map.radius_at(p)?)))
+            .and_then(|(at, r)| se.constraint_hover(sk, at, r))
     } else {
         pointer
             .filter(|_| !se.is_dragging())
@@ -1291,13 +1565,20 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
             })
     };
 
-    // Kurven
+    // Kurven (beim Bearbeiten eines Musters ohne seine Exemplare: An ihrer Stelle steht die
+    // Vorschau).
+    let (hidden, hidden_points) = se.pattern_hidden(sk);
     for (c, data) in sk.curves() {
+        if hidden.contains(&c) {
+            continue;
+        }
         let Some(pl) = sk.curve_polyline(c, STEPS_PER_TURN) else {
             continue;
         };
         // Die schon gewählten Kurven einer laufenden Art leuchten wie die Auswahl.
-        let selected = se.selection.contains(&Item::Curve(c)) || se.pending_curves.contains(&c);
+        let selected = se.selection.contains(&Item::Curve(c))
+            || se.pending_curves.contains(&c)
+            || dim_picked(se, Item::Curve(c));
         let mut color = if selected {
             col.selected
         } else if data.construction {
@@ -1318,10 +1599,15 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
 
     // Punkte
     for (p, _) in sk.points() {
+        if hidden_points.contains(&p) {
+            continue;
+        }
         let Some(s) = pos(sk, p).and_then(|q| map.to_screen(q)) else {
             continue;
         };
-        let selected = se.selection.contains(&Item::Point(p)) || se.dragging == Some(p);
+        let selected = se.selection.contains(&Item::Point(p))
+            || se.dragging == Some(p)
+            || dim_picked(se, Item::Point(p));
         let determined = point_determined(report, p);
         let mut color = if selected {
             col.selected
@@ -1343,6 +1629,27 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     }
 
     draw_preview(&painter, &map, sk, se, col.preview);
+    let mut placed: Vec<Rect> = Vec::new();
+    // Skizzenbemaßung: Hilfsstriche und der Wert am Anker (dem Zeiger bzw. der gesetzten Stelle).
+    if let Some(plan) = se.dimension_preview(sk) {
+        let stroke = Stroke::new(1.0, col.preview);
+        for line in dimension_helpers(sk, &plan) {
+            for path in map.paths(&line) {
+                draw_path(&painter, path, stroke, true);
+            }
+        }
+        if let Some(s) = map.to_screen(plan.anchor) {
+            let text = dimension_text(ui.ctx(), sk, &plan);
+            label(
+                &painter,
+                s + vec2(6.0, -18.0),
+                &text,
+                col.preview,
+                col.label_bg,
+                &mut placed,
+            );
+        }
+    }
 
     if let Some(l) = grip_layout(state, rect) {
         let hot = se
@@ -1350,6 +1657,15 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
             .map(|d| d.grip)
             .or(pointer.and_then(|p| sketch_grips::hit(&l, p)));
         sketch_grips::paint(&painter, &l, hot, col.selected, lighter(col.selected));
+    }
+    if let Some(l) = pattern_grip_layout(state, rect) {
+        let hot = se
+            .pattern
+            .drag
+            .as_ref()
+            .map(|d| d.grip)
+            .or(pointer.and_then(|p| sketch_pattern::pattern_hit(&l, p)));
+        sketch_pattern::paint_pattern_grips(&painter, &l, hot, col.selected, lighter(col.selected));
     }
 
     // Stutzen/Brechen: das Stück rot; Dehnen: der Weg zum neuen Ende rot gestrichelt.
@@ -1361,7 +1677,6 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     }
 
     // Abhängigkeiten und Maße
-    let mut placed: Vec<Rect> = Vec::new();
     let bad: Vec<_> = report
         .map(|r| r.conflicting.iter().chain(&r.redundant).copied().collect())
         .unwrap_or_default();
@@ -1371,8 +1686,15 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     let mut shown: HashSet<(CurveId, String)> = HashSet::new();
     let mut constraints: Vec<_> = sk.constraints().collect();
     constraints.sort_by_key(|(id, _)| !bad.contains(id));
+    let centers = round_centers(sk);
+    let mut hits: Vec<LabelHit> = Vec::new();
     for (id, c) in constraints {
-        let text = overlay_text(ui.ctx(), sk, &c.kind, c.driven);
+        let mark = overlay_mark(&centers, &c.kind);
+        let text = match mark {
+            // Nur als Schlüssel für „je Kurve und Art einmal“; gezeichnet wird das Symbol.
+            Some(m) => format!("{m:?}"),
+            None => overlay_text(ui.ctx(), sk, &c.kind, c.driven),
+        };
         if text.is_empty() {
             continue;
         }
@@ -1401,17 +1723,22 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         };
         for a in places {
             if let Some(s) = map.to_screen(a) {
-                label(
-                    &painter,
-                    s + vec2(6.0, -18.0),
-                    &text,
-                    color,
-                    col.label_bg,
-                    &mut placed,
-                );
+                let at = s + vec2(6.0, -18.0);
+                match mark {
+                    Some(m) => mark_label(&painter, at, m, color, col.label_bg, &mut placed),
+                    None => {
+                        let rect = label(&painter, at, &text, color, col.label_bg, &mut placed);
+                        if c.kind.is_dimension() {
+                            hits.push(LabelHit { id, rect });
+                        }
+                    }
+                }
             }
         }
     }
+    // Für den Doppelklick im nächsten Bild (die Eingabe kommt vor dem Zeichnen).
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(label_hits_id(se.sketch), hits));
 
     // Zeichen der automatischen Abhängigkeiten, bevor sie entstehen
     for (at, auto) in auto_marks(sk, se) {
@@ -1449,6 +1776,57 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     painter.extend(box_select_shapes(state));
 }
 
+/// Gehört `item` zu den gewählten Objekten der Skizzenbemaßung?
+fn dim_picked(se: &SketchSession, item: Item) -> bool {
+    se.tool == Tool::Dimension
+        && se.dim.picks.iter().any(|p| match (*p, item) {
+            (DimPick::Point(a), Item::Point(b)) => a == b,
+            (DimPick::Curve(a, _), Item::Curve(b)) => a == b,
+            _ => false,
+        })
+}
+
+/// Text der Vorschau der Skizzenbemaßung, wie das Maß später in der Ansicht steht
+/// (etwa „40,00 mm“, „Ø 30,00 mm“, „R 5,00 mm“, „30,0°“); ein anzeigendes wie in der Ansicht.
+pub fn dimension_text(ctx: &egui::Context, sk: &Sketch, plan: &DimPlan) -> String {
+    overlay_text(ctx, sk, &plan.kind, plan.driven)
+}
+
+/// Hilfsstriche der Vorschau der Skizzenbemaßung (Skizzenkoordinaten): waagerecht und senkrecht
+/// zwei Maßhilfslinien von den Punkten bis auf die Höhe (bzw. Lage) des Ankers und die Maßlinie
+/// dazwischen; ausgerichtet und zur Linie die Verbindung. Kreis, Bogen, Ellipse und Winkel: keine.
+pub fn dimension_helpers(sk: &Sketch, plan: &DimPlan) -> Vec<Vec<DVec2>> {
+    use ConstraintKind as K;
+    let at = plan.anchor;
+    match plan.kind {
+        K::DistanceX(a, b, _) => {
+            let (Some(a), Some(b)) = (pos(sk, a), pos(sk, b)) else {
+                return Vec::new();
+            };
+            let (ea, eb) = (DVec2::new(a.x, at.y), DVec2::new(b.x, at.y));
+            vec![vec![a, ea], vec![b, eb], vec![ea, eb]]
+        }
+        K::DistanceY(a, b, _) => {
+            let (Some(a), Some(b)) = (pos(sk, a), pos(sk, b)) else {
+                return Vec::new();
+            };
+            let (ea, eb) = (DVec2::new(at.x, a.y), DVec2::new(at.x, b.y));
+            vec![vec![a, ea], vec![b, eb], vec![ea, eb]]
+        }
+        K::Distance(a, b, _) => match (pos(sk, a), pos(sk, b)) {
+            (Some(a), Some(b)) => vec![vec![a, b]],
+            _ => Vec::new(),
+        },
+        K::DistancePointLine(p, l, _) | K::CenterlineDiameter(p, l, _) => {
+            match pos(sk, p).and_then(|q| Some((q, sk.nearest_on_curve(l, q)?))) {
+                Some((q, foot)) => vec![vec![q, foot]],
+                None => Vec::new(),
+            }
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// Zeichen der Fangart am Zeiger, selbst gezeichnet: Quadrat Punkt, Kreis Mitte, Dreieck
 /// Mittelpunkt, X Schnitt, Sanduhr Kurve, Kreuz im Kreis Ursprung, kleines Plus Raster.
 fn paint_snap_mark(painter: &egui::Painter, at: Pos2, snap: Snap, color: Color32) {
@@ -1481,6 +1859,7 @@ fn paint_snap_mark(painter: &egui::Painter, at: Pos2, snap: Snap, color: Color32
 }
 
 /// Kleine Beschriftung mit Hintergrund; weicht bereits gesetzten Beschriftungen nach unten aus.
+/// Liefert das Rechteck samt Hintergrund.
 fn label(
     painter: &egui::Painter,
     at: Pos2,
@@ -1488,11 +1867,74 @@ fn label(
     color: Color32,
     bg: Color32,
     placed: &mut Vec<Rect>,
+) -> Rect {
+    let galley = painter.layout_no_wrap(text.to_string(), FontId::proportional(LABEL_SIZE), color);
+    let r = place_label(Rect::from_min_size(at, galley.size()).expand(2.0), placed);
+    painter.rect_filled(r, 3.0, bg);
+    painter.galley(r.min + vec2(2.0, 2.0), galley, color);
+    r
+}
+
+/// Ein gezeichneter Maßtext im Bild: Maß und Rechteck des Texts samt Hintergrund (Bildschirm).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LabelHit {
+    pub id: ConstraintId,
+    pub rect: Rect,
+}
+
+/// Ablage der Maßtexte je Skizze: Nach einem Wechsel des Tabs oder der Skizze trifft kein
+/// Rechteck einer anderen Skizze.
+fn label_hits_id(sketch: FeatureId) -> egui::Id {
+    egui::Id::new("planora-sketch-label-hits").with(sketch)
+}
+
+/// Das Maß der Skizze `sketch`, dessen Text im letzten Bild unter `p` stand (der zuletzt
+/// gezeichnete zuerst).
+fn label_at(ctx: &egui::Context, sketch: FeatureId, p: Pos2) -> Option<ConstraintId> {
+    ctx.data(|d| d.get_temp::<Vec<LabelHit>>(label_hits_id(sketch)))?
+        .iter()
+        .rev()
+        .find(|h| h.rect.contains(p))
+        .map(|h| h.id)
+}
+
+/// Maßtexte der Skizze `sketch` im letzten Bild mit ihren Rechtecken (für Tests).
+#[doc(hidden)]
+pub fn label_hits(ctx: &egui::Context, sketch: FeatureId) -> Vec<(ConstraintId, Rect)> {
+    ctx.data(|d| d.get_temp::<Vec<LabelHit>>(label_hits_id(sketch)))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|h| (h.id, h.rect))
+        .collect()
+}
+
+/// Wie [`label`], aber mit einem gezeichneten Zeichen statt Text: ein Feld in Texthöhe, darin das
+/// Symbol.
+fn mark_label(
+    painter: &egui::Painter,
+    at: Pos2,
+    mark: PaintedMark,
+    color: Color32,
+    bg: Color32,
+    placed: &mut Vec<Rect>,
 ) {
+    let size = painter
+        .layout_no_wrap("H".to_string(), FontId::proportional(LABEL_SIZE), color)
+        .size()
+        .y;
+    let r = place_label(
+        Rect::from_min_size(at, vec2(size, size)).expand(2.0),
+        placed,
+    );
+    painter.rect_filled(r, 3.0, bg);
+    crate::icons::paint_hand_icon(painter, r.shrink(1.0), mark.icon(), color);
+}
+
+/// Schiebt `r` nach unten, bis es keine schon gesetzte Beschriftung überdeckt (höchstens einige
+/// Male), und merkt es sich.
+fn place_label(mut r: Rect, placed: &mut Vec<Rect>) -> Rect {
     /// Höchstens so oft wird einer Überlappung ausgewichen.
     const MAX_SHIFTS: usize = 8;
-    let galley = painter.layout_no_wrap(text.to_string(), FontId::proportional(LABEL_SIZE), color);
-    let mut r = Rect::from_min_size(at, galley.size()).expand(2.0);
     for _ in 0..MAX_SHIFTS {
         if !placed.iter().any(|q| q.intersects(r)) {
             break;
@@ -1500,8 +1942,7 @@ fn label(
         r = r.translate(vec2(0.0, r.height() + 1.0));
     }
     placed.push(r);
-    painter.rect_filled(r, 3.0, bg);
-    painter.galley(r.min + vec2(2.0, 2.0), galley, color);
+    r
 }
 
 /// Vorschau des laufenden Werkzeugs vom zuletzt gesetzten Punkt zum Mauszeiger.
@@ -1520,6 +1961,26 @@ fn draw_preview(
             for path in map.paths(&line) {
                 painter.extend(style_shapes(path, stroke, style));
             }
+        }
+        return;
+    }
+    // Anordnung: die Exemplare, die Eingabe anlegt; abgewählte gestrichelt und dünn.
+    if se.runs_pattern() {
+        for (_, suppressed, lines) in se.pattern_preview_all(sk).unwrap_or_default() {
+            let stroke = if suppressed {
+                Stroke::new(1.0, color)
+            } else {
+                Stroke::new(CURVE_WIDTH, color)
+            };
+            for line in lines {
+                for path in map.paths(&line) {
+                    draw_path(painter, path, stroke, suppressed);
+                }
+            }
+        }
+        // Die Mitte des Kreismusters, die erst das Anlegen als Punkt setzt.
+        if let Some(at) = se.pattern.new_center.and_then(|hit| map.to_screen(hit.at)) {
+            painter.circle_filled(at, 3.0, color);
         }
         return;
     }

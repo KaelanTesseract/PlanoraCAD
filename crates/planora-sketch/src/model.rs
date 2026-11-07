@@ -113,6 +113,8 @@ pub struct Sketch {
     pub(crate) points: Arena<PointData>,
     pub(crate) curves: Arena<CurveData>,
     pub(crate) constraints: Arena<crate::constraint::ConstraintData>,
+    /// Muster (auch gelöschte), siehe `pattern.rs`.
+    pub(crate) patterns: Arena<crate::pattern::PatternData>,
     /// Stand der Skizze, siehe [`Sketch::revision`].
     revision: u64,
     /// Ergebnisse der letzten Solver-Läufe je Gruppe (siehe `solver.rs`). Jede Änderung an
@@ -165,6 +167,7 @@ impl Sketch {
             points: Arena::new(),
             curves: Arena::new(),
             constraints: Arena::new(),
+            patterns: Arena::new(),
             revision: next_revision(),
             solve_cache: SolveCache::default(),
         }
@@ -279,8 +282,10 @@ impl Sketch {
     }
 
     /// Ersetzt die Art einer lebenden Kurve (Stutzen, Dehnen, Brechen). Prüft nichts; interne
-    /// Abhängigkeiten der neuen Art legt der Aufrufer an.
+    /// Abhängigkeiten der neuen Art legt der Aufrufer an. Ist die Kurve Vorlage oder Exemplar
+    /// eines Musters, wird das Muster aufgelöst.
     pub(crate) fn set_curve_kind(&mut self, c: CurveId, kind: CurveKind) {
+        self.dissolve_patterns_at(&[c]);
         self.touch_structure();
         self.curves[c].kind = kind;
         self.refresh_shared_signs(Some(c));
@@ -322,9 +327,32 @@ impl Sketch {
         {
             return Err(SketchError::Degenerate(tr!("sketch-err-arc-center")));
         }
-        let id = self.push_curve(CurveKind::Arc { center, start, end });
-        self.push_internal(crate::constraint::ConstraintKind::ArcRadius(id));
-        Ok(id)
+        self.with_internal_checked(|s| {
+            let id = s.push_curve(CurveKind::Arc { center, start, end });
+            let k = s.push_internal(crate::constraint::ConstraintKind::ArcRadius(id));
+            (id, k)
+        })
+    }
+
+    /// Legt eine Kurve mit ihrer internen Abhängigkeit an (`make` liefert beide Ids). Mit Mustern
+    /// wird abgelehnt, wenn die interne Abhängigkeit Vorlage und eigenes Exemplar verbände (etwa
+    /// ein Bogen um einen Vorlagenpunkt mit Enden auf einem Exemplar, wie der Fang sie anbietet):
+    /// Die Exemplare folgten der Vorlage, die Vorlage wieder dem Bogen, und der Löser liefe nie
+    /// zusammen. Dann bleibt die Skizze unverändert.
+    fn with_internal_checked(
+        &mut self,
+        make: impl FnOnce(&mut Sketch) -> (CurveId, crate::constraint::ConstraintId),
+    ) -> Result<CurveId, SketchError> {
+        if self.patterns().next().is_none() {
+            return Ok(make(self).0);
+        }
+        self.atomically(|s| {
+            let (id, k) = make(s);
+            if s.check_activation_cycle(k).is_err() {
+                return Err(SketchError::InvalidInput(tr!("sketch-pattern-cycle-arc")));
+            }
+            Ok(id)
+        })
     }
 
     /// Ellipse um `center` mit großer Halbachse `major` (Vektor) und kleiner Halbachse `minor`
@@ -388,16 +416,14 @@ impl Sketch {
         {
             return Err(SketchError::Degenerate(tr!("sketch-err-arc-center")));
         }
-        let (ax, ay, mi) = (
-            self.new_var(major.x),
-            self.new_var(major.y),
-            self.new_var(minor),
-        );
-        Ok(self.add_elliptic_arc_vars(center, ax, ay, mi, start, end))
+        self.with_internal_checked(|s| {
+            let (ax, ay, mi) = (s.new_var(major.x), s.new_var(major.y), s.new_var(minor));
+            s.add_elliptic_arc_vars(center, ax, ay, mi, start, end)
+        })
     }
 
     /// Ellipsenbogen auf vorhandenen Variablen (etwa geteilt mit der Ellipse, aus der er
-    /// entsteht); legt die interne Abhängigkeit `EllipticArcEnds` an. Prüft nichts.
+    /// entsteht); legt die interne Abhängigkeit `EllipticArcEnds` an und liefert beide Ids. Prüft nichts.
     pub(crate) fn add_elliptic_arc_vars(
         &mut self,
         center: PointId,
@@ -406,7 +432,7 @@ impl Sketch {
         minor: usize,
         start: PointId,
         end: PointId,
-    ) -> CurveId {
+    ) -> (CurveId, crate::constraint::ConstraintId) {
         let id = self.push_curve(CurveKind::EllipticArc {
             center,
             ax,
@@ -415,8 +441,8 @@ impl Sketch {
             start,
             end,
         });
-        self.push_internal(crate::constraint::ConstraintKind::EllipticArcEnds(id));
-        id
+        let k = self.push_internal(crate::constraint::ConstraintKind::EllipticArcEnds(id));
+        (id, k)
     }
 
     /// Natürlicher kubischer Spline durch 2 bis [`MAX_SPLINE_POINTS`] verschiedene Punkte;
@@ -532,23 +558,29 @@ impl Sketch {
         }
     }
 
+    /// Gehört die Kurve zu einem Muster, gilt der Stil für die Vorlage und alle ihre Exemplare
+    /// (Stil wie die Vorlage, auch nach späterem Umschalten).
     pub fn set_construction(&mut self, c: CurveId, construction: bool) -> Result<(), SketchError> {
         self.check_curve(c)?;
-        self.curves[c].construction = construction;
-        self.curves[c].centerline = false;
+        for x in self.pattern_style_group(c) {
+            self.curves[x].construction = construction;
+            self.curves[x].centerline = false;
+        }
         self.touch_structure();
         Ok(())
     }
 
     /// Schaltet die Mittellinie um (nur Linien): an ⇒ Konstruktion und Mittellinie, aus ⇒
-    /// beides aus.
+    /// beides aus. Im Muster wie [`Sketch::set_construction`].
     pub fn set_centerline(&mut self, c: CurveId, on: bool) -> Result<(), SketchError> {
         self.check_curve(c)?;
         if !matches!(self.curves[c].kind, CurveKind::Line { .. }) {
             return Err(SketchError::WrongType(tr!("sketch-err-centerline-type")));
         }
-        self.curves[c].construction = on;
-        self.curves[c].centerline = on;
+        for x in self.pattern_style_group(c) {
+            self.curves[x].construction = on;
+            self.curves[x].centerline = on;
+        }
         self.touch_structure();
         Ok(())
     }
@@ -557,6 +589,17 @@ impl Sketch {
     /// Datei Format 14.
     pub fn has_centerline_entry(&self) -> bool {
         self.curves.iter().any(|(_, c)| c.centerline)
+    }
+
+    /// Gibt es einen Mustereintrag oder einen Abhängigkeitseintrag, der Format 15 braucht, auch
+    /// einen gelöschten (ein aufgelöstes Muster, ein Musterwert)? Dann braucht die Datei Format
+    /// 15.
+    pub fn needs_format_15(&self) -> bool {
+        !self.patterns.is_empty()
+            || self
+                .constraints
+                .iter()
+                .any(|(_, c)| c.kind.needs_format_15())
     }
 
     /// Alle lebenden Punkte.

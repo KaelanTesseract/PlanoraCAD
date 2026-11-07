@@ -28,6 +28,7 @@ use crate::model::{
 };
 use crate::params::ParamScope;
 use planora_i18n::tr;
+use planora_sketch::pattern::PatternSlot;
 use planora_sketch::{ConstraintId, ConstraintKind, Sketch, SketchError};
 use std::collections::{BTreeMap, HashSet};
 
@@ -390,24 +391,17 @@ pub(crate) fn has_formulas(kind: &FeatureKind, formulas: &Formulas) -> bool {
 pub fn constraint_unit(kind: &ConstraintKind) -> ParamUnit {
     match kind {
         ConstraintKind::Angle(..) | ConstraintKind::EllipseAngle(..) => ParamUnit::Angle,
+        // Musterwerte (Skizzen 5): Anzahl ohne Einheit, Winkel in Grad, Abstand als Länge.
+        ConstraintKind::PatternValue(_, slot, _) if slot.is_count() => ParamUnit::Number,
+        ConstraintKind::PatternValue(_, PatternSlot::Angle, _) => ParamUnit::Angle,
         _ => ParamUnit::Length,
     }
 }
 
-/// Gespeicherter Zahlenwert eines Maßes; `None` für Abhängigkeiten ohne Zahlenwert.
+/// Gespeicherter Zahlenwert eines Maßes ([`ConstraintKind::value`]), auch eines Musterwerts;
+/// `None` für Abhängigkeiten ohne Zahlenwert.
 fn dimension_value(kind: &ConstraintKind) -> Option<f64> {
-    use ConstraintKind::*;
-    match kind {
-        Distance(_, _, v)
-        | DistancePointLine(_, _, v)
-        | Angle(_, _, v)
-        | Radius(_, v)
-        | Diameter(_, v)
-        | EllipseMajor(_, v)
-        | EllipseMinor(_, v)
-        | EllipseAngle(_, v) => Some(*v),
-        _ => None,
-    }
+    kind.value()
 }
 
 /// Text einer Ablehnung durch die Skizze ohne die Vorsilbe der Fehlerart.

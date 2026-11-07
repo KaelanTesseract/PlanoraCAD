@@ -217,6 +217,10 @@ fn sketch_speaks_english() {
                 "Midpoint",
                 "Symmetric",
                 "Point on curve",
+                // Skizzen 5
+                "Concentric",
+                "Collinear",
+                "Smooth",
                 "Distance …",
                 "Point–line distance …",
                 "Radius …",
@@ -224,7 +228,7 @@ fn sketch_speaks_english() {
                 "Angle …",
                 "Edit",
                 "Mirror …",
-                "Pattern …",
+                "Linear pattern …",
                 "Delete",
                 // Fusion-Verhalten, Skizzen 2
                 "Automatic\nconstraints",
@@ -252,6 +256,8 @@ fn sketch_speaks_english() {
                 "Ellipse",
                 "Spline",
                 "Copy body edge",
+                "Pattern",
+                "Sketch Dimension",
                 "Trim",
                 "Extend",
                 "Break",
@@ -263,7 +269,7 @@ fn sketch_speaks_english() {
             ]
         );
         let buttons = sketch_panel::strip_buttons(&c);
-        assert_eq!(buttons.len(), 18);
+        assert_eq!(buttons.len(), 20);
         for (tool, label, hint) in tools {
             let (_, r) = buttons.iter().find(|(l, _)| *l == label).unwrap();
             frame(&c, &mut app, vec![moved(r.center())]);
@@ -292,11 +298,11 @@ fn sketch_editing_fields_speak_english() {
         shot.assert_english("Maßfeld");
         shot.assert_has("Maßfeld", &["Distance:", "OK", "Cancel", "20.00"]);
 
-        // Abbrechen, dann „Pattern …“ und „Mirror …“.
+        // Abbrechen, dann „Linear pattern …“ und „Mirror …“.
         let r = shot.at_in(side(&c), "Cancel");
         let shot = click(&c, &mut app, r.center());
         shot.assert_english("nach Abbrechen");
-        let r = shot.at_in(side(&c), "Pattern …");
+        let r = shot.at_in(side(&c), "Linear pattern …");
         let shot = click(&c, &mut app, r.center());
         shot.assert_english("Muster");
         shot.assert_has(

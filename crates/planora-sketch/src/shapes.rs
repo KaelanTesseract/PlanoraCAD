@@ -437,10 +437,15 @@ const HALF_TURN_MARGIN: f64 = 1e-6;
 /// Der Löser findet dort ausgebeulte Bögen, die alle Abhängigkeiten erfüllen und zu klein für
 /// [`folded_over`] sind.
 pub fn sweep_crossed_half_turn(before: &Sketch, after: &Sketch) -> bool {
+    let (instances, _) = after.instance_parts();
     after.curves().any(|(c, data)| {
         let CurveKind::Arc { center, start, end } = data.kind else {
             return false;
         };
+        // Exemplare von Mustern drehen mit ihrer Lage (Kreismuster), das ist kein Umschlagen.
+        if instances.contains(&c) {
+            return false;
+        }
         if before.curve(c).is_none_or(|d| d.kind != data.kind) || after.tangent_ends(c).is_none() {
             return false;
         }
@@ -467,9 +472,12 @@ pub fn sweep_crossed_half_turn(before: &Sketch, after: &Sketch) -> bool {
 /// Bogen, der an beiden Enden tangential anschließt, hat auch umgeklappt, wenn sich sein
 /// Öffnungswinkel um mehr als π ändert (eine Schleife). Mit einem freien Ende darf er das: Wird die
 /// Linie vor einem tangentialen Bogen länger, läuft der Bogen weiter um sein festes Ende herum.
+/// Exemplare von Mustern zählen nicht.
 pub fn folded_over(before: &Sketch, after: &Sketch) -> bool {
+    let (instances, _) = after.instance_parts();
     after.curves().any(|(c, data)| {
-        if before.curve(c).is_none_or(|d| d.kind != data.kind) {
+        // Exemplare von Mustern drehen mit ihrer Lage (Kreismuster), das ist kein Umklappen.
+        if instances.contains(&c) || before.curve(c).is_none_or(|d| d.kind != data.kind) {
             return false;
         }
         match data.kind {

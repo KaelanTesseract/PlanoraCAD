@@ -30,24 +30,28 @@ use planora_feature::{
 use planora_i18n::{DisplayUnit, tr};
 use planora_kernel::BoolOp;
 use planora_math::{DQuat, DVec3, Frame, Tolerance};
+use planora_sketch::pattern::{CircularMode, PatternDir, PatternInstance, PatternKind};
 use planora_sketch::{
     ConstraintId, ConstraintKind, ConstraintRecord, CurveId, CurveKind, CurveRecord,
-    LegacyMigration, LineOrPoints, PieceRef, PointId, PointRecord, ProfileRef, Sketch, SketchData,
+    LegacyMigration, LineOrPoints, PatternId, PatternRecord, PatternSlot, PieceRef, PointId,
+    PointRecord, ProfileRef, Sketch, SketchData,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Höchste lesbare Formatnummer der Versionsdateien (P7, P12, F7).
-pub const FORMAT_VERSION: u32 = 14;
+pub const FORMAT_VERSION: u32 = 15;
 /// Formatnummer der Rahmendateien `dokument.json` und `.autosave.json`; ihre Struktur ist seit
 /// Format 1 unverändert, ältere Programme öffnen das Projekt deshalb weiter (P7).
 pub const CONTAINER_FORMAT: u32 = 1;
 /// Größte Summe der dekodierten Netzdaten eines Dokuments (wie die Dateigrenze beim Import).
 const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 
-/// Kleinste Formatnummer, die den Stand darstellt: 14 mit einer Mittellinie in einer Skizze
-/// (auch einem gelöschten Kurveneintrag; als erste Regel geprüft), 13 mit einem Ellipsenbogen in einer Skizze
-/// (auch einem gelöschten Kurveneintrag; als erste Regel geprüft) oder mit Profil-Verweisen,
+/// Kleinste Formatnummer, die den Stand darstellt (die Regeln in dieser Reihenfolge geprüft): 15
+/// mit einem Muster oder einer der Abhängigkeitsarten aus Skizzen 5 in einer Skizze (auch einem
+/// aufgelösten Muster oder gelöschten Eintrag), 14 mit einer Mittellinie in einer Skizze (auch
+/// einem gelöschten Kurveneintrag), 13 mit einem Ellipsenbogen in einer Skizze (auch einem
+/// gelöschten Kurveneintrag) oder mit Profil-Verweisen,
 /// die sich nicht als alte Profilnummer schreiben lassen ([`ProfileField`]), 12 mit einer Zeichnung in
 /// Zoll, 11 mit Rückrollstellen, 10 mit einem STEP-Körper (auch unterdrückt: sein Text muss in der Datei stehen),
 /// 9 mit Parametern, Feature-Formeln oder Skizzenformeln, 8 mit Schnittansichten, 7 mit
@@ -55,7 +59,7 @@ const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 /// Stückliste auf einem Blatt), 6 mit Blatt- oder Projektangaben, 5 mit Maßen oder
 /// eingeschalteten Mittellinien, 4 mit Zeichnungen, 3 mit Netz-Körpern, 2 mit Rundungen oder
 /// Fasen, sonst 1 (P7, P12, F7, Teilprojekt 12 P11, Teilprojekt STEP-Import, Verlaufsleiste,
-/// Teilprojekt Zoll, Teilprojekt Skizzen 1).
+/// Teilprojekt Zoll, Teilprojekte Skizzen 1, 3 und 5).
 pub fn required_format(s: &Snapshot) -> u32 {
     format_with(s, &profile_fields(s))
 }
@@ -63,7 +67,9 @@ pub fn required_format(s: &Snapshot) -> u32 {
 /// [`required_format`] mit den schon bestimmten Profilfeldern `fields` (eins je Feature).
 fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
     let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
-    if has(|k| matches!(k, FeatureKind::Sketch(sf) if sf.sketch.has_centerline_entry())) {
+    if has(|k| matches!(k, FeatureKind::Sketch(sf) if sf.sketch.needs_format_15())) {
+        15
+    } else if has(|k| matches!(k, FeatureKind::Sketch(sf) if sf.sketch.has_centerline_entry())) {
         14
     } else if has(|k| matches!(k, FeatureKind::Sketch(sf) if has_elliptic_arc(&sf.sketch)))
         || fields.iter().any(|f| f.profile.is_some())
@@ -427,6 +433,46 @@ fn constraint_to(k: &ConstraintKind) -> ConstraintKindDto {
             kurve: c(k),
             wert: *v,
         },
+        K::Collinear(a, b) => D::Kollinear { a: c(a), b: c(b) },
+        K::Smooth(a, pa, b, pb) => D::Glatt {
+            a: c(a),
+            punkt_a: p(pa),
+            b: c(b),
+            punkt_b: p(pb),
+        },
+        K::DistanceX(a, b, v) => D::AbstandWaagerecht {
+            a: p(a),
+            b: p(b),
+            wert: *v,
+        },
+        K::DistanceY(a, b, v) => D::AbstandSenkrecht {
+            a: p(a),
+            b: p(b),
+            wert: *v,
+        },
+        K::CenterlineDiameter(a, k, v) => D::DurchmesserZurAchse {
+            punkt: p(a),
+            kurve: c(k),
+            wert: *v,
+        },
+        K::SlotOverall(a, b, k, v) => D::LanglochGesamt {
+            a: p(a),
+            b: p(b),
+            kappe: c(k),
+            wert: *v,
+        },
+        K::PatternValue(m, slot, v) => D::MusterWert {
+            muster: m.index(),
+            feld: match slot {
+                PatternSlot::Count1 => MusterFeldDto::Anzahl1,
+                PatternSlot::Spacing1 => MusterFeldDto::Abstand1,
+                PatternSlot::Count2 => MusterFeldDto::Anzahl2,
+                PatternSlot::Spacing2 => MusterFeldDto::Abstand2,
+                PatternSlot::Count => MusterFeldDto::Anzahl,
+                PatternSlot::Angle => MusterFeldDto::Winkel,
+            },
+            wert: *v,
+        },
     }
 }
 
@@ -458,7 +504,183 @@ fn constraint_from(d: &ConstraintKindDto) -> ConstraintKind {
         D::EllipseGross { kurve, wert } => K::EllipseMajor(c(*kurve), *wert),
         D::EllipseKlein { kurve, wert } => K::EllipseMinor(c(*kurve), *wert),
         D::EllipseWinkel { kurve, wert } => K::EllipseAngle(c(*kurve), *wert),
+        D::Kollinear { a, b } => K::Collinear(c(*a), c(*b)),
+        D::Glatt {
+            a,
+            punkt_a,
+            b,
+            punkt_b,
+        } => K::Smooth(c(*a), p(*punkt_a), c(*b), p(*punkt_b)),
+        D::AbstandWaagerecht { a, b, wert } => K::DistanceX(p(*a), p(*b), *wert),
+        D::AbstandSenkrecht { a, b, wert } => K::DistanceY(p(*a), p(*b), *wert),
+        D::DurchmesserZurAchse { punkt, kurve, wert } => {
+            K::CenterlineDiameter(p(*punkt), c(*kurve), *wert)
+        }
+        D::LanglochGesamt { a, b, kappe, wert } => K::SlotOverall(p(*a), p(*b), c(*kappe), *wert),
+        D::MusterWert { muster, feld, wert } => K::PatternValue(
+            PatternId::from_index(*muster),
+            match feld {
+                MusterFeldDto::Anzahl1 => PatternSlot::Count1,
+                MusterFeldDto::Abstand1 => PatternSlot::Spacing1,
+                MusterFeldDto::Anzahl2 => PatternSlot::Count2,
+                MusterFeldDto::Abstand2 => PatternSlot::Spacing2,
+                MusterFeldDto::Anzahl => PatternSlot::Count,
+                MusterFeldDto::Winkel => PatternSlot::Angle,
+            },
+            *wert,
+        ),
     }
+}
+
+fn pattern_to(m: &PatternRecord) -> PatternDto {
+    let dir = |d: PatternDir| match d {
+        PatternDir::SketchX => MusterRichtungDto::SkizzeX,
+        PatternDir::SketchY => MusterRichtungDto::SkizzeY,
+        PatternDir::Line(l) => MusterRichtungDto::Linie { kurve: l.index() },
+        PatternDir::Perpendicular => MusterRichtungDto::Senkrecht,
+    };
+    PatternDto {
+        art: match m.kind {
+            PatternKind::Rect {
+                dirs,
+                extent,
+                symmetric,
+            } => MusterArtDto::Rechteck {
+                richtungen: dirs.map(dir),
+                gesamt: extent,
+                symmetrisch: symmetric,
+            },
+            PatternKind::Circular { center, mode } => MusterArtDto::Kreis {
+                mitte: center.index(),
+                art: match mode {
+                    CircularMode::Full => KreisArtDto::Voll,
+                    CircularMode::Angle => KreisArtDto::Winkel,
+                    CircularMode::Symmetric => KreisArtDto::Symmetrisch,
+                },
+            },
+        },
+        vorlagen: m.sources.iter().map(|c| c.index()).collect(),
+        vorlagenpunkte: m.source_points.iter().map(|p| p.index()).collect(),
+        werte: m.values.iter().map(|c| c.index()).collect(),
+        exemplare: m
+            .instances
+            .iter()
+            .map(|i| ExemplarDto {
+                lage: i.at,
+                punkte: i.points.iter().map(|p| p.index()).collect(),
+                kurven: i.curves.iter().map(|c| c.index()).collect(),
+            })
+            .collect(),
+        abgewaehlt: m.suppressed.clone(),
+        lebt: m.alive,
+    }
+}
+
+/// Muster einer Skizze aus der Datei. Indizes werden hier gegen die Listen der Skizze geprüft
+/// (`from_index` schnitte große Zahlen sonst ab); alles Weitere prüft `Sketch::from_data`.
+fn patterns_from(origin: &str, feature: &str, d: &SketchDto) -> Result<Vec<PatternRecord>> {
+    let missing = || {
+        ProjectError::corrupt(
+            origin,
+            tr!(
+                "proj-ctx-sketch",
+                name = feature,
+                msg = tr!("sketch-err-data-pattern-object")
+            ),
+        )
+    };
+    let (np, nc, nk) = (d.punkte.len(), d.kurven.len(), d.abhaengigkeiten.len());
+    let point = |i: usize| {
+        if i < np {
+            Ok(PointId::from_index(i))
+        } else {
+            Err(missing())
+        }
+    };
+    let curve = |i: usize| {
+        if i < nc {
+            Ok(CurveId::from_index(i))
+        } else {
+            Err(missing())
+        }
+    };
+    let dir = |r: MusterRichtungDto| -> Result<PatternDir> {
+        Ok(match r {
+            MusterRichtungDto::SkizzeX => PatternDir::SketchX,
+            MusterRichtungDto::SkizzeY => PatternDir::SketchY,
+            MusterRichtungDto::Linie { kurve } => PatternDir::Line(curve(kurve)?),
+            MusterRichtungDto::Senkrecht => PatternDir::Perpendicular,
+        })
+    };
+    check_len(origin, &|| tr!("proj-l-patterns"), d.muster.len())?;
+    let mut out = Vec::with_capacity(d.muster.len());
+    for m in &d.muster {
+        check_len(origin, &|| tr!("proj-l-instances"), m.exemplare.len())?;
+        check_len(origin, &|| tr!("proj-l-instances"), m.abgewaehlt.len())?;
+        check_len(origin, &|| tr!("proj-l-curves"), m.vorlagen.len())?;
+        check_len(origin, &|| tr!("proj-l-points"), m.vorlagenpunkte.len())?;
+        check_len(origin, &|| tr!("proj-l-constraints"), m.werte.len())?;
+        for e in &m.exemplare {
+            check_len(origin, &|| tr!("proj-l-points"), e.punkte.len())?;
+            check_len(origin, &|| tr!("proj-l-curves"), e.kurven.len())?;
+        }
+        let kind = match m.art {
+            MusterArtDto::Rechteck {
+                richtungen,
+                gesamt,
+                symmetrisch,
+            } => PatternKind::Rect {
+                dirs: [dir(richtungen[0])?, dir(richtungen[1])?],
+                extent: gesamt,
+                symmetric: symmetrisch,
+            },
+            MusterArtDto::Kreis { mitte, art } => PatternKind::Circular {
+                center: point(mitte)?,
+                mode: match art {
+                    KreisArtDto::Voll => CircularMode::Full,
+                    KreisArtDto::Winkel => CircularMode::Angle,
+                    KreisArtDto::Symmetrisch => CircularMode::Symmetric,
+                },
+            },
+        };
+        let values = m
+            .werte
+            .iter()
+            .map(|&i| {
+                if i < nk {
+                    Ok(ConstraintId::from_index(i))
+                } else {
+                    Err(missing())
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut instances = Vec::with_capacity(m.exemplare.len());
+        for e in &m.exemplare {
+            instances.push(PatternInstance {
+                at: e.lage,
+                points: e.punkte.iter().map(|&i| point(i)).collect::<Result<_>>()?,
+                curves: e.kurven.iter().map(|&i| curve(i)).collect::<Result<_>>()?,
+            });
+        }
+        out.push(PatternRecord {
+            kind,
+            sources: m
+                .vorlagen
+                .iter()
+                .map(|&i| curve(i))
+                .collect::<Result<_>>()?,
+            source_points: m
+                .vorlagenpunkte
+                .iter()
+                .map(|&i| point(i))
+                .collect::<Result<_>>()?,
+            values,
+            instances,
+            suppressed: m.abgewaehlt.clone(),
+            alive: m.lebt,
+        });
+    }
+    Ok(out)
 }
 
 fn sketch_to(s: &Sketch) -> SketchDto {
@@ -502,10 +724,13 @@ fn sketch_to(s: &Sketch) -> SketchDto {
                 lebt: c.alive,
             })
             .collect(),
+        muster: d.patterns.iter().map(pattern_to).collect(),
     }
 }
 
-fn sketch_from(origin: &str, feature: &str, d: &SketchDto) -> Result<Sketch> {
+/// Liest eine Skizze; dazu die Zahl der Muster, die beim Laden aufgelöst wurden, weil sie in einer
+/// Schleife lagen (`Sketch::from_data_counted`, Skizzen 5).
+fn sketch_from(origin: &str, feature: &str, d: &SketchDto) -> Result<(Sketch, usize)> {
     let ctx =
         |m: String| ProjectError::corrupt(origin, tr!("proj-ctx-sketch", name = feature, msg = m));
     check_len(origin, &|| tr!("proj-l-values"), d.werte.len())?;
@@ -578,8 +803,9 @@ fn sketch_from(origin: &str, feature: &str, d: &SketchDto) -> Result<Sketch> {
                 alive: c.lebt,
             })
             .collect(),
+        patterns: patterns_from(origin, feature, d)?,
     };
-    Sketch::from_data(data).map_err(|e| ctx(e.to_string()))
+    Sketch::from_data_counted(data).map_err(|e| ctx(e.to_string()))
 }
 
 // ---- Feature-Arten ----------------------------------------------------------------------
@@ -964,13 +1190,15 @@ fn art_from(origin: &str, name: &str, d: &BlendArtDto) -> Result<BlendArt> {
     })
 }
 
-fn kind_from(origin: &str, name: &str, d: &KindDto) -> Result<FeatureKind> {
+/// Liest die Art eines Features; `dissolved` zählt die beim Laden aufgelösten Muster mit.
+fn kind_from(origin: &str, name: &str, d: &KindDto, dissolved: &mut usize) -> Result<FeatureKind> {
     let n = |label: Label, x: f64| num(origin, &|| field_label(name, label()), x);
     let v = |label: Label, x: V3| dv3(origin, &|| field_label(name, label()), x);
     Ok(match d {
         KindDto::Skizze(s) => {
             check_len(origin, &|| tr!("proj-l-edge-copies"), s.kopien.len())?;
-            let sketch = sketch_from(origin, name, &s.skizze)?;
+            let (sketch, n) = sketch_from(origin, name, &s.skizze)?;
+            *dissolved += n;
             let formulas = sketch_formulas_from(origin, name, s, &sketch)?;
             FeatureKind::Sketch(SketchFeature {
                 sketch,
@@ -2522,8 +2750,9 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
     }
     check_len(origin, &|| tr!("proj-l-features"), file.features.len())?;
     let mut features = Vec::with_capacity(file.features.len());
+    let mut dissolved_patterns = 0;
     for f in &file.features {
-        let kind = kind_from(origin, &f.name, &f.art)?;
+        let kind = kind_from(origin, &f.name, &f.art, &mut dissolved_patterns)?;
         let formulas = feature_formulas_from(origin, f, &kind)?;
         features.push(SnapshotFeature {
             id: FeatureId(f.id),
@@ -2547,6 +2776,7 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
         parameters,
         next_param,
         rollbacks,
+        dissolved_patterns,
     })
 }
 

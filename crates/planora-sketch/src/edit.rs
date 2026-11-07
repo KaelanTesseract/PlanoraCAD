@@ -98,6 +98,7 @@ impl Sketch {
     /// eine Ellipse ein Ellipsenbogen (beide behalten ihre Id und ihre Maße). Ohne Schnitt wird
     /// die Kurve gelöscht, mit den Punkten, die nur sie benutzte. Gibt die übrigen Kurven
     /// zurück, `c` zuerst, falls sie bleibt. Bei einem Fehler bleibt die Skizze unverändert.
+    /// Ist `c` Vorlage oder Exemplar eines Musters, wird das Muster vorher aufgelöst.
     pub fn trim(&mut self, c: CurveId, at: DVec2) -> Result<Vec<CurveId>, SketchError> {
         self.check_curve(c)?;
         if !at.is_finite() {
@@ -107,6 +108,7 @@ impl Sketch {
             return Err(SketchError::Degenerate(tr!("sketch-err-trim-degenerate")));
         };
         let backup = self.clone();
+        self.dissolve_patterns_at(&[c]);
         let result = self.apply_split(c, &g, &b, false);
         if result.is_err() {
             *self = backup;
@@ -127,6 +129,7 @@ impl Sketch {
     /// den eigenen Anfang). `Ok(false)` und die Skizze bleibt unverändert, wenn das Ende nicht
     /// offen ist (andere Kurve am Punkt oder „deckungsgleich“), die Kurve keine dieser Arten ist
     /// oder es kein Ziel gibt. Bei einem Fehler bleibt die Skizze unverändert.
+    /// Ist `c` Vorlage oder Exemplar eines Musters, wird das Muster vorher aufgelöst.
     pub fn extend(&mut self, c: CurveId, at: DVec2) -> Result<bool, SketchError> {
         self.check_curve(c)?;
         if !at.is_finite() {
@@ -136,6 +139,7 @@ impl Sketch {
             return Ok(false);
         };
         let backup = self.clone();
+        self.dissolve_patterns_at(&[c]);
         let result = self.apply_extend(c, &x);
         if result.is_err() {
             *self = backup;
@@ -151,6 +155,7 @@ impl Sketch {
     /// Gibt die Teile zurück, `c` zuerst (bei offenen Kurven in Kurvenrichtung); ohne Schnitt
     /// `vec![c]` und die Skizze bleibt unverändert. Bei einem Fehler bleibt sie ebenfalls
     /// unverändert.
+    /// Ist `c` Vorlage oder Exemplar eines Musters, wird das Muster vorher aufgelöst.
     pub fn break_curve(&mut self, c: CurveId, at: DVec2) -> Result<Vec<CurveId>, SketchError> {
         self.check_curve(c)?;
         if !at.is_finite() {
@@ -160,6 +165,7 @@ impl Sketch {
             return Err(SketchError::Degenerate(tr!("sketch-err-break-degenerate")));
         };
         let backup = self.clone();
+        self.dissolve_patterns_at(&[c]);
         let result = self.apply_split(c, &g, &b, true);
         if result.is_err() {
             *self = backup;
@@ -652,7 +658,9 @@ impl Sketch {
                 minor,
                 start,
                 end,
-            } => Ok(self.add_elliptic_arc_vars(center, ax, ay, minor, start, end)),
+            } => Ok(self
+                .add_elliptic_arc_vars(center, ax, ay, minor, start, end)
+                .0),
             CurveKind::Spline { points } => self.add_spline(&points),
             CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => {
                 unreachable!("pieces are open curves")
@@ -710,7 +718,8 @@ impl Sketch {
     /// werden neu gesetzt; jede aktive Abhängigkeit an ihnen, die nicht mehr ohne Bewegung
     /// erfüllt ist, entfällt, ebenso „Mittelpunkt“ an einer geänderten Linie. Als erfüllt gilt auch
     /// eine Tangente am gemeinsamen Endpunkt im Rahmen ihrer zulässigen Abweichung (siehe
-    /// `satisfied`). Nur anzeigende und ausgeschaltete Abhängigkeiten bewegen nichts und bleiben.
+    /// `satisfied`). Nur anzeigende und ausgeschaltete Abhängigkeiten bewegen nichts und bleiben,
+    /// außer einem Glatt, dessen Punkt kein Ende seiner Kurve mehr ist.
     pub(crate) fn settle_constraints(&mut self, touched: &[CurveId], points: &[PointId]) {
         let ids: Vec<ConstraintId> = self
             .constraints()
@@ -725,6 +734,12 @@ impl Sketch {
             if let ConstraintKind::Midpoint(_, l) = kind
                 && touched.contains(&l)
             {
+                self.drop_constraint(id);
+                continue;
+            }
+            // Skizzen 5: Glatt an einem Punkt, der kein Ende mehr ist, entfällt immer, auch nur
+            // anzeigend oder ausgeschaltet (die Datei lüde sonst nicht mehr).
+            if !self.smooth_ends_hold(&kind) {
                 self.drop_constraint(id);
                 continue;
             }

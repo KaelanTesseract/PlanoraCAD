@@ -14,7 +14,9 @@ use crate::sketch_kinds::ToolKind;
 use crate::sketch_state::{
     ConstraintAction, Item, Severity, SketchSession, Tool, TransformStage, formula_problem,
 };
-use crate::sketch_view::{constraint_name, format_number, parse_number, shown_value};
+use crate::sketch_view::{
+    constraint_name_among, format_number, parse_number, round_centers, shown_value, stored_value,
+};
 use crate::state::AppState;
 use crate::theme;
 use egui::RichText;
@@ -27,7 +29,7 @@ use planora_sketch::model::{CurveKind, Sketch};
 const _: () = assert!(TOOL_ORDER.len() == crate::shell::STRIP_TOOLS);
 
 /// Werkzeuge der Skizzenleiste in der Reihenfolge der Leiste.
-pub const TOOL_ORDER: [Tool; 18] = [
+pub const TOOL_ORDER: [Tool; 20] = [
     Tool::Select,
     Tool::Point,
     Tool::Line,
@@ -39,6 +41,9 @@ pub const TOOL_ORDER: [Tool; 18] = [
     Tool::Ellipse,
     Tool::Spline,
     Tool::ProjectEdge,
+    // Skizzen 5 (Entscheidung 15): Muster mit Liste der Arten, dann die Skizzenbemaßung.
+    Tool::Pattern,
+    Tool::Dimension,
     Tool::Trim,
     Tool::Extend,
     Tool::Break,
@@ -73,6 +78,10 @@ pub fn tool_label(tool: Tool) -> String {
         Tool::Offset => tr!("action-sketch-offset"),
         Tool::MoveCopy => tr!("action-sketch-move-copy"),
         Tool::Scale => tr!("action-sketch-scale"),
+        Tool::Dimension => tr!("action-sketch-dimension"),
+        // Der Knopf mit Liste heißt wie in Fusion „Muster“; die Arten nennen sich selbst.
+        Tool::Pattern => tr!("sketch-tool-pattern"),
+        Tool::Constraint(action) => action.label(),
     }
 }
 
@@ -97,16 +106,44 @@ pub fn tool_hint(tool: Tool) -> String {
         Tool::Offset => tr!("sketch-tool-offset-hint"),
         Tool::MoveCopy => tr!("sketch-tool-move-copy-hint"),
         Tool::Scale => tr!("sketch-tool-scale-hint"),
+        Tool::Dimension => tr!("sketch-tool-dimension-hint"),
+        Tool::Pattern => tr!("sketch-tool-pattern-hint"),
+        Tool::Constraint(action) => command_hint(action),
+    }
+}
+
+/// Hinweis des Abhängigkeitsbefehls in der Statuszeile: was zu wählen ist (Handtest Skizzen 5,
+/// Korrektur 4). Maße haben keinen Befehl; dann der Hinweis des Auswählens.
+fn command_hint(action: ConstraintAction) -> String {
+    use ConstraintAction::*;
+    match action {
+        Coincident => tr!("sketch-command-coincident-hint"),
+        Horizontal => tr!("sketch-command-horizontal-hint"),
+        Vertical => tr!("sketch-command-vertical-hint"),
+        Parallel => tr!("sketch-command-parallel-hint"),
+        Perpendicular => tr!("sketch-command-perpendicular-hint"),
+        Tangent => tr!("sketch-command-tangent-hint"),
+        Equal => tr!("sketch-command-equal-hint"),
+        Fixed => tr!("sketch-command-fixed-hint"),
+        Midpoint => tr!("sketch-command-midpoint-hint"),
+        Symmetric => tr!("sketch-command-symmetric-hint"),
+        PointOnCurve => tr!("sketch-command-point-on-curve-hint"),
+        Concentric => tr!("sketch-command-concentric-hint"),
+        Collinear => tr!("sketch-command-collinear-hint"),
+        Smooth => tr!("sketch-command-smooth-hint"),
+        Distance | DistancePointLine | Radius | Diameter | Angle => {
+            tr!("sketch-tool-select-hint")
+        }
     }
 }
 
 /// Werkzeuge der Skizzenleiste: Werkzeug, Beschriftung, Hinweis (in der aktuellen Sprache).
-pub fn tools() -> [(Tool, String, String); 18] {
+pub fn tools() -> [(Tool, String, String); 20] {
     TOOL_ORDER.map(|t| (t, tool_label(t), tool_hint(t)))
 }
 
 /// Abhängigkeiten, die die Skizzenleiste anbietet.
-pub const ACTIONS: [ConstraintAction; 16] = {
+pub const ACTIONS: [ConstraintAction; 19] = {
     use ConstraintAction::*;
     [
         Coincident,
@@ -120,6 +157,10 @@ pub const ACTIONS: [ConstraintAction; 16] = {
         Midpoint,
         Symmetric,
         PointOnCurve,
+        // Skizzen 5
+        Concentric,
+        Collinear,
+        Smooth,
         Distance,
         DistancePointLine,
         Radius,
@@ -127,6 +168,16 @@ pub const ACTIONS: [ConstraintAction; 16] = {
         Angle,
     ]
 };
+
+/// Die Aktion der Tastenbelegung zu einem Knopf der Abhängigkeiten, soweit es eine gibt.
+fn bindable_action(action: ConstraintAction) -> Option<Action> {
+    match action {
+        ConstraintAction::Concentric => Some(Action::SketchConcentric),
+        ConstraintAction::Collinear => Some(Action::SketchCollinear),
+        ConstraintAction::Smooth => Some(Action::SketchSmooth),
+        _ => None,
+    }
+}
 
 /// Größe der Symbole in der Werkzeugleiste.
 const STRIP_ICON: f32 = 20.0;
@@ -153,12 +204,15 @@ pub fn list_fx_label() -> String {
 /// Höhe der Abhängigkeitsliste, ab der sie rollt.
 const LIST_HEIGHT: f32 = 180.0;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum EditTarget {
     /// Neues Maß aus der Auswahl.
     New(ConstraintAction),
     /// Vorhandenes Maß ändern.
     Existing(ConstraintId),
+    /// Von der Skizzenbemaßung gesetztes, noch nicht angelegtes Maß (Skizzen 5); gehört zu
+    /// `SketchSession::dim.plan`, Esc legt nichts an.
+    Planned(ConstraintKind),
 }
 
 #[derive(Clone, Debug)]
@@ -300,6 +354,49 @@ fn new_editor(se: &SketchSession, sk: &Sketch, action: ConstraintAction) -> Edit
     }
 }
 
+/// Maßfeld für das von der Skizzenbemaßung gesetzte Maß `kind` (Vorgabe: der gemessene Wert).
+fn planned_editor(se: &SketchSession, kind: &ConstraintKind) -> Editor {
+    let unit = constraint_unit(kind);
+    let value = stored_value(kind).unwrap_or(0.0);
+    let text = editor_text(value, unit);
+    Editor {
+        target: EditTarget::Planned(kind.clone()),
+        shown: text.clone(),
+        text,
+        unit,
+        driven: false,
+        focus: true,
+        reveal: true,
+        selection: se.selection.clone(),
+        jumps: se.history_jumps,
+        value,
+        display: current_unit(),
+    }
+}
+
+/// Das Maßfeld folgt dem gesetzten Maß der Skizzenbemaßung: Ist eins gesetzt, öffnet es (auch
+/// nach dem Umschalten Ø/R mit dem neuen Wert); ist es fort (Esc, anderes Werkzeug, neuer Klick,
+/// Rückgängig), schließt ein Feld dafür.
+fn follow_planned(panel: &mut PanelState, se: &SketchSession) {
+    let planned = se.dim.plan.as_ref().map(|p| &p.kind);
+    let open = match panel.editor.as_ref().map(|e| &e.target) {
+        Some(EditTarget::Planned(k)) => Some(k),
+        _ => None,
+    };
+    match (planned, open) {
+        (Some(k), Some(o)) if k == o => {}
+        (Some(k), _) => {
+            panel.error = None;
+            panel.editor = Some(planned_editor(se, k));
+        }
+        (None, Some(_)) => {
+            panel.editor = None;
+            panel.error = None;
+        }
+        (None, None) => {}
+    }
+}
+
 fn load_panel(ctx: &egui::Context, index: FeatureId) -> PanelState {
     ctx.data(|d| d.get_temp::<PanelState>(panel_id()))
         .filter(|p| p.sketch == index)
@@ -373,9 +470,7 @@ pub fn has_flyout(tool: Tool) -> bool {
 }
 
 fn flyout_id(tool: Tool) -> egui::Id {
-    shell_panels::sketch_strip_id()
-        .with("flyout")
-        .with(tool as usize)
+    shell_panels::sketch_strip_id().with("flyout").with(tool)
 }
 
 /// Ist eine Liste von Arten offen? Die Ansicht läuft im Bild vor der Leiste und liest das, damit
@@ -477,6 +572,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         panel.editor = None;
         panel.error = None;
     }
+    follow_planned(&mut panel, se);
     // Anzeigeeinheit umgestellt: Die Versatztexte stünden in der alten Einheit.
     if panel.pattern_unit != current_unit() {
         panel.pattern_dx = pattern_default();
@@ -558,7 +654,11 @@ fn strip_field(
                         let title = strip_title(&km, se, tool);
                         let hint = se.kind_of(tool).map_or(hint, ToolKind::hint);
                         let flyout = has_flyout(tool);
-                        let source = icons::sketch_tool_icon(tool);
+                        // Das Muster zeigt das Symbol der zuletzt benutzten Art.
+                        let source = match se.kind_of(tool) {
+                            Some(kind) if tool == Tool::Pattern => icons::sketch_kind_icon(kind),
+                            _ => icons::sketch_tool_icon(tool),
+                        };
                         let r = strip_button(ui, source, &label, selected, flyout, dark)
                             .on_hover_ui(|ui| {
                                 ui.strong(&title);
@@ -783,6 +883,9 @@ fn tool_options(ui: &mut egui::Ui, se: &mut SketchSession, sf: &mut SketchFeatur
     if se.tool == Tool::Offset {
         ui.checkbox(&mut se.offset_chain, tr!("sketch-offset-chain"));
     }
+    if se.runs_pattern() {
+        pattern_options(ui, se, sf);
+    }
     if se.runs_transform() {
         if se.tool == Tool::Scale {
             // Der Maßstab kopiert nicht; er sagt, was Eingabe jetzt tut.
@@ -816,6 +919,110 @@ fn tool_options(ui: &mut egui::Ui, se: &mut SketchSession, sf: &mut SketchFeatur
             }
         });
     }
+}
+
+/// Einstellungen der Anordnung (Skizzen 5): je Richtung Art (Achse oder Linie, „Linie wählen“),
+/// „Gesamtlänge“ und „Symmetrisch“; beim Kreismuster „Voll“, „Winkel“, „Symmetrisch“; OK und
+/// Abbrechen.
+fn pattern_options(ui: &mut egui::Ui, se: &mut SketchSession, sf: &mut SketchFeature) {
+    use planora_sketch::pattern::{CircularMode, PatternDir, PatternKind};
+    let active = se.pattern.stage == TransformStage::Active;
+    if let Some(kind) = se.pattern.plan.as_ref().map(|p| p.kind).filter(|_| active) {
+        match kind {
+            PatternKind::Rect {
+                dirs,
+                mut extent,
+                mut symmetric,
+            } => {
+                let mut pick = None;
+                let mut perpendicular = false;
+                for k in 0..2 {
+                    let name = match dirs[k] {
+                        PatternDir::SketchX => tr!("sketch-pattern-axis-x"),
+                        PatternDir::SketchY => tr!("sketch-pattern-axis-y"),
+                        PatternDir::Line(_) => tr!("sketch-pattern-line"),
+                        PatternDir::Perpendicular => tr!("sketch-pattern-perpendicular"),
+                    };
+                    let n = (k + 1).to_string();
+                    ui.label(format!(
+                        "{}: {name}",
+                        tr!("sketch-pattern-direction-n", n = n)
+                    ));
+                    ui.horizontal_wrapped(|ui| {
+                        let picking =
+                            se.pattern.picking_direction && se.pattern.direction_slot == k;
+                        if ui
+                            .selectable_label(picking, tr!("sketch-pattern-pick-line"))
+                            .on_hover_text(tr!("sketch-pattern-pick-line-hint"))
+                            .clicked()
+                        {
+                            pick = Some(k);
+                        }
+                        // Richtung 2 zurück auf die Vorgabe „senkrecht zu Richtung 1“.
+                        if k == 1
+                            && ui
+                                .selectable_label(
+                                    dirs[1] == PatternDir::Perpendicular,
+                                    tr!("sketch-pattern-perpendicular-button"),
+                                )
+                                .on_hover_text(tr!("sketch-pattern-perpendicular-button-hint"))
+                                .clicked()
+                        {
+                            perpendicular = true;
+                        }
+                        ui.checkbox(&mut extent[k], tr!("sketch-pattern-extent"))
+                            .on_hover_text(tr!("sketch-pattern-extent-hint"));
+                        ui.checkbox(&mut symmetric[k], tr!("sketch-pattern-symmetric"))
+                            .on_hover_text(tr!("sketch-pattern-symmetric-hint"));
+                    });
+                }
+                if let Some(plan) = se.pattern.plan.as_mut() {
+                    plan.kind = PatternKind::Rect {
+                        dirs,
+                        extent,
+                        symmetric,
+                    };
+                }
+                if perpendicular {
+                    se.pattern.picking_direction = false;
+                    se.set_pattern_direction(1, PatternDir::Perpendicular);
+                }
+                if let Some(k) = pick {
+                    se.pick_pattern_direction(k);
+                }
+            }
+            PatternKind::Circular { center, mode } => {
+                let mut m = mode;
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut m, CircularMode::Full, tr!("sketch-pattern-full"));
+                    ui.radio_value(
+                        &mut m,
+                        CircularMode::Angle,
+                        tr!("sketch-pattern-angle-mode"),
+                    );
+                    ui.radio_value(
+                        &mut m,
+                        CircularMode::Symmetric,
+                        tr!("sketch-pattern-symmetric"),
+                    );
+                });
+                if m != mode
+                    && let Some(plan) = se.pattern.plan.as_mut()
+                {
+                    plan.kind = PatternKind::Circular { center, mode: m };
+                }
+            }
+        }
+    }
+    ui.horizontal(|ui| {
+        if ui.button(tr!("common-ok")).clicked() {
+            // Fehler stehen in der Meldung der Sitzung.
+            let _ = se.confirm_pattern(sf);
+        }
+        if ui.button(tr!("common-cancel")).clicked() {
+            se.cancel(&mut sf.sketch);
+        }
+    });
 }
 
 /// Inhalt des Skizzenfelds: Name, Abhängigkeiten mit Maßeingabe, Bearbeiten, Liste.
@@ -868,15 +1075,33 @@ fn side_contents(
     theme::section_header(ui, &tr!("sketch-section-constraints"), theme::SUB_HEADER_H);
     let sk = &mut sf.sketch;
     let available = se.available_actions(sk);
+    let km = crate::keymap::mouse::current(ui.ctx());
     ui.horizontal_wrapped(|ui| {
         for action in ACTIONS {
-            let enabled = available.contains(&action);
+            // Geometrische Abhängigkeiten gehen immer: Ohne passende Auswahl startet der Knopf den
+            // Befehl (Fusion „erst Befehl, dann Auswahl“) und erscheint dann aktiv. Maße brauchen
+            // die Auswahl wie bisher.
+            let enabled = !action.is_dimension() || available.contains(&action);
+            let active = se.tool == Tool::Constraint(action);
             let label = if action.is_dimension() {
                 format!("{} …", action.label())
             } else {
                 action.label().to_string()
             };
-            if tool_button(ui, icons::sketch_action_icon(action), &label, enabled)
+            let mut button = tool_button_state(
+                ui,
+                icons::sketch_action_icon(action),
+                &label,
+                enabled,
+                active,
+            );
+            // Belegbare Abhängigkeiten (Skizzen 5) nennen ihre Taste im Hinweistext.
+            if let Some(bound) = bindable_action(action)
+                && !shortcut_hint(&km, bound).is_empty()
+            {
+                button = button.on_hover_text(with_hint(&km, bound, &label));
+            }
+            if button
                 .on_disabled_hover_text(tr!("sketch-not-fitting"))
                 .clicked()
             {
@@ -884,7 +1109,7 @@ fn side_contents(
                 if action.is_dimension() {
                     panel.editor = Some(new_editor(se, sk, action));
                 } else {
-                    let _ = se.apply(sk, action, None);
+                    let _ = se.constraint_button(sk, action);
                 }
             }
         }
@@ -979,9 +1204,14 @@ fn side_contents(
             ui,
             IconSource::Font(Icon::Delete),
             &tr!("action-delete"),
-            !se.selection.is_empty(),
+            // In der Anordnung gehört die Auswahl der Vorlage (wie Entf in der Ansicht).
+            !se.selection.is_empty() && !se.runs_pattern(),
         )
-        .on_disabled_hover_text(tr!("sketch-delete-disabled"))
+        .on_disabled_hover_text(if se.runs_pattern() {
+            tr!("sketch-delete-in-pattern")
+        } else {
+            tr!("sketch-delete-disabled")
+        })
         .clicked()
         {
             se.delete_selection(sk);
@@ -1068,17 +1298,31 @@ fn tool_button(
     label: &str,
     enabled: bool,
 ) -> egui::Response {
+    tool_button_state(ui, source, label, enabled, false)
+}
+
+/// Wie [`tool_button`], `active` zeigt ihn gedrückt (laufender Abhängigkeitsbefehl).
+fn tool_button_state(
+    ui: &mut egui::Ui,
+    source: IconSource,
+    label: &str,
+    enabled: bool,
+    active: bool,
+) -> egui::Response {
     let dark = ui.visuals().dark_mode;
     // `add_enabled` statt `add_enabled_ui`: ohne eigenen Bereich bricht die Zeile richtig um.
     ui.add_enabled(enabled, |ui: &mut egui::Ui| {
-        icons::source_button(ui, source, label, dark, false)
+        icons::source_button(ui, source, label, dark, active)
     })
 }
 
 /// Vorgabetext des Zahlenfelds (Winkel in Grad, eine Nachkommastelle; Längen in mm mit zwei
 /// Nachkommastellen, in einer anderen Anzeigeeinheit umgerechnet wie die Formelfelder).
 fn editor_text(value: f64, unit: ParamUnit) -> String {
-    if unit == ParamUnit::Angle {
+    if unit == ParamUnit::Number {
+        // Die Anzahl eines Musters: ganzzahlig, ohne Einheit.
+        format_number(value, 0)
+    } else if unit == ParamUnit::Angle {
         format_number(value.to_degrees(), 1)
     } else if current_unit() == DisplayUnit::Millimeter {
         format_number(value, 2)
@@ -1108,16 +1352,29 @@ fn value_editor(
     scope: &ParamScope,
 ) -> Option<String> {
     let editor = panel.editor.as_mut()?;
-    let title = match editor.target {
+    let title = match &editor.target {
         EditTarget::New(a) => a.label(),
-        EditTarget::Existing(id) => match sf.sketch.constraint(id) {
+        EditTarget::Existing(id) => match sf.sketch.constraint(*id) {
             Some(c) => crate::sketch_view::kind_label(&c.kind),
             None => {
                 panel.editor = None;
                 return None;
             }
         },
+        EditTarget::Planned(k) => crate::sketch_view::kind_label(k),
     };
+    let planned = matches!(editor.target, EditTarget::Planned(_));
+    let toggles = match &editor.target {
+        EditTarget::Planned(k) => crate::sketch_dimension::toggles(&sf.sketch, k),
+        _ => false,
+    };
+    // Gesetztes Maß: Tab schaltet Ø/R um und lässt dem Feld die Tastatur (egui hat aus Tab schon
+    // eine Fokusrichtung gemacht).
+    let mut toggle =
+        toggles && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab));
+    if toggle {
+        ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+    }
     let (mut ok, mut cancel) = (false, false);
     let mut live = None;
     // Untereinander, damit es in die Feldbreite 250 passt: Name, Feld mit Einheit bzw. Wert,
@@ -1160,6 +1417,11 @@ fn value_editor(
     if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
         ok = true;
     }
+    // Esc im Feld eines gesetzten Maßes: nichts anlegen; die Ansicht sieht die Taste nicht mehr.
+    if planned && response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+        cancel = true;
+    }
     ui.horizontal(|ui| {
         if ui
             .add_enabled(live.is_none(), egui::Button::new(tr!("common-ok")).small())
@@ -1171,7 +1433,33 @@ fn value_editor(
         if ui.small_button(tr!("common-cancel")).clicked() {
             cancel = true;
         }
+        if toggles
+            && ui
+                .small_button(toggle_label())
+                .on_hover_text(tr!("sketch-toggle-radius-diameter-hint"))
+                .clicked()
+        {
+            toggle = true;
+        }
     });
+    if toggle && se.toggle_dimension_preview(&sf.sketch) {
+        // Das Feld folgt dem umgeschalteten Maß mit seinem Wert; eine getippte Zahl bleibt
+        // (wie Fusion die Eingabe behält, **Annahme**).
+        let typed = editor.text.trim() != editor.shown.trim();
+        if let Some(plan) = &se.dim.plan {
+            let text = std::mem::take(&mut editor.text);
+            *editor = planned_editor(se, &plan.kind);
+            if typed {
+                editor.text = text;
+            }
+        }
+        se.dim.text = typed.then(|| editor.text.clone());
+        return live;
+    }
+    // Der getippte Text gilt auch für einen Klick neben das Feld.
+    if planned {
+        se.dim.text = (editor.text.trim() != editor.shown.trim()).then(|| editor.text.clone());
+    }
     // Frisch geöffnet: Name, Zahl und Knöpfe ins Bild rollen (in kleinen Fenstern liegt das
     // Zahlenfeld sonst unter dem sichtbaren Teil des Skizzenfelds).
     if editor.reveal {
@@ -1182,6 +1470,9 @@ fn value_editor(
         }
     }
     if cancel {
+        if planned {
+            se.cancel_planned();
+        }
         panel.editor = None;
         panel.error = None;
         return None;
@@ -1195,7 +1486,7 @@ fn value_editor(
     let kept = editor.unit == ParamUnit::Length
         && current_unit() != DisplayUnit::Millimeter
         && editor.text.trim() == editor.shown.trim();
-    let done = match (editor.target, kept) {
+    let done = match (editor.target.clone(), kept) {
         (EditTarget::New(action), true) => {
             se.apply_dimension_value(sf, action, editor.value).is_ok()
         }
@@ -1206,6 +1497,10 @@ fn value_editor(
         (EditTarget::Existing(id), false) => {
             se.set_dimension_input(sf, id, &editor.text, scope).is_ok()
         }
+        (EditTarget::Planned(kind), true) => se.apply_planned_value(sf, kind, editor.value).is_ok(),
+        (EditTarget::Planned(kind), false) => {
+            se.apply_planned(sf, kind, &editor.text, scope).is_ok()
+        }
     };
     if done {
         panel.editor = None;
@@ -1213,7 +1508,7 @@ fn value_editor(
     live
 }
 
-/// Eingaben für „Spiegeln …“ und „Muster …“.
+/// Eingaben für „Spiegeln …“ und „Lineares Muster …“.
 fn sections(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch, panel: &mut PanelState) {
     match panel.section {
         Some(Section::Mirror) => {
@@ -1305,6 +1600,7 @@ fn constraint_list(
         .map(|r| r.conflicting.iter().chain(&r.redundant).copied().collect())
         .unwrap_or_default();
     let shift = ui.input(|i| i.modifiers.shift);
+    let centers = round_centers(sk);
     theme::scroll_area(
         ui,
         egui::ScrollArea::vertical()
@@ -1314,7 +1610,8 @@ fn constraint_list(
             for (id, kind, driven) in rows {
                 let item = Item::Constraint(id);
                 let selected = se.selection.contains(&item);
-                let mut text = RichText::new(constraint_name(&sf.sketch, &kind, driven));
+                let mut text =
+                    RichText::new(constraint_name_among(&sf.sketch, &centers, &kind, driven));
                 if bad.contains(&id) {
                     text = text.color(theme::palette(ui.visuals().dark_mode).error);
                 }
@@ -1325,14 +1622,20 @@ fn constraint_list(
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let dark = ui.visuals().dark_mode;
                         let delete_row = tr!("sketch-delete-row");
-                        delete = icons::source_icon_button(
-                            ui,
-                            IconSource::Font(Icon::Delete),
-                            &delete_row,
-                            dark,
-                        )
-                        .on_hover_text(&delete_row)
-                        .clicked();
+                        // In der Anordnung gehört die Auswahl der Vorlage: gesperrt wie der Knopf
+                        // „Löschen“ im Skizzenfeld.
+                        delete = ui
+                            .add_enabled(!se.runs_pattern(), |ui: &mut egui::Ui| {
+                                icons::source_icon_button(
+                                    ui,
+                                    IconSource::Font(Icon::Delete),
+                                    &delete_row,
+                                    dark,
+                                )
+                            })
+                            .on_hover_text(&delete_row)
+                            .on_disabled_hover_text(tr!("sketch-delete-in-pattern"))
+                            .clicked();
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                             name = Some(ui.selectable_label(selected, text));
                         });
@@ -1340,6 +1643,8 @@ fn constraint_list(
                 });
                 let r = name.expect("Zeile gezeichnet");
                 if r.clicked() {
+                    // Die Liste wählt ohne Klicklage auf einer Kurve.
+                    se.drop_curve_picks();
                     if shift {
                         if selected {
                             se.selection.retain(|i| *i != item);
@@ -1356,6 +1661,7 @@ fn constraint_list(
                         && formula_row(ui, &formula_text(f, constraint_unit(&kind), scope))
                             .clicked()
                     {
+                        se.drop_curve_picks();
                         se.selection = vec![item];
                         open = true;
                     }
@@ -1364,17 +1670,36 @@ fn constraint_list(
                         panel.editor = Some(editor);
                     }
                     let mut d = driven;
-                    if ui
-                        .checkbox(&mut d, tr!("sketch-driven"))
-                        .on_hover_text(tr!("sketch-driven-hint"))
-                        .changed()
-                        && se.set_driven(&mut sf.sketch, id, d).is_ok()
-                    {
+                    let mut flip = false;
+                    let toggles = crate::sketch_dimension::toggles(&sf.sketch, &kind);
+                    // Ein Musterwert lässt sich nicht anzeigend schalten (Entscheidung 3).
+                    let pattern_value = matches!(kind, ConstraintKind::PatternValue(..));
+                    let changed = ui
+                        .horizontal(|ui| {
+                            if pattern_value {
+                                return false;
+                            }
+                            let r = ui
+                                .checkbox(&mut d, tr!("sketch-driven"))
+                                .on_hover_text(tr!("sketch-driven-hint"));
+                            // Radius und Durchmesser umschalten (auch zur Mittellinie).
+                            flip = toggles
+                                && ui
+                                    .small_button(toggle_label())
+                                    .on_hover_text(tr!("sketch-toggle-radius-diameter-hint"))
+                                    .clicked();
+                            r.changed()
+                        })
+                        .inner;
+                    if changed && se.set_driven(&mut sf.sketch, id, d).is_ok() {
                         // Ein anzeigendes Maß bestimmt nichts und hat keine Formel.
                         sf.prune_formulas();
                     }
+                    if flip {
+                        let _ = se.toggle_radius_diameter(sf, id);
+                    }
                 }
-                if delete {
+                if delete && !se.runs_pattern() {
                     se.selection = vec![item];
                     se.delete_selection(&mut sf.sketch);
                 }
@@ -1400,6 +1725,11 @@ fn formula_row(ui: &mut egui::Ui, formula: &str) -> egui::Response {
         fx
     })
     .inner
+}
+
+/// Beschriftung des Knopfs, der ein Maß zwischen Radius und Durchmesser umschaltet („Ø/R“).
+pub fn toggle_label() -> String {
+    tr!("sketch-toggle-radius-diameter")
 }
 
 /// Beschriftung des Schalters [`auto_axis`] in zwei Zeilen (nach dem ersten Wort umbrochen).

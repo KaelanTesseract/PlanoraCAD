@@ -240,6 +240,8 @@ fn press_in_side(c: &egui::Context, app: &mut PlanoraApp, label: &str) -> Shot {
 #[test]
 fn all_nine_tools_are_buttons_with_tooltips_and_widget_info() {
     use egui::accesskit::{Role, Toggled};
+    // Skizzen 5: Alle 20 Knöpfe ohne Rollen erst bei 1920×1080 (Standard der Tests).
+    const SIZE: Vec2 = vec2(1920.0, 1080.0);
     let c = context();
     c.enable_accesskit();
     let mut app = sketching(0);
@@ -436,7 +438,7 @@ fn constraint_actions_and_edit_buttons_work_like_before() {
 
     // Muster: drei Kopien der Linie.
     let curves = |app: &mut PlanoraApp| state(app).session_sketch().unwrap().curves().count();
-    press_in_side(&c, &mut app, "Muster …");
+    press_in_side(&c, &mut app, "Lineares Muster …");
     press_in_side(&c, &mut app, "Erzeugen");
     assert_eq!(curves(&mut app), 4, "Linie und drei Kopien");
 

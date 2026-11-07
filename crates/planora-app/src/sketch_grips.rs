@@ -188,7 +188,7 @@ pub fn unwrapped_angle(previous: f64, raw: f64) -> f64 {
 /// Zahl auf höchstens 12 gültige Stellen als Text mit Punkt; `None`, wenn sie nicht positiv und
 /// endlich ist, mehr als 1e-9 (relativ) abweicht oder der Text lang würde (winzige und riesige
 /// Zahlen): Dann steht die Formel nicht in kurzer Form da.
-fn short_factor(p: f64) -> Option<String> {
+pub(crate) fn short_factor(p: f64) -> Option<String> {
     if !(p.is_finite() && p > 0.0) {
         return None;
     }
@@ -204,14 +204,14 @@ fn short_factor(p: f64) -> Option<String> {
 const FACTOR_TEXT_MAX: usize = 30;
 
 /// Ein Name oder eine Zahl ohne Operator, Leerraum oder Klammer: braucht keine Klammern.
-fn is_plain(s: &str) -> bool {
+pub(crate) fn is_plain(s: &str) -> bool {
     !s.is_empty()
         && s.chars()
             .all(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | ','))
 }
 
 /// Steht der ganze Text in einem Klammerpaar, das sich erst am Ende schließt?
-fn is_wrapped(s: &str) -> bool {
+pub(crate) fn is_wrapped(s: &str) -> bool {
     if !(s.starts_with('(') && s.ends_with(')')) {
         return false;
     }
@@ -233,7 +233,7 @@ fn is_wrapped(s: &str) -> bool {
 
 /// Trennt `kopf * zahl` ab, wenn der Kopf ein Name, eine Zahl oder ein Klammerausdruck ist und
 /// `zahl` eine reine Zahl: nur dann darf der Faktor mit einem neuen zusammengefasst werden.
-fn split_factor(text: &str) -> Option<(&str, f64)> {
+pub(crate) fn split_factor(text: &str) -> Option<(&str, f64)> {
     let i = text.rfind(" * ")?;
     let (head, tail) = (&text[..i], &text[i + 3..]);
     if !(is_plain(head) || is_wrapped(head))
@@ -266,11 +266,12 @@ pub(crate) fn scaled_formula(text: &str, k: f64) -> Option<String> {
     })
 }
 
-/// Wert eines Längenmaßes.
+/// Wert eines Längenmaßes (auch des Abstands eines Musters, Skizzen 5).
 fn length_of(kind: &planora_sketch::constraint::ConstraintKind) -> Option<f64> {
     use planora_sketch::constraint::ConstraintKind as K;
     match *kind {
         K::EllipseMajor(_, v) | K::EllipseMinor(_, v) => Some(v),
+        K::PatternValue(_, slot, v) if slot.is_spacing() => Some(v),
         ref k => k.length_value(),
     }
 }
@@ -296,6 +297,7 @@ fn block_message(block: TransformBlock) -> Msg {
         }
         TransformBlock::NothingToDo => crate::msg!("sketch-move-nothing"),
         TransformBlock::Degenerate => crate::msg!("sketch-move-degenerate"),
+        TransformBlock::PatternInstance => crate::msg!("sketch-move-pattern-instance"),
     }
 }
 
@@ -321,8 +323,9 @@ impl SketchSession {
 
     /// Wird gerade gewählt? Dann gilt der Rahmen wie im Auswahlwerkzeug.
     pub fn transform_picking(&self) -> bool {
-        matches!(self.tool, Tool::MoveCopy | Tool::Scale)
-            && self.transform.stage == TransformStage::Picking
+        (matches!(self.tool, Tool::MoveCopy | Tool::Scale)
+            && self.transform.stage == TransformStage::Picking)
+            || self.pattern_picking()
     }
 
     /// Sind Griffe zu sehen? Sobald eine Menge gesetzt ist, auch beim Wählen; beim Setzen des
@@ -339,7 +342,7 @@ impl SketchSession {
 
     /// Läuft ein Zug mit der Maus, der mit dem Abschluss und dem Löschen nichts zu tun hat?
     pub fn in_gesture(&self) -> bool {
-        self.grip_drag.is_some() || self.box_select.is_some()
+        self.grip_drag.is_some() || self.box_select.is_some() || self.pattern.drag.is_some()
     }
 
     /// Die Kurven und Punkte der Auswahl als Menge.
@@ -533,6 +536,7 @@ impl SketchSession {
                     Snap::Curve(c) => Item::Curve(c),
                     _ => return,
                 };
+                self.drop_curve_picks();
                 match self.selection.iter().position(|&s| s == item) {
                     Some(k) => {
                         self.selection.remove(k);
@@ -648,6 +652,7 @@ impl SketchSession {
         }
         let curves = self.transform.set.curves.iter();
         let points = self.transform.set.points.iter();
+        self.curve_picks = Default::default();
         self.selection = curves
             .filter_map(|c| map.curves.get(c).map(|&c| Item::Curve(c)))
             .chain(points.filter_map(|p| map.points.get(p).map(|&p| Item::Point(p))))

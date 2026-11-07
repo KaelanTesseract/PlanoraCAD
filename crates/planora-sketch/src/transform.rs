@@ -56,7 +56,7 @@ impl Similarity {
     }
 
     /// Der Anteil ohne Verschiebung, für Vektoren wie die große Halbachse.
-    fn linear(&self, v: DVec2) -> DVec2 {
+    pub(crate) fn linear(&self, v: DVec2) -> DVec2 {
         let (sin, cos) = self.angle.sin_cos();
         DVec2::new(v.x * cos - v.y * sin, v.x * sin + v.y * cos) * self.factor
     }
@@ -89,6 +89,9 @@ pub enum TransformBlock {
     /// Ungültige Zahlen (Maßstab nicht über null, nicht endlich), oder eine Kurve oder ein Maß
     /// fiele unter die Toleranz oder Koordinaten über die Grenze.
     Degenerate,
+    /// In der Menge ist ein Exemplar eines Musters: Seine Lage folgt aus Vorlage und Musterwerten
+    /// (Meldung `sketch-move-pattern-instance`). Kopieren geht.
+    PatternInstance,
 }
 
 /// Was eine Bewegung an den Abhängigkeiten geändert hat.
@@ -144,6 +147,13 @@ fn map_ids(
         EllipseMinor(x, v) => EllipseMinor(c(*x), *v),
         EllipseAngle(x, v) => EllipseAngle(c(*x), *v),
         EllipticArcEnds(x) => EllipticArcEnds(c(*x)),
+        Collinear(a, b) => Collinear(c(*a), c(*b)),
+        Smooth(a, pa, b, pb) => Smooth(c(*a), p(*pa), c(*b), p(*pb)),
+        DistanceX(a, b, v) => DistanceX(p(*a), p(*b), *v),
+        DistanceY(a, b, v) => DistanceY(p(*a), p(*b), *v),
+        CenterlineDiameter(a, x, v) => CenterlineDiameter(p(*a), c(*x), *v),
+        SlotOverall(a, b, x, v) => SlotOverall(p(*a), p(*b), c(*x), *v),
+        PatternValue(m, slot, v) => PatternValue(*m, *slot, *v),
     }
 }
 
@@ -157,7 +167,11 @@ fn transformed_value(kind: &ConstraintKind, s: &Similarity) -> (ConstraintKind, 
         | Radius(_, v)
         | Diameter(_, v)
         | EllipseMajor(_, v)
-        | EllipseMinor(_, v) => (
+        | EllipseMinor(_, v)
+        | DistanceX(_, _, v)
+        | DistanceY(_, _, v)
+        | CenterlineDiameter(_, _, v)
+        | SlotOverall(_, _, _, v) => (
             kind.with_value(v * s.factor)
                 .unwrap_or_else(|| kind.clone()),
             true,
@@ -180,7 +194,11 @@ fn length_in_range(kind: &ConstraintKind, tol: f64) -> bool {
         | Radius(_, v)
         | Diameter(_, v)
         | EllipseMajor(_, v)
-        | EllipseMinor(_, v) => v > tol && v <= MAX_COORD,
+        | EllipseMinor(_, v)
+        | DistanceX(_, _, v)
+        | DistanceY(_, _, v)
+        | CenterlineDiameter(_, _, v)
+        | SlotOverall(_, _, _, v) => v > tol && v <= MAX_COORD,
         _ => true,
     }
 }
@@ -193,10 +211,15 @@ fn is_position_binding(kind: &ConstraintKind) -> bool {
     )
 }
 
+/// Bindet an die Achsen der Skizze: waagerecht und senkrecht, auch als Abstand (Skizzen 5).
+/// Beim Drehen entfällt sie.
 fn is_axis_binding(kind: &ConstraintKind) -> bool {
     matches!(
         kind,
-        ConstraintKind::Horizontal(_) | ConstraintKind::Vertical(_)
+        ConstraintKind::Horizontal(_)
+            | ConstraintKind::Vertical(_)
+            | ConstraintKind::DistanceX(..)
+            | ConstraintKind::DistanceY(..)
     )
 }
 
@@ -216,7 +239,7 @@ fn size_vars(kind: &CurveKind) -> Vec<usize> {
 }
 
 /// Die Art mit abgebildeten Punkten und Variablen.
-fn map_curve(
+pub(crate) fn map_curve(
     kind: &CurveKind,
     p: impl Fn(PointId) -> PointId,
     v: impl Fn(usize) -> usize,
@@ -285,14 +308,20 @@ impl Sketch {
         if set.out.points.is_empty() {
             return set.out;
         }
+        // Exemplare kommen nie als Hilfsgeometrie dazu; gewählt sperren sie die Bewegung.
+        let (instance_curves, instance_points) = self.instance_parts();
         loop {
             let before = set.out.points.len() + set.out.curves.len();
             let (helper_curves, helper_points) = self.helpers_of(&set);
             for c in helper_curves {
-                set.add_curve(self, c);
+                if !instance_curves.contains(&c) {
+                    set.add_curve(self, c);
+                }
             }
             for p in helper_points {
-                set.add_point(p);
+                if !instance_points.contains(&p) {
+                    set.add_point(p);
+                }
             }
             for c in self.rollers_of(&set) {
                 set.add_curve(self, c);
@@ -584,13 +613,14 @@ impl Sketch {
     }
 
     /// Alle Kurven und freien Punkte ohne feste Geometrie, also ohne Achshilfslinie, Kantenkopien
-    /// und festen Ursprung.
+    /// und festen Ursprung, und ohne Exemplare von Mustern (sie folgen ihrer Vorlage).
     pub fn whole_sketch_set(&self) -> TransformSet {
         let held = self.held_points();
+        let (instances, _) = self.instance_parts();
         let curves: Vec<CurveId> = self
             .curves()
             .map(|(c, _)| c)
-            .filter(|&c| !self.is_held_curve(c, &held))
+            .filter(|&c| !self.is_held_curve(c, &held) && !instances.contains(&c))
             .collect();
         let used: HashSet<PointId> = self.curves().flat_map(|(_, d)| d.kind.points()).collect();
         let points: Vec<PointId> = self
@@ -720,7 +750,10 @@ impl Sketch {
                         minor,
                         start,
                         end,
-                    } => self.add_elliptic_arc_vars(center, ax, ay, minor, start, end),
+                    } => {
+                        self.add_elliptic_arc_vars(center, ax, ay, minor, start, end)
+                            .0
+                    }
                     other => self.push_curve(other),
                 }
             }
@@ -763,8 +796,11 @@ impl Sketch {
         let inner: Vec<(ConstraintId, ConstraintData, bool)> = self
             .constraints()
             .filter(|(_, d)| {
-                !matches!(d.kind, ConstraintKind::Fixed(..))
-                    && d.kind.points().iter().all(|p| points.contains_key(p))
+                // Musterwerte gehören zum Muster, nicht zur Geometrie: Kopien sind lose.
+                !matches!(
+                    d.kind,
+                    ConstraintKind::Fixed(..) | ConstraintKind::PatternValue(..)
+                ) && d.kind.points().iter().all(|p| points.contains_key(p))
                     && d.kind.curves().iter().all(|c| curves.contains_key(c))
             })
             .map(|(id, d)| (id, d.clone(), self.satisfied(id, SETTLE_FACTOR)))
@@ -836,6 +872,12 @@ impl Sketch {
             return Err(TransformBlock::Degenerate);
         }
         let set = self.transform_set(&set.curves, &set.points);
+        let (instance_curves, instance_points) = self.instance_parts();
+        if set.curves.iter().any(|c| instance_curves.contains(c))
+            || set.points.iter().any(|p| instance_points.contains(p))
+        {
+            return Err(TransformBlock::PatternInstance);
+        }
         let s = &self.settled(&set, s);
         if set.points.is_empty() || s.is_identity(self.tol.linear) {
             return Err(TransformBlock::NothingToDo);
@@ -897,7 +939,18 @@ impl Sketch {
         let mut out = self.clone();
         let split = out.split_from_outsiders(&scope)?;
         out.write_positions(&set.curves, &targets, s)?;
+        // Muster: Abstände mit dem Maßstab, wenn die ganze Vorlage samt Richtungslinien mitgeht;
+        // dann die Exemplare an die neue Lage, damit Bindungen an ihnen richtig geprüft werden.
+        let mut scaled_spacings = Vec::new();
+        if stretching {
+            let held_line = |l: CurveId| self.is_held_curve(l, &held);
+            scaled_spacings = out
+                .scale_pattern_spacings(&scope.curves, held_line, s.factor)
+                .ok_or(TransformBlock::Degenerate)?;
+        }
+        out.refresh_patterns();
         let mut report = out.settle_after_transform(&scope, &held, &held_before, &severed, s)?;
+        report.scaled.extend(scaled_spacings);
         report.split = split;
         if set.curves.iter().any(|&c| out.collapsed(c)) {
             return Err(TransformBlock::Degenerate);

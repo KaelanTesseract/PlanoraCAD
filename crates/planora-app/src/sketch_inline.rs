@@ -1,6 +1,6 @@
 //! Maßfelder am Zeiger beim Zeichnen (wie Fusion): Die Felder der aktuellen Stufe folgen dem Zeiger,
 //! nehmen keine Mausereignisse an, und das aktive hat die Tastatur, solange kein anderes Eingabefeld
-//! sie hat. Bis zum ersten Zeichen zeigen sie den aktuellen Wert gerundet; Getipptes sperrt
+//! sie hat. Die Felder der Anordnung stehen fest; ein Klick in eines gibt ihm die Tastatur. Bis zum ersten Zeichen zeigen sie den aktuellen Wert gerundet; Getipptes sperrt
 //! ([`SketchSession::type_field`]), Tab wechselt das Feld, Eingabe setzt den Punkt, Esc bricht ab.
 
 use crate::formula_field::FormulaField;
@@ -9,7 +9,7 @@ use crate::sketch_state::SketchSession;
 use crate::sketch_view::{format_number, pointer_radius};
 use crate::state::AppState;
 use crate::{theme, viewport};
-use egui::{Event, ImeEvent, Key, Modifiers, Order, Pos2, Rect, pos2};
+use egui::{Event, ImeEvent, Key, Modifiers, Order, Pos2, Rect, Vec2, pos2};
 use planora_feature::SketchFeature;
 
 /// Abstand des ersten Felds vom Zeiger, je Richtung.
@@ -55,15 +55,65 @@ fn field_pos(rect: Rect, anchor: Pos2, width: f32, row: usize, rows: usize) -> P
     pos2(x, top + row as f32 * ROW_STEP)
 }
 
+/// Linke obere Ecke des Felds `row` von `rows` am festen Platz der Anordnung: vom Anker `anchor`
+/// aus in die Bildschirmrichtung `away` (je Achse nur das Vorzeichen), in `rect` gehalten. Nach
+/// links stehen die Felder bündig mit der geschätzten Breite, damit eine längere Zeile (etwa mit
+/// Fehler) die anderen nicht verschiebt. Die Lage hängt nur vom Anker ab, nie von der Vorschau.
+pub fn pattern_field_pos(
+    rect: Rect,
+    anchor: Pos2,
+    away: Vec2,
+    width: f32,
+    row: usize,
+    rows: usize,
+) -> Pos2 {
+    let x = if away.x < 0.0 {
+        anchor.x - POINTER_GAP - ROW_WIDTH_GUESS
+    } else {
+        anchor.x + POINTER_GAP
+    };
+    let block = rows as f32 * ROW_STEP;
+    let top = if away.y < 0.0 {
+        anchor.y - POINTER_GAP - block
+    } else {
+        anchor.y + POINTER_GAP
+    };
+    let x = x.min(rect.right() - width).max(rect.left());
+    let top = top.min(rect.bottom() - block).max(rect.top());
+    pos2(x, top + row as f32 * ROW_STEP)
+}
+
+/// Steht `p` auf einem der Felder, die gerade zu sehen sind (Lage aus dem letzten Bild)? Ein Klick
+/// dort gehört dem Feld, nicht der Zeichnung: Er wählt etwa kein Exemplar einer Anordnung ab.
+pub fn over_field(ctx: &egui::Context, se: &SketchSession, p: Pos2) -> bool {
+    se.input.fields.iter().any(|f| {
+        ctx.memory(|m| m.area_rect(area_id(f.kind)))
+            .is_some_and(|r| r.contains(p))
+    })
+}
+
 /// Der aktuelle Wert gerundet, wie ihn das Feld vor dem ersten Zeichen zeigt: Länge wie
 /// [`planora_i18n::fmt_len`] ohne Einheit, Winkel mit einer Stelle, die Seitenzahl ganz.
 pub fn suggestion(se: &SketchSession, sf: &SketchFeature, kind: FieldKind) -> String {
     match se.field_value(&sf.sketch, kind) {
-        Some(v) if kind == FieldKind::Sides => format!("{v:.0}"),
         Some(v)
             if matches!(
                 kind,
-                FieldKind::Angle | FieldKind::Sweep | FieldKind::MoveAngle
+                FieldKind::Sides
+                    | FieldKind::PatternCount1
+                    | FieldKind::PatternCount2
+                    | FieldKind::PatternCount
+            ) =>
+        {
+            format!("{v:.0}")
+        }
+        Some(v)
+            if matches!(
+                kind,
+                FieldKind::Angle
+                    | FieldKind::Sweep
+                    | FieldKind::MoveAngle
+                    | FieldKind::PatternAngle
             ) =>
         {
             format_number(v.to_degrees(), 1)
@@ -112,6 +162,9 @@ fn starts_typing(event: &Event) -> bool {
 pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option<Pos2>) -> bool {
     let ctx = ui.ctx().clone();
     let radius = pointer.map_or(0.0, |p| pointer_radius(state, rect, p));
+    // Die Anordnung hat einen festen Platz für ihre Felder (wie Fusions Dialog), alle anderen
+    // Befehle folgen dem Zeiger.
+    let fixed = crate::sketch_view::pattern_field_place(state, rect);
     let Some((se, sk)) = state.session_sketch_mut() else {
         return false;
     };
@@ -186,9 +239,14 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option
             .memory(|m| m.area_rect(area_id(kind)))
             .map_or(ROW_WIDTH_GUESS, |r| r.width());
         let response = egui::Area::new(area_id(kind))
-            .fixed_pos(field_pos(rect, anchor, width, i, rows))
+            .fixed_pos(match fixed {
+                Some((at, away)) => pattern_field_pos(rect, at, away, width, i, rows),
+                None => field_pos(rect, anchor, width, i, rows),
+            })
             .order(Order::Foreground)
-            .interactable(false)
+            // Am Zeiger nehmen die Felder keine Maus an (sie liefen ihr sonst in den Weg); am
+            // festen Platz der Anordnung setzt ein Klick in ein Feld dort den Fokus (wie Fusion).
+            .interactable(fixed.is_some())
             .show(&ctx, |ui| {
                 let p = theme::palette(ui.visuals().dark_mode);
                 egui::Frame::new()
@@ -220,6 +278,11 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option
             .inner;
         viewport::set_draw_field(&ctx, response.id);
         ctx.data_mut(|d| d.insert_temp(widget_id_key(kind), response.id));
+        // Ein Klick hat diesem Feld die Tastatur gegeben: Es ist jetzt das aktive (Tab geht von
+        // hier weiter, und unten holt sich das alte den Fokus nicht zurück).
+        if response.has_focus() {
+            se.input.active = i;
+        }
         if response.changed() || wipe {
             se.type_field(i, &text, &scope);
             typed = true;
@@ -235,6 +298,8 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option
     if enter && !flyout && se.runs_transform() {
         // Fehler stehen in der Meldung der Sitzung und im Feld.
         let _ = se.confirm_transform(sf);
+    } else if enter && !flyout && se.runs_pattern() {
+        let _ = se.confirm_pattern(sf);
     } else if enter && !flyout {
         // Fehler stehen in der Meldung der Sitzung und im Feld.
         let _ = se.commit_at_cursor(sf, radius, &scope);

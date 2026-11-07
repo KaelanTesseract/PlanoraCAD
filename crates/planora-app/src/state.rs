@@ -681,6 +681,7 @@ impl AppState {
     /// fortsetzen, Körper ableiten, Ansicht einpassen.
     pub fn from_snapshot(snapshot: planora_feature::Snapshot) -> Result<AppState, String> {
         let mut s = AppState::new();
+        let dissolved = snapshot.dissolved_patterns;
         s.document =
             Document::from_snapshot(snapshot, s.chord_tolerance).map_err(|e| e.to_string())?;
         s.rebuild_name_counters();
@@ -688,6 +689,10 @@ impl AppState {
         s.frame_all();
         // Die frische Kamera kennt das freie Rechteck noch nicht.
         s.fit_pending = true;
+        // Skizzen 5: Muster in einer Schleife hat das Laden aufgelöst; die Meldung sagt es.
+        if dissolved > 0 {
+            s.message = Some(tr!("state-patterns-dissolved-on-load", n = dissolved));
+        }
         Ok(s)
     }
 
@@ -2071,6 +2076,9 @@ impl AppState {
         else {
             return Ok(());
         };
+        // Ein Befehl ohne fertige Form hinterlässt nichts, auch beim Beenden der Skizze.
+        se.drop_open_points(&mut draft.sketch);
+        se.clear_pending();
         let id = se.sketch;
         let Some(FeatureKind::Sketch(def)) = self.document.feature(id).map(|f| &f.kind) else {
             return Ok(());
@@ -3092,6 +3100,7 @@ impl AppState {
             .map(|f| f.id)
             .collect();
         let count = self.document.edit_count();
+        let constraints_before = self.sketch_constraint_counts();
         let out = match act(&mut self.document) {
             Ok(out) => out,
             Err(e) => return self.fail(e.to_string()),
@@ -3100,6 +3109,19 @@ impl AppState {
             return Ok(out);
         }
         self.refresh();
+        // Skizzen 5: Senkt eine Formel die Anzahl eines Musters, entfallen die Abhängigkeiten an
+        // den wegfallenden Exemplaren; die Meldung nennt ihre Zahl wie im Werkzeug.
+        let after = self.sketch_constraint_counts();
+        let dropped: usize = constraints_before
+            .iter()
+            .filter_map(|(id, n)| {
+                let now = after.iter().find(|(f, _)| f == id)?.1;
+                Some(n.saturating_sub(now))
+            })
+            .sum();
+        if dropped > 0 {
+            self.message = Some(tr!("sketch-pattern-dropped", n = dropped));
+        }
         let newly_failed = self
             .document
             .features()
@@ -3111,8 +3133,26 @@ impl AppState {
                 _ => None,
             });
         if let Some(m) = newly_failed {
-            self.message = Some(m);
+            self.message = Some(match self.message.take() {
+                Some(note) if dropped > 0 => format!("{m} {note}"),
+                _ => m,
+            });
         }
         Ok(out)
+    }
+
+    /// Zahl der Abhängigkeiten (ohne interne) je Skizzen-Feature, für die Meldung nach einer
+    /// Parameteränderung. Aus der Definition, nicht aus dem Ergebnis: Eine Skizze mit Fehler hat
+    /// kein Ergebnis, ihre Abhängigkeiten zählen trotzdem (die Anzahl eines Musters schreibt der
+    /// Formel-Durchgang in die Definition).
+    fn sketch_constraint_counts(&self) -> Vec<(FeatureId, usize)> {
+        self.document
+            .features()
+            .iter()
+            .filter_map(|f| match &f.kind {
+                FeatureKind::Sketch(sf) => Some((f.id, sf.sketch.constraints().count())),
+                _ => None,
+            })
+            .collect()
     }
 }

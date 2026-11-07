@@ -5,6 +5,7 @@ use crate::curves::{Sampled, ellipse_eval, spline_eval, spline_second_derivative
 use crate::dual::Dual;
 use crate::error::SketchError;
 use crate::model::{CurveId, CurveKind, PointId, Sketch};
+use crate::pattern::{PATTERN_MAX_INSTANCES, PatternId, PatternProblem, PatternSlot};
 use planora_i18n::tr;
 use planora_kernel::Id;
 use planora_math::DVec2;
@@ -78,6 +79,25 @@ pub enum ConstraintKind {
     EllipseAngle(CurveId, f64),
     /// Intern: Start und Ende eines Ellipsenbogens liegen auf seiner Ellipse.
     EllipticArcEnds(CurveId),
+    /// Zwei Linien auf derselben Geraden, auch mit Abstand zwischen ihnen (ab Format 15).
+    Collinear(CurveId, CurveId),
+    /// Glatter Übergang: Kurve, ihr Ende, Kurve, ihr Ende. Mindestens eine Kurve ist ein Spline,
+    /// die andere Linie, Bogen oder Spline (ab Format 15).
+    Smooth(CurveId, PointId, CurveId, PointId),
+    /// Waagerechter Abstand `|b − a|ₓ` zweier Punkte; die Seite steht in `branch` (ab Format 15).
+    DistanceX(PointId, PointId, f64),
+    /// Senkrechter Abstand `|b − a|ᵧ` zweier Punkte; die Seite steht in `branch` (ab Format 15).
+    DistanceY(PointId, PointId, f64),
+    /// Doppelter Abstand eines Punktes von einer Mittellinie (Durchmesser eines Drehteils, ab
+    /// Format 15). Angelegt wird es nur an Mittellinien.
+    CenterlineDiameter(PointId, CurveId, f64),
+    /// Gesamtlänge eines geraden Langlochs: Abstand der Mitten plus Durchmesser der Kappe (ab
+    /// Format 15).
+    SlotOverall(PointId, PointId, CurveId, f64),
+    /// Wert eines Musters (Anzahl, Abstand oder Winkel): ein Maß ohne Zeile, das nur
+    /// [`Sketch::add_pattern`] anlegt (ab Format 15). Die Lage der Exemplare folgt daraus, siehe
+    /// `pattern.rs`.
+    PatternValue(PatternId, PatternSlot, f64),
 }
 
 impl ConstraintKind {
@@ -93,6 +113,25 @@ impl ConstraintKind {
                 | ConstraintKind::EllipseMajor(..)
                 | ConstraintKind::EllipseMinor(..)
                 | ConstraintKind::EllipseAngle(..)
+                | ConstraintKind::DistanceX(..)
+                | ConstraintKind::DistanceY(..)
+                | ConstraintKind::CenterlineDiameter(..)
+                | ConstraintKind::SlotOverall(..)
+                | ConstraintKind::PatternValue(..)
+        )
+    }
+
+    /// Braucht ein Eintrag dieser Art Dateiformat 15? Gilt für die Arten aus Skizzen 5.
+    pub fn needs_format_15(&self) -> bool {
+        matches!(
+            self,
+            ConstraintKind::Collinear(..)
+                | ConstraintKind::Smooth(..)
+                | ConstraintKind::DistanceX(..)
+                | ConstraintKind::DistanceY(..)
+                | ConstraintKind::CenterlineDiameter(..)
+                | ConstraintKind::SlotOverall(..)
+                | ConstraintKind::PatternValue(..)
         )
     }
 
@@ -109,9 +148,36 @@ impl ConstraintKind {
     pub fn length_value(&self) -> Option<f64> {
         use ConstraintKind::*;
         match *self {
-            Distance(_, _, v) | DistancePointLine(_, _, v) | Radius(_, v) | Diameter(_, v) => {
-                Some(v)
-            }
+            Distance(_, _, v)
+            | DistancePointLine(_, _, v)
+            | Radius(_, v)
+            | Diameter(_, v)
+            | DistanceX(_, _, v)
+            | DistanceY(_, _, v)
+            | CenterlineDiameter(_, _, v)
+            | SlotOverall(_, _, _, v) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// Der gespeicherte Zahlenwert eines Maßes (dieselben Arten wie
+    /// [`with_value`](Self::with_value)); `None` für Abhängigkeiten ohne Zahlenwert.
+    pub fn value(&self) -> Option<f64> {
+        use ConstraintKind::*;
+        match *self {
+            Distance(_, _, x)
+            | DistancePointLine(_, _, x)
+            | Angle(_, _, x)
+            | Radius(_, x)
+            | Diameter(_, x)
+            | EllipseMajor(_, x)
+            | EllipseMinor(_, x)
+            | EllipseAngle(_, x)
+            | DistanceX(_, _, x)
+            | DistanceY(_, _, x)
+            | CenterlineDiameter(_, _, x)
+            | SlotOverall(_, _, _, x)
+            | PatternValue(_, _, x) => Some(x),
             _ => None,
         }
     }
@@ -129,7 +195,12 @@ impl ConstraintKind {
             | Diameter(_, x)
             | EllipseMajor(_, x)
             | EllipseMinor(_, x)
-            | EllipseAngle(_, x) => *x = v,
+            | EllipseAngle(_, x)
+            | DistanceX(_, _, x)
+            | DistanceY(_, _, x)
+            | CenterlineDiameter(_, _, x)
+            | SlotOverall(_, _, _, x)
+            | PatternValue(_, _, x) => *x = v,
             _ => return None,
         }
         Some(kind)
@@ -139,13 +210,21 @@ impl ConstraintKind {
     pub fn points(&self) -> Vec<PointId> {
         use ConstraintKind::*;
         match self {
-            Coincident(a, b) | Distance(a, b, _) | Symmetric(a, b, _) => vec![*a, *b],
+            Coincident(a, b)
+            | Distance(a, b, _)
+            | Symmetric(a, b, _)
+            | DistanceX(a, b, _)
+            | DistanceY(a, b, _)
+            | SlotOverall(a, b, ..)
+            | Smooth(_, a, _, b) => vec![*a, *b],
             Horizontal(LineOrPoints::Points(a, b)) | Vertical(LineOrPoints::Points(a, b)) => {
                 vec![*a, *b]
             }
-            PointOnCurve(p, _) | Fixed(p, ..) | Midpoint(p, _) | DistancePointLine(p, ..) => {
-                vec![*p]
-            }
+            PointOnCurve(p, _)
+            | Fixed(p, ..)
+            | Midpoint(p, _)
+            | DistancePointLine(p, ..)
+            | CenterlineDiameter(p, ..) => vec![*p],
             _ => vec![],
         }
     }
@@ -166,10 +245,16 @@ impl ConstraintKind {
             | EllipseAngle(c, _)
             | Symmetric(_, _, c)
             | Horizontal(LineOrPoints::Line(c))
-            | Vertical(LineOrPoints::Line(c)) => vec![*c],
-            Parallel(a, b) | Perpendicular(a, b) | Tangent(a, b) | Equal(a, b) | Angle(a, b, _) => {
-                vec![*a, *b]
-            }
+            | Vertical(LineOrPoints::Line(c))
+            | CenterlineDiameter(_, c, _)
+            | SlotOverall(_, _, c, _) => vec![*c],
+            Parallel(a, b)
+            | Perpendicular(a, b)
+            | Tangent(a, b)
+            | Equal(a, b)
+            | Angle(a, b, _)
+            | Collinear(a, b)
+            | Smooth(a, _, b, _) => vec![*a, *b],
             _ => vec![],
         }
     }
@@ -452,6 +537,75 @@ fn signed_distance(ctx: &Ctx, p: &V2, line: CurveId) -> Dual {
     cross(&d, &sub2(p, &a)) / norm_len(&d)
 }
 
+/// Die Enden einer Linie, eines Bogens oder eines Splines (sonst `None`).
+pub(crate) fn curve_ends(kind: &CurveKind) -> Option<[PointId; 2]> {
+    match kind {
+        CurveKind::Line { a, b } => Some([*a, *b]),
+        CurveKind::Arc { start, end, .. } => Some([*start, *end]),
+        CurveKind::Spline { points } => Some([*points.first()?, *points.last()?]),
+        _ => None,
+    }
+}
+
+/// Der Punkt der Linie `l2`, der kein Punkt der Linie `l1` ist (für Kollinear); `None`, wenn
+/// beide Punkte geteilt sind oder eine der Kurven keine Linie ist.
+fn collinear_point(sk: &Sketch, l1: CurveId, l2: CurveId) -> Option<PointId> {
+    let (CurveKind::Line { a: a1, b: b1 }, CurveKind::Line { a: a2, b: b2 }) =
+        (&sk.curves[l1].kind, &sk.curves[l2].kind)
+    else {
+        return None;
+    };
+    [*a2, *b2].into_iter().find(|p| p != a1 && p != b1)
+}
+
+/// Teilen die (geprüften) Linien `l1` und `l2` einen Punkt?
+fn lines_share_point(sk: &Sketch, l1: CurveId, l2: CurveId) -> bool {
+    let (CurveKind::Line { a: a1, b: b1 }, CurveKind::Line { a: a2, b: b2 }) =
+        (&sk.curves[l1].kind, &sk.curves[l2].kind)
+    else {
+        return false;
+    };
+    [a2, b2].into_iter().any(|p| p == a1 || p == b1)
+}
+
+/// Richtung aus dem Ende `p` in die Linie, den Bogen oder den Spline `c` hinein; `None`, wenn `p`
+/// (nicht mehr) ein Ende von `c` ist, etwa nach Stutzen, Brechen oder Rundung.
+fn into_curve(ctx: &Ctx, c: CurveId, p: PointId) -> Option<V2> {
+    let [first, last] = curve_ends(&ctx.sk.curves[c].kind)?;
+    if p != first && p != last {
+        return None;
+    }
+    Some(match &ctx.sk.curves[c].kind {
+        CurveKind::Line { a, b } => {
+            let (pa, pb) = (ctx.pt(*a), ctx.pt(*b));
+            if p == *a {
+                sub2(&pb, &pa)
+            } else {
+                sub2(&pa, &pb)
+            }
+        }
+        // Bögen laufen gegen den Uhrzeigersinn vom Start zum Ende.
+        CurveKind::Arc { center, start, .. } => {
+            let r = sub2(&ctx.pt(p), &ctx.pt(*center));
+            if p == *start {
+                (-&r.1, r.0)
+            } else {
+                (r.1, -&r.0)
+            }
+        }
+        CurveKind::Spline { points } => {
+            if p == first {
+                param_curve(ctx, c, &Dual::constant(0.0)).1
+            } else {
+                let end = (points.len() - 1) as f64;
+                let (_, d) = param_curve(ctx, c, &Dual::constant(end));
+                (-&d.0, -&d.1)
+            }
+        }
+        _ => return None,
+    })
+}
+
 fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
     use ConstraintKind::*;
     let sk = ctx.sk;
@@ -617,7 +771,68 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
             let dir = (Dual::constant(v.cos()), Dual::constant(v.sin()));
             vec![cross(&a, &dir) / len]
         }
+        Collinear(l1, l2) => {
+            let ((_, d1), (_, d2)) = (line_dir(ctx, *l1), line_dir(ctx, *l2));
+            let den = norm_len(&d1) * norm_len(&d2);
+            let Some(q) = collinear_point(sk, *l1, *l2) else {
+                debug_assert!(false, "type was checked");
+                return Vec::new();
+            };
+            let angle = cross(&d1, &d2) / den;
+            // Mit gemeinsamem Ende ist der Abstand von `q` nur die Winkelzeile mal `|d2|`: Eine
+            // zweite Zeile wäre stets abhängig und meldete die Abhängigkeit als überzählig.
+            if lines_share_point(sk, *l1, *l2) {
+                vec![angle]
+            } else {
+                vec![angle, signed_distance(ctx, &ctx.pt(q), *l1)]
+            }
+        }
+        // Wie die Tangente am gemeinsamen Ende als Winkel: Die Spitze liegt bei ±π und ist keine
+        // Nullstelle.
+        // Ohne gültige Enden keine Zeile; `settle_constraints` und `satisfied` sorgen dafür, dass
+        // ein solches Glatt entfällt.
+        Smooth(c1, p1, c2, p2) => {
+            let (Some(u), Some(v)) = (into_curve(ctx, *c1, *p1), into_curve(ctx, *c2, *p2)) else {
+                return Vec::new();
+            };
+            let w = (-&v.0, -&v.1);
+            vec![cross(&u, &w).atan2(&dot(&u, &w))]
+        }
+        DistanceX(a, b, v) | DistanceY(a, b, v) => {
+            let d = sub2(&ctx.pt(*b), &ctx.pt(*a));
+            let along = if matches!(data.kind, DistanceX(..)) {
+                d.0
+            } else {
+                d.1
+            };
+            vec![f64::from(data.branch) * along - *v]
+        }
+        CenterlineDiameter(p, line, v) => {
+            let pp = ctx.pt(*p);
+            vec![2.0 * f64::from(data.branch) * signed_distance(ctx, &pp, *line) - *v]
+        }
+        SlotOverall(a, b, cap, v) => {
+            let gap = length(&sub2(&ctx.pt(*a), &ctx.pt(*b)));
+            vec![gap + 2.0 * circle_of(ctx, *cap).1 - *v]
+        }
+        // Keine Zeile: Die Exemplare hält der Löser selbst (`refresh_patterns`).
+        PatternValue(..) => Vec::new(),
     }
+}
+
+/// Radius und Durchmesser umgeschaltet: `Radius(c, v) ↔ Diameter(c, 2v)`,
+/// `DistancePointLine(p, L, v) ↔ CenterlineDiameter(p, L, 2v)`. Ob die Linie eine Mittellinie
+/// ist, prüft der Aufrufer. Die Faktoren sind exakt, zweimal umgeschaltet ist der Wert bitgleich.
+/// `None` für andere Arten.
+pub(crate) fn toggled_kind(kind: &ConstraintKind) -> Option<ConstraintKind> {
+    use ConstraintKind::*;
+    Some(match *kind {
+        Radius(c, v) => Diameter(c, 2.0 * v),
+        Diameter(c, v) => Radius(c, 0.5 * v),
+        DistancePointLine(p, l, v) => CenterlineDiameter(p, l, 2.0 * v),
+        CenterlineDiameter(p, l, v) => DistancePointLine(p, l, 0.5 * v),
+        _ => return None,
+    })
 }
 
 /// Endliche Länge oder Koordinate mit Betrag höchstens `MAX_COORD`.
@@ -651,7 +866,12 @@ impl Sketch {
         {
             return None;
         }
-        let data = &self.constraints[id];
+        Some(self.evaluate_data(&self.constraints[id], x))
+    }
+
+    /// Wertet `data` an `x` aus (auch eine noch nicht angelegte Abhängigkeit); `x` muss alle
+    /// Variablen von `data` enthalten.
+    fn evaluate_data(&self, data: &ConstraintData, x: &[f64]) -> Evaluation {
         let first = Ctx::collecting(self, x);
         let _ = eval_kind(&first, data);
         let locals = first.locals.into_inner();
@@ -662,10 +882,10 @@ impl Sketch {
             collecting: false,
         };
         let residuals = eval_kind(&second, data);
-        Some(Evaluation {
+        Evaluation {
             locals: second.locals.into_inner(),
             residuals,
-        })
+        }
     }
 
     /// Eine lebende, nicht interne Abhängigkeit.
@@ -690,7 +910,7 @@ impl Sketch {
             .filter(|(_, c)| c.alive && c.internal)
     }
 
-    pub(crate) fn push_internal(&mut self, kind: ConstraintKind) {
+    pub(crate) fn push_internal(&mut self, kind: ConstraintKind) -> ConstraintId {
         self.touch_structure();
         self.constraints.push(ConstraintData {
             kind,
@@ -701,7 +921,7 @@ impl Sketch {
             internal: true,
             extra: None,
             alive: true,
-        });
+        })
     }
 
     fn checked_constraint(&self, id: ConstraintId) -> Result<(), SketchError> {
@@ -712,21 +932,37 @@ impl Sketch {
         }
     }
 
+    /// Wird die Abhängigkeit dadurch wieder erzwungen, gilt die Prüfung auf eine Schleife
+    /// zwischen Vorlage und eigenem Exemplar wie bei [`Sketch::add_constraint`].
     pub fn set_driven(&mut self, id: ConstraintId, driven: bool) -> Result<(), SketchError> {
         self.checked_constraint(id)?;
+        if driven {
+            self.check_not_pattern_value(id)?;
+        } else if self.constraints[id].driven && self.constraints[id].enabled {
+            self.check_activation_cycle(id)?;
+            self.check_not_instance_only(id)?;
+        }
         self.constraints[id].driven = driven;
         self.touch_structure();
         Ok(())
     }
 
+    /// Beim Einschalten gilt die Prüfung auf eine Schleife wie bei [`Sketch::add_constraint`].
     pub fn set_enabled(&mut self, id: ConstraintId, enabled: bool) -> Result<(), SketchError> {
         self.checked_constraint(id)?;
+        if enabled && !self.constraints[id].enabled && !self.constraints[id].driven {
+            self.check_activation_cycle(id)?;
+            self.check_not_instance_only(id)?;
+        }
         self.constraints[id].enabled = enabled;
         self.touch_structure();
         Ok(())
     }
 
-    /// Ändert den Zahlenwert eines Maßes. Die gewählte Lage (`branch`) bleibt erhalten.
+    /// Ändert den Zahlenwert eines Maßes. Die gewählte Lage (`branch`) bleibt erhalten. Ein
+    /// Musterwert muss eine gültige Lage ergeben; eine neue Anzahl gleicht die Exemplare an
+    /// (`sync_pattern`): Bleibende behalten ihre Ids, wegfallende nehmen ihre Abhängigkeiten mit.
+    /// Bei einem Fehler bleibt die Skizze unverändert.
     pub fn set_constraint_value(&mut self, id: ConstraintId, v: f64) -> Result<(), SketchError> {
         self.checked_constraint(id)?;
         let kind = self.constraints[id]
@@ -734,6 +970,35 @@ impl Sketch {
             .with_value(v)
             .ok_or_else(|| SketchError::WrongType(tr!("sketch-not-dimension")))?;
         self.check_refs(&kind)?;
+        // Ein treibendes Maß nur an Exemplaren (aus einer alten Datei) bekäme einen Wert ohne
+        // Wirkung: abgelehnt (Schlusskorrektur I1). Anzeigend darf es den Messwert speichern.
+        let d = &self.constraints[id];
+        if d.enabled && !d.driven {
+            self.check_not_instance_only(id)?;
+        }
+        if let ConstraintKind::PatternValue(m, slot, v) = kind {
+            let plan = self
+                .pattern_plan(m)
+                .ok_or(SketchError::UnknownObject)?
+                .with_value(slot, v);
+            self.pattern_lattice(&plan).map_err(PatternProblem::error)?;
+            return self.atomically(|s| {
+                // Eine neue Anzahl kann Exemplare wegnehmen und so ein Muster in eine Schleife
+                // bringen (siehe `refuse_new_cycles`); ein Abstand oder Winkel nicht.
+                let before = if slot.is_count() {
+                    s.cyclic_patterns()
+                } else {
+                    Vec::new()
+                };
+                s.constraints[id].kind = kind;
+                s.touch_structure();
+                if slot.is_count() {
+                    s.sync_pattern(m)?;
+                    s.refuse_new_cycles(&before)?;
+                }
+                Ok(())
+            });
+        }
         self.constraints[id].kind = kind;
         self.touch_structure();
         Ok(())
@@ -763,13 +1028,21 @@ impl Sketch {
                 let (_, a, _, _) = ellipse_of(&ctx, *c);
                 a.1.v.atan2(a.0.v)
             }
+            DistanceX(a, b, _) => (ctx.pt(*b).0.v - ctx.pt(*a).0.v).abs(),
+            DistanceY(a, b, _) => (ctx.pt(*b).1.v - ctx.pt(*a).1.v).abs(),
+            CenterlineDiameter(p, l, _) => 2.0 * signed_distance(&ctx, &ctx.pt(*p), *l).v.abs(),
+            SlotOverall(a, b, cap, _) => {
+                length(&sub2(&ctx.pt(*a), &ctx.pt(*b))).v + 2.0 * circle_of(&ctx, *cap).1.v
+            }
+            // Der gespeicherte Wert des Musters ist sein Wert.
+            PatternValue(m, slot, _) => self.pattern_value(*m, *slot)?,
             _ => return None,
         };
         v.is_finite().then_some(v)
     }
 
     /// Prüft Ids, Objekttypen und Zahlenwerte einer Abhängigkeit.
-    fn check_refs(&self, kind: &ConstraintKind) -> Result<(), SketchError> {
+    pub(crate) fn check_refs(&self, kind: &ConstraintKind) -> Result<(), SketchError> {
         self.check_structure(kind)?;
         self.check_constraint_value(kind)
     }
@@ -782,7 +1055,14 @@ impl Sketch {
         for c in kind.curves() {
             self.check_curve(c)?;
         }
-        self.check_types(kind)
+        self.check_types(kind)?;
+        // Nicht in `check_types`: Ein gelöschtes Glatt behält nach Stutzen oder Rundung einen
+        // Punkt, der kein Ende mehr ist, und die Datei muss trotzdem laden.
+        if self.smooth_ends_hold(kind) {
+            Ok(())
+        } else {
+            Err(SketchError::WrongType(tr!("sketch-err-smooth-end")))
+        }
     }
 
     /// Prüft nur die Objekttypen und Entartungen; die Ids müssen im Bereich der Arenen liegen
@@ -851,6 +1131,36 @@ impl Sketch {
             {
                 wrong(tr!("sketch-err-only-ellipses"))
             }
+            Collinear(a, b) if !(is_line(*a) && is_line(*b)) => wrong(tr!("sketch-err-only-lines")),
+            Collinear(a, b) if a == b || collinear_point(self, *a, *b).is_none() => {
+                degenerate(tr!("sketch-err-two-objects"))
+            }
+            Smooth(a, _, b, _) if a == b => degenerate(tr!("sketch-err-two-objects")),
+            Smooth(a, _, b, _) => {
+                let kind = |c: CurveId| &self.curves[c].kind;
+                let spline = |c: CurveId| matches!(kind(c), CurveKind::Spline { .. });
+                let allowed = |c: CurveId| {
+                    matches!(
+                        kind(c),
+                        CurveKind::Line { .. } | CurveKind::Arc { .. } | CurveKind::Spline { .. }
+                    )
+                };
+                if !(allowed(*a) && allowed(*b) && (spline(*a) || spline(*b))) {
+                    wrong(tr!("sketch-smooth-kinds"))
+                } else {
+                    Ok(())
+                }
+            }
+            DistanceX(a, b, _) | DistanceY(a, b, _) | SlotOverall(a, b, ..) if a == b => {
+                degenerate(tr!("sketch-err-two-points"))
+            }
+            CenterlineDiameter(_, l, _) if !is_line(*l) => wrong(tr!("sketch-err-only-lines")),
+            SlotOverall(_, _, cap, _) if !is_round(*cap) => wrong(tr!("sketch-err-only-circles")),
+            PatternValue(m, slot, _) => match self.patterns.get(*m) {
+                None => Err(SketchError::UnknownObject),
+                Some(d) if !slot.fits(&d.kind) => wrong(tr!("sketch-pattern-slot")),
+                Some(_) => Ok(()),
+            },
             _ => Ok(()),
         }
     }
@@ -860,7 +1170,8 @@ impl Sketch {
     /// [`Sketch::set_constraint_value`] und die Eingabe in der Oberfläche:
     /// - alle Werte endlich, Längen und Koordinaten betragsmäßig höchstens
     ///   [`MAX_COORD`](crate::model::MAX_COORD);
-    /// - Abstand zweier Punkte, Radius, Durchmesser und Halbachsen größer als `tol.linear`
+    /// - Abstand zweier Punkte (auch waagerecht und senkrecht), Radius, Durchmesser (auch zur
+    ///   Mittellinie), Gesamtlänge des Langlochs und Halbachsen größer als `tol.linear`
     ///   (ein Abstand null ließe eine Linie zu einem Punkt zusammenfallen; dafür gibt es
     ///   „deckungsgleich“);
     /// - Abstand Punkt–Linie nicht negativ (null heißt: Punkt auf der Linie);
@@ -869,7 +1180,13 @@ impl Sketch {
     pub fn check_constraint_value(&self, kind: &ConstraintKind) -> Result<(), SketchError> {
         use ConstraintKind::*;
         match kind {
-            Distance(_, _, v) | Radius(_, v) | Diameter(_, v) => self.check_positive(*v),
+            Distance(_, _, v)
+            | Radius(_, v)
+            | Diameter(_, v)
+            | DistanceX(_, _, v)
+            | DistanceY(_, _, v)
+            | CenterlineDiameter(_, _, v)
+            | SlotOverall(_, _, _, v) => self.check_positive(*v),
             DistancePointLine(_, _, v) => {
                 finite(*v)?;
                 if *v < 0.0 {
@@ -883,11 +1200,42 @@ impl Sketch {
                 self.check_axis_pair(kind, *e, *v)
             }
             Angle(_, _, v) | EllipseAngle(_, v) => finite_angle(*v),
+            PatternValue(_, slot, v) => self.check_pattern_value(*slot, *v),
             Fixed(_, x, y) => {
                 finite(*x)?;
                 finite(*y)
             }
             _ => Ok(()),
+        }
+    }
+
+    /// Musterwerte (Entscheidung 3): Anzahl ganzzahlig 1 bis [`PATTERN_MAX_INSTANCES`]; Abstand
+    /// endlich, Betrag über `tol.linear` und höchstens `MAX_COORD` (das Vorzeichen kehrt die
+    /// Richtung um); Winkel endlich, nicht null, Betrag höchstens 2π.
+    fn check_pattern_value(&self, slot: PatternSlot, v: f64) -> Result<(), SketchError> {
+        if slot.is_count() {
+            if v.is_finite()
+                && v.fract() == 0.0
+                && (1.0..=PATTERN_MAX_INSTANCES as f64).contains(&v)
+            {
+                Ok(())
+            } else {
+                Err(SketchError::InvalidInput(tr!(
+                    "sketch-pattern-count-range",
+                    max = PATTERN_MAX_INSTANCES.to_string()
+                )))
+            }
+        } else if slot.is_spacing() {
+            finite(v)?;
+            self.check_positive(v.abs())
+        } else {
+            finite_angle(v)?;
+            let tol = self.tolerance().angular;
+            if v.abs() > tol && v.abs() <= planora_math::TAU + tol {
+                Ok(())
+            } else {
+                Err(SketchError::Degenerate(tr!("sketch-pattern-angle-range")))
+            }
         }
     }
 
@@ -1031,7 +1379,11 @@ impl Sketch {
                         .map_or(0, |c| c.0)
                 }
             },
-            DistancePointLine(p, l, _) => sign(signed_distance(&ctx, &ctx.pt(*p), *l).v),
+            DistancePointLine(p, l, _) | CenterlineDiameter(p, l, _) => {
+                sign(signed_distance(&ctx, &ctx.pt(*p), *l).v)
+            }
+            DistanceX(a, b, _) => sign(self.pos(*b).x - self.pos(*a).x),
+            DistanceY(a, b, _) => sign(self.pos(*b).y - self.pos(*a).y),
             _ => 0,
         }
     }
@@ -1078,11 +1430,14 @@ impl Sketch {
 
     /// Ist die lebende Abhängigkeit an den aktuellen Werten ohne Bewegung erfüllt? Alle Residuen
     /// höchstens `factor · tol.linear`, Winkelzeilen (parallel, rechtwinklig, Winkel,
-    /// Ellipsenwinkel, Richtung bei Tangente Linie–Ellipse/Spline) höchstens
+    /// Ellipsenwinkel, Richtung bei Tangente Linie–Ellipse/Spline, Kollinear und Glatt) höchstens
     /// `factor · tol.angular`; eine Tangente am gemeinsamen Endpunkt innerhalb von
     /// [`SHARED_END_TANGENT_DRIFT`].
     pub(crate) fn satisfied(&self, id: ConstraintId, factor: f64) -> bool {
         use ConstraintKind::*;
+        if !self.smooth_ends_hold(&self.constraints[id].kind) {
+            return false;
+        }
         if self
             .shared_end_tangent_drift(id, &self.vars)
             .is_some_and(|d| d <= SHARED_END_TANGENT_DRIFT)
@@ -1095,6 +1450,7 @@ impl Sketch {
         let kind = &self.constraints[id].kind;
         let angular_row = |row: usize| match kind {
             Parallel(..) | Perpendicular(..) | Angle(..) | EllipseAngle(..) => true,
+            Collinear(..) | Smooth(..) => row == 0,
             Tangent(a, b) => row == 1 && line_and_param(self, *a, *b).is_some(),
             _ => false,
         };
@@ -1146,41 +1502,291 @@ impl Sketch {
     pub fn add_constraint(&mut self, kind: ConstraintKind) -> Result<ConstraintId, SketchError> {
         if matches!(
             kind,
-            ConstraintKind::ArcRadius(_) | ConstraintKind::EllipticArcEnds(_)
+            ConstraintKind::ArcRadius(_)
+                | ConstraintKind::EllipticArcEnds(_)
+                | ConstraintKind::PatternValue(..)
         ) {
             return Err(SketchError::WrongType(tr!(
                 "sketch-err-internal-constraint"
             )));
         }
         self.check_refs(&kind)?;
+        self.check_centerline(&kind)?;
+        // Erst nach allen Prüfungen anlegen, damit ein Fehler nichts hinterlässt.
+        let (mut data, start) = self.new_constraint_data(kind);
+        // Mit Mustern: Schlösse die Abhängigkeit eine Schleife zwischen Vorlage und eigenem
+        // Exemplar, wird sie abgelehnt (Entscheidung 6).
+        if self.data_closes_pattern_cycle(&data, start) {
+            return Err(PatternProblem::Cycle.error());
+        }
+        // Liest sie nur Exemplare, hätte sie keine Wirkung (Schlusskorrektur I1): Ein Maß wird
+        // anzeigend und zeigt den gemessenen Wert (wie Fusion bei einem überzähligen Maß), eine
+        // geometrische Abhängigkeit wird abgelehnt.
+        if self.data_reads_only_instances(&data, start) {
+            if !data.kind.is_dimension() {
+                return Err(PatternProblem::InstanceOnly.error());
+            }
+            data.driven = true;
+            if let Some(kind) = self
+                .measure(&data.kind)
+                .and_then(|v| data.kind.with_value(v))
+                .filter(|k| self.check_constraint_value(k).is_ok())
+            {
+                data.kind = kind;
+            }
+        }
+        data.extra = start.map(|t| self.new_var(t));
+        self.touch_structure();
+        Ok(self.constraints.push(data))
+    }
+
+    /// Die Daten einer neuen Abhängigkeit `kind` (geprüft) mit der Lage aus der aktuellen
+    /// Geometrie, dazu der Startwert ihrer Zusatzvariable. `extra` zeigt auf die nächste freie
+    /// Variable; angelegt ist sie noch nicht.
+    fn new_constraint_data(&self, kind: ConstraintKind) -> (ConstraintData, Option<f64>) {
         let branch = self.initial_branch(&kind);
         let shared_sign = self.shared_end_sign(&kind);
-        // Erst nach allen Prüfungen anlegen, damit ein Fehler nichts hinterlässt.
-        let extra = self.extra_start(&kind).map(|t| self.new_var(t));
-        self.touch_structure();
-        Ok(self.constraints.push(ConstraintData {
+        let start = self.extra_start(&kind);
+        let data = ConstraintData {
             kind,
             branch,
             shared_sign,
             driven: false,
             enabled: true,
             internal: false,
-            extra,
+            extra: start.map(|_| self.vars.len()),
+            alive: true,
+        };
+        (data, start)
+    }
+
+    /// Schlösse die neue Abhängigkeit `data` eine Schleife zwischen Vorlage und eigenem Exemplar
+    /// (Entscheidung 6)? Ohne Muster `false` ohne Rechnung. Die Zusatzvariable ist neu und
+    /// verbindet nichts; sie zählt für die Prüfung nicht.
+    fn data_closes_pattern_cycle(&self, data: &ConstraintData, start: Option<f64>) -> bool {
+        if self.patterns().next().is_none() {
+            return false;
+        }
+        self.pattern_cycle(&self.data_locals(data, start))
+    }
+
+    /// Die Variablen der neuen Abhängigkeit `data` ohne ihre (neue) Zusatzvariable.
+    fn data_locals(&self, data: &ConstraintData, start: Option<f64>) -> Vec<usize> {
+        let mut x = self.vars.clone();
+        x.extend(start);
+        let mut locals = self.evaluate_data(data, &x).locals;
+        locals.retain(|&v| v < self.vars.len());
+        locals
+    }
+
+    /// Läse die neue Abhängigkeit `data` nur Exemplare eines Musters (Schlusskorrektur I1)? Ohne
+    /// Muster `false` ohne Rechnung.
+    fn data_reads_only_instances(&self, data: &ConstraintData, start: Option<f64>) -> bool {
+        if self.patterns().next().is_none() {
+            return false;
+        }
+        self.reads_only_instances(&self.data_locals(data, start))
+    }
+
+    /// Sind die Variablen `locals` alle gehaltene Exemplarvariablen? Dann hätte eine
+    /// Abhängigkeit darauf keine Wirkung: Der Löser hält Exemplare fest, sie folgen der Vorlage.
+    fn reads_only_instances(&self, locals: &[usize]) -> bool {
+        if locals.is_empty() || self.patterns().next().is_none() {
+            return false;
+        }
+        let held = self.pattern_vars();
+        locals.iter().all(|v| held.contains(v))
+    }
+
+    /// Wird das geprüfte Maß `kind`, angelegt mit [`Sketch::add_constraint`], anzeigend, weil es
+    /// nur Exemplare liest? Dieselbe Prüfung, ohne die Skizze zu ändern (für die Vorschau).
+    pub(crate) fn plans_driven(&self, kind: &ConstraintKind) -> bool {
+        if self.patterns().next().is_none() {
+            return false;
+        }
+        let (data, start) = self.new_constraint_data(kind.clone());
+        self.data_reads_only_instances(&data, start)
+    }
+
+    /// Liest die bestehende (nicht interne) Abhängigkeit `id` nur Exemplare? Dann wäre sie
+    /// treibend ohne Wirkung: `PatternProblem::InstanceOnly` (Schlusskorrektur I1).
+    fn check_not_instance_only(&self, id: ConstraintId) -> Result<(), SketchError> {
+        if self.constraints[id].internal || self.patterns().next().is_none() {
+            return Ok(());
+        }
+        let Some(ev) = self.evaluate(id, &self.vars) else {
+            return Ok(());
+        };
+        if self.reads_only_instances(&ev.locals) {
+            Err(PatternProblem::InstanceOnly.error())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Lehnte [`Sketch::add_constraint`] die geprüfte Abhängigkeit `kind` wegen einer Schleife
+    /// zwischen Vorlage und eigenem Exemplar ab? Dieselbe Prüfung, ohne die Skizze zu ändern;
+    /// ohne Muster kostet sie nichts.
+    pub(crate) fn closes_pattern_cycle(&self, kind: &ConstraintKind) -> bool {
+        if self.patterns().next().is_none() {
+            return false;
+        }
+        let (data, start) = self.new_constraint_data(kind.clone());
+        self.data_closes_pattern_cycle(&data, start)
+    }
+
+    /// Legt einen Musterwert an (nur `add_pattern`). Prüft Wert und Feld.
+    pub(crate) fn push_pattern_value(
+        &mut self,
+        kind: ConstraintKind,
+    ) -> Result<ConstraintId, SketchError> {
+        self.check_refs(&kind)?;
+        self.touch_structure();
+        Ok(self.constraints.push(ConstraintData {
+            kind,
+            branch: 0,
+            shared_sign: 0,
+            driven: false,
+            enabled: true,
+            internal: false,
+            extra: None,
             alive: true,
         }))
+    }
+
+    /// Schlösse die (gerade nicht aktive) Abhängigkeit `id`, wieder aktiv, eine Schleife zwischen
+    /// Vorlage und eigenem Exemplar? Dann `PatternProblem::Cycle` (Entscheidung 6). Gilt auch für
+    /// die interne Abhängigkeit einer neuen Kurve (`add_arc`, `add_elliptic_arc`).
+    pub(crate) fn check_activation_cycle(&self, id: ConstraintId) -> Result<(), SketchError> {
+        if self.patterns().next().is_none() {
+            return Ok(());
+        }
+        let Some(ev) = self.evaluate(id, &self.vars) else {
+            return Ok(());
+        };
+        if self.pattern_cycle(&ev.locals) {
+            Err(PatternProblem::Cycle.error())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Musterwerte bleiben, solange ihr Muster lebt: nicht löschen, nicht anzeigend schalten.
+    fn check_not_pattern_value(&self, id: ConstraintId) -> Result<(), SketchError> {
+        if matches!(self.constraints[id].kind, ConstraintKind::PatternValue(..)) {
+            Err(SketchError::InvalidInput(tr!("sketch-pattern-value-keep")))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Ein neuer Durchmesser zur Mittellinie braucht eine Mittellinie. Nur beim Anlegen und
+    /// Umschalten geprüft: Wer die Mittellinie später ausschaltet, behält ein lösbares Maß, und
+    /// eine solche Datei lädt weiter.
+    fn check_centerline(&self, kind: &ConstraintKind) -> Result<(), SketchError> {
+        match kind {
+            ConstraintKind::CenterlineDiameter(_, l, _) if !self.curves[*l].centerline => {
+                Err(SketchError::WrongType(tr!("sketch-diameter-centerline")))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Schaltet ein Maß zwischen Radius und Durchmesser um: `Radius(c, v) ↔ Diameter(c, 2v)`,
+    /// `DistancePointLine(p, L, v) ↔ CenterlineDiameter(p, L, 2v)` (nur an Mittellinien). Id,
+    /// `branch`, `driven` und `enabled` bleiben; zweimal umgeschaltet ist der Wert bitgleich. Bei
+    /// einem Fehler bleibt die Skizze unverändert.
+    pub fn toggle_radius_diameter(&mut self, id: ConstraintId) -> Result<(), SketchError> {
+        self.checked_constraint(id)?;
+        let kind = toggled_kind(&self.constraints[id].kind)
+            .ok_or_else(|| SketchError::WrongType(tr!("sketch-err-toggle-kinds")))?;
+        self.check_refs(&kind)?;
+        self.check_centerline(&kind)?;
+        self.constraints[id].kind = kind;
+        self.touch_structure();
+        Ok(())
+    }
+
+    /// Sind die Punkte eines Glatt noch Enden ihrer Kurven? `true` für alle anderen Arten. Nach
+    /// Stutzen, Brechen oder Rundung kann ein Punkt aufhören, Ende zu sein; dann entfällt Glatt
+    /// (`settle_constraints`), sonst bliebe ein lebendes Glatt ohne Zeile, das `add_constraint`
+    /// ablehnen würde.
+    pub(crate) fn smooth_ends_hold(&self, kind: &ConstraintKind) -> bool {
+        let ConstraintKind::Smooth(a, pa, b, pb) = *kind else {
+            return true;
+        };
+        let is_end = |c: CurveId, p: PointId| {
+            curve_ends(&self.curves[c].kind).is_some_and(|e| e.contains(&p))
+        };
+        is_end(a, pa) && is_end(b, pb)
+    }
+
+    /// Die Enden, an denen Glatt die Kurven `a` und `b` verbindet, wie in Fusion an der
+    /// Klickstelle: Wurde eine Kurve per Klick gewählt (`at_a`, `at_b`), gilt ihr Ende, das dem
+    /// Klick am nächsten liegt; ohne Klick (etwa Rahmenauswahl) das Ende, das am nächsten an einem
+    /// Ende der anderen Kurve liegt (ein gemeinsames Ende zuerst). Die Weite ist nicht begrenzt:
+    /// Getrennte Enden legt der Befehl der Oberfläche mit einem `Coincident` zusammen. Die Wahl
+    /// hängt nicht von der Reihenfolge ab (Gleichstand: zuerst ein wirklich gemeinsamer Punkt vor
+    /// zwei deckenden, dann das Paar mit den kleineren Punktnummern). `None` für dieselbe Kurve
+    /// oder Kurven ohne Enden (wie bei [`curve_ends`]). Die Kurvenarten prüft
+    /// [`Sketch::add_constraint`]: Auch eine Linie und ein Bogen liefern Enden.
+    pub fn smooth_ends(
+        &self,
+        a: CurveId,
+        at_a: Option<DVec2>,
+        b: CurveId,
+        at_b: Option<DVec2>,
+    ) -> Option<(PointId, PointId)> {
+        if a == b {
+            return None;
+        }
+        let (ea, eb) = (
+            curve_ends(&self.curve(a)?.kind)?,
+            curve_ends(&self.curve(b)?.kind)?,
+        );
+        let dist = |p: PointId, q: DVec2| self.pos(p).distance(q);
+        // Mit Klick bleibt nur das Ende nächst dem Klick.
+        let clicked = |ends: [PointId; 2], at: Option<DVec2>| -> Vec<PointId> {
+            match at {
+                Some(q) => ends
+                    .into_iter()
+                    .min_by(|x, y| dist(*x, q).total_cmp(&dist(*y, q)).then(x.cmp(y)))
+                    .into_iter()
+                    .collect(),
+                None => ends.to_vec(),
+            }
+        };
+        let (ca, cb) = (clicked(ea, at_a), clicked(eb, at_b));
+        let gap = |p: PointId, q: PointId| {
+            if p == q { 0.0 } else { dist(p, self.pos(q)) }
+        };
+        let key = |p: PointId, q: PointId| (p.min(q), p.max(q));
+        ca.iter()
+            .flat_map(|&p| cb.iter().map(move |&q| (p, q)))
+            .min_by(|&(p, q), &(r, t)| {
+                gap(p, q)
+                    .total_cmp(&gap(r, t))
+                    // Ein wirklich gemeinsamer Punkt vor zwei deckenden Punkten.
+                    .then_with(|| (p != q).cmp(&(r != t)))
+                    .then_with(|| key(p, q).cmp(&key(r, t)))
+            })
     }
 
     /// Entfernt eine (nicht interne) Abhängigkeit.
     pub fn remove_constraint(&mut self, id: ConstraintId) -> Result<(), SketchError> {
         self.checked_constraint(id)?;
+        self.check_not_pattern_value(id)?;
         self.constraints[id].alive = false;
         self.touch_structure();
         Ok(())
     }
 
     /// Entfernt die Kurve samt allen Abhängigkeiten, die sie benutzen (auch interne).
+    /// Ist sie Vorlage, Exemplar oder Richtungslinie eines Musters, wird das Muster aufgelöst;
+    /// ein einzelnes Exemplar löscht die Oberfläche über [`Sketch::suppress_instance`].
     pub fn remove_curve(&mut self, c: CurveId) -> Result<(), SketchError> {
         self.check_curve(c)?;
+        self.dissolve_patterns_of_curve(c);
         self.touch_structure();
         self.curves[c].alive = false;
         let dead: Vec<ConstraintId> = self
@@ -1196,8 +1802,10 @@ impl Sketch {
     }
 
     /// Entfernt den Punkt samt allen Kurven und Abhängigkeiten, die ihn benutzen.
+    /// Ist er Mitte, Vorlagen- oder Exemplarpunkt eines Musters, wird das Muster aufgelöst.
     pub fn remove_point(&mut self, p: PointId) -> Result<(), SketchError> {
         self.check_point(p)?;
+        self.dissolve_patterns_of_point(p);
         self.touch_structure();
         self.points[p].alive = false;
         let curves: Vec<CurveId> = self
@@ -1238,6 +1846,8 @@ impl Sketch {
         for (_, k) in self.constraints() {
             used.extend(k.kind.points());
         }
+        // Die Mitte eines Kreismusters ist benutzt, auch als freier Punkt.
+        used.extend(self.pattern_centers());
         let mut removed = 0;
         for &p in candidates {
             if self.check_point(p).is_ok() && !used.contains(&p) {

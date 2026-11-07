@@ -70,6 +70,10 @@ pub struct Snapshot {
     /// Rückrollstellen je Körper in Listenordnung (siehe [`Document::rollbacks`]); beim Bauen
     /// streng geprüft, nicht still repariert.
     pub rollbacks: Vec<FeatureId>,
+    /// Beim Laden aufgelöste Muster (Skizzen 5: Muster in einer Schleife werden aufgelöst, die
+    /// Geometrie bleibt). Nur für die Meldung nach dem Öffnen; zählt nicht zum Inhalt und wird
+    /// nicht gespeichert.
+    pub dissolved_patterns: usize,
 }
 
 /// Gleiche Netztabellen: gleiche Kennungen mit jeweils demselben `Arc` (nicht nur gleichem
@@ -161,6 +165,7 @@ impl Document {
             parameters: self.parameters.clone(),
             next_param: self.next_param,
             rollbacks: self.rollbacks.clone(),
+            dissolved_patterns: 0,
         }
     }
 

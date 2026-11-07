@@ -291,19 +291,22 @@ fn first_click_belongs_to_the_line() {
         Some("Spline zeichnen".to_string())
     );
 
-    // Ein abgebrochener erster Klick hinterlässt einen Punkt: der ist ein eigener Schritt.
+    // Ein abgebrochener erster Klick hinterlässt nichts, keinen Punkt und keinen Schritt (wie
+    // Fusion, Handprüfung Skizzen 5).
     tool(&mut w, Tool::Line);
     let n = sk_undo_len(&w);
+    let points = draft(&w).points().count();
     click(&mut w, 80.0, 0.0);
     observe(&mut w);
     assert_eq!(sk_undo_len(&w), n);
     let (se, sk) = sess(&mut w);
     se.cancel(sk);
     observe(&mut w);
-    assert_eq!(sk_undo_len(&w), n + 1);
+    assert_eq!(sk_undo_len(&w), n);
+    assert_eq!(draft(&w).points().count(), points);
     assert_eq!(
         w.active_tab().undo_label(),
-        Some("Punkt setzen".to_string())
+        Some("Spline zeichnen".to_string())
     );
 }
 
@@ -1259,4 +1262,286 @@ fn first_click_snapped_on_a_circle_is_deferred() {
         w.active_tab().undo_label(),
         Some("Linie zeichnen".to_string())
     );
+}
+
+// ---- (h) Klick auf den eigenen offenen Punkt (Handprüfung Skizzen 5) --------------------------
+
+/// Klick mit dem Werkzeug an `(x, y)`, dessen Ergebnis zählt (auch eine Ablehnung).
+fn try_click(w: &mut Workspace, x: f64, y: f64) -> Result<(), String> {
+    let (se, sk) = sess(w);
+    se.click(sk, DVec2::new(x, y), R, false)
+}
+
+/// Kreis (Mittelpunkt–Radius): Ein Klick genau auf den eigenen Mittelpunkt legt nichts an, auch
+/// keinen Rückgängig-Schritt, und das Werkzeug wartet weiter auf den Radius. Ein Klick knapp daneben
+/// (im Fangradius) fängt nicht auf den eigenen Mittelpunkt wie in Fusion, sondern legt den kleinen
+/// Kreis an.
+#[test]
+fn click_on_own_circle_center_leaves_nothing_and_keeps_waiting() {
+    let mut w = ws();
+    open_new_sketch(&mut w);
+    tool(&mut w, Tool::Circle);
+    click(&mut w, 10.0, 10.0);
+    observe(&mut w);
+    let n = sk_undo_len(&w);
+    assert_eq!(draft(&w).points().count(), 1);
+
+    assert!(try_click(&mut w, 10.0, 10.0).is_err(), "Radius null");
+    observe(&mut w);
+    assert_eq!(draft(&w).points().count(), 1, "kein weiterer Punkt");
+    assert_eq!(curves(&w), 0);
+    assert_eq!(sk_undo_len(&w), n, "kein Rückgängig-Schritt");
+    let se = st(&mut w).sketch_session.as_ref().unwrap();
+    assert_eq!(se.tool, Tool::Circle);
+    assert_eq!(se.pending.len(), 1, "das Werkzeug wartet auf den Radius");
+
+    // Knapp daneben, im Fangradius des eigenen Mittelpunkts: der kleine Kreis entsteht.
+    click(&mut w, 10.3, 10.0);
+    observe(&mut w);
+    assert_eq!(curves(&w), 1);
+    assert_eq!(draft(&w).points().count(), 1, "nur der Mittelpunkt");
+    let c = draft(&w).curves().next().unwrap().0;
+    assert!((draft(&w).radius(c).unwrap() - 0.3).abs() < 1e-6);
+    assert_eq!(sk_undo_len(&w), n + 1, "genau ein Schritt");
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Kreis zeichnen".to_string())
+    );
+}
+
+/// Dasselbe bei Bogen (Mitte, Anfang, Ende) und Ellipse: Der nächste Klick fängt nicht auf die
+/// offenen Punkte des eigenen Befehls; genau darauf wird abgelehnt, ohne etwas zu hinterlassen. Die
+/// Linie fängt weiter auf ihren Anfang und lehnt dort ab, ebenfalls ohne Rest.
+#[test]
+fn own_open_points_do_not_catch_the_next_click() {
+    // Bogen: Anfang knapp neben der Mitte, Ende knapp neben dem Anfang.
+    let mut w = ws();
+    open_new_sketch(&mut w);
+    tool(&mut w, Tool::Arc);
+    click(&mut w, 10.0, 10.0);
+    assert!(try_click(&mut w, 10.0, 10.0).is_err());
+    assert_eq!(draft(&w).points().count(), 1);
+    click(&mut w, 10.3, 10.0);
+    assert_eq!(draft(&w).points().count(), 2);
+    assert!(try_click(&mut w, 10.3, 10.0).is_err());
+    assert_eq!(draft(&w).points().count(), 2);
+    click(&mut w, 10.0, 10.3);
+    observe(&mut w);
+    assert_eq!(curves(&w), 1, "der kleine Bogen");
+    assert_eq!(sk_undo_len(&w), 1);
+
+    // Ellipse: Ende der großen Achse knapp neben der Mitte.
+    let mut w = ws();
+    open_new_sketch(&mut w);
+    tool(&mut w, Tool::Ellipse);
+    click(&mut w, 10.0, 10.0);
+    assert!(try_click(&mut w, 10.0, 10.0).is_err());
+    click(&mut w, 10.4, 10.0);
+    click(&mut w, 10.0, 10.2);
+    observe(&mut w);
+    assert_eq!(curves(&w), 1, "die kleine Ellipse");
+    assert_eq!(draft(&w).points().count(), 1);
+    assert_eq!(sk_undo_len(&w), 1);
+
+    // Linie: Sie fängt weiter auf ihren Anfang (keine winzige Linie aus einem Klick dort, siehe
+    // `sketch_line_arc`); die Ablehnung lässt nichts zurück, das Werkzeug wartet weiter.
+    let mut w = ws();
+    open_new_sketch(&mut w);
+    tool(&mut w, Tool::Line);
+    click(&mut w, 10.0, 10.0);
+    for (x, y) in [(10.0, 10.0), (10.3, 10.0)] {
+        assert!(try_click(&mut w, x, y).is_err(), "{x}, {y}: Länge null");
+        observe(&mut w);
+        assert_eq!(draft(&w).points().count(), 1);
+        assert_eq!(curves(&w), 0);
+        assert_eq!(sk_undo_len(&w), 0);
+        assert_eq!(st(&mut w).sketch_session.as_ref().unwrap().pending.len(), 1);
+    }
+    click(&mut w, 15.0, 10.0);
+    observe(&mut w);
+    assert_eq!(curves(&w), 1);
+    assert_eq!(sk_undo_len(&w), 1);
+}
+
+// ---- (i) Abbruch nach dem ersten Klick (Handprüfung Skizzen 5, Fix 6 Rest A) ------------------
+
+/// Stand der Skizze für den Vergleich: Punkte, Kurven, Abhängigkeiten, Rückgängig-Schritte und
+/// der Name des nächsten Rückgängig.
+fn tally(w: &Workspace) -> (usize, usize, usize, usize, Option<String>) {
+    (
+        draft(w).points().count(),
+        curves(w),
+        draft(w).constraints().count(),
+        sk_undo_len(w),
+        w.active_tab().undo_label(),
+    )
+}
+
+/// Skizze mit einer Linie (0,0)–(20,0) und einem Punkt bei (40,0), als Schritte erfasst.
+fn sketch_with_line_and_point() -> Workspace {
+    let mut w = ws();
+    open_new_sketch(&mut w);
+    tool(&mut w, Tool::Line);
+    click(&mut w, 0.0, 0.0);
+    click(&mut w, 20.0, 0.0);
+    observe(&mut w);
+    tool(&mut w, Tool::Point);
+    click(&mut w, 40.0, 0.0);
+    observe(&mut w);
+    w
+}
+
+/// Wie Fusion: Ein Befehl, der noch keine Form angelegt hat, hinterlässt beim Abbruch (Esc,
+/// Rechtsklick) nichts, keinen Punkt und keinen Rückgängig-Schritt; bei jedem Zeichenwerkzeug
+/// mit mehreren Klicks.
+#[test]
+fn cancel_after_first_click_leaves_nothing() {
+    for t in [
+        Tool::Line,
+        Tool::Circle,
+        Tool::Rectangle,
+        Tool::Slot,
+        Tool::Polygon,
+        Tool::Arc,
+        Tool::Ellipse,
+        Tool::Spline,
+    ] {
+        let mut w = sketch_with_line_and_point();
+        tool(&mut w, t);
+        let before = tally(&w);
+        click(&mut w, 60.0, 10.0);
+        observe(&mut w);
+        let (se, sk) = sess(&mut w);
+        se.cancel(sk);
+        observe(&mut w);
+        assert_eq!(tally(&w), before, "{t:?}: erster Klick und Esc");
+        let se = st(&mut w).sketch_session.as_ref().unwrap();
+        assert!(se.pending.is_empty() && se.pending_pos.is_empty(), "{t:?}");
+    }
+    // Bogen und Spline auch nach dem zweiten Klick (noch keine Form).
+    for t in [Tool::Arc, Tool::Spline] {
+        let mut w = sketch_with_line_and_point();
+        tool(&mut w, t);
+        let before = tally(&w);
+        click(&mut w, 60.0, 10.0);
+        observe(&mut w);
+        click(&mut w, 65.0, 10.0);
+        observe(&mut w);
+        let (se, sk) = sess(&mut w);
+        se.cancel(sk);
+        observe(&mut w);
+        assert_eq!(tally(&w), before, "{t:?}: zwei Klicks und Esc");
+    }
+}
+
+/// Werkzeugwechsel und Enter nach dem ersten Klick lassen ebenso nichts zurück; Skizze beenden
+/// schreibt den offenen Punkt nicht ins Dokument.
+#[test]
+fn tool_change_finish_and_close_after_first_click_leave_nothing() {
+    for t in [Tool::Line, Tool::Circle, Tool::Rectangle, Tool::Slot] {
+        let mut w = sketch_with_line_and_point();
+        tool(&mut w, t);
+        let before = tally(&w);
+        click(&mut w, 60.0, 10.0);
+        observe(&mut w);
+        tool(&mut w, Tool::Select);
+        observe(&mut w);
+        assert_eq!(tally(&w), before, "{t:?}: Werkzeugwechsel");
+    }
+    // Enter bzw. Doppelklick beendet den Linienzug: Ohne Linie bleibt nichts.
+    let mut w = sketch_with_line_and_point();
+    tool(&mut w, Tool::Line);
+    let before = tally(&w);
+    click(&mut w, 60.0, 10.0);
+    let (se, sk) = sess(&mut w);
+    se.finish_tool(sk).unwrap();
+    observe(&mut w);
+    assert_eq!(tally(&w), before, "Linie: erster Klick und Enter");
+
+    // Skizze beenden mitten im Kreis: Im Dokument stehen nur Linie und Punkt.
+    let mut w = sketch_with_line_and_point();
+    let id = st(&mut w).sketch_session.as_ref().unwrap().sketch;
+    tool(&mut w, Tool::Circle);
+    click(&mut w, 60.0, 10.0);
+    observe(&mut w);
+    st(&mut w).try_close_sketch().unwrap();
+    let sk = w.active_tab().state.document.sketch_of(id).unwrap();
+    assert_eq!(sk.points().count(), 3, "zwei Linienenden und der Punkt");
+    assert_eq!(sk.curves().count(), 1);
+}
+
+/// Linienzug: Fertige Linien bleiben, ihr Ende auch; nur ein offener Anfang ohne Linie fällt.
+#[test]
+fn cancel_keeps_finished_lines_of_a_chain() {
+    let mut w = ws();
+    open_new_sketch(&mut w);
+    tool(&mut w, Tool::Line);
+    for (x, y) in [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)] {
+        click(&mut w, x, y);
+        observe(&mut w);
+    }
+    let before = tally(&w);
+    assert_eq!((before.0, before.1), (3, 2));
+    let (se, sk) = sess(&mut w);
+    se.cancel(sk);
+    observe(&mut w);
+    assert_eq!(tally(&w), before, "zwei Linien samt Enden bleiben");
+    // Rückgängig nimmt genau die letzte Linie.
+    tab(&mut w).undo().unwrap();
+    assert_eq!(curves(&w), 1);
+}
+
+/// Ein Punkt, auf den der erste Klick gefangen hat, bleibt; eine Fangbindung des offenen Punktes
+/// (Punkt auf Kurve) fällt mit ihm weg.
+#[test]
+fn cancel_keeps_caught_points_and_drops_snap_constraints() {
+    for t in [
+        Tool::Line,
+        Tool::Circle,
+        Tool::Arc,
+        Tool::Ellipse,
+        Tool::Rectangle,
+    ] {
+        // Erster Klick auf den vorhandenen Punkt.
+        let mut w = sketch_with_line_and_point();
+        tool(&mut w, t);
+        let before = tally(&w);
+        click(&mut w, 40.0, 0.0);
+        observe(&mut w);
+        let (se, sk) = sess(&mut w);
+        se.cancel(sk);
+        observe(&mut w);
+        assert_eq!(tally(&w), before, "{t:?}: gefangener Punkt bleibt");
+        assert!(draft(&w).pick_point(DVec2::new(40.0, 0.0), R).is_some());
+
+        // Erster Klick auf die Linie: neuer Punkt mit Bindung, beides fällt.
+        let mut w = sketch_with_line_and_point();
+        tool(&mut w, t);
+        let before = tally(&w);
+        click(&mut w, 7.0, 0.0);
+        observe(&mut w);
+        let (se, sk) = sess(&mut w);
+        se.cancel(sk);
+        observe(&mut w);
+        assert_eq!(
+            tally(&w),
+            before,
+            "{t:?}: Punkt auf der Linie fällt samt Bindung"
+        );
+    }
+}
+
+/// Der Punkt (ein Klick, fertig) bleibt, auch nach Esc.
+#[test]
+fn single_point_stays_after_cancel() {
+    let mut w = ws();
+    open_new_sketch(&mut w);
+    tool(&mut w, Tool::Point);
+    click(&mut w, 5.0, 5.0);
+    observe(&mut w);
+    let (se, sk) = sess(&mut w);
+    se.cancel(sk);
+    observe(&mut w);
+    assert_eq!(draft(&w).points().count(), 1);
+    assert_eq!(sk_undo_len(&w), 1);
 }

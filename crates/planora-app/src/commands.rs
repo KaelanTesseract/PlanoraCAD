@@ -212,7 +212,9 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
         | Action::SketchFillet
         | Action::SketchChamferEqual
         | Action::SketchChamferDistanceAngle
-        | Action::SketchChamferTwoDistances => {
+        | Action::SketchChamferTwoDistances
+        | Action::SketchPatternRect
+        | Action::SketchPatternCircular => {
             if let Some(kind) = a.sketch_kind()
                 && let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut()
             {
@@ -226,7 +228,8 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
         | Action::SketchBreak
         | Action::SketchOffset
         | Action::SketchMoveCopy
-        | Action::SketchScale => {
+        | Action::SketchScale
+        | Action::SketchDimension => {
             if let Some(tool) = a.sketch_tool()
                 && let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut()
             {
@@ -253,6 +256,19 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
         Action::SketchCenterline => {
             if let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut() {
                 se.toggle_centerline_if_possible(sk);
+            }
+        }
+        Action::SketchConcentric | Action::SketchCollinear | Action::SketchSmooth => {
+            use crate::sketch_state::ConstraintAction as C;
+            let action = match a {
+                Action::SketchConcentric => C::Concentric,
+                Action::SketchCollinear => C::Collinear,
+                _ => C::Smooth,
+            };
+            if let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut() {
+                // Wie der Knopf: Passt die Auswahl, entsteht die Abhängigkeit, sonst startet der
+                // Befehl, und passt sie gar nicht, steht der Grund in der Meldung des Skizzenfelds.
+                let _ = se.constraint_button(sk, action);
             }
         }
         Action::SketchRepeatLast => {

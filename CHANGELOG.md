@@ -5,6 +5,11 @@ Hier steht, was sich in jeder Version geändert hat. Die neueste Version steht o
 ## 0.0.2-dev.2
 
 ### Neu
+- Skizzen: Muster wie in Fusion. „Rechteckige Anordnung“ legt Kopien in zwei Richtungen mit Anzahl und Abstand an, „Kreisförmige Anordnung“ um eine Mitte, voll, über einen Winkel oder symmetrisch. Du siehst die Kopien vorab, kannst einzelne abwählen und das Muster später wieder öffnen oder über die Maße ändern; ändert man die Vorlage, folgen die Kopien. Ein Muster hat höchstens 900 Plätze, die Vorlage mitgezählt, und alle Kopien zusammen höchstens 3600 Kurven. Der ältere Knopf „Muster …“ im Skizzenfeld (Kopien mit Versatz) heißt jetzt „Lineares Muster …“.
+- Skizzen: Die Skizzenbemaßung (Taste D) sucht sich das passende Maß selbst: direkt, waagerecht oder senkrecht je nach Lage des Zeigers, Durchmesser, Radius, Halbachse oder Winkel. Gegen eine Mittellinie entsteht ein Durchmessermaß; Tab oder der Knopf „Ø/R“ wechselt zwischen Durchmesser und Radius. Ein Doppelklick auf den Maßtext in der Zeichnung öffnet sein Feld.
+- Skizzen: Drei neue Abhängigkeiten, „Konzentrisch“, „Kollinear“ und „Glatt“, mit Knöpfen im Skizzenfeld; alle lassen sich in den Einstellungen belegen.
+- Skizzen: Das Langloch „Gesamt“ merkt sich die Gesamtlänge als eigenes Maß. Der Rasterfang bindet an einen Punkt, der schon auf dem Rasterpunkt liegt, statt einen zweiten daraufzulegen.
+- Skizzen mit einem Muster oder einer der neuen Abhängigkeiten werden im neuen Dateiformat 15 gespeichert und lassen sich von älteren Programmversionen nicht öffnen. Alle anderen Dateien bleiben unverändert.
 - PlanoraCAD spricht jetzt Deutsch und Englisch. Beim ersten Start nimmt das Programm die Sprache von Windows; gibt es sie nicht, ist es englisch. Unter „Datei → Einstellungen …“ lässt sich die Sprache wechseln, alle Texte wechseln sofort mit. Auf einem deutschen Windows bleibt alles wie bisher.
 - Zahlen erscheinen in der Sprache des Programms: deutsch mit Komma (38,8), englisch mit Punkt (38.8). Eintippen geht in beiden Sprachen mit Komma und mit Punkt.
 - Beim Exportieren einer Zeichnung kannst du eine andere Sprache für die Zeichnung wählen, zum Beispiel eine englische Zeichnung aus dem deutschen Programm.

@@ -169,6 +169,19 @@ impl SnapIndex {
     /// Mitte und Ursprung vor Mittelpunkt vor Schnittpunkt vor Kurve; innerhalb der Klasse
     /// der nächste, bei gleichem Abstand die kleinere Id.
     pub fn find(&self, at: DVec2, radius: f64) -> Option<SnapHit> {
+        self.find_avoiding(at, radius, &[], 0.0)
+    }
+
+    /// Wie [`find`](Self::find), aber Ziele, die höchstens `tol` neben einer Lage aus `avoid`
+    /// liegen, zählen nicht (die offenen Punkte des laufenden Befehls: ein Klick dorthin ergäbe
+    /// eine Form ohne Größe).
+    pub fn find_avoiding(
+        &self,
+        at: DVec2,
+        radius: f64,
+        avoid: &[DVec2],
+        tol: f64,
+    ) -> Option<SnapHit> {
         if !at.is_finite() {
             return None;
         }
@@ -178,6 +191,11 @@ impl SnapIndex {
             0.0
         };
         let mut best: Option<(f64, SnapHit)> = None;
+        let take = |best: &mut Option<(f64, SnapHit)>, radius, d, snap, p: DVec2| {
+            if !avoid.iter().any(|a| a.distance(p) <= tol) {
+                take(best, radius, d, snap, p);
+            }
+        };
 
         for &(snap, p) in &self.points {
             take(&mut best, radius, p.distance(at), snap, p);

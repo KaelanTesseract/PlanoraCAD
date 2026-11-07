@@ -50,6 +50,15 @@ enum Projected {
     },
 }
 
+/// Wie [`Sketch::copy_curve`] kopiert: verschoben (lineares Muster), gespiegelt an einer Achse mit
+/// normierter Richtung, oder an die Lage eines Exemplars (Muster aus `pattern.rs`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum CopyHow {
+    Shift,
+    Mirror(DVec2),
+    Pattern(crate::transform::Similarity),
+}
+
 fn unsupported(what: String) -> SketchError {
     SketchError::UnsupportedProjection(what)
 }
@@ -117,23 +126,29 @@ impl Sketch {
         })
     }
 
-    /// Legt eine Kopie von `kind` an, deren Punkte über `map` abgebildet werden. Beim Spiegeln
-    /// (`mirror` = normierte Achsrichtung) werden Bögen und Ellipsenbögen mit vertauschtem Start
-    /// und Ende angelegt und die große Halbachse eines Ellipsenbogens gespiegelt. Gibt die neue
+    /// Legt eine Kopie der Kurve `source` an, deren Punkte über `map` abgebildet werden; Stil wie
+    /// die Vorlage. Beim Spiegeln (`CopyHow::Mirror`) werden Bögen und Ellipsenbögen mit
+    /// vertauschtem Start und Ende angelegt und die große Halbachse eines Ellipsenbogens
+    /// gespiegelt. Nur Muster (`CopyHow::Pattern`) kopieren auch Ellipsen und Splines; Radius und
+    /// Halbachsen nehmen den Maßstab, die große Halbachse die Drehung der Lage mit. Gibt die neue
     /// Kurve zurück.
-    fn copy_curve(
+    pub(crate) fn copy_curve(
         &mut self,
         source: CurveId,
         map: &HashMap<PointId, PointId>,
-        mirror: Option<DVec2>,
+        how: CopyHow,
     ) -> Result<CurveId, SketchError> {
-        let swap_arc = mirror.is_some();
+        let swap_arc = matches!(how, CopyHow::Mirror(_));
+        let factor = match how {
+            CopyHow::Pattern(t) => t.factor,
+            _ => 1.0,
+        };
         let construction = self.curves[source].construction;
         let centerline = self.curves[source].centerline;
         let id = match self.curves[source].kind.clone() {
             CurveKind::Line { a, b } => self.add_line(map[&a], map[&b])?,
             CurveKind::Circle { center, radius } => {
-                let r = self.vars[radius];
+                let r = self.vars[radius] * factor;
                 self.add_circle(map[&center], r)?
             }
             CurveKind::Arc { center, start, end } => {
@@ -155,11 +170,28 @@ impl Sketch {
                 let a = DVec2::new(self.vars[ax], self.vars[ay]);
                 // Spiegeln kehrt den Umlaufsinn um; die gespiegelte Ellipse ist dieselbe Menge
                 // wie die mit gespiegelter großer Halbachse und gleicher kleiner Halbachse.
-                let (major, s, e) = match mirror {
-                    Some(d) => (reflect(a, DVec2::ZERO, d), map[&end], map[&start]),
-                    None => (a, map[&start], map[&end]),
+                let (major, s, e) = match how {
+                    CopyHow::Mirror(d) => (reflect(a, DVec2::ZERO, d), map[&end], map[&start]),
+                    CopyHow::Shift => (a, map[&start], map[&end]),
+                    CopyHow::Pattern(t) => (t.linear(a), map[&start], map[&end]),
                 };
-                self.add_elliptic_arc(map[&center], major, self.vars[minor], s, e)?
+                self.add_elliptic_arc(map[&center], major, self.vars[minor] * factor, s, e)?
+            }
+            CurveKind::Ellipse {
+                center,
+                ax,
+                ay,
+                minor,
+            } if matches!(how, CopyHow::Pattern(_)) => {
+                let CopyHow::Pattern(t) = how else {
+                    unreachable!()
+                };
+                let major = t.linear(DVec2::new(self.vars[ax], self.vars[ay]));
+                self.add_ellipse(map[&center], major, self.vars[minor] * factor)?
+            }
+            CurveKind::Spline { points } if matches!(how, CopyHow::Pattern(_)) => {
+                let mapped: Vec<PointId> = points.iter().map(|p| map[p]).collect();
+                self.add_spline(&mapped)?
             }
             CurveKind::Ellipse { .. } | CurveKind::Spline { .. } => {
                 return Err(SketchError::WrongType(tr!("sketch-err-copy-kinds")));
@@ -223,7 +255,7 @@ impl Sketch {
                         map.insert(p, q);
                     }
                 }
-                let copy = s.copy_curve(c, &map, Some(d))?;
+                let copy = s.copy_curve(c, &map, CopyHow::Mirror(d))?;
                 if matches!(s.curves[c].kind, CurveKind::Circle { .. }) {
                     s.add_constraint(ConstraintKind::Equal(c, copy))?;
                 }
@@ -272,7 +304,7 @@ impl Sketch {
                             slot.insert(s.add_point_like(p, s.pos(p) + shift)?);
                         }
                     }
-                    let copy = s.copy_curve(c, &map, None)?;
+                    let copy = s.copy_curve(c, &map, CopyHow::Shift)?;
                     // `Equal` gibt es nur für Linien, Kreise und Bögen.
                     if !matches!(s.curves[c].kind, CurveKind::EllipticArc { .. }) {
                         created.push(s.add_constraint(ConstraintKind::Equal(c, copy))?);

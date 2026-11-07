@@ -530,12 +530,13 @@ fn typed_length_40_and_width_12_become_exact_dimensions() {
         assert!(matches!(ds[1].1, K::Diameter(_, v) if v == 12.0), "{ds:?}");
         assert_eq!(assert_solved(sk(&w)).dof, 3);
 
-        // Gesamt: Mitten 28, Enden außen 40 auseinander, die Länge ist kein eigenes Maß.
+        // Gesamt: Mitten 28, Enden außen 40 auseinander. Skizzen 5 (Entscheidung 12): Die
+        // Gesamtlänge ist ein eigenes Maß `SlotOverall` 40 statt des Mittenabstands 28.
         let w = straight_with_fields(ToolKind::SlotOverall, angle);
         let ds = dims(sk(&w));
         assert_eq!(ds.len(), 2);
         assert!(
-            matches!(ds[0].1, K::Distance(_, _, v) if v == 28.0),
+            matches!(ds[0].1, K::SlotOverall(_, _, _, v) if v == 40.0),
             "{ds:?}"
         );
         assert!(matches!(ds[1].1, K::Diameter(_, v) if v == 12.0), "{ds:?}");
@@ -568,6 +569,8 @@ fn typed_length_40_and_width_12_become_exact_dimensions() {
 
 #[test]
 fn overall_length_uses_the_pointer_width_when_only_the_length_is_typed() {
+    // Skizzen 5: Die getippte Gesamtlänge wird das Maß `SlotOverall` 40 (vorher Mittenabstand
+    // 28); die Breite vom Zeiger gibt nur die Lage der Mitten.
     let mut w = rig(ToolKind::SlotOverall);
     commit(&mut w, place(0.0, 0.0, 0.0)).unwrap();
     type_in(&mut w, F::Length, "40");
@@ -576,8 +579,13 @@ fn overall_length_uses_the_pointer_width_when_only_the_length_is_typed() {
     let ds = dims(sk(&w));
     assert_eq!(ds.len(), 1);
     assert!(
-        matches!(ds[0].1, K::Distance(_, _, v) if (v - 28.0).abs() < 1e-9),
+        matches!(ds[0].1, K::SlotOverall(_, _, _, v) if v == 40.0),
         "{ds:?}"
+    );
+    let ids = slot_ids(sk(&w));
+    near(
+        xy(sk(&w), ids.centers[0]).distance(xy(sk(&w), ids.centers[1])),
+        28.0,
     );
     assert_solved(sk(&w));
 
@@ -730,23 +738,44 @@ fn changing_width_and_length_in_the_app_keeps_the_straight_shape() {
             let mut w = straight_with_fields(kind, angle);
             let ids = slot_ids(sk(&w));
             let width = dim_id(sk(&w), |k| matches!(k, K::Diameter(..)));
-            let length = dim_id(sk(&w), |k| matches!(k, K::Distance(..)));
-            for (id, text) in [
-                (width, "30"),
-                (length, "100"),
-                (width, "2"),
-                (length, "5"),
-                (width, "12"),
-                (length, "40"),
-            ] {
+            // Skizzen 5: „Gesamt“ hält die Gesamtlänge (`SlotOverall`), die anderen den
+            // Mittenabstand; die Werte für „Gesamt“ bleiben über der Breite.
+            let overall = kind == ToolKind::SlotOverall;
+            let length = dim_id(sk(&w), |k| {
+                matches!(k, K::Distance(..) | K::SlotOverall(..))
+            });
+            let steps: &[(ConstraintId, &str)] = if overall {
+                &[
+                    (width, "30"),
+                    (length, "100"),
+                    (width, "2"),
+                    (length, "5"),
+                    (width, "4"),
+                    (length, "40"),
+                    (width, "12"),
+                ]
+            } else {
+                &[
+                    (width, "30"),
+                    (length, "100"),
+                    (width, "2"),
+                    (length, "5"),
+                    (width, "12"),
+                    (length, "40"),
+                ]
+            };
+            for &(id, text) in steps {
                 set(&mut w, id, text).unwrap_or_else(|e| panic!("{kind:?} {text}: {e}"));
                 assert_solved(sk(&w));
                 assert_slot(sk(&w), &ids);
                 let v: f64 = text.parse().unwrap();
+                let (a, b) = (xy(sk(&w), ids.centers[0]), xy(sk(&w), ids.centers[1]));
+                let r = sk(&w).radius(ids.caps[0]).unwrap();
                 if id == width {
-                    near(sk(&w).radius(ids.caps[0]).unwrap(), v / 2.0);
+                    near(r, v / 2.0);
+                } else if overall {
+                    near(a.distance(b) + 2.0 * r, v);
                 } else {
-                    let (a, b) = (xy(sk(&w), ids.centers[0]), xy(sk(&w), ids.centers[1]));
                     near(a.distance(b), v);
                 }
                 if let Some(mid) = ids.mid {
@@ -951,18 +980,18 @@ fn three_collinear_points_and_a_short_radius_are_refused_at_the_axis_stage() {
 
 #[test]
 fn overall_length_below_the_width_by_dimension_is_refused_and_the_state_stays() {
-    // Ruling Task 2: Die Gesamtlänge ist kein eigenes Maß. Die Länge unter die Breite heißt also:
-    // Der Mittenabstand L − W käme auf null oder darunter.
+    // Skizzen 5 (Entscheidung 12): Die Gesamtlänge ist das eigene Maß `SlotOverall` 40 bei
+    // Breite 12. Gleich der Breite, darunter, null und negativ wird abgelehnt.
     let mut w = straight_with_fields(ToolKind::SlotOverall, 0.0);
-    let length = dim_id(sk(&w), |k| matches!(k, K::Distance(..)));
+    let length = dim_id(sk(&w), |k| matches!(k, K::SlotOverall(..)));
     let before = bits(sk(&w));
-    for text in ["0", "-8"] {
+    for text in ["12", "8", "0", "-8"] {
         assert!(set(&mut w, length, text).is_err(), "{text}");
         assert_eq!(bits(sk(&w)), before, "{text}");
     }
     assert!(matches!(
         sk(&w).constraint(length).unwrap().kind,
-        K::Distance(_, _, v) if v == 28.0
+        K::SlotOverall(_, _, _, v) if v == 40.0
     ));
 }
 

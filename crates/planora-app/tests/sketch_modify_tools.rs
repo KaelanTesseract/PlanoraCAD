@@ -202,7 +202,7 @@ fn menu_lines(w: &mut Workspace, edit: bool) -> Vec<String> {
 // ---- Leiste ---------------------------------------------------------------------------------
 
 #[test]
-fn strip_has_eighteen_buttons_in_english_that_all_fit_at_full_hd() {
+fn strip_has_twenty_buttons_in_english_that_all_fit_at_full_hd() {
     with_lang(&english(), || {
         let rig = Rig::new();
         let buttons = sketch_panel::strip_buttons(&rig.ctx);
@@ -221,6 +221,9 @@ fn strip_has_eighteen_buttons_in_english_that_all_fit_at_full_hd() {
                 "Ellipse",
                 "Spline",
                 "Copy body edge",
+                // Skizzen 5
+                "Pattern",
+                "Sketch Dimension",
                 "Trim",
                 "Extend",
                 "Break",
@@ -230,7 +233,7 @@ fn strip_has_eighteen_buttons_in_english_that_all_fit_at_full_hd() {
                 "Sketch Scale",
             ]
         );
-        assert_eq!(shell::STRIP_TOOLS, 18);
+        assert_eq!(shell::STRIP_TOOLS, 20);
         for (name, r) in &buttons {
             assert!(
                 r.top() >= 0.0 && r.bottom() < SIZE.y - shell::BOTTOM_H,
@@ -243,8 +246,8 @@ fn strip_has_eighteen_buttons_in_english_that_all_fit_at_full_hd() {
         }
         // Trennlinie vor „Trim“, sonst überall der gleiche Abstand.
         let gap = |i: usize| buttons[i + 1].1.top() - buttons[i].1.bottom();
-        for i in 0..17 {
-            let want = if i == 10 { 13.0 } else { 4.0 };
+        for i in 0..19 {
+            let want = if i == 12 { 13.0 } else { 4.0 };
             assert!((gap(i) - want).abs() < 0.01, "Abstand {i}: {}", gap(i));
         }
     });
@@ -264,6 +267,7 @@ fn only_the_forms_with_kinds_and_the_fillet_have_a_triangle() {
             Tool::Arc,
             Tool::Polygon,
             Tool::Slot,
+            Tool::Pattern,
             Tool::Fillet
         ]
     );

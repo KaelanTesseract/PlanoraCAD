@@ -17,6 +17,7 @@ use planora_sketch::fillet::{ChamferIds, FilletIds};
 use planora_sketch::helpers::RectIds;
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
 use planora_sketch::offset::OffsetIds;
+use planora_sketch::pattern::{PATTERN_MAX_INSTANCES, PatternSlot};
 use planora_sketch::shapes::{ArcSlotIds, PolygonIds, SlotIds};
 
 /// Länge der Achshilfe (Skizzen-x-Achse) für Winkel ohne vorige Linie.
@@ -52,14 +53,32 @@ pub enum FieldKind {
     MoveAngle,
     /// Faktor des Maßstabs: größer als null, ohne Einheit.
     ScaleFactor,
+    /// Muster (Skizzen 5): Anzahl der ersten Richtung, ganzzahlig 1 bis
+    /// [`planora_sketch::pattern::PATTERN_MAX_INSTANCES`].
+    PatternCount1,
+    /// Abstand (oder Gesamtlänge) der ersten Richtung: Vorzeichen kehrt die Richtung um, nie null.
+    PatternSpacing1,
+    PatternCount2,
+    PatternSpacing2,
+    /// Anzahl des Kreismusters.
+    PatternCount,
+    /// Gesamtwinkel des Kreismusters in Grad: Vorzeichen erlaubt, nie null, höchstens 360°.
+    PatternAngle,
 }
 
 impl FieldKind {
     /// Einheit, in der das Feld gelesen wird (Winkel in Grad, Seitenzahl ohne, sonst Länge).
     pub fn unit(self) -> ParamUnit {
         match self {
-            FieldKind::Angle | FieldKind::Sweep | FieldKind::MoveAngle => ParamUnit::Angle,
-            FieldKind::Sides | FieldKind::ScaleFactor => ParamUnit::Number,
+            FieldKind::Angle
+            | FieldKind::Sweep
+            | FieldKind::MoveAngle
+            | FieldKind::PatternAngle => ParamUnit::Angle,
+            FieldKind::Sides
+            | FieldKind::ScaleFactor
+            | FieldKind::PatternCount1
+            | FieldKind::PatternCount2
+            | FieldKind::PatternCount => ParamUnit::Number,
             _ => ParamUnit::Length,
         }
     }
@@ -85,7 +104,26 @@ impl FieldKind {
             FieldKind::MoveY => tr!("sketch-field-move-y"),
             FieldKind::MoveAngle => tr!("sketch-field-move-angle"),
             FieldKind::ScaleFactor => tr!("sketch-field-scale-factor"),
+            FieldKind::PatternCount1 => tr!("sketch-pattern-slot-count1"),
+            FieldKind::PatternSpacing1 => tr!("sketch-pattern-slot-spacing1"),
+            FieldKind::PatternCount2 => tr!("sketch-pattern-slot-count2"),
+            FieldKind::PatternSpacing2 => tr!("sketch-pattern-slot-spacing2"),
+            FieldKind::PatternCount => tr!("sketch-pattern-slot-count"),
+            FieldKind::PatternAngle => tr!("sketch-pattern-slot-angle"),
         }
+    }
+
+    /// Der Musterwert, den dieses Feld setzt (Skizzen 5); `None` für alle anderen Felder.
+    pub fn pattern_slot(self) -> Option<PatternSlot> {
+        Some(match self {
+            FieldKind::PatternCount1 => PatternSlot::Count1,
+            FieldKind::PatternSpacing1 => PatternSlot::Spacing1,
+            FieldKind::PatternCount2 => PatternSlot::Count2,
+            FieldKind::PatternSpacing2 => PatternSlot::Spacing2,
+            FieldKind::PatternCount => PatternSlot::Count,
+            FieldKind::PatternAngle => PatternSlot::Angle,
+            _ => return None,
+        })
     }
 }
 
@@ -101,6 +139,19 @@ pub struct DrawField {
     pub error: Option<String>,
 }
 
+/// Werkzeug, Art und Stand, zu dem die Felder gehören (siehe [`DrawInput`]): offene Punkte,
+/// Lagen, Kurven, Bogenzug, Stufe von Verschieben/Kopieren oder Muster und die Felder der Stufe.
+type InputKey = (
+    Option<Tool>,
+    Option<ToolKind>,
+    Vec<PointId>,
+    usize,
+    usize,
+    bool,
+    TransformStage,
+    &'static [FieldKind],
+);
+
 /// Felder der Stufe des laufenden Werkzeugs.
 #[derive(Clone, Debug, Default)]
 pub struct DrawInput {
@@ -110,15 +161,7 @@ pub struct DrawInput {
     pub sides: Option<usize>,
     /// Werkzeug, Art und Stand (Punkte, Lagen, Kurven, Bogenzug), zu dem die Felder gehören;
     /// ändert er sich, sind die Felder leer.
-    key: (
-        Option<Tool>,
-        Option<ToolKind>,
-        Vec<PointId>,
-        usize,
-        usize,
-        bool,
-        TransformStage,
-    ),
+    key: InputKey,
     /// Getippte Werte früherer Stufen (Bogenradius, große Achse) bis zum Abschluss.
     carried: Vec<(FieldKind, String)>,
     /// Größte kleine Halbachse dieser Stufe (die große Halbachse mit Toleranz).
@@ -240,6 +283,28 @@ fn read_field(
         found => found?,
     };
     match kind {
+        // Muster (Skizzen 5): Anzahl ganzzahlig ab 1, Abstand mit Vorzeichen und nie null,
+        // Winkel mit Vorzeichen, nie null, höchstens ein Umlauf.
+        FieldKind::PatternCount1 | FieldKind::PatternCount2 | FieldKind::PatternCount
+            if !(1.0..=PATTERN_MAX_INSTANCES as f64).contains(&v) || v.fract() != 0.0 =>
+        {
+            Err(tr!(
+                "sketch-pattern-count-range",
+                max = PATTERN_MAX_INSTANCES.to_string()
+            ))
+        }
+        FieldKind::PatternSpacing1 | FieldKind::PatternSpacing2 if !v.is_finite() || v == 0.0 => {
+            Err(tr!("sketch-field-pattern-spacing"))
+        }
+        FieldKind::PatternAngle if !v.is_finite() || v == 0.0 || v.abs() > 360.0 => {
+            Err(tr!("sketch-pattern-angle-range"))
+        }
+        FieldKind::PatternAngle => Ok(Some(v.to_radians())),
+        FieldKind::PatternCount1
+        | FieldKind::PatternCount2
+        | FieldKind::PatternCount
+        | FieldKind::PatternSpacing1
+        | FieldKind::PatternSpacing2 => Ok(Some(v)),
         FieldKind::Sides if !(3.0..=64.0).contains(&v) || v.fract() != 0.0 => {
             Err(tr!("sketch-field-sides-range"))
         }
@@ -341,7 +406,13 @@ impl SketchSession {
             self.pending_pos.len(),
             self.pending_curves.len(),
             self.line_arc.is_some(),
-            self.transform.stage,
+            if self.tool == Tool::Pattern {
+                self.pattern.stage
+            } else {
+                self.transform.stage
+            },
+            // Muster: Die Felder wechseln mit der Art des Kreismusters (Voll ohne Winkel).
+            self.stage_fields(),
         );
         if self.input.key == key {
             return;
@@ -351,15 +422,25 @@ impl SketchSession {
         {
             self.input.carried.clear();
         }
+        // Muster: Wechselt nur die Art des Kreismusters (Voll ohne Winkel), bleibt, was in den
+        // Feldern steht, die es weiter gibt.
+        let mut old = if self.tool == Tool::Pattern {
+            std::mem::take(&mut self.input.fields)
+        } else {
+            Vec::new()
+        };
         self.input.fields = self
             .stage_fields()
             .iter()
-            .map(|&kind| DrawField {
-                kind,
-                text: String::new(),
-                touched: false,
-                locked: None,
-                error: None,
+            .map(|&kind| match old.iter().position(|f| f.kind == kind) {
+                Some(i) => old.swap_remove(i),
+                None => DrawField {
+                    kind,
+                    text: String::new(),
+                    touched: false,
+                    locked: None,
+                    error: None,
+                },
             })
             .collect();
         self.input.active = 0;
@@ -376,6 +457,9 @@ impl SketchSession {
         }
         if let Some(kind) = self.planned_kind() {
             return kind.stages().get(self.kind_stage()).copied().unwrap_or(&[]);
+        }
+        if self.tool == Tool::Pattern {
+            return self.pattern_fields();
         }
         let (pts, pos) = (self.pending.len(), self.pending_pos.len());
         match self.tool {
@@ -412,6 +496,16 @@ impl SketchSession {
         };
         field.text = text.to_string();
         field.touched = true;
+        // Muster: Die Formel (in Zoll auch „1 in“) kommt beim Abschluss an den Musterwert.
+        if let Some(slot) = field.kind.pattern_slot() {
+            let formula = resolve(text, field.kind.unit(), scope)
+                .ok()
+                .and_then(|(_, f)| f);
+            self.pattern.typed_formula(slot, formula);
+        }
+        let Some(field) = self.input.fields.get_mut(i) else {
+            return;
+        };
         match read_field(field.kind, text, scope, limit) {
             Ok(locked) => {
                 field.locked = locked;
@@ -463,6 +557,9 @@ impl SketchSession {
         if self.planned_kind().is_some() {
             return self.kind_field_value(sk, kind);
         }
+        if let Some(slot) = kind.pattern_slot() {
+            return self.pattern_slot_value(slot);
+        }
         if matches!(kind, F::MoveX | F::MoveY | F::MoveAngle | F::ScaleFactor) {
             return self.transform_field_value(kind);
         }
@@ -506,7 +603,13 @@ impl SketchSession {
             | F::MoveX
             | F::MoveY
             | F::MoveAngle
-            | F::ScaleFactor => return None,
+            | F::ScaleFactor
+            | F::PatternCount1
+            | F::PatternSpacing1
+            | F::PatternCount2
+            | F::PatternSpacing2
+            | F::PatternCount
+            | F::PatternAngle => return None,
         })
     }
 
@@ -614,6 +717,14 @@ impl SketchSession {
         extend: bool,
         scope: &ParamScope,
     ) -> Result<(), String> {
+        // Muster: Die Felder wirken schon in der Vorschau; ein Klick wählt Exemplare ab oder setzt
+        // die Richtung, legt aber nichts an.
+        if self.tool == Tool::Pattern {
+            return self.click(&mut sf.sketch, raw, radius, extend);
+        }
+        // Skizzenbemaßung: Ein Klick daneben übernimmt das gesetzte Maß mit dem Wert im Feld (wie
+        // Fusion); geht das nicht, bleibt das Feld offen und der Klick wählt nichts.
+        self.accept_planned(sf, scope)?;
         self.sync_input(&sf.sketch);
         if let Some(e) = self.input.fields.iter().find_map(|f| f.error.clone()) {
             self.message = Some(Msg::Raw(e.clone()));
@@ -720,9 +831,8 @@ impl SketchSession {
                 }
                 continue;
             }
-            let overall = self.overall_center_distance(sf, &created, *kind, &typed, scope)?;
             note = self
-                .add_typed_dimension(sf, &created, *kind, text, overall, chain, scope)?
+                .add_typed_dimension(sf, &created, *kind, text, chain, scope)?
                 .or(note);
         }
         if note.is_some() {
@@ -733,62 +843,22 @@ impl SketchSession {
         Ok(())
     }
 
-    /// Der Mittenabstand `L − W` zur getippten Gesamtlänge eines Langlochs „Gesamt“ (Ruling Task 2:
-    /// Die Gesamtlänge ist kein eigenes Maß); `W` ist die getippte Breite oder die vom Zeiger. `None`
-    /// für jedes andere Maß.
-    fn overall_center_distance(
-        &self,
-        sf: &SketchFeature,
-        created: &Created,
-        kind: FieldKind,
-        typed: &[(FieldKind, String)],
-        scope: &ParamScope,
-    ) -> Result<Option<f64>, Msg> {
-        let (Some(ToolKind::SlotOverall), Created::Slot(ids), FieldKind::Length) =
-            (self.planned_kind(), created, kind)
-        else {
-            return Ok(None);
-        };
-        let value_of = |wanted: FieldKind| {
-            typed
-                .iter()
-                .find(|(k, _)| *k == wanted)
-                .map(|(k, text)| dimension_input(text, k.unit(), scope).map(|(v, _)| v))
-                .transpose()
-        };
-        let length =
-            value_of(FieldKind::Length)?.ok_or_else(|| crate::msg!("sketch-field-rejected"))?;
-        let width = match value_of(FieldKind::Width)? {
-            Some(w) => w,
-            None => {
-                2.0 * sf
-                    .sketch
-                    .radius(ids.caps[0])
-                    .ok_or_else(|| crate::msg!("sketch-field-rejected"))?
-            }
-        };
-        Ok(Some(length - width))
-    }
-
     /// Legt das Maß eines getippten Werts an. Widerspruch ist ein Fehler; `Some`: das Maß war
     /// überzählig und ist anzeigend, das ist die Meldung dazu. Ein überzähliger Öffnungswinkel
-    /// entfällt samt seinen beiden Hilfslinien, die sonst keinen Zweck hätten. `computed` ersetzt den
-    /// getippten Wert; das Maß bekommt dann weder Formel noch Speichertext.
-    #[allow(clippy::too_many_arguments)]
+    /// entfällt samt seinen beiden Hilfslinien, die sonst keinen Zweck hätten.
     fn add_typed_dimension(
         &mut self,
         sf: &mut SketchFeature,
         created: &Created,
         kind: FieldKind,
         text: &str,
-        computed: Option<f64>,
         chain: Option<CurveId>,
         scope: &ParamScope,
     ) -> Result<Option<Msg>, Msg> {
-        let (typed, _) = dimension_input(text, kind.unit(), scope)?;
-        let value = computed.unwrap_or(typed);
+        let (value, _) = dimension_input(text, kind.unit(), scope)?;
         let prior = sf.sketch.clone();
-        let dim = dimension_kind(&mut sf.sketch, created, kind, chain)?;
+        let overall = self.planned_kind() == Some(ToolKind::SlotOverall);
+        let dim = dimension_kind(&mut sf.sketch, created, kind, chain, overall)?;
         let dim = checked_value(&sf.sketch, &dim, value)?;
         let old = sf.sketch.measure(&dim);
         let id = sf.sketch.add_constraint(dim).map_err(err)?;
@@ -811,9 +881,6 @@ impl SketchSession {
             self.make_driven(&mut sf.sketch, id)?;
             return Ok(self.message.take());
         }
-        if computed.is_some() {
-            return Ok(None);
-        }
         if let Err(text) = self.set_dimension_input(sf, id, text, scope) {
             return Err(self.message.take().unwrap_or(Msg::Raw(text)));
         }
@@ -823,12 +890,14 @@ impl SketchSession {
 
 /// Das Maß der Art `kind` an der fertigen Kurve, noch ohne Wert. Winkel: `Angle(bezug, linie)`
 /// oder `Angle(linie, bezug)`, je nachdem, zu welcher Seite die Linie abgeht, damit der Wert
-/// positiv bleibt. Öffnungswinkel: zwei Konstruktionslinien Mitte→Start und Mitte→Ende.
+/// positiv bleibt. Öffnungswinkel: zwei Konstruktionslinien Mitte→Start und Mitte→Ende. `overall`:
+/// das Langloch „Gesamt“, seine Länge ist die Gesamtlänge (Skizzen 5, Entscheidung 12).
 fn dimension_kind(
     sk: &mut Sketch,
     created: &Created,
     kind: FieldKind,
     chain: Option<CurveId>,
+    overall: bool,
 ) -> Result<ConstraintKind, Msg> {
     use ConstraintKind as K;
     use FieldKind as F;
@@ -856,6 +925,9 @@ fn dimension_kind(
             K::DistancePointLine(ids.center, ids.lines[0], 0.0)
         }
         (Created::Polygon { ids, .. }, F::Length) => K::Distance(ids.points[0], ids.points[1], 0.0),
+        (Created::Slot(ids), F::Length) if overall => {
+            K::SlotOverall(ids.centers[0], ids.centers[1], ids.caps[0], 0.0)
+        }
         (Created::Slot(ids), F::Length) => K::Distance(ids.centers[0], ids.centers[1], 0.0),
         (Created::Slot(ids), F::Width) => K::Diameter(ids.caps[0], 0.0),
         (Created::ArcSlot(ids), F::Radius) => K::Radius(ids.axis, 0.0),

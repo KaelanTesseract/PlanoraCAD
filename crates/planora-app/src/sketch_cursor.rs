@@ -297,7 +297,12 @@ impl SketchSession {
     pub fn is_drawing_tool(&self) -> bool {
         !matches!(
             self.tool,
-            Tool::Select | Tool::ProjectEdge | Tool::Trim | Tool::Extend | Tool::Break
+            Tool::Select
+                | Tool::ProjectEdge
+                | Tool::Trim
+                | Tool::Extend
+                | Tool::Break
+                | Tool::Constraint(_)
         )
     }
 
@@ -329,6 +334,15 @@ impl SketchSession {
             }
             return cur;
         }
+        // Bemaßen und Muster: Der Zeiger zeigt nur, was der Klick wählte; die Art wählt die
+        // Rohlage, das Muster rechnet ohne Fang. Nur die Mitte des Kreismusters fängt wie ein
+        // gezeichneter Punkt (Fang, Raster, Strg).
+        if self.tool == Tool::Dimension
+            || (self.tool == Tool::Pattern && self.pattern.stage != TransformStage::SetBase)
+        {
+            cur.snap = self.snap(sk, raw, radius);
+            return cur;
+        }
         // Wer Kurven wählt, sieht nur Kurven: kein Punkt davor, keine Hilfslinie, kein Raster. Eine
         // Kurve wählen ist kein Fang, also geht das auch mit Strg.
         if self.picks_curves() {
@@ -349,7 +363,8 @@ impl SketchSession {
             return cur;
         }
         let index = self.current_index(sk);
-        if let Some(hit) = index.find(raw, radius) {
+        let tol = sk.tolerance().linear;
+        if let Some(hit) = index.find_avoiding(raw, radius, &self.own_open_spots(sk), tol) {
             cur.at = hit.at;
             cur.snap = hit.snap;
             cur.snap_at = Some(hit.at);
@@ -407,6 +422,21 @@ impl SketchSession {
             }
             cur.snap = Snap::Grid;
             cur.snap_at = Some(cur.at);
+            // Liegt auf dem Rasterpunkt schon ein Punkt, bindet die Kurve an ihn, statt einen
+            // zweiten daraufzulegen (Skizzen 5, Entscheidung 17); Strg schaltet das mit dem Raster ab.
+            // Ohne Punkt im Ursprung bindet der Rasterpunkt dort wie der Ursprungsfang (fest auf 0, 0).
+            let tol = sk.tolerance().linear;
+            if let Some(p) = sk.point_at(cur.at, tol)
+                && let Ok(at) = sk.point_xy(p)
+            {
+                cur.at = at;
+                cur.snap = Snap::Point(p);
+                cur.snap_at = Some(at);
+            } else if cur.at.length() <= tol {
+                cur.at = DVec2::ZERO;
+                cur.snap = Snap::Origin;
+                cur.snap_at = Some(DVec2::ZERO);
+            }
         }
     }
 
@@ -513,6 +543,23 @@ impl SketchSession {
         }
     }
 
+    /// Lagen, auf die der nächste Klick nicht fängt: die offenen Punkte von Kreis, Bogen und Ellipse
+    /// (klassische Arten). Wie in Fusion fängt der zweite Klick nicht auf den eigenen ersten Punkt;
+    /// das gäbe eine Form ohne Größe, und ein Klick knapp daneben meint die kleine Form. Die Linie
+    /// fängt weiter auf ihren letzten Punkt: Ein Klick dort (auch ein kleiner Zug unter der
+    /// Klickgrenze) legt keine winzige Linie an. Der Spline hat seine eigene Meldung.
+    fn own_open_spots(&self, sk: &Sketch) -> Vec<DVec2> {
+        if self.planned_kind().is_some()
+            || !matches!(self.tool, Tool::Circle | Tool::Arc | Tool::Ellipse)
+        {
+            return Vec::new();
+        }
+        self.pending
+            .iter()
+            .filter_map(|&p| sk.point_xy(p).ok())
+            .collect()
+    }
+
     /// Punkte, an denen sich der Zeiger nicht ausrichtet: die laufenden und die, die auf einer
     /// gemerkten Lage des Rechtecks oder einer geplanten Art liegen (die Form gibt es nur als
     /// Lagen).
@@ -542,35 +589,7 @@ impl SketchSession {
         p: Option<PointId>,
         cur: &DrawCursor,
     ) -> Result<PointId, Msg> {
-        use ConstraintKind as K;
-        let snap = cur.binding(sk.tolerance().linear);
-        if let Snap::Point(q) | Snap::Center(q) = snap {
-            let Some(own) = p else {
-                return Ok(q);
-            };
-            if own != q {
-                sk.add_constraint(K::Coincident(own, q)).map_err(err)?;
-            }
-            return Ok(own);
-        }
-        let own = match p {
-            Some(own) => own,
-            None => sk.add_point(cur.at.x, cur.at.y).map_err(err)?,
-        };
-        let kinds = match snap {
-            Snap::Curve(c) => vec![K::PointOnCurve(own, c)],
-            Snap::Midpoint(c) => match sk.curve(c).map(|d| &d.kind) {
-                Some(CurveKind::Line { .. }) => vec![K::Midpoint(own, c)],
-                _ => vec![K::PointOnCurve(own, c)],
-            },
-            Snap::Intersection(a, b) => vec![K::PointOnCurve(own, a), K::PointOnCurve(own, b)],
-            Snap::Origin => vec![K::Fixed(own, 0.0, 0.0)],
-            _ => Vec::new(),
-        };
-        for kind in kinds {
-            sk.add_constraint(kind).map_err(err)?;
-        }
-        Ok(own)
+        attach_point(sk, p, cur)
     }
 
     /// Kreis oder Ellipse: Nur ein gefangener Punkt bindet, und nur, wenn er wirklich auf der
@@ -595,4 +614,42 @@ impl SketchSession {
         }
         Ok(())
     }
+}
+
+/// [`SketchSession::attach`] ohne Sitzung (die Anordnung legt ihre Mitte erst beim Anlegen an und
+/// zeigt sie vorher in einer Kopie der Skizze).
+pub(crate) fn attach_point(
+    sk: &mut Sketch,
+    p: Option<PointId>,
+    cur: &DrawCursor,
+) -> Result<PointId, Msg> {
+    use ConstraintKind as K;
+    let snap = cur.binding(sk.tolerance().linear);
+    if let Snap::Point(q) | Snap::Center(q) = snap {
+        let Some(own) = p else {
+            return Ok(q);
+        };
+        if own != q {
+            sk.add_constraint(K::Coincident(own, q)).map_err(err)?;
+        }
+        return Ok(own);
+    }
+    let own = match p {
+        Some(own) => own,
+        None => sk.add_point(cur.at.x, cur.at.y).map_err(err)?,
+    };
+    let kinds = match snap {
+        Snap::Curve(c) => vec![K::PointOnCurve(own, c)],
+        Snap::Midpoint(c) => match sk.curve(c).map(|d| &d.kind) {
+            Some(CurveKind::Line { .. }) => vec![K::Midpoint(own, c)],
+            _ => vec![K::PointOnCurve(own, c)],
+        },
+        Snap::Intersection(a, b) => vec![K::PointOnCurve(own, a), K::PointOnCurve(own, b)],
+        Snap::Origin => vec![K::Fixed(own, 0.0, 0.0)],
+        _ => Vec::new(),
+    };
+    for kind in kinds {
+        sk.add_constraint(kind).map_err(err)?;
+    }
+    Ok(own)
 }

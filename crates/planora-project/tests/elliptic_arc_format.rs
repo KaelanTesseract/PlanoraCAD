@@ -57,7 +57,7 @@ fn load(text: &str) -> Result<Document, ProjectError> {
 
 #[test]
 fn format_version_is_13() {
-    assert_eq!(FORMAT_VERSION, 14);
+    assert_eq!(FORMAT_VERSION, 15);
 }
 
 #[test]
@@ -105,8 +105,8 @@ fn without_an_elliptic_arc_the_file_keeps_its_format() {
 }
 
 #[test]
-fn format_15_is_too_new() {
+fn format_16_is_too_new() {
     let text = encode_version(&document(true, false).snapshot()).unwrap();
-    let e = load(&text.replacen("\"format\": 13", "\"format\": 15", 1)).unwrap_err();
-    assert!(matches!(e, ProjectError::TooNew { found: 15, .. }), "{e:?}");
+    let e = load(&text.replacen("\"format\": 13", "\"format\": 16", 1)).unwrap_err();
+    assert!(matches!(e, ProjectError::TooNew { found: 16, .. }), "{e:?}");
 }

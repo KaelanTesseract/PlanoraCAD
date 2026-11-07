@@ -1198,8 +1198,20 @@ impl PlanoraApp {
                 panic!("Crash test: triggered on purpose");
             }
         }
-        let area = keymap::dispatch::current_area(&self.ws.active_tab().state);
         let windows = self.windows_open() || self.projects.is_open();
+        // Skizzenbemaßung: Tab schaltet Ø/R der Vorschau um, statt den Fokus weiterzugeben. Hier
+        // vor dem Aufbau der Bedienelemente, sonst nähme schon das erste den Fokus.
+        if !windows
+            && let Some((se, sk)) = self.ws.active_tab_mut().state.session_sketch_mut()
+            && se.tool == crate::sketch_state::Tool::Dimension
+            && se.dim.plan.is_none()
+            && !ctx.egui_wants_keyboard_input()
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab))
+        {
+            ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+            se.toggle_dimension_preview(sk);
+        }
+        let area = keymap::dispatch::current_area(&self.ws.active_tab().state);
         let pressed = keymap::dispatch::pressed_if(ctx, &self.ws.keymap, area, |a| {
             !is_history_key(a) && !(windows && a.area() != keymap::Area::All)
         });
@@ -2060,6 +2072,7 @@ pub fn create_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     ui.separator();
     sketch_menu(ui, ws);
     sketch_kinds_menu(ui, ws);
+    sketch_create_entries(ui, ws);
     ui.separator();
     // Körper aus Skizzen: die gewählte (sonst die geöffnete, sonst die letzte) Skizze.
     for kind in &CreateKind::ALL[4..] {
@@ -2278,8 +2291,9 @@ fn sketch_kinds_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     }
     let tools = sketch_panel::TOOL_ORDER
         .into_iter()
-        // Die Rundung und die Fasen stehen unter „Bearbeiten → Ändern“.
-        .filter(|t| sketch_panel::has_flyout(*t) && *t != Tool::Fillet);
+        // Die Rundung und die Fasen stehen unter „Bearbeiten → Ändern“, die Muster direkt im
+        // Menü (`sketch_create_entries`).
+        .filter(|t| sketch_panel::has_flyout(*t) && !matches!(t, Tool::Fillet | Tool::Pattern));
     for tool in tools {
         icons::submenu(ui, sketch_panel::tool_label(tool), |ui| {
             for kind in crate::sketch_kinds::ToolKind::of(tool) {
@@ -2294,6 +2308,39 @@ fn sketch_kinds_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
                 }
             }
         });
+    }
+}
+
+/// Die Einträge des Menüs „Erzeugen“ bei offener Skizze ohne Untermenü (wie Fusion „Create“):
+/// beide Muster und die Skizzenbemaßung.
+pub const SKETCH_CREATE_ACTIONS: [Action; 3] = [
+    Action::SketchPatternRect,
+    Action::SketchPatternCircular,
+    Action::SketchDimension,
+];
+
+/// Bei offener Skizze [`SKETCH_CREATE_ACTIONS`] mit Symbol, Taste und Hinweis, gewählt über die
+/// Aktion wie in der Leiste.
+fn sketch_create_entries(ui: &mut egui::Ui, ws: &mut Workspace) {
+    if ws.active_tab().state.open_sketch_id().is_none() {
+        return;
+    }
+    for action in SKETCH_CREATE_ACTIONS {
+        let (source, hint) = match action.sketch_kind() {
+            Some(kind) => (icons::sketch_kind_icon(kind), kind.hint()),
+            None => {
+                let tool = action.sketch_tool().unwrap_or(Tool::Dimension);
+                (icons::sketch_tool_icon(tool), sketch_panel::tool_hint(tool))
+            }
+        };
+        let keys = keymap::shortcut_hint(&ws.keymap, action);
+        if icons::source_entry_keys(ui, source, &action.label(), &keys, true)
+            .on_hover_text(hint)
+            .clicked()
+        {
+            commands::run_action(ws, action);
+            ui.close();
+        }
     }
 }
 

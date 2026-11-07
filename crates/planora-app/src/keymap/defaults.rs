@@ -97,8 +97,7 @@ action_table! {
     /// „Ansicht → Tastenkürzel …“. In der Skizze gilt [`Action::SketchShowShortcuts`].
     ShowShortcuts, "ansicht.tastenkuerzel", "action-show-shortcuts", Model, [key(Key::S)];
     // Skizze: nur Werkzeuge, die es gibt (wie der Klick auf den Knopf der Leiste). Die
-    // Skizzenbemaßung D kommt erst mit ihrer Funktion. Esc, Enter und Entf der Skizze sind
-    // fest (`sketch_view`), nicht in der Tabelle.
+    // Esc, Enter und Entf der Skizze sind fest (`sketch_view`), nicht in der Tabelle.
     SketchLine, "skizze.linie", "action-sketch-line", Sketch, [key(Key::L)];
     // Die Arten der Formen (`sketch_kinds::ToolKind`): Der Name ist der Name der Art, der Knopf
     // der Leiste heißt weiter nach der Form (`sketch_panel::tool_label`). Nur Rechteck und Kreis
@@ -153,6 +152,13 @@ action_table! {
     SketchMoveCopy, "skizze.verschieben", "action-sketch-move-copy", Sketch, [key(Key::M)];
     /// Fusion „Skizzenmaßstab“: ohne Vorgabetaste, belegbar.
     SketchScale, "skizze.massstab", "action-sketch-scale", Sketch, [];
+    /// Fusion „Skizzenbemaßung“ (D, Skizzen 5). Das D der Zeichnung gilt in einem anderen
+    /// Bereich, die beiden stoßen sich nicht.
+    SketchDimension, "skizze.bemassen", "action-sketch-dimension", Sketch, [key(Key::D)];
+    /// Fusion „Rechteckige Anordnung“ (Skizzen 5): ohne Vorgabetaste wie in Fusion, belegbar.
+    SketchPatternRect, "skizze.muster_rechteck", "action-sketch-pattern-rect", Sketch, [];
+    /// Fusion „Kreisförmige Anordnung“ (Skizzen 5): ohne Vorgabetaste wie in Fusion, belegbar.
+    SketchPatternCircular, "skizze.muster_kreis", "action-sketch-pattern-circular", Sketch, [];
     /// Fusion „Blick auf“ (Look At): wie der Knopf in der Skizzenpalette; ohne Vorgabetaste.
     SketchLookAt, "skizze.blick_auf", "action-sketch-look-at", Sketch, [];
     /// Schalter „Skizzenraster“ der Skizzenpalette; ohne Vorgabetaste.
@@ -168,6 +174,13 @@ action_table! {
     /// Wie der Knopf im Skizzenfeld: schaltet die ausgewählten Linien zwischen Mittellinie und
     /// normal um (ohne Vorgabetaste).
     SketchCenterline, "skizze.mittellinie", "action-sketch-centerline", Sketch, [];
+    // Skizzen 5: wie die Knöpfe im Skizzenfeld, auf die Auswahl; ohne Vorgabetaste wie in Fusion.
+    /// Fusion „Konzentrisch“.
+    SketchConcentric, "skizze.konzentrisch", "action-sketch-concentric", Sketch, [];
+    /// Fusion „Kollinear“.
+    SketchCollinear, "skizze.kollinear", "action-sketch-collinear", Sketch, [];
+    /// Fusion „Glatt“.
+    SketchSmooth, "skizze.glatt", "action-sketch-smooth", Sketch, [];
     /// Wie [`Action::ShowShortcuts`], in der offenen Skizze (eine Aktion hat nur einen Bereich).
     SketchShowShortcuts, "skizze.tastenkuerzel", "action-sketch-show-shortcuts", Sketch,
         [key(Key::S)];
@@ -201,6 +214,7 @@ impl Action {
             Action::SketchOffset => Some(Tool::Offset),
             Action::SketchMoveCopy => Some(Tool::MoveCopy),
             Action::SketchScale => Some(Tool::Scale),
+            Action::SketchDimension => Some(Tool::Dimension),
             _ => self.sketch_kind().map(crate::sketch_kinds::ToolKind::tool),
         }
     }

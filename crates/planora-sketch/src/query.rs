@@ -210,6 +210,15 @@ impl Sketch {
             .map(|(id, _)| id)
     }
 
+    /// Lebender Punkt, der innerhalb von `tol` auf `at` liegt (der nächste); für den Rasterfang,
+    /// der auf einem vorhandenen Punkt an ihn bindet statt einen zweiten daraufzulegen.
+    pub fn point_at(&self, at: DVec2, tol: f64) -> Option<PointId> {
+        if !at.is_finite() || !tol.is_finite() {
+            return None;
+        }
+        self.pick_point(at, tol.max(0.0))
+    }
+
     /// Nächste lebende Kurve innerhalb von `radius` um `at`.
     pub fn pick_curve(&self, at: DVec2, radius: f64) -> Option<CurveId> {
         self.curves()

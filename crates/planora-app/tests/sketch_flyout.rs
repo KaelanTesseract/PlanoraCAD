@@ -273,7 +273,13 @@ fn only_shapes_with_kinds_have_a_triangle() {
     for tool in TOOL_ORDER {
         let expected = matches!(
             tool,
-            Tool::Rectangle | Tool::Circle | Tool::Arc | Tool::Polygon | Tool::Slot | Tool::Fillet
+            Tool::Rectangle
+                | Tool::Circle
+                | Tool::Arc
+                | Tool::Polygon
+                | Tool::Slot
+                | Tool::Pattern
+                | Tool::Fillet
         );
         assert_eq!(sketch_panel::has_flyout(tool), expected, "{tool:?}");
     }
@@ -645,10 +651,11 @@ fn another_kind_of_the_same_shape_drops_positions_the_same_kind_keeps_them() {
 fn the_create_menu_lists_all_kinds_while_a_sketch_is_open() {
     let mut rig = Rig::new();
     let mut count = 0;
-    // Skizzen 4: Rundung und Fasen stehen unter „Bearbeiten → Ändern“, nicht hier.
+    // Skizzen 4: Rundung und Fasen stehen unter „Bearbeiten → Ändern“, nicht hier; Skizzen 5:
+    // die Muster stehen ohne Untermenü im Menü (`sketch_s5_commands.rs`).
     for tool in TOOL_ORDER
         .into_iter()
-        .filter(|t| sketch_panel::has_flyout(*t) && *t != Tool::Fillet)
+        .filter(|t| sketch_panel::has_flyout(*t) && !matches!(t, Tool::Fillet | Tool::Pattern))
     {
         let label = sketch_panel::tool_label(tool);
         let shot = rig.settle();

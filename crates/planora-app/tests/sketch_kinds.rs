@@ -205,8 +205,9 @@ const R: f64 = 0.5;
 
 #[test]
 fn kinds_cover_their_tools_without_gaps() {
-    // Skizzen 4: Rundung und die drei Fasen kamen dazu (19 → 23).
-    assert_eq!(ToolKind::ALL.len(), 23);
+    // Skizzen 4: Rundung und die drei Fasen kamen dazu (19 → 23). Skizzen 5: die beiden
+    // Anordnungen (23 → 25).
+    assert_eq!(ToolKind::ALL.len(), 25);
     let mut seen = Vec::new();
     for tool in [
         Tool::Rectangle,
@@ -215,6 +216,7 @@ fn kinds_cover_their_tools_without_gaps() {
         Tool::Polygon,
         Tool::Slot,
         Tool::Fillet,
+        Tool::Pattern,
     ] {
         assert!(!ToolKind::of(tool).is_empty(), "{tool:?}");
         for &k in ToolKind::of(tool) {
@@ -223,7 +225,7 @@ fn kinds_cover_their_tools_without_gaps() {
             seen.push(k);
         }
     }
-    assert_eq!(seen.len(), 23);
+    assert_eq!(seen.len(), 25);
     for tool in [
         Tool::Select,
         Tool::Point,
@@ -262,6 +264,8 @@ fn kinds_cover_their_tools_without_gaps() {
             polygon: ToolKind::PolygonCircumscribed,
             slot: ToolKind::SlotCenterToCenter,
             fillet: ToolKind::Fillet,
+            // Skizzen 5: Die Anordnungen merken ihre Art wie die Formen.
+            pattern: ToolKind::PatternRect,
         }
     );
     let lines_only: Vec<ToolKind> = ToolKind::ALL
@@ -413,8 +417,9 @@ fn default_keys_stay_and_twenty_actions_have_none() {
         .iter()
         .filter(|k| k.action().default_bindings().is_empty())
         .count();
-    // Skizzen 4: Die Rundung hat F, die drei Fasen keine Taste (17 → 20).
-    assert_eq!(free, 20);
+    // Skizzen 4: Die Rundung hat F, die drei Fasen keine Taste (17 → 20). Skizzen 5: Die beiden
+    // Anordnungen haben wie in Fusion keine Taste (20 → 22).
+    assert_eq!(free, 22);
     assert!(km.to_overrides().is_empty(), "Konfiguration bleibt leer");
 }
 
@@ -542,7 +547,7 @@ fn planned_arc_kind_is_remembered() {
 // ---- Leiste und Hinweis ---------------------------------------------------------------------
 
 #[test]
-fn strip_has_eighteen_tools_and_fits_at_full_hd() {
+fn strip_has_twenty_tools_and_fits_at_full_hd() {
     assert_eq!(
         sketch_panel::TOOL_ORDER,
         [
@@ -557,6 +562,9 @@ fn strip_has_eighteen_tools_and_fits_at_full_hd() {
             Tool::Ellipse,
             Tool::Spline,
             Tool::ProjectEdge,
+            // Skizzen 5
+            Tool::Pattern,
+            Tool::Dimension,
             Tool::Trim,
             Tool::Extend,
             Tool::Break,
@@ -569,7 +577,7 @@ fn strip_has_eighteen_tools_and_fits_at_full_hd() {
     );
     let rig = Rig::new();
     let buttons = sketch_panel::strip_buttons(&rig.ctx);
-    assert_eq!(buttons.len(), 18);
+    assert_eq!(buttons.len(), 20);
     for (label, r) in &buttons {
         assert!(
             r.top() >= 0.0 && r.bottom() < SIZE.y - planora_app::shell::BOTTOM_H,

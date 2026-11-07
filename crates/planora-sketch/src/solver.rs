@@ -22,6 +22,7 @@ use crate::constraint::{ConstraintId, ConstraintKind, SHARED_END_TANGENT_DRIFT};
 use crate::error::SketchError;
 use crate::linalg::{Matrix, analyze_rows, cholesky_solve};
 use crate::model::{CurveId, CurveKind, PointId, Sketch};
+use crate::pattern::{PATTERN_ROUNDS, PatternId};
 use planora_i18n::tr;
 use planora_math::DVec2;
 use std::collections::{HashMap, HashSet};
@@ -188,6 +189,9 @@ struct Group {
     /// Gruppe, etwa das freie Ende einer Linie oder einen Punkt einer anderen Gruppe).
     /// Aufsteigend, ohne Doppelte. Schlüssel des Zwischenspeichers.
     reads: Vec<usize>,
+    /// Variablen von Musterexemplaren, die die Abhängigkeiten der Gruppe lesen: für den Löser
+    /// Konstanten (keine Spalte), aber Teil von `reads`. Aufsteigend, ohne Doppelte.
+    pattern_reads: Vec<usize>,
 }
 
 /// Residuen und Jacobi-Matrix einer Gruppe.
@@ -755,29 +759,44 @@ impl Sketch {
     /// Bildet die Gruppen der aktiven Abhängigkeiten. Liefert auch, welche Variablen in einer
     /// aktiven Abhängigkeit vorkommen.
     fn build_groups(&self) -> (Vec<Group>, Vec<bool>) {
+        self.build_groups_holding(&self.pattern_vars(), None)
+    }
+
+    /// Wie [`build_groups`](Self::build_groups); die Variablen `held` (Musterexemplare) sind
+    /// Konstanten: Sie verbinden nichts und zählen nicht als Variablen einer Gruppe, landen aber
+    /// in `reads` und `pattern_reads`. Abhängigkeiten, die nur sie lesen, entfallen. `extra`:
+    /// Variablen einer noch nicht angelegten Abhängigkeit, die mit verbindet (ohne Eintrag in
+    /// `Group::constraints`).
+    fn build_groups_holding(
+        &self,
+        held: &HashSet<usize>,
+        extra: Option<&[usize]>,
+    ) -> (Vec<Group>, Vec<bool>) {
         let n = self.vars.len();
         let mut parent: Vec<usize> = (0..n).collect();
         let mut in_constraint = vec![false; n];
-        // Abhängigkeiten in Anlagereihenfolge, jeweils mit ihren Variablen.
-        let mut active: Vec<(ConstraintId, Vec<usize>)> = Vec::new();
-        for (id, c) in self.constraints.iter() {
-            if !(c.alive && c.enabled && !c.driven) {
+        // Abhängigkeiten in Anlagereihenfolge, jeweils mit ihren Variablen und den gelesenen
+        // Exemplarvariablen.
+        let mut active: Vec<(Option<ConstraintId>, Vec<usize>, Vec<usize>)> = Vec::new();
+        let existing = self
+            .constraints
+            .iter()
+            .filter(|(_, c)| c.alive && c.enabled && !c.driven)
+            .filter_map(|(id, _)| Some((Some(id), self.evaluate(id, &self.vars)?.locals)));
+        for (id, all) in existing.chain(extra.map(|e| (None, e.to_vec()))) {
+            let (locals, read): (Vec<usize>, Vec<usize>) =
+                all.into_iter().partition(|v| !held.contains(v));
+            if locals.is_empty() {
                 continue;
             }
-            let Some(ev) = self.evaluate(id, &self.vars) else {
-                continue;
-            };
-            if ev.locals.is_empty() {
-                continue;
-            }
-            for w in ev.locals.windows(2) {
+            for w in locals.windows(2) {
                 let (a, b) = (find(&mut parent, w[0]), find(&mut parent, w[1]));
                 parent[a] = b;
             }
-            for &v in &ev.locals {
+            for &v in &locals {
                 in_constraint[v] = true;
             }
-            active.push((id, ev.locals));
+            active.push((id, locals, read));
         }
         let mut groups: Vec<Group> = Vec::new();
         let mut index: HashMap<usize, usize> = HashMap::new();
@@ -789,14 +808,16 @@ impl Sketch {
                     constraints: Vec::new(),
                     curves: Vec::new(),
                     reads: Vec::new(),
+                    pattern_reads: Vec::new(),
                 });
                 groups.len() - 1
             });
             groups[gi].vars.push(v);
         }
-        for (id, locals) in active {
+        for (id, locals, read) in active {
             let gi = index[&find(&mut parent, locals[0])];
-            groups[gi].constraints.push(id);
+            groups[gi].constraints.extend(id);
+            groups[gi].pattern_reads.extend(read);
         }
         // Kurven, deren Variablen (Punkte oder eigene) in einer Gruppe liegen, gehören zu ihr
         // (für die Prüfung auf Entartung).
@@ -819,18 +840,154 @@ impl Sketch {
             }
         }
         for g in &mut groups {
+            g.pattern_reads.sort_unstable();
+            g.pattern_reads.dedup();
             g.reads.extend(g.vars.iter().copied());
+            g.reads.extend(g.pattern_reads.iter().copied());
             g.reads.sort_unstable();
             g.reads.dedup();
         }
         (groups, in_constraint)
     }
 
+    /// Die lebenden Muster in einer Schleife: Eine Gruppe enthält eine Eingangsvariable (Vorlage,
+    /// Richtungslinie oder Mitte) und liest eine Exemplarvariable desselben Musters. Dann liefe das
+    /// Nachführen nie zusammen (Entscheidung 6). `extra`: die Variablen einer Abhängigkeit, die
+    /// erst angelegt werden soll; `touching`: nur Gruppen, die eine dieser Variablen enthalten
+    /// (`None`: alle Gruppen).
+    fn patterns_in_cycles(
+        &self,
+        extra: Option<&[usize]>,
+        touching: Option<&[usize]>,
+    ) -> Vec<PatternId> {
+        let held = self.pattern_vars();
+        if held.is_empty() {
+            return Vec::new();
+        }
+        let (groups, _) = self.build_groups_holding(&held, extra);
+        let io: Vec<(PatternId, HashSet<usize>, HashSet<usize>)> = self
+            .patterns()
+            .map(|(id, _)| {
+                let (inputs, outputs) = self.pattern_io(id);
+                (id, inputs, outputs)
+            })
+            .collect();
+        let touching: Option<HashSet<usize>> = touching.map(|t| t.iter().copied().collect());
+        let mut out: Vec<PatternId> = Vec::new();
+        for g in groups.iter().filter(|g| !g.pattern_reads.is_empty()) {
+            if let Some(t) = &touching
+                && !g.vars.iter().any(|v| t.contains(v))
+            {
+                continue;
+            }
+            for (id, inputs, outputs) in &io {
+                if !out.contains(id)
+                    && g.pattern_reads.iter().any(|v| outputs.contains(v))
+                    && g.vars.iter().any(|v| inputs.contains(v))
+                {
+                    out.push(*id);
+                }
+            }
+        }
+        out
+    }
+
+    /// Schlösse die Abhängigkeit mit den Variablen `locals` (noch nicht angelegt oder gerade
+    /// angelegt) eine neue Schleife zwischen Vorlage und eigenem Exemplar? Geprüft werden nur die
+    /// Gruppen, in denen sie liegt: Eine Schleife anderswo in der Skizze (etwa aus einer alten
+    /// Datei) sperrt fremde Befehle nicht.
+    pub(crate) fn pattern_cycle(&self, locals: &[usize]) -> bool {
+        !self
+            .patterns_in_cycles(Some(locals), Some(locals))
+            .is_empty()
+    }
+
+    /// Alle lebenden Muster in einer Schleife (beim Laden, vor und nach Befehlen, die Muster
+    /// ändern oder auflösen).
+    pub(crate) fn cyclic_patterns(&self) -> Vec<PatternId> {
+        self.patterns_in_cycles(None, None)
+    }
+
     /// Löst mit weichen Zusatzbedingungen (zum Ziehen). Harte Abhängigkeiten werden danach
     /// ohne die weichen exakt nachgelöst („Politur“).
+    ///
+    /// Mit Mustern (Entscheidung 5): Vor dem Lauf werden die Exemplare aus der Vorlage
+    /// nachgeführt, danach erneut. Hat sich dabei ein Exemplar bewegt und liest eine Gruppe
+    /// Exemplare, folgt noch ein Lauf, insgesamt höchstens `max(PATTERN_ROUNDS, Muster + 1)`:
+    /// Jede Runde bringt in einer Kette ohne Schleife mindestens ein weiteres Glied zur Ruhe, so
+    /// reicht das für jede solche Kette (Schlusskorrektur I2). Die Exemplare stehen am Ende immer
+    /// an der Lage der gelösten Vorlage. Geht die Lage eines Musters nicht, ist ein „gelöst“
+    /// „nicht lösbar“: Seine Exemplare stünden sonst still an der alten Lage.
     pub(crate) fn solve_with_soft(&mut self, soft: &[Soft]) -> SolveReport {
+        if self.patterns().next().is_none() {
+            return self.solve_round(soft, &HashSet::new()).0;
+        }
+        self.refresh_patterns();
+        let held = self.pattern_vars();
+        let max_rounds = PATTERN_ROUNDS.max(self.patterns().count() + 1);
+        let (mut report, mut reads) = self.solve_round(soft, &held);
+        let mut rounds = 1;
+        loop {
+            let refresh = self.refresh_patterns();
+            if refresh.failed && report.status == SolveStatus::Solved {
+                report.status = SolveStatus::NotConverged;
+            }
+            if !(refresh.moved && reads) {
+                break;
+            }
+            if rounds >= max_rounds {
+                // Die letzte Nachführung hat Exemplare bewegt, die eine Gruppe liest (etwa eine
+                // Schleife über mehrere Muster, die die Prüfung nicht kennt): Deren Lösung ist
+                // überholt.
+                self.flag_stale_pattern_reads(&held, &mut report);
+                break;
+            }
+            let (next, again) = self.solve_round(soft, &held);
+            rounds += 1;
+            reads = again;
+            report = SolveReport {
+                drag_failed: report.drag_failed || next.drag_failed,
+                iterations: report.iterations.max(next.iterations),
+                group_solves: report.group_solves + next.group_solves,
+                ..next
+            };
+        }
+        report
+    }
+
+    /// Prüft die Gruppen, die Exemplare lesen, an den aktuellen Werten: Verletzte Abhängigkeiten
+    /// kommen nach `conflicting`, und ein „gelöst“ wird „nicht lösbar“ (kein Widerspruch: der
+    /// nächste Lauf führt weiter).
+    fn flag_stale_pattern_reads(&self, held: &HashSet<usize>, report: &mut SolveReport) {
         let tol_r = RESIDUAL_FRACTION * self.tolerance().linear;
-        let (groups, in_constraint) = self.build_groups();
+        let (groups, _) = self.build_groups_holding(held, None);
+        let mut violated = false;
+        for g in groups.iter().filter(|g| !g.pattern_reads.is_empty()) {
+            for &id in &g.constraints {
+                let Some(ev) = self.evaluate(id, &self.vars) else {
+                    continue;
+                };
+                // `!(|r| <= tol_r)` zählt auch NaN als verletzt.
+                if ev.residuals.iter().all(|r| r.v.abs() <= tol_r) {
+                    continue;
+                }
+                violated = true;
+                if !self.constraints[id].internal && !report.conflicting.contains(&id) {
+                    report.conflicting.push(id);
+                }
+            }
+        }
+        if violated && report.status == SolveStatus::Solved {
+            report.status = SolveStatus::NotConverged;
+        }
+    }
+
+    /// Ein Lauf über alle Gruppen; `held` sind die Exemplarvariablen (Konstanten). Der zweite
+    /// Wert sagt, ob eine Gruppe Exemplare liest.
+    fn solve_round(&mut self, soft: &[Soft], held: &HashSet<usize>) -> (SolveReport, bool) {
+        let tol_r = RESIDUAL_FRACTION * self.tolerance().linear;
+        let (groups, in_constraint) = self.build_groups_holding(held, None);
+        let reads_patterns = groups.iter().any(|g| !g.pattern_reads.is_empty());
 
         let mut status = SolveStatus::Solved;
         let mut redundant = Vec::new();
@@ -999,42 +1156,71 @@ impl Sketch {
         self.vars = committed;
         self.solve_cache = cache;
 
-        // Lebende Variablen, die in keiner aktiven Abhängigkeit vorkommen, sind frei.
+        // Lebende Variablen, die in keiner aktiven Abhängigkeit vorkommen, sind frei;
+        // Exemplarvariablen nicht (sie hält das Muster).
         for v in self.live_variables() {
-            if !in_constraint[v] && free_vars.insert(v) {
+            if !in_constraint[v] && !held.contains(&v) && free_vars.insert(v) {
                 dof += 1;
             }
         }
-        let free_points: Vec<PointId> = self
+        let mut free_points: Vec<PointId> = self
             .points()
             .filter(|(_, p)| free_vars.contains(&p.x) || free_vars.contains(&p.y))
             .map(|(i, _)| i)
             .collect();
-        let free_curves: Vec<CurveId> = self
+        // Ein Exemplarpunkt gilt als frei, wenn sein Vorlagenpunkt frei ist (nur für die Farbe).
+        let mut free_set: HashSet<PointId> = free_points.iter().copied().collect();
+        let mut instance_curves: Vec<(CurveId, CurveId)> = Vec::new();
+        for (_, d) in self.patterns() {
+            for inst in &d.instances {
+                for (&q, p) in inst.points.iter().zip(&d.source_points) {
+                    if self.points[q].alive && free_set.contains(p) && free_set.insert(q) {
+                        free_points.push(q);
+                    }
+                }
+                instance_curves.extend(inst.curves.iter().copied().zip(d.sources.iter().copied()));
+            }
+        }
+        let mut free_curves: Vec<CurveId> = self
             .curves()
             .filter(|(_, c)| {
                 own_vars(&c.kind).iter().any(|v| free_vars.contains(v))
-                    || c.kind.points().iter().any(|p| free_points.contains(p))
+                    || c.kind.points().iter().any(|p| free_set.contains(p))
             })
             .map(|(i, _)| i)
             .collect();
-        SolveReport {
-            drag_failed,
-            status,
-            dof,
-            redundant,
-            conflicting,
-            free_points,
-            free_curves,
-            iterations,
-            group_solves,
+        let free_sources: HashSet<CurveId> = free_curves.iter().copied().collect();
+        for (copy, source) in instance_curves {
+            if self.curves[copy].alive
+                && free_sources.contains(&source)
+                && !free_sources.contains(&copy)
+            {
+                free_curves.push(copy);
+            }
         }
+        (
+            SolveReport {
+                drag_failed,
+                status,
+                dof,
+                redundant,
+                conflicting,
+                free_points,
+                free_curves,
+                iterations,
+                group_solves,
+            },
+            reads_patterns,
+        )
     }
 
     /// Zieht Punkte zu Zielpositionen; harte Abhängigkeiten bleiben erfüllt. Der Solver startet
     /// vom aktuellen Zustand, die gewählte Lage mehrdeutiger Abhängigkeiten (`branch`) bleibt
     /// unverändert, deshalb klappt nichts in die Spiegellage um. Nicht lösbare Gruppen bleiben
     /// unverändert (siehe `solve`).
+    ///
+    /// Zug an einem Musterexemplar zieht dessen Vorlagenpunkt an die entsprechende Stelle (die
+    /// Umkehrung der Lage des Exemplars, **Annahme**).
     pub fn drag(&mut self, drags: &[Drag]) -> Result<SolveReport, SketchError> {
         for d in drags {
             self.check_point(d.point)?;
@@ -1044,6 +1230,19 @@ impl Sketch {
             crate::model::finite(d.target.x, || tr!("sketch-err-what-target-x"))?;
             crate::model::finite(d.target.y, || tr!("sketch-err-what-target-y"))?;
         }
+        let mapped: Vec<Drag>;
+        let drags = if self.patterns().next().is_some() {
+            mapped = drags
+                .iter()
+                .map(|d| match self.instance_drag_target(d.point, d.target) {
+                    Some((point, target)) if target.is_finite() => Drag { point, target },
+                    _ => *d,
+                })
+                .collect();
+            &mapped[..]
+        } else {
+            drags
+        };
         let mut soft = Vec::with_capacity(2 * drags.len());
         for d in drags {
             let (xv, yv) = (self.points[d.point].x, self.points[d.point].y);
@@ -1069,8 +1268,10 @@ impl Sketch {
 
     /// Zieht den Radius eines Kreises zu `target` (größer als die Toleranz); harte Abhängigkeiten
     /// bleiben erfüllt. Liest keine aktive Abhängigkeit den Radius, folgt er direkt.
+    /// Am Kreis eines Musterexemplars zieht das den Kreis der Vorlage.
     pub fn drag_radius(&mut self, c: CurveId, target: f64) -> Result<SolveReport, SketchError> {
         self.check_curve(c)?;
+        let c = self.instance_source_curve(c).unwrap_or(c);
         let CurveKind::Circle { radius, .. } = self.curves[c].kind else {
             return Err(SketchError::InvalidInput(tr!(
                 "sketch-err-only-whole-circles"
@@ -1094,6 +1295,10 @@ impl Sketch {
     /// Wahr, wenn keine aktive Abhängigkeit (lebend, eingeschaltet, nicht nur anzeigend, auch
     /// interne) den Punkt direkt oder über eine Kurve benutzt, die ihn enthält.
     fn point_unconstrained(&self, p: PointId) -> bool {
+        // Ein Exemplarpunkt hält das Muster; mit gelöschter Vorlage zählt er wie jeder Punkt.
+        if self.instance_drag_target(p, DVec2::ZERO).is_some() {
+            return false;
+        }
         !self
             .constraints
             .iter()
@@ -1120,7 +1325,7 @@ impl Sketch {
 }
 
 /// Variablen, die zu einer Kurve gehören und nicht Teil eines Punktes sind.
-fn own_vars(kind: &CurveKind) -> Vec<usize> {
+pub(crate) fn own_vars(kind: &CurveKind) -> Vec<usize> {
     match kind {
         CurveKind::Circle { radius, .. } => vec![*radius],
         CurveKind::Ellipse { ax, ay, minor, .. } | CurveKind::EllipticArc { ax, ay, minor, .. } => {
