@@ -27,7 +27,7 @@ pub use nurbs_ssi::{
     SsiOutcome, intersect_nurbs,
 };
 pub use roots::{CurveSurface, Root, curve_surface_roots, seg_intersections};
-pub use section::{SectionError, SectionPiece, section_by_plane};
+pub use section::{SectionError, SectionPiece, section_by_plane, silhouette};
 pub use seg::{Seg, reverse_loop};
 pub use select::{Piece, Side, select_piece};
 pub use sew::sew;

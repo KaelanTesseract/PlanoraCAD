@@ -18,7 +18,7 @@ pub mod validate;
 pub use blend::{BlendEdge, BlendError, BlendKind, BlendRequest, Blended};
 pub use boolean::{
     BoolOp, BooleanError, SectionError, SectionPiece, edge_probe_point, face_probe_point,
-    section_by_plane,
+    section_by_plane, silhouette,
 };
 pub use error::KernelError;
 pub use extrude::extrude;

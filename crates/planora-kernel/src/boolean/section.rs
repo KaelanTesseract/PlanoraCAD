@@ -234,14 +234,194 @@ pub fn section_by_plane(
     Ok(out.into_iter().map(|(p, _)| p).collect())
 }
 
+/// Ungekürzte Umrisskurven der Trägerfläche `surface` in Blickrichtung `view` (Einheitsvektor)
+/// samt einer Ebene, die sie alle enthält (für die Treffer der Randkanten). `Ok(None)`: kein
+/// Umriss (Ebene; Zylinder und Kegel mit Achse in Blickrichtung). `Err(())`: Lage ohne Rechenweg.
+fn silhouette_curves(
+    surface: &Surface,
+    view: DVec3,
+    tol: &Tolerance,
+) -> Result<Option<(Vec<Curve>, Frame)>, ()> {
+    let along_axis = |axis: DVec3| axis.cross(view).length() <= tol.angular;
+    let across_axis = |axis: DVec3| axis.dot(view).abs() <= tol.angular;
+    match surface {
+        Surface::Plane { .. } => Ok(None),
+        Surface::Cylinder { frame, radius } => {
+            if along_axis(frame.z) {
+                return Ok(None);
+            }
+            if !across_axis(frame.z) {
+                return Err(());
+            }
+            // Die beiden Mantellinien bei ±90° zur Blickrichtung liegen in der Ebene durch die
+            // Achse mit der Normalen `view`.
+            let d = frame.z.cross(view).normalize();
+            let lines = [d, -d]
+                .into_iter()
+                .map(|s| Curve::Line {
+                    origin: frame.origin + s * *radius,
+                    dir: frame.z,
+                })
+                .collect();
+            Ok(Some((lines, Frame::from_origin_normal(frame.origin, view))))
+        }
+        Surface::Cone {
+            frame,
+            radius,
+            slope,
+        } => {
+            if along_axis(frame.z) {
+                return Ok(None);
+            }
+            if !across_axis(frame.z) {
+                return Err(());
+            }
+            // Mantellinien `origin + s·(radius + slope·v) + z·v` in der Ebene durch die Achse mit
+            // der Normalen `view`; sie laufen durch die Spitze (dort teilt `breakpoints`).
+            let d = frame.z.cross(view).normalize();
+            let lines = [d, -d]
+                .into_iter()
+                .map(|s| Curve::Line {
+                    origin: frame.origin + s * *radius,
+                    dir: (frame.z + s * *slope).normalize(),
+                })
+                .collect();
+            Ok(Some((lines, Frame::from_origin_normal(frame.origin, view))))
+        }
+        Surface::Sphere { frame, radius } => {
+            // Großkreis senkrecht zur Blickrichtung.
+            let plane = Frame::from_origin_normal(frame.origin, view);
+            let circle = Curve::Circle {
+                frame: plane,
+                radius: *radius,
+            };
+            Ok(Some((vec![circle], plane)))
+        }
+        Surface::Torus {
+            frame,
+            major,
+            minor,
+        } => {
+            if !along_axis(frame.z) {
+                return Err(());
+            }
+            // Außen- und Innenkreis in der Mittelebene (der Innenkreis nur, wenn es ihn gibt).
+            let circles = [major + minor, major - minor]
+                .into_iter()
+                .filter(|r| *r > tol.linear)
+                .map(|radius| Curve::Circle {
+                    frame: *frame,
+                    radius,
+                })
+                .collect();
+            Ok(Some((circles, *frame)))
+        }
+        Surface::Nurbs(_) => Err(()),
+    }
+}
+
+/// Umriss (Silhouette) der Fläche `face` in Blickrichtung `view` (Einheitsvektor, Normale der
+/// Skizzenebene): die Linien, an denen die Fläche von vorn nach hinten umschlägt, beschnitten auf
+/// das Innere der Fläche wie bei [`section_by_plane`].
+///
+/// Analytisch: Zylinder und Kegel mit Achse quer zur Blickrichtung ergeben die beiden Mantellinien
+/// (beim Kegel bis zur Spitze), die Kugel den Großkreis senkrecht zur Blickrichtung, ein Torus mit
+/// Achse in Blickrichtung Außen- und Innenkreis in der Mittelebene. Ebenen und Zylinder/Kegel mit
+/// Achse in Blickrichtung haben keinen Umriss (leeres Ergebnis). Jede andere Lage ergibt
+/// [`SectionError::Unsupported`], Freiformflächen [`SectionError::Freeform`].
+///
+/// Die Stücke folgen den Umrisskurven in fester Reihenfolge und je Kurve dem Parameter. Ein Stück,
+/// das auf einer echten Randkante liegt, entfällt (die Kante selbst lässt sich projizieren);
+/// eines auf der Naht bleibt. Eine Kennung, die nicht zum Körper gehört, ergibt nichts.
+pub fn silhouette(
+    solid: &Solid,
+    face: Id<Face>,
+    view: DVec3,
+    tol: &Tolerance,
+) -> Result<Vec<SectionPiece>, SectionError> {
+    if solid.faces.get(face).is_none() {
+        return Ok(Vec::new());
+    }
+    let geom = face_geom(solid, face);
+    if matches!(geom.surface, Surface::Nurbs(_)) {
+        return Err(SectionError::Freeform(face));
+    }
+    let view = view.normalize_or_zero();
+    if view == DVec3::ZERO {
+        return Ok(Vec::new());
+    }
+    let Some((curves, plane)) =
+        silhouette_curves(&geom.surface, view, tol).map_err(|()| SectionError::Unsupported {
+            face,
+            surface: surface_name(&geom.surface),
+        })?
+    else {
+        return Ok(Vec::new());
+    };
+    let ptol = pipeline_tol(tol, face_is_freeform(&geom));
+    let cut = Surface::Plane { frame: plane };
+    let boundary: Vec<Seg> = geom.loops.iter().flatten().cloned().collect();
+    let seams = seam_segments(&geom, &boundary, &ptol);
+    let hits: Vec<_> = boundary
+        .iter()
+        .flat_map(|e| edge_hits(e, &cut, &ptol))
+        .collect();
+    let mut out = Vec::new();
+    for c in curves {
+        let ts = breakpoints(&c, &hits, &[&geom.surface], &ptol);
+        let kept: Vec<(f64, f64)> = split_at(&c, ts, &ptol)
+            .into_iter()
+            .filter(|s| classify_seg(&geom, &seams, s, &ptol) == Containment::Inside)
+            .map(|s| (s.t0, s.t1))
+            .collect();
+        out.extend(
+            join_adjacent(kept, c.period())
+                .into_iter()
+                .map(|(t0, t1)| SectionPiece {
+                    face,
+                    curve: c.clone(),
+                    t0,
+                    t1,
+                }),
+        );
+    }
+    Ok(out)
+}
+
+/// Fügt aufeinanderfolgende Parameterbereiche einer Kurve zusammen, die lückenlos aneinander
+/// stoßen (Haltepunkte an Polen und Nähten teilen sonst etwa den Großkreis der Kugel), bei
+/// geschlossenen Kurven auch das letzte Stück mit dem ersten über die Periode hinweg.
+/// `ranges` ist aufsteigend geordnet, wie [`split_at`] sie liefert.
+fn join_adjacent(ranges: Vec<(f64, f64)>, period: Option<f64>) -> Vec<(f64, f64)> {
+    const GAP: f64 = 1e-9;
+    let mut out: Vec<(f64, f64)> = Vec::new();
+    for (a, b) in ranges {
+        match out.last_mut() {
+            Some(last) if (a - last.1).abs() <= GAP => last.1 = b,
+            _ => out.push((a, b)),
+        }
+    }
+    if let (Some(p), true) = (period, out.len() > 1) {
+        let (first, last) = (out[0], out[out.len() - 1]);
+        if (first.0 + p - last.1).abs() <= GAP {
+            out.pop();
+            out[0] = (last.0, first.1 + p);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extrude::extrude;
     use crate::geometry::{Curve, Surface};
     use crate::primitives::{make_box, make_cone, make_cylinder, make_sphere};
+    use crate::profile::{Profile, ProfileLoop, Segment};
+    use crate::revolve::revolve;
     use crate::topology::Solid;
     use planora_math::nurbs::{NurbsCurve, NurbsSurface};
-    use planora_math::{DVec3, Frame, TAU, Tolerance};
+    use planora_math::{DVec2, DVec3, Frame, PI, TAU, Tolerance};
 
     fn tol() -> Tolerance {
         Tolerance::default()
@@ -559,5 +739,230 @@ mod tests {
         let err = section_by_plane(&b, &plane(DVec3::new(0.0, 0.0, 30.0), DVec3::Z), None, &t)
             .unwrap_err();
         assert_eq!(err, SectionError::Freeform(top));
+    }
+
+    // --- Silhouette (Skizzen 6, Task 2) ---
+
+    /// Halber Zylinder r = 5, h = 20: Mantel nur 0…180° (y ≥ 0), Achse z.
+    fn half_cylinder(t: &Tolerance) -> Solid {
+        let profile = Profile {
+            outer: ProfileLoop {
+                start: DVec2::new(5.0, 0.0),
+                segments: vec![
+                    Segment::Arc {
+                        center: DVec2::ZERO,
+                        sweep: PI,
+                    },
+                    Segment::Line {
+                        to: DVec2::new(5.0, 0.0),
+                    },
+                ],
+            },
+            holes: vec![],
+        };
+        extrude(&profile, &Frame::WORLD, 20.0, t).unwrap()
+    }
+
+    /// Drehkörper um z mit einem Torusstück (R = 5, r = 2), das außen (R + r) und innen (R − r)
+    /// über die Mittelebene z = 0 reicht.
+    fn torus_solid(t: &Tolerance) -> Solid {
+        let chain = ProfileLoop {
+            start: DVec2::new(0.0, -2.0),
+            segments: vec![
+                Segment::Line {
+                    to: DVec2::new(5.0, -2.0),
+                },
+                Segment::Arc {
+                    center: DVec2::new(5.0, 0.0),
+                    sweep: 300f64.to_radians(),
+                },
+                Segment::Line {
+                    to: DVec2::new(0.0, -1.0),
+                },
+            ],
+        };
+        revolve(&chain, &Frame::WORLD, t).unwrap()
+    }
+
+    #[test]
+    fn cylinder_side_view_gives_two_lines_of_height() {
+        let t = tol();
+        let c = make_cylinder(5.0, 20.0, &t).unwrap();
+        let side = face_with(&c, |s| matches!(s, Surface::Cylinder { .. }));
+        let ps = silhouette(&c, side, DVec3::Y, &t).unwrap();
+        assert_eq!(ps.len(), 2, "{ps:?}");
+        let mut xs: Vec<f64> = ps
+            .iter()
+            .map(|p| {
+                assert!(matches!(p.curve, Curve::Line { .. }), "{p:?}");
+                assert_eq!(p.face, side);
+                let s = seg(p);
+                assert!((s.length() - 20.0).abs() < 1e-9, "{p:?}");
+                assert!(s.start().y.abs() < 1e-9 && s.end().y.abs() < 1e-9);
+                assert!((s.start().x - s.end().x).abs() < 1e-9);
+                s.start().x
+            })
+            .collect();
+        xs.sort_by(|a, b| a.total_cmp(b));
+        assert!(
+            (xs[0] + 5.0).abs() < 1e-9 && (xs[1] - 5.0).abs() < 1e-9,
+            "{xs:?}"
+        );
+    }
+
+    #[test]
+    fn half_cylinder_gives_one_line() {
+        let t = tol();
+        let c = half_cylinder(&t);
+        let side = face_with(&c, |s| matches!(s, Surface::Cylinder { .. }));
+        // Blick entlang x: Umrisslinien bei y = ±5, nur y = +5 liegt auf dem Mantel.
+        let ps = silhouette(&c, side, DVec3::X, &t).unwrap();
+        assert_eq!(ps.len(), 1, "{ps:?}");
+        let s = seg(&ps[0]);
+        assert!((s.length() - 20.0).abs() < 1e-9);
+        assert!(
+            (s.at(0.5) - DVec3::new(0.0, 5.0, 10.0)).length() < 1e-9,
+            "{ps:?}"
+        );
+    }
+
+    #[test]
+    fn sphere_gives_full_circle() {
+        let t = tol();
+        let s = make_sphere(5.0, &t).unwrap();
+        let face = face_with(&s, |x| matches!(x, Surface::Sphere { .. }));
+        for view in [DVec3::Z, DVec3::X, DVec3::new(1.0, 2.0, 3.0).normalize()] {
+            let ps = silhouette(&s, face, view, &t).unwrap();
+            assert_eq!(ps.len(), 1, "{view}: {ps:?}");
+            let Curve::Circle { frame, radius } = ps[0].curve else {
+                panic!("kein Kreis: {:?}", ps[0].curve);
+            };
+            assert!((radius - 5.0).abs() < 1e-9);
+            assert!(frame.origin.length() < 1e-9);
+            assert!(frame.z.cross(view).length() < 1e-9, "{view}: {:?}", frame.z);
+            assert!(((ps[0].t1 - ps[0].t0).abs() - TAU).abs() < 1e-9, "{ps:?}");
+        }
+    }
+
+    #[test]
+    fn torus_top_view_gives_two_circles() {
+        let t = tol();
+        let s = torus_solid(&t);
+        let face = face_with(&s, |x| matches!(x, Surface::Torus { .. }));
+        let ps = silhouette(&s, face, DVec3::Z, &t).unwrap();
+        assert_eq!(ps.len(), 2, "{ps:?}");
+        let radii: Vec<f64> = ps
+            .iter()
+            .map(|p| {
+                let Curve::Circle { frame, radius } = p.curve else {
+                    panic!("kein Kreis: {:?}", p.curve);
+                };
+                assert!(frame.origin.length() < 1e-9, "{p:?}");
+                assert!(frame.z.cross(DVec3::Z).length() < 1e-9);
+                assert!(((p.t1 - p.t0).abs() - TAU).abs() < 1e-9, "{p:?}");
+                radius
+            })
+            .collect();
+        // feste Reihenfolge: erst außen (R + r), dann innen (R − r)
+        assert!(
+            (radii[0] - 7.0).abs() < 1e-9 && (radii[1] - 3.0).abs() < 1e-9,
+            "{radii:?}"
+        );
+        // Blick quer zur Achse: kein Rechenweg
+        let err = silhouette(&s, face, DVec3::X, &t).unwrap_err();
+        assert_eq!(
+            err,
+            SectionError::Unsupported {
+                face,
+                surface: "Torus"
+            }
+        );
+    }
+
+    #[test]
+    fn cylinder_view_along_axis_is_empty() {
+        let t = tol();
+        let c = make_cylinder(5.0, 20.0, &t).unwrap();
+        for (id, _) in c.faces.iter() {
+            assert!(silhouette(&c, id, DVec3::Z, &t).unwrap().is_empty());
+            assert!(silhouette(&c, id, -DVec3::Z, &t).unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn oblique_cylinder_is_unsupported() {
+        let t = tol();
+        let c = make_cylinder(5.0, 20.0, &t).unwrap();
+        let side = face_with(&c, |s| matches!(s, Surface::Cylinder { .. }));
+        let a = 30f64.to_radians();
+        let err = silhouette(&c, side, DVec3::new(0.0, a.sin(), a.cos()), &t).unwrap_err();
+        assert_eq!(
+            err,
+            SectionError::Unsupported {
+                face: side,
+                surface: "Zylinder"
+            }
+        );
+    }
+
+    /// Kegel r = 5, h = 10 von der Seite: zwei Mantellinien vom Grundkreis bis zur Spitze.
+    #[test]
+    fn cone_side_view_gives_two_generators_to_apex() {
+        let t = tol();
+        let c = make_cone(5.0, 10.0, &t).unwrap();
+        let cone = face_with(&c, |s| matches!(s, Surface::Cone { .. }));
+        let ps = silhouette(&c, cone, DVec3::Y, &t).unwrap();
+        assert_eq!(ps.len(), 2, "{ps:?}");
+        let apex = DVec3::new(0.0, 0.0, 10.0);
+        let mut feet: Vec<f64> = ps
+            .iter()
+            .map(|p| {
+                let s = seg(p);
+                assert!((s.length() - 125f64.sqrt()).abs() < 1e-9, "{p:?}");
+                let (a, b) = (s.start(), s.end());
+                let (foot, top) = if a.z < b.z { (a, b) } else { (b, a) };
+                assert!(top.distance(apex) < 1e-9, "{p:?}");
+                assert!(foot.z.abs() < 1e-9 && foot.y.abs() < 1e-9);
+                foot.x
+            })
+            .collect();
+        feet.sort_by(|a, b| a.total_cmp(b));
+        assert!((feet[0] + 5.0).abs() < 1e-9 && (feet[1] - 5.0).abs() < 1e-9);
+        // Blick entlang der Achse: leer; schräg: kein Rechenweg
+        assert!(silhouette(&c, cone, DVec3::Z, &t).unwrap().is_empty());
+        let err = silhouette(&c, cone, DVec3::new(1.0, 0.0, 1.0).normalize(), &t).unwrap_err();
+        assert_eq!(
+            err,
+            SectionError::Unsupported {
+                face: cone,
+                surface: "Kegel"
+            }
+        );
+    }
+
+    #[test]
+    fn planar_face_has_no_silhouette_and_nurbs_is_freeform() {
+        let t = tol();
+        let mut c = make_cylinder(5.0, 20.0, &t).unwrap();
+        let cap = face_with(&c, |s| matches!(s, Surface::Plane { .. }));
+        assert!(silhouette(&c, cap, DVec3::Y, &t).unwrap().is_empty());
+        let line = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![DVec3::new(5.0, 0.0, 0.0), DVec3::new(5.0, 0.0, 20.0)],
+            vec![1.0; 2],
+        )
+        .unwrap();
+        let side = face_with(&c, |s| matches!(s, Surface::Cylinder { .. }));
+        c.faces[side].surface = Surface::nurbs(
+            NurbsSurface::revolve(&line, DVec3::ZERO, DVec3::Z, 0.0, TAU).unwrap(),
+            true,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            silhouette(&c, side, DVec3::Y, &t).unwrap_err(),
+            SectionError::Freeform(side)
+        );
     }
 }
