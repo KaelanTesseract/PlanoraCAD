@@ -67,11 +67,13 @@ impl StandardPlane {
     }
 }
 
-/// Ebene einer Skizze: eine Grundebene oder eine ebene Fläche eines vorhergehenden Features.
+/// Ebene einer Skizze: eine Grundebene, eine ebene Fläche eines vorhergehenden Features oder
+/// eine vorhergehende Konstruktionsebene (Skizzen 6).
 #[derive(Clone, Debug, PartialEq)]
 pub enum SketchPlane {
     Standard(StandardPlane),
     OnFace(FaceRef),
+    OnPlane(FeatureId),
 }
 
 /// Herkunft einer projizierten Skizzenkurve: eine Körperkante, das `index`-te Stück des Schnitts
@@ -370,8 +372,10 @@ impl FeatureKind {
         let mut deps = match self {
             FeatureKind::Sketch(s) => {
                 let mut d = Vec::new();
-                if let SketchPlane::OnFace(r) = &s.plane {
-                    d.push(FeatureId(r.origin));
+                match &s.plane {
+                    SketchPlane::Standard(_) => {}
+                    SketchPlane::OnFace(r) => d.push(FeatureId(r.origin)),
+                    SketchPlane::OnPlane(id) => d.push(*id),
                 }
                 for c in &s.copies {
                     d.extend(c.source.origins());

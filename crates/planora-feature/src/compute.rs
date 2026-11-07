@@ -731,6 +731,15 @@ fn compute_sketch(
             };
             (frame, SketchPlane::OnFace(updated))
         }
+        SketchPlane::OnPlane(id) => {
+            let frame = doc.plane_frame(*id).ok_or_else(|| {
+                let name = doc
+                    .feature(*id)
+                    .map_or_else(String::new, |f| f.name.clone());
+                FeatureError::InvalidInput(tr!("feature-plane-not-plane", name = name))
+            })?;
+            (frame, sf.plane.clone())
+        }
     };
     sketch.set_frame(frame).map_err(sketch_error)?;
     let mut copies = Vec::with_capacity(sf.copies.len());

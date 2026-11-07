@@ -441,8 +441,8 @@ fn formula_drives_offset() {
     assert_eq!(field_value(&angle, FieldKey::Winkel), Some(0.0));
 }
 
-/// Review Focus 4: Löschen nimmt Abhängige mit. Skizzen auf Ebenen (`OnPlane`) kommen in
-/// Task 6; hier hängen eine zweite Ebene und eine Mittelebene an der ersten, und eine Ebene
+/// Review Focus 4: Löschen nimmt Abhängige mit. Skizzen auf Ebenen (`OnPlane`) prüft
+/// `redefine.rs` (`deleting_plane_with_sketch_and_extrusion`); hier hängen eine zweite Ebene und eine Mittelebene an der ersten, und eine Ebene
 /// durch Skizzenpunkte hängt an der Skizze.
 #[test]
 fn deleting_plane_lists_dependents() {

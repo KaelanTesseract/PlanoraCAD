@@ -343,13 +343,16 @@ impl Document {
     }
 
     /// Hält ein unterdrücktes, fehlerhaftes oder übersprungenes Eingangsfeature `dep` das
-    /// Feature `kind` an? Bei Skizzen nur die Herkunft der Skizzenebene: Die Herkunft einer
-    /// Projektion ergibt dann einen verlorenen Bezug (Warnung, Spec A4), keinen Stillstand.
+    /// Feature `kind` an? Bei Skizzen nur die Herkunft der Skizzenebene (Fläche oder
+    /// Konstruktionsebene): Die Herkunft einer Projektion ergibt dann einen verlorenen Bezug
+    /// (Warnung, Spec A4), keinen Stillstand.
     fn blocks(kind: &FeatureKind, dep: FeatureId) -> bool {
         match kind {
-            FeatureKind::Sketch(s) => {
-                matches!(&s.plane, SketchPlane::OnFace(r) if FeatureId(r.origin) == dep)
-            }
+            FeatureKind::Sketch(s) => match &s.plane {
+                SketchPlane::Standard(_) => false,
+                SketchPlane::OnFace(r) => FeatureId(r.origin) == dep,
+                SketchPlane::OnPlane(id) => *id == dep,
+            },
             _ => true,
         }
     }

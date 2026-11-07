@@ -1779,6 +1779,8 @@ impl AppState {
             // Ohne bekannte Fläche vorläufig; die Berechnung setzt die Ebene der Fläche.
             // [`AppState::new_sketch_on_face`] gibt die echte Ebene mit.
             SketchPlane::OnFace(_) => Frame::WORLD,
+            // Skizzen 6: Oberfläche folgt in Task 13; die Berechnung setzt die Lage der Ebene.
+            SketchPlane::OnPlane(id) => self.document.plane_frame(*id).unwrap_or(Frame::WORLD),
         };
         self.add_sketch_in(plane, frame)
     }

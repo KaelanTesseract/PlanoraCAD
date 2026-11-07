@@ -1039,6 +1039,10 @@ fn kind_to(
                 SketchPlane::OnFace(r) => PlaneDto::Flaeche {
                     flaeche: face_to(r),
                 },
+                // Skizzen auf Konstruktionsebenen kommen erst mit Format 16 (Skizzen 6, Task 7).
+                SketchPlane::OnPlane(_) => {
+                    return Err(ProjectError::Invalid(tr!("proj-err-plane-unsupported")));
+                }
             },
             kopien: s
                 .copies
