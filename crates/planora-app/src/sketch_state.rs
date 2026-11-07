@@ -391,6 +391,9 @@ pub struct SketchSession {
     pub selection: Vec<Item>,
     /// Punkte des laufenden Werkzeugs.
     pub pending: Vec<PointId>,
+    /// Stand vor dem ersten Klick eines Befehls, der bisher nur offene Punkte gesetzt hat (noch
+    /// keine Form); ein Abbruch stellt ihn wieder her ([`drop_open_points`](Self::drop_open_points)).
+    open_start: Option<OpenStart>,
     /// Noch nicht angelegte Eckpunkte (Rechteck, Ellipse).
     pub pending_pos: Vec<DVec2>,
     /// Fang der noch nicht angelegten Eckpunkte in `pending_pos` (Rechteck: erste Ecke, Ellipse:
@@ -479,6 +482,14 @@ pub struct SketchSession {
     pub constraint_last: Option<Item>,
 }
 
+/// Die Skizze vor dem ersten Klick eines laufenden Befehls und ihr Stand nach seinem letzten
+/// Klick: Ist sie seither unverändert, kam nur Offenes des Befehls hinzu.
+#[derive(Clone, Debug)]
+struct OpenStart {
+    before: Sketch,
+    revision: u64,
+}
+
 /// Was vor einer Änderung gesichert wird, um sie bei einem Fehler zurückzunehmen.
 struct Backup {
     sketch: Sketch,
@@ -558,6 +569,7 @@ impl SketchSession {
             kinds: ToolKinds::default(),
             selection: Vec::new(),
             pending: Vec::new(),
+            open_start: None,
             pending_pos: Vec::new(),
             pending_snaps: Vec::new(),
             pending_curves: Vec::new(),
@@ -623,6 +635,7 @@ impl SketchSession {
         // Ein Werkzeugwechsel beendet die Klick-Auswahl.
         self.drop_curve_picks();
         self.draw_cursor = None;
+        self.drop_open_points(sk);
         self.clear_pending();
         // Versatz: Eine Vorauswahl mit Kurven ist schon die Kette, es geht gleich mit dem Abstand weiter.
         if tool == Tool::Offset {
@@ -651,6 +664,7 @@ impl SketchSession {
     /// Vergisst, was das laufende Werkzeug schon gesetzt und getippt hat.
     pub(crate) fn clear_pending(&mut self) {
         self.pending.clear();
+        self.open_start = None;
         self.pending_pos.clear();
         self.pending_snaps.clear();
         self.pending_curves.clear();
@@ -662,6 +676,30 @@ impl SketchSession {
         self.input = DrawInput::default();
         // Bemaßen: Wahl und gesetztes Maß (sein Feld schließt) entfallen, nichts bleibt.
         self.dim = DimToolState::default();
+    }
+
+    /// Abbruch eines Befehls, der noch keine Form angelegt hat (wie Fusion): Seine offenen Punkte
+    /// fallen weg, samt ihrer Fangbindungen, und es bleibt kein Rückgängig-Schritt. Gefangene
+    /// vorhandene Punkte und fertige Linien eines Linienzugs bleiben. Ist die Skizze seit dem
+    /// letzten Klick unverändert, kommt der Stand vor dem ersten Klick zurück (derselbe Stand, so
+    /// sieht der Verlauf keine Änderung); sonst fallen nur die neuen offenen Punkte, an denen keine
+    /// Kurve hängt. Die offenen Punkte selbst vergisst erst [`clear_pending`](Self::clear_pending).
+    pub(crate) fn drop_open_points(&mut self, sk: &mut Sketch) {
+        let Some(open) = self.open_start.take() else {
+            return;
+        };
+        if sk.revision() == open.revision {
+            *sk = open.before;
+        } else {
+            for &p in &self.pending {
+                let new = open.before.point_xy(p).is_err() && sk.point_xy(p).is_ok();
+                if new && !sk.curves().any(|(_, c)| c.kind.points().contains(&p)) {
+                    let _ = sk.remove_point(p);
+                }
+            }
+        }
+        self.last_report = Some(sk.clone().solve());
+        self.forget_removed(sk);
     }
 
     /// Wählt `tool` wie der Klick auf seinen Knopf in der Leiste (und sein Tastenkürzel): ist
@@ -853,29 +891,64 @@ impl SketchSession {
         self.created = None;
         self.pick_radius = radius;
         let cur = self.resolve_cursor(sk, at, radius);
+        // Stand vor dem ersten Klick eines Befehls (siehe `open_start`): beim ersten offenen Punkt
+        // der vor diesem Klick, danach der gemerkte.
+        let open = self.open_start.take();
+        let fresh = (open.is_none() && self.pending.is_empty() && self.is_drawing_tool())
+            .then(|| sk.clone());
+        let result = self.click_tool(sk, at, radius, extend, &cur);
+        if result.is_err() {
+            self.open_start = open;
+            return result;
+        }
+        self.open_start = match open.map(|o| o.before).or(fresh) {
+            Some(before)
+                if !self.pending.is_empty()
+                    && self.created.is_none()
+                    && sk.curves().all(|(c, _)| before.curve(c).is_some()) =>
+            {
+                Some(OpenStart {
+                    before,
+                    revision: sk.revision(),
+                })
+            }
+            _ => None,
+        };
+        result
+    }
+
+    /// Der Klick mit dem aktiven Werkzeug selbst ([`click`](Self::click)).
+    fn click_tool(
+        &mut self,
+        sk: &mut Sketch,
+        at: DVec2,
+        radius: f64,
+        extend: bool,
+        cur: &DrawCursor,
+    ) -> Result<(), String> {
         self.atomic(sk, |se, sk, prior| {
             if se.planned_kind().is_some() {
-                return se.click_kind(sk, &cur, prior);
+                return se.click_kind(sk, cur, prior);
             }
             match se.tool {
                 Tool::Select => {
                     se.select_at(sk, at, radius, extend);
                     Ok(())
                 }
-                Tool::Point => se.click_point(sk, &cur, prior),
-                Tool::Line => se.click_line(sk, &cur, prior),
-                Tool::Rectangle => se.click_rectangle(sk, &cur, prior),
-                Tool::Circle => se.click_circle(sk, &cur, prior),
-                Tool::Arc => se.click_arc(sk, &cur, prior),
-                Tool::Ellipse => se.click_ellipse(sk, &cur, prior),
-                Tool::Spline => se.click_spline(sk, &cur, prior),
+                Tool::Point => se.click_point(sk, cur, prior),
+                Tool::Line => se.click_line(sk, cur, prior),
+                Tool::Rectangle => se.click_rectangle(sk, cur, prior),
+                Tool::Circle => se.click_circle(sk, cur, prior),
+                Tool::Arc => se.click_arc(sk, cur, prior),
+                Tool::Ellipse => se.click_ellipse(sk, cur, prior),
+                Tool::Spline => se.click_spline(sk, cur, prior),
                 // Haben nur geplante Arten (oben); die Kantenkopie steuert die Oberfläche über
                 // `project_edge`.
                 Tool::Polygon | Tool::Slot | Tool::ProjectEdge => Ok(()),
                 Tool::Trim | Tool::Extend | Tool::Break => se.click_modify(sk, at, radius, prior),
-                Tool::Offset => se.click_offset(sk, &cur, prior),
+                Tool::Offset => se.click_offset(sk, cur, prior),
                 Tool::MoveCopy | Tool::Scale => {
-                    se.click_transform(sk, &cur);
+                    se.click_transform(sk, cur);
                     Ok(())
                 }
                 // Rundung und Fase laufen über ihre Arten (`click_kind`).
@@ -885,7 +958,7 @@ impl SketchSession {
                     Ok(())
                 }
                 Tool::Pattern => {
-                    se.click_pattern(sk, &cur);
+                    se.click_pattern(sk, cur);
                     Ok(())
                 }
                 Tool::Constraint(action) => se.click_constraint(sk, action, at, radius),
@@ -1491,6 +1564,8 @@ impl SketchSession {
         }
         if self.tool != Tool::Spline {
             self.message = None;
+            // Ein Linienzug ohne Linie hinterlässt nichts (wie Esc).
+            self.drop_open_points(sk);
             self.clear_pending();
             return Ok(());
         }
@@ -1538,6 +1613,8 @@ impl SketchSession {
         let dim_idle =
             self.tool == Tool::Dimension && self.dim.picks.is_empty() && self.dim.plan.is_none();
         self.end_drag(sk);
+        // Ein Befehl ohne fertige Form hinterlässt nichts (wie Fusion).
+        self.drop_open_points(sk);
         self.clear_pending();
         // Abhängigkeitsbefehl: Esc und Rechtsklick beenden ihn ganz, die halbe Auswahl fällt weg.
         if matches!(self.tool, Tool::Constraint(_)) {

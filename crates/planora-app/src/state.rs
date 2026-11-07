@@ -2076,6 +2076,9 @@ impl AppState {
         else {
             return Ok(());
         };
+        // Ein Befehl ohne fertige Form hinterlässt nichts, auch beim Beenden der Skizze.
+        se.drop_open_points(&mut draft.sketch);
+        se.clear_pending();
         let id = se.sketch;
         let Some(FeatureKind::Sketch(def)) = self.document.feature(id).map(|f| &f.kind) else {
             return Ok(());
