@@ -2282,7 +2282,14 @@ Umgesetzt 2026-11-03 bis 2026-11-06 auf dem Zweig `feature/skizzen-muster` (Spec
 - **Annahme:** Ein Rasterpunkt auf einem Punkt bindet wie der Punktfang (am Ursprung fest auf 0, 0); auf einem Exemplarpunkt bindet er genauso.
 
 *Noch offen nach Skizzen 5 (geparkt, nicht behoben; Stand nach der Abschlussprüfung)*
-- Die Handprüfung bei 1920×1080 steht aus (nur auf Dennis' Wort), ebenso die Gesamtläufe unter Windows und in WSL, `cargo deny check` und die Messtests im Release.
+- Gesamtläufe unter Windows (4bb3c76) und in WSL (d586ae0), `cargo deny check` und die Messtests im Release sind grün.
+- Handprüfung am 2026-11-07 bei 1920×1080 (Testordner, Release-Build d586ae0): in Ordnung waren Rechteckmuster 10×10 mit Abwählen, Muster wieder öffnen und ändern, Rückgängig, Kreismuster mit Winkel 90° und Änderung auf 180°, Bemaßen waagerecht, senkrecht und Ø zur Mittellinie mit Ø/R-Umschalter (Zahl bleibt), Doppelklick auf einen Maßtext, Konzentrisch, Kollinear, Glatt (Spline an Linie), Langloch gesamt mit eigenem Gesamtmaß, Raster bindet an den vorhandenen Punkt, alte Datei (Format 1) öffnen und speichern: neue Version bytegleich. Die Leiste passt bei 1080 Pixeln ganz.
+- Beobachtungen aus der Handprüfung (nicht behoben):
+  - Esc beendet die Skizzenbemaßung (D) nicht, auch nicht zweimal; nur ein anderes Werkzeug beendet sie. In Fusion beendet Esc den Befehl.
+  - Die Felder des Musters (Anzahl, Abstand) wandern mit der Vorschau; wächst das Muster, liegen sie über Exemplaren, und ein Klick auf die alte Stelle trifft daneben.
+  - Ein freies, mit nichts verbundenes Teil (ein Bogen) verschiebt sich bei jedem Lösen um einige Pixel, auch bei Abhängigkeiten an ganz anderen Kurven (bei Glatt etwa 10 Pixel). Vermutlich älter als Skizzen 5.
+  - Ein Kreis, dessen zweiter Klick auf den eigenen Mittelpunkt fängt, wird abgelehnt (Radius 0), lässt aber den Mittelpunkt als Punkt stehen (aus Teilprojekt 2/3).
+  - Die Knöpfe der Abhängigkeiten wirken nur auf eine schon getroffene Auswahl (zuerst wählen, dann Knopf); Fusion erlaubt auch erst den Befehl, dann die Auswahl.
 - `Id::from_index` schneidet große Indizes still ab (schon vorher, betrifft auch `MusterWert`). Härten.
 - Ein lebendes Glatt mit veraltetem Ende aus einer von Hand geänderten Datei lädt still und liefert keine Zeile; mögliche Härtung in `from_data`.
 - Löser: Die Vorschau klont die Skizze je Bild; `add_constraint` baut die Gruppen für die Schleifenprüfung neu (im schlimmsten Fall quadratisch); Gleitkommarauschen in einer Rückkopplung könnte ein falsches `NotConverged` geben, und `dof` wird im gemeldeten Fall nicht neu berechnet.
