@@ -1561,3 +1561,55 @@ fn pure_field_anchor_and_place_ignore_count_and_spacing() {
     let edge = pattern_field_pos(rect, pos2(5.0, H - 5.0), away, 180.0, 0, 4);
     assert!(edge.x >= 0.0 && edge.y + 4.0 * 30.0 <= H, "{edge:?}");
 }
+
+/// Handtest Skizzen 5, Fix 6 Rest B: Ein Klick in ein Feld der Anordnung gibt ihm die Tastatur
+/// (wie Fusion); er wählt kein Exemplar ab und ändert die Skizze nicht. Danach Getipptes landet in
+/// diesem Feld.
+#[test]
+fn a_click_into_a_pattern_field_gives_it_the_keyboard() {
+    with_lang(&german(), || {
+        let mut rig = Rig::new(&[]);
+        let ids = rig.sk().add_rectangle(v(0.0, 0.0), v(10.0, 5.0)).unwrap();
+        rig.settle();
+        rig.select(lines(&ids));
+        rig.action(Action::SketchPatternRect);
+        let field = |rig: &mut Rig, kind: FieldKind| {
+            let se = rig.st().sketch_session.as_ref().unwrap();
+            se.input.fields.iter().position(|f| f.kind == kind).unwrap()
+        };
+        let spacing = field(&mut rig, FieldKind::PatternSpacing1);
+        assert_ne!(
+            rig.st().sketch_session.as_ref().unwrap().input.active,
+            spacing,
+            "vorher hat ein anderes Feld die Tastatur"
+        );
+        let revision = rig.sk().revision();
+        let undo = rig.undo_len();
+        // Mitten in das Eingabefeld rechts neben dem Namen „Abstand 1“.
+        let label = field_rects(&rig.settle(), &[FieldKind::PatternSpacing1])[0];
+        rig.click(pos2(label.right() + 44.0, label.center().y));
+        let se = rig.st().sketch_session.as_ref().unwrap();
+        assert_eq!(se.input.active, spacing, "„Abstand 1“ hat die Tastatur");
+        assert_eq!(rig.tool(), Tool::Pattern);
+        assert!(
+            rig.now().unwrap().suppressed.is_empty(),
+            "kein Exemplar abgewählt"
+        );
+        assert_eq!(rig.sk().revision(), revision, "die Skizze bleibt");
+        assert_eq!(rig.undo_len(), undo);
+        rig.type_text("25");
+        rig.settle();
+        let se = rig.st().sketch_session.as_ref().unwrap();
+        let f = &se.input.fields[spacing];
+        assert_eq!(f.text, "25", "Getipptes steht in „Abstand 1“");
+        assert_eq!(f.locked, Some(25.0));
+        assert!(
+            se.input
+                .fields
+                .iter()
+                .enumerate()
+                .all(|(i, f)| i == spacing || !f.touched),
+            "die anderen Felder bleiben"
+        );
+    });
+}

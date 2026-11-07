@@ -1,6 +1,6 @@
 //! Maßfelder am Zeiger beim Zeichnen (wie Fusion): Die Felder der aktuellen Stufe folgen dem Zeiger,
 //! nehmen keine Mausereignisse an, und das aktive hat die Tastatur, solange kein anderes Eingabefeld
-//! sie hat. Bis zum ersten Zeichen zeigen sie den aktuellen Wert gerundet; Getipptes sperrt
+//! sie hat. Die Felder der Anordnung stehen fest; ein Klick in eines gibt ihm die Tastatur. Bis zum ersten Zeichen zeigen sie den aktuellen Wert gerundet; Getipptes sperrt
 //! ([`SketchSession::type_field`]), Tab wechselt das Feld, Eingabe setzt den Punkt, Esc bricht ab.
 
 use crate::formula_field::FormulaField;
@@ -244,7 +244,9 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option
                 None => field_pos(rect, anchor, width, i, rows),
             })
             .order(Order::Foreground)
-            .interactable(false)
+            // Am Zeiger nehmen die Felder keine Maus an (sie liefen ihr sonst in den Weg); am
+            // festen Platz der Anordnung setzt ein Klick in ein Feld dort den Fokus (wie Fusion).
+            .interactable(fixed.is_some())
             .show(&ctx, |ui| {
                 let p = theme::palette(ui.visuals().dark_mode);
                 egui::Frame::new()
@@ -276,6 +278,11 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option
             .inner;
         viewport::set_draw_field(&ctx, response.id);
         ctx.data_mut(|d| d.insert_temp(widget_id_key(kind), response.id));
+        // Ein Klick hat diesem Feld die Tastatur gegeben: Es ist jetzt das aktive (Tab geht von
+        // hier weiter, und unten holt sich das alte den Fokus nicht zurück).
+        if response.has_focus() {
+            se.input.active = i;
+        }
         if response.changed() || wipe {
             se.type_field(i, &text, &scope);
             typed = true;
