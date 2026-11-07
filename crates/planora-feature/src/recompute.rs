@@ -314,6 +314,7 @@ impl Document {
             FeatureKind::Sketch(s) => {
                 matches!(s.plane, SketchPlane::OnFace(_)) || !s.copies.is_empty()
             }
+            FeatureKind::Plane(p) => p.reads_bodies(),
             _ => false,
         }
     }
@@ -400,6 +401,7 @@ impl Document {
             sketch,
             hints,
             warning,
+            plane,
         } = computed;
         let f = &mut self.features[idx];
         f.result = Some(FeatureResult {
@@ -408,6 +410,7 @@ impl Document {
             result_version,
             key,
             warning,
+            plane,
         });
         if let (Some(h), FeatureKind::Sketch(sf)) = (hints, &mut f.kind) {
             sf.plane = h.plane;

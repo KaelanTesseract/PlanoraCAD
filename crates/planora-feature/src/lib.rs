@@ -14,6 +14,7 @@ mod ops;
 pub mod params;
 mod parts;
 mod parts_sheets;
+pub mod planes;
 pub mod recompute;
 pub mod refs;
 mod rollback;

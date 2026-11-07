@@ -258,15 +258,17 @@ pub fn body_color(state: &AppState, tip: FeatureId) -> BodyColor {
     colors[(first % colors.len() as u64) as usize]
 }
 
-/// Der erste Körperschritt der Kette von `tip` (kleinste Kennung, Skizzen zählen nicht): Grundlage
-/// der Körperfarbe und der festen Reihenfolge im Feature-Baum. `None` für einen unbekannten Körper.
+/// Der erste Körperschritt der Kette von `tip` (kleinste Kennung, Skizzen und Ebenen zählen
+/// nicht): Grundlage der Körperfarbe und der festen Reihenfolge im Feature-Baum. `None` für einen
+/// unbekannten Körper.
 pub fn body_root(state: &AppState, tip: FeatureId) -> Option<FeatureId> {
     let doc = &state.document;
     doc.chain(tip)
         .into_iter()
         .filter(|id| {
             doc.feature(*id)
-                .is_some_and(|f| !matches!(f.kind, FeatureKind::Sketch(_)))
+                // Konstruktionsebenen (Skizzen 6) erzeugen wie Skizzen keinen Körper.
+                .is_some_and(|f| !matches!(f.kind, FeatureKind::Sketch(_) | FeatureKind::Plane(_)))
         })
         .min()
 }

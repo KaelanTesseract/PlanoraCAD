@@ -46,6 +46,8 @@ pub(crate) struct Computed {
     pub(crate) hints: Option<SketchHints>,
     /// Warnung bei sonst gelungener Berechnung (siehe [`crate::Feature::warning`]).
     pub(crate) warning: Option<String>,
+    /// Koordinatensystem einer Konstruktionsebene.
+    pub(crate) plane: Option<planora_math::Frame>,
 }
 
 impl Computed {
@@ -152,6 +154,11 @@ pub(crate) fn check_parameters(kind: &FeatureKind) -> Result<(), FeatureError> {
             }
             if !art.numbers().iter().all(|v| in_range(*v)) {
                 return out(tr!("feature-what-blend-size"));
+            }
+        }
+        FeatureKind::Plane(p) => {
+            if !p.numbers().iter().all(|v| in_range(*v)) {
+                return out(tr!("feature-what-plane"));
             }
         }
         FeatureKind::MeshBody {
@@ -337,6 +344,17 @@ fn compute_unchecked(
                 .solid()
                 .map_err(|m| FeatureError::StepShape(m.to_string()))?;
             finish(doc, solid.clone(), id.0)
+        }
+        FeatureKind::Plane(pf) => {
+            for dep in pf.dependencies() {
+                ensure_not_mesh(doc, dep)?;
+            }
+            let solids: Vec<&Solid> = visible.iter().filter_map(|r| doc.body(*r)).collect();
+            let frame = crate::planes::compute_plane(doc, pf, &solids, &kernel.tolerance)?;
+            Ok(Computed {
+                plane: Some(frame),
+                ..Computed::default()
+            })
         }
     }
 }
@@ -756,6 +774,7 @@ fn compute_sketch(
         sketch: Some(sketch),
         hints: Some(SketchHints { plane, copies }),
         warning: (lost > 0).then(|| tr!("feature-sketch-projection-lost", count = lost)),
+        plane: None,
     })
 }
 

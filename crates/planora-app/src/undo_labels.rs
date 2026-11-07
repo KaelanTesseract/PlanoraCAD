@@ -142,6 +142,8 @@ fn created_label(kind: &FeatureKind) -> String {
         }
         FeatureKind::MeshBody { .. } => tr!("undo-mesh-import"),
         FeatureKind::StepBody { .. } => tr!("undo-step-import"),
+        // Skizzen 6: Oberfläche folgt in Task 12.
+        FeatureKind::Plane(_) => tr!("undo-plane"),
     }
 }
 

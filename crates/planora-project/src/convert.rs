@@ -1141,6 +1141,10 @@ fn kind_to(
             // Fehlt die Form im Bild, bleibt die Kennung; das Selbstlesen meldet sie dann.
             form: forms.get(shape).copied().unwrap_or(shape.0),
         },
+        // Konstruktionsebenen kommen erst mit Format 16 (Skizzen 6, Task 7).
+        FeatureKind::Plane(_) => {
+            return Err(ProjectError::Invalid(tr!("proj-err-plane-unsupported")));
+        }
     })
 }
 

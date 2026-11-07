@@ -440,6 +440,8 @@ pub fn parameter_rows(state: &AppState, kind: &FeatureKind) -> Vec<(String, Stri
         FeatureKind::StepBody { shape } => doc
             .step_shape(*shape)
             .map_or_else(Vec::new, |s| step_rows(state, s, tr!("props-faces"))),
+        // Skizzen 6: Oberfläche folgt in Task 12.
+        FeatureKind::Plane(_) => Vec::new(),
     }
 }
 

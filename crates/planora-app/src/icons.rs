@@ -675,6 +675,8 @@ impl FeatureIcon {
             K::Verrunden { art, .. } => FeatureIcon::for_blend(art.is_chamfer()),
             K::MeshBody { .. } => FeatureIcon::Body(BodyKind::Mesh),
             K::StepBody { .. } => FeatureIcon::Body(BodyKind::Step),
+            // Skizzen 6: Oberfläche folgt in Task 12 (bis dahin das Skizzensymbol).
+            K::Plane(_) => FeatureIcon::Sketch,
         }
     }
 }

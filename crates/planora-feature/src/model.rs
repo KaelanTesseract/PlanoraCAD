@@ -341,6 +341,8 @@ pub enum FeatureKind {
     StepBody {
         shape: StepShapeId,
     },
+    /// Konstruktionsebene (Skizzen 6): erzeugt keinen Körper, nur ein Koordinatensystem.
+    Plane(crate::planes::PlaneFeature),
 }
 
 impl FeatureKind {
@@ -359,6 +361,7 @@ impl FeatureKind {
             FeatureKind::Verrunden { art, .. } => art.label(),
             FeatureKind::MeshBody { .. } => tr!("feature-label-mesh"),
             FeatureKind::StepBody { .. } => tr!("feature-label-step"),
+            FeatureKind::Plane(_) => tr!("feature-label-plane"),
         }
     }
 
@@ -394,6 +397,7 @@ impl FeatureKind {
                 }
                 d
             }
+            FeatureKind::Plane(p) => p.dependencies(),
         };
         deps.sort();
         deps.dedup();
@@ -415,7 +419,8 @@ impl FeatureKind {
             | FeatureKind::Extrude { .. }
             | FeatureKind::Revolve { .. }
             | FeatureKind::MeshBody { .. }
-            | FeatureKind::StepBody { .. } => Vec::new(),
+            | FeatureKind::StepBody { .. }
+            | FeatureKind::Plane(_) => Vec::new(),
         }
     }
 
@@ -458,6 +463,8 @@ pub(crate) struct FeatureResult {
     pub(crate) key: Vec<u64>,
     /// Warnung der Berechnung (siehe [`Feature::warning`]).
     pub(crate) warning: Option<String>,
+    /// Koordinatensystem einer Konstruktionsebene (siehe [`Document::plane_frame`]).
+    pub(crate) plane: Option<Frame>,
 }
 
 #[derive(Clone, Debug)]
