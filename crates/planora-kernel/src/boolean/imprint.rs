@@ -5,22 +5,19 @@
 //! Ein Stück gehört zu einer Fläche, wenn es in ihrem Inneren und nicht außerhalb der anderen
 //! Fläche liegt.
 
-use super::breaks::{breakpoints, classify_seg, edge_hits, split_at};
+use super::breaks::{bbox, breakpoints, classify_seg, edge_hits, split_at};
 use super::error::BooleanError;
 use super::roots::seg_intersections;
 use super::seg::Seg;
 use super::split::seam_segments;
 use super::surfsurf::{SurfaceIntersection, intersect_surfaces, surface_label, surface_name};
-use super::uv::{Containment, FaceGeom, check_loops_on_surface, face_geom, loop_points};
+use super::uv::{Containment, FaceGeom, check_loops_on_surface, face_geom};
 use super::{face_is_freeform, pipeline_tol};
 use crate::geometry::{Curve, Surface};
 use crate::topology::Solid;
 use planora_i18n::tr;
 use planora_math::{DVec3, Tolerance};
 
-/// Zuschlag zum Hüllquader als Anteil seiner Diagonale (deckt die Sehnenabweichung der
-/// 5°-Abtastung von Bögen ab: höchstens etwa 0,1 % des Radius).
-const BBOX_MARGIN_FRACTION: f64 = 0.01;
 /// Bruchteile auf einer Randkante, die näher beieinander liegen, gelten als derselbe Teilungspunkt.
 const SAME_FRACTION: f64 = 1e-7;
 
@@ -36,41 +33,6 @@ struct Prepared {
     geom: FaceGeom,
     seams: Vec<Seg>,
     bbox: (DVec3, DVec3),
-}
-
-/// Hüllquader einer Fläche. Kugel- und Torusflächen werden von ihren Randkurven nicht umschlossen
-/// (ihr Rand kann allein aus Nähten bestehen): dort gilt der Hüllquader der ganzen Trägerfläche.
-/// Die Randpunkte sind Abtastpunkte; der Zuschlag deckt die Sehnenabweichung der Bögen ab.
-fn bbox(g: &FaceGeom, tol: &Tolerance) -> (DVec3, DVec3) {
-    let mut pts: Vec<DVec3> = g.loops.iter().flat_map(|l| loop_points(l)).collect();
-    match &g.surface {
-        Surface::Sphere { frame, radius } => {
-            pts.push(frame.origin - DVec3::splat(*radius));
-            pts.push(frame.origin + DVec3::splat(*radius));
-        }
-        Surface::Torus {
-            frame,
-            major,
-            minor,
-        } => {
-            let r = major + minor;
-            pts.push(frame.origin - DVec3::splat(r));
-            pts.push(frame.origin + DVec3::splat(r));
-        }
-        // Hüllquader der Kontrollpunkte (enthält die ganze Fläche).
-        Surface::Nurbs(d) => {
-            let (lo, hi) = d.control_bounds();
-            pts.push(lo);
-            pts.push(hi);
-        }
-        _ => {}
-    }
-    let (lo, hi) = pts.iter().fold(
-        (DVec3::splat(f64::MAX), DVec3::splat(f64::MIN)),
-        |(lo, hi), p| (lo.min(*p), hi.max(*p)),
-    );
-    let margin = (hi - lo).length() * BBOX_MARGIN_FRACTION + tol.linear * 10.0;
-    (lo - DVec3::splat(margin), hi + DVec3::splat(margin))
 }
 
 fn overlaps(a: &(DVec3, DVec3), b: &(DVec3, DVec3)) -> bool {

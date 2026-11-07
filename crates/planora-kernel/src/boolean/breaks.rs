@@ -5,11 +5,14 @@
 use super::roots::{CurveSurface, curve_surface_roots};
 use super::seg::Seg;
 use super::split::pole_point;
-use super::uv::{Containment, FaceGeom, point_in_face};
+use super::uv::{Containment, FaceGeom, loop_points, point_in_face};
 use crate::geometry::{Curve, Surface};
 use crate::validate::edge_surface_tol;
 use planora_math::{DVec3, Tolerance};
 
+/// Zuschlag zum Hüllquader als Anteil seiner Diagonale (deckt die Sehnenabweichung der
+/// 5°-Abtastung von Bögen ab: höchstens etwa 0,1 % des Radius).
+const BBOX_MARGIN_FRACTION: f64 = 0.01;
 /// Kleinster Parameterabstand zweier Haltepunkte, der noch ein eigenes Kurvenstück ergibt.
 const MIN_PARAM_SPAN: f64 = 1e-9;
 
@@ -168,4 +171,39 @@ pub(super) fn classify_seg(
     } else {
         Containment::Boundary
     }
+}
+
+/// Hüllquader einer Fläche. Kugel- und Torusflächen werden von ihren Randkurven nicht umschlossen
+/// (ihr Rand kann allein aus Nähten bestehen): dort gilt der Hüllquader der ganzen Trägerfläche.
+/// Die Randpunkte sind Abtastpunkte; der Zuschlag deckt die Sehnenabweichung der Bögen ab.
+pub(super) fn bbox(g: &FaceGeom, tol: &Tolerance) -> (DVec3, DVec3) {
+    let mut pts: Vec<DVec3> = g.loops.iter().flat_map(|l| loop_points(l)).collect();
+    match &g.surface {
+        Surface::Sphere { frame, radius } => {
+            pts.push(frame.origin - DVec3::splat(*radius));
+            pts.push(frame.origin + DVec3::splat(*radius));
+        }
+        Surface::Torus {
+            frame,
+            major,
+            minor,
+        } => {
+            let r = major + minor;
+            pts.push(frame.origin - DVec3::splat(r));
+            pts.push(frame.origin + DVec3::splat(r));
+        }
+        // Hüllquader der Kontrollpunkte (enthält die ganze Fläche).
+        Surface::Nurbs(d) => {
+            let (lo, hi) = d.control_bounds();
+            pts.push(lo);
+            pts.push(hi);
+        }
+        _ => {}
+    }
+    let (lo, hi) = pts.iter().fold(
+        (DVec3::splat(f64::MAX), DVec3::splat(f64::MIN)),
+        |(lo, hi), p| (lo.min(*p), hi.max(*p)),
+    );
+    let margin = (hi - lo).length() * BBOX_MARGIN_FRACTION + tol.linear * 10.0;
+    (lo - DVec3::splat(margin), hi + DVec3::splat(margin))
 }

@@ -1,17 +1,17 @@
 //! Ebenenschnitt eines Körpers: die Schnittkurven einer Ebene mit den Flächen eines Körpers,
 //! beschnitten auf das Innere der Flächen (Grundlage für „Schneiden“ in der Skizze).
 
-use super::breaks::{breakpoints, classify_seg, edge_hits, split_at};
+use super::breaks::{bbox, breakpoints, classify_seg, edge_hits, split_at};
 use super::seg::Seg;
 use super::split::seam_segments;
 use super::surfsurf::{SurfaceIntersection, intersect_surfaces, surface_label, surface_name};
-use super::uv::{Containment, face_geom};
+use super::uv::{Containment, face_geom, point_in_face};
 use super::{face_is_freeform, pipeline_tol};
 use crate::geometry::{Curve, Surface};
 use crate::ids::Id;
 use crate::topology::{Face, Solid};
 use planora_i18n::tr;
-use planora_math::{Frame, Tolerance};
+use planora_math::{DVec3, Frame, Tolerance};
 use std::fmt;
 
 /// Ein Stück der Schnittkurve im Inneren einer Fläche: `curve` auf `[t0, t1]` (auch absteigend).
@@ -53,10 +53,97 @@ impl std::error::Error for SectionError {}
 
 /// Dieselbe Punktfolge (Anfang, Mitte und Ende innerhalb `tol.linear`, Richtung egal)?
 fn same_pointwise(a: &Seg, b: &Seg, tol: &Tolerance) -> bool {
-    let near = |p: planora_math::DVec3, q: planora_math::DVec3| p.distance(q) <= tol.linear;
+    let near = |p: DVec3, q: DVec3| p.distance(q) <= tol.linear;
     let ends = (near(a.start(), b.start()) && near(a.end(), b.end()))
         || (near(a.start(), b.end()) && near(a.end(), b.start()));
     ends && near(a.at(0.5), b.at(0.5))
+}
+
+/// Schneidet die Ebene den Hüllquader `(lo, hi)`? (Abstände der Ecken mit beiden Vorzeichen,
+/// innerhalb der Toleranz.)
+fn box_meets_plane((lo, hi): (DVec3, DVec3), plane: &Frame, tol: &Tolerance) -> bool {
+    let (mut min, mut max) = (f64::MAX, f64::MIN);
+    for i in 0..8 {
+        let c = DVec3::new(
+            if i & 1 == 0 { lo.x } else { hi.x },
+            if i & 2 == 0 { lo.y } else { hi.y },
+            if i & 4 == 0 { lo.z } else { hi.z },
+        );
+        let d = plane.z.dot(c - plane.origin);
+        min = min.min(d);
+        max = max.max(d);
+    }
+    min <= tol.linear && max >= -tol.linear
+}
+
+/// Abstand zur Ebene eines Punkts der Fläche `face` dicht neben `p` auf ihrer Randkante (Tangente
+/// `t`), um `eps` ins Flächeninnere versetzt. `None`, wenn kein solcher Punkt im Inneren liegt.
+fn side_near(
+    solid: &Solid,
+    face: Id<Face>,
+    p: DVec3,
+    t: DVec3,
+    eps: f64,
+    plane: &Frame,
+    tol: &Tolerance,
+) -> Option<f64> {
+    let geom = face_geom(solid, face);
+    let (u, v) = geom.surface.project(p);
+    let d = geom.surface.normal(u, v).cross(t).normalize_or_zero();
+    [1.0, -1.0].into_iter().find_map(|sgn| {
+        let (qu, qv) = geom.surface.project(p + d * (eps * sgn));
+        let q = geom.surface.point(qu, qv);
+        (point_in_face(&geom, q, tol) == Containment::Inside).then(|| plane.z.dot(q - plane.origin))
+    })
+}
+
+/// Ein Stück auf dem Rand der Fläche `face` gehört zum Schnitt, wenn es auf einer echten Kante
+/// liegt, deren beide Nachbarflächen auf verschiedenen Seiten der Ebene liegen (die Ebene geht
+/// durch den Körper). Berührt die Ebene den Körper nur an der Kante, entfällt es.
+fn edge_piece_crosses(
+    solid: &Solid,
+    face: Id<Face>,
+    s: &Seg,
+    plane: &Frame,
+    tol: &Tolerance,
+) -> bool {
+    let mid = s.at(0.5);
+    let f = &solid.faces[face];
+    let own = || {
+        std::iter::once(&f.outer)
+            .chain(f.inner.iter())
+            .flat_map(|l| &l.half_edges)
+    };
+    let Some(edge) = own().map(|he| he.edge).find(|&e| {
+        let e = &solid.edges[e];
+        Seg::new(e.curve.clone(), e.t0, e.t1).closest(mid).1 <= tol.linear
+    }) else {
+        return false;
+    };
+    // Naht: dieselbe Kante zweimal in derselben Fläche, keine Nachbarfläche.
+    if own().filter(|he| he.edge == edge).count() > 1 {
+        return false;
+    }
+    let Some(other) = solid.faces.iter().map(|(id, _)| id).find(|&o| {
+        o != face && {
+            let g = &solid.faces[o];
+            std::iter::once(&g.outer)
+                .chain(g.inner.iter())
+                .flat_map(|l| &l.half_edges)
+                .any(|he| he.edge == edge)
+        }
+    }) else {
+        return false;
+    };
+    let t = s.tangent_at(0.5);
+    let eps = (s.length() * 1e-3).max(tol.linear * 100.0);
+    match (
+        side_near(solid, face, mid, t, eps, plane, tol),
+        side_near(solid, other, mid, t, eps, plane, tol),
+    ) {
+        (Some(a), Some(b)) => a.abs() > tol.linear && b.abs() > tol.linear && a * b < 0.0,
+        _ => false,
+    }
 }
 
 /// Schnitt der Ebene `plane` mit den Flächen des Körpers (allen oder nur `faces`; Kennungen, die
@@ -82,8 +169,13 @@ pub fn section_by_plane(
             continue;
         }
         let geom = face_geom(solid, id);
+        // Freiformflächen nur ablehnen, wenn die Ebene ihren Hüllquader trifft; sonst trägt die
+        // Fläche ohnehin nichts bei (etwa eine Rundung weit weg).
         if matches!(geom.surface, Surface::Nurbs(_)) {
-            return Err(SectionError::Freeform(id));
+            if box_meets_plane(bbox(&geom, tol), plane, tol) {
+                return Err(SectionError::Freeform(id));
+            }
+            continue;
         }
         // Randkanten aus Freiformkurven: Haltepunkte und Lage mit der weiteren Toleranz.
         let ptol = pipeline_tol(tol, face_is_freeform(&geom));
@@ -116,11 +208,14 @@ pub fn section_by_plane(
                     .collect();
                 for c in cs {
                     let ts = breakpoints(&c, &hits, &[&geom.surface], &ptol);
-                    found.extend(
-                        split_at(&c, ts, &ptol).into_iter().filter(|s| {
-                            classify_seg(&geom, &seams, s, &ptol) == Containment::Inside
-                        }),
-                    );
+                    found.extend(split_at(&c, ts, &ptol).into_iter().filter(|s| {
+                        match classify_seg(&geom, &seams, s, &ptol) {
+                            Containment::Inside => true,
+                            // Stück auf einer Kante: nur, wenn die Ebene dort durchgeht.
+                            Containment::Boundary => edge_piece_crosses(solid, id, s, plane, &ptol),
+                            Containment::Outside => false,
+                        }
+                    }));
                 }
             }
         }
@@ -393,5 +488,76 @@ mod tests {
         let ps = section_by_plane(&c, &cut, Some(&[cap]), &t).unwrap();
         assert_eq!(ps.len(), 1);
         assert_eq!(ps[0].face, cap);
+    }
+
+    /// Fix-Runde 1: Die Ebene x = y geht durch zwei gegenüberliegende senkrechte Kanten des
+    /// Quaders: Beide Kanten gehören zum Schnitt, die Kontur ist geschlossen.
+    #[test]
+    fn diagonal_plane_through_box_edges_gives_closed_contour() {
+        let t = tol();
+        let b = make_box(DVec3::new(10.0, 10.0, 30.0), &t).unwrap();
+        let n = DVec3::new(1.0, -1.0, 0.0).normalize();
+        let ps = section_by_plane(&b, &plane(DVec3::ZERO, n), None, &t).unwrap();
+        assert_eq!(ps.len(), 4, "{ps:?}");
+        assert_no_duplicates(&ps);
+        // geschlossen: jeder Endpunkt kommt genau zweimal vor
+        let ends: Vec<DVec3> = ps
+            .iter()
+            .flat_map(|p| {
+                let s = seg(p);
+                [s.start(), s.end()]
+            })
+            .collect();
+        for e in &ends {
+            let k = ends.iter().filter(|x| x.distance(*e) <= t.linear).count();
+            assert_eq!(k, 2, "offenes Ende bei {e}: {ps:?}");
+        }
+        let verticals = ps
+            .iter()
+            .map(seg)
+            .filter(|s| (s.length() - 30.0).abs() < 1e-9)
+            .count();
+        assert_eq!(verticals, 2);
+    }
+
+    /// Fix-Runde 1: Die Ebene x + y = 0 berührt den Quader nur an der Kante x = y = 0: kein Stück,
+    /// kein Fehler.
+    #[test]
+    fn plane_touching_box_edge_gives_nothing() {
+        let t = tol();
+        let b = make_box(DVec3::new(10.0, 10.0, 30.0), &t).unwrap();
+        let n = DVec3::new(1.0, 1.0, 0.0).normalize();
+        let ps = section_by_plane(&b, &plane(DVec3::ZERO, n), None, &t).unwrap();
+        assert!(ps.is_empty(), "{ps:?}");
+    }
+
+    /// Fix-Runde 1: Eine Freiformfläche abseits der Ebene stört nicht; wird sie geschnitten, gibt
+    /// es den Freiform-Fehler.
+    #[test]
+    fn nurbs_face_away_from_plane_is_skipped() {
+        let t = tol();
+        let mut b = make_box(DVec3::new(10.0, 20.0, 30.0), &t).unwrap();
+        let top = face_with(&b, |s| match s {
+            Surface::Plane { frame } => {
+                (frame.origin.z - 30.0).abs() < 1e-9 && frame.z.z.abs() > 0.5
+            }
+            _ => false,
+        });
+        let edge = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![DVec3::new(0.0, 0.0, 30.0), DVec3::new(10.0, 0.0, 30.0)],
+            vec![1.0; 2],
+        )
+        .unwrap();
+        let s = NurbsSurface::extrude(&edge, DVec3::new(0.0, 20.0, 0.0)).unwrap();
+        b.faces[top].surface = Surface::nurbs(s, false, false).unwrap();
+        let ps =
+            section_by_plane(&b, &plane(DVec3::new(0.0, 0.0, 15.0), DVec3::Z), None, &t).unwrap();
+        assert_eq!(ps.len(), 4, "{ps:?}");
+        assert!((total_length(&ps) - 60.0).abs() < 1e-9);
+        let err = section_by_plane(&b, &plane(DVec3::new(0.0, 0.0, 30.0), DVec3::Z), None, &t)
+            .unwrap_err();
+        assert_eq!(err, SectionError::Freeform(top));
     }
 }
