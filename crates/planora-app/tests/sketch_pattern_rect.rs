@@ -1387,3 +1387,177 @@ fn direction_two_back_to_perpendicular_previews_the_result_in_one_step() {
         assert_eq!(dirs, [PatternDir::Line(l), PatternDir::Perpendicular]);
     });
 }
+
+/// Die Namen der Felder `kinds` im Bild (je die erste Fundstelle).
+fn field_rects(shot: &Shot, kinds: &[FieldKind]) -> Vec<Rect> {
+    kinds
+        .iter()
+        .map(|k| {
+            let name = k.label();
+            shot.texts
+                .iter()
+                .find(|(t, _)| *t == name)
+                .map(|(_, r)| *r)
+                .unwrap_or_else(|| panic!("Feld {name}"))
+        })
+        .collect()
+}
+
+fn assert_same_rects(got: &[Rect], want: &[Rect], what: &str) {
+    assert_eq!(got.len(), want.len(), "{what}");
+    for (g, w) in got.iter().zip(want) {
+        assert!(
+            g.center().distance(w.center()) < 0.5,
+            "{what}: {g:?} statt {w:?}"
+        );
+    }
+}
+
+const RECT_KINDS: [FieldKind; 4] = [
+    FieldKind::PatternCount1,
+    FieldKind::PatternSpacing1,
+    FieldKind::PatternCount2,
+    FieldKind::PatternSpacing2,
+];
+
+/// Handtest Skizzen 5, Fix 3: Die Felder stehen fest an der Vorlage, auf der Seite, die den
+/// Richtungen abgewandt ist. Anzahl 3 → 10, Abstand und Zeiger verschieben sie nicht.
+#[test]
+fn the_rect_fields_stay_put_beside_the_source_away_from_the_instances() {
+    with_lang(&german(), || {
+        let mut rig = Rig::new(&[]);
+        let ids = rig.sk().add_rectangle(v(0.0, 0.0), v(10.0, 5.0)).unwrap();
+        rig.settle();
+        let (px, _) = rig.pixels();
+        rig.select(lines(&ids));
+        rig.action(Action::SketchPatternRect);
+        let start = field_rects(&rig.settle(), &RECT_KINDS);
+        // Links unterhalb der linken unteren Ecke: Die Richtungen gehen nach rechts und oben.
+        let corner = px(v(0.0, 0.0));
+        for r in &start {
+            assert!(
+                r.max.x < corner.x && r.min.y > corner.y,
+                "{r:?} zu {corner:?}"
+            );
+        }
+        // Der Zeiger wandert über die Vorschau: Die Felder bleiben.
+        rig.hover(px(v(40.0, 20.0)));
+        assert_same_rects(&field_rects(&rig.settle(), &RECT_KINDS), &start, "Zeiger");
+        // 10 × 10 mit anderen Abständen, getippt wie im Handtest.
+        rig.type_text("10");
+        rig.press(Key::Tab);
+        rig.type_text("25");
+        rig.press(Key::Tab);
+        rig.type_text("10");
+        rig.press(Key::Tab);
+        rig.type_text("12");
+        rig.hover(px(v(60.0, 40.0)));
+        let shot = rig.settle();
+        assert_eq!(rig.now().unwrap().counts, [10, 10]);
+        assert_eq!(rig.now().unwrap().values, [25.0, 12.0]);
+        assert_same_rects(&field_rects(&shot, &RECT_KINDS), &start, "10 × 10");
+        // Ein gezogener Abstand ebenso.
+        rig.st()
+            .sketch_session
+            .as_mut()
+            .unwrap()
+            .pattern
+            .plan
+            .as_mut()
+            .unwrap()
+            .values = [40.0, 30.0];
+        assert_same_rects(&field_rects(&rig.settle(), &RECT_KINDS), &start, "Abstand");
+    });
+}
+
+/// Handtest Skizzen 5, Fix 3: Ein Klick auf ein Feld wählt kein Exemplar ab, auch wenn eines
+/// darunter liegt (hier mit negativen Abständen dorthin gelegt).
+#[test]
+fn a_click_on_a_pattern_field_suppresses_no_instance_below_it() {
+    with_lang(&german(), || {
+        let mut rig = Rig::new(&[]);
+        let ids = rig.sk().add_rectangle(v(0.0, 0.0), v(10.0, 5.0)).unwrap();
+        rig.settle();
+        rig.select(lines(&ids));
+        rig.action(Action::SketchPatternRect);
+        let p = field_rects(&rig.settle(), &[FieldKind::PatternCount2])[0].center();
+        rig.press(Key::Escape);
+        // Die Skizzenlage unter der Feldmitte.
+        rig.use_tool(Tool::Dimension);
+        let q = rig.at_pixel(p);
+        rig.use_tool(Tool::Select);
+        rig.select(lines(&ids));
+        rig.action(Action::SketchPatternRect);
+        assert_same_rects(
+            &field_rects(&rig.settle(), &[FieldKind::PatternCount2]),
+            &[Rect::from_center_size(p, Vec2::ZERO)],
+            "wieder da",
+        );
+        // Exemplar [1, 1] mit seiner linken Kante genau unter der Feldmitte.
+        {
+            let plan = rig
+                .st()
+                .sketch_session
+                .as_mut()
+                .unwrap()
+                .pattern
+                .plan
+                .as_mut()
+                .unwrap();
+            plan.counts = [2, 2];
+            plan.values = [q.x, q.y - 2.5];
+        }
+        rig.settle();
+        // Gegenprobe in der Sitzung: Dort träfe ein Klick das Exemplar.
+        {
+            let mut probe = rig.st().sketch_session.clone().unwrap();
+            let mut sk = rig.sk().clone();
+            probe.click(&mut sk, q, PICK, false).unwrap();
+            assert_eq!(probe.pattern_now().unwrap().suppressed, vec![[1, 1]]);
+        }
+        rig.click(p);
+        assert!(rig.now().unwrap().suppressed.is_empty(), "Klick aufs Feld");
+        assert_eq!(rig.tool(), Tool::Pattern);
+    });
+}
+
+/// Handtest Skizzen 5, Fix 3, rein: Der Anker der Felder hängt nicht an Anzahl und Abstand, steht
+/// an der den Richtungen abgewandten Ecke, und die Feldlage hängt nur am Anker.
+#[test]
+fn pure_field_anchor_and_place_ignore_count_and_spacing() {
+    use planora_app::sketch_inline::pattern_field_pos;
+    use planora_app::sketch_pattern::rect_field_anchor;
+    let (mut s, _) = sketch_with(&[], |sk| {
+        sk.add_rectangle(v(0.0, 0.0), v(10.0, 5.0))
+            .unwrap()
+            .lines
+            .to_vec()
+    });
+    let anchor = |s: &AppState| {
+        let se = s.sketch_session.as_ref().unwrap();
+        se.pattern_field_anchor(s.session_sketch().unwrap())
+            .expect("Anker")
+    };
+    let start = anchor(&s);
+    assert!(start.at.distance(v(0.0, 0.0)) < 1e-9, "{start:?}");
+    assert!(start.away.x < 0.0 && start.away.y < 0.0);
+    type_field(&mut s, FieldKind::PatternCount1, "10");
+    type_field(&mut s, FieldKind::PatternCount2, "10");
+    type_field(&mut s, FieldKind::PatternSpacing1, "40");
+    assert_eq!(anchor(&s), start);
+    plan_mut(&mut s).values = [3.0, 70.0];
+    assert_eq!(anchor(&s), start);
+    // Richtung 1 nach links: Die Ecke wechselt nach rechts unten.
+    let left = rect_field_anchor(v(0.0, 0.0), v(10.0, 5.0), v(-1.0, 1.0));
+    assert!(left.at.distance(v(10.0, 0.0)) < 1e-9 && left.away.x > 0.0 && left.away.y < 0.0);
+    // Bildschirm: links unterhalb vom Anker, in der Fläche gehalten, Zeilen untereinander.
+    let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(W, H));
+    let (at, away) = (pos2(800.0, 500.0), vec2(-1.0, 1.0));
+    let p0 = pattern_field_pos(rect, at, away, 180.0, 0, 4);
+    let p1 = pattern_field_pos(rect, at, away, 230.0, 1, 4);
+    assert!(p0.x + 180.0 < at.x && p0.y > at.y, "{p0:?}");
+    assert_eq!(p0.x, p1.x, "bündig, auch wenn eine Zeile breiter ist");
+    assert!(p1.y > p0.y);
+    let edge = pattern_field_pos(rect, pos2(5.0, H - 5.0), away, 180.0, 0, 4);
+    assert!(edge.x >= 0.0 && edge.y + 4.0 * 30.0 <= H, "{edge:?}");
+}

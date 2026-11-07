@@ -9,7 +9,7 @@ use crate::sketch_state::SketchSession;
 use crate::sketch_view::{format_number, pointer_radius};
 use crate::state::AppState;
 use crate::{theme, viewport};
-use egui::{Event, ImeEvent, Key, Modifiers, Order, Pos2, Rect, pos2};
+use egui::{Event, ImeEvent, Key, Modifiers, Order, Pos2, Rect, Vec2, pos2};
 use planora_feature::SketchFeature;
 
 /// Abstand des ersten Felds vom Zeiger, je Richtung.
@@ -53,6 +53,43 @@ fn field_pos(rect: Rect, anchor: Pos2, width: f32, row: usize, rows: usize) -> P
         anchor.y + POINTER_GAP
     };
     pos2(x, top + row as f32 * ROW_STEP)
+}
+
+/// Linke obere Ecke des Felds `row` von `rows` am festen Platz der Anordnung: vom Anker `anchor`
+/// aus in die Bildschirmrichtung `away` (je Achse nur das Vorzeichen), in `rect` gehalten. Nach
+/// links stehen die Felder bündig mit der geschätzten Breite, damit eine längere Zeile (etwa mit
+/// Fehler) die anderen nicht verschiebt. Die Lage hängt nur vom Anker ab, nie von der Vorschau.
+pub fn pattern_field_pos(
+    rect: Rect,
+    anchor: Pos2,
+    away: Vec2,
+    width: f32,
+    row: usize,
+    rows: usize,
+) -> Pos2 {
+    let x = if away.x < 0.0 {
+        anchor.x - POINTER_GAP - ROW_WIDTH_GUESS
+    } else {
+        anchor.x + POINTER_GAP
+    };
+    let block = rows as f32 * ROW_STEP;
+    let top = if away.y < 0.0 {
+        anchor.y - POINTER_GAP - block
+    } else {
+        anchor.y + POINTER_GAP
+    };
+    let x = x.min(rect.right() - width).max(rect.left());
+    let top = top.min(rect.bottom() - block).max(rect.top());
+    pos2(x, top + row as f32 * ROW_STEP)
+}
+
+/// Steht `p` auf einem der Felder, die gerade zu sehen sind (Lage aus dem letzten Bild)? Ein Klick
+/// dort gehört dem Feld, nicht der Zeichnung: Er wählt etwa kein Exemplar einer Anordnung ab.
+pub fn over_field(ctx: &egui::Context, se: &SketchSession, p: Pos2) -> bool {
+    se.input.fields.iter().any(|f| {
+        ctx.memory(|m| m.area_rect(area_id(f.kind)))
+            .is_some_and(|r| r.contains(p))
+    })
 }
 
 /// Der aktuelle Wert gerundet, wie ihn das Feld vor dem ersten Zeichen zeigt: Länge wie
@@ -125,6 +162,9 @@ fn starts_typing(event: &Event) -> bool {
 pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option<Pos2>) -> bool {
     let ctx = ui.ctx().clone();
     let radius = pointer.map_or(0.0, |p| pointer_radius(state, rect, p));
+    // Die Anordnung hat einen festen Platz für ihre Felder (wie Fusions Dialog), alle anderen
+    // Befehle folgen dem Zeiger.
+    let fixed = crate::sketch_view::pattern_field_place(state, rect);
     let Some((se, sk)) = state.session_sketch_mut() else {
         return false;
     };
@@ -199,7 +239,10 @@ pub fn show(ui: &mut egui::Ui, rect: Rect, state: &mut AppState, pointer: Option
             .memory(|m| m.area_rect(area_id(kind)))
             .map_or(ROW_WIDTH_GUESS, |r| r.width());
         let response = egui::Area::new(area_id(kind))
-            .fixed_pos(field_pos(rect, anchor, width, i, rows))
+            .fixed_pos(match fixed {
+                Some((at, away)) => pattern_field_pos(rect, at, away, width, i, rows),
+                None => field_pos(rect, anchor, width, i, rows),
+            })
             .order(Order::Foreground)
             .interactable(false)
             .show(&ctx, |ui| {

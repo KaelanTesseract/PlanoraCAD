@@ -886,3 +886,93 @@ fn the_angle_grip_unwraps_over_a_dense_turn_and_stops_at_360() {
         assert!((last + TAU).abs() < 1e-9);
     }
 }
+
+/// Die Namen der Felder `kinds` im Bild (je die erste Fundstelle).
+fn field_rects(shot: &Shot, kinds: &[FieldKind]) -> Vec<Rect> {
+    kinds
+        .iter()
+        .map(|k| {
+            let name = k.label();
+            shot.texts
+                .iter()
+                .find(|(t, _)| *t == name)
+                .map(|(_, r)| *r)
+                .unwrap_or_else(|| panic!("Feld {name}"))
+        })
+        .collect()
+}
+
+fn assert_same_rect(got: Rect, want: Rect, what: &str) {
+    assert!(
+        got.center().distance(want.center()) < 0.5,
+        "{what}: {got:?} statt {want:?}"
+    );
+}
+
+/// Handtest Skizzen 5, Fix 3: Die Felder des Kreismusters stehen fest rechts unterhalb des Rings
+/// um die Mitte; Anzahl, Winkel und Zeiger verschieben sie nicht, und sie liegen auf keinem
+/// Exemplar.
+#[test]
+fn the_circular_fields_stay_put_outside_the_ring() {
+    with_lang(&german(), || {
+        let mut rig = Rig::new();
+        let m = rig.sk().add_point(20.0, 0.0).unwrap();
+        let circle = rig.sk().add_circle(m, 3.0).unwrap();
+        rig.sk().solve();
+        rig.settle();
+        let (px, _) = rig.pixels();
+        let origin = rig.exact(v(0.0, 0.0));
+        rig.select(vec![Item::Curve(circle)]);
+        rig.action(Action::SketchPatternCircular);
+        rig.click(origin);
+        assert_eq!(rig.stage(), TransformStage::Active);
+        let count = FieldKind::PatternCount;
+        let start = field_rects(&rig.settle(), &[count])[0];
+        // Außerhalb des Rings (Halbmesser 20 + 3): rechts von ihm und unter ihm.
+        assert!(
+            start.min.x > px(v(23.0, 0.0)).x && start.min.y > px(v(0.0, -23.0)).y,
+            "{start:?}"
+        );
+        rig.hover(px(v(-20.0, 0.0)));
+        assert_same_rect(field_rects(&rig.settle(), &[count])[0], start, "Zeiger");
+        rig.type_field(count, "10");
+        rig.hover(px(v(0.0, 20.0)));
+        assert_same_rect(field_rects(&rig.settle(), &[count])[0], start, "Anzahl 10");
+        // Art „Winkel“: ein Feld mehr, das erste bleibt; der Winkel verschiebt nichts.
+        let shot = rig.settle();
+        let winkel = shot
+            .find(&tr!("sketch-pattern-angle-mode"))
+            .expect("Winkel");
+        rig.click(winkel);
+        let kinds = [count, FieldKind::PatternAngle];
+        let with_angle = field_rects(&rig.settle(), &kinds);
+        assert_same_rect(with_angle[0], start, "Art Winkel");
+        rig.type_field(FieldKind::PatternAngle, "200");
+        rig.type_field(count, "4");
+        let shot = rig.settle();
+        assert_same_rect(field_rects(&shot, &kinds)[0], with_angle[0], "Winkel 200");
+        assert_same_rect(field_rects(&shot, &kinds)[1], with_angle[1], "Winkel 200");
+    });
+}
+
+/// Handtest Skizzen 5, Fix 3, rein: Der Anker der Felder des Kreismusters hängt nicht an Anzahl,
+/// Art und Winkel; er liegt rechts unten am Quadrat um den Ring.
+#[test]
+fn pure_circular_field_anchor_ignores_count_mode_and_angle() {
+    let (mut s, _, _) = circle_state();
+    click_center(&mut s, v(0.0, 0.0), None, true);
+    let anchor = |s: &AppState| {
+        let se = s.sketch_session.as_ref().unwrap();
+        se.pattern_field_anchor(s.session_sketch().unwrap())
+            .expect("Anker")
+    };
+    let start = anchor(&s);
+    let r = 20.0 + 3.0 * 2f64.sqrt();
+    assert!(start.at.distance(v(r, -r)) < 1e-6, "{start:?}");
+    assert!(start.away.x > 0.0 && start.away.y < 0.0);
+    type_field(&mut s, FieldKind::PatternCount, "10");
+    assert_eq!(anchor(&s), start);
+    set_mode(&mut s, CircularMode::Angle);
+    type_field(&mut s, FieldKind::PatternAngle, "200");
+    assert_eq!(anchor(&s), start);
+}

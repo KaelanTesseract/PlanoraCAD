@@ -1006,6 +1006,19 @@ pub fn pattern_grip_layout(state: &AppState, rect: Rect) -> Option<PatternGripLa
     Some(sketch_pattern::pattern_layout(origin, tips, None))
 }
 
+/// Fester Platz der Felder der Anordnung in diesem Bild: der Ankerpunkt auf dem Bildschirm und die
+/// Bildschirmrichtung, in die die Felder von ihm weg stehen. Er folgt Schwenken und Zoomen, nicht
+/// der Vorschau; `None` ohne laufende Anordnung.
+pub fn pattern_field_place(state: &AppState, rect: Rect) -> Option<(Pos2, egui::Vec2)> {
+    let (se, sk) = (state.sketch_session.as_ref()?, state.session_sketch()?);
+    let anchor = se.pattern_field_anchor(sk)?;
+    let map = mapper(rect, state)?;
+    let at = map.to_screen(anchor.at)?;
+    let step = map.radius_at(at).filter(|r| *r > 0.0)?;
+    let away = map.to_screen(anchor.at + anchor.away * step)? - at;
+    (away.length() > 0.0).then_some((at, away))
+}
+
 /// Der Griff der Anordnung, den der eben erkannte Zug mit der linken Taste greift (`layout`: die
 /// Lage der Griffe in diesem Bild).
 fn pattern_grip_can_start(
@@ -1164,6 +1177,14 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             || pointer
                 .zip(pattern_layout.as_ref())
                 .is_some_and(|(p, l)| sketch_pattern::pattern_hit(l, p).is_some()));
+    // Ein Klick auf ein Feld der Anordnung (die Felder nehmen keine Mausereignisse an) schaltet
+    // kein Exemplar darunter (Handtest Skizzen 5). Die anderen Befehle führen ihre Felder neben
+    // dem Zeiger, dort trifft ein Klick nie ein Feld.
+    let click_on_field = (primary_click || response.double_clicked() || response.triple_clicked())
+        && state.sketch_session.as_ref().is_some_and(|se| {
+            se.runs_pattern()
+                && pointer.is_some_and(|p| crate::sketch_inline::over_field(ui.ctx(), se, p))
+        });
 
     // Getippte Werte werden beim Klick und bei der Eingabe zu Maßen; die Formeln darin brauchen die
     // Parameter.
@@ -1316,6 +1337,8 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     // Abstand nur zum letzten) – das ist für den Nutzer ein Doppelklick und beendet ebenso.
     if se.box_aborted {
         // Das Loslassen nach dem Abbruch ist kein Klick.
+    } else if click_on_field {
+        // Der Klick gehört dem Feld der Anordnung.
     } else if (response.double_clicked() || response.triple_clicked()) && !se.click_after_flyout {
         let label = pointer
             .filter(|_| se.tool == Tool::Select)

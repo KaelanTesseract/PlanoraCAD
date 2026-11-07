@@ -345,6 +345,48 @@ fn slot_value(plan: &PatternPlan, slot: PatternSlot) -> f64 {
     }
 }
 
+/// Fester Platz der Felder des Musters in der Skizze: der Punkt `at` und die Richtung `away`, in
+/// die die Felder von ihm weg stehen ([`SketchSession::pattern_field_anchor`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PatternFieldAnchor {
+    pub at: DVec2,
+    pub away: DVec2,
+}
+
+/// Rechteckmuster: die Ecke des Rahmens der Vorlage (`lo`–`hi`), die der Summe `along` der
+/// Richtungen abgewandt ist; die Felder stehen von dort weiter weg. Die Exemplare gehen in die
+/// Richtungen, also liegt hinter dieser Ecke keines (außer bei „Symmetrisch“ oder negativem
+/// Abstand). Heben sich die Richtungen auf, gilt links unten.
+pub fn rect_field_anchor(lo: DVec2, hi: DVec2, along: DVec2) -> PatternFieldAnchor {
+    let away = (-along)
+        .try_normalize()
+        .unwrap_or(DVec2::new(-1.0, -1.0).normalize());
+    let pick = |a: f64, low: f64, high: f64| {
+        if a < -1e-9 {
+            low
+        } else if a > 1e-9 {
+            high
+        } else {
+            0.5 * (low + high)
+        }
+    };
+    PatternFieldAnchor {
+        at: DVec2::new(pick(away.x, lo.x, hi.x), pick(away.y, lo.y, hi.y)),
+        away,
+    }
+}
+
+/// Kreismuster: die rechte untere Ecke des Quadrats um den Ring aller möglichen Exemplare (Mitte
+/// `center`, Halbmesser bis zum äußersten Punkt des Rahmens `lo`–`hi` der Vorlage). Die Felder
+/// stehen rechts unterhalb davon und decken so bei keinem Winkel ein Exemplar.
+pub fn circular_field_anchor(center: DVec2, lo: DVec2, hi: DVec2) -> PatternFieldAnchor {
+    let r = ((lo + hi) * 0.5 - center).length() + 0.5 * (hi - lo).length();
+    PatternFieldAnchor {
+        at: center + DVec2::new(r, -r),
+        away: DVec2::new(1.0, -1.0).normalize(),
+    }
+}
+
 /// Griffpunkte in der Skizze: Mitte der Vorlage, je Richtung das letzte Exemplar und die Richtung
 /// nach außen.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -804,6 +846,31 @@ impl SketchSession {
             }
         }
         Some(PatternHandles { origin, arrows })
+    }
+
+    /// Wo die Felder des Musters stehen ([`PatternFieldAnchor`]); `None` außerhalb der aktiven
+    /// Stufe. Es zählen nur Vorlage, Richtungen und Mitte, nie Anzahl, Abstand oder Winkel: So
+    /// bleiben die Felder während des Befehls an ihrem Platz wie in Fusions Dialog (Handtest
+    /// Skizzen 5).
+    pub fn pattern_field_anchor(&self, sk: &Sketch) -> Option<PatternFieldAnchor> {
+        if !self.runs_pattern() || self.pattern.stage != TransformStage::Active {
+            return None;
+        }
+        let plan = self.pattern.plan.as_ref()?;
+        let (lo, hi) = bounds(sk, &plan.sources)?;
+        let anchor = match plan.kind {
+            PatternKind::Rect { dirs, .. } => {
+                let along = [0, 1]
+                    .map(|k| dir_unit(sk, dirs, k).unwrap_or(DVec2::ZERO))
+                    .into_iter()
+                    .sum::<DVec2>();
+                rect_field_anchor(lo, hi, along)
+            }
+            PatternKind::Circular { center, .. } => {
+                circular_field_anchor(self.pattern_center_xy(sk, center)?, lo, hi)
+            }
+        };
+        (anchor.at.is_finite() && anchor.away.is_finite()).then_some(anchor)
     }
 
     /// Beginnt den Zug am Griff `grip` bei `at` (Skizzeneinheiten). Ein getippter Abstand dieser
