@@ -228,7 +228,10 @@ fn compute_unchecked(
     let id = feature.id;
     let kernel = &doc.kernel;
     match &feature.kind {
-        FeatureKind::Sketch(sf) => compute_sketch(doc, sf, visible),
+        FeatureKind::Sketch(sf) => {
+            let previous = feature.result.as_ref().and_then(|r| r.sketch.as_ref());
+            compute_sketch(doc, sf, visible, previous)
+        }
         FeatureKind::Box { size, origin } => primitive(doc, kernel.make_box(*size), *origin, id.0),
         FeatureKind::Cylinder {
             radius,
@@ -679,11 +682,13 @@ fn refit_formula_arcs(sketch: &mut Sketch, sf: &SketchFeature) {
 
 /// Skizze: Ebene auflösen, Projektionen nachführen, lösen. Eine Projektion, deren Bezug sich
 /// nicht mehr auflösen oder nachführen lässt, bleibt wie gespeichert und zählt zur Warnung; nur
-/// eine nicht auffindbare Skizzenebene ist ein Fehler.
+/// eine nicht auffindbare Skizzenebene ist ein Fehler. Eine verlorene Kurve behält die Lage aus
+/// `previous` (dem letzten berechneten Stand dieses Features), sonst die der Definition.
 fn compute_sketch(
     doc: &Document,
     sf: &SketchFeature,
     visible: &[BodyRef],
+    previous: Option<&Sketch>,
 ) -> Result<Computed, FeatureError> {
     let solids: Vec<&Solid> = visible.iter().filter_map(|r| doc.body(*r)).collect();
     let tol = doc.kernel.tolerance;
@@ -716,7 +721,12 @@ fn compute_sketch(
         match follow_copy(&mut sketch, c, &solids, &frame, &tol) {
             Some(updated) => copies.push(updated),
             None => {
-                // Bezug verloren: Kurve und Verweis bleiben wie gespeichert.
+                // Bezug verloren: Die Kurve bleibt an ihrer zuletzt nachgeführten Lage (gibt es
+                // die Kurve im letzten Stand nicht in derselben Art, an der Lage der
+                // Definition); der Verweis bleibt wie gespeichert.
+                if let Some(prev) = previous {
+                    let _ = sketch.restore_projected_curve(c.curve, prev);
+                }
                 lost += 1;
                 copies.push(c.clone());
             }

@@ -96,6 +96,9 @@ fn box_with_projected_edge() -> (Document, FeatureId, FeatureId, CurveId) {
     let (curve, edge) = project_line_edge(&mut sk, &solid, |_, s, c| {
         (s.line_length(c).unwrap() - 10.0).abs() < 1e-9
     });
+    // Eigenes Profil abseits des Quaders für eine Extrusion.
+    sk.add_rectangle(DVec2::new(50.0, 50.0), DVec2::new(55.0, 55.0))
+        .unwrap();
     let s = d
         .add_feature(
             "Skizze",
@@ -103,7 +106,7 @@ fn box_with_projected_edge() -> (Document, FeatureId, FeatureId, CurveId) {
         )
         .unwrap();
     assert_eq!(d.feature(s).unwrap().status, FeatureStatus::Ok);
-    assert!(d.feature(s).unwrap().warning.is_none());
+    assert!(d.feature(s).unwrap().warning().is_none());
     (d, b, s, curve)
 }
 
@@ -182,7 +185,7 @@ fn lost_edge_keeps_geometry_and_warns() {
         )
         .unwrap();
     assert_eq!(d.feature(s).unwrap().status, FeatureStatus::Ok);
-    assert!(d.feature(s).unwrap().warning.is_none(), "Bezug noch da");
+    assert!(d.feature(s).unwrap().warning().is_none(), "Bezug noch da");
     assert_eq!(
         d.feature(e).unwrap().status,
         FeatureStatus::Ok,
@@ -195,8 +198,8 @@ fn lost_edge_keeps_geometry_and_warns() {
     let f = d.feature(s).unwrap();
     assert_eq!(f.status, FeatureStatus::Ok, "{:?}", f.status);
     let warning = f
-        .warning
-        .clone()
+        .warning()
+        .map(str::to_string)
         .expect("Warnung über den verlorenen Bezug");
     assert_eq!(
         warning,
@@ -241,7 +244,7 @@ fn changed_kind_keeps_geometry_and_warns() {
         .unwrap();
     let f = d.feature(s).unwrap();
     assert_eq!(f.status, FeatureStatus::Ok, "{:?}", f.status);
-    assert!(f.warning.is_some());
+    assert!(f.warning().is_some());
     let sk = d.sketch_of(s).unwrap();
     assert!(matches!(
         sk.curve(circle).unwrap().kind,
@@ -267,7 +270,7 @@ fn deleted_curve_is_pruned_not_error() {
         "tote Kurve ist kein Fehler: {:?}",
         f.status
     );
-    assert!(f.warning.is_some(), "tote Kurve zählt als verloren");
+    assert!(f.warning().is_some(), "tote Kurve zählt als verloren");
 
     let mut sf = sketch_def(&d, s).clone();
     assert!(sf.prune_copies());
@@ -276,7 +279,7 @@ fn deleted_curve_is_pruned_not_error() {
     d.update(s, |k| *k = FeatureKind::Sketch(sf)).unwrap();
     let f = d.feature(s).unwrap();
     assert_eq!(f.status, FeatureStatus::Ok);
-    assert!(f.warning.is_none(), "nach dem Aufräumen keine Warnung");
+    assert!(f.warning().is_none(), "nach dem Aufräumen keine Warnung");
 }
 
 #[test]
@@ -295,7 +298,7 @@ fn break_link_stops_following() {
     set_box_x(&mut d, b, 15.0);
     let f = d.feature(s).unwrap();
     assert_eq!(f.status, FeatureStatus::Ok);
-    assert!(f.warning.is_none());
+    assert!(f.warning().is_none());
     let sk = d.sketch_of(s).unwrap();
     let len = sk.line_length(curve).unwrap();
     assert!((len - 12.0).abs() < 1e-7, "gelöst bleibt stehen: {len}");
@@ -355,7 +358,7 @@ fn section_copy_follows_body() {
             ),
         )
         .unwrap();
-    assert!(d.feature(s).unwrap().warning.is_none());
+    assert!(d.feature(s).unwrap().warning().is_none());
     d.update(b, |k| {
         if let FeatureKind::Box { size, .. } = k {
             size.x = 30.0;
@@ -365,7 +368,7 @@ fn section_copy_follows_body() {
     .unwrap();
     let f = d.feature(s).unwrap();
     assert_eq!(f.status, FeatureStatus::Ok, "{:?}", f.status);
-    assert!(f.warning.is_none(), "{:?}", f.warning);
+    assert!(f.warning().is_none(), "{:?}", f.warning());
     let sk = d.sketch_of(s).unwrap();
     assert!((sk.line_length(curve).unwrap() - 30.0).abs() < 1e-7);
     let (a, b2) = line_ends(sk, curve);
@@ -419,7 +422,7 @@ fn silhouette_copy_follows_radius() {
             ),
         )
         .unwrap();
-    assert!(d.feature(s).unwrap().warning.is_none());
+    assert!(d.feature(s).unwrap().warning().is_none());
     d.update(c, |k| {
         if let FeatureKind::Cylinder { radius, .. } = k {
             *radius = 8.0;
@@ -428,7 +431,7 @@ fn silhouette_copy_follows_radius() {
     .unwrap();
     let f = d.feature(s).unwrap();
     assert_eq!(f.status, FeatureStatus::Ok, "{:?}", f.status);
-    assert!(f.warning.is_none(), "{:?}", f.warning);
+    assert!(f.warning().is_none(), "{:?}", f.warning());
     let (a, b) = line_ends(d.sketch_of(s).unwrap(), curve);
     assert!((a.x - 8.0 * x0.signum()).abs() < 1e-7, "{a:?}");
     assert!((b.x - 8.0 * x0.signum()).abs() < 1e-7, "{b:?}");
@@ -473,7 +476,7 @@ fn hints_do_not_bump_edits() {
         .unwrap();
     let f = d.feature(s).unwrap();
     assert_eq!(f.status, FeatureStatus::Ok);
-    assert!(f.warning.is_none(), "{:?}", f.warning);
+    assert!(f.warning().is_none(), "{:?}", f.warning());
     let (version, edits) = (f.version(), d.edit_count());
     let sf = sketch_def(&d, s);
     match &sf.copies[0].source {
@@ -493,4 +496,91 @@ fn hints_do_not_bump_edits() {
         "keine neue Version"
     );
     assert_eq!(d.edit_count(), edits, "keine Änderung gezählt");
+}
+
+/// Extrusion des Rechtecks der Skizze aus [`box_with_projected_edge`].
+fn extrude(d: &mut Document, s: FeatureId) -> FeatureId {
+    let e = d
+        .add_feature(
+            "Extrusion",
+            FeatureKind::Extrude {
+                sketch: s,
+                profiles: ProfileSel::Index(0),
+                height: 2.0,
+            },
+        )
+        .unwrap();
+    assert_eq!(d.feature(e).unwrap().status, FeatureStatus::Ok);
+    e
+}
+
+fn assert_lost_but_ok(d: &Document, s: FeatureId, e: FeatureId) {
+    let f = d.feature(s).unwrap();
+    assert_eq!(f.status, FeatureStatus::Ok, "{:?}", f.status);
+    assert!(f.warning().is_some(), "Warnung statt Stillstand");
+    let fe = d.feature(e).unwrap();
+    assert_eq!(fe.status, FeatureStatus::Ok, "{:?}", fe.status);
+    d.check_invariants().unwrap();
+}
+
+#[test]
+fn suppressed_source_warns_and_dependents_compute() {
+    let (mut d, b, s, curve) = box_with_projected_edge();
+    let e = extrude(&mut d, s);
+    d.set_suppressed(b, true).unwrap();
+    assert_lost_but_ok(&d, s, e);
+    let len = d.sketch_of(s).unwrap().line_length(curve).unwrap();
+    assert!((len - 10.0).abs() < 1e-7, "{len}");
+    // Zurückgeholt folgt die Kurve wieder, ohne Warnung.
+    d.set_suppressed(b, false).unwrap();
+    set_box_x(&mut d, b, 13.0);
+    let f = d.feature(s).unwrap();
+    assert!(f.warning().is_none(), "{:?}", f.warning());
+    let len = d.sketch_of(s).unwrap().line_length(curve).unwrap();
+    assert!((len - 13.0).abs() < 1e-7, "{len}");
+}
+
+#[test]
+fn source_in_error_warns_and_dependents_compute() {
+    let (mut d, b, s, _) = box_with_projected_edge();
+    let e = extrude(&mut d, s);
+    d.update(b, |k| {
+        if let FeatureKind::Box { size, .. } = k {
+            size.x = 0.0;
+        }
+    })
+    .unwrap();
+    assert!(
+        matches!(d.feature(b).unwrap().status, FeatureStatus::Error(_)),
+        "{:?}",
+        d.feature(b).unwrap().status
+    );
+    assert_lost_but_ok(&d, s, e);
+}
+
+#[test]
+fn lost_curve_stays_at_last_followed_position() {
+    let (mut d, b, s, curve) = box_with_projected_edge();
+    set_box_x(&mut d, b, 12.0);
+    let followed = line_ends(d.sketch_of(s).unwrap(), curve);
+    assert!((d.sketch_of(s).unwrap().line_length(curve).unwrap() - 12.0).abs() < 1e-7);
+    d.set_suppressed(b, true).unwrap();
+    let f = d.feature(s).unwrap();
+    assert_eq!(f.status, FeatureStatus::Ok);
+    assert!(f.warning().is_some());
+    let sk = d.sketch_of(s).unwrap();
+    let after = line_ends(sk, curve);
+    assert!(
+        close(followed.0, after.0) && close(followed.1, after.1),
+        "zuletzt nachgeführte Lage, nicht die der Definition: {followed:?} → {after:?}"
+    );
+    // Die `Fixed`-Werte stimmen mit der Lage überein (die Kurve springt beim Lösen nicht).
+    let (pa, _) = line_points(sk, curve);
+    assert!(sk.constraints().any(|(_, c)| matches!(
+        c.kind,
+        K::Fixed(p, x, y) if p == pa && close(DVec2::new(x, y), after.0)
+    )));
+    // Die Definition bleibt unverändert (alte Dateien bytegleich).
+    let def = &sketch_def(&d, s).sketch;
+    assert!((def.line_length(curve).unwrap() - 10.0).abs() < 1e-7);
 }

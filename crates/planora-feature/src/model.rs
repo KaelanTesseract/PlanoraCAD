@@ -481,13 +481,19 @@ pub struct Feature {
     pub(crate) issue: Option<crate::formulas::FormulaIssue>,
     /// Warnung der letzten Berechnung bei Status `Ok` (etwa verlorene Bezüge projizierter
     /// Skizzenkurven); wird nur gerechnet, nicht gespeichert und zählt nicht zum Stand.
-    pub warning: Option<String>,
+    pub(crate) warning: Option<String>,
 }
 
 impl Feature {
     /// Die Formeln der Zahlenfelder (Feld → Formeltext).
     pub fn formulas(&self) -> &crate::formulas::Formulas {
         &self.formulas
+    }
+
+    /// Warnung der letzten Berechnung (nur bei Status `Ok`), etwa verlorene Bezüge projizierter
+    /// Skizzenkurven.
+    pub fn warning(&self) -> Option<&str> {
+        self.warning.as_deref()
     }
 
     /// Stand der Parameter (und der Unterdrückung); ändert sich bei jeder solchen Änderung.

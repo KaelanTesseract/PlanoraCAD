@@ -511,6 +511,60 @@ impl Sketch {
         self.reproject(id, projected)
     }
 
+    /// Gibt der projizierten Kurve `id` Lage und Werte derselben Kurve aus `from` (etwa dem
+    /// zuletzt berechneten Stand der Skizze), in Skizzenkoordinaten; die zugehörigen `Fixed`-,
+    /// `Radius`- und `Ellipse…`-Werte werden mitgeführt wie bei [`Sketch::reproject_curve`].
+    /// Fehlt die Kurve in `from` oder hat sie dort eine andere Art, bleibt die Skizze
+    /// unverändert und es gibt einen Fehler.
+    pub fn restore_projected_curve(
+        &mut self,
+        id: CurveId,
+        from: &Sketch,
+    ) -> Result<(), SketchError> {
+        self.check_curve(id)?;
+        from.check_curve(id)?;
+        let projected = match from.curves[id].kind {
+            CurveKind::Line { a, b } => Projected::Line(from.pos(a), from.pos(b)),
+            CurveKind::Circle { center, radius } => Projected::Circle {
+                center: from.pos(center),
+                radius: from.vars[radius],
+            },
+            CurveKind::Arc { center, start, end } => Projected::Arc {
+                center: from.pos(center),
+                start: from.pos(start),
+                end: from.pos(end),
+            },
+            CurveKind::Ellipse {
+                center,
+                ax,
+                ay,
+                minor,
+            } => Projected::Ellipse {
+                center: from.pos(center),
+                axis: DVec2::new(from.vars[ax], from.vars[ay]),
+                minor: from.vars[minor],
+            },
+            CurveKind::EllipticArc {
+                center,
+                ax,
+                ay,
+                minor,
+                start,
+                end,
+            } => Projected::EllipticArc {
+                center: from.pos(center),
+                axis: DVec2::new(from.vars[ax], from.vars[ay]),
+                minor: from.vars[minor],
+                start: from.pos(start),
+                end: from.pos(end),
+            },
+            CurveKind::Spline { .. } => {
+                return Err(unsupported(tr!("sketch-err-edge-type-changed")));
+            }
+        };
+        self.reproject(id, projected)
+    }
+
     /// Gibt der Kurve `curve` die neue Lage `projected` (siehe [`Sketch::reproject_curve`]).
     fn reproject(&mut self, curve: CurveId, projected: Projected) -> Result<(), SketchError> {
         self.atomically(|s| {

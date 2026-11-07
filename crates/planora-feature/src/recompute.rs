@@ -341,14 +341,30 @@ impl Document {
         key
     }
 
+    /// Hält ein unterdrücktes, fehlerhaftes oder übersprungenes Eingangsfeature `dep` das
+    /// Feature `kind` an? Bei Skizzen nur die Herkunft der Skizzenebene: Die Herkunft einer
+    /// Projektion ergibt dann einen verlorenen Bezug (Warnung, Spec A4), keinen Stillstand.
+    fn blocks(kind: &FeatureKind, dep: FeatureId) -> bool {
+        match kind {
+            FeatureKind::Sketch(s) => {
+                matches!(&s.plane, SketchPlane::OnFace(r) if FeatureId(r.origin) == dep)
+            }
+            _ => true,
+        }
+    }
+
     /// Prüft die Eingangsfeatures von `idx` auf Unterdrückung, Fehler und Lage.
     fn blocked_by_dependency(&self, idx: usize) -> Option<Blocked> {
-        for dep in self.features[idx].kind.dependencies() {
+        let kind = &self.features[idx].kind;
+        for dep in kind.dependencies() {
             let Some(di) = self.index_of(dep) else {
                 return Some(Blocked::Error(FeatureError::UnknownFeature));
             };
             if di >= idx {
                 return Some(Blocked::Error(FeatureError::ForwardReference));
+            }
+            if !Self::blocks(kind, dep) {
+                continue;
             }
             let d = &self.features[di];
             if d.suppressed {
