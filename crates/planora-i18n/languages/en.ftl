@@ -1935,6 +1935,10 @@ feature-no-profile = Profile { $n } does not exist
 feature-no-profile-rejected = Profile { $n } does not exist; rejected curve chains of the sketch: { $reasons }
 feature-profile-lost = A profile of the sketch no longer exists. Select it again via Edit.
 feature-face-not-flat = The face for the sketch is not flat
+feature-sketch-projection-lost = { $count ->
+    [one] A projected curve lost its reference and stays where it was.
+   *[other] { $count } projected curves lost their reference and stay where they were.
+}
 feature-kind-fixed = The type of a feature cannot be changed
 feature-name-empty = The name must not be empty
 feature-mesh-ids-used = The mesh ids are used up
@@ -2663,6 +2667,7 @@ proj-err-io = File error in "{ $path }": { $msg }
 proj-err-corrupt = The file "{ $path }" is damaged: { $msg }
 proj-err-too-new = The file "{ $path }" was created with a newer program version (format { $found }).
 proj-err-outside-root = The path is outside the project folder.
+proj-err-copy-kind-unsupported = Intersection and silhouette projections cannot be saved in this file format yet.
 proj-err-exists = "{ $name }" already exists.
 proj-err-not-found = "{ $name }" was not found.
 proj-err-locked = The document is currently in use by another program (locked since { $since }).

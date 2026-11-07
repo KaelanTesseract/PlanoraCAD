@@ -1087,7 +1087,10 @@ fn rejected_commit_keeps_the_sketch_history() {
         .as_mut()
         .unwrap()
         .copies
-        .push(planora_feature::EdgeCopy { curve, edge });
+        .push(planora_feature::EdgeCopy {
+            curve,
+            source: planora_feature::CopySource::Edge(edge),
+        });
     assert!(st(&mut w).try_close_sketch().is_err());
     assert!(st(&mut w).sketch_session.is_some());
     assert_eq!(sk_undo_len(&w), 1, "der Verlauf bleibt");

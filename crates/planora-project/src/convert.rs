@@ -20,12 +20,12 @@ use planora_drawing::{
 };
 use planora_exchange::{ExchangeMesh, MAX_FILE_BYTES};
 use planora_feature::{
-    BlendArt, BodyRef, EdgeCopy, EdgeRef, FaceRef, FeatureId, FeatureKind, FieldKey, Formulas,
-    MAX_COMMENT_CHARS, MAX_COORD_MM, MAX_DECIMALS, MAX_DIM_TEXT_CHARS, MAX_DRAWINGS, MAX_FIT_CHARS,
-    MAX_FORMULA_CHARS, MAX_PARAM_NAME_CHARS, MAX_PARAMETERS, MAX_POS_MM, MAX_ROLE_CHARS,
-    MAX_TOL_MM, MAX_VIEWS, MeshId, ParamId, ParamUnit, Parameter, ProfileSel, SketchFeature,
-    SketchFormulas, SketchPlane, Snapshot, SnapshotFeature, StandardPlane, StepShape, StepShapeId,
-    field_keys, step_text_megabytes, step_text_sum_limit, validate_drawing,
+    BlendArt, BodyRef, CopySource, EdgeCopy, EdgeRef, FaceRef, FeatureId, FeatureKind, FieldKey,
+    Formulas, MAX_COMMENT_CHARS, MAX_COORD_MM, MAX_DECIMALS, MAX_DIM_TEXT_CHARS, MAX_DRAWINGS,
+    MAX_FIT_CHARS, MAX_FORMULA_CHARS, MAX_PARAM_NAME_CHARS, MAX_PARAMETERS, MAX_POS_MM,
+    MAX_ROLE_CHARS, MAX_TOL_MM, MAX_VIEWS, MeshId, ParamId, ParamUnit, Parameter, ProfileSel,
+    SketchFeature, SketchFormulas, SketchPlane, Snapshot, SnapshotFeature, StandardPlane,
+    StepShape, StepShapeId, field_keys, step_text_megabytes, step_text_sum_limit, validate_drawing,
 };
 use planora_i18n::{DisplayUnit, tr};
 use planora_kernel::BoolOp;
@@ -1043,11 +1043,17 @@ fn kind_to(
             kopien: s
                 .copies
                 .iter()
-                .map(|c| EdgeCopyDto {
-                    kurve: c.curve.index(),
-                    kante: edge_to(&c.edge),
+                .map(|c| {
+                    // Schnitt und Silhouette kommen erst mit Format 16 (Skizzen 6, Task 7).
+                    let edge = c.edge().ok_or_else(|| {
+                        ProjectError::Invalid(tr!("proj-err-copy-kind-unsupported"))
+                    })?;
+                    Ok(EdgeCopyDto {
+                        kurve: c.curve.index(),
+                        kante: edge_to(edge),
+                    })
                 })
-                .collect(),
+                .collect::<Result<Vec<_>>>()?,
             formeln: s
                 .formulas
                 .iter()
@@ -1228,7 +1234,7 @@ fn kind_from(origin: &str, name: &str, d: &KindDto, dissolved: &mut usize) -> Re
                     .map(|c| {
                         Ok(EdgeCopy {
                             curve: CurveId::from_index(c.kurve),
-                            edge: edge_from(origin, name, &c.kante)?,
+                            source: CopySource::Edge(edge_from(origin, name, &c.kante)?),
                         })
                     })
                     .collect::<Result<Vec<_>>>()?,

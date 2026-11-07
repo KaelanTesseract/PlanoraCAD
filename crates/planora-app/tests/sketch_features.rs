@@ -344,7 +344,10 @@ fn a_rejected_draft_keeps_the_sketch_open() {
         .as_mut()
         .unwrap()
         .copies
-        .push(planora_feature::EdgeCopy { curve, edge });
+        .push(planora_feature::EdgeCopy {
+            curve,
+            source: planora_feature::CopySource::Edge(edge),
+        });
     let e = s.try_close_sketch().unwrap_err();
     assert!(e.contains("nicht übernehmen"), "{e}");
     assert_eq!(s.open_sketch_id(), Some(id), "Skizze bleibt offen");

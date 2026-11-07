@@ -410,7 +410,7 @@ fn snapshot_bytes_grows_with_sketch_content() {
     let curve = sf.sketch.curves().next().unwrap().0;
     sf.copies.push(EdgeCopy {
         curve,
-        edge: EdgeRef {
+        source: planora_feature::CopySource::Edge(EdgeRef {
             a: FaceRef {
                 origin: 1,
                 role: String::new(),
@@ -422,7 +422,7 @@ fn snapshot_bytes_grows_with_sketch_content() {
                 hint: DVec3::ZERO,
             },
             hint: DVec3::ZERO,
-        },
+        }),
     });
     let with_copy = snapshot_bytes(&with_sketch(sf));
     assert_eq!(with_copy - with_constraint, 64, "Kopie zählt 64");

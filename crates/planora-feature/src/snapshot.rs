@@ -330,6 +330,7 @@ impl Document {
                 failed: None,
                 formulas: f.formulas,
                 issue: None,
+                warning: None,
             });
         }
         for idx in 0..doc.features.len() {

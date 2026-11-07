@@ -73,6 +73,7 @@ impl Document {
                 failed: None,
                 formulas,
                 issue: None,
+                warning: None,
             },
         );
         self.marker += 1;
@@ -216,6 +217,13 @@ impl Document {
                 }
             }
             report.computed.push(id);
+        }
+        // Warnungen gelten nur für berechnete Features (Ergebnis übernommen oder neu).
+        for f in &mut self.features {
+            f.warning = match (&f.status, &f.result) {
+                (FeatureStatus::Ok, Some(r)) => r.warning.clone(),
+                _ => None,
+            };
         }
         report
     }
@@ -375,6 +383,7 @@ impl Document {
             bodies,
             sketch,
             hints,
+            warning,
         } = computed;
         let f = &mut self.features[idx];
         f.result = Some(FeatureResult {
@@ -382,6 +391,7 @@ impl Document {
             sketch,
             result_version,
             key,
+            warning,
         });
         if let (Some(h), FeatureKind::Sketch(sf)) = (hints, &mut f.kind) {
             sf.plane = h.plane;

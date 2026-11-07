@@ -4,9 +4,9 @@ use crate::sketch_state::SketchSession;
 use glam::{Vec2, Vec3};
 use planora_exchange::{ExchangeMesh, MeshReport, MeshTransform, check_mesh};
 use planora_feature::{
-    BlendArt, BodyRef, Document, EdgeCopy, FeatureError, FeatureId, FeatureKind, FeatureStatus,
-    FieldKey, Formulas, MeshId, NewStepBody, ParamEdit, ParamId, ProfileSel, RestoreKind,
-    SketchFeature, SketchPlane, StepShape, mesh_locked,
+    BlendArt, BodyRef, CopySource, Document, EdgeCopy, FeatureError, FeatureId, FeatureKind,
+    FeatureStatus, FieldKey, Formulas, MeshId, NewStepBody, ParamEdit, ParamId, ProfileSel,
+    RestoreKind, SketchFeature, SketchPlane, StepShape, mesh_locked,
 };
 use planora_i18n::tr;
 use planora_kernel::boolean::BoolOp;
@@ -2401,7 +2401,7 @@ impl AppState {
         };
         draft.copies.push(EdgeCopy {
             curve,
-            edge: edge_ref,
+            source: CopySource::Edge(edge_ref),
         });
         Ok(())
     }

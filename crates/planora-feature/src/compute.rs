@@ -2,8 +2,8 @@
 
 use crate::error::FeatureError;
 use crate::model::{
-    BlendArt, BodyRef, Document, EdgeCopy, FeatureId, FeatureKind, MAX_MESH_SCALE, MIN_MESH_SCALE,
-    ProfileSel, ROTATION_NORM_TOL, SketchFeature, SketchPlane,
+    BlendArt, BodyRef, CopySource, Document, EdgeCopy, FeatureId, FeatureKind, MAX_MESH_SCALE,
+    MIN_MESH_SCALE, ProfileSel, ROTATION_NORM_TOL, SketchFeature, SketchPlane,
 };
 use crate::refs::{FaceRef, first_face, resolve_edge, resolve_face};
 use planora_exchange::{ExchangeMesh, MeshTransform};
@@ -44,6 +44,8 @@ pub(crate) struct Computed {
     pub(crate) bodies: Vec<Solid>,
     pub(crate) sketch: Option<Sketch>,
     pub(crate) hints: Option<SketchHints>,
+    /// Warnung bei sonst gelungener Berechnung (siehe [`crate::Feature::warning`]).
+    pub(crate) warning: Option<String>,
 }
 
 impl Computed {
@@ -675,7 +677,9 @@ fn refit_formula_arcs(sketch: &mut Sketch, sf: &SketchFeature) {
     *sketch = trial;
 }
 
-/// Skizze: Ebene auflösen, Kantenkopien nachführen, lösen.
+/// Skizze: Ebene auflösen, Projektionen nachführen, lösen. Eine Projektion, deren Bezug sich
+/// nicht mehr auflösen oder nachführen lässt, bleibt wie gespeichert und zählt zur Warnung; nur
+/// eine nicht auffindbare Skizzenebene ist ein Fehler.
 fn compute_sketch(
     doc: &Document,
     sf: &SketchFeature,
@@ -687,8 +691,9 @@ fn compute_sketch(
         ensure_not_mesh(doc, FeatureId(r.origin))?;
     }
     for c in &sf.copies {
-        ensure_not_mesh(doc, FeatureId(c.edge.a.origin))?;
-        ensure_not_mesh(doc, FeatureId(c.edge.b.origin))?;
+        for origin in c.source.origins() {
+            ensure_not_mesh(doc, origin)?;
+        }
     }
     let mut sketch = sf.sketch.clone();
     let (frame, plane) = match &sf.plane {
@@ -706,14 +711,16 @@ fn compute_sketch(
     };
     sketch.set_frame(frame).map_err(sketch_error)?;
     let mut copies = Vec::with_capacity(sf.copies.len());
+    let mut lost = 0usize;
     for c in &sf.copies {
-        let found = resolve_edge(&solids, &c.edge, &tol)?;
-        sketch
-            .reproject_edge(c.curve, solids[found.body], found.edge)
-            .map_err(sketch_error)?;
-        let mut updated = c.clone();
-        updated.edge.hint = found.hint;
-        copies.push(updated);
+        match follow_copy(&mut sketch, c, &solids, &frame, &tol) {
+            Some(updated) => copies.push(updated),
+            None => {
+                // Bezug verloren: Kurve und Verweis bleiben wie gespeichert.
+                lost += 1;
+                copies.push(c.clone());
+            }
+        }
     }
     if sf.formulas.is_empty() {
         // Ohne Formeln wird der Lösungsstatus bewusst nicht ausgewertet (wie bisher): eine
@@ -738,6 +745,60 @@ fn compute_sketch(
         bodies: Vec::new(),
         sketch: Some(sketch),
         hints: Some(SketchHints { plane, copies }),
+        warning: (lost > 0).then(|| tr!("feature-sketch-projection-lost", count = lost)),
+    })
+}
+
+/// Führt die projizierte Kurve `c` ihrer Herkunft nach und liefert den Verweis mit neuem
+/// Hinweispunkt; `None`, wenn der Bezug verloren ist (nicht gefunden, Art geändert, Stück
+/// fehlt, Kurve gelöscht). Dann bleibt die Skizze unverändert.
+fn follow_copy(
+    sketch: &mut Sketch,
+    c: &EdgeCopy,
+    solids: &[&Solid],
+    frame: &planora_math::Frame,
+    tol: &planora_math::Tolerance,
+) -> Option<EdgeCopy> {
+    let source = match &c.source {
+        CopySource::Edge(e) => {
+            let found = resolve_edge(solids, e, tol).ok()?;
+            sketch
+                .reproject_edge(c.curve, solids[found.body], found.edge)
+                .ok()?;
+            CopySource::Edge(crate::refs::EdgeRef {
+                hint: found.hint,
+                ..e.clone()
+            })
+        }
+        CopySource::Section { face, index } | CopySource::Silhouette { face, index } => {
+            let section = matches!(c.source, CopySource::Section { .. });
+            let found = resolve_face(solids, face, tol).ok()?;
+            let solid = solids[found.body];
+            let pieces = if section {
+                planora_kernel::section_by_plane(solid, frame, Some(&[found.face]), tol)
+            } else {
+                planora_kernel::silhouette(solid, found.face, frame.z, tol)
+            }
+            .ok()?;
+            let piece = pieces.get(*index)?;
+            sketch
+                .reproject_curve(c.curve, &piece.curve, piece.t0, piece.t1)
+                .ok()?;
+            let face = FaceRef {
+                hint: found.hint,
+                ..face.clone()
+            };
+            let index = *index;
+            if section {
+                CopySource::Section { face, index }
+            } else {
+                CopySource::Silhouette { face, index }
+            }
+        }
+    };
+    Some(EdgeCopy {
+        curve: c.curve,
+        source,
     })
 }
 

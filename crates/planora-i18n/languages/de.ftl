@@ -1918,6 +1918,10 @@ feature-no-profile = Profil { $n } gibt es nicht
 feature-no-profile-rejected = Profil { $n } gibt es nicht; abgelehnte Kurvenzüge der Skizze: { $reasons }
 feature-profile-lost = Ein Profil der Skizze ist nicht mehr vorhanden. Wähle es über Bearbeiten neu.
 feature-face-not-flat = Die Fläche für die Skizze ist nicht eben
+feature-sketch-projection-lost = { $count ->
+    [one] Eine projizierte Kurve hat ihren Bezug verloren und bleibt an ihrer letzten Stelle.
+   *[other] { $count } projizierte Kurven haben ihren Bezug verloren und bleiben an ihrer letzten Stelle.
+}
 feature-kind-fixed = Die Art des Features lässt sich nicht ändern
 feature-name-empty = Der Name darf nicht leer sein
 feature-mesh-ids-used = Die Netz-Kennungen sind aufgebraucht
@@ -2646,6 +2650,7 @@ proj-err-io = Dateifehler bei „{ $path }“: { $msg }
 proj-err-corrupt = Die Datei „{ $path }“ ist beschädigt: { $msg }
 proj-err-too-new = Die Datei „{ $path }“ wurde mit einer neueren Programmversion erstellt (Format { $found }).
 proj-err-outside-root = Der Pfad liegt außerhalb des Projektordners.
+proj-err-copy-kind-unsupported = Schnitt- und Silhouettenprojektionen lassen sich in diesem Dateiformat noch nicht speichern.
 proj-err-exists = „{ $name }“ gibt es schon.
 proj-err-not-found = „{ $name }“ wurde nicht gefunden.
 proj-err-locked = Das Dokument wird gerade von einem anderen Programm benutzt (gesperrt seit { $since }).
