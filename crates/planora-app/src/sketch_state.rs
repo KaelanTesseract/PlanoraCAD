@@ -1495,7 +1495,8 @@ impl SketchSession {
     /// wo er ist). Stutzen, Dehnen und Brechen enden ganz (zurück zur Auswahl). Ein laufender
     /// Rahmen fällt allein weg, die alte Auswahl bleibt; ebenso ein laufender Zug auf dem letzten
     /// Punkt, der Linienzug bleibt, und ein laufender Griff, das Werkzeug bleibt. Verschieben/Kopieren
-    /// hinterlässt auch in der Auswahl nichts.
+    /// hinterlässt auch in der Auswahl nichts. Die Skizzenbemaßung verwirft zuerst ein offenes Maß
+    /// (gewählter Bezug oder gesetztes Maß) und endet erst, wenn nichts mehr offen ist.
     pub fn cancel(&mut self, sk: &mut Sketch) {
         if self.grip_drag.is_some() {
             self.abort_grip();
@@ -1516,8 +1517,16 @@ impl SketchSession {
             self.forget_removed(sk);
             return;
         }
+        // Bemaßen: Ist nichts offen (kein Bezug gewählt, kein Maß gesetzt), beendet Esc das
+        // Werkzeug wie in Fusion; sonst fällt unten nur das offene Maß weg, das Werkzeug bleibt.
+        let dim_idle =
+            self.tool == Tool::Dimension && self.dim.picks.is_empty() && self.dim.plan.is_none();
         self.end_drag(sk);
         self.clear_pending();
+        if dim_idle {
+            self.set_tool(sk, Tool::Select);
+            return;
+        }
         if self.tool == Tool::Select {
             self.selection.clear();
             self.drop_curve_picks();

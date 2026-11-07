@@ -1092,3 +1092,94 @@ fn the_head_dimension_of_a_five_link_pattern_chain_can_be_edited() {
         }
     }
 }
+
+#[test]
+fn esc_and_right_click_drop_the_open_dimension_first_and_then_end_the_tool() {
+    with_lang(&german(), || {
+        let mut rig = Rig::new(&[]);
+        rig.sk().add_point(0.0, 0.0).unwrap();
+        rig.sk().add_point(40.0, 0.0).unwrap();
+        rig.settle();
+        let steps = rig.undo_len();
+        // Nichts offen: Esc beendet das Werkzeug.
+        rig.press(Key::D);
+        assert_eq!(rig.tool(), Tool::Dimension);
+        rig.press(Key::Escape);
+        assert_eq!(rig.tool(), Tool::Select, "Esc ohne offenes Maß beendet D");
+        // Erster Bezug gewählt: Esc verwirft ihn, das zweite beendet.
+        rig.press(Key::D);
+        let px = rig.pixels();
+        rig.click(px(v(0.0, 0.0)));
+        assert_eq!(rig.picks(), 1);
+        rig.press(Key::Escape);
+        assert_eq!(rig.picks(), 0);
+        assert_eq!(rig.tool(), Tool::Dimension);
+        rig.press(Key::Escape);
+        assert_eq!(rig.tool(), Tool::Select);
+        // Gesetzt, Feld offen und fokussiert: das erste Esc schließt nur das Feld, das zweite
+        // beendet.
+        rig.press(Key::D);
+        rig.click(px(v(0.0, 0.0)));
+        rig.click(px(v(40.0, 0.0)));
+        rig.click(px(v(20.0, 15.0)));
+        assert!(rig.editor_open());
+        rig.press(Key::Escape);
+        assert!(!rig.editor_open());
+        assert_eq!(
+            rig.tool(),
+            Tool::Dimension,
+            "Esc im Feld beendet nur das Maß"
+        );
+        rig.press(Key::Escape);
+        assert_eq!(rig.tool(), Tool::Select);
+        // Rechtsklick wie Esc: erst das gesetzte Maß, dann das Werkzeug (abseits des Felds an
+        // seinem Anker).
+        rig.press(Key::D);
+        rig.click(px(v(0.0, 0.0)));
+        rig.click(px(v(40.0, 0.0)));
+        rig.click(px(v(20.0, 15.0)));
+        assert!(rig.editor_open());
+        rig.click_with(px(v(-10.0, -15.0)), PointerButton::Secondary);
+        assert!(!rig.editor_open());
+        assert_eq!(rig.tool(), Tool::Dimension);
+        rig.click_with(px(v(-10.0, -15.0)), PointerButton::Secondary);
+        assert_eq!(rig.tool(), Tool::Select);
+        // Nichts angelegt.
+        assert!(rig.live().is_empty());
+        assert_eq!(rig.undo_len(), steps);
+    });
+}
+
+#[test]
+fn cancel_drops_picks_or_the_planned_dimension_and_ends_the_tool_only_when_nothing_is_open() {
+    let mut s = sketch_with(&[], |sk| {
+        sk.add_point(0.0, 0.0).unwrap();
+        sk.add_point(40.0, 0.0).unwrap();
+    });
+    let cancel = |s: &mut AppState| {
+        let (se, sk) = s.session_sketch_mut().unwrap();
+        se.cancel(sk);
+        se.tool
+    };
+    // Erster Bezug gewählt.
+    pick(&mut s, v(0.0, 0.0));
+    assert_eq!(s.sketch_session.as_ref().unwrap().dim.picks.len(), 1);
+    assert_eq!(cancel(&mut s), Tool::Dimension);
+    assert!(s.sketch_session.as_ref().unwrap().dim.picks.is_empty());
+    assert_eq!(cancel(&mut s), Tool::Select);
+    // Gesetztes Maß mit getipptem Text.
+    {
+        let (se, sk) = s.session_sketch_mut().unwrap();
+        se.set_tool(sk, Tool::Dimension);
+    }
+    pick(&mut s, v(0.0, 0.0));
+    pick(&mut s, v(40.0, 0.0));
+    pick(&mut s, v(20.0, 15.0));
+    assert!(planned(&s).is_some());
+    s.sketch_session.as_mut().unwrap().dim.text = Some("55".into());
+    assert_eq!(cancel(&mut s), Tool::Dimension);
+    assert!(planned(&s).is_none());
+    assert_eq!(s.sketch_session.as_ref().unwrap().dim.text, None);
+    assert_eq!(cancel(&mut s), Tool::Select);
+    assert_eq!(s.session_sketch().unwrap().constraints().count(), 0);
+}
