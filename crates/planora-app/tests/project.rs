@@ -477,21 +477,26 @@ fn pick_becomes_target_by_filter() {
         face: Id::from_index(4),
     });
     use ProjectFilter::*;
+    // Skizzen 6: `project_target` liefert `Option` (Ebenen und Ecken projiziert es nicht).
     assert_eq!(
         sketch_view::project_target(edge, Entities),
-        ProjectTarget::Edge(2, Id::from_index(3))
+        Some(ProjectTarget::Edge(2, Id::from_index(3)))
     );
     assert_eq!(
         sketch_view::project_target(face, Entities),
-        ProjectTarget::Face(1, Id::from_index(4))
+        Some(ProjectTarget::Face(1, Id::from_index(4)))
     );
     assert_eq!(
         sketch_view::project_target(edge, Bodies),
-        ProjectTarget::Body(2)
+        Some(ProjectTarget::Body(2))
     );
     assert_eq!(
         sketch_view::project_target(face, Bodies),
-        ProjectTarget::Body(1)
+        Some(ProjectTarget::Body(1))
+    );
+    assert_eq!(
+        sketch_view::project_target(Pick::Plane(planora_feature::FeatureId(7)), Entities),
+        None
     );
 }
 

@@ -668,8 +668,8 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
     // Platz für die 3D-Szene; sie wird am Ende mit der endgültigen Kamera eingesetzt, damit die
     // Skizze darüber liegt.
     let scene_slot = painter.add(Shape::Noop);
-    // Fertige Skizzen als dünne Linien über der Szene; ihr Platz wird ebenfalls erst am Ende mit
-    // der endgültigen Kamera gefüllt.
+    // Konstruktionsebenen und fertige Skizzen als dünne Linien über der Szene; ihr Platz wird
+    // ebenfalls erst am Ende mit der endgültigen Kamera gefüllt.
     let sketches_slot = painter.add(Shape::Noop);
 
     let cube = cube_rect(free.unwrap_or(rect));
@@ -813,10 +813,10 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
             },
         ),
     );
-    painter.set(
-        sketches_slot,
-        Shape::Vec(sketch_view::finished_sketch_shapes(state, rect)),
-    );
+    // Konstruktionsebenen (Skizzen 6) unter den Linien der Skizzen.
+    let mut overlay = sketch_view::plane_shapes(state, rect);
+    overlay.extend(sketch_view::finished_sketch_shapes(state, rect));
+    painter.set(sketches_slot, Shape::Vec(overlay));
 
     // Würfel mit der endgültigen Kamera zeichnen (nach einem Klick schon in der neuen Ansicht).
     paint_cube(

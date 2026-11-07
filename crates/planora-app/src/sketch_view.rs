@@ -7,7 +7,7 @@ use crate::sketch_grips::{self, Grip, GripLayout};
 use crate::sketch_kinds::ToolKind;
 use crate::sketch_pattern::{self, PatternGrip, PatternGripLayout};
 use crate::sketch_state::{Item, ProjectFilter, SketchSession, Snap, Tool};
-use crate::state::{AppState, ProjectTarget};
+use crate::state::{AppState, PickFilter, ProjectTarget};
 use crate::theme::{self, lighten as lighter, sketch_colors as colors};
 use crate::viewport;
 use egui::{Color32, FontId, Mesh, PointerButton, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2};
@@ -615,6 +615,54 @@ fn profile_fill_shape(
         }
     }
     (!mesh.is_empty()).then(|| Shape::mesh(mesh))
+}
+
+/// Strichstärke des Randes einer Konstruktionsebene in der 3D-Ansicht.
+const PLANE_EDGE_WIDTH: f32 = 1.5;
+
+/// Konstruktionsebenen (Skizzen 6) als halbdurchsichtige orange Rechtecke über der 3D-Ansicht
+/// in `rect` ([`AppState::plane_rects`]); gewählte und die unter dem Mauszeiger heller. Wie die
+/// fertigen Skizzen liegen sie immer über den Körpern (keine Verdeckung, Abweichung von Fusion).
+/// Eine Ebene, deren Ecke hinter der Kamera liegt, fehlt.
+pub fn plane_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
+    let mut out = Vec::new();
+    if rect.width() < 2.0 || rect.height() < 2.0 {
+        return out;
+    }
+    let col = colors(state.dark);
+    for (id, plane) in state.plane_rects() {
+        let map = Mapper {
+            camera: state.camera,
+            frame: plane.frame,
+            rect,
+        };
+        let (hx, hy) = (plane.half.x, plane.half.y);
+        let corners: Option<Vec<Pos2>> = [
+            DVec2::new(-hx, -hy),
+            DVec2::new(hx, -hy),
+            DVec2::new(hx, hy),
+            DVec2::new(-hx, hy),
+        ]
+        .into_iter()
+        .map(|c| map.to_screen(c))
+        .collect();
+        let Some(corners) = corners else {
+            continue;
+        };
+        let this = Some(Pick::Plane(id));
+        let active = state.selection == this || state.hover == this;
+        let (fill, edge) = if active {
+            (col.plane_fill_active, col.plane_edge_active)
+        } else {
+            (col.plane_fill, col.plane_edge)
+        };
+        out.push(Shape::convex_polygon(
+            corners,
+            fill,
+            Stroke::new(PLANE_EDGE_WIDTH, edge),
+        ));
+    }
+    out
 }
 
 /// Strichstärke fertiger Skizzen in der 3D-Ansicht (dünner als im Skizzen-Modus).
@@ -1492,7 +1540,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
                 .pick_face_under(map.local(p), map.viewport())
                 .map(Pick::Face)
         } else {
-            state.pick(map.local(p), map.viewport())
+            state.pick_with(map.local(p), map.viewport(), PickFilter::GEOMETRY)
         }
     };
     let hover = if tool == Tool::ProjectEdge {
@@ -1507,16 +1555,17 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     if let Some(p) = project_at {
         // Fehler (etwa ein Körper, der erst nach der Skizze entsteht) stehen in der Meldung der
         // Sitzung.
-        match (kind, pick_at(state, p)) {
-            (ToolKind::Intersect, Some(pick)) => {
-                let _ = state.intersect_into_sketch(project_target(pick, settings.filter));
+        let picked = pick_at(state, p);
+        let target = picked.and_then(|pick| project_target(pick, settings.filter));
+        match (kind, picked, target) {
+            (ToolKind::Intersect, _, Some(t)) => {
+                let _ = state.intersect_into_sketch(t);
             }
-            (ToolKind::Silhouette, Some(Pick::Face(FaceRef { body, face }))) => {
+            (ToolKind::Silhouette, Some(Pick::Face(FaceRef { body, face })), _) => {
                 let _ = state.silhouette_into_sketch(body, face);
             }
-            (_, Some(pick)) if kind == ToolKind::Project => {
-                let target = project_target(pick, settings.filter);
-                let _ = state.project_into_sketch(target, settings.link);
+            (ToolKind::Project, _, Some(t)) => {
+                let _ = state.project_into_sketch(t, settings.link);
             }
             _ => {
                 let m = match kind {
@@ -1533,9 +1582,10 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
 }
 
 /// Was ein Klick mit „Projizieren“ auf `pick` projiziert: mit „Angegebene Elemente“ die Kante
-/// oder Fläche, mit „Körper“ deren ganzen Körper.
-pub fn project_target(pick: Pick, filter: ProjectFilter) -> ProjectTarget {
-    match (filter, pick) {
+/// oder Fläche, mit „Körper“ deren ganzen Körper. Ebenen und Eckpunkte (Skizzen 6) projiziert
+/// es nicht: `None`.
+pub fn project_target(pick: Pick, filter: ProjectFilter) -> Option<ProjectTarget> {
+    Some(match (filter, pick) {
         (ProjectFilter::Entities, Pick::Edge(EdgeRef { body, edge })) => {
             ProjectTarget::Edge(body, edge)
         }
@@ -1544,7 +1594,8 @@ pub fn project_target(pick: Pick, filter: ProjectFilter) -> ProjectTarget {
         }
         (ProjectFilter::Bodies, Pick::Edge(EdgeRef { body, .. }))
         | (ProjectFilter::Bodies, Pick::Face(FaceRef { body, .. })) => ProjectTarget::Body(body),
-    }
+        (_, Pick::Plane(_) | Pick::Vertex { .. }) => return None,
+    })
 }
 
 /// Ist der Punkt vollständig bestimmt (laut letztem Bericht)?

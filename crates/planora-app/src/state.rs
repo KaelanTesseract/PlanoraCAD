@@ -3,6 +3,7 @@ use crate::msg::Msg;
 use crate::sketch_state::SketchSession;
 use glam::{Vec2, Vec3};
 use planora_exchange::{ExchangeMesh, MeshReport, MeshTransform, check_mesh};
+use planora_feature::planes::{PlaneBase, PlaneDef};
 use planora_feature::{
     BlendArt, BodyRef, CopySource, Document, EdgeCopy, FeatureError, FeatureId, FeatureKind,
     FeatureStatus, FieldKey, Formulas, MeshId, NewStepBody, ParamEdit, ParamId, ProfileSel,
@@ -16,8 +17,8 @@ use planora_mesh::{
     MassProperties, Mesh, TessellationOptions, is_watertight, mass_properties, tessellate,
 };
 use planora_render::{
-    EdgeRef, FaceRef, Highlight, OrbitCamera, Palette, Pick, SceneData, build_scene_marked,
-    pick_edge, pick_face,
+    EdgeRef, FaceRef, Highlight, OrbitCamera, Palette, Pick, PlaneRect, Ray, SceneData,
+    build_scene_marked, pick_edge, pick_face, pick_plane, pick_vertex,
 };
 use planora_sketch::constraint::ConstraintKind;
 use planora_sketch::model::{CurveId, PointId, Sketch};
@@ -381,6 +382,39 @@ fn sketch_label() -> String {
     tr!("state-sketch-label")
 }
 const PICK_EDGE_PX: f32 = 6.0;
+/// Fangweite für Eckpunkte bei der Punktwahl (Skizzen 6, „Ebene durch drei Punkte“).
+const PICK_VERTEX_PX: f32 = 8.0;
+/// Kleinste halbe Kantenlänge einer gezeichneten Konstruktionsebene (Skizzen 6).
+const PLANE_MIN_HALF_MM: f64 = 25.0;
+/// Halbe Kantenlänge einer Konstruktionsebene als Anteil der Diagonale aller sichtbaren Körper.
+const PLANE_HALF_PER_DIAGONAL: f64 = 0.6;
+
+/// Was [`AppState::pick_with`] außer Flächen und Kanten finden darf (Skizzen 6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PickFilter {
+    /// Konstruktionsebenen.
+    pub planes: bool,
+    /// Eckpunkte der Körper (nur bei der Punktwahl eines Dialogs).
+    pub vertices: bool,
+}
+
+impl PickFilter {
+    /// Normale Auswahl in der 3D-Ansicht: Flächen, Kanten und Ebenen, keine Eckpunkte.
+    pub const SELECT: PickFilter = PickFilter {
+        planes: true,
+        vertices: false,
+    };
+    /// Nur Flächen und Kanten (Projizieren und Schneiden im Skizzen-Modus).
+    pub const GEOMETRY: PickFilter = PickFilter {
+        planes: false,
+        vertices: false,
+    };
+    /// Punktwahl („Ebene durch drei Punkte“): Eckpunkte vor allem anderen.
+    pub const POINTS: PickFilter = PickFilter {
+        planes: true,
+        vertices: true,
+    };
+}
 const BODY_GAP_MM: f64 = 10.0;
 /// Mindestgröße des Bereichs, auf den die Ansicht beim Öffnen einer Skizze eingepasst wird.
 const MIN_SKETCH_VIEW_MM: f64 = 10.0;
@@ -600,6 +634,13 @@ impl AppState {
                 self.bodies[body].solid.edges.get(edge)?;
                 Some(Pick::Edge(EdgeRef { body, edge }))
             }
+            Pick::Vertex { body, edge, end } => {
+                let body = map(body)?;
+                self.bodies[body].solid.edges.get(edge)?;
+                Some(Pick::Vertex { body, edge, end })
+            }
+            // Eine Ebene hängt an keinem Körper; sie bleibt, solange sie gezeichnet wird.
+            Pick::Plane(id) => self.plane_rect(id).map(|_| pick),
         }
     }
 
@@ -651,7 +692,7 @@ impl AppState {
             return;
         }
         if hidden {
-            let on = |p: Option<Pick>| p.is_some_and(|p| pick_body(p) == j);
+            let on = |p: Option<Pick>| p.and_then(pick_body) == Some(j);
             if on(self.selection) {
                 self.selection = None;
             }
@@ -1572,15 +1613,18 @@ impl AppState {
     pub fn set_selection(&mut self, selection: Option<Pick>) {
         if self.selection != selection {
             self.selection = selection;
-            if selection.is_some() {
-                self.selected_feature = None;
-            }
-            self.selected_body = match selection {
-                Some(Pick::Face(FaceRef { body, .. })) | Some(Pick::Edge(EdgeRef { body, .. })) => {
-                    Some(body)
+            // Eine Ebene wählt ihr Feature (wie ein Klick im Browser), alles andere den Körper.
+            match selection {
+                Some(Pick::Plane(id)) => {
+                    self.selected_feature = Some(id);
+                    self.selected_body = None;
                 }
-                None => self.selected_body,
-            };
+                Some(p) => {
+                    self.selected_feature = None;
+                    self.selected_body = pick_body(p);
+                }
+                None => {}
+            }
             self.rebuild_scene();
         }
     }
@@ -1661,13 +1705,30 @@ impl AppState {
     }
 
     /// Was liegt unter dem Mauszeiger? `cursor` in Pixeln (Ursprung oben links) im Viewport der Größe `viewport`.
-    /// Kanten haben Vorrang, wenn sie nahe genug und nicht verdeckt sind.
+    /// Kanten haben Vorrang, wenn sie nahe genug und nicht verdeckt sind. Konstruktionsebenen
+    /// zählen mit, Eckpunkte nicht ([`AppState::pick_with`] mit [`PickFilter::SELECT`]).
     pub fn pick(&self, cursor: Vec2, viewport: Vec2) -> Option<Pick> {
+        self.pick_with(cursor, viewport, PickFilter::SELECT)
+    }
+
+    /// Wie [`AppState::pick`], mit Wahl, ob Ebenen und Eckpunkte zählen. Reihenfolge: Eckpunkt
+    /// (nur mit `filter.vertices`), Kante, dann das Vordere aus Fläche und Ebene. Eine Ebene
+    /// verdeckt Ecken und Kanten dahinter wie eine Fläche; liegt eine Fläche näher, gewinnt sie.
+    pub fn pick_with(&self, cursor: Vec2, viewport: Vec2, filter: PickFilter) -> Option<Pick> {
         if viewport.x < 1.0 || viewport.y < 1.0 {
             return None;
         }
         let nearest_face = self.nearest_face_hit(cursor, viewport);
-        let occluder = nearest_face.map(|(_, h)| h.distance);
+        let nearest_plane = if filter.planes {
+            self.nearest_plane_hit(cursor, viewport)
+        } else {
+            None
+        };
+        let plane_distance = nearest_plane.map(|(_, d)| d as f32);
+        let occluder = match (nearest_face.map(|(_, h)| h.distance), plane_distance) {
+            (Some(f), Some(p)) => Some(f.min(p)),
+            (f, p) => f.or(p),
+        };
 
         let shown = || {
             self.bodies
@@ -1675,6 +1736,19 @@ impl AppState {
                 .enumerate()
                 .filter(|(j, _)| !self.is_body_hidden(*j))
         };
+        if filter.vertices {
+            let meshes: Vec<(usize, &Mesh)> = shown().map(|(j, b)| (j, &b.mesh)).collect();
+            if let Some((body, edge, end)) = pick_vertex(
+                &meshes,
+                &self.camera,
+                viewport,
+                cursor,
+                PICK_VERTEX_PX,
+                occluder,
+            ) {
+                return Some(Pick::Vertex { body, edge, end });
+            }
+        }
         let mut best_edge: Option<(usize, planora_render::EdgeHit)> = None;
         for (body, b) in shown() {
             if let Some(hit) = pick_edge(
@@ -1695,11 +1769,95 @@ impl AppState {
                 edge: hit.edge,
             }));
         }
-        nearest_face.map(|(body, hit)| {
-            Pick::Face(FaceRef {
-                body,
-                face: hit.face,
+        match (nearest_face, nearest_plane) {
+            (Some((_, f)), Some((id, p))) if p < f.distance as f64 => Some(Pick::Plane(id)),
+            (None, Some((id, _))) => Some(Pick::Plane(id)),
+            (face, _) => face.map(|(body, hit)| {
+                Pick::Face(FaceRef {
+                    body,
+                    face: hit.face,
+                })
+            }),
+        }
+    }
+
+    /// Die vorderste gezeichnete Konstruktionsebene unter dem Zeiger und die Strahllänge bis zu
+    /// ihr (gleiches Maß wie [`planora_render::FaceHit::distance`]).
+    fn nearest_plane_hit(&self, cursor: Vec2, viewport: Vec2) -> Option<(FeatureId, f64)> {
+        let ndc = Vec2::new(
+            2.0 * cursor.x / viewport.x - 1.0,
+            1.0 - 2.0 * cursor.y / viewport.y,
+        );
+        let (origin, dir) = self.camera.ray(ndc);
+        let ray = Ray {
+            origin: origin.as_dvec3(),
+            dir: dir.as_dvec3(),
+        };
+        self.plane_rects()
+            .into_iter()
+            .filter_map(|(id, rect)| pick_plane(&ray, &rect).map(|t| (id, t)))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+    }
+
+    /// Alle gezeichneten Konstruktionsebenen in der Reihenfolge des Verlaufs (siehe
+    /// [`AppState::plane_rect`]).
+    pub fn plane_rects(&self) -> Vec<(FeatureId, PlaneRect)> {
+        self.document
+            .features()
+            .iter()
+            .filter(|f| matches!(f.kind, FeatureKind::Plane(_)))
+            .filter_map(|f| self.plane_rect(f.id).map(|r| (f.id, r)))
+            .collect()
+    }
+
+    /// Rechteck, als das die Konstruktionsebene `id` gezeichnet und angeklickt wird (Skizzen 6);
+    /// `None` für unterdrückte, fehlerhafte und zurückgerollte Ebenen und andere Features.
+    /// Halbe Kante: das Größere aus 25 mm und 0,6 × Diagonale der Hüllquader aller sichtbaren
+    /// Körper. Mitte: Mitte der Basisfläche (Versatz von einer Fläche, Tangentialebene) in die
+    /// Ebene gelegt, sonst der Fußpunkt des Ursprungs.
+    pub fn plane_rect(&self, id: FeatureId) -> Option<PlaneRect> {
+        let Some(FeatureKind::Plane(pf)) = self.document.feature(id).map(|f| &f.kind) else {
+            return None;
+        };
+        if !self.document.is_active(id) {
+            return None;
+        }
+        let frame = self.document.plane_frame(id)?;
+        let base_face = match &pf.def {
+            PlaneDef::Offset {
+                base: PlaneBase::Face(r),
+                ..
+            }
+            | PlaneDef::Tangent { face: r, .. } => Some(r),
+            _ => None,
+        };
+        let anchor = base_face
+            .and_then(|r| self.face_outline(r))
+            .and_then(|pts| {
+                let first = *pts.first()?;
+                let (lo, hi) = pts
+                    .iter()
+                    .fold((first, first), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
+                Some((lo + hi) * 0.5)
             })
+            .unwrap_or(DVec3::ZERO);
+        // `anchor` senkrecht in die Ebene legen.
+        let center = anchor - frame.z * (anchor - frame.origin).dot(frame.z);
+        let diagonal = self
+            .bodies
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| !self.is_body_hidden(*j))
+            .map(|(_, b)| b.bounds)
+            .reduce(|(lo, hi), (a, b)| (lo.min(a), hi.max(b)))
+            .map_or(0.0, |(lo, hi)| (hi - lo).length());
+        let half = (PLANE_HALF_PER_DIAGONAL * diagonal).max(PLANE_MIN_HALF_MM);
+        (center.is_finite() && half.is_finite()).then_some(PlaneRect {
+            frame: Frame {
+                origin: center,
+                ..frame
+            },
+            half: DVec2::splat(half),
         })
     }
 
@@ -1815,10 +1973,13 @@ fn body_edges(solid: &Solid) -> Vec<Id<Edge>> {
         .collect()
 }
 
-/// Index des Körpers, zu dem eine Fläche oder Kante gehört.
-fn pick_body(p: Pick) -> usize {
+/// Index des Körpers, zu dem eine Fläche, Kante oder Ecke gehört (eine Ebene: `None`).
+fn pick_body(p: Pick) -> Option<usize> {
     match p {
-        Pick::Face(FaceRef { body, .. }) | Pick::Edge(EdgeRef { body, .. }) => body,
+        Pick::Face(FaceRef { body, .. })
+        | Pick::Edge(EdgeRef { body, .. })
+        | Pick::Vertex { body, .. } => Some(body),
+        Pick::Plane(_) => None,
     }
 }
 
@@ -3106,11 +3267,7 @@ impl AppState {
     /// Der Körper, um den es bei Menü, Befehlsfeld und Tasten geht (Index in `bodies`): der
     /// gewählte, sonst der Körper der gewählten Fläche oder Kante.
     pub fn chosen_body(&self) -> Option<usize> {
-        self.selected_body.or(match self.selection {
-            Some(Pick::Face(f)) => Some(f.body),
-            Some(Pick::Edge(e)) => Some(e.body),
-            None => None,
-        })
+        self.selected_body.or(self.selection.and_then(pick_body))
     }
 
     /// Warum „Vereinigen“, „Abziehen“ und „Schneiden“ gerade nicht gehen (`None`: sie gehen).

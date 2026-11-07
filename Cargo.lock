@@ -2776,6 +2776,7 @@ dependencies = [
  "egui-wgpu",
  "glam",
  "naga",
+ "planora-feature",
  "planora-i18n",
  "planora-kernel",
  "planora-math",
