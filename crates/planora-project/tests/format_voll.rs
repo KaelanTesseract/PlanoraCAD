@@ -295,10 +295,10 @@ fn the_rich_document_computes_without_errors() {
     }
 }
 
-/// Skizzen 6 (Task 4): Schnitt- und Silhouettenprojektionen kennt das Format erst ab Task 7;
-/// bis dahin lehnt das Speichern sie mit klarer Meldung ab, statt sie still zu verlieren.
+/// Skizzen 6: Schnitt- und Silhouettenprojektionen wurden bis Task 7 beim Speichern abgelehnt;
+/// mit Format 16 werden sie geschrieben und gleich wieder gelesen (bewusst umgeschrieben).
 #[test]
-fn section_copies_are_refused_until_the_format_knows_them() {
+fn section_copies_are_written_with_format_16() {
     let mut d = rich_document();
     let id = d
         .features()
@@ -317,9 +317,10 @@ fn section_copies_are_refused_until_the_format_knows_them() {
         }
     })
     .unwrap();
-    let err = encode_version(&d.snapshot()).unwrap_err();
+    let text = encode_version(&d.snapshot()).unwrap();
+    assert!(text.contains("\"format\": 16"), "{text}");
     assert_eq!(
-        err.to_string(),
-        planora_i18n::tr!("proj-err-copy-kind-unsupported")
+        encode_version(&decode_version(&text, "x.json").unwrap()).unwrap(),
+        text
     );
 }

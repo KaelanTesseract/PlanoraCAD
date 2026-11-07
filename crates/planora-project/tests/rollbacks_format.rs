@@ -106,7 +106,7 @@ fn good() -> (String, Document, [FeatureId; 5]) {
 
 #[test]
 fn format_version_is_11() {
-    assert_eq!(FORMAT_VERSION, 15);
+    assert_eq!(FORMAT_VERSION, 16); // seit Skizzen 6 (Konstruktionsebenen und neue Projektionen)
 }
 
 #[test]
@@ -222,10 +222,10 @@ fn format_11_with_unknown_step_id_is_rejected() {
 #[test]
 fn older_program_limit() {
     let (text, _, _) = good();
-    let e = bad(&text.replacen("\"format\": 11", "\"format\": 16", 1));
-    assert!(matches!(e, ProjectError::TooNew { found: 16, .. }), "{e:?}");
-    let e = bad("{\"format\": 16, \"rueckrollstellen\": \"ganz anders\"}");
-    assert!(matches!(e, ProjectError::TooNew { found: 16, .. }), "{e:?}");
+    let e = bad(&text.replacen("\"format\": 11", "\"format\": 17", 1));
+    assert!(matches!(e, ProjectError::TooNew { found: 17, .. }), "{e:?}");
+    let e = bad("{\"format\": 17, \"rueckrollstellen\": \"ganz anders\"}");
+    assert!(matches!(e, ProjectError::TooNew { found: 17, .. }), "{e:?}");
     // Format 11 selbst ist nicht zu neu.
     assert!(decode_version(&text, "x.json").is_ok());
 }

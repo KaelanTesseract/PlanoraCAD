@@ -44,8 +44,8 @@ fn load(text: &str) -> Result<Document, ProjectError> {
 }
 
 #[test]
-fn format_version_is_15() {
-    assert_eq!(FORMAT_VERSION, 15);
+fn format_version_is_16() {
+    assert_eq!(FORMAT_VERSION, 16); // seit Skizzen 6 (Konstruktionsebenen und neue Projektionen)
 }
 
 #[test]
@@ -110,8 +110,8 @@ fn a_centerline_without_construction_in_the_file_is_rejected() {
 }
 
 #[test]
-fn format_16_is_too_new() {
+fn format_17_is_too_new() {
     let text = encode_version(&document(2, false).snapshot()).unwrap();
-    let e = load(&text.replacen("\"format\": 14", "\"format\": 16", 1)).unwrap_err();
-    assert!(matches!(e, ProjectError::TooNew { found: 16, .. }), "{e:?}");
+    let e = load(&text.replacen("\"format\": 14", "\"format\": 17", 1)).unwrap_err();
+    assert!(matches!(e, ProjectError::TooNew { found: 17, .. }), "{e:?}");
 }
