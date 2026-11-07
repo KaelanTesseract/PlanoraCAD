@@ -392,13 +392,18 @@ const PLANE_MIN_HALF_MM: f64 = 25.0;
 /// Halbe Kantenlänge einer Konstruktionsebene als Anteil der Diagonale aller sichtbaren Körper.
 const PLANE_HALF_PER_DIAGONAL: f64 = 0.6;
 
-/// Was [`AppState::pick_with`] außer Flächen und Kanten finden darf (Skizzen 6).
+/// Was [`AppState::pick_with`] finden darf (Skizzen 6). Ausgeschaltete Flächen verdecken
+/// trotzdem, was hinter ihnen liegt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PickFilter {
     /// Konstruktionsebenen.
     pub planes: bool,
     /// Eckpunkte der Körper (nur bei der Punktwahl eines Dialogs).
     pub vertices: bool,
+    /// Kanten der Körper.
+    pub edges: bool,
+    /// Flächen der Körper.
+    pub faces: bool,
 }
 
 impl PickFilter {
@@ -406,17 +411,51 @@ impl PickFilter {
     pub const SELECT: PickFilter = PickFilter {
         planes: true,
         vertices: false,
+        edges: true,
+        faces: true,
     };
     /// Nur Flächen und Kanten (Projizieren und Schneiden im Skizzen-Modus).
     pub const GEOMETRY: PickFilter = PickFilter {
         planes: false,
         vertices: false,
+        edges: true,
+        faces: true,
     };
-    /// Punktwahl („Ebene durch drei Punkte“): Eckpunkte vor allem anderen. Ebenen zählen nicht
+    /// Punktwahl: Eckpunkte vor allem anderen, dann Kanten und Flächen. Ebenen zählen nicht
     /// und verdecken keine Ecken (die Punkte liegen oft hinter einer schon gezeichneten Ebene).
     pub const POINTS: PickFilter = PickFilter {
         planes: false,
         vertices: true,
+        edges: true,
+        faces: true,
+    };
+    /// Bezug eines Ebenen-Fensters: Flächen und Ebenen, keine Kanten.
+    pub const BASES: PickFilter = PickFilter {
+        planes: true,
+        vertices: false,
+        edges: false,
+        faces: true,
+    };
+    /// Nur Flächen (Tangentialebene).
+    pub const FACES: PickFilter = PickFilter {
+        planes: false,
+        vertices: false,
+        edges: false,
+        faces: true,
+    };
+    /// Nur Kanten (Achse der Ebene unter Winkel).
+    pub const EDGES: PickFilter = PickFilter {
+        planes: false,
+        vertices: false,
+        edges: true,
+        faces: false,
+    };
+    /// Nur Eckpunkte („Ebene durch drei Punkte“).
+    pub const VERTICES: PickFilter = PickFilter {
+        planes: false,
+        vertices: true,
+        edges: false,
+        faces: false,
     };
 }
 const BODY_GAP_MM: f64 = 10.0;
@@ -1736,8 +1775,9 @@ impl AppState {
         self.selection == this || self.hover == this || self.selected_feature == Some(id)
     }
 
-    /// Wie [`AppState::pick`], mit Wahl, ob Ebenen und Eckpunkte zählen. Reihenfolge: Eckpunkt
-    /// (nur mit `filter.vertices`), Kante, dann das Vordere aus Fläche und Ebene. Eine Ebene
+    /// Wie [`AppState::pick`], mit Wahl, was zählt ([`PickFilter`]). Reihenfolge: Eckpunkt
+    /// (nur mit `filter.vertices`), Kante (mit `filter.edges`), dann das Vordere aus Fläche und
+    /// Ebene (eine ausgeschaltete Fläche ergibt nichts, verdeckt aber weiter). Eine Ebene
     /// verdeckt Ecken und Kanten dahinter wie eine Fläche; liegt eine Fläche näher, gewinnt sie.
     pub fn pick_with(&self, cursor: Vec2, viewport: Vec2, filter: PickFilter) -> Option<Pick> {
         if viewport.x < 1.0 || viewport.y < 1.0 {
@@ -1775,7 +1815,7 @@ impl AppState {
             }
         }
         let mut best_edge: Option<(usize, planora_render::EdgeHit)> = None;
-        for (body, b) in shown() {
+        for (body, b) in shown().filter(|_| filter.edges) {
             if let Some(hit) = pick_edge(
                 &b.mesh,
                 &self.camera,
@@ -1797,7 +1837,7 @@ impl AppState {
         match (nearest_face, nearest_plane) {
             (Some((_, f)), Some((id, p))) if p < f.distance as f64 => Some(Pick::Plane(id)),
             (None, Some((id, _))) => Some(Pick::Plane(id)),
-            (face, _) => face.map(|(body, hit)| {
+            (face, _) => face.filter(|_| filter.faces).map(|(body, hit)| {
                 Pick::Face(FaceRef {
                     body,
                     face: hit.face,

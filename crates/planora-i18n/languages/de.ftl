@@ -3133,3 +3133,4 @@ undo-plane-mid = Mittelebene anlegen
 undo-plane-three-points = Ebene durch drei Punkte anlegen
 undo-plane-tangent = Tangentialebene anlegen
 undo-plane-edit = Ebene ändern
+plane-later-geometry = Diese Geometrie entsteht erst nach der Ebene im Verlauf.

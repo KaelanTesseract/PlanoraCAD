@@ -142,7 +142,8 @@ fn offset_plane_dialog_ok_adds_one_step() {
     let _ = d.sync(s);
     assert_eq!(
         s.plane_pick.map(|p| p.filter),
-        Some(planora_app::state::PickFilter::SELECT)
+        // Korrekturrunde 1: Flächen und Ebenen, keine Kanten.
+        Some(planora_app::state::PickFilter::BASES)
     );
     s.plane_pick.as_mut().unwrap().clicked =
         Some(PlaneClick::View(Pick::Face(planora_render::FaceRef {
@@ -371,4 +372,146 @@ fn all_plane_actions_are_bindable() {
     assert!(d.error().is_some());
     assert!(d.ok(&mut s).is_err(), "leere Felder");
     assert!(s.document.features().is_empty());
+}
+
+// ---- Korrekturrunde 1 -----------------------------------------------------------------------
+
+const VIEWPORT: glam::Vec2 = glam::Vec2::new(1920.0, 1080.0);
+
+/// Kamera schräg von oben auf `target`, Bild 1920×1080 (wie `plane_view.rs`).
+fn look_from_above(s: &mut AppState, target: glam::Vec3) {
+    s.camera = planora_render::OrbitCamera {
+        target,
+        distance: 200.0,
+        pitch: 1.2,
+        ..planora_render::OrbitCamera::default()
+    };
+    s.camera.set_viewport(VIEWPORT.x, VIEWPORT.y);
+}
+
+fn screen(s: &AppState, p: glam::Vec3) -> glam::Vec2 {
+    s.camera.project(p, VIEWPORT).unwrap()
+}
+
+/// Das Feld des Fensters bekommt den Klick an `at` mit seinem eigenen Filter.
+fn click_slot(d: &mut PlaneDialog, s: &mut AppState, at: glam::Vec2) -> Option<Pick> {
+    let _ = d.sync(s);
+    let filter = s.plane_pick.unwrap().filter;
+    let hit = s.pick_with(at, VIEWPORT, filter);
+    if let Some(h) = hit {
+        s.plane_pick.as_mut().unwrap().clicked = Some(PlaneClick::View(h));
+        let _ = d.sync(s);
+    }
+    hit
+}
+
+#[test]
+fn slot_filters_match_their_slots() {
+    let mut s = AppState::new();
+    s.create_box(DVec3::splat(20.0)).unwrap();
+    look_from_above(&mut s, glam::Vec3::new(10.0, 10.0, 10.0));
+    // Dicht an der Kante der Deckfläche: die normale Auswahl trifft die Kante, das Bezugsfeld
+    // die Fläche.
+    let near_edge = screen(&s, glam::Vec3::new(10.0, 0.3, 20.0));
+    assert!(matches!(s.pick(near_edge, VIEWPORT), Some(Pick::Edge(_))));
+    let mut d = PlaneDialog::new(PlaneCommand::Offset);
+    let hit = click_slot(&mut d, &mut s, near_edge);
+    assert!(matches!(hit, Some(Pick::Face(_))), "{hit:?}");
+    assert!(matches!(
+        d.slot(0),
+        Some(SlotValue::Base(PlaneBase::Face(_)))
+    ));
+    assert_eq!(d.error(), None);
+    // Achse: auf der Mitte einer Fläche die nächste Kante oder nichts, nie die Fläche.
+    let middle = screen(&s, glam::Vec3::new(10.0, 10.0, 20.0));
+    let mut a = PlaneDialog::new(PlaneCommand::Angle);
+    let hit = click_slot(&mut a, &mut s, middle);
+    assert!(!matches!(hit, Some(Pick::Face(_))), "{hit:?}");
+    assert_eq!(a.error(), None, "kein „passt nicht“");
+    // Dicht an der Kante: die Kante.
+    let hit = click_slot(&mut a, &mut s, near_edge);
+    assert!(matches!(hit, Some(Pick::Edge(_))), "{hit:?}");
+    assert!(matches!(a.slot(0), Some(SlotValue::Axis(_))));
+    // Fläche (Tangentialebene): nur Flächen, auch an der Kante.
+    let mut t = PlaneDialog::new(PlaneCommand::Tangent);
+    assert!(matches!(
+        click_slot(&mut t, &mut s, near_edge),
+        Some(Pick::Face(_))
+    ));
+    // Punkte: nur Eckpunkte; auf der Flächenmitte nichts.
+    let mut p = PlaneDialog::new(PlaneCommand::ThreePoints);
+    assert_eq!(click_slot(&mut p, &mut s, middle), None);
+    let corner = screen(&s, glam::Vec3::new(20.0, 20.0, 20.0));
+    assert!(matches!(
+        click_slot(&mut p, &mut s, corner),
+        Some(Pick::Vertex { .. })
+    ));
+    assert!(matches!(p.slot(0), Some(SlotValue::Point(_))));
+    // Die bisherigen Filter bleiben, wie sie waren.
+    use planora_app::state::PickFilter;
+    for f in [PickFilter::SELECT, PickFilter::GEOMETRY, PickFilter::POINTS] {
+        assert!(f.edges && f.faces, "{f:?}");
+    }
+}
+
+#[test]
+fn plane_and_fillet_windows_exclude_each_other() {
+    let mut w = ws();
+    w.active_tab_mut()
+        .state
+        .create_box(DVec3::splat(20.0))
+        .unwrap();
+    app::open_blend(&mut w, false);
+    {
+        let tab = w.active_tab_mut();
+        assert!(tab.blend_dialog.is_some());
+        tab.state.edge_picking = true;
+        let s = &mut tab.state;
+        let edge = s.bodies[0].solid.edges.iter().next().unwrap().0;
+        s.toggle_edge_mark(planora_render::EdgeRef { body: 0, edge }, false);
+        assert!(!s.marked_edges.is_empty());
+    }
+    app::open_plane(&mut w, PlaneCommand::Offset);
+    let tab = w.active_tab_mut();
+    assert!(tab.plane_dialog.is_some());
+    assert!(tab.blend_dialog.is_none(), "Verrunden geschlossen");
+    assert!(!tab.state.edge_picking);
+    assert!(tab.state.marked_edges.is_empty());
+    // Eine Vorschau/Auswahl des Ebenen-Fensters steht schon.
+    let mut d = tab.plane_dialog.take().unwrap();
+    let _ = d.sync(&mut tab.state);
+    tab.plane_dialog = Some(d);
+    assert!(tab.state.plane_pick.is_some());
+    app::open_blend(&mut w, true);
+    let tab = w.active_tab_mut();
+    assert!(tab.blend_dialog.is_some());
+    assert!(tab.plane_dialog.is_none(), "Ebenen-Fenster geschlossen");
+    assert!(tab.state.plane_pick.is_none());
+}
+
+#[test]
+fn editing_rejects_geometry_from_later_features() {
+    let mut s = AppState::new();
+    let plane = offset_plane(&mut s, 10.0);
+    // Der Quader entsteht erst nach der Ebene.
+    s.create_box(DVec3::splat(20.0)).unwrap();
+    look_from_above(&mut s, glam::Vec3::new(10.0, 10.0, 10.0));
+    let top = screen(&s, glam::Vec3::new(10.0, 10.0, 20.0));
+    let mut d = PlaneDialog::edit(&s, plane).unwrap();
+    let hit = click_slot(&mut d, &mut s, top);
+    assert!(matches!(hit, Some(Pick::Face(_))), "{hit:?}");
+    assert_eq!(
+        d.slot(0),
+        Some(&SlotValue::Base(PlaneBase::Standard(StandardPlane::XY))),
+        "Feld unverändert"
+    );
+    let e = d.error().expect("Meldung");
+    assert!(e.contains("nach der Ebene"), "{e}");
+    // Eine neue Ebene darf die Fläche nehmen.
+    let mut n = PlaneDialog::new(PlaneCommand::Offset);
+    click_slot(&mut n, &mut s, top);
+    assert!(matches!(
+        n.slot(0),
+        Some(SlotValue::Base(PlaneBase::Face(_)))
+    ));
 }

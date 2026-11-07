@@ -439,11 +439,22 @@ impl DocTab {
         }
     }
 
+    /// Schließt das Fenster „Verrunden“/„Fase“ samt Kantenmarkierung (ein Ebenen-Fenster
+    /// übernimmt die Klicks in der Ansicht; beide gleichzeitig gibt es nicht).
+    pub fn close_blend_dialog(&mut self) {
+        if let Some(d) = self.blend_dialog.take() {
+            d.finish(&mut self.state);
+        }
+        self.state.edge_picking = false;
+        self.state.clear_edge_marks();
+    }
+
     /// Öffnet das Fenster „Bearbeiten“ für das Feature `id`: bei einer Konstruktionsebene das
     /// Fenster der Ebene mit ihren Werten, sonst [`FeatureDialog`].
     pub fn open_edit(&mut self, id: FeatureId) {
         if let Some(d) = PlaneDialog::edit(&self.state, id) {
             self.feature_dialog = None;
+            self.close_blend_dialog();
             self.plane_dialog = Some(d);
         } else {
             self.feature_dialog = FeatureDialog::new(&self.state, id);

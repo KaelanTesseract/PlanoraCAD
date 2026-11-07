@@ -3150,3 +3150,4 @@ undo-plane-mid = Create midplane
 undo-plane-three-points = Create plane through three points
 undo-plane-tangent = Create tangent plane
 undo-plane-edit = Change plane
+plane-later-geometry = This geometry is only created after the plane in the timeline.

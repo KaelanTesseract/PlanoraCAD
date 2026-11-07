@@ -150,9 +150,10 @@ impl SlotKind {
     /// Was ein Klick in der 3D-Ansicht für dieses Feld treffen kann.
     pub fn filter(self) -> PickFilter {
         match self {
-            SlotKind::Base => PickFilter::SELECT,
-            SlotKind::Axis | SlotKind::Face => PickFilter::GEOMETRY,
-            SlotKind::Point => PickFilter::POINTS,
+            SlotKind::Base => PickFilter::BASES,
+            SlotKind::Axis => PickFilter::EDGES,
+            SlotKind::Face => PickFilter::FACES,
+            SlotKind::Point => PickFilter::VERTICES,
         }
     }
 
@@ -462,6 +463,17 @@ impl PlaneDialog {
 
     /// Wandelt einen Klick in den Inhalt des aktiven Felds.
     fn convert(&self, state: &AppState, click: PlaneClick) -> Result<SlotValue, Msg> {
+        let value = self.convert_raw(state, click)?;
+        // Beim Bearbeiten: Flächen, Kanten und Ecken aus späteren Features gibt es an der Stelle
+        // der Ebene im Verlauf noch nicht.
+        if self.uses_later_geometry(state, &value) {
+            return Err(crate::msg!("plane-later-geometry"));
+        }
+        Ok(value)
+    }
+
+    /// Wie [`PlaneDialog::convert`], ohne die Prüfung auf spätere Geometrie.
+    fn convert_raw(&self, state: &AppState, click: PlaneClick) -> Result<SlotValue, Msg> {
         let kind = self.command.slots()[self.active];
         let tol = state.kernel.tolerance;
         let solid_of = |body: usize| -> Result<&Solid, Msg> {
@@ -514,6 +526,29 @@ impl PlaneDialog {
             }
             _ => Err(wrong()),
         }
+    }
+
+    /// Verweist der Feldinhalt beim Bearbeiten auf Geometrie eines Features, das nicht vor der
+    /// bearbeiteten Ebene liegt?
+    fn uses_later_geometry(&self, state: &AppState, v: &SlotValue) -> bool {
+        let Some(e) = &self.editing else {
+            return false;
+        };
+        let doc = &state.document;
+        let Some(own) = doc.index_of(e.id) else {
+            return false;
+        };
+        let origins: Vec<u64> = match v {
+            SlotValue::Base(PlaneBase::Face(r)) | SlotValue::Face(r) => vec![r.origin],
+            SlotValue::Axis(AxisRef::Edge(r))
+            | SlotValue::Point(PointRef::EdgeEnd { edge: r, .. }) => {
+                vec![r.a.origin, r.b.origin]
+            }
+            _ => Vec::new(),
+        };
+        origins
+            .into_iter()
+            .any(|o| doc.index_of(FeatureId(o)).is_none_or(|i| i >= own))
     }
 
     /// Liegt die Ebene `id` beim Bearbeiten nicht vor der bearbeiteten (sie selbst oder eine

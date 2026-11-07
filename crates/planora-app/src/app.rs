@@ -2055,6 +2055,9 @@ pub fn open_blend(ws: &mut Workspace, chamfer: bool) {
         return;
     }
     if tab.state.try_close_sketch().is_ok() {
+        // Nur ein Fenster wählt in der Ansicht: ein offenes Ebenen-Fenster schließt.
+        tab.plane_dialog = None;
+        tab.state.plane_pick = None;
         tab.blend_dialog = Some(if chamfer {
             BlendDialog::chamfer()
         } else {
@@ -2069,6 +2072,7 @@ pub fn open_plane(ws: &mut Workspace, command: PlaneCommand) {
     let tab = ws.active_tab_mut();
     if tab.state.try_close_sketch().is_ok() {
         tab.feature_dialog = None;
+        tab.close_blend_dialog();
         tab.plane_dialog = Some(PlaneDialog::new(command));
     }
 }
