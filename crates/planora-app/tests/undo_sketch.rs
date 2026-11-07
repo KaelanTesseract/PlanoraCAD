@@ -1260,3 +1260,102 @@ fn first_click_snapped_on_a_circle_is_deferred() {
         Some("Linie zeichnen".to_string())
     );
 }
+
+// ---- (h) Klick auf den eigenen offenen Punkt (Handprüfung Skizzen 5) --------------------------
+
+/// Klick mit dem Werkzeug an `(x, y)`, dessen Ergebnis zählt (auch eine Ablehnung).
+fn try_click(w: &mut Workspace, x: f64, y: f64) -> Result<(), String> {
+    let (se, sk) = sess(w);
+    se.click(sk, DVec2::new(x, y), R, false)
+}
+
+/// Kreis (Mittelpunkt–Radius): Ein Klick genau auf den eigenen Mittelpunkt legt nichts an, auch
+/// keinen Rückgängig-Schritt, und das Werkzeug wartet weiter auf den Radius. Ein Klick knapp daneben
+/// (im Fangradius) fängt nicht auf den eigenen Mittelpunkt wie in Fusion, sondern legt den kleinen
+/// Kreis an.
+#[test]
+fn click_on_own_circle_center_leaves_nothing_and_keeps_waiting() {
+    let mut w = ws();
+    open_new_sketch(&mut w);
+    tool(&mut w, Tool::Circle);
+    click(&mut w, 10.0, 10.0);
+    observe(&mut w);
+    let n = sk_undo_len(&w);
+    assert_eq!(draft(&w).points().count(), 1);
+
+    assert!(try_click(&mut w, 10.0, 10.0).is_err(), "Radius null");
+    observe(&mut w);
+    assert_eq!(draft(&w).points().count(), 1, "kein weiterer Punkt");
+    assert_eq!(curves(&w), 0);
+    assert_eq!(sk_undo_len(&w), n, "kein Rückgängig-Schritt");
+    let se = st(&mut w).sketch_session.as_ref().unwrap();
+    assert_eq!(se.tool, Tool::Circle);
+    assert_eq!(se.pending.len(), 1, "das Werkzeug wartet auf den Radius");
+
+    // Knapp daneben, im Fangradius des eigenen Mittelpunkts: der kleine Kreis entsteht.
+    click(&mut w, 10.3, 10.0);
+    observe(&mut w);
+    assert_eq!(curves(&w), 1);
+    assert_eq!(draft(&w).points().count(), 1, "nur der Mittelpunkt");
+    let c = draft(&w).curves().next().unwrap().0;
+    assert!((draft(&w).radius(c).unwrap() - 0.3).abs() < 1e-6);
+    assert_eq!(sk_undo_len(&w), n + 1, "genau ein Schritt");
+    assert_eq!(
+        w.active_tab().undo_label(),
+        Some("Kreis zeichnen".to_string())
+    );
+}
+
+/// Dasselbe bei Bogen (Mitte, Anfang, Ende) und Ellipse: Der nächste Klick fängt nicht auf die
+/// offenen Punkte des eigenen Befehls; genau darauf wird abgelehnt, ohne etwas zu hinterlassen. Die
+/// Linie fängt weiter auf ihren Anfang und lehnt dort ab, ebenfalls ohne Rest.
+#[test]
+fn own_open_points_do_not_catch_the_next_click() {
+    // Bogen: Anfang knapp neben der Mitte, Ende knapp neben dem Anfang.
+    let mut w = ws();
+    open_new_sketch(&mut w);
+    tool(&mut w, Tool::Arc);
+    click(&mut w, 10.0, 10.0);
+    assert!(try_click(&mut w, 10.0, 10.0).is_err());
+    assert_eq!(draft(&w).points().count(), 1);
+    click(&mut w, 10.3, 10.0);
+    assert_eq!(draft(&w).points().count(), 2);
+    assert!(try_click(&mut w, 10.3, 10.0).is_err());
+    assert_eq!(draft(&w).points().count(), 2);
+    click(&mut w, 10.0, 10.3);
+    observe(&mut w);
+    assert_eq!(curves(&w), 1, "der kleine Bogen");
+    assert_eq!(sk_undo_len(&w), 1);
+
+    // Ellipse: Ende der großen Achse knapp neben der Mitte.
+    let mut w = ws();
+    open_new_sketch(&mut w);
+    tool(&mut w, Tool::Ellipse);
+    click(&mut w, 10.0, 10.0);
+    assert!(try_click(&mut w, 10.0, 10.0).is_err());
+    click(&mut w, 10.4, 10.0);
+    click(&mut w, 10.0, 10.2);
+    observe(&mut w);
+    assert_eq!(curves(&w), 1, "die kleine Ellipse");
+    assert_eq!(draft(&w).points().count(), 1);
+    assert_eq!(sk_undo_len(&w), 1);
+
+    // Linie: Sie fängt weiter auf ihren Anfang (keine winzige Linie aus einem Klick dort, siehe
+    // `sketch_line_arc`); die Ablehnung lässt nichts zurück, das Werkzeug wartet weiter.
+    let mut w = ws();
+    open_new_sketch(&mut w);
+    tool(&mut w, Tool::Line);
+    click(&mut w, 10.0, 10.0);
+    for (x, y) in [(10.0, 10.0), (10.3, 10.0)] {
+        assert!(try_click(&mut w, x, y).is_err(), "{x}, {y}: Länge null");
+        observe(&mut w);
+        assert_eq!(draft(&w).points().count(), 1);
+        assert_eq!(curves(&w), 0);
+        assert_eq!(sk_undo_len(&w), 0);
+        assert_eq!(st(&mut w).sketch_session.as_ref().unwrap().pending.len(), 1);
+    }
+    click(&mut w, 15.0, 10.0);
+    observe(&mut w);
+    assert_eq!(curves(&w), 1);
+    assert_eq!(sk_undo_len(&w), 1);
+}

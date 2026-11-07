@@ -358,7 +358,8 @@ impl SketchSession {
             return cur;
         }
         let index = self.current_index(sk);
-        if let Some(hit) = index.find(raw, radius) {
+        let tol = sk.tolerance().linear;
+        if let Some(hit) = index.find_avoiding(raw, radius, &self.own_open_spots(sk), tol) {
             cur.at = hit.at;
             cur.snap = hit.snap;
             cur.snap_at = Some(hit.at);
@@ -535,6 +536,23 @@ impl SketchSession {
                 index
             }
         }
+    }
+
+    /// Lagen, auf die der nächste Klick nicht fängt: die offenen Punkte von Kreis, Bogen und Ellipse
+    /// (klassische Arten). Wie in Fusion fängt der zweite Klick nicht auf den eigenen ersten Punkt;
+    /// das gäbe eine Form ohne Größe, und ein Klick knapp daneben meint die kleine Form. Die Linie
+    /// fängt weiter auf ihren letzten Punkt: Ein Klick dort (auch ein kleiner Zug unter der
+    /// Klickgrenze) legt keine winzige Linie an. Der Spline hat seine eigene Meldung.
+    fn own_open_spots(&self, sk: &Sketch) -> Vec<DVec2> {
+        if self.planned_kind().is_some()
+            || !matches!(self.tool, Tool::Circle | Tool::Arc | Tool::Ellipse)
+        {
+            return Vec::new();
+        }
+        self.pending
+            .iter()
+            .filter_map(|&p| sk.point_xy(p).ok())
+            .collect()
     }
 
     /// Punkte, an denen sich der Zeiger nicht ausrichtet: die laufenden und die, die auf einer
