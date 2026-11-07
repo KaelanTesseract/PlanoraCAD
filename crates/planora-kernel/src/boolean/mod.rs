@@ -1,11 +1,13 @@
 //! Boolesche Operationen (Vereinigen, Abziehen, Schneiden) für Körper mit analytischen Flächen.
 
+mod breaks;
 mod budget;
 mod classify;
 mod error;
 mod imprint;
 mod nurbs_ssi;
 mod roots;
+mod section;
 mod seg;
 mod select;
 mod sew;
@@ -25,6 +27,7 @@ pub use nurbs_ssi::{
     SsiOutcome, intersect_nurbs,
 };
 pub use roots::{CurveSurface, Root, curve_surface_roots, seg_intersections};
+pub use section::{SectionError, SectionPiece, section_by_plane};
 pub use seg::{Seg, reverse_loop};
 pub use select::{Piece, Side, select_piece};
 pub use sew::sew;

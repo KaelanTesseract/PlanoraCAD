@@ -16,7 +16,10 @@ mod transform;
 pub mod validate;
 
 pub use blend::{BlendEdge, BlendError, BlendKind, BlendRequest, Blended};
-pub use boolean::{BoolOp, BooleanError, edge_probe_point, face_probe_point};
+pub use boolean::{
+    BoolOp, BooleanError, SectionError, SectionPiece, edge_probe_point, face_probe_point,
+    section_by_plane,
+};
 pub use error::KernelError;
 pub use extrude::extrude;
 pub use geometry::{Curve, CurveKind, Surface, SurfaceKind, UvRect, nurbs_divisions};
