@@ -771,6 +771,24 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
                 pick.clicked = at;
             }
         }
+    } else if !sketching && let Some(filter) = state.plane_pick.map(|p| p.filter) {
+        // Fenster einer Konstruktionsebene (Skizzen 6): Ein Klick füllt dessen aktives
+        // Auswahlfeld (mit dem Filter des Felds) statt zu wählen.
+        match response.hover_pos() {
+            Some(p) => {
+                let cursor = Vec2::new(p.x - rect.left(), p.y - rect.top());
+                let viewport = Vec2::new(rect.width(), rect.height());
+                let hit = state.pick_with(cursor, viewport, filter);
+                state.set_hover(hit);
+                if response.clicked()
+                    && let Some(h) = hit
+                    && let Some(pick) = state.plane_pick.as_mut()
+                {
+                    pick.clicked = Some(crate::plane_dialog::PlaneClick::View(h));
+                }
+            }
+            None => state.set_hover(None),
+        }
     } else if !sketching {
         // Auswahl (nicht über dem Würfel; dort ist die Ansicht nicht „hovered“)
         match response.hover_pos() {

@@ -205,6 +205,9 @@ pub struct AppState {
     pub edge_picking: bool,
     /// Ein Klick markiert die ganze Tangentenkette.
     pub chain_marking: bool,
+    /// Offenes Fenster einer Konstruktionsebene (Skizzen 6): Klicks in der 3D-Ansicht und im
+    /// Ordner „Ursprung“ füllen sein aktives Auswahlfeld statt zu wählen; dazu die Vorschau.
+    pub plane_pick: Option<crate::plane_dialog::PlanePick>,
     /// Verschieben, das der laufende Zug im Eigenschaftenfenster angelegt hat.
     drag_move: Option<FeatureId>,
     /// Prüfberichte der Netze, einmal je Netz berechnet (Plan P13).
@@ -489,6 +492,7 @@ impl AppState {
             marked_edges: Vec::new(),
             edge_picking: false,
             chain_marking: true,
+            plane_pick: None,
             drag_move: None,
             mesh_reports: BTreeMap::new(),
             display_triangles: crate::mesh_body::DISPLAY_TRIANGLES,
@@ -787,6 +791,7 @@ impl AppState {
         let had_marks = !self.marked_edges.is_empty();
         self.marked_edges.clear();
         self.edge_picking = false;
+        self.plane_pick = None;
         self.drag_move = None;
         self.pending_delete = None;
         self.pending_delete_drawing = None;
@@ -1843,7 +1848,13 @@ impl AppState {
             return None;
         }
         let frame = self.document.plane_frame(id)?;
-        let base_face = match &pf.def {
+        self.plane_rect_for(&pf.def, frame)
+    }
+
+    /// Rechteck einer Ebene mit der Definition `def` und der Lage `frame` (wie
+    /// [`AppState::plane_rect`]; auch für die Vorschau des Fensters, die noch kein Feature ist).
+    pub fn plane_rect_for(&self, def: &PlaneDef, frame: Frame) -> Option<PlaneRect> {
+        let base_face = match def {
             PlaneDef::Offset {
                 base: PlaneBase::Face(r),
                 ..
@@ -2100,6 +2111,89 @@ impl AppState {
             }
         };
         self.add_sketch_in(SketchPlane::OnFace(r), frame)
+    }
+
+    /// Legt eine Konstruktionsebene „Ebene N“ mit der Definition `def` am Marker an (Skizzen 6,
+    /// Menü „Konstruieren“). Ein Schritt; lässt sich die Ebene nicht berechnen, bleibt sie mit
+    /// Fehlerstatus stehen (wie andere Features) und die Meldung steht in `message`.
+    pub fn add_plane(&mut self, def: PlaneDef) -> Result<FeatureId, String> {
+        self.add_plane_with(def, Formulas::new())
+    }
+
+    /// Wie [`AppState::add_plane`], mit den Formeln der Felder „Abstand“ bzw. „Winkel“.
+    pub fn add_plane_with(
+        &mut self,
+        def: PlaneDef,
+        formulas: Formulas,
+    ) -> Result<FeatureId, String> {
+        self.try_close_sketch()?;
+        let kind = FeatureKind::Plane(planora_feature::planes::PlaneFeature { def });
+        self.add_feature_with(None, kind, formulas)
+    }
+
+    /// Ändert die Konstruktionsebene `id` auf `def` mit `formulas` (Fenster „Bearbeiten“): ein
+    /// Schritt. Lässt sich die Ebene danach nicht berechnen, steht der Grund in `message` und im
+    /// Baum; das gilt trotzdem als übernommen.
+    pub fn update_plane(
+        &mut self,
+        id: FeatureId,
+        def: PlaneDef,
+        formulas: Formulas,
+    ) -> Result<(), String> {
+        if !self
+            .document
+            .feature(id)
+            .is_some_and(|f| matches!(f.kind, FeatureKind::Plane(_)))
+        {
+            return self.fail(tr!("state-plane-not-found"));
+        }
+        self.end_sketch_for(None)?;
+        let kind = FeatureKind::Plane(planora_feature::planes::PlaneFeature { def });
+        if let Err(e) = self
+            .document
+            .update_with_formulas(id, |k| *k = kind, formulas)
+        {
+            return self.fail(tr!("edit-rejected", error = e.to_string()));
+        }
+        self.message = None;
+        self.refresh();
+        if let Some(f) = self.document.feature(id)
+            && let FeatureStatus::Error(e) = &f.status
+        {
+            self.message = Some(tr!("tree-status-line", name = &f.name, error = e));
+        }
+        Ok(())
+    }
+
+    /// Legt ein leeres Skizzen-Feature auf der Konstruktionsebene `id` an (Kontextmenü
+    /// „Skizze erstellen“, „Skizze auf gewählter Fläche“ mit gewählter Ebene). Die Skizze folgt
+    /// der Ebene. Nur für berechnete Ebenen.
+    pub fn new_sketch_on_plane(&mut self, id: FeatureId) -> Result<FeatureId, String> {
+        if !self
+            .document
+            .feature(id)
+            .is_some_and(|f| matches!(f.kind, FeatureKind::Plane(_)))
+        {
+            return self.fail(tr!("state-plane-not-found"));
+        }
+        let Some(frame) = self.document.plane_frame(id) else {
+            return self.fail(tr!("state-plane-not-computed"));
+        };
+        if let Some(why) = crate::history_bar::lock_reason(self, &[id]) {
+            return self.fail(why);
+        }
+        self.try_close_sketch()?;
+        self.add_sketch_in(SketchPlane::OnPlane(id), frame)
+    }
+
+    /// Die gewählte, berechnete Konstruktionsebene (in der Ansicht angeklickt oder im Browser
+    /// gewählt), sonst `None`.
+    pub fn selected_plane(&self) -> Option<FeatureId> {
+        let id = match self.selection {
+            Some(Pick::Plane(id)) => id,
+            _ => self.selected_feature?,
+        };
+        self.plane_rect(id).map(|_| id)
     }
 
     /// Öffnet den Skizzen-Modus für das Skizzen-Feature `id` auf einem Entwurf (Kopie der
@@ -3312,8 +3406,12 @@ impl AppState {
         }
     }
 
-    /// Warum „Skizze auf gewählter Fläche“ gerade nicht geht (`None`: es geht).
+    /// Warum „Skizze auf gewählter Fläche“ gerade nicht geht (`None`: es geht). Eine gewählte
+    /// Konstruktionsebene zählt wie eine ebene Fläche (Skizzen 6).
     pub fn sketch_on_face_blocked(&self) -> Option<String> {
+        if let Some(id) = self.selected_plane() {
+            return crate::history_bar::lock_reason(self, &[id]);
+        }
         if self.selected_is_mesh() {
             return Some(mesh_locked_hint());
         }

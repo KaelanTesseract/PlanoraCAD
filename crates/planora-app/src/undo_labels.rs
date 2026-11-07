@@ -112,6 +112,7 @@ fn features(before: &Snapshot, after: &Snapshot) -> Option<String> {
         return Some(match a.kind {
             FeatureKind::Move { .. } | FeatureKind::MeshBody { .. } => tr!("undo-move"),
             FeatureKind::Sketch(_) => tr!("undo-sketch-edit"),
+            FeatureKind::Plane(_) => tr!("undo-plane-edit"),
             _ => tr!("undo-feature-change"),
         });
     }
@@ -142,8 +143,17 @@ fn created_label(kind: &FeatureKind) -> String {
         }
         FeatureKind::MeshBody { .. } => tr!("undo-mesh-import"),
         FeatureKind::StepBody { .. } => tr!("undo-step-import"),
-        // Skizzen 6: Oberfläche folgt in Task 12.
-        FeatureKind::Plane(_) => tr!("undo-plane"),
+        // Skizzen 6: nach dem Befehl des Menüs „Konstruieren“.
+        FeatureKind::Plane(pf) => {
+            use planora_feature::planes::PlaneDef;
+            match pf.def {
+                PlaneDef::Offset { .. } => tr!("undo-plane-offset"),
+                PlaneDef::Angle { .. } => tr!("undo-plane-angle"),
+                PlaneDef::Mid { .. } => tr!("undo-plane-mid"),
+                PlaneDef::ThreePoints(_) => tr!("undo-plane-three-points"),
+                PlaneDef::Tangent { .. } => tr!("undo-plane-tangent"),
+            }
+        }
     }
 }
 

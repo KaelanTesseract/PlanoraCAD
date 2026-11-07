@@ -15,6 +15,7 @@ use crate::import_dialog::ImportDialog;
 use crate::install_mode::{self, InstallMode};
 use crate::keymap::overview::{OverviewEvent, OverviewState};
 use crate::keymap::{self, Action};
+use crate::plane_dialog::{PlaneCommand, PlaneDialog};
 use crate::project_actions::ProjectsUi;
 use crate::projects_window::{ProjectsEvent, ProjectsWindow};
 use crate::settings_window::{CheckHint, SettingsEvent, SettingsWindow};
@@ -1859,6 +1860,9 @@ pub(crate) fn menu_bar_measured(
             ui.add_enabled_ui(!read_only, |ui| {
                 ui.menu_button(tr!("menu-edit"), |ui| edit_menu(ui, ws));
             });
+            ui.add_enabled_ui(!read_only, |ui| {
+                ui.menu_button(tr!("menu-construct"), |ui| construct_menu(ui, ws));
+            });
             ui.menu_button(tr!("menu-view"), |ui| {
                 if view_menu(ui, ws, shell) {
                     request = MenuRequest::Shortcuts;
@@ -2056,6 +2060,31 @@ pub fn open_blend(ws: &mut Workspace, chamfer: bool) {
         } else {
             BlendDialog::fillet()
         });
+    }
+}
+
+/// Öffnet das Fenster einer Konstruktionsebene (Menü „Konstruieren“, Taste). Eine offene
+/// Skizze wird vorher beendet.
+pub fn open_plane(ws: &mut Workspace, command: PlaneCommand) {
+    let tab = ws.active_tab_mut();
+    if tab.state.try_close_sketch().is_ok() {
+        tab.feature_dialog = None;
+        tab.plane_dialog = Some(PlaneDialog::new(command));
+    }
+}
+
+/// Menü „Konstruieren“ (Skizzen 6): die fünf Konstruktionsebenen wie in Fusion, mit ihren
+/// Tasten aus der Belegung.
+#[doc(hidden)]
+pub fn construct_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
+    for cmd in PlaneCommand::ALL {
+        let keys = keymap::shortcut_hint(&ws.keymap, cmd.action());
+        if icons::source_entry_keys(ui, icons::IconSource::Plane(cmd), &cmd.label(), &keys, true)
+            .clicked()
+        {
+            commands::run_action(ws, cmd.action());
+            ui.close();
+        }
     }
 }
 
@@ -2416,6 +2445,8 @@ fn sketch_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
             .map(|_| (body, face)),
         _ => None,
     };
+    // Eine gewählte Konstruktionsebene zählt wie eine Fläche (Skizzen 6).
+    let plane = state.selected_plane();
     // Gesperrt auch, wenn der Körper der Fläche zurückgesetzt ist (Verlaufsleiste).
     let blocked = state.sketch_on_face_blocked();
     if entry(
@@ -2425,9 +2456,13 @@ fn sketch_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     )
     .on_disabled_hover_text(blocked.unwrap_or_default())
     .clicked()
-        && let Some((body, face)) = face
     {
-        if let Ok(id) = state.new_sketch_on_face(body, face) {
+        let made = match (plane, face) {
+            (Some(p), _) => state.new_sketch_on_plane(p).ok(),
+            (None, Some((body, face))) => state.new_sketch_on_face(body, face).ok(),
+            (None, None) => None,
+        };
+        if let Some(id) = made {
             let _ = state.open_sketch(id);
         }
         ui.close();
@@ -2596,7 +2631,7 @@ impl eframe::App for PlanoraApp {
         }
         let tab = self.ws.active_tab_mut();
         if let Some(id) = tab.state.edit_request.take() {
-            tab.feature_dialog = FeatureDialog::new(&tab.state, id);
+            tab.open_edit(id);
         }
         drop_dialogs_in_sketch_mode(&tab.state, &mut tab.dialog, &mut tab.boolean_dialog);
         // In einer alten Version lässt sich nichts ändern: das Fenster „Blattangaben“ (mit dem
@@ -2607,6 +2642,7 @@ impl eframe::App for PlanoraApp {
         if tab.state.sketch_session.is_some() {
             tab.feature_dialog = None;
             tab.blend_dialog = None;
+            tab.plane_dialog = None;
             // Beim Schreiben einer STEP-Datei oder Zeichnung bleibt das Fenster, damit nichts ohne
             // Meldung endet.
             if tab
@@ -2664,6 +2700,14 @@ impl eframe::App for PlanoraApp {
             && tab.state.sheet_dialog.is_none()
         {
             tab.state.sheet_dialog = Some(dialog);
+        }
+        if let Some(mut dialog) = tab.plane_dialog.take()
+            && dialog.show(&ctx, &mut tab.state)
+        {
+            tab.plane_dialog = Some(dialog);
+        }
+        if tab.plane_dialog.is_none() && tab.state.plane_pick.is_some() {
+            PlaneDialog::finish(&mut tab.state);
         }
         if tab.blend_dialog.is_none() && tab.state.edge_picking {
             tab.state.edge_picking = false;

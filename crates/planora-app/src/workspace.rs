@@ -12,10 +12,11 @@ use crate::import_dialog::ImportDialog;
 use crate::keymap::Keymap;
 use crate::parameter_dialog::ParameterDialog;
 use crate::places::{FavoriteChange, Places};
+use crate::plane_dialog::PlaneDialog;
 use crate::state::{AppState, redo_failed, undo_failed};
 use crate::step_import_dialog::StepImportDialog;
 use crate::undo_labels::describe_change;
-use planora_feature::Snapshot;
+use planora_feature::{FeatureId, Snapshot};
 use planora_i18n::tr;
 use planora_project::config::{
     Config, PendingUpdate, THEME_DARK, THEME_LIGHT, WindowState, clamp_panel_transparency,
@@ -80,6 +81,8 @@ pub struct DocTab {
     pub boolean_dialog: Option<BooleanDialog>,
     pub feature_dialog: Option<FeatureDialog>,
     pub blend_dialog: Option<BlendDialog>,
+    /// Fenster einer Konstruktionsebene (Skizzen 6, Menü „Konstruieren“, auch „Bearbeiten“).
+    pub plane_dialog: Option<PlaneDialog>,
     pub export_dialog: Option<ExportDialog>,
     pub import_dialog: Option<ImportDialog>,
     /// Fenster „STEP importieren“.
@@ -128,6 +131,7 @@ impl DocTab {
             boolean_dialog: None,
             feature_dialog: None,
             blend_dialog: None,
+            plane_dialog: None,
             export_dialog: None,
             import_dialog: None,
             step_import_dialog: None,
@@ -422,8 +426,27 @@ impl DocTab {
     /// zeigten alte Werte und Formeln, „Übernehmen“ würde Formeln still verwerfen.
     pub fn after_parameter_change(&mut self) {
         self.observe_history(false);
-        if self.feature_dialog.take().is_some() {
+        let edit_plane = self
+            .plane_dialog
+            .as_ref()
+            .is_some_and(|d| d.editing().is_some());
+        if self.feature_dialog.take().is_some() || edit_plane {
+            if edit_plane {
+                self.plane_dialog = None;
+                self.state.plane_pick = None;
+            }
             self.state.info = Some(crate::parameter_dialog::dialog_closed());
+        }
+    }
+
+    /// Öffnet das Fenster „Bearbeiten“ für das Feature `id`: bei einer Konstruktionsebene das
+    /// Fenster der Ebene mit ihren Werten, sonst [`FeatureDialog`].
+    pub fn open_edit(&mut self, id: FeatureId) {
+        if let Some(d) = PlaneDialog::edit(&self.state, id) {
+            self.feature_dialog = None;
+            self.plane_dialog = Some(d);
+        } else {
+            self.feature_dialog = FeatureDialog::new(&self.state, id);
         }
     }
 
@@ -434,6 +457,7 @@ impl DocTab {
             || self.boolean_dialog.is_some()
             || self.feature_dialog.is_some()
             || self.blend_dialog.is_some()
+            || self.plane_dialog.is_some()
             || self.export_dialog.is_some()
             || self.import_dialog.is_some()
             || self.step_import_dialog.is_some()
@@ -454,6 +478,8 @@ impl DocTab {
         self.boolean_dialog = None;
         self.feature_dialog = None;
         self.blend_dialog = None;
+        self.plane_dialog = None;
+        self.state.plane_pick = None;
         if !self
             .export_dialog
             .as_ref()

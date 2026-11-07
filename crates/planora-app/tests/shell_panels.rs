@@ -1022,7 +1022,9 @@ fn tabs_can_be_activated_added_and_closed_in_the_top_field() {
     // Unveränderte Tabs: Schließen braucht keine Rückfrage.
     let mut app = PlanoraApp::for_tests(library_ws());
     app.ws_mut().new_tab();
-    let size = vec2(1400.0, 900.0);
+    // Skizzen 6: bei 1920 × 1080 (Standard); bei 1400 rollt das Menü „Konstruieren“ das
+    // Schließen-Symbol des ersten Tabs nach dem dritten Tab aus dem Bild.
+    let size = vec2(1920.0, 1080.0);
     let glyph = |icon| planora_app::icons::glyph(icon).to_string();
     let (shot, _) = settle(&c, &mut app, size);
     let top = fields_of(&shot, true, size).top;
@@ -1097,10 +1099,13 @@ fn the_tab_bar_scroll_bar_is_thin_hidden_at_rest_and_below_the_tab_names() {
             "dunkel {dark}: in Ruhe unsichtbar: {rest:?}"
         );
         // Zeiger über den Tabs: ein schmaler Griff in der Palettenfarbe, unter den Namen.
+        // Skizzen 6: der aktive (ins Bild gerollte) Tab; seit dem Menü „Konstruieren“ liegt der
+        // erste Tab links außerhalb des sichtbaren Teils der Leiste.
+        let active = app.ws_mut().active_tab().title();
         let tab = shot
             .texts
             .iter()
-            .find(|t| t.text.starts_with("Unbenannt") && top.contains_rect(t.rect))
+            .find(|t| t.text.starts_with(&active) && top.contains_rect(t.rect))
             .expect("ein Tab")
             .rect;
         for _ in 0..30 {

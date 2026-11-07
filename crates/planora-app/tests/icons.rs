@@ -212,11 +212,19 @@ fn every_hand_drawn_icon_draws_with_the_theme_width() {
             widths(|p, r| icons::paint_view_icon(p, r, color)),
         ),
     ];
+    // Skizzen 6: die Konstruktionsebene und die fünf Befehle des Menüs „Konstruieren“.
+    for cmd in planora_app::plane_dialog::PlaneCommand::ALL {
+        all.push((
+            format!("{cmd:?}"),
+            widths(|p, r| icons::paint_source(p, r, icons::IconSource::Plane(cmd), color)),
+        ));
+    }
     for fi in [
         icons::FeatureIcon::Sketch,
         icons::FeatureIcon::Move,
         icons::FeatureIcon::Blend,
         icons::FeatureIcon::Chamfer,
+        icons::FeatureIcon::Plane,
     ] {
         all.push((
             format!("{fi:?}"),
@@ -282,7 +290,11 @@ fn every_sketch_tool_and_action_has_an_icon_source() {
         match src {
             IconSource::Font(i) => assert!(ALL.contains(&i), "{name}: {i:?} nicht in ALL"),
             IconSource::Hand(h) => assert!(HAND_DRAWN.contains(&h), "{name}: {h:?}"),
-            IconSource::Feature(_) | IconSource::Body(_) | IconSource::Dimension(_) => {}
+            // Skizzen 6: die Symbole des Menüs „Konstruieren“ sind selbst gezeichnet.
+            IconSource::Feature(_)
+            | IconSource::Body(_)
+            | IconSource::Dimension(_)
+            | IconSource::Plane(_) => {}
         }
     }
     // Kegel: wie im Feature-Baum gezeichnet

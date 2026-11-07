@@ -195,8 +195,9 @@ pub fn resolve_plane_base(
     }
 }
 
-/// Berechnet das Koordinatensystem der Ebene aus den sichtbaren Körpern `solids`.
-pub(crate) fn compute_plane(
+/// Berechnet das Koordinatensystem der Ebene aus den sichtbaren Körpern `solids` (rein; die App
+/// nutzt es auch für die Vorschau ihres Fensters, ohne das Dokument zu ändern).
+pub fn compute_plane(
     doc: &Document,
     pf: &PlaneFeature,
     solids: &[&Solid],

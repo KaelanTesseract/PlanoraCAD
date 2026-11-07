@@ -16,6 +16,7 @@
 use crate::app::{self, CreateKind, MenuRequest};
 use crate::create_dialog::CreateDialog;
 use crate::keymap::{Action, Area};
+use crate::plane_dialog::PlaneCommand;
 use crate::state::AppState;
 use crate::workspace::{DocTab, Workspace};
 use planora_feature::{FeatureId, FeatureKind};
@@ -181,6 +182,16 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                     app::open_blend(ws, false);
                     track(ws, a);
                 }
+            }
+        }
+        Action::PlaneOffset
+        | Action::PlaneAngle
+        | Action::PlaneMid
+        | Action::PlaneThreePoints
+        | Action::PlaneTangent => {
+            if let Some(cmd) = PlaneCommand::for_action(a) {
+                app::open_plane(ws, cmd);
+                track(ws, a);
             }
         }
         Action::ToggleVisibility => toggle_visibility(&mut ws.active_tab_mut().state),
@@ -357,7 +368,11 @@ fn window_open(tab: &DocTab, a: Action) -> bool {
     match a {
         Action::ExtrudeSketch => matches!(tab.dialog, Some(CreateDialog::ExtrudeSketch { .. })),
         Action::Fillet => tab.blend_dialog.is_some(),
-        _ => false,
+        _ => PlaneCommand::for_action(a).is_some_and(|c| {
+            tab.plane_dialog
+                .as_ref()
+                .is_some_and(|d| d.command() == c && d.editing().is_none())
+        }),
     }
 }
 
@@ -366,7 +381,12 @@ fn made_by(a: Action, kind: &FeatureKind) -> bool {
     match a {
         Action::ExtrudeSketch => matches!(kind, FeatureKind::Extrude { .. }),
         Action::Fillet => matches!(kind, FeatureKind::Verrunden { .. }),
-        _ => false,
+        _ => match kind {
+            FeatureKind::Plane(pf) => {
+                PlaneCommand::for_action(a) == Some(PlaneCommand::of(&pf.def))
+            }
+            _ => false,
+        },
     }
 }
 

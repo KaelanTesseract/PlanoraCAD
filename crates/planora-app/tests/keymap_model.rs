@@ -356,7 +356,20 @@ fn model_defaults_and_conflicts_with_all_actions() {
         .copied()
         .filter(|a| a.repeatable() && a.area() == Area::Model)
         .collect();
-    assert_eq!(repeatable, [Action::ExtrudeSketch, Action::Fillet]);
+    // Skizzen 6: Die fünf Ebenen-Befehle des Menüs „Konstruieren“ sind wie in Fusion
+    // wiederholbar.
+    assert_eq!(
+        repeatable,
+        [
+            Action::ExtrudeSketch,
+            Action::Fillet,
+            Action::PlaneOffset,
+            Action::PlaneAngle,
+            Action::PlaneMid,
+            Action::PlaneThreePoints,
+            Action::PlaneTangent,
+        ]
+    );
 }
 
 #[test]
@@ -741,8 +754,9 @@ fn save_undo_navigation_are_not_repeatable() {
     for &a in Action::ALL {
         last.remember(a);
     }
-    // Nur die wiederholbaren zählen; die letzte davon bleibt.
-    assert_eq!(last.last(), Some(Action::Fillet));
+    // Nur die wiederholbaren zählen; die letzte davon bleibt (Skizzen 6: die letzte ist jetzt
+    // die Tangentialebene des Menüs „Konstruieren“).
+    assert_eq!(last.last(), Some(Action::PlaneTangent));
     for a in [
         Action::New,
         Action::Projects,
@@ -760,7 +774,7 @@ fn save_undo_navigation_are_not_repeatable() {
     ] {
         assert!(!a.repeatable(), "{a:?}");
         last.remember(a);
-        assert_eq!(last.last(), Some(Action::Fillet), "{a:?}");
+        assert_eq!(last.last(), Some(Action::PlaneTangent), "{a:?}");
     }
 
     // In der App: Rückgängig über Strg+Z ersetzt den gemerkten Befehl nicht.

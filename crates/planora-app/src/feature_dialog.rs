@@ -274,7 +274,7 @@ impl FeatureDialog {
     /// Features.
     pub fn new(state: &AppState, id: FeatureId) -> Option<FeatureDialog> {
         let f = state.document.feature(id)?;
-        // Skizzen 6: Oberfläche folgt in Task 12 (Konstruktionsebenen bis dahin ohne Dialog).
+        // Konstruktionsebenen haben ein eigenes Fenster (`plane_dialog`, Skizzen 6).
         if matches!(
             f.kind,
             FeatureKind::Sketch(_)

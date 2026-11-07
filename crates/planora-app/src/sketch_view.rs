@@ -656,6 +656,26 @@ pub fn plane_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
             Stroke::new(PLANE_EDGE_WIDTH, edge),
         ));
     }
+    // Vorschau des offenen Ebenen-Fensters in der Hervorhebungsfarbe (noch kein Feature).
+    if let Some(plane) = state.plane_pick.and_then(|p| p.preview) {
+        let map = Mapper {
+            camera: state.camera,
+            frame: plane.frame,
+            rect,
+        };
+        let corners: Option<Vec<Pos2>> = plane
+            .corners()
+            .into_iter()
+            .map(|c| map.to_screen(plane.frame.to_local(c).truncate()))
+            .collect();
+        if let Some(corners) = corners {
+            out.push(Shape::convex_polygon(
+                corners,
+                col.plane_fill_active,
+                Stroke::new(PLANE_EDGE_WIDTH, col.plane_edge_active),
+            ));
+        }
+    }
     out
 }
 

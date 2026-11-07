@@ -1,6 +1,5 @@
 //! Modell der Verlaufsleiste ohne Oberfläche: Schritte, Markerstelle, Bewegen, Farbe, Sperre.
 
-use crate::feature_dialog::FeatureDialog;
 use crate::icons::FeatureIcon;
 use crate::state::AppState;
 pub use crate::theme::BodyColor;
@@ -318,7 +317,7 @@ pub(crate) fn refuse_if_locked(state: &mut AppState, inputs: &[FeatureId]) -> Re
 
 /// Doppelklick auf einen Schritt: wählt ihn und öffnet seine Einstellungen wie ein Doppelklick
 /// im Feature-Baum (`browser::edit`); eine Skizze öffnet sich zum Bearbeiten, sonst der
-/// Dialog „Bearbeiten“ ([`FeatureDialog`]). Das geht auch bei zurückgesetzten Schritten: Der
+/// Dialog „Bearbeiten“ ([`crate::workspace::DocTab::open_edit`]). Das geht auch bei zurückgesetzten Schritten: Der
 /// Dialog ändert nur die Werte, der Marker bleibt stehen; die abhängigen Schritte rechnet das
 /// Dokument beim Übernehmen neu. In einer alten Version geschieht nichts.
 pub fn open_step(ws: &mut Workspace, id: FeatureId) {
@@ -328,7 +327,7 @@ pub fn open_step(ws: &mut Workspace, id: FeatureId) {
     }
     crate::browser::edit(&mut tab.state, id);
     if let Some(id) = tab.state.edit_request.take() {
-        tab.feature_dialog = FeatureDialog::new(&tab.state, id);
+        tab.open_edit(id);
     }
 }
 
