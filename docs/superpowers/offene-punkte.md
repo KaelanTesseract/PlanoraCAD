@@ -2210,6 +2210,8 @@ Umgesetzt 2026-11-02 und 2026-11-03 auf dem Zweig `feature/skizzen-aendern` (Spe
 
 ## Teilprojekt Skizzen 5
 
+Abgeschlossen 2026-11-07, gemergt in b00b8a9. Handtest bei 1920×1080 bestanden; die fünf Beobachtungen daraus und die zwei Reste (Abbruch nach dem ersten Klick, Klick ins Musterfeld) sind vor dem Merge behoben. Läufe auf 87f39c0: Windows 5879 und WSL 5869 Tests bestanden, keiner fehlgeschlagen; fmt, clippy, deny und Messtests in Ordnung.
+
 Umgesetzt 2026-11-03 bis 2026-11-06 auf dem Zweig `feature/skizzen-muster` (Spec `specs/2026-11-03-skizzen-muster-design.md`, Plan `plans/2026-11-03-skizzen-muster.md`): Rechteckige und Kreisförmige Anordnung, Konzentrisch, Kollinear, Glatt, Skizzenbemaßung mit waagerechtem, senkrechtem und Durchmessermaß zur Mittellinie, dazu Gesamtlänge des Langlochs als Maß, Doppelklick auf Maße und Rasterbindung. Beschreibung in `docs/funktionen.md`, Abschnitt „Skizzen“. Das Dateiformat steigt auf 15, aber nur für Skizzen mit Muster oder einer der neuen Abhängigkeiten (auch gelöscht); alle anderen Dateien werden bytegleich wie vorher geschrieben. Die Handprüfung steht noch aus (nur auf Dennis' Wort), die Gesamtläufe unter Windows und in WSL folgen nach der Abschlussprüfung. Die Abschnitte unten sind nach Tasks geordnet; die Sammlung am Ende fasst Abweichungen, Grenzen, Annahmen und Offenes zusammen.
 
 **Annahmen zu Mustern (Task 4)**
