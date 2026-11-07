@@ -11,7 +11,6 @@ use crate::sketch_input::{Created, DrawInput, FieldKind};
 use crate::sketch_kinds::{PREVIEW_STEPS_PER_TURN, ToolKinds};
 use planora_feature::{FeatureId, ParamScope, ParamUnit, SketchFeature, constraint_unit};
 use planora_i18n::tr;
-use planora_kernel::{Edge, Id, Solid};
 use planora_math::DVec2;
 use planora_sketch::SketchError;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
@@ -24,6 +23,7 @@ use planora_sketch::solver::{Drag, SolveReport, SolveStatus};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+pub use crate::sketch_project::{ProjectFilter, ProjectState};
 pub use planora_sketch::snap::Snap;
 
 /// Schritte je Vollkreis für den Linienzug, gegen den der Auswahlrahmen prüft.
@@ -477,6 +477,8 @@ pub struct SketchSession {
     pub dim: DimToolState,
     /// Rechteckige und Kreisförmige Anordnung.
     pub pattern: crate::sketch_pattern::PatternToolState,
+    /// Projizieren (Skizzen 6): Auswahlfilter und „Projektionsverknüpfung“, für die Sitzung.
+    pub project: ProjectState,
     /// Abhängigkeitsbefehl: der Bezug, den der letzte Klick gewählt oder abgewählt hat (für einen
     /// schnellen zweiten Klick, [`constraint_second_click_counts`](Self::constraint_second_click_counts)).
     pub constraint_last: Option<Item>,
@@ -606,6 +608,7 @@ impl SketchSession {
             grip_drag: None,
             dim: DimToolState::default(),
             pattern: Default::default(),
+            project: ProjectState::default(),
             constraint_last: None,
         }
     }
@@ -942,8 +945,8 @@ impl SketchSession {
                 Tool::Arc => se.click_arc(sk, cur, prior),
                 Tool::Ellipse => se.click_ellipse(sk, cur, prior),
                 Tool::Spline => se.click_spline(sk, cur, prior),
-                // Haben nur geplante Arten (oben); die Kantenkopie steuert die Oberfläche über
-                // `project_edge`.
+                // Haben nur geplante Arten (oben); das Projizieren steuert die Oberfläche über
+                // `AppState::project_into_sketch`.
                 Tool::Polygon | Tool::Slot | Tool::ProjectEdge => Ok(()),
                 Tool::Trim | Tool::Extend | Tool::Break => se.click_modify(sk, at, radius, prior),
                 Tool::Offset => se.click_offset(sk, cur, prior),
@@ -2797,20 +2800,6 @@ impl SketchSession {
             sk.add_linear_pattern(&curves, offset, count).map_err(err)?;
             se.solve_checked(sk, prior)?;
             Ok(())
-        })
-    }
-
-    /// Kopiert eine Körperkante als feste Konstruktionsgeometrie in die Skizze.
-    pub fn project_edge(
-        &mut self,
-        sk: &mut Sketch,
-        solid: &Solid,
-        edge: Id<Edge>,
-    ) -> Result<CurveId, String> {
-        self.atomic(sk, |se, sk, prior| {
-            let c = sk.add_projected_edge(solid, edge).map_err(err)?;
-            se.solve_checked(sk, prior)?;
-            Ok(c)
         })
     }
 }

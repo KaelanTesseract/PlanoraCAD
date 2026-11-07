@@ -206,8 +206,8 @@ const R: f64 = 0.5;
 #[test]
 fn kinds_cover_their_tools_without_gaps() {
     // Skizzen 4: Rundung und die drei Fasen kamen dazu (19 → 23). Skizzen 5: die beiden
-    // Anordnungen (23 → 25).
-    assert_eq!(ToolKind::ALL.len(), 25);
+    // Anordnungen (23 → 25). Skizzen 6: Projizieren (25 → 26).
+    assert_eq!(ToolKind::ALL.len(), 26);
     let mut seen = Vec::new();
     for tool in [
         Tool::Rectangle,
@@ -217,6 +217,7 @@ fn kinds_cover_their_tools_without_gaps() {
         Tool::Slot,
         Tool::Fillet,
         Tool::Pattern,
+        Tool::ProjectEdge,
     ] {
         assert!(!ToolKind::of(tool).is_empty(), "{tool:?}");
         for &k in ToolKind::of(tool) {
@@ -225,14 +226,13 @@ fn kinds_cover_their_tools_without_gaps() {
             seen.push(k);
         }
     }
-    assert_eq!(seen.len(), 25);
+    assert_eq!(seen.len(), 26);
     for tool in [
         Tool::Select,
         Tool::Point,
         Tool::Line,
         Tool::Ellipse,
         Tool::Spline,
-        Tool::ProjectEdge,
         Tool::Trim,
         Tool::Extend,
         Tool::Break,
@@ -266,6 +266,8 @@ fn kinds_cover_their_tools_without_gaps() {
             fillet: ToolKind::Fillet,
             // Skizzen 5: Die Anordnungen merken ihre Art wie die Formen.
             pattern: ToolKind::PatternRect,
+            // Skizzen 6: das Klappmenü „Projizieren/Einschließen“.
+            project: ToolKind::Project,
         }
     );
     let lines_only: Vec<ToolKind> = ToolKind::ALL

@@ -800,8 +800,12 @@ fn follow_copy(
     let source = match &c.source {
         CopySource::Edge(e) => {
             let found = resolve_edge(solids, e, tol).ok()?;
+            // Wie beim Anlegen (`add_projected_curve`): Schräge Kreisbögen und Ellipsenbögen
+            // werden Ellipsenbögen (Skizzen 6). Alte Kantenkopien kennen diese Arten nicht, für
+            // sie ist das Ergebnis dasselbe wie mit `reproject_edge`.
+            let edge = solids[found.body].edges.get(found.edge)?;
             sketch
-                .reproject_edge(c.curve, solids[found.body], found.edge)
+                .reproject_curve(c.curve, &edge.curve, edge.t0, edge.t1)
                 .ok()?;
             CopySource::Edge(crate::refs::EdgeRef {
                 hint: found.hint,

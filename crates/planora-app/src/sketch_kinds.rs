@@ -58,6 +58,9 @@ pub enum ToolKind {
     PatternRect,
     /// Fusion „Kreisförmige Anordnung“ (Skizzen 5).
     PatternCircular,
+    /// Fusion „Projizieren“ im Klappmenü „Projizieren/Einschließen“ (Skizzen 6); läuft über
+    /// [`crate::state::AppState::project_into_sketch`], nicht über die Stufen der Formen.
+    Project,
 }
 
 impl ToolKind {
@@ -88,6 +91,7 @@ impl ToolKind {
         ToolKind::ChamferTwoDistances,
         ToolKind::PatternRect,
         ToolKind::PatternCircular,
+        ToolKind::Project,
     ];
 
     /// Das Werkzeug, zu dem die Art gehört.
@@ -102,6 +106,7 @@ impl ToolKind {
             | SlotCenterPointArc => Tool::Slot,
             Fillet | ChamferEqual | ChamferDistanceAngle | ChamferTwoDistances => Tool::Fillet,
             PatternRect | PatternCircular => Tool::Pattern,
+            Project => Tool::ProjectEdge,
         }
     }
 
@@ -116,6 +121,8 @@ impl ToolKind {
             Tool::Slot => &all[14..19],
             Tool::Fillet => &all[19..23],
             Tool::Pattern => &all[23..25],
+            // Skizzen 6: „Schneiden“ und „Silhouette“ kommen mit Task 10 dazu.
+            Tool::ProjectEdge => &all[25..26],
             _ => &[],
         }
     }
@@ -132,6 +139,12 @@ impl ToolKind {
     /// Stufen der Formen.
     pub fn is_pattern(self) -> bool {
         self.tool() == Tool::Pattern
+    }
+
+    /// Eine Art von „Projizieren/Einschließen“? Sie wählt Kanten, Flächen oder Körper in der
+    /// 3D-Szene ([`crate::sketch_view`]), nicht Lagen in der Skizze.
+    pub fn is_projection(self) -> bool {
+        self.tool() == Tool::ProjectEdge
     }
 
     /// Felder je Stufe (Index = Stufe, die letzte Stufe schließt ab, Stufe 0 hat nie welche).
@@ -158,6 +171,7 @@ impl ToolKind {
             ChamferTwoDistances => &[&[], &[], &[F::Distance, F::Distance2]],
             // Die Muster haben ihren eigenen Ablauf (`sketch_pattern::pattern_fields`).
             PatternRect | PatternCircular => &[&[]],
+            Project => &[&[]],
         }
     }
 
@@ -195,6 +209,7 @@ impl ToolKind {
             ChamferTwoDistances => tr!("sketch-kind-chamfer-two-distances-hint"),
             PatternRect => tr!("sketch-kind-pattern-rect-hint"),
             PatternCircular => tr!("sketch-kind-pattern-circular-hint"),
+            Project => tr!("sketch-tool-project-edge-hint"),
         }
     }
 
@@ -227,6 +242,7 @@ impl ToolKind {
             ChamferTwoDistances => Action::SketchChamferTwoDistances,
             PatternRect => Action::SketchPatternRect,
             PatternCircular => Action::SketchPatternCircular,
+            Project => Action::SketchProjectEdge,
         }
     }
 
@@ -256,6 +272,7 @@ impl ToolKind {
                 crate::msg!("sketch-chamfer-too-big")
             }
             PatternRect | PatternCircular => crate::msg!("sketch-pattern-empty"),
+            Project => crate::msg!("sketch-pick-project"),
         }
     }
 
@@ -292,6 +309,8 @@ pub struct ToolKinds {
     pub fillet: ToolKind,
     /// Rechteckige oder Kreisförmige Anordnung (Skizzen 5).
     pub pattern: ToolKind,
+    /// Projizieren (Skizzen 6; Schneiden und Silhouette folgen).
+    pub project: ToolKind,
 }
 
 impl Default for ToolKinds {
@@ -305,6 +324,7 @@ impl Default for ToolKinds {
             slot: ToolKind::SlotCenterToCenter,
             fillet: ToolKind::Fillet,
             pattern: ToolKind::PatternRect,
+            project: ToolKind::Project,
         }
     }
 }
@@ -319,6 +339,7 @@ impl ToolKinds {
             Tool::Slot => self.slot = kind,
             Tool::Fillet => self.fillet = kind,
             Tool::Pattern => self.pattern = kind,
+            Tool::ProjectEdge => self.project = kind,
             _ => {}
         }
     }
@@ -484,6 +505,7 @@ impl SketchSession {
             Tool::Slot => Some(self.kinds.slot),
             Tool::Fillet => Some(self.kinds.fillet),
             Tool::Pattern => Some(self.kinds.pattern),
+            Tool::ProjectEdge => Some(self.kinds.project),
             _ => None,
         }
     }
@@ -491,7 +513,7 @@ impl SketchSession {
     /// Die aktive Art, wenn sie über die Stufenmaschine läuft (nicht klassisch).
     pub fn planned_kind(&self) -> Option<ToolKind> {
         self.kind_of(self.tool)
-            .filter(|k| !k.is_classic() && !k.is_pattern())
+            .filter(|k| !k.is_classic() && !k.is_pattern() && !k.is_projection())
     }
 
     /// Wählt `kind` wie ihre Aktion: Ist sie schon gewählt, bleibt alles; sonst bricht das wie

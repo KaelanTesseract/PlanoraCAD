@@ -70,7 +70,8 @@ pub fn tool_label(tool: Tool) -> String {
         Tool::Slot => tr!("sketch-tool-slot"),
         Tool::Ellipse => tr!("sketch-tool-ellipse"),
         Tool::Spline => tr!("sketch-tool-spline"),
-        Tool::ProjectEdge => tr!("action-sketch-project-edge"),
+        // Skizzen 6: Klappmenü wie in Fusion; die Arten nennen sich selbst („Projizieren“).
+        Tool::ProjectEdge => tr!("sketch-tool-project-include"),
         Tool::Trim => tr!("action-sketch-trim"),
         Tool::Extend => tr!("action-sketch-extend"),
         Tool::Break => tr!("action-sketch-break"),
@@ -891,6 +892,9 @@ fn tool_options(ui: &mut egui::Ui, se: &mut SketchSession, sf: &mut SketchFeatur
     if se.tool == Tool::Offset {
         ui.checkbox(&mut se.offset_chain, tr!("sketch-offset-chain"));
     }
+    if se.tool == Tool::ProjectEdge {
+        project_options(ui, se);
+    }
     if se.runs_pattern() {
         pattern_options(ui, se, sf);
     }
@@ -927,6 +931,27 @@ fn tool_options(ui: &mut egui::Ui, se: &mut SketchSession, sf: &mut SketchFeatur
             }
         });
     }
+}
+
+/// Einstellungen des Projizierens (Skizzen 6, Fusion „Projizieren“): Auswahlfilter „Angegebene
+/// Elemente“ / „Körper“ und der Schalter „Projektionsverknüpfung“. Sie gelten für die Sitzung.
+fn project_options(ui: &mut egui::Ui, se: &mut SketchSession) {
+    use crate::sketch_state::ProjectFilter;
+    ui.label(tr!("sketch-project-filter"));
+    ui.horizontal_wrapped(|ui| {
+        ui.radio_value(
+            &mut se.project.filter,
+            ProjectFilter::Entities,
+            tr!("sketch-project-entities"),
+        );
+        ui.radio_value(
+            &mut se.project.filter,
+            ProjectFilter::Bodies,
+            tr!("sketch-project-bodies"),
+        );
+    });
+    ui.checkbox(&mut se.project.link, tr!("sketch-project-link"))
+        .on_hover_text(tr!("sketch-project-link-hint"));
 }
 
 /// Einstellungen der Anordnung (Skizzen 5): je Richtung Art (Achse oder Linie, „Linie wählen“),

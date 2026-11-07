@@ -1717,6 +1717,61 @@ impl AppState {
     }
 }
 
+/// Was „Projizieren“ in die Skizze legt: eine Kante, eine Fläche (ihre Schleifen) oder einen
+/// ganzen Körper; je mit dem Index des Körpers in [`AppState::bodies`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjectTarget {
+    Edge(usize, Id<Edge>),
+    Face(usize, Id<Face>),
+    Body(usize),
+}
+
+/// Kanten, die in einer Fläche zweimal vorkommen (Nähte von Zylinder, Kegel und Kugel): Sie
+/// sind keine echten Ränder und werden nicht projiziert.
+fn seam_edges(solid: &Solid) -> std::collections::HashSet<Id<Edge>> {
+    let mut seams = std::collections::HashSet::new();
+    for (_, face) in solid.faces.iter() {
+        let mut seen = std::collections::HashSet::new();
+        for he in std::iter::once(&face.outer)
+            .chain(&face.inner)
+            .flat_map(|l| &l.half_edges)
+        {
+            if !seen.insert(he.edge) {
+                seams.insert(he.edge);
+            }
+        }
+    }
+    seams
+}
+
+/// Die Kanten der Schleifen von `face` (außen, dann die Löcher), ohne Nähte und Wiederholung;
+/// `None`, wenn es die Fläche nicht gibt.
+fn face_edges(solid: &Solid, face: Id<Face>) -> Option<Vec<Id<Edge>>> {
+    let f = solid.faces.get(face)?;
+    let seams = seam_edges(solid);
+    let mut out: Vec<Id<Edge>> = Vec::new();
+    for he in std::iter::once(&f.outer)
+        .chain(&f.inner)
+        .flat_map(|l| &l.half_edges)
+    {
+        if !seams.contains(&he.edge) && !out.contains(&he.edge) {
+            out.push(he.edge);
+        }
+    }
+    Some(out)
+}
+
+/// Alle Kanten des Körpers ohne Nähte.
+fn body_edges(solid: &Solid) -> Vec<Id<Edge>> {
+    let seams = seam_edges(solid);
+    solid
+        .edges
+        .iter()
+        .map(|(id, _)| id)
+        .filter(|id| !seams.contains(id))
+        .collect()
+}
+
 /// Index des Körpers, zu dem eine Fläche oder Kante gehört.
 fn pick_body(p: Pick) -> usize {
     match p {
@@ -2400,13 +2455,28 @@ impl AppState {
         }
     }
 
-    /// Kopiert die Kante `edge` des sichtbaren Körpers `body` in die geöffnete Skizze und merkt
-    /// sich den Verweis, damit die Kopie dem Körper folgt. Nur Körper, die vor dem
-    /// Skizzen-Feature sichtbar sind, sind erlaubt. Fehler stehen auch in der Meldung der
-    /// Sitzung.
+    /// Projiziert die Kante `edge` des sichtbaren Körpers `body` verknüpft in die geöffnete
+    /// Skizze (Kurzform von [`AppState::project_into_sketch`]).
     pub fn project_edge_into_sketch(&mut self, body: usize, edge: Id<Edge>) -> Result<(), String> {
-        match self.try_project_edge(body, edge) {
-            Ok(()) => Ok(()),
+        self.project_into_sketch(ProjectTarget::Edge(body, edge), true)
+            .map(|_| ())
+    }
+
+    /// Fusion „Projizieren“ (Skizzen 6): projiziert eine Kante, alle Kanten der Schleifen einer
+    /// Fläche (außen und Löcher) oder alle Kanten eines Körpers in die geöffnete Skizze, als feste,
+    /// normale Kurven. Kanten, die nur ein Punkt wären, und Nähte entfallen; deckungsgleiche
+    /// Projektionen kommen nur einmal, auch gegen schon projizierte Kurven der Skizze. Mit `link`
+    /// bekommt jede Kurve ihren Verweis auf die Kante und folgt dem Körper. Freiformkanten werden
+    /// übersprungen und in der Meldung gezählt. Nur Körper, die vor dem Skizzen-Feature sichtbar
+    /// sind, sind erlaubt. Liefert die Zahl neuer Kurven; alles ist ein Rückgängig-Schritt.
+    /// Fehler stehen auch in der Meldung der Sitzung.
+    pub fn project_into_sketch(
+        &mut self,
+        target: ProjectTarget,
+        link: bool,
+    ) -> Result<usize, String> {
+        match self.try_project(target, link) {
+            Ok(n) => Ok(n),
             Err(m) => {
                 let text = m.text();
                 if let Some(se) = self.sketch_session.as_mut() {
@@ -2417,10 +2487,13 @@ impl AppState {
         }
     }
 
-    fn try_project_edge(&mut self, body: usize, edge: Id<Edge>) -> Result<(), Msg> {
+    fn try_project(&mut self, target: ProjectTarget, link: bool) -> Result<usize, Msg> {
         let id = self
             .open_sketch_id()
             .ok_or_else(|| crate::msg!("state-no-open-sketch"))?;
+        let body = match target {
+            ProjectTarget::Edge(b, _) | ProjectTarget::Face(b, _) | ProjectTarget::Body(b) => b,
+        };
         let source = self
             .bodies
             .get(body)
@@ -2433,22 +2506,74 @@ impl AppState {
             .find(|v| v.body == source)
             .map(|v| v.solid.clone())
             .ok_or_else(|| crate::msg!("state-edge-body-later"))?;
-        let edge_ref = planora_feature::EdgeRef::from_edge(&solid, edge, &self.kernel.tolerance)
-            .map_err(|e| crate::msg!("state-edge-copy-failed", error = e.to_string()))?;
+        let tol = self.kernel.tolerance;
+        let single = matches!(target, ProjectTarget::Edge(..));
+        let edges = match target {
+            ProjectTarget::Edge(_, e) => vec![e],
+            ProjectTarget::Face(_, f) => {
+                face_edges(&solid, f).ok_or_else(|| crate::msg!("state-face-not-found"))?
+            }
+            ProjectTarget::Body(_) => body_edges(&solid),
+        };
+        // Je Kante Kurvenstück und (mit Verknüpfung) Verweis; eine Kante ohne Verweis wird
+        // übersprungen, bei einer einzelnen Kante ist das ein Fehler wie früher.
+        let mut pieces = Vec::with_capacity(edges.len());
+        let mut refs = Vec::with_capacity(edges.len());
+        let mut skipped = 0;
+        for e in edges {
+            let edge_ref = if link {
+                match planora_feature::EdgeRef::from_edge(&solid, e, &tol) {
+                    Ok(r) => Some(r),
+                    Err(err) if single => {
+                        return Err(crate::msg!(
+                            "state-edge-copy-failed",
+                            error = err.to_string()
+                        ));
+                    }
+                    Err(_) => {
+                        skipped += 1;
+                        continue;
+                    }
+                }
+            } else {
+                None
+            };
+            let Some(edge) = solid.edges.get(e) else {
+                return Err(crate::msg!("state-edge-copy-failed", error = String::new()));
+            };
+            pieces.push((edge.curve.clone(), edge.t0, edge.t1));
+            refs.push(edge_ref);
+        }
         let (Some(se), Some(draft)) = (self.sketch_session.as_mut(), self.sketch_draft.as_mut())
         else {
             return Err(crate::msg!("state-no-open-sketch"));
         };
+        let known: Vec<CurveId> = draft.copies.iter().map(|c| c.curve).collect();
         // Fehler der Sitzung stehen schon als Grund in ihrer Meldung.
-        let curve = match se.project_edge(&mut draft.sketch, &solid, edge) {
-            Ok(c) => c,
+        let outcome = match se.project_pieces(&mut draft.sketch, &pieces, &known, single) {
+            Ok(o) => o,
             Err(e) => return Err(se.message.clone().unwrap_or(Msg::Raw(e))),
         };
-        draft.copies.push(EdgeCopy {
-            curve,
-            source: CopySource::Edge(edge_ref),
-        });
-        Ok(())
+        skipped += outcome.skipped;
+        if outcome.added.is_empty() {
+            return Err(if skipped > 0 {
+                crate::msg!("sketch-project-skipped", count = skipped)
+            } else {
+                crate::msg!("sketch-project-nothing-new")
+            });
+        }
+        for &(i, curve) in &outcome.added {
+            if let Some(edge_ref) = refs[i].clone() {
+                draft.copies.push(EdgeCopy {
+                    curve,
+                    source: CopySource::Edge(edge_ref),
+                });
+            }
+        }
+        if skipped > 0 {
+            se.add_note(crate::msg!("sketch-project-skipped", count = skipped));
+        }
+        Ok(outcome.added.len())
     }
 
     /// Wunsch aus dem Kontextmenü des Browsers, „Skizze extrudieren/drehen“ zu öffnen: beendet

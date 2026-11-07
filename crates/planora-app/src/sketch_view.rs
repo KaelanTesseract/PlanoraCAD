@@ -5,8 +5,8 @@
 use crate::sketch_cursor::AutoConstraint;
 use crate::sketch_grips::{self, Grip, GripLayout};
 use crate::sketch_pattern::{self, PatternGrip, PatternGripLayout};
-use crate::sketch_state::{Item, SketchSession, Snap, Tool};
-use crate::state::AppState;
+use crate::sketch_state::{Item, ProjectFilter, SketchSession, Snap, Tool};
+use crate::state::{AppState, ProjectTarget};
 use crate::theme::{self, lighten as lighter, sketch_colors as colors};
 use crate::viewport;
 use egui::{Color32, FontId, Mesh, PointerButton, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2};
@@ -14,7 +14,7 @@ use glam::{Vec2, Vec3};
 use planora_feature::{FeatureId, FeatureKind, SketchFeature};
 use planora_i18n::tr;
 use planora_math::{DVec2, DVec3, Frame};
-use planora_render::{EdgeRef, OrbitCamera, Pick, exact_step, grid_radius, line_weight};
+use planora_render::{EdgeRef, FaceRef, OrbitCamera, Pick, exact_step, grid_radius, line_weight};
 use planora_sketch::ExtractedProfiles;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
 use planora_sketch::dimension::{DimPick, DimPlan};
@@ -1479,11 +1479,10 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     se.update_pattern_note(&sf.sketch);
     let tool = se.tool;
 
-    // Körperkante kopieren: Kante in der 3D-Szene wählen.
+    // Projizieren: Kante oder Fläche in der 3D-Szene wählen; mit dem Filter „Körper“ zählt der
+    // Körper unter dem Zeiger (die Markierung zeigt, was der Zeiger trifft).
     let hover = if tool == Tool::ProjectEdge {
-        pointer
-            .and_then(|p| state.pick(map.local(p), map.viewport()))
-            .filter(|h| matches!(h, Pick::Edge(_)))
+        pointer.and_then(|p| state.pick(map.local(p), map.viewport()))
     } else {
         None
     };
@@ -1492,18 +1491,36 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         crate::sketch_panel::open_existing_dimension_editor(ui.ctx(), state, id);
     }
     if let Some(p) = project_at {
-        match state.pick(map.local(p), map.viewport()) {
+        let pick = state.pick(map.local(p), map.viewport());
+        let settings = state.sketch_session.as_ref().map(|se| se.project);
+        match (pick, settings) {
             // Fehler (etwa ein Körper, der erst nach der Skizze entsteht) stehen in der
             // Meldung der Sitzung.
-            Some(Pick::Edge(EdgeRef { body, edge })) => {
-                let _ = state.project_edge_into_sketch(body, edge);
+            (Some(pick), Some(settings)) => {
+                let target = project_target(pick, settings.filter);
+                let _ = state.project_into_sketch(target, settings.link);
             }
             _ => {
                 if let Some(se) = state.sketch_session.as_mut() {
-                    se.message = Some(crate::msg!("sketch-pick-edge"));
+                    se.message = Some(crate::msg!("sketch-pick-project"));
                 }
             }
         }
+    }
+}
+
+/// Was ein Klick mit „Projizieren“ auf `pick` projiziert: mit „Angegebene Elemente“ die Kante
+/// oder Fläche, mit „Körper“ deren ganzen Körper.
+pub fn project_target(pick: Pick, filter: ProjectFilter) -> ProjectTarget {
+    match (filter, pick) {
+        (ProjectFilter::Entities, Pick::Edge(EdgeRef { body, edge })) => {
+            ProjectTarget::Edge(body, edge)
+        }
+        (ProjectFilter::Entities, Pick::Face(FaceRef { body, face })) => {
+            ProjectTarget::Face(body, face)
+        }
+        (ProjectFilter::Bodies, Pick::Edge(EdgeRef { body, .. }))
+        | (ProjectFilter::Bodies, Pick::Face(FaceRef { body, .. })) => ProjectTarget::Body(body),
     }
 }
 

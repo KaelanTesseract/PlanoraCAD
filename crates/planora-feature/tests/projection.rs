@@ -2,6 +2,7 @@
 //! Bezug verloren, bleibt die Kurve stehen und die Skizze bekommt eine Warnung statt eines
 //! Fehlers.
 
+use planora_feature::planes::{AxisRef, PlaneDef, PlaneFeature, StdAxis};
 use planora_feature::*;
 use planora_kernel::{BoolOp, Face, Id, Solid, section_by_plane, silhouette};
 use planora_math::{DVec2, DVec3, Frame, Tolerance};
@@ -583,4 +584,84 @@ fn lost_curve_stays_at_last_followed_position() {
     // Die Definition bleibt unverändert (alte Dateien bytegleich).
     let def = &sketch_def(&d, s).sketch;
     assert!((def.line_length(curve).unwrap() - 10.0).abs() < 1e-7);
+}
+
+/// Skizzen 6, Task 9: Ein schräg projizierter Kreisbogen (Ellipsenbogen) folgt seiner Kante
+/// ohne Warnung. Neue Projektionen einer Kante entstehen über `add_projected_curve`; das
+/// Nachführen muss dieselbe Projektion benutzen (nicht die ältere Kantenkopie, die schräge
+/// Bögen ablehnt).
+#[test]
+fn oblique_arc_projection_follows_without_warning() {
+    let mut d = Document::new();
+    let b = add_box(&mut d, "Quader", DVec3::splat(10.0), DVec3::ZERO);
+    let solid = body(&d, b);
+    // Eine senkrechte Kante runden: oben und unten entstehen Viertelbögen in waagerechten Ebenen.
+    let vertical = solid
+        .edges
+        .iter()
+        .find(|(_, e)| (e.curve.point(e.t0).z - e.curve.point(e.t1).z).abs() > 5.0)
+        .unwrap()
+        .0;
+    let r = EdgeRef::from_edge(&solid, vertical, &tol()).unwrap();
+    let f = d
+        .add_feature(
+            "Rundung",
+            FeatureKind::Verrunden {
+                body: BodyRef {
+                    feature: b,
+                    index: 0,
+                },
+                edges: vec![r],
+                art: BlendArt::Rundung { radius: 2.0 },
+                tangentenkette: true,
+            },
+        )
+        .unwrap();
+    assert_eq!(d.feature(f).unwrap().status, FeatureStatus::Ok);
+    // Skizze auf einer um 30° um X gedrehten Ebene: die Bögen liegen schräg zu ihr.
+    let p = d
+        .add_feature(
+            "Ebene",
+            FeatureKind::Plane(PlaneFeature {
+                def: PlaneDef::Angle {
+                    axis: AxisRef::Standard(StdAxis::X),
+                    angle: 30.0,
+                },
+            }),
+        )
+        .unwrap();
+    let frame = d.plane_frame(p).unwrap();
+    let solid = body(&d, f);
+    let mut sk = Sketch::new(frame, "Skizze", tol());
+    let (curve, edge) = solid
+        .edges
+        .iter()
+        .find_map(|(id, e)| {
+            let partial = matches!(e.curve, planora_kernel::Curve::Circle { .. })
+                && (e.t1 - e.t0).abs() < 6.0;
+            if !partial {
+                return None;
+            }
+            let c = sk.add_projected_curve(&e.curve, e.t0, e.t1, LINKED).ok()?;
+            Some((c, EdgeRef::from_edge(&solid, id, &tol()).ok()?))
+        })
+        .expect("ein Viertelbogen");
+    assert!(matches!(
+        sk.curve(curve).unwrap().kind,
+        CurveKind::EllipticArc { .. }
+    ));
+    let s = d
+        .add_feature(
+            "Skizze",
+            FeatureKind::Sketch(SketchFeature {
+                sketch: sk,
+                plane: SketchPlane::OnPlane(p),
+                copies: vec![edge_copy(curve, edge)],
+                formulas: Default::default(),
+            }),
+        )
+        .unwrap();
+    let feature = d.feature(s).unwrap();
+    assert_eq!(feature.status, FeatureStatus::Ok);
+    assert!(feature.warning().is_none(), "{:?}", feature.warning());
 }

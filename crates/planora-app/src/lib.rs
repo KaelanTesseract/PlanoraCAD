@@ -65,6 +65,7 @@ pub mod sketch_input;
 pub mod sketch_kinds;
 pub mod sketch_panel;
 pub mod sketch_pattern;
+pub mod sketch_project;
 pub mod sketch_state;
 pub mod sketch_view;
 pub mod state;
