@@ -570,8 +570,12 @@ fn strip_still_fits_1080() {
     }
     assert!(buttons.iter().any(|(l, _)| l == "Projizieren/Einschließen"));
     // Der Knopf ist ein Klappmenü „Projizieren/Einschließen“ mit dem Eintrag „Projizieren“ (P).
+    // Skizzen 6, Task 10: bewusst angepasst, „Schneiden“ und „Silhouette“ stehen dahinter.
     assert!(sketch_panel::has_flyout(Tool::ProjectEdge));
-    assert_eq!(ToolKind::of(Tool::ProjectEdge), &[ToolKind::Project]);
+    assert_eq!(
+        ToolKind::of(Tool::ProjectEdge),
+        &[ToolKind::Project, ToolKind::Intersect, ToolKind::Silhouette]
+    );
     assert_eq!(
         sketch_panel::tool_label(Tool::ProjectEdge),
         "Projizieren/Einschließen"

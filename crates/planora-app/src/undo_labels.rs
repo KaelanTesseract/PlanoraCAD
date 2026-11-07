@@ -293,7 +293,13 @@ pub fn describe_sketch_change_beside(
 ) -> String {
     let (bs, as_) = (&before.sketch, &after.sketch);
     if after.copies.len() > before.copies.len() {
-        return tr!("undo-edge-project");
+        // Skizzen 6: der Befehl nach der Herkunft der neuen Kurven.
+        use planora_feature::CopySource;
+        return match after.copies.last().map(|c| &c.source) {
+            Some(CopySource::Section { .. }) => tr!("undo-sketch-intersect"),
+            Some(CopySource::Silhouette { .. }) => tr!("undo-silhouette"),
+            _ => tr!("undo-edge-project"),
+        };
     }
     // Gelöscht heißt: eine Kennung von vorher gibt es nachher nicht mehr (nicht nur: weniger).
     let removed = bs.curves().any(|(id, _)| as_.curve(id).is_none())

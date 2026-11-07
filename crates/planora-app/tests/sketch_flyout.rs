@@ -689,8 +689,9 @@ fn the_create_menu_lists_all_kinds_while_a_sketch_is_open() {
         assert_eq!(rig.se().kind_of(tool), Some(*last), "wie in der Liste");
         assert!(!shot.has(&last.label()), "Menü zu");
     }
-    // Skizzen 6: „Projizieren/Einschließen“ mit „Projizieren“ (19 → 20).
-    assert_eq!(count, 20);
+    // Skizzen 6: „Projizieren/Einschließen“ mit „Projizieren“ (19 → 20); Task 10 bewusst
+    // angepasst: dazu „Schneiden“ und „Silhouette“ (→ 22).
+    assert_eq!(count, 22);
 }
 
 /// Hat die Schrift in ihrer Zeichentabelle einen Eintrag für `c`? (Wie in tests/icons.rs.)

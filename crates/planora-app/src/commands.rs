@@ -214,7 +214,12 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
         | Action::SketchChamferDistanceAngle
         | Action::SketchChamferTwoDistances
         | Action::SketchPatternRect
-        | Action::SketchPatternCircular => {
+        | Action::SketchPatternCircular
+        // Skizzen 6: P wählt immer die Art „Projizieren“, auch wenn zuletzt „Schneiden“ oder
+        // „Silhouette“ im Klappmenü gewählt war.
+        | Action::SketchProjectEdge
+        | Action::SketchIntersect
+        | Action::SketchSilhouette => {
             if let Some(kind) = a.sketch_kind()
                 && let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut()
             {
@@ -222,7 +227,6 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
             }
         }
         Action::SketchLine
-        | Action::SketchProjectEdge
         | Action::SketchTrim
         | Action::SketchExtend
         | Action::SketchBreak

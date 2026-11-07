@@ -61,6 +61,12 @@ pub enum ToolKind {
     /// Fusion „Projizieren“ im Klappmenü „Projizieren/Einschließen“ (Skizzen 6); läuft über
     /// [`crate::state::AppState::project_into_sketch`], nicht über die Stufen der Formen.
     Project,
+    /// Fusion „Schneiden“ (Intersect, Skizzen 6): Schnitt der Skizzenebene mit Körper oder
+    /// Fläche, über [`crate::state::AppState::intersect_into_sketch`].
+    Intersect,
+    /// Fusion „Silhouette“ (Skizzen 6): Umriss einer Fläche in Blickrichtung der Skizzenebene,
+    /// über [`crate::state::AppState::silhouette_into_sketch`].
+    Silhouette,
 }
 
 impl ToolKind {
@@ -92,6 +98,8 @@ impl ToolKind {
         ToolKind::PatternRect,
         ToolKind::PatternCircular,
         ToolKind::Project,
+        ToolKind::Intersect,
+        ToolKind::Silhouette,
     ];
 
     /// Das Werkzeug, zu dem die Art gehört.
@@ -106,7 +114,7 @@ impl ToolKind {
             | SlotCenterPointArc => Tool::Slot,
             Fillet | ChamferEqual | ChamferDistanceAngle | ChamferTwoDistances => Tool::Fillet,
             PatternRect | PatternCircular => Tool::Pattern,
-            Project => Tool::ProjectEdge,
+            Project | Intersect | Silhouette => Tool::ProjectEdge,
         }
     }
 
@@ -121,8 +129,7 @@ impl ToolKind {
             Tool::Slot => &all[14..19],
             Tool::Fillet => &all[19..23],
             Tool::Pattern => &all[23..25],
-            // Skizzen 6: „Schneiden“ und „Silhouette“ kommen mit Task 10 dazu.
-            Tool::ProjectEdge => &all[25..26],
+            Tool::ProjectEdge => &all[25..28],
             _ => &[],
         }
     }
@@ -171,7 +178,7 @@ impl ToolKind {
             ChamferTwoDistances => &[&[], &[], &[F::Distance, F::Distance2]],
             // Die Muster haben ihren eigenen Ablauf (`sketch_pattern::pattern_fields`).
             PatternRect | PatternCircular => &[&[]],
-            Project => &[&[]],
+            Project | Intersect | Silhouette => &[&[]],
         }
     }
 
@@ -210,6 +217,8 @@ impl ToolKind {
             PatternRect => tr!("sketch-kind-pattern-rect-hint"),
             PatternCircular => tr!("sketch-kind-pattern-circular-hint"),
             Project => tr!("sketch-tool-project-edge-hint"),
+            Intersect => tr!("sketch-kind-intersect-hint"),
+            Silhouette => tr!("sketch-kind-silhouette-hint"),
         }
     }
 
@@ -243,6 +252,8 @@ impl ToolKind {
             PatternRect => Action::SketchPatternRect,
             PatternCircular => Action::SketchPatternCircular,
             Project => Action::SketchProjectEdge,
+            Intersect => Action::SketchIntersect,
+            Silhouette => Action::SketchSilhouette,
         }
     }
 
@@ -272,7 +283,8 @@ impl ToolKind {
                 crate::msg!("sketch-chamfer-too-big")
             }
             PatternRect | PatternCircular => crate::msg!("sketch-pattern-empty"),
-            Project => crate::msg!("sketch-pick-project"),
+            Project | Intersect => crate::msg!("sketch-pick-project"),
+            Silhouette => crate::msg!("sketch-pick-silhouette"),
         }
     }
 
@@ -309,7 +321,7 @@ pub struct ToolKinds {
     pub fillet: ToolKind,
     /// Rechteckige oder Kreisförmige Anordnung (Skizzen 5).
     pub pattern: ToolKind,
-    /// Projizieren (Skizzen 6; Schneiden und Silhouette folgen).
+    /// Projizieren, Schneiden oder Silhouette (Skizzen 6).
     pub project: ToolKind,
 }
 

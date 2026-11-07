@@ -128,6 +128,10 @@ action_table! {
         Sketch, [];
     /// Fusion „Projizieren“.
     SketchProjectEdge, "skizze.projizieren", "action-sketch-project-edge", Sketch, [key(Key::P)];
+    /// Fusion „Schneiden“ (Skizzen 6): ohne Vorgabetaste wie in Fusion, belegbar.
+    SketchIntersect, "skizze.schneiden", "action-sketch-intersect", Sketch, [];
+    /// Fusion „Silhouette“ (Skizzen 6): ohne Vorgabetaste wie in Fusion, belegbar.
+    SketchSilhouette, "skizze.silhouette", "action-sketch-silhouette", Sketch, [];
     /// Fusion „Stutzen“ (T).
     SketchTrim, "skizze.stutzen", "action-sketch-trim", Sketch, [key(Key::T)];
     /// Fusion „Dehnen“: ohne Vorgabetaste wie in Fusion, belegbar.

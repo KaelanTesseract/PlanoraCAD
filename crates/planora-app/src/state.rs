@@ -1666,28 +1666,15 @@ impl AppState {
         if viewport.x < 1.0 || viewport.y < 1.0 {
             return None;
         }
-        let ndc = Vec2::new(
-            2.0 * cursor.x / viewport.x - 1.0,
-            1.0 - 2.0 * cursor.y / viewport.y,
-        );
-        let (origin, dir) = self.camera.ray(ndc);
+        let nearest_face = self.nearest_face_hit(cursor, viewport);
+        let occluder = nearest_face.map(|(_, h)| h.distance);
 
-        let mut nearest_face: Option<(usize, planora_render::FaceHit)> = None;
         let shown = || {
             self.bodies
                 .iter()
                 .enumerate()
                 .filter(|(j, _)| !self.is_body_hidden(*j))
         };
-        for (body, b) in shown() {
-            if let Some(hit) = pick_face(&b.mesh, origin, dir)
-                && nearest_face.is_none_or(|(_, h)| hit.distance < h.distance)
-            {
-                nearest_face = Some((body, hit));
-            }
-        }
-        let occluder = nearest_face.map(|(_, h)| h.distance);
-
         let mut best_edge: Option<(usize, planora_render::EdgeHit)> = None;
         for (body, b) in shown() {
             if let Some(hit) = pick_edge(
@@ -1715,6 +1702,44 @@ impl AppState {
             })
         })
     }
+
+    /// Wie [`AppState::pick`], aber nur Flächen (Kanten zählen nicht): für Schneiden und
+    /// Silhouette, die Flächen wählen.
+    pub fn pick_face_under(&self, cursor: Vec2, viewport: Vec2) -> Option<FaceRef> {
+        if viewport.x < 1.0 || viewport.y < 1.0 {
+            return None;
+        }
+        self.nearest_face_hit(cursor, viewport)
+            .map(|(body, hit)| FaceRef {
+                body,
+                face: hit.face,
+            })
+    }
+
+    /// Die vorderste sichtbare Fläche unter dem Zeiger (Index des Körpers und Treffer).
+    fn nearest_face_hit(
+        &self,
+        cursor: Vec2,
+        viewport: Vec2,
+    ) -> Option<(usize, planora_render::FaceHit)> {
+        let ndc = Vec2::new(
+            2.0 * cursor.x / viewport.x - 1.0,
+            1.0 - 2.0 * cursor.y / viewport.y,
+        );
+        let (origin, dir) = self.camera.ray(ndc);
+        let mut nearest_face: Option<(usize, planora_render::FaceHit)> = None;
+        for (body, b) in self.bodies.iter().enumerate() {
+            if self.is_body_hidden(body) {
+                continue;
+            }
+            if let Some(hit) = pick_face(&b.mesh, origin, dir)
+                && nearest_face.is_none_or(|(_, h)| hit.distance < h.distance)
+            {
+                nearest_face = Some((body, hit));
+            }
+        }
+        nearest_face
+    }
 }
 
 /// Was „Projizieren“ in die Skizze legt: eine Kante, eine Fläche (ihre Schleifen) oder einen
@@ -1724,6 +1749,24 @@ pub enum ProjectTarget {
     Edge(usize, Id<Edge>),
     Face(usize, Id<Face>),
     Body(usize),
+}
+
+/// Meldung zu einem Fehler des Ebenenschnitts (`section`) oder der Silhouette, mit dem Text des
+/// Befehls statt dem des Rechners.
+fn section_error(e: &planora_kernel::SectionError, section: bool) -> Msg {
+    use planora_kernel::SectionError;
+    match (e, section) {
+        (SectionError::Unsupported { surface, .. }, true) => crate::msg!(
+            "sketch-intersect-unsupported",
+            surface = planora_kernel::boolean::surface_label(surface)
+        ),
+        (SectionError::Unsupported { surface, .. }, false) => crate::msg!(
+            "sketch-silhouette-unsupported",
+            surface = planora_kernel::boolean::surface_label(surface)
+        ),
+        (SectionError::Freeform(_), true) => crate::msg!("sketch-intersect-freeform"),
+        (SectionError::Freeform(_), false) => crate::msg!("sketch-silhouette-freeform"),
+    }
 }
 
 /// Kanten, die in einer Fläche zweimal vorkommen (Nähte von Zylinder, Kegel und Kugel): Sie
@@ -2475,37 +2518,66 @@ impl AppState {
         target: ProjectTarget,
         link: bool,
     ) -> Result<usize, String> {
-        match self.try_project(target, link) {
-            Ok(n) => Ok(n),
-            Err(m) => {
-                let text = m.text();
-                if let Some(se) = self.sketch_session.as_mut() {
-                    se.message = Some(m);
-                }
-                Err(text)
-            }
-        }
+        let r = self.try_project(target, link);
+        self.report_to_session(r)
     }
 
-    fn try_project(&mut self, target: ProjectTarget, link: bool) -> Result<usize, Msg> {
+    /// Fusion „Schneiden“ (Skizzen 6): schneidet die Skizzenebene mit einer Fläche oder allen
+    /// Flächen eines Körpers und legt je Schnittstück eine feste, normale Kurve in die geöffnete
+    /// Skizze. Jede Kurve ist mit ihrer Fläche verknüpft (`CopySource::Section`) und folgt dem
+    /// Körper. Kann der Rechner eine getroffene Fläche nicht schneiden (Freiform, Lage ohne
+    /// Rechenweg), entsteht nichts und die Meldung nennt den Grund. Kanten lassen sich nicht
+    /// schneiden. Liefert die Zahl neuer Kurven; alles ist ein Rückgängig-Schritt. Fehler stehen
+    /// auch in der Meldung der Sitzung.
+    pub fn intersect_into_sketch(&mut self, target: ProjectTarget) -> Result<usize, String> {
+        let r = self.try_intersect(target);
+        self.report_to_session(r)
+    }
+
+    /// Fusion „Silhouette“ (Skizzen 6): legt den Umriss der Fläche `face` des sichtbaren Körpers
+    /// `body` in Blickrichtung der Skizzenebene (ihre Normale) als feste, normale Kurven in die
+    /// geöffnete Skizze, verknüpft über `CopySource::Silhouette`. Fehler des Rechners wie bei
+    /// [`AppState::intersect_into_sketch`]. Ein Rückgängig-Schritt.
+    pub fn silhouette_into_sketch(&mut self, body: usize, face: Id<Face>) -> Result<usize, String> {
+        let r = self.try_silhouette(body, face);
+        self.report_to_session(r)
+    }
+
+    /// Ein Fehler eines Befehls steht auch in der Meldung der Skizzensitzung.
+    fn report_to_session(&mut self, r: Result<usize, Msg>) -> Result<usize, String> {
+        r.map_err(|m| {
+            let text = m.text();
+            if let Some(se) = self.sketch_session.as_mut() {
+                se.message = Some(m);
+            }
+            text
+        })
+    }
+
+    /// Der Körper `body` (Index in [`AppState::bodies`]), wie er vor der geöffneten Skizze
+    /// sichtbar ist; nur diese Körper lassen sich in die Skizze bringen.
+    fn solid_before_sketch(&self, body: usize) -> Result<Solid, Msg> {
         let id = self
             .open_sketch_id()
             .ok_or_else(|| crate::msg!("state-no-open-sketch"))?;
-        let body = match target {
-            ProjectTarget::Edge(b, _) | ProjectTarget::Face(b, _) | ProjectTarget::Body(b) => b,
-        };
         let source = self
             .bodies
             .get(body)
             .map(|b| b.source)
             .ok_or_else(|| crate::msg!("state-body-not-found"))?;
-        let solid = self
-            .document
+        self.document
             .visible_bodies_before(id)
             .into_iter()
             .find(|v| v.body == source)
             .map(|v| v.solid.clone())
-            .ok_or_else(|| crate::msg!("state-edge-body-later"))?;
+            .ok_or_else(|| crate::msg!("state-edge-body-later"))
+    }
+
+    fn try_project(&mut self, target: ProjectTarget, link: bool) -> Result<usize, Msg> {
+        let body = match target {
+            ProjectTarget::Edge(b, _) | ProjectTarget::Face(b, _) | ProjectTarget::Body(b) => b,
+        };
+        let solid = self.solid_before_sketch(body)?;
         let tol = self.kernel.tolerance;
         let single = matches!(target, ProjectTarget::Edge(..));
         let edges = match target {
@@ -2518,13 +2590,13 @@ impl AppState {
         // Je Kante Kurvenstück und (mit Verknüpfung) Verweis; eine Kante ohne Verweis wird
         // übersprungen, bei einer einzelnen Kante ist das ein Fehler wie früher.
         let mut pieces = Vec::with_capacity(edges.len());
-        let mut refs = Vec::with_capacity(edges.len());
-        // Übersprungene Kanten: Freiform und andere (etwa ohne Verweis) getrennt gezählt.
+        let mut sources = Vec::with_capacity(edges.len());
+        // Übersprungene Kanten ohne Verweis (Freiform zählt die Sitzung selbst).
         let mut skipped_other = 0;
         for e in edges {
             let edge_ref = if link {
                 match planora_feature::EdgeRef::from_edge(&solid, e, &tol) {
-                    Ok(r) => Some(r),
+                    Ok(r) => Some(CopySource::Edge(r)),
                     Err(err) if single => {
                         return Err(crate::msg!(
                             "state-edge-copy-failed",
@@ -2543,15 +2615,159 @@ impl AppState {
                 return Err(crate::msg!("state-edge-copy-failed", error = String::new()));
             };
             pieces.push((edge.curve.clone(), edge.t0, edge.t1));
-            refs.push(edge_ref);
+            sources.push(edge_ref);
         }
+        // Der Schritt heißt wie der Befehl (Fusion „Projizieren“), auch ohne Verknüpfung.
+        self.place_projection(
+            &pieces,
+            &sources,
+            single,
+            skipped_other,
+            crate::msg!("sketch-project-nothing-new"),
+            crate::msg!("undo-edge-project"),
+        )
+    }
+
+    fn try_intersect(&mut self, target: ProjectTarget) -> Result<usize, Msg> {
+        let (body, faces) = match target {
+            ProjectTarget::Edge(..) => return Err(crate::msg!("sketch-pick-intersect")),
+            ProjectTarget::Face(b, f) => (b, Some(f)),
+            ProjectTarget::Body(b) => (b, None),
+        };
+        let solid = self.solid_before_sketch(body)?;
+        let frame = *self
+            .sketch_draft
+            .as_ref()
+            .ok_or_else(|| crate::msg!("state-no-open-sketch"))?
+            .sketch
+            .frame();
+        let faces: Vec<Id<Face>> = match faces {
+            Some(f) if solid.faces.get(f).is_some() => vec![f],
+            Some(_) => return Err(crate::msg!("state-face-not-found")),
+            None => solid.faces.iter().map(|(f, _)| f).collect(),
+        };
+        let tol = self.kernel.tolerance;
+        // Je Fläche einzeln geschnitten: Der Index eines Stücks zählt unter den Stücken seiner
+        // Fläche, so wie `follow_copy` im Feature ihn beim Nachführen auflöst.
+        self.place_face_pieces(
+            &solid,
+            &faces,
+            |f| {
+                planora_kernel::section_by_plane(&solid, &frame, Some(&[f]), &tol)
+                    .map_err(|e| section_error(&e, true))
+            },
+            true,
+        )
+    }
+
+    fn try_silhouette(&mut self, body: usize, face: Id<Face>) -> Result<usize, Msg> {
+        let solid = self.solid_before_sketch(body)?;
+        if solid.faces.get(face).is_none() {
+            return Err(crate::msg!("state-face-not-found"));
+        }
+        let view = self
+            .sketch_draft
+            .as_ref()
+            .ok_or_else(|| crate::msg!("state-no-open-sketch"))?
+            .sketch
+            .frame()
+            .z;
+        let tol = self.kernel.tolerance;
+        self.place_face_pieces(
+            &solid,
+            &[face],
+            |f| {
+                planora_kernel::silhouette(&solid, f, view, &tol)
+                    .map_err(|e| section_error(&e, false))
+            },
+            false,
+        )
+    }
+
+    /// Schneiden und Silhouette: die Stücke der Flächen `faces` (je Fläche aus `pieces_of`),
+    /// jedes verknüpft mit seiner Fläche und seinem Index unter den Stücken dieser Fläche
+    /// (`section`: Schnitt, sonst Umriss). Ein Fehler des Rechners bricht alles ab, bevor etwas
+    /// angelegt ist. Eine Fläche ohne Verweis zählt mit ihren Stücken als übersprungen; ist sie die
+    /// einzige, ist das ein Fehler.
+    fn place_face_pieces(
+        &mut self,
+        solid: &Solid,
+        faces: &[Id<Face>],
+        pieces_of: impl Fn(Id<Face>) -> Result<Vec<planora_kernel::SectionPiece>, Msg>,
+        section: bool,
+    ) -> Result<usize, Msg> {
+        let tol = self.kernel.tolerance;
+        let mut pieces = Vec::new();
+        let mut sources = Vec::new();
+        let mut skipped_other = 0;
+        for &f in faces {
+            let found = pieces_of(f)?;
+            if found.is_empty() {
+                continue;
+            }
+            let face = match planora_feature::FaceRef::from_face(solid, f, &tol) {
+                Ok(r) => r,
+                Err(e) if faces.len() == 1 => {
+                    return Err(crate::msg!("state-face-link-failed", error = e.to_string()));
+                }
+                Err(_) => {
+                    skipped_other += found.len();
+                    continue;
+                }
+            };
+            for (index, p) in found.into_iter().enumerate() {
+                let face = face.clone();
+                sources.push(Some(if section {
+                    CopySource::Section { face, index }
+                } else {
+                    CopySource::Silhouette { face, index }
+                }));
+                pieces.push((p.curve, p.t0, p.t1));
+            }
+        }
+        if pieces.is_empty() && skipped_other == 0 {
+            return Err(if section {
+                crate::msg!("sketch-intersect-nothing")
+            } else {
+                crate::msg!("sketch-silhouette-nothing")
+            });
+        }
+        let (nothing, label) = if section {
+            (
+                crate::msg!("sketch-intersect-nothing-new"),
+                crate::msg!("undo-sketch-intersect"),
+            )
+        } else {
+            (
+                crate::msg!("sketch-silhouette-nothing-new"),
+                crate::msg!("undo-silhouette"),
+            )
+        };
+        self.place_projection(&pieces, &sources, false, skipped_other, nothing, label)
+    }
+
+    /// Gemeinsamer Abschluss von Projizieren, Schneiden und Silhouette: legt die Kurvenstücke
+    /// `pieces` über [`SketchSession::project_pieces`] in die Skizze (ohne Punkte und Doppelte),
+    /// hängt je neue Kurve ihre Herkunft aus `sources` an (gleicher Index; `None`: ohne
+    /// Verknüpfung) und benennt den Schritt mit `label`. Übersprungene Stücke stehen als Hinweis
+    /// in der Meldung (`skipped_other` kommt zu den anderen der Sitzung dazu); ohne neue Kurve
+    /// ist das Ergebnis ein Fehler (`nothing`, wenn nichts übersprungen ist).
+    fn place_projection(
+        &mut self,
+        pieces: &[(planora_kernel::Curve, f64, f64)],
+        sources: &[Option<CopySource>],
+        single: bool,
+        mut skipped_other: usize,
+        nothing: Msg,
+        label: Msg,
+    ) -> Result<usize, Msg> {
         let (Some(se), Some(draft)) = (self.sketch_session.as_mut(), self.sketch_draft.as_mut())
         else {
             return Err(crate::msg!("state-no-open-sketch"));
         };
         let known: Vec<CurveId> = draft.copies.iter().map(|c| c.curve).collect();
         // Fehler der Sitzung stehen schon als Grund in ihrer Meldung.
-        let outcome = match se.project_pieces(&mut draft.sketch, &pieces, &known, single) {
+        let outcome = match se.project_pieces(&mut draft.sketch, pieces, &known, single) {
             Ok(o) => o,
             Err(e) => return Err(se.message.clone().unwrap_or(Msg::Raw(e))),
         };
@@ -2572,24 +2788,20 @@ impl AppState {
         }
         if outcome.added.is_empty() {
             return Err(match notes.len() {
-                0 => crate::msg!("sketch-project-nothing-new"),
+                0 => nothing,
                 1 => notes.remove(0),
                 _ => Msg::Join(notes),
             });
         }
         for &(i, curve) in &outcome.added {
-            if let Some(edge_ref) = refs[i].clone() {
-                draft.copies.push(EdgeCopy {
-                    curve,
-                    source: CopySource::Edge(edge_ref),
-                });
+            if let Some(source) = sources[i].clone() {
+                draft.copies.push(EdgeCopy { curve, source });
             }
         }
         for note in notes {
             se.add_note(note);
         }
-        // Der Schritt heißt wie der Befehl (Fusion „Projizieren“), auch ohne Verknüpfung.
-        se.edit_label = Some(crate::msg!("undo-edge-project"));
+        se.edit_label = Some(label);
         Ok(outcome.added.len())
     }
 

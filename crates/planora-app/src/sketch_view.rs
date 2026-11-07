@@ -4,6 +4,7 @@
 
 use crate::sketch_cursor::AutoConstraint;
 use crate::sketch_grips::{self, Grip, GripLayout};
+use crate::sketch_kinds::ToolKind;
 use crate::sketch_pattern::{self, PatternGrip, PatternGripLayout};
 use crate::sketch_state::{Item, ProjectFilter, SketchSession, Snap, Tool};
 use crate::state::{AppState, ProjectTarget};
@@ -1478,11 +1479,24 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     se.update_transform_block(&sf.sketch);
     se.update_pattern_note(&sf.sketch);
     let tool = se.tool;
+    let kind = se.kinds.project;
+    let settings = se.project;
 
     // Projizieren: Kante oder Fläche in der 3D-Szene wählen; mit dem Filter „Körper“ zählt der
-    // Körper unter dem Zeiger (die Markierung zeigt, was der Zeiger trifft).
+    // Körper unter dem Zeiger (die Markierung zeigt, was der Zeiger trifft). Schneiden und
+    // Silhouette wählen nur Flächen (Schneiden mit „Körper“ den ganzen Körper).
+    let faces_only = matches!(kind, ToolKind::Intersect | ToolKind::Silhouette);
+    let pick_at = |state: &AppState, p: Pos2| {
+        if faces_only {
+            state
+                .pick_face_under(map.local(p), map.viewport())
+                .map(Pick::Face)
+        } else {
+            state.pick(map.local(p), map.viewport())
+        }
+    };
     let hover = if tool == Tool::ProjectEdge {
-        pointer.and_then(|p| state.pick(map.local(p), map.viewport()))
+        pointer.and_then(|p| pick_at(state, p))
     } else {
         None
     };
@@ -1491,18 +1505,27 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         crate::sketch_panel::open_existing_dimension_editor(ui.ctx(), state, id);
     }
     if let Some(p) = project_at {
-        let pick = state.pick(map.local(p), map.viewport());
-        let settings = state.sketch_session.as_ref().map(|se| se.project);
-        match (pick, settings) {
-            // Fehler (etwa ein Körper, der erst nach der Skizze entsteht) stehen in der
-            // Meldung der Sitzung.
-            (Some(pick), Some(settings)) => {
+        // Fehler (etwa ein Körper, der erst nach der Skizze entsteht) stehen in der Meldung der
+        // Sitzung.
+        match (kind, pick_at(state, p)) {
+            (ToolKind::Intersect, Some(pick)) => {
+                let _ = state.intersect_into_sketch(project_target(pick, settings.filter));
+            }
+            (ToolKind::Silhouette, Some(Pick::Face(FaceRef { body, face }))) => {
+                let _ = state.silhouette_into_sketch(body, face);
+            }
+            (_, Some(pick)) if kind == ToolKind::Project => {
                 let target = project_target(pick, settings.filter);
                 let _ = state.project_into_sketch(target, settings.link);
             }
             _ => {
+                let m = match kind {
+                    ToolKind::Intersect => crate::msg!("sketch-pick-intersect"),
+                    ToolKind::Silhouette => crate::msg!("sketch-pick-silhouette"),
+                    _ => crate::msg!("sketch-pick-project"),
+                };
                 if let Some(se) = state.sketch_session.as_mut() {
-                    se.message = Some(crate::msg!("sketch-pick-project"));
+                    se.message = Some(m);
                 }
             }
         }

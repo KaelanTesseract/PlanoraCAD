@@ -935,8 +935,14 @@ fn tool_options(ui: &mut egui::Ui, se: &mut SketchSession, sf: &mut SketchFeatur
 
 /// Einstellungen des Projizierens (Skizzen 6, Fusion „Projizieren“): Auswahlfilter „Angegebene
 /// Elemente“ / „Körper“ und der Schalter „Projektionsverknüpfung“. Sie gelten für die Sitzung.
+/// „Schneiden“ hat nur den Auswahlfilter (seine Kurven sind immer verknüpft), „Silhouette“ wählt
+/// nur Flächen und hat keine Einstellungen.
 fn project_options(ui: &mut egui::Ui, se: &mut SketchSession) {
+    use crate::sketch_kinds::ToolKind;
     use crate::sketch_state::ProjectFilter;
+    if se.kinds.project == ToolKind::Silhouette {
+        return;
+    }
     ui.label(tr!("sketch-project-filter"));
     ui.horizontal_wrapped(|ui| {
         ui.radio_value(
@@ -950,8 +956,10 @@ fn project_options(ui: &mut egui::Ui, se: &mut SketchSession) {
             tr!("sketch-project-bodies"),
         );
     });
-    ui.checkbox(&mut se.project.link, tr!("sketch-project-link"))
-        .on_hover_text(tr!("sketch-project-link-hint"));
+    if se.kinds.project == ToolKind::Project {
+        ui.checkbox(&mut se.project.link, tr!("sketch-project-link"))
+            .on_hover_text(tr!("sketch-project-link-hint"));
+    }
 }
 
 /// Einstellungen der Anordnung (Skizzen 5): je Richtung Art (Achse oder Linie, „Linie wählen“),
