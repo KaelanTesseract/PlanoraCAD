@@ -534,12 +534,18 @@ fn step_button(
             ink = ink.gamma_multiply(theme::DISABLED_ALPHA);
         }
         icons::paint_feature_icon(painter, rect.shrink(STEP_PAD), v.icon, ink);
-        if matches!(v.state, StepState::Error(_)) {
+        // Fehler rot, Warnung gelb (Skizzen 6), je mit Warnzeichen in der Ecke.
+        let badge = match v.state {
+            StepState::Error(_) => Some(p.error),
+            StepState::Warning(_) => Some(p.warning),
+            StepState::Active | StepState::Inactive => None,
+        };
+        if let Some(badge) = badge {
             let warn = Rect::from_min_size(
                 pos2(rect.right() - WARN_SIZE, rect.top()),
                 vec2(WARN_SIZE, WARN_SIZE),
             );
-            icons::paint_source(painter, warn, IconSource::Font(Icon::Warning), p.error);
+            icons::paint_source(painter, warn, IconSource::Font(Icon::Warning), badge);
         }
     }
     theme::focus_ring(ui, &response);
@@ -553,6 +559,9 @@ fn step_button(
         match &v.state {
             StepState::Error(e) => {
                 ui.colored_label(p.error, e);
+            }
+            StepState::Warning(w) => {
+                ui.colored_label(p.warning, w);
             }
             StepState::Inactive => {
                 ui.label(egui::RichText::new(tr!("history-rolled-back")).color(p.text_secondary));

@@ -909,6 +909,9 @@ pub struct SketchColors {
     pub selected: Color32,
     /// Hilfsgeometrie.
     pub construction: Color32,
+    /// Projizierte Geometrie, die ihrer Herkunft folgt (Skizzen 6, lila wie in Fusion; gleich
+    /// der violetten Körperfarbe `BODY_COLORS[3]`).
+    pub projected: Color32,
     /// Kurven fertiger Skizzen in der 3D-Ansicht.
     pub finished: Color32,
     /// Widersprüchliche oder fehlerhafte Geometrie.
@@ -951,6 +954,7 @@ pub fn sketch_colors(dark: bool) -> SketchColors {
             determined: p.ok,
             selected: p.selection,
             construction: p.text_secondary,
+            projected: BODY_COLORS[3].dark,
             finished: rgb(0x7fb4ff),
             error: p.error,
             text: p.text_primary,
@@ -972,6 +976,7 @@ pub fn sketch_colors(dark: bool) -> SketchColors {
             determined: p.ok,
             selected: rgb(0xa86a00),
             construction: p.text_tertiary,
+            projected: BODY_COLORS[3].light,
             finished: p.chip_split.1,
             error: p.error,
             text: p.text_primary,

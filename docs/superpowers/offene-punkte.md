@@ -2308,3 +2308,8 @@ Umgesetzt 2026-11-03 bis 2026-11-06 auf dem Zweig `feature/skizzen-muster` (Spec
   - Für ein anzeigendes Maß zwischen Exemplaren öffnet das Bemaßen trotzdem das Wertfeld; eine getippte Zahl wird durch den gemessenen Wert ersetzt, die Meldung sagt das.
   - Bei jedem anzeigenden Maß (schon vor Skizzen 5) wird eine getippte Zahl still gespeichert, angezeigt wird der gemessene Wert.
   - Glatt zwischen Spline und elliptischem Bogen wird abgelehnt; ob Fusion es erlaubt, ist nicht geprüft (**Annahme**).
+
+## Teilprojekt Skizzen 6
+
+- „Verknüpfung aufheben“ steht als Knopf im Abschnitt „Bearbeiten“ des Skizzenfelds (nur, wenn eine gewählte Kurve eine Projektion ist) und als belegbare Aktion `skizze.verknuepfung_aufheben` ohne Vorgabetaste. Fusion bietet den Befehl im Rechtsklick-Menü der Kurve an; PlanoraCAD hat in der Skizzenansicht noch kein Rechtsklick-Menü (Rechtsklick bricht das Werkzeug ab). Nachholen, sobald es ein Kontextmenü für Skizzenkurven gibt.
+- Warnzeichen an der Browser-Zeile einer Skizze mit verlorenem Bezug: kleines gelbes Warnsymbol über der Ecke des Skizzensymbols, Text im Hinweis. Genaue Lage und Form wie in Fusion ist **Annahme**.

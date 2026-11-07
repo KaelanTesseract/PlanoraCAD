@@ -11,7 +11,7 @@ use crate::theme::{self, lighten as lighter, sketch_colors as colors};
 use crate::viewport;
 use egui::{Color32, FontId, Mesh, PointerButton, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2};
 use glam::{Vec2, Vec3};
-use planora_feature::FeatureId;
+use planora_feature::{FeatureId, FeatureKind, SketchFeature};
 use planora_i18n::tr;
 use planora_math::{DVec2, DVec3, Frame};
 use planora_render::{EdgeRef, OrbitCamera, Pick, exact_step, grid_radius, line_weight};
@@ -660,15 +660,28 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
                 })
             }));
         }
+        // Projektionen lila wie in Fusion (Skizzen 6), Konstruktion weiter gestrichelt.
+        let projected: HashSet<CurveId> = match state.document.feature(id).map(|f| &f.kind) {
+            Some(FeatureKind::Sketch(def)) => def.copies.iter().map(|c| c.curve).collect(),
+            _ => HashSet::new(),
+        };
         for (c, data) in sk.curves() {
             let Some(pl) = sk.curve_polyline(c, STEPS_PER_TURN) else {
                 continue;
             };
-            let stroke = if data.construction {
-                Stroke::new(FINISHED_CONSTRUCTION_WIDTH, col.construction)
+            let width = if data.construction {
+                FINISHED_CONSTRUCTION_WIDTH
             } else {
-                Stroke::new(FINISHED_WIDTH, col.finished)
+                FINISHED_WIDTH
             };
+            let color = if projected.contains(&c) {
+                col.projected
+            } else if data.construction {
+                col.construction
+            } else {
+                col.finished
+            };
+            let stroke = Stroke::new(width, color);
             for path in map.paths(&pl) {
                 out.extend(style_shapes(path, stroke, data.style()));
             }
@@ -1503,10 +1516,99 @@ fn curve_determined(report: Option<&SolveReport>, c: CurveId) -> bool {
     report.is_some_and(|r| r.status == SolveStatus::Solved && !r.free_curves.contains(&c))
 }
 
+/// Kurven und Punkte der offenen Skizze, die als Projektion ihrer Herkunft folgen (Skizzen 6):
+/// die Kurven aus den Kopien des Entwurfs und die Punkte, die diese Kurven benutzen.
+struct Projected {
+    curves: HashSet<CurveId>,
+    points: HashSet<PointId>,
+}
+
+impl Projected {
+    fn of(draft: &SketchFeature) -> Projected {
+        let curves: HashSet<CurveId> = draft.copies.iter().map(|c| c.curve).collect();
+        let points = curves
+            .iter()
+            .filter_map(|c| draft.sketch.curve(*c))
+            .flat_map(|d| d.kind.points())
+            .collect();
+        Projected { curves, points }
+    }
+}
+
+/// Farbe einer Kurve der offenen Skizze (ohne Aufhellung unter dem Zeiger): gewählt (auch die
+/// schon gewählten Kurven einer laufenden Art) > projiziert (lila wie Fusion, auch als
+/// Konstruktion; gestrichelt macht der Linienstil) > Konstruktion > bestimmt > frei.
+fn curve_ink(
+    col: &theme::SketchColors,
+    se: &SketchSession,
+    sk: &Sketch,
+    projected: &Projected,
+    c: CurveId,
+) -> Color32 {
+    let selected = se.selection.contains(&Item::Curve(c))
+        || se.pending_curves.contains(&c)
+        || dim_picked(se, Item::Curve(c));
+    if selected {
+        col.selected
+    } else if projected.curves.contains(&c) {
+        col.projected
+    } else if sk.curve(c).is_some_and(|d| d.construction) {
+        col.construction
+    } else if curve_determined(se.last_report.as_ref(), c) {
+        col.determined
+    } else {
+        col.free
+    }
+}
+
+/// Farbe eines Punkts der offenen Skizze (ohne Aufhellung): gewählt oder gezogen > Punkt einer
+/// projizierten Kurve (lila wie Fusion) > bestimmt > frei.
+fn point_ink(
+    col: &theme::SketchColors,
+    se: &SketchSession,
+    projected: &Projected,
+    p: PointId,
+) -> Color32 {
+    let selected = se.selection.contains(&Item::Point(p))
+        || se.dragging == Some(p)
+        || dim_picked(se, Item::Point(p));
+    if selected {
+        col.selected
+    } else if projected.points.contains(&p) {
+        col.projected
+    } else if point_determined(se.last_report.as_ref(), p) {
+        col.determined
+    } else {
+        col.free
+    }
+}
+
+/// Farbe, in der die Ansicht die Kurve `c` der offenen Skizze zeichnet (ohne Aufhellung unter
+/// dem Zeiger); ohne offene Skizze die Farbe freier Geometrie.
+pub fn curve_color(state: &AppState, c: CurveId) -> Color32 {
+    let col = colors(state.dark);
+    match (state.sketch_session.as_ref(), state.sketch_draft.as_ref()) {
+        (Some(se), Some(draft)) => curve_ink(&col, se, &draft.sketch, &Projected::of(draft), c),
+        _ => col.free,
+    }
+}
+
+/// Wie [`curve_color`] für den Punkt `p`.
+pub fn point_color(state: &AppState, p: PointId) -> Color32 {
+    let col = colors(state.dark);
+    match (state.sketch_session.as_ref(), state.sketch_draft.as_ref()) {
+        (Some(se), Some(draft)) => point_ink(&col, se, &Projected::of(draft), p),
+        _ => col.free,
+    }
+}
+
 fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
-    let (Some(se), Some(sk)) = (state.sketch_session.as_ref(), state.session_sketch()) else {
+    let (Some(se), Some(draft)) = (state.sketch_session.as_ref(), state.sketch_draft.as_ref())
+    else {
         return;
     };
+    let sk = &draft.sketch;
+    let projected = Projected::of(draft);
     let painter = ui.painter_at(rect);
     let col = colors(state.dark);
     let map = Mapper {
@@ -1575,19 +1677,7 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         let Some(pl) = sk.curve_polyline(c, STEPS_PER_TURN) else {
             continue;
         };
-        // Die schon gewählten Kurven einer laufenden Art leuchten wie die Auswahl.
-        let selected = se.selection.contains(&Item::Curve(c))
-            || se.pending_curves.contains(&c)
-            || dim_picked(se, Item::Curve(c));
-        let mut color = if selected {
-            col.selected
-        } else if data.construction {
-            col.construction
-        } else if curve_determined(report, c) {
-            col.determined
-        } else {
-            col.free
-        };
+        let mut color = curve_ink(&col, se, sk, &projected, c);
         if hovered == Some(Item::Curve(c)) {
             color = lighter(color);
         }
@@ -1605,17 +1695,8 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         let Some(s) = pos(sk, p).and_then(|q| map.to_screen(q)) else {
             continue;
         };
-        let selected = se.selection.contains(&Item::Point(p))
-            || se.dragging == Some(p)
-            || dim_picked(se, Item::Point(p));
         let determined = point_determined(report, p);
-        let mut color = if selected {
-            col.selected
-        } else if determined {
-            col.determined
-        } else {
-            col.free
-        };
+        let mut color = point_ink(&col, se, &projected, p);
         let hover = hovered == Some(Item::Point(p));
         if hover {
             color = lighter(color);

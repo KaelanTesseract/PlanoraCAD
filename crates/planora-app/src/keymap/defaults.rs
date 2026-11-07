@@ -174,6 +174,9 @@ action_table! {
     /// Wie der Knopf im Skizzenfeld: schaltet die ausgewählten Linien zwischen Mittellinie und
     /// normal um (ohne Vorgabetaste).
     SketchCenterline, "skizze.mittellinie", "action-sketch-centerline", Sketch, [];
+    /// Fusion „Verknüpfung aufheben“ (Skizzen 6): wie der Knopf im Skizzenfeld, nur mit
+    /// ausgewählten projizierten Kurven; ohne Vorgabetaste wie in Fusion.
+    SketchBreakLink, "skizze.verknuepfung_aufheben", "action-sketch-break-link", Sketch, [];
     // Skizzen 5: wie die Knöpfe im Skizzenfeld, auf die Auswahl; ohne Vorgabetaste wie in Fusion.
     /// Fusion „Konzentrisch“.
     SketchConcentric, "skizze.konzentrisch", "action-sketch-concentric", Sketch, [];

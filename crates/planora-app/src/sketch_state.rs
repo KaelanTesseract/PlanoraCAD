@@ -2688,6 +2688,28 @@ impl SketchSession {
         }
     }
 
+    /// Lässt sich „Verknüpfung aufheben“ anwenden (Skizzen 6): Mindestens eine ausgewählte
+    /// Kurve ist eine Projektion des Entwurfs `sf`.
+    pub fn can_break_links(&self, sf: &SketchFeature) -> bool {
+        self.selected_curves()
+            .iter()
+            .any(|c| sf.copies.iter().any(|copy| copy.curve == *c))
+    }
+
+    /// „Verknüpfung aufheben“ (Fusion „Break Link“) für alle ausgewählten projizierten Kurven:
+    /// Sie bleiben, folgen ihrer Herkunft aber nicht mehr. Der nächste Skizzenschritt trägt den
+    /// Namen des Befehls. `true`, wenn sich etwas änderte.
+    pub fn break_links(&mut self, sf: &mut SketchFeature) -> bool {
+        let mut changed = false;
+        for c in self.selected_curves() {
+            changed |= sf.break_link(c);
+        }
+        if changed {
+            self.edit_label = Some(crate::msg!("action-sketch-break-link"));
+        }
+        changed
+    }
+
     /// Schaltet bei den ausgewählten Kurven die Konstruktionseigenschaft um.
     pub fn toggle_construction(&mut self, sk: &mut Sketch) {
         for item in &self.selection {

@@ -120,6 +120,8 @@ pub enum Icon {
     Angle,
     /// Phosphor `circle-dashed`.
     ToggleConstruction,
+    /// Phosphor `link-break` (Skizzen 6, „Verknüpfung aufheben“).
+    BreakLink,
     /// Phosphor `flip-horizontal`.
     Mirror,
     /// Phosphor `dots-nine`.
@@ -242,6 +244,7 @@ pub const ALL: &[Icon] = &[
     Icon::Distance,
     Icon::Angle,
     Icon::ToggleConstruction,
+    Icon::BreakLink,
     Icon::Mirror,
     Icon::Pattern,
     Icon::EndSketch,
@@ -332,6 +335,7 @@ const TABLE: &[(Icon, char, &str)] = &[
     (Icon::Distance, '\u{e0a0}', "arrows-left-right"),
     (Icon::Angle, '\u{e7bc}', "angle"),
     (Icon::ToggleConstruction, '\u{e602}', "circle-dashed"),
+    (Icon::BreakLink, '\u{e2e4}', "link-break"),
     (Icon::Mirror, '\u{ed6a}', "flip-horizontal"),
     (Icon::Pattern, '\u{e1fc}', "dots-nine"),
     (Icon::EndSketch, '\u{e184}', "check-circle"),

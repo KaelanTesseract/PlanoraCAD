@@ -1129,6 +1129,9 @@ fn side_contents(
     {
         ui.colored_label(theme::palette(ui.visuals().dark_mode).error, m);
     }
+    // „Verknüpfung aufheben“ gibt es nur, wenn eine gewählte Kurve eine Projektion ist.
+    let can_break_link = se.can_break_links(sf);
+    let mut break_link = false;
     let sk = &mut sf.sketch;
     ui.separator();
 
@@ -1178,6 +1181,22 @@ fn side_contents(
         {
             se.toggle_centerline_if_possible(sk);
         }
+        if can_break_link
+            && tool_button(
+                ui,
+                IconSource::Font(Icon::BreakLink),
+                &break_link_label(),
+                true,
+            )
+            .on_hover_text(with_hint(
+                &crate::keymap::mouse::current(ui.ctx()),
+                Action::SketchBreakLink,
+                &tr!("sketch-break-link-hint"),
+            ))
+            .clicked()
+        {
+            break_link = true;
+        }
         if tool_button(
             ui,
             IconSource::Font(Icon::Mirror),
@@ -1217,7 +1236,10 @@ fn side_contents(
             se.delete_selection(sk);
         }
     });
-    sections(ui, se, sk, panel);
+    if break_link {
+        se.break_links(sf);
+    }
+    sections(ui, se, &mut sf.sketch, panel);
     // In einer Zeile wäre die Beschriftung breiter als das Feld (250): zweizeilig; die Erklärung
     // steht im Hinweistext.
     ui.add(theme::Toggle::new(
@@ -1755,4 +1777,9 @@ pub fn centerline() -> String {
 /// Beschriftung des Knopfs „Konstruktion umschalten“ (gleich dem Namen seiner Aktion).
 pub fn construction() -> String {
     Action::SketchConstruction.label()
+}
+
+/// Beschriftung des Knopfs „Verknüpfung aufheben“ (gleich dem Namen seiner Aktion).
+pub fn break_link_label() -> String {
+    Action::SketchBreakLink.label()
 }

@@ -258,6 +258,13 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                 se.toggle_centerline_if_possible(sk);
             }
         }
+        Action::SketchBreakLink => {
+            // Wie der Knopf: alle gewählten Projektionen in einem Schritt (der Verlauf erfasst
+            // die Änderung am Ende des Bildes).
+            if let Some((se, sf)) = ws.active_tab_mut().state.session_draft_mut() {
+                se.break_links(sf);
+            }
+        }
         Action::SketchConcentric | Action::SketchCollinear | Action::SketchSmooth => {
             use crate::sketch_state::ConstraintAction as C;
             let action = match a {

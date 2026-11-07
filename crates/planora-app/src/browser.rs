@@ -22,6 +22,8 @@ const FOLDER_INDENT: f32 = 14.0;
 const STATUS_GAP: f32 = 10.0;
 /// Größe der Zeilensymbole.
 const ICON_SIZE: f32 = 16.0;
+/// Größe des Warnzeichens an einer Skizzenzeile mit Warnung, als Anteil der Symbolgröße.
+const WARN_BADGE: f32 = 0.7;
 /// Größe des Pfeils vor einem Ordner.
 const CARET: f32 = 8.0;
 /// Breite des Auges vor einer Körperzeile und Größe seines Symbols.
@@ -273,6 +275,17 @@ pub fn apply_rename(state: &mut AppState) -> Result<(), String> {
     }
 }
 
+/// Warnung der Skizzenzeile `id` im Browser (Hinweistext neben dem Warnzeichen): die Warnung
+/// des Features bei sonst gelungener Berechnung, etwa verlorener Bezug einer Projektion
+/// (Skizzen 6).
+pub fn sketch_row_warning(state: &AppState, id: FeatureId) -> Option<String> {
+    state
+        .document
+        .feature(id)
+        .and_then(|f| f.warning())
+        .map(str::to_string)
+}
+
 /// Text für die Statuszeile: der Fehler des ersten Features mit Status `Error`.
 pub fn status_text(state: &AppState) -> Option<String> {
     state
@@ -450,6 +463,8 @@ struct SketchRow {
     name: String,
     suppressed: bool,
     status: FeatureStatus,
+    /// Warnung bei sonst gelungener Berechnung (Skizzen 6: verlorener Bezug einer Projektion).
+    warning: Option<String>,
 }
 
 /// Angaben einer Körperzeile: ein sichtbarer Körper oder, wenn von einem Körper gerade nichts
@@ -1045,11 +1060,13 @@ fn sketches(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
             name: f.name.clone(),
             suppressed: f.suppressed,
             status: f.status.clone(),
+            warning: sketch_row_warning(state, f.id),
         })
         .collect();
     if rows.is_empty() {
         ui.weak(no_sketches());
     }
+    let warn_color = theme::palette(ui.visuals().dark_mode).warning;
     for r in rows {
         let id = r.id;
         let selected = state.selected_feature == Some(id) || open == Some(id);
@@ -1059,6 +1076,8 @@ fn sketches(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
             r.name.clone()
         };
         let (status, color, reason) = status_view(&r.status, weak, row_error(ui));
+        // Mit Warnung: Warnzeichen über der Ecke des Symbols, der Text im Hinweis (wie Fusion).
+        let warned = r.warning.is_some();
         let resp = row(
             ui,
             0.0,
@@ -1067,9 +1086,23 @@ fn sketches(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
             color,
             status.as_deref().zip(color),
             None,
-            |p, rect, c| paint_feature_icon(p, rect, FeatureIcon::Sketch, c),
+            |p, rect, c| {
+                paint_feature_icon(p, rect, FeatureIcon::Sketch, c);
+                if warned {
+                    let size = rect.width() * WARN_BADGE;
+                    let badge = egui::Rect::from_min_size(
+                        rect.right_bottom() - vec2(size, size) * 0.75,
+                        vec2(size, size),
+                    );
+                    paint_source(p, badge, IconSource::Font(Icon::Warning), warn_color);
+                }
+            },
         )
-        .on_hover_text(reason.unwrap_or_else(|| tr!("tree-sketch-hint")));
+        .on_hover_text(
+            reason
+                .or(r.warning.clone())
+                .unwrap_or_else(|| tr!("tree-sketch-hint")),
+        );
         if resp.double_clicked() {
             *action = Some(Action::Edit(id));
         } else if resp.clicked() {

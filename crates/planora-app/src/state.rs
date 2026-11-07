@@ -2081,6 +2081,8 @@ impl AppState {
         // Ein Befehl ohne fertige Form hinterlässt nichts, auch beim Beenden der Skizze.
         se.drop_open_points(&mut draft.sketch);
         se.clear_pending();
+        // Projektionen gelöschter Kurven werden nicht gespeichert (Skizzen 6; beim Laden ebenso).
+        draft.prune_copies();
         let id = se.sketch;
         let Some(FeatureKind::Sketch(def)) = self.document.feature(id).map(|f| &f.kind) else {
             return Ok(());
@@ -2139,6 +2141,31 @@ impl AppState {
         }
         self.commit_draft()?;
         self.restore_camera();
+        Ok(())
+    }
+
+    /// „Verknüpfung aufheben“ (Skizzen 6, Fusion „Break Link“): Die projizierte Kurve `curve`
+    /// der offenen Skizze folgt ihrer Herkunft nicht mehr, Lage und Fixierung bleiben. Ein
+    /// eigener Skizzen-Rückgängig-Schritt; Rückgängig stellt die Verknüpfung wieder her.
+    /// Fehler (Meldung auch in `message`): keine offene Skizze, oder `curve` ist keine
+    /// Projektion.
+    pub fn break_projection_link(&mut self, curve: CurveId) -> Result<(), String> {
+        if self.sketch_session.is_none() || self.sketch_draft.is_none() {
+            return self.fail(tr!("state-no-open-sketch"));
+        }
+        // Offene Änderungen vorher als eigener Schritt, damit dieser nur das Lösen enthält.
+        self.observe_sketch(false);
+        let broken = self
+            .sketch_draft
+            .as_mut()
+            .is_some_and(|d| d.break_link(curve));
+        if !broken {
+            return self.fail(tr!("state-curve-not-projected"));
+        }
+        if let Some(se) = self.sketch_session.as_mut() {
+            se.edit_label = Some(crate::msg!("action-sketch-break-link"));
+        }
+        self.observe_sketch(false);
         Ok(())
     }
 
