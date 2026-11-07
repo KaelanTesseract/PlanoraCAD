@@ -260,6 +260,20 @@ fn concentric_needs_round_curves_and_says_when_the_centre_is_shared() {
         press(&c, &mut app, "Konzentrisch");
         assert_eq!(sk(&mut app).revision(), rev);
         assert_eq!(message(&mut app), Some(tr!("sketch-concentric-kinds")));
+        {
+            let se = state(&mut app).sketch_session.as_ref().unwrap();
+            assert_eq!(
+                se.tool,
+                planora_app::sketch_state::Tool::Constraint(ConstraintAction::Concentric)
+            );
+            assert!(se.selection.is_empty(), "die unpassende Auswahl fällt weg");
+        }
+        // Esc beendet den Befehl; die Prüfungen unten gelten dem Sofort-Weg aus dem Auswählen.
+        {
+            let (se, s) = state(&mut app).session_sketch_mut().unwrap();
+            se.cancel(s);
+            assert_eq!(se.tool, planora_app::sketch_state::Tool::Select);
+        }
         // Über `apply` sagt die Meldung dasselbe.
         select(&mut app, vec![Item::Curve(c1), Item::Curve(l)]);
         {
@@ -297,6 +311,11 @@ fn concentric_needs_round_curves_and_says_when_the_centre_is_shared() {
         let dof_before = dof(&mut app);
         press(&c, &mut app, "Konzentrisch");
         assert_eq!(dof(&mut app), dof_before - 2, "{:?}", message(&mut app));
+        assert_eq!(
+            state(&mut app).sketch_session.as_ref().unwrap().tool,
+            planora_app::sketch_state::Tool::Select,
+            "mit passender Auswahl kein Befehl"
+        );
     });
 }
 

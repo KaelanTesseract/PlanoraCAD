@@ -1370,8 +1370,14 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
                 }
             }
         } else if matches!(se.tool, Tool::Constraint(_)) {
-            // Abhängigkeitsbefehl: Der erste Klick hat schon gewählt; der zweite wählt ihn nicht
-            // wieder ab und schließt nichts ab.
+            // Abhängigkeitsbefehl: Trifft der schnelle zweite Klick etwas anderes (zwei nahe
+            // Punkte für Deckungsgleich), wählt er es wie jeder Klick; derselbe Bezug wird nicht
+            // wieder abgewählt, und nichts schließt ab.
+            if let Some(at) = at
+                && se.constraint_second_click_counts(&sf.sketch, at, radius)
+            {
+                let _ = se.click(&mut sf.sketch, at, radius, shift);
+            }
         } else if se.runs_pattern() {
             // Anordnung: Der zweite schnelle Klick schaltet das nächste Exemplar wie jeder Klick
             // (ein Doppelklick schließt nichts ab).
@@ -1542,6 +1548,12 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
             Snap::Curve(c) | Snap::Midpoint(c) => Some(Item::Curve(c)),
             _ => None,
         })
+    } else if matches!(se.tool, Tool::Constraint(_)) {
+        // Abhängigkeitsbefehl: hervorgehoben ist, was der Klick wählen würde (passt der Punkt
+        // nicht, die Kurve darunter), und nichts, was er ablehnt.
+        pointer
+            .and_then(|p| Some((map.to_sketch(p)?, map.radius_at(p)?)))
+            .and_then(|(at, r)| se.constraint_hover(sk, at, r))
     } else {
         pointer
             .filter(|_| !se.is_dragging())

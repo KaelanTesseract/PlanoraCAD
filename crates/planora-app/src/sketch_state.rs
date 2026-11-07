@@ -474,6 +474,9 @@ pub struct SketchSession {
     pub dim: DimToolState,
     /// Rechteckige und Kreisförmige Anordnung.
     pub pattern: crate::sketch_pattern::PatternToolState,
+    /// Abhängigkeitsbefehl: der Bezug, den der letzte Klick gewählt oder abgewählt hat (für einen
+    /// schnellen zweiten Klick, [`constraint_second_click_counts`](Self::constraint_second_click_counts)).
+    pub constraint_last: Option<Item>,
 }
 
 /// Was vor einer Änderung gesichert wird, um sie bei einem Fehler zurückzunehmen.
@@ -591,6 +594,7 @@ impl SketchSession {
             grip_drag: None,
             dim: DimToolState::default(),
             pattern: Default::default(),
+            constraint_last: None,
         }
     }
 
@@ -614,6 +618,7 @@ impl SketchSession {
         if matches!(self.tool, Tool::Constraint(_)) && !matches!(tool, Tool::Constraint(_)) {
             self.selection.clear();
         }
+        self.constraint_last = None;
         self.tool = tool;
         // Ein Werkzeugwechsel beendet die Klick-Auswahl.
         self.drop_curve_picks();
@@ -1870,15 +1875,30 @@ impl SketchSession {
             return Ok(());
         }
         self.end_drag(sk);
-        let keep = constraint_fit(sk, action, &self.selection) == Fit::Partial;
-        let refusal = (!keep && !self.selection.is_empty())
-            .then(|| constraint_mismatch(sk, action, &self.selection));
-        let (selection, picks) = (self.selection.clone(), self.curve_picks.clone());
+        // Einträge der Liste sind keine Bezüge: Sie fallen weg, ohne dass das eine Meldung wäre.
+        let geometry = geometry_of(sk, &self.selection);
+        let keep = constraint_fit(sk, action, &geometry) == Fit::Partial;
+        let refusal = (!keep && !geometry.is_empty()).then(|| {
+            kinds_refusal(sk, action, &geometry).unwrap_or_else(|| {
+                crate::msg!(
+                    "sketch-command-wrong-selection",
+                    action = action.label_msg(),
+                    need = need_msg(action)
+                )
+            })
+        });
+        let picks = self.curve_picks.clone();
+        let same = geometry == self.selection;
         self.set_tool(sk, Tool::Constraint(action));
         if keep {
-            // Der Werkzeugwechsel ersetzt die Auswahl nicht: Ihre Klicklagen gelten weiter.
-            self.selection = selection;
-            self.curve_picks = picks;
+            // Der Werkzeugwechsel ersetzt die Auswahl nicht: Ihre Klicklagen gelten weiter. Fiel
+            // ein Listeneintrag weg, ist es eine andere Auswahl, ohne Klicklagen.
+            self.selection = geometry;
+            if same {
+                self.curve_picks = picks;
+            } else {
+                self.drop_curve_picks();
+            }
         } else {
             self.selection.clear();
             self.drop_curve_picks();
@@ -1887,12 +1907,90 @@ impl SketchSession {
         Ok(())
     }
 
-    /// Klick im Abhängigkeitsbefehl: wählt den Bezug unter dem Zeiger (Punkt vor Kurve; passt der
-    /// Punkt nicht, aber die Kurve, die Kurve) oder wählt einen schon gewählten wieder ab. Passt
-    /// keiner, ist die Meldung der Grund, und die Auswahl bleibt ([`atomic`](Self::atomic)).
-    /// Reicht die Auswahl, entsteht die Abhängigkeit (ein Schritt), die Auswahl leert sich, und
-    /// der Befehl bleibt. Scheitert das Anlegen (Widerspruch …), bleibt die Meldung, und die
-    /// Auswahl leert sich ebenso, damit das nächste Paar frisch beginnt.
+    /// Was ein Klick im Abhängigkeitsbefehl an der Stelle `at` wählen würde: `Ok(None)`, wenn dort
+    /// nichts liegt; `Err` mit der Meldung, wenn dort nichts passt. Punkt vor Kurve; passt der
+    /// Punkt nicht, aber die Kurve, die Kurve. Ein schon gewählter Bezug zählt (er wird abgewählt).
+    fn constraint_target(
+        &self,
+        sk: &Sketch,
+        action: ConstraintAction,
+        at: DVec2,
+        radius: f64,
+    ) -> Result<Option<Item>, Msg> {
+        let selection = geometry_of(sk, &self.selection);
+        let candidates: Vec<Item> = [
+            sk.pick_point(at, radius).map(Item::Point),
+            sk.pick_curve(at, radius).map(Item::Curve),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if candidates.is_empty() {
+            return Ok(None);
+        }
+        let with = |item: Item| {
+            let mut items = selection.clone();
+            items.push(item);
+            items
+        };
+        if let Some(item) = candidates
+            .iter()
+            .copied()
+            .find(|&i| selection.contains(&i) || constraint_fit(sk, action, &with(i)) != Fit::No)
+        {
+            return Ok(Some(item));
+        }
+        // Die Meldung gilt der Kurve, wenn eine da ist (ein Klick nahe einem Linienende meint
+        // meist die Linie).
+        let blame = candidates
+            .iter()
+            .copied()
+            .find(|i| matches!(i, Item::Curve(_)))
+            .unwrap_or(candidates[0]);
+        let items = with(blame);
+        Err(kinds_refusal(sk, action, &items).unwrap_or_else(|| {
+            crate::msg!(
+                "sketch-command-wrong-pick",
+                action = action.label_msg(),
+                need = need_msg(action)
+            )
+        }))
+    }
+
+    /// Bezug unter dem Zeiger, den ein Klick im laufenden Abhängigkeitsbefehl wählen (oder
+    /// abwählen) würde, für die Hervorhebung; `None` außerhalb des Befehls oder wenn dort nichts
+    /// passt.
+    pub fn constraint_hover(&self, sk: &Sketch, at: DVec2, radius: f64) -> Option<Item> {
+        let Tool::Constraint(action) = self.tool else {
+            return None;
+        };
+        self.constraint_target(sk, action, at, radius)
+            .ok()
+            .flatten()
+    }
+
+    /// Gilt ein schneller zweiter Klick (egui: Doppelklick) im Abhängigkeitsbefehl als eigener
+    /// Klick? Ja, wenn er etwas anderes trifft als der Klick davor (etwa zwei nahe Punkte für
+    /// Deckungsgleich) oder dort nichts passt (dann kommt die Meldung); trifft er denselben Bezug,
+    /// tut er nichts (kein Abwählen, kein zweites Anlegen).
+    pub fn constraint_second_click_counts(&self, sk: &Sketch, at: DVec2, radius: f64) -> bool {
+        let Tool::Constraint(action) = self.tool else {
+            return false;
+        };
+        match self.constraint_target(sk, action, at, radius) {
+            Ok(Some(item)) => self.constraint_last != Some(item),
+            Ok(None) => false,
+            Err(_) => true,
+        }
+    }
+
+    /// Klick im Abhängigkeitsbefehl: wählt den Bezug unter dem Zeiger
+    /// ([`constraint_target`](Self::constraint_target)) oder wählt einen schon gewählten wieder
+    /// ab. Passt keiner, ist die Meldung der Grund, und die Auswahl bleibt
+    /// ([`atomic`](Self::atomic)). Reicht die Auswahl, entsteht die Abhängigkeit (ein Schritt),
+    /// die Auswahl leert sich, und der Befehl bleibt. Scheitert das Anlegen (Widerspruch …),
+    /// bleibt die Meldung, und die Auswahl leert sich ebenso, damit das nächste Paar frisch
+    /// beginnt.
     fn click_constraint(
         &mut self,
         sk: &mut Sketch,
@@ -1902,36 +2000,15 @@ impl SketchSession {
     ) -> Result<(), Msg> {
         self.forget_stale_picks();
         // Was nicht Punkt oder Kurve ist (etwa ein Eintrag der Liste), ist kein Bezug.
-        let before = self.selection.len();
-        self.selection.retain(|i| match *i {
-            Item::Point(p) => sk.point_xy(p).is_ok(),
-            Item::Curve(c) => sk.curve(c).is_some(),
-            Item::Constraint(_) => false,
-        });
-        if self.selection.len() != before {
+        let geometry = geometry_of(sk, &self.selection);
+        if geometry != self.selection {
+            self.selection = geometry;
             self.drop_curve_picks();
         }
-        let candidates: Vec<Item> = [
-            sk.pick_point(at, radius).map(Item::Point),
-            sk.pick_curve(at, radius).map(Item::Curve),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
-        let Some(&first) = candidates.first() else {
+        let Some(item) = self.constraint_target(sk, action, at, radius)? else {
             return Ok(());
         };
-        let with = |item: Item| {
-            let mut items = self.selection.clone();
-            items.push(item);
-            items
-        };
-        let chosen = candidates.iter().copied().find(|&i| {
-            self.selection.contains(&i) || constraint_fit(sk, action, &with(i)) != Fit::No
-        });
-        let Some(item) = chosen else {
-            return Err(constraint_mismatch(sk, action, &with(first)));
-        };
+        self.constraint_last = Some(item);
         if let Some(k) = self.selection.iter().position(|&s| s == item) {
             self.selection.remove(k);
             self.sync_picks();
@@ -2447,6 +2524,15 @@ impl SketchSession {
     /// mitgelöschter) Kurven, die danach nichts mehr benutzt, werden mit entfernt; andere freie
     /// Punkte bleiben.
     pub fn delete_selection(&mut self, sk: &mut Sketch) {
+        // Im Abhängigkeitsbefehl gehört die Auswahl dem Befehl: Entf löscht nichts, es nimmt nur
+        // die halbe Auswahl zurück.
+        if matches!(self.tool, Tool::Constraint(_)) {
+            self.message = None;
+            self.selection.clear();
+            self.drop_curve_picks();
+            self.constraint_last = None;
+            return;
+        }
         // Eine Einheit: Lehnt die Skizze einen Teil ab (das Abwählen eines Exemplars brächte ein
         // Muster in eine Schleife, ein Musterwert bleibt), bleibt alles, wie es war, und die
         // Meldung nennt den Grund. `atomic` meldet aufgelöste Muster.
@@ -2887,8 +2973,14 @@ fn constraint_fit(sk: &Sketch, action: ConstraintAction, items: &[Item]) -> Fit 
 }
 
 /// Meldung, wenn `items` nicht zu `action` passen: Bei Konzentrisch und Glatt mit Kurven der
-/// falschen Art sagt sie, welche gehen.
+/// falschen Art sagt sie, welche gehen ([`kinds_refusal`]), sonst allgemein.
 fn constraint_mismatch(sk: &Sketch, action: ConstraintAction, items: &[Item]) -> Msg {
+    kinds_refusal(sk, action, items)
+        .unwrap_or_else(|| crate::msg!("sketch-action-mismatch", action = action.label_msg()))
+}
+
+/// Bei Konzentrisch und Glatt mit Kurven der falschen Art die Meldung, welche gehen.
+fn kinds_refusal(sk: &Sketch, action: ConstraintAction, items: &[Item]) -> Option<Msg> {
     let curves_only = sort_items(sk, items).filter(|s| s.points.is_empty() && !s.curves.is_empty());
     let wrong_kind = |ok: &dyn Fn(CurveId) -> bool| {
         curves_only
@@ -2897,13 +2989,49 @@ fn constraint_mismatch(sk: &Sketch, action: ConstraintAction, items: &[Item]) ->
     };
     match action {
         ConstraintAction::Concentric if wrong_kind(&|c| round_center(sk, c).is_some()) => {
-            crate::msg!("sketch-concentric-kinds")
+            Some(crate::msg!("sketch-concentric-kinds"))
         }
         ConstraintAction::Smooth if wrong_kind(&|c| smooth_partner(sk, c)) => {
-            crate::msg!("sketch-smooth-kinds")
+            Some(crate::msg!("sketch-smooth-kinds"))
         }
-        _ => crate::msg!("sketch-action-mismatch", action = action.label_msg()),
+        _ => None,
     }
+}
+
+/// Was eine geometrische Abhängigkeit braucht, für die Meldungen des Befehls („… braucht zwei
+/// Linien“). Maße haben keinen Befehl; dann ihr Name.
+fn need_msg(action: ConstraintAction) -> Msg {
+    use ConstraintAction::*;
+    match action {
+        Coincident => crate::msg!("sketch-command-coincident-need"),
+        Horizontal => crate::msg!("sketch-command-horizontal-need"),
+        Vertical => crate::msg!("sketch-command-vertical-need"),
+        Parallel => crate::msg!("sketch-command-parallel-need"),
+        Perpendicular => crate::msg!("sketch-command-perpendicular-need"),
+        Tangent => crate::msg!("sketch-command-tangent-need"),
+        Equal => crate::msg!("sketch-command-equal-need"),
+        Fixed => crate::msg!("sketch-command-fixed-need"),
+        Midpoint => crate::msg!("sketch-command-midpoint-need"),
+        Symmetric => crate::msg!("sketch-command-symmetric-need"),
+        PointOnCurve => crate::msg!("sketch-command-point-on-curve-need"),
+        Concentric => crate::msg!("sketch-command-concentric-need"),
+        Collinear => crate::msg!("sketch-command-collinear-need"),
+        Smooth => crate::msg!("sketch-command-smooth-need"),
+        Distance | DistancePointLine | Radius | Diameter | Angle => action.label_msg(),
+    }
+}
+
+/// Die Punkte und Kurven aus `items`, die es noch gibt (ohne Einträge der Liste).
+fn geometry_of(sk: &Sketch, items: &[Item]) -> Vec<Item> {
+    items
+        .iter()
+        .copied()
+        .filter(|i| match *i {
+            Item::Point(p) => sk.point_xy(p).is_ok(),
+            Item::Curve(c) => sk.curve(c).is_some(),
+            Item::Constraint(_) => false,
+        })
+        .collect()
 }
 
 /// Kann die Kurve `c` an einem Glatt teilhaben (Spline, Linie oder Bogen)?

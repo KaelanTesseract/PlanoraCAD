@@ -105,7 +105,7 @@ thread_local! {
 }
 
 /// Ein Bild der Ansicht; danach schreibt es den Verlauf fort wie die App. Die Zeit läuft je Bild
-/// eine halbe Sekunde, so zählt egui zwei Klicks nie als Doppelklick (außer [`double_click`]).
+/// eine halbe Sekunde, so zählt egui zwei Klicks nie als Doppelklick (kürzere Schritte für einen Doppelklick).
 fn frame_at(ctx: &egui::Context, s: &mut AppState, events: Frame, step: f64) {
     let time = TIME.with(|t| {
         t.set(t.get() + step);
@@ -137,18 +137,6 @@ fn click(ctx: &egui::Context, s: &mut AppState, at: DVec2) {
     frame(ctx, s, vec![moved(p)]);
     frame(ctx, s, vec![moved(p), button(p, left, true)]);
     frame(ctx, s, vec![button(p, left, false)]);
-    frame(ctx, s, vec![]);
-}
-
-/// Doppelklick in der Ansicht an der Skizzenstelle `at` (vorher ist der Zeiger dort).
-fn double_click(ctx: &egui::Context, s: &mut AppState, at: DVec2) {
-    let p = screen(s, at);
-    let left = egui::PointerButton::Primary;
-    frame(ctx, s, vec![moved(p)]);
-    for _ in 0..2 {
-        frame_at(ctx, s, vec![button(p, left, true)], 0.02);
-        frame_at(ctx, s, vec![button(p, left, false)], 0.02);
-    }
     frame(ctx, s, vec![]);
 }
 
@@ -300,8 +288,235 @@ fn a_line_is_refused_by_concentric_and_the_command_goes_on() {
         click(&ctx, &mut s, v(0.0, -15.0));
         assert_eq!(message(&s), Some(tr!("sketch-concentric-kinds")));
         assert_eq!(se(&s).selection.len(), 1);
+        // Nachbesserung 4: Auch auf dem Linienende (dort liegt zuerst ein Punkt) dieselbe Meldung.
+        click(&ctx, &mut s, v(20.0, -15.0));
+        assert_eq!(message(&s), Some(tr!("sketch-concentric-kinds")));
+        assert_eq!(se(&s).selection.len(), 1);
         click(&ctx, &mut s, v(17.0, 6.0));
         assert_eq!(live(&s).len(), before + 1, "{:?}", message(&s));
+    });
+}
+
+/// Nachbesserung 4: Ein unpassender Bezug sagt, was die Art braucht.
+#[test]
+fn a_wrong_pick_says_what_is_needed() {
+    with_lang(&german(), || {
+        let ctx = context();
+        let (mut s, (l1, l2, l3)) = sketch_with(|sk| {
+            circle(sk, -10.0, 0.0, 4.0);
+            (
+                line(sk, (-20.0, -15.0), (20.0, -15.0)).0,
+                line(sk, (-20.0, 15.0), (20.0, 18.0)).0,
+                line(sk, (-20.0, 25.0), (20.0, 20.0)).0,
+            )
+        });
+        frame(&ctx, &mut s, vec![]);
+        press(&mut s, A::Parallel);
+        click(&ctx, &mut s, v(-6.0, 0.0));
+        let text = message(&s).unwrap_or_default();
+        assert!(
+            text.contains(&tr!("sketch-command-parallel-need")),
+            "{text}"
+        );
+        assert!(text.contains(&tr!("sketch-constraint-parallel")), "{text}");
+        assert!(se(&s).selection.is_empty());
+        // Beim Start mit unpassender Auswahl (drei Linien) ebenso.
+        {
+            let (se, _) = s.session_sketch_mut().unwrap();
+            se.selection = vec![Item::Curve(l1), Item::Curve(l2), Item::Curve(l3)];
+        }
+        press(&mut s, A::Perpendicular);
+        let text = message(&s).unwrap_or_default();
+        assert!(
+            text.contains(&tr!("sketch-command-perpendicular-need")),
+            "{text}"
+        );
+        assert_eq!(se(&s).tool, Tool::Constraint(A::Perpendicular));
+        assert!(se(&s).selection.is_empty());
+    });
+}
+
+/// Nachbesserung 5: Ein gewählter Listeneintrag ist kein Bezug und keine Meldung wert.
+#[test]
+fn a_selected_list_entry_does_not_count_and_says_nothing() {
+    with_lang(&german(), || {
+        let ctx = context();
+        let (mut s, l) = sketch_with(|sk| line(sk, (-20.0, -15.0), (20.0, -10.0)).0);
+        let k = {
+            let (_, sk) = s.session_sketch_mut().unwrap();
+            let p = sk.add_point(30.0, 0.0).unwrap();
+            let q = sk.add_point(40.0, 5.0).unwrap();
+            sk.add_constraint(K::Coincident(p, q)).unwrap()
+        };
+        s.observe_sketch(false);
+        frame(&ctx, &mut s, vec![]);
+        s.sketch_session.as_mut().unwrap().selection = vec![Item::Constraint(k)];
+        press(&mut s, A::Horizontal);
+        assert_eq!(message(&s), None);
+        assert_eq!(se(&s).tool, Tool::Constraint(A::Horizontal));
+        assert!(se(&s).selection.is_empty());
+        // Neben einer passenden Linie fällt nur der Eintrag weg; die Linie zählt als Anfang.
+        {
+            let (se, sk) = s.session_sketch_mut().unwrap();
+            se.cancel(sk);
+        }
+        s.sketch_session.as_mut().unwrap().selection = vec![Item::Constraint(k), Item::Curve(l)];
+        press(&mut s, A::Parallel);
+        assert_eq!(message(&s), None);
+        assert_eq!(se(&s).tool, Tool::Constraint(A::Parallel));
+        assert_eq!(se(&s).selection, vec![Item::Curve(l)]);
+    });
+}
+
+/// Nachbesserung 3: Hervorgehoben ist, was der Klick wählt.
+#[test]
+fn the_hover_shows_what_the_click_takes() {
+    with_lang(&german(), || {
+        let ctx = context();
+        let (mut s, (l, a)) = sketch_with(|sk| {
+            circle(sk, -10.0, 0.0, 4.0);
+            let (l, a, _) = line(sk, (-20.0, -15.0), (20.0, -15.0));
+            (l, a)
+        });
+        frame(&ctx, &mut s, vec![]);
+        let r = 0.5;
+        let end = v(-20.0, -15.0);
+        // Im Auswählen ist am Linienende der Punkt dran.
+        assert_eq!(
+            se(&s).snap(sk(&s), end, r),
+            planora_app::sketch_state::Snap::Point(a)
+        );
+        assert_eq!(se(&s).constraint_hover(sk(&s), end, r), None, "kein Befehl");
+        press(&mut s, A::Parallel);
+        assert_eq!(
+            se(&s).constraint_hover(sk(&s), end, r),
+            Some(Item::Curve(l))
+        );
+        assert_eq!(
+            se(&s).constraint_hover(sk(&s), v(-6.0, 0.0), r),
+            None,
+            "Kreis passt nicht"
+        );
+        press(&mut s, A::Coincident);
+        assert_eq!(
+            se(&s).constraint_hover(sk(&s), end, r),
+            Some(Item::Point(a))
+        );
+    });
+}
+
+/// Nachbesserung 2: Zwei schnelle Klicks auf zwei nahe Punkte (egui: Doppelklick) wählen beide.
+#[test]
+fn two_quick_clicks_on_two_near_points_make_coincident() {
+    with_lang(&german(), || {
+        let ctx = context();
+        let (mut s, p) = sketch_with(|sk| sk.add_point(0.0, 0.0).unwrap());
+        // 4 Pixel daneben (egui zählt bis 6 Pixel als Doppelklick).
+        let per_px = 10.0 / (screen(&s, v(10.0, 0.0)).x - screen(&s, v(0.0, 0.0)).x) as f64;
+        let q_at = v(4.0 * per_px, 0.0);
+        let q = s
+            .session_sketch_mut()
+            .unwrap()
+            .1
+            .add_point(q_at.x, q_at.y)
+            .unwrap();
+        s.observe_sketch(false);
+        let before = live(&s).len();
+        frame(&ctx, &mut s, vec![]);
+        press(&mut s, A::Coincident);
+        let (sp, sq) = (screen(&s, v(0.0, 0.0)), screen(&s, q_at));
+        assert!(sp.distance(sq) < 6.0);
+        let left = egui::PointerButton::Primary;
+        frame(&ctx, &mut s, vec![moved(sp)]);
+        frame_at(&ctx, &mut s, vec![button(sp, left, true)], 0.02);
+        frame_at(&ctx, &mut s, vec![button(sp, left, false)], 0.02);
+        frame_at(&ctx, &mut s, vec![moved(sq)], 0.02);
+        frame_at(&ctx, &mut s, vec![button(sq, left, true)], 0.02);
+        frame_at(&ctx, &mut s, vec![button(sq, left, false)], 0.02);
+        frame(&ctx, &mut s, vec![]);
+        assert_eq!(live(&s).len(), before + 1, "{:?}", message(&s));
+        assert!(matches!(
+            live(&s).last(),
+            Some(K::Coincident(a, b)) if [*a, *b] == [p, q] || [*a, *b] == [q, p]
+        ));
+    });
+}
+
+/// Nachbesserung 6: Entf löscht im Befehl nichts, es nimmt nur die halbe Auswahl zurück.
+#[test]
+fn delete_in_the_command_only_clears_the_half_selection() {
+    with_lang(&german(), || {
+        let ctx = context();
+        let (mut s, (c1, _)) = sketch_with(|sk| {
+            let c = circle(sk, -10.0, 0.0, 4.0);
+            circle(sk, 12.0, 6.0, 5.0);
+            c
+        });
+        let rev = sk(&s).revision();
+        frame(&ctx, &mut s, vec![]);
+        press(&mut s, A::Concentric);
+        click(&ctx, &mut s, v(-6.0, 0.0));
+        assert_eq!(se(&s).selection, vec![Item::Curve(c1)]);
+        let del = egui::Event::Key {
+            key: egui::Key::Delete,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        };
+        let away = screen(&s, v(0.0, 20.0));
+        frame(&ctx, &mut s, vec![moved(away), del]);
+        frame(&ctx, &mut s, vec![]);
+        assert!(sk(&s).curve(c1).is_some(), "nichts gelöscht");
+        assert_eq!(sk(&s).revision(), rev);
+        assert!(se(&s).selection.is_empty());
+        assert_eq!(se(&s).tool, Tool::Constraint(A::Concentric));
+    });
+}
+
+/// Nachbesserung 7: Ein Exemplar eines Musters im Befehl: Die Meldung sagt es, nichts entsteht,
+/// der Befehl läuft weiter.
+#[test]
+fn an_instance_line_in_the_command_is_refused_with_the_message() {
+    use planora_sketch::pattern::{PatternDir, PatternKind, PatternPlan};
+    with_lang(&german(), || {
+        let ctx = context();
+        let (mut s, pid) = sketch_with(|sk| {
+            let (src, ..) = line(sk, (-20.0, 0.0), (-10.0, 4.0));
+            let pid = sk
+                .add_pattern(&PatternPlan {
+                    kind: PatternKind::Rect {
+                        dirs: [PatternDir::SketchX, PatternDir::SketchY],
+                        extent: [false, false],
+                        symmetric: [false, false],
+                    },
+                    sources: vec![src],
+                    counts: [2, 1],
+                    values: [20.0, 10.0],
+                    suppressed: vec![],
+                })
+                .unwrap();
+            sk.solve();
+            pid
+        });
+        let inst = sk(&s).pattern(pid).unwrap().instances[0].curves[0];
+        let mid = {
+            let pl = sk(&s).curve_polyline(inst, 16).unwrap();
+            (pl[0] + pl[pl.len() - 1]) / 2.0
+        };
+        let (n, rev) = (live(&s).len(), sk(&s).revision());
+        frame(&ctx, &mut s, vec![]);
+        press(&mut s, A::Horizontal);
+        click(&ctx, &mut s, mid);
+        let text = message(&s).unwrap_or_default();
+        assert!(
+            text.contains(&tr!("sketch-pattern-instance-only")),
+            "{text}"
+        );
+        assert_eq!(live(&s).len(), n);
+        assert_eq!(sk(&s).revision(), rev);
+        assert!(se(&s).selection.is_empty());
+        assert_eq!(se(&s).tool, Tool::Constraint(A::Horizontal));
     });
 }
 
@@ -474,9 +689,21 @@ fn in_the_command_a_drag_moves_nothing_and_a_double_click_picks_once() {
         assert_eq!(sk(&s).revision(), rev);
         assert_eq!(sk(&s).point_xy(m1).unwrap(), v(-10.0, 0.0));
         assert!(se(&s).box_select.is_none());
-        // Ein Doppelklick auf den Kreis wählt ihn einmal (keine Kette, kein Abwählen).
-        double_click(&ctx, &mut s, v(-6.0, 0.0));
+        // Ein Doppelklick auf den Kreis wählt ihn einmal (keine Kette, kein Abwählen). Der zweite
+        // Klick tut gar nichts: Eine Meldung von dazwischen bleibt stehen (ein Abschluss über
+        // `finish_tool` oder ein Klick leerte sie, Nachbesserung 1).
+        let p = screen(&s, v(-6.0, 0.0));
+        frame(&ctx, &mut s, vec![moved(p)]);
+        frame_at(&ctx, &mut s, vec![button(p, left, true)], 0.02);
+        frame_at(&ctx, &mut s, vec![button(p, left, false)], 0.02);
         assert_eq!(se(&s).selection, vec![Item::Curve(c1)]);
+        s.sketch_session.as_mut().unwrap().message =
+            Some(planora_app::msg::Msg::Raw("dazwischen".into()));
+        frame_at(&ctx, &mut s, vec![button(p, left, true)], 0.02);
+        frame_at(&ctx, &mut s, vec![button(p, left, false)], 0.02);
+        frame(&ctx, &mut s, vec![]);
+        assert_eq!(se(&s).selection, vec![Item::Curve(c1)]);
+        assert_eq!(message(&s).as_deref(), Some("dazwischen"));
         assert_eq!(se(&s).tool, Tool::Constraint(A::Concentric));
     });
 }
