@@ -1369,6 +1369,9 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
                     se.select_chain(&sf.sketch, c, shift);
                 }
             }
+        } else if matches!(se.tool, Tool::Constraint(_)) {
+            // Abhängigkeitsbefehl: Der erste Klick hat schon gewählt; der zweite wählt ihn nicht
+            // wieder ab und schließt nichts ab.
         } else if se.runs_pattern() {
             // Anordnung: Der zweite schnelle Klick schaltet das nächste Exemplar wie jeder Klick
             // (ein Doppelklick schließt nichts ab).

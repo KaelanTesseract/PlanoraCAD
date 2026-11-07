@@ -252,13 +252,16 @@ fn concentric_needs_round_curves_and_says_when_the_centre_is_shared() {
         let (c1, m) = circle(&mut app, 0.0, 0.0, 5.0);
         let (l, ..) = line(&mut app, (20.0, 0.0), (40.0, 5.0));
         settle(&c, &mut app);
-        // Kreis und Linie: Knopf aus, ein Klick ändert nichts.
+        // Kreis und Linie: Der Klick legt nichts an; die Meldung sagt, warum, und der Befehl
+        // startet ohne diese Auswahl (Handtest Korrektur 4: erst Befehl, dann Auswahl).
         select(&mut app, vec![Item::Curve(c1), Item::Curve(l)]);
         assert!(!available(&mut app).contains(&ConstraintAction::Concentric));
         let rev = sk(&mut app).revision();
         press(&c, &mut app, "Konzentrisch");
         assert_eq!(sk(&mut app).revision(), rev);
-        // Über die Aktion (Taste) sagt die Meldung, warum.
+        assert_eq!(message(&mut app), Some(tr!("sketch-concentric-kinds")));
+        // Über `apply` sagt die Meldung dasselbe.
+        select(&mut app, vec![Item::Curve(c1), Item::Curve(l)]);
         {
             let (se, s) = state(&mut app).session_sketch_mut().unwrap();
             assert!(se.apply(s, ConstraintAction::Concentric, None).is_err());

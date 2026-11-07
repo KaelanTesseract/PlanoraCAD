@@ -81,6 +81,7 @@ pub fn tool_label(tool: Tool) -> String {
         Tool::Dimension => tr!("action-sketch-dimension"),
         // Der Knopf mit Liste heißt wie in Fusion „Muster“; die Arten nennen sich selbst.
         Tool::Pattern => tr!("sketch-tool-pattern"),
+        Tool::Constraint(action) => action.label(),
     }
 }
 
@@ -107,6 +108,32 @@ pub fn tool_hint(tool: Tool) -> String {
         Tool::Scale => tr!("sketch-tool-scale-hint"),
         Tool::Dimension => tr!("sketch-tool-dimension-hint"),
         Tool::Pattern => tr!("sketch-tool-pattern-hint"),
+        Tool::Constraint(action) => command_hint(action),
+    }
+}
+
+/// Hinweis des Abhängigkeitsbefehls in der Statuszeile: was zu wählen ist (Handtest Skizzen 5,
+/// Korrektur 4). Maße haben keinen Befehl; dann der Hinweis des Auswählens.
+fn command_hint(action: ConstraintAction) -> String {
+    use ConstraintAction::*;
+    match action {
+        Coincident => tr!("sketch-command-coincident-hint"),
+        Horizontal => tr!("sketch-command-horizontal-hint"),
+        Vertical => tr!("sketch-command-vertical-hint"),
+        Parallel => tr!("sketch-command-parallel-hint"),
+        Perpendicular => tr!("sketch-command-perpendicular-hint"),
+        Tangent => tr!("sketch-command-tangent-hint"),
+        Equal => tr!("sketch-command-equal-hint"),
+        Fixed => tr!("sketch-command-fixed-hint"),
+        Midpoint => tr!("sketch-command-midpoint-hint"),
+        Symmetric => tr!("sketch-command-symmetric-hint"),
+        PointOnCurve => tr!("sketch-command-point-on-curve-hint"),
+        Concentric => tr!("sketch-command-concentric-hint"),
+        Collinear => tr!("sketch-command-collinear-hint"),
+        Smooth => tr!("sketch-command-smooth-hint"),
+        Distance | DistancePointLine | Radius | Diameter | Angle => {
+            tr!("sketch-tool-select-hint")
+        }
     }
 }
 
@@ -443,9 +470,7 @@ pub fn has_flyout(tool: Tool) -> bool {
 }
 
 fn flyout_id(tool: Tool) -> egui::Id {
-    shell_panels::sketch_strip_id()
-        .with("flyout")
-        .with(tool as usize)
+    shell_panels::sketch_strip_id().with("flyout").with(tool)
 }
 
 /// Ist eine Liste von Arten offen? Die Ansicht läuft im Bild vor der Leiste und liest das, damit
@@ -1053,13 +1078,23 @@ fn side_contents(
     let km = crate::keymap::mouse::current(ui.ctx());
     ui.horizontal_wrapped(|ui| {
         for action in ACTIONS {
-            let enabled = available.contains(&action);
+            // Geometrische Abhängigkeiten gehen immer: Ohne passende Auswahl startet der Knopf den
+            // Befehl (Fusion „erst Befehl, dann Auswahl“) und erscheint dann aktiv. Maße brauchen
+            // die Auswahl wie bisher.
+            let enabled = !action.is_dimension() || available.contains(&action);
+            let active = se.tool == Tool::Constraint(action);
             let label = if action.is_dimension() {
                 format!("{} …", action.label())
             } else {
                 action.label().to_string()
             };
-            let mut button = tool_button(ui, icons::sketch_action_icon(action), &label, enabled);
+            let mut button = tool_button_state(
+                ui,
+                icons::sketch_action_icon(action),
+                &label,
+                enabled,
+                active,
+            );
             // Belegbare Abhängigkeiten (Skizzen 5) nennen ihre Taste im Hinweistext.
             if let Some(bound) = bindable_action(action)
                 && !shortcut_hint(&km, bound).is_empty()
@@ -1074,7 +1109,7 @@ fn side_contents(
                 if action.is_dimension() {
                     panel.editor = Some(new_editor(se, sk, action));
                 } else {
-                    let _ = se.apply(sk, action, None);
+                    let _ = se.constraint_button(sk, action);
                 }
             }
         }
@@ -1263,10 +1298,21 @@ fn tool_button(
     label: &str,
     enabled: bool,
 ) -> egui::Response {
+    tool_button_state(ui, source, label, enabled, false)
+}
+
+/// Wie [`tool_button`], `active` zeigt ihn gedrückt (laufender Abhängigkeitsbefehl).
+fn tool_button_state(
+    ui: &mut egui::Ui,
+    source: IconSource,
+    label: &str,
+    enabled: bool,
+    active: bool,
+) -> egui::Response {
     let dark = ui.visuals().dark_mode;
     // `add_enabled` statt `add_enabled_ui`: ohne eigenen Bereich bricht die Zeile richtig um.
     ui.add_enabled(enabled, |ui: &mut egui::Ui| {
-        icons::source_button(ui, source, label, dark, false)
+        icons::source_button(ui, source, label, dark, active)
     })
 }
 

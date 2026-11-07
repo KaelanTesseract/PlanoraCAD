@@ -297,7 +297,12 @@ impl SketchSession {
     pub fn is_drawing_tool(&self) -> bool {
         !matches!(
             self.tool,
-            Tool::Select | Tool::ProjectEdge | Tool::Trim | Tool::Extend | Tool::Break
+            Tool::Select
+                | Tool::ProjectEdge
+                | Tool::Trim
+                | Tool::Extend
+                | Tool::Break
+                | Tool::Constraint(_)
         )
     }
 

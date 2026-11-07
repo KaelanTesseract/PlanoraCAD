@@ -266,8 +266,9 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                 _ => C::Smooth,
             };
             if let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut() {
-                // Passt die Auswahl nicht, steht der Grund in der Meldung des Skizzenfelds.
-                let _ = se.apply(sk, action, None);
+                // Wie der Knopf: Passt die Auswahl, entsteht die Abhängigkeit, sonst startet der
+                // Befehl, und passt sie gar nicht, steht der Grund in der Meldung des Skizzenfelds.
+                let _ = se.constraint_button(sk, action);
             }
         }
         Action::SketchRepeatLast => {
