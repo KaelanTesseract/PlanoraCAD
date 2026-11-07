@@ -6,10 +6,12 @@ use planora_app::history_bar::{self, StepState};
 use planora_app::keymap::Action;
 use planora_app::sketch_state::Item;
 use planora_app::state::{AppState, StandardPlane};
-use planora_app::{browser, sketch_view, theme};
+use planora_app::workspace::Workspace;
+use planora_app::{browser, commands, sketch_view, theme};
 use planora_feature::{FeatureId, FeatureKind, SketchFeature, SketchPlane};
 use planora_i18n::tr;
 use planora_math::{DVec2, DVec3};
+use planora_project::config::Config;
 use planora_sketch::model::CurveId;
 
 const SCREEN: egui::Rect = egui::Rect {
@@ -20,6 +22,12 @@ const SCREEN: egui::Rect = egui::Rect {
 /// Quader und eine offene Skizze auf XY mit einer projizierten Kante; liefert Skizze und Kurve.
 fn projected() -> (AppState, FeatureId, CurveId) {
     let mut s = AppState::new();
+    let (id, curves) = build(&mut s, 1);
+    (s, id, curves[0])
+}
+
+/// Legt in `s` einen Quader und eine offene Skizze auf XY mit `n` projizierten Kanten an.
+fn build(s: &mut AppState, n: usize) -> (FeatureId, Vec<CurveId>) {
     s.create_box(DVec3::new(10.0, 20.0, 5.0)).unwrap();
     let id = s
         .add_sketch(SketchPlane::Standard(StandardPlane::XY))
@@ -27,15 +35,26 @@ fn projected() -> (AppState, FeatureId, CurveId) {
     s.open_sketch(id).unwrap();
     s.observe_sketch(false);
     let solid = s.bodies[0].solid.clone();
-    solid
-        .edges
-        .iter()
-        .map(|(e, _)| e)
-        .find(|e| s.project_edge_into_sketch(0, *e).is_ok())
-        .expect("eine Kante lässt sich projizieren");
-    s.observe_sketch(false);
-    let curve = draft(&s).copies[0].curve;
-    (s, id, curve)
+    for (e, _) in solid.edges.iter() {
+        if draft(s).copies.len() < n && s.project_edge_into_sketch(0, e).is_ok() {
+            s.observe_sketch(false);
+        }
+    }
+    let curves: Vec<CurveId> = draft(s).copies.iter().map(|c| c.curve).collect();
+    assert_eq!(curves.len(), n, "genug Kanten projiziert");
+    (id, curves)
+}
+
+/// Arbeitsbereich mit [`build`] im aktiven Reiter: für Knopf und Aktion (derselbe Weg).
+fn projected_ws(n: usize) -> (Workspace, FeatureId, Vec<CurveId>) {
+    let mut w = Workspace::new(None, Config::default());
+    let (id, curves) = build(&mut w.active_tab_mut().state, n);
+    w.observe_history(false);
+    (w, id, curves)
+}
+
+fn st(w: &mut Workspace) -> &mut AppState {
+    &mut w.active_tab_mut().state
 }
 
 fn draft(s: &AppState) -> &SketchFeature {
@@ -119,69 +138,74 @@ fn projected_curve_uses_projected_color() {
     assert!(colors.contains(&col.finished), "{colors:?}");
 }
 
+/// Knopf und Aktion „Verknüpfung aufheben“ laufen beide über
+/// `AppState::break_projection_links` mit den gewählten Projektionen; hier über die Aktion.
 #[test]
 fn break_link_is_one_undo_step() {
-    let (mut s, id, c) = projected();
-    let before = undo_len(&s);
-    s.break_projection_link(c).unwrap();
-    assert!(draft(&s).copies.is_empty(), "Verweis gelöst");
-    assert!(draft(&s).sketch.curve(c).is_some(), "die Kurve bleibt");
-    assert_eq!(undo_len(&s), before + 1, "genau ein Schritt");
+    let (mut w, id, c) = projected_ws(2);
+    // Beide Projektionen und eine eigene Linie gewählt: ein Schritt löst beide.
+    let own = {
+        let sk = st(&mut w).session_sketch_mut().unwrap().1;
+        let a = sk.add_point(40.0, 40.0).unwrap();
+        let b = sk.add_point(50.0, 45.0).unwrap();
+        sk.add_line(a, b).unwrap()
+    };
+    w.observe_history(false);
+    select(
+        st(&mut w),
+        &[Item::Curve(c[0]), Item::Curve(own), Item::Curve(c[1])],
+    );
+    assert_eq!(st(&mut w).selected_projections(), vec![c[0], c[1]]);
+    let before = undo_len(st(&mut w));
+    commands::run_action(&mut w, Action::SketchBreakLink);
+    w.observe_history(false);
+    let s = st(&mut w);
+    assert!(draft(s).copies.is_empty(), "beide Verweise gelöst");
+    for curve in &c {
+        assert!(
+            draft(s).sketch.curve(*curve).is_some(),
+            "die Kurven bleiben"
+        );
+    }
+    assert_eq!(undo_len(s), before + 1, "genau ein Schritt für beide");
     assert_eq!(
         s.sketch_undo_label(),
         Some(tr!("action-sketch-break-link")),
         "Name des Schritts"
     );
-    assert_ne!(
-        sketch_view::curve_color(&s, c),
-        theme::sketch_colors(s.dark).projected
-    );
-    // Eine nicht projizierte Kurve: abgelehnt, nichts geändert.
-    assert!(s.break_projection_link(c).is_err());
-    assert_eq!(undo_len(&s), before + 1);
-    // Rückgängig stellt die Verknüpfung wieder her.
-    assert!(s.undo_sketch());
-    assert_eq!(draft(&s).copies.len(), 1);
-    assert_eq!(draft(&s).copies[0].curve, c);
-    assert!(s.redo_sketch());
-    assert!(draft(&s).copies.is_empty());
-    s.close_sketch();
-    assert!(def(&s, id).copies.is_empty(), "gelöst gespeichert");
+    assert!(s.selected_projections().is_empty());
+    // Ohne passende Auswahl tut die Aktion nichts (kein Schritt, keine Meldung).
+    s.message = None;
+    commands::run_action(&mut w, Action::SketchBreakLink);
+    w.observe_history(false);
+    assert_eq!(undo_len(st(&mut w)), before + 1);
+    assert!(st(&mut w).message.is_none());
+    // Rückgängig stellt beide Verknüpfungen wieder her, Wiederholen löst sie wieder.
+    assert!(st(&mut w).undo_sketch());
+    let restored: Vec<CurveId> = draft(st(&mut w)).copies.iter().map(|x| x.curve).collect();
+    assert_eq!(restored, c);
+    assert!(st(&mut w).redo_sketch());
+    assert!(draft(st(&mut w)).copies.is_empty());
+    st(&mut w).close_sketch();
+    assert!(def(st(&mut w), id).copies.is_empty(), "gelöst gespeichert");
 }
 
 #[test]
-fn break_link_action_needs_a_selected_projection() {
+fn break_projection_links_rejects_curves_without_projection() {
     let (mut s, _, c) = projected();
-    // Ohne Auswahl tut die Aktion nichts.
-    select(&mut s, &[]);
-    assert!(
-        !s.sketch_session
-            .as_ref()
-            .unwrap()
-            .can_break_links(draft(&s))
-    );
-    select(&mut s, &[Item::Curve(c)]);
-    assert!(
-        s.sketch_session
-            .as_ref()
-            .unwrap()
-            .can_break_links(draft(&s))
-    );
-    // Die Aktion löst die gewählten Projektionen in einem Schritt.
+    s.break_projection_links(&[c]).unwrap();
     let before = undo_len(&s);
-    {
-        let (se, sf) = s.session_draft_mut().unwrap();
-        assert!(se.break_links(sf));
-    }
-    s.observe_sketch(false);
-    assert!(draft(&s).copies.is_empty());
-    assert_eq!(undo_len(&s), before + 1);
+    // Schon gelöst: abgelehnt, Meldung gesetzt, nichts geändert.
+    assert!(s.break_projection_links(&[c]).is_err());
+    assert!(s.message.is_some());
+    assert_eq!(undo_len(&s), before);
     assert!(
-        !s.sketch_session
-            .as_ref()
-            .unwrap()
-            .can_break_links(draft(&s))
+        s.break_projection_link(c).is_err(),
+        "Kurzform für eine Kurve"
     );
+    // Ohne offene Skizze ebenso.
+    s.close_sketch();
+    assert!(s.break_projection_links(&[c]).is_err());
     assert_eq!(Action::SketchBreakLink.id(), "skizze.verknuepfung_aufheben");
     assert_eq!(
         Action::SketchBreakLink.label(),

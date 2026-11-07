@@ -2144,12 +2144,23 @@ impl AppState {
         Ok(())
     }
 
-    /// „Verknüpfung aufheben“ (Skizzen 6, Fusion „Break Link“): Die projizierte Kurve `curve`
-    /// der offenen Skizze folgt ihrer Herkunft nicht mehr, Lage und Fixierung bleiben. Ein
-    /// eigener Skizzen-Rückgängig-Schritt; Rückgängig stellt die Verknüpfung wieder her.
-    /// Fehler (Meldung auch in `message`): keine offene Skizze, oder `curve` ist keine
-    /// Projektion.
-    pub fn break_projection_link(&mut self, curve: CurveId) -> Result<(), String> {
+    /// Die gewählten Kurven der offenen Skizze, die Projektionen sind (Ziel von „Verknüpfung
+    /// aufheben“ an Knopf und Aktion); ohne offene Skizze leer.
+    pub fn selected_projections(&self) -> Vec<CurveId> {
+        match (self.sketch_session.as_ref(), self.sketch_draft.as_ref()) {
+            (Some(se), Some(draft)) => se.selected_projections(draft),
+            _ => Vec::new(),
+        }
+    }
+
+    /// „Verknüpfung aufheben“ (Skizzen 6, Fusion „Break Link“), der einzige Weg für Knopf und
+    /// Aktion: Die projizierten Kurven `curves` der offenen Skizze folgen ihrer Herkunft nicht
+    /// mehr, Lage und Fixierung bleiben. Alle zusammen sind genau ein Skizzen-Rückgängig-Schritt
+    /// („Verknüpfung aufheben“); Rückgängig stellt die Verknüpfungen wieder her. Kurven ohne
+    /// Projektion werden übergangen. Liefert die Zahl der gelösten Kurven.
+    /// Fehler (Meldung auch in `message`, nichts geändert): keine offene Skizze, oder keine der
+    /// Kurven ist eine Projektion.
+    pub fn break_projection_links(&mut self, curves: &[CurveId]) -> Result<usize, String> {
         if self.sketch_session.is_none() || self.sketch_draft.is_none() {
             return self.fail(tr!("state-no-open-sketch"));
         }
@@ -2158,15 +2169,20 @@ impl AppState {
         let broken = self
             .sketch_draft
             .as_mut()
-            .is_some_and(|d| d.break_link(curve));
-        if !broken {
+            .map_or(0, |d| curves.iter().filter(|c| d.break_link(**c)).count());
+        if broken == 0 {
             return self.fail(tr!("state-curve-not-projected"));
         }
         if let Some(se) = self.sketch_session.as_mut() {
             se.edit_label = Some(crate::msg!("action-sketch-break-link"));
         }
         self.observe_sketch(false);
-        Ok(())
+        Ok(broken)
+    }
+
+    /// [`break_projection_links`](Self::break_projection_links) für eine Kurve.
+    pub fn break_projection_link(&mut self, curve: CurveId) -> Result<(), String> {
+        self.break_projection_links(&[curve]).map(|_| ())
     }
 
     // ---- Rückgängig in der offenen Skizze (R10) ------------------------------------------

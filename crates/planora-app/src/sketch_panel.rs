@@ -560,6 +560,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         snap: state.sketch_snap_grid,
         changed: false,
         look_at: false,
+        break_link: false,
     };
     let Some((se, sf)) = state.session_draft_mut() else {
         return;
@@ -594,6 +595,11 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     state.sketch_grid_changed |= palette.changed;
     if palette.look_at {
         state.look_at_sketch();
+    }
+    if palette.break_link {
+        // Derselbe Weg wie die Aktion: alle gewählten Projektionen in einem Schritt.
+        let curves = state.selected_projections();
+        let _ = state.break_projection_links(&curves);
     }
     ctx.data_mut(|d| d.insert_temp(panel_id(), panel));
     if close {
@@ -842,6 +848,8 @@ struct SketchPalette {
     changed: bool,
     /// Der Knopf „Blick auf“ wurde gedrückt.
     look_at: bool,
+    /// Der Knopf „Verknüpfung aufheben“ wurde gedrückt (Skizzen 6).
+    break_link: bool,
 }
 
 /// Was das Skizzenfeld außer Sitzung und Entwurf braucht.
@@ -1130,8 +1138,7 @@ fn side_contents(
         ui.colored_label(theme::palette(ui.visuals().dark_mode).error, m);
     }
     // „Verknüpfung aufheben“ gibt es nur, wenn eine gewählte Kurve eine Projektion ist.
-    let can_break_link = se.can_break_links(sf);
-    let mut break_link = false;
+    let can_break_link = !se.selected_projections(sf).is_empty();
     let sk = &mut sf.sketch;
     ui.separator();
 
@@ -1195,7 +1202,7 @@ fn side_contents(
             ))
             .clicked()
         {
-            break_link = true;
+            palette.break_link = true;
         }
         if tool_button(
             ui,
@@ -1236,10 +1243,7 @@ fn side_contents(
             se.delete_selection(sk);
         }
     });
-    if break_link {
-        se.break_links(sf);
-    }
-    sections(ui, se, &mut sf.sketch, panel);
+    sections(ui, se, sk, panel);
     // In einer Zeile wäre die Beschriftung breiter als das Feld (250): zweizeilig; die Erklärung
     // steht im Hinweistext.
     ui.add(theme::Toggle::new(

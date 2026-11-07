@@ -259,10 +259,12 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
             }
         }
         Action::SketchBreakLink => {
-            // Wie der Knopf: alle gewählten Projektionen in einem Schritt (der Verlauf erfasst
-            // die Änderung am Ende des Bildes).
-            if let Some((se, sf)) = ws.active_tab_mut().state.session_draft_mut() {
-                se.break_links(sf);
+            // Wie der Knopf: alle gewählten Projektionen in einem Schritt; ohne passende
+            // Auswahl nichts (wie „Konstruktion umschalten“).
+            let state = &mut ws.active_tab_mut().state;
+            let curves = state.selected_projections();
+            if !curves.is_empty() {
+                let _ = state.break_projection_links(&curves);
             }
         }
         Action::SketchConcentric | Action::SketchCollinear | Action::SketchSmooth => {
