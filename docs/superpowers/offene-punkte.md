@@ -2288,7 +2288,7 @@ Umgesetzt 2026-11-03 bis 2026-11-06 auf dem Zweig `feature/skizzen-muster` (Spec
   - ~~Esc beendet die Skizzenbemaßung (D) nicht, auch nicht zweimal; nur ein anderes Werkzeug beendet sie. In Fusion beendet Esc den Befehl.~~ Behoben (a657201): Esc und Rechtsklick verwerfen erst ein offenes Maß, danach beenden sie das Werkzeug.
   - Die Felder des Musters (Anzahl, Abstand) wandern mit der Vorschau; wächst das Muster, liegen sie über Exemplaren, und ein Klick auf die alte Stelle trifft daneben.
   - Ein freies, mit nichts verbundenes Teil (ein Bogen) verschiebt sich bei jedem Lösen um einige Pixel, auch bei Abhängigkeiten an ganz anderen Kurven (bei Glatt etwa 10 Pixel). Vermutlich älter als Skizzen 5.
-  - Ein Kreis, dessen zweiter Klick auf den eigenen Mittelpunkt fängt, wird abgelehnt (Radius 0), lässt aber den Mittelpunkt als Punkt stehen (aus Teilprojekt 2/3).
+  - ~~Ein Kreis, dessen zweiter Klick auf den eigenen Mittelpunkt fängt, wird abgelehnt (Radius 0), lässt aber den Mittelpunkt als Punkt stehen (aus Teilprojekt 2/3).~~ Behoben (ee65070): Der nächste Klick von Kreis, Bogen und Ellipse fängt nicht mehr auf die offenen Punkte des eigenen Befehls (knapp daneben entsteht die kleine Form); ein Klick genau darauf wird abgelehnt, das Werkzeug wartet weiter, nichts bleibt. Die Linie fängt weiter auf ihren letzten Punkt und lehnt dort ab.
   - Die Knöpfe der Abhängigkeiten wirken nur auf eine schon getroffene Auswahl (zuerst wählen, dann Knopf); Fusion erlaubt auch erst den Befehl, dann die Auswahl.
 - `Id::from_index` schneidet große Indizes still ab (schon vorher, betrifft auch `MusterWert`). Härten.
 - Ein lebendes Glatt mit veraltetem Ende aus einer von Hand geänderten Datei lädt still und liefert keine Zeile; mögliche Härtung in `from_data`.
