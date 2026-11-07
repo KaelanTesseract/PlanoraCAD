@@ -777,7 +777,7 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
             Some(p) => {
                 let cursor = Vec2::new(p.x - rect.left(), p.y - rect.top());
                 let viewport = Vec2::new(rect.width(), rect.height());
-                let hit = state.pick(cursor, viewport);
+                let hit = state.view_pick(cursor, viewport);
                 state.set_hover(hit);
                 if response.clicked() {
                     match hit {

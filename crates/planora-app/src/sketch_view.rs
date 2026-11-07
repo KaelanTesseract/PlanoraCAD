@@ -621,7 +621,8 @@ fn profile_fill_shape(
 const PLANE_EDGE_WIDTH: f32 = 1.5;
 
 /// Konstruktionsebenen (Skizzen 6) als halbdurchsichtige orange Rechtecke über der 3D-Ansicht
-/// in `rect` ([`AppState::plane_rects`]); gewählte und die unter dem Mauszeiger heller. Wie die
+/// in `rect` ([`AppState::plane_rects`]); gewählte (auch im Browser) und die unter dem Mauszeiger
+/// heller ([`AppState::plane_highlighted`]). Wie die
 /// fertigen Skizzen liegen sie immer über den Körpern (keine Verdeckung, Abweichung von Fusion).
 /// Eine Ebene, deren Ecke hinter der Kamera liegt, fehlt.
 pub fn plane_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
@@ -636,22 +637,15 @@ pub fn plane_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
             frame: plane.frame,
             rect,
         };
-        let (hx, hy) = (plane.half.x, plane.half.y);
-        let corners: Option<Vec<Pos2>> = [
-            DVec2::new(-hx, -hy),
-            DVec2::new(hx, -hy),
-            DVec2::new(hx, hy),
-            DVec2::new(-hx, hy),
-        ]
-        .into_iter()
-        .map(|c| map.to_screen(c))
-        .collect();
+        let corners: Option<Vec<Pos2>> = plane
+            .corners()
+            .into_iter()
+            .map(|c| map.to_screen(plane.frame.to_local(c).truncate()))
+            .collect();
         let Some(corners) = corners else {
             continue;
         };
-        let this = Some(Pick::Plane(id));
-        let active = state.selection == this || state.hover == this;
-        let (fill, edge) = if active {
+        let (fill, edge) = if state.plane_highlighted(id) {
             (col.plane_fill_active, col.plane_edge_active)
         } else {
             (col.plane_fill, col.plane_edge)

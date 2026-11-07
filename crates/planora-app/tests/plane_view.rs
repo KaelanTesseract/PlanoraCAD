@@ -235,3 +235,65 @@ fn vertex_pick_only_in_point_mode() {
     let p = solid.vertices[if end { e.end } else { e.start }].point;
     assert!((p - corner.as_dvec3()).length() < 1e-9, "{p:?}");
 }
+
+#[test]
+fn edge_behind_a_plane_can_be_marked_in_edge_marking_mode() {
+    // Fix-Runde 1: Ebene 30 mm über dem Quader verdeckt von oben die obere Kante.
+    let (mut s, plane) = box_and_plane(20.0, 30.0);
+    look_from_above(&mut s, Vec3::new(10.0, 10.0, 10.0));
+    let at = screen(&s, Vec3::new(10.0, 0.0, 20.0));
+    // Normale Auswahl: Die Ebene liegt davor.
+    assert_eq!(s.view_pick(at, VIEWPORT), Some(Pick::Plane(plane)));
+    // Kanten markieren (Abrunden/Fase): Ebenen zählen nicht, die Kante ist wählbar.
+    s.edge_picking = true;
+    let Some(Pick::Edge(e)) = s.view_pick(at, VIEWPORT) else {
+        panic!("Kante erwartet: {:?}", s.view_pick(at, VIEWPORT));
+    };
+    s.toggle_edge_mark(e, false);
+    assert_eq!(s.marked_edges, vec![e]);
+}
+
+#[test]
+fn point_mode_ignores_planes() {
+    // Fix-Runde 1: Bei der Punktwahl verdecken Ebenen keine Ecken und werden selbst nicht gewählt.
+    let (mut s, plane) = box_and_plane(20.0, 30.0);
+    look_from_above(&mut s, Vec3::new(10.0, 10.0, 10.0));
+    let corner = Vec3::new(20.0, 0.0, 20.0);
+    let at = screen(&s, corner) + Vec2::new(2.0, 1.0);
+    assert!(matches!(
+        s.pick(at, VIEWPORT),
+        Some(Pick::Plane(id)) if id == plane
+    ));
+    let Some(Pick::Vertex { edge, end, .. }) = s.pick_with(at, VIEWPORT, PickFilter::POINTS) else {
+        panic!(
+            "Ecke erwartet: {:?}",
+            s.pick_with(at, VIEWPORT, PickFilter::POINTS)
+        );
+    };
+    let solid = &s.bodies[0].solid;
+    let e = &solid.edges[edge];
+    let p = solid.vertices[if end { e.end } else { e.start }].point;
+    assert!((p - corner.as_dvec3()).length() < 1e-9, "{p:?}");
+    // Neben dem Quader, nur die Ebene unter dem Zeiger: nichts.
+    let beside = screen(&s, Vec3::new(-15.0, 10.0, 30.0));
+    assert_eq!(s.pick(beside, VIEWPORT), Some(Pick::Plane(plane)));
+    assert_eq!(s.pick_with(beside, VIEWPORT, PickFilter::POINTS), None);
+}
+
+#[test]
+fn plane_selected_in_browser_is_highlighted() {
+    // Fix-Runde 1: Auch eine im Browser gewählte Ebene wird hell gezeichnet.
+    let (mut s, plane) = box_and_plane(20.0, 30.0);
+    look_from_above(&mut s, Vec3::new(10.0, 10.0, 10.0));
+    let rect = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(VIEWPORT.x, VIEWPORT.y));
+    let col = planora_app::theme::sketch_colors(s.dark);
+    let fill = |s: &AppState| match &sketch_view::plane_shapes(s, rect)[..] {
+        [egui::Shape::Path(p)] => p.fill,
+        other => panic!("eine Fläche erwartet: {other:?}"),
+    };
+    assert!(!s.plane_highlighted(plane));
+    assert_eq!(fill(&s), col.plane_fill);
+    s.selected_feature = Some(plane);
+    assert!(s.plane_highlighted(plane));
+    assert_eq!(fill(&s), col.plane_fill_active);
+}

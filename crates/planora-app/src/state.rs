@@ -409,9 +409,10 @@ impl PickFilter {
         planes: false,
         vertices: false,
     };
-    /// Punktwahl („Ebene durch drei Punkte“): Eckpunkte vor allem anderen.
+    /// Punktwahl („Ebene durch drei Punkte“): Eckpunkte vor allem anderen. Ebenen zählen nicht
+    /// und verdecken keine Ecken (die Punkte liegen oft hinter einer schon gezeichneten Ebene).
     pub const POINTS: PickFilter = PickFilter {
-        planes: true,
+        planes: false,
         vertices: true,
     };
 }
@@ -1709,6 +1710,25 @@ impl AppState {
     /// zählen mit, Eckpunkte nicht ([`AppState::pick_with`] mit [`PickFilter::SELECT`]).
     pub fn pick(&self, cursor: Vec2, viewport: Vec2) -> Option<Pick> {
         self.pick_with(cursor, viewport, PickFilter::SELECT)
+    }
+
+    /// Was ein Klick in der 3D-Ansicht trifft: beim Markieren von Kanten (Dialoge Abrunden und
+    /// Fase, [`AppState::edge_picking`]) nur Flächen und Kanten, damit keine Ebene die Kanten
+    /// dahinter verdeckt; sonst wie [`AppState::pick`].
+    pub fn view_pick(&self, cursor: Vec2, viewport: Vec2) -> Option<Pick> {
+        let filter = if self.edge_picking {
+            PickFilter::GEOMETRY
+        } else {
+            PickFilter::SELECT
+        };
+        self.pick_with(cursor, viewport, filter)
+    }
+
+    /// Wird die Ebene `id` hervorgehoben gezeichnet? Gewählt in der Ansicht, im Browser
+    /// (`selected_feature`) oder unter dem Mauszeiger.
+    pub fn plane_highlighted(&self, id: FeatureId) -> bool {
+        let this = Some(Pick::Plane(id));
+        self.selection == this || self.hover == this || self.selected_feature == Some(id)
     }
 
     /// Wie [`AppState::pick`], mit Wahl, ob Ebenen und Eckpunkte zählen. Reihenfolge: Eckpunkt
