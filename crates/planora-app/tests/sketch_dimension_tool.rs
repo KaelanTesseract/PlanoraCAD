@@ -19,7 +19,7 @@ use planora_project::config::Config;
 use planora_project::library::Library;
 use planora_sketch::constraint::ConstraintKind as K;
 use planora_sketch::dimension::{DimMode, DimPlan};
-use planora_sketch::model::{PointId, Sketch};
+use planora_sketch::model::{CurveKind, HandleCurvature, PointId, Sketch};
 
 const W: f32 = 1920.0;
 const H: f32 = 1080.0;
@@ -1182,4 +1182,56 @@ fn cancel_drops_picks_or_the_planned_dimension_and_ends_the_tool_only_when_nothi
     assert_eq!(s.sketch_session.as_ref().unwrap().dim.text, None);
     assert_eq!(cancel(&mut s), Tool::Select);
     assert_eq!(s.session_sketch().unwrap().constraints().count(), 0);
+}
+
+#[test]
+fn a_big_jump_of_the_curvature_handle_radius_arrives_through_the_dimension_edit() {
+    // Skizzen 7: Das direkte Lösen schafft sehr große Sprünge nicht; die Maßeingabe geht dann in
+    // Schritten (`guard_length`, `solve_in_steps`). Das Maß und die Griffe bleiben, wie sie sind.
+    for (from, to) in [(1.0, 3000.0), (0.4, 1000.0), (0.1, 3000.0), (3000.0, 0.1)] {
+        let mut dim = None;
+        let mut arc = None;
+        let mut len = 0.0;
+        let mut at = None;
+        let mut center = None;
+        let mut s = sketch_with(&[], |sk| {
+            let pts: Vec<PointId> = [(0.0, 0.0), (10.0, 6.0), (21.0, -3.0), (30.0, 8.0)]
+                .iter()
+                .map(|&(x, y)| sk.add_point(x, y).unwrap())
+                .collect();
+            let c = sk.add_spline(&pts).unwrap();
+            let a = sk.activate_curvature_handle(c, pts[2]).unwrap();
+            let CurveKind::Spline { handles, .. } = &sk.curve(c).unwrap().kind else {
+                panic!("kein Spline");
+            };
+            let h = handles[0];
+            let HandleCurvature::Arc { center: m, .. } = h.curvature else {
+                panic!("kein Krümmungsgriff");
+            };
+            len = xy(sk, h.tip).distance(xy(sk, pts[2]));
+            for &p in pts.iter().chain([&h.tip]) {
+                let q = xy(sk, p);
+                sk.add_constraint(K::Fixed(p, q.x, q.y)).unwrap();
+            }
+            dim = Some(sk.add_constraint(K::Radius(a, len)).unwrap());
+            arc = Some(a);
+            at = Some(pts[2]);
+            center = Some(m);
+        });
+        let (dim, at, center) = (dim.unwrap(), at.unwrap(), center.unwrap());
+        let (se, sk) = s.session_sketch_mut().unwrap();
+        se.set_dimension_value(sk, dim, from * len).unwrap();
+        se.set_dimension_value(sk, dim, to * len).unwrap();
+        assert_eq!(
+            se.last_report.as_ref().unwrap().status,
+            planora_sketch::solver::SolveStatus::Solved,
+            "{from} -> {to}"
+        );
+        let r = xy(sk, center).distance(xy(sk, at));
+        assert!(
+            (r - to * len).abs() < 1e-6 * (to * len).max(1.0),
+            "{from} -> {to}: r = {r}"
+        );
+        assert!(sk.curve(arc.unwrap()).is_some());
+    }
 }

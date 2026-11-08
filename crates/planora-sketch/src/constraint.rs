@@ -889,22 +889,29 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
             };
             let (a, m) = (ctx.pt(*at), ctx.pt(center));
             let forward = sub2(&ctx.pt(tip), &a);
-            let l = norm_len(&forward);
             let radial = sub2(&m, &a);
-            let r = norm_len(&radial);
+            // Mitte auf der Normalen, als Winkel von der Normalen auf ihrer Seite: links des Griffs,
+            // wenn der Bogen am Stützpunkt beginnt, rechts, wenn er dort endet. Das nackte
+            // `dot(radial, forward)` ist auch auf der anderen Seite null (B9: Die Seite wechselt nie
+            // durch Lösen), und der Löser erfüllt es, indem er die Mitte auf die neue Normale
+            // projiziert: Bei gedrehtem Griff schrumpft der Radius mit `|cos|`, bei 90° bis auf null.
+            // Der Winkel dreht die Mitte stattdessen mit; die Gegenseite liegt bei ±π und ist keine
+            // Nullstelle.
+            let side = if start == *at { 1.0 } else { -1.0 };
+            let off_normal = dot(&radial, &forward).atan2(&(side * cross(&forward, &radial)));
             // Bögen laufen gegen den Uhrzeigersinn vom Start zum Ende. Die Öffnung ist höchstens
             // 2,5 rad, der Sprung von `atan2` bei π ist also weit weg.
             let (s, e) = (sub2(&ctx.pt(start), &m), sub2(&ctx.pt(end), &m));
             let opening = cross(&s, &e).atan2(&dot(&s, &e));
-            // Als Bogenlänge statt als Winkel: Beide Zeilen messen dann eine Länge, und bei großem
-            // Radius zählt ein Winkelfehler so viel, wie er das Bogenende versetzt.
-            let reach = HANDLE_MAX_OPENING * &r;
-            let want = if l.v < reach.v { l.clone() } else { reach };
-            // Mitte auf der Normalen. Geteilt durch `√(L² + r²)`: So bleibt der Gradient auch bei
-            // `r = 1000·L` nahe eins. Durch `L` allein wäre er dort 1000 und bremste über die
-            // einheitliche Dämpfung des Löser alle anderen Zeilen der Gruppe.
-            let scale = (&l * &l + &r * &r).sqrt();
-            vec![dot(&radial, &forward) / scale, r * opening - want]
+            // Beide Zeilen sind Winkel. Mit einem Faktor `r` (Länge statt Winkel) wären sie bei
+            // `r = 0` erfüllt, und der Löser fände dort ein Tal: Der Bogen fiele in sich zusammen.
+            let ratio = norm_len(&forward) / norm_len(&radial);
+            let want = if ratio.v < HANDLE_MAX_OPENING {
+                ratio
+            } else {
+                Dual::constant(HANDLE_MAX_OPENING)
+            };
+            vec![off_normal, opening - want]
         }
     }
 }
@@ -1025,7 +1032,10 @@ pub(crate) fn end_curvature_dual(ctx: &Ctx, c: CurveId, p: PointId) -> Option<Du
             let w = conic_weight(*rho);
             kappa_of(&u, &v) * (0.5 / (w * w))
         }
-        _ => return None,
+        // Diese Arten haben keine Enden; `curve_ends` oben hat sie schon abgewiesen.
+        CurveKind::Circle { .. } | CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. } => {
+            return None;
+        }
     })
 }
 
@@ -1721,6 +1731,7 @@ impl Sketch {
         let angular_row = |row: usize| match kind {
             Parallel(..) | Perpendicular(..) | Angle(..) | EllipseAngle(..) => true,
             Collinear(..) | Smooth(..) => row == 0,
+            SplineCurvatureHandle(..) => true,
             Tangent(a, b) => row == 1 && line_and_param(self, *a, *b).is_some(),
             _ => false,
         };

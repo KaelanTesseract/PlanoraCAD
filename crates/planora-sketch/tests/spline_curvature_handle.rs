@@ -99,25 +99,30 @@ fn kappa_side(s: &Sketch, c: CurveId, t: f64, side: f64) -> f64 {
     d.perp_dot(a) / d.length().powi(3)
 }
 
-/// Prüft die beiden Zeilen aus B2 und den Radiusbezug an den aktuellen Werten.
+/// Prüft die beiden Zeilen aus B2 und den Radiusbezug an den aktuellen Werten. `limit` gilt für die
+/// Winkel in Radiant und für den Abstand des Bogenendes vom Kreis, relativ zum Radius.
 fn assert_rows_hold(s: &Sketch, at: PointId, h: &Parts, limit: f64) {
     let (a, tip, m, o) = (pos(s, at), pos(s, h.tip), pos(s, h.center), pos(s, h.other));
     let f = tip - a;
     let (l, r) = (f.length(), (m - a).length());
     assert!(
-        (m - a).dot(f).abs() / l <= limit,
+        (m - a).dot(f).abs() / (l * r) <= limit,
         "Mitte nicht auf der Normalen"
     );
     assert!(
-        ((o - m).length() - r).abs() <= limit,
+        ((o - m).length() - r).abs() <= limit * r.max(1.0),
         "Ende nicht auf dem Kreis"
     );
     let open = (a - m).perp_dot(o - m).atan2((a - m).dot(o - m)).abs();
     let want = (l / r).min(MAX_OPENING);
-    assert!(
-        (open - want).abs() * r <= limit,
-        "Öffnung {open}, soll {want}"
-    );
+    assert!((open - want).abs() <= limit, "Öffnung {open}, soll {want}");
+    // Das freie Ende liegt vor dem Griff, die Mitte auf der Seite des Bogens.
+    let CurveKind::Arc { start, .. } = s.curve(h.arc).unwrap().kind else {
+        panic!("kein Bogen");
+    };
+    let left = f.perp_dot(m - a) > 0.0;
+    assert_eq!(left, start == at, "Seite passt nicht zum Bogen");
+    assert!((o - a).dot(f) > 0.0, "Bogenende hinter dem Griff");
 }
 
 #[test]
@@ -342,6 +347,7 @@ fn the_switch_also_holds_when_the_handle_moves() {
     assert_eq!(s.solve().status, SolveStatus::Solved);
     let f = (pos(&s, h.tip) - a).normalize();
     // Der Griff wächst und schrumpft über L = 2,5·r = 10.
+    let mut lengths = Vec::new();
     for k in 0..=400 {
         let l = 10.0 + 6.0 * (k as f64 * 0.04).sin();
         let target = a + f * l;
@@ -353,8 +359,13 @@ fn the_switch_also_holds_when_the_handle_moves() {
             .unwrap();
         assert!(!rep.drag_failed, "L = {l}: Ziehen gescheitert");
         assert_rows_hold(&s, pts[2], &h, 1e-6);
+        lengths.push(pos(&s, h.tip).distance(a));
     }
-    assert!(s.constraint(dim).is_some());
+    // Das Maß hat gehalten, und der Griff hat beide Seiten des Knicks gesehen.
+    assert_eq!(s.constraint(dim).unwrap().kind, K::Radius(h.arc, 4.0));
+    assert!((pos(&s, h.center).distance(a) - 4.0).abs() < 1e-6);
+    assert!(lengths.iter().any(|&l| l > 11.0), "{lengths:?}");
+    assert!(lengths.iter().any(|&l| l < 9.0), "{lengths:?}");
     // Und ohne jedes Halten: Das freie Ende zieht alles mit.
     let mut s = sketch();
     let (c, pts) = spline(&mut s, &WAVE);
@@ -405,17 +416,27 @@ fn the_center_cannot_change_sides() {
             assert_rows_hold(&s, pts[1], &h, 1e-6);
             assert!(kappa_side(&s, c, 1.0, 1.0) * sign > 0.0, "Zug über {far}");
         }
-        // Auch die Spitze, die über den Stützpunkt springt, kehrt die Seite nicht um.
-        for far in [1.0, 5.0, 50.0] {
-            let a = pos(&s, pts[1]);
-            let target = a - (pos(&s, h.tip) - a).normalize() * far;
-            s.drag(&[Drag {
-                point: h.tip,
-                target,
-            }])
-            .unwrap();
-            assert_eq!(is_left(&s), left, "Spitze über {far}");
+        // Auch die Spitze, die in feinen Schritten ganz um den Stützpunkt läuft, kehrt die Seite
+        // nicht um, und sie kommt wirklich herum.
+        let a = pos(&s, pts[1]);
+        s.add_constraint(K::Fixed(pts[1], a.x, a.y)).unwrap();
+        let start = pos(&s, h.tip) - a;
+        for k in 1..=72 {
+            let (sin, cos) = (k as f64 * 5.0_f64.to_radians()).sin_cos();
+            let d = DVec2::new(start.x * cos - start.y * sin, start.x * sin + start.y * cos);
+            let target = pos(&s, pts[1]) + d;
+            let rep = s
+                .drag(&[Drag {
+                    point: h.tip,
+                    target,
+                }])
+                .unwrap();
+            assert!(!rep.drag_failed, "Spitze, Schritt {k}");
+            assert_eq!(is_left(&s), left, "Spitze, Schritt {k}");
             assert_rows_hold(&s, pts[1], &h, 1e-6);
+            let now = pos(&s, h.tip) - pos(&s, pts[1]);
+            let off = now.normalize().dot(d.normalize());
+            assert!(off > 0.9, "Spitze folgt nicht, Schritt {k}: {off}");
         }
         // Eine harte Vorgabe auf der anderen Seite wäre lösbar, wird aber nicht erfüllt: Die
         // Skizze meldet das und bleibt auf ihrer Seite.
@@ -423,10 +444,8 @@ fn the_center_cannot_change_sides() {
         let m = pos(&s, h.center);
         let mirror = a - (m - a);
         let before = kappa_side(&s, c, 1.0, 1.0);
-        for p in [pts[1], h.tip] {
-            let q = pos(&s, p);
-            s.add_constraint(K::Fixed(p, q.x, q.y)).unwrap();
-        }
+        let q = pos(&s, h.tip);
+        s.add_constraint(K::Fixed(h.tip, q.x, q.y)).unwrap();
         assert_eq!(s.solve().status, SolveStatus::Solved);
         let fixed = s
             .add_constraint(K::Fixed(h.center, mirror.x, mirror.y))
@@ -560,9 +579,10 @@ fn near_zero_curvature_starts_at_1000_l() {
     let dim = s.add_constraint(K::Radius(h.arc, 5.0)).unwrap();
     assert_eq!(s.solve().status, SolveStatus::Solved);
     assert!((kappa_side(&s, c, 1.0, 1.0) - 0.2).abs() < 1e-6);
-    s.set_constraint_value(dim, 1000.0 * l).unwrap();
-    assert_eq!(s.solve().status, SolveStatus::Solved);
-    assert_rows_hold(&s, pts[1], &h, 1e-6);
+    let accept =
+        |_: &Sketch, r: &planora_sketch::solver::SolveReport| r.status == SolveStatus::Solved;
+    let (done, _) = s.solve_in_steps(&[(dim, 5.0, 1000.0 * l)], accept).unwrap();
+    assert_rows_hold(&done, pts[1], &h, 1e-6);
 
     // Knapp darunter und darüber: Die Grenze ist |κ|·L = 1e-3.
     let bent = |y: f64| {
@@ -914,4 +934,130 @@ fn data_with_a_curvature_handle_is_checked_on_loading() {
     assert!(d.constraints[row].kind == K::SplineCurvatureHandle(c, pts[2]));
     assert!(!d.constraints[row].alive);
     Sketch::from_data(d).unwrap();
+}
+
+/// Griff am Stützpunkt `pts[2]`, Spitze soll durch `pin` auf den um `degrees` gedrehten Ort.
+fn turn_the_tip(degrees: f64, hold_fit_points: bool, pin: usize) -> Option<(f64, f64)> {
+    let mut s = sketch();
+    let (c, pts) = spline(&mut s, &WAVE);
+    s.activate_curvature_handle(c, pts[2]).unwrap();
+    let h = parts(&s, c, pts[2]);
+    if hold_fit_points {
+        for &p in &pts {
+            let q = pos(&s, p);
+            s.add_constraint(K::Fixed(p, q.x, q.y)).unwrap();
+        }
+        assert_eq!(s.solve().status, SolveStatus::Solved);
+    }
+    let a = pos(&s, pts[2]);
+    let side = |s: &Sketch| {
+        let a = pos(s, pts[2]);
+        (pos(s, h.tip) - a).perp_dot(pos(s, h.center) - a) > 0.0
+    };
+    let before = side(&s);
+    let r0 = pos(&s, h.center).distance(a);
+    let d = pos(&s, h.tip) - a;
+    let (sin, cos) = degrees.to_radians().sin_cos();
+    let q = a + DVec2::new(d.x * cos - d.y * sin, d.x * sin + d.y * cos);
+    if pin == 0 {
+        let free = s.add_point(q.x, q.y).unwrap();
+        s.add_constraint(K::Fixed(free, q.x, q.y)).unwrap();
+        s.add_constraint(K::Coincident(h.tip, free)).unwrap();
+    } else {
+        s.add_constraint(K::Fixed(h.tip, q.x, q.y)).unwrap();
+    }
+    let rep = s.solve();
+    if rep.status != SolveStatus::Solved {
+        return None;
+    }
+    assert_eq!(side(&s), before, "{degrees}°: Seite gewechselt");
+    assert!(
+        pos(&s, h.tip).distance(q) < 1e-6,
+        "{degrees}°: Spitze nicht am Ziel"
+    );
+    assert_rows_hold(&s, pts[2], &h, 1e-6);
+    // Die Krümmung folgt dem Griff mit demselben Vorzeichen.
+    let now = pos(&s, h.center).distance(pos(&s, pts[2]));
+    let sign = if before { 1.0 } else { -1.0 };
+    let k = kappa_side(&s, c, 2.0, 1.0);
+    assert!((k - sign / now).abs() < 1e-6, "{degrees}°: κ {k}, r {now}");
+    assert!(
+        now > 0.2 * r0,
+        "{degrees}°: Radius eingebrochen, {r0} auf {now}"
+    );
+    Some((now, r0))
+}
+
+#[test]
+fn turning_the_tip_by_a_constraint_is_solvable_on_the_same_side() {
+    // In beide Richtungen, frei und mit festen Stützpunkten, über Deckungsgleich und über Fest.
+    // Die Seite bleibt, es gibt also keinen falschen Widerspruch.
+    for hold in [false, true] {
+        for pin in [0, 1] {
+            for k in -35..=35 {
+                let degrees = 5.0 * k as f64;
+                assert!(
+                    turn_the_tip(degrees, hold, pin).is_some(),
+                    "{degrees}°, feste Stützpunkte {hold}, Art {pin}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_tip_held_against_a_held_center_is_not_solved_by_flipping() {
+    // Mitte fest, Griff soll herumdrehen: Das ginge nur auf der anderen Seite. Das ist kein Fall
+    // für einen Seitenwechsel (B9): Die Skizze meldet es und bleibt stehen.
+    let mut s = sketch();
+    let (c, pts) = spline(&mut s, &WAVE);
+    s.activate_curvature_handle(c, pts[2]).unwrap();
+    let h = parts(&s, c, pts[2]);
+    for &p in pts.iter().chain([&h.center]) {
+        let q = pos(&s, p);
+        s.add_constraint(K::Fixed(p, q.x, q.y)).unwrap();
+    }
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+    let a = pos(&s, pts[2]);
+    let d = pos(&s, h.tip) - a;
+    let (tip0, center0) = (pos(&s, h.tip), pos(&s, h.center));
+    let q = a - d;
+    s.add_constraint(K::Fixed(h.tip, q.x, q.y)).unwrap();
+    assert_ne!(s.solve().status, SolveStatus::Solved);
+    assert!(pos(&s, h.tip).distance(tip0) < 1e-9);
+    assert!(pos(&s, h.center).distance(center0) < 1e-9);
+}
+
+#[test]
+fn big_radius_jumps_arrive_in_steps() {
+    // Der direkte Weg kann scheitern; die Maßeingabe der Oberfläche geht über `solve_in_steps`.
+    for (from, to) in [(1.0, 3000.0), (0.4, 1000.0), (0.1, 1000.0), (3000.0, 0.1)] {
+        let mut s = sketch();
+        let (c, pts) = spline(&mut s, &WAVE);
+        s.activate_curvature_handle(c, pts[2]).unwrap();
+        let h = parts(&s, c, pts[2]);
+        for &p in pts.iter().chain([&h.tip]) {
+            let q = pos(&s, p);
+            s.add_constraint(K::Fixed(p, q.x, q.y)).unwrap();
+        }
+        let l = pos(&s, h.tip).distance(pos(&s, pts[2]));
+        let dim = s.add_constraint(K::Radius(h.arc, l)).unwrap();
+        assert_eq!(s.solve().status, SolveStatus::Solved);
+        // Über 10·L zum Anfangswert, das geht direkt.
+        s.set_constraint_value(dim, 10.0 * l).unwrap();
+        assert_eq!(s.solve().status, SolveStatus::Solved);
+        s.set_constraint_value(dim, from * l).unwrap();
+        assert_eq!(s.solve().status, SolveStatus::Solved, "Anfang {from}");
+        let accept =
+            |_: &Sketch, r: &planora_sketch::solver::SolveReport| r.status == SolveStatus::Solved;
+        let (done, _) = s
+            .solve_in_steps(&[(dim, from * l, to * l)], accept)
+            .unwrap_or_else(|| panic!("{from} -> {to}: nicht angekommen"));
+        let r = pos(&done, h.center).distance(pos(&done, pts[2]));
+        assert!(
+            (r - to * l).abs() < 1e-6 * (to * l).max(1.0),
+            "{from} -> {to}: r = {r}"
+        );
+        assert_rows_hold(&done, pts[2], &h, 1e-5);
+    }
 }
