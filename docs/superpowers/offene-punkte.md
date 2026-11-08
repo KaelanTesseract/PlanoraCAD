@@ -2311,6 +2311,8 @@ Umgesetzt 2026-11-03 bis 2026-11-06 auf dem Zweig `feature/skizzen-muster` (Spec
 
 ## Teilprojekt Skizzen 6
 
+Abgeschlossen 2026-11-08, gemergt in a78db45. Drei Handtests bei 1920×1080; die Funde daraus (Esc, Symbole, Augen, Sichtbarkeit in der Datei, Augen an Ordnern, wählbare Grundebenen, Abstand im Baum) sind vor dem Merge behoben. Läufe auf 651634a: Windows 6034 bestanden, 0 fehlgeschlagen; WSL 6042 bestanden, 2 fehlgeschlagen (`real_step_text_limit`, auch auf `master`; `a_locked_old_json_never_ends_up_next_to_a_new_png`, nur unter root); fmt, clippy und deny in Ordnung. Nicht in der App geprüft: Speichern und Laden im Fenster, „Skizze erstellen“ am Ursprung.
+
 - „Verknüpfung aufheben“ steht als Knopf im Abschnitt „Bearbeiten“ des Skizzenfelds (nur, wenn eine gewählte Kurve eine Projektion ist) und als belegbare Aktion `skizze.verknuepfung_aufheben` ohne Vorgabetaste. Fusion bietet den Befehl im Rechtsklick-Menü der Kurve an; PlanoraCAD hat in der Skizzenansicht noch kein Rechtsklick-Menü (Rechtsklick bricht das Werkzeug ab). Nachholen, sobald es ein Kontextmenü für Skizzenkurven gibt.
 - Warnzeichen an der Browser-Zeile einer Skizze mit verlorenem Bezug: kleines Warnsymbol in Warnfarbe an der rechten unteren Ecke des Skizzensymbols, Text im Hinweis. Genaue Lage und Form wie in Fusion ist **Annahme**.
 - Projizieren einer Fläche oder eines Körpers (Task 9): Jede projizierte Kurve hat ihre eigenen festen Punkte; die Ecken einer Fläche oder eines Körpers teilen sich **keine** Skizzenpunkte (Entscheidung des Plans). Fusion legt vermutlich gemeinsame Punkte an. Profile entstehen trotzdem, weil die Enden auf derselben Stelle liegen. Nachholen, wenn Punkte nach dem Nachführen sicher zusammenbleiben.
