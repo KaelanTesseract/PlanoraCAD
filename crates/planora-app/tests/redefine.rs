@@ -426,7 +426,8 @@ fn key_starts_the_mode_and_windows_exclude_it() {
     assert_eq!(w.active_tab().state.pending_pick, None);
     assert!(w.active_tab().blend_dialog.is_some());
     // Aus dem Kontextmenü der Verlaufsleiste (Browser-Weg siehe oben) bei offenem
-    // „Verrunden“: Das Fenster schließt im nächsten Bild der App.
+    // „Verrunden“: Das Fenster schließt im selben Bild der App (Browser und Leiste laufen vor
+    // `exclude_pick_modes`).
     w.active_tab_mut()
         .state
         .start_redefine_sketch_plane(sketch)
@@ -434,6 +435,83 @@ fn key_starts_the_mode_and_windows_exclude_it() {
     w.active_tab_mut().exclude_pick_modes();
     assert!(w.active_tab().blend_dialog.is_none());
     assert!(!w.active_tab().state.edge_picking);
+}
+
+/// Skizze mit einem Rechteck (geschlossenes Profil) im Tab, gewählt.
+fn rectangle_sketch(w: &mut Workspace) -> FeatureId {
+    let s = &mut w.active_tab_mut().state;
+    let sketch = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    s.open_sketch(sketch).unwrap();
+    s.session_sketch_mut()
+        .unwrap()
+        .1
+        .add_rectangle(DVec2::new(0.0, 0.0), DVec2::new(10.0, 10.0))
+        .unwrap();
+    s.close_sketch();
+    s.selected_feature = Some(sketch);
+    sketch
+}
+
+#[test]
+fn profile_dialogs_and_mode_exclude_each_other() {
+    // Korrekturrunde 1: Die Profilwahl von Extrudieren/Drehen und der Wahlmodus wählen beide in
+    // der Ansicht; es gibt immer nur einen.
+    let mut w = ws();
+    let sketch = rectangle_sketch(&mut w);
+    // Offenes „Extrudieren“, dann der Modus: Das Fenster schließt, die Profilwahl endet.
+    app::do_create(&mut w, app::CreateKind::Extrusion);
+    assert!(
+        w.active_tab()
+            .dialog
+            .as_ref()
+            .is_some_and(|d| d.profile_choice().is_some())
+    );
+    w.active_tab_mut()
+        .state
+        .start_redefine_sketch_plane(sketch)
+        .unwrap();
+    w.active_tab_mut().exclude_pick_modes();
+    let tab = w.active_tab();
+    assert!(tab.dialog.is_none());
+    assert!(tab.state.profile_pick.is_none());
+    assert_eq!(
+        tab.state.pending_pick,
+        Some(PendingPick::SketchPlane(sketch))
+    );
+    // Umgekehrt: „Extrudieren“ aus dem Menü beendet den Modus.
+    app::do_create(&mut w, app::CreateKind::Revolution);
+    assert_eq!(w.active_tab().state.pending_pick, None);
+    assert!(w.active_tab().dialog.is_some());
+    w.active_tab_mut().dialog = None;
+    // „Extrudieren …“ aus dem Kontextmenü (Wunsch an die App) ebenso.
+    let s = &mut w.active_tab_mut().state;
+    s.start_redefine_sketch_plane(sketch).unwrap();
+    s.request_sketch_dialog(planora_app::state::SketchRequest::Extrude(sketch));
+    let d = app::dialog_for_request(s).expect("Dialog");
+    assert!(d.profile_choice().is_some());
+    assert_eq!(s.pending_pick, None);
+    // Bearbeiten einer Extrusion (Fenster mit Profilwahl): beendet den Modus, und der Modus
+    // schließt umgekehrt das Fenster.
+    let extrude = s.extrude_sketch(sketch, 0, 5.0).unwrap();
+    s.start_redefine_sketch_plane(sketch).unwrap();
+    let tab = w.active_tab_mut();
+    tab.open_edit(extrude);
+    assert!(
+        tab.feature_dialog
+            .as_ref()
+            .is_some_and(planora_app::feature_dialog::FeatureDialog::picks_profiles)
+    );
+    assert_eq!(tab.state.pending_pick, None);
+    tab.state.start_redefine_sketch_plane(sketch).unwrap();
+    tab.exclude_pick_modes();
+    assert!(tab.feature_dialog.is_none());
+    assert!(tab.state.profile_pick.is_none());
+    assert_eq!(
+        tab.state.pending_pick,
+        Some(PendingPick::SketchPlane(sketch))
+    );
 }
 
 #[test]

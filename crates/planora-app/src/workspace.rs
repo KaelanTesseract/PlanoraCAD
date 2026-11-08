@@ -449,9 +449,10 @@ impl DocTab {
         self.state.clear_edge_marks();
     }
 
-    /// Läuft ein Wahlmodus ([`crate::state::PendingPick`]), schließen ein Ebenen-Fenster und das
-    /// Fenster „Verrunden“/„Fase“ (sie wählen sonst in derselben Ansicht). Wer eines dieser
-    /// Fenster öffnet, beendet umgekehrt den Wahlmodus.
+    /// Läuft ein Wahlmodus ([`crate::state::PendingPick`]), schließen ein Ebenen-Fenster, das
+    /// Fenster „Verrunden“/„Fase“ und ein Fenster mit Profilwahl (Extrudieren, Drehen; neu oder
+    /// beim Bearbeiten): Sie wählen sonst in derselben Ansicht. Wer eines dieser Fenster öffnet,
+    /// beendet umgekehrt den Wahlmodus.
     pub fn exclude_pick_modes(&mut self) {
         if self.state.pending_pick.is_none() {
             return;
@@ -462,6 +463,21 @@ impl DocTab {
         if self.blend_dialog.is_some() {
             self.close_blend_dialog();
         }
+        if self
+            .dialog
+            .as_ref()
+            .is_some_and(|d| d.profile_choice().is_some())
+        {
+            self.dialog = None;
+        }
+        if self
+            .feature_dialog
+            .as_ref()
+            .is_some_and(FeatureDialog::picks_profiles)
+        {
+            self.feature_dialog = None;
+        }
+        self.state.profile_pick = None;
     }
 
     /// Öffnet das Fenster „Bearbeiten“ für das Feature `id`: bei einer Konstruktionsebene das
@@ -473,6 +489,8 @@ impl DocTab {
             self.state.cancel_pending_pick();
             self.plane_dialog = Some(d);
         } else {
+            // Das Bearbeiten-Fenster kann Profile wählen: ein Wahlmodus endet.
+            self.state.cancel_pending_pick();
             self.feature_dialog = FeatureDialog::new(&self.state, id);
         }
     }

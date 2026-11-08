@@ -2013,6 +2013,8 @@ pub fn do_create(ws: &mut Workspace, kind: CreateKind) {
             if tab.state.try_close_sketch().is_err() {
                 return;
             }
+            // Die Profilwahl wählt in der Ansicht: ein Wahlmodus endet.
+            tab.state.cancel_pending_pick();
             tab.dialog = Some(if kind == CreateKind::Revolution {
                 CreateDialog::revolve_sketch(&tab.state, i)
             } else {
@@ -2531,8 +2533,11 @@ pub fn clear_profile_pick_without_dialog(tab: &mut crate::workspace::DocTab) {
 
 /// Setzt einen Dialogwunsch aus dem Browser (Kontextmenü einer Skizze) in den passenden Dialog um
 /// und löscht ihn. Der Browser hat die offene Skizze dann bereits beendet.
+/// Der Dialog wählt Profile in der Ansicht: ein laufender Wahlmodus endet.
 pub fn dialog_for_request(state: &mut AppState) -> Option<CreateDialog> {
-    match state.sketch_request.take()? {
+    let request = state.sketch_request.take()?;
+    state.cancel_pending_pick();
+    match request {
         SketchRequest::Extrude(i) => Some(CreateDialog::extrude_sketch(state, i)),
         SketchRequest::Revolve(i) => Some(CreateDialog::revolve_sketch(state, i)),
     }
@@ -2640,6 +2645,10 @@ impl eframe::App for PlanoraApp {
         if let Some(id) = tab.state.edit_request.take() {
             tab.open_edit(id);
         }
+        // Ein eben begonnener Wahlmodus (Browser, Verlaufsleiste) schließt im selben Bild, bevor
+        // sie sich zeigen, die Fenster, die in der Ansicht wählen: Profilwahl von Extrudieren/
+        // Drehen, Ebenen-Fenster, „Verrunden“/„Fase“. Nur einer wählt in der Ansicht.
+        tab.exclude_pick_modes();
         drop_dialogs_in_sketch_mode(&tab.state, &mut tab.dialog, &mut tab.boolean_dialog);
         // In einer alten Version lässt sich nichts ändern: das Fenster „Blattangaben“ (mit dem
         // Knopf für das Stücklistenblatt) gibt es dort nicht.
@@ -2708,9 +2717,6 @@ impl eframe::App for PlanoraApp {
         {
             tab.state.sheet_dialog = Some(dialog);
         }
-        // Ein eben begonnener Wahlmodus (Browser, Verlaufsleiste) schließt Ebenen-Fenster und
-        // „Verrunden“/„Fase“: nur einer wählt in der Ansicht.
-        tab.exclude_pick_modes();
         if let Some(mut dialog) = tab.plane_dialog.take()
             && dialog.show(&ctx, &mut tab.state)
         {
