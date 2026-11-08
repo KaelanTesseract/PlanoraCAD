@@ -327,12 +327,30 @@ fn collinear_and_doubled_control_points_stay_finite() {
     s.add_constraint(K::PointOnCurve(q, c)).unwrap();
     s.add_constraint(K::Coincident(pts[2], pts[3])).unwrap();
     let rep = s.solve();
-    assert!(s.variable_count() > 0);
+    assert_eq!(rep.status, SolveStatus::Solved, "{rep:?}");
     assert!(
         s.points().all(|(p, _)| s.point_xy(p).unwrap().is_finite()),
         "{rep:?}"
     );
     finite(&s, c);
+    // Die Abhängigkeiten halten wirklich: Punkte aufeinander, `q` auf der Kurve.
+    let (p2, p3) = (s.point_xy(pts[2]).unwrap(), s.point_xy(pts[3]).unwrap());
+    assert!(p2.distance(p3) < 1e-6, "{p2} {p3}");
+    let on = s.point_xy(q).unwrap();
+    assert!(distance_to(&s, c, on) < 1e-3, "{on}");
+    // Die Zusatzvariable von „Punkt auf Kurve“ bleibt endlich und im Bereich der Kurve.
+    let (lo, hi) = s.curve_domain(c).unwrap();
+    let extras: Vec<f64> = s
+        .constraints()
+        .filter(|(_, d)| matches!(d.kind, K::PointOnCurve(p, k) if p == q && k == c))
+        .filter_map(|(id, _)| s.to_data().constraints[id.index()].extra)
+        .map(|v| s.variables()[v])
+        .collect();
+    assert_eq!(extras.len(), 1, "{extras:?}");
+    assert!(
+        extras[0].is_finite() && (lo..=hi).contains(&extras[0]),
+        "{extras:?}"
+    );
 
     // Das erste Kontrollpolygon-Stück auf null gezogen: Die Ableitung am Anfang verschwindet.
     let mut s = sketch();
@@ -427,30 +445,4 @@ fn data_roundtrip_keeps_shape_and_ids() {
     let back = Sketch::from_data(s.to_data()).unwrap();
     assert_eq!(back.to_data(), s.to_data());
     assert_eq!(back.curve(c).unwrap().kind, s.curve(c).unwrap().kind);
-}
-
-#[test]
-fn other_commands_refuse_it_for_now() {
-    // Vorläufig bis Task 3: klare Ablehnung statt Absturz; die Skizze bleibt, wie sie ist.
-    let mut s = sketch();
-    let pts = points(&mut s, &ARCH);
-    let c = s.add_control_spline(&pts, 5).unwrap();
-    let a = s.add_point(-5.0, -5.0).unwrap();
-    let b = s.add_point(-5.0, 5.0).unwrap();
-    let axis = s.add_line(a, b).unwrap();
-    // Eine Linie, die die Kurve kreuzt: Sonst löscht Stutzen die ganze Kurve (wie bei jeder Art).
-    let d = s.add_point(6.0, -2.0).unwrap();
-    let e = s.add_point(6.0, 10.0).unwrap();
-    s.add_line(d, e).unwrap();
-    let before = s.to_data();
-    assert!(s.add_mirrored(&[c], axis).is_err());
-    assert_eq!(s.to_data(), before);
-    let at = s.curve_eval(c, 0.5).unwrap();
-    assert!(s.trim(c, at).is_err());
-    assert!(s.break_curve(c, at).is_err());
-    assert_eq!(s.to_data(), before);
-    // Keine Profilkante; die Kurve wird benannt abgelehnt.
-    let found = s.profiles();
-    assert!(found.profiles.is_empty());
-    assert!(found.rejected.iter().any(|r| r.curves == vec![c]));
 }

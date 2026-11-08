@@ -66,10 +66,10 @@ pub(crate) fn intersect_prepared(p1: &Prepared, p2: &Prepared, tol: f64) -> Vec<
     finish(g1, g2, raw, tol)
 }
 
-/// Selbstschnitte eines Splines als Parameterpaare `t1 < t2` (Kreuzungen nicht benachbarter
-/// Linienzug-Abschnitte, nachgeschärft); andere Kurven haben keine.
+/// Selbstschnitte eines Splines (beider Arten) als Parameterpaare `t1 < t2` (Kreuzungen nicht
+/// benachbarter Linienzug-Abschnitte, nachgeschärft); andere Kurven haben keine.
 pub(crate) fn self_intersect(g: &Geom, tol: f64) -> Vec<(f64, f64)> {
-    if !matches!(g, Geom::Spline { .. }) {
+    if !matches!(g, Geom::Spline { .. } | Geom::Nurbs { .. }) {
         return Vec::new();
     }
     let poly = Poly::new(g);

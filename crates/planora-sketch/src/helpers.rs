@@ -94,8 +94,8 @@ impl Sketch {
         result
     }
 
-    /// Prüft die Quellkurven für Spiegeln und Muster: vorhanden, ohne Doppelte, nur Linien,
-    /// Kreise, Bögen und Ellipsenbögen.
+    /// Prüft die Quellkurven für Spiegeln und Muster: vorhanden, ohne Doppelte, keine ganze
+    /// Ellipse (Skizzen 7: Splines beider Arten gehen jetzt).
     fn check_copy_sources(&self, curves: &[CurveId]) -> Result<(), SketchError> {
         if curves.is_empty() {
             return Err(SketchError::InvalidInput(tr!("sketch-nothing-selected")));
@@ -105,12 +105,7 @@ impl Sketch {
             if curves[..i].contains(&c) {
                 return Err(SketchError::InvalidInput(tr!("sketch-err-object-twice")));
             }
-            if matches!(
-                self.curves[c].kind,
-                CurveKind::Ellipse { .. }
-                    | CurveKind::Spline { .. }
-                    | CurveKind::ControlSpline { .. }
-            ) {
+            if matches!(self.curves[c].kind, CurveKind::Ellipse { .. }) {
                 return Err(SketchError::WrongType(tr!("sketch-err-copy-kinds")));
             }
         }
@@ -148,9 +143,10 @@ impl Sketch {
     /// Legt eine Kopie der Kurve `source` an, deren Punkte über `map` abgebildet werden; Stil wie
     /// die Vorlage. Beim Spiegeln (`CopyHow::Mirror`) werden Bögen und Ellipsenbögen mit
     /// vertauschtem Start und Ende angelegt und die große Halbachse eines Ellipsenbogens
-    /// gespiegelt. Nur Muster (`CopyHow::Pattern`) kopieren auch Ellipsen und Splines; Radius und
-    /// Halbachsen nehmen den Maßstab, die große Halbachse die Drehung der Lage mit. Gibt die neue
-    /// Kurve zurück.
+    /// gespiegelt; Splines behalten die Reihenfolge ihrer Punkte, ein Spline mit Kontrollpunkten
+    /// auch Grad und Knoten. Nur Muster (`CopyHow::Pattern`) kopieren auch ganze Ellipsen; Radius
+    /// und Halbachsen nehmen den Maßstab, die große Halbachse die Drehung der Lage mit. Gibt die
+    /// neue Kurve zurück.
     pub(crate) fn copy_curve(
         &mut self,
         source: CurveId,
@@ -208,13 +204,19 @@ impl Sketch {
                 let major = t.linear(DVec2::new(self.vars[ax], self.vars[ay]));
                 self.add_ellipse(map[&center], major, self.vars[minor] * factor)?
             }
-            CurveKind::Spline { points } if matches!(how, CopyHow::Pattern(_)) => {
+            CurveKind::Spline { points } => {
                 let mapped: Vec<PointId> = points.iter().map(|p| map[p]).collect();
                 self.add_spline(&mapped)?
             }
-            CurveKind::Ellipse { .. }
-            | CurveKind::Spline { .. }
-            | CurveKind::ControlSpline { .. } => {
+            CurveKind::ControlSpline {
+                points,
+                degree,
+                knots,
+            } => {
+                let mapped: Vec<PointId> = points.iter().map(|p| map[p]).collect();
+                self.add_control_spline_as(&mapped, degree, knots)?
+            }
+            CurveKind::Ellipse { .. } => {
                 return Err(SketchError::WrongType(tr!("sketch-err-copy-kinds")));
             }
         };
@@ -234,7 +236,7 @@ impl Sketch {
         Ok(p)
     }
 
-    /// Spiegelt Linien, Kreise, Bögen und Ellipsenbögen an der Linie `axis`. Jeder Punkt bekommt
+    /// Spiegelt Linien, Kreise, Bögen, Ellipsenbögen und Splines an der Linie `axis`. Jeder Punkt bekommt
     /// ein Spiegelbild mit `Symmetric`-Abhängigkeit (Punkte auf der Achse werden
     /// wiederverwendet), Kreise ein `Equal` zum Original. Bögen und Ellipsenbögen werden mit
     /// vertauschtem Start und Ende angelegt; die Halbachsen eines gespiegelten Ellipsenbogens
@@ -327,7 +329,12 @@ impl Sketch {
                     }
                     let copy = s.copy_curve(c, &map, CopyHow::Shift)?;
                     // `Equal` gibt es nur für Linien, Kreise und Bögen.
-                    if !matches!(s.curves[c].kind, CurveKind::EllipticArc { .. }) {
+                    if !matches!(
+                        s.curves[c].kind,
+                        CurveKind::EllipticArc { .. }
+                            | CurveKind::Spline { .. }
+                            | CurveKind::ControlSpline { .. }
+                    ) {
                         created.push(s.add_constraint(ConstraintKind::Equal(c, copy))?);
                     }
                     if matches!(s.curves[c].kind, CurveKind::Line { .. }) {

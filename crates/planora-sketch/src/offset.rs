@@ -34,7 +34,7 @@
 
 use crate::arrangement::{Nodes, polygon_contains, split};
 use crate::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
-use crate::curves::Sampled;
+use crate::curves::{Sampled, nurbs_breaks, nurbs_samples};
 use crate::error::SketchError;
 use crate::fillet::{Shape, meet, wrap_pi};
 use crate::geom::Geom;
@@ -339,11 +339,19 @@ fn approx_samples(
 /// `Err(Cusp)`, wenn der Versatz `d` nach links die Kurve irgendwo umklappen ließe.
 fn check_cusp(g: &Geom, against: bool, d: f64) -> Result<(), OffsetProblem> {
     let (lo, hi) = g.domain();
+    let sign = if against { -1.0 } else { 1.0 };
+    if let Geom::Nurbs { curve } = g {
+        for t in nurbs_samples(curve, lo, hi, CUSP_STEPS_PER_SEGMENT) {
+            if 1.0 - sign * g.curvature(t) * d <= CUSP_MARGIN {
+                return Err(OffsetProblem::Cusp);
+            }
+        }
+        return Ok(());
+    }
     let steps = match g {
         Geom::Spline { n, .. } => (n - 1) * CUSP_STEPS_PER_SEGMENT,
         _ => (((hi - lo) / TAU * CUSP_STEPS_PER_TURN as f64).ceil() as usize).max(1),
     };
-    let sign = if against { -1.0 } else { 1.0 };
     for k in 0..=steps {
         let t = lo + (hi - lo) * k as f64 / steps as f64;
         if 1.0 - sign * g.curvature(t) * d <= CUSP_MARGIN {
@@ -463,8 +471,20 @@ impl Sketch {
                 let sections = ((n - 1) * SECTIONS_PER_SPAN).min(MAX_SECTIONS);
                 self.open_approx(c, g, sections, against, d)
             }
-            // Vorläufig bis Skizzen 7 Task 3: klar abgelehnt.
-            Geom::Nurbs { .. } => Err(BAD),
+            Geom::Nurbs { curve } => {
+                check_cusp(g, against, d)?;
+                // Je Bézier-Stück, damit die Knoten auf Stützpunkten liegen; ein Stück hohen Grades
+                // braucht mehr Abschnitte als ein kubisches.
+                let (lo, hi) = curve.domain();
+                let pieces = nurbs_breaks(curve, lo, hi).len() - 1;
+                let per_piece = SECTIONS_PER_SPAN
+                    .max(2 * curve.degree())
+                    .min(MAX_SECTIONS / pieces)
+                    .max(1);
+                let ts = nurbs_samples(curve, lo, hi, per_piece);
+                let samples = approx_samples(g, &ts, against, d).ok_or(BAD)?;
+                Ok(vec![approx_raw(c, &samples)])
+            }
         }
     }
 

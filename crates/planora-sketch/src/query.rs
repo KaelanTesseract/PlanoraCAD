@@ -169,7 +169,8 @@ impl Sketch {
 
     /// Punkt der lebenden Kurve `c`, der `at` am nächsten liegt: exakt für Linien (auf der
     /// unbegrenzten Geraden) sowie Kreise und Bögen (auf dem ganzen Kreis), für Ellipsen und
-    /// Splines auf dem Linienzug, für Ellipsenbögen auf dem Linienzug ihrer ganzen Ellipse.
+    /// Splines auf dem Linienzug, für Ellipsenbögen auf dem Linienzug ihrer ganzen Ellipse, für
+    /// Splines mit Kontrollpunkten auf der Kurve selbst (siehe [`crate::geom::Geom::nearest`]).
     pub fn nearest_on_curve(&self, c: CurveId, at: DVec2) -> Option<DVec2> {
         if !at.is_finite() {
             return None;
@@ -200,10 +201,12 @@ impl Sketch {
                 let m = self.pos(*center);
                 Some(around(m, self.pos(*start).distance(m)))
             }
-            CurveKind::Ellipse { .. }
-            | CurveKind::Spline { .. }
-            | CurveKind::ControlSpline { .. } => {
+            CurveKind::Ellipse { .. } | CurveKind::Spline { .. } => {
                 polyline_closest(&self.curve_polyline(c, MAX_STEPS_PER_TURN)?, at)
+            }
+            CurveKind::ControlSpline { .. } => {
+                let g = self.geom(c)?;
+                Some(g.eval(g.nearest(at)).0)
             }
             CurveKind::EllipticArc { .. } => {
                 // wie beim Bogen auf der ganzen Kurve

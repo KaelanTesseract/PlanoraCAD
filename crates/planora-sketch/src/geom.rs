@@ -19,6 +19,14 @@ use std::sync::Arc;
 const NEAREST_STEPS_PER_TURN: usize = 256;
 /// Abtastschritte je Spline-Segment bei der Suche nach dem nächsten Punkt.
 const NEAREST_STEPS_PER_SEGMENT: usize = 64;
+/// Abtastschritte je Bézier-Stück einer Freiformkurve bei der Suche nach dem nächsten Punkt. Der
+/// Hover fragt das je Bild: So kostet eine Kurve aus 64 Punkten etwa 1000 Auswertungen wie der
+/// Spline durch Stützpunkte (16 je Segment), nicht 62000 (Linienzug mit 4096 Schritten je Umlauf).
+const NEAREST_SAMPLES_PER_PIECE: usize = 16;
+/// So viele der tiefsten lokalen Minima der Abtastung werden nachgeschärft.
+const NEAREST_CANDIDATES: usize = 3;
+/// Höchstzahl der Schritte (Newton mit Halbieren als Rückfall) beim Nachschärfen eines Minimums.
+const NEAREST_REFINE_STEPS: usize = 40;
 /// Schritte des Goldenen Schnitts beim Nachschärfen des nächsten Punkts (Intervall schrumpft
 /// auf 0,618⁸⁰ ≈ 2e-17 seiner Breite).
 const GOLDEN_STEPS: usize = 80;
@@ -250,22 +258,21 @@ impl Geom {
                     hi
                 }
             }
-            Geom::Ellipse { .. }
-            | Geom::EllipticArc { .. }
-            | Geom::Spline { .. }
-            | Geom::Nurbs { .. } => {
-                let ts: Vec<f64> = if let Geom::Nurbs { curve } = self {
-                    nurbs_samples(curve, lo, hi, NEAREST_STEPS_PER_SEGMENT)
-                } else {
-                    let steps = match self {
-                        Geom::Spline { n, .. } => (n - 1) * NEAREST_STEPS_PER_SEGMENT,
-                        _ => steps_for(hi - lo, NEAREST_STEPS_PER_TURN),
-                    };
-                    (0..=steps)
-                        .map(|k| lo + (hi - lo) * k as f64 / steps as f64)
-                        .collect()
+            Geom::Nurbs { curve } => {
+                let ts = nurbs_samples(curve, lo, hi, NEAREST_SAMPLES_PER_PIECE);
+                self.normalize(nearest_by_samples(&ts, p, |t| {
+                    let d = curve.derivs_unclamped(t, 2);
+                    (d[0].truncate(), d[1].truncate(), d[2].truncate())
+                }))
+            }
+            Geom::Ellipse { .. } | Geom::EllipticArc { .. } | Geom::Spline { .. } => {
+                let steps = match self {
+                    Geom::Spline { n, .. } => (n - 1) * NEAREST_STEPS_PER_SEGMENT,
+                    _ => steps_for(hi - lo, NEAREST_STEPS_PER_TURN),
                 };
-                let steps = ts.len() - 1;
+                let ts: Vec<f64> = (0..=steps)
+                    .map(|k| lo + (hi - lo) * k as f64 / steps as f64)
+                    .collect();
                 let dist = |t: f64| self.eval(t).0.distance_squared(p);
                 let k = ts
                     .iter()
@@ -428,6 +435,80 @@ fn steps_for(span: f64, per_turn: usize) -> usize {
     ((span.abs() / TAU * per_turn as f64).ceil() as usize).clamp(1, 1 << 16)
 }
 
+/// Parameter des nächsten Punkts einer Kurve, die `jet` als Punkt, erste und zweite Ableitung
+/// liefert: Die Abtastung `ts` findet die lokalen Minima des Abstands, die [`NEAREST_CANDIDATES`]
+/// tiefsten werden auf `(C − p)·C' = 0` nachgeschärft (Newton, mit Halbieren als Rückfall).
+fn nearest_by_samples(ts: &[f64], p: DVec2, jet: impl Fn(f64) -> (DVec2, DVec2, DVec2)) -> f64 {
+    let dist: Vec<f64> = ts.iter().map(|&t| jet(t).0.distance_squared(p)).collect();
+    let last = ts.len() - 1;
+    let mut minima: Vec<usize> = (0..=last)
+        .filter(|&k| (k == 0 || dist[k] <= dist[k - 1]) && (k == last || dist[k] <= dist[k + 1]))
+        .collect();
+    minima.sort_by(|&x, &y| dist[x].total_cmp(&dist[y]));
+    minima.truncate(NEAREST_CANDIDATES);
+    let (mut best, mut best_d) = (ts[0], dist[0]);
+    let mut consider = |t: f64, d: f64| {
+        if d < best_d {
+            (best, best_d) = (t, d);
+        }
+    };
+    for &k in &minima {
+        consider(ts[k], dist[k]);
+        let sides = [
+            (k.checked_sub(1), Some(k)),
+            (Some(k), (k < last).then_some(k + 1)),
+        ];
+        for (a, b) in sides {
+            let (Some(a), Some(b)) = (a, b) else { continue };
+            if let Some(t) = slope_root(ts[a], ts[b], p, &jet) {
+                consider(t, jet(t).0.distance_squared(p));
+            }
+        }
+    }
+    best
+}
+
+/// Nullstelle von `(C(t) − p)·C'(t)` in `[a, b]`, wenn sie dort von − nach + wechselt.
+fn slope_root(
+    mut a: f64,
+    mut b: f64,
+    p: DVec2,
+    jet: &impl Fn(f64) -> (DVec2, DVec2, DVec2),
+) -> Option<f64> {
+    let slope = |t: f64| {
+        let (q, d, _) = jet(t);
+        (q - p).dot(d)
+    };
+    if !(slope(a) <= 0.0 && slope(b) >= 0.0) {
+        return None;
+    }
+    let mut t = 0.5 * (a + b);
+    for _ in 0..NEAREST_REFINE_STEPS {
+        let (q, d, s) = jet(t);
+        let f = (q - p).dot(d);
+        if f == 0.0 {
+            break;
+        }
+        if f < 0.0 {
+            a = t;
+        } else {
+            b = t;
+        }
+        let next = t - f / (d.length_squared() + (q - p).dot(s));
+        let next = if next > a && next < b {
+            next
+        } else {
+            0.5 * (a + b)
+        };
+        let done = (next - t).abs() <= 1e-15 * (1.0 + t.abs());
+        t = next;
+        if done {
+            break;
+        }
+    }
+    t.is_finite().then_some(t)
+}
+
 /// Kleinste Stelle von `f` in `[a, b]` per Goldenem Schnitt (lokales Minimum).
 fn golden_min(mut a: f64, mut b: f64, f: impl Fn(f64) -> f64) -> f64 {
     const R: f64 = 0.618_033_988_749_894_8;
@@ -560,6 +641,39 @@ mod tests {
             a,
             b: DVec2::new(0.0, 5.0),
         }
+    }
+
+    #[test]
+    fn nearest_on_a_long_control_spline_costs_about_as_much_as_a_fit_spline() {
+        // 64 Punkte, Grad 3: 61 Bézier-Stücke. Der Spline durch Stützpunkte braucht für den
+        // nächsten Punkt 63 · 16 + 1 = 1009 Auswertungen (Skizzen 7, Task 3).
+        let control: Vec<_> = (0..64)
+            .map(|i| planora_math::DVec3::new(i as f64, 6.0 * (i as f64 * 0.7).sin(), 0.0))
+            .collect();
+        let curve = NurbsCurve::new(
+            3,
+            planora_math::nurbs::uniform_clamped_knots(3, 64),
+            control,
+            vec![1.0; 64],
+        )
+        .unwrap();
+        let (lo, hi) = curve.domain();
+        let ts = nurbs_samples(&curve, lo, hi, NEAREST_SAMPLES_PER_PIECE);
+        assert_eq!(ts.len(), 977);
+        let count = std::cell::Cell::new(0_usize);
+        let mut most = 0;
+        for k in 0..200 {
+            let at = DVec2::new(k as f64 * 0.32, 8.0 * (k as f64 * 1.3).sin());
+            count.set(0);
+            let t = nearest_by_samples(&ts, at, |t| {
+                count.set(count.get() + 1);
+                let d = curve.derivs_unclamped(t, 2);
+                (d[0].truncate(), d[1].truncate(), d[2].truncate())
+            });
+            assert!((lo..=hi).contains(&t));
+            most = most.max(count.get());
+        }
+        assert!(most <= 1200, "{most} Auswertungen");
     }
 
     #[test]

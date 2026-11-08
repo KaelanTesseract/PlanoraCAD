@@ -151,10 +151,9 @@ pub const MAX_COORD: f64 = 1e9;
 /// Höchstzahl der Stützpunkte eines Splines.
 pub const MAX_SPLINE_POINTS: usize = 64;
 
-/// Vorläufig bis Skizzen 7 Task 3: Der Spline mit Kontrollpunkten wird von diesem Befehl klar
-/// abgelehnt. Task 3 ersetzt alle Aufrufe und entfernt die Funktion.
-pub(crate) fn control_spline_refused() -> SketchError {
-    SketchError::WrongType(tr!("sketch-err-copy-kinds"))
+/// Beide Koordinaten endlich und betragsmäßig höchstens [`MAX_COORD`].
+pub(crate) fn within_coord_range(p: DVec2) -> bool {
+    p.is_finite() && p.x.abs() <= MAX_COORD && p.y.abs() <= MAX_COORD
 }
 
 /// Endlich und betragsmäßig höchstens [`MAX_COORD`].
@@ -504,6 +503,34 @@ impl Sketch {
             points: points.to_vec(),
             degree: p as u8,
             knots: uniform_clamped_knots(p, points.len()),
+        }))
+    }
+
+    /// Spline mit Kontrollpunkten aus vorhandenen Daten (Teilstück, Kopie): Grad und Knoten werden
+    /// übernommen. Anders als beim Zeichnen dürfen benachbarte Kontrollpunkte aufeinanderliegen, die
+    /// Kurve bleibt gültig; das Lösen kann das ebenso erzeugen.
+    pub(crate) fn add_control_spline_as(
+        &mut self,
+        points: &[PointId],
+        degree: u8,
+        knots: Vec<f64>,
+    ) -> Result<CurveId, SketchError> {
+        if !(2..=MAX_SPLINE_POINTS).contains(&points.len()) {
+            return Err(SketchError::InvalidInput(tr!(
+                "sketch-err-spline-count",
+                max = MAX_SPLINE_POINTS.to_string()
+            )));
+        }
+        for (i, &p) in points.iter().enumerate() {
+            self.check_point(p)?;
+            if points[..i].contains(&p) {
+                return Err(SketchError::InvalidInput(tr!("sketch-err-point-twice")));
+            }
+        }
+        Ok(self.push_curve(CurveKind::ControlSpline {
+            points: points.to_vec(),
+            degree,
+            knots,
         }))
     }
 

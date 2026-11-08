@@ -4,10 +4,11 @@
 //! Regeln: Es zählen lebende Kurven, die keine Konstruktionsgeometrie sind. Endpunkte im Abstand
 //! `≤ tol.linear` bilden denselben Knoten. Kreise und Ellipsen sind eigene Schleifen (Ellipsen als
 //! ein geschlossenes Freiformsegment), Linien, Bögen, Ellipsenbögen (als Freiformsegment) und
-//! Splines bilden einen Graphen, dessen
+//! Splines beider Arten bilden einen Graphen, dessen
 //! Zusammenhangskomponenten je ein einfacher Kreis sein müssen. Splines werden zu natürlichen
 //! kubischen Freiformkurven mit derselben Parametrisierung wie in der Skizze (Stützpunkt `i` bei
-//! `t = i`); ein Spline, dessen Enden zusammenfallen, ist allein eine Schleife. Schleifen, die
+//! `t = i`), Splines mit Kontrollpunkten bleiben dieselbe Kurve; ein Spline, dessen Enden
+//! zusammenfallen, ist allein eine Schleife. Schleifen, die
 //! sich selbst oder andere schneiden oder
 //! berühren, werden abgelehnt; die übrigen werden nach Schachtelungstiefe zu äußeren Schleifen
 //! (gerade Tiefe) und Löchern (ungerade Tiefe) sortiert.
@@ -18,10 +19,10 @@
 //! etwa 0,12 % des Radius beteiligter Bögen) gelten ebenfalls als Berührung.
 
 use crate::error::SketchError;
-use crate::model::{CurveId, CurveKind, Sketch, control_spline_refused};
+use crate::model::{CurveId, CurveKind, Sketch};
 use crate::profile::{
     CHECK_STEPS, ExtractedProfiles, RejectedLoop, arc_off_circle, elliptic_arc_off_ellipse,
-    spline_off_node,
+    nurbs_segment, spline_off_node,
 };
 use planora_i18n::tr;
 use planora_kernel::{Profile, ProfileLoop, SampledLoop, Segment, segment_end};
@@ -104,26 +105,24 @@ impl Sketch {
                         reason,
                     }),
                 },
-                CurveKind::Spline { points } => match (points.first(), points.last()) {
-                    (Some(first), Some(last)) if points.len() >= 2 => {
-                        let (na, nb) = (node(self.pos(*first)), node(self.pos(*last)));
-                        edges.push(Edge {
-                            curve: id,
-                            a: na,
-                            b: nb,
-                        });
+                CurveKind::Spline { points } | CurveKind::ControlSpline { points, .. } => {
+                    match (points.first(), points.last()) {
+                        (Some(first), Some(last)) if points.len() >= 2 => {
+                            let (na, nb) = (node(self.pos(*first)), node(self.pos(*last)));
+                            edges.push(Edge {
+                                curve: id,
+                                a: na,
+                                b: nb,
+                            });
+                        }
+                        // Kann bei einer gültigen Skizze nicht auftreten (`add_spline` und das Laden
+                        // verlangen zwei Punkte); zur Sicherheit benannt statt einer Panik.
+                        _ => out.rejected.push(RejectedLoop {
+                            curves: vec![id],
+                            reason: SketchError::Degenerate(tr!("sketch-err-spline-two-points")),
+                        }),
                     }
-                    // Kann bei einer gültigen Skizze nicht auftreten (`add_spline` und das Laden
-                    // verlangen zwei Punkte); zur Sicherheit benannt statt einer Panik.
-                    _ => out.rejected.push(RejectedLoop {
-                        curves: vec![id],
-                        reason: SketchError::Degenerate(tr!("sketch-err-spline-two-points")),
-                    }),
-                },
-                CurveKind::ControlSpline { .. } => out.rejected.push(RejectedLoop {
-                    curves: vec![id],
-                    reason: control_spline_refused(),
-                }),
+                }
             }
         }
         let node_count = reps.len();
@@ -261,8 +260,12 @@ impl Sketch {
         reps: &[DVec2],
     ) -> Result<(Vec<CurveId>, ProfileLoop), SketchError> {
         let tol = self.tolerance();
-        let is_spline =
-            |e: usize| matches!(self.curves[edges[e].curve].kind, CurveKind::Spline { .. });
+        let is_spline = |e: usize| {
+            matches!(
+                self.curves[edges[e].curve].kind,
+                CurveKind::Spline { .. } | CurveKind::ControlSpline { .. }
+            )
+        };
         // Ein Spline, dessen Enden zusammenfallen, ist allein eine geschlossene Schleife (ein
         // geschlossenes Freiformsegment wie eine Vollellipse). Hängen an diesem Knoten weitere
         // Kurven, ist das keine einfache Schleife.
@@ -273,7 +276,7 @@ impl Sketch {
                 CurveKind::Arc { .. } | CurveKind::EllipticArc { .. } => {
                     tr!("sketch-err-arc-closed")
                 }
-                CurveKind::Spline { .. } => {
+                CurveKind::Spline { .. } | CurveKind::ControlSpline { .. } => {
                     tr!("sketch-err-spline-closed-branch")
                 }
                 _ => tr!("sketch-err-line-zero-length"),
@@ -334,6 +337,12 @@ impl Sketch {
             let target = reps[if forward { edge.b } else { edge.a }];
             let seg = match &self.curves[edge.curve].kind {
                 CurveKind::Spline { points } => self.spline_segment(points, forward)?,
+                CurveKind::ControlSpline { .. } => {
+                    let Some(curve) = self.nurbs_of(edge.curve) else {
+                        return Err(SketchError::Degenerate(tr!("sketch-err-spline-neighbours")));
+                    };
+                    nurbs_segment((*curve).clone(), forward)?
+                }
                 CurveKind::EllipticArc { .. } => {
                     self.elliptic_arc_segment(edge.curve, reps[edge.a], reps[edge.b], forward)?
                 }

@@ -18,7 +18,8 @@
 //!
 //! Schleifen der Profile: Linie → `Segment::Line`, Kreis- und Bogenstück → `Segment::Arc`,
 //! Ellipsenstück → `NurbsCurve::elliptic_arc`, Splinestück → Teil des natürlichen kubischen
-//! Splines mit derselben Parametrisierung wie in der Skizze. Ein ungeteilter Kreis wird zu
+//! Splines mit derselben Parametrisierung wie in der Skizze, Stück eines Splines mit Kontrollpunkten
+//! → exakter Teil der Kurve. Ein ungeteilter Kreis wird zu
 //! [`ProfileLoop::circle`], eine ungeteilte Ellipse zum geschlossenen Freiformsegment ab
 //! Parameter 0 (wie bisher). Jede Schleife beginnt beim Stück mit dem kleinsten
 //! (Kurven-Index, `u0`) und durchläuft es in Kurvenrichtung.
@@ -26,9 +27,10 @@
 //! Die bisherige Extraktion bleibt als [`Sketch::legacy_profiles`] (`profile_legacy.rs`).
 
 use crate::arrangement::{Arrangement, polygon_area, polygon_centroid, polygon_contains};
+use crate::curves::{KNOT_SNAP, snap_to_knot};
 use crate::error::SketchError;
 use crate::geom::Geom;
-use crate::model::{CurveId, CurveKind, Sketch, control_spline_refused};
+use crate::model::{CurveId, CurveKind, Sketch};
 use crate::triangulate::triangulate;
 use planora_i18n::tr;
 use planora_kernel::{Profile, ProfileLoop, SampledLoop, Segment, segment_end};
@@ -52,10 +54,6 @@ pub(crate) fn spline_off_node() -> String {
     tr!("sketch-err-spline-off-node")
 }
 
-/// Teilungsstellen eines Splines, die relativ zum Parameterbereich höchstens so nah an einem
-/// Stützpunkt liegen, werden auf ihn gelegt (deutlich über `MIN_KNOT_GAP_RATIO` = 1e-9).
-const KNOT_SNAP: f64 = 1e-7;
-
 /// Abtastschritte je Vollkreis für Schnitt- und Enthaltensein-Prüfungen (wie im Kernel).
 pub(crate) const CHECK_STEPS: usize = 64;
 
@@ -70,7 +68,7 @@ pub struct RejectedLoop {
 ///
 /// Normierter Parameter `u`: bei Kreis, Bogen, Ellipse und Ellipsenbogen der absolute Winkel
 /// bzw. Ellipsenparameter (siehe [`Sketch::curve_eval`]) geteilt durch 2π, damit ein Kreis und
-/// der später aus ihm gestutzte Bogen dieselbe Grundlage haben; bei Linie und Spline
+/// der später aus ihm gestutzte Bogen dieselbe Grundlage haben; bei Linie und Splines
 /// `u = (t − lo)/(hi − lo)` über [`Sketch::curve_domain`]. Es gilt `u0 < u1`; bei Kreis und
 /// Ellipse reicht `u1` bis `u0 + 1`.
 #[derive(Clone, Debug, PartialEq)]
@@ -357,7 +355,21 @@ impl Sketch {
                     return Err(SketchError::Degenerate(tr!("sketch-err-spline-neighbours")));
                 }
             }
-            CurveKind::ControlSpline { .. } => return Err(control_spline_refused()),
+            CurveKind::ControlSpline { points, .. } => {
+                // Innere Punkte dürfen aufeinanderliegen, die Kurve bleibt gültig. Liegen alle auf
+                // einer Stelle, hat sie keine Länge.
+                let first = self.pos(points[0]);
+                if points
+                    .iter()
+                    .all(|&p| self.pos(p).distance(first) <= tol.linear)
+                {
+                    return Err(SketchError::Degenerate(tr!("sketch-err-spline-neighbours")));
+                }
+                // Nicht still entfallen: Der Rand fehlte sonst ohne Grund.
+                if self.nurbs_of(id).is_none() {
+                    return Err(SketchError::Degenerate(tr!("sketch-err-spline-two-points")));
+                }
+            }
         }
         let Some(g) = self.geom(id) else {
             return Ok(None);
@@ -371,7 +383,7 @@ impl Sketch {
 /// Normierter Parameter `u` (siehe [`PieceRef`]).
 pub(crate) fn normalized(g: &Geom, t: f64) -> f64 {
     match g {
-        Geom::Line { .. } | Geom::Spline { .. } => {
+        Geom::Line { .. } | Geom::Spline { .. } | Geom::Nurbs { .. } => {
             let (lo, hi) = g.domain();
             (t - lo) / (hi - lo)
         }
@@ -603,7 +615,10 @@ impl LoopBuilder<'_> {
                     nurbs_segment(self.spline_piece(run)?, run.forward)?,
                     spline_off_node(),
                 ),
-                Geom::Nurbs { .. } => return Err(control_spline_refused()),
+                Geom::Nurbs { curve } => (
+                    nurbs_segment(nurbs_piece(curve, run)?, run.forward)?,
+                    spline_off_node(),
+                ),
             };
             if let Segment::Nurbs { curve } = &seg {
                 // Der Kernel verlangt, dass ein Freiformsegment am Ende des vorigen beginnt.
@@ -636,6 +651,9 @@ impl LoopBuilder<'_> {
             }
             Geom::Spline { .. } => {
                 ProfileLoop::nurbs_loop(self.spline_piece(run)?).map_err(kernel)?
+            }
+            Geom::Nurbs { curve } => {
+                ProfileLoop::nurbs_loop(nurbs_piece(curve, run)?).map_err(kernel)?
             }
             _ => return Ok(None),
         };
@@ -672,6 +690,22 @@ impl LoopBuilder<'_> {
     }
 }
 
+/// Teil `[t0, t1]` der Freiformkurve zum Stück `run`, exakt (ganze Kurve, wenn das Stück sie ganz
+/// überdeckt); Teilungsstellen dicht an einem Knoten werden auf ihn gelegt.
+fn nurbs_piece(curve: &NurbsCurve, run: Run) -> Result<NurbsCurve, SketchError> {
+    let (lo, hi) = curve.domain();
+    if run.t0 <= lo && run.t1 >= hi {
+        return Ok(curve.clone());
+    }
+    let (t0, t1) = (
+        snap_to_knot(curve, run.t0.max(lo)),
+        snap_to_knot(curve, run.t1.min(hi)),
+    );
+    curve.sub_curve(t0, t1).map_err(|e| {
+        SketchError::Degenerate(tr!("sketch-err-spline-invalid", detail = e.to_string()))
+    })
+}
+
 /// Ellipsenstück `c + a·cos t + b·sin t` ab `t0` über `sweep` als Freiformkurve.
 fn elliptic(c: DVec2, a: DVec2, b: DVec2, t0: f64, sweep: f64) -> Result<NurbsCurve, SketchError> {
     NurbsCurve::elliptic_arc(
@@ -685,7 +719,7 @@ fn elliptic(c: DVec2, a: DVec2, b: DVec2, t0: f64, sweep: f64) -> Result<NurbsCu
 }
 
 /// Freiformsegment, bei `forward == false` umgekehrt (wie im Kernel).
-fn nurbs_segment(curve: NurbsCurve, forward: bool) -> Result<Segment, SketchError> {
+pub(crate) fn nurbs_segment(curve: NurbsCurve, forward: bool) -> Result<Segment, SketchError> {
     let start = curve.point(curve.domain().0);
     let seg = Segment::Nurbs {
         curve: Arc::new(curve),

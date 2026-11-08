@@ -284,6 +284,25 @@ impl Sampled {
     }
 }
 
+/// Teilungsstellen eines Splines, die relativ zum Parameterbereich höchstens so nah an einem
+/// Stützpunkt bzw. Knoten liegen, werden auf ihn gelegt (deutlich über `MIN_KNOT_GAP_RATIO` = 1e-9).
+pub(crate) const KNOT_SNAP: f64 = 1e-7;
+
+/// `t`, oder der Knoten von `curve`, der höchstens [`KNOT_SNAP`] des Bereichs daneben liegt: Sonst
+/// entstünden beim Teilen zu nahe Knoten (Grenze `MIN_KNOT_GAP_RATIO` der NURBS).
+pub(crate) fn snap_to_knot(curve: &NurbsCurve, t: f64) -> f64 {
+    let (lo, hi) = curve.domain();
+    let reach = KNOT_SNAP * (hi - lo);
+    curve
+        .knots()
+        .knots()
+        .iter()
+        .copied()
+        .filter(|k| (t - k).abs() <= reach)
+        .min_by(|a, b| (t - a).abs().total_cmp(&(t - b).abs()))
+        .unwrap_or(t)
+}
+
 /// `per_piece` gleiche Schritte je Bézier-Stück von `t0` bis `t1` (`t0 < t1`), mit beiden Enden.
 pub(crate) fn nurbs_samples(curve: &NurbsCurve, t0: f64, t1: f64, per_piece: usize) -> Vec<f64> {
     let breaks = nurbs_breaks(curve, t0, t1);

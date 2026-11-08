@@ -4,9 +4,7 @@
 
 use planora_feature::*;
 use planora_math::{DVec2, Tolerance};
-use planora_project::{
-    FORMAT_VERSION, ProjectError, decode_version, encode_version, required_format,
-};
+use planora_project::{ProjectError, decode_version, encode_version, required_format};
 use planora_sketch::constraint::ConstraintKind as K;
 use planora_sketch::pattern::{
     CircularMode, PatternDir, PatternId, PatternKind, PatternPlan, PatternSlot,
@@ -109,11 +107,6 @@ fn all_kinds() -> (Sketch, Vec<ConstraintId>) {
     let mut s = new_sketch();
     let ids = (0..6).map(|k| add_kind(&mut s, k)).collect();
     (s, ids)
-}
-
-#[test]
-fn format_version_is_16() {
-    assert_eq!(FORMAT_VERSION, 17); // seit Skizzen 7 (Spline mit Kontrollpunkten)
 }
 
 #[test]

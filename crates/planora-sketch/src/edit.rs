@@ -4,23 +4,31 @@
 //! Klickstelle (mit allen Kurven, auch Konstruktion; bei Kreis und Ellipse umlaufend); hat die
 //! Kurve keinen Schnitt, wird sie ganz gelöscht. Brechen teilt die Kurve an denselben beiden
 //! Stellen, ohne etwas zu löschen; die Teile hängen an getrennten Punkten deckungsgleich
-//! zusammen (Entscheidung 9). Dehnen verlängert ein offenes Ende einer Linie, eines Bogens oder
-//! Ellipsenbogens bis zum nächsten Schnitt mit einer anderen Kurve (Entscheidung 8).
+//! zusammen (Entscheidung 9). Dehnen verlängert ein offenes Ende einer Linie, eines Bogens,
+//! Ellipsenbogens oder Splines mit Kontrollpunkten bis zum nächsten Schnitt mit einer anderen Kurve
+//! (Entscheidung 8). Ein Spline mit Kontrollpunkten wird dabei exakt geteilt bzw. über sein letztes
+//! Polynomstück fortgesetzt: Das übrige Stück behält seine Form.
 //! Abhängigkeiten nach Entscheidung 7 des Plans: Erhalten bleibt, was danach ohne Bewegung
 //! erfüllt ist, so bewegt sich nie etwas; neue Enden hängen „deckungsgleich“ an einem Punkt der
 //! schneidenden Kurve oder „Punkt auf Kurve“ an ihr.
 
 use crate::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
+use crate::curves::snap_to_knot;
 use crate::error::SketchError;
 use crate::geom::Geom;
 use crate::intersect::{Prepared, clean_params, intersect_prepared};
-use crate::model::{CurveId, CurveKind, PointId, Sketch, control_spline_refused};
+use crate::model::{CurveId, CurveKind, PointId, Sketch, within_coord_range};
 use planora_i18n::tr;
+use planora_math::nurbs::NurbsCurve;
 use planora_math::{DVec2, TAU};
 use std::collections::HashSet;
+use std::sync::Arc;
 
 /// Abschnitte je Vollkreis des Linienzugs der Vorschau (wie `curve_polyline` in der Ansicht).
 const PREVIEW_STEPS_PER_TURN: usize = 64;
+/// Dehnen eines Splines mit Kontrollpunkten sucht bis zu so vielen Bereichsbreiten hinter dem Ende
+/// (**Annahme**, Spec E: Weiter trägt die Fortsetzung eines Polynomstücks nicht sinnvoll).
+const EXTEND_REACH: f64 = 3.0;
 /// Vielfaches von `tol.linear` bzw. `tol.angular`, bis zu dem eine Abhängigkeit nach dem
 /// Ändern als erfüllt gilt (Entscheidung 7).
 pub(crate) const SETTLE_FACTOR: f64 = 10.0;
@@ -66,6 +74,14 @@ struct ExtendTarget {
     cutter: CurveId,
     /// Linienzug vom alten zum neuen Ende.
     path: Vec<DVec2>,
+    /// Spline mit Kontrollpunkten: alle wandernden Punkte (auch `point`) und die neuen Knoten.
+    control: Option<ControlExtend>,
+}
+
+/// Neue Lage der letzten (bzw. ersten) Kontrollpunkte und neuer Knotenvektor beim Dehnen.
+struct ControlExtend {
+    moved: Vec<(PointId, DVec2)>,
+    knots: Vec<f64>,
 }
 
 /// Abstand zweier Parameter, bei periodischen Kurven über den kürzeren Weg.
@@ -122,13 +138,16 @@ impl Sketch {
         self.locate_extend(c, at).map(|x| x.path)
     }
 
-    /// Dehnt die Linie, den Bogen oder Ellipsenbogen `c` an dem Ende, das `at` näher liegt, bis
-    /// zum nächsten Schnitt mit einer anderen lebenden Kurve (auch Konstruktion): Der Endpunkt
-    /// wandert dorthin und behält seine Id, Abhängigkeiten nach Entscheidung 7. Eine Linie
-    /// wächst geradeaus, ein Bogen auf seinem Kreis bzw. seiner Ellipse (höchstens bis kurz vor
-    /// den eigenen Anfang). `Ok(false)` und die Skizze bleibt unverändert, wenn das Ende nicht
-    /// offen ist (andere Kurve am Punkt oder „deckungsgleich“), die Kurve keine dieser Arten ist
-    /// oder es kein Ziel gibt. Bei einem Fehler bleibt die Skizze unverändert.
+    /// Dehnt die Linie, den Bogen, Ellipsenbogen oder Spline mit Kontrollpunkten `c` an dem Ende, das
+    /// `at` näher liegt, bis zum nächsten Schnitt mit einer anderen lebenden Kurve (auch
+    /// Konstruktion): Der Endpunkt wandert dorthin und behält seine Id, Abhängigkeiten nach
+    /// Entscheidung 7. Eine Linie wächst geradeaus, ein Bogen auf seinem Kreis bzw. seiner Ellipse
+    /// (höchstens bis kurz vor den eigenen Anfang), ein Spline mit Kontrollpunkten über sein
+    /// Randstück (dessen letzte Kontrollpunkte wandern mit, das alte Stück behält seine Form).
+    /// `Ok(false)` und die Skizze bleibt unverändert, wenn das Ende nicht offen ist (andere Kurve am
+    /// Punkt oder „deckungsgleich“), die Kurve keine dieser Arten ist, es kein Ziel gibt oder ein
+    /// mitwandernder Kontrollpunkt zu einer anderen Kurve gehört. Bei einem Fehler bleibt die Skizze
+    /// unverändert.
     /// Ist `c` Vorlage oder Exemplar eines Musters, wird das Muster vorher aufgelöst.
     pub fn extend(&mut self, c: CurveId, at: DVec2) -> Result<bool, SketchError> {
         self.check_curve(c)?;
@@ -180,17 +199,21 @@ impl Sketch {
             return None;
         }
         let g = self.geom(c)?;
-        let (first, last) = match self.curves[c].kind {
-            CurveKind::Line { a, b } => (a, b),
+        let (first, last) = match &self.curves[c].kind {
+            CurveKind::Line { a, b } => (*a, *b),
             CurveKind::Arc { start, end, .. } | CurveKind::EllipticArc { start, end, .. } => {
-                (start, end)
+                (*start, *end)
             }
+            CurveKind::ControlSpline { points, .. } => (points[0], points[points.len() - 1]),
             _ => return None,
         };
         let at_end = at.distance(self.pos(last)) < at.distance(self.pos(first));
         let (point, other) = if at_end { (last, first) } else { (first, last) };
         if !self.is_open_end(c, point) {
             return None;
+        }
+        if let Geom::Nurbs { curve } = &g {
+            return self.locate_extend_control(c, curve, at_end);
         }
         let tol = self.tolerance().linear;
         let (from, fixed) = (self.pos(point), self.pos(other));
@@ -234,26 +257,8 @@ impl Sketch {
                 }
             }
         };
-        let ps = Prepared::new(&search);
-        let mut hits: Vec<(f64, f64, CurveId)> = Vec::new();
-        for (id, _) in self.curves() {
-            if id == c {
-                continue;
-            }
-            let Some(h) = self.geom(id) else { continue };
-            for (t, _) in intersect_prepared(&ps, &Prepared::new(&h), tol) {
-                if let Some(d) = ahead(t) {
-                    hits.push((d, t, id));
-                }
-            }
-        }
-        let &(gap, t, _) = hits.iter().min_by(|x, y| x.0.total_cmp(&y.0))?;
+        let (gap, t, cutter) = self.nearest_extend_hit(c, &search, ahead)?;
         let hit = search.eval(t).0;
-        let cutter = hits
-            .iter()
-            .filter(|h| search.eval(h.1).0.distance(hit) <= tol)
-            .map(|h| h.2)
-            .min()?;
         let to = self
             .cutter_point_at(cutter, hit)
             .map_or(hit, |q| self.pos(q));
@@ -274,6 +279,121 @@ impl Sketch {
             to,
             cutter,
             path,
+            control: None,
+        })
+    }
+
+    /// Nächster Schnitt der Suchkurve mit einer anderen lebenden Kurve als `(Weg, t, Kurve)`: `ahead`
+    /// misst den Weg zum Parameter `t` (`None` außerhalb der Verlängerung). Bei mehreren Kurven an
+    /// derselben Stelle zählt die mit kleinster Id.
+    fn nearest_extend_hit(
+        &self,
+        c: CurveId,
+        search: &Geom,
+        ahead: impl Fn(f64) -> Option<f64>,
+    ) -> Option<(f64, f64, CurveId)> {
+        let tol = self.tolerance().linear;
+        let ps = Prepared::new(search);
+        let mut hits: Vec<(f64, f64, CurveId)> = Vec::new();
+        for (id, _) in self.curves() {
+            if id == c {
+                continue;
+            }
+            let Some(h) = self.geom(id) else { continue };
+            for (t, _) in intersect_prepared(&ps, &Prepared::new(&h), tol) {
+                if let Some(d) = ahead(t) {
+                    hits.push((d, t, id));
+                }
+            }
+        }
+        let &(gap, t, _) = hits.iter().min_by(|x, y| x.0.total_cmp(&y.0))?;
+        let hit = search.eval(t).0;
+        let cutter = hits
+            .iter()
+            .filter(|h| search.eval(h.1).0.distance(hit) <= tol)
+            .map(|h| h.2)
+            .min()?;
+        Some((gap, t, cutter))
+    }
+
+    /// Ziel beim Dehnen eines Splines mit Kontrollpunkten: Das Randstück wird über das Ende
+    /// fortgesetzt (Blüten, [`NurbsCurve::extended`]), gesucht bis [`EXTEND_REACH`] Bereichsbreiten.
+    fn locate_extend_control(
+        &self,
+        c: CurveId,
+        curve: &Arc<NurbsCurve>,
+        at_end: bool,
+    ) -> Option<ExtendTarget> {
+        let CurveKind::ControlSpline { points, .. } = &self.curves[c].kind else {
+            return None;
+        };
+        let tol = self.tolerance().linear;
+        let (lo, hi) = curve.domain();
+        let far = EXTEND_REACH * (hi - lo);
+        let (point, end) = if at_end {
+            (points[points.len() - 1], hi)
+        } else {
+            (points[0], lo)
+        };
+        let from = self.pos(point);
+        // Nur das neue Stück: Schnitte mit dem alten Teil der Kurve zählen nicht.
+        let long = if at_end {
+            curve.extended(lo, hi + far).ok()?
+        } else {
+            curve.extended(lo - far, hi).ok()?
+        };
+        let stub = if at_end {
+            long.sub_curve(hi, hi + far).ok()?
+        } else {
+            long.sub_curve(lo - far, lo).ok()?
+        };
+        let search = Geom::Nurbs {
+            curve: Arc::new(stub),
+        };
+        let ahead = |t: f64| {
+            let gap = (t - end).abs();
+            (search.eval(t).0.distance(from) > tol).then_some(gap)
+        };
+        let (_, t, cutter) = self.nearest_extend_hit(c, &search, ahead)?;
+        let hit = search.eval(t).0;
+        let to = self
+            .cutter_point_at(cutter, hit)
+            .map_or(hit, |q| self.pos(q));
+        let longer = if at_end {
+            curve.extended(lo, t).ok()?
+        } else {
+            curve.extended(t, hi).ok()?
+        };
+        // Nur die Punkte des Randstücks wandern; gehört einer zu einer anderen Kurve, bewegte die
+        // sich mit, also kein Ziel (Entscheidung 7: Es bewegt sich nie etwas anderes).
+        let mut moved = Vec::new();
+        for (&p, q) in points.iter().zip(longer.control_points()) {
+            let xy = if p == point { to } else { q.truncate() };
+            if xy == self.pos(p) {
+                continue;
+            }
+            if !within_coord_range(xy)
+                || self
+                    .curves()
+                    .any(|(id, d)| id != c && d.kind.points().contains(&p))
+            {
+                return None;
+            }
+            moved.push((p, xy));
+        }
+        let mut path = search.polyline(end, t, PREVIEW_STEPS_PER_TURN);
+        let n = path.len();
+        path[0] = from;
+        path[n - 1] = to;
+        Some(ExtendTarget {
+            point,
+            to,
+            cutter,
+            path,
+            control: Some(ControlExtend {
+                moved,
+                knots: longer.knots().knots().to_vec(),
+            }),
         })
     }
 
@@ -292,6 +412,22 @@ impl Sketch {
     /// Setzt den Endpunkt auf das Ziel, dann Regel 7 und die Abhängigkeit an der schneidenden
     /// Kurve.
     fn apply_extend(&mut self, c: CurveId, x: &ExtendTarget) -> Result<(), SketchError> {
+        if let Some(control) = &x.control {
+            for &(p, xy) in &control.moved {
+                let (vx, vy) = (self.points[p].x, self.points[p].y);
+                self.vars[vx] = xy.x;
+                self.vars[vy] = xy.y;
+            }
+            self.touch_values();
+            let mut kind = self.curves[c].kind.clone();
+            if let CurveKind::ControlSpline { knots, .. } = &mut kind {
+                knots.clone_from(&control.knots);
+            }
+            self.set_curve_kind(c, kind);
+            let moved: Vec<PointId> = control.moved.iter().map(|m| m.0).collect();
+            self.settle_constraints(&[c], &moved);
+            return self.end_constraint(x.point, x.cutter, x.to);
+        }
         let (vx, vy) = (self.points[x.point].x, self.points[x.point].y);
         self.vars[vx] = x.to.x;
         self.vars[vy] = x.to.y;
@@ -475,8 +611,9 @@ impl Sketch {
                     CurveKind::Line { a, b } => (*a, *b),
                     CurveKind::Arc { start, end, .. }
                     | CurveKind::EllipticArc { start, end, .. } => (*start, *end),
-                    CurveKind::Spline { points } => (points[0], points[points.len() - 1]),
-                    CurveKind::ControlSpline { .. } => return Err(control_spline_refused()),
+                    CurveKind::Spline { points } | CurveKind::ControlSpline { points, .. } => {
+                        (points[0], points[points.len() - 1])
+                    }
                     CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => {
                         unreachable!("closed curves are handled above")
                     }
@@ -504,8 +641,10 @@ impl Sketch {
                         pieces.push((s, last, b.t1, hi));
                     }
                 }
-                for (k, (s, e, u0, u1)) in pieces.into_iter().enumerate() {
-                    let piece = match &open {
+                // Erst alle Teile bauen: Der Spline mit Kontrollpunkten liest dafür die alte Kurve.
+                let mut built = Vec::with_capacity(pieces.len());
+                for (s, e, u0, u1) in pieces {
+                    built.push(match &open {
                         CurveKind::Line { .. } => CurveKind::Line { a: s, b: e },
                         CurveKind::Arc { center, .. } => CurveKind::Arc {
                             center: *center,
@@ -529,11 +668,15 @@ impl Sketch {
                         CurveKind::Spline { points } => CurveKind::Spline {
                             points: self.spline_piece(g, points, s, e, u0, u1)?,
                         },
-                        CurveKind::ControlSpline { .. } => return Err(control_spline_refused()),
+                        CurveKind::ControlSpline { .. } => {
+                            self.control_spline_piece(c, u0, u1, s, e)?
+                        }
                         CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => {
                             unreachable!("closed curves are handled above")
                         }
-                    };
+                    });
+                }
+                for (k, piece) in built.into_iter().enumerate() {
                     if k == 0 {
                         self.set_curve_kind(c, piece);
                     } else {
@@ -647,6 +790,42 @@ impl Sketch {
         Ok(out)
     }
 
+    /// Das Stück `u0..u1` des Splines mit Kontrollpunkten `c` von `s` nach `e`, exakt
+    /// ([`NurbsCurve::sub_curve`]): neue innere Punkte, Parameter und Grad bleiben. Teilungsstellen
+    /// dicht an einem Knoten werden auf ihn gelegt ([`snap_to_knot`]); die Enden bleiben `s` und `e`,
+    /// die Form weicht dann höchstens um diesen Schnappweg ab. Zu kleine Stücke und sonst ungültige
+    /// Knoten ergeben eine Meldung.
+    pub(crate) fn control_spline_piece(
+        &mut self,
+        c: CurveId,
+        u0: f64,
+        u1: f64,
+        s: PointId,
+        e: PointId,
+    ) -> Result<CurveKind, SketchError> {
+        let neighbours = || SketchError::Degenerate(tr!("sketch-err-spline-neighbours"));
+        let curve = self.nurbs_of(c).ok_or_else(neighbours)?;
+        let (u0, u1) = (snap_to_knot(&curve, u0), snap_to_knot(&curve, u1));
+        if u0 >= u1 {
+            return Err(neighbours());
+        }
+        let piece = curve.sub_curve(u0, u1).map_err(|err| {
+            SketchError::Degenerate(tr!("sketch-err-spline-invalid", detail = err.to_string()))
+        })?;
+        let control = piece.control_points();
+        let mut points = Vec::with_capacity(control.len());
+        points.push(s);
+        for q in &control[1..control.len() - 1] {
+            points.push(self.add_point(q.x, q.y)?);
+        }
+        points.push(e);
+        Ok(CurveKind::ControlSpline {
+            points,
+            degree: piece.degree() as u8,
+            knots: piece.knots().knots().to_vec(),
+        })
+    }
+
     /// Legt das zweite Teilstück als neue Kurve an (mit den Prüfungen der `add_…`-Funktionen;
     /// ein Ellipsenbogen teilt die Variablen seiner Ellipse).
     fn add_piece(&mut self, piece: CurveKind) -> Result<CurveId, SketchError> {
@@ -664,7 +843,11 @@ impl Sketch {
                 .add_elliptic_arc_vars(center, ax, ay, minor, start, end)
                 .0),
             CurveKind::Spline { points } => self.add_spline(&points),
-            CurveKind::ControlSpline { .. } => Err(control_spline_refused()),
+            CurveKind::ControlSpline {
+                points,
+                degree,
+                knots,
+            } => self.add_control_spline_as(&points, degree, knots),
             CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => {
                 unreachable!("pieces are open curves")
             }
@@ -747,7 +930,11 @@ impl Sketch {
                 continue;
             }
             let on_touched_spline = kind.curves().iter().any(|c| {
-                touched.contains(c) && matches!(self.curves[*c].kind, CurveKind::Spline { .. })
+                touched.contains(c)
+                    && matches!(
+                        self.curves[*c].kind,
+                        CurveKind::Spline { .. } | CurveKind::ControlSpline { .. }
+                    )
             });
             if on_touched_spline
                 && self.needs_extra(&kind)

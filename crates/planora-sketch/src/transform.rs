@@ -16,7 +16,7 @@ use crate::constraint::{ConstraintData, ConstraintId, ConstraintKind, LineOrPoin
 use crate::edit::SETTLE_FACTOR;
 use crate::error::SketchError;
 use crate::fillet::wrap_pi;
-use crate::model::{CurveId, CurveKind, MAX_COORD, PointId, Sketch, control_spline_refused};
+use crate::model::{CurveId, CurveKind, MAX_COORD, PointId, Sketch};
 use crate::offset::ends_of;
 use planora_i18n::tr;
 use planora_math::DVec2;
@@ -742,7 +742,14 @@ impl Sketch {
                 let mapped: Vec<PointId> = list.iter().map(|p| points[p]).collect();
                 self.add_spline(&mapped)?
             }
-            CurveKind::ControlSpline { .. } => return Err(control_spline_refused()),
+            CurveKind::ControlSpline {
+                points: list,
+                degree,
+                knots,
+            } => {
+                let mapped: Vec<PointId> = list.iter().map(|p| points[p]).collect();
+                self.add_control_spline_as(&mapped, degree, knots)?
+            }
             ref kind @ (CurveKind::Ellipse { ax, ay, minor, .. }
             | CurveKind::EllipticArc { ax, ay, minor, .. }) => {
                 if !sizes.contains_key(&ax) {
