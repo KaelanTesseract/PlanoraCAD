@@ -179,3 +179,74 @@ fn old_files_stay_byte_equal() {
     }
     assert!(seen >= 12, "{seen}");
 }
+
+// ---- Kegelschnitt (Task 5) ------------------------------------------------------------------
+
+fn conic_sketch() -> (Sketch, CurveId) {
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze1", Tolerance::default());
+    let a = sk.add_point(0.0, 0.0).unwrap();
+    let m = sk.add_point(5.0, 8.0).unwrap();
+    let b = sk.add_point(10.0, 0.0).unwrap();
+    let c = sk.add_conic(a, b, m, 0.35).unwrap();
+    (sk, c)
+}
+
+#[test]
+fn conic_needs_17_and_roundtrips() {
+    let (sk, c) = conic_sketch();
+    let snap = document(sk.clone()).snapshot();
+    assert_eq!(required_format(&snap), 17);
+    let text = encode_version(&snap).unwrap();
+    assert_eq!(format_of(&text), 17);
+    assert!(text.contains("\"typ\": \"kegelschnitt\""), "{text}");
+    assert!(text.contains("\"scheitel\""), "{text}");
+    assert!(text.contains("\"rho\": 0.35"), "{text}");
+    let back = decode_version(&text, "x.json").unwrap();
+    let got = sketch_of(&back);
+    assert_eq!(got.curve(c).unwrap().kind, sk.curve(c).unwrap().kind);
+    assert_eq!(encode_version(&back).unwrap(), text);
+    assert_eq!(got.curve_eval(c, 0.3), sk.curve_eval(c, 0.3));
+    // Kein Dokument mit Rho in einer älteren Formatnummer.
+    let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    v["format"] = 16.into();
+    let old = serde_json::to_string_pretty(&v).unwrap();
+    assert!(matches!(
+        decode_version(&old, "x.json"),
+        Err(ProjectError::Corrupt { .. })
+    ));
+}
+
+#[test]
+fn deleted_conic_needs_17() {
+    let (mut sk, c) = conic_sketch();
+    sk.remove_curve(c).unwrap();
+    let snap = document(sk).snapshot();
+    assert_eq!(required_format(&snap), 17);
+    let text = encode_version(&snap).unwrap();
+    let back = decode_version(&text, "x.json").unwrap();
+    assert_eq!(encode_version(&back).unwrap(), text);
+}
+
+#[test]
+fn bad_rho_in_the_file_is_refused() {
+    let (sk, _) = conic_sketch();
+    let text = encode_version(&document(sk).snapshot()).unwrap();
+    for rho in [
+        serde_json::json!(0.0),
+        serde_json::json!(1.0),
+        serde_json::json!(-0.1),
+        serde_json::json!(2.5),
+    ] {
+        let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let curves = v["features"][0]["art"]["skizze"]["kurven"]
+            .as_array_mut()
+            .unwrap();
+        let conic = curves
+            .iter_mut()
+            .find(|c| c["art"]["typ"] == "kegelschnitt")
+            .unwrap();
+        conic["art"]["rho"] = rho.clone();
+        let edited = serde_json::to_string_pretty(&v).unwrap();
+        assert!(decode_version(&edited, "x.json").is_err(), "{rho}");
+    }
+}

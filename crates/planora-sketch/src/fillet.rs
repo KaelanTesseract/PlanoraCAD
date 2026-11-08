@@ -17,7 +17,7 @@
 //! Die Enden der Vorlage wandern auf die Berührpunkte wie beim Stutzen; es bleibt, was danach
 //! ohne Bewegung erfüllt ist. Reihenfolge immer: Kurven, Tangenten, Ecke, Maß.
 
-use crate::constraint::{ConstraintId, ConstraintKind};
+use crate::constraint::{ConstraintId, ConstraintKind, curve_ends};
 use crate::curves::nurbs_breaks;
 use crate::error::SketchError;
 use crate::geom::Geom;
@@ -426,6 +426,7 @@ impl Sketch {
                 Some([*start, *end])
             }
             CurveKind::ControlSpline { points, .. } => Some([points[0], points[points.len() - 1]]),
+            CurveKind::Conic { start, end, .. } => Some([*start, *end]),
             _ => None,
         };
         let is_fixed = |p: PointId| {
@@ -841,9 +842,9 @@ impl Sketch {
         Ok(())
     }
 
-    /// Kürzt den Spline mit Kontrollpunkten `c` wie beim Stutzen: Das Stück vom Ende `end` bis zum
-    /// Parameter `at` fällt weg, `to` wird das neue Ende. Innere Punkte, die nur er benutzte,
-    /// entfallen; das alte Ende räumt der Aufrufer auf.
+    /// Kürzt den Spline mit Kontrollpunkten oder den Kegelschnitt `c` wie beim Stutzen: Das Stück vom
+    /// Ende `end` bis zum Parameter `at` fällt weg, `to` wird das neue Ende. Innere Punkte, die nur er
+    /// benutzte, entfallen; das alte Ende räumt der Aufrufer auf.
     fn cut_control_spline(
         &mut self,
         c: CurveId,
@@ -852,20 +853,23 @@ impl Sketch {
         to: PointId,
     ) -> Result<(), SketchError> {
         self.check_curve(c)?;
-        let CurveKind::ControlSpline { points, .. } = self.curves[c].kind.clone() else {
-            return Err(SketchError::UnknownObject);
-        };
+        let kind = self.curves[c].kind.clone();
+        let [first, last] = curve_ends(&kind).ok_or(SketchError::UnknownObject)?;
         let (lo, hi) = self.geom(c).ok_or(SketchError::UnknownObject)?.domain();
-        let (first, last) = (points[0], points[points.len() - 1]);
-        let piece = if end == first {
-            self.control_spline_piece(c, at, hi, to, last)?
+        let (u0, u1, s, e) = if end == first {
+            (at, hi, to, last)
         } else if end == last {
-            self.control_spline_piece(c, lo, at, first, to)?
+            (lo, at, first, to)
         } else {
             return Err(SketchError::UnknownObject);
         };
+        let piece = match kind {
+            CurveKind::ControlSpline { .. } => self.control_spline_piece(c, u0, u1, s, e)?,
+            CurveKind::Conic { .. } => self.conic_part(c, u0, u1, s, e)?,
+            _ => return Err(SketchError::UnknownObject),
+        };
         self.set_curve_kind(c, piece);
-        let inner: Vec<PointId> = points.into_iter().filter(|&p| p != end).collect();
+        let inner: Vec<PointId> = kind.points().into_iter().filter(|&p| p != end).collect();
         self.drop_orphans(&inner)
     }
 

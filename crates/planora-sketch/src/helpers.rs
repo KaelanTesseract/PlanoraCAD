@@ -216,6 +216,12 @@ impl Sketch {
                 let mapped: Vec<PointId> = points.iter().map(|p| map[p]).collect();
                 self.add_control_spline_as(&mapped, degree, knots)?
             }
+            CurveKind::Conic {
+                start,
+                end,
+                apex,
+                rho,
+            } => self.add_conic_as(map[&start], map[&end], map[&apex], rho)?,
             CurveKind::Ellipse { .. } => {
                 return Err(SketchError::WrongType(tr!("sketch-err-copy-kinds")));
             }
@@ -334,6 +340,7 @@ impl Sketch {
                         CurveKind::EllipticArc { .. }
                             | CurveKind::Spline { .. }
                             | CurveKind::ControlSpline { .. }
+                            | CurveKind::Conic { .. }
                     ) {
                         created.push(s.add_constraint(ConstraintKind::Equal(c, copy))?);
                     }
@@ -569,7 +576,9 @@ impl Sketch {
                 start: from.pos(start),
                 end: from.pos(end),
             },
-            CurveKind::Spline { .. } | CurveKind::ControlSpline { .. } => {
+            CurveKind::Spline { .. }
+            | CurveKind::ControlSpline { .. }
+            | CurveKind::Conic { .. } => {
                 return Err(unsupported(tr!("sketch-err-edge-type-changed")));
             }
         };

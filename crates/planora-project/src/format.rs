@@ -783,6 +783,13 @@ pub enum CurveKindDto {
         grad: u8,
         knoten: Vec<f64>,
     },
+    /// Ab Format 17: Kegelschnitt mit Scheitel und Rho.
+    Kegelschnitt {
+        start: usize,
+        ende: usize,
+        scheitel: usize,
+        rho: f64,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

@@ -33,6 +33,7 @@ pub mod transform;
 pub mod triangulate;
 
 pub use constraint::{ConstraintData, ConstraintId, ConstraintKind, Evaluation, LineOrPoints};
+pub use curves::conic_nurbs;
 pub use data::{ConstraintRecord, CurveRecord, PatternRecord, PointRecord, SketchData};
 pub use dimension::{DimMode, DimPick, DimPlan};
 pub use edit::TrimPiece;

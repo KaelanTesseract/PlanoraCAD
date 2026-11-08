@@ -1,5 +1,6 @@
 //! Skizze: Punkte, Kurven, Zahlenvektor. Abhängigkeiten stehen in `constraint.rs`.
 
+use crate::curves::{conic_nurbs, conic_rho_ok};
 use crate::error::SketchError;
 use crate::solver::SolveCache;
 use planora_i18n::tr;
@@ -67,6 +68,16 @@ pub enum CurveKind {
         degree: u8,
         knots: Vec<f64>,
     },
+    /// Rationale quadratische Bézierkurve von `start` nach `end` mit dem Scheitel `apex` (Schnitt
+    /// der Endtangenten), Gewicht `w = rho / (1 − rho)`, Parameter `t ∈ [0, 1]`. Der Schulterpunkt
+    /// `C(½)` liegt bei `M + rho·(apex − M)`, `M` = Sehnenmitte. `rho` ist eine Zahl in der Kurve,
+    /// keine Löservariable: Die Kurve hat die 6 Freiheitsgrade ihrer drei Punkte.
+    Conic {
+        start: PointId,
+        end: PointId,
+        apex: PointId,
+        rho: f64,
+    },
 }
 
 impl CurveKind {
@@ -82,6 +93,9 @@ impl CurveKind {
             CurveKind::EllipticArc {
                 center, start, end, ..
             } => vec![*center, *start, *end],
+            CurveKind::Conic {
+                start, end, apex, ..
+            } => vec![*start, *apex, *end],
         }
     }
 }
@@ -154,6 +168,15 @@ pub const MAX_SPLINE_POINTS: usize = 64;
 /// Beide Koordinaten endlich und betragsmäßig höchstens [`MAX_COORD`].
 pub(crate) fn within_coord_range(p: DVec2) -> bool {
     p.is_finite() && p.x.abs() <= MAX_COORD && p.y.abs() <= MAX_COORD
+}
+
+/// `Ok`, wenn `rho` als Rho eines Kegelschnitts taugt (siehe [`conic_rho_ok`]).
+pub(crate) fn check_conic_rho(rho: f64) -> Result<(), SketchError> {
+    if conic_rho_ok(rho) {
+        Ok(())
+    } else {
+        Err(SketchError::InvalidInput(tr!("sketch-err-conic-rho")))
+    }
 }
 
 /// Endlich und betragsmäßig höchstens [`MAX_COORD`].
@@ -523,6 +546,80 @@ impl Sketch {
         }))
     }
 
+    /// Kegelschnitt von `start` nach `end` mit dem Scheitel `apex` (Schnitt der Endtangenten) und
+    /// `0 < rho < 1` (siehe [`CurveKind::Conic`]). Der Scheitel darf nicht auf der Geraden durch
+    /// Start und Ende liegen.
+    pub fn add_conic(
+        &mut self,
+        start: PointId,
+        end: PointId,
+        apex: PointId,
+        rho: f64,
+    ) -> Result<CurveId, SketchError> {
+        self.check_conic(start, end, apex, rho)?;
+        let (p0, a, p2) = (self.pos(start), self.pos(apex), self.pos(end));
+        let chord = p2 - p0;
+        let len = chord.length();
+        if len <= self.tol.linear || (chord.perp_dot(a - p0) / len).abs() <= self.tol.linear {
+            return Err(SketchError::Degenerate(tr!("sketch-err-conic-apex")));
+        }
+        self.add_conic_as(start, end, apex, rho)
+    }
+
+    /// Kegelschnitt aus vorhandenen Daten (Teilstück, Kopie). Anders als beim Zeichnen darf der
+    /// Scheitel auf der Sehne liegen, die Kurve bleibt gültig; das Lösen kann das ebenso erzeugen.
+    pub(crate) fn add_conic_as(
+        &mut self,
+        start: PointId,
+        end: PointId,
+        apex: PointId,
+        rho: f64,
+    ) -> Result<CurveId, SketchError> {
+        self.check_conic(start, end, apex, rho)?;
+        Ok(self.push_curve(CurveKind::Conic {
+            start,
+            end,
+            apex,
+            rho,
+        }))
+    }
+
+    /// Lebende, verschiedene Punkte und ein gültiges Rho.
+    fn check_conic(
+        &self,
+        start: PointId,
+        end: PointId,
+        apex: PointId,
+        rho: f64,
+    ) -> Result<(), SketchError> {
+        for p in [start, end, apex] {
+            self.check_point(p)?;
+        }
+        if start == end || start == apex || end == apex {
+            return Err(SketchError::InvalidInput(tr!("sketch-err-point-twice")));
+        }
+        check_conic_rho(rho)
+    }
+
+    /// Setzt das Rho eines Kegelschnitts. Die Punkte bleiben; Abhängigkeiten an der Kurve folgen
+    /// beim nächsten Lösen. Ist `c` Vorlage oder Exemplar eines Musters, wird es aufgelöst.
+    pub fn set_conic_rho(&mut self, c: CurveId, rho: f64) -> Result<(), SketchError> {
+        self.check_curve(c)?;
+        let mut kind = self.curves[c].kind.clone();
+        let CurveKind::Conic { rho: slot, .. } = &mut kind else {
+            return Err(SketchError::WrongType(tr!("sketch-err-conic-kind")));
+        };
+        check_conic_rho(rho)?;
+        if *slot != rho {
+            *slot = rho;
+            self.set_curve_kind(c, kind);
+            // Die Parameter neu suchen: Bei einem großen Sprung im Rho läge der alte Parameter weit
+            // von der neuen Stelle, und der Löser schösse damit über die Enden hinaus.
+            self.reseed_extras(c);
+        }
+        Ok(())
+    }
+
     /// Punktzahl und lebende Punkte ohne Doppelte, für jeden Spline.
     fn check_spline_ids(&self, points: &[PointId]) -> Result<(), SketchError> {
         if !(2..=MAX_SPLINE_POINTS).contains(&points.len()) {
@@ -568,6 +665,14 @@ impl Sketch {
                     .ok()
                     .map(Arc::new)
             }
+            CurveKind::Conic {
+                start,
+                end,
+                apex,
+                rho,
+            } => conic_nurbs(self.pos(*start), self.pos(*apex), self.pos(*end), *rho)
+                .ok()
+                .map(Arc::new),
             _ => None,
         }
     }

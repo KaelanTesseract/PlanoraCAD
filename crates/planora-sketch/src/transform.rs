@@ -278,6 +278,17 @@ pub(crate) fn map_curve(
             degree: *degree,
             knots: knots.clone(),
         },
+        CurveKind::Conic {
+            start,
+            end,
+            apex,
+            rho,
+        } => CurveKind::Conic {
+            start: p(*start),
+            end: p(*end),
+            apex: p(*apex),
+            rho: *rho,
+        },
         CurveKind::EllipticArc {
             center,
             ax,
@@ -750,6 +761,12 @@ impl Sketch {
                 let mapped: Vec<PointId> = list.iter().map(|p| points[p]).collect();
                 self.add_control_spline_as(&mapped, degree, knots)?
             }
+            CurveKind::Conic {
+                start,
+                end,
+                apex,
+                rho,
+            } => self.add_conic_as(points[&start], points[&end], points[&apex], rho)?,
             ref kind @ (CurveKind::Ellipse { ax, ay, minor, .. }
             | CurveKind::EllipticArc { ax, ay, minor, .. }) => {
                 if !sizes.contains_key(&ax) {
@@ -1203,6 +1220,9 @@ impl Sketch {
             CurveKind::ControlSpline { ref points, .. } => {
                 points.windows(2).all(|w| close(w[0], w[1]))
             }
+            CurveKind::Conic {
+                start, end, apex, ..
+            } => close(start, apex) && close(apex, end),
         }
     }
 

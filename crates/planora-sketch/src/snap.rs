@@ -98,6 +98,13 @@ impl SnapIndex {
                 CurveKind::Spline { points } | CurveKind::ControlSpline { points, .. } => {
                     other_role.extend(points.iter().map(|p| p.index()));
                 }
+                CurveKind::Conic {
+                    start, end, apex, ..
+                } => {
+                    other_role.insert(start.index());
+                    other_role.insert(apex.index());
+                    other_role.insert(end.index());
+                }
             }
             let Some(geom) = sk.geom(id) else { continue };
             if matches!(geom, Geom::Line { .. } | Geom::Arc { .. }) {

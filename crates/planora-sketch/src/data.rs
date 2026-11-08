@@ -4,7 +4,8 @@
 use crate::constraint::{ConstraintData, ConstraintId, ConstraintKind};
 use crate::error::SketchError;
 use crate::model::{
-    CurveData, CurveId, CurveKind, MAX_COORD, MAX_SPLINE_POINTS, PointData, PointId, Sketch, finite,
+    CurveData, CurveId, CurveKind, MAX_COORD, MAX_SPLINE_POINTS, PointData, PointId, Sketch,
+    check_conic_rho, finite,
 };
 use crate::pattern::{
     CircularMode, PatternData, PatternDir, PatternInstance, PatternKind, PatternProblem,
@@ -211,6 +212,7 @@ impl Sketch {
                     degree,
                     knots,
                 } => check_control_spline(points.len(), *degree, knots)?,
+                CurveKind::Conic { rho, .. } => check_conic_rho(*rho)?,
                 _ => {}
             }
             if c.alive && pts.iter().any(|p| !point_alive(*p)) {

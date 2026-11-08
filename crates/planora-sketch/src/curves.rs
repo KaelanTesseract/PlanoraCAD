@@ -2,7 +2,8 @@
 //! nach dem Startparameter der Zusatzvariablen parametrischer Abhängigkeiten.
 
 use crate::dual::Dual;
-use planora_math::nurbs::NurbsCurve;
+use crate::model::within_coord_range;
+use planora_math::nurbs::{MAX_WEIGHT, MIN_WEIGHT, NurbsCurve, NurbsError};
 use planora_math::{DVec2, TAU};
 use std::sync::Arc;
 
@@ -312,6 +313,93 @@ pub(crate) fn nurbs_samples(curve: &NurbsCurve, t0: f64, t1: f64, per_piece: usi
     }
     out.push(t1);
     out
+}
+
+/// Knoten eines Kegelschnitts: ein Bézier-Stück über `[0, 1]`.
+pub(crate) const CONIC_KNOTS: [f64; 6] = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+
+/// Inneres Gewicht des Kegelschnitts mit dem Rho `rho`; die Endgewichte sind 1.
+pub(crate) fn conic_weight(rho: f64) -> f64 {
+    rho / (1.0 - rho)
+}
+
+/// Kegelschnitt von `p0` nach `p2` mit dem Scheitel `a` als NURBS-Kurve in Skizzenkoordinaten
+/// (`z = 0`): Grad 2 über `[0, 1]`, Gewichte `1, rho / (1 − rho), 1`. Ein Rho, dessen Gewicht außerhalb
+/// des Bereichs der NURBS liegt, und Punkte außerhalb des Rechenbereichs ergeben einen Fehler.
+pub fn conic_nurbs(p0: DVec2, a: DVec2, p2: DVec2, rho: f64) -> Result<NurbsCurve, NurbsError> {
+    NurbsCurve::new(
+        2,
+        CONIC_KNOTS.to_vec(),
+        vec![p0.extend(0.0), a.extend(0.0), p2.extend(0.0)],
+        vec![1.0, conic_weight(rho), 1.0],
+    )
+}
+
+/// `0 < rho < 1`, und das Gewicht liegt im Bereich, den eine NURBS-Kurve erlaubt (das schließt nur
+/// Werte aus, die dichter als etwa 1e-6 an 0 oder 1 liegen). `NaN` ist ungültig.
+pub(crate) fn conic_rho_ok(rho: f64) -> bool {
+    rho > 0.0 && rho < 1.0 && (MIN_WEIGHT..=MAX_WEIGHT).contains(&conic_weight(rho))
+}
+
+/// Kontrollpunkte und Gewichte des Stücks `u0..u1` eines Kegelschnitts in homogener Teilung (Blüten),
+/// der Parameter bleibt der der ganzen Kurve; auch außerhalb von `[0, 1]`. `None`, wenn ein Gewicht
+/// nicht positiv ist oder ein Punkt außerhalb des Rechenbereichs liegt.
+fn conic_span(
+    p0: DVec2,
+    a: DVec2,
+    p2: DVec2,
+    rho: f64,
+    u0: f64,
+    u1: f64,
+) -> Option<([DVec2; 3], [f64; 3])> {
+    let w = conic_weight(rho);
+    let blossom = |u: f64, v: f64| {
+        let (c0, c1, c2) = ((1.0 - u) * (1.0 - v), (1.0 - u) * v + u * (1.0 - v), u * v);
+        (p0 * c0 + a * (w * c1) + p2 * c2, c0 + w * c1 + c2)
+    };
+    let h = [blossom(u0, u0), blossom(u0, u1), blossom(u1, u1)];
+    let weights = h.map(|x| x.1);
+    let points = h.map(|x| x.0 / x.1);
+    let ok = weights.iter().all(|w| w.is_finite() && *w > 0.0)
+        && points.iter().all(|&p| within_coord_range(p));
+    ok.then_some((points, weights))
+}
+
+/// Das Stück `u0..u1` eines Kegelschnitts wieder als Kegelschnitt: Start, Scheitel, Ende und Rho aus
+/// dem Gewicht `w₁/√(w₀·w₂)`. Auch für `u` außerhalb von `[0, 1]` (Dehnen). `None` bei nicht positiven
+/// Gewichten, außerhalb des Rechenbereichs und wenn das neue Rho nicht darstellbar ist.
+pub(crate) fn conic_piece(
+    p0: DVec2,
+    a: DVec2,
+    p2: DVec2,
+    rho: f64,
+    u0: f64,
+    u1: f64,
+) -> Option<(DVec2, DVec2, DVec2, f64)> {
+    let ([q0, q1, q2], [w0, w1, w2]) = conic_span(p0, a, p2, rho, u0, u1)?;
+    let inner = w1 / (w0 * w2).sqrt();
+    let new_rho = inner / (1.0 + inner);
+    conic_rho_ok(new_rho).then_some((q0, q1, q2, new_rho))
+}
+
+/// Das Stück `u0..u1` als NURBS-Kurve mit dem Parameter der ganzen Kurve, zum Suchen beim Dehnen.
+/// `None` wie bei [`conic_piece`] und wenn ein Gewicht außerhalb des Bereichs der NURBS liegt.
+pub(crate) fn conic_stretch(
+    p0: DVec2,
+    a: DVec2,
+    p2: DVec2,
+    rho: f64,
+    u0: f64,
+    u1: f64,
+) -> Option<NurbsCurve> {
+    let (q, w) = conic_span(p0, a, p2, rho, u0, u1)?;
+    NurbsCurve::new(
+        2,
+        vec![u0, u0, u0, u1, u1, u1],
+        q.iter().map(|p| p.extend(0.0)).collect(),
+        w.to_vec(),
+    )
+    .ok()
 }
 
 /// Index des kleinsten Funktionswerts (NaN zählt als größer als alles andere).

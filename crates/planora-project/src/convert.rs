@@ -118,13 +118,13 @@ fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
         1
     }
 }
-/// Braucht die Art Format 17 (Skizzen 7)? Eine Skizze mit einem Spline mit Kontrollpunkten, auch
-/// einem gelöschten Eintrag: Er steht in der Datei.
+/// Braucht die Art Format 17 (Skizzen 7)? Eine Skizze mit einem Spline mit Kontrollpunkten oder
+/// einem Kegelschnitt, auch einem gelöschten Eintrag: Er steht in der Datei.
 fn needs_format_17(k: &FeatureKind) -> bool {
     matches!(k, FeatureKind::Sketch(sf) if sf
         .sketch
         .curve_entries()
-        .any(|c| matches!(c, CurveKind::ControlSpline { .. })))
+        .any(|c| matches!(c, CurveKind::ControlSpline { .. } | CurveKind::Conic { .. })))
 }
 /// Braucht die Art Format 16 (Skizzen 6)? Konstruktionsebenen, Skizzen auf ihnen und Schnitt-
 /// oder Silhouettenprojektionen. Kantenprojektionen gibt es schon länger, auch verknüpfte, nicht
@@ -361,6 +361,17 @@ fn curve_to(k: &CurveKind) -> CurveKindDto {
             grad: *degree,
             knoten: knots.clone(),
         },
+        CurveKind::Conic {
+            start,
+            end,
+            apex,
+            rho,
+        } => CurveKindDto::Kegelschnitt {
+            start: start.index(),
+            ende: end.index(),
+            scheitel: apex.index(),
+            rho: *rho,
+        },
     }
 }
 
@@ -414,6 +425,17 @@ fn curve_from(d: &CurveKindDto) -> CurveKind {
             points: punkte.iter().map(|i| p(*i)).collect(),
             degree: *grad,
             knots: knoten.clone(),
+        },
+        CurveKindDto::Kegelschnitt {
+            start,
+            ende,
+            scheitel,
+            rho,
+        } => CurveKind::Conic {
+            start: p(*start),
+            end: p(*ende),
+            apex: p(*scheitel),
+            rho: *rho,
         },
     }
 }
@@ -2911,10 +2933,13 @@ fn has_format_16_data(k: &KindDto) -> bool {
 /// Inhalt aus Format 17 in einer Feature-Art der Datei (Gegenstück zu [`needs_format_17`]).
 fn has_format_17_data(k: &KindDto) -> bool {
     matches!(k, KindDto::Skizze(s) if s
-        .skizze
-        .kurven
-        .iter()
-        .any(|c| matches!(c.art, CurveKindDto::KontrollSpline { .. })))
+    .skizze
+    .kurven
+    .iter()
+    .any(|c| matches!(
+        c.art,
+        CurveKindDto::KontrollSpline { .. } | CurveKindDto::Kegelschnitt { .. }
+    )))
 }
 
 /// Liest eine Versionsdatei. `origin` ist der Dateiname für Meldungen.

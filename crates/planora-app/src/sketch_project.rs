@@ -177,7 +177,9 @@ fn key_of(sk: &Sketch, c: CurveId) -> Option<CurveKey> {
             let mid = sk.ellipse_point(c, t0 + sweep(t1 - t0, sk) / 2.0)?;
             CurveKey::EllipticArc([s, mid, e])
         }
-        CurveKind::Spline { .. } | CurveKind::ControlSpline { .. } => return None,
+        CurveKind::Spline { .. } | CurveKind::ControlSpline { .. } | CurveKind::Conic { .. } => {
+            return None;
+        }
     })
 }
 

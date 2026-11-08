@@ -50,6 +50,8 @@ const ELLIPSE_HALF_SECTIONS: usize = 32;
 const SECTIONS_PER_SPAN: usize = 4;
 /// Höchstzahl der Abschnitte eines Näherungsstücks.
 const MAX_SECTIONS: usize = 63;
+/// Mindestzahl der Abschnitte eines Kegelschnitts: Er ist ein einziges Stück, dreht aber bis fast 180°.
+const CONIC_SECTIONS: usize = 12;
 /// Abtastung der Krümmung beim Suchen nach Spitzen.
 const CUSP_STEPS_PER_TURN: usize = 256;
 const CUSP_STEPS_PER_SEGMENT: usize = 64;
@@ -306,6 +308,7 @@ fn open_ends(sketch: &Sketch, c: CurveId) -> Option<[DVec2; 2]> {
         CurveKind::Spline { points } | CurveKind::ControlSpline { points, .. } => {
             (*points.first()?, *points.last()?)
         }
+        CurveKind::Conic { start, end, .. } => (*start, *end),
         CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => return None,
     };
     Some([sketch.pos(a), sketch.pos(b)])
@@ -371,6 +374,7 @@ pub(crate) fn ends_of(kind: &CurveKind) -> Vec<PointId> {
         CurveKind::Spline { points } | CurveKind::ControlSpline { points, .. } => {
             vec![points[0], points[points.len() - 1]]
         }
+        CurveKind::Conic { start, end, .. } => vec![*start, *end],
         CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => Vec::new(),
     }
 }
@@ -477,8 +481,13 @@ impl Sketch {
                 // braucht mehr Abschnitte als ein kubisches.
                 let (lo, hi) = curve.domain();
                 let pieces = nurbs_breaks(curve, lo, hi).len() - 1;
+                let least = if matches!(self.curves[c].kind, CurveKind::Conic { .. }) {
+                    CONIC_SECTIONS
+                } else {
+                    2 * curve.degree()
+                };
                 let per_piece = SECTIONS_PER_SPAN
-                    .max(2 * curve.degree())
+                    .max(least)
                     .min(MAX_SECTIONS / pieces)
                     .max(1);
                 let ts = nurbs_samples(curve, lo, hi, per_piece);

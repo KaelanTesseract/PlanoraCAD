@@ -2934,7 +2934,8 @@ fn sort_items(sk: &Sketch, items: &[Item]) -> Option<Sorted> {
                     CurveKind::Ellipse { .. }
                     | CurveKind::EllipticArc { .. }
                     | CurveKind::Spline { .. }
-                    | CurveKind::ControlSpline { .. } => s.others.push(c),
+                    | CurveKind::ControlSpline { .. }
+                    | CurveKind::Conic { .. } => s.others.push(c),
                 }
                 s.curves.push(c);
             }
@@ -3127,7 +3128,10 @@ pub(crate) fn round_center(sk: &Sketch, c: CurveId) -> Option<PointId> {
         | CurveKind::Arc { center, .. }
         | CurveKind::Ellipse { center, .. }
         | CurveKind::EllipticArc { center, .. } => Some(center),
-        CurveKind::Line { .. } | CurveKind::Spline { .. } | CurveKind::ControlSpline { .. } => None,
+        CurveKind::Line { .. }
+        | CurveKind::Spline { .. }
+        | CurveKind::ControlSpline { .. }
+        | CurveKind::Conic { .. } => None,
     }
 }
 

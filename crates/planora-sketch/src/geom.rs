@@ -602,7 +602,7 @@ impl Sketch {
                     n: xy.len(),
                 }
             }
-            CurveKind::ControlSpline { .. } => Geom::Nurbs {
+            CurveKind::ControlSpline { .. } | CurveKind::Conic { .. } => Geom::Nurbs {
                 curve: self.nurbs_of(c)?,
             },
         };

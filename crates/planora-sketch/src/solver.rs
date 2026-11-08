@@ -679,7 +679,9 @@ impl Sketch {
             | CurveKind::EllipticArc { ax, ay, minor, .. } => {
                 !(ok(DVec2::new(x[*ax], x[*ay]).length()) && ok(x[*minor]))
             }
-            CurveKind::Spline { .. } | CurveKind::ControlSpline { .. } => false,
+            CurveKind::Spline { .. }
+            | CurveKind::ControlSpline { .. }
+            | CurveKind::Conic { .. } => false,
         })
     }
 

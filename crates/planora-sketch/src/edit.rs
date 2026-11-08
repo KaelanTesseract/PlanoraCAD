@@ -13,7 +13,7 @@
 //! schneidenden Kurve oder „Punkt auf Kurve“ an ihr.
 
 use crate::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
-use crate::curves::{nurbs_breaks, snap_to_knot};
+use crate::curves::{conic_piece, conic_stretch, nurbs_breaks, snap_to_knot};
 use crate::error::SketchError;
 use crate::geom::Geom;
 use crate::intersect::{Prepared, clean_params, intersect_prepared};
@@ -29,6 +29,8 @@ const PREVIEW_STEPS_PER_TURN: usize = 64;
 /// Dehnen eines Splines mit Kontrollpunkten sucht bis zu so vielen Bereichsbreiten hinter dem Ende
 /// (**Annahme**, Spec E: Weiter trägt die Fortsetzung eines Polynomstücks nicht sinnvoll).
 const EXTEND_REACH: f64 = 3.0;
+/// Halbierungen, mit denen die Suche auf die Grenze des Darstellbaren einer Fortsetzung kommt.
+const CONIC_REACH_HALVINGS: usize = 50;
 /// Vielfaches von `tol.linear` bzw. `tol.angular`, bis zu dem eine Abhängigkeit nach dem
 /// Ändern als erfüllt gilt (Entscheidung 7).
 pub(crate) const SETTLE_FACTOR: f64 = 10.0;
@@ -81,7 +83,16 @@ struct ExtendTarget {
 /// Neue Lage der letzten (bzw. ersten) Kontrollpunkte und neuer Knotenvektor beim Dehnen.
 struct ControlExtend {
     moved: Vec<(PointId, DVec2)>,
-    knots: Vec<f64>,
+    shape: ExtendShape,
+}
+
+/// Was sich beim Dehnen außer den Punkten ändert.
+#[derive(Clone, Debug)]
+enum ExtendShape {
+    /// Spline mit Kontrollpunkten: die Knoten.
+    Knots(Vec<f64>),
+    /// Kegelschnitt: das Rho.
+    Rho(f64),
 }
 
 /// Abstand zweier Parameter, bei periodischen Kurven über den kürzeren Weg.
@@ -138,7 +149,8 @@ impl Sketch {
         self.locate_extend(c, at).map(|x| x.path)
     }
 
-    /// Dehnt die Linie, den Bogen, Ellipsenbogen oder Spline mit Kontrollpunkten `c` an dem Ende, das
+    /// Dehnt die Linie, den Bogen, Ellipsenbogen, Spline mit Kontrollpunkten oder Kegelschnitt `c` (dieser
+    /// exakt mit neuem Scheitel und Rho; wird dabei ein Gewicht negativ: Fehler und keine Änderung) an dem Ende, das
     /// `at` näher liegt, bis zum nächsten Schnitt mit einer anderen lebenden Kurve (auch
     /// Konstruktion): Der Endpunkt wandert dorthin und behält seine Id, Abhängigkeiten nach
     /// Entscheidung 7. Eine Linie wächst geradeaus, ein Bogen auf seinem Kreis bzw. seiner Ellipse
@@ -155,6 +167,9 @@ impl Sketch {
             return Err(SketchError::InvalidInput(tr!("sketch-err-target-finite")));
         }
         let Some(x) = self.locate_extend(c, at) else {
+            if self.conic_extend_refused(c, at) {
+                return Err(SketchError::Degenerate(tr!("sketch-err-conic-extend")));
+            }
             return Ok(false);
         };
         let backup = self.clone();
@@ -205,12 +220,16 @@ impl Sketch {
                 (*start, *end)
             }
             CurveKind::ControlSpline { points, .. } => (points[0], points[points.len() - 1]),
+            CurveKind::Conic { start, end, .. } => (*start, *end),
             _ => return None,
         };
         let at_end = at.distance(self.pos(last)) < at.distance(self.pos(first));
         let (point, other) = if at_end { (last, first) } else { (first, last) };
         if !self.is_open_end(c, point) {
             return None;
+        }
+        if matches!(self.curves[c].kind, CurveKind::Conic { .. }) {
+            return self.locate_extend_conic(c, at_end);
         }
         if let Geom::Nurbs { curve } = &g {
             return self.locate_extend_control(c, curve, at_end);
@@ -410,8 +429,124 @@ impl Sketch {
             path,
             control: Some(ControlExtend {
                 moved,
-                knots: longer.knots().knots().to_vec(),
+                shape: ExtendShape::Knots(longer.knots().knots().to_vec()),
             }),
+        })
+    }
+
+    /// Nächster Treffer der Fortsetzung des Kegelschnitts `c` über sein Ende: `(Suchkurve, t, Kurve)`,
+    /// `t` im Parameter der ganzen Kurve. Gesucht wird bis [`EXTEND_REACH`] Bereichsbreiten, längstens
+    /// bis dorthin, wo die Fortsetzung selbst noch darstellbar ist (bei einer Hyperbel die Asymptote).
+    fn conic_extend_hit(&self, c: CurveId, at_end: bool) -> Option<(Geom, f64, CurveId)> {
+        let CurveKind::Conic {
+            start,
+            end,
+            apex,
+            rho,
+        } = self.curves[c].kind
+        else {
+            return None;
+        };
+        let tol = self.tolerance().linear;
+        let (p0, a, p2) = (self.pos(start), self.pos(apex), self.pos(end));
+        let (from, boundary) = if at_end { (p2, 1.0) } else { (p0, 0.0) };
+        let stretch = |reach: f64| {
+            if at_end {
+                conic_stretch(p0, a, p2, rho, 1.0, 1.0 + reach)
+            } else {
+                conic_stretch(p0, a, p2, rho, -reach, 0.0)
+            }
+        };
+        let mut reach = EXTEND_REACH;
+        if stretch(reach).is_none() {
+            let (mut good, mut bad) = (0.0, reach);
+            for _ in 0..CONIC_REACH_HALVINGS {
+                let mid = 0.5 * (good + bad);
+                if stretch(mid).is_some() {
+                    good = mid;
+                } else {
+                    bad = mid;
+                }
+            }
+            reach = good;
+        }
+        let search = Geom::Nurbs {
+            curve: Arc::new(stretch(reach)?),
+        };
+        let ahead = |t: f64| {
+            let gap = (t - boundary).abs();
+            (search.eval(t).0.distance(from) > tol).then_some(gap)
+        };
+        let (_, t, cutter) = self.nearest_extend_hit(c, &search, ahead)?;
+        Some((search, t, cutter))
+    }
+
+    /// Ziel beim Dehnen eines Kegelschnitts: exakt, Scheitel und Rho aus [`conic_piece`]. Wie beim Spline
+    /// mit Kontrollpunkten kein Ziel, wenn der Scheitel zu einer anderen Kurve gehört.
+    fn locate_extend_conic(&self, c: CurveId, at_end: bool) -> Option<ExtendTarget> {
+        let CurveKind::Conic {
+            start,
+            end,
+            apex,
+            rho,
+        } = self.curves[c].kind
+        else {
+            return None;
+        };
+        let (search, t, cutter) = self.conic_extend_hit(c, at_end)?;
+        let (p0, a, p2) = (self.pos(start), self.pos(apex), self.pos(end));
+        let (point, from, boundary, u0, u1) = if at_end {
+            (end, p2, 1.0, 0.0, t)
+        } else {
+            (start, p0, 0.0, t, 1.0)
+        };
+        let (_, new_apex, _, new_rho) = conic_piece(p0, a, p2, rho, u0, u1)?;
+        if self
+            .curves()
+            .any(|(id, d)| id != c && d.kind.points().contains(&apex))
+        {
+            return None;
+        }
+        let hit = search.eval(t).0;
+        let to = self
+            .cutter_point_at(cutter, hit)
+            .map_or(hit, |q| self.pos(q));
+        let mut path = search.polyline(boundary, t, PREVIEW_STEPS_PER_TURN);
+        let n = path.len();
+        path[0] = from;
+        path[n - 1] = to;
+        Some(ExtendTarget {
+            point,
+            to,
+            cutter,
+            path,
+            control: Some(ControlExtend {
+                moved: vec![(point, to), (apex, new_apex)],
+                shape: ExtendShape::Rho(new_rho),
+            }),
+        })
+    }
+
+    /// Hat das Dehnen des Kegelschnitts `c` ein Ziel, das nur daran scheitert, dass das längere Stück kein
+    /// Kegelschnitt mehr wäre? Das Gewicht wird dort negativ (siehe Spec, Tabelle E).
+    fn conic_extend_refused(&self, c: CurveId, at: DVec2) -> bool {
+        let CurveKind::Conic {
+            start,
+            end,
+            apex,
+            rho,
+        } = self.curves[c].kind
+        else {
+            return false;
+        };
+        let (p0, a, p2) = (self.pos(start), self.pos(apex), self.pos(end));
+        let at_end = at.distance(p2) < at.distance(p0);
+        if !self.is_open_end(c, if at_end { end } else { start }) {
+            return false;
+        }
+        self.conic_extend_hit(c, at_end).is_some_and(|(_, t, _)| {
+            let (u0, u1) = if at_end { (0.0, t) } else { (t, 1.0) };
+            conic_piece(p0, a, p2, rho, u0, u1).is_none()
         })
     }
 
@@ -438,8 +573,12 @@ impl Sketch {
             }
             self.touch_values();
             let mut kind = self.curves[c].kind.clone();
-            if let CurveKind::ControlSpline { knots, .. } = &mut kind {
-                knots.clone_from(&control.knots);
+            match (&mut kind, &control.shape) {
+                (CurveKind::ControlSpline { knots, .. }, ExtendShape::Knots(new)) => {
+                    knots.clone_from(new);
+                }
+                (CurveKind::Conic { rho, .. }, ExtendShape::Rho(new)) => *rho = *new,
+                _ => {}
             }
             self.set_curve_kind(c, kind);
             let moved: Vec<PointId> = control.moved.iter().map(|m| m.0).collect();
@@ -632,6 +771,7 @@ impl Sketch {
                     CurveKind::Spline { points } | CurveKind::ControlSpline { points, .. } => {
                         (points[0], points[points.len() - 1])
                     }
+                    CurveKind::Conic { start, end, .. } => (*start, *end),
                     CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => {
                         unreachable!("closed curves are handled above")
                     }
@@ -689,6 +829,7 @@ impl Sketch {
                         CurveKind::ControlSpline { .. } => {
                             self.control_spline_piece(c, u0, u1, s, e)?
                         }
+                        CurveKind::Conic { .. } => self.conic_part(c, u0, u1, s, e)?,
                         CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => {
                             unreachable!("closed curves are handled above")
                         }
@@ -844,6 +985,40 @@ impl Sketch {
         })
     }
 
+    /// Das Stück `u0..u1` des Kegelschnitts `c` von `s` nach `e`: wieder ein Kegelschnitt mit neuem
+    /// Scheitel und neuem Rho aus homogener Teilung ([`conic_piece`]). Die Enden bleiben `s` und `e`.
+    pub(crate) fn conic_part(
+        &mut self,
+        c: CurveId,
+        u0: f64,
+        u1: f64,
+        s: PointId,
+        e: PointId,
+    ) -> Result<CurveKind, SketchError> {
+        let CurveKind::Conic {
+            start,
+            end,
+            apex,
+            rho,
+        } = self.curves[c].kind
+        else {
+            return Err(SketchError::UnknownObject);
+        };
+        let (p0, a, p2) = (self.pos(start), self.pos(apex), self.pos(end));
+        let piece = (u0 < u1)
+            .then(|| conic_piece(p0, a, p2, rho, u0, u1))
+            .flatten();
+        let Some((_, m, _, new_rho)) = piece else {
+            return Err(SketchError::Degenerate(tr!("sketch-err-conic-piece")));
+        };
+        Ok(CurveKind::Conic {
+            start: s,
+            end: e,
+            apex: self.add_point(m.x, m.y)?,
+            rho: new_rho,
+        })
+    }
+
     /// Legt das zweite Teilstück als neue Kurve an (mit den Prüfungen der `add_…`-Funktionen;
     /// ein Ellipsenbogen teilt die Variablen seiner Ellipse).
     fn add_piece(&mut self, piece: CurveKind) -> Result<CurveId, SketchError> {
@@ -866,6 +1041,12 @@ impl Sketch {
                 degree,
                 knots,
             } => self.add_control_spline_as(&points, degree, knots),
+            CurveKind::Conic {
+                start,
+                end,
+                apex,
+                rho,
+            } => self.add_conic_as(start, end, apex, rho),
             CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => {
                 unreachable!("pieces are open curves")
             }
@@ -951,7 +1132,9 @@ impl Sketch {
                 touched.contains(c)
                     && matches!(
                         self.curves[*c].kind,
-                        CurveKind::Spline { .. } | CurveKind::ControlSpline { .. }
+                        CurveKind::Spline { .. }
+                            | CurveKind::ControlSpline { .. }
+                            | CurveKind::Conic { .. }
                     )
             });
             if on_touched_spline
@@ -964,6 +1147,25 @@ impl Sketch {
             let d = &self.constraints[id];
             if d.enabled && !d.driven && !self.satisfied(id, SETTLE_FACTOR) {
                 self.drop_constraint(id);
+            }
+        }
+    }
+
+    /// Setzt die Zusatzvariablen aller Abhängigkeiten an der Kurve `c` auf ihre Startwerte für die
+    /// aktuelle Form.
+    pub(crate) fn reseed_extras(&mut self, c: CurveId) {
+        let ids: Vec<ConstraintId> = self
+            .constraints()
+            .filter(|(_, d)| d.kind.curves().contains(&c))
+            .map(|(id, _)| id)
+            .collect();
+        for id in ids {
+            let kind = self.constraints[id].kind.clone();
+            if self.needs_extra(&kind)
+                && let (Some(var), Some(t)) = (self.constraints[id].extra, self.extra_start(&kind))
+            {
+                self.vars[var] = t;
+                self.touch_values();
             }
         }
     }

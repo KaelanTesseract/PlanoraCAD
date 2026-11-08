@@ -2,7 +2,8 @@
 //! Ableitungen nach den beteiligten Variablen.
 
 use crate::curves::{
-    Sampled, ellipse_eval, nurbs_eval_dual, spline_eval, spline_second_derivatives,
+    CONIC_KNOTS, Sampled, conic_weight, ellipse_eval, nurbs_eval_dual, spline_eval,
+    spline_second_derivatives,
 };
 use crate::dual::Dual;
 use crate::error::SketchError;
@@ -463,6 +464,16 @@ fn param_curve(ctx: &Ctx, c: CurveId, t: &Dual) -> (V2, V2) {
             let pts: Vec<V2> = points.iter().map(|&p| ctx.pt(p)).collect();
             nurbs_eval_dual(usize::from(*degree), knots, None, &pts, t)
         }
+        CurveKind::Conic {
+            start,
+            end,
+            apex,
+            rho,
+        } => {
+            let pts = [ctx.pt(*start), ctx.pt(*apex), ctx.pt(*end)];
+            let weights = [1.0, conic_weight(*rho), 1.0];
+            nurbs_eval_dual(2, &CONIC_KNOTS, Some(&weights), &pts, t)
+        }
         _ => unreachable!("type was checked"),
     }
 }
@@ -486,6 +497,7 @@ fn is_param_kind(k: &CurveKind) -> bool {
             | CurveKind::EllipticArc { .. }
             | CurveKind::Spline { .. }
             | CurveKind::ControlSpline { .. }
+            | CurveKind::Conic { .. }
     )
 }
 
@@ -493,7 +505,7 @@ fn is_param_kind(k: &CurveKind) -> bool {
 fn on_curve_needs_parameter(k: &CurveKind) -> bool {
     matches!(
         k,
-        CurveKind::Spline { .. } | CurveKind::ControlSpline { .. }
+        CurveKind::Spline { .. } | CurveKind::ControlSpline { .. } | CurveKind::Conic { .. }
     )
 }
 
@@ -567,6 +579,7 @@ pub(crate) fn curve_ends(kind: &CurveKind) -> Option<[PointId; 2]> {
         CurveKind::Spline { points } | CurveKind::ControlSpline { points, .. } => {
             Some([*points.first()?, *points.last()?])
         }
+        CurveKind::Conic { start, end, .. } => Some([*start, *end]),
         _ => None,
     }
 }
@@ -634,6 +647,14 @@ fn into_curve(ctx: &Ctx, c: CurveId, p: PointId) -> Option<V2> {
                 (-&d.0, -&d.1)
             }
         }
+        CurveKind::Conic { .. } => {
+            if p == first {
+                param_curve(ctx, c, &Dual::constant(0.0)).1
+            } else {
+                let (_, d) = param_curve(ctx, c, &Dual::constant(1.0));
+                (-&d.0, -&d.1)
+            }
+        }
         _ => return None,
     })
 }
@@ -654,7 +675,9 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
                 CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. } => {
                     vec![ellipse_residual(ctx, *c, &pp)]
                 }
-                CurveKind::Spline { .. } | CurveKind::ControlSpline { .. } => {
+                CurveKind::Spline { .. }
+                | CurveKind::ControlSpline { .. }
+                | CurveKind::Conic { .. } => {
                     let t = extra_var(ctx, data);
                     let (q, _) = param_curve(ctx, *c, &t);
                     vec![&q.0 - &pp.0, &q.1 - &pp.1]
@@ -1378,6 +1401,26 @@ impl Sketch {
                         ),
                     })
                 }
+                CurveKind::Conic {
+                    start,
+                    end,
+                    apex,
+                    rho,
+                } => {
+                    // Wie oben, mit der Geschwindigkeit am Ende `2w · Schenkel`.
+                    let w = conic_weight(*rho);
+                    let slack = |a: PointId, b: PointId| {
+                        (tol / (2.0 * w * at(a).distance(at(b))))
+                            .clamp(MIN_SPLINE_T_TOL, MAX_SPLINE_T_TOL)
+                    };
+                    Some(SplineParameter {
+                        var,
+                        lo: 0.0,
+                        hi: 1.0,
+                        slack_start: slack(*start, *apex),
+                        slack_end: slack(*apex, *end),
+                    })
+                }
                 _ => None,
             })
     }
@@ -1479,7 +1522,9 @@ impl Sketch {
                 let xy: Vec<DVec2> = points.iter().map(|&p| self.pos(p)).collect();
                 Some(Sampled::spline(&xy))
             }
-            CurveKind::ControlSpline { .. } => Some(Sampled::Nurbs(self.nurbs_of(c)?)),
+            CurveKind::ControlSpline { .. } | CurveKind::Conic { .. } => {
+                Some(Sampled::Nurbs(self.nurbs_of(c)?))
+            }
             _ => None,
         }
     }

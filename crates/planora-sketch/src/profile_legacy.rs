@@ -123,6 +123,14 @@ impl Sketch {
                         }),
                     }
                 }
+                CurveKind::Conic { start, end, .. } => {
+                    let (na, nb) = (node(self.pos(*start)), node(self.pos(*end)));
+                    edges.push(Edge {
+                        curve: id,
+                        a: na,
+                        b: nb,
+                    });
+                }
             }
         }
         let node_count = reps.len();
@@ -263,7 +271,9 @@ impl Sketch {
         let is_spline = |e: usize| {
             matches!(
                 self.curves[edges[e].curve].kind,
-                CurveKind::Spline { .. } | CurveKind::ControlSpline { .. }
+                CurveKind::Spline { .. }
+                    | CurveKind::ControlSpline { .. }
+                    | CurveKind::Conic { .. }
             )
         };
         // Ein Spline, dessen Enden zusammenfallen, ist allein eine geschlossene Schleife (ein
@@ -276,7 +286,9 @@ impl Sketch {
                 CurveKind::Arc { .. } | CurveKind::EllipticArc { .. } => {
                     tr!("sketch-err-arc-closed")
                 }
-                CurveKind::Spline { .. } | CurveKind::ControlSpline { .. } => {
+                CurveKind::Spline { .. }
+                | CurveKind::ControlSpline { .. }
+                | CurveKind::Conic { .. } => {
                     tr!("sketch-err-spline-closed-branch")
                 }
                 _ => tr!("sketch-err-line-zero-length"),
@@ -337,7 +349,7 @@ impl Sketch {
             let target = reps[if forward { edge.b } else { edge.a }];
             let seg = match &self.curves[edge.curve].kind {
                 CurveKind::Spline { points } => self.spline_segment(points, forward)?,
-                CurveKind::ControlSpline { .. } => {
+                CurveKind::ControlSpline { .. } | CurveKind::Conic { .. } => {
                     let Some(curve) = self.nurbs_of(edge.curve) else {
                         return Err(SketchError::Degenerate(tr!("sketch-err-spline-neighbours")));
                     };

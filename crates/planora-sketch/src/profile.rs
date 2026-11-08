@@ -370,6 +370,17 @@ impl Sketch {
                     return Err(SketchError::Degenerate(tr!("sketch-err-spline-two-points")));
                 }
             }
+            CurveKind::Conic {
+                start, end, apex, ..
+            } => {
+                let first = self.pos(*start);
+                let collapsed = [*end, *apex]
+                    .iter()
+                    .all(|&p| self.pos(p).distance(first) <= tol.linear);
+                if collapsed || self.nurbs_of(id).is_none() {
+                    return Err(SketchError::Degenerate(tr!("sketch-err-conic-collapsed")));
+                }
+            }
         }
         let Some(g) = self.geom(id) else {
             return Ok(None);
