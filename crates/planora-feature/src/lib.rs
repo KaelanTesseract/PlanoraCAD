@@ -20,6 +20,7 @@ pub mod refs;
 mod rollback;
 mod snapshot;
 mod step_bodies;
+mod visibility;
 
 pub use compute::MAX_COORD_MM;
 pub use dimensions::{
@@ -65,3 +66,4 @@ pub use step_bodies::{
     limit_step_text_sum_for_tests, step_builds, step_text_megabytes, step_text_sum,
     step_text_sum_limit,
 };
+pub use visibility::{HiddenFolders, Visibility};

@@ -157,18 +157,10 @@ pub struct AppState {
     history_choice: Option<FeatureId>,
     /// Auf- und zugeklappte Ordner des Feature-Baums (je Tab).
     pub tree_folders: crate::browser::FolderState,
-    /// Im Feature-Baum ausgeblendete Körper (Auge). Gilt nur für die Ansicht dieses Tabs: Der
-    /// Körper bleibt im Modell, wird aber nicht gezeichnet und nicht gewählt. Wird nicht
-    /// gespeichert. Kennung über Änderungen am Teil hinweg ([`Document::body_key`]).
-    hidden_bodies: std::collections::BTreeSet<planora_drawing::BodyKey>,
-    /// Im Feature-Baum ausgeblendete Skizzen und Konstruktionsebenen (Auge, Handtest Skizzen 6).
-    /// Wie [`Self::hidden_bodies`] nur für die Ansicht dieses Tabs, nicht gespeichert.
-    hidden_features: std::collections::BTreeSet<FeatureId>,
-    /// Eingeblendete Grundebenen im Ordner „Ursprung“ (XY, XZ, YZ); anfangs alle aus wie in
-    /// Fusion. Nur Ansicht, nicht gespeichert.
-    shown_origin_planes: [bool; 3],
-    /// Grundebene unter dem Zeiger in einem Wahlmodus (hell gezeichnet).
+    /// Grundebene unter dem Zeiger (hell gezeichnet; gilt nur für das laufende Bild).
     pub origin_hover: Option<StandardPlane>,
+    /// Gewählte Grundebene; gelesen über [`AppState::selected_origin_plane`].
+    selected_origin: Option<StandardPlane>,
     /// Geöffneter Skizzen-Modus.
     pub sketch_session: Option<SketchSession>,
     /// Entwurf des geöffneten Skizzen-Features (Entscheidung F6): eine Kopie der Definition mit
@@ -409,15 +401,6 @@ const PICK_EDGE_PX: f32 = 6.0;
 const PICK_VERTEX_PX: f32 = 8.0;
 /// Kleinste halbe Kantenlänge einer gezeichneten Konstruktionsebene (Skizzen 6).
 const PLANE_MIN_HALF_MM: f64 = 25.0;
-
-/// Stelle der Grundebene `p` in [`AppState::shown_origin_planes`].
-fn origin_index(p: StandardPlane) -> usize {
-    match p {
-        StandardPlane::XY => 0,
-        StandardPlane::XZ => 1,
-        StandardPlane::YZ => 2,
-    }
-}
 /// Halbe Kantenlänge einer Konstruktionsebene als Anteil der Diagonale aller sichtbaren Körper.
 const PLANE_HALF_PER_DIAGONAL: f64 = 0.6;
 
@@ -538,10 +521,8 @@ impl AppState {
             selected_feature: None,
             history_choice: None,
             tree_folders: crate::browser::FolderState::default(),
-            hidden_bodies: std::collections::BTreeSet::new(),
-            hidden_features: std::collections::BTreeSet::new(),
-            shown_origin_planes: [false; 3],
             origin_hover: None,
+            selected_origin: None,
             sketch_session: None,
             sketch_draft: None,
             sketch_history: None,
@@ -744,56 +725,61 @@ impl AppState {
         tips.last().copied()
     }
 
-    /// Ist der Körper `j` (Index in `bodies`) im Feature-Baum ausgeblendet? Unbekannte nicht.
+    /// Ist der Körper `j` (Index in `bodies`) gerade ausgeblendet (selbst oder über den Ordner)?
+    /// Unbekannte nicht.
     pub fn is_body_hidden(&self, j: usize) -> bool {
+        self.bodies.get(j).is_some() && self.document.visibility().folders.bodies
+            || self.own_body_hidden(j)
+    }
+
+    /// Steht das Auge des Körpers `j` selbst auf „aus“ (ohne den Ordner)?
+    pub fn own_body_hidden(&self, j: usize) -> bool {
         self.bodies.get(j).is_some_and(|b| {
-            self.hidden_bodies
+            self.document
+                .visibility()
+                .bodies
                 .contains(&self.document.body_key(b.source))
         })
     }
 
-    /// Blendet den Körper `j` aus oder ein (Auge im Feature-Baum). Nur die Ansicht ändert sich:
-    /// Ein ausgeblendeter Körper wird nicht gezeichnet und nicht gewählt; Auswahl und
-    /// Hervorhebung auf ihm entfallen. Ein unbekannter Index ändert nichts.
+    /// Blendet den Körper `j` aus oder ein (Auge im Feature-Baum). Das Modell bleibt: Ein
+    /// ausgeblendeter Körper wird nicht gezeichnet und nicht gewählt; Auswahl und Hervorhebung auf
+    /// ihm entfallen. Ein unbekannter Index ändert nichts.
     pub fn set_body_hidden(&mut self, j: usize, hidden: bool) {
         let Some(b) = self.bodies.get(j) else {
             return;
         };
         let key = self.document.body_key(b.source);
-        let changed = if hidden {
-            self.hidden_bodies.insert(key)
-        } else {
-            self.hidden_bodies.remove(&key)
-        };
-        if !changed {
-            return;
-        }
+        let mut v = self.document.visibility().clone();
         if hidden {
-            let on = |p: Option<Pick>| p.and_then(pick_body) == Some(j);
-            if on(self.selection) {
-                self.selection = None;
-            }
-            if on(self.hover) {
-                self.hover = None;
-            }
-            if self.selected_body == Some(j) {
-                self.selected_body = None;
-            }
-            self.marked_edges.retain(|e| e.body != j);
+            v.bodies.insert(key);
+        } else {
+            v.bodies.remove(&key);
         }
-        self.rebuild_scene();
+        self.apply_visibility(v);
     }
 
-    /// Ist die Skizze oder Konstruktionsebene `id` im Feature-Baum ausgeblendet?
+    /// Ist die Skizze oder Konstruktionsebene `id` gerade ausgeblendet (selbst oder über den
+    /// Ordner)?
     pub fn is_feature_hidden(&self, id: FeatureId) -> bool {
-        self.hidden_features.contains(&id)
+        let v = self.document.visibility();
+        let folder = match self.document.feature(id).map(|f| &f.kind) {
+            Some(FeatureKind::Sketch(_)) => v.folders.sketches,
+            Some(FeatureKind::Plane(_)) => v.folders.planes,
+            _ => false,
+        };
+        folder || v.features.contains(&id)
     }
 
-    /// Blendet die Skizze oder Konstruktionsebene `id` aus oder ein (Auge im Feature-Baum, wie
-    /// [`Self::set_body_hidden`] nur für die Ansicht). Eine ausgeblendete Ebene wird nicht
-    /// gezeichnet und nicht angeklickt, Auswahl und Hervorhebung auf ihr entfallen; eine
-    /// ausgeblendete Skizze wird in 3D nicht gezeichnet. Andere Features und die geöffnete
-    /// Skizze (sie bleibt sichtbar) ändern nichts.
+    /// Steht das Auge der Skizze oder Konstruktionsebene `id` selbst auf „aus“?
+    pub fn own_feature_hidden(&self, id: FeatureId) -> bool {
+        self.document.visibility().features.contains(&id)
+    }
+
+    /// Blendet die Skizze oder Konstruktionsebene `id` aus oder ein (Auge im Feature-Baum). Eine
+    /// ausgeblendete Ebene wird nicht gezeichnet und nicht angeklickt, Auswahl und Hervorhebung
+    /// auf ihr entfallen; eine ausgeblendete Skizze wird in 3D nicht gezeichnet. Andere Features
+    /// und das Ausblenden der geöffneten Skizze (sie bleibt sichtbar) ändern nichts.
     pub fn set_feature_hidden(&mut self, id: FeatureId, hidden: bool) {
         let hideable = self
             .document
@@ -802,38 +788,111 @@ impl AppState {
         if !hideable || (hidden && self.open_sketch_id() == Some(id)) {
             return;
         }
-        let changed = if hidden {
-            self.hidden_features.insert(id)
+        let mut v = self.document.visibility().clone();
+        if hidden {
+            v.features.insert(id);
         } else {
-            self.hidden_features.remove(&id)
-        };
-        if changed && hidden {
-            let this = Some(Pick::Plane(id));
-            if self.selection == this {
-                self.selection = None;
-            }
-            if self.hover == this {
-                self.hover = None;
-            }
-            self.rebuild_scene();
+            v.features.remove(&id);
         }
+        self.apply_visibility(v);
     }
 
     /// Ist die Grundebene `p` eingeblendet (Auge im Ordner „Ursprung“)?
     pub fn is_origin_plane_shown(&self, p: StandardPlane) -> bool {
-        self.shown_origin_planes[origin_index(p)]
+        self.document.visibility().origin_shown(p)
     }
 
     /// Blendet die Grundebene `p` in der 3D-Ansicht ein oder aus.
     pub fn set_origin_plane_shown(&mut self, p: StandardPlane, shown: bool) {
-        self.shown_origin_planes[origin_index(p)] = shown;
-        if !shown && self.origin_hover == Some(p) {
-            self.origin_hover = None;
+        let mut v = self.document.visibility().clone();
+        v.set_origin_shown(p, shown);
+        self.apply_visibility(v);
+    }
+
+    /// Zeigt das Auge des Ordners `f` „aus“? „Ursprung“: keine Grundebene ist eingeblendet;
+    /// „Zeichnungen“ hat kein Auge.
+    pub fn is_folder_hidden(&self, f: crate::browser::Folder) -> bool {
+        use crate::browser::Folder;
+        let v = self.document.visibility();
+        match f {
+            Folder::Bodies => v.folders.bodies,
+            Folder::Sketches => v.folders.sketches,
+            Folder::Construction => v.folders.planes,
+            Folder::Origin => v.origin_planes == [false; 3],
+            Folder::Drawings => false,
         }
     }
 
-    /// „Sichtbarkeit umschalten“ (Taste V): die gewählte Skizze oder Konstruktionsebene, sonst
-    /// der gewählte Körper. `false`, wenn nichts davon gewählt ist.
+    /// Auge am Ordner `f`. Körper, Skizzen und Konstruktion: Alles darin geht aus oder an, die
+    /// Augen der Zeilen bleiben stehen (wie in Fusion). „Ursprung“: Ist eine Grundebene an, gehen
+    /// alle aus, sonst alle an.
+    pub fn toggle_folder_hidden(&mut self, f: crate::browser::Folder) {
+        use crate::browser::Folder;
+        let mut v = self.document.visibility().clone();
+        match f {
+            Folder::Bodies => v.folders.bodies = !v.folders.bodies,
+            Folder::Sketches => v.folders.sketches = !v.folders.sketches,
+            Folder::Construction => v.folders.planes = !v.folders.planes,
+            Folder::Origin => v.origin_planes = [v.origin_planes == [false; 3]; 3],
+            Folder::Drawings => return,
+        }
+        self.apply_visibility(v);
+    }
+
+    /// Übernimmt `v` ins Dokument und lässt die Ansicht folgen.
+    fn apply_visibility(&mut self, v: planora_feature::Visibility) {
+        if v != *self.document.visibility() {
+            self.document.set_visibility(v);
+            self.sync_visibility();
+        }
+    }
+
+    /// Nach einer geänderten Sichtbarkeit: Auswahl und Hervorhebung auf Ausgeblendetem entfallen,
+    /// die Szene wird neu gebaut.
+    fn sync_visibility(&mut self) {
+        let hidden = |s: &Self, p: Option<Pick>| match p {
+            Some(Pick::Plane(id)) => s.is_feature_hidden(id),
+            Some(p) => pick_body(p).is_some_and(|j| s.is_body_hidden(j)),
+            None => false,
+        };
+        if hidden(self, self.selection) {
+            self.selection = None;
+        }
+        if hidden(self, self.hover) {
+            self.hover = None;
+        }
+        if self.selected_body.is_some_and(|j| self.is_body_hidden(j)) {
+            self.selected_body = None;
+        }
+        let marks = std::mem::take(&mut self.marked_edges);
+        self.marked_edges = marks
+            .into_iter()
+            .filter(|e| !self.is_body_hidden(e.body))
+            .collect();
+        self.rebuild_scene();
+    }
+
+    /// Wählt die Grundebene `p` (Klick in der Ansicht oder im Ordner „Ursprung“). Alles andere ist
+    /// danach nicht mehr gewählt.
+    pub fn select_origin_plane(&mut self, p: StandardPlane) {
+        self.set_selection(None);
+        self.selected_feature = None;
+        self.selected_body = None;
+        self.drawing_ui.selected_drawing = None;
+        self.selected_origin = Some(p);
+    }
+
+    /// Die gewählte Grundebene; jede andere Wahl hat Vorrang.
+    pub fn selected_origin_plane(&self) -> Option<StandardPlane> {
+        self.selected_origin.filter(|_| {
+            self.selection.is_none()
+                && self.selected_feature.is_none()
+                && self.selected_body.is_none()
+        })
+    }
+
+    /// „Sichtbarkeit umschalten“ (Taste V): die gewählte Skizze, Konstruktions- oder Grundebene,
+    /// sonst der gewählte Körper. `false`, wenn nichts davon gewählt ist.
     pub fn toggle_selected_visibility(&mut self) -> bool {
         let feature = self.selected_feature.filter(|id| {
             self.document
@@ -841,13 +900,18 @@ impl AppState {
                 .is_some_and(|f| matches!(f.kind, FeatureKind::Sketch(_) | FeatureKind::Plane(_)))
         });
         if let Some(id) = feature {
-            let hidden = self.is_feature_hidden(id);
+            let hidden = self.own_feature_hidden(id);
             self.set_feature_hidden(id, !hidden);
+            return true;
+        }
+        if let Some(p) = self.selected_origin_plane() {
+            let shown = self.is_origin_plane_shown(p);
+            self.set_origin_plane_shown(p, !shown);
             return true;
         }
         match self.chosen_body() {
             Some(j) => {
-                let hidden = self.is_body_hidden(j);
+                let hidden = self.own_body_hidden(j);
                 self.set_body_hidden(j, !hidden);
                 true
             }
@@ -925,6 +989,7 @@ impl AppState {
             .iter()
             .filter_map(|f| carried_body(&f.kind).map(|b| (f.id, b)))
             .collect();
+        let visibility_before = self.document.visibility().clone();
         let kind = self.document.restore(s).map_err(|e| e.to_string())?;
         self.rebuild_name_counters();
         // Eine offene Skizze verwerfen: Ihr Entwurf (samt Verlauf) gehört zum alten Dokument.
@@ -972,6 +1037,9 @@ impl AppState {
             // ihre Hervorhebung (markierte Kanten) geändert hat.
             RestoreKind::Annotations if had_marks && !left_sketch => self.rebuild_scene(),
             RestoreKind::Annotations => {}
+        }
+        if *self.document.visibility() != visibility_before {
+            self.sync_visibility();
         }
         if left_sketch {
             // Wie beim Verwerfen einer Skizze: die Kamera von vor dem Skizzenmodus.
@@ -1761,6 +1829,7 @@ impl AppState {
     }
 
     pub fn set_selection(&mut self, selection: Option<Pick>) {
+        self.selected_origin = None;
         if self.selection != selection {
             self.selection = selection;
             // Eine Ebene wählt ihr Feature (wie ein Klick im Browser), alles andere den Körper.
@@ -2015,6 +2084,21 @@ impl AppState {
             .into_iter()
             .filter_map(|(p, rect)| pick_plane(&ray, &rect).map(|t| (p, t)))
             .min_by(|a, b| a.1.total_cmp(&b.1))
+    }
+
+    /// Was ein Klick in der normalen Auswahl trifft: wie [`Self::view_pick`], dazu die
+    /// eingeblendeten Grundebenen ([`Self::plane_click_at`]; beim Markieren von Kanten nicht).
+    pub fn view_click_at(
+        &self,
+        cursor: Vec2,
+        viewport: Vec2,
+    ) -> Option<crate::plane_dialog::PlaneClick> {
+        let filter = if self.edge_picking {
+            PickFilter::GEOMETRY
+        } else {
+            PickFilter::SELECT
+        };
+        self.plane_click_at(cursor, viewport, filter)
     }
 
     /// Was ein Klick in einem Wahlmodus (Ebenen-Fenster, „Skizzenebene neu festlegen“) trifft:
@@ -3737,6 +3821,9 @@ impl AppState {
     /// Warum „Skizze auf gewählter Fläche“ gerade nicht geht (`None`: es geht). Eine gewählte
     /// Konstruktionsebene zählt wie eine ebene Fläche (Skizzen 6).
     pub fn sketch_on_face_blocked(&self) -> Option<String> {
+        if self.selected_origin_plane().is_some() {
+            return None;
+        }
         if let Some(id) = self.selected_plane() {
             return crate::history_bar::lock_reason(self, &[id]);
         }

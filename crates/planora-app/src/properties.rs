@@ -115,6 +115,8 @@ pub fn show_content(ui: &mut egui::Ui, state: &mut AppState) {
         .filter(|id| state.document.feature(*id).is_some())
     {
         feature(ui, state, id);
+    } else if let Some(p) = state.selected_origin_plane() {
+        ui.label(crate::browser::origin_plane_name(p));
     } else {
         ui.weak(tr!("props-nothing-selected"));
     }

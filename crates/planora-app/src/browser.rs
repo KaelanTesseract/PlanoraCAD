@@ -402,6 +402,15 @@ fn rolled_back_hint() -> String {
 }
 
 /// Die drei Grundebenen im Ordner „Ursprung“.
+/// Name der Grundebene `p` wie im Ordner „Ursprung“.
+pub fn origin_plane_name(p: StandardPlane) -> String {
+    match p {
+        StandardPlane::XY => tr!("tree-plane-xy"),
+        StandardPlane::XZ => tr!("tree-plane-xz"),
+        StandardPlane::YZ => tr!("tree-plane-yz"),
+    }
+}
+
 fn planes() -> [String; 3] {
     [
         tr!("tree-plane-xy"),
@@ -458,6 +467,12 @@ enum Action {
     ToggleFeatureHidden(FeatureId),
     /// Auge einer Grundebene im Ordner „Ursprung“.
     ToggleOrigin(StandardPlane),
+    /// Auge am Kopf eines Ordners.
+    ToggleFolder(Folder),
+    /// Klick auf eine Grundebene im Ordner „Ursprung“.
+    SelectOrigin(StandardPlane),
+    /// „Skizze erstellen“ auf einer Grundebene.
+    SketchOnOrigin(StandardPlane),
     Fold(Folder),
     Edit(FeatureId),
     Rename(FeatureId),
@@ -482,8 +497,10 @@ struct SketchRow {
     status: FeatureStatus,
     /// Warnung bei sonst gelungener Berechnung (Skizzen 6: verlorener Bezug einer Projektion).
     warning: Option<String>,
-    /// Im Baum ausgeblendet (Auge).
+    /// Gerade ausgeblendet (auch über den Ordner).
     hidden: bool,
+    /// Das Auge der Zeile selbst steht auf „aus“.
+    own_hidden: bool,
 }
 
 /// Angaben einer Körperzeile: ein sichtbarer Körper oder, wenn von einem Körper gerade nichts
@@ -500,7 +517,10 @@ struct BodyRow {
     icon: FeatureIcon,
     color: Color32,
     locked: bool,
+    /// Gerade ausgeblendet (auch über den Ordner).
     hidden: bool,
+    /// Das Auge der Zeile selbst steht auf „aus“.
+    own_hidden: bool,
     suppressed: bool,
     status: FeatureStatus,
 }
@@ -560,6 +580,7 @@ fn body_rows(state: &AppState, dark: bool) -> Vec<BodyRow> {
                 color,
                 locked,
                 hidden: index.is_some_and(|j| state.is_body_hidden(j)),
+                own_hidden: index.is_some_and(|j| state.own_body_hidden(j)),
                 suppressed,
                 status,
             });
@@ -797,8 +818,29 @@ fn row_lead(
     response
 }
 
-/// Kopf eines Ordners: Pfeil (zu: nach rechts, offen: nach unten), Ordnersymbol, Name. Ein
-/// Klick klappt ihn um.
+/// Auge im Kopf des Ordners `folder` (zwischen Pfeil und Ordnersymbol).
+fn folder_eye(ui: &mut egui::Ui, state: &AppState, folder: Folder, head: egui::Rect) -> bool {
+    let eye = egui::Rect::from_min_size(
+        egui::pos2(
+            head.min.x + theme::SPACE_1 + CARET + theme::SPACE_1,
+            head.min.y,
+        ),
+        vec2(EYE_W, ROW_HEIGHT),
+    );
+    let hidden = state.is_folder_hidden(folder);
+    let texts = (tr!("tree-show-folder"), tr!("tree-hide-folder"));
+    eye_at(
+        ui,
+        eye,
+        ("eye-folder", folder.index()),
+        &folder.label(),
+        (hidden, hidden),
+        texts,
+    )
+}
+
+/// Kopf eines Ordners: Pfeil (zu: nach rechts, offen: nach unten), Platz für das Auge,
+/// Ordnersymbol, Name. Ein Klick klappt ihn um.
 fn folder_header(ui: &mut egui::Ui, folder: Folder, open: bool) -> egui::Response {
     let (rect, response) =
         ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
@@ -841,7 +883,7 @@ fn folder_header(ui: &mut egui::Ui, folder: Folder, open: bool) -> egui::Respons
     ));
     let icon_rect = egui::Rect::from_center_size(
         egui::pos2(
-            rect.min.x + theme::SPACE_1 + CARET + theme::SPACE_1 + ICON_SIZE / 2.0,
+            rect.min.x + theme::SPACE_1 + CARET + theme::SPACE_1 + EYE_W + ICON_SIZE / 2.0,
             rect.center().y,
         ),
         vec2(ICON_SIZE, ICON_SIZE),
@@ -925,7 +967,16 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
                 continue;
             }
             let open = state.tree_folders.is_open(folder);
-            if folder_header(ui, folder, open).clicked() {
+            let head = folder_header(ui, folder, open);
+            // Auge am Ordner (Zeichnungen erscheinen nicht in der 3D-Ansicht); auf einer alten
+            // Version gesperrt wie die Augen der Zeilen.
+            let eye = folder != Folder::Drawings
+                && ui
+                    .add_enabled_ui(!read_only, |ui| folder_eye(ui, state, folder, head.rect))
+                    .inner;
+            if eye {
+                action = Some(Action::ToggleFolder(folder));
+            } else if head.clicked() {
                 action = Some(Action::Fold(folder));
             }
             if !open {
@@ -947,7 +998,7 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
                     crate::dimension_browser::show(ui, state, read_only);
                     crate::balloon_browser::show(ui, state, read_only);
                 }
-                Folder::Origin => origin(ui, state, &mut action),
+                Folder::Origin => origin(ui, state, read_only, &mut action),
             });
         }
     });
@@ -1031,28 +1082,42 @@ fn bodies(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
         // Auge: nur für sichtbare Körper (sonst gibt es nichts aus- oder einzublenden).
         if let Some(j) = r.index {
             let texts = (tr!("tree-show-body"), tr!("tree-hide-body"));
-            if eye_button(ui, full, ("eye", r.tip, j), &r.name, r.hidden, texts) {
+            let eye = (r.own_hidden, r.hidden);
+            if eye_button(ui, full, ("eye", r.tip, j), &r.name, eye, texts) {
                 *action = Some(Action::ToggleHidden(j));
             }
         }
     }
 }
 
-/// Auge am linken Rand der Zeile `full` (Name `name` für [`eye_rects`]); `texts`: Hinweis zum
-/// Einblenden und zum Ausblenden. Liefert, ob es angeklickt wurde.
+/// Auge am linken Rand der Zeile `full`; siehe [`eye_at`].
 fn eye_button(
     ui: &mut egui::Ui,
     full: egui::Rect,
     key: impl std::hash::Hash + std::fmt::Debug,
     name: &str,
-    hidden: bool,
+    state: (bool, bool),
     texts: (String, String),
 ) -> bool {
-    let weak = ui.visuals().weak_text_color();
     let eye = egui::Rect::from_min_size(
         egui::pos2(full.min.x + theme::SPACE_2 - theme::SPACE_1, full.min.y),
         vec2(EYE_W, ROW_HEIGHT),
     );
+    eye_at(ui, eye, key, name, state, texts)
+}
+
+/// Auge im Rechteck `eye` (Name `name` für [`eye_rects`]). `state`: Steht es selbst auf „aus“
+/// (bestimmt das Zeichen) und ist das Objekt gerade ausgeblendet (dämpft, etwa über den Ordner);
+/// `texts`: Hinweis zum Einblenden und zum Ausblenden. Liefert, ob es angeklickt wurde.
+fn eye_at(
+    ui: &mut egui::Ui,
+    eye: egui::Rect,
+    key: impl std::hash::Hash + std::fmt::Debug,
+    name: &str,
+    (hidden, dimmed): (bool, bool),
+    texts: (String, String),
+) -> bool {
+    let weak = ui.visuals().weak_text_color();
     let e = ui.interact(eye, ui.id().with(key), Sense::click());
     remember(ui, eyes_id(), (name.to_string(), eye));
     let hovered = e.hovered() && ui.is_enabled();
@@ -1062,7 +1127,7 @@ fn eye_button(
         ui.painter(),
         egui::Rect::from_center_size(eye.center(), vec2(EYE_ICON, EYE_ICON)),
         IconSource::Font(glyph),
-        if hidden { weak } else { c },
+        if dimmed { weak } else { c },
     );
     let (show, hide) = texts;
     let e = e.on_hover_ui(|ui| {
@@ -1094,6 +1159,7 @@ fn sketches(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
             status: f.status.clone(),
             warning: sketch_row_warning(state, f.id),
             hidden: state.is_feature_hidden(f.id),
+            own_hidden: state.own_feature_hidden(f.id),
         })
         .collect();
     if rows.is_empty() {
@@ -1143,7 +1209,8 @@ fn sketches(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
         // Die geöffnete Skizze bleibt sichtbar: ohne Auge.
         if open != Some(id) {
             let texts = (tr!("tree-show-item"), tr!("tree-hide-item"));
-            if eye_button(ui, resp.rect, ("eye-sketch", id), &name, r.hidden, texts) {
+            let eye = (r.own_hidden, r.hidden);
+            if eye_button(ui, resp.rect, ("eye-sketch", id), &name, eye, texts) {
                 *action = Some(Action::ToggleFeatureHidden(id));
             }
         }
@@ -1262,7 +1329,7 @@ fn delete_entry(ui: &mut egui::Ui, action: &mut Option<Action>, id: FeatureId) {
 /// Ordner „Ursprung“: die drei Grundebenen. Ist ein Ebenen-Fenster offen, füllt ein Klick
 /// dessen aktives Feld; im Wahlmodus „Skizzenebene neu festlegen“ setzt er die Skizze auf die
 /// Grundebene; sonst nur zur Anzeige.
-fn origin(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
+fn origin(ui: &mut egui::Ui, state: &AppState, read_only: bool, action: &mut Option<Action>) {
     let redefining = state.pending_pick.is_some();
     let picking = redefining || state.plane_pick.is_some();
     for (plane, std) in
@@ -1276,7 +1343,7 @@ fn origin(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
             ui,
             0.0,
             EYE_W,
-            false,
+            state.selected_origin_plane() == Some(std),
             &plane,
             color,
             None,
@@ -1291,17 +1358,27 @@ fn origin(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
             tr!("tree-plane-hint")
         });
         let texts = (tr!("tree-show-item"), tr!("tree-hide-item"));
-        if eye_button(
-            ui,
-            resp.rect,
-            ("eye-origin", format!("{std:?}")),
-            &plane,
-            !shown,
-            texts,
-        ) {
+        let full = resp.rect;
+        let key = ("eye-origin", format!("{std:?}"));
+        let eye = ui
+            .add_enabled_ui(!read_only, |ui| {
+                eye_button(ui, full, key, &plane, (!shown, !shown), texts)
+            })
+            .inner;
+        if eye {
             *action = Some(Action::ToggleOrigin(std));
         } else if picking && resp.clicked() {
             *action = Some(Action::PickStandard(std));
+        } else if resp.clicked() {
+            *action = Some(Action::SelectOrigin(std));
+        }
+        if !read_only {
+            resp.context_menu(|ui| {
+                if ui.button(tr!("tree-create-sketch")).clicked() {
+                    *action = Some(Action::SketchOnOrigin(std));
+                    ui.close();
+                }
+            });
         }
     }
 }
@@ -1347,7 +1424,8 @@ fn construction(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>
         )
         .on_hover_text(reason.unwrap_or_else(|| tr!("tree-construction-hint")));
         let texts = (tr!("tree-show-item"), tr!("tree-hide-item"));
-        if eye_button(ui, resp.rect, ("eye-plane", id), &name, hidden, texts) {
+        let eye = (state.own_feature_hidden(id), hidden);
+        if eye_button(ui, resp.rect, ("eye-plane", id), &name, eye, texts) {
             *action = Some(Action::ToggleFeatureHidden(id));
         }
         if resp.double_clicked() {
@@ -1397,8 +1475,15 @@ fn plane_menu(
 /// Führt einen Befehl aus einer Zeile aus. Fehler legt `AppState` in `message` ab.
 fn run(state: &mut AppState, action: Action) {
     match action {
+        Action::ToggleFolder(f) => state.toggle_folder_hidden(f),
+        Action::SelectOrigin(p) => state.select_origin_plane(p),
+        Action::SketchOnOrigin(p) => {
+            if let Ok(sketch) = state.add_sketch(SketchPlane::Standard(p)) {
+                let _ = state.open_sketch(sketch);
+            }
+        }
         Action::ToggleFeatureHidden(id) => {
-            let hidden = state.is_feature_hidden(id);
+            let hidden = state.own_feature_hidden(id);
             state.set_feature_hidden(id, !hidden);
         }
         Action::ToggleOrigin(p) => {
@@ -1458,7 +1543,7 @@ fn run(state: &mut AppState, action: Action) {
             state.select_body(Some(tip));
         }
         Action::ToggleHidden(j) => {
-            let hidden = state.is_body_hidden(j);
+            let hidden = state.own_body_hidden(j);
             state.set_body_hidden(j, !hidden);
         }
         Action::Fold(folder) => state.tree_folders.toggle(folder),

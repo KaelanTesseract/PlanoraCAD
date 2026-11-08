@@ -58,11 +58,48 @@ pub struct VersionFile {
     /// Schritte in Listenordnung. Leer heißt: fehlt, damit alte Dateien Byte für Byte bleiben.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rueckrollstellen: Vec<u64>,
+    /// Was im Browser ausgeblendet ist (ab Format 16). Fehlt im Grundzustand, damit alte Dateien
+    /// Byte für Byte bleiben.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sichtbarkeit: Option<SichtbarkeitDto>,
     /// Formen der STEP-Körper (ab Format 10, Teilprojekt STEP-Import): je benutzte Form der
     /// normalisierte STEP-Text, in jeder Version erneut. Leer heißt: fehlt, damit alte Dateien
     /// Byte für Byte bleiben. Steht am Ende, weil die Texte lang sind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub step_formen: Vec<StepFormDto>,
+}
+
+/// Sichtbarkeit im Browser (ab Format 16); jede Liste fehlt, wenn sie leer ist.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct SichtbarkeitDto {
+    /// Ausgeblendete Körper als [Feature, Index], wie in der Stückliste.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub koerper: Vec<[u64; 2]>,
+    /// Ausgeblendete Skizzen und Konstruktionsebenen.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<u64>,
+    /// Eingeblendete Grundebenen.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grundebenen: Vec<GrundebeneDto>,
+    /// Ausgeblendete Ordner.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ordner: Vec<OrdnerDto>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum GrundebeneDto {
+    Xy,
+    Xz,
+    Yz,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum OrdnerDto {
+    Koerper,
+    Skizzen,
+    Konstruktion,
 }
 
 /// Form eines STEP-Körpers (ab Format 10): Kennung (ab 1), Genauigkeit der Ursprungsdatei in mm

@@ -554,6 +554,8 @@ pub struct Document {
     /// Eigene Texte der Stücklistenzeilen, nach Körperkennung (Teilprojekt 3c-2); zählt wie die
     /// Zeichnungen zu [`Document::edit_count`], nicht zu [`Document::model_edit_count`].
     pub(crate) parts_overrides: BTreeMap<planora_drawing::BodyKey, planora_drawing::RowOverride>,
+    /// Was im Browser ausgeblendet ist (zählt nicht zum Modell).
+    pub(crate) visibility: crate::visibility::Visibility,
     /// Parametertabelle (Tabellenreihenfolge); zählt zum Modell.
     pub(crate) parameters: Vec<crate::params::Parameter>,
     /// Berechnete Werte, je Zeile von `parameters` einer.
@@ -603,6 +605,7 @@ impl Document {
             drawing_edits: 0,
             project_info: None,
             parts_overrides: BTreeMap::new(),
+            visibility: crate::visibility::Visibility::default(),
             parameters: Vec::new(),
             param_values: Vec::new(),
             next_param: 1,

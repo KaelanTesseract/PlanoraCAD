@@ -632,10 +632,10 @@ pub fn plane_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
     }
     let col = colors(state.dark);
     // Eingeblendete Grundebenen (Ordner „Ursprung“) zuerst, darüber die Konstruktionsebenen.
-    let origins = state
-        .origin_plane_rects()
-        .into_iter()
-        .map(|(p, r)| (r, state.origin_hover == Some(p)));
+    let origins = state.origin_plane_rects().into_iter().map(|(p, r)| {
+        let lit = state.origin_hover == Some(p) || state.selected_origin_plane() == Some(p);
+        (r, lit)
+    });
     let features = state
         .plane_rects()
         .into_iter()

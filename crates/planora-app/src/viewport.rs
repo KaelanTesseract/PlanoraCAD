@@ -772,7 +772,7 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
     }
     home_response.on_hover_text(planora_i18n::tr!("view-home-hint"));
 
-    // Grundebene unter dem Zeiger gilt nur im Wahlmodus und nur für dieses Bild.
+    // Grundebene unter dem Zeiger gilt nur für dieses Bild.
     state.origin_hover = None;
     if !sketching && state.profile_pick.is_some() {
         // Profilwahl eines Dialogs: Klick ohne Ziehen schaltet das Profil unter dem Zeiger um
@@ -833,19 +833,22 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
             Some(p) => {
                 let cursor = Vec2::new(p.x - rect.left(), p.y - rect.top());
                 let viewport = Vec2::new(rect.width(), rect.height());
-                let hit = state.view_pick(cursor, viewport);
-                state.set_hover(hit);
+                let hit = state.view_click_at(cursor, viewport);
+                hover_plane_click(state, hit);
                 if response.clicked() {
+                    use crate::plane_dialog::PlaneClick;
                     match hit {
-                        Some(Pick::Edge(e)) if state.edge_picking => {
+                        Some(PlaneClick::View(Pick::Edge(e))) if state.edge_picking => {
                             let extend = ui.input(|i| i.modifiers.shift);
                             state.toggle_edge_mark(e, extend);
                         }
-                        _ => state.set_selection(hit),
+                        Some(PlaneClick::Standard(p)) => state.select_origin_plane(p),
+                        Some(PlaneClick::View(h)) => state.set_selection(Some(h)),
+                        None => state.set_selection(None),
                     }
                 }
             }
-            None => state.set_hover(None),
+            None => hover_plane_click(state, None),
         }
         if !typing(ui.ctx()) && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             state.set_selection(None);

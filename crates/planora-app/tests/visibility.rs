@@ -1,7 +1,9 @@
 //! Handtest Skizzen 6 (2026-11-08): Jedes Objekt der 3D-Ansicht lässt sich im Browser aus- und
-//! einblenden wie in Fusion: Körper (schon vorher), Skizzen, Konstruktionsebenen und die
-//! Grundebenen im Ordner „Ursprung“ (anfangs ausgeblendet wie in Fusion). Nur die Ansicht
-//! ändert sich; ausgeblendete Objekte werden nicht gezeichnet und nicht angeklickt. Ohne
+//! einblenden wie in Fusion: Körper, Skizzen, Konstruktionsebenen und die Grundebenen im Ordner
+//! „Ursprung“ (anfangs ausgeblendet wie in Fusion), auch ganze Ordner. Das Modell bleibt;
+//! ausgeblendete Objekte werden nicht gezeichnet und nicht angeklickt. Die Sichtbarkeit steht in
+//! der Datei und ist ein Rückgängig-Schritt. Grundebenen lassen sich auch in der normalen
+//! Auswahl wählen. Ohne
 //! Fenster: Rohereignisse je Bild gegen einen egui-Kontext (1920×1080).
 
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, pos2};
@@ -250,4 +252,226 @@ fn the_open_sketch_has_no_eye() {
     // Auch über den Zustand nicht: Das Ausblenden einer offenen Skizze wird abgelehnt.
     s.set_feature_hidden(id, true);
     assert!(!s.is_feature_hidden(id));
+}
+
+/// Klick auf das Auge eines Ordners.
+fn toggle_folder(t: &mut Tree, s: &mut AppState, f: browser::Folder) {
+    t.toggle(s, &f.label());
+}
+
+#[test]
+fn visibility_is_saved_in_the_file_and_old_files_stay_as_they_were() {
+    let mut s = AppState::new();
+    s.create_box(DVec3::splat(10.0)).unwrap();
+    let sk = sketch_with_rectangle(&mut s);
+    let plain = planora_project::encode_version(&s.snapshot()).unwrap();
+    assert!(!plain.contains("sichtbarkeit"), "Grundzustand: kein Feld");
+    assert!(planora_project::required_format(&s.snapshot()) < 16);
+
+    s.set_body_hidden(0, true);
+    s.set_feature_hidden(sk, true);
+    s.set_origin_plane_shown(StandardPlane::XZ, true);
+    s.toggle_folder_hidden(browser::Folder::Construction);
+    assert_eq!(planora_project::required_format(&s.snapshot()), 16);
+    let text = planora_project::encode_version(&s.snapshot()).unwrap();
+    let back = planora_project::decode_version(&text, "Test").unwrap();
+    let l = AppState::from_snapshot(back).unwrap();
+    assert!(l.is_body_hidden(0));
+    assert!(l.own_feature_hidden(sk));
+    assert!(l.is_origin_plane_shown(StandardPlane::XZ));
+    assert!(!l.is_origin_plane_shown(StandardPlane::XY));
+    assert!(l.is_folder_hidden(browser::Folder::Construction));
+    assert_eq!(l.scene.face_indices.len(), 0, "der Körper bleibt aus");
+
+    // Alles wieder an: Die Datei ist wieder die alte, Byte für Byte.
+    s.set_body_hidden(0, false);
+    s.set_feature_hidden(sk, false);
+    s.set_origin_plane_shown(StandardPlane::XZ, false);
+    s.toggle_folder_hidden(browser::Folder::Construction);
+    assert_eq!(
+        planora_project::encode_version(&s.snapshot()).unwrap(),
+        plain
+    );
+}
+
+#[test]
+fn an_older_format_with_visibility_is_refused_and_unknown_references_fall_away() {
+    let mut s = AppState::new();
+    s.create_box(DVec3::splat(10.0)).unwrap();
+    s.set_body_hidden(0, true);
+    let text = planora_project::encode_version(&s.snapshot()).unwrap();
+    let old = text.replacen("\"format\": 16", "\"format\": 15", 1);
+    assert_ne!(old, text);
+    assert!(planora_project::decode_version(&old, "Test").is_err());
+    // Ein Verweis auf ein fehlendes Feature fällt beim Laden weg.
+    let mut snap = s.snapshot();
+    snap.visibility.features.insert(FeatureId(999));
+    let l = AppState::from_snapshot(snap).unwrap();
+    assert!(!l.own_feature_hidden(FeatureId(999)));
+    assert!(l.snapshot().visibility.features.is_empty());
+}
+
+#[test]
+fn hiding_is_one_undo_step_and_undo_brings_it_back() {
+    let mut s = AppState::new();
+    s.create_box(DVec3::splat(10.0)).unwrap();
+    let before = s.snapshot();
+    let full = s.scene.face_indices.len();
+    let edits = s.document.edit_count();
+    let model = s.document.model_edit_count();
+    s.set_body_hidden(0, true);
+    assert!(s.document.edit_count() > edits, "gilt als Änderung");
+    assert_eq!(s.document.model_edit_count(), model, "rechnet nicht neu");
+    assert_eq!(s.scene.face_indices.len(), 0);
+    assert!(!before.same_content(&s.snapshot()));
+    assert!(before.same_model(&s.snapshot()));
+    assert_eq!(
+        planora_app::undo_labels::describe_change(&before, &s.snapshot()),
+        "Ein- oder ausblenden"
+    );
+    s.restore_document(before).unwrap();
+    assert!(!s.is_body_hidden(0));
+    assert_eq!(s.scene.face_indices.len(), full, "die Szene folgt");
+}
+
+#[test]
+fn the_folder_eye_hides_everything_inside_and_keeps_the_row_eyes() {
+    use browser::Folder;
+    let mut s = AppState::new();
+    s.create_box(DVec3::splat(10.0)).unwrap();
+    let sk = sketch_with_rectangle(&mut s);
+    let a = offset_plane(&mut s, 30.0);
+    let b = offset_plane(&mut s, 40.0);
+    s.set_feature_hidden(b, true);
+    let mut t = Tree::new();
+
+    toggle_folder(&mut t, &mut s, Folder::Construction);
+    assert!(s.is_feature_hidden(a));
+    assert!(!s.own_feature_hidden(a), "das Auge der Zeile bleibt");
+    assert!(s.plane_rects().is_empty());
+    toggle_folder(&mut t, &mut s, Folder::Construction);
+    assert_eq!(s.plane_rects().len(), 1, "b bleibt selbst aus");
+    assert!(s.own_feature_hidden(b));
+
+    toggle_folder(&mut t, &mut s, Folder::Sketches);
+    assert!(s.is_feature_hidden(sk));
+    assert!(sketch_view::finished_sketch_shapes(&s, SCREEN).is_empty());
+    toggle_folder(&mut t, &mut s, Folder::Sketches);
+    assert!(!sketch_view::finished_sketch_shapes(&s, SCREEN).is_empty());
+
+    let full = s.scene.face_indices.len();
+    s.selected_body = Some(0);
+    toggle_folder(&mut t, &mut s, Folder::Bodies);
+    assert!(s.is_body_hidden(0));
+    assert!(!s.own_body_hidden(0));
+    assert_eq!(s.scene.face_indices.len(), 0);
+    assert_eq!(s.selected_body, None, "die Wahl entfällt");
+    toggle_folder(&mut t, &mut s, Folder::Bodies);
+    assert_eq!(s.scene.face_indices.len(), full);
+
+    // Ursprung: das Auge schaltet die drei Ebenen selbst.
+    assert!(s.is_folder_hidden(Folder::Origin));
+    toggle_folder(&mut t, &mut s, Folder::Origin);
+    assert_eq!(s.origin_plane_rects().len(), 3);
+    s.set_origin_plane_shown(StandardPlane::XY, false);
+    assert!(!s.is_folder_hidden(Folder::Origin), "zwei sind noch an");
+    toggle_folder(&mut t, &mut s, Folder::Origin);
+    assert!(s.origin_plane_rects().is_empty());
+}
+
+#[test]
+fn a_click_on_the_folder_eye_does_not_fold_and_drawings_have_no_eye() {
+    use browser::Folder;
+    let mut s = AppState::new();
+    let mut t = Tree::new();
+    let open = s.tree_folders.is_open(Folder::Sketches);
+    toggle_folder(&mut t, &mut s, Folder::Sketches);
+    assert_eq!(s.tree_folders.is_open(Folder::Sketches), open);
+    assert!(t.eye(&Folder::Drawings.label()).is_none());
+}
+
+#[test]
+fn an_old_version_changes_no_visibility() {
+    let mut s = AppState::new();
+    s.tree_folders.set_open(browser::Folder::Origin, true);
+    let mut t = Tree::new();
+    let run = |t: &mut Tree, s: &mut AppState, events| {
+        t.time += 0.05;
+        let raw = egui::RawInput {
+            screen_rect: Some(SCREEN),
+            time: Some(t.time),
+            events,
+            ..Default::default()
+        };
+        let out = t.ctx.run_ui(raw, |ui| browser::show_with(ui, s, true));
+        out.drop_without_applying_deltas();
+    };
+    run(&mut t, &mut s, vec![]);
+    run(&mut t, &mut s, vec![]);
+    for name in ["XY-Ebene".to_string(), browser::Folder::Origin.label()] {
+        let p = t.eye(&name).unwrap().center();
+        let button = |pressed| Event::PointerButton {
+            pos: p,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        for e in [
+            vec![Event::PointerMoved(p)],
+            vec![button(true)],
+            vec![button(false)],
+            vec![],
+        ] {
+            run(&mut t, &mut s, e);
+        }
+    }
+    assert!(s.document.visibility().is_default());
+}
+
+#[test]
+fn a_shown_origin_plane_can_be_selected_in_the_normal_view() {
+    let mut s = AppState::new();
+    let center = VIEW / 2.0;
+    assert_eq!(s.view_click_at(center, VIEW), None);
+    s.set_origin_plane_shown(StandardPlane::XY, true);
+    assert_eq!(
+        s.view_click_at(center, VIEW),
+        Some(PlaneClick::Standard(StandardPlane::XY))
+    );
+    assert_eq!(s.pick(center, VIEW), None, "Pick kennt nur das Modell");
+    s.edge_picking = true;
+    assert_eq!(s.view_click_at(center, VIEW), None, "beim Markieren nicht");
+    s.edge_picking = false;
+
+    s.select_origin_plane(StandardPlane::XY);
+    assert_eq!(s.selected_origin_plane(), Some(StandardPlane::XY));
+    assert_eq!(s.sketch_on_face_blocked(), None, "Skizze darauf geht");
+    // V schaltet die gewählte Ebene um.
+    assert!(s.toggle_selected_visibility());
+    assert!(!s.is_origin_plane_shown(StandardPlane::XY));
+    assert!(s.toggle_selected_visibility());
+    assert!(s.is_origin_plane_shown(StandardPlane::XY));
+    // Eine andere Wahl löst sie ab, auch ein Klick ins Leere.
+    s.set_selection(None);
+    assert_eq!(s.selected_origin_plane(), None);
+    s.select_origin_plane(StandardPlane::XY);
+    let id = offset_plane(&mut s, 5.0);
+    s.selected_feature = Some(id);
+    assert_eq!(s.selected_origin_plane(), None);
+}
+
+#[test]
+fn a_click_on_an_origin_row_selects_it() {
+    let mut s = AppState::new();
+    s.tree_folders.set_open(browser::Folder::Origin, true);
+    let mut t = Tree::new();
+    t.settle(&mut s);
+    let row = browser::row_rects(&t.ctx)
+        .into_iter()
+        .find(|(n, _)| n == "XZ-Ebene")
+        .unwrap()
+        .1;
+    t.click(&mut s, row.center());
+    assert_eq!(s.selected_origin_plane(), Some(StandardPlane::XZ));
+    assert!(!s.is_origin_plane_shown(StandardPlane::XZ), "wählt nur");
 }

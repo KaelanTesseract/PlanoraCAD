@@ -2456,6 +2456,8 @@ fn sketch_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     };
     // Eine gewählte Konstruktionsebene zählt wie eine Fläche (Skizzen 6).
     let plane = state.selected_plane();
+    // Eine gewählte Grundebene ebenso.
+    let origin = state.selected_origin_plane();
     // Gesperrt auch, wenn der Körper der Fläche zurückgesetzt ist (Verlaufsleiste).
     let blocked = state.sketch_on_face_blocked();
     if entry(
@@ -2467,6 +2469,11 @@ fn sketch_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     .clicked()
     {
         let made = match (plane, face) {
+            _ if origin.is_some() => origin.and_then(|p| {
+                state
+                    .add_sketch(planora_feature::SketchPlane::Standard(p))
+                    .ok()
+            }),
             (Some(p), _) => state.new_sketch_on_plane(p).ok(),
             (None, Some((body, face))) => state.new_sketch_on_face(body, face).ok(),
             (None, None) => None,

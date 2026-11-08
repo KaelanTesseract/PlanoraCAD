@@ -26,7 +26,8 @@ use planora_feature::{
     MAX_FIT_CHARS, MAX_FORMULA_CHARS, MAX_PARAM_NAME_CHARS, MAX_PARAMETERS, MAX_POS_MM,
     MAX_ROLE_CHARS, MAX_TOL_MM, MAX_VIEWS, MeshId, ParamId, ParamUnit, Parameter, ProfileSel,
     SketchFeature, SketchFormulas, SketchPlane, Snapshot, SnapshotFeature, StandardPlane,
-    StepShape, StepShapeId, field_keys, step_text_megabytes, step_text_sum_limit, validate_drawing,
+    StepShape, StepShapeId, Visibility, field_keys, step_text_megabytes, step_text_sum_limit,
+    validate_drawing,
 };
 use planora_i18n::{DisplayUnit, tr};
 use planora_kernel::BoolOp;
@@ -49,8 +50,9 @@ pub const CONTAINER_FORMAT: u32 = 1;
 const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 
 /// Kleinste Formatnummer, die den Stand darstellt (die Regeln in dieser Reihenfolge geprüft): 16
-/// mit einer Konstruktionsebene, einer Skizze auf einer Konstruktionsebene oder einer Schnitt-
-/// oder Silhouettenprojektion ([`needs_format_16`]), 15 mit einem Muster oder einer der
+/// mit einer Konstruktionsebene, einer Skizze auf einer Konstruktionsebene, einer Schnitt-
+/// oder Silhouettenprojektion ([`needs_format_16`]) oder einer vom Grundzustand abweichenden
+/// Sichtbarkeit, 15 mit einem Muster oder einer der
 /// Abhängigkeitsarten aus Skizzen 5 in einer Skizze (auch einem aufgelösten Muster oder
 /// gelöschten Eintrag), 14 mit einer Mittellinie in einer Skizze (auch
 /// einem gelöschten Kurveneintrag), 13 mit einem Ellipsenbogen in einer Skizze (auch einem
@@ -70,7 +72,7 @@ pub fn required_format(s: &Snapshot) -> u32 {
 /// [`required_format`] mit den schon bestimmten Profilfeldern `fields` (eins je Feature).
 fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
     let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
-    if has(needs_format_16) {
+    if has(needs_format_16) || !s.visibility.is_default() {
         16
     } else if has(|k| matches!(k, FeatureKind::Sketch(sf) if sf.sketch.needs_format_15())) {
         15
@@ -2372,6 +2374,80 @@ fn body_key_from(k: [u64; 2]) -> Option<BodyKey> {
     })
 }
 
+/// Sichtbarkeit für die Datei; `None` im Grundzustand (das Feld fehlt dann).
+fn visibility_to(v: &Visibility) -> Option<SichtbarkeitDto> {
+    if v.is_default() {
+        return None;
+    }
+    let planes = [
+        (StandardPlane::XY, GrundebeneDto::Xy),
+        (StandardPlane::XZ, GrundebeneDto::Xz),
+        (StandardPlane::YZ, GrundebeneDto::Yz),
+    ];
+    let folders = [
+        (v.folders.bodies, OrdnerDto::Koerper),
+        (v.folders.sketches, OrdnerDto::Skizzen),
+        (v.folders.planes, OrdnerDto::Konstruktion),
+    ];
+    Some(SichtbarkeitDto {
+        koerper: v
+            .bodies
+            .iter()
+            .map(|k| [k.feature, u64::from(k.index)])
+            .collect(),
+        features: v.features.iter().map(|f| f.0).collect(),
+        grundebenen: planes
+            .into_iter()
+            .filter(|(p, _)| v.origin_shown(*p))
+            .map(|(_, d)| d)
+            .collect(),
+        ordner: folders
+            .into_iter()
+            .filter(|(hidden, _)| *hidden)
+            .map(|(_, d)| d)
+            .collect(),
+    })
+}
+
+/// Sichtbarkeit aus der Datei. Verweise auf fehlende Features fallen beim Bauen des Dokuments
+/// weg ([`planora_feature::Document::set_visibility`]); ein Körperindex jenseits von `u32` nennt
+/// keinen Körper und entfällt hier.
+fn visibility_from(d: Option<&SichtbarkeitDto>) -> Visibility {
+    let mut v = Visibility::default();
+    let Some(d) = d else {
+        return v;
+    };
+    v.bodies = d
+        .koerper
+        .iter()
+        .filter_map(|[feature, index]| {
+            Some(BodyKey {
+                feature: *feature,
+                index: u32::try_from(*index).ok()?,
+            })
+        })
+        .collect();
+    v.features = d.features.iter().map(|f| FeatureId(*f)).collect();
+    for p in &d.grundebenen {
+        v.set_origin_shown(
+            match p {
+                GrundebeneDto::Xy => StandardPlane::XY,
+                GrundebeneDto::Xz => StandardPlane::XZ,
+                GrundebeneDto::Yz => StandardPlane::YZ,
+            },
+            true,
+        );
+    }
+    for f in &d.ordner {
+        match f {
+            OrdnerDto::Koerper => v.folders.bodies = true,
+            OrdnerDto::Skizzen => v.folders.sketches = true,
+            OrdnerDto::Konstruktion => v.folders.planes = true,
+        }
+    }
+    v
+}
+
 fn overrides_to(o: &BTreeMap<BodyKey, RowOverride>) -> Vec<StuecklisteZeileDto> {
     o.iter()
         .map(|(k, v)| StuecklisteZeileDto {
@@ -2777,6 +2853,7 @@ pub fn encode_version(s: &Snapshot) -> Result<String> {
             s.next_param
         },
         rueckrollstellen: s.rollbacks.iter().map(|r| r.0).collect(),
+        sichtbarkeit: visibility_to(&s.visibility),
         step_formen,
     };
     let text = serde_json::to_string_pretty(&file)
@@ -2936,6 +3013,17 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
             ),
         ));
     }
+    if file.format < 16 && file.sichtbarkeit.is_some() {
+        return Err(ProjectError::corrupt(
+            origin,
+            tr!(
+                "proj-since-format",
+                what = tr!("proj-feat-visibility"),
+                format = "16"
+            ),
+        ));
+    }
+    let visibility = visibility_from(file.sichtbarkeit.as_ref());
     let rollbacks = rollbacks_from(origin, &file)?;
     let (parameters, next_param) = parameters_from(origin, &file)?;
     let parts_overrides = overrides_from(origin, &file.stueckliste)?;
@@ -3001,6 +3089,7 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
         next_drawing,
         project_info,
         parts_overrides,
+        visibility,
         parameters,
         next_param,
         rollbacks,
