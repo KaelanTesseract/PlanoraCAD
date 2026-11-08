@@ -130,7 +130,7 @@ Ist so eine Abhängigkeit schon erfüllt und überflüssig, steht das in der Mel
 
 *Verknüpfung aufheben:* Eine gewählte projizierte Kurve wird mit dem Knopf „Verknüpfung aufheben“ im Abschnitt „Bearbeiten“ des Skizzenfelds zu normaler fester Geometrie; sie folgt dem Körper nicht mehr und ist nicht mehr lila. Ein Rückgängig-Schritt. Der Befehl lässt sich auch in den Einstellungen auf eine Taste legen.
 
-*Schneiden:* Im Klappmenü „Schneiden“, dann eine Fläche oder mit dem Filter „Körper“ einen Körper anklicken. Die Skizzenebene schneidet ihn, und die Schnittkurven erscheinen als verknüpfte, feste, lila Kurven. Es geht mit analytischen Flächen (Ebene, Zylinder, Kegel, Kugel, Torus) in den Lagen, die der Kernel berechnen kann; ein schräger Kegel (Kegelschnitt), ein Torus in allgemeiner Lage und Freiformflächen werden mit einer Meldung abgelehnt.
+*Schneiden:* Im Klappmenü „Schneiden“, dann eine Fläche oder mit dem Filter „Körper“ einen Körper anklicken. Die Skizzenebene schneidet ihn, und die Schnittkurven erscheinen als verknüpfte, feste, lila Kurven. Es geht mit analytischen Flächen (Ebene, Zylinder, Kegel, Kugel, Torus) in den Lagen, die der Kernel berechnen kann; ein schräger Kegel (Kegelschnitt) und ein Torus in allgemeiner Lage werden mit einer Meldung abgelehnt. Freiformflächen werden abgelehnt, sobald die Ebene in ihre Nähe kommt; liegt die Ebene weit weg von ihnen, schadet die Fläche nicht.
 
 *Silhouette:* Im Klappmenü „Silhouette“, dann eine gekrümmte Fläche anklicken. Ihr Umriss in Blickrichtung der Skizze (senkrecht zur Ebene) wird als verknüpfte Kurven übernommen: zwei Linien bei Zylinder und Kegel, deren Achse parallel zur Skizzenebene liegt, ein Kreis bei der Kugel, zwei Kreise beim Torus mit Achse senkrecht zur Ebene. Andere Lagen lehnt der Befehl mit einer Meldung ab.
 
@@ -155,7 +155,7 @@ Die Ebene wird halbdurchsichtig orange gezeichnet, ohne dass Körper sie verdeck
 - Ellipsen- und Splineprofile werden seit Teilprojekt 7 zu Körpern (siehe „Freiformflächen“). Splines lassen sich stutzen, aber nicht dehnen.
 - Drehen nur für Profile ohne Löcher, die mit genau einer Linie auf der Drehachse liegen und ganz auf einer Seite davon; immer 360°.
 - Skizzen auf den Grundebenen, auf ebenen Körperflächen und auf Konstruktionsebenen.
-- Projizierte Freiformkanten (Splines) gehen noch nicht; Schneiden geht nicht mit schrägem Kegel, allgemeinem Torus und Freiformflächen.
+- Projizierte Freiformkanten (Splines) gehen noch nicht; Schneiden geht nicht mit schrägem Kegel, allgemeinem Torus und Freiformflächen, die die Ebene treffen.
 - Fang und Ausrichtungslinien gibt es nur in den Zeichenwerkzeugen, nicht beim Ziehen im Auswahlwerkzeug. Für die Richtung zählen alle Linien als Vorbild, nicht nur die zuletzt überfahrenen.
 - Mehrdeutige Lagen (z. B. ein Winkel um 180° gedreht) entscheidet der nächstgelegene Zustand; es gibt keine Auswahl der Lösung.
 - Der Solver rechnet je zusammenhängender Gruppe mit dichten Matrizen. Unveränderte Gruppen werden nicht neu gerechnet (auch beim Ziehen nicht); innerhalb einer Gruppe wird flüssiges Ziehen ab etwa 150–300 Variablen zäh (300 Variablen: etwa 0,15 s je Zugschritt im Release-Build). Widersprüchliche Gruppen sind langsamer: Beim Ziehen sucht der Solver dort nicht nach der Ursache, das holt er am Ende des Ziehens nach; hat eine Gruppe mehr als 48 Abhängigkeiten, meldet er statt der genauen Ursache „nicht lösbar“ mit den verletzten Abhängigkeiten. Ein Muster mit 100 Kopien eines Rechtecks ist eine Gruppe mit über 800 Variablen (Anlegen etwa 1,7 s, Ziehen etwa 1,5 s je Schritt).
