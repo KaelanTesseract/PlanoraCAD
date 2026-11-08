@@ -494,7 +494,7 @@ fn keys_do_nothing_without_a_matching_selection() {
     rig.press(Key::V, NONE);
     assert_eq!(
         rig.st().info.as_deref(),
-        Some(commands::need_body().as_str())
+        Some(commands::need_visible().as_str())
     );
     rig.press(Key::Delete, NONE);
     assert_eq!(

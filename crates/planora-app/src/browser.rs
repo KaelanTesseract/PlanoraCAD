@@ -454,6 +454,10 @@ enum Action {
     /// Körperzeile: Spitze für die Verlaufsleiste und, falls sichtbar, Index in `bodies`.
     SelectBody(FeatureId, Option<usize>),
     ToggleHidden(usize),
+    /// Auge einer Skizze oder Konstruktionsebene (Handtest Skizzen 6).
+    ToggleFeatureHidden(FeatureId),
+    /// Auge einer Grundebene im Ordner „Ursprung“.
+    ToggleOrigin(StandardPlane),
     Fold(Folder),
     Edit(FeatureId),
     Rename(FeatureId),
@@ -478,6 +482,8 @@ struct SketchRow {
     status: FeatureStatus,
     /// Warnung bei sonst gelungener Berechnung (Skizzen 6: verlorener Bezug einer Projektion).
     warning: Option<String>,
+    /// Im Baum ausgeblendet (Auge).
+    hidden: bool,
 }
 
 /// Angaben einer Körperzeile: ein sichtbarer Körper oder, wenn von einem Körper gerade nichts
@@ -1024,44 +1030,51 @@ fn bodies(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
             .rect_filled(swatch, egui::CornerRadius::same(2), ink);
         // Auge: nur für sichtbare Körper (sonst gibt es nichts aus- oder einzublenden).
         if let Some(j) = r.index {
-            let eye = egui::Rect::from_min_size(
-                egui::pos2(lead_x - theme::SPACE_1, full.min.y),
-                vec2(EYE_W, ROW_HEIGHT),
-            );
-            let id = ui.id().with(("eye", r.tip, j));
-            let e = ui.interact(eye, id, Sense::click());
-            remember(ui, eyes_id(), (r.name.clone(), eye));
-            let hovered = e.hovered() && ui.is_enabled();
-            let glyph = if r.hidden {
-                Icon::Hidden
-            } else {
-                Icon::Visible
-            };
-            let c = row_ink(ui, hovered);
-            paint_source(
-                ui.painter(),
-                egui::Rect::from_center_size(eye.center(), vec2(EYE_ICON, EYE_ICON)),
-                IconSource::Font(glyph),
-                if r.hidden { weak } else { c },
-            );
-            let e = e.on_hover_ui(|ui| {
-                let km = crate::keymap::mouse::current(ui.ctx());
-                let text = if r.hidden {
-                    tr!("tree-show-body")
-                } else {
-                    tr!("tree-hide-body")
-                };
-                ui.label(crate::keymap::with_hint(
-                    &km,
-                    crate::keymap::Action::ToggleVisibility,
-                    &text,
-                ));
-            });
-            if e.clicked() {
+            let texts = (tr!("tree-show-body"), tr!("tree-hide-body"));
+            if eye_button(ui, full, ("eye", r.tip, j), &r.name, r.hidden, texts) {
                 *action = Some(Action::ToggleHidden(j));
             }
         }
     }
+}
+
+/// Auge am linken Rand der Zeile `full` (Name `name` für [`eye_rects`]); `texts`: Hinweis zum
+/// Einblenden und zum Ausblenden. Liefert, ob es angeklickt wurde.
+fn eye_button(
+    ui: &mut egui::Ui,
+    full: egui::Rect,
+    key: impl std::hash::Hash + std::fmt::Debug,
+    name: &str,
+    hidden: bool,
+    texts: (String, String),
+) -> bool {
+    let weak = ui.visuals().weak_text_color();
+    let eye = egui::Rect::from_min_size(
+        egui::pos2(full.min.x + theme::SPACE_2 - theme::SPACE_1, full.min.y),
+        vec2(EYE_W, ROW_HEIGHT),
+    );
+    let e = ui.interact(eye, ui.id().with(key), Sense::click());
+    remember(ui, eyes_id(), (name.to_string(), eye));
+    let hovered = e.hovered() && ui.is_enabled();
+    let glyph = if hidden { Icon::Hidden } else { Icon::Visible };
+    let c = row_ink(ui, hovered);
+    paint_source(
+        ui.painter(),
+        egui::Rect::from_center_size(eye.center(), vec2(EYE_ICON, EYE_ICON)),
+        IconSource::Font(glyph),
+        if hidden { weak } else { c },
+    );
+    let (show, hide) = texts;
+    let e = e.on_hover_ui(|ui| {
+        let km = crate::keymap::mouse::current(ui.ctx());
+        let text = if hidden { show } else { hide };
+        ui.label(crate::keymap::with_hint(
+            &km,
+            crate::keymap::Action::ToggleVisibility,
+            &text,
+        ));
+    });
+    e.clicked()
 }
 
 /// Ordner „Skizzen“: je Skizze eine Zeile mit den bisherigen Befehlen.
@@ -1080,6 +1093,7 @@ fn sketches(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
             suppressed: f.suppressed,
             status: f.status.clone(),
             warning: sketch_row_warning(state, f.id),
+            hidden: state.is_feature_hidden(f.id),
         })
         .collect();
     if rows.is_empty() {
@@ -1094,12 +1108,16 @@ fn sketches(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
         } else {
             r.name.clone()
         };
-        let (status, color, reason) = status_view(&r.status, weak, row_error(ui));
+        let (status, mut color, reason) = status_view(&r.status, weak, row_error(ui));
+        if r.hidden && color.is_none() {
+            color = Some(weak);
+        }
         // Mit Warnung: Warnzeichen über der Ecke des Symbols, der Text im Hinweis (wie Fusion).
         let warned = r.warning.is_some();
-        let resp = row(
+        let resp = row_lead(
             ui,
             0.0,
+            EYE_W,
             selected,
             &name,
             color,
@@ -1122,6 +1140,13 @@ fn sketches(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
                 .or(r.warning.clone())
                 .unwrap_or_else(|| tr!("tree-sketch-hint")),
         );
+        // Die geöffnete Skizze bleibt sichtbar: ohne Auge.
+        if open != Some(id) {
+            let texts = (tr!("tree-show-item"), tr!("tree-hide-item"));
+            if eye_button(ui, resp.rect, ("eye-sketch", id), &name, r.hidden, texts) {
+                *action = Some(Action::ToggleFeatureHidden(id));
+            }
+        }
         if resp.double_clicked() {
             *action = Some(Action::Edit(id));
         } else if resp.clicked() {
@@ -1245,9 +1270,19 @@ fn origin(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
             .into_iter()
             .zip([StandardPlane::XY, StandardPlane::XZ, StandardPlane::YZ])
     {
-        let resp = row(ui, 0.0, false, &plane, None, None, None, |p, rect, c| {
-            paint_source(p, rect, IconSource::Font(Icon::SketchOnPlane), c)
-        })
+        let shown = state.is_origin_plane_shown(std);
+        let color = (!shown).then(|| ui.visuals().weak_text_color());
+        let resp = row_lead(
+            ui,
+            0.0,
+            EYE_W,
+            false,
+            &plane,
+            color,
+            None,
+            None,
+            |p, rect, c| paint_source(p, rect, IconSource::Font(Icon::SketchOnPlane), c),
+        )
         .on_hover_text(if redefining {
             tr!("tree-plane-redefine-hint")
         } else if picking {
@@ -1255,7 +1290,17 @@ fn origin(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
         } else {
             tr!("tree-plane-hint")
         });
-        if picking && resp.clicked() {
+        let texts = (tr!("tree-show-item"), tr!("tree-hide-item"));
+        if eye_button(
+            ui,
+            resp.rect,
+            ("eye-origin", format!("{std:?}")),
+            &plane,
+            !shown,
+            texts,
+        ) {
+            *action = Some(Action::ToggleOrigin(std));
+        } else if picking && resp.clicked() {
             *action = Some(Action::PickStandard(std));
         }
     }
@@ -1284,10 +1329,15 @@ fn construction(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>
         .collect();
     for (id, name, suppressed, status) in rows {
         let selected = state.selected_feature == Some(id);
-        let (status, color, reason) = status_view(&status, weak, row_error(ui));
-        let resp = row(
+        let hidden = state.is_feature_hidden(id);
+        let (status, mut color, reason) = status_view(&status, weak, row_error(ui));
+        if hidden && color.is_none() {
+            color = Some(weak);
+        }
+        let resp = row_lead(
             ui,
             0.0,
+            EYE_W,
             selected,
             &name,
             color,
@@ -1296,6 +1346,10 @@ fn construction(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>
             |p, rect, c| paint_feature_icon(p, rect, FeatureIcon::Plane, c),
         )
         .on_hover_text(reason.unwrap_or_else(|| tr!("tree-construction-hint")));
+        let texts = (tr!("tree-show-item"), tr!("tree-hide-item"));
+        if eye_button(ui, resp.rect, ("eye-plane", id), &name, hidden, texts) {
+            *action = Some(Action::ToggleFeatureHidden(id));
+        }
         if resp.double_clicked() {
             *action = Some(Action::Edit(id));
         } else if resp.clicked() {
@@ -1343,6 +1397,14 @@ fn plane_menu(
 /// Führt einen Befehl aus einer Zeile aus. Fehler legt `AppState` in `message` ab.
 fn run(state: &mut AppState, action: Action) {
     match action {
+        Action::ToggleFeatureHidden(id) => {
+            let hidden = state.is_feature_hidden(id);
+            state.set_feature_hidden(id, !hidden);
+        }
+        Action::ToggleOrigin(p) => {
+            let shown = state.is_origin_plane_shown(p);
+            state.set_origin_plane_shown(p, !shown);
+        }
         // Wahlmodus „Skizzenebene neu festlegen“: Grundebene oder Konstruktionsebene des Baums.
         Action::PickStandard(plane) if state.pending_pick.is_some() => {
             state.pick_sketch_plane(PlaneClick::Standard(plane));

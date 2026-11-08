@@ -631,7 +631,16 @@ pub fn plane_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
         return out;
     }
     let col = colors(state.dark);
-    for (id, plane) in state.plane_rects() {
+    // Eingeblendete Grundebenen (Ordner „Ursprung“) zuerst, darüber die Konstruktionsebenen.
+    let origins = state
+        .origin_plane_rects()
+        .into_iter()
+        .map(|(p, r)| (r, state.origin_hover == Some(p)));
+    let features = state
+        .plane_rects()
+        .into_iter()
+        .map(|(id, r)| (r, state.plane_highlighted(id)));
+    for (plane, lit) in origins.chain(features) {
         let map = Mapper {
             camera: state.camera,
             frame: plane.frame,
@@ -645,7 +654,7 @@ pub fn plane_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
         let Some(corners) = corners else {
             continue;
         };
-        let (fill, edge) = if state.plane_highlighted(id) {
+        let (fill, edge) = if lit {
             (col.plane_fill_active, col.plane_edge_active)
         } else {
             (col.plane_fill, col.plane_edge)
@@ -701,6 +710,12 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
     // Kantenkopien); die geöffnete zeichnet das Overlay aus dem Entwurf.
     for (id, _) in state.sketch_features() {
         if open == Some(id) {
+            continue;
+        }
+        // Im Baum ausgeblendet: nicht zeichnen, es sei denn, ein Dialog wählt gerade ihre
+        // Profile (dann braucht man sie).
+        let picking = state.profile_pick.as_ref().is_some_and(|p| p.sketch == id);
+        if state.is_feature_hidden(id) && !picking {
             continue;
         }
         let Some(sk) = state.document.sketch_of(id) else {

@@ -338,6 +338,7 @@ shell-old-version-banner = Alte Version v{ $n } – schreibgeschützt. Im Bereic
 ## Befehle
 cmd-need-sketch = Zuerst eine Skizze mit geschlossenem Profil wählen.
 cmd-need-body = Zuerst einen Körper wählen.
+cmd-need-visible = Zuerst einen Körper, eine Skizze oder eine Ebene wählen.
 cmd-need-any-sketch = Zuerst eine Skizze wählen.
 cmd-need-selection = Zuerst einen Körper oder Schritt wählen.
 
@@ -649,6 +650,8 @@ tree-header = Feature-Baum
 tree-body-hint = Körper: Klick wählt ihn für die Eigenschaften und die Verlaufsleiste; Doppelklick öffnet „Bearbeiten“; Rechtsklick zeigt weitere Befehle.
 tree-show-body = Körper einblenden
 tree-hide-body = Körper ausblenden (nur in der Ansicht)
+tree-show-item = Einblenden
+tree-hide-item = Ausblenden (nur in der Ansicht)
 tree-in-progress = { $name } (in Bearbeitung)
 tree-sketch-hint = Doppelklick öffnet die Skizze zum Bearbeiten; Rechtsklick zeigt weitere Befehle.
 tree-edit = Bearbeiten

@@ -346,6 +346,7 @@ shell-old-version-banner = Old version v{ $n } – read-only. In the "Versions" 
 ## Befehle
 cmd-need-sketch = Choose a sketch with a closed profile first.
 cmd-need-body = Choose a body first.
+cmd-need-visible = Choose a body, sketch or plane first.
 cmd-need-any-sketch = Choose a sketch first.
 cmd-need-selection = Choose a body or step first.
 
@@ -657,6 +658,8 @@ tree-header = Feature tree
 tree-body-hint = Body: click selects it for the properties and the history bar; double-click opens "Edit"; right-click shows more commands.
 tree-show-body = Show body
 tree-hide-body = Hide body (in the view only)
+tree-show-item = Show
+tree-hide-item = Hide (in the view only)
 tree-in-progress = { $name } (being edited)
 tree-sketch-hint = Double-click opens the sketch for editing; right-click shows more commands.
 tree-edit = Edit

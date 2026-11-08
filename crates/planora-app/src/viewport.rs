@@ -586,6 +586,20 @@ pub fn remember_keyboard_focus(ctx: &egui::Context) {
 /// der Fokus nicht schon auf einer Fläche liegt, die keinen Text liest. Ebenso
 /// gesperrt, solange die Einstellungen eine neue Belegung erfassen
 /// ([`crate::keymap::settings_ui::is_capturing`]): die erfasste Taste löst nichts aus.
+/// Hervorhebung für einen Treffer im Wahlmodus: eine Grundebene über `origin_hover`, sonst
+/// wie gewohnt über `hover`.
+fn hover_plane_click(state: &mut AppState, hit: Option<crate::plane_dialog::PlaneClick>) {
+    use crate::plane_dialog::PlaneClick;
+    match hit {
+        Some(PlaneClick::Standard(p)) => {
+            state.set_hover(None);
+            state.origin_hover = Some(p);
+        }
+        Some(PlaneClick::View(h)) => state.set_hover(Some(h)),
+        None => state.set_hover(None),
+    }
+}
+
 pub fn typing(ctx: &egui::Context) -> bool {
     keyboard_taken(ctx)
         || crate::keymap::settings_ui::is_capturing(ctx)
@@ -758,6 +772,8 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
     }
     home_response.on_hover_text(planora_i18n::tr!("view-home-hint"));
 
+    // Grundebene unter dem Zeiger gilt nur im Wahlmodus und nur für dieses Bild.
+    state.origin_hover = None;
     if !sketching && state.profile_pick.is_some() {
         // Profilwahl eines Dialogs: Klick ohne Ziehen schaltet das Profil unter dem Zeiger um
         // (wie Fusion); Körper werden dabei nicht gewählt.
@@ -778,15 +794,15 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
             Some(p) => {
                 let cursor = Vec2::new(p.x - rect.left(), p.y - rect.top());
                 let viewport = Vec2::new(rect.width(), rect.height());
-                let hit = state.pick_with(cursor, viewport, crate::state::PickFilter::BASES);
-                state.set_hover(hit);
+                let hit = state.plane_click_at(cursor, viewport, crate::state::PickFilter::BASES);
+                hover_plane_click(state, hit);
                 if response.clicked()
                     && let Some(h) = hit
                 {
-                    state.pick_sketch_plane(crate::plane_dialog::PlaneClick::View(h));
+                    state.pick_sketch_plane(h);
                 }
             }
-            None => state.set_hover(None),
+            None => hover_plane_click(state, None),
         }
         if response.secondary_clicked()
             || (!typing(ui.ctx()) && ui.input(|i| i.key_pressed(egui::Key::Escape)))
@@ -800,16 +816,16 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
             Some(p) => {
                 let cursor = Vec2::new(p.x - rect.left(), p.y - rect.top());
                 let viewport = Vec2::new(rect.width(), rect.height());
-                let hit = state.pick_with(cursor, viewport, filter);
-                state.set_hover(hit);
+                let hit = state.plane_click_at(cursor, viewport, filter);
+                hover_plane_click(state, hit);
                 if response.clicked()
                     && let Some(h) = hit
                     && let Some(pick) = state.plane_pick.as_mut()
                 {
-                    pick.clicked = Some(crate::plane_dialog::PlaneClick::View(h));
+                    pick.clicked = Some(h);
                 }
             }
-            None => state.set_hover(None),
+            None => hover_plane_click(state, None),
         }
     } else if !sketching {
         // Auswahl (nicht über dem Würfel; dort ist die Ansicht nicht „hovered“)

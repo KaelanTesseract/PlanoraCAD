@@ -27,6 +27,10 @@ pub fn need_sketch() -> String {
     tr!("cmd-need-sketch")
 }
 /// Hinweis, wenn „Sichtbarkeit umschalten“ keinen gewählten Körper findet.
+/// Hinweis, wenn „Sichtbarkeit umschalten“ (V) nichts Gewähltes findet.
+pub fn need_visible() -> String {
+    tr!("cmd-need-visible")
+}
 pub fn need_body() -> String {
     tr!("cmd-need-body")
 }
@@ -350,13 +354,10 @@ fn hint(state: &mut AppState, text: &str) {
 }
 
 /// Das Auge des gewählten Körpers ([`AppState::chosen_body`]), wie im Feature-Baum.
+/// Taste V: die gewählte Skizze oder Konstruktionsebene, sonst der gewählte Körper.
 fn toggle_visibility(state: &mut AppState) {
-    match state.chosen_body() {
-        Some(j) => {
-            let hidden = state.is_body_hidden(j);
-            state.set_body_hidden(j, !hidden);
-        }
-        None => hint(state, &need_body()),
+    if !state.toggle_selected_visibility() {
+        hint(state, &need_visible());
     }
 }
 

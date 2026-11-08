@@ -161,6 +161,14 @@ pub struct AppState {
     /// Körper bleibt im Modell, wird aber nicht gezeichnet und nicht gewählt. Wird nicht
     /// gespeichert. Kennung über Änderungen am Teil hinweg ([`Document::body_key`]).
     hidden_bodies: std::collections::BTreeSet<planora_drawing::BodyKey>,
+    /// Im Feature-Baum ausgeblendete Skizzen und Konstruktionsebenen (Auge, Handtest Skizzen 6).
+    /// Wie [`Self::hidden_bodies`] nur für die Ansicht dieses Tabs, nicht gespeichert.
+    hidden_features: std::collections::BTreeSet<FeatureId>,
+    /// Eingeblendete Grundebenen im Ordner „Ursprung“ (XY, XZ, YZ); anfangs alle aus wie in
+    /// Fusion. Nur Ansicht, nicht gespeichert.
+    shown_origin_planes: [bool; 3],
+    /// Grundebene unter dem Zeiger in einem Wahlmodus (hell gezeichnet).
+    pub origin_hover: Option<StandardPlane>,
     /// Geöffneter Skizzen-Modus.
     pub sketch_session: Option<SketchSession>,
     /// Entwurf des geöffneten Skizzen-Features (Entscheidung F6): eine Kopie der Definition mit
@@ -401,6 +409,15 @@ const PICK_EDGE_PX: f32 = 6.0;
 const PICK_VERTEX_PX: f32 = 8.0;
 /// Kleinste halbe Kantenlänge einer gezeichneten Konstruktionsebene (Skizzen 6).
 const PLANE_MIN_HALF_MM: f64 = 25.0;
+
+/// Stelle der Grundebene `p` in [`AppState::shown_origin_planes`].
+fn origin_index(p: StandardPlane) -> usize {
+    match p {
+        StandardPlane::XY => 0,
+        StandardPlane::XZ => 1,
+        StandardPlane::YZ => 2,
+    }
+}
 /// Halbe Kantenlänge einer Konstruktionsebene als Anteil der Diagonale aller sichtbaren Körper.
 const PLANE_HALF_PER_DIAGONAL: f64 = 0.6;
 
@@ -522,6 +539,9 @@ impl AppState {
             history_choice: None,
             tree_folders: crate::browser::FolderState::default(),
             hidden_bodies: std::collections::BTreeSet::new(),
+            hidden_features: std::collections::BTreeSet::new(),
+            shown_origin_planes: [false; 3],
+            origin_hover: None,
             sketch_session: None,
             sketch_draft: None,
             sketch_history: None,
@@ -762,6 +782,77 @@ impl AppState {
             self.marked_edges.retain(|e| e.body != j);
         }
         self.rebuild_scene();
+    }
+
+    /// Ist die Skizze oder Konstruktionsebene `id` im Feature-Baum ausgeblendet?
+    pub fn is_feature_hidden(&self, id: FeatureId) -> bool {
+        self.hidden_features.contains(&id)
+    }
+
+    /// Blendet die Skizze oder Konstruktionsebene `id` aus oder ein (Auge im Feature-Baum, wie
+    /// [`Self::set_body_hidden`] nur für die Ansicht). Eine ausgeblendete Ebene wird nicht
+    /// gezeichnet und nicht angeklickt, Auswahl und Hervorhebung auf ihr entfallen; eine
+    /// ausgeblendete Skizze wird in 3D nicht gezeichnet. Andere Features und die geöffnete
+    /// Skizze (sie bleibt sichtbar) ändern nichts.
+    pub fn set_feature_hidden(&mut self, id: FeatureId, hidden: bool) {
+        let hideable = self
+            .document
+            .feature(id)
+            .is_some_and(|f| matches!(f.kind, FeatureKind::Sketch(_) | FeatureKind::Plane(_)));
+        if !hideable || (hidden && self.open_sketch_id() == Some(id)) {
+            return;
+        }
+        let changed = if hidden {
+            self.hidden_features.insert(id)
+        } else {
+            self.hidden_features.remove(&id)
+        };
+        if changed && hidden {
+            let this = Some(Pick::Plane(id));
+            if self.selection == this {
+                self.selection = None;
+            }
+            if self.hover == this {
+                self.hover = None;
+            }
+            self.rebuild_scene();
+        }
+    }
+
+    /// Ist die Grundebene `p` eingeblendet (Auge im Ordner „Ursprung“)?
+    pub fn is_origin_plane_shown(&self, p: StandardPlane) -> bool {
+        self.shown_origin_planes[origin_index(p)]
+    }
+
+    /// Blendet die Grundebene `p` in der 3D-Ansicht ein oder aus.
+    pub fn set_origin_plane_shown(&mut self, p: StandardPlane, shown: bool) {
+        self.shown_origin_planes[origin_index(p)] = shown;
+        if !shown && self.origin_hover == Some(p) {
+            self.origin_hover = None;
+        }
+    }
+
+    /// „Sichtbarkeit umschalten“ (Taste V): die gewählte Skizze oder Konstruktionsebene, sonst
+    /// der gewählte Körper. `false`, wenn nichts davon gewählt ist.
+    pub fn toggle_selected_visibility(&mut self) -> bool {
+        let feature = self.selected_feature.filter(|id| {
+            self.document
+                .feature(*id)
+                .is_some_and(|f| matches!(f.kind, FeatureKind::Sketch(_) | FeatureKind::Plane(_)))
+        });
+        if let Some(id) = feature {
+            let hidden = self.is_feature_hidden(id);
+            self.set_feature_hidden(id, !hidden);
+            return true;
+        }
+        match self.chosen_body() {
+            Some(j) => {
+                let hidden = self.is_body_hidden(j);
+                self.set_body_hidden(j, !hidden);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Index des Körpers `r` in der Körperliste, falls er sichtbar ist.
@@ -1881,14 +1972,85 @@ impl AppState {
     }
 
     /// Alle gezeichneten Konstruktionsebenen in der Reihenfolge des Verlaufs (siehe
-    /// [`AppState::plane_rect`]).
+    /// [`AppState::plane_rect`]); im Baum ausgeblendete fehlen.
     pub fn plane_rects(&self) -> Vec<(FeatureId, PlaneRect)> {
         self.document
             .features()
             .iter()
             .filter(|f| matches!(f.kind, FeatureKind::Plane(_)))
+            .filter(|f| !self.is_feature_hidden(f.id))
             .filter_map(|f| self.plane_rect(f.id).map(|r| (f.id, r)))
             .collect()
+    }
+
+    /// Die eingeblendeten Grundebenen als Rechtecke im Ursprung, so groß wie
+    /// Konstruktionsebenen ([`AppState::plane_rect_for`]).
+    pub fn origin_plane_rects(&self) -> Vec<(StandardPlane, PlaneRect)> {
+        [StandardPlane::XY, StandardPlane::XZ, StandardPlane::YZ]
+            .into_iter()
+            .filter(|p| self.is_origin_plane_shown(*p))
+            .filter_map(|p| {
+                let def = PlaneDef::Offset {
+                    base: PlaneBase::Standard(p),
+                    distance: 0.0,
+                };
+                self.plane_rect_for(&def, p.frame()).map(|r| (p, r))
+            })
+            .collect()
+    }
+
+    /// Die vorderste eingeblendete Grundebene unter dem Zeiger und die Strahllänge bis zu ihr
+    /// (wie [`Self::nearest_plane_hit`]).
+    fn nearest_origin_hit(&self, cursor: Vec2, viewport: Vec2) -> Option<(StandardPlane, f64)> {
+        let ndc = Vec2::new(
+            2.0 * cursor.x / viewport.x - 1.0,
+            1.0 - 2.0 * cursor.y / viewport.y,
+        );
+        let (origin, dir) = self.camera.ray(ndc);
+        let ray = Ray {
+            origin: origin.as_dvec3(),
+            dir: dir.as_dvec3(),
+        };
+        self.origin_plane_rects()
+            .into_iter()
+            .filter_map(|(p, rect)| pick_plane(&ray, &rect).map(|t| (p, t)))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+    }
+
+    /// Was ein Klick in einem Wahlmodus (Ebenen-Fenster, „Skizzenebene neu festlegen“) trifft:
+    /// wie [`Self::pick_with`], dazu bei `filter.planes` die eingeblendeten Grundebenen. Eine
+    /// Grundebene gewinnt, wenn nichts davor liegt (Ecken und Kanten gehen immer vor).
+    pub fn plane_click_at(
+        &self,
+        cursor: Vec2,
+        viewport: Vec2,
+        filter: PickFilter,
+    ) -> Option<crate::plane_dialog::PlaneClick> {
+        use crate::plane_dialog::PlaneClick;
+        if viewport.x < 1.0 || viewport.y < 1.0 {
+            return None;
+        }
+        let hit = self.pick_with(cursor, viewport, filter);
+        let origin = filter
+            .planes
+            .then(|| self.nearest_origin_hit(cursor, viewport))
+            .flatten();
+        let Some((plane, t)) = origin else {
+            return hit.map(PlaneClick::View);
+        };
+        // Abstand des anderen Treffers; Ecken und Kanten liegen vorn.
+        let front = match hit {
+            None => None,
+            Some(Pick::Face(_)) => self
+                .nearest_face_hit(cursor, viewport)
+                .map(|(_, f)| f.distance as f64),
+            Some(Pick::Plane(_)) => self.nearest_plane_hit(cursor, viewport).map(|(_, d)| d),
+            Some(_) => Some(f64::NEG_INFINITY),
+        };
+        match (hit, front) {
+            (Some(h), Some(d)) if d <= t => Some(PlaneClick::View(h)),
+            _ => Some(PlaneClick::Standard(plane)),
+        }
     }
 
     /// Rechteck, als das die Konstruktionsebene `id` gezeichnet und angeklickt wird (Skizzen 6);

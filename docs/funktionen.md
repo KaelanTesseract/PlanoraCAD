@@ -146,6 +146,8 @@ Die Ebene wird halbdurchsichtig orange gezeichnet, ohne dass Körper sie verdeck
 
 *Skizzenebene neu festlegen:* Im Kontextmenü einer Skizze (Baum und Verlaufsleiste) oder über die belegbare Aktion; danach eine Grundebene (im Ordner „Ursprung“), eine ebene Fläche oder eine Konstruktionsebene anklicken. Die 2D-Zeichnung bleibt, projizierte Kurven werden auf der neuen Ebene nachgeführt. Bezüge auf Features, die im Verlauf nach der Skizze kommen, lehnt das Programm mit einer Meldung ab. Ein Rückgängig-Schritt; Esc hinterlässt nichts.
 
+*Ein- und ausblenden:* Jede Zeile im Baum, die etwas in der 3D-Ansicht zeigt, hat links ein Auge: Körper, Skizzen, Konstruktionsebenen und die drei Grundebenen im Ordner „Ursprung“. Ein Klick blendet das Objekt nur in der Ansicht aus oder ein; es bleibt im Modell, wird aber nicht gezeichnet und lässt sich in der Ansicht nicht anklicken. Die Taste V schaltet das gewählte Objekt um. Die Grundebenen sind anfangs ausgeblendet (wie in Fusion); eingeblendet lassen sie sich in einem Ebenen-Fenster und bei „Skizzenebene neu festlegen“ direkt in der Ansicht anklicken. Die geöffnete Skizze hat kein Auge. Was ausgeblendet ist, wird nicht in der Datei gespeichert.
+
 *Datei:* Nur Dateien mit einer Konstruktionsebene, einer Skizze auf einer Ebene oder einer Schnitt- oder Silhouettenprojektion werden im neuen Format 16 gespeichert und lassen sich von älteren Programmversionen nicht öffnen. Alle anderen Dateien bleiben, wie sie waren. Alte Kantenkopien auf Kurven, die es nicht mehr gibt, werden beim Laden verworfen.
 
 *Wo es von Fusion abweicht oder wo das Verhalten aus dem Gedächtnis angenommen ist,* steht in `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt Skizzen 6“.
