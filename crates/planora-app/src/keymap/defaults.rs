@@ -108,6 +108,9 @@ action_table! {
     PlaneThreePoints, "konstruieren.drei_punkte", "action-plane-three-points", Model, [];
     /// Fusion „Tangentialebene“.
     PlaneTangent, "konstruieren.tangentialebene", "action-plane-tangent", Model, [];
+    /// Fusion „Skizzenebene neu festlegen“ für die gewählte Skizze (sonst ein Hinweis); ohne
+    /// Vorgabetaste wie in Fusion, belegbar.
+    SketchRedefinePlane, "skizze.ebene_neu", "action-sketch-redefine-plane", Model, [];
     // Skizze: nur Werkzeuge, die es gibt (wie der Klick auf den Knopf der Leiste). Die
     // Esc, Enter und Entf der Skizze sind fest (`sketch_view`), nicht in der Tabelle.
     SketchLine, "skizze.linie", "action-sketch-line", Sketch, [key(Key::L)];

@@ -298,7 +298,7 @@ pub fn parameter_rows(state: &AppState, kind: &FeatureKind) -> Vec<(String, Stri
                     role = planora_kernel::blend::topo::role_label(&r.role),
                     name = feature_name(FeatureId(r.origin))
                 ),
-                // Skizzen 6: Oberfläche folgt in Task 13; bis dahin der Name der Ebene.
+                // Skizzen 6: Name der Konstruktionsebene.
                 SketchPlane::OnPlane(id) => feature_name(*id),
             };
             vec![

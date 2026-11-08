@@ -194,6 +194,20 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                 track(ws, a);
             }
         }
+        Action::SketchRedefinePlane => {
+            let state = &mut ws.active_tab_mut().state;
+            let sketch = state
+                .selected_feature
+                .filter(|id| state.document.sketch_of(*id).is_some());
+            match sketch {
+                Some(id) => {
+                    if state.start_redefine_sketch_plane(id).is_ok() {
+                        ws.active_tab_mut().exclude_pick_modes();
+                    }
+                }
+                None => hint(state, &tr!("cmd-need-any-sketch")),
+            }
+        }
         Action::ToggleVisibility => toggle_visibility(&mut ws.active_tab_mut().state),
         Action::DeleteSelection => delete_selection(&mut ws.active_tab_mut().state),
         Action::RepeatLast => {

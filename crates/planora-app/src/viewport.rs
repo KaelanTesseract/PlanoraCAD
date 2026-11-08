@@ -771,6 +771,28 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
                 pick.clicked = at;
             }
         }
+    } else if !sketching && state.pending_pick.is_some() {
+        // Wahlmodus „Skizzenebene neu festlegen“ (Skizzen 6): Flächen und Ebenen, keine Kanten.
+        // Ein Klick setzt die Skizze; Esc oder Rechtsklick beenden ohne Änderung.
+        match response.hover_pos() {
+            Some(p) => {
+                let cursor = Vec2::new(p.x - rect.left(), p.y - rect.top());
+                let viewport = Vec2::new(rect.width(), rect.height());
+                let hit = state.pick_with(cursor, viewport, crate::state::PickFilter::BASES);
+                state.set_hover(hit);
+                if response.clicked()
+                    && let Some(h) = hit
+                {
+                    state.pick_sketch_plane(crate::plane_dialog::PlaneClick::View(h));
+                }
+            }
+            None => state.set_hover(None),
+        }
+        if response.secondary_clicked()
+            || (!typing(ui.ctx()) && ui.input(|i| i.key_pressed(egui::Key::Escape)))
+        {
+            state.cancel_pending_pick();
+        }
     } else if !sketching && let Some(filter) = state.plane_pick.map(|p| p.filter) {
         // Fenster einer Konstruktionsebene (Skizzen 6): Ein Klick füllt dessen aktives
         // Auswahlfeld (mit dem Filter des Felds) statt zu wählen.

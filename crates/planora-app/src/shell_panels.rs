@@ -1081,12 +1081,17 @@ fn history_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) 
     );
 }
 
-/// Text und Farbe der Statuszeile. Vorrang: letzte Meldung (Fehlerfarbe), Hinweis `info`
+/// Text und Farbe der Statuszeile. Vorrang: letzte Meldung (Fehlerfarbe), Hinweis eines
+/// Wahlmodus ([`crate::state::PendingPick`]), Hinweis `info`
 /// (text_secondary; im Skizzen-Modus hinter der Zeile „Skizzen-Modus: …“, damit diese sichtbar
 /// bleibt), Skizzen-Modus (text_secondary), erstes Feature mit Fehler (Fehlerfarbe), Körperzahl
 /// (mit Hinweis bei ungenauem Netz in der Warnfarbe, sonst text_secondary).
 fn status_line(state: &AppState, dark: bool) -> (String, egui::Color32) {
     let p = theme::palette(dark);
+    // Ein Wahlmodus ohne Fenster sagt, was zu wählen ist (vor anderen Hinweisen).
+    if state.message.is_none() && state.pending_pick.is_some() {
+        return (tr!("state-pick-sketch-plane"), p.text_secondary);
+    }
     if state.message.is_none()
         && let Some(info) = &state.info
     {
@@ -1146,4 +1151,28 @@ fn banner_field(ctx: &egui::Context, rects: &ShellRects, app: &mut PlanoraApp) {
         dark,
         (text, color, None, None),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use planora_feature::{SketchPlane, StandardPlane};
+
+    /// Skizzen 6, Task 13: Im Wahlmodus „Skizzenebene neu festlegen“ sagt die Statuszeile, was
+    /// zu wählen ist; eine Meldung (etwa „nur ebene Flächen“) hat Vorrang.
+    #[test]
+    fn pending_pick_shows_its_hint() {
+        let mut s = AppState::new();
+        let id = s
+            .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+            .unwrap();
+        s.info = Some("Hinweis".into());
+        s.start_redefine_sketch_plane(id).unwrap();
+        assert_eq!(status_line(&s, true).0, tr!("state-pick-sketch-plane"));
+        s.message = Some("Meldung".into());
+        assert_eq!(status_line(&s, true).0, "Meldung");
+        s.message = None;
+        s.cancel_pending_pick();
+        assert_eq!(status_line(&s, true).0, "Hinweis");
+    }
 }

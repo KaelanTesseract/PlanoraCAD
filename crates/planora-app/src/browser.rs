@@ -463,8 +463,11 @@ enum Action {
     Delete(FeatureId),
     /// „Skizze erstellen“ auf einer Konstruktionsebene.
     SketchOnPlane(FeatureId),
-    /// Grundebene für das aktive Feld eines Ebenen-Fensters.
+    /// Grundebene für das aktive Feld eines Ebenen-Fensters oder für „Skizzenebene neu
+    /// festlegen“.
     PickStandard(StandardPlane),
+    /// „Skizzenebene neu festlegen“ für diese Skizze (Wahlmodus).
+    RedefinePlane(FeatureId),
 }
 
 /// Angaben einer Skizzenzeile (aus dem Dokument kopiert, damit danach geändert werden darf).
@@ -1182,6 +1185,14 @@ fn feature_menu(
                 pick(action, act, ui);
             }
         }
+        // Ändert nur die vorhandene Skizze; nicht gesperrt (wie „Bearbeiten“).
+        let redefine = key_button(
+            &tr!("tree-redefine-plane"),
+            crate::keymap::Action::SketchRedefinePlane,
+        );
+        if ui.add(redefine).clicked() {
+            pick(action, Action::RedefinePlane(id), ui);
+        }
     }
     delete_entry(ui, action, id);
 }
@@ -1224,9 +1235,11 @@ fn delete_entry(ui: &mut egui::Ui, action: &mut Option<Action>, id: FeatureId) {
 }
 
 /// Ordner „Ursprung“: die drei Grundebenen. Ist ein Ebenen-Fenster offen, füllt ein Klick
-/// dessen aktives Feld; sonst nur zur Anzeige.
+/// dessen aktives Feld; im Wahlmodus „Skizzenebene neu festlegen“ setzt er die Skizze auf die
+/// Grundebene; sonst nur zur Anzeige.
 fn origin(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
-    let picking = state.plane_pick.is_some();
+    let redefining = state.pending_pick.is_some();
+    let picking = redefining || state.plane_pick.is_some();
     for (plane, std) in
         planes()
             .into_iter()
@@ -1235,7 +1248,9 @@ fn origin(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
         let resp = row(ui, 0.0, false, &plane, None, None, None, |p, rect, c| {
             paint_source(p, rect, IconSource::Font(Icon::SketchOnPlane), c)
         })
-        .on_hover_text(if picking {
+        .on_hover_text(if redefining {
+            tr!("tree-plane-redefine-hint")
+        } else if picking {
             tr!("tree-plane-pick-hint")
         } else {
             tr!("tree-plane-hint")
@@ -1328,6 +1343,22 @@ fn plane_menu(
 /// Führt einen Befehl aus einer Zeile aus. Fehler legt `AppState` in `message` ab.
 fn run(state: &mut AppState, action: Action) {
     match action {
+        // Wahlmodus „Skizzenebene neu festlegen“: Grundebene oder Konstruktionsebene des Baums.
+        Action::PickStandard(plane) if state.pending_pick.is_some() => {
+            state.pick_sketch_plane(PlaneClick::Standard(plane));
+        }
+        Action::Select(id)
+            if state.pending_pick.is_some()
+                && state
+                    .document
+                    .feature(id)
+                    .is_some_and(|f| matches!(f.kind, FeatureKind::Plane(_))) =>
+        {
+            state.pick_sketch_plane(PlaneClick::View(Pick::Plane(id)));
+        }
+        Action::RedefinePlane(id) => {
+            let _ = state.start_redefine_sketch_plane(id);
+        }
         // Offenes Ebenen-Fenster: Eine Ebene des Baums füllt sein aktives Feld.
         Action::Select(id)
             if state.plane_pick.is_some()

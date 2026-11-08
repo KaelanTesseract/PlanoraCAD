@@ -346,6 +346,7 @@ shell-old-version-banner = Old version v{ $n } – read-only. In the "Versions" 
 ## Befehle
 cmd-need-sketch = Choose a sketch with a closed profile first.
 cmd-need-body = Choose a body first.
+cmd-need-any-sketch = Choose a sketch first.
 cmd-need-selection = Choose a body or step first.
 
 ## Dateiauswahl
@@ -664,6 +665,7 @@ tree-activate = Activate
 tree-suppress = Suppress
 tree-extrude = Extrude …
 tree-revolve = Revolve …
+tree-redefine-plane = Redefine Sketch Plane
 tree-delete = Delete
 tree-plane-hint = Base plane; "Create", then "Sketch" creates a sketch on it.
 tree-apply = Apply
@@ -996,6 +998,7 @@ state-mesh-locked = Mesh bodies cannot be edited.
 state-need-two-bodies = This needs at least two bodies.
 state-need-one-body = This needs at least one body.
 state-pick-planar-face = First click a flat face of a body or a construction plane.
+state-pick-sketch-plane = Select a plane or planar face
 state-not-mesh = This is not a mesh body
 state-field-no-formula = This field cannot have a formula
 
@@ -3110,6 +3113,7 @@ action-plane-angle = Plane at Angle
 action-plane-mid = Midplane
 action-plane-three-points = Plane Through Three Points
 action-plane-tangent = Tangent Plane
+action-sketch-redefine-plane = Redefine Sketch Plane
 plane-slot-plane = Plane
 plane-slot-line = Line
 plane-slot-first-plane = First plane
@@ -3142,6 +3146,7 @@ tree-folder-construction = Construction
 tree-construction-hint = Double-click opens the plane's window; right-click shows more commands.
 tree-create-sketch = Create Sketch
 tree-plane-pick-hint = A click puts the base plane into the plane's window.
+tree-plane-redefine-hint = A click puts the sketch on this base plane.
 state-plane-not-found = The construction plane was not found.
 state-plane-not-computed = The plane is not computed (error, suppressed or behind the marker).
 undo-plane-offset = Create offset plane
@@ -3150,4 +3155,5 @@ undo-plane-mid = Create midplane
 undo-plane-three-points = Create plane through three points
 undo-plane-tangent = Create tangent plane
 undo-plane-edit = Change plane
+undo-sketch-redefine-plane = Redefine Sketch Plane
 plane-later-geometry = This geometry is only created after the plane in the timeline.

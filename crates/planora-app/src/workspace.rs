@@ -449,12 +449,28 @@ impl DocTab {
         self.state.clear_edge_marks();
     }
 
+    /// Läuft ein Wahlmodus ([`crate::state::PendingPick`]), schließen ein Ebenen-Fenster und das
+    /// Fenster „Verrunden“/„Fase“ (sie wählen sonst in derselben Ansicht). Wer eines dieser
+    /// Fenster öffnet, beendet umgekehrt den Wahlmodus.
+    pub fn exclude_pick_modes(&mut self) {
+        if self.state.pending_pick.is_none() {
+            return;
+        }
+        if self.plane_dialog.take().is_some() {
+            PlaneDialog::finish(&mut self.state);
+        }
+        if self.blend_dialog.is_some() {
+            self.close_blend_dialog();
+        }
+    }
+
     /// Öffnet das Fenster „Bearbeiten“ für das Feature `id`: bei einer Konstruktionsebene das
     /// Fenster der Ebene mit ihren Werten, sonst [`FeatureDialog`].
     pub fn open_edit(&mut self, id: FeatureId) {
         if let Some(d) = PlaneDialog::edit(&self.state, id) {
             self.feature_dialog = None;
             self.close_blend_dialog();
+            self.state.cancel_pending_pick();
             self.plane_dialog = Some(d);
         } else {
             self.feature_dialog = FeatureDialog::new(&self.state, id);
@@ -491,6 +507,7 @@ impl DocTab {
         self.blend_dialog = None;
         self.plane_dialog = None;
         self.state.plane_pick = None;
+        self.state.cancel_pending_pick();
         if !self
             .export_dialog
             .as_ref()

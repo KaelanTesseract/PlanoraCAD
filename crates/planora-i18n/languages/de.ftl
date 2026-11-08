@@ -338,6 +338,7 @@ shell-old-version-banner = Alte Version v{ $n } – schreibgeschützt. Im Bereic
 ## Befehle
 cmd-need-sketch = Zuerst eine Skizze mit geschlossenem Profil wählen.
 cmd-need-body = Zuerst einen Körper wählen.
+cmd-need-any-sketch = Zuerst eine Skizze wählen.
 cmd-need-selection = Zuerst einen Körper oder Schritt wählen.
 
 ## Dateiauswahl
@@ -656,6 +657,7 @@ tree-activate = Aktivieren
 tree-suppress = Unterdrücken
 tree-extrude = Extrudieren …
 tree-revolve = Drehen …
+tree-redefine-plane = Skizzenebene neu festlegen
 tree-delete = Löschen
 tree-plane-hint = Grundebene; „Erzeugen“, dann „Skizze“ legt darauf eine Skizze an.
 tree-apply = Übernehmen
@@ -979,6 +981,7 @@ state-mesh-locked = Netz-Körper lassen sich nicht bearbeiten.
 state-need-two-bodies = Dafür werden mindestens zwei Körper benötigt.
 state-need-one-body = Dafür wird mindestens ein Körper benötigt.
 state-pick-planar-face = Dafür zuerst eine ebene Fläche eines Körpers oder eine Konstruktionsebene anklicken.
+state-pick-sketch-plane = Ebene oder ebene Fläche wählen
 state-not-mesh = Das ist kein Netz-Körper
 state-field-no-formula = Dieses Feld kann keine Formel haben
 
@@ -3093,6 +3096,7 @@ action-plane-angle = Ebene unter Winkel
 action-plane-mid = Mittelebene
 action-plane-three-points = Ebene durch drei Punkte
 action-plane-tangent = Tangentialebene
+action-sketch-redefine-plane = Skizzenebene neu festlegen
 plane-slot-plane = Ebene
 plane-slot-line = Linie
 plane-slot-first-plane = Erste Ebene
@@ -3125,6 +3129,7 @@ tree-folder-construction = Konstruktion
 tree-construction-hint = Doppelklick öffnet das Fenster der Ebene; Rechtsklick zeigt weitere Befehle.
 tree-create-sketch = Skizze erstellen
 tree-plane-pick-hint = Ein Klick übernimmt die Grundebene in das Fenster der Ebene.
+tree-plane-redefine-hint = Ein Klick setzt die Skizze auf diese Grundebene.
 state-plane-not-found = Die Konstruktionsebene wurde nicht gefunden.
 state-plane-not-computed = Die Ebene ist nicht berechnet (Fehler, unterdrückt oder hinter dem Marker).
 undo-plane-offset = Versatzebene anlegen
@@ -3133,4 +3138,5 @@ undo-plane-mid = Mittelebene anlegen
 undo-plane-three-points = Ebene durch drei Punkte anlegen
 undo-plane-tangent = Tangentialebene anlegen
 undo-plane-edit = Ebene ändern
+undo-sketch-redefine-plane = Skizzenebene neu festlegen
 plane-later-geometry = Diese Geometrie entsteht erst nach der Ebene im Verlauf.

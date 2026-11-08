@@ -158,6 +158,8 @@ enum Action {
     Rename(FeatureId),
     ToggleSuppress(FeatureId),
     Delete(FeatureId),
+    /// „Skizzenebene neu festlegen“ (nur bei Skizzen).
+    RedefinePlane(FeatureId),
 }
 
 /// Stand der Leiste für den gewählten Körper.
@@ -580,6 +582,10 @@ fn step_button(
 /// (die Befehle, die früher die Schrittzeilen im Feature-Baum hatten).
 fn step_menu(r: &egui::Response, state: &AppState, id: FeatureId, action: &mut Option<Action>) {
     let suppressed = state.document.feature(id).is_some_and(|f| f.suppressed);
+    let sketch = state
+        .document
+        .feature(id)
+        .is_some_and(|f| matches!(f.kind, FeatureKind::Sketch(_)));
     r.context_menu(|ui| {
         let mut pick = |a: Action, ui: &mut egui::Ui| {
             *action = Some(a);
@@ -598,6 +604,9 @@ fn step_menu(r: &egui::Response, state: &AppState, id: FeatureId, action: &mut O
         };
         if ui.button(&toggle).clicked() {
             pick(Action::ToggleSuppress(id), ui);
+        }
+        if sketch && ui.button(tr!("tree-redefine-plane")).clicked() {
+            pick(Action::RedefinePlane(id), ui);
         }
         ui.separator();
         if ui.button(tr!("history-delete")).clicked() {
@@ -812,6 +821,10 @@ fn run(ctx: &egui::Context, state: &mut AppState, bar: &Bar, action: Action) {
         Action::Delete(id) => {
             stop_playing(ctx);
             browser::request_delete(state, id);
+        }
+        Action::RedefinePlane(id) => {
+            stop_playing(ctx);
+            let _ = state.start_redefine_sketch_plane(id);
         }
     }
 }

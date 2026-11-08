@@ -2055,9 +2055,11 @@ pub fn open_blend(ws: &mut Workspace, chamfer: bool) {
         return;
     }
     if tab.state.try_close_sketch().is_ok() {
-        // Nur ein Fenster wählt in der Ansicht: ein offenes Ebenen-Fenster schließt.
+        // Nur ein Fenster wählt in der Ansicht: ein offenes Ebenen-Fenster schließt, ebenso
+        // der Wahlmodus „Skizzenebene neu festlegen“.
         tab.plane_dialog = None;
         tab.state.plane_pick = None;
+        tab.state.cancel_pending_pick();
         tab.blend_dialog = Some(if chamfer {
             BlendDialog::chamfer()
         } else {
@@ -2073,6 +2075,7 @@ pub fn open_plane(ws: &mut Workspace, command: PlaneCommand) {
     if tab.state.try_close_sketch().is_ok() {
         tab.feature_dialog = None;
         tab.close_blend_dialog();
+        tab.state.cancel_pending_pick();
         tab.plane_dialog = Some(PlaneDialog::new(command));
     }
 }
@@ -2705,6 +2708,9 @@ impl eframe::App for PlanoraApp {
         {
             tab.state.sheet_dialog = Some(dialog);
         }
+        // Ein eben begonnener Wahlmodus (Browser, Verlaufsleiste) schließt Ebenen-Fenster und
+        // „Verrunden“/„Fase“: nur einer wählt in der Ansicht.
+        tab.exclude_pick_modes();
         if let Some(mut dialog) = tab.plane_dialog.take()
             && dialog.show(&ctx, &mut tab.state)
         {

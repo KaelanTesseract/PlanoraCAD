@@ -114,6 +114,15 @@ pub enum SketchRequest {
     Revolve(FeatureId),
 }
 
+/// Ein Wahlmodus ohne Fenster: Der nächste Klick in der 3D-Ansicht oder im Browser wählt etwas
+/// für einen Befehl (Skizzen 6). Esc oder Rechtsklick beenden ihn ohne Änderung.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PendingPick {
+    /// „Skizzenebene neu festlegen“ für diese Skizze: Grundebene, Konstruktionsebene oder
+    /// ebene Fläche wählen.
+    SketchPlane(FeatureId),
+}
+
 /// Alles, was die Oberfläche anzeigt. Enthält keine egui-Typen und ist deshalb testbar.
 pub struct AppState {
     /// Das Feature-Dokument; Quelle aller Körper.
@@ -208,6 +217,9 @@ pub struct AppState {
     /// Offenes Fenster einer Konstruktionsebene (Skizzen 6): Klicks in der 3D-Ansicht und im
     /// Ordner „Ursprung“ füllen sein aktives Auswahlfeld statt zu wählen; dazu die Vorschau.
     pub plane_pick: Option<crate::plane_dialog::PlanePick>,
+    /// Laufender Wahlmodus ohne Fenster ([`PendingPick`]); schließt sich mit `plane_pick` und
+    /// dem Fenster „Verrunden“/„Fase“ gegenseitig aus.
+    pub pending_pick: Option<PendingPick>,
     /// Verschieben, das der laufende Zug im Eigenschaftenfenster angelegt hat.
     drag_move: Option<FeatureId>,
     /// Prüfberichte der Netze, einmal je Netz berechnet (Plan P13).
@@ -532,6 +544,7 @@ impl AppState {
             edge_picking: false,
             chain_marking: true,
             plane_pick: None,
+            pending_pick: None,
             drag_move: None,
             mesh_reports: BTreeMap::new(),
             display_triangles: crate::mesh_body::DISPLAY_TRIANGLES,
@@ -831,6 +844,7 @@ impl AppState {
         self.marked_edges.clear();
         self.edge_picking = false;
         self.plane_pick = None;
+        self.pending_pick = None;
         self.drag_move = None;
         self.pending_delete = None;
         self.pending_delete_drawing = None;
@@ -2109,7 +2123,7 @@ impl AppState {
             // Ohne bekannte Fläche vorläufig; die Berechnung setzt die Ebene der Fläche.
             // [`AppState::new_sketch_on_face`] gibt die echte Ebene mit.
             SketchPlane::OnFace(_) => Frame::WORLD,
-            // Skizzen 6: Oberfläche folgt in Task 13; die Berechnung setzt die Lage der Ebene.
+            // Lage der Konstruktionsebene; nur ohne berechnete Ebene vorläufig die Weltebene.
             SketchPlane::OnPlane(id) => self.document.plane_frame(*id).unwrap_or(Frame::WORLD),
         };
         self.add_sketch_in(plane, frame)
@@ -2205,6 +2219,114 @@ impl AppState {
         Ok(())
     }
 
+    /// „Skizzenebene neu festlegen“ (Skizzen 6): setzt die Skizze `sketch` auf `plane`. Ein
+    /// Schritt; eine offene Skizze wird vorher beendet. Lehnt das Dokument ab (etwa eine Fläche
+    /// eines späteren Features), bleibt es unverändert und der Grund steht in `message`.
+    pub fn redefine_sketch_plane(
+        &mut self,
+        sketch: FeatureId,
+        plane: SketchPlane,
+    ) -> Result<(), String> {
+        if !self
+            .document
+            .feature(sketch)
+            .is_some_and(|f| matches!(f.kind, FeatureKind::Sketch(_)))
+        {
+            return self.fail(tr!("state-sketch-not-found"));
+        }
+        self.try_close_sketch()?;
+        if let Err(e) = self.document.set_sketch_plane(sketch, plane) {
+            return self.fail(tr!("edit-rejected", error = e.to_string()));
+        }
+        self.message = None;
+        self.refresh();
+        if let Some(f) = self.document.feature(sketch)
+            && let FeatureStatus::Error(e) = &f.status
+        {
+            self.message = Some(tr!("tree-status-line", name = &f.name, error = e));
+        }
+        Ok(())
+    }
+
+    /// Beginnt den Wahlmodus „Skizzenebene neu festlegen“ für `sketch` (Kontextmenü, Taste).
+    /// Eine offene Skizze wird vorher beendet (wie „Extrudieren“ aus dem Kontextmenü); wird ihr
+    /// Entwurf abgelehnt, beginnt der Modus nicht. Andere Wahlmodi enden.
+    pub fn start_redefine_sketch_plane(&mut self, sketch: FeatureId) -> Result<(), String> {
+        if !self
+            .document
+            .feature(sketch)
+            .is_some_and(|f| matches!(f.kind, FeatureKind::Sketch(_)))
+        {
+            return self.fail(tr!("state-sketch-not-found"));
+        }
+        self.try_close_sketch()?;
+        self.plane_pick = None;
+        self.edge_picking = false;
+        self.clear_edge_marks();
+        self.selected_feature = Some(sketch);
+        self.selected_body = None;
+        self.set_selection(None);
+        self.message = None;
+        self.pending_pick = Some(PendingPick::SketchPlane(sketch));
+        Ok(())
+    }
+
+    /// Beendet einen Wahlmodus ohne Änderung (Esc, Rechtsklick).
+    pub fn cancel_pending_pick(&mut self) {
+        self.pending_pick = None;
+        self.set_hover(None);
+    }
+
+    /// Ein Klick im Wahlmodus „Skizzenebene neu festlegen“ (Ansicht oder Ordner „Ursprung“).
+    /// Eine Grundebene, Konstruktionsebene oder ebene Fläche setzt die Skizze darauf und beendet
+    /// den Modus, auch wenn das Dokument ablehnt. Eine gekrümmte Fläche (oder eine Fläche eines
+    /// Netz-Körpers) gibt nur eine Meldung; der Modus bleibt.
+    pub fn pick_sketch_plane(&mut self, click: crate::plane_dialog::PlaneClick) {
+        use crate::plane_dialog::PlaneClick;
+        let Some(PendingPick::SketchPlane(sketch)) = self.pending_pick else {
+            return;
+        };
+        let plane = match click {
+            PlaneClick::Standard(p) => SketchPlane::Standard(p),
+            PlaneClick::View(Pick::Plane(id)) => SketchPlane::OnPlane(id),
+            PlaneClick::View(Pick::Face(f)) => match self.face_ref_for_sketch(f.body, f.face) {
+                Ok(r) => SketchPlane::OnFace(r),
+                Err(e) => {
+                    self.message = Some(e);
+                    return;
+                }
+            },
+            // Kanten und Eckpunkte wählt der Filter nicht.
+            PlaneClick::View(_) => return,
+        };
+        self.cancel_pending_pick();
+        let _ = self.redefine_sketch_plane(sketch, plane);
+    }
+
+    /// Verweis auf die ebene Fläche `face` des sichtbaren Körpers `body` für eine Skizze; sonst
+    /// der Grund.
+    fn face_ref_for_sketch(
+        &self,
+        body: usize,
+        face: Id<Face>,
+    ) -> Result<planora_feature::FaceRef, String> {
+        if self.is_mesh(body) {
+            return Err(mesh_locked());
+        }
+        let b = self
+            .bodies
+            .get(body)
+            .ok_or_else(|| tr!("state-body-not-found"))?;
+        if b.solid.faces.get(face).is_none() {
+            return Err(tr!("state-face-not-found"));
+        }
+        if plane_of_face(&b.solid, face).is_none() {
+            return Err(tr!("state-sketch-planar-only"));
+        }
+        planora_feature::FaceRef::from_face(&b.solid, face, &self.kernel.tolerance)
+            .map_err(|e| tr!("state-sketch-on-face-failed", error = e.to_string()))
+    }
+
     /// Legt ein leeres Skizzen-Feature auf der Konstruktionsebene `id` an (Kontextmenü
     /// „Skizze erstellen“, „Skizze auf gewählter Fläche“ mit gewählter Ebene). Die Skizze folgt
     /// der Ebene. Nur für berechnete Ebenen.
@@ -2248,6 +2370,8 @@ impl AppState {
         {
             return self.fail(tr!("state-sketch-not-found"));
         }
+        // Im Skizzen-Modus wählt die Ansicht nichts für einen anderen Befehl.
+        self.pending_pick = None;
         let switching = self.sketch_session.is_some();
         if switching {
             // Bleibt die alte Skizze offen (Entwurf abgelehnt), wird nicht gewechselt.

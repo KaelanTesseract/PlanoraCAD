@@ -105,15 +105,21 @@ fn features(before: &Snapshot, after: &Snapshot) -> Option<String> {
     }
     // Gleiche Art, aber andere Formeln (etwa nur der Formeltext, der Wert bleibt): benannt wie
     // eine Änderung der Art.
-    if let Some((_, a)) = pairs
+    if let Some((b, a)) = pairs
         .iter()
         .find(|(b, a)| b.kind != a.kind || b.formulas != a.formulas)
     {
-        return Some(match a.kind {
-            FeatureKind::Move { .. } | FeatureKind::MeshBody { .. } => tr!("undo-move"),
-            FeatureKind::Sketch(_) => tr!("undo-sketch-edit"),
-            FeatureKind::Plane(_) => tr!("undo-plane-edit"),
-            _ => tr!("undo-feature-change"),
+        return Some(match (&b.kind, &a.kind) {
+            // Skizzen 6: nur die Ebene der Skizze geändert.
+            (FeatureKind::Sketch(bs), FeatureKind::Sketch(as_)) if bs.plane != as_.plane => {
+                tr!("undo-sketch-redefine-plane")
+            }
+            (_, kind) => match kind {
+                FeatureKind::Move { .. } | FeatureKind::MeshBody { .. } => tr!("undo-move"),
+                FeatureKind::Sketch(_) => tr!("undo-sketch-edit"),
+                FeatureKind::Plane(_) => tr!("undo-plane-edit"),
+                _ => tr!("undo-feature-change"),
+            },
         });
     }
     None
