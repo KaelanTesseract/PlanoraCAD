@@ -819,7 +819,13 @@ fn row_lead(
 }
 
 /// Auge im Kopf des Ordners `folder` (zwischen Pfeil und Ordnersymbol).
-fn folder_eye(ui: &mut egui::Ui, state: &AppState, folder: Folder, head: egui::Rect) -> bool {
+fn folder_eye(
+    ui: &mut egui::Ui,
+    state: &AppState,
+    folder: Folder,
+    head: egui::Rect,
+    read_only: bool,
+) -> bool {
     let eye = egui::Rect::from_min_size(
         egui::pos2(
             head.min.x + theme::SPACE_1 + CARET + theme::SPACE_1,
@@ -834,7 +840,7 @@ fn folder_eye(ui: &mut egui::Ui, state: &AppState, folder: Folder, head: egui::R
         eye,
         ("eye-folder", folder.index()),
         &folder.label(),
-        (hidden, hidden),
+        (hidden, hidden || read_only),
         texts,
     )
 }
@@ -971,9 +977,8 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
             // Auge am Ordner (Zeichnungen erscheinen nicht in der 3D-Ansicht); auf einer alten
             // Version gesperrt wie die Augen der Zeilen.
             let eye = folder != Folder::Drawings
-                && ui
-                    .add_enabled_ui(!read_only, |ui| folder_eye(ui, state, folder, head.rect))
-                    .inner;
+                && folder_eye(ui, state, folder, head.rect, read_only)
+                && !read_only;
             if eye {
                 action = Some(Action::ToggleFolder(folder));
             } else if head.clicked() {
@@ -1360,13 +1365,12 @@ fn origin(ui: &mut egui::Ui, state: &AppState, read_only: bool, action: &mut Opt
         let texts = (tr!("tree-show-item"), tr!("tree-hide-item"));
         let full = resp.rect;
         let key = ("eye-origin", format!("{std:?}"));
-        let eye = ui
-            .add_enabled_ui(!read_only, |ui| {
-                eye_button(ui, full, key, &plane, (!shown, !shown), texts)
-            })
-            .inner;
-        if eye {
+        // Eigener Bereich käme mit Abstand im Layout: gesperrt heißt hier gedämpft und ohne Wirkung.
+        let eye = eye_button(ui, full, key, &plane, (!shown, !shown || read_only), texts);
+        if eye && !read_only {
             *action = Some(Action::ToggleOrigin(std));
+        } else if eye {
+            // Das Auge auf einer alten Version wählt auch nichts.
         } else if picking && resp.clicked() {
             *action = Some(Action::PickStandard(std));
         } else if resp.clicked() {

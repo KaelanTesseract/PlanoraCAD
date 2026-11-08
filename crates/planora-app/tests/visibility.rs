@@ -475,3 +475,47 @@ fn a_click_on_an_origin_row_selects_it() {
     assert_eq!(s.selected_origin_plane(), Some(StandardPlane::XZ));
     assert!(!s.is_origin_plane_shown(StandardPlane::XZ), "wählt nur");
 }
+
+/// Die Augen belegen keinen Platz im Layout: Unter dem Ordnerkopf und zwischen den Zeilen ist
+/// der Abstand gleich (Kurzprüfung: je Ordner waren es 4 Pixel zu viel).
+#[test]
+fn the_eyes_take_no_room_in_the_layout() {
+    let mut s = AppState::new();
+    s.create_box(DVec3::splat(10.0)).unwrap();
+    s.create_cylinder(1.0, 4.0).unwrap();
+    s.tree_folders.set_open(browser::Folder::Origin, true);
+    for read_only in [false, true] {
+        let mut t = Tree::new();
+        for _ in 0..2 {
+            t.time += 0.05;
+            let raw = egui::RawInput {
+                screen_rect: Some(SCREEN),
+                time: Some(t.time),
+                ..Default::default()
+            };
+            let out = t
+                .ctx
+                .run_ui(raw, |ui| browser::show_with(ui, &mut s, read_only));
+            out.drop_without_applying_deltas();
+        }
+        let row = |name: &str| {
+            browser::row_rects(&t.ctx)
+                .into_iter()
+                .find(|(n, _)| n == name)
+                .unwrap_or_else(|| panic!("Zeile {name}"))
+                .1
+        };
+        let folder = |f: browser::Folder| {
+            browser::folder_rects(&t.ctx)
+                .into_iter()
+                .find(|(g, _)| *g == f)
+                .unwrap()
+                .1
+        };
+        let rows = row("Zylinder 1").top() - row("Quader 1").top();
+        let bodies = row("Quader 1").top() - folder(browser::Folder::Bodies).top();
+        assert_eq!(bodies, rows, "unter dem Ordnerkopf");
+        let origin = row("XZ-Ebene").top() - row("XY-Ebene").top();
+        assert_eq!(origin, rows, "zwischen den Grundebenen");
+    }
+}
