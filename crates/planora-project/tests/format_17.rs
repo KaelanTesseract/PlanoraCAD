@@ -253,18 +253,10 @@ fn a_switched_off_handle_needs_no_17_any_more() {
 
 #[test]
 fn arc_handle_roundtrips() {
+    // Skizzen 7: Der Krümmungsgriff kommt jetzt vom Befehl, seine interne Zeile gehört dazu.
     let (sk, c, _, at) = handled_sketch();
     let mut sk = sk;
-    let center = sk.add_point(10.0, 16.0).unwrap();
-    let other = sk.add_point(20.0, 16.0).unwrap();
-    let arc = sk.add_arc(center, at, other).unwrap();
-    sk.set_construction(arc, true).unwrap();
-    let mut d = sk.to_data();
-    let CurveKind::Spline { handles, .. } = &mut d.curves[c.index()].kind else {
-        panic!("kein Spline");
-    };
-    handles[0].curvature = planora_sketch::HandleCurvature::Arc { arc, center, other };
-    let sk = Sketch::from_data(d).unwrap();
+    sk.activate_curvature_handle(c, at).unwrap();
     let text = encode_version(&document(sk.clone()).snapshot()).unwrap();
     assert!(text.contains("\"kruemmung\""), "{text}");
     assert!(text.contains("\"typ\": \"bogen\""), "{text}");
@@ -274,6 +266,32 @@ fn arc_handle_roundtrips() {
         sk.curve(c).unwrap().kind
     );
     assert_eq!(encode_version(&back).unwrap(), text);
+    assert!(text.contains("\"typ\": \"kruemmungs_griff\""), "{text}");
+    assert_eq!(sketch_of(&back).to_data(), sk.to_data());
+}
+
+#[test]
+fn a_deleted_curvature_row_still_needs_17() {
+    // Griff samt Bogen wieder aus: Es bleibt nur der gelöschte Eintrag der internen Zeile.
+    let (mut sk, c, _, at) = handled_sketch();
+    sk.activate_curvature_handle(c, at).unwrap();
+    sk.deactivate_handle(c, at).unwrap();
+    assert!(
+        sk.curve_entries()
+            .all(|k| !matches!(k, CurveKind::Spline { handles, .. } if !handles.is_empty()))
+    );
+    let snap = document(sk).snapshot();
+    assert_eq!(required_format(&snap), 17);
+    let text = encode_version(&snap).unwrap();
+    assert!(text.contains("kruemmungs_griff"));
+    assert_eq!(
+        encode_version(&decode_version(&text, "x.json").unwrap()).unwrap(),
+        text
+    );
+    // Eine ältere Formatangabe passt nicht zu diesem Inhalt.
+    let old = text.replace("\"format\": 17", "\"format\": 16");
+    assert_ne!(old, text);
+    assert!(decode_version(&old, "x.json").is_err());
 }
 
 #[test]

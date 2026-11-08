@@ -8,6 +8,7 @@
 //!
 //! Ohne Griffe läuft nichts von hier: `Spline` mit leerem `handles` nimmt den alten Codeweg.
 
+use crate::constraint::ConstraintKind;
 use crate::curves::{Sampled, V2};
 use crate::dual::Dual;
 use crate::error::SketchError;
@@ -21,6 +22,15 @@ const NURBS_DEGREE: usize = 5;
 
 /// Vielfachheit der inneren Knoten: Die Kurve ist dort C².
 const NURBS_INNER_MULTIPLICITY: usize = 3;
+
+/// Größte Öffnung des Griff-Bogens in Radiant (B2).
+pub(crate) const HANDLE_MAX_OPENING: f64 = 2.5;
+
+/// Unter diesem `|κ|·L` gilt die Krümmung als fast null: Es gibt keinen endlichen Bogen (B5).
+const NEAR_ZERO_CURVATURE: f64 = 1e-3;
+
+/// Startradius bei fast null Krümmung, als Vielfaches der Grifflänge (B5).
+const NEAR_ZERO_RADIUS: f64 = 1000.0;
 
 /// Wert, erste und zweite Ableitung nach `t` je Stützpunkt.
 #[derive(Clone, Debug, PartialEq)]
@@ -344,16 +354,29 @@ pub(crate) fn hermite_eval_dual(nodes: &Nodes<V2>, t: &Dual) -> (V2, V2) {
 }
 
 /// Vorgabe zum Griff `h` am Stützpunkt `index` aus den Lagen `at` und `tip`.
-fn node_handle(index: usize, h: &SplineHandle, at: &V2, tip: &V2) -> NodeHandle {
+fn node_handle(index: usize, at: &V2, tip: &V2, curvature: NodeCurvature) -> NodeHandle {
     NodeHandle {
         index,
         derivative: (3.0 * (&tip.0 - &at.0), 3.0 * (&tip.1 - &at.1)),
-        curvature: match h.curvature {
-            HandleCurvature::Form => NodeCurvature::Form,
-            HandleCurvature::Straight => NodeCurvature::Value(c(0.0)),
-            // Skizzen 7: Der Wert des Krümmungsgriffs kommt mit Task 7.
-            HandleCurvature::Arc { .. } => NodeCurvature::Form,
-        },
+        curvature,
+    }
+}
+
+/// Krümmung des Griffs mit der Bogenmitte `center`: `±1 / r`, positiv, wenn die Mitte links der
+/// Laufrichtung `tip − at` liegt (B2). Mitte auf dem Stützpunkt: keine Krümmung; der Löser lässt so
+/// einen Bogen nicht zu.
+pub(crate) fn handle_kappa(at: &V2, tip: &V2, center: &V2) -> Dual {
+    let (fx, fy) = (&tip.0 - &at.0, &tip.1 - &at.1);
+    let (mx, my) = (&center.0 - &at.0, &center.1 - &at.1);
+    let r = (&mx * &mx + &my * &my).sqrt();
+    if r.v <= f64::MIN_POSITIVE {
+        return c(0.0);
+    }
+    let kappa = c(1.0) / &r;
+    if fx.v * my.v - fy.v * mx.v < 0.0 {
+        -&kappa
+    } else {
+        kappa
     }
 }
 
@@ -369,10 +392,53 @@ pub(crate) fn nodes_of(
         .filter_map(|h| {
             // Einen Griff neben den Stützpunkten lässt das Laden nicht zu.
             let index = points.iter().position(|&p| p == h.at)?;
-            Some(node_handle(index, h, &y[index], &pt(h.tip)))
+            let (at, tip) = (&y[index], pt(h.tip));
+            let curvature = match h.curvature {
+                HandleCurvature::Form => NodeCurvature::Form,
+                HandleCurvature::Straight => NodeCurvature::Value(c(0.0)),
+                HandleCurvature::Arc { center, .. } => {
+                    NodeCurvature::Value(handle_kappa(at, &tip, &pt(center)))
+                }
+            };
+            Some(node_handle(index, at, &tip, curvature))
         })
         .collect();
     hermite_nodes(&y, &inputs)
+}
+
+/// Startlage des Griff-Bogens am Griff `at → tip` für die Krümmung `kappa`.
+struct CurvatureArc {
+    center: DVec2,
+    other: DVec2,
+    /// Liegt die Mitte links der Laufrichtung `tip − at`?
+    left: bool,
+}
+
+impl CurvatureArc {
+    /// `None`, wenn es keinen Griff oder keine Zahl gibt.
+    fn new(at: DVec2, tip: DVec2, kappa: f64) -> Option<CurvatureArc> {
+        let forward = tip - at;
+        let l = forward.length();
+        if !kappa.is_finite() || !l.is_finite() || l <= 0.0 {
+            return None;
+        }
+        let (r, left) = if kappa.abs() * l < NEAR_ZERO_CURVATURE {
+            (NEAR_ZERO_RADIUS * l, true)
+        } else {
+            (1.0 / kappa.abs(), kappa > 0.0)
+        };
+        let side = if left { 1.0 } else { -1.0 };
+        let center = at + forward.perp() / l * (side * r);
+        // Vom Stützpunkt um die Öffnung weiter in Laufrichtung: Links dreht das gegen den
+        // Uhrzeigersinn, rechts mit ihm.
+        let turn = DVec2::from_angle(side * (l / r).min(HANDLE_MAX_OPENING));
+        let other = center + turn.rotate(at - center);
+        Some(CurvatureArc {
+            center,
+            other,
+            left,
+        })
+    }
 }
 
 impl Sketch {
@@ -448,6 +514,89 @@ impl Sketch {
         };
         let line = h.line;
         self.remove_curve(line)
+    }
+
+    /// Schaltet am Stützpunkt `at` des Splines `c` den Krümmungsgriff ein und, falls er fehlt, in
+    /// demselben Schritt den Tangentengriff. Der Bogen übernimmt die aktuelle Krümmung, die Form
+    /// ändert sich nicht (B5). Wo die Krümmung fast null ist, startet er bei `r = 1000·L` links; nur
+    /// dort weicht die Form minimal ab. Liefert den Griff-Bogen. Abgelehnt bleibt die Skizze, wie sie
+    /// ist.
+    pub fn activate_curvature_handle(
+        &mut self,
+        c: CurveId,
+        at: PointId,
+    ) -> Result<CurveId, SketchError> {
+        self.check_curve(c)?;
+        let CurveKind::Spline { points, handles } = &self.curves[c].kind else {
+            return Err(SketchError::WrongType(tr!("sketch-err-handle-kind")));
+        };
+        let Some(index) = points.iter().position(|&p| p == at) else {
+            return Err(SketchError::InvalidInput(tr!("sketch-err-handle-point")));
+        };
+        let existing = handles.iter().find(|h| h.at == at).map(|h| h.curvature);
+        if matches!(existing, Some(HandleCurvature::Arc { .. })) {
+            return Err(SketchError::InvalidInput(tr!("sketch-err-handle-active")));
+        }
+        self.atomically(|s| {
+            if existing.is_none() {
+                s.activate_tangent_handle(c, at)?;
+            }
+            let CurveKind::Spline { points, handles } = &s.curves[c].kind else {
+                unreachable!("checked above");
+            };
+            let Some(tip) = handles.iter().find(|h| h.at == at).map(|h| h.tip) else {
+                unreachable!("the handle exists by now");
+            };
+            let nodes = nodes_of(points, handles, |p| {
+                let q = s.pos(p);
+                (Dual::constant(q.x), Dual::constant(q.y))
+            })
+            .numbers();
+            let (d, a) = (nodes.first[index], nodes.second[index]);
+            let (from, to) = (s.pos(at), s.pos(tip));
+            let layout = CurvatureArc::new(from, to, d.perp_dot(a) / d.length().powi(3))
+                .ok_or_else(|| SketchError::Degenerate(tr!("sketch-err-handle-still")))?;
+            let center = s.add_point(layout.center.x, layout.center.y)?;
+            let other = s.add_point(layout.other.x, layout.other.y)?;
+            // Bögen laufen gegen den Uhrzeigersinn: Links beginnt der Bogen am Stützpunkt, rechts
+            // endet er dort. In beiden Fällen liegt er vor dem Griff (B2).
+            let arc = if layout.left {
+                s.add_arc(center, at, other)?
+            } else {
+                s.add_arc(center, other, at)?
+            };
+            s.curves[arc].construction = true;
+            let mut kind = s.curves[c].kind.clone();
+            if let CurveKind::Spline { handles, .. } = &mut kind
+                && let Some(h) = handles.iter_mut().find(|h| h.at == at)
+            {
+                h.curvature = HandleCurvature::Arc { arc, center, other };
+            }
+            s.set_curve_kind(c, kind);
+            s.push_internal(ConstraintKind::SplineCurvatureHandle(c, at));
+            Ok(arc)
+        })
+    }
+
+    /// Schaltet nur den Krümmungsgriff am Stützpunkt `at` aus; der Tangentengriff bleibt, die Kurve
+    /// springt auf die Form ohne ihn (B8).
+    pub fn deactivate_curvature_handle(
+        &mut self,
+        c: CurveId,
+        at: PointId,
+    ) -> Result<(), SketchError> {
+        self.check_curve(c)?;
+        let CurveKind::Spline { handles, .. } = &self.curves[c].kind else {
+            return Err(SketchError::WrongType(tr!("sketch-err-handle-kind")));
+        };
+        let arc = handles.iter().find_map(|h| match h.curvature {
+            HandleCurvature::Arc { arc, .. } if h.at == at => Some(arc),
+            _ => None,
+        });
+        let Some(arc) = arc else {
+            return Err(SketchError::InvalidInput(tr!("sketch-err-handle-none")));
+        };
+        self.remove_curve(arc)
     }
 
     /// Der Spline als exakte NURBS-Kurve: Grad 5, innere Knoten dreifach, Parameter wie
@@ -573,6 +722,17 @@ impl Sketch {
         let mut kind = self.curves[spline].kind.clone();
         if let CurveKind::Spline { handles, .. } = &mut kind {
             own(&handles[i], whole);
+            // Die Zeilen des Krümmungsgriffs hängen am Spline und gingen sonst nicht mit dem Bogen.
+            let row = ConstraintKind::SplineCurvatureHandle(spline, handles[i].at);
+            let dead: Vec<_> = self
+                .constraints
+                .iter()
+                .filter(|(_, k)| k.alive && k.kind == row)
+                .map(|(id, _)| id)
+                .collect();
+            for id in dead {
+                self.constraints[id].alive = false;
+            }
             if whole {
                 handles.remove(i);
             } else {

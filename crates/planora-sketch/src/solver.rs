@@ -21,7 +21,7 @@
 use crate::constraint::{ConstraintId, ConstraintKind, SHARED_END_TANGENT_DRIFT};
 use crate::error::SketchError;
 use crate::linalg::{Matrix, analyze_rows, cholesky_solve};
-use crate::model::{CurveId, CurveKind, PointId, Sketch};
+use crate::model::{CurveId, CurveKind, HandleCurvature, PointId, Sketch};
 use crate::pattern::{PATTERN_ROUNDS, PatternId};
 use planora_i18n::tr;
 use planora_math::DVec2;
@@ -679,9 +679,19 @@ impl Sketch {
             | CurveKind::EllipticArc { ax, ay, minor, .. } => {
                 !(ok(DVec2::new(x[*ax], x[*ay]).length()) && ok(x[*minor]))
             }
-            CurveKind::Spline { .. }
-            | CurveKind::ControlSpline { .. }
-            | CurveKind::Conic { .. } => false,
+            // Die Seite eines Krümmungsgriffs wechselt nie durch Lösen (B9): Die Lage hinter dem
+            // Stützpunkt erfüllte dieselben Zeilen, wäre aber ein Sprung des Vorzeichens von κ.
+            CurveKind::Spline { handles, .. } => handles.iter().any(|h| {
+                let HandleCurvature::Arc { center, .. } = h.curvature else {
+                    return false;
+                };
+                let side = |v: &[f64]| {
+                    let xy = |p: PointId| DVec2::new(v[self.points[p].x], v[self.points[p].y]);
+                    (xy(h.tip) - xy(h.at)).perp_dot(xy(center) - xy(h.at))
+                };
+                side(&self.vars) * side(x) < 0.0
+            }),
+            CurveKind::ControlSpline { .. } | CurveKind::Conic { .. } => false,
         })
     }
 

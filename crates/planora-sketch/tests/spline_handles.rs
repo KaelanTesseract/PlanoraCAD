@@ -748,17 +748,17 @@ fn a_valid_arc_handle_loads() {
         &mut s,
         &[(0.0, 0.0), (10.0, 6.0), (20.0, -2.0), (30.0, 3.0)],
     );
+    // Skizzen 7: Der Krümmungsgriff kommt jetzt vom Befehl, seine interne Zeile gehört dazu.
     let line = s.activate_tangent_handle(c, pts[1]).unwrap();
     let tip = tip_of(&s, c, pts[1]);
-    let center = s.add_point(10.0, 16.0).unwrap();
-    let other = s.add_point(20.0, 16.0).unwrap();
-    let arc = s.add_arc(center, pts[1], other).unwrap();
-    s.set_construction(arc, true).unwrap();
-    let mut d = s.to_data();
-    let CurveKind::Spline { handles, .. } = &mut d.curves[c.index()].kind else {
+    let arc = s.activate_curvature_handle(c, pts[1]).unwrap();
+    let CurveKind::Spline { handles, .. } = &s.curve(c).unwrap().kind else {
         panic!();
     };
-    handles[0].curvature = HandleCurvature::Arc { arc, center, other };
+    let HandleCurvature::Arc { center, other, .. } = handles[0].curvature else {
+        panic!();
+    };
+    let d = s.to_data();
     let mut back = Sketch::from_data(d.clone()).unwrap();
     assert_eq!(back.to_data().curves, d.curves);
     let kind = back.curve(c).unwrap().kind.clone();

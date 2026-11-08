@@ -1028,6 +1028,7 @@ sketch-constraint-radius = Radius
 sketch-constraint-diameter = Diameter
 sketch-constraint-angle = Angle
 sketch-constraint-arc-radius = Arc radius
+sketch-constraint-curvature-handle = Curvature handle
 sketch-constraint-elliptic-arc-ends = Elliptical arc ends
 sketch-constraint-ellipse-major = Major semi-axis
 sketch-constraint-ellipse-minor = Minor semi-axis

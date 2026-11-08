@@ -1011,6 +1011,7 @@ sketch-constraint-radius = Radius
 sketch-constraint-diameter = Durchmesser
 sketch-constraint-angle = Winkel
 sketch-constraint-arc-radius = Bogenradius
+sketch-constraint-curvature-handle = Krümmungsgriff
 sketch-constraint-elliptic-arc-ends = Ellipsenbogen-Enden
 sketch-constraint-ellipse-major = Große Halbachse
 sketch-constraint-ellipse-minor = Kleine Halbachse

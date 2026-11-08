@@ -937,6 +937,11 @@ pub enum ConstraintKindDto {
         a: usize,
         b: usize,
     },
+    /// Ab Format 17, intern: Krümmungsgriff des Splines `kurve` am Stützpunkt `punkt`.
+    KruemmungsGriff {
+        kurve: usize,
+        punkt: usize,
+    },
     /// Ab Format 15: glatter Übergang, Kurve und ihr Ende, Kurve und ihr Ende.
     Glatt {
         a: usize,

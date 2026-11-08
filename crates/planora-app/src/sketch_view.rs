@@ -209,6 +209,7 @@ pub fn kind_msg(kind: &ConstraintKind) -> crate::msg::Msg {
         K::Diameter(..) => crate::msg!("sketch-constraint-diameter"),
         K::Angle(..) => crate::msg!("sketch-constraint-angle"),
         K::ArcRadius(..) => crate::msg!("sketch-constraint-arc-radius"),
+        K::SplineCurvatureHandle(..) => crate::msg!("sketch-constraint-curvature-handle"),
         K::EllipticArcEnds(..) => crate::msg!("sketch-constraint-elliptic-arc-ends"),
         K::EllipseMajor(..) => crate::msg!("sketch-constraint-ellipse-major"),
         K::EllipseMinor(..) => crate::msg!("sketch-constraint-ellipse-minor"),
@@ -350,7 +351,10 @@ pub fn overlay_text(
 ) -> String {
     use ConstraintKind as K;
     let plain = match kind {
-        K::Coincident(..) | K::ArcRadius(..) | K::EllipticArcEnds(..) => return String::new(),
+        K::Coincident(..)
+        | K::ArcRadius(..)
+        | K::EllipticArcEnds(..)
+        | K::SplineCurvatureHandle(..) => return String::new(),
         K::Horizontal(..) => "H".to_string(),
         K::Vertical(..) => "V".to_string(),
         K::Parallel(..) => parallel_symbol(ctx).to_string(),
@@ -496,6 +500,7 @@ fn anchors(sk: &Sketch, kind: &ConstraintKind) -> Vec<DVec2> {
         K::Radius(c, _)
         | K::Diameter(c, _)
         | K::ArcRadius(c)
+        | K::SplineCurvatureHandle(c, _)
         | K::EllipticArcEnds(c)
         | K::EllipseMajor(c, _)
         | K::EllipseMinor(c, _)

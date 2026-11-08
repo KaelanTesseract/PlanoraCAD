@@ -128,7 +128,10 @@ fn needs_format_17(k: &FeatureKind) -> bool {
         CurveKind::ControlSpline { .. } | CurveKind::Conic { .. } => true,
         CurveKind::Spline { handles, .. } => !handles.is_empty(),
         _ => false,
-    }))
+    }) || sf
+        .sketch
+        .constraint_entries()
+        .any(|c| matches!(c, ConstraintKind::SplineCurvatureHandle(..))))
 }
 /// Braucht die Art Format 16 (Skizzen 6)? Konstruktionsebenen, Skizzen auf ihnen und Schnitt-
 /// oder Silhouettenprojektionen. Kantenprojektionen gibt es schon länger, auch verknüpfte, nicht
@@ -539,6 +542,10 @@ fn constraint_to(k: &ConstraintKind) -> ConstraintKindDto {
             wert: *v,
         },
         K::ArcRadius(k) => D::BogenRadius { kurve: c(k) },
+        K::SplineCurvatureHandle(k, a) => D::KruemmungsGriff {
+            kurve: c(k),
+            punkt: p(a),
+        },
         K::EllipticArcEnds(k) => D::EllipsenbogenEnden { kurve: c(k) },
         K::EllipseMajor(k, v) => D::EllipseGross {
             kurve: c(k),
@@ -619,6 +626,7 @@ fn constraint_from(d: &ConstraintKindDto) -> ConstraintKind {
         D::Durchmesser { kurve, wert } => K::Diameter(c(*kurve), *wert),
         D::Winkel { a, b, wert } => K::Angle(c(*a), c(*b), *wert),
         D::BogenRadius { kurve } => K::ArcRadius(c(*kurve)),
+        D::KruemmungsGriff { kurve, punkt } => K::SplineCurvatureHandle(c(*kurve), p(*punkt)),
         D::EllipsenbogenEnden { kurve } => K::EllipticArcEnds(c(*kurve)),
         D::EllipseGross { kurve, wert } => K::EllipseMajor(c(*kurve), *wert),
         D::EllipseKlein { kurve, wert } => K::EllipseMinor(c(*kurve), *wert),
@@ -2985,7 +2993,11 @@ fn has_format_17_data(k: &KindDto) -> bool {
         CurveKindDto::KontrollSpline { .. } | CurveKindDto::Kegelschnitt { .. } => true,
         CurveKindDto::Spline { griffe, .. } => !griffe.is_empty(),
         _ => false,
-    }))
+    }) || s
+        .skizze
+        .abhaengigkeiten
+        .iter()
+        .any(|c| matches!(c.art, ConstraintKindDto::KruemmungsGriff { .. })))
 }
 
 /// Liest eine Versionsdatei. `origin` ist der Dateiname für Meldungen.

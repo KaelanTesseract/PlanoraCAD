@@ -85,6 +85,11 @@ impl Sketch {
         self.curves.iter().map(|(_, c)| &c.kind)
     }
 
+    /// Arten aller Abhängigkeitseinträge in Arena-Reihenfolge, auch gelöschter und interner.
+    pub fn constraint_entries(&self) -> impl Iterator<Item = &ConstraintKind> {
+        self.constraints.iter().map(|(_, c)| &c.kind)
+    }
+
     pub fn to_data(&self) -> SketchData {
         SketchData {
             name: self.name.clone(),
@@ -345,16 +350,34 @@ impl Sketch {
 /// Spitze kein Stützpunkt, die Griff-Linie eine Konstruktionslinie von `at` nach `tip`, die nur diesem
 /// Griff gehört, der Krümmungsgriff ein Bogen um `center` zwischen `at` und `other`. An einem lebenden
 /// Spline leben Linie und Bogen. Die Punkte hat die Prüfung der Kurven schon gesehen.
+///
+/// Zu jedem Krümmungsgriff eines lebenden Splines gehört genau eine wirksame interne
+/// `SplineCurvatureHandle`-Zeile, und keine lebende Zeile steht ohne ihn; sonst wäre der Bogen frei
+/// oder die Zeile leer.
 fn check_handles(d: &SketchData) -> Result<(), SketchError> {
     let wrong = || bad(tr!("sketch-err-data-handle"));
+    let mut rows: HashSet<(CurveId, PointId)> = HashSet::new();
+    for k in d.constraints.iter().filter(|k| k.alive) {
+        if let ConstraintKind::SplineCurvatureHandle(c, at) = k.kind
+            && (!k.internal || !k.enabled || k.driven || !rows.insert((c, at)))
+        {
+            return Err(wrong());
+        }
+    }
     let mut used: HashSet<CurveId> = HashSet::new();
-    for c in &d.curves {
+    for (index, c) in d.curves.iter().enumerate() {
         let CurveKind::Spline { points, handles } = &c.kind else {
             continue;
         };
         let mut seen: HashSet<PointId> = HashSet::new();
         for h in handles {
             if !points.contains(&h.at) || points.contains(&h.tip) || !seen.insert(h.at) {
+                return Err(wrong());
+            }
+            if c.alive
+                && matches!(h.curvature, HandleCurvature::Arc { .. })
+                && !rows.remove(&(CurveId::from_index(index), h.at))
+            {
                 return Err(wrong());
             }
             let line = d.curves.get(h.line.index()).ok_or_else(wrong)?;
@@ -381,7 +404,12 @@ fn check_handles(d: &SketchData) -> Result<(), SketchError> {
             }
         }
     }
-    Ok(())
+    // Was übrig ist, steht ohne Krümmungsgriff.
+    if rows.is_empty() {
+        Ok(())
+    } else {
+        Err(wrong())
+    }
 }
 
 /// Prüft Punktzahl, Grad und Knoten eines Splines mit Kontrollpunkten: 2 bis

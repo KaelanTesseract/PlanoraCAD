@@ -143,6 +143,7 @@ fn map_ids(
         Diameter(x, v) => Diameter(c(*x), *v),
         Angle(a, b, v) => Angle(c(*a), c(*b), *v),
         ArcRadius(x) => ArcRadius(c(*x)),
+        SplineCurvatureHandle(x, a) => SplineCurvatureHandle(c(*x), p(*a)),
         EllipseMajor(x, v) => EllipseMajor(c(*x), *v),
         EllipseMinor(x, v) => EllipseMinor(c(*x), *v),
         EllipseAngle(x, v) => EllipseAngle(c(*x), *v),
