@@ -17,7 +17,7 @@ use crate::curves::{nurbs_breaks, snap_to_knot};
 use crate::error::SketchError;
 use crate::geom::Geom;
 use crate::intersect::{Prepared, clean_params, intersect_prepared};
-use crate::model::{CurveId, CurveKind, PointId, Sketch, within_coord_range};
+use crate::model::{CurveId, CurveKind, MAX_SPLINE_POINTS, PointId, Sketch, within_coord_range};
 use planora_i18n::tr;
 use planora_math::nurbs::NurbsCurve;
 use planora_math::{DVec2, TAU};
@@ -997,5 +997,174 @@ impl Sketch {
         };
         self.add_constraint(kind)?;
         Ok(())
+    }
+}
+
+/// Zahl der Abhängigkeiten, die nach einer Änderung entfallen sind (Skizzen 7, Task 4).
+pub type SettleReport = usize;
+
+impl Sketch {
+    /// Ändert den Grad eines Splines mit Kontrollpunkten auf 3 oder 5 (Skizzen 7, D3).
+    /// Erhöhen ist exakt: gleiche Form, mehr Kontrollpunkte. Verringern nähert nach kleinsten
+    /// Quadraten mit festen Enden, die Form ändert sich; die Punktzahl sinkt um die Gradstufen
+    /// (mindestens Grad + 1 bleiben). Die vorhandenen Punkte behalten ihre Ids der Reihe nach, der
+    /// letzte bleibt letzter; neue Punkte kommen davor hinzu, überzählige entfallen. Rückgabe: Zahl
+    /// der entfallenen Abhängigkeiten.
+    pub fn set_control_spline_degree(
+        &mut self,
+        c: CurveId,
+        degree: u8,
+    ) -> Result<SettleReport, SketchError> {
+        self.check_curve(c)?;
+        let CurveKind::ControlSpline { points, .. } = self.curves[c].kind.clone() else {
+            return Err(SketchError::WrongType(tr!("sketch-err-control-kind")));
+        };
+        if !matches!(degree, 3 | 5) {
+            return Err(SketchError::InvalidInput(tr!("sketch-err-spline-degree")));
+        }
+        let curve = self
+            .nurbs_of(c)
+            .ok_or_else(|| SketchError::Degenerate(tr!("sketch-err-spline-neighbours")))?;
+        let (old, to) = (curve.degree(), usize::from(degree));
+        if to == old {
+            return Ok(0);
+        }
+        let invalid = |err: planora_math::nurbs::NurbsError| {
+            SketchError::Degenerate(tr!("sketch-err-spline-invalid", detail = err.to_string()))
+        };
+        let n = points.len();
+        let (new_curve, ids) = if to > old {
+            let longer = curve.elevated(to).map_err(invalid)?;
+            let extra = longer.control_points().len() - n;
+            let mut ids: Vec<Option<PointId>> = points[..n - 1].iter().map(|&p| Some(p)).collect();
+            ids.extend(std::iter::repeat_n(None, extra));
+            ids.push(Some(points[n - 1]));
+            (longer, ids)
+        } else {
+            let keep = n - (old - to);
+            let shorter = curve.reduced(to, keep).map_err(invalid)?;
+            let mut ids: Vec<Option<PointId>> =
+                points[..keep - 1].iter().map(|&p| Some(p)).collect();
+            ids.push(Some(points[n - 1]));
+            (shorter, ids)
+        };
+        if new_curve.control_points().len() > MAX_SPLINE_POINTS {
+            return Err(SketchError::InvalidInput(tr!(
+                "sketch-err-spline-count",
+                max = MAX_SPLINE_POINTS.to_string()
+            )));
+        }
+        self.atomically(|s| s.rebuild_control_spline(c, &new_curve, &ids))
+    }
+
+    /// Fügt an der Kurvenstelle, die `at` am nächsten liegt, einen Knoten ein (Skizzen 7, D3): Die
+    /// Form bleibt, ein Kontrollpunkt kommt hinzu, die Nachbarn wandern. Alle vorhandenen Punkte
+    /// behalten ihre Ids und ihre Reihenfolge; der neue sitzt in der Mitte der verschobenen Gruppe.
+    /// Rückgabe: der neue Punkt und die Zahl der entfallenen Abhängigkeiten.
+    pub fn insert_control_point(
+        &mut self,
+        c: CurveId,
+        at: DVec2,
+    ) -> Result<(PointId, SettleReport), SketchError> {
+        self.check_curve(c)?;
+        let CurveKind::ControlSpline { points, .. } = self.curves[c].kind.clone() else {
+            return Err(SketchError::WrongType(tr!("sketch-err-control-kind")));
+        };
+        if !at.is_finite() {
+            return Err(SketchError::InvalidInput(tr!("sketch-err-control-range")));
+        }
+        let n = points.len();
+        if n >= MAX_SPLINE_POINTS {
+            return Err(SketchError::InvalidInput(tr!(
+                "sketch-err-spline-count",
+                max = MAX_SPLINE_POINTS.to_string()
+            )));
+        }
+        let neighbours = || SketchError::Degenerate(tr!("sketch-err-spline-neighbours"));
+        let curve = self.nurbs_of(c).ok_or_else(neighbours)?;
+        let u = self.geom(c).ok_or_else(neighbours)?.nearest(at);
+        let longer = curve.insert_knot(u, 1).map_err(|err| {
+            SketchError::Degenerate(tr!("sketch-err-spline-invalid", detail = err.to_string()))
+        })?;
+        // Verschoben wird die Gruppe der Basisfunktionen über dem Knotenabschnitt; der neue Punkt
+        // kommt in ihre Mitte.
+        let p = curve.degree();
+        let span = curve.knots().find_span(u);
+        let slot = (span + 1 - p + p / 2).clamp(1, n - 1);
+        let mut ids: Vec<Option<PointId>> = points.iter().map(|&q| Some(q)).collect();
+        ids.insert(slot, None);
+        self.atomically(|s| {
+            let dropped = s.rebuild_control_spline(c, &longer, &ids)?;
+            let CurveKind::ControlSpline { points, .. } = &s.curves[c].kind else {
+                unreachable!("just rebuilt");
+            };
+            Ok((points[slot], dropped))
+        })
+    }
+
+    /// Setzt die Kontrollpunkte von `c` auf die der Kurve `new`: `ids[i]` ist der vorhandene Punkt
+    /// für Stelle `i`, `None` ein neuer. Erster und letzter Punkt bleiben stehen; wandert ein Punkt,
+    /// den eine andere Kurve benutzt, ist das ein Fehler (Entscheidung 7: Es bewegt sich nie etwas
+    /// anderes). Danach Regel 7 und das Löschen der verwaisten Punkte.
+    fn rebuild_control_spline(
+        &mut self,
+        c: CurveId,
+        new: &NurbsCurve,
+        ids: &[Option<PointId>],
+    ) -> Result<SettleReport, SketchError> {
+        let CurveKind::ControlSpline { points: old, .. } = self.curves[c].kind.clone() else {
+            unreachable!("checked by the callers");
+        };
+        let control = new.control_points();
+        debug_assert_eq!(control.len(), ids.len());
+        let last = ids.len() - 1;
+        let mut moved = Vec::new();
+        for (i, (id, q)) in ids.iter().zip(control).enumerate() {
+            let xy = q.truncate();
+            if !within_coord_range(xy) {
+                return Err(SketchError::InvalidInput(tr!("sketch-err-control-range")));
+            }
+            if let Some(p) = *id
+                && i != 0
+                && i != last
+                && self.pos(p) != xy
+            {
+                if self
+                    .curves()
+                    .any(|(other, d)| other != c && d.kind.points().contains(&p))
+                {
+                    return Err(SketchError::Degenerate(tr!("sketch-err-control-shared")));
+                }
+                moved.push((p, xy));
+            }
+        }
+        let constraints_before = self.constraints().count();
+        let mut points = Vec::with_capacity(ids.len());
+        for (id, q) in ids.iter().zip(control) {
+            points.push(match id {
+                Some(p) => *p,
+                None => self.add_point(q.x, q.y)?,
+            });
+        }
+        for &(p, xy) in &moved {
+            let (vx, vy) = (self.points[p].x, self.points[p].y);
+            self.vars[vx] = xy.x;
+            self.vars[vy] = xy.y;
+        }
+        self.touch_values();
+        self.set_curve_kind(
+            c,
+            CurveKind::ControlSpline {
+                points: points.clone(),
+                degree: new.degree() as u8,
+                knots: new.knots().knots().to_vec(),
+            },
+        );
+        let touched: Vec<PointId> = moved.iter().map(|m| m.0).collect();
+        self.settle_constraints(&[c], &touched);
+        let gone: Vec<PointId> = old.into_iter().filter(|p| !points.contains(p)).collect();
+        self.drop_orphans(&gone)?;
+        // Abhängigkeiten, die zu gelöschten Punkten gehörten, zählen ebenfalls als entfallen.
+        Ok(constraints_before.saturating_sub(self.constraints().count()))
     }
 }
