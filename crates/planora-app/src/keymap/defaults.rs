@@ -96,6 +96,21 @@ action_table! {
     /// Öffnet das Fenster „Tastenkürzel“ mit aktivem Suchfeld (Fusion „Shortcuts“); wie
     /// „Ansicht → Tastenkürzel …“. In der Skizze gilt [`Action::SketchShowShortcuts`].
     ShowShortcuts, "ansicht.tastenkuerzel", "action-show-shortcuts", Model, [key(Key::S)];
+    // Menü „Konstruieren“ (Skizzen 6): die Fenster der Konstruktionsebenen; ohne Vorgabetaste
+    // wie in Fusion, belegbar.
+    /// Fusion „Versatzebene“.
+    PlaneOffset, "konstruieren.versatzebene", "action-plane-offset", Model, [];
+    /// Fusion „Ebene unter Winkel“.
+    PlaneAngle, "konstruieren.winkelebene", "action-plane-angle", Model, [];
+    /// Fusion „Mittelebene“.
+    PlaneMid, "konstruieren.mittelebene", "action-plane-mid", Model, [];
+    /// Fusion „Ebene durch drei Punkte“.
+    PlaneThreePoints, "konstruieren.drei_punkte", "action-plane-three-points", Model, [];
+    /// Fusion „Tangentialebene“.
+    PlaneTangent, "konstruieren.tangentialebene", "action-plane-tangent", Model, [];
+    /// Fusion „Skizzenebene neu festlegen“ für die gewählte Skizze (sonst ein Hinweis); ohne
+    /// Vorgabetaste wie in Fusion, belegbar.
+    SketchRedefinePlane, "skizze.ebene_neu", "action-sketch-redefine-plane", Model, [];
     // Skizze: nur Werkzeuge, die es gibt (wie der Klick auf den Knopf der Leiste). Die
     // Esc, Enter und Entf der Skizze sind fest (`sketch_view`), nicht in der Tabelle.
     SketchLine, "skizze.linie", "action-sketch-line", Sketch, [key(Key::L)];
@@ -128,6 +143,10 @@ action_table! {
         Sketch, [];
     /// Fusion „Projizieren“.
     SketchProjectEdge, "skizze.projizieren", "action-sketch-project-edge", Sketch, [key(Key::P)];
+    /// Fusion „Schneiden“ (Skizzen 6): ohne Vorgabetaste wie in Fusion, belegbar.
+    SketchIntersect, "skizze.schneiden", "action-sketch-intersect", Sketch, [];
+    /// Fusion „Silhouette“ (Skizzen 6): ohne Vorgabetaste wie in Fusion, belegbar.
+    SketchSilhouette, "skizze.silhouette", "action-sketch-silhouette", Sketch, [];
     /// Fusion „Stutzen“ (T).
     SketchTrim, "skizze.stutzen", "action-sketch-trim", Sketch, [key(Key::T)];
     /// Fusion „Dehnen“: ohne Vorgabetaste wie in Fusion, belegbar.
@@ -174,6 +193,9 @@ action_table! {
     /// Wie der Knopf im Skizzenfeld: schaltet die ausgewählten Linien zwischen Mittellinie und
     /// normal um (ohne Vorgabetaste).
     SketchCenterline, "skizze.mittellinie", "action-sketch-centerline", Sketch, [];
+    /// Fusion „Verknüpfung aufheben“ (Skizzen 6): wie der Knopf im Skizzenfeld, nur mit
+    /// ausgewählten projizierten Kurven; ohne Vorgabetaste wie in Fusion.
+    SketchBreakLink, "skizze.verknuepfung_aufheben", "action-sketch-break-link", Sketch, [];
     // Skizzen 5: wie die Knöpfe im Skizzenfeld, auf die Auswahl; ohne Vorgabetaste wie in Fusion.
     /// Fusion „Konzentrisch“.
     SketchConcentric, "skizze.konzentrisch", "action-sketch-concentric", Sketch, [];
@@ -199,7 +221,9 @@ impl Action {
     /// eigenem Gedächtnis); nicht Datei, Rückgängig, Ansicht, Sichtbarkeit, Löschen, die
     /// Schalter der Zeichnung und das Wiederholen selbst.
     pub fn repeatable(self) -> bool {
-        matches!(self, Action::ExtrudeSketch | Action::Fillet) || self.sketch_tool().is_some()
+        matches!(self, Action::ExtrudeSketch | Action::Fillet)
+            || crate::plane_dialog::PlaneCommand::for_action(self).is_some()
+            || self.sketch_tool().is_some()
     }
 
     /// Das Skizzenwerkzeug, das diese Aktion wählt.

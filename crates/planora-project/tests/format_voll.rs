@@ -222,7 +222,10 @@ fn rich_document() -> Document {
         if let Ok(c) = fs.add_projected_edge(&solid, id)
             && let Ok(e) = EdgeRef::from_edge(&solid, id, &tol)
         {
-            copy = Some(EdgeCopy { curve: c, edge: e });
+            copy = Some(EdgeCopy {
+                curve: c,
+                source: planora_feature::CopySource::Edge(e),
+            });
             break;
         }
     }
@@ -290,4 +293,34 @@ fn the_rich_document_computes_without_errors() {
     for f in rich_document().features() {
         assert_eq!(f.status, FeatureStatus::Ok, "{}", f.name);
     }
+}
+
+/// Skizzen 6: Schnitt- und Silhouettenprojektionen wurden bis Task 7 beim Speichern abgelehnt;
+/// mit Format 16 werden sie geschrieben und gleich wieder gelesen (bewusst umgeschrieben).
+#[test]
+fn section_copies_are_written_with_format_16() {
+    let mut d = rich_document();
+    let id = d
+        .features()
+        .iter()
+        .find(|f| f.name == "Auf Fläche")
+        .unwrap()
+        .id;
+    d.update(id, |k| {
+        if let FeatureKind::Sketch(sf) = k
+            && let CopySource::Edge(e) = sf.copies[0].source.clone()
+        {
+            sf.copies[0].source = CopySource::Section {
+                face: e.a,
+                index: 0,
+            };
+        }
+    })
+    .unwrap();
+    let text = encode_version(&d.snapshot()).unwrap();
+    assert!(text.contains("\"format\": 16"), "{text}");
+    assert_eq!(
+        encode_version(&decode_version(&text, "x.json").unwrap()).unwrap(),
+        text
+    );
 }

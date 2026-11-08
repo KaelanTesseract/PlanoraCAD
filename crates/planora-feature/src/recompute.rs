@@ -73,6 +73,7 @@ impl Document {
                 failed: None,
                 formulas,
                 issue: None,
+                warning: None,
             },
         );
         self.marker += 1;
@@ -217,6 +218,13 @@ impl Document {
             }
             report.computed.push(id);
         }
+        // Warnungen gelten nur für berechnete Features (Ergebnis übernommen oder neu).
+        for f in &mut self.features {
+            f.warning = match (&f.status, &f.result) {
+                (FeatureStatus::Ok, Some(r)) => r.warning.clone(),
+                _ => None,
+            };
+        }
         report
     }
 
@@ -306,6 +314,7 @@ impl Document {
             FeatureKind::Sketch(s) => {
                 matches!(s.plane, SketchPlane::OnFace(_)) || !s.copies.is_empty()
             }
+            FeatureKind::Plane(p) => p.reads_bodies(),
             _ => false,
         }
     }
@@ -333,14 +342,33 @@ impl Document {
         key
     }
 
+    /// Hält ein unterdrücktes, fehlerhaftes oder übersprungenes Eingangsfeature `dep` das
+    /// Feature `kind` an? Bei Skizzen nur die Herkunft der Skizzenebene (Fläche oder
+    /// Konstruktionsebene): Die Herkunft einer Projektion ergibt dann einen verlorenen Bezug
+    /// (Warnung, Spec A4), keinen Stillstand.
+    fn blocks(kind: &FeatureKind, dep: FeatureId) -> bool {
+        match kind {
+            FeatureKind::Sketch(s) => match &s.plane {
+                SketchPlane::Standard(_) => false,
+                SketchPlane::OnFace(r) => FeatureId(r.origin) == dep,
+                SketchPlane::OnPlane(id) => *id == dep,
+            },
+            _ => true,
+        }
+    }
+
     /// Prüft die Eingangsfeatures von `idx` auf Unterdrückung, Fehler und Lage.
     fn blocked_by_dependency(&self, idx: usize) -> Option<Blocked> {
-        for dep in self.features[idx].kind.dependencies() {
+        let kind = &self.features[idx].kind;
+        for dep in kind.dependencies() {
             let Some(di) = self.index_of(dep) else {
                 return Some(Blocked::Error(FeatureError::UnknownFeature));
             };
             if di >= idx {
                 return Some(Blocked::Error(FeatureError::ForwardReference));
+            }
+            if !Self::blocks(kind, dep) {
+                continue;
             }
             let d = &self.features[di];
             if d.suppressed {
@@ -375,6 +403,8 @@ impl Document {
             bodies,
             sketch,
             hints,
+            warning,
+            plane,
         } = computed;
         let f = &mut self.features[idx];
         f.result = Some(FeatureResult {
@@ -382,6 +412,8 @@ impl Document {
             sketch,
             result_version,
             key,
+            warning,
+            plane,
         });
         if let (Some(h), FeatureKind::Sketch(sf)) = (hints, &mut f.kind) {
             sf.plane = h.plane;

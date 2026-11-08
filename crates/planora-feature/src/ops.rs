@@ -6,7 +6,7 @@ use crate::formulas::{
     Formulas, check_keys, drop_overwritten_dims, evaluate, field_keys, prune_sketch, same_fields,
     same_values,
 };
-use crate::model::{Document, FeatureId, FeatureKind, FeatureStatus};
+use crate::model::{Document, FeatureId, FeatureKind, FeatureStatus, SketchPlane};
 use crate::recompute::RecomputeReport;
 use planora_i18n::tr;
 use planora_kernel::Kernel;
@@ -87,6 +87,50 @@ impl Document {
         feature.version = version;
         self.edits += 1;
         Ok(self.recompute())
+    }
+
+    /// „Skizzenebene neu festlegen“ (Skizzen 6, wie Fusion): Legt die Skizze `sketch` auf die
+    /// Ebene `plane`. Die 2D-Geometrie bleibt in Skizzenkoordinaten gleich, nur das
+    /// Koordinatensystem wechselt; Projektionen werden bei der Neuberechnung neu projiziert.
+    /// Genau eine Änderung (ein Rückgängig-Schritt); eine gleiche Ebene ändert nichts.
+    ///
+    /// Die neue Ebene darf nur auf Features **vor** der Skizze verweisen, sonst
+    /// [`FeatureError::ForwardReference`]. Das schließt auch Schleifen aus: Ein Feature, das von
+    /// der Skizze abhängt (etwa ihre Extrusion), steht immer hinter ihr. Eine
+    /// Konstruktionsebene muss ein Feature „Ebene“ sein. Bei einem Fehler bleibt das Dokument
+    /// unverändert.
+    pub fn set_sketch_plane(
+        &mut self,
+        sketch: FeatureId,
+        plane: SketchPlane,
+    ) -> Result<(), FeatureError> {
+        let idx = self.index_of(sketch).ok_or(FeatureError::UnknownFeature)?;
+        let f = &self.features[idx];
+        let FeatureKind::Sketch(sf) = &f.kind else {
+            return Err(FeatureError::InvalidInput(tr!(
+                "feature-not-sketch",
+                name = f.name.clone()
+            )));
+        };
+        if sf.plane == plane {
+            return Ok(());
+        }
+        if let SketchPlane::OnPlane(id) = &plane
+            && let Some(p) = self.feature(*id)
+            && !matches!(p.kind, FeatureKind::Plane(_))
+        {
+            return Err(FeatureError::InvalidInput(tr!(
+                "feature-plane-not-plane",
+                name = p.name.clone()
+            )));
+        }
+        let mut sf = sf.clone();
+        sf.plane = plane;
+        let kind = FeatureKind::Sketch(sf);
+        self.check_references(&kind, idx)?;
+        // Die Formeln der Skizzenmaße stehen in der Art; Feldformeln bleiben wie sie sind.
+        let formulas = self.features[idx].formulas.clone();
+        self.commit_update(idx, kind, formulas).map(|_| ())
     }
 
     /// Wie [`Document::update_with_report`], ohne den Bericht.

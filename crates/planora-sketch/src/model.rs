@@ -406,6 +406,23 @@ impl Sketch {
         start: PointId,
         end: PointId,
     ) -> Result<CurveId, SketchError> {
+        self.check_elliptic_arc(center, major, minor, start, end)?;
+        self.with_internal_checked(|s| {
+            let (ax, ay, mi) = (s.new_var(major.x), s.new_var(major.y), s.new_var(minor));
+            s.add_elliptic_arc_vars(center, ax, ay, mi, start, end)
+        })
+    }
+
+    /// Prüfungen von [`Sketch::add_elliptic_arc`]: lebende Punkte, Halbachsen wie bei
+    /// [`Sketch::add_ellipse`], beide Enden nicht in der Mitte.
+    pub(crate) fn check_elliptic_arc(
+        &self,
+        center: PointId,
+        major: DVec2,
+        minor: f64,
+        start: PointId,
+        end: PointId,
+    ) -> Result<(), SketchError> {
         self.check_point(center)?;
         self.check_point(start)?;
         self.check_point(end)?;
@@ -416,10 +433,7 @@ impl Sketch {
         {
             return Err(SketchError::Degenerate(tr!("sketch-err-arc-center")));
         }
-        self.with_internal_checked(|s| {
-            let (ax, ay, mi) = (s.new_var(major.x), s.new_var(major.y), s.new_var(minor));
-            s.add_elliptic_arc_vars(center, ax, ay, mi, start, end)
-        })
+        Ok(())
     }
 
     /// Ellipsenbogen auf vorhandenen Variablen (etwa geteilt mit der Ellipse, aus der er

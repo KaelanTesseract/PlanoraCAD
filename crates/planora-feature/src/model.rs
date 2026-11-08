@@ -67,18 +67,55 @@ impl StandardPlane {
     }
 }
 
-/// Ebene einer Skizze: eine Grundebene oder eine ebene Fläche eines vorhergehenden Features.
+/// Ebene einer Skizze: eine Grundebene, eine ebene Fläche eines vorhergehenden Features oder
+/// eine vorhergehende Konstruktionsebene (Skizzen 6).
 #[derive(Clone, Debug, PartialEq)]
 pub enum SketchPlane {
     Standard(StandardPlane),
     OnFace(FaceRef),
+    OnPlane(FeatureId),
 }
 
-/// In die Skizze kopierte Körperkante: die Skizzenkurve und der Verweis auf die Kante.
+/// Herkunft einer projizierten Skizzenkurve: eine Körperkante, das `index`-te Stück des Schnitts
+/// der Skizzenebene mit einer Fläche oder das `index`-te Stück des Umrisses einer Fläche (je in
+/// der Reihenfolge des Kernels, siehe [`planora_kernel::section_by_plane`] und
+/// [`planora_kernel::silhouette`]).
+#[derive(Clone, Debug, PartialEq)]
+pub enum CopySource {
+    Edge(EdgeRef),
+    Section { face: FaceRef, index: usize },
+    Silhouette { face: FaceRef, index: usize },
+}
+
+impl CopySource {
+    /// Features, aus denen die Herkunft stammt (Marken der Flächen).
+    pub fn origins(&self) -> Vec<FeatureId> {
+        match self {
+            CopySource::Edge(e) => vec![FeatureId(e.a.origin), FeatureId(e.b.origin)],
+            CopySource::Section { face, .. } | CopySource::Silhouette { face, .. } => {
+                vec![FeatureId(face.origin)]
+            }
+        }
+    }
+}
+
+/// Projizierte Skizzenkurve mit ihrer Herkunft; die Kurve folgt ihr bei jeder Neuberechnung.
+/// Geht der Bezug verloren, bleibt die Kurve wie gespeichert, und das Skizzen-Feature bekommt
+/// eine Warnung (Skizzen 6, wie Fusion).
 #[derive(Clone, Debug, PartialEq)]
 pub struct EdgeCopy {
     pub curve: CurveId,
-    pub edge: EdgeRef,
+    pub source: CopySource,
+}
+
+impl EdgeCopy {
+    /// Die Kante, wenn die Herkunft eine Kante ist.
+    pub fn edge(&self) -> Option<&EdgeRef> {
+        match &self.source {
+            CopySource::Edge(e) => Some(e),
+            CopySource::Section { .. } | CopySource::Silhouette { .. } => None,
+        }
+    }
 }
 
 /// Formeln der Skizzenmaße: Abhängigkeit → Formeltext (Nebentabelle, Spec §4a.1). Der Wert in
@@ -108,6 +145,23 @@ impl SketchFeature {
                 .is_some_and(|c| c.kind.is_dimension() && !c.driven)
         });
         self.formulas.len() != before
+    }
+
+    /// Löst die Verknüpfung der projizierten Kurve `curve` mit ihrer Herkunft: Die Kurve folgt
+    /// dem Körper nicht mehr, ihre `Fixed`-Werte bleiben. `true`, wenn es einen Eintrag gab.
+    pub fn break_link(&mut self, curve: CurveId) -> bool {
+        let before = self.copies.len();
+        self.copies.retain(|c| c.curve != curve);
+        self.copies.len() != before
+    }
+
+    /// Entfernt Projektionen, deren Kurve in der Skizze nicht mehr lebt; `true`, wenn sich
+    /// etwas änderte.
+    pub fn prune_copies(&mut self) -> bool {
+        let before = self.copies.len();
+        let sketch = &self.sketch;
+        self.copies.retain(|c| sketch.curve(c.curve).is_some());
+        self.copies.len() != before
     }
 }
 
@@ -289,6 +343,8 @@ pub enum FeatureKind {
     StepBody {
         shape: StepShapeId,
     },
+    /// Konstruktionsebene (Skizzen 6): erzeugt keinen Körper, nur ein Koordinatensystem.
+    Plane(crate::planes::PlaneFeature),
 }
 
 impl FeatureKind {
@@ -307,6 +363,7 @@ impl FeatureKind {
             FeatureKind::Verrunden { art, .. } => art.label(),
             FeatureKind::MeshBody { .. } => tr!("feature-label-mesh"),
             FeatureKind::StepBody { .. } => tr!("feature-label-step"),
+            FeatureKind::Plane(_) => tr!("feature-label-plane"),
         }
     }
 
@@ -315,12 +372,13 @@ impl FeatureKind {
         let mut deps = match self {
             FeatureKind::Sketch(s) => {
                 let mut d = Vec::new();
-                if let SketchPlane::OnFace(r) = &s.plane {
-                    d.push(FeatureId(r.origin));
+                match &s.plane {
+                    SketchPlane::Standard(_) => {}
+                    SketchPlane::OnFace(r) => d.push(FeatureId(r.origin)),
+                    SketchPlane::OnPlane(id) => d.push(*id),
                 }
                 for c in &s.copies {
-                    d.push(FeatureId(c.edge.a.origin));
-                    d.push(FeatureId(c.edge.b.origin));
+                    d.extend(c.source.origins());
                 }
                 d
             }
@@ -343,6 +401,7 @@ impl FeatureKind {
                 }
                 d
             }
+            FeatureKind::Plane(p) => p.dependencies(),
         };
         deps.sort();
         deps.dedup();
@@ -364,7 +423,8 @@ impl FeatureKind {
             | FeatureKind::Extrude { .. }
             | FeatureKind::Revolve { .. }
             | FeatureKind::MeshBody { .. }
-            | FeatureKind::StepBody { .. } => Vec::new(),
+            | FeatureKind::StepBody { .. }
+            | FeatureKind::Plane(_) => Vec::new(),
         }
     }
 
@@ -405,6 +465,10 @@ pub(crate) struct FeatureResult {
     pub(crate) result_version: u64,
     /// Schlüssel der Eingaben (eigene Version und Ergebnisstände der Abhängigkeiten).
     pub(crate) key: Vec<u64>,
+    /// Warnung der Berechnung (siehe [`Feature::warning`]).
+    pub(crate) warning: Option<String>,
+    /// Koordinatensystem einer Konstruktionsebene (siehe [`Document::plane_frame`]).
+    pub(crate) plane: Option<Frame>,
 }
 
 #[derive(Clone, Debug)]
@@ -426,12 +490,21 @@ pub struct Feature {
     pub(crate) formulas: crate::formulas::Formulas,
     /// Erster Formelfehler nach dem letzten Auswertungsdurchgang; ergibt den Status `Error`.
     pub(crate) issue: Option<crate::formulas::FormulaIssue>,
+    /// Warnung der letzten Berechnung bei Status `Ok` (etwa verlorene Bezüge projizierter
+    /// Skizzenkurven); wird nur gerechnet, nicht gespeichert und zählt nicht zum Stand.
+    pub(crate) warning: Option<String>,
 }
 
 impl Feature {
     /// Die Formeln der Zahlenfelder (Feld → Formeltext).
     pub fn formulas(&self) -> &crate::formulas::Formulas {
         &self.formulas
+    }
+
+    /// Warnung der letzten Berechnung (nur bei Status `Ok`), etwa verlorene Bezüge projizierter
+    /// Skizzenkurven.
+    pub fn warning(&self) -> Option<&str> {
+        self.warning.as_deref()
     }
 
     /// Stand der Parameter (und der Unterdrückung); ändert sich bei jeder solchen Änderung.
@@ -481,6 +554,8 @@ pub struct Document {
     /// Eigene Texte der Stücklistenzeilen, nach Körperkennung (Teilprojekt 3c-2); zählt wie die
     /// Zeichnungen zu [`Document::edit_count`], nicht zu [`Document::model_edit_count`].
     pub(crate) parts_overrides: BTreeMap<planora_drawing::BodyKey, planora_drawing::RowOverride>,
+    /// Was im Browser ausgeblendet ist (zählt nicht zum Modell).
+    pub(crate) visibility: crate::visibility::Visibility,
     /// Parametertabelle (Tabellenreihenfolge); zählt zum Modell.
     pub(crate) parameters: Vec<crate::params::Parameter>,
     /// Berechnete Werte, je Zeile von `parameters` einer.
@@ -530,6 +605,7 @@ impl Document {
             drawing_edits: 0,
             project_info: None,
             parts_overrides: BTreeMap::new(),
+            visibility: crate::visibility::Visibility::default(),
             parameters: Vec::new(),
             param_values: Vec::new(),
             next_param: 1,

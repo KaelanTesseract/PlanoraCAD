@@ -280,6 +280,8 @@ fn only_shapes_with_kinds_have_a_triangle() {
                 | Tool::Slot
                 | Tool::Pattern
                 | Tool::Fillet
+                // Skizzen 6: Klappmenü „Projizieren/Einschließen“.
+                | Tool::ProjectEdge
         );
         assert_eq!(sketch_panel::has_flyout(tool), expected, "{tool:?}");
     }
@@ -687,7 +689,9 @@ fn the_create_menu_lists_all_kinds_while_a_sketch_is_open() {
         assert_eq!(rig.se().kind_of(tool), Some(*last), "wie in der Liste");
         assert!(!shot.has(&last.label()), "Menü zu");
     }
-    assert_eq!(count, 19);
+    // Skizzen 6: „Projizieren/Einschließen“ mit „Projizieren“ (19 → 20); Task 10 bewusst
+    // angepasst: dazu „Schneiden“ und „Silhouette“ (→ 22).
+    assert_eq!(count, 22);
 }
 
 /// Hat die Schrift in ihrer Zeichentabelle einen Eintrag für `c`? (Wie in tests/icons.rs.)
@@ -726,10 +730,10 @@ fn the_submenu_arrows_of_the_create_menu_use_a_glyph_the_fonts_have() {
     let menu = shot.find("Erzeugen").rect.center();
     let shot = rig.click(menu);
     assert_no_missing_glyphs(&shot, "Menü Erzeugen");
-    // Alle fünf Untermenüs mit Pfeil stehen im offenen Menü.
+    // Alle sechs Untermenüs mit Pfeil stehen im offenen Menü (Skizzen 6: „Projizieren/Einschließen“).
     let arrow = planora_app::icons::glyph(planora_app::icons::Icon::PathSeparator).to_string();
     let arrows = shot.texts.iter().filter(|t| t.text == arrow).count();
-    assert_eq!(arrows, 5, "ein Pfeil je Untermenü");
+    assert_eq!(arrows, 6, "ein Pfeil je Untermenü");
     // Auch mit offenem Untermenü.
     let sub = shot
         .texts

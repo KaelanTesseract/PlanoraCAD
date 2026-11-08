@@ -1,7 +1,7 @@
 use crate::camera::OrbitCamera;
 use glam::{Vec2, Vec3};
 use planora_kernel::{Edge, Face, Id};
-use planora_math::DVec3;
+use planora_math::{DVec2, DVec3, Frame};
 use planora_mesh::Mesh;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -156,4 +156,102 @@ pub fn pick_edge(
         }
     }
     best
+}
+
+/// Strahl in Weltkoordinaten; `dir` muss nicht normiert sein (Abstände gelten in Vielfachen von
+/// `dir`, bei normiertem `dir` also in mm wie [`FaceHit::distance`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ray {
+    pub origin: DVec3,
+    pub dir: DVec3,
+}
+
+/// Rechteck einer Konstruktionsebene (Skizzen 6): Mitte `frame.origin`, Kanten entlang
+/// `frame.x` und `frame.y`, halbe Kantenlängen `half`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlaneRect {
+    pub frame: Frame,
+    pub half: DVec2,
+}
+
+impl PlaneRect {
+    /// Die vier Ecken in Weltkoordinaten, gegen den Uhrzeigersinn um `frame.z`.
+    pub fn corners(&self) -> [DVec3; 4] {
+        let (hx, hy) = (self.half.x, self.half.y);
+        [
+            self.frame.point(-hx, -hy, 0.0),
+            self.frame.point(hx, -hy, 0.0),
+            self.frame.point(hx, hy, 0.0),
+            self.frame.point(-hx, hy, 0.0),
+        ]
+    }
+}
+
+/// Trifft der Strahl das Rechteck (beidseitig)? Liefert die Strahllänge bis zum Treffer; parallel
+/// zur Ebene, hinter dem Ursprung oder außerhalb des Rechtecks `None`.
+pub fn pick_plane(ray: &Ray, rect: &PlaneRect) -> Option<f64> {
+    let n = rect.frame.z;
+    let denom = ray.dir.dot(n);
+    if !denom.is_finite() || denom.abs() < 1e-12 {
+        return None;
+    }
+    let t = (rect.frame.origin - ray.origin).dot(n) / denom;
+    if !(t.is_finite() && t > 1e-9) {
+        return None;
+    }
+    let local = rect.frame.to_local(ray.origin + ray.dir * t);
+    (local.x.abs() <= rect.half.x && local.y.abs() <= rect.half.y).then_some(t)
+}
+
+/// Eckpunkt (Anfang oder Ende einer Kante) nächst der Mausposition, höchstens `max_px` entfernt,
+/// unter den Netzen `meshes` (je mit dem Index ihres Körpers). Liefert Körper, Kante und
+/// `end` (`false` = Anfang). `occluder` wie bei [`pick_edge`]: Weiter entfernte Ecken gelten als
+/// verdeckt und zählen nicht.
+pub fn pick_vertex(
+    meshes: &[(usize, &Mesh)],
+    camera: &OrbitCamera,
+    viewport: Vec2,
+    cursor: Vec2,
+    max_px: f32,
+    occluder: Option<f32>,
+) -> Option<(usize, Id<Edge>, bool)> {
+    if !(viewport.x >= 1.0 && viewport.y >= 1.0 && viewport.is_finite() && cursor.is_finite()) {
+        return None;
+    }
+    let ndc = Vec2::new(
+        2.0 * cursor.x / viewport.x - 1.0,
+        1.0 - 2.0 * cursor.y / viewport.y,
+    );
+    let (ray_origin, ray_dir) = camera.ray(ndc);
+    // Bester Treffer: Körper, Kante, Ende und Abstand in Pixeln.
+    let mut best: Option<(usize, Id<Edge>, bool, f32)> = None;
+    for &(body, mesh) in meshes {
+        for line in &mesh.edge_lines {
+            let (Some(first), Some(last)) = (line.points.first(), line.points.last()) else {
+                continue;
+            };
+            for (end, p) in [(false, *first), (true, *last)] {
+                let world = to_vec3(p);
+                let Some(at) = camera.project(world, viewport) else {
+                    continue;
+                };
+                let dist = (cursor - at).length();
+                if dist.is_nan() || dist > max_px || best.is_some_and(|b| dist >= b.3) {
+                    continue;
+                }
+                if let Some(od) = occluder {
+                    // Gleiche Toleranz wie bei `pick_edge`: Der Zeiger darf bis `max_px` neben
+                    // der Ecke liegen, der Strahl trifft dann eine Fläche etwas davor oder dahinter.
+                    let along = (world - ray_origin).dot(ray_dir);
+                    let pixel_world = 2.0 * od * (camera.fov_y * 0.5).tan() / viewport.y;
+                    let tolerance = 1.0e-3 * od + 2.0 * max_px * pixel_world + 0.01;
+                    if along > od + tolerance {
+                        continue;
+                    }
+                }
+                best = Some((body, line.edge, end, dist));
+            }
+        }
+    }
+    best.map(|(body, edge, end, _)| (body, edge, end))
 }

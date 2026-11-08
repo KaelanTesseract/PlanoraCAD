@@ -158,6 +158,8 @@ enum Action {
     Rename(FeatureId),
     ToggleSuppress(FeatureId),
     Delete(FeatureId),
+    /// „Skizzenebene neu festlegen“ (nur bei Skizzen).
+    RedefinePlane(FeatureId),
 }
 
 /// Stand der Leiste für den gewählten Körper.
@@ -534,12 +536,18 @@ fn step_button(
             ink = ink.gamma_multiply(theme::DISABLED_ALPHA);
         }
         icons::paint_feature_icon(painter, rect.shrink(STEP_PAD), v.icon, ink);
-        if matches!(v.state, StepState::Error(_)) {
+        // Fehler rot, Warnung gelb (Skizzen 6), je mit Warnzeichen in der Ecke.
+        let badge = match v.state {
+            StepState::Error(_) => Some(p.error),
+            StepState::Warning(_) => Some(p.warning),
+            StepState::Active | StepState::Inactive => None,
+        };
+        if let Some(badge) = badge {
             let warn = Rect::from_min_size(
                 pos2(rect.right() - WARN_SIZE, rect.top()),
                 vec2(WARN_SIZE, WARN_SIZE),
             );
-            icons::paint_source(painter, warn, IconSource::Font(Icon::Warning), p.error);
+            icons::paint_source(painter, warn, IconSource::Font(Icon::Warning), badge);
         }
     }
     theme::focus_ring(ui, &response);
@@ -553,6 +561,9 @@ fn step_button(
         match &v.state {
             StepState::Error(e) => {
                 ui.colored_label(p.error, e);
+            }
+            StepState::Warning(w) => {
+                ui.colored_label(p.warning, w);
             }
             StepState::Inactive => {
                 ui.label(egui::RichText::new(tr!("history-rolled-back")).color(p.text_secondary));
@@ -571,6 +582,10 @@ fn step_button(
 /// (die Befehle, die früher die Schrittzeilen im Feature-Baum hatten).
 fn step_menu(r: &egui::Response, state: &AppState, id: FeatureId, action: &mut Option<Action>) {
     let suppressed = state.document.feature(id).is_some_and(|f| f.suppressed);
+    let sketch = state
+        .document
+        .feature(id)
+        .is_some_and(|f| matches!(f.kind, FeatureKind::Sketch(_)));
     r.context_menu(|ui| {
         let mut pick = |a: Action, ui: &mut egui::Ui| {
             *action = Some(a);
@@ -589,6 +604,9 @@ fn step_menu(r: &egui::Response, state: &AppState, id: FeatureId, action: &mut O
         };
         if ui.button(&toggle).clicked() {
             pick(Action::ToggleSuppress(id), ui);
+        }
+        if sketch && ui.button(tr!("tree-redefine-plane")).clicked() {
+            pick(Action::RedefinePlane(id), ui);
         }
         ui.separator();
         if ui.button(tr!("history-delete")).clicked() {
@@ -803,6 +821,10 @@ fn run(ctx: &egui::Context, state: &mut AppState, bar: &Bar, action: Action) {
         Action::Delete(id) => {
             stop_playing(ctx);
             browser::request_delete(state, id);
+        }
+        Action::RedefinePlane(id) => {
+            stop_playing(ctx);
+            let _ = state.start_redefine_sketch_plane(id);
         }
     }
 }

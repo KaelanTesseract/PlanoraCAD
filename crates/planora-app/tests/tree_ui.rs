@@ -437,7 +437,7 @@ fn a_stale_delete_confirmation_is_refreshed_instead_of_deleting() {
     for (e, _) in solid.edges.iter() {
         if s.project_edge_into_sketch(0, e).is_ok() {
             let c = s.sketch_draft.as_ref().unwrap().copies.last().unwrap();
-            if c.edge.a.origin == x.0 || c.edge.b.origin == x.0 {
+            if c.source.origins().contains(&x) {
                 copied = true;
                 break;
             }

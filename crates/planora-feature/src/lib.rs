@@ -14,11 +14,13 @@ mod ops;
 pub mod params;
 mod parts;
 mod parts_sheets;
+pub mod planes;
 pub mod recompute;
 pub mod refs;
 mod rollback;
 mod snapshot;
 mod step_bodies;
+mod visibility;
 
 pub use compute::MAX_COORD_MM;
 pub use dimensions::{
@@ -43,10 +45,10 @@ pub use georef::{
 };
 pub use meshes::VisibleMesh;
 pub use model::{
-    BlendArt, BodyRef, Document, EdgeCopy, Feature, FeatureId, FeatureKind, FeatureStatus,
-    MAX_CHAMFER_ANGLE_DEG, MAX_MESH_SCALE, MIN_CHAMFER_ANGLE_DEG, MIN_MESH_SCALE, MeshId,
-    ProfileSel, ROTATION_NORM_TOL, SketchFeature, SketchFormulas, SketchPlane, StandardPlane,
-    mesh_locked,
+    BlendArt, BodyRef, CopySource, Document, EdgeCopy, Feature, FeatureId, FeatureKind,
+    FeatureStatus, MAX_CHAMFER_ANGLE_DEG, MAX_MESH_SCALE, MIN_CHAMFER_ANGLE_DEG, MIN_MESH_SCALE,
+    MeshId, ProfileSel, ROTATION_NORM_TOL, SketchFeature, SketchFormulas, SketchPlane,
+    StandardPlane, mesh_locked,
 };
 pub use params::{ParamEdit, ParamId, ParamScope, Parameter};
 pub use parts_sheets::{
@@ -64,3 +66,4 @@ pub use step_bodies::{
     limit_step_text_sum_for_tests, step_builds, step_text_megabytes, step_text_sum,
     step_text_sum_limit,
 };
+pub use visibility::{HiddenFolders, Visibility};

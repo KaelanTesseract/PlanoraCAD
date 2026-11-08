@@ -16,6 +16,7 @@
 use crate::app::{self, CreateKind, MenuRequest};
 use crate::create_dialog::CreateDialog;
 use crate::keymap::{Action, Area};
+use crate::plane_dialog::PlaneCommand;
 use crate::state::AppState;
 use crate::workspace::{DocTab, Workspace};
 use planora_feature::{FeatureId, FeatureKind};
@@ -26,6 +27,10 @@ pub fn need_sketch() -> String {
     tr!("cmd-need-sketch")
 }
 /// Hinweis, wenn „Sichtbarkeit umschalten“ keinen gewählten Körper findet.
+/// Hinweis, wenn „Sichtbarkeit umschalten“ (V) nichts Gewähltes findet.
+pub fn need_visible() -> String {
+    tr!("cmd-need-visible")
+}
 pub fn need_body() -> String {
     tr!("cmd-need-body")
 }
@@ -183,6 +188,30 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                 }
             }
         }
+        Action::PlaneOffset
+        | Action::PlaneAngle
+        | Action::PlaneMid
+        | Action::PlaneThreePoints
+        | Action::PlaneTangent => {
+            if let Some(cmd) = PlaneCommand::for_action(a) {
+                app::open_plane(ws, cmd);
+                track(ws, a);
+            }
+        }
+        Action::SketchRedefinePlane => {
+            let state = &mut ws.active_tab_mut().state;
+            let sketch = state
+                .selected_feature
+                .filter(|id| state.document.sketch_of(*id).is_some());
+            match sketch {
+                Some(id) => {
+                    if state.start_redefine_sketch_plane(id).is_ok() {
+                        ws.active_tab_mut().exclude_pick_modes();
+                    }
+                }
+                None => hint(state, &tr!("cmd-need-any-sketch")),
+            }
+        }
         Action::ToggleVisibility => toggle_visibility(&mut ws.active_tab_mut().state),
         Action::DeleteSelection => delete_selection(&mut ws.active_tab_mut().state),
         Action::RepeatLast => {
@@ -214,7 +243,12 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
         | Action::SketchChamferDistanceAngle
         | Action::SketchChamferTwoDistances
         | Action::SketchPatternRect
-        | Action::SketchPatternCircular => {
+        | Action::SketchPatternCircular
+        // Skizzen 6: P wählt immer die Art „Projizieren“, auch wenn zuletzt „Schneiden“ oder
+        // „Silhouette“ im Klappmenü gewählt war.
+        | Action::SketchProjectEdge
+        | Action::SketchIntersect
+        | Action::SketchSilhouette => {
             if let Some(kind) = a.sketch_kind()
                 && let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut()
             {
@@ -222,7 +256,6 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
             }
         }
         Action::SketchLine
-        | Action::SketchProjectEdge
         | Action::SketchTrim
         | Action::SketchExtend
         | Action::SketchBreak
@@ -256,6 +289,15 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
         Action::SketchCenterline => {
             if let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut() {
                 se.toggle_centerline_if_possible(sk);
+            }
+        }
+        Action::SketchBreakLink => {
+            // Wie der Knopf: alle gewählten Projektionen in einem Schritt; ohne passende
+            // Auswahl nichts (wie „Konstruktion umschalten“).
+            let state = &mut ws.active_tab_mut().state;
+            let curves = state.selected_projections();
+            if !curves.is_empty() {
+                let _ = state.break_projection_links(&curves);
             }
         }
         Action::SketchConcentric | Action::SketchCollinear | Action::SketchSmooth => {
@@ -312,13 +354,10 @@ fn hint(state: &mut AppState, text: &str) {
 }
 
 /// Das Auge des gewählten Körpers ([`AppState::chosen_body`]), wie im Feature-Baum.
+/// Taste V: die gewählte Skizze oder Konstruktionsebene, sonst der gewählte Körper.
 fn toggle_visibility(state: &mut AppState) {
-    match state.chosen_body() {
-        Some(j) => {
-            let hidden = state.is_body_hidden(j);
-            state.set_body_hidden(j, !hidden);
-        }
-        None => hint(state, &need_body()),
+    if !state.toggle_selected_visibility() {
+        hint(state, &need_visible());
     }
 }
 
@@ -344,7 +383,11 @@ fn window_open(tab: &DocTab, a: Action) -> bool {
     match a {
         Action::ExtrudeSketch => matches!(tab.dialog, Some(CreateDialog::ExtrudeSketch { .. })),
         Action::Fillet => tab.blend_dialog.is_some(),
-        _ => false,
+        _ => PlaneCommand::for_action(a).is_some_and(|c| {
+            tab.plane_dialog
+                .as_ref()
+                .is_some_and(|d| d.command() == c && d.editing().is_none())
+        }),
     }
 }
 
@@ -353,7 +396,12 @@ fn made_by(a: Action, kind: &FeatureKind) -> bool {
     match a {
         Action::ExtrudeSketch => matches!(kind, FeatureKind::Extrude { .. }),
         Action::Fillet => matches!(kind, FeatureKind::Verrunden { .. }),
-        _ => false,
+        _ => match kind {
+            FeatureKind::Plane(pf) => {
+                PlaneCommand::for_action(a) == Some(PlaneCommand::of(&pf.def))
+            }
+            _ => false,
+        },
     }
 }
 

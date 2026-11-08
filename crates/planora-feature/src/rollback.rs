@@ -8,9 +8,9 @@ use crate::recompute::RecomputeReport;
 use planora_i18n::tr;
 use std::collections::HashSet;
 
-/// Erzeugt die Art einen Körper (Skizzen nicht)?
+/// Erzeugt die Art einen Körper (Skizzen und Konstruktionsebenen nicht)?
 fn produces_body(kind: &FeatureKind) -> bool {
-    !matches!(kind, FeatureKind::Sketch(_))
+    !matches!(kind, FeatureKind::Sketch(_) | FeatureKind::Plane(_))
 }
 
 impl Document {

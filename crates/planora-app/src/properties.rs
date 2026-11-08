@@ -115,6 +115,8 @@ pub fn show_content(ui: &mut egui::Ui, state: &mut AppState) {
         .filter(|id| state.document.feature(*id).is_some())
     {
         feature(ui, state, id);
+    } else if let Some(p) = state.selected_origin_plane() {
+        ui.label(crate::browser::origin_plane_name(p));
     } else {
         ui.weak(tr!("props-nothing-selected"));
     }
@@ -298,6 +300,8 @@ pub fn parameter_rows(state: &AppState, kind: &FeatureKind) -> Vec<(String, Stri
                     role = planora_kernel::blend::topo::role_label(&r.role),
                     name = feature_name(FeatureId(r.origin))
                 ),
+                // Skizzen 6: Name der Konstruktionsebene.
+                SketchPlane::OnPlane(id) => feature_name(*id),
             };
             vec![
                 (tr!("props-plane"), plane),
@@ -440,6 +444,7 @@ pub fn parameter_rows(state: &AppState, kind: &FeatureKind) -> Vec<(String, Stri
         FeatureKind::StepBody { shape } => doc
             .step_shape(*shape)
             .map_or_else(Vec::new, |s| step_rows(state, s, tr!("props-faces"))),
+        FeatureKind::Plane(pf) => crate::plane_dialog::property_rows(state, &pf.def),
     }
 }
 
@@ -449,6 +454,7 @@ fn feature(ui: &mut egui::Ui, state: &mut AppState, id: FeatureId) {
         return;
     };
     let (name, label, status) = (f.name.clone(), f.kind.label(), f.status.clone());
+    let warning = f.warning().map(str::to_string);
     let rows = parameter_rows(state, &f.kind);
     let sketch = matches!(f.kind, FeatureKind::Sketch(_));
     ui.label(tr!("props-name"));
@@ -457,7 +463,12 @@ fn feature(ui: &mut egui::Ui, state: &mut AppState, id: FeatureId) {
     row(ui, &tr!("props-kind"), theme::value(label));
     let weak = |text: String| egui::RichText::new(text).weak();
     let status_text = match &status {
-        FeatureStatus::Ok => theme::value(tr!("props-status-ok")),
+        // Skizzen 6: berechnet, aber mit Warnung (etwa verlorener Bezug einer Projektion).
+        FeatureStatus::Ok => match &warning {
+            Some(w) => egui::RichText::new(tr!("props-status-warning", warning = w.as_str()))
+                .color(theme::palette(ui.visuals().dark_mode).warning),
+            None => theme::value(tr!("props-status-ok")),
+        },
         FeatureStatus::Error(e) => egui::RichText::new(tr!("props-status-error", error = e))
             .color(error_color(ui.visuals().dark_mode)),
         FeatureStatus::Skipped(why) => weak(tr!("props-status-skipped", why = why)),

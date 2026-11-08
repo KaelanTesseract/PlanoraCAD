@@ -47,7 +47,7 @@ Bekannte Grenzen: Bei Körpern aus einfachen Flächen werden Schnitte, die Raumk
 - Zeichnen: Punkt, Linie, Rechteck, Kreis, Bogen, Polygon, Langloch (alle mit mehreren Arten), Ellipse, Ellipsenbogen (entsteht beim Stutzen oder Brechen einer Ellipse), Spline; Konstruktionsgeometrie über „Konstruktion umschalten“, Mittellinien; Spiegeln, lineares Muster, rechteckige und kreisförmige Anordnung.
 - Abhängigkeiten: deckungsgleich, waagerecht, senkrecht, parallel, rechtwinklig, tangential, gleich, fest, Mittelpunkt, symmetrisch, Punkt auf Kurve, konzentrisch, kollinear, glatt; Maße für Abstand (auch waagerecht und senkrecht), Abstand Punkt–Linie, Radius, Durchmesser (auch zur Mittellinie) und Winkel (Eingabe als Zahl oder Formel).
 - Der eigene Solver (keine neue Bibliothek) zeigt die Freiheitsgrade an, färbt bestimmte Geometrie anders ein und meldet überzählige und widersprüchliche Abhängigkeiten. Der Solver arbeitet je zusammenhängender Gruppe: Eine Gruppe mit Widerspruch (oder die sich nicht lösen lässt) bleibt in ihrem letzten Zustand, die übrigen Gruppen werden trotzdem gelöst. Lösungen, bei denen Geometrie entartet (Radius null oder negativ, Linie der Länge null, Bogenanfang auf der Mitte), gelten nicht als Lösung; die Gruppe bleibt dann ebenfalls stehen, und die Ursache wird genannt. Eine neue Abhängigkeit, die eine gelöste Skizze kaputt machen würde, wird abgelehnt; in einer schon fehlerhaften Skizze wird sie mit Warnung behalten. Ziehen startet vom letzten Zustand, mehrdeutige Lagen klappen in der Regel nicht um.
-- Körperkanten einmalig als feste Konstruktionsgeometrie in die Skizze kopieren (Geraden; Kreise und Bögen in parallelen Ebenen; ganze Kreise und Ellipsen auch schräg, dann als Ellipse).
+- Körperkanten, Flächen und ganze Körper in die Skizze projizieren, auch verknüpft (siehe „Skizzen 6“ unten); Geraden, Kreise, Bögen und Ellipsen, schräge Bögen als Ellipsenbögen.
 - „Skizze beenden“ legt die Skizze als Eintrag im Feature-Baum ab; sie bleibt als dünne Linien in der 3D-Ansicht sichtbar und lässt sich per Doppelklick oder Rechtsklick → „Bearbeiten“ wieder öffnen.
 - Körper aus Skizzen: Rechtsklick auf die Skizze → „Extrudieren …“ / „Drehen …“ oder „Erzeugen → Skizze extrudieren … / Skizze drehen …“. Welche Profile in den Körper eingehen, wählt man wie in Fusion durch Anklicken in der Ansicht (siehe unten) oder in der Liste des Dialogs, die Fläche und Löcher nennt. Gibt es in der Skizze genau ein Profil, ist es schon gewählt. Das Ergebnis ist ein normaler Körper, der sich mit den Booleschen Operationen weiterverarbeiten lässt und der Skizze folgt (siehe „Feature-Baum“).
 
@@ -122,12 +122,46 @@ Ist so eine Abhängigkeit schon erfüllt und überflüssig, steht das in der Mel
 
 *Wo es von Fusion abweicht oder wo das Verhalten aus dem Gedächtnis angenommen ist,* steht in `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt Skizzen 5“.
 
+**Projizieren, Schneiden, Silhouette und Konstruktionsebenen (Skizzen 6)**
+
+*Projizieren* (Taste P, Klappmenü „Projizieren/Einschließen“ in der Leiste): Du klickst eine Kante, eine Fläche oder einen ganzen Körper an. Der Filter im Fenster steht auf „Angegebene Elemente“ oder „Körper“; mit „Körper“ genügt ein Klick auf den Körper. Eine Fläche ergibt ihre Randschleifen (außen und Löcher), ein Körper alle Kanten, die sich nicht zu einem Punkt abbilden; Kanten, die schon als projizierte Kurve in der Skizze liegen, kommen nicht doppelt. Die neuen Kurven sind normale, feste Kurven, die in der Skizze lila erscheinen und Profile bilden können. Schräge Bögen werden zu Ellipsenbögen, Kreise senkrecht zur Skizzenebene zu Linien. Freiformkanten werden übersprungen; die Meldung zählt sie.
+
+*Projektionsverknüpfung:* Ist der Schalter im Fenster an (Vorgabe), folgen die Kurven dem Körper, wenn er sich ändert. Ist er aus, entsteht feste Geometrie ohne Bezug. Findet die Skizze eine Kante nicht mehr oder ändert sie ihre Art, bleibt die Kurve an ihrer letzten Lage stehen; die Skizze zeigt im Baum ein kleines Warnzeichen, rechnet aber weiter, auch die Extrusionen darauf. Kommt am Körper später eine Kante hinzu, wird sie nicht von selbst ergänzt.
+
+*Verknüpfung aufheben:* Eine gewählte projizierte Kurve wird mit dem Knopf „Verknüpfung aufheben“ im Abschnitt „Bearbeiten“ des Skizzenfelds zu normaler fester Geometrie; sie folgt dem Körper nicht mehr und ist nicht mehr lila. Ein Rückgängig-Schritt. Der Befehl lässt sich auch in den Einstellungen auf eine Taste legen.
+
+*Schneiden:* Im Klappmenü „Schneiden“, dann eine Fläche oder mit dem Filter „Körper“ einen Körper anklicken. Die Skizzenebene schneidet ihn, und die Schnittkurven erscheinen als verknüpfte, feste, lila Kurven. Es geht mit analytischen Flächen (Ebene, Zylinder, Kegel, Kugel, Torus) in den Lagen, die der Kernel berechnen kann; ein schräger Kegel (Kegelschnitt) und ein Torus in allgemeiner Lage werden mit einer Meldung abgelehnt. Freiformflächen werden abgelehnt, sobald die Ebene in ihre Nähe kommt; liegt die Ebene weit weg von ihnen, schadet die Fläche nicht.
+
+*Silhouette:* Im Klappmenü „Silhouette“, dann eine gekrümmte Fläche anklicken. Ihr Umriss in Blickrichtung der Skizze (senkrecht zur Ebene) wird als verknüpfte Kurven übernommen: zwei Linien bei Zylinder und Kegel, deren Achse parallel zur Skizzenebene liegt, ein Kreis bei der Kugel, zwei Kreise beim Torus mit Achse senkrecht zur Ebene. Andere Lagen lehnt der Befehl mit einer Meldung ab.
+
+*Konstruktionsebenen* (Menü „Konstruieren“): Fünf Arten, alle als Feature „Ebene 1“, „Ebene 2“ … im Baum, im neuen Ordner „Konstruktion“ (er erscheint erst mit der ersten Ebene).
+- **Versatzebene:** Abstand zu einer Grundebene, ebenen Fläche oder anderen Ebene; auch negativ, auch als Formel.
+- **Ebene unter Winkel:** um eine gerade Körperkante oder eine Ursprungsachse (Knopf „Achse“ im Fenster), mit Winkel.
+- **Mittelebene:** zwischen zwei Ebenen oder ebenen Flächen; liegen sie nicht parallel, ist es die Winkelhalbierende.
+- **Ebene durch drei Punkte:** Eckpunkte von Körpern oder der Ursprung.
+- **Tangentialebene:** an einen Zylinder, Kegel oder eine Kugel, ausgerichtet an einer Ebene, mit Winkel.
+Die Ebene wird halbdurchsichtig orange gezeichnet, ohne dass Körper sie verdecken; die Ebene folgt ihren Bezügen, und ein verlorener Bezug zeigt den Fehler am Feature. Jedes Auswahlfeld im Fenster nimmt nur, was passt. Abstand und Winkel werden getippt (Zahl oder Formel), einen Ziehpfeil gibt es nicht. Kontextmenü der Zeile: Bearbeiten, Skizze erstellen, Umbenennen, Unterdrücken, Löschen.
+
+*Skizze auf Konstruktionsebene:* „Skizze erstellen“ im Kontextmenü der Ebene im Baum. Die Skizze folgt der Ebene, wenn sich diese ändert.
+
+*Skizzenebene neu festlegen:* Im Kontextmenü einer Skizze (Baum und Verlaufsleiste) oder über die belegbare Aktion; danach eine Grundebene (im Ordner „Ursprung“), eine ebene Fläche oder eine Konstruktionsebene anklicken. Die 2D-Zeichnung bleibt, projizierte Kurven werden auf der neuen Ebene nachgeführt. Bezüge auf Features, die im Verlauf nach der Skizze kommen, lehnt das Programm mit einer Meldung ab. Ein Rückgängig-Schritt; Esc hinterlässt nichts.
+
+*Ein- und ausblenden:* Jede Zeile im Baum, die etwas in der 3D-Ansicht zeigt, hat links ein Auge: Körper, Skizzen, Konstruktionsebenen und die drei Grundebenen im Ordner „Ursprung“. Ein Klick blendet das Objekt aus oder ein; es bleibt im Modell, wird aber nicht gezeichnet und lässt sich in der Ansicht nicht anklicken. Die Taste V schaltet das gewählte Objekt um. Die geöffnete Skizze hat kein Auge. Jeder Klick ist ein Rückgängig-Schritt, und die Sichtbarkeit wird mit der Datei gespeichert.
+
+*Auge am Ordner:* Die Ordner „Körper“, „Skizzen“ und „Konstruktion“ haben ein eigenes Auge, das alles darin aus- oder einblendet; die Augen der einzelnen Zeilen bleiben dabei stehen. Das Auge am Ordner „Ursprung“ schaltet die drei Grundebenen: Ist eine an, gehen alle aus, sonst alle an.
+
+*Grundebenen:* Sie sind anfangs ausgeblendet (wie in Fusion). Eingeblendet lassen sie sich in der Ansicht anklicken; im Ordner „Ursprung“ geht das auch ausgeblendet. Mit einer gewählten Grundebene legt „Skizze auf gewählter Fläche“ die Skizze darauf, ebenso „Skizze erstellen“ im Kontextmenü der Zeile. In einem Ebenen-Fenster und bei „Skizzenebene neu festlegen“ übernimmt der Klick die Ebene.
+
+*Datei:* Nur Dateien mit einer Konstruktionsebene, einer Skizze auf einer Ebene, einer Schnitt- oder Silhouettenprojektion oder etwas Aus- oder Eingeblendetem werden im neuen Format 16 gespeichert und lassen sich von älteren Programmversionen nicht öffnen. Alle anderen Dateien bleiben, wie sie waren. Alte Kantenkopien auf Kurven, die es nicht mehr gibt, werden beim Laden verworfen.
+
+*Wo es von Fusion abweicht oder wo das Verhalten aus dem Gedächtnis angenommen ist,* steht in `docs/superpowers/offene-punkte.md`, Abschnitt „Teilprojekt Skizzen 6“.
+
 **Was (noch) nicht geht**
 - Eine Fläche, die sich selbst in einem Punkt berührt (zum Beispiel ein Kreis, der innen den Rand berührt, oder zwei Kreise, die sich innen berühren), erscheint als Profil, lässt sich aber nicht zu einem Körper machen. Fusion kann das.
 - Ellipsen- und Splineprofile werden seit Teilprojekt 7 zu Körpern (siehe „Freiformflächen“). Splines lassen sich stutzen, aber nicht dehnen.
 - Drehen nur für Profile ohne Löcher, die mit genau einer Linie auf der Drehachse liegen und ganz auf einer Seite davon; immer 360°.
-- Skizzen nur auf den Grundebenen und auf ebenen Körperflächen.
-- Kopierte Körperkanten folgen der Kante nur, solange sie ihre Art behält (eine Gerade bleibt eine Gerade).
+- Skizzen auf den Grundebenen, auf ebenen Körperflächen und auf Konstruktionsebenen.
+- Projizierte Freiformkanten (Splines) gehen noch nicht; Schneiden geht nicht mit schrägem Kegel, allgemeinem Torus und Freiformflächen, die die Ebene treffen.
 - Fang und Ausrichtungslinien gibt es nur in den Zeichenwerkzeugen, nicht beim Ziehen im Auswahlwerkzeug. Für die Richtung zählen alle Linien als Vorbild, nicht nur die zuletzt überfahrenen.
 - Mehrdeutige Lagen (z. B. ein Winkel um 180° gedreht) entscheidet der nächstgelegene Zustand; es gibt keine Auswahl der Lösung.
 - Der Solver rechnet je zusammenhängender Gruppe mit dichten Matrizen. Unveränderte Gruppen werden nicht neu gerechnet (auch beim Ziehen nicht); innerhalb einer Gruppe wird flüssiges Ziehen ab etwa 150–300 Variablen zäh (300 Variablen: etwa 0,15 s je Zugschritt im Release-Build). Widersprüchliche Gruppen sind langsamer: Beim Ziehen sucht der Solver dort nicht nach der Ursache, das holt er am Ende des Ziehens nach; hat eine Gruppe mehr als 48 Abhängigkeiten, meldet er statt der genauen Ursache „nicht lösbar“ mit den verletzten Abhängigkeiten. Ein Muster mit 100 Kopien eines Rechtecks ist eine Gruppe mit über 800 Variablen (Anlegen etwa 1,7 s, Ziehen etwa 1,5 s je Schritt).
@@ -498,7 +532,7 @@ Alles, was du baust, steht als Liste von Schritten im Dokument: Quader, Skizze, 
 **Was geht**
 - Zeitleiste: Jeder Schritt baut auf den früheren auf. Ein Schritt kann mit Rechtsklick umbenannt, bearbeitet oder gelöscht werden.
 - Neuberechnung: Änderst du ein Maß (z. B. in einer Skizze oder die Höhe einer Extrusion), rechnen sich alle Schritte danach neu. Nur das, was sich wirklich ändert, wird neu gebaut.
-- Feste Verweise: Eine Skizze auf einer Körperfläche oder eine Kantenkopie merkt sich die Fläche bzw. Kante und findet sie nach einer Änderung wieder.
+- Feste Verweise: Eine Skizze auf einer Körperfläche oder eine projizierte Kante merkt sich die Fläche bzw. Kante und findet sie nach einer Änderung wieder; sonst bleibt die Kurve stehen und die Skizze zeigt eine Warnung.
 - Unterdrücken: Ein Schritt lässt sich abschalten. Schritte, die von ihm abhängen, werden dann übersprungen.
 - Zurückrollen: Jeder Körper hat in der Verlaufsleiste seinen eigenen Marker (siehe unten); „Zum Ende der Zeitleiste“ im Menü „Bearbeiten“ holt alles zurück.
 - Löschen mit Folgen: Beim Löschen zeigt das Programm, welche weiteren Schritte davon betroffen sind, und fragt nach.
@@ -507,7 +541,7 @@ Alles, was du baust, steht als Liste von Schritten im Dokument: Quader, Skizze, 
 **Was (noch) nicht geht**
 - Keine benannten Maße oder Gleichungen.
 - Keine Muster- oder Spiegel-Schritte.
-- Die Ebene einer Skizze lässt sich nachträglich nicht ändern.
+- Die Ebene einer Skizze lässt sich mit „Skizzenebene neu festlegen“ ändern (nicht auf Features nach der Skizze).
 - Ein Körper lässt sich nicht nachträglich vor eine Skizze setzen, die ihn braucht.
 - Verschiebst du einen Körper im Eigenschaftenfenster, kommt ein neuer Schritt ans Ende; Skizzen und Extrusionen davor ziehen nicht mit. Änderst du dagegen die Maße des Quaders selbst, folgen sie.
 - Die Oberfläche des Feature-Baums wurde zuletzt von Hand durchgespielt (mit `tools/gui-drive.ps1`): Quader anlegen und ändern, Skizze auf einer Fläche, Extrusion, Vereinigen, Unterdrücken, Zurückrollen, Löschen mit Rückfrage und Position ziehen liefen ohne Absturz. Rotation und Fehlerfälle wurden nur durch automatische Tests geprüft.

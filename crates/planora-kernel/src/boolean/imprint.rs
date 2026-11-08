@@ -5,26 +5,19 @@
 //! Ein Stück gehört zu einer Fläche, wenn es in ihrem Inneren und nicht außerhalb der anderen
 //! Fläche liegt.
 
+use super::breaks::{bbox, breakpoints, classify_seg, edge_hits, split_at};
 use super::error::BooleanError;
-use super::roots::{CurveSurface, curve_surface_roots, seg_intersections};
+use super::roots::seg_intersections;
 use super::seg::Seg;
-use super::split::{pole_point, seam_segments};
+use super::split::seam_segments;
 use super::surfsurf::{SurfaceIntersection, intersect_surfaces, surface_label, surface_name};
-use super::uv::{
-    Containment, FaceGeom, check_loops_on_surface, face_geom, loop_points, point_in_face,
-};
+use super::uv::{Containment, FaceGeom, check_loops_on_surface, face_geom};
 use super::{face_is_freeform, pipeline_tol};
 use crate::geometry::{Curve, Surface};
 use crate::topology::Solid;
-use crate::validate::edge_surface_tol;
 use planora_i18n::tr;
 use planora_math::{DVec3, Tolerance};
 
-/// Zuschlag zum Hüllquader als Anteil seiner Diagonale (deckt die Sehnenabweichung der
-/// 5°-Abtastung von Bögen ab: höchstens etwa 0,1 % des Radius).
-const BBOX_MARGIN_FRACTION: f64 = 0.01;
-/// Kleinster Parameterabstand zweier Haltepunkte, der noch ein eigenes Kurvenstück ergibt.
-const MIN_PARAM_SPAN: f64 = 1e-9;
 /// Bruchteile auf einer Randkante, die näher beieinander liegen, gelten als derselbe Teilungspunkt.
 const SAME_FRACTION: f64 = 1e-7;
 
@@ -42,41 +35,6 @@ struct Prepared {
     bbox: (DVec3, DVec3),
 }
 
-/// Hüllquader einer Fläche. Kugel- und Torusflächen werden von ihren Randkurven nicht umschlossen
-/// (ihr Rand kann allein aus Nähten bestehen): dort gilt der Hüllquader der ganzen Trägerfläche.
-/// Die Randpunkte sind Abtastpunkte; der Zuschlag deckt die Sehnenabweichung der Bögen ab.
-fn bbox(g: &FaceGeom, tol: &Tolerance) -> (DVec3, DVec3) {
-    let mut pts: Vec<DVec3> = g.loops.iter().flat_map(|l| loop_points(l)).collect();
-    match &g.surface {
-        Surface::Sphere { frame, radius } => {
-            pts.push(frame.origin - DVec3::splat(*radius));
-            pts.push(frame.origin + DVec3::splat(*radius));
-        }
-        Surface::Torus {
-            frame,
-            major,
-            minor,
-        } => {
-            let r = major + minor;
-            pts.push(frame.origin - DVec3::splat(r));
-            pts.push(frame.origin + DVec3::splat(r));
-        }
-        // Hüllquader der Kontrollpunkte (enthält die ganze Fläche).
-        Surface::Nurbs(d) => {
-            let (lo, hi) = d.control_bounds();
-            pts.push(lo);
-            pts.push(hi);
-        }
-        _ => {}
-    }
-    let (lo, hi) = pts.iter().fold(
-        (DVec3::splat(f64::MAX), DVec3::splat(f64::MIN)),
-        |(lo, hi), p| (lo.min(*p), hi.max(*p)),
-    );
-    let margin = (hi - lo).length() * BBOX_MARGIN_FRACTION + tol.linear * 10.0;
-    (lo - DVec3::splat(margin), hi + DVec3::splat(margin))
-}
-
 fn overlaps(a: &(DVec3, DVec3), b: &(DVec3, DVec3)) -> bool {
     a.0.x <= b.1.x
         && b.0.x <= a.1.x
@@ -88,53 +46,6 @@ fn overlaps(a: &(DVec3, DVec3), b: &(DVec3, DVec3)) -> bool {
 
 fn is_closed_curve(c: &Curve) -> bool {
     c.period().is_some()
-}
-
-/// Anfang des Parameterbereichs einer geschlossenen Kurve (Kreis, Ellipse: 0).
-fn period_start(c: &Curve) -> f64 {
-    c.domain().map_or(0.0, |(a, _)| a)
-}
-
-/// Parameter von `p` auf der Kurve, falls `p` (innerhalb der Toleranz) auf ihr liegt.
-/// Bei geschlossenen Kurven in `[Anfang, Anfang + Periode)` gefaltet.
-fn param_on_curve(c: &Curve, p: DVec3, tol: &Tolerance) -> Option<f64> {
-    let t = c.project(p);
-    let t = match c.period() {
-        Some(period) => {
-            let a = period_start(c);
-            a + (t - a).rem_euclid(period)
-        }
-        None => t,
-    };
-    (c.point(t).distance(p) <= tol.linear * 10.0).then_some(t)
-}
-
-/// Punkte, an denen die Randkante `e` die Trägerfläche `other` trifft: Nullstellen, Kantenenden
-/// innerhalb der Toleranz auf der Fläche und bei ganz aufliegenden (nicht geschlossenen) Kanten
-/// ihre Enden.
-fn edge_hits(e: &Seg, other: &Surface, tol: &Tolerance) -> Vec<DVec3> {
-    let mut out = Vec::new();
-    match curve_surface_roots(&e.curve, e.t0, e.t1, other, tol) {
-        CurveSurface::Roots(rs) => {
-            for r in rs {
-                out.push(e.curve.point(r.t));
-            }
-            // Ein Kantenende knapp innerhalb der Toleranz kann der Nullstellensuche
-            // entgehen, wenn die Kante gleich dahinter die Fläche verlässt.
-            for p in [e.start(), e.end()] {
-                if other.implicit(p).abs() <= edge_surface_tol(&e.curve, other, tol) {
-                    out.push(p);
-                }
-            }
-        }
-        // Der Anfangspunkt einer geschlossenen Kante ist kein Teilungspunkt.
-        CurveSurface::Lies if e.start().distance(e.end()) <= tol.linear => {}
-        CurveSurface::Lies => {
-            out.push(e.start());
-            out.push(e.end());
-        }
-    }
-    out
 }
 
 /// Bereits berechnete Kantentreffer (nur bei Freiformbeteiligung): Die Nullstellensuche gegen
@@ -208,118 +119,22 @@ fn pair_hits(
     out
 }
 
-/// Haltepunkte der Schnittkurve `c`: dort, wo Randkanten der beiden Flächen die jeweils andere
-/// Trägerfläche treffen (`hits` aus [`pair_hits`]; auch Nahtkanten: so wird die Kurve an der Naht
-/// geteilt), dazu Kantenenden, die innerhalb der Toleranz auf der anderen Fläche liegen, sowie
-/// Pole und Kegelspitzen beider Flächen, durch die die Kurve läuft.
-fn breakpoints(
-    c: &Curve,
-    hits: &[DVec3],
-    fa: &FaceGeom,
-    fb: &FaceGeom,
-    tol: &Tolerance,
-) -> Vec<f64> {
-    let mut ts: Vec<f64> = Vec::new();
-    let mut pts: Vec<DVec3> = Vec::new();
-    let mut add = |p: DVec3| {
-        if let Some(t) = param_on_curve(c, p, tol) {
-            let q = c.point(t);
-            if !pts.iter().any(|x| x.distance(q) <= tol.linear) {
-                pts.push(q);
-                ts.push(t);
-            }
-        }
-    };
-    for p in hits {
-        add(*p);
-    }
-    for s in [&fa.surface, &fb.surface] {
-        for pv in s.pole_vs() {
-            add(pole_point(s, pv));
-        }
-    }
-    // Offene Freiformkurven (Äste des numerischen Schnittrechners) enden auf dem Rand einer
-    // Fläche oder dort, wo der nächste Teil desselben Asts beginnt: Ihre Enden sind Haltepunkte,
-    // sonst gingen die Stücke zwischen dem letzten Haltepunkt und dem Kurvenende verloren.
-    if let (Curve::Nurbs(_), None, Some((a, b))) = (c, c.period(), c.domain()) {
-        for t in [a, b] {
-            let q = c.point(t);
-            if !pts.iter().any(|x| x.distance(q) <= tol.linear) {
-                pts.push(q);
-                ts.push(t);
-            }
-        }
-    }
-    ts
-}
-
-/// Lage eines Stücks zur Fläche. Liegt die Mitte zufällig auf dem Rand (etwa auf der Naht),
-/// werden weitere Punkte des Stücks befragt. Liegt das ganze Stück auf einer Naht (und nicht
-/// zugleich auf einem echten Randstück), gilt es als innen: die Naht ist Inneres der Fläche.
+/// Lage eines Stücks zur Fläche (siehe [`classify_seg`]).
 fn classify(face: &Prepared, seg: &Seg, tol: &Tolerance) -> Containment {
-    for f in [0.5, 0.381_966, 0.618_034, 0.25, 0.75] {
-        let c = point_in_face(&face.geom, seg.at(f), tol);
-        if c != Containment::Boundary {
-            return c;
-        }
-    }
-    let mid = seg.at(0.5);
-    // Nahterkennung mit 4·tol wie in `split_face` (Nahtstücke werden dort so gepaart); der Test
-    // gegen echte Randstücke nutzt tol wie `point_in_face`, damit beide Urteile zusammenpassen.
-    let is_seam = |s: &Seg| {
-        face.seams
-            .iter()
-            .any(|m| m.closest(s.at(0.5)).1 <= tol.linear * 4.0)
-    };
-    let on_seam = face
-        .seams
-        .iter()
-        .any(|m| m.closest(mid).1 <= tol.linear * 4.0);
-    let on_real_edge = face
-        .geom
-        .loops
-        .iter()
-        .flatten()
-        .filter(|s| !is_seam(s))
-        .any(|s| s.closest(mid).1 <= tol.linear);
-    if on_seam && !on_real_edge {
-        Containment::Inside
-    } else {
-        Containment::Boundary
-    }
+    classify_seg(&face.geom, &face.seams, seg, tol)
 }
 
 /// Zerlegt die Schnittkurve an den Haltepunkten und liefert die Stücke samt Lage in beiden
 /// Flächen. Stücke kürzer als die Toleranz entfallen.
 fn pieces(
     c: &Curve,
-    mut ts: Vec<f64>,
+    ts: Vec<f64>,
     fa: &Prepared,
     fb: &Prepared,
     tol: &Tolerance,
 ) -> Vec<(Seg, Containment, Containment)> {
-    ts.sort_by(|x, y| x.total_cmp(y));
-    let mut intervals: Vec<(f64, f64)> = Vec::new();
-    if let Some(period) = c.period() {
-        if ts.is_empty() {
-            let a = period_start(c);
-            intervals.push((a, a + period));
-        } else {
-            for w in ts.windows(2) {
-                intervals.push((w[0], w[1]));
-            }
-            intervals.push((ts[ts.len() - 1], ts[0] + period));
-        }
-    } else {
-        for w in ts.windows(2) {
-            intervals.push((w[0], w[1]));
-        }
-    }
-    intervals
+    split_at(c, ts, tol)
         .into_iter()
-        .filter(|(a, b)| (b - a).abs() > MIN_PARAM_SPAN)
-        .map(|(a, b)| Seg::new(c.clone(), a, b))
-        .filter(|seg| seg.length() > tol.linear)
         .map(|seg| {
             let (ca, cb) = (classify(fa, &seg, tol), classify(fb, &seg, tol));
             (seg, ca, cb)
@@ -489,7 +304,7 @@ pub fn imprint(
                     let cache = freeform.then_some((&mut cache, i, j));
                     let hits = pair_hits(ga, gb, tol_p, cache);
                     for c in cs {
-                        let ts = breakpoints(&c, &hits, ga, gb, tol_p);
+                        let ts = breakpoints(&c, &hits, &[&ga.surface, &gb.surface], tol_p);
                         for (seg, ca, cb) in pieces(&c, ts, fa, fb, tol_p) {
                             if ca == Containment::Inside && cb != Containment::Outside {
                                 push_unique(&mut sa[i], seg.clone(), tol_p);

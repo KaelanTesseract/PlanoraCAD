@@ -485,7 +485,12 @@ fn no_text_is_clipped_at_1400px() {
     // Die Symbole der Leiste liegen ganz im Fenster (ihr Name steht im Hinweistext, siehe
     // tests/sketch_fields.rs).
     let buttons = sketch_panel::strip_buttons(&c);
-    assert!(buttons.iter().any(|(l, _)| *l == "Körperkante kopieren"));
+    // Skizzen 6: Der Knopf heißt wie in Fusion „Projizieren/Einschließen“.
+    assert!(
+        buttons
+            .iter()
+            .any(|(l, _)| *l == "Projizieren/Einschließen")
+    );
     for (label, r) in buttons {
         assert!(r.left() >= 0.0 && r.bottom() <= HEIGHT, "{label} {r:?}");
     }

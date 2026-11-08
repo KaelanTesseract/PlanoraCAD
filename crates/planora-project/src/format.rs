@@ -58,11 +58,48 @@ pub struct VersionFile {
     /// Schritte in Listenordnung. Leer heißt: fehlt, damit alte Dateien Byte für Byte bleiben.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rueckrollstellen: Vec<u64>,
+    /// Was im Browser ausgeblendet ist (ab Format 16). Fehlt im Grundzustand, damit alte Dateien
+    /// Byte für Byte bleiben.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sichtbarkeit: Option<SichtbarkeitDto>,
     /// Formen der STEP-Körper (ab Format 10, Teilprojekt STEP-Import): je benutzte Form der
     /// normalisierte STEP-Text, in jeder Version erneut. Leer heißt: fehlt, damit alte Dateien
     /// Byte für Byte bleiben. Steht am Ende, weil die Texte lang sind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub step_formen: Vec<StepFormDto>,
+}
+
+/// Sichtbarkeit im Browser (ab Format 16); jede Liste fehlt, wenn sie leer ist.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct SichtbarkeitDto {
+    /// Ausgeblendete Körper als [Feature, Index], wie in der Stückliste.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub koerper: Vec<[u64; 2]>,
+    /// Ausgeblendete Skizzen und Konstruktionsebenen.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<u64>,
+    /// Eingeblendete Grundebenen.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grundebenen: Vec<GrundebeneDto>,
+    /// Ausgeblendete Ordner.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ordner: Vec<OrdnerDto>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum GrundebeneDto {
+    Xy,
+    Xz,
+    Yz,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum OrdnerDto {
+    Koerper,
+    Skizzen,
+    Konstruktion,
 }
 
 /// Form eines STEP-Körpers (ab Format 10): Kennung (ab 1), Genauigkeit der Ursprungsdatei in mm
@@ -610,17 +647,84 @@ pub struct EdgeRefDto {
     pub hinweis: V3,
 }
 
+/// Lage einer Skizze und Bezug einer Konstruktionsebene: Grundebene, ebene Körperfläche oder
+/// (ab Format 16) eine frühere Konstruktionsebene.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "typ", rename_all = "snake_case")]
 pub enum PlaneDto {
     Standard { ebene: String },
     Flaeche { flaeche: FaceRefDto },
+    Ebene { feature: u64 },
 }
 
+/// Fläche und Nummer des Stücks einer Schnitt- oder Silhouettenprojektion (ab Format 16).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct FaceIndexDto {
+    pub flaeche: FaceRefDto,
+    pub index: usize,
+}
+
+/// Projizierte Skizzenkurve mit genau einer Herkunft: Kante (alle Formate), Schnitt oder
+/// Silhouette (ab Format 16). Alte Dateien haben nur `kante` und schreiben sich gleich.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct EdgeCopyDto {
     pub kurve: usize,
-    pub kante: EdgeRefDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kante: Option<EdgeRefDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schnitt: Option<FaceIndexDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub silhouette: Option<FaceIndexDto>,
+}
+
+/// Drehachse einer Ebene unter Winkel (ab Format 16): Ursprungsachse (`x`, `y`, `z`), gerade
+/// Körperkante oder Linie (Kurvennummer) einer Skizze.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "typ", rename_all = "snake_case")]
+pub enum AchseDto {
+    Standard { achse: String },
+    Kante { kante: EdgeRefDto },
+    Skizzenlinie { skizze: u64, kurve: usize },
+}
+
+/// Punkt einer Ebene durch drei Punkte (ab Format 16): Ursprung, Anfang (`ende == false`) oder
+/// Ende einer Körperkante, Punkt (Punktnummer) einer Skizze.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "typ", rename_all = "snake_case")]
+pub enum PunktDto {
+    Ursprung,
+    Kantenende { kante: EdgeRefDto, ende: bool },
+    Skizzenpunkt { skizze: u64, punkt: usize },
+}
+
+/// Konstruktionsebene (ab Format 16): Art und Eingaben, Längen in mm, Winkel in Grad.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "steht in `KindDto` schon in einer Box; die drei Punkte bleiben so lesbar wie im Modell"
+)]
+#[serde(tag = "art", rename_all = "snake_case")]
+pub enum PlaneFeatureDto {
+    Versatz {
+        basis: PlaneDto,
+        abstand: f64,
+    },
+    Winkel {
+        achse: AchseDto,
+        winkel: f64,
+    },
+    Mitte {
+        a: PlaneDto,
+        b: PlaneDto,
+    },
+    DreiPunkte {
+        punkte: [PunktDto; 3],
+    },
+    Tangential {
+        flaeche: FaceRefDto,
+        basis: PlaneDto,
+        winkel: f64,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -1019,6 +1123,8 @@ pub enum KindDto {
     StepKoerper {
         form: u64,
     },
+    /// Konstruktionsebene (ab Format 16, Skizzen 6).
+    Konstruktionsebene(Box<PlaneFeatureDto>),
 }
 
 /// Ein Profil-Verweis: Stücke des äußeren Rands in Umlaufreihenfolge, danach die Stücke aller

@@ -409,8 +409,6 @@ fn keys_speak_english() {
                 "Keyboard shortcuts",
                 "Everywhere",
                 "Model",
-                "Sketch",
-                "Drawing",
                 "Change in settings",
                 "Close",
                 "New document",
@@ -423,6 +421,12 @@ fn keys_speak_english() {
             ],
         );
         assert_english("Übersicht", &seen);
+        // Skizzen 6 (Task 13): Mit „Redefine Sketch Plane“ ist die Liste länger als ihr Feld;
+        // die Abschnitte „Sketch“ und „Drawing“ zeigt die Suche nach ihren Befehlen.
+        rig.app.overview_mut().filter = "line".into();
+        assert_has("Suche Sketch", &rig.settle(), &["Sketch", "Line"]);
+        rig.app.overview_mut().filter = "dimension".into();
+        assert_has("Suche Drawing", &rig.settle(), &["Drawing", "Dimension"]);
         rig.app.overview_mut().filter = "zzzz".into();
         assert_has("Suche", &rig.settle(), &["No shortcuts found."]);
 

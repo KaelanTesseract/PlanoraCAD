@@ -19,13 +19,15 @@ use planora_drawing::{
     Projection, RowOverride, Scale, SectionSpec, Sheet, ViewId, ViewKind, ViewSpec,
 };
 use planora_exchange::{ExchangeMesh, MAX_FILE_BYTES};
+use planora_feature::planes::{AxisRef, PlaneBase, PlaneDef, PlaneFeature, PointRef, StdAxis};
 use planora_feature::{
-    BlendArt, BodyRef, EdgeCopy, EdgeRef, FaceRef, FeatureId, FeatureKind, FieldKey, Formulas,
-    MAX_COMMENT_CHARS, MAX_COORD_MM, MAX_DECIMALS, MAX_DIM_TEXT_CHARS, MAX_DRAWINGS, MAX_FIT_CHARS,
-    MAX_FORMULA_CHARS, MAX_PARAM_NAME_CHARS, MAX_PARAMETERS, MAX_POS_MM, MAX_ROLE_CHARS,
-    MAX_TOL_MM, MAX_VIEWS, MeshId, ParamId, ParamUnit, Parameter, ProfileSel, SketchFeature,
-    SketchFormulas, SketchPlane, Snapshot, SnapshotFeature, StandardPlane, StepShape, StepShapeId,
-    field_keys, step_text_megabytes, step_text_sum_limit, validate_drawing,
+    BlendArt, BodyRef, CopySource, EdgeCopy, EdgeRef, FaceRef, FeatureId, FeatureKind, FieldKey,
+    Formulas, MAX_COMMENT_CHARS, MAX_COORD_MM, MAX_DECIMALS, MAX_DIM_TEXT_CHARS, MAX_DRAWINGS,
+    MAX_FIT_CHARS, MAX_FORMULA_CHARS, MAX_PARAM_NAME_CHARS, MAX_PARAMETERS, MAX_POS_MM,
+    MAX_ROLE_CHARS, MAX_TOL_MM, MAX_VIEWS, MeshId, ParamId, ParamUnit, Parameter, ProfileSel,
+    SketchFeature, SketchFormulas, SketchPlane, Snapshot, SnapshotFeature, StandardPlane,
+    StepShape, StepShapeId, Visibility, field_keys, step_text_megabytes, step_text_sum_limit,
+    validate_drawing,
 };
 use planora_i18n::{DisplayUnit, tr};
 use planora_kernel::BoolOp;
@@ -40,16 +42,19 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Höchste lesbare Formatnummer der Versionsdateien (P7, P12, F7).
-pub const FORMAT_VERSION: u32 = 15;
+pub const FORMAT_VERSION: u32 = 16;
 /// Formatnummer der Rahmendateien `dokument.json` und `.autosave.json`; ihre Struktur ist seit
 /// Format 1 unverändert, ältere Programme öffnen das Projekt deshalb weiter (P7).
 pub const CONTAINER_FORMAT: u32 = 1;
 /// Größte Summe der dekodierten Netzdaten eines Dokuments (wie die Dateigrenze beim Import).
 const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 
-/// Kleinste Formatnummer, die den Stand darstellt (die Regeln in dieser Reihenfolge geprüft): 15
-/// mit einem Muster oder einer der Abhängigkeitsarten aus Skizzen 5 in einer Skizze (auch einem
-/// aufgelösten Muster oder gelöschten Eintrag), 14 mit einer Mittellinie in einer Skizze (auch
+/// Kleinste Formatnummer, die den Stand darstellt (die Regeln in dieser Reihenfolge geprüft): 16
+/// mit einer Konstruktionsebene, einer Skizze auf einer Konstruktionsebene, einer Schnitt-
+/// oder Silhouettenprojektion ([`needs_format_16`]) oder einer vom Grundzustand abweichenden
+/// Sichtbarkeit, 15 mit einem Muster oder einer der
+/// Abhängigkeitsarten aus Skizzen 5 in einer Skizze (auch einem aufgelösten Muster oder
+/// gelöschten Eintrag), 14 mit einer Mittellinie in einer Skizze (auch
 /// einem gelöschten Kurveneintrag), 13 mit einem Ellipsenbogen in einer Skizze (auch einem
 /// gelöschten Kurveneintrag) oder mit Profil-Verweisen,
 /// die sich nicht als alte Profilnummer schreiben lassen ([`ProfileField`]), 12 mit einer Zeichnung in
@@ -59,7 +64,7 @@ const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 /// Stückliste auf einem Blatt), 6 mit Blatt- oder Projektangaben, 5 mit Maßen oder
 /// eingeschalteten Mittellinien, 4 mit Zeichnungen, 3 mit Netz-Körpern, 2 mit Rundungen oder
 /// Fasen, sonst 1 (P7, P12, F7, Teilprojekt 12 P11, Teilprojekt STEP-Import, Verlaufsleiste,
-/// Teilprojekt Zoll, Teilprojekte Skizzen 1, 3 und 5).
+/// Teilprojekt Zoll, Teilprojekte Skizzen 1, 3, 5 und 6).
 pub fn required_format(s: &Snapshot) -> u32 {
     format_with(s, &profile_fields(s))
 }
@@ -67,7 +72,9 @@ pub fn required_format(s: &Snapshot) -> u32 {
 /// [`required_format`] mit den schon bestimmten Profilfeldern `fields` (eins je Feature).
 fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
     let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
-    if has(|k| matches!(k, FeatureKind::Sketch(sf) if sf.sketch.needs_format_15())) {
+    if has(needs_format_16) || !s.visibility.is_default() {
+        16
+    } else if has(|k| matches!(k, FeatureKind::Sketch(sf) if sf.sketch.needs_format_15())) {
         15
     } else if has(|k| matches!(k, FeatureKind::Sketch(sf) if sf.sketch.has_centerline_entry())) {
         14
@@ -106,6 +113,22 @@ fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
         2
     } else {
         1
+    }
+}
+/// Braucht die Art Format 16 (Skizzen 6)? Konstruktionsebenen, Skizzen auf ihnen und Schnitt-
+/// oder Silhouettenprojektionen. Kantenprojektionen gibt es schon länger, auch verknüpfte, nicht
+/// zur Konstruktion gemachte Kurven (das steht an der Kurve, nicht an der Kopie).
+fn needs_format_16(k: &FeatureKind) -> bool {
+    match k {
+        FeatureKind::Plane(_) => true,
+        FeatureKind::Sketch(sf) => {
+            matches!(sf.plane, SketchPlane::OnPlane(_))
+                || sf
+                    .copies
+                    .iter()
+                    .any(|c| !matches!(c.source, CopySource::Edge(_)))
+        }
+        _ => false,
     }
 }
 /// Hat die Skizze einen Ellipsenbogen (auch einen gelöschten Kurveneintrag, er steht in der
@@ -1032,22 +1055,12 @@ fn kind_to(
     Ok(match k {
         FeatureKind::Sketch(s) => KindDto::Skizze(Box::new(SketchFeatureDto {
             skizze: sketch_to(&s.sketch),
-            lage: match &s.plane {
-                SketchPlane::Standard(p) => PlaneDto::Standard {
-                    ebene: plane_name(*p).into(),
-                },
-                SketchPlane::OnFace(r) => PlaneDto::Flaeche {
-                    flaeche: face_to(r),
-                },
-            },
-            kopien: s
-                .copies
-                .iter()
-                .map(|c| EdgeCopyDto {
-                    kurve: c.curve.index(),
-                    kante: edge_to(&c.edge),
-                })
-                .collect(),
+            lage: base_to(&match &s.plane {
+                SketchPlane::Standard(p) => PlaneBase::Standard(*p),
+                SketchPlane::OnFace(r) => PlaneBase::Face(r.clone()),
+                SketchPlane::OnPlane(id) => PlaneBase::Plane(*id),
+            }),
+            kopien: s.copies.iter().map(copy_to).collect(),
             formeln: s
                 .formulas
                 .iter()
@@ -1135,7 +1148,215 @@ fn kind_to(
             // Fehlt die Form im Bild, bleibt die Kennung; das Selbstlesen meldet sie dann.
             form: forms.get(shape).copied().unwrap_or(shape.0),
         },
+        FeatureKind::Plane(p) => KindDto::Konstruktionsebene(Box::new(plane_to(p))),
     })
+}
+
+// ---- Ebenen und Projektionen (Format 16) ------------------------------------------------
+
+fn base_to(b: &PlaneBase) -> PlaneDto {
+    match b {
+        PlaneBase::Standard(p) => PlaneDto::Standard {
+            ebene: plane_name(*p).into(),
+        },
+        PlaneBase::Face(r) => PlaneDto::Flaeche {
+            flaeche: face_to(r),
+        },
+        PlaneBase::Plane(id) => PlaneDto::Ebene { feature: id.0 },
+    }
+}
+
+/// Fehler „beschädigt“ mit dem Feature `name` im Text.
+fn feature_corrupt(origin: &str, name: &str, msg: String) -> ProjectError {
+    ProjectError::corrupt(origin, tr!("proj-ctx-feature", name = name, msg = msg))
+}
+
+fn base_from(origin: &str, name: &str, d: &PlaneDto) -> Result<PlaneBase> {
+    Ok(match d {
+        PlaneDto::Standard { ebene } => PlaneBase::Standard(match ebene.as_str() {
+            "xy" => StandardPlane::XY,
+            "xz" => StandardPlane::XZ,
+            "yz" => StandardPlane::YZ,
+            other => {
+                return Err(feature_corrupt(
+                    origin,
+                    name,
+                    tr!("proj-unknown-plane", value = other),
+                ));
+            }
+        }),
+        PlaneDto::Flaeche { flaeche } => PlaneBase::Face(face_from(origin, name, flaeche)?),
+        PlaneDto::Ebene { feature } => PlaneBase::Plane(FeatureId(*feature)),
+    })
+}
+
+fn copy_to(c: &EdgeCopy) -> EdgeCopyDto {
+    let mut d = EdgeCopyDto {
+        kurve: c.curve.index(),
+        kante: None,
+        schnitt: None,
+        silhouette: None,
+    };
+    match &c.source {
+        CopySource::Edge(e) => d.kante = Some(edge_to(e)),
+        CopySource::Section { face, index } => {
+            d.schnitt = Some(FaceIndexDto {
+                flaeche: face_to(face),
+                index: *index,
+            });
+        }
+        CopySource::Silhouette { face, index } => {
+            d.silhouette = Some(FaceIndexDto {
+                flaeche: face_to(face),
+                index: *index,
+            });
+        }
+    }
+    d
+}
+
+/// Liest eine Projektion; genau eins von `kante`, `schnitt` und `silhouette` muss stehen.
+fn copy_from(origin: &str, name: &str, d: &EdgeCopyDto) -> Result<EdgeCopy> {
+    let source = match (&d.kante, &d.schnitt, &d.silhouette) {
+        (Some(e), None, None) => CopySource::Edge(edge_from(origin, name, e)?),
+        (None, Some(f), None) => CopySource::Section {
+            face: face_from(origin, name, &f.flaeche)?,
+            index: f.index,
+        },
+        (None, None, Some(f)) => CopySource::Silhouette {
+            face: face_from(origin, name, &f.flaeche)?,
+            index: f.index,
+        },
+        _ => return Err(feature_corrupt(origin, name, tr!("proj-copy-source-count"))),
+    };
+    Ok(EdgeCopy {
+        curve: CurveId::from_index(d.kurve),
+        source,
+    })
+}
+
+/// Nummer einer Kurve oder eines Punkts in einer anderen Skizze. Größer als jede erlaubte Liste
+/// ist sie beschädigt (`from_index` schnitte sie sonst ab und träfe womöglich eine andere Kurve).
+fn sketch_index(origin: &str, name: &str, i: usize) -> Result<usize> {
+    if i >= MAX_LIST {
+        return Err(feature_corrupt(
+            origin,
+            name,
+            tr!("proj-plane-ref-index", value = i.to_string()),
+        ));
+    }
+    Ok(i)
+}
+
+fn plane_to(p: &PlaneFeature) -> PlaneFeatureDto {
+    match &p.def {
+        PlaneDef::Offset { base, distance } => PlaneFeatureDto::Versatz {
+            basis: base_to(base),
+            abstand: *distance,
+        },
+        PlaneDef::Angle { axis, angle } => PlaneFeatureDto::Winkel {
+            achse: match axis {
+                AxisRef::Standard(a) => AchseDto::Standard {
+                    achse: match a {
+                        StdAxis::X => "x",
+                        StdAxis::Y => "y",
+                        StdAxis::Z => "z",
+                    }
+                    .into(),
+                },
+                AxisRef::Edge(e) => AchseDto::Kante { kante: edge_to(e) },
+                AxisRef::SketchLine { sketch, curve } => AchseDto::Skizzenlinie {
+                    skizze: sketch.0,
+                    kurve: curve.index(),
+                },
+            },
+            winkel: *angle,
+        },
+        PlaneDef::Mid { a, b } => PlaneFeatureDto::Mitte {
+            a: base_to(a),
+            b: base_to(b),
+        },
+        PlaneDef::ThreePoints(points) => PlaneFeatureDto::DreiPunkte {
+            punkte: points.each_ref().map(|p| match p {
+                PointRef::Origin => PunktDto::Ursprung,
+                PointRef::EdgeEnd { edge, end } => PunktDto::Kantenende {
+                    kante: edge_to(edge),
+                    ende: *end,
+                },
+                PointRef::SketchPoint { sketch, point } => PunktDto::Skizzenpunkt {
+                    skizze: sketch.0,
+                    punkt: point.index(),
+                },
+            }),
+        },
+        PlaneDef::Tangent { face, base, angle } => PlaneFeatureDto::Tangential {
+            flaeche: face_to(face),
+            basis: base_to(base),
+            winkel: *angle,
+        },
+    }
+}
+
+fn plane_from(origin: &str, name: &str, d: &PlaneFeatureDto) -> Result<PlaneFeature> {
+    let n = |label: Label, x: f64| num(origin, &|| field_label(name, label()), x);
+    let point = |p: &PunktDto| -> Result<PointRef> {
+        Ok(match p {
+            PunktDto::Ursprung => PointRef::Origin,
+            PunktDto::Kantenende { kante, ende } => PointRef::EdgeEnd {
+                edge: edge_from(origin, name, kante)?,
+                end: *ende,
+            },
+            PunktDto::Skizzenpunkt { skizze, punkt } => PointRef::SketchPoint {
+                sketch: FeatureId(*skizze),
+                point: PointId::from_index(sketch_index(origin, name, *punkt)?),
+            },
+        })
+    };
+    let def = match d {
+        PlaneFeatureDto::Versatz { basis, abstand } => PlaneDef::Offset {
+            base: base_from(origin, name, basis)?,
+            distance: n(|| tr!("proj-l-distance"), *abstand)?,
+        },
+        PlaneFeatureDto::Winkel { achse, winkel } => PlaneDef::Angle {
+            axis: match achse {
+                AchseDto::Standard { achse } => AxisRef::Standard(match achse.as_str() {
+                    "x" => StdAxis::X,
+                    "y" => StdAxis::Y,
+                    "z" => StdAxis::Z,
+                    other => {
+                        return Err(feature_corrupt(
+                            origin,
+                            name,
+                            tr!("proj-unknown-axis", value = other),
+                        ));
+                    }
+                }),
+                AchseDto::Kante { kante } => AxisRef::Edge(edge_from(origin, name, kante)?),
+                AchseDto::Skizzenlinie { skizze, kurve } => AxisRef::SketchLine {
+                    sketch: FeatureId(*skizze),
+                    curve: CurveId::from_index(sketch_index(origin, name, *kurve)?),
+                },
+            },
+            angle: n(|| tr!("proj-l-angle"), *winkel)?,
+        },
+        PlaneFeatureDto::Mitte { a, b } => PlaneDef::Mid {
+            a: base_from(origin, name, a)?,
+            b: base_from(origin, name, b)?,
+        },
+        PlaneFeatureDto::DreiPunkte { punkte: [a, b, c] } => {
+            PlaneDef::ThreePoints([point(a)?, point(b)?, point(c)?])
+        }
+        PlaneFeatureDto::Tangential {
+            flaeche,
+            basis,
+            winkel,
+        } => PlaneDef::Tangent {
+            face: face_from(origin, name, flaeche)?,
+            base: base_from(origin, name, basis)?,
+            angle: n(|| tr!("proj-l-angle"), *winkel)?,
+        },
+    };
+    Ok(PlaneFeature { def })
 }
 
 fn art_to(a: &BlendArt) -> BlendArtDto {
@@ -1200,40 +1421,24 @@ fn kind_from(origin: &str, name: &str, d: &KindDto, dissolved: &mut usize) -> Re
             let (sketch, n) = sketch_from(origin, name, &s.skizze)?;
             *dissolved += n;
             let formulas = sketch_formulas_from(origin, name, s, &sketch)?;
-            FeatureKind::Sketch(SketchFeature {
+            let mut sf = SketchFeature {
                 sketch,
-                plane: match &s.lage {
-                    PlaneDto::Standard { ebene } => SketchPlane::Standard(match ebene.as_str() {
-                        "xy" => StandardPlane::XY,
-                        "xz" => StandardPlane::XZ,
-                        "yz" => StandardPlane::YZ,
-                        other => {
-                            return Err(ProjectError::corrupt(
-                                origin,
-                                tr!(
-                                    "proj-ctx-feature",
-                                    name = name,
-                                    msg = tr!("proj-unknown-plane", value = other)
-                                ),
-                            ));
-                        }
-                    }),
-                    PlaneDto::Flaeche { flaeche } => {
-                        SketchPlane::OnFace(face_from(origin, name, flaeche)?)
-                    }
+                plane: match base_from(origin, name, &s.lage)? {
+                    PlaneBase::Standard(p) => SketchPlane::Standard(p),
+                    PlaneBase::Face(r) => SketchPlane::OnFace(r),
+                    PlaneBase::Plane(id) => SketchPlane::OnPlane(id),
                 },
                 copies: s
                     .kopien
                     .iter()
-                    .map(|c| {
-                        Ok(EdgeCopy {
-                            curve: CurveId::from_index(c.kurve),
-                            edge: edge_from(origin, name, &c.kante)?,
-                        })
-                    })
+                    .map(|c| copy_from(origin, name, c))
                     .collect::<Result<Vec<_>>>()?,
                 formulas,
-            })
+            };
+            // Eine Projektion, deren Kurve in der Skizze nicht mehr lebt, ist tot und fällt beim
+            // Laden weg (wie beim Bearbeiten).
+            sf.prune_copies();
+            FeatureKind::Sketch(sf)
         }
         KindDto::Quader { groesse, ursprung } => FeatureKind::Box {
             size: v(|| tr!("proj-l-size"), *groesse)?,
@@ -1357,6 +1562,7 @@ fn kind_from(origin: &str, name: &str, d: &KindDto, dissolved: &mut usize) -> Re
         KindDto::StepKoerper { form } => FeatureKind::StepBody {
             shape: StepShapeId(*form),
         },
+        KindDto::Konstruktionsebene(p) => FeatureKind::Plane(plane_from(origin, name, p)?),
     })
 }
 
@@ -2168,6 +2374,80 @@ fn body_key_from(k: [u64; 2]) -> Option<BodyKey> {
     })
 }
 
+/// Sichtbarkeit für die Datei; `None` im Grundzustand (das Feld fehlt dann).
+fn visibility_to(v: &Visibility) -> Option<SichtbarkeitDto> {
+    if v.is_default() {
+        return None;
+    }
+    let planes = [
+        (StandardPlane::XY, GrundebeneDto::Xy),
+        (StandardPlane::XZ, GrundebeneDto::Xz),
+        (StandardPlane::YZ, GrundebeneDto::Yz),
+    ];
+    let folders = [
+        (v.folders.bodies, OrdnerDto::Koerper),
+        (v.folders.sketches, OrdnerDto::Skizzen),
+        (v.folders.planes, OrdnerDto::Konstruktion),
+    ];
+    Some(SichtbarkeitDto {
+        koerper: v
+            .bodies
+            .iter()
+            .map(|k| [k.feature, u64::from(k.index)])
+            .collect(),
+        features: v.features.iter().map(|f| f.0).collect(),
+        grundebenen: planes
+            .into_iter()
+            .filter(|(p, _)| v.origin_shown(*p))
+            .map(|(_, d)| d)
+            .collect(),
+        ordner: folders
+            .into_iter()
+            .filter(|(hidden, _)| *hidden)
+            .map(|(_, d)| d)
+            .collect(),
+    })
+}
+
+/// Sichtbarkeit aus der Datei. Verweise auf fehlende Features fallen beim Bauen des Dokuments
+/// weg ([`planora_feature::Document::set_visibility`]); ein Körperindex jenseits von `u32` nennt
+/// keinen Körper und entfällt hier.
+fn visibility_from(d: Option<&SichtbarkeitDto>) -> Visibility {
+    let mut v = Visibility::default();
+    let Some(d) = d else {
+        return v;
+    };
+    v.bodies = d
+        .koerper
+        .iter()
+        .filter_map(|[feature, index]| {
+            Some(BodyKey {
+                feature: *feature,
+                index: u32::try_from(*index).ok()?,
+            })
+        })
+        .collect();
+    v.features = d.features.iter().map(|f| FeatureId(*f)).collect();
+    for p in &d.grundebenen {
+        v.set_origin_shown(
+            match p {
+                GrundebeneDto::Xy => StandardPlane::XY,
+                GrundebeneDto::Xz => StandardPlane::XZ,
+                GrundebeneDto::Yz => StandardPlane::YZ,
+            },
+            true,
+        );
+    }
+    for f in &d.ordner {
+        match f {
+            OrdnerDto::Koerper => v.folders.bodies = true,
+            OrdnerDto::Skizzen => v.folders.sketches = true,
+            OrdnerDto::Konstruktion => v.folders.planes = true,
+        }
+    }
+    v
+}
+
 fn overrides_to(o: &BTreeMap<BodyKey, RowOverride>) -> Vec<StuecklisteZeileDto> {
     o.iter()
         .map(|(k, v)| StuecklisteZeileDto {
@@ -2573,6 +2853,7 @@ pub fn encode_version(s: &Snapshot) -> Result<String> {
             s.next_param
         },
         rueckrollstellen: s.rollbacks.iter().map(|r| r.0).collect(),
+        sichtbarkeit: visibility_to(&s.visibility),
         step_formen,
     };
     let text = serde_json::to_string_pretty(&file)
@@ -2582,6 +2863,20 @@ pub fn encode_version(s: &Snapshot) -> Result<String> {
     decode_version(&text, &tr!("proj-origin-output"))
         .map_err(|e| ProjectError::Invalid(tr!("proj-invalid-values", msg = e.to_string())))?;
     Ok(text)
+}
+
+/// Inhalt aus Format 16 in einer Feature-Art der Datei (Gegenstück zu [`needs_format_16`]).
+fn has_format_16_data(k: &KindDto) -> bool {
+    match k {
+        KindDto::Konstruktionsebene(_) => true,
+        KindDto::Skizze(s) => {
+            matches!(s.lage, PlaneDto::Ebene { .. })
+                || s.kopien
+                    .iter()
+                    .any(|c| c.schnitt.is_some() || c.silhouette.is_some())
+        }
+        _ => false,
+    }
 }
 
 /// Liest eine Versionsdatei. `origin` ist der Dateiname für Meldungen.
@@ -2708,6 +3003,27 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
             ),
         ));
     }
+    if file.format < 16 && file.features.iter().any(|f| has_format_16_data(&f.art)) {
+        return Err(ProjectError::corrupt(
+            origin,
+            tr!(
+                "proj-since-format",
+                what = tr!("proj-feat-planes"),
+                format = "16"
+            ),
+        ));
+    }
+    if file.format < 16 && file.sichtbarkeit.is_some() {
+        return Err(ProjectError::corrupt(
+            origin,
+            tr!(
+                "proj-since-format",
+                what = tr!("proj-feat-visibility"),
+                format = "16"
+            ),
+        ));
+    }
+    let visibility = visibility_from(file.sichtbarkeit.as_ref());
     let rollbacks = rollbacks_from(origin, &file)?;
     let (parameters, next_param) = parameters_from(origin, &file)?;
     let parts_overrides = overrides_from(origin, &file.stueckliste)?;
@@ -2773,6 +3089,7 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
         next_drawing,
         project_info,
         parts_overrides,
+        visibility,
         parameters,
         next_param,
         rollbacks,

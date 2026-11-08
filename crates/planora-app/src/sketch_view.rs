@@ -4,17 +4,18 @@
 
 use crate::sketch_cursor::AutoConstraint;
 use crate::sketch_grips::{self, Grip, GripLayout};
+use crate::sketch_kinds::ToolKind;
 use crate::sketch_pattern::{self, PatternGrip, PatternGripLayout};
-use crate::sketch_state::{Item, SketchSession, Snap, Tool};
-use crate::state::AppState;
+use crate::sketch_state::{Item, ProjectFilter, SketchSession, Snap, Tool};
+use crate::state::{AppState, PickFilter, ProjectTarget};
 use crate::theme::{self, lighten as lighter, sketch_colors as colors};
 use crate::viewport;
 use egui::{Color32, FontId, Mesh, PointerButton, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2};
 use glam::{Vec2, Vec3};
-use planora_feature::FeatureId;
+use planora_feature::{FeatureId, FeatureKind, SketchFeature};
 use planora_i18n::tr;
 use planora_math::{DVec2, DVec3, Frame};
-use planora_render::{EdgeRef, OrbitCamera, Pick, exact_step, grid_radius, line_weight};
+use planora_render::{EdgeRef, FaceRef, OrbitCamera, Pick, exact_step, grid_radius, line_weight};
 use planora_sketch::ExtractedProfiles;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
 use planora_sketch::dimension::{DimPick, DimPlan};
@@ -616,6 +617,77 @@ fn profile_fill_shape(
     (!mesh.is_empty()).then(|| Shape::mesh(mesh))
 }
 
+/// Strichstärke des Randes einer Konstruktionsebene in der 3D-Ansicht.
+const PLANE_EDGE_WIDTH: f32 = 1.5;
+
+/// Konstruktionsebenen (Skizzen 6) als halbdurchsichtige orange Rechtecke über der 3D-Ansicht
+/// in `rect` ([`AppState::plane_rects`]); gewählte (auch im Browser) und die unter dem Mauszeiger
+/// heller ([`AppState::plane_highlighted`]). Wie die
+/// fertigen Skizzen liegen sie immer über den Körpern (keine Verdeckung, Abweichung von Fusion).
+/// Eine Ebene, deren Ecke hinter der Kamera liegt, fehlt.
+pub fn plane_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
+    let mut out = Vec::new();
+    if rect.width() < 2.0 || rect.height() < 2.0 {
+        return out;
+    }
+    let col = colors(state.dark);
+    // Eingeblendete Grundebenen (Ordner „Ursprung“) zuerst, darüber die Konstruktionsebenen.
+    let origins = state.origin_plane_rects().into_iter().map(|(p, r)| {
+        let lit = state.origin_hover == Some(p) || state.selected_origin_plane() == Some(p);
+        (r, lit)
+    });
+    let features = state
+        .plane_rects()
+        .into_iter()
+        .map(|(id, r)| (r, state.plane_highlighted(id)));
+    for (plane, lit) in origins.chain(features) {
+        let map = Mapper {
+            camera: state.camera,
+            frame: plane.frame,
+            rect,
+        };
+        let corners: Option<Vec<Pos2>> = plane
+            .corners()
+            .into_iter()
+            .map(|c| map.to_screen(plane.frame.to_local(c).truncate()))
+            .collect();
+        let Some(corners) = corners else {
+            continue;
+        };
+        let (fill, edge) = if lit {
+            (col.plane_fill_active, col.plane_edge_active)
+        } else {
+            (col.plane_fill, col.plane_edge)
+        };
+        out.push(Shape::convex_polygon(
+            corners,
+            fill,
+            Stroke::new(PLANE_EDGE_WIDTH, edge),
+        ));
+    }
+    // Vorschau des offenen Ebenen-Fensters in der Hervorhebungsfarbe (noch kein Feature).
+    if let Some(plane) = state.plane_pick.and_then(|p| p.preview) {
+        let map = Mapper {
+            camera: state.camera,
+            frame: plane.frame,
+            rect,
+        };
+        let corners: Option<Vec<Pos2>> = plane
+            .corners()
+            .into_iter()
+            .map(|c| map.to_screen(plane.frame.to_local(c).truncate()))
+            .collect();
+        if let Some(corners) = corners {
+            out.push(Shape::convex_polygon(
+                corners,
+                col.plane_fill_active,
+                Stroke::new(PLANE_EDGE_WIDTH, col.plane_edge_active),
+            ));
+        }
+    }
+    out
+}
+
 /// Strichstärke fertiger Skizzen in der 3D-Ansicht (dünner als im Skizzen-Modus).
 const FINISHED_WIDTH: f32 = 1.2;
 /// Strichstärke der Konstruktionsgeometrie fertiger Skizzen.
@@ -640,6 +712,12 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
         if open == Some(id) {
             continue;
         }
+        // Im Baum ausgeblendet: nicht zeichnen, es sei denn, ein Dialog wählt gerade ihre
+        // Profile (dann braucht man sie).
+        let picking = state.profile_pick.as_ref().is_some_and(|p| p.sketch == id);
+        if state.is_feature_hidden(id) && !picking {
+            continue;
+        }
         let Some(sk) = state.document.sketch_of(id) else {
             continue;
         };
@@ -660,15 +738,28 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
                 })
             }));
         }
+        // Projektionen lila wie in Fusion (Skizzen 6), Konstruktion weiter gestrichelt.
+        let projected: HashSet<CurveId> = match state.document.feature(id).map(|f| &f.kind) {
+            Some(FeatureKind::Sketch(def)) => def.copies.iter().map(|c| c.curve).collect(),
+            _ => HashSet::new(),
+        };
         for (c, data) in sk.curves() {
             let Some(pl) = sk.curve_polyline(c, STEPS_PER_TURN) else {
                 continue;
             };
-            let stroke = if data.construction {
-                Stroke::new(FINISHED_CONSTRUCTION_WIDTH, col.construction)
+            let width = if data.construction {
+                FINISHED_CONSTRUCTION_WIDTH
             } else {
-                Stroke::new(FINISHED_WIDTH, col.finished)
+                FINISHED_WIDTH
             };
+            let color = if projected.contains(&c) {
+                col.projected
+            } else if data.construction {
+                col.construction
+            } else {
+                col.finished
+            };
+            let stroke = Stroke::new(width, color);
             for path in map.paths(&pl) {
                 out.extend(style_shapes(path, stroke, data.style()));
             }
@@ -1465,12 +1556,24 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     se.update_transform_block(&sf.sketch);
     se.update_pattern_note(&sf.sketch);
     let tool = se.tool;
+    let kind = se.kinds.project;
+    let settings = se.project;
 
-    // Körperkante kopieren: Kante in der 3D-Szene wählen.
+    // Projizieren: Kante oder Fläche in der 3D-Szene wählen; mit dem Filter „Körper“ zählt der
+    // Körper unter dem Zeiger (die Markierung zeigt, was der Zeiger trifft). Schneiden und
+    // Silhouette wählen nur Flächen (Schneiden mit „Körper“ den ganzen Körper).
+    let faces_only = matches!(kind, ToolKind::Intersect | ToolKind::Silhouette);
+    let pick_at = |state: &AppState, p: Pos2| {
+        if faces_only {
+            state
+                .pick_face_under(map.local(p), map.viewport())
+                .map(Pick::Face)
+        } else {
+            state.pick_with(map.local(p), map.viewport(), PickFilter::GEOMETRY)
+        }
+    };
     let hover = if tool == Tool::ProjectEdge {
-        pointer
-            .and_then(|p| state.pick(map.local(p), map.viewport()))
-            .filter(|h| matches!(h, Pick::Edge(_)))
+        pointer.and_then(|p| pick_at(state, p))
     } else {
         None
     };
@@ -1479,19 +1582,49 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         crate::sketch_panel::open_existing_dimension_editor(ui.ctx(), state, id);
     }
     if let Some(p) = project_at {
-        match state.pick(map.local(p), map.viewport()) {
-            // Fehler (etwa ein Körper, der erst nach der Skizze entsteht) stehen in der
-            // Meldung der Sitzung.
-            Some(Pick::Edge(EdgeRef { body, edge })) => {
-                let _ = state.project_edge_into_sketch(body, edge);
+        // Fehler (etwa ein Körper, der erst nach der Skizze entsteht) stehen in der Meldung der
+        // Sitzung.
+        let picked = pick_at(state, p);
+        let target = picked.and_then(|pick| project_target(pick, settings.filter));
+        match (kind, picked, target) {
+            (ToolKind::Intersect, _, Some(t)) => {
+                let _ = state.intersect_into_sketch(t);
+            }
+            (ToolKind::Silhouette, Some(Pick::Face(FaceRef { body, face })), _) => {
+                let _ = state.silhouette_into_sketch(body, face);
+            }
+            (ToolKind::Project, _, Some(t)) => {
+                let _ = state.project_into_sketch(t, settings.link);
             }
             _ => {
+                let m = match kind {
+                    ToolKind::Intersect => crate::msg!("sketch-pick-intersect"),
+                    ToolKind::Silhouette => crate::msg!("sketch-pick-silhouette"),
+                    _ => crate::msg!("sketch-pick-project"),
+                };
                 if let Some(se) = state.sketch_session.as_mut() {
-                    se.message = Some(crate::msg!("sketch-pick-edge"));
+                    se.message = Some(m);
                 }
             }
         }
     }
+}
+
+/// Was ein Klick mit „Projizieren“ auf `pick` projiziert: mit „Angegebene Elemente“ die Kante
+/// oder Fläche, mit „Körper“ deren ganzen Körper. Ebenen und Eckpunkte (Skizzen 6) projiziert
+/// es nicht: `None`.
+pub fn project_target(pick: Pick, filter: ProjectFilter) -> Option<ProjectTarget> {
+    Some(match (filter, pick) {
+        (ProjectFilter::Entities, Pick::Edge(EdgeRef { body, edge })) => {
+            ProjectTarget::Edge(body, edge)
+        }
+        (ProjectFilter::Entities, Pick::Face(FaceRef { body, face })) => {
+            ProjectTarget::Face(body, face)
+        }
+        (ProjectFilter::Bodies, Pick::Edge(EdgeRef { body, .. }))
+        | (ProjectFilter::Bodies, Pick::Face(FaceRef { body, .. })) => ProjectTarget::Body(body),
+        (_, Pick::Plane(_) | Pick::Vertex { .. }) => return None,
+    })
 }
 
 /// Ist der Punkt vollständig bestimmt (laut letztem Bericht)?
@@ -1503,10 +1636,99 @@ fn curve_determined(report: Option<&SolveReport>, c: CurveId) -> bool {
     report.is_some_and(|r| r.status == SolveStatus::Solved && !r.free_curves.contains(&c))
 }
 
+/// Kurven und Punkte der offenen Skizze, die als Projektion ihrer Herkunft folgen (Skizzen 6):
+/// die Kurven aus den Kopien des Entwurfs und die Punkte, die diese Kurven benutzen.
+struct Projected {
+    curves: HashSet<CurveId>,
+    points: HashSet<PointId>,
+}
+
+impl Projected {
+    fn of(draft: &SketchFeature) -> Projected {
+        let curves: HashSet<CurveId> = draft.copies.iter().map(|c| c.curve).collect();
+        let points = curves
+            .iter()
+            .filter_map(|c| draft.sketch.curve(*c))
+            .flat_map(|d| d.kind.points())
+            .collect();
+        Projected { curves, points }
+    }
+}
+
+/// Farbe einer Kurve der offenen Skizze (ohne Aufhellung unter dem Zeiger): gewählt (auch die
+/// schon gewählten Kurven einer laufenden Art) > projiziert (lila wie Fusion, auch als
+/// Konstruktion; gestrichelt macht der Linienstil) > Konstruktion > bestimmt > frei.
+fn curve_ink(
+    col: &theme::SketchColors,
+    se: &SketchSession,
+    sk: &Sketch,
+    projected: &Projected,
+    c: CurveId,
+) -> Color32 {
+    let selected = se.selection.contains(&Item::Curve(c))
+        || se.pending_curves.contains(&c)
+        || dim_picked(se, Item::Curve(c));
+    if selected {
+        col.selected
+    } else if projected.curves.contains(&c) {
+        col.projected
+    } else if sk.curve(c).is_some_and(|d| d.construction) {
+        col.construction
+    } else if curve_determined(se.last_report.as_ref(), c) {
+        col.determined
+    } else {
+        col.free
+    }
+}
+
+/// Farbe eines Punkts der offenen Skizze (ohne Aufhellung): gewählt oder gezogen > Punkt einer
+/// projizierten Kurve (lila wie Fusion) > bestimmt > frei.
+fn point_ink(
+    col: &theme::SketchColors,
+    se: &SketchSession,
+    projected: &Projected,
+    p: PointId,
+) -> Color32 {
+    let selected = se.selection.contains(&Item::Point(p))
+        || se.dragging == Some(p)
+        || dim_picked(se, Item::Point(p));
+    if selected {
+        col.selected
+    } else if projected.points.contains(&p) {
+        col.projected
+    } else if point_determined(se.last_report.as_ref(), p) {
+        col.determined
+    } else {
+        col.free
+    }
+}
+
+/// Farbe, in der die Ansicht die Kurve `c` der offenen Skizze zeichnet (ohne Aufhellung unter
+/// dem Zeiger); ohne offene Skizze die Farbe freier Geometrie.
+pub fn curve_color(state: &AppState, c: CurveId) -> Color32 {
+    let col = colors(state.dark);
+    match (state.sketch_session.as_ref(), state.sketch_draft.as_ref()) {
+        (Some(se), Some(draft)) => curve_ink(&col, se, &draft.sketch, &Projected::of(draft), c),
+        _ => col.free,
+    }
+}
+
+/// Wie [`curve_color`] für den Punkt `p`.
+pub fn point_color(state: &AppState, p: PointId) -> Color32 {
+    let col = colors(state.dark);
+    match (state.sketch_session.as_ref(), state.sketch_draft.as_ref()) {
+        (Some(se), Some(draft)) => point_ink(&col, se, &Projected::of(draft), p),
+        _ => col.free,
+    }
+}
+
 fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
-    let (Some(se), Some(sk)) = (state.sketch_session.as_ref(), state.session_sketch()) else {
+    let (Some(se), Some(draft)) = (state.sketch_session.as_ref(), state.sketch_draft.as_ref())
+    else {
         return;
     };
+    let sk = &draft.sketch;
+    let projected = Projected::of(draft);
     let painter = ui.painter_at(rect);
     let col = colors(state.dark);
     let map = Mapper {
@@ -1575,19 +1797,7 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         let Some(pl) = sk.curve_polyline(c, STEPS_PER_TURN) else {
             continue;
         };
-        // Die schon gewählten Kurven einer laufenden Art leuchten wie die Auswahl.
-        let selected = se.selection.contains(&Item::Curve(c))
-            || se.pending_curves.contains(&c)
-            || dim_picked(se, Item::Curve(c));
-        let mut color = if selected {
-            col.selected
-        } else if data.construction {
-            col.construction
-        } else if curve_determined(report, c) {
-            col.determined
-        } else {
-            col.free
-        };
+        let mut color = curve_ink(&col, se, sk, &projected, c);
         if hovered == Some(Item::Curve(c)) {
             color = lighter(color);
         }
@@ -1605,17 +1815,8 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         let Some(s) = pos(sk, p).and_then(|q| map.to_screen(q)) else {
             continue;
         };
-        let selected = se.selection.contains(&Item::Point(p))
-            || se.dragging == Some(p)
-            || dim_picked(se, Item::Point(p));
         let determined = point_determined(report, p);
-        let mut color = if selected {
-            col.selected
-        } else if determined {
-            col.determined
-        } else {
-            col.free
-        };
+        let mut color = point_ink(&col, se, &projected, p);
         let hover = hovered == Some(Item::Point(p));
         if hover {
             color = lighter(color);

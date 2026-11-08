@@ -27,6 +27,7 @@ use crate::model::{
     MIN_CHAMFER_ANGLE_DEG, MIN_MESH_SCALE, SketchFeature,
 };
 use crate::params::ParamScope;
+use crate::planes::PlaneDef;
 use planora_i18n::tr;
 use planora_sketch::pattern::PatternSlot;
 use planora_sketch::{ConstraintId, ConstraintKind, Sketch, SketchError};
@@ -110,6 +111,11 @@ pub fn field_keys(kind: &FeatureKind) -> Vec<FieldKey> {
             BlendArt::FaseWinkel { .. } => vec![Abstand, Winkel],
             // Die Punkte der variablen Rundung bleiben ohne Formeln (Spec §4a.2).
             BlendArt::RundungVariabel { .. } => Vec::new(),
+        },
+        FeatureKind::Plane(p) => match p.def {
+            PlaneDef::Offset { .. } => vec![Abstand],
+            PlaneDef::Angle { .. } | PlaneDef::Tangent { .. } => vec![Winkel],
+            PlaneDef::Mid { .. } | PlaneDef::ThreePoints(_) => Vec::new(),
         },
         FeatureKind::Sketch(_)
         | FeatureKind::Revolve { .. }
@@ -216,6 +222,12 @@ macro_rules! field_table {
                 (BlendArt::FaseWinkel { winkel, .. }, Winkel) => Some($($r)+ *winkel),
                 _ => None,
             },
+            FeatureKind::Plane(p) => match ($($r)+ p.def, $key) {
+                (PlaneDef::Offset { distance, .. }, Abstand) => Some($($r)+ *distance),
+                (PlaneDef::Angle { angle, .. }, Winkel) => Some($($r)+ *angle),
+                (PlaneDef::Tangent { angle, .. }, Winkel) => Some($($r)+ *angle),
+                _ => None,
+            },
             _ => None,
         }
     }};
@@ -255,6 +267,11 @@ pub fn set_field_value(kind: &mut FeatureKind, key: FieldKey, v: f64) -> bool {
 /// „Fase“); Lagen und Verschiebungen dürfen jedes Vorzeichen haben. Das Kleinstmaß einer Rundung
 /// oder Fase prüft der Kernel beim Rechnen (Fehlerstatus mit seiner Meldung).
 fn value_issue(kind: &FeatureKind, key: FieldKey, v: f64, tolerance: f64) -> Option<String> {
+    // Konstruktionsebenen: Abstand mit jedem Vorzeichen (andere Seite der Basis), Winkel ohne
+    // Grenzen (Skizzen 6, wie Fusion); die Bereichsprüfung macht die Berechnung.
+    if matches!(kind, FeatureKind::Plane(_)) {
+        return None;
+    }
     match key {
         FieldKey::Breite
         | FieldKey::Tiefe

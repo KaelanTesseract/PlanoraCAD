@@ -3,10 +3,11 @@ use crate::msg::Msg;
 use crate::sketch_state::SketchSession;
 use glam::{Vec2, Vec3};
 use planora_exchange::{ExchangeMesh, MeshReport, MeshTransform, check_mesh};
+use planora_feature::planes::{PlaneBase, PlaneDef};
 use planora_feature::{
-    BlendArt, BodyRef, Document, EdgeCopy, FeatureError, FeatureId, FeatureKind, FeatureStatus,
-    FieldKey, Formulas, MeshId, NewStepBody, ParamEdit, ParamId, ProfileSel, RestoreKind,
-    SketchFeature, SketchPlane, StepShape, mesh_locked,
+    BlendArt, BodyRef, CopySource, Document, EdgeCopy, FeatureError, FeatureId, FeatureKind,
+    FeatureStatus, FieldKey, Formulas, MeshId, NewStepBody, ParamEdit, ParamId, ProfileSel,
+    RestoreKind, SketchFeature, SketchPlane, StepShape, mesh_locked,
 };
 use planora_i18n::tr;
 use planora_kernel::boolean::BoolOp;
@@ -16,8 +17,8 @@ use planora_mesh::{
     MassProperties, Mesh, TessellationOptions, is_watertight, mass_properties, tessellate,
 };
 use planora_render::{
-    EdgeRef, FaceRef, Highlight, OrbitCamera, Palette, Pick, SceneData, build_scene_marked,
-    pick_edge, pick_face,
+    EdgeRef, FaceRef, Highlight, OrbitCamera, Palette, Pick, PlaneRect, Ray, SceneData,
+    build_scene_marked, pick_edge, pick_face, pick_plane, pick_vertex,
 };
 use planora_sketch::constraint::ConstraintKind;
 use planora_sketch::model::{CurveId, PointId, Sketch};
@@ -113,6 +114,15 @@ pub enum SketchRequest {
     Revolve(FeatureId),
 }
 
+/// Ein Wahlmodus ohne Fenster: Der nächste Klick in der 3D-Ansicht oder im Browser wählt etwas
+/// für einen Befehl (Skizzen 6). Esc oder Rechtsklick beenden ihn ohne Änderung.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PendingPick {
+    /// „Skizzenebene neu festlegen“ für diese Skizze: Grundebene, Konstruktionsebene oder
+    /// ebene Fläche wählen.
+    SketchPlane(FeatureId),
+}
+
 /// Alles, was die Oberfläche anzeigt. Enthält keine egui-Typen und ist deshalb testbar.
 pub struct AppState {
     /// Das Feature-Dokument; Quelle aller Körper.
@@ -147,10 +157,10 @@ pub struct AppState {
     history_choice: Option<FeatureId>,
     /// Auf- und zugeklappte Ordner des Feature-Baums (je Tab).
     pub tree_folders: crate::browser::FolderState,
-    /// Im Feature-Baum ausgeblendete Körper (Auge). Gilt nur für die Ansicht dieses Tabs: Der
-    /// Körper bleibt im Modell, wird aber nicht gezeichnet und nicht gewählt. Wird nicht
-    /// gespeichert. Kennung über Änderungen am Teil hinweg ([`Document::body_key`]).
-    hidden_bodies: std::collections::BTreeSet<planora_drawing::BodyKey>,
+    /// Grundebene unter dem Zeiger (hell gezeichnet; gilt nur für das laufende Bild).
+    pub origin_hover: Option<StandardPlane>,
+    /// Gewählte Grundebene; gelesen über [`AppState::selected_origin_plane`].
+    selected_origin: Option<StandardPlane>,
     /// Geöffneter Skizzen-Modus.
     pub sketch_session: Option<SketchSession>,
     /// Entwurf des geöffneten Skizzen-Features (Entscheidung F6): eine Kopie der Definition mit
@@ -204,6 +214,12 @@ pub struct AppState {
     pub edge_picking: bool,
     /// Ein Klick markiert die ganze Tangentenkette.
     pub chain_marking: bool,
+    /// Offenes Fenster einer Konstruktionsebene (Skizzen 6): Klicks in der 3D-Ansicht und im
+    /// Ordner „Ursprung“ füllen sein aktives Auswahlfeld statt zu wählen; dazu die Vorschau.
+    pub plane_pick: Option<crate::plane_dialog::PlanePick>,
+    /// Laufender Wahlmodus ohne Fenster ([`PendingPick`]); schließt sich mit `plane_pick` und
+    /// dem Fenster „Verrunden“/„Fase“ gegenseitig aus.
+    pub pending_pick: Option<PendingPick>,
     /// Verschieben, das der laufende Zug im Eigenschaftenfenster angelegt hat.
     drag_move: Option<FeatureId>,
     /// Prüfberichte der Netze, einmal je Netz berechnet (Plan P13).
@@ -381,6 +397,79 @@ fn sketch_label() -> String {
     tr!("state-sketch-label")
 }
 const PICK_EDGE_PX: f32 = 6.0;
+/// Fangweite für Eckpunkte bei der Punktwahl (Skizzen 6, „Ebene durch drei Punkte“).
+const PICK_VERTEX_PX: f32 = 8.0;
+/// Kleinste halbe Kantenlänge einer gezeichneten Konstruktionsebene (Skizzen 6).
+const PLANE_MIN_HALF_MM: f64 = 25.0;
+/// Halbe Kantenlänge einer Konstruktionsebene als Anteil der Diagonale aller sichtbaren Körper.
+const PLANE_HALF_PER_DIAGONAL: f64 = 0.6;
+
+/// Was [`AppState::pick_with`] finden darf (Skizzen 6). Ausgeschaltete Flächen verdecken
+/// trotzdem, was hinter ihnen liegt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PickFilter {
+    /// Konstruktionsebenen.
+    pub planes: bool,
+    /// Eckpunkte der Körper (nur bei der Punktwahl eines Dialogs).
+    pub vertices: bool,
+    /// Kanten der Körper.
+    pub edges: bool,
+    /// Flächen der Körper.
+    pub faces: bool,
+}
+
+impl PickFilter {
+    /// Normale Auswahl in der 3D-Ansicht: Flächen, Kanten und Ebenen, keine Eckpunkte.
+    pub const SELECT: PickFilter = PickFilter {
+        planes: true,
+        vertices: false,
+        edges: true,
+        faces: true,
+    };
+    /// Nur Flächen und Kanten (Projizieren und Schneiden im Skizzen-Modus).
+    pub const GEOMETRY: PickFilter = PickFilter {
+        planes: false,
+        vertices: false,
+        edges: true,
+        faces: true,
+    };
+    /// Punktwahl: Eckpunkte vor allem anderen, dann Kanten und Flächen. Ebenen zählen nicht
+    /// und verdecken keine Ecken (die Punkte liegen oft hinter einer schon gezeichneten Ebene).
+    pub const POINTS: PickFilter = PickFilter {
+        planes: false,
+        vertices: true,
+        edges: true,
+        faces: true,
+    };
+    /// Bezug eines Ebenen-Fensters: Flächen und Ebenen, keine Kanten.
+    pub const BASES: PickFilter = PickFilter {
+        planes: true,
+        vertices: false,
+        edges: false,
+        faces: true,
+    };
+    /// Nur Flächen (Tangentialebene).
+    pub const FACES: PickFilter = PickFilter {
+        planes: false,
+        vertices: false,
+        edges: false,
+        faces: true,
+    };
+    /// Nur Kanten (Achse der Ebene unter Winkel).
+    pub const EDGES: PickFilter = PickFilter {
+        planes: false,
+        vertices: false,
+        edges: true,
+        faces: false,
+    };
+    /// Nur Eckpunkte („Ebene durch drei Punkte“).
+    pub const VERTICES: PickFilter = PickFilter {
+        planes: false,
+        vertices: true,
+        edges: false,
+        faces: false,
+    };
+}
 const BODY_GAP_MM: f64 = 10.0;
 /// Mindestgröße des Bereichs, auf den die Ansicht beim Öffnen einer Skizze eingepasst wird.
 const MIN_SKETCH_VIEW_MM: f64 = 10.0;
@@ -432,7 +521,8 @@ impl AppState {
             selected_feature: None,
             history_choice: None,
             tree_folders: crate::browser::FolderState::default(),
-            hidden_bodies: std::collections::BTreeSet::new(),
+            origin_hover: None,
+            selected_origin: None,
             sketch_session: None,
             sketch_draft: None,
             sketch_history: None,
@@ -454,6 +544,8 @@ impl AppState {
             marked_edges: Vec::new(),
             edge_picking: false,
             chain_marking: true,
+            plane_pick: None,
+            pending_pick: None,
             drag_move: None,
             mesh_reports: BTreeMap::new(),
             display_triangles: crate::mesh_body::DISPLAY_TRIANGLES,
@@ -600,6 +692,13 @@ impl AppState {
                 self.bodies[body].solid.edges.get(edge)?;
                 Some(Pick::Edge(EdgeRef { body, edge }))
             }
+            Pick::Vertex { body, edge, end } => {
+                let body = map(body)?;
+                self.bodies[body].solid.edges.get(edge)?;
+                Some(Pick::Vertex { body, edge, end })
+            }
+            // Eine Ebene hängt an keinem Körper; sie bleibt, solange sie gezeichnet wird.
+            Pick::Plane(id) => self.plane_rect(id).map(|_| pick),
         }
     }
 
@@ -626,44 +725,198 @@ impl AppState {
         tips.last().copied()
     }
 
-    /// Ist der Körper `j` (Index in `bodies`) im Feature-Baum ausgeblendet? Unbekannte nicht.
+    /// Ist der Körper `j` (Index in `bodies`) gerade ausgeblendet (selbst oder über den Ordner)?
+    /// Unbekannte nicht.
     pub fn is_body_hidden(&self, j: usize) -> bool {
+        self.bodies.get(j).is_some() && self.document.visibility().folders.bodies
+            || self.own_body_hidden(j)
+    }
+
+    /// Steht das Auge des Körpers `j` selbst auf „aus“ (ohne den Ordner)?
+    pub fn own_body_hidden(&self, j: usize) -> bool {
         self.bodies.get(j).is_some_and(|b| {
-            self.hidden_bodies
+            self.document
+                .visibility()
+                .bodies
                 .contains(&self.document.body_key(b.source))
         })
     }
 
-    /// Blendet den Körper `j` aus oder ein (Auge im Feature-Baum). Nur die Ansicht ändert sich:
-    /// Ein ausgeblendeter Körper wird nicht gezeichnet und nicht gewählt; Auswahl und
-    /// Hervorhebung auf ihm entfallen. Ein unbekannter Index ändert nichts.
+    /// Blendet den Körper `j` aus oder ein (Auge im Feature-Baum). Das Modell bleibt: Ein
+    /// ausgeblendeter Körper wird nicht gezeichnet und nicht gewählt; Auswahl und Hervorhebung auf
+    /// ihm entfallen. Ein unbekannter Index ändert nichts.
     pub fn set_body_hidden(&mut self, j: usize, hidden: bool) {
         let Some(b) = self.bodies.get(j) else {
             return;
         };
         let key = self.document.body_key(b.source);
-        let changed = if hidden {
-            self.hidden_bodies.insert(key)
+        let mut v = self.document.visibility().clone();
+        if hidden {
+            v.bodies.insert(key);
         } else {
-            self.hidden_bodies.remove(&key)
+            v.bodies.remove(&key);
+        }
+        self.apply_visibility(v);
+    }
+
+    /// Ist die Skizze oder Konstruktionsebene `id` gerade ausgeblendet (selbst oder über den
+    /// Ordner)?
+    pub fn is_feature_hidden(&self, id: FeatureId) -> bool {
+        let v = self.document.visibility();
+        let folder = match self.document.feature(id).map(|f| &f.kind) {
+            Some(FeatureKind::Sketch(_)) => v.folders.sketches,
+            Some(FeatureKind::Plane(_)) => v.folders.planes,
+            _ => false,
         };
-        if !changed {
+        folder || v.features.contains(&id)
+    }
+
+    /// Steht das Auge der Skizze oder Konstruktionsebene `id` selbst auf „aus“?
+    pub fn own_feature_hidden(&self, id: FeatureId) -> bool {
+        self.document.visibility().features.contains(&id)
+    }
+
+    /// Blendet die Skizze oder Konstruktionsebene `id` aus oder ein (Auge im Feature-Baum). Eine
+    /// ausgeblendete Ebene wird nicht gezeichnet und nicht angeklickt, Auswahl und Hervorhebung
+    /// auf ihr entfallen; eine ausgeblendete Skizze wird in 3D nicht gezeichnet. Andere Features
+    /// und das Ausblenden der geöffneten Skizze (sie bleibt sichtbar) ändern nichts.
+    pub fn set_feature_hidden(&mut self, id: FeatureId, hidden: bool) {
+        let hideable = self
+            .document
+            .feature(id)
+            .is_some_and(|f| matches!(f.kind, FeatureKind::Sketch(_) | FeatureKind::Plane(_)));
+        if !hideable || (hidden && self.open_sketch_id() == Some(id)) {
             return;
         }
+        let mut v = self.document.visibility().clone();
         if hidden {
-            let on = |p: Option<Pick>| p.is_some_and(|p| pick_body(p) == j);
-            if on(self.selection) {
-                self.selection = None;
-            }
-            if on(self.hover) {
-                self.hover = None;
-            }
-            if self.selected_body == Some(j) {
-                self.selected_body = None;
-            }
-            self.marked_edges.retain(|e| e.body != j);
+            v.features.insert(id);
+        } else {
+            v.features.remove(&id);
         }
+        self.apply_visibility(v);
+    }
+
+    /// Ist die Grundebene `p` eingeblendet (Auge im Ordner „Ursprung“)?
+    pub fn is_origin_plane_shown(&self, p: StandardPlane) -> bool {
+        self.document.visibility().origin_shown(p)
+    }
+
+    /// Blendet die Grundebene `p` in der 3D-Ansicht ein oder aus.
+    pub fn set_origin_plane_shown(&mut self, p: StandardPlane, shown: bool) {
+        let mut v = self.document.visibility().clone();
+        v.set_origin_shown(p, shown);
+        self.apply_visibility(v);
+    }
+
+    /// Zeigt das Auge des Ordners `f` „aus“? „Ursprung“: keine Grundebene ist eingeblendet;
+    /// „Zeichnungen“ hat kein Auge.
+    pub fn is_folder_hidden(&self, f: crate::browser::Folder) -> bool {
+        use crate::browser::Folder;
+        let v = self.document.visibility();
+        match f {
+            Folder::Bodies => v.folders.bodies,
+            Folder::Sketches => v.folders.sketches,
+            Folder::Construction => v.folders.planes,
+            Folder::Origin => v.origin_planes == [false; 3],
+            Folder::Drawings => false,
+        }
+    }
+
+    /// Auge am Ordner `f`. Körper, Skizzen und Konstruktion: Alles darin geht aus oder an, die
+    /// Augen der Zeilen bleiben stehen (wie in Fusion). „Ursprung“: Ist eine Grundebene an, gehen
+    /// alle aus, sonst alle an.
+    pub fn toggle_folder_hidden(&mut self, f: crate::browser::Folder) {
+        use crate::browser::Folder;
+        let mut v = self.document.visibility().clone();
+        match f {
+            Folder::Bodies => v.folders.bodies = !v.folders.bodies,
+            Folder::Sketches => v.folders.sketches = !v.folders.sketches,
+            Folder::Construction => v.folders.planes = !v.folders.planes,
+            Folder::Origin => v.origin_planes = [v.origin_planes == [false; 3]; 3],
+            Folder::Drawings => return,
+        }
+        self.apply_visibility(v);
+    }
+
+    /// Übernimmt `v` ins Dokument und lässt die Ansicht folgen.
+    fn apply_visibility(&mut self, v: planora_feature::Visibility) {
+        if v != *self.document.visibility() {
+            self.document.set_visibility(v);
+            self.sync_visibility();
+        }
+    }
+
+    /// Nach einer geänderten Sichtbarkeit: Auswahl und Hervorhebung auf Ausgeblendetem entfallen,
+    /// die Szene wird neu gebaut.
+    fn sync_visibility(&mut self) {
+        let hidden = |s: &Self, p: Option<Pick>| match p {
+            Some(Pick::Plane(id)) => s.is_feature_hidden(id),
+            Some(p) => pick_body(p).is_some_and(|j| s.is_body_hidden(j)),
+            None => false,
+        };
+        if hidden(self, self.selection) {
+            self.selection = None;
+        }
+        if hidden(self, self.hover) {
+            self.hover = None;
+        }
+        if self.selected_body.is_some_and(|j| self.is_body_hidden(j)) {
+            self.selected_body = None;
+        }
+        let marks = std::mem::take(&mut self.marked_edges);
+        self.marked_edges = marks
+            .into_iter()
+            .filter(|e| !self.is_body_hidden(e.body))
+            .collect();
         self.rebuild_scene();
+    }
+
+    /// Wählt die Grundebene `p` (Klick in der Ansicht oder im Ordner „Ursprung“). Alles andere ist
+    /// danach nicht mehr gewählt.
+    pub fn select_origin_plane(&mut self, p: StandardPlane) {
+        self.set_selection(None);
+        self.selected_feature = None;
+        self.selected_body = None;
+        self.drawing_ui.selected_drawing = None;
+        self.selected_origin = Some(p);
+    }
+
+    /// Die gewählte Grundebene; jede andere Wahl hat Vorrang.
+    pub fn selected_origin_plane(&self) -> Option<StandardPlane> {
+        self.selected_origin.filter(|_| {
+            self.selection.is_none()
+                && self.selected_feature.is_none()
+                && self.selected_body.is_none()
+        })
+    }
+
+    /// „Sichtbarkeit umschalten“ (Taste V): die gewählte Skizze, Konstruktions- oder Grundebene,
+    /// sonst der gewählte Körper. `false`, wenn nichts davon gewählt ist.
+    pub fn toggle_selected_visibility(&mut self) -> bool {
+        let feature = self.selected_feature.filter(|id| {
+            self.document
+                .feature(*id)
+                .is_some_and(|f| matches!(f.kind, FeatureKind::Sketch(_) | FeatureKind::Plane(_)))
+        });
+        if let Some(id) = feature {
+            let hidden = self.own_feature_hidden(id);
+            self.set_feature_hidden(id, !hidden);
+            return true;
+        }
+        if let Some(p) = self.selected_origin_plane() {
+            let shown = self.is_origin_plane_shown(p);
+            self.set_origin_plane_shown(p, !shown);
+            return true;
+        }
+        match self.chosen_body() {
+            Some(j) => {
+                let hidden = self.own_body_hidden(j);
+                self.set_body_hidden(j, !hidden);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Index des Körpers `r` in der Körperliste, falls er sichtbar ist.
@@ -736,6 +989,7 @@ impl AppState {
             .iter()
             .filter_map(|f| carried_body(&f.kind).map(|b| (f.id, b)))
             .collect();
+        let visibility_before = self.document.visibility().clone();
         let kind = self.document.restore(s).map_err(|e| e.to_string())?;
         self.rebuild_name_counters();
         // Eine offene Skizze verwerfen: Ihr Entwurf (samt Verlauf) gehört zum alten Dokument.
@@ -745,6 +999,8 @@ impl AppState {
         let had_marks = !self.marked_edges.is_empty();
         self.marked_edges.clear();
         self.edge_picking = false;
+        self.plane_pick = None;
+        self.pending_pick = None;
         self.drag_move = None;
         self.pending_delete = None;
         self.pending_delete_drawing = None;
@@ -781,6 +1037,9 @@ impl AppState {
             // ihre Hervorhebung (markierte Kanten) geändert hat.
             RestoreKind::Annotations if had_marks && !left_sketch => self.rebuild_scene(),
             RestoreKind::Annotations => {}
+        }
+        if *self.document.visibility() != visibility_before {
+            self.sync_visibility();
         }
         if left_sketch {
             // Wie beim Verwerfen einer Skizze: die Kamera von vor dem Skizzenmodus.
@@ -1570,17 +1829,21 @@ impl AppState {
     }
 
     pub fn set_selection(&mut self, selection: Option<Pick>) {
+        self.selected_origin = None;
         if self.selection != selection {
             self.selection = selection;
-            if selection.is_some() {
-                self.selected_feature = None;
-            }
-            self.selected_body = match selection {
-                Some(Pick::Face(FaceRef { body, .. })) | Some(Pick::Edge(EdgeRef { body, .. })) => {
-                    Some(body)
+            // Eine Ebene wählt ihr Feature (wie ein Klick im Browser), alles andere den Körper.
+            match selection {
+                Some(Pick::Plane(id)) => {
+                    self.selected_feature = Some(id);
+                    self.selected_body = None;
                 }
-                None => self.selected_body,
-            };
+                Some(p) => {
+                    self.selected_feature = None;
+                    self.selected_body = pick_body(p);
+                }
+                None => {}
+            }
             self.rebuild_scene();
         }
     }
@@ -1661,35 +1924,74 @@ impl AppState {
     }
 
     /// Was liegt unter dem Mauszeiger? `cursor` in Pixeln (Ursprung oben links) im Viewport der Größe `viewport`.
-    /// Kanten haben Vorrang, wenn sie nahe genug und nicht verdeckt sind.
+    /// Kanten haben Vorrang, wenn sie nahe genug und nicht verdeckt sind. Konstruktionsebenen
+    /// zählen mit, Eckpunkte nicht ([`AppState::pick_with`] mit [`PickFilter::SELECT`]).
     pub fn pick(&self, cursor: Vec2, viewport: Vec2) -> Option<Pick> {
+        self.pick_with(cursor, viewport, PickFilter::SELECT)
+    }
+
+    /// Was ein Klick in der 3D-Ansicht trifft: beim Markieren von Kanten (Dialoge Abrunden und
+    /// Fase, [`AppState::edge_picking`]) nur Flächen und Kanten, damit keine Ebene die Kanten
+    /// dahinter verdeckt; sonst wie [`AppState::pick`].
+    pub fn view_pick(&self, cursor: Vec2, viewport: Vec2) -> Option<Pick> {
+        let filter = if self.edge_picking {
+            PickFilter::GEOMETRY
+        } else {
+            PickFilter::SELECT
+        };
+        self.pick_with(cursor, viewport, filter)
+    }
+
+    /// Wird die Ebene `id` hervorgehoben gezeichnet? Gewählt in der Ansicht, im Browser
+    /// (`selected_feature`) oder unter dem Mauszeiger.
+    pub fn plane_highlighted(&self, id: FeatureId) -> bool {
+        let this = Some(Pick::Plane(id));
+        self.selection == this || self.hover == this || self.selected_feature == Some(id)
+    }
+
+    /// Wie [`AppState::pick`], mit Wahl, was zählt ([`PickFilter`]). Reihenfolge: Eckpunkt
+    /// (nur mit `filter.vertices`), Kante (mit `filter.edges`), dann das Vordere aus Fläche und
+    /// Ebene (eine ausgeschaltete Fläche ergibt nichts, verdeckt aber weiter). Ob eine Ebene
+    /// Ecken und Kanten dahinter verdeckt, hängt vom Filter ab: bei `planes: true` verdeckt sie
+    /// wie eine Fläche (liegt eine Fläche näher, gewinnt diese); mit `planes: false` (etwa
+    /// `PickFilter::VERTICES`) zählen Ebenen nicht und verdecken nichts.
+    pub fn pick_with(&self, cursor: Vec2, viewport: Vec2, filter: PickFilter) -> Option<Pick> {
         if viewport.x < 1.0 || viewport.y < 1.0 {
             return None;
         }
-        let ndc = Vec2::new(
-            2.0 * cursor.x / viewport.x - 1.0,
-            1.0 - 2.0 * cursor.y / viewport.y,
-        );
-        let (origin, dir) = self.camera.ray(ndc);
+        let nearest_face = self.nearest_face_hit(cursor, viewport);
+        let nearest_plane = if filter.planes {
+            self.nearest_plane_hit(cursor, viewport)
+        } else {
+            None
+        };
+        let plane_distance = nearest_plane.map(|(_, d)| d as f32);
+        let occluder = match (nearest_face.map(|(_, h)| h.distance), plane_distance) {
+            (Some(f), Some(p)) => Some(f.min(p)),
+            (f, p) => f.or(p),
+        };
 
-        let mut nearest_face: Option<(usize, planora_render::FaceHit)> = None;
         let shown = || {
             self.bodies
                 .iter()
                 .enumerate()
                 .filter(|(j, _)| !self.is_body_hidden(*j))
         };
-        for (body, b) in shown() {
-            if let Some(hit) = pick_face(&b.mesh, origin, dir)
-                && nearest_face.is_none_or(|(_, h)| hit.distance < h.distance)
-            {
-                nearest_face = Some((body, hit));
+        if filter.vertices {
+            let meshes: Vec<(usize, &Mesh)> = shown().map(|(j, b)| (j, &b.mesh)).collect();
+            if let Some((body, edge, end)) = pick_vertex(
+                &meshes,
+                &self.camera,
+                viewport,
+                cursor,
+                PICK_VERTEX_PX,
+                occluder,
+            ) {
+                return Some(Pick::Vertex { body, edge, end });
             }
         }
-        let occluder = nearest_face.map(|(_, h)| h.distance);
-
         let mut best_edge: Option<(usize, planora_render::EdgeHit)> = None;
-        for (body, b) in shown() {
+        for (body, b) in shown().filter(|_| filter.edges) {
             if let Some(hit) = pick_edge(
                 &b.mesh,
                 &self.camera,
@@ -1708,19 +2010,309 @@ impl AppState {
                 edge: hit.edge,
             }));
         }
-        nearest_face.map(|(body, hit)| {
-            Pick::Face(FaceRef {
+        match (nearest_face, nearest_plane) {
+            (Some((_, f)), Some((id, p))) if p < f.distance as f64 => Some(Pick::Plane(id)),
+            (None, Some((id, _))) => Some(Pick::Plane(id)),
+            (face, _) => face.filter(|_| filter.faces).map(|(body, hit)| {
+                Pick::Face(FaceRef {
+                    body,
+                    face: hit.face,
+                })
+            }),
+        }
+    }
+
+    /// Die vorderste gezeichnete Konstruktionsebene unter dem Zeiger und die Strahllänge bis zu
+    /// ihr (gleiches Maß wie [`planora_render::FaceHit::distance`]).
+    fn nearest_plane_hit(&self, cursor: Vec2, viewport: Vec2) -> Option<(FeatureId, f64)> {
+        let ndc = Vec2::new(
+            2.0 * cursor.x / viewport.x - 1.0,
+            1.0 - 2.0 * cursor.y / viewport.y,
+        );
+        let (origin, dir) = self.camera.ray(ndc);
+        let ray = Ray {
+            origin: origin.as_dvec3(),
+            dir: dir.as_dvec3(),
+        };
+        self.plane_rects()
+            .into_iter()
+            .filter_map(|(id, rect)| pick_plane(&ray, &rect).map(|t| (id, t)))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+    }
+
+    /// Alle gezeichneten Konstruktionsebenen in der Reihenfolge des Verlaufs (siehe
+    /// [`AppState::plane_rect`]); im Baum ausgeblendete fehlen.
+    pub fn plane_rects(&self) -> Vec<(FeatureId, PlaneRect)> {
+        self.document
+            .features()
+            .iter()
+            .filter(|f| matches!(f.kind, FeatureKind::Plane(_)))
+            .filter(|f| !self.is_feature_hidden(f.id))
+            .filter_map(|f| self.plane_rect(f.id).map(|r| (f.id, r)))
+            .collect()
+    }
+
+    /// Die eingeblendeten Grundebenen als Rechtecke im Ursprung, so groß wie
+    /// Konstruktionsebenen ([`AppState::plane_rect_for`]).
+    pub fn origin_plane_rects(&self) -> Vec<(StandardPlane, PlaneRect)> {
+        [StandardPlane::XY, StandardPlane::XZ, StandardPlane::YZ]
+            .into_iter()
+            .filter(|p| self.is_origin_plane_shown(*p))
+            .filter_map(|p| {
+                let def = PlaneDef::Offset {
+                    base: PlaneBase::Standard(p),
+                    distance: 0.0,
+                };
+                self.plane_rect_for(&def, p.frame()).map(|r| (p, r))
+            })
+            .collect()
+    }
+
+    /// Die vorderste eingeblendete Grundebene unter dem Zeiger und die Strahllänge bis zu ihr
+    /// (wie [`Self::nearest_plane_hit`]).
+    fn nearest_origin_hit(&self, cursor: Vec2, viewport: Vec2) -> Option<(StandardPlane, f64)> {
+        let ndc = Vec2::new(
+            2.0 * cursor.x / viewport.x - 1.0,
+            1.0 - 2.0 * cursor.y / viewport.y,
+        );
+        let (origin, dir) = self.camera.ray(ndc);
+        let ray = Ray {
+            origin: origin.as_dvec3(),
+            dir: dir.as_dvec3(),
+        };
+        self.origin_plane_rects()
+            .into_iter()
+            .filter_map(|(p, rect)| pick_plane(&ray, &rect).map(|t| (p, t)))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+    }
+
+    /// Was ein Klick in der normalen Auswahl trifft: wie [`Self::view_pick`], dazu die
+    /// eingeblendeten Grundebenen ([`Self::plane_click_at`]; beim Markieren von Kanten nicht).
+    pub fn view_click_at(
+        &self,
+        cursor: Vec2,
+        viewport: Vec2,
+    ) -> Option<crate::plane_dialog::PlaneClick> {
+        let filter = if self.edge_picking {
+            PickFilter::GEOMETRY
+        } else {
+            PickFilter::SELECT
+        };
+        self.plane_click_at(cursor, viewport, filter)
+    }
+
+    /// Was ein Klick in einem Wahlmodus (Ebenen-Fenster, „Skizzenebene neu festlegen“) trifft:
+    /// wie [`Self::pick_with`], dazu bei `filter.planes` die eingeblendeten Grundebenen. Eine
+    /// Grundebene gewinnt, wenn nichts davor liegt (Ecken und Kanten gehen immer vor).
+    pub fn plane_click_at(
+        &self,
+        cursor: Vec2,
+        viewport: Vec2,
+        filter: PickFilter,
+    ) -> Option<crate::plane_dialog::PlaneClick> {
+        use crate::plane_dialog::PlaneClick;
+        if viewport.x < 1.0 || viewport.y < 1.0 {
+            return None;
+        }
+        let hit = self.pick_with(cursor, viewport, filter);
+        let origin = filter
+            .planes
+            .then(|| self.nearest_origin_hit(cursor, viewport))
+            .flatten();
+        let Some((plane, t)) = origin else {
+            return hit.map(PlaneClick::View);
+        };
+        // Abstand des anderen Treffers; Ecken und Kanten liegen vorn.
+        let front = match hit {
+            None => None,
+            Some(Pick::Face(_)) => self
+                .nearest_face_hit(cursor, viewport)
+                .map(|(_, f)| f.distance as f64),
+            Some(Pick::Plane(_)) => self.nearest_plane_hit(cursor, viewport).map(|(_, d)| d),
+            Some(_) => Some(f64::NEG_INFINITY),
+        };
+        match (hit, front) {
+            (Some(h), Some(d)) if d <= t => Some(PlaneClick::View(h)),
+            _ => Some(PlaneClick::Standard(plane)),
+        }
+    }
+
+    /// Rechteck, als das die Konstruktionsebene `id` gezeichnet und angeklickt wird (Skizzen 6);
+    /// `None` für unterdrückte, fehlerhafte und zurückgerollte Ebenen und andere Features.
+    /// Halbe Kante: das Größere aus 25 mm und 0,6 × Diagonale der Hüllquader aller sichtbaren
+    /// Körper. Mitte: Mitte der Basisfläche (Versatz von einer Fläche, Tangentialebene) in die
+    /// Ebene gelegt, sonst der Fußpunkt des Ursprungs.
+    pub fn plane_rect(&self, id: FeatureId) -> Option<PlaneRect> {
+        let Some(FeatureKind::Plane(pf)) = self.document.feature(id).map(|f| &f.kind) else {
+            return None;
+        };
+        if !self.document.is_active(id) {
+            return None;
+        }
+        let frame = self.document.plane_frame(id)?;
+        self.plane_rect_for(&pf.def, frame)
+    }
+
+    /// Rechteck einer Ebene mit der Definition `def` und der Lage `frame` (wie
+    /// [`AppState::plane_rect`]; auch für die Vorschau des Fensters, die noch kein Feature ist).
+    pub fn plane_rect_for(&self, def: &PlaneDef, frame: Frame) -> Option<PlaneRect> {
+        let base_face = match def {
+            PlaneDef::Offset {
+                base: PlaneBase::Face(r),
+                ..
+            }
+            | PlaneDef::Tangent { face: r, .. } => Some(r),
+            _ => None,
+        };
+        let anchor = base_face
+            .and_then(|r| self.face_outline(r))
+            .and_then(|pts| {
+                let first = *pts.first()?;
+                let (lo, hi) = pts
+                    .iter()
+                    .fold((first, first), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
+                Some((lo + hi) * 0.5)
+            })
+            .unwrap_or(DVec3::ZERO);
+        // `anchor` senkrecht in die Ebene legen.
+        let center = anchor - frame.z * (anchor - frame.origin).dot(frame.z);
+        let diagonal = self
+            .bodies
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| !self.is_body_hidden(*j))
+            .map(|(_, b)| b.bounds)
+            .reduce(|(lo, hi), (a, b)| (lo.min(a), hi.max(b)))
+            .map_or(0.0, |(lo, hi)| (hi - lo).length());
+        let half = (PLANE_HALF_PER_DIAGONAL * diagonal).max(PLANE_MIN_HALF_MM);
+        (center.is_finite() && half.is_finite()).then_some(PlaneRect {
+            frame: Frame {
+                origin: center,
+                ..frame
+            },
+            half: DVec2::splat(half),
+        })
+    }
+
+    /// Wie [`AppState::pick`], aber nur Flächen (Kanten zählen nicht): für Schneiden und
+    /// Silhouette, die Flächen wählen.
+    pub fn pick_face_under(&self, cursor: Vec2, viewport: Vec2) -> Option<FaceRef> {
+        if viewport.x < 1.0 || viewport.y < 1.0 {
+            return None;
+        }
+        self.nearest_face_hit(cursor, viewport)
+            .map(|(body, hit)| FaceRef {
                 body,
                 face: hit.face,
             })
-        })
+    }
+
+    /// Die vorderste sichtbare Fläche unter dem Zeiger (Index des Körpers und Treffer).
+    fn nearest_face_hit(
+        &self,
+        cursor: Vec2,
+        viewport: Vec2,
+    ) -> Option<(usize, planora_render::FaceHit)> {
+        let ndc = Vec2::new(
+            2.0 * cursor.x / viewport.x - 1.0,
+            1.0 - 2.0 * cursor.y / viewport.y,
+        );
+        let (origin, dir) = self.camera.ray(ndc);
+        let mut nearest_face: Option<(usize, planora_render::FaceHit)> = None;
+        for (body, b) in self.bodies.iter().enumerate() {
+            if self.is_body_hidden(body) {
+                continue;
+            }
+            if let Some(hit) = pick_face(&b.mesh, origin, dir)
+                && nearest_face.is_none_or(|(_, h)| hit.distance < h.distance)
+            {
+                nearest_face = Some((body, hit));
+            }
+        }
+        nearest_face
     }
 }
 
-/// Index des Körpers, zu dem eine Fläche oder Kante gehört.
-fn pick_body(p: Pick) -> usize {
+/// Was „Projizieren“ in die Skizze legt: eine Kante, eine Fläche (ihre Schleifen) oder einen
+/// ganzen Körper; je mit dem Index des Körpers in [`AppState::bodies`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjectTarget {
+    Edge(usize, Id<Edge>),
+    Face(usize, Id<Face>),
+    Body(usize),
+}
+
+/// Meldung zu einem Fehler des Ebenenschnitts (`section`) oder der Silhouette, mit dem Text des
+/// Befehls statt dem des Rechners.
+fn section_error(e: &planora_kernel::SectionError, section: bool) -> Msg {
+    use planora_kernel::SectionError;
+    match (e, section) {
+        (SectionError::Unsupported { surface, .. }, true) => crate::msg!(
+            "sketch-intersect-unsupported",
+            surface = planora_kernel::boolean::surface_label(surface)
+        ),
+        (SectionError::Unsupported { surface, .. }, false) => crate::msg!(
+            "sketch-silhouette-unsupported",
+            surface = planora_kernel::boolean::surface_label(surface)
+        ),
+        (SectionError::Freeform(_), true) => crate::msg!("sketch-intersect-freeform"),
+        (SectionError::Freeform(_), false) => crate::msg!("sketch-silhouette-freeform"),
+    }
+}
+
+/// Kanten, die in einer Fläche zweimal vorkommen (Nähte von Zylinder, Kegel und Kugel): Sie
+/// sind keine echten Ränder und werden nicht projiziert.
+fn seam_edges(solid: &Solid) -> std::collections::HashSet<Id<Edge>> {
+    let mut seams = std::collections::HashSet::new();
+    for (_, face) in solid.faces.iter() {
+        let mut seen = std::collections::HashSet::new();
+        for he in std::iter::once(&face.outer)
+            .chain(&face.inner)
+            .flat_map(|l| &l.half_edges)
+        {
+            if !seen.insert(he.edge) {
+                seams.insert(he.edge);
+            }
+        }
+    }
+    seams
+}
+
+/// Die Kanten der Schleifen von `face` (außen, dann die Löcher), ohne Nähte und Wiederholung;
+/// `None`, wenn es die Fläche nicht gibt.
+fn face_edges(solid: &Solid, face: Id<Face>) -> Option<Vec<Id<Edge>>> {
+    let f = solid.faces.get(face)?;
+    let seams = seam_edges(solid);
+    let mut out: Vec<Id<Edge>> = Vec::new();
+    for he in std::iter::once(&f.outer)
+        .chain(&f.inner)
+        .flat_map(|l| &l.half_edges)
+    {
+        if !seams.contains(&he.edge) && !out.contains(&he.edge) {
+            out.push(he.edge);
+        }
+    }
+    Some(out)
+}
+
+/// Alle Kanten des Körpers ohne Nähte.
+fn body_edges(solid: &Solid) -> Vec<Id<Edge>> {
+    let seams = seam_edges(solid);
+    solid
+        .edges
+        .iter()
+        .map(|(id, _)| id)
+        .filter(|id| !seams.contains(id))
+        .collect()
+}
+
+/// Index des Körpers, zu dem eine Fläche, Kante oder Ecke gehört (eine Ebene: `None`).
+fn pick_body(p: Pick) -> Option<usize> {
     match p {
-        Pick::Face(FaceRef { body, .. }) | Pick::Edge(EdgeRef { body, .. }) => body,
+        Pick::Face(FaceRef { body, .. })
+        | Pick::Edge(EdgeRef { body, .. })
+        | Pick::Vertex { body, .. } => Some(body),
+        Pick::Plane(_) => None,
     }
 }
 
@@ -1779,6 +2371,8 @@ impl AppState {
             // Ohne bekannte Fläche vorläufig; die Berechnung setzt die Ebene der Fläche.
             // [`AppState::new_sketch_on_face`] gibt die echte Ebene mit.
             SketchPlane::OnFace(_) => Frame::WORLD,
+            // Lage der Konstruktionsebene; nur ohne berechnete Ebene vorläufig die Weltebene.
+            SketchPlane::OnPlane(id) => self.document.plane_frame(*id).unwrap_or(Frame::WORLD),
         };
         self.add_sketch_in(plane, frame)
     }
@@ -1821,6 +2415,197 @@ impl AppState {
         self.add_sketch_in(SketchPlane::OnFace(r), frame)
     }
 
+    /// Legt eine Konstruktionsebene „Ebene N“ mit der Definition `def` am Marker an (Skizzen 6,
+    /// Menü „Konstruieren“). Ein Schritt; lässt sich die Ebene nicht berechnen, bleibt sie mit
+    /// Fehlerstatus stehen (wie andere Features) und die Meldung steht in `message`.
+    pub fn add_plane(&mut self, def: PlaneDef) -> Result<FeatureId, String> {
+        self.add_plane_with(def, Formulas::new())
+    }
+
+    /// Wie [`AppState::add_plane`], mit den Formeln der Felder „Abstand“ bzw. „Winkel“.
+    pub fn add_plane_with(
+        &mut self,
+        def: PlaneDef,
+        formulas: Formulas,
+    ) -> Result<FeatureId, String> {
+        self.try_close_sketch()?;
+        let kind = FeatureKind::Plane(planora_feature::planes::PlaneFeature { def });
+        self.add_feature_with(None, kind, formulas)
+    }
+
+    /// Ändert die Konstruktionsebene `id` auf `def` mit `formulas` (Fenster „Bearbeiten“): ein
+    /// Schritt. Lässt sich die Ebene danach nicht berechnen, steht der Grund in `message` und im
+    /// Baum; das gilt trotzdem als übernommen.
+    pub fn update_plane(
+        &mut self,
+        id: FeatureId,
+        def: PlaneDef,
+        formulas: Formulas,
+    ) -> Result<(), String> {
+        if !self
+            .document
+            .feature(id)
+            .is_some_and(|f| matches!(f.kind, FeatureKind::Plane(_)))
+        {
+            return self.fail(tr!("state-plane-not-found"));
+        }
+        self.end_sketch_for(None)?;
+        let kind = FeatureKind::Plane(planora_feature::planes::PlaneFeature { def });
+        if let Err(e) = self
+            .document
+            .update_with_formulas(id, |k| *k = kind, formulas)
+        {
+            return self.fail(tr!("edit-rejected", error = e.to_string()));
+        }
+        self.message = None;
+        self.refresh();
+        if let Some(f) = self.document.feature(id)
+            && let FeatureStatus::Error(e) = &f.status
+        {
+            self.message = Some(tr!("tree-status-line", name = &f.name, error = e));
+        }
+        Ok(())
+    }
+
+    /// „Skizzenebene neu festlegen“ (Skizzen 6): setzt die Skizze `sketch` auf `plane`. Ein
+    /// Schritt; eine offene Skizze wird vorher beendet. Lehnt das Dokument ab (etwa eine Fläche
+    /// eines späteren Features), bleibt es unverändert und der Grund steht in `message`.
+    pub fn redefine_sketch_plane(
+        &mut self,
+        sketch: FeatureId,
+        plane: SketchPlane,
+    ) -> Result<(), String> {
+        if !self
+            .document
+            .feature(sketch)
+            .is_some_and(|f| matches!(f.kind, FeatureKind::Sketch(_)))
+        {
+            return self.fail(tr!("state-sketch-not-found"));
+        }
+        self.try_close_sketch()?;
+        if let Err(e) = self.document.set_sketch_plane(sketch, plane) {
+            return self.fail(tr!("edit-rejected", error = e.to_string()));
+        }
+        self.message = None;
+        self.refresh();
+        if let Some(f) = self.document.feature(sketch)
+            && let FeatureStatus::Error(e) = &f.status
+        {
+            self.message = Some(tr!("tree-status-line", name = &f.name, error = e));
+        }
+        Ok(())
+    }
+
+    /// Beginnt den Wahlmodus „Skizzenebene neu festlegen“ für `sketch` (Kontextmenü, Taste).
+    /// Eine offene Skizze wird vorher beendet (wie „Extrudieren“ aus dem Kontextmenü); wird ihr
+    /// Entwurf abgelehnt, beginnt der Modus nicht. Andere Wahlmodi enden.
+    pub fn start_redefine_sketch_plane(&mut self, sketch: FeatureId) -> Result<(), String> {
+        if !self
+            .document
+            .feature(sketch)
+            .is_some_and(|f| matches!(f.kind, FeatureKind::Sketch(_)))
+        {
+            return self.fail(tr!("state-sketch-not-found"));
+        }
+        self.try_close_sketch()?;
+        self.plane_pick = None;
+        self.edge_picking = false;
+        self.clear_edge_marks();
+        self.selected_feature = Some(sketch);
+        self.selected_body = None;
+        self.set_selection(None);
+        self.message = None;
+        self.pending_pick = Some(PendingPick::SketchPlane(sketch));
+        Ok(())
+    }
+
+    /// Beendet einen Wahlmodus ohne Änderung (Esc, Rechtsklick).
+    pub fn cancel_pending_pick(&mut self) {
+        self.pending_pick = None;
+        self.set_hover(None);
+    }
+
+    /// Ein Klick im Wahlmodus „Skizzenebene neu festlegen“ (Ansicht oder Ordner „Ursprung“).
+    /// Eine Grundebene, Konstruktionsebene oder ebene Fläche setzt die Skizze darauf und beendet
+    /// den Modus, auch wenn das Dokument ablehnt. Eine gekrümmte Fläche (oder eine Fläche eines
+    /// Netz-Körpers) gibt nur eine Meldung; der Modus bleibt.
+    pub fn pick_sketch_plane(&mut self, click: crate::plane_dialog::PlaneClick) {
+        use crate::plane_dialog::PlaneClick;
+        let Some(PendingPick::SketchPlane(sketch)) = self.pending_pick else {
+            return;
+        };
+        let plane = match click {
+            PlaneClick::Standard(p) => SketchPlane::Standard(p),
+            PlaneClick::View(Pick::Plane(id)) => SketchPlane::OnPlane(id),
+            PlaneClick::View(Pick::Face(f)) => match self.face_ref_for_sketch(f.body, f.face) {
+                Ok(r) => SketchPlane::OnFace(r),
+                Err(e) => {
+                    self.message = Some(e);
+                    return;
+                }
+            },
+            // Kanten und Eckpunkte wählt der Filter nicht.
+            PlaneClick::View(_) => return,
+        };
+        self.cancel_pending_pick();
+        let _ = self.redefine_sketch_plane(sketch, plane);
+    }
+
+    /// Verweis auf die ebene Fläche `face` des sichtbaren Körpers `body` für eine Skizze; sonst
+    /// der Grund.
+    fn face_ref_for_sketch(
+        &self,
+        body: usize,
+        face: Id<Face>,
+    ) -> Result<planora_feature::FaceRef, String> {
+        if self.is_mesh(body) {
+            return Err(mesh_locked());
+        }
+        let b = self
+            .bodies
+            .get(body)
+            .ok_or_else(|| tr!("state-body-not-found"))?;
+        if b.solid.faces.get(face).is_none() {
+            return Err(tr!("state-face-not-found"));
+        }
+        if plane_of_face(&b.solid, face).is_none() {
+            return Err(tr!("state-sketch-planar-only"));
+        }
+        planora_feature::FaceRef::from_face(&b.solid, face, &self.kernel.tolerance)
+            .map_err(|e| tr!("state-sketch-on-face-failed", error = e.to_string()))
+    }
+
+    /// Legt ein leeres Skizzen-Feature auf der Konstruktionsebene `id` an (Kontextmenü
+    /// „Skizze erstellen“, „Skizze auf gewählter Fläche“ mit gewählter Ebene). Die Skizze folgt
+    /// der Ebene. Nur für berechnete Ebenen.
+    pub fn new_sketch_on_plane(&mut self, id: FeatureId) -> Result<FeatureId, String> {
+        if !self
+            .document
+            .feature(id)
+            .is_some_and(|f| matches!(f.kind, FeatureKind::Plane(_)))
+        {
+            return self.fail(tr!("state-plane-not-found"));
+        }
+        let Some(frame) = self.document.plane_frame(id) else {
+            return self.fail(tr!("state-plane-not-computed"));
+        };
+        if let Some(why) = crate::history_bar::lock_reason(self, &[id]) {
+            return self.fail(why);
+        }
+        self.try_close_sketch()?;
+        self.add_sketch_in(SketchPlane::OnPlane(id), frame)
+    }
+
+    /// Die gewählte, berechnete Konstruktionsebene (in der Ansicht angeklickt oder im Browser
+    /// gewählt), sonst `None`.
+    pub fn selected_plane(&self) -> Option<FeatureId> {
+        let id = match self.selection {
+            Some(Pick::Plane(id)) => id,
+            _ => self.selected_feature?,
+        };
+        self.plane_rect(id).map(|_| id)
+    }
+
     /// Öffnet den Skizzen-Modus für das Skizzen-Feature `id` auf einem Entwurf (Kopie der
     /// Definition mit der berechneten Skizze): Kamera senkrecht auf die Skizzenebene, übrige
     /// Szene gedämpft. Eine schon geöffnete Skizze wird vorher zurückgeschrieben; die gemerkte
@@ -1833,6 +2618,8 @@ impl AppState {
         {
             return self.fail(tr!("state-sketch-not-found"));
         }
+        // Im Skizzen-Modus wählt die Ansicht nichts für einen anderen Befehl.
+        self.pending_pick = None;
         let switching = self.sketch_session.is_some();
         if switching {
             // Bleibt die alte Skizze offen (Entwurf abgelehnt), wird nicht gewechselt.
@@ -2079,6 +2866,8 @@ impl AppState {
         // Ein Befehl ohne fertige Form hinterlässt nichts, auch beim Beenden der Skizze.
         se.drop_open_points(&mut draft.sketch);
         se.clear_pending();
+        // Projektionen gelöschter Kurven werden nicht gespeichert (Skizzen 6; beim Laden ebenso).
+        draft.prune_copies();
         let id = se.sketch;
         let Some(FeatureKind::Sketch(def)) = self.document.feature(id).map(|f| &f.kind) else {
             return Ok(());
@@ -2138,6 +2927,47 @@ impl AppState {
         self.commit_draft()?;
         self.restore_camera();
         Ok(())
+    }
+
+    /// Die gewählten Kurven der offenen Skizze, die Projektionen sind (Ziel von „Verknüpfung
+    /// aufheben“ an Knopf und Aktion); ohne offene Skizze leer.
+    pub fn selected_projections(&self) -> Vec<CurveId> {
+        match (self.sketch_session.as_ref(), self.sketch_draft.as_ref()) {
+            (Some(se), Some(draft)) => se.selected_projections(draft),
+            _ => Vec::new(),
+        }
+    }
+
+    /// „Verknüpfung aufheben“ (Skizzen 6, Fusion „Break Link“), der einzige Weg für Knopf und
+    /// Aktion: Die projizierten Kurven `curves` der offenen Skizze folgen ihrer Herkunft nicht
+    /// mehr, Lage und Fixierung bleiben. Alle zusammen sind genau ein Skizzen-Rückgängig-Schritt
+    /// („Verknüpfung aufheben“); Rückgängig stellt die Verknüpfungen wieder her. Kurven ohne
+    /// Projektion werden übergangen. Liefert die Zahl der gelösten Kurven.
+    /// Fehler (Meldung auch in `message`, nichts geändert): keine offene Skizze, oder keine der
+    /// Kurven ist eine Projektion.
+    pub fn break_projection_links(&mut self, curves: &[CurveId]) -> Result<usize, String> {
+        if self.sketch_session.is_none() || self.sketch_draft.is_none() {
+            return self.fail(tr!("state-no-open-sketch"));
+        }
+        // Offene Änderungen vorher als eigener Schritt, damit dieser nur das Lösen enthält.
+        self.observe_sketch(false);
+        let broken = self
+            .sketch_draft
+            .as_mut()
+            .map_or(0, |d| curves.iter().filter(|c| d.break_link(**c)).count());
+        if broken == 0 {
+            return self.fail(tr!("state-curve-not-projected"));
+        }
+        if let Some(se) = self.sketch_session.as_mut() {
+            se.edit_label = Some(crate::msg!("action-sketch-break-link"));
+        }
+        self.observe_sketch(false);
+        Ok(broken)
+    }
+
+    /// [`break_projection_links`](Self::break_projection_links) für eine Kurve.
+    pub fn break_projection_link(&mut self, curve: CurveId) -> Result<(), String> {
+        self.break_projection_links(&[curve]).map(|_| ())
     }
 
     // ---- Rückgängig in der offenen Skizze (R10) ------------------------------------------
@@ -2355,24 +3185,65 @@ impl AppState {
         }
     }
 
-    /// Kopiert die Kante `edge` des sichtbaren Körpers `body` in die geöffnete Skizze und merkt
-    /// sich den Verweis, damit die Kopie dem Körper folgt. Nur Körper, die vor dem
-    /// Skizzen-Feature sichtbar sind, sind erlaubt. Fehler stehen auch in der Meldung der
-    /// Sitzung.
+    /// Projiziert die Kante `edge` des sichtbaren Körpers `body` verknüpft in die geöffnete
+    /// Skizze (Kurzform von [`AppState::project_into_sketch`]).
     pub fn project_edge_into_sketch(&mut self, body: usize, edge: Id<Edge>) -> Result<(), String> {
-        match self.try_project_edge(body, edge) {
-            Ok(()) => Ok(()),
-            Err(m) => {
-                let text = m.text();
-                if let Some(se) = self.sketch_session.as_mut() {
-                    se.message = Some(m);
-                }
-                Err(text)
-            }
-        }
+        self.project_into_sketch(ProjectTarget::Edge(body, edge), true)
+            .map(|_| ())
     }
 
-    fn try_project_edge(&mut self, body: usize, edge: Id<Edge>) -> Result<(), Msg> {
+    /// Fusion „Projizieren“ (Skizzen 6): projiziert eine Kante, alle Kanten der Schleifen einer
+    /// Fläche (außen und Löcher) oder alle Kanten eines Körpers in die geöffnete Skizze, als feste,
+    /// normale Kurven. Kanten, die nur ein Punkt wären, und Nähte entfallen; deckungsgleiche
+    /// Projektionen kommen nur einmal, auch gegen schon projizierte Kurven der Skizze. Mit `link`
+    /// bekommt jede Kurve ihren Verweis auf die Kante und folgt dem Körper. Freiformkanten werden
+    /// übersprungen und in der Meldung gezählt. Nur Körper, die vor dem Skizzen-Feature sichtbar
+    /// sind, sind erlaubt. Liefert die Zahl neuer Kurven; alles ist ein Rückgängig-Schritt.
+    /// Fehler stehen auch in der Meldung der Sitzung.
+    pub fn project_into_sketch(
+        &mut self,
+        target: ProjectTarget,
+        link: bool,
+    ) -> Result<usize, String> {
+        let r = self.try_project(target, link);
+        self.report_to_session(r)
+    }
+
+    /// Fusion „Schneiden“ (Skizzen 6): schneidet die Skizzenebene mit einer Fläche oder allen
+    /// Flächen eines Körpers und legt je Schnittstück eine feste, normale Kurve in die geöffnete
+    /// Skizze. Jede Kurve ist mit ihrer Fläche verknüpft (`CopySource::Section`) und folgt dem
+    /// Körper. Kann der Rechner eine getroffene Fläche nicht schneiden (Freiform, Lage ohne
+    /// Rechenweg), entsteht nichts und die Meldung nennt den Grund. Kanten lassen sich nicht
+    /// schneiden. Liefert die Zahl neuer Kurven; alles ist ein Rückgängig-Schritt. Fehler stehen
+    /// auch in der Meldung der Sitzung.
+    pub fn intersect_into_sketch(&mut self, target: ProjectTarget) -> Result<usize, String> {
+        let r = self.try_intersect(target);
+        self.report_to_session(r)
+    }
+
+    /// Fusion „Silhouette“ (Skizzen 6): legt den Umriss der Fläche `face` des sichtbaren Körpers
+    /// `body` in Blickrichtung der Skizzenebene (ihre Normale) als feste, normale Kurven in die
+    /// geöffnete Skizze, verknüpft über `CopySource::Silhouette`. Fehler des Rechners wie bei
+    /// [`AppState::intersect_into_sketch`]. Ein Rückgängig-Schritt.
+    pub fn silhouette_into_sketch(&mut self, body: usize, face: Id<Face>) -> Result<usize, String> {
+        let r = self.try_silhouette(body, face);
+        self.report_to_session(r)
+    }
+
+    /// Ein Fehler eines Befehls steht auch in der Meldung der Skizzensitzung.
+    fn report_to_session(&mut self, r: Result<usize, Msg>) -> Result<usize, String> {
+        r.map_err(|m| {
+            let text = m.text();
+            if let Some(se) = self.sketch_session.as_mut() {
+                se.message = Some(m);
+            }
+            text
+        })
+    }
+
+    /// Der Körper `body` (Index in [`AppState::bodies`]), wie er vor der geöffneten Skizze
+    /// sichtbar ist; nur diese Körper lassen sich in die Skizze bringen.
+    fn solid_before_sketch(&self, body: usize) -> Result<Solid, Msg> {
         let id = self
             .open_sketch_id()
             .ok_or_else(|| crate::msg!("state-no-open-sketch"))?;
@@ -2381,29 +3252,244 @@ impl AppState {
             .get(body)
             .map(|b| b.source)
             .ok_or_else(|| crate::msg!("state-body-not-found"))?;
-        let solid = self
-            .document
+        self.document
             .visible_bodies_before(id)
             .into_iter()
             .find(|v| v.body == source)
             .map(|v| v.solid.clone())
-            .ok_or_else(|| crate::msg!("state-edge-body-later"))?;
-        let edge_ref = planora_feature::EdgeRef::from_edge(&solid, edge, &self.kernel.tolerance)
-            .map_err(|e| crate::msg!("state-edge-copy-failed", error = e.to_string()))?;
+            .ok_or_else(|| crate::msg!("state-edge-body-later"))
+    }
+
+    fn try_project(&mut self, target: ProjectTarget, link: bool) -> Result<usize, Msg> {
+        let body = match target {
+            ProjectTarget::Edge(b, _) | ProjectTarget::Face(b, _) | ProjectTarget::Body(b) => b,
+        };
+        let solid = self.solid_before_sketch(body)?;
+        let tol = self.kernel.tolerance;
+        let single = matches!(target, ProjectTarget::Edge(..));
+        let edges = match target {
+            ProjectTarget::Edge(_, e) => vec![e],
+            ProjectTarget::Face(_, f) => {
+                face_edges(&solid, f).ok_or_else(|| crate::msg!("state-face-not-found"))?
+            }
+            ProjectTarget::Body(_) => body_edges(&solid),
+        };
+        // Je Kante Kurvenstück und (mit Verknüpfung) Verweis; eine Kante ohne Verweis wird
+        // übersprungen, bei einer einzelnen Kante ist das ein Fehler wie früher.
+        let mut pieces = Vec::with_capacity(edges.len());
+        let mut sources = Vec::with_capacity(edges.len());
+        // Übersprungene Kanten ohne Verweis (Freiform zählt die Sitzung selbst).
+        let mut skipped_other = 0;
+        for e in edges {
+            let edge_ref = if link {
+                match planora_feature::EdgeRef::from_edge(&solid, e, &tol) {
+                    Ok(r) => Some(CopySource::Edge(r)),
+                    Err(err) if single => {
+                        return Err(crate::msg!(
+                            "state-edge-copy-failed",
+                            error = err.to_string()
+                        ));
+                    }
+                    Err(_) => {
+                        skipped_other += 1;
+                        continue;
+                    }
+                }
+            } else {
+                None
+            };
+            let Some(edge) = solid.edges.get(e) else {
+                return Err(crate::msg!("state-edge-copy-failed", error = String::new()));
+            };
+            pieces.push((edge.curve.clone(), edge.t0, edge.t1));
+            sources.push(edge_ref);
+        }
+        // Der Schritt heißt wie der Befehl (Fusion „Projizieren“), auch ohne Verknüpfung.
+        self.place_projection(
+            &pieces,
+            &sources,
+            single,
+            skipped_other,
+            crate::msg!("sketch-project-nothing-new"),
+            crate::msg!("undo-edge-project"),
+        )
+    }
+
+    fn try_intersect(&mut self, target: ProjectTarget) -> Result<usize, Msg> {
+        let (body, faces) = match target {
+            ProjectTarget::Edge(..) => return Err(crate::msg!("sketch-pick-intersect")),
+            ProjectTarget::Face(b, f) => (b, Some(f)),
+            ProjectTarget::Body(b) => (b, None),
+        };
+        let solid = self.solid_before_sketch(body)?;
+        let frame = *self
+            .sketch_draft
+            .as_ref()
+            .ok_or_else(|| crate::msg!("state-no-open-sketch"))?
+            .sketch
+            .frame();
+        let faces: Vec<Id<Face>> = match faces {
+            Some(f) if solid.faces.get(f).is_some() => vec![f],
+            Some(_) => return Err(crate::msg!("state-face-not-found")),
+            None => solid.faces.iter().map(|(f, _)| f).collect(),
+        };
+        let tol = self.kernel.tolerance;
+        // Je Fläche einzeln geschnitten: Der Index eines Stücks zählt unter den Stücken seiner
+        // Fläche, so wie `follow_copy` im Feature ihn beim Nachführen auflöst.
+        self.place_face_pieces(
+            &solid,
+            &faces,
+            |f| {
+                planora_kernel::section_by_plane(&solid, &frame, Some(&[f]), &tol)
+                    .map_err(|e| section_error(&e, true))
+            },
+            true,
+        )
+    }
+
+    fn try_silhouette(&mut self, body: usize, face: Id<Face>) -> Result<usize, Msg> {
+        let solid = self.solid_before_sketch(body)?;
+        if solid.faces.get(face).is_none() {
+            return Err(crate::msg!("state-face-not-found"));
+        }
+        let view = self
+            .sketch_draft
+            .as_ref()
+            .ok_or_else(|| crate::msg!("state-no-open-sketch"))?
+            .sketch
+            .frame()
+            .z;
+        let tol = self.kernel.tolerance;
+        self.place_face_pieces(
+            &solid,
+            &[face],
+            |f| {
+                planora_kernel::silhouette(&solid, f, view, &tol)
+                    .map_err(|e| section_error(&e, false))
+            },
+            false,
+        )
+    }
+
+    /// Schneiden und Silhouette: die Stücke der Flächen `faces` (je Fläche aus `pieces_of`),
+    /// jedes verknüpft mit seiner Fläche und seinem Index unter den Stücken dieser Fläche
+    /// (`section`: Schnitt, sonst Umriss). Ein Fehler des Rechners bricht alles ab, bevor etwas
+    /// angelegt ist. Eine Fläche ohne Verweis zählt mit ihren Stücken als übersprungen; ist sie die
+    /// einzige, ist das ein Fehler.
+    fn place_face_pieces(
+        &mut self,
+        solid: &Solid,
+        faces: &[Id<Face>],
+        pieces_of: impl Fn(Id<Face>) -> Result<Vec<planora_kernel::SectionPiece>, Msg>,
+        section: bool,
+    ) -> Result<usize, Msg> {
+        let tol = self.kernel.tolerance;
+        let mut pieces = Vec::new();
+        let mut sources = Vec::new();
+        let mut skipped_other = 0;
+        for &f in faces {
+            let found = pieces_of(f)?;
+            if found.is_empty() {
+                continue;
+            }
+            let face = match planora_feature::FaceRef::from_face(solid, f, &tol) {
+                Ok(r) => r,
+                Err(e) if faces.len() == 1 => {
+                    return Err(crate::msg!("state-face-link-failed", error = e.to_string()));
+                }
+                Err(_) => {
+                    skipped_other += found.len();
+                    continue;
+                }
+            };
+            for (index, p) in found.into_iter().enumerate() {
+                let face = face.clone();
+                sources.push(Some(if section {
+                    CopySource::Section { face, index }
+                } else {
+                    CopySource::Silhouette { face, index }
+                }));
+                pieces.push((p.curve, p.t0, p.t1));
+            }
+        }
+        if pieces.is_empty() && skipped_other == 0 {
+            return Err(if section {
+                crate::msg!("sketch-intersect-nothing")
+            } else {
+                crate::msg!("sketch-silhouette-nothing")
+            });
+        }
+        let (nothing, label) = if section {
+            (
+                crate::msg!("sketch-intersect-nothing-new"),
+                crate::msg!("undo-sketch-intersect"),
+            )
+        } else {
+            (
+                crate::msg!("sketch-silhouette-nothing-new"),
+                crate::msg!("undo-silhouette"),
+            )
+        };
+        self.place_projection(&pieces, &sources, false, skipped_other, nothing, label)
+    }
+
+    /// Gemeinsamer Abschluss von Projizieren, Schneiden und Silhouette: legt die Kurvenstücke
+    /// `pieces` über [`SketchSession::project_pieces`] in die Skizze (ohne Punkte und Doppelte),
+    /// hängt je neue Kurve ihre Herkunft aus `sources` an (gleicher Index; `None`: ohne
+    /// Verknüpfung) und benennt den Schritt mit `label`. Übersprungene Stücke stehen als Hinweis
+    /// in der Meldung (`skipped_other` kommt zu den anderen der Sitzung dazu); ohne neue Kurve
+    /// ist das Ergebnis ein Fehler (`nothing`, wenn nichts übersprungen ist).
+    fn place_projection(
+        &mut self,
+        pieces: &[(planora_kernel::Curve, f64, f64)],
+        sources: &[Option<CopySource>],
+        single: bool,
+        mut skipped_other: usize,
+        nothing: Msg,
+        label: Msg,
+    ) -> Result<usize, Msg> {
         let (Some(se), Some(draft)) = (self.sketch_session.as_mut(), self.sketch_draft.as_mut())
         else {
             return Err(crate::msg!("state-no-open-sketch"));
         };
+        let known: Vec<CurveId> = draft.copies.iter().map(|c| c.curve).collect();
         // Fehler der Sitzung stehen schon als Grund in ihrer Meldung.
-        let curve = match se.project_edge(&mut draft.sketch, &solid, edge) {
-            Ok(c) => c,
+        let outcome = match se.project_pieces(&mut draft.sketch, pieces, &known, single) {
+            Ok(o) => o,
             Err(e) => return Err(se.message.clone().unwrap_or(Msg::Raw(e))),
         };
-        draft.copies.push(EdgeCopy {
-            curve,
-            edge: edge_ref,
-        });
-        Ok(())
+        skipped_other += outcome.skipped_other;
+        let skipped_freeform = outcome.skipped_freeform;
+        let mut notes = Vec::new();
+        if skipped_freeform > 0 {
+            notes.push(crate::msg!(
+                "sketch-project-skipped",
+                count = skipped_freeform
+            ));
+        }
+        if skipped_other > 0 {
+            notes.push(crate::msg!(
+                "sketch-project-skipped-other",
+                count = skipped_other
+            ));
+        }
+        if outcome.added.is_empty() {
+            return Err(match notes.len() {
+                0 => nothing,
+                1 => notes.remove(0),
+                _ => Msg::Join(notes),
+            });
+        }
+        for &(i, curve) in &outcome.added {
+            if let Some(source) = sources[i].clone() {
+                draft.copies.push(EdgeCopy { curve, source });
+            }
+        }
+        for note in notes {
+            se.add_note(note);
+        }
+        se.edit_label = Some(label);
+        Ok(outcome.added.len())
     }
 
     /// Wunsch aus dem Kontextmenü des Browsers, „Skizze extrudieren/drehen“ zu öffnen: beendet
@@ -2707,11 +3793,7 @@ impl AppState {
     /// Der Körper, um den es bei Menü, Befehlsfeld und Tasten geht (Index in `bodies`): der
     /// gewählte, sonst der Körper der gewählten Fläche oder Kante.
     pub fn chosen_body(&self) -> Option<usize> {
-        self.selected_body.or(match self.selection {
-            Some(Pick::Face(f)) => Some(f.body),
-            Some(Pick::Edge(e)) => Some(e.body),
-            None => None,
-        })
+        self.selected_body.or(self.selection.and_then(pick_body))
     }
 
     /// Warum „Vereinigen“, „Abziehen“ und „Schneiden“ gerade nicht gehen (`None`: sie gehen).
@@ -2736,8 +3818,15 @@ impl AppState {
         }
     }
 
-    /// Warum „Skizze auf gewählter Fläche“ gerade nicht geht (`None`: es geht).
+    /// Warum „Skizze auf gewählter Fläche“ gerade nicht geht (`None`: es geht). Eine gewählte
+    /// Konstruktionsebene zählt wie eine ebene Fläche (Skizzen 6).
     pub fn sketch_on_face_blocked(&self) -> Option<String> {
+        if self.selected_origin_plane().is_some() {
+            return None;
+        }
+        if let Some(id) = self.selected_plane() {
+            return crate::history_bar::lock_reason(self, &[id]);
+        }
         if self.selected_is_mesh() {
             return Some(mesh_locked_hint());
         }

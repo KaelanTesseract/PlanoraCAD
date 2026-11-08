@@ -25,6 +25,7 @@ pub fn describe_change(before: &Snapshot, after: &Snapshot) -> String {
         .or_else(|| {
             (before.parts_overrides != after.parts_overrides).then_some(tr!("undo-parts-text"))
         })
+        .or_else(|| (before.visibility != after.visibility).then_some(tr!("undo-visibility")))
         .unwrap_or_else(fallback)
 }
 
@@ -105,14 +106,21 @@ fn features(before: &Snapshot, after: &Snapshot) -> Option<String> {
     }
     // Gleiche Art, aber andere Formeln (etwa nur der Formeltext, der Wert bleibt): benannt wie
     // eine Änderung der Art.
-    if let Some((_, a)) = pairs
+    if let Some((b, a)) = pairs
         .iter()
         .find(|(b, a)| b.kind != a.kind || b.formulas != a.formulas)
     {
-        return Some(match a.kind {
-            FeatureKind::Move { .. } | FeatureKind::MeshBody { .. } => tr!("undo-move"),
-            FeatureKind::Sketch(_) => tr!("undo-sketch-edit"),
-            _ => tr!("undo-feature-change"),
+        return Some(match (&b.kind, &a.kind) {
+            // Skizzen 6: nur die Ebene der Skizze geändert.
+            (FeatureKind::Sketch(bs), FeatureKind::Sketch(as_)) if bs.plane != as_.plane => {
+                tr!("undo-sketch-redefine-plane")
+            }
+            (_, kind) => match kind {
+                FeatureKind::Move { .. } | FeatureKind::MeshBody { .. } => tr!("undo-move"),
+                FeatureKind::Sketch(_) => tr!("undo-sketch-edit"),
+                FeatureKind::Plane(_) => tr!("undo-plane-edit"),
+                _ => tr!("undo-feature-change"),
+            },
         });
     }
     None
@@ -142,6 +150,17 @@ fn created_label(kind: &FeatureKind) -> String {
         }
         FeatureKind::MeshBody { .. } => tr!("undo-mesh-import"),
         FeatureKind::StepBody { .. } => tr!("undo-step-import"),
+        // Skizzen 6: nach dem Befehl des Menüs „Konstruieren“.
+        FeatureKind::Plane(pf) => {
+            use planora_feature::planes::PlaneDef;
+            match pf.def {
+                PlaneDef::Offset { .. } => tr!("undo-plane-offset"),
+                PlaneDef::Angle { .. } => tr!("undo-plane-angle"),
+                PlaneDef::Mid { .. } => tr!("undo-plane-mid"),
+                PlaneDef::ThreePoints(_) => tr!("undo-plane-three-points"),
+                PlaneDef::Tangent { .. } => tr!("undo-plane-tangent"),
+            }
+        }
     }
 }
 
@@ -291,7 +310,13 @@ pub fn describe_sketch_change_beside(
 ) -> String {
     let (bs, as_) = (&before.sketch, &after.sketch);
     if after.copies.len() > before.copies.len() {
-        return tr!("undo-edge-project");
+        // Skizzen 6: der Befehl nach der Herkunft der neuen Kurven.
+        use planora_feature::CopySource;
+        return match after.copies.last().map(|c| &c.source) {
+            Some(CopySource::Section { .. }) => tr!("undo-sketch-intersect"),
+            Some(CopySource::Silhouette { .. }) => tr!("undo-silhouette"),
+            _ => tr!("undo-edge-project"),
+        };
     }
     // Gelöscht heißt: eine Kennung von vorher gibt es nachher nicht mehr (nicht nur: weniger).
     let removed = bs.curves().any(|(id, _)| as_.curve(id).is_none())

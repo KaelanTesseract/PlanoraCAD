@@ -275,8 +275,9 @@ const SKETCH_KEYS: [(Action, Key, Tool, &str, &str); 7] = [
         Action::SketchProjectEdge,
         Key::P,
         Tool::ProjectEdge,
-        "Körperkante kopieren",
-        "Körperkante kopieren",
+        // Skizzen 6: Klappmenü „Projizieren/Einschließen“, Art „Projizieren“ (Taste P bleibt).
+        "Projizieren/Einschließen",
+        "Projizieren",
     ),
     // Skizzen 4 (F, O und M sind Annahmen nach Fusion).
     (
@@ -364,11 +365,9 @@ fn sketch_keys_select_the_tools() {
     rig.settle();
     let texts = rig.hover(rig.strip("Linie"));
     assert!(texts.iter().any(|t| t == "Linie (L)"), "{texts:?}");
-    let texts = rig.hover(rig.strip("Körperkante kopieren"));
-    assert!(
-        texts.iter().any(|t| t == "Körperkante kopieren (P)"),
-        "{texts:?}"
-    );
+    // Skizzen 6: Der Knopf nennt seine Art „Projizieren“ mit Taste.
+    let texts = rig.hover(rig.strip("Projizieren/Einschließen"));
+    assert!(texts.iter().any(|t| t == "Projizieren (P)"), "{texts:?}");
     let mut km = rig.ws().keymap.clone();
     assert_eq!(km.set(Action::SketchLine, 0, plain(Key::K)), SetResult::Ok);
     rig.ws().keymap = km;

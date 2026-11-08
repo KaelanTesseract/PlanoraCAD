@@ -289,7 +289,10 @@ fn copied_body_edges_follow_a_resized_body() {
             FeatureKind::Sketch(SketchFeature {
                 sketch: sk,
                 plane: SketchPlane::Standard(StandardPlane::XY),
-                copies: vec![EdgeCopy { curve, edge }],
+                copies: vec![EdgeCopy {
+                    curve,
+                    source: planora_feature::CopySource::Edge(edge),
+                }],
                 formulas: Default::default(),
             }),
         )

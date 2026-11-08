@@ -826,7 +826,8 @@ fn boolean_dialog_speaks_english() {
         );
         assert_eq!(
             AppState::new().sketch_on_face_blocked().as_deref(),
-            Some("First click a flat face of a body.")
+            // Skizzen 6: auch eine Konstruktionsebene geht.
+            Some("First click a flat face of a body or a construction plane.")
         );
     });
 }

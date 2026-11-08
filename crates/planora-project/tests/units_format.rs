@@ -58,7 +58,7 @@ fn load(text: &str) -> Result<Document, ProjectError> {
 
 #[test]
 fn format_version_is_13() {
-    assert_eq!(FORMAT_VERSION, 15);
+    assert_eq!(FORMAT_VERSION, 16); // seit Skizzen 6 (Konstruktionsebenen und neue Projektionen)
 }
 
 #[test]

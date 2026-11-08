@@ -11,7 +11,6 @@ use crate::sketch_input::{Created, DrawInput, FieldKind};
 use crate::sketch_kinds::{PREVIEW_STEPS_PER_TURN, ToolKinds};
 use planora_feature::{FeatureId, ParamScope, ParamUnit, SketchFeature, constraint_unit};
 use planora_i18n::tr;
-use planora_kernel::{Edge, Id, Solid};
 use planora_math::DVec2;
 use planora_sketch::SketchError;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
@@ -24,6 +23,7 @@ use planora_sketch::solver::{Drag, SolveReport, SolveStatus};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+pub use crate::sketch_project::{ProjectFilter, ProjectState};
 pub use planora_sketch::snap::Snap;
 
 /// Schritte je Vollkreis für den Linienzug, gegen den der Auswahlrahmen prüft.
@@ -477,6 +477,8 @@ pub struct SketchSession {
     pub dim: DimToolState,
     /// Rechteckige und Kreisförmige Anordnung.
     pub pattern: crate::sketch_pattern::PatternToolState,
+    /// Projizieren (Skizzen 6): Auswahlfilter und „Projektionsverknüpfung“, für die Sitzung.
+    pub project: ProjectState,
     /// Abhängigkeitsbefehl: der Bezug, den der letzte Klick gewählt oder abgewählt hat (für einen
     /// schnellen zweiten Klick, [`constraint_second_click_counts`](Self::constraint_second_click_counts)).
     pub constraint_last: Option<Item>,
@@ -606,6 +608,7 @@ impl SketchSession {
             grip_drag: None,
             dim: DimToolState::default(),
             pattern: Default::default(),
+            project: ProjectState::default(),
             constraint_last: None,
         }
     }
@@ -942,8 +945,8 @@ impl SketchSession {
                 Tool::Arc => se.click_arc(sk, cur, prior),
                 Tool::Ellipse => se.click_ellipse(sk, cur, prior),
                 Tool::Spline => se.click_spline(sk, cur, prior),
-                // Haben nur geplante Arten (oben); die Kantenkopie steuert die Oberfläche über
-                // `project_edge`.
+                // Haben nur geplante Arten (oben); das Projizieren steuert die Oberfläche über
+                // `AppState::project_into_sketch`.
                 Tool::Polygon | Tool::Slot | Tool::ProjectEdge => Ok(()),
                 Tool::Trim | Tool::Extend | Tool::Break => se.click_modify(sk, at, radius, prior),
                 Tool::Offset => se.click_offset(sk, cur, prior),
@@ -1582,7 +1585,8 @@ impl SketchSession {
 
     /// Bricht das laufende Werkzeug ab; im Auswahlwerkzeug wird die Auswahl geleert. Ein
     /// laufendes Ziehen wird wie mit [`end_drag`](Self::end_drag) beendet (der Punkt bleibt,
-    /// wo er ist). Stutzen, Dehnen und Brechen enden ganz (zurück zur Auswahl). Ein laufender
+    /// wo er ist). Stutzen, Dehnen, Brechen und Projizieren/Einschließen enden ganz (zurück zur
+    /// Auswahl). Ein laufender
     /// Rahmen fällt allein weg, die alte Auswahl bleibt; ebenso ein laufender Zug auf dem letzten
     /// Punkt, der Linienzug bleibt, und ein laufender Griff, das Werkzeug bleibt. Verschieben/Kopieren
     /// hinterlässt auch in der Auswahl nichts. Die Skizzenbemaßung verwirft zuerst ein offenes Maß
@@ -1637,8 +1641,9 @@ impl SketchSession {
             self.forget_removed(sk);
         }
         // Stutzen, Dehnen und Brechen haben nichts Offenes: Esc beendet sie wie in Fusion (auch
-        // mitten im Ziehen; was schon gestutzt ist, bleibt).
-        if self.tool.is_modify() {
+        // mitten im Ziehen; was schon gestutzt ist, bleibt). Ebenso Projizieren, Schneiden und
+        // Silhouette: Jeder Klick ist schon ein fertiger Schritt (Handtest Skizzen 6).
+        if self.tool.is_modify() || self.tool == Tool::ProjectEdge {
             self.set_tool(sk, Tool::Select);
         }
     }
@@ -2688,6 +2693,15 @@ impl SketchSession {
         }
     }
 
+    /// Die ausgewählten Kurven, die Projektionen des Entwurfs `sf` sind (Skizzen 6): darauf
+    /// wirkt „Verknüpfung aufheben“; leer, wenn der Befehl nicht passt.
+    pub fn selected_projections(&self, sf: &SketchFeature) -> Vec<CurveId> {
+        self.selected_curves()
+            .into_iter()
+            .filter(|c| sf.copies.iter().any(|copy| copy.curve == *c))
+            .collect()
+    }
+
     /// Schaltet bei den ausgewählten Kurven die Konstruktionseigenschaft um.
     pub fn toggle_construction(&mut self, sk: &mut Sketch) {
         for item in &self.selection {
@@ -2788,20 +2802,6 @@ impl SketchSession {
             sk.add_linear_pattern(&curves, offset, count).map_err(err)?;
             se.solve_checked(sk, prior)?;
             Ok(())
-        })
-    }
-
-    /// Kopiert eine Körperkante als feste Konstruktionsgeometrie in die Skizze.
-    pub fn project_edge(
-        &mut self,
-        sk: &mut Sketch,
-        solid: &Solid,
-        edge: Id<Edge>,
-    ) -> Result<CurveId, String> {
-        self.atomic(sk, |se, sk, prior| {
-            let c = sk.add_projected_edge(solid, edge).map_err(err)?;
-            se.solve_checked(sk, prior)?;
-            Ok(c)
         })
     }
 }

@@ -2,8 +2,8 @@
 
 use crate::error::FeatureError;
 use crate::model::{
-    BlendArt, BodyRef, Document, EdgeCopy, FeatureId, FeatureKind, MAX_MESH_SCALE, MIN_MESH_SCALE,
-    ProfileSel, ROTATION_NORM_TOL, SketchFeature, SketchPlane,
+    BlendArt, BodyRef, CopySource, Document, EdgeCopy, FeatureId, FeatureKind, MAX_MESH_SCALE,
+    MIN_MESH_SCALE, ProfileSel, ROTATION_NORM_TOL, SketchFeature, SketchPlane,
 };
 use crate::refs::{FaceRef, first_face, resolve_edge, resolve_face};
 use planora_exchange::{ExchangeMesh, MeshTransform};
@@ -44,6 +44,10 @@ pub(crate) struct Computed {
     pub(crate) bodies: Vec<Solid>,
     pub(crate) sketch: Option<Sketch>,
     pub(crate) hints: Option<SketchHints>,
+    /// Warnung bei sonst gelungener Berechnung (siehe [`crate::Feature::warning`]).
+    pub(crate) warning: Option<String>,
+    /// Koordinatensystem einer Konstruktionsebene.
+    pub(crate) plane: Option<planora_math::Frame>,
 }
 
 impl Computed {
@@ -152,6 +156,11 @@ pub(crate) fn check_parameters(kind: &FeatureKind) -> Result<(), FeatureError> {
                 return out(tr!("feature-what-blend-size"));
             }
         }
+        FeatureKind::Plane(p) => {
+            if !p.numbers().iter().all(|v| in_range(*v)) {
+                return out(tr!("feature-what-plane"));
+            }
+        }
         FeatureKind::MeshBody {
             offset,
             rotation,
@@ -226,7 +235,10 @@ fn compute_unchecked(
     let id = feature.id;
     let kernel = &doc.kernel;
     match &feature.kind {
-        FeatureKind::Sketch(sf) => compute_sketch(doc, sf, visible),
+        FeatureKind::Sketch(sf) => {
+            let previous = feature.result.as_ref().and_then(|r| r.sketch.as_ref());
+            compute_sketch(doc, sf, visible, previous)
+        }
         FeatureKind::Box { size, origin } => primitive(doc, kernel.make_box(*size), *origin, id.0),
         FeatureKind::Cylinder {
             radius,
@@ -332,6 +344,17 @@ fn compute_unchecked(
                 .solid()
                 .map_err(|m| FeatureError::StepShape(m.to_string()))?;
             finish(doc, solid.clone(), id.0)
+        }
+        FeatureKind::Plane(pf) => {
+            for dep in pf.dependencies() {
+                ensure_not_mesh(doc, dep)?;
+            }
+            let solids: Vec<&Solid> = visible.iter().filter_map(|r| doc.body(*r)).collect();
+            let frame = crate::planes::compute_plane(doc, pf, &solids, &kernel.tolerance)?;
+            Ok(Computed {
+                plane: Some(frame),
+                ..Computed::default()
+            })
         }
     }
 }
@@ -675,11 +698,15 @@ fn refit_formula_arcs(sketch: &mut Sketch, sf: &SketchFeature) {
     *sketch = trial;
 }
 
-/// Skizze: Ebene auflösen, Kantenkopien nachführen, lösen.
+/// Skizze: Ebene auflösen, Projektionen nachführen, lösen. Eine Projektion, deren Bezug sich
+/// nicht mehr auflösen oder nachführen lässt, bleibt wie gespeichert und zählt zur Warnung; nur
+/// eine nicht auffindbare Skizzenebene ist ein Fehler. Eine verlorene Kurve behält die Lage aus
+/// `previous` (dem letzten berechneten Stand dieses Features), sonst die der Definition.
 fn compute_sketch(
     doc: &Document,
     sf: &SketchFeature,
     visible: &[BodyRef],
+    previous: Option<&Sketch>,
 ) -> Result<Computed, FeatureError> {
     let solids: Vec<&Solid> = visible.iter().filter_map(|r| doc.body(*r)).collect();
     let tol = doc.kernel.tolerance;
@@ -687,8 +714,9 @@ fn compute_sketch(
         ensure_not_mesh(doc, FeatureId(r.origin))?;
     }
     for c in &sf.copies {
-        ensure_not_mesh(doc, FeatureId(c.edge.a.origin))?;
-        ensure_not_mesh(doc, FeatureId(c.edge.b.origin))?;
+        for origin in c.source.origins() {
+            ensure_not_mesh(doc, origin)?;
+        }
     }
     let mut sketch = sf.sketch.clone();
     let (frame, plane) = match &sf.plane {
@@ -703,17 +731,33 @@ fn compute_sketch(
             };
             (frame, SketchPlane::OnFace(updated))
         }
+        SketchPlane::OnPlane(id) => {
+            let frame = doc.plane_frame(*id).ok_or_else(|| {
+                let name = doc
+                    .feature(*id)
+                    .map_or_else(String::new, |f| f.name.clone());
+                FeatureError::InvalidInput(tr!("feature-plane-not-plane", name = name))
+            })?;
+            (frame, sf.plane.clone())
+        }
     };
     sketch.set_frame(frame).map_err(sketch_error)?;
     let mut copies = Vec::with_capacity(sf.copies.len());
+    let mut lost = 0usize;
     for c in &sf.copies {
-        let found = resolve_edge(&solids, &c.edge, &tol)?;
-        sketch
-            .reproject_edge(c.curve, solids[found.body], found.edge)
-            .map_err(sketch_error)?;
-        let mut updated = c.clone();
-        updated.edge.hint = found.hint;
-        copies.push(updated);
+        match follow_copy(&mut sketch, c, &solids, &frame, &tol) {
+            Some(updated) => copies.push(updated),
+            None => {
+                // Bezug verloren: Die Kurve bleibt an ihrer zuletzt nachgeführten Lage (gibt es
+                // die Kurve im letzten Stand nicht in derselben Art, an der Lage der
+                // Definition); der Verweis bleibt wie gespeichert.
+                if let Some(prev) = previous {
+                    let _ = sketch.restore_projected_curve(c.curve, prev);
+                }
+                lost += 1;
+                copies.push(c.clone());
+            }
+        }
     }
     if sf.formulas.is_empty() {
         // Ohne Formeln wird der Lösungsstatus bewusst nicht ausgewertet (wie bisher): eine
@@ -738,6 +782,65 @@ fn compute_sketch(
         bodies: Vec::new(),
         sketch: Some(sketch),
         hints: Some(SketchHints { plane, copies }),
+        warning: (lost > 0).then(|| tr!("feature-sketch-projection-lost", count = lost)),
+        plane: None,
+    })
+}
+
+/// Führt die projizierte Kurve `c` ihrer Herkunft nach und liefert den Verweis mit neuem
+/// Hinweispunkt; `None`, wenn der Bezug verloren ist (nicht gefunden, Art geändert, Stück
+/// fehlt, Kurve gelöscht). Dann bleibt die Skizze unverändert.
+fn follow_copy(
+    sketch: &mut Sketch,
+    c: &EdgeCopy,
+    solids: &[&Solid],
+    frame: &planora_math::Frame,
+    tol: &planora_math::Tolerance,
+) -> Option<EdgeCopy> {
+    let source = match &c.source {
+        CopySource::Edge(e) => {
+            let found = resolve_edge(solids, e, tol).ok()?;
+            // Wie beim Anlegen (`add_projected_curve`): Schräge Kreisbögen und Ellipsenbögen
+            // werden Ellipsenbögen (Skizzen 6). Alte Kantenkopien kennen diese Arten nicht, für
+            // sie ist das Ergebnis dasselbe wie mit `reproject_edge`.
+            let edge = solids[found.body].edges.get(found.edge)?;
+            sketch
+                .reproject_curve(c.curve, &edge.curve, edge.t0, edge.t1)
+                .ok()?;
+            CopySource::Edge(crate::refs::EdgeRef {
+                hint: found.hint,
+                ..e.clone()
+            })
+        }
+        CopySource::Section { face, index } | CopySource::Silhouette { face, index } => {
+            let section = matches!(c.source, CopySource::Section { .. });
+            let found = resolve_face(solids, face, tol).ok()?;
+            let solid = solids[found.body];
+            let pieces = if section {
+                planora_kernel::section_by_plane(solid, frame, Some(&[found.face]), tol)
+            } else {
+                planora_kernel::silhouette(solid, found.face, frame.z, tol)
+            }
+            .ok()?;
+            let piece = pieces.get(*index)?;
+            sketch
+                .reproject_curve(c.curve, &piece.curve, piece.t0, piece.t1)
+                .ok()?;
+            let face = FaceRef {
+                hint: found.hint,
+                ..face.clone()
+            };
+            let index = *index;
+            if section {
+                CopySource::Section { face, index }
+            } else {
+                CopySource::Silhouette { face, index }
+            }
+        }
+    };
+    Some(EdgeCopy {
+        curve: c.curve,
+        source,
     })
 }
 

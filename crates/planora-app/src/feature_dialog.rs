@@ -274,9 +274,13 @@ impl FeatureDialog {
     /// Features.
     pub fn new(state: &AppState, id: FeatureId) -> Option<FeatureDialog> {
         let f = state.document.feature(id)?;
+        // Konstruktionsebenen haben ein eigenes Fenster (`plane_dialog`, Skizzen 6).
         if matches!(
             f.kind,
-            FeatureKind::Sketch(_) | FeatureKind::MeshBody { .. } | FeatureKind::StepBody { .. }
+            FeatureKind::Sketch(_)
+                | FeatureKind::MeshBody { .. }
+                | FeatureKind::StepBody { .. }
+                | FeatureKind::Plane(_)
         ) {
             return None;
         }

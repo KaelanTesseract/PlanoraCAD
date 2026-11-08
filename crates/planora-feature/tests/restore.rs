@@ -542,7 +542,7 @@ fn sketch_equality_by_revision() {
     let mut copies = a.clone();
     copies.copies.push(EdgeCopy {
         curve: a.sketch.curves().next().map(|(id, _)| id).unwrap(),
-        edge: EdgeRef {
+        source: planora_feature::CopySource::Edge(EdgeRef {
             a: FaceRef {
                 origin: 1,
                 role: "Wand 1".into(),
@@ -554,7 +554,7 @@ fn sketch_equality_by_revision() {
                 hint: DVec3::ZERO,
             },
             hint: DVec3::ZERO,
-        },
+        }),
     });
     assert_ne!(a, copies);
 }

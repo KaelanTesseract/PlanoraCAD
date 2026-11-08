@@ -1,6 +1,5 @@
 //! Modell der Verlaufsleiste ohne Oberfläche: Schritte, Markerstelle, Bewegen, Farbe, Sperre.
 
-use crate::feature_dialog::FeatureDialog;
 use crate::icons::FeatureIcon;
 use crate::state::AppState;
 pub use crate::theme::BodyColor;
@@ -23,6 +22,9 @@ pub enum StepState {
     Inactive,
     /// Berechnung fehlgeschlagen; der Text nennt den Grund.
     Error(String),
+    /// Berechnet, aber mit Warnung (Skizzen 6: verlorener Bezug einer Projektion); der Text ist
+    /// die Warnung.
+    Warning(String),
 }
 
 /// Ein Schritt der Leiste (aus dem Dokument kopiert).
@@ -113,7 +115,10 @@ pub fn steps(state: &AppState, tip: FeatureId) -> Vec<StepView> {
                 StepState::Inactive
             } else {
                 match &f.status {
-                    FeatureStatus::Ok => StepState::Active,
+                    FeatureStatus::Ok => match f.warning() {
+                        Some(w) => StepState::Warning(w.to_string()),
+                        None => StepState::Active,
+                    },
                     FeatureStatus::Error(e) => StepState::Error(e.clone()),
                     FeatureStatus::Skipped(_)
                     | FeatureStatus::Suppressed
@@ -258,15 +263,17 @@ pub fn body_color(state: &AppState, tip: FeatureId) -> BodyColor {
     colors[(first % colors.len() as u64) as usize]
 }
 
-/// Der erste Körperschritt der Kette von `tip` (kleinste Kennung, Skizzen zählen nicht): Grundlage
-/// der Körperfarbe und der festen Reihenfolge im Feature-Baum. `None` für einen unbekannten Körper.
+/// Der erste Körperschritt der Kette von `tip` (kleinste Kennung, Skizzen und Ebenen zählen
+/// nicht): Grundlage der Körperfarbe und der festen Reihenfolge im Feature-Baum. `None` für einen
+/// unbekannten Körper.
 pub fn body_root(state: &AppState, tip: FeatureId) -> Option<FeatureId> {
     let doc = &state.document;
     doc.chain(tip)
         .into_iter()
         .filter(|id| {
             doc.feature(*id)
-                .is_some_and(|f| !matches!(f.kind, FeatureKind::Sketch(_)))
+                // Konstruktionsebenen (Skizzen 6) erzeugen wie Skizzen keinen Körper.
+                .is_some_and(|f| !matches!(f.kind, FeatureKind::Sketch(_) | FeatureKind::Plane(_)))
         })
         .min()
 }
@@ -310,7 +317,7 @@ pub(crate) fn refuse_if_locked(state: &mut AppState, inputs: &[FeatureId]) -> Re
 
 /// Doppelklick auf einen Schritt: wählt ihn und öffnet seine Einstellungen wie ein Doppelklick
 /// im Feature-Baum (`browser::edit`); eine Skizze öffnet sich zum Bearbeiten, sonst der
-/// Dialog „Bearbeiten“ ([`FeatureDialog`]). Das geht auch bei zurückgesetzten Schritten: Der
+/// Dialog „Bearbeiten“ ([`crate::workspace::DocTab::open_edit`]). Das geht auch bei zurückgesetzten Schritten: Der
 /// Dialog ändert nur die Werte, der Marker bleibt stehen; die abhängigen Schritte rechnet das
 /// Dokument beim Übernehmen neu. In einer alten Version geschieht nichts.
 pub fn open_step(ws: &mut Workspace, id: FeatureId) {
@@ -320,7 +327,7 @@ pub fn open_step(ws: &mut Workspace, id: FeatureId) {
     }
     crate::browser::edit(&mut tab.state, id);
     if let Some(id) = tab.state.edit_request.take() {
-        tab.feature_dialog = FeatureDialog::new(&tab.state, id);
+        tab.open_edit(id);
     }
 }
 

@@ -255,7 +255,8 @@ fn sketch_speaks_english() {
                 "Slot",
                 "Ellipse",
                 "Spline",
-                "Copy body edge",
+                // Skizzen 6: Fusion „Project/Include“.
+                "Project/Include",
                 "Pattern",
                 "Sketch Dimension",
                 "Trim",

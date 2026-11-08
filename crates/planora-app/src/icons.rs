@@ -120,6 +120,8 @@ pub enum Icon {
     Angle,
     /// Phosphor `circle-dashed`.
     ToggleConstruction,
+    /// Phosphor `link-break` (Skizzen 6, „Verknüpfung aufheben“).
+    BreakLink,
     /// Phosphor `flip-horizontal`.
     Mirror,
     /// Phosphor `dots-nine`.
@@ -242,6 +244,7 @@ pub const ALL: &[Icon] = &[
     Icon::Distance,
     Icon::Angle,
     Icon::ToggleConstruction,
+    Icon::BreakLink,
     Icon::Mirror,
     Icon::Pattern,
     Icon::EndSketch,
@@ -332,6 +335,7 @@ const TABLE: &[(Icon, char, &str)] = &[
     (Icon::Distance, '\u{e0a0}', "arrows-left-right"),
     (Icon::Angle, '\u{e7bc}', "angle"),
     (Icon::ToggleConstruction, '\u{e602}', "circle-dashed"),
+    (Icon::BreakLink, '\u{e2e4}', "link-break"),
     (Icon::Mirror, '\u{ed6a}', "flip-horizontal"),
     (Icon::Pattern, '\u{e1fc}', "dots-nine"),
     (Icon::EndSketch, '\u{e184}', "check-circle"),
@@ -647,6 +651,8 @@ pub enum FeatureIcon {
     Move,
     Blend,
     Chamfer,
+    /// Konstruktionsebene (Skizzen 6).
+    Plane,
 }
 
 impl FeatureIcon {
@@ -675,6 +681,7 @@ impl FeatureIcon {
             K::Verrunden { art, .. } => FeatureIcon::for_blend(art.is_chamfer()),
             K::MeshBody { .. } => FeatureIcon::Body(BodyKind::Mesh),
             K::StepBody { .. } => FeatureIcon::Body(BodyKind::Step),
+            K::Plane(_) => FeatureIcon::Plane,
         }
     }
 }
@@ -702,6 +709,79 @@ pub fn paint_feature_icon(painter: &Painter, rect: Rect, icon: FeatureIcon, colo
         FeatureIcon::Move => paint_move_icon(painter, rect, color),
         FeatureIcon::Blend => paint_blend_icon(painter, rect, color),
         FeatureIcon::Chamfer => paint_chamfer_icon(painter, rect, color),
+        FeatureIcon::Plane => paint_plane_icon(painter, rect, None, color),
+    }
+}
+
+/// Parallelogramm einer Ebene in Schrägsicht um `c` mit halber Breite `r`, um `dy` verschoben.
+fn plane_outline(c: Pos2, r: f32, dy: f32) -> Vec<Pos2> {
+    let h = r * 0.42;
+    vec![
+        c + vec2(-r, h + dy),
+        c + vec2(r * 0.45, h + dy),
+        c + vec2(r, -h + dy),
+        c + vec2(-r * 0.45, -h + dy),
+    ]
+}
+
+/// Symbol einer Konstruktionsebene (`None`, Baumzeile) oder eines Befehls aus dem Menü
+/// „Konstruieren“: ein Parallelogramm, je Befehl mit seinem Bezug (selbst gezeichnet).
+pub fn paint_plane_icon(
+    painter: &Painter,
+    rect: Rect,
+    command: Option<crate::plane_dialog::PlaneCommand>,
+    color: Color32,
+) {
+    use crate::plane_dialog::PlaneCommand as C;
+    let stroke = Stroke::new(STROKE_WIDTH, color);
+    let thin = Stroke::new(1.0, color);
+    let c = rect.center();
+    let r = rect.width().min(rect.height()) * 0.42;
+    let closed = |pts: Vec<Pos2>, s: Stroke| {
+        painter.add(egui::Shape::closed_line(pts, s));
+    };
+    match command {
+        None => closed(plane_outline(c, r, 0.0), stroke),
+        // Zwei parallele Ebenen übereinander.
+        Some(C::Offset) => {
+            closed(plane_outline(c, r * 0.9, r * 0.4), thin);
+            closed(plane_outline(c, r * 0.9, -r * 0.4), stroke);
+        }
+        // Liegende Bezugsebene und eine schräg aufgestellte durch ihre Vorderkante.
+        Some(C::Angle) => {
+            closed(plane_outline(c, r * 0.9, r * 0.45), thin);
+            let base = c + vec2(0.0, r * 0.83);
+            closed(
+                vec![
+                    base + vec2(-r * 0.9, 0.0),
+                    base + vec2(r * 0.4, 0.0),
+                    base + vec2(r, -r * 1.5),
+                    base + vec2(-r * 0.3, -r * 1.5),
+                ],
+                stroke,
+            );
+        }
+        // Zwei Ebenen dünn, die mittlere kräftig.
+        Some(C::Mid) => {
+            closed(plane_outline(c, r * 0.8, r * 0.6), thin);
+            closed(plane_outline(c, r * 0.8, -r * 0.6), thin);
+            closed(plane_outline(c, r, 0.0), stroke);
+        }
+        // Ebene mit drei Punkten.
+        Some(C::ThreePoints) => {
+            let pts = plane_outline(c, r, 0.0);
+            closed(pts.clone(), stroke);
+            for p in [pts[0], pts[1], pts[3]] {
+                painter.circle_filled(p, STROKE_WIDTH * 1.4, color);
+            }
+        }
+        // Zylinder im Querschnitt (Kreis) und die Ebene, die ihn oben berührt.
+        Some(C::Tangent) => {
+            let radius = r * 0.55;
+            let center = c + vec2(0.0, r * 0.4);
+            painter.circle_stroke(center, radius, thin);
+            closed(plane_outline(c, r, -r * 0.15), stroke);
+        }
     }
 }
 
@@ -953,6 +1033,11 @@ pub enum HandIcon {
     PatternCircular,
     /// Skizzenbemaßung: zwei Hilfslinien, dazwischen die Maßlinie mit zwei Pfeilspitzen.
     SketchDimension,
+    /// Schneiden (Skizzen 6): ein Körper als dünner Kreis, die Skizzenebene als dünne
+    /// Waagerechte; die Schnittstrecke im Körper kräftig, ihre Enden als Punkte.
+    SketchIntersect,
+    /// Silhouette (Skizzen 6): eine Kugel mit dünnem Äquator, ihr Umriss kräftig.
+    SketchSilhouette,
 }
 
 /// Alle gezeichneten Symbole aus [`HandIcon`].
@@ -983,6 +1068,8 @@ pub const HAND_DRAWN: &[HandIcon] = &[
     HandIcon::PatternRect,
     HandIcon::PatternCircular,
     HandIcon::SketchDimension,
+    HandIcon::SketchIntersect,
+    HandIcon::SketchSilhouette,
 ];
 
 /// Zeichnet ein [`HandIcon`] in `rect` (Strichbreite 1,5, runde Enden).
@@ -1281,6 +1368,27 @@ pub fn paint_hand_icon(painter: &Painter, rect: Rect, icon: HandIcon, color: Col
                 seg(painter, [tip, tip + vec2(d * h, h * 0.7)], stroke);
             }
         }
+        HandIcon::SketchIntersect => {
+            // Körper dünn, die Ebene dünn über die ganze Breite; was die Ebene im Körper trifft,
+            // kräftig mit den beiden Randpunkten.
+            let thin = Stroke::new(1.0, color);
+            painter.circle_stroke(c, r * 0.8, thin);
+            let y = r * 0.25;
+            seg(painter, [c + vec2(-r * 1.2, y), c + vec2(r * 1.2, y)], thin);
+            let half = ((r * 0.8).powi(2) - y * y).sqrt();
+            seg(painter, [c + vec2(-half, y), c + vec2(half, y)], stroke);
+            painter.circle_filled(c + vec2(-half, y), 1.6, color);
+            painter.circle_filled(c + vec2(half, y), 1.6, color);
+        }
+        HandIcon::SketchSilhouette => {
+            // Kugel: Äquator als flache dünne Ellipse, der Umriss kräftig.
+            painter.add(egui::Shape::ellipse_stroke(
+                c,
+                vec2(r, r * 0.35),
+                Stroke::new(1.0, color),
+            ));
+            painter.circle_stroke(c, r, stroke);
+        }
         HandIcon::Centerline => {
             seg(
                 painter,
@@ -1327,6 +1435,8 @@ pub enum IconSource {
     Feature(FeatureIcon),
     Body(BodyKind),
     Dimension(planora_drawing::dimension::DimKind),
+    /// Befehl des Menüs „Konstruieren“ (Skizzen 6).
+    Plane(crate::plane_dialog::PlaneCommand),
 }
 
 /// Symbol zu einer Körperart (Menü „Erzeugen“, Feature-Baum): wo Phosphor ein passendes Symbol
@@ -1382,6 +1492,8 @@ pub fn sketch_kind_icon(kind: crate::sketch_kinds::ToolKind) -> IconSource {
             IconSource::Hand(HandIcon::Chamfer)
         }
         K::PatternCircular => IconSource::Hand(HandIcon::PatternCircular),
+        K::Intersect => IconSource::Hand(HandIcon::SketchIntersect),
+        K::Silhouette => IconSource::Hand(HandIcon::SketchSilhouette),
         _ => sketch_tool_icon(kind.tool()),
     }
 }
@@ -1429,6 +1541,7 @@ pub fn paint_source(painter: &Painter, rect: Rect, source: IconSource, color: Co
         IconSource::Feature(f) => paint_feature_icon(painter, rect, f, color),
         IconSource::Body(k) => paint_body_icon(painter, rect, k, color),
         IconSource::Dimension(k) => paint_dimension_icon(k)(painter, rect, color),
+        IconSource::Plane(cmd) => paint_plane_icon(painter, rect, Some(cmd), color),
     }
 }
 

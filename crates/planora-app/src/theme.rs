@@ -909,6 +909,9 @@ pub struct SketchColors {
     pub selected: Color32,
     /// Hilfsgeometrie.
     pub construction: Color32,
+    /// Projizierte Geometrie, die ihrer Herkunft folgt (Skizzen 6, lila wie in Fusion; gleich
+    /// der violetten Körperfarbe `BODY_COLORS[3]`).
+    pub projected: Color32,
     /// Kurven fertiger Skizzen in der 3D-Ansicht.
     pub finished: Color32,
     /// Widersprüchliche oder fehlerhafte Geometrie.
@@ -938,6 +941,15 @@ pub struct SketchColors {
     pub snap: Color32,
     /// Gestrichelte Ausrichtungslinien beim Zeichnen.
     pub guide: Color32,
+    /// Fläche einer Konstruktionsebene in der 3D-Ansicht (Skizzen 6, orange wie in Fusion),
+    /// halbtransparent.
+    pub plane_fill: Color32,
+    /// Fläche einer gewählten Ebene oder der Ebene unter dem Mauszeiger (heller).
+    pub plane_fill_active: Color32,
+    /// Rand einer Konstruktionsebene (deckend).
+    pub plane_edge: Color32,
+    /// Rand einer gewählten Ebene oder der Ebene unter dem Mauszeiger (heller).
+    pub plane_edge_active: Color32,
 }
 
 /// Skizzenfarben des Themas. Linien erreichen auf dem Viewport mindestens 3 : 1. Dunkel: Auswahl,
@@ -951,6 +963,7 @@ pub fn sketch_colors(dark: bool) -> SketchColors {
             determined: p.ok,
             selected: p.selection,
             construction: p.text_secondary,
+            projected: BODY_COLORS[3].dark,
             finished: rgb(0x7fb4ff),
             error: p.error,
             text: p.text_primary,
@@ -965,6 +978,10 @@ pub fn sketch_colors(dark: bool) -> SketchColors {
             axis_y: p.axis_y,
             snap: p.selection,
             guide: p.text_secondary,
+            plane_fill: with_alpha(rgb(0xe8963c), 0x38),
+            plane_fill_active: with_alpha(rgb(0xffb766), 0x60),
+            plane_edge: rgb(0xe8963c),
+            plane_edge_active: rgb(0xffc480),
         }
     } else {
         SketchColors {
@@ -972,6 +989,7 @@ pub fn sketch_colors(dark: bool) -> SketchColors {
             determined: p.ok,
             selected: rgb(0xa86a00),
             construction: p.text_tertiary,
+            projected: BODY_COLORS[3].light,
             finished: p.chip_split.1,
             error: p.error,
             text: p.text_primary,
@@ -986,6 +1004,10 @@ pub fn sketch_colors(dark: bool) -> SketchColors {
             axis_y: p.axis_y,
             snap: rgb(0xa86a00),
             guide: p.text_tertiary,
+            plane_fill: with_alpha(rgb(0xe07b10), 0x30),
+            plane_fill_active: with_alpha(rgb(0xf59a3a), 0x58),
+            plane_edge: rgb(0xd06e00),
+            plane_edge_active: rgb(0xf08a1a),
         }
     }
 }

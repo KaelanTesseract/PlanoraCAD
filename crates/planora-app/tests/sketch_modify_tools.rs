@@ -220,7 +220,8 @@ fn strip_has_twenty_buttons_in_english_that_all_fit_at_full_hd() {
                 "Slot",
                 "Ellipse",
                 "Spline",
-                "Copy body edge",
+                // Skizzen 6: Fusion „Project/Include“.
+                "Project/Include",
                 // Skizzen 5
                 "Pattern",
                 "Sketch Dimension",
@@ -267,6 +268,8 @@ fn only_the_forms_with_kinds_and_the_fillet_have_a_triangle() {
             Tool::Arc,
             Tool::Polygon,
             Tool::Slot,
+            // Skizzen 6: Klappmenü „Projizieren/Einschließen“.
+            Tool::ProjectEdge,
             Tool::Pattern,
             Tool::Fillet
         ]

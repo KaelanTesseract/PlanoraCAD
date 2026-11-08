@@ -63,6 +63,8 @@ pub struct Snapshot {
     pub project_info: Option<ProjectInfo>,
     /// Eigene Texte der Stücklistenzeilen.
     pub parts_overrides: BTreeMap<BodyKey, RowOverride>,
+    /// Was im Browser ausgeblendet ist.
+    pub visibility: crate::visibility::Visibility,
     /// Parametertabelle (ohne Werte; sie werden beim Bauen berechnet).
     pub parameters: Vec<Parameter>,
     /// Nächste Parameterkennung (mindestens 1).
@@ -109,11 +111,13 @@ impl Snapshot {
             && self.next_drawing == other.next_drawing
             && self.project_info == other.project_info
             && self.parts_overrides == other.parts_overrides
+            && self.visibility == other.visibility
     }
 
     /// Gleiches Modell: Features (samt Formeltexten), Marker, Rückrollstellen, Kennungszähler,
     /// Netze, STEP-Formen (beide als derselbe `Arc`) und Parametertabelle (samt
-    /// Parameterzähler) gleich; Zeichnungen, Projektangaben und Stücklistentexte zählen nicht.
+    /// Parameterzähler) gleich; Zeichnungen, Projektangaben, Stücklistentexte und Sichtbarkeit
+    /// zählen nicht.
     /// Eine Änderung nur an Parametern oder Formeln nimmt deshalb in [`Document::restore`] den
     /// vollen Weg.
     pub fn same_model(&self, other: &Snapshot) -> bool {
@@ -162,6 +166,7 @@ impl Document {
             next_drawing: self.next_drawing,
             project_info: self.project_info.clone(),
             parts_overrides: self.parts_overrides.clone(),
+            visibility: self.pruned_visibility(self.visibility.clone()),
             parameters: self.parameters.clone(),
             next_param: self.next_param,
             rollbacks: self.rollbacks.clone(),
@@ -212,6 +217,7 @@ impl Document {
             self.set_drawings(s.drawings, s.next_drawing)?;
             self.project_info = s.project_info;
             self.parts_overrides = s.parts_overrides;
+            self.visibility = self.pruned_visibility(s.visibility);
             self.drawing_edits += 1;
             return Ok(RestoreKind::Annotations);
         }
@@ -330,6 +336,7 @@ impl Document {
                 failed: None,
                 formulas: f.formulas,
                 issue: None,
+                warning: None,
             });
         }
         for idx in 0..doc.features.len() {
@@ -343,6 +350,7 @@ impl Document {
         doc.project_info = s.project_info;
         crate::parts::check_overrides(&s.parts_overrides)?;
         doc.parts_overrides = s.parts_overrides;
+        doc.visibility = doc.pruned_visibility(s.visibility);
         doc.marker = s.marker;
         doc.next_id = s.next_id;
         // Nach den Features, weil die Prüfung die Ketten braucht; ungültige Stellen sind ein

@@ -112,8 +112,8 @@ fn all_kinds() -> (Sketch, Vec<ConstraintId>) {
 }
 
 #[test]
-fn format_version_is_15() {
-    assert_eq!(FORMAT_VERSION, 15);
+fn format_version_is_16() {
+    assert_eq!(FORMAT_VERSION, 16); // seit Skizzen 6 (Konstruktionsebenen und neue Projektionen)
 }
 
 #[test]
@@ -243,9 +243,9 @@ fn a_head_newer_than_the_known_format_is_too_new() {
     let (s, _) = all_kinds();
     let text = encode_version(&document(s).snapshot()).unwrap();
     assert!(load(&text).is_ok());
-    let newer = text.replacen("\"format\": 15", "\"format\": 16", 1);
+    let newer = text.replacen("\"format\": 15", "\"format\": 17", 1);
     let e = load(&newer).unwrap_err();
-    assert!(matches!(e, ProjectError::TooNew { found: 16, .. }), "{e:?}");
+    assert!(matches!(e, ProjectError::TooNew { found: 17, .. }), "{e:?}");
 }
 
 // ---------------------------------------------------------------------------------------------

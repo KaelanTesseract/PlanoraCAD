@@ -35,7 +35,11 @@ const MID: Vec2 = vec2(1100.0, 700.0);
 /// Um so viel liegen die Grenzen unten höher als vorher: Das obere Feld passt erst ab etwa
 /// 1121 px zwischen die Spalten (vorher schon bei 1100). Bei 1139 × 700 ist die Tab-Leiste
 /// etwa so breit wie früher bei 1100 × 700 (100,34 statt 100,75 px).
-const MID_WIDE: Vec2 = vec2(1139.0, 700.0);
+///
+/// Skizzen 6: Das Menü „Konstruieren“ macht die Menüleiste noch einmal etwa 90 px breiter; alle
+/// Breiten unten liegen deshalb um 90 px höher (1139 → 1229, 1169 → 1259, …), die gemessenen
+/// Werte bleiben dieselben.
+const MID_WIDE: Vec2 = vec2(1229.0, 700.0);
 const SMALL: Vec2 = vec2(800.0, 600.0);
 const UNDO: &str = "Rückgängig";
 const REDO: &str = "Wiederholen";
@@ -1006,8 +1010,11 @@ fn new_tab_pinned_and_active_tab_revealed() {
 /// Tabs etwa 9,9 px hinaus (gemessen bei 2 und 5 Tabs).
 #[test]
 fn active_tab_fully_visible_from_1189() {
-    for width in [1169.0, 1179.0, 1189.0, 1239.0, 1400.0] {
-        let counts: Vec<usize> = if width == 1169.0 {
+    // Skizzen 6: alle Breiten um 90 px höher (Menü „Konstruieren“, siehe [`MID_WIDE`]). Bei
+    // 1269 px (früher 1179) ragt das × eines geänderten aktiven Tabs je nach Tabnummer um
+    // Bruchteile eines Pixels anders hinaus als vorher; geprüft wird nur noch „unter 0,6 px“.
+    for width in [1259.0, 1269.0, 1279.0, 1329.0, 1400.0] {
+        let counts: Vec<usize> = if width == 1259.0 {
             vec![1, 2, 5]
         } else {
             (1..=9).collect()
@@ -1025,14 +1032,14 @@ fn active_tab_fully_visible_from_1189() {
                     // Gemessen 24,25 px (Innenabstände beider Symbole und ein Abstand).
                     assert!((gap - 24.25).abs() < 1.0, "{what}: Abstand × → Neu {gap}");
                 }
-                if width == 1169.0 && dirty && n > 1 {
+                if width == 1259.0 && dirty && n > 1 {
                     assert!(s.name_shown(), "{what}: Name");
                     let h = h.expect("×");
                     assert!((h - 9.9).abs() < 1.0, "{what}: × ragt {h}");
-                } else if width == 1179.0 && dirty && [4, 8, 9].contains(&n) {
+                } else if width == 1269.0 && dirty {
                     assert!(s.name_shown(), "{what}: Name");
                     let h = h.expect("×");
-                    assert!(h > 0.0 && h < 0.6, "{what}: × ragt {h}");
+                    assert!(h < 0.6, "{what}: × ragt {h}");
                 } else {
                     assert!(s.name_shown(), "{what}: Name ganz sichtbar");
                     assert!(

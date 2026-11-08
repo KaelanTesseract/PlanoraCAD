@@ -70,7 +70,8 @@ pub fn tool_label(tool: Tool) -> String {
         Tool::Slot => tr!("sketch-tool-slot"),
         Tool::Ellipse => tr!("sketch-tool-ellipse"),
         Tool::Spline => tr!("sketch-tool-spline"),
-        Tool::ProjectEdge => tr!("action-sketch-project-edge"),
+        // Skizzen 6: Klappmenü wie in Fusion; die Arten nennen sich selbst („Projizieren“).
+        Tool::ProjectEdge => tr!("sketch-tool-project-include"),
         Tool::Trim => tr!("action-sketch-trim"),
         Tool::Extend => tr!("action-sketch-extend"),
         Tool::Break => tr!("action-sketch-break"),
@@ -560,6 +561,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         snap: state.sketch_snap_grid,
         changed: false,
         look_at: false,
+        break_link: false,
     };
     let Some((se, sf)) = state.session_draft_mut() else {
         return;
@@ -594,6 +596,11 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     state.sketch_grid_changed |= palette.changed;
     if palette.look_at {
         state.look_at_sketch();
+    }
+    if palette.break_link {
+        // Derselbe Weg wie die Aktion: alle gewählten Projektionen in einem Schritt.
+        let curves = state.selected_projections();
+        let _ = state.break_projection_links(&curves);
     }
     ctx.data_mut(|d| d.insert_temp(panel_id(), panel));
     if close {
@@ -842,6 +849,8 @@ struct SketchPalette {
     changed: bool,
     /// Der Knopf „Blick auf“ wurde gedrückt.
     look_at: bool,
+    /// Der Knopf „Verknüpfung aufheben“ wurde gedrückt (Skizzen 6).
+    break_link: bool,
 }
 
 /// Was das Skizzenfeld außer Sitzung und Entwurf braucht.
@@ -883,6 +892,9 @@ fn tool_options(ui: &mut egui::Ui, se: &mut SketchSession, sf: &mut SketchFeatur
     if se.tool == Tool::Offset {
         ui.checkbox(&mut se.offset_chain, tr!("sketch-offset-chain"));
     }
+    if se.tool == Tool::ProjectEdge {
+        project_options(ui, se);
+    }
     if se.runs_pattern() {
         pattern_options(ui, se, sf);
     }
@@ -918,6 +930,35 @@ fn tool_options(ui: &mut egui::Ui, se: &mut SketchSession, sf: &mut SketchFeatur
                 se.cancel(&mut sf.sketch);
             }
         });
+    }
+}
+
+/// Einstellungen des Projizierens (Skizzen 6, Fusion „Projizieren“): Auswahlfilter „Angegebene
+/// Elemente“ / „Körper“ und der Schalter „Projektionsverknüpfung“. Sie gelten für die Sitzung.
+/// „Schneiden“ hat nur den Auswahlfilter (seine Kurven sind immer verknüpft), „Silhouette“ wählt
+/// nur Flächen und hat keine Einstellungen.
+fn project_options(ui: &mut egui::Ui, se: &mut SketchSession) {
+    use crate::sketch_kinds::ToolKind;
+    use crate::sketch_state::ProjectFilter;
+    if se.kinds.project == ToolKind::Silhouette {
+        return;
+    }
+    ui.label(tr!("sketch-project-filter"));
+    ui.horizontal_wrapped(|ui| {
+        ui.radio_value(
+            &mut se.project.filter,
+            ProjectFilter::Entities,
+            tr!("sketch-project-entities"),
+        );
+        ui.radio_value(
+            &mut se.project.filter,
+            ProjectFilter::Bodies,
+            tr!("sketch-project-bodies"),
+        );
+    });
+    if se.kinds.project == ToolKind::Project {
+        ui.checkbox(&mut se.project.link, tr!("sketch-project-link"))
+            .on_hover_text(tr!("sketch-project-link-hint"));
     }
 }
 
@@ -1129,6 +1170,8 @@ fn side_contents(
     {
         ui.colored_label(theme::palette(ui.visuals().dark_mode).error, m);
     }
+    // „Verknüpfung aufheben“ gibt es nur, wenn eine gewählte Kurve eine Projektion ist.
+    let can_break_link = !se.selected_projections(sf).is_empty();
     let sk = &mut sf.sketch;
     ui.separator();
 
@@ -1177,6 +1220,22 @@ fn side_contents(
         .clicked()
         {
             se.toggle_centerline_if_possible(sk);
+        }
+        if can_break_link
+            && tool_button(
+                ui,
+                IconSource::Font(Icon::BreakLink),
+                &break_link_label(),
+                true,
+            )
+            .on_hover_text(with_hint(
+                &crate::keymap::mouse::current(ui.ctx()),
+                Action::SketchBreakLink,
+                &tr!("sketch-break-link-hint"),
+            ))
+            .clicked()
+        {
+            palette.break_link = true;
         }
         if tool_button(
             ui,
@@ -1755,4 +1814,9 @@ pub fn centerline() -> String {
 /// Beschriftung des Knopfs „Konstruktion umschalten“ (gleich dem Namen seiner Aktion).
 pub fn construction() -> String {
     Action::SketchConstruction.label()
+}
+
+/// Beschriftung des Knopfs „Verknüpfung aufheben“ (gleich dem Namen seiner Aktion).
+pub fn break_link_label() -> String {
+    Action::SketchBreakLink.label()
 }

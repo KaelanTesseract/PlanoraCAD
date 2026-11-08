@@ -1,4 +1,5 @@
 use bytemuck::{Pod, Zeroable};
+use planora_feature::FeatureId;
 use planora_kernel::{Edge, Face, Id};
 use planora_mesh::Mesh;
 
@@ -18,6 +19,15 @@ pub struct EdgeRef {
 pub enum Pick {
     Face(FaceRef),
     Edge(EdgeRef),
+    /// Konstruktionsebene (Skizzen 6); gezeichnet als Overlay der App, nicht in der Szene.
+    Plane(FeatureId),
+    /// Eckpunkt eines Körpers: Anfang (`end == false`) oder Ende der Kante `edge`. Nur bei der
+    /// Punktwahl („Ebene durch drei Punkte“), nie in der normalen Auswahl.
+    Vertex {
+        body: usize,
+        edge: Id<Edge>,
+        end: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
