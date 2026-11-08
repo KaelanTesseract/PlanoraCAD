@@ -262,6 +262,27 @@ fn every_hand_drawn_icon_draws_with_the_theme_width() {
     }
 }
 
+/// Handtest Skizzen 6: Projizieren, Schneiden und Silhouette haben im Klappmenü je ein eigenes
+/// Symbol; Projizieren behält das des Leistenknopfs.
+#[test]
+fn project_intersect_and_silhouette_have_their_own_icons() {
+    use icons::IconSource;
+    use planora_app::sketch_kinds::ToolKind;
+    use planora_app::sketch_state::Tool;
+    let [p, i, s] =
+        [ToolKind::Project, ToolKind::Intersect, ToolKind::Silhouette].map(icons::sketch_kind_icon);
+    assert_eq!(p, icons::sketch_tool_icon(Tool::ProjectEdge));
+    assert_ne!(p, i);
+    assert_ne!(p, s);
+    assert_ne!(i, s);
+    for src in [i, s] {
+        let IconSource::Hand(h) = src else {
+            panic!("selbst gezeichnet erwartet: {src:?}");
+        };
+        assert!(HAND_DRAWN.contains(&h), "{h:?} fehlt in HAND_DRAWN");
+    }
+}
+
 #[test]
 fn every_sketch_tool_and_action_has_an_icon_source() {
     use icons::IconSource;

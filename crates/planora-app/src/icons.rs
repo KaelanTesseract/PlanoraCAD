@@ -1033,6 +1033,11 @@ pub enum HandIcon {
     PatternCircular,
     /// Skizzenbemaßung: zwei Hilfslinien, dazwischen die Maßlinie mit zwei Pfeilspitzen.
     SketchDimension,
+    /// Schneiden (Skizzen 6): ein Körper als dünner Kreis, die Skizzenebene als dünne
+    /// Waagerechte; die Schnittstrecke im Körper kräftig, ihre Enden als Punkte.
+    SketchIntersect,
+    /// Silhouette (Skizzen 6): eine Kugel mit dünnem Äquator, ihr Umriss kräftig.
+    SketchSilhouette,
 }
 
 /// Alle gezeichneten Symbole aus [`HandIcon`].
@@ -1063,6 +1068,8 @@ pub const HAND_DRAWN: &[HandIcon] = &[
     HandIcon::PatternRect,
     HandIcon::PatternCircular,
     HandIcon::SketchDimension,
+    HandIcon::SketchIntersect,
+    HandIcon::SketchSilhouette,
 ];
 
 /// Zeichnet ein [`HandIcon`] in `rect` (Strichbreite 1,5, runde Enden).
@@ -1361,6 +1368,27 @@ pub fn paint_hand_icon(painter: &Painter, rect: Rect, icon: HandIcon, color: Col
                 seg(painter, [tip, tip + vec2(d * h, h * 0.7)], stroke);
             }
         }
+        HandIcon::SketchIntersect => {
+            // Körper dünn, die Ebene dünn über die ganze Breite; was die Ebene im Körper trifft,
+            // kräftig mit den beiden Randpunkten.
+            let thin = Stroke::new(1.0, color);
+            painter.circle_stroke(c, r * 0.8, thin);
+            let y = r * 0.25;
+            seg(painter, [c + vec2(-r * 1.2, y), c + vec2(r * 1.2, y)], thin);
+            let half = ((r * 0.8).powi(2) - y * y).sqrt();
+            seg(painter, [c + vec2(-half, y), c + vec2(half, y)], stroke);
+            painter.circle_filled(c + vec2(-half, y), 1.6, color);
+            painter.circle_filled(c + vec2(half, y), 1.6, color);
+        }
+        HandIcon::SketchSilhouette => {
+            // Kugel: Äquator als flache dünne Ellipse, der Umriss kräftig.
+            painter.add(egui::Shape::ellipse_stroke(
+                c,
+                vec2(r, r * 0.35),
+                Stroke::new(1.0, color),
+            ));
+            painter.circle_stroke(c, r, stroke);
+        }
         HandIcon::Centerline => {
             seg(
                 painter,
@@ -1464,6 +1492,8 @@ pub fn sketch_kind_icon(kind: crate::sketch_kinds::ToolKind) -> IconSource {
             IconSource::Hand(HandIcon::Chamfer)
         }
         K::PatternCircular => IconSource::Hand(HandIcon::PatternCircular),
+        K::Intersect => IconSource::Hand(HandIcon::SketchIntersect),
+        K::Silhouette => IconSource::Hand(HandIcon::SketchSilhouette),
         _ => sketch_tool_icon(kind.tool()),
     }
 }
