@@ -18,7 +18,7 @@
 //! etwa 0,12 % des Radius beteiligter Bögen) gelten ebenfalls als Berührung.
 
 use crate::error::SketchError;
-use crate::model::{CurveId, CurveKind, Sketch};
+use crate::model::{CurveId, CurveKind, Sketch, control_spline_refused};
 use crate::profile::{
     CHECK_STEPS, ExtractedProfiles, RejectedLoop, arc_off_circle, elliptic_arc_off_ellipse,
     spline_off_node,
@@ -120,6 +120,10 @@ impl Sketch {
                         reason: SketchError::Degenerate(tr!("sketch-err-spline-two-points")),
                     }),
                 },
+                CurveKind::ControlSpline { .. } => out.rejected.push(RejectedLoop {
+                    curves: vec![id],
+                    reason: control_spline_refused(),
+                }),
             }
         }
         let node_count = reps.len();

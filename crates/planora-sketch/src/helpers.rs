@@ -107,7 +107,9 @@ impl Sketch {
             }
             if matches!(
                 self.curves[c].kind,
-                CurveKind::Ellipse { .. } | CurveKind::Spline { .. }
+                CurveKind::Ellipse { .. }
+                    | CurveKind::Spline { .. }
+                    | CurveKind::ControlSpline { .. }
             ) {
                 return Err(SketchError::WrongType(tr!("sketch-err-copy-kinds")));
             }
@@ -210,7 +212,9 @@ impl Sketch {
                 let mapped: Vec<PointId> = points.iter().map(|p| map[p]).collect();
                 self.add_spline(&mapped)?
             }
-            CurveKind::Ellipse { .. } | CurveKind::Spline { .. } => {
+            CurveKind::Ellipse { .. }
+            | CurveKind::Spline { .. }
+            | CurveKind::ControlSpline { .. } => {
                 return Err(SketchError::WrongType(tr!("sketch-err-copy-kinds")));
             }
         };
@@ -558,7 +562,7 @@ impl Sketch {
                 start: from.pos(start),
                 end: from.pos(end),
             },
-            CurveKind::Spline { .. } => {
+            CurveKind::Spline { .. } | CurveKind::ControlSpline { .. } => {
                 return Err(unsupported(tr!("sketch-err-edge-type-changed")));
             }
         };

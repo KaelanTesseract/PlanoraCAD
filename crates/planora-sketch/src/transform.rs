@@ -16,7 +16,7 @@ use crate::constraint::{ConstraintData, ConstraintId, ConstraintKind, LineOrPoin
 use crate::edit::SETTLE_FACTOR;
 use crate::error::SketchError;
 use crate::fillet::wrap_pi;
-use crate::model::{CurveId, CurveKind, MAX_COORD, PointId, Sketch};
+use crate::model::{CurveId, CurveKind, MAX_COORD, PointId, Sketch, control_spline_refused};
 use crate::offset::ends_of;
 use planora_i18n::tr;
 use planora_math::DVec2;
@@ -268,6 +268,15 @@ pub(crate) fn map_curve(
         },
         CurveKind::Spline { points } => CurveKind::Spline {
             points: points.iter().map(|&x| p(x)).collect(),
+        },
+        CurveKind::ControlSpline {
+            points,
+            degree,
+            knots,
+        } => CurveKind::ControlSpline {
+            points: points.iter().map(|&x| p(x)).collect(),
+            degree: *degree,
+            knots: knots.clone(),
         },
         CurveKind::EllipticArc {
             center,
@@ -733,6 +742,7 @@ impl Sketch {
                 let mapped: Vec<PointId> = list.iter().map(|p| points[p]).collect();
                 self.add_spline(&mapped)?
             }
+            CurveKind::ControlSpline { .. } => return Err(control_spline_refused()),
             ref kind @ (CurveKind::Ellipse { ax, ay, minor, .. }
             | CurveKind::EllipticArc { ax, ay, minor, .. }) => {
                 if !sizes.contains_key(&ax) {
@@ -1182,6 +1192,10 @@ impl Sketch {
                 end,
             } => self.axes_collapsed(ax, ay, minor) || close(center, start) || close(center, end),
             CurveKind::Spline { ref points } => points.windows(2).any(|w| close(w[0], w[1])),
+            // Kontrollpunkte dürfen zusammenfallen; entartet ist erst die ganze Kurve in einem Punkt.
+            CurveKind::ControlSpline { ref points, .. } => {
+                points.windows(2).all(|w| close(w[0], w[1]))
+            }
         }
     }
 

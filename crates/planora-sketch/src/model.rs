@@ -4,7 +4,9 @@ use crate::error::SketchError;
 use crate::solver::SolveCache;
 use planora_i18n::tr;
 use planora_kernel::{Arena, Id};
-use planora_math::{DVec2, Frame, Tolerance};
+use planora_math::nurbs::{NurbsCurve, uniform_clamped_knots};
+use planora_math::{DVec2, DVec3, Frame, Tolerance};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Punkt: zwei Einträge im Variablenvektor.
@@ -56,6 +58,15 @@ pub enum CurveKind {
         start: PointId,
         end: PointId,
     },
+    /// Nicht rationale B-Spline-Kurve über echte Skizzenpunkte als Kontrollpunkte (2 bis
+    /// [`MAX_SPLINE_POINTS`]); erster und letzter liegen auf der Kurve. `degree` ist der wirksame
+    /// Grad, `knots` der geklemmte Knotenvektor; er steht in der Kurve, weil Stutzen und Einfügen
+    /// ihn ungleichmäßig machen.
+    ControlSpline {
+        points: Vec<PointId>,
+        degree: u8,
+        knots: Vec<f64>,
+    },
 }
 
 impl CurveKind {
@@ -65,7 +76,9 @@ impl CurveKind {
             CurveKind::Line { a, b } => vec![*a, *b],
             CurveKind::Circle { center, .. } | CurveKind::Ellipse { center, .. } => vec![*center],
             CurveKind::Arc { center, start, end } => vec![*center, *start, *end],
-            CurveKind::Spline { points } => points.clone(),
+            CurveKind::Spline { points } | CurveKind::ControlSpline { points, .. } => {
+                points.clone()
+            }
             CurveKind::EllipticArc {
                 center, start, end, ..
             } => vec![*center, *start, *end],
@@ -137,6 +150,12 @@ pub const MAX_COORD: f64 = 1e9;
 
 /// Höchstzahl der Stützpunkte eines Splines.
 pub const MAX_SPLINE_POINTS: usize = 64;
+
+/// Vorläufig bis Skizzen 7 Task 3: Der Spline mit Kontrollpunkten wird von diesem Befehl klar
+/// abgelehnt. Task 3 ersetzt alle Aufrufe und entfernt die Funktion.
+pub(crate) fn control_spline_refused() -> SketchError {
+    SketchError::WrongType(tr!("sketch-err-copy-kinds"))
+}
 
 /// Endlich und betragsmäßig höchstens [`MAX_COORD`].
 pub(crate) fn finite(v: f64, what: impl FnOnce() -> String) -> Result<(), SketchError> {
@@ -462,6 +481,34 @@ impl Sketch {
     /// Natürlicher kubischer Spline durch 2 bis [`MAX_SPLINE_POINTS`] verschiedene Punkte;
     /// Stützpunkt `i` liegt beim Parameter `t = i`.
     pub fn add_spline(&mut self, points: &[PointId]) -> Result<CurveId, SketchError> {
+        self.check_spline_points(points)?;
+        Ok(self.push_curve(CurveKind::Spline {
+            points: points.to_vec(),
+        }))
+    }
+
+    /// Spline mit den Kontrollpunkten `points` (2 bis [`MAX_SPLINE_POINTS`] verschiedene Punkte)
+    /// und gleichmäßigem geklemmtem Knotenvektor. `degree` ist 3 oder 5; wirksam ist der kleinere
+    /// Wert aus `degree` und `n − 1` (**Annahme**, deckt den Foreneintrag zu Fusion).
+    pub fn add_control_spline(
+        &mut self,
+        points: &[PointId],
+        degree: u8,
+    ) -> Result<CurveId, SketchError> {
+        if !matches!(degree, 3 | 5) {
+            return Err(SketchError::InvalidInput(tr!("sketch-err-spline-degree")));
+        }
+        self.check_spline_points(points)?;
+        let p = usize::from(degree).min(points.len() - 1);
+        Ok(self.push_curve(CurveKind::ControlSpline {
+            points: points.to_vec(),
+            degree: p as u8,
+            knots: uniform_clamped_knots(p, points.len()),
+        }))
+    }
+
+    /// Prüfungen eines neuen Splines: Punktzahl, lebende Punkte ohne Doppelte, Nachbarn getrennt.
+    fn check_spline_points(&self, points: &[PointId]) -> Result<(), SketchError> {
         if !(2..=MAX_SPLINE_POINTS).contains(&points.len()) {
             return Err(SketchError::InvalidInput(tr!(
                 "sketch-err-spline-count",
@@ -480,9 +527,27 @@ impl Sketch {
         {
             return Err(SketchError::Degenerate(tr!("sketch-err-spline-neighbours")));
         }
-        Ok(self.push_curve(CurveKind::Spline {
-            points: points.to_vec(),
-        }))
+        Ok(())
+    }
+
+    /// Die lebende Kurve als NURBS-Kurve in Skizzenkoordinaten (`z = 0`): alle Freiformarten außer
+    /// dem Spline durch Stützpunkte. `None` für andere Kurven und außerhalb des Rechenbereichs
+    /// liegende Punkte.
+    pub fn nurbs_of(&self, c: CurveId) -> Option<Arc<NurbsCurve>> {
+        match &self.curve(c)?.kind {
+            CurveKind::ControlSpline {
+                points,
+                degree,
+                knots,
+            } => {
+                let control: Vec<DVec3> = points.iter().map(|&p| self.pos(p).extend(0.0)).collect();
+                let weights = vec![1.0; control.len()];
+                NurbsCurve::new(usize::from(*degree), knots.clone(), control, weights)
+                    .ok()
+                    .map(Arc::new)
+            }
+            _ => None,
+        }
     }
 
     /// Punkt der Ellipse beim Parameter `t`: `center + a·cos t + b̂·minor·sin t` mit der großen

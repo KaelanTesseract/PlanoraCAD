@@ -777,6 +777,12 @@ pub enum CurveKindDto {
         start: usize,
         ende: usize,
     },
+    /// Ab Format 17: Spline mit Kontrollpunkten; `grad` ist der wirksame Grad.
+    KontrollSpline {
+        punkte: Vec<usize>,
+        grad: u8,
+        knoten: Vec<f64>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

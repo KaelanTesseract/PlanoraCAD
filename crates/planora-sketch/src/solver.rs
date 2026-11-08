@@ -634,7 +634,7 @@ impl Sketch {
         }
     }
 
-    /// Abhängigkeiten der Gruppe, deren Spline-Parameter in `x` außerhalb von `[0, n − 1]`
+    /// Abhängigkeiten der Gruppe, deren Spline-Parameter in `x` außerhalb des Kurvenbereichs
     /// liegt (Spielraum siehe `Sketch::spline_parameter`). Dort läge die Lösung auf der nicht
     /// gezeichneten Fortsetzung des End-Segments; sie gilt nicht als Lösung.
     fn spline_parameters_outside(&self, g: &Group, x: &[f64]) -> Vec<ConstraintId> {
@@ -654,7 +654,7 @@ impl Sketch {
             if let Some(sp) = self.spline_parameter(id, x) {
                 let t = x[sp.var];
                 if t.is_finite() {
-                    x[sp.var] = t.clamp(0.0, sp.end);
+                    x[sp.var] = t.clamp(sp.lo, sp.hi);
                 }
             }
         }
@@ -679,7 +679,7 @@ impl Sketch {
             | CurveKind::EllipticArc { ax, ay, minor, .. } => {
                 !(ok(DVec2::new(x[*ax], x[*ay]).length()) && ok(x[*minor]))
             }
-            CurveKind::Spline { .. } => false,
+            CurveKind::Spline { .. } | CurveKind::ControlSpline { .. } => false,
         })
     }
 

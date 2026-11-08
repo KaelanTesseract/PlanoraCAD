@@ -5,11 +5,15 @@
 //! Parameter je Art: Linie `t ∈ [0, 1]` von `a` nach `b`; Kreis Winkel `t ∈ [0, 2π)` ab der
 //! x-Achse; Bogen Winkel `t ∈ [a0, a0 + sweep]` (gegen den Uhrzeigersinn); Ellipse
 //! `t ∈ [0, 2π)` auf `c + a·cos t + b·sin t`; Ellipsenbogen `t ∈ [t0, t0 + sweep]` auf
-//! derselben Form; Spline `t ∈ [0, n − 1]` (Stützpunkt `i` bei `t = i`).
+//! derselben Form; Spline `t ∈ [0, n − 1]` (Stützpunkt `i` bei `t = i`); Freiformkurve der
+//! NURBS-Parameter.
 
-use crate::curves::Sampled;
+use crate::curves::{Sampled, nurbs_breaks, nurbs_samples};
 use crate::model::{CurveId, CurveKind, Sketch};
+use planora_kernel::nurbs_divisions;
+use planora_math::nurbs::NurbsCurve;
 use planora_math::{DVec2, TAU};
+use std::sync::Arc;
 
 /// Abtastschritte je Vollkreis bei der Suche nach dem nächsten Punkt (Ellipsen).
 const NEAREST_STEPS_PER_TURN: usize = 256;
@@ -59,11 +63,16 @@ pub(crate) enum Geom {
         s: Sampled,
         n: usize,
     },
+    /// Freiformkurve in Skizzenkoordinaten (`z = 0`).
+    Nurbs {
+        curve: Arc<NurbsCurve>,
+    },
 }
 
 impl Geom {
     /// Punkt und Ableitung nach `t`. Außerhalb des Bereichs wird die Kurve fortgesetzt
-    /// (Gerade, ganzer Kreis bzw. ganze Ellipse, Spline über sein erstes bzw. letztes Segment).
+    /// (Gerade, ganzer Kreis bzw. ganze Ellipse, Spline über sein erstes bzw. letztes Segment,
+    /// Freiformkurve über ihr erstes bzw. letztes Polynomstück).
     pub(crate) fn eval(&self, t: f64) -> (DVec2, DVec2) {
         match self {
             Geom::Line { a, b } => (*a + (*b - *a) * t, *b - *a),
@@ -87,6 +96,10 @@ impl Geom {
                     y1 - y0 - m0 * ((3.0 * w * w - 1.0) / 6.0) + m1 * ((3.0 * u * u - 1.0) / 6.0);
                 (p, d)
             }
+            Geom::Nurbs { curve } => {
+                let d = curve.derivs_unclamped(t, 1);
+                (d[0].truncate(), d[1].truncate())
+            }
         }
     }
 
@@ -107,6 +120,7 @@ impl Geom {
                 spline_segment(s, *n, t)
                     .map_or(DVec2::ZERO, |(u, [_, _, m0, m1])| m0 * (1.0 - u) + m1 * u)
             }
+            Geom::Nurbs { curve } => curve.derivs_unclamped(t, 2)[2].truncate(),
         }
     }
 
@@ -118,6 +132,7 @@ impl Geom {
             Geom::Arc { a0, sweep, .. } => (*a0, a0 + sweep),
             Geom::EllipticArc { t0, sweep, .. } => (*t0, t0 + sweep),
             Geom::Spline { n, .. } => (0.0, (n - 1) as f64),
+            Geom::Nurbs { curve } => curve.domain(),
         }
     }
 
@@ -166,24 +181,33 @@ impl Geom {
         match self {
             Geom::Line { a, b } => a.distance(*b) * span,
             Geom::Circle { r, .. } | Geom::Arc { r, .. } => r * span,
+            Geom::Nurbs { curve } => nurbs_breaks(curve, lo, hi)
+                .windows(2)
+                .map(|w| self.simpson(w[0], w[1], LENGTH_STEPS_PER_SEGMENT as usize))
+                .sum(),
             Geom::Ellipse { .. } | Geom::EllipticArc { .. } | Geom::Spline { .. } => {
                 let per_unit = if matches!(self, Geom::Spline { .. }) {
                     LENGTH_STEPS_PER_SEGMENT
                 } else {
                     LENGTH_STEPS_PER_TURN / TAU
                 };
-                // Simpson mit gerader Abschnittszahl
+                // gerade Abschnittszahl
                 let k = ((span * per_unit / 2.0).ceil() as usize).clamp(1, 1 << 16) * 2;
-                let h = span / k as f64;
-                let speed = |t: f64| self.eval(t).1.length();
-                let mut sum = speed(lo) + speed(hi);
-                for i in 1..k {
-                    let w = if i % 2 == 1 { 4.0 } else { 2.0 };
-                    sum += w * speed(lo + h * i as f64);
-                }
-                sum * h / 3.0
+                self.simpson(lo, hi, k)
             }
         }
+    }
+
+    /// Bogenlänge von `lo` bis `hi` nach Simpson mit `k` Abschnitten (`k` gerade).
+    fn simpson(&self, lo: f64, hi: f64, k: usize) -> f64 {
+        let h = (hi - lo) / k as f64;
+        let speed = |t: f64| self.eval(t).1.length();
+        let mut sum = speed(lo) + speed(hi);
+        for i in 1..k {
+            let w = if i % 2 == 1 { 4.0 } else { 2.0 };
+            sum += w * speed(lo + h * i as f64);
+        }
+        sum * h / 3.0
     }
 
     /// Parameter des Kurvenpunkts, der `p` am nächsten liegt (im Bereich; bei periodischen
@@ -226,14 +250,22 @@ impl Geom {
                     hi
                 }
             }
-            Geom::Ellipse { .. } | Geom::EllipticArc { .. } | Geom::Spline { .. } => {
-                let steps = match self {
-                    Geom::Spline { n, .. } => (n - 1) * NEAREST_STEPS_PER_SEGMENT,
-                    _ => steps_for(hi - lo, NEAREST_STEPS_PER_TURN),
+            Geom::Ellipse { .. }
+            | Geom::EllipticArc { .. }
+            | Geom::Spline { .. }
+            | Geom::Nurbs { .. } => {
+                let ts: Vec<f64> = if let Geom::Nurbs { curve } = self {
+                    nurbs_samples(curve, lo, hi, NEAREST_STEPS_PER_SEGMENT)
+                } else {
+                    let steps = match self {
+                        Geom::Spline { n, .. } => (n - 1) * NEAREST_STEPS_PER_SEGMENT,
+                        _ => steps_for(hi - lo, NEAREST_STEPS_PER_TURN),
+                    };
+                    (0..=steps)
+                        .map(|k| lo + (hi - lo) * k as f64 / steps as f64)
+                        .collect()
                 };
-                let ts: Vec<f64> = (0..=steps)
-                    .map(|k| lo + (hi - lo) * k as f64 / steps as f64)
-                    .collect();
+                let steps = ts.len() - 1;
                 let dist = |t: f64| self.eval(t).0.distance_squared(p);
                 let k = ts
                     .iter()
@@ -267,9 +299,16 @@ impl Geom {
 
     /// Parameter des Linienzugs von `t0` nach `t1`: Linie ein Abschnitt; Kreise, Bögen und
     /// Ellipsen `steps_per_turn` Abschnitte je Vollkreis; Splines `steps_per_turn / 4` je
-    /// Segment (wie [`Sketch::curve_polyline`] mit 16 je Segment bei 64 je Vollkreis).
+    /// Segment (wie [`Sketch::curve_polyline`] mit 16 je Segment bei 64 je Vollkreis);
+    /// Freiformkurven siehe [`nurbs_polyline_params`], immer mit allen Knoten dazwischen.
     pub(crate) fn polyline_params(&self, t0: f64, t1: f64, steps_per_turn: usize) -> Vec<f64> {
         let span = t1 - t0;
+        if let Geom::Nurbs { curve } = self
+            && span.is_finite()
+            && span != 0.0
+        {
+            return nurbs_polyline_params(curve, t0, t1, steps_per_turn);
+        }
         let steps = if !span.is_finite() {
             1
         } else {
@@ -325,6 +364,10 @@ impl Geom {
                 let half = DVec2::new(a.x.hypot(b.x), a.y.hypot(b.y));
                 (*c - half, *c + half)
             }
+            Geom::Nurbs { curve } => {
+                let mut pts = curve.control_points().iter().map(|p| p.truncate());
+                fold(&mut pts)
+            }
             Geom::Spline { n, .. } => {
                 let mut pts = (0..n - 1).flat_map(|i| {
                     let (p0, d0) = self.eval(i as f64);
@@ -351,6 +394,33 @@ fn spline_segment(s: &Sampled, n: usize, t: f64) -> Option<(f64, [DVec2; 4])> {
         t - i as f64,
         [at(y, i), at(y, i + 1), at(m, i), at(m, i + 1)],
     ))
+}
+
+/// Parameter des Linienzugs einer Freiformkurve von `t0` nach `t1` (`t0 != t1`, Reihenfolge
+/// beliebig). Die Zahl der Abschnitte richtet sich nach der Struktur der Kurve:
+/// [`nurbs_divisions`], mindestens `steps_per_turn / 4` je Bézier-Stück wie beim Spline. Sie
+/// verteilen sich nach Parameterbreite auf die Bézier-Stücke, damit die Knoten, an denen die Kurve
+/// abknicken kann, im Linienzug liegen.
+fn nurbs_polyline_params(curve: &NurbsCurve, t0: f64, t1: f64, steps_per_turn: usize) -> Vec<f64> {
+    let (lo, hi) = (t0.min(t1), t0.max(t1));
+    let breaks = nurbs_breaks(curve, lo, hi);
+    let pieces = breaks.len() - 1;
+    let total = nurbs_divisions(curve, lo, hi, TAU / steps_per_turn.max(1) as f64)
+        .max(pieces * (steps_per_turn / 4).max(1))
+        .clamp(1, 1 << 16);
+    let mut out = vec![lo];
+    for w in breaks.windows(2) {
+        let share = (w[1] - w[0]) / (hi - lo);
+        let steps = ((share * total as f64).ceil() as usize).max(1);
+        for k in 1..steps {
+            out.push(w[0] + (w[1] - w[0]) * k as f64 / steps as f64);
+        }
+        out.push(w[1]);
+    }
+    if t0 > t1 {
+        out.reverse();
+    }
+    out
 }
 
 /// Abschnitte für den Parameterbereich `span` bei `per_turn` Abschnitten je 2π (mindestens 1).
@@ -451,14 +521,17 @@ impl Sketch {
                     n: xy.len(),
                 }
             }
+            CurveKind::ControlSpline { .. } => Geom::Nurbs {
+                curve: self.nurbs_of(c)?,
+            },
         };
         Some(g)
     }
 
     /// Punkt der lebenden Kurve `c` beim Parameter `t` (Parameter je Art: Linie `[0, 1]`,
     /// Kreis und Bogen Winkel ab der x-Achse, Ellipse und Ellipsenbogen der Parameter von
-    /// [`Sketch::ellipse_point`], Spline `[0, n − 1]`). Außerhalb von [`Sketch::curve_domain`]
-    /// wird die Kurve fortgesetzt. `None` für unbekannte oder entartete Kurven und nicht
+    /// [`Sketch::ellipse_point`], Spline `[0, n − 1]`, Freiformkurve der NURBS-Parameter).
+    /// Außerhalb von [`Sketch::curve_domain`] wird die Kurve fortgesetzt. `None` für unbekannte oder entartete Kurven und nicht
     /// endliches `t`.
     pub fn curve_eval(&self, c: CurveId, t: f64) -> Option<DVec2> {
         if !t.is_finite() {

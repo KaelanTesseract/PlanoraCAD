@@ -28,7 +28,7 @@
 use crate::arrangement::{Arrangement, polygon_area, polygon_centroid, polygon_contains};
 use crate::error::SketchError;
 use crate::geom::Geom;
-use crate::model::{CurveId, CurveKind, Sketch};
+use crate::model::{CurveId, CurveKind, Sketch, control_spline_refused};
 use crate::triangulate::triangulate;
 use planora_i18n::tr;
 use planora_kernel::{Profile, ProfileLoop, SampledLoop, Segment, segment_end};
@@ -357,6 +357,7 @@ impl Sketch {
                     return Err(SketchError::Degenerate(tr!("sketch-err-spline-neighbours")));
                 }
             }
+            CurveKind::ControlSpline { .. } => return Err(control_spline_refused()),
         }
         let Some(g) = self.geom(id) else {
             return Ok(None);
@@ -602,6 +603,7 @@ impl LoopBuilder<'_> {
                     nurbs_segment(self.spline_piece(run)?, run.forward)?,
                     spline_off_node(),
                 ),
+                Geom::Nurbs { .. } => return Err(control_spline_refused()),
             };
             if let Segment::Nurbs { curve } = &seg {
                 // Der Kernel verlangt, dass ein Freiformsegment am Ende des vorigen beginnt.

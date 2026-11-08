@@ -42,16 +42,17 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Höchste lesbare Formatnummer der Versionsdateien (P7, P12, F7).
-pub const FORMAT_VERSION: u32 = 16;
+pub const FORMAT_VERSION: u32 = 17;
 /// Formatnummer der Rahmendateien `dokument.json` und `.autosave.json`; ihre Struktur ist seit
 /// Format 1 unverändert, ältere Programme öffnen das Projekt deshalb weiter (P7).
 pub const CONTAINER_FORMAT: u32 = 1;
 /// Größte Summe der dekodierten Netzdaten eines Dokuments (wie die Dateigrenze beim Import).
 const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 
-/// Kleinste Formatnummer, die den Stand darstellt (die Regeln in dieser Reihenfolge geprüft): 16
-/// mit einer Konstruktionsebene, einer Skizze auf einer Konstruktionsebene, einer Schnitt-
-/// oder Silhouettenprojektion ([`needs_format_16`]) oder einer vom Grundzustand abweichenden
+/// Kleinste Formatnummer, die den Stand darstellt (die Regeln in dieser Reihenfolge geprüft): 17
+/// mit einer der neuen Kurvenarten aus Skizzen 7 ([`needs_format_17`], auch einem gelöschten
+/// Kurveneintrag), 16 mit einer Konstruktionsebene, einer Skizze auf einer Konstruktionsebene,
+/// einer Schnitt- oder Silhouettenprojektion ([`needs_format_16`]) oder einer vom Grundzustand abweichenden
 /// Sichtbarkeit, 15 mit einem Muster oder einer der
 /// Abhängigkeitsarten aus Skizzen 5 in einer Skizze (auch einem aufgelösten Muster oder
 /// gelöschten Eintrag), 14 mit einer Mittellinie in einer Skizze (auch
@@ -72,7 +73,9 @@ pub fn required_format(s: &Snapshot) -> u32 {
 /// [`required_format`] mit den schon bestimmten Profilfeldern `fields` (eins je Feature).
 fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
     let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
-    if has(needs_format_16) || !s.visibility.is_default() {
+    if has(needs_format_17) {
+        17
+    } else if has(needs_format_16) || !s.visibility.is_default() {
         16
     } else if has(|k| matches!(k, FeatureKind::Sketch(sf) if sf.sketch.needs_format_15())) {
         15
@@ -114,6 +117,14 @@ fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
     } else {
         1
     }
+}
+/// Braucht die Art Format 17 (Skizzen 7)? Eine Skizze mit einem Spline mit Kontrollpunkten, auch
+/// einem gelöschten Eintrag: Er steht in der Datei.
+fn needs_format_17(k: &FeatureKind) -> bool {
+    matches!(k, FeatureKind::Sketch(sf) if sf
+        .sketch
+        .curve_entries()
+        .any(|c| matches!(c, CurveKind::ControlSpline { .. })))
 }
 /// Braucht die Art Format 16 (Skizzen 6)? Konstruktionsebenen, Skizzen auf ihnen und Schnitt-
 /// oder Silhouettenprojektionen. Kantenprojektionen gibt es schon länger, auch verknüpfte, nicht
@@ -341,6 +352,15 @@ fn curve_to(k: &CurveKind) -> CurveKindDto {
             start: start.index(),
             ende: end.index(),
         },
+        CurveKind::ControlSpline {
+            points,
+            degree,
+            knots,
+        } => CurveKindDto::KontrollSpline {
+            punkte: points.iter().map(|p| p.index()).collect(),
+            grad: *degree,
+            knoten: knots.clone(),
+        },
     }
 }
 
@@ -385,6 +405,15 @@ fn curve_from(d: &CurveKindDto) -> CurveKind {
             minor: *klein,
             start: p(*start),
             end: p(*ende),
+        },
+        CurveKindDto::KontrollSpline {
+            punkte,
+            grad,
+            knoten,
+        } => CurveKind::ControlSpline {
+            points: punkte.iter().map(|i| p(*i)).collect(),
+            degree: *grad,
+            knots: knoten.clone(),
         },
     }
 }
@@ -2879,6 +2908,15 @@ fn has_format_16_data(k: &KindDto) -> bool {
     }
 }
 
+/// Inhalt aus Format 17 in einer Feature-Art der Datei (Gegenstück zu [`needs_format_17`]).
+fn has_format_17_data(k: &KindDto) -> bool {
+    matches!(k, KindDto::Skizze(s) if s
+        .skizze
+        .kurven
+        .iter()
+        .any(|c| matches!(c.art, CurveKindDto::KontrollSpline { .. })))
+}
+
 /// Liest eine Versionsdatei. `origin` ist der Dateiname für Meldungen.
 pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
     // Erst nur das Format lesen, damit eine neuere Datei auch bei geänderter Struktur die
@@ -3020,6 +3058,16 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
                 "proj-since-format",
                 what = tr!("proj-feat-visibility"),
                 format = "16"
+            ),
+        ));
+    }
+    if file.format < 17 && file.features.iter().any(|f| has_format_17_data(&f.art)) {
+        return Err(ProjectError::corrupt(
+            origin,
+            tr!(
+                "proj-since-format",
+                what = tr!("proj-feat-control-spline"),
+                format = "17"
             ),
         ));
     }

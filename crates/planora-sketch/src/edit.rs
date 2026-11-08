@@ -14,7 +14,7 @@ use crate::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
 use crate::error::SketchError;
 use crate::geom::Geom;
 use crate::intersect::{Prepared, clean_params, intersect_prepared};
-use crate::model::{CurveId, CurveKind, PointId, Sketch};
+use crate::model::{CurveId, CurveKind, PointId, Sketch, control_spline_refused};
 use planora_i18n::tr;
 use planora_math::{DVec2, TAU};
 use std::collections::HashSet;
@@ -476,6 +476,7 @@ impl Sketch {
                     CurveKind::Arc { start, end, .. }
                     | CurveKind::EllipticArc { start, end, .. } => (*start, *end),
                     CurveKind::Spline { points } => (points[0], points[points.len() - 1]),
+                    CurveKind::ControlSpline { .. } => return Err(control_spline_refused()),
                     CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => {
                         unreachable!("closed curves are handled above")
                     }
@@ -528,6 +529,7 @@ impl Sketch {
                         CurveKind::Spline { points } => CurveKind::Spline {
                             points: self.spline_piece(g, points, s, e, u0, u1)?,
                         },
+                        CurveKind::ControlSpline { .. } => return Err(control_spline_refused()),
                         CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => {
                             unreachable!("closed curves are handled above")
                         }
@@ -662,6 +664,7 @@ impl Sketch {
                 .add_elliptic_arc_vars(center, ax, ay, minor, start, end)
                 .0),
             CurveKind::Spline { points } => self.add_spline(&points),
+            CurveKind::ControlSpline { .. } => Err(control_spline_refused()),
             CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => {
                 unreachable!("pieces are open curves")
             }

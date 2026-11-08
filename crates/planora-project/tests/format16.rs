@@ -6,9 +6,7 @@ use planora_feature::planes::{AxisRef, PlaneBase, PlaneDef, PlaneFeature, PointR
 use planora_feature::*;
 use planora_kernel::{Solid, Surface};
 use planora_math::{DVec3, Frame, Tolerance};
-use planora_project::{
-    FORMAT_VERSION, ProjectError, decode_version, encode_version, required_format,
-};
+use planora_project::{ProjectError, decode_version, encode_version, required_format};
 use planora_sketch::{CurveId, PointId, Sketch};
 
 fn load(text: &str) -> Result<Document, ProjectError> {
@@ -100,10 +98,7 @@ fn old_files() -> Vec<(String, String)> {
     out
 }
 
-#[test]
-fn format_version_is_16() {
-    assert_eq!(FORMAT_VERSION, 16);
-}
+// Skizzen 7: Die höchste Formatnummer prüft jetzt `format_17.rs`.
 
 #[test]
 fn old_files_roundtrip_bytewise() {

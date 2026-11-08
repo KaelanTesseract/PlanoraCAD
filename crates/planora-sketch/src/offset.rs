@@ -303,7 +303,9 @@ fn open_ends(sketch: &Sketch, c: CurveId) -> Option<[DVec2; 2]> {
         CurveKind::Arc { start, end, .. } | CurveKind::EllipticArc { start, end, .. } => {
             (*start, *end)
         }
-        CurveKind::Spline { points } => (*points.first()?, *points.last()?),
+        CurveKind::Spline { points } | CurveKind::ControlSpline { points, .. } => {
+            (*points.first()?, *points.last()?)
+        }
         CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => return None,
     };
     Some([sketch.pos(a), sketch.pos(b)])
@@ -358,7 +360,9 @@ pub(crate) fn ends_of(kind: &CurveKind) -> Vec<PointId> {
         CurveKind::Arc { start, end, .. } | CurveKind::EllipticArc { start, end, .. } => {
             vec![*start, *end]
         }
-        CurveKind::Spline { points } => vec![points[0], points[points.len() - 1]],
+        CurveKind::Spline { points } | CurveKind::ControlSpline { points, .. } => {
+            vec![points[0], points[points.len() - 1]]
+        }
         CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => Vec::new(),
     }
 }
@@ -459,6 +463,8 @@ impl Sketch {
                 let sections = ((n - 1) * SECTIONS_PER_SPAN).min(MAX_SECTIONS);
                 self.open_approx(c, g, sections, against, d)
             }
+            // Vorläufig bis Skizzen 7 Task 3: klar abgelehnt.
+            Geom::Nurbs { .. } => Err(BAD),
         }
     }
 

@@ -57,7 +57,7 @@ fn load(text: &str) -> Result<Document, ProjectError> {
 
 #[test]
 fn format_version_is_13() {
-    assert_eq!(FORMAT_VERSION, 16); // seit Skizzen 6 (Konstruktionsebenen und neue Projektionen)
+    assert_eq!(FORMAT_VERSION, 17); // seit Skizzen 7 (Spline mit Kontrollpunkten)
 }
 
 #[test]
@@ -107,6 +107,6 @@ fn without_an_elliptic_arc_the_file_keeps_its_format() {
 #[test]
 fn format_17_is_too_new() {
     let text = encode_version(&document(true, false).snapshot()).unwrap();
-    let e = load(&text.replacen("\"format\": 13", "\"format\": 17", 1)).unwrap_err();
-    assert!(matches!(e, ProjectError::TooNew { found: 17, .. }), "{e:?}");
+    let e = load(&text.replacen("\"format\": 13", "\"format\": 18", 1)).unwrap_err();
+    assert!(matches!(e, ProjectError::TooNew { found: 18, .. }), "{e:?}");
 }

@@ -1,7 +1,9 @@
 //! Abhängigkeiten und Maße. Jede Abhängigkeit liefert Residuen als `Dual`, also mit exakten
 //! Ableitungen nach den beteiligten Variablen.
 
-use crate::curves::{Sampled, ellipse_eval, spline_eval, spline_second_derivatives};
+use crate::curves::{
+    Sampled, ellipse_eval, nurbs_eval_dual, spline_eval, spline_second_derivatives,
+};
 use crate::dual::Dual;
 use crate::error::SketchError;
 use crate::model::{CurveId, CurveKind, PointId, Sketch};
@@ -19,12 +21,13 @@ const MIN_SPLINE_T_TOL: f64 = 1e-12;
 /// Obergrenze dieses Spielraums (zu einem Punkt zusammengezogene End-Segmente).
 const MAX_SPLINE_T_TOL: f64 = 1e-3;
 
-/// Bereich des Spline-Parameters einer parametrischen Abhängigkeit: Variable, Ende `n − 1` und
-/// erlaubter Überstand an beiden Enden.
+/// Bereich des Spline-Parameters einer parametrischen Abhängigkeit: Variable, Bereich `(lo, hi)`
+/// (beim Spline durch Stützpunkte `(0, n − 1)`) und erlaubter Überstand an beiden Enden.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SplineParameter {
     pub var: usize,
-    pub end: f64,
+    pub lo: f64,
+    pub hi: f64,
     pub slack_start: f64,
     pub slack_end: f64,
 }
@@ -32,7 +35,7 @@ pub(crate) struct SplineParameter {
 impl SplineParameter {
     /// Liegt `t` im (um den Spielraum erweiterten) Bereich? NaN liegt nie darin.
     pub fn contains(&self, t: f64) -> bool {
-        t >= -self.slack_start && t <= self.end + self.slack_end
+        t >= self.lo - self.slack_start && t <= self.hi + self.slack_end
     }
 }
 
@@ -433,7 +436,7 @@ fn ellipse_residual(ctx: &Ctx, c: CurveId, p: &V2) -> Dual {
 }
 
 /// Punkt und Ableitung nach `t` einer (geprüften) Ellipse, eines Ellipsenbogens (auf seiner
-/// ganzen Ellipse) oder eines Splines.
+/// ganzen Ellipse), eines Splines oder einer Freiformkurve.
 fn param_curve(ctx: &Ctx, c: CurveId, t: &Dual) -> (V2, V2) {
     match &ctx.sk.curves[c].kind {
         CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. } => {
@@ -451,6 +454,14 @@ fn param_curve(ctx: &Ctx, c: CurveId, t: &Dual) -> (V2, V2) {
             let (x, dx) = spline_eval(&xs, &mx, t);
             let (y, dy) = spline_eval(&ys, &my, t);
             ((x, y), (dx, dy))
+        }
+        CurveKind::ControlSpline {
+            points,
+            degree,
+            knots,
+        } => {
+            let pts: Vec<V2> = points.iter().map(|&p| ctx.pt(p)).collect();
+            nurbs_eval_dual(usize::from(*degree), knots, None, &pts, t)
         }
         _ => unreachable!("type was checked"),
     }
@@ -471,7 +482,18 @@ fn is_line_kind(k: &CurveKind) -> bool {
 fn is_param_kind(k: &CurveKind) -> bool {
     matches!(
         k,
-        CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. } | CurveKind::Spline { .. }
+        CurveKind::Ellipse { .. }
+            | CurveKind::EllipticArc { .. }
+            | CurveKind::Spline { .. }
+            | CurveKind::ControlSpline { .. }
+    )
+}
+
+/// Kurven, auf denen „Punkt auf Kurve“ einen Kurvenparameter als Zusatzvariable braucht.
+fn on_curve_needs_parameter(k: &CurveKind) -> bool {
+    matches!(
+        k,
+        CurveKind::Spline { .. } | CurveKind::ControlSpline { .. }
     )
 }
 
@@ -542,7 +564,9 @@ pub(crate) fn curve_ends(kind: &CurveKind) -> Option<[PointId; 2]> {
     match kind {
         CurveKind::Line { a, b } => Some([*a, *b]),
         CurveKind::Arc { start, end, .. } => Some([*start, *end]),
-        CurveKind::Spline { points } => Some([*points.first()?, *points.last()?]),
+        CurveKind::Spline { points } | CurveKind::ControlSpline { points, .. } => {
+            Some([*points.first()?, *points.last()?])
+        }
         _ => None,
     }
 }
@@ -602,6 +626,14 @@ fn into_curve(ctx: &Ctx, c: CurveId, p: PointId) -> Option<V2> {
                 (-&d.0, -&d.1)
             }
         }
+        CurveKind::ControlSpline { knots, .. } => {
+            if p == first {
+                param_curve(ctx, c, &Dual::constant(*knots.first()?)).1
+            } else {
+                let (_, d) = param_curve(ctx, c, &Dual::constant(*knots.last()?));
+                (-&d.0, -&d.1)
+            }
+        }
         _ => return None,
     })
 }
@@ -622,7 +654,7 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
                 CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. } => {
                     vec![ellipse_residual(ctx, *c, &pp)]
                 }
-                CurveKind::Spline { .. } => {
+                CurveKind::Spline { .. } | CurveKind::ControlSpline { .. } => {
                     let t = extra_var(ctx, data);
                     let (q, _) = param_curve(ctx, *c, &t);
                     vec![&q.0 - &pp.0, &q.1 - &pp.1]
@@ -1291,29 +1323,63 @@ impl Sketch {
     pub(crate) fn spline_parameter(&self, id: ConstraintId, x: &[f64]) -> Option<SplineParameter> {
         let data = &self.constraints[id];
         let var = data.extra?;
-        let points = data
-            .kind
+        let at = |p: PointId| DVec2::new(x[self.points[p].x], x[self.points[p].y]);
+        let tol = self.tolerance().linear;
+        data.kind
             .curves()
             .iter()
             .find_map(|&c| match &self.curves[c].kind {
-                CurveKind::Spline { points } => Some(points.clone()),
+                CurveKind::Spline { points } => {
+                    let n = points.len();
+                    // Spielraum je Ende: `tol.linear` geteilt durch die Sehnenlänge des
+                    // End-Segments, also etwa `tol.linear` Weglänge auf der Fortsetzung, begrenzt
+                    // auf [MIN_SPLINE_T_TOL, MAX_SPLINE_T_TOL].
+                    let slack = |a: PointId, b: PointId| {
+                        (tol / at(a).distance(at(b))).clamp(MIN_SPLINE_T_TOL, MAX_SPLINE_T_TOL)
+                    };
+                    Some(SplineParameter {
+                        var,
+                        lo: 0.0,
+                        hi: (n - 1) as f64,
+                        slack_start: slack(points[0], points[1]),
+                        slack_end: slack(points[n - 2], points[n - 1]),
+                    })
+                }
+                CurveKind::ControlSpline {
+                    points,
+                    degree,
+                    knots,
+                } => {
+                    let (p, n, k) = (usize::from(*degree), points.len(), knots.len());
+                    // Wie oben, mit der Geschwindigkeit am Ende `p / reach · Sehne`. Zusammen-
+                    // gefallene Punkte (Sehne null) ergeben die Obergrenze; sie wächst mit der
+                    // Breite des End-Stücks, damit auch schmale Bereiche nur wenig überragt werden.
+                    let slack = |a: PointId, b: PointId, reach: f64, piece: f64| {
+                        (tol * reach / (p as f64 * at(a).distance(at(b)))).clamp(
+                            MIN_SPLINE_T_TOL,
+                            (MAX_SPLINE_T_TOL * piece).max(MIN_SPLINE_T_TOL),
+                        )
+                    };
+                    Some(SplineParameter {
+                        var,
+                        lo: knots[0],
+                        hi: knots[k - 1],
+                        slack_start: slack(
+                            points[0],
+                            points[1],
+                            knots[p + 1] - knots[1],
+                            knots[p + 1] - knots[p],
+                        ),
+                        slack_end: slack(
+                            points[n - 2],
+                            points[n - 1],
+                            knots[k - 2] - knots[k - p - 2],
+                            knots[k - p - 1] - knots[k - p - 2],
+                        ),
+                    })
+                }
                 _ => None,
-            })?;
-        let n = points.len();
-        let at = |p: PointId| DVec2::new(x[self.points[p].x], x[self.points[p].y]);
-        // Spielraum je Ende: `tol.linear` geteilt durch die Sehnenlänge des End-Segments, also
-        // etwa `tol.linear` Weglänge auf der Fortsetzung, begrenzt auf
-        // [MIN_SPLINE_T_TOL, MAX_SPLINE_T_TOL].
-        let slack = |a: PointId, b: PointId| {
-            (self.tolerance().linear / at(a).distance(at(b)))
-                .clamp(MIN_SPLINE_T_TOL, MAX_SPLINE_T_TOL)
-        };
-        Some(SplineParameter {
-            var,
-            end: (n - 1) as f64,
-            slack_start: slack(points[0], points[1]),
-            slack_end: slack(points[n - 2], points[n - 1]),
-        })
+            })
     }
 
     /// Vorzeichen der Tangente `kind` an einem gemeinsamen Endpunkt, aus der aktuellen Geometrie:
@@ -1388,8 +1454,8 @@ impl Sketch {
         }
     }
 
-    /// Abgetastete Form einer Ellipse, der ganzen Ellipse eines Ellipsenbogens oder eines
-    /// Splines (sonst `None`).
+    /// Abgetastete Form einer Ellipse, der ganzen Ellipse eines Ellipsenbogens, eines Splines oder
+    /// einer Freiformkurve (sonst `None`).
     fn sampled(&self, c: CurveId) -> Option<Sampled> {
         match &self.curves[c].kind {
             CurveKind::Ellipse {
@@ -1413,6 +1479,7 @@ impl Sketch {
                 let xy: Vec<DVec2> = points.iter().map(|&p| self.pos(p)).collect();
                 Some(Sampled::spline(&xy))
             }
+            CurveKind::ControlSpline { .. } => Some(Sampled::Nurbs(self.nurbs_of(c)?)),
             _ => None,
         }
     }
@@ -1469,9 +1536,7 @@ impl Sketch {
     /// `extra_start`: Punkt auf Spline, Tangente zwischen Linie und Ellipse/Spline.
     pub(crate) fn needs_extra(&self, kind: &ConstraintKind) -> bool {
         match kind {
-            ConstraintKind::PointOnCurve(_, c) => {
-                matches!(self.curves[*c].kind, CurveKind::Spline { .. })
-            }
+            ConstraintKind::PointOnCurve(_, c) => on_curve_needs_parameter(&self.curves[*c].kind),
             ConstraintKind::Tangent(a, b) => line_and_param(self, *a, *b).is_some(),
             _ => false,
         }
@@ -1482,7 +1547,7 @@ impl Sketch {
     pub(crate) fn extra_start(&self, kind: &ConstraintKind) -> Option<f64> {
         match kind {
             ConstraintKind::PointOnCurve(p, c)
-                if matches!(self.curves[*c].kind, CurveKind::Spline { .. }) =>
+                if on_curve_needs_parameter(&self.curves[*c].kind) =>
             {
                 Some(self.sampled(*c)?.nearest_to_point(self.pos(*p)))
             }

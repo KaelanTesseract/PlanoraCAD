@@ -340,7 +340,7 @@ pub fn describe_sketch_change_beside(
                 CurveKind::Circle { .. } => tr!("undo-circle"),
                 CurveKind::Arc { .. } => tr!("undo-arc"),
                 CurveKind::Ellipse { .. } => tr!("undo-ellipse"),
-                CurveKind::Spline { .. } => tr!("undo-spline"),
+                CurveKind::Spline { .. } | CurveKind::ControlSpline { .. } => tr!("undo-spline"),
                 CurveKind::EllipticArc { .. } => tr!("undo-elliptic-arc"),
             };
         }

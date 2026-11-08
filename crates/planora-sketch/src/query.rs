@@ -68,10 +68,12 @@ fn chain_ends(kind: &CurveKind) -> Vec<PointId> {
         CurveKind::Arc { start, end, .. } | CurveKind::EllipticArc { start, end, .. } => {
             vec![*start, *end]
         }
-        CurveKind::Spline { points } => match (points.first(), points.last()) {
-            (Some(a), Some(b)) => vec![*a, *b],
-            _ => Vec::new(),
-        },
+        CurveKind::Spline { points } | CurveKind::ControlSpline { points, .. } => {
+            match (points.first(), points.last()) {
+                (Some(a), Some(b)) => vec![*a, *b],
+                _ => Vec::new(),
+            }
+        }
         CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => Vec::new(),
     }
 }
@@ -79,8 +81,9 @@ fn chain_ends(kind: &CurveKind) -> Vec<PointId> {
 impl Sketch {
     /// Linienzug einer lebenden Kurve: Linie 2 Punkte; Kreis und Ellipse geschlossen (letzter
     /// Punkt = erster); Bogen gegen den Uhrzeigersinn von Start nach Ende mit den exakten
-    /// Endpunkten, Ellipsenbogen ebenso; Spline 16 Punkte je Segment. `steps_per_turn` wird auf
-    /// `4..=4096` geklemmt.
+    /// Endpunkten, Ellipsenbogen ebenso; Spline 16 Punkte je Segment; Spline mit Kontrollpunkten
+    /// nach seinen Bézier-Stücken mit den exakten Enden. `steps_per_turn` wird auf `4..=4096`
+    /// geklemmt.
     pub fn curve_polyline(&self, c: CurveId, steps_per_turn: usize) -> Option<Vec<DVec2>> {
         let per_turn = steps_per_turn.clamp(MIN_STEPS_PER_TURN, MAX_STEPS_PER_TURN);
         let tol = self.tolerance();
@@ -140,6 +143,15 @@ impl Sketch {
                 pl[n] = xy[xy.len() - 1];
                 pl
             }
+            CurveKind::ControlSpline { points, .. } => {
+                let g = self.geom(c)?;
+                let (lo, hi) = g.domain();
+                let mut pl = g.polyline(lo, hi, per_turn);
+                let last = pl.len() - 1;
+                pl[0] = self.pos(points[0]);
+                pl[last] = self.pos(points[points.len() - 1]);
+                pl
+            }
         };
         Some(pl)
     }
@@ -188,7 +200,9 @@ impl Sketch {
                 let m = self.pos(*center);
                 Some(around(m, self.pos(*start).distance(m)))
             }
-            CurveKind::Ellipse { .. } | CurveKind::Spline { .. } => {
+            CurveKind::Ellipse { .. }
+            | CurveKind::Spline { .. }
+            | CurveKind::ControlSpline { .. } => {
                 polyline_closest(&self.curve_polyline(c, MAX_STEPS_PER_TURN)?, at)
             }
             CurveKind::EllipticArc { .. } => {

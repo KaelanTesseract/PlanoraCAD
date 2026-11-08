@@ -13,7 +13,8 @@ use crate::pattern::{
 use crate::solver::SolveCache;
 use planora_i18n::tr;
 use planora_kernel::Arena;
-use planora_math::{Frame, Tolerance};
+use planora_math::nurbs::NurbsCurve;
+use planora_math::{DVec3, Frame, Tolerance};
 use std::collections::HashSet;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -68,6 +69,9 @@ pub struct SketchData {
     /// Muster, auch aufgelöste (Skizzen 5); leer in Skizzen ohne Muster.
     pub patterns: Vec<PatternRecord>,
 }
+
+/// Größter Grad eines Splines mit Kontrollpunkten in einer Datei (im Skizzenfeld wählbar: 3, 5).
+const MAX_CONTROL_SPLINE_DEGREE: u8 = 5;
 
 fn bad(msg: impl Into<String>) -> SketchError {
     SketchError::InvalidInput(msg.into())
@@ -202,6 +206,11 @@ impl Sketch {
                 {
                     return Err(bad(tr!("sketch-err-data-spline-count")));
                 }
+                CurveKind::ControlSpline {
+                    points,
+                    degree,
+                    knots,
+                } => check_control_spline(points.len(), *degree, knots)?,
                 _ => {}
             }
             if c.alive && pts.iter().any(|p| !point_alive(*p)) {
@@ -317,6 +326,23 @@ impl Sketch {
         s.refresh_shared_signs(None);
         Ok((s, dissolved))
     }
+}
+
+/// Prüft Punktzahl, Grad und Knoten eines Splines mit Kontrollpunkten: 2 bis
+/// [`MAX_SPLINE_POINTS`] Punkte, Grad 1 bis 5 (der größte wählbare), Knoten wie
+/// [`NurbsCurve::new`] sie verlangt (auch: passend zu Grad und Punktzahl).
+fn check_control_spline(n: usize, degree: u8, knots: &[f64]) -> Result<(), SketchError> {
+    if !(2..=MAX_SPLINE_POINTS).contains(&n) {
+        return Err(bad(tr!("sketch-err-data-spline-count")));
+    }
+    if !(1..=MAX_CONTROL_SPLINE_DEGREE).contains(&degree) {
+        return Err(bad(tr!("sketch-err-spline-degree")));
+    }
+    let control = vec![DVec3::ZERO; n];
+    let weights = vec![1.0; n];
+    NurbsCurve::new(usize::from(degree), knots.to_vec(), control, weights)
+        .map(|_| ())
+        .map_err(|e| bad(tr!("sketch-err-spline-invalid", detail = e.to_string())))
 }
 
 /// Prüft die Muster der Rohdaten. Indizes vorhanden, auch bei aufgelösten Mustern. Bei lebenden
