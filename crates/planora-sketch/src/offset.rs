@@ -552,6 +552,16 @@ impl Sketch {
                 let sections = (sweep / PI * ELLIPSE_HALF_SECTIONS as f64).ceil() as usize;
                 self.open_approx(c, g, sections.clamp(1, MAX_SECTIONS), against, d)
             }
+            // Griffe machen die Geschwindigkeit an ihren Stützpunkten sprunghaft; gleiche Schritte im
+            // Parameter folgten dort nicht. Darum die Stellen wie beim Spline mit Kontrollpunkten.
+            Geom::Spline { .. } if self.has_handles(c) => {
+                check_cusp(g, against, d)?;
+                let curve = self.handled_spline_nurbs(c).map_err(|_| BAD)?;
+                let side = if against { -d } else { d };
+                let ts = offset_params(g, &curve, side, MAX_SECTIONS);
+                let samples = approx_samples(g, &ts, against, d).ok_or(BAD)?;
+                Ok(vec![approx_raw(c, &samples)])
+            }
             Geom::Spline { n, .. } => {
                 check_cusp(g, against, d)?;
                 let sections = ((n - 1) * SECTIONS_PER_SPAN).min(MAX_SECTIONS);
@@ -1526,6 +1536,9 @@ impl Sketch {
         let mut ids = curves.to_vec();
         ids.sort();
         ids.dedup();
+        // Griffe gehören zu keiner Kette, auch wenn eine Rahmenwahl sie mitbringt.
+        let handle_curves = self.handle_curves();
+        ids.retain(|c| !handle_curves.contains(c));
         let mut nodes = Nodes::new(tol);
         let mut links: Vec<Option<[usize; 2]>> = Vec::with_capacity(ids.len());
         for &c in &ids {

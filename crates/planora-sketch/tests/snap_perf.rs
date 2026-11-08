@@ -56,8 +56,8 @@ fn two_hundred_curves_find_and_align_under_1_ms_build_under_50_ms() {
         .map(|k| {
             let at = DVec2::new((k % 14) as f64 * 0.73 - 0.5, (k / 14) as f64 * 0.81 - 0.5);
             let t = Instant::now();
-            let _ = idx.find(at, 0.05);
-            let _ = idx.align(at, 0.03, &[]);
+            let _ = idx.find(at, 0.05, &[]);
+            let _ = idx.align(at, 0.03, &[], &[]);
             t.elapsed().as_secs_f64() * 1e3
         })
         .collect();

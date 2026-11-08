@@ -29,7 +29,7 @@ fn close(a: DVec2, b: DVec2) -> bool {
 fn line_midpoint_is_found_at_exact_position() {
     let mut s = sketch();
     let (l, _, _) = line(&mut s, (10.0, 10.0), (30.0, 10.0));
-    let hit = SnapIndex::build(&s).find(v(20.2, 10.3), 1.0).unwrap();
+    let hit = SnapIndex::build(&s).find(v(20.2, 10.3), 1.0, &[]).unwrap();
     assert_eq!(hit.snap, Snap::Midpoint(l));
     assert!(close(hit.at, v(20.0, 10.0)), "{:?}", hit.at);
 }
@@ -46,7 +46,7 @@ fn arc_midpoint_lies_on_the_circle_for_wrapping_arc() {
     // Mitte der 270 Grad: -pi/2 + 3pi/4 = pi/4
     let expect = v(50.0 + r * 0.5f64.sqrt(), 50.0 + r * 0.5f64.sqrt());
     let hit = SnapIndex::build(&s)
-        .find(expect + v(0.1, 0.1), 1.0)
+        .find(expect + v(0.1, 0.1), 1.0, &[])
         .unwrap();
     assert_eq!(hit.snap, Snap::Midpoint(arc));
     assert!(close(hit.at, expect), "{:?} {:?}", hit.at, expect);
@@ -62,7 +62,7 @@ fn arc_starting_at_three_half_pi_has_midpoint_on_the_circle() {
     let e = pt(&mut s, 10.0, 100.0);
     let arc = s.add_arc(c, a, e).unwrap();
     let expect = v(10.0 * 0.5f64.sqrt(), 100.0 - 10.0 * 0.5f64.sqrt());
-    let hit = SnapIndex::build(&s).find(expect, 0.5).unwrap();
+    let hit = SnapIndex::build(&s).find(expect, 0.5, &[]).unwrap();
     assert_eq!(hit.snap, Snap::Midpoint(arc));
     assert!(close(hit.at, expect), "{:?}", hit.at);
 }
@@ -71,7 +71,7 @@ fn arc_starting_at_three_half_pi_has_midpoint_on_the_circle() {
 fn midpoint_beats_curve_at_same_spot() {
     let mut s = sketch();
     let (l, _, _) = line(&mut s, (10.0, 10.0), (30.0, 10.0));
-    let hit = SnapIndex::build(&s).find(v(20.5, 10.0), 1.0).unwrap();
+    let hit = SnapIndex::build(&s).find(v(20.5, 10.0), 1.0, &[]).unwrap();
     assert_eq!(hit.snap, Snap::Midpoint(l));
 }
 
@@ -79,7 +79,7 @@ fn midpoint_beats_curve_at_same_spot() {
 fn curve_is_found_and_position_is_refined() {
     let mut s = sketch();
     let (l, _, _) = line(&mut s, (10.0, 10.0), (30.0, 10.0));
-    let hit = SnapIndex::build(&s).find(v(14.0, 10.6), 1.0).unwrap();
+    let hit = SnapIndex::build(&s).find(v(14.0, 10.6), 1.0, &[]).unwrap();
     assert_eq!(hit.snap, Snap::Curve(l));
     assert!(close(hit.at, v(14.0, 10.0)), "{:?}", hit.at);
 }
@@ -89,7 +89,7 @@ fn circle_rim_is_found_on_the_circle() {
     let mut s = sketch();
     let c = pt(&mut s, 50.0, 50.0);
     let k = s.add_circle(c, 10.0).unwrap();
-    let hit = SnapIndex::build(&s).find(v(60.4, 50.0), 1.0).unwrap();
+    let hit = SnapIndex::build(&s).find(v(60.4, 50.0), 1.0, &[]).unwrap();
     assert_eq!(hit.snap, Snap::Curve(k));
     assert!(close(hit.at, v(60.0, 50.0)), "{:?}", hit.at);
 }
@@ -99,7 +99,7 @@ fn intersection_found_with_exact_position() {
     let mut s = sketch();
     let (a, _, _) = line(&mut s, (0.0, 0.0), (100.0, 0.0));
     let (b, _, _) = line(&mut s, (30.0, -50.0), (30.0, 80.0));
-    let hit = SnapIndex::build(&s).find(v(30.4, 0.3), 1.0).unwrap();
+    let hit = SnapIndex::build(&s).find(v(30.4, 0.3), 1.0, &[]).unwrap();
     assert_eq!(hit.snap, Snap::Intersection(a, b));
     assert!(close(hit.at, v(30.0, 0.0)), "{:?}", hit.at);
 }
@@ -110,7 +110,7 @@ fn intersection_includes_construction_curves() {
     line(&mut s, (0.0, 0.0), (100.0, 0.0));
     let (b, _, _) = line(&mut s, (30.0, -50.0), (30.0, 80.0));
     s.set_construction(b, true).unwrap();
-    let hit = SnapIndex::build(&s).find(v(30.0, 0.2), 1.0).unwrap();
+    let hit = SnapIndex::build(&s).find(v(30.0, 0.2), 1.0, &[]).unwrap();
     assert!(matches!(hit.snap, Snap::Intersection(..)), "{hit:?}");
 }
 
@@ -120,7 +120,7 @@ fn endpoint_in_radius_beats_nearer_intersection() {
     let mut s = sketch();
     let (_, _, end) = line(&mut s, (0.0, 0.0), (30.0, 0.0));
     line(&mut s, (29.5, -50.0), (29.5, 80.0));
-    let hit = SnapIndex::build(&s).find(v(29.5, 0.0), 1.0).unwrap();
+    let hit = SnapIndex::build(&s).find(v(29.5, 0.0), 1.0, &[]).unwrap();
     assert_eq!(hit.snap, Snap::Point(end));
     assert!(close(hit.at, v(30.0, 0.0)));
 }
@@ -133,7 +133,7 @@ fn shared_endpoint_is_point_not_intersection() {
     let b = pt(&mut s, 80.0, 0.0);
     s.add_line(a, m).unwrap();
     s.add_line(m, b).unwrap();
-    let hit = SnapIndex::build(&s).find(v(40.2, 40.1), 1.0).unwrap();
+    let hit = SnapIndex::build(&s).find(v(40.2, 40.1), 1.0, &[]).unwrap();
     assert_eq!(hit.snap, Snap::Point(m));
     assert!(close(hit.at, v(40.0, 40.0)));
 }
@@ -143,7 +143,7 @@ fn circle_center_is_center() {
     let mut s = sketch();
     let c = pt(&mut s, 50.0, 50.0);
     s.add_circle(c, 10.0).unwrap();
-    let hit = SnapIndex::build(&s).find(v(50.2, 50.0), 1.0).unwrap();
+    let hit = SnapIndex::build(&s).find(v(50.2, 50.0), 1.0, &[]).unwrap();
     assert_eq!(hit.snap, Snap::Center(c));
 }
 
@@ -152,7 +152,7 @@ fn ellipse_center_is_center() {
     let mut s = sketch();
     let c = pt(&mut s, 50.0, 50.0);
     s.add_ellipse(c, v(20.0, 0.0), 10.0).unwrap();
-    let hit = SnapIndex::build(&s).find(v(50.0, 50.2), 1.0).unwrap();
+    let hit = SnapIndex::build(&s).find(v(50.0, 50.2), 1.0, &[]).unwrap();
     assert_eq!(hit.snap, Snap::Center(c));
 }
 
@@ -163,7 +163,7 @@ fn center_that_is_also_endpoint_is_point() {
     let far = pt(&mut s, 90.0, 50.0);
     s.add_circle(c, 10.0).unwrap();
     s.add_line(c, far).unwrap();
-    let hit = SnapIndex::build(&s).find(v(50.0, 50.0), 1.0).unwrap();
+    let hit = SnapIndex::build(&s).find(v(50.0, 50.0), 1.0, &[]).unwrap();
     assert_eq!(hit.snap, Snap::Point(c));
 }
 
@@ -171,13 +171,13 @@ fn center_that_is_also_endpoint_is_point() {
 fn free_origin_snaps_and_point_at_origin_wins() {
     let mut s = sketch();
     line(&mut s, (50.0, 50.0), (80.0, 50.0));
-    let hit = SnapIndex::build(&s).find(v(0.3, -0.2), 1.0).unwrap();
+    let hit = SnapIndex::build(&s).find(v(0.3, -0.2), 1.0, &[]).unwrap();
     assert_eq!(hit.snap, Snap::Origin);
     assert!(close(hit.at, DVec2::ZERO));
 
     let mut s = sketch();
     let (_, a, _) = line(&mut s, (0.0, 0.0), (80.0, 50.0));
-    let hit = SnapIndex::build(&s).find(v(0.3, -0.2), 1.0).unwrap();
+    let hit = SnapIndex::build(&s).find(v(0.3, -0.2), 1.0, &[]).unwrap();
     assert_eq!(hit.snap, Snap::Point(a));
 }
 
@@ -185,8 +185,12 @@ fn free_origin_snaps_and_point_at_origin_wins() {
 fn nothing_in_radius_is_none() {
     let mut s = sketch();
     line(&mut s, (50.0, 50.0), (80.0, 50.0));
-    assert!(SnapIndex::build(&s).find(v(200.0, 200.0), 1.0).is_none());
-    assert!(SnapIndex::build(&s).find(v(60.0, 52.0), 1.0).is_none());
+    assert!(
+        SnapIndex::build(&s)
+            .find(v(200.0, 200.0), 1.0, &[])
+            .is_none()
+    );
+    assert!(SnapIndex::build(&s).find(v(60.0, 52.0), 1.0, &[]).is_none());
 }
 
 #[test]
@@ -205,7 +209,7 @@ fn align_x_and_y_from_two_points() {
     let p = pt(&mut s, 30.0, 70.0);
     let q = pt(&mut s, 90.0, 20.0);
     let idx = SnapIndex::build(&s);
-    let h = idx.align(v(30.2, 20.3), 1.0, &[]);
+    let h = idx.align(v(30.2, 20.3), 1.0, &[], &[]);
     assert_eq!(h.x, Some((p, 30.0)));
     assert_eq!(h.y, Some((q, 20.0)));
 }
@@ -216,10 +220,10 @@ fn align_skip_and_radius() {
     let p = pt(&mut s, 30.0, 70.0);
     let q = pt(&mut s, 90.0, 20.0);
     let idx = SnapIndex::build(&s);
-    let h = idx.align(v(30.2, 20.3), 1.0, &[p]);
+    let h = idx.align(v(30.2, 20.3), 1.0, &[p], &[]);
     assert_eq!(h.x, None);
     assert_eq!(h.y, Some((q, 20.0)));
-    let h = idx.align(v(32.0, 25.0), 1.0, &[]);
+    let h = idx.align(v(32.0, 25.0), 1.0, &[], &[]);
     assert_eq!((h.x, h.y), (None, None));
 }
 
@@ -234,10 +238,10 @@ fn tiny_curve_and_zero_radius_never_give_nan() {
     let idx = SnapIndex::build(&s);
     for r in [0.0, 1e-12, 1.0] {
         for at in [v(5.0, 5.0), v(7.0, 7.0), v(0.0, 0.0), v(6.0, 6.0)] {
-            if let Some(h) = idx.find(at, r) {
+            if let Some(h) = idx.find(at, r, &[]) {
                 assert!(h.at.is_finite(), "{h:?}");
             }
-            let al = idx.align(at, r, &[]);
+            let al = idx.align(at, r, &[], &[]);
             assert!(al.x.is_none_or(|(_, x)| x.is_finite()));
         }
     }

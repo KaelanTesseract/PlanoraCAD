@@ -732,10 +732,6 @@ impl Sketch {
         if set.points.is_empty() {
             return Err(SketchError::InvalidInput(tr!("sketch-nothing-selected")));
         }
-        // Skizzen 7: bis Task 8.
-        for &c in &set.curves {
-            self.check_without_handles(c)?;
-        }
         let s = &self.settled(&set, s);
         self.atomically(|sk| {
             let mut points = HashMap::new();
@@ -746,6 +742,9 @@ impl Sketch {
             let mut curves = HashMap::new();
             for &c in &set.curves {
                 curves.insert(c, sk.copy_curve_transformed(c, &points, &mut sizes, s)?);
+            }
+            for &c in &set.curves {
+                sk.carry_handles(c, curves[&c], &points, &curves);
             }
             let constraints = sk.copy_inner_constraints(&points, &curves, s)?;
             Ok(CopyMap {

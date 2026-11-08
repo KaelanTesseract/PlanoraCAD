@@ -633,11 +633,11 @@ fn snap_finds_curve_ends_and_apex() {
     let index = SnapIndex::build(&s);
     for p in pts {
         let q = s.point_xy(p).unwrap();
-        let hit = index.find(q + v(0.05, 0.05), 0.5).unwrap();
+        let hit = index.find(q + v(0.05, 0.05), 0.5, &[]).unwrap();
         assert_eq!(hit.snap, Snap::Point(p));
     }
     let on = s.curve_eval(c, 0.3).unwrap();
-    let hit = index.find(on + v(0.02, 0.02), 0.1).unwrap();
+    let hit = index.find(on + v(0.02, 0.02), 0.1, &[]).unwrap();
     assert_eq!(hit.snap, Snap::Curve(c));
 }
 

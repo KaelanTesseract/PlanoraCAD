@@ -900,14 +900,14 @@ fn snap_finds_control_points_and_curve() {
     // Ein innerer Kontrollpunkt (nicht auf der Kurve) und die Enden sind Punkte.
     for p in [pts[0], pts[2], pts[5]] {
         let q = s.point_xy(p).unwrap();
-        let hit = index.find(q + v(0.05, 0.05), 0.5).unwrap();
+        let hit = index.find(q + v(0.05, 0.05), 0.5, &[]).unwrap();
         assert_eq!(hit.snap, Snap::Point(p));
         assert!(hit.at.distance(q) < 1e-12);
     }
     // Die Kurve selbst fängt auf der Kurve.
     let on = s.curve_eval(c, 1.5).unwrap();
     assert!(s.point_xy(pts[2]).unwrap().distance(on) > 0.5);
-    let hit = index.find(on + v(0.02, 0.02), 0.1).unwrap();
+    let hit = index.find(on + v(0.02, 0.02), 0.1, &[]).unwrap();
     assert_eq!(hit.snap, Snap::Curve(c));
     assert!(distance_to(&s, c, hit.at) < 1e-3);
 }

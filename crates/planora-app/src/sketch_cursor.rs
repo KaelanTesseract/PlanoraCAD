@@ -364,7 +364,8 @@ impl SketchSession {
         }
         let index = self.current_index(sk);
         let tol = sk.tolerance().linear;
-        if let Some(hit) = index.find_avoiding(raw, radius, &self.own_open_spots(sk), tol) {
+        // Skizzen 7: Die sichtbaren Griffpunkte (letzte Liste) nennt Task 13; bis dahin fängt keiner.
+        if let Some(hit) = index.find_avoiding(raw, radius, &self.own_open_spots(sk), tol, &[]) {
             cur.at = hit.at;
             cur.snap = hit.snap;
             cur.snap_at = Some(hit.at);
@@ -393,7 +394,7 @@ impl SketchSession {
             free_x = auto == AutoConstraint::Horizontal;
             free_y = auto == AutoConstraint::Vertical;
         }
-        cur.guides = index.align(raw, radius * ALIGN_RADIUS_FACTOR, &self.align_skip(sk));
+        cur.guides = index.align(raw, radius * ALIGN_RADIUS_FACTOR, &self.align_skip(sk), &[]);
         if !free_x {
             cur.guides.x = None;
         }

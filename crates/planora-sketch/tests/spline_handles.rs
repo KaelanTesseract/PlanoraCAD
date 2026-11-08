@@ -834,37 +834,12 @@ fn moving_the_spline_moves_the_handle_and_keeps_the_shape() {
 }
 
 #[test]
-fn commands_not_yet_built_for_handles_refuse_and_change_nothing() {
-    // Skizzen 7: Task 8 lässt Griffe durch diese Befehle laufen; bis dahin lehnen sie ab.
+fn a_handle_stays_construction_and_is_not_split() {
+    // Skizzen 7: Task 8 lässt Griffe durch Stutzen, Brechen, Spiegeln, Muster und Kopieren laufen
+    // (`spline_handles_edit.rs`); hier bleibt nur, was weiter abgelehnt wird oder nichts tut.
     let mut s = sketch();
     let (c, pts) = spline(&mut s, &WAVE);
     let line = s.activate_tangent_handle(c, pts[2]).unwrap();
-    let cutter_a = s.add_point(25.0, -40.0).unwrap();
-    let cutter_b = s.add_point(25.0, 40.0).unwrap();
-    let cutter = s.add_line(cutter_a, cutter_b).unwrap();
-    let axis_a = s.add_point(0.0, -60.0).unwrap();
-    let axis_b = s.add_point(60.0, -60.0).unwrap();
-    let axis = s.add_line(axis_a, axis_b).unwrap();
-    let curves = s.curves().count();
-    let at = s.curve_eval(c, 2.9).unwrap();
-    assert!(s.trim(c, at).is_err());
-    assert!(s.break_curve(c, at).is_err());
-    assert!(s.add_mirrored(&[c], axis).is_err());
-    assert!(s.add_mirrored(&[line], axis).is_err());
-    assert!(
-        s.add_linear_pattern(&[c], DVec2::new(0.0, 100.0), 2)
-            .is_err()
-    );
-    let set = s.transform_set(&[c], &[]);
-    let mv = Similarity {
-        base: DVec2::ZERO,
-        offset: DVec2::new(0.0, 100.0),
-        angle: 0.0,
-        factor: 1.0,
-    };
-    assert!(s.copy_transformed(&set, &mv).is_err());
-    assert_eq!(s.curves().count(), curves);
-    assert_eq!(handle_count(&s, c), 1);
     // Griff-Linie: bleibt Konstruktion, wird nicht geteilt.
     assert!(s.set_construction(line, false).is_err());
     assert!(s.curve(line).unwrap().construction);
@@ -878,8 +853,9 @@ fn commands_not_yet_built_for_handles_refuse_and_change_nothing() {
     let u = s.add_point(mid.x - across.x, mid.y - across.y).unwrap();
     let w = s.add_point(mid.x + across.x, mid.y + across.y).unwrap();
     s.add_line(u, w).unwrap();
-    assert!(s.break_curve(line, mid).is_err());
-    let _ = cutter;
+    let before = s.to_data();
+    assert_eq!(s.break_curve(line, mid).unwrap(), vec![line]);
+    assert_eq!(s.to_data(), before);
 }
 
 #[test]

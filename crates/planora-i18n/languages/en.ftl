@@ -1843,7 +1843,6 @@ sketch-err-handle-active = This fit point already has a handle
 sketch-err-handle-none = This fit point has no handle
 sketch-err-handle-still = The spline stands still at this fit point, a handle would have no length
 sketch-err-handle-construction = Handles stay construction geometry
-sketch-err-handle-command = This command does not work on a spline with handles yet; switch the handles off first
 sketch-err-data-handle = A spline handle is invalid
 sketch-err-conic-kind = Only a conic curve has a rho
 sketch-err-conic-piece = This piece cannot be represented as a conic curve

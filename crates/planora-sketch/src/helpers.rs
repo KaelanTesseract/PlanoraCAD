@@ -108,7 +108,6 @@ impl Sketch {
             if matches!(self.curves[c].kind, CurveKind::Ellipse { .. }) {
                 return Err(SketchError::WrongType(tr!("sketch-err-copy-kinds")));
             }
-            self.check_without_handles(c)?;
         }
         Ok(())
     }
@@ -248,6 +247,11 @@ impl Sketch {
     /// wiederverwendet), Kreise ein `Equal` zum Original. Bögen und Ellipsenbögen werden mit
     /// vertauschtem Start und Ende angelegt; die Halbachsen eines gespiegelten Ellipsenbogens
     /// sind nicht an das Original gebunden.
+    ///
+    /// Griffe (Skizzen 7) gehen mit dem Spline und umgekehrt, geliefert werden nur die Kopien von
+    /// `curves`. `at` und `tip` bekommen `Symmetric`, zwei Krümmungsbögen `Equal`. Mitte und freies Ende
+    /// eines Bogens bekommen nichts und immer einen eigenen Punkt: Den Rest halten seine internen
+    /// Zeilen, jede weitere wäre überzählig.
     pub fn add_mirrored(
         &mut self,
         curves: &[CurveId],
@@ -258,7 +262,8 @@ impl Sketch {
             return Err(SketchError::WrongType(tr!("sketch-err-mirror-line")));
         };
         self.check_copy_sources(curves)?;
-        if curves.contains(&axis) {
+        let all = self.with_handle_family(curves);
+        if all.contains(&axis) {
             return Err(SketchError::InvalidInput(tr!("sketch-err-mirror-self")));
         }
         let (origin, dir) = (self.pos(aa), self.pos(ab) - self.pos(aa));
@@ -268,16 +273,19 @@ impl Sketch {
         let d = dir.normalize();
         self.atomically(|s| {
             let tol = s.tolerance().linear;
+            let bows = s.handle_arcs(&all);
             let mut map: HashMap<PointId, PointId> = HashMap::new();
-            let mut out = Vec::with_capacity(curves.len());
-            for &c in curves {
+            let mut copies: HashMap<CurveId, CurveId> = HashMap::new();
+            for &c in &all {
                 for p in s.curves[c].kind.points() {
                     if map.contains_key(&p) {
                         continue;
                     }
                     let xy = s.pos(p);
                     let on_axis = (xy - origin).perp_dot(d).abs() <= tol;
-                    if on_axis {
+                    if bows.iter().any(|b| b.1 == p || b.2 == p) {
+                        map.insert(p, s.add_point_like(p, reflect(xy, origin, d))?);
+                    } else if on_axis {
                         map.insert(p, p);
                     } else {
                         let q = s.add_point_like(p, reflect(xy, origin, d))?;
@@ -289,9 +297,15 @@ impl Sketch {
                 if matches!(s.curves[c].kind, CurveKind::Circle { .. }) {
                     s.add_constraint(ConstraintKind::Equal(c, copy))?;
                 }
-                out.push(copy);
+                copies.insert(c, copy);
             }
-            Ok(out)
+            for &c in &all {
+                s.carry_handles(c, copies[&c], &map, &copies);
+            }
+            for &(arc, ..) in &bows {
+                s.add_constraint(ConstraintKind::Equal(arc, copies[&arc]))?;
+            }
+            Ok(curves.iter().map(|c| copies[c]).collect())
         })
     }
 
@@ -317,6 +331,9 @@ impl Sketch {
             return Err(SketchError::Degenerate(tr!("sketch-err-offset-zero")));
         }
         self.check_copy_sources(curves)?;
+        let all = self.with_handle_family(curves);
+        // Griffe binden nichts an die Vorlage, so wenig wie der Spline, zu dem sie gehören (**Annahme**).
+        let parts = self.handle_curves();
         let first = self.curves[curves[0]].kind.points()[0];
         let horizontal = offset.y.abs() <= tol;
         let vertical = offset.x.abs() <= tol;
@@ -327,14 +344,18 @@ impl Sketch {
             for k in 1..=count {
                 let shift = offset * k as f64;
                 let mut map: HashMap<PointId, PointId> = HashMap::new();
-                let mut group = Vec::with_capacity(curves.len());
-                for &c in curves {
+                let mut copies: HashMap<CurveId, CurveId> = HashMap::new();
+                for &c in &all {
                     for p in s.curves[c].kind.points() {
                         if let Entry::Vacant(slot) = map.entry(p) {
                             slot.insert(s.add_point_like(p, s.pos(p) + shift)?);
                         }
                     }
                     let copy = s.copy_curve(c, &map, CopyHow::Shift)?;
+                    copies.insert(c, copy);
+                    if parts.contains(&c) {
+                        continue;
+                    }
                     // `Equal` gibt es nur für Linien, Kreise und Bögen.
                     if !matches!(
                         s.curves[c].kind,
@@ -348,8 +369,11 @@ impl Sketch {
                     if matches!(s.curves[c].kind, CurveKind::Line { .. }) {
                         created.push(s.add_constraint(ConstraintKind::Parallel(c, copy))?);
                     }
-                    group.push(copy);
                 }
+                for &c in &all {
+                    s.carry_handles(c, copies[&c], &map, &copies);
+                }
+                let group: Vec<CurveId> = curves.iter().map(|c| copies[c]).collect();
                 let moved = map[&first];
                 created.push(s.add_constraint(ConstraintKind::Distance(
                     first,

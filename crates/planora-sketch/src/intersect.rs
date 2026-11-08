@@ -130,8 +130,10 @@ impl Sketch {
         let tol = self.tolerance().linear;
         let mut ts = Vec::new();
         let pg = Prepared::new(g);
+        // Griffe schneiden nichts: Sonst fiele an jedem Stützpunkt mit Griff eine Schnittstelle an.
+        let handle_curves = self.handle_curves();
         for (id, data) in self.curves() {
-            if id == c || (data.construction && !with_construction) {
+            if id == c || (data.construction && !with_construction) || handle_curves.contains(&id) {
                 continue;
             }
             if let Some(h) = self.geom(id) {

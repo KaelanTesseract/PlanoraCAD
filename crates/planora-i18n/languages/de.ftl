@@ -1826,7 +1826,6 @@ sketch-err-handle-active = An diesem Stützpunkt ist schon ein Griff
 sketch-err-handle-none = An diesem Stützpunkt ist kein Griff
 sketch-err-handle-still = Der Spline steht an diesem Stützpunkt still, ein Griff hätte keine Länge
 sketch-err-handle-construction = Griffe bleiben Konstruktion
-sketch-err-handle-command = Dieser Befehl geht an einem Spline mit Griffen noch nicht; erst die Griffe ausschalten
 sketch-err-data-handle = Ein Griff eines Splines ist ungültig
 sketch-err-conic-kind = Nur ein Kegelschnitt hat ein Rho
 sketch-err-conic-piece = Dieses Stück lässt sich nicht als Kegelschnitt darstellen

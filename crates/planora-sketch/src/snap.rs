@@ -4,7 +4,7 @@
 
 use crate::geom::Geom;
 use crate::intersect::{Prepared, intersect_prepared};
-use crate::model::{CurveId, CurveKind, PointId, Sketch};
+use crate::model::{CurveId, CurveKind, HandleCurvature, PointId, Sketch};
 use planora_math::DVec2;
 use std::collections::HashSet;
 
@@ -60,6 +60,32 @@ pub struct SnapIndex {
     crossings: Vec<(CurveId, CurveId, DVec2)>,
     curves: Vec<IndexedCurve>,
     origin_free: bool,
+    /// Punkte, die nur zu Griffen gehören (Spitze, Mitte, freies Ende): Sie fangen nur, wenn der
+    /// Aufrufer sie als sichtbar nennt. Das Modell kennt die Auswahl nicht.
+    handle_points: HashSet<PointId>,
+}
+
+/// Die Punkte, die nur Griffe benutzen. Benutzt eine andere Kurve einen, fängt er wie jeder Punkt.
+fn only_handle_points(sk: &Sketch, handle_curves: &HashSet<CurveId>) -> HashSet<PointId> {
+    let mut out = HashSet::new();
+    let mut ordinary = HashSet::new();
+    for (id, data) in sk.curves() {
+        match &data.kind {
+            CurveKind::Spline { points, handles } => {
+                ordinary.extend(points.iter().copied());
+                for h in handles {
+                    out.insert(h.tip);
+                    if let HandleCurvature::Arc { center, other, .. } = h.curvature {
+                        out.extend([center, other]);
+                    }
+                }
+            }
+            kind if !handle_curves.contains(&id) => ordinary.extend(kind.points()),
+            _ => {}
+        }
+    }
+    out.retain(|p| !ordinary.contains(p));
+    out
 }
 
 /// Merkt sich das beste Ziel: kleinerer Abstand gewinnt, bei Gleichstand das frühere
@@ -78,6 +104,8 @@ impl SnapIndex {
         let mut centers: HashSet<usize> = HashSet::new();
         let mut curves = Vec::new();
         let mut mids = Vec::new();
+        let handle_curves = sk.handle_curves();
+        let handle_points = only_handle_points(sk, &handle_curves);
         for (id, data) in sk.curves() {
             match &data.kind {
                 CurveKind::Line { a, b } => {
@@ -105,6 +133,10 @@ impl SnapIndex {
                     other_role.insert(apex.index());
                     other_role.insert(end.index());
                 }
+            }
+            // Griff-Kurven sind keine Fangziele, nur ihre Punkte, wenn sie sichtbar sind.
+            if handle_curves.contains(&id) {
+                continue;
             }
             let Some(geom) = sk.geom(id) else { continue };
             if matches!(geom, Geom::Line { .. } | Geom::Arc { .. }) {
@@ -135,7 +167,8 @@ impl SnapIndex {
             if !p.is_finite() {
                 continue;
             }
-            if p.length() <= tol {
+            // Ein Griffpunkt, der gerade nicht fängt, belegt auch den Ursprung nicht.
+            if p.length() <= tol && !handle_points.contains(&id) {
                 origin_free = false;
             }
             let snap = if centers.contains(&id.index()) && !other_role.contains(&id.index()) {
@@ -164,7 +197,16 @@ impl SnapIndex {
             crossings,
             curves,
             origin_free,
+            handle_points,
         }
+    }
+
+    /// Fängt der Punkt? Griffpunkte nur, wenn `visible` sie nennt.
+    fn offered(&self, snap: Snap, visible: &[PointId]) -> bool {
+        let (Snap::Point(id) | Snap::Center(id)) = snap else {
+            return true;
+        };
+        !self.handle_points.contains(&id) || visible.contains(&id)
     }
 
     /// Stand der Skizze, aus dem der Index gebaut wurde.
@@ -174,9 +216,10 @@ impl SnapIndex {
 
     /// Bestes Fangziel im Radius um `at`. Die Klasse entscheidet vor dem Abstand: Punkt,
     /// Mitte und Ursprung vor Mittelpunkt vor Schnittpunkt vor Kurve; innerhalb der Klasse
-    /// der nächste, bei gleichem Abstand die kleinere Id.
-    pub fn find(&self, at: DVec2, radius: f64) -> Option<SnapHit> {
-        self.find_avoiding(at, radius, &[], 0.0)
+    /// der nächste, bei gleichem Abstand die kleinere Id. `visible`: die Griffpunkte, die gerade zu
+    /// sehen sind; alle anderen fangen nicht. Ohne Griffe ist die Liste ohne Wirkung.
+    pub fn find(&self, at: DVec2, radius: f64, visible: &[PointId]) -> Option<SnapHit> {
+        self.find_avoiding(at, radius, &[], 0.0, visible)
     }
 
     /// Wie [`find`](Self::find), aber Ziele, die höchstens `tol` neben einer Lage aus `avoid`
@@ -188,6 +231,7 @@ impl SnapIndex {
         radius: f64,
         avoid: &[DVec2],
         tol: f64,
+        visible: &[PointId],
     ) -> Option<SnapHit> {
         if !at.is_finite() {
             return None;
@@ -205,7 +249,9 @@ impl SnapIndex {
         };
 
         for &(snap, p) in &self.points {
-            take(&mut best, radius, p.distance(at), snap, p);
+            if self.offered(snap, visible) {
+                take(&mut best, radius, p.distance(at), snap, p);
+            }
         }
         if self.origin_free {
             take(&mut best, radius, at.length(), Snap::Origin, DVec2::ZERO);
@@ -263,8 +309,8 @@ impl SnapIndex {
     }
 
     /// Ausrichtung an den Koordinaten lebender Punkte außer `skip` (nur innerhalb von
-    /// `radius`; der nächste gewinnt, bei Gleichstand die kleinere Id).
-    pub fn align(&self, at: DVec2, radius: f64, skip: &[PointId]) -> AlignHit {
+    /// `radius`; der nächste gewinnt, bei Gleichstand die kleinere Id). Griffpunkte nur aus `visible`.
+    pub fn align(&self, at: DVec2, radius: f64, skip: &[PointId], visible: &[PointId]) -> AlignHit {
         let mut hit = AlignHit::default();
         if !at.is_finite() {
             return hit;
@@ -279,7 +325,7 @@ impl SnapIndex {
             let (Snap::Point(id) | Snap::Center(id)) = snap else {
                 continue;
             };
-            if skip.contains(&id) {
+            if skip.contains(&id) || !self.offered(snap, visible) {
                 continue;
             }
             let dx = (p.x - at.x).abs();

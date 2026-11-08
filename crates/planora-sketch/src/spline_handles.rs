@@ -16,6 +16,7 @@ use crate::model::{CurveId, CurveKind, HandleCurvature, PointId, Sketch, SplineH
 use planora_i18n::tr;
 use planora_math::nurbs::NurbsCurve;
 use planora_math::{DVec2, DVec3};
+use std::collections::{HashMap, HashSet};
 
 /// Grad der exakten Darstellung eines Splines mit Griffen.
 const NURBS_DEGREE: usize = 5;
@@ -406,6 +407,15 @@ pub(crate) fn nodes_of(
     hermite_nodes(&y, &inputs)
 }
 
+/// Die Kurven eines Griffs: seine Linie und ein Krümmungsbogen.
+fn handle_parts(h: &SplineHandle) -> impl Iterator<Item = CurveId> + use<> {
+    let arc = match h.curvature {
+        HandleCurvature::Arc { arc, .. } => Some(arc),
+        _ => None,
+    };
+    std::iter::once(h.line).chain(arc)
+}
+
 /// Startlage des Griff-Bogens am Griff `at → tip` für die Krümmung `kappa`.
 struct CurvatureArc {
     center: DVec2,
@@ -626,6 +636,14 @@ impl Sketch {
         })
     }
 
+    /// Hat die Kurve `c` Griffe?
+    pub(crate) fn has_handles(&self, c: CurveId) -> bool {
+        matches!(
+            &self.curves[c].kind,
+            CurveKind::Spline { handles, .. } if !handles.is_empty()
+        )
+    }
+
     /// Ist `c` die Linie oder der Bogen eines Griffs?
     pub fn is_handle_curve(&self, c: CurveId) -> bool {
         self.handled_splines().any(|(_, handles)| {
@@ -645,18 +663,179 @@ impl Sketch {
         })
     }
 
-    /// Skizzen 7: Bis Task 8 kennen Stutzen, Brechen, Spiegeln, Muster und Kopieren keine Griffe.
-    /// Sie lehnen einen Spline mit Griffen und die Griffe selbst ab, statt die Griffe zu verlieren.
-    pub(crate) fn check_without_handles(&self, c: CurveId) -> Result<(), SketchError> {
-        let with_handles = matches!(
-            &self.curves[c].kind,
-            CurveKind::Spline { handles, .. } if !handles.is_empty()
-        );
-        if with_handles || self.is_handle_curve(c) {
-            Err(SketchError::WrongType(tr!("sketch-err-handle-command")))
-        } else {
-            Ok(())
+    /// Alle Griff-Linien und Griff-Bögen. Sie schneiden nichts, und der Fang kennt sie nicht als Kurven.
+    pub(crate) fn handle_curves(&self) -> HashSet<CurveId> {
+        self.handled_splines()
+            .flat_map(|(_, handles)| handles.iter().flat_map(handle_parts))
+            .collect()
+    }
+
+    /// `curves` mit allem, was als Griff oder Spline dazugehört: Kopien nehmen den Spline immer mit
+    /// seinen Griffen. Ein Griff steht für seinen Spline, die Griffe folgen hinten, in der Reihenfolge
+    /// der Splines; die Liste hängt also nicht davon ab, welchen Teil jemand gewählt hat. Ohne Griffe
+    /// genau `curves`.
+    pub(crate) fn with_handle_family(&self, curves: &[CurveId]) -> Vec<CurveId> {
+        if self.handle_family(curves).is_empty() {
+            return curves.to_vec();
         }
+        let mut out: Vec<CurveId> = Vec::with_capacity(curves.len());
+        for &c in curves {
+            let owner = self.handled_splines().find_map(|(spline, handles)| {
+                handles
+                    .iter()
+                    .any(|h| handle_parts(h).any(|part| part == c))
+                    .then_some(spline)
+            });
+            let c = owner.unwrap_or(c);
+            if !out.contains(&c) {
+                out.push(c);
+            }
+        }
+        for spline in out.clone() {
+            if let CurveKind::Spline { handles, .. } = &self.curves[spline].kind {
+                out.extend(handles.iter().flat_map(handle_parts));
+            }
+        }
+        out
+    }
+
+    /// Die Vorlagen ohne die Griff-Kurven ihrer Splines: Das Muster führt sie als Vorlagen, damit sie
+    /// Teil jedes Exemplars sind; der Nutzer wählt nur den Spline.
+    pub(crate) fn without_handle_parts(&self, sources: &[CurveId]) -> Vec<CurveId> {
+        let parts: Vec<CurveId> = sources
+            .iter()
+            .filter_map(|&c| match &self.curves[c].kind {
+                CurveKind::Spline { handles, .. } => Some(handles.iter().flat_map(handle_parts)),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        sources
+            .iter()
+            .copied()
+            .filter(|c| !parts.contains(c))
+            .collect()
+    }
+
+    /// Gibt der Kopie `copy` des Splines `source` dessen Griffe auf den abgebildeten Punkten und
+    /// Kurven, je Krümmungsgriff mit eigener interner Zeile. Anderes als ein Spline bleibt, wie es ist.
+    /// Fehlt ein Teil in den Abbildungen (nur aus einer fremden Datei möglich, deren Muster den Griff
+    /// nicht als Vorlage führt), bleibt die Kopie an dieser Stelle ohne Griff.
+    pub(crate) fn carry_handles(
+        &mut self,
+        source: CurveId,
+        copy: CurveId,
+        points: &HashMap<PointId, PointId>,
+        curves: &HashMap<CurveId, CurveId>,
+    ) {
+        let CurveKind::Spline { handles, .. } = &self.curves[source].kind else {
+            return;
+        };
+        if handles.is_empty() {
+            return;
+        }
+        let map_handle = |h: &SplineHandle| {
+            Some(SplineHandle {
+                at: *points.get(&h.at)?,
+                line: *curves.get(&h.line)?,
+                tip: *points.get(&h.tip)?,
+                curvature: match h.curvature {
+                    HandleCurvature::Arc { arc, center, other } => HandleCurvature::Arc {
+                        arc: *curves.get(&arc)?,
+                        center: *points.get(&center)?,
+                        other: *points.get(&other)?,
+                    },
+                    other => other,
+                },
+            })
+        };
+        let mapped: Vec<SplineHandle> = handles.iter().filter_map(map_handle).collect();
+        let rows: Vec<PointId> = mapped
+            .iter()
+            .filter(|h| matches!(h.curvature, HandleCurvature::Arc { .. }))
+            .map(|h| h.at)
+            .collect();
+        let mut kind = self.curves[copy].kind.clone();
+        if let CurveKind::Spline { handles, .. } = &mut kind {
+            *handles = mapped;
+        }
+        self.set_curve_kind(copy, kind);
+        for at in rows {
+            self.push_internal(ConstraintKind::SplineCurvatureHandle(copy, at));
+        }
+    }
+
+    /// Verteilt beim Stutzen und Brechen die Griffe des Splines `c` auf seine Stücke `pieces`: Jeder
+    /// Griff geht mit seinem Stützpunkt, ein Griff an einem weggefallenen Punkt entfällt samt Linie,
+    /// Spitze, Bogen und interner Zeile. `pieces` sind noch nicht angelegt.
+    pub(crate) fn share_handles(
+        &mut self,
+        c: CurveId,
+        pieces: &mut [CurveKind],
+    ) -> Result<(), SketchError> {
+        let CurveKind::Spline { handles, .. } = &self.curves[c].kind else {
+            return Ok(());
+        };
+        let mut gone = Vec::new();
+        for h in handles {
+            let home = pieces.iter_mut().find_map(|piece| match piece {
+                CurveKind::Spline { points, handles } if points.contains(&h.at) => Some(handles),
+                _ => None,
+            });
+            match home {
+                Some(list) => list.push(*h),
+                None => gone.push(h.line),
+            }
+        }
+        for line in gone {
+            self.remove_curve(line)?;
+        }
+        Ok(())
+    }
+
+    /// Die Krümmungsgriffe der Splines unter `curves`: Bogen, Mitte und freies Ende.
+    pub(crate) fn handle_arcs(&self, curves: &[CurveId]) -> Vec<(CurveId, PointId, PointId)> {
+        let mut out = Vec::new();
+        for &c in curves {
+            if let CurveKind::Spline { handles, .. } = &self.curves[c].kind {
+                out.extend(handles.iter().filter_map(|h| match h.curvature {
+                    HandleCurvature::Arc { arc, center, other } => Some((arc, center, other)),
+                    _ => None,
+                }));
+            }
+        }
+        out
+    }
+
+    /// Die internen Zeilen der Krümmungsgriffe des Stücks `to` hingen bisher am Spline `from`.
+    pub(crate) fn move_handle_rows(&mut self, from: CurveId, to: CurveId) {
+        let CurveKind::Spline { handles, .. } = &self.curves[to].kind else {
+            return;
+        };
+        let moved: Vec<PointId> = handles
+            .iter()
+            .filter(|h| matches!(h.curvature, HandleCurvature::Arc { .. }))
+            .map(|h| h.at)
+            .collect();
+        if moved.is_empty() {
+            return;
+        }
+        let rows: Vec<_> = self
+            .constraints
+            .iter()
+            .filter_map(|(id, k)| match k.kind {
+                ConstraintKind::SplineCurvatureHandle(spline, at)
+                    if k.alive && spline == from && moved.contains(&at) =>
+                {
+                    Some((id, at))
+                }
+                _ => None,
+            })
+            .collect();
+        for (id, at) in rows {
+            self.constraints[id].kind = ConstraintKind::SplineCurvatureHandle(to, at);
+        }
+        self.touch_structure();
     }
 
     /// Die Griff-Teile und Splines, die mit den Kurven `curves` gehen müssen: Griffe eines Splines und
@@ -664,14 +843,7 @@ impl Sketch {
     pub(crate) fn handle_family(&self, curves: &[CurveId]) -> Vec<CurveId> {
         let mut out = Vec::new();
         for (spline, handles) in self.handled_splines() {
-            let parts = handles.iter().flat_map(|h| {
-                let arc = match h.curvature {
-                    HandleCurvature::Arc { arc, .. } => Some(arc),
-                    _ => None,
-                };
-                std::iter::once(h.line).chain(arc)
-            });
-            let parts: Vec<CurveId> = parts.collect();
+            let parts: Vec<CurveId> = handles.iter().flat_map(handle_parts).collect();
             if curves.contains(&spline) || parts.iter().any(|p| curves.contains(p)) {
                 out.push(spline);
                 out.extend(parts);

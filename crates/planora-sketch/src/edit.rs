@@ -314,8 +314,9 @@ impl Sketch {
         let tol = self.tolerance().linear;
         let ps = Prepared::new(search);
         let mut hits: Vec<(f64, f64, CurveId)> = Vec::new();
+        let handle_curves = self.handle_curves();
         for (id, _) in self.curves() {
-            if id == c {
+            if id == c || handle_curves.contains(&id) {
                 continue;
             }
             let Some(h) = self.geom(id) else { continue };
@@ -620,7 +621,9 @@ impl Sketch {
             cutter0: None,
             cutter1: None,
         };
-        if cleaned.is_empty() {
+        // Griffe zerfallen nicht: Linie und Bogen müssen ganz am Stützpunkt bleiben. Stutzen schaltet
+        // sie aus, Brechen tut nichts.
+        if cleaned.is_empty() || self.is_handle_curve(c) {
             return Some((g, whole(lo, hi)));
         }
         if g.periodic() && cleaned.len() == 1 {
@@ -704,8 +707,6 @@ impl Sketch {
             self.drop_orphans(&old_points)?;
             return Ok(Vec::new());
         }
-        // Skizzen 7: bis Task 8; die ganze Kurve zu löschen geht schon oben.
-        self.check_without_handles(c)?;
         let mut ends: Vec<NewEnd> = Vec::new();
         // Getrennte Punkte an einer Trennstelle beim Brechen (werden deckungsgleich).
         let mut joins: Vec<(PointId, PointId)> = Vec::new();
@@ -806,7 +807,7 @@ impl Sketch {
                     }
                 }
                 // Erst alle Teile bauen: Der Spline mit Kontrollpunkten liest dafür die alte Kurve.
-                let mut built = Vec::with_capacity(pieces.len());
+                let mut built: Vec<CurveKind> = Vec::with_capacity(pieces.len());
                 for (s, e, u0, u1) in pieces {
                     built.push(match &open {
                         CurveKind::Line { .. } => CurveKind::Line { a: s, b: e },
@@ -842,11 +843,14 @@ impl Sketch {
                         }
                     });
                 }
+                self.share_handles(c, &mut built)?;
                 for (k, piece) in built.into_iter().enumerate() {
                     if k == 0 {
                         self.set_curve_kind(c, piece);
                     } else {
-                        out.push(self.add_piece(piece)?);
+                        let n = self.add_piece(piece)?;
+                        self.move_handle_rows(c, n);
+                        out.push(n);
                     }
                 }
             }
@@ -1045,7 +1049,13 @@ impl Sketch {
             } => Ok(self
                 .add_elliptic_arc_vars(center, ax, ay, minor, start, end)
                 .0),
-            CurveKind::Spline { points, .. } => self.add_spline(&points),
+            CurveKind::Spline { points, handles } => {
+                let n = self.add_spline(&points)?;
+                if !handles.is_empty() {
+                    self.set_curve_kind(n, CurveKind::Spline { points, handles });
+                }
+                Ok(n)
+            }
             CurveKind::ControlSpline {
                 points,
                 degree,
