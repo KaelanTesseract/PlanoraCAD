@@ -252,6 +252,31 @@ fn a_switched_off_handle_needs_no_17_any_more() {
 }
 
 #[test]
+fn arc_handle_roundtrips() {
+    let (sk, c, _, at) = handled_sketch();
+    let mut sk = sk;
+    let center = sk.add_point(10.0, 16.0).unwrap();
+    let other = sk.add_point(20.0, 16.0).unwrap();
+    let arc = sk.add_arc(center, at, other).unwrap();
+    sk.set_construction(arc, true).unwrap();
+    let mut d = sk.to_data();
+    let CurveKind::Spline { handles, .. } = &mut d.curves[c.index()].kind else {
+        panic!("kein Spline");
+    };
+    handles[0].curvature = planora_sketch::HandleCurvature::Arc { arc, center, other };
+    let sk = Sketch::from_data(d).unwrap();
+    let text = encode_version(&document(sk.clone()).snapshot()).unwrap();
+    assert!(text.contains("\"kruemmung\""), "{text}");
+    assert!(text.contains("\"typ\": \"bogen\""), "{text}");
+    let back = decode_version(&text, "x.json").unwrap();
+    assert_eq!(
+        sketch_of(&back).curve(c).unwrap().kind,
+        sk.curve(c).unwrap().kind
+    );
+    assert_eq!(encode_version(&back).unwrap(), text);
+}
+
+#[test]
 fn bad_handle_in_the_file_is_refused() {
     let (sk, ..) = handled_sketch();
     let text = encode_version(&document(sk).snapshot()).unwrap();

@@ -232,7 +232,7 @@ impl Sketch {
             .iter()
             .enumerate()
             .filter(|(_, (_, g))| matches!(g, Geom::Spline { .. }))
-            .map(|(i, (id, _))| (i, self.natural_spline(*id)))
+            .map(|(i, (id, _))| (i, self.whole_spline(*id)))
             .collect();
         let builder = LoopBuilder {
             tol,
@@ -266,9 +266,10 @@ impl Sketch {
         out
     }
 
-    /// Natürlicher kubischer Spline durch die Stützpunkte des Splines `id` mit den Parametern
-    /// `0, 1, …, n − 1` (wie [`Sketch::spline_point`]).
-    fn natural_spline(&self, id: CurveId) -> Result<NurbsCurve, SketchError> {
+    /// Der ganze Spline `id` als NURBS-Kurve mit den Parametern `0, 1, …, n − 1` (wie
+    /// [`Sketch::spline_point`]): ohne Griffe natürlich kubisch durch die Stützpunkte, mit Griffen
+    /// exakt nach [`Sketch::handled_spline_nurbs`].
+    fn whole_spline(&self, id: CurveId) -> Result<NurbsCurve, SketchError> {
         let CurveKind::Spline { points, handles } = &self.curves[id].kind else {
             return Err(SketchError::Degenerate(tr!("sketch-err-spline-two-points")));
         };

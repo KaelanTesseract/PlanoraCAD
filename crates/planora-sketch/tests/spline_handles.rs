@@ -1,6 +1,6 @@
 //! Tangentengriff am Spline durch Stützpunkte (Skizzen 7, Task 6; Spec B1, B3, B4, B5, B8).
 
-use planora_kernel::Segment;
+use planora_kernel::{ProfileLoop, Segment};
 use planora_math::{DVec2, Frame, Tolerance};
 use planora_sketch::constraint::{ConstraintKind as K, LineOrPoints};
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
@@ -329,6 +329,33 @@ fn handle_on_two_point_spline_and_tiny_derivative() {
     assert_eq!(s.curves().count(), curves);
     assert_eq!(s.points().count(), points);
     assert_eq!(handle_count(&s, c), 0);
+    // Fast null, knapp über der Toleranz: Am mittleren Punkt ist die Spitze |y₂ − y₀| / 6 entfernt,
+    // hier etwa 1,67e-6 bei `tol.linear` = 1e-6. Der Griff entsteht, die Form bleibt, alles endlich.
+    let mut tiny = sketch();
+    let (k, ids) = spline(&mut tiny, &[(0.0, 0.0), (10.0, 0.0), (1e-5, 0.0)]);
+    let before = dense(&tiny, k, 40);
+    tiny.activate_tangent_handle(k, ids[1]).unwrap();
+    let reach = tiny
+        .point_xy(tip_of(&tiny, k, ids[1]))
+        .unwrap()
+        .distance(tiny.point_xy(ids[1]).unwrap());
+    assert!((reach - 1e-5 / 6.0).abs() < 1e-9, "{reach}");
+    let after = dense(&tiny, k, 40);
+    for (a, b) in after.iter().zip(&before) {
+        assert!(a.is_finite());
+        assert!(a.distance(*b) < 1e-9, "{a} statt {b}");
+    }
+    assert!(second(&tiny, k, 1.0, 1.0).is_finite());
+    assert!(tiny.handled_spline_nurbs(k).is_ok());
+    assert_eq!(tiny.solve().status, SolveStatus::Solved);
+    assert!(tiny.curve_eval(k, 0.5).unwrap().is_finite());
+    // Fast null, unter der Toleranz (Spitze etwa 1,67e-7 entfernt): abgelehnt, nichts bleibt zurück.
+    let mut tiny = sketch();
+    let (k, ids) = spline(&mut tiny, &[(0.0, 0.0), (10.0, 0.0), (1e-6, 0.0)]);
+    let before = tiny.to_data();
+    let err = tiny.activate_tangent_handle(k, ids[1]).unwrap_err();
+    assert!(matches!(err, SketchError::Degenerate(_)), "{err:?}");
+    assert_eq!(tiny.to_data(), before);
     // Kein Griff an einem fremden Punkt, kein zweiter am selben, keiner an einer Linie.
     let other = s.add_point(50.0, 50.0).unwrap();
     assert!(s.activate_tangent_handle(c, other).is_err());
@@ -547,7 +574,7 @@ fn parameter(s: &Sketch, k: planora_sketch::ConstraintId) -> f64 {
 }
 
 #[test]
-fn point_on_handled_spline_and_tangent_line_solve() {
+fn point_on_handled_spline_solves_and_follows_the_tip() {
     let mut s = sketch();
     let (c, pts) = spline(&mut s, &WAVE);
     s.activate_tangent_handle(c, pts[2]).unwrap();
@@ -570,6 +597,203 @@ fn point_on_handled_spline_and_tangent_line_solve() {
     assert_eq!(s.solve().status, SolveStatus::Solved);
     let t = parameter(&s, k);
     assert!(s.curve_eval(c, t).unwrap().distance(s.point_xy(p).unwrap()) < 1e-6);
+}
+
+/// Abstand und Winkelfehler (Sinus) der Linie `a`–`b` zur Kurve beim Parameter `t`.
+fn tangency(s: &Sketch, c: CurveId, a: PointId, b: PointId, t: f64) -> (f64, f64) {
+    let (p, q) = (s.point_xy(a).unwrap(), s.point_xy(b).unwrap());
+    let dir = (q - p).normalize();
+    let at = s.curve_eval(c, t).unwrap();
+    let d = derivative(s, c, t, if t < 4.0 { 1.0 } else { -1.0 }).normalize();
+    (dir.perp_dot(at - p).abs(), dir.perp_dot(d).abs())
+}
+
+#[test]
+fn tangent_line_on_a_handled_spline_solves_and_follows_the_tip() {
+    let mut s = sketch();
+    let (c, pts) = spline(&mut s, &WAVE);
+    s.activate_tangent_handle(c, pts[2]).unwrap();
+    let tip = tip_of(&s, c, pts[2]);
+    // Griff weggezogen: Das Segment neben dem Griff ist jetzt wirklich quintisch.
+    s.set_point_xy(tip, 26.0, 9.0).unwrap();
+    let at = s.curve_eval(c, 1.5).unwrap();
+    let d = derivative(&s, c, 1.5, 1.0).normalize() * 8.0;
+    let side = d.perp().normalize() * 0.2;
+    let a = s
+        .add_point(at.x - d.x + side.x, at.y - d.y + side.y)
+        .unwrap();
+    let b = s
+        .add_point(at.x + d.x + side.x, at.y + d.y + side.y)
+        .unwrap();
+    let line = s.add_line(a, b).unwrap();
+    let k = s.add_constraint(K::Tangent(line, c)).unwrap();
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+    let (gap, angle) = tangency(&s, c, a, b, parameter(&s, k));
+    assert!(gap < 1e-6, "Abstand {gap}");
+    assert!(angle < 1e-5, "Winkel {angle}");
+    // Griff weiter ziehen: Die Linie bleibt tangential und die Spitze folgt dem Zug.
+    let before = s.point_xy(a).unwrap();
+    let target = DVec2::new(27.0, 11.0);
+    let report = s.drag(&[Drag { point: tip, target }]).unwrap();
+    assert!(!report.drag_failed);
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+    let (gap, angle) = tangency(&s, c, a, b, parameter(&s, k));
+    assert!(gap < 1e-6, "Abstand {gap}");
+    assert!(angle < 1e-5, "Winkel {angle}");
+    assert!(s.point_xy(tip).unwrap().distance(target) < 1e-3);
+    assert!(
+        s.point_xy(a).unwrap().distance(before) > 1e-4,
+        "die Linie folgt"
+    );
+}
+
+/// Abstand von `q` zum Linienzug `poly`.
+fn to_polyline(q: DVec2, poly: &[DVec2]) -> f64 {
+    poly.windows(2)
+        .map(|w| {
+            let d = w[1] - w[0];
+            let u = ((q - w[0]).dot(d) / d.length_squared()).clamp(0.0, 1.0);
+            q.distance(w[0] + d * u)
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
+/// Fläche einer Schleife aus Linien und Freiformstücken über das Randintegral (Simpson, fein genug
+/// für 1e-6). `ProfileLoop::signed_area` misst nur über Sehnen und liegt hier um etwa 3e-3 daneben.
+fn exact_area(lp: &ProfileLoop) -> f64 {
+    let mut sum = 0.0;
+    let mut p = lp.start;
+    for seg in &lp.segments {
+        match seg {
+            Segment::Line { to } => {
+                sum += p.perp_dot(*to);
+                p = *to;
+            }
+            Segment::Nurbs { curve } => {
+                let (lo, hi) = curve.domain();
+                let steps = 4000;
+                let h = (hi - lo) / steps as f64;
+                let flux = |t: f64| {
+                    let d = curve.derivs_unclamped(t, 1);
+                    d[0].truncate().perp_dot(d[1].truncate())
+                };
+                let mut s = flux(lo) + flux(hi);
+                for k in 1..steps {
+                    let w = if k % 2 == 1 { 4.0 } else { 2.0 };
+                    s += w * flux(lo + h * k as f64);
+                }
+                sum += s * h / 3.0;
+                let q = curve.point(hi);
+                p = DVec2::new(q.x, q.y);
+            }
+            Segment::Arc { .. } => panic!("hier gibt es keine Bögen"),
+        }
+    }
+    (sum / 2.0).abs()
+}
+
+#[test]
+fn profile_of_a_handled_spline_split_by_a_crossing_line_is_exact() {
+    // Schnitt im Segment, genau auf dem dreifachen Knoten und nahe daneben. Enger am Knoten lehnt die
+    // Profilsuche auch den natürlichen Spline ab, das hängt nicht an den Griffen (Bericht Task 6).
+    for x in [6.3, 9.5, 10.0, 10.5, 14.9] {
+        let mut s = sketch();
+        let (c, pts) = spline(&mut s, &[(0.0, 0.0), (10.0, 12.0), (20.0, 0.0)]);
+        s.add_line(pts[2], pts[0]).unwrap();
+        s.activate_tangent_handle(c, pts[1]).unwrap();
+        let tip = tip_of(&s, c, pts[1]);
+        s.set_point_xy(tip, 15.0, 14.0).unwrap();
+        let whole = s.profiles();
+        assert_eq!(whole.profiles.len(), 1, "{:?}", whole.rejected);
+        let area = exact_area(&whole.profiles[0].outer);
+
+        let a = s.add_point(x, -5.0).unwrap();
+        let b = s.add_point(x, 40.0).unwrap();
+        s.add_line(a, b).unwrap();
+        let found = s.profiles();
+        assert!(found.rejected.is_empty(), "x={x}: {:?}", found.rejected);
+        assert_eq!(found.profiles.len(), 2, "x={x}");
+        // Die Stücke füllen die Fläche ohne Rest.
+        let sum: f64 = found.profiles.iter().map(|p| exact_area(&p.outer)).sum();
+        assert!((sum - area).abs() < 1e-6, "x={x}: {sum} statt {area}");
+        // Jedes Freiformstück bleibt Grad 5 und liegt auf der Kurve.
+        let poly = dense(&s, c, 400);
+        for p in &found.profiles {
+            let pieces: Vec<_> = p
+                .outer
+                .segments
+                .iter()
+                .filter_map(|seg| match seg {
+                    Segment::Nurbs { curve } => Some(curve.clone()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(pieces.len(), 1, "x={x}");
+            let piece = &pieces[0];
+            assert_eq!(piece.degree(), 5, "x={x}");
+            let (lo, hi) = piece.domain();
+            for k in 0..=200 {
+                let q = piece.point(lo + (hi - lo) * k as f64 / 200.0);
+                let gap = to_polyline(DVec2::new(q.x, q.y), &poly);
+                assert!(gap < 1e-4, "x={x}: {gap}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_valid_arc_handle_loads() {
+    let mut s = sketch();
+    let (c, pts) = spline(
+        &mut s,
+        &[(0.0, 0.0), (10.0, 6.0), (20.0, -2.0), (30.0, 3.0)],
+    );
+    let line = s.activate_tangent_handle(c, pts[1]).unwrap();
+    let tip = tip_of(&s, c, pts[1]);
+    let center = s.add_point(10.0, 16.0).unwrap();
+    let other = s.add_point(20.0, 16.0).unwrap();
+    let arc = s.add_arc(center, pts[1], other).unwrap();
+    s.set_construction(arc, true).unwrap();
+    let mut d = s.to_data();
+    let CurveKind::Spline { handles, .. } = &mut d.curves[c.index()].kind else {
+        panic!();
+    };
+    handles[0].curvature = HandleCurvature::Arc { arc, center, other };
+    let mut back = Sketch::from_data(d.clone()).unwrap();
+    assert_eq!(back.to_data().curves, d.curves);
+    let kind = back.curve(c).unwrap().kind.clone();
+    assert!(kind.points().contains(&center) && kind.points().contains(&other));
+    assert_eq!(kind.fit_points(), &pts[..]);
+    // Andersherum gezeichnet ist der Bogen ebenso gültig.
+    let mut flipped = d.clone();
+    flipped.curves[arc.index()].kind = CurveKind::Arc {
+        center,
+        start: other,
+        end: pts[1],
+    };
+    assert!(Sketch::from_data(flipped).is_ok());
+    // Bogen ohne Konstruktion oder um eine andere Mitte: abgelehnt.
+    let mut plain = d.clone();
+    plain.curves[arc.index()].construction = false;
+    assert!(Sketch::from_data(plain).is_err());
+    let mut off = d;
+    off.curves[arc.index()].kind = CurveKind::Arc {
+        center: other,
+        start: pts[1],
+        end: center,
+    };
+    assert!(Sketch::from_data(off).is_err());
+    // Bogen löschen (B8): nur der Krümmungsgriff geht, der Tangentengriff bleibt.
+    back.remove_curve(arc).unwrap();
+    let CurveKind::Spline { handles, .. } = &back.curve(c).unwrap().kind else {
+        panic!();
+    };
+    assert_eq!(handles.len(), 1);
+    assert_eq!(handles[0].curvature, HandleCurvature::Form);
+    assert!(back.curve(line).is_some());
+    assert!(back.point_xy(tip).is_ok());
+    assert!(back.point_xy(center).is_err() && back.point_xy(other).is_err());
+    assert!(back.point_xy(pts[1]).is_ok());
 }
 
 #[test]
