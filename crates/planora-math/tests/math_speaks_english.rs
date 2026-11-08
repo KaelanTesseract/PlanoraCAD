@@ -144,6 +144,18 @@ fn real_failures() -> Vec<NurbsError> {
         .map(|_| ()),
     );
     push(skin(&[], &[], &[]).map(|_| ()));
+    // Verlängern und Gradwechsel.
+    let line = NurbsCurve::new(
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![p(0.0, 0.0, 0.0), p(1.0, 0.0, 0.0)],
+        vec![1.0, 2.0],
+    )
+    .unwrap();
+    push(line.extended(-1.0, 2.0).map(|_| ()));
+    push(line.extended(0.5, 2.0).map(|_| ()));
+    push(line.elevated(0).map(|_| ()));
+    push(line.reduced(0, 3).map(|_| ()));
     errors
 }
 

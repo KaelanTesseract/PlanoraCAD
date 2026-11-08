@@ -5,6 +5,7 @@
 mod bezier;
 mod build;
 mod curve;
+mod degree;
 mod dense;
 mod error;
 mod fit;
@@ -15,6 +16,7 @@ mod work;
 
 pub use bezier::{BezierPatch, BezierSegment};
 pub use curve::NurbsCurve;
+pub use degree::uniform_clamped_knots;
 pub use error::NurbsError;
 pub use fit::MAX_FIT_CONTROL_POINTS;
 pub use knots::KnotVector;

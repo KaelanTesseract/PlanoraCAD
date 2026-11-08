@@ -405,6 +405,33 @@ fn smallest_eigenvector(mut a: [[f64; 3]; 3]) -> DVec3 {
     DVec3::new(v[0][best], v[1][best], v[2][best])
 }
 
+/// Blüte des ersten Polynomstücks (Knoten `t`, Kontrollpunkte `ctrl[0..=p]`) an den Argumenten
+/// `xs` (de Boor mit je Stufe einem eigenen Argument).
+fn blossom_first(p: usize, t: &[f64], ctrl: &[DVec3], xs: &[f64]) -> DVec3 {
+    let mut d: Vec<DVec3> = ctrl[..=p].to_vec();
+    for r in 1..=p {
+        for i in (r..=p).rev() {
+            let alpha = (xs[r - 1] - t[i]) / (t[i + p + 1 - r] - t[i]);
+            d[i] = d[i - 1] * (1.0 - alpha) + d[i] * alpha;
+        }
+    }
+    d[p]
+}
+
+/// Setzt das erste Polynomstück bis `new_lo` fort: die ersten `p + 1` Knoten werden `new_lo`, die
+/// ersten `p + 1` Kontrollpunkte sind die Blüte des alten ersten Stücks an den neuen Knoten.
+fn extend_front(p: usize, knots: &[f64], ctrl: &[DVec3], new_lo: f64) -> (Vec<f64>, Vec<DVec3>) {
+    let mut nk = knots.to_vec();
+    for k in nk.iter_mut().take(p + 1) {
+        *k = new_lo;
+    }
+    let mut nc = ctrl.to_vec();
+    for (i, c) in nc.iter_mut().enumerate().take(p + 1) {
+        *c = blossom_first(p, knots, ctrl, &nk[i + 1..=i + p]);
+    }
+    (nk, nc)
+}
+
 impl NurbsCurve {
     /// Fügt den Knoten `u` `times`-mal ein (A5.1, homogen); die Kurve ändert sich nicht.
     /// Fehler, wenn `u` nicht im Inneren liegt oder die Vielfachheit den Grad übersteigen würde.
@@ -460,6 +487,36 @@ impl NurbsCurve {
             c.control_points()[range.clone()].to_vec(),
             c.weights()[range].to_vec(),
         )
+    }
+
+    /// Dieselbe Kurve mit neuen End-Knoten `new_lo ≤ domain().0` und `new_hi ≥ domain().1`; die
+    /// inneren Knoten bleiben. Der Anfang setzt das erste, das Ende das letzte Polynomstück fort
+    /// (Blüte des Randstücks an den neuen Knoten). Nur für nicht rationale Kurven (alle Gewichte
+    /// gleich), sonst und bei einem Bereich, der den alten nicht umfasst, `NurbsError::Input`.
+    pub fn extended(&self, new_lo: f64, new_hi: f64) -> Result<NurbsCurve, NurbsError> {
+        let (a, b) = self.domain();
+        if self.weights().iter().any(|w| *w != self.weights()[0]) {
+            return Err(NurbsError::Input(tr!("math-extend-rational")));
+        }
+        if !(new_lo.is_finite() && new_hi.is_finite() && new_lo <= a && new_hi >= b) {
+            return Err(NurbsError::Input(tr!(
+                "math-extend-range",
+                lo = new_lo.to_string(),
+                hi = new_hi.to_string(),
+                a = a.to_string(),
+                b = b.to_string()
+            )));
+        }
+        let p = self.degree();
+        let (knots, control) = extend_front(p, self.knots().knots(), self.control_points(), new_lo);
+        // Das Ende wird gespiegelt (Knoten negiert, Punkte umgekehrt) wie der Anfang behandelt.
+        let neg: Vec<f64> = knots.iter().rev().map(|k| 0.0 - k).collect();
+        let rev: Vec<DVec3> = control.iter().rev().copied().collect();
+        let (knots, control) = extend_front(p, &neg, &rev, 0.0 - new_hi);
+        let knots: Vec<f64> = knots.iter().rev().map(|k| 0.0 - k).collect();
+        let control: Vec<DVec3> = control.into_iter().rev().collect();
+        let n = control.len();
+        NurbsCurve::new(p, knots, control, vec![self.weights()[0]; n])
     }
 
     /// Zerlegung in rationale Bézier-Stücke (je ein Stück pro nichtleerem Knotenabschnitt).
