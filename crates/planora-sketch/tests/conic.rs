@@ -240,6 +240,20 @@ fn collapsed_points_stay_finite_after_solving() {
     assert_eq!(found.rejected.len(), 1, "{:?}", found.rejected);
 }
 
+#[test]
+fn conic_with_start_on_end_names_a_reason() {
+    let mut s = sketch();
+    let (c, [start, _, end]) = conic(&mut s, 0.5);
+    s.set_point_xy(end, 0.0, 0.0).unwrap();
+    assert_eq!(s.point_xy(start), s.point_xy(end));
+    for found in [s.profiles(), s.legacy_profiles()] {
+        assert!(found.profiles.is_empty());
+        assert_eq!(found.rejected.len(), 1, "{:?}", found.rejected);
+        assert_eq!(found.rejected[0].curves, vec![c]);
+        assert_eq!(found.rejected[0].reason, SketchError::SelfIntersecting);
+    }
+}
+
 // ---- Stutzen und Brechen ----------------------------------------------------------------------
 
 #[test]
@@ -432,6 +446,16 @@ fn extend_leaves_a_shared_apex_alone() {
     let before = format!("{:?}", s.to_data());
     assert!(!s.extend(c, v(10.0, 0.0)).unwrap());
     assert_eq!(format!("{:?}", s.to_data()), before);
+
+    // Auch wenn das Ziel zugleich hinter dem positiven Gewicht liegt: kein Ziel, keine Meldung.
+    let mut s = sketch();
+    let (c, [_, apex, _]) = conic_at(&mut s, (0.0, 0.0), (5.0, 4.0), (10.0, 0.0), 0.2);
+    let other = s.add_point(30.0, 30.0).unwrap();
+    s.add_line(apex, other).unwrap();
+    line(&mut s, (0.0, -1.0), (20.0, -1.0));
+    let before = format!("{:?}", s.to_data());
+    assert_eq!(s.extend(c, v(10.0, 0.0)), Ok(false));
+    assert_eq!(format!("{:?}", s.to_data()), before);
 }
 
 // ---- Spiegeln, Kopieren, Abrunden, Versatz, Fang --------------------------------------------------
@@ -554,6 +578,52 @@ fn offset_of_a_conic_is_a_spline_at_the_distance() {
         let d = s.nearest_on_curve(c, q).unwrap().distance(q);
         assert!((d - 0.5).abs() < 1e-2, "{i}: {d}");
     }
+}
+
+/// Größte Abweichung vom Abstand `d`, bezogen auf `|d|`: dichte Abtastung des Versatz-Splines gegen
+/// den nächsten Punkt der Vorlage. `None`, wenn der Versatz abgelehnt wird (Spitze).
+fn offset_error(p0: (f64, f64), a: (f64, f64), p2: (f64, f64), rho: f64, d: f64) -> Option<f64> {
+    let mut s = sketch();
+    let (c, _) = conic_at(&mut s, p0, a, p2, rho);
+    let chains = s.ordered_chains(&[c]).unwrap();
+    let plan = s.offset_plan(&chains, d).ok()?;
+    let k = s.add_offset(&plan).unwrap().curves[0];
+    assert!(matches!(s.curve(k).unwrap().kind, CurveKind::Spline { .. }));
+    let hi = s.curve_domain(k).unwrap().1;
+    let mut worst = 0.0_f64;
+    for i in 0..=2000 {
+        let q = s.curve_eval(k, hi * i as f64 / 2000.0).unwrap();
+        worst = worst.max((s.nearest_on_curve(c, q).unwrap().distance(q) - d.abs()).abs());
+    }
+    Some(worst / d.abs())
+}
+
+const OFFSET_RHOS: [f64; 13] = [
+    0.01, 0.05, 0.1, 0.2, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99, 0.999,
+];
+
+#[test]
+fn offset_stays_at_the_distance_for_every_rho() {
+    // Außen geht jedes Rho; 1 % des Abstands gilt überall.
+    for rho in OFFSET_RHOS {
+        let e = offset_error(P0, APEX, P2, rho, 0.5).expect("außen gibt es keine Spitze");
+        assert!(e < 1e-2, "rho {rho}: {e}");
+    }
+    // Andere Formen und Abstände, auch innen, soweit dort keine Spitze entsteht.
+    let mut inner = 0;
+    for a in [(5.0, 8.0), (1.0, 8.0), (5.0, 1.0)] {
+        for d in [0.5, 3.0, -0.5] {
+            for rho in OFFSET_RHOS {
+                if let Some(e) = offset_error(P0, a, P2, rho, d) {
+                    assert!(e < 1e-2, "Scheitel {a:?}, Abstand {d}, rho {rho}: {e}");
+                    inner += usize::from(d < 0.0);
+                } else {
+                    assert!(d < 0.0, "außen abgelehnt: {a:?}, {d}, {rho}");
+                }
+            }
+        }
+    }
+    assert!(inner >= 5, "{inner}");
 }
 
 #[test]
@@ -768,4 +838,28 @@ fn from_data_rejects_bad_rho() {
     };
     *apex = PointId::from_index(99);
     assert!(Sketch::from_data(bad).is_err());
+    // Derselbe Punkt zweimal, wie bei `add_conic`.
+    let CurveKind::Conic {
+        start: s0,
+        end: e0,
+        apex: a0,
+        ..
+    } = good.curves[c.index()].kind
+    else {
+        panic!("falsche Art");
+    };
+    for (x, y, z) in [(s0, s0, a0), (s0, e0, s0), (s0, e0, e0)] {
+        let mut bad = good.clone();
+        let CurveKind::Conic {
+            start, end, apex, ..
+        } = &mut bad.curves[c.index()].kind
+        else {
+            panic!("falsche Art");
+        };
+        (*start, *end, *apex) = (x, y, z);
+        assert!(
+            matches!(Sketch::from_data(bad), Err(SketchError::InvalidInput(_))),
+            "{x:?} {y:?} {z:?}"
+        );
+    }
 }

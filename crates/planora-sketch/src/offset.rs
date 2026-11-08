@@ -41,6 +41,7 @@ use crate::geom::Geom;
 use crate::intersect::{Prepared, boxes_touch, intersect, intersect_prepared, self_intersect};
 use crate::model::{CurveId, CurveKind, MAX_COORD, PointId, Sketch};
 use crate::shapes::ArcPlan;
+use planora_math::nurbs::NurbsCurve;
 use planora_math::{DVec2, PI, TAU, Tolerance};
 use std::collections::{HashMap, HashSet};
 
@@ -50,8 +51,14 @@ const ELLIPSE_HALF_SECTIONS: usize = 32;
 const SECTIONS_PER_SPAN: usize = 4;
 /// Höchstzahl der Abschnitte eines Näherungsstücks.
 const MAX_SECTIONS: usize = 63;
-/// Mindestzahl der Abschnitte eines Kegelschnitts: Er ist ein einziges Stück, dreht aber bis fast 180°.
-const CONIC_SECTIONS: usize = 12;
+/// Rasterschritte je Bézier-Stück, auf denen eine Freiformkurve für den Versatz vermessen wird.
+const MEASURE_STEPS_PER_PIECE: usize = 64;
+/// Rasterschritte je Hälfte eines rationalen Stücks: Sie werden zu den Enden hin geometrisch kleiner,
+/// denn bei großen Gewichten liegt fast der ganze Weg in `t ≈ 1 / (2w)`.
+const MEASURE_STEPS_PER_RATIONAL_HALF: usize = 1000;
+/// Erster Rasterschritt eines rationalen Stücks, bezogen auf seine Breite (kleinstes `t` bei `w = 1e6`
+/// ist etwa 5e-7).
+const MEASURE_FIRST_STEP: f64 = 1e-8;
 /// Abtastung der Krümmung beim Suchen nach Spitzen.
 const CUSP_STEPS_PER_TURN: usize = 256;
 const CUSP_STEPS_PER_SEGMENT: usize = 64;
@@ -339,6 +346,81 @@ fn approx_samples(
     Some(out)
 }
 
+/// Raster einer Freiformkurve zum Vermessen, aufsteigend mit beiden Enden und allen Knoten.
+fn measure_grid(curve: &NurbsCurve) -> Vec<f64> {
+    let (lo, hi) = curve.domain();
+    let rational = curve.weights().iter().any(|w| *w != 1.0);
+    let mut out = vec![lo];
+    for w in nurbs_breaks(curve, lo, hi).windows(2) {
+        let (a, width) = (w[0], w[1] - w[0]);
+        if rational {
+            let half = MEASURE_STEPS_PER_RATIONAL_HALF;
+            let at = |k: usize| {
+                MEASURE_FIRST_STEP * (0.5 / MEASURE_FIRST_STEP).powf(k as f64 / half as f64)
+            };
+            out.extend((0..=half).map(|k| a + width * at(k)));
+            out.extend((0..half).rev().map(|k| a + width * (1.0 - at(k))));
+        } else {
+            let steps = MEASURE_STEPS_PER_PIECE;
+            out.extend((1..steps).map(|k| a + width * k as f64 / steps as f64));
+        }
+        out.push(w[1]);
+    }
+    out
+}
+
+/// `sections + 1` Parameter einer Freiformkurve für den Versatz um `d` nach links. Der Spline durch
+/// die Versatzpunkte hat je Stützpunkt denselben Parameterschritt und folgt nur gut, wenn sie
+/// gleichmäßig über Weg und Drehung liegen; gleiche Schritte in `t` täten das bei großen Gewichten oder
+/// ungleichen Kontrollpolygonen nicht. Darum zählt je zur Hälfte der Anteil an der Länge der
+/// Versatzkurve und der an der ganzen Drehung. Beide Enden sind exakt.
+fn offset_params(g: &Geom, curve: &NurbsCurve, d: f64, sections: usize) -> Vec<f64> {
+    let grid = measure_grid(curve);
+    let jets: Vec<(DVec2, Option<DVec2>)> = grid
+        .iter()
+        .map(|&t| {
+            let (p, v) = g.eval(t);
+            (p, v.try_normalize())
+        })
+        .collect();
+    let (mut lengths, mut turns) = (
+        Vec::with_capacity(grid.len()),
+        Vec::with_capacity(grid.len()),
+    );
+    for w in jets.windows(2) {
+        let shifted = |j: &(DVec2, Option<DVec2>)| j.0 + j.1.map_or(DVec2::ZERO, |u| u.perp() * d);
+        lengths.push(shifted(&w[0]).distance(shifted(&w[1])));
+        turns.push(match (w[0].1, w[1].1) {
+            (Some(a), Some(b)) => a.perp_dot(b).atan2(a.dot(b)).abs(),
+            _ => 0.0,
+        });
+    }
+    let (length, turn): (f64, f64) = (lengths.iter().sum(), turns.iter().sum());
+    let share = |v: f64, all: f64| if all > 0.0 { v / all } else { 0.0 };
+    let mut sum = vec![0.0];
+    for (l, a) in lengths.iter().zip(&turns) {
+        let last = sum[sum.len() - 1];
+        sum.push(last + share(*l, length) + share(*a, turn));
+    }
+    let total = sum[sum.len() - 1];
+    let (lo, hi) = curve.domain();
+    if !(total > 0.0 && total.is_finite()) {
+        return (0..=sections)
+            .map(|k| lo + (hi - lo) * k as f64 / sections as f64)
+            .collect();
+    }
+    let mut out = Vec::with_capacity(sections + 1);
+    out.push(lo);
+    for k in 1..sections {
+        let goal = total * k as f64 / sections as f64;
+        let i = sum.partition_point(|&s| s < goal).clamp(1, grid.len() - 1);
+        let u = (goal - sum[i - 1]) / (sum[i] - sum[i - 1]);
+        out.push(grid[i - 1] + (grid[i] - grid[i - 1]) * u);
+    }
+    out.push(hi);
+    out
+}
+
 /// `Err(Cusp)`, wenn der Versatz `d` nach links die Kurve irgendwo umklappen ließe.
 fn check_cusp(g: &Geom, against: bool, d: f64) -> Result<(), OffsetProblem> {
     let (lo, hi) = g.domain();
@@ -477,20 +559,8 @@ impl Sketch {
             }
             Geom::Nurbs { curve } => {
                 check_cusp(g, against, d)?;
-                // Je Bézier-Stück, damit die Knoten auf Stützpunkten liegen; ein Stück hohen Grades
-                // braucht mehr Abschnitte als ein kubisches.
-                let (lo, hi) = curve.domain();
-                let pieces = nurbs_breaks(curve, lo, hi).len() - 1;
-                let least = if matches!(self.curves[c].kind, CurveKind::Conic { .. }) {
-                    CONIC_SECTIONS
-                } else {
-                    2 * curve.degree()
-                };
-                let per_piece = SECTIONS_PER_SPAN
-                    .max(least)
-                    .min(MAX_SECTIONS / pieces)
-                    .max(1);
-                let ts = nurbs_samples(curve, lo, hi, per_piece);
+                let side = if against { -d } else { d };
+                let ts = offset_params(g, curve, side, MAX_SECTIONS);
                 let samples = approx_samples(g, &ts, against, d).ok_or(BAD)?;
                 Ok(vec![approx_raw(c, &samples)])
             }

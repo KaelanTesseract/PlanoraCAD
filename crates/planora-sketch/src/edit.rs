@@ -501,10 +501,7 @@ impl Sketch {
             (start, p0, 0.0, t, 1.0)
         };
         let (_, new_apex, _, new_rho) = conic_piece(p0, a, p2, rho, u0, u1)?;
-        if self
-            .curves()
-            .any(|(id, d)| id != c && d.kind.points().contains(&apex))
-        {
+        if self.conic_apex_shared(c, apex) {
             return None;
         }
         let hit = search.eval(t).0;
@@ -527,6 +524,12 @@ impl Sketch {
         })
     }
 
+    /// Benutzt eine andere Kurve den Scheitel `apex` des Kegelschnitts `c`? Er wandert beim Dehnen mit.
+    fn conic_apex_shared(&self, c: CurveId, apex: PointId) -> bool {
+        self.curves()
+            .any(|(id, d)| id != c && d.kind.points().contains(&apex))
+    }
+
     /// Hat das Dehnen des Kegelschnitts `c` ein Ziel, das nur daran scheitert, dass das längere Stück kein
     /// Kegelschnitt mehr wäre? Das Gewicht wird dort negativ (siehe Spec, Tabelle E).
     fn conic_extend_refused(&self, c: CurveId, at: DVec2) -> bool {
@@ -541,7 +544,8 @@ impl Sketch {
         };
         let (p0, a, p2) = (self.pos(start), self.pos(apex), self.pos(end));
         let at_end = at.distance(p2) < at.distance(p0);
-        if !self.is_open_end(c, if at_end { end } else { start }) {
+        if !self.is_open_end(c, if at_end { end } else { start }) || self.conic_apex_shared(c, apex)
+        {
             return false;
         }
         self.conic_extend_hit(c, at_end).is_some_and(|(_, t, _)| {

@@ -212,7 +212,17 @@ impl Sketch {
                     degree,
                     knots,
                 } => check_control_spline(points.len(), *degree, knots)?,
-                CurveKind::Conic { rho, .. } => check_conic_rho(*rho)?,
+                CurveKind::Conic {
+                    start,
+                    end,
+                    apex,
+                    rho,
+                } => {
+                    if start == end || start == apex || end == apex {
+                        return Err(bad(tr!("sketch-err-point-twice")));
+                    }
+                    check_conic_rho(*rho)?;
+                }
                 _ => {}
             }
             if c.alive && pts.iter().any(|p| !point_alive(*p)) {

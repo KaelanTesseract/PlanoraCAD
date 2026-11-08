@@ -556,6 +556,47 @@ fn pick(c: CurveId, x: f64, y: f64) -> CurvePick {
     }
 }
 
+/// Größte Abweichung des Versatz-Splines vom Abstand, bezogen auf den Abstand.
+fn offset_error(xy: &[(f64, f64)], degree: u8, d: f64) -> f64 {
+    let mut s = sketch();
+    let pts = points(&mut s, xy);
+    let c = s.add_control_spline(&pts, degree).unwrap();
+    let chains = s.ordered_chains(&[c]).unwrap();
+    let plan = s.offset_plan(&chains, d).unwrap();
+    let k = s.add_offset(&plan).unwrap().curves[0];
+    let hi = s.curve_domain(k).unwrap().1;
+    let mut worst = 0.0_f64;
+    for i in 0..=2000 {
+        let q = s.curve_eval(k, hi * i as f64 / 2000.0).unwrap();
+        worst = worst.max((s.nearest_on_curve(c, q).unwrap().distance(q) - d).abs());
+    }
+    worst / d
+}
+
+#[test]
+fn offset_follows_uneven_and_long_control_polygons() {
+    // Gleiche Schritte je Bézier-Stück lagen hier bei 0,17 bis 0,20 und 4,07 des Abstands.
+    let uneven = [
+        (0.0, 0.0),
+        (0.2, 3.0),
+        (0.4, 3.2),
+        (9.0, 3.3),
+        (9.2, 0.0),
+        (20.0, 0.0),
+        (20.0, 8.0),
+    ];
+    let long: Vec<(f64, f64)> = (0..40)
+        .map(|i| (i as f64 * 2.0, 6.0 * (i as f64 * 0.9).sin()))
+        .collect();
+    for degree in [3, 5] {
+        let e = offset_error(&uneven, degree, 0.3);
+        assert!(e < 1e-2, "ungleich, Grad {degree}: {e}");
+        // Die 64 Stützpunkte begrenzen, was bei 40 Punkten geht.
+        let e = offset_error(&long, degree, 0.3);
+        assert!(e < 0.1, "lang, Grad {degree}: {e}");
+    }
+}
+
 #[test]
 fn fillet_line_and_control_spline() {
     let mut s = sketch();

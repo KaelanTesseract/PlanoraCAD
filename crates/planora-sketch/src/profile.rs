@@ -380,6 +380,10 @@ impl Sketch {
                 if collapsed || self.nurbs_of(id).is_none() {
                     return Err(SketchError::Degenerate(tr!("sketch-err-conic-collapsed")));
                 }
+                // Hin und auf demselben Weg zurück umschließt nichts.
+                if self.pos(*end).distance(first) <= tol.linear {
+                    return Err(SketchError::SelfIntersecting);
+                }
             }
         }
         let Some(g) = self.geom(id) else {
