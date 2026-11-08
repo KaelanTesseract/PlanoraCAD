@@ -1585,7 +1585,8 @@ impl SketchSession {
 
     /// Bricht das laufende Werkzeug ab; im Auswahlwerkzeug wird die Auswahl geleert. Ein
     /// laufendes Ziehen wird wie mit [`end_drag`](Self::end_drag) beendet (der Punkt bleibt,
-    /// wo er ist). Stutzen, Dehnen und Brechen enden ganz (zurück zur Auswahl). Ein laufender
+    /// wo er ist). Stutzen, Dehnen, Brechen und Projizieren/Einschließen enden ganz (zurück zur
+    /// Auswahl). Ein laufender
     /// Rahmen fällt allein weg, die alte Auswahl bleibt; ebenso ein laufender Zug auf dem letzten
     /// Punkt, der Linienzug bleibt, und ein laufender Griff, das Werkzeug bleibt. Verschieben/Kopieren
     /// hinterlässt auch in der Auswahl nichts. Die Skizzenbemaßung verwirft zuerst ein offenes Maß
@@ -1640,8 +1641,9 @@ impl SketchSession {
             self.forget_removed(sk);
         }
         // Stutzen, Dehnen und Brechen haben nichts Offenes: Esc beendet sie wie in Fusion (auch
-        // mitten im Ziehen; was schon gestutzt ist, bleibt).
-        if self.tool.is_modify() {
+        // mitten im Ziehen; was schon gestutzt ist, bleibt). Ebenso Projizieren, Schneiden und
+        // Silhouette: Jeder Klick ist schon ein fertiger Schritt (Handtest Skizzen 6).
+        if self.tool.is_modify() || self.tool == Tool::ProjectEdge {
             self.set_tool(sk, Tool::Select);
         }
     }

@@ -466,6 +466,27 @@ fn esc_leaves_nothing() {
     assert!(!se.project.link);
 }
 
+/// Handtest 2026-11-08: Esc beendet Projizieren, Schneiden und Silhouette wie in Fusion (zurück
+/// zur Auswahl); die Art bleibt für den nächsten Aufruf gemerkt.
+#[test]
+fn esc_ends_project_intersect_and_silhouette() {
+    let mut s = box_with_sketch_on_top();
+    for kind in [ToolKind::Project, ToolKind::Intersect, ToolKind::Silhouette] {
+        let steps = undo_len(&s);
+        {
+            let (se, sk) = s.session_sketch_mut().unwrap();
+            se.choose_kind(sk, kind);
+            assert_eq!(se.tool, Tool::ProjectEdge);
+            se.cancel(sk);
+            assert_eq!(se.tool, Tool::Select, "{kind:?}: Esc beendet den Befehl");
+            assert_eq!(se.kind_of(Tool::ProjectEdge), Some(kind), "Art gemerkt");
+        }
+        s.observe_sketch(false);
+        assert!(kinds(&s).is_empty());
+        assert_eq!(undo_len(&s), steps, "{kind:?}: nichts im Verlauf");
+    }
+}
+
 #[test]
 fn pick_becomes_target_by_filter() {
     let edge = Pick::Edge(EdgeRef {
