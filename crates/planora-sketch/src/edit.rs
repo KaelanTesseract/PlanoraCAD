@@ -1118,6 +1118,8 @@ impl Sketch {
         let control = new.control_points();
         debug_assert_eq!(control.len(), ids.len());
         let last = ids.len() - 1;
+        // Was die Knoteneinfügung nicht ändert, kann um Rundung abweichen: nicht als bewegt zählen.
+        let tol = self.tolerance().linear;
         let mut moved = Vec::new();
         for (i, (id, q)) in ids.iter().zip(control).enumerate() {
             let xy = q.truncate();
@@ -1127,7 +1129,7 @@ impl Sketch {
             if let Some(p) = *id
                 && i != 0
                 && i != last
-                && self.pos(p) != xy
+                && self.pos(p).distance(xy) > tol
             {
                 if self
                     .curves()

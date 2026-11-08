@@ -153,3 +153,66 @@ fn degree_change_rejects_other_kinds() {
     assert!(s.insert_control_point(c, DVec2::new(0.0, 0.0)).is_err());
     assert_eq!(parts(&s, c), before);
 }
+
+/// Hängt an jeden Punkt in `shared` eine Linie zu einem neuen Punkt.
+fn share(s: &mut Sketch, shared: &[PointId]) {
+    for &p in shared {
+        let q = s.add_point(0.0, -50.0 - p.index() as f64).unwrap();
+        s.add_line(p, q).unwrap();
+    }
+}
+
+/// Punkte (mit Lage), Kurvenarten und Zahl der Abhängigkeiten.
+type Snapshot = (Vec<(PointId, DVec2)>, Vec<CurveKind>, usize);
+
+fn snapshot(s: &Sketch) -> Snapshot {
+    (
+        s.points()
+            .map(|(p, _)| (p, s.point_xy(p).unwrap()))
+            .collect(),
+        s.curves().map(|(_, d)| d.kind.clone()).collect(),
+        s.constraints().count(),
+    )
+}
+
+#[test]
+fn shared_interior_points_reject_a_degree_change_and_leave_everything_alone() {
+    let mut s = sketch();
+    let (c, ids) = spline(&mut s, &WAVE, 3);
+    share(&mut s, &ids[1..6]);
+    s.add_constraint(K::Fixed(ids[0], 0.0, 0.0)).unwrap();
+    let before = snapshot(&s);
+    assert!(matches!(
+        s.set_control_spline_degree(c, 5),
+        Err(SketchError::Degenerate(_))
+    ));
+    assert_eq!(snapshot(&s), before);
+}
+
+#[test]
+fn shared_interior_points_reject_an_insert_and_leave_everything_alone() {
+    let mut s = sketch();
+    let (c, ids) = spline(&mut s, &WAVE, 3);
+    share(&mut s, &ids[1..6]);
+    s.add_constraint(K::Fixed(ids[0], 0.0, 0.0)).unwrap();
+    let before = snapshot(&s);
+    assert!(matches!(
+        s.insert_control_point(c, DVec2::new(25.0, 2.0)),
+        Err(SketchError::Degenerate(_))
+    ));
+    assert_eq!(snapshot(&s), before);
+}
+
+#[test]
+fn a_shared_point_outside_the_affected_group_does_not_block_an_insert() {
+    let mut s = sketch();
+    let (c, ids) = spline(&mut s, &WAVE, 3);
+    // Eingefügt wird nahe dem Anfang: Der vorletzte Punkt bleibt unberührt.
+    share(&mut s, &ids[5..6]);
+    let old = nurbs(&s, c);
+    let before = s.point_xy(ids[5]).unwrap();
+    let (p, _) = s.insert_control_point(c, DVec2::new(6.0, 5.0)).unwrap();
+    assert!(parts(&s, c).0.contains(&p));
+    assert_eq!(s.point_xy(ids[5]).unwrap(), before);
+    assert!(max_gap(&s, c, &old) < 1e-9);
+}
