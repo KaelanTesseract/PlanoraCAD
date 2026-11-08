@@ -5,9 +5,7 @@
 use planora_feature::*;
 use planora_kernel::BoolOp;
 use planora_math::DVec3;
-use planora_project::{
-    FORMAT_VERSION, ProjectError, decode_version, encode_version, required_format,
-};
+use planora_project::{ProjectError, decode_version, encode_version, required_format};
 use serde_json::{Value, json};
 
 // ---- Bausteine ----------------------------------------------------------------------------
@@ -103,11 +101,6 @@ fn good() -> (String, Document, [FeatureId; 5]) {
 }
 
 // ---- Tests --------------------------------------------------------------------------------
-
-#[test]
-fn format_version_is_11() {
-    assert_eq!(FORMAT_VERSION, 17); // seit Skizzen 7 (Spline mit Kontrollpunkten)
-}
 
 #[test]
 fn file_without_rollbacks_is_byte_identical_to_format_10() {

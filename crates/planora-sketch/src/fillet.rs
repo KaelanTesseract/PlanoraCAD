@@ -1023,7 +1023,13 @@ impl Sketch {
             match plan.corner {
                 Some(p) if moved.contains(&p) => {
                     if corner.is_some() {
-                        s.hold_point(p, &curves)?;
+                        // Vom gekürzten Spline ist die Ecke abgeschnitten: Dort hielte sie nichts,
+                        // die Zeile wäre ein Widerspruch.
+                        let on: Vec<CurveId> = (0..2)
+                            .filter(|&i| !matches!(plan.moves[i], EndMove::Cut { .. }))
+                            .map(|i| curves[i])
+                            .collect();
+                        s.hold_point(p, &on)?;
                     } else {
                         s.drop_orphans(&[p])?;
                     }

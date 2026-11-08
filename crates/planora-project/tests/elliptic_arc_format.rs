@@ -3,9 +3,7 @@
 
 use planora_feature::*;
 use planora_math::{DVec2, Tolerance};
-use planora_project::{
-    FORMAT_VERSION, ProjectError, decode_version, encode_version, required_format,
-};
+use planora_project::{ProjectError, decode_version, encode_version, required_format};
 use planora_sketch::{CurveKind, Sketch};
 
 /// Skizze mit Viertelellipse von (10, 0) nach (0, 5) und der Sehne zurück, dazu eine Extrusion.
@@ -53,11 +51,6 @@ fn document(with_arc: bool, remove_arc: bool) -> Document {
 fn load(text: &str) -> Result<Document, ProjectError> {
     let s = decode_version(text, "x.json")?;
     Document::from_snapshot(s, 0.05).map_err(|e| ProjectError::Invalid(e.to_string()))
-}
-
-#[test]
-fn format_version_is_13() {
-    assert_eq!(FORMAT_VERSION, 17); // seit Skizzen 7 (Spline mit Kontrollpunkten)
 }
 
 #[test]

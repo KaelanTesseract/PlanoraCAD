@@ -573,7 +573,7 @@ fn fillet_line_and_control_spline() {
     assert_eq!(end, pts[8], "das Ende hinter der Ecke fällt weg");
     // Die Mitte liegt im Abstand r von beiden Kurven, der Berührpunkt auf der Kurve.
     assert!((distance_to(&s, c, plan.arc.center) - 1.0).abs() < 1e-3);
-    assert!((plan.arc.center.x.abs() - 9.0).abs() - 1.0 < 1e-6);
+    assert!(((plan.arc.center.x.abs() - 9.0).abs() - 1.0).abs() < 1e-6);
     assert!(distance_to(&s, c, plan.touch[1]) < 1e-3);
     let ids = s.add_fillet(&plan, None).unwrap();
     // Gekürzt über denselben Weg wie Stutzen: Form gleich, das Ende ist der Berührpunkt.
@@ -1197,4 +1197,135 @@ fn fillet_at_a_shared_end_drops_the_old_corner() {
     Sketch::from_data(s.to_data()).unwrap();
     let rep = s.solve();
     assert_eq!(rep.status, SolveStatus::Solved, "{rep:?}");
+}
+
+#[test]
+fn fillet_at_a_corner_still_in_use_stays_solvable() {
+    // Die Ecke bleibt, weil eine dritte Kurve oder „deckungsgleich“ daran hängt. Sie liegt nach dem
+    // Kürzen nicht mehr auf dem Spline, darf dort also auch nicht festgehalten werden.
+    for r in [1.0, 3.0] {
+        for variant in ["dritte Kurve", "deckungsgleich", "Linie fest"] {
+            let mut s = sketch();
+            let pts = points(&mut s, &ARCH);
+            let c = s.add_control_spline(&pts, 3).unwrap();
+            let old = s.nurbs_of(c).unwrap();
+            let far = s.add_point(14.0, -20.0).unwrap();
+            let l = s.add_line(pts[5], far).unwrap();
+            match variant {
+                "dritte Kurve" => {
+                    let q = s.add_point(30.0, 5.0).unwrap();
+                    s.add_line(pts[5], q).unwrap();
+                }
+                "deckungsgleich" => {
+                    let q = s.add_point(14.0, 0.0).unwrap();
+                    s.add_constraint(K::Coincident(pts[5], q)).unwrap();
+                }
+                _ => {
+                    s.add_constraint(K::Fixed(pts[5], 14.0, 0.0)).unwrap();
+                }
+            }
+            let plan = s
+                .fillet_plan(pick(l, 14.0, -15.0), pick(c, 5.0, 5.0), r)
+                .expect("Plan");
+            assert_eq!(plan.corner, Some(pts[5]), "{variant}");
+            let ids = s.add_fillet(&plan, None).unwrap();
+            let held_on_spline = s
+                .constraints()
+                .any(|(_, d)| matches!(d.kind, K::PointOnCurve(p, k) if p == pts[5] && k == c));
+            assert!(!held_on_spline, "{variant}, r = {r}");
+            Sketch::from_data(s.to_data()).unwrap();
+            let rep = s.solve();
+            assert_eq!(
+                rep.status,
+                SolveStatus::Solved,
+                "{variant}, r = {r}: {rep:?}"
+            );
+            assert!(rep.conflicting.is_empty(), "{variant}, r = {r}: {rep:?}");
+            if matches!(plan.moves[1], EndMove::Cut { .. }) {
+                assert_eq!(ids.corner, Some(pts[5]), "{variant}");
+                assert_same_shape(&s, c, &old, 1e-6);
+            }
+        }
+    }
+}
+
+#[test]
+fn extend_reaches_a_near_target_on_long_curves() {
+    // Die Fortsetzung eines hohen Grades wächst über viele Bereichsbreiten über den Rechenbereich
+    // hinaus; ein Ziel dicht hinter dem Ende muss trotzdem getroffen werden.
+    for n in [24, 32, 48, 64] {
+        for degree in [3, 5] {
+            for past in [0.02, 0.5] {
+                let mut s = sketch();
+                let xy: Vec<(f64, f64)> = (0..n)
+                    .map(|i| (i as f64, 6.0 * (i as f64 * 0.7).sin()))
+                    .collect();
+                let pts = points(&mut s, &xy);
+                let c = s.add_control_spline(&pts, degree).unwrap();
+                let old = s.nurbs_of(c).unwrap();
+                let (_, hi) = old.domain();
+                let last = *pts.last().unwrap();
+                let from = s.point_xy(last).unwrap();
+                let tip = old.point_unclamped(hi + past).truncate();
+                let d = old.derivs_unclamped(hi + past, 1)[1].truncate();
+                let m = d.normalize().perp() * 2.0;
+                line(
+                    &mut s,
+                    (tip.x - m.x, tip.y - m.y),
+                    (tip.x + m.x, tip.y + m.y),
+                );
+                assert!(
+                    s.extend(c, from).unwrap(),
+                    "{n} Punkte, Grad {degree}, {past}"
+                );
+                let end = s.point_xy(last).unwrap();
+                assert!(
+                    end.distance(tip) < 1e-9,
+                    "{n}, {degree}, {past}: {end} statt {tip}"
+                );
+                assert_same_shape(&s, c, &old, 1e-6);
+                Sketch::from_data(s.to_data()).unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn fillet_of_two_control_splines_at_a_corner_in_use_cuts_both() {
+    let mut s = sketch();
+    let pts = points(&mut s, &ARCH);
+    let a = s.add_control_spline(&pts, 3).unwrap();
+    let other = points(
+        &mut s,
+        &[(18.0, 2.0), (22.0, 7.0), (28.0, 6.0), (32.0, 0.0)],
+    );
+    let mut chain = vec![pts[5]];
+    chain.extend(&other);
+    let b = s.add_control_spline(&chain, 3).unwrap();
+    let (old_a, old_b) = (s.nurbs_of(a).unwrap(), s.nurbs_of(b).unwrap());
+    let q = s.add_point(14.0, -20.0).unwrap();
+    s.add_line(pts[5], q).unwrap();
+    let plan = s
+        .fillet_plan(pick(a, 5.0, 5.0), pick(b, 24.0, 5.0), 0.5)
+        .expect("Plan");
+    assert!(
+        matches!(plan.moves[0], EndMove::Cut { .. }),
+        "{:?}",
+        plan.moves
+    );
+    assert!(
+        matches!(plan.moves[1], EndMove::Cut { .. }),
+        "{:?}",
+        plan.moves
+    );
+    s.add_fillet(&plan, None).unwrap();
+    assert!(s.point_xy(pts[5]).is_ok(), "die dritte Kurve hält die Ecke");
+    assert!(
+        !s.constraints()
+            .any(|(_, d)| matches!(d.kind, K::PointOnCurve(p, _) if p == pts[5]))
+    );
+    let rep = s.solve();
+    assert_eq!(rep.status, SolveStatus::Solved, "{rep:?}");
+    assert_same_shape(&s, a, &old_a, 1e-6);
+    assert_same_shape(&s, b, &old_b, 1e-6);
 }

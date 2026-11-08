@@ -515,18 +515,7 @@ impl Sketch {
         degree: u8,
         knots: Vec<f64>,
     ) -> Result<CurveId, SketchError> {
-        if !(2..=MAX_SPLINE_POINTS).contains(&points.len()) {
-            return Err(SketchError::InvalidInput(tr!(
-                "sketch-err-spline-count",
-                max = MAX_SPLINE_POINTS.to_string()
-            )));
-        }
-        for (i, &p) in points.iter().enumerate() {
-            self.check_point(p)?;
-            if points[..i].contains(&p) {
-                return Err(SketchError::InvalidInput(tr!("sketch-err-point-twice")));
-            }
-        }
+        self.check_spline_ids(points)?;
         Ok(self.push_curve(CurveKind::ControlSpline {
             points: points.to_vec(),
             degree,
@@ -534,8 +523,8 @@ impl Sketch {
         }))
     }
 
-    /// Prüfungen eines neuen Splines: Punktzahl, lebende Punkte ohne Doppelte, Nachbarn getrennt.
-    fn check_spline_points(&self, points: &[PointId]) -> Result<(), SketchError> {
+    /// Punktzahl und lebende Punkte ohne Doppelte, für jeden Spline.
+    fn check_spline_ids(&self, points: &[PointId]) -> Result<(), SketchError> {
         if !(2..=MAX_SPLINE_POINTS).contains(&points.len()) {
             return Err(SketchError::InvalidInput(tr!(
                 "sketch-err-spline-count",
@@ -548,6 +537,12 @@ impl Sketch {
                 return Err(SketchError::InvalidInput(tr!("sketch-err-point-twice")));
             }
         }
+        Ok(())
+    }
+
+    /// Prüfungen eines neuen Splines: Punktzahl, lebende Punkte ohne Doppelte, Nachbarn getrennt.
+    fn check_spline_points(&self, points: &[PointId]) -> Result<(), SketchError> {
+        self.check_spline_ids(points)?;
         if points
             .windows(2)
             .any(|w| self.pos(w[0]).distance(self.pos(w[1])) <= self.tol.linear)

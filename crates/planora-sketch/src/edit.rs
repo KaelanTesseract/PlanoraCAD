@@ -13,7 +13,7 @@
 //! schneidenden Kurve oder „Punkt auf Kurve“ an ihr.
 
 use crate::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
-use crate::curves::snap_to_knot;
+use crate::curves::{nurbs_breaks, snap_to_knot};
 use crate::error::SketchError;
 use crate::geom::Geom;
 use crate::intersect::{Prepared, clean_params, intersect_prepared};
@@ -336,25 +336,43 @@ impl Sketch {
             (points[0], lo)
         };
         let from = self.pos(point);
-        // Nur das neue Stück: Schnitte mit dem alten Teil der Kurve zählen nicht.
-        let long = if at_end {
-            curve.extended(lo, hi + far).ok()?
+        // Die Suche wächst von der Breite des Randstücks an: Die Fortsetzung eines hohen Grades läuft
+        // schnell aus dem Rechenbereich, und nur dicht am Ende trifft ihr Linienzug genau. Der erste
+        // Bereich mit einem Treffer enthält den nächsten; passt er nicht mehr, gibt es kein Ziel.
+        let breaks = nurbs_breaks(curve, lo, hi);
+        let mut reach = if at_end {
+            hi - breaks[breaks.len() - 2]
         } else {
-            curve.extended(lo - far, hi).ok()?
+            breaks[1] - lo
+        }
+        .min(far);
+        let (search, t, cutter) = loop {
+            // Nur das neue Stück: Schnitte mit dem alten Teil der Kurve zählen nicht.
+            let stub = if at_end {
+                curve
+                    .extended(lo, hi + reach)
+                    .and_then(|long| long.sub_curve(hi, hi + reach))
+            } else {
+                curve
+                    .extended(lo - reach, hi)
+                    .and_then(|long| long.sub_curve(lo - reach, lo))
+            }
+            .ok()?;
+            let search = Geom::Nurbs {
+                curve: Arc::new(stub),
+            };
+            let ahead = |t: f64| {
+                let gap = (t - end).abs();
+                (search.eval(t).0.distance(from) > tol).then_some(gap)
+            };
+            if let Some((_, t, cutter)) = self.nearest_extend_hit(c, &search, ahead) {
+                break (search, t, cutter);
+            }
+            if reach >= far {
+                return None;
+            }
+            reach = (2.0 * reach).min(far);
         };
-        let stub = if at_end {
-            long.sub_curve(hi, hi + far).ok()?
-        } else {
-            long.sub_curve(lo - far, lo).ok()?
-        };
-        let search = Geom::Nurbs {
-            curve: Arc::new(stub),
-        };
-        let ahead = |t: f64| {
-            let gap = (t - end).abs();
-            (search.eval(t).0.distance(from) > tol).then_some(gap)
-        };
-        let (_, t, cutter) = self.nearest_extend_hit(c, &search, ahead)?;
         let hit = search.eval(t).0;
         let to = self
             .cutter_point_at(cutter, hit)
