@@ -283,7 +283,8 @@ impl ToolKind {
                 crate::msg!("sketch-chamfer-too-big")
             }
             PatternRect | PatternCircular => crate::msg!("sketch-pattern-empty"),
-            Project | Intersect => crate::msg!("sketch-pick-project"),
+            Project => crate::msg!("sketch-pick-project"),
+            Intersect => crate::msg!("sketch-pick-intersect"),
             Silhouette => crate::msg!("sketch-pick-silhouette"),
         }
     }
@@ -1451,5 +1452,18 @@ impl SketchSession {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Die Ablehnung von „Schneiden“ nennt die Fläche, nicht das Projizieren.
+    #[test]
+    fn intersect_refusal_has_own_text() {
+        let text = ToolKind::Intersect.refusal().text();
+        assert_eq!(text, crate::msg!("sketch-pick-intersect").text());
+        assert_ne!(text, ToolKind::Project.refusal().text());
     }
 }

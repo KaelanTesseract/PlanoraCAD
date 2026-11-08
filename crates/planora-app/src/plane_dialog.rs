@@ -581,12 +581,21 @@ impl PlaneDialog {
                 )
                 .map_err(|e| crate::msg!("field-error", label = label.as_str(), error = e))?;
                 if v.abs() > MAX_COORD_MM {
-                    return Err(crate::msg!(
-                        "edit-too-big",
-                        label = label.as_str(),
-                        max = MsgArg::LenAs(MAX_COORD_MM, format!("{MAX_COORD_MM:e}")),
-                        unit = MsgArg::Unit
-                    ));
+                    // Längenfeld: Längeneinheit der Anzeige; Winkelfeld: Grad.
+                    return Err(if unit == ParamUnit::Angle {
+                        crate::msg!(
+                            "edit-too-big-angle",
+                            label = label.as_str(),
+                            max = MsgArg::Plain(MAX_COORD_MM)
+                        )
+                    } else {
+                        crate::msg!(
+                            "edit-too-big",
+                            label = label.as_str(),
+                            max = MsgArg::LenAs(MAX_COORD_MM, format!("{MAX_COORD_MM:e}")),
+                            unit = MsgArg::Unit
+                        )
+                    });
                 }
                 if let Some(f) = formula {
                     formulas.insert(key, f);

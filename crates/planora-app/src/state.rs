@@ -1791,8 +1791,10 @@ impl AppState {
 
     /// Wie [`AppState::pick`], mit Wahl, was zählt ([`PickFilter`]). Reihenfolge: Eckpunkt
     /// (nur mit `filter.vertices`), Kante (mit `filter.edges`), dann das Vordere aus Fläche und
-    /// Ebene (eine ausgeschaltete Fläche ergibt nichts, verdeckt aber weiter). Eine Ebene
-    /// verdeckt Ecken und Kanten dahinter wie eine Fläche; liegt eine Fläche näher, gewinnt sie.
+    /// Ebene (eine ausgeschaltete Fläche ergibt nichts, verdeckt aber weiter). Ob eine Ebene
+    /// Ecken und Kanten dahinter verdeckt, hängt vom Filter ab: bei `planes: true` verdeckt sie
+    /// wie eine Fläche (liegt eine Fläche näher, gewinnt diese); mit `planes: false` (etwa
+    /// `PickFilter::VERTICES`) zählen Ebenen nicht und verdecken nichts.
     pub fn pick_with(&self, cursor: Vec2, viewport: Vec2, filter: PickFilter) -> Option<Pick> {
         if viewport.x < 1.0 || viewport.y < 1.0 {
             return None;

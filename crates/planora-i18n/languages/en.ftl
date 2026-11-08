@@ -766,6 +766,7 @@ edit-title = Edit "{ $name }"
 edit-stale = The feature has been changed in the meantime; the window now shows the current state. Please check the values and apply again.
 edit-numbers-only = { $label }: Only numbers are possible here.
 edit-invalid-number = Invalid number for "{ $label }": "{ $text }"
+edit-too-big-angle = The value for "{ $label }" is too large (absolute value at most { $max }°)
 edit-too-big = The value for "{ $label }" is too large (absolute value at most { $max } { $unit })
 edit-op-difference = Subtract (target − tool)
 edit-rejected = The change was rejected: { $error }

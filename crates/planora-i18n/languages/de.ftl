@@ -758,6 +758,7 @@ edit-title = „{ $name }“ bearbeiten
 edit-stale = Das Feature wurde inzwischen geändert; der Dialog zeigt jetzt den aktuellen Stand. Bitte die Werte prüfen und erneut übernehmen.
 edit-numbers-only = { $label }: Hier sind nur Zahlen möglich.
 edit-invalid-number = Ungültige Zahl bei „{ $label }“: „{ $text }“
+edit-too-big-angle = Der Wert bei „{ $label }“ ist zu groß (Betrag höchstens { $max }°)
 edit-too-big = Der Wert bei „{ $label }“ ist zu groß (Betrag höchstens { $max } { $unit })
 edit-op-difference = Abziehen (Ziel − Werkzeug)
 edit-rejected = Die Änderung wurde abgelehnt: { $error }
