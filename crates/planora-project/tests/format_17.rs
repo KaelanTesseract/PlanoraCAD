@@ -191,6 +191,84 @@ fn conic_sketch() -> (Sketch, CurveId) {
     (sk, c)
 }
 
+/// Spline mit einem Griff am mittleren Stützpunkt; die Griff-Linie und die Spitze sind dabei.
+fn handled_sketch() -> (Sketch, CurveId, CurveId, planora_sketch::PointId) {
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze1", Tolerance::default());
+    let pts: Vec<_> = [(0.0, 0.0), (10.0, 6.0), (20.0, -2.0), (30.0, 3.0)]
+        .iter()
+        .map(|&(x, y)| sk.add_point(x, y).unwrap())
+        .collect();
+    let c = sk.add_spline(&pts).unwrap();
+    let line = sk.activate_tangent_handle(c, pts[1]).unwrap();
+    (sk, c, line, pts[1])
+}
+
+#[test]
+fn handles_need_17_and_roundtrip() {
+    let (sk, c, line, _) = handled_sketch();
+    let snap = document(sk.clone()).snapshot();
+    assert_eq!(required_format(&snap), 17);
+    let text = encode_version(&snap).unwrap();
+    assert_eq!(format_of(&text), 17);
+    assert!(text.contains("\"griffe\""), "{text}");
+    assert!(text.contains("\"spitze\""), "{text}");
+    // Griff mit Form: keine Angabe zur Krümmung in der Datei
+    assert!(!text.contains("\"kruemmung\""), "{text}");
+    let back = decode_version(&text, "x.json").unwrap();
+    let got = sketch_of(&back);
+    assert_eq!(got.curve(c).unwrap().kind, sk.curve(c).unwrap().kind);
+    assert!(got.curve(line).unwrap().construction);
+    assert_eq!(encode_version(&back).unwrap(), text);
+    assert_eq!(got.curve_eval(c, 1.3), sk.curve_eval(c, 1.3));
+    // Kein Griff in einer älteren Formatnummer.
+    let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    v["format"] = 16.into();
+    let old = serde_json::to_string_pretty(&v).unwrap();
+    assert!(matches!(
+        decode_version(&old, "x.json"),
+        Err(ProjectError::Corrupt { .. })
+    ));
+}
+
+#[test]
+fn without_handles_the_spline_needs_no_17_and_no_griffe_field() {
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze1", Tolerance::default());
+    let pts: Vec<_> = [(0.0, 0.0), (10.0, 6.0), (20.0, -2.0)]
+        .iter()
+        .map(|&(x, y)| sk.add_point(x, y).unwrap())
+        .collect();
+    sk.add_spline(&pts).unwrap();
+    let snap = document(sk).snapshot();
+    assert!(required_format(&snap) < 17);
+    let text = encode_version(&snap).unwrap();
+    assert!(!text.contains("griffe"), "{text}");
+}
+
+#[test]
+fn a_switched_off_handle_needs_no_17_any_more() {
+    let (mut sk, c, _, at) = handled_sketch();
+    sk.deactivate_handle(c, at).unwrap();
+    assert!(required_format(&document(sk).snapshot()) < 17);
+}
+
+#[test]
+fn bad_handle_in_the_file_is_refused() {
+    let (sk, ..) = handled_sketch();
+    let text = encode_version(&document(sk).snapshot()).unwrap();
+    // Griff an einem Punkt, der kein Stützpunkt ist: an der Spitze selbst.
+    let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let griffe = v["features"][0]["art"]["skizze"]["kurven"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|k| k["art"]["griffe"].is_array())
+        .unwrap();
+    let griff = &mut griffe["art"]["griffe"][0];
+    griff["an"] = griff["spitze"].clone();
+    let broken = serde_json::to_string_pretty(&v).unwrap();
+    assert!(decode_version(&broken, "x.json").is_err());
+}
+
 #[test]
 fn conic_needs_17_and_roundtrips() {
     let (sk, c) = conic_sketch();

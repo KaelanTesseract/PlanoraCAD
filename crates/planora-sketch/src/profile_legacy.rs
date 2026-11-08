@@ -105,7 +105,7 @@ impl Sketch {
                         reason,
                     }),
                 },
-                CurveKind::Spline { points } | CurveKind::ControlSpline { points, .. } => {
+                CurveKind::Spline { points, .. } | CurveKind::ControlSpline { points, .. } => {
                     match (points.first(), points.last()) {
                         (Some(first), Some(last)) if points.len() >= 2 => {
                             let (na, nb) = (node(self.pos(*first)), node(self.pos(*last)));
@@ -348,7 +348,13 @@ impl Sketch {
             let edge = &edges[e];
             let target = reps[if forward { edge.b } else { edge.a }];
             let seg = match &self.curves[edge.curve].kind {
-                CurveKind::Spline { points } => self.spline_segment(points, forward)?,
+                CurveKind::Spline { points, handles } => {
+                    if handles.is_empty() {
+                        self.spline_segment(points, forward)?
+                    } else {
+                        nurbs_segment(self.handled_spline_nurbs(edge.curve)?, forward)?
+                    }
+                }
                 CurveKind::ControlSpline { .. } | CurveKind::Conic { .. } => {
                     let Some(curve) = self.nurbs_of(edge.curve) else {
                         return Err(SketchError::Degenerate(tr!("sketch-err-spline-neighbours")));

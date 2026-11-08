@@ -861,7 +861,7 @@ fn ellipse_elliptic_arc_and_spline_turn_with_the_circular_pattern() {
                         assert!(close(want, got, 1e-9), "{:?}", inst.at);
                     }
                 }
-                (CurveKind::Spline { points: a }, CurveKind::Spline { points: b }) => {
+                (CurveKind::Spline { points: a, .. }, CurveKind::Spline { points: b, .. }) => {
                     assert_eq!(a.len(), b.len());
                     for (p, q) in a.iter().zip(b) {
                         assert!(close(rot(at(&s, *p)), at(&s, *q), 1e-9));

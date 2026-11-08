@@ -704,6 +704,8 @@ impl Sketch {
             self.drop_orphans(&old_points)?;
             return Ok(Vec::new());
         }
+        // Skizzen 7: bis Task 8; die ganze Kurve zu löschen geht schon oben.
+        self.check_without_handles(c)?;
         let mut ends: Vec<NewEnd> = Vec::new();
         // Getrennte Punkte an einer Trennstelle beim Brechen (werden deckungsgleich).
         let mut joins: Vec<(PointId, PointId)> = Vec::new();
@@ -772,7 +774,7 @@ impl Sketch {
                     CurveKind::Line { a, b } => (*a, *b),
                     CurveKind::Arc { start, end, .. }
                     | CurveKind::EllipticArc { start, end, .. } => (*start, *end),
-                    CurveKind::Spline { points } | CurveKind::ControlSpline { points, .. } => {
+                    CurveKind::Spline { points, .. } | CurveKind::ControlSpline { points, .. } => {
                         (points[0], points[points.len() - 1])
                     }
                     CurveKind::Conic { start, end, .. } => (*start, *end),
@@ -827,8 +829,9 @@ impl Sketch {
                             start: s,
                             end: e,
                         },
-                        CurveKind::Spline { points } => CurveKind::Spline {
+                        CurveKind::Spline { points, .. } => CurveKind::Spline {
                             points: self.spline_piece(g, points, s, e, u0, u1)?,
+                            handles: Vec::new(),
                         },
                         CurveKind::ControlSpline { .. } => {
                             self.control_spline_piece(c, u0, u1, s, e)?
@@ -906,10 +909,13 @@ impl Sketch {
     /// Der Punkt der Kurve `k`, der höchstens `tol.linear` von `at` entfernt liegt (der nächste).
     fn cutter_point_at(&self, k: CurveId, at: DVec2) -> Option<PointId> {
         let tol = self.tolerance().linear;
-        self.curves[k]
-            .kind
-            .points()
-            .into_iter()
+        let kind = &self.curves[k].kind;
+        // Griffspitzen liegen nicht auf dem Spline.
+        let own = match kind {
+            CurveKind::Spline { points, .. } => points.clone(),
+            other => other.points(),
+        };
+        own.into_iter()
             .filter(|&q| self.check_point(q).is_ok())
             .map(|q| (q, self.pos(q).distance(at)))
             .filter(|&(_, d)| d <= tol)
@@ -1039,7 +1045,7 @@ impl Sketch {
             } => Ok(self
                 .add_elliptic_arc_vars(center, ax, ay, minor, start, end)
                 .0),
-            CurveKind::Spline { points } => self.add_spline(&points),
+            CurveKind::Spline { points, .. } => self.add_spline(&points),
             CurveKind::ControlSpline {
                 points,
                 degree,

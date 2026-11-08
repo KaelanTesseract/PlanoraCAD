@@ -20,6 +20,31 @@ pub struct PointData {
 }
 pub type PointId = Id<PointData>;
 
+/// Krümmung an einem Tangentengriff (Skizzen 7, B).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum HandleCurvature {
+    /// Die Krümmung ergibt sich aus der Kurve.
+    Form,
+    /// Krümmung 0 (entsteht nur durch Glatt an einer Linie).
+    Straight,
+    /// Krümmungsgriff: ein Konstruktionsbogen um `center` zwischen `at` und `other`.
+    Arc {
+        arc: CurveId,
+        center: PointId,
+        other: PointId,
+    },
+}
+
+/// Griff an einem Stützpunkt eines Splines: Die Konstruktionslinie `line` läuft von `at` nach `tip`,
+/// die Ableitung der Kurve am Stützpunkt ist `3·(tip − at)`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SplineHandle {
+    pub at: PointId,
+    pub line: CurveId,
+    pub tip: PointId,
+    pub curvature: HandleCurvature,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum CurveKind {
     Line {
@@ -43,9 +68,11 @@ pub enum CurveKind {
         ay: usize,
         minor: usize,
     },
-    /// Natürlicher kubischer Spline durch die Stützpunkte.
+    /// Kubischer Spline durch die Stützpunkte; natürlich, solange `handles` leer ist (dann derselbe
+    /// Codeweg wie vor den Griffen), sonst nach `spline_handles.rs`.
     Spline {
         points: Vec<PointId>,
+        handles: Vec<SplineHandle>,
     },
     /// Gegen den Uhrzeigersinn von `start` nach `end` auf der Ellipse
     /// `center + a·cos t + b̂·minor·sin t` (große Halbachse `a = (ax, ay)`, siehe
@@ -87,15 +114,33 @@ impl CurveKind {
             CurveKind::Line { a, b } => vec![*a, *b],
             CurveKind::Circle { center, .. } | CurveKind::Ellipse { center, .. } => vec![*center],
             CurveKind::Arc { center, start, end } => vec![*center, *start, *end],
-            CurveKind::Spline { points } | CurveKind::ControlSpline { points, .. } => {
-                points.clone()
+            CurveKind::Spline { points, handles } => {
+                // Die Griffe gehören zur Punktgruppe: So nimmt der Löser sie in dieselbe Gruppe.
+                let mut out = points.clone();
+                for h in handles {
+                    out.push(h.tip);
+                    if let HandleCurvature::Arc { center, other, .. } = h.curvature {
+                        out.extend([center, other]);
+                    }
+                }
+                out
             }
+            CurveKind::ControlSpline { points, .. } => points.clone(),
             CurveKind::EllipticArc {
                 center, start, end, ..
             } => vec![*center, *start, *end],
             CurveKind::Conic {
                 start, end, apex, ..
             } => vec![*start, *apex, *end],
+        }
+    }
+
+    /// Die Stützpunkte eines Splines bzw. die Kontrollpunkte eines Splines mit Kontrollpunkten, ohne
+    /// Griffe; leer bei allen anderen Arten.
+    pub fn fit_points(&self) -> &[PointId] {
+        match self {
+            CurveKind::Spline { points, .. } | CurveKind::ControlSpline { points, .. } => points,
+            _ => &[],
         }
     }
 }
@@ -506,6 +551,7 @@ impl Sketch {
         self.check_spline_points(points)?;
         Ok(self.push_curve(CurveKind::Spline {
             points: points.to_vec(),
+            handles: Vec::new(),
         }))
     }
 
@@ -732,15 +778,14 @@ impl Sketch {
     /// Punkt des Splines beim Parameter `t` (auf `[0, n − 1]` geklemmt). `None` für andere
     /// Kurven oder nicht endliches `t`.
     pub fn spline_point(&self, c: CurveId, t: f64) -> Option<DVec2> {
-        let CurveKind::Spline { points } = &self.curve(c)?.kind else {
+        let CurveKind::Spline { points, handles } = &self.curve(c)?.kind else {
             return None;
         };
         if !t.is_finite() {
             return None;
         }
-        let xy: Vec<DVec2> = points.iter().map(|&p| self.pos(p)).collect();
-        let t = t.clamp(0.0, (xy.len() - 1) as f64);
-        Some(crate::curves::Sampled::spline(&xy).eval(t).0)
+        let t = t.clamp(0.0, (points.len() - 1) as f64);
+        Some(self.spline_sampled(points, handles).eval(t).0)
     }
 
     pub fn curve(&self, c: CurveId) -> Option<&CurveData> {
@@ -765,9 +810,14 @@ impl Sketch {
     }
 
     /// Gehört die Kurve zu einem Muster, gilt der Stil für die Vorlage und alle ihre Exemplare
-    /// (Stil wie die Vorlage, auch nach späterem Umschalten).
+    /// (Stil wie die Vorlage, auch nach späterem Umschalten). Griffe bleiben Konstruktion.
     pub fn set_construction(&mut self, c: CurveId, construction: bool) -> Result<(), SketchError> {
         self.check_curve(c)?;
+        if !construction && self.is_handle_curve(c) {
+            return Err(SketchError::WrongType(tr!(
+                "sketch-err-handle-construction"
+            )));
+        }
         for x in self.pattern_style_group(c) {
             self.curves[x].construction = construction;
             self.curves[x].centerline = false;
@@ -782,6 +832,11 @@ impl Sketch {
         self.check_curve(c)?;
         if !matches!(self.curves[c].kind, CurveKind::Line { .. }) {
             return Err(SketchError::WrongType(tr!("sketch-err-centerline-type")));
+        }
+        if self.is_handle_curve(c) {
+            return Err(SketchError::WrongType(tr!(
+                "sketch-err-handle-construction"
+            )));
         }
         for x in self.pattern_style_group(c) {
             self.curves[x].construction = on;

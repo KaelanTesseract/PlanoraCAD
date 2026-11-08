@@ -518,7 +518,7 @@ fn offset_control_spline_is_a_fit_spline_at_distance() {
             CurveKind::Spline { .. }
         ));
         // Alle Stützpunkte liegen genau im Abstand, die Kurve dazwischen nahe daran.
-        let CurveKind::Spline { points: fit } = s.curve(copy).unwrap().kind.clone() else {
+        let CurveKind::Spline { points: fit, .. } = s.curve(copy).unwrap().kind.clone() else {
             unreachable!()
         };
         for p in &fit {

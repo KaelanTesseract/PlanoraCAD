@@ -351,6 +351,11 @@ impl Sketch {
     /// `PatternValue` (bei „Voll“ ohne Winkel; Anzahl und Abstand der zweiten Richtung auch bei
     /// Anzahl 1), dann einmal lösen. Bei einem Fehler bleibt die Skizze unverändert.
     pub fn add_pattern(&mut self, plan: &PatternPlan) -> Result<PatternId, SketchError> {
+        for &c in &plan.sources {
+            if self.check_curve(c).is_ok() {
+                self.check_without_handles(c)?;
+            }
+        }
         let transforms = self
             .pattern_transforms(plan)
             .map_err(PatternProblem::error)?;

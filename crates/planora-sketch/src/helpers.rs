@@ -108,6 +108,7 @@ impl Sketch {
             if matches!(self.curves[c].kind, CurveKind::Ellipse { .. }) {
                 return Err(SketchError::WrongType(tr!("sketch-err-copy-kinds")));
             }
+            self.check_without_handles(c)?;
         }
         Ok(())
     }
@@ -204,7 +205,7 @@ impl Sketch {
                 let major = t.linear(DVec2::new(self.vars[ax], self.vars[ay]));
                 self.add_ellipse(map[&center], major, self.vars[minor] * factor)?
             }
-            CurveKind::Spline { points } => {
+            CurveKind::Spline { points, .. } => {
                 let mapped: Vec<PointId> = points.iter().map(|p| map[p]).collect();
                 self.add_spline(&mapped)?
             }

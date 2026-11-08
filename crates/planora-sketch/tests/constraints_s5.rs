@@ -79,7 +79,7 @@ fn into_curve(s: &Sketch, c: CurveId, p: PointId) -> DVec2 {
             let r = at(s, p) - at(s, center);
             if p == start { r.perp() } else { -r.perp() }
         }
-        CurveKind::Spline { points } => {
+        CurveKind::Spline { points, .. } => {
             let n = (points.len() - 1) as f64;
             let h = 1e-6;
             if p == points[0] {

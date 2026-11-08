@@ -420,6 +420,10 @@ impl Sketch {
             return None;
         }
         let g = self.geom(pick.curve)?;
+        // Griffe bleiben, wie sie sind: Abrunden würde die Linie vom Stützpunkt lösen.
+        if self.is_handle_curve(pick.curve) {
+            return None;
+        }
         let ends = match &self.curve(pick.curve)?.kind {
             CurveKind::Line { a, b } => Some([*a, *b]),
             CurveKind::Arc { start, end, .. } | CurveKind::EllipticArc { start, end, .. } => {

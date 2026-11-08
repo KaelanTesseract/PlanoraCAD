@@ -4,8 +4,8 @@
 use crate::constraint::{ConstraintData, ConstraintId, ConstraintKind};
 use crate::error::SketchError;
 use crate::model::{
-    CurveData, CurveId, CurveKind, MAX_COORD, MAX_SPLINE_POINTS, PointData, PointId, Sketch,
-    check_conic_rho, finite,
+    CurveData, CurveId, CurveKind, HandleCurvature, MAX_COORD, MAX_SPLINE_POINTS, PointData,
+    PointId, Sketch, check_conic_rho, finite,
 };
 use crate::pattern::{
     CircularMode, PatternData, PatternDir, PatternInstance, PatternKind, PatternProblem,
@@ -202,7 +202,7 @@ impl Sketch {
                 {
                     return Err(bad(tr!("sketch-err-data-ellipse-value")));
                 }
-                CurveKind::Spline { points }
+                CurveKind::Spline { points, .. }
                     if points.len() < 2 || points.len() > MAX_SPLINE_POINTS =>
                 {
                     return Err(bad(tr!("sketch-err-data-spline-count")));
@@ -229,6 +229,7 @@ impl Sketch {
                 return Err(bad(tr!("sketch-err-data-curve-deleted")));
             }
         }
+        check_handles(&d)?;
         for c in &d.constraints {
             if !(-1..=1).contains(&c.branch) {
                 return Err(bad(tr!("sketch-err-data-constraint-place")));
@@ -338,6 +339,49 @@ impl Sketch {
         s.refresh_shared_signs(None);
         Ok((s, dissolved))
     }
+}
+
+/// Prüft die Griffe aller Splines, auch gelöschter Einträge: am Stützpunkt, je Stützpunkt einer, die
+/// Spitze kein Stützpunkt, die Griff-Linie eine Konstruktionslinie von `at` nach `tip`, die nur diesem
+/// Griff gehört, der Krümmungsgriff ein Bogen um `center` zwischen `at` und `other`. An einem lebenden
+/// Spline leben Linie und Bogen. Die Punkte hat die Prüfung der Kurven schon gesehen.
+fn check_handles(d: &SketchData) -> Result<(), SketchError> {
+    let wrong = || bad(tr!("sketch-err-data-handle"));
+    let mut used: HashSet<CurveId> = HashSet::new();
+    for c in &d.curves {
+        let CurveKind::Spline { points, handles } = &c.kind else {
+            continue;
+        };
+        let mut seen: HashSet<PointId> = HashSet::new();
+        for h in handles {
+            if !points.contains(&h.at) || points.contains(&h.tip) || !seen.insert(h.at) {
+                return Err(wrong());
+            }
+            let line = d.curves.get(h.line.index()).ok_or_else(wrong)?;
+            let fits = line.kind == CurveKind::Line { a: h.at, b: h.tip } && line.construction;
+            if !fits || (c.alive && !line.alive) || !used.insert(h.line) {
+                return Err(wrong());
+            }
+            if let HandleCurvature::Arc { arc, center, other } = h.curvature {
+                let bow = d.curves.get(arc.index()).ok_or_else(wrong)?;
+                let fits = match bow.kind {
+                    CurveKind::Arc {
+                        center: m,
+                        start,
+                        end,
+                    } => {
+                        m == center
+                            && ((start, end) == (h.at, other) || (start, end) == (other, h.at))
+                    }
+                    _ => false,
+                };
+                if !fits || !bow.construction || (c.alive && !bow.alive) || !used.insert(arc) {
+                    return Err(wrong());
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Prüft Punktzahl, Grad und Knoten eines Splines mit Kontrollpunkten: 2 bis

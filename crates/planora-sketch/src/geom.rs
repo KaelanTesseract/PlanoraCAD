@@ -123,6 +123,10 @@ impl Geom {
                 let (s, co) = t.sin_cos();
                 -(*a * co + *b * s)
             }
+            Geom::Spline {
+                s: Sampled::Hermite { nodes },
+                ..
+            } => nodes.second_at(t),
             Geom::Spline { s, n } => {
                 // linear zwischen den zweiten Ableitungen der Segmentenden
                 spline_segment(s, *n, t)
@@ -375,6 +379,13 @@ impl Geom {
                 let mut pts = curve.control_points().iter().map(|p| p.truncate());
                 fold(&mut pts)
             }
+            Geom::Spline {
+                s: Sampled::Hermite { nodes },
+                n,
+            } => {
+                let mut pts = (0..n - 1).flat_map(|i| nodes.bezier(i));
+                fold(&mut pts)
+            }
             Geom::Spline { n, .. } => {
                 let mut pts = (0..n - 1).flat_map(|i| {
                     let (p0, d0) = self.eval(i as f64);
@@ -595,13 +606,10 @@ impl Sketch {
                     Geom::Ellipse { c: m, a, b }
                 }
             }
-            CurveKind::Spline { points } => {
-                let xy: Vec<DVec2> = points.iter().map(|&p| self.pos(p)).collect();
-                Geom::Spline {
-                    s: Sampled::spline(&xy),
-                    n: xy.len(),
-                }
-            }
+            CurveKind::Spline { points, handles } => Geom::Spline {
+                s: self.spline_sampled(points, handles),
+                n: points.len(),
+            },
             CurveKind::ControlSpline { .. } | CurveKind::Conic { .. } => Geom::Nurbs {
                 curve: self.nurbs_of(c)?,
             },

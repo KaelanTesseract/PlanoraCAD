@@ -312,7 +312,7 @@ fn open_ends(sketch: &Sketch, c: CurveId) -> Option<[DVec2; 2]> {
         CurveKind::Arc { start, end, .. } | CurveKind::EllipticArc { start, end, .. } => {
             (*start, *end)
         }
-        CurveKind::Spline { points } | CurveKind::ControlSpline { points, .. } => {
+        CurveKind::Spline { points, .. } | CurveKind::ControlSpline { points, .. } => {
             (*points.first()?, *points.last()?)
         }
         CurveKind::Conic { start, end, .. } => (*start, *end),
@@ -453,7 +453,7 @@ pub(crate) fn ends_of(kind: &CurveKind) -> Vec<PointId> {
         CurveKind::Arc { start, end, .. } | CurveKind::EllipticArc { start, end, .. } => {
             vec![*start, *end]
         }
-        CurveKind::Spline { points } | CurveKind::ControlSpline { points, .. } => {
+        CurveKind::Spline { points, .. } | CurveKind::ControlSpline { points, .. } => {
             vec![points[0], points[points.len() - 1]]
         }
         CurveKind::Conic { start, end, .. } => vec![*start, *end],

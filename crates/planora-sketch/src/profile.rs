@@ -269,9 +269,12 @@ impl Sketch {
     /// Natürlicher kubischer Spline durch die Stützpunkte des Splines `id` mit den Parametern
     /// `0, 1, …, n − 1` (wie [`Sketch::spline_point`]).
     fn natural_spline(&self, id: CurveId) -> Result<NurbsCurve, SketchError> {
-        let CurveKind::Spline { points } = &self.curves[id].kind else {
+        let CurveKind::Spline { points, handles } = &self.curves[id].kind else {
             return Err(SketchError::Degenerate(tr!("sketch-err-spline-two-points")));
         };
+        if !handles.is_empty() {
+            return self.handled_spline_nurbs(id);
+        }
         let pts: Vec<DVec3> = points
             .iter()
             .map(|&q| {
@@ -341,7 +344,7 @@ impl Sketch {
                     return Err(SketchError::Degenerate(elliptic_arc_off_ellipse()));
                 }
             }
-            CurveKind::Spline { points } => {
+            CurveKind::Spline { points, .. } => {
                 if points.len() < 2 {
                     // Kann bei einer gültigen Skizze nicht auftreten (`add_spline` und das Laden
                     // verlangen zwei Punkte); zur Sicherheit benannt statt einer Panik.

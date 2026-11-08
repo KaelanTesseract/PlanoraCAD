@@ -3,6 +3,7 @@
 
 use crate::dual::Dual;
 use crate::model::within_coord_range;
+use crate::spline_handles::Nodes;
 use planora_math::nurbs::{MAX_WEIGHT, MIN_WEIGHT, NurbsCurve, NurbsError};
 use planora_math::{DVec2, TAU};
 use std::sync::Arc;
@@ -157,6 +158,10 @@ pub(crate) enum Sampled {
         m: [Vec<Dual>; 2],
     },
     Nurbs(Arc<NurbsCurve>),
+    /// Spline mit Griffen: quintische Hermite-Stücke durch die Knotenwerte (`spline_handles.rs`).
+    Hermite {
+        nodes: Nodes<DVec2>,
+    },
 }
 
 fn c(v: f64) -> Dual {
@@ -202,6 +207,7 @@ impl Sampled {
                 let d = curve.derivs_unclamped(t, 1);
                 (d[0].truncate(), d[1].truncate())
             }
+            Sampled::Hermite { nodes } => nodes.eval(t),
         }
     }
 
@@ -212,6 +218,10 @@ impl Sampled {
             Sampled::Ellipse { .. } => (TAU, ELLIPSE_SAMPLES),
             Sampled::Spline { y, .. } => {
                 let segs = y[0].len() - 1;
+                (segs as f64, segs * SPLINE_SAMPLES_PER_SEGMENT)
+            }
+            Sampled::Hermite { nodes } => {
+                let segs = nodes.value.len() - 1;
                 (segs as f64, segs * SPLINE_SAMPLES_PER_SEGMENT)
             }
             Sampled::Nurbs(curve) => {

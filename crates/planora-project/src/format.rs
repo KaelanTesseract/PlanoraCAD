@@ -767,6 +767,9 @@ pub enum CurveKindDto {
     },
     Spline {
         punkte: Vec<usize>,
+        /// Ab Format 17: Griffe an Stützpunkten; fehlt, wenn es keine gibt.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        griffe: Vec<GriffDto>,
     },
     /// Ab Format 13: gegen den Uhrzeigersinn von `start` nach `ende` auf der Ellipse.
     Ellipsenbogen {
@@ -790,6 +793,36 @@ pub enum CurveKindDto {
         scheitel: usize,
         rho: f64,
     },
+}
+
+/// Griff an einem Stützpunkt eines Splines (ab Format 17).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct GriffDto {
+    pub an: usize,
+    pub linie: usize,
+    pub spitze: usize,
+    #[serde(default, skip_serializing_if = "GriffKruemmungDto::ist_form")]
+    pub kruemmung: GriffKruemmungDto,
+}
+
+/// Krümmung an einem Griff (ab Format 17); fehlt in der Datei, wenn sie aus der Form folgt.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Default)]
+#[serde(tag = "typ", rename_all = "snake_case")]
+pub enum GriffKruemmungDto {
+    #[default]
+    Form,
+    Gerade,
+    Bogen {
+        bogen: usize,
+        mitte: usize,
+        anderes: usize,
+    },
+}
+
+impl GriffKruemmungDto {
+    fn ist_form(&self) -> bool {
+        matches!(self, GriffKruemmungDto::Form)
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

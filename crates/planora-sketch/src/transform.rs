@@ -16,7 +16,7 @@ use crate::constraint::{ConstraintData, ConstraintId, ConstraintKind, LineOrPoin
 use crate::edit::SETTLE_FACTOR;
 use crate::error::SketchError;
 use crate::fillet::wrap_pi;
-use crate::model::{CurveId, CurveKind, MAX_COORD, PointId, Sketch};
+use crate::model::{CurveId, CurveKind, HandleCurvature, MAX_COORD, PointId, Sketch, SplineHandle};
 use crate::offset::ends_of;
 use planora_i18n::tr;
 use planora_math::DVec2;
@@ -266,8 +266,24 @@ pub(crate) fn map_curve(
             ay: v(*ay),
             minor: v(*minor),
         },
-        CurveKind::Spline { points } => CurveKind::Spline {
+        CurveKind::Spline { points, handles } => CurveKind::Spline {
             points: points.iter().map(|&x| p(x)).collect(),
+            handles: handles
+                .iter()
+                .map(|h| SplineHandle {
+                    at: p(h.at),
+                    line: h.line,
+                    tip: p(h.tip),
+                    curvature: match h.curvature {
+                        HandleCurvature::Arc { arc, center, other } => HandleCurvature::Arc {
+                            arc,
+                            center: p(center),
+                            other: p(other),
+                        },
+                        other => other,
+                    },
+                })
+                .collect(),
         },
         CurveKind::ControlSpline {
             points,
@@ -332,6 +348,10 @@ impl Sketch {
         let (instance_curves, instance_points) = self.instance_parts();
         loop {
             let before = set.out.points.len() + set.out.curves.len();
+            // Griff und Spline gehen zusammen, sonst risse das Trennen den Griff vom Stützpunkt.
+            for c in self.handle_family(&set.out.curves) {
+                set.add_curve(self, c);
+            }
             let (helper_curves, helper_points) = self.helpers_of(&set);
             for c in helper_curves {
                 if !instance_curves.contains(&c) {
@@ -711,6 +731,10 @@ impl Sketch {
         if set.points.is_empty() {
             return Err(SketchError::InvalidInput(tr!("sketch-nothing-selected")));
         }
+        // Skizzen 7: bis Task 8.
+        for &c in &set.curves {
+            self.check_without_handles(c)?;
+        }
         let s = &self.settled(&set, s);
         self.atomically(|sk| {
             let mut points = HashMap::new();
@@ -749,7 +773,7 @@ impl Sketch {
             CurveKind::Arc { center, start, end } => {
                 self.add_arc(points[&center], points[&start], points[&end])?
             }
-            CurveKind::Spline { points: list } => {
+            CurveKind::Spline { points: list, .. } => {
                 let mapped: Vec<PointId> = list.iter().map(|p| points[p]).collect();
                 self.add_spline(&mapped)?
             }
@@ -1215,7 +1239,7 @@ impl Sketch {
                 start,
                 end,
             } => self.axes_collapsed(ax, ay, minor) || close(center, start) || close(center, end),
-            CurveKind::Spline { ref points } => points.windows(2).any(|w| close(w[0], w[1])),
+            CurveKind::Spline { ref points, .. } => points.windows(2).any(|w| close(w[0], w[1])),
             // Kontrollpunkte dürfen zusammenfallen; entartet ist erst die ganze Kurve in einem Punkt.
             CurveKind::ControlSpline { ref points, .. } => {
                 points.windows(2).all(|w| close(w[0], w[1]))

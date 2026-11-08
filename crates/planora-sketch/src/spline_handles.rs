@@ -1,0 +1,766 @@
+//! Griffe am Spline durch Stützpunkte (Skizzen 7, Spec B): Rechnung nach B4 und die Befehle.
+//!
+//! Stützpunkte mit Griff und die Enden teilen den Spline in Strecken. Jede Strecke ist ein
+//! C²-kubischer Spline mit Parameterabstand 1; an einem Griff ist die Ableitung vorgegeben, an einem
+//! Ende ohne Griff ist er natürlich. Daraus folgen für jeden Knoten Wert, erste und zweite Ableitung,
+//! und jedes Segment ist ein quintisches Hermite-Stück durch diese Werte. Damit ist die Kurve überall
+//! C², auch an einem Griff, an dem die beiden Strecken verschiedene zweite Ableitungen hätten.
+//!
+//! Ohne Griffe läuft nichts von hier: `Spline` mit leerem `handles` nimmt den alten Codeweg.
+
+use crate::curves::{Sampled, V2};
+use crate::dual::Dual;
+use crate::error::SketchError;
+use crate::model::{CurveId, CurveKind, HandleCurvature, PointId, Sketch, SplineHandle};
+use planora_i18n::tr;
+use planora_math::nurbs::NurbsCurve;
+use planora_math::{DVec2, DVec3};
+
+/// Grad der exakten Darstellung eines Splines mit Griffen.
+const NURBS_DEGREE: usize = 5;
+
+/// Vielfachheit der inneren Knoten: Die Kurve ist dort C².
+const NURBS_INNER_MULTIPLICITY: usize = 3;
+
+/// Wert, erste und zweite Ableitung nach `t` je Stützpunkt.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Nodes<T> {
+    pub value: Vec<T>,
+    pub first: Vec<T>,
+    pub second: Vec<T>,
+}
+
+/// Vorgabe an einem Griff für [`hermite_nodes`].
+#[derive(Clone, Debug)]
+pub enum NodeCurvature {
+    /// Krümmung aus der Kurve: der Mittelwert beider Seiten.
+    Form,
+    /// Vorgegebene Krümmung; der Griff bestimmt nur den Anteil quer zur Tangente.
+    Value(Dual),
+}
+
+/// Griff am Stützpunkt `index`: vorgegebene Ableitung und Krümmung.
+#[derive(Clone, Debug)]
+pub struct NodeHandle {
+    pub index: usize,
+    pub derivative: V2,
+    pub curvature: NodeCurvature,
+}
+
+fn c(v: f64) -> Dual {
+    Dual::constant(v)
+}
+
+/// Zweite Ableitungen einer Strecke durch `y` (mindestens zwei Werte, Parameterabstand 1). Mit
+/// vorgegebener Ableitung `2·M₀ + M₁ = 6·(y₁ − y₀ − D₀)` bzw. `Mₙ₋₁ + 2·Mₙ = 6·(Dₙ − (yₙ − yₙ₋₁))`,
+/// ohne `M = 0`. Thomas-Verfahren; die Koeffizienten sind Zahlen, die rechte Seite ist `Dual`.
+fn stretch_second(y: &[Dual], start: Option<&Dual>, end: Option<&Dual>) -> Vec<Dual> {
+    let n = y.len();
+    let last = n - 1;
+    let mut upper = vec![0.0; n];
+    let mut right: Vec<Dual> = Vec::with_capacity(n);
+    for i in 0..n {
+        let (l, diag, u, r) = if i == 0 {
+            match start {
+                Some(d) => (0.0, 2.0, 1.0, 6.0 * (&y[1] - &y[0] - d)),
+                None => (0.0, 1.0, 0.0, c(0.0)),
+            }
+        } else if i == last {
+            match end {
+                Some(d) => (1.0, 2.0, 0.0, 6.0 * (d - &(&y[last] - &y[last - 1]))),
+                None => (0.0, 1.0, 0.0, c(0.0)),
+            }
+        } else {
+            let r = 6.0 * (&y[i - 1] - &(2.0 * &y[i]) + &y[i + 1]);
+            (1.0, 4.0, 1.0, r)
+        };
+        if i == 0 {
+            upper[0] = u / diag;
+            right.push(r / diag);
+        } else {
+            let den = diag - l * upper[i - 1];
+            upper[i] = u / den;
+            let v = (r - &(l * &right[i - 1])) / den;
+            right.push(v);
+        }
+    }
+    let mut m = right;
+    for i in (0..last).rev() {
+        let v = &m[i] - &(upper[i] * &m[i + 1]);
+        m[i] = v;
+    }
+    m
+}
+
+/// Eine Koordinate aller Knoten: erste Ableitung und `M̄` (an einem Griff der Mittelwert beider
+/// Seiten, an einem Spline-Ende der Wert der einen Seite).
+fn axis(y: &[Dual], slope: &[Option<&Dual>]) -> (Vec<Dual>, Vec<Dual>) {
+    let n = y.len();
+    let mut first = vec![c(0.0); n];
+    let mut mean = vec![c(0.0); n];
+    let breaks: Vec<usize> = (0..n)
+        .filter(|&i| i == 0 || i == n - 1 || slope[i].is_some())
+        .collect();
+    for w in breaks.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        let m = stretch_second(&y[a..=b], slope[a], slope[b]);
+        for (k, mk) in m.iter().enumerate() {
+            let i = a + k;
+            mean[i] = if k == 0 && a > 0 {
+                // Die linke Strecke hat ihren Wert schon eingetragen.
+                0.5 * (&mean[i] + mk)
+            } else {
+                mk.clone()
+            };
+            first[i] = match slope[i] {
+                Some(d) => d.clone(),
+                None if k + 1 < m.len() => &y[i + 1] - &y[i] - (2.0 * mk + &m[k + 1]) / 6.0,
+                None => &y[i] - &y[i - 1] + (&m[k - 1] + &(2.0 * mk)) / 6.0,
+            };
+        }
+    }
+    (first, mean)
+}
+
+/// Knotenwerte nach B4 durch die Stützpunkte `y` (mindestens zwei) mit den Griffen `handles`. Ohne
+/// Griffe sind es die des natürlichen Splines. Die Rechnung läuft in `Dual`; Zahlen rechnet
+/// [`Nodes::numbers`] daraus, Konstanten kosten keinen Gradienten.
+pub fn hermite_nodes(y: &[V2], handles: &[NodeHandle]) -> Nodes<V2> {
+    let n = y.len();
+    let mut by_node: Vec<Option<&NodeHandle>> = vec![None; n];
+    for h in handles {
+        by_node[h.index] = Some(h);
+    }
+    let coordinate = |pick: fn(&V2) -> &Dual| {
+        let values: Vec<Dual> = y.iter().map(|p| pick(p).clone()).collect();
+        let slope: Vec<Option<&Dual>> = by_node
+            .iter()
+            .map(|h| h.map(|h| pick(&h.derivative)))
+            .collect();
+        axis(&values, &slope)
+    };
+    let (first_x, mean_x) = coordinate(|p| &p.0);
+    let (first_y, mean_y) = coordinate(|p| &p.1);
+    let first: Vec<V2> = first_x.into_iter().zip(first_y).collect();
+    let mut second: Vec<V2> = mean_x.into_iter().zip(mean_y).collect();
+    for h in handles {
+        if let NodeCurvature::Value(kappa) = &h.curvature {
+            second[h.index] = with_curvature(&second[h.index], &h.derivative, kappa);
+        }
+    }
+    Nodes {
+        value: y.to_vec(),
+        first,
+        second,
+    }
+}
+
+/// `κ·|D|²·N + ((M̄·D)/|D|²)·D` mit der linken Normalen `N`: Der Griff bestimmt nur den Anteil quer
+/// zur Tangente. Bei verschwindender Ableitung gibt es keine Richtung, dann bleibt `M̄`.
+fn with_curvature(mean: &V2, d: &V2, kappa: &Dual) -> V2 {
+    let len2 = &d.0 * &d.0 + &d.1 * &d.1;
+    if len2.v <= f64::MIN_POSITIVE {
+        return mean.clone();
+    }
+    let along = (&mean.0 * &d.0 + &mean.1 * &d.1) / &len2;
+    let across = kappa * &len2.sqrt();
+    (
+        &along * &d.0 - &across * &d.1,
+        &along * &d.1 + &across * &d.0,
+    )
+}
+
+impl Nodes<V2> {
+    /// Die Werte ohne Gradienten.
+    pub(crate) fn numbers(&self) -> Nodes<DVec2> {
+        let plain = |v: &[V2]| v.iter().map(|p| DVec2::new(p.0.v, p.1.v)).collect();
+        Nodes {
+            value: plain(&self.value),
+            first: plain(&self.first),
+            second: plain(&self.second),
+        }
+    }
+}
+
+/// Segment bei `t` und lokaler Parameter wie bei `spline_eval` (außerhalb erstes bzw. letztes).
+fn segment_of(t: f64, n: usize) -> usize {
+    // `NaN.max(0.0)` ist 0; zu große Werte sättigen beim Umwandeln und werden begrenzt.
+    (t.floor().max(0.0) as usize).min(n - 2)
+}
+
+/// Quintische Hermite-Grundfunktionen `[p₀, d₀, a₀, a₁, d₁, p₁]` bei `u`.
+fn basis(u: f64) -> [f64; 6] {
+    let (u2, u3) = (u * u, u * u * u);
+    let (u4, u5) = (u3 * u, u3 * u2);
+    [
+        1.0 - 10.0 * u3 + 15.0 * u4 - 6.0 * u5,
+        u - 6.0 * u3 + 8.0 * u4 - 3.0 * u5,
+        0.5 * u2 - 1.5 * u3 + 1.5 * u4 - 0.5 * u5,
+        0.5 * u3 - u4 + 0.5 * u5,
+        -4.0 * u3 + 7.0 * u4 - 3.0 * u5,
+        10.0 * u3 - 15.0 * u4 + 6.0 * u5,
+    ]
+}
+
+/// Erste Ableitung der Grundfunktionen.
+fn basis_first(u: f64) -> [f64; 6] {
+    let (u2, u3) = (u * u, u * u * u);
+    let u4 = u3 * u;
+    [
+        -30.0 * u2 + 60.0 * u3 - 30.0 * u4,
+        1.0 - 18.0 * u2 + 32.0 * u3 - 15.0 * u4,
+        u - 4.5 * u2 + 6.0 * u3 - 2.5 * u4,
+        1.5 * u2 - 4.0 * u3 + 2.5 * u4,
+        -12.0 * u2 + 28.0 * u3 - 15.0 * u4,
+        30.0 * u2 - 60.0 * u3 + 30.0 * u4,
+    ]
+}
+
+/// Zweite Ableitung der Grundfunktionen.
+fn basis_second(u: f64) -> [f64; 6] {
+    let (u2, u3) = (u * u, u * u * u);
+    [
+        -60.0 * u + 180.0 * u2 - 120.0 * u3,
+        -36.0 * u + 96.0 * u2 - 60.0 * u3,
+        1.0 - 9.0 * u + 18.0 * u2 - 10.0 * u3,
+        3.0 * u - 12.0 * u2 + 10.0 * u3,
+        -24.0 * u + 84.0 * u2 - 60.0 * u3,
+        60.0 * u - 180.0 * u2 + 120.0 * u3,
+    ]
+}
+
+impl Nodes<DVec2> {
+    /// Die sechs Werte des Segments `i` in der Ordnung von [`basis`].
+    fn coefficients(&self, i: usize) -> [DVec2; 6] {
+        [
+            self.value[i],
+            self.first[i],
+            self.second[i],
+            self.second[i + 1],
+            self.first[i + 1],
+            self.value[i + 1],
+        ]
+    }
+
+    fn combine(&self, i: usize, b: [f64; 6]) -> DVec2 {
+        self.coefficients(i)
+            .iter()
+            .zip(b)
+            .fold(DVec2::ZERO, |sum, (&q, w)| sum + q * w)
+    }
+
+    /// Punkt und Ableitung nach `t`; außerhalb wird das erste bzw. letzte Segment fortgesetzt.
+    pub(crate) fn eval(&self, t: f64) -> (DVec2, DVec2) {
+        let i = segment_of(t, self.value.len());
+        let u = t - i as f64;
+        (self.combine(i, basis(u)), self.combine(i, basis_first(u)))
+    }
+
+    /// Zweite Ableitung nach `t`.
+    pub(crate) fn second_at(&self, t: f64) -> DVec2 {
+        let i = segment_of(t, self.value.len());
+        self.combine(i, basis_second(t - i as f64))
+    }
+
+    /// Die sechs Bézier-Punkte des Segments `i`.
+    pub(crate) fn bezier(&self, i: usize) -> [DVec2; 6] {
+        let (p0, d0, a0) = (self.value[i], self.first[i], self.second[i]);
+        let (p1, d1, a1) = (self.value[i + 1], self.first[i + 1], self.second[i + 1]);
+        [
+            p0,
+            p0 + d0 / 5.0,
+            p0 + d0 * 0.4 + a0 / 20.0,
+            p1 - d1 * 0.4 + a1 / 20.0,
+            p1 - d1 / 5.0,
+            p1,
+        ]
+    }
+
+    /// Kontrollpunkte und Knoten als B-Spline Grad 5 mit dreifachen inneren Knoten. Die Kurve ist C²,
+    /// darum stimmen die Blüten `f` beider Seiten überein, sobald drei Argumente `k` sind. Mit dem
+    /// Abstand 1 gehören zu jedem inneren Knoten `k` genau `f(k−1, k−1, k, k, k)` (der Bézier-Punkt
+    /// `b₃` links), `f(k−1, k, k, k, k+1) = 2·b₄ − b₃` und `f(k, k, k, k+1, k+1)` (`b₂` rechts).
+    fn b_spline(&self) -> (Vec<f64>, Vec<DVec3>) {
+        let n = self.value.len();
+        let mut control = Vec::with_capacity(3 * n);
+        let first = self.bezier(0);
+        control.extend_from_slice(&first[..3]);
+        for k in 1..n - 1 {
+            let (left, right) = (self.bezier(k - 1), self.bezier(k));
+            control.extend([left[3], left[4] * 2.0 - left[3], right[2]]);
+        }
+        let end = self.bezier(n - 2);
+        control.extend_from_slice(&end[3..]);
+        let mut knots = vec![0.0; NURBS_DEGREE + 1];
+        for k in 1..n - 1 {
+            knots.extend(std::iter::repeat_n(k as f64, NURBS_INNER_MULTIPLICITY));
+        }
+        knots.extend(std::iter::repeat_n((n - 1) as f64, NURBS_DEGREE + 1));
+        (knots, control.iter().map(|p| p.extend(0.0)).collect())
+    }
+}
+
+/// Punkt und Ableitung nach `t` in `Dual` (auch `t` kann Variable sein).
+pub(crate) fn hermite_eval_dual(nodes: &Nodes<V2>, t: &Dual) -> (V2, V2) {
+    let i = segment_of(t.v, nodes.value.len());
+    let u = t - i as f64;
+    let u2 = &u * &u;
+    let u3 = &u2 * &u;
+    let u4 = &u3 * &u;
+    let u5 = &u4 * &u;
+    let value = [
+        1.0 - 10.0 * &u3 + 15.0 * &u4 - 6.0 * &u5,
+        &u - &(6.0 * &u3) + 8.0 * &u4 - 3.0 * &u5,
+        0.5 * &u2 - 1.5 * &u3 + 1.5 * &u4 - 0.5 * &u5,
+        0.5 * &u3 - &u4 + 0.5 * &u5,
+        -4.0 * &u3 + 7.0 * &u4 - 3.0 * &u5,
+        10.0 * &u3 - 15.0 * &u4 + 6.0 * &u5,
+    ];
+    let slope = [
+        -30.0 * &u2 + 60.0 * &u3 - 30.0 * &u4,
+        1.0 - 18.0 * &u2 + 32.0 * &u3 - 15.0 * &u4,
+        &u - &(4.5 * &u2) + 6.0 * &u3 - 2.5 * &u4,
+        1.5 * &u2 - 4.0 * &u3 + 2.5 * &u4,
+        -12.0 * &u2 + 28.0 * &u3 - 15.0 * &u4,
+        30.0 * &u2 - 60.0 * &u3 + 30.0 * &u4,
+    ];
+    let k = [
+        &nodes.value[i],
+        &nodes.first[i],
+        &nodes.second[i],
+        &nodes.second[i + 1],
+        &nodes.first[i + 1],
+        &nodes.value[i + 1],
+    ];
+    let sum = |w: &[Dual; 6], pick: fn(&V2) -> &Dual| {
+        k.iter()
+            .zip(w)
+            .fold(c(0.0), |acc, (q, b)| acc + b * pick(q))
+    };
+    (
+        (sum(&value, |p| &p.0), sum(&value, |p| &p.1)),
+        (sum(&slope, |p| &p.0), sum(&slope, |p| &p.1)),
+    )
+}
+
+/// Vorgabe zum Griff `h` am Stützpunkt `index` aus den Lagen `at` und `tip`.
+fn node_handle(index: usize, h: &SplineHandle, at: &V2, tip: &V2) -> NodeHandle {
+    NodeHandle {
+        index,
+        derivative: (3.0 * (&tip.0 - &at.0), 3.0 * (&tip.1 - &at.1)),
+        curvature: match h.curvature {
+            HandleCurvature::Form => NodeCurvature::Form,
+            HandleCurvature::Straight => NodeCurvature::Value(c(0.0)),
+            // Skizzen 7: Der Wert des Krümmungsgriffs kommt mit Task 7.
+            HandleCurvature::Arc { .. } => NodeCurvature::Form,
+        },
+    }
+}
+
+/// Knotenwerte eines Splines mit Griffen; `pt` liefert die Lage eines Punktes (im Löser als `Dual`).
+pub(crate) fn nodes_of(
+    points: &[PointId],
+    handles: &[SplineHandle],
+    pt: impl Fn(PointId) -> V2,
+) -> Nodes<V2> {
+    let y: Vec<V2> = points.iter().map(|&p| pt(p)).collect();
+    let inputs: Vec<NodeHandle> = handles
+        .iter()
+        .filter_map(|h| {
+            // Einen Griff neben den Stützpunkten lässt das Laden nicht zu.
+            let index = points.iter().position(|&p| p == h.at)?;
+            Some(node_handle(index, h, &y[index], &pt(h.tip)))
+        })
+        .collect();
+    hermite_nodes(&y, &inputs)
+}
+
+impl Sketch {
+    /// Die abgetastete Form eines Splines: ohne Griffe wie eh und je.
+    pub(crate) fn spline_sampled(&self, points: &[PointId], handles: &[SplineHandle]) -> Sampled {
+        if handles.is_empty() {
+            let xy: Vec<DVec2> = points.iter().map(|&p| self.pos(p)).collect();
+            Sampled::spline(&xy)
+        } else {
+            Sampled::Hermite {
+                nodes: nodes_of(points, handles, |p| {
+                    let q = self.pos(p);
+                    (c(q.x), c(q.y))
+                })
+                .numbers(),
+            }
+        }
+    }
+
+    /// Schaltet am Stützpunkt `at` des Splines `c` den Tangentengriff ein: eine Konstruktionslinie
+    /// von `at` zu einer neuen Spitze `at + C'/3`. Die Form ändert sich nicht. Abgelehnt, wenn die
+    /// Kurve dort steht (Ableitung unter der Toleranz), dann bleibt die Skizze unverändert. Ist `c`
+    /// Vorlage oder Exemplar eines Musters, wird das Muster aufgelöst.
+    pub fn activate_tangent_handle(
+        &mut self,
+        c: CurveId,
+        at: PointId,
+    ) -> Result<CurveId, SketchError> {
+        self.check_curve(c)?;
+        let CurveKind::Spline { points, handles } = &self.curves[c].kind else {
+            return Err(SketchError::WrongType(tr!("sketch-err-handle-kind")));
+        };
+        let Some(index) = points.iter().position(|&p| p == at) else {
+            return Err(SketchError::InvalidInput(tr!("sketch-err-handle-point")));
+        };
+        if handles.iter().any(|h| h.at == at) {
+            return Err(SketchError::InvalidInput(tr!("sketch-err-handle-active")));
+        }
+        let geom = self.geom(c).ok_or(SketchError::UnknownObject)?;
+        let reach = geom.eval(index as f64).1 / 3.0;
+        if !reach.is_finite() || reach.length() <= self.tol.linear {
+            return Err(SketchError::Degenerate(tr!("sketch-err-handle-still")));
+        }
+        let tip_at = self.pos(at) + reach;
+        self.atomically(|s| {
+            let tip = s.add_point(tip_at.x, tip_at.y)?;
+            let line = s.add_line(at, tip)?;
+            s.curves[line].construction = true;
+            let mut kind = s.curves[c].kind.clone();
+            if let CurveKind::Spline { handles, .. } = &mut kind {
+                handles.push(SplineHandle {
+                    at,
+                    line,
+                    tip,
+                    curvature: HandleCurvature::Form,
+                });
+            }
+            s.set_curve_kind(c, kind);
+            Ok(line)
+        })
+    }
+
+    /// Schaltet den Griff am Stützpunkt `at` des Splines `c` aus: Linie, Spitze und ein
+    /// Krümmungsgriff entfallen, die Kurve springt auf die Form ohne ihn. Abhängigkeiten an der Kurve
+    /// folgen beim nächsten Lösen.
+    pub fn deactivate_handle(&mut self, c: CurveId, at: PointId) -> Result<(), SketchError> {
+        self.check_curve(c)?;
+        let CurveKind::Spline { handles, .. } = &self.curves[c].kind else {
+            return Err(SketchError::WrongType(tr!("sketch-err-handle-kind")));
+        };
+        let Some(h) = handles.iter().find(|h| h.at == at) else {
+            return Err(SketchError::InvalidInput(tr!("sketch-err-handle-none")));
+        };
+        let line = h.line;
+        self.remove_curve(line)
+    }
+
+    /// Der Spline als exakte NURBS-Kurve: Grad 5, innere Knoten dreifach, Parameter wie
+    /// [`Sketch::curve_eval`]. Für Profile eines Splines mit Griffen.
+    pub fn handled_spline_nurbs(&self, c: CurveId) -> Result<NurbsCurve, SketchError> {
+        self.check_curve(c)?;
+        let CurveKind::Spline { points, handles } = &self.curves[c].kind else {
+            return Err(SketchError::WrongType(tr!("sketch-err-handle-kind")));
+        };
+        let tol = self.tol.linear;
+        // `add_spline` prüft das beim Anlegen; das Lösen kann Punkte danach zusammenlegen.
+        if points
+            .windows(2)
+            .any(|w| self.pos(w[0]).distance(self.pos(w[1])) <= tol)
+        {
+            return Err(SketchError::Degenerate(tr!("sketch-err-spline-neighbours")));
+        }
+        let nodes = nodes_of(points, handles, |p| {
+            let q = self.pos(p);
+            (Dual::constant(q.x), Dual::constant(q.y))
+        })
+        .numbers();
+        let (knots, control) = nodes.b_spline();
+        let weights = vec![1.0; control.len()];
+        NurbsCurve::new(NURBS_DEGREE, knots, control, weights).map_err(|e| {
+            SketchError::Degenerate(tr!("sketch-err-spline-invalid", detail = e.to_string()))
+        })
+    }
+
+    /// Ist `c` die Linie oder der Bogen eines Griffs?
+    pub fn is_handle_curve(&self, c: CurveId) -> bool {
+        self.handled_splines().any(|(_, handles)| {
+            handles.iter().any(|h| {
+                h.line == c || matches!(h.curvature, HandleCurvature::Arc { arc, .. } if arc == c)
+            })
+        })
+    }
+
+    /// Lebende Splines mit Griffen.
+    fn handled_splines(&self) -> impl Iterator<Item = (CurveId, &[SplineHandle])> {
+        self.curves().filter_map(|(id, d)| match &d.kind {
+            CurveKind::Spline { handles, .. } if !handles.is_empty() => {
+                Some((id, handles.as_slice()))
+            }
+            _ => None,
+        })
+    }
+
+    /// Skizzen 7: Bis Task 8 kennen Stutzen, Brechen, Spiegeln, Muster und Kopieren keine Griffe.
+    /// Sie lehnen einen Spline mit Griffen und die Griffe selbst ab, statt die Griffe zu verlieren.
+    pub(crate) fn check_without_handles(&self, c: CurveId) -> Result<(), SketchError> {
+        let with_handles = matches!(
+            &self.curves[c].kind,
+            CurveKind::Spline { handles, .. } if !handles.is_empty()
+        );
+        if with_handles || self.is_handle_curve(c) {
+            Err(SketchError::WrongType(tr!("sketch-err-handle-command")))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Die Griff-Teile und Splines, die mit den Kurven `curves` gehen müssen: Griffe eines Splines und
+    /// der Spline eines Griffs. So bleibt beim Verschieben ein Griff am Stützpunkt.
+    pub(crate) fn handle_family(&self, curves: &[CurveId]) -> Vec<CurveId> {
+        let mut out = Vec::new();
+        for (spline, handles) in self.handled_splines() {
+            let parts = handles.iter().flat_map(|h| {
+                let arc = match h.curvature {
+                    HandleCurvature::Arc { arc, .. } => Some(arc),
+                    _ => None,
+                };
+                std::iter::once(h.line).chain(arc)
+            });
+            let parts: Vec<CurveId> = parts.collect();
+            if curves.contains(&spline) || parts.iter().any(|p| curves.contains(p)) {
+                out.push(spline);
+                out.extend(parts);
+            }
+        }
+        out
+    }
+
+    /// Nimmt vor dem Löschen der Kurve `c` den Griff aus dem Modell, zu dem sie gehört: am Spline alle
+    /// seine Griffe, an der Griff-Linie den ganzen Griff, am Griff-Bogen nur den Krümmungsgriff.
+    /// Liefert, was danach mitgeht.
+    pub(crate) fn release_handles_of(&mut self, c: CurveId) -> ReleasedHandle {
+        let mut out = ReleasedHandle::default();
+        let mut own = |h: &SplineHandle, whole: bool| {
+            if whole {
+                out.curves.push(h.line);
+                out.points.push(h.tip);
+            }
+            if let HandleCurvature::Arc { arc, center, other } = h.curvature {
+                out.curves.push(arc);
+                out.points.extend([center, other]);
+            }
+        };
+        if let CurveKind::Spline { handles, .. } = &mut self.curves[c].kind {
+            // Der Spline wird gelöscht und behält keine Griffe im gelöschten Eintrag.
+            for h in std::mem::take(handles) {
+                own(&h, true);
+            }
+            return out;
+        }
+        let found = self.handled_splines().find_map(|(spline, handles)| {
+            handles
+                .iter()
+                .position(|h| h.line == c)
+                .map(|i| (spline, i, true))
+                .or_else(|| {
+                    handles
+                        .iter()
+                        .position(
+                            |h| matches!(h.curvature, HandleCurvature::Arc { arc, .. } if arc == c),
+                        )
+                        .map(|i| (spline, i, false))
+                })
+        });
+        let Some((spline, i, whole)) = found else {
+            return out;
+        };
+        let mut kind = self.curves[spline].kind.clone();
+        if let CurveKind::Spline { handles, .. } = &mut kind {
+            own(&handles[i], whole);
+            if whole {
+                handles.remove(i);
+            } else {
+                handles[i].curvature = HandleCurvature::Form;
+            }
+        }
+        self.set_curve_kind(spline, kind);
+        out.spline = Some(spline);
+        // Die Kurve selbst löscht der Aufrufer.
+        out.curves.retain(|&k| k != c);
+        out
+    }
+
+    /// Löscht, was [`release_handles_of`](Self::release_handles_of) übrig ließ. Punkte, die eine andere
+    /// Kurve noch benutzt, bleiben.
+    pub(crate) fn finish_release(&mut self, released: ReleasedHandle) -> Result<(), SketchError> {
+        for k in released.curves {
+            if self.check_curve(k).is_ok() {
+                self.remove_curve(k)?;
+            }
+        }
+        self.drop_orphans(&released.points)?;
+        if let Some(spline) = released.spline {
+            self.reseed_extras(spline);
+        }
+        Ok(())
+    }
+
+    /// Griff-Teile zum Punkt `p`: die Griff-Linie an einer Spitze, der Bogen an einem Punkt des
+    /// Krümmungsgriffs. Sie gehen statt des ganzen Splines. Der Stützpunkt zählt hier nicht.
+    pub(crate) fn handle_parts_at(&self, p: PointId) -> Vec<CurveId> {
+        let mut out = Vec::new();
+        for (_, handles) in self.handled_splines() {
+            for h in handles {
+                if h.tip == p {
+                    out.push(h.line);
+                } else if let HandleCurvature::Arc { arc, center, other } = h.curvature
+                    && (center == p || other == p)
+                {
+                    out.push(arc);
+                }
+            }
+        }
+        out
+    }
+}
+
+/// Was nach dem Austragen eines Griffs mit gelöscht wird, siehe
+/// [`Sketch::release_handles_of`].
+#[derive(Default)]
+pub(crate) struct ReleasedHandle {
+    curves: Vec<CurveId>,
+    points: Vec<PointId>,
+    /// Der Spline, der weiterlebt und seine Form geändert hat.
+    spline: Option<CurveId>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v(x: f64, y: f64) -> V2 {
+        (c(x), c(y))
+    }
+
+    fn close(a: &Dual, b: f64) -> bool {
+        (a.v - b).abs() < 1e-12
+    }
+
+    #[test]
+    fn stretch_with_both_ends_given_has_one_segment() {
+        // Ein Stück, beide Enden vorgegeben: y = t³ hat D₀ = 0, D₁ = 3, M = 0 und 6.
+        let m = stretch_second(&[c(0.0), c(1.0)], Some(&c(0.0)), Some(&c(3.0)));
+        assert!(close(&m[0], 0.0) && close(&m[1], 6.0), "{m:?}");
+        // Natürlich am Anfang, vorgegeben am Ende: M₀ = 0, 2·M₁ = 6·(D − Δy).
+        let m = stretch_second(&[c(0.0), c(1.0)], None, Some(&c(2.0)));
+        assert!(close(&m[0], 0.0) && close(&m[1], 3.0), "{m:?}");
+    }
+
+    #[test]
+    fn nodes_without_handles_are_the_natural_spline() {
+        let y = [v(0.0, 0.0), v(10.0, 6.0), v(21.0, -3.0), v(30.0, 8.0)];
+        let nodes = hermite_nodes(&y, &[]);
+        let xs: Vec<Dual> = y.iter().map(|p| p.0.clone()).collect();
+        let m = crate::curves::spline_second_derivatives(&xs);
+        for (i, mi) in m.iter().enumerate() {
+            assert!((nodes.second[i].0.v - mi.v).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn gradient_matches_differences() {
+        // Griff am mittleren Punkt, mit Krümmungsvorgabe: Gradient gegen Differenzen.
+        let n = 8;
+        let eval = |x: &[f64], t: f64| {
+            let var = |i: usize| Dual::variable(x[i], i, n);
+            let y = [(var(0), var(1)), (var(2), var(3)), (var(4), var(5))];
+            let handle = NodeHandle {
+                index: 1,
+                derivative: (var(6), var(7)),
+                curvature: NodeCurvature::Value(c(0.05)),
+            };
+            hermite_eval_dual(&hermite_nodes(&y, &[handle]), &c(t))
+        };
+        let x = [0.0, 0.0, 10.0, 6.0, 21.0, -3.0, 9.0, 1.0];
+        let h = 1e-6;
+        for t in [0.3, 1.0, 1.7] {
+            let (q, d) = eval(&x, t);
+            for i in 0..n {
+                let (mut up, mut down) = (x, x);
+                up[i] += h;
+                down[i] -= h;
+                let (qu, du) = eval(&up, t);
+                let (qd, dd) = eval(&down, t);
+                let fd = |a: f64, b: f64| (a - b) / (2.0 * h);
+                assert!((fd(qu.0.v, qd.0.v) - q.0.grad(i)).abs() < 1e-7);
+                assert!((fd(qu.1.v, qd.1.v) - q.1.grad(i)).abs() < 1e-7);
+                assert!((fd(du.0.v, dd.0.v) - d.0.grad(i)).abs() < 1e-7);
+                assert!((fd(du.1.v, dd.1.v) - d.1.grad(i)).abs() < 1e-7);
+            }
+        }
+    }
+
+    #[test]
+    fn dual_and_numbers_agree_also_with_straight_and_zero_derivative() {
+        let y = [v(0.0, 0.0), v(10.0, 6.0), v(21.0, -3.0)];
+        for d in [v(9.0, 1.0), v(0.0, 0.0)] {
+            let handle = NodeHandle {
+                index: 1,
+                derivative: d,
+                curvature: NodeCurvature::Value(c(0.0)),
+            };
+            let dual = hermite_nodes(&y, &[handle]);
+            let plain = dual.numbers();
+            if d_is_zero(&dual.first[1]) {
+                // Keine Richtung: bleibt M̄ und endlich.
+                assert!(plain.second[1].is_finite());
+            } else {
+                // Krümmung 0: Die zweite Ableitung liegt auf der Tangente.
+                assert!(plain.second[1].perp_dot(plain.first[1]).abs() < 1e-12);
+            }
+            for k in -2..=42 {
+                let t = k as f64 / 20.0;
+                let (p, dp) = plain.eval(t);
+                let (q, dq) = hermite_eval_dual(&dual, &c(t));
+                assert!((p.x - q.0.v).abs() < 1e-11 && (p.y - q.1.v).abs() < 1e-11);
+                assert!((dp.x - dq.0.v).abs() < 1e-11 && (dp.y - dq.1.v).abs() < 1e-11);
+            }
+        }
+    }
+
+    fn d_is_zero(d: &V2) -> bool {
+        d.0.v == 0.0 && d.1.v == 0.0
+    }
+
+    #[test]
+    fn basis_functions_are_consistent() {
+        // An den Enden die Einheitswerte, dazwischen die Ableitungen gegen Differenzen.
+        for (u, want) in [
+            (
+                0.0,
+                (
+                    [1., 0., 0., 0., 0., 0.],
+                    [0., 1., 0., 0., 0., 0.],
+                    [0., 0., 1., 0., 0., 0.],
+                ),
+            ),
+            (
+                1.0,
+                (
+                    [0., 0., 0., 0., 0., 1.],
+                    [0., 0., 0., 0., 1., 0.],
+                    [0., 0., 0., 1., 0., 0.],
+                ),
+            ),
+        ] {
+            assert_eq!(basis(u), want.0);
+            assert_eq!(basis_first(u), want.1);
+            assert_eq!(basis_second(u), want.2);
+        }
+        let h = 1e-6;
+        for u in [0.2, 0.5, 0.9, 1.3] {
+            for k in 0..6 {
+                let d = (basis(u + h)[k] - basis(u - h)[k]) / (2.0 * h);
+                assert!((d - basis_first(u)[k]).abs() < 1e-8);
+                let d = (basis_first(u + h)[k] - basis_first(u - h)[k]) / (2.0 * h);
+                assert!((d - basis_second(u)[k]).abs() < 1e-8);
+            }
+        }
+    }
+}

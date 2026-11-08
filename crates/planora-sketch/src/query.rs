@@ -2,7 +2,6 @@
 //! Hülle der Skizze.
 
 use crate::constraint::ConstraintKind;
-use crate::curves::Sampled;
 use crate::model::{CurveId, CurveKind, PointId, Sketch};
 use planora_math::{DVec2, TAU};
 use std::collections::BTreeSet;
@@ -68,7 +67,7 @@ fn chain_ends(kind: &CurveKind) -> Vec<PointId> {
         CurveKind::Arc { start, end, .. } | CurveKind::EllipticArc { start, end, .. } => {
             vec![*start, *end]
         }
-        CurveKind::Spline { points } | CurveKind::ControlSpline { points, .. } => {
+        CurveKind::Spline { points, .. } | CurveKind::ControlSpline { points, .. } => {
             match (points.first(), points.last()) {
                 (Some(a), Some(b)) => vec![*a, *b],
                 _ => Vec::new(),
@@ -133,9 +132,9 @@ impl Sketch {
                 pl[steps] = e;
                 pl
             }
-            CurveKind::Spline { points } => {
+            CurveKind::Spline { points, handles } => {
                 let xy: Vec<DVec2> = points.iter().map(|&p| self.pos(p)).collect();
-                let sampled = Sampled::spline(&xy);
+                let sampled = self.spline_sampled(points, handles);
                 let n = (xy.len() - 1) * SPLINE_STEPS_PER_SEGMENT;
                 let mut pl: Vec<DVec2> = (0..=n)
                     .map(|k| sampled.eval(k as f64 / SPLINE_STEPS_PER_SEGMENT as f64).0)
@@ -270,8 +269,10 @@ impl Sketch {
                 _ => None,
             })
             .collect();
+        // Griffe gehören zu keiner Kette, auch wenn sie an einem Spline-Ende beginnen.
         let ends: Vec<(CurveId, Vec<PointId>)> = self
             .curves()
+            .filter(|&(id, _)| !self.is_handle_curve(id))
             .map(|(id, data)| (id, chain_ends(&data.kind)))
             .collect();
         let mut chain = BTreeSet::from([c]);

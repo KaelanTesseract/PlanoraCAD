@@ -95,7 +95,7 @@ impl SnapIndex {
                     other_role.insert(start.index());
                     other_role.insert(end.index());
                 }
-                CurveKind::Spline { points } | CurveKind::ControlSpline { points, .. } => {
+                CurveKind::Spline { points, .. } | CurveKind::ControlSpline { points, .. } => {
                     other_role.extend(points.iter().map(|p| p.index()));
                 }
                 CurveKind::Conic {

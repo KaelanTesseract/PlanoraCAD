@@ -9,6 +9,7 @@ use crate::dual::Dual;
 use crate::error::SketchError;
 use crate::model::{CurveId, CurveKind, PointId, Sketch};
 use crate::pattern::{PATTERN_MAX_INSTANCES, PatternId, PatternProblem, PatternSlot};
+use crate::spline_handles::{hermite_eval_dual, nodes_of};
 use planora_i18n::tr;
 use planora_kernel::Id;
 use planora_math::DVec2;
@@ -444,7 +445,10 @@ fn param_curve(ctx: &Ctx, c: CurveId, t: &Dual) -> (V2, V2) {
             let (m, a, len, minor) = ellipse_of(ctx, c);
             ellipse_eval(&m, &a, &len, &minor, t)
         }
-        CurveKind::Spline { points } => {
+        CurveKind::Spline { points, handles } if !handles.is_empty() => {
+            hermite_eval_dual(&nodes_of(points, handles, |p| ctx.pt(p)), t)
+        }
+        CurveKind::Spline { points, .. } => {
             let pts: Vec<V2> = points.iter().map(|&p| ctx.pt(p)).collect();
             let xs: Vec<Dual> = pts.iter().map(|p| p.0.clone()).collect();
             let ys: Vec<Dual> = pts.iter().map(|p| p.1.clone()).collect();
@@ -576,7 +580,7 @@ pub(crate) fn curve_ends(kind: &CurveKind) -> Option<[PointId; 2]> {
     match kind {
         CurveKind::Line { a, b } => Some([*a, *b]),
         CurveKind::Arc { start, end, .. } => Some([*start, *end]),
-        CurveKind::Spline { points } | CurveKind::ControlSpline { points, .. } => {
+        CurveKind::Spline { points, .. } | CurveKind::ControlSpline { points, .. } => {
             Some([*points.first()?, *points.last()?])
         }
         CurveKind::Conic { start, end, .. } => Some([*start, *end]),
@@ -630,7 +634,7 @@ fn into_curve(ctx: &Ctx, c: CurveId, p: PointId) -> Option<V2> {
                 (r.1, -&r.0)
             }
         }
-        CurveKind::Spline { points } => {
+        CurveKind::Spline { points, .. } => {
             if p == first {
                 param_curve(ctx, c, &Dual::constant(0.0)).1
             } else {
@@ -1352,7 +1356,7 @@ impl Sketch {
             .curves()
             .iter()
             .find_map(|&c| match &self.curves[c].kind {
-                CurveKind::Spline { points } => {
+                CurveKind::Spline { points, .. } => {
                     let n = points.len();
                     // Spielraum je Ende: `tol.linear` geteilt durch die Sehnenlänge des
                     // End-Segments, also etwa `tol.linear` Weglänge auf der Fortsetzung, begrenzt
@@ -1518,10 +1522,7 @@ impl Sketch {
                 DVec2::new(self.vars[*ax], self.vars[*ay]),
                 self.vars[*minor],
             )),
-            CurveKind::Spline { points } => {
-                let xy: Vec<DVec2> = points.iter().map(|&p| self.pos(p)).collect();
-                Some(Sampled::spline(&xy))
-            }
+            CurveKind::Spline { points, handles } => Some(self.spline_sampled(points, handles)),
             CurveKind::ControlSpline { .. } | CurveKind::Conic { .. } => {
                 Some(Sampled::Nurbs(self.nurbs_of(c)?))
             }
@@ -1894,8 +1895,13 @@ impl Sketch {
     /// Entfernt die Kurve samt allen Abhängigkeiten, die sie benutzen (auch interne).
     /// Ist sie Vorlage, Exemplar oder Richtungslinie eines Musters, wird das Muster aufgelöst;
     /// ein einzelnes Exemplar löscht die Oberfläche über [`Sketch::suppress_instance`].
+    ///
+    /// Griffe (Skizzen 7, B8): Der Spline nimmt seine Griffe mit. Die Griff-Linie schaltet den Griff
+    /// aus, der Griff-Bogen nur den Krümmungsgriff; der Spline bleibt und springt auf die Form ohne
+    /// sie.
     pub fn remove_curve(&mut self, c: CurveId) -> Result<(), SketchError> {
         self.check_curve(c)?;
+        let released = self.release_handles_of(c);
         self.dissolve_patterns_of_curve(c);
         self.touch_structure();
         self.curves[c].alive = false;
@@ -1908,23 +1914,31 @@ impl Sketch {
         for i in dead {
             self.constraints[i].alive = false;
         }
-        Ok(())
+        self.finish_release(released)
     }
 
     /// Entfernt den Punkt samt allen Kurven und Abhängigkeiten, die ihn benutzen.
     /// Ist er Mitte, Vorlagen- oder Exemplarpunkt eines Musters, wird das Muster aufgelöst.
+    /// Eine Griffspitze nimmt nur den Griff mit, nicht den Spline (Skizzen 7).
     pub fn remove_point(&mut self, p: PointId) -> Result<(), SketchError> {
         self.check_point(p)?;
         self.dissolve_patterns_of_point(p);
         self.touch_structure();
         self.points[p].alive = false;
+        // Zuerst: Danach gehört `p` nicht mehr zu den Punkten des Splines.
+        for part in self.handle_parts_at(p) {
+            self.remove_curve(part)?;
+        }
         let curves: Vec<CurveId> = self
             .curves()
             .filter(|(_, d)| d.kind.points().contains(&p))
             .map(|(i, _)| i)
             .collect();
         for c in curves {
-            self.remove_curve(c)?;
+            // Der Spline an einem Stützpunkt hat seine Griff-Linien schon mitgenommen.
+            if self.check_curve(c).is_ok() {
+                self.remove_curve(c)?;
+            }
         }
         let dead: Vec<ConstraintId> = self
             .constraints

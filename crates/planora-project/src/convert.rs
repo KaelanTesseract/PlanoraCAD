@@ -35,8 +35,8 @@ use planora_math::{DQuat, DVec3, Frame, Tolerance};
 use planora_sketch::pattern::{CircularMode, PatternDir, PatternInstance, PatternKind};
 use planora_sketch::{
     ConstraintId, ConstraintKind, ConstraintRecord, CurveId, CurveKind, CurveRecord,
-    LegacyMigration, LineOrPoints, PatternId, PatternRecord, PatternSlot, PieceRef, PointId,
-    PointRecord, ProfileRef, Sketch, SketchData,
+    HandleCurvature, LegacyMigration, LineOrPoints, PatternId, PatternRecord, PatternSlot,
+    PieceRef, PointId, PointRecord, ProfileRef, Sketch, SketchData, SplineHandle,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -118,13 +118,17 @@ fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
         1
     }
 }
-/// Braucht die Art Format 17 (Skizzen 7)? Eine Skizze mit einem Spline mit Kontrollpunkten oder
-/// einem Kegelschnitt, auch einem gelöschten Eintrag: Er steht in der Datei.
+/// Braucht die Art Format 17 (Skizzen 7)? Eine Skizze mit einem Spline mit Kontrollpunkten, einem
+/// Kegelschnitt oder einem Griff, auch einem gelöschten Eintrag: Er steht in der Datei.
 fn needs_format_17(k: &FeatureKind) -> bool {
     matches!(k, FeatureKind::Sketch(sf) if sf
-        .sketch
-        .curve_entries()
-        .any(|c| matches!(c, CurveKind::ControlSpline { .. } | CurveKind::Conic { .. })))
+    .sketch
+    .curve_entries()
+    .any(|c| match c {
+        CurveKind::ControlSpline { .. } | CurveKind::Conic { .. } => true,
+        CurveKind::Spline { handles, .. } => !handles.is_empty(),
+        _ => false,
+    }))
 }
 /// Braucht die Art Format 16 (Skizzen 6)? Konstruktionsebenen, Skizzen auf ihnen und Schnitt-
 /// oder Silhouettenprojektionen. Kantenprojektionen gibt es schon länger, auch verknüpfte, nicht
@@ -334,8 +338,9 @@ fn curve_to(k: &CurveKind) -> CurveKindDto {
             ay: *ay,
             klein: *minor,
         },
-        CurveKind::Spline { points } => CurveKindDto::Spline {
+        CurveKind::Spline { points, handles } => CurveKindDto::Spline {
             punkte: points.iter().map(|p| p.index()).collect(),
+            griffe: handles.iter().map(griff_dto).collect(),
         },
         CurveKind::EllipticArc {
             center,
@@ -375,6 +380,45 @@ fn curve_to(k: &CurveKind) -> CurveKindDto {
     }
 }
 
+fn griff_dto(h: &SplineHandle) -> GriffDto {
+    GriffDto {
+        an: h.at.index(),
+        linie: h.line.index(),
+        spitze: h.tip.index(),
+        kruemmung: match h.curvature {
+            HandleCurvature::Form => GriffKruemmungDto::Form,
+            HandleCurvature::Straight => GriffKruemmungDto::Gerade,
+            HandleCurvature::Arc { arc, center, other } => GriffKruemmungDto::Bogen {
+                bogen: arc.index(),
+                mitte: center.index(),
+                anderes: other.index(),
+            },
+        },
+    }
+}
+
+fn griff_from(d: &GriffDto) -> SplineHandle {
+    let p = PointId::from_index;
+    SplineHandle {
+        at: p(d.an),
+        line: CurveId::from_index(d.linie),
+        tip: p(d.spitze),
+        curvature: match d.kruemmung {
+            GriffKruemmungDto::Form => HandleCurvature::Form,
+            GriffKruemmungDto::Gerade => HandleCurvature::Straight,
+            GriffKruemmungDto::Bogen {
+                bogen,
+                mitte,
+                anderes,
+            } => HandleCurvature::Arc {
+                arc: CurveId::from_index(bogen),
+                center: p(mitte),
+                other: p(anderes),
+            },
+        },
+    }
+}
+
 fn curve_from(d: &CurveKindDto) -> CurveKind {
     let p = PointId::from_index;
     match d {
@@ -399,8 +443,9 @@ fn curve_from(d: &CurveKindDto) -> CurveKind {
             ay: *ay,
             minor: *klein,
         },
-        CurveKindDto::Spline { punkte } => CurveKind::Spline {
+        CurveKindDto::Spline { punkte, griffe } => CurveKind::Spline {
             points: punkte.iter().map(|i| p(*i)).collect(),
+            handles: griffe.iter().map(griff_from).collect(),
         },
         CurveKindDto::Ellipsenbogen {
             mitte,
@@ -2936,10 +2981,11 @@ fn has_format_17_data(k: &KindDto) -> bool {
     .skizze
     .kurven
     .iter()
-    .any(|c| matches!(
-        c.art,
-        CurveKindDto::KontrollSpline { .. } | CurveKindDto::Kegelschnitt { .. }
-    )))
+    .any(|c| match &c.art {
+        CurveKindDto::KontrollSpline { .. } | CurveKindDto::Kegelschnitt { .. } => true,
+        CurveKindDto::Spline { griffe, .. } => !griffe.is_empty(),
+        _ => false,
+    }))
 }
 
 /// Liest eine Versionsdatei. `origin` ist der Dateiname für Meldungen.

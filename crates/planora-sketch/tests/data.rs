@@ -170,6 +170,7 @@ fn bad_numbers_and_splines_and_extra_are_rejected() {
             .unwrap();
         d.curves[i].kind = CurveKind::Spline {
             points: vec![PointId::from_index(0); n],
+            handles: Vec::new(),
         };
     };
     for n in [0, 1, 65, 10_000] {
