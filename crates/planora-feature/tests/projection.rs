@@ -1073,7 +1073,7 @@ fn oblique_cone_section_in_sketch_follows_the_body() {
     assert_eq!(sketch_def(&d, s).copies.len(), 1, "der Verweis bleibt");
     d.check_invariants().unwrap();
 
-    // Hyperbel: fester Spline, folgt dem Körper ohne Warnung und bleibt beim Rückgängig-Weg gültig.
+    // Hyperbel: fester Spline, folgt dem Körper ohne Warnung.
     let mut d = Document::new();
     let cone = d
         .add_feature(
@@ -1104,6 +1104,55 @@ fn oblique_cone_section_in_sketch_follows_the_body() {
     assert_eq!(f.status, FeatureStatus::Ok, "{:?}", f.status);
     assert!(f.warning().is_none(), "{:?}", f.warning());
     assert_ne!(spline(&d), before, "die Kurve folgt");
+    assert_curve_matches_section(&d, cone, s, c);
+    d.check_invariants().unwrap();
+}
+
+/// Korrektur 1: Die Radiusänderung lässt die Hyperbel über die Naht wachsen. Die Kurve folgt dem
+/// ganzen Schnitt und nicht nur einem Stück davon.
+#[test]
+fn cone_section_follows_across_the_seam() {
+    let mut d = Document::new();
+    let cone = d
+        .add_feature(
+            "Kegel",
+            FeatureKind::Cone {
+                radius: 2.9,
+                height: 10.0,
+                origin: DVec3::new(-3.0, 0.0, 0.0),
+            },
+        )
+        .unwrap();
+    // Ebene durch die z-Achse mit der Normalen (0,894; 0,447; 0).
+    let p = d
+        .add_feature(
+            "Ebene",
+            FeatureKind::Plane(PlaneFeature {
+                def: PlaneDef::Angle {
+                    axis: AxisRef::Standard(StdAxis::Z),
+                    angle: -(2f64.atan().to_degrees()),
+                },
+            }),
+        )
+        .unwrap();
+    let frame = d.plane_frame(p).unwrap();
+    let wanted = DVec3::new(2.0, 1.0, 0.0).normalize();
+    assert!(frame.z.cross(wanted).length() < 1e-9, "{}", frame.z);
+    let (s, c) = cone_section_sketch(&mut d, cone, frame, SketchPlane::OnPlane(p));
+    assert!(matches!(
+        d.sketch_of(s).unwrap().curve(c).unwrap().kind,
+        CurveKind::FixedSpline { .. }
+    ));
+    set_cone_radius(&mut d, cone, 5.0);
+    let f = d.feature(s).unwrap();
+    assert_eq!(f.status, FeatureStatus::Ok, "{:?}", f.status);
+    assert!(f.warning().is_none(), "{:?}", f.warning());
+    let solid = body(&d, cone);
+    let face = find_face(&solid, |f| {
+        matches!(solid.faces[f].surface, planora_kernel::Surface::Cone { .. })
+    });
+    let pieces = section_by_plane(&solid, &frame, Some(&[face]), &tol()).unwrap();
+    assert_eq!(pieces.len(), 1, "ein Stück über die Naht: {pieces:?}");
     assert_curve_matches_section(&d, cone, s, c);
     d.check_invariants().unwrap();
 }

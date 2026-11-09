@@ -122,10 +122,18 @@ fn check_section(solid: &Solid, plane: &Frame, what: &str) -> Vec<SectionPiece> 
         if point_in_face(&geom, q, &t) != Containment::Inside {
             continue;
         }
-        let best = segs
-            .iter()
-            .map(|s| s.closest(q).1)
-            .fold(f64::INFINITY, f64::min);
+        // `Seg::closest` sucht nur um die beste Stützstelle: An der engen Spitze einer schmalen
+        // Parabel kann es den falschen Schenkel erwischen. Dann fein geteilt nachsuchen.
+        let nearest = |s: &Seg| {
+            let coarse = s.closest(q).1;
+            if coarse < 1e-5 {
+                return coarse;
+            }
+            (0..256)
+                .map(|k| s.sub(k as f64 / 256.0, (k + 1) as f64 / 256.0).closest(q).1)
+                .fold(coarse, f64::min)
+        };
+        let best = segs.iter().map(nearest).fold(f64::INFINITY, f64::min);
         assert!(
             best < 1e-5,
             "{what}: Schnittpunkt {q} fehlt (Abstand {best}), Stücke {ps:?}"
@@ -230,6 +238,97 @@ fn moved_turned_and_scaled_cones() {
                     &plane,
                     &format!("Maßstab {scale}, {deg}°, {lateral}"),
                 );
+            }
+        }
+    }
+}
+
+/// Kegel um eine zu z parallele Achse durch `origin`, Spitze oben.
+fn cone_at(origin: DVec3, r: f64, h: f64) -> Solid {
+    let chain = ProfileLoop {
+        start: DVec2::ZERO,
+        segments: vec![
+            Segment::Line {
+                to: DVec2::new(r, 0.0),
+            },
+            Segment::Line {
+                to: DVec2::new(0.0, h),
+            },
+        ],
+    };
+    let frame = Frame {
+        origin,
+        ..Frame::WORLD
+    };
+    revolve(&chain, &frame, &tol()).unwrap()
+}
+
+/// Korrektur 1: Parabel, Hyperbel und Ellipsenbogen laufen als ein Stück über die Naht. Sonst folgte
+/// die Skizzenkurve beim Verweis auf das Stück 0 nur noch einem Teil des Schnitts, ohne Warnung.
+#[test]
+fn seam_does_not_split_a_conic() {
+    for tilt in [0.0f64, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2] {
+        for (nx, ny) in [(0.894f64, 0.447f64), (1.0, 0.0), (0.7, 0.7)] {
+            let side = DVec3::new(nx, ny, 0.0).normalize();
+            let n = (side * tilt.cos() + DVec3::Z * tilt.sin()).normalize();
+            let plane = Frame::from_origin_normal(DVec3::Z * 2.0, n);
+            for i in 0..=60 {
+                let r = 2.0 + i as f64 * 0.1;
+                let solid = cone_at(DVec3::new(-3.0, 0.0, 0.0), r, 10.0);
+                let what = format!("Kippung {tilt}, Normale ({nx}, {ny}), r {r}");
+                let ps = check_section(&solid, &plane, &what);
+                assert!(ps.len() <= 1, "{what}: {ps:?}");
+            }
+        }
+    }
+}
+
+/// Korrektur 1: Große Kegel im Fenster der Parabel. Die weggelassene Größe `A·u²` darf das Stück
+/// weder über die Fläche hinauslaufen lassen noch die Kurve vom Kegel wegschieben.
+#[test]
+fn large_cones_near_the_parabola_stay_on_the_face() {
+    let t = tol();
+    let positions = [
+        (100.0, 200.0, 1e-4, 1e-10),
+        (100.0, 200.0, 5.0, 1e-7),
+        (250.0, 500.0, 5.0, 1e-9),
+        (1000.0, 2000.0, 1e-2, 1e-10),
+        (1000.0, 2000.0, 1e-5, 1e-12),
+        (1000.0, 2000.0, 20.0, 1e-10),
+        (1000.0, 2000.0, 20.0, 3e-9),
+        (1000.0, 2000.0, 20.0, 1e-6),
+        (1000.0, 2000.0, 1e-3, 1e-7),
+        (1000.0, 2000.0, 1e-3, 1e-5),
+        (1000.0, 2000.0, 1e-5, 1e-9),
+    ];
+    for (r, height, h, tilt) in positions {
+        for sign in [1.0, -1.0, 0.0] {
+            for phi in [1.1f64, 3.3] {
+                let solid = make_cone(r, height, &t).unwrap();
+                let slope = -r / height;
+                let along = normal_along_generator(slope, phi);
+                let radial = DVec3::new(phi.cos(), phi.sin(), 0.0);
+                let apex = DVec3::Z * height;
+                // Die Ebene liegt um `h` neben der Mantellinie, auf der Seite der Achse.
+                let origin = apex - along * (h * along.dot(radial).signum());
+                let n = (along + DVec3::Z * (tilt * sign)).normalize();
+                let plane = Frame::from_origin_normal(origin, n);
+                let what = format!(
+                    "r {r}, H {height}, h {h}, Kippung {}, phi {phi}",
+                    tilt * sign
+                );
+                let ps = check_section(&solid, &plane, &what);
+                assert!(!ps.is_empty(), "{what}");
+                let geom = face_geom(&solid, cone_face(&solid));
+                for p in &ps {
+                    let s = seg(p);
+                    for i in 0..=256 {
+                        let q = s.at(i as f64 / 256.0);
+                        assert!(q.z >= -1e-5, "{what}: unter der Fläche {q}");
+                        let off = geom.surface.implicit(q).abs();
+                        assert!(off < 1e-7, "{what}: {off} neben dem Kegel");
+                    }
+                }
             }
         }
     }

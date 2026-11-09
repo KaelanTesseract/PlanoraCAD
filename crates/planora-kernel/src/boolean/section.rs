@@ -146,8 +146,8 @@ fn edge_piece_crosses(
 /// (**Annahme**: Fusion liefert die Berührlinie nicht). Stücke, die als Punktfolge gleich sind
 /// (etwa eine Kante, die zwei Flächen liefern), kommen nur einmal vor; es bleibt das der ersten
 /// Fläche. Freiformflächen ergeben [`SectionError::Freeform`], analytische Lagen ohne Rechenweg
-/// [`SectionError::Unsupported`]. Der Kegel hat in jeder Lage einen Rechenweg
-/// ([`plane_cone_conic`]); Parabel und Hyperbel kommen als `Curve::Nurbs`.
+/// [`SectionError::Unsupported`]. Der schräge Kegel läuft über [`plane_cone_conic`]; Parabel und
+/// Hyperbel kommen dort als `Curve::Nurbs`, und Kegelschnitte laufen als ein Stück über die Naht.
 pub fn section_by_plane(
     solid: &Solid,
     plane: &Frame,
@@ -211,8 +211,29 @@ pub fn section_by_plane(
                     .iter()
                     .flat_map(|e| edge_hits(e, &cut, &ptol))
                     .collect();
+                // Kegelschnitte am Kegel teilt die Naht nicht: Sonst hinge die Stückzahl daran,
+                // ob die Kurve sie kreuzt, und der Verweis auf ein Stück folgte bei einer
+                // Maßänderung still nur noch einem Teil des Schnitts. Gerade Mantellinien brauchen
+                // die Treffer weiter (sie können in der Naht liegen).
+                let rim_hits: Vec<_> = if matches!(geom.surface, Surface::Cone { .. }) {
+                    let on_seam = |e: &Seg| {
+                        seams
+                            .iter()
+                            .any(|m| m.closest(e.at(0.5)).1 <= ptol.linear * 4.0)
+                    };
+                    boundary
+                        .iter()
+                        .filter(|e| !on_seam(e))
+                        .flat_map(|e| edge_hits(e, &cut, &ptol))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
                 for c in cs {
-                    let ts = breakpoints(&c, &hits, &[&geom.surface], &ptol);
+                    let spans_seam = matches!(geom.surface, Surface::Cone { .. })
+                        && matches!(c, Curve::Nurbs(_) | Curve::Ellipse { .. });
+                    let own_hits = if spans_seam { &rim_hits } else { &hits };
+                    let ts = breakpoints(&c, own_hits, &[&geom.surface], &ptol);
                     found.extend(split_at(&c, ts, &ptol).into_iter().filter(|s| {
                         match classify_seg(&geom, &seams, s, &ptol) {
                             Containment::Inside => true,
@@ -242,6 +263,20 @@ pub fn section_by_plane(
 /// Fenster, in dem die Lage als Parabel gilt: Abstand der Tangente des Winkels zwischen Ebene und
 /// Achse von der Kegelsteigung, bezogen auf die Steigung.
 const PARABOLA_WINDOW: f64 = 1e-9;
+/// So weit darf die weggelassene Größe `A·u²` die Parabel innerhalb des Hüllquaders seitlich
+/// verschieben; sonst gilt die genaue Ellipse oder Hyperbel. Diese Größe begrenzt zugleich den
+/// Abstand zum Kegel, liegt also bewusst unter der Grenze `1e-7` für Schnittpunkte.
+const PARABOLA_MAX_SHIFT: f64 = 5e-8;
+/// Bis zu dieser großen Halbachse bleibt eine Ellipse `Curve::Ellipse`. Darüber rechnet die Form
+/// aus Mitte und Halbachse mit Zahlen, deren Rundung die Grenze `1e-7` erreicht.
+const MAX_ELLIPSE_MAJOR: f64 = 1e7;
+/// Bis zu diesem Verhältnis der Halbachsen bleibt eine Ellipse `Curve::Ellipse`. `Curve::project`
+/// bestimmt ihren Parameter über den Winkel, nicht über den nächsten Punkt; ein kleiner Fehler quer
+/// zur langen Achse wächst dabei etwa mit diesem Verhältnis. Gemessen: Bei 3e4 verfehlt der Treffer
+/// der Randkante die Kurve um 2e-5, der Haltepunkt ginge verloren und mit ihm das ganze Stück.
+const MAX_ELLIPSE_ASPECT: f64 = 1000.0;
+/// Größter Winkel vom Scheitel, bis zu dem eine fast parabolische Ellipse als Bézier-Stück geht.
+const MAX_ELLIPSE_ARC_ANGLE: f64 = 1.4;
 /// Unter dieser Steigung hat der Kegel keine brauchbare Spitze (Zylinder).
 const MIN_CONE_SLOPE: f64 = 1e-12;
 /// Unter dieser Länge gilt die Projektion der Achse auf die Ebene als null (Ebene quer zur Achse).
@@ -310,10 +345,59 @@ fn hyperbola_arcs(
     Some(vec![conic_bezier([at(s0), corner, at(s1)], weight)?])
 }
 
+/// Das Stück einer sehr großen Ellipse am nahen Scheitel als rationales Bézier-Stück Grad 2: Der
+/// Punkt zum Winkel `t` ist `vertex + x·a·(1 − cos t) + y·b·sin t`; `x` zeigt vom Scheitel zur Mitte.
+/// Das ist dieselbe Ellipse wie `Curve::Ellipse`, aber ohne die Auslöschung großer Zahlen.
+/// Äußeres `None`: Der Hüllquader reicht zu weit um die Ellipse (dann bleibt es `Curve::Ellipse`),
+/// inneres `None`: Die Ellipse erreicht den Quader nicht.
+fn near_vertex_ellipse(
+    (vertex, x, y): (DVec3, DVec3, DVec3),
+    (a, b): (f64, f64),
+    bounds: (DVec3, DVec3),
+) -> Option<Option<Curve>> {
+    let reach = box_range(bounds, vertex, x).1;
+    if reach < 0.0 {
+        return Some(None);
+    }
+    let (y_lo, y_hi) = box_range(bounds, vertex, y);
+    let (sin_max, y_lo, y_hi) = ((reach / (2.0 * a)).sqrt(), y_lo / b, y_hi / b);
+    if sin_max >= 1.0 {
+        return None;
+    }
+    // Quer zur Achse grenzt der Quader nur ein; reicht er über die kleine Halbachse, zählt allein
+    // die Reichweite längs der Achse.
+    let t_max = 2.0 * sin_max.asin();
+    let (t0, t1) = (
+        y_lo.clamp(-1.0, 1.0).asin().max(-t_max),
+        y_hi.clamp(-1.0, 1.0).asin().min(t_max),
+    );
+    if t0.abs().max(t1.abs()) > MAX_ELLIPSE_ARC_ANGLE {
+        return None;
+    }
+    if t1 - t0 < MIN_CONIC_SPAN {
+        return Some(None);
+    }
+    let at = |t: f64| {
+        let sh = (t / 2.0).sin();
+        vertex + x * (a * 2.0 * sh * sh) + y * (b * t.sin())
+    };
+    // Schnitt der Endtangenten: cos(m)/cos(h) und sin(m)/cos(h) mit der Mitte m.
+    let (half, m) = ((t1 - t0) / 2.0, (t0 + t1) / 2.0);
+    let weight = half.cos();
+    let c = -2.0 * ((half + m) / 2.0).sin() * ((half - m) / 2.0).sin() / weight;
+    let corner = vertex + x * (a * c) + y * (b * m.sin() / weight);
+    conic_bezier([at(t0), corner, at(t1)], weight).map(Some)
+}
+
 /// Schnitt der Ebene `plane` mit dem Kegel `cone`, `radius`, `slope` in jeder Lage (Skizzen 7, G2):
-/// Ellipse als `Curve::Ellipse`, Parabel als nicht rationales Bézier-Stück Grad 2, Hyperbel je Ast
-/// als rationale Bézier-Stücke Grad 2 (der falsche Ast entfällt beim Beschneiden, weil er auf der
-/// anderen Schale liegt), durch die Spitze zwei Geraden, eine Berührgerade oder nur die Spitze.
+/// Ellipse als `Curve::Ellipse` (ein sehr großes oder sehr schlankes Stück, das den Scheitel nicht
+/// umrundet, siehe [`MAX_ELLIPSE_MAJOR`] und [`MAX_ELLIPSE_ASPECT`], als rationales Bézier-Stück), Parabel als nicht rationales Bézier-Stück Grad 2, Hyperbel je Ast als rationale
+/// Bézier-Stücke Grad 2 (der falsche Ast entfällt beim Beschneiden, weil er auf der anderen Schale
+/// liegt), durch die Spitze zwei Geraden, eine Berührgerade oder nur die Spitze.
+///
+/// Als Parabel gilt die Lage nur im Fenster [`PARABOLA_WINDOW`] und solange `A·u²` innerhalb des
+/// Hüllquaders höchstens [`PARABOLA_MAX_SHIFT`] seitlich ausmacht; sonst läge der Treffer der
+/// Randkante nicht mehr auf der Kurve, und das Stück liefe über die Fläche hinaus.
 ///
 /// `bounds`: Hüllquader der Fläche. Parabel und Hyperbel überdecken genau das Stück, das in ihm
 /// liegen kann; ein Ast, der ihn gar nicht erreicht, entfällt schon hier.
@@ -351,10 +435,10 @@ pub(crate) fn plane_cone_conic(
     let e2 = n.cross(e1);
     let flank = s * sigma;
     let steeper = c.abs() - flank;
-    let parabola = steeper.abs() <= PARABOLA_WINDOW * flank;
+    let in_window = steeper.abs() <= PARABOLA_WINDOW * flank;
     if h.abs() <= tol.linear {
         // Durch die Spitze: `A·u² + v² = 0`.
-        if parabola {
+        if in_window {
             return SurfaceIntersection::Touch;
         }
         if steeper > 0.0 {
@@ -378,11 +462,18 @@ pub(crate) fn plane_cone_conic(
     let big_f = h * h * (1.0 - k * c * c);
     let root = s * h.abs();
     let (y_lo, y_hi) = box_range(bounds, foot, e2);
+    let (u_lo, u_hi) = box_range(bounds, foot, e1);
+    // Die Parabel verschiebt die Kurve längs `e1` um `A·u²/(2·B)`; seitlich zu ihr zählt davon der
+    // Anteil quer zur Tangente `(v/B, 1)` mit `v² ≈ 2·B·u`. Beides wächst mit `|u|`.
+    let parabola = in_window && big_b != 0.0 && {
+        let u_max = u_lo.abs().max(u_hi.abs());
+        let along = big_a.abs() * u_max * u_max / (2.0 * big_b.abs());
+        along / (1.0 + 2.0 * u_max / big_b.abs()).sqrt() <= PARABOLA_MAX_SHIFT.min(tol.linear)
+    };
     if parabola {
         // `u = (v² + F) / (2·B)`: Bézier über `v`, der Parameter läuft gleichmäßig in `v`.
         let u_at = |v: f64| (v * v + big_f) / (2.0 * big_b);
         let vertex_u = u_at(0.0);
-        let (u_lo, u_hi) = box_range(bounds, foot, e1);
         let reach = if big_b > 0.0 {
             u_hi - vertex_u
         } else {
@@ -403,8 +494,21 @@ pub(crate) fn plane_cone_conic(
                 SurfaceIntersection::Curves(vec![curve])
             });
     }
+    // Scheitel sind die Nullstellen von `A·u² − 2·B·u + F`, stabil gerechnet.
+    let q = big_b + root.copysign(big_b);
+    let (far, near) = (q / big_a, big_f / q);
     if steeper > 0.0 {
         // `A·(u − B/A)² + v² = slope²·h²/A`, und `A ≤ 1`: die große Halbachse liegt auf `e1`.
+        let (major, minor) = (root / big_a, root / big_a.sqrt());
+        if major > MAX_ELLIPSE_MAJOR || major > MAX_ELLIPSE_ASPECT * minor {
+            let to_center = if q > 0.0 { e1 } else { -e1 };
+            let frame = (foot + e1 * near, to_center, e2);
+            match near_vertex_ellipse(frame, (major, minor), bounds) {
+                Some(Some(curve)) => return SurfaceIntersection::Curves(vec![curve]),
+                Some(None) => return SurfaceIntersection::None,
+                None => {}
+            }
+        }
         return SurfaceIntersection::Curves(vec![Curve::Ellipse {
             frame: Frame {
                 origin: foot + e1 * (big_b / big_a),
@@ -412,15 +516,13 @@ pub(crate) fn plane_cone_conic(
                 y: e2,
                 z: n,
             },
-            major: root / big_a,
-            minor: root / big_a.sqrt(),
+            major,
+            minor,
         }]);
     }
-    // Hyperbel: Scheitel sind die Nullstellen von `A·u² − 2·B·u + F`, stabil gerechnet.
+    // Hyperbel.
     let flat = -big_a;
     let (a, b) = (root / flat, root / flat.sqrt());
-    let q = big_b + root.copysign(big_b);
-    let (far, near) = (q / big_a, big_f / q);
     // Nach `q` unterscheiden, nicht nach `B`: `B` kann −0 sein (Ebene parallel zur Achse).
     let vertices = if q > 0.0 {
         [(1.0, near), (-1.0, far)]
