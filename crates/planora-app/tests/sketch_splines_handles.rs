@@ -2163,6 +2163,10 @@ fn the_inner_handle_follows_the_mouse_beside_a_curvature_handle() {
 enum Joint {
     Shared,
     Coincident,
+    /// „Deckungsgleich“ über einen dritten Punkt.
+    Chain,
+    /// Aufeinander, ohne Abhängigkeit.
+    SamePlace,
 }
 
 /// Bogen um `m` mit Radius `r` von `from` bis `to` (Winkel), am Ende `fit` des Splines angesetzt.
@@ -2199,6 +2203,14 @@ fn arc_at_spline(sk: &mut Sketch, at_end: bool, joint: Joint, handle: bool) -> A
             sk.add_constraint(K::Coincident(p, fit)).unwrap();
             p
         }
+        Joint::Chain => {
+            let p = sk.add_point(f.x, f.y).unwrap();
+            let mid = sk.add_point(f.x, f.y).unwrap();
+            sk.add_constraint(K::Coincident(p, mid)).unwrap();
+            sk.add_constraint(K::Coincident(mid, fit)).unwrap();
+            p
+        }
+        Joint::SamePlace => sk.add_point(f.x, f.y).unwrap(),
     };
     let arc = sk.add_arc(center, start, free).unwrap();
     if handle {
@@ -2220,7 +2232,12 @@ fn arc_at_spline(sk: &mut Sketch, at_end: bool, joint: Joint, handle: bool) -> A
 #[test]
 fn smooth_between_spline_and_an_attached_arc_stays_put() {
     for at_end in [false, true] {
-        for joint in [Joint::Shared, Joint::Coincident] {
+        for joint in [
+            Joint::Shared,
+            Joint::Coincident,
+            Joint::Chain,
+            Joint::SamePlace,
+        ] {
             for handle in [false, true] {
                 for arc_first in [true, false] {
                     let what = format!(
@@ -2309,6 +2326,60 @@ fn smooth_between_spline_and_an_attached_arc_stays_put() {
                     );
                 }
             }
+        }
+    }
+}
+
+/// Glatt über „erst Auswahl, dann Befehl“ (Aktion `skizze.glatt`): Bogen und Spline sind schon gewählt,
+/// der Befehl legt Glatt an der Fuge an, ohne Überzähliges, ein Schritt namens „Glatt“. Für jede Art
+/// der Fuge.
+#[test]
+fn smooth_from_a_selection_is_one_step_named_smooth() {
+    use planora_app::commands::run_action;
+    for joint in [
+        Joint::Shared,
+        Joint::Coincident,
+        Joint::Chain,
+        Joint::SamePlace,
+    ] {
+        for at_end in [false, true] {
+            let what = format!("{joint:?}, Ende {at_end}");
+            let mut ids = None;
+            let mut rig = Rig::new(|sk| ids = Some(arc_at_spline(sk, at_end, joint, false)));
+            let ids = ids.unwrap();
+            let fit = if at_end { ids.pts[3] } else { ids.pts[0] };
+            let free_before = rig.sketch().point_xy(ids.free).unwrap();
+            rig.select(&[Item::Curve(ids.arc), Item::Curve(ids.spline)]);
+            let steps = rig.undo_len();
+            run_action(rig.app.ws_mut(), Action::SketchSmooth);
+            rig.settle();
+            let sk = rig.sketch();
+            let smooth: Vec<_> = sk
+                .constraints()
+                .filter_map(|(_, d)| match d.kind {
+                    K::Smooth(a, pa, _, pb) => Some(if a == ids.arc { (pa, pb) } else { (pb, pa) }),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(smooth.len(), 1, "{what}: ein Glatt");
+            assert_eq!(smooth[0].1, fit, "{what}: am Spline die Fuge");
+            assert_ne!(smooth[0].0, ids.free, "{what}: am Bogen die Fuge");
+            let report = rig.se().last_report.clone().unwrap();
+            assert_eq!(report.status, SolveStatus::Solved, "{what}: {report:?}");
+            assert!(
+                report.redundant.is_empty() && report.conflicting.is_empty(),
+                "{what}: {report:?}"
+            );
+            assert!(
+                sk.point_xy(ids.free).unwrap().distance(free_before) < 1e-6,
+                "{what}: der Bogen springt"
+            );
+            assert_eq!(rig.undo_len(), steps + 1, "{what}: ein Schritt");
+            assert_eq!(
+                rig.st().sketch_undo_label().as_deref(),
+                Some(tr!("sketch-constraint-smooth").as_str()),
+                "{what}"
+            );
         }
     }
 }

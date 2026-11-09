@@ -2324,13 +2324,9 @@ impl SketchSession {
                 }
             }
             // Glatt an getrennten Enden: erst die Enden zusammen (im selben Schritt).
+            // Eine Kette aus „Deckungsgleich“ hält sie schon; eine weitere Zeile wäre überzählig.
             if let ConstraintKind::Smooth(_, pa, _, pb) = kind
-                && pa != pb
-                && !sk.constraints().any(|(_, k)| {
-                    k.enabled
-                        && matches!(k.kind, ConstraintKind::Coincident(x, y)
-                            if (x, y) == (pa, pb) || (x, y) == (pb, pa))
-                })
+                && !sk.coincident_chain(pa, pb)
             {
                 sk.add_constraint(ConstraintKind::Coincident(pa, pb))
                     .map_err(err)?;

@@ -2347,31 +2347,39 @@ impl Sketch {
             if p == q { 0.0 } else { dist(p, self.pos(q)) }
         };
         let key = |p: PointId, q: PointId| (p.min(q), p.max(q));
-        // Hängen die Kurven schon an Enden zusammen (gemeinsamer Punkt oder „Deckungsgleich“), gilt
-        // eine solche Fuge vor dem Klick. Das Ende nächst dem Klick legte sonst das freie Ende auf die
-        // Fuge, und eine Kurve schlösse sich zum Vollkreis (Handtest Skizzen 7). Der Klick wählt nur
-        // noch zwischen mehreren Fugen.
-        let joined = |p: PointId, q: PointId| {
-            p == q
-                || self.constraints().any(|(_, k)| {
-                    k.enabled
-                        && matches!(k.kind, ConstraintKind::Coincident(x, y)
-                            if (x, y) == (p, q) || (x, y) == (q, p))
-                })
+        // Hängen die Kurven schon an Enden zusammen, gilt eine solche Fuge vor dem Klick. Das Ende
+        // nächst dem Klick legte sonst das freie Ende auf die Fuge, und eine Kurve schlösse sich zum
+        // Vollkreis (Handtest Skizzen 7). Rang: gemeinsamer Punkt, Kette aus „Deckungsgleich“, gleiche
+        // Lage ohne Abhängigkeit (bis `tol.linear`). Der Klick wählt nur noch zwischen Fugen
+        // desselben Rangs.
+        let rank = |p: PointId, q: PointId| -> Option<u8> {
+            if p == q {
+                Some(0)
+            } else if self.coincident_chain(p, q) {
+                Some(1)
+            } else if gap(p, q) <= self.tol.linear {
+                Some(2)
+            } else {
+                None
+            }
         };
-        let joints: Vec<(PointId, PointId)> = ea
+        let joints: Vec<(u8, PointId, PointId)> = ea
             .iter()
             .flat_map(|&p| eb.iter().map(move |&q| (p, q)))
-            .filter(|&(p, q)| joined(p, q))
+            .filter_map(|(p, q)| rank(p, q).map(|r| (r, p, q)))
             .collect();
         if !joints.is_empty() {
             let off = |p: PointId, at: Option<DVec2>| at.map_or(0.0, |q| dist(p, q));
-            return joints.into_iter().min_by(|&(p, q), &(r, t)| {
-                (off(p, at_a) + off(q, at_b))
-                    .total_cmp(&(off(r, at_a) + off(t, at_b)))
-                    .then_with(|| (p != q).cmp(&(r != t)))
-                    .then_with(|| key(p, q).cmp(&key(r, t)))
-            });
+            return joints
+                .into_iter()
+                .min_by(|&(ra, p, q), &(rb, r, t)| {
+                    ra.cmp(&rb)
+                        .then_with(|| {
+                            (off(p, at_a) + off(q, at_b)).total_cmp(&(off(r, at_a) + off(t, at_b)))
+                        })
+                        .then_with(|| key(p, q).cmp(&key(r, t)))
+                })
+                .map(|(_, p, q)| (p, q));
         }
         let (ca, cb) = (clicked(ea, at_a), clicked(eb, at_b));
         ca.iter()
@@ -2383,6 +2391,43 @@ impl Sketch {
                     .then_with(|| (p != q).cmp(&(r != t)))
                     .then_with(|| key(p, q).cmp(&key(r, t)))
             })
+    }
+
+    /// Sind `p` und `q` über eine Kette eingeschalteter `Coincident` verbunden (auch direkt)? Für
+    /// Glatt: Eine solche Fuge braucht keine weitere Lagebedingung, sie wäre überzählig.
+    pub fn coincident_chain(&self, p: PointId, q: PointId) -> bool {
+        if p == q {
+            return true;
+        }
+        let pairs: Vec<(PointId, PointId)> = self
+            .constraints()
+            .filter(|(_, k)| k.enabled)
+            .filter_map(|(_, k)| match k.kind {
+                ConstraintKind::Coincident(x, y) => Some((x, y)),
+                _ => None,
+            })
+            .collect();
+        let mut seen = vec![p];
+        let mut open = vec![p];
+        while let Some(x) = open.pop() {
+            for &(a, b) in &pairs {
+                let next = if a == x {
+                    b
+                } else if b == x {
+                    a
+                } else {
+                    continue;
+                };
+                if next == q {
+                    return true;
+                }
+                if !seen.contains(&next) {
+                    seen.push(next);
+                    open.push(next);
+                }
+            }
+        }
+        false
     }
 
     /// Entfernt eine (nicht interne) Abhängigkeit.

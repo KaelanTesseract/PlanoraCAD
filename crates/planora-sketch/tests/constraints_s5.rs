@@ -653,6 +653,57 @@ fn smooth_ends_finds_shared_or_nearest_ends() {
         Some((p[0], la)),
         "andere Reihenfolge"
     );
+    // Fuge über eine Kette von „Deckungsgleich“ (ein dritter Punkt dazwischen) und Enden, die ohne
+    // Abhängigkeit aufeinander liegen: Auch sie gelten vor dem Klick, am Anfang und am Ende des
+    // Splines, in beiden Reihenfolgen.
+    for at_end in [false, true] {
+        for chain in [true, false] {
+            let mut s = sketch();
+            let (sp, p) = spline(&mut s, &[v(0.0, 0.0), v(5.0, 3.0), v(10.0, 0.0)]);
+            let fit = if at_end { p[2] } else { p[0] };
+            let f = at(&s, fit);
+            let away = if at_end { v(13.0, 3.0) } else { v(-3.0, -3.0) };
+            let (l, la, _) = line(&mut s, f, away);
+            if chain {
+                let mid = pt(&mut s, f.x, f.y);
+                s.add_constraint(K::Coincident(la, mid)).unwrap();
+                s.add_constraint(K::Coincident(mid, fit)).unwrap();
+            }
+            let what = format!("Ende {at_end}, Kette {chain}");
+            let near_free = away - (away - f) * 0.05;
+            let near_far = at(&s, if at_end { p[0] } else { p[2] });
+            assert_eq!(
+                s.smooth_ends(l, Some(near_free), sp, Some(near_far)),
+                Some((la, fit)),
+                "{what}"
+            );
+            assert_eq!(
+                s.smooth_ends(sp, Some(near_far), l, Some(near_free)),
+                Some((fit, la)),
+                "{what}, andere Reihenfolge"
+            );
+        }
+    }
+    // Vorrang: gemeinsamer Punkt vor Kette vor gleicher Lage, auch gegen den Klick.
+    let mut s = sketch();
+    let (sp, p) = spline(&mut s, &[v(0.0, 0.0), v(5.0, 3.0), v(10.0, 0.0)]);
+    let la = pt(&mut s, 10.0, 0.0);
+    let back = s.add_line(la, p[0]).unwrap();
+    assert_eq!(
+        s.smooth_ends(back, Some(v(9.5, 0.0)), sp, Some(v(9.5, 0.3))),
+        Some((p[0], p[0])),
+        "gemeinsamer Punkt vor gleicher Lage"
+    );
+    let mut s = sketch();
+    let (sp, p) = spline(&mut s, &[v(0.0, 0.0), v(5.0, 3.0), v(10.0, 0.0)]);
+    let (back, la, lb) = line(&mut s, v(10.0, 0.0), v(0.0, 0.0));
+    s.add_constraint(K::Coincident(lb, p[0])).unwrap();
+    assert_eq!(
+        s.smooth_ends(back, Some(v(9.5, 0.0)), sp, Some(v(9.5, 0.3))),
+        Some((lb, p[0])),
+        "Kette vor gleicher Lage"
+    );
+    let _ = la;
     // Zwei Fugen (geschlossene Kette): Der Klick wählt.
     let mut s = sketch();
     let (sp, p) = spline(&mut s, &[v(0.0, 0.0), v(5.0, 3.0), v(10.0, 0.0)]);
