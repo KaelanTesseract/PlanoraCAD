@@ -11,7 +11,7 @@ use planora_app::keymap::{Action, Keymap};
 use planora_app::sketch_handles::{HandlePart, HandleView};
 use planora_app::sketch_kinds::ToolKind;
 use planora_app::sketch_panel;
-use planora_app::sketch_state::{Item, SketchSession, Snap, Tool};
+use planora_app::sketch_state::{ConstraintAction, Item, SketchSession, Snap, Tool};
 use planora_app::state::{AppState, StandardPlane};
 use planora_app::workspace::{DocTab, Workspace};
 use planora_app::{fonts, theme};
@@ -2115,7 +2115,10 @@ fn the_inner_handle_follows_the_mouse_beside_a_curvature_handle() {
                 "{what}: Spitze {got} statt {want}"
             );
             assert!(
-                sk.point_xy(pts[k]).unwrap().distance(v(FOUR[k].0, FOUR[k].1)) < 1e-9,
+                sk.point_xy(pts[k])
+                    .unwrap()
+                    .distance(v(FOUR[k].0, FOUR[k].1))
+                    < 1e-9,
                 "{what}: Stützpunkt bleibt"
             );
             assert!(
@@ -2150,6 +2153,162 @@ fn the_inner_handle_follows_the_mouse_beside_a_curvature_handle() {
                 &rig.sketch().curve_polyline(c, 64).unwrap(),
                 1e-9
             ));
+        }
+    }
+}
+
+/// Wie der Spline am Bogen hängt: ein gemeinsamer Punkt (so legt ihn das Zeichnen mit Fang an) oder
+/// zwei Punkte mit „Deckungsgleich“.
+#[derive(Clone, Copy, Debug)]
+enum Joint {
+    Shared,
+    Coincident,
+}
+
+/// Bogen um `m` mit Radius `r` von `from` bis `to` (Winkel), am Ende `fit` des Splines angesetzt.
+struct ArcAtSpline {
+    spline: CurveId,
+    pts: Vec<PointId>,
+    arc: CurveId,
+    center: PointId,
+    free: PointId,
+}
+
+fn arc_at_spline(sk: &mut Sketch, at_end: bool, joint: Joint, handle: bool) -> ArcAtSpline {
+    const FOUR: [(f64, f64); 4] = [(10.0, -16.0), (17.0, -5.0), (26.0, -15.0), (36.0, -7.0)];
+    let (spline, pts) = add_spline(sk, &FOUR);
+    let fit = if at_end { pts[3] } else { pts[0] };
+    let f = sk.point_xy(fit).unwrap();
+    // Die Mitte liegt außen vor dem Ende, der Bogen läuft vom Ende weg und knickt dort ab.
+    let m = if at_end {
+        f + v(4.0, -6.0)
+    } else {
+        f + v(-6.0, -4.0)
+    };
+    let r = f.distance(m);
+    let a0 = (f - m).y.atan2((f - m).x);
+    let a1 = a0 + 2.0;
+    let center = sk.add_point(m.x, m.y).unwrap();
+    let free = sk
+        .add_point(m.x + r * a1.cos(), m.y + r * a1.sin())
+        .unwrap();
+    let start = match joint {
+        Joint::Shared => fit,
+        Joint::Coincident => {
+            let p = sk.add_point(f.x, f.y).unwrap();
+            sk.add_constraint(K::Coincident(p, fit)).unwrap();
+            p
+        }
+    };
+    let arc = sk.add_arc(center, start, free).unwrap();
+    if handle {
+        sk.activate_tangent_handle(spline, fit).unwrap();
+    }
+    ArcAtSpline {
+        spline,
+        pts,
+        arc,
+        center,
+        free,
+    }
+}
+
+/// Handtest Skizzen 7, Fehler 2: „Glatt“ zwischen Spline und einem Bogen, der an seinem Anfang oder
+/// Ende ansetzt. Geklickt wird der Bogen nahe seinem freien Ende, der Spline nahe der Fuge. Das Glatt
+/// gilt an der Fuge, ohne Sprung und ohne Überzähligkeit; der Bogen bleibt, wo er war; ein Schritt
+/// namens „Glatt“. In beiden Wahlreihenfolgen, auch mit schon eingeschaltetem Griff.
+#[test]
+fn smooth_between_spline_and_an_attached_arc_stays_put() {
+    for at_end in [false, true] {
+        for joint in [Joint::Shared, Joint::Coincident] {
+            for handle in [false, true] {
+                for arc_first in [true, false] {
+                    let what = format!(
+                        "Ende {at_end}, {joint:?}, Griff {handle}, Bogen zuerst {arc_first}"
+                    );
+                    let mut ids = None;
+                    let mut rig =
+                        Rig::new(|sk| ids = Some(arc_at_spline(sk, at_end, joint, handle)));
+                    let ids = ids.unwrap();
+                    let before = rig.sketch();
+                    let fit = if at_end { ids.pts[3] } else { ids.pts[0] };
+                    let free_before = before.point_xy(ids.free).unwrap();
+                    let center_before = before.point_xy(ids.center).unwrap();
+                    // Klickstellen: der Bogen bei 80 % zum freien Ende, der Spline nahe der Fuge.
+                    let on_arc = {
+                        let (lo, hi) = before.curve_domain(ids.arc).unwrap();
+                        before.curve_eval(ids.arc, lo + 0.8 * (hi - lo)).unwrap()
+                    };
+                    let on_arc = if on_arc.distance(free_before)
+                        < before
+                            .curve_eval(ids.arc, before.curve_domain(ids.arc).unwrap().0)
+                            .unwrap()
+                            .distance(free_before)
+                    {
+                        on_arc
+                    } else {
+                        let (lo, hi) = before.curve_domain(ids.arc).unwrap();
+                        before.curve_eval(ids.arc, lo + 0.2 * (hi - lo)).unwrap()
+                    };
+                    let on_spline = {
+                        let (lo, hi) = before.curve_domain(ids.spline).unwrap();
+                        let t = if at_end { hi - 0.3 } else { lo + 0.3 };
+                        before.curve_eval(ids.spline, t).unwrap()
+                    };
+                    let steps = rig.undo_len();
+                    {
+                        let (se, sk) = rig.st().session_sketch_mut().unwrap();
+                        se.set_tool(sk, Tool::Constraint(ConstraintAction::Smooth));
+                    }
+                    rig.settle();
+                    let clicks = if arc_first {
+                        [on_arc, on_spline]
+                    } else {
+                        [on_spline, on_arc]
+                    };
+                    for at in clicks {
+                        let p = rig.screen(at);
+                        rig.click(p);
+                    }
+                    let sk = rig.sketch();
+                    let smooth: Vec<_> = sk
+                        .constraints()
+                        .filter_map(|(_, d)| match d.kind {
+                            K::Smooth(a, pa, b, pb) => Some((a, pa, b, pb)),
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(smooth.len(), 1, "{what}: ein Glatt");
+                    let (a, pa, b, pb) = smooth[0];
+                    let (arc_end, spline_end) = if a == ids.arc { (pa, pb) } else { (pb, pa) };
+                    assert!(
+                        [a, b].contains(&ids.arc) && [a, b].contains(&ids.spline),
+                        "{what}"
+                    );
+                    assert_eq!(spline_end, fit, "{what}: am Spline die Fuge");
+                    assert_ne!(arc_end, ids.free, "{what}: am Bogen die Fuge");
+                    let report = rig.se().last_report.clone().unwrap();
+                    assert_eq!(report.status, SolveStatus::Solved, "{what}: {report:?}");
+                    assert!(
+                        report.redundant.is_empty() && report.conflicting.is_empty(),
+                        "{what}: {report:?}"
+                    );
+                    assert!(
+                        sk.point_xy(ids.free).unwrap().distance(free_before) < 1e-6,
+                        "{what}: der Bogen springt"
+                    );
+                    assert!(
+                        sk.point_xy(ids.center).unwrap().distance(center_before) < 1e-6,
+                        "{what}: die Bogenmitte springt"
+                    );
+                    assert_eq!(rig.undo_len(), steps + 1, "{what}: ein Schritt");
+                    assert_eq!(
+                        rig.st().sketch_undo_label().as_deref(),
+                        Some(tr!("sketch-constraint-smooth").as_str()),
+                        "{what}"
+                    );
+                }
+            }
         }
     }
 }

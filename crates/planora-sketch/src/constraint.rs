@@ -2307,8 +2307,9 @@ impl Sketch {
         is_end(a, pa) && is_end(b, pb)
     }
 
-    /// Die Enden, an denen Glatt die Kurven `a` und `b` verbindet, wie in Fusion an der
-    /// Klickstelle: Wurde eine Kurve per Klick gewählt (`at_a`, `at_b`), gilt ihr Ende, das dem
+    /// Die Enden, an denen Glatt die Kurven `a` und `b` verbindet. Hängen sie schon an Enden
+    /// zusammen (gemeinsamer Punkt oder `Coincident`), gilt diese Fuge; bei mehreren die nächst den
+    /// Klicks. Sonst wie in Fusion an der Klickstelle: Wurde eine Kurve per Klick gewählt (`at_a`, `at_b`), gilt ihr Ende, das dem
     /// Klick am nächsten liegt; ohne Klick (etwa Rahmenauswahl) das Ende, das am nächsten an einem
     /// Ende der anderen Kurve liegt (ein gemeinsames Ende zuerst). Die Weite ist nicht begrenzt:
     /// Getrennte Enden legt der Befehl der Oberfläche mit einem `Coincident` zusammen. Die Wahl
@@ -2342,11 +2343,37 @@ impl Sketch {
                 None => ends.to_vec(),
             }
         };
-        let (ca, cb) = (clicked(ea, at_a), clicked(eb, at_b));
         let gap = |p: PointId, q: PointId| {
             if p == q { 0.0 } else { dist(p, self.pos(q)) }
         };
         let key = |p: PointId, q: PointId| (p.min(q), p.max(q));
+        // Hängen die Kurven schon an Enden zusammen (gemeinsamer Punkt oder „Deckungsgleich“), gilt
+        // eine solche Fuge vor dem Klick. Das Ende nächst dem Klick legte sonst das freie Ende auf die
+        // Fuge, und eine Kurve schlösse sich zum Vollkreis (Handtest Skizzen 7). Der Klick wählt nur
+        // noch zwischen mehreren Fugen.
+        let joined = |p: PointId, q: PointId| {
+            p == q
+                || self.constraints().any(|(_, k)| {
+                    k.enabled
+                        && matches!(k.kind, ConstraintKind::Coincident(x, y)
+                            if (x, y) == (p, q) || (x, y) == (q, p))
+                })
+        };
+        let joints: Vec<(PointId, PointId)> = ea
+            .iter()
+            .flat_map(|&p| eb.iter().map(move |&q| (p, q)))
+            .filter(|&(p, q)| joined(p, q))
+            .collect();
+        if !joints.is_empty() {
+            let off = |p: PointId, at: Option<DVec2>| at.map_or(0.0, |q| dist(p, q));
+            return joints.into_iter().min_by(|&(p, q), &(r, t)| {
+                (off(p, at_a) + off(q, at_b))
+                    .total_cmp(&(off(r, at_a) + off(t, at_b)))
+                    .then_with(|| (p != q).cmp(&(r != t)))
+                    .then_with(|| key(p, q).cmp(&key(r, t)))
+            });
+        }
+        let (ca, cb) = (clicked(ea, at_a), clicked(eb, at_b));
         ca.iter()
             .flat_map(|&p| cb.iter().map(move |&q| (p, q)))
             .min_by(|&(p, q), &(r, t)| {

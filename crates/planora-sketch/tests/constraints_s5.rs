@@ -628,6 +628,43 @@ fn smooth_ends_finds_shared_or_nearest_ends() {
         s.smooth_ends(l, Some(v(-9.5, 0.0)), sp, Some(v(9.0, 0.5))),
         Some((la, p[2]))
     );
+    // Hängen die Kurven schon an einem Ende zusammen, gilt diese Fuge, wo auch immer geklickt wurde:
+    // Ein Klick nahe dem freien Ende legte sonst beide Enden der einen Kurve auf denselben Punkt
+    // (Handtest Skizzen 7: der Bogen am Spline wurde zum Vollkreis).
+    let mut s = sketch();
+    let (sp, p) = spline(&mut s, &[v(0.0, 0.0), v(5.0, 3.0), v(10.0, 0.0)]);
+    let free = pt(&mut s, -3.0, -3.0);
+    let (l, _, _) = line(&mut s, v(0.0, 0.0), v(-3.0, -3.0));
+    let shared = s.add_line(p[0], free).unwrap();
+    assert_eq!(
+        s.smooth_ends(shared, Some(v(-2.9, -2.9)), sp, Some(v(9.0, 0.5))),
+        Some((p[0], p[0])),
+        "gemeinsamer Punkt"
+    );
+    let (la, _) = ends(&s, l);
+    s.add_constraint(K::Coincident(la, p[0])).unwrap();
+    assert_eq!(
+        s.smooth_ends(l, Some(v(-2.9, -2.9)), sp, None),
+        Some((la, p[0])),
+        "deckungsgleiche Enden"
+    );
+    assert_eq!(
+        s.smooth_ends(sp, None, l, Some(v(-2.9, -2.9))),
+        Some((p[0], la)),
+        "andere Reihenfolge"
+    );
+    // Zwei Fugen (geschlossene Kette): Der Klick wählt.
+    let mut s = sketch();
+    let (sp, p) = spline(&mut s, &[v(0.0, 0.0), v(5.0, 3.0), v(10.0, 0.0)]);
+    let back = s.add_line(p[0], p[2]).unwrap();
+    assert_eq!(
+        s.smooth_ends(back, Some(v(9.0, 0.0)), sp, Some(v(9.0, 0.5))),
+        Some((p[2], p[2]))
+    );
+    assert_eq!(
+        s.smooth_ends(back, Some(v(1.0, 0.0)), sp, Some(v(1.0, 0.5))),
+        Some((p[0], p[0]))
+    );
     // Kurven ohne Enden und dieselbe Kurve
     let m = pt(&mut s, 50.0, 50.0);
     let c = s.add_circle(m, 2.0).unwrap();

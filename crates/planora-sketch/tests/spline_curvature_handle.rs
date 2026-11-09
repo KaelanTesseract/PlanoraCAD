@@ -1109,7 +1109,10 @@ fn inner_handle_tip_and_fit_point_follow_a_drag_beside_a_curvature_handle() {
                 target: to,
             }])
             .unwrap();
-            assert!(pos(&s, pts[k]).distance(to) < 1e-9, "{k} {pull}: Stützpunkt");
+            assert!(
+                pos(&s, pts[k]).distance(to) < 1e-9,
+                "{k} {pull}: Stützpunkt"
+            );
         }
     }
 }

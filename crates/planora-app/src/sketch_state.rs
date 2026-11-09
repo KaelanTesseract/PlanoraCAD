@@ -2354,12 +2354,19 @@ impl SketchSession {
                         )),
                         None => {
                             se.warn_if_unsolved();
+                            se.edit_label = Some(action.label_msg());
                             Ok(id)
                         }
                     };
                 }
             }
-            se.add_checked(sk, prior, kind, action.label_msg())
+            let smooth = matches!(kind, ConstraintKind::Smooth(..));
+            let id = se.add_checked(sk, prior, kind, action.label_msg())?;
+            // Glatt schaltet dabei Griffe ein; der Vergleich der Stände hieße den Schritt danach.
+            if smooth {
+                se.edit_label = Some(action.label_msg());
+            }
+            Ok(id)
         })
     }
 
