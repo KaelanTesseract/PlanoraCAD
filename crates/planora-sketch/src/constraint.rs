@@ -1346,6 +1346,7 @@ impl Sketch {
         self.checked_constraint(id)?;
         if driven {
             self.check_not_pattern_value(id)?;
+            self.check_not_fixed_spline_end(id)?;
         } else if self.constraints[id].driven && self.constraints[id].enabled {
             self.check_activation_cycle(id)?;
             self.check_not_instance_only(id)?;
@@ -1361,6 +1362,9 @@ impl Sketch {
         if enabled && !self.constraints[id].enabled && !self.constraints[id].driven {
             self.check_activation_cycle(id)?;
             self.check_not_instance_only(id)?;
+        }
+        if !enabled {
+            self.check_not_fixed_spline_end(id)?;
         }
         self.constraints[id].enabled = enabled;
         self.touch_structure();
@@ -2160,6 +2164,22 @@ impl Sketch {
         }
     }
 
+    /// Das `Fixed` am Ende eines lebenden festen Splines bleibt (A3): Ohne es verließe der Punkt die
+    /// unveränderliche Kurve. Mit der Kurve geht es.
+    fn check_not_fixed_spline_end(&self, id: ConstraintId) -> Result<(), SketchError> {
+        let ConstraintKind::Fixed(p, ..) = self.constraints[id].kind else {
+            return Ok(());
+        };
+        let holds = |d: &crate::model::CurveData| matches!(d.kind, CurveKind::FixedSpline { start, end, .. } if p == start || p == end);
+        if self.curves().any(|(_, d)| holds(d)) {
+            Err(SketchError::InvalidInput(tr!(
+                "sketch-fixed-spline-keep-fixed"
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
     /// Ein neuer Durchmesser zur Mittellinie braucht eine Mittellinie. Nur beim Anlegen und
     /// Umschalten geprüft: Wer die Mittellinie später ausschaltet, behält ein lösbares Maß, und
     /// eine solche Datei lädt weiter.
@@ -2322,6 +2342,7 @@ impl Sketch {
     pub fn remove_constraint(&mut self, id: ConstraintId) -> Result<(), SketchError> {
         self.checked_constraint(id)?;
         self.check_not_pattern_value(id)?;
+        self.check_not_fixed_spline_end(id)?;
         self.constraints[id].alive = false;
         self.touch_structure();
         Ok(())

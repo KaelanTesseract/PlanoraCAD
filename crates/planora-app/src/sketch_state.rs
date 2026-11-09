@@ -2644,7 +2644,15 @@ impl SketchSession {
             se.drop_curve_picks();
             // Abhängigkeiten, die mit abgewählten Exemplaren entfallen.
             let mut dropped = 0;
-            for item in std::mem::take(&mut se.selection) {
+            // Ein Fest-Wert zuletzt: Ist sein fester Spline mit gewählt, ist der dann fort und er geht mit.
+            let mut items = std::mem::take(&mut se.selection);
+            items.sort_by_key(|item| {
+                matches!(item, Item::Constraint(c) if matches!(
+                    sk.constraint(*c).map(|d| &d.kind),
+                    Some(ConstraintKind::Fixed(..))
+                ))
+            });
+            for item in items {
                 // Ein Exemplar eines Musters wird abgewählt, das Muster bleibt (Entscheidung 6 des
                 // Plans Skizzen 5); seine anderen Kurven und Punkte sind danach fort.
                 if let Some((id, at)) = crate::sketch_pattern::instance_of_item(sk, item) {
@@ -2658,7 +2666,7 @@ impl SketchSession {
                         if let Err(e) = sk.remove_constraint(c)
                             && matches!(
                                 sk.constraint(c).map(|d| &d.kind),
-                                Some(ConstraintKind::PatternValue(..))
+                                Some(ConstraintKind::PatternValue(..) | ConstraintKind::Fixed(..))
                             )
                         {
                             return Err(err(e));
@@ -2924,6 +2932,7 @@ fn offset_problem_message(problem: OffsetProblem) -> Msg {
         OffsetProblem::NoJoin => crate::msg!("sketch-offset-no-join"),
         OffsetProblem::SelfCrossing => crate::msg!("sketch-offset-crossing"),
         OffsetProblem::Cusp => crate::msg!("sketch-offset-cusp"),
+        OffsetProblem::ClosedKink => crate::msg!("sketch-offset-closed-kink"),
         OffsetProblem::Degenerate => crate::msg!("sketch-field-rejected"),
     }
 }

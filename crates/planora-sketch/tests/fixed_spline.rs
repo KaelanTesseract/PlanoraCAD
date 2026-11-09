@@ -818,3 +818,162 @@ fn two_fixed_splines_refused() {
         assert!(s.smooth_kinds_fit(a, other));
     }
 }
+
+// ---- Korrekturrunde 1: Der feste Spline bleibt fest (A3) -----------------------------------------
+
+fn fixed_rows(s: &Sketch, p: PointId) -> Vec<planora_sketch::ConstraintId> {
+    s.constraints()
+        .filter(|(_, d)| matches!(d.kind, K::Fixed(q, ..) if q == p))
+        .map(|(id, _)| id)
+        .collect()
+}
+
+#[test]
+fn fixed_on_an_end_of_a_fixed_spline_stays() {
+    for curve in [wavy(), circle(5.0, 0.0)] {
+        let mut s = sketch();
+        let (lo, hi) = curve.domain();
+        let edge = free(curve);
+        let c = s.add_projected_curve(&edge, lo, hi, LINKED).unwrap();
+        let (start, end, _) = fixed_ends(&s, c);
+        for p in [start, end] {
+            let id = fixed_rows(&s, p)[0];
+            let e = s.remove_constraint(id).unwrap_err().to_string();
+            assert!(e.contains(&tr!("sketch-fixed-spline-keep-fixed")), "{e}");
+            assert!(s.set_driven(id, true).is_err(), "nicht nur anzeigend");
+            assert!(s.set_enabled(id, false).is_err(), "nicht ausgeschaltet");
+            let d = s.constraint(id).unwrap();
+            assert!(d.enabled && !d.driven);
+        }
+        // Ohne die Kurve ist es ein gewöhnlicher Fest-Wert.
+        let id = fixed_rows(&s, start)[0];
+        s.remove_curve(c).unwrap();
+        s.remove_constraint(id).unwrap();
+    }
+    // Ein anderer fester Punkt ist nicht betroffen.
+    let mut s = sketch();
+    let p = s.add_point(1.0, 1.0).unwrap();
+    let id = s.add_constraint(K::Fixed(p, 1.0, 1.0)).unwrap();
+    s.remove_constraint(id).unwrap();
+}
+
+#[test]
+fn loading_checks_ends_and_their_fixed() {
+    let mut s = sketch();
+    let c = s
+        .add_projected_curve(&free(wavy()), 0.0, 3.0, LINKED)
+        .unwrap();
+    let (start, end, _) = fixed_ends(&s, c);
+    let good = s.to_data();
+    assert!(Sketch::from_data(good.clone()).is_ok());
+    let reason = tr!("sketch-err-data-fixed-spline");
+    let refused = |d: planora_sketch::SketchData, what: &str| {
+        let e = Sketch::from_data(d).expect_err(what).to_string();
+        assert!(e.contains(&reason), "{what}: {e}");
+    };
+    for p in [start, end] {
+        // Der Punkt steht neben dem Kurvenende.
+        let mut d = good.clone();
+        let x = d.points[p.index()].x;
+        d.vars[x] += 0.01;
+        refused(d, "neben dem Ende");
+        // Sein `Fixed` fehlt, ist gelöscht, anzeigend oder ausgeschaltet.
+        let row = fixed_rows(&s, p)[0].index();
+        let mut d = good.clone();
+        d.constraints[row].alive = false;
+        refused(d, "gelöscht");
+        let mut d = good.clone();
+        d.constraints[row].driven = true;
+        refused(d, "anzeigend");
+        let mut d = good.clone();
+        d.constraints[row].enabled = false;
+        refused(d, "ausgeschaltet");
+    }
+    // Eine gelöschte Kurve prüft niemand mehr: Sie steht nur noch in der Datei.
+    let mut gone = s.clone();
+    let id = fixed_rows(&gone, start)[0];
+    gone.remove_curve(c).unwrap();
+    gone.remove_constraint(id).unwrap();
+    assert!(Sketch::from_data(gone.to_data()).is_ok());
+}
+
+/// Geschlossen, Grad 3, oben und unten gerundet; `tilt` kippt die letzte Tangente an der Naht bei
+/// `(5, 0)` um etwa `tilt` rad.
+fn loop_with_kink(tilt: f64) -> NurbsCurve {
+    nurbs(
+        3,
+        &[0.0, 0.0, 0.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.0, 1.0, 1.0],
+        &[
+            (5.0, 0.0, 0.0),
+            (5.0, 4.0, 0.0),
+            (2.0, 7.0, 0.0),
+            (-5.0, 3.0, 0.0),
+            (-2.0, -7.0, 0.0),
+            (5.0 + 4.0 * tilt, -4.0, 0.0),
+            (5.0, 0.0, 0.0),
+        ],
+        &[1.0; 7],
+    )
+}
+
+fn offset_of(curve: NurbsCurve, d: f64) -> Result<usize, planora_sketch::offset::OffsetProblem> {
+    let mut s = sketch();
+    let (lo, hi) = curve.domain();
+    let c = s.add_projected_curve(&free(curve), lo, hi, LINKED).unwrap();
+    let chains = s.ordered_chains(&[c])?;
+    s.offset_plan(&chains, d).map(|p| p.piece_count())
+}
+
+#[test]
+fn closed_curve_with_a_seam_kink_is_refused_clearly() {
+    use planora_sketch::offset::OffsetProblem::ClosedKink;
+    let teardrop = nurbs(
+        3,
+        &[0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+        &[
+            (0.0, 0.0, 0.0),
+            (30.0, -18.0, 0.0),
+            (30.0, 18.0, 0.0),
+            (0.0, 0.0, 0.0),
+        ],
+        &[1.0; 4],
+    );
+    let diamond = nurbs(
+        1,
+        &[0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 4.0],
+        &[
+            (10.0, 0.0, 0.0),
+            (0.0, 10.0, 0.0),
+            (-10.0, 0.0, 0.0),
+            (0.0, -10.0, 0.0),
+            (10.0, 0.0, 0.0),
+        ],
+        &[1.0; 5],
+    );
+    for (what, curve) in [("Tropfen", teardrop), ("Raute", diamond)] {
+        for d in [1.0, -1.0] {
+            assert_eq!(offset_of(curve.clone(), d), Err(ClosedKink), "{what} {d}");
+        }
+    }
+    // Kleine Knicke ab etwa 0,001°, beide Richtungen.
+    for tilt in [2e-5, 1e-4, 1e-2] {
+        for d in [0.5, -0.5] {
+            assert_eq!(
+                offset_of(loop_with_kink(tilt), d),
+                Err(ClosedKink),
+                "{tilt} {d}"
+            );
+        }
+    }
+}
+
+#[test]
+fn closed_curve_with_a_kink_below_tolerance_is_offset() {
+    let tol = Tolerance::default();
+    // Unter der Winkeltoleranz und um Größenordnungen darüber, solange der Abstand unter `tol.linear` bleibt.
+    for tilt in [0.0, tol.angular * 0.5, tol.linear * 0.1] {
+        for d in [0.5, -0.5] {
+            assert_eq!(offset_of(loop_with_kink(tilt), d), Ok(1), "{tilt} {d}");
+        }
+    }
+}

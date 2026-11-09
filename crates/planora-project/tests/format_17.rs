@@ -559,24 +559,47 @@ fn broken_fixed_data_is_refused() {
         }
     }
     type Edit = fn(&mut serde_json::Value);
-    let cases: [(&str, Edit); 6] = [
-        ("Knoten", |e| e["knoten"] = serde_json::json!([0.0, 1.0])),
-        ("Grad", |e| e["grad"] = serde_json::json!(7)),
-        ("Gewichte", |e| {
-            e["gewichte"] = serde_json::json!([1.0, 0.0, 1.0, 1.0])
+    // Der Grund kommt von der Prüfung selbst: dieselben Daten, direkt an `NurbsCurve::new`.
+    let math = |grad: usize, knoten: Vec<f64>, gewichte: Vec<f64>| {
+        let punkte = vec![planora_math::DVec3::ZERO; 4];
+        planora_math::nurbs::NurbsCurve::new(grad, knoten, punkte, gewichte)
+            .unwrap_err()
+            .to_string()
+    };
+    let knots = vec![0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0];
+    let weights = vec![1.0, 3.0, 0.4, 1.0];
+    let fixed = planora_i18n::tr!("sketch-err-data-fixed-spline");
+    let cases: Vec<(&str, String, Edit)> = vec![
+        ("Knoten", math(2, vec![0.0, 1.0], weights.clone()), |e| {
+            e["knoten"] = serde_json::json!([0.0, 1.0])
         }),
-        ("Zahl der Gewichte", |e| {
+        ("Grad", math(7, knots.clone(), weights.clone()), |e| {
+            e["grad"] = serde_json::json!(7)
+        }),
+        (
+            "Gewichte",
+            math(2, knots.clone(), vec![1.0, 0.0, 1.0, 1.0]),
+            |e| e["gewichte"] = serde_json::json!([1.0, 0.0, 1.0, 1.0]),
+        ),
+        ("Zahl der Gewichte", math(2, knots, vec![1.0]), |e| {
             e["gewichte"] = serde_json::json!([1.0])
         }),
-        ("Punkt fehlt", |e| e["ende"] = serde_json::json!(999)),
-        ("geschlossen, aber offen", |e| {
+        (
+            "Punkt fehlt",
+            planora_i18n::tr!("sketch-err-data-curve-point"),
+            |e| e["ende"] = serde_json::json!(999),
+        ),
+        ("geschlossen, aber offen", fixed, |e| {
             e["ende"] = e["start"].clone()
         }),
     ];
-    for (what, edit) in cases {
+    for (what, reason, edit) in cases {
         let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
         edit(find(&mut v).expect("Eintrag"));
-        let r = decode_version(&v.to_string(), "x.json");
-        assert!(r.is_err(), "{what}");
+        let e = decode_version(&v.to_string(), "x.json")
+            .err()
+            .unwrap_or_else(|| panic!("{what}: nicht abgelehnt"))
+            .to_string();
+        assert!(e.contains(&reason), "{what}: {e}");
     }
 }

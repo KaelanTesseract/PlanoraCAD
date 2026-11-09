@@ -15,7 +15,7 @@ use crate::solver::SolveCache;
 use planora_i18n::tr;
 use planora_kernel::Arena;
 use planora_math::nurbs::NurbsCurve;
-use planora_math::{DVec3, Frame, Tolerance};
+use planora_math::{DVec2, DVec3, Frame, Tolerance};
 use std::collections::HashSet;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -233,6 +233,24 @@ impl Sketch {
                     let flat = curve.control_points().iter().all(|q| q.z == 0.0);
                     if !flat || (start == end && !curve.is_closed(d.tolerance.linear)) {
                         return Err(bad(tr!("sketch-err-data-fixed-spline")));
+                    }
+                    // Eine lebende Kurve: Die Enden liegen auf ihr und sind fest (A3).
+                    if c.alive {
+                        let (lo, hi) = curve.domain();
+                        let holds = |p: PointId, t: f64| {
+                            let r = &d.points[p.index()];
+                            let at = DVec2::new(d.vars[r.x], d.vars[r.y]);
+                            at.distance(curve.point(t).truncate()) <= d.tolerance.linear
+                                && d.constraints.iter().any(|k| {
+                                    k.alive
+                                        && k.enabled
+                                        && !k.driven
+                                        && matches!(k.kind, ConstraintKind::Fixed(q, ..) if q == p)
+                                })
+                        };
+                        if !(holds(*start, lo) && holds(*end, hi)) {
+                            return Err(bad(tr!("sketch-err-data-fixed-spline")));
+                        }
                     }
                 }
                 _ => {}

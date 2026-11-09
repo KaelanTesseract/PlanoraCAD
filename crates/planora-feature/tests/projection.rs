@@ -911,3 +911,43 @@ fn closed_projection_makes_a_profile_and_extrudes() {
     assert!((v - want).abs() < 0.05, "{v} {want}");
     d.check_invariants().unwrap();
 }
+
+/// „Verknüpfung aufheben“ nimmt nur den Bezug: Die Kurve bleibt fest, mit ihren Fest-Werten.
+#[test]
+fn break_link_keeps_a_fixed_spline_fixed() {
+    let (mut d, base, s, c, _) = body_with_fixed_spline();
+    d.update(s, |k| {
+        if let FeatureKind::Sketch(sf) = k {
+            assert!(sf.break_link(c));
+        }
+    })
+    .unwrap();
+    let curve_of = |d: &Document| match &d.sketch_of(s).unwrap().curve(c).unwrap().kind {
+        CurveKind::FixedSpline { curve, start, end } => (curve.clone(), *start, *end),
+        k => panic!("kein fester Spline: {k:?}"),
+    };
+    let (before, start, end) = curve_of(&d);
+    set_base(&mut d, base, spline_base(9.0));
+    let f = d.feature(s).unwrap();
+    assert_eq!(f.status, FeatureStatus::Ok, "{:?}", f.status);
+    assert!(f.warning().is_none(), "kein Bezug, also auch keine Warnung");
+    let (after, ..) = curve_of(&d);
+    assert_eq!(after, before, "folgt dem Körper nicht mehr");
+    let sk = d.sketch_of(s).unwrap();
+    for p in [start, end] {
+        assert!(
+            sk.constraints()
+                .any(|(_, x)| matches!(x.kind, K::Fixed(o, ..) if o == p)),
+            "der Fest-Wert bleibt"
+        );
+    }
+    // Auch ohne Bezug bleibt er geschützt, und die Datei lädt.
+    let mut copy = sk.clone();
+    let row = copy
+        .constraints()
+        .find(|(_, x)| matches!(x.kind, K::Fixed(..)))
+        .unwrap()
+        .0;
+    assert!(copy.remove_constraint(row).is_err());
+    assert!(Sketch::from_data(copy.to_data()).is_ok());
+}

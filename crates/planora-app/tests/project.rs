@@ -308,10 +308,10 @@ fn freeform_edges_become_fixed_splines_without_duplicates() {
         "nichts übersprungen"
     );
     // Noch einmal: nichts Neues, auch nicht gegen die schon vorhandene Projektion.
-    assert!(
-        s.project_into_sketch(ProjectTarget::Body(body), true)
-            .is_err()
-    );
+    let err = s
+        .project_into_sketch(ProjectTarget::Body(body), true)
+        .unwrap_err();
+    assert!(err.contains(&tr!("sketch-project-nothing-new")), "{err}");
     assert_eq!(kinds(&s).len(), 4);
     // Die Form stimmt: durch den mittleren Stützpunkt.
     let sk = &draft(&s).sketch;
@@ -330,11 +330,116 @@ fn freeform_edges_become_fixed_splines_without_duplicates() {
         .find(|(_, e)| matches!(e.curve, planora_kernel::Curve::Nurbs(_)))
         .unwrap()
         .0;
-    assert!(
-        s.project_into_sketch(ProjectTarget::Edge(body, spline), true)
-            .is_err()
-    );
+    let err = s
+        .project_into_sketch(ProjectTarget::Edge(body, spline), true)
+        .unwrap_err();
+    assert!(err.contains(&tr!("sketch-project-nothing-new")), "{err}");
     assert_eq!(kinds(&s).len(), 4);
+}
+
+/// Körper mit einer Freiformwand, darauf eine leere Skizze auf XY. Liefert den Index des Körpers.
+fn spline_body_with_open_sketch() -> (AppState, usize) {
+    let mut s = AppState::new();
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze", Tolerance::default());
+    let p: Vec<_> = [(0.0, 0.0), (10.0, 0.0), (10.0, 5.0), (5.0, 7.0), (0.0, 5.0)]
+        .iter()
+        .map(|&(x, y)| sk.add_point(x, y).unwrap())
+        .collect();
+    sk.add_line(p[0], p[1]).unwrap();
+    sk.add_line(p[1], p[2]).unwrap();
+    sk.add_spline(&p[2..5]).unwrap();
+    sk.add_line(p[4], p[0]).unwrap();
+    let base = add_sketch(&mut s, sk);
+    extrude(&mut s, base, 4.0);
+    let id = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    s.open_sketch(id).unwrap();
+    let body = s.bodies.len() - 1;
+    (s, body)
+}
+
+/// Die Freiformwand: Ihr Rand sind zwei Freiformkanten übereinander und zwei senkrechte Kanten, die
+/// Punkte wären. Es bleibt ein fester Spline, nichts ist übersprungen.
+#[test]
+fn freeform_face_gives_one_fixed_spline() {
+    let (mut s, body) = spline_body_with_open_sketch();
+    let solid = s.bodies[body].solid.clone();
+    let face = solid
+        .faces
+        .iter()
+        .find(|(_, f)| f.surface.kind() == planora_kernel::SurfaceKind::Nurbs)
+        .unwrap()
+        .0;
+    let n = s
+        .project_into_sketch(ProjectTarget::Face(body, face), true)
+        .unwrap();
+    assert_eq!(n, 1);
+    assert_eq!(kinds(&s), vec!["Fester Spline"]);
+    assert!(s.sketch_session.as_ref().unwrap().message_text().is_none());
+    assert_eq!(draft(&s).copies.len(), 1);
+}
+
+/// Die Freiformkante allein, in einer leeren Skizze.
+#[test]
+fn single_freeform_edge_gives_one_fixed_spline() {
+    let (mut s, body) = spline_body_with_open_sketch();
+    let solid = s.bodies[body].solid.clone();
+    let edge = solid
+        .edges
+        .iter()
+        .find(|(_, e)| matches!(e.curve, planora_kernel::Curve::Nurbs(_)))
+        .unwrap()
+        .0;
+    let n = s
+        .project_into_sketch(ProjectTarget::Edge(body, edge), true)
+        .unwrap();
+    assert_eq!(n, 1);
+    assert_eq!(kinds(&s), vec!["Fester Spline"]);
+    assert_eq!(draft(&s).copies.len(), 1);
+}
+
+/// Der Fest-Wert am Ende bleibt mit Meldung; zusammen mit der Kurve geht er, in jeder Reihenfolge.
+#[test]
+fn deleting_the_fixed_of_a_fixed_spline_end_is_refused_with_a_message() {
+    use planora_app::sketch_state::Item;
+    use planora_sketch::constraint::ConstraintKind as K;
+    let (mut s, body) = spline_body_with_open_sketch();
+    let solid = s.bodies[body].solid.clone();
+    let edge = solid
+        .edges
+        .iter()
+        .find(|(_, e)| matches!(e.curve, planora_kernel::Curve::Nurbs(_)))
+        .unwrap()
+        .0;
+    s.project_into_sketch(ProjectTarget::Edge(body, edge), true)
+        .unwrap();
+    let (curve, fixed) = {
+        let sk = &draft(&s).sketch;
+        let curve = sk.curves().next().unwrap().0;
+        let fixed = sk
+            .constraints()
+            .find(|(_, d)| matches!(d.kind, K::Fixed(..)))
+            .unwrap()
+            .0;
+        (curve, fixed)
+    };
+    let (se, sk) = s.session_sketch_mut().unwrap();
+    se.selection = vec![Item::Constraint(fixed)];
+    se.delete_selection(sk);
+    assert!(sk.constraint(fixed).is_some(), "bleibt");
+    assert!(
+        se.message_text()
+            .unwrap()
+            .contains(&tr!("sketch-fixed-spline-keep-fixed")),
+        "{:?}",
+        se.message_text()
+    );
+    // Fest-Wert zuerst gewählt, dann die Kurve: Beides geht.
+    se.selection = vec![Item::Constraint(fixed), Item::Curve(curve)];
+    se.delete_selection(sk);
+    assert!(sk.curve(curve).is_none());
+    assert!(sk.constraint(fixed).is_none());
 }
 
 /// Skizzen 7: `skipped_freeform` zählt nur noch echte Fehlschläge.
@@ -404,6 +509,70 @@ fn deleted_fixed_spline_takes_its_edge_copy_along() {
     draft.prune_copies();
     assert_eq!(draft.copies.len(), copies - 1);
     assert!(draft.copies.iter().all(|copy| copy.curve != c));
+}
+
+#[test]
+fn cross_hole_gives_lines_and_nothing_skipped() {
+    // Quader 20 × 20 × 10 mit senkrechtem Loch r = 2 (Kreise in waagerechten Ebenen); die
+    // Skizze liegt auf der Seitenfläche y = 0, steht also senkrecht auf den Kreisen. Wie in
+    // Fusion werden die Kreise Linien (Durchmesser), nichts wird übersprungen.
+    let mut s = AppState::new();
+    s.document
+        .add_feature(
+            "Quader",
+            FeatureKind::Box {
+                size: DVec3::new(20.0, 20.0, 10.0),
+                origin: DVec3::ZERO,
+            },
+        )
+        .unwrap();
+    s.document
+        .add_feature(
+            "Zylinder",
+            FeatureKind::Cylinder {
+                radius: 2.0,
+                height: 14.0,
+                origin: DVec3::new(10.0, 10.0, -2.0),
+            },
+        )
+        .unwrap();
+    s.refresh();
+    s.add_boolean(0, 1, planora_kernel::boolean::BoolOp::Difference)
+        .unwrap();
+    let body = s.bodies.len() - 1;
+    let side = {
+        let solid = &s.bodies[body].solid;
+        solid
+            .faces
+            .iter()
+            .find(|(id, _)| {
+                planora_sketch::plane_of_face(solid, *id)
+                    .is_some_and(|f| f.z.y < -0.5 && f.origin.y.abs() < 1e-9)
+            })
+            .map(|(id, _)| id)
+            .expect("Seitenfläche y = 0")
+    };
+    let id = s.new_sketch_on_face(body, side).unwrap();
+    s.open_sketch(id).unwrap();
+    s.observe_sketch(false);
+    let n = s
+        .project_into_sketch(ProjectTarget::Body(body), true)
+        .unwrap();
+    assert!(
+        s.sketch_session.as_ref().unwrap().message.is_none(),
+        "{:?}",
+        s.sketch_session.as_ref().unwrap().message_text()
+    );
+    assert_eq!(kinds(&s), vec!["Linie"; n]);
+    let sk = &draft(&s).sketch;
+    let mut lengths: Vec<f64> = sk.curves().filter_map(|(c, _)| sk.line_length(c)).collect();
+    lengths.sort_by(f64::total_cmp);
+    // Rand der Seite (20, 20, 10, 10) und die beiden Lochkreise als Linien der Länge 4.
+    assert_eq!(n, 6, "{lengths:?}");
+    assert!(
+        (lengths[0] - 4.0).abs() < 1e-9 && (lengths[1] - 4.0).abs() < 1e-9,
+        "{lengths:?}"
+    );
 }
 
 #[test]

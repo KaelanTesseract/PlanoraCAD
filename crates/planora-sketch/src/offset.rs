@@ -169,6 +169,9 @@ pub enum OffsetProblem {
     Cusp,
     /// Unbrauchbare Eingabe: Abstand 0 oder nicht endlich, keine Kette, tote oder leere Kurve.
     Degenerate,
+    /// Eine einzelne geschlossene Kurve hat an ihrer Naht einen Knick (Skizzen 7): Dort gibt es keinen
+    /// Nachbarn zum Fügen.
+    ClosedKink,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -910,6 +913,19 @@ fn check_rejoin(join: Join, raws: &[Raw], i: usize, j: usize) -> Join {
         Join::Miter(_) if turn_between(raws, i, j).abs() > PI => Join::Gap,
         _ => join,
     }
+}
+
+/// Hat die einzelne geschlossene Kurve `g` an ihrer Naht einen Knick, also eine Fuge, die [`join_of`]
+/// nicht als gemeinsamen Punkt nähme? Sie hätte keinen Nachbarn zum Schneiden oder Überbrücken.
+fn seam_kink(g: &Geom, d: f64, tol: &Tolerance) -> bool {
+    let (lo, hi) = g.domain();
+    let ((a, u), (b, v)) = (g.eval(lo), g.eval(hi));
+    let (Some(u), Some(v)) = (u.try_normalize(), v.try_normalize()) else {
+        return true;
+    };
+    let shared = u.perp_dot(v).abs() <= tol.angular
+        || (b + v.perp() * d).distance(a + u.perp() * d) <= tol.linear;
+    u.dot(v) <= 0.0 || !shared
 }
 
 /// Fügt eine Kette; Stücke, die umkehren, entfallen, das zuerst zusammengelaufene zuerst.
@@ -1701,6 +1717,14 @@ impl Sketch {
         for (index, chain) in chains.iter().enumerate() {
             if chain.items.is_empty() {
                 return Err(OffsetProblem::Degenerate);
+            }
+            if let [(c, against)] = chain.items[..]
+                && chain.closed
+                && let Some(g) = self.geom(c)
+                && !g.periodic()
+                && seam_kink(&g, if against { -d } else { d }, &tolerance)
+            {
+                return Err(OffsetProblem::ClosedKink);
             }
             let mut geoms = Vec::with_capacity(chain.items.len());
             let mut raws = Vec::with_capacity(chain.items.len());
