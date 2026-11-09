@@ -473,6 +473,10 @@ fn rho_field_key() -> egui::Id {
     shell_panels::sketch_side_id().with("conic-rho")
 }
 
+fn rho_draft_key() -> egui::Id {
+    shell_panels::sketch_side_id().with("conic-rho-draft")
+}
+
 /// Lage des Rho-Felds des gewählten Kegelschnitts im letzten Bild (für Tests).
 #[doc(hidden)]
 pub fn rho_field(ctx: &egui::Context) -> Option<egui::Rect> {
@@ -1086,7 +1090,10 @@ fn spline_edit_fields(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch
     match se.selected_conic(sk) {
         Some((c, rho)) => rho_field_row(ui, se, sk, c, rho),
         None => {
-            ui.data_mut(|d| d.insert_temp(rho_field_key(), None::<egui::Rect>));
+            ui.data_mut(|d| {
+                d.insert_temp(rho_field_key(), None::<egui::Rect>);
+                d.insert_temp(rho_draft_key(), None::<(CurveId, String)>);
+            });
         }
     }
 }
@@ -1094,11 +1101,13 @@ fn spline_edit_fields(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch
 /// Das Rho-Feld: eine reine Zahl, keine Formel (Spec, Fusion). Abgeschlossen wird mit Eingabe oder
 /// beim Verlassen, Esc lässt den alten Wert. Was nicht passt, steht in der Meldung der Sitzung.
 fn rho_field_row(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch, c: CurveId, rho: f64) {
-    let id = rho_field_key().with(c);
     let proposal = crate::sketch_inline::format_rho(rho);
-    let mut text = ui
-        .data(|d| d.get_temp::<String>(id))
-        .unwrap_or_else(|| proposal.clone());
+    // Der Entwurf gehört zu dieser Kurve und lebt nur, solange ihr Feld steht.
+    let draft = ui
+        .data(|d| d.get_temp::<Option<(CurveId, String)>>(rho_draft_key()))
+        .flatten()
+        .filter(|(owner, _)| *owner == c);
+    let mut text = draft.map_or_else(|| proposal.clone(), |(_, text)| text);
     let field = ui
         .horizontal(|ui| {
             ui.label(tr!("sketch-field-rho"));
@@ -1110,11 +1119,9 @@ fn rho_field_row(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch, c: 
         .inner
         .on_hover_text(tr!("sketch-conic-rho-hint"));
     ui.data_mut(|d| d.insert_temp(rho_field_key(), Some(field.rect)));
-    if field.has_focus() {
-        ui.data_mut(|d| d.insert_temp(id, text.clone()));
-    }
+    let kept = field.has_focus().then(|| (c, text.clone()));
+    ui.data_mut(|d| d.insert_temp(rho_draft_key(), kept));
     if field.lost_focus() {
-        ui.data_mut(|d| d.remove_temp::<String>(id));
         let cancelled = ui.input(|i| i.key_pressed(egui::Key::Escape));
         if !cancelled && text != proposal {
             match crate::sketch_view::parse_number(&text) {

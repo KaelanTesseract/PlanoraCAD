@@ -5,7 +5,7 @@
 use planora_math::{DVec2, Frame, Tolerance};
 use planora_sketch::constraint::ConstraintKind as K;
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
-use planora_sketch::solver::{SolveReport, SolveStatus};
+use planora_sketch::solver::{Drag, SolveReport, SolveStatus};
 use planora_sketch::{HandleCurvature, conic_rho_at, conic_shoulder};
 
 const WAVE: [(f64, f64); 5] = [
@@ -150,6 +150,40 @@ fn the_inserted_control_point_is_the_nearest_of_the_moved_group() {
         assert_eq!(points.first(), Some(&pts[0]));
         assert_eq!(points.last(), Some(&pts[7]));
     }
+}
+
+/// Ein Zug mit gehaltenen Punkten hinterlässt dem nächsten Lösen keine Zahlen: Unter dem Halten ist die
+/// Gruppe kleiner, und das darf nicht als Ergebnis der ganzen Gruppe gelten.
+#[test]
+fn a_held_drag_leaves_no_numbers_for_the_next_solve() {
+    let mut s = sketch();
+    let (c, pts) = spline(&mut s, &WAVE);
+    s.activate_curvature_handle(c, pts[2]).unwrap();
+    let free = |r: &SolveReport| {
+        let mut f = r.free_points.clone();
+        f.sort();
+        f
+    };
+    let before = s.solve();
+    let t = tip(&s, c, pts[2]);
+    let to = pos(&s, t) + DVec2::new(1.0, 2.0);
+    let held = s
+        .drag_holding(
+            &[Drag {
+                point: t,
+                target: to,
+            }],
+            &[pts[2]],
+        )
+        .unwrap();
+    assert!(!held.drag_failed);
+    assert_eq!(pos(&s, t), to);
+    let after = s.solve();
+    assert_eq!(after.dof, before.dof);
+    assert_eq!(free(&after), free(&before));
+    // Auch ein weiteres Lösen, das den Zwischenspeicher trifft, sagt dasselbe.
+    let again = s.clone().solve();
+    assert_eq!(again.dof, before.dof);
 }
 
 /// Der Schulterpunkt und seine Umkehrung sind dieselbe Definition.

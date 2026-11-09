@@ -1720,7 +1720,7 @@ fn point_ink(
     p: PointId,
 ) -> Color32 {
     let selected = se.selection.contains(&Item::Point(p))
-        || se.dragging == Some(p)
+        || se.is_dragged_point(p)
         || dim_picked(se, Item::Point(p));
     if selected {
         col.selected

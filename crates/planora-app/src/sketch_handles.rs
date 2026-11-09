@@ -12,14 +12,16 @@ use crate::msg::Msg;
 use crate::sketch_state::{CurveDrag, Item, SketchSession, Tool, err};
 use planora_math::DVec2;
 use planora_sketch::SketchError;
-use planora_sketch::constraint::ConstraintKind;
 use planora_sketch::model::{CurveId, CurveKind, HandleCurvature, PointId, Sketch, SplineHandle};
-use planora_sketch::solver::SolveReport;
+use planora_sketch::solver::{Drag, SolveReport};
 use planora_sketch::{conic_rho_at, conic_rho_ok, conic_shoulder};
 use std::collections::HashSet;
 
 /// Bereich des Rho-Griffs (D4). Getippt geht mehr, siehe [`conic_rho_ok`].
 const RHO_GRIP_RANGE: (f64, f64) = (0.001, 0.999);
+
+/// Bis zu diesem Anteil des Zeigerwegs gilt ein Stützpunkt als stehen geblieben ([`carry_frame`]).
+const NOT_MOVED: f64 = 1e-4;
 
 /// Welcher Griff.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,6 +108,42 @@ pub(crate) fn rho_frame(
     Ok(sk.solve())
 }
 
+/// Ein Bild des Zugs am Stützpunkt mit Griff: Griffspitze und Krümmungsbogen gehen starr mit (Ruling
+/// Task 6), aber nur um das, was der Stützpunkt wirklich schafft. Ein fester Punkt bleibt, und der Griff
+/// verbiegt die Kurve nicht. Darum zuerst der Punkt allein auf einer Kopie, dann alle um seinen Weg.
+/// `start[0]` ist der Stützpunkt.
+pub(crate) fn carry_frame(
+    sk: &mut Sketch,
+    start: &[(PointId, DVec2)],
+    delta: DVec2,
+) -> Result<SolveReport, SketchError> {
+    let (fit, from) = start[0];
+    let mut trial = sk.clone();
+    let probe = trial.drag(&[Drag {
+        point: fit,
+        target: from + delta,
+    }])?;
+    if probe.drag_failed {
+        return Ok(probe);
+    }
+    let made = trial.point_xy(fit)? - from;
+    // Der Probelauf hält einen Punkt, der nicht folgen kann, nur bis auf die Genauigkeit des Zugs. Das
+    // gilt als „bewegt sich nicht“, sonst würde daraus eine Form- und eine Schrittänderung.
+    let made = if made.length() <= NOT_MOVED * delta.length() {
+        DVec2::ZERO
+    } else {
+        made
+    };
+    let drags: Vec<Drag> = start
+        .iter()
+        .map(|&(point, at)| Drag {
+            point,
+            target: at + made,
+        })
+        .collect();
+    sk.drag(&drags)
+}
+
 /// Die Griff-Kurven eines Griffs.
 fn parts_of(h: &SplineHandle) -> Vec<CurveId> {
     match h.curvature {
@@ -122,25 +160,49 @@ fn points_of(h: &SplineHandle) -> Vec<PointId> {
     }
 }
 
-/// Betrifft die Auswahl diesen Spline: er selbst, ein Griff oder ein Stützpunkt (B6)?
-fn related(
-    selection: &[Item],
+/// Ein Spline und was die Auswahl für seine Griffe heißt. Hier steht die eine Regel aus B6.
+struct SplineView<'a> {
     spline: CurveId,
-    points: &[PointId],
-    handles: &[SplineHandle],
-) -> bool {
-    selection.iter().any(|item| match *item {
-        Item::Curve(c) => c == spline || handles.iter().any(|h| parts_of(h).contains(&c)),
-        Item::Point(p) => points.contains(&p) || handles.iter().any(|h| points_of(h).contains(&p)),
-        Item::Constraint(_) => false,
+    handles: &'a [SplineHandle],
+    /// Die Auswahl betrifft ihn: er selbst, ein Griff oder ein Stützpunkt.
+    related: bool,
+}
+
+impl SplineView<'_> {
+    /// Ist der aktive Griff `h` zu sehen?
+    fn shows(&self, sk: &Sketch, h: &SplineHandle) -> bool {
+        self.related || constrained(sk, h)
+    }
+}
+
+/// Alle Splines der Skizze, gesehen von der Auswahl `selection`.
+fn spline_views<'a>(sk: &'a Sketch, selection: &'a [Item]) -> impl Iterator<Item = SplineView<'a>> {
+    sk.curves().filter_map(move |(spline, data)| {
+        let CurveKind::Spline { points, handles } = &data.kind else {
+            return None;
+        };
+        let related = selection.iter().any(|item| match *item {
+            Item::Curve(c) => c == spline || handles.iter().any(|h| parts_of(h).contains(&c)),
+            Item::Point(p) => {
+                points.contains(&p) || handles.iter().any(|h| points_of(h).contains(&p))
+            }
+            Item::Constraint(_) => false,
+        });
+        Some(SplineView {
+            spline,
+            handles,
+            related,
+        })
     })
 }
 
 /// Hat der Griff eine Abhängigkeit oder ein Maß des Nutzers? Die interne Zeile des Bogens zählt nicht.
+/// Eine ausgeschaltete oder nur anzeigende zählt mit: Ihr Zeichen steht weiter in der Zeichnung, und
+/// der Griff muss zu sehen und wählbar bleiben, damit man sie wiederfindet.
 fn constrained(sk: &Sketch, h: &SplineHandle) -> bool {
     let (curves, points) = (parts_of(h), points_of(h));
     sk.constraints().any(|(_, d)| {
-        !matches!(d.kind, ConstraintKind::SplineCurvatureHandle(..))
+        !d.internal
             && (d.kind.curves().iter().any(|c| curves.contains(c))
                 || d.kind.points().iter().any(|p| points.contains(p)))
     })
@@ -149,14 +211,8 @@ fn constrained(sk: &Sketch, h: &SplineHandle) -> bool {
 /// Was bei dieser Auswahl unsichtbar ist. Eine fertige Skizze hat keine Auswahl.
 pub fn hidden_handles_of(sk: &Sketch, selection: &[Item]) -> HiddenHandles {
     let mut out = HiddenHandles::default();
-    for (spline, data) in sk.curves() {
-        let CurveKind::Spline { points, handles } = &data.kind else {
-            continue;
-        };
-        if handles.is_empty() || related(selection, spline, points, handles) {
-            continue;
-        }
-        for h in handles.iter().filter(|h| !constrained(sk, h)) {
+    for view in spline_views(sk, selection) {
+        for h in view.handles.iter().filter(|h| !view.shows(sk, h)) {
             out.curves.extend(parts_of(h));
             out.points.extend(points_of(h));
         }
@@ -177,16 +233,10 @@ impl SketchSession {
     pub fn visible_handles(&self, sk: &Sketch) -> Vec<HandleView> {
         let mut out = Vec::new();
         let select_tool = self.tool == Tool::Select;
-        for (spline, data) in sk.curves() {
-            let CurveKind::Spline { points, handles } = &data.kind else {
-                continue;
-            };
-            let is_related = related(&self.selection, spline, points, handles);
+        for view in spline_views(sk, &self.selection) {
+            let spline = view.spline;
             let xy = |p: PointId| sk.point_xy(p).ok();
-            for h in handles {
-                if !is_related && !constrained(sk, h) {
-                    continue;
-                }
+            for h in view.handles.iter().filter(|h| view.shows(sk, h)) {
                 let (Some(at), Some(tip)) = (xy(h.at), xy(h.tip)) else {
                     continue;
                 };
@@ -218,7 +268,7 @@ impl SketchSession {
                     ghost: true,
                 })
             };
-            if is_related {
+            if view.related {
                 out.extend(
                     sk.handle_curvature_marks(spline)
                         .into_iter()
@@ -239,12 +289,8 @@ impl SketchSession {
     /// Die Punkte der aktiven Griffe, die zu sehen sind: die Liste für den Fang.
     pub fn visible_handle_points(&self, sk: &Sketch) -> Vec<PointId> {
         let mut out = Vec::new();
-        for (spline, data) in sk.curves() {
-            let CurveKind::Spline { points, handles } = &data.kind else {
-                continue;
-            };
-            let is_related = related(&self.selection, spline, points, handles);
-            for h in handles.iter().filter(|h| is_related || constrained(sk, h)) {
+        for view in spline_views(sk, &self.selection) {
+            for h in view.handles.iter().filter(|h| view.shows(sk, h)) {
                 out.extend(points_of(h));
             }
         }
@@ -308,6 +354,15 @@ impl SketchSession {
             return None;
         }
         Some(grips.1)
+    }
+
+    /// Wird der Punkt `p` gerade gezogen? Beim Griffzug die bewegten Punkte, nicht die gehaltenen.
+    pub fn is_dragged_point(&self, p: PointId) -> bool {
+        self.dragging == Some(p)
+            || self
+                .curve_drag
+                .as_ref()
+                .is_some_and(|d| d.before.is_some() && d.start.iter().any(|&(moved, _)| moved == p))
     }
 
     /// Läuft ein Griffzug, den ein Abbruch ganz zurücknimmt?
@@ -436,6 +491,9 @@ impl SketchSession {
         let mut moved = vec![p];
         moved.extend(carried);
         self.start_handle_grab(sk, sk.clone(), at, &moved, &[], None);
+        if let Some(drag) = self.curve_drag.as_mut() {
+            drag.carry = true;
+        }
         true
     }
 

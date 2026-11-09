@@ -438,7 +438,7 @@ impl SketchSession {
             // zweiten daraufzulegen (Skizzen 5, Entscheidung 17); Strg schaltet das mit dem Raster ab.
             // Ohne Punkt im Ursprung bindet der Rasterpunkt dort wie der Ursprungsfang (fest auf 0, 0).
             let tol = sk.tolerance().linear;
-            if let Some(p) = sk.point_at(cur.at, tol)
+            if let Some(p) = self.shown_point(sk, cur.at, tol)
                 && let Ok(at) = sk.point_xy(p)
             {
                 cur.at = at;

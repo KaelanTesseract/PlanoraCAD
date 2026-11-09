@@ -2363,6 +2363,12 @@ Abgeschlossen 2026-11-08, gemergt in a78db45. Drei Handtests bei 1920×1080; die
 - **Annahme:** Nach dem Scheitel fängt der Zeiger nichts mehr; der letzte Klick bestätigt nur und setzt keinen Punkt.
 - **Abweichung (Spec D1):** Der Kegelschnitt steht im Klappmenü am Spline-Knopf, im Menü „Erzeugen“ aber als eigener Eintrag und nicht im Untermenü „Spline“.
 
+### Griffe in der Oberfläche (Task 13)
+- **Abweichung (Spec, „Wie“: kein neuer Löser-Sonderweg):** `Sketch::drag_holding` hält Punkte für einen Zuglauf fest, über denselben Weg wie Musterexemplare. Grund: Mit weichen Zielen allein wandert der Stützpunkt beim Griffzug um etwa ein Drittel des nicht erreichbaren Rests, denn der Löser verteilt ihn auf alle Ziele. Griffe und Kontrollpunkte bleiben Punkte in `vars`; neu ist nur das Halten. Gruppen unter dem Halten gehen nicht über den Zwischenspeicher, damit ihre Freiheitsgrade nicht ins nächste volle Lösen gelangen.
+- **Annahme:** Beim Zeichnen fangen an einem sichtbaren Griff auch die Bogenmitte und das freie Bogenende, nicht nur die Griffspitzen, die Tabelle E nennt. Sie sind gezeichnete Punkte; ein Fang, der sie auslässt, wäre überraschend.
+- **Grenze, stilles Stehenbleiben:** Griff mit Waagerecht und Abstand an einem freien Stützpunkt: Zug an der Spitze lässt Spitze und Stützpunkt stehen, ohne Meldung. Der Lauf bleibt gelöst, weil der Stützpunkt fest gehalten wird und die Spitze durch die Abhängigkeiten bestimmt ist. Ohne das Halten nähme der Löser den Stützpunkt mit (vergleiche das Ruling zu Waagerecht am Griff).
+- **Grenze, `is_worse_than`:** Ein schon vorhandener Widerspruch an anderer Stelle verdeckt eine neue nicht lösbare Gruppe, die keine Abhängigkeit nennt: Der Status ist dann weiter „widersprüchlich“, und die Liste wächst nicht. Dieselbe Grenze steht an `check_change`.
+
 ### Schneiden am schrägen Kegel (Task 11)
 - **Folgepunkt:** `plane_cone` und damit die Booleschen Operationen kennen den schrägen Kegel weiter nicht (Spec G1). Der neue Rechenweg `plane_cone_conic` gilt nur für „Schneiden“.
 - **Entscheidung:** Parabel, Hyperbel und Ellipsenbogen laufen am Kegel als ein Stück über die Naht. So hängt die Stückzahl nicht daran, ob die Kurve die Naht kreuzt, und der Verweis auf das Stück folgt dem ganzen Schnitt. Andere Flächen und die geraden Linien durch die Spitze teilt die Naht weiter.

@@ -1298,7 +1298,9 @@ impl Sketch {
     /// behalten ihre Ids und ihre Reihenfolge. Die Einfügung ändert eine Gruppe von `p` Kontrollpunkten
     /// (`p` der Grad); der neue ist der aus dieser Gruppe, der der Kurvenstelle am nächsten liegt. Er
     /// liegt also bei der Klickstelle, im Allgemeinen aber nicht auf der Kurve, denn er ist ein
-    /// Kontrollpunkt. Außerhalb der Gruppe bewegt sich nichts.
+    /// Kontrollpunkt. Außerhalb dieser `p` Stellen bewegt sich nichts. Liegt die Kurvenstelle auf einem
+    /// schon vorhandenen inneren Knoten, ändern sich weniger als `p` Lagen; dann kann in diesen Stellen
+    /// auch ein Punkt mit unveränderter Lage auf die Lage seines Nachbarn rücken. Die Form bleibt.
     /// Rückgabe: der neue Punkt und die Zahl der entfallenen Abhängigkeiten.
     pub fn insert_control_point(
         &mut self,
@@ -1325,9 +1327,9 @@ impl Sketch {
         let longer = curve.insert_knot(u, 1).map_err(|err| {
             SketchError::Degenerate(tr!("sketch-err-spline-invalid", detail = err.to_string()))
         })?;
-        // Verschoben wird die Gruppe der Basisfunktionen über dem Knotenabschnitt `span`: Vor ihr und
-        // hinter ihr stimmen die alten Punkte genau, jede Stelle in ihr hält also die übrigen an ihrem
-        // Platz. Der neue Punkt nimmt die Stelle nächst der Kurvenstelle, sonst sprängen die Kennungen
+        // Verschoben werden höchstens die `p` Stellen über dem Knotenabschnitt `span`: Vor ihnen und
+        // hinter ihnen stimmen die alten Punkte genau, jede Stelle in ihnen hält also die übrigen an
+        // ihrem Platz. Der neue Punkt nimmt die Stelle nächst der Kurvenstelle, sonst sprängen die Kennungen
         // weg vom Klick. Die Enden bleiben immer die alten.
         let p = curve.degree();
         let span = curve.knots().find_span(u);

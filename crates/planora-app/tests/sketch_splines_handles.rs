@@ -617,6 +617,203 @@ fn dragging_a_fit_point_carries_tip_and_arc_rigidly() {
     assert_eq!(pos(&s, pts[3]), others[1]);
 }
 
+/// Punkt und Griff um dieselbe Verschiebung: Was `at` wirklich schafft, gilt für alle.
+fn handle_vector(s: &AppState, c: CurveId, p: PointId) -> (DVec2, DVec2, DVec2) {
+    let h = handle(s, c, p).unwrap();
+    let HandleCurvature::Arc { center, other, .. } = h.curvature else {
+        panic!("kein Bogen");
+    };
+    let at = pos(s, p);
+    (pos(s, h.tip) - at, pos(s, center) - at, pos(s, other) - at)
+}
+
+/// Ein fester Stützpunkt bleibt, und der Griff darf die Kurve dabei nicht verbiegen.
+#[test]
+fn dragging_a_fixed_fit_point_changes_nothing() {
+    let (mut s, c, pts) = wave();
+    {
+        let sk = s.session_sketch_mut().unwrap().1;
+        sk.activate_curvature_handle(c, pts[2]).unwrap();
+        let at = sk.point_xy(pts[2]).unwrap();
+        sk.add_constraint(K::Fixed(pts[2], at.x, at.y)).unwrap();
+        sk.solve();
+    }
+    s.observe_sketch(false);
+    select(&mut s, &[Item::Curve(c)]);
+    let form = shape(&s, c);
+    let vectors = handle_vector(&s, c, pts[2]);
+    let at = pos(&s, pts[2]);
+    let steps = undo_len(&s);
+    assert!(begin(&mut s, at));
+    drag(&mut s, at + v(1.5, 1.0));
+    drag(&mut s, at + v(3.0, 2.0));
+    end(&mut s);
+    assert!(same_shape(&form, &shape(&s, c), 1e-9), "die Form bleibt");
+    let now = handle_vector(&s, c, pts[2]);
+    assert!(
+        now.0.distance(vectors.0) < 1e-9,
+        "{now:?} statt {vectors:?}"
+    );
+    assert_eq!(undo_len(&s), steps, "es hat sich nichts geändert");
+}
+
+/// Ein Stützpunkt, der nur waagerecht kann: Der Griff geht genau so weit mit wie er.
+#[test]
+fn a_fit_point_that_can_move_only_sideways_carries_only_what_it_made() {
+    let (mut s, c, pts) = wave();
+    {
+        let sk = s.session_sketch_mut().unwrap().1;
+        sk.activate_curvature_handle(c, pts[2]).unwrap();
+        let at = sk.point_xy(pts[2]).unwrap();
+        let q = sk.add_point(at.x - 30.0, at.y).unwrap();
+        sk.add_constraint(K::Fixed(q, at.x - 30.0, at.y)).unwrap();
+        sk.add_constraint(K::Horizontal(planora_sketch::LineOrPoints::Points(
+            q, pts[2],
+        )))
+        .unwrap();
+        sk.solve();
+    }
+    s.observe_sketch(false);
+    select(&mut s, &[Item::Curve(c)]);
+    let vectors = handle_vector(&s, c, pts[2]);
+    let at = pos(&s, pts[2]);
+    // Nur hoch: nichts geht.
+    let form = shape(&s, c);
+    assert!(begin(&mut s, at));
+    drag(&mut s, at + v(0.0, 4.0));
+    end(&mut s);
+    assert!(pos(&s, pts[2]).distance(at) < 1e-9);
+    assert!(same_shape(&form, &shape(&s, c), 1e-9), "die Form bleibt");
+    // Schräg: Der Punkt schafft nur den waagerechten Teil, der Griff folgt ihm.
+    assert!(begin(&mut s, at));
+    drag(&mut s, at + v(3.0, 4.0));
+    end(&mut s);
+    assert!(pos(&s, pts[2]).distance(at + v(3.0, 0.0)) < 1e-3);
+    let now = handle_vector(&s, c, pts[2]);
+    assert!(
+        now.0.distance(vectors.0) < 1e-6,
+        "{now:?} statt {vectors:?}"
+    );
+    assert!(
+        now.1.distance(vectors.1) < 1e-6,
+        "{now:?} statt {vectors:?}"
+    );
+    assert!(
+        now.2.distance(vectors.2) < 1e-6,
+        "{now:?} statt {vectors:?}"
+    );
+}
+
+/// Der Lauf mit gehaltenen Punkten darf die Zahlen nach dem Zug nicht färben.
+#[test]
+fn a_handle_drag_keeps_freedom_and_free_points() {
+    let free = |s: &AppState| {
+        let r = s
+            .sketch_session
+            .as_ref()
+            .unwrap()
+            .last_report
+            .clone()
+            .unwrap();
+        let mut f = r.free_points.clone();
+        f.sort();
+        (r.dof, f)
+    };
+    let (mut s, c, pts) = wave();
+    {
+        let (se_, sk_) = s.session_sketch_mut().unwrap();
+        sk_.activate_curvature_handle(c, pts[2]).unwrap();
+        se_.last_report = Some(sk_.solve());
+    }
+    s.observe_sketch(false);
+    select(&mut s, &[Item::Curve(c)]);
+    let before = free(&s);
+    let h = handle(&s, c, pts[2]).unwrap();
+    let HandleCurvature::Arc { other, .. } = h.curvature else {
+        panic!("kein Bogen");
+    };
+    for grabbed in [h.tip, other] {
+        let at = pos(&s, grabbed);
+        assert!(begin(&mut s, at));
+        drag(&mut s, at + v(0.4, 0.5));
+        end(&mut s);
+        assert_eq!(free(&s), before, "nach dem Zug an {grabbed:?}");
+        let fresh = sk(&s).clone().solve();
+        assert_eq!(fresh.dof, before.0);
+    }
+}
+
+/// Auch Griff und Stützpunkt leuchten, solange sie gezogen werden.
+#[test]
+fn dragged_handle_points_light_up() {
+    let (mut s, c, pts) = wave();
+    s.session_sketch_mut()
+        .unwrap()
+        .1
+        .activate_tangent_handle(c, pts[2])
+        .unwrap();
+    s.observe_sketch(false);
+    select(&mut s, &[Item::Curve(c)]);
+    let h = handle(&s, c, pts[2]).unwrap();
+    let lit = planora_app::theme::sketch_colors(s.dark).selected;
+    let color = |s: &AppState, p| planora_app::sketch_view::point_color(s, p);
+    assert_ne!(color(&s, h.tip), lit);
+    let tip_at = pos(&s, h.tip);
+    assert!(begin(&mut s, tip_at));
+    assert_eq!(color(&s, h.tip), lit, "die gezogene Spitze");
+    assert_ne!(color(&s, pts[2]), lit, "der gehaltene Stützpunkt nicht");
+    end(&mut s);
+    assert_ne!(color(&s, h.tip), lit, "nach dem Zug nicht mehr");
+    let at = pos(&s, pts[2]);
+    assert!(begin(&mut s, at));
+    assert_eq!(color(&s, pts[2]), lit, "der gezogene Stützpunkt");
+    end(&mut s);
+}
+
+/// Eine ausgeschaltete Abhängigkeit steht weiter in der Zeichnung und will gewählt werden.
+#[test]
+fn a_disabled_constraint_keeps_the_handle_visible() {
+    let (mut s, c, pts) = wave();
+    {
+        let sk = s.session_sketch_mut().unwrap().1;
+        let line = sk.activate_tangent_handle(c, pts[2]).unwrap();
+        let k = sk
+            .add_constraint(K::Horizontal(planora_sketch::LineOrPoints::Line(line)))
+            .unwrap();
+        sk.set_enabled(k, false).unwrap();
+    }
+    assert_eq!(views(&s).len(), 1);
+    let session = s.sketch_session.as_ref().unwrap();
+    assert!(session.hidden_handles(sk(&s)).curves.is_empty());
+    assert_eq!(session.visible_handle_points(sk(&s)).len(), 1);
+}
+
+/// Der Rasterfang bindet nicht an eine unsichtbare Spitze, die zufällig auf dem Rasterpunkt liegt.
+#[test]
+fn the_grid_snap_does_not_bind_a_hidden_tip() {
+    let (mut s, c, pts) = wave();
+    {
+        let sk = s.session_sketch_mut().unwrap().1;
+        sk.activate_tangent_handle(c, pts[2]).unwrap();
+    }
+    let tip = handle(&s, c, pts[2]).unwrap().tip;
+    let node = v(25.0, -2.0);
+    let (se_, sk_) = s.session_sketch_mut().unwrap();
+    sk_.drag(&[planora_sketch::solver::Drag {
+        point: tip,
+        target: node,
+    }])
+    .unwrap();
+    se_.set_tool(sk_, Tool::Line);
+    se_.cursor_opts.grid_step = Some(1.0);
+    let raw = node + v(0.02, 0.02);
+    se_.update_cursor(sk_, Some(raw), 0.001);
+    assert_eq!(se_.draw_cursor.as_ref().unwrap().snap, Snap::Grid);
+    se_.selection = vec![Item::Curve(c)];
+    se_.update_cursor(sk_, Some(raw), 0.001);
+    assert_eq!(se_.draw_cursor.as_ref().unwrap().snap, Snap::Point(tip));
+}
+
 /// Ein Zug am Griff ist ein Griffzug: An der Linie zieht er die Spitze, am Bogen sein freies Ende,
 /// und der Stützpunkt bleibt.
 #[test]
@@ -836,6 +1033,43 @@ fn a_handle_in_a_pattern_counts_as_its_spline() {
     sk_.add_pattern(&plan).unwrap();
     assert!(se_.begin_pattern_edit_at(sk_, line));
     assert_eq!(se_.pattern.plan.as_ref().unwrap().sources, vec![c]);
+}
+
+/// Auch am Exemplar: Rho löst das Muster auf, die Meldung sagt es, und ein Fehler ändert nichts.
+#[test]
+fn changing_rho_of_a_pattern_instance_dissolves_the_pattern_with_a_note() {
+    let (mut s, c) = conic_sketch(0.5);
+    let plan = PatternPlan {
+        kind: PatternKind::Rect {
+            dirs: [PatternDir::SketchX, PatternDir::Perpendicular],
+            extent: [false, false],
+            symmetric: [false, false],
+        },
+        sources: vec![c],
+        counts: [3, 1],
+        values: [40.0, 40.0],
+        suppressed: Vec::new(),
+    };
+    let (se_, sk_) = s.session_sketch_mut().unwrap();
+    let id = sk_.add_pattern(&plan).unwrap();
+    let instance = sk_
+        .pattern(id)
+        .unwrap()
+        .instances
+        .iter()
+        .find_map(|i| i.curves.first().copied().filter(|k| *k != c))
+        .expect("ein Exemplar");
+    assert!(se_.set_conic_rho(sk_, instance, 1.5).is_err());
+    assert_eq!(sk_.pattern_count(), 1, "abgelehnt: das Muster bleibt");
+    se_.set_conic_rho(sk_, instance, 0.25).unwrap();
+    assert_eq!(sk_.pattern_count(), 0);
+    let text = se_.message_text().unwrap();
+    assert!(
+        text.contains(&planora_i18n::tr!("sketch-pattern-dissolved", n = 1_usize)),
+        "{text}"
+    );
+    assert_eq!(rho_of(&s, instance), 0.25);
+    assert_eq!(rho_of(&s, c), 0.5, "die Vorlage behält ihr Rho");
 }
 
 #[test]
@@ -1189,7 +1423,46 @@ fn shape_count(shape: &egui::epaint::Shape) -> usize {
     }
 }
 
+/// Ruft `f` für jede Ecke einer Linie oder eines Linienzugs.
+fn stroke_points(shape: &egui::epaint::Shape, f: &mut impl FnMut(Pos2)) {
+    use egui::epaint::Shape as S;
+    match shape {
+        S::Vec(v) => v.iter().for_each(|x| stroke_points(x, f)),
+        S::LineSegment { points, .. } => points.iter().for_each(|p| f(*p)),
+        S::Path(path) => path.points.iter().for_each(|p| f(*p)),
+        _ => {}
+    }
+}
+
 impl Rig {
+    /// Zahl der Linienecken im letzten Bild, die auf der Strecke `from`–`to` liegen.
+    fn strokes_on(&mut self, from: Pos2, to: Pos2) -> usize {
+        // Der Zeiger aus `screen` darf nichts hervorheben.
+        self.frame(vec![Event::PointerMoved(Pos2::new(1400.0, 900.0))]);
+        self.settle();
+        self.time += 1.0 / 60.0;
+        let raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, SIZE)),
+            time: Some(self.time),
+            ..Default::default()
+        };
+        let mut f = eframe::Frame::_new_kittest();
+        let app = &mut self.app;
+        let out = self.ctx.run_ui(raw, |ui| app.ui(ui, &mut f));
+        let mut n = 0;
+        let along = to - from;
+        for c in &out.shapes {
+            stroke_points(&c.shape, &mut |p| {
+                let t = (p - from).dot(along) / along.length_sq();
+                if (0.0..=1.0).contains(&t) && (from + along * t).distance(p) < 0.7 {
+                    n += 1;
+                }
+            });
+        }
+        out.drop_without_applying_deltas();
+        n
+    }
+
     fn drawn(&mut self) -> usize {
         self.settle();
         self.time += 1.0 / 60.0;
@@ -1224,7 +1497,29 @@ fn a_hidden_handle_is_not_drawn() {
         .activate_tangent_handle(c, pts[2])
         .unwrap();
     assert_eq!(rig.drawn(), plain, "unsichtbar");
+    let h = {
+        let st = rig.st();
+        let CurveKind::Spline { handles, .. } =
+            &st.session_sketch().unwrap().curve(c).unwrap().kind
+        else {
+            panic!("kein Spline");
+        };
+        handles[0]
+    };
+    let (at, tip) = {
+        let sk = rig.st().session_sketch().unwrap();
+        (sk.point_xy(h.at).unwrap(), sk.point_xy(h.tip).unwrap())
+    };
+    // Die äußere Hälfte der Griff-Linie: Dort läuft keine andere Kurve.
+    let (from, to) = (rig.screen((at + tip) * 0.5), rig.screen(tip));
+    assert_eq!(
+        rig.strokes_on(from, to),
+        0,
+        "die Linie wird nicht gezeichnet"
+    );
     rig.select(&[Item::Curve(c)]);
+    let (from, to) = (rig.screen((at + tip) * 0.5), rig.screen(tip));
+    assert!(rig.strokes_on(from, to) > 0, "gewählt zu sehen");
     assert!(rig.drawn() > plain, "gewählt zu sehen");
 }
 
@@ -1304,6 +1599,96 @@ fn rho_field_in_panel() {
     assert_eq!(rho(&mut rig), 0.25);
     rig.select(&[]);
     assert!(sketch_panel::rho_field(&rig.ctx).is_none());
+}
+
+/// Verschwindet das Feld mit einem Entwurf, kommt der nicht wieder: Sonst stünde beim nächsten Wählen
+/// der alte Text darin, und Eingabe wendete ihn an.
+#[test]
+fn a_rho_draft_does_not_survive_the_field() {
+    let mut conic = None;
+    let mut rig = Rig::new(|sk| {
+        let p = sk.add_point(0.0, 0.0).unwrap();
+        let q = sk.add_point(20.0, 0.0).unwrap();
+        let a = sk.add_point(10.0, 12.0).unwrap();
+        conic = Some(sk.add_conic(p, q, a, 0.5).unwrap());
+    });
+    let c = conic.unwrap();
+    rig.select(&[Item::Curve(c)]);
+    let field = sketch_panel::rho_field(&rig.ctx).expect("Rho-Feld");
+    rig.click(field.center());
+    rig.frame(vec![Event::Text("7".to_string())]);
+    rig.settle();
+    // Das Feld geht weg, während es den Fokus hat, und kommt wieder.
+    rig.select(&[]);
+    assert!(sketch_panel::rho_field(&rig.ctx).is_none());
+    rig.select(&[Item::Curve(c)]);
+    let field = sketch_panel::rho_field(&rig.ctx).expect("Rho-Feld");
+    rig.click(field.center());
+    rig.frame(vec![key(Key::Enter)]);
+    rig.settle();
+    let rho = match rig.st().session_sketch().unwrap().curve(c).unwrap().kind {
+        CurveKind::Conic { rho, .. } => rho,
+        _ => panic!("kein Kegelschnitt"),
+    };
+    assert_eq!(rho, 0.5, "der alte Entwurf gilt nicht");
+    assert!(rig.se().message.is_none(), "{:?}", rig.se().message_text());
+}
+
+/// Die vier Aktionen laufen wie aus der Tastenbelegung über `run_action`.
+#[test]
+fn the_four_actions_work_through_run_action() {
+    use planora_app::commands::run_action;
+    let mut ids = None;
+    let mut rig = Rig::new(|sk| {
+        let (c, pts) = add_spline(sk, &WAVE);
+        let cps: Vec<PointId> = (0..7)
+            .map(|k| {
+                sk.add_point(f64::from(k) * 8.0, 30.0 + f64::from(k % 2) * 9.0)
+                    .unwrap()
+            })
+            .collect();
+        ids = Some((c, pts, sk.add_control_spline(&cps, 5).unwrap()));
+    });
+    let (c, pts, control) = ids.unwrap();
+    let state = |rig: &mut Rig| {
+        let st = rig.st();
+        let session = st.sketch_session.as_ref().unwrap();
+        session.handle_state(st.session_sketch().unwrap(), c, pts[2])
+    };
+    rig.select(&[Item::Point(pts[2])]);
+    run_action(rig.app.ws_mut(), Action::SketchTangentHandle);
+    assert_eq!(state(&mut rig), (true, false));
+    run_action(rig.app.ws_mut(), Action::SketchCurvatureHandle);
+    assert_eq!(state(&mut rig), (true, true));
+    run_action(rig.app.ws_mut(), Action::SketchCurvatureHandle);
+    assert_eq!(state(&mut rig), (true, false));
+    run_action(rig.app.ws_mut(), Action::SketchTangentHandle);
+    assert_eq!(state(&mut rig), (false, false));
+    rig.select(&[Item::Curve(control)]);
+    run_action(rig.app.ws_mut(), Action::SketchSplineDegree);
+    let degree = |rig: &mut Rig| match rig
+        .st()
+        .session_sketch()
+        .unwrap()
+        .curve(control)
+        .unwrap()
+        .kind
+    {
+        CurveKind::ControlSpline { degree, .. } => degree,
+        _ => panic!("kein Kontrollpunkt-Spline"),
+    };
+    assert_eq!(degree(&mut rig), 3);
+    run_action(rig.app.ws_mut(), Action::SketchInsertControlPoint);
+    assert_eq!(rig.se().tool, Tool::InsertControlPoint);
+    // Ohne passende Auswahl: nur die Meldung.
+    rig.select(&[]);
+    run_action(rig.app.ws_mut(), Action::SketchTangentHandle);
+    assert_eq!(rig.se().message_text(), Some(tr!("sketch-handle-no-point")));
+    run_action(rig.app.ws_mut(), Action::SketchSplineDegree);
+    assert_eq!(
+        rig.se().message_text(),
+        Some(tr!("sketch-spline-degree-no-selection"))
+    );
 }
 
 #[test]

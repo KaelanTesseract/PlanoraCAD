@@ -340,6 +340,9 @@ pub struct CurveDrag {
     pub(crate) anchors: Vec<PointId>,
     /// Zug am Rho-Griff: ändert nur das Rho des Kegelschnitts.
     pub(crate) rho: Option<crate::sketch_handles::RhoGrab>,
+    /// Griffzug am Stützpunkt (der erste in `start`): Die übrigen Punkte gehen um das mit, was er
+    /// wirklich schafft ([`carry_frame`](crate::sketch_handles::carry_frame)).
+    pub(crate) carry: bool,
     /// Griffzug: der Stand vor dem Zug und vor einem Einschalten im ersten Zug. Ein Abbruch geht
     /// dorthin zurück ([`abort_handle_drag`](SketchSession::abort_handle_drag)). `None`: ein Zug ohne
     /// Griff, oder mitten im Zug wurde noch etwas anderes geändert.
@@ -366,6 +369,7 @@ impl CurveDrag {
             rim: None,
             anchors: Vec::new(),
             rho: None,
+            carry: false,
             before: None,
             label: None,
             patterns_before: sk.pattern_count(),
@@ -1951,6 +1955,9 @@ impl SketchSession {
                 })
             }
             (None, Some(grab)) => crate::sketch_handles::rho_frame(sk, grab, at),
+            (None, None) if drag.carry => {
+                crate::sketch_handles::carry_frame(sk, &drag.start, at - drag.grab)
+            }
             (None, None) => {
                 let delta = at - drag.grab;
                 let drags: Vec<Drag> = drag

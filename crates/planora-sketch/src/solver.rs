@@ -948,13 +948,13 @@ impl Sketch {
     /// Konstanten des Laufs.
     fn solve_with_soft_holding(&mut self, soft: &[Soft], extra: &HashSet<usize>) -> SolveReport {
         if self.patterns().next().is_none() {
-            return self.solve_round(soft, extra).0;
+            return self.solve_round(soft, extra, extra).0;
         }
         self.refresh_patterns();
         let mut held = self.pattern_vars();
         held.extend(extra.iter().copied());
         let max_rounds = PATTERN_ROUNDS.max(self.patterns().count() + 1);
-        let (mut report, mut reads) = self.solve_round(soft, &held);
+        let (mut report, mut reads) = self.solve_round(soft, &held, extra);
         let mut rounds = 1;
         loop {
             let refresh = self.refresh_patterns();
@@ -971,7 +971,7 @@ impl Sketch {
                 self.flag_stale_pattern_reads(&held, &mut report);
                 break;
             }
-            let (next, again) = self.solve_round(soft, &held);
+            let (next, again) = self.solve_round(soft, &held, extra);
             rounds += 1;
             reads = again;
             report = SolveReport {
@@ -1013,7 +1013,17 @@ impl Sketch {
 
     /// Ein Lauf über alle Gruppen; `held` sind die Exemplarvariablen (Konstanten). Der zweite
     /// Wert sagt, ob eine Gruppe Exemplare liest.
-    fn solve_round(&mut self, soft: &[Soft], held: &HashSet<usize>) -> (SolveReport, bool) {
+    ///
+    /// `extra`: Teil von `held`, der nur für diesen Lauf fest steht (anders als Musterexemplare, die
+    /// in jedem Lauf fest stehen). Gruppen, die so eine Variable lesen, gehen nicht über den
+    /// Zwischenspeicher: Ihre Freiheitsgrade gelten nur unter dem Halten, und der Schlüssel kennt
+    /// das Halten nicht. Das volle Lösen danach bekäme sonst diese Zahlen.
+    fn solve_round(
+        &mut self,
+        soft: &[Soft],
+        held: &HashSet<usize>,
+        extra: &HashSet<usize>,
+    ) -> (SolveReport, bool) {
         let tol_r = RESIDUAL_FRACTION * self.tolerance().linear;
         let (groups, in_constraint) = self.build_groups_holding(held, None);
         let reads_patterns = groups.iter().any(|g| !g.pattern_reads.is_empty());
@@ -1027,6 +1037,7 @@ impl Sketch {
         let mut group_solves = 0;
         let mut drag_failed = false;
         let touched = |g: &Group| soft.iter().any(|s| g.reads.binary_search(&s.var).is_ok());
+        let only_this_run = |g: &Group| g.reads.iter().any(|v| extra.contains(v));
         let start = self.vars.clone();
         let mut committed = self.vars.clone();
         let old_cache = std::mem::take(&mut self.solve_cache);
@@ -1045,6 +1056,7 @@ impl Sketch {
             // gelöste Gruppe ist an ihren Werten schon gelöst, ein neuer Lauf bräuchte keinen
             // Schritt; eine gescheiterte rechnete ab demselben Start dasselbe.
             if group_soft.is_empty()
+                && !only_this_run(g)
                 && let Some(outcome) = old_cache.lookup(g, &start)
             {
                 match outcome {
@@ -1132,15 +1144,17 @@ impl Sketch {
                 for &v in &g.vars {
                     committed[v] = x[v];
                 }
-                cache.insert(
-                    g,
-                    &x,
-                    Outcome::Solved {
-                        dof: analysis.dof,
-                        redundant: analysis.redundant,
-                        free_vars: analysis.free_vars,
-                    },
-                );
+                if !only_this_run(g) {
+                    cache.insert(
+                        g,
+                        &x,
+                        Outcome::Solved {
+                            dof: analysis.dof,
+                            redundant: analysis.redundant,
+                            free_vars: analysis.free_vars,
+                        },
+                    );
+                }
             } else {
                 // Beim Ziehen sucht die Diagnose für die gezogene Gruppe nicht nach der
                 // Ursache; das holt das volle Lösen am Ende des Ziehens nach.
@@ -1162,7 +1176,7 @@ impl Sketch {
                         conflicting.push(id);
                     }
                 }
-                if full {
+                if full && !only_this_run(g) {
                     cache.insert(
                         g,
                         &start,
