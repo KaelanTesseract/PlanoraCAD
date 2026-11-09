@@ -248,7 +248,10 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
         // „Silhouette“ im Klappmenü gewählt war.
         | Action::SketchProjectEdge
         | Action::SketchIntersect
-        | Action::SketchSilhouette => {
+        | Action::SketchSilhouette
+        | Action::SketchSplineFit
+        | Action::SketchSplineControl
+        | Action::SketchConic => {
             if let Some(kind) = a.sketch_kind()
                 && let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut()
             {
@@ -454,7 +457,7 @@ pub fn observe(ws: &mut Workspace) {
 /// Werkzeug verlassen merkt nichts (wie ein abgebrochenes Fenster); Rückgängig/Wiederholen in
 /// der Skizze zählt nicht als Benutzen. Eine Form merkt sich ihre aktive Art
 /// ([`Action::for_kind`]); auch der Mittelpunkt-Bogen wird gemerkt (Skizzen 3). Ein Werkzeug ohne
-/// Eintrag in der Tabelle (Spline, …) ersetzt das Gedächtnis nicht. Das Gedächtnis des Modells
+/// Eintrag in der Tabelle (Ellipse, …) ersetzt das Gedächtnis nicht. Das Gedächtnis des Modells
 /// bleibt in jedem Fall.
 fn observe_sketch(ws: &mut Workspace) {
     let tab = ws.active_tab();

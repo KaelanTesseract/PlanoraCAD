@@ -2355,6 +2355,13 @@ Abgeschlossen 2026-11-08, gemergt in a78db45. Drei Handtests bei 1920×1080; die
 
 ## Teilprojekt Skizzen 7
 
+### Werkzeuge und Klappmenü (Task 12)
+- **Annahme:** Auch „Spline durch Stützpunkte“ bekommt eine eigene belegbare Aktion `skizze.spline_stuetzpunkte` ohne Vorgabetaste; Spec D5 nennt sie nicht, aber jede Art eines Knopfs hat ihre Aktion. Dadurch merkt sich „Letztes Skizzenwerkzeug wiederholen“ nun auch den Spline.
+- **Annahme:** Das Rho-Feld schlägt nach dem ersten angelegten Kegelschnitt der Sitzung dessen Rho vor (wie die Seitenzahl des Polygons); ein abgebrochener zählt nicht. Der gewählte Grad gilt ebenso für die Sitzung.
+- **Annahme:** Das Rho-Feld nimmt nur Zahlen, auch keinen Parameter und keine Einheit (Spec: Rho nimmt keine Formel). Der Scheitel auf der Sehne wird schon beim Klick auf den Scheitel abgelehnt, die Stufe bleibt.
+- **Annahme:** Nach dem Scheitel fängt der Zeiger nichts mehr; der letzte Klick bestätigt nur und setzt keinen Punkt.
+- **Abweichung (Spec D1):** Der Kegelschnitt steht im Klappmenü am Spline-Knopf, im Menü „Erzeugen“ aber als eigener Eintrag und nicht im Untermenü „Spline“.
+
 ### Schneiden am schrägen Kegel (Task 11)
 - **Folgepunkt:** `plane_cone` und damit die Booleschen Operationen kennen den schrägen Kegel weiter nicht (Spec G1). Der neue Rechenweg `plane_cone_conic` gilt nur für „Schneiden“.
 - **Entscheidung:** Parabel, Hyperbel und Ellipsenbogen laufen am Kegel als ein Stück über die Naht. So hängt die Stückzahl nicht daran, ob die Kurve die Naht kreuzt, und der Verweis auf das Stück folgt dem ganzen Schnitt. Andere Flächen und die geraden Linien durch die Spitze teilt die Naht weiter.

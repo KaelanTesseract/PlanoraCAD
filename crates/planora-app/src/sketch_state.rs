@@ -8,7 +8,7 @@ use crate::msg::Msg;
 use crate::sketch_cursor::{CursorOptions, DrawCursor};
 use crate::sketch_grips::GripDrag;
 use crate::sketch_input::{Created, DrawInput, FieldKind};
-use crate::sketch_kinds::{PREVIEW_STEPS_PER_TURN, ToolKinds};
+use crate::sketch_kinds::{PREVIEW_STEPS_PER_TURN, ToolKind, ToolKinds};
 use planora_feature::{FeatureId, ParamScope, ParamUnit, SketchFeature, constraint_unit};
 use planora_i18n::tr;
 use planora_math::DVec2;
@@ -404,6 +404,10 @@ pub struct SketchSession {
     pub pending_curves: Vec<CurveId>,
     /// Zuletzt abgeschlossene Seitenzahl eines Polygons; ein abgebrochenes zählt nicht.
     pub polygon_sides: usize,
+    /// Grad für neue Splines mit Kontrollpunkten: 5 (Vorgabe) oder 3, gilt für die Sitzung.
+    pub spline_degree: u8,
+    /// Rho, das das Feld des nächsten Kegelschnitts vorschlägt: 0,5, danach das zuletzt angelegte.
+    pub conic_rho: f64,
     /// Laufender Zug auf dem letzten Punkt des Linienzugs.
     pub line_arc: Option<LineArcDrag>,
     /// Bogen aus dem Linienzug, an dem die nächste Linie tangential weiterläuft.
@@ -576,6 +580,8 @@ impl SketchSession {
             pending_snaps: Vec::new(),
             pending_curves: Vec::new(),
             polygon_sides: 6,
+            spline_degree: 5,
+            conic_rho: 0.5,
             line_arc: None,
             line_after_arc: None,
             cursor: None,
@@ -1576,9 +1582,16 @@ impl SketchSession {
             if se.pending.len() < 2 {
                 return Err(crate::msg!("sketch-spline-min"));
             }
-            sk.add_spline(&se.pending).map_err(err)?;
+            if se.kinds.spline == ToolKind::SplineControl {
+                sk.add_control_spline(&se.pending, se.spline_degree)
+                    .map_err(err)?;
+            } else {
+                sk.add_spline(&se.pending).map_err(err)?;
+            }
             se.pending.clear();
             se.solve_checked(sk, prior)?;
+            // Der Befehl ist fertig: Der nächste Klick beginnt einen neuen, sein Esc lässt nichts.
+            se.open_start = None;
             Ok(())
         })
     }

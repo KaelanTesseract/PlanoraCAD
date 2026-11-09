@@ -1038,6 +1038,12 @@ pub enum HandIcon {
     SketchIntersect,
     /// Silhouette (Skizzen 6): eine Kugel mit dünnem Äquator, ihr Umriss kräftig.
     SketchSilhouette,
+    /// Spline mit Kontrollpunkten (Skizzen 7): die Kurve kräftig, ihr Kontrollpolygon dünn, die
+    /// Kontrollpunkte als Punkte.
+    SketchSplineControl,
+    /// Kegelschnitt (Skizzen 7): zwei dünne Hilfslinien zum Scheitel, die Kurve kräftig, ein Punkt
+    /// auf der Schulter.
+    SketchConic,
 }
 
 /// Alle gezeichneten Symbole aus [`HandIcon`].
@@ -1070,6 +1076,8 @@ pub const HAND_DRAWN: &[HandIcon] = &[
     HandIcon::SketchDimension,
     HandIcon::SketchIntersect,
     HandIcon::SketchSilhouette,
+    HandIcon::SketchSplineControl,
+    HandIcon::SketchConic,
 ];
 
 /// Zeichnet ein [`HandIcon`] in `rect` (Strichbreite 1,5, runde Enden).
@@ -1389,6 +1397,57 @@ pub fn paint_hand_icon(painter: &Painter, rect: Rect, icon: HandIcon, color: Col
             ));
             painter.circle_stroke(c, r, stroke);
         }
+        HandIcon::SketchSplineControl => {
+            // Bézier-Stück über vier Kontrollpunkte, dünn verbunden.
+            let thin = Stroke::new(1.0, color);
+            let ctrl = [
+                c + vec2(-r * 1.1, r),
+                c + vec2(-r * 0.5, -r),
+                c + vec2(r * 0.5, r * 0.5),
+                c + vec2(r * 1.1, -r * 0.8),
+            ];
+            for w in ctrl.windows(2) {
+                seg(painter, [w[0], w[1]], thin);
+            }
+            let curve: Vec<Pos2> = (0..=16_i32)
+                .map(|i| {
+                    let t = i as f32 / 16.0;
+                    let s = 1.0 - t;
+                    let (b0, b1) = (s * s * s, 3.0 * s * s * t);
+                    let (b2, b3) = (3.0 * s * t * t, t * t * t);
+                    Pos2::new(
+                        b0 * ctrl[0].x + b1 * ctrl[1].x + b2 * ctrl[2].x + b3 * ctrl[3].x,
+                        b0 * ctrl[0].y + b1 * ctrl[1].y + b2 * ctrl[2].y + b3 * ctrl[3].y,
+                    )
+                })
+                .collect();
+            painter.add(egui::Shape::line(curve, stroke));
+            for p in ctrl {
+                painter.circle_filled(p, 1.6, color);
+            }
+        }
+        HandIcon::SketchConic => {
+            // Start und Ende unten, der Scheitel oben: quadratische Kurve mit Gewicht, Rho 0,6.
+            let thin = Stroke::new(1.0, color);
+            let start = c + vec2(-r * 1.1, r);
+            let apex = c + vec2(0.0, -r * 1.1);
+            let end = c + vec2(r * 1.1, r);
+            seg(painter, [start, apex], thin);
+            seg(painter, [apex, end], thin);
+            let w = 1.5_f32;
+            let at = |t: f32| {
+                let s = 1.0 - t;
+                let (b0, b1, b2) = (s * s, 2.0 * w * s * t, t * t);
+                let sum = b0 + b1 + b2;
+                Pos2::new(
+                    (b0 * start.x + b1 * apex.x + b2 * end.x) / sum,
+                    (b0 * start.y + b1 * apex.y + b2 * end.y) / sum,
+                )
+            };
+            let curve: Vec<Pos2> = (0..=16_i32).map(|i| at(i as f32 / 16.0)).collect();
+            painter.add(egui::Shape::line(curve, stroke));
+            painter.circle_filled(at(0.5), 1.6, color);
+        }
         HandIcon::Centerline => {
             seg(
                 painter,
@@ -1494,6 +1553,8 @@ pub fn sketch_kind_icon(kind: crate::sketch_kinds::ToolKind) -> IconSource {
         K::PatternCircular => IconSource::Hand(HandIcon::PatternCircular),
         K::Intersect => IconSource::Hand(HandIcon::SketchIntersect),
         K::Silhouette => IconSource::Hand(HandIcon::SketchSilhouette),
+        K::SplineControl => IconSource::Hand(HandIcon::SketchSplineControl),
+        K::Conic => IconSource::Hand(HandIcon::SketchConic),
         _ => sketch_tool_icon(kind.tool()),
     }
 }

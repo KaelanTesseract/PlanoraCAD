@@ -454,6 +454,17 @@ pub fn look_at_button(ctx: &egui::Context) -> Option<egui::Rect> {
     ctx.data(|d| d.get_temp::<egui::Rect>(look_at_key()))
 }
 
+fn degree_buttons_key() -> egui::Id {
+    shell_panels::sketch_side_id().with("spline-degree")
+}
+
+/// Wert und Lage der Knöpfe des Grad-Felds im letzten Bild, leer ohne das Feld (für Tests).
+#[doc(hidden)]
+pub fn degree_buttons(ctx: &egui::Context) -> Vec<(u8, egui::Rect)> {
+    ctx.data(|d| d.get_temp::<Vec<(u8, egui::Rect)>>(degree_buttons_key()))
+        .unwrap_or_default()
+}
+
 fn strip_buttons_key() -> egui::Id {
     shell_panels::sketch_strip_id().with("buttons")
 }
@@ -661,9 +672,11 @@ fn strip_field(
                         let title = strip_title(&km, se, tool);
                         let hint = se.kind_of(tool).map_or(hint, ToolKind::hint);
                         let flyout = has_flyout(tool);
-                        // Das Muster zeigt das Symbol der zuletzt benutzten Art.
+                        // Muster und Spline zeigen das Symbol der zuletzt benutzten Art.
                         let source = match se.kind_of(tool) {
-                            Some(kind) if tool == Tool::Pattern => icons::sketch_kind_icon(kind),
+                            Some(kind) if matches!(tool, Tool::Pattern | Tool::Spline) => {
+                                icons::sketch_kind_icon(kind)
+                            }
                             _ => icons::sketch_tool_icon(tool),
                         };
                         let r = strip_button(ui, source, &label, selected, flyout, dark)
@@ -889,6 +902,11 @@ fn side_field(
 /// Einstellungen des aktiven Werkzeugs: beim Versatz der Haken „Kette“, beim Verschieben der Haken
 /// „Kopie erstellen“, „Bezugspunkt setzen“, OK und Abbrechen.
 fn tool_options(ui: &mut egui::Ui, se: &mut SketchSession, sf: &mut SketchFeature) {
+    if se.tool == Tool::Spline && se.kinds.spline == ToolKind::SplineControl {
+        spline_options(ui, se);
+    } else {
+        ui.data_mut(|d| d.remove_temp::<Vec<(u8, egui::Rect)>>(degree_buttons_key()));
+    }
     if se.tool == Tool::Offset {
         ui.checkbox(&mut se.offset_chain, tr!("sketch-offset-chain"));
     }
@@ -931,6 +949,21 @@ fn tool_options(ui: &mut egui::Ui, se: &mut SketchSession, sf: &mut SketchFeatur
             }
         });
     }
+}
+
+/// Einstellung des Splines mit Kontrollpunkten (Skizzen 7): der Grad neuer Kurven, 5 oder 3.
+fn spline_options(ui: &mut egui::Ui, se: &mut SketchSession) {
+    let mut rects = Vec::new();
+    ui.horizontal(|ui| {
+        ui.label(tr!("sketch-spline-degree"));
+        for degree in [5_u8, 3] {
+            let button = ui
+                .radio_value(&mut se.spline_degree, degree, degree.to_string())
+                .on_hover_text(tr!("sketch-spline-degree-hint"));
+            rects.push((degree, button.rect));
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(degree_buttons_key(), rects));
 }
 
 /// Einstellungen des Projizierens (Skizzen 6, Fusion „Projizieren“): Auswahlfilter „Angegebene

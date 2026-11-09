@@ -2334,9 +2334,18 @@ fn sketch_kinds_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
         .filter(|t| sketch_panel::has_flyout(*t) && !matches!(t, Tool::Fillet | Tool::Pattern));
     for tool in tools {
         icons::submenu(ui, sketch_panel::tool_label(tool), |ui| {
-            for kind in crate::sketch_kinds::ToolKind::of(tool) {
+            // Der Kegelschnitt hat wie in Fusion einen eigenen Eintrag (`SKETCH_CREATE_ACTIONS`).
+            let kinds = crate::sketch_kinds::ToolKind::of(tool)
+                .iter()
+                .filter(|k| **k != crate::sketch_kinds::ToolKind::Conic);
+            for kind in kinds {
                 let keys = keymap::shortcut_hint(&ws.keymap, kind.action());
-                let source = icons::sketch_tool_icon(tool);
+                // Die Spline-Arten unterscheiden sich am Symbol.
+                let source = if tool == Tool::Spline {
+                    icons::sketch_kind_icon(*kind)
+                } else {
+                    icons::sketch_tool_icon(tool)
+                };
                 if icons::source_entry_keys(ui, source, &kind.label(), &keys, true)
                     .on_hover_text(kind.hint())
                     .clicked()
@@ -2350,8 +2359,9 @@ fn sketch_kinds_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
 }
 
 /// Die Einträge des Menüs „Erzeugen“ bei offener Skizze ohne Untermenü (wie Fusion „Create“):
-/// beide Muster und die Skizzenbemaßung.
-pub const SKETCH_CREATE_ACTIONS: [Action; 3] = [
+/// der Kegelschnitt, beide Muster und die Skizzenbemaßung.
+pub const SKETCH_CREATE_ACTIONS: [Action; 4] = [
+    Action::SketchConic,
     Action::SketchPatternRect,
     Action::SketchPatternCircular,
     Action::SketchDimension,

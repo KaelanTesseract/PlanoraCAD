@@ -1812,6 +1812,13 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         }
     }
 
+    // Hilfslinien der gewählten Kurve (Kontrollpolygon, Kegelschnitt), gestrichelt unter den Punkten.
+    for line in curve_guides(se, sk) {
+        for path in map.paths(&line) {
+            draw_path(&painter, path, Stroke::new(1.0, col.preview), true);
+        }
+    }
+
     // Punkte
     for (p, _) in sk.points() {
         if hidden_points.contains(&p) {
@@ -2152,6 +2159,27 @@ fn place_label(mut r: Rect, placed: &mut Vec<Rect>) -> Rect {
 }
 
 /// Vorschau des laufenden Werkzeugs vom zuletzt gesetzten Punkt zum Mauszeiger.
+/// Hilfslinien der gewählten Kurven als Linienzüge (Skizzen 7): beim Spline mit Kontrollpunkten das
+/// Kontrollpolygon, beim Kegelschnitt Start–Scheitel–Ende. Sie sind keine Kurven.
+pub fn curve_guides(se: &SketchSession, sk: &Sketch) -> Vec<Vec<DVec2>> {
+    se.selection
+        .iter()
+        .filter_map(|item| {
+            let Item::Curve(c) = item else {
+                return None;
+            };
+            let ids = match &sk.curve(*c)?.kind {
+                CurveKind::ControlSpline { points, .. } => points.clone(),
+                CurveKind::Conic {
+                    start, end, apex, ..
+                } => vec![*start, *apex, *end],
+                _ => return None,
+            };
+            ids.iter().map(|&p| pos(sk, p)).collect()
+        })
+        .collect()
+}
+
 fn draw_preview(
     painter: &egui::Painter,
     map: &Mapper,
@@ -2223,6 +2251,14 @@ fn draw_preview(
             }
         }
         return;
+    }
+    // Spline mit Kontrollpunkten: die Kurve durchgezogen, das Polygon gestrichelt (unten).
+    for path in se
+        .control_spline_preview(sk, cursor)
+        .iter()
+        .flat_map(|curve| map.paths(curve))
+    {
+        draw_path(painter, path, stroke, false);
     }
     let pending: Vec<DVec2> = se.pending.iter().filter_map(|&p| pos(sk, p)).collect();
     let circle = |m: DVec2, r: f64| -> Vec<DVec2> {

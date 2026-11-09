@@ -283,6 +283,30 @@ fn project_intersect_and_silhouette_have_their_own_icons() {
     }
 }
 
+/// Skizzen 7: Spline mit Kontrollpunkten und Kegelschnitt haben je ein eigenes gezeichnetes Symbol;
+/// der Spline durch Stützpunkte behält das des Leistenknopfs.
+#[test]
+fn new_icons_are_hand_drawn() {
+    use icons::{HandIcon, IconSource};
+    use planora_app::sketch_kinds::ToolKind;
+    use planora_app::sketch_state::Tool;
+    assert_eq!(
+        icons::sketch_kind_icon(ToolKind::SplineFit),
+        icons::sketch_tool_icon(Tool::Spline)
+    );
+    assert_eq!(
+        icons::sketch_kind_icon(ToolKind::SplineControl),
+        IconSource::Hand(HandIcon::SketchSplineControl)
+    );
+    assert_eq!(
+        icons::sketch_kind_icon(ToolKind::Conic),
+        IconSource::Hand(HandIcon::SketchConic)
+    );
+    for h in [HandIcon::SketchSplineControl, HandIcon::SketchConic] {
+        assert!(HAND_DRAWN.contains(&h), "{h:?} fehlt in HAND_DRAWN");
+    }
+}
+
 #[test]
 fn every_sketch_tool_and_action_has_an_icon_source() {
     use icons::IconSource;

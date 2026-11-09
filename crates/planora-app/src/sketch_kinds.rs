@@ -11,6 +11,7 @@ use crate::sketch_input::{Created, FieldKind, locked_ray, toward_pointer};
 use crate::sketch_state::{LineArcDrag, SketchSession, Snap, Tool, check_change, err};
 use planora_i18n::tr;
 use planora_math::DVec2;
+use planora_math::nurbs::{NurbsCurve, uniform_clamped_knots};
 use planora_sketch::constraint::ConstraintKind;
 use planora_sketch::fillet::{ChamferKind, ChamferPlan, CurvePick, FilletPlan};
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
@@ -23,6 +24,10 @@ pub const PREVIEW_STEPS_PER_TURN: usize = 96;
 const CHAMFER_ANGLE_DEFAULT: f64 = std::f64::consts::FRAC_PI_4;
 /// Faktor für die Probe, ob eine vom Löser abgelehnte Rundung oder Fase kleiner ginge.
 const SMALLER: f64 = 0.01;
+/// Schritte der Vorschau eines Kegelschnitts; gerade, damit die Schulter genau darauf liegt.
+const CONIC_PREVIEW_STEPS: usize = 64;
+/// Schritte der Vorschau eines Splines mit Kontrollpunkten je Knotenabschnitt.
+const CONTROL_PREVIEW_STEPS: usize = 16;
 
 /// Eine Art, eine Form zu zeichnen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -67,6 +72,13 @@ pub enum ToolKind {
     /// Fusion „Silhouette“ (Skizzen 6): Umriss einer Fläche in Blickrichtung der Skizzenebene,
     /// über [`crate::state::AppState::silhouette_into_sketch`].
     Silhouette,
+    /// Fusion „Spline durch Stützpunkte“ (Skizzen 7): der bisherige Spline, über `click_spline`.
+    SplineFit,
+    /// Fusion „Spline mit Kontrollpunkten“ (Skizzen 7): dieselben Klicks, Grad aus
+    /// [`SketchSession::spline_degree`].
+    SplineControl,
+    /// Fusion „Kegelschnitt“ (Skizzen 7): Start, Ende, Scheitel, dann das Rho-Feld am Zeiger.
+    Conic,
 }
 
 impl ToolKind {
@@ -100,6 +112,9 @@ impl ToolKind {
         ToolKind::Project,
         ToolKind::Intersect,
         ToolKind::Silhouette,
+        ToolKind::SplineFit,
+        ToolKind::SplineControl,
+        ToolKind::Conic,
     ];
 
     /// Das Werkzeug, zu dem die Art gehört.
@@ -115,6 +130,7 @@ impl ToolKind {
             Fillet | ChamferEqual | ChamferDistanceAngle | ChamferTwoDistances => Tool::Fillet,
             PatternRect | PatternCircular => Tool::Pattern,
             Project | Intersect | Silhouette => Tool::ProjectEdge,
+            SplineFit | SplineControl | Conic => Tool::Spline,
         }
     }
 
@@ -130,6 +146,7 @@ impl ToolKind {
             Tool::Fillet => &all[19..23],
             Tool::Pattern => &all[23..25],
             Tool::ProjectEdge => &all[25..28],
+            Tool::Spline => &all[28..31],
             _ => &[],
         }
     }
@@ -138,7 +155,11 @@ impl ToolKind {
     pub fn is_classic(self) -> bool {
         matches!(
             self,
-            ToolKind::Rect2P | ToolKind::CircleCenter | ToolKind::ArcCenter
+            ToolKind::Rect2P
+                | ToolKind::CircleCenter
+                | ToolKind::ArcCenter
+                | ToolKind::SplineFit
+                | ToolKind::SplineControl
         )
     }
 
@@ -179,6 +200,9 @@ impl ToolKind {
             // Die Muster haben ihren eigenen Ablauf (`sketch_pattern::pattern_fields`).
             PatternRect | PatternCircular => &[&[]],
             Project | Intersect | Silhouette => &[&[]],
+            // Die Klicks sammelt `click_spline`, Eingabe oder Doppelklick schließt ab.
+            SplineFit | SplineControl => &[&[]],
+            Conic => &[&[], &[], &[], &[F::Rho]],
         }
     }
 
@@ -219,6 +243,9 @@ impl ToolKind {
             Project => tr!("sketch-tool-project-edge-hint"),
             Intersect => tr!("sketch-kind-intersect-hint"),
             Silhouette => tr!("sketch-kind-silhouette-hint"),
+            SplineFit => tr!("sketch-kind-spline-fit-hint"),
+            SplineControl => tr!("sketch-kind-spline-control-hint"),
+            Conic => tr!("sketch-kind-conic-hint"),
         }
     }
 
@@ -254,6 +281,9 @@ impl ToolKind {
             Project => Action::SketchProjectEdge,
             Intersect => Action::SketchIntersect,
             Silhouette => Action::SketchSilhouette,
+            SplineFit => Action::SketchSplineFit,
+            SplineControl => Action::SketchSplineControl,
+            Conic => Action::SketchConic,
         }
     }
 
@@ -286,6 +316,8 @@ impl ToolKind {
             Project => crate::msg!("sketch-pick-project"),
             Intersect => crate::msg!("sketch-pick-intersect"),
             Silhouette => crate::msg!("sketch-pick-silhouette"),
+            SplineFit | SplineControl => crate::msg!("sketch-spline-min"),
+            Conic => crate::msg!("sketch-err-conic-apex"),
         }
     }
 
@@ -324,6 +356,8 @@ pub struct ToolKinds {
     pub pattern: ToolKind,
     /// Projizieren, Schneiden oder Silhouette (Skizzen 6).
     pub project: ToolKind,
+    /// Art am Spline-Knopf: durch Stützpunkte, mit Kontrollpunkten oder Kegelschnitt (Skizzen 7).
+    pub spline: ToolKind,
 }
 
 impl Default for ToolKinds {
@@ -338,6 +372,7 @@ impl Default for ToolKinds {
             fillet: ToolKind::Fillet,
             pattern: ToolKind::PatternRect,
             project: ToolKind::Project,
+            spline: ToolKind::SplineFit,
         }
     }
 }
@@ -353,6 +388,7 @@ impl ToolKinds {
             Tool::Fillet => self.fillet = kind,
             Tool::Pattern => self.pattern = kind,
             Tool::ProjectEdge => self.project = kind,
+            Tool::Spline => self.spline = kind,
             _ => {}
         }
     }
@@ -406,6 +442,28 @@ fn check_fillet_pair(sk: &Sketch, kind: ToolKind, a: CurvePick, b: CurvePick) ->
         return Err(crate::msg!("sketch-chamfer-fixed"));
     }
     Ok(())
+}
+
+/// Taugt `apex` als Scheitel über der Sehne `start`–`end`? Dieselbe Frage wie
+/// [`Sketch::add_conic`], nur schon beim Klick auf den Scheitel.
+fn apex_off_chord(start: DVec2, end: DVec2, apex: DVec2, tol: f64) -> bool {
+    let chord = end - start;
+    let len = chord.length();
+    len > tol && (chord.perp_dot(apex - start) / len).abs() > tol
+}
+
+/// Linienzug des Kegelschnitts: rationale quadratische Bézierkurve mit `w = ρ / (1 − ρ)`, wie sie
+/// [`CurveKind::Conic`] rechnet.
+fn conic_points(start: DVec2, end: DVec2, apex: DVec2, rho: f64) -> Vec<DVec2> {
+    let w = rho / (1.0 - rho);
+    (0..=CONIC_PREVIEW_STEPS)
+        .map(|k| {
+            let t = k as f64 / CONIC_PREVIEW_STEPS as f64;
+            let s = 1.0 - t;
+            let (b0, b1, b2) = (s * s, 2.0 * w * s * t, t * t);
+            (start * b0 + apex * b1 + end * b2) / (b0 + b1 + b2)
+        })
+        .collect()
 }
 
 /// Linie, Bogen oder Kreis (exakt gerechnet)?
@@ -519,6 +577,7 @@ impl SketchSession {
             Tool::Fillet => Some(self.kinds.fillet),
             Tool::Pattern => Some(self.kinds.pattern),
             Tool::ProjectEdge => Some(self.kinds.project),
+            Tool::Spline => Some(self.kinds.spline),
             _ => None,
         }
     }
@@ -605,6 +664,12 @@ impl SketchSession {
             && self.plan_with(sk, kind, cur.at, None).is_none()
         {
             return Err(self.finish_refusal(sk, kind));
+        }
+        // Der Scheitel: Auf der Sehne wird es nie ein Kegelschnitt.
+        if let (ToolKind::Conic, &[start, end]) = (kind, self.pending_pos.as_slice())
+            && !apex_off_chord(start, end, cur.at, tol)
+        {
+            return Err(kind.refusal());
         }
         self.pending_pos.push(cur.at);
         self.pending_snaps.push(cur.remember(tol));
@@ -988,6 +1053,9 @@ impl SketchSession {
             self.clear_pending();
             return Ok(());
         }
+        if kind == ToolKind::Conic {
+            return self.finish_conic(sk, prior);
+        }
         // Beim letzten Klick von `3 tangential` zählt die Kurve unter dem Zeiger.
         let third = match (kind, cur.snap) {
             (ToolKind::Circle3T, Snap::Curve(c)) if !self.pending_curves.contains(&c) => {
@@ -1107,6 +1175,36 @@ impl SketchSession {
         self.created = Some(created);
         self.clear_pending();
         Ok(())
+    }
+
+    /// Der Kegelschnitt aus den drei gemerkten Lagen samt ihrem Fang, mit dem Rho aus dem Feld. Die
+    /// Lage des letzten Klicks zählt nicht, er bestätigt nur.
+    fn finish_conic(&mut self, sk: &mut Sketch, prior: &Sketch) -> Result<(), Msg> {
+        let rho = self.current_rho();
+        let hits: Vec<DrawCursor> = self
+            .pending_snaps
+            .iter()
+            .map(|&hit| DrawCursor::remembered(hit, sk))
+            .collect();
+        let [first, second, third] = hits.as_slice() else {
+            return Err(ToolKind::Conic.refusal());
+        };
+        let start = self.attach(sk, None, first)?;
+        let end = self.attach(sk, None, second)?;
+        let apex = self.attach(sk, None, third)?;
+        let curve = sk.add_conic(start, end, apex, rho).map_err(err)?;
+        self.solve_checked(sk, prior)?;
+        self.conic_rho = rho;
+        let created = Created::Conic(curve);
+        self.edit_label = Some(created.undo_label());
+        self.created = Some(created);
+        self.clear_pending();
+        Ok(())
+    }
+
+    /// Rho des laufenden Kegelschnitts: das getippte, sonst das vorgeschlagene.
+    fn current_rho(&self) -> f64 {
+        self.input.locked(FieldKind::Rho).unwrap_or(self.conic_rho)
     }
 
     /// Bindet die ersten Klicks eines geraden Langlochs (die Breite bindet nie). „Gesamt“ hat an den
@@ -1254,6 +1352,9 @@ impl SketchSession {
     /// Vorschau der laufenden Form, aus demselben Plan wie das Ergebnis. Vor dem Plan zeigen
     /// `Rect3P`, `Circle3P`, `PolygonEdge` und alle Langlöcher die Linie zum Zeiger.
     pub fn kind_preview(&self, sk: &Sketch, at: DVec2) -> Option<Vec<Vec<DVec2>>> {
+        if self.planned_kind() == Some(ToolKind::Conic) {
+            return self.conic_preview(sk, at);
+        }
         if let Some(kind) = self
             .planned_kind()
             .filter(|&k| k.is_fillet_or_chamfer() && k != ToolKind::Fillet)
@@ -1273,6 +1374,61 @@ impl SketchSession {
             return (from.distance(at) > sk.tolerance().linear).then(|| vec![vec![from, at]]);
         }
         Some(self.kind_plan(sk, at)?.outline(PREVIEW_STEPS_PER_TURN))
+    }
+
+    /// Vorschau des Kegelschnitts: erst die Linie zum Zeiger, dann mit dem Zeiger als Scheitel,
+    /// zuletzt mit dem gesetzten Scheitel und dem Rho aus dem Feld, jeweils mit den Hilfslinien.
+    fn conic_preview(&self, sk: &Sketch, at: DVec2) -> Option<Vec<Vec<DVec2>>> {
+        let tol = sk.tolerance().linear;
+        let (start, end, apex) = match *self.pending_pos.as_slice() {
+            [from] => {
+                return (from.distance(at) > tol).then(|| vec![vec![from, at]]);
+            }
+            [start, end] if !apex_off_chord(start, end, at, tol) => {
+                return Some(vec![vec![start, end]]);
+            }
+            [start, end] => (start, end, at),
+            [start, end, apex] => (start, end, apex),
+            _ => return None,
+        };
+        Some(vec![
+            vec![start, apex, end],
+            conic_points(start, end, apex, self.current_rho()),
+        ])
+    }
+
+    /// Linienzug des laufenden Splines mit Kontrollpunkten, der Zeiger als letzter Kontrollpunkt;
+    /// gleichmäßige Knoten und wirksamer Grad wie [`Sketch::add_control_spline`]. `None` in jedem
+    /// anderen Werkzeug und vor dem ersten Punkt.
+    pub fn control_spline_preview(&self, sk: &Sketch, at: DVec2) -> Option<Vec<DVec2>> {
+        if self.tool != Tool::Spline
+            || self.kinds.spline != ToolKind::SplineControl
+            || self.pending.is_empty()
+        {
+            return None;
+        }
+        let mut points: Vec<planora_math::DVec3> = self
+            .pending
+            .iter()
+            .filter_map(|&p| sk.point_xy(p).ok())
+            .map(|p| p.extend(0.0))
+            .collect();
+        points.push(at.extend(0.0));
+        let degree = usize::from(self.spline_degree).min(points.len() - 1);
+        let spans = points.len() - degree;
+        let weights = vec![1.0; points.len()];
+        let knots = uniform_clamped_knots(degree, points.len());
+        let curve = NurbsCurve::new(degree, knots, points, weights).ok()?;
+        let (lo, hi) = curve.domain();
+        let steps = spans * CONTROL_PREVIEW_STEPS;
+        Some(
+            (0..=steps)
+                .map(|k| {
+                    let p = curve.point(lo + (hi - lo) * k as f64 / steps as f64);
+                    DVec2::new(p.x, p.y)
+                })
+                .collect(),
+        )
     }
 
     /// Lage mit den gesperrten Größen der laufenden Form; `None` ohne Sperre.
@@ -1381,6 +1537,9 @@ impl SketchSession {
         use FieldKind as F;
         if kind == F::Sides {
             return Some(self.current_sides() as f64);
+        }
+        if kind == F::Rho {
+            return Some(self.conic_rho);
         }
         let at = self.draw_cursor.as_ref()?.at;
         match (self.planned_kind()?, self.pending_pos.as_slice(), kind) {

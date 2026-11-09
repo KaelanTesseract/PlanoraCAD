@@ -147,6 +147,13 @@ action_table! {
     SketchIntersect, "skizze.schneiden", "action-sketch-intersect", Sketch, [];
     /// Fusion „Silhouette“ (Skizzen 6): ohne Vorgabetaste wie in Fusion, belegbar.
     SketchSilhouette, "skizze.silhouette", "action-sketch-silhouette", Sketch, [];
+    // Skizzen 7: die Arten am Spline-Knopf, ohne Vorgabetaste wie in Fusion (Annahme), belegbar.
+    /// Fusion „Spline durch Stützpunkte“.
+    SketchSplineFit, "skizze.spline_stuetzpunkte", "action-sketch-spline-fit", Sketch, [];
+    /// Fusion „Spline mit Kontrollpunkten“.
+    SketchSplineControl, "skizze.spline_kontrollpunkte", "action-sketch-spline-control", Sketch, [];
+    /// Fusion „Kegelschnitt“.
+    SketchConic, "skizze.kegelschnitt", "action-sketch-conic", Sketch, [];
     /// Fusion „Stutzen“ (T).
     SketchTrim, "skizze.stutzen", "action-sketch-trim", Sketch, [key(Key::T)];
     /// Fusion „Dehnen“: ohne Vorgabetaste wie in Fusion, belegbar.

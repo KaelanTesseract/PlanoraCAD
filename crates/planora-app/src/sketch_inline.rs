@@ -118,14 +118,14 @@ pub fn suggestion(se: &SketchSession, sf: &SketchFeature, kind: FieldKind) -> St
         {
             format_number(v.to_degrees(), 1)
         }
-        // Der Faktor hat keine Einheit: Zoll darf ihn nicht umrechnen.
-        Some(v) if kind == FieldKind::ScaleFactor => format_factor(v),
+        // Faktor und Rho haben keine Einheit: Zoll darf sie nicht umrechnen.
+        Some(v) if matches!(kind, FieldKind::ScaleFactor | FieldKind::Rho) => format_factor(v),
         Some(v) => planora_i18n::fmt_len_num(v),
         None => String::new(),
     }
 }
 
-/// Der Faktor des Maßstabs als Zahl ohne Einheit, ohne überflüssige Nullen.
+/// Der Faktor des Maßstabs oder Rho als Zahl ohne Einheit, ohne überflüssige Nullen.
 fn format_factor(v: f64) -> String {
     let text = format_number(v, 4);
     if text.contains(['.', ',']) {

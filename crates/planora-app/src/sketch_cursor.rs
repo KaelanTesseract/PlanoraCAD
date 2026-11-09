@@ -356,7 +356,10 @@ impl SketchSession {
         // Beim 2-Tangenten-Kreis wählt der letzte Klick nur den Sektor: Fang auf einer der Linien
         // ergäbe gar keinen. Bei Rundung und Fase gibt der Zeiger nur den Abstand zur Ecke an, beim
         // Versatz Abstand und Seite zur Kette.
+        // Beim Kegelschnitt ist die Form mit dem Scheitel fertig, der Klick bestätigt nur noch Rho.
+        let awaits_rho = self.planned_kind() == Some(ToolKind::Conic) && self.kind_stage() == 3;
         if self.cursor_opts.suppressed
+            || awaits_rho
             || self.planned_kind() == Some(ToolKind::Circle2T)
             || matches!(self.tool, Tool::Fillet | Tool::Offset)
         {
