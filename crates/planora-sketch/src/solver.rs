@@ -1315,9 +1315,18 @@ impl Sketch {
                 weight: DRAG_WEIGHT,
             });
         }
-        // Punkte ohne jede Abhängigkeit folgen dem Zug direkt.
+        // Punkte ohne jede Abhängigkeit folgen dem Zug direkt. Ebenso Punkte, die keine aktive Zeile
+        // liest, obwohl eine Abhängigkeit an ihrer Kurve hängt: Der Löser sähe sie in keiner Gruppe,
+        // und das weiche Ziel bliebe ohne Wirkung. So etwa die Spitze eines inneren Griffs, wenn ein
+        // Krümmungsgriff am Ende desselben Splines nur das Ende liest (Handtest Skizzen 7).
+        let mut unread: Option<Vec<bool>> = None;
         for d in drags {
-            if self.point_unconstrained(d.point) {
+            let free = self.point_unconstrained(d.point) || {
+                let read = unread.get_or_insert_with(|| self.build_groups().1);
+                let (xv, yv) = (self.points[d.point].x, self.points[d.point].y);
+                self.instance_drag_target(d.point, DVec2::ZERO).is_none() && !read[xv] && !read[yv]
+            };
+            if free {
                 self.set_point_xy(d.point, d.target.x, d.target.y)?;
             }
         }

@@ -1061,3 +1061,55 @@ fn big_radius_jumps_arrive_in_steps() {
         assert_rows_hold(&done, pts[2], &h, 1e-5);
     }
 }
+
+/// Handtest Skizzen 7: Mit einem Krümmungsgriff am Ende liest dessen Zeile den Spline nur am Ende. Die
+/// Spitze eines inneren Griffs und ein innerer Stützpunkt liegen in keiner Gruppe des Lösers, gehören
+/// aber zur Kurve, an der die Zeile hängt. Sie folgen dem Zug trotzdem, auf beiden Seiten des Griffs.
+#[test]
+fn inner_handle_tip_and_fit_point_follow_a_drag_beside_a_curvature_handle() {
+    let xy = [(10.66, -16.14), (17.0, -5.0), (26.0, -15.0), (36.0, -7.0)];
+    for k in [1, 2] {
+        for pull in [DVec2::new(2.0, 3.0), DVec2::new(-6.0, 1.5)] {
+            let mut s = sketch();
+            let (c, pts) = spline(&mut s, &xy);
+            s.activate_curvature_handle(c, pts[3]).unwrap();
+            s.activate_tangent_handle(c, pts[k]).unwrap();
+            assert_eq!(s.solve().status, SolveStatus::Solved);
+            let CurveKind::Spline { handles, .. } = &s.curve(c).unwrap().kind else {
+                panic!("kein Spline");
+            };
+            let tip = handles.iter().find(|h| h.at == pts[k]).unwrap().tip;
+            let before = dense(&s, c, 8);
+            let to = pos(&s, tip) + pull;
+            let r = s
+                .drag_holding(
+                    &[Drag {
+                        point: tip,
+                        target: to,
+                    }],
+                    &[pts[k]],
+                )
+                .unwrap();
+            assert_eq!(r.status, SolveStatus::Solved, "{k} {pull}");
+            assert!(pos(&s, tip).distance(to) < 1e-9, "{k} {pull}: Spitze");
+            assert!(
+                pos(&s, pts[k]).distance(DVec2::new(xy[k].0, xy[k].1)) < 1e-12,
+                "Stützpunkt bleibt"
+            );
+            let moved = dense(&s, c, 8)
+                .iter()
+                .zip(&before)
+                .map(|(p, q)| p.distance(*q))
+                .fold(0.0, f64::max);
+            assert!(moved > 0.1, "{k} {pull}: die Kurve folgt ({moved})");
+            // Der Stützpunkt selbst zieht ebenso.
+            let to = DVec2::new(xy[k].0, xy[k].1) + pull;
+            s.drag(&[Drag {
+                point: pts[k],
+                target: to,
+            }])
+            .unwrap();
+            assert!(pos(&s, pts[k]).distance(to) < 1e-9, "{k} {pull}: Stützpunkt");
+        }
+    }
+}

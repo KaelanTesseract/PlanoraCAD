@@ -2048,3 +2048,108 @@ fn the_first_drag_with_real_events_and_right_button_abort() {
     };
     assert_eq!(handles.len(), 1);
 }
+
+impl Rig {
+    /// Zieht mit echten Ereignissen von `from` nach `to` (Bildschirm) und lässt los.
+    fn pull(&mut self, from: Pos2, to: Pos2) {
+        self.time += 1.0;
+        self.frame(vec![Event::PointerMoved(from)]);
+        self.frame(vec![pointer(from, PointerButton::Primary, true)]);
+        self.frame(vec![Event::PointerMoved(from + (to - from) * 0.25)]);
+        self.frame(vec![Event::PointerMoved(to)]);
+        self.frame(vec![pointer(to, PointerButton::Primary, false)]);
+        self.settle();
+    }
+
+    fn sketch(&mut self) -> Sketch {
+        self.st().session_sketch().unwrap().clone()
+    }
+}
+
+fn tip_of(sk: &Sketch, c: CurveId, at: PointId) -> Option<PointId> {
+    let CurveKind::Spline { handles, .. } = &sk.curve(c).unwrap().kind else {
+        panic!("kein Spline");
+    };
+    handles.iter().find(|h| h.at == at).map(|h| h.tip)
+}
+
+/// Handtest Skizzen 7, Fehler 1: Spline durch vier Stützpunkte mit Krümmungsgriff am Ende. Der erste
+/// Zug am gedämpften Griff eines inneren Stützpunkts schaltet ihn ein und zieht ihn mit, die Kurve
+/// folgt, ein Schritt. Ein zweiter Zug am nun aktiven Griff zieht weiter. An beiden inneren Punkten und
+/// nach beiden Seiten der Spitze (länger und quer über den Stützpunkt hinweg).
+#[test]
+fn the_inner_handle_follows_the_mouse_beside_a_curvature_handle() {
+    const FOUR: [(f64, f64); 4] = [(10.66, -16.14), (17.0, -5.0), (26.0, -15.0), (36.0, -7.0)];
+    for k in [1usize, 2] {
+        for pull in [vec2(60.0, -40.0), vec2(-90.0, 30.0)] {
+            let mut ids = None;
+            let mut rig = Rig::new(|sk| {
+                let (c, pts) = add_spline(sk, &FOUR);
+                sk.activate_curvature_handle(c, pts[3]).unwrap();
+                ids = Some((c, pts));
+            });
+            let (c, pts) = ids.unwrap();
+            rig.select(&[Item::Curve(c)]);
+            let form = rig.sketch().curve_polyline(c, 64).unwrap();
+            let steps = rig.undo_len();
+            let ghost_tip = {
+                let st = rig.st();
+                let session = st.sketch_session.as_ref().unwrap();
+                session
+                    .visible_handles(st.session_sketch().unwrap())
+                    .into_iter()
+                    .find(|h| h.ghost && h.part == HandlePart::Tangent && h.point == pts[k])
+                    .expect("gedämpfter Griff")
+                    .tip
+            };
+            let p = rig.screen(ghost_tip);
+            let to = p + pull;
+            let want = ghost_tip + (rig.raw_at(to) - rig.raw_at(p));
+            rig.pull(p, to);
+            let what = format!("Punkt {k}, Zug {pull:?}");
+            let sk = rig.sketch();
+            let tip = tip_of(&sk, c, pts[k]).unwrap_or_else(|| panic!("{what}: eingeschaltet"));
+            let got = sk.point_xy(tip).unwrap();
+            assert!(
+                got.distance(want) < 1e-6 * want.length().max(1.0),
+                "{what}: Spitze {got} statt {want}"
+            );
+            assert!(
+                sk.point_xy(pts[k]).unwrap().distance(v(FOUR[k].0, FOUR[k].1)) < 1e-9,
+                "{what}: Stützpunkt bleibt"
+            );
+            assert!(
+                !same_shape(&form, &sk.curve_polyline(c, 64).unwrap(), 1e-3),
+                "{what}: die Kurve folgt"
+            );
+            assert_eq!(rig.undo_len(), steps + 1, "{what}: ein Schritt");
+            assert_eq!(
+                rig.st().sketch_undo_label().as_deref(),
+                Some(tr!("undo-handle-tangent").as_str()),
+                "{what}"
+            );
+            // Zweiter Zug am aktiven Griff, ein eigener Schritt.
+            let p2 = rig.screen(got);
+            let to2 = p2 + vec2(-pull.y, pull.x) * 0.5;
+            let want2 = got + (rig.raw_at(to2) - rig.raw_at(p2));
+            rig.pull(p2, to2);
+            let sk = rig.sketch();
+            let got2 = sk.point_xy(tip).unwrap();
+            assert!(
+                got2.distance(want2) < 1e-6 * want2.length().max(1.0),
+                "{what}: zweiter Zug {got2} statt {want2}"
+            );
+            assert_eq!(rig.undo_len(), steps + 2, "{what}: zweiter Schritt");
+            // Ein Rückgängig nimmt den zweiten Zug, das zweite den Griff.
+            assert!(rig.st().undo_sketch());
+            assert!(rig.st().undo_sketch());
+            rig.settle();
+            assert!(tip_of(&rig.sketch(), c, pts[k]).is_none(), "{what}");
+            assert!(same_shape(
+                &form,
+                &rig.sketch().curve_polyline(c, 64).unwrap(),
+                1e-9
+            ));
+        }
+    }
+}
