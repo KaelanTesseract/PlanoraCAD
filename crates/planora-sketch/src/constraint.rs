@@ -1061,7 +1061,7 @@ pub(crate) enum SmoothEnd {
     Natural,
     /// Griff `Straight`: Krümmung von selbst 0.
     Straight,
-    /// Griff `Form`: Krümmung aus der Kurve, nur über die Griffspitze steuerbar.
+    /// Griff `Form`: Krümmung aus der Kurve, nicht steuerbar; das Glatt gilt dort als G1.
     Form,
     /// Griff `Arc`.
     ArcHandle,
@@ -1096,40 +1096,23 @@ pub(crate) fn smooth_end(sk: &Sketch, c: CurveId, p: PointId) -> Option<SmoothEn
     })
 }
 
-/// Gibt es die Krümmungszeile (C1)? Ein Spline-Ende ohne Griff hat nie eine: Gegen Krümmung 0 ist die
-/// Fuge schon G2, gegen einen Wert ist es der alte G1-Fall aus C4. Zwei Seiten mit Krümmung 0 brauchen
-/// auch keine.
+/// Gibt es die Krümmungszeile (C1)? Ein Spline-Ende ohne Griff und ein Griff `Form` haben nie eine:
+/// Gegen Krümmung 0 ist die Fuge beim natürlichen Ende schon G2, sonst ist es der G1-Fall aus C4. Zwei
+/// Seiten mit Krümmung 0 brauchen auch keine.
 fn smooth_has_curvature_row(a: SmoothEnd, b: SmoothEnd) -> bool {
+    let free = |e: SmoothEnd| matches!(e, SmoothEnd::Natural | SmoothEnd::Form);
     let zero = |e: SmoothEnd| matches!(e, SmoothEnd::Line | SmoothEnd::Straight);
-    !(a == SmoothEnd::Natural || b == SmoothEnd::Natural || (zero(a) && zero(b)))
+    !(free(a) || free(b) || (zero(a) && zero(b)))
 }
 
-/// Krümmung einer Seite in der Krümmungszeile. Griff `Form`: C1 verlangt die Erfüllung allein über die
-/// Griffspitze, darum sind alle anderen Punkte des Splines hier Zahlen ohne Gradient.
+/// Krümmung einer Seite in der Krümmungszeile; `None` für Seiten, die nie eine Zeile haben.
 fn smooth_row_kappa(ctx: &Ctx, c: CurveId, p: PointId, end: SmoothEnd) -> Option<Dual> {
     match end {
-        SmoothEnd::Line | SmoothEnd::Natural | SmoothEnd::Straight => Some(Dual::constant(0.0)),
+        SmoothEnd::Line | SmoothEnd::Straight => Some(Dual::constant(0.0)),
         SmoothEnd::ArcHandle | SmoothEnd::Arc | SmoothEnd::ControlSpline | SmoothEnd::Conic => {
             end_curvature_dual(ctx, c, p)
         }
-        SmoothEnd::Form => {
-            let CurveKind::Spline { points, handles } = &ctx.sk.curves[c].kind else {
-                return None;
-            };
-            let tip = handles.iter().find(|h| h.at == p)?.tip;
-            let nodes = nodes_of(points, handles, |q| {
-                if q == tip {
-                    ctx.pt(q)
-                } else {
-                    let d = &ctx.sk.points[q];
-                    (Dual::constant(ctx.x[d.x]), Dual::constant(ctx.x[d.y]))
-                }
-            });
-            let first = points.first() == Some(&p);
-            let i = if first { 0 } else { points.len() - 1 };
-            let k = kappa_of(&nodes.first[i], &nodes.second[i]);
-            Some(if first { k } else { -&k })
-        }
+        SmoothEnd::Natural | SmoothEnd::Form => None,
     }
 }
 
@@ -1142,13 +1125,12 @@ pub(crate) enum SmoothStep {
     Follow,
     /// Griff `Straight`, ein Krümmungsbogen entfällt (C3, zweiter Fall).
     Straighten,
-    /// Krümmungsgriff auf dem eigenen Wert: Die zweite Seite folgt ihm.
-    OwnArc,
+    /// Gleicher Rang: Beide Seiten bekommen den Mittelwert aus Tangente und Krümmung.
+    Mean,
 }
 
-/// Der Schritt für die Seite `me` gegen `other`. `first`: `me` ist die erste Seite des Befehls; sie
-/// gibt vor, wenn beide gleichrangig sind.
-pub(crate) fn smooth_step(me: SmoothEnd, other: SmoothEnd, first: bool) -> SmoothStep {
+/// Der Schritt für die Seite `me` gegen `other`. Er hängt nicht von der Wahlreihenfolge ab.
+pub(crate) fn smooth_step(me: SmoothEnd, other: SmoothEnd) -> SmoothStep {
     use SmoothEnd::*;
     use SmoothStep::*;
     match (me, other) {
@@ -1162,11 +1144,9 @@ pub(crate) fn smooth_step(me: SmoothEnd, other: SmoothEnd, first: bool) -> Smoot
         (Straight, Line | Natural | Straight | Form | ControlSpline) => Keep,
         (Form, Arc | ArcHandle | ControlSpline | Conic) => Follow,
         (Form, Line | Natural | Straight) => Straighten,
-        (Form, Form) if first => OwnArc,
-        (Form, Form) => Follow,
+        (Form, Form) | (ArcHandle, ArcHandle) => Mean,
         (ArcHandle, Line) => Straighten,
-        (ArcHandle, ArcHandle) if first => Keep,
-        (ArcHandle, ArcHandle | Arc | ControlSpline | Conic) => Follow,
+        (ArcHandle, Arc | ControlSpline | Conic) => Follow,
         (ArcHandle, Natural | Straight | Form) => Keep,
     }
 }
@@ -2157,6 +2137,41 @@ impl Sketch {
             && smooth_partner_kind(ka)
             && smooth_partner_kind(kb)
             && (smooth_leader(ka) || smooth_leader(kb))
+    }
+
+    /// Das wirksame Glatt zwischen genau diesen Enden, in beiden Reihenfolgen.
+    pub fn smooth_between(
+        &self,
+        a: CurveId,
+        pa: PointId,
+        b: CurveId,
+        pb: PointId,
+    ) -> Option<ConstraintId> {
+        self.constraints().find_map(|(id, d)| match d.kind {
+            ConstraintKind::Smooth(x, px, y, py)
+                if d.enabled
+                    && ((x, px, y, py) == (a, pa, b, pb) || (x, px, y, py) == (b, pb, a, pa)) =>
+            {
+                Some(id)
+            }
+            _ => None,
+        })
+    }
+
+    /// Die andere Seite eines wirksamen Glatt am Ende `at` der Kurve `c`.
+    pub(crate) fn smooth_partner_at(&self, c: CurveId, at: PointId) -> Option<(CurveId, PointId)> {
+        self.constraints().find_map(|(_, d)| match d.kind {
+            ConstraintKind::Smooth(x, px, y, py) if d.enabled => {
+                if (x, px) == (c, at) {
+                    Some((y, py))
+                } else if (y, py) == (c, at) {
+                    Some((x, px))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        })
     }
 
     /// Richtung (nicht normiert) aus dem Ende `p` in die Kurve `c` und die Krümmung dort, in Zahlen.

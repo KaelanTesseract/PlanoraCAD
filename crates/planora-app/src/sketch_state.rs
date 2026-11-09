@@ -2232,6 +2232,26 @@ impl SketchSession {
             // Griffe an und ihre Lage auf den Werten des Partners (Skizzen 7, C3), im selben Schritt.
             if let ConstraintKind::Smooth(a, pa, b, pb) = kind {
                 sk.prepare_smooth(a, pa, b, pb).map_err(err)?;
+                // Dasselbe Glatt gibt es schon: kein zweites, so wird ein altes G1 zu G2.
+                if let Some(id) = sk.smooth_between(a, pa, b, pb) {
+                    let before = se.last_report.take();
+                    let report = sk.solve();
+                    se.last_report = Some(report.clone());
+                    return match check_change(&report, before.as_ref(), prior, Some(id)) {
+                        Some(SolveStatus::Conflicting) => Err(crate::msg!(
+                            "sketch-apply-conflict",
+                            action = action.label_msg()
+                        )),
+                        Some(_) => Err(crate::msg!(
+                            "sketch-apply-unsolved",
+                            action = action.label_msg()
+                        )),
+                        None => {
+                            se.warn_if_unsolved();
+                            Ok(id)
+                        }
+                    };
+                }
             }
             se.add_checked(sk, prior, kind, action.label_msg())
         })

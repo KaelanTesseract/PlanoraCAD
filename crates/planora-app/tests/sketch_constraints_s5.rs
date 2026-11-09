@@ -1097,8 +1097,110 @@ fn smooth_is_one_undo_step_with_handles() {
                 .any(|k| matches!(k, K::Coincident(..)))
         );
         assert_eq!(sk(&mut app).clone().solve().status, SolveStatus::Solved);
+        assert!(jump(sk(&mut app), arc, sp) < 1e-6, "G2");
         undo(&mut app);
         assert_eq!(sk(&mut app).to_data(), before, "ein Rückgängig nimmt alles");
+    });
+}
+
+/// Krümmungssprung zwischen dem hinteren Ende von `arc` und dem Anfang von `spline`, nur über die
+/// Lage gemessen.
+fn jump(s: &Sketch, arc: CurveId, spline: CurveId) -> f64 {
+    let kappa = |c: CurveId, start: bool| {
+        let (lo, hi) = s.curve_domain(c).unwrap();
+        let h = (hi - lo) * 2e-3;
+        let (t, side) = if start { (lo, 1.0) } else { (hi, -1.0) };
+        let f: [DVec2; 6] =
+            std::array::from_fn(|k| s.curve_eval(c, t + side * k as f64 * h).unwrap());
+        let d = (f[0] * (-137.0 / 60.0) + f[1] * 5.0 - f[2] * 5.0 + f[3] * (10.0 / 3.0)
+            - f[4] * 1.25
+            + f[5] * 0.2)
+            / h
+            * side;
+        let a = (f[0] * (15.0 / 4.0) - f[1] * (77.0 / 6.0) + f[2] * (107.0 / 6.0) - f[3] * 13.0
+            + f[4] * (61.0 / 12.0)
+            - f[5] * (5.0 / 6.0))
+            / (h * h);
+        let k = d.perp_dot(a) / d.length().powi(3);
+        if start { k } else { -k }
+    };
+    (kappa(arc, false) + kappa(spline, true)).abs()
+}
+
+/// C3: Glatt an denselben Enden noch einmal: kein zweites, ein altes G1 wird G2, ein Schritt, keine
+/// Meldung.
+#[test]
+fn smooth_again_on_the_same_ends_makes_old_g1_into_g2() {
+    with_lang(&german(), || {
+        let c = context();
+        let mut app = sketching();
+        let (m, st, en) = (
+            pt(&mut app, 0.0, 0.0),
+            pt(&mut app, 5.0, 0.0),
+            pt(&mut app, 0.0, 5.0),
+        );
+        let arc = sk(&mut app).add_arc(m, st, en).unwrap();
+        let q = [pt(&mut app, -5.0, 8.0), pt(&mut app, -10.0, 6.0)];
+        let sp = sk(&mut app).add_spline(&[en, q[0], q[1]]).unwrap();
+        // Das alte G1: ohne den Befehl.
+        sk(&mut app)
+            .add_constraint(K::Smooth(arc, en, sp, en))
+            .unwrap();
+        assert_eq!(sk(&mut app).solve().status, SolveStatus::Solved);
+        settle(&c, &mut app);
+        assert!(jump(sk(&mut app), arc, sp) > 1e-3);
+        let before = sk(&mut app).to_data();
+        let smooth_count = |app: &mut PlanoraApp| {
+            live(app)
+                .iter()
+                .filter(|k| matches!(k, K::Smooth(..)))
+                .count()
+        };
+        for order in [[sp, arc], [arc, sp]] {
+            select(&mut app, vec![Item::Curve(order[0]), Item::Curve(order[1])]);
+            press(&c, &mut app, "Glatt");
+            assert_eq!(message(&mut app), None, "{order:?}");
+            assert_eq!(smooth_count(&mut app), 1, "kein zweites");
+            assert!(jump(sk(&mut app), arc, sp) < 1e-6, "G2");
+            undo(&mut app);
+            assert_eq!(sk(&mut app).to_data(), before, "ein Schritt");
+        }
+    });
+}
+
+/// Ein Radiusmaß am Griff-Bogen über die Oberfläche: Die Fuge bleibt G2.
+#[test]
+fn a_radius_dimension_on_the_bow_keeps_g2() {
+    with_lang(&german(), || {
+        let c = context();
+        let mut app = sketching();
+        let (m, st, en) = (
+            pt(&mut app, 0.0, 0.0),
+            pt(&mut app, 5.0, 0.0),
+            pt(&mut app, 0.0, 5.0),
+        );
+        let arc = sk(&mut app).add_arc(m, st, en).unwrap();
+        let q = [pt(&mut app, -5.0, 8.0), pt(&mut app, -10.0, 6.0)];
+        let sp = sk(&mut app).add_spline(&[en, q[0], q[1]]).unwrap();
+        settle(&c, &mut app);
+        select(&mut app, vec![Item::Curve(sp), Item::Curve(arc)]);
+        press(&c, &mut app, "Glatt");
+        let CurveKind::Spline { handles, .. } = sk(&mut app).curve(sp).unwrap().kind.clone() else {
+            panic!("kein Spline");
+        };
+        let planora_sketch::HandleCurvature::Arc { arc: bow, .. } = handles[0].curvature else {
+            panic!("kein Bogen");
+        };
+        select(&mut app, vec![Item::Curve(bow)]);
+        let id = {
+            let (se, s) = state(&mut app).session_sketch_mut().unwrap();
+            se.apply(s, ConstraintAction::Radius, Some(5.0)).unwrap()
+        };
+        for r in [8.0, 3.0, 40.0] {
+            let (se, s) = state(&mut app).session_sketch_mut().unwrap();
+            se.set_dimension_value(s, id, r).unwrap();
+            assert!(jump(sk(&mut app), arc, sp) < 1e-6, "r = {r}");
+        }
     });
 }
 

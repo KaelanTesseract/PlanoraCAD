@@ -65,13 +65,16 @@ Aus dem Forum, nicht amtlich: Grad 5 mit nur 5 Punkten wird Grad 4. Rho ist kein
 1. Neben der Winkelzeile bekommt `Smooth` eine **Krümmungszeile** `κ₁ + κ₂ = 0` (die Richtungen in die Kurven laufen entgegengesetzt). Sie gibt es, wenn beide Seiten eine „steuerbare oder bekannte“ Krümmung haben und mindestens eine davon nicht von selbst passt. Genau:
    - **Krümmung 0 von selbst:** Linie, Spline-Ende ohne Griff (natürlich), Griff `Straight`. Treffen sich nur solche Seiten, gibt es keine Zeile: Die Fuge ist schon G2.
    - **Mit Wert:** Bogen, Griff `Arc`, Kontrollpunkt-Spline, Kegelschnitt, fester Spline.
-   - **Griff `Form`:** Krümmung aus der Kurve, zählt als „mit Wert“; der Befehl aus C3 legt diesen Zustand nie an einem Glatt an, er kann aber durch Einschalten eines Griffs an einem alten Glatt entstehen. Dann gilt die Krümmungszeile, und sie wird nur über die Griffspitze erfüllt.
-   - Ist eine Seite Spline-Ende ohne Griff und die andere „mit Wert“: keine Zeile. Das ist der alte G1-Fall aus C4.
+   - **Griff `Form`:** Die Krümmung folgt aus der Kurve und ist nicht steuerbar. Keine Zeile; das Glatt gilt dort als G1. So entsteht `Form` nur, wenn ein Tangentengriff an einem alten G1-Glatt eingeschaltet wird (Form bleibt gleich, B5) oder der Krümmungsbogen eines G2-Glatt gelöscht wird (es fällt auf G1 zurück, die Skizze bleibt lösbar; **Annahme**).
+   - Ist eine Seite Spline-Ende ohne Griff oder Griff `Form` und die andere „mit Wert“: keine Zeile. Das ist der alte G1-Fall aus C4.
 2. **Krümmung am Ende in Zahlen:** Linie 0; Bogen ±1/r; Griff `Arc` der Griffwert; alle übrigen aus ihrer Form (`Geom::curvature`, in `Dual`).
 3. **Neues Glatt (Befehl):**
    - Eine Seite ist Bogen, Kontrollpunkt-Spline, Kegelschnitt, fester Spline oder Griff `Arc`: Ein Spline durch Stützpunkte auf der anderen Seite bekommt am Ende Tangenten- und Krümmungsgriff. Beide starten auf den Werten des Partners, die Griff-Lage wird vor dem Lösen gesetzt.
    - Die andere Seite ist eine Linie oder ein Spline-Ende mit Krümmung 0: Ein Spline durch Stützpunkte wird dort zu Krümmung 0. Ohne Griff bleibt er natürlich. Mit Griff wird der zu `Straight`, ein Krümmungsbogen entfällt.
    - Kontrollpunkt-Spline gegen Linie oder Spline-Ende mit Krümmung 0: Krümmungszeile, die Kontrollpunkte passen sich an.
+   - **Gleicher Rang:** Treffen zwei Spline-Enden gleichen Rangs aufeinander (`Form`–`Form`, `Arc`–`Arc`), bekommen beide den Mittelwert aus Tangente und Krümmung, unabhängig von der Wahlreihenfolge; ist er fast 0, werden beide `Straight`. Natürliches Ende gegen `Form`: `Form` wird `Straight`.
+   - **Vorhandenes Glatt an denselben Enden:** Der Befehl legt kein zweites an, sondern bereitet die Enden wie oben vor. So wird ein altes G1 zu G2 (ein Rückgängig-Schritt).
+   - **Krümmungsgriff an einem Ende mit Glatt:** Einschalten wirkt wie das Vorbereiten oben (übernimmt die Werte des Partners, die Form darf sich dabei ändern, Ausnahme zu B5). Ist der Partner eine Linie oder hat er Krümmung 0, wird es mit Meldung abgelehnt. Lässt sich die Skizze danach nicht lösen, wird der ganze Befehl abgelehnt.
    - Alles in einem Rückgängig-Schritt, Meldung `sketch-smooth-arc-g1` entfällt.
 4. **Alte Dateien (bewusste Abweichung):** Ein altes Glatt zwischen Spline ohne Griff und Bogen hat keine zweite Zeile (C1). Es bleibt G1, Form und Datei bleiben gleich. Wer G2 will, löscht es und setzt es neu.
 5. **Partner:** Mindestens eine Seite ist Spline, Kontrollpunkt-Spline oder fester Spline; die andere Linie, Bogen, Spline, Kontrollpunkt-Spline, Kegelschnitt oder fester Spline; zwei feste Splines gehen nicht. Ellipsenbogen bleibt abgelehnt (**Annahme**, siehe Skizzen 5).

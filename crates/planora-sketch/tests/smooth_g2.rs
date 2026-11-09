@@ -80,6 +80,22 @@ fn smooth(s: &mut Sketch, a: CurveId, pa: PointId, b: CurveId, pb: PointId) -> C
     s.add_constraint(K::Smooth(a, pa, b, pb)).unwrap()
 }
 
+fn dense(s: &Sketch, c: CurveId) -> Vec<DVec2> {
+    let (lo, hi) = s.curve_domain(c).unwrap();
+    (0..=200)
+        .map(|k| {
+            s.curve_eval(c, lo + (hi - lo) * f64::from(k) / 200.0)
+                .unwrap()
+        })
+        .collect()
+}
+
+fn near(a: &[DVec2], b: &[DVec2], limit: f64) {
+    for (i, (p, q)) in a.iter().zip(b).enumerate() {
+        assert!(p.distance(*q) <= limit, "Stelle {i}: {p} / {q}");
+    }
+}
+
 fn rows(s: &Sketch, id: ConstraintId) -> usize {
     s.evaluate(id, s.variables()).unwrap().residuals.len()
 }
@@ -377,14 +393,22 @@ fn two_splines(s: &mut Sketch) -> (CurveId, CurveId, PointId) {
     (a, b, joint)
 }
 
-#[test]
-fn spline_spline_with_handles_is_g2() {
-    // Beide nur mit Tangentengriff.
-    let mut s = sketch();
-    let (a, b, joint) = two_splines(&mut s);
+/// Tangentengriffe an beiden Splines, die Spitzen gedreht und verschieden lang.
+fn turned_tangents(s: &mut Sketch, a: CurveId, b: CurveId, joint: PointId) {
     s.activate_tangent_handle(a, joint).unwrap();
     s.activate_tangent_handle(b, joint).unwrap();
-    let keep = kappa_into(&s, a, joint);
+    let (ta, tb) = (tip_of(s, a, joint), tip_of(s, b, joint));
+    s.set_point_xy(ta, -1.0, 2.5).unwrap();
+    s.set_point_xy(tb, 3.0, -0.5).unwrap();
+}
+
+#[test]
+fn spline_spline_with_handles_is_g2() {
+    // Beide nur mit Tangentengriff, die Spitzen gedreht: Am natürlichen Ende wäre die Krümmung sonst 0.
+    let mut s = sketch();
+    let (a, b, joint) = two_splines(&mut s);
+    turned_tangents(&mut s, a, b, joint);
+    let mean = 0.5 * (kappa_into(&s, a, joint) - kappa_into(&s, b, joint));
     let id = smooth(&mut s, a, joint, b, joint);
     assert_eq!(rows(&s, id), 2);
     assert!(matches!(
@@ -395,10 +419,10 @@ fn spline_spline_with_handles_is_g2() {
         curvature_of(&s, b, joint),
         Some(HandleCurvature::Arc { .. })
     ));
-    // Die erste Kurve gibt die Krümmung vor (mit `r = 1000·L`, falls sie dort fast gerade ist).
-    if keep.abs() > 1e-3 {
-        assert!((kappa_into(&s, a, joint) - keep).abs() < 1e-9);
-    }
+    // Der Mittelwert, schon vor dem Lösen.
+    assert!(mean.abs() > 1e-3, "{mean}");
+    assert!((kappa_into(&s, a, joint) - mean).abs() < 1e-6);
+    assert!((kappa_into(&s, b, joint) + mean).abs() < 1e-6);
     solved(&mut s, "beide Griffe");
     assert_g2(&s, a, joint, b, joint, "beide Griffe");
 
@@ -524,11 +548,13 @@ fn straight_handle_stays_at_zero_when_tip_is_dragged() {
     solved(&mut s, "angelegt");
     let tip = tip_of(&s, sp, joint);
     for (x, y) in [(3.0, 1.0), (9.0, 2.0), (1.0, 4.0), (4.0, -2.0), (7.0, 0.0)] {
-        s.drag(&[Drag {
-            point: tip,
-            target: DVec2::new(x, y),
-        }])
-        .unwrap();
+        let r = s
+            .drag(&[Drag {
+                point: tip,
+                target: DVec2::new(x, y),
+            }])
+            .unwrap();
+        assert_eq!(r.status, SolveStatus::Solved, "Zug {x} {y}: {r:?}");
         assert_g2(&s, l, joint, sp, joint, &format!("Zug {x} {y}"));
         assert!(kappa_into(&s, sp, joint).abs() < 1e-6);
     }
@@ -583,12 +609,12 @@ fn natural_ends_add_no_row() {
 
 #[test]
 fn values_get_a_second_row() {
-    // Griff `Form` an einer Linie, ohne den Befehl (C1).
+    // Griff `Form` hat nie eine Zeile (C1), auch nicht gegen eine Linie oder einen Bogen.
     let mut s = sketch();
     let (l, sp, joint) = line_and_spline(&mut s);
     s.activate_tangent_handle(sp, joint).unwrap();
     let id = s.add_constraint(K::Smooth(l, joint, sp, joint)).unwrap();
-    assert_eq!(rows(&s, id), 2);
+    assert_eq!(rows(&s, id), 1);
     // Griff `Arc`.
     let mut s = sketch();
     let (arc, _, _, en) = quarter(&mut s, 3.0);
@@ -599,27 +625,280 @@ fn values_get_a_second_row() {
     assert_eq!(rows(&s, id), 2);
 }
 
-/// C1: Entsteht `Form` durch Einschalten an einem alten Glatt, gilt die Krümmungszeile, und sie wird
-/// am Spline nur über die Griffspitze erfüllt; die übrigen Stützpunkte bleiben.
+/// C1: Ein Tangentengriff an einem alten G1 bringt keine Zeile; die Form bleibt, auch am festen Bogen.
 #[test]
-fn a_handle_on_an_old_smooth_is_met_through_the_tip_only() {
+fn a_tangent_handle_on_an_old_smooth_adds_no_row_and_keeps_the_shape() {
+    for pinned in [false, true] {
+        let mut s = sketch();
+        let (arc, m, st, en) = quarter(&mut s, 12.0);
+        if pinned {
+            for p in [m, st, en] {
+                let at = pos(&s, p);
+                s.add_constraint(K::Fixed(p, at.x, at.y)).unwrap();
+            }
+        }
+        let q = points(&mut s, &[(-4.0, 13.5), (-8.0, 12.0), (-12.0, 9.0)]);
+        let sp = s.add_spline(&[en, q[0], q[1], q[2]]).unwrap();
+        let id = s.add_constraint(K::Smooth(arc, en, sp, en)).unwrap();
+        let old = s.solve();
+        assert_eq!(old.status, SolveStatus::Solved, "{old:?}");
+        let (shape_arc, shape_spline) = (dense(&s, arc), dense(&s, sp));
+        s.activate_tangent_handle(sp, en).unwrap();
+        assert_eq!(rows(&s, id), 1);
+        assert_eq!(curvature_of(&s, sp, en), Some(HandleCurvature::Form));
+        let r = s.solve();
+        assert_eq!(r.status, SolveStatus::Solved, "{pinned}: {r:?}");
+        // Drei feste Punkte am Bogen sind von sich aus überzählig; der Griff bringt nichts dazu.
+        assert_eq!(r.redundant, old.redundant, "{pinned}");
+        near(&dense(&s, arc), &shape_arc, 1e-9);
+        near(&dense(&s, sp), &shape_spline, 1e-9);
+    }
+}
+
+/// Linie fest, Tangentengriff: Nichts wird überzählig, auch keine fremde Abhängigkeit.
+#[test]
+fn a_tangent_handle_at_a_pinned_line_makes_nothing_redundant() {
     let mut s = sketch();
-    let (arc, _, _, en) = quarter(&mut s, 12.0);
-    let q = points(&mut s, &[(-4.0, 13.5), (-8.0, 12.0), (-12.0, 9.0)]);
-    let sp = s.add_spline(&[en, q[0], q[1], q[2]]).unwrap();
-    let id = s.add_constraint(K::Smooth(arc, en, sp, en)).unwrap();
+    let (l, sp, joint) = line_and_spline(&mut s);
+    let CurveKind::Line { a, b } = s.curve(l).unwrap().kind else {
+        panic!("keine Linie");
+    };
+    for p in [a, b] {
+        let at = pos(&s, p);
+        s.add_constraint(K::Fixed(p, at.x, at.y)).unwrap();
+    }
+    s.add_constraint(K::Smooth(l, joint, sp, joint)).unwrap();
     solved(&mut s, "alt");
-    let stay: Vec<DVec2> = q.iter().map(|&p| pos(&s, p)).collect();
-    s.activate_tangent_handle(sp, en).unwrap();
-    assert_eq!(rows(&s, id), 2);
-    assert!(matches!(
-        curvature_of(&s, sp, en),
-        Some(HandleCurvature::Form)
-    ));
-    solved(&mut s, "Griff eingeschaltet");
-    assert_g2(&s, arc, en, sp, en, "Griff eingeschaltet");
-    for (&p, m) in q.iter().zip(&stay) {
-        assert!(pos(&s, p).distance(*m) < 1e-12, "Stützpunkt bewegt");
+    s.activate_tangent_handle(sp, joint).unwrap();
+    let check = |s: &mut Sketch, what: &str| {
+        let r = s.solve();
+        assert_eq!(r.status, SolveStatus::Solved, "{what}: {r:?}");
+        assert!(r.redundant.is_empty(), "{what}: {r:?}");
+        assert!(r.conflicting.is_empty(), "{what}: {r:?}");
+    };
+    check(&mut s, "Linie fest");
+    // Auch die Stützpunkte fest.
+    let CurveKind::Spline { points: list, .. } = s.curve(sp).unwrap().kind.clone() else {
+        panic!("kein Spline");
+    };
+    for &p in &list[1..] {
+        let at = pos(&s, p);
+        s.add_constraint(K::Fixed(p, at.x, at.y)).unwrap();
+    }
+    check(&mut s, "alles fest");
+}
+
+/// C1: Löschen des Krümmungsbogens fällt auf G1 zurück, in jeder Lage lösbar.
+#[test]
+fn deleting_the_bow_falls_back_to_g1_and_stays_solvable() {
+    for spline_first in [true, false] {
+        for arc_start in [true, false] {
+            for bend in [1.0, -1.0] {
+                for pinned in [false, true] {
+                    for radius in [1.0, 6.0] {
+                        let what = format!("{spline_first} {arc_start} {bend} {pinned} {radius}");
+                        let mut s = sketch();
+                        let (arc, m, st, en) = quarter(&mut s, radius);
+                        let joint = if arc_start { st } else { en };
+                        if pinned {
+                            for p in [m, st, en] {
+                                let at = pos(&s, p);
+                                s.add_constraint(K::Fixed(p, at.x, at.y)).unwrap();
+                            }
+                        }
+                        let from = pos(&s, joint);
+                        let mut xy: Vec<(f64, f64)> = [(4.0, 3.0), (9.0, -2.0), (14.0, 2.0)]
+                            .iter()
+                            .map(|&(x, y)| (from.x + x, from.y + bend * y))
+                            .collect();
+                        if !spline_first {
+                            xy.reverse();
+                        }
+                        let q = points(&mut s, &xy);
+                        let list = if spline_first {
+                            vec![joint, q[0], q[1], q[2]]
+                        } else {
+                            vec![q[0], q[1], q[2], joint]
+                        };
+                        let sp = s.add_spline(&list).unwrap();
+                        let id = smooth(&mut s, arc, joint, sp, joint);
+                        solved(&mut s, &what);
+                        let Some(HandleCurvature::Arc { arc: bow, .. }) =
+                            curvature_of(&s, sp, joint)
+                        else {
+                            panic!("{what}: kein Bogen");
+                        };
+                        s.remove_curve(bow).unwrap();
+                        assert_eq!(curvature_of(&s, sp, joint), Some(HandleCurvature::Form));
+                        assert_eq!(rows(&s, id), 1, "{what}");
+                        solved(&mut s, &what);
+                        let turn = dir_into(&s, arc, joint).dot(dir_into(&s, sp, joint));
+                        assert!((turn + 1.0).abs() < 1e-8, "{what}: {turn}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---- Krümmungsgriff an einem Ende mit Glatt (C3) ------------------------------------------------
+
+#[test]
+fn a_curvature_handle_on_an_old_smooth_takes_the_partners_values() {
+    for pinned in [false, true] {
+        let mut s = sketch();
+        let (arc, m, st, en) = quarter(&mut s, 12.0);
+        if pinned {
+            for p in [m, st, en] {
+                let at = pos(&s, p);
+                s.add_constraint(K::Fixed(p, at.x, at.y)).unwrap();
+            }
+        }
+        let q = points(&mut s, &[(-4.0, 13.5), (-8.0, 12.0), (-12.0, 9.0)]);
+        let sp = s.add_spline(&[en, q[0], q[1], q[2]]).unwrap();
+        let id = s.add_constraint(K::Smooth(arc, en, sp, en)).unwrap();
+        solved(&mut s, "alt");
+        s.activate_curvature_handle(sp, en).unwrap();
+        assert_eq!(rows(&s, id), 2);
+        assert_g2(&s, arc, en, sp, en, "gleich gelöst");
+        assert_eq!(s.clone().solve().status, SolveStatus::Solved);
+    }
+}
+
+#[test]
+fn a_curvature_handle_is_refused_against_curvature_zero() {
+    // Linie.
+    let mut s = sketch();
+    let (l, sp, joint) = line_and_spline(&mut s);
+    s.add_constraint(K::Smooth(l, joint, sp, joint)).unwrap();
+    solved(&mut s, "Linie");
+    let before = s.to_data();
+    assert!(s.activate_curvature_handle(sp, joint).is_err());
+    assert_eq!(s.to_data(), before, "Linie: nichts bleibt");
+    // Griff `Straight` an der Linie.
+    s.activate_tangent_handle(sp, joint).unwrap();
+    s.prepare_smooth(l, joint, sp, joint).unwrap();
+    solved(&mut s, "gerade");
+    assert_eq!(curvature_of(&s, sp, joint), Some(HandleCurvature::Straight));
+    let before = s.to_data();
+    assert!(s.activate_curvature_handle(sp, joint).is_err());
+    assert_eq!(s.to_data(), before, "gerade: nichts bleibt");
+    // Natürliches Ende als Partner.
+    let mut s = sketch();
+    let (a, b, joint) = two_splines(&mut s);
+    s.add_constraint(K::Smooth(a, joint, b, joint)).unwrap();
+    solved(&mut s, "natürlich");
+    let before = s.to_data();
+    assert!(s.activate_curvature_handle(a, joint).is_err());
+    assert_eq!(s.to_data(), before, "natürlich: nichts bleibt");
+}
+
+/// Zwei feste Bögen mit verschiedenen Radien am selben Spline-Ende: G1 zu beiden geht, die Krümmung
+/// beider nie. Der Griff wird abgelehnt, und nichts bleibt.
+#[test]
+fn a_curvature_handle_that_cannot_solve_is_refused_whole() {
+    let mut s = sketch();
+    let (first, m, st, en) = quarter(&mut s, 5.0);
+    let p = points(&mut s, &[(0.0, -5.0), (10.0, -5.0)]);
+    let second = s.add_arc(p[0], p[1], en).unwrap();
+    for q in [m, st, en, p[0]] {
+        let at = pos(&s, q);
+        s.add_constraint(K::Fixed(q, at.x, at.y)).unwrap();
+    }
+    let q = points(&mut s, &[(-4.0, 6.5), (-8.0, 5.0), (-12.0, 2.0)]);
+    let sp = s.add_spline(&[en, q[0], q[1], q[2]]).unwrap();
+    s.add_constraint(K::Smooth(first, en, sp, en)).unwrap();
+    s.add_constraint(K::Smooth(second, en, sp, en)).unwrap();
+    solved(&mut s, "beide tangential");
+    let before = s.to_data();
+    let e = s.activate_curvature_handle(sp, en).unwrap_err();
+    assert!(
+        e.to_string()
+            .contains(&planora_i18n::tr!("sketch-err-handle-smooth-unsolved")),
+        "{e}"
+    );
+    assert_eq!(s.to_data(), before, "nichts bleibt");
+}
+
+#[test]
+fn both_selection_orders_are_bit_identical() {
+    fn bits(s: &Sketch) -> Vec<u64> {
+        s.variables().iter().map(|v| v.to_bits()).collect()
+    }
+    type Setup = fn(&mut Sketch, CurveId, CurveId, PointId);
+    let tangents: Setup = turned_tangents;
+    let bows: Setup = |s, a, b, j| {
+        turned_tangents(s, a, b, j);
+        s.activate_curvature_handle(a, j).unwrap();
+        s.activate_curvature_handle(b, j).unwrap();
+    };
+    for setup in [tangents, bows] {
+        let run = |swap: bool| {
+            let mut s = sketch();
+            let (a, b, j) = two_splines(&mut s);
+            setup(&mut s, a, b, j);
+            if swap {
+                smooth(&mut s, b, j, a, j);
+            } else {
+                smooth(&mut s, a, j, b, j);
+            }
+            let prepared = bits(&s);
+            solved(&mut s, "Reihenfolge");
+            assert_g2(&s, a, j, b, j, "Reihenfolge");
+            (prepared, bits(&s), s.curves().count())
+        };
+        assert_eq!(run(false), run(true));
+    }
+}
+
+#[test]
+fn a_mean_near_zero_makes_both_straight() {
+    // Spiegelbildlich an der Fuge: Die Krümmungen in die Kurven sind gleich, das Mittel ist 0.
+    let mut s = sketch();
+    let joint = s.add_point(0.0, 0.0).unwrap();
+    let q = points(&mut s, &[(5.0, 3.0), (10.0, 0.0)]);
+    let r = points(&mut s, &[(-5.0, -3.0), (-10.0, 0.0)]);
+    let a = s.add_spline(&[joint, q[0], q[1]]).unwrap();
+    let b = s.add_spline(&[joint, r[0], r[1]]).unwrap();
+    s.activate_tangent_handle(a, joint).unwrap();
+    s.activate_tangent_handle(b, joint).unwrap();
+    let CurveKind::Spline { handles, .. } = s.curve(a).unwrap().kind.clone() else {
+        panic!("kein Spline");
+    };
+    s.set_point_xy(handles[0].tip, 2.0, 2.0).unwrap();
+    let CurveKind::Spline { handles, .. } = s.curve(b).unwrap().kind.clone() else {
+        panic!("kein Spline");
+    };
+    s.set_point_xy(handles[0].tip, -2.0, -2.0).unwrap();
+    let id = smooth(&mut s, a, joint, b, joint);
+    assert_eq!(curvature_of(&s, a, joint), Some(HandleCurvature::Straight));
+    assert_eq!(curvature_of(&s, b, joint), Some(HandleCurvature::Straight));
+    assert_eq!(rows(&s, id), 1);
+    solved(&mut s, "Mittel 0");
+    assert_g2(&s, a, joint, b, joint, "Mittel 0");
+}
+
+#[test]
+fn a_radius_on_the_bow_moves_the_partner_too() {
+    let mut s = sketch();
+    let (arc, _, _, en) = quarter(&mut s, 4.0);
+    let q = points(&mut s, &[(-3.0, 6.0), (-7.0, 7.0), (-10.0, 4.0)]);
+    let sp = s.add_spline(&[en, q[0], q[1], q[2]]).unwrap();
+    smooth(&mut s, arc, en, sp, en);
+    solved(&mut s, "angelegt");
+    let Some(HandleCurvature::Arc { arc: bow, .. }) = curvature_of(&s, sp, en) else {
+        panic!("kein Bogen");
+    };
+    let id = s.add_constraint(K::Radius(bow, 4.0)).unwrap();
+    solved(&mut s, "Maß");
+    for r in [6.0, 9.0, 3.0] {
+        s.set_constraint_value(id, r).unwrap();
+        solved(&mut s, &format!("r = {r}"));
+        assert_g2(&s, arc, en, sp, en, &format!("r = {r}"));
+        assert!(
+            (kappa_into(&s, arc, en).abs() - 1.0 / r).abs() < 1e-6,
+            "{r}"
+        );
     }
 }
 

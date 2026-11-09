@@ -13,6 +13,7 @@ use crate::curves::{Sampled, V2};
 use crate::dual::Dual;
 use crate::error::SketchError;
 use crate::model::{CurveId, CurveKind, HandleCurvature, PointId, Sketch, SplineHandle};
+use crate::solver::SolveStatus;
 use planora_i18n::tr;
 use planora_math::nurbs::NurbsCurve;
 use planora_math::{DVec2, DVec3};
@@ -547,7 +548,85 @@ impl Sketch {
     /// ändert sich nicht (B5). Wo die Krümmung fast null ist, startet er bei `r = 1000·L` links; nur
     /// dort weicht die Form minimal ab. Liefert den Griff-Bogen. Abgelehnt bleibt die Skizze, wie sie
     /// ist.
+    ///
+    /// An einem Ende mit Glatt wirkt das wie [`prepare_smooth`](Self::prepare_smooth) (C3, Ausnahme zu
+    /// B5): Der Griff übernimmt die Werte des Partners, und die Skizze wird gleich gelöst. Abgelehnt,
+    /// wenn der Partner keine Krümmung hat oder die Skizze danach nicht mehr lösbar ist.
     pub fn activate_curvature_handle(
+        &mut self,
+        c: CurveId,
+        at: PointId,
+    ) -> Result<CurveId, SketchError> {
+        match self.smooth_partner_at(c, at) {
+            None => self.activate_curvature_plain(c, at),
+            Some((partner, partner_at)) => {
+                self.activate_curvature_on_smooth(c, at, partner, partner_at)
+            }
+        }
+    }
+
+    /// Krümmungsgriff an einem Ende mit Glatt, siehe [`activate_curvature_handle`](Self::activate_curvature_handle).
+    fn activate_curvature_on_smooth(
+        &mut self,
+        c: CurveId,
+        at: PointId,
+        partner: CurveId,
+        partner_at: PointId,
+    ) -> Result<CurveId, SketchError> {
+        self.check_curve(c)?;
+        if matches!(
+            self.handle_at(c, at).map(|h| h.curvature),
+            Ok(HandleCurvature::Arc { .. })
+        ) {
+            return Err(SketchError::InvalidInput(tr!("sketch-err-handle-active")));
+        }
+        let flat = || SketchError::InvalidInput(tr!("sketch-err-handle-smooth-flat"));
+        let wrong_end = || SketchError::WrongType(tr!("sketch-err-smooth-end"));
+        let partner_end = smooth_end(self, partner, partner_at).ok_or_else(wrong_end)?;
+        if matches!(
+            partner_end,
+            SmoothEnd::Line | SmoothEnd::Natural | SmoothEnd::Straight
+        ) {
+            return Err(flat());
+        }
+        let solvable_before = self.clone().solve().status == SolveStatus::Solved;
+        self.atomically(|s| {
+            if !s.has_handle_at(c, at) {
+                s.activate_tangent_handle(c, at)?;
+            }
+            if partner_end == SmoothEnd::Form {
+                // Beide nur aus der Form: gleichrangig, beide bekommen einen Krümmungsgriff.
+                if !s.smooth_mean(c, at, partner, partner_at)? {
+                    return Err(flat());
+                }
+            } else {
+                let (into_partner, partner_kappa) = s
+                    .smooth_end_values(partner, partner_at)
+                    .ok_or_else(wrong_end)?;
+                let first = curve_starts_at(&s.curves[c].kind, at);
+                let reach = s.aim_tip(c, at, if first { -into_partner } else { into_partner })?;
+                if partner_end == SmoothEnd::ControlSpline
+                    && partner_kappa.abs() * reach < NEAR_ZERO_CURVATURE
+                {
+                    return Err(flat());
+                }
+                let kappa = if first { -partner_kappa } else { partner_kappa };
+                s.place_curvature_arc(c, at, kappa)?;
+            }
+            if solvable_before && s.solve().status != SolveStatus::Solved {
+                return Err(SketchError::InvalidInput(tr!(
+                    "sketch-err-handle-smooth-unsolved"
+                )));
+            }
+            match s.handle_at(c, at)?.curvature {
+                HandleCurvature::Arc { arc, .. } => Ok(arc),
+                _ => unreachable!("the curvature handle exists by now"),
+            }
+        })
+    }
+
+    /// Der Krümmungsgriff aus der aktuellen Form, ohne Blick auf ein Glatt.
+    fn activate_curvature_plain(
         &mut self,
         c: CurveId,
         at: PointId,
@@ -638,15 +717,70 @@ impl Sketch {
         pb: PointId,
     ) -> Result<(), SketchError> {
         self.check_structure(&ConstraintKind::Smooth(a, pa, b, pb))?;
+        // Immer in derselben Folge, damit auch die neuen Ids nicht von der Wahlreihenfolge abhängen.
+        let (a, pa, b, pb) = if a <= b {
+            (a, pa, b, pb)
+        } else {
+            (b, pb, a, pa)
+        };
         let wrong_end = || SketchError::WrongType(tr!("sketch-err-smooth-end"));
         let (ea, eb) = (
             smooth_end(self, a, pa).ok_or_else(wrong_end)?,
             smooth_end(self, b, pb).ok_or_else(wrong_end)?,
         );
         self.atomically(|s| {
-            s.smooth_step_at(a, pa, smooth_step(ea, eb, true), b, pb, eb)?;
-            s.smooth_step_at(b, pb, smooth_step(eb, ea, false), a, pa, ea)
+            if smooth_step(ea, eb) == SmoothStep::Mean {
+                if !s.smooth_mean(a, pa, b, pb)? {
+                    s.straighten_both(a, pa, b, pb)?;
+                }
+                return Ok(());
+            }
+            s.smooth_step_at(a, pa, smooth_step(ea, eb), b, pb, eb)?;
+            s.smooth_step_at(b, pb, smooth_step(eb, ea), a, pa, ea)
         })
+    }
+
+    /// Beide Griffe auf den Mittelwert aus Tangente und Krümmung (C3, gleicher Rang). `false`, wenn er
+    /// fast 0 ist: Dann gibt es keinen endlichen Bogen, und nur die Tangenten stehen auf dem Mittel.
+    /// Beide Griffe müssen da sein. Das Ergebnis hängt nicht von der Reihenfolge ab: `x − y` und
+    /// `y − x` sind genau entgegengesetzt.
+    fn smooth_mean(
+        &mut self,
+        a: CurveId,
+        pa: PointId,
+        b: CurveId,
+        pb: PointId,
+    ) -> Result<bool, SketchError> {
+        let wrong_end = || SketchError::WrongType(tr!("sketch-err-smooth-end"));
+        let (ua, ka) = self.smooth_end_values(a, pa).ok_or_else(wrong_end)?;
+        let (ub, kb) = self.smooth_end_values(b, pb).ok_or_else(wrong_end)?;
+        let into_a = ua.normalize_or_zero() - ub.normalize_or_zero();
+        let mean = 0.5 * (ka - kb);
+        let mut reach: f64 = 0.0;
+        for (c, at, into) in [(a, pa, into_a), (b, pb, -into_a)] {
+            let first = curve_starts_at(&self.curves[c].kind, at);
+            reach = reach.max(self.aim_tip(c, at, if first { into } else { -into })?);
+        }
+        if mean.abs() * reach < NEAR_ZERO_CURVATURE {
+            return Ok(false);
+        }
+        for (c, at, kappa) in [(a, pa, mean), (b, pb, -mean)] {
+            let first = curve_starts_at(&self.curves[c].kind, at);
+            self.place_curvature_arc(c, at, if first { kappa } else { -kappa })?;
+        }
+        Ok(true)
+    }
+
+    /// Der Mittelwert ist fast 0: Beide Griffe werden `Straight`.
+    fn straighten_both(
+        &mut self,
+        a: CurveId,
+        pa: PointId,
+        b: CurveId,
+        pb: PointId,
+    ) -> Result<(), SketchError> {
+        self.straighten_handle(a, pa)?;
+        self.straighten_handle(b, pb)
     }
 
     /// Führt den Schritt `step` für das Ende `at` der Seite `c` gegen den Partner aus.
@@ -660,10 +794,6 @@ impl Sketch {
         partner_end: SmoothEnd,
     ) -> Result<(), SketchError> {
         if step == SmoothStep::Keep {
-            return Ok(());
-        }
-        if step == SmoothStep::OwnArc {
-            self.activate_curvature_handle(c, at)?;
             return Ok(());
         }
         // Vor jeder Änderung an `c`: Die Werte des Partners hängen nicht von ihr ab, ein neuer Griff
@@ -758,7 +888,7 @@ impl Sketch {
             self.handle_at(c, at)?.curvature,
             HandleCurvature::Arc { .. }
         ) {
-            self.activate_curvature_handle(c, at)?;
+            self.activate_curvature_plain(c, at)?;
         }
         let HandleCurvature::Arc { arc, center, other } = self.handle_at(c, at)?.curvature else {
             unreachable!("the curvature handle exists by now");
