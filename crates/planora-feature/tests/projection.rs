@@ -1156,3 +1156,132 @@ fn cone_section_follows_across_the_seam() {
     assert_curve_matches_section(&d, cone, s, c);
     d.check_invariants().unwrap();
 }
+
+/// Korrektur 2: Ab einer großen Halbachse von 1e7 kommt die Ellipse als rationales Bézier-Stück.
+/// Der Wechsel gilt als Artänderung: Warnung, Kurve bleibt, und zurück ist die Warnung wieder weg.
+#[test]
+fn form_switch_of_a_huge_ellipse_is_a_lost_reference() {
+    let mut d = Document::new();
+    let cone = d
+        .add_feature(
+            "Kegel",
+            FeatureKind::Cone {
+                radius: 4.9999999,
+                height: 10.0,
+                origin: DVec3::new(0.0, 0.0, -7.0),
+            },
+        )
+        .unwrap();
+    // Ebene durch die X-Achse, um atan 2 gedreht: fast parallel zu einer Mantellinie.
+    let p = d
+        .add_feature(
+            "Ebene",
+            FeatureKind::Plane(PlaneFeature {
+                def: PlaneDef::Angle {
+                    axis: AxisRef::Standard(StdAxis::X),
+                    angle: 2f64.atan().to_degrees(),
+                },
+            }),
+        )
+        .unwrap();
+    let frame = d.plane_frame(p).unwrap();
+    let (s, c) = cone_section_sketch(&mut d, cone, frame, SketchPlane::OnPlane(p));
+    let is_spline = |d: &Document| {
+        matches!(
+            d.sketch_of(s).unwrap().curve(c).unwrap().kind,
+            CurveKind::FixedSpline { .. }
+        )
+    };
+    assert!(is_spline(&d));
+    assert_curve_matches_section(&d, cone, s, c);
+    // Knapp unter der Grenze: `Curve::Ellipse`, die Kurve bleibt stehen.
+    set_cone_radius(&mut d, cone, 4.999999);
+    let solid = body(&d, cone);
+    let face = find_face(&solid, |f| {
+        matches!(solid.faces[f].surface, planora_kernel::Surface::Cone { .. })
+    });
+    let pieces = section_by_plane(&solid, &frame, Some(&[face]), &tol()).unwrap();
+    assert!(
+        matches!(pieces[0].curve, planora_kernel::Curve::Ellipse { .. }),
+        "{pieces:?}"
+    );
+    let f = d.feature(s).unwrap();
+    assert_eq!(f.status, FeatureStatus::Ok, "{:?}", f.status);
+    assert!(f.warning().is_some(), "Bezug verloren");
+    assert!(is_spline(&d), "die Kurve bleibt stehen");
+    // Zurück: Die Warnung ist weg, die Kurve folgt wieder.
+    set_cone_radius(&mut d, cone, 4.9999999);
+    let f = d.feature(s).unwrap();
+    assert_eq!(f.status, FeatureStatus::Ok, "{:?}", f.status);
+    assert!(f.warning().is_none(), "{:?}", f.warning());
+    assert!(is_spline(&d));
+    assert_curve_matches_section(&d, cone, s, c);
+    d.check_invariants().unwrap();
+}
+
+/// Korrektur 2: Schlanke Ellipsen gehen genau in die Skizze, und die Skizze bleibt lösbar. Bis zum
+/// Verhältnis 1e4 als Ellipsenbogen, darüber als fester Spline: Der Löser meldet für einen
+/// Ellipsenbogen ab etwa 1e5 `NotConverged`.
+#[test]
+fn slim_ellipses_keep_the_sketch_solvable() {
+    let tilted = |r: f64, height: f64, h: f64, tilt: f64| {
+        let phi = 1.1f64;
+        let radial = DVec3::new(phi.cos(), phi.sin(), 0.0);
+        let side = DVec3::Z.cross(radial);
+        let along = (radial * (-r / height) + DVec3::Z).cross(side).normalize();
+        let origin = DVec3::Z * height - along * (h * along.dot(radial).signum());
+        Frame::from_origin_normal(origin, (along + DVec3::Z * tilt).normalize())
+    };
+    for (r, height, h, tilt) in [
+        (5.0, 10.0, 1e-3, -1e-4),
+        (5.0, 10.0, 1e-3, -1e-7),
+        (5.0, 10.0, 1e-3, -1e-9),
+        (5.0, 10.0, 1e-3, -1e-10),
+        (100.0, 200.0, 1e-3, -1e-10),
+        (1000.0, 2000.0, 1e-3, -1e-7),
+        (1000.0, 2000.0, 1e-3, -1e-10),
+        (1000.0, 2000.0, 1e-5, -1e-9),
+        (1000.0, 2000.0, 1e-5, -1e-10),
+        (1000.0, 2000.0, 1e-5, -1e-12),
+    ] {
+        let what = format!("r {r}, h {h}, Kippung {tilt}");
+        let solid = planora_kernel::primitives::make_cone(r, height, &tol()).unwrap();
+        let face = find_face(&solid, |f| {
+            matches!(solid.faces[f].surface, planora_kernel::Surface::Cone { .. })
+        });
+        let frame = tilted(r, height, h, tilt);
+        let pieces = section_by_plane(&solid, &frame, Some(&[face]), &tol()).unwrap();
+        assert_eq!(pieces.len(), 1, "{what}: {pieces:?}");
+        let p = &pieces[0];
+        let mut sk = Sketch::new(frame, "Skizze", tol());
+        let c = sk
+            .add_projected_curve(&p.curve, p.t0, p.t1, LINKED)
+            .unwrap();
+        assert_eq!(
+            sk.solve().status,
+            planora_sketch::SolveStatus::Solved,
+            "{what}"
+        );
+        for i in 0..=32 {
+            let t = p.t0 + (p.t1 - p.t0) * i as f64 / 32.0;
+            let q = frame.to_local(p.curve.point(t)).truncate();
+            match p.curve {
+                // Beim selben Parameter gleich. `nearest_on_curve` rechnet über `atan2` und wäre
+                // an so schlanken Ellipsen zu grob.
+                planora_kernel::Curve::Ellipse { major, minor, .. } => {
+                    assert!(major / minor <= 1e4, "{what}: {major} / {minor}");
+                    let on = sk.ellipse_point(c, t).unwrap();
+                    assert!(on.distance(q) < 1e-7, "{what}: {q} gegen {on}");
+                }
+                _ => {
+                    assert!(matches!(
+                        sk.curve(c).unwrap().kind,
+                        CurveKind::FixedSpline { .. }
+                    ));
+                    let on = sk.nearest_on_curve(c, q).unwrap();
+                    assert!(on.distance(q) < 1e-5, "{what}: {q} gegen {on}");
+                }
+            }
+        }
+    }
+}

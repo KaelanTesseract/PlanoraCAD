@@ -126,8 +126,11 @@ Konstruktion umschalten gilt an allen Arten außer Griffen; die bleiben Konstruk
    - Parabel → `Curve::Nurbs` (Bézier Grad 2), Bereich so, dass der Hüllquader der Fläche sicher überdeckt ist.
    - Hyperbel → je Ast `Curve::Nurbs` (rational Grad 2), ebenso.
    - Ebene durch die Spitze → zwei Geraden, eine Berührgerade → `Touch`, nur die Spitze → nichts.
+   - **Abweichung beim Bauen (Parabel):** Das Fenster `1e-9` allein reicht nicht. Als Parabel gilt die Lage nur, solange die weggelassene Größe `A·u²/(2·B)` im Hüllquader seitlich höchstens `5e-8` ausmacht; sonst gilt die genaue Ellipse oder Hyperbel. Grund: Im Fenster allein lief ein Stück bei großen Kegeln bis 22 mm über die Fläche hinaus.
+   - **Abweichung beim Bauen (Ellipse):** Eine große Halbachse über `1e7` oder ein Verhältnis der Halbachsen über `1e4` kommt, wenn das Stück den Scheitel nicht umrundet, als rationales Bézier-Stück Grad 2 statt als `Curve::Ellipse`, gerechnet vom nahen Scheitel. Es ist dieselbe Ellipse. Gründe: Die Form aus Mitte und Halbachse erreicht über `1e7` durch Rundung die Grenze `1e-7` (gemessen 5,33e-7 bei r = 1000), und der Skizzenlöser meldet für einen Ellipsenbogen ab etwa `1e5` `NotConverged` (gemessen: 3,3e4 gelöst, 1,1e5 nicht, bei r = 5 bis 1000).
 3. Beschneiden wie gehabt (`breakpoints`, `split_at`, `classify_seg`). Der falsche Ast fällt dort weg.
 4. Ergebnis in der Skizze: Ellipse oder Ellipsenbogen wie bisher; Parabel und Hyperbel als **fester Spline** (rational, exakt). Das ist dieselbe Kurve wie ein fester Kegelschnitt, ohne weitere Art. Sie folgen dem Körper nach F3.
+   - **Abweichung beim Bauen:** Auch die sehr große oder sehr schlanke Ellipse aus G2 wird ein fester Spline. Der Wechsel zwischen beiden Formen bei einer Maßänderung ist eine Artänderung nach F3, also eine Warnung. Parabel, Hyperbel und Ellipsenbogen laufen am Kegel als ein Stück über die Naht; andere Flächen teilt die Naht weiter (siehe `offene-punkte.md`).
 5. `kernel-section-unsupported` bleibt für Torus allgemein; der Kegel fällt heraus. Silhouette bleibt, wie sie ist.
 
 ### H. Dateiformat

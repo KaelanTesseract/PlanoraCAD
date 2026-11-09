@@ -263,8 +263,8 @@ fn cone_at(origin: DVec3, r: f64, h: f64) -> Solid {
     revolve(&chain, &frame, &tol()).unwrap()
 }
 
-/// Korrektur 1: Parabel, Hyperbel und Ellipsenbogen laufen als ein Stück über die Naht. Sonst folgte
-/// die Skizzenkurve beim Verweis auf das Stück 0 nur noch einem Teil des Schnitts, ohne Warnung.
+/// Korrektur 1: Parabel, Hyperbel und Ellipsenbogen laufen als ein Stück über die Naht. Sonst
+/// folgte die Skizzenkurve beim Verweis auf das Stück 0 nur noch einem Teil des Schnitts, ohne Warnung.
 #[test]
 fn seam_does_not_split_a_conic() {
     for tilt in [0.0f64, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2] {
@@ -330,6 +330,61 @@ fn large_cones_near_the_parabola_stay_on_the_face() {
                     }
                 }
             }
+        }
+    }
+}
+
+/// Ebene mit der Normalen `normal(a, phi)`, deren ferner Scheitel um `dip` unter dem Grundkreis
+/// liegt (auf der Mantellinie in Richtung `phi`).
+fn plane_with_far_vertex_below_rim(r: f64, height: f64, a: f64, phi: f64, dip: f64) -> Frame {
+    let radial = DVec3::new(phi.cos(), phi.sin(), 0.0);
+    let far = radial * (r + r / height * dip) - DVec3::Z * dip;
+    Frame::from_origin_normal(far, normal(a, phi))
+}
+
+/// Korrektur 2: Taucht der ferne Scheitel einer schlanken Ellipse knapp unter den Rand, fallen die
+/// beiden Treffer des Randes zusammen. Der Schnitt darf dabei nicht verloren gehen.
+#[test]
+fn far_vertex_just_below_the_rim_keeps_the_section() {
+    let t = tol();
+    let mut checked = 0;
+    for (r, height) in [(5.0, 10.0), (100.0, 200.0), (1000.0, 2000.0)] {
+        let solid = make_cone(r, height, &t).unwrap();
+        for a in [1.0, 1.05, 1.09, 1.1, 1.105, 1.107] {
+            for dip in [2e-6, 1e-5, 3e-5, 1e-4, 3e-4, 1e-3, 1e-2] {
+                for phi in [0.6f64, 2.5] {
+                    let plane = plane_with_far_vertex_below_rim(r, height, a, phi, dip);
+                    let what = format!("r {r}, a {a}, Tiefe {dip}, phi {phi}");
+                    let ps = check_section(&solid, &plane, &what);
+                    assert!(!ps.is_empty(), "{what}: Schnitt leer");
+                    // Bis auf die kleine Lücke am fernen Scheitel ist der Schnitt da.
+                    let open = ps
+                        .iter()
+                        .map(|p| seg(p).start().distance(seg(p).end()))
+                        .fold(0.0, f64::max);
+                    assert!(open < r, "{what}: Lücke {open}");
+                    checked += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(checked, 3 * 6 * 7 * 2);
+}
+
+/// Korrektur 2: Dasselbe von innen: Der Scheitel bleibt knapp über dem Rand, der Schnitt ist die
+/// ganze Ellipse.
+#[test]
+fn far_vertex_just_above_the_rim_is_a_whole_ellipse() {
+    let t = tol();
+    let solid = make_cone(5.0, 10.0, &t).unwrap();
+    for a in [1.0, 1.09, 1.1] {
+        for dip in [-1e-5, -1e-3, -1e-1] {
+            let plane = plane_with_far_vertex_below_rim(5.0, 10.0, a, 0.6, dip);
+            let what = format!("a {a}, Höhe {}", -dip);
+            let ps = check_section(&solid, &plane, &what);
+            assert_eq!(ps.len(), 1, "{what}: {ps:?}");
+            let s = seg(&ps[0]);
+            assert!(s.start().distance(s.end()) <= t.linear, "{what}: {ps:?}");
         }
     }
 }

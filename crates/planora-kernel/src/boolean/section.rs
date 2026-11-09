@@ -215,25 +215,24 @@ pub fn section_by_plane(
                 // ob die Kurve sie kreuzt, und der Verweis auf ein Stück folgte bei einer
                 // Maßänderung still nur noch einem Teil des Schnitts. Gerade Mantellinien brauchen
                 // die Treffer weiter (sie können in der Naht liegen).
-                let rim_hits: Vec<_> = if matches!(geom.surface, Surface::Cone { .. }) {
+                let rim: Vec<Seg> = if matches!(geom.surface, Surface::Cone { .. }) {
                     let on_seam = |e: &Seg| {
                         seams
                             .iter()
                             .any(|m| m.closest(e.at(0.5)).1 <= ptol.linear * 4.0)
                     };
-                    boundary
-                        .iter()
-                        .filter(|e| !on_seam(e))
-                        .flat_map(|e| edge_hits(e, &cut, &ptol))
-                        .collect()
+                    boundary.iter().filter(|e| !on_seam(e)).cloned().collect()
                 } else {
                     Vec::new()
                 };
                 for c in cs {
                     let spans_seam = matches!(geom.surface, Surface::Cone { .. })
                         && matches!(c, Curve::Nurbs(_) | Curve::Ellipse { .. });
-                    let own_hits = if spans_seam { &rim_hits } else { &hits };
-                    let ts = breakpoints(&c, own_hits, &[&geom.surface], &ptol);
+                    let ts = if spans_seam {
+                        conic_breakpoints(&c, &rim, &cut, &geom.surface, &ptol)
+                    } else {
+                        breakpoints(&c, &hits, &[&geom.surface], &ptol)
+                    };
                     found.extend(split_at(&c, ts, &ptol).into_iter().filter(|s| {
                         match classify_seg(&geom, &seams, s, &ptol) {
                             Containment::Inside => true,
@@ -270,11 +269,10 @@ const PARABOLA_MAX_SHIFT: f64 = 5e-8;
 /// Bis zu dieser großen Halbachse bleibt eine Ellipse `Curve::Ellipse`. Darüber rechnet die Form
 /// aus Mitte und Halbachse mit Zahlen, deren Rundung die Grenze `1e-7` erreicht.
 const MAX_ELLIPSE_MAJOR: f64 = 1e7;
-/// Bis zu diesem Verhältnis der Halbachsen bleibt eine Ellipse `Curve::Ellipse`. `Curve::project`
-/// bestimmt ihren Parameter über den Winkel, nicht über den nächsten Punkt; ein kleiner Fehler quer
-/// zur langen Achse wächst dabei etwa mit diesem Verhältnis. Gemessen: Bei 3e4 verfehlt der Treffer
-/// der Randkante die Kurve um 2e-5, der Haltepunkt ginge verloren und mit ihm das ganze Stück.
-const MAX_ELLIPSE_ASPECT: f64 = 1000.0;
+/// Bis zu diesem Verhältnis der Halbachsen bleibt ein Ellipsenstück `Curve::Ellipse`. Grund ist die
+/// Skizze: Der Löser meldet für einen Ellipsenbogen ab etwa 1e5 `NotConverged` (gemessen bei allen
+/// Größen: 3,3e4 gelöst, 1,1e5 nicht). Der Schnitt selbst bliebe auch darüber genau.
+const MAX_ELLIPSE_ASPECT: f64 = 1e4;
 /// Größter Winkel vom Scheitel, bis zu dem eine fast parabolische Ellipse als Bézier-Stück geht.
 const MAX_ELLIPSE_ARC_ANGLE: f64 = 1.4;
 /// Unter dieser Steigung hat der Kegel keine brauchbare Spitze (Zylinder).
@@ -345,8 +343,102 @@ fn hyperbola_arcs(
     Some(vec![conic_bezier([at(s0), corner, at(s1)], weight)?])
 }
 
+/// Parameter, an denen der Kegelschnitt `c` aus [`plane_cone_conic`] die Ebene `plane` kreuzt, in
+/// geschlossener Form. `None`: Die Kurve liegt in der Ebene, oder es ist kein solcher Kegelschnitt.
+fn conic_plane_params(c: &Curve, plane: &Frame, tol: &Tolerance) -> Option<Vec<f64>> {
+    let along = |p: DVec3| plane.z.dot(p - plane.origin);
+    match c {
+        // `d + p·cos t + q·sin t = 0`.
+        Curve::Ellipse {
+            frame,
+            major,
+            minor,
+        } => {
+            let d = along(frame.origin);
+            let (p, q) = (major * plane.z.dot(frame.x), minor * plane.z.dot(frame.y));
+            let amplitude = p.hypot(q);
+            if amplitude <= tol.linear && d.abs() <= tol.linear {
+                return None;
+            }
+            if d.abs() > amplitude {
+                return Some(Vec::new());
+            }
+            let (phi, w) = (q.atan2(p), (-d / amplitude).acos());
+            Some(vec![phi - w, phi + w])
+        }
+        // Zähler der rationalen Bézierkurve: `e0·(1 − t)² + 2·e1·t·(1 − t) + e2·t²`.
+        Curve::Nurbs(n) if n.degree() == 2 && n.control_points().len() == 3 => {
+            let d: Vec<f64> = n.control_points().iter().map(|p| along(*p)).collect();
+            if d.iter().all(|x| x.abs() <= tol.linear) {
+                return None;
+            }
+            let w = n.weights();
+            let (e0, e1, e2) = (d[0] * w[0], d[1] * w[1], d[2] * w[2]);
+            let (qa, half_b, qc) = (e0 - 2.0 * e1 + e2, e1 - e0, e0);
+            let disc = half_b * half_b - qa * qc;
+            if disc < 0.0 {
+                return Some(Vec::new());
+            }
+            // Stabile Form ohne Auslöschung; `qa = 0` ergibt nur die eine, endliche Lösung.
+            let big = -(half_b + disc.sqrt().copysign(half_b));
+            let roots = [big / qa, qc / big];
+            Some(
+                roots
+                    .into_iter()
+                    .filter(|t| t.is_finite() && (0.0..=1.0).contains(t))
+                    .collect(),
+            )
+        }
+        _ => None,
+    }
+}
+
+/// Haltepunkte des Kegelschnitts `c` auf der Kegelfläche `surface` mit den Randkanten `rim`.
+///
+/// Randkreise und Randellipsen liegen je in einer Ebene: Dort zählt, wo die Kurve selbst diese
+/// Ebene kreuzt. Das trennt auch eine Doppelstelle, die [`edge_hits`] zu einem Punkt neben der
+/// Kurve zusammenzieht, wenn die Kante nur knapp durch die Schnittebene taucht (der ferne Scheitel
+/// einer schlanken Ellipse knapp unter dem Rand). Und die Parameter kommen unmittelbar aus der
+/// Rechnung: Der Umweg über `Curve::project` verliert an einer schlanken Ellipse zu viel, der
+/// Haltepunkt ginge verloren (gemessen 1,5e-5 bei einem Verhältnis der Halbachsen von 1e6).
+fn conic_breakpoints(
+    c: &Curve,
+    rim: &[Seg],
+    cut: &Surface,
+    surface: &Surface,
+    tol: &Tolerance,
+) -> Vec<f64> {
+    let mut direct: Vec<f64> = Vec::new();
+    let mut other: Vec<DVec3> = Vec::new();
+    for e in rim {
+        let crossings = match &e.curve {
+            Curve::Circle { frame, .. } | Curve::Ellipse { frame, .. } => {
+                conic_plane_params(c, frame, tol)
+            }
+            _ => None,
+        };
+        match crossings {
+            Some(ts) => direct.extend(
+                ts.into_iter()
+                    .filter(|t| e.closest(c.point(*t)).1 <= tol.linear * 10.0),
+            ),
+            None => other.extend(edge_hits(e, cut, tol)),
+        }
+    }
+    let mut ts = breakpoints(c, &other, &[surface], tol);
+    for t in direct {
+        let t = c.period().map_or(t, |period| t.rem_euclid(period));
+        let q = c.point(t);
+        if !ts.iter().any(|o| c.point(*o).distance(q) <= tol.linear) {
+            ts.push(t);
+        }
+    }
+    ts
+}
+
 /// Das Stück einer sehr großen Ellipse am nahen Scheitel als rationales Bézier-Stück Grad 2: Der
-/// Punkt zum Winkel `t` ist `vertex + x·a·(1 − cos t) + y·b·sin t`; `x` zeigt vom Scheitel zur Mitte.
+/// Punkt zum Winkel `t` ist `vertex + x·a·(1 − cos t) + y·b·sin t`; `x` zeigt vom Scheitel zur
+/// Mitte.
 /// Das ist dieselbe Ellipse wie `Curve::Ellipse`, aber ohne die Auslöschung großer Zahlen.
 /// Äußeres `None`: Der Hüllquader reicht zu weit um die Ellipse (dann bleibt es `Curve::Ellipse`),
 /// inneres `None`: Die Ellipse erreicht den Quader nicht.
@@ -391,9 +483,10 @@ fn near_vertex_ellipse(
 
 /// Schnitt der Ebene `plane` mit dem Kegel `cone`, `radius`, `slope` in jeder Lage (Skizzen 7, G2):
 /// Ellipse als `Curve::Ellipse` (ein sehr großes oder sehr schlankes Stück, das den Scheitel nicht
-/// umrundet, siehe [`MAX_ELLIPSE_MAJOR`] und [`MAX_ELLIPSE_ASPECT`], als rationales Bézier-Stück), Parabel als nicht rationales Bézier-Stück Grad 2, Hyperbel je Ast als rationale
-/// Bézier-Stücke Grad 2 (der falsche Ast entfällt beim Beschneiden, weil er auf der anderen Schale
-/// liegt), durch die Spitze zwei Geraden, eine Berührgerade oder nur die Spitze.
+/// umrundet, siehe [`MAX_ELLIPSE_MAJOR`] und [`MAX_ELLIPSE_ASPECT`], als rationales Bézier-Stück),
+/// Parabel als nicht rationales Bézier-Stück Grad 2, Hyperbel je Ast als rationale Bézier-Stücke
+/// Grad 2 (der falsche Ast entfällt beim Beschneiden, weil er auf der anderen Schale liegt), durch
+/// die Spitze zwei Geraden, eine Berührgerade oder nur die Spitze.
 ///
 /// Als Parabel gilt die Lage nur im Fenster [`PARABOLA_WINDOW`] und solange `A·u²` innerhalb des
 /// Hüllquaders höchstens [`PARABOLA_MAX_SHIFT`] seitlich ausmacht; sonst läge der Treffer der
@@ -403,8 +496,8 @@ fn near_vertex_ellipse(
 /// liegen kann; ein Ast, der ihn gar nicht erreicht, entfällt schon hier.
 ///
 /// Rechnung, in Koordinaten von der Spitze aus: Mit `Q` als Punkt relativ zur Spitze lautet der
-/// Kegel `|Q|² = k·(Q·a)²`, `k = 1 + slope²`. In der Ebene mit `h` als Abstand der Spitze zur Ebene,
-/// `e1` als Richtung des Achsenschattens und `c = n·a`, `σ = a·e1`:
+/// Kegel `|Q|² = k·(Q·a)²`, `k = 1 + slope²`. In der Ebene mit `h` als Abstand der Spitze zur
+/// Ebene, `e1` als Richtung des Achsenschattens und `c = n·a`, `σ = a·e1`:
 /// `A·u² + v² − 2·B·u + F = 0` mit `A = c² − slope²·σ²`, `B = k·h·c·σ`, `F = h²·(1 − k·c²)`; dabei
 /// ist `B² − A·F = slope²·h²`.
 pub(crate) fn plane_cone_conic(
