@@ -105,6 +105,14 @@ pub enum CurveKind {
         apex: PointId,
         rho: f64,
     },
+    /// Projizierte Freiformkurve (Spec A3, F): unveränderlich in Skizzenkoordinaten (`z = 0`), auch
+    /// rational; `start` und `end` tragen `Fixed`. Nur die Projektion legt sie an. Bei einer
+    /// geschlossenen Kante ist `start == end`.
+    FixedSpline {
+        start: PointId,
+        end: PointId,
+        curve: Arc<NurbsCurve>,
+    },
 }
 
 impl CurveKind {
@@ -132,6 +140,8 @@ impl CurveKind {
             CurveKind::Conic {
                 start, end, apex, ..
             } => vec![*start, *apex, *end],
+            CurveKind::FixedSpline { start, end, .. } if start == end => vec![*start],
+            CurveKind::FixedSpline { start, end, .. } => vec![*start, *end],
         }
     }
 
@@ -719,6 +729,7 @@ impl Sketch {
             } => conic_nurbs(self.pos(*start), self.pos(*apex), self.pos(*end), *rho)
                 .ok()
                 .map(Arc::new),
+            CurveKind::FixedSpline { curve, .. } => Some(curve.clone()),
             _ => None,
         }
     }

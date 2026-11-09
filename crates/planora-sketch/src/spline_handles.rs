@@ -30,6 +30,8 @@ pub(crate) const HANDLE_MAX_OPENING: f64 = 2.5;
 
 /// Unter diesem `|κ|·L` gilt die Krümmung als fast null: Es gibt keinen endlichen Bogen (B5).
 const NEAR_ZERO_CURVATURE: f64 = 1e-3;
+/// Bis zu diesem Vielfachen von `tol.linear` gilt die Krümmung eines festen Spline-Endes als null.
+const FIXED_SPLINE_FLAT: f64 = 0.1;
 
 /// Startradius bei fast null Krümmung, als Vielfaches der Grifflänge (B5).
 const NEAR_ZERO_RADIUS: f64 = 1000.0;
@@ -605,8 +607,10 @@ impl Sketch {
                     .ok_or_else(wrong_end)?;
                 let first = curve_starts_at(&s.curves[c].kind, at);
                 let reach = s.aim_tip(c, at, if first { -into_partner } else { into_partner })?;
-                if partner_end == SmoothEnd::ControlSpline
-                    && partner_kappa.abs() * reach < NEAR_ZERO_CURVATURE
+                if matches!(
+                    partner_end,
+                    SmoothEnd::ControlSpline | SmoothEnd::FixedSpline
+                ) && partner_kappa.abs() * reach < NEAR_ZERO_CURVATURE
                 {
                     return Err(flat());
                 }
@@ -811,9 +815,13 @@ impl Sketch {
         let reach = self.aim_tip(c, at, if first { -into_partner } else { into_partner })?;
         let kappa = if first { -partner_kappa } else { partner_kappa };
         // Ein fast gerader Kontrollpunkt-Spline: Es gibt keinen endlichen Bogen (B5), er passt sich
-        // über die Krümmungszeile auf 0 an.
-        let flat =
-            partner_end == SmoothEnd::ControlSpline && kappa.abs() * reach < NEAR_ZERO_CURVATURE;
+        // über die Krümmungszeile auf 0 an. Der feste Spline passt sich nie an: `Straight` nur, wenn seine
+        // Krümmung die Zeile schon erfüllt, sonst ein sehr großer Bogen mit genau seinem Wert.
+        let flat = match partner_end {
+            SmoothEnd::ControlSpline => kappa.abs() * reach < NEAR_ZERO_CURVATURE,
+            SmoothEnd::FixedSpline => kappa.abs() <= FIXED_SPLINE_FLAT * self.tol.linear,
+            _ => false,
+        };
         if step == SmoothStep::Straighten || flat {
             self.straighten_handle(c, at)
         } else {

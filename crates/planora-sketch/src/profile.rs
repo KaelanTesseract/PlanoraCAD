@@ -389,6 +389,8 @@ impl Sketch {
                     return Err(SketchError::SelfIntersecting);
                 }
             }
+            // Fest und beim Anlegen geprüft; geschlossen ist hier erlaubt.
+            CurveKind::FixedSpline { .. } => {}
         }
         let Some(g) = self.geom(id) else {
             return Ok(None);

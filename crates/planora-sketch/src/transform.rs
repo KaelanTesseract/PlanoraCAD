@@ -306,6 +306,11 @@ pub(crate) fn map_curve(
             apex: p(*apex),
             rho: *rho,
         },
+        CurveKind::FixedSpline { start, end, curve } => CurveKind::FixedSpline {
+            start: p(*start),
+            end: p(*end),
+            curve: curve.clone(),
+        },
         CurveKind::EllipticArc {
             center,
             ax,
@@ -791,6 +796,9 @@ impl Sketch {
                 apex,
                 rho,
             } => self.add_conic_as(points[&start], points[&end], points[&apex], rho)?,
+            CurveKind::FixedSpline { .. } => {
+                return Err(SketchError::WrongType(tr!("sketch-fixed-spline-no-copy")));
+            }
             ref kind @ (CurveKind::Ellipse { ax, ay, minor, .. }
             | CurveKind::EllipticArc { ax, ay, minor, .. }) => {
                 if !sizes.contains_key(&ax) {
@@ -945,6 +953,11 @@ impl Sketch {
         let stretching = s.factor != 1.0;
         // Eine feste Kurve behält auch Größe und Lage ihrer Achsen, wenn die Mitte stehen bleibt.
         for &c in &set.curves {
+            // Der feste Spline bleibt immer stehen, auch ohne `Fixed` an seinen Enden oder wenn sein
+            // einziger Punkt die Mitte des Maßstabs ist.
+            if let CurveKind::FixedSpline { start, .. } = self.curves[c].kind {
+                return Err(TransformBlock::FixedInSet(start));
+            }
             if !self.is_held_curve(c, &held) {
                 continue;
             }
@@ -1198,6 +1211,9 @@ impl Sketch {
     /// (Achshilfslinie, Kantenkopie). Ein Kreis mit fester Mitte und freiem Radius zählt nicht.
     fn is_held_curve(&self, c: CurveId, held: &HashSet<PointId>) -> bool {
         let kind = &self.curves[c].kind;
+        if matches!(kind, CurveKind::FixedSpline { .. }) {
+            return true;
+        }
         if !kind.points().iter().all(|p| held.contains(p)) {
             return false;
         }
@@ -1247,6 +1263,8 @@ impl Sketch {
             CurveKind::Conic {
                 start, end, apex, ..
             } => close(start, apex) && close(apex, end),
+            // Bleibt, wie sie ist; bewegen geht ohnehin nicht.
+            CurveKind::FixedSpline { .. } => false,
         }
     }
 

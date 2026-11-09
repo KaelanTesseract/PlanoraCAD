@@ -110,6 +110,9 @@ impl Sketch {
     /// Das Stück der Kurve `c`, das ein Klick bei `at` stutzen würde (Vorschau beim
     /// Überfahren). `None` für unbekannte oder entartete Kurven und nicht endliches `at`.
     pub fn trim_piece(&self, c: CurveId, at: DVec2) -> Option<TrimPiece> {
+        if matches!(self.curve(c)?.kind, CurveKind::FixedSpline { .. }) {
+            return None;
+        }
         let (g, b) = self.locate_trim(c, at)?;
         Some(TrimPiece {
             curve: c,
@@ -128,6 +131,7 @@ impl Sketch {
     /// Ist `c` Vorlage oder Exemplar eines Musters, wird das Muster vorher aufgelöst.
     pub fn trim(&mut self, c: CurveId, at: DVec2) -> Result<Vec<CurveId>, SketchError> {
         self.check_curve(c)?;
+        self.refuse_fixed_spline(c)?;
         if !at.is_finite() {
             return Err(SketchError::InvalidInput(tr!("sketch-err-target-finite")));
         }
@@ -163,6 +167,7 @@ impl Sketch {
     /// Ist `c` Vorlage oder Exemplar eines Musters, wird das Muster vorher aufgelöst.
     pub fn extend(&mut self, c: CurveId, at: DVec2) -> Result<bool, SketchError> {
         self.check_curve(c)?;
+        self.refuse_fixed_spline(c)?;
         if !at.is_finite() {
             return Err(SketchError::InvalidInput(tr!("sketch-err-target-finite")));
         }
@@ -192,6 +197,7 @@ impl Sketch {
     /// Ist `c` Vorlage oder Exemplar eines Musters, wird das Muster vorher aufgelöst.
     pub fn break_curve(&mut self, c: CurveId, at: DVec2) -> Result<Vec<CurveId>, SketchError> {
         self.check_curve(c)?;
+        self.refuse_fixed_spline(c)?;
         if !at.is_finite() {
             return Err(SketchError::InvalidInput(tr!("sketch-err-target-finite")));
         }
@@ -782,6 +788,9 @@ impl Sketch {
                     CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => {
                         unreachable!("closed curves are handled above")
                     }
+                    CurveKind::FixedSpline { .. } => {
+                        return Err(SketchError::WrongType(tr!("sketch-fixed-spline-no-copy")));
+                    }
                 };
                 let mut pieces = Vec::new();
                 if keep {
@@ -840,6 +849,9 @@ impl Sketch {
                         CurveKind::Conic { .. } => self.conic_part(c, u0, u1, s, e)?,
                         CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => {
                             unreachable!("closed curves are handled above")
+                        }
+                        CurveKind::FixedSpline { .. } => {
+                            unreachable!("refused above")
                         }
                     });
                 }
@@ -1067,8 +1079,10 @@ impl Sketch {
                 apex,
                 rho,
             } => self.add_conic_as(start, end, apex, rho),
-            CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => {
-                unreachable!("pieces are open curves")
+            CurveKind::Circle { .. }
+            | CurveKind::Ellipse { .. }
+            | CurveKind::FixedSpline { .. } => {
+                unreachable!("pieces are open curves of a free kind")
             }
         }
     }

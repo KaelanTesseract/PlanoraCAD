@@ -160,7 +160,8 @@ impl Sketch {
             }
             CurveKind::Spline { .. }
             | CurveKind::ControlSpline { .. }
-            | CurveKind::Conic { .. } => {
+            | CurveKind::Conic { .. }
+            | CurveKind::FixedSpline { .. } => {
                 return None;
             }
         })

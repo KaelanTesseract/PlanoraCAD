@@ -31,6 +31,7 @@ fn kinds(s: &AppState) -> Vec<&'static str> {
             CurveKind::Spline { .. } => "Spline",
             CurveKind::ControlSpline { .. } => "Spline mit Kontrollpunkten",
             CurveKind::Conic { .. } => "Kegelschnitt",
+            CurveKind::FixedSpline { .. } => "Fester Spline",
         })
         .collect()
 }
@@ -273,8 +274,9 @@ fn link_off_creates_no_copy() {
     assert!(sk.curves().all(|(_, c)| !c.construction));
 }
 
+/// Skizzen 7: Freiformkanten werden feste Splines; früher wurden sie übersprungen.
 #[test]
-fn freeform_edge_is_skipped_with_count() {
+fn freeform_edges_become_fixed_splines_without_duplicates() {
     let mut s = AppState::new();
     // Profil aus zwei Linien, einem Spline und einer Linie (wie tests/nurbs_app.rs).
     let mut sk = Sketch::new(Frame::WORLD, "Skizze", Tolerance::default());
@@ -293,18 +295,34 @@ fn freeform_edge_is_skipped_with_count() {
         .unwrap();
     s.open_sketch(id).unwrap();
     let body = s.bodies.len() - 1;
+    // body_projection_has_no_duplicates: Ober- und Unterkante des Splines liegen übereinander.
     let n = s
         .project_into_sketch(ProjectTarget::Body(body), true)
         .unwrap();
-    assert_eq!(n, 3, "drei Linien");
-    assert_eq!(kinds(&s), vec!["Linie"; 3]);
-    let text = s.sketch_session.as_ref().unwrap().message_text().unwrap();
+    assert_eq!(n, 4, "drei Linien und ein fester Spline");
+    let mut names = kinds(&s);
+    names.sort();
+    assert_eq!(names, vec!["Fester Spline", "Linie", "Linie", "Linie"]);
     assert!(
-        text.contains(&tr!("sketch-project-skipped", count = 2)),
-        "unten und oben je ein Spline: {text}"
+        s.sketch_session.as_ref().unwrap().message_text().is_none(),
+        "nichts übersprungen"
     );
-    assert!(!text.contains("ließen sich nicht"), "nur Freiform: {text}");
-    // Die Freiformkante allein: Fehler mit dem Grund.
+    // Noch einmal: nichts Neues, auch nicht gegen die schon vorhandene Projektion.
+    assert!(
+        s.project_into_sketch(ProjectTarget::Body(body), true)
+            .is_err()
+    );
+    assert_eq!(kinds(&s).len(), 4);
+    // Die Form stimmt: durch den mittleren Stützpunkt.
+    let sk = &draft(&s).sketch;
+    let (c, _) = sk
+        .curves()
+        .find(|(_, d)| matches!(d.kind, CurveKind::FixedSpline { .. }))
+        .unwrap();
+    let top = DVec2::new(5.0, 7.0);
+    assert!(sk.nearest_on_curve(c, top).unwrap().distance(top) < 1e-6);
+    assert!(draft(&s).copies.iter().any(|copy| copy.curve == c));
+    // Die Freiformkante allein geht ebenso; sie liegt schon in der Skizze.
     let solid = s.bodies[body].solid.clone();
     let spline = solid
         .edges
@@ -312,89 +330,80 @@ fn freeform_edge_is_skipped_with_count() {
         .find(|(_, e)| matches!(e.curve, planora_kernel::Curve::Nurbs(_)))
         .unwrap()
         .0;
-    let err = s
-        .project_into_sketch(ProjectTarget::Edge(body, spline), true)
-        .unwrap_err();
-    assert!(err.contains(&tr!("sketch-err-freeform-edge")), "{err}");
-    // Die Fläche aus dem Spline: alles übersprungen ⇒ Fehler mit Zahl, nichts angelegt.
-    let face = solid
-        .faces
-        .iter()
-        .find(|(_, f)| f.surface.kind() == planora_kernel::SurfaceKind::Nurbs)
-        .unwrap()
-        .0;
-    let err = s
-        .project_into_sketch(ProjectTarget::Face(body, face), true)
-        .unwrap_err();
     assert!(
-        err.contains(&tr!("sketch-project-skipped", count = 2)),
-        "{err}"
+        s.project_into_sketch(ProjectTarget::Edge(body, spline), true)
+            .is_err()
     );
-    assert_eq!(kinds(&s).len(), 3);
+    assert_eq!(kinds(&s).len(), 4);
 }
 
+/// Skizzen 7: `skipped_freeform` zählt nur noch echte Fehlschläge.
 #[test]
-fn cross_hole_gives_lines_and_nothing_skipped() {
-    // Quader 20 × 20 × 10 mit senkrechtem Loch r = 2 (Kreise in waagerechten Ebenen); die
-    // Skizze liegt auf der Seitenfläche y = 0, steht also senkrecht auf den Kreisen. Wie in
-    // Fusion werden die Kreise Linien (Durchmesser), nichts wird übersprungen.
+fn only_failures_count_as_skipped_freeform() {
+    let mut s = box_with_sketch_on_top();
+    let (se, sk) = s.session_sketch_mut().unwrap();
+    let nurbs = planora_math::nurbs::NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![
+            DVec3::new(0.0, 0.0, 5.0),
+            DVec3::new(1.0, 2.0, 5.0),
+            DVec3::new(2.0, 0.0, 5.0),
+        ],
+        vec![1.0; 3],
+    )
+    .unwrap();
+    let curve = planora_kernel::Curve::Nurbs(std::sync::Arc::new(nurbs));
+    let out = se
+        .project_pieces(
+            sk,
+            &[(curve.clone(), 0.0, 1.0), (curve, 0.0, 7.0)],
+            &[],
+            false,
+        )
+        .unwrap();
+    assert_eq!(out.added.len(), 1, "der gültige Bereich");
+    assert_eq!(out.skipped_freeform, 1, "der Bereich außerhalb der Kurve");
+    assert_eq!(out.skipped_other, 0);
+    let text = tr!("sketch-project-skipped", count = 1);
+    assert!(!text.contains("noch nicht"), "{text}");
+}
+
+/// Löschen nimmt den Verweis auf die Kante mit.
+#[test]
+fn deleted_fixed_spline_takes_its_edge_copy_along() {
     let mut s = AppState::new();
-    s.document
-        .add_feature(
-            "Quader",
-            FeatureKind::Box {
-                size: DVec3::new(20.0, 20.0, 10.0),
-                origin: DVec3::ZERO,
-            },
-        )
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze", Tolerance::default());
+    let p: Vec<_> = [(0.0, 0.0), (10.0, 0.0), (10.0, 5.0), (5.0, 7.0), (0.0, 5.0)]
+        .iter()
+        .map(|&(x, y)| sk.add_point(x, y).unwrap())
+        .collect();
+    sk.add_line(p[0], p[1]).unwrap();
+    sk.add_line(p[1], p[2]).unwrap();
+    sk.add_spline(&p[2..5]).unwrap();
+    sk.add_line(p[4], p[0]).unwrap();
+    let base = add_sketch(&mut s, sk);
+    extrude(&mut s, base, 4.0);
+    let id = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
         .unwrap();
-    s.document
-        .add_feature(
-            "Zylinder",
-            FeatureKind::Cylinder {
-                radius: 2.0,
-                height: 14.0,
-                origin: DVec3::new(10.0, 10.0, -2.0),
-            },
-        )
-        .unwrap();
-    s.refresh();
-    s.add_boolean(0, 1, planora_kernel::boolean::BoolOp::Difference)
-        .unwrap();
-    let body = s.bodies.len() - 1;
-    let side = {
-        let solid = &s.bodies[body].solid;
-        solid
-            .faces
-            .iter()
-            .find(|(id, _)| {
-                planora_sketch::plane_of_face(solid, *id)
-                    .is_some_and(|f| f.z.y < -0.5 && f.origin.y.abs() < 1e-9)
-            })
-            .map(|(id, _)| id)
-            .expect("Seitenfläche y = 0")
-    };
-    let id = s.new_sketch_on_face(body, side).unwrap();
     s.open_sketch(id).unwrap();
-    s.observe_sketch(false);
-    let n = s
-        .project_into_sketch(ProjectTarget::Body(body), true)
+    let body = s.bodies.len() - 1;
+    s.project_into_sketch(ProjectTarget::Body(body), true)
         .unwrap();
-    assert!(
-        s.sketch_session.as_ref().unwrap().message.is_none(),
-        "{:?}",
-        s.sketch_session.as_ref().unwrap().message_text()
-    );
-    assert_eq!(kinds(&s), vec!["Linie"; n]);
-    let sk = &draft(&s).sketch;
-    let mut lengths: Vec<f64> = sk.curves().filter_map(|(c, _)| sk.line_length(c)).collect();
-    lengths.sort_by(f64::total_cmp);
-    // Rand der Seite (20, 20, 10, 10) und die beiden Lochkreise als Linien der Länge 4.
-    assert_eq!(n, 6, "{lengths:?}");
-    assert!(
-        (lengths[0] - 4.0).abs() < 1e-9 && (lengths[1] - 4.0).abs() < 1e-9,
-        "{lengths:?}"
-    );
+    let copies = draft(&s).copies.len();
+    let c = {
+        let sk = &draft(&s).sketch;
+        sk.curves()
+            .find(|(_, d)| matches!(d.kind, CurveKind::FixedSpline { .. }))
+            .unwrap()
+            .0
+    };
+    let draft = s.sketch_draft.as_mut().unwrap();
+    draft.sketch.remove_curve(c).unwrap();
+    draft.prune_copies();
+    assert_eq!(draft.copies.len(), copies - 1);
+    assert!(draft.copies.iter().all(|copy| copy.curve != c));
 }
 
 #[test]

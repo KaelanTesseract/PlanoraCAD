@@ -48,7 +48,7 @@ const PROJECTED: ProjectStyle = ProjectStyle {
 pub struct ProjectOutcome {
     /// Je neue Kurve der Index ihres Stücks und die Kurve.
     pub added: Vec<(usize, CurveId)>,
-    /// Freiformkurven, die sich noch nicht projizieren lassen.
+    /// Freiformkurven, deren Projektion fehlschlug.
     pub skipped_freeform: usize,
     /// Andere Stücke, die sich nicht projizieren lassen.
     pub skipped_other: usize,
@@ -111,7 +111,8 @@ impl SketchSession {
 }
 
 /// Lage einer Kurve zum Vergleich: Linie über ihre Enden, Kreis über Mitte und Radius, Bögen über
-/// Anfang, Mitte des Bogens und Ende, Ellipse über Mitte und die Enden ihrer Halbachsen.
+/// Anfang, Mitte des Bogens und Ende, Ellipse über Mitte und die Enden ihrer Halbachsen, feste Splines
+/// über Anfang, Mitte des Bereichs und Ende.
 #[derive(Clone, Copy, Debug)]
 enum CurveKey {
     Line(DVec2, DVec2),
@@ -119,6 +120,7 @@ enum CurveKey {
     Arc([DVec2; 3]),
     Ellipse([DVec2; 3]),
     EllipticArc([DVec2; 3]),
+    Spline([DVec2; 3]),
 }
 
 impl CurveKey {
@@ -133,7 +135,8 @@ impl CurveKey {
                 near(*m, *n) && (r - s).abs() <= tol
             }
             (CurveKey::Arc(a), CurveKey::Arc(b))
-            | (CurveKey::EllipticArc(a), CurveKey::EllipticArc(b)) => {
+            | (CurveKey::EllipticArc(a), CurveKey::EllipticArc(b))
+            | (CurveKey::Spline(a), CurveKey::Spline(b)) => {
                 near(a[1], b[1])
                     && ((near(a[0], b[0]) && near(a[2], b[2]))
                         || (near(a[0], b[2]) && near(a[2], b[0])))
@@ -151,7 +154,7 @@ impl CurveKey {
     }
 }
 
-/// Die Lage der lebenden Kurve `c` zum Vergleich ([`CurveKey`]); Splines vergleicht niemand.
+/// Die Lage der lebenden Kurve `c` zum Vergleich ([`CurveKey`]); freie Splines vergleicht niemand.
 fn key_of(sk: &Sketch, c: CurveId) -> Option<CurveKey> {
     let pos = |p| sk.point_xy(p).ok();
     Some(match &sk.curve(c)?.kind {
@@ -176,6 +179,10 @@ fn key_of(sk: &Sketch, c: CurveId) -> Option<CurveKey> {
             let t1 = sk.ellipse_param_of(c, e)?;
             let mid = sk.ellipse_point(c, t0 + sweep(t1 - t0, sk) / 2.0)?;
             CurveKey::EllipticArc([s, mid, e])
+        }
+        CurveKind::FixedSpline { start, end, .. } => {
+            let (lo, hi) = sk.curve_domain(c)?;
+            CurveKey::Spline([pos(*start)?, sk.curve_eval(c, 0.5 * (lo + hi))?, pos(*end)?])
         }
         CurveKind::Spline { .. } | CurveKind::ControlSpline { .. } | CurveKind::Conic { .. } => {
             return None;

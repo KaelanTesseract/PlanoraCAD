@@ -133,6 +133,10 @@ impl SnapIndex {
                     other_role.insert(apex.index());
                     other_role.insert(end.index());
                 }
+                CurveKind::FixedSpline { start, end, .. } => {
+                    other_role.insert(start.index());
+                    other_role.insert(end.index());
+                }
             }
             // Griff-Kurven sind keine Fangziele, nur ihre Punkte, wenn sie sichtbar sind.
             if handle_curves.contains(&id) {

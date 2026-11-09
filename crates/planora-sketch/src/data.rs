@@ -228,6 +228,13 @@ impl Sketch {
                     }
                     check_conic_rho(*rho)?;
                 }
+                // Knoten, Gewichte und Zahlen hat `NurbsCurve::new` schon geprüft.
+                CurveKind::FixedSpline { start, end, curve } => {
+                    let flat = curve.control_points().iter().all(|q| q.z == 0.0);
+                    if !flat || (start == end && !curve.is_closed(d.tolerance.linear)) {
+                        return Err(bad(tr!("sketch-err-data-fixed-spline")));
+                    }
+                }
                 _ => {}
             }
             if c.alive && pts.iter().any(|p| !point_alive(*p)) {

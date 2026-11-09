@@ -31,6 +31,7 @@ use planora_feature::{
 };
 use planora_i18n::{DisplayUnit, tr};
 use planora_kernel::BoolOp;
+use planora_math::nurbs::NurbsCurve;
 use planora_math::{DQuat, DVec3, Frame, Tolerance};
 use planora_sketch::pattern::{CircularMode, PatternDir, PatternInstance, PatternKind};
 use planora_sketch::{
@@ -119,13 +120,15 @@ fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
     }
 }
 /// Braucht die Art Format 17 (Skizzen 7)? Eine Skizze mit einem Spline mit Kontrollpunkten, einem
-/// Kegelschnitt oder einem Griff, auch einem gelöschten Eintrag: Er steht in der Datei.
+/// Kegelschnitt, einem festen Spline oder einem Griff, auch einem gelöschten Eintrag: Er steht in der Datei.
 fn needs_format_17(k: &FeatureKind) -> bool {
     matches!(k, FeatureKind::Sketch(sf) if sf
     .sketch
     .curve_entries()
     .any(|c| match c {
-        CurveKind::ControlSpline { .. } | CurveKind::Conic { .. } => true,
+        CurveKind::ControlSpline { .. } | CurveKind::Conic { .. } | CurveKind::FixedSpline { .. } => {
+            true
+        }
         CurveKind::Spline { handles, .. } => !handles.is_empty(),
         _ => false,
     }) || sf
@@ -380,6 +383,14 @@ fn curve_to(k: &CurveKind) -> CurveKindDto {
             scheitel: apex.index(),
             rho: *rho,
         },
+        CurveKind::FixedSpline { start, end, curve } => CurveKindDto::FesterSpline {
+            start: start.index(),
+            ende: end.index(),
+            grad: curve.degree(),
+            knoten: curve.knots().knots().to_vec(),
+            punkte: curve.control_points().iter().map(|q| [q.x, q.y]).collect(),
+            gewichte: curve.weights().to_vec(),
+        },
     }
 }
 
@@ -422,9 +433,9 @@ fn griff_from(d: &GriffDto) -> SplineHandle {
     }
 }
 
-fn curve_from(d: &CurveKindDto) -> CurveKind {
+fn curve_from(d: &CurveKindDto) -> std::result::Result<CurveKind, String> {
     let p = PointId::from_index;
-    match d {
+    Ok(match d {
         CurveKindDto::Linie { a, b } => CurveKind::Line { a: p(*a), b: p(*b) },
         CurveKindDto::Kreis { mitte, radius } => CurveKind::Circle {
             center: p(*mitte),
@@ -485,7 +496,27 @@ fn curve_from(d: &CurveKindDto) -> CurveKind {
             apex: p(*scheitel),
             rho: *rho,
         },
-    }
+        CurveKindDto::FesterSpline {
+            start,
+            ende,
+            grad,
+            knoten,
+            punkte,
+            gewichte,
+        } => CurveKind::FixedSpline {
+            start: p(*start),
+            end: p(*ende),
+            curve: Arc::new(
+                NurbsCurve::new(
+                    *grad,
+                    knoten.clone(),
+                    punkte.iter().map(|q| DVec3::new(q[0], q[1], 0.0)).collect(),
+                    gewichte.clone(),
+                )
+                .map_err(|e| e.to_string())?,
+            ),
+        },
+    })
 }
 
 fn constraint_to(k: &ConstraintKind) -> ConstraintKindDto {
@@ -910,13 +941,15 @@ fn sketch_from(origin: &str, feature: &str, d: &SketchDto) -> Result<(Sketch, us
         curves: d
             .kurven
             .iter()
-            .map(|c| CurveRecord {
-                kind: curve_from(&c.art),
-                construction: c.konstruktion,
-                centerline: c.mittellinie,
-                alive: c.aktiv,
+            .map(|c| {
+                Ok(CurveRecord {
+                    kind: curve_from(&c.art).map_err(ctx)?,
+                    construction: c.konstruktion,
+                    centerline: c.mittellinie,
+                    alive: c.aktiv,
+                })
             })
-            .collect(),
+            .collect::<Result<Vec<_>>>()?,
         constraints: d
             .abhaengigkeiten
             .iter()
@@ -2990,7 +3023,9 @@ fn has_format_17_data(k: &KindDto) -> bool {
     .kurven
     .iter()
     .any(|c| match &c.art {
-        CurveKindDto::KontrollSpline { .. } | CurveKindDto::Kegelschnitt { .. } => true,
+        CurveKindDto::KontrollSpline { .. }
+        | CurveKindDto::Kegelschnitt { .. }
+        | CurveKindDto::FesterSpline { .. } => true,
         CurveKindDto::Spline { griffe, .. } => !griffe.is_empty(),
         _ => false,
     }) || s

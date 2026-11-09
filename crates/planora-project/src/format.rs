@@ -793,6 +793,16 @@ pub enum CurveKindDto {
         scheitel: usize,
         rho: f64,
     },
+    /// Ab Format 17: projizierte Freiformkurve, unveränderlich; `punkte` in Skizzenkoordinaten.
+    /// Geschlossen: `start == ende`.
+    FesterSpline {
+        start: usize,
+        ende: usize,
+        grad: usize,
+        knoten: Vec<f64>,
+        punkte: Vec<[f64; 2]>,
+        gewichte: Vec<f64>,
+    },
 }
 
 /// Griff an einem Stützpunkt eines Splines (ab Format 17).

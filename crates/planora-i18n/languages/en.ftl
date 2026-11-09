@@ -1239,8 +1239,8 @@ sketch-project-bodies = Bodies
 sketch-project-link = Projection link
 sketch-project-link-hint = On: the curves follow the body. Off: fixed geometry without a reference.
 sketch-project-skipped = { $count ->
-    [one] One edge was skipped (freeform edges cannot be projected yet)
-   *[other] { $count } edges were skipped (freeform edges cannot be projected yet)
+    [one] One freeform edge could not be projected and was skipped
+   *[other] { $count } freeform edges could not be projected and were skipped
 }
 sketch-project-skipped-other = { $count ->
     [one] One edge could not be projected and was skipped
@@ -1803,7 +1803,9 @@ sketch-err-edge-no-range = The edge has no parameter range
 sketch-err-edge-perpendicular = The edge is perpendicular to the sketch plane and would only be a point
 sketch-err-arc-not-parallel = Arcs that are not parallel to the sketch plane are not supported
 sketch-err-ellipse-arc = Elliptical arcs are not supported, only full ellipses
-sketch-err-freeform-edge = Freeform edges cannot be taken into the sketch yet
+sketch-err-freeform-edge = This freeform edge cannot be taken into the sketch
+sketch-fixed-spline-no-copy = A fixed spline cannot be trimmed, broken, extended, copied, mirrored, patterned or moved
+sketch-err-data-fixed-spline = A fixed spline has invalid data
 sketch-err-curve-perpendicular = The curve is perpendicular to the sketch plane and would only be a line segment
 sketch-err-what-x = The x coordinate
 sketch-err-what-y = The y coordinate

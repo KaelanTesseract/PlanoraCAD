@@ -30,6 +30,7 @@ fn kinds(sk: &Sketch) -> Vec<&'static str> {
             CurveKind::Spline { .. } => "Spline",
             CurveKind::ControlSpline { .. } => "Spline mit Kontrollpunkten",
             CurveKind::Conic { .. } => "Kegelschnitt",
+            CurveKind::FixedSpline { .. } => "Fester Spline",
         })
         .collect()
 }

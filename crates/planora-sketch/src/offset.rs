@@ -315,7 +315,9 @@ fn open_ends(sketch: &Sketch, c: CurveId) -> Option<[DVec2; 2]> {
         CurveKind::Spline { points, .. } | CurveKind::ControlSpline { points, .. } => {
             (*points.first()?, *points.last()?)
         }
-        CurveKind::Conic { start, end, .. } => (*start, *end),
+        CurveKind::Conic { start, end, .. } | CurveKind::FixedSpline { start, end, .. } => {
+            (*start, *end)
+        }
         CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => return None,
     };
     Some([sketch.pos(a), sketch.pos(b)])
@@ -456,7 +458,9 @@ pub(crate) fn ends_of(kind: &CurveKind) -> Vec<PointId> {
         CurveKind::Spline { points, .. } | CurveKind::ControlSpline { points, .. } => {
             vec![points[0], points[points.len() - 1]]
         }
-        CurveKind::Conic { start, end, .. } => vec![*start, *end],
+        CurveKind::Conic { start, end, .. } | CurveKind::FixedSpline { start, end, .. } => {
+            vec![*start, *end]
+        }
         CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => Vec::new(),
     }
 }
@@ -784,7 +788,8 @@ fn cut_approx(points: &[DVec2], js: DVec2, je: DVec2, tol: f64) -> Cut {
     let g = spline_geom(points);
     let last = points.len() - 1;
     let place = |j: DVec2, end_value: usize| -> f64 {
-        if j == points[end_value] {
+        // Auf einer geschlossenen Näherung wäre der nächste Punkt an der Naht mal der Anfang, mal das Ende.
+        if j.distance(points[end_value]) <= tol {
             return end_value as f64;
         }
         let t = g.nearest(j);
@@ -804,7 +809,8 @@ fn cut_approx(points: &[DVec2], js: DVec2, je: DVec2, tol: f64) -> Cut {
     kept.push(je);
     let full = points.windows(2).map(|w| w[0].distance(w[1])).sum::<f64>();
     let length = (te - ts) * full / last as f64;
-    let n_ok = te > ts && kept.len() >= 2 && js != je;
+    // Gleiche Enden gehen nur, wenn die Näherung dazwischen läuft: eine geschlossene Kurve.
+    let n_ok = te > ts && kept.len() >= 2 && (js != je || kept.len() > 2);
     Cut {
         start: js,
         end: je,
@@ -1914,6 +1920,13 @@ impl Sketch {
                     } else {
                         self.add_point(p.x, p.y)?
                     });
+                }
+                // Geschlossene Näherung: Ein Spline hat keinen Punkt zweimal, darum ist sein Ende ein
+                // eigener, deckungsgleicher Punkt.
+                if ids[0] == ids[last] {
+                    let p = points[last];
+                    ids[last] = self.add_point(p.x, p.y)?;
+                    self.add_constraint(ConstraintKind::Coincident(ids[0], ids[last]))?;
                 }
                 self.add_spline(&ids)?
             }

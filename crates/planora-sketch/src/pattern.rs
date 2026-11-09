@@ -194,6 +194,8 @@ pub enum PatternProblem {
     /// Eine (nicht interne) Abhängigkeit liest nur Exemplare: Sie hätte keine Wirkung, weil
     /// Exemplare der Vorlage folgen (Schlusskorrektur I1). Maße werden stattdessen anzeigend.
     InstanceOnly,
+    /// Ein fester Spline soll Vorlage sein: Er hat keine Kopie (Skizzen 7).
+    FixedSpline,
 }
 
 impl PatternProblem {
@@ -211,6 +213,7 @@ impl PatternProblem {
             PatternProblem::InstanceAsSource => tr!("sketch-pattern-instance-source"),
             PatternProblem::Cycle => tr!("sketch-pattern-cycle"),
             PatternProblem::InstanceOnly => tr!("sketch-pattern-instance-only"),
+            PatternProblem::FixedSpline => tr!("sketch-fixed-spline-no-copy"),
         }
     }
 
@@ -646,6 +649,9 @@ impl Sketch {
         for (i, &c) in plan.sources.iter().enumerate() {
             if self.check_curve(c).is_err() || plan.sources[..i].contains(&c) {
                 return Err(PatternProblem::Empty);
+            }
+            if self.refuse_fixed_spline(c).is_err() {
+                return Err(PatternProblem::FixedSpline);
             }
         }
         let mut curves: HashSet<CurveId> = HashSet::new();

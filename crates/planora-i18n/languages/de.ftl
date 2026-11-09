@@ -1222,8 +1222,8 @@ sketch-project-bodies = Körper
 sketch-project-link = Projektionsverknüpfung
 sketch-project-link-hint = An: Die Kurven folgen dem Körper. Aus: feste Geometrie ohne Bezug.
 sketch-project-skipped = { $count ->
-    [one] Eine Kante wurde übersprungen (Freiformkanten lassen sich noch nicht projizieren)
-   *[other] { $count } Kanten wurden übersprungen (Freiformkanten lassen sich noch nicht projizieren)
+    [one] Eine Freiformkante ließ sich nicht projizieren und wurde übersprungen
+   *[other] { $count } Freiformkanten ließen sich nicht projizieren und wurden übersprungen
 }
 sketch-project-skipped-other = { $count ->
     [one] Eine Kante ließ sich nicht projizieren und wurde übersprungen
@@ -1786,7 +1786,9 @@ sketch-err-edge-no-range = Die Kante hat keinen Parameterbereich
 sketch-err-edge-perpendicular = Die Kante steht senkrecht zur Skizzenebene und wäre nur ein Punkt
 sketch-err-arc-not-parallel = Kreisbögen, die nicht parallel zur Skizzenebene liegen, werden nicht unterstützt
 sketch-err-ellipse-arc = Ellipsenbögen werden nicht unterstützt, nur ganze Ellipsen
-sketch-err-freeform-edge = Freiformkanten können noch nicht in die Skizze übernommen werden
+sketch-err-freeform-edge = Diese Freiformkante lässt sich nicht in die Skizze übernehmen
+sketch-fixed-spline-no-copy = Ein fester Spline lässt sich nicht stutzen, brechen, dehnen, kopieren, spiegeln, mustern oder bewegen
+sketch-err-data-fixed-spline = Ein fester Spline hat ungültige Daten
 sketch-err-curve-perpendicular = Die Kurve steht senkrecht zur Skizzenebene und wäre nur eine Strecke
 sketch-err-what-x = Die x-Koordinate
 sketch-err-what-y = Die y-Koordinate

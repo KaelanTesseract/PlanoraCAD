@@ -665,3 +665,249 @@ fn oblique_arc_projection_follows_without_warning() {
     assert_eq!(feature.status, FeatureStatus::Ok);
     assert!(feature.warning().is_none(), "{:?}", feature.warning());
 }
+
+// ---- Skizzen 7, Task 10: feste Splines ---------------------------------------------------------
+
+/// Profil aus drei Linien und einem Spline durch `(5, top)`.
+fn spline_base(top: f64) -> Sketch {
+    let mut sk = Sketch::new(Frame::WORLD, "Basis", tol());
+    let p: Vec<_> = [(0.0, 0.0), (10.0, 0.0), (10.0, 5.0), (5.0, top), (0.0, 5.0)]
+        .iter()
+        .map(|&(x, y)| sk.add_point(x, y).unwrap())
+        .collect();
+    sk.add_line(p[0], p[1]).unwrap();
+    sk.add_line(p[1], p[2]).unwrap();
+    sk.add_spline(&p[2..5]).unwrap();
+    sk.add_line(p[4], p[0]).unwrap();
+    sk
+}
+
+/// Körper aus [`spline_base`], darauf eine Skizze mit der projizierten oberen Freiformkante und einem
+/// Punkt auf ihr. Skizze 2 steht auf XY.
+fn body_with_fixed_spline() -> (Document, FeatureId, FeatureId, CurveId, PointId) {
+    let mut d = Document::new();
+    let base = d
+        .add_feature(
+            "Basis",
+            sketch_kind(spline_base(7.0), StandardPlane::XY, vec![]),
+        )
+        .unwrap();
+    d.add_feature(
+        "Körper",
+        FeatureKind::Extrude {
+            sketch: base,
+            profiles: ProfileSel::Index(0),
+            height: 4.0,
+        },
+    )
+    .unwrap();
+    let solid = d.visible_bodies()[0].solid.clone();
+    let (id, e) = solid
+        .edges
+        .iter()
+        .find(|(_, e)| matches!(e.curve, planora_kernel::Curve::Nurbs(_)))
+        .expect("Freiformkante");
+    let edge = EdgeRef::from_edge(&solid, id, &tol()).unwrap();
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze", tol());
+    let c = sk
+        .add_projected_curve(&e.curve, e.t0, e.t1, LINKED)
+        .unwrap();
+    let q = sk.add_point(5.0, 7.5).unwrap();
+    sk.add_constraint(K::PointOnCurve(q, c)).unwrap();
+    assert_eq!(
+        sk.solve().status,
+        planora_sketch::solver::SolveStatus::Solved
+    );
+    let s = d
+        .add_feature(
+            "Skizze",
+            sketch_kind(sk, StandardPlane::XY, vec![edge_copy(c, edge)]),
+        )
+        .unwrap();
+    assert!(d.feature(s).unwrap().warning().is_none());
+    (d, base, s, c, q)
+}
+
+fn set_base(d: &mut Document, base: FeatureId, sketch: Sketch) {
+    d.update(base, |k| {
+        if let FeatureKind::Sketch(sf) = k {
+            sf.sketch = sketch;
+        }
+    })
+    .unwrap();
+}
+
+#[test]
+fn reproject_keeps_id_and_constraints() {
+    let (mut d, base, s, c, q) = body_with_fixed_spline();
+    let before = match &d.sketch_of(s).unwrap().curve(c).unwrap().kind {
+        CurveKind::FixedSpline { curve, .. } => curve.clone(),
+        k => panic!("kein fester Spline: {k:?}"),
+    };
+    set_base(&mut d, base, spline_base(9.0));
+    let f = d.feature(s).unwrap();
+    assert_eq!(f.status, FeatureStatus::Ok, "{:?}", f.status);
+    assert!(f.warning().is_none(), "der Bezug hält: {:?}", f.warning());
+    let sk = d.sketch_of(s).unwrap();
+    let CurveKind::FixedSpline { curve, start, end } = &sk.curve(c).unwrap().kind else {
+        panic!("Art und Id bleiben");
+    };
+    assert_ne!(*curve, before, "die Kurve folgt dem Körper");
+    let top = DVec2::new(5.0, 9.0);
+    assert!(sk.nearest_on_curve(c, top).unwrap().distance(top) < 1e-6);
+    // Die Fest-Werte folgen, der Punkt bleibt auf der Kurve.
+    for p in [*start, *end] {
+        let xy = sk.point_xy(p).unwrap();
+        assert!(
+            sk.constraints().any(|(_, d)| matches!(d.kind,
+                K::Fixed(o, x, y) if o == p && x == xy.x && y == xy.y)),
+            "{xy}"
+        );
+    }
+    assert!(sk.constraints().any(|(_, d)| matches!(d.kind,
+        K::PointOnCurve(o, k) if o == q && k == c)));
+    let on = sk.point_xy(q).unwrap();
+    assert!(sk.nearest_on_curve(c, on).unwrap().distance(on) < 1e-6);
+    d.check_invariants().unwrap();
+}
+
+#[test]
+fn degree_change_on_reproject_is_fine() {
+    // Mehr Stützpunkte, also mehr Knoten; aus einem Grad-3-Stück wird keine andere Art.
+    let (mut d, base, s, c, _) = body_with_fixed_spline();
+    let knots = |d: &Document| match &d.sketch_of(s).unwrap().curve(c).unwrap().kind {
+        CurveKind::FixedSpline { curve, .. } => curve.knots().knots().len(),
+        k => panic!("kein fester Spline: {k:?}"),
+    };
+    let before = knots(&d);
+    let mut sk = Sketch::new(Frame::WORLD, "Basis", tol());
+    let p: Vec<_> = [
+        (0.0, 0.0),
+        (10.0, 0.0),
+        (10.0, 5.0),
+        (8.0, 7.0),
+        (5.0, 8.0),
+        (2.0, 7.0),
+        (0.0, 5.0),
+    ]
+    .iter()
+    .map(|&(x, y)| sk.add_point(x, y).unwrap())
+    .collect();
+    sk.add_line(p[0], p[1]).unwrap();
+    sk.add_line(p[1], p[2]).unwrap();
+    sk.add_spline(&p[2..7]).unwrap();
+    sk.add_line(p[6], p[0]).unwrap();
+    set_base(&mut d, base, sk);
+    let f = d.feature(s).unwrap();
+    assert_eq!(f.status, FeatureStatus::Ok, "{:?}", f.status);
+    assert!(
+        f.warning().is_none(),
+        "keine Artänderung: {:?}",
+        f.warning()
+    );
+    assert_ne!(knots(&d), before);
+    let top = DVec2::new(5.0, 8.0);
+    let sk = d.sketch_of(s).unwrap();
+    assert!(sk.nearest_on_curve(c, top).unwrap().distance(top) < 1e-6);
+}
+
+#[test]
+fn kind_change_is_lost_reference_warning() {
+    let (mut d, base, s, c, _) = body_with_fixed_spline();
+    let before = match &d.sketch_of(s).unwrap().curve(c).unwrap().kind {
+        CurveKind::FixedSpline { curve, .. } => curve.clone(),
+        k => panic!("kein fester Spline: {k:?}"),
+    };
+    // Aus dem Spline wird eine Linie: Die Kante ist keine Freiformkante mehr.
+    let mut sk = Sketch::new(Frame::WORLD, "Basis", tol());
+    let p: Vec<_> = [(0.0, 0.0), (10.0, 0.0), (10.0, 5.0), (0.0, 5.0)]
+        .iter()
+        .map(|&(x, y)| sk.add_point(x, y).unwrap())
+        .collect();
+    for i in 0..4 {
+        sk.add_line(p[i], p[(i + 1) % 4]).unwrap();
+    }
+    set_base(&mut d, base, sk);
+    let f = d.feature(s).unwrap();
+    assert_eq!(f.status, FeatureStatus::Ok, "{:?}", f.status);
+    assert!(f.warning().is_some(), "Warnung statt Fehler");
+    let CurveKind::FixedSpline { curve, .. } = &d.sketch_of(s).unwrap().curve(c).unwrap().kind
+    else {
+        panic!("die Kurve bleibt stehen");
+    };
+    assert_eq!(*curve, before, "an der alten Lage");
+    assert_eq!(sketch_def(&d, s).copies.len(), 1, "der Verweis bleibt");
+    d.check_invariants().unwrap();
+}
+
+/// Review Focus 3: Die geschlossene Kante eines Ellipsenzylinders wird ein fester Spline mit einem
+/// Punkt, bildet allein ein Profil und lässt sich mit der richtigen Größe extrudieren.
+#[test]
+fn closed_projection_makes_a_profile_and_extrudes() {
+    let mut d = Document::new();
+    let mut base = Sketch::new(Frame::WORLD, "Basis", tol());
+    let m = base.add_point(0.0, 0.0).unwrap();
+    base.add_ellipse(m, DVec2::new(6.0, 0.0), 3.0).unwrap();
+    let base = d
+        .add_feature("Basis", sketch_kind(base, StandardPlane::XY, vec![]))
+        .unwrap();
+    d.add_feature(
+        "Körper",
+        FeatureKind::Extrude {
+            sketch: base,
+            profiles: ProfileSel::Index(0),
+            height: 4.0,
+        },
+    )
+    .unwrap();
+    let solid = d.visible_bodies()[0].solid.clone();
+    let (_, e) = solid
+        .edges
+        .iter()
+        .find(|(_, e)| {
+            matches!(&e.curve, planora_kernel::Curve::Nurbs(n) if n.is_closed(tol().linear))
+        })
+        .expect("geschlossene Freiformkante");
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze", tol());
+    let c = sk
+        .add_projected_curve(&e.curve, e.t0, e.t1, LINKED)
+        .unwrap();
+    let CurveKind::FixedSpline { start, end, .. } = sk.curve(c).unwrap().kind.clone() else {
+        panic!("kein fester Spline");
+    };
+    assert_eq!(start, end);
+    assert_eq!(sk.points().count(), 1);
+    let found = sk.profiles();
+    assert_eq!(found.profiles.len(), 1, "{:?}", found.rejected);
+    let s = d
+        .add_feature("Skizze", sketch_kind(sk, StandardPlane::XY, vec![]))
+        .unwrap();
+    let before = d.visible_bodies().len();
+    let x = d
+        .add_feature(
+            "Extrusion",
+            FeatureKind::Extrude {
+                sketch: s,
+                profiles: ProfileSel::Index(0),
+                height: 2.0,
+            },
+        )
+        .unwrap();
+    let f = d.feature(x).unwrap();
+    assert_eq!(f.status, FeatureStatus::Ok, "{:?}", f.status);
+    let bodies = d.visible_bodies();
+    assert_eq!(bodies.len(), before + 1);
+    let v = planora_mesh::mass_properties(
+        &planora_mesh::tessellate(
+            bodies[before].solid,
+            &planora_mesh::TessellationOptions {
+                chord_tolerance: 1e-3,
+            },
+        )
+        .unwrap(),
+    )
+    .volume;
+    let want = std::f64::consts::PI * 6.0 * 3.0 * 2.0;
+    assert!((v - want).abs() < 0.05, "{v} {want}");
+    d.check_invariants().unwrap();
+}

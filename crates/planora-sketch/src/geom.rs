@@ -610,7 +610,9 @@ impl Sketch {
                 s: self.spline_sampled(points, handles),
                 n: points.len(),
             },
-            CurveKind::ControlSpline { .. } | CurveKind::Conic { .. } => Geom::Nurbs {
+            CurveKind::ControlSpline { .. }
+            | CurveKind::Conic { .. }
+            | CurveKind::FixedSpline { .. } => Geom::Nurbs {
                 curve: self.nurbs_of(c)?,
             },
         };

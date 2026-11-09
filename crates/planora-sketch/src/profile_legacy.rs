@@ -123,7 +123,7 @@ impl Sketch {
                         }),
                     }
                 }
-                CurveKind::Conic { start, end, .. } => {
+                CurveKind::Conic { start, end, .. } | CurveKind::FixedSpline { start, end, .. } => {
                     let (na, nb) = (node(self.pos(*start)), node(self.pos(*end)));
                     edges.push(Edge {
                         curve: id,
@@ -274,6 +274,7 @@ impl Sketch {
                 CurveKind::Spline { .. }
                     | CurveKind::ControlSpline { .. }
                     | CurveKind::Conic { .. }
+                    | CurveKind::FixedSpline { .. }
             )
         };
         // Ein Spline, dessen Enden zusammenfallen, ist allein eine geschlossene Schleife (ein
@@ -288,7 +289,8 @@ impl Sketch {
                 }
                 CurveKind::Spline { .. }
                 | CurveKind::ControlSpline { .. }
-                | CurveKind::Conic { .. } => {
+                | CurveKind::Conic { .. }
+                | CurveKind::FixedSpline { .. } => {
                     tr!("sketch-err-spline-closed-branch")
                 }
                 _ => tr!("sketch-err-line-zero-length"),
@@ -355,7 +357,9 @@ impl Sketch {
                         nurbs_segment(self.handled_spline_nurbs(edge.curve)?, forward)?
                     }
                 }
-                CurveKind::ControlSpline { .. } | CurveKind::Conic { .. } => {
+                CurveKind::ControlSpline { .. }
+                | CurveKind::Conic { .. }
+                | CurveKind::FixedSpline { .. } => {
                     let Some(curve) = self.nurbs_of(edge.curve) else {
                         return Err(SketchError::Degenerate(tr!("sketch-err-spline-neighbours")));
                     };

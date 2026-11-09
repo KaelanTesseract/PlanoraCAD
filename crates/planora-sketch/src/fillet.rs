@@ -430,13 +430,20 @@ impl Sketch {
                 Some([*start, *end])
             }
             CurveKind::ControlSpline { points, .. } => Some([points[0], points[points.len() - 1]]),
-            CurveKind::Conic { start, end, .. } => Some([*start, *end]),
+            CurveKind::Conic { start, end, .. } | CurveKind::FixedSpline { start, end, .. } => {
+                Some([*start, *end])
+            }
             _ => None,
         };
+        // Der feste Spline bleibt, wie er ist, auch ohne `Fixed` an seinen Enden (Spec E).
+        let pinned = matches!(self.curve(pick.curve)?.kind, CurveKind::FixedSpline { .. });
         let is_fixed = |p: PointId| {
-            self.constraints().any(|(_, d)| {
-                d.enabled && !d.driven && matches!(d.kind, ConstraintKind::Fixed(q, ..) if q == p)
-            })
+            pinned
+                || self.constraints().any(|(_, d)| {
+                    d.enabled
+                        && !d.driven
+                        && matches!(d.kind, ConstraintKind::Fixed(q, ..) if q == p)
+                })
         };
         let fixed = ends.map_or([false; 2], |e| [is_fixed(e[0]), is_fixed(e[1])]);
         let exact = matches!(

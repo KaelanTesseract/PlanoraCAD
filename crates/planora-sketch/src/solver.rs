@@ -681,7 +681,8 @@ impl Sketch {
             }
             CurveKind::Spline { .. }
             | CurveKind::ControlSpline { .. }
-            | CurveKind::Conic { .. } => false,
+            | CurveKind::Conic { .. }
+            | CurveKind::FixedSpline { .. } => false,
         })
     }
 

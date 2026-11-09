@@ -487,3 +487,96 @@ fn redone_smooth_on_old_file_is_g2_and_17() {
     assert_eq!(again.solve().status, planora_sketch::SolveStatus::Solved);
     assert!(jump(&again, arc, spline) < 1e-6);
 }
+
+// ---- Fester Spline (Task 10) -------------------------------------------------------------------
+
+fn fixed_sketch() -> (Sketch, CurveId) {
+    let curve = planora_math::nurbs::NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0],
+        vec![
+            planora_math::DVec3::new(0.0, 0.0, 0.0),
+            planora_math::DVec3::new(3.0, 6.0, 1.0),
+            planora_math::DVec3::new(7.0, 5.0, 2.0),
+            planora_math::DVec3::new(9.1, 0.3, 1.0),
+        ],
+        vec![1.0, 3.0, 0.4, 1.0],
+    )
+    .unwrap();
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze1", Tolerance::default());
+    let c = sk
+        .add_projected_curve(
+            &planora_kernel::Curve::Nurbs(std::sync::Arc::new(curve)),
+            0.0,
+            1.0,
+            planora_sketch::helpers::ProjectStyle {
+                construction: false,
+            },
+        )
+        .unwrap();
+    (sk, c)
+}
+
+#[test]
+fn fixed_needs_17_and_roundtrips() {
+    let (sk, c) = fixed_sketch();
+    let want = sk.curve(c).unwrap().kind.clone();
+    let snap = document(sk).snapshot();
+    assert_eq!(required_format(&snap), 17);
+    let text = encode_version(&snap).unwrap();
+    assert_eq!(format_of(&text), 17);
+    assert!(text.contains("\"typ\": \"fester_spline\""), "{text}");
+    assert!(text.contains("\"gewichte\""), "{text}");
+    let back = decode_version(&text, "x.json").unwrap();
+    assert_eq!(sketch_of(&back).curve(c).unwrap().kind, want, "bitgleich");
+    assert_eq!(encode_version(&back).unwrap(), text);
+}
+
+#[test]
+fn deleted_fixed_needs_17() {
+    let (mut sk, c) = fixed_sketch();
+    sk.remove_curve(c).unwrap();
+    let snap = document(sk).snapshot();
+    assert_eq!(required_format(&snap), 17);
+    let text = encode_version(&snap).unwrap();
+    let back = decode_version(&text, "x.json").unwrap();
+    assert_eq!(encode_version(&back).unwrap(), text);
+}
+
+/// Kaputte Daten werden mit Meldung abgelehnt, nicht repariert.
+#[test]
+fn broken_fixed_data_is_refused() {
+    let (sk, _) = fixed_sketch();
+    let text = encode_version(&document(sk).snapshot()).unwrap();
+    fn find(v: &mut serde_json::Value) -> Option<&mut serde_json::Value> {
+        if v.get("typ").and_then(|t| t.as_str()) == Some("fester_spline") {
+            return Some(v);
+        }
+        match v {
+            serde_json::Value::Object(m) => m.values_mut().find_map(find),
+            serde_json::Value::Array(a) => a.iter_mut().find_map(find),
+            _ => None,
+        }
+    }
+    type Edit = fn(&mut serde_json::Value);
+    let cases: [(&str, Edit); 6] = [
+        ("Knoten", |e| e["knoten"] = serde_json::json!([0.0, 1.0])),
+        ("Grad", |e| e["grad"] = serde_json::json!(7)),
+        ("Gewichte", |e| {
+            e["gewichte"] = serde_json::json!([1.0, 0.0, 1.0, 1.0])
+        }),
+        ("Zahl der Gewichte", |e| {
+            e["gewichte"] = serde_json::json!([1.0])
+        }),
+        ("Punkt fehlt", |e| e["ende"] = serde_json::json!(999)),
+        ("geschlossen, aber offen", |e| {
+            e["ende"] = e["start"].clone()
+        }),
+    ];
+    for (what, edit) in cases {
+        let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        edit(find(&mut v).expect("Eintrag"));
+        let r = decode_version(&v.to_string(), "x.json");
+        assert!(r.is_err(), "{what}");
+    }
+}

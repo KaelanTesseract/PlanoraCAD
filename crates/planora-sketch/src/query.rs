@@ -73,7 +73,9 @@ fn chain_ends(kind: &CurveKind) -> Vec<PointId> {
                 _ => Vec::new(),
             }
         }
-        CurveKind::Conic { start, end, .. } => vec![*start, *end],
+        CurveKind::Conic { start, end, .. } | CurveKind::FixedSpline { start, end, .. } => {
+            vec![*start, *end]
+        }
         CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => Vec::new(),
     }
 }
@@ -152,7 +154,7 @@ impl Sketch {
                 pl[last] = self.pos(points[points.len() - 1]);
                 pl
             }
-            CurveKind::Conic { start, end, .. } => {
+            CurveKind::Conic { start, end, .. } | CurveKind::FixedSpline { start, end, .. } => {
                 let g = self.geom(c)?;
                 let (lo, hi) = g.domain();
                 let mut pl = g.polyline(lo, hi, per_turn);
@@ -213,7 +215,9 @@ impl Sketch {
             CurveKind::Ellipse { .. } | CurveKind::Spline { .. } => {
                 polyline_closest(&self.curve_polyline(c, MAX_STEPS_PER_TURN)?, at)
             }
-            CurveKind::ControlSpline { .. } | CurveKind::Conic { .. } => {
+            CurveKind::ControlSpline { .. }
+            | CurveKind::Conic { .. }
+            | CurveKind::FixedSpline { .. } => {
                 let g = self.geom(c)?;
                 Some(g.eval(g.nearest(at)).0)
             }
