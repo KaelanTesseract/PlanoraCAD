@@ -1539,6 +1539,7 @@ pub fn sketch_tool_icon(tool: crate::sketch_state::Tool) -> IconSource {
         // Der Knopf zeigt die zuletzt benutzte Art (`sketch_kind_icon`); das hier ist die erste.
         T::Pattern => IconSource::Hand(HandIcon::PatternRect),
         T::Constraint(action) => sketch_action_icon(action),
+        T::InsertControlPoint => IconSource::Hand(HandIcon::SketchSplineControl),
     }
 }
 

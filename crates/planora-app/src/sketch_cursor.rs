@@ -303,6 +303,7 @@ impl SketchSession {
                 | Tool::Extend
                 | Tool::Break
                 | Tool::Constraint(_)
+                | Tool::InsertControlPoint
         )
     }
 
@@ -346,7 +347,7 @@ impl SketchSession {
         // Wer Kurven wählt, sieht nur Kurven: kein Punkt davor, keine Hilfslinie, kein Raster. Eine
         // Kurve wählen ist kein Fang, also geht das auch mit Strg.
         if self.picks_curves() {
-            if let Some(c) = sk.pick_curve(raw, radius) {
+            if let Some(c) = self.shown_curve(sk, raw, radius) {
                 cur.at = sk.nearest_on_curve(c, raw).unwrap_or(raw);
                 cur.snap = Snap::Curve(c);
                 cur.snap_at = Some(cur.at);
@@ -367,8 +368,9 @@ impl SketchSession {
         }
         let index = self.current_index(sk);
         let tol = sk.tolerance().linear;
-        // Skizzen 7: Die sichtbaren Griffpunkte (letzte Liste) nennt Task 13; bis dahin fängt keiner.
-        if let Some(hit) = index.find_avoiding(raw, radius, &self.own_open_spots(sk), tol, &[]) {
+        // Skizzen 7: Griffpunkte fangen nur, solange sie zu sehen sind.
+        let shown = self.visible_handle_points(sk);
+        if let Some(hit) = index.find_avoiding(raw, radius, &self.own_open_spots(sk), tol, &shown) {
             cur.at = hit.at;
             cur.snap = hit.snap;
             cur.snap_at = Some(hit.at);
@@ -397,7 +399,13 @@ impl SketchSession {
             free_x = auto == AutoConstraint::Horizontal;
             free_y = auto == AutoConstraint::Vertical;
         }
-        cur.guides = index.align(raw, radius * ALIGN_RADIUS_FACTOR, &self.align_skip(sk), &[]);
+        let shown = self.visible_handle_points(sk);
+        cur.guides = index.align(
+            raw,
+            radius * ALIGN_RADIUS_FACTOR,
+            &self.align_skip(sk),
+            &shown,
+        );
         if !free_x {
             cur.guides.x = None;
         }

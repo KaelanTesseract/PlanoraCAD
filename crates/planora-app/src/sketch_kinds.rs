@@ -679,7 +679,7 @@ impl SketchSession {
             return self.finish_kind(sk, kind, cur, prior);
         }
         let corner_hit = (self.kind_stage() == 0)
-            .then(|| sk.pick_point(cur.raw, self.pick_radius))
+            .then(|| self.shown_point(sk, cur.raw, self.pick_radius))
             .flatten();
         let picked: Vec<CurvePick> = if let Some(p) = corner_hit {
             let curves = normal_curves_at(sk, p);
@@ -724,7 +724,7 @@ impl SketchSession {
         let &[first] = self.pending_curves.as_slice() else {
             return Ok(None);
         };
-        let Some(p) = sk.pick_point(cur.raw, self.pick_radius) else {
+        let Some(p) = self.shown_point(sk, cur.raw, self.pick_radius) else {
             return Ok(None);
         };
         let curves = normal_curves_at(sk, p);

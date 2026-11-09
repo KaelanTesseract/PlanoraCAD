@@ -327,6 +327,17 @@ pub fn describe_sketch_change_beside(
     if removed {
         return tr!("undo-delete");
     }
+    // Griffe sind Kurven, aber kein Zeichenbefehl.
+    if let Some((id, _)) = as_
+        .curves()
+        .find(|(id, _)| bs.curve(*id).is_none() && as_.is_handle_curve(*id))
+    {
+        return if matches!(as_.curve(id).map(|d| &d.kind), Some(CurveKind::Arc { .. })) {
+            tr!("undo-handle-curvature")
+        } else {
+            tr!("undo-handle-tangent")
+        };
+    }
     let new_curves: Vec<&CurveKind> = as_
         .curves()
         .filter(|(id, _)| bs.curve(*id).is_none())

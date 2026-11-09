@@ -13,7 +13,6 @@ use crate::curves::{Sampled, V2};
 use crate::dual::Dual;
 use crate::error::SketchError;
 use crate::model::{CurveId, CurveKind, HandleCurvature, PointId, Sketch, SplineHandle};
-use crate::solver::SolveStatus;
 use planora_i18n::tr;
 use planora_math::nurbs::NurbsCurve;
 use planora_math::{DVec2, DVec3};
@@ -591,7 +590,9 @@ impl Sketch {
         ) {
             return Err(flat());
         }
-        let solvable_before = self.clone().solve().status == SolveStatus::Solved;
+        // Ein Widerspruch an anderer Stelle bleibt, wie er ist: Abgelehnt wird nur, was dieser Befehl
+        // schlechter macht.
+        let before = self.clone().solve();
         self.atomically(|s| {
             if !s.has_handle_at(c, at) {
                 s.activate_tangent_handle(c, at)?;
@@ -617,7 +618,7 @@ impl Sketch {
                 let kappa = if first { -partner_kappa } else { partner_kappa };
                 s.place_curvature_arc(c, at, kappa)?;
             }
-            if solvable_before && s.solve().status != SolveStatus::Solved {
+            if s.solve().is_worse_than(&before) {
                 return Err(SketchError::InvalidInput(tr!(
                     "sketch-err-handle-smooth-unsolved"
                 )));
@@ -942,8 +943,8 @@ impl Sketch {
     /// Hat die Kurve `c` Griffe?
     pub(crate) fn has_handles(&self, c: CurveId) -> bool {
         matches!(
-            &self.curves[c].kind,
-            CurveKind::Spline { handles, .. } if !handles.is_empty()
+            self.curve(c).map(|d| &d.kind),
+            Some(CurveKind::Spline { handles, .. }) if !handles.is_empty()
         )
     }
 
@@ -954,6 +955,92 @@ impl Sketch {
                 h.line == c || matches!(h.curvature, HandleCurvature::Arc { arc, .. } if arc == c)
             })
         })
+    }
+
+    /// Wo die gedämpften Tangentengriffe des Splines `c` hinzeigen (B6): je Stützpunkt ohne Griff die
+    /// Spitze, die [`activate_tangent_handle`](Self::activate_tangent_handle) anlegen würde. Ein Punkt,
+    /// an dem die Kurve steht, fehlt, denn dort lehnte sie ab. Leer für andere Kurven.
+    pub fn handle_ghost_tips(&self, c: CurveId) -> Vec<(PointId, DVec2)> {
+        let Some(CurveKind::Spline { points, handles }) = self.curve(c).map(|d| &d.kind) else {
+            return Vec::new();
+        };
+        let Some(geom) = self.geom(c) else {
+            return Vec::new();
+        };
+        points
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| handles.iter().all(|h| h.at != **p))
+            .filter_map(|(index, &p)| {
+                let reach = geom.eval(index as f64).1 / 3.0;
+                (reach.is_finite() && reach.length() > self.tol.linear)
+                    .then(|| (p, self.pos(p) + reach))
+            })
+            .collect()
+    }
+
+    /// Die gedämpften Marken der Krümmungsgriffe des Splines `c` (B6): an jedem Griff ohne Bogen ein
+    /// Punkt auf der Normalen im Abstand der Grifflänge, auf der Seite, auf die sich die Kurve dort
+    /// krümmt (bei fast null Krümmung links, wie der Bogen selbst, B5).
+    pub fn handle_curvature_marks(&self, c: CurveId) -> Vec<(PointId, DVec2)> {
+        let Some(CurveKind::Spline { points, handles }) = self.curve(c).map(|d| &d.kind) else {
+            return Vec::new();
+        };
+        let nodes = nodes_of(points, handles, |p| {
+            let q = self.pos(p);
+            (Dual::constant(q.x), Dual::constant(q.y))
+        })
+        .numbers();
+        handles
+            .iter()
+            .filter(|h| !matches!(h.curvature, HandleCurvature::Arc { .. }))
+            .filter_map(|h| {
+                let index = points.iter().position(|&p| p == h.at)?;
+                let (from, to) = (self.pos(h.at), self.pos(h.tip));
+                let (d, a) = (nodes.first[index], nodes.second[index]);
+                let layout = CurvatureArc::new(from, to, d.perp_dot(a) / d.length().powi(3))?;
+                let side = if layout.left { 1.0 } else { -1.0 };
+                Some((h.at, from + (to - from).perp() * side))
+            })
+            .collect()
+    }
+
+    /// Spline und Griff, zu denen die Griff-Linie oder der Griff-Bogen `c` gehört.
+    pub fn handle_of_curve(&self, c: CurveId) -> Option<(CurveId, SplineHandle)> {
+        self.handled_splines().find_map(|(spline, handles)| {
+            let h = handles.iter().find(|h| handle_parts(h).any(|k| k == c))?;
+            Some((spline, *h))
+        })
+    }
+
+    /// Spline und Griff, zu denen die Spitze, die Bogenmitte oder das freie Bogenende `p` gehört.
+    pub fn handle_of_point(&self, p: PointId) -> Option<(CurveId, SplineHandle)> {
+        self.handled_splines().find_map(|(spline, handles)| {
+            let h = handles.iter().find(|h| {
+                h.tip == p
+                    || matches!(h.curvature, HandleCurvature::Arc { center, other, .. }
+                        if center == p || other == p)
+            })?;
+            Some((spline, *h))
+        })
+    }
+
+    /// Die Griffe am Stützpunkt `at`, an allen Splines, die dort liegen.
+    pub fn handles_at(&self, at: PointId) -> Vec<(CurveId, SplineHandle)> {
+        self.handled_splines()
+            .flat_map(|(spline, handles)| {
+                handles
+                    .iter()
+                    .filter(move |h| h.at == at)
+                    .map(move |h| (spline, *h))
+            })
+            .collect()
+    }
+
+    /// Die Punkte, die nur Griffe benutzen (Spitze, Mitte, freies Ende). Benutzt eine andere Kurve
+    /// einen, gilt er als gewöhnlicher Punkt.
+    pub fn handle_only_points(&self) -> HashSet<PointId> {
+        crate::snap::only_handle_points(self, &self.handle_curves())
     }
 
     /// Lebende Splines mit Griffen.
@@ -995,7 +1082,8 @@ impl Sketch {
             }
         }
         for spline in out.clone() {
-            if let CurveKind::Spline { handles, .. } = &self.curves[spline].kind {
+            // `curves` kommt von außen und kann eine Kennung enthalten, die es nicht gibt.
+            if let Some(CurveKind::Spline { handles, .. }) = self.curve(spline).map(|d| &d.kind) {
                 out.extend(handles.iter().flat_map(handle_parts));
             }
         }
@@ -1007,8 +1095,10 @@ impl Sketch {
     pub(crate) fn without_handle_parts(&self, sources: &[CurveId]) -> Vec<CurveId> {
         let parts: Vec<CurveId> = sources
             .iter()
-            .filter_map(|&c| match &self.curves[c].kind {
-                CurveKind::Spline { handles, .. } => Some(handles.iter().flat_map(handle_parts)),
+            .filter_map(|&c| match self.curve(c).map(|d| &d.kind) {
+                Some(CurveKind::Spline { handles, .. }) => {
+                    Some(handles.iter().flat_map(handle_parts))
+                }
                 _ => None,
             })
             .flatten()
@@ -1100,7 +1190,7 @@ impl Sketch {
     pub(crate) fn handle_arcs(&self, curves: &[CurveId]) -> Vec<(CurveId, PointId, PointId)> {
         let mut out = Vec::new();
         for &c in curves {
-            if let CurveKind::Spline { handles, .. } = &self.curves[c].kind {
+            if let Some(CurveKind::Spline { handles, .. }) = self.curve(c).map(|d| &d.kind) {
                 out.extend(handles.iter().filter_map(|h| match h.curvature {
                     HandleCurvature::Arc { arc, center, other } => Some((arc, center, other)),
                     _ => None,
@@ -1357,6 +1447,33 @@ mod tests {
                 assert!((dp.x - dq.0.v).abs() < 1e-11 && (dp.y - dq.1.v).abs() < 1e-11);
             }
         }
+    }
+
+    #[test]
+    fn unknown_ids_do_not_panic_in_the_handle_lists() {
+        let mut s = Sketch::new(
+            planora_math::Frame::WORLD,
+            "S",
+            planora_math::Tolerance::default(),
+        );
+        let pts: Vec<PointId> = [(0.0, 0.0), (10.0, 6.0), (21.0, -3.0)]
+            .iter()
+            .map(|&(x, y)| s.add_point(x, y).unwrap())
+            .collect();
+        let spline = s.add_spline(&pts).unwrap();
+        s.activate_tangent_handle(spline, pts[1]).unwrap();
+        let gone = CurveId::from_index(100_000);
+        // Die Liste nennt den Griff des Splines und die fremde Kennung, die bleibt, wie sie ist.
+        let family = s.with_handle_family(&[spline, gone]);
+        assert!(
+            family.contains(&gone) && family.contains(&spline),
+            "{family:?}"
+        );
+        assert_eq!(s.without_handle_parts(&[gone]), vec![gone]);
+        assert!(s.handle_arcs(&[gone]).is_empty());
+        assert!(!s.has_handles(gone));
+        assert!(s.handle_ghost_tips(gone).is_empty());
+        assert!(s.handle_curvature_marks(gone).is_empty());
     }
 
     fn d_is_zero(d: &V2) -> bool {

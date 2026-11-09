@@ -165,6 +165,25 @@ impl SolveCache {
     }
 }
 
+impl SolveReport {
+    /// Ist dieser Bericht schlechter als `before`, der Bericht zur Skizze vor einer Änderung? Gelöst
+    /// ist nie schlechter. Sonst: Die Skizze war vorher gelöst, oder jetzt widersprechen sich
+    /// Abhängigkeiten, die es vorher nicht taten, oder sie wurde von widersprüchlich zu nicht lösbar.
+    /// Ein Widerspruch an anderer Stelle, den es schon gab, zählt nicht.
+    pub fn is_worse_than(&self, before: &SolveReport) -> bool {
+        if self.status == SolveStatus::Solved {
+            return false;
+        }
+        before.status == SolveStatus::Solved
+            || self
+                .conflicting
+                .iter()
+                .any(|c| !before.conflicting.contains(c))
+            || (before.status == SolveStatus::Conflicting
+                && self.status == SolveStatus::NotConverged)
+    }
+}
+
 /// Gewicht der weichen Zugbedingung. Klein gegen die harten Residuen (Gewicht 1), damit die
 /// Abhängigkeiten im Zuglauf gewinnen und die Politur nur wenig korrigieren muss; groß genug,
 /// damit der Zug die freien Freiheitsgrade in wenigen Schritten bewegt (Kosten des Zugs bei
@@ -922,11 +941,18 @@ impl Sketch {
     /// an der Lage der gelösten Vorlage. Geht die Lage eines Musters nicht, ist ein „gelöst“
     /// „nicht lösbar“: Seine Exemplare stünden sonst still an der alten Lage.
     pub(crate) fn solve_with_soft(&mut self, soft: &[Soft]) -> SolveReport {
+        self.solve_with_soft_holding(soft, &HashSet::new())
+    }
+
+    /// Wie [`solve_with_soft`](Self::solve_with_soft); die Variablen `extra` sind wie Exemplare
+    /// Konstanten des Laufs.
+    fn solve_with_soft_holding(&mut self, soft: &[Soft], extra: &HashSet<usize>) -> SolveReport {
         if self.patterns().next().is_none() {
-            return self.solve_round(soft, &HashSet::new()).0;
+            return self.solve_round(soft, extra).0;
         }
         self.refresh_patterns();
-        let held = self.pattern_vars();
+        let mut held = self.pattern_vars();
+        held.extend(extra.iter().copied());
         let max_rounds = PATTERN_ROUNDS.max(self.patterns().count() + 1);
         let (mut report, mut reads) = self.solve_round(soft, &held);
         let mut rounds = 1;
@@ -1225,6 +1251,21 @@ impl Sketch {
     /// Zug an einem Musterexemplar zieht dessen Vorlagenpunkt an die entsprechende Stelle (die
     /// Umkehrung der Lage des Exemplars, **Annahme**).
     pub fn drag(&mut self, drags: &[Drag]) -> Result<SolveReport, SketchError> {
+        self.drag_holding(drags, &[])
+    }
+
+    /// Wie [`drag`](Self::drag), aber die Punkte `hold` stehen für den Löser fest wie Exemplare eines
+    /// Musters: Ein Griffzug nimmt den Stützpunkt nicht mit. Weiche Ziele allein täten das, sobald das
+    /// Ziel nicht genau erreichbar ist, denn der Löser verteilt den Rest auf alle Ziele. Geht der Zug
+    /// nur mit einem bewegten `hold`, scheitert die Gruppe wie jeder andere Zug.
+    pub fn drag_holding(
+        &mut self,
+        drags: &[Drag],
+        hold: &[PointId],
+    ) -> Result<SolveReport, SketchError> {
+        for &p in hold {
+            self.check_point(p)?;
+        }
         for d in drags {
             self.check_point(d.point)?;
             if !d.target.is_finite() {
@@ -1266,7 +1307,15 @@ impl Sketch {
                 self.set_point_xy(d.point, d.target.x, d.target.y)?;
             }
         }
-        Ok(self.solve_with_soft(&soft))
+        let mut held = HashSet::new();
+        for &p in hold {
+            // An einem Exemplar steht die Vorlage fest, wie beim Zug selbst.
+            let p = self
+                .instance_drag_target(p, self.pos(p))
+                .map_or(p, |(source, _)| source);
+            held.extend([self.points[p].x, self.points[p].y]);
+        }
+        Ok(self.solve_with_soft_holding(&soft, &held))
     }
 
     /// Zieht den Radius eines Kreises zu `target` (größer als die Toleranz); harte Abhängigkeiten

@@ -342,7 +342,10 @@ impl SketchSession {
 
     /// Läuft ein Zug mit der Maus, der mit dem Abschluss und dem Löschen nichts zu tun hat?
     pub fn in_gesture(&self) -> bool {
-        self.grip_drag.is_some() || self.box_select.is_some() || self.pattern.drag.is_some()
+        self.grip_drag.is_some()
+            || self.box_select.is_some()
+            || self.pattern.drag.is_some()
+            || self.handle_drag_running()
     }
 
     /// Die Kurven und Punkte der Auswahl als Menge.

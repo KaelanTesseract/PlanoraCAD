@@ -136,7 +136,7 @@ fn format_factor(v: f64) -> String {
 
 /// Rho als Zahl ohne Einheit, mit so vielen Stellen, dass das Feld den gezeigten Wert auch annimmt:
 /// 0,00004 zeigte mit vier Stellen „0“ und 0,99999 „1“, beide außerhalb des Bereichs.
-fn format_rho(v: f64) -> String {
+pub(crate) fn format_rho(v: f64) -> String {
     (4..=RHO_MAX_DECIMALS)
         .map(|decimals| trimmed_number(v, decimals))
         .find(|text| parse_number(text).is_some_and(planora_sketch::conic_rho_ok))

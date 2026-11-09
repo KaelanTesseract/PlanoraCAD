@@ -66,7 +66,10 @@ pub struct SnapIndex {
 }
 
 /// Die Punkte, die nur Griffe benutzen. Benutzt eine andere Kurve einen, fängt er wie jeder Punkt.
-fn only_handle_points(sk: &Sketch, handle_curves: &HashSet<CurveId>) -> HashSet<PointId> {
+pub(crate) fn only_handle_points(
+    sk: &Sketch,
+    handle_curves: &HashSet<CurveId>,
+) -> HashSet<PointId> {
     let mut out = HashSet::new();
     let mut ordinary = HashSet::new();
     for (id, data) in sk.curves() {

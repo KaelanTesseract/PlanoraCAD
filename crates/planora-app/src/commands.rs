@@ -258,7 +258,20 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                 se.choose_kind(sk, kind);
             }
         }
-        Action::SketchLine
+        Action::SketchTangentHandle
+        | Action::SketchCurvatureHandle
+        | Action::SketchSplineDegree => {
+            // Fehler und Grund stehen in der Meldung der Sitzung.
+            if let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut() {
+                let _ = match a {
+                    Action::SketchTangentHandle => se.toggle_tangent_handle(sk),
+                    Action::SketchCurvatureHandle => se.toggle_curvature_handle(sk),
+                    _ => se.cycle_spline_degree(sk),
+                };
+            }
+        }
+        Action::SketchInsertControlPoint
+        | Action::SketchLine
         | Action::SketchTrim
         | Action::SketchExtend
         | Action::SketchBreak

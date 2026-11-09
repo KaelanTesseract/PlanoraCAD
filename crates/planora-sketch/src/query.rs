@@ -4,7 +4,7 @@
 use crate::constraint::ConstraintKind;
 use crate::model::{CurveId, CurveKind, PointId, Sketch};
 use planora_math::{DVec2, TAU};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 /// Kleinste und größte Schrittzahl je Vollkreis für [`Sketch::curve_polyline`].
 const MIN_STEPS_PER_TURN: usize = 4;
@@ -233,7 +233,18 @@ impl Sketch {
 
     /// Nächster lebender Punkt innerhalb von `radius` um `at`.
     pub fn pick_point(&self, at: DVec2, radius: f64) -> Option<PointId> {
+        self.pick_point_skipping(at, radius, &HashSet::new())
+    }
+
+    /// Wie [`pick_point`](Self::pick_point), ohne die Punkte aus `skip` (etwa ausgeblendete Griffe).
+    pub fn pick_point_skipping(
+        &self,
+        at: DVec2,
+        radius: f64,
+        skip: &HashSet<PointId>,
+    ) -> Option<PointId> {
         self.points()
+            .filter(|(id, _)| !skip.contains(id))
             .map(|(id, _)| (id, self.pos(id).distance(at)))
             .filter(|&(_, d)| d <= radius)
             .min_by(|a, b| a.1.total_cmp(&b.1))
@@ -251,7 +262,18 @@ impl Sketch {
 
     /// Nächste lebende Kurve innerhalb von `radius` um `at`.
     pub fn pick_curve(&self, at: DVec2, radius: f64) -> Option<CurveId> {
+        self.pick_curve_skipping(at, radius, &HashSet::new())
+    }
+
+    /// Wie [`pick_curve`](Self::pick_curve), ohne die Kurven aus `skip` (etwa ausgeblendete Griffe).
+    pub fn pick_curve_skipping(
+        &self,
+        at: DVec2,
+        radius: f64,
+        skip: &HashSet<CurveId>,
+    ) -> Option<CurveId> {
         self.curves()
+            .filter(|(id, _)| !skip.contains(id))
             .filter_map(|(id, _)| Some((id, self.distance_to_curve(id, at)?)))
             .filter(|&(_, d)| d <= radius)
             .min_by(|a, b| a.1.total_cmp(&b.1))
@@ -260,11 +282,16 @@ impl Sketch {
 
     /// Die zusammenhängende Kette um die lebende Kurve `c`, sortiert und mit `c` (leer, wenn `c`
     /// nicht lebt): Kurven hängen über gemeinsame Endpunkte und eingeschaltete `Coincident`
-    /// zusammen, Verzweigungen laufen mit. Mitten und `PointOnCurve` verbinden nicht.
+    /// zusammen, Verzweigungen laufen mit. Mitten und `PointOnCurve` verbinden nicht. Griffe gehören
+    /// zu keiner Kette: Ab einer Griff-Linie oder einem Griff-Bogen ist die Kette nur er selbst, ganz
+    /// gleich, ob sein Stützpunkt zufällig ein Ende des Splines ist.
     pub fn connected_chain(&self, c: CurveId) -> Vec<CurveId> {
         let Some(start) = self.curve(c) else {
             return Vec::new();
         };
+        if self.is_handle_curve(c) {
+            return vec![c];
+        }
         let links: Vec<(PointId, PointId)> = self
             .constraints()
             .filter(|(_, data)| data.enabled)

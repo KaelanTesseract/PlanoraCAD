@@ -408,13 +408,19 @@ impl SketchSession {
 
     /// Die gewählten, lebenden Kurven: die Vorlage.
     fn picked_sources(&self, sk: &Sketch) -> Vec<CurveId> {
-        self.selection
-            .iter()
-            .filter_map(|i| match *i {
-                Item::Curve(c) if sk.curve(c).is_some() => Some(c),
-                _ => None,
-            })
-            .collect()
+        let mut out = Vec::new();
+        for item in &self.selection {
+            if let Item::Curve(c) = *item
+                && sk.curve(c).is_some()
+            {
+                // Wie im Plan eines Musters (`pattern_plan`): Ein Griff steht für seinen Spline.
+                let c = sk.handle_of_curve(c).map_or(c, |(spline, _)| spline);
+                if !out.contains(&c) {
+                    out.push(c);
+                }
+            }
+        }
+        out
     }
 
     /// Mit gewählten Kurven geht es weiter: Rechteckmuster gleich zu Feldern und Griffen,

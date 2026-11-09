@@ -3054,6 +3054,13 @@ impl AppState {
             se.abort_grip();
             return true;
         }
+        // Ebenso mitten im Griffzug an der Skizze: Er geht ganz zurück, auch ein Einschalten.
+        if back
+            && let Some((se, sk)) = self.session_sketch_mut()
+            && se.abort_handle_drag(sk)
+        {
+            return true;
+        }
         self.observe_sketch(false);
         let AppState {
             sketch_session: Some(se),

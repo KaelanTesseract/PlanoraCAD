@@ -24,7 +24,7 @@ use planora_feature::{FeatureId, ParamScope, ParamUnit, SketchFeature, constrain
 use planora_i18n::{DisplayUnit, current_unit, tr};
 use planora_math::DVec2;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind};
-use planora_sketch::model::{CurveKind, Sketch};
+use planora_sketch::model::{CurveId, CurveKind, Sketch};
 
 const _: () = assert!(TOOL_ORDER.len() == crate::shell::STRIP_TOOLS);
 
@@ -83,6 +83,7 @@ pub fn tool_label(tool: Tool) -> String {
         // Der Knopf mit Liste heißt wie in Fusion „Muster“; die Arten nennen sich selbst.
         Tool::Pattern => tr!("sketch-tool-pattern"),
         Tool::Constraint(action) => action.label(),
+        Tool::InsertControlPoint => tr!("action-sketch-insert-control-point"),
     }
 }
 
@@ -110,6 +111,7 @@ pub fn tool_hint(tool: Tool) -> String {
         Tool::Dimension => tr!("sketch-tool-dimension-hint"),
         Tool::Pattern => tr!("sketch-tool-pattern-hint"),
         Tool::Constraint(action) => command_hint(action),
+        Tool::InsertControlPoint => tr!("sketch-tool-insert-control-point-hint"),
     }
 }
 
@@ -184,6 +186,8 @@ fn bindable_action(action: ConstraintAction) -> Option<Action> {
 const STRIP_ICON: f32 = 20.0;
 /// So lange (Sekunden) gedrückt, öffnet ein Knopf mit Arten seine Liste.
 const FLYOUT_HOLD_SECS: f64 = 0.4;
+/// Breite des Rho-Felds im Skizzenfeld.
+const RHO_FIELD_WIDTH: f32 = 72.0;
 /// Abstand der Prüfung, ob das Halten lange genug war (ohne Eingabe zeichnet egui sonst nicht neu).
 const FLYOUT_HOLD_REPAINT_SECS: f32 = 0.05;
 /// Kantenlänge des Dreiecks auf einem Knopf mit Arten.
@@ -462,6 +466,38 @@ fn degree_buttons_key() -> egui::Id {
 #[doc(hidden)]
 pub fn degree_buttons(ctx: &egui::Context) -> Vec<(u8, egui::Rect)> {
     ctx.data(|d| d.get_temp::<Vec<(u8, egui::Rect)>>(degree_buttons_key()))
+        .unwrap_or_default()
+}
+
+fn rho_field_key() -> egui::Id {
+    shell_panels::sketch_side_id().with("conic-rho")
+}
+
+/// Lage des Rho-Felds des gewählten Kegelschnitts im letzten Bild (für Tests).
+#[doc(hidden)]
+pub fn rho_field(ctx: &egui::Context) -> Option<egui::Rect> {
+    ctx.data(|d| d.get_temp::<Option<egui::Rect>>(rho_field_key()).flatten())
+}
+
+fn selected_degree_key() -> egui::Id {
+    shell_panels::sketch_side_id().with("selected-degree")
+}
+
+/// Gezeigter Grad und Lage der Knöpfe am gewählten Spline mit Kontrollpunkten im letzten Bild (für
+/// Tests).
+#[doc(hidden)]
+pub fn selected_degree(ctx: &egui::Context) -> Option<(u8, Vec<(u8, egui::Rect)>)> {
+    ctx.data(|d| d.get_temp::<(u8, Vec<(u8, egui::Rect)>)>(selected_degree_key()))
+}
+
+fn handle_buttons_key() -> egui::Id {
+    shell_panels::sketch_side_id().with("handle-buttons")
+}
+
+/// Name und Lage der Griff-Knöpfe im letzten Bild, leer ohne sie (für Tests).
+#[doc(hidden)]
+pub fn handle_buttons(ctx: &egui::Context) -> Vec<(String, egui::Rect)> {
+    ctx.data(|d| d.get_temp::<Vec<(String, egui::Rect)>>(handle_buttons_key()))
         .unwrap_or_default()
 }
 
@@ -966,6 +1002,131 @@ fn spline_options(ui: &mut egui::Ui, se: &mut SketchSession) {
     ui.data_mut(|d| d.insert_temp(degree_buttons_key(), rects));
 }
 
+/// Abschnitt „Bearbeiten“ (Skizzen 7, B7, D3, D4): Griff-Knöpfe am gewählten Stützpunkt, Grad und
+/// „Kontrollpunkt einfügen“ am gewählten Spline mit Kontrollpunkten, Rho am gewählten Kegelschnitt.
+/// Alle Felder stehen nur da, wenn die Auswahl passt: Die Spalte bleibt sonst, wie sie ist.
+fn spline_edit_fields(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch) {
+    let km = crate::keymap::mouse::current(ui.ctx());
+    let mut rects: Vec<(String, egui::Rect)> = Vec::new();
+    if let Some((c, at)) = se.handle_target(sk) {
+        let (tangent, curvature) = se.handle_state(sk, c, at);
+        ui.horizontal_wrapped(|ui| {
+            let name = tr!("action-sketch-tangent-handle");
+            let tip = with_hint(
+                &km,
+                Action::SketchTangentHandle,
+                &tr!("sketch-handle-tangent-hint"),
+            );
+            let b = ui.selectable_label(tangent, &name).on_hover_text(tip);
+            rects.push((name, b.rect));
+            if b.clicked() {
+                let _ = se.toggle_tangent_handle(sk);
+            }
+            let name = tr!("action-sketch-curvature-handle");
+            let tip = with_hint(
+                &km,
+                Action::SketchCurvatureHandle,
+                &tr!("sketch-handle-curvature-hint"),
+            );
+            let b = ui.selectable_label(curvature, &name).on_hover_text(tip);
+            rects.push((name, b.rect));
+            if b.clicked() {
+                // Eine Ablehnung steht in der Meldung der Sitzung.
+                let _ = se.toggle_curvature_handle(sk);
+            }
+        });
+    }
+    ui.data_mut(|d| d.insert_temp(handle_buttons_key(), rects));
+
+    if let Some((c, shown)) = se.selected_control_spline(sk) {
+        let mut rects = Vec::new();
+        let tip = with_hint(
+            &km,
+            Action::SketchSplineDegree,
+            &tr!("sketch-spline-degree-selected-hint"),
+        );
+        ui.horizontal(|ui| {
+            ui.label(tr!("sketch-spline-degree"));
+            // Der wirksame Grad: Fünf Punkte bei Wahl von Grad 5 ergeben 4 (D3).
+            ui.strong(shown.to_string());
+            for degree in [5_u8, 3] {
+                let b = ui
+                    .selectable_label(shown == degree, degree.to_string())
+                    .on_hover_text(tip.as_str());
+                rects.push((degree, b.rect));
+                if b.clicked() {
+                    let _ = se.set_spline_degree(sk, c, degree);
+                }
+            }
+        });
+        ui.data_mut(|d| d.insert_temp(selected_degree_key(), (shown, rects)));
+        let name = tr!("action-sketch-insert-control-point");
+        let running = se.tool == Tool::InsertControlPoint;
+        let tip = with_hint(
+            &km,
+            Action::SketchInsertControlPoint,
+            &tr!("sketch-tool-insert-control-point-hint"),
+        );
+        if ui
+            .selectable_label(running, name)
+            .on_hover_text(tip)
+            .clicked()
+        {
+            let next = if running {
+                Tool::Select
+            } else {
+                Tool::InsertControlPoint
+            };
+            se.choose_tool(sk, next);
+        }
+    } else {
+        ui.data_mut(|d| d.remove_temp::<(u8, Vec<(u8, egui::Rect)>)>(selected_degree_key()));
+    }
+
+    match se.selected_conic(sk) {
+        Some((c, rho)) => rho_field_row(ui, se, sk, c, rho),
+        None => {
+            ui.data_mut(|d| d.insert_temp(rho_field_key(), None::<egui::Rect>));
+        }
+    }
+}
+
+/// Das Rho-Feld: eine reine Zahl, keine Formel (Spec, Fusion). Abgeschlossen wird mit Eingabe oder
+/// beim Verlassen, Esc lässt den alten Wert. Was nicht passt, steht in der Meldung der Sitzung.
+fn rho_field_row(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch, c: CurveId, rho: f64) {
+    let id = rho_field_key().with(c);
+    let proposal = crate::sketch_inline::format_rho(rho);
+    let mut text = ui
+        .data(|d| d.get_temp::<String>(id))
+        .unwrap_or_else(|| proposal.clone());
+    let field = ui
+        .horizontal(|ui| {
+            ui.label(tr!("sketch-field-rho"));
+            theme::text_field(
+                ui,
+                egui::TextEdit::singleline(&mut text).desired_width(RHO_FIELD_WIDTH),
+            )
+        })
+        .inner
+        .on_hover_text(tr!("sketch-conic-rho-hint"));
+    ui.data_mut(|d| d.insert_temp(rho_field_key(), Some(field.rect)));
+    if field.has_focus() {
+        ui.data_mut(|d| d.insert_temp(id, text.clone()));
+    }
+    if field.lost_focus() {
+        ui.data_mut(|d| d.remove_temp::<String>(id));
+        let cancelled = ui.input(|i| i.key_pressed(egui::Key::Escape));
+        if !cancelled && text != proposal {
+            match crate::sketch_view::parse_number(&text) {
+                Some(v) => {
+                    let _ = se.set_conic_rho(sk, c, v);
+                }
+                None => se.message = Some(crate::msg!("sketch-err-conic-rho")),
+            }
+        }
+    }
+}
+
 /// Einstellungen des Projizierens (Skizzen 6, Fusion „Projizieren“): Auswahlfilter „Angegebene
 /// Elemente“ / „Körper“ und der Schalter „Projektionsverknüpfung“. Sie gelten für die Sitzung.
 /// „Schneiden“ hat nur den Auswahlfilter (seine Kurven sind immer verknüpft), „Silhouette“ wählt
@@ -1210,6 +1371,7 @@ fn side_contents(
 
     // Bearbeiten
     theme::section_header(ui, &tr!("sketch-section-edit"), theme::SUB_HEADER_H);
+    spline_edit_fields(ui, se, sk);
     let curves = se
         .selection
         .iter()

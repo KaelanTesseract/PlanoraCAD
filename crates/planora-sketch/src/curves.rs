@@ -351,6 +351,21 @@ pub fn conic_rho_ok(rho: f64) -> bool {
     rho > 0.0 && rho < 1.0 && (MIN_WEIGHT..=MAX_WEIGHT).contains(&conic_weight(rho))
 }
 
+/// Der Schulterpunkt des Kegelschnitts: `M + rho·(A − M)` mit `M`, der Mitte der Sehne (Spec A2).
+pub fn conic_shoulder(p0: DVec2, a: DVec2, p2: DVec2, rho: f64) -> DVec2 {
+    let m = (p0 + p2) * 0.5;
+    m + (a - m) * rho
+}
+
+/// Das Rho, zu dem `at` senkrecht auf die Strecke `M`–`A` fällt; unbegrenzt. `None`, wenn der Scheitel
+/// auf der Mitte der Sehne liegt.
+pub fn conic_rho_at(p0: DVec2, a: DVec2, p2: DVec2, at: DVec2) -> Option<f64> {
+    let m = (p0 + p2) * 0.5;
+    let axis = a - m;
+    let rho = (at - m).dot(axis) / axis.length_squared();
+    rho.is_finite().then_some(rho)
+}
+
 /// Taugt `a` als Scheitel über der Sehne `p0`–`p2`? Die Enden sind getrennt, und der Scheitel liegt
 /// weiter als `tol` neben ihrer Geraden. Dieselbe Frage für den Klick auf den Scheitel, die Vorschau
 /// und [`crate::model::Sketch::add_conic`].

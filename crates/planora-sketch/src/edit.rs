@@ -1295,7 +1295,10 @@ impl Sketch {
 
     /// Fügt an der Kurvenstelle, die `at` am nächsten liegt, einen Knoten ein (Skizzen 7, D3): Die
     /// Form bleibt, ein Kontrollpunkt kommt hinzu, die Nachbarn wandern. Alle vorhandenen Punkte
-    /// behalten ihre Ids und ihre Reihenfolge; der neue sitzt in der Mitte der verschobenen Gruppe.
+    /// behalten ihre Ids und ihre Reihenfolge. Die Einfügung ändert eine Gruppe von `p` Kontrollpunkten
+    /// (`p` der Grad); der neue ist der aus dieser Gruppe, der der Kurvenstelle am nächsten liegt. Er
+    /// liegt also bei der Klickstelle, im Allgemeinen aber nicht auf der Kurve, denn er ist ein
+    /// Kontrollpunkt. Außerhalb der Gruppe bewegt sich nichts.
     /// Rückgabe: der neue Punkt und die Zahl der entfallenen Abhängigkeiten.
     pub fn insert_control_point(
         &mut self,
@@ -1322,11 +1325,19 @@ impl Sketch {
         let longer = curve.insert_knot(u, 1).map_err(|err| {
             SketchError::Degenerate(tr!("sketch-err-spline-invalid", detail = err.to_string()))
         })?;
-        // Verschoben wird die Gruppe der Basisfunktionen über dem Knotenabschnitt; der neue Punkt
-        // kommt in ihre Mitte.
+        // Verschoben wird die Gruppe der Basisfunktionen über dem Knotenabschnitt `span`: Vor ihr und
+        // hinter ihr stimmen die alten Punkte genau, jede Stelle in ihr hält also die übrigen an ihrem
+        // Platz. Der neue Punkt nimmt die Stelle nächst der Kurvenstelle, sonst sprängen die Kennungen
+        // weg vom Klick. Die Enden bleiben immer die alten.
         let p = curve.degree();
         let span = curve.knots().find_span(u);
-        let slot = (span + 1 - p + p / 2).clamp(1, n - 1);
+        let on_curve = curve.point(u).truncate();
+        let slot = ((span + 1 - p).max(1)..=span.min(n - 1))
+            .min_by(|&a, &b| {
+                let to = |i: usize| longer.control_points()[i].truncate().distance(on_curve);
+                to(a).total_cmp(&to(b))
+            })
+            .unwrap_or_else(|| (span + 1 - p + p / 2).clamp(1, n - 1));
         let mut ids: Vec<Option<PointId>> = points.iter().map(|&q| Some(q)).collect();
         ids.insert(slot, None);
         self.atomically(|s| {
