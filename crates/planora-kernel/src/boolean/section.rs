@@ -11,6 +11,7 @@ use crate::geometry::{Curve, Surface};
 use crate::ids::Id;
 use crate::topology::{Face, Solid};
 use planora_i18n::tr;
+use planora_math::nurbs::{MAX_WEIGHT, NurbsCurve};
 use planora_math::{DVec3, Frame, Tolerance};
 use std::fmt;
 
@@ -26,7 +27,7 @@ pub struct SectionPiece {
 /// Warum eine Fläche nicht mit der Ebene geschnitten werden kann.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SectionError {
-    /// Analytische Fläche in einer Lage ohne Rechenweg (etwa schräger Kegel, Torus allgemein);
+    /// Analytische Fläche in einer Lage ohne Rechenweg (etwa Torus allgemein);
     /// `surface` ist die Kennung aus `surface_name`, nicht der Anzeigename.
     Unsupported {
         face: Id<Face>,
@@ -61,18 +62,8 @@ fn same_pointwise(a: &Seg, b: &Seg, tol: &Tolerance) -> bool {
 
 /// Schneidet die Ebene den Hüllquader `(lo, hi)`? (Abstände der Ecken mit beiden Vorzeichen,
 /// innerhalb der Toleranz.)
-fn box_meets_plane((lo, hi): (DVec3, DVec3), plane: &Frame, tol: &Tolerance) -> bool {
-    let (mut min, mut max) = (f64::MAX, f64::MIN);
-    for i in 0..8 {
-        let c = DVec3::new(
-            if i & 1 == 0 { lo.x } else { hi.x },
-            if i & 2 == 0 { lo.y } else { hi.y },
-            if i & 4 == 0 { lo.z } else { hi.z },
-        );
-        let d = plane.z.dot(c - plane.origin);
-        min = min.min(d);
-        max = max.max(d);
-    }
+fn box_meets_plane(bounds: (DVec3, DVec3), plane: &Frame, tol: &Tolerance) -> bool {
+    let (min, max) = box_range(bounds, plane.origin, plane.z);
     min <= tol.linear && max >= -tol.linear
 }
 
@@ -155,7 +146,8 @@ fn edge_piece_crosses(
 /// (**Annahme**: Fusion liefert die Berührlinie nicht). Stücke, die als Punktfolge gleich sind
 /// (etwa eine Kante, die zwei Flächen liefern), kommen nur einmal vor; es bleibt das der ersten
 /// Fläche. Freiformflächen ergeben [`SectionError::Freeform`], analytische Lagen ohne Rechenweg
-/// [`SectionError::Unsupported`].
+/// [`SectionError::Unsupported`]. Der Kegel hat in jeder Lage einen Rechenweg
+/// ([`plane_cone_conic`]); Parabel und Hyperbel kommen als `Curve::Nurbs`.
 pub fn section_by_plane(
     solid: &Solid,
     plane: &Frame,
@@ -180,7 +172,20 @@ pub fn section_by_plane(
         // Randkanten aus Freiformkurven: Haltepunkte und Lage mit der weiteren Toleranz.
         let ptol = pipeline_tol(tol, face_is_freeform(&geom));
         let mut found: Vec<Seg> = Vec::new();
-        match intersect_surfaces(&cut, &geom.surface, tol) {
+        // Schräger Kegel: eigener Rechenweg nur hier. `plane_cone` und damit die Booleschen
+        // Operationen bleiben unverändert (Skizzen 7, G1).
+        let meeting = match (intersect_surfaces(&cut, &geom.surface, tol), &geom.surface) {
+            (
+                SurfaceIntersection::Unsupported,
+                Surface::Cone {
+                    frame,
+                    radius,
+                    slope,
+                },
+            ) => plane_cone_conic(plane, frame, *radius, *slope, bbox(&geom, tol), tol),
+            (other, _) => other,
+        };
+        match meeting {
             SurfaceIntersection::None | SurfaceIntersection::Touch => {}
             SurfaceIntersection::Unsupported => {
                 return Err(SectionError::Unsupported {
@@ -232,6 +237,223 @@ pub fn section_by_plane(
         }
     }
     Ok(out.into_iter().map(|(p, _)| p).collect())
+}
+
+/// Fenster, in dem die Lage als Parabel gilt: Abstand der Tangente des Winkels zwischen Ebene und
+/// Achse von der Kegelsteigung, bezogen auf die Steigung.
+const PARABOLA_WINDOW: f64 = 1e-9;
+/// Unter dieser Steigung hat der Kegel keine brauchbare Spitze (Zylinder).
+const MIN_CONE_SLOPE: f64 = 1e-12;
+/// Unter dieser Länge gilt die Projektion der Achse auf die Ebene als null (Ebene quer zur Achse).
+const MIN_AXIS_SHADOW: f64 = 1e-12;
+/// Kleinster Parameterbereich eines Kurvenstücks auf Parabel oder Hyperbel.
+const MIN_CONIC_SPAN: f64 = 1e-12;
+
+/// Kleinster und größter Wert der Ecken des Hüllquaders `(lo, hi)` längs `axis`, von `origin` aus.
+fn box_range((lo, hi): (DVec3, DVec3), origin: DVec3, axis: DVec3) -> (f64, f64) {
+    let (mut min, mut max) = (f64::MAX, f64::MIN);
+    for i in 0..8 {
+        let c = DVec3::new(
+            if i & 1 == 0 { lo.x } else { hi.x },
+            if i & 2 == 0 { lo.y } else { hi.y },
+            if i & 4 == 0 { lo.z } else { hi.z },
+        );
+        let d = axis.dot(c - origin);
+        min = min.min(d);
+        max = max.max(d);
+    }
+    (min, max)
+}
+
+/// Kegelschnitt in der Ebene als Bézier-Stück Grad 2 mit dem Kurvenparameter `[0, 1]`.
+fn conic_bezier(points: [DVec3; 3], middle_weight: f64) -> Option<Curve> {
+    NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        points.to_vec(),
+        vec![1.0, middle_weight, 1.0],
+    )
+    .ok()
+    .map(Curve::nurbs)
+}
+
+/// Ein Ast der Hyperbel als rationale Bézier-Stücke Grad 2 über `[s0, s1]`: Der Punkt zum
+/// Parameter `s` ist `vertex + x·a·(cosh s − 1) + y·b·sinh s`; `x` zeigt vom Scheitel nach außen.
+/// Vom Scheitel aus gerechnet, damit die Rechnung bei sehr großen Halbachsen (fast eine Parabel)
+/// nicht in der Auslöschung großer Zahlen untergeht. Überschreitet das Gewicht die Grenze der
+/// NURBS-Kurven, wird am Scheitel geteilt, sonst in der Mitte. `None`: Die Kurve wäre ungültig.
+fn hyperbola_arcs(
+    (vertex, x, y): (DVec3, DVec3, DVec3),
+    (a, b): (f64, f64),
+    (s0, s1): (f64, f64),
+) -> Option<Vec<Curve>> {
+    let half = (s1 - s0) / 2.0;
+    let weight = half.cosh();
+    if weight > MAX_WEIGHT {
+        let cut = if s0 < 0.0 && s1 > 0.0 {
+            0.0
+        } else {
+            (s0 + s1) / 2.0
+        };
+        let mut arcs = hyperbola_arcs((vertex, x, y), (a, b), (s0, cut))?;
+        arcs.extend(hyperbola_arcs((vertex, x, y), (a, b), (cut, s1))?);
+        return Some(arcs);
+    }
+    let at = |s: f64| {
+        let sh = (s / 2.0).sinh();
+        vertex + x * (a * 2.0 * sh * sh) + y * (b * s.sinh())
+    };
+    // Schnitt der Endtangenten: cosh(m)/cosh(h) und sinh(m)/cosh(h) mit der Mitte m.
+    let m = (s0 + s1) / 2.0;
+    let c = 2.0 * ((m + half) / 2.0).sinh() * ((m - half) / 2.0).sinh() / weight;
+    let corner = vertex + x * (a * c) + y * (b * m.sinh() / weight);
+    Some(vec![conic_bezier([at(s0), corner, at(s1)], weight)?])
+}
+
+/// Schnitt der Ebene `plane` mit dem Kegel `cone`, `radius`, `slope` in jeder Lage (Skizzen 7, G2):
+/// Ellipse als `Curve::Ellipse`, Parabel als nicht rationales Bézier-Stück Grad 2, Hyperbel je Ast
+/// als rationale Bézier-Stücke Grad 2 (der falsche Ast entfällt beim Beschneiden, weil er auf der
+/// anderen Schale liegt), durch die Spitze zwei Geraden, eine Berührgerade oder nur die Spitze.
+///
+/// `bounds`: Hüllquader der Fläche. Parabel und Hyperbel überdecken genau das Stück, das in ihm
+/// liegen kann; ein Ast, der ihn gar nicht erreicht, entfällt schon hier.
+///
+/// Rechnung, in Koordinaten von der Spitze aus: Mit `Q` als Punkt relativ zur Spitze lautet der
+/// Kegel `|Q|² = k·(Q·a)²`, `k = 1 + slope²`. In der Ebene mit `h` als Abstand der Spitze zur Ebene,
+/// `e1` als Richtung des Achsenschattens und `c = n·a`, `σ = a·e1`:
+/// `A·u² + v² − 2·B·u + F = 0` mit `A = c² − slope²·σ²`, `B = k·h·c·σ`, `F = h²·(1 − k·c²)`; dabei
+/// ist `B² − A·F = slope²·h²`.
+pub(crate) fn plane_cone_conic(
+    plane: &Frame,
+    cone: &Frame,
+    radius: f64,
+    slope: f64,
+    bounds: (DVec3, DVec3),
+    tol: &Tolerance,
+) -> SurfaceIntersection {
+    let s = slope.abs();
+    if s < MIN_CONE_SLOPE {
+        return SurfaceIntersection::Unsupported;
+    }
+    let n = plane.z;
+    let axis = cone.z;
+    let apex = cone.origin + axis * (-radius / slope);
+    // Abstand der Spitze zur Ebene: Die Ebene liegt bei `apex + n·h`.
+    let h = n.dot(plane.origin - apex);
+    let foot = apex + n * h;
+    let c = n.dot(axis);
+    let shadow = axis - n * c;
+    let (e1, sigma) = if shadow.length() < MIN_AXIS_SHADOW {
+        (plane.x, 0.0)
+    } else {
+        (shadow.normalize(), shadow.length())
+    };
+    let e2 = n.cross(e1);
+    let flank = s * sigma;
+    let steeper = c.abs() - flank;
+    let parabola = steeper.abs() <= PARABOLA_WINDOW * flank;
+    if h.abs() <= tol.linear {
+        // Durch die Spitze: `A·u² + v² = 0`.
+        if parabola {
+            return SurfaceIntersection::Touch;
+        }
+        if steeper > 0.0 {
+            return SurfaceIntersection::None;
+        }
+        let spread = (-(steeper * (c.abs() + flank))).sqrt();
+        return SurfaceIntersection::Curves(vec![
+            Curve::Line {
+                origin: foot,
+                dir: (e1 + e2 * spread).normalize(),
+            },
+            Curve::Line {
+                origin: foot,
+                dir: (e1 - e2 * spread).normalize(),
+            },
+        ]);
+    }
+    let k = 1.0 + slope * slope;
+    let big_a = steeper * (c.abs() + flank);
+    let big_b = k * h * c * sigma;
+    let big_f = h * h * (1.0 - k * c * c);
+    let root = s * h.abs();
+    let (y_lo, y_hi) = box_range(bounds, foot, e2);
+    if parabola {
+        // `u = (v² + F) / (2·B)`: Bézier über `v`, der Parameter läuft gleichmäßig in `v`.
+        let u_at = |v: f64| (v * v + big_f) / (2.0 * big_b);
+        let vertex_u = u_at(0.0);
+        let (u_lo, u_hi) = box_range(bounds, foot, e1);
+        let reach = if big_b > 0.0 {
+            u_hi - vertex_u
+        } else {
+            vertex_u - u_lo
+        };
+        if reach < 0.0 {
+            return SurfaceIntersection::None;
+        }
+        let v_max = (2.0 * big_b.abs() * reach).sqrt();
+        let (v0, v1) = (y_lo.max(-v_max), y_hi.min(v_max));
+        if v1 - v0 < MIN_CONIC_SPAN {
+            return SurfaceIntersection::None;
+        }
+        let point = |u: f64, v: f64| foot + e1 * u + e2 * v;
+        let corner = point((v0 * v1 + big_f) / (2.0 * big_b), (v0 + v1) / 2.0);
+        return conic_bezier([point(u_at(v0), v0), corner, point(u_at(v1), v1)], 1.0)
+            .map_or(SurfaceIntersection::Unsupported, |curve| {
+                SurfaceIntersection::Curves(vec![curve])
+            });
+    }
+    if steeper > 0.0 {
+        // `A·(u − B/A)² + v² = slope²·h²/A`, und `A ≤ 1`: die große Halbachse liegt auf `e1`.
+        return SurfaceIntersection::Curves(vec![Curve::Ellipse {
+            frame: Frame {
+                origin: foot + e1 * (big_b / big_a),
+                x: e1,
+                y: e2,
+                z: n,
+            },
+            major: root / big_a,
+            minor: root / big_a.sqrt(),
+        }]);
+    }
+    // Hyperbel: Scheitel sind die Nullstellen von `A·u² − 2·B·u + F`, stabil gerechnet.
+    let flat = -big_a;
+    let (a, b) = (root / flat, root / flat.sqrt());
+    let q = big_b + root.copysign(big_b);
+    let (far, near) = (q / big_a, big_f / q);
+    // Nach `q` unterscheiden, nicht nach `B`: `B` kann −0 sein (Ebene parallel zur Achse).
+    let vertices = if q > 0.0 {
+        [(1.0, near), (-1.0, far)]
+    } else {
+        [(1.0, far), (-1.0, near)]
+    };
+    let mut curves = Vec::new();
+    for (side, vertex_u) in vertices {
+        let x = e1 * side;
+        let vertex = foot + e1 * vertex_u;
+        let x_hi = box_range(bounds, vertex, x).1;
+        if x_hi < 0.0 {
+            continue;
+        }
+        // `a·(cosh s − 1) ≤ reach` heißt `|s| ≤ 2·asinh(√(reach / (2·a)))`.
+        let s_max = 2.0 * (x_hi / (2.0 * a)).sqrt().asinh();
+        let (s0, s1) = (
+            (y_lo / b).asinh().max(-s_max),
+            (y_hi / b).asinh().min(s_max),
+        );
+        if s1 - s0 < MIN_CONIC_SPAN {
+            continue;
+        }
+        match hyperbola_arcs((vertex, x, e2), (a, b), (s0, s1)) {
+            Some(arcs) => curves.extend(arcs),
+            None => return SurfaceIntersection::Unsupported,
+        }
+    }
+    if curves.is_empty() {
+        SurfaceIntersection::None
+    } else {
+        SurfaceIntersection::Curves(curves)
+    }
 }
 
 /// Ungekürzte Umrisskurven der Trägerfläche `surface` in Blickrichtung `view` (Einheitsvektor)
@@ -622,22 +844,61 @@ mod tests {
         assert!(((ps[0].t1 - ps[0].t0).abs() - TAU).abs() < 1e-9);
     }
 
+    /// Skizzen 7: Der schräge Kegel wird nicht mehr abgelehnt, ein Torus allgemein weiter schon
+    /// (der Fehlertext bleibt).
     #[test]
-    fn oblique_cone_is_unsupported() {
-        let c = make_cone(5.0, 10.0, &tol()).unwrap();
+    fn oblique_cone_gives_an_ellipse_and_a_general_torus_is_refused() {
+        let t = tol();
+        let c = make_cone(5.0, 10.0, &t).unwrap();
         let a = 30f64.to_radians();
         let n = DVec3::new(0.0, a.sin(), a.cos());
-        let err =
-            section_by_plane(&c, &plane(DVec3::new(0.0, 0.0, 5.0), n), None, &tol()).unwrap_err();
-        let cone = face_with(&c, |s| matches!(s, Surface::Cone { .. }));
+        let ps = section_by_plane(&c, &plane(DVec3::new(0.0, 0.0, 5.0), n), None, &t).unwrap();
+        assert_eq!(ps.len(), 1, "{ps:?}");
+        assert!(matches!(ps[0].curve, Curve::Ellipse { .. }), "{ps:?}");
+
+        let s = torus_solid(&t);
+        let torus = face_with(&s, |x| matches!(x, Surface::Torus { .. }));
+        let err = section_by_plane(&s, &plane(DVec3::new(5.0, 0.0, 0.0), n), None, &t).unwrap_err();
         assert_eq!(
             err,
             SectionError::Unsupported {
-                face: cone,
-                surface: "Kegel"
+                face: torus,
+                surface: "Torus"
             }
         );
         assert!(!err.to_string().is_empty());
+    }
+
+    /// Beide Äste stehen in der Liste; erst das Beschneiden lässt den richtigen übrig.
+    #[test]
+    fn conic_lists_both_hyperbola_branches_and_the_cases_through_the_apex() {
+        let t = tol();
+        let cone = Frame::WORLD;
+        let big = (DVec3::splat(-30.0), DVec3::splat(30.0));
+        // Kegel mit Spitze bei z = 10, Ebene y = 2 parallel zur Achse.
+        let conic = |p: &Frame| plane_cone_conic(p, &cone, 5.0, -0.5, big, &t);
+        let SurfaceIntersection::Curves(cs) = conic(&plane(DVec3::Y * 2.0, DVec3::Y)) else {
+            panic!("keine Kurven");
+        };
+        assert_eq!(cs.len(), 2, "{cs:?}");
+        assert!(cs.iter().all(|c| matches!(c, Curve::Nurbs(_))));
+        // Durch die Spitze: zwei Geraden; Mantellinie berührt: Touch; nur die Spitze: nichts.
+        let apex = DVec3::Z * 10.0;
+        let n = DVec3::new(0.0, 1.0, 0.1).normalize();
+        let SurfaceIntersection::Curves(cs) = conic(&plane(apex, n)) else {
+            panic!("keine Geraden");
+        };
+        assert_eq!(cs.len(), 2);
+        assert!(cs.iter().all(|c| matches!(c, Curve::Line { .. })));
+        let gen_n = DVec3::new(0.0, 1.0, 0.5).normalize();
+        assert!(matches!(
+            conic(&plane(apex, gen_n)),
+            SurfaceIntersection::Touch
+        ));
+        assert!(matches!(
+            conic(&plane(apex, DVec3::new(0.0, 0.2, 1.0).normalize())),
+            SurfaceIntersection::None
+        ));
     }
 
     #[test]

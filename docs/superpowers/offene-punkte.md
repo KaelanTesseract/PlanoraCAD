@@ -2352,3 +2352,12 @@ Abgeschlossen 2026-11-08, gemergt in a78db45. Drei Handtests bei 1920×1080; die
 - Konstruktionsebenen werden ohne Verdeckung gezeichnet (siehe oben) und haben keinen Ziehpfeil in der Ansicht für Abstand und Winkel; beides ist Abweichung von Fusion und wird getippt.
 - Ebenen schreiben die Hinweispunkte ihrer Bezüge nicht zurück; die Ebene hält nur den Verweis selbst (Abweichung, geringe Folge).
 - Eine Datei im Format 15 mit verknüpfter Kantenprojektion eines schrägen Bogens (Ellipsenbogen) lässt sich in einer älteren Programmversion laden, aber die Skizze steht dort im Fehlerzustand („Bogen nicht parallel“); nichts geht verloren, die Datei bleibt lesbar.
+
+## Teilprojekt Skizzen 7
+
+### Schneiden am schrägen Kegel (Task 11)
+- **Folgepunkt:** `plane_cone` und damit die Booleschen Operationen kennen den schrägen Kegel weiter nicht (Spec G1). Der neue Rechenweg `plane_cone_conic` gilt nur für „Schneiden“.
+- **Annahme:** Eine Parabel oder Hyperbel, die über die Naht des Kegels läuft, ergibt zwei feste Splines, die sich an der Naht treffen. Das ist das Beschneiden wie gehabt (G3). Fusion liefert vermutlich eine Kurve.
+- **Annahme:** Eine sehr schmale Hyperbel (Ebene höchstens etwa ein Millionstel der Kegelgröße neben der Spitze) wird am Scheitel in zwei feste Splines geteilt, weil das Gewicht der NURBS-Kurve sonst über der Grenze läge.
+- **Grenze:** Ist die Ebene weniger als etwa 4,5e-5 rad gegen die Senkrechte zur Achse gekippt, antwortet noch der alte Kreisweg von `plane_cone`. Er bleibt unverändert und weicht dort messbar ab (7,6e-6 mm bei 1e-5 rad und r = 3).
+- **Grenze:** Dicht neben der Parabellage (Abweichung über dem Fenster 1e-9) ist die Ellipse sehr groß; ihre Genauigkeit ist dort an die Zahlendarstellung gebunden.
