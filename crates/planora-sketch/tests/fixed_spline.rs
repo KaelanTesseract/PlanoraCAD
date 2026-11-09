@@ -806,16 +806,63 @@ fn two_fixed_splines_refused() {
     assert!(s.prepare_smooth(a, pa, b, pb).is_err());
     assert!(s.add_constraint(K::Smooth(a, pa, b, pb)).is_err());
     assert_eq!(s.constraints().count(), before);
-    // Gegen einen freien Spline, eine Linie, einen Bogen, einen Kegelschnitt: ja.
+    // Gegen einen freien Spline und einen Kegelschnitt: ja. Skizzen 7: gegen eine Linie nicht mehr,
+    // siehe `a_line_on_a_fixed_spline_is_refused_with_its_own_reason`.
     let q: Vec<PointId> = [(0.0, 0.0), (1.0, 3.0), (2.0, 9.0)]
         .iter()
         .map(|&(x, y)| s.add_point(x, y).unwrap())
         .collect();
     let sp = s.add_spline(&q[..2]).unwrap();
-    let line = s.add_line(q[1], q[2]).unwrap();
     let conic = s.add_conic(q[0], q[2], q[1], 0.5).unwrap();
-    for other in [sp, line, conic] {
+    for other in [sp, conic] {
         assert!(s.smooth_kinds_fit(a, other));
+    }
+}
+
+/// Die Krümmung des festen Splines steht fest, die der Linie ist 0: Die Krümmungszeile ginge nie auf.
+/// Darum gibt es den Befehl für dieses Paar nicht, in beiden Wahlreihenfolgen und mit eigenem Grund.
+/// Das gilt nach der Art, also auch für ein festes Ende, das zufällig gerade ausläuft.
+#[test]
+fn a_line_on_a_fixed_spline_is_refused_with_its_own_reason() {
+    let flat = NurbsCurve::natural_cubic(
+        &[
+            DVec3::new(0.0, 0.0, 0.0),
+            DVec3::new(3.0, 3.0, 0.0),
+            DVec3::new(7.0, 2.0, 0.0),
+            DVec3::new(10.0, 5.0, 0.0),
+        ],
+        &[0.0, 1.0, 2.0, 3.0],
+    )
+    .unwrap();
+    for (curve, what) in [(wavy(), "krumm"), (flat, "gerades Ende")] {
+        let mut s = sketch();
+        let (lo, hi) = curve.domain();
+        let edge = free(curve);
+        let fixed = s.add_projected_curve(&edge, lo, hi, LINKED).unwrap();
+        let (_, end, _) = fixed_ends(&s, fixed);
+        let xy = s.point_xy(end).unwrap();
+        let a = s.add_point(xy.x, xy.y).unwrap();
+        let b = s.add_point(xy.x + 5.0, xy.y + 1.0).unwrap();
+        let line = s.add_line(a, b).unwrap();
+        s.add_constraint(K::Coincident(end, a)).unwrap();
+        s.solve();
+        let why = SketchError::WrongType(tr!("sketch-smooth-fixed-line"));
+        let before = s.to_data();
+        for (x, px, y, py) in [(fixed, end, line, a), (line, a, fixed, end)] {
+            assert!(!s.smooth_kinds_fit(x, y), "{what}");
+            assert_eq!(s.prepare_smooth(x, px, y, py), Err(why.clone()), "{what}");
+            assert_eq!(
+                s.add_constraint(K::Smooth(x, px, y, py)),
+                Err(why.clone()),
+                "{what}"
+            );
+            assert_eq!(s.to_data(), before, "{what}: nichts geändert");
+        }
+        // Jede für sich bleibt ein Partner, und die Linie darf weiter an einen freien Spline.
+        assert!(s.smooth_partner(fixed) && s.smooth_partner(line));
+        let q = s.add_point(xy.x - 5.0, xy.y - 1.0).unwrap();
+        let sp = s.add_spline(&[a, q]).unwrap();
+        assert!(s.smooth_kinds_fit(line, sp), "{what}");
     }
 }
 

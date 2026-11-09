@@ -1549,7 +1549,9 @@ impl Sketch {
             }
             Smooth(a, _, b, _) if a == b => degenerate(tr!("sketch-err-two-objects")),
             Smooth(a, _, b, _) => {
-                if self.smooth_kinds_fit(*a, *b) {
+                if self.smooth_fixed_against_line(*a, *b) {
+                    wrong(tr!("sketch-smooth-fixed-line"))
+                } else if self.smooth_kinds_fit(*a, *b) {
                     Ok(())
                 } else {
                     wrong(tr!("sketch-smooth-kinds"))
@@ -2216,7 +2218,9 @@ impl Sketch {
     }
 
     /// Geht Glatt zwischen `a` und `b` (Spec C5)? Mindestens eine Seite ist ein Spline einer Art, die
-    /// andere ein gültiger Partner; zwei feste Splines gehen nicht. Dieselbe Regel nutzen die Prüfung und die Oberfläche.
+    /// andere ein gültiger Partner; zwei feste Splines gehen nicht, ein fester Spline und eine Linie
+    /// auch nicht ([`smooth_fixed_against_line`](Self::smooth_fixed_against_line)). Dieselbe Regel
+    /// nutzen die Prüfung und die Oberfläche.
     pub fn smooth_kinds_fit(&self, a: CurveId, b: CurveId) -> bool {
         let (Some(ka), Some(kb)) = (self.curves.get(a), self.curves.get(b)) else {
             return false;
@@ -2228,6 +2232,22 @@ impl Sketch {
             && (smooth_leader(ka) || smooth_leader(kb))
             && !(matches!(ka, CurveKind::FixedSpline { .. })
                 && matches!(kb, CurveKind::FixedSpline { .. }))
+            && !self.smooth_fixed_against_line(a, b)
+    }
+
+    /// Sind `a` und `b` ein fester Spline und eine Linie, in beliebiger Folge? Die Krümmung des festen
+    /// Splines ändert sich nie, die der Linie ist 0: Die Krümmungszeile ginge nicht auf, und keine
+    /// Variable könnte helfen. Die Regel gilt nach der Art, auch für ein Ende, das zufällig gerade
+    /// ausläuft; sonst hinge der Befehl an einem Wert, den man nicht sieht.
+    pub fn smooth_fixed_against_line(&self, a: CurveId, b: CurveId) -> bool {
+        let (Some(ka), Some(kb)) = (self.curves.get(a), self.curves.get(b)) else {
+            return false;
+        };
+        matches!(
+            (&ka.kind, &kb.kind),
+            (CurveKind::FixedSpline { .. }, CurveKind::Line { .. })
+                | (CurveKind::Line { .. }, CurveKind::FixedSpline { .. })
+        )
     }
 
     /// Das wirksame Glatt zwischen genau diesen Enden, in beiden Reihenfolgen.

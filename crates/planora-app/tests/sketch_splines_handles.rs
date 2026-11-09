@@ -243,6 +243,119 @@ fn esc_during_first_drag_leaves_nothing() {
     );
 }
 
+/// Ein Griff, der schon an ist, und die Lage seiner Spitze.
+fn with_active_tangent(c: CurveId, s: &mut AppState, at: PointId) -> (SplineHandle, DVec2) {
+    select(s, &[Item::Curve(c)]);
+    let g = ghost(s, HandlePart::Tangent, at);
+    assert!(begin(s, g.tip));
+    drag(s, g.tip + v(1.0, 1.0));
+    end(s);
+    let h = handle(s, c, at).expect("eingeschaltet");
+    (h, pos(s, h.tip))
+}
+
+fn change_tool(s: &mut AppState) {
+    let (se_, sk_) = s.session_sketch_mut().unwrap();
+    se_.set_tool(sk_, Tool::Line);
+    s.observe_sketch(false);
+}
+
+/// Wie beim Punktzug: Der Werkzeugwechsel übernimmt den Zug an einem Griff, der schon an ist.
+#[test]
+fn a_tool_change_takes_over_the_drag_on_an_active_handle() {
+    let (mut s, c, pts) = wave();
+    let (h, tip) = with_active_tangent(c, &mut s, pts[2]);
+    let steps = undo_len(&s);
+    assert!(begin(&mut s, tip));
+    let to = tip + v(2.0, 1.0);
+    drag(&mut s, to);
+    change_tool(&mut s);
+    let session = s.sketch_session.as_ref().unwrap();
+    assert!(!session.is_dragging());
+    assert_eq!(session.tool, Tool::Line);
+    assert!(pos(&s, h.tip).distance(to) < 1e-6);
+    assert_eq!(undo_len(&s), steps + 1, "ein Schritt");
+    assert!(s.undo_sketch());
+    assert_eq!(pos(&s, h.tip), tip);
+    assert!(handle(&s, c, pts[2]).is_some(), "der Griff bleibt an");
+}
+
+/// Dasselbe, wenn der Stützpunkt seinen Griff mitnimmt.
+#[test]
+fn a_tool_change_takes_over_the_drag_of_a_fit_point_with_a_handle() {
+    let (mut s, c, pts) = wave();
+    let (h, tip) = with_active_tangent(c, &mut s, pts[2]);
+    let at = pos(&s, pts[2]);
+    let steps = undo_len(&s);
+    assert!(begin(&mut s, at));
+    drag(&mut s, at + v(1.0, 2.0));
+    change_tool(&mut s);
+    assert!(pos(&s, pts[2]).distance(at + v(1.0, 2.0)) < 1e-6);
+    assert!(pos(&s, h.tip).distance(tip + v(1.0, 2.0)) < 1e-6);
+    assert_eq!(undo_len(&s), steps + 1);
+}
+
+/// Der Rho-Griff ist immer da: Es gibt nichts einzuschalten, also ist es ein gewöhnlicher Zug.
+#[test]
+fn a_tool_change_takes_over_the_rho_drag() {
+    let (mut s, c) = conic_sketch(0.5);
+    select(&mut s, &[Item::Curve(c)]);
+    let at = conic_shoulder(v(0.0, 0.0), v(10.0, 12.0), v(20.0, 0.0), 0.5);
+    let steps = undo_len(&s);
+    assert!(begin(&mut s, at));
+    drag(&mut s, at + v(0.0, 2.4));
+    change_tool(&mut s);
+    assert!((rho_of(&s, c) - 0.7).abs() < 1e-9);
+    assert_eq!(undo_len(&s), steps + 1);
+    assert!(s.undo_sketch());
+    assert_eq!(rho_of(&s, c), 0.5);
+}
+
+/// Der erste Zug schaltet erst ein und bleibt beim Werkzeugwechsel nie halb stehen, auch nicht, wenn
+/// am Stützpunkt schon der Tangentengriff an ist und nur der Krümmungsgriff dazukäme.
+#[test]
+fn a_tool_change_during_the_curvature_ghost_leaves_the_tangent_handle_only() {
+    let (mut s, c, pts) = wave();
+    let (_, tip) = with_active_tangent(c, &mut s, pts[2]);
+    let before = sk(&s).clone();
+    let steps = undo_len(&s);
+    let g = ghost(&s, HandlePart::Curvature, pts[2]);
+    assert!(begin(&mut s, g.tip));
+    drag(&mut s, g.tip + v(1.0, 1.0));
+    change_tool(&mut s);
+    assert!(unchanged(sk(&s), &before));
+    assert_eq!(undo_len(&s), steps);
+    assert_eq!(pos(&s, handle(&s, c, pts[2]).unwrap().tip), tip);
+}
+
+/// Esc und die rechte Taste brechen auch den Zug an einem Griff ab, der schon an ist.
+#[test]
+fn esc_and_right_button_still_abort_the_drag_on_an_active_handle() {
+    type Abort = fn(&mut AppState);
+    let aborts: [Abort; 2] = [
+        |s| {
+            let (se, sk) = s.session_sketch_mut().unwrap();
+            se.cancel(sk);
+        },
+        |s| {
+            let (se, sk) = s.session_sketch_mut().unwrap();
+            assert!(se.abort_handle_drag(sk));
+        },
+    ];
+    for abort in aborts {
+        let (mut s, c, pts) = wave();
+        let (_, tip) = with_active_tangent(c, &mut s, pts[2]);
+        let before = sk(&s).clone();
+        let steps = undo_len(&s);
+        assert!(begin(&mut s, tip));
+        drag(&mut s, tip + v(2.0, 1.0));
+        abort(&mut s);
+        s.observe_sketch(false);
+        assert!(unchanged(sk(&s), &before));
+        assert_eq!(undo_len(&s), steps);
+    }
+}
+
 #[test]
 fn undo_during_the_first_drag_only_takes_the_drag_back() {
     let (mut s, c, pts) = wave();
@@ -1632,6 +1745,98 @@ fn a_rho_draft_does_not_survive_the_field() {
     };
     assert_eq!(rho, 0.5, "der alte Entwurf gilt nicht");
     assert!(rig.se().message.is_none(), "{:?}", rig.se().message_text());
+}
+
+/// Das Rho-Feld übernimmt nur mit Eingabe oder Tab wie die Felder am Zeiger. Wer es sonst verlässt,
+/// verwirft den Entwurf: Kein Wert, kein Schritt, keine Meldung.
+#[test]
+fn the_rho_field_takes_a_value_only_with_enter_or_tab() {
+    let mut conic = None;
+    let mut rig = Rig::new(|sk| {
+        let p = sk.add_point(0.0, 0.0).unwrap();
+        let q = sk.add_point(20.0, 0.0).unwrap();
+        let a = sk.add_point(10.0, 12.0).unwrap();
+        conic = Some(sk.add_conic(p, q, a, 0.5).unwrap());
+    });
+    let c = conic.unwrap();
+    let rho = |rig: &mut Rig| match rig.st().session_sketch().unwrap().curve(c).unwrap().kind {
+        CurveKind::Conic { rho, .. } => rho,
+        _ => panic!("kein Kegelschnitt"),
+    };
+    let type_draft = |rig: &mut Rig, text: &str| {
+        rig.select(&[Item::Curve(c)]);
+        let field = sketch_panel::rho_field(&rig.ctx).expect("Rho-Feld");
+        rig.click(field.center());
+        rig.frame(vec![Event::Key {
+            key: Key::A,
+            physical_key: Some(Key::A),
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::COMMAND,
+        }]);
+        rig.frame(vec![Event::Text(text.to_string())]);
+    };
+    let steps = rig.undo_len();
+    // Klick in die Zeichnung: Der Wert, auch ein falscher, verfällt ohne Meldung.
+    let empty = rig.screen(v(10.0, -6.0));
+    for draft in ["0,25", "1,5"] {
+        type_draft(&mut rig, draft);
+        rig.click(empty);
+        assert!(
+            rig.se().selection.is_empty(),
+            "der Klick traf die Zeichnung"
+        );
+        assert_eq!(rho(&mut rig), 0.5, "{draft}");
+        assert_eq!(rig.undo_len(), steps, "{draft}");
+        assert!(rig.se().message.is_none(), "{draft}");
+    }
+    // Klick auf die Kurve selbst: Sie bleibt gewählt, das Feld bleibt stehen und verliert nur den
+    // Fokus. Das ist der Fall, in dem früher der halb getippte Wert galt.
+    let on_curve = rig
+        .st()
+        .session_sketch()
+        .unwrap()
+        .curve_polyline(c, 64)
+        .unwrap()[12];
+    let on_curve = rig.screen(on_curve);
+    for draft in ["0,25", "1,5"] {
+        type_draft(&mut rig, draft);
+        rig.click(on_curve);
+        assert_eq!(rig.se().selection, vec![Item::Curve(c)]);
+        assert!(sketch_panel::rho_field(&rig.ctx).is_some(), "{draft}");
+        assert_eq!(rho(&mut rig), 0.5, "{draft}");
+        assert_eq!(rig.undo_len(), steps, "{draft}");
+        assert!(rig.se().message.is_none(), "{draft}");
+    }
+    // Der Entwurf kommt nicht wieder.
+    rig.select(&[Item::Curve(c)]);
+    let field = sketch_panel::rho_field(&rig.ctx).expect("Rho-Feld");
+    rig.click(field.center());
+    rig.frame(vec![key(Key::Enter)]);
+    rig.settle();
+    assert_eq!(rho(&mut rig), 0.5);
+    assert_eq!(rig.undo_len(), steps);
+    // Esc verwirft.
+    type_draft(&mut rig, "0,25");
+    rig.frame(vec![key(Key::Escape)]);
+    rig.settle();
+    assert_eq!(rho(&mut rig), 0.5);
+    assert_eq!(rig.undo_len(), steps);
+    // Tab übernimmt, ein Schritt. Der Fokus geht ans nächste Feld; solange zählt der Verlauf das
+    // Tippen als Geste wie überall, und der Schritt entsteht beim Verlassen.
+    type_draft(&mut rig, "0,25");
+    rig.frame(vec![key(Key::Tab)]);
+    rig.settle();
+    assert_eq!(rho(&mut rig), 0.25);
+    rig.click(empty);
+    assert_eq!(rho(&mut rig), 0.25);
+    assert_eq!(rig.undo_len(), steps + 1);
+    // Eingabe übernimmt, ein Schritt.
+    type_draft(&mut rig, "0,75");
+    rig.frame(vec![key(Key::Enter)]);
+    rig.settle();
+    assert_eq!(rho(&mut rig), 0.75);
+    assert_eq!(rig.undo_len(), steps + 2);
 }
 
 /// Die vier Aktionen laufen wie aus der Tastenbelegung über `run_action`.

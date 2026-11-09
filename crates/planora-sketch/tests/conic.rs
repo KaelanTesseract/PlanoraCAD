@@ -1,6 +1,7 @@
 //! Kegelschnitt (Skizzen 7, Task 5): rationale quadratische Bézierkurve mit Rho, Stutzen, Dehnen,
 //! Spiegeln, Abrunden, Versatz, Profile, Abhängigkeiten und Laden.
 
+use planora_i18n::tr;
 use planora_kernel::Segment;
 use planora_math::{DVec2, Frame, Tolerance};
 use planora_sketch::constraint::ConstraintKind as K;
@@ -438,23 +439,27 @@ fn extend_conic_exact_and_refuses_negative_weight() {
 
 #[test]
 fn extend_leaves_a_shared_apex_alone() {
+    let shared = || Err(SketchError::Degenerate(tr!("sketch-err-conic-apex-shared")));
     let mut s = sketch();
     let (c, [_, apex, _]) = conic(&mut s, 0.5);
     let other = s.add_point(30.0, 30.0).unwrap();
     s.add_line(apex, other).unwrap();
+    // Ohne Ziel bleibt es „kein Ziel“.
+    assert_eq!(s.extend(c, v(10.0, 0.0)), Ok(false));
+    // Skizzen 7: Mit Ziel sagt das Dehnen den wahren Grund.
     line(&mut s, (0.0, -1.0), (20.0, -1.0));
     let before = format!("{:?}", s.to_data());
-    assert!(!s.extend(c, v(10.0, 0.0)).unwrap());
+    assert_eq!(s.extend(c, v(10.0, 0.0)), shared());
     assert_eq!(format!("{:?}", s.to_data()), before);
 
-    // Auch wenn das Ziel zugleich hinter dem positiven Gewicht liegt: kein Ziel, keine Meldung.
+    // Auch wenn das Ziel zugleich hinter dem positiven Gewicht liegt: Der geteilte Scheitel zählt zuerst.
     let mut s = sketch();
     let (c, [_, apex, _]) = conic_at(&mut s, (0.0, 0.0), (5.0, 4.0), (10.0, 0.0), 0.2);
     let other = s.add_point(30.0, 30.0).unwrap();
     s.add_line(apex, other).unwrap();
     line(&mut s, (0.0, -1.0), (20.0, -1.0));
     let before = format!("{:?}", s.to_data());
-    assert_eq!(s.extend(c, v(10.0, 0.0)), Ok(false));
+    assert_eq!(s.extend(c, v(10.0, 0.0)), shared());
     assert_eq!(format!("{:?}", s.to_data()), before);
 }
 

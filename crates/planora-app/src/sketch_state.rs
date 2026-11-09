@@ -347,6 +347,8 @@ pub struct CurveDrag {
     /// dorthin zurück ([`abort_handle_drag`](SketchSession::abort_handle_drag)). `None`: ein Zug ohne
     /// Griff, oder mitten im Zug wurde noch etwas anderes geändert.
     pub(crate) before: Option<Sketch>,
+    /// Griffzug: Dieser Zug hat den Griff erst eingeschaltet (erster Zug).
+    pub(crate) activates: bool,
     /// Griffzug: Name des Schritts.
     pub(crate) label: Option<Msg>,
     /// Zahl der Muster vor dem Zug: Löst der Zug eines auf, sagt es die Meldung am Ende.
@@ -371,6 +373,7 @@ impl CurveDrag {
             rho: None,
             carry: false,
             before: None,
+            activates: false,
             label: None,
             patterns_before: sk.pattern_count(),
             origin: Some(sk.clone()),
@@ -679,9 +682,12 @@ impl SketchSession {
     }
 
     /// Wechselt das Werkzeug; ein laufendes Werkzeug wird abgebrochen, ein laufendes Ziehen
-    /// wie mit [`end_drag`](Self::end_drag) beendet.
+    /// wie mit [`end_drag`](Self::end_drag) beendet, auch ein Griffzug. Nur der erste Zug, der einen
+    /// Griff erst einschaltet, geht ganz zurück: Er bleibt nie halb stehen.
     pub fn set_tool(&mut self, sk: &mut Sketch, tool: Tool) {
-        self.abort_handle_drag(sk);
+        if self.curve_drag.as_ref().is_some_and(|d| d.activates) {
+            self.abort_handle_drag(sk);
+        }
         self.end_drag(sk);
         self.box_select = None;
         self.trim_drag = None;
@@ -3187,10 +3193,14 @@ fn kinds_refusal(sk: &Sketch, action: ConstraintAction, items: &[Item]) -> Optio
             .as_ref()
             .is_some_and(|s| s.curves.len() == 2 || s.curves.iter().any(|&c| !ok(c)))
     };
+    let fixed_and_line = curves_only
+        .as_ref()
+        .is_some_and(|s| matches!(s.curves[..], [a, b] if sk.smooth_fixed_against_line(a, b)));
     match action {
         ConstraintAction::Concentric if wrong_kind(&|c| round_center(sk, c).is_some()) => {
             Some(crate::msg!("sketch-concentric-kinds"))
         }
+        ConstraintAction::Smooth if fixed_and_line => Some(crate::msg!("sketch-smooth-fixed-line")),
         ConstraintAction::Smooth if wrong_kind(&|c| sk.smooth_partner(c)) => {
             Some(crate::msg!("sketch-smooth-kinds"))
         }

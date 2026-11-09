@@ -161,9 +161,9 @@ impl Sketch {
     /// (höchstens bis kurz vor den eigenen Anfang), ein Spline mit Kontrollpunkten über sein
     /// Randstück (dessen letzte Kontrollpunkte wandern mit, das alte Stück behält seine Form).
     /// `Ok(false)` und die Skizze bleibt unverändert, wenn das Ende nicht offen ist (andere Kurve am
-    /// Punkt oder „deckungsgleich“), die Kurve keine dieser Arten ist, es kein Ziel gibt oder ein
-    /// mitwandernder Kontrollpunkt zu einer anderen Kurve gehört. Bei einem Fehler bleibt die Skizze
-    /// unverändert.
+    /// Punkt oder „deckungsgleich“), die Kurve keine dieser Arten ist oder es kein Ziel gibt. Gibt es
+    /// ein Ziel, aber ein mitwandernder Kontrollpunkt oder der Scheitel gehört zu einer anderen Kurve,
+    /// ist das ein Fehler mit diesem Grund. Bei einem Fehler bleibt die Skizze unverändert.
     /// Ist `c` Vorlage oder Exemplar eines Musters, wird das Muster vorher aufgelöst.
     pub fn extend(&mut self, c: CurveId, at: DVec2) -> Result<bool, SketchError> {
         self.check_curve(c)?;
@@ -172,10 +172,10 @@ impl Sketch {
             return Err(SketchError::InvalidInput(tr!("sketch-err-target-finite")));
         }
         let Some(x) = self.locate_extend(c, at) else {
-            if self.conic_extend_refused(c, at) {
-                return Err(SketchError::Degenerate(tr!("sketch-err-conic-extend")));
-            }
-            return Ok(false);
+            return match self.extend_refusal(c, at) {
+                Some(why) => Err(SketchError::Degenerate(why)),
+                None => Ok(false),
+            };
         };
         let backup = self.clone();
         self.dissolve_patterns_at(&[c]);
@@ -350,6 +350,19 @@ impl Sketch {
         curve: &Arc<NurbsCurve>,
         at_end: bool,
     ) -> Option<ExtendTarget> {
+        self.control_extend_plan(c, curve, at_end)
+            .and_then(|(target, shared)| (!shared).then_some(target))
+    }
+
+    /// Das Ziel beim Dehnen eines Splines mit Kontrollpunkten, dazu: Gehört ein mitwandernder Punkt zu
+    /// einer anderen Kurve? Sie bewegte sich mit, also darf das Ziel nicht gelten (Entscheidung 7: Es
+    /// bewegt sich nie etwas anderes).
+    fn control_extend_plan(
+        &self,
+        c: CurveId,
+        curve: &Arc<NurbsCurve>,
+        at_end: bool,
+    ) -> Option<(ExtendTarget, bool)> {
         let CurveKind::ControlSpline { points, .. } = &self.curves[c].kind else {
             return None;
         };
@@ -408,28 +421,27 @@ impl Sketch {
         } else {
             curve.extended(t, hi).ok()?
         };
-        // Nur die Punkte des Randstücks wandern; gehört einer zu einer anderen Kurve, bewegte die
-        // sich mit, also kein Ziel (Entscheidung 7: Es bewegt sich nie etwas anderes).
+        // Nur die Punkte des Randstücks wandern.
         let mut moved = Vec::new();
+        let mut shared = false;
         for (&p, q) in points.iter().zip(longer.control_points()) {
             let xy = if p == point { to } else { q.truncate() };
             if xy == self.pos(p) {
                 continue;
             }
-            if !within_coord_range(xy)
-                || self
-                    .curves()
-                    .any(|(id, d)| id != c && d.kind.points().contains(&p))
-            {
+            if !within_coord_range(xy) {
                 return None;
             }
+            shared |= self
+                .curves()
+                .any(|(id, d)| id != c && d.kind.points().contains(&p));
             moved.push((p, xy));
         }
         let mut path = search.polyline(end, t, PREVIEW_STEPS_PER_TURN);
         let n = path.len();
         path[0] = from;
         path[n - 1] = to;
-        Some(ExtendTarget {
+        let target = ExtendTarget {
             point,
             to,
             cutter,
@@ -438,7 +450,8 @@ impl Sketch {
                 moved,
                 shape: ExtendShape::Knots(longer.knots().knots().to_vec()),
             }),
-        })
+        };
+        Some((target, shared))
     }
 
     /// Nächster Treffer der Fortsetzung des Kegelschnitts `c` über sein Ende: `(Suchkurve, t, Kurve)`,
@@ -489,7 +502,7 @@ impl Sketch {
     }
 
     /// Ziel beim Dehnen eines Kegelschnitts: exakt, Scheitel und Rho aus [`conic_piece`]. Wie beim Spline
-    /// mit Kontrollpunkten kein Ziel, wenn der Scheitel zu einer anderen Kurve gehört.
+    /// mit Kontrollpunkten gilt es nicht, wenn der Scheitel zu einer anderen Kurve gehört.
     fn locate_extend_conic(&self, c: CurveId, at_end: bool) -> Option<ExtendTarget> {
         let CurveKind::Conic {
             start,
@@ -537,28 +550,46 @@ impl Sketch {
             .any(|(id, d)| id != c && d.kind.points().contains(&apex))
     }
 
-    /// Hat das Dehnen des Kegelschnitts `c` ein Ziel, das nur daran scheitert, dass das längere Stück kein
-    /// Kegelschnitt mehr wäre? Das Gewicht wird dort negativ (siehe Spec, Tabelle E).
-    fn conic_extend_refused(&self, c: CurveId, at: DVec2) -> bool {
-        let CurveKind::Conic {
-            start,
-            end,
-            apex,
-            rho,
-        } = self.curves[c].kind
-        else {
-            return false;
-        };
-        let (p0, a, p2) = (self.pos(start), self.pos(apex), self.pos(end));
-        let at_end = at.distance(p2) < at.distance(p0);
-        if !self.is_open_end(c, if at_end { end } else { start }) || self.conic_apex_shared(c, apex)
-        {
-            return false;
+    /// Warum das Dehnen von `c` nicht geht, obwohl an einem offenen Ende ein Ziel da ist: Ein
+    /// mitwandernder Kontrollpunkt oder der Scheitel gehört zu einer anderen Kurve, oder das längere
+    /// Stück wäre kein Kegelschnitt mehr (das Gewicht wird negativ, siehe Spec, Tabelle E). `None`, wenn
+    /// es wirklich kein Ziel gibt.
+    fn extend_refusal(&self, c: CurveId, at: DVec2) -> Option<String> {
+        match self.curves[c].kind {
+            CurveKind::ControlSpline { ref points, .. } => {
+                let (first, last) = (points[0], points[points.len() - 1]);
+                let at_end = at.distance(self.pos(last)) < at.distance(self.pos(first));
+                if !self.is_open_end(c, if at_end { last } else { first }) {
+                    return None;
+                }
+                let Some(Geom::Nurbs { curve }) = self.geom(c) else {
+                    return None;
+                };
+                let (_, shared) = self.control_extend_plan(c, &curve, at_end)?;
+                shared.then(|| tr!("sketch-err-control-shared"))
+            }
+            CurveKind::Conic {
+                start,
+                end,
+                apex,
+                rho,
+            } => {
+                let (p0, a, p2) = (self.pos(start), self.pos(apex), self.pos(end));
+                let at_end = at.distance(p2) < at.distance(p0);
+                if !self.is_open_end(c, if at_end { end } else { start }) {
+                    return None;
+                }
+                let (_, t, _) = self.conic_extend_hit(c, at_end)?;
+                if self.conic_apex_shared(c, apex) {
+                    return Some(tr!("sketch-err-conic-apex-shared"));
+                }
+                let (u0, u1) = if at_end { (0.0, t) } else { (t, 1.0) };
+                conic_piece(p0, a, p2, rho, u0, u1)
+                    .is_none()
+                    .then(|| tr!("sketch-err-conic-extend"))
+            }
+            _ => None,
         }
-        self.conic_extend_hit(c, at_end).is_some_and(|(_, t, _)| {
-            let (u0, u1) = if at_end { (0.0, t) } else { (t, 1.0) };
-            conic_piece(p0, a, p2, rho, u0, u1).is_none()
-        })
     }
 
     /// Offenes Ende (Entscheidung 8): keine andere lebende Kurve benutzt den Punkt `p`, und er

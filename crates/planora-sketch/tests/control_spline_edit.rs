@@ -1,9 +1,11 @@
 //! Spline mit Kontrollpunkten in allen abhängigen Befehlen (Skizzen 7, Task 3): Stutzen, Brechen,
 //! Dehnen, Versatz, Abrunden, Spiegeln, Muster, Kopieren, Fang und Profile.
 
+use planora_i18n::tr;
 use planora_kernel::{ProfileLoop, Segment};
 use planora_math::nurbs::NurbsCurve;
 use planora_math::{DVec2, Frame, Tolerance};
+use planora_sketch::SketchError;
 use planora_sketch::constraint::ConstraintKind as K;
 use planora_sketch::fillet::{CurvePick, EndMove};
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
@@ -494,9 +496,42 @@ fn extend_without_a_target_or_on_a_bound_end_changes_nothing() {
         (tip.x - n.x, tip.y - n.y),
         (tip.x + n.x, tip.y + n.y),
     );
+    // Skizzen 7: Ein Ziel ist da, darum sagt das Dehnen den wahren Grund statt „kein Ziel“.
     let before = s.to_data();
-    assert!(!s.extend(c, v(14.0, 0.0)).unwrap());
+    assert_eq!(
+        s.extend(c, v(14.0, 0.0)),
+        Err(SketchError::Degenerate(tr!("sketch-err-control-shared")))
+    );
     assert_eq!(s.to_data(), before);
+    assert!(s.extend_preview(c, v(14.0, 0.0)).is_none());
+}
+
+/// Ein geteilter Punkt, der gar nicht mitwandert, und ein Spline ohne Ziel sind kein Grund für die
+/// Meldung.
+#[test]
+fn extend_names_a_shared_control_point_only_if_it_stops_the_extension() {
+    // Ohne Ziel: weiter „kein Ziel“, auch wenn der Punkt geteilt ist.
+    let mut s = sketch();
+    let pts = points(&mut s, &ARCH);
+    let c = s.add_control_spline(&pts, 3).unwrap();
+    let far = s.add_point(20.0, 20.0).unwrap();
+    s.add_line(pts[4], far).unwrap();
+    assert_eq!(s.extend(c, v(14.0, 0.0)), Ok(false));
+    // Der Punkt am anderen Ende wandert nicht mit: Das Dehnen geht.
+    let mut s = sketch();
+    let pts = points(&mut s, &ARCH);
+    let c = s.add_control_spline(&pts, 3).unwrap();
+    let far = s.add_point(20.0, 20.0).unwrap();
+    s.add_line(pts[1], far).unwrap();
+    let old = s.nurbs_of(c).unwrap();
+    let tip = old.point_unclamped(3.5).truncate();
+    let n = old.derivs(3.0, 1)[1].truncate().normalize().perp() * 30.0;
+    line(
+        &mut s,
+        (tip.x - n.x, tip.y - n.y),
+        (tip.x + n.x, tip.y + n.y),
+    );
+    assert_eq!(s.extend(c, v(14.0, 0.0)), Ok(true));
 }
 
 // ---- Versatz und Abrunden -----------------------------------------------------------------

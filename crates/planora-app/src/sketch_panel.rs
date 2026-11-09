@@ -1098,8 +1098,9 @@ fn spline_edit_fields(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch
     }
 }
 
-/// Das Rho-Feld: eine reine Zahl, keine Formel (Spec, Fusion). Abgeschlossen wird mit Eingabe oder
-/// beim Verlassen, Esc lässt den alten Wert. Was nicht passt, steht in der Meldung der Sitzung.
+/// Das Rho-Feld: eine reine Zahl, keine Formel (Spec, Fusion). Abgeschlossen wird mit Eingabe oder Tab
+/// wie an den Feldern am Zeiger; wer das Feld sonst verlässt (Esc, Klick), verwirft den Entwurf. Was
+/// nicht passt, steht in der Meldung der Sitzung.
 fn rho_field_row(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch, c: CurveId, rho: f64) {
     let proposal = crate::sketch_inline::format_rho(rho);
     // Der Entwurf gehört zu dieser Kurve und lebt nur, solange ihr Feld steht.
@@ -1121,15 +1122,13 @@ fn rho_field_row(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch, c: 
     ui.data_mut(|d| d.insert_temp(rho_field_key(), Some(field.rect)));
     let kept = field.has_focus().then(|| (c, text.clone()));
     ui.data_mut(|d| d.insert_temp(rho_draft_key(), kept));
-    if field.lost_focus() {
-        let cancelled = ui.input(|i| i.key_pressed(egui::Key::Escape));
-        if !cancelled && text != proposal {
-            match crate::sketch_view::parse_number(&text) {
-                Some(v) => {
-                    let _ = se.set_conic_rho(sk, c, v);
-                }
-                None => se.message = Some(crate::msg!("sketch-err-conic-rho")),
+    let confirmed = ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Tab));
+    if field.lost_focus() && confirmed && text != proposal {
+        match crate::sketch_view::parse_number(&text) {
+            Some(v) => {
+                let _ = se.set_conic_rho(sk, c, v);
             }
+            None => se.message = Some(crate::msg!("sketch-err-conic-rho")),
         }
     }
 }

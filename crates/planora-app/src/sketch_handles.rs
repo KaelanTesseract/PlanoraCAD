@@ -371,7 +371,8 @@ impl SketchSession {
     }
 
     /// Nimmt den laufenden Griffzug ganz zurück, auch das Einschalten im ersten Zug: Es entsteht kein
-    /// Schritt (Esc, rechte Taste, Werkzeugwechsel). `false`, wenn keiner läuft. Hat mitten im Zug
+    /// Schritt (Esc, rechte Taste, Rückgängig; der Werkzeugwechsel nur beim ersten Zug, siehe
+    /// [`set_tool`](SketchSession::set_tool)). `false`, wenn keiner läuft. Hat mitten im Zug
     /// noch etwas anderes die Skizze geändert, gibt es den Stand nicht mehr; dann endet der Zug wie
     /// jeder andere.
     pub fn abort_handle_drag(&mut self, sk: &mut Sketch) -> bool {
@@ -446,6 +447,9 @@ impl SketchSession {
             ),
         };
         self.start_handle_grab(sk, before, at, &[moved], &anchors, Some(label));
+        if let Some(drag) = self.curve_drag.as_mut() {
+            drag.activates = true;
+        }
     }
 
     /// Greift den Rho-Griff des Kegelschnitts `c`.

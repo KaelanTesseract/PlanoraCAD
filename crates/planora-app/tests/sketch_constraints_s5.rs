@@ -8,18 +8,22 @@ use egui::epaint::{ClippedShape, Shape};
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, Vec2, vec2};
 use planora_app::app::PlanoraApp;
 use planora_app::keymap::Action;
-use planora_app::sketch_state::{ConstraintAction, Item};
+use planora_app::sketch_state::{ConstraintAction, Item, Tool};
 use planora_app::state::{AppState, StandardPlane};
 use planora_app::workspace::Workspace;
 use planora_app::{fonts, sketch_view, theme};
 use planora_feature::SketchPlane;
 use planora_i18n::{english, german, tr, with_lang};
-use planora_math::DVec2;
+use planora_kernel::Curve;
+use planora_math::nurbs::NurbsCurve;
+use planora_math::{DVec2, DVec3};
 use planora_project::config::Config;
 use planora_project::library::Library;
 use planora_sketch::constraint::ConstraintKind as K;
+use planora_sketch::helpers::ProjectStyle;
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
 use planora_sketch::solver::SolveStatus;
+use std::sync::Arc;
 
 const SIZE: Vec2 = vec2(1920.0, 1080.0);
 
@@ -390,6 +394,49 @@ fn smooth_on_arc_has_no_message_any_more() {
             assert!(se.apply(s, ConstraintAction::Smooth, None).is_err());
         }
         assert_eq!(message(&mut app), Some(tr!("sketch-smooth-kinds")));
+    });
+}
+
+/// Skizzen 7: Eine Linie geht an einem festen Spline nicht mit Glatt; der Grund ist genannt, nicht
+/// „Widerspruch“ und nicht die allgemeine Liste der Arten.
+#[test]
+fn smooth_between_a_fixed_spline_and_a_line_says_why() {
+    with_lang(&german(), || {
+        let c = context();
+        let mut app = sketching();
+        let wavy = NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 2.0, 2.0, 2.0],
+            [(0.0, 0.0), (2.0, 5.0), (5.0, 7.0), (9.0, 6.0), (12.0, 3.0)]
+                .iter()
+                .map(|&(x, y)| DVec3::new(x, y, 0.0))
+                .collect(),
+            vec![1.0; 5],
+        )
+        .unwrap();
+        let edge = Curve::Nurbs(Arc::new(wavy));
+        let style = ProjectStyle {
+            construction: false,
+        };
+        let fixed = sk(&mut app)
+            .add_projected_curve(&edge, 0.0, 2.0, style)
+            .unwrap();
+        let (l, ..) = line(&mut app, (12.0, 3.0), (20.0, 3.0));
+        settle(&c, &mut app);
+        for pair in [[fixed, l], [l, fixed]] {
+            select(&mut app, pair.iter().map(|&k| Item::Curve(k)).collect());
+            assert!(!available(&mut app).contains(&ConstraintAction::Smooth));
+            let before = live(&mut app).len();
+            {
+                let (se, s) = state(&mut app).session_sketch_mut().unwrap();
+                assert!(se.apply(s, ConstraintAction::Smooth, None).is_err());
+            }
+            assert_eq!(message(&mut app), Some(tr!("sketch-smooth-fixed-line")));
+            press(&c, &mut app, "Glatt");
+            assert_eq!(message(&mut app), Some(tr!("sketch-smooth-fixed-line")));
+            assert_eq!(live(&mut app).len(), before);
+            state(&mut app).sketch_session.as_mut().unwrap().tool = Tool::Select;
+        }
     });
 }
 
