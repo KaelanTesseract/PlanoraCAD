@@ -834,3 +834,208 @@ fn conic_preview_follows_rho_through_the_shoulder() {
         assert!(lines.iter().any(|l| l == &vec![s, a, e]), "Hilfslinien");
     }
 }
+
+#[test]
+fn rho_field_and_model_agree_at_the_extremes() {
+    let scope = ParamScope::default();
+    // Was das Modell ablehnt, lehnt schon das Feld ab, mit einer Meldung, die dafür stimmt.
+    let mut rig = Rig::new();
+    rig.conic_up_to_rho();
+    let before = rig.fingerprint();
+    for bad in ["0,9999999", "0,0000001"] {
+        let se = rig.se();
+        se.type_field(0, bad, &scope);
+        assert_eq!(se.input.fields[0].locked, None, "{bad}");
+        assert!(se.input.fields[0].error.is_some(), "{bad}: Fehler im Feld");
+        rig.press(Key::Enter);
+        assert_eq!(rig.fingerprint(), before, "{bad}");
+    }
+    with_lang(&german(), || {
+        let text = t("sketch-field-rho-range");
+        assert!(
+            text.contains("0,000001") && text.contains("0,999999"),
+            "{text}"
+        );
+        let text = t("sketch-err-conic-rho");
+        assert!(
+            text.contains("0,000001") && text.contains("0,999999"),
+            "{text}"
+        );
+    });
+    with_lang(&english(), || {
+        let text = t("sketch-field-rho-range");
+        assert!(
+            text.contains("0.000001") && text.contains("0.999999"),
+            "{text}"
+        );
+        let text = t("sketch-err-conic-rho");
+        assert!(
+            text.contains("0.000001") && text.contains("0.999999"),
+            "{text}"
+        );
+    });
+    // Die Grenzen selbst legen die Kurve an.
+    for (good, value) in [("0,000001", 0.000001), ("0,999999", 0.999999)] {
+        let mut rig = Rig::new();
+        rig.conic_up_to_rho();
+        rig.se().type_field(0, good, &scope);
+        rig.press(Key::Enter);
+        let (_, kind) = rig.only_curve();
+        assert!(
+            matches!(kind, CurveKind::Conic { rho, .. } if rho == value),
+            "{good}"
+        );
+    }
+}
+
+#[test]
+fn rho_proposal_is_a_value_the_field_accepts() {
+    let scope = ParamScope::default();
+    for lang in [german(), english()] {
+        with_lang(&lang, || {
+            for (rho, near) in [
+                (0.00004, 0.00004),
+                (0.99999, 0.99999),
+                (0.000001, 0.000001),
+                (0.999999, 0.999999),
+                (0.5, 0.5),
+                (0.12345678, 0.1235),
+            ] {
+                let mut rig = Rig::new();
+                rig.conic_up_to_rho();
+                rig.se().conic_rho = rho;
+                let st = rig.st();
+                let (se, sf) = st.session_draft_mut().unwrap();
+                let shown = sketch_inline::suggestion(se, sf, FieldKind::Rho);
+                se.type_field(0, &shown, &scope);
+                assert_eq!(se.input.fields[0].error, None, "{rho}: „{shown}“");
+                let got = se.input.fields[0].locked.expect("gesperrt");
+                assert!((got - near).abs() < 1e-12, "{rho}: „{shown}“ ergibt {got}");
+            }
+        });
+    }
+}
+
+#[test]
+fn space_repeats_the_last_spline_kind() {
+    for kind in [
+        ToolKind::SplineFit,
+        ToolKind::SplineControl,
+        ToolKind::Conic,
+    ] {
+        let mut rig = Rig::new();
+        rig.choose(kind);
+        rig.click(A);
+        rig.click(B);
+        rig.click(D);
+        rig.press(Key::Enter);
+        assert_eq!(rig.sk().curves().count(), 1, "{kind:?}: gezeichnet");
+        // Nur wählen zählt nicht: Eine andere Art ohne Kurve ersetzt das Gedächtnis nicht.
+        let other = if kind == ToolKind::SplineFit {
+            ToolKind::Conic
+        } else {
+            ToolKind::SplineFit
+        };
+        rig.choose(other);
+        let (se, sk) = rig.st().session_sketch_mut().unwrap();
+        se.set_tool(sk, Tool::Select);
+        rig.settle();
+        rig.press(Key::Space);
+        assert_eq!(rig.se().tool, Tool::Spline, "{kind:?}");
+        assert_eq!(rig.se().kind_of(Tool::Spline), Some(kind), "{kind:?}");
+    }
+}
+
+#[test]
+fn esc_leaves_nothing_at_every_stage() {
+    // Der erste Klick des zweiten Splines durch Stützpunkte.
+    let mut rig = Rig::new();
+    rig.choose(ToolKind::SplineFit);
+    rig.click(A);
+    rig.click(B);
+    rig.press(Key::Enter);
+    assert_eq!(rig.sk().curves().count(), 1);
+    let before = rig.fingerprint();
+    let steps = rig.undo_len();
+    rig.click(D);
+    rig.press(Key::Escape);
+    assert_eq!(rig.fingerprint(), before, "zweiter Spline: nichts bleibt");
+    assert_eq!(rig.undo_len(), steps);
+
+    // Kegelschnitt mit Start und Ende.
+    let mut rig = Rig::new();
+    let before = rig.fingerprint();
+    let steps = rig.undo_len();
+    rig.choose(ToolKind::Conic);
+    rig.click(A);
+    rig.click(B);
+    assert_eq!(rig.se().pending_pos.len(), 2);
+    rig.press(Key::Escape);
+    assert_eq!(rig.fingerprint(), before, "Stufe 2");
+    assert_eq!(rig.undo_len(), steps);
+    assert!(rig.se().pending_pos.is_empty());
+    assert_eq!(rig.se().kind_of(Tool::Spline), Some(ToolKind::Conic));
+
+    // Mehrere Kontrollpunkte.
+    let mut rig = Rig::new();
+    let before = rig.fingerprint();
+    let steps = rig.undo_len();
+    rig.choose(ToolKind::SplineControl);
+    for p in [A, B, C, D] {
+        rig.click(p);
+    }
+    assert_eq!(rig.se().pending.len(), 4);
+    rig.press(Key::Escape);
+    assert_eq!(rig.fingerprint(), before, "vier Kontrollpunkte");
+    assert_eq!(rig.undo_len(), steps);
+    assert!(rig.se().pending.is_empty());
+}
+
+#[test]
+fn changing_the_kind_while_drawing_leaves_nothing() {
+    use ToolKind as K;
+    for (from, to) in [
+        (K::SplineControl, K::Conic),
+        (K::SplineControl, K::SplineFit),
+        (K::SplineFit, K::SplineControl),
+        (K::Conic, K::SplineControl),
+    ] {
+        let mut rig = Rig::new();
+        let before = rig.fingerprint();
+        let steps = rig.undo_len();
+        rig.choose(from);
+        rig.click(A);
+        rig.click(B);
+        // Dieselbe Art wählen lässt die Lagen.
+        rig.choose(from);
+        assert_eq!(
+            rig.se().pending.len() + rig.se().pending_pos.len(),
+            2,
+            "{from:?}: gleiche Art"
+        );
+        rig.choose(to);
+        assert_eq!(rig.fingerprint(), before, "{from:?} zu {to:?}");
+        assert_eq!(rig.undo_len(), steps, "{from:?} zu {to:?}");
+        assert!(rig.se().pending.is_empty(), "{from:?} zu {to:?}");
+        assert!(rig.se().pending_pos.is_empty(), "{from:?} zu {to:?}");
+        assert_eq!(rig.se().tool, Tool::Spline);
+        assert_eq!(rig.se().kind_of(Tool::Spline), Some(to));
+    }
+}
+
+#[test]
+fn fit_spline_action_has_its_id() {
+    assert_eq!(
+        Action::from_id("skizze.spline_stuetzpunkte"),
+        Some(Action::SketchSplineFit)
+    );
+    assert_eq!(ToolKind::SplineFit.action(), Action::SketchSplineFit);
+    with_lang(&english(), || {
+        let hint = t("sketch-tool-spline-hint");
+        assert!(hint.contains("fit points"), "{hint}");
+    });
+    with_lang(&german(), || {
+        let hint = t("sketch-tool-spline-hint");
+        assert!(hint.contains("Stützpunkte"), "{hint}");
+    });
+}

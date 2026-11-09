@@ -2358,6 +2358,7 @@ Abgeschlossen 2026-11-08, gemergt in a78db45. Drei Handtests bei 1920×1080; die
 ### Werkzeuge und Klappmenü (Task 12)
 - **Annahme:** Auch „Spline durch Stützpunkte“ bekommt eine eigene belegbare Aktion `skizze.spline_stuetzpunkte` ohne Vorgabetaste; Spec D5 nennt sie nicht, aber jede Art eines Knopfs hat ihre Aktion. Dadurch merkt sich „Letztes Skizzenwerkzeug wiederholen“ nun auch den Spline.
 - **Annahme:** Das Rho-Feld schlägt nach dem ersten angelegten Kegelschnitt der Sitzung dessen Rho vor (wie die Seitenzahl des Polygons); ein abgebrochener zählt nicht. Der gewählte Grad gilt ebenso für die Sitzung.
+- **Grenze:** Das Rho-Feld und das Modell nehmen 0,000001 bis 0,999999 statt der ganzen Spanne 0 < ρ < 1 aus Spec D4: Das Gewicht muss im Bereich der NURBS liegen (`conic_rho_ok`), und die Meldung nennt diese Zahlen.
 - **Annahme:** Das Rho-Feld nimmt nur Zahlen, auch keinen Parameter und keine Einheit (Spec: Rho nimmt keine Formel). Der Scheitel auf der Sehne wird schon beim Klick auf den Scheitel abgelehnt, die Stufe bleibt.
 - **Annahme:** Nach dem Scheitel fängt der Zeiger nichts mehr; der letzte Klick bestätigt nur und setzt keinen Punkt.
 - **Abweichung (Spec D1):** Der Kegelschnitt steht im Klappmenü am Spline-Knopf, im Menü „Erzeugen“ aber als eigener Eintrag und nicht im Untermenü „Spline“.

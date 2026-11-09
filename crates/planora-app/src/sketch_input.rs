@@ -64,7 +64,8 @@ pub enum FieldKind {
     PatternCount,
     /// Gesamtwinkel des Kreismusters in Grad: Vorzeichen erlaubt, nie null, höchstens 360°.
     PatternAngle,
-    /// Rho des Kegelschnitts (Skizzen 7): reine Zahl mit 0 < Rho < 1, wird nie ein Maß.
+    /// Rho des Kegelschnitts (Skizzen 7): reine Zahl nach [`planora_sketch::conic_rho_ok`], wird nie
+    /// ein Maß.
     Rho,
 }
 
@@ -286,7 +287,8 @@ fn read_field(
     // Rho ist eine Zahl in der Kurve, kein Parameter: keine Formel, keine Einheit.
     if kind == FieldKind::Rho {
         return match crate::sketch_view::parse_number(text) {
-            Some(v) if v > 0.0 && v < 1.0 => Ok(Some(v)),
+            // Dieselbe Regel wie das Modell, sonst käme die Ablehnung erst beim Abschluss.
+            Some(v) if planora_sketch::conic_rho_ok(v) => Ok(Some(v)),
             _ => Err(tr!("sketch-field-rho-range")),
         };
     }

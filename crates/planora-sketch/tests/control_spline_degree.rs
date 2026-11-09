@@ -216,3 +216,87 @@ fn a_shared_point_outside_the_affected_group_does_not_block_an_insert() {
     assert_eq!(s.point_xy(ids[5]).unwrap(), before);
     assert!(max_gap(&s, c, &old) < 1e-9);
 }
+
+/// Skizzen 7, Task 12: Der Baustein der Vorschau rechnet dieselbe Kurve wie das Modell, auch beim
+/// wirksamen Grad.
+#[test]
+fn preview_builder_matches_the_model() {
+    for (n, degree) in [
+        (2, 5_u8),
+        (3, 5),
+        (5, 5),
+        (6, 5),
+        (9, 5),
+        (2, 3),
+        (4, 3),
+        (9, 3),
+    ] {
+        let xy: Vec<(f64, f64)> = (0..n)
+            .map(|i| (i as f64 * 7.0, ((i * i) % 5) as f64 * 3.0))
+            .collect();
+        let mut s = Sketch::new(Frame::WORLD, "S", Tolerance::default());
+        let (c, points) = spline(&mut s, &xy, degree);
+        let built = planora_sketch::control_spline_nurbs(
+            &points
+                .iter()
+                .map(|&p| s.point_xy(p).unwrap())
+                .collect::<Vec<_>>(),
+            degree,
+        )
+        .unwrap();
+        let model = s.nurbs_of(c).unwrap();
+        assert_eq!(built.degree(), model.degree(), "{n}, {degree}");
+        assert_eq!(built.knots(), model.knots(), "{n}, {degree}");
+        assert_eq!(
+            built.control_points(),
+            model.control_points(),
+            "{n}, {degree}"
+        );
+        assert_eq!(built.weights(), model.weights(), "{n}, {degree}");
+    }
+}
+
+/// Dieselbe Frage nach dem Scheitel wie `add_conic`, und dasselbe Rho wie `add_conic`.
+#[test]
+fn conic_checks_match_the_model() {
+    let tol = Tolerance::default().linear;
+    let (a, b) = (DVec2::new(0.0, 0.0), DVec2::new(10.0, 0.0));
+    for apex in [
+        DVec2::new(5.0, 3.0),
+        DVec2::new(5.0, 0.0),
+        DVec2::new(5.0, tol / 2.0),
+        DVec2::new(5.0, tol * 2.0),
+        DVec2::new(20.0, 0.0),
+    ] {
+        let mut s = Sketch::new(Frame::WORLD, "S", Tolerance::default());
+        let [p, q, r] = [a, b, apex].map(|v| s.add_point(v.x, v.y).unwrap());
+        assert_eq!(
+            planora_sketch::conic_apex_ok(a, apex, b, tol),
+            s.add_conic(p, q, r, 0.5).is_ok(),
+            "{apex:?}"
+        );
+    }
+    for rho in [
+        0.0,
+        1.0,
+        -0.5,
+        1e-7,
+        0.000001,
+        0.5,
+        0.999999,
+        0.9999999,
+        f64::NAN,
+    ] {
+        let mut s = Sketch::new(Frame::WORLD, "S", Tolerance::default());
+        let [p, q, r] = [a, b, DVec2::new(5.0, 3.0)].map(|v| s.add_point(v.x, v.y).unwrap());
+        assert_eq!(
+            planora_sketch::conic_rho_ok(rho),
+            s.add_conic(p, q, r, rho).is_ok(),
+            "{rho}"
+        );
+    }
+    assert!(planora_sketch::conic_rho_ok(0.000001));
+    assert!(planora_sketch::conic_rho_ok(0.999999));
+    assert!(!planora_sketch::conic_rho_ok(0.9999999));
+    assert!(!planora_sketch::conic_rho_ok(0.0000001));
+}

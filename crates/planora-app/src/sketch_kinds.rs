@@ -11,12 +11,12 @@ use crate::sketch_input::{Created, FieldKind, locked_ray, toward_pointer};
 use crate::sketch_state::{LineArcDrag, SketchSession, Snap, Tool, check_change, err};
 use planora_i18n::tr;
 use planora_math::DVec2;
-use planora_math::nurbs::{NurbsCurve, uniform_clamped_knots};
+use planora_math::nurbs::NurbsCurve;
 use planora_sketch::constraint::ConstraintKind;
 use planora_sketch::fillet::{ChamferKind, ChamferPlan, CurvePick, FilletPlan};
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
 use planora_sketch::shapes::{self, ArcPlan, ShapePlan, SlotIds, SlotStyle};
-use planora_sketch::tangent_circles;
+use planora_sketch::{conic_apex_ok, conic_nurbs, control_spline_nurbs, tangent_circles};
 
 /// Schritte je Vollkreis für die Vorschau einer Form.
 pub const PREVIEW_STEPS_PER_TURN: usize = 96;
@@ -444,24 +444,13 @@ fn check_fillet_pair(sk: &Sketch, kind: ToolKind, a: CurvePick, b: CurvePick) ->
     Ok(())
 }
 
-/// Taugt `apex` als Scheitel über der Sehne `start`–`end`? Dieselbe Frage wie
-/// [`Sketch::add_conic`], nur schon beim Klick auf den Scheitel.
-fn apex_off_chord(start: DVec2, end: DVec2, apex: DVec2, tol: f64) -> bool {
-    let chord = end - start;
-    let len = chord.length();
-    len > tol && (chord.perp_dot(apex - start) / len).abs() > tol
-}
-
-/// Linienzug des Kegelschnitts: rationale quadratische Bézierkurve mit `w = ρ / (1 − ρ)`, wie sie
-/// [`CurveKind::Conic`] rechnet.
-fn conic_points(start: DVec2, end: DVec2, apex: DVec2, rho: f64) -> Vec<DVec2> {
-    let w = rho / (1.0 - rho);
-    (0..=CONIC_PREVIEW_STEPS)
+/// `steps + 1` Punkte der Kurve in Skizzenkoordinaten, gleichmäßig im Parameter.
+fn sample_nurbs(curve: &NurbsCurve, steps: usize) -> Vec<DVec2> {
+    let (lo, hi) = curve.domain();
+    (0..=steps)
         .map(|k| {
-            let t = k as f64 / CONIC_PREVIEW_STEPS as f64;
-            let s = 1.0 - t;
-            let (b0, b1, b2) = (s * s, 2.0 * w * s * t, t * t);
-            (start * b0 + apex * b1 + end * b2) / (b0 + b1 + b2)
+            let p = curve.point(lo + (hi - lo) * k as f64 / steps as f64);
+            DVec2::new(p.x, p.y)
         })
         .collect()
 }
@@ -667,7 +656,7 @@ impl SketchSession {
         }
         // Der Scheitel: Auf der Sehne wird es nie ein Kegelschnitt.
         if let (ToolKind::Conic, &[start, end]) = (kind, self.pending_pos.as_slice())
-            && !apex_off_chord(start, end, cur.at, tol)
+            && !conic_apex_ok(start, cur.at, end, tol)
         {
             return Err(kind.refusal());
         }
@@ -1384,22 +1373,23 @@ impl SketchSession {
             [from] => {
                 return (from.distance(at) > tol).then(|| vec![vec![from, at]]);
             }
-            [start, end] if !apex_off_chord(start, end, at, tol) => {
+            [start, end] if !conic_apex_ok(start, at, end, tol) => {
                 return Some(vec![vec![start, end]]);
             }
             [start, end] => (start, end, at),
             [start, end, apex] => (start, end, apex),
             _ => return None,
         };
+        let curve = conic_nurbs(start, apex, end, self.current_rho()).ok()?;
         Some(vec![
             vec![start, apex, end],
-            conic_points(start, end, apex, self.current_rho()),
+            sample_nurbs(&curve, CONIC_PREVIEW_STEPS),
         ])
     }
 
     /// Linienzug des laufenden Splines mit Kontrollpunkten, der Zeiger als letzter Kontrollpunkt;
-    /// gleichmäßige Knoten und wirksamer Grad wie [`Sketch::add_control_spline`]. `None` in jedem
-    /// anderen Werkzeug und vor dem ersten Punkt.
+    /// dieselbe Kurve wie [`Sketch::add_control_spline`]. `None` in jedem anderen Werkzeug und vor
+    /// dem ersten Punkt.
     pub fn control_spline_preview(&self, sk: &Sketch, at: DVec2) -> Option<Vec<DVec2>> {
         if self.tool != Tool::Spline
             || self.kinds.spline != ToolKind::SplineControl
@@ -1407,28 +1397,16 @@ impl SketchSession {
         {
             return None;
         }
-        let mut points: Vec<planora_math::DVec3> = self
+        let mut points: Vec<DVec2> = self
             .pending
             .iter()
             .filter_map(|&p| sk.point_xy(p).ok())
-            .map(|p| p.extend(0.0))
             .collect();
-        points.push(at.extend(0.0));
-        let degree = usize::from(self.spline_degree).min(points.len() - 1);
-        let spans = points.len() - degree;
-        let weights = vec![1.0; points.len()];
-        let knots = uniform_clamped_knots(degree, points.len());
-        let curve = NurbsCurve::new(degree, knots, points, weights).ok()?;
+        points.push(at);
+        let curve = control_spline_nurbs(&points, self.spline_degree).ok()?;
         let (lo, hi) = curve.domain();
-        let steps = spans * CONTROL_PREVIEW_STEPS;
-        Some(
-            (0..=steps)
-                .map(|k| {
-                    let p = curve.point(lo + (hi - lo) * k as f64 / steps as f64);
-                    DVec2::new(p.x, p.y)
-                })
-                .collect(),
-        )
+        let steps = (hi - lo).ceil().max(1.0) as usize * CONTROL_PREVIEW_STEPS;
+        Some(sample_nurbs(&curve, steps))
     }
 
     /// Lage mit den gesperrten Größen der laufenden Form; `None` ohne Sperre.

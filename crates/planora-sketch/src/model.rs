@@ -1,11 +1,11 @@
 //! Skizze: Punkte, Kurven, Zahlenvektor. Abhängigkeiten stehen in `constraint.rs`.
 
-use crate::curves::{conic_nurbs, conic_rho_ok};
+use crate::curves::{conic_apex_ok, conic_nurbs, conic_rho_ok, control_spline_layout};
 use crate::error::SketchError;
 use crate::solver::SolveCache;
 use planora_i18n::tr;
 use planora_kernel::{Arena, Id};
-use planora_math::nurbs::{NurbsCurve, uniform_clamped_knots};
+use planora_math::nurbs::NurbsCurve;
 use planora_math::{DVec2, DVec3, Frame, Tolerance};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -577,11 +577,11 @@ impl Sketch {
             return Err(SketchError::InvalidInput(tr!("sketch-err-spline-degree")));
         }
         self.check_spline_points(points)?;
-        let p = usize::from(degree).min(points.len() - 1);
+        let (degree, knots) = control_spline_layout(degree, points.len());
         Ok(self.push_curve(CurveKind::ControlSpline {
             points: points.to_vec(),
-            degree: p as u8,
-            knots: uniform_clamped_knots(p, points.len()),
+            degree,
+            knots,
         }))
     }
 
@@ -614,9 +614,7 @@ impl Sketch {
     ) -> Result<CurveId, SketchError> {
         self.check_conic(start, end, apex, rho)?;
         let (p0, a, p2) = (self.pos(start), self.pos(apex), self.pos(end));
-        let chord = p2 - p0;
-        let len = chord.length();
-        if len <= self.tol.linear || (chord.perp_dot(a - p0) / len).abs() <= self.tol.linear {
+        if !conic_apex_ok(p0, a, p2, self.tol.linear) {
             return Err(SketchError::Degenerate(tr!("sketch-err-conic-apex")));
         }
         self.add_conic_as(start, end, apex, rho)

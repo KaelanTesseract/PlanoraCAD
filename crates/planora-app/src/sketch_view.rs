@@ -2158,7 +2158,6 @@ fn place_label(mut r: Rect, placed: &mut Vec<Rect>) -> Rect {
     r
 }
 
-/// Vorschau des laufenden Werkzeugs vom zuletzt gesetzten Punkt zum Mauszeiger.
 /// Hilfslinien der gewählten Kurven als Linienzüge (Skizzen 7): beim Spline mit Kontrollpunkten das
 /// Kontrollpolygon, beim Kegelschnitt Start–Scheitel–Ende. Sie sind keine Kurven.
 pub fn curve_guides(se: &SketchSession, sk: &Sketch) -> Vec<Vec<DVec2>> {
@@ -2180,6 +2179,7 @@ pub fn curve_guides(se: &SketchSession, sk: &Sketch) -> Vec<Vec<DVec2>> {
         .collect()
 }
 
+/// Vorschau des laufenden Werkzeugs vom zuletzt gesetzten Punkt zum Mauszeiger.
 fn draw_preview(
     painter: &egui::Painter,
     map: &Mapper,

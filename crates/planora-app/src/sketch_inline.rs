@@ -6,7 +6,7 @@
 use crate::formula_field::FormulaField;
 use crate::sketch_input::FieldKind;
 use crate::sketch_state::SketchSession;
-use crate::sketch_view::{format_number, pointer_radius};
+use crate::sketch_view::{format_number, parse_number, pointer_radius};
 use crate::state::AppState;
 use crate::{theme, viewport};
 use egui::{Event, ImeEvent, Key, Modifiers, Order, Pos2, Rect, Vec2, pos2};
@@ -20,6 +20,9 @@ const ROW_STEP: f32 = 30.0;
 const FIELD_WIDTH: f32 = 72.0;
 /// Breite eines Felds samt Name, solange es noch nicht gemessen ist.
 const ROW_WIDTH_GUESS: f32 = 200.0;
+
+/// Stellen, die jedes gültige Rho im Bereich halten (die Grenzen liegen bei 0,000001 und 0,999999).
+const RHO_MAX_DECIMALS: usize = 6;
 
 fn kind_index(kind: FieldKind) -> usize {
     kind as usize
@@ -119,15 +122,30 @@ pub fn suggestion(se: &SketchSession, sf: &SketchFeature, kind: FieldKind) -> St
             format_number(v.to_degrees(), 1)
         }
         // Faktor und Rho haben keine Einheit: Zoll darf sie nicht umrechnen.
-        Some(v) if matches!(kind, FieldKind::ScaleFactor | FieldKind::Rho) => format_factor(v),
+        Some(v) if kind == FieldKind::ScaleFactor => format_factor(v),
+        Some(v) if kind == FieldKind::Rho => format_rho(v),
         Some(v) => planora_i18n::fmt_len_num(v),
         None => String::new(),
     }
 }
 
-/// Der Faktor des Maßstabs oder Rho als Zahl ohne Einheit, ohne überflüssige Nullen.
+/// Der Faktor des Maßstabs als Zahl ohne Einheit, ohne überflüssige Nullen.
 fn format_factor(v: f64) -> String {
-    let text = format_number(v, 4);
+    trimmed_number(v, 4)
+}
+
+/// Rho als Zahl ohne Einheit, mit so vielen Stellen, dass das Feld den gezeigten Wert auch annimmt:
+/// 0,00004 zeigte mit vier Stellen „0“ und 0,99999 „1“, beide außerhalb des Bereichs.
+fn format_rho(v: f64) -> String {
+    (4..=RHO_MAX_DECIMALS)
+        .map(|decimals| trimmed_number(v, decimals))
+        .find(|text| parse_number(text).is_some_and(planora_sketch::conic_rho_ok))
+        .unwrap_or_else(|| trimmed_number(v, RHO_MAX_DECIMALS))
+}
+
+/// `v` mit `decimals` Nachkommastellen, ohne überflüssige Nullen.
+fn trimmed_number(v: f64, decimals: usize) -> String {
+    let text = format_number(v, decimals);
     if text.contains(['.', ',']) {
         text.trim_end_matches('0')
             .trim_end_matches(['.', ','])

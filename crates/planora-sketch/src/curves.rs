@@ -4,7 +4,7 @@
 use crate::dual::Dual;
 use crate::model::within_coord_range;
 use crate::spline_handles::Nodes;
-use planora_math::nurbs::{MAX_WEIGHT, MIN_WEIGHT, NurbsCurve, NurbsError};
+use planora_math::nurbs::{MAX_WEIGHT, MIN_WEIGHT, NurbsCurve, NurbsError, uniform_clamped_knots};
 use planora_math::{DVec2, TAU};
 use std::sync::Arc;
 
@@ -347,8 +347,37 @@ pub fn conic_nurbs(p0: DVec2, a: DVec2, p2: DVec2, rho: f64) -> Result<NurbsCurv
 
 /// `0 < rho < 1`, und das Gewicht liegt im Bereich, den eine NURBS-Kurve erlaubt (das schließt nur
 /// Werte aus, die dichter als etwa 1e-6 an 0 oder 1 liegen). `NaN` ist ungültig.
-pub(crate) fn conic_rho_ok(rho: f64) -> bool {
+pub fn conic_rho_ok(rho: f64) -> bool {
     rho > 0.0 && rho < 1.0 && (MIN_WEIGHT..=MAX_WEIGHT).contains(&conic_weight(rho))
+}
+
+/// Taugt `a` als Scheitel über der Sehne `p0`–`p2`? Die Enden sind getrennt, und der Scheitel liegt
+/// weiter als `tol` neben ihrer Geraden. Dieselbe Frage für den Klick auf den Scheitel, die Vorschau
+/// und [`crate::model::Sketch::add_conic`].
+pub fn conic_apex_ok(p0: DVec2, a: DVec2, p2: DVec2, tol: f64) -> bool {
+    let chord = p2 - p0;
+    let len = chord.length();
+    len > tol && (chord.perp_dot(a - p0) / len).abs() > tol
+}
+
+/// Wirksamer Grad und gleichmäßiger geklemmter Knotenvektor eines neu gezeichneten Splines mit `n`
+/// Kontrollpunkten beim gewählten Grad `degree`: der kleinere Wert aus `degree` und `n − 1`
+/// (**Annahme**, deckt den Foreneintrag zu Fusion).
+pub(crate) fn control_spline_layout(degree: u8, n: usize) -> (u8, Vec<f64>) {
+    let p = usize::from(degree).min(n.saturating_sub(1));
+    (p as u8, uniform_clamped_knots(p, n))
+}
+
+/// Die Kurve, die [`crate::model::Sketch::add_control_spline`] aus diesen Kontrollpunkten und dem
+/// gewählten Grad anlegt, als NURBS-Kurve in Skizzenkoordinaten (`z = 0`).
+pub fn control_spline_nurbs(points: &[DVec2], degree: u8) -> Result<NurbsCurve, NurbsError> {
+    let (p, knots) = control_spline_layout(degree, points.len());
+    NurbsCurve::new(
+        usize::from(p),
+        knots,
+        points.iter().map(|q| q.extend(0.0)).collect(),
+        vec![1.0; points.len()],
+    )
 }
 
 /// Kontrollpunkte und Gewichte des Stücks `u0..u1` eines Kegelschnitts in homogener Teilung (Blüten),
