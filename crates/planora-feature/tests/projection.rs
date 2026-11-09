@@ -682,8 +682,8 @@ fn spline_base(top: f64) -> Sketch {
     sk
 }
 
-/// Körper aus [`spline_base`], darauf eine Skizze mit der projizierten oberen Freiformkante und einem
-/// Punkt auf ihr. Skizze 2 steht auf XY.
+/// Körper aus [`spline_base`], darauf eine Skizze mit der projizierten oberen Freiformkante und
+/// einem Punkt auf ihr. Skizze 2 steht auf XY.
 fn body_with_fixed_spline() -> (Document, FeatureId, FeatureId, CurveId, PointId) {
     let mut d = Document::new();
     let base = d
@@ -1220,8 +1220,10 @@ fn form_switch_of_a_huge_ellipse_is_a_lost_reference() {
 }
 
 /// Korrektur 2: Schlanke Ellipsen gehen genau in die Skizze, und die Skizze bleibt lösbar. Bis zum
-/// Verhältnis 1e4 als Ellipsenbogen, darüber als fester Spline: Der Löser meldet für einen
-/// Ellipsenbogen ab etwa 1e5 `NotConverged`.
+/// Verhältnis 1e4 als Ellipsenbogen, darüber meist als fester Spline: Der Löser meldet für einen
+/// Ellipsenbogen ab etwa 1e5 `NotConverged`. Nicht immer: Liefert `near_vertex_ellipse` `None`
+/// (Nadelkegel, Stück reicht über den Scheitel hinaus), bleibt es eine `Curve::Ellipse` und kann
+/// `NotConverged` sein.
 #[test]
 fn slim_ellipses_keep_the_sketch_solvable() {
     let tilted = |r: f64, height: f64, h: f64, tilt: f64| {

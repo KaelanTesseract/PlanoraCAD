@@ -603,8 +603,9 @@ impl Sketch {
     }
 
     /// Kegelschnitt von `start` nach `end` mit dem Scheitel `apex` (Schnitt der Endtangenten) und
-    /// `0 < rho < 1` (siehe [`CurveKind::Conic`]). Der Scheitel darf nicht auf der Geraden durch
-    /// Start und Ende liegen.
+    /// `rho` zwischen etwa 0,000001 und 0,999999, denn das Gewicht muss im Bereich der NURBS liegen
+    /// (siehe [`conic_rho_ok`] und [`CurveKind::Conic`]). Der Scheitel darf nicht auf der Geraden
+    /// durch Start und Ende liegen.
     pub fn add_conic(
         &mut self,
         start: PointId,

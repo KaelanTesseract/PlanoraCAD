@@ -345,8 +345,10 @@ pub fn conic_nurbs(p0: DVec2, a: DVec2, p2: DVec2, rho: f64) -> Result<NurbsCurv
     )
 }
 
-/// `0 < rho < 1`, und das Gewicht liegt im Bereich, den eine NURBS-Kurve erlaubt (das schließt nur
-/// Werte aus, die dichter als etwa 1e-6 an 0 oder 1 liegen). `NaN` ist ungültig.
+/// Das Gewicht `rho / (1 − rho)` muss im Bereich der NURBS-Kurve liegen (`MIN_WEIGHT` bis
+/// `MAX_WEIGHT`, 1e-6 bis 1e6). Das ergibt rund 0,000001 ≤ rho ≤ 0,999999; die Grenzen liegen
+/// bei etwa 9,99999e-7 und 0,999999000001, das Modell nimmt Werte knapp darüber noch an. Die
+/// Oberfläche nennt 0,000001 bis 0,999999. `NaN` ist ungültig.
 pub fn conic_rho_ok(rho: f64) -> bool {
     rho > 0.0 && rho < 1.0 && (MIN_WEIGHT..=MAX_WEIGHT).contains(&conic_weight(rho))
 }

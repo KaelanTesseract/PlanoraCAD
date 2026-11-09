@@ -270,8 +270,13 @@ const PARABOLA_MAX_SHIFT: f64 = 5e-8;
 /// aus Mitte und Halbachse mit Zahlen, deren Rundung die Grenze `1e-7` erreicht.
 const MAX_ELLIPSE_MAJOR: f64 = 1e7;
 /// Bis zu diesem Verhältnis der Halbachsen bleibt ein Ellipsenstück `Curve::Ellipse`. Grund ist die
-/// Skizze: Der Löser meldet für einen Ellipsenbogen ab etwa 1e5 `NotConverged` (gemessen bei allen
-/// Größen: 3,3e4 gelöst, 1,1e5 nicht). Der Schnitt selbst bliebe auch darüber genau.
+/// Skizze: Der Löser meldet für einen Ellipsenbogen ab etwa 1e5 `NotConverged` (gemessen bei r = 5
+/// bis 1000: 3,3e4 gelöst, 1,1e5 nicht). Die Ursache ist vermutlich ein Rundungsboden in
+/// `ellipse_residual` (planora-sketch, `constraint.rs`): Dort bleibt das Residuum bei etwa
+/// `1e-16·große Halbachse·|sin t|·Verhältnis/2`, gegen `tol_r` = 1e-8. Das ist eine Folgerung aus
+/// dem Code, nicht nachgemessen. Eine harte Grenze ist es nicht: Liefert `near_vertex_ellipse`
+/// `None`, bleiben auch schlanke Nadelkegel `Curve::Ellipse` und können `NotConverged` sein. Der
+/// Schnitt selbst bliebe auch darüber genau.
 const MAX_ELLIPSE_ASPECT: f64 = 1e4;
 /// Größter Winkel vom Scheitel, bis zu dem eine fast parabolische Ellipse als Bézier-Stück geht.
 const MAX_ELLIPSE_ARC_ANGLE: f64 = 1.4;

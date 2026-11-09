@@ -264,7 +264,8 @@ fn cone_at(origin: DVec3, r: f64, h: f64) -> Solid {
 }
 
 /// Korrektur 1: Parabel, Hyperbel und Ellipsenbogen laufen als ein Stück über die Naht. Sonst
-/// folgte die Skizzenkurve beim Verweis auf das Stück 0 nur noch einem Teil des Schnitts, ohne Warnung.
+/// folgte die Skizzenkurve beim Verweis auf das Stück 0 nur noch einem Teil des Schnitts, ohne
+/// Warnung.
 #[test]
 fn seam_does_not_split_a_conic() {
     for tilt in [0.0f64, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2] {
