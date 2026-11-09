@@ -345,7 +345,7 @@ fn collinear_takes_two_and_is_named_like_fusion() {
 }
 
 #[test]
-fn smooth_on_an_arc_says_g1_and_on_a_line_says_nothing() {
+fn smooth_on_arc_has_no_message_any_more() {
     with_lang(&german(), || {
         let c = context();
         let mut app = sketching();
@@ -362,11 +362,10 @@ fn smooth_on_an_arc_says_g1_and_on_a_line_says_nothing() {
         select(&mut app, vec![Item::Curve(sp), Item::Curve(arc)]);
         assert!(available(&mut app).contains(&ConstraintAction::Smooth));
         assert!(!available(&mut app).contains(&ConstraintAction::Concentric));
-        let before = live(&mut app).len();
         press(&c, &mut app, "Glatt");
-        assert_eq!(live(&mut app).len(), before + 1);
-        assert!(matches!(live(&mut app).last(), Some(K::Smooth(..))));
-        assert_eq!(message(&mut app), Some(tr!("sketch-smooth-arc-g1")));
+        assert!(live(&mut app).iter().any(|k| matches!(k, K::Smooth(..))));
+        // Skizzen 7: Glatt am Bogen ist jetzt G2, die Meldung über G1 entfällt.
+        assert_eq!(message(&mut app), None);
 
         // Spline und Linie am gemeinsamen Ende: keine Meldung.
         let (l, _, joint) = line(&mut app, (40.0, 0.0), (50.0, 0.0));
@@ -490,7 +489,7 @@ fn the_three_actions_are_bindable_and_apply_to_the_selection() {
             "Kollinear",
             "Collinear",
         ),
-        (Action::SketchSmooth, "skizze.glatt", "Glatt", "Smooth"),
+        (Action::SketchSmooth, "skizze.glatt", "Glatt", "Curvature"),
     ];
     for (a, id, de, en) in actions {
         assert_eq!(a.id(), id);
@@ -520,14 +519,14 @@ fn the_new_buttons_speak_english() {
         let (c2, _) = circle(&mut app, 30.0, 10.0, 8.0);
         select(&mut app, vec![Item::Curve(c1), Item::Curve(c2)]);
         let shot = settle(&c, &mut app);
-        for label in ["Concentric", "Collinear", "Smooth"] {
+        for label in ["Concentric", "Collinear", "Curvature"] {
             assert!(shot.count(label) >= 1, "{label}");
         }
         let shot = press(&c, &mut app, "Concentric");
         assert!(shot.count("Concentric") >= 2, "Knopf und Listeneintrag");
         assert_eq!(
             ConstraintAction::Smooth.label(),
-            "Smooth",
+            "Curvature",
             "wie der Name in der Liste"
         );
     });
@@ -1058,5 +1057,118 @@ fn delete_is_one_unit_when_a_suppression_is_refused() {
         let (se, s) = state(&mut app).session_sketch_mut().unwrap();
         se.delete_selection(s);
         assert!(s.curve(free).is_none());
+    });
+}
+
+// ---- Glatt G2 (Skizzen 7, Task 9) ---------------------------------------------------------------
+
+#[test]
+fn smooth_is_one_undo_step_with_handles() {
+    with_lang(&german(), || {
+        let c = context();
+        let mut app = sketching();
+        let (m, st, en) = (
+            pt(&mut app, 0.0, 0.0),
+            pt(&mut app, 5.0, 0.0),
+            pt(&mut app, 0.0, 5.0),
+        );
+        let arc = sk(&mut app).add_arc(m, st, en).unwrap();
+        // Getrennte Enden: Coincident, Griffe und Glatt sind ein Schritt.
+        let s0 = pt(&mut app, -1.0, 6.0);
+        let q = [pt(&mut app, -5.0, 8.0), pt(&mut app, -10.0, 6.0)];
+        let sp = sk(&mut app).add_spline(&[s0, q[0], q[1]]).unwrap();
+        settle(&c, &mut app);
+        let before = sk(&mut app).to_data();
+        select(&mut app, vec![Item::Curve(sp), Item::Curve(arc)]);
+        press(&c, &mut app, "Glatt");
+        assert_eq!(message(&mut app), None);
+        let CurveKind::Spline { handles, .. } = sk(&mut app).curve(sp).unwrap().kind.clone() else {
+            panic!("kein Spline");
+        };
+        assert_eq!(handles.len(), 1, "Griff am Ende");
+        assert!(matches!(
+            handles[0].curvature,
+            planora_sketch::HandleCurvature::Arc { .. }
+        ));
+        assert!(live(&mut app).iter().any(|k| matches!(k, K::Smooth(..))));
+        assert!(
+            live(&mut app)
+                .iter()
+                .any(|k| matches!(k, K::Coincident(..)))
+        );
+        assert_eq!(sk(&mut app).clone().solve().status, SolveStatus::Solved);
+        undo(&mut app);
+        assert_eq!(sk(&mut app).to_data(), before, "ein Rückgängig nimmt alles");
+    });
+}
+
+#[test]
+fn refused_smooth_leaves_no_handles() {
+    with_lang(&german(), || {
+        let c = context();
+        let mut app = sketching();
+        // Griff-Spitze fest quer zum festen Bogen: Die Tangente lässt sich nicht erfüllen.
+        let (m, st, en) = (
+            pt(&mut app, 0.0, 0.0),
+            pt(&mut app, 5.0, 0.0),
+            pt(&mut app, 0.0, 5.0),
+        );
+        let arc = sk(&mut app).add_arc(m, st, en).unwrap();
+        for (p, x, y) in [(m, 0.0, 0.0), (st, 5.0, 0.0), (en, 0.0, 5.0)] {
+            sk(&mut app).add_constraint(K::Fixed(p, x, y)).unwrap();
+        }
+        let q = [pt(&mut app, -5.0, 8.0), pt(&mut app, -10.0, 6.0)];
+        let sp = sk(&mut app).add_spline(&[en, q[0], q[1]]).unwrap();
+        sk(&mut app).activate_tangent_handle(sp, en).unwrap();
+        let CurveKind::Spline { handles, .. } = sk(&mut app).curve(sp).unwrap().kind.clone() else {
+            panic!("kein Spline");
+        };
+        let tip = handles[0].tip;
+        let at = sk(&mut app).point_xy(tip).unwrap();
+        sk(&mut app)
+            .add_constraint(K::Fixed(tip, at.x, at.y))
+            .unwrap();
+        settle(&c, &mut app);
+        let before = sk(&mut app).to_data();
+        select(&mut app, vec![Item::Curve(sp), Item::Curve(arc)]);
+        {
+            let (se, s) = state(&mut app).session_sketch_mut().unwrap();
+            assert!(se.apply(s, ConstraintAction::Smooth, None).is_err());
+        }
+        assert_eq!(sk(&mut app).to_data(), before, "nichts bleibt");
+        assert!(message(&mut app).is_some());
+    });
+}
+
+#[test]
+fn smooth_is_offered_for_the_partners_of_c5() {
+    with_lang(&german(), || {
+        let mut app = sketching();
+        let k = [
+            pt(&mut app, 0.0, 0.0),
+            pt(&mut app, 8.0, 0.0),
+            pt(&mut app, 4.0, 6.0),
+        ];
+        let conic = sk(&mut app).add_conic(k[0], k[1], k[2], 0.5).unwrap();
+        let p: Vec<PointId> = [(20.0, 0.0), (24.0, 4.0), (28.0, 1.0), (32.0, 4.0)]
+            .iter()
+            .map(|&(x, y)| pt(&mut app, x, y))
+            .collect();
+        let control = sk(&mut app).add_control_spline(&p, 3).unwrap();
+        let (l, ..) = line(&mut app, (0.0, 30.0), (10.0, 30.0));
+        let (m, st, en) = (
+            pt(&mut app, 0.0, 50.0),
+            pt(&mut app, 5.0, 50.0),
+            pt(&mut app, 0.0, 55.0),
+        );
+        let arc = sk(&mut app).add_arc(m, st, en).unwrap();
+        for other in [conic, l, arc] {
+            select(&mut app, vec![Item::Curve(control), Item::Curve(other)]);
+            assert!(available(&mut app).contains(&ConstraintAction::Smooth));
+        }
+        for (x, y) in [(conic, l), (conic, arc), (l, arc)] {
+            select(&mut app, vec![Item::Curve(x), Item::Curve(y)]);
+            assert!(!available(&mut app).contains(&ConstraintAction::Smooth));
+        }
     });
 }

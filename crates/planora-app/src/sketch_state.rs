@@ -2229,6 +2229,10 @@ impl SketchSession {
                 sk.add_constraint(ConstraintKind::Coincident(pa, pb))
                     .map_err(err)?;
             }
+            // Griffe an und ihre Lage auf den Werten des Partners (Skizzen 7, C3), im selben Schritt.
+            if let ConstraintKind::Smooth(a, pa, b, pb) = kind {
+                sk.prepare_smooth(a, pa, b, pb).map_err(err)?;
+            }
             se.add_checked(sk, prior, kind, action.label_msg())
         })
     }
@@ -2245,7 +2249,6 @@ impl SketchSession {
     ) -> Result<ConstraintId, Msg> {
         let se = self;
         let dimension = kind.is_dimension();
-        let on_arc = smooth_on_arc(sk, &kind);
         let old = sk.measure(&kind);
         let value_of = kind.length_value();
         let id = sk.add_constraint(kind).map_err(err)?;
@@ -2281,8 +2284,6 @@ impl SketchSession {
             }
         } else if driven {
             se.message = Some(crate::msg!("sketch-became-driven"));
-        } else if on_arc {
-            se.message = Some(crate::msg!("sketch-smooth-arc-g1"));
         }
         se.warn_if_unsolved();
         Ok(id)
@@ -2975,7 +2976,7 @@ fn actions_for(sk: &Sketch, items: &[Item]) -> Vec<ConstraintAction> {
         if round_center(sk, a).is_some() && round_center(sk, b).is_some() {
             found.push(Concentric);
         }
-        if smooth_kinds_ok(sk, a, b) {
+        if sk.smooth_kinds_fit(a, b) {
             found.push(Smooth);
         }
     }
@@ -3034,7 +3035,7 @@ fn constraint_fit(sk: &Sketch, action: ConstraintAction, items: &[Item]) -> Fit 
         Smooth => {
             s.points.is_empty()
                 && s.curves.len() < 2
-                && s.curves.iter().all(|&c| smooth_partner(sk, c))
+                && s.curves.iter().all(|&c| sk.smooth_partner(c))
         }
         _ => {
             let have = [
@@ -3070,7 +3071,7 @@ fn kinds_refusal(sk: &Sketch, action: ConstraintAction, items: &[Item]) -> Optio
         ConstraintAction::Concentric if wrong_kind(&|c| round_center(sk, c).is_some()) => {
             Some(crate::msg!("sketch-concentric-kinds"))
         }
-        ConstraintAction::Smooth if wrong_kind(&|c| smooth_partner(sk, c)) => {
+        ConstraintAction::Smooth if wrong_kind(&|c| sk.smooth_partner(c)) => {
             Some(crate::msg!("sketch-smooth-kinds"))
         }
         _ => None,
@@ -3113,14 +3114,6 @@ fn geometry_of(sk: &Sketch, items: &[Item]) -> Vec<Item> {
         .collect()
 }
 
-/// Kann die Kurve `c` an einem Glatt teilhaben (Spline, Linie oder Bogen)?
-fn smooth_partner(sk: &Sketch, c: CurveId) -> bool {
-    matches!(
-        sk.curve(c).map(|d| &d.kind),
-        Some(CurveKind::Spline { .. } | CurveKind::Line { .. } | CurveKind::Arc { .. })
-    )
-}
-
 /// Mitte eines Kreises, Bogens, einer Ellipse oder eines Ellipsenbogens (Konzentrisch).
 pub(crate) fn round_center(sk: &Sketch, c: CurveId) -> Option<PointId> {
     match sk.curve(c)?.kind {
@@ -3135,32 +3128,9 @@ pub(crate) fn round_center(sk: &Sketch, c: CurveId) -> Option<PointId> {
     }
 }
 
-/// Geht Glatt zwischen `a` und `b`? Ein Spline und eine Linie, ein Bogen oder ein zweiter Spline.
-fn smooth_kinds_ok(sk: &Sketch, a: CurveId, b: CurveId) -> bool {
-    let kind = |c: CurveId| sk.curve(c).map(|d| &d.kind);
-    let spline = |k: Option<&CurveKind>| matches!(k, Some(CurveKind::Spline { .. }));
-    let partner = |k: Option<&CurveKind>| {
-        matches!(
-            k,
-            Some(CurveKind::Spline { .. } | CurveKind::Line { .. } | CurveKind::Arc { .. })
-        )
-    };
-    a != b && ((spline(kind(a)) && partner(kind(b))) || (spline(kind(b)) && partner(kind(a))))
-}
-
 /// Freiheitsgrade von `sk`, frisch gerechnet (nicht aus einem möglicherweise älteren Bericht).
 fn dof_of(sk: &Sketch) -> usize {
     sk.clone().solve().dof
-}
-
-/// Glatt an einem Bogen: bis Teilprojekt 7 nur tangential (G1), das sagt die Meldung.
-fn smooth_on_arc(sk: &Sketch, kind: &ConstraintKind) -> bool {
-    let ConstraintKind::Smooth(a, _, b, _) = *kind else {
-        return false;
-    };
-    [a, b]
-        .into_iter()
-        .any(|c| matches!(sk.curve(c).map(|d| &d.kind), Some(CurveKind::Arc { .. })))
 }
 
 /// Darf ein Winkelmaß den Wert `value` bekommen? Der Betrag ist höchstens 180°; ein negativer

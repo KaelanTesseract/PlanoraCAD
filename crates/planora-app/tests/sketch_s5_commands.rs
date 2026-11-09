@@ -391,7 +391,7 @@ const SIX: [(Action, &str, &str, &str); 6] = [
         "Kollinear",
         "Collinear",
     ),
-    (Action::SketchSmooth, "skizze.glatt", "Glatt", "Smooth"),
+    (Action::SketchSmooth, "skizze.glatt", "Glatt", "Curvature"),
 ];
 
 #[test]

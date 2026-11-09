@@ -371,3 +371,119 @@ fn bad_rho_in_the_file_is_refused() {
         assert!(decode_version(&edited, "x.json").is_err(), "{rho}");
     }
 }
+
+// ---- Glatt (Task 9, Spec C4, Review Focus 4) --------------------------------------------------
+
+/// Datei von vor Skizzen 7 (Format 15): `Smooth` zwischen einem Spline ohne Griff und einem Bogen.
+const OLD_SMOOTH: &str = include_str!("fixtures_old_smooth/format15_smooth_spline_arc.json");
+
+/// Glatt, Bogen und Spline der alten Datei, dazu ihr gemeinsamer Punkt.
+fn smooth_of(
+    sk: &Sketch,
+) -> (
+    planora_sketch::ConstraintId,
+    CurveId,
+    CurveId,
+    planora_sketch::PointId,
+) {
+    let (id, a, pa, b) = sk
+        .constraints()
+        .find_map(|(id, c)| match c.kind {
+            planora_sketch::ConstraintKind::Smooth(a, pa, b, _) => Some((id, a, pa, b)),
+            _ => None,
+        })
+        .expect("kein Glatt in der Datei");
+    (id, a, b, pa)
+}
+
+fn dense(sk: &Sketch, c: CurveId) -> Vec<planora_math::DVec2> {
+    let (lo, hi) = sk.curve_domain(c).unwrap();
+    (0..=200)
+        .map(|k| {
+            sk.curve_eval(c, lo + (hi - lo) * f64::from(k) / 200.0)
+                .unwrap()
+        })
+        .collect()
+}
+
+/// Krümmung in die Kurve hinein am Bereichsanfang (`start`) oder -ende, nur über die Lage gemessen.
+fn kappa_into(sk: &Sketch, c: CurveId, start: bool) -> f64 {
+    let (lo, hi) = sk.curve_domain(c).unwrap();
+    let h = (hi - lo) * 2e-3;
+    let (t, side) = if start { (lo, 1.0) } else { (hi, -1.0) };
+    let f: [planora_math::DVec2; 6] =
+        std::array::from_fn(|k| sk.curve_eval(c, t + side * k as f64 * h).unwrap());
+    let d = (f[0] * (-137.0 / 60.0) + f[1] * 5.0 - f[2] * 5.0 + f[3] * (10.0 / 3.0) - f[4] * 1.25
+        + f[5] * 0.2)
+        / h
+        * side;
+    let a = (f[0] * (15.0 / 4.0) - f[1] * (77.0 / 6.0) + f[2] * (107.0 / 6.0) - f[3] * 13.0
+        + f[4] * (61.0 / 12.0)
+        - f[5] * (5.0 / 6.0))
+        / (h * h);
+    let k = d.perp_dot(a) / d.length().powi(3);
+    if start { k } else { -k }
+}
+
+/// Krümmungssprung an der Fuge der alten Datei: Bogenende (hinten) gegen Spline-Anfang.
+fn jump(sk: &Sketch, arc: CurveId, spline: CurveId) -> f64 {
+    (kappa_into(sk, arc, false) + kappa_into(sk, spline, true)).abs()
+}
+
+#[test]
+fn old_g1_on_arc_stays() {
+    assert_eq!(format_of(OLD_SMOOTH), 15);
+    let snap = decode_version(OLD_SMOOTH, "alt.json").unwrap();
+    let doc = Document::from_snapshot(snap, 0.05).unwrap();
+    let mut sk = sketch_of(&doc.snapshot()).clone();
+    let (id, arc, spline, _) = smooth_of(&sk);
+    let (shape_a, shape_s) = (dense(&sk, arc), dense(&sk, spline));
+    let vars: Vec<u64> = sk.variables().iter().map(|v| v.to_bits()).collect();
+    let k = jump(&sk, arc, spline);
+    assert!(k > 1e-3, "die alte Datei hat einen Krümmungssprung: {k}");
+    assert_eq!(sk.evaluate(id, sk.variables()).unwrap().residuals.len(), 1);
+
+    let r = sk.solve();
+    assert_eq!(r.status, planora_sketch::SolveStatus::Solved, "{r:?}");
+    assert_eq!(r.iterations, 0, "{r:?}");
+    let now: Vec<u64> = sk.variables().iter().map(|v| v.to_bits()).collect();
+    assert_eq!(now, vars, "Lagen bitgleich");
+    assert_eq!(dense(&sk, arc), shape_a);
+    assert_eq!(dense(&sk, spline), shape_s);
+    assert_eq!(jump(&sk, arc, spline), k, "der Sprung bleibt");
+
+    // Auch nach dem Lösen dieselben Bytes im alten Format.
+    let mut after = doc.snapshot();
+    let FeatureKind::Sketch(sf) = &mut after.features[0].kind else {
+        panic!("keine Skizze");
+    };
+    sf.sketch = sk;
+    assert!(required_format(&after) < 17);
+    assert_eq!(encode_version(&after).unwrap(), OLD_SMOOTH);
+}
+
+#[test]
+fn redone_smooth_on_old_file_is_g2_and_17() {
+    let snap = decode_version(OLD_SMOOTH, "alt.json").unwrap();
+    let mut sk = sketch_of(&snap).clone();
+    let (id, arc, spline, joint) = smooth_of(&sk);
+    sk.remove_constraint(id).unwrap();
+    sk.prepare_smooth(arc, joint, spline, joint).unwrap();
+    let new = sk
+        .add_constraint(planora_sketch::ConstraintKind::Smooth(
+            arc, joint, spline, joint,
+        ))
+        .unwrap();
+    assert_eq!(sk.evaluate(new, sk.variables()).unwrap().residuals.len(), 2);
+    assert_eq!(sk.solve().status, planora_sketch::SolveStatus::Solved);
+    assert!(jump(&sk, arc, spline) < 1e-6, "{}", jump(&sk, arc, spline));
+    let doc = document(sk.clone());
+    assert_eq!(required_format(&doc.snapshot()), 17);
+    let text = encode_version(&doc.snapshot()).unwrap();
+    assert_eq!(format_of(&text), 17);
+    let back = decode_version(&text, "x.json").unwrap();
+    assert_eq!(encode_version(&back).unwrap(), text);
+    let mut again = sketch_of(&back).clone();
+    assert_eq!(again.solve().status, planora_sketch::SolveStatus::Solved);
+    assert!(jump(&again, arc, spline) < 1e-6);
+}

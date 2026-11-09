@@ -8,7 +8,7 @@
 //!
 //! Ohne Griffe läuft nichts von hier: `Spline` mit leerem `handles` nimmt den alten Codeweg.
 
-use crate::constraint::ConstraintKind;
+use crate::constraint::{ConstraintKind, SmoothEnd, SmoothStep, smooth_end, smooth_step};
 use crate::curves::{Sampled, V2};
 use crate::dual::Dual;
 use crate::error::SketchError;
@@ -407,6 +407,11 @@ pub(crate) fn nodes_of(
     hermite_nodes(&y, &inputs)
 }
 
+/// Ist `p` das erste Ende des Splines?
+fn curve_starts_at(kind: &CurveKind, p: PointId) -> bool {
+    matches!(kind, CurveKind::Spline { points, .. } if points.first() == Some(&p))
+}
+
 /// Die Kurven eines Griffs: seine Linie und ein Krümmungsbogen.
 fn handle_parts(h: &SplineHandle) -> impl Iterator<Item = CurveId> + use<> {
     let arc = match h.curvature {
@@ -427,16 +432,27 @@ struct CurvatureArc {
 impl CurvatureArc {
     /// `None`, wenn es keinen Griff oder keine Zahl gibt.
     fn new(at: DVec2, tip: DVec2, kappa: f64) -> Option<CurvatureArc> {
-        let forward = tip - at;
-        let l = forward.length();
-        if !kappa.is_finite() || !l.is_finite() || l <= 0.0 {
+        let l = (tip - at).length();
+        if kappa.is_finite() && l.is_finite() && kappa.abs() * l < NEAR_ZERO_CURVATURE {
+            return CurvatureArc::with_radius(at, tip, NEAR_ZERO_RADIUS * l, true);
+        }
+        CurvatureArc::exact(at, tip, kappa)
+    }
+
+    /// Genau die Krümmung `kappa`, auch wenn der Bogen dadurch sehr groß wird. `None` bei `κ = 0`.
+    fn exact(at: DVec2, tip: DVec2, kappa: f64) -> Option<CurvatureArc> {
+        if !kappa.is_finite() || kappa == 0.0 {
             return None;
         }
-        let (r, left) = if kappa.abs() * l < NEAR_ZERO_CURVATURE {
-            (NEAR_ZERO_RADIUS * l, true)
-        } else {
-            (1.0 / kappa.abs(), kappa > 0.0)
-        };
+        CurvatureArc::with_radius(at, tip, 1.0 / kappa.abs(), kappa > 0.0)
+    }
+
+    fn with_radius(at: DVec2, tip: DVec2, r: f64, left: bool) -> Option<CurvatureArc> {
+        let forward = tip - at;
+        let l = forward.length();
+        if !l.is_finite() || l <= 0.0 {
+            return None;
+        }
         let side = if left { 1.0 } else { -1.0 };
         let center = at + forward.perp() / l * (side * r);
         // Vom Stützpunkt um die Öffnung weiter in Laufrichtung: Links dreht das gegen den
@@ -607,6 +623,155 @@ impl Sketch {
             return Err(SketchError::InvalidInput(tr!("sketch-err-handle-none")));
         };
         self.remove_curve(arc)
+    }
+
+    /// Bereitet Glatt zwischen dem Ende `pa` von `a` und dem Ende `pb` von `b` vor (Spec C3): Griffe
+    /// an oder aus und ihre Lage auf den Werten des Partners, vor dem Lösen. Die Griffzeilen sind
+    /// reine Winkel; große Sprünge des Radius erreicht das Lösen von selbst nicht. Die Griffe behalten
+    /// ihre Länge, ein neuer also ein Drittel der aktuellen Ableitung. Die Abhängigkeit selbst legt
+    /// der Aufrufer an. Abgelehnt mit denselben Gründen wie sie; dann bleibt die Skizze, wie sie ist.
+    pub fn prepare_smooth(
+        &mut self,
+        a: CurveId,
+        pa: PointId,
+        b: CurveId,
+        pb: PointId,
+    ) -> Result<(), SketchError> {
+        self.check_structure(&ConstraintKind::Smooth(a, pa, b, pb))?;
+        let wrong_end = || SketchError::WrongType(tr!("sketch-err-smooth-end"));
+        let (ea, eb) = (
+            smooth_end(self, a, pa).ok_or_else(wrong_end)?,
+            smooth_end(self, b, pb).ok_or_else(wrong_end)?,
+        );
+        self.atomically(|s| {
+            s.smooth_step_at(a, pa, smooth_step(ea, eb, true), b, pb, eb)?;
+            s.smooth_step_at(b, pb, smooth_step(eb, ea, false), a, pa, ea)
+        })
+    }
+
+    /// Führt den Schritt `step` für das Ende `at` der Seite `c` gegen den Partner aus.
+    fn smooth_step_at(
+        &mut self,
+        c: CurveId,
+        at: PointId,
+        step: SmoothStep,
+        partner: CurveId,
+        partner_at: PointId,
+        partner_end: SmoothEnd,
+    ) -> Result<(), SketchError> {
+        if step == SmoothStep::Keep {
+            return Ok(());
+        }
+        if step == SmoothStep::OwnArc {
+            self.activate_curvature_handle(c, at)?;
+            return Ok(());
+        }
+        // Vor jeder Änderung an `c`: Die Werte des Partners hängen nicht von ihr ab, ein neuer Griff
+        // braucht aber die alte Form.
+        let wrong_end = || SketchError::WrongType(tr!("sketch-err-smooth-end"));
+        let (into_partner, partner_kappa) = self
+            .smooth_end_values(partner, partner_at)
+            .ok_or_else(wrong_end)?;
+        if !self.has_handle_at(c, at) {
+            self.activate_tangent_handle(c, at)?;
+        }
+        let first = curve_starts_at(&self.curves[c].kind, at);
+        // In `t`-Richtung: Am Anfang läuft sie in die Kurve, am Ende aus ihr heraus. Der Partner liegt
+        // gegenüber, also dreht sich beides um.
+        let reach = self.aim_tip(c, at, if first { -into_partner } else { into_partner })?;
+        let kappa = if first { -partner_kappa } else { partner_kappa };
+        // Ein fast gerader Kontrollpunkt-Spline: Es gibt keinen endlichen Bogen (B5), er passt sich
+        // über die Krümmungszeile auf 0 an.
+        let flat =
+            partner_end == SmoothEnd::ControlSpline && kappa.abs() * reach < NEAR_ZERO_CURVATURE;
+        if step == SmoothStep::Straighten || flat {
+            self.straighten_handle(c, at)
+        } else {
+            self.place_curvature_arc(c, at, kappa)
+        }
+    }
+
+    /// Gibt es am Stützpunkt `at` des Splines `c` einen Griff?
+    fn has_handle_at(&self, c: CurveId, at: PointId) -> bool {
+        matches!(
+            &self.curves[c].kind,
+            CurveKind::Spline { handles, .. } if handles.iter().any(|h| h.at == at)
+        )
+    }
+
+    /// Der Griff am Stützpunkt `at`.
+    fn handle_at(&self, c: CurveId, at: PointId) -> Result<SplineHandle, SketchError> {
+        let CurveKind::Spline { handles, .. } = &self.curves[c].kind else {
+            return Err(SketchError::WrongType(tr!("sketch-err-handle-kind")));
+        };
+        handles
+            .iter()
+            .find(|h| h.at == at)
+            .copied()
+            .ok_or_else(|| SketchError::InvalidInput(tr!("sketch-err-handle-none")))
+    }
+
+    /// Richtet die Griffspitze auf `forward` aus und behält die Länge. Liefert die Grifflänge. Ohne
+    /// Richtung (entartete Partnerkurve) bleibt die Spitze; das Lösen entscheidet dann.
+    fn aim_tip(&mut self, c: CurveId, at: PointId, forward: DVec2) -> Result<f64, SketchError> {
+        let tip = self.handle_at(c, at)?.tip;
+        let from = self.pos(at);
+        let reach = self.pos(tip).distance(from);
+        if let Some(unit) = forward.try_normalize() {
+            let to = from + unit * reach;
+            self.set_point_xy(tip, to.x, to.y)?;
+        }
+        Ok(reach)
+    }
+
+    /// Griff am Stützpunkt `at` auf `Straight`; ein Krümmungsbogen entfällt samt Zeile.
+    fn straighten_handle(&mut self, c: CurveId, at: PointId) -> Result<(), SketchError> {
+        if matches!(
+            self.handle_at(c, at)?.curvature,
+            HandleCurvature::Arc { .. }
+        ) {
+            self.deactivate_curvature_handle(c, at)?;
+        }
+        let mut kind = self.curves[c].kind.clone();
+        if let CurveKind::Spline { handles, .. } = &mut kind
+            && let Some(h) = handles.iter_mut().find(|h| h.at == at)
+        {
+            h.curvature = HandleCurvature::Straight;
+        }
+        self.set_curve_kind(c, kind);
+        Ok(())
+    }
+
+    /// Legt den Krümmungsgriff am Stützpunkt `at` auf die Krümmung `kappa` (in `t`-Richtung), ohne den
+    /// Fast-null-Ersatz aus B5. Ein vorhandener Bogen bleibt mit seinen Abhängigkeiten; liegt er auf
+    /// der anderen Seite, tauschen Start und Ende, denn Bögen laufen gegen den Uhrzeigersinn.
+    fn place_curvature_arc(
+        &mut self,
+        c: CurveId,
+        at: PointId,
+        kappa: f64,
+    ) -> Result<(), SketchError> {
+        let tip = self.handle_at(c, at)?.tip;
+        let layout = CurvatureArc::exact(self.pos(at), self.pos(tip), kappa)
+            .ok_or_else(|| SketchError::Degenerate(tr!("sketch-err-handle-still")))?;
+        if !matches!(
+            self.handle_at(c, at)?.curvature,
+            HandleCurvature::Arc { .. }
+        ) {
+            self.activate_curvature_handle(c, at)?;
+        }
+        let HandleCurvature::Arc { arc, center, other } = self.handle_at(c, at)?.curvature else {
+            unreachable!("the curvature handle exists by now");
+        };
+        self.set_point_xy(center, layout.center.x, layout.center.y)?;
+        self.set_point_xy(other, layout.other.x, layout.other.y)?;
+        let (start, end) = if layout.left {
+            (at, other)
+        } else {
+            (other, at)
+        };
+        self.set_curve_kind(arc, CurveKind::Arc { center, start, end });
+        Ok(())
     }
 
     /// Der Spline als exakte NURBS-Kurve: Grad 5, innere Knoten dreifach, Parameter wie

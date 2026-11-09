@@ -1,0 +1,153 @@
+{
+  "format": 15,
+  "marker": 1,
+  "naechste_id": 2,
+  "features": [
+    {
+      "id": 1,
+      "name": "Skizze1",
+      "unterdrueckt": false,
+      "art": {
+        "typ": "skizze",
+        "skizze": {
+          "name": "Skizze1",
+          "ebene": {
+            "ursprung": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "x": [
+              1.0,
+              0.0,
+              0.0
+            ],
+            "y": [
+              0.0,
+              1.0,
+              0.0
+            ],
+            "z": [
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          "linear": 1e-6,
+          "winkel": 1e-9,
+          "werte": [
+            -0.37379942991394105,
+            0.04712388046572974,
+            5.040825740064486,
+            -0.0000790344901265546,
+            0.5730802662624226,
+            5.378522635718758,
+            -4.303292517574493,
+            6.4624410757546205,
+            -8.924176870606374,
+            7.134389731061342,
+            -13.01263718823227,
+            2.9776017114897777
+          ],
+          "punkte": [
+            {
+              "x": 0,
+              "y": 1,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 2,
+              "y": 3,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 4,
+              "y": 5,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 6,
+              "y": 7,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 8,
+              "y": 9,
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "x": 10,
+              "y": 11,
+              "konstruktion": false,
+              "aktiv": true
+            }
+          ],
+          "kurven": [
+            {
+              "art": {
+                "typ": "bogen",
+                "mitte": 0,
+                "start": 1,
+                "ende": 2
+              },
+              "konstruktion": false,
+              "aktiv": true
+            },
+            {
+              "art": {
+                "typ": "spline",
+                "punkte": [
+                  2,
+                  3,
+                  4,
+                  5
+                ]
+              },
+              "konstruktion": false,
+              "aktiv": true
+            }
+          ],
+          "abhaengigkeiten": [
+            {
+              "art": {
+                "typ": "bogen_radius",
+                "kurve": 0
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": true,
+              "extra": null,
+              "lebt": true
+            },
+            {
+              "art": {
+                "typ": "glatt",
+                "a": 0,
+                "punkt_a": 2,
+                "b": 1,
+                "punkt_b": 2
+              },
+              "zweig": 0,
+              "gesteuert": false,
+              "aktiv": true,
+              "intern": false,
+              "extra": null,
+              "lebt": true
+            }
+          ]
+        },
+        "lage": {
+          "typ": "standard",
+          "ebene": "xy"
+        },
+        "kopien": []
+      }
+    }
+  ]
+}

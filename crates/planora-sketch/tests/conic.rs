@@ -782,19 +782,23 @@ fn point_on_conic_and_tangent_line_solve() {
 }
 
 #[test]
-fn coincident_line_at_the_end_follows_and_smooth_is_not_there_yet() {
+fn coincident_line_at_the_end_follows_and_smooth_needs_a_spline() {
     let mut s = sketch();
     let (c, [_, _, end]) = conic(&mut s, 0.5);
     let far = s.add_point(20.0, 0.0).unwrap();
     let l = s.add_line(end, far).unwrap();
-    // Glatt am Kegelschnitt kommt erst mit Task 9.
+    // Skizzen 7: Glatt geht am Kegelschnitt, aber nach C5 nur gegen einen Spline, nicht gegen eine
+    // Linie.
     assert!(
         s.add_constraint(K::Smooth(c, end, l, end)).is_err(),
-        "Glatt verlangt noch einen Spline"
+        "Glatt verlangt einen Spline"
     );
     s.set_point_xy(end, 12.0, 1.0).unwrap();
     assert_eq!(s.solve().status, SolveStatus::Solved);
     assert!(s.curve_eval(c, 1.0).unwrap().distance(v(12.0, 1.0)) < 1e-9);
+    let bend = s.add_point(16.0, -3.0).unwrap();
+    let sp = s.add_spline(&[end, bend, far]).unwrap();
+    assert!(s.add_constraint(K::Smooth(c, end, sp, end)).is_ok());
 }
 
 // ---- Laden -----------------------------------------------------------------------------------

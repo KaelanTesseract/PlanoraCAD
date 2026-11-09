@@ -856,12 +856,24 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
         // Nullstelle.
         // Ohne gültige Enden keine Zeile; `settle_constraints` und `satisfied` sorgen dafür, dass
         // ein solches Glatt entfällt.
+        // Dazu die Krümmungszeile `κ₁ + κ₂ = 0` nach Spec C1: Die Richtungen in die Kurven laufen
+        // entgegengesetzt.
         Smooth(c1, p1, c2, p2) => {
             let (Some(u), Some(v)) = (into_curve(ctx, *c1, *p1), into_curve(ctx, *c2, *p2)) else {
                 return Vec::new();
             };
             let w = (-&v.0, -&v.1);
-            vec![cross(&u, &w).atan2(&dot(&u, &w))]
+            let mut rows = vec![cross(&u, &w).atan2(&dot(&u, &w))];
+            if let (Some(e1), Some(e2)) = (smooth_end(sk, *c1, *p1), smooth_end(sk, *c2, *p2))
+                && smooth_has_curvature_row(e1, e2)
+                && let (Some(k1), Some(k2)) = (
+                    smooth_row_kappa(ctx, *c1, *p1, e1),
+                    smooth_row_kappa(ctx, *c2, *p2, e2),
+                )
+            {
+                rows.push(k1 + k2);
+            }
+            rows
         }
         DistanceX(a, b, v) | DistanceY(a, b, v) => {
             let d = sub2(&ctx.pt(*b), &ctx.pt(*a));
@@ -969,7 +981,6 @@ fn clamped_start_derivatives(degree: usize, knots: &[f64], pts: &[V2]) -> (V2, V
 /// `Arc` der Griffwert, alle übrigen aus ihrer zweiten Ableitung. Das Vorzeichen gilt in der Richtung
 /// von `p` in die Kurve hinein: positiv bei Linksdrehung. `None`, wenn `p` kein Ende von `c` ist oder
 /// die Kurve keine Enden hat.
-#[allow(dead_code, reason = "Skizzen 7: Glatt G2 nutzt das mit Task 9")]
 pub(crate) fn end_curvature_dual(ctx: &Ctx, c: CurveId, p: PointId) -> Option<Dual> {
     let [first, last] = curve_ends(&ctx.sk.curves[c].kind)?;
     if p != first && p != last {
@@ -1037,6 +1048,154 @@ pub(crate) fn end_curvature_dual(ctx: &Ctx, c: CurveId, p: PointId) -> Option<Du
             return None;
         }
     })
+}
+
+/// Woher die Krümmung am Ende einer Glatt-Seite kommt (Spec C1). Hier und in den `match` darunter steht
+/// die ganze Regel, wer mit wem geht und was der Befehl tut; eine neue Kurvenart (Task 10: fester
+/// Spline) scheitert in [`smooth_end`], [`smooth_step`], [`smooth_leader`] und [`smooth_partner_kind`]
+/// beim Übersetzen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SmoothEnd {
+    Line,
+    /// Spline durch Stützpunkte, an diesem Ende ohne Griff: Krümmung von selbst 0.
+    Natural,
+    /// Griff `Straight`: Krümmung von selbst 0.
+    Straight,
+    /// Griff `Form`: Krümmung aus der Kurve, nur über die Griffspitze steuerbar.
+    Form,
+    /// Griff `Arc`.
+    ArcHandle,
+    Arc,
+    /// Die Kontrollpunkte passen sich an, auch auf Krümmung 0.
+    ControlSpline,
+    Conic,
+}
+
+/// Die Art der Seite `c` am Ende `p`; `None` ohne Enden oder wenn `p` keines ist.
+pub(crate) fn smooth_end(sk: &Sketch, c: CurveId, p: PointId) -> Option<SmoothEnd> {
+    let kind = &sk.curves[c].kind;
+    if !curve_ends(kind)?.contains(&p) {
+        return None;
+    }
+    Some(match kind {
+        CurveKind::Line { .. } => SmoothEnd::Line,
+        CurveKind::Arc { .. } => SmoothEnd::Arc,
+        CurveKind::ControlSpline { .. } => SmoothEnd::ControlSpline,
+        CurveKind::Conic { .. } => SmoothEnd::Conic,
+        CurveKind::Spline { handles, .. } => match handles.iter().find(|h| h.at == p) {
+            None => SmoothEnd::Natural,
+            Some(h) => match h.curvature {
+                HandleCurvature::Form => SmoothEnd::Form,
+                HandleCurvature::Straight => SmoothEnd::Straight,
+                HandleCurvature::Arc { .. } => SmoothEnd::ArcHandle,
+            },
+        },
+        CurveKind::Circle { .. } | CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. } => {
+            return None;
+        }
+    })
+}
+
+/// Gibt es die Krümmungszeile (C1)? Ein Spline-Ende ohne Griff hat nie eine: Gegen Krümmung 0 ist die
+/// Fuge schon G2, gegen einen Wert ist es der alte G1-Fall aus C4. Zwei Seiten mit Krümmung 0 brauchen
+/// auch keine.
+fn smooth_has_curvature_row(a: SmoothEnd, b: SmoothEnd) -> bool {
+    let zero = |e: SmoothEnd| matches!(e, SmoothEnd::Line | SmoothEnd::Straight);
+    !(a == SmoothEnd::Natural || b == SmoothEnd::Natural || (zero(a) && zero(b)))
+}
+
+/// Krümmung einer Seite in der Krümmungszeile. Griff `Form`: C1 verlangt die Erfüllung allein über die
+/// Griffspitze, darum sind alle anderen Punkte des Splines hier Zahlen ohne Gradient.
+fn smooth_row_kappa(ctx: &Ctx, c: CurveId, p: PointId, end: SmoothEnd) -> Option<Dual> {
+    match end {
+        SmoothEnd::Line | SmoothEnd::Natural | SmoothEnd::Straight => Some(Dual::constant(0.0)),
+        SmoothEnd::ArcHandle | SmoothEnd::Arc | SmoothEnd::ControlSpline | SmoothEnd::Conic => {
+            end_curvature_dual(ctx, c, p)
+        }
+        SmoothEnd::Form => {
+            let CurveKind::Spline { points, handles } = &ctx.sk.curves[c].kind else {
+                return None;
+            };
+            let tip = handles.iter().find(|h| h.at == p)?.tip;
+            let nodes = nodes_of(points, handles, |q| {
+                if q == tip {
+                    ctx.pt(q)
+                } else {
+                    let d = &ctx.sk.points[q];
+                    (Dual::constant(ctx.x[d.x]), Dual::constant(ctx.x[d.y]))
+                }
+            });
+            let first = points.first() == Some(&p);
+            let i = if first { 0 } else { points.len() - 1 };
+            let k = kappa_of(&nodes.first[i], &nodes.second[i]);
+            Some(if first { k } else { -&k })
+        }
+    }
+}
+
+/// Was der Befehl Glatt an einer Seite tut (Spec C3), siehe [`smooth_step`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SmoothStep {
+    /// Nichts.
+    Keep,
+    /// Griffe an, Tangente und Krümmung vom Partner (C3, erster Fall).
+    Follow,
+    /// Griff `Straight`, ein Krümmungsbogen entfällt (C3, zweiter Fall).
+    Straighten,
+    /// Krümmungsgriff auf dem eigenen Wert: Die zweite Seite folgt ihm.
+    OwnArc,
+}
+
+/// Der Schritt für die Seite `me` gegen `other`. `first`: `me` ist die erste Seite des Befehls; sie
+/// gibt vor, wenn beide gleichrangig sind.
+pub(crate) fn smooth_step(me: SmoothEnd, other: SmoothEnd, first: bool) -> SmoothStep {
+    use SmoothEnd::*;
+    use SmoothStep::*;
+    match (me, other) {
+        // Nur ein Spline durch Stützpunkte hat Griffe. Der Kontrollpunkt-Spline passt sich über die
+        // Krümmungszeile an.
+        (Line | Arc | ControlSpline | Conic, _) => Keep,
+        (Natural, Arc | ArcHandle | ControlSpline | Conic) => Follow,
+        (Natural, Line | Natural | Straight | Form) => Keep,
+        // Gegen einen Bogen oder Kegelschnitt ginge Krümmung 0 nie; ein Kontrollpunkt-Spline kann sie.
+        (Straight, Arc | ArcHandle | Conic) => Follow,
+        (Straight, Line | Natural | Straight | Form | ControlSpline) => Keep,
+        (Form, Arc | ArcHandle | ControlSpline | Conic) => Follow,
+        (Form, Line | Natural | Straight) => Straighten,
+        (Form, Form) if first => OwnArc,
+        (Form, Form) => Follow,
+        (ArcHandle, Line) => Straighten,
+        (ArcHandle, ArcHandle) if first => Keep,
+        (ArcHandle, ArcHandle | Arc | ControlSpline | Conic) => Follow,
+        (ArcHandle, Natural | Straight | Form) => Keep,
+    }
+}
+
+/// Kann diese Art die eine Seite sein, die jedes Glatt braucht (C5)?
+fn smooth_leader(k: &CurveKind) -> bool {
+    match k {
+        CurveKind::Spline { .. } | CurveKind::ControlSpline { .. } => true,
+        CurveKind::Line { .. }
+        | CurveKind::Circle { .. }
+        | CurveKind::Arc { .. }
+        | CurveKind::Ellipse { .. }
+        | CurveKind::EllipticArc { .. }
+        | CurveKind::Conic { .. } => false,
+    }
+}
+
+/// Kann diese Art überhaupt an einem Glatt teilhaben (C5)? Ellipsenbogen bleibt abgelehnt.
+fn smooth_partner_kind(k: &CurveKind) -> bool {
+    match k {
+        CurveKind::Line { .. }
+        | CurveKind::Arc { .. }
+        | CurveKind::Spline { .. }
+        | CurveKind::ControlSpline { .. }
+        | CurveKind::Conic { .. } => true,
+        CurveKind::Circle { .. } | CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. } => {
+            false
+        }
+    }
 }
 
 /// Radius und Durchmesser umgeschaltet: `Radius(c, v) ↔ Diameter(c, 2v)`,
@@ -1267,7 +1426,7 @@ impl Sketch {
     }
 
     /// Prüft Ids und Objekttypen (ohne die Zahlenwerte der Maße).
-    fn check_structure(&self, kind: &ConstraintKind) -> Result<(), SketchError> {
+    pub(crate) fn check_structure(&self, kind: &ConstraintKind) -> Result<(), SketchError> {
         for p in kind.points() {
             self.check_point(p)?;
         }
@@ -1356,18 +1515,10 @@ impl Sketch {
             }
             Smooth(a, _, b, _) if a == b => degenerate(tr!("sketch-err-two-objects")),
             Smooth(a, _, b, _) => {
-                let kind = |c: CurveId| &self.curves[c].kind;
-                let spline = |c: CurveId| matches!(kind(c), CurveKind::Spline { .. });
-                let allowed = |c: CurveId| {
-                    matches!(
-                        kind(c),
-                        CurveKind::Line { .. } | CurveKind::Arc { .. } | CurveKind::Spline { .. }
-                    )
-                };
-                if !(allowed(*a) && allowed(*b) && (spline(*a) || spline(*b))) {
-                    wrong(tr!("sketch-smooth-kinds"))
-                } else {
+                if self.smooth_kinds_fit(*a, *b) {
                     Ok(())
+                } else {
+                    wrong(tr!("sketch-smooth-kinds"))
                 }
             }
             DistanceX(a, b, _) | DistanceY(a, b, _) | SlotOverall(a, b, ..) if a == b => {
@@ -1985,6 +2136,35 @@ impl Sketch {
         self.constraints[id].kind = kind;
         self.touch_structure();
         Ok(())
+    }
+
+    /// Kann die Kurve `c` an einem Glatt teilhaben (Spec C5)? Für die Anzeige, solange die zweite
+    /// Kurve fehlt; auch gelöschte Kurven zählen nach ihrer Art.
+    pub fn smooth_partner(&self, c: CurveId) -> bool {
+        self.curves
+            .get(c)
+            .is_some_and(|d| smooth_partner_kind(&d.kind))
+    }
+
+    /// Geht Glatt zwischen `a` und `b` (Spec C5)? Mindestens eine Seite ist ein Spline einer Art, die
+    /// andere ein gültiger Partner. Dieselbe Regel nutzen die Prüfung und die Oberfläche.
+    pub fn smooth_kinds_fit(&self, a: CurveId, b: CurveId) -> bool {
+        let (Some(ka), Some(kb)) = (self.curves.get(a), self.curves.get(b)) else {
+            return false;
+        };
+        let (ka, kb) = (&ka.kind, &kb.kind);
+        a != b
+            && smooth_partner_kind(ka)
+            && smooth_partner_kind(kb)
+            && (smooth_leader(ka) || smooth_leader(kb))
+    }
+
+    /// Richtung (nicht normiert) aus dem Ende `p` in die Kurve `c` und die Krümmung dort, in Zahlen.
+    pub(crate) fn smooth_end_values(&self, c: CurveId, p: PointId) -> Option<(DVec2, f64)> {
+        let ctx = Ctx::collecting(self, &self.vars);
+        let u = into_curve(&ctx, c, p)?;
+        let k = end_curvature_dual(&ctx, c, p)?;
+        Some((DVec2::new(u.0.v, u.1.v), k.v))
     }
 
     /// Sind die Punkte eines Glatt noch Enden ihrer Kurven? `true` für alle anderen Arten. Nach
