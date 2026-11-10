@@ -2808,6 +2808,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "planora-text"
+version = "0.0.2-dev.1"
+dependencies = [
+ "skrifa",
+]
+
+[[package]]
 name = "planora-update"
 version = "0.0.2-dev.1"
 dependencies = [
