@@ -67,7 +67,7 @@ fn edited(text: &str, f: impl FnOnce(&mut Value)) -> String {
 
 #[test]
 fn format_8_only_with_sections() {
-    assert_eq!(FORMAT_VERSION, 17); // seit Skizzen 7 (Spline mit Kontrollpunkten)
+    assert_eq!(FORMAT_VERSION, 18); // seit Skizzen 8 (Text)
     let (plain, _, _) = doc(false);
     // Ohne Schnitt wie bisher: Format 5 (die Normansicht hat Mittellinien), kein Schnittfeld.
     assert_eq!(fmt(&plain), 5);
@@ -201,9 +201,9 @@ fn format_errors() {
     });
     assert!(bad(&wrong_kind).to_string().contains("Schnittebene"));
 
-    // Format 18 ist zu neu (Skizzen 7: 17 ist jetzt bekannt).
-    let t = good.replacen("\"format\": 8", "\"format\": 18", 1);
-    assert!(matches!(bad(&t), ProjectError::TooNew { found: 18, .. }));
+    // Format 19 ist zu neu (Skizzen 8: 18 ist jetzt bekannt).
+    let t = good.replacen("\"format\": 8", "\"format\": 19", 1);
+    assert!(matches!(bad(&t), ProjectError::TooNew { found: 19, .. }));
 }
 
 #[test]

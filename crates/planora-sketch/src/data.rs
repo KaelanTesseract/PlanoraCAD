@@ -12,8 +12,8 @@ use crate::pattern::{
     PatternSlot,
 };
 use crate::solver::SolveCache;
-use crate::text::{ShapedCache, TextData, TextPlacement};
-use crate::text_shape::TextStyle;
+use crate::text::{MAX_SPACING, ShapedCache, TextData, TextPlacement};
+use crate::text_shape::{MAX_TEXT_CHARS, MAX_TEXT_CURVES, TextStyle};
 use planora_i18n::tr;
 use planora_kernel::Arena;
 use planora_math::nurbs::NurbsCurve;
@@ -103,6 +103,12 @@ impl Sketch {
     /// [`Sketch::to_data`]).
     pub fn curve_entries(&self) -> impl Iterator<Item = &CurveKind> {
         self.curves.iter().map(|(_, c)| &c.kind)
+    }
+
+    /// Gibt es einen Texteintrag, auch einen gelöschten? Dann braucht die Datei Format 18
+    /// (Skizzen 8): Er steht in der Datei.
+    pub fn has_text_entry(&self) -> bool {
+        !self.texts.is_empty()
     }
 
     /// Arten aller Abhängigkeitseinträge in Arena-Reihenfolge, auch gelöschter und interner.
@@ -326,7 +332,7 @@ impl Sketch {
             }
         }
         check_patterns(&d)?;
-        check_text_refs(&d)?;
+        check_texts(&d)?;
 
         let mut points = Arena::new();
         for p in d.points {
@@ -670,9 +676,26 @@ fn check_patterns(d: &SketchData) -> Result<(), SketchError> {
     Ok(())
 }
 
-/// Prüft, dass jeder Text (auch ein gelöschter) nur vorhandene Kurven und Punkte nennt; so stürzt
-/// nichts ab. Die strenge Prüfung der Texte (Werte, Rahmen, Zuordnung) folgt mit Format 18.
-fn check_text_refs(d: &SketchData) -> Result<(), SketchError> {
+/// Fehler eines Textes in den Rohdaten mit dem Grund `reason` (Schlüssel).
+fn bad_text(reason: &str) -> SketchError {
+    bad(tr!(
+        "sketch-err-text-data",
+        reason = planora_i18n::t(reason)
+    ))
+}
+
+/// Prüft die Texte streng (Spec G5); eine kaputte Skizze wird abgelehnt, nicht repariert.
+///
+/// Jeder Text, auch ein gelöschter: nur vorhandene Kurven und Punkte (so stürzt nichts ab), Höhe
+/// endlich und größer als null, Zeichenabstand in `0 ≤ p ≤ 1000`, Inhalt nicht leer und
+/// höchstens [`MAX_TEXT_CHARS`] Zeichen, höchstens [`MAX_TEXT_CURVES`] erzeugte Kurven.
+///
+/// Jeder lebende Text dazu: alle Teile leben; der Rahmen besteht aus vier verschiedenen Ecken und
+/// vier Linien, Linie `i` zwischen Ecke `i` und Ecke `i + 1`; der Pfad ist keine erzeugte Kurve
+/// eines lebenden Textes; keine Kurve (erzeugt oder Rahmen) und kein Punkt (erzeugt oder Ecke)
+/// gehört zweimal zu lebenden Texten. Ein gelöschter Text darf auf gelöschte Teile zeigen und
+/// seine Kurven abgegeben haben (Text auflösen, Spec F).
+fn check_texts(d: &SketchData) -> Result<(), SketchError> {
     let (np, nc) = (d.points.len(), d.curves.len());
     for t in &d.texts {
         let placement_ok = match t.placement {
@@ -684,7 +707,72 @@ fn check_text_refs(d: &SketchData) -> Result<(), SketchError> {
         let parts_ok =
             t.curves.iter().all(|c| c.index() < nc) && t.points.iter().all(|p| p.index() < np);
         if !(placement_ok && parts_ok) {
-            return Err(bad(tr!("sketch-err-data-text-object")));
+            return Err(bad_text("sketch-err-text-data-object"));
+        }
+        if !(t.height.is_finite() && t.height > 0.0) {
+            return Err(bad_text("sketch-err-text-data-height"));
+        }
+        if !(0.0..=MAX_SPACING).contains(&t.style.spacing) {
+            return Err(bad_text("sketch-err-text-data-spacing"));
+        }
+        if t.content.chars().count() > MAX_TEXT_CHARS || t.content.trim().is_empty() {
+            return Err(bad_text("sketch-err-text-data-content"));
+        }
+        if t.curves.len() > MAX_TEXT_CURVES {
+            return Err(bad_text("sketch-err-text-data-curves"));
+        }
+    }
+    let live: Vec<&TextRecord> = d.texts.iter().filter(|t| t.alive).collect();
+    let point_alive = |p: PointId| d.points[p.index()].alive;
+    let curve_alive = |c: CurveId| d.curves[c.index()].alive;
+    // Alle erzeugten Kurven lebender Texte: Keine davon ist ein Pfad.
+    let glyph_curves: HashSet<CurveId> = live.iter().flat_map(|t| t.curves.clone()).collect();
+    let mut curves: HashSet<CurveId> = HashSet::new();
+    let mut points: HashSet<PointId> = HashSet::new();
+    for t in live {
+        let alive = t.curves.iter().all(|&c| curve_alive(c))
+            && t.points.iter().all(|&p| point_alive(p))
+            && match t.placement {
+                TextPlacement::Box { lines, corners, .. } => {
+                    lines.iter().all(|&c| curve_alive(c)) && corners.iter().all(|&p| point_alive(p))
+                }
+                TextPlacement::Path { path, .. } => curve_alive(path),
+            };
+        if !alive {
+            return Err(bad_text("sketch-err-text-data-deleted"));
+        }
+        let (own_curves, own_points): (Vec<CurveId>, Vec<PointId>) = match t.placement {
+            TextPlacement::Box { lines, corners, .. } => {
+                let quad = (0..4).all(|i| {
+                    let (p, q) = (corners[i], corners[(i + 1) % 4]);
+                    matches!(d.curves[lines[i].index()].kind,
+                        CurveKind::Line { a, b } if (a, b) == (p, q) || (a, b) == (q, p))
+                });
+                let distinct = corners.iter().collect::<HashSet<_>>().len() == 4
+                    && lines.iter().collect::<HashSet<_>>().len() == 4;
+                if !(quad && distinct) {
+                    return Err(bad_text("sketch-err-text-data-frame"));
+                }
+                (lines.to_vec(), corners.to_vec())
+            }
+            TextPlacement::Path { path, .. } => {
+                if glyph_curves.contains(&path) {
+                    return Err(bad_text("sketch-err-text-data-path"));
+                }
+                (Vec::new(), Vec::new())
+            }
+        };
+        let exclusive = t
+            .curves
+            .iter()
+            .chain(&own_curves)
+            .all(|&c| curves.insert(c))
+            && t.points
+                .iter()
+                .chain(&own_points)
+                .all(|&p| points.insert(p));
+        if !exclusive {
+            return Err(bad_text("sketch-err-text-data-shared"));
         }
     }
     Ok(())

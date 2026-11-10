@@ -134,7 +134,7 @@ fn documents_without_blends_still_write_format_1() {
             .contains("\"format\": 1")
     );
     assert_eq!(required_format(&blend_document().snapshot()), 2);
-    assert_eq!(FORMAT_VERSION, 17); // seit Skizzen 7 (Spline mit Kontrollpunkten)
+    assert_eq!(FORMAT_VERSION, 18); // seit Skizzen 8 (Text)
 }
 
 #[test]
@@ -148,8 +148,8 @@ fn a_format_1_file_with_a_blend_is_corrupt_and_format_3_is_too_new() {
     assert!(e.contains("Dateiformat 2"), "{e}");
     // Seit der Zeichnungseinheit (Zoll) ist Format 12 gültig; „zu neu“ ist jetzt 13.
     assert!(matches!(
-        bad(&good.replacen("\"format\": 2", "\"format\": 18", 1)),
-        ProjectError::TooNew { found: 18, .. }
+        bad(&good.replacen("\"format\": 2", "\"format\": 19", 1)),
+        ProjectError::TooNew { found: 19, .. }
     ));
 }
 

@@ -121,7 +121,7 @@ pub struct ReshapeReport {
 }
 
 /// Größter erlaubter Zeichenabstand in Prozent (Spec A7).
-const MAX_SPACING: f64 = 1000.0;
+pub(crate) const MAX_SPACING: f64 = 1000.0;
 
 impl From<TextShapeError> for SketchError {
     fn from(e: TextShapeError) -> SketchError {

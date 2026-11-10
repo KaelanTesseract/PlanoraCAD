@@ -3,9 +3,7 @@
 
 use planora_feature::*;
 use planora_math::{Frame, Tolerance};
-use planora_project::{
-    FORMAT_VERSION, ProjectError, decode_version, encode_version, required_format,
-};
+use planora_project::{ProjectError, decode_version, encode_version, required_format};
 use planora_sketch::{CurveId, CurveKind, Sketch};
 
 fn format_of(text: &str) -> u64 {
@@ -52,10 +50,7 @@ fn sketch_of(s: &Snapshot) -> &Sketch {
     &sf.sketch
 }
 
-#[test]
-fn format_version_is_17() {
-    assert_eq!(FORMAT_VERSION, 17);
-}
+// Skizzen 8: Die höchste Formatnummer prüft jetzt `format18_text.rs`.
 
 #[test]
 fn control_spline_needs_17() {
