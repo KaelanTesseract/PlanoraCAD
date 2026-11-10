@@ -158,13 +158,6 @@ impl Sketch {
                 }
             }
         }
-        for &p in old_points.iter().skip(want_points.len()) {
-            if self.points[p].alive {
-                self.points[p].alive = false;
-                dead_points.insert(p);
-                structure = true;
-            }
-        }
 
         let mut curves: Vec<CurveId> = Vec::with_capacity(pieces.len());
         for (i, &piece) in pieces.iter().enumerate() {
@@ -198,6 +191,24 @@ impl Sketch {
                 self.curves[c].alive = false;
                 dead_curves.insert(c);
                 structure = true;
+            }
+        }
+        // Überzählige Punkte erst jetzt, wenn die Kurven des Textes feststehen: Einen Punkt, den
+        // noch eine andere lebende Kurve benutzt, gibt der Text nur frei; er bleibt als
+        // gewöhnlicher Punkt stehen.
+        let surplus: Vec<PointId> = old_points
+            .iter()
+            .skip(want_points.len())
+            .copied()
+            .filter(|&p| self.points[p].alive)
+            .collect();
+        if !surplus.is_empty() {
+            structure = true;
+            let own: HashSet<CurveId> = curves.iter().copied().collect();
+            let used = self.points_used_outside(&own);
+            for p in surplus.into_iter().filter(|p| !used.contains(p)) {
+                self.points[p].alive = false;
+                dead_points.insert(p);
             }
         }
 

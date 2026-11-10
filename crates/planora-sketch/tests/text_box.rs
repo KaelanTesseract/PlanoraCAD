@@ -973,3 +973,99 @@ fn edit_text_box_rejects_and_keeps_the_text() {
         Err(SketchError::UnknownObject)
     );
 }
+
+#[test]
+fn remove_text_keeps_points_used_by_other_curves() {
+    let mut s = sketch();
+    let t = text(&mut s, "ab");
+    let (lines, corners) = frame(&s, t);
+    let glyph = glyph_points(&s, t)[0];
+    let q = s.add_point(60.0, 0.0).unwrap();
+    let r = s.add_point(60.0, 20.0).unwrap();
+    // Wie das Linienwerkzeug mit Fang an der Ecke: Die Linie benutzt den Eckpunkt selbst.
+    let line = s.add_line(corners[1], q).unwrap();
+    let other = s.add_line(glyph, r).unwrap();
+    let keep = s.add_constraint(K::Distance(corners[1], r, 25.0)).unwrap();
+    s.add_constraint(K::Parallel(lines[0], line)).unwrap();
+    s.remove_text(t).unwrap();
+    assert!(s.curve(line).is_some() && s.curve(other).is_some());
+    assert!(
+        s.point_xy(corners[1]).is_ok(),
+        "die Ecke bleibt als gewöhnlicher Punkt"
+    );
+    assert!(s.point_xy(glyph).is_ok(), "ebenso ein benutzter Glyphpunkt");
+    for k in [0, 2, 3] {
+        assert!(s.point_xy(corners[k]).is_err(), "Ecke {k}");
+    }
+    assert!(lines.iter().all(|&l| s.curve(l).is_none()));
+    assert!(
+        s.constraint(keep).is_some(),
+        "ohne Textkurve bleibt die Abhängigkeit"
+    );
+    assert_eq!(
+        s.constraints().count(),
+        1,
+        "die Parallele an der Rahmenlinie entfällt"
+    );
+    assert_eq!(s.internal_constraints().count(), 0);
+    let loaded = Sketch::from_data(s.to_data()).unwrap();
+    assert!(loaded.curve(line).is_some());
+    // Jetzt ein gewöhnlicher Punkt: Er lässt sich löschen, die Linie geht mit.
+    s.remove_point(corners[1]).unwrap();
+    assert!(s.curve(line).is_none());
+}
+
+#[test]
+fn surplus_glyph_point_used_by_another_curve_stays() {
+    let mut s = sketch();
+    let t = text(&mut s, "abc");
+    let points = glyph_points(&s, t);
+    let shared = points[25];
+    let q = s.add_point(60.0, 30.0).unwrap();
+    let line = s.add_line(shared, q).unwrap();
+    let p = params("ab");
+    let shape = shape_of(&p);
+    s.edit_text_box(t, p, HAlign::Left, VAlign::Bottom, shape)
+        .unwrap();
+    assert_eq!(glyph_points(&s, t), points[..22].to_vec());
+    assert!(
+        s.point_xy(shared).is_ok(),
+        "von einer anderen Kurve benutzt"
+    );
+    assert!(s.curve(line).is_some());
+    for &p in points[22..].iter().filter(|&&p| p != shared) {
+        assert!(s.point_xy(p).is_err(), "überzähliger Punkt {p:?} gelöscht");
+    }
+    Sketch::from_data(s.to_data()).unwrap();
+}
+
+#[test]
+fn frame_lines_stay_construction() {
+    let mut s = sketch();
+    let t = text(&mut s, "ab");
+    let (lines, _) = frame(&s, t);
+    let rev = s.revision();
+    for l in lines {
+        says(
+            s.set_construction(l, false),
+            tr!("sketch-text-part"),
+            "Rahmenlinie normal",
+        );
+        says(
+            s.set_centerline(l, true),
+            tr!("sketch-text-part"),
+            "Rahmenlinie als Mittellinie",
+        );
+        says(
+            s.set_centerline(l, false),
+            tr!("sketch-text-part"),
+            "Rahmenlinie ohne Mittellinie",
+        );
+        let d = s.curve(l).unwrap();
+        assert!(d.construction && !d.centerline);
+    }
+    assert_eq!(s.revision(), rev);
+    // Konstruktion bleibt Konstruktion: Das geht.
+    s.set_construction(lines[0], true).unwrap();
+    assert!(s.curve(lines[0]).unwrap().construction);
+}

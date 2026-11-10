@@ -313,6 +313,15 @@ impl Sketch {
         }
     }
 
+    /// Rahmenlinien bleiben Konstruktion: weder normal noch Mittellinie (Ruling zu Spec B4).
+    pub(crate) fn refuse_frame_style(&self, c: CurveId) -> Result<(), SketchError> {
+        if self.text_of_frame(c).is_some() {
+            Err(SketchError::InvalidInput(tr!("sketch-text-part")))
+        } else {
+            Ok(())
+        }
+    }
+
     /// Die Kurven, die den Stil der erzeugten Kurve `c` teilen: alle Kurven ihres Textes (Spec
     /// B10). `None`, wenn `c` keine erzeugte Kurve ist.
     pub(crate) fn text_style_group(&self, c: CurveId) -> Option<Vec<CurveId>> {
@@ -466,17 +475,22 @@ impl Sketch {
         Ok(())
     }
 
-    /// Löscht den Text als Ganzes (Spec B8): Rahmen, Ecken, erzeugte Kurven und Punkte und alle
-    /// Abhängigkeiten daran, auch die des Benutzers. Ein Pfad bleibt. Muster an diesen Teilen
+    /// Löscht den Text als Ganzes (Spec B8): Rahmen, erzeugte Kurven, die Abhängigkeiten daran
+    /// (auch die des Benutzers) und die Punkte des Textes. Ein Punkt des Textes, den noch eine
+    /// andere lebende Kurve benutzt (etwa eine Linie, gezeichnet mit Fang an einer Ecke), bleibt
+    /// als gewöhnlicher Punkt; Abhängigkeiten zwischen ihm und anderer Geometrie bleiben, sofern
+    /// sie keine Kurve des Textes benutzen. Ein Pfad bleibt. Muster an den gelöschten Teilen
     /// werden aufgelöst.
     pub fn remove_text(&mut self, t: TextId) -> Result<(), SketchError> {
         let d = self.text(t).ok_or(SketchError::UnknownObject)?;
         let mut curves: HashSet<CurveId> = d.curves.iter().copied().collect();
-        let mut points: HashSet<PointId> = d.points.iter().copied().collect();
+        let mut points: Vec<PointId> = d.points.clone();
         if let TextPlacement::Box { lines, corners, .. } = d.placement {
             curves.extend(lines);
             points.extend(corners);
         }
+        let used = self.points_used_outside(&curves);
+        let points: HashSet<PointId> = points.into_iter().filter(|p| !used.contains(p)).collect();
         for &c in &curves {
             self.dissolve_patterns_of_curve(c);
         }
@@ -505,6 +519,15 @@ impl Sketch {
         self.texts[t].alive = false;
         self.touch_structure();
         Ok(())
+    }
+
+    /// Die Punkte aller lebenden Kurven außer `own`: Solche Punkte eines Textes bleiben beim
+    /// Löschen seiner Teile als gewöhnliche Punkte stehen.
+    pub(crate) fn points_used_outside(&self, own: &HashSet<CurveId>) -> HashSet<PointId> {
+        self.curves()
+            .filter(|(c, _)| !own.contains(c))
+            .flat_map(|(_, d)| d.kind.points())
+            .collect()
     }
 
     /// Schaltet alle erzeugten Kurven des Textes auf Konstruktion oder zurück (Spec B10); der
