@@ -5,8 +5,9 @@ use planora_sketch::text_shape::{Contour, Seg};
 
 /// Scherung für nachgebildetes Kursiv: `tan 12° ≈ 0,2126`.
 pub(crate) const ITALIC_SHEAR: f64 = 0.2126;
-/// Verbreitern je Seite für nachgebildetes Fett, in Einheiten der Höhe (2 % der Höhe).
-pub(crate) const BOLD_OFFSET: f64 = 0.02;
+/// Stärke für nachgebildetes Fett nach `FT_Outline_Embolden`, in Einheiten der Höhe: Die
+/// Glyphe wird um 2 % der Höhe breiter und höher, also 0,01 je Seite.
+pub(crate) const BOLD_STRENGTH: f64 = 0.02;
 
 /// Grenze für FreeType: Nur Ecken, die weniger als etwa 160° umkehren, werden verschoben
 /// (`d > -0xF000` in 16.16, also Skalarprodukt der Richtungen über −0,9375).
@@ -14,43 +15,42 @@ const MAX_TURN_DOT: f64 = -0.9375;
 /// Kürzere Wege gelten als Punkt (doppelter Punkt).
 const SAME_POINT: f64 = 1e-12;
 
-/// Verschiebt alle Punkte.
-pub(crate) fn translate(contours: &mut [Contour], by: DVec2) {
-    for_each_point(contours, |p| *p += by);
-}
-
 /// Schert um `k` um die Grundlinie der Zeile: `x += k · (y + dy)`. `dy` ist die Höhe des
 /// Glyphen-Ursprungs in der Zeile, damit die ganze Zeile eine einzige Scherung ist.
 pub(crate) fn shear(contours: &mut [Contour], k: f64, dy: f64) {
     for_each_point(contours, |p| p.x += k * (p.y + dy));
 }
 
-/// Verbreitert die Umrisse um `strength` je Seite nach dem Verfahren von FreeType
-/// (`FT_Outline_EmboldenXY`): Jeder Punkt des Kontrollpolygons wandert entlang der
-/// gemittelten Normalen seiner beiden Nachbarkanten nach außen, so weit, dass beide Kanten um
-/// `strength` versetzt sind. Kurze Kanten an spitzen Innenecken begrenzen den Weg, sehr spitze
-/// Ecken (Umkehr über etwa 160°) bleiben stehen. Außen und Innen folgen der Drehrichtung der
-/// ganzen Glyphe, Löcher werden also kleiner. Anders als FreeType wird nicht nach rechts oben
-/// verschoben; die Umrisse wachsen nach allen Seiten gleich.
+/// Macht die Umrisse fetter wie `FT_Outline_Embolden(outline, strength)` von FreeType: Die
+/// Glyphe wird um `strength` breiter und höher. Dazu wandert jeder Punkt des Kontrollpolygons
+/// entlang der gemittelten Normalen seiner beiden Nachbarkanten nach außen, so weit, dass beide
+/// Kanten um `strength / 2` versetzt sind, und danach um `strength / 2` nach rechts oben. So
+/// bleiben linker und unterer Rand stehen; nichts reicht weiter unter die Grundlinie als vorher.
+/// Kurze Kanten an spitzen Innenecken begrenzen den Weg, sehr spitze Ecken (Umkehr über etwa
+/// 160°) werden nur verschoben. Außen und Innen folgen der Drehrichtung der ganzen Glyphe,
+/// Löcher werden also kleiner.
 pub(crate) fn embolden(contours: &mut [Contour], strength: f64) {
     let area: f64 = contours.iter().map(polygon_area).sum();
-    if area.abs() <= SAME_POINT || strength == 0.0 {
+    if area.abs() <= SAME_POINT || strength <= 0.0 {
         // Keine Drehrichtung (FreeType: `FT_ORIENTATION_NONE`): unverändert.
         return;
     }
+    // Wie FreeType: `xstrength /= 2`, `ystrength /= 2`.
+    let half = strength / 2.0;
     // +1: gegen den Uhrzeigersinn (PostScript), −1: im Uhrzeigersinn (TrueType).
     let sign = area.signum();
     for contour in contours.iter_mut() {
         let pts = polygon(contour);
         let n = pts.len();
         let moved: Vec<DVec2> = (0..n)
-            .map(|i| pts[i] + corner_shift(&pts, i, sign, strength))
+            .map(|i| pts[i] + DVec2::splat(half) + corner_shift(&pts, i, sign, half))
             .collect();
         write_polygon(contour, &moved);
     }
 }
 
-/// Weg eines Punkts beim Verbreitern (FreeType-Formel ohne die Verschiebung um `strength`).
+/// Weg eines Punkts beim Versetzen der Kanten um `strength` (FreeType-Formel `shift`, ohne die
+/// Verschiebung nach rechts oben).
 fn corner_shift(pts: &[DVec2], i: usize, sign: f64, strength: f64) -> DVec2 {
     let n = pts.len();
     let here = pts[i];
@@ -198,25 +198,17 @@ mod tests {
                 square(0.0, 0.0, 1.0, 1.0, ccw),
                 square(0.3, 0.3, 0.7, 0.7, !ccw),
             ];
-            embolden(&mut ring, 0.05);
+            // Stärke 0,1: 0,05 je Seite, dann 0,05 nach rechts oben (wie FreeType).
+            embolden(&mut ring, 0.1);
+            let near = |a: DVec2, x: f64| (a - DVec2::splat(x)).length() < 1e-12;
+            // Außen: linker und unterer Rand bleiben, 0,1 breiter und höher.
             let (min, max) = bounds(&ring[0]);
-            assert!(
-                (min - DVec2::splat(-0.05)).length() < 1e-12,
-                "{ccw}: {min:?}"
-            );
-            assert!(
-                (max - DVec2::splat(1.05)).length() < 1e-12,
-                "{ccw}: {max:?}"
-            );
+            assert!(near(min, 0.0), "{ccw}: {min:?}");
+            assert!(near(max, 1.1), "{ccw}: {max:?}");
+            // Das Loch wird je Seite um 0,05 kleiner und wandert mit.
             let (min, max) = bounds(&ring[1]);
-            assert!(
-                (min - DVec2::splat(0.35)).length() < 1e-12,
-                "{ccw}: {min:?}"
-            );
-            assert!(
-                (max - DVec2::splat(0.65)).length() < 1e-12,
-                "{ccw}: {max:?}"
-            );
+            assert!(near(min, 0.4), "{ccw}: {min:?}");
+            assert!(near(max, 0.7), "{ccw}: {max:?}");
             // Geschlossen wie vorher.
             for contour in &ring {
                 assert_eq!(contour.segs.last().unwrap().end(), contour.start);
@@ -229,10 +221,16 @@ mod tests {
         let mut contour = square(0.0, 0.0, 1.0, 1.0, true);
         contour.segs.insert(0, Seg::Line(DVec2::ZERO));
         let mut list = [contour];
-        embolden(&mut list, 0.1);
+        embolden(&mut list, 0.2);
         let pts = polygon(&list[0]);
         assert_eq!(pts[0], pts[1]);
-        assert!((pts[0] - DVec2::new(-0.1, -0.1)).length() < 1e-12);
+        // Ecke unten links bleibt, Ecke oben rechts wandert um die ganze Stärke.
+        assert!(pts[0].length() < 1e-12, "{:?}", pts[0]);
+        assert!(
+            (pts[3] - DVec2::splat(1.2)).length() < 1e-12,
+            "{:?}",
+            pts[3]
+        );
     }
 
     #[test]

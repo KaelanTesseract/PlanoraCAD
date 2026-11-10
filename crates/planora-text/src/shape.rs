@@ -21,7 +21,7 @@ use skrifa::raw::TableProvider;
 use skrifa::{FontRef, MetadataProvider};
 
 use crate::outline::{glyph_contours, tidy};
-use crate::synth::{BOLD_OFFSET, ITALIC_SHEAR, embolden, shear, translate};
+use crate::synth::{BOLD_STRENGTH, ITALIC_SHEAR, embolden, shear};
 use crate::{FALLBACK_FAMILY, FaceChoice, FontLibrary};
 
 /// Schrift für Zeichen, die der gewählten Schrift fehlen (mitgeliefert, Apache-2.0).
@@ -305,10 +305,9 @@ fn glyph_outline(
             )
             .ok()?;
             if face.synth_bold {
-                embolden(&mut contours, BOLD_OFFSET);
-                // Die Glyphe wächst nach beiden Seiten; nach rechts verschoben behält sie ihren
-                // linken Rand, der Vorschub wächst um beide Seiten (wie bei FreeType).
-                translate(&mut contours, DVec2::new(BOLD_OFFSET, 0.0));
+                // Wie FreeType: 0,02 breiter und höher, linker und unterer Rand bleiben; der
+                // Vorschub wächst in `assemble` um dieselbe Stärke.
+                embolden(&mut contours, BOLD_STRENGTH);
                 contours = contours
                     .into_iter()
                     .filter_map(|c| tidy(c.start, c.segs))
@@ -353,8 +352,9 @@ fn assemble(
         for glyph in &placed[i..j] {
             let face = &faces[glyph.face];
             let origin = DVec2::new(pen + extra + glyph.offset.x, glyph.offset.y);
+            // `FT_GlyphSlot_Embolden`: Der Vorschub wächst um die Stärke.
             let bold = if face.synth_bold && glyph.advance != 0.0 {
-                2.0 * BOLD_OFFSET
+                BOLD_STRENGTH
             } else {
                 0.0
             };

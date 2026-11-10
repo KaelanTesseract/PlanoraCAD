@@ -15,7 +15,7 @@ use skrifa::{FontRef, MetadataProvider};
 const MONTSERRAT: &[u8] = include_bytes!("../../planora-app/assets/fonts/Montserrat-Regular.ttf");
 const ROBOTO: &[u8] = include_bytes!("../../planora-app/assets/fonts/Roboto-Regular.ttf");
 
-/// Nachgebildete Schnitte laut Vorgabe.
+/// Nachgebildete Schnitte laut Vorgabe: Scherung, Stärke beim Fettmachen (gesamt, nicht je Seite).
 const SHEAR: f64 = 0.2126;
 const BOLD: f64 = 0.02;
 
@@ -531,24 +531,32 @@ fn synthetic_bold_widens() {
     let b = only_glyph(&bold);
     let (amin, amax) = bbox(&a.contours);
     let (bmin, bmax) = bbox(&b.contours);
-    // Um 0,02 je Seite breiter und höher.
+    // Wie `FT_Outline_Embolden`: insgesamt um 0,02 breiter und höher (0,01 je Seite), linker
+    // und unterer Rand bleiben stehen, nichts reicht unter die Grundlinie.
     let grow = (bmax - bmin) - (amax - amin);
-    assert!((grow.x - 2.0 * BOLD).abs() < 1e-9, "{grow:?}");
-    assert!((grow.y - 2.0 * BOLD).abs() < 1e-9, "{grow:?}");
-    assert!((bmin.y - (amin.y - BOLD)).abs() < 1e-9);
-    assert!((bmax.y - (amax.y + BOLD)).abs() < 1e-9);
-    // Der Vorschub wächst mit, die Glyphe behält ihren linken Rand.
-    assert!((b.advance - a.advance - 2.0 * BOLD).abs() < 1e-12);
-    assert!((bmin.x - amin.x).abs() < 1e-9);
+    assert!((grow.x - BOLD).abs() < 1e-9, "{grow:?}");
+    assert!((grow.y - BOLD).abs() < 1e-9, "{grow:?}");
+    assert!((bmin.x - amin.x).abs() < 1e-9, "{amin:?} {bmin:?}");
+    assert!((bmin.y - amin.y).abs() < 1e-9, "{amin:?} {bmin:?}");
+    assert!(bmin.y >= -1e-9, "{bmin:?}");
+    assert!((bmax - amax - DVec2::splat(BOLD)).length() < 1e-9);
+    // Der Vorschub wächst um die Stärke.
+    assert!((b.advance - a.advance - BOLD).abs() < 1e-12);
+    // Der Stamm selbst ist 0,02 dicker: 0,01 je Seite um seine verschobene Mitte.
+    let (a_mid, b_mid) = ((amin.x + amax.x) / 2.0, (bmin.x + bmax.x) / 2.0);
+    assert!((b_mid - a_mid - BOLD / 2.0).abs() < 1e-9);
 
-    // „O“ mit Kurven: ungefähr ebenso, das Loch wird kleiner.
+    // „O“ mit Kurven: ungefähr ebenso, das Loch wird je Seite um 0,01 kleiner; der untere Rand
+    // (Überhang unter der Grundlinie) bleibt.
     let a = roboto("O", false, false);
     let b = roboto("O", true, false);
     let (amin, amax) = bbox(&only_glyph(&a).contours);
     let (bmin, bmax) = bbox(&only_glyph(&b).contours);
     let grow = (bmax - bmin) - (amax - amin);
-    assert!((grow.x - 2.0 * BOLD).abs() < 2e-3, "{grow:?}");
-    assert!((grow.y - 2.0 * BOLD).abs() < 2e-3, "{grow:?}");
+    assert!((grow.x - BOLD).abs() < 1e-3, "{grow:?}");
+    assert!((grow.y - BOLD).abs() < 1e-3, "{grow:?}");
+    assert!((bmin.y - amin.y).abs() < 1e-3, "{amin:?} {bmin:?}");
+    assert!((bmin.x - amin.x).abs() < 1e-3, "{amin:?} {bmin:?}");
     let hole = |s: &TextShape| {
         let g = only_glyph(s);
         let boxes: Vec<_> = g
@@ -562,7 +570,7 @@ fn synthetic_bold_widens() {
             .fold(f64::INFINITY, f64::min)
     };
     let shrink = hole(&a) - hole(&b);
-    assert!((shrink - 2.0 * BOLD).abs() < 2e-3, "{shrink}");
+    assert!((shrink - BOLD).abs() < 1e-3, "{shrink}");
 }
 
 #[test]
@@ -739,16 +747,17 @@ fn font_with_cut_glyph_table_does_not_crash() {
     bytes[at + 12..at + 16].copy_from_slice(&64u32.to_be_bytes());
     let dir = TempDir::with_font("cutglyf", &bytes);
     let lib = FontLibrary::scan(std::slice::from_ref(&dir.0));
-    if !lib.has_family("Kaputt") {
-        // Schon beim Durchsuchen verworfen: auch richtig.
-        assert!(!lib.skipped().is_empty());
-        return;
-    }
+    // Die Datei besteht das Durchsuchen (Name und `glyf` sind da); erst das Zeichnen scheitert.
+    assert!(lib.has_family("Kaputt"), "{:?}", lib.skipped());
     let shape = lib
         .shape("Hallo Welt", &style("Kaputt", true, true, 10.0))
         .unwrap();
+    // Gesetzt mit der kaputten Schrift selbst, nicht mit der Ersatzschrift.
+    assert!(shape.substituted.is_none());
     assert!(shape.missing_chars);
-    for glyph in shape.lines.iter().flat_map(|l| &l.glyphs) {
+    let glyphs: Vec<&Glyph> = shape.lines.iter().flat_map(|l| &l.glyphs).collect();
+    assert_eq!(glyphs.len(), "Hallo Welt".chars().count());
+    for glyph in glyphs {
         assert!(glyph.origin.is_finite() && glyph.advance.is_finite());
     }
 }
