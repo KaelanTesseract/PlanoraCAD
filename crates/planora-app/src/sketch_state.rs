@@ -1974,6 +1974,16 @@ impl SketchSession {
                         target: from + delta,
                     })
                     .collect();
+                // Zug am freien Ende eines Krümmungsbogens: erst den Radius suchen, dessen Ende dem
+                // Ziel am nächsten liegt. Von einem sehr großen Radius aus käme das Lösen allein nicht
+                // hin (zweiter Handtest Skizzen 7).
+                if let [only] = drags.as_slice()
+                    && let Some((c, h)) = sk.handle_of_point(only.point)
+                    && matches!(h.curvature, planora_sketch::HandleCurvature::Arc { other, .. } if other == only.point)
+                {
+                    // Scheitert die Suche, zieht der Zug wie sonst.
+                    let _ = sk.aim_curvature_arc(c, h.at, only.target);
+                }
                 sk.drag_holding(&drags, &drag.anchors)
             }
         };

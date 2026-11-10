@@ -1116,3 +1116,57 @@ fn inner_handle_tip_and_fit_point_follow_a_drag_beside_a_curvature_handle() {
         }
     }
 }
+
+/// Zweiter Handtest Skizzen 7: Ein Natur-Ende hat Krümmung fast 0, der Krümmungsgriff beginnt bei
+/// r = 1000·L (B5). Von dort kommt der Zug am freien Bogenende allein nicht an: Der Löser bleibt beim
+/// großen Radius. `aim_curvature_arc` legt den Bogen vorher auf den Radius, dessen Ende dem Ziel am
+/// nächsten liegt, auf derselben Seite (B9); danach hält der Zug wie sonst Stützpunkt und Spitze.
+#[test]
+fn aiming_the_curvature_arc_reaches_the_nearest_end_from_a_flat_start() {
+    let xy = [(10.0, -16.0), (17.0, -5.0), (26.0, -15.0), (36.0, -7.0)];
+    for end in [0usize, 3] {
+        for reach in [1.5, 3.0, 6.0] {
+            let mut s = sketch();
+            let (c, pts) = spline(&mut s, &xy);
+            s.activate_curvature_handle(c, pts[end]).unwrap();
+            let h = parts(&s, c, pts[end]);
+            let (a, t, m0, o0) = (
+                pos(&s, pts[end]),
+                pos(&s, h.tip),
+                pos(&s, h.center),
+                pos(&s, h.other),
+            );
+            let side = (t - a).perp_dot(m0 - a).signum();
+            let target = o0 + (m0 - o0).normalize() * reach;
+            // Das nächste erreichbare Ende auf dieser Seite, grob abgetastet.
+            let l = t.distance(a);
+            let best = (0..4000)
+                .map(|k| {
+                    let r = l * 1e-2 * (1e5f64).powf(f64::from(k) / 4000.0);
+                    let n = (t - a).perp().normalize() * side;
+                    let m = a + n * r;
+                    let turn = DVec2::from_angle(side * (l / r).min(MAX_OPENING));
+                    m + turn.rotate(a - m)
+                })
+                .map(|q| q.distance(target))
+                .fold(f64::INFINITY, f64::min);
+            let what = format!("Ende {end}, Weg {reach}");
+            s.aim_curvature_arc(c, pts[end], target).unwrap();
+            s.drag_holding(
+                &[Drag {
+                    point: h.other,
+                    target,
+                }],
+                &[pts[end], h.tip],
+            )
+            .unwrap();
+            let got = pos(&s, h.other).distance(target);
+            assert!(got < best + 1e-3, "{what}: {got} statt {best}");
+            assert!(pos(&s, pts[end]).distance(a) < 1e-9, "{what}");
+            assert!(pos(&s, h.tip).distance(t) < 1e-9, "{what}");
+            let m = pos(&s, h.center);
+            assert_eq!((t - a).perp_dot(m - a).signum(), side, "{what}: Seite");
+            assert_eq!(s.solve().status, SolveStatus::Solved, "{what}");
+        }
+    }
+}

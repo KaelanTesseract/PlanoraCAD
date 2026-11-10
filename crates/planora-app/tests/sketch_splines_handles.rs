@@ -2383,3 +2383,129 @@ fn smooth_from_a_selection_is_one_step_named_smooth() {
         }
     }
 }
+
+/// Der Krümmungsgriff am Ende `fit`: Stützpunkt, Spitze, Mitte und freies Bogenende.
+fn curvature_parts(sk: &Sketch, c: CurveId, fit: PointId) -> Option<(PointId, PointId, PointId)> {
+    let CurveKind::Spline { handles, .. } = &sk.curve(c).unwrap().kind else {
+        panic!("kein Spline");
+    };
+    let h = handles.iter().find(|h| h.at == fit)?;
+    match h.curvature {
+        HandleCurvature::Arc { center, other, .. } => Some((h.tip, center, other)),
+        _ => None,
+    }
+}
+
+/// Zweiter Handtest Skizzen 7: Der erste Zug an der gedämpften Krümmungsmarke schaltet den
+/// Krümmungsgriff ein und zieht in derselben Geste. Das freie Bogenende landet dort, wo es auch ein Zug
+/// am schon aktiven Griff zum selben Zeiger hinbrächte (es folgt dem Zeiger, soweit die Bedingungen es
+/// erlauben), nicht um den Abstand von Marke zu Bogenende versetzt. Ein Schritt; an beiden Enden des
+/// Splines, nach außen und nach innen auf der Seite des Bogens.
+#[test]
+fn the_first_drag_at_the_curvature_mark_follows_the_pointer() {
+    const FOUR: [(f64, f64); 4] = [(10.0, -16.0), (17.0, -5.0), (26.0, -15.0), (36.0, -7.0)];
+    for end in [0usize, 3] {
+        for outward in [3.0f64, 1.5, -3.0] {
+            let what = format!("Ende {end}, Richtung {outward}");
+            let build = || {
+                let mut ids = None;
+                let rig = Rig::new(|sk| {
+                    let (c, pts) = add_spline(sk, &FOUR);
+                    sk.activate_tangent_handle(c, pts[end]).unwrap();
+                    ids = Some((c, pts));
+                });
+                let (c, pts) = ids.unwrap();
+                (rig, c, pts)
+            };
+            // A: erster Zug an der Marke.
+            let (mut rig, c, pts) = build();
+            let fit = pts[end];
+            rig.select(&[Item::Curve(c)]);
+            let steps = rig.undo_len();
+            let (mark, at) = {
+                let st = rig.st();
+                let session = st.sketch_session.as_ref().unwrap();
+                let g = session
+                    .visible_handles(st.session_sketch().unwrap())
+                    .into_iter()
+                    .find(|h| h.ghost && h.part == HandlePart::Curvature && h.point == fit)
+                    .expect("Krümmungsmarke");
+                (g.tip, g.at)
+            };
+            let _ = at;
+            // Das Ziel: vom Bogenende, das das Einschalten anlegt, zur Bogenmitte hin (stärker
+            // gekrümmt) oder von ihr weg (flacher), also auf der Seite des Bogens (B9).
+            let (arc_end, arc_center) = {
+                let mut probe = rig.sketch();
+                probe.activate_curvature_handle(c, fit).unwrap();
+                let (_, center, other) = curvature_parts(&probe, c, fit).unwrap();
+                (
+                    probe.point_xy(other).unwrap(),
+                    probe.point_xy(center).unwrap(),
+                )
+            };
+            // Ein Natur-Ende hat Krümmung fast 0: Das Einschalten legt r = 1000·L an (B5), die Mitte
+            // liegt weit weg. Gezogen wird einige Längeneinheiten zur Mitte hin oder von ihr weg.
+            let aim = arc_end + (arc_center - arc_end).normalize() * outward;
+            let to = rig.screen(aim);
+            let p = rig.screen(mark);
+            let pointer = rig.raw_at(to);
+            rig.pull(p, to);
+            let sk_a = rig.sketch();
+            let (_, _, other) =
+                curvature_parts(&sk_a, c, fit).unwrap_or_else(|| panic!("{what}: eingeschaltet"));
+            let got = sk_a.point_xy(other).unwrap();
+            assert_eq!(rig.undo_len(), steps + 1, "{what}: ein Schritt");
+            assert_eq!(
+                rig.st().sketch_undo_label().as_deref(),
+                Some(tr!("undo-handle-curvature").as_str()),
+                "{what}"
+            );
+            // B: Griff mit dem Knopf an, dann das freie Ende zum selben Zeiger.
+            let (mut rig_b, c_b, pts_b) = build();
+            rig_b.select(&[Item::Point(pts_b[end])]);
+            {
+                let (se, sk) = rig_b.st().session_sketch_mut().unwrap();
+                se.toggle_curvature_handle(sk).unwrap();
+            }
+            rig_b.st().observe_sketch(false);
+            rig_b.select(&[Item::Curve(c_b)]);
+            let sk_b = rig_b.sketch();
+            let (_, _, other_b) = curvature_parts(&sk_b, c_b, pts_b[end]).unwrap();
+            let start_b = sk_b.point_xy(other_b).unwrap();
+            let q = rig_b.screen(start_b);
+            rig_b.pull(q, to);
+            let want = rig_b.sketch().point_xy(other_b).unwrap();
+            // Gleich nah am Zeiger wie der Zug am aktiven Griff. Die Lage selbst trifft das weiche
+            // Zugziel nur bis auf die Zuggenauigkeit, und der Weg der Bilder ist ein anderer.
+            assert!(
+                (got.distance(pointer) - want.distance(pointer)).abs() < 1e-3
+                    && got.distance(want) < 0.05,
+                "{what}: Bogenende {got}, Zug am aktiven Griff {want}, Zeiger {pointer}"
+            );
+            assert!(
+                start_b.distance(arc_end) < 1e-9,
+                "{what}: Knopf und Marke schalten gleich ein"
+            );
+            // Die Seite des Bogens bleibt (B9): Die Mitte liegt auf derselben Seite des Griffs.
+            let (tip, center, _) = curvature_parts(&sk_a, c, fit).unwrap();
+            let (a, t, m) = (
+                sk_a.point_xy(fit).unwrap(),
+                sk_a.point_xy(tip).unwrap(),
+                sk_a.point_xy(center).unwrap(),
+            );
+            let side = |m: DVec2| (t - a).perp_dot(m - a).signum();
+            assert_eq!(side(m), side(arc_center), "{what}: Seite des Bogens");
+            if outward > 0.0 {
+                assert!(
+                    got.distance(arc_end) > 0.3,
+                    "{what}: das Bogenende bewegt sich ({got} gegen {arc_end})"
+                );
+                assert!(
+                    got.distance(pointer) < 0.5 * arc_end.distance(pointer),
+                    "{what}: das Bogenende folgt dem Zeiger"
+                );
+            }
+        }
+    }
+}

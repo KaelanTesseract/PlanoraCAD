@@ -446,7 +446,15 @@ impl SketchSession {
                 crate::msg!("undo-handle-tangent"),
             ),
         };
-        self.start_handle_grab(sk, before, at, &[moved], &anchors, Some(label));
+        // An der Krümmungsmarke gilt das freie Bogenende als gegriffen: Es folgt dem Zeiger wie danach
+        // beim Zug am aktiven Griff. Die Marke liegt nicht auf dem Bogenende; vom Greifpunkt aus
+        // gerechnet landete das Ende um diesen Abstand neben dem Zeiger (zweiter Handtest Skizzen 7).
+        // Die gedämpfte Spitze ist dagegen schon die Spitze, dort bleibt der Greifpunkt.
+        let grab = match h.part {
+            HandlePart::Curvature => sk.point_xy(moved).unwrap_or(at),
+            HandlePart::Tangent => at,
+        };
+        self.start_handle_grab(sk, before, grab, &[moved], &anchors, Some(label));
         if let Some(drag) = self.curve_drag.as_mut() {
             drag.activates = true;
         }

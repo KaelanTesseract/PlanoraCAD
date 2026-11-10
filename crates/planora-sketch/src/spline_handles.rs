@@ -881,6 +881,63 @@ impl Sketch {
         Ok(())
     }
 
+    /// Legt den Krümmungsbogen am Stützpunkt `at` vor einem Zug an seinem freien Ende auf den Radius,
+    /// dessen Ende `target` am nächsten liegt, auf der Seite, auf der er liegt (B9: kein Wechsel durch
+    /// `r = ∞`). Der Löser allein kommt von einem sehr großen Radius (Natur-Ende, `r = 1000·L`, B5)
+    /// nicht zum Ziel, denn dort ändert ein Radiusschritt das Ende kaum. Danach poliert das Lösen wie
+    /// sonst; was eine Abhängigkeit am Bogen anders will, setzt sich dort durch. `false`, wenn der
+    /// Bogen schon am besten liegt.
+    pub fn aim_curvature_arc(
+        &mut self,
+        c: CurveId,
+        at: PointId,
+        target: DVec2,
+    ) -> Result<bool, SketchError> {
+        let h = self.handle_at(c, at)?;
+        let HandleCurvature::Arc { center, other, .. } = h.curvature else {
+            return Err(SketchError::InvalidInput(tr!("sketch-err-handle-none")));
+        };
+        if !target.is_finite() {
+            return Ok(false);
+        }
+        let (a, tip) = (self.pos(at), self.pos(h.tip));
+        let l = tip.distance(a);
+        if !l.is_finite() || l <= self.tol.linear {
+            return Ok(false);
+        }
+        let left = (tip - a).perp_dot(self.pos(center) - a) > 0.0;
+        let end_at = |r: f64| CurvatureArc::with_radius(a, tip, r, left).map(|g| g.other);
+        let miss = |r: f64| end_at(r).map_or(f64::INFINITY, |q| q.distance(target));
+        // Radius in Vielfachen von L, logarithmisch von 0,01 bis 1000 (B5): grob abtasten, dann
+        // zwischen den Nachbarn des besten Werts fein nachsuchen (Goldener Schnitt).
+        const STEPS: i32 = 400;
+        let radius = |k: f64| l * 1e-2 * 1e5f64.powf(k / f64::from(STEPS));
+        let best = (0..=STEPS)
+            .min_by(|&x, &y| miss(radius(f64::from(x))).total_cmp(&miss(radius(f64::from(y)))))
+            .unwrap_or(0);
+        let (mut lo, mut hi) = (
+            f64::from(best - 1).max(0.0),
+            f64::from(best + 1).min(f64::from(STEPS)),
+        );
+        let phi = (5f64.sqrt() - 1.0) / 2.0;
+        for _ in 0..60 {
+            let (x1, x2) = (hi - phi * (hi - lo), lo + phi * (hi - lo));
+            if miss(radius(x1)) < miss(radius(x2)) {
+                hi = x2;
+            } else {
+                lo = x1;
+            }
+        }
+        let r = radius(0.5 * (lo + hi));
+        let now = self.pos(other).distance(target);
+        if miss(r) >= now - self.tol.linear {
+            return Ok(false);
+        }
+        let kappa = if left { 1.0 / r } else { -1.0 / r };
+        self.place_curvature_arc(c, at, kappa)?;
+        Ok(true)
+    }
+
     /// Legt den Krümmungsgriff am Stützpunkt `at` auf die Krümmung `kappa` (in `t`-Richtung), ohne den
     /// Fast-null-Ersatz aus B5. Ein vorhandener Bogen bleibt mit seinen Abhängigkeiten; liegt er auf
     /// der anderen Seite, tauschen Start und Ende, denn Bögen laufen gegen den Uhrzeigersinn.
