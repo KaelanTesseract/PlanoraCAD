@@ -4,7 +4,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use planora_text::{FALLBACK_FAMILY, FontLibrary};
+use planora_text::{FALLBACK_FAMILY, FontLibrary, SkipReason};
 
 const ROBOTO: &[u8] = include_bytes!("../../planora-app/assets/fonts/Roboto-Regular.ttf");
 const MONTSERRAT_SEMIBOLD: &[u8] =
@@ -158,7 +158,37 @@ fn scan_skips_files_over_64_mb_without_reading() {
     assert_eq!(lib.skipped().len(), 1, "{:?}", lib.skipped());
     let (path, reason) = &lib.skipped()[0];
     assert!(path.ends_with("riesig.ttf"), "{path:?}");
-    assert!(reason.contains("64 MB"), "{reason}");
+    // Der Grund ist sprachneutral; zum Protokollieren gibt es einen englischen Text.
+    assert_eq!(
+        *reason,
+        SkipReason::TooLarge {
+            bytes: 64 * 1024 * 1024 + 1,
+            limit: 64 * 1024 * 1024,
+        }
+    );
+    assert_eq!(
+        reason.to_string(),
+        "file too large (67108865 bytes, limit 64 MB)"
+    );
+}
+
+#[test]
+fn skip_reasons_say_why() {
+    let dir = TempDir::new("reasons");
+    dir.write("cut.ttf", &ROBOTO[..100]);
+    dir.write("ohne-glyf.ttf", &rename_table(ROBOTO, b"glyf", b"xxxx"));
+    let lib = FontLibrary::scan(&[dir.path().to_path_buf()]);
+    assert_eq!(lib.skipped().len(), 2, "{:?}", lib.skipped());
+    for (path, reason) in lib.skipped() {
+        let SkipReason::Invalid(why) = reason else {
+            panic!("{path:?}: {reason:?}");
+        };
+        assert!(!why.is_empty());
+        assert!(reason.to_string().starts_with("not a usable font: "));
+        if path.ends_with("ohne-glyf.ttf") {
+            assert_eq!(why, "no outlines (glyf/CFF)");
+        }
+    }
 }
 
 #[test]

@@ -51,10 +51,37 @@ impl Entry {
     }
 }
 
+/// Warum eine Datei beim Durchsuchen übersprungen wurde. Das sind Daten ohne Sprache; zum
+/// Protokollieren gibt `Display` einen englischen Text (Protokolle sind englisch). Die Texte in
+/// `Io` und `Invalid` kommen vom Betriebssystem bzw. vom Schriftleser.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SkipReason {
+    /// Größer als `limit` Bytes; die Datei wurde nicht gelesen.
+    TooLarge { bytes: u64, limit: u64 },
+    /// Die Datei ließ sich nicht lesen.
+    Io(String),
+    /// Kein brauchbarer Schnitt in der Datei.
+    Invalid(String),
+}
+
+impl fmt::Display for SkipReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SkipReason::TooLarge { bytes, limit } => write!(
+                f,
+                "file too large ({bytes} bytes, limit {} MB)",
+                limit / (1024 * 1024)
+            ),
+            SkipReason::Io(err) => write!(f, "cannot read file: {err}"),
+            SkipReason::Invalid(err) => write!(f, "not a usable font: {err}"),
+        }
+    }
+}
+
 /// Alle bekannten Schriften. Wird einmal je Programmlauf aufgebaut.
 pub struct FontLibrary {
     entries: Vec<Entry>,
-    skipped: Vec<(PathBuf, String)>,
+    skipped: Vec<(PathBuf, SkipReason)>,
     /// Schon gelesene Dateien, damit eine Datei bei jeder Wahl nicht neu gelesen wird.
     cache: Mutex<HashMap<PathBuf, Arc<[u8]>>>,
 }
@@ -116,7 +143,7 @@ impl FontLibrary {
                             });
                         }
                     }
-                    Err(reason) => lib.skipped.push((path, reason)),
+                    Err(reason) => lib.skipped.push((path, SkipReason::Invalid(reason))),
                 },
                 Err(reason) => lib.skipped.push((path, reason)),
             }
@@ -164,7 +191,7 @@ impl FontLibrary {
     }
 
     /// Übersprungene Dateien mit Grund, zum Protokollieren.
-    pub fn skipped(&self) -> &[(PathBuf, String)] {
+    pub fn skipped(&self) -> &[(PathBuf, SkipReason)] {
         &self.skipped
     }
 
@@ -246,15 +273,16 @@ impl FontLibrary {
 
 /// Liest eine Schriftdatei, aber nur bis [`MAX_FONT_FILE_BYTES`]. Die Größe kommt aus den
 /// Dateiangaben; eine zu große Datei wird gar nicht erst gelesen.
-fn read_limited(path: &Path) -> Result<Vec<u8>, String> {
-    let len = fs::metadata(path).map_err(|e| e.to_string())?.len();
+fn read_limited(path: &Path) -> Result<Vec<u8>, SkipReason> {
+    let io = |e: std::io::Error| SkipReason::Io(e.to_string());
+    let len = fs::metadata(path).map_err(io)?.len();
     if len > MAX_FONT_FILE_BYTES {
-        return Err(format!(
-            "zu groß ({len} Bytes, höchstens {} MB)",
-            MAX_FONT_FILE_BYTES / (1024 * 1024)
-        ));
+        return Err(SkipReason::TooLarge {
+            bytes: len,
+            limit: MAX_FONT_FILE_BYTES,
+        });
     }
-    fs::read(path).map_err(|e| e.to_string())
+    fs::read(path).map_err(io)
 }
 
 /// Montserrat Regular ohne Umweg über die Liste. Nur für den Fall, dass selbst die
@@ -301,12 +329,13 @@ fn read_file_faces(bytes: &[u8]) -> Result<Vec<(u32, FaceInfo)>, String> {
             }
         }
         if faces.is_empty() {
-            Err(first_error.unwrap_or_else(|| "keine Schrift in der Datei".to_string()))
+            // Protokolltexte englisch (siehe `SkipReason`).
+            Err(first_error.unwrap_or_else(|| "no font in file".to_string()))
         } else {
             Ok(faces)
         }
     })
-    .unwrap_or_else(|| Err("Fehler beim Lesen".to_string()))
+    .unwrap_or_else(|| Err("font reader panicked".to_string()))
 }
 
 /// Sammelt Schriftdateien rekursiv. Verknüpfte Ordner werden nur einmal besucht, damit

@@ -12,7 +12,7 @@ mod shape;
 mod synth;
 
 pub use face::{FaceChoice, FaceRef};
-pub use library::{FontLibrary, system_font_dirs};
+pub use library::{FontLibrary, SkipReason, system_font_dirs};
 
 /// Ersatzschrift, wenn die gewünschte Familie fehlt (mitgeliefert, OFL 1.1).
 pub const FALLBACK_FAMILY: &str = "Montserrat";

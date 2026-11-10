@@ -79,16 +79,17 @@ pub(crate) struct FaceInfo {
 }
 
 /// Liest Familie, Schnitt, Gewicht und Kursiv einer Schrift. Fehlt der Name oder hat die
-/// Schrift keine Umrisse (weder `glyf` noch `CFF`/`CFF2`), ist sie unbrauchbar.
+/// Schrift keine Umrisse (weder `glyf` noch `CFF`/`CFF2`), ist sie unbrauchbar. Der Grund ist
+/// ein englischer Protokolltext (landet in `SkipReason::Invalid`).
 pub(crate) fn read_face_info(font: &FontRef<'_>) -> Result<FaceInfo, String> {
     let family = name_string(font, StringId::TYPOGRAPHIC_FAMILY_NAME)
         .or_else(|| name_string(font, StringId::FAMILY_NAME))
-        .ok_or_else(|| "kein Familienname".to_string())?;
+        .ok_or_else(|| "no family name".to_string())?;
     let style = name_string(font, StringId::TYPOGRAPHIC_SUBFAMILY_NAME)
         .or_else(|| name_string(font, StringId::SUBFAMILY_NAME))
         .unwrap_or_else(|| "Regular".to_string());
     if font.outline_glyphs().format().is_none() {
-        return Err("keine Umrisse (glyf/CFF)".to_string());
+        return Err("no outlines (glyf/CFF)".to_string());
     }
     let (weight, italic) = match font.os2() {
         Ok(os2) => (
