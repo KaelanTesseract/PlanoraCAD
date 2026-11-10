@@ -138,13 +138,15 @@ impl<'a> Walk<'a> {
             return None;
         }
         let dir = if clockwise { -1.0 } else { 1.0 };
-        let t0 = if closed && matches!(geom, Geom::Circle { .. }) {
-            // Beim Kreis liegt der Bezugspunkt ganz oben (Spec B7).
-            FRAC_PI_2
-        } else if clockwise {
-            hi
-        } else {
-            lo
+        // Bezugspunkt geschlossener Pfade: bei Kreis und Ellipse ganz oben (Spec B7, Ruling 5b
+        // für die Ellipse), sonst der Anfang der Leserichtung. Kreis und Ellipse sind periodisch,
+        // ihr Parameter darf also über den Bereich hinaus laufen.
+        let t0 = match geom {
+            Geom::Circle { .. } if closed => FRAC_PI_2,
+            // y = c.y + a.y·cos t + b.y·sin t ist am größten bei t = atan2(b.y, a.y).
+            Geom::Ellipse { a, b, .. } if closed => b.y.atan2(a.y),
+            _ if clockwise => hi,
+            _ => lo,
         };
         let mut walk = Walk {
             geom,
@@ -161,12 +163,13 @@ impl<'a> Walk<'a> {
         ) {
             walk.length = geom.arc_length(lo, hi);
         } else {
-            let ts = geom.polyline_params(lo, hi, TABLE_STEPS_PER_TURN);
-            let taus: Vec<f64> = if clockwise {
-                ts.iter().rev().map(|t| hi - t).collect()
-            } else {
-                ts.iter().map(|t| t - lo).collect()
-            };
+            // Abgetastet wird von `t0` in Leserichtung über die ganze Spanne, auch über die Naht
+            // einer Ellipse hinweg (Bezugspunkt oben); so passen Tabelle und `t(τ)` zusammen.
+            let ts = geom.polyline_params(walk.t(0.0), walk.t(span), TABLE_STEPS_PER_TURN);
+            let taus: Vec<f64> = ts
+                .iter()
+                .map(|t| ((t - t0) * dir).clamp(0.0, span))
+                .collect();
             let mut table = Vec::with_capacity(taus.len());
             let mut sum = 0.0;
             table.push((0.0, 0.0));
@@ -256,7 +259,12 @@ impl<'a> Walk<'a> {
         }
         let h = 1e-6 * self.span;
         let (a, b) = if self.closed {
-            (tau - h, tau + h)
+            // Über die Naht herum statt aus dem Bereich hinaus (eine geschlossene Freiformkurve
+            // liefe sonst auf der Verlängerung ihres ersten bzw. letzten Stücks).
+            (
+                (tau - h).rem_euclid(self.span),
+                (tau + h).rem_euclid(self.span),
+            )
         } else {
             ((tau - h).max(0.0), (tau + h).min(self.span))
         };
@@ -354,25 +362,31 @@ fn units(row: &[(DVec2, &Glyph)]) -> (Vec<Unit>, Vec<Option<usize>>) {
 /// Die Konturen des Textes auf dem Pfad `path_geom` in Skizzenkoordinaten, in der Reihenfolge
 /// Glyphe, Kontur wie im `TextShape` (Spec B7).
 ///
-/// - Leserichtung: mit dem Parameter, bei Kreis und Bogen (`is_circle_or_arc`) im
-///   Uhrzeigersinn. Oberhalb (`above`) heißt links der Leserichtung mit der Grundlinie auf dem
-///   Pfad, unterhalb rechts davon mit der Oberlänge auf dem Pfad; lesbar bleibt der Text beide
-///   Male.
+/// - Leserichtung: mit dem Parameter, bei Kreis, Bogen, Ellipse und Ellipsenbogen (`clockwise`,
+///   Ruling 5b) im Uhrzeigersinn. Oberhalb (`above`) heißt links der Leserichtung mit der
+///   Grundlinie auf dem Pfad, unterhalb rechts davon mit der Oberlänge auf dem Pfad; lesbar
+///   bleibt der Text beide Male.
 /// - Jede Glyphe bleibt starr. Sie sitzt mit der Mitte ihres Vorschubs auf der Grundlinie an
 ///   ihrer Bogenlänge auf dem Pfad, gedreht nach der Tangente dort. Akzente gehen mit ihrem
 ///   Buchstaben.
 /// - Ausrichtung auf offenem Pfad: links am Anfang, zentriert in der Mitte der Länge, rechts am
-///   Ende. Auf geschlossenem (`closed`) am Bezugspunkt, beim Kreis ganz oben, sonst am Anfang
-///   der Leserichtung: links beginnt dort, zentriert sitzt darüber, rechts endet dort.
+///   Ende. Auf geschlossenem (`closed`) am Bezugspunkt, bei Kreis und Ellipse ganz oben, sonst
+///   am Anfang der Leserichtung: links beginnt dort, zentriert sitzt darüber, rechts endet dort.
 /// - Über das Ende hinaus geht es auf offenem Pfad auf der Tangente weiter, auf geschlossenem
 ///   um die Kurve herum.
 /// - Anpassen (`fit`): gleiche Lücken zwischen den Vorschüben vom Anfang bis zum Ende, auf
 ///   geschlossenem Pfad auch zwischen letzter und erster Glyphe; zu langer Text bekommt
 ///   negative Lücken. Ausrichtung und Zeichenabstand wirken dann nicht. Eine einzelne Glyphe
 ///   steht auf offenem Pfad in der Mitte.
-/// - Umkehren spiegelt wie im Rahmen (Spec B6): `flip_h` entlang des Pfades an seiner Mitte
-///   (offen) bzw. am Bezugspunkt (geschlossen), die Leserichtung kehrt sich um; `flip_v` am
-///   Pfad, der Text wechselt die Seite.
+/// - Umkehren (Spec B6, Ruling 5a/5d): `flip_h` kehrt die Leserichtung um, die Buchstaben bleiben
+///   lesbar (nicht spiegelverkehrt). Gelesen wird dann vom Ende zum Anfang (offen) bzw. am
+///   Bezugspunkt in die andere Richtung herum (geschlossen); oberhalb und unterhalb gelten
+///   weiter zur Leserichtung, der Text steht also auf der anderen Seite des Pfades (auf dem
+///   Kreis: gegen den Uhrzeigersinn, unten lesbar). `flip_v` wechselt die Seite (Spiegelung am
+///   Pfad).
+///
+/// Den Inhalt setzt der Aufrufer mit verbundenen Zeilen ([`crate::text::path_content`]), das
+/// Ergebnis hat also höchstens eine Zeile.
 ///
 /// `None`, wenn der Pfad keine Länge hat oder an einer Glyphe keine Richtung: Dann behält der
 /// Aufrufer die letzte gute Lage (Review Focus 3).
@@ -385,14 +399,18 @@ pub(crate) fn place_path(
     height: f64,
     path_geom: &Geom,
     closed: bool,
-    is_circle_or_arc: bool,
+    clockwise: bool,
     above: bool,
     fit: bool,
     h: HAlign,
     flip_h: bool,
     flip_v: bool,
 ) -> Option<Vec<Contour>> {
-    let walk = Walk::new(path_geom, closed, is_circle_or_arc)?;
+    debug_assert!(
+        shape.lines.len() <= 1,
+        "Text auf Pfad mit `path_content` setzen (Zeilen verbunden)"
+    );
+    let walk = Walk::new(path_geom, closed, clockwise)?;
     let length = walk.length;
     let (row, width) = glyph_row(shape);
     let (units, of) = units(&row);
@@ -433,15 +451,14 @@ pub(crate) fn place_path(
             .map(|u| start + (u.x + 0.5 * u.advance) * height)
             .collect()
     };
+    // Umgekehrte Leserichtung: dieselbe Bogenlänge von der anderen Seite gemessen, die
+    // Leserichtung entgegen; links davon ist dann die andere Seite des Pfades.
     let frames: Vec<(DVec2, DVec2)> = mids
         .iter()
-        .map(|&s| {
-            let s = match (flip_h, closed) {
-                (false, _) => s,
-                (true, true) => -s,
-                (true, false) => length - s,
-            };
-            walk.at(s)
+        .map(|&s| match (flip_h, closed) {
+            (false, _) => walk.at(s),
+            (true, true) => walk.at(-s).map(|(p, u)| (p, -u)),
+            (true, false) => walk.at(length - s).map(|(p, u)| (p, -u)),
         })
         .collect::<Option<_>>()?;
     let lift = if above { 0.0 } else { -shape.ascender * height };
@@ -458,7 +475,6 @@ pub(crate) fn place_path(
                 let at = origin + q;
                 let dx = (at.x - mid) * height;
                 let dy = at.y * height + lift;
-                let dx = if flip_h { -dx } else { dx };
                 let dy = if flip_v { -dy } else { dy };
                 p + u * dx + n * dy
             }));

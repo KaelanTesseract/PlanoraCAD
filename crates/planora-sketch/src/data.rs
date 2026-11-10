@@ -691,10 +691,10 @@ fn bad_text(reason: &str) -> SketchError {
 /// höchstens [`MAX_TEXT_CHARS`] Zeichen, höchstens [`MAX_TEXT_CURVES`] erzeugte Kurven.
 ///
 /// Jeder lebende Text dazu: alle Teile leben; der Rahmen besteht aus vier verschiedenen Ecken und
-/// vier Linien, Linie `i` zwischen Ecke `i` und Ecke `i + 1`; der Pfad ist keine erzeugte Kurve
-/// eines lebenden Textes; keine Kurve (erzeugt oder Rahmen) und kein Punkt (erzeugt oder Ecke)
-/// gehört zweimal zu lebenden Texten. Ein gelöschter Text darf auf gelöschte Teile zeigen und
-/// seine Kurven abgegeben haben (Text auflösen, Spec F).
+/// vier Linien, Linie `i` zwischen Ecke `i` und Ecke `i + 1`; der Pfad ist weder erzeugte Kurve
+/// noch Rahmenlinie eines lebenden Textes; keine Kurve (erzeugt oder Rahmen) und kein Punkt
+/// (erzeugt oder Ecke) gehört zweimal zu lebenden Texten. Ein gelöschter Text darf auf gelöschte
+/// Teile zeigen und seine Kurven abgegeben haben (Text auflösen, Spec F).
 fn check_texts(d: &SketchData) -> Result<(), SketchError> {
     let (np, nc) = (d.points.len(), d.curves.len());
     for t in &d.texts {
@@ -725,8 +725,18 @@ fn check_texts(d: &SketchData) -> Result<(), SketchError> {
     let live: Vec<&TextRecord> = d.texts.iter().filter(|t| t.alive).collect();
     let point_alive = |p: PointId| d.points[p.index()].alive;
     let curve_alive = |c: CurveId| d.curves[c.index()].alive;
-    // Alle erzeugten Kurven lebender Texte: Keine davon ist ein Pfad.
-    let glyph_curves: HashSet<CurveId> = live.iter().flat_map(|t| t.curves.clone()).collect();
+    // Alle erzeugten Kurven und Rahmenlinien lebender Texte: Keine davon ist ein Pfad (Ruling 5c:
+    // ein Rahmen ginge mit seinem Text verloren, der Text auf ihm hinge dann an nichts).
+    let not_paths: HashSet<CurveId> = live
+        .iter()
+        .flat_map(|t| {
+            let frame = match t.placement {
+                TextPlacement::Box { lines, .. } => lines.to_vec(),
+                TextPlacement::Path { .. } => Vec::new(),
+            };
+            t.curves.iter().copied().chain(frame)
+        })
+        .collect();
     let mut curves: HashSet<CurveId> = HashSet::new();
     let mut points: HashSet<PointId> = HashSet::new();
     for t in live {
@@ -756,7 +766,7 @@ fn check_texts(d: &SketchData) -> Result<(), SketchError> {
                 (lines.to_vec(), corners.to_vec())
             }
             TextPlacement::Path { path, .. } => {
-                if glyph_curves.contains(&path) {
+                if not_paths.contains(&path) {
                     return Err(bad_text("sketch-err-text-data-path"));
                 }
                 (Vec::new(), Vec::new())

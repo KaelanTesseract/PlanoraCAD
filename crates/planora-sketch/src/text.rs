@@ -387,9 +387,9 @@ impl Sketch {
                 fit,
                 h,
             } => {
-                let (geom, closed, round) = self.text_path_geom(path)?;
+                let (geom, closed, clockwise) = self.text_path_geom(path)?;
                 place_path(
-                    shape, height, &geom, closed, round, above, fit, h, flip_h, flip_v,
+                    shape, height, &geom, closed, clockwise, above, fit, h, flip_h, flip_v,
                 )?
             }
         };
@@ -397,8 +397,9 @@ impl Sketch {
     }
 
     /// Der Pfad `path` als Geometrie, ob er geschlossen ist (Kreis, Ellipse, Kurve mit gleichen
-    /// Enden) und ob er Kreis oder Bogen ist (Leserichtung im Uhrzeigersinn). `None`, solange er
-    /// entartet ist: gelöscht, ohne Radius, nicht endlich oder nicht größer als die Toleranz.
+    /// Enden) und ob er im Uhrzeigersinn gelesen wird (Kreis, Bogen, Ellipse, Ellipsenbogen;
+    /// Spec B7, Ruling 5b). `None`, solange er entartet ist: gelöscht, ohne Radius, nicht endlich
+    /// oder nicht größer als die Toleranz.
     fn text_path_geom(&self, path: CurveId) -> Option<(Geom, bool, bool)> {
         let kind = &self.curve(path)?.kind;
         let geom = self.geom(path)?;
@@ -410,8 +411,14 @@ impl Sketch {
             || curve_ends(kind).is_some_and(|[a, b]| {
                 a == b || self.pos(a).distance(self.pos(b)) <= self.tol.linear
             });
-        let round = matches!(kind, CurveKind::Circle { .. } | CurveKind::Arc { .. });
-        Some((geom, closed, round))
+        let clockwise = matches!(
+            kind,
+            CurveKind::Circle { .. }
+                | CurveKind::Arc { .. }
+                | CurveKind::Ellipse { .. }
+                | CurveKind::EllipticArc { .. }
+        );
+        Some((geom, closed, clockwise))
     }
 
     /// Legt einen Text im Rahmen mit den gegenüberliegenden Ecken `a` und `b` an (Spec B4). Der
@@ -496,8 +503,8 @@ impl Sketch {
     /// `params` gesetzte Text, die Zeilen mit [`path_content`] verbunden. Bei einem Fehler bleibt
     /// die Skizze unverändert.
     ///
-    /// **Annahme:** Eine Rahmenlinie ist kein Pfad. Sie gehört zu ihrem Text und ginge mit ihm
-    /// verloren (Löschen, Auflösen, Wechsel auf Pfad).
+    /// Eine Rahmenlinie ist kein Pfad (Ruling 5c, ebenso in `from_data`): Sie gehört zu ihrem
+    /// Text und ginge mit ihm verloren (Löschen, Auflösen, Wechsel auf Pfad).
     pub fn add_text_path(
         &mut self,
         path: CurveId,
@@ -602,16 +609,13 @@ impl Sketch {
     /// andere lebende Kurve benutzt (etwa eine Linie, gezeichnet mit Fang an einer Ecke), bleibt
     /// als gewöhnlicher Punkt; Abhängigkeiten zwischen ihm und anderer Geometrie bleiben, sofern
     /// sie keine Kurve des Textes benutzen. Ein Pfad bleibt. Muster an den gelöschten Teilen
-    /// werden aufgelöst. Ist eine Rahmenlinie Pfad eines anderen Textes (nur aus einer Datei
-    /// möglich), wird abgelehnt wie beim Löschen eines Pfades.
+    /// werden aufgelöst. Eine Rahmenlinie ist nie Pfad eines anderen Textes (`add_text_path` und
+    /// `from_data` lehnen das ab), der Rahmen geht also ohne Rückfrage mit.
     pub fn remove_text(&mut self, t: TextId) -> Result<(), SketchError> {
         let d = self.text(t).ok_or(SketchError::UnknownObject)?;
         let mut curves: HashSet<CurveId> = d.curves.iter().copied().collect();
         let mut points: Vec<PointId> = d.points.clone();
         if let TextPlacement::Box { lines, corners, .. } = d.placement {
-            if lines.iter().any(|&l| self.is_text_path(l)) {
-                return Err(SketchError::InvalidInput(tr!("sketch-text-on-path")));
-            }
             curves.extend(lines);
             points.extend(corners);
         }

@@ -341,6 +341,53 @@ fn on_circle_centered_is_upright_on_top() {
     assert_rigid(&s, t, "Kreis");
 }
 
+#[test]
+fn on_ellipse_centered_is_upright_on_top() {
+    // Ruling 5b: Ellipse und Ellipsenbogen werden wie Kreis und Bogen im Uhrzeigersinn gelesen.
+    // Der Bezugspunkt der Ellipse ist ihr höchster Punkt, auch bei gedrehter Ellipse.
+    let c = v(5.0, -3.0);
+    for major in [v(30.0, 0.0), v(24.0, 18.0), v(-18.0, 24.0), v(0.0, -30.0)] {
+        let mut s = sketch();
+        let m = s.add_point(c.x, c.y).unwrap();
+        let e = s.add_ellipse(m, major, 15.0).unwrap();
+        let t = on_path(&mut s, e, "a", HAlign::Center);
+        let g = glyph(&s, t, 0);
+        let b = major.perp() / major.length() * 15.0;
+        let top_t = b.y.atan2(major.y);
+        let top = c + major * top_t.cos() + b * top_t.sin();
+        assert!(
+            (top.y - c.y - major.y.hypot(b.y)).abs() < 1e-9,
+            "höchster Punkt"
+        );
+        assert_close(g.mid, top, "Mitte der Glyphe oben");
+        assert_close(g.ex, v(1.0, 0.0), "im Uhrzeigersinn gelesen");
+        assert_close(g.ey, v(0.0, 1.0), "aufrecht und außen");
+        assert_rigid(&s, t, "Ellipse");
+        // Ein langer Text läuft über die Naht des Parameters hinweg um die ganze Ellipse.
+        let long = on_path(&mut s, e, &"a".repeat(30), HAlign::Center);
+        assert!(all_finite(&s, long));
+        for k in 0..30 {
+            let d = distance_to_curve(&s, e, glyph(&s, long, k).mid);
+            assert!(d < 1e-4, "{major:?} {k}: {d}");
+        }
+    }
+    // Ellipsenbogen über die obere Hälfte (gegen den Uhrzeigersinn von rechts nach links
+    // angelegt): gelesen von links nach rechts, mittig oben aufrecht und außen.
+    let mut s = sketch();
+    let m = s.add_point(0.0, 0.0).unwrap();
+    let a = s.add_point(30.0, 0.0).unwrap();
+    let b = s.add_point(-30.0, 0.0).unwrap();
+    let arc = s.add_elliptic_arc(m, v(30.0, 0.0), 15.0, a, b).unwrap();
+    let t = on_path(&mut s, arc, "a", HAlign::Center);
+    let g = glyph(&s, t, 0);
+    assert!(g.mid.distance(v(0.0, 15.0)) < 1e-6, "{g:?}");
+    assert!(g.ex.distance(v(1.0, 0.0)) < 1e-6, "{g:?}");
+    assert!(g.ey.distance(v(0.0, 1.0)) < 1e-6, "{g:?}");
+    let t = on_path(&mut s, arc, "ab", HAlign::Left);
+    let first = glyph(&s, t, 0);
+    assert!(first.mid.x < -20.0, "links beginnt links: {first:?}");
+}
+
 /// Schräge Linie der Länge 100 von (10, 10) nach (70, 90).
 fn slanted() -> (Sketch, CurveId, DVec2, DVec2) {
     let mut s = sketch();
@@ -786,9 +833,9 @@ fn deleting_path_rejected() {
 }
 
 #[test]
-fn deleting_box_text_whose_frame_carries_text_rejected() {
-    // Über das Laden kann eine Rahmenlinie Pfad eines anderen Textes sein; der Rahmen darf dann
-    // nicht still mitgehen, sonst hinge der Text an einer gelöschten Kurve.
+fn from_data_refuses_a_frame_line_as_path() {
+    // Ruling 5c: Eine Rahmenlinie ist auch aus einer Datei kein Pfad. Sonst ginge sie mit ihrem
+    // Text verloren, und der Text auf ihr hinge an einer gelöschten Kurve.
     let mut s = sketch();
     let p = params("ab");
     let shape = Arc::new(BoxShaper.shape("ab", &p.style).unwrap());
@@ -807,19 +854,26 @@ fn deleting_box_text_whose_frame_carries_text_rejected() {
     let TextPlacement::Box { lines, .. } = s.text(boxed).unwrap().placement else {
         panic!("Rahmen");
     };
-    let mut d = s.to_data();
-    if let TextPlacement::Path { path, .. } = &mut d.texts[1].placement {
-        *path = lines[2];
-    }
-    let mut s = Sketch::from_data(d).unwrap();
-    let rev = s.revision();
-    says(
-        s.remove_text(boxed),
-        tr!("sketch-text-on-path"),
-        "Rahmen trägt Text",
+    let good = s.to_data();
+    assert!(
+        Sketch::from_data(good.clone()).is_ok(),
+        "freie Linie als Pfad"
     );
-    assert_eq!(s.revision(), rev);
-    assert!(s.text(boxed).is_some());
+    let reason = tr!(
+        "sketch-err-text-data",
+        reason = planora_i18n::t("sketch-err-text-data-path")
+    );
+    for l in lines {
+        let mut d = good.clone();
+        if let TextPlacement::Path { path, .. } = &mut d.texts[1].placement {
+            *path = l;
+        }
+        says(Sketch::from_data(d), reason.clone(), "Rahmenlinie als Pfad");
+    }
+    // Darum geht der Rahmen beim Löschen des Textes immer mit, ohne Rückfrage.
+    let mut s = Sketch::from_data(good).unwrap();
+    s.remove_text(boxed).unwrap();
+    assert!(lines.iter().all(|&l| s.curve(l).is_none()));
 }
 
 #[test]
@@ -832,36 +886,63 @@ fn flip_h_reverses_reading() {
         let t = add(&mut s, l, p, true, false, h);
         (s, t)
     };
+    // Ruling 5a/5d: Die Leserichtung kehrt sich um, die Buchstaben bleiben lesbar. Auf der
+    // Geraden ist das eine Drehung um 180° um die Mitte des Pfades, für jede Ausrichtung;
+    // „oberhalb“ bleibt links der (neuen) Leserichtung, also unter der Linie.
     for h in [HAlign::Left, HAlign::Center, HAlign::Right] {
         let (s0, t0) = make(false, h);
         let (s1, t1) = make(true, h);
         for (p, q) in positions(&s0, t0).iter().zip(positions(&s1, t1)) {
-            assert_close(q, v(100.0 - p.x, p.y), "gespiegelt an der Mitte des Pfades");
+            assert_close(q, v(100.0 - p.x, -p.y), "gedreht um die Mitte des Pfades");
+        }
+        for k in 0..2 {
+            let (a, b) = (glyph(&s0, t0, k), glyph(&s1, t1, k));
+            assert!(
+                (a.ex.perp_dot(a.ey) - b.ex.perp_dot(b.ey)).abs() < 1e-9
+                    && b.ex.perp_dot(b.ey) > 0.0,
+                "lesbar, nicht spiegelverkehrt: {a:?} {b:?}"
+            );
+            assert!(
+                outer_area(&a) * outer_area(&b) > 0.0,
+                "gleicher Umlaufsinn der Kontur"
+            );
         }
     }
-    // Links ausgerichtet beginnt die Leserichtung nun am Ende.
+    // Links ausgerichtet beginnt die Leserichtung nun am Ende, die Reihenfolge kehrt sich um.
     let (s, t) = make(true, HAlign::Left);
-    let g = glyph(&s, t, 0);
-    assert_close(g.origin, v(100.0, 0.0), "erste Glyphe am Ende");
-    assert_close(g.ex, v(-1.0, 0.0), "Leserichtung umgekehrt");
-    assert_close(g.ey, v(0.0, 1.0), "dieselbe Seite");
-    // Auf dem Kreis: gespiegelt an der Senkrechten durch den Bezugspunkt oben.
-    for h in [HAlign::Left, HAlign::Right] {
-        let mut sk = [sketch(), sketch()];
-        let mut ts = Vec::new();
-        for (i, s) in sk.iter_mut().enumerate() {
-            let c = circle(s, 20.0);
-            let mut p = params("abc");
-            p.flip_h = i == 1;
-            ts.push(add(s, c, p, true, false, h));
-        }
-        for (p, q) in positions(&sk[0], ts[0])
-            .iter()
-            .zip(positions(&sk[1], ts[1]))
-        {
-            assert_close(q, v(-p.x, p.y), "Kreis gespiegelt");
-        }
+    let (a, b) = (glyph(&s, t, 0), glyph(&s, t, 1));
+    assert_close(a.mid, v(100.0 - 0.5 * ADV * H, 0.0), "erste Glyphe am Ende");
+    assert!(b.mid.x < a.mid.x, "umgekehrte Folge: {a:?} {b:?}");
+    assert_close(a.ex, v(-1.0, 0.0), "Leserichtung umgekehrt");
+    assert_close(a.ey, v(0.0, -1.0), "links der neuen Leserichtung");
+    assert!(positions(&s, t).iter().all(|p| p.y <= 1e-9), "andere Seite");
+    // Auf dem Kreis: gegen den Uhrzeigersinn ab oben, oberhalb heißt dann innen; unten steht der
+    // Text aufrecht und läuft von links nach rechts.
+    let mut s = sketch();
+    let c = circle(&mut s, 20.0);
+    let mut p = params(&"a".repeat(40));
+    p.flip_h = true;
+    let t = add(&mut s, c, p, true, false, HAlign::Left);
+    for k in 0..40 {
+        let g = glyph(&s, t, k);
+        let s_k = -(k as f64 + 0.5) * ADV * H;
+        assert_close(g.mid, on_circle(20.0, s_k), "gegen den Uhrzeigersinn");
+        assert_close(g.ey, -g.mid / 20.0, "nach innen");
+        assert!(g.ex.perp_dot(g.ey) > 0.0, "lesbar");
     }
+    let bottom = glyph(&s, t, 15);
+    assert!(bottom.mid.y < -19.9, "{bottom:?}");
+    assert!(
+        bottom.ex.x > 0.99 && bottom.ey.y > 0.99,
+        "unten lesbar: {bottom:?}"
+    );
+    assert_rigid(&s, t, "Kreis umgekehrt");
+}
+
+/// Vorzeichenbehaftete Fläche der Außenkontur einer Glyphe des Test-Setzers.
+fn outer_area(g: &Placed) -> f64 {
+    let q = &g.points[..4];
+    (0..4).map(|i| q[i].perp_dot(q[(i + 1) % 4])).sum::<f64>() / 2.0
 }
 
 #[test]
