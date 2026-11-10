@@ -25,6 +25,8 @@ const BUNDLED: [&[u8]; 3] = [MONTSERRAT_REGULAR, MONTSERRAT_SEMIBOLD, ROBOTO_REG
 const FONT_EXTENSIONS: [&str; 4] = ["ttf", "otf", "ttc", "otc"];
 /// Tiefe der Unterordner, bis zu der gesucht wird. Schützt vor sehr tiefen Bäumen.
 const MAX_DEPTH: usize = 32;
+/// Größere Dateien werden nicht gelesen, sondern übersprungen (keine echte Schrift ist so groß).
+const MAX_FONT_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Woher die Bytes eines Schnitts kommen.
 #[derive(Clone)]
@@ -103,7 +105,7 @@ impl FontLibrary {
         files.sort();
         files.dedup();
         for path in files {
-            match fs::read(&path) {
+            match read_limited(&path) {
                 Ok(bytes) => match read_file_faces(&bytes) {
                     Ok(faces) => {
                         for (index, info) in faces {
@@ -116,7 +118,7 @@ impl FontLibrary {
                     }
                     Err(reason) => lib.skipped.push((path, reason)),
                 },
-                Err(err) => lib.skipped.push((path, err.to_string())),
+                Err(reason) => lib.skipped.push((path, reason)),
             }
         }
         lib
@@ -222,7 +224,7 @@ impl FontLibrary {
                 let data = match cache.get(path) {
                     Some(data) => data.clone(),
                     None => {
-                        let data: Arc<[u8]> = Arc::from(fs::read(path).ok()?);
+                        let data: Arc<[u8]> = Arc::from(read_limited(path).ok()?);
                         cache.insert(path.clone(), data.clone());
                         data
                     }
@@ -240,6 +242,19 @@ impl FontLibrary {
             }
         }
     }
+}
+
+/// Liest eine Schriftdatei, aber nur bis [`MAX_FONT_FILE_BYTES`]. Die Größe kommt aus den
+/// Dateiangaben; eine zu große Datei wird gar nicht erst gelesen.
+fn read_limited(path: &Path) -> Result<Vec<u8>, String> {
+    let len = fs::metadata(path).map_err(|e| e.to_string())?.len();
+    if len > MAX_FONT_FILE_BYTES {
+        return Err(format!(
+            "zu groß ({len} Bytes, höchstens {} MB)",
+            MAX_FONT_FILE_BYTES / (1024 * 1024)
+        ));
+    }
+    fs::read(path).map_err(|e| e.to_string())
 }
 
 /// Montserrat Regular ohne Umweg über die Liste. Nur für den Fall, dass selbst die

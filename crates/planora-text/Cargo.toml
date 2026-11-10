@@ -8,6 +8,11 @@ publish.workspace = true
 
 [dependencies]
 skrifa.workspace = true
+harfrust.workspace = true
+planora-math.workspace = true
+# Nur für die Datentypen in `planora_sketch::text_shape` (TextShape, TextStyle, TextShaper).
+# Abweichung von Spec A10, Grund in docs/superpowers/offene-punkte.md (Teilprojekt Skizzen 8).
+planora-sketch.workspace = true
 
 [lints]
 workspace = true

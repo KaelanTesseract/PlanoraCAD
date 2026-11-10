@@ -30,6 +30,7 @@ pub mod solid;
 pub mod solver;
 pub mod spline_handles;
 pub mod tangent_circles;
+pub mod text_shape;
 pub mod transform;
 pub mod triangulate;
 

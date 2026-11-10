@@ -2811,6 +2811,9 @@ dependencies = [
 name = "planora-text"
 version = "0.0.2-dev.1"
 dependencies = [
+ "harfrust",
+ "planora-math",
+ "planora-sketch",
  "skrifa",
 ]
 

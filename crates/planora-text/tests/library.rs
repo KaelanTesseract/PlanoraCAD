@@ -143,6 +143,25 @@ fn scan_skips_font_without_outlines() {
 }
 
 #[test]
+fn scan_skips_files_over_64_mb_without_reading() {
+    let dir = TempDir::new("huge");
+    dir.write("klein.ttf", ROBOTO);
+    // Nur die Länge setzen, nichts schreiben: Die Datei ist 64 MB plus ein Byte groß.
+    let huge = dir.path().join("riesig.ttf");
+    fs::File::create(&huge)
+        .unwrap()
+        .set_len(64 * 1024 * 1024 + 1)
+        .unwrap();
+    let bundled = FontLibrary::bundled_only();
+    let lib = FontLibrary::scan(&[dir.path().to_path_buf()]);
+    assert_eq!(lib.face_count(), bundled.face_count() + 1);
+    assert_eq!(lib.skipped().len(), 1, "{:?}", lib.skipped());
+    let (path, reason) = &lib.skipped()[0];
+    assert!(path.ends_with("riesig.ttf"), "{path:?}");
+    assert!(reason.contains("64 MB"), "{reason}");
+}
+
+#[test]
 fn scan_ignores_missing_dirs_and_other_files() {
     let dir = TempDir::new("other");
     dir.write("liesmich.txt", b"keine Schrift");
