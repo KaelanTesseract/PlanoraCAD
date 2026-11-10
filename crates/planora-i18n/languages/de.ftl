@@ -1936,6 +1936,8 @@ sketch-text-too-many-curves = Der Text ergibt zu viele Kurven: höchstens { $max
 sketch-text-height = Die Höhe des Textes muss größer als null sein.
 sketch-text-spacing = Der Zeichenabstand muss zwischen 0 % und { $max } % liegen.
 sketch-text-out-of-range = Der Text läge außerhalb des Rechenbereichs.
+sketch-text-bad-path = Diese Kurve geht nicht als Pfad: Buchstaben, Textrahmen und Griffe tragen keinen Text.
+sketch-text-path-degenerate = Der Pfad hat keine Länge.
 state-patterns-dissolved-on-load = { $n ->
     [one] Beim Öffnen wurde ein Muster aufgelöst, weil es seine Vorlage mit einem eigenen Exemplar verband. Die Geometrie bleibt.
    *[other] Beim Öffnen wurden { $n } Muster aufgelöst, weil sie ihre Vorlage mit einem eigenen Exemplar verbanden. Die Geometrie bleibt.

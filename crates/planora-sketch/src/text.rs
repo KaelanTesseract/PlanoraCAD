@@ -1,7 +1,7 @@
 //! Text in der Skizze (Skizzen 8, Spec B).
 //!
 //! Ein Text steht als eigene Art ([`TextData`]) in der Arena `texts` der Skizze, wie ein Muster.
-//! Aus dem gesetzten [`TextShape`] und der Lage im Rahmen (oder später auf einem Pfad) entstehen
+//! Aus dem gesetzten [`TextShape`] und der Lage im Rahmen oder auf einem Pfad entstehen
 //! echte Skizzenkurven: Strecke → `Line`, quadratisch → `Conic` mit ρ = 0,5, kubisch →
 //! `ControlSpline` Grad 3. Ihre Punkte sind für den Löser Konstanten wie Musterexemplare;
 //! `refresh_texts` (in `text_refresh.rs`) schreibt sie vor und nach jedem Lösen neu, mit
@@ -11,16 +11,18 @@
 //! beim Ändern und über [`Sketch::reshape_texts`]. Fehlt das gesetzte `TextShape` (gerade
 //! geladen), bleiben die gespeicherten Kurven unverändert stehen.
 
-use crate::constraint::{ConstraintKind, LineOrPoints};
+use crate::constraint::{ConstraintKind, LineOrPoints, curve_ends};
 use crate::error::SketchError;
-use crate::model::{CurveId, PointId, Sketch, within_coord_range};
-use crate::text_layout::place_box;
+use crate::geom::Geom;
+use crate::model::{CurveId, CurveKind, PointId, Sketch, within_coord_range};
+use crate::text_layout::{place_box, place_path};
 use crate::text_shape::{
     Contour, MAX_TEXT_CHARS, MAX_TEXT_CURVES, Seg, TextShape, TextShapeError, TextShaper, TextStyle,
 };
 use planora_i18n::tr;
 use planora_kernel::Id;
 use planora_math::DVec2;
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -53,7 +55,8 @@ pub enum TextPlacement {
         h: HAlign,
         v: VAlign,
     },
-    /// Auf einer Kurve (Skizzen 8, Task 5).
+    /// Auf der Kurve `path` (Spec B7): oberhalb (`above`, links der Leserichtung) oder
+    /// unterhalb, „An Pfad anpassen“ (`fit`), Ausrichtung am Pfad.
     Path {
         path: CurveId,
         above: bool,
@@ -197,6 +200,21 @@ fn out_of_range() -> SketchError {
     SketchError::InvalidInput(tr!("sketch-text-out-of-range"))
 }
 
+/// Was für einen Text auf Pfad gesetzt wird: Die Zeilen werden mit einem Leerzeichen verbunden
+/// (Spec B7, **Annahme**); Zeilenumbrüche wie beim Setzen (`\r\n`, `\r`, `\n`). Gespeichert bleibt
+/// der Inhalt, wie er ist, damit ein Wechsel in den Rahmen die Zeilen zurückbringt.
+pub fn path_content(content: &str) -> String {
+    content.replace("\r\n", "\n").replace(['\r', '\n'], " ")
+}
+
+/// Was für den Text `d` gesetzt wird: der Inhalt, auf einem Pfad mit verbundenen Zeilen.
+fn shaping_content(d: &TextData) -> Cow<'_, str> {
+    match d.placement {
+        TextPlacement::Box { .. } => Cow::Borrowed(&d.content),
+        TextPlacement::Path { .. } => Cow::Owned(path_content(&d.content)),
+    }
+}
+
 impl Sketch {
     /// Ein lebender Text.
     pub fn text(&self, t: TextId) -> Option<&TextData> {
@@ -331,11 +349,24 @@ impl Sketch {
 
     /// Die Konturen des Textes `t` mit dem Umriss `shape` an seiner aktuellen Lage, in
     /// Skizzenkoordinaten. `None`, wenn die Lage gerade nicht geht (Ecke gelöscht, Grundlinie
-    /// der Länge null, Punkte außerhalb des Rechenbereichs) oder der Text auf einem Pfad steht
-    /// (folgt mit Task 5): Dann bleibt die letzte gute Lage.
+    /// der Länge null, Pfad ohne Länge oder Richtung, Punkte außerhalb des Rechenbereichs): Dann
+    /// bleibt die letzte gute Lage (Review Focus 3).
     pub(crate) fn placed_contours(&self, t: TextId, shape: &TextShape) -> Option<Vec<Contour>> {
         let d = &self.texts[t];
-        match d.placement {
+        self.place_text(d.placement, d.height, d.flip_h, d.flip_v, shape)
+    }
+
+    /// Die Konturen eines Textes mit `placement`, Höhe und Umkehren (siehe
+    /// [`Sketch::placed_contours`]).
+    fn place_text(
+        &self,
+        placement: TextPlacement,
+        height: f64,
+        flip_h: bool,
+        flip_v: bool,
+        shape: &TextShape,
+    ) -> Option<Vec<Contour>> {
+        let placed = match placement {
             TextPlacement::Box {
                 corners, h, v: va, ..
             } => {
@@ -348,11 +379,39 @@ impl Sketch {
                 {
                     return None;
                 }
-                let placed = place_box(shape, d.height, at, h, va, d.flip_h, d.flip_v);
-                placed_ok(&placed).then_some(placed)
+                place_box(shape, height, at, h, va, flip_h, flip_v)
             }
-            TextPlacement::Path { .. } => None,
+            TextPlacement::Path {
+                path,
+                above,
+                fit,
+                h,
+            } => {
+                let (geom, closed, round) = self.text_path_geom(path)?;
+                place_path(
+                    shape, height, &geom, closed, round, above, fit, h, flip_h, flip_v,
+                )?
+            }
+        };
+        placed_ok(&placed).then_some(placed)
+    }
+
+    /// Der Pfad `path` als Geometrie, ob er geschlossen ist (Kreis, Ellipse, Kurve mit gleichen
+    /// Enden) und ob er Kreis oder Bogen ist (Leserichtung im Uhrzeigersinn). `None`, solange er
+    /// entartet ist: gelöscht, ohne Radius, nicht endlich oder nicht größer als die Toleranz.
+    fn text_path_geom(&self, path: CurveId) -> Option<(Geom, bool, bool)> {
+        let kind = &self.curve(path)?.kind;
+        let geom = self.geom(path)?;
+        let (lo, hi) = geom.bbox();
+        if !(lo.is_finite() && hi.is_finite()) || lo.distance(hi) <= self.tol.linear {
+            return None;
         }
+        let closed = geom.periodic()
+            || curve_ends(kind).is_some_and(|[a, b]| {
+                a == b || self.pos(a).distance(self.pos(b)) <= self.tol.linear
+            });
+        let round = matches!(kind, CurveKind::Circle { .. } | CurveKind::Arc { .. });
+        Some((geom, closed, round))
     }
 
     /// Legt einen Text im Rahmen mit den gegenüberliegenden Ecken `a` und `b` an (Spec B4). Der
@@ -431,6 +490,69 @@ impl Sketch {
         })
     }
 
+    /// Legt einen Text auf dem Pfad `path` an (Spec B7): jede lebende Kurve außer erzeugten
+    /// Kurven, Rahmenlinien eines Textes und Griffen, auch Konstruktion und projizierte. `above`
+    /// heißt oberhalb (links der Leserichtung), `fit` „An Pfad anpassen“. `shape` ist der mit
+    /// `params` gesetzte Text, die Zeilen mit [`path_content`] verbunden. Bei einem Fehler bleibt
+    /// die Skizze unverändert.
+    ///
+    /// **Annahme:** Eine Rahmenlinie ist kein Pfad. Sie gehört zu ihrem Text und ginge mit ihm
+    /// verloren (Löschen, Auflösen, Wechsel auf Pfad).
+    pub fn add_text_path(
+        &mut self,
+        path: CurveId,
+        params: TextParams,
+        above: bool,
+        fit: bool,
+        h: HAlign,
+        shape: Arc<TextShape>,
+    ) -> Result<TextId, SketchError> {
+        if self.curve(path).is_none() {
+            return Err(SketchError::UnknownObject);
+        }
+        if self.text_of_curve(path).is_some()
+            || self.text_of_frame(path).is_some()
+            || self.is_handle_curve(path)
+        {
+            return Err(SketchError::InvalidInput(tr!("sketch-text-bad-path")));
+        }
+        check_params(&params)?;
+        check_new_shape(&shape)?;
+        if self.text_path_geom(path).is_none() {
+            return Err(SketchError::Degenerate(tr!("sketch-text-path-degenerate")));
+        }
+        let placement = TextPlacement::Path {
+            path,
+            above,
+            fit,
+            h,
+        };
+        let placed = self
+            .place_text(
+                placement,
+                params.height,
+                params.flip_h,
+                params.flip_v,
+                &shape,
+            )
+            .ok_or_else(out_of_range)?;
+        let t = self.texts.push(TextData {
+            content: params.content,
+            style: params.style,
+            height: params.height,
+            flip_h: params.flip_h,
+            flip_v: params.flip_v,
+            placement,
+            curves: Vec::new(),
+            points: Vec::new(),
+            alive: true,
+            shaped: ShapedCache(Some(shape)),
+        });
+        self.touch_structure();
+        self.sync_text(t, &placed);
+        Ok(t)
+    }
+
     /// Ändert Werte und Ausrichtung eines Textes im Rahmen; `shape` ist der mit `params` gesetzte
     /// Text. Die Kurven werden der Reihe nach wiederverwendet (Spec B3): Ändern sich nur Höhe,
     /// Abstand, Ausrichtung oder Umkehren, behalten alle Kurven ihre Ids. Der Rahmen bleibt. Bei
@@ -480,12 +602,16 @@ impl Sketch {
     /// andere lebende Kurve benutzt (etwa eine Linie, gezeichnet mit Fang an einer Ecke), bleibt
     /// als gewöhnlicher Punkt; Abhängigkeiten zwischen ihm und anderer Geometrie bleiben, sofern
     /// sie keine Kurve des Textes benutzen. Ein Pfad bleibt. Muster an den gelöschten Teilen
-    /// werden aufgelöst.
+    /// werden aufgelöst. Ist eine Rahmenlinie Pfad eines anderen Textes (nur aus einer Datei
+    /// möglich), wird abgelehnt wie beim Löschen eines Pfades.
     pub fn remove_text(&mut self, t: TextId) -> Result<(), SketchError> {
         let d = self.text(t).ok_or(SketchError::UnknownObject)?;
         let mut curves: HashSet<CurveId> = d.curves.iter().copied().collect();
         let mut points: Vec<PointId> = d.points.clone();
         if let TextPlacement::Box { lines, corners, .. } = d.placement {
+            if lines.iter().any(|&l| self.is_text_path(l)) {
+                return Err(SketchError::InvalidInput(tr!("sketch-text-on-path")));
+            }
             curves.extend(lines);
             points.extend(corners);
         }
@@ -554,13 +680,14 @@ impl Sketch {
     /// Setzt alle Texte mit `shaper` neu (beim Laden, wenn die Schriftliste da ist, und wenn sich
     /// Schriften ändern). Die Kurven werden nach Spec B3 wiederverwendet. Liefert dieselbe Form
     /// dieselben Kurven und Punkte, ändert sich nichts, auch nicht der Stand der Skizze (Review
-    /// Focus 1). Ein Text, den `shaper` nicht setzen kann, bleibt unverändert und ungesetzt.
+    /// Focus 1). Ein Text, den `shaper` nicht setzen kann, bleibt unverändert und ungesetzt. Auf
+    /// einem Pfad wird mit verbundenen Zeilen gesetzt ([`path_content`]).
     pub fn reshape_texts(&mut self, shaper: &dyn TextShaper) -> ReshapeReport {
         let mut report = ReshapeReport::default();
         let ids: Vec<TextId> = self.texts().map(|(t, _)| t).collect();
         for t in ids {
             let d = &self.texts[t];
-            let Ok(shape) = shaper.shape(&d.content, &d.style) else {
+            let Ok(shape) = shaper.shape(&shaping_content(d), &d.style) else {
                 continue;
             };
             if check_curve_limit(&shape).is_err() {

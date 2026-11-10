@@ -1953,6 +1953,8 @@ sketch-text-too-many-curves = The text makes too many curves: at most { $max } p
 sketch-text-height = The text height must be greater than zero.
 sketch-text-spacing = The character spacing must be between 0 % and { $max } %.
 sketch-text-out-of-range = The text would lie outside the working range.
+sketch-text-bad-path = This curve cannot be a path: letters, text frames and handles cannot carry text.
+sketch-text-path-degenerate = The path has no length.
 state-patterns-dissolved-on-load = { $n ->
     [one] On opening, a pattern was dissolved because it linked its original to one of its own instances. The geometry stays.
    *[other] On opening, { $n } patterns were dissolved because they linked their original to one of their own instances. The geometry stays.
