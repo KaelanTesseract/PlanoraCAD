@@ -1998,6 +1998,7 @@ impl Sketch {
         }
         self.check_refs(&kind)?;
         self.check_centerline(&kind)?;
+        self.refuse_text_glyphs(&kind)?;
         // Erst nach allen Prüfungen anlegen, damit ein Fehler nichts hinterlässt.
         let (mut data, start) = self.new_constraint_data(kind);
         // Mit Mustern: Schlösse die Abhängigkeit eine Schleife zwischen Vorlage und eigenem
@@ -2447,8 +2448,12 @@ impl Sketch {
     /// Griffe (Skizzen 7, B8): Der Spline nimmt seine Griffe mit. Die Griff-Linie schaltet den Griff
     /// aus, der Griff-Bogen nur den Krümmungsgriff; der Spline bleibt und springt auf die Form ohne
     /// sie.
+    ///
+    /// Text (Skizzen 8, B8): Rahmenlinien und erzeugte Kurven gehen nur mit dem ganzen Text
+    /// ([`Sketch::remove_text`]), ein Pfad mit Text gar nicht; dann bleibt alles, wie es ist.
     pub fn remove_curve(&mut self, c: CurveId) -> Result<(), SketchError> {
         self.check_curve(c)?;
+        self.refuse_text_curve_removal(c)?;
         let released = self.release_handles_of(c);
         self.dissolve_patterns_of_curve(c);
         self.touch_structure();
@@ -2467,9 +2472,12 @@ impl Sketch {
 
     /// Entfernt den Punkt samt allen Kurven und Abhängigkeiten, die ihn benutzen.
     /// Ist er Mitte, Vorlagen- oder Exemplarpunkt eines Musters, wird das Muster aufgelöst.
-    /// Eine Griffspitze nimmt nur den Griff mit, nicht den Spline (Skizzen 7).
+    /// Eine Griffspitze nimmt nur den Griff mit, nicht den Spline (Skizzen 7). Ecken und erzeugte
+    /// Punkte eines Textes gehen nur mit dem ganzen Text, Punkte eines Pfads mit Text gar nicht
+    /// (Skizzen 8, B8).
     pub fn remove_point(&mut self, p: PointId) -> Result<(), SketchError> {
         self.check_point(p)?;
+        self.refuse_text_point_removal(p)?;
         self.dissolve_patterns_of_point(p);
         self.touch_structure();
         self.points[p].alive = false;

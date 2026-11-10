@@ -781,7 +781,9 @@ impl Sketch {
     /// Bildet die Gruppen der aktiven Abhängigkeiten. Liefert auch, welche Variablen in einer
     /// aktiven Abhängigkeit vorkommen.
     fn build_groups(&self) -> (Vec<Group>, Vec<bool>) {
-        self.build_groups_holding(&self.pattern_vars(), None)
+        let mut held = self.pattern_vars();
+        held.extend(self.text_vars());
+        self.build_groups_holding(&held, None)
     }
 
     /// Wie [`build_groups`](Self::build_groups); die Variablen `held` (Musterexemplare) sind
@@ -947,11 +949,24 @@ impl Sketch {
     /// Wie [`solve_with_soft`](Self::solve_with_soft); die Variablen `extra` sind wie Exemplare
     /// Konstanten des Laufs.
     fn solve_with_soft_holding(&mut self, soft: &[Soft], extra: &HashSet<usize>) -> SolveReport {
+        let texts = self.texts().next().is_some();
         if self.patterns().next().is_none() {
-            return self.solve_round(soft, extra, extra).0;
+            if !texts {
+                return self.solve_round(soft, extra, extra).0;
+            }
+            // Texte (Skizzen 8): Die erzeugten Punkte sind Konstanten wie Musterexemplare. Nichts
+            // liest sie (Spec E), also genügt ein Lauf zwischen zwei Nachführungen.
+            self.refresh_texts();
+            let mut held = self.text_vars();
+            held.extend(extra.iter().copied());
+            let report = self.solve_round(soft, &held, extra).0;
+            self.refresh_texts();
+            return report;
         }
         self.refresh_patterns();
+        self.refresh_texts();
         let mut held = self.pattern_vars();
+        held.extend(self.text_vars());
         held.extend(extra.iter().copied());
         let max_rounds = PATTERN_ROUNDS.max(self.patterns().count() + 1);
         let (mut report, mut reads) = self.solve_round(soft, &held, extra);
@@ -980,6 +995,10 @@ impl Sketch {
                 group_solves: report.group_solves + next.group_solves,
                 ..next
             };
+        }
+        // Texte folgen dem gelösten Rahmen, auch einem, der an Exemplaren hängt.
+        if texts {
+            self.refresh_texts();
         }
         report
     }
@@ -1200,7 +1219,7 @@ impl Sketch {
         self.solve_cache = cache;
 
         // Lebende Variablen, die in keiner aktiven Abhängigkeit vorkommen, sind frei;
-        // Exemplarvariablen nicht (sie hält das Muster).
+        // Exemplarvariablen nicht (sie hält das Muster), ebenso erzeugte Punkte eines Textes.
         for v in self.live_variables() {
             if !in_constraint[v] && !held.contains(&v) && free_vars.insert(v) {
                 dof += 1;
@@ -1319,12 +1338,16 @@ impl Sketch {
         // liest, obwohl eine Abhängigkeit an ihrer Kurve hängt: Der Löser sähe sie in keiner Gruppe,
         // und das weiche Ziel bliebe ohne Wirkung. So etwa die Spitze eines inneren Griffs, wenn ein
         // Krümmungsgriff am Ende desselben Splines nur das Ende liest (Handtest Skizzen 7).
+        // Erzeugte Punkte eines Textes folgen nie dem Zug; sie hält der Text (Skizzen 8).
         let mut unread: Option<Vec<bool>> = None;
         for d in drags {
             let free = self.point_unconstrained(d.point) || {
                 let read = unread.get_or_insert_with(|| self.build_groups().1);
                 let (xv, yv) = (self.points[d.point].x, self.points[d.point].y);
-                self.instance_drag_target(d.point, DVec2::ZERO).is_none() && !read[xv] && !read[yv]
+                self.instance_drag_target(d.point, DVec2::ZERO).is_none()
+                    && !self.is_text_point(d.point)
+                    && !read[xv]
+                    && !read[yv]
             };
             if free {
                 self.set_point_xy(d.point, d.target.x, d.target.y)?;
@@ -1371,7 +1394,8 @@ impl Sketch {
     /// interne) den Punkt direkt oder über eine Kurve benutzt, die ihn enthält.
     fn point_unconstrained(&self, p: PointId) -> bool {
         // Ein Exemplarpunkt hält das Muster; mit gelöschter Vorlage zählt er wie jeder Punkt.
-        if self.instance_drag_target(p, DVec2::ZERO).is_some() {
+        // Einen erzeugten Punkt eines Textes hält der Text (Skizzen 8).
+        if self.instance_drag_target(p, DVec2::ZERO).is_some() || self.is_text_point(p) {
             return false;
         }
         !self

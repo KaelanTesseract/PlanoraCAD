@@ -1790,6 +1790,7 @@ sketch-err-data-constraint-deleted = Eine Abhängigkeit verweist auf ein gelösc
 sketch-err-data-constraint-extra = Einer Abhängigkeit fehlt ihre Zusatzvariable
 sketch-err-data-centerline = Eine Mittellinie ist keine Konstruktionslinie oder keine Linie
 sketch-err-data-pattern-object = Ein Muster verweist auf ein fehlendes Objekt
+sketch-err-data-text-object = Ein Text verweist auf ein fehlendes Objekt
 sketch-err-data-pattern-direction = Ein Muster hat eine ungültige Richtung („senkrecht zu Richtung 1“ als erste Richtung)
 sketch-err-data-pattern-deleted = Ein Muster verweist auf ein gelöschtes Objekt
 sketch-err-data-pattern-instance = Ein Exemplar eines Musters passt nicht zu seiner Vorlage
@@ -1915,6 +1916,17 @@ sketch-pattern-dissolved = { $n ->
 sketch-pattern-dropped = Mit den weggefallenen Exemplaren entfallen Abhängigkeiten: { $n }.
 sketch-pattern-instance-dropped = Abhängigkeiten am Muster-Exemplar entfallen: { $n }.
 sketch-pattern-direction-line = Für die Richtung bitte eine Linie anklicken
+sketch-text-part = Gehört zum Text. Wähle den ganzen Text, um ihn zu löschen.
+sketch-text-on-path = Text hängt an diesem Pfad. Löse den Text auf oder lösche ihn zuerst.
+sketch-text-no-dimension = Maße und Abhängigkeiten gehen an den Rahmen oder den Pfad, nicht an die Buchstaben.
+sketch-text-no-centerline = Text kann keine Mittellinie sein.
+sketch-text-not-box = Das geht nur bei Text im Rahmen.
+sketch-text-empty = Der Text enthält keine sichtbaren Zeichen.
+sketch-text-too-long = Der Text ist zu lang: höchstens { $max } Zeichen.
+sketch-text-too-many-curves = Der Text ergibt zu viele Kurven: höchstens { $max } je Text.
+sketch-text-height = Die Höhe des Textes muss größer als null sein.
+sketch-text-spacing = Der Zeichenabstand muss zwischen 0 % und { $max } % liegen.
+sketch-text-out-of-range = Der Text läge außerhalb des Rechenbereichs.
 state-patterns-dissolved-on-load = { $n ->
     [one] Beim Öffnen wurde ein Muster aufgelöst, weil es seine Vorlage mit einem eigenen Exemplar verband. Die Geometrie bleibt.
    *[other] Beim Öffnen wurden { $n } Muster aufgelöst, weil sie ihre Vorlage mit einem eigenen Exemplar verbanden. Die Geometrie bleibt.

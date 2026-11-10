@@ -12,6 +12,8 @@ use crate::pattern::{
     PatternSlot,
 };
 use crate::solver::SolveCache;
+use crate::text::{ShapedCache, TextData, TextPlacement};
+use crate::text_shape::TextStyle;
 use planora_i18n::tr;
 use planora_kernel::Arena;
 use planora_math::nurbs::NurbsCurve;
@@ -58,6 +60,22 @@ pub struct PatternRecord {
     pub alive: bool,
 }
 
+/// Ein Text wie [`TextData`], mit `alive` und ohne das gesetzte `TextShape` (Skizzen 8): Nach dem
+/// Laden ist ein Text „noch nicht gesetzt“, seine gespeicherten Kurven bleiben, bis
+/// [`Sketch::reshape_texts`] ihn neu setzt.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextRecord {
+    pub content: String,
+    pub style: TextStyle,
+    pub height: f64,
+    pub flip_h: bool,
+    pub flip_v: bool,
+    pub placement: TextPlacement,
+    pub curves: Vec<CurveId>,
+    pub points: Vec<PointId>,
+    pub alive: bool,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SketchData {
     pub name: String,
@@ -69,6 +87,8 @@ pub struct SketchData {
     pub constraints: Vec<ConstraintRecord>,
     /// Muster, auch aufgelöste (Skizzen 5); leer in Skizzen ohne Muster.
     pub patterns: Vec<PatternRecord>,
+    /// Texte, auch gelöschte (Skizzen 8); leer in Skizzen ohne Text.
+    pub texts: Vec<TextRecord>,
 }
 
 /// Größter Grad eines Splines mit Kontrollpunkten in einer Datei (im Skizzenfeld wählbar: 3, 5).
@@ -140,6 +160,21 @@ impl Sketch {
                     instances: m.instances.clone(),
                     suppressed: m.suppressed.clone(),
                     alive: m.alive,
+                })
+                .collect(),
+            texts: self
+                .texts
+                .iter()
+                .map(|(_, t)| TextRecord {
+                    content: t.content.clone(),
+                    style: t.style.clone(),
+                    height: t.height,
+                    flip_h: t.flip_h,
+                    flip_v: t.flip_v,
+                    placement: t.placement,
+                    curves: t.curves.clone(),
+                    points: t.points.clone(),
+                    alive: t.alive,
                 })
                 .collect(),
         }
@@ -291,6 +326,7 @@ impl Sketch {
             }
         }
         check_patterns(&d)?;
+        check_text_refs(&d)?;
 
         let mut points = Arena::new();
         for p in d.points {
@@ -335,12 +371,29 @@ impl Sketch {
                 alive: m.alive,
             });
         }
+        let mut texts = Arena::new();
+        for t in d.texts {
+            texts.push(TextData {
+                content: t.content,
+                style: t.style,
+                height: t.height,
+                flip_h: t.flip_h,
+                flip_v: t.flip_v,
+                placement: t.placement,
+                curves: t.curves,
+                points: t.points,
+                alive: t.alive,
+                // Noch nicht gesetzt: Die gespeicherten Kurven bleiben (Spec G4).
+                shaped: ShapedCache(None),
+            });
+        }
         let mut s = Sketch::new(d.frame, d.name, d.tolerance);
         s.vars = d.vars;
         s.points = points;
         s.curves = curves;
         s.constraints = constraints;
         s.patterns = patterns;
+        s.texts = texts;
         s.solve_cache = SolveCache::default();
         s.touch_structure();
         // Typen und Entartungen aller Abhängigkeiten (auch gelöschter) wie bei add_constraint
@@ -612,6 +665,26 @@ fn check_patterns(d: &SketchData) -> Result<(), SketchError> {
             if !(owner.alive && owner.values.iter().any(|v| v.index() == i)) {
                 return Err(value());
             }
+        }
+    }
+    Ok(())
+}
+
+/// Prüft, dass jeder Text (auch ein gelöschter) nur vorhandene Kurven und Punkte nennt; so stürzt
+/// nichts ab. Die strenge Prüfung der Texte (Werte, Rahmen, Zuordnung) folgt mit Format 18.
+fn check_text_refs(d: &SketchData) -> Result<(), SketchError> {
+    let (np, nc) = (d.points.len(), d.curves.len());
+    for t in &d.texts {
+        let placement_ok = match t.placement {
+            TextPlacement::Box { lines, corners, .. } => {
+                lines.iter().all(|c| c.index() < nc) && corners.iter().all(|p| p.index() < np)
+            }
+            TextPlacement::Path { path, .. } => path.index() < nc,
+        };
+        let parts_ok =
+            t.curves.iter().all(|c| c.index() < nc) && t.points.iter().all(|p| p.index() < np);
+        if !(placement_ok && parts_ok) {
+            return Err(bad(tr!("sketch-err-data-text-object")));
         }
     }
     Ok(())

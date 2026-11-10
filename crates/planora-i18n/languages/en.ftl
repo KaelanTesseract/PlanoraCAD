@@ -1807,6 +1807,7 @@ sketch-err-data-constraint-deleted = A constraint refers to a deleted object
 sketch-err-data-constraint-extra = A constraint is missing its extra variable
 sketch-err-data-centerline = A centerline is not a construction line or not a line
 sketch-err-data-pattern-object = A pattern refers to a missing object
+sketch-err-data-text-object = A text refers to a missing object
 sketch-err-data-pattern-direction = A pattern has an invalid direction ("perpendicular to direction 1" as the first direction)
 sketch-err-data-pattern-deleted = A pattern refers to a deleted object
 sketch-err-data-pattern-instance = An instance of a pattern does not match its objects
@@ -1932,6 +1933,17 @@ sketch-pattern-dissolved = { $n ->
 sketch-pattern-dropped = Constraints removed with the dropped instances: { $n }.
 sketch-pattern-instance-dropped = Constraints on the pattern instance removed: { $n }.
 sketch-pattern-direction-line = Please click a line for the direction
+sketch-text-part = Belongs to the text. Select the whole text to delete it.
+sketch-text-on-path = Text is attached to this path. Explode or delete the text first.
+sketch-text-no-dimension = Dimensions and constraints go on the frame or the path, not on the letters.
+sketch-text-no-centerline = Text cannot be a centerline.
+sketch-text-not-box = This only works for text in a frame.
+sketch-text-empty = The text has no visible characters.
+sketch-text-too-long = The text is too long: at most { $max } characters.
+sketch-text-too-many-curves = The text makes too many curves: at most { $max } per text.
+sketch-text-height = The text height must be greater than zero.
+sketch-text-spacing = The character spacing must be between 0 % and { $max } %.
+sketch-text-out-of-range = The text would lie outside the working range.
 state-patterns-dissolved-on-load = { $n ->
     [one] On opening, a pattern was dissolved because it linked its original to one of its own instances. The geometry stays.
    *[other] On opening, { $n } patterns were dissolved because they linked their original to one of their own instances. The geometry stays.

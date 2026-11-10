@@ -964,6 +964,8 @@ fn sketch_from(origin: &str, feature: &str, d: &SketchDto) -> Result<(Sketch, us
             })
             .collect(),
         patterns: patterns_from(origin, feature, d)?,
+        // Texte kommen erst mit Format 18 in die Datei (Skizzen 8, Task 4).
+        texts: Vec::new(),
     };
     Sketch::from_data_counted(data).map_err(|e| ctx(e.to_string()))
 }
