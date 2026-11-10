@@ -5,16 +5,28 @@
 //! Parameter je Art: Linie `t ∈ [0, 1]` von `a` nach `b`; Kreis Winkel `t ∈ [0, 2π)` ab der
 //! x-Achse; Bogen Winkel `t ∈ [a0, a0 + sweep]` (gegen den Uhrzeigersinn); Ellipse
 //! `t ∈ [0, 2π)` auf `c + a·cos t + b·sin t`; Ellipsenbogen `t ∈ [t0, t0 + sweep]` auf
-//! derselben Form; Spline `t ∈ [0, n − 1]` (Stützpunkt `i` bei `t = i`).
+//! derselben Form; Spline `t ∈ [0, n − 1]` (Stützpunkt `i` bei `t = i`); Freiformkurve der
+//! NURBS-Parameter.
 
-use crate::curves::Sampled;
+use crate::curves::{Sampled, nurbs_breaks, nurbs_samples};
 use crate::model::{CurveId, CurveKind, Sketch};
+use planora_kernel::nurbs_divisions;
+use planora_math::nurbs::NurbsCurve;
 use planora_math::{DVec2, TAU};
+use std::sync::Arc;
 
 /// Abtastschritte je Vollkreis bei der Suche nach dem nächsten Punkt (Ellipsen).
 const NEAREST_STEPS_PER_TURN: usize = 256;
 /// Abtastschritte je Spline-Segment bei der Suche nach dem nächsten Punkt.
 const NEAREST_STEPS_PER_SEGMENT: usize = 64;
+/// Abtastschritte je Bézier-Stück einer Freiformkurve bei der Suche nach dem nächsten Punkt. Der
+/// Hover fragt das je Bild: So kostet eine Kurve aus 64 Punkten etwa 1000 Auswertungen wie der
+/// Spline durch Stützpunkte (16 je Segment), nicht 62000 (Linienzug mit 4096 Schritten je Umlauf).
+const NEAREST_SAMPLES_PER_PIECE: usize = 16;
+/// So viele der tiefsten lokalen Minima der Abtastung werden nachgeschärft.
+const NEAREST_CANDIDATES: usize = 3;
+/// Höchstzahl der Schritte (Newton mit Halbieren als Rückfall) beim Nachschärfen eines Minimums.
+const NEAREST_REFINE_STEPS: usize = 40;
 /// Schritte des Goldenen Schnitts beim Nachschärfen des nächsten Punkts (Intervall schrumpft
 /// auf 0,618⁸⁰ ≈ 2e-17 seiner Breite).
 const GOLDEN_STEPS: usize = 80;
@@ -59,11 +71,16 @@ pub(crate) enum Geom {
         s: Sampled,
         n: usize,
     },
+    /// Freiformkurve in Skizzenkoordinaten (`z = 0`).
+    Nurbs {
+        curve: Arc<NurbsCurve>,
+    },
 }
 
 impl Geom {
     /// Punkt und Ableitung nach `t`. Außerhalb des Bereichs wird die Kurve fortgesetzt
-    /// (Gerade, ganzer Kreis bzw. ganze Ellipse, Spline über sein erstes bzw. letztes Segment).
+    /// (Gerade, ganzer Kreis bzw. ganze Ellipse, Spline über sein erstes bzw. letztes Segment,
+    /// Freiformkurve über ihr erstes bzw. letztes Polynomstück).
     pub(crate) fn eval(&self, t: f64) -> (DVec2, DVec2) {
         match self {
             Geom::Line { a, b } => (*a + (*b - *a) * t, *b - *a),
@@ -87,6 +104,10 @@ impl Geom {
                     y1 - y0 - m0 * ((3.0 * w * w - 1.0) / 6.0) + m1 * ((3.0 * u * u - 1.0) / 6.0);
                 (p, d)
             }
+            Geom::Nurbs { curve } => {
+                let d = curve.derivs_unclamped(t, 1);
+                (d[0].truncate(), d[1].truncate())
+            }
         }
     }
 
@@ -102,11 +123,16 @@ impl Geom {
                 let (s, co) = t.sin_cos();
                 -(*a * co + *b * s)
             }
+            Geom::Spline {
+                s: Sampled::Hermite { nodes },
+                ..
+            } => nodes.second_at(t),
             Geom::Spline { s, n } => {
                 // linear zwischen den zweiten Ableitungen der Segmentenden
                 spline_segment(s, *n, t)
                     .map_or(DVec2::ZERO, |(u, [_, _, m0, m1])| m0 * (1.0 - u) + m1 * u)
             }
+            Geom::Nurbs { curve } => curve.derivs_unclamped(t, 2)[2].truncate(),
         }
     }
 
@@ -118,6 +144,7 @@ impl Geom {
             Geom::Arc { a0, sweep, .. } => (*a0, a0 + sweep),
             Geom::EllipticArc { t0, sweep, .. } => (*t0, t0 + sweep),
             Geom::Spline { n, .. } => (0.0, (n - 1) as f64),
+            Geom::Nurbs { curve } => curve.domain(),
         }
     }
 
@@ -166,24 +193,33 @@ impl Geom {
         match self {
             Geom::Line { a, b } => a.distance(*b) * span,
             Geom::Circle { r, .. } | Geom::Arc { r, .. } => r * span,
+            Geom::Nurbs { curve } => nurbs_breaks(curve, lo, hi)
+                .windows(2)
+                .map(|w| self.simpson(w[0], w[1], LENGTH_STEPS_PER_SEGMENT as usize))
+                .sum(),
             Geom::Ellipse { .. } | Geom::EllipticArc { .. } | Geom::Spline { .. } => {
                 let per_unit = if matches!(self, Geom::Spline { .. }) {
                     LENGTH_STEPS_PER_SEGMENT
                 } else {
                     LENGTH_STEPS_PER_TURN / TAU
                 };
-                // Simpson mit gerader Abschnittszahl
+                // gerade Abschnittszahl
                 let k = ((span * per_unit / 2.0).ceil() as usize).clamp(1, 1 << 16) * 2;
-                let h = span / k as f64;
-                let speed = |t: f64| self.eval(t).1.length();
-                let mut sum = speed(lo) + speed(hi);
-                for i in 1..k {
-                    let w = if i % 2 == 1 { 4.0 } else { 2.0 };
-                    sum += w * speed(lo + h * i as f64);
-                }
-                sum * h / 3.0
+                self.simpson(lo, hi, k)
             }
         }
+    }
+
+    /// Bogenlänge von `lo` bis `hi` nach Simpson mit `k` Abschnitten (`k` gerade).
+    fn simpson(&self, lo: f64, hi: f64, k: usize) -> f64 {
+        let h = (hi - lo) / k as f64;
+        let speed = |t: f64| self.eval(t).1.length();
+        let mut sum = speed(lo) + speed(hi);
+        for i in 1..k {
+            let w = if i % 2 == 1 { 4.0 } else { 2.0 };
+            sum += w * speed(lo + h * i as f64);
+        }
+        sum * h / 3.0
     }
 
     /// Parameter des Kurvenpunkts, der `p` am nächsten liegt (im Bereich; bei periodischen
@@ -226,6 +262,13 @@ impl Geom {
                     hi
                 }
             }
+            Geom::Nurbs { curve } => {
+                let ts = nurbs_samples(curve, lo, hi, NEAREST_SAMPLES_PER_PIECE);
+                self.normalize(nearest_by_samples(&ts, p, |t| {
+                    let d = curve.derivs_unclamped(t, 2);
+                    (d[0].truncate(), d[1].truncate(), d[2].truncate())
+                }))
+            }
             Geom::Ellipse { .. } | Geom::EllipticArc { .. } | Geom::Spline { .. } => {
                 let steps = match self {
                     Geom::Spline { n, .. } => (n - 1) * NEAREST_STEPS_PER_SEGMENT,
@@ -267,9 +310,16 @@ impl Geom {
 
     /// Parameter des Linienzugs von `t0` nach `t1`: Linie ein Abschnitt; Kreise, Bögen und
     /// Ellipsen `steps_per_turn` Abschnitte je Vollkreis; Splines `steps_per_turn / 4` je
-    /// Segment (wie [`Sketch::curve_polyline`] mit 16 je Segment bei 64 je Vollkreis).
+    /// Segment (wie [`Sketch::curve_polyline`] mit 16 je Segment bei 64 je Vollkreis);
+    /// Freiformkurven siehe [`nurbs_polyline_params`], immer mit allen Knoten dazwischen.
     pub(crate) fn polyline_params(&self, t0: f64, t1: f64, steps_per_turn: usize) -> Vec<f64> {
         let span = t1 - t0;
+        if let Geom::Nurbs { curve } = self
+            && span.is_finite()
+            && span != 0.0
+        {
+            return nurbs_polyline_params(curve, t0, t1, steps_per_turn);
+        }
         let steps = if !span.is_finite() {
             1
         } else {
@@ -325,6 +375,17 @@ impl Geom {
                 let half = DVec2::new(a.x.hypot(b.x), a.y.hypot(b.y));
                 (*c - half, *c + half)
             }
+            Geom::Nurbs { curve } => {
+                let mut pts = curve.control_points().iter().map(|p| p.truncate());
+                fold(&mut pts)
+            }
+            Geom::Spline {
+                s: Sampled::Hermite { nodes },
+                n,
+            } => {
+                let mut pts = (0..n - 1).flat_map(|i| nodes.bezier(i));
+                fold(&mut pts)
+            }
             Geom::Spline { n, .. } => {
                 let mut pts = (0..n - 1).flat_map(|i| {
                     let (p0, d0) = self.eval(i as f64);
@@ -353,9 +414,110 @@ fn spline_segment(s: &Sampled, n: usize, t: f64) -> Option<(f64, [DVec2; 4])> {
     ))
 }
 
+/// Parameter des Linienzugs einer Freiformkurve von `t0` nach `t1` (`t0 != t1`, Reihenfolge
+/// beliebig). Die Zahl der Abschnitte richtet sich nach der Struktur der Kurve:
+/// [`nurbs_divisions`], mindestens `steps_per_turn / 4` je Bézier-Stück wie beim Spline. Sie
+/// verteilen sich nach Parameterbreite auf die Bézier-Stücke, damit die Knoten, an denen die Kurve
+/// abknicken kann, im Linienzug liegen.
+fn nurbs_polyline_params(curve: &NurbsCurve, t0: f64, t1: f64, steps_per_turn: usize) -> Vec<f64> {
+    let (lo, hi) = (t0.min(t1), t0.max(t1));
+    let breaks = nurbs_breaks(curve, lo, hi);
+    let pieces = breaks.len() - 1;
+    let total = nurbs_divisions(curve, lo, hi, TAU / steps_per_turn.max(1) as f64)
+        .max(pieces * (steps_per_turn / 4).max(1))
+        .clamp(1, 1 << 16);
+    let mut out = vec![lo];
+    for w in breaks.windows(2) {
+        let share = (w[1] - w[0]) / (hi - lo);
+        let steps = ((share * total as f64).ceil() as usize).max(1);
+        for k in 1..steps {
+            out.push(w[0] + (w[1] - w[0]) * k as f64 / steps as f64);
+        }
+        out.push(w[1]);
+    }
+    if t0 > t1 {
+        out.reverse();
+    }
+    out
+}
+
 /// Abschnitte für den Parameterbereich `span` bei `per_turn` Abschnitten je 2π (mindestens 1).
 fn steps_for(span: f64, per_turn: usize) -> usize {
     ((span.abs() / TAU * per_turn as f64).ceil() as usize).clamp(1, 1 << 16)
+}
+
+/// Parameter des nächsten Punkts einer Kurve, die `jet` als Punkt, erste und zweite Ableitung
+/// liefert: Die Abtastung `ts` findet die lokalen Minima des Abstands, die [`NEAREST_CANDIDATES`]
+/// tiefsten werden auf `(C − p)·C' = 0` nachgeschärft (Newton, mit Halbieren als Rückfall).
+fn nearest_by_samples(ts: &[f64], p: DVec2, jet: impl Fn(f64) -> (DVec2, DVec2, DVec2)) -> f64 {
+    let dist: Vec<f64> = ts.iter().map(|&t| jet(t).0.distance_squared(p)).collect();
+    let last = ts.len() - 1;
+    let mut minima: Vec<usize> = (0..=last)
+        .filter(|&k| (k == 0 || dist[k] <= dist[k - 1]) && (k == last || dist[k] <= dist[k + 1]))
+        .collect();
+    minima.sort_by(|&x, &y| dist[x].total_cmp(&dist[y]));
+    minima.truncate(NEAREST_CANDIDATES);
+    let (mut best, mut best_d) = (ts[0], dist[0]);
+    let mut consider = |t: f64, d: f64| {
+        if d < best_d {
+            (best, best_d) = (t, d);
+        }
+    };
+    for &k in &minima {
+        consider(ts[k], dist[k]);
+        let sides = [
+            (k.checked_sub(1), Some(k)),
+            (Some(k), (k < last).then_some(k + 1)),
+        ];
+        for (a, b) in sides {
+            let (Some(a), Some(b)) = (a, b) else { continue };
+            if let Some(t) = slope_root(ts[a], ts[b], p, &jet) {
+                consider(t, jet(t).0.distance_squared(p));
+            }
+        }
+    }
+    best
+}
+
+/// Nullstelle von `(C(t) − p)·C'(t)` in `[a, b]`, wenn sie dort von − nach + wechselt.
+fn slope_root(
+    mut a: f64,
+    mut b: f64,
+    p: DVec2,
+    jet: &impl Fn(f64) -> (DVec2, DVec2, DVec2),
+) -> Option<f64> {
+    let slope = |t: f64| {
+        let (q, d, _) = jet(t);
+        (q - p).dot(d)
+    };
+    if !(slope(a) <= 0.0 && slope(b) >= 0.0) {
+        return None;
+    }
+    let mut t = 0.5 * (a + b);
+    for _ in 0..NEAREST_REFINE_STEPS {
+        let (q, d, s) = jet(t);
+        let f = (q - p).dot(d);
+        if f == 0.0 {
+            break;
+        }
+        if f < 0.0 {
+            a = t;
+        } else {
+            b = t;
+        }
+        let next = t - f / (d.length_squared() + (q - p).dot(s));
+        let next = if next > a && next < b {
+            next
+        } else {
+            0.5 * (a + b)
+        };
+        let done = (next - t).abs() <= 1e-15 * (1.0 + t.abs());
+        t = next;
+        if done {
+            break;
+        }
+    }
+    t.is_finite().then_some(t)
 }
 
 /// Kleinste Stelle von `f` in `[a, b]` per Goldenem Schnitt (lokales Minimum).
@@ -444,21 +606,23 @@ impl Sketch {
                     Geom::Ellipse { c: m, a, b }
                 }
             }
-            CurveKind::Spline { points } => {
-                let xy: Vec<DVec2> = points.iter().map(|&p| self.pos(p)).collect();
-                Geom::Spline {
-                    s: Sampled::spline(&xy),
-                    n: xy.len(),
-                }
-            }
+            CurveKind::Spline { points, handles } => Geom::Spline {
+                s: self.spline_sampled(points, handles),
+                n: points.len(),
+            },
+            CurveKind::ControlSpline { .. }
+            | CurveKind::Conic { .. }
+            | CurveKind::FixedSpline { .. } => Geom::Nurbs {
+                curve: self.nurbs_of(c)?,
+            },
         };
         Some(g)
     }
 
     /// Punkt der lebenden Kurve `c` beim Parameter `t` (Parameter je Art: Linie `[0, 1]`,
     /// Kreis und Bogen Winkel ab der x-Achse, Ellipse und Ellipsenbogen der Parameter von
-    /// [`Sketch::ellipse_point`], Spline `[0, n − 1]`). Außerhalb von [`Sketch::curve_domain`]
-    /// wird die Kurve fortgesetzt. `None` für unbekannte oder entartete Kurven und nicht
+    /// [`Sketch::ellipse_point`], Spline `[0, n − 1]`, Freiformkurve der NURBS-Parameter).
+    /// Außerhalb von [`Sketch::curve_domain`] wird die Kurve fortgesetzt. `None` für unbekannte oder entartete Kurven und nicht
     /// endliches `t`.
     pub fn curve_eval(&self, c: CurveId, t: f64) -> Option<DVec2> {
         if !t.is_finite() {
@@ -487,6 +651,39 @@ mod tests {
             a,
             b: DVec2::new(0.0, 5.0),
         }
+    }
+
+    #[test]
+    fn nearest_on_a_long_control_spline_costs_about_as_much_as_a_fit_spline() {
+        // 64 Punkte, Grad 3: 61 Bézier-Stücke. Der Spline durch Stützpunkte braucht für den
+        // nächsten Punkt 63 · 16 + 1 = 1009 Auswertungen (Skizzen 7, Task 3).
+        let control: Vec<_> = (0..64)
+            .map(|i| planora_math::DVec3::new(i as f64, 6.0 * (i as f64 * 0.7).sin(), 0.0))
+            .collect();
+        let curve = NurbsCurve::new(
+            3,
+            planora_math::nurbs::uniform_clamped_knots(3, 64),
+            control,
+            vec![1.0; 64],
+        )
+        .unwrap();
+        let (lo, hi) = curve.domain();
+        let ts = nurbs_samples(&curve, lo, hi, NEAREST_SAMPLES_PER_PIECE);
+        assert_eq!(ts.len(), 977);
+        let count = std::cell::Cell::new(0_usize);
+        let mut most = 0;
+        for k in 0..200 {
+            let at = DVec2::new(k as f64 * 0.32, 8.0 * (k as f64 * 1.3).sin());
+            count.set(0);
+            let t = nearest_by_samples(&ts, at, |t| {
+                count.set(count.get() + 1);
+                let d = curve.derivs_unclamped(t, 2);
+                (d[0].truncate(), d[1].truncate(), d[2].truncate())
+            });
+            assert!((lo..=hi).contains(&t));
+            most = most.max(count.get());
+        }
+        assert!(most <= 1200, "{most} Auswertungen");
     }
 
     #[test]

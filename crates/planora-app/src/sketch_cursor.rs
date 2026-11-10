@@ -303,6 +303,7 @@ impl SketchSession {
                 | Tool::Extend
                 | Tool::Break
                 | Tool::Constraint(_)
+                | Tool::InsertControlPoint
         )
     }
 
@@ -346,7 +347,7 @@ impl SketchSession {
         // Wer Kurven wählt, sieht nur Kurven: kein Punkt davor, keine Hilfslinie, kein Raster. Eine
         // Kurve wählen ist kein Fang, also geht das auch mit Strg.
         if self.picks_curves() {
-            if let Some(c) = sk.pick_curve(raw, radius) {
+            if let Some(c) = self.shown_curve(sk, raw, radius) {
                 cur.at = sk.nearest_on_curve(c, raw).unwrap_or(raw);
                 cur.snap = Snap::Curve(c);
                 cur.snap_at = Some(cur.at);
@@ -356,7 +357,10 @@ impl SketchSession {
         // Beim 2-Tangenten-Kreis wählt der letzte Klick nur den Sektor: Fang auf einer der Linien
         // ergäbe gar keinen. Bei Rundung und Fase gibt der Zeiger nur den Abstand zur Ecke an, beim
         // Versatz Abstand und Seite zur Kette.
+        // Beim Kegelschnitt ist die Form mit dem Scheitel fertig, der Klick bestätigt nur noch Rho.
+        let awaits_rho = self.planned_kind() == Some(ToolKind::Conic) && self.kind_stage() == 3;
         if self.cursor_opts.suppressed
+            || awaits_rho
             || self.planned_kind() == Some(ToolKind::Circle2T)
             || matches!(self.tool, Tool::Fillet | Tool::Offset)
         {
@@ -364,7 +368,9 @@ impl SketchSession {
         }
         let index = self.current_index(sk);
         let tol = sk.tolerance().linear;
-        if let Some(hit) = index.find_avoiding(raw, radius, &self.own_open_spots(sk), tol) {
+        // Skizzen 7: Griffpunkte fangen nur, solange sie zu sehen sind.
+        let shown = self.visible_handle_points(sk);
+        if let Some(hit) = index.find_avoiding(raw, radius, &self.own_open_spots(sk), tol, &shown) {
             cur.at = hit.at;
             cur.snap = hit.snap;
             cur.snap_at = Some(hit.at);
@@ -393,7 +399,13 @@ impl SketchSession {
             free_x = auto == AutoConstraint::Horizontal;
             free_y = auto == AutoConstraint::Vertical;
         }
-        cur.guides = index.align(raw, radius * ALIGN_RADIUS_FACTOR, &self.align_skip(sk));
+        let shown = self.visible_handle_points(sk);
+        cur.guides = index.align(
+            raw,
+            radius * ALIGN_RADIUS_FACTOR,
+            &self.align_skip(sk),
+            &shown,
+        );
         if !free_x {
             cur.guides.x = None;
         }
@@ -426,7 +438,7 @@ impl SketchSession {
             // zweiten daraufzulegen (Skizzen 5, Entscheidung 17); Strg schaltet das mit dem Raster ab.
             // Ohne Punkt im Ursprung bindet der Rasterpunkt dort wie der Ursprungsfang (fest auf 0, 0).
             let tol = sk.tolerance().linear;
-            if let Some(p) = sk.point_at(cur.at, tol)
+            if let Some(p) = self.shown_point(sk, cur.at, tol)
                 && let Ok(at) = sk.point_xy(p)
             {
                 cur.at = at;

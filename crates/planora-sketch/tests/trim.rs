@@ -312,7 +312,7 @@ fn a_trimmed_spline_ends_on_the_cutting_curve() {
     let at = s.curve_eval(sp, 3.5).unwrap();
     let before = snapshot(&s);
     assert_eq!(s.trim(sp, at).unwrap(), vec![sp]);
-    let CurveKind::Spline { points } = &s.curve(sp).unwrap().kind else {
+    let CurveKind::Spline { points, .. } = &s.curve(sp).unwrap().kind else {
         panic!("kein Spline")
     };
     assert!(points.len() >= 3, "{points:?}");
@@ -339,7 +339,7 @@ fn a_spline_piece_without_inner_points_gets_its_midpoint() {
     let at = s.curve_eval(sp, 1.5).unwrap();
     let out = s.trim(sp, at).unwrap();
     assert_eq!(out, vec![sp]);
-    let CurveKind::Spline { points } = &s.curve(sp).unwrap().kind else {
+    let CurveKind::Spline { points, .. } = &s.curve(sp).unwrap().kind else {
         panic!("kein Spline")
     };
     assert!(points.len() >= 3, "{points:?}");

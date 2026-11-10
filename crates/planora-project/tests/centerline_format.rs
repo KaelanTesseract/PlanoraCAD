@@ -4,9 +4,7 @@
 
 use planora_feature::*;
 use planora_math::Tolerance;
-use planora_project::{
-    FORMAT_VERSION, ProjectError, decode_version, encode_version, required_format,
-};
+use planora_project::{ProjectError, decode_version, encode_version, required_format};
 use planora_sketch::{LineStyle, Sketch};
 
 /// Skizze mit einer Linie. `style`: 0 normal, 1 Konstruktion, 2 Mittellinie; `remove` löscht
@@ -41,11 +39,6 @@ fn document(style: u8, remove: bool) -> Document {
 fn load(text: &str) -> Result<Document, ProjectError> {
     let s = decode_version(text, "x.json")?;
     Document::from_snapshot(s, 0.05).map_err(|e| ProjectError::Invalid(e.to_string()))
-}
-
-#[test]
-fn format_version_is_16() {
-    assert_eq!(FORMAT_VERSION, 16); // seit Skizzen 6 (Konstruktionsebenen und neue Projektionen)
 }
 
 #[test]
@@ -109,9 +102,10 @@ fn a_centerline_without_construction_in_the_file_is_rejected() {
     assert!(load(&broken).is_err());
 }
 
+// Skizzen 7: Format 17 ist jetzt gültig, zu neu ist erst 18.
 #[test]
-fn format_17_is_too_new() {
+fn format_18_is_too_new() {
     let text = encode_version(&document(2, false).snapshot()).unwrap();
-    let e = load(&text.replacen("\"format\": 14", "\"format\": 17", 1)).unwrap_err();
-    assert!(matches!(e, ProjectError::TooNew { found: 17, .. }), "{e:?}");
+    let e = load(&text.replacen("\"format\": 14", "\"format\": 18", 1)).unwrap_err();
+    assert!(matches!(e, ProjectError::TooNew { found: 18, .. }), "{e:?}");
 }

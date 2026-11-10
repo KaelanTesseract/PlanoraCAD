@@ -165,6 +165,25 @@ impl SolveCache {
     }
 }
 
+impl SolveReport {
+    /// Ist dieser Bericht schlechter als `before`, der Bericht zur Skizze vor einer Änderung? Gelöst
+    /// ist nie schlechter. Sonst: Die Skizze war vorher gelöst, oder jetzt widersprechen sich
+    /// Abhängigkeiten, die es vorher nicht taten, oder sie wurde von widersprüchlich zu nicht lösbar.
+    /// Ein Widerspruch an anderer Stelle, den es schon gab, zählt nicht.
+    pub fn is_worse_than(&self, before: &SolveReport) -> bool {
+        if self.status == SolveStatus::Solved {
+            return false;
+        }
+        before.status == SolveStatus::Solved
+            || self
+                .conflicting
+                .iter()
+                .any(|c| !before.conflicting.contains(c))
+            || (before.status == SolveStatus::Conflicting
+                && self.status == SolveStatus::NotConverged)
+    }
+}
+
 /// Gewicht der weichen Zugbedingung. Klein gegen die harten Residuen (Gewicht 1), damit die
 /// Abhängigkeiten im Zuglauf gewinnen und die Politur nur wenig korrigieren muss; groß genug,
 /// damit der Zug die freien Freiheitsgrade in wenigen Schritten bewegt (Kosten des Zugs bei
@@ -634,7 +653,7 @@ impl Sketch {
         }
     }
 
-    /// Abhängigkeiten der Gruppe, deren Spline-Parameter in `x` außerhalb von `[0, n − 1]`
+    /// Abhängigkeiten der Gruppe, deren Spline-Parameter in `x` außerhalb des Kurvenbereichs
     /// liegt (Spielraum siehe `Sketch::spline_parameter`). Dort läge die Lösung auf der nicht
     /// gezeichneten Fortsetzung des End-Segments; sie gilt nicht als Lösung.
     fn spline_parameters_outside(&self, g: &Group, x: &[f64]) -> Vec<ConstraintId> {
@@ -654,7 +673,7 @@ impl Sketch {
             if let Some(sp) = self.spline_parameter(id, x) {
                 let t = x[sp.var];
                 if t.is_finite() {
-                    x[sp.var] = t.clamp(0.0, sp.end);
+                    x[sp.var] = t.clamp(sp.lo, sp.hi);
                 }
             }
         }
@@ -679,7 +698,10 @@ impl Sketch {
             | CurveKind::EllipticArc { ax, ay, minor, .. } => {
                 !(ok(DVec2::new(x[*ax], x[*ay]).length()) && ok(x[*minor]))
             }
-            CurveKind::Spline { .. } => false,
+            CurveKind::Spline { .. }
+            | CurveKind::ControlSpline { .. }
+            | CurveKind::Conic { .. }
+            | CurveKind::FixedSpline { .. } => false,
         })
     }
 
@@ -919,13 +941,20 @@ impl Sketch {
     /// an der Lage der gelösten Vorlage. Geht die Lage eines Musters nicht, ist ein „gelöst“
     /// „nicht lösbar“: Seine Exemplare stünden sonst still an der alten Lage.
     pub(crate) fn solve_with_soft(&mut self, soft: &[Soft]) -> SolveReport {
+        self.solve_with_soft_holding(soft, &HashSet::new())
+    }
+
+    /// Wie [`solve_with_soft`](Self::solve_with_soft); die Variablen `extra` sind wie Exemplare
+    /// Konstanten des Laufs.
+    fn solve_with_soft_holding(&mut self, soft: &[Soft], extra: &HashSet<usize>) -> SolveReport {
         if self.patterns().next().is_none() {
-            return self.solve_round(soft, &HashSet::new()).0;
+            return self.solve_round(soft, extra, extra).0;
         }
         self.refresh_patterns();
-        let held = self.pattern_vars();
+        let mut held = self.pattern_vars();
+        held.extend(extra.iter().copied());
         let max_rounds = PATTERN_ROUNDS.max(self.patterns().count() + 1);
-        let (mut report, mut reads) = self.solve_round(soft, &held);
+        let (mut report, mut reads) = self.solve_round(soft, &held, extra);
         let mut rounds = 1;
         loop {
             let refresh = self.refresh_patterns();
@@ -942,7 +971,7 @@ impl Sketch {
                 self.flag_stale_pattern_reads(&held, &mut report);
                 break;
             }
-            let (next, again) = self.solve_round(soft, &held);
+            let (next, again) = self.solve_round(soft, &held, extra);
             rounds += 1;
             reads = again;
             report = SolveReport {
@@ -984,7 +1013,17 @@ impl Sketch {
 
     /// Ein Lauf über alle Gruppen; `held` sind die Exemplarvariablen (Konstanten). Der zweite
     /// Wert sagt, ob eine Gruppe Exemplare liest.
-    fn solve_round(&mut self, soft: &[Soft], held: &HashSet<usize>) -> (SolveReport, bool) {
+    ///
+    /// `extra`: Teil von `held`, der nur für diesen Lauf fest steht (anders als Musterexemplare, die
+    /// in jedem Lauf fest stehen). Gruppen, die so eine Variable lesen, gehen nicht über den
+    /// Zwischenspeicher: Ihre Freiheitsgrade gelten nur unter dem Halten, und der Schlüssel kennt
+    /// das Halten nicht. Das volle Lösen danach bekäme sonst diese Zahlen.
+    fn solve_round(
+        &mut self,
+        soft: &[Soft],
+        held: &HashSet<usize>,
+        extra: &HashSet<usize>,
+    ) -> (SolveReport, bool) {
         let tol_r = RESIDUAL_FRACTION * self.tolerance().linear;
         let (groups, in_constraint) = self.build_groups_holding(held, None);
         let reads_patterns = groups.iter().any(|g| !g.pattern_reads.is_empty());
@@ -998,6 +1037,7 @@ impl Sketch {
         let mut group_solves = 0;
         let mut drag_failed = false;
         let touched = |g: &Group| soft.iter().any(|s| g.reads.binary_search(&s.var).is_ok());
+        let only_this_run = |g: &Group| g.reads.iter().any(|v| extra.contains(v));
         let start = self.vars.clone();
         let mut committed = self.vars.clone();
         let old_cache = std::mem::take(&mut self.solve_cache);
@@ -1016,6 +1056,7 @@ impl Sketch {
             // gelöste Gruppe ist an ihren Werten schon gelöst, ein neuer Lauf bräuchte keinen
             // Schritt; eine gescheiterte rechnete ab demselben Start dasselbe.
             if group_soft.is_empty()
+                && !only_this_run(g)
                 && let Some(outcome) = old_cache.lookup(g, &start)
             {
                 match outcome {
@@ -1103,15 +1144,17 @@ impl Sketch {
                 for &v in &g.vars {
                     committed[v] = x[v];
                 }
-                cache.insert(
-                    g,
-                    &x,
-                    Outcome::Solved {
-                        dof: analysis.dof,
-                        redundant: analysis.redundant,
-                        free_vars: analysis.free_vars,
-                    },
-                );
+                if !only_this_run(g) {
+                    cache.insert(
+                        g,
+                        &x,
+                        Outcome::Solved {
+                            dof: analysis.dof,
+                            redundant: analysis.redundant,
+                            free_vars: analysis.free_vars,
+                        },
+                    );
+                }
             } else {
                 // Beim Ziehen sucht die Diagnose für die gezogene Gruppe nicht nach der
                 // Ursache; das holt das volle Lösen am Ende des Ziehens nach.
@@ -1133,7 +1176,7 @@ impl Sketch {
                         conflicting.push(id);
                     }
                 }
-                if full {
+                if full && !only_this_run(g) {
                     cache.insert(
                         g,
                         &start,
@@ -1222,6 +1265,21 @@ impl Sketch {
     /// Zug an einem Musterexemplar zieht dessen Vorlagenpunkt an die entsprechende Stelle (die
     /// Umkehrung der Lage des Exemplars, **Annahme**).
     pub fn drag(&mut self, drags: &[Drag]) -> Result<SolveReport, SketchError> {
+        self.drag_holding(drags, &[])
+    }
+
+    /// Wie [`drag`](Self::drag), aber die Punkte `hold` stehen für den Löser fest wie Exemplare eines
+    /// Musters: Ein Griffzug nimmt den Stützpunkt nicht mit. Weiche Ziele allein täten das, sobald das
+    /// Ziel nicht genau erreichbar ist, denn der Löser verteilt den Rest auf alle Ziele. Geht der Zug
+    /// nur mit einem bewegten `hold`, scheitert die Gruppe wie jeder andere Zug.
+    pub fn drag_holding(
+        &mut self,
+        drags: &[Drag],
+        hold: &[PointId],
+    ) -> Result<SolveReport, SketchError> {
+        for &p in hold {
+            self.check_point(p)?;
+        }
         for d in drags {
             self.check_point(d.point)?;
             if !d.target.is_finite() {
@@ -1257,13 +1315,30 @@ impl Sketch {
                 weight: DRAG_WEIGHT,
             });
         }
-        // Punkte ohne jede Abhängigkeit folgen dem Zug direkt.
+        // Punkte ohne jede Abhängigkeit folgen dem Zug direkt. Ebenso Punkte, die keine aktive Zeile
+        // liest, obwohl eine Abhängigkeit an ihrer Kurve hängt: Der Löser sähe sie in keiner Gruppe,
+        // und das weiche Ziel bliebe ohne Wirkung. So etwa die Spitze eines inneren Griffs, wenn ein
+        // Krümmungsgriff am Ende desselben Splines nur das Ende liest (Handtest Skizzen 7).
+        let mut unread: Option<Vec<bool>> = None;
         for d in drags {
-            if self.point_unconstrained(d.point) {
+            let free = self.point_unconstrained(d.point) || {
+                let read = unread.get_or_insert_with(|| self.build_groups().1);
+                let (xv, yv) = (self.points[d.point].x, self.points[d.point].y);
+                self.instance_drag_target(d.point, DVec2::ZERO).is_none() && !read[xv] && !read[yv]
+            };
+            if free {
                 self.set_point_xy(d.point, d.target.x, d.target.y)?;
             }
         }
-        Ok(self.solve_with_soft(&soft))
+        let mut held = HashSet::new();
+        for &p in hold {
+            // An einem Exemplar steht die Vorlage fest, wie beim Zug selbst.
+            let p = self
+                .instance_drag_target(p, self.pos(p))
+                .map_or(p, |(source, _)| source);
+            held.extend([self.points[p].x, self.points[p].y]);
+        }
+        Ok(self.solve_with_soft_holding(&soft, &held))
     }
 
     /// Zieht den Radius eines Kreises zu `target` (größer als die Toleranz); harte Abhängigkeiten

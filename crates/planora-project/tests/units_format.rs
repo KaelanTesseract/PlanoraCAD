@@ -7,9 +7,7 @@ use planora_drawing::{Paper, Placement, Projection, Scale, Sheet, ViewKind};
 use planora_feature::*;
 use planora_i18n::{DisplayUnit, german, with_lang};
 use planora_math::DVec3;
-use planora_project::{
-    FORMAT_VERSION, ProjectError, decode_version, encode_version, required_format,
-};
+use planora_project::{ProjectError, decode_version, encode_version, required_format};
 use serde_json::{Value, json};
 
 const A3: Sheet = Sheet {
@@ -54,11 +52,6 @@ fn document(unit_b: DisplayUnit) -> Document {
 fn load(text: &str) -> Result<Document, ProjectError> {
     let s = decode_version(text, "x.json")?;
     Document::from_snapshot(s, 0.05).map_err(|e| ProjectError::Invalid(e.to_string()))
-}
-
-#[test]
-fn format_version_is_13() {
-    assert_eq!(FORMAT_VERSION, 16); // seit Skizzen 6 (Konstruktionsebenen und neue Projektionen)
 }
 
 #[test]

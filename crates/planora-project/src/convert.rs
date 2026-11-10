@@ -31,27 +31,29 @@ use planora_feature::{
 };
 use planora_i18n::{DisplayUnit, tr};
 use planora_kernel::BoolOp;
+use planora_math::nurbs::NurbsCurve;
 use planora_math::{DQuat, DVec3, Frame, Tolerance};
 use planora_sketch::pattern::{CircularMode, PatternDir, PatternInstance, PatternKind};
 use planora_sketch::{
     ConstraintId, ConstraintKind, ConstraintRecord, CurveId, CurveKind, CurveRecord,
-    LegacyMigration, LineOrPoints, PatternId, PatternRecord, PatternSlot, PieceRef, PointId,
-    PointRecord, ProfileRef, Sketch, SketchData,
+    HandleCurvature, LegacyMigration, LineOrPoints, PatternId, PatternRecord, PatternSlot,
+    PieceRef, PointId, PointRecord, ProfileRef, Sketch, SketchData, SplineHandle,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Höchste lesbare Formatnummer der Versionsdateien (P7, P12, F7).
-pub const FORMAT_VERSION: u32 = 16;
+pub const FORMAT_VERSION: u32 = 17;
 /// Formatnummer der Rahmendateien `dokument.json` und `.autosave.json`; ihre Struktur ist seit
 /// Format 1 unverändert, ältere Programme öffnen das Projekt deshalb weiter (P7).
 pub const CONTAINER_FORMAT: u32 = 1;
 /// Größte Summe der dekodierten Netzdaten eines Dokuments (wie die Dateigrenze beim Import).
 const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 
-/// Kleinste Formatnummer, die den Stand darstellt (die Regeln in dieser Reihenfolge geprüft): 16
-/// mit einer Konstruktionsebene, einer Skizze auf einer Konstruktionsebene, einer Schnitt-
-/// oder Silhouettenprojektion ([`needs_format_16`]) oder einer vom Grundzustand abweichenden
+/// Kleinste Formatnummer, die den Stand darstellt (die Regeln in dieser Reihenfolge geprüft): 17
+/// mit einer der neuen Kurvenarten aus Skizzen 7 ([`needs_format_17`], auch einem gelöschten
+/// Kurveneintrag), 16 mit einer Konstruktionsebene, einer Skizze auf einer Konstruktionsebene,
+/// einer Schnitt- oder Silhouettenprojektion ([`needs_format_16`]) oder einer vom Grundzustand abweichenden
 /// Sichtbarkeit, 15 mit einem Muster oder einer der
 /// Abhängigkeitsarten aus Skizzen 5 in einer Skizze (auch einem aufgelösten Muster oder
 /// gelöschten Eintrag), 14 mit einer Mittellinie in einer Skizze (auch
@@ -72,7 +74,9 @@ pub fn required_format(s: &Snapshot) -> u32 {
 /// [`required_format`] mit den schon bestimmten Profilfeldern `fields` (eins je Feature).
 fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
     let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
-    if has(needs_format_16) || !s.visibility.is_default() {
+    if has(needs_format_17) {
+        17
+    } else if has(needs_format_16) || !s.visibility.is_default() {
         16
     } else if has(|k| matches!(k, FeatureKind::Sketch(sf) if sf.sketch.needs_format_15())) {
         15
@@ -114,6 +118,23 @@ fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
     } else {
         1
     }
+}
+/// Braucht die Art Format 17 (Skizzen 7)? Eine Skizze mit einem Spline mit Kontrollpunkten, einem
+/// Kegelschnitt, einem festen Spline oder einem Griff, auch einem gelöschten Eintrag: Er steht in der Datei.
+fn needs_format_17(k: &FeatureKind) -> bool {
+    matches!(k, FeatureKind::Sketch(sf) if sf
+    .sketch
+    .curve_entries()
+    .any(|c| match c {
+        CurveKind::ControlSpline { .. } | CurveKind::Conic { .. } | CurveKind::FixedSpline { .. } => {
+            true
+        }
+        CurveKind::Spline { handles, .. } => !handles.is_empty(),
+        _ => false,
+    }) || sf
+        .sketch
+        .constraint_entries()
+        .any(|c| matches!(c, ConstraintKind::SplineCurvatureHandle(..))))
 }
 /// Braucht die Art Format 16 (Skizzen 6)? Konstruktionsebenen, Skizzen auf ihnen und Schnitt-
 /// oder Silhouettenprojektionen. Kantenprojektionen gibt es schon länger, auch verknüpfte, nicht
@@ -323,8 +344,9 @@ fn curve_to(k: &CurveKind) -> CurveKindDto {
             ay: *ay,
             klein: *minor,
         },
-        CurveKind::Spline { points } => CurveKindDto::Spline {
+        CurveKind::Spline { points, handles } => CurveKindDto::Spline {
             punkte: points.iter().map(|p| p.index()).collect(),
+            griffe: handles.iter().map(griff_dto).collect(),
         },
         CurveKind::EllipticArc {
             center,
@@ -341,12 +363,79 @@ fn curve_to(k: &CurveKind) -> CurveKindDto {
             start: start.index(),
             ende: end.index(),
         },
+        CurveKind::ControlSpline {
+            points,
+            degree,
+            knots,
+        } => CurveKindDto::KontrollSpline {
+            punkte: points.iter().map(|p| p.index()).collect(),
+            grad: *degree,
+            knoten: knots.clone(),
+        },
+        CurveKind::Conic {
+            start,
+            end,
+            apex,
+            rho,
+        } => CurveKindDto::Kegelschnitt {
+            start: start.index(),
+            ende: end.index(),
+            scheitel: apex.index(),
+            rho: *rho,
+        },
+        CurveKind::FixedSpline { start, end, curve } => CurveKindDto::FesterSpline {
+            start: start.index(),
+            ende: end.index(),
+            grad: curve.degree(),
+            knoten: curve.knots().knots().to_vec(),
+            punkte: curve.control_points().iter().map(|q| [q.x, q.y]).collect(),
+            gewichte: curve.weights().to_vec(),
+        },
     }
 }
 
-fn curve_from(d: &CurveKindDto) -> CurveKind {
+fn griff_dto(h: &SplineHandle) -> GriffDto {
+    GriffDto {
+        an: h.at.index(),
+        linie: h.line.index(),
+        spitze: h.tip.index(),
+        kruemmung: match h.curvature {
+            HandleCurvature::Form => GriffKruemmungDto::Form,
+            HandleCurvature::Straight => GriffKruemmungDto::Gerade,
+            HandleCurvature::Arc { arc, center, other } => GriffKruemmungDto::Bogen {
+                bogen: arc.index(),
+                mitte: center.index(),
+                anderes: other.index(),
+            },
+        },
+    }
+}
+
+fn griff_from(d: &GriffDto) -> SplineHandle {
     let p = PointId::from_index;
-    match d {
+    SplineHandle {
+        at: p(d.an),
+        line: CurveId::from_index(d.linie),
+        tip: p(d.spitze),
+        curvature: match d.kruemmung {
+            GriffKruemmungDto::Form => HandleCurvature::Form,
+            GriffKruemmungDto::Gerade => HandleCurvature::Straight,
+            GriffKruemmungDto::Bogen {
+                bogen,
+                mitte,
+                anderes,
+            } => HandleCurvature::Arc {
+                arc: CurveId::from_index(bogen),
+                center: p(mitte),
+                other: p(anderes),
+            },
+        },
+    }
+}
+
+fn curve_from(d: &CurveKindDto) -> std::result::Result<CurveKind, String> {
+    let p = PointId::from_index;
+    Ok(match d {
         CurveKindDto::Linie { a, b } => CurveKind::Line { a: p(*a), b: p(*b) },
         CurveKindDto::Kreis { mitte, radius } => CurveKind::Circle {
             center: p(*mitte),
@@ -368,8 +457,9 @@ fn curve_from(d: &CurveKindDto) -> CurveKind {
             ay: *ay,
             minor: *klein,
         },
-        CurveKindDto::Spline { punkte } => CurveKind::Spline {
+        CurveKindDto::Spline { punkte, griffe } => CurveKind::Spline {
             points: punkte.iter().map(|i| p(*i)).collect(),
+            handles: griffe.iter().map(griff_from).collect(),
         },
         CurveKindDto::Ellipsenbogen {
             mitte,
@@ -386,7 +476,47 @@ fn curve_from(d: &CurveKindDto) -> CurveKind {
             start: p(*start),
             end: p(*ende),
         },
-    }
+        CurveKindDto::KontrollSpline {
+            punkte,
+            grad,
+            knoten,
+        } => CurveKind::ControlSpline {
+            points: punkte.iter().map(|i| p(*i)).collect(),
+            degree: *grad,
+            knots: knoten.clone(),
+        },
+        CurveKindDto::Kegelschnitt {
+            start,
+            ende,
+            scheitel,
+            rho,
+        } => CurveKind::Conic {
+            start: p(*start),
+            end: p(*ende),
+            apex: p(*scheitel),
+            rho: *rho,
+        },
+        CurveKindDto::FesterSpline {
+            start,
+            ende,
+            grad,
+            knoten,
+            punkte,
+            gewichte,
+        } => CurveKind::FixedSpline {
+            start: p(*start),
+            end: p(*ende),
+            curve: Arc::new(
+                NurbsCurve::new(
+                    *grad,
+                    knoten.clone(),
+                    punkte.iter().map(|q| DVec3::new(q[0], q[1], 0.0)).collect(),
+                    gewichte.clone(),
+                )
+                .map_err(|e| e.to_string())?,
+            ),
+        },
+    })
 }
 
 fn constraint_to(k: &ConstraintKind) -> ConstraintKindDto {
@@ -443,6 +573,10 @@ fn constraint_to(k: &ConstraintKind) -> ConstraintKindDto {
             wert: *v,
         },
         K::ArcRadius(k) => D::BogenRadius { kurve: c(k) },
+        K::SplineCurvatureHandle(k, a) => D::KruemmungsGriff {
+            kurve: c(k),
+            punkt: p(a),
+        },
         K::EllipticArcEnds(k) => D::EllipsenbogenEnden { kurve: c(k) },
         K::EllipseMajor(k, v) => D::EllipseGross {
             kurve: c(k),
@@ -523,6 +657,7 @@ fn constraint_from(d: &ConstraintKindDto) -> ConstraintKind {
         D::Durchmesser { kurve, wert } => K::Diameter(c(*kurve), *wert),
         D::Winkel { a, b, wert } => K::Angle(c(*a), c(*b), *wert),
         D::BogenRadius { kurve } => K::ArcRadius(c(*kurve)),
+        D::KruemmungsGriff { kurve, punkt } => K::SplineCurvatureHandle(c(*kurve), p(*punkt)),
         D::EllipsenbogenEnden { kurve } => K::EllipticArcEnds(c(*kurve)),
         D::EllipseGross { kurve, wert } => K::EllipseMajor(c(*kurve), *wert),
         D::EllipseKlein { kurve, wert } => K::EllipseMinor(c(*kurve), *wert),
@@ -806,13 +941,15 @@ fn sketch_from(origin: &str, feature: &str, d: &SketchDto) -> Result<(Sketch, us
         curves: d
             .kurven
             .iter()
-            .map(|c| CurveRecord {
-                kind: curve_from(&c.art),
-                construction: c.konstruktion,
-                centerline: c.mittellinie,
-                alive: c.aktiv,
+            .map(|c| {
+                Ok(CurveRecord {
+                    kind: curve_from(&c.art).map_err(ctx)?,
+                    construction: c.konstruktion,
+                    centerline: c.mittellinie,
+                    alive: c.aktiv,
+                })
             })
-            .collect(),
+            .collect::<Result<Vec<_>>>()?,
         constraints: d
             .abhaengigkeiten
             .iter()
@@ -2879,6 +3016,25 @@ fn has_format_16_data(k: &KindDto) -> bool {
     }
 }
 
+/// Inhalt aus Format 17 in einer Feature-Art der Datei (Gegenstück zu [`needs_format_17`]).
+fn has_format_17_data(k: &KindDto) -> bool {
+    matches!(k, KindDto::Skizze(s) if s
+    .skizze
+    .kurven
+    .iter()
+    .any(|c| match &c.art {
+        CurveKindDto::KontrollSpline { .. }
+        | CurveKindDto::Kegelschnitt { .. }
+        | CurveKindDto::FesterSpline { .. } => true,
+        CurveKindDto::Spline { griffe, .. } => !griffe.is_empty(),
+        _ => false,
+    }) || s
+        .skizze
+        .abhaengigkeiten
+        .iter()
+        .any(|c| matches!(c.art, ConstraintKindDto::KruemmungsGriff { .. })))
+}
+
 /// Liest eine Versionsdatei. `origin` ist der Dateiname für Meldungen.
 pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
     // Erst nur das Format lesen, damit eine neuere Datei auch bei geänderter Struktur die
@@ -3020,6 +3176,16 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
                 "proj-since-format",
                 what = tr!("proj-feat-visibility"),
                 format = "16"
+            ),
+        ));
+    }
+    if file.format < 17 && file.features.iter().any(|f| has_format_17_data(&f.art)) {
+        return Err(ProjectError::corrupt(
+            origin,
+            tr!(
+                "proj-since-format",
+                what = tr!("proj-feat-control-spline"),
+                format = "17"
             ),
         ));
     }

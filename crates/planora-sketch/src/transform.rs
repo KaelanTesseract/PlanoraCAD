@@ -16,7 +16,7 @@ use crate::constraint::{ConstraintData, ConstraintId, ConstraintKind, LineOrPoin
 use crate::edit::SETTLE_FACTOR;
 use crate::error::SketchError;
 use crate::fillet::wrap_pi;
-use crate::model::{CurveId, CurveKind, MAX_COORD, PointId, Sketch};
+use crate::model::{CurveId, CurveKind, HandleCurvature, MAX_COORD, PointId, Sketch, SplineHandle};
 use crate::offset::ends_of;
 use planora_i18n::tr;
 use planora_math::DVec2;
@@ -143,6 +143,7 @@ fn map_ids(
         Diameter(x, v) => Diameter(c(*x), *v),
         Angle(a, b, v) => Angle(c(*a), c(*b), *v),
         ArcRadius(x) => ArcRadius(c(*x)),
+        SplineCurvatureHandle(x, a) => SplineCurvatureHandle(c(*x), p(*a)),
         EllipseMajor(x, v) => EllipseMajor(c(*x), *v),
         EllipseMinor(x, v) => EllipseMinor(c(*x), *v),
         EllipseAngle(x, v) => EllipseAngle(c(*x), *v),
@@ -266,8 +267,49 @@ pub(crate) fn map_curve(
             ay: v(*ay),
             minor: v(*minor),
         },
-        CurveKind::Spline { points } => CurveKind::Spline {
+        CurveKind::Spline { points, handles } => CurveKind::Spline {
             points: points.iter().map(|&x| p(x)).collect(),
+            handles: handles
+                .iter()
+                .map(|h| SplineHandle {
+                    at: p(h.at),
+                    line: h.line,
+                    tip: p(h.tip),
+                    curvature: match h.curvature {
+                        HandleCurvature::Arc { arc, center, other } => HandleCurvature::Arc {
+                            arc,
+                            center: p(center),
+                            other: p(other),
+                        },
+                        other => other,
+                    },
+                })
+                .collect(),
+        },
+        CurveKind::ControlSpline {
+            points,
+            degree,
+            knots,
+        } => CurveKind::ControlSpline {
+            points: points.iter().map(|&x| p(x)).collect(),
+            degree: *degree,
+            knots: knots.clone(),
+        },
+        CurveKind::Conic {
+            start,
+            end,
+            apex,
+            rho,
+        } => CurveKind::Conic {
+            start: p(*start),
+            end: p(*end),
+            apex: p(*apex),
+            rho: *rho,
+        },
+        CurveKind::FixedSpline { start, end, curve } => CurveKind::FixedSpline {
+            start: p(*start),
+            end: p(*end),
+            curve: curve.clone(),
         },
         CurveKind::EllipticArc {
             center,
@@ -312,6 +354,10 @@ impl Sketch {
         let (instance_curves, instance_points) = self.instance_parts();
         loop {
             let before = set.out.points.len() + set.out.curves.len();
+            // Griff und Spline gehen zusammen, sonst risse das Trennen den Griff vom Stützpunkt.
+            for c in self.handle_family(&set.out.curves) {
+                set.add_curve(self, c);
+            }
             let (helper_curves, helper_points) = self.helpers_of(&set);
             for c in helper_curves {
                 if !instance_curves.contains(&c) {
@@ -702,6 +748,9 @@ impl Sketch {
             for &c in &set.curves {
                 curves.insert(c, sk.copy_curve_transformed(c, &points, &mut sizes, s)?);
             }
+            for &c in &set.curves {
+                sk.carry_handles(c, curves[&c], &points, &curves);
+            }
             let constraints = sk.copy_inner_constraints(&points, &curves, s)?;
             Ok(CopyMap {
                 points,
@@ -729,9 +778,26 @@ impl Sketch {
             CurveKind::Arc { center, start, end } => {
                 self.add_arc(points[&center], points[&start], points[&end])?
             }
-            CurveKind::Spline { points: list } => {
+            CurveKind::Spline { points: list, .. } => {
                 let mapped: Vec<PointId> = list.iter().map(|p| points[p]).collect();
                 self.add_spline(&mapped)?
+            }
+            CurveKind::ControlSpline {
+                points: list,
+                degree,
+                knots,
+            } => {
+                let mapped: Vec<PointId> = list.iter().map(|p| points[p]).collect();
+                self.add_control_spline_as(&mapped, degree, knots)?
+            }
+            CurveKind::Conic {
+                start,
+                end,
+                apex,
+                rho,
+            } => self.add_conic_as(points[&start], points[&end], points[&apex], rho)?,
+            CurveKind::FixedSpline { .. } => {
+                return Err(SketchError::WrongType(tr!("sketch-fixed-spline-no-copy")));
             }
             ref kind @ (CurveKind::Ellipse { ax, ay, minor, .. }
             | CurveKind::EllipticArc { ax, ay, minor, .. }) => {
@@ -887,6 +953,11 @@ impl Sketch {
         let stretching = s.factor != 1.0;
         // Eine feste Kurve behält auch Größe und Lage ihrer Achsen, wenn die Mitte stehen bleibt.
         for &c in &set.curves {
+            // Der feste Spline bleibt immer stehen, auch ohne `Fixed` an seinen Enden oder wenn sein
+            // einziger Punkt die Mitte des Maßstabs ist.
+            if let CurveKind::FixedSpline { start, .. } = self.curves[c].kind {
+                return Err(TransformBlock::FixedInSet(start));
+            }
             if !self.is_held_curve(c, &held) {
                 continue;
             }
@@ -1140,6 +1211,9 @@ impl Sketch {
     /// (Achshilfslinie, Kantenkopie). Ein Kreis mit fester Mitte und freiem Radius zählt nicht.
     fn is_held_curve(&self, c: CurveId, held: &HashSet<PointId>) -> bool {
         let kind = &self.curves[c].kind;
+        if matches!(kind, CurveKind::FixedSpline { .. }) {
+            return true;
+        }
         if !kind.points().iter().all(|p| held.contains(p)) {
             return false;
         }
@@ -1181,7 +1255,16 @@ impl Sketch {
                 start,
                 end,
             } => self.axes_collapsed(ax, ay, minor) || close(center, start) || close(center, end),
-            CurveKind::Spline { ref points } => points.windows(2).any(|w| close(w[0], w[1])),
+            CurveKind::Spline { ref points, .. } => points.windows(2).any(|w| close(w[0], w[1])),
+            // Kontrollpunkte dürfen zusammenfallen; entartet ist erst die ganze Kurve in einem Punkt.
+            CurveKind::ControlSpline { ref points, .. } => {
+                points.windows(2).all(|w| close(w[0], w[1]))
+            }
+            CurveKind::Conic {
+                start, end, apex, ..
+            } => close(start, apex) && close(apex, end),
+            // Bleibt, wie sie ist; bewegen geht ohnehin nicht.
+            CurveKind::FixedSpline { .. } => false,
         }
     }
 

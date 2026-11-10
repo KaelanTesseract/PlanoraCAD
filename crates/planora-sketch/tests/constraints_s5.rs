@@ -79,7 +79,7 @@ fn into_curve(s: &Sketch, c: CurveId, p: PointId) -> DVec2 {
             let r = at(s, p) - at(s, center);
             if p == start { r.perp() } else { -r.perp() }
         }
-        CurveKind::Spline { points } => {
+        CurveKind::Spline { points, .. } => {
             let n = (points.len() - 1) as f64;
             let h = 1e-6;
             if p == points[0] {
@@ -627,6 +627,94 @@ fn smooth_ends_finds_shared_or_nearest_ends() {
     assert_eq!(
         s.smooth_ends(l, Some(v(-9.5, 0.0)), sp, Some(v(9.0, 0.5))),
         Some((la, p[2]))
+    );
+    // Hängen die Kurven schon an einem Ende zusammen, gilt diese Fuge, wo auch immer geklickt wurde:
+    // Ein Klick nahe dem freien Ende legte sonst beide Enden der einen Kurve auf denselben Punkt
+    // (Handtest Skizzen 7: der Bogen am Spline wurde zum Vollkreis).
+    let mut s = sketch();
+    let (sp, p) = spline(&mut s, &[v(0.0, 0.0), v(5.0, 3.0), v(10.0, 0.0)]);
+    let free = pt(&mut s, -3.0, -3.0);
+    let (l, _, _) = line(&mut s, v(0.0, 0.0), v(-3.0, -3.0));
+    let shared = s.add_line(p[0], free).unwrap();
+    assert_eq!(
+        s.smooth_ends(shared, Some(v(-2.9, -2.9)), sp, Some(v(9.0, 0.5))),
+        Some((p[0], p[0])),
+        "gemeinsamer Punkt"
+    );
+    let (la, _) = ends(&s, l);
+    s.add_constraint(K::Coincident(la, p[0])).unwrap();
+    assert_eq!(
+        s.smooth_ends(l, Some(v(-2.9, -2.9)), sp, None),
+        Some((la, p[0])),
+        "deckungsgleiche Enden"
+    );
+    assert_eq!(
+        s.smooth_ends(sp, None, l, Some(v(-2.9, -2.9))),
+        Some((p[0], la)),
+        "andere Reihenfolge"
+    );
+    // Fuge über eine Kette von „Deckungsgleich“ (ein dritter Punkt dazwischen) und Enden, die ohne
+    // Abhängigkeit aufeinander liegen: Auch sie gelten vor dem Klick, am Anfang und am Ende des
+    // Splines, in beiden Reihenfolgen.
+    for at_end in [false, true] {
+        for chain in [true, false] {
+            let mut s = sketch();
+            let (sp, p) = spline(&mut s, &[v(0.0, 0.0), v(5.0, 3.0), v(10.0, 0.0)]);
+            let fit = if at_end { p[2] } else { p[0] };
+            let f = at(&s, fit);
+            let away = if at_end { v(13.0, 3.0) } else { v(-3.0, -3.0) };
+            let (l, la, _) = line(&mut s, f, away);
+            if chain {
+                let mid = pt(&mut s, f.x, f.y);
+                s.add_constraint(K::Coincident(la, mid)).unwrap();
+                s.add_constraint(K::Coincident(mid, fit)).unwrap();
+            }
+            let what = format!("Ende {at_end}, Kette {chain}");
+            let near_free = away - (away - f) * 0.05;
+            let near_far = at(&s, if at_end { p[0] } else { p[2] });
+            assert_eq!(
+                s.smooth_ends(l, Some(near_free), sp, Some(near_far)),
+                Some((la, fit)),
+                "{what}"
+            );
+            assert_eq!(
+                s.smooth_ends(sp, Some(near_far), l, Some(near_free)),
+                Some((fit, la)),
+                "{what}, andere Reihenfolge"
+            );
+        }
+    }
+    // Vorrang: gemeinsamer Punkt vor Kette vor gleicher Lage, auch gegen den Klick.
+    let mut s = sketch();
+    let (sp, p) = spline(&mut s, &[v(0.0, 0.0), v(5.0, 3.0), v(10.0, 0.0)]);
+    let la = pt(&mut s, 10.0, 0.0);
+    let back = s.add_line(la, p[0]).unwrap();
+    assert_eq!(
+        s.smooth_ends(back, Some(v(9.5, 0.0)), sp, Some(v(9.5, 0.3))),
+        Some((p[0], p[0])),
+        "gemeinsamer Punkt vor gleicher Lage"
+    );
+    let mut s = sketch();
+    let (sp, p) = spline(&mut s, &[v(0.0, 0.0), v(5.0, 3.0), v(10.0, 0.0)]);
+    let (back, la, lb) = line(&mut s, v(10.0, 0.0), v(0.0, 0.0));
+    s.add_constraint(K::Coincident(lb, p[0])).unwrap();
+    assert_eq!(
+        s.smooth_ends(back, Some(v(9.5, 0.0)), sp, Some(v(9.5, 0.3))),
+        Some((lb, p[0])),
+        "Kette vor gleicher Lage"
+    );
+    let _ = la;
+    // Zwei Fugen (geschlossene Kette): Der Klick wählt.
+    let mut s = sketch();
+    let (sp, p) = spline(&mut s, &[v(0.0, 0.0), v(5.0, 3.0), v(10.0, 0.0)]);
+    let back = s.add_line(p[0], p[2]).unwrap();
+    assert_eq!(
+        s.smooth_ends(back, Some(v(9.0, 0.0)), sp, Some(v(9.0, 0.5))),
+        Some((p[2], p[2]))
+    );
+    assert_eq!(
+        s.smooth_ends(back, Some(v(1.0, 0.0)), sp, Some(v(1.0, 0.5))),
+        Some((p[0], p[0]))
     );
     // Kurven ohne Enden und dieselbe Kurve
     let m = pt(&mut s, 50.0, 50.0);

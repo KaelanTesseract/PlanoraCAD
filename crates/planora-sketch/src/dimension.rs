@@ -158,7 +158,12 @@ impl Sketch {
                     (EllipseMinor(c, 0.0), DimMode::Minor)
                 }
             }
-            CurveKind::Spline { .. } => return None,
+            CurveKind::Spline { .. }
+            | CurveKind::ControlSpline { .. }
+            | CurveKind::Conic { .. }
+            | CurveKind::FixedSpline { .. } => {
+                return None;
+            }
         })
     }
 

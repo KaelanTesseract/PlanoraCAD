@@ -1,11 +1,15 @@
 //! Abhängigkeiten und Maße. Jede Abhängigkeit liefert Residuen als `Dual`, also mit exakten
 //! Ableitungen nach den beteiligten Variablen.
 
-use crate::curves::{Sampled, ellipse_eval, spline_eval, spline_second_derivatives};
+use crate::curves::{
+    CONIC_KNOTS, Sampled, conic_weight, ellipse_eval, nurbs_eval_dual, spline_eval,
+    spline_second_derivatives,
+};
 use crate::dual::Dual;
 use crate::error::SketchError;
-use crate::model::{CurveId, CurveKind, PointId, Sketch};
+use crate::model::{CurveId, CurveKind, HandleCurvature, PointId, Sketch};
 use crate::pattern::{PATTERN_MAX_INSTANCES, PatternId, PatternProblem, PatternSlot};
+use crate::spline_handles::{HANDLE_MAX_OPENING, handle_kappa, hermite_eval_dual, nodes_of};
 use planora_i18n::tr;
 use planora_kernel::Id;
 use planora_math::DVec2;
@@ -19,12 +23,13 @@ const MIN_SPLINE_T_TOL: f64 = 1e-12;
 /// Obergrenze dieses Spielraums (zu einem Punkt zusammengezogene End-Segmente).
 const MAX_SPLINE_T_TOL: f64 = 1e-3;
 
-/// Bereich des Spline-Parameters einer parametrischen Abhängigkeit: Variable, Ende `n − 1` und
-/// erlaubter Überstand an beiden Enden.
+/// Bereich des Spline-Parameters einer parametrischen Abhängigkeit: Variable, Bereich `(lo, hi)`
+/// (beim Spline durch Stützpunkte `(0, n − 1)`) und erlaubter Überstand an beiden Enden.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SplineParameter {
     pub var: usize,
-    pub end: f64,
+    pub lo: f64,
+    pub hi: f64,
     pub slack_start: f64,
     pub slack_end: f64,
 }
@@ -32,7 +37,7 @@ pub(crate) struct SplineParameter {
 impl SplineParameter {
     /// Liegt `t` im (um den Spielraum erweiterten) Bereich? NaN liegt nie darin.
     pub fn contains(&self, t: f64) -> bool {
-        t >= -self.slack_start && t <= self.end + self.slack_end
+        t >= self.lo - self.slack_start && t <= self.hi + self.slack_end
     }
 }
 
@@ -98,6 +103,10 @@ pub enum ConstraintKind {
     /// [`Sketch::add_pattern`] anlegt (ab Format 15). Die Lage der Exemplare folgt daraus, siehe
     /// `pattern.rs`.
     PatternValue(PatternId, PatternSlot, f64),
+    /// Intern: Krümmungsgriff des Splines am Stützpunkt (Skizzen 7, B2). Zwei Zeilen: Die Mitte des
+    /// Griff-Bogens liegt auf der Normalen des Tangentengriffs, und die Öffnung des Bogens ist
+    /// `min(L / r, 2,5 rad)`. Es bleibt der Radius als einziger Freiheitsgrad.
+    SplineCurvatureHandle(CurveId, PointId),
 }
 
 impl ConstraintKind {
@@ -224,7 +233,8 @@ impl ConstraintKind {
             | Fixed(p, ..)
             | Midpoint(p, _)
             | DistancePointLine(p, ..)
-            | CenterlineDiameter(p, ..) => vec![*p],
+            | CenterlineDiameter(p, ..)
+            | SplineCurvatureHandle(_, p) => vec![*p],
             _ => vec![],
         }
     }
@@ -247,7 +257,8 @@ impl ConstraintKind {
             | Horizontal(LineOrPoints::Line(c))
             | Vertical(LineOrPoints::Line(c))
             | CenterlineDiameter(_, c, _)
-            | SlotOverall(_, _, c, _) => vec![*c],
+            | SlotOverall(_, _, c, _)
+            | SplineCurvatureHandle(c, _) => vec![*c],
             Parallel(a, b)
             | Perpendicular(a, b)
             | Tangent(a, b)
@@ -305,7 +316,7 @@ type V2 = (Dual, Dual);
 
 /// Auswertungskontext. Erster Durchlauf (`collecting`) sammelt die beteiligten Variablen,
 /// der zweite baut daraus Dual-Zahlen mit Gradienten fester Länge.
-struct Ctx<'a> {
+pub(crate) struct Ctx<'a> {
     sk: &'a Sketch,
     x: &'a [f64],
     locals: RefCell<Vec<usize>>,
@@ -433,14 +444,17 @@ fn ellipse_residual(ctx: &Ctx, c: CurveId, p: &V2) -> Dual {
 }
 
 /// Punkt und Ableitung nach `t` einer (geprüften) Ellipse, eines Ellipsenbogens (auf seiner
-/// ganzen Ellipse) oder eines Splines.
+/// ganzen Ellipse), eines Splines oder einer Freiformkurve.
 fn param_curve(ctx: &Ctx, c: CurveId, t: &Dual) -> (V2, V2) {
     match &ctx.sk.curves[c].kind {
         CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. } => {
             let (m, a, len, minor) = ellipse_of(ctx, c);
             ellipse_eval(&m, &a, &len, &minor, t)
         }
-        CurveKind::Spline { points } => {
+        CurveKind::Spline { points, handles } if !handles.is_empty() => {
+            hermite_eval_dual(&nodes_of(points, handles, |p| ctx.pt(p)), t)
+        }
+        CurveKind::Spline { points, .. } => {
             let pts: Vec<V2> = points.iter().map(|&p| ctx.pt(p)).collect();
             let xs: Vec<Dual> = pts.iter().map(|p| p.0.clone()).collect();
             let ys: Vec<Dual> = pts.iter().map(|p| p.1.clone()).collect();
@@ -451,6 +465,39 @@ fn param_curve(ctx: &Ctx, c: CurveId, t: &Dual) -> (V2, V2) {
             let (x, dx) = spline_eval(&xs, &mx, t);
             let (y, dy) = spline_eval(&ys, &my, t);
             ((x, y), (dx, dy))
+        }
+        CurveKind::ControlSpline {
+            points,
+            degree,
+            knots,
+        } => {
+            let pts: Vec<V2> = points.iter().map(|&p| ctx.pt(p)).collect();
+            nurbs_eval_dual(usize::from(*degree), knots, None, &pts, t)
+        }
+        CurveKind::Conic {
+            start,
+            end,
+            apex,
+            rho,
+        } => {
+            let pts = [ctx.pt(*start), ctx.pt(*apex), ctx.pt(*end)];
+            let weights = [1.0, conic_weight(*rho), 1.0];
+            nurbs_eval_dual(2, &CONIC_KNOTS, Some(&weights), &pts, t)
+        }
+        CurveKind::FixedSpline { curve, .. } => {
+            // Die Kurve steht fest: Zahlen ohne Gradient, nur `t` läuft.
+            let pts: Vec<V2> = curve
+                .control_points()
+                .iter()
+                .map(|q| (Dual::constant(q.x), Dual::constant(q.y)))
+                .collect();
+            nurbs_eval_dual(
+                curve.degree(),
+                curve.knots().knots(),
+                Some(curve.weights()),
+                &pts,
+                t,
+            )
         }
         _ => unreachable!("type was checked"),
     }
@@ -471,7 +518,23 @@ fn is_line_kind(k: &CurveKind) -> bool {
 fn is_param_kind(k: &CurveKind) -> bool {
     matches!(
         k,
-        CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. } | CurveKind::Spline { .. }
+        CurveKind::Ellipse { .. }
+            | CurveKind::EllipticArc { .. }
+            | CurveKind::Spline { .. }
+            | CurveKind::ControlSpline { .. }
+            | CurveKind::Conic { .. }
+            | CurveKind::FixedSpline { .. }
+    )
+}
+
+/// Kurven, auf denen „Punkt auf Kurve“ einen Kurvenparameter als Zusatzvariable braucht.
+fn on_curve_needs_parameter(k: &CurveKind) -> bool {
+    matches!(
+        k,
+        CurveKind::Spline { .. }
+            | CurveKind::ControlSpline { .. }
+            | CurveKind::Conic { .. }
+            | CurveKind::FixedSpline { .. }
     )
 }
 
@@ -542,7 +605,12 @@ pub(crate) fn curve_ends(kind: &CurveKind) -> Option<[PointId; 2]> {
     match kind {
         CurveKind::Line { a, b } => Some([*a, *b]),
         CurveKind::Arc { start, end, .. } => Some([*start, *end]),
-        CurveKind::Spline { points } => Some([*points.first()?, *points.last()?]),
+        CurveKind::Spline { points, .. } | CurveKind::ControlSpline { points, .. } => {
+            Some([*points.first()?, *points.last()?])
+        }
+        CurveKind::Conic { start, end, .. } => Some([*start, *end]),
+        // Geschlossen: zweimal derselbe Punkt.
+        CurveKind::FixedSpline { start, end, .. } => Some([*start, *end]),
         _ => None,
     }
 }
@@ -593,12 +661,38 @@ fn into_curve(ctx: &Ctx, c: CurveId, p: PointId) -> Option<V2> {
                 (r.1, -&r.0)
             }
         }
-        CurveKind::Spline { points } => {
+        CurveKind::Spline { points, .. } => {
             if p == first {
                 param_curve(ctx, c, &Dual::constant(0.0)).1
             } else {
                 let end = (points.len() - 1) as f64;
                 let (_, d) = param_curve(ctx, c, &Dual::constant(end));
+                (-&d.0, -&d.1)
+            }
+        }
+        CurveKind::ControlSpline { knots, .. } => {
+            if p == first {
+                param_curve(ctx, c, &Dual::constant(*knots.first()?)).1
+            } else {
+                let (_, d) = param_curve(ctx, c, &Dual::constant(*knots.last()?));
+                (-&d.0, -&d.1)
+            }
+        }
+        CurveKind::Conic { .. } => {
+            if p == first {
+                param_curve(ctx, c, &Dual::constant(0.0)).1
+            } else {
+                let (_, d) = param_curve(ctx, c, &Dual::constant(1.0));
+                (-&d.0, -&d.1)
+            }
+        }
+        CurveKind::FixedSpline { curve, .. } => {
+            // Geschlossen: `p` ist beides, es gilt der Anfang.
+            let (lo, hi) = curve.domain();
+            if p == first {
+                param_curve(ctx, c, &Dual::constant(lo)).1
+            } else {
+                let (_, d) = param_curve(ctx, c, &Dual::constant(hi));
                 (-&d.0, -&d.1)
             }
         }
@@ -622,7 +716,10 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
                 CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. } => {
                     vec![ellipse_residual(ctx, *c, &pp)]
                 }
-                CurveKind::Spline { .. } => {
+                CurveKind::Spline { .. }
+                | CurveKind::ControlSpline { .. }
+                | CurveKind::Conic { .. }
+                | CurveKind::FixedSpline { .. } => {
                     let t = extra_var(ctx, data);
                     let (q, _) = param_curve(ctx, *c, &t);
                     vec![&q.0 - &pp.0, &q.1 - &pp.1]
@@ -791,12 +888,24 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
         // Nullstelle.
         // Ohne gültige Enden keine Zeile; `settle_constraints` und `satisfied` sorgen dafür, dass
         // ein solches Glatt entfällt.
+        // Dazu die Krümmungszeile `κ₁ + κ₂ = 0` nach Spec C1: Die Richtungen in die Kurven laufen
+        // entgegengesetzt.
         Smooth(c1, p1, c2, p2) => {
             let (Some(u), Some(v)) = (into_curve(ctx, *c1, *p1), into_curve(ctx, *c2, *p2)) else {
                 return Vec::new();
             };
             let w = (-&v.0, -&v.1);
-            vec![cross(&u, &w).atan2(&dot(&u, &w))]
+            let mut rows = vec![cross(&u, &w).atan2(&dot(&u, &w))];
+            if let (Some(e1), Some(e2)) = (smooth_end(sk, *c1, *p1), smooth_end(sk, *c2, *p2))
+                && smooth_has_curvature_row(e1, e2)
+                && let (Some(k1), Some(k2)) = (
+                    smooth_row_kappa(ctx, *c1, *p1, e1),
+                    smooth_row_kappa(ctx, *c2, *p2, e2),
+                )
+            {
+                rows.push(k1 + k2);
+            }
+            rows
         }
         DistanceX(a, b, v) | DistanceY(a, b, v) => {
             let d = sub2(&ctx.pt(*b), &ctx.pt(*a));
@@ -817,6 +926,305 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
         }
         // Keine Zeile: Die Exemplare hält der Löser selbst (`refresh_patterns`).
         PatternValue(..) => Vec::new(),
+        // Ohne Krümmungsgriff keine Zeile; lebend lässt `check_handles` das nicht zu.
+        SplineCurvatureHandle(c, at) => {
+            let Some((tip, center, start, end)) = curvature_handle_points(sk, *c, *at) else {
+                return Vec::new();
+            };
+            let (a, m) = (ctx.pt(*at), ctx.pt(center));
+            let forward = sub2(&ctx.pt(tip), &a);
+            let radial = sub2(&m, &a);
+            // Mitte auf der Normalen, als Winkel von der Normalen auf ihrer Seite: links des Griffs,
+            // wenn der Bogen am Stützpunkt beginnt, rechts, wenn er dort endet. Das nackte
+            // `dot(radial, forward)` ist auch auf der anderen Seite null (B9: Die Seite wechselt nie
+            // durch Lösen), und der Löser erfüllt es, indem er die Mitte auf die neue Normale
+            // projiziert: Bei gedrehtem Griff schrumpft der Radius mit `|cos|`, bei 90° bis auf null.
+            // Der Winkel dreht die Mitte stattdessen mit; die Gegenseite liegt bei ±π und ist keine
+            // Nullstelle.
+            let side = if start == *at { 1.0 } else { -1.0 };
+            let off_normal = dot(&radial, &forward).atan2(&(side * cross(&forward, &radial)));
+            // Bögen laufen gegen den Uhrzeigersinn vom Start zum Ende. Die Öffnung ist höchstens
+            // 2,5 rad, der Sprung von `atan2` bei π ist also weit weg.
+            let (s, e) = (sub2(&ctx.pt(start), &m), sub2(&ctx.pt(end), &m));
+            let opening = cross(&s, &e).atan2(&dot(&s, &e));
+            // Beide Zeilen sind Winkel. Mit einem Faktor `r` (Länge statt Winkel) wären sie bei
+            // `r = 0` erfüllt, und der Löser fände dort ein Tal: Der Bogen fiele in sich zusammen.
+            let ratio = norm_len(&forward) / norm_len(&radial);
+            let want = if ratio.v < HANDLE_MAX_OPENING {
+                ratio
+            } else {
+                Dual::constant(HANDLE_MAX_OPENING)
+            };
+            vec![off_normal, opening - want]
+        }
+    }
+}
+
+/// Spitze, Bogenmitte, Bogenstart und Bogenende des Krümmungsgriffs von `c` am Stützpunkt `at`.
+fn curvature_handle_points(
+    sk: &Sketch,
+    c: CurveId,
+    at: PointId,
+) -> Option<(PointId, PointId, PointId, PointId)> {
+    let CurveKind::Spline { handles, .. } = &sk.curves[c].kind else {
+        return None;
+    };
+    let h = handles.iter().find(|h| h.at == at)?;
+    let HandleCurvature::Arc { arc, center, .. } = h.curvature else {
+        return None;
+    };
+    let CurveKind::Arc { start, end, .. } = sk.curves[arc].kind else {
+        return None;
+    };
+    Some((h.tip, center, start, end))
+}
+
+/// Krümmung `κ = (C' × C'') / |C'|³` aus erster und zweiter Ableitung; 0 ohne Richtung.
+fn kappa_of(first: &V2, second: &V2) -> Dual {
+    let len2 = dot(first, first);
+    if len2.v <= f64::MIN_POSITIVE {
+        return Dual::constant(0.0);
+    }
+    cross(first, second) / (&len2 * &len2.sqrt())
+}
+
+/// Erste und zweite Ableitung am Anfang eines geklemmten B-Splines (Grad mindestens 1).
+fn clamped_start_derivatives(degree: usize, knots: &[f64], pts: &[V2]) -> (V2, V2) {
+    let zero = || (Dual::constant(0.0), Dual::constant(0.0));
+    let quotient = |a: &V2, b: &V2, den: f64, f: f64| -> V2 {
+        if den > 0.0 {
+            let d = sub2(a, b);
+            (&d.0 * (f / den), &d.1 * (f / den))
+        } else {
+            zero()
+        }
+    };
+    let p = degree as f64;
+    let first = quotient(&pts[1], &pts[0], knots[degree + 1] - knots[1], p);
+    if degree < 2 || pts.len() < 3 {
+        return (first, zero());
+    }
+    let next = quotient(&pts[2], &pts[1], knots[degree + 2] - knots[2], p);
+    let second = quotient(&next, &first, knots[degree + 1] - knots[2], p - 1.0);
+    (first, second)
+}
+
+/// Krümmung der Kurve `c` an ihrem Ende `p`, in Zahlen wie in Spec C2: Linie 0, Bogen `±1 / r`, Griff
+/// `Arc` der Griffwert, alle übrigen aus ihrer zweiten Ableitung. Das Vorzeichen gilt in der Richtung
+/// von `p` in die Kurve hinein: positiv bei Linksdrehung. `None`, wenn `p` kein Ende von `c` ist oder
+/// die Kurve keine Enden hat.
+pub(crate) fn end_curvature_dual(ctx: &Ctx, c: CurveId, p: PointId) -> Option<Dual> {
+    let [first, last] = curve_ends(&ctx.sk.curves[c].kind)?;
+    if p != first && p != last {
+        return None;
+    }
+    // Vom hinteren Ende her läuft die Richtung `t` abwärts, das kehrt das Vorzeichen um.
+    let along = |k: Dual| if p == first { k } else { -&k };
+    Some(match &ctx.sk.curves[c].kind {
+        CurveKind::Line { .. } => Dual::constant(0.0),
+        // Gegen den Uhrzeigersinn vom Start aus, also links; vom Ende her rechts.
+        CurveKind::Arc { center, start, .. } => {
+            let r = norm_len(&sub2(&ctx.pt(*start), &ctx.pt(*center)));
+            along(Dual::constant(1.0) / &r)
+        }
+        // Natürliches Ende.
+        CurveKind::Spline { handles, .. } if handles.is_empty() => Dual::constant(0.0),
+        CurveKind::Spline { points, handles } => {
+            if let Some(h) = handles.iter().find(|h| h.at == p)
+                && let HandleCurvature::Arc { center, .. } = h.curvature
+            {
+                let (at, tip, m) = (ctx.pt(p), ctx.pt(h.tip), ctx.pt(center));
+                return Some(along(handle_kappa(&at, &tip, &m)));
+            }
+            let nodes = nodes_of(points, handles, |q| ctx.pt(q));
+            let i = if p == first { 0 } else { points.len() - 1 };
+            along(kappa_of(&nodes.first[i], &nodes.second[i]))
+        }
+        CurveKind::ControlSpline {
+            points,
+            degree,
+            knots,
+        } => {
+            // Vom hinteren Ende aus ist es der Anfang der umgedrehten Kurve; das Vorzeichen gilt
+            // damit schon in die Kurve hinein.
+            let mut pts: Vec<V2> = points.iter().map(|&q| ctx.pt(q)).collect();
+            let mut u = knots.clone();
+            if p != first {
+                pts.reverse();
+                u.reverse();
+                u.iter_mut().for_each(|v| *v = -*v);
+            }
+            let (d1, d2) = clamped_start_derivatives(usize::from(*degree), &u, &pts);
+            kappa_of(&d1, &d2)
+        }
+        CurveKind::Conic {
+            start,
+            end,
+            apex,
+            rho,
+        } => {
+            // Rationale Bézierkurve Grad 2 mit den Gewichten 1, w, 1 an ihrem Anfang:
+            // `κ = ((B − A) × (E − B)) / (2·w²·|B − A|³)`.
+            let (s, e) = if p == *start {
+                (*start, *end)
+            } else {
+                (*end, *start)
+            };
+            let (a, b, f) = (ctx.pt(s), ctx.pt(*apex), ctx.pt(e));
+            let (u, v) = (sub2(&b, &a), sub2(&f, &b));
+            let w = conic_weight(*rho);
+            kappa_of(&u, &v) * (0.5 / (w * w))
+        }
+        CurveKind::FixedSpline { curve, .. } => {
+            let (lo, hi) = curve.domain();
+            let d = curve.derivs(if p == first { lo } else { hi }, 2);
+            let (d1, d2) = (d[1].truncate(), d[2].truncate());
+            let speed = d1.length();
+            along(Dual::constant(if speed > 0.0 {
+                d1.perp_dot(d2) / (speed * speed * speed)
+            } else {
+                0.0
+            }))
+        }
+        // Diese Arten haben keine Enden; `curve_ends` oben hat sie schon abgewiesen.
+        CurveKind::Circle { .. } | CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. } => {
+            return None;
+        }
+    })
+}
+
+/// Woher die Krümmung am Ende einer Glatt-Seite kommt (Spec C1). Hier und in den `match` darunter steht
+/// die ganze Regel, wer mit wem geht und was der Befehl tut; eine neue Kurvenart scheitert in
+/// [`smooth_end`], [`smooth_step`], [`smooth_leader`] und [`smooth_partner_kind`] beim Übersetzen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SmoothEnd {
+    Line,
+    /// Spline durch Stützpunkte, an diesem Ende ohne Griff: Krümmung von selbst 0.
+    Natural,
+    /// Griff `Straight`: Krümmung von selbst 0.
+    Straight,
+    /// Griff `Form`: Krümmung aus der Kurve, nicht steuerbar; das Glatt gilt dort als G1.
+    Form,
+    /// Griff `Arc`.
+    ArcHandle,
+    Arc,
+    /// Die Kontrollpunkte passen sich an, auch auf Krümmung 0.
+    ControlSpline,
+    Conic,
+    /// Mit eigener Krümmung, die sich nie ändert (C5).
+    FixedSpline,
+}
+
+/// Die Art der Seite `c` am Ende `p`; `None` ohne Enden oder wenn `p` keines ist.
+pub(crate) fn smooth_end(sk: &Sketch, c: CurveId, p: PointId) -> Option<SmoothEnd> {
+    let kind = &sk.curves[c].kind;
+    if !curve_ends(kind)?.contains(&p) {
+        return None;
+    }
+    Some(match kind {
+        CurveKind::Line { .. } => SmoothEnd::Line,
+        CurveKind::Arc { .. } => SmoothEnd::Arc,
+        CurveKind::ControlSpline { .. } => SmoothEnd::ControlSpline,
+        CurveKind::Conic { .. } => SmoothEnd::Conic,
+        CurveKind::FixedSpline { .. } => SmoothEnd::FixedSpline,
+        CurveKind::Spline { handles, .. } => match handles.iter().find(|h| h.at == p) {
+            None => SmoothEnd::Natural,
+            Some(h) => match h.curvature {
+                HandleCurvature::Form => SmoothEnd::Form,
+                HandleCurvature::Straight => SmoothEnd::Straight,
+                HandleCurvature::Arc { .. } => SmoothEnd::ArcHandle,
+            },
+        },
+        CurveKind::Circle { .. } | CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. } => {
+            return None;
+        }
+    })
+}
+
+/// Gibt es die Krümmungszeile (C1)? Ein Spline-Ende ohne Griff und ein Griff `Form` haben nie eine:
+/// Gegen Krümmung 0 ist die Fuge beim natürlichen Ende schon G2, sonst ist es der G1-Fall aus C4. Zwei
+/// Seiten mit Krümmung 0 brauchen auch keine.
+fn smooth_has_curvature_row(a: SmoothEnd, b: SmoothEnd) -> bool {
+    let free = |e: SmoothEnd| matches!(e, SmoothEnd::Natural | SmoothEnd::Form);
+    let zero = |e: SmoothEnd| matches!(e, SmoothEnd::Line | SmoothEnd::Straight);
+    !(free(a) || free(b) || (zero(a) && zero(b)))
+}
+
+/// Krümmung einer Seite in der Krümmungszeile; `None` für Seiten, die nie eine Zeile haben.
+fn smooth_row_kappa(ctx: &Ctx, c: CurveId, p: PointId, end: SmoothEnd) -> Option<Dual> {
+    match end {
+        SmoothEnd::Line | SmoothEnd::Straight => Some(Dual::constant(0.0)),
+        SmoothEnd::ArcHandle
+        | SmoothEnd::Arc
+        | SmoothEnd::ControlSpline
+        | SmoothEnd::Conic
+        | SmoothEnd::FixedSpline => end_curvature_dual(ctx, c, p),
+        SmoothEnd::Natural | SmoothEnd::Form => None,
+    }
+}
+
+/// Was der Befehl Glatt an einer Seite tut (Spec C3), siehe [`smooth_step`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SmoothStep {
+    /// Nichts.
+    Keep,
+    /// Griffe an, Tangente und Krümmung vom Partner (C3, erster Fall).
+    Follow,
+    /// Griff `Straight`, ein Krümmungsbogen entfällt (C3, zweiter Fall).
+    Straighten,
+    /// Gleicher Rang: Beide Seiten bekommen den Mittelwert aus Tangente und Krümmung.
+    Mean,
+}
+
+/// Der Schritt für die Seite `me` gegen `other`. Er hängt nicht von der Wahlreihenfolge ab.
+pub(crate) fn smooth_step(me: SmoothEnd, other: SmoothEnd) -> SmoothStep {
+    use SmoothEnd::*;
+    use SmoothStep::*;
+    match (me, other) {
+        // Nur ein Spline durch Stützpunkte hat Griffe. Der Kontrollpunkt-Spline passt sich über die
+        // Krümmungszeile an, der feste Spline nie.
+        (Line | Arc | ControlSpline | Conic | FixedSpline, _) => Keep,
+        (Natural, Arc | ArcHandle | ControlSpline | Conic | FixedSpline) => Follow,
+        (Natural, Line | Natural | Straight | Form) => Keep,
+        // Gegen einen Bogen oder Kegelschnitt ginge Krümmung 0 nie; ein Kontrollpunkt-Spline kann sie.
+        (Straight, Arc | ArcHandle | Conic | FixedSpline) => Follow,
+        (Straight, Line | Natural | Straight | Form | ControlSpline) => Keep,
+        (Form, Arc | ArcHandle | ControlSpline | Conic | FixedSpline) => Follow,
+        (Form, Line | Natural | Straight) => Straighten,
+        (Form, Form) | (ArcHandle, ArcHandle) => Mean,
+        (ArcHandle, Line) => Straighten,
+        (ArcHandle, Arc | ControlSpline | Conic | FixedSpline) => Follow,
+        (ArcHandle, Natural | Straight | Form) => Keep,
+    }
+}
+
+/// Kann diese Art die eine Seite sein, die jedes Glatt braucht (C5)?
+fn smooth_leader(k: &CurveKind) -> bool {
+    match k {
+        CurveKind::Spline { .. }
+        | CurveKind::ControlSpline { .. }
+        | CurveKind::FixedSpline { .. } => true,
+        CurveKind::Line { .. }
+        | CurveKind::Circle { .. }
+        | CurveKind::Arc { .. }
+        | CurveKind::Ellipse { .. }
+        | CurveKind::EllipticArc { .. }
+        | CurveKind::Conic { .. } => false,
+    }
+}
+
+/// Kann diese Art überhaupt an einem Glatt teilhaben (C5)? Ellipsenbogen bleibt abgelehnt.
+fn smooth_partner_kind(k: &CurveKind) -> bool {
+    match k {
+        CurveKind::Line { .. }
+        | CurveKind::Arc { .. }
+        | CurveKind::Spline { .. }
+        | CurveKind::ControlSpline { .. }
+        | CurveKind::Conic { .. }
+        | CurveKind::FixedSpline { .. } => true,
+        CurveKind::Circle { .. } | CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. } => {
+            false
+        }
     }
 }
 
@@ -938,6 +1346,7 @@ impl Sketch {
         self.checked_constraint(id)?;
         if driven {
             self.check_not_pattern_value(id)?;
+            self.check_not_fixed_spline_end(id)?;
         } else if self.constraints[id].driven && self.constraints[id].enabled {
             self.check_activation_cycle(id)?;
             self.check_not_instance_only(id)?;
@@ -953,6 +1362,9 @@ impl Sketch {
         if enabled && !self.constraints[id].enabled && !self.constraints[id].driven {
             self.check_activation_cycle(id)?;
             self.check_not_instance_only(id)?;
+        }
+        if !enabled {
+            self.check_not_fixed_spline_end(id)?;
         }
         self.constraints[id].enabled = enabled;
         self.touch_structure();
@@ -1048,7 +1460,7 @@ impl Sketch {
     }
 
     /// Prüft Ids und Objekttypen (ohne die Zahlenwerte der Maße).
-    fn check_structure(&self, kind: &ConstraintKind) -> Result<(), SketchError> {
+    pub(crate) fn check_structure(&self, kind: &ConstraintKind) -> Result<(), SketchError> {
         for p in kind.points() {
             self.check_point(p)?;
         }
@@ -1137,18 +1549,12 @@ impl Sketch {
             }
             Smooth(a, _, b, _) if a == b => degenerate(tr!("sketch-err-two-objects")),
             Smooth(a, _, b, _) => {
-                let kind = |c: CurveId| &self.curves[c].kind;
-                let spline = |c: CurveId| matches!(kind(c), CurveKind::Spline { .. });
-                let allowed = |c: CurveId| {
-                    matches!(
-                        kind(c),
-                        CurveKind::Line { .. } | CurveKind::Arc { .. } | CurveKind::Spline { .. }
-                    )
-                };
-                if !(allowed(*a) && allowed(*b) && (spline(*a) || spline(*b))) {
-                    wrong(tr!("sketch-smooth-kinds"))
-                } else {
+                if self.smooth_fixed_against_line(*a, *b) {
+                    wrong(tr!("sketch-smooth-fixed-line"))
+                } else if self.smooth_kinds_fit(*a, *b) {
                     Ok(())
+                } else {
+                    wrong(tr!("sketch-smooth-kinds"))
                 }
             }
             DistanceX(a, b, _) | DistanceY(a, b, _) | SlotOverall(a, b, ..) if a == b => {
@@ -1156,6 +1562,13 @@ impl Sketch {
             }
             CenterlineDiameter(_, l, _) if !is_line(*l) => wrong(tr!("sketch-err-only-lines")),
             SlotOverall(_, _, cap, _) if !is_round(*cap) => wrong(tr!("sketch-err-only-circles")),
+            // Dass an `at` wirklich ein Krümmungsgriff sitzt, prüft `check_handles`: Ein gelöschter
+            // Eintrag behält die Zeile, auch wenn der Griff längst weg ist.
+            SplineCurvatureHandle(c, _)
+                if !matches!(self.curves[*c].kind, CurveKind::Spline { .. }) =>
+            {
+                wrong(tr!("sketch-err-handle-kind"))
+            }
             PatternValue(m, slot, _) => match self.patterns.get(*m) {
                 None => Err(SketchError::UnknownObject),
                 Some(d) if !slot.fits(&d.kind) => wrong(tr!("sketch-pattern-slot")),
@@ -1291,29 +1704,102 @@ impl Sketch {
     pub(crate) fn spline_parameter(&self, id: ConstraintId, x: &[f64]) -> Option<SplineParameter> {
         let data = &self.constraints[id];
         let var = data.extra?;
-        let points = data
-            .kind
+        let at = |p: PointId| DVec2::new(x[self.points[p].x], x[self.points[p].y]);
+        let tol = self.tolerance().linear;
+        data.kind
             .curves()
             .iter()
             .find_map(|&c| match &self.curves[c].kind {
-                CurveKind::Spline { points } => Some(points.clone()),
+                CurveKind::Spline { points, .. } => {
+                    let n = points.len();
+                    // Spielraum je Ende: `tol.linear` geteilt durch die Sehnenlänge des
+                    // End-Segments, also etwa `tol.linear` Weglänge auf der Fortsetzung, begrenzt
+                    // auf [MIN_SPLINE_T_TOL, MAX_SPLINE_T_TOL].
+                    let slack = |a: PointId, b: PointId| {
+                        (tol / at(a).distance(at(b))).clamp(MIN_SPLINE_T_TOL, MAX_SPLINE_T_TOL)
+                    };
+                    Some(SplineParameter {
+                        var,
+                        lo: 0.0,
+                        hi: (n - 1) as f64,
+                        slack_start: slack(points[0], points[1]),
+                        slack_end: slack(points[n - 2], points[n - 1]),
+                    })
+                }
+                CurveKind::ControlSpline {
+                    points,
+                    degree,
+                    knots,
+                } => {
+                    let (p, n, k) = (usize::from(*degree), points.len(), knots.len());
+                    // Wie oben, mit der Geschwindigkeit am Ende `p / reach · Sehne`. Zusammen-
+                    // gefallene Punkte (Sehne null) ergeben die Obergrenze; sie wächst mit der
+                    // Breite des End-Stücks, damit auch schmale Bereiche nur wenig überragt werden.
+                    let slack = |a: PointId, b: PointId, reach: f64, piece: f64| {
+                        (tol * reach / (p as f64 * at(a).distance(at(b)))).clamp(
+                            MIN_SPLINE_T_TOL,
+                            (MAX_SPLINE_T_TOL * piece).max(MIN_SPLINE_T_TOL),
+                        )
+                    };
+                    Some(SplineParameter {
+                        var,
+                        lo: knots[0],
+                        hi: knots[k - 1],
+                        slack_start: slack(
+                            points[0],
+                            points[1],
+                            knots[p + 1] - knots[1],
+                            knots[p + 1] - knots[p],
+                        ),
+                        slack_end: slack(
+                            points[n - 2],
+                            points[n - 1],
+                            knots[k - 2] - knots[k - p - 2],
+                            knots[k - p - 1] - knots[k - p - 2],
+                        ),
+                    })
+                }
+                CurveKind::Conic {
+                    start,
+                    end,
+                    apex,
+                    rho,
+                } => {
+                    // Wie oben, mit der Geschwindigkeit am Ende `2w · Schenkel`.
+                    let w = conic_weight(*rho);
+                    let slack = |a: PointId, b: PointId| {
+                        (tol / (2.0 * w * at(a).distance(at(b))))
+                            .clamp(MIN_SPLINE_T_TOL, MAX_SPLINE_T_TOL)
+                    };
+                    Some(SplineParameter {
+                        var,
+                        lo: 0.0,
+                        hi: 1.0,
+                        slack_start: slack(*start, *apex),
+                        slack_end: slack(*apex, *end),
+                    })
+                }
+                CurveKind::FixedSpline { curve, .. } => {
+                    // Wie oben, mit der Geschwindigkeit der Kurve an ihren Enden.
+                    let (lo, hi) = curve.domain();
+                    let (p, k) = (curve.degree(), curve.knots().knots());
+                    let n = k.len();
+                    let slack = |t: f64, piece: f64| {
+                        (tol / curve.derivs(t, 1)[1].length()).clamp(
+                            MIN_SPLINE_T_TOL,
+                            (MAX_SPLINE_T_TOL * piece).max(MIN_SPLINE_T_TOL),
+                        )
+                    };
+                    Some(SplineParameter {
+                        var,
+                        lo,
+                        hi,
+                        slack_start: slack(lo, k[p + 1] - k[p]),
+                        slack_end: slack(hi, k[n - p - 1] - k[n - p - 2]),
+                    })
+                }
                 _ => None,
-            })?;
-        let n = points.len();
-        let at = |p: PointId| DVec2::new(x[self.points[p].x], x[self.points[p].y]);
-        // Spielraum je Ende: `tol.linear` geteilt durch die Sehnenlänge des End-Segments, also
-        // etwa `tol.linear` Weglänge auf der Fortsetzung, begrenzt auf
-        // [MIN_SPLINE_T_TOL, MAX_SPLINE_T_TOL].
-        let slack = |a: PointId, b: PointId| {
-            (self.tolerance().linear / at(a).distance(at(b)))
-                .clamp(MIN_SPLINE_T_TOL, MAX_SPLINE_T_TOL)
-        };
-        Some(SplineParameter {
-            var,
-            end: (n - 1) as f64,
-            slack_start: slack(points[0], points[1]),
-            slack_end: slack(points[n - 2], points[n - 1]),
-        })
+            })
     }
 
     /// Vorzeichen der Tangente `kind` an einem gemeinsamen Endpunkt, aus der aktuellen Geometrie:
@@ -1388,8 +1874,8 @@ impl Sketch {
         }
     }
 
-    /// Abgetastete Form einer Ellipse, der ganzen Ellipse eines Ellipsenbogens oder eines
-    /// Splines (sonst `None`).
+    /// Abgetastete Form einer Ellipse, der ganzen Ellipse eines Ellipsenbogens, eines Splines oder
+    /// einer Freiformkurve (sonst `None`).
     fn sampled(&self, c: CurveId) -> Option<Sampled> {
         match &self.curves[c].kind {
             CurveKind::Ellipse {
@@ -1409,10 +1895,10 @@ impl Sketch {
                 DVec2::new(self.vars[*ax], self.vars[*ay]),
                 self.vars[*minor],
             )),
-            CurveKind::Spline { points } => {
-                let xy: Vec<DVec2> = points.iter().map(|&p| self.pos(p)).collect();
-                Some(Sampled::spline(&xy))
-            }
+            CurveKind::Spline { points, handles } => Some(self.spline_sampled(points, handles)),
+            CurveKind::ControlSpline { .. }
+            | CurveKind::Conic { .. }
+            | CurveKind::FixedSpline { .. } => Some(Sampled::Nurbs(self.nurbs_of(c)?)),
             _ => None,
         }
     }
@@ -1451,6 +1937,7 @@ impl Sketch {
         let angular_row = |row: usize| match kind {
             Parallel(..) | Perpendicular(..) | Angle(..) | EllipseAngle(..) => true,
             Collinear(..) | Smooth(..) => row == 0,
+            SplineCurvatureHandle(..) => true,
             Tangent(a, b) => row == 1 && line_and_param(self, *a, *b).is_some(),
             _ => false,
         };
@@ -1469,9 +1956,7 @@ impl Sketch {
     /// `extra_start`: Punkt auf Spline, Tangente zwischen Linie und Ellipse/Spline.
     pub(crate) fn needs_extra(&self, kind: &ConstraintKind) -> bool {
         match kind {
-            ConstraintKind::PointOnCurve(_, c) => {
-                matches!(self.curves[*c].kind, CurveKind::Spline { .. })
-            }
+            ConstraintKind::PointOnCurve(_, c) => on_curve_needs_parameter(&self.curves[*c].kind),
             ConstraintKind::Tangent(a, b) => line_and_param(self, *a, *b).is_some(),
             _ => false,
         }
@@ -1482,7 +1967,7 @@ impl Sketch {
     pub(crate) fn extra_start(&self, kind: &ConstraintKind) -> Option<f64> {
         match kind {
             ConstraintKind::PointOnCurve(p, c)
-                if matches!(self.curves[*c].kind, CurveKind::Spline { .. }) =>
+                if on_curve_needs_parameter(&self.curves[*c].kind) =>
             {
                 Some(self.sampled(*c)?.nearest_to_point(self.pos(*p)))
             }
@@ -1505,6 +1990,7 @@ impl Sketch {
             ConstraintKind::ArcRadius(_)
                 | ConstraintKind::EllipticArcEnds(_)
                 | ConstraintKind::PatternValue(..)
+                | ConstraintKind::SplineCurvatureHandle(..)
         ) {
             return Err(SketchError::WrongType(tr!(
                 "sketch-err-internal-constraint"
@@ -1680,6 +2166,22 @@ impl Sketch {
         }
     }
 
+    /// Das `Fixed` am Ende eines lebenden festen Splines bleibt (A3): Ohne es verließe der Punkt die
+    /// unveränderliche Kurve. Mit der Kurve geht es.
+    fn check_not_fixed_spline_end(&self, id: ConstraintId) -> Result<(), SketchError> {
+        let ConstraintKind::Fixed(p, ..) = self.constraints[id].kind else {
+            return Ok(());
+        };
+        let holds = |d: &crate::model::CurveData| matches!(d.kind, CurveKind::FixedSpline { start, end, .. } if p == start || p == end);
+        if self.curves().any(|(_, d)| holds(d)) {
+            Err(SketchError::InvalidInput(tr!(
+                "sketch-fixed-spline-keep-fixed"
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
     /// Ein neuer Durchmesser zur Mittellinie braucht eine Mittellinie. Nur beim Anlegen und
     /// Umschalten geprüft: Wer die Mittellinie später ausschaltet, behält ein lösbares Maß, und
     /// eine solche Datei lädt weiter.
@@ -1707,6 +2209,90 @@ impl Sketch {
         Ok(())
     }
 
+    /// Kann die Kurve `c` an einem Glatt teilhaben (Spec C5)? Für die Anzeige, solange die zweite
+    /// Kurve fehlt; auch gelöschte Kurven zählen nach ihrer Art.
+    pub fn smooth_partner(&self, c: CurveId) -> bool {
+        self.curves
+            .get(c)
+            .is_some_and(|d| smooth_partner_kind(&d.kind))
+    }
+
+    /// Geht Glatt zwischen `a` und `b` (Spec C5)? Mindestens eine Seite ist ein Spline einer Art, die
+    /// andere ein gültiger Partner; zwei feste Splines gehen nicht, ein fester Spline und eine Linie
+    /// auch nicht ([`smooth_fixed_against_line`](Self::smooth_fixed_against_line)). Dieselbe Regel
+    /// nutzen die Prüfung und die Oberfläche.
+    pub fn smooth_kinds_fit(&self, a: CurveId, b: CurveId) -> bool {
+        let (Some(ka), Some(kb)) = (self.curves.get(a), self.curves.get(b)) else {
+            return false;
+        };
+        let (ka, kb) = (&ka.kind, &kb.kind);
+        a != b
+            && smooth_partner_kind(ka)
+            && smooth_partner_kind(kb)
+            && (smooth_leader(ka) || smooth_leader(kb))
+            && !(matches!(ka, CurveKind::FixedSpline { .. })
+                && matches!(kb, CurveKind::FixedSpline { .. }))
+            && !self.smooth_fixed_against_line(a, b)
+    }
+
+    /// Sind `a` und `b` ein fester Spline und eine Linie, in beliebiger Folge? Die Krümmung des festen
+    /// Splines ändert sich nie, die der Linie ist 0: Die Krümmungszeile ginge nicht auf, und keine
+    /// Variable könnte helfen. Die Regel gilt nach der Art, auch für ein Ende, das zufällig gerade
+    /// ausläuft; sonst hinge der Befehl an einem Wert, den man nicht sieht.
+    pub fn smooth_fixed_against_line(&self, a: CurveId, b: CurveId) -> bool {
+        let (Some(ka), Some(kb)) = (self.curves.get(a), self.curves.get(b)) else {
+            return false;
+        };
+        matches!(
+            (&ka.kind, &kb.kind),
+            (CurveKind::FixedSpline { .. }, CurveKind::Line { .. })
+                | (CurveKind::Line { .. }, CurveKind::FixedSpline { .. })
+        )
+    }
+
+    /// Das wirksame Glatt zwischen genau diesen Enden, in beiden Reihenfolgen.
+    pub fn smooth_between(
+        &self,
+        a: CurveId,
+        pa: PointId,
+        b: CurveId,
+        pb: PointId,
+    ) -> Option<ConstraintId> {
+        self.constraints().find_map(|(id, d)| match d.kind {
+            ConstraintKind::Smooth(x, px, y, py)
+                if d.enabled
+                    && ((x, px, y, py) == (a, pa, b, pb) || (x, px, y, py) == (b, pb, a, pa)) =>
+            {
+                Some(id)
+            }
+            _ => None,
+        })
+    }
+
+    /// Die andere Seite eines wirksamen Glatt am Ende `at` der Kurve `c`.
+    pub(crate) fn smooth_partner_at(&self, c: CurveId, at: PointId) -> Option<(CurveId, PointId)> {
+        self.constraints().find_map(|(_, d)| match d.kind {
+            ConstraintKind::Smooth(x, px, y, py) if d.enabled => {
+                if (x, px) == (c, at) {
+                    Some((y, py))
+                } else if (y, py) == (c, at) {
+                    Some((x, px))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        })
+    }
+
+    /// Richtung (nicht normiert) aus dem Ende `p` in die Kurve `c` und die Krümmung dort, in Zahlen.
+    pub(crate) fn smooth_end_values(&self, c: CurveId, p: PointId) -> Option<(DVec2, f64)> {
+        let ctx = Ctx::collecting(self, &self.vars);
+        let u = into_curve(&ctx, c, p)?;
+        let k = end_curvature_dual(&ctx, c, p)?;
+        Some((DVec2::new(u.0.v, u.1.v), k.v))
+    }
+
     /// Sind die Punkte eines Glatt noch Enden ihrer Kurven? `true` für alle anderen Arten. Nach
     /// Stutzen, Brechen oder Rundung kann ein Punkt aufhören, Ende zu sein; dann entfällt Glatt
     /// (`settle_constraints`), sonst bliebe ein lebendes Glatt ohne Zeile, das `add_constraint`
@@ -1721,8 +2307,9 @@ impl Sketch {
         is_end(a, pa) && is_end(b, pb)
     }
 
-    /// Die Enden, an denen Glatt die Kurven `a` und `b` verbindet, wie in Fusion an der
-    /// Klickstelle: Wurde eine Kurve per Klick gewählt (`at_a`, `at_b`), gilt ihr Ende, das dem
+    /// Die Enden, an denen Glatt die Kurven `a` und `b` verbindet. Hängen sie schon an Enden
+    /// zusammen (gemeinsamer Punkt oder `Coincident`), gilt diese Fuge; bei mehreren die nächst den
+    /// Klicks. Sonst wie in Fusion an der Klickstelle: Wurde eine Kurve per Klick gewählt (`at_a`, `at_b`), gilt ihr Ende, das dem
     /// Klick am nächsten liegt; ohne Klick (etwa Rahmenauswahl) das Ende, das am nächsten an einem
     /// Ende der anderen Kurve liegt (ein gemeinsames Ende zuerst). Die Weite ist nicht begrenzt:
     /// Getrennte Enden legt der Befehl der Oberfläche mit einem `Coincident` zusammen. Die Wahl
@@ -1756,11 +2343,45 @@ impl Sketch {
                 None => ends.to_vec(),
             }
         };
-        let (ca, cb) = (clicked(ea, at_a), clicked(eb, at_b));
         let gap = |p: PointId, q: PointId| {
             if p == q { 0.0 } else { dist(p, self.pos(q)) }
         };
         let key = |p: PointId, q: PointId| (p.min(q), p.max(q));
+        // Hängen die Kurven schon an Enden zusammen, gilt eine solche Fuge vor dem Klick. Das Ende
+        // nächst dem Klick legte sonst das freie Ende auf die Fuge, und eine Kurve schlösse sich zum
+        // Vollkreis (Handtest Skizzen 7). Rang: gemeinsamer Punkt, Kette aus „Deckungsgleich“, gleiche
+        // Lage ohne Abhängigkeit (bis `tol.linear`). Der Klick wählt nur noch zwischen Fugen
+        // desselben Rangs.
+        let rank = |p: PointId, q: PointId| -> Option<u8> {
+            if p == q {
+                Some(0)
+            } else if self.coincident_chain(p, q) {
+                Some(1)
+            } else if gap(p, q) <= self.tol.linear {
+                Some(2)
+            } else {
+                None
+            }
+        };
+        let joints: Vec<(u8, PointId, PointId)> = ea
+            .iter()
+            .flat_map(|&p| eb.iter().map(move |&q| (p, q)))
+            .filter_map(|(p, q)| rank(p, q).map(|r| (r, p, q)))
+            .collect();
+        if !joints.is_empty() {
+            let off = |p: PointId, at: Option<DVec2>| at.map_or(0.0, |q| dist(p, q));
+            return joints
+                .into_iter()
+                .min_by(|&(ra, p, q), &(rb, r, t)| {
+                    ra.cmp(&rb)
+                        .then_with(|| {
+                            (off(p, at_a) + off(q, at_b)).total_cmp(&(off(r, at_a) + off(t, at_b)))
+                        })
+                        .then_with(|| key(p, q).cmp(&key(r, t)))
+                })
+                .map(|(_, p, q)| (p, q));
+        }
+        let (ca, cb) = (clicked(ea, at_a), clicked(eb, at_b));
         ca.iter()
             .flat_map(|&p| cb.iter().map(move |&q| (p, q)))
             .min_by(|&(p, q), &(r, t)| {
@@ -1772,10 +2393,48 @@ impl Sketch {
             })
     }
 
+    /// Sind `p` und `q` über eine Kette eingeschalteter `Coincident` verbunden (auch direkt)? Für
+    /// Glatt: Eine solche Fuge braucht keine weitere Lagebedingung, sie wäre überzählig.
+    pub fn coincident_chain(&self, p: PointId, q: PointId) -> bool {
+        if p == q {
+            return true;
+        }
+        let pairs: Vec<(PointId, PointId)> = self
+            .constraints()
+            .filter(|(_, k)| k.enabled)
+            .filter_map(|(_, k)| match k.kind {
+                ConstraintKind::Coincident(x, y) => Some((x, y)),
+                _ => None,
+            })
+            .collect();
+        let mut seen = vec![p];
+        let mut open = vec![p];
+        while let Some(x) = open.pop() {
+            for &(a, b) in &pairs {
+                let next = if a == x {
+                    b
+                } else if b == x {
+                    a
+                } else {
+                    continue;
+                };
+                if next == q {
+                    return true;
+                }
+                if !seen.contains(&next) {
+                    seen.push(next);
+                    open.push(next);
+                }
+            }
+        }
+        false
+    }
+
     /// Entfernt eine (nicht interne) Abhängigkeit.
     pub fn remove_constraint(&mut self, id: ConstraintId) -> Result<(), SketchError> {
         self.checked_constraint(id)?;
         self.check_not_pattern_value(id)?;
+        self.check_not_fixed_spline_end(id)?;
         self.constraints[id].alive = false;
         self.touch_structure();
         Ok(())
@@ -1784,8 +2443,13 @@ impl Sketch {
     /// Entfernt die Kurve samt allen Abhängigkeiten, die sie benutzen (auch interne).
     /// Ist sie Vorlage, Exemplar oder Richtungslinie eines Musters, wird das Muster aufgelöst;
     /// ein einzelnes Exemplar löscht die Oberfläche über [`Sketch::suppress_instance`].
+    ///
+    /// Griffe (Skizzen 7, B8): Der Spline nimmt seine Griffe mit. Die Griff-Linie schaltet den Griff
+    /// aus, der Griff-Bogen nur den Krümmungsgriff; der Spline bleibt und springt auf die Form ohne
+    /// sie.
     pub fn remove_curve(&mut self, c: CurveId) -> Result<(), SketchError> {
         self.check_curve(c)?;
+        let released = self.release_handles_of(c);
         self.dissolve_patterns_of_curve(c);
         self.touch_structure();
         self.curves[c].alive = false;
@@ -1798,23 +2462,31 @@ impl Sketch {
         for i in dead {
             self.constraints[i].alive = false;
         }
-        Ok(())
+        self.finish_release(released)
     }
 
     /// Entfernt den Punkt samt allen Kurven und Abhängigkeiten, die ihn benutzen.
     /// Ist er Mitte, Vorlagen- oder Exemplarpunkt eines Musters, wird das Muster aufgelöst.
+    /// Eine Griffspitze nimmt nur den Griff mit, nicht den Spline (Skizzen 7).
     pub fn remove_point(&mut self, p: PointId) -> Result<(), SketchError> {
         self.check_point(p)?;
         self.dissolve_patterns_of_point(p);
         self.touch_structure();
         self.points[p].alive = false;
+        // Zuerst: Danach gehört `p` nicht mehr zu den Punkten des Splines.
+        for part in self.handle_parts_at(p) {
+            self.remove_curve(part)?;
+        }
         let curves: Vec<CurveId> = self
             .curves()
             .filter(|(_, d)| d.kind.points().contains(&p))
             .map(|(i, _)| i)
             .collect();
         for c in curves {
-            self.remove_curve(c)?;
+            // Der Spline an einem Stützpunkt hat seine Griff-Linien schon mitgenommen.
+            if self.check_curve(c).is_ok() {
+                self.remove_curve(c)?;
+            }
         }
         let dead: Vec<ConstraintId> = self
             .constraints
@@ -1859,5 +2531,175 @@ impl Sketch {
             self.touch_structure();
         }
         removed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use planora_math::{Frame, Tolerance};
+
+    /// Wert und Gradient am Stand `x`; der Gradient nach `locals` wie in `evaluate_data`.
+    fn end_kappa(s: &Sketch, c: CurveId, p: PointId, x: &[f64]) -> (f64, Vec<(usize, f64)>) {
+        let collect = Ctx::collecting(s, x);
+        end_curvature_dual(&collect, c, p).unwrap();
+        let locals = collect.locals.into_inner();
+        let ctx = Ctx {
+            sk: s,
+            x,
+            locals: RefCell::new(locals.clone()),
+            collecting: false,
+        };
+        let k = end_curvature_dual(&ctx, c, p).unwrap();
+        let grads = locals.iter().enumerate().map(|(i, &v)| (v, k.grad(i)));
+        (k.v, grads.collect())
+    }
+
+    /// Prüft den Wert gegen `want` und den Gradienten gegen Differenzen.
+    fn check(s: &Sketch, c: CurveId, p: PointId, want: f64) {
+        let x = s.variables().to_vec();
+        let (k, grads) = end_kappa(s, c, p, &x);
+        assert!((k - want).abs() < 1e-9, "κ {k}, soll {want}");
+        let h = 1e-6;
+        for (v, g) in grads {
+            let (mut up, mut down) = (x.clone(), x.clone());
+            up[v] += h;
+            down[v] -= h;
+            let fd = (end_kappa(s, c, p, &up).0 - end_kappa(s, c, p, &down).0) / (2.0 * h);
+            assert!((fd - g).abs() < 1e-6, "Variable {v}: {g} / Differenz {fd}");
+        }
+    }
+
+    /// Krümmung aus der Form, in der Richtung in die Kurve hinein.
+    fn from_form(s: &Sketch, c: CurveId, first: bool) -> f64 {
+        let g = s.geom(c).unwrap();
+        let (lo, hi) = g.domain();
+        if first {
+            g.curvature(lo)
+        } else {
+            -g.curvature(hi)
+        }
+    }
+
+    fn sketch() -> Sketch {
+        Sketch::new(Frame::WORLD, "S", Tolerance::default())
+    }
+
+    fn points(s: &mut Sketch, xy: &[(f64, f64)]) -> Vec<PointId> {
+        xy.iter()
+            .map(|&(x, y)| s.add_point(x, y).unwrap())
+            .collect()
+    }
+
+    const WAVE: [(f64, f64); 5] = [
+        (0.0, 0.0),
+        (10.0, 6.0),
+        (21.0, -3.0),
+        (30.0, 8.0),
+        (42.0, 5.0),
+    ];
+
+    #[test]
+    fn line_and_arc_at_their_ends() {
+        let mut s = sketch();
+        let p = points(&mut s, &[(0.0, 0.0), (5.0, 1.0)]);
+        let line = s.add_line(p[0], p[1]).unwrap();
+        check(&s, line, p[0], 0.0);
+        check(&s, line, p[1], 0.0);
+        // Bogen gegen den Uhrzeigersinn: vom Start aus links, vom Ende aus rechts.
+        let q = points(&mut s, &[(1.0, 1.0), (5.0, 1.0), (1.0, 5.0)]);
+        let arc = s.add_arc(q[0], q[1], q[2]).unwrap();
+        check(&s, arc, q[1], 0.25);
+        check(&s, arc, q[2], -0.25);
+        // Ein Punkt, der kein Ende ist.
+        let x = Ctx::collecting(&s, s.variables());
+        assert!(end_curvature_dual(&x, arc, q[0]).is_none());
+        assert!(end_curvature_dual(&x, line, q[1]).is_none());
+    }
+
+    #[test]
+    fn spline_without_a_handle_is_natural_at_its_end() {
+        let mut s = sketch();
+        let p = points(&mut s, &WAVE);
+        let c = s.add_spline(&p).unwrap();
+        check(&s, c, p[0], 0.0);
+        check(&s, c, p[4], 0.0);
+        let x = Ctx::collecting(&s, s.variables());
+        assert!(end_curvature_dual(&x, c, p[2]).is_none(), "innerer Punkt");
+    }
+
+    /// Spline mit Griffen an beiden Enden; die Spitzen gedreht, sonst ist die Krümmung dort null.
+    fn turned_spline(s: &mut Sketch) -> (CurveId, Vec<PointId>) {
+        let p = points(s, &WAVE);
+        let c = s.add_spline(&p).unwrap();
+        s.activate_tangent_handle(c, p[0]).unwrap();
+        s.activate_tangent_handle(c, p[4]).unwrap();
+        let CurveKind::Spline { handles, .. } = s.curves[c].kind.clone() else {
+            panic!("kein Spline");
+        };
+        s.set_point_xy(handles[0].tip, 1.0, 7.0).unwrap();
+        s.set_point_xy(handles[1].tip, 44.0, 12.0).unwrap();
+        (c, p)
+    }
+
+    #[test]
+    fn spline_with_form_handle_uses_the_form() {
+        let mut s = sketch();
+        let (c, p) = turned_spline(&mut s);
+        let (a, b) = (from_form(&s, c, true), from_form(&s, c, false));
+        assert!(a.abs() > 1e-4 && b.abs() > 1e-4);
+        check(&s, c, p[0], a);
+        check(&s, c, p[4], b);
+    }
+
+    #[test]
+    fn spline_with_arc_handle_gives_the_handle_value() {
+        let mut s = sketch();
+        let (c, p) = turned_spline(&mut s);
+        for at in [p[0], p[4]] {
+            let form = from_form(&s, c, at == p[0]);
+            s.activate_curvature_handle(c, at).unwrap();
+            assert!((form - from_form(&s, c, at == p[0])).abs() < 1e-9);
+            check(&s, c, at, form);
+        }
+    }
+
+    #[test]
+    fn control_spline_and_conic_come_from_their_form() {
+        for (degree, xy) in [(5_u8, &WAVE[..]), (3, &WAVE[..]), (3, &WAVE[..3])] {
+            let mut s = sketch();
+            let p = points(&mut s, xy);
+            let c = s.add_control_spline(&p, degree).unwrap();
+            check(&s, c, p[0], from_form(&s, c, true));
+            check(&s, c, *p.last().unwrap(), from_form(&s, c, false));
+        }
+        // Ungleichmäßige Knoten: ein eingefügter Punkt nahe dem Anfang und dem Ende.
+        let mut s = sketch();
+        let p = points(&mut s, &WAVE);
+        let c = s.add_control_spline(&p, 3).unwrap();
+        for t in [0.05, 0.95] {
+            let (lo, hi) = s.curve_domain(c).unwrap();
+            let q = s.curve_eval(c, lo + t * (hi - lo)).unwrap();
+            s.insert_control_point(c, q).unwrap();
+        }
+        check(&s, c, p[0], from_form(&s, c, true));
+        check(&s, c, p[4], from_form(&s, c, false));
+        // Zwei Kontrollpunkte: gerade, Krümmung null.
+        let mut s = sketch();
+        let p = points(&mut s, &[(0.0, 0.0), (5.0, 5.0)]);
+        let c = s.add_control_spline(&p, 5).unwrap();
+        check(&s, c, p[0], 0.0);
+        check(&s, c, p[1], 0.0);
+        // Kegelschnitte: Ellipse, Parabel, Hyperbel.
+        for rho in [0.3, 0.5, 0.8] {
+            let mut s = sketch();
+            let p = points(&mut s, &[(0.0, 0.0), (10.0, 0.0), (3.0, 7.0)]);
+            let c = s.add_conic(p[0], p[1], p[2], rho).unwrap();
+            let (a, b) = (from_form(&s, c, true), from_form(&s, c, false));
+            // Beide Enden drehen zum Scheitel hin, also in Laufrichtung gegensinnig.
+            assert!(a.abs() > 1e-3 && a.signum() != b.signum(), "{a} / {b}");
+            check(&s, c, p[0], a);
+            check(&s, c, p[1], b);
+        }
     }
 }

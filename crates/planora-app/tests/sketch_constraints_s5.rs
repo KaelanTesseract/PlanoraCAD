@@ -8,18 +8,22 @@ use egui::epaint::{ClippedShape, Shape};
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, Vec2, vec2};
 use planora_app::app::PlanoraApp;
 use planora_app::keymap::Action;
-use planora_app::sketch_state::{ConstraintAction, Item};
+use planora_app::sketch_state::{ConstraintAction, Item, Tool};
 use planora_app::state::{AppState, StandardPlane};
 use planora_app::workspace::Workspace;
 use planora_app::{fonts, sketch_view, theme};
 use planora_feature::SketchPlane;
 use planora_i18n::{english, german, tr, with_lang};
-use planora_math::DVec2;
+use planora_kernel::Curve;
+use planora_math::nurbs::NurbsCurve;
+use planora_math::{DVec2, DVec3};
 use planora_project::config::Config;
 use planora_project::library::Library;
 use planora_sketch::constraint::ConstraintKind as K;
+use planora_sketch::helpers::ProjectStyle;
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
 use planora_sketch::solver::SolveStatus;
+use std::sync::Arc;
 
 const SIZE: Vec2 = vec2(1920.0, 1080.0);
 
@@ -345,7 +349,7 @@ fn collinear_takes_two_and_is_named_like_fusion() {
 }
 
 #[test]
-fn smooth_on_an_arc_says_g1_and_on_a_line_says_nothing() {
+fn smooth_on_arc_has_no_message_any_more() {
     with_lang(&german(), || {
         let c = context();
         let mut app = sketching();
@@ -362,11 +366,10 @@ fn smooth_on_an_arc_says_g1_and_on_a_line_says_nothing() {
         select(&mut app, vec![Item::Curve(sp), Item::Curve(arc)]);
         assert!(available(&mut app).contains(&ConstraintAction::Smooth));
         assert!(!available(&mut app).contains(&ConstraintAction::Concentric));
-        let before = live(&mut app).len();
         press(&c, &mut app, "Glatt");
-        assert_eq!(live(&mut app).len(), before + 1);
-        assert!(matches!(live(&mut app).last(), Some(K::Smooth(..))));
-        assert_eq!(message(&mut app), Some(tr!("sketch-smooth-arc-g1")));
+        assert!(live(&mut app).iter().any(|k| matches!(k, K::Smooth(..))));
+        // Skizzen 7: Glatt am Bogen ist jetzt G2, die Meldung über G1 entfällt.
+        assert_eq!(message(&mut app), None);
 
         // Spline und Linie am gemeinsamen Ende: keine Meldung.
         let (l, _, joint) = line(&mut app, (40.0, 0.0), (50.0, 0.0));
@@ -391,6 +394,49 @@ fn smooth_on_an_arc_says_g1_and_on_a_line_says_nothing() {
             assert!(se.apply(s, ConstraintAction::Smooth, None).is_err());
         }
         assert_eq!(message(&mut app), Some(tr!("sketch-smooth-kinds")));
+    });
+}
+
+/// Skizzen 7: Eine Linie geht an einem festen Spline nicht mit Glatt; der Grund ist genannt, nicht
+/// „Widerspruch“ und nicht die allgemeine Liste der Arten.
+#[test]
+fn smooth_between_a_fixed_spline_and_a_line_says_why() {
+    with_lang(&german(), || {
+        let c = context();
+        let mut app = sketching();
+        let wavy = NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 2.0, 2.0, 2.0],
+            [(0.0, 0.0), (2.0, 5.0), (5.0, 7.0), (9.0, 6.0), (12.0, 3.0)]
+                .iter()
+                .map(|&(x, y)| DVec3::new(x, y, 0.0))
+                .collect(),
+            vec![1.0; 5],
+        )
+        .unwrap();
+        let edge = Curve::Nurbs(Arc::new(wavy));
+        let style = ProjectStyle {
+            construction: false,
+        };
+        let fixed = sk(&mut app)
+            .add_projected_curve(&edge, 0.0, 2.0, style)
+            .unwrap();
+        let (l, ..) = line(&mut app, (12.0, 3.0), (20.0, 3.0));
+        settle(&c, &mut app);
+        for pair in [[fixed, l], [l, fixed]] {
+            select(&mut app, pair.iter().map(|&k| Item::Curve(k)).collect());
+            assert!(!available(&mut app).contains(&ConstraintAction::Smooth));
+            let before = live(&mut app).len();
+            {
+                let (se, s) = state(&mut app).session_sketch_mut().unwrap();
+                assert!(se.apply(s, ConstraintAction::Smooth, None).is_err());
+            }
+            assert_eq!(message(&mut app), Some(tr!("sketch-smooth-fixed-line")));
+            press(&c, &mut app, "Glatt");
+            assert_eq!(message(&mut app), Some(tr!("sketch-smooth-fixed-line")));
+            assert_eq!(live(&mut app).len(), before);
+            state(&mut app).sketch_session.as_mut().unwrap().tool = Tool::Select;
+        }
     });
 }
 
@@ -490,7 +536,7 @@ fn the_three_actions_are_bindable_and_apply_to_the_selection() {
             "Kollinear",
             "Collinear",
         ),
-        (Action::SketchSmooth, "skizze.glatt", "Glatt", "Smooth"),
+        (Action::SketchSmooth, "skizze.glatt", "Glatt", "Curvature"),
     ];
     for (a, id, de, en) in actions {
         assert_eq!(a.id(), id);
@@ -520,14 +566,14 @@ fn the_new_buttons_speak_english() {
         let (c2, _) = circle(&mut app, 30.0, 10.0, 8.0);
         select(&mut app, vec![Item::Curve(c1), Item::Curve(c2)]);
         let shot = settle(&c, &mut app);
-        for label in ["Concentric", "Collinear", "Smooth"] {
+        for label in ["Concentric", "Collinear", "Curvature"] {
             assert!(shot.count(label) >= 1, "{label}");
         }
         let shot = press(&c, &mut app, "Concentric");
         assert!(shot.count("Concentric") >= 2, "Knopf und Listeneintrag");
         assert_eq!(
             ConstraintAction::Smooth.label(),
-            "Smooth",
+            "Curvature",
             "wie der Name in der Liste"
         );
     });
@@ -1058,5 +1104,220 @@ fn delete_is_one_unit_when_a_suppression_is_refused() {
         let (se, s) = state(&mut app).session_sketch_mut().unwrap();
         se.delete_selection(s);
         assert!(s.curve(free).is_none());
+    });
+}
+
+// ---- Glatt G2 (Skizzen 7, Task 9) ---------------------------------------------------------------
+
+#[test]
+fn smooth_is_one_undo_step_with_handles() {
+    with_lang(&german(), || {
+        let c = context();
+        let mut app = sketching();
+        let (m, st, en) = (
+            pt(&mut app, 0.0, 0.0),
+            pt(&mut app, 5.0, 0.0),
+            pt(&mut app, 0.0, 5.0),
+        );
+        let arc = sk(&mut app).add_arc(m, st, en).unwrap();
+        // Getrennte Enden: Coincident, Griffe und Glatt sind ein Schritt.
+        let s0 = pt(&mut app, -1.0, 6.0);
+        let q = [pt(&mut app, -5.0, 8.0), pt(&mut app, -10.0, 6.0)];
+        let sp = sk(&mut app).add_spline(&[s0, q[0], q[1]]).unwrap();
+        settle(&c, &mut app);
+        let before = sk(&mut app).to_data();
+        select(&mut app, vec![Item::Curve(sp), Item::Curve(arc)]);
+        press(&c, &mut app, "Glatt");
+        assert_eq!(message(&mut app), None);
+        let CurveKind::Spline { handles, .. } = sk(&mut app).curve(sp).unwrap().kind.clone() else {
+            panic!("kein Spline");
+        };
+        assert_eq!(handles.len(), 1, "Griff am Ende");
+        assert!(matches!(
+            handles[0].curvature,
+            planora_sketch::HandleCurvature::Arc { .. }
+        ));
+        assert!(live(&mut app).iter().any(|k| matches!(k, K::Smooth(..))));
+        assert!(
+            live(&mut app)
+                .iter()
+                .any(|k| matches!(k, K::Coincident(..)))
+        );
+        assert_eq!(sk(&mut app).clone().solve().status, SolveStatus::Solved);
+        assert!(jump(sk(&mut app), arc, sp) < 1e-6, "G2");
+        undo(&mut app);
+        assert_eq!(sk(&mut app).to_data(), before, "ein Rückgängig nimmt alles");
+    });
+}
+
+/// Krümmungssprung zwischen dem hinteren Ende von `arc` und dem Anfang von `spline`, nur über die
+/// Lage gemessen.
+fn jump(s: &Sketch, arc: CurveId, spline: CurveId) -> f64 {
+    let kappa = |c: CurveId, start: bool| {
+        let (lo, hi) = s.curve_domain(c).unwrap();
+        let h = (hi - lo) * 2e-3;
+        let (t, side) = if start { (lo, 1.0) } else { (hi, -1.0) };
+        let f: [DVec2; 6] =
+            std::array::from_fn(|k| s.curve_eval(c, t + side * k as f64 * h).unwrap());
+        let d = (f[0] * (-137.0 / 60.0) + f[1] * 5.0 - f[2] * 5.0 + f[3] * (10.0 / 3.0)
+            - f[4] * 1.25
+            + f[5] * 0.2)
+            / h
+            * side;
+        let a = (f[0] * (15.0 / 4.0) - f[1] * (77.0 / 6.0) + f[2] * (107.0 / 6.0) - f[3] * 13.0
+            + f[4] * (61.0 / 12.0)
+            - f[5] * (5.0 / 6.0))
+            / (h * h);
+        let k = d.perp_dot(a) / d.length().powi(3);
+        if start { k } else { -k }
+    };
+    (kappa(arc, false) + kappa(spline, true)).abs()
+}
+
+/// C3: Glatt an denselben Enden noch einmal: kein zweites, ein altes G1 wird G2, ein Schritt, keine
+/// Meldung.
+#[test]
+fn smooth_again_on_the_same_ends_makes_old_g1_into_g2() {
+    with_lang(&german(), || {
+        let c = context();
+        let mut app = sketching();
+        let (m, st, en) = (
+            pt(&mut app, 0.0, 0.0),
+            pt(&mut app, 5.0, 0.0),
+            pt(&mut app, 0.0, 5.0),
+        );
+        let arc = sk(&mut app).add_arc(m, st, en).unwrap();
+        let q = [pt(&mut app, -5.0, 8.0), pt(&mut app, -10.0, 6.0)];
+        let sp = sk(&mut app).add_spline(&[en, q[0], q[1]]).unwrap();
+        // Das alte G1: ohne den Befehl.
+        sk(&mut app)
+            .add_constraint(K::Smooth(arc, en, sp, en))
+            .unwrap();
+        assert_eq!(sk(&mut app).solve().status, SolveStatus::Solved);
+        settle(&c, &mut app);
+        assert!(jump(sk(&mut app), arc, sp) > 1e-3);
+        let before = sk(&mut app).to_data();
+        let smooth_count = |app: &mut PlanoraApp| {
+            live(app)
+                .iter()
+                .filter(|k| matches!(k, K::Smooth(..)))
+                .count()
+        };
+        for order in [[sp, arc], [arc, sp]] {
+            select(&mut app, vec![Item::Curve(order[0]), Item::Curve(order[1])]);
+            press(&c, &mut app, "Glatt");
+            assert_eq!(message(&mut app), None, "{order:?}");
+            assert_eq!(smooth_count(&mut app), 1, "kein zweites");
+            assert!(jump(sk(&mut app), arc, sp) < 1e-6, "G2");
+            undo(&mut app);
+            assert_eq!(sk(&mut app).to_data(), before, "ein Schritt");
+        }
+    });
+}
+
+/// Ein Radiusmaß am Griff-Bogen über die Oberfläche: Die Fuge bleibt G2.
+#[test]
+fn a_radius_dimension_on_the_bow_keeps_g2() {
+    with_lang(&german(), || {
+        let c = context();
+        let mut app = sketching();
+        let (m, st, en) = (
+            pt(&mut app, 0.0, 0.0),
+            pt(&mut app, 5.0, 0.0),
+            pt(&mut app, 0.0, 5.0),
+        );
+        let arc = sk(&mut app).add_arc(m, st, en).unwrap();
+        let q = [pt(&mut app, -5.0, 8.0), pt(&mut app, -10.0, 6.0)];
+        let sp = sk(&mut app).add_spline(&[en, q[0], q[1]]).unwrap();
+        settle(&c, &mut app);
+        select(&mut app, vec![Item::Curve(sp), Item::Curve(arc)]);
+        press(&c, &mut app, "Glatt");
+        let CurveKind::Spline { handles, .. } = sk(&mut app).curve(sp).unwrap().kind.clone() else {
+            panic!("kein Spline");
+        };
+        let planora_sketch::HandleCurvature::Arc { arc: bow, .. } = handles[0].curvature else {
+            panic!("kein Bogen");
+        };
+        select(&mut app, vec![Item::Curve(bow)]);
+        let id = {
+            let (se, s) = state(&mut app).session_sketch_mut().unwrap();
+            se.apply(s, ConstraintAction::Radius, Some(5.0)).unwrap()
+        };
+        for r in [8.0, 3.0, 40.0] {
+            let (se, s) = state(&mut app).session_sketch_mut().unwrap();
+            se.set_dimension_value(s, id, r).unwrap();
+            assert!(jump(sk(&mut app), arc, sp) < 1e-6, "r = {r}");
+        }
+    });
+}
+
+#[test]
+fn refused_smooth_leaves_no_handles() {
+    with_lang(&german(), || {
+        let c = context();
+        let mut app = sketching();
+        // Griff-Spitze fest quer zum festen Bogen: Die Tangente lässt sich nicht erfüllen.
+        let (m, st, en) = (
+            pt(&mut app, 0.0, 0.0),
+            pt(&mut app, 5.0, 0.0),
+            pt(&mut app, 0.0, 5.0),
+        );
+        let arc = sk(&mut app).add_arc(m, st, en).unwrap();
+        for (p, x, y) in [(m, 0.0, 0.0), (st, 5.0, 0.0), (en, 0.0, 5.0)] {
+            sk(&mut app).add_constraint(K::Fixed(p, x, y)).unwrap();
+        }
+        let q = [pt(&mut app, -5.0, 8.0), pt(&mut app, -10.0, 6.0)];
+        let sp = sk(&mut app).add_spline(&[en, q[0], q[1]]).unwrap();
+        sk(&mut app).activate_tangent_handle(sp, en).unwrap();
+        let CurveKind::Spline { handles, .. } = sk(&mut app).curve(sp).unwrap().kind.clone() else {
+            panic!("kein Spline");
+        };
+        let tip = handles[0].tip;
+        let at = sk(&mut app).point_xy(tip).unwrap();
+        sk(&mut app)
+            .add_constraint(K::Fixed(tip, at.x, at.y))
+            .unwrap();
+        settle(&c, &mut app);
+        let before = sk(&mut app).to_data();
+        select(&mut app, vec![Item::Curve(sp), Item::Curve(arc)]);
+        {
+            let (se, s) = state(&mut app).session_sketch_mut().unwrap();
+            assert!(se.apply(s, ConstraintAction::Smooth, None).is_err());
+        }
+        assert_eq!(sk(&mut app).to_data(), before, "nichts bleibt");
+        assert!(message(&mut app).is_some());
+    });
+}
+
+#[test]
+fn smooth_is_offered_for_the_partners_of_c5() {
+    with_lang(&german(), || {
+        let mut app = sketching();
+        let k = [
+            pt(&mut app, 0.0, 0.0),
+            pt(&mut app, 8.0, 0.0),
+            pt(&mut app, 4.0, 6.0),
+        ];
+        let conic = sk(&mut app).add_conic(k[0], k[1], k[2], 0.5).unwrap();
+        let p: Vec<PointId> = [(20.0, 0.0), (24.0, 4.0), (28.0, 1.0), (32.0, 4.0)]
+            .iter()
+            .map(|&(x, y)| pt(&mut app, x, y))
+            .collect();
+        let control = sk(&mut app).add_control_spline(&p, 3).unwrap();
+        let (l, ..) = line(&mut app, (0.0, 30.0), (10.0, 30.0));
+        let (m, st, en) = (
+            pt(&mut app, 0.0, 50.0),
+            pt(&mut app, 5.0, 50.0),
+            pt(&mut app, 0.0, 55.0),
+        );
+        let arc = sk(&mut app).add_arc(m, st, en).unwrap();
+        for other in [conic, l, arc] {
+            select(&mut app, vec![Item::Curve(control), Item::Curve(other)]);
+            assert!(available(&mut app).contains(&ConstraintAction::Smooth));
+        }
+        for (x, y) in [(conic, l), (conic, arc), (l, arc)] {
+            select(&mut app, vec![Item::Curve(x), Item::Curve(y)]);
+            assert!(!available(&mut app).contains(&ConstraintAction::Smooth));
+        }
     });
 }

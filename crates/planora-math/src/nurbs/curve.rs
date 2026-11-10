@@ -102,11 +102,34 @@ impl NurbsCurve {
     /// `n` wird auf `MAX_DERIV_ORDER` begrenzt; das Ergebnis hat `min(n, MAX_DERIV_ORDER) + 1`
     /// Einträge.
     pub fn derivs(&self, u: f64, n: usize) -> Vec<DVec3> {
+        let (a, b) = self.knots.domain();
+        let u = if u.is_finite() { u.clamp(a, b) } else { a };
+        self.derivs_at(u, n)
+    }
+
+    /// Wie `point`, aber außerhalb des Parameterbereichs wird das erste bzw. letzte Polynomstück
+    /// fortgesetzt statt zu begrenzen (nicht endliches `u` ergibt den Anfang).
+    pub fn point_unclamped(&self, u: f64) -> DVec3 {
+        self.derivs_unclamped(u, 0)[0]
+    }
+
+    /// Wie `derivs`, aber mit Fortsetzung des ersten bzw. letzten Polynomstücks außerhalb des
+    /// Parameterbereichs.
+    pub fn derivs_unclamped(&self, u: f64, n: usize) -> Vec<DVec3> {
+        let u = if u.is_finite() {
+            u
+        } else {
+            self.knots.domain().0
+        };
+        self.derivs_at(u, n)
+    }
+
+    /// Auswertung bei `u` ohne Begrenzung: der Abschnitt kommt von `find_span` (das begrenzt
+    /// selbst), die Basisfunktionen werden mit dem unbegrenzten `u` berechnet.
+    fn derivs_at(&self, u: f64, n: usize) -> Vec<DVec3> {
         super::work::count();
         let n = n.min(MAX_DERIV_ORDER);
         let p = self.knots.degree();
-        let (a, b) = self.knots.domain();
-        let u = if u.is_finite() { u.clamp(a, b) } else { a };
         let span = self.knots.find_span(u);
         let nd = self.knots.basis_derivs(span, u, n);
         let mut av = vec![DVec3::ZERO; n + 1];

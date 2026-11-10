@@ -64,6 +64,9 @@ pub enum FieldKind {
     PatternCount,
     /// Gesamtwinkel des Kreismusters in Grad: Vorzeichen erlaubt, nie null, höchstens 360°.
     PatternAngle,
+    /// Rho des Kegelschnitts (Skizzen 7): reine Zahl nach [`planora_sketch::conic_rho_ok`], wird nie
+    /// ein Maß.
+    Rho,
 }
 
 impl FieldKind {
@@ -78,7 +81,8 @@ impl FieldKind {
             | FieldKind::ScaleFactor
             | FieldKind::PatternCount1
             | FieldKind::PatternCount2
-            | FieldKind::PatternCount => ParamUnit::Number,
+            | FieldKind::PatternCount
+            | FieldKind::Rho => ParamUnit::Number,
             _ => ParamUnit::Length,
         }
     }
@@ -110,6 +114,7 @@ impl FieldKind {
             FieldKind::PatternSpacing2 => tr!("sketch-pattern-slot-spacing2"),
             FieldKind::PatternCount => tr!("sketch-pattern-slot-count"),
             FieldKind::PatternAngle => tr!("sketch-pattern-slot-angle"),
+            FieldKind::Rho => tr!("sketch-field-rho"),
         }
     }
 
@@ -185,6 +190,7 @@ pub enum Created {
     Circle(CurveId),
     Arc(CurveId),
     Ellipse(CurveId),
+    Conic(CurveId),
     Polygon { ids: PolygonIds, inscribed: bool },
     Slot(SlotIds),
     ArcSlot(ArcSlotIds),
@@ -201,6 +207,7 @@ impl Created {
             Created::Circle(_) => crate::msg!("undo-circle"),
             Created::Arc(_) => crate::msg!("undo-arc"),
             Created::Ellipse(_) => crate::msg!("undo-ellipse"),
+            Created::Conic(_) => crate::msg!("undo-conic"),
             Created::Polygon { .. } => crate::msg!("undo-polygon"),
             Created::Slot(_) | Created::ArcSlot(_) => crate::msg!("undo-slot"),
             Created::Fillet(_) => crate::msg!("undo-fillet"),
@@ -276,6 +283,14 @@ fn read_field(
 ) -> Result<Option<f64>, String> {
     if text.trim().is_empty() {
         return Ok(None);
+    }
+    // Rho ist eine Zahl in der Kurve, kein Parameter: keine Formel, keine Einheit.
+    if kind == FieldKind::Rho {
+        return match crate::sketch_view::parse_number(text) {
+            // Dieselbe Regel wie das Modell, sonst käme die Ablehnung erst beim Abschluss.
+            Some(v) if planora_sketch::conic_rho_ok(v) => Ok(Some(v)),
+            _ => Err(tr!("sketch-field-rho-range")),
+        };
     }
     // Bei der Seitenzahl ist jeder unlesbare Text (auch ein unbekannter Name) ein Bereichsfehler.
     let (v, _) = match resolve(text, kind.unit(), scope) {
@@ -609,7 +624,8 @@ impl SketchSession {
             | F::PatternCount2
             | F::PatternSpacing2
             | F::PatternCount
-            | F::PatternAngle => return None,
+            | F::PatternAngle
+            | F::Rho => return None,
         })
     }
 
@@ -778,13 +794,14 @@ impl SketchSession {
             self.input
                 .fields
                 .iter()
-                // Die Seitenzahl ist kein Maß; sie steht in `DrawInput::sides`. Verschieben und
-                // Maßstab lesen ihre Felder selbst.
+                // Die Seitenzahl ist kein Maß; sie steht in `DrawInput::sides`. Rho liest der
+                // Kegelschnitt, Verschieben und Maßstab lesen ihre Felder selbst.
                 .filter(|f| {
                     f.locked.is_some()
                         && !matches!(
                             f.kind,
                             FieldKind::Sides
+                                | FieldKind::Rho
                                 | FieldKind::MoveX
                                 | FieldKind::MoveY
                                 | FieldKind::MoveAngle

@@ -437,7 +437,7 @@ fn breaking_a_spline_keeps_its_knots_in_the_pieces() {
     let out = s.break_curve(sp, DVec2::new(5.0, 2.0)).unwrap();
     assert_eq!(out.len(), 3, "{out:?}");
     let knots = |k: CurveId| match &s.curve(k).unwrap().kind {
-        CurveKind::Spline { points } => points.clone(),
+        CurveKind::Spline { points, .. } => points.clone(),
         k => panic!("kein Spline: {k:?}"),
     };
     let (a, m, b) = (knots(out[0]), knots(out[1]), knots(out[2]));

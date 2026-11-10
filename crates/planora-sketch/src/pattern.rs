@@ -194,6 +194,8 @@ pub enum PatternProblem {
     /// Eine (nicht interne) Abhängigkeit liest nur Exemplare: Sie hätte keine Wirkung, weil
     /// Exemplare der Vorlage folgen (Schlusskorrektur I1). Maße werden stattdessen anzeigend.
     InstanceOnly,
+    /// Ein fester Spline soll Vorlage sein: Er hat keine Kopie (Skizzen 7).
+    FixedSpline,
 }
 
 impl PatternProblem {
@@ -211,6 +213,7 @@ impl PatternProblem {
             PatternProblem::InstanceAsSource => tr!("sketch-pattern-instance-source"),
             PatternProblem::Cycle => tr!("sketch-pattern-cycle"),
             PatternProblem::InstanceOnly => tr!("sketch-pattern-instance-only"),
+            PatternProblem::FixedSpline => tr!("sketch-fixed-spline-no-copy"),
         }
     }
 
@@ -329,18 +332,23 @@ impl Sketch {
         plan: &PatternPlan,
         steps_per_turn: usize,
     ) -> Result<PatternPreview, SketchError> {
+        let plan = &self.with_handle_sources(plan);
         let transforms = self
             .pattern_transforms(plan)
             .map_err(PatternProblem::error)?;
         let mut s = self.clone();
         let source_points = points_of(&s, &plan.sources);
+        let parts = self.handle_curves();
         let mut out = Vec::with_capacity(transforms.len());
         for (at, t) in &transforms {
             let inst = s.add_instance(&plan.sources, &source_points, *at, t)?;
+            // Griffe gehören zum Exemplar, aber nicht in die Vorschau.
             let lines = inst
                 .curves
                 .iter()
-                .filter_map(|&c| s.curve_polyline(c, steps_per_turn))
+                .zip(&plan.sources)
+                .filter(|(_, source)| !parts.contains(source))
+                .filter_map(|(&c, _)| s.curve_polyline(c, steps_per_turn))
                 .collect();
             out.push((*at, lines));
         }
@@ -351,6 +359,7 @@ impl Sketch {
     /// `PatternValue` (bei „Voll“ ohne Winkel; Anzahl und Abstand der zweiten Richtung auch bei
     /// Anzahl 1), dann einmal lösen. Bei einem Fehler bleibt die Skizze unverändert.
     pub fn add_pattern(&mut self, plan: &PatternPlan) -> Result<PatternId, SketchError> {
+        let plan = &self.with_handle_sources(plan);
         let transforms = self
             .pattern_transforms(plan)
             .map_err(PatternProblem::error)?;
@@ -379,6 +388,14 @@ impl Sketch {
             s.solve();
             Ok(id)
         })
+    }
+
+    /// Der Plan mit den Griffen der Vorlagen als weiteren Vorlagen (und dem Spline eines gewählten
+    /// Griffs): So gehören ihre Kopien zum Exemplar, und dessen Kurven passen weiter zu den Vorlagen.
+    fn with_handle_sources(&self, plan: &PatternPlan) -> PatternPlan {
+        let mut out = plan.clone();
+        out.sources = self.with_handle_family(&plan.sources);
+        out
     }
 
     /// Der gespeicherte Wert eines lebenden Musters im Feld `slot`.
@@ -426,7 +443,7 @@ impl Sketch {
         };
         Some(PatternPlan {
             kind: d.kind,
-            sources: d.sources.clone(),
+            sources: self.without_handle_parts(&d.sources),
             counts,
             values,
             suppressed: d.suppressed.clone(),
@@ -633,6 +650,9 @@ impl Sketch {
             if self.check_curve(c).is_err() || plan.sources[..i].contains(&c) {
                 return Err(PatternProblem::Empty);
             }
+            if self.refuse_fixed_spline(c).is_err() {
+                return Err(PatternProblem::FixedSpline);
+            }
         }
         let mut curves: HashSet<CurveId> = HashSet::new();
         let mut points: HashSet<PointId> = HashSet::new();
@@ -822,8 +842,14 @@ impl Sketch {
             points.push(q);
         }
         let mut curves = Vec::with_capacity(sources.len());
+        let mut copies = HashMap::with_capacity(sources.len());
         for &c in sources {
-            curves.push(self.copy_curve(c, &map, crate::helpers::CopyHow::Pattern(*t))?);
+            let copy = self.copy_curve(c, &map, crate::helpers::CopyHow::Pattern(*t))?;
+            curves.push(copy);
+            copies.insert(c, copy);
+        }
+        for &c in sources {
+            self.carry_handles(c, copies[&c], &map, &copies);
         }
         Ok(PatternInstance { at, points, curves })
     }
@@ -840,7 +866,9 @@ impl Sketch {
         id: PatternId,
         plan: &PatternPlan,
     ) -> Result<PatternEdit, SketchError> {
-        let current = self.pattern_plan(id).ok_or(SketchError::UnknownObject)?;
+        let mut current = self.pattern_plan(id).ok_or(SketchError::UnknownObject)?;
+        current.sources.clone_from(&self.patterns[id].sources);
+        let plan = &self.with_handle_sources(plan);
         self.pattern_transforms(plan)
             .map_err(PatternProblem::error)?;
         let lattice = self.pattern_lattice(plan).map_err(PatternProblem::error)?;

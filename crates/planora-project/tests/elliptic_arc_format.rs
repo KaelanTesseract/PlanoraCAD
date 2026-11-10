@@ -3,9 +3,7 @@
 
 use planora_feature::*;
 use planora_math::{DVec2, Tolerance};
-use planora_project::{
-    FORMAT_VERSION, ProjectError, decode_version, encode_version, required_format,
-};
+use planora_project::{ProjectError, decode_version, encode_version, required_format};
 use planora_sketch::{CurveKind, Sketch};
 
 /// Skizze mit Viertelellipse von (10, 0) nach (0, 5) und der Sehne zurück, dazu eine Extrusion.
@@ -56,11 +54,6 @@ fn load(text: &str) -> Result<Document, ProjectError> {
 }
 
 #[test]
-fn format_version_is_13() {
-    assert_eq!(FORMAT_VERSION, 16); // seit Skizzen 6 (Konstruktionsebenen und neue Projektionen)
-}
-
-#[test]
 fn a_sketch_with_an_elliptic_arc_writes_format_13_and_loads_the_same() {
     let d = document(true, false);
     let s = d.snapshot();
@@ -104,9 +97,10 @@ fn without_an_elliptic_arc_the_file_keeps_its_format() {
     assert!(text.contains("\"format\": 1,"), "{text}");
 }
 
+// Skizzen 7: Format 17 ist jetzt gültig, zu neu ist erst 18.
 #[test]
-fn format_17_is_too_new() {
+fn format_18_is_too_new() {
     let text = encode_version(&document(true, false).snapshot()).unwrap();
-    let e = load(&text.replacen("\"format\": 13", "\"format\": 17", 1)).unwrap_err();
-    assert!(matches!(e, ProjectError::TooNew { found: 17, .. }), "{e:?}");
+    let e = load(&text.replacen("\"format\": 13", "\"format\": 18", 1)).unwrap_err();
+    assert!(matches!(e, ProjectError::TooNew { found: 18, .. }), "{e:?}");
 }

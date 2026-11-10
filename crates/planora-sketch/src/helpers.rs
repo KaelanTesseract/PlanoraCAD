@@ -8,9 +8,11 @@ use crate::error::SketchError;
 use crate::model::{CurveId, CurveKind, PointId, Sketch, finite};
 use planora_i18n::tr;
 use planora_kernel::{Curve, Edge, Face, Id, Solid, Surface};
+use planora_math::nurbs::{NurbsCurve, NurbsError};
 use planora_math::{DVec2, DVec3, Frame, PI, TAU};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::sync::Arc;
 
 /// Höchstzahl zusätzlicher Kopien eines Musters.
 const MAX_PATTERN_COPIES: usize = 100;
@@ -38,7 +40,7 @@ pub struct ProjectStyle {
 }
 
 /// Ein in die Skizzenebene projiziertes Kurvenstück (Werte in Skizzenkoordinaten).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum Projected {
     Line(DVec2, DVec2),
     Circle {
@@ -65,6 +67,157 @@ enum Projected {
         start: DVec2,
         end: DVec2,
     },
+    /// Freiformkurve in Skizzenkoordinaten (`z = 0`). `start` gleich `end` heißt geschlossen.
+    Spline {
+        start: DVec2,
+        end: DVec2,
+        curve: NurbsCurve,
+    },
+}
+
+/// Was von einem projizierten Freiformstück übrig bleibt (Spec F2).
+enum FlatNurbs {
+    /// Alle Kontrollpunkte auf einer Stelle.
+    Point,
+    /// Alle Kontrollpunkte auf der Geraden durch `origin` mit der Richtung `dir` (normiert).
+    Line {
+        origin: DVec2,
+        dir: DVec2,
+    },
+    Free,
+}
+
+/// Abschnitte je Bézier-Stück, in denen die Ausdehnung eines hochkant stehenden Stücks gesucht wird.
+const EDGE_ON_STEPS_PER_SPAN: usize = 32;
+/// Drittelungen, mit denen eine gefundene Spitze nachgeschärft wird.
+const EDGE_ON_REFINE: usize = 60;
+
+/// Gemeinsamer Fehler, wenn sich eine Freiformkante nicht zerlegen lässt.
+fn freeform_failed(_: NurbsError) -> SketchError {
+    unsupported(tr!("sketch-err-freeform-edge"))
+}
+
+/// Das Stück `from … to` (`from < to`) von `c`. Bei einer geschlossenen Kurve dürfen die Parameter
+/// den Bereich verlassen und werden gefaltet wie im Kernel; ein Stück über die Naht wird zusammengesetzt.
+/// Der Parameter bleibt der von `from … to`.
+fn nurbs_range(c: &NurbsCurve, from: f64, to: f64, tol: f64) -> Result<NurbsCurve, SketchError> {
+    let (a, b) = c.domain();
+    let width = b - a;
+    let eps = width * 1e-12;
+    if from >= a - eps && to <= b + eps {
+        return c.sub_curve(from.max(a), to.min(b)).map_err(freeform_failed);
+    }
+    if !c.is_closed(tol) || to - from > width + eps {
+        return Err(SketchError::Degenerate(tr!("sketch-err-edge-no-range")));
+    }
+    let shift = (from - a).div_euclid(width) * width;
+    let (u0, u1) = (from - shift, to - shift);
+    if b - u0 <= eps {
+        let part = c.sub_curve(a, u1 - b + a).map_err(freeform_failed)?;
+        return shifted(&part, shift + width);
+    }
+    if u1 <= b + eps {
+        let part = c.sub_curve(u0, u1.min(b)).map_err(freeform_failed)?;
+        return shifted(&part, shift);
+    }
+    let first = c.sub_curve(u0, b).map_err(freeform_failed)?;
+    if u1 - b <= eps {
+        return shifted(&first, shift);
+    }
+    let second = c.sub_curve(a, u1 - width).map_err(freeform_failed)?;
+    let second = shifted(&second, width)?;
+    let joined = joined_at_seam(&first, &second)?;
+    shifted(&joined, shift)
+}
+
+/// `c` mit um `by` verschobenem Parameter.
+fn shifted(c: &NurbsCurve, by: f64) -> Result<NurbsCurve, SketchError> {
+    NurbsCurve::new(
+        c.degree(),
+        c.knots().knots().iter().map(|k| k + by).collect(),
+        c.control_points().to_vec(),
+        c.weights().to_vec(),
+    )
+    .map_err(freeform_failed)
+}
+
+/// Hängt `next` an `first`: Sein erster Kontrollpunkt fällt mit dem letzten von `first` zusammen, der
+/// Parameter läuft durch, der Knoten dort hat die Vielfachheit des Grades. Die homogene Teilung erlaubt,
+/// alle Gewichte von `next` mit einem Faktor anzugleichen; die Kurve ändert sich dadurch nicht.
+fn joined_at_seam(first: &NurbsCurve, next: &NurbsCurve) -> Result<NurbsCurve, SketchError> {
+    let p = first.degree();
+    let (ka, kb) = (first.knots().knots(), next.knots().knots());
+    let mut knots = ka[..ka.len() - 1].to_vec();
+    knots.extend_from_slice(&kb[p + 1..]);
+    let mut control = first.control_points().to_vec();
+    control.extend_from_slice(&next.control_points()[1..]);
+    let scale = first.weights()[first.weights().len() - 1] / next.weights()[0];
+    let mut weights = first.weights().to_vec();
+    weights.extend(next.weights()[1..].iter().map(|w| w * scale));
+    NurbsCurve::new(p, knots, control, weights).map_err(freeform_failed)
+}
+
+/// Einordnung nach den Kontrollpunkten (die Kurve liegt in ihrer konvexen Hülle).
+fn flat_nurbs(c: &NurbsCurve, tol: f64) -> FlatNurbs {
+    let pts: Vec<DVec2> = c.control_points().iter().map(|q| q.truncate()).collect();
+    let (mut far, mut pair) = (0.0, (pts[0], pts[0]));
+    for (i, &p) in pts.iter().enumerate() {
+        for &q in &pts[i + 1..] {
+            let d = p.distance(q);
+            if d > far {
+                (far, pair) = (d, (p, q));
+            }
+        }
+    }
+    if far <= tol {
+        return FlatNurbs::Point;
+    }
+    let dir = (pair.1 - pair.0) / far;
+    if pts.iter().all(|p| (*p - pair.0).perp_dot(dir).abs() <= tol) {
+        FlatNurbs::Line {
+            origin: pair.0,
+            dir,
+        }
+    } else {
+        FlatNurbs::Free
+    }
+}
+
+/// Die wirkliche Ausdehnung des auf die Gerade projizierten Stücks, abgetastet und an den Spitzen
+/// nachgeschärft; die Linie läuft vom Anfang des Stücks in Richtung seines Endes.
+fn edge_on_line(c: &NurbsCurve, origin: DVec2, dir: DVec2) -> (DVec2, DVec2) {
+    let (lo, hi) = c.domain();
+    let along = |t: f64| (c.point(t).truncate() - origin).dot(dir);
+    let n = c.knots().spans_in(lo, hi).max(1) * EDGE_ON_STEPS_PER_SPAN;
+    let at = |k: usize| lo + (hi - lo) * k as f64 / n as f64;
+    let (mut low, mut high) = (0, 0);
+    for k in 1..=n {
+        if along(at(k)) < along(at(low)) {
+            low = k;
+        }
+        if along(at(k)) > along(at(high)) {
+            high = k;
+        }
+    }
+    let refined = |k: usize, sign: f64| {
+        let (mut u, mut v) = (at(k.saturating_sub(1)), at((k + 1).min(n)));
+        for _ in 0..EDGE_ON_REFINE {
+            let (a, b) = (u + (v - u) / 3.0, v - (v - u) / 3.0);
+            if sign * along(a) < sign * along(b) {
+                u = a;
+            } else {
+                v = b;
+            }
+        }
+        sign * (sign * along(0.5 * (u + v))).max(sign * along(at(k)))
+    };
+    let (min, max) = (refined(low, -1.0), refined(high, 1.0));
+    let (p0, p1) = (origin + dir * min, origin + dir * max);
+    if along(lo) <= along(hi) {
+        (p0, p1)
+    } else {
+        (p1, p0)
+    }
 }
 
 /// Wie [`Sketch::copy_curve`] kopiert: verschoben (lineares Muster), gespiegelt an einer Achse mit
@@ -94,8 +247,8 @@ impl Sketch {
         result
     }
 
-    /// Prüft die Quellkurven für Spiegeln und Muster: vorhanden, ohne Doppelte, nur Linien,
-    /// Kreise, Bögen und Ellipsenbögen.
+    /// Prüft die Quellkurven für Spiegeln und Muster: vorhanden, ohne Doppelte, keine ganze
+    /// Ellipse (Skizzen 7: Splines beider Arten gehen jetzt), kein fester Spline.
     fn check_copy_sources(&self, curves: &[CurveId]) -> Result<(), SketchError> {
         if curves.is_empty() {
             return Err(SketchError::InvalidInput(tr!("sketch-nothing-selected")));
@@ -105,12 +258,18 @@ impl Sketch {
             if curves[..i].contains(&c) {
                 return Err(SketchError::InvalidInput(tr!("sketch-err-object-twice")));
             }
-            if matches!(
-                self.curves[c].kind,
-                CurveKind::Ellipse { .. } | CurveKind::Spline { .. }
-            ) {
+            if matches!(self.curves[c].kind, CurveKind::Ellipse { .. }) {
                 return Err(SketchError::WrongType(tr!("sketch-err-copy-kinds")));
             }
+            self.refuse_fixed_spline(c)?;
+        }
+        Ok(())
+    }
+
+    /// Ein fester Spline ändert sich nicht und hat keine Kopie (Spec E); alle anderen Kurven gehen.
+    pub(crate) fn refuse_fixed_spline(&self, c: CurveId) -> Result<(), SketchError> {
+        if matches!(self.curves[c].kind, CurveKind::FixedSpline { .. }) {
+            return Err(SketchError::WrongType(tr!("sketch-fixed-spline-no-copy")));
         }
         Ok(())
     }
@@ -146,9 +305,10 @@ impl Sketch {
     /// Legt eine Kopie der Kurve `source` an, deren Punkte über `map` abgebildet werden; Stil wie
     /// die Vorlage. Beim Spiegeln (`CopyHow::Mirror`) werden Bögen und Ellipsenbögen mit
     /// vertauschtem Start und Ende angelegt und die große Halbachse eines Ellipsenbogens
-    /// gespiegelt. Nur Muster (`CopyHow::Pattern`) kopieren auch Ellipsen und Splines; Radius und
-    /// Halbachsen nehmen den Maßstab, die große Halbachse die Drehung der Lage mit. Gibt die neue
-    /// Kurve zurück.
+    /// gespiegelt; Splines behalten die Reihenfolge ihrer Punkte, ein Spline mit Kontrollpunkten
+    /// auch Grad und Knoten. Nur Muster (`CopyHow::Pattern`) kopieren auch ganze Ellipsen; Radius
+    /// und Halbachsen nehmen den Maßstab, die große Halbachse die Drehung der Lage mit. Gibt die
+    /// neue Kurve zurück.
     pub(crate) fn copy_curve(
         &mut self,
         source: CurveId,
@@ -206,11 +366,28 @@ impl Sketch {
                 let major = t.linear(DVec2::new(self.vars[ax], self.vars[ay]));
                 self.add_ellipse(map[&center], major, self.vars[minor] * factor)?
             }
-            CurveKind::Spline { points } if matches!(how, CopyHow::Pattern(_)) => {
+            CurveKind::Spline { points, .. } => {
                 let mapped: Vec<PointId> = points.iter().map(|p| map[p]).collect();
                 self.add_spline(&mapped)?
             }
-            CurveKind::Ellipse { .. } | CurveKind::Spline { .. } => {
+            CurveKind::ControlSpline {
+                points,
+                degree,
+                knots,
+            } => {
+                let mapped: Vec<PointId> = points.iter().map(|p| map[p]).collect();
+                self.add_control_spline_as(&mapped, degree, knots)?
+            }
+            CurveKind::Conic {
+                start,
+                end,
+                apex,
+                rho,
+            } => self.add_conic_as(map[&start], map[&end], map[&apex], rho)?,
+            CurveKind::FixedSpline { .. } => {
+                return Err(SketchError::WrongType(tr!("sketch-fixed-spline-no-copy")));
+            }
+            CurveKind::Ellipse { .. } => {
                 return Err(SketchError::WrongType(tr!("sketch-err-copy-kinds")));
             }
         };
@@ -230,11 +407,16 @@ impl Sketch {
         Ok(p)
     }
 
-    /// Spiegelt Linien, Kreise, Bögen und Ellipsenbögen an der Linie `axis`. Jeder Punkt bekommt
+    /// Spiegelt Linien, Kreise, Bögen, Ellipsenbögen und Splines an der Linie `axis`. Jeder Punkt bekommt
     /// ein Spiegelbild mit `Symmetric`-Abhängigkeit (Punkte auf der Achse werden
     /// wiederverwendet), Kreise ein `Equal` zum Original. Bögen und Ellipsenbögen werden mit
     /// vertauschtem Start und Ende angelegt; die Halbachsen eines gespiegelten Ellipsenbogens
     /// sind nicht an das Original gebunden.
+    ///
+    /// Griffe (Skizzen 7) gehen mit dem Spline und umgekehrt, geliefert werden nur die Kopien von
+    /// `curves`. `at` und `tip` bekommen `Symmetric`, zwei Krümmungsbögen `Equal`. Mitte und freies Ende
+    /// eines Bogens bekommen nichts und immer einen eigenen Punkt: Den Rest halten seine internen
+    /// Zeilen, jede weitere wäre überzählig.
     pub fn add_mirrored(
         &mut self,
         curves: &[CurveId],
@@ -245,7 +427,8 @@ impl Sketch {
             return Err(SketchError::WrongType(tr!("sketch-err-mirror-line")));
         };
         self.check_copy_sources(curves)?;
-        if curves.contains(&axis) {
+        let all = self.with_handle_family(curves);
+        if all.contains(&axis) {
             return Err(SketchError::InvalidInput(tr!("sketch-err-mirror-self")));
         }
         let (origin, dir) = (self.pos(aa), self.pos(ab) - self.pos(aa));
@@ -255,16 +438,19 @@ impl Sketch {
         let d = dir.normalize();
         self.atomically(|s| {
             let tol = s.tolerance().linear;
+            let bows = s.handle_arcs(&all);
             let mut map: HashMap<PointId, PointId> = HashMap::new();
-            let mut out = Vec::with_capacity(curves.len());
-            for &c in curves {
+            let mut copies: HashMap<CurveId, CurveId> = HashMap::new();
+            for &c in &all {
                 for p in s.curves[c].kind.points() {
                     if map.contains_key(&p) {
                         continue;
                     }
                     let xy = s.pos(p);
                     let on_axis = (xy - origin).perp_dot(d).abs() <= tol;
-                    if on_axis {
+                    if bows.iter().any(|b| b.1 == p || b.2 == p) {
+                        map.insert(p, s.add_point_like(p, reflect(xy, origin, d))?);
+                    } else if on_axis {
                         map.insert(p, p);
                     } else {
                         let q = s.add_point_like(p, reflect(xy, origin, d))?;
@@ -276,9 +462,15 @@ impl Sketch {
                 if matches!(s.curves[c].kind, CurveKind::Circle { .. }) {
                     s.add_constraint(ConstraintKind::Equal(c, copy))?;
                 }
-                out.push(copy);
+                copies.insert(c, copy);
             }
-            Ok(out)
+            for &c in &all {
+                s.carry_handles(c, copies[&c], &map, &copies);
+            }
+            for &(arc, ..) in &bows {
+                s.add_constraint(ConstraintKind::Equal(arc, copies[&arc]))?;
+            }
+            Ok(curves.iter().map(|c| copies[c]).collect())
         })
     }
 
@@ -304,6 +496,9 @@ impl Sketch {
             return Err(SketchError::Degenerate(tr!("sketch-err-offset-zero")));
         }
         self.check_copy_sources(curves)?;
+        let all = self.with_handle_family(curves);
+        // Griffe binden nichts an die Vorlage, so wenig wie der Spline, zu dem sie gehören (**Annahme**).
+        let parts = self.handle_curves();
         let first = self.curves[curves[0]].kind.points()[0];
         let horizontal = offset.y.abs() <= tol;
         let vertical = offset.x.abs() <= tol;
@@ -314,23 +509,36 @@ impl Sketch {
             for k in 1..=count {
                 let shift = offset * k as f64;
                 let mut map: HashMap<PointId, PointId> = HashMap::new();
-                let mut group = Vec::with_capacity(curves.len());
-                for &c in curves {
+                let mut copies: HashMap<CurveId, CurveId> = HashMap::new();
+                for &c in &all {
                     for p in s.curves[c].kind.points() {
                         if let Entry::Vacant(slot) = map.entry(p) {
                             slot.insert(s.add_point_like(p, s.pos(p) + shift)?);
                         }
                     }
                     let copy = s.copy_curve(c, &map, CopyHow::Shift)?;
+                    copies.insert(c, copy);
+                    if parts.contains(&c) {
+                        continue;
+                    }
                     // `Equal` gibt es nur für Linien, Kreise und Bögen.
-                    if !matches!(s.curves[c].kind, CurveKind::EllipticArc { .. }) {
+                    if !matches!(
+                        s.curves[c].kind,
+                        CurveKind::EllipticArc { .. }
+                            | CurveKind::Spline { .. }
+                            | CurveKind::ControlSpline { .. }
+                            | CurveKind::Conic { .. }
+                    ) {
                         created.push(s.add_constraint(ConstraintKind::Equal(c, copy))?);
                     }
                     if matches!(s.curves[c].kind, CurveKind::Line { .. }) {
                         created.push(s.add_constraint(ConstraintKind::Parallel(c, copy))?);
                     }
-                    group.push(copy);
                 }
+                for &c in &all {
+                    s.carry_handles(c, copies[&c], &map, &copies);
+                }
+                let group: Vec<CurveId> = curves.iter().map(|c| copies[c]).collect();
                 let moved = map[&first];
                 created.push(s.add_constraint(ConstraintKind::Distance(
                     first,
@@ -378,12 +586,12 @@ impl Sketch {
     }
 
     /// Projiziert das Kurvenstück `curve(t0 … t1)` orthogonal in die Skizzenebene und legt es
-    /// als feste Geometrie an: Linie, Kreis, Bogen, Ellipse oder Ellipsenbogen (schräger
-    /// Kreisbogen, Teilstück einer Ellipse). Die Punkte bekommen `Fixed`-Werte, Kreise einen
-    /// `Radius`, Ellipsen und Ellipsenbögen `EllipseMajor`, `EllipseMinor` und `EllipseAngle`.
-    /// Mit `construction: false` sind Kurve und Punkte normale Geometrie (verknüpfte Projektion,
-    /// bildet Profile). Freiformkurven und Stücke, die nur ein Punkt oder eine Strecke wären,
-    /// werden abgelehnt; die Skizze bleibt dann unverändert.
+    /// als feste Geometrie an: Linie, Kreis, Bogen, Ellipse, Ellipsenbogen (schräger Kreisbogen,
+    /// Teilstück einer Ellipse) oder fester Spline (Freiformkurve). Die Punkte bekommen
+    /// `Fixed`-Werte, Kreise einen `Radius`, Ellipsen und Ellipsenbögen `EllipseMajor`,
+    /// `EllipseMinor` und `EllipseAngle`. Mit `construction: false` sind Kurve und Punkte normale
+    /// Geometrie (verknüpfte Projektion, bildet Profile). Stücke, die nur ein Punkt wären, werden
+    /// abgelehnt; die Skizze bleibt dann unverändert.
     pub fn add_projected_curve(
         &mut self,
         curve: &Curve,
@@ -461,6 +669,20 @@ impl Sketch {
                     s.push_internal(ConstraintKind::EllipticArcEnds(e));
                     e
                 }
+                Projected::Spline { start, end, curve } => {
+                    let a = s.add_fixed_point(start, construction)?;
+                    // Geschlossene Kante: ein fester Punkt.
+                    let b = if start == end {
+                        a
+                    } else {
+                        s.add_fixed_point(end, construction)?
+                    };
+                    s.push_curve(CurveKind::FixedSpline {
+                        start: a,
+                        end: b,
+                        curve: Arc::new(curve),
+                    })
+                }
             };
             s.curves[c].construction = construction;
             Ok(c)
@@ -524,6 +746,15 @@ impl Sketch {
         self.check_curve(id)?;
         from.check_curve(id)?;
         let projected = match from.curves[id].kind {
+            CurveKind::FixedSpline {
+                start,
+                end,
+                ref curve,
+            } => Projected::Spline {
+                start: from.pos(start),
+                end: from.pos(end),
+                curve: (**curve).clone(),
+            },
             CurveKind::Line { a, b } => Projected::Line(from.pos(a), from.pos(b)),
             CurveKind::Circle { center, radius } => Projected::Circle {
                 center: from.pos(center),
@@ -558,7 +789,9 @@ impl Sketch {
                 start: from.pos(start),
                 end: from.pos(end),
             },
-            CurveKind::Spline { .. } => {
+            CurveKind::Spline { .. }
+            | CurveKind::ControlSpline { .. }
+            | CurveKind::Conic { .. } => {
                 return Err(unsupported(tr!("sketch-err-edge-type-changed")));
             }
         };
@@ -572,6 +805,7 @@ impl Sketch {
             // Neue Maße, die in den Abhängigkeiten nachgeführt werden.
             let mut radius_value = None;
             let mut ellipse_values = None;
+            let mut new_shape = false;
             match (projected, kind) {
                 (Projected::Line(p0, p1), CurveKind::Line { a, b }) => {
                     s.set_point_xy(a, p0.x, p0.y)?;
@@ -639,6 +873,29 @@ impl Sketch {
                     s.set_point_xy(a, start.x, start.y)?;
                     s.set_point_xy(b, end.x, end.y)?;
                 }
+                // Andere Knoten oder ein anderer Grad sind keine Artänderung. Wird aus der offenen
+                // Kante eine geschlossene oder umgekehrt, passen die Punkte nicht mehr: Das zählt als
+                // Artänderung (**Annahme**).
+                (
+                    Projected::Spline {
+                        start,
+                        end,
+                        curve: new,
+                    },
+                    CurveKind::FixedSpline {
+                        start: a, end: b, ..
+                    },
+                ) if (start == end) == (a == b) => {
+                    s.set_point_xy(a, start.x, start.y)?;
+                    s.set_point_xy(b, end.x, end.y)?;
+                    s.curves[curve].kind = CurveKind::FixedSpline {
+                        start: a,
+                        end: b,
+                        curve: Arc::new(new),
+                    };
+                    // Der neue Bereich passt nicht mehr zu den alten Parametern.
+                    new_shape = true;
+                }
                 _ => return Err(unsupported(tr!("sketch-err-edge-type-changed"))),
             }
             // Die Fixwerte und Maße, die `add_projected` angelegt hat, mitführen.
@@ -675,6 +932,9 @@ impl Sketch {
             }
             s.touch_structure();
             s.refresh_shared_signs(Some(curve));
+            if new_shape {
+                s.reseed_extras(curve);
+            }
             Ok(())
         })
     }
@@ -696,8 +956,17 @@ impl Sketch {
     }
 
     /// Ob das Kurvenstück `curve(t0 … t1)` in der Skizzenebene nur ein Punkt wäre: eine Gerade
-    /// senkrecht zur Skizzenebene. Andere Kurven liefern `false`.
+    /// senkrecht zur Skizzenebene oder eine Freiformkurve, deren Kontrollpunkte alle auf eine Stelle
+    /// fallen. Andere Kurven liefern `false`.
     pub fn projects_to_point(&self, curve: &Curve, t0: f64, t1: f64) -> bool {
+        if let Curve::Nurbs(c) = curve {
+            return self.project_nurbs(c, t0, t1).is_ok_and(|piece| {
+                matches!(
+                    flat_nurbs(&piece, self.tolerance().linear),
+                    FlatNurbs::Point
+                )
+            });
+        }
         let Curve::Line { .. } = curve else {
             return false;
         };
@@ -784,8 +1053,54 @@ impl Sketch {
                 major,
                 minor,
             } => self.project_ellipse_piece(curve, (cf, *major, *minor), t0, t1, full),
-            Curve::Nurbs(_) => Err(unsupported(tr!("sketch-err-freeform-edge"))),
+            Curve::Nurbs(c) => {
+                let piece = self.project_nurbs(c, t0, t1)?;
+                match flat_nurbs(&piece, tol.linear) {
+                    FlatNurbs::Point => Err(unsupported(tr!("sketch-err-curve-perpendicular"))),
+                    FlatNurbs::Line { origin, dir } => {
+                        let (p0, p1) = edge_on_line(&piece, origin, dir);
+                        if p0.distance(p1) <= tol.linear {
+                            return Err(unsupported(tr!("sketch-err-curve-perpendicular")));
+                        }
+                        Ok(Projected::Line(p0, p1))
+                    }
+                    FlatNurbs::Free => {
+                        let (lo, hi) = piece.domain();
+                        let start = piece.point(lo).truncate();
+                        let end = piece.point(hi).truncate();
+                        Ok(Projected::Spline {
+                            start,
+                            // Geschlossen heißt in der Skizze: genau ein Punkt.
+                            end: if start.distance(end) <= tol.linear {
+                                start
+                            } else {
+                                end
+                            },
+                            curve: piece,
+                        })
+                    }
+                }
+            }
         }
+    }
+
+    /// Das Stück `t0 … t1` der Freiformkurve `c` in Skizzenkoordinaten (`z = 0`), absteigend umgedreht:
+    /// Kontrollpunkte abgebildet, Gewichte und Knoten unverändert. Das ist exakt, auch rational, denn
+    /// die Abbildung ist affin.
+    fn project_nurbs(&self, c: &NurbsCurve, t0: f64, t1: f64) -> Result<NurbsCurve, SketchError> {
+        let frame = *self.frame();
+        if !(t0.is_finite() && t1.is_finite()) || t0 == t1 {
+            return Err(SketchError::Degenerate(tr!("sketch-err-edge-no-range")));
+        }
+        let piece = nurbs_range(c, t0.min(t1), t0.max(t1), self.tolerance().linear)?;
+        let piece = if t1 < t0 {
+            piece.reversed().map_err(freeform_failed)?
+        } else {
+            piece
+        };
+        piece
+            .transformed(|p| frame.to_local(p).truncate().extend(0.0))
+            .map_err(freeform_failed)
     }
 
     /// Projiziert ein Kreis- oder Ellipsenstück, dessen Ebene senkrecht auf der Skizzenebene

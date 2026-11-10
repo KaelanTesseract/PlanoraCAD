@@ -8,7 +8,7 @@ use crate::msg::Msg;
 use crate::sketch_cursor::{CursorOptions, DrawCursor};
 use crate::sketch_grips::GripDrag;
 use crate::sketch_input::{Created, DrawInput, FieldKind};
-use crate::sketch_kinds::{PREVIEW_STEPS_PER_TURN, ToolKinds};
+use crate::sketch_kinds::{PREVIEW_STEPS_PER_TURN, ToolKind, ToolKinds};
 use planora_feature::{FeatureId, ParamScope, ParamUnit, SketchFeature, constraint_unit};
 use planora_i18n::tr;
 use planora_math::DVec2;
@@ -69,6 +69,9 @@ pub enum Tool {
     /// Korrektur 4): Klicks wählen die Bezüge, sobald es reicht, entsteht die Abhängigkeit, und
     /// der Befehl bleibt für das nächste Paar ([`SketchSession::constraint_button`]).
     Constraint(ConstraintAction),
+    /// „Kontrollpunkt einfügen“ (Skizzen 7, D3): Jeder Klick auf einen Spline mit Kontrollpunkten fügt
+    /// dort einen ein ([`crate::sketch_handles`]). Esc beendet ihn.
+    InsertControlPoint,
 }
 
 impl Tool {
@@ -332,6 +335,28 @@ pub struct CurveDrag {
     pub start: Vec<(PointId, DVec2)>,
     /// Einzelner Kreis am Rand: zieht den Radius; dazu Griffabstand von der Mitte minus Radius.
     pub rim: Option<(CurveId, f64)>,
+    /// Griffzug (Skizzen 7): Punkte, die stehen bleiben, etwa der Stützpunkt, wenn die Spitze gezogen
+    /// wird ([`Sketch::drag_holding`]).
+    pub(crate) anchors: Vec<PointId>,
+    /// Zug am Rho-Griff: ändert nur das Rho des Kegelschnitts.
+    pub(crate) rho: Option<crate::sketch_handles::RhoGrab>,
+    /// Griffzug am Stützpunkt (der erste in `start`): Die übrigen Punkte gehen um das mit, was er
+    /// wirklich schafft ([`carry_frame`](crate::sketch_handles::carry_frame)).
+    pub(crate) carry: bool,
+    /// Griffzug: der Stand vor dem Zug und vor einem Einschalten im ersten Zug. Ein Abbruch geht
+    /// dorthin zurück ([`abort_handle_drag`](SketchSession::abort_handle_drag)). `None`: ein Zug ohne
+    /// Griff, oder mitten im Zug wurde noch etwas anderes geändert.
+    pub(crate) before: Option<Sketch>,
+    /// Griffzug: Dieser Zug hat den Griff erst eingeschaltet (erster Zug).
+    pub(crate) activates: bool,
+    /// Griffzug: Name des Schritts.
+    pub(crate) label: Option<Msg>,
+    /// Zug am freien Ende eines Krümmungsbogens (Spline, Stützpunkt), dessen Radius frei ist: Vor
+    /// jedem Bild sucht der Zug den Radius ([`Sketch::aim_curvature_arc`]). Einmal je Zug beim Greifen
+    /// bestimmt ([`Sketch::curvature_radius_free`]).
+    pub(crate) aim: Option<(CurveId, PointId)>,
+    /// Zahl der Muster vor dem Zug: Löst der Zug eines auf, sagt es die Meldung am Ende.
+    patterns_before: usize,
     /// Die Skizze beim Greifen: Kommt der Zug ohne Änderung dorthin zurück, gilt wieder sie.
     /// `None`, sobald mitten im Zug noch etwas anderes geändert wurde.
     origin: Option<Sketch>,
@@ -342,15 +367,57 @@ pub struct CurveDrag {
 }
 
 impl CurveDrag {
+    /// Zug vom Stand `sk` aus, gegriffen bei `grab`, mit den bewegten Punkten `start`.
+    pub(crate) fn new(sk: &Sketch, grab: DVec2, start: Vec<(PointId, DVec2)>) -> CurveDrag {
+        CurveDrag {
+            grab,
+            start,
+            rim: None,
+            anchors: Vec::new(),
+            rho: None,
+            carry: false,
+            before: None,
+            activates: false,
+            label: None,
+            aim: None,
+            patterns_before: sk.pattern_count(),
+            origin: Some(sk.clone()),
+            baseline: sk.clone().solve(),
+            frame_revision: sk.revision(),
+        }
+    }
+
+    /// Die Muster vor dem Zug stehen in `before`, nicht im Stand beim Greifen.
+    pub(crate) fn count_patterns_of(&mut self, before: &Sketch) {
+        self.patterns_before = before.pattern_count();
+    }
+
+    /// Steht alles wie im Stand `origin`? Rho ist keine Variable und zählt beim Rho-Griff eigens.
+    fn back_at(&self, sk: &Sketch, origin: &Sketch) -> bool {
+        same_values(sk, origin)
+            && self.rho.is_none_or(|grab| {
+                let rho = |s: &Sketch| crate::sketch_handles::conic_rho(s, grab.curve);
+                match (rho(sk), rho(origin)) {
+                    (Some(a), Some(b)) => (a - b).abs() <= RHO_BACK_TOLERANCE,
+                    _ => false,
+                }
+            })
+    }
+
     /// Hat seit dem letzten Bild etwas anderes die Skizze geändert (etwa „Konstruktion“ per Taste),
     /// gibt es keinen Stand mehr, zu dem der Zug zurückkehren dürfte, und der Vergleich gilt ab jetzt.
-    fn note_foreign_change(&mut self, sk: &Sketch) {
+    pub(crate) fn note_foreign_change(&mut self, sk: &Sketch) {
         if sk.revision() != self.frame_revision {
             self.origin = None;
+            self.before = None;
             self.baseline = sk.clone().solve();
         }
     }
 }
+
+/// So nah am Rho beim Greifen gilt der Rho-Griff als zurück: Die Rechnung über den Zeiger trifft den
+/// Startwert nur bis auf Rundung.
+const RHO_BACK_TOLERANCE: f64 = 1e-12;
 
 /// Macht ein Bild des Zugs die Lage schlechter als beim Greifen? Ein schon vorhandener Widerspruch
 /// in einer fremden Gruppe zählt nicht.
@@ -404,6 +471,10 @@ pub struct SketchSession {
     pub pending_curves: Vec<CurveId>,
     /// Zuletzt abgeschlossene Seitenzahl eines Polygons; ein abgebrochenes zählt nicht.
     pub polygon_sides: usize,
+    /// Grad für neue Splines mit Kontrollpunkten: 5 (Vorgabe) oder 3, gilt für die Sitzung.
+    pub spline_degree: u8,
+    /// Rho, das das Feld des nächsten Kegelschnitts vorschlägt: 0,5, danach das zuletzt angelegte.
+    pub conic_rho: f64,
     /// Laufender Zug auf dem letzten Punkt des Linienzugs.
     pub line_arc: Option<LineArcDrag>,
     /// Bogen aus dem Linienzug, an dem die nächste Linie tangential weiterläuft.
@@ -576,6 +647,8 @@ impl SketchSession {
             pending_snaps: Vec::new(),
             pending_curves: Vec::new(),
             polygon_sides: 6,
+            spline_degree: 5,
+            conic_rho: 0.5,
             line_arc: None,
             line_after_arc: None,
             cursor: None,
@@ -614,8 +687,12 @@ impl SketchSession {
     }
 
     /// Wechselt das Werkzeug; ein laufendes Werkzeug wird abgebrochen, ein laufendes Ziehen
-    /// wie mit [`end_drag`](Self::end_drag) beendet.
+    /// wie mit [`end_drag`](Self::end_drag) beendet, auch ein Griffzug. Nur der erste Zug, der einen
+    /// Griff erst einschaltet, geht ganz zurück: Er bleibt nie halb stehen.
     pub fn set_tool(&mut self, sk: &mut Sketch, tool: Tool) {
+        if self.curve_drag.as_ref().is_some_and(|d| d.activates) {
+            self.abort_handle_drag(sk);
+        }
         self.end_drag(sk);
         self.box_select = None;
         self.trim_drag = None;
@@ -743,9 +820,9 @@ impl SketchSession {
     /// [`Snap::Curve`] und [`Snap::None`]; beim Zeichnen gilt
     /// [`resolve_cursor`](Self::resolve_cursor)).
     pub fn snap(&self, sk: &Sketch, at: DVec2, radius: f64) -> Snap {
-        if let Some(p) = sk.pick_point(at, radius) {
+        if let Some(p) = self.shown_point(sk, at, radius) {
             Snap::Point(p)
-        } else if let Some(c) = sk.pick_curve(at, radius) {
+        } else if let Some(c) = self.shown_curve(sk, at, radius) {
             Snap::Curve(c)
         } else {
             Snap::None
@@ -965,6 +1042,7 @@ impl SketchSession {
                     Ok(())
                 }
                 Tool::Constraint(action) => se.click_constraint(sk, action, at, radius),
+                Tool::InsertControlPoint => se.click_insert_control_point(sk, at, radius, prior),
             }
         })
     }
@@ -1070,7 +1148,7 @@ impl SketchSession {
         radius: f64,
         prior: &Sketch,
     ) -> Result<(), Msg> {
-        let Some(c) = sk.pick_curve(at, radius) else {
+        let Some(c) = self.shown_curve(sk, at, radius) else {
             return Ok(());
         };
         let label = match self.tool {
@@ -1143,7 +1221,7 @@ impl SketchSession {
                 a.is_finite() && matches!(self.tool, Tool::Trim | Tool::Extend | Tool::Break)
             })
             .and_then(|at| {
-                let c = sk.pick_curve(at, radius)?;
+                let c = self.shown_curve(sk, at, radius)?;
                 match self.tool {
                     Tool::Extend => sk.extend_preview(c, at),
                     _ => Some(sk.trim_piece(c, at)?.polyline),
@@ -1204,7 +1282,7 @@ impl SketchSession {
             } else {
                 from.lerp(to, k as f64 / n as f64)
             };
-            if sk.pick_curve(p, radius).is_none() {
+            if self.shown_curve(sk, p, radius).is_none() {
                 continue;
             }
             if self.click(sk, p, radius, false).is_err() {
@@ -1218,6 +1296,11 @@ impl SketchSession {
     }
 
     fn select_at(&mut self, sk: &Sketch, at: DVec2, radius: f64, extend: bool) {
+        // Ein Klick auf einen gedämpften Griff oder den Rho-Griff ändert die Auswahl nicht, sonst wäre
+        // der Griff gleich wieder weg.
+        if self.handle_grip_at(sk, at, radius).is_some() {
+            return;
+        }
         self.forget_stale_picks();
         let item = match self.snap(sk, at, radius) {
             Snap::Point(p) => Some(Item::Point(p)),
@@ -1576,9 +1659,16 @@ impl SketchSession {
             if se.pending.len() < 2 {
                 return Err(crate::msg!("sketch-spline-min"));
             }
-            sk.add_spline(&se.pending).map_err(err)?;
+            if se.kinds.spline == ToolKind::SplineControl {
+                sk.add_control_spline(&se.pending, se.spline_degree)
+                    .map_err(err)?;
+            } else {
+                sk.add_spline(&se.pending).map_err(err)?;
+            }
             se.pending.clear();
             se.solve_checked(sk, prior)?;
+            // Der Befehl ist fertig: Der nächste Klick beginnt einen neuen, sein Esc lässt nichts.
+            se.open_start = None;
             Ok(())
         })
     }
@@ -1599,6 +1689,9 @@ impl SketchSession {
         }
         if self.pattern.drag.is_some() {
             self.abort_pattern_grip();
+            return;
+        }
+        if self.abort_handle_drag(sk) {
             return;
         }
         if self.box_select.take().is_some() || self.line_arc.take().is_some() {
@@ -1643,7 +1736,9 @@ impl SketchSession {
         // Stutzen, Dehnen und Brechen haben nichts Offenes: Esc beendet sie wie in Fusion (auch
         // mitten im Ziehen; was schon gestutzt ist, bleibt). Ebenso Projizieren, Schneiden und
         // Silhouette: Jeder Klick ist schon ein fertiger Schritt (Handtest Skizzen 6).
-        if self.tool.is_modify() || self.tool == Tool::ProjectEdge {
+        if self.tool.is_modify()
+            || matches!(self.tool, Tool::ProjectEdge | Tool::InsertControlPoint)
+        {
             self.set_tool(sk, Tool::Select);
         }
     }
@@ -1654,6 +1749,7 @@ impl SketchSession {
     /// Dieselbe Frage wie in [`begin_drag`](Self::begin_drag): [`snap`](Self::snap).
     pub fn is_free_at(&self, sk: &Sketch, at: DVec2, radius: f64) -> bool {
         matches!(self.snap(sk, at, radius), Snap::None)
+            && self.handle_grip_at(sk, at, radius).is_none()
     }
 
     /// Beginnt im Auswahlwerkzeug oder beim Wählen von Verschieben/Kopieren und Maßstab den Rahmen an
@@ -1708,7 +1804,8 @@ impl SketchSession {
         let (lo, hi) = (a.min(b), a.max(b));
         let on_screen = |p: DVec2| project(p).filter(|q| q.is_finite());
         let mut found = Vec::new();
-        for (c, _) in sk.curves() {
+        let hidden = self.hidden_handles(sk);
+        for (c, _) in sk.curves().filter(|(c, _)| !hidden.curves.contains(c)) {
             let Some(line) = sk.curve_polyline(c, BOX_STEPS_PER_TURN) else {
                 continue;
             };
@@ -1778,9 +1875,15 @@ impl SketchSession {
         }
         self.dragging = None;
         self.curve_drag = None;
+        // Griffe gehen über die Kurve, auf der sie liegen; den Punkt prüft der Griff selbst.
+        if self.begin_grip_drag(sk, at, radius) {
+            return self.is_dragging();
+        }
         match self.snap(sk, at, radius) {
-            Snap::Point(p) => self.dragging = Some(p),
-            Snap::Curve(c) => self.begin_curve_drag(sk, c, at),
+            Snap::Point(p) if !self.begin_handle_point(sk, p, at) => self.dragging = Some(p),
+            Snap::Curve(c) if !self.begin_handle_curve(sk, c, at) => {
+                self.begin_curve_drag(sk, c, at);
+            }
             _ => {}
         }
         self.is_dragging()
@@ -1817,14 +1920,9 @@ impl SketchSession {
             }
             _ => None,
         };
-        self.curve_drag = Some(CurveDrag {
-            grab: at,
-            start,
-            rim,
-            origin: Some(sk.clone()),
-            baseline: sk.clone().solve(),
-            frame_revision: sk.revision(),
-        });
+        let mut drag = CurveDrag::new(sk, at, start);
+        drag.rim = rim;
+        self.curve_drag = Some(drag);
     }
 
     /// Führt den Zug nach `at`. Punkt: Scheitert der Solver, bleibt die Skizze, und `message`
@@ -1857,8 +1955,8 @@ impl SketchSession {
     fn curve_drag_to(&mut self, sk: &mut Sketch, drag: &CurveDrag, at: DVec2) {
         self.cursor = Some(at);
         let before = sk.clone();
-        let result = match drag.rim {
-            Some((c, offset)) => {
+        let result = match (drag.rim, drag.rho) {
+            (Some((c, offset)), _) => {
                 let center = sk.curve(c).and_then(|d| match d.kind {
                     CurveKind::Circle { center, .. } => sk.point_xy(center).ok(),
                     _ => None,
@@ -1867,7 +1965,11 @@ impl SketchSession {
                     sk.drag_radius(c, m.distance(at) - offset)
                 })
             }
-            None => {
+            (None, Some(grab)) => crate::sketch_handles::rho_frame(sk, grab, at),
+            (None, None) if drag.carry => {
+                crate::sketch_handles::carry_frame(sk, &drag.start, at - drag.grab)
+            }
+            (None, None) => {
                 let delta = at - drag.grab;
                 let drags: Vec<Drag> = drag
                     .start
@@ -1877,12 +1979,19 @@ impl SketchSession {
                         target: from + delta,
                     })
                     .collect();
-                sk.drag(&drags)
+                // Zug am freien Ende eines Krümmungsbogens mit freiem Radius: erst den Radius suchen,
+                // dessen Ende dem Ziel am nächsten liegt. Von einem sehr großen Radius aus käme das
+                // Lösen allein nicht hin (zweiter Handtest Skizzen 7).
+                if let (Some((c, at)), [only]) = (drag.aim, drags.as_slice()) {
+                    // Scheitert die Suche, zieht der Zug wie sonst.
+                    let _ = sk.aim_curvature_arc(c, at, only.target);
+                }
+                sk.drag_holding(&drags, &drag.anchors)
             }
         };
         match result {
             Ok(report) if !frame_is_worse(&report, &drag.baseline) => {
-                if same_values(sk, &before) {
+                if drag.rho.is_none() && same_values(sk, &before) {
                     *sk = before;
                 } else {
                     self.last_report = Some(report);
@@ -1904,15 +2013,24 @@ impl SketchSession {
     pub fn end_drag(&mut self, sk: &mut Sketch) {
         if let Some(mut drag) = self.curve_drag.take() {
             drag.note_foreign_change(sk);
-            match drag.origin.filter(|origin| same_values(sk, origin)) {
+            let back = drag.origin.take().filter(|origin| drag.back_at(sk, origin));
+            let label = drag.label.take();
+            match back {
                 Some(origin) => {
                     *sk = origin;
                     self.last_report = Some(drag.baseline);
+                    // Ein erster Zug, der zurückkommt, hat den Griff trotzdem eingeschaltet. Ohne
+                    // Änderung leert der Verlauf den Namen wieder.
+                    self.edit_label = label;
                 }
                 None => {
                     self.last_report = Some(sk.solve());
-                    self.edit_label = Some(crate::msg!("undo-sketch-move"));
+                    self.edit_label = Some(label.unwrap_or(crate::msg!("undo-sketch-move")));
                 }
+            }
+            let dissolved = drag.patterns_before.saturating_sub(sk.pattern_count());
+            if dissolved > 0 {
+                self.add_note(crate::msg!("sketch-pattern-dissolved", n = dissolved));
             }
         }
         if self.dragging.take().is_some() {
@@ -2001,8 +2119,8 @@ impl SketchSession {
     ) -> Result<Option<Item>, Msg> {
         let selection = geometry_of(sk, &self.selection);
         let candidates: Vec<Item> = [
-            sk.pick_point(at, radius).map(Item::Point),
-            sk.pick_curve(at, radius).map(Item::Curve),
+            self.shown_point(sk, at, radius).map(Item::Point),
+            self.shown_curve(sk, at, radius).map(Item::Curve),
         ]
         .into_iter()
         .flatten()
@@ -2218,18 +2336,45 @@ impl SketchSession {
                 }
             }
             // Glatt an getrennten Enden: erst die Enden zusammen (im selben Schritt).
+            // Eine Kette aus „Deckungsgleich“ hält sie schon; eine weitere Zeile wäre überzählig.
             if let ConstraintKind::Smooth(_, pa, _, pb) = kind
-                && pa != pb
-                && !sk.constraints().any(|(_, k)| {
-                    k.enabled
-                        && matches!(k.kind, ConstraintKind::Coincident(x, y)
-                            if (x, y) == (pa, pb) || (x, y) == (pb, pa))
-                })
+                && !sk.coincident_chain(pa, pb)
             {
                 sk.add_constraint(ConstraintKind::Coincident(pa, pb))
                     .map_err(err)?;
             }
-            se.add_checked(sk, prior, kind, action.label_msg())
+            // Griffe an und ihre Lage auf den Werten des Partners (Skizzen 7, C3), im selben Schritt.
+            if let ConstraintKind::Smooth(a, pa, b, pb) = kind {
+                sk.prepare_smooth(a, pa, b, pb).map_err(err)?;
+                // Dasselbe Glatt gibt es schon: kein zweites, so wird ein altes G1 zu G2.
+                if let Some(id) = sk.smooth_between(a, pa, b, pb) {
+                    let before = se.last_report.take();
+                    let report = sk.solve();
+                    se.last_report = Some(report.clone());
+                    return match check_change(&report, before.as_ref(), prior, Some(id)) {
+                        Some(SolveStatus::Conflicting) => Err(crate::msg!(
+                            "sketch-apply-conflict",
+                            action = action.label_msg()
+                        )),
+                        Some(_) => Err(crate::msg!(
+                            "sketch-apply-unsolved",
+                            action = action.label_msg()
+                        )),
+                        None => {
+                            se.warn_if_unsolved();
+                            se.edit_label = Some(action.label_msg());
+                            Ok(id)
+                        }
+                    };
+                }
+            }
+            let smooth = matches!(kind, ConstraintKind::Smooth(..));
+            let id = se.add_checked(sk, prior, kind, action.label_msg())?;
+            // Glatt schaltet dabei Griffe ein; der Vergleich der Stände hieße den Schritt danach.
+            if smooth {
+                se.edit_label = Some(action.label_msg());
+            }
+            Ok(id)
         })
     }
 
@@ -2245,7 +2390,6 @@ impl SketchSession {
     ) -> Result<ConstraintId, Msg> {
         let se = self;
         let dimension = kind.is_dimension();
-        let on_arc = smooth_on_arc(sk, &kind);
         let old = sk.measure(&kind);
         let value_of = kind.length_value();
         let id = sk.add_constraint(kind).map_err(err)?;
@@ -2281,8 +2425,6 @@ impl SketchSession {
             }
         } else if driven {
             se.message = Some(crate::msg!("sketch-became-driven"));
-        } else if on_arc {
-            se.message = Some(crate::msg!("sketch-smooth-arc-g1"));
         }
         se.warn_if_unsolved();
         Ok(id)
@@ -2623,7 +2765,15 @@ impl SketchSession {
             se.drop_curve_picks();
             // Abhängigkeiten, die mit abgewählten Exemplaren entfallen.
             let mut dropped = 0;
-            for item in std::mem::take(&mut se.selection) {
+            // Ein Fest-Wert zuletzt: Ist sein fester Spline mit gewählt, ist der dann fort und er geht mit.
+            let mut items = std::mem::take(&mut se.selection);
+            items.sort_by_key(|item| {
+                matches!(item, Item::Constraint(c) if matches!(
+                    sk.constraint(*c).map(|d| &d.kind),
+                    Some(ConstraintKind::Fixed(..))
+                ))
+            });
+            for item in items {
                 // Ein Exemplar eines Musters wird abgewählt, das Muster bleibt (Entscheidung 6 des
                 // Plans Skizzen 5); seine anderen Kurven und Punkte sind danach fort.
                 if let Some((id, at)) = crate::sketch_pattern::instance_of_item(sk, item) {
@@ -2637,7 +2787,7 @@ impl SketchSession {
                         if let Err(e) = sk.remove_constraint(c)
                             && matches!(
                                 sk.constraint(c).map(|d| &d.kind),
-                                Some(ConstraintKind::PatternValue(..))
+                                Some(ConstraintKind::PatternValue(..) | ConstraintKind::Fixed(..))
                             )
                         {
                             return Err(err(e));
@@ -2827,9 +2977,8 @@ pub(crate) fn check_change(
     if status_ok(report) {
         return None;
     }
-    let bad = Some(report.status);
     if new.is_some_and(|id| report.conflicting.contains(&id)) {
-        return bad;
+        return Some(report.status);
     }
     let solved_prior;
     let before = match before {
@@ -2839,16 +2988,7 @@ pub(crate) fn check_change(
             &solved_prior
         }
     };
-    if status_ok(before) {
-        return bad;
-    }
-    let grown = report
-        .conflicting
-        .iter()
-        .any(|c| !before.conflicting.contains(c));
-    let worse =
-        before.status == SolveStatus::Conflicting && report.status == SolveStatus::NotConverged;
-    (grown || worse).then_some(report.status)
+    report.is_worse_than(before).then_some(report.status)
 }
 
 /// Die Kette um `c`, wie sie der Versatz nimmt: Querlinien und Rollkreise eines früheren Versatzes
@@ -2903,6 +3043,7 @@ fn offset_problem_message(problem: OffsetProblem) -> Msg {
         OffsetProblem::NoJoin => crate::msg!("sketch-offset-no-join"),
         OffsetProblem::SelfCrossing => crate::msg!("sketch-offset-crossing"),
         OffsetProblem::Cusp => crate::msg!("sketch-offset-cusp"),
+        OffsetProblem::ClosedKink => crate::msg!("sketch-offset-closed-kink"),
         OffsetProblem::Degenerate => crate::msg!("sketch-field-rejected"),
     }
 }
@@ -2933,7 +3074,10 @@ fn sort_items(sk: &Sketch, items: &[Item]) -> Option<Sorted> {
                     CurveKind::Circle { .. } | CurveKind::Arc { .. } => s.rounds.push(c),
                     CurveKind::Ellipse { .. }
                     | CurveKind::EllipticArc { .. }
-                    | CurveKind::Spline { .. } => s.others.push(c),
+                    | CurveKind::Spline { .. }
+                    | CurveKind::ControlSpline { .. }
+                    | CurveKind::Conic { .. }
+                    | CurveKind::FixedSpline { .. } => s.others.push(c),
                 }
                 s.curves.push(c);
             }
@@ -2973,7 +3117,7 @@ fn actions_for(sk: &Sketch, items: &[Item]) -> Vec<ConstraintAction> {
         if round_center(sk, a).is_some() && round_center(sk, b).is_some() {
             found.push(Concentric);
         }
-        if smooth_kinds_ok(sk, a, b) {
+        if sk.smooth_kinds_fit(a, b) {
             found.push(Smooth);
         }
     }
@@ -3032,7 +3176,7 @@ fn constraint_fit(sk: &Sketch, action: ConstraintAction, items: &[Item]) -> Fit 
         Smooth => {
             s.points.is_empty()
                 && s.curves.len() < 2
-                && s.curves.iter().all(|&c| smooth_partner(sk, c))
+                && s.curves.iter().all(|&c| sk.smooth_partner(c))
         }
         _ => {
             let have = [
@@ -3064,11 +3208,15 @@ fn kinds_refusal(sk: &Sketch, action: ConstraintAction, items: &[Item]) -> Optio
             .as_ref()
             .is_some_and(|s| s.curves.len() == 2 || s.curves.iter().any(|&c| !ok(c)))
     };
+    let fixed_and_line = curves_only
+        .as_ref()
+        .is_some_and(|s| matches!(s.curves[..], [a, b] if sk.smooth_fixed_against_line(a, b)));
     match action {
         ConstraintAction::Concentric if wrong_kind(&|c| round_center(sk, c).is_some()) => {
             Some(crate::msg!("sketch-concentric-kinds"))
         }
-        ConstraintAction::Smooth if wrong_kind(&|c| smooth_partner(sk, c)) => {
+        ConstraintAction::Smooth if fixed_and_line => Some(crate::msg!("sketch-smooth-fixed-line")),
+        ConstraintAction::Smooth if wrong_kind(&|c| sk.smooth_partner(c)) => {
             Some(crate::msg!("sketch-smooth-kinds"))
         }
         _ => None,
@@ -3111,14 +3259,6 @@ fn geometry_of(sk: &Sketch, items: &[Item]) -> Vec<Item> {
         .collect()
 }
 
-/// Kann die Kurve `c` an einem Glatt teilhaben (Spline, Linie oder Bogen)?
-fn smooth_partner(sk: &Sketch, c: CurveId) -> bool {
-    matches!(
-        sk.curve(c).map(|d| &d.kind),
-        Some(CurveKind::Spline { .. } | CurveKind::Line { .. } | CurveKind::Arc { .. })
-    )
-}
-
 /// Mitte eines Kreises, Bogens, einer Ellipse oder eines Ellipsenbogens (Konzentrisch).
 pub(crate) fn round_center(sk: &Sketch, c: CurveId) -> Option<PointId> {
     match sk.curve(c)?.kind {
@@ -3126,36 +3266,17 @@ pub(crate) fn round_center(sk: &Sketch, c: CurveId) -> Option<PointId> {
         | CurveKind::Arc { center, .. }
         | CurveKind::Ellipse { center, .. }
         | CurveKind::EllipticArc { center, .. } => Some(center),
-        CurveKind::Line { .. } | CurveKind::Spline { .. } => None,
+        CurveKind::Line { .. }
+        | CurveKind::Spline { .. }
+        | CurveKind::ControlSpline { .. }
+        | CurveKind::Conic { .. }
+        | CurveKind::FixedSpline { .. } => None,
     }
-}
-
-/// Geht Glatt zwischen `a` und `b`? Ein Spline und eine Linie, ein Bogen oder ein zweiter Spline.
-fn smooth_kinds_ok(sk: &Sketch, a: CurveId, b: CurveId) -> bool {
-    let kind = |c: CurveId| sk.curve(c).map(|d| &d.kind);
-    let spline = |k: Option<&CurveKind>| matches!(k, Some(CurveKind::Spline { .. }));
-    let partner = |k: Option<&CurveKind>| {
-        matches!(
-            k,
-            Some(CurveKind::Spline { .. } | CurveKind::Line { .. } | CurveKind::Arc { .. })
-        )
-    };
-    a != b && ((spline(kind(a)) && partner(kind(b))) || (spline(kind(b)) && partner(kind(a))))
 }
 
 /// Freiheitsgrade von `sk`, frisch gerechnet (nicht aus einem möglicherweise älteren Bericht).
 fn dof_of(sk: &Sketch) -> usize {
     sk.clone().solve().dof
-}
-
-/// Glatt an einem Bogen: bis Teilprojekt 7 nur tangential (G1), das sagt die Meldung.
-fn smooth_on_arc(sk: &Sketch, kind: &ConstraintKind) -> bool {
-    let ConstraintKind::Smooth(a, _, b, _) = *kind else {
-        return false;
-    };
-    [a, b]
-        .into_iter()
-        .any(|c| matches!(sk.curve(c).map(|d| &d.kind), Some(CurveKind::Arc { .. })))
 }
 
 /// Darf ein Winkelmaß den Wert `value` bekommen? Der Betrag ist höchstens 180°; ein negativer

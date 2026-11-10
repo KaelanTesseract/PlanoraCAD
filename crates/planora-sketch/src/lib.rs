@@ -28,11 +28,15 @@ pub mod shapes;
 pub mod snap;
 pub mod solid;
 pub mod solver;
+pub mod spline_handles;
 pub mod tangent_circles;
 pub mod transform;
 pub mod triangulate;
 
 pub use constraint::{ConstraintData, ConstraintId, ConstraintKind, Evaluation, LineOrPoints};
+pub use curves::{
+    conic_apex_ok, conic_nurbs, conic_rho_at, conic_rho_ok, conic_shoulder, control_spline_nurbs,
+};
 pub use data::{ConstraintRecord, CurveRecord, PatternRecord, PointRecord, SketchData};
 pub use dimension::{DimMode, DimPick, DimPlan};
 pub use edit::TrimPiece;
@@ -42,7 +46,10 @@ pub use fillet::{
     FilletPlan,
 };
 pub use helpers::{RectIds, plane_of_face};
-pub use model::{CurveData, CurveId, CurveKind, LineStyle, PointData, PointId, Sketch};
+pub use model::{
+    CurveData, CurveId, CurveKind, HandleCurvature, LineStyle, PointData, PointId, Sketch,
+    SplineHandle,
+};
 pub use pattern::{
     CircularMode, PatternData, PatternDir, PatternId, PatternInstance, PatternKind, PatternPlan,
     PatternProblem, PatternSlot,
@@ -53,4 +60,5 @@ pub use shapes::{ArcSlotIds, CenterRectIds, PolygonIds, SlotIds, SlotStyle};
 pub use snap::{AlignHit, Snap, SnapHit, SnapIndex};
 pub use solid::{extrude_profile, revolve_profile};
 pub use solver::{Drag, SolveReport, SolveStatus};
+pub use spline_handles::{NodeCurvature, NodeHandle, Nodes, hermite_nodes};
 pub use transform::{CopyMap, Similarity, TransformBlock, TransformReport, TransformSet};

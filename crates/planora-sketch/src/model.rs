@@ -1,10 +1,13 @@
 //! Skizze: Punkte, Kurven, Zahlenvektor. Abhängigkeiten stehen in `constraint.rs`.
 
+use crate::curves::{conic_apex_ok, conic_nurbs, conic_rho_ok, control_spline_layout};
 use crate::error::SketchError;
 use crate::solver::SolveCache;
 use planora_i18n::tr;
 use planora_kernel::{Arena, Id};
-use planora_math::{DVec2, Frame, Tolerance};
+use planora_math::nurbs::NurbsCurve;
+use planora_math::{DVec2, DVec3, Frame, Tolerance};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Punkt: zwei Einträge im Variablenvektor.
@@ -16,6 +19,31 @@ pub struct PointData {
     pub(crate) alive: bool,
 }
 pub type PointId = Id<PointData>;
+
+/// Krümmung an einem Tangentengriff (Skizzen 7, B).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum HandleCurvature {
+    /// Die Krümmung ergibt sich aus der Kurve.
+    Form,
+    /// Krümmung 0 (entsteht nur durch Glatt an einer Linie).
+    Straight,
+    /// Krümmungsgriff: ein Konstruktionsbogen um `center` zwischen `at` und `other`.
+    Arc {
+        arc: CurveId,
+        center: PointId,
+        other: PointId,
+    },
+}
+
+/// Griff an einem Stützpunkt eines Splines: Die Konstruktionslinie `line` läuft von `at` nach `tip`,
+/// die Ableitung der Kurve am Stützpunkt ist `3·(tip − at)`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SplineHandle {
+    pub at: PointId,
+    pub line: CurveId,
+    pub tip: PointId,
+    pub curvature: HandleCurvature,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CurveKind {
@@ -40,9 +68,11 @@ pub enum CurveKind {
         ay: usize,
         minor: usize,
     },
-    /// Natürlicher kubischer Spline durch die Stützpunkte.
+    /// Kubischer Spline durch die Stützpunkte; natürlich, solange `handles` leer ist (dann derselbe
+    /// Codeweg wie vor den Griffen), sonst nach `spline_handles.rs`.
     Spline {
         points: Vec<PointId>,
+        handles: Vec<SplineHandle>,
     },
     /// Gegen den Uhrzeigersinn von `start` nach `end` auf der Ellipse
     /// `center + a·cos t + b̂·minor·sin t` (große Halbachse `a = (ax, ay)`, siehe
@@ -56,6 +86,33 @@ pub enum CurveKind {
         start: PointId,
         end: PointId,
     },
+    /// Nicht rationale B-Spline-Kurve über echte Skizzenpunkte als Kontrollpunkte (2 bis
+    /// [`MAX_SPLINE_POINTS`]); erster und letzter liegen auf der Kurve. `degree` ist der wirksame
+    /// Grad, `knots` der geklemmte Knotenvektor; er steht in der Kurve, weil Stutzen und Einfügen
+    /// ihn ungleichmäßig machen.
+    ControlSpline {
+        points: Vec<PointId>,
+        degree: u8,
+        knots: Vec<f64>,
+    },
+    /// Rationale quadratische Bézierkurve von `start` nach `end` mit dem Scheitel `apex` (Schnitt
+    /// der Endtangenten), Gewicht `w = rho / (1 − rho)`, Parameter `t ∈ [0, 1]`. Der Schulterpunkt
+    /// `C(½)` liegt bei `M + rho·(apex − M)`, `M` = Sehnenmitte. `rho` ist eine Zahl in der Kurve,
+    /// keine Löservariable: Die Kurve hat die 6 Freiheitsgrade ihrer drei Punkte.
+    Conic {
+        start: PointId,
+        end: PointId,
+        apex: PointId,
+        rho: f64,
+    },
+    /// Projizierte Freiformkurve (Spec A3, F): unveränderlich in Skizzenkoordinaten (`z = 0`), auch
+    /// rational; `start` und `end` tragen `Fixed`. Nur die Projektion legt sie an. Bei einer
+    /// geschlossenen Kante ist `start == end`.
+    FixedSpline {
+        start: PointId,
+        end: PointId,
+        curve: Arc<NurbsCurve>,
+    },
 }
 
 impl CurveKind {
@@ -65,10 +122,35 @@ impl CurveKind {
             CurveKind::Line { a, b } => vec![*a, *b],
             CurveKind::Circle { center, .. } | CurveKind::Ellipse { center, .. } => vec![*center],
             CurveKind::Arc { center, start, end } => vec![*center, *start, *end],
-            CurveKind::Spline { points } => points.clone(),
+            CurveKind::Spline { points, handles } => {
+                // Die Griffe gehören zur Punktgruppe: So nimmt der Löser sie in dieselbe Gruppe.
+                let mut out = points.clone();
+                for h in handles {
+                    out.push(h.tip);
+                    if let HandleCurvature::Arc { center, other, .. } = h.curvature {
+                        out.extend([center, other]);
+                    }
+                }
+                out
+            }
+            CurveKind::ControlSpline { points, .. } => points.clone(),
             CurveKind::EllipticArc {
                 center, start, end, ..
             } => vec![*center, *start, *end],
+            CurveKind::Conic {
+                start, end, apex, ..
+            } => vec![*start, *apex, *end],
+            CurveKind::FixedSpline { start, end, .. } if start == end => vec![*start],
+            CurveKind::FixedSpline { start, end, .. } => vec![*start, *end],
+        }
+    }
+
+    /// Die Stützpunkte eines Splines bzw. die Kontrollpunkte eines Splines mit Kontrollpunkten, ohne
+    /// Griffe; leer bei allen anderen Arten.
+    pub fn fit_points(&self) -> &[PointId] {
+        match self {
+            CurveKind::Spline { points, .. } | CurveKind::ControlSpline { points, .. } => points,
+            _ => &[],
         }
     }
 }
@@ -137,6 +219,20 @@ pub const MAX_COORD: f64 = 1e9;
 
 /// Höchstzahl der Stützpunkte eines Splines.
 pub const MAX_SPLINE_POINTS: usize = 64;
+
+/// Beide Koordinaten endlich und betragsmäßig höchstens [`MAX_COORD`].
+pub(crate) fn within_coord_range(p: DVec2) -> bool {
+    p.is_finite() && p.x.abs() <= MAX_COORD && p.y.abs() <= MAX_COORD
+}
+
+/// `Ok`, wenn `rho` als Rho eines Kegelschnitts taugt (siehe [`conic_rho_ok`]).
+pub(crate) fn check_conic_rho(rho: f64) -> Result<(), SketchError> {
+    if conic_rho_ok(rho) {
+        Ok(())
+    } else {
+        Err(SketchError::InvalidInput(tr!("sketch-err-conic-rho")))
+    }
+}
 
 /// Endlich und betragsmäßig höchstens [`MAX_COORD`].
 pub(crate) fn finite(v: f64, what: impl FnOnce() -> String) -> Result<(), SketchError> {
@@ -462,6 +558,125 @@ impl Sketch {
     /// Natürlicher kubischer Spline durch 2 bis [`MAX_SPLINE_POINTS`] verschiedene Punkte;
     /// Stützpunkt `i` liegt beim Parameter `t = i`.
     pub fn add_spline(&mut self, points: &[PointId]) -> Result<CurveId, SketchError> {
+        self.check_spline_points(points)?;
+        Ok(self.push_curve(CurveKind::Spline {
+            points: points.to_vec(),
+            handles: Vec::new(),
+        }))
+    }
+
+    /// Spline mit den Kontrollpunkten `points` (2 bis [`MAX_SPLINE_POINTS`] verschiedene Punkte)
+    /// und gleichmäßigem geklemmtem Knotenvektor. `degree` ist 3 oder 5; wirksam ist der kleinere
+    /// Wert aus `degree` und `n − 1` (**Annahme**, deckt den Foreneintrag zu Fusion).
+    pub fn add_control_spline(
+        &mut self,
+        points: &[PointId],
+        degree: u8,
+    ) -> Result<CurveId, SketchError> {
+        if !matches!(degree, 3 | 5) {
+            return Err(SketchError::InvalidInput(tr!("sketch-err-spline-degree")));
+        }
+        self.check_spline_points(points)?;
+        let (degree, knots) = control_spline_layout(degree, points.len());
+        Ok(self.push_curve(CurveKind::ControlSpline {
+            points: points.to_vec(),
+            degree,
+            knots,
+        }))
+    }
+
+    /// Spline mit Kontrollpunkten aus vorhandenen Daten (Teilstück, Kopie): Grad und Knoten werden
+    /// übernommen. Anders als beim Zeichnen dürfen benachbarte Kontrollpunkte aufeinanderliegen, die
+    /// Kurve bleibt gültig; das Lösen kann das ebenso erzeugen.
+    pub(crate) fn add_control_spline_as(
+        &mut self,
+        points: &[PointId],
+        degree: u8,
+        knots: Vec<f64>,
+    ) -> Result<CurveId, SketchError> {
+        self.check_spline_ids(points)?;
+        Ok(self.push_curve(CurveKind::ControlSpline {
+            points: points.to_vec(),
+            degree,
+            knots,
+        }))
+    }
+
+    /// Kegelschnitt von `start` nach `end` mit dem Scheitel `apex` (Schnitt der Endtangenten) und
+    /// `rho` zwischen etwa 0,000001 und 0,999999, denn das Gewicht muss im Bereich der NURBS liegen
+    /// (siehe [`conic_rho_ok`] und [`CurveKind::Conic`]). Der Scheitel darf nicht auf der Geraden
+    /// durch Start und Ende liegen.
+    pub fn add_conic(
+        &mut self,
+        start: PointId,
+        end: PointId,
+        apex: PointId,
+        rho: f64,
+    ) -> Result<CurveId, SketchError> {
+        self.check_conic(start, end, apex, rho)?;
+        let (p0, a, p2) = (self.pos(start), self.pos(apex), self.pos(end));
+        if !conic_apex_ok(p0, a, p2, self.tol.linear) {
+            return Err(SketchError::Degenerate(tr!("sketch-err-conic-apex")));
+        }
+        self.add_conic_as(start, end, apex, rho)
+    }
+
+    /// Kegelschnitt aus vorhandenen Daten (Teilstück, Kopie). Anders als beim Zeichnen darf der
+    /// Scheitel auf der Sehne liegen, die Kurve bleibt gültig; das Lösen kann das ebenso erzeugen.
+    pub(crate) fn add_conic_as(
+        &mut self,
+        start: PointId,
+        end: PointId,
+        apex: PointId,
+        rho: f64,
+    ) -> Result<CurveId, SketchError> {
+        self.check_conic(start, end, apex, rho)?;
+        Ok(self.push_curve(CurveKind::Conic {
+            start,
+            end,
+            apex,
+            rho,
+        }))
+    }
+
+    /// Lebende, verschiedene Punkte und ein gültiges Rho.
+    fn check_conic(
+        &self,
+        start: PointId,
+        end: PointId,
+        apex: PointId,
+        rho: f64,
+    ) -> Result<(), SketchError> {
+        for p in [start, end, apex] {
+            self.check_point(p)?;
+        }
+        if start == end || start == apex || end == apex {
+            return Err(SketchError::InvalidInput(tr!("sketch-err-point-twice")));
+        }
+        check_conic_rho(rho)
+    }
+
+    /// Setzt das Rho eines Kegelschnitts. Die Punkte bleiben; Abhängigkeiten an der Kurve folgen
+    /// beim nächsten Lösen. Ist `c` Vorlage oder Exemplar eines Musters, wird es aufgelöst.
+    pub fn set_conic_rho(&mut self, c: CurveId, rho: f64) -> Result<(), SketchError> {
+        self.check_curve(c)?;
+        let mut kind = self.curves[c].kind.clone();
+        let CurveKind::Conic { rho: slot, .. } = &mut kind else {
+            return Err(SketchError::WrongType(tr!("sketch-err-conic-kind")));
+        };
+        check_conic_rho(rho)?;
+        if *slot != rho {
+            *slot = rho;
+            self.set_curve_kind(c, kind);
+            // Die Parameter neu suchen: Bei einem großen Sprung im Rho läge der alte Parameter weit
+            // von der neuen Stelle, und der Löser schösse damit über die Enden hinaus.
+            self.reseed_extras(c);
+        }
+        Ok(())
+    }
+
+    /// Punktzahl und lebende Punkte ohne Doppelte, für jeden Spline.
+    fn check_spline_ids(&self, points: &[PointId]) -> Result<(), SketchError> {
         if !(2..=MAX_SPLINE_POINTS).contains(&points.len()) {
             return Err(SketchError::InvalidInput(tr!(
                 "sketch-err-spline-count",
@@ -474,15 +689,48 @@ impl Sketch {
                 return Err(SketchError::InvalidInput(tr!("sketch-err-point-twice")));
             }
         }
+        Ok(())
+    }
+
+    /// Prüfungen eines neuen Splines: Punktzahl, lebende Punkte ohne Doppelte, Nachbarn getrennt.
+    fn check_spline_points(&self, points: &[PointId]) -> Result<(), SketchError> {
+        self.check_spline_ids(points)?;
         if points
             .windows(2)
             .any(|w| self.pos(w[0]).distance(self.pos(w[1])) <= self.tol.linear)
         {
             return Err(SketchError::Degenerate(tr!("sketch-err-spline-neighbours")));
         }
-        Ok(self.push_curve(CurveKind::Spline {
-            points: points.to_vec(),
-        }))
+        Ok(())
+    }
+
+    /// Die lebende Kurve als NURBS-Kurve in Skizzenkoordinaten (`z = 0`): alle Freiformarten außer
+    /// dem Spline durch Stützpunkte. `None` für andere Kurven und außerhalb des Rechenbereichs
+    /// liegende Punkte.
+    pub fn nurbs_of(&self, c: CurveId) -> Option<Arc<NurbsCurve>> {
+        match &self.curve(c)?.kind {
+            CurveKind::ControlSpline {
+                points,
+                degree,
+                knots,
+            } => {
+                let control: Vec<DVec3> = points.iter().map(|&p| self.pos(p).extend(0.0)).collect();
+                let weights = vec![1.0; control.len()];
+                NurbsCurve::new(usize::from(*degree), knots.clone(), control, weights)
+                    .ok()
+                    .map(Arc::new)
+            }
+            CurveKind::Conic {
+                start,
+                end,
+                apex,
+                rho,
+            } => conic_nurbs(self.pos(*start), self.pos(*apex), self.pos(*end), *rho)
+                .ok()
+                .map(Arc::new),
+            CurveKind::FixedSpline { curve, .. } => Some(curve.clone()),
+            _ => None,
+        }
     }
 
     /// Punkt der Ellipse beim Parameter `t`: `center + a·cos t + b̂·minor·sin t` mit der großen
@@ -540,15 +788,14 @@ impl Sketch {
     /// Punkt des Splines beim Parameter `t` (auf `[0, n − 1]` geklemmt). `None` für andere
     /// Kurven oder nicht endliches `t`.
     pub fn spline_point(&self, c: CurveId, t: f64) -> Option<DVec2> {
-        let CurveKind::Spline { points } = &self.curve(c)?.kind else {
+        let CurveKind::Spline { points, handles } = &self.curve(c)?.kind else {
             return None;
         };
         if !t.is_finite() {
             return None;
         }
-        let xy: Vec<DVec2> = points.iter().map(|&p| self.pos(p)).collect();
-        let t = t.clamp(0.0, (xy.len() - 1) as f64);
-        Some(crate::curves::Sampled::spline(&xy).eval(t).0)
+        let t = t.clamp(0.0, (points.len() - 1) as f64);
+        Some(self.spline_sampled(points, handles).eval(t).0)
     }
 
     pub fn curve(&self, c: CurveId) -> Option<&CurveData> {
@@ -573,9 +820,14 @@ impl Sketch {
     }
 
     /// Gehört die Kurve zu einem Muster, gilt der Stil für die Vorlage und alle ihre Exemplare
-    /// (Stil wie die Vorlage, auch nach späterem Umschalten).
+    /// (Stil wie die Vorlage, auch nach späterem Umschalten). Griffe bleiben Konstruktion.
     pub fn set_construction(&mut self, c: CurveId, construction: bool) -> Result<(), SketchError> {
         self.check_curve(c)?;
+        if !construction && self.is_handle_curve(c) {
+            return Err(SketchError::WrongType(tr!(
+                "sketch-err-handle-construction"
+            )));
+        }
         for x in self.pattern_style_group(c) {
             self.curves[x].construction = construction;
             self.curves[x].centerline = false;
@@ -590,6 +842,11 @@ impl Sketch {
         self.check_curve(c)?;
         if !matches!(self.curves[c].kind, CurveKind::Line { .. }) {
             return Err(SketchError::WrongType(tr!("sketch-err-centerline-type")));
+        }
+        if self.is_handle_curve(c) {
+            return Err(SketchError::WrongType(tr!(
+                "sketch-err-handle-construction"
+            )));
         }
         for x in self.pattern_style_group(c) {
             self.curves[x].construction = on;

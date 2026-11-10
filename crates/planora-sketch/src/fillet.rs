@@ -7,7 +7,9 @@
 //! das ist das Stück von der Ecke zum fernen Ende der Kurve, auf dem geklickt wurde. Davon
 //! gewinnt der mit der kleinsten Summe `|T1 − Klick1| + |T2 − Klick2|`, bei Gleichstand der mit
 //! dem kleinsten Abstand Mitte–Ecke. Linien und Bögen, die sich nur in der Verlängerung treffen,
-//! werden bis zum Berührpunkt verlängert (ihr nahes Ende wandert).
+//! werden bis zum Berührpunkt verlängert (ihr nahes Ende wandert). Ein Spline mit Kontrollpunkten
+//! wird wie beim Stutzen am Berührpunkt gekürzt ([`EndMove::Cut`]), ein Spline durch Stützpunkte
+//! bleibt ganz.
 //!
 //! **Fase** (`chamfer_plan`): nur Linien, drei Arten.
 //!
@@ -15,7 +17,8 @@
 //! Die Enden der Vorlage wandern auf die Berührpunkte wie beim Stutzen; es bleibt, was danach
 //! ohne Bewegung erfüllt ist. Reihenfolge immer: Kurven, Tangenten, Ecke, Maß.
 
-use crate::constraint::{ConstraintId, ConstraintKind};
+use crate::constraint::{ConstraintId, ConstraintKind, curve_ends};
+use crate::curves::nurbs_breaks;
 use crate::error::SketchError;
 use crate::geom::Geom;
 use crate::intersect::intersect;
@@ -46,6 +49,9 @@ pub enum EndMove {
     Replace(PointId),
     /// Die Kurve bleibt, wie sie ist (Kreis, Ellipse, Spline, Ende mit `Fixed`).
     Whole,
+    /// Spline mit Kontrollpunkten: Das Ende `end` fällt samt dem Stück bis zum Parameter `at` weg,
+    /// gekürzt wie beim Stutzen; der Berührpunkt wird das neue Ende.
+    Cut { end: PointId, at: f64 },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -323,11 +329,38 @@ pub(crate) fn wrap_pi(x: f64) -> f64 {
     if w > PI { w - TAU } else { w }
 }
 
+/// Liegt der Berührpunkt `t` auf dem Stück, das bleibt? Bei einem Spline mit Kontrollpunkten: von
+/// der Ecke `x` aus auf derselben Seite wie der Klick. Andere Kurven ohne Enden bleiben ganz.
+fn control_keeps(side: &Side, x: Option<DVec2>, t: DVec2) -> bool {
+    let (Geom::Nurbs { .. }, Some(x)) = (&side.g, x) else {
+        return true;
+    };
+    let ux = side.g.nearest(x);
+    (side.g.nearest(side.pick.at) - ux) * (side.g.nearest(t) - ux) >= 0.0
+}
+
+/// Kürzung eines Splines mit Kontrollpunkten am Berührpunkt `touch`: Es bleibt das Stück bis zu dem
+/// Ende, auf dessen Seite der Klick liegt. `None`, wenn das wegfallende Ende `Fixed` hat oder der
+/// Berührpunkt auf einem Ende liegt, dann bleibt die Kurve ganz.
+fn control_cut(side: &Side, ends: [PointId; 2], touch: DVec2) -> Option<EndMove> {
+    let Geom::Nurbs { curve } = &side.g else {
+        return None;
+    };
+    let at = side.g.nearest(touch);
+    let (lo, hi) = curve.domain();
+    if at <= lo || at >= hi {
+        return None;
+    }
+    // Das Ende auf der Seite ohne Klick fällt weg.
+    let cut = usize::from(side.g.nearest(side.pick.at) < at);
+    (!side.fixed[cut]).then_some(EndMove::Cut { end: ends[cut], at })
+}
+
 /// Eine gewählte Kurve mit allem, was die Pläne brauchen.
 struct Side {
     pick: CurvePick,
     g: Geom,
-    /// Anfang und Ende offener Kurven (Linie, Bogen, Ellipsenbogen).
+    /// Anfang und Ende offener Kurven (Linie, Bogen, Ellipsenbogen, Spline mit Kontrollpunkten).
     ends: Option<[PointId; 2]>,
     /// `Fixed` an Anfang und Ende.
     fixed: [bool; 2],
@@ -387,17 +420,30 @@ impl Sketch {
             return None;
         }
         let g = self.geom(pick.curve)?;
+        // Griffe bleiben, wie sie sind: Abrunden würde die Linie vom Stützpunkt lösen.
+        if self.is_handle_curve(pick.curve) {
+            return None;
+        }
         let ends = match &self.curve(pick.curve)?.kind {
             CurveKind::Line { a, b } => Some([*a, *b]),
             CurveKind::Arc { start, end, .. } | CurveKind::EllipticArc { start, end, .. } => {
                 Some([*start, *end])
             }
+            CurveKind::ControlSpline { points, .. } => Some([points[0], points[points.len() - 1]]),
+            CurveKind::Conic { start, end, .. } | CurveKind::FixedSpline { start, end, .. } => {
+                Some([*start, *end])
+            }
             _ => None,
         };
+        // Der feste Spline bleibt, wie er ist, auch ohne `Fixed` an seinen Enden (Spec E).
+        let pinned = matches!(self.curve(pick.curve)?.kind, CurveKind::FixedSpline { .. });
         let is_fixed = |p: PointId| {
-            self.constraints().any(|(_, d)| {
-                d.enabled && !d.driven && matches!(d.kind, ConstraintKind::Fixed(q, ..) if q == p)
-            })
+            pinned
+                || self.constraints().any(|(_, d)| {
+                    d.enabled
+                        && !d.driven
+                        && matches!(d.kind, ConstraintKind::Fixed(q, ..) if q == p)
+                })
         };
         let fixed = ends.map_or([false; 2], |e| [is_fixed(e[0]), is_fixed(e[1])]);
         let exact = matches!(
@@ -568,6 +614,10 @@ impl Sketch {
         let (lo, hi) = p.g.domain();
         let steps = match &p.g {
             Geom::Spline { n, .. } => SCAN_STEPS_PER_SEGMENT * (n - 1),
+            Geom::Nurbs { curve } => {
+                let (lo, hi) = curve.domain();
+                SCAN_STEPS_PER_SEGMENT * (nurbs_breaks(curve, lo, hi).len() - 1)
+            }
             _ => SCAN_STEPS,
         }
         .max(8);
@@ -635,7 +685,7 @@ impl Sketch {
         };
         let on_piece = |side: &Side, piece: &Option<Piece>, t: DVec2| match piece {
             Some(p) => coord(&side.g, t).is_some_and(|u| p.contains(u)),
-            None => true,
+            None => control_keeps(side, corner.x, t),
         };
         let best = cands
             .into_iter()
@@ -666,15 +716,16 @@ impl Sketch {
                 end: best.t[0],
             }
         };
-        let mv = |side: &Side, piece: &Option<Piece>| match (side.ends, piece) {
+        let mv = |side: &Side, piece: &Option<Piece>, touch: DVec2| match (side.ends, piece) {
             (Some(ends), Some(p)) if !side.fixed[1 - p.far] => EndMove::Replace(ends[1 - p.far]),
+            (Some(ends), None) => control_cut(side, ends, touch).unwrap_or(EndMove::Whole),
             _ => EndMove::Whole,
         };
         let plan = FilletPlan {
             picks: [a, b],
             arc,
             touch: best.t,
-            moves: [mv(&sa, &pa), mv(&sb, &pb)],
+            moves: [mv(&sa, &pa, best.t[0]), mv(&sb, &pb, best.t[1])],
             corner: corner.shared,
             corner_at: corner.at,
             radius,
@@ -802,6 +853,37 @@ impl Sketch {
         Ok(())
     }
 
+    /// Kürzt den Spline mit Kontrollpunkten oder den Kegelschnitt `c` wie beim Stutzen: Das Stück vom
+    /// Ende `end` bis zum Parameter `at` fällt weg, `to` wird das neue Ende. Innere Punkte, die nur er
+    /// benutzte, entfallen; das alte Ende räumt der Aufrufer auf.
+    fn cut_control_spline(
+        &mut self,
+        c: CurveId,
+        end: PointId,
+        at: f64,
+        to: PointId,
+    ) -> Result<(), SketchError> {
+        self.check_curve(c)?;
+        let kind = self.curves[c].kind.clone();
+        let [first, last] = curve_ends(&kind).ok_or(SketchError::UnknownObject)?;
+        let (lo, hi) = self.geom(c).ok_or(SketchError::UnknownObject)?.domain();
+        let (u0, u1, s, e) = if end == first {
+            (at, hi, to, last)
+        } else if end == last {
+            (lo, at, first, to)
+        } else {
+            return Err(SketchError::UnknownObject);
+        };
+        let piece = match kind {
+            CurveKind::ControlSpline { .. } => self.control_spline_piece(c, u0, u1, s, e)?,
+            CurveKind::Conic { .. } => self.conic_part(c, u0, u1, s, e)?,
+            _ => return Err(SketchError::UnknownObject),
+        };
+        self.set_curve_kind(c, piece);
+        let inner: Vec<PointId> = kind.points().into_iter().filter(|&p| p != end).collect();
+        self.drop_orphans(&inner)
+    }
+
     pub(crate) fn fillet_helper_line(
         &mut self,
         a: PointId,
@@ -913,10 +995,18 @@ impl Sketch {
             let mut touched = Vec::new();
             let mut moved = Vec::new();
             for i in 0..2 {
-                if let EndMove::Replace(p) = plan.moves[i] {
-                    s.rehang_end(curves[i], p, touch[i])?;
-                    touched.push(curves[i]);
-                    moved.push(p);
+                match plan.moves[i] {
+                    EndMove::Replace(p) => {
+                        s.rehang_end(curves[i], p, touch[i])?;
+                        touched.push(curves[i]);
+                        moved.push(p);
+                    }
+                    EndMove::Cut { end, at } => {
+                        s.cut_control_spline(curves[i], end, at, touch[i])?;
+                        touched.push(curves[i]);
+                        moved.push(end);
+                    }
+                    EndMove::Whole => {}
                 }
             }
             s.settle_constraints(&touched, &[]);
@@ -925,8 +1015,11 @@ impl Sketch {
             for i in 0..2 {
                 let elliptic = matches!(s.curves[curves[i]].kind, CurveKind::EllipticArc { .. });
                 match plan.moves[i] {
-                    // Ein Ellipsenbogen hält sein neues Ende selbst auf der Ellipse.
+                    // Ein Ellipsenbogen hält sein neues Ende selbst auf der Ellipse. Beim Spline mit
+                    // Kontrollpunkten ist der Berührpunkt sein Ende; eine Tangente zwischen Bogen und
+                    // Freiformkurve gibt es nicht (wie bei der Ellipse).
                     EndMove::Replace(_) if elliptic => {}
+                    EndMove::Cut { .. } => {}
                     EndMove::Replace(_) => {
                         s.add_constraint(ConstraintKind::Tangent(curves[i], arc))?;
                     }
@@ -945,7 +1038,13 @@ impl Sketch {
             match plan.corner {
                 Some(p) if moved.contains(&p) => {
                     if corner.is_some() {
-                        s.hold_point(p, &curves)?;
+                        // Vom gekürzten Spline ist die Ecke abgeschnitten: Dort hielte sie nichts,
+                        // die Zeile wäre ein Widerspruch.
+                        let on: Vec<CurveId> = (0..2)
+                            .filter(|&i| !matches!(plan.moves[i], EndMove::Cut { .. }))
+                            .map(|i| curves[i])
+                            .collect();
+                        s.hold_point(p, &on)?;
                     } else {
                         s.drop_orphans(&[p])?;
                     }
@@ -954,10 +1053,19 @@ impl Sketch {
                     let ends: Vec<(PointId, CurveId)> = (0..2)
                         .filter_map(|i| match plan.moves[i] {
                             EndMove::Replace(p) => Some((p, curves[i])),
-                            EndMove::Whole => None,
+                            EndMove::Whole | EndMove::Cut { .. } => None,
                         })
                         .collect();
                     s.settle_old_ends(&ends)?;
+                    // Das weggeschnittene Ende liegt nicht mehr auf seiner Kurve: Kein neuer Halt,
+                    // es entfällt, wenn nichts mehr daran hängt (wie beim Stutzen).
+                    for m in plan.moves {
+                        if let EndMove::Cut { end, .. } = m
+                            && !s.point_in_use(end)
+                        {
+                            s.drop_orphans(&[end])?;
+                        }
+                    }
                 }
             }
 

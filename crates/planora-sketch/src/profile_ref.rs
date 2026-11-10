@@ -259,7 +259,10 @@ impl ExtractedProfiles {
             .iter()
             .flat_map(|arr| arr.curves.iter())
             .map(|(id, g)| {
-                let angle = !matches!(g, Geom::Line { .. } | Geom::Spline { .. });
+                let angle = !matches!(
+                    g,
+                    Geom::Line { .. } | Geom::Spline { .. } | Geom::Nurbs { .. }
+                );
                 (id.index(), angle)
             })
             .collect()

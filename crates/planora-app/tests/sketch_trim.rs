@@ -348,6 +348,44 @@ fn extend_without_target_shows_the_hint_and_changes_nothing() {
     );
 }
 
+/// Skizzen 7: Ein Ziel ist da, nur der Scheitel hängt an einer anderen Kurve: Die Meldung sagt das,
+/// nicht „keine Kurve zum Dehnen“.
+#[test]
+fn extend_names_a_shared_apex_and_changes_nothing() {
+    let ctx = context();
+    let mut s = sketch_with(|sk| {
+        let p = sk.add_point(0.0, 0.0).unwrap();
+        let q = sk.add_point(10.0, 0.0).unwrap();
+        let apex = sk.add_point(5.0, 4.0).unwrap();
+        sk.add_conic(p, q, apex, 0.5).unwrap();
+        let other = sk.add_point(30.0, 30.0).unwrap();
+        sk.add_line(apex, other).unwrap();
+        line(sk, (0.0, -1.0), (20.0, -1.0));
+    });
+    let before = snapshot(&s);
+    let steps = undo_len(&s);
+    set_tool(&mut s, Tool::Extend);
+    let on_conic = {
+        let sk = s.session_sketch().unwrap();
+        let conic = sk
+            .curves()
+            .find(|(_, d)| matches!(d.kind, CurveKind::Conic { .. }))
+            .unwrap()
+            .0;
+        let shape = sk.curve_polyline(conic, 64).unwrap();
+        shape[shape.len() * 7 / 8]
+    };
+    let at = screen(&s, (on_conic.x, on_conic.y));
+    click(&ctx, &mut s, at);
+    assert_eq!(snapshot(&s), before);
+    assert_eq!(undo_len(&s), steps);
+    let text = s.sketch_session.as_ref().unwrap().message_text().unwrap();
+    assert!(
+        text.contains(&planora_i18n::tr!("sketch-err-conic-apex-shared")),
+        "{text}"
+    );
+}
+
 #[test]
 fn extend_reaches_the_next_curve_with_preview_and_undo_name() {
     let ctx = context();

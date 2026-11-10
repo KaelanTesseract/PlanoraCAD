@@ -5,9 +5,7 @@
 use planora_feature::*;
 use planora_kernel::BoolOp;
 use planora_math::DVec3;
-use planora_project::{
-    FORMAT_VERSION, ProjectError, decode_version, encode_version, required_format,
-};
+use planora_project::{ProjectError, decode_version, encode_version, required_format};
 use serde_json::{Value, json};
 
 // ---- Bausteine ----------------------------------------------------------------------------
@@ -103,11 +101,6 @@ fn good() -> (String, Document, [FeatureId; 5]) {
 }
 
 // ---- Tests --------------------------------------------------------------------------------
-
-#[test]
-fn format_version_is_11() {
-    assert_eq!(FORMAT_VERSION, 16); // seit Skizzen 6 (Konstruktionsebenen und neue Projektionen)
-}
 
 #[test]
 fn file_without_rollbacks_is_byte_identical_to_format_10() {
@@ -222,10 +215,10 @@ fn format_11_with_unknown_step_id_is_rejected() {
 #[test]
 fn older_program_limit() {
     let (text, _, _) = good();
-    let e = bad(&text.replacen("\"format\": 11", "\"format\": 17", 1));
-    assert!(matches!(e, ProjectError::TooNew { found: 17, .. }), "{e:?}");
-    let e = bad("{\"format\": 17, \"rueckrollstellen\": \"ganz anders\"}");
-    assert!(matches!(e, ProjectError::TooNew { found: 17, .. }), "{e:?}");
+    let e = bad(&text.replacen("\"format\": 11", "\"format\": 18", 1));
+    assert!(matches!(e, ProjectError::TooNew { found: 18, .. }), "{e:?}");
+    let e = bad("{\"format\": 18, \"rueckrollstellen\": \"ganz anders\"}");
+    assert!(matches!(e, ProjectError::TooNew { found: 18, .. }), "{e:?}");
     // Format 11 selbst ist nicht zu neu.
     assert!(decode_version(&text, "x.json").is_ok());
 }

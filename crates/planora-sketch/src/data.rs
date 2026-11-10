@@ -4,7 +4,8 @@
 use crate::constraint::{ConstraintData, ConstraintId, ConstraintKind};
 use crate::error::SketchError;
 use crate::model::{
-    CurveData, CurveId, CurveKind, MAX_COORD, MAX_SPLINE_POINTS, PointData, PointId, Sketch, finite,
+    CurveData, CurveId, CurveKind, HandleCurvature, MAX_COORD, MAX_SPLINE_POINTS, PointData,
+    PointId, Sketch, check_conic_rho, finite,
 };
 use crate::pattern::{
     CircularMode, PatternData, PatternDir, PatternInstance, PatternKind, PatternProblem,
@@ -13,7 +14,8 @@ use crate::pattern::{
 use crate::solver::SolveCache;
 use planora_i18n::tr;
 use planora_kernel::Arena;
-use planora_math::{Frame, Tolerance};
+use planora_math::nurbs::NurbsCurve;
+use planora_math::{DVec2, DVec3, Frame, Tolerance};
 use std::collections::HashSet;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -69,6 +71,9 @@ pub struct SketchData {
     pub patterns: Vec<PatternRecord>,
 }
 
+/// Größter Grad eines Splines mit Kontrollpunkten in einer Datei (im Skizzenfeld wählbar: 3, 5).
+const MAX_CONTROL_SPLINE_DEGREE: u8 = 5;
+
 fn bad(msg: impl Into<String>) -> SketchError {
     SketchError::InvalidInput(msg.into())
 }
@@ -78,6 +83,11 @@ impl Sketch {
     /// [`Sketch::to_data`]).
     pub fn curve_entries(&self) -> impl Iterator<Item = &CurveKind> {
         self.curves.iter().map(|(_, c)| &c.kind)
+    }
+
+    /// Arten aller Abhängigkeitseinträge in Arena-Reihenfolge, auch gelöschter und interner.
+    pub fn constraint_entries(&self) -> impl Iterator<Item = &ConstraintKind> {
+        self.constraints.iter().map(|(_, c)| &c.kind)
     }
 
     pub fn to_data(&self) -> SketchData {
@@ -197,10 +207,51 @@ impl Sketch {
                 {
                     return Err(bad(tr!("sketch-err-data-ellipse-value")));
                 }
-                CurveKind::Spline { points }
+                CurveKind::Spline { points, .. }
                     if points.len() < 2 || points.len() > MAX_SPLINE_POINTS =>
                 {
                     return Err(bad(tr!("sketch-err-data-spline-count")));
+                }
+                CurveKind::ControlSpline {
+                    points,
+                    degree,
+                    knots,
+                } => check_control_spline(points.len(), *degree, knots)?,
+                CurveKind::Conic {
+                    start,
+                    end,
+                    apex,
+                    rho,
+                } => {
+                    if start == end || start == apex || end == apex {
+                        return Err(bad(tr!("sketch-err-point-twice")));
+                    }
+                    check_conic_rho(*rho)?;
+                }
+                // Knoten, Gewichte und Zahlen hat `NurbsCurve::new` schon geprüft.
+                CurveKind::FixedSpline { start, end, curve } => {
+                    let flat = curve.control_points().iter().all(|q| q.z == 0.0);
+                    if !flat || (start == end && !curve.is_closed(d.tolerance.linear)) {
+                        return Err(bad(tr!("sketch-err-data-fixed-spline")));
+                    }
+                    // Eine lebende Kurve: Die Enden liegen auf ihr und sind fest (A3).
+                    if c.alive {
+                        let (lo, hi) = curve.domain();
+                        let holds = |p: PointId, t: f64| {
+                            let r = &d.points[p.index()];
+                            let at = DVec2::new(d.vars[r.x], d.vars[r.y]);
+                            at.distance(curve.point(t).truncate()) <= d.tolerance.linear
+                                && d.constraints.iter().any(|k| {
+                                    k.alive
+                                        && k.enabled
+                                        && !k.driven
+                                        && matches!(k.kind, ConstraintKind::Fixed(q, ..) if q == p)
+                                })
+                        };
+                        if !(holds(*start, lo) && holds(*end, hi)) {
+                            return Err(bad(tr!("sketch-err-data-fixed-spline")));
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -208,6 +259,7 @@ impl Sketch {
                 return Err(bad(tr!("sketch-err-data-curve-deleted")));
             }
         }
+        check_handles(&d)?;
         for c in &d.constraints {
             if !(-1..=1).contains(&c.branch) {
                 return Err(bad(tr!("sketch-err-data-constraint-place")));
@@ -317,6 +369,89 @@ impl Sketch {
         s.refresh_shared_signs(None);
         Ok((s, dissolved))
     }
+}
+
+/// Prüft die Griffe aller Splines, auch gelöschter Einträge: am Stützpunkt, je Stützpunkt einer, die
+/// Spitze kein Stützpunkt, die Griff-Linie eine Konstruktionslinie von `at` nach `tip`, die nur diesem
+/// Griff gehört, der Krümmungsgriff ein Bogen um `center` zwischen `at` und `other`. An einem lebenden
+/// Spline leben Linie und Bogen. Die Punkte hat die Prüfung der Kurven schon gesehen.
+///
+/// Zu jedem Krümmungsgriff eines lebenden Splines gehört genau eine wirksame interne
+/// `SplineCurvatureHandle`-Zeile, und keine lebende Zeile steht ohne ihn; sonst wäre der Bogen frei
+/// oder die Zeile leer.
+fn check_handles(d: &SketchData) -> Result<(), SketchError> {
+    let wrong = || bad(tr!("sketch-err-data-handle"));
+    let mut rows: HashSet<(CurveId, PointId)> = HashSet::new();
+    for k in d.constraints.iter().filter(|k| k.alive) {
+        if let ConstraintKind::SplineCurvatureHandle(c, at) = k.kind
+            && (!k.internal || !k.enabled || k.driven || !rows.insert((c, at)))
+        {
+            return Err(wrong());
+        }
+    }
+    let mut used: HashSet<CurveId> = HashSet::new();
+    for (index, c) in d.curves.iter().enumerate() {
+        let CurveKind::Spline { points, handles } = &c.kind else {
+            continue;
+        };
+        let mut seen: HashSet<PointId> = HashSet::new();
+        for h in handles {
+            if !points.contains(&h.at) || points.contains(&h.tip) || !seen.insert(h.at) {
+                return Err(wrong());
+            }
+            if c.alive
+                && matches!(h.curvature, HandleCurvature::Arc { .. })
+                && !rows.remove(&(CurveId::from_index(index), h.at))
+            {
+                return Err(wrong());
+            }
+            let line = d.curves.get(h.line.index()).ok_or_else(wrong)?;
+            let fits = line.kind == CurveKind::Line { a: h.at, b: h.tip } && line.construction;
+            if !fits || (c.alive && !line.alive) || !used.insert(h.line) {
+                return Err(wrong());
+            }
+            if let HandleCurvature::Arc { arc, center, other } = h.curvature {
+                let bow = d.curves.get(arc.index()).ok_or_else(wrong)?;
+                let fits = match bow.kind {
+                    CurveKind::Arc {
+                        center: m,
+                        start,
+                        end,
+                    } => {
+                        m == center
+                            && ((start, end) == (h.at, other) || (start, end) == (other, h.at))
+                    }
+                    _ => false,
+                };
+                if !fits || !bow.construction || (c.alive && !bow.alive) || !used.insert(arc) {
+                    return Err(wrong());
+                }
+            }
+        }
+    }
+    // Was übrig ist, steht ohne Krümmungsgriff.
+    if rows.is_empty() {
+        Ok(())
+    } else {
+        Err(wrong())
+    }
+}
+
+/// Prüft Punktzahl, Grad und Knoten eines Splines mit Kontrollpunkten: 2 bis
+/// [`MAX_SPLINE_POINTS`] Punkte, Grad 1 bis 5 (der größte wählbare), Knoten wie
+/// [`NurbsCurve::new`] sie verlangt (auch: passend zu Grad und Punktzahl).
+fn check_control_spline(n: usize, degree: u8, knots: &[f64]) -> Result<(), SketchError> {
+    if !(2..=MAX_SPLINE_POINTS).contains(&n) {
+        return Err(bad(tr!("sketch-err-data-spline-count")));
+    }
+    if !(1..=MAX_CONTROL_SPLINE_DEGREE).contains(&degree) {
+        return Err(bad(tr!("sketch-err-spline-degree")));
+    }
+    let control = vec![DVec3::ZERO; n];
+    let weights = vec![1.0; n];
+    NurbsCurve::new(usize::from(degree), knots.to_vec(), control, weights)
+        .map(|_| ())
+        .map_err(|e| bad(tr!("sketch-err-spline-invalid", detail = e.to_string())))
 }
 
 /// Prüft die Muster der Rohdaten. Indizes vorhanden, auch bei aufgelösten Mustern. Bei lebenden

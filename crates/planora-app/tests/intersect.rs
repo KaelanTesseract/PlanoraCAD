@@ -28,6 +28,9 @@ fn kinds(sk: &Sketch) -> Vec<&'static str> {
             CurveKind::Ellipse { .. } => "Ellipse",
             CurveKind::EllipticArc { .. } => "Ellipsenbogen",
             CurveKind::Spline { .. } => "Spline",
+            CurveKind::ControlSpline { .. } => "Spline mit Kontrollpunkten",
+            CurveKind::Conic { .. } => "Kegelschnitt",
+            CurveKind::FixedSpline { .. } => "Fester Spline",
         })
         .collect()
 }
@@ -389,4 +392,41 @@ fn panel_shows_filter_for_intersect_and_nothing_for_silhouette() {
     assert!(!text.contains("Auswahlfilter"), "{text}");
     let text = texts(&mut s, ToolKind::Project);
     assert!(text.contains("Projektionsverknüpfung"), "{text}");
+}
+
+/// Skizzen 7, Task 11: Der schräge Kegel wird nicht mehr abgelehnt. Hyperbel als fester Spline,
+/// dazu die Sehne auf dem Boden; ein zweiter Aufruf legt keine Doppelten an.
+#[test]
+fn intersect_oblique_cone_gives_a_fixed_spline() {
+    let mut s = AppState::new();
+    s.document
+        .add_feature(
+            "Kegel",
+            FeatureKind::Cone {
+                radius: 5.0,
+                height: 10.0,
+                origin: DVec3::new(0.0, 2.0, 0.0),
+            },
+        )
+        .unwrap();
+    s.refresh();
+    let id = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XZ))
+        .unwrap();
+    s.open_sketch(id).unwrap();
+    s.observe_sketch(false);
+    let before = undo_len(&s);
+    let n = s.intersect_into_sketch(ProjectTarget::Body(0)).unwrap();
+    assert_eq!(n, 2);
+    s.observe_sketch(false);
+    assert_eq!(undo_len(&s), before + 1, "ein Rückgängig-Schritt");
+    let mut found = kinds(&draft(&s).sketch);
+    found.sort_unstable();
+    assert_eq!(found, vec!["Fester Spline", "Linie"]);
+    assert!(s.sketch_session.as_ref().unwrap().message.is_none());
+    let cone = face_of_kind(&s, 0, SurfaceKind::Cone);
+    let err = s
+        .intersect_into_sketch(ProjectTarget::Face(0, cone))
+        .unwrap_err();
+    assert_eq!(err, tr!("sketch-intersect-nothing-new"));
 }

@@ -147,6 +147,23 @@ action_table! {
     SketchIntersect, "skizze.schneiden", "action-sketch-intersect", Sketch, [];
     /// Fusion „Silhouette“ (Skizzen 6): ohne Vorgabetaste wie in Fusion, belegbar.
     SketchSilhouette, "skizze.silhouette", "action-sketch-silhouette", Sketch, [];
+    // Skizzen 7: die Arten am Spline-Knopf, ohne Vorgabetaste wie in Fusion (Annahme), belegbar.
+    /// Fusion „Spline durch Stützpunkte“.
+    SketchSplineFit, "skizze.spline_stuetzpunkte", "action-sketch-spline-fit", Sketch, [];
+    /// Fusion „Spline mit Kontrollpunkten“.
+    SketchSplineControl, "skizze.spline_kontrollpunkte", "action-sketch-spline-control", Sketch, [];
+    /// Fusion „Kegelschnitt“.
+    SketchConic, "skizze.kegelschnitt", "action-sketch-conic", Sketch, [];
+    // Skizzen 7 (D5): Griffe und Änderungen am Spline, ohne Vorgabetaste (Annahme), belegbar.
+    /// Fusion „Tangentengriff“: schaltet ihn am gewählten Stützpunkt ein oder aus.
+    SketchTangentHandle, "skizze.tangentengriff", "action-sketch-tangent-handle", Sketch, [];
+    /// Fusion „Krümmungsgriff“: schaltet ihn am gewählten Stützpunkt ein oder aus.
+    SketchCurvatureHandle, "skizze.kruemmungsgriff", "action-sketch-curvature-handle", Sketch, [];
+    /// Fügt beim Klick auf einen Spline mit Kontrollpunkten einen Kontrollpunkt ein.
+    SketchInsertControlPoint, "skizze.kontrollpunkt_einfuegen",
+        "action-sketch-insert-control-point", Sketch, [];
+    /// Wechselt den Grad des gewählten Splines mit Kontrollpunkten zwischen 3 und 5.
+    SketchSplineDegree, "skizze.spline_grad", "action-sketch-spline-degree", Sketch, [];
     /// Fusion „Stutzen“ (T).
     SketchTrim, "skizze.stutzen", "action-sketch-trim", Sketch, [key(Key::T)];
     /// Fusion „Dehnen“: ohne Vorgabetaste wie in Fusion, belegbar.
@@ -233,6 +250,7 @@ impl Action {
             Action::SketchLine => Some(Tool::Line),
             Action::SketchProjectEdge => Some(Tool::ProjectEdge),
             Action::SketchTrim => Some(Tool::Trim),
+            Action::SketchInsertControlPoint => Some(Tool::InsertControlPoint),
             Action::SketchExtend => Some(Tool::Extend),
             Action::SketchBreak => Some(Tool::Break),
             Action::SketchOffset => Some(Tool::Offset),

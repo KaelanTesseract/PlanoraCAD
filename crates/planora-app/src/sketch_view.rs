@@ -4,6 +4,7 @@
 
 use crate::sketch_cursor::AutoConstraint;
 use crate::sketch_grips::{self, Grip, GripLayout};
+use crate::sketch_handles::HandlePart;
 use crate::sketch_kinds::ToolKind;
 use crate::sketch_pattern::{self, PatternGrip, PatternGripLayout};
 use crate::sketch_state::{Item, ProjectFilter, SketchSession, Snap, Tool};
@@ -38,6 +39,10 @@ const AXIS_PX: f32 = 28.0;
 const POINT_PX: f32 = 3.5;
 /// Strichstärke normaler Kurven in Pixeln.
 const CURVE_WIDTH: f32 = 2.0;
+/// Halbe Größe eines gedämpften Griffs und des Rho-Griffs in Bildpunkten.
+const HANDLE_GRIP_PX: f32 = 4.5;
+/// Stärke der Farbe eines gedämpften Griffs.
+const HANDLE_GHOST_FADE: f32 = 0.6;
 /// Halbe Größe der Fangzeichen in Pixeln.
 const SNAP_MARK_PX: f32 = 5.0;
 /// Strichstärke der Fangzeichen in Pixeln.
@@ -209,6 +214,7 @@ pub fn kind_msg(kind: &ConstraintKind) -> crate::msg::Msg {
         K::Diameter(..) => crate::msg!("sketch-constraint-diameter"),
         K::Angle(..) => crate::msg!("sketch-constraint-angle"),
         K::ArcRadius(..) => crate::msg!("sketch-constraint-arc-radius"),
+        K::SplineCurvatureHandle(..) => crate::msg!("sketch-constraint-curvature-handle"),
         K::EllipticArcEnds(..) => crate::msg!("sketch-constraint-elliptic-arc-ends"),
         K::EllipseMajor(..) => crate::msg!("sketch-constraint-ellipse-major"),
         K::EllipseMinor(..) => crate::msg!("sketch-constraint-ellipse-minor"),
@@ -350,7 +356,10 @@ pub fn overlay_text(
 ) -> String {
     use ConstraintKind as K;
     let plain = match kind {
-        K::Coincident(..) | K::ArcRadius(..) | K::EllipticArcEnds(..) => return String::new(),
+        K::Coincident(..)
+        | K::ArcRadius(..)
+        | K::EllipticArcEnds(..)
+        | K::SplineCurvatureHandle(..) => return String::new(),
         K::Horizontal(..) => "H".to_string(),
         K::Vertical(..) => "V".to_string(),
         K::Parallel(..) => parallel_symbol(ctx).to_string(),
@@ -496,6 +505,7 @@ fn anchors(sk: &Sketch, kind: &ConstraintKind) -> Vec<DVec2> {
         K::Radius(c, _)
         | K::Diameter(c, _)
         | K::ArcRadius(c)
+        | K::SplineCurvatureHandle(c, _)
         | K::EllipticArcEnds(c)
         | K::EllipseMajor(c, _)
         | K::EllipseMinor(c, _)
@@ -743,7 +753,12 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
             Some(FeatureKind::Sketch(def)) => def.copies.iter().map(|c| c.curve).collect(),
             _ => HashSet::new(),
         };
+        // Eine fertige Skizze hat keine Auswahl: Griffe ohne Abhängigkeit sind nicht zu sehen (B6).
+        let handles_hidden = crate::sketch_handles::hidden_handles_of(sk, &[]);
         for (c, data) in sk.curves() {
+            if handles_hidden.curves.contains(&c) {
+                continue;
+            }
             let Some(pl) = sk.curve_polyline(c, STEPS_PER_TURN) else {
                 continue;
             };
@@ -1319,6 +1334,18 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             se.begin_line_arc(&sf.sketch, start, r);
         }
     }
+    let esc =
+        !flyout && !viewport::typing(ui.ctx()) && ui.input(|i| i.key_pressed(egui::Key::Escape));
+    // Griffzug: Die rechte Taste und Esc nehmen ihn ganz zurück. Das steht vor dem Ende des Zugs, denn
+    // Esc beendet schon hier den Zug von egui, und das hieße Annehmen. Die Taste gilt damit als
+    // verbraucht: Sie leert nicht auch noch die Auswahl.
+    let handle_aborted = se.handle_drag_running()
+        && (esc || ui.input(|i| i.pointer.button_pressed(PointerButton::Secondary)))
+        && se.abort_handle_drag(&mut sf.sketch);
+    let esc = esc && !handle_aborted;
+    if handle_aborted {
+        ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+    }
     if se.is_dragging() {
         if response.dragged_by(PointerButton::Primary)
             && let Some(at) = at
@@ -1330,8 +1357,6 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         }
     }
 
-    let esc =
-        !flyout && !viewport::typing(ui.ctx()) && ui.input(|i| i.key_pressed(egui::Key::Escape));
     if se.box_select.is_some() {
         // Die rechte Taste bricht schon beim Drücken ab: Ein Klick wird es während des Zugs nicht
         // immer. Esc beendet schon hier den Zug von egui, der Rahmen fällt aber unten weg.
@@ -1472,6 +1497,11 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         } else if se.runs_pattern() {
             // Anordnung: Der zweite schnelle Klick schaltet das nächste Exemplar wie jeder Klick
             // (ein Doppelklick schließt nichts ab).
+            if let Some(at) = at {
+                let _ = se.click(&mut sf.sketch, at, radius, shift);
+            }
+        } else if se.tool == Tool::InsertControlPoint {
+            // Der schnelle zweite Klick fügt den nächsten Punkt ein wie jeder Klick.
             if let Some(at) = at {
                 let _ = se.click(&mut sf.sketch, at, radius, shift);
             }
@@ -1690,7 +1720,7 @@ fn point_ink(
     p: PointId,
 ) -> Color32 {
     let selected = se.selection.contains(&Item::Point(p))
-        || se.dragging == Some(p)
+        || se.is_dragged_point(p)
         || dim_picked(se, Item::Point(p));
     if selected {
         col.selected
@@ -1789,7 +1819,10 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
 
     // Kurven (beim Bearbeiten eines Musters ohne seine Exemplare: An ihrer Stelle steht die
     // Vorschau).
-    let (hidden, hidden_points) = se.pattern_hidden(sk);
+    let (mut hidden, mut hidden_points) = se.pattern_hidden(sk);
+    let handles_hidden = se.hidden_handles(sk);
+    hidden.extend(handles_hidden.curves);
+    hidden_points.extend(handles_hidden.points);
     for (c, data) in sk.curves() {
         if hidden.contains(&c) {
             continue;
@@ -1804,6 +1837,13 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         let width = if data.construction { 1.2 } else { CURVE_WIDTH };
         for path in map.paths(&pl) {
             painter.extend(style_shapes(path, Stroke::new(width, color), data.style()));
+        }
+    }
+
+    // Hilfslinien der gewählten Kurve (Kontrollpolygon, Kegelschnitt), gestrichelt unter den Punkten.
+    for line in curve_guides(se, sk) {
+        for path in map.paths(&line) {
+            draw_path(&painter, path, Stroke::new(1.0, col.preview), true);
         }
     }
 
@@ -1829,6 +1869,7 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         }
     }
 
+    draw_handle_grips(&painter, &map, se, sk, &col, pointer);
     draw_preview(&painter, &map, sk, se, col.preview);
     let mut placed: Vec<Rect> = Vec::new();
     // Skizzenbemaßung: Hilfsstriche und der Wert am Anker (dem Zeiger bzw. der gesetzten Stelle).
@@ -1975,6 +2016,59 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     }
 
     painter.extend(box_select_shapes(state));
+}
+
+/// Gedämpfte Griffe und Rho-Griffe. Aktive Griffe sind Kurven und Punkte der Skizze und schon gezeichnet.
+fn draw_handle_grips(
+    painter: &egui::Painter,
+    map: &Mapper,
+    se: &SketchSession,
+    sk: &Sketch,
+    col: &theme::SketchColors,
+    pointer: Option<Pos2>,
+) {
+    let hot = |s: Pos2| pointer.is_some_and(|p| p.distance(s) <= HANDLE_GRIP_PX + 3.0);
+    let diamond = |c: Pos2, r: f32| {
+        vec![
+            c - vec2(r, 0.0),
+            c - vec2(0.0, r),
+            c + vec2(r, 0.0),
+            c + vec2(0.0, r),
+        ]
+    };
+    let dim = col.construction.gamma_multiply(HANDLE_GHOST_FADE);
+    for h in se.visible_handles(sk).iter().filter(|h| h.ghost) {
+        let (Some(a), Some(t)) = (map.to_screen(h.at), map.to_screen(h.tip)) else {
+            continue;
+        };
+        let ink = if hot(t) { col.construction } else { dim };
+        draw_path(painter, vec![a, t], Stroke::new(1.0, ink), true);
+        match h.part {
+            HandlePart::Tangent => {
+                painter.circle_stroke(t, HANDLE_GRIP_PX, Stroke::new(1.2, ink));
+            }
+            HandlePart::Curvature => {
+                painter.add(Shape::closed_line(
+                    diamond(t, HANDLE_GRIP_PX),
+                    Stroke::new(1.2, ink),
+                ));
+            }
+        }
+    }
+    for (_, at) in se.rho_grips(sk) {
+        if let Some(s) = map.to_screen(at) {
+            let ink = if hot(s) {
+                lighter(col.selected)
+            } else {
+                col.selected
+            };
+            painter.add(Shape::convex_polygon(
+                diamond(s, HANDLE_GRIP_PX),
+                ink,
+                Stroke::NONE,
+            ));
+        }
+    }
 }
 
 /// Gehört `item` zu den gewählten Objekten der Skizzenbemaßung?
@@ -2146,6 +2240,27 @@ fn place_label(mut r: Rect, placed: &mut Vec<Rect>) -> Rect {
     r
 }
 
+/// Hilfslinien der gewählten Kurven als Linienzüge (Skizzen 7): beim Spline mit Kontrollpunkten das
+/// Kontrollpolygon, beim Kegelschnitt Start–Scheitel–Ende. Sie sind keine Kurven.
+pub fn curve_guides(se: &SketchSession, sk: &Sketch) -> Vec<Vec<DVec2>> {
+    se.selection
+        .iter()
+        .filter_map(|item| {
+            let Item::Curve(c) = item else {
+                return None;
+            };
+            let ids = match &sk.curve(*c)?.kind {
+                CurveKind::ControlSpline { points, .. } => points.clone(),
+                CurveKind::Conic {
+                    start, end, apex, ..
+                } => vec![*start, *apex, *end],
+                _ => return None,
+            };
+            ids.iter().map(|&p| pos(sk, p)).collect()
+        })
+        .collect()
+}
+
 /// Vorschau des laufenden Werkzeugs vom zuletzt gesetzten Punkt zum Mauszeiger.
 fn draw_preview(
     painter: &egui::Painter,
@@ -2218,6 +2333,14 @@ fn draw_preview(
             }
         }
         return;
+    }
+    // Spline mit Kontrollpunkten: die Kurve durchgezogen, das Polygon gestrichelt (unten).
+    for path in se
+        .control_spline_preview(sk, cursor)
+        .iter()
+        .flat_map(|curve| map.paths(curve))
+    {
+        draw_path(painter, path, stroke, false);
     }
     let pending: Vec<DVec2> = se.pending.iter().filter_map(|&p| pos(sk, p)).collect();
     let circle = |m: DVec2, r: f64| -> Vec<DVec2> {

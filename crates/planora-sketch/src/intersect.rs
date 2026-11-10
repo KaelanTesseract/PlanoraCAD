@@ -66,10 +66,10 @@ pub(crate) fn intersect_prepared(p1: &Prepared, p2: &Prepared, tol: f64) -> Vec<
     finish(g1, g2, raw, tol)
 }
 
-/// Selbstschnitte eines Splines als Parameterpaare `t1 < t2` (Kreuzungen nicht benachbarter
-/// Linienzug-Abschnitte, nachgeschärft); andere Kurven haben keine.
+/// Selbstschnitte eines Splines (beider Arten) als Parameterpaare `t1 < t2` (Kreuzungen nicht
+/// benachbarter Linienzug-Abschnitte, nachgeschärft); andere Kurven haben keine.
 pub(crate) fn self_intersect(g: &Geom, tol: f64) -> Vec<(f64, f64)> {
-    if !matches!(g, Geom::Spline { .. }) {
+    if !matches!(g, Geom::Spline { .. } | Geom::Nurbs { .. }) {
         return Vec::new();
     }
     let poly = Poly::new(g);
@@ -130,8 +130,10 @@ impl Sketch {
         let tol = self.tolerance().linear;
         let mut ts = Vec::new();
         let pg = Prepared::new(g);
+        // Griffe schneiden nichts: Sonst fiele an jedem Stützpunkt mit Griff eine Schnittstelle an.
+        let handle_curves = self.handle_curves();
         for (id, data) in self.curves() {
-            if id == c || (data.construction && !with_construction) {
+            if id == c || (data.construction && !with_construction) || handle_curves.contains(&id) {
                 continue;
             }
             if let Some(h) = self.geom(id) {

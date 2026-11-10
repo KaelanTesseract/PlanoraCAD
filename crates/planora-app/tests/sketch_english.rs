@@ -220,7 +220,7 @@ fn sketch_speaks_english() {
                 // Skizzen 5
                 "Concentric",
                 "Collinear",
-                "Smooth",
+                "Curvature",
                 "Distance …",
                 "Point–line distance …",
                 "Radius …",

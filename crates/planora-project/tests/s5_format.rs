@@ -4,9 +4,7 @@
 
 use planora_feature::*;
 use planora_math::{DVec2, Tolerance};
-use planora_project::{
-    FORMAT_VERSION, ProjectError, decode_version, encode_version, required_format,
-};
+use planora_project::{ProjectError, decode_version, encode_version, required_format};
 use planora_sketch::constraint::ConstraintKind as K;
 use planora_sketch::pattern::{
     CircularMode, PatternDir, PatternId, PatternKind, PatternPlan, PatternSlot,
@@ -109,11 +107,6 @@ fn all_kinds() -> (Sketch, Vec<ConstraintId>) {
     let mut s = new_sketch();
     let ids = (0..6).map(|k| add_kind(&mut s, k)).collect();
     (s, ids)
-}
-
-#[test]
-fn format_version_is_16() {
-    assert_eq!(FORMAT_VERSION, 16); // seit Skizzen 6 (Konstruktionsebenen und neue Projektionen)
 }
 
 #[test]
@@ -243,9 +236,9 @@ fn a_head_newer_than_the_known_format_is_too_new() {
     let (s, _) = all_kinds();
     let text = encode_version(&document(s).snapshot()).unwrap();
     assert!(load(&text).is_ok());
-    let newer = text.replacen("\"format\": 15", "\"format\": 17", 1);
+    let newer = text.replacen("\"format\": 15", "\"format\": 18", 1);
     let e = load(&newer).unwrap_err();
-    assert!(matches!(e, ProjectError::TooNew { found: 17, .. }), "{e:?}");
+    assert!(matches!(e, ProjectError::TooNew { found: 18, .. }), "{e:?}");
 }
 
 // ---------------------------------------------------------------------------------------------

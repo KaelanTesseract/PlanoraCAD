@@ -268,6 +268,8 @@ fn only_the_forms_with_kinds_and_the_fillet_have_a_triangle() {
             Tool::Arc,
             Tool::Polygon,
             Tool::Slot,
+            // Skizzen 7: Klappmenü am Spline-Knopf.
+            Tool::Spline,
             // Skizzen 6: Klappmenü „Projizieren/Einschließen“.
             Tool::ProjectEdge,
             Tool::Pattern,

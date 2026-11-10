@@ -2,10 +2,9 @@
 //! Hülle der Skizze.
 
 use crate::constraint::ConstraintKind;
-use crate::curves::Sampled;
 use crate::model::{CurveId, CurveKind, PointId, Sketch};
 use planora_math::{DVec2, TAU};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 /// Kleinste und größte Schrittzahl je Vollkreis für [`Sketch::curve_polyline`].
 const MIN_STEPS_PER_TURN: usize = 4;
@@ -68,10 +67,15 @@ fn chain_ends(kind: &CurveKind) -> Vec<PointId> {
         CurveKind::Arc { start, end, .. } | CurveKind::EllipticArc { start, end, .. } => {
             vec![*start, *end]
         }
-        CurveKind::Spline { points } => match (points.first(), points.last()) {
-            (Some(a), Some(b)) => vec![*a, *b],
-            _ => Vec::new(),
-        },
+        CurveKind::Spline { points, .. } | CurveKind::ControlSpline { points, .. } => {
+            match (points.first(), points.last()) {
+                (Some(a), Some(b)) => vec![*a, *b],
+                _ => Vec::new(),
+            }
+        }
+        CurveKind::Conic { start, end, .. } | CurveKind::FixedSpline { start, end, .. } => {
+            vec![*start, *end]
+        }
         CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => Vec::new(),
     }
 }
@@ -79,8 +83,9 @@ fn chain_ends(kind: &CurveKind) -> Vec<PointId> {
 impl Sketch {
     /// Linienzug einer lebenden Kurve: Linie 2 Punkte; Kreis und Ellipse geschlossen (letzter
     /// Punkt = erster); Bogen gegen den Uhrzeigersinn von Start nach Ende mit den exakten
-    /// Endpunkten, Ellipsenbogen ebenso; Spline 16 Punkte je Segment. `steps_per_turn` wird auf
-    /// `4..=4096` geklemmt.
+    /// Endpunkten, Ellipsenbogen ebenso; Spline 16 Punkte je Segment; Spline mit Kontrollpunkten
+    /// nach seinen Bézier-Stücken mit den exakten Enden. `steps_per_turn` wird auf `4..=4096`
+    /// geklemmt.
     pub fn curve_polyline(&self, c: CurveId, steps_per_turn: usize) -> Option<Vec<DVec2>> {
         let per_turn = steps_per_turn.clamp(MIN_STEPS_PER_TURN, MAX_STEPS_PER_TURN);
         let tol = self.tolerance();
@@ -129,15 +134,33 @@ impl Sketch {
                 pl[steps] = e;
                 pl
             }
-            CurveKind::Spline { points } => {
+            CurveKind::Spline { points, handles } => {
                 let xy: Vec<DVec2> = points.iter().map(|&p| self.pos(p)).collect();
-                let sampled = Sampled::spline(&xy);
+                let sampled = self.spline_sampled(points, handles);
                 let n = (xy.len() - 1) * SPLINE_STEPS_PER_SEGMENT;
                 let mut pl: Vec<DVec2> = (0..=n)
                     .map(|k| sampled.eval(k as f64 / SPLINE_STEPS_PER_SEGMENT as f64).0)
                     .collect();
                 pl[0] = xy[0];
                 pl[n] = xy[xy.len() - 1];
+                pl
+            }
+            CurveKind::ControlSpline { points, .. } => {
+                let g = self.geom(c)?;
+                let (lo, hi) = g.domain();
+                let mut pl = g.polyline(lo, hi, per_turn);
+                let last = pl.len() - 1;
+                pl[0] = self.pos(points[0]);
+                pl[last] = self.pos(points[points.len() - 1]);
+                pl
+            }
+            CurveKind::Conic { start, end, .. } | CurveKind::FixedSpline { start, end, .. } => {
+                let g = self.geom(c)?;
+                let (lo, hi) = g.domain();
+                let mut pl = g.polyline(lo, hi, per_turn);
+                let last = pl.len() - 1;
+                pl[0] = self.pos(*start);
+                pl[last] = self.pos(*end);
                 pl
             }
         };
@@ -157,7 +180,8 @@ impl Sketch {
 
     /// Punkt der lebenden Kurve `c`, der `at` am nächsten liegt: exakt für Linien (auf der
     /// unbegrenzten Geraden) sowie Kreise und Bögen (auf dem ganzen Kreis), für Ellipsen und
-    /// Splines auf dem Linienzug, für Ellipsenbögen auf dem Linienzug ihrer ganzen Ellipse.
+    /// Splines auf dem Linienzug, für Ellipsenbögen auf dem Linienzug ihrer ganzen Ellipse, für
+    /// Splines mit Kontrollpunkten auf der Kurve selbst (siehe [`crate::geom::Geom::nearest`]).
     pub fn nearest_on_curve(&self, c: CurveId, at: DVec2) -> Option<DVec2> {
         if !at.is_finite() {
             return None;
@@ -191,6 +215,12 @@ impl Sketch {
             CurveKind::Ellipse { .. } | CurveKind::Spline { .. } => {
                 polyline_closest(&self.curve_polyline(c, MAX_STEPS_PER_TURN)?, at)
             }
+            CurveKind::ControlSpline { .. }
+            | CurveKind::Conic { .. }
+            | CurveKind::FixedSpline { .. } => {
+                let g = self.geom(c)?;
+                Some(g.eval(g.nearest(at)).0)
+            }
             CurveKind::EllipticArc { .. } => {
                 // wie beim Bogen auf der ganzen Kurve
                 let ring: Vec<DVec2> = (0..=MAX_STEPS_PER_TURN)
@@ -203,7 +233,18 @@ impl Sketch {
 
     /// Nächster lebender Punkt innerhalb von `radius` um `at`.
     pub fn pick_point(&self, at: DVec2, radius: f64) -> Option<PointId> {
+        self.pick_point_skipping(at, radius, &HashSet::new())
+    }
+
+    /// Wie [`pick_point`](Self::pick_point), ohne die Punkte aus `skip` (etwa ausgeblendete Griffe).
+    pub fn pick_point_skipping(
+        &self,
+        at: DVec2,
+        radius: f64,
+        skip: &HashSet<PointId>,
+    ) -> Option<PointId> {
         self.points()
+            .filter(|(id, _)| !skip.contains(id))
             .map(|(id, _)| (id, self.pos(id).distance(at)))
             .filter(|&(_, d)| d <= radius)
             .min_by(|a, b| a.1.total_cmp(&b.1))
@@ -221,7 +262,18 @@ impl Sketch {
 
     /// Nächste lebende Kurve innerhalb von `radius` um `at`.
     pub fn pick_curve(&self, at: DVec2, radius: f64) -> Option<CurveId> {
+        self.pick_curve_skipping(at, radius, &HashSet::new())
+    }
+
+    /// Wie [`pick_curve`](Self::pick_curve), ohne die Kurven aus `skip` (etwa ausgeblendete Griffe).
+    pub fn pick_curve_skipping(
+        &self,
+        at: DVec2,
+        radius: f64,
+        skip: &HashSet<CurveId>,
+    ) -> Option<CurveId> {
         self.curves()
+            .filter(|(id, _)| !skip.contains(id))
             .filter_map(|(id, _)| Some((id, self.distance_to_curve(id, at)?)))
             .filter(|&(_, d)| d <= radius)
             .min_by(|a, b| a.1.total_cmp(&b.1))
@@ -230,11 +282,16 @@ impl Sketch {
 
     /// Die zusammenhängende Kette um die lebende Kurve `c`, sortiert und mit `c` (leer, wenn `c`
     /// nicht lebt): Kurven hängen über gemeinsame Endpunkte und eingeschaltete `Coincident`
-    /// zusammen, Verzweigungen laufen mit. Mitten und `PointOnCurve` verbinden nicht.
+    /// zusammen, Verzweigungen laufen mit. Mitten und `PointOnCurve` verbinden nicht. Griffe gehören
+    /// zu keiner Kette: Ab einer Griff-Linie oder einem Griff-Bogen ist die Kette nur er selbst, ganz
+    /// gleich, ob sein Stützpunkt zufällig ein Ende des Splines ist.
     pub fn connected_chain(&self, c: CurveId) -> Vec<CurveId> {
         let Some(start) = self.curve(c) else {
             return Vec::new();
         };
+        if self.is_handle_curve(c) {
+            return vec![c];
+        }
         let links: Vec<(PointId, PointId)> = self
             .constraints()
             .filter(|(_, data)| data.enabled)
@@ -243,8 +300,10 @@ impl Sketch {
                 _ => None,
             })
             .collect();
+        // Griffe gehören zu keiner Kette, auch wenn sie an einem Spline-Ende beginnen.
         let ends: Vec<(CurveId, Vec<PointId>)> = self
             .curves()
+            .filter(|&(id, _)| !self.is_handle_curve(id))
             .map(|(id, data)| (id, chain_ends(&data.kind)))
             .collect();
         let mut chain = BTreeSet::from([c]);
