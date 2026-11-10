@@ -1170,3 +1170,74 @@ fn aiming_the_curvature_arc_reaches_the_nearest_end_from_a_flat_start() {
         }
     }
 }
+
+/// Nachprüfung zu 9741876: Bei kleinem Radius und gekappter Öffnung hat das erreichbare Bogenende zwei
+/// Äste. Pendelt das Ziel um die Stelle, an der beide gleich nah sind, darf das Ende nicht bei jedem
+/// Bild zwischen ihnen springen; höchstens einmal.
+#[test]
+fn aiming_does_not_flip_between_two_branches_when_the_target_wobbles() {
+    let xy = [(0.0, 0.0), (10.0, 6.0), (21.0, -3.0), (30.0, 8.0)];
+    let mut s = sketch();
+    let (c, pts) = spline(&mut s, &xy);
+    s.activate_curvature_handle(c, pts[3]).unwrap();
+    let h = parts(&s, c, pts[3]);
+    let (a, t) = (pos(&s, pts[3]), pos(&s, h.tip));
+    let l = a.distance(t);
+    let tu = (t - a) / l;
+    let side = tu.perp_dot(pos(&s, h.center) - a).signum();
+    let n = tu.perp() * side;
+    // Alle erreichbaren Enden auf dieser Seite, fein abgetastet.
+    let reach: Vec<DVec2> = (0..20000)
+        .map(|k| {
+            let r = l * 1e-2 * (1e5f64).powf(f64::from(k) / 20000.0);
+            let m = a + n * r;
+            m + DVec2::from_angle(side * (l / r).min(MAX_OPENING)).rotate(a - m)
+        })
+        .collect();
+    let nearest = |q: DVec2| {
+        *reach
+            .iter()
+            .min_by(|x, y| x.distance(q).total_cmp(&y.distance(q)))
+            .unwrap()
+    };
+    // Eine Linie quer vor der Spitze; dort, wo der nächste Punkt springt, liegt die Mitte der Äste.
+    let (p0, p1) = (a + n * (0.5 * l), a + tu * (0.9 * l) + n * (0.5 * l));
+    let at_frac = |f: f64| p0 + (p1 - p0) * f;
+    let steps = 400;
+    let switch = (1..=steps)
+        .find(|&i| {
+            let (u, v) = (
+                f64::from(i - 1) / f64::from(steps),
+                f64::from(i) / f64::from(steps),
+            );
+            nearest(at_frac(u)).distance(nearest(at_frac(v))) > 0.2 * l
+        })
+        .expect("die Linie kreuzt die Mitte zwischen den Ästen");
+    let drag_to = |s: &mut Sketch, q: DVec2| {
+        s.aim_curvature_arc(c, pts[3], q).unwrap();
+        s.drag_holding(
+            &[Drag {
+                point: h.other,
+                target: q,
+            }],
+            &[pts[3], h.tip],
+        )
+        .unwrap();
+        pos(s, h.other)
+    };
+    // Hin bis kurz vor die Stelle, dann pendeln.
+    let mut last = pos(&s, h.other);
+    for i in 0..switch {
+        last = drag_to(&mut s, at_frac(f64::from(i) / f64::from(steps)));
+    }
+    let mut jumps = 0;
+    for k in 0..40 {
+        let i = if k % 2 == 0 { switch } else { switch - 1 };
+        let now = drag_to(&mut s, at_frac(f64::from(i) / f64::from(steps)));
+        if now.distance(last) > 0.2 * l {
+            jumps += 1;
+        }
+        last = now;
+    }
+    assert!(jumps <= 1, "{jumps} Sprünge beim Pendeln");
+}

@@ -2509,3 +2509,147 @@ fn the_first_drag_at_the_curvature_mark_follows_the_pointer() {
         }
     }
 }
+
+/// Wie der Krümmungsbogen in den Tests zur Radiusbindung gebunden ist.
+#[derive(Clone, Copy, Debug)]
+enum ArcBond {
+    /// Radiusmaß am aktiven Bogen.
+    RadiusDim,
+    /// „Gleich“ mit einem Kreis.
+    EqualCircle,
+    /// Erster Zug an der Marke an einem Ende mit altem G1-Glatt gegen einen Bogen: Das Einschalten
+    /// übernimmt den Wert des Partners, die Krümmungszeile bindet ihn.
+    SmoothFirstDrag,
+}
+
+/// Nachprüfung zu 9741876: Bindet ein Maß oder eine Abhängigkeit den Radius des Krümmungsbogens,
+/// sucht der Zug keinen Radius. Großer Zug zur Bogenmitte hin, beim ersten Zug und am aktiven Griff:
+/// keine Meldung „blockiert“, die Bindung bleibt erfüllt, an beiden Enden des Splines.
+#[test]
+fn a_bound_curvature_arc_is_not_aimed_and_the_drag_is_not_blocked() {
+    const FOUR: [(f64, f64); 4] = [(10.0, -16.0), (17.0, -5.0), (26.0, -15.0), (36.0, -7.0)];
+    for bond in [
+        ArcBond::RadiusDim,
+        ArcBond::EqualCircle,
+        ArcBond::SmoothFirstDrag,
+    ] {
+        for end in [0usize, 3] {
+            let what = format!("{bond:?}, Ende {end}");
+            let mut ids = None;
+            let mut rig = Rig::new(|sk| {
+                let (c, pts) = add_spline(sk, &FOUR);
+                let fit = pts[end];
+                let mut circle = None;
+                match bond {
+                    ArcBond::RadiusDim | ArcBond::EqualCircle => {
+                        sk.activate_curvature_handle(c, fit).unwrap();
+                        let (_, center, _) = curvature_parts(sk, c, fit).unwrap();
+                        let r = sk
+                            .point_xy(center)
+                            .unwrap()
+                            .distance(sk.point_xy(fit).unwrap());
+                        let CurveKind::Spline { handles, .. } = &sk.curve(c).unwrap().kind else {
+                            panic!("kein Spline");
+                        };
+                        let HandleCurvature::Arc { arc, .. } =
+                            handles.iter().find(|h| h.at == fit).unwrap().curvature
+                        else {
+                            panic!("kein Bogen");
+                        };
+                        if matches!(bond, ArcBond::RadiusDim) {
+                            sk.add_constraint(K::Radius(arc, r)).unwrap();
+                        } else {
+                            let m = sk.add_point(0.0, 60.0).unwrap();
+                            let k = sk.add_circle(m, r).unwrap();
+                            sk.add_constraint(K::Equal(arc, k)).unwrap();
+                            circle = Some(k);
+                        }
+                    }
+                    ArcBond::SmoothFirstDrag => {
+                        // Ein Bogen am Ende, ein Glatt ohne Vorbereitung wie aus einer alten Datei (G1).
+                        let f = sk.point_xy(fit).unwrap();
+                        let away = sk.point_xy(if end == 0 { pts[1] } else { pts[2] }).unwrap();
+                        let out = (f - away).normalize();
+                        let m = sk.add_point(f.x + out.y * 8.0, f.y - out.x * 8.0).unwrap();
+                        let mq = sk.point_xy(m).unwrap();
+                        let q = mq + (f - mq).rotate(DVec2::from_angle(1.0));
+                        let free = sk.add_point(q.x, q.y).unwrap();
+                        let arc = sk.add_arc(m, fit, free).unwrap();
+                        sk.add_constraint(K::Smooth(arc, fit, c, fit)).unwrap();
+                        sk.activate_tangent_handle(c, fit).unwrap();
+                    }
+                }
+                ids = Some((c, pts, circle));
+            });
+            let (c, pts, circle) = ids.unwrap();
+            let fit = pts[end];
+            rig.select(&[Item::Curve(c)]);
+            assert_eq!(
+                rig.se().last_report.as_ref().map(|r| r.status),
+                Some(SolveStatus::Solved),
+                "{what}: Anfang"
+            );
+            let steps = rig.undo_len();
+            // Greifpunkt: die Marke beim ersten Zug, sonst das freie Bogenende.
+            let grab = match bond {
+                ArcBond::SmoothFirstDrag => {
+                    let st = rig.st();
+                    let session = st.sketch_session.as_ref().unwrap();
+                    session
+                        .visible_handles(st.session_sketch().unwrap())
+                        .into_iter()
+                        .find(|h| h.ghost && h.part == HandlePart::Curvature && h.point == fit)
+                        .unwrap_or_else(|| panic!("{what}: Krümmungsmarke"))
+                        .tip
+                }
+                _ => {
+                    let sk = rig.sketch();
+                    sk.point_xy(curvature_parts(&sk, c, fit).unwrap().2)
+                        .unwrap()
+                }
+            };
+            let p = rig.screen(grab);
+            let to = p + vec2(-220.0, 160.0);
+            rig.pull(p, to);
+            assert_eq!(rig.se().message_text(), None, "{what}: keine Meldung");
+            let sk = rig.sketch();
+            let (_, center, other) =
+                curvature_parts(&sk, c, fit).unwrap_or_else(|| panic!("{what}: Bogen da"));
+            let r = sk
+                .point_xy(center)
+                .unwrap()
+                .distance(sk.point_xy(fit).unwrap());
+            let report = rig.se().last_report.clone().unwrap();
+            assert_eq!(report.status, SolveStatus::Solved, "{what}: {report:?}");
+            assert!(report.conflicting.is_empty(), "{what}: {report:?}");
+            match bond {
+                ArcBond::RadiusDim => {
+                    let value = sk
+                        .constraints()
+                        .find_map(|(_, d)| match d.kind {
+                            K::Radius(_, v) => Some(v),
+                            _ => None,
+                        })
+                        .unwrap();
+                    assert!(
+                        (r - value).abs() < 1e-6 * value,
+                        "{what}: {r} statt {value}"
+                    );
+                }
+                ArcBond::EqualCircle => {
+                    let k = sk.radius(circle.unwrap()).unwrap();
+                    assert!((r - k).abs() < 1e-6 * k, "{what}: {r} statt {k}");
+                }
+                ArcBond::SmoothFirstDrag => {
+                    assert_eq!(rig.undo_len(), steps + 1, "{what}: ein Schritt");
+                    assert_eq!(
+                        rig.st().sketch_undo_label().as_deref(),
+                        Some(tr!("undo-handle-curvature").as_str()),
+                        "{what}"
+                    );
+                }
+            }
+            let _ = other;
+        }
+    }
+}

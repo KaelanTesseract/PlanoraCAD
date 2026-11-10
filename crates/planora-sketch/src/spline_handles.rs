@@ -35,6 +35,10 @@ const FIXED_SPLINE_FLAT: f64 = 0.1;
 /// Startradius bei fast null Krümmung, als Vielfaches der Grifflänge (B5).
 const NEAR_ZERO_RADIUS: f64 = 1000.0;
 
+/// Um so viel (in Vielfachen der Grifflänge) muss ein anderes Tal der Radiussuche näher am Zeiger liegen,
+/// bevor das Bogenende dorthin springt ([`Sketch::aim_curvature_arc`]).
+const AIM_SWITCH: f64 = 0.05;
+
 /// Wert, erste und zweite Ableitung nach `t` je Stützpunkt.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Nodes<T> {
@@ -881,6 +885,30 @@ impl Sketch {
         Ok(())
     }
 
+    /// Bindet eine wirkende Abhängigkeit oder ein Maß des Nutzers den Krümmungsbogen `arc` (Mitte
+    /// `center`, freies Ende `other`) am Stützpunkt `at` des Splines `c`? Etwa ein Radiusmaß, „Gleich“
+    /// mit einem anderen Bogen, eine Abhängigkeit an Mitte oder freiem Ende, oder ein Glatt an diesem
+    /// Ende, dessen Krümmungszeile den Griffwert liest. Dann sucht [`aim_curvature_arc`]
+    /// (Self::aim_curvature_arc) keinen Radius: Das Lösen holte ihn zurück und scheiterte bei großen
+    /// Sprüngen an der bekannten Grenze.
+    fn curvature_arc_bound(
+        &self,
+        c: CurveId,
+        at: PointId,
+        arc: CurveId,
+        center: PointId,
+        other: PointId,
+    ) -> bool {
+        self.constraints()
+            .filter(|(_, k)| k.enabled && !k.driven)
+            .any(|(_, k)| {
+                k.kind.curves().contains(&arc)
+                    || k.kind.points().iter().any(|&p| p == center || p == other)
+                    || matches!(k.kind, ConstraintKind::Smooth(x, px, y, py)
+                        if (x, px) == (c, at) || (y, py) == (c, at))
+            })
+    }
+
     /// Legt den Krümmungsbogen am Stützpunkt `at` vor einem Zug an seinem freien Ende auf den Radius,
     /// dessen Ende `target` am nächsten liegt, auf der Seite, auf der er liegt (B9: kein Wechsel durch
     /// `r = ∞`). Der Löser allein kommt von einem sehr großen Radius (Natur-Ende, `r = 1000·L`, B5)
@@ -894,10 +922,10 @@ impl Sketch {
         target: DVec2,
     ) -> Result<bool, SketchError> {
         let h = self.handle_at(c, at)?;
-        let HandleCurvature::Arc { center, other, .. } = h.curvature else {
+        let HandleCurvature::Arc { arc, center, other } = h.curvature else {
             return Err(SketchError::InvalidInput(tr!("sketch-err-handle-none")));
         };
-        if !target.is_finite() {
+        if !target.is_finite() || self.curvature_arc_bound(c, at, arc, center, other) {
             return Ok(false);
         }
         let (a, tip) = (self.pos(at), self.pos(h.tip));
@@ -908,27 +936,57 @@ impl Sketch {
         let left = (tip - a).perp_dot(self.pos(center) - a) > 0.0;
         let end_at = |r: f64| CurvatureArc::with_radius(a, tip, r, left).map(|g| g.other);
         let miss = |r: f64| end_at(r).map_or(f64::INFINITY, |q| q.distance(target));
-        // Radius in Vielfachen von L, logarithmisch von 0,01 bis 1000 (B5): grob abtasten, dann
-        // zwischen den Nachbarn des besten Werts fein nachsuchen (Goldener Schnitt).
+        // Radius in Vielfachen von L, logarithmisch von 0,01 bis 1000 (B5), grob abgetastet, dann
+        // zwischen den Nachbarn fein nachgesucht (Goldener Schnitt).
         const STEPS: i32 = 400;
         let radius = |k: f64| l * 1e-2 * 1e5f64.powf(k / f64::from(STEPS));
-        let best = (0..=STEPS)
-            .min_by(|&x, &y| miss(radius(f64::from(x))).total_cmp(&miss(radius(f64::from(y)))))
-            .unwrap_or(0);
-        let (mut lo, mut hi) = (
-            f64::from(best - 1).max(0.0),
-            f64::from(best + 1).min(f64::from(STEPS)),
-        );
-        let phi = (5f64.sqrt() - 1.0) / 2.0;
-        for _ in 0..60 {
-            let (x1, x2) = (hi - phi * (hi - lo), lo + phi * (hi - lo));
-            if miss(radius(x1)) < miss(radius(x2)) {
-                hi = x2;
-            } else {
-                lo = x1;
+        let refine = |best: i32| {
+            let (mut lo, mut hi) = (
+                f64::from(best - 1).max(0.0),
+                f64::from(best + 1).min(f64::from(STEPS)),
+            );
+            let phi = (5f64.sqrt() - 1.0) / 2.0;
+            for _ in 0..60 {
+                let (x1, x2) = (hi - phi * (hi - lo), lo + phi * (hi - lo));
+                if miss(radius(x1)) < miss(radius(x2)) {
+                    hi = x2;
+                } else {
+                    lo = x1;
+                }
+            }
+            radius(0.5 * (lo + hi))
+        };
+        // Das Ende hat bei kleinem Radius und gekappter Öffnung zwei Äste (Gerade zum Stützpunkt und
+        // Bogen zur Spitze). Mit dem jeweils besten Radius spränge es zwischen ihnen hin und her,
+        // sobald der Zeiger um die Mitte zwischen beiden pendelt. Darum gilt das Tal, in dem der
+        // aktuelle Radius liegt (bergab auf dem Raster), und das beste Tal erst, wenn es um mehr als
+        // `AIM_SWITCH · L` näher liegt: ein Sprung, kein Pendeln.
+        let now_r = self.pos(center).distance(a);
+        let mut near = ((now_r / (l * 1e-2)).ln() / 1e5f64.ln() * f64::from(STEPS))
+            .round()
+            .clamp(0.0, f64::from(STEPS)) as i32;
+        loop {
+            let here = miss(radius(f64::from(near)));
+            let down = [near - 1, near + 1]
+                .into_iter()
+                .filter(|k| (0..=STEPS).contains(k))
+                .map(|k| (k, miss(radius(f64::from(k)))))
+                .filter(|&(_, m)| m < here)
+                .min_by(|x, y| x.1.total_cmp(&y.1));
+            match down {
+                Some((k, _)) => near = k,
+                None => break,
             }
         }
-        let r = radius(0.5 * (lo + hi));
+        let deepest = (0..=STEPS)
+            .min_by(|&x, &y| miss(radius(f64::from(x))).total_cmp(&miss(radius(f64::from(y)))))
+            .unwrap_or(near);
+        let (r_near, r_deep) = (refine(near), refine(deepest));
+        let r = if miss(r_deep) < miss(r_near) - AIM_SWITCH * l {
+            r_deep
+        } else {
+            r_near
+        };
         let now = self.pos(other).distance(target);
         if miss(r) >= now - self.tol.linear {
             return Ok(false);
