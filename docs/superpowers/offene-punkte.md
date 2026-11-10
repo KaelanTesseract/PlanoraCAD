@@ -2355,6 +2355,8 @@ Abgeschlossen 2026-11-08, gemergt in a78db45. Drei Handtests bei 1920×1080; die
 
 ## Teilprojekt Skizzen 7
 
+Abgeschlossen 2026-11-10, gemergt in 4c5393e. Drei Handtests bei 1920×1080; die Funde daraus (innerer Tangentengriff, Glatt an der Fuge samt Ketten und gleicher Lage, erster Zug an der Krümmungsmarke, Radiussuche nur bei freiem Radius über die Freiheitsgrade des Lösers, kein Pendeln) sind vor dem Merge behoben. Läufe auf 9b74822: Windows 6440 bestanden, 1 fehlgeschlagen (`real_step_text_limit`, auch auf `master`); WSL 6429 bestanden, 2 fehlgeschlagen (dazu `a_locked_old_json_never_ends_up_next_to_a_new_png`, nur unter root); fmt, clippy und deny in Ordnung (deny nur unter Windows). Beobachtet, nicht behoben: Nach dem Öffnen einer Skizze zeigt der Tab „•“ ohne Änderung.
+
 Umgesetzt 2026-11-08 bis 2026-11-09 auf dem Zweig `feature/skizzen-splines` (Spec `specs/2026-11-08-skizzen-splines-design.md`, Plan `plans/2026-11-08-skizzen-splines.md`): Spline mit Kontrollpunkten, Kegelschnitt, Tangenten- und Krümmungsgriffe am Spline durch Stützpunkte, Glatt mit stetiger Krümmung auch am Bogen, projizierte Freiformkanten als feste Splines und „Schneiden“ am schrägen Kegel. Beschreibung in `docs/funktionen.md`, Abschnitt „Skizzen“. Das Dateiformat steigt auf 17, aber nur für Skizzen mit einer der neuen Kurvenarten, einem Griff oder der Krümmungszeile (auch gelöscht); alle anderen Dateien bleiben bytegleich. Die Läufe auf dem Endstand stehen im Bericht zu Task 14. Der Handtest steht aus (nur auf Dennis' Wort).
 
 Alles, was über Fusion gesagt wird und nicht geprüft ist, steht hier als **Annahme**. Wir haben Fusion nicht zum Vergleich.
