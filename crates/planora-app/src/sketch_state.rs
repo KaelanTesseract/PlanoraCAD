@@ -351,6 +351,10 @@ pub struct CurveDrag {
     pub(crate) activates: bool,
     /// Griffzug: Name des Schritts.
     pub(crate) label: Option<Msg>,
+    /// Zug am freien Ende eines Krümmungsbogens (Spline, Stützpunkt), dessen Radius frei ist: Vor
+    /// jedem Bild sucht der Zug den Radius ([`Sketch::aim_curvature_arc`]). Einmal je Zug beim Greifen
+    /// bestimmt ([`Sketch::curvature_radius_free`]).
+    pub(crate) aim: Option<(CurveId, PointId)>,
     /// Zahl der Muster vor dem Zug: Löst der Zug eines auf, sagt es die Meldung am Ende.
     patterns_before: usize,
     /// Die Skizze beim Greifen: Kommt der Zug ohne Änderung dorthin zurück, gilt wieder sie.
@@ -375,6 +379,7 @@ impl CurveDrag {
             before: None,
             activates: false,
             label: None,
+            aim: None,
             patterns_before: sk.pattern_count(),
             origin: Some(sk.clone()),
             baseline: sk.clone().solve(),
@@ -1974,15 +1979,12 @@ impl SketchSession {
                         target: from + delta,
                     })
                     .collect();
-                // Zug am freien Ende eines Krümmungsbogens: erst den Radius suchen, dessen Ende dem
-                // Ziel am nächsten liegt. Von einem sehr großen Radius aus käme das Lösen allein nicht
-                // hin (zweiter Handtest Skizzen 7).
-                if let [only] = drags.as_slice()
-                    && let Some((c, h)) = sk.handle_of_point(only.point)
-                    && matches!(h.curvature, planora_sketch::HandleCurvature::Arc { other, .. } if other == only.point)
-                {
+                // Zug am freien Ende eines Krümmungsbogens mit freiem Radius: erst den Radius suchen,
+                // dessen Ende dem Ziel am nächsten liegt. Von einem sehr großen Radius aus käme das
+                // Lösen allein nicht hin (zweiter Handtest Skizzen 7).
+                if let (Some((c, at)), [only]) = (drag.aim, drags.as_slice()) {
                     // Scheitert die Suche, zieht der Zug wie sonst.
-                    let _ = sk.aim_curvature_arc(c, h.at, only.target);
+                    let _ = sk.aim_curvature_arc(c, at, only.target);
                 }
                 sk.drag_holding(&drags, &drag.anchors)
             }

@@ -540,6 +540,15 @@ impl SketchSession {
         let mut drag = CurveDrag::new(sk, at, start);
         drag.anchors = anchors.to_vec();
         drag.label = label;
+        // Allein das freie Ende eines Krümmungsbogens: Ist sein Radius frei, sucht jedes Bild ihn.
+        // Der Löser wird einmal je Zug gefragt, nicht je Bild.
+        if let [p] = moved
+            && let Some((c, h)) = sk.handle_of_point(*p)
+            && matches!(h.curvature, HandleCurvature::Arc { other, .. } if other == *p)
+            && sk.curvature_radius_free(c, h.at)
+        {
+            drag.aim = Some((c, h.at));
+        }
         // Löst das Einschalten ein Muster auf, sagt es die Meldung am Ende des Zugs.
         drag.count_patterns_of(&before);
         drag.before = Some(before);

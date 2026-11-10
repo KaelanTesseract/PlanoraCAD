@@ -885,36 +885,39 @@ impl Sketch {
         Ok(())
     }
 
-    /// Bindet eine wirkende Abhängigkeit oder ein Maß des Nutzers den Krümmungsbogen `arc` (Mitte
-    /// `center`, freies Ende `other`) am Stützpunkt `at` des Splines `c`? Etwa ein Radiusmaß, „Gleich“
-    /// mit einem anderen Bogen, eine Abhängigkeit an Mitte oder freiem Ende, oder ein Glatt an diesem
-    /// Ende, dessen Krümmungszeile den Griffwert liest. Dann sucht [`aim_curvature_arc`]
-    /// (Self::aim_curvature_arc) keinen Radius: Das Lösen holte ihn zurück und scheiterte bei großen
-    /// Sprüngen an der bekannten Grenze.
-    fn curvature_arc_bound(
-        &self,
-        c: CurveId,
-        at: PointId,
-        arc: CurveId,
-        center: PointId,
-        other: PointId,
-    ) -> bool {
-        self.constraints()
-            .filter(|(_, k)| k.enabled && !k.driven)
-            .any(|(_, k)| {
-                k.kind.curves().contains(&arc)
-                    || k.kind.points().iter().any(|&p| p == center || p == other)
-                    || matches!(k.kind, ConstraintKind::Smooth(x, px, y, py)
-                        if (x, px) == (c, at) || (y, py) == (c, at))
-            })
+    /// Hat der Radius des Krümmungsbogens am Stützpunkt `at` des Splines `c` noch einen eigenen
+    /// Freiheitsgrad, wenn Stützpunkt und Spitze stehen wie beim Zug am freien Bogenende? Gefragt wird
+    /// der Löser: ein Lauf auf einer Kopie mit diesen Punkten gehalten, und ob die Bogenmitte dann frei
+    /// ist (Nullraum der Jacobi-Matrix, wie die Anzeige „voll bestimmt“). Bei gehaltenem Stützpunkt und
+    /// Spitze liegt die Mitte auf der Normalen; sie ist genau dann frei, wenn der Radius frei ist.
+    /// Unsicher (nicht gelöst, Zug gescheitert, kein Bogen) heißt gebunden: Dann sucht der Zug keinen
+    /// Radius ([`aim_curvature_arc`](Self::aim_curvature_arc)), und das Lösen allein zieht, zäh, aber
+    /// ohne Sprung gegen eine Bindung.
+    pub fn curvature_radius_free(&self, c: CurveId, at: PointId) -> bool {
+        let Ok(h) = self.handle_at(c, at) else {
+            return false;
+        };
+        let HandleCurvature::Arc { center, .. } = h.curvature else {
+            return false;
+        };
+        let mut probe = self.clone();
+        match probe.drag_holding(&[], &[at, h.tip]) {
+            Ok(r) => {
+                r.status == crate::solver::SolveStatus::Solved
+                    && !r.drag_failed
+                    && r.free_points.contains(&center)
+            }
+            Err(_) => false,
+        }
     }
 
     /// Legt den Krümmungsbogen am Stützpunkt `at` vor einem Zug an seinem freien Ende auf den Radius,
     /// dessen Ende `target` am nächsten liegt, auf der Seite, auf der er liegt (B9: kein Wechsel durch
     /// `r = ∞`). Der Löser allein kommt von einem sehr großen Radius (Natur-Ende, `r = 1000·L`, B5)
     /// nicht zum Ziel, denn dort ändert ein Radiusschritt das Ende kaum. Danach poliert das Lösen wie
-    /// sonst; was eine Abhängigkeit am Bogen anders will, setzt sich dort durch. `false`, wenn der
-    /// Bogen schon am besten liegt.
+    /// sonst. Ob der Radius dafür frei ist, fragt der Aufrufer vorher einmal je Zug
+    /// ([`curvature_radius_free`](Self::curvature_radius_free)). `false`, wenn der Bogen schon am
+    /// besten liegt.
     pub fn aim_curvature_arc(
         &mut self,
         c: CurveId,
@@ -922,10 +925,10 @@ impl Sketch {
         target: DVec2,
     ) -> Result<bool, SketchError> {
         let h = self.handle_at(c, at)?;
-        let HandleCurvature::Arc { arc, center, other } = h.curvature else {
+        let HandleCurvature::Arc { center, other, .. } = h.curvature else {
             return Err(SketchError::InvalidInput(tr!("sketch-err-handle-none")));
         };
-        if !target.is_finite() || self.curvature_arc_bound(c, at, arc, center, other) {
+        if !target.is_finite() {
             return Ok(false);
         }
         let (a, tip) = (self.pos(at), self.pos(h.tip));

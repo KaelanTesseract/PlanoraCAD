@@ -2653,3 +2653,121 @@ fn a_bound_curvature_arc_is_not_aimed_and_the_drag_is_not_blocked() {
         }
     }
 }
+
+/// Was an einem Punkt des aktiven Krümmungsbogens hängt (Nachprüfung zu 43bfc01).
+#[derive(Clone, Copy, Debug)]
+enum ArcTie {
+    /// Eine Linie beginnt am freien Bogenende, ist waagerecht, ihr anderes Ende fest: Der Radius ist
+    /// gebunden, ohne dass eine Abhängigkeit den Bogen nennt.
+    HorizontalLineFixed,
+    /// Ein freier Punkt liegt auf dem Bogen: Der Radius bleibt frei.
+    PointOnArcFree,
+    /// „Gleich“ mit einem freien Kreis: Der Radius bleibt frei.
+    EqualFreeCircle,
+}
+
+/// Nachprüfung zu 43bfc01: Ob die Radiussuche läuft, entscheidet der Löser (ist der Radius bei
+/// gehaltenem Griff noch frei?), nicht eine Liste von Abhängigkeiten. Großer Zug am freien Bogenende
+/// an beiden Enden des Splines: gebunden ohne Meldung und die Bindung bleibt erfüllt; frei folgt das
+/// Ende dem Zeiger so wie ohne die Abhängigkeit.
+#[test]
+fn whether_the_radius_search_runs_follows_the_solver() {
+    const FOUR: [(f64, f64); 4] = [(10.0, -16.0), (17.0, -5.0), (26.0, -15.0), (36.0, -7.0)];
+    for tie in [
+        ArcTie::HorizontalLineFixed,
+        ArcTie::PointOnArcFree,
+        ArcTie::EqualFreeCircle,
+    ] {
+        for end in [0usize, 3] {
+            let what = format!("{tie:?}, Ende {end}");
+            // `with`: mit der Abhängigkeit; sonst derselbe Bogen ohne sie, als Vergleich.
+            let run = |with: bool| {
+                let mut ids = None;
+                let mut rig = Rig::new(|sk| {
+                    let (c, pts) = add_spline(sk, &FOUR);
+                    let fit = pts[end];
+                    sk.activate_curvature_handle(c, fit).unwrap();
+                    let CurveKind::Spline { handles, .. } = &sk.curve(c).unwrap().kind else {
+                        panic!("kein Spline");
+                    };
+                    let HandleCurvature::Arc { arc, center, other } =
+                        handles.iter().find(|h| h.at == fit).unwrap().curvature
+                    else {
+                        panic!("kein Bogen");
+                    };
+                    let mut fixed = None;
+                    if with {
+                        match tie {
+                            ArcTie::HorizontalLineFixed => {
+                                let o = sk.point_xy(other).unwrap();
+                                let q = sk.add_point(o.x + 15.0, o.y).unwrap();
+                                let l = sk.add_line(other, q).unwrap();
+                                sk.add_constraint(K::Horizontal(
+                                    planora_sketch::constraint::LineOrPoints::Line(l),
+                                ))
+                                .unwrap();
+                                sk.add_constraint(K::Fixed(q, o.x + 15.0, o.y)).unwrap();
+                                fixed = Some(o.y);
+                            }
+                            ArcTie::PointOnArcFree => {
+                                let o = sk.point_xy(other).unwrap();
+                                let f = sk.point_xy(fit).unwrap();
+                                let mid = (o + f) * 0.5;
+                                let p = sk.add_point(mid.x, mid.y).unwrap();
+                                sk.add_constraint(K::PointOnCurve(p, arc)).unwrap();
+                            }
+                            ArcTie::EqualFreeCircle => {
+                                let r = sk
+                                    .point_xy(center)
+                                    .unwrap()
+                                    .distance(sk.point_xy(fit).unwrap());
+                                let m = sk.add_point(0.0, 60.0).unwrap();
+                                let k = sk.add_circle(m, r).unwrap();
+                                sk.add_constraint(K::Equal(arc, k)).unwrap();
+                            }
+                        }
+                    }
+                    ids = Some((c, fit, other, fixed));
+                });
+                let (c, fit, other, fixed) = ids.unwrap();
+                rig.select(&[Item::Curve(c)]);
+                let start = rig.sketch().point_xy(other).unwrap();
+                let center = {
+                    let sk = rig.sketch();
+                    sk.point_xy(curvature_parts(&sk, c, fit).unwrap().1)
+                        .unwrap()
+                };
+                // Einige Millimeter zur Bogenmitte hin: stärker gekrümmt.
+                let aim = start + (center - start).normalize() * 3.0;
+                let p = rig.screen(start);
+                let to = rig.screen(aim);
+                let pointer = rig.raw_at(to);
+                rig.pull(p, to);
+                let message = rig.se().message_text();
+                let got = rig.sketch().point_xy(other).unwrap();
+                let report = rig.se().last_report.clone().unwrap();
+                (message, got, pointer, fixed, report)
+            };
+            let (message, got, pointer, fixed, report) = run(true);
+            assert_eq!(message, None, "{what}: keine Meldung");
+            assert_eq!(report.status, SolveStatus::Solved, "{what}: {report:?}");
+            assert!(report.conflicting.is_empty(), "{what}: {report:?}");
+            match tie {
+                ArcTie::HorizontalLineFixed => {
+                    let y = fixed.unwrap();
+                    assert!(
+                        (got.y - y).abs() < 1e-6,
+                        "{what}: Bindung {got} gegen y {y}"
+                    );
+                }
+                ArcTie::PointOnArcFree | ArcTie::EqualFreeCircle => {
+                    let (_, plain, _, _, _) = run(false);
+                    assert!(
+                        (got.distance(pointer) - plain.distance(pointer)).abs() < 0.05,
+                        "{what}: {got} folgt nicht wie ohne Abhängigkeit ({plain}), Zeiger {pointer}"
+                    );
+                }
+            }
+        }
+    }
+}
