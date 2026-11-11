@@ -89,6 +89,10 @@ struct Shot {
     texts: Vec<(String, Rect)>,
     /// Mitten und Radien der gezeichneten Kreise (Punkte der Skizze).
     circles: Vec<(Pos2, f32)>,
+    /// Eckpunkte aller gezeichneten Linien, Linienzüge, Bézierstücke und Flächen (Netze).
+    vertices: Vec<Pos2>,
+    /// Gezeichnete Linienzüge mit ihrer Farbe.
+    strokes: Vec<(Vec<Pos2>, egui::Color32)>,
     /// Wann das Bild ein nächstes anfordert.
     repaint: Duration,
 }
@@ -101,6 +105,19 @@ fn walk(shape: &Shape, s: &mut Shot) {
             Rect::from_min_size(t.pos, t.galley.size()),
         )),
         Shape::Circle(c) => s.circles.push((c.center, c.radius)),
+        Shape::LineSegment { points, stroke } => {
+            s.vertices.extend(points);
+            s.strokes.push((points.to_vec(), stroke.color));
+        }
+        Shape::Path(p) => {
+            s.vertices.extend(&p.points);
+            if let egui::epaint::ColorMode::Solid(c) = p.stroke.color {
+                s.strokes.push((p.points.clone(), c));
+            }
+        }
+        Shape::QuadraticBezier(b) => s.vertices.extend(b.points),
+        Shape::CubicBezier(b) => s.vertices.extend(b.points),
+        Shape::Mesh(m) => s.vertices.extend(m.vertices.iter().map(|v| v.pos)),
         _ => {}
     }
 }
@@ -1359,4 +1376,237 @@ fn cancel_restores_selection_from_before_the_edit() {
     rig.click_label(&tr!("common-cancel"));
     assert_eq!(rig.se().tool, Tool::Select);
     assert_eq!(rig.selection(), before, "die Auswahl von vorher");
+}
+
+// ---- Korrektur nach dem Handtest ------------------------------------------------------------
+
+impl Shot {
+    /// Das Rechteck des letzten Texts `text`.
+    fn rect_of(&self, text: &str) -> Rect {
+        self.texts
+            .iter()
+            .rfind(|(t, _)| t == text)
+            .unwrap_or_else(|| panic!("„{text}“ fehlt"))
+            .1
+    }
+}
+
+/// Handtest B1: „Text bearbeiten“ über den Knopf, im Winkelfeld Strg+A und „0“ getippt, dann OK
+/// geklickt, während das Feld noch die Tastatur hat: Ein Klick übernimmt den Wert und schließt
+/// den Abschnitt. Nachgestellt wie im Handtest (erst Doppelklick mit Höhe 10 und Winkel 30, dann
+/// über den Knopf), mit Tastenereignissen wie unter Windows und dem Klick in getrennten Bildern
+/// mit Pausen wie `tools/gui-drive.ps1`.
+#[test]
+fn ok_click_with_focused_angle_field_commits_in_one_click() {
+    let mut rig = Rig::new();
+    let t = rig.api_text("Hallo", FRAME_A, FRAME_B);
+    let field_of = |rig: &mut Rig, key: &str| {
+        let label = rig.settle().rect_of(&planora_i18n::t(key));
+        pos2(label.right() + 30.0, label.center().y)
+    };
+    let up = |k: Key, m: Modifiers| Event::Key {
+        key: k,
+        physical_key: Some(k),
+        pressed: false,
+        repeat: false,
+        modifiers: m,
+    };
+    // Strg+A und Tippen wie unter Windows: Taste gedrückt, Text, Taste losgelassen.
+    let retype = |rig: &mut Rig, text: &str| {
+        rig.frame(vec![key_with(Key::A, ctrl())]);
+        rig.frame(vec![up(Key::A, ctrl())]);
+        for ch in text.chars() {
+            let k = Key::from_name(&ch.to_string()).expect("Zifferntaste");
+            rig.frame(vec![key_with(k, NONE), Event::Text(ch.to_string())]);
+            rig.frame(vec![up(k, NONE)]);
+        }
+        rig.settle();
+    };
+    // Klick wie `gui-drive.ps1`: Zeiger hin, 150 ms, drücken, 60 ms, loslassen.
+    let click_ok = |rig: &mut Rig| {
+        let ok = rig.settle().find(&tr!("common-ok"));
+        rig.time += 1.0;
+        rig.frame(vec![Event::PointerMoved(ok)]);
+        rig.time += 0.15;
+        rig.frame(vec![pointer(ok, PointerButton::Primary, true, NONE)]);
+        rig.time += 0.06;
+        rig.frame(vec![pointer(ok, PointerButton::Primary, false, NONE)]);
+        rig.settle();
+    };
+    // Erster Durchgang: Doppelklick, Höhe 10, Winkel 30, OK.
+    let spot = rig.glyph_spot(t);
+    rig.double_click(spot);
+    assert_eq!(rig.tool().editing, Some(t));
+    let h = field_of(&mut rig, "sketch-text-height-label");
+    rig.click(h);
+    retype(&mut rig, "10");
+    let a = field_of(&mut rig, "sketch-text-angle-label");
+    rig.click(a);
+    retype(&mut rig, "30");
+    click_ok(&mut rig);
+    assert_eq!(rig.se().tool, Tool::Select, "erster Durchgang: ein Klick");
+    let steps = rig.undo_len();
+    // Zweiter Durchgang: wählen, Knopf „Text bearbeiten“, Winkel 0, OK.
+    let spot = rig.glyph_spot(t);
+    rig.click(spot);
+    rig.click_label(&tr!("action-sketch-text-edit"));
+    assert_eq!(rig.tool().editing, Some(t));
+    assert_eq!(rig.tool().angle_text, "30");
+    let a = field_of(&mut rig, "sketch-text-angle-label");
+    rig.click(a);
+    retype(&mut rig, "0");
+    assert_eq!(rig.tool().angle_text, "0", "getippt");
+    click_ok(&mut rig);
+    assert_eq!(rig.se().tool, Tool::Select, "ein Klick auf OK schließt");
+    let angle = rig.sk().text_angle(t).expect("Winkel");
+    assert!(angle.abs() < 1e-9, "0° übernommen: {}", angle.to_degrees());
+    assert_eq!(rig.undo_len(), steps + 1, "ein Schritt");
+}
+
+impl Shot {
+    /// Liegt eine gezeichnete Ecke (Linie, Linienzug, Fläche) höchstens 0,75 px neben `at`?
+    fn near_vertex(&self, at: Pos2) -> bool {
+        self.vertices.iter().any(|v| v.distance(at) <= 0.75)
+    }
+}
+
+/// Handtest B2: Beim Ändern wird vom alten Text nichts gezeichnet, nur die Vorschau: keine
+/// Kurven, keine gestrichelten Hilfslinien der runden Buchstaben, keine Profilfüllung der
+/// Buchstaben, kein Rahmen (auch nicht hervorgehoben) und keine Ecken.
+#[test]
+fn edited_text_is_not_painted_while_editing() {
+    let mut rig = Rig::new();
+    let t = rig.api_text("Hallo", FRAME_A, FRAME_B);
+    let to_screen = rig.mapping();
+    let d = rig.sk().text(t).unwrap().clone();
+    let TextPlacement::Box { corners, .. } = d.placement else {
+        panic!("Rahmen erwartet");
+    };
+    let glyph_spots: Vec<Pos2> = d
+        .points
+        .iter()
+        .map(|&p| to_screen(rig.sk().point_xy(p).unwrap()))
+        .collect();
+    // Ecke 0 ist der Drehpunkt: Dort beginnt auch der Rahmen der Vorschau.
+    let corner_spots: Vec<Pos2> = corners[1..]
+        .iter()
+        .map(|&p| to_screen(rig.sk().point_xy(p).unwrap()))
+        .collect();
+    assert!(rig.st().show_sketch_profiles, "Profile werden gezeigt");
+    let shot = rig.frame(vec![Event::PointerMoved(AWAY)]);
+    let seen = glyph_spots.iter().filter(|s| shot.near_vertex(**s)).count();
+    assert!(
+        seen * 2 > glyph_spots.len(),
+        "vorher gezeichnet: {seen} von {}",
+        glyph_spots.len()
+    );
+    for s in &corner_spots {
+        assert!(shot.near_vertex(*s), "Rahmen vorher bei {s:?}");
+    }
+    // Doppelklick: Der erste Klick wählt den Text, er bleibt beim Ändern gewählt.
+    let spot = rig.glyph_spot(t);
+    rig.double_click(spot);
+    assert_eq!(rig.tool().editing, Some(t));
+    assert!(!rig.selection().is_empty(), "der Text bleibt gewählt");
+    // Um 180° gedreht: Die Vorschau liegt ganz neben dem alten Text.
+    let scope = rig.st().document.param_scope();
+    rig.tool().set_angle_text("180", &scope);
+    rig.settle();
+    assert!(rig.se().placed_text_preview().is_some(), "Vorschau da");
+    let shot = rig.frame(vec![Event::PointerMoved(AWAY)]);
+    let left: Vec<Pos2> = glyph_spots
+        .iter()
+        .copied()
+        .filter(|s| shot.near_vertex(*s))
+        .collect();
+    assert!(left.is_empty(), "vom alten Text gezeichnet: {left:?}");
+    for s in &corner_spots {
+        assert!(!shot.near_vertex(*s), "alter Rahmen bei {s:?}");
+        assert!(!painted(&shot, *s), "alte Ecke bei {s:?}");
+    }
+    // Abbrechen: Der Text ist wieder ganz zu sehen.
+    rig.click_label(&tr!("common-cancel"));
+    let shot = rig.frame(vec![Event::PointerMoved(AWAY)]);
+    let seen = glyph_spots.iter().filter(|s| shot.near_vertex(**s)).count();
+    assert!(seen * 2 > glyph_spots.len(), "nachher wieder gezeichnet");
+    for s in &corner_spots {
+        assert!(shot.near_vertex(*s), "Rahmen nachher bei {s:?}");
+    }
+}
+
+/// Handtest B4 (Dennis: „Nur färben“): Nach „Text auflösen“ malt die Ansicht kein „fix“-Schild je
+/// Punkt mehr (bei „Hallo“ waren es Dutzende); die Kurven tragen die Farbe fester Geometrie. Die
+/// Fixierungen bleiben in der Liste „Abhängigkeiten der Skizze“: Eine dort gewählte zeigt ihr
+/// Schild, und sie lässt sich einzeln löschen.
+#[test]
+fn exploded_text_is_coloured_without_a_cloud_of_fix_labels() {
+    use planora_sketch::constraint::ConstraintKind;
+    let mut rig = Rig::new();
+    let t = rig.api_text("Hallo", FRAME_A, FRAME_B);
+    let lines: Vec<CurveId> = {
+        let sk = rig.sk();
+        sk.text(t)
+            .unwrap()
+            .curves
+            .iter()
+            .copied()
+            .filter(|&c| matches!(sk.curve(c).unwrap().kind, CurveKind::Line { .. }))
+            .collect()
+    };
+    let spot = rig.glyph_spot(t);
+    rig.click(spot);
+    rig.click_label(&tr!("action-sketch-text-explode"));
+    assert_eq!(rig.text_count(), 0, "aufgelöst");
+    let fixes: Vec<_> = rig
+        .sk()
+        .constraints()
+        .filter(|(_, c)| matches!(c.kind, ConstraintKind::Fixed(..)))
+        .map(|(id, _)| id)
+        .collect();
+    assert!(fixes.len() > 20, "je Punkt eine Fixierung: {}", fixes.len());
+    let fix = |shot: &Shot| shot.texts.iter().filter(|(t, _)| t == "fix").count();
+    // Gleich nach dem Auflösen (die Kurven bleiben gewählt) und abgewählt: kein Schild.
+    let shot = rig.frame(vec![Event::PointerMoved(AWAY)]);
+    assert_eq!(fix(&shot), 0, "keine Schilder, Kurven gewählt");
+    rig.click(AWAY);
+    assert!(rig.selection().is_empty(), "abgewählt");
+    let shot = rig.frame(vec![Event::PointerMoved(AWAY)]);
+    assert_eq!(fix(&shot), 0, "keine Schilder");
+    // Die Kurven in der Farbe fester (bestimmter) Geometrie.
+    let dark = rig.st().dark;
+    let fixed_ink = theme::sketch_colors(dark).determined;
+    let to_screen = rig.mapping();
+    let shot = rig.frame(vec![Event::PointerMoved(AWAY)]);
+    for &c in &lines {
+        let CurveKind::Line { a, b } = rig.sk().curve(c).unwrap().kind else {
+            unreachable!()
+        };
+        let (sa, sb) = (
+            to_screen(rig.sk().point_xy(a).unwrap()),
+            to_screen(rig.sk().point_xy(b).unwrap()),
+        );
+        let ink = shot.strokes.iter().find_map(|(pts, color)| {
+            let near = |q: Pos2| pts.iter().any(|p| p.distance(q) <= 0.75);
+            (near(sa) && near(sb)).then_some(*color)
+        });
+        assert_eq!(
+            ink,
+            Some(fixed_ink),
+            "Kurve {c:?} in der Farbe fester Geometrie"
+        );
+    }
+    // Eine in der Liste gewählte Fixierung zeigt ihr Schild; Entf löscht sie einzeln.
+    rig.se().selection = vec![Item::Constraint(fixes[0])];
+    let shot = rig.frame(vec![Event::PointerMoved(AWAY)]);
+    assert_eq!(fix(&shot), 1, "nur das Schild der gewählten Fixierung");
+    rig.press(Key::Delete);
+    let left = rig
+        .sk()
+        .constraints()
+        .filter(|(_, c)| matches!(c.kind, ConstraintKind::Fixed(..)))
+        .count();
+    assert_eq!(left, fixes.len() - 1, "einzeln gelöscht");
+    for &c in &lines {
+        assert!(rig.sk().curve(c).is_some(), "die Kurven bleiben");
+    }
 }

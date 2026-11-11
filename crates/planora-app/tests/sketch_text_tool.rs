@@ -71,15 +71,20 @@ fn pointer(p: Pos2, b: PointerButton, pressed: bool) -> Event {
 #[derive(Default)]
 struct Shot {
     texts: Vec<(String, Rect)>,
+    /// Ausschnitt, in dem `texts[i]` gezeichnet wird.
+    clips: Vec<Rect>,
 }
 
-fn walk(shape: &Shape, s: &mut Shot) {
+fn walk(shape: &Shape, clip: Rect, s: &mut Shot) {
     match shape {
-        Shape::Vec(v) => v.iter().for_each(|x| walk(x, s)),
-        Shape::Text(t) => s.texts.push((
-            t.galley.text().to_string(),
-            Rect::from_min_size(t.pos, t.galley.size()),
-        )),
+        Shape::Vec(v) => v.iter().for_each(|x| walk(x, clip, s)),
+        Shape::Text(t) => {
+            s.texts.push((
+                t.galley.text().to_string(),
+                Rect::from_min_size(t.pos, t.galley.size()),
+            ));
+            s.clips.push(clip);
+        }
         _ => {}
     }
 }
@@ -202,7 +207,7 @@ impl Rig {
         let out = self.ctx.run_ui(raw, |ui| app.ui(ui, &mut f));
         let mut shot = Shot::default();
         for c in &out.shapes {
-            walk(&c.shape, &mut shot);
+            walk(&c.shape, c.clip_rect, &mut shot);
         }
         out.drop_without_applying_deltas();
         shot
@@ -1227,4 +1232,82 @@ fn spacing_field_uses_the_sketch_limit() {
     // OK lehnt mit derselben Meldung ab, die Skizze bleibt leer.
     rig.click_label(&tr!("common-ok"));
     assert_eq!(rig.sk().texts().count(), 0);
+}
+
+// ---- Korrektur nach dem Handtest ------------------------------------------------------------
+
+impl Shot {
+    /// Ausschnitt und Texte des Skizzenfelds: alle Texte im Ausschnitt der Überschrift „Text“
+    /// bzw. (ohne Abschnitt) des Skizzennamens.
+    fn side_texts(&self, anchor: &str) -> (Rect, Vec<(String, Rect)>) {
+        let i = self
+            .texts
+            .iter()
+            .rposition(|(t, _)| t == anchor)
+            .unwrap_or_else(|| panic!("„{anchor}“ fehlt"));
+        let clip = self.clips[i];
+        let texts = self
+            .texts
+            .iter()
+            .zip(&self.clips)
+            .filter(|(_, c)| **c == clip)
+            .map(|(t, _)| t.clone())
+            .collect();
+        (clip, texts)
+    }
+}
+
+/// Handtest B3: „Text auf Pfad“ ohne gewählten Pfad. Die lange Zeile „Kein Pfad gewählt …“ bricht
+/// in der festen Spaltenbreite um; das Skizzenfeld wird nicht breiter als ohne Abschnitt, nichts
+/// wird rechts abgeschnitten (Schriftart-Liste, Knöpfe der Abhängigkeiten).
+#[test]
+fn path_without_curve_keeps_the_side_field_width() {
+    let mut rig = Rig::new();
+    rig.line();
+    let name = rig.sk().name.clone();
+    // Ohne Abschnitt: rechter Rand der Knöpfe der Abhängigkeiten.
+    let shot = rig.settle();
+    let horizontal = tr!("sketch-constraint-horizontal");
+    let on_curve = tr!("sketch-constraint-point-on-curve");
+    let (clip0, _) = shot.side_texts(&name);
+    let right_of = |texts: &[(String, Rect)], label: &str| {
+        texts
+            .iter()
+            .rfind(|(t, _)| t == label)
+            .unwrap_or_else(|| panic!("„{label}“ fehlt im Skizzenfeld"))
+            .1
+            .right()
+    };
+    let (_, texts0) = shot.side_texts(&name);
+    let widths0 = (right_of(&texts0, &horizontal), right_of(&texts0, &on_curve));
+    rig.frame_text();
+    rig.type_text("Weg");
+    let shot = rig.click_label(&tr!("sketch-text-kind-path"));
+    assert_eq!(rig.tool().kind, TextToolKind::Path);
+    assert_eq!(rig.tool().path, None, "kein Pfad gewählt");
+    let (clip, texts) = shot.side_texts(&tr!("sketch-text-section"));
+    assert_eq!(clip, clip0, "derselbe Ausschnitt");
+    // Der Hinweis steht (umbrochen) im Feld.
+    let none = tr!("sketch-text-path-none");
+    let words: String = texts
+        .iter()
+        .map(|(t, _)| t.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let squeezed = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        squeezed(&words).contains(&squeezed(&none)),
+        "„{none}“ fehlt im Skizzenfeld: {words}"
+    );
+    for (t, r) in &texts {
+        assert!(
+            r.right() <= clip.right() + 0.5,
+            "„{t}“ rechts abgeschnitten: {r:?} in {clip:?}"
+        );
+    }
+    let widths = (right_of(&texts, &horizontal), right_of(&texts, &on_curve));
+    assert!(
+        (widths.0 - widths0.0).abs() < 0.5 && (widths.1 - widths0.1).abs() < 0.5,
+        "Knöpfe wie ohne Abschnitt: {widths:?} statt {widths0:?}"
+    );
 }

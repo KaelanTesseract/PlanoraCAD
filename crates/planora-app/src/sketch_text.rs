@@ -17,7 +17,8 @@
 //! **Ändern** (Spec C8): Doppelklick auf einen Buchstaben, der Knopf „Text bearbeiten“ und die
 //! Aktion öffnen denselben Abschnitt mit den Werten des Textes ([`SketchSession::begin_text_edit`]).
 //! Die Vorschau ist das Ergebnis von OK auf einer Kopie der Skizze; an ihrer Stelle zeichnet die
-//! Ansicht die Buchstaben des Textes nicht ([`SketchSession::text_hidden`]). OK ändert den Text in
+//! Ansicht vom Text nichts: keine Buchstaben, keinen Rahmen samt Ecken, keine Hilfslinien und
+//! keine Profilfüllung ([`SketchSession::text_hidden`], Handtest B2). OK ändert den Text in
 //! **einem** Schritt „Text ändern“ ([`Sketch::edit_text`], dazu [`Sketch::set_text_angle`]),
 //! Abbrechen hinterlässt nichts. Die gemerkten Werte für neue Texte bleiben dabei, wie sie sind
 //! (**Annahme**). **Text auflösen** (Spec C9) wirkt auf alle gewählten Texte in einem Schritt
@@ -835,25 +836,41 @@ impl SketchSession {
         Ok(())
     }
 
-    /// Kurven, die die Ansicht beim Ändern nicht zeichnet (an ihrer Stelle steht die Vorschau):
-    /// die Buchstaben des Textes, auf dem Pfad dazu sein Rahmen, den OK löscht. Punkte von
-    /// Buchstaben zeichnet die Ansicht ohnehin nie.
-    pub fn text_hidden(&self, sk: &Sketch) -> HashSet<CurveId> {
-        let Some((tool, d)) = self
-            .text
+    /// Der Text, der gerade geändert wird (Abschnitt „Text“ offen zum Ändern).
+    pub fn edited_text(&self) -> Option<TextId> {
+        self.text
             .as_ref()
             .filter(|_| self.runs_text())
-            .and_then(|tool| Some((tool, sk.text(tool.editing?)?)))
-        else {
+            .and_then(|t| t.editing)
+    }
+
+    /// Kurven, die die Ansicht beim Ändern nicht zeichnet (an ihrer Stelle steht nur die
+    /// Vorschau, Handtest B2): die Buchstaben des Textes und sein Rahmen. Die Vorschau zeichnet
+    /// ihren eigenen Rahmen; der alte bliebe sonst (gewählt sogar hervorgehoben) an der alten Lage
+    /// stehen. Punkte von Buchstaben zeichnet die Ansicht ohnehin nie, die Ecken des Rahmens nennt
+    /// [`SketchSession::text_hidden_points`].
+    pub fn text_hidden(&self, sk: &Sketch) -> HashSet<CurveId> {
+        let Some(d) = self.edited_text().and_then(|t| sk.text(t)) else {
             return Default::default();
         };
         let mut curves: HashSet<CurveId> = d.curves.iter().copied().collect();
-        if tool.kind == TextToolKind::Path
-            && let TextPlacement::Box { lines, .. } = d.placement
-        {
+        if let TextPlacement::Box { lines, .. } = d.placement {
             curves.extend(lines);
         }
         curves
+    }
+
+    /// Punkte, die die Ansicht beim Ändern nicht zeichnet: die Ecken des Rahmens (siehe
+    /// [`SketchSession::text_hidden`]).
+    pub fn text_hidden_points(&self, sk: &Sketch) -> Vec<PointId> {
+        match self
+            .edited_text()
+            .and_then(|t| sk.text(t))
+            .map(|d| d.placement)
+        {
+            Some(TextPlacement::Box { corners, .. }) => corners.to_vec(),
+            _ => Vec::new(),
+        }
     }
 
     /// Die zuletzt gelegte Vorschau, ohne neu zu rechnen (zum Zeichnen in jedem Bild).
@@ -1170,9 +1187,11 @@ pub(crate) fn text_options(
     if let Some(e) = t.shape_error.filter(|e| *e != TextShapeError::Empty) {
         ui.colored_label(error, shape_error_msg(e).text());
     }
-    // Pfad
+    // Pfad: Der Hinweis bricht in der Spaltenbreite um (Handtest B3); eine Zeile ohne Umbruch
+    // machte den Inhalt des Skizzenfelds breiter als die Spalte, rechts wurde dann alles
+    // abgeschnitten.
     if t.kind == TextToolKind::Path {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label(tr!("sketch-text-path"));
             // Ein gelöschter Pfad gilt als nicht gewählt.
             let state = if t.path.is_some_and(|p| sf.sketch.curve(p).is_some()) {
@@ -1180,7 +1199,7 @@ pub(crate) fn text_options(
             } else {
                 tr!("sketch-text-path-none")
             };
-            ui.label(RichText::new(state).weak());
+            ui.add(egui::Label::new(RichText::new(state).weak()).wrap());
         });
     }
     // Schriftart

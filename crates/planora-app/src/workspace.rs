@@ -265,6 +265,20 @@ impl DocTab {
         self.autosaved_edits = self.state.document.edit_count();
     }
 
+    /// „Verwerfen“ im Dialog „Änderungen speichern?“ (Handtest Skizzen 8, B5, Dennis): Die
+    /// Autosicherung dieses Tabs wird mit verworfen, sonst böte der nächste Start den verworfenen
+    /// Stand wieder an. Fremde oder unlesbare Sicherungen (Angebot offen, `keep_autosave`) und
+    /// schreibgeschützte Ansichten bleiben unberührt.
+    fn discard_own_autosave(&mut self) {
+        if self.read_only || !self.owns_autosave() {
+            return;
+        }
+        if let Some(store) = &self.store {
+            store.discard_autosave();
+        }
+        self.autosave_written = false;
+    }
+
     // ---- Rückgängig und Wiederholen --------------------------------------------------
 
     /// Am Ende eines Bildes (R3, R4): Hat sich das Dokument geändert und läuft keine Geste
@@ -886,9 +900,10 @@ impl Workspace {
     }
 
     /// Schließt einen Tab ohne Rückfrage; nach dem letzten entsteht ein frischer leerer Tab.
-    /// Eine vorhandene `.autosave.json` des Dokuments bleibt liegen (auch beim Verwerfen) und
+    /// Eine vorhandene `.autosave.json` des Dokuments bleibt liegen (wie nach einem Absturz) und
     /// wird beim nächsten Öffnen wieder angeboten – außer der Tab ist sauber und hat sie selbst
-    /// geschrieben (dann ist sie überholt und wird gelöscht).
+    /// geschrieben (dann ist sie überholt und wird gelöscht). „Verwerfen“ löscht sie vorher
+    /// ([`Workspace::discard_and_continue`]).
     pub fn close_tab(&mut self, i: usize) {
         if i >= self.tabs.len() {
             return;
@@ -960,9 +975,13 @@ impl Workspace {
         }
     }
 
-    /// „Verwerfen“ im Prompt `SaveChanges`.
+    /// „Verwerfen“ im Prompt `SaveChanges`: verwirft die Änderungen samt der Autosicherung des
+    /// Tabs (Handtest Skizzen 8, B5) und schließt ihn bzw. macht beim Beenden weiter.
     pub fn discard_and_continue(&mut self) {
         if let Some(Prompt::SaveChanges { tab, then }) = self.prompt.take() {
+            if let Some(i) = self.tab_index(tab) {
+                self.tabs[i].discard_own_autosave();
+            }
             self.finish_after(tab, Some(then));
         }
     }

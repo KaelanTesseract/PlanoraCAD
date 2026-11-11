@@ -1802,8 +1802,21 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     // wieder (sonst würden sie in jedem Frame neu bestimmt).
     if state.show_sketch_profiles && !se.is_dragging() {
         let extracted = state.profile_cache.get(sk);
-        painter.extend(profile_fill_shape(&map, &extracted, |_| {
-            Some(col.profile_fill)
+        // Beim Ändern eines Textes ohne seine Buchstaben (Handtest B2): An ihrer Stelle steht
+        // nur die Vorschau. Ein Profil des Textes hat nur Buchstaben am äußeren Rand; die
+        // Buchstaben einmal je Bild als Menge statt einer Suche je Profil.
+        let glyphs: HashSet<CurveId> = se
+            .edited_text()
+            .and_then(|t| sk.text(t))
+            .map(|d| d.curves.iter().copied().collect())
+            .unwrap_or_default();
+        painter.extend(profile_fill_shape(&map, &extracted, |i| {
+            let own = !glyphs.is_empty()
+                && extracted
+                    .refs
+                    .get(i)
+                    .is_some_and(|r| r.outer.first().is_some_and(|e| glyphs.contains(&e.curve)));
+            (!own).then_some(col.profile_fill)
         }));
     }
 
@@ -1849,8 +1862,10 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     let handles_hidden = se.hidden_handles(sk);
     hidden.extend(handles_hidden.curves);
     hidden_points.extend(handles_hidden.points);
-    // Beim Ändern eines Textes steht die Vorschau an der Stelle seiner Buchstaben.
+    // Beim Ändern eines Textes steht die Vorschau an der Stelle seiner Buchstaben und seines
+    // Rahmens.
     hidden.extend(se.text_hidden(sk));
+    hidden_points.extend(se.text_hidden_points(sk));
     // Buchstaben haben keine sichtbaren Punkte (Spec B9, wie Fusion): Sie fangen nicht und
     // lassen sich nicht einzeln wählen.
     hidden_points.extend(sk.glyph_points());
@@ -1975,6 +1990,15 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
             None => overlay_text(ui.ctx(), sk, &c.kind, c.driven),
         };
         if text.is_empty() {
+            continue;
+        }
+        // Fest (Handtest B4, wie Fusion): Fixierte Geometrie erkennt man an ihrer Farbe, nicht an
+        // einem Schild je Punkt (ein aufgelöster Text hätte sonst Hunderte). Ihr Schild zeigt
+        // nur eine in der Liste gewählte oder fehlerhafte Fixierung.
+        if matches!(c.kind, ConstraintKind::Fixed(..))
+            && !bad.contains(&id)
+            && !se.selection.contains(&Item::Constraint(id))
+        {
             continue;
         }
         // „auf“ an einer Hilfskurve (z. B. dem Hilfskreis des Vielecks) wäre nur Lärm.
@@ -2278,14 +2302,20 @@ fn place_label(mut r: Rect, placed: &mut Vec<Rect>) -> Rect {
 }
 
 /// Hilfslinien der gewählten Kurven als Linienzüge (Skizzen 7): beim Spline mit Kontrollpunkten das
-/// Kontrollpolygon, beim Kegelschnitt Start–Scheitel–Ende. Sie sind keine Kurven.
+/// Kontrollpolygon, beim Kegelschnitt Start–Scheitel–Ende. Sie sind keine Kurven. Die Buchstaben
+/// eines Textes, der gerade geändert wird, haben keine (Handtest B2: Die Ansicht zeichnet sie
+/// nicht, [`SketchSession::text_hidden`]).
 pub fn curve_guides(se: &SketchSession, sk: &Sketch) -> Vec<Vec<DVec2>> {
+    let hidden = se.text_hidden(sk);
     se.selection
         .iter()
         .filter_map(|item| {
             let Item::Curve(c) = item else {
                 return None;
             };
+            if hidden.contains(c) {
+                return None;
+            }
             let ids = match &sk.curve(*c)?.kind {
                 CurveKind::ControlSpline { points, .. } => points.clone(),
                 CurveKind::Conic {
