@@ -618,6 +618,54 @@ fn pattern_text_rejected() {
 }
 
 #[test]
+fn pattern_of_frame_lines_keeps_them_construction() {
+    // Eine Rahmenlinie als Vorlage eines Musters teilt ihren Stil mit den Exemplaren. Über ein
+    // Exemplar darf sie weder normal noch Mittellinie werden: Sonst lehnte das Laden die Datei
+    // ab (Rahmenlinien sind Konstruktion), und die Skizze ginge verloren.
+    let mut s = sketch();
+    let t = box_text(&mut s);
+    let (lines, _) = frame(&s, t);
+    let m = s.add_pattern(&rect_plan(lines.to_vec())).unwrap();
+    solved(&mut s);
+    let instance = s.pattern(m).unwrap().instances[0].curves[0];
+    assert!(
+        s.text_of_frame(instance).is_none(),
+        "das Exemplar ist eine Linie"
+    );
+    assert!(
+        s.curve(instance).unwrap().construction,
+        "Stil wie die Vorlage"
+    );
+    let before = s.clone();
+    says(
+        s.set_construction(instance, false),
+        tr!("sketch-text-part"),
+        "Exemplar normal",
+    );
+    unchanged(&s, &before, "Exemplar normal");
+    for on in [true, false] {
+        says(
+            s.set_centerline(instance, on),
+            tr!("sketch-text-part"),
+            "Exemplar als Mittellinie",
+        );
+        unchanged(&s, &before, "Exemplar als Mittellinie");
+    }
+    // Konstruktion bleibt Konstruktion: Das geht weiter.
+    s.set_construction(instance, true).unwrap();
+    for &l in &lines {
+        let d = s.curve(l).unwrap();
+        assert!(d.construction && !d.centerline);
+    }
+    // Speichern und Laden der Skizze mit dem Muster gehen.
+    let data = s.to_data();
+    let loaded = Sketch::from_data(data.clone()).unwrap();
+    assert!(loaded.to_data() == data);
+    assert_eq!(loaded.texts().count(), 1);
+    assert_eq!(loaded.pattern_count(), 1);
+}
+
+#[test]
 fn offset_text_rejected() {
     let mut s = sketch();
     let t = box_text(&mut s);

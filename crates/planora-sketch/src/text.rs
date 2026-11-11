@@ -532,8 +532,10 @@ impl Sketch {
     }
 
     /// Rahmenlinien bleiben Konstruktion: weder normal noch Mittellinie (Ruling zu Spec B4).
-    pub(crate) fn refuse_frame_style(&self, c: CurveId) -> Result<(), SketchError> {
-        if self.text_of_frame(c).is_some() {
+    /// `curves` ist die ganze Stilgruppe: Eine Rahmenlinie als Vorlage eines Musters darf sich
+    /// nicht über ein Exemplar mit umschalten, sonst lehnte das Laden die Datei ab.
+    pub(crate) fn refuse_frame_styles(&self, curves: &[CurveId]) -> Result<(), SketchError> {
+        if !self.texts.is_empty() && curves.iter().any(|&c| self.text_of_frame(c).is_some()) {
             Err(SketchError::InvalidInput(tr!("sketch-text-part")))
         } else {
             Ok(())

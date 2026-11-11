@@ -2573,6 +2573,7 @@ In Arbeit auf dem Zweig `feature/skizzen-text` (Spec `specs/2026-11-10-skizzen-t
 - **Annahme:** Wird nur der Pfad eines Textes auf Pfad skaliert, bleibt die Höhe des Textes; er folgt dem Pfad nur in der Lage. Die Höhe wächst nur, wenn der Text mit gewählt ist.
 - **Annahme:** Beim Bewegen der ganzen Skizze bleibt Text auf einem Pfad, der stehen bleibt (projiziert, fest), bei seinem Pfad, statt die Bewegung mit „Text auf Pfad folgt seinem Pfad.“ zu sperren.
 - **Annahme (zu Spec E, Stutzen bis Fase):** Auch Rahmenlinien lassen sich nicht stutzen, dehnen, brechen, abrunden oder fasen (Meldung des Befehls), denn das zerrisse das Rechteck und löste Ecken vom Text. Maße, Abhängigkeiten, Fang, Versatz, Spiegeln und Muster gehen an ihnen wie an Linien.
+- **Festlegung (Schlusskorrektur, Prüfung der Korrekturwelle):** Ist eine Rahmenlinie Vorlage eines Musters, teilt sie ihren Stil mit den Exemplaren. Ein Exemplar lässt sich darum nicht auf „normal“ oder „Mittellinie“ (an oder aus) schalten, Meldung „Gehört zum Text …“; sonst würde die Rahmenlinie mit umgeschaltet, und das Laden lehnte die Datei ab. „Konstruktion“ geht weiter.
 - **Festlegung:** Wird eine andere Kurve an einem Buchstaben gestutzt oder bis zu ihm gedehnt, bekommt das neue Ende keine Abhängigkeit (Buchstaben tragen keine). Es liegt nur an der Stelle des Schnitts.
 - **Festlegung (Spec B9):** Buchstaben bieten keine Punkte, Mitten, Schnitte oder Ausrichtung zum Fangen. Als Kurve bleiben sie im Fang-Index, damit ein Klick den Text wählt. Beim Zeichnen ist der Zeiger über einem Buchstaben frei (kein `PointOnCurve`), und Buchstaben geben keine Richtung (parallel, senkrecht) vor (Korrekturrunde 1).
 - **Festlegung (Korrekturrunde 1):** Werkzeuge, die Kurven wählen, nehmen keine Buchstaben und melden das: 2 und 3 tangential „Maße und Abhängigkeiten gehen an den Rahmen …“, Rundung und Fase (auch am Rahmen) und Versatz ihre Meldung aus Spec E. Rho, Grad, Kontrollpunkt einfügen und die Lage eines erzeugten Punktes setzen werden mit „Buchstaben eines Textes lassen sich nicht einzeln ändern. Löse den Text zuerst auf.“ abgelehnt; eine Buchstabenkurve als Richtung eines Musters wie als Spiegelachse.
@@ -2655,7 +2656,7 @@ Release-Build, Median aus 11 Läufen, Schrift Montserrat, Höhe 5 (Stand nach Ta
 - Ziehen an einem Spline-Pfad mit Text: 5,3 ms je Bild.
 - Bisheriger Profiltest `profile_perf` (200 Kurven): 4,2 ms (Ziel unter 50 ms), unverändert schnell.
 - Schlusskorrektur, Auflösen eines Textes mit 200 Zeichen (3209 Kurven, 5402 Punkte): Auflösen 0,85 ms, danach Lösen 16,0 ms, Ziehen an fremder Geometrie 6,2 ms je Bild (Ziel ≤ 20 ms, kein Umbau nötig).
-- Schlusskorrektur, gewählte Texte bei einem ganz gewählten Text mit 200 Zeichen (`selected_texts`, läuft bis zu dreimal je Bild): 0,11 ms, vorher 0,97 ms (Ziel unter 1 ms).
+- Schlusskorrektur, gewählte Texte bei einem ganz gewählten Text mit 200 Zeichen (`selected_texts`, läuft bis zu dreimal je Bild): 0,10 ms, vorher 0,97 ms (Ziel unter 0,5 ms, so fiele die frühere Suche durch).
 - Voller Lauf unter Windows und WSL: steht noch aus (nach der Gesamtprüfung).
 
 ### Handliste für den Nutzer (Prüfung von Hand im echten Fenster, noch offen)

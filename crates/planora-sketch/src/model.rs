@@ -830,7 +830,7 @@ impl Sketch {
     /// Gehört die Kurve zu einem Muster, gilt der Stil für die Vorlage und alle ihre Exemplare
     /// (Stil wie die Vorlage, auch nach späterem Umschalten). Griffe bleiben Konstruktion. Eine
     /// erzeugte Kurve eines Textes schaltet den ganzen Text um (Skizzen 8, B10), eine Rahmenlinie
-    /// bleibt Konstruktion.
+    /// bleibt Konstruktion, auch als Vorlage eines Musters, dessen Exemplar umgeschaltet wird.
     pub fn set_construction(&mut self, c: CurveId, construction: bool) -> Result<(), SketchError> {
         self.check_curve(c)?;
         if !construction && self.is_handle_curve(c) {
@@ -838,12 +838,12 @@ impl Sketch {
                 "sketch-err-handle-construction"
             )));
         }
-        if !construction {
-            self.refuse_frame_style(c)?;
-        }
         let group = self
             .text_style_group(c)
             .unwrap_or_else(|| self.pattern_style_group(c));
+        if !construction {
+            self.refuse_frame_styles(&group)?;
+        }
         for x in group {
             self.curves[x].construction = construction;
             self.curves[x].centerline = false;
@@ -864,12 +864,14 @@ impl Sketch {
                 "sketch-err-handle-construction"
             )));
         }
-        // Text wird nie Mittellinie (Skizzen 8, B10), eine Rahmenlinie bleibt Konstruktion.
+        // Text wird nie Mittellinie (Skizzen 8, B10), eine Rahmenlinie bleibt Konstruktion, auch
+        // als Vorlage eines Musters, dessen Exemplar umgeschaltet wird.
         if self.text_of_curve(c).is_some() {
             return Err(SketchError::WrongType(tr!("sketch-text-no-centerline")));
         }
-        self.refuse_frame_style(c)?;
-        for x in self.pattern_style_group(c) {
+        let group = self.pattern_style_group(c);
+        self.refuse_frame_styles(&group)?;
+        for x in group {
             self.curves[x].construction = on;
             self.curves[x].centerline = on;
         }

@@ -1,5 +1,7 @@
 //! Gewählte Texte (Skizzen 8, Spec B9, C9): `selected_texts` läuft in jedem Bild (Skizzenfeld,
-//! Ansicht, Menü). Ein ganz gewählter Text mit 200 Zeichen darf dabei nicht quadratisch kosten.
+//! Ansicht, Menü). Ein ganz gewählter Text mit 200 Zeichen darf dabei nicht quadratisch kosten:
+//! höchstens 0,5 ms (die frühere Suche je gewähltem Eintrag brauchte im Release 0,97 ms, die
+//! jetzige etwa 0,1 ms).
 //!
 //! Der Messtest läuft nur im Release-Build:
 //! `cargo test --release -p planora-app --test sketch_text_selection_perf -- --ignored`
@@ -90,7 +92,7 @@ fn selected_texts_keep_selection_order() {
 
 #[test]
 #[ignore = "Messtest, nur im Release-Build sinnvoll"]
-fn selected_texts_of_a_fully_selected_200_char_text_under_1ms() {
+fn selected_texts_of_a_fully_selected_200_char_text_under_half_a_ms() {
     let lib = FontLibrary::bundled_only();
     let mut sk = Sketch::new(Frame::WORLD, "S", Tolerance::default());
     let t = text(&mut sk, &lib, &two_hundred(), v(0.0, 0.0), v(150.0, 40.0));
@@ -117,5 +119,5 @@ fn selected_texts_of_a_fully_selected_200_char_text_under_1ms() {
         d.curves.len(),
         d.points.len()
     );
-    assert!(med < 1.0, "Median {med:.3} ms");
+    assert!(med < 0.5, "Median {med:.3} ms");
 }
