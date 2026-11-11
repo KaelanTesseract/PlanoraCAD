@@ -2089,6 +2089,10 @@ feature-sketch-projection-lost = { $count ->
     [one] A projected curve lost its reference and stays where it was.
    *[other] { $count } projected curves lost their reference and stay where they were.
 }
+feature-sketch-font-missing = { $count ->
+    [one] Font "{ $font }" is missing on this computer, replaced by Montserrat.
+   *[other] Font "{ $font }" is missing on this computer, replaced by Montserrat in { $count } texts.
+}
 feature-kind-fixed = The type of a feature cannot be changed
 feature-name-empty = The name must not be empty
 feature-mesh-ids-used = The mesh ids are used up

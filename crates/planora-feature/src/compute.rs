@@ -778,13 +778,48 @@ fn compute_sketch(
             }
         }
     }
+    let warning = sketch_warning(lost, &sketch);
     Ok(Computed {
         bodies: Vec::new(),
         sketch: Some(sketch),
         hints: Some(SketchHints { plane, copies }),
-        warning: (lost > 0).then(|| tr!("feature-sketch-projection-lost", count = lost)),
+        warning,
         plane: None,
     })
+}
+
+/// Die Warnung einer Skizze: verlorene Bezüge von Projektionen und fehlende Schriften, je eine
+/// Zeile; `None` ohne beides.
+fn sketch_warning(lost: usize, sketch: &Sketch) -> Option<String> {
+    let mut lines = Vec::new();
+    if lost > 0 {
+        lines.push(tr!("feature-sketch-projection-lost", count = lost));
+    }
+    for (font, count) in missing_fonts(sketch) {
+        lines.push(tr!(
+            "feature-sketch-font-missing",
+            font = font,
+            count = count
+        ));
+    }
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+/// Die fehlenden Schriften der gesetzten Texte (Spec C10) mit der Anzahl der Texte je Familie, in
+/// der Reihenfolge der Texte. Ein noch nicht gesetzter Text zählt nicht (Spec G4: nach dem Laden
+/// noch kein Hinweis und keine Warnung).
+pub(crate) fn missing_fonts(sketch: &Sketch) -> Vec<(String, usize)> {
+    let mut out: Vec<(String, usize)> = Vec::new();
+    for (_, d) in sketch.texts() {
+        let Some(name) = d.shape().and_then(|s| s.substituted.as_deref()) else {
+            continue;
+        };
+        match out.iter_mut().find(|(n, _)| n == name) {
+            Some((_, count)) => *count += 1,
+            None => out.push((name.to_string(), 1)),
+        }
+    }
+    out
 }
 
 /// Führt die projizierte Kurve `c` ihrer Herkunft nach und liefert den Verweis mit neuem

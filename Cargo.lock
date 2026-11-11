@@ -2706,6 +2706,7 @@ dependencies = [
  "planora-mesh",
  "planora-sketch",
  "planora-step",
+ "planora-text",
  "proptest",
  "thiserror 2.0.21",
 ]

@@ -19,6 +19,9 @@ thiserror.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
+# Nur in Tests: Texte mit den mitgelieferten Schriften setzen (Skizzen 8, Spec G7). Zur Laufzeit
+# braucht das Crate nur den `TextShaper` aus planora-sketch.
+planora-text.workspace = true
 
 [lints]
 workspace = true

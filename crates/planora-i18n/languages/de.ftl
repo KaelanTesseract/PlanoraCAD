@@ -2072,6 +2072,10 @@ feature-sketch-projection-lost = { $count ->
     [one] Eine projizierte Kurve hat ihren Bezug verloren und bleibt an ihrer letzten Stelle.
    *[other] { $count } projizierte Kurven haben ihren Bezug verloren und bleiben an ihrer letzten Stelle.
 }
+feature-sketch-font-missing = { $count ->
+    [one] Schrift „{ $font }“ fehlt auf diesem Rechner, ersetzt durch Montserrat.
+   *[other] Schrift „{ $font }“ fehlt auf diesem Rechner, in { $count } Texten ersetzt durch Montserrat.
+}
 feature-kind-fixed = Die Art des Features lässt sich nicht ändern
 feature-name-empty = Der Name darf nicht leer sein
 feature-mesh-ids-used = Die Netz-Kennungen sind aufgebraucht

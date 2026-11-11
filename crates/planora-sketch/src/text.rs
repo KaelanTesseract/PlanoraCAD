@@ -127,6 +127,15 @@ pub struct TextData {
     pub(crate) walk: WalkCache,
 }
 
+impl TextData {
+    /// Das zuletzt gesetzte Ergebnis, nur zur Laufzeit; `None`, solange der Text nicht gesetzt
+    /// ist (nach dem Laden bis [`Sketch::reshape_texts`]). Die Feature-Berechnung liest daraus
+    /// etwa die ersetzte Schrift (Spec C10).
+    pub fn shape(&self) -> Option<&TextShape> {
+        self.shaped.0.as_deref()
+    }
+}
+
 /// Was ein Text werden soll, ohne die Lage.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextParams {
