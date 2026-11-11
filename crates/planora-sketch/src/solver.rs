@@ -17,6 +17,10 @@
 //! deterministisch dasselbe (eine gelöste Gruppe ist an ihren Werten schon gelöst). Jede
 //! Änderung an Objekten oder Abhängigkeiten leert den Speicher. So rechnet beim Ziehen nur die
 //! Gruppe mit dem gezogenen Punkt.
+//!
+//! Eine Gruppe, die ohne Zug schon am Start erfüllt ist (etwa jeder Punkt mit `Fixed` nach dem
+//! Auflösen eines Textes), wird ohne Schritt und ohne Kopie des Variablenvektors erkannt; das
+//! Ergebnis ist dasselbe wie mit dem vollen Lauf, der dort vor dem ersten Schritt abbräche.
 
 use crate::constraint::{ConstraintId, ConstraintKind, SHARED_END_TANGENT_DRIFT};
 use crate::error::SketchError;
@@ -142,23 +146,42 @@ enum Outcome {
 }
 
 impl SolveCache {
-    fn lookup(&self, g: &Group, x: &[f64]) -> Option<&Outcome> {
-        let hit = self.groups.get(&g.constraints)?;
+    /// Leerer Speicher mit Platz für `n` Gruppen.
+    fn with_capacity(n: usize) -> Self {
+        Self {
+            groups: HashMap::with_capacity(n),
+        }
+    }
+
+    /// Nimmt den Eintrag der Gruppe heraus, wenn er zu ihren Lesevariablen und deren Werten in
+    /// `x` passt. Ein Eintrag, der nicht passt, ist ohnehin überholt (der alte Speicher wird
+    /// nach dem Lauf verworfen).
+    fn take(&mut self, g: &Group, x: &[f64]) -> Option<CachedGroup> {
+        let hit = self.groups.remove(&g.constraints)?;
         (hit.reads == g.reads
             && hit
                 .reads
                 .iter()
                 .zip(&hit.values)
                 .all(|(&v, &bits)| x[v].to_bits() == bits))
-        .then_some(&hit.outcome)
+        .then_some(hit)
     }
 
-    fn insert(&mut self, g: &Group, x: &[f64], outcome: Outcome) {
+    /// Übernimmt einen passenden Eintrag aus [`take`](Self::take) unverändert: Lesevariablen
+    /// und Werte stimmen ja überein.
+    fn keep(&mut self, constraints: Vec<ConstraintId>, hit: CachedGroup) {
+        self.groups.insert(constraints, hit);
+    }
+
+    /// Merkt das Ergebnis der Gruppe an den Werten `x`; die Gruppe wird dabei verbraucht
+    /// (Schlüssel und Lesevariablen wandern ohne Kopie in den Speicher).
+    fn insert(&mut self, g: Group, x: &[f64], outcome: Outcome) {
+        let values = g.reads.iter().map(|&v| x[v].to_bits()).collect();
         self.groups.insert(
-            g.constraints.clone(),
+            g.constraints,
             CachedGroup {
-                reads: g.reads.clone(),
-                values: g.reads.iter().map(|&v| x[v].to_bits()).collect(),
+                reads: g.reads,
+                values,
                 outcome,
             },
         );
@@ -199,6 +222,7 @@ pub struct Drag {
 
 /// Zusammenhangskomponente aus Variablen und Abhängigkeiten.
 struct Group {
+    /// Variablen der Gruppe, aufsteigend; die Stelle ist die Spalte (siehe [`Group::column`]).
     vars: Vec<usize>,
     constraints: Vec<ConstraintId>,
     /// Lebende Kurven mit mindestens einer Variablen in der Gruppe.
@@ -211,6 +235,14 @@ struct Group {
     /// Variablen von Musterexemplaren, die die Abhängigkeiten der Gruppe lesen: für den Löser
     /// Konstanten (keine Spalte), aber Teil von `reads`. Aufsteigend, ohne Doppelte.
     pattern_reads: Vec<usize>,
+}
+
+impl Group {
+    /// Spalte der Variablen `v` in der Jacobi-Matrix der Gruppe: ihr Platz in `vars`
+    /// (aufsteigend, siehe `build_groups_holding`).
+    fn column(&self, v: usize) -> Option<usize> {
+        self.vars.binary_search(&v).ok()
+    }
 }
 
 /// Residuen und Jacobi-Matrix einer Gruppe.
@@ -256,6 +288,27 @@ struct Analysis {
     dof: usize,
     redundant: Vec<ConstraintId>,
     free_vars: Vec<usize>,
+}
+
+impl Analysis {
+    /// Gleiche Freiheitsgrade, überzählige Abhängigkeiten und freie Variablen (Prüfung des
+    /// Kurzwegs [`Ready::FixedPoint`]).
+    fn same_as(&self, other: &Analysis) -> bool {
+        self.dof == other.dof
+            && self.redundant == other.redundant
+            && self.free_vars == other.free_vars
+    }
+}
+
+/// Eine Gruppe ohne Zug, die schon am Start erfüllt ist: Levenberg-Marquardt bräche vor dem
+/// ersten Schritt ab.
+enum Ready {
+    /// Genau ein `Fixed` an genau dem Punkt der Gruppe (jeder Punkt nach dem Auflösen eines
+    /// Textes): Seine zwei Zeilen tragen je eine Eins in einer eigenen Spalte. Rang 2, also kein
+    /// Freiheitsgrad, nichts überzählig, nichts frei, ohne dass die Zeilen gebaut werden.
+    FixedPoint,
+    /// Sonst: die Zeilen am Start, sie dienen auch der Analyse.
+    Assembled(Assembled),
 }
 
 fn sumsq(v: &[f64]) -> f64 {
@@ -485,14 +538,7 @@ impl Sketch {
     }
 
     /// Baut Residuen und Jacobi-Matrix der Gruppe an der Stelle `x`, je nach `which` (alle, ohne eine Abhängigkeit, oder mit Restwerten für Tangenten).
-    fn assemble(
-        &self,
-        g: &Group,
-        col: &HashMap<usize, usize>,
-        x: &[f64],
-        soft: &[Soft],
-        which: Rows,
-    ) -> Assembled {
+    fn assemble(&self, g: &Group, x: &[f64], soft: &[Soft], which: Rows) -> Assembled {
         let mut rows: Vec<(f64, Vec<(usize, f64)>)> = Vec::new();
         let mut owner = Vec::new();
         for (ci, &id) in g.constraints.iter().enumerate() {
@@ -515,7 +561,7 @@ impl Sketch {
                     .locals
                     .iter()
                     .enumerate()
-                    .filter_map(|(k, v)| col.get(v).map(|&c| (c, res.grad(k))))
+                    .filter_map(|(k, v)| g.column(*v).map(|c| (c, res.grad(k))))
                     .collect();
                 rows.push((res.v - target, entries));
                 owner.push(ci);
@@ -523,7 +569,7 @@ impl Sketch {
         }
         let hard_rows = rows.len();
         for s in soft {
-            if let Some(&c) = col.get(&s.var) {
+            if let Some(c) = g.column(s.var) {
                 rows.push((s.weight * (x[s.var] - s.target), vec![(c, s.weight)]));
             }
         }
@@ -548,13 +594,26 @@ impl Sketch {
     fn levenberg_marquardt(
         &self,
         g: &Group,
-        col: &HashMap<usize, usize>,
         x: &mut [f64],
         soft: &[Soft],
         which: Rows,
         tol_r: f64,
     ) -> Lm {
-        let mut a = self.assemble(g, col, x, soft, which);
+        let a = self.assemble(g, x, soft, which);
+        self.levenberg_marquardt_from(g, x, soft, which, tol_r, a)
+    }
+
+    /// Wie [`levenberg_marquardt`](Self::levenberg_marquardt) mit den schon gebauten Zeilen `a`
+    /// an der Stelle `x` (mit denselben `soft` und `which`).
+    fn levenberg_marquardt_from(
+        &self,
+        g: &Group,
+        x: &mut [f64],
+        soft: &[Soft],
+        which: Rows,
+        tol_r: f64,
+        mut a: Assembled,
+    ) -> Lm {
         let mut cost = sumsq(&a.r);
         let mut lambda = INITIAL_LAMBDA;
         let mut iterations = 0;
@@ -585,7 +644,7 @@ impl Sketch {
                     for (c, &v) in g.vars.iter().enumerate() {
                         trial[v] += step[c];
                     }
-                    let t = self.assemble(g, col, &trial, soft, which);
+                    let t = self.assemble(g, &trial, soft, which);
                     let trial_cost = sumsq(&t.r);
                     if trial_cost.is_finite() && trial_cost < cost {
                         let size = g.vars.iter().map(|&v| x[v].abs()).fold(1.0_f64, f64::max);
@@ -624,7 +683,6 @@ impl Sketch {
     fn solve_keeping_tangent_drift(
         &self,
         g: &Group,
-        col: &HashMap<usize, usize>,
         start: &[f64],
         soft: &[Soft],
         tol_r: f64,
@@ -646,10 +704,10 @@ impl Sketch {
         let mut iterations = 0;
         if !soft.is_empty() {
             iterations += self
-                .levenberg_marquardt(g, col, &mut x, soft, which, tol_r)
+                .levenberg_marquardt(g, &mut x, soft, which, tol_r)
                 .iterations;
         }
-        let mut lm = self.levenberg_marquardt(g, col, &mut x, &[], which, tol_r);
+        let mut lm = self.levenberg_marquardt(g, &mut x, &[], which, tol_r);
         lm.iterations += iterations;
         let within = kept.iter().all(|&(id, _)| {
             self.shared_end_tangent_drift(id, &x)
@@ -659,8 +717,13 @@ impl Sketch {
     }
 
     /// Rang, Redundanz und freie Variablen einer gelösten Gruppe an der Stelle `x`.
-    fn analyze(&self, g: &Group, col: &HashMap<usize, usize>, x: &[f64]) -> Analysis {
-        let a = self.assemble(g, col, x, &[], Rows::All);
+    fn analyze(&self, g: &Group, x: &[f64]) -> Analysis {
+        self.analyze_assembled(g, &self.assemble(g, x, &[], Rows::All))
+    }
+
+    /// Wie [`analyze`](Self::analyze) mit den schon gebauten Zeilen `a` (alle Abhängigkeiten,
+    /// ohne weiche Bedingungen) an der gelösten Stelle.
+    fn analyze_assembled(&self, g: &Group, a: &Assembled) -> Analysis {
         let space = analyze_rows(&a.j, RANK_REL_TOL);
         let mut redundant = Vec::new();
         for (row, independent) in space.independent.iter().enumerate() {
@@ -740,6 +803,29 @@ impl Sketch {
         })
     }
 
+    /// Besteht die Gruppe aus genau einem `Fixed` an genau ihrem Punkt, und liegt der Punkt in
+    /// `x` schon im Rahmen von `tol_r` am Ziel? Dieselbe Rechnung wie die Residuen von `Fixed`
+    /// (`x − Ziel`) und [`Assembled::hard_inf`] (NaN ist nicht erfüllt).
+    fn fixed_point_ready(&self, g: &Group, x: &[f64], tol_r: f64) -> bool {
+        let [id] = g.constraints[..] else {
+            return false;
+        };
+        let ConstraintKind::Fixed(p, fx, fy) = self.constraints[id].kind else {
+            return false;
+        };
+        let (vx, vy) = (self.points[p].x, self.points[p].y);
+        let ready = g.vars.len() == 2
+            && g.column(vx).is_some()
+            && g.column(vy).is_some()
+            && (x[vx] - fx).abs() <= tol_r
+            && (x[vy] - fy).abs() <= tol_r;
+        debug_assert!(
+            !ready || self.assemble(g, x, &[], Rows::All).hard_inf() <= tol_r,
+            "Kurzweg für einen festen Punkt weicht ab"
+        );
+        ready
+    }
+
     /// Konvergiert, alle Spline-Parameter im Bereich und keine Kurve der Gruppe entartet.
     fn acceptable(&self, g: &Group, lm: &Lm, x: &[f64]) -> bool {
         lm.converged
@@ -757,7 +843,6 @@ impl Sketch {
     fn diagnose(
         &self,
         g: &Group,
-        col: &HashMap<usize, usize>,
         start: &[f64],
         failed: &[f64],
         tol_r: f64,
@@ -765,7 +850,7 @@ impl Sketch {
     ) -> (Vec<ConstraintId>, bool) {
         // Erfüllt schon der Start alles und ist dort nichts entartet (etwa beim Ziehen), ist
         // keine Abhängigkeit schuld.
-        let at_start = self.assemble(g, col, start, &[], Rows::All);
+        let at_start = self.assemble(g, start, &[], Rows::All);
         if at_start.hard_inf() <= tol_r
             && self.spline_parameters_outside(g, start).is_empty()
             && !self.degenerate(&g.curves, start)
@@ -785,7 +870,7 @@ impl Sketch {
                 }
                 let mut x = start.to_vec();
                 if self
-                    .levenberg_marquardt(g, col, &mut x, &[], Rows::Without(id), tol_r)
+                    .levenberg_marquardt(g, &mut x, &[], Rows::Without(id), tol_r)
                     .converged
                     && self
                         .spline_parameters_outside(g, &x)
@@ -800,7 +885,7 @@ impl Sketch {
                 return (candidates, true);
             }
         }
-        let a = self.assemble(g, col, failed, &[], Rows::All);
+        let a = self.assemble(g, failed, &[], Rows::All);
         let mut big = Vec::new();
         for (row, v) in a.r[..a.hard_rows].iter().enumerate() {
             let id = g.constraints[a.owner[row]];
@@ -841,7 +926,7 @@ impl Sketch {
             .constraints
             .iter()
             .filter(|(_, c)| c.alive && c.enabled && !c.driven)
-            .filter_map(|(id, _)| Some((Some(id), self.evaluate(id, &self.vars)?.locals)));
+            .filter_map(|(id, _)| Some((Some(id), self.constraint_locals(id, &self.vars)?)));
         for (id, all) in existing.chain(extra.map(|e| (None, e.to_vec()))) {
             let (locals, read): (Vec<usize>, Vec<usize>) =
                 all.into_iter().partition(|v| !held.contains(v));
@@ -858,10 +943,11 @@ impl Sketch {
             active.push((id, locals, read));
         }
         let mut groups: Vec<Group> = Vec::new();
-        let mut index: HashMap<usize, usize> = HashMap::new();
+        // Gruppe je Wurzel der Vereinigung (`usize::MAX`: noch keine).
+        let mut index: Vec<usize> = vec![usize::MAX; n];
         for v in (0..n).filter(|v| in_constraint[*v]) {
             let root = find(&mut parent, v);
-            let gi = *index.entry(root).or_insert_with(|| {
+            if index[root] == usize::MAX {
                 groups.push(Group {
                     vars: Vec::new(),
                     constraints: Vec::new(),
@@ -869,12 +955,12 @@ impl Sketch {
                     reads: Vec::new(),
                     pattern_reads: Vec::new(),
                 });
-                groups.len() - 1
-            });
-            groups[gi].vars.push(v);
+                index[root] = groups.len() - 1;
+            }
+            groups[index[root]].vars.push(v);
         }
         for (id, locals, read) in active {
-            let gi = index[&find(&mut parent, locals[0])];
+            let gi = index[find(&mut parent, locals[0])];
             groups[gi].constraints.extend(id);
             groups[gi].pattern_reads.extend(read);
         }
@@ -890,7 +976,7 @@ impl Sketch {
             vars.extend(own_vars(&c.kind));
             let mut seen: Vec<usize> = Vec::new();
             for &v in vars.iter().filter(|&&v| in_constraint[v]) {
-                let gi = index[&find(&mut parent, v)];
+                let gi = index[find(&mut parent, v)];
                 if !seen.contains(&gi) {
                     seen.push(gi);
                     groups[gi].curves.push(cid);
@@ -1094,26 +1180,24 @@ impl Sketch {
         let only_this_run = |g: &Group| g.reads.iter().any(|v| extra.contains(v));
         let start = self.vars.clone();
         let mut committed = self.vars.clone();
-        let old_cache = std::mem::take(&mut self.solve_cache);
-        let mut cache = SolveCache::default();
-        for g in &groups {
-            let col: HashMap<usize, usize> =
-                g.vars.iter().enumerate().map(|(c, v)| (*v, c)).collect();
+        let mut old_cache = std::mem::take(&mut self.solve_cache);
+        let mut cache = SolveCache::with_capacity(groups.len());
+        for g in groups {
             // Nur die weichen Bedingungen auf Variablen dieser Gruppe zählen. Gruppen ohne sie
             // werden genau wie von `solve` gelöst (kein Zug- und Politurlauf).
             let group_soft: Vec<Soft> = soft
                 .iter()
-                .filter(|s| col.contains_key(&s.var))
+                .filter(|s| g.column(s.var).is_some())
                 .copied()
                 .collect();
             // Unverändert seit dem letzten Lauf: Ergebnis übernehmen (siehe Moduldoku). Eine
             // gelöste Gruppe ist an ihren Werten schon gelöst, ein neuer Lauf bräuchte keinen
             // Schritt; eine gescheiterte rechnete ab demselben Start dasselbe.
             if group_soft.is_empty()
-                && !only_this_run(g)
-                && let Some(outcome) = old_cache.lookup(g, &start)
+                && !only_this_run(&g)
+                && let Some(hit) = old_cache.take(&g, &start)
             {
-                match outcome {
+                match &hit.outcome {
                     Outcome::Solved {
                         dof: d,
                         redundant: red,
@@ -1132,7 +1216,7 @@ impl Sketch {
                         found,
                         iterations: used,
                     } => {
-                        drag_failed |= touched(g);
+                        drag_failed |= touched(&g);
                         iterations = iterations.max(*used);
                         if *conflict {
                             status = SolveStatus::Conflicting;
@@ -1146,48 +1230,99 @@ impl Sketch {
                         }
                     }
                 }
-                cache.insert(g, &start, outcome.clone());
+                cache.keep(g.constraints, hit);
                 continue;
             }
             group_solves += 1;
-            let mut x = start.clone();
-            let mut lm = self.levenberg_marquardt(g, &col, &mut x, &group_soft, Rows::All, tol_r);
-            let mut used = lm.iterations;
-            if !group_soft.is_empty() {
-                // Politur: Die weichen Bedingungen liefern nur eine Näherung. Von dort aus wird
-                // ohne sie exakt nachgelöst. Landet ein Spline-Parameter dabei auf der
-                // Fortsetzung, wird er aufs Ende gesetzt und erneut poliert. Gelingt das nicht,
-                // wird ohne Zug vom Start gelöst.
-                lm = self.levenberg_marquardt(g, &col, &mut x, &[], Rows::All, tol_r);
-                used += lm.iterations;
-                if lm.converged && !self.acceptable(g, &lm, &x) {
-                    self.clamp_spline_parameters(g, &mut x);
-                    lm = self.levenberg_marquardt(g, &col, &mut x, &[], Rows::All, tol_r);
-                    used += lm.iterations;
+            // Schon am Start erfüllt und ohne Zug (etwa jeder Punkt mit `Fixed` nach dem
+            // Auflösen eines Textes): Levenberg-Marquardt bräche vor dem ersten Schritt ab, mit
+            // 0 Schritten, konvergiert und `x` gleich dem Start. Das wird hier ohne Kopie des
+            // Variablenvektors festgestellt, und die Zeilen an dieser Stelle dienen auch der
+            // Analyse. Das Ergebnis ist dasselbe wie mit dem vollen Lauf.
+            // Nicht erfüllt: Die Zeilen am Start sind dieselben, mit denen Levenberg-Marquardt
+            // beginnt (ohne Zug, alle Abhängigkeiten), sie werden nicht noch einmal gebaut.
+            let mut start_rows: Option<Assembled> = None;
+            let ready = if !group_soft.is_empty() {
+                None
+            } else if self.fixed_point_ready(&g, &start, tol_r) {
+                Some(Ready::FixedPoint)
+            } else {
+                let a = self.assemble(&g, &start, &[], Rows::All);
+                if a.hard_inf() <= tol_r {
+                    Some(Ready::Assembled(a))
+                } else {
+                    start_rows = Some(a);
+                    None
                 }
-                if !self.acceptable(g, &lm, &x) {
-                    x = start.clone();
-                    lm = self.levenberg_marquardt(g, &col, &mut x, &[], Rows::All, tol_r);
+            };
+            let mut moved: Option<Vec<f64>> = None;
+            let (lm, used) = if ready.is_some() {
+                let lm = Lm {
+                    converged: true,
+                    iterations: 0,
+                };
+                (lm, 0)
+            } else {
+                let mut x = start.clone();
+                let mut lm = match start_rows {
+                    Some(a) => self.levenberg_marquardt_from(&g, &mut x, &[], Rows::All, tol_r, a),
+                    None => self.levenberg_marquardt(&g, &mut x, &group_soft, Rows::All, tol_r),
+                };
+                let mut used = lm.iterations;
+                if !group_soft.is_empty() {
+                    // Politur: Die weichen Bedingungen liefern nur eine Näherung. Von dort aus
+                    // wird ohne sie exakt nachgelöst. Landet ein Spline-Parameter dabei auf der
+                    // Fortsetzung, wird er aufs Ende gesetzt und erneut poliert. Gelingt das
+                    // nicht, wird ohne Zug vom Start gelöst.
+                    lm = self.levenberg_marquardt(&g, &mut x, &[], Rows::All, tol_r);
                     used += lm.iterations;
+                    if lm.converged && !self.acceptable(&g, &lm, &x) {
+                        self.clamp_spline_parameters(&g, &mut x);
+                        lm = self.levenberg_marquardt(&g, &mut x, &[], Rows::All, tol_r);
+                        used += lm.iterations;
+                    }
+                    if !self.acceptable(&g, &lm, &x) {
+                        x = start.clone();
+                        lm = self.levenberg_marquardt(&g, &mut x, &[], Rows::All, tol_r);
+                        used += lm.iterations;
+                    }
                 }
-            }
-            if !lm.converged
-                && let Some((y, retry)) =
-                    self.solve_keeping_tangent_drift(g, &col, &start, &group_soft, tol_r)
-            {
-                used += retry.iterations;
-                x = y;
-                lm = retry;
-            }
+                if !lm.converged
+                    && let Some((y, retry)) =
+                        self.solve_keeping_tangent_drift(&g, &start, &group_soft, tol_r)
+                {
+                    used += retry.iterations;
+                    x = y;
+                    lm = retry;
+                }
+                moved = Some(x);
+                (lm, used)
+            };
+            let x: &[f64] = moved.as_deref().unwrap_or(&start);
             iterations = iterations.max(used);
             // Spline-Parameter außerhalb des gezeichneten Bereichs: nicht gelöst.
             let outside = if lm.converged {
-                self.spline_parameters_outside(g, &x)
+                self.spline_parameters_outside(&g, x)
             } else {
                 Vec::new()
             };
-            if lm.converged && outside.is_empty() && !self.degenerate(&g.curves, &x) {
-                let analysis = self.analyze(g, &col, &x);
+            if lm.converged && outside.is_empty() && !self.degenerate(&g.curves, x) {
+                let analysis = match &ready {
+                    Some(Ready::FixedPoint) => {
+                        let analysis = Analysis {
+                            dof: 0,
+                            redundant: Vec::new(),
+                            free_vars: Vec::new(),
+                        };
+                        debug_assert!(
+                            analysis.same_as(&self.analyze(&g, x)),
+                            "Kurzweg für einen festen Punkt weicht ab"
+                        );
+                        analysis
+                    }
+                    Some(Ready::Assembled(a)) => self.analyze_assembled(&g, a),
+                    None => self.analyze(&g, x),
+                };
                 dof += analysis.dof;
                 free_vars.extend(analysis.free_vars.iter().copied());
                 for &id in &analysis.redundant {
@@ -1198,10 +1333,10 @@ impl Sketch {
                 for &v in &g.vars {
                     committed[v] = x[v];
                 }
-                if !only_this_run(g) {
+                if !only_this_run(&g) {
                     cache.insert(
                         g,
-                        &x,
+                        x,
                         Outcome::Solved {
                             dof: analysis.dof,
                             redundant: analysis.redundant,
@@ -1212,9 +1347,9 @@ impl Sketch {
             } else {
                 // Beim Ziehen sucht die Diagnose für die gezogene Gruppe nicht nach der
                 // Ursache; das holt das volle Lösen am Ende des Ziehens nach.
-                drag_failed |= touched(g);
+                drag_failed |= touched(&g);
                 let full = group_soft.is_empty();
-                let (found, conflict) = self.diagnose(g, &col, &start, &x, tol_r, full);
+                let (found, conflict) = self.diagnose(&g, &start, x, tol_r, full);
                 // Widerspruch gewinnt gegen „nicht konvergiert“.
                 if conflict {
                     status = SolveStatus::Conflicting;
@@ -1230,7 +1365,7 @@ impl Sketch {
                         conflicting.push(id);
                     }
                 }
-                if full && !only_this_run(g) {
+                if full && !only_this_run(&g) {
                     cache.insert(
                         g,
                         &start,

@@ -1277,6 +1277,21 @@ impl Sketch {
         Some(self.evaluate_data(&self.constraints[id], x))
     }
 
+    /// Nur die lokalen Variablen einer lebenden Abhängigkeit an `x`, genau wie
+    /// `evaluate(id, x).locals`, aber ohne die Rechnung mit Ableitungen: Der zweite Durchlauf
+    /// von [`evaluate_data`](Self::evaluate_data) meldet keine neue Variable.
+    pub(crate) fn constraint_locals(&self, id: ConstraintId, x: &[f64]) -> Option<Vec<usize>> {
+        if id.index() >= self.constraints.len()
+            || !self.constraints[id].alive
+            || x.len() < self.vars.len()
+        {
+            return None;
+        }
+        let first = Ctx::collecting(self, x);
+        let _ = eval_kind(&first, &self.constraints[id]);
+        Some(first.locals.into_inner())
+    }
+
     /// Wertet `data` an `x` aus (auch eine noch nicht angelegte Abhängigkeit); `x` muss alle
     /// Variablen von `data` enthalten.
     fn evaluate_data(&self, data: &ConstraintData, x: &[f64]) -> Evaluation {
