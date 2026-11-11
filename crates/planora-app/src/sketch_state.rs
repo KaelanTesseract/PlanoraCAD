@@ -559,9 +559,10 @@ pub struct SketchSession {
     pub constraint_last: Option<Item>,
     /// Das Werkzeug „Text“, solange es läuft (Skizzen 8, [`crate::sketch_text`]).
     pub text: Option<crate::sketch_text::TextTool>,
-    /// Die zuletzt benutzten Werte des Werkzeugs „Text“ außer dem Text (Spec C4); der Zustand der
-    /// App trägt sie über das Ende der Sitzung hinaus durch den Programmlauf.
-    pub text_memory: Option<crate::sketch_text::TextMemory>,
+    /// Die zuletzt benutzten Werte des Werkzeugs „Text“ außer dem Text (Spec C4), geteilt mit
+    /// dem Arbeitsbereich ([`crate::state::AppState::share_text_memory`]): Sie gelten für den
+    /// Programmlauf, über das Ende der Sitzung und über alle Tabs hinweg.
+    pub text_memory: crate::sketch_text::TextMemoryShare,
 }
 
 /// Die Skizze vor dem ersten Klick eines laufenden Befehls und ihr Stand nach seinem letzten
@@ -694,7 +695,7 @@ impl SketchSession {
             project: ProjectState::default(),
             constraint_last: None,
             text: None,
-            text_memory: None,
+            text_memory: Default::default(),
         }
     }
 

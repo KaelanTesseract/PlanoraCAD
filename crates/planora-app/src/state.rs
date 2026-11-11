@@ -284,9 +284,10 @@ pub struct AppState {
     /// Die Schriftliste des Programms, sobald sie da ist ([`AppState::fonts`]); die App gibt sie
     /// jedem Tab ([`crate::workspace::Workspace::apply_fonts`]).
     fonts: Option<Arc<planora_text::FontLibrary>>,
-    /// Die zuletzt benutzten Werte des Werkzeugs „Text“ (Spec C4): jede Skizzensitzung beginnt
-    /// damit und gibt sie an ihrem Ende zurück, so gelten sie für den Programmlauf.
-    text_memory: Option<crate::sketch_text::TextMemory>,
+    /// Die zuletzt benutzten Werte des Werkzeugs „Text“ (Spec C4): geteilt mit dem
+    /// Arbeitsbereich und allen seinen Tabs, so gelten sie für den Programmlauf
+    /// ([`AppState::share_text_memory`]). Jede Skizzensitzung bekommt denselben Speicher.
+    text_memory: crate::sketch_text::TextMemoryShare,
 }
 
 /// Profilwahl eines offenen Dialogs „Extrudieren“/„Drehen“ (wie in Fusion: Klick in die Ansicht
@@ -599,10 +600,25 @@ impl AppState {
             document_name: tr!("state-unnamed"),
             instance: NEXT_INSTANCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             fonts: None,
-            text_memory: None,
+            text_memory: Default::default(),
         };
         state.rebuild_scene();
         state
+    }
+
+    /// Teilt die gemerkten Werte des Werkzeugs „Text“ mit `share` (dem Speicher des
+    /// Arbeitsbereichs, Spec C4: für den Programmlauf, über alle Tabs); eine offene Sitzung
+    /// bekommt ihn auch.
+    pub fn share_text_memory(&mut self, share: &crate::sketch_text::TextMemoryShare) {
+        self.text_memory = share.clone();
+        if let Some(se) = self.sketch_session.as_mut() {
+            se.text_memory = share.clone();
+        }
+    }
+
+    /// Der Speicher der gemerkten Werte des Werkzeugs „Text“.
+    pub fn text_memory_share(&self) -> &crate::sketch_text::TextMemoryShare {
+        &self.text_memory
     }
 
     /// Die Schriftliste; `None`, solange die Schriftordner noch durchsucht werden (Spec G4).
@@ -1064,9 +1080,7 @@ impl AppState {
         // Eine offene Skizze verwerfen: Ihr Entwurf (samt Verlauf) gehört zum alten Dokument.
         self.sketch_draft = None;
         self.sketch_history = None;
-        let left = self.sketch_session.take();
-        self.keep_text_memory(left.as_ref());
-        let left_sketch = left.is_some();
+        let left_sketch = self.sketch_session.take().is_some();
         let had_marks = !self.marked_edges.is_empty();
         self.marked_edges.clear();
         self.edge_picking = false;
@@ -2930,9 +2944,9 @@ impl AppState {
         // Der Skizzenverlauf endet mit der Sitzung; nur wenn das Dokument den Entwurf ablehnt
         // und die Skizze offen bleibt, bleibt er auch.
         let history = self.sketch_history.take();
-        let session = self.sketch_session.take();
-        self.keep_text_memory(session.as_ref());
-        let (Some(mut se), Some(mut draft)) = (session, self.sketch_draft.take()) else {
+        let (Some(mut se), Some(mut draft)) =
+            (self.sketch_session.take(), self.sketch_draft.take())
+        else {
             return Ok(());
         };
         // Ein Befehl ohne fertige Form hinterlässt nichts, auch beim Beenden der Skizze.
@@ -3213,17 +3227,8 @@ impl AppState {
     fn discard_sketch(&mut self) {
         self.sketch_draft = None;
         self.sketch_history = None;
-        let session = self.sketch_session.take();
-        self.keep_text_memory(session.as_ref());
-        if session.is_some() {
+        if self.sketch_session.take().is_some() {
             self.restore_camera();
-        }
-    }
-
-    /// Am Ende einer Skizzensitzung: Ihre gemerkten Werte des Werkzeugs „Text“ gelten weiter.
-    fn keep_text_memory(&mut self, se: Option<&SketchSession>) {
-        if let Some(memory) = se.and_then(|se| se.text_memory.clone()) {
-            self.text_memory = Some(memory);
         }
     }
 

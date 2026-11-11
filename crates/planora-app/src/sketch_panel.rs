@@ -644,8 +644,9 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         fonts: fonts.as_deref(),
     };
     side_field(ctx, rects.right, dark, se, sf, side);
-    // Text: die Vorschau nach den Eingaben dieses Bilds setzen, höchstens einmal je Bild (Spec C6).
-    se.update_text_preview(fonts.as_deref());
+    // Text: die Vorschau nach den Eingaben dieses Bilds setzen und legen, höchstens einmal je Bild
+    // und nur nach einer Änderung (Spec C6).
+    se.update_text_preview(&sf.sketch, fonts.as_deref());
     let close = foot_field(ctx, rects.bottom, dark, se, &mut sf.sketch);
     state.show_sketch_profiles = show_profiles;
     state.sketch_show_grid = palette.grid;

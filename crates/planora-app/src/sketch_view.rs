@@ -2297,7 +2297,9 @@ fn draw_text_preview(
         }
     }
     let stroke = Stroke::new(CURVE_WIDTH, color);
-    for line in crate::sketch_text::contour_polylines(&se.text_preview(sk).unwrap_or_default()) {
+    // Die gemerkte Lage: Gelegt wird nur nach einer Änderung (`update_text_preview`).
+    let placed = se.placed_text_preview().unwrap_or_default();
+    for line in crate::sketch_text::contour_polylines(&placed) {
         for path in map.paths(&line) {
             draw_path(painter, path, stroke, false);
         }

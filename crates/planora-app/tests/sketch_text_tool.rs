@@ -15,7 +15,7 @@ use planora_app::formula_field::value_field_text;
 use planora_app::keymap::{Action, Area, Binding, KeyChord, Keymap, SetResult};
 use planora_app::shell::{STRIP_BUTTON, STRIP_TOOLS};
 use planora_app::sketch_panel::{self, TOOL_ORDER};
-use planora_app::sketch_state::{SketchSession, Tool};
+use planora_app::sketch_state::{Item, SketchSession, Tool};
 use planora_app::sketch_text::{FontChoice, TextTool, TextToolKind, default_font, font_choices};
 use planora_app::state::AppState;
 use planora_app::workspace::{DocTab, Workspace};
@@ -27,7 +27,7 @@ use planora_project::config::Config;
 use planora_project::library::Library;
 use planora_sketch::model::{CurveId, CurveKind, Sketch};
 use planora_sketch::text::{HAlign, TextParams, TextPlacement, VAlign};
-use planora_sketch::text_shape::{Contour, Seg, TextShaper, TextStyle};
+use planora_sketch::text_shape::{Contour, MAX_TEXT_CHARS, Seg, TextShaper, TextStyle};
 use planora_text::FontLibrary;
 use std::sync::Arc;
 
@@ -97,6 +97,26 @@ impl Shot {
             .unwrap_or_else(|| panic!("„{text}“ fehlt"))
             .1
             .center()
+    }
+
+    /// Die Lage (oben) des ersten Textes `text`, der rechts von `min_x` beginnt (im Skizzenfeld).
+    fn first_top_from(&self, text: &str, min_x: f32) -> f32 {
+        self.texts
+            .iter()
+            .find(|(t, r)| t == text && r.left() >= min_x)
+            .unwrap_or_else(|| panic!("„{text}“ fehlt"))
+            .1
+            .top()
+    }
+
+    /// Die Lage (links) des ersten Textes `text`.
+    fn left_of(&self, text: &str) -> f32 {
+        self.texts
+            .iter()
+            .find(|(t, _)| t == text)
+            .unwrap_or_else(|| panic!("„{text}“ fehlt"))
+            .1
+            .left()
     }
 
     /// Die Lage (oben) des letzten (obersten) Textes `text`.
@@ -998,4 +1018,188 @@ fn frame_click_on_point_binds_coincident() {
         "eine Ecke liegt fest auf dem Ende der Linie"
     );
     assert!(rig.sk().text(t).is_some());
+}
+
+/// Fix-Runde 1: Ruhige Bilder setzen die Vorschau nicht neu und legen sie nicht neu (auf dem Pfad
+/// baute das sonst in jedem Bild die Längentabelle).
+#[test]
+fn idle_frames_neither_reshape_nor_replace() {
+    let mut rig = Rig::new();
+    let line = rig.line();
+    rig.frame_text();
+    rig.type_text("Ruhe");
+    for kind in [TextToolKind::Box, TextToolKind::Path] {
+        if kind == TextToolKind::Path {
+            rig.click_label(&tr!("sketch-text-kind-path"));
+            rig.click(LINE_MID);
+            assert_eq!(rig.tool().path, Some(line));
+        }
+        rig.settle();
+        let shape = rig.tool().preview_shape().cloned().expect("gesetzt");
+        let placed = rig.se().placed_text_preview().expect("gelegt");
+        let (shapings, placements) = (rig.tool().shapings(), rig.tool().placements());
+        // Ruhige Bilder und Zeigerbewegungen ändern nichts.
+        rig.settle();
+        rig.frame(vec![Event::PointerMoved(AWAY)]);
+        rig.frame(vec![Event::PointerMoved(pos2(1250.0, 850.0))]);
+        rig.settle();
+        let t = rig.tool().clone();
+        assert!(
+            Arc::ptr_eq(t.preview_shape().unwrap(), &shape),
+            "{kind:?}: neu gesetzt"
+        );
+        assert_eq!(t.shapings(), shapings, "{kind:?}");
+        assert_eq!(t.placements(), placements, "{kind:?}: neu gelegt");
+        let again = rig.se().placed_text_preview().unwrap();
+        assert!(Arc::ptr_eq(&again, &placed), "{kind:?}");
+        let s = rig.st();
+        let se = s.sketch_session.as_ref().unwrap();
+        let asked = se.text_preview(s.session_sketch().unwrap()).unwrap();
+        assert!(
+            Arc::ptr_eq(&asked, &placed),
+            "{kind:?}: gemerkte Lage passt"
+        );
+        // Eine neue Höhe legt einmal neu, ohne neu zu setzen.
+        let scope = rig.scope();
+        let height = if kind == TextToolKind::Box { "7" } else { "9" };
+        rig.tool().set_height_text(height, &scope);
+        rig.settle();
+        assert_eq!(rig.tool().shapings(), shapings, "{kind:?}");
+        assert_eq!(rig.tool().placements(), placements + 1, "{kind:?}");
+        // Fett setzt einmal neu und legt einmal neu.
+        let bold = rig.tool().params.style.bold;
+        rig.tool().params.style.bold = !bold;
+        rig.settle();
+        assert_eq!(rig.tool().shapings(), shapings + 1, "{kind:?}");
+        assert_eq!(rig.tool().placements(), placements + 2, "{kind:?}");
+    }
+}
+
+/// Fix-Runde 1 (Spec C4, „innerhalb eines Programmlaufs“): Die gemerkten Werte gelten auch in
+/// einem anderen Dokument.
+#[test]
+fn last_values_remembered_across_documents() {
+    let mut rig = Rig::new();
+    rig.frame_text();
+    rig.type_text("A");
+    let scope = rig.scope();
+    rig.tool().set_height_text("8", &scope);
+    rig.click_label(&tr!("sketch-text-italic"));
+    rig.click_label(&tr!("common-ok"));
+    assert_eq!(rig.sk().texts().count(), 1);
+    // Ein zweites Dokument mit eigener Skizze.
+    rig.ws().new_tab();
+    let s = rig.st();
+    let id = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    s.open_sketch(id).unwrap();
+    rig.settle();
+    assert_eq!(rig.sk().texts().count(), 0, "anderes Dokument");
+    rig.action(Action::SketchText);
+    let t = rig.tool().clone();
+    assert!(t.params.style.italic);
+    assert_eq!(t.params.height, 8.0);
+    assert!(t.params.content.is_empty());
+}
+
+/// Fix-Runde 1: Wird der gewählte Pfad bei offenem Abschnitt gelöscht, gilt er als nicht gewählt:
+/// keine Vorschau, kein Absturz, die Zeile sagt es, OK wird mit Meldung abgelehnt.
+#[test]
+fn deleted_path_while_section_open_counts_as_missing() {
+    let mut rig = Rig::new();
+    let line = rig.line();
+    rig.frame_text();
+    rig.type_text("Weg");
+    rig.click_label(&tr!("sketch-text-kind-path"));
+    rig.click(LINE_MID);
+    assert_eq!(rig.tool().path, Some(line));
+    assert!(rig.settle().has(&tr!("sketch-text-path-chosen")));
+    {
+        let (se, sk) = rig.st().session_sketch_mut().unwrap();
+        se.selection = vec![Item::Curve(line)];
+        se.delete_selection(sk);
+        assert!(sk.curve(line).is_none(), "Pfad gelöscht");
+    }
+    let shot = rig.settle();
+    assert_eq!(rig.tool().path, None);
+    assert!(shot.has(&tr!("sketch-text-path-none")));
+    assert!(!shot.has(&tr!("sketch-text-path-chosen")));
+    {
+        let s = rig.st();
+        let se = s.sketch_session.as_ref().unwrap();
+        assert!(se.text_preview(s.session_sketch().unwrap()).is_none());
+        assert!(se.placed_text_preview().is_none());
+    }
+    let before = rig.data();
+    rig.click_label(&tr!("common-ok"));
+    assert_eq!(rig.se().message_text(), Some(tr!("sketch-text-need-path")));
+    assert_eq!(rig.data(), before);
+    assert_eq!(rig.sk().texts().count(), 0);
+    assert!(rig.tool().section_open(), "der Abschnitt bleibt");
+}
+
+/// Fix-Runde 1: Die Felder stehen in Fusions Reihenfolge (Spec C3).
+#[test]
+fn fields_follow_fusion_order() {
+    let mut rig = Rig::new();
+    rig.line();
+    let shot = rig.frame_text();
+    let kind = tr!("sketch-text-kind-path");
+    // Nur im Skizzenfeld: ab dem linken Rand seiner Beschriftungen.
+    let min_x = shot.left_of(&tr!("sketch-text-font")) - 5.0;
+    let order = |shot: &Shot, keys: &[&str]| {
+        let tops: Vec<(String, f32)> = keys
+            .iter()
+            .map(|k| {
+                let label = planora_i18n::t(k);
+                let top = shot.first_top_from(&label, min_x);
+                (label, top)
+            })
+            .collect();
+        for w in tops.windows(2) {
+            assert!(w[0].1 < w[1].1, "{} vor {}: {tops:?}", w[0].0, w[1].0);
+        }
+    };
+    order(
+        &shot,
+        &[
+            "sketch-text-kind-path",
+            "sketch-text-font",
+            "sketch-text-style",
+            "sketch-text-height-label",
+            "sketch-text-spacing-label",
+            "sketch-text-angle-label",
+            "sketch-text-flip",
+            "sketch-text-align",
+            "sketch-text-align-top",
+            "common-ok",
+        ],
+    );
+    let shot = rig.click_label(&kind);
+    order(
+        &shot,
+        &[
+            "sketch-text-kind-path",
+            "sketch-text-path",
+            "sketch-text-font",
+            "sketch-text-style",
+            "sketch-text-height-label",
+            "sketch-text-spacing-label",
+            "sketch-text-placement",
+            "sketch-text-fit",
+            "sketch-text-flip",
+            "sketch-text-align",
+            "common-ok",
+        ],
+    );
+}
+
+/// Fix-Runde 1: Das Textfeld nimmt höchstens 500 Zeichen (Spec A9).
+#[test]
+fn content_is_limited_to_max_chars() {
+    let mut rig = Rig::new();
+    rig.frame_text();
+    rig.type_text(&"W".repeat(MAX_TEXT_CHARS + 20));
+    assert_eq!(rig.tool().params.content.chars().count(), MAX_TEXT_CHARS);
 }

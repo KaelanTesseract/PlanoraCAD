@@ -588,7 +588,10 @@ impl DocTab {
     /// Ersetzt den ganzen Zustand des Tabs (Autosicherung übernommen, Version wiederhergestellt):
     /// ein neuer Verlauf beginnt, die Fenster des alten Stands schließen.
     pub fn replace_state(&mut self, state: AppState) {
+        // Die gemerkten Werte des Werkzeugs „Text“ gehören zum Programmlauf, nicht zum Stand.
+        let memory = self.state.text_memory_share().clone();
         self.state = state;
+        self.state.share_text_memory(&memory);
         (self.history, self.tracker) = fresh_history(&self.state);
         self.reshape_due = true;
         self.close_dialogs();
@@ -739,6 +742,9 @@ pub struct Workspace {
     pub exchange_dir: Option<PathBuf>,
     next_tab_id: u64,
     untitled: usize,
+    /// Die zuletzt benutzten Werte des Werkzeugs „Text“ (Skizzen 8, Spec C4): einer für den
+    /// Programmlauf, alle Tabs teilen ihn.
+    text_memory: crate::sketch_text::TextMemoryShare,
 }
 
 fn err(e: impl std::fmt::Display) -> String {
@@ -783,6 +789,7 @@ impl Workspace {
             exchange_dir: None,
             next_tab_id: 1,
             untitled: 0,
+            text_memory: Default::default(),
         };
         w.new_tab();
         if !w.config.dark() {
@@ -806,6 +813,7 @@ impl Workspace {
             .map(|t| t.state.dark)
             .unwrap_or(true);
         let mut state = AppState::new();
+        state.share_text_memory(&self.text_memory);
         state.dark = dark;
         state.rebuild_scene();
         state.frame_all();
@@ -1106,7 +1114,8 @@ impl Workspace {
             && self.tabs[0].state.document.features().is_empty()
     }
 
-    fn push_tab(&mut self, tab: DocTab) -> usize {
+    fn push_tab(&mut self, mut tab: DocTab) -> usize {
+        tab.state.share_text_memory(&self.text_memory);
         if self.replace_empty_start_tab() {
             self.tabs[0] = tab;
             self.active = 0;
@@ -1279,6 +1288,7 @@ impl Workspace {
         tab.source_dir = Some(dir);
         tab.based_on = Some(n);
         tab.read_only = true;
+        tab.state.share_text_memory(&self.text_memory);
         self.tabs.push(tab);
         self.active = self.tabs.len() - 1;
         Ok(self.active)

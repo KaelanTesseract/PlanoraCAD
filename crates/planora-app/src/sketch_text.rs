@@ -7,7 +7,9 @@
 //! Bis OK schreibt das Werkzeug nichts in die Skizze: Die Vorschau setzt den Text mit der
 //! Schriftliste ([`SketchSession::update_text_preview`], höchstens einmal je Bild und nur, wenn
 //! sich Inhalt oder Stil geändert haben) und legt ihn mit derselben reinen Lage wie das Anlegen in
-//! den Rahmen bzw. auf den Pfad ([`place_box`], [`Sketch::text_path_preview`]). OK legt den Text
+//! den Rahmen bzw. auf den Pfad ([`place_box`], [`Sketch::text_path_preview`]). Auch das Legen
+//! geschieht nur, wenn sich Lage, Werte, gesetzte Form oder der Stand der Skizze geändert haben;
+//! ruhige Bilder zeichnen das Gemerkte ([`SketchSession::placed_text_preview`]). OK legt den Text
 //! als **einen** Rückgängig-Schritt an ([`SketchSession::confirm_text`]); Esc, Rechtsklick,
 //! Werkzeugwechsel und Abbrechen hinterlassen nichts. Gesetzt wird nur über
 //! [`crate::fonts_library::Guarded`].
@@ -30,7 +32,7 @@ use planora_sketch::text_shape::{
     Contour, MAX_TEXT_CHARS, MAX_TEXT_CURVES, Seg, TextShape, TextShapeError, TextShaper, TextStyle,
 };
 use planora_text::{FALLBACK_FAMILY, FontLibrary};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// Vorgabeschrift, wenn sie installiert ist (Spec C4, **Annahme**); sonst [`FALLBACK_FAMILY`].
 pub const DEFAULT_FONT: &str = "Arial";
@@ -102,6 +104,39 @@ impl TextMemory {
     }
 }
 
+/// Gemeinsamer Speicher der gemerkten Werte (Spec C4): einer je Arbeitsbereich, also für den
+/// Programmlauf; alle Tabs und Skizzensitzungen teilen ihn
+/// ([`crate::state::AppState::share_text_memory`]).
+#[derive(Clone, Debug, Default)]
+pub struct TextMemoryShare(Arc<Mutex<Option<TextMemory>>>);
+
+impl TextMemoryShare {
+    /// Die gemerkten Werte; `None` vor dem ersten gelungenen OK.
+    pub fn get(&self) -> Option<TextMemory> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    fn set(&self, memory: TextMemory) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(memory);
+    }
+}
+
+/// Wofür die gemerkte Vorschau gelegt wurde: gesetzte Form (Zeiger), Art, Rahmen, Pfad samt Stand
+/// der Skizze (der Pfad ändert sich nur mit dem Stand) und alle Werte der Lage.
+#[derive(Clone, Debug, PartialEq)]
+struct PlaceKey {
+    shape: usize,
+    kind: TextToolKind,
+    corners: Option<[DVec2; 4]>,
+    path: Option<(CurveId, u64)>,
+    h: HAlign,
+    v: VAlign,
+    above: bool,
+    fit: bool,
+    height: f64,
+    flips: (bool, bool),
+}
+
 /// Ein Eintrag der Klappliste „Schriftart“: Familie und Beschriftung (eine fehlende mit
 /// „(fehlt)“).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -157,6 +192,11 @@ pub struct TextTool {
     pub editing: Option<TextId>,
     /// Was zuletzt gesetzt wurde (Vorschau); passt zu `shaped_for`.
     preview: Option<Arc<TextShape>>,
+    /// Die zuletzt gelegte Vorschau (`None`: nichts zu zeigen) und wofür.
+    placed: Option<(PlaceKey, Option<Arc<Vec<Contour>>>)>,
+    /// Wie oft die Vorschau gesetzt bzw. gelegt wurde (ruhige Bilder tun beides nicht).
+    shapings: u64,
+    placements: u64,
     /// Texte der Felder Höhe (Anzeigeeinheit), Zeichenabstand (%) und Winkel (Grad).
     pub height_text: String,
     pub spacing_text: String,
@@ -224,6 +264,9 @@ impl TextTool {
             angle: 0.0,
             editing: None,
             preview: None,
+            placed: None,
+            shapings: 0,
+            placements: 0,
             snaps: Vec::new(),
             shaped_for: None,
             shape_error: None,
@@ -255,6 +298,55 @@ impl TextTool {
     /// Das zuletzt gesetzte Ergebnis der Vorschau.
     pub fn preview_shape(&self) -> Option<&Arc<TextShape>> {
         self.preview.as_ref()
+    }
+
+    /// Wie oft die Vorschau bisher gesetzt wurde (Schrift, Inhalt oder Stil geändert).
+    #[doc(hidden)]
+    pub fn shapings(&self) -> u64 {
+        self.shapings
+    }
+
+    /// Wie oft die Vorschau bisher in den Rahmen oder auf den Pfad gelegt wurde.
+    #[doc(hidden)]
+    pub fn placements(&self) -> u64 {
+        self.placements
+    }
+
+    /// Der Schlüssel der Lage zum Stand `sk`; `None` ohne gesetzte Form.
+    fn place_key(&self, sk: &Sketch) -> Option<PlaceKey> {
+        let shape = self.preview.as_ref()?;
+        Some(PlaceKey {
+            shape: Arc::as_ptr(shape) as usize,
+            kind: self.kind,
+            corners: self.frame_corners(),
+            path: self.path.map(|p| (p, sk.revision())),
+            h: self.h,
+            v: self.v,
+            above: self.above,
+            fit: self.fit,
+            height: self.params.height,
+            flips: (self.params.flip_h, self.params.flip_v),
+        })
+    }
+
+    /// Legt die Vorschau in den Rahmen bzw. auf den Pfad (siehe [`SketchSession::text_preview`]).
+    fn place(&self, sk: &Sketch) -> Option<Vec<Contour>> {
+        let shape = self.preview.as_ref()?;
+        let p = &self.params;
+        match self.kind {
+            TextToolKind::Box => {
+                let corners = self.frame_corners()?;
+                let placed =
+                    place_box(shape, p.height, corners, self.h, self.v, p.flip_h, p.flip_v);
+                let finite = placed
+                    .iter()
+                    .all(|c| c.start.is_finite() && c.segs.iter().all(|s| s.end().is_finite()));
+                finite.then_some(placed)
+            }
+            TextToolKind::Path => {
+                sk.text_path_preview(self.path?, self.above, self.fit, self.h, p, shape)
+            }
+        }
     }
 
     /// Die Ecken des Rahmens wie beim Anlegen: achsenparallel, Ecke 0 unten links, Linie 0 → 1 die
@@ -410,7 +502,8 @@ impl SketchSession {
 
     /// Beginnt das Werkzeug neu, mit den gemerkten Werten.
     pub(crate) fn begin_text(&mut self) {
-        self.text = Some(TextTool::new(self.text_memory.as_ref(), current_unit()));
+        let memory = self.text_memory.get();
+        self.text = Some(TextTool::new(memory.as_ref(), current_unit()));
     }
 
     /// Stellt die Art um. Auf dem Pfad wartet das Werkzeug auf einen Klick auf eine Kurve, ein
@@ -421,40 +514,56 @@ impl SketchSession {
         }
     }
 
-    /// Setzt die Vorschau neu, wenn sich Inhalt oder Stil seit dem letzten Setzen geändert haben
-    /// (Spec C6: höchstens einmal je Bild, die Oberfläche ruft es einmal je Bild). Ohne
-    /// Schriftliste (sie wird noch gelesen) geschieht nichts.
-    pub fn update_text_preview(&mut self, fonts: Option<&FontLibrary>) {
-        let (Some(t), Some(lib)) = (self.text.as_mut(), fonts) else {
+    /// Bringt die Vorschau auf den Stand `sk` (Spec C6; die Oberfläche ruft es einmal je Bild).
+    /// Gesetzt wird nur neu, wenn sich Inhalt oder Stil geändert haben, gelegt nur, wenn sich dazu
+    /// Lage, Werte oder der Stand der Skizze geändert haben; ruhige Bilder tun nichts. Ein
+    /// gelöschter Pfad gilt als nicht gewählt. Ohne Schriftliste (sie wird noch gelesen) wird
+    /// nichts gesetzt.
+    pub fn update_text_preview(&mut self, sk: &Sketch, fonts: Option<&FontLibrary>) {
+        let Some(t) = self.text.as_mut() else {
             return;
         };
-        t.resolve_font(lib);
-        let key = (t.shaping_content(), t.params.style.clone());
-        if t.shaped_for.as_ref() == Some(&key) {
+        if t.path.is_some_and(|p| sk.curve(p).is_none()) {
+            t.path = None;
+        }
+        if let Some(lib) = fonts {
+            t.resolve_font(lib);
+            let key = (t.shaping_content(), t.params.style.clone());
+            if t.shaped_for.as_ref() != Some(&key) {
+                let shaped = shape_now(lib, &key.0, &key.1);
+                t.shape_error = shaped.as_ref().err().copied();
+                t.preview = shaped.ok();
+                t.shaped_for = Some(key);
+                t.shapings += 1;
+            }
+        }
+        let Some(key) = t.place_key(sk) else {
+            t.placed = None;
+            return;
+        };
+        if t.placed.as_ref().is_some_and(|(k, _)| *k == key) {
             return;
         }
-        let shaped = shape_now(lib, &key.0, &key.1);
-        t.shape_error = shaped.as_ref().err().copied();
-        t.preview = shaped.ok();
-        t.shaped_for = Some(key);
+        let placed = t.place(sk).map(Arc::new);
+        t.placements += 1;
+        t.placed = Some((key, placed));
+    }
+
+    /// Die zuletzt gelegte Vorschau, ohne neu zu rechnen (zum Zeichnen in jedem Bild).
+    pub fn placed_text_preview(&self) -> Option<Arc<Vec<Contour>>> {
+        let t = self.text.as_ref().filter(|_| self.runs_text())?;
+        t.placed.as_ref()?.1.clone()
     }
 
     /// Die Konturen der Vorschau in Skizzenkoordinaten, mit derselben Lage wie das Anlegen; `None`,
-    /// solange es nichts zu zeigen gibt (kein Text, kein Rahmen, kein Pfad, Pfad ohne Länge).
-    pub fn text_preview(&self, sk: &Sketch) -> Option<Vec<Contour>> {
+    /// solange es nichts zu zeigen gibt (kein Text, kein Rahmen, kein Pfad, Pfad ohne Länge). Passt
+    /// die gemerkte Lage zum Stand `sk`, kommt sie ohne Rechnen zurück.
+    pub fn text_preview(&self, sk: &Sketch) -> Option<Arc<Vec<Contour>>> {
         let t = self.text.as_ref().filter(|_| self.runs_text())?;
-        let shape = t.preview.as_ref()?;
-        let p = &t.params;
-        match t.kind {
-            TextToolKind::Box => {
-                let corners = t.frame_corners()?;
-                let placed = place_box(shape, p.height, corners, t.h, t.v, p.flip_h, p.flip_v);
-                let finite = placed
-                    .iter()
-                    .all(|c| c.start.is_finite() && c.segs.iter().all(|s| s.end().is_finite()));
-                finite.then_some(placed)
-            }
-            TextToolKind::Path => sk.text_path_preview(t.path?, t.above, t.fit, t.h, p, shape),
+        let key = t.place_key(sk)?;
+        match &t.placed {
+            Some((k, placed)) if *k == key => placed.clone(),
+            _ => t.place(sk).map(Arc::new),
         }
     }
 
@@ -468,7 +577,13 @@ impl SketchSession {
         radius: f64,
     ) -> Result<(), Msg> {
         let tol = sk.tolerance().linear;
-        let picked = self.shown_curve(sk, at, radius);
+        // Nur auf dem Pfad sucht ein Klick eine Kurve.
+        let picked = self
+            .text
+            .as_ref()
+            .is_some_and(|t| t.kind == TextToolKind::Path)
+            .then(|| self.shown_curve(sk, at, radius))
+            .flatten();
         let Some(t) = self.text.as_mut() else {
             return Ok(());
         };
@@ -532,7 +647,7 @@ impl SketchSession {
             return refuse(self, Msg::Raw(e));
         }
         match t.kind {
-            TextToolKind::Path if t.path.is_none() => {
+            TextToolKind::Path if t.path.is_none_or(|p| sf.sketch.curve(p).is_none()) => {
                 return refuse(self, crate::msg!("sketch-text-need-path"));
             }
             TextToolKind::Box if t.corners.len() < 2 => {
@@ -596,7 +711,7 @@ impl SketchSession {
             se.edit_label = Some(crate::msg!("undo-sketch-text-create"));
             Ok(())
         })?;
-        self.text_memory = Some(TextMemory::of(&t));
+        self.text_memory.set(TextMemory::of(&t));
         let note = self.message.take();
         self.selection.clear();
         self.drop_curve_picks();
@@ -665,6 +780,7 @@ pub(crate) fn text_options(
         ui,
         egui::TextEdit::multiline(&mut t.params.content)
             .id_salt(CONTENT_ID)
+            .char_limit(MAX_TEXT_CHARS)
             .desired_rows(CONTENT_ROWS)
             .desired_width(f32::INFINITY),
     );
@@ -684,10 +800,11 @@ pub(crate) fn text_options(
     if t.kind == TextToolKind::Path {
         ui.horizontal(|ui| {
             ui.label(tr!("sketch-text-path"));
-            let state = if t.path.is_some() {
+            // Ein gelöschter Pfad gilt als nicht gewählt.
+            let state = if t.path.is_some_and(|p| sf.sketch.curve(p).is_some()) {
                 tr!("sketch-text-path-chosen")
             } else {
-                tr!("sketch-text-path-pick")
+                tr!("sketch-text-path-none")
             };
             ui.label(RichText::new(state).weak());
         });
