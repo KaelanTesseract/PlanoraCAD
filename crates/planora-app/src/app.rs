@@ -434,13 +434,6 @@ impl PlanoraApp {
         self.fonts = fonts;
     }
 
-    /// Die App mit der fertigen Schriftliste `lib` (für Tests).
-    #[doc(hidden)]
-    pub fn with_fonts(mut self, lib: planora_text::FontLibrary) -> Self {
-        self.fonts = FontState::Ready(Arc::new(lib));
-        self
-    }
-
     /// Wie [`PlanoraApp::for_tests_with_updates`] mit Nachbildungen für Download und Start des
     /// Installers, dem Install-Modus `mode` und dem Download-Ordner `download_dir` (in einem
     /// Temp-Ordner, nie der echte).
@@ -2864,10 +2857,13 @@ impl eframe::App for PlanoraApp {
             || crate::history_bar::is_playing(&ctx);
         self.ws.observe_history(gesture);
         // Nach den Schritten: Sobald die Schriftliste da ist, setzen die Tabs ihre Texte neu
-        // (Spec G4), ohne Rückgängig-Schritt.
+        // (Spec G4), ohne Rückgängig-Schritt. Das Bild ist dann schon gezeichnet: Neu gesetzte
+        // Texte, neue Warnungen und der nicht mehr wartende Abschnitt „Text“ brauchen ein weiteres.
         if let Some(lib) = self.fonts.poll() {
             let lib = lib.clone();
-            self.ws.apply_fonts(&lib);
+            if self.ws.apply_fonts(&lib) {
+                ctx.request_repaint();
+            }
         }
         viewport::remember_keyboard_focus(&ctx);
         if self.ws.quit && !self.close_sent {

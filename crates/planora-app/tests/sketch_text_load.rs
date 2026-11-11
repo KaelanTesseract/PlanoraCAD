@@ -14,6 +14,7 @@ use eframe::App as _;
 use egui::epaint::{ClippedShape, Shape};
 use egui::{Pos2, Rect, Vec2};
 use planora_app::app::PlanoraApp;
+use planora_app::browser;
 use planora_app::crash;
 use planora_app::fonts_library;
 use planora_app::state::{AppState, FontState, StandardPlane};
@@ -108,12 +109,17 @@ struct Saved {
 }
 
 fn saved_doc(font: &str, shaper: &dyn TextShaper) -> Saved {
+    saved_doc_with("Ho", font, shaper)
+}
+
+/// Wie [`saved_doc`] mit dem Inhalt `content`.
+fn saved_doc_with(content: &str, font: &str, shaper: &dyn TextShaper) -> Saved {
     let mut w = workspace();
     let s = &mut w.active_tab_mut().state;
     let sketch = s
         .add_sketch(SketchPlane::Standard(StandardPlane::XY))
         .unwrap();
-    let shape = shaper.shape("Ho", &style(font)).unwrap();
+    let shape = shaper.shape(content, &style(font)).unwrap();
     let mut text = None;
     s.document
         .update(sketch, |k| {
@@ -126,7 +132,7 @@ fn saved_doc(font: &str, shaper: &dyn TextShaper) -> Saved {
                         DVec2::new(0.0, 0.0),
                         DVec2::new(40.0, 10.0),
                         TextParams {
-                            content: "Ho".into(),
+                            content: content.into(),
                             style: style(font),
                             height: 5.0,
                             flip_h: false,
@@ -213,6 +219,8 @@ struct Rig {
     app: PlanoraApp,
     time: f64,
     fonts: Option<Sender<FontLibrary>>,
+    /// Wann das letzte Bild das nächste haben will (`Duration::ZERO`: sofort).
+    repaint: Duration,
 }
 
 impl Rig {
@@ -236,6 +244,7 @@ impl Rig {
             app,
             time: 0.0,
             fonts: None,
+            repaint: Duration::MAX,
         }
     }
 
@@ -252,6 +261,10 @@ impl Rig {
         let out = self.ctx.run_ui(raw, |ui| app.ui(ui, &mut f));
         let mut texts = Vec::new();
         collect(&out.shapes, &mut texts);
+        self.repaint = out
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .map_or(Duration::MAX, |v| v.repaint_delay);
         out.drop_without_applying_deltas();
         texts
     }
@@ -562,4 +575,215 @@ fn missing_font_marks_dirty_and_warns() {
     let texts = rig.settle();
     assert!(!tab_marked(&texts), "gespeichert");
     assert!(!rig.tab().is_dirty());
+}
+
+fn unset_warning(count: usize) -> String {
+    planora_i18n::tr!("feature-sketch-text-unset", count = count)
+}
+
+/// Rückt die Uhr weit vor und zeichnet, bis kein Bild mehr ein weiteres anfordert (Tooltips und
+/// Übergänge sind dann fertig); höchstens 20 Bilder.
+fn quiet(rig: &mut Rig) {
+    for _ in 0..20 {
+        rig.time += 5.0;
+        rig.frame();
+        if rig.repaint != Duration::ZERO {
+            return;
+        }
+    }
+    panic!("die App kommt nicht zur Ruhe");
+}
+
+#[test]
+fn second_machine_shows_only_the_warning() {
+    // Auf einem Rechner ohne die Schrift gespeichert: Die Kurven stammen schon aus Montserrat.
+    // Hier fehlt sie ebenso, das Neusetzen liefert dieselbe Form. Nur die Warnung erscheint:
+    // kein „●“, kein Rückgängig-Schritt, gleiche Zähler, gleiches Bild des Dokuments.
+    let mut saved = saved_doc(MISSING, &FontLibrary::bundled_only());
+    open(&mut saved.w, &saved.path);
+    let (sk, t) = (saved.sketch, saved.text);
+    let mut rig = Rig::loading(saved.w);
+    rig.settle();
+    quiet(&mut rig);
+    let before = rig.st().snapshot();
+    let edits = rig.st().document.edit_count();
+    let model = rig.st().document.model_edit_count();
+    assert_eq!(
+        browser::sketch_row_warning(rig.st(), sk),
+        None,
+        "noch keine"
+    );
+
+    rig.fonts_ready();
+    rig.frame();
+    assert_eq!(
+        rig.repaint,
+        Duration::ZERO,
+        "die Warnung kam nach dem Zeichnen: ein weiteres Bild"
+    );
+    for _ in 0..5 {
+        let texts = rig.frame();
+        assert!(!tab_marked(&texts), "kein „●“");
+    }
+    let s = rig.st();
+    assert!(text_data(s, sk, t).shape().is_some(), "gesetzt");
+    assert_eq!(
+        curve_list(s, sk, t),
+        saved.curves,
+        "gleiche Form, gleiche Ids"
+    );
+    assert_eq!(
+        browser::sketch_row_warning(s, sk),
+        Some(font_warning(MISSING, 1)),
+        "Warnung im Baum"
+    );
+    assert_eq!(s.document.edit_count(), edits, "nicht geändert");
+    assert_eq!(s.document.model_edit_count(), model);
+    assert!(s.snapshot().same_content(&before), "gleiches Bild");
+    assert_eq!(rig.tab().history().undo_len(), 0, "kein Rückgängig-Schritt");
+    assert!(!rig.tab().is_dirty());
+}
+
+#[test]
+fn restored_warning_requests_a_repaint() {
+    // Nach Rückgängig sind die Texte wieder ungesetzt; das Neusetzen am Ende des Bildes bringt
+    // die Warnung zurück und fordert dafür ein weiteres Bild an (die Liste ist längst da).
+    let mut saved = saved_doc(MISSING, &FontLibrary::bundled_only());
+    open(&mut saved.w, &saved.path);
+    let sk = saved.sketch;
+    let mut rig = Rig::loading(saved.w);
+    rig.settle();
+    rig.fonts_ready();
+    rig.settle();
+    rig.st()
+        .create_box(planora_math::DVec3::splat(10.0))
+        .unwrap();
+    rig.settle();
+    quiet(&mut rig);
+    assert_eq!(rig.tab().history().undo_len(), 1);
+    rig.tab().undo().unwrap();
+    assert_eq!(
+        browser::sketch_row_warning(rig.st(), sk),
+        None,
+        "Voraussetzung: das Bild vor dem Schritt hält den Text ungesetzt"
+    );
+    rig.frame();
+    assert_eq!(
+        browser::sketch_row_warning(rig.st(), sk),
+        Some(font_warning(MISSING, 1))
+    );
+    assert_eq!(
+        rig.repaint,
+        Duration::ZERO,
+        "neue Warnung: ein weiteres Bild"
+    );
+    // Ohne Änderung bleibt es ruhig.
+    quiet(&mut rig);
+    rig.frame();
+    assert_ne!(rig.repaint, Duration::ZERO);
+}
+
+#[test]
+fn fonts_arriving_while_a_sketch_is_open_wait_for_close() {
+    let mut saved = saved_doc("Montserrat", &FontLibrary::bundled_only());
+    open(&mut saved.w, &saved.path);
+    let (sk, t) = (saved.sketch, saved.text);
+    let mut rig = Rig::loading(saved.w);
+    rig.settle();
+    rig.st().open_sketch(sk).unwrap();
+    rig.settle();
+    let undo = rig.tab().history().undo_len();
+    rig.fonts_ready();
+    for _ in 0..5 {
+        rig.frame();
+    }
+    let s = rig.st();
+    assert!(s.fonts().is_some(), "die Liste ist im Tab");
+    assert!(
+        text_data(s, sk, t).shape().is_none(),
+        "solange die Skizze offen ist, wird nicht gesetzt"
+    );
+    let (_, draft) = s.session_draft_mut().expect("Skizze offen");
+    assert!(
+        draft.sketch.text(t).unwrap().shape().is_none(),
+        "Entwurf ebenso"
+    );
+
+    rig.st().close_sketch();
+    rig.settle();
+    let s = rig.st();
+    assert!(
+        text_data(s, sk, t).shape().is_some(),
+        "nach dem Schließen gesetzt"
+    );
+    assert_eq!(
+        curve_list(s, sk, t),
+        saved.curves,
+        "gleiche Form, gleiche Ids"
+    );
+    assert_eq!(
+        rig.tab().history().undo_len(),
+        undo,
+        "kein Rückgängig-Schritt"
+    );
+}
+
+#[test]
+fn text_that_cannot_be_set_keeps_its_curves_and_warns() {
+    // Gespeichert mit einer Schrift, die hier fehlt, und Zeichen, die weder Montserrat noch Roboto
+    // haben: Die Ersatzschrift ergäbe keine Kurve. Der Text verschwindet nicht (Anti-Ziel), die
+    // Skizze warnt im Baum, und der Abschnitt „Text“ sagt es beim Ändern.
+    let mut saved = saved_doc_with("漢字", MISSING, &SquareShaper);
+    open(&mut saved.w, &saved.path);
+    let (sk, t) = (saved.sketch, saved.text);
+    let mut rig = Rig::loading(saved.w);
+    rig.settle();
+    rig.fonts_ready();
+    let texts = rig.settle();
+    assert!(!tab_marked(&texts), "nichts geändert");
+    let s = rig.st();
+    assert_eq!(curve_list(s, sk, t), saved.curves, "die Kurven bleiben");
+    assert!(text_data(s, sk, t).is_unset());
+    assert_eq!(
+        browser::sketch_row_warning(s, sk),
+        Some(unset_warning(1)),
+        "Warnung im Baum"
+    );
+    assert_eq!(rig.tab().history().undo_len(), 0);
+    assert!(!rig.tab().is_dirty());
+
+    rig.st().open_sketch(sk).unwrap();
+    rig.settle();
+    let (se, sf) = rig.st().session_draft_mut().expect("Skizze offen");
+    assert!(se.begin_text_edit(&mut sf.sketch, t));
+    let texts = rig.settle();
+    let hint = planora_i18n::tr!("sketch-text-hint-unset");
+    assert!(texts.contains(&hint), "Hinweis im Abschnitt: {texts:?}");
+}
+
+#[test]
+fn font_scan_logs_skipped_files_and_counts() {
+    // Das Protokoll gehört zum Durchsuchen im Hintergrund, steht aber außerhalb des Merkers für
+    // abgefangene Paniken (nur `FontLibrary::scan` läuft darin).
+    let dir = common::temp_root("planora-font-scan-log");
+    std::fs::create_dir_all(&dir).unwrap();
+    let name = format!("kaputt-{}.ttf", std::process::id());
+    std::fs::write(dir.join(&name), b"keine Schrift").unwrap();
+    let state = fonts_library::spawn_scan(None, move || FontLibrary::scan(&[dir]));
+    let mut rig = Rig::with_state(workspace(), state);
+    wait_for_fonts(&mut rig);
+    assert_eq!(rig.st().fonts().unwrap().skipped().len(), 1);
+    let lines = planora_app::diag::recent_lines(2000);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("Font skipped:") && l.contains(&name)),
+        "{lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("Fonts read:") && l.contains("1 files skipped")),
+        "{lines:?}"
+    );
 }

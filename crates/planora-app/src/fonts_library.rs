@@ -16,25 +16,15 @@ use std::sync::mpsc;
 /// Übersprungene Dateien kommen je einmal ins Protokoll; sobald die Liste fertig ist, zeichnet
 /// `ctx` ein neues Bild.
 pub fn start(ctx: &egui::Context) -> FontState {
-    spawn_scan(Some(ctx.clone()), || {
-        let started = std::time::Instant::now();
-        let lib = FontLibrary::scan(&system_font_dirs());
-        for (path, reason) in lib.skipped() {
-            crate::diag::info(&format!("Font skipped: {} ({reason})", path.display()));
-        }
-        crate::diag::info(&format!(
-            "Fonts read: {} faces, {} files skipped, {} ms",
-            lib.face_count(),
-            lib.skipped().len(),
-            started.elapsed().as_millis()
-        ));
-        lib
-    })
+    spawn_scan(Some(ctx.clone()), || FontLibrary::scan(&system_font_dirs()))
 }
 
-/// Führt `scan` in einem eigenen Faden aus und liefert sofort den Laden-Zustand. Eine Panik in
-/// `scan` schreibt keinen Absturzbericht; dann gelten die mitgelieferten Schriften (mit Zeile im
-/// Protokoll). `ctx`: neues Bild, sobald die Liste da ist (Tests ohne Fenster: `None`).
+/// Führt `scan` (das Durchsuchen selbst) in einem eigenen Faden aus und liefert sofort den
+/// Laden-Zustand. Nur `scan` läuft im Merker [`crate::crash::expected_panics`]: Eine Panik darin
+/// schreibt keinen Absturzbericht, dann gelten die mitgelieferten Schriften (mit Zeile im
+/// Protokoll). Das Protokoll der gelesenen und übersprungenen Dateien steht außerhalb, ein Fehler
+/// dort wäre ein echter Absturz. `ctx`: neues Bild, sobald die Liste da ist (Tests ohne Fenster:
+/// `None`).
 #[doc(hidden)]
 pub fn spawn_scan(
     ctx: Option<egui::Context>,
@@ -44,13 +34,20 @@ pub fn spawn_scan(
     let spawned = std::thread::Builder::new()
         .name("planora-fonts".into())
         .spawn(move || {
-            let lib = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let started = std::time::Instant::now();
+            let scanned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 crate::crash::expected_panics(scan)
-            }))
-            .unwrap_or_else(|_| {
-                crate::diag::warn("Font scan failed; using bundled fonts");
-                FontLibrary::bundled_only()
-            });
+            }));
+            let lib = match scanned {
+                Ok(lib) => {
+                    log_scan(&lib, started.elapsed());
+                    lib
+                }
+                Err(_) => {
+                    crate::diag::warn("Font scan failed; using bundled fonts");
+                    FontLibrary::bundled_only()
+                }
+            };
             // Ist die App schon beendet, fragt niemand mehr.
             let _ = tx.send(lib);
             if let Some(ctx) = ctx {
@@ -65,6 +62,19 @@ pub fn spawn_scan(
             FontState::Ready(std::sync::Arc::new(FontLibrary::bundled_only()))
         }
     }
+}
+
+/// Schreibt jede übersprungene Datei und die Zahlen des Durchsuchens ins Protokoll.
+fn log_scan(lib: &FontLibrary, took: std::time::Duration) {
+    for (path, reason) in lib.skipped() {
+        crate::diag::info(&format!("Font skipped: {} ({reason})", path.display()));
+    }
+    crate::diag::info(&format!(
+        "Fonts read: {} faces, {} files skipped, {} ms",
+        lib.face_count(),
+        lib.skipped().len(),
+        took.as_millis()
+    ));
 }
 
 /// Setzt mit der Schriftliste; eine abgefangene Panik im Schriftleser (siehe Modulkopf) ist dabei

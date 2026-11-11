@@ -37,14 +37,14 @@ use planora_sketch::SketchError;
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
 use planora_sketch::snap::SnapHit;
 use planora_sketch::text::{
-    HAlign, TextId, TextKindEdit, TextParams, TextPlacement, VAlign, path_content,
+    HAlign, MAX_SPACING, TextId, TextKindEdit, TextParams, TextPlacement, VAlign, path_content,
 };
 use planora_sketch::text_layout::place_box;
 use planora_sketch::text_shape::{
     Contour, MAX_TEXT_CHARS, MAX_TEXT_CURVES, Seg, TextShape, TextShapeError, TextShaper, TextStyle,
 };
 use planora_text::{FALLBACK_FAMILY, FontLibrary};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::f64::consts::TAU;
 use std::sync::{Arc, Mutex};
 
@@ -54,8 +54,6 @@ pub const DEFAULT_FONT: &str = "Arial";
 pub const DEFAULT_HEIGHT_MM: f64 = 5.0;
 /// Vorgabehöhe in Zoll-Dokumenten (in Zoll).
 pub const DEFAULT_HEIGHT_IN: f64 = 0.2;
-/// Größter Zeichenabstand in Prozent (Spec A7).
-const MAX_SPACING: f64 = 1000.0;
 /// Breite der Zahlenfelder im Abschnitt.
 const FIELD_W: f32 = 80.0;
 /// Zeilen des Textfelds.
@@ -762,19 +760,34 @@ impl SketchSession {
 
     /// Die gewählten Texte (Spec B9, C9): jeder Text, von dem ein Buchstabe gewählt ist, einmal,
     /// in der Reihenfolge der Auswahl. Rahmenlinien und Ecken allein zählen nicht.
+    ///
+    /// Das läuft in jedem Bild, auch wenn ein großer Text ganz gewählt ist: ein Durchgang über die
+    /// Auswahl und einer über die Teile der Texte, statt je gewähltem Eintrag alle Texte zu
+    /// durchsuchen.
     pub fn selected_texts(&self, sk: &Sketch) -> Vec<TextId> {
-        let mut out = Vec::new();
-        if sk.texts().next().is_none() {
-            return out;
+        if self.selection.is_empty() || sk.texts().next().is_none() {
+            return Vec::new();
         }
-        for item in &self.selection {
-            if let Some(t) = text_of_item(sk, *item)
-                && !out.contains(&t)
-            {
-                out.push(t);
-            }
+        // Erste Stelle jedes Eintrags in der Auswahl.
+        let mut first: HashMap<Item, usize> = HashMap::with_capacity(self.selection.len());
+        for (i, item) in self.selection.iter().enumerate() {
+            first.entry(*item).or_insert(i);
         }
-        out
+        let mut found: Vec<(usize, TextId)> = sk
+            .texts()
+            .filter_map(|(t, d)| {
+                d.curves
+                    .iter()
+                    .map(|&c| Item::Curve(c))
+                    .chain(d.points.iter().map(|&p| Item::Point(p)))
+                    .filter_map(|item| first.get(&item).copied())
+                    .min()
+                    .map(|i| (i, t))
+            })
+            .collect();
+        // Kein Eintrag gehört zu zwei Texten: Die Stellen sind verschieden.
+        found.sort_unstable_by_key(|&(i, _)| i);
+        found.into_iter().map(|(_, t)| t).collect()
     }
 
     /// „Text bearbeiten“ (Knopf und Aktion): öffnet den ersten gewählten Text; ohne gewählten
@@ -1182,6 +1195,14 @@ pub(crate) fn text_options(
     // Hinweise zur Schrift (Spec C10): aus der letzten Vorschau, je eine Zeile.
     for hint in t.preview.as_deref().map(shape_hints).unwrap_or_default() {
         ui.label(RichText::new(hint).small().weak());
+    }
+    // Ein Text, der sich beim Neusetzen nicht setzen ließ, behält seine Kurven (wie die Warnung
+    // im Verlauf).
+    if t.editing
+        .and_then(|id| sf.sketch.text(id))
+        .is_some_and(|d| d.is_unset())
+    {
+        ui.label(RichText::new(tr!("sketch-text-hint-unset")).small().weak());
     }
     // Höhe, Zeichenabstand, Winkel
     let locked = t.align_locked();

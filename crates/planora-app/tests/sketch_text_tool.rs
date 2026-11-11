@@ -26,7 +26,7 @@ use planora_math::DVec2;
 use planora_project::config::Config;
 use planora_project::library::Library;
 use planora_sketch::model::{CurveId, CurveKind, Sketch};
-use planora_sketch::text::{HAlign, TextParams, TextPlacement, VAlign};
+use planora_sketch::text::{HAlign, MAX_SPACING, TextParams, TextPlacement, VAlign};
 use planora_sketch::text_shape::{Contour, MAX_TEXT_CHARS, Seg, TextShaper, TextStyle};
 use planora_text::FontLibrary;
 use std::sync::Arc;
@@ -1202,4 +1202,29 @@ fn content_is_limited_to_max_chars() {
     rig.frame_text();
     rig.type_text(&"W".repeat(MAX_TEXT_CHARS + 20));
     assert_eq!(rig.tool().params.content.chars().count(), MAX_TEXT_CHARS);
+}
+
+#[test]
+fn spacing_field_uses_the_sketch_limit() {
+    // Das Feld prüft mit derselben Grenze wie die Skizze (eine Konstante, Spec A7).
+    let mut rig = Rig::new();
+    rig.frame_text();
+    rig.type_text("A");
+    let scope = rig.scope();
+    let limit = tr!("sketch-text-spacing", max = format!("{MAX_SPACING}"));
+    rig.tool()
+        .set_spacing_text(&format!("{MAX_SPACING}"), &scope);
+    assert_eq!(rig.tool().params.style.spacing, MAX_SPACING);
+    assert!(!rig.settle().has(&limit), "die Grenze selbst geht");
+    rig.tool()
+        .set_spacing_text(&format!("{}", MAX_SPACING + 1.0), &scope);
+    assert!(rig.settle().has(&limit), "darüber: Meldung im Abschnitt");
+    assert_eq!(
+        rig.tool().params.style.spacing,
+        MAX_SPACING,
+        "der letzte gültige Wert bleibt"
+    );
+    // OK lehnt mit derselben Meldung ab, die Skizze bleibt leer.
+    rig.click_label(&tr!("common-ok"));
+    assert_eq!(rig.sk().texts().count(), 0);
 }

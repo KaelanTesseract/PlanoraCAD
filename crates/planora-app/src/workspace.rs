@@ -61,6 +61,11 @@ pub fn root_locked() -> String {
     tr!("settings-root-locked")
 }
 
+/// Die Versionen aller Features: Ändert sich eine, ist neu gerechnet worden.
+fn feature_versions(doc: &planora_feature::Document) -> Vec<u64> {
+    doc.features().iter().map(|f| f.version()).collect()
+}
+
 /// Grund, warum Rückgängig nicht geht: kein Schritt da.
 pub fn nothing_to_undo() -> String {
     tr!("project-nothing-to-undo")
@@ -167,19 +172,33 @@ impl DocTab {
     ///
     /// Es wartet, solange eine Skizze offen ist (ihr Entwurf ist eine Kopie, die beim Beenden
     /// zurückgeschrieben wird) und solange eine Änderung noch kein Schritt ist (Geste läuft).
-    pub(crate) fn apply_fonts(&mut self, fonts: &std::sync::Arc<planora_text::FontLibrary>) {
+    ///
+    /// `true`, wenn das Bild dieses Durchgangs veraltet ist, weil es danach läuft: Der Tab hat die
+    /// Liste gerade bekommen (der Abschnitt „Text“ wartet nicht mehr), seine Texte sind neu gesetzt
+    /// oder eine Warnung hat sich geändert (fehlende Schrift, Text ließ sich nicht setzen).
+    pub(crate) fn apply_fonts(
+        &mut self,
+        fonts: &std::sync::Arc<planora_text::FontLibrary>,
+    ) -> bool {
+        let mut stale = false;
         if self.state.fonts().is_none() {
             self.state.set_fonts(fonts.clone());
+            stale = true;
         }
         if !self.reshape_due
             || self.state.sketch_session.is_some()
             || self.tracker.is_pending(self.state.document.edit_count())
         {
-            return;
+            return stale;
         }
         self.reshape_due = false;
-        if !self.state.reshape_texts() {
-            return;
+        // Eine neue Version einer Skizze heißt: neu gesetzt oder neue Warnung (`reshape_texts` im
+        // Dokument).
+        let versions = feature_versions(&self.state.document);
+        let reshaped = self.state.reshape_texts();
+        stale |= feature_versions(&self.state.document) != versions;
+        if !reshaped {
+            return stale;
         }
         // Neuer Zählerstand ohne Schritt, wie nach dem Zurückladen; das Bild des Verlaufs ist ab
         // jetzt der neu gesetzte Stand (Rückgängig kehrt dorthin zurück, nicht zur alten Form).
@@ -188,6 +207,7 @@ impl DocTab {
         let bytes = snapshot_bytes(&snapshot);
         self.history.replace_current(snapshot, bytes);
         crate::diag::info("Texts reshaped with the fonts of this computer");
+        true
     }
 
     /// Ungespeicherte Änderungen (R7): eine Skizze ist offen, eine Änderung ist noch kein
@@ -1441,11 +1461,14 @@ impl Workspace {
     }
 
     /// Am Ende jedes Bildes, sobald die Schriftliste da ist: Jeder Tab bekommt sie und setzt
-    /// seine Texte neu, wenn das fällig ist ([`DocTab::apply_fonts`], Spec G4).
-    pub fn apply_fonts(&mut self, fonts: &std::sync::Arc<planora_text::FontLibrary>) {
+    /// seine Texte neu, wenn das fällig ist ([`DocTab::apply_fonts`], Spec G4). `true`, wenn das
+    /// gerade gezeichnete Bild dadurch veraltet ist (dann braucht es ein weiteres).
+    pub fn apply_fonts(&mut self, fonts: &std::sync::Arc<planora_text::FontLibrary>) -> bool {
+        let mut stale = false;
         for t in &mut self.tabs {
-            t.apply_fonts(fonts);
+            stale |= t.apply_fonts(fonts);
         }
+        stale
     }
 
     /// Am Ende jedes Bildes: Änderungen aller Tabs werden Schritte ihres Verlaufs (R3, R4);
