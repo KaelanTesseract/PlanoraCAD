@@ -513,6 +513,36 @@ impl Sketch {
         )
     }
 
+    /// Die Konturen eines Textes auf dem Pfad `path` mit den Werten `params`, gesetzt als `shape`,
+    /// ohne etwas in die Skizze zu schreiben: die Vorschau des Werkzeugs (Spec C6), dieselbe
+    /// Rechnung wie [`Sketch::add_text_path`]. `None`, wenn die Kurve keinen Text trägt
+    /// (Buchstaben, Rahmenlinien, Griffe, unbekannt) oder die Lage gerade nicht geht (siehe
+    /// [`Sketch::placed_contours`]).
+    pub fn text_path_preview(
+        &self,
+        path: CurveId,
+        above: bool,
+        fit: bool,
+        h: HAlign,
+        params: &TextParams,
+        shape: &TextShape,
+    ) -> Option<Vec<Contour>> {
+        self.refuse_bad_path(path).ok()?;
+        let placement = TextPlacement::Path {
+            path,
+            above,
+            fit,
+            h,
+        };
+        self.place_text(
+            placement,
+            params.height,
+            params.flip_h,
+            params.flip_v,
+            shape,
+        )
+    }
+
     /// Die Konturen eines Textes mit `placement`, Höhe und Umkehren (siehe
     /// [`Sketch::placed_contours`]).
     fn place_text(

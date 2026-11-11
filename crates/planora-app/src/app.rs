@@ -2393,12 +2393,14 @@ fn sketch_kinds_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
 }
 
 /// Die Einträge des Menüs „Erzeugen“ bei offener Skizze ohne Untermenü (wie Fusion „Create“):
-/// der Kegelschnitt, beide Muster und die Skizzenbemaßung.
-pub const SKETCH_CREATE_ACTIONS: [Action; 4] = [
+/// der Kegelschnitt, beide Muster, die Skizzenbemaßung und Text (Skizzen 8, wie in Fusion nicht in
+/// der Leiste).
+pub const SKETCH_CREATE_ACTIONS: [Action; 5] = [
     Action::SketchConic,
     Action::SketchPatternRect,
     Action::SketchPatternCircular,
     Action::SketchDimension,
+    Action::SketchText,
 ];
 
 /// Bei offener Skizze [`SKETCH_CREATE_ACTIONS`] mit Symbol, Taste und Hinweis, gewählt über die

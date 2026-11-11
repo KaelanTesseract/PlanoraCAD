@@ -1044,6 +1044,11 @@ pub enum HandIcon {
     /// Kegelschnitt (Skizzen 7): zwei dünne Hilfslinien zum Scheitel, die Kurve kräftig, ein Punkt
     /// auf der Schulter.
     SketchConic,
+    /// Text (Skizzen 8): ein großes „A“ kräftig, darunter dünn die Grundlinie des Rahmens.
+    Text,
+    /// Text auflösen (Skizzen 8): das „A“ in zwei Teile auseinandergerückt, dazwischen kleine
+    /// Punkte (aus dem Text werden einzelne Kurven).
+    ExplodeText,
 }
 
 /// Alle gezeichneten Symbole aus [`HandIcon`].
@@ -1078,6 +1083,8 @@ pub const HAND_DRAWN: &[HandIcon] = &[
     HandIcon::SketchSilhouette,
     HandIcon::SketchSplineControl,
     HandIcon::SketchConic,
+    HandIcon::Text,
+    HandIcon::ExplodeText,
 ];
 
 /// Zeichnet ein [`HandIcon`] in `rect` (Strichbreite 1,5, runde Enden).
@@ -1448,6 +1455,68 @@ pub fn paint_hand_icon(painter: &Painter, rect: Rect, icon: HandIcon, color: Col
             painter.add(egui::Shape::line(curve, stroke));
             painter.circle_filled(at(0.5), 1.6, color);
         }
+        HandIcon::Text => {
+            // „A“ aus zwei Schrägen und dem Querstrich, darunter dünn die Grundlinie.
+            let (top, left, right) = (
+                c + vec2(0.0, -r * 1.05),
+                c + vec2(-r * 0.8, r * 0.75),
+                c + vec2(r * 0.8, r * 0.75),
+            );
+            seg(painter, [left, top], stroke);
+            seg(painter, [top, right], stroke);
+            seg(
+                painter,
+                [c + vec2(-r * 0.45, r * 0.1), c + vec2(r * 0.45, r * 0.1)],
+                stroke,
+            );
+            let thin = Stroke::new(1.0, color);
+            seg(
+                painter,
+                [c + vec2(-r * 1.1, r * 1.05), c + vec2(r * 1.1, r * 1.05)],
+                thin,
+            );
+        }
+        HandIcon::ExplodeText => {
+            // Linke Hälfte des „A“ nach links unten, rechte nach rechts unten gerückt, dazwischen
+            // drei Punkte.
+            let (dl, dr) = (vec2(-r * 0.3, r * 0.1), vec2(r * 0.3, r * 0.1));
+            let top = c + vec2(0.0, -r * 1.05);
+            seg(
+                painter,
+                [c + vec2(-r * 0.8, r * 0.75) + dl, top + dl],
+                stroke,
+            );
+            seg(
+                painter,
+                [top + dr, c + vec2(r * 0.8, r * 0.75) + dr],
+                stroke,
+            );
+            seg(
+                painter,
+                [
+                    c + vec2(-r * 0.45, r * 0.1) + dl,
+                    c + vec2(-r * 0.15, r * 0.1) + dl,
+                ],
+                stroke,
+            );
+            seg(
+                painter,
+                [
+                    c + vec2(r * 0.15, r * 0.1) + dr,
+                    c + vec2(r * 0.45, r * 0.1) + dr,
+                ],
+                stroke,
+            );
+            let thin = Stroke::new(1.0, color);
+            seg(
+                painter,
+                [c + vec2(-r * 1.1, r * 1.05), c + vec2(r * 1.1, r * 1.05)],
+                thin,
+            );
+            for y in [-0.5_f32, 0.0, 0.5] {
+                painter.circle_filled(c + vec2(0.0, r * y), 1.2, color);
+            }
+        }
         HandIcon::Centerline => {
             seg(
                 painter,
@@ -1540,6 +1609,7 @@ pub fn sketch_tool_icon(tool: crate::sketch_state::Tool) -> IconSource {
         T::Pattern => IconSource::Hand(HandIcon::PatternRect),
         T::Constraint(action) => sketch_action_icon(action),
         T::InsertControlPoint => IconSource::Hand(HandIcon::SketchSplineControl),
+        T::Text => IconSource::Hand(HandIcon::Text),
     }
 }
 

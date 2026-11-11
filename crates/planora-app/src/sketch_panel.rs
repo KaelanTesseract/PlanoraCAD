@@ -84,6 +84,7 @@ pub fn tool_label(tool: Tool) -> String {
         Tool::Pattern => tr!("sketch-tool-pattern"),
         Tool::Constraint(action) => action.label(),
         Tool::InsertControlPoint => tr!("action-sketch-insert-control-point"),
+        Tool::Text => tr!("action-sketch-text"),
     }
 }
 
@@ -112,6 +113,7 @@ pub fn tool_hint(tool: Tool) -> String {
         Tool::Pattern => tr!("sketch-tool-pattern-hint"),
         Tool::Constraint(action) => command_hint(action),
         Tool::InsertControlPoint => tr!("sketch-tool-insert-control-point-hint"),
+        Tool::Text => tr!("sketch-tool-text-hint"),
     }
 }
 
@@ -606,6 +608,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     let mut panel = load_panel(ctx, index);
     // Formeln der Maße nennen Parameter nur lesend (das Fenster „Parameter“ ist gesperrt).
     let scope = state.document.param_scope();
+    let fonts = state.fonts().cloned();
     let mut show_profiles = state.show_sketch_profiles;
     let mut palette = SketchPalette {
         grid: state.sketch_show_grid,
@@ -638,8 +641,11 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         scope: &scope,
         show_profiles: &mut show_profiles,
         palette: &mut palette,
+        fonts: fonts.as_deref(),
     };
     side_field(ctx, rects.right, dark, se, sf, side);
+    // Text: die Vorschau nach den Eingaben dieses Bilds setzen, höchstens einmal je Bild (Spec C6).
+    se.update_text_preview(fonts.as_deref());
     let close = foot_field(ctx, rects.bottom, dark, se, &mut sf.sketch);
     state.show_sketch_profiles = show_profiles;
     state.sketch_show_grid = palette.grid;
@@ -913,6 +919,8 @@ struct SideInput<'a> {
     /// Schalter „Profil anzeigen“ ([`AppState::show_sketch_profiles`]).
     show_profiles: &'a mut bool,
     palette: &'a mut SketchPalette,
+    /// Die Schriftliste für den Abschnitt „Text“; `None`, solange sie gelesen wird.
+    fonts: Option<&'a planora_text::FontLibrary>,
 }
 
 /// Skizzenfeld rechts (Spaltenbreite 250): Inhalt in einer senkrechten ScrollArea, höchstens so
@@ -940,8 +948,14 @@ fn side_field(
 }
 
 /// Einstellungen des aktiven Werkzeugs: beim Versatz der Haken „Kette“, beim Verschieben der Haken
-/// „Kopie erstellen“, „Bezugspunkt setzen“, OK und Abbrechen.
-fn tool_options(ui: &mut egui::Ui, se: &mut SketchSession, sf: &mut SketchFeature) {
+/// „Kopie erstellen“, „Bezugspunkt setzen“, OK und Abbrechen; bei Text der Abschnitt „Text“.
+fn tool_options(
+    ui: &mut egui::Ui,
+    se: &mut SketchSession,
+    sf: &mut SketchFeature,
+    fonts: Option<&planora_text::FontLibrary>,
+    scope: &ParamScope,
+) {
     if se.tool == Tool::Spline && se.kinds.spline == ToolKind::SplineControl {
         spline_options(ui, se);
     } else {
@@ -955,6 +969,9 @@ fn tool_options(ui: &mut egui::Ui, se: &mut SketchSession, sf: &mut SketchFeatur
     }
     if se.runs_pattern() {
         pattern_options(ui, se, sf);
+    }
+    if se.runs_text() {
+        crate::sketch_text::text_options(ui, se, sf, fonts, scope);
     }
     if se.runs_transform() {
         if se.tool == Tool::Scale {
@@ -1278,6 +1295,7 @@ fn side_contents(
         scope,
         show_profiles,
         palette,
+        fonts,
     } = side;
     // Name, rechts daneben der Schalter „Profil anzeigen“ (wie Fusions Skizzenpalette
     // „Profil“: geschlossene Flächen hell eingefärbt); in einer Zeile, damit die Liste darunter
@@ -1309,7 +1327,7 @@ fn side_contents(
         ui.data_mut(|d| d.insert_temp(look_at_key(), look.rect));
         palette.look_at |= look.clicked();
     });
-    tool_options(ui, se, sf);
+    tool_options(ui, se, sf, fonts, scope);
     ui.add_space(2.0);
 
     // Abhängigkeiten

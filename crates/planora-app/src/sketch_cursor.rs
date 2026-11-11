@@ -302,6 +302,13 @@ impl SketchSession {
     /// Zeichnet das aktive Werkzeug neue Geometrie (Fang, Anbindung, Hilfslinien)? Auswahl und
     /// Kantenkopie nicht; Stutzen, Dehnen und Brechen haben ihre eigene Vorschau.
     pub fn is_drawing_tool(&self) -> bool {
+        // Text: nur beim Aufziehen des Rahmens; auf dem Pfad wählt ein Klick eine Kurve.
+        if self.tool == Tool::Text {
+            return self
+                .text
+                .as_ref()
+                .is_some_and(crate::sketch_text::TextTool::placing_frame);
+        }
         !matches!(
             self.tool,
             Tool::Select

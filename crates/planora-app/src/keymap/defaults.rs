@@ -195,6 +195,9 @@ action_table! {
     SketchPatternRect, "skizze.muster_rechteck", "action-sketch-pattern-rect", Sketch, [];
     /// Fusion „Kreisförmige Anordnung“ (Skizzen 5): ohne Vorgabetaste wie in Fusion, belegbar.
     SketchPatternCircular, "skizze.muster_kreis", "action-sketch-pattern-circular", Sketch, [];
+    /// Fusion „Text“ (Skizzen 8): im Menü „Erzeugen“, nicht in der Leiste; ohne Vorgabetaste
+    /// (**Annahme**: Fusion hat keine), belegbar.
+    SketchText, "skizze.text", "action-sketch-text", Sketch, [];
     /// Fusion „Blick auf“ (Look At): wie der Knopf in der Skizzenpalette; ohne Vorgabetaste.
     SketchLookAt, "skizze.blick_auf", "action-sketch-look-at", Sketch, [];
     /// Schalter „Skizzenraster“ der Skizzenpalette; ohne Vorgabetaste.
@@ -257,6 +260,7 @@ impl Action {
             Action::SketchMoveCopy => Some(Tool::MoveCopy),
             Action::SketchScale => Some(Tool::Scale),
             Action::SketchDimension => Some(Tool::Dimension),
+            Action::SketchText => Some(Tool::Text),
             _ => self.sketch_kind().map(crate::sketch_kinds::ToolKind::tool),
         }
     }

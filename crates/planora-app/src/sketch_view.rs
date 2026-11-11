@@ -1301,6 +1301,8 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             .as_ref()
             .is_some_and(SketchSession::is_drawing_tool))
     .then(|| state.document.param_scope());
+    // Text: OK über Eingabe setzt mit der Schriftliste.
+    let fonts = state.fonts().cloned();
     let Some((se, sf)) = state.session_draft_mut() else {
         return;
     };
@@ -1568,6 +1570,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
                 }
                 _ if se.runs_transform() => se.confirm_transform(sf),
                 _ if se.runs_pattern() => se.confirm_pattern(sf),
+                _ if se.runs_text() => se.confirm_text(sf, fonts.as_deref()),
                 _ => se.finish_tool(&mut sf.sketch),
             };
         }
@@ -2261,6 +2264,46 @@ pub fn curve_guides(se: &SketchSession, sk: &Sketch) -> Vec<Vec<DVec2>> {
         .collect()
 }
 
+/// Vorschau des Werkzeugs „Text“ ([`crate::sketch_text`]): nichts davon steht in der Skizze.
+fn draw_text_preview(
+    painter: &egui::Painter,
+    map: &Mapper,
+    sk: &Sketch,
+    se: &SketchSession,
+    color: Color32,
+) {
+    use crate::sketch_text::TextToolKind;
+    let Some(t) = se.text.as_ref() else {
+        return;
+    };
+    let cursor = se.draw_cursor.as_ref().map(|c| c.at).or(se.cursor);
+    if t.kind == TextToolKind::Box {
+        let frame: Option<Vec<DVec2>> = match (t.frame_corners(), t.corners.as_slice(), cursor) {
+            (Some(c), ..) => Some(vec![c[0], c[1], c[2], c[3], c[0]]),
+            (None, [a], Some(b)) => {
+                Some(vec![*a, DVec2::new(b.x, a.y), b, DVec2::new(a.x, b.y), *a])
+            }
+            _ => None,
+        };
+        for path in frame.iter().flat_map(|f| map.paths(f)) {
+            draw_path(painter, path, Stroke::new(1.5, color), true);
+        }
+    }
+    if t.kind == TextToolKind::Path
+        && let Some(pl) = t.path.and_then(|p| sk.curve_polyline(p, STEPS_PER_TURN))
+    {
+        for path in map.paths(&pl) {
+            draw_path(painter, path, Stroke::new(CURVE_WIDTH + 1.0, color), false);
+        }
+    }
+    let stroke = Stroke::new(CURVE_WIDTH, color);
+    for line in crate::sketch_text::contour_polylines(&se.text_preview(sk).unwrap_or_default()) {
+        for path in map.paths(&line) {
+            draw_path(painter, path, stroke, false);
+        }
+    }
+}
+
 /// Vorschau des laufenden Werkzeugs vom zuletzt gesetzten Punkt zum Mauszeiger.
 fn draw_preview(
     painter: &egui::Painter,
@@ -2298,6 +2341,12 @@ fn draw_preview(
         if let Some(at) = se.pattern.new_center.and_then(|hit| map.to_screen(hit.at)) {
             painter.circle_filled(at, 3.0, color);
         }
+        return;
+    }
+    // Text: Rahmen gestrichelt (beim Aufziehen bis zum Zeiger), der Pfad kräftig, der Text, wie
+    // OK ihn anlegt.
+    if se.runs_text() {
+        draw_text_preview(painter, map, sk, se, color);
         return;
     }
     // Ohne Zeiger über der Skizze bleibt die Vorschau an der letzten Stelle stehen.

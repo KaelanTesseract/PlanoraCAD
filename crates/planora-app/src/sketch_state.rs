@@ -72,6 +72,10 @@ pub enum Tool {
     /// „Kontrollpunkt einfügen“ (Skizzen 7, D3): Jeder Klick auf einen Spline mit Kontrollpunkten fügt
     /// dort einen ein ([`crate::sketch_handles`]). Esc beendet ihn.
     InsertControlPoint,
+    /// Fusion „Text“ (Skizzen 8): zwei Klicks für den Rahmen oder ein Klick auf den Pfad, dann der
+    /// Abschnitt „Text“ im Skizzenfeld; Zustand in [`SketchSession::text`], Ablauf in
+    /// [`crate::sketch_text`].
+    Text,
 }
 
 impl Tool {
@@ -553,6 +557,11 @@ pub struct SketchSession {
     /// Abhängigkeitsbefehl: der Bezug, den der letzte Klick gewählt oder abgewählt hat (für einen
     /// schnellen zweiten Klick, [`constraint_second_click_counts`](Self::constraint_second_click_counts)).
     pub constraint_last: Option<Item>,
+    /// Das Werkzeug „Text“, solange es läuft (Skizzen 8, [`crate::sketch_text`]).
+    pub text: Option<crate::sketch_text::TextTool>,
+    /// Die zuletzt benutzten Werte des Werkzeugs „Text“ außer dem Text (Spec C4); der Zustand der
+    /// App trägt sie über das Ende der Sitzung hinaus durch den Programmlauf.
+    pub text_memory: Option<crate::sketch_text::TextMemory>,
 }
 
 /// Die Skizze vor dem ersten Klick eines laufenden Befehls und ihr Stand nach seinem letzten
@@ -586,6 +595,7 @@ struct Backup {
     grip_drag: Option<GripDrag>,
     dim: DimToolState,
     pattern: crate::sketch_pattern::PatternToolState,
+    text: Option<crate::sketch_text::TextTool>,
 }
 
 /// Klicklagen der Kurven, die das Auswählen per Klick gewählt hat, und die Auswahl gleich nach
@@ -683,6 +693,8 @@ impl SketchSession {
             pattern: Default::default(),
             project: ProjectState::default(),
             constraint_last: None,
+            text: None,
+            text_memory: None,
         }
     }
 
@@ -705,6 +717,8 @@ impl SketchSession {
         self.grip_drag = None;
         // Muster: Plan, Abwahl und Griff gehören zum Werkzeug, nichts bleibt.
         self.pattern = Default::default();
+        // Text: Rahmen, Pfad und Felder gehören zum Werkzeug, nichts bleibt (Spec C7).
+        self.text = None;
         // Die halbe Auswahl eines Abhängigkeitsbefehls gehört ihm; ein anderes Werkzeug nimmt sie
         // nicht mit (ein anderer Abhängigkeitsknopf entscheidet selbst, `constraint_button`).
         if matches!(self.tool, Tool::Constraint(_)) && !matches!(tool, Tool::Constraint(_)) {
@@ -738,6 +752,10 @@ impl SketchSession {
         if tool == Tool::Pattern {
             self.pattern.selection_before = self.selection.clone();
             self.begin_pattern(sk);
+        }
+        // Text: beginnt mit der Art „Text“ und den gemerkten Werten (Spec C2, C4).
+        if tool == Tool::Text {
+            self.begin_text();
         }
     }
 
@@ -810,6 +828,11 @@ impl SketchSession {
         self.transform = TransformState::default();
         self.grip_drag = None;
         self.pattern.reset_after_jump();
+        // Text (Review Focus 5): Der offene Abschnitt gehört zum alten Stand und bricht ab; das
+        // Werkzeug wartet wieder auf den Rahmen.
+        if self.tool == Tool::Text {
+            self.begin_text();
+        }
         self.edit_label = None;
         self.message = None;
         self.last_report = Some(sk.clone().solve());
@@ -854,6 +877,7 @@ impl SketchSession {
             grip_drag: self.grip_drag,
             dim: self.dim.clone(),
             pattern: self.pattern.clone(),
+            text: self.text.clone(),
         }
     }
 
@@ -879,6 +903,7 @@ impl SketchSession {
         self.grip_drag = b.grip_drag;
         self.dim = b.dim;
         self.pattern = b.pattern;
+        self.text = b.text;
     }
 
     /// Führt `f` atomar aus: Bei einem Fehler wird alles zurückgesetzt und die Meldung in
@@ -1043,6 +1068,7 @@ impl SketchSession {
                 }
                 Tool::Constraint(action) => se.click_constraint(sk, action, at, radius),
                 Tool::InsertControlPoint => se.click_insert_control_point(sk, at, radius, prior),
+                Tool::Text => se.click_text(sk, cur, at, radius),
             }
         })
     }
@@ -1698,6 +1724,11 @@ impl SketchSession {
             return;
         }
         if self.box_select.take().is_some() || self.line_arc.take().is_some() {
+            return;
+        }
+        // Text: Esc, Rechtsklick und Abbrechen lassen nichts zurück, auch keinen Rahmen (Spec C7).
+        if self.tool == Tool::Text {
+            self.set_tool(sk, Tool::Select);
             return;
         }
         // Muster: Esc und Rechtsklick lassen nichts zurück, auch keine Auswahl.
