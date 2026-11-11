@@ -378,3 +378,62 @@ fn refresh_200_chars_under_20ms() {
     );
     assert!(med <= 20.0, "Median {med:.2} ms");
 }
+
+#[test]
+#[ignore = "Messtest, nur im Release-Build sinnvoll"]
+fn explode_200_chars_then_solve_and_drag_under_20ms() {
+    // Auflösen macht aus jedem Punkt einen freien Punkt mit `Fixed` (Spec F1). Danach muss die
+    // Skizze weiter flüssig lösen, auch beim Ziehen an fremder Geometrie.
+    let lib = FontLibrary::bundled_only();
+    let mut base = sketch();
+    let t = box_text(&mut base, &lib, &two_hundred(), v(0.0, 0.0), v(150.0, 40.0));
+    let a = base.add_point(0.0, -20.0).unwrap();
+    let b = base.add_point(30.0, -20.0).unwrap();
+    base.add_line(a, b).unwrap();
+    base.solve();
+    let (curves, points) = {
+        let d = base.text(t).unwrap();
+        (d.curves.clone(), d.points.clone())
+    };
+    let (mut explode, mut solve, mut drag) = (Vec::new(), Vec::new(), Vec::new());
+    for k in 0..RUNS {
+        let mut s = base.clone();
+        let t0 = Instant::now();
+        let freed = s.explode_texts(&[t]).unwrap();
+        explode.push(t0.elapsed().as_secs_f64() * 1e3);
+        assert_eq!(freed, curves);
+        assert!(s.text(t).is_none(), "der Text ist fort");
+
+        let t0 = Instant::now();
+        let r = s.solve();
+        solve.push(t0.elapsed().as_secs_f64() * 1e3);
+        assert_eq!(
+            r.status,
+            planora_sketch::solver::SolveStatus::Solved,
+            "{r:?}"
+        );
+
+        let target = v(30.0 + k as f64, -25.0);
+        let t0 = Instant::now();
+        s.drag(&[Drag { point: b, target }]).unwrap();
+        drag.push(t0.elapsed().as_secs_f64() * 1e3);
+        assert!(s.point_xy(b).unwrap().distance(target) < 1e-6);
+        // Die Buchstaben bleiben, wo sie waren.
+        for &p in points.iter().take(20) {
+            assert_eq!(s.point_xy(p), base.point_xy(p));
+        }
+    }
+    let (me, ms, md) = (
+        median(explode.clone()),
+        median(solve.clone()),
+        median(drag.clone()),
+    );
+    println!(
+        "Auflösen, 200 Zeichen ({} Kurven, {} Punkte): Auflösen {me:.2} ms ({explode:.2?}), \
+         Lösen {ms:.2} ms ({solve:.2?}), Ziehen fremd {md:.2} ms ({drag:.2?})",
+        curves.len(),
+        points.len()
+    );
+    assert!(ms <= 20.0, "Lösen: Median {ms:.2} ms");
+    assert!(md <= 20.0, "Ziehen: Median {md:.2} ms");
+}
