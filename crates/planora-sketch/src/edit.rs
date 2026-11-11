@@ -113,6 +113,9 @@ impl Sketch {
         if matches!(self.curve(c)?.kind, CurveKind::FixedSpline { .. }) {
             return None;
         }
+        if self.refuse_text_parts(&[c], "sketch-text-no-trim").is_err() {
+            return None;
+        }
         let (g, b) = self.locate_trim(c, at)?;
         Some(TrimPiece {
             curve: c,
@@ -128,10 +131,13 @@ impl Sketch {
     /// eine Ellipse ein Ellipsenbogen (beide behalten ihre Id und ihre Maße). Ohne Schnitt wird
     /// die Kurve gelöscht, mit den Punkten, die nur sie benutzte. Gibt die übrigen Kurven
     /// zurück, `c` zuerst, falls sie bleibt. Bei einem Fehler bleibt die Skizze unverändert.
-    /// Ist `c` Vorlage oder Exemplar eines Musters, wird das Muster vorher aufgelöst.
+    /// Ist `c` Vorlage oder Exemplar eines Musters, wird das Muster vorher aufgelöst. Erzeugte
+    /// Kurven und Rahmenlinien eines Textes werden abgelehnt (Spec E); an Buchstaben als
+    /// Schnittkante bekommt das neue Ende keine Abhängigkeit.
     pub fn trim(&mut self, c: CurveId, at: DVec2) -> Result<Vec<CurveId>, SketchError> {
         self.check_curve(c)?;
         self.refuse_fixed_spline(c)?;
+        self.refuse_text_parts(&[c], "sketch-text-no-trim")?;
         if !at.is_finite() {
             return Err(SketchError::InvalidInput(tr!("sketch-err-target-finite")));
         }
@@ -150,6 +156,12 @@ impl Sketch {
     /// Der Weg, den [`Sketch::extend`] an derselben Stelle das Ende verlängern würde, vom alten
     /// zum neuen Ende (Vorschau beim Überfahren). `None`, wenn nichts zu dehnen ist.
     pub fn extend_preview(&self, c: CurveId, at: DVec2) -> Option<Vec<DVec2>> {
+        if self
+            .refuse_text_parts(&[c], "sketch-text-no-extend")
+            .is_err()
+        {
+            return None;
+        }
         self.locate_extend(c, at).map(|x| x.path)
     }
 
@@ -164,10 +176,13 @@ impl Sketch {
     /// Punkt oder „deckungsgleich“), die Kurve keine dieser Arten ist oder es kein Ziel gibt. Gibt es
     /// ein Ziel, aber ein mitwandernder Kontrollpunkt oder der Scheitel gehört zu einer anderen Kurve,
     /// ist das ein Fehler mit diesem Grund. Bei einem Fehler bleibt die Skizze unverändert.
-    /// Ist `c` Vorlage oder Exemplar eines Musters, wird das Muster vorher aufgelöst.
+    /// Ist `c` Vorlage oder Exemplar eines Musters, wird das Muster vorher aufgelöst. Erzeugte
+    /// Kurven und Rahmenlinien eines Textes werden abgelehnt (Spec E); an Buchstaben als
+    /// Schnittkante bekommt das neue Ende keine Abhängigkeit.
     pub fn extend(&mut self, c: CurveId, at: DVec2) -> Result<bool, SketchError> {
         self.check_curve(c)?;
         self.refuse_fixed_spline(c)?;
+        self.refuse_text_parts(&[c], "sketch-text-no-extend")?;
         if !at.is_finite() {
             return Err(SketchError::InvalidInput(tr!("sketch-err-target-finite")));
         }
@@ -194,10 +209,13 @@ impl Sketch {
     /// Gibt die Teile zurück, `c` zuerst (bei offenen Kurven in Kurvenrichtung); ohne Schnitt
     /// `vec![c]` und die Skizze bleibt unverändert. Bei einem Fehler bleibt sie ebenfalls
     /// unverändert.
-    /// Ist `c` Vorlage oder Exemplar eines Musters, wird das Muster vorher aufgelöst.
+    /// Ist `c` Vorlage oder Exemplar eines Musters, wird das Muster vorher aufgelöst. Erzeugte
+    /// Kurven und Rahmenlinien eines Textes werden abgelehnt (Spec E); an Buchstaben als
+    /// Schnittkante bekommt das neue Ende keine Abhängigkeit.
     pub fn break_curve(&mut self, c: CurveId, at: DVec2) -> Result<Vec<CurveId>, SketchError> {
         self.check_curve(c)?;
         self.refuse_fixed_spline(c)?;
+        self.refuse_text_parts(&[c], "sketch-text-no-break")?;
         if !at.is_finite() {
             return Err(SketchError::InvalidInput(tr!("sketch-err-target-finite")));
         }
@@ -1242,13 +1260,17 @@ impl Sketch {
 
     /// Abhängigkeit des neuen Endes `p` an der schneidenden Kurve `cutter` (Schnitt bei `at`):
     /// „deckungsgleich“ mit einem Punkt der Kurve, der höchstens `tol.linear` entfernt liegt
-    /// (`p` kommt genau auf ihn), sonst „Punkt auf Kurve“.
+    /// (`p` kommt genau auf ihn), sonst „Punkt auf Kurve“. An einer erzeugten Kurve eines Textes
+    /// keine: Buchstaben tragen keine Abhängigkeiten (Spec E), sie zählen nur als Schnittkante.
     pub(crate) fn end_constraint(
         &mut self,
         p: PointId,
         cutter: CurveId,
         at: DVec2,
     ) -> Result<(), SketchError> {
+        if self.text_of_curve(cutter).is_some() {
+            return Ok(());
+        }
         let kind = match self.cutter_point_at(cutter, at).filter(|&q| q != p) {
             Some(q) => {
                 let v = self.pos(q);

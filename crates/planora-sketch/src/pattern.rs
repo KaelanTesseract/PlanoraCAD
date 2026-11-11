@@ -196,6 +196,8 @@ pub enum PatternProblem {
     InstanceOnly,
     /// Ein fester Spline soll Vorlage sein: Er hat keine Kopie (Skizzen 7).
     FixedSpline,
+    /// Eine erzeugte Kurve eines Textes soll Vorlage sein (Spec E).
+    Text,
 }
 
 impl PatternProblem {
@@ -214,6 +216,7 @@ impl PatternProblem {
             PatternProblem::Cycle => tr!("sketch-pattern-cycle"),
             PatternProblem::InstanceOnly => tr!("sketch-pattern-instance-only"),
             PatternProblem::FixedSpline => tr!("sketch-fixed-spline-no-copy"),
+            PatternProblem::Text => tr!("sketch-text-no-pattern"),
         }
     }
 
@@ -640,8 +643,8 @@ impl Sketch {
         Some((source, inverse_apply(&t, target)))
     }
 
-    /// Vorlagen vorhanden, lebend, ohne Doppelte; kein Exemplar als Vorlage, Richtungslinie oder
-    /// Mitte.
+    /// Vorlagen vorhanden, lebend, ohne Doppelte, keine erzeugte Kurve eines Textes (Spec E); kein
+    /// Exemplar als Vorlage, Richtungslinie oder Mitte.
     fn check_pattern_refs(&self, plan: &PatternPlan) -> Result<(), PatternProblem> {
         if plan.sources.is_empty() {
             return Err(PatternProblem::Empty);
@@ -653,6 +656,12 @@ impl Sketch {
             if self.refuse_fixed_spline(c).is_err() {
                 return Err(PatternProblem::FixedSpline);
             }
+        }
+        if self
+            .refuse_text_curves(&plan.sources, "sketch-text-no-pattern")
+            .is_err()
+        {
+            return Err(PatternProblem::Text);
         }
         let mut curves: HashSet<CurveId> = HashSet::new();
         let mut points: HashSet<PointId> = HashSet::new();

@@ -3044,6 +3044,7 @@ fn offset_problem_message(problem: OffsetProblem) -> Msg {
         OffsetProblem::SelfCrossing => crate::msg!("sketch-offset-crossing"),
         OffsetProblem::Cusp => crate::msg!("sketch-offset-cusp"),
         OffsetProblem::ClosedKink => crate::msg!("sketch-offset-closed-kink"),
+        OffsetProblem::Text => crate::msg!("sketch-text-no-offset"),
         OffsetProblem::Degenerate => crate::msg!("sketch-field-rejected"),
     }
 }

@@ -367,6 +367,54 @@ impl Sketch {
         }
     }
 
+    /// Die erzeugten Kurven aller lebenden Texte, einmal gesammelt für Schleifen über viele
+    /// Kurven (Fang, Stutzen); `text_of_curve` sucht dagegen jedes Mal alle Texte ab.
+    pub(crate) fn glyph_curves(&self) -> HashSet<CurveId> {
+        self.texts()
+            .flat_map(|(_, d)| d.curves.iter().copied())
+            .collect()
+    }
+
+    /// Die erzeugten Punkte aller lebenden Texte (siehe [`Sketch::glyph_curves`]).
+    pub(crate) fn glyph_points(&self) -> HashSet<PointId> {
+        self.texts()
+            .flat_map(|(_, d)| d.points.iter().copied())
+            .collect()
+    }
+
+    /// Gemeinsame Prüfung der Befehle aus Spec E: abgelehnt mit der Meldung `key`, wenn eine der
+    /// Kurven `curves` eine erzeugte Kurve eines Textes ist. Rahmenlinien und Pfade gehen wie
+    /// andere Linien und Kurven. Die Skizze bleibt unberührt.
+    pub fn refuse_text_curves(
+        &self,
+        curves: &[CurveId],
+        key: &'static str,
+    ) -> Result<(), SketchError> {
+        if self.texts.is_empty() {
+            return Ok(());
+        }
+        if curves.iter().any(|&c| self.text_of_curve(c).is_some()) {
+            return Err(SketchError::InvalidInput(planora_i18n::t(key)));
+        }
+        Ok(())
+    }
+
+    /// Wie [`Sketch::refuse_text_curves`], dazu Rahmenlinien: für Befehle, die eine Kurve
+    /// zerschneiden oder ihre Enden versetzen (Stutzen, Dehnen, Brechen, Abrunden, Fase). Am
+    /// Rahmen zerrissen sie das Rechteck und lösten Ecken vom Text (**Annahme**, Spec E nennt nur
+    /// die Buchstaben).
+    pub(crate) fn refuse_text_parts(
+        &self,
+        curves: &[CurveId],
+        key: &'static str,
+    ) -> Result<(), SketchError> {
+        self.refuse_text_curves(curves, key)?;
+        if !self.texts.is_empty() && curves.iter().any(|&c| self.text_of_frame(c).is_some()) {
+            return Err(SketchError::InvalidInput(planora_i18n::t(key)));
+        }
+        Ok(())
+    }
+
     /// Rahmenlinien bleiben Konstruktion: weder normal noch Mittellinie (Ruling zu Spec B4).
     pub(crate) fn refuse_frame_style(&self, c: CurveId) -> Result<(), SketchError> {
         if self.text_of_frame(c).is_some() {

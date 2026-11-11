@@ -1957,6 +1957,15 @@ sketch-text-bad-path = This curve cannot be a path: letters, text frames and han
 sketch-text-path-degenerate = The path has no length.
 sketch-text-angle-held = A constraint holds the angle of the text. Delete it first to rotate the text.
 sketch-text-what-angle = The angle of the text
+sketch-text-no-mirror = Text cannot be mirrored. Use Flip or explode it.
+sketch-text-no-pattern = Text cannot be patterned. Explode it first.
+sketch-text-no-offset = Offset does not work on text. Explode it first.
+sketch-text-no-trim = Text cannot be trimmed. Explode it first.
+sketch-text-no-extend = Text cannot be extended. Explode it first.
+sketch-text-no-break = Text cannot be broken. Explode it first.
+sketch-text-no-fillet = Text cannot be filleted. Explode it first.
+sketch-text-no-chamfer = Text cannot be chamfered. Explode it first.
+sketch-text-path-follows = Text on a path follows its path.
 state-patterns-dissolved-on-load = { $n ->
     [one] On opening, a pattern was dissolved because it linked its original to one of its own instances. The geometry stays.
    *[other] On opening, { $n } patterns were dissolved because they linked their original to one of their own instances. The geometry stays.

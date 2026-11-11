@@ -248,8 +248,14 @@ impl Sketch {
     }
 
     /// Prüft die Quellkurven für Spiegeln und Muster: vorhanden, ohne Doppelte, keine ganze
-    /// Ellipse (Skizzen 7: Splines beider Arten gehen jetzt), kein fester Spline.
-    fn check_copy_sources(&self, curves: &[CurveId]) -> Result<(), SketchError> {
+    /// Ellipse (Skizzen 7: Splines beider Arten gehen jetzt), kein fester Spline, keine erzeugte
+    /// Kurve eines Textes (Spec E, Meldung `text_key`). Rahmenlinien allein werden wie Linien
+    /// kopiert, ein Text entsteht dabei nicht (**Annahme**, Spec E).
+    fn check_copy_sources(
+        &self,
+        curves: &[CurveId],
+        text_key: &'static str,
+    ) -> Result<(), SketchError> {
         if curves.is_empty() {
             return Err(SketchError::InvalidInput(tr!("sketch-nothing-selected")));
         }
@@ -263,7 +269,7 @@ impl Sketch {
             }
             self.refuse_fixed_spline(c)?;
         }
-        Ok(())
+        self.refuse_text_curves(curves, text_key)
     }
 
     /// Ein fester Spline ändert sich nicht und hat keine Kopie (Spec E); alle anderen Kurven gehen.
@@ -426,7 +432,9 @@ impl Sketch {
         let CurveKind::Line { a: aa, b: ab } = self.curves[axis].kind else {
             return Err(SketchError::WrongType(tr!("sketch-err-mirror-line")));
         };
-        self.check_copy_sources(curves)?;
+        self.check_copy_sources(curves, "sketch-text-no-mirror")?;
+        // Auch an einer Buchstabenkurve spiegelt nichts: Die Spiegelung bände an sie.
+        self.refuse_text_curves(&[axis], "sketch-text-no-mirror")?;
         let all = self.with_handle_family(curves);
         if all.contains(&axis) {
             return Err(SketchError::InvalidInput(tr!("sketch-err-mirror-self")));
@@ -495,7 +503,7 @@ impl Sketch {
         if offset.length() <= tol {
             return Err(SketchError::Degenerate(tr!("sketch-err-offset-zero")));
         }
-        self.check_copy_sources(curves)?;
+        self.check_copy_sources(curves, "sketch-text-no-pattern")?;
         let all = self.with_handle_family(curves);
         // Griffe binden nichts an die Vorlage, so wenig wie der Spline, zu dem sie gehören (**Annahme**).
         let parts = self.handle_curves();

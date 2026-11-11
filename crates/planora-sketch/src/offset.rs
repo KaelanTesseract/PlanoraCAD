@@ -172,6 +172,8 @@ pub enum OffsetProblem {
     /// Eine einzelne geschlossene Kurve hat an ihrer Naht einen Knick (Skizzen 7): Dort gibt es keinen
     /// Nachbarn zum Fügen.
     ClosedKink,
+    /// Eine Kurve ist eine erzeugte Kurve eines Textes (Spec E, Meldung `sketch-text-no-offset`).
+    Text,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1550,9 +1552,9 @@ fn signed_distance(geoms: &[Geom], chain: &OrderedChain, p: DVec2, tol: f64) -> 
 
 impl Sketch {
     /// Ordnet Kurven zu gerichteten Ketten. Enden gelten als verbunden, wenn sie in derselben
-    /// Lage liegen. Verzweigung: `Branching`. Konstruktionskurven an einer normalen Kette zählen
-    /// nicht. Eine geschlossene Kette beginnt an ihrer kleinsten Kurve in deren Richtung, eine
-    /// offene an dem Ende mit der kleineren Kurve.
+    /// Lage liegen. Verzweigung: `Branching`; eine erzeugte Kurve eines Textes: `Text` (Spec E).
+    /// Konstruktionskurven an einer normalen Kette zählen nicht. Eine geschlossene Kette beginnt an
+    /// ihrer kleinsten Kurve in deren Richtung, eine offene an dem Ende mit der kleineren Kurve.
     pub fn ordered_chains(&self, curves: &[CurveId]) -> Result<Vec<OrderedChain>, OffsetProblem> {
         let tol = self.tolerance().linear;
         let mut ids = curves.to_vec();
@@ -1561,6 +1563,13 @@ impl Sketch {
         // Griffe gehören zu keiner Kette, auch wenn eine Rahmenwahl sie mitbringt.
         let handle_curves = self.handle_curves();
         ids.retain(|c| !handle_curves.contains(c));
+        // Versatz geht nicht am Text (Spec E); Rahmenlinien sind Linien.
+        if self
+            .refuse_text_curves(&ids, "sketch-text-no-offset")
+            .is_err()
+        {
+            return Err(OffsetProblem::Text);
+        }
         let mut nodes = Nodes::new(tol);
         let mut links: Vec<Option<[usize; 2]>> = Vec::with_capacity(ids.len());
         for &c in &ids {
@@ -1717,6 +1726,13 @@ impl Sketch {
         for (index, chain) in chains.iter().enumerate() {
             if chain.items.is_empty() {
                 return Err(OffsetProblem::Degenerate);
+            }
+            let sources: Vec<CurveId> = chain.items.iter().map(|&(c, _)| c).collect();
+            if self
+                .refuse_text_curves(&sources, "sketch-text-no-offset")
+                .is_err()
+            {
+                return Err(OffsetProblem::Text);
             }
             if let [(c, against)] = chain.items[..]
                 && chain.closed
@@ -2099,6 +2115,7 @@ impl Sketch {
             for l in &plan.loops {
                 for piece in &l.pieces {
                     s.check_curve(piece.source)?;
+                    s.refuse_text_curves(&[piece.source], "sketch-text-no-offset")?;
                 }
                 if tied {
                     s.seed_bridge_joints(l, plan.distance.abs(), &mut joints)?;

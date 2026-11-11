@@ -11,6 +11,11 @@
 //! und -punkte, die nur an der Menge hängen, gehören dazu, sonst bliebe die Form an der alten Lage
 //! gebunden. Beim Versatz zieht die Vorlage ihre Rollkreise und damit ihre Kopie mit; wird nur die
 //! Kopie bewegt, bleiben Vorlage und Rollkreise stehen und die Kopie hört auf zu folgen.
+//!
+//! **Text geht als Ganzes** (Skizzen 8, Spec E): Ist ein Teil eines Textes im Rahmen in der Menge
+//! (Buchstabe, Rahmenlinie, Ecke), gehören Rahmen und alle Buchstaben dazu; der Text folgt seinen
+//! Ecken. Text auf Pfad geht nur mit seinem Pfad (sonst `TextOnPath`). Skalieren multipliziert die
+//! Höhe mit dem Maßstab, Kopieren legt einen zweiten Text mit gleichen Werten an.
 
 use crate::constraint::{ConstraintData, ConstraintId, ConstraintKind, LineOrPoints};
 use crate::edit::SETTLE_FACTOR;
@@ -18,6 +23,7 @@ use crate::error::SketchError;
 use crate::fillet::wrap_pi;
 use crate::model::{CurveId, CurveKind, HandleCurvature, MAX_COORD, PointId, Sketch, SplineHandle};
 use crate::offset::ends_of;
+use crate::text::{TextData, TextId, TextPlacement};
 use planora_i18n::tr;
 use planora_math::DVec2;
 use std::collections::{HashMap, HashSet};
@@ -92,6 +98,9 @@ pub enum TransformBlock {
     /// In der Menge ist ein Exemplar eines Musters: Seine Lage folgt aus Vorlage und Musterwerten
     /// (Meldung `sketch-move-pattern-instance`). Kopieren geht.
     PatternInstance,
+    /// In der Menge ist Text auf einem Pfad, der Pfad aber nicht: Der Text folgt seinem Pfad
+    /// (Spec E, Meldung `sketch-text-path-follows`).
+    TextOnPath,
 }
 
 /// Was eine Bewegung an den Abhängigkeiten geändert hat.
@@ -112,6 +121,8 @@ pub struct CopyMap {
     pub points: HashMap<PointId, PointId>,
     pub curves: HashMap<CurveId, CurveId>,
     pub constraints: HashMap<ConstraintId, ConstraintId>,
+    /// Original und Kopie der Texte (Spec E).
+    pub texts: HashMap<TextId, TextId>,
 }
 
 /// Die Abhängigkeit mit abgebildeten Punkten und Kurven.
@@ -334,7 +345,8 @@ impl Sketch {
     /// auch die Punkte der Kurven. Wiederholt, bis sich nichts mehr ändert, kommt dazu:
     /// - Hilfsgeometrie, deren Bindungen alle in die Menge gehen (`helpers_of`);
     /// - zu einer gewählten Vorlage ihre Rollkreise samt den Stücken der Kopie, die sie tragen
-    ///   (`rollers_of`). Die Kopie allein zieht weder Vorlage noch Rollkreis mit.
+    ///   (`rollers_of`). Die Kopie allein zieht weder Vorlage noch Rollkreis mit;
+    /// - zu einem Teil eines Textes der ganze Text (`text_family`).
     pub fn transform_set(&self, curves: &[CurveId], points: &[PointId]) -> TransformSet {
         let mut set = Collected::default();
         for &c in curves {
@@ -370,6 +382,9 @@ impl Sketch {
                 }
             }
             for c in self.rollers_of(&set) {
+                set.add_curve(self, c);
+            }
+            for c in self.text_family(&set) {
                 set.add_curve(self, c);
             }
             if set.out.points.len() + set.out.curves.len() == before {
@@ -504,6 +519,67 @@ impl Sketch {
             .filter(|p| reached_points.contains(p))
             .collect();
         (helper_curves, helper_points)
+    }
+
+    /// Die noch fehlenden Kurven der Texte, von denen ein Teil in der Menge ist (Spec E): beim Text
+    /// im Rahmen die Rahmenlinien und alle Buchstaben, sobald ein Buchstabe, eine Rahmenlinie, eine
+    /// Ecke oder ein erzeugter Punkt dabei ist (auch als Punkt einer anderen Kurve, sonst risse das
+    /// Trennen die Ecke vom Rahmen). Beim Text auf Pfad alle Buchstaben, sobald einer dabei ist;
+    /// der Pfad kommt nicht von selbst dazu (siehe `TransformBlock::TextOnPath`).
+    fn text_family(&self, set: &Collected) -> Vec<CurveId> {
+        let mut out = Vec::new();
+        for (_, d) in self.texts() {
+            let frame = match d.placement {
+                TextPlacement::Box { lines, corners, .. } => Some((lines, corners)),
+                TextPlacement::Path { .. } => None,
+            };
+            let touched = d.curves.iter().any(|c| set.curves.contains(c))
+                || d.points.iter().any(|p| set.points.contains(p))
+                || frame.is_some_and(|(lines, corners)| {
+                    lines.iter().any(|c| set.curves.contains(c))
+                        || corners.iter().any(|p| set.points.contains(p))
+                });
+            if !touched {
+                continue;
+            }
+            let lines: &[CurveId] = match &frame {
+                Some((lines, _)) => lines,
+                None => &[],
+            };
+            out.extend(
+                lines
+                    .iter()
+                    .chain(&d.curves)
+                    .filter(|c| !set.curves.contains(c) && self.curves[**c].alive),
+            );
+        }
+        out
+    }
+
+    /// Die Texte, die mit der Menge gehen: deren Buchstaben oder Rahmenlinien darin liegen (über
+    /// `transform_set` dann alle ihre Kurven).
+    fn texts_in_set(&self, set: &TransformSet) -> Vec<TextId> {
+        if self.texts.is_empty() {
+            return Vec::new();
+        }
+        let curves: HashSet<CurveId> = set.curves.iter().copied().collect();
+        self.texts()
+            .filter(|(_, d)| {
+                d.curves.iter().any(|c| curves.contains(c))
+                    || matches!(d.placement, TextPlacement::Box { lines, .. }
+                        if lines.iter().any(|c| curves.contains(c)))
+            })
+            .map(|(t, _)| t)
+            .collect()
+    }
+
+    /// Ist unter `texts` ein Text auf Pfad, dessen Pfad nicht in der Menge ist? Er folgt seinem
+    /// Pfad und geht nicht allein (Spec E).
+    fn text_off_its_path(&self, set: &TransformSet, texts: &[TextId]) -> bool {
+        texts.iter().any(|&t| {
+            matches!(self.texts[t].placement, TextPlacement::Path { path, .. }
+                if !set.curves.contains(&path))
+        })
     }
 
     /// Die Kurven, die an einem Konstruktionskreis `roller` tangential hängen.
@@ -659,15 +735,26 @@ impl Sketch {
     }
 
     /// Alle Kurven und freien Punkte ohne feste Geometrie, also ohne Achshilfslinie, Kantenkopien
-    /// und festen Ursprung, und ohne Exemplare von Mustern (sie folgen ihrer Vorlage).
+    /// und festen Ursprung, und ohne Exemplare von Mustern (sie folgen ihrer Vorlage) und ohne Text
+    /// auf einem Pfad, der stehen bleibt.
     pub fn whole_sketch_set(&self) -> TransformSet {
         let held = self.held_points();
         let (instances, _) = self.instance_parts();
-        let curves: Vec<CurveId> = self
+        let mut curves: Vec<CurveId> = self
             .curves()
             .map(|(c, _)| c)
             .filter(|&c| !self.is_held_curve(c, &held) && !instances.contains(&c))
             .collect();
+        // Text auf einem Pfad, der stehen bleibt, bleibt bei ihm (Spec E).
+        let moving: HashSet<CurveId> = curves.iter().copied().collect();
+        let staying: HashSet<CurveId> = self
+            .texts()
+            .filter(|(_, d)| {
+                matches!(d.placement, TextPlacement::Path { path, .. } if !moving.contains(&path))
+            })
+            .flat_map(|(_, d)| d.curves.iter().copied())
+            .collect();
+        curves.retain(|c| !staying.contains(c));
         let used: HashSet<PointId> = self.curves().flat_map(|(_, d)| d.kind.points()).collect();
         let points: Vec<PointId> = self
             .points()
@@ -718,8 +805,9 @@ impl Sketch {
     /// Legt eine bewegte Kopie der Menge an: Kurven samt Stil, jede innere Abhängigkeit mit
     /// abgebildeten Ids und ihrem `driven` und `enabled`; `Fixed` nicht, die Kopie ist frei, und
     /// keine Bindung ans Original. Die Zweige setzt `add_constraint` an der Kopie neu. Horizontal,
-    /// vertikal und was sonst an der Kopie nicht gilt, entfällt. Bei einem Fehler bleibt die Skizze
-    /// unverändert.
+    /// vertikal und was sonst an der Kopie nicht gilt, entfällt. Zu jedem Text der Menge entsteht
+    /// ein zweiter (`copy_texts`); Text auf Pfad nur mit seinem Pfad (`sketch-text-path-follows`).
+    /// Bei einem Fehler bleibt die Skizze unverändert.
     pub fn copy_transformed(
         &mut self,
         set: &TransformSet,
@@ -737,6 +825,10 @@ impl Sketch {
         if set.points.is_empty() {
             return Err(SketchError::InvalidInput(tr!("sketch-nothing-selected")));
         }
+        let texts = self.texts_in_set(&set);
+        if self.text_off_its_path(&set, &texts) {
+            return Err(SketchError::InvalidInput(tr!("sketch-text-path-follows")));
+        }
         let s = &self.settled(&set, s);
         self.atomically(|sk| {
             let mut points = HashMap::new();
@@ -752,10 +844,12 @@ impl Sketch {
                 sk.carry_handles(c, curves[&c], &points, &curves);
             }
             let constraints = sk.copy_inner_constraints(&points, &curves, s)?;
+            let texts = sk.copy_texts(&texts, &points, &curves, s)?;
             Ok(CopyMap {
                 points,
                 curves,
                 constraints,
+                texts,
             })
         })
     }
@@ -827,6 +921,98 @@ impl Sketch {
         self.curves[id].construction = construction;
         self.curves[id].centerline = centerline;
         Ok(id)
+    }
+
+    /// Legt zu jedem Text in `texts` einen zweiten an (Spec E): gleiche Werte, die Höhe mal Maßstab,
+    /// die Lage auf den Kopien von Rahmen bzw. Pfad, die kopierten Buchstaben als seine Kurven und
+    /// Punkte in derselben Reihenfolge und dieselbe gesetzte Form. So steht die Kopie sofort da,
+    /// wo das nächste Neusetzen sie hinschriebe, auch bei einem noch ungesetzten Text. Der kopierte
+    /// Rahmen bekommt die internen Abhängigkeiten des Originals, das Waagerecht der Grundlinie nur
+    /// ohne Drehung.
+    fn copy_texts(
+        &mut self,
+        texts: &[TextId],
+        points: &HashMap<PointId, PointId>,
+        curves: &HashMap<CurveId, CurveId>,
+        s: &Similarity,
+    ) -> Result<HashMap<TextId, TextId>, SketchError> {
+        let turning = wrap_pi(s.angle).abs() > self.tol.angular;
+        let point = |p: &PointId| points.get(p).copied().ok_or(SketchError::UnknownObject);
+        let curve = |c: &CurveId| curves.get(c).copied().ok_or(SketchError::UnknownObject);
+        let mut out = HashMap::new();
+        for &t in texts {
+            let d = self.texts[t].clone();
+            let height = d.height * s.factor;
+            if !(height.is_finite() && height > 0.0) {
+                return Err(SketchError::InvalidInput(tr!("sketch-text-height")));
+            }
+            let placement = match d.placement {
+                TextPlacement::Box {
+                    lines,
+                    corners,
+                    h,
+                    v,
+                } => {
+                    let new_lines = [
+                        curve(&lines[0])?,
+                        curve(&lines[1])?,
+                        curve(&lines[2])?,
+                        curve(&lines[3])?,
+                    ];
+                    let new_corners = [
+                        point(&corners[0])?,
+                        point(&corners[1])?,
+                        point(&corners[2])?,
+                        point(&corners[3])?,
+                    ];
+                    let internal: Vec<ConstraintKind> = self
+                        .internal_constraints()
+                        .map(|(_, k)| &k.kind)
+                        .filter(|k| {
+                            let cs = k.curves();
+                            !cs.is_empty()
+                                && cs.iter().all(|c| lines.contains(c))
+                                && k.points().iter().all(|p| corners.contains(p))
+                                && !(turning && is_axis_binding(k))
+                        })
+                        .cloned()
+                        .collect();
+                    for kind in internal {
+                        let mapped = map_ids(&kind, |p| points[&p], |c| curves[&c]);
+                        self.push_internal(mapped);
+                    }
+                    TextPlacement::Box {
+                        lines: new_lines,
+                        corners: new_corners,
+                        h,
+                        v,
+                    }
+                }
+                TextPlacement::Path {
+                    path,
+                    above,
+                    fit,
+                    h,
+                } => TextPlacement::Path {
+                    path: curve(&path)?,
+                    above,
+                    fit,
+                    h,
+                },
+            };
+            let copy = TextData {
+                height,
+                placement,
+                curves: d.curves.iter().map(curve).collect::<Result<_, _>>()?,
+                points: d.points.iter().map(point).collect::<Result<_, _>>()?,
+                ..d
+            };
+            out.insert(t, self.texts.push(copy));
+        }
+        if !out.is_empty() {
+            self.touch_structure();
+        }
+        Ok(out)
     }
 
     /// Die Halbachsen nach der Bewegung, geprüft. Die Rollen dürfen vertauscht sein (siehe
@@ -944,6 +1130,10 @@ impl Sketch {
         {
             return Err(TransformBlock::PatternInstance);
         }
+        let texts = self.texts_in_set(&set);
+        if self.text_off_its_path(&set, &texts) {
+            return Err(TransformBlock::TextOnPath);
+        }
         let s = &self.settled(&set, s);
         if set.points.is_empty() || s.is_identity(self.tol.linear) {
             return Err(TransformBlock::NothingToDo);
@@ -1020,14 +1210,59 @@ impl Sketch {
                 .ok_or(TransformBlock::Degenerate)?;
         }
         out.refresh_patterns();
+        // Text: Höhe mit dem Maßstab, das interne Waagerecht des Rahmens entfällt beim Drehen
+        // (sonst drehte das Lösen ihn zurück); dann die Buchstaben an die neue Lage.
+        out.move_texts(&texts, s, turning)?;
+        out.refresh_texts();
         let mut report = out.settle_after_transform(&scope, &held, &held_before, &severed, s)?;
         report.scaled.extend(scaled_spacings);
         report.split = split;
-        if set.curves.iter().any(|&c| out.collapsed(c)) {
+        // Buchstaben sind erzeugt, nicht gezeichnet: Ein winziges Stück einer Schrift sperrt die
+        // Bewegung nicht. Der Rahmen zählt wie jede Linie.
+        let glyphs = self.glyph_curves();
+        if set
+            .curves
+            .iter()
+            .any(|&c| !glyphs.contains(&c) && out.collapsed(c))
+        {
             return Err(TransformBlock::Degenerate);
         }
         out.touch_structure();
         Ok((out, report))
+    }
+
+    /// Die Texte `texts` nach der Bewegung mit dem Maßstab von `s`: Höhe mal Maßstab; beim Drehen
+    /// entfällt das interne Waagerecht der Grundlinie, wie bei [`Sketch::set_text_angle`].
+    fn move_texts(
+        &mut self,
+        texts: &[TextId],
+        s: &Similarity,
+        turning: bool,
+    ) -> Result<(), TransformBlock> {
+        for &t in texts {
+            let height = self.texts[t].height * s.factor;
+            if !(height.is_finite() && height > 0.0) {
+                return Err(TransformBlock::Degenerate);
+            }
+            self.texts[t].height = height;
+            let TextPlacement::Box { lines, .. } = self.texts[t].placement else {
+                continue;
+            };
+            if !turning {
+                continue;
+            }
+            let level: Vec<ConstraintId> = self
+                .internal_constraints()
+                .filter(|(_, k)| {
+                    matches!(k.kind, ConstraintKind::Horizontal(LineOrPoints::Line(l)) if l == lines[0])
+                })
+                .map(|(id, _)| id)
+                .collect();
+            for id in level {
+                self.drop_constraint(id);
+            }
+        }
+        Ok(())
     }
 
     /// Fremde Kurven an bewegten Punkten oder geteilten Halbachsen bekommen eigene an der alten

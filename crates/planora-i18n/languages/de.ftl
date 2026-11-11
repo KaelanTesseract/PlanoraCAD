@@ -1940,6 +1940,15 @@ sketch-text-bad-path = Diese Kurve geht nicht als Pfad: Buchstaben, Textrahmen u
 sketch-text-path-degenerate = Der Pfad hat keine Länge.
 sketch-text-angle-held = Eine Abhängigkeit hält den Winkel des Textes. Lösche sie zuerst, um den Text zu drehen.
 sketch-text-what-angle = Der Winkel des Textes
+sketch-text-no-mirror = Text lässt sich nicht spiegeln. Nutze Umkehren oder löse ihn auf.
+sketch-text-no-pattern = Text lässt sich nicht als Muster vervielfältigen. Löse ihn zuerst auf.
+sketch-text-no-offset = Versatz geht nicht am Text. Löse ihn zuerst auf.
+sketch-text-no-trim = Text lässt sich nicht stutzen. Löse ihn zuerst auf.
+sketch-text-no-extend = Text lässt sich nicht dehnen. Löse ihn zuerst auf.
+sketch-text-no-break = Text lässt sich nicht brechen. Löse ihn zuerst auf.
+sketch-text-no-fillet = Text lässt sich nicht abrunden. Löse ihn zuerst auf.
+sketch-text-no-chamfer = Text bekommt keine Fase. Löse ihn zuerst auf.
+sketch-text-path-follows = Text auf Pfad folgt seinem Pfad.
 state-patterns-dissolved-on-load = { $n ->
     [one] Beim Öffnen wurde ein Muster aufgelöst, weil es seine Vorlage mit einem eigenen Exemplar verband. Die Geometrie bleibt.
    *[other] Beim Öffnen wurden { $n } Muster aufgelöst, weil sie ihre Vorlage mit einem eigenen Exemplar verbanden. Die Geometrie bleibt.
