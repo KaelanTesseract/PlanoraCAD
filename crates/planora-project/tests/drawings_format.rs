@@ -738,7 +738,7 @@ fn missing_counters_are_derived_from_the_ids() {
 
 #[test]
 fn too_new_format_is_refused_with_clear_text() {
-    // Seit der Zeichnungseinheit (Zoll) ist Format 12 gültig; „zu neu“ ist jetzt 13.
+    // Gültig ist bis Format 18 (seit Text in Skizzen); „zu neu“ ist jetzt 19.
     let good = good();
     let e = bad(&good.replacen("\"format\": 5", "\"format\": 19", 1));
     assert!(matches!(e, ProjectError::TooNew { found: 19, .. }), "{e:?}");

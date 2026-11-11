@@ -1053,6 +1053,10 @@ pub enum SenkrechtDto {
 
 /// Wo ein Text steht (ab Format 18): im Rahmen aus vier Linien zwischen vier Ecken (Linie `i`
 /// von Ecke `i` nach Ecke `i + 1`, Linie 0 ist die Grundlinie) oder auf einer Kurve.
+///
+/// Bewusst extern getaggt (`"lage": {"rahmen": {…}}`), anders als die übrigen Arten mit
+/// `tag = "typ"`: So stehen in der Datei genau die Schlüssel, die Spec G2 nennt (`rahmen` oder
+/// `pfad` mit ihren Feldern), ohne zusätzlichen `typ`. Ändern hieße ein neues Format.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TextLageDto {

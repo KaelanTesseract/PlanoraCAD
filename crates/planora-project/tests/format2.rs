@@ -146,7 +146,7 @@ fn a_format_1_file_with_a_blend_is_corrupt_and_format_3_is_too_new() {
     }
     let e = bad(&good.replacen("\"format\": 2", "\"format\": 1", 1)).to_string();
     assert!(e.contains("Dateiformat 2"), "{e}");
-    // Seit der Zeichnungseinheit (Zoll) ist Format 12 gültig; „zu neu“ ist jetzt 13.
+    // Gültig ist bis Format 18 (seit Text in Skizzen); „zu neu“ ist jetzt 19.
     assert!(matches!(
         bad(&good.replacen("\"format\": 2", "\"format\": 19", 1)),
         ProjectError::TooNew { found: 19, .. }
