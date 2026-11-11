@@ -658,13 +658,14 @@ impl Sketch {
                 return Err(PatternProblem::FixedSpline);
             }
         }
-        let glyph_dir = match plan.kind {
+        // Richtungslinie oder Mitte an einem Buchstaben: Sie hält der Text, nicht das Muster.
+        let glyph_ref = match plan.kind {
             PatternKind::Rect { dirs, .. } => dirs
                 .iter()
                 .any(|d| matches!(d, PatternDir::Line(l) if self.has_glyph(&[*l]))),
-            PatternKind::Circular { .. } => false,
+            PatternKind::Circular { center, .. } => self.is_text_point(center),
         };
-        if self.has_glyph(&plan.sources) || glyph_dir {
+        if self.has_glyph(&plan.sources) || glyph_ref {
             return Err(PatternProblem::Text);
         }
         let mut curves: HashSet<CurveId> = HashSet::new();

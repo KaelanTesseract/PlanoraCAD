@@ -12,7 +12,7 @@ use planora_sketch::dimension::DimPick;
 use planora_sketch::fillet::{ChamferKind, CurvePick};
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
 use planora_sketch::offset::OffsetProblem;
-use planora_sketch::pattern::{PatternDir, PatternKind, PatternPlan, PatternProblem};
+use planora_sketch::pattern::{CircularMode, PatternDir, PatternKind, PatternPlan, PatternProblem};
 use planora_sketch::snap::{Snap, SnapIndex};
 use planora_sketch::solver::SolveStatus;
 use planora_sketch::text::{HAlign, TextId, TextParams, TextPlacement, VAlign};
@@ -991,4 +991,41 @@ fn pattern_direction_on_glyph_rejected() {
         "Richtung am Buchstaben",
     );
     unchanged(&s, &before, "Richtung am Buchstaben");
+}
+
+#[test]
+fn pattern_center_on_glyph_point_rejected() {
+    let mut s = sketch();
+    let t = box_text(&mut s);
+    let other = line(&mut s, v(-30.0, 0.0), v(-20.0, 0.0));
+    let center = s.text(t).unwrap().points[0];
+    let plan = PatternPlan {
+        kind: PatternKind::Circular {
+            center,
+            mode: CircularMode::Full,
+        },
+        sources: vec![other],
+        counts: [3, 1],
+        values: [0.0, 0.0],
+        suppressed: Vec::new(),
+    };
+    let before = s.clone();
+    assert_eq!(
+        s.pattern_transforms(&plan).err(),
+        Some(PatternProblem::Text)
+    );
+    says(
+        s.add_pattern(&plan),
+        tr!("sketch-text-no-pattern"),
+        "Mitte an einem Buchstaben",
+    );
+    unchanged(&s, &before, "Mitte an einem Buchstaben");
+    // Eine Ecke des Rahmens ist ein gewöhnlicher Punkt: Als Mitte geht sie.
+    let (_, corners) = frame(&s, t);
+    let mut plan = plan;
+    plan.kind = PatternKind::Circular {
+        center: corners[0],
+        mode: CircularMode::Full,
+    };
+    s.add_pattern(&plan).unwrap();
 }

@@ -1012,6 +1012,66 @@ impl Sketch {
         Ok(())
     }
 
+    /// Löst die Texte `ts` auf (Spec F), alles oder nichts: Die erzeugten Kurven bleiben mit
+    /// ihren Ids und Punkten als gewöhnliche freie Kurven (Linien, Kegelschnitte, Splines mit
+    /// Kontrollpunkten), damit Extrusionen an ihren Profilen bleiben. Jeder ihrer Punkte, auch
+    /// Scheitel und Kontrollpunkte, bekommt wie in Fusion ein `Fixed` an seiner aktuellen Stelle,
+    /// das sich einzeln lösen lässt. Rahmen, Ecken und die Abhängigkeiten daran gehen nach der
+    /// Regel von [`Sketch::remove_text`] (eine Ecke an einer anderen Kurve bleibt als gewöhnlicher
+    /// Punkt), ein Pfad bleibt. Das `TextData` wird gelöscht (es bleibt tot in der Arena, wie
+    /// beim Löschen). Liefert die aufgelösten Kurven in der Reihenfolge von `ts`; ein doppelt
+    /// genannter Text zählt einmal, eine leere Liste ändert nichts. Ein unbekannter oder
+    /// gelöschter Text: `UnknownObject`, die Skizze bleibt unverändert.
+    pub fn explode_texts(&mut self, ts: &[TextId]) -> Result<Vec<CurveId>, SketchError> {
+        let mut ids: Vec<TextId> = Vec::with_capacity(ts.len());
+        for &t in ts {
+            self.text(t).ok_or(SketchError::UnknownObject)?;
+            if !ids.contains(&t) {
+                ids.push(t);
+            }
+        }
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.atomically(|s| {
+            let mut out = Vec::new();
+            for t in ids {
+                let d = &s.texts[t];
+                let curves = d.curves.clone();
+                // Alle Punkte der Kurven, auch wenn `points` einen nicht nennen sollte.
+                let mut points: Vec<PointId> = d.points.clone();
+                let mut seen: HashSet<PointId> = points.iter().copied().collect();
+                for &c in &curves {
+                    for p in s.curves[c].kind.points() {
+                        if seen.insert(p) {
+                            points.push(p);
+                        }
+                    }
+                }
+                let frame = match d.placement {
+                    TextPlacement::Box { lines, corners, .. } => Some((lines, corners)),
+                    TextPlacement::Path { .. } => None,
+                };
+                // Zuerst tot: Danach sind Kurven und Punkte keine Textteile mehr, und `Fixed`
+                // wird nicht als Abhängigkeit an Buchstaben abgelehnt.
+                s.texts[t].alive = false;
+                s.texts[t].shaped = ShapedCache(None);
+                if let Some((lines, corners)) = frame {
+                    s.drop_text_parts(&lines.into_iter().collect(), corners.to_vec());
+                }
+                for p in points {
+                    if s.points[p].alive {
+                        let xy = s.pos(p);
+                        s.add_constraint(ConstraintKind::Fixed(p, xy.x, xy.y))?;
+                    }
+                }
+                out.extend(curves);
+            }
+            s.touch_structure();
+            Ok(out)
+        })
+    }
+
     /// Löscht die Kurven `curves` und die Punkte `points` eines Textes samt allen Abhängigkeiten
     /// daran (auch internen und denen des Benutzers). Ein Punkt, den noch eine andere lebende
     /// Kurve benutzt, bleibt als gewöhnlicher Punkt, ebenso Abhängigkeiten zwischen ihm und
