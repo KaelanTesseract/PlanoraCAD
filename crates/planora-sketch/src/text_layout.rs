@@ -607,4 +607,112 @@ mod tests {
         // Ein gewöhnlicher Kreis geht.
         assert!(place(&Geom::Circle { c, r: 2.0 }, true, true).is_some());
     }
+
+    /// Die gemerkte Längentabelle legt den Text bitgleich wie eine frisch gebaute; ein bewegter
+    /// Pfad mit gleich vielen Knoten baut sie neu.
+    #[test]
+    fn cached_walk_is_bit_identical_and_rebuilt_when_the_path_moves() {
+        use crate::model::Sketch;
+        use crate::text::TextParams;
+        use crate::text_shape::TextStyle;
+        use planora_math::{Frame, Tolerance};
+        use std::sync::Arc;
+
+        let mut s = Sketch::new(Frame::WORLD, "S", Tolerance::default());
+        let pts: Vec<_> = [
+            (0.0, 0.0),
+            (10.0, 8.0),
+            (20.0, -4.0),
+            (30.0, 6.0),
+            (40.0, 0.0),
+        ]
+        .iter()
+        .map(|&(x, y)| s.add_point(x, y).unwrap())
+        .collect();
+        let path = s.add_control_spline(&pts, 3).unwrap();
+        let shape = Arc::new(square());
+        let params = TextParams {
+            content: "x".into(),
+            style: TextStyle {
+                font: "Test".into(),
+                bold: false,
+                italic: false,
+                spacing: 0.0,
+            },
+            height: 5.0,
+            flip_h: false,
+            flip_v: false,
+        };
+        let t = s
+            .add_text_path(path, params, true, false, HAlign::Center, shape.clone())
+            .unwrap();
+        let fresh_place = |s: &Sketch| {
+            let walk = Walk::new(s.geom(path).unwrap(), false, false).unwrap();
+            let placed = place_path(
+                &shape,
+                5.0,
+                &walk,
+                true,
+                false,
+                HAlign::Center,
+                false,
+                false,
+            )
+            .unwrap();
+            (walk, placed)
+        };
+        let starts = |s: &Sketch| -> Vec<u64> {
+            let d = &s.texts[t];
+            d.points
+                .iter()
+                .flat_map(|&p| {
+                    let q = s.pos(p);
+                    [q.x.to_bits(), q.y.to_bits()]
+                })
+                .collect()
+        };
+        s.solve();
+        let cached = s.texts[t].walk.0.clone().expect("Tabelle gemerkt");
+        let (fresh, placed) = fresh_place(&s);
+        assert_eq!(cached.table, fresh.table);
+        assert_eq!(cached.length.to_bits(), fresh.length.to_bits());
+        let again = place_path(
+            &shape,
+            5.0,
+            &cached,
+            true,
+            false,
+            HAlign::Center,
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(again, placed, "bitgleich mit frischer Tabelle");
+        let want = [placed[0].start.x.to_bits(), placed[0].start.y.to_bits()];
+        assert_eq!(
+            starts(&s)[..2],
+            want,
+            "die Skizze steht an der frischen Lage"
+        );
+        // Gleicher Pfad: dieselbe Tabelle bleibt.
+        let before = starts(&s);
+        s.solve();
+        assert!(Arc::ptr_eq(&cached, s.texts[t].walk.0.as_ref().unwrap()));
+        assert_eq!(starts(&s), before);
+
+        // Kontrollpunkt bewegt: gleich viele Knoten, andere Geometrie, neue Tabelle.
+        s.set_point_xy(pts[2], 20.0, 3.0).unwrap();
+        s.solve();
+        let moved = s.texts[t].walk.0.clone().unwrap();
+        let geom = s.geom(path).unwrap();
+        assert!(!Arc::ptr_eq(&cached, &moved));
+        assert!(!cached.fits(&geom, false, false));
+        assert!(moved.fits(&geom, false, false));
+        // Die Zahl der Abschnitte folgt der Krümmung, die Knoten bleiben dieselben.
+        assert_ne!(cached.table, moved.table);
+        let (fresh, placed) = fresh_place(&s);
+        assert_eq!(moved.table, fresh.table);
+        let want = [placed[0].start.x.to_bits(), placed[0].start.y.to_bits()];
+        assert_eq!(starts(&s)[..2], want, "der Text folgt dem bewegten Pfad");
+    }
 }

@@ -61,6 +61,11 @@ fn shape(content: &str) -> TextShape {
 }
 
 fn text(s: &mut Sketch, content: &str, at: DVec2) -> TextId {
+    text_h(s, content, at, H)
+}
+
+/// Text der Höhe `height` im Rahmen ab `at` (Rahmen groß genug für eine Glyphe).
+fn text_h(s: &mut Sketch, content: &str, at: DVec2, height: f64) -> TextId {
     let p = TextParams {
         content: content.into(),
         style: TextStyle {
@@ -69,12 +74,13 @@ fn text(s: &mut Sketch, content: &str, at: DVec2) -> TextId {
             italic: false,
             spacing: 0.0,
         },
-        height: H,
+        height,
         flip_h: false,
         flip_v: false,
     };
     let sh = Arc::new(shape(content));
-    s.add_text_box(at, at + v(20.0, 10.0), p, HAlign::Left, VAlign::Bottom, sh)
+    let size = v(4.0, 2.0) * height;
+    s.add_text_box(at, at + size, p, HAlign::Left, VAlign::Bottom, sh)
         .unwrap()
 }
 
@@ -160,16 +166,55 @@ fn foreign_curve_in_hole_keeps_the_rest_as_profile() {
 #[test]
 fn two_texts_overlapping_keep_mixed_faces() {
     let mut s = sketch();
-    // Zweiter Text um eine halbe Glyphe schräg versetzt: Teilflächen, die an beide Texte grenzen,
-    // sind keine Textprofile, und keine fällt als leeres Inneres weg.
-    let a = text(&mut s, "o", DVec2::ZERO);
-    let b = text(&mut s, "o", v(0.5 * H, 0.25 * H));
+    // A: außen x 0…4, y 1…5, innen x 1…3, y 2…4. B um (3,2; 0,5) versetzt: außen x 3,2…7,2,
+    // y 1,5…5,5, innen x 4,2…6,2, y 2,5…4,5. Die Ränder kreuzen sich nur bei (3,2; 5) und
+    // (4; 1,5); die Überdeckung x 3,2…4, y 1,5…5 ist Tinte beider Texte.
+    text(&mut s, "o", DVec2::ZERO);
+    text(&mut s, "o", v(3.2, 0.5));
     let e = s.profiles();
     assert!(e.rejected.is_empty(), "{:?}", e.rejected);
-    assert!(!e.profiles.is_empty());
-    for r in &e.refs {
-        let t = s.text_of_profile(r);
-        assert!(t.is_none() || t == Some(a) || t == Some(b));
-    }
-    assert!(e.refs.iter().any(|r| s.text_of_profile(r).is_none()));
+    // Nur A ohne B (mit dem Inneren von A als Loch), die Überdeckung, nur B ohne A (mit dem
+    // Inneren von B als Loch). Alle grenzen an beide Texte, keines ist ein Textprofil.
+    assert_eq!(e.profiles.len(), 3);
+    assert!(e.refs.iter().all(|r| s.text_of_profile(r).is_none()));
+    let only_a = e.profile_at(v(0.5, 3.0)).expect("nur A");
+    let both = e.profile_at(v(3.6, 3.25)).expect("Überdeckung");
+    let only_b = e.profile_at(v(6.7, 3.5)).expect("nur B");
+    let mut all = vec![only_a, both, only_b];
+    all.sort_unstable();
+    all.dedup();
+    assert_eq!(all.len(), 3);
+    assert_eq!(e.profiles[only_a].holes.len(), 1);
+    assert_eq!(e.profiles[both].holes.len(), 0);
+    assert_eq!(e.profiles[only_b].holes.len(), 1);
+    // Beide Innenflächen grenzen nur an ihren eigenen Text und sind leer: kein Profil.
+    assert_eq!(e.profile_at(v(2.0, 3.0)), None);
+    assert_eq!(e.profile_at(v(5.2, 3.5)), None);
+}
+
+#[test]
+fn hole_of_small_text_inside_ink_of_large_text_stays_a_profile() {
+    let mut s = sketch();
+    // Großes „o“ (Höhe 50): außen x 0…40, y 10…50, innen x 10…30, y 20…40. Das kleine „o“
+    // (Höhe 5) liegt ganz im unteren Strich (y 10…20) ohne Schnitt: außen x 15…19, y 12…16,
+    // innen x 16…18, y 13…15.
+    let big = text_h(&mut s, "o", DVec2::ZERO, 50.0);
+    let small = text_h(&mut s, "o", v(15.0, 11.0), 5.0);
+    let e = s.profiles();
+    assert!(e.rejected.is_empty(), "{:?}", e.rejected);
+    // Großer Ring (Löcher: sein Inneres und das kleine „o“), kleiner Ring, Inneres des kleinen
+    // „o“: Das ist Tinte des großen Textes und bleibt ein Profil. Das Innere des großen „o“ ist
+    // leer.
+    assert_eq!(e.profiles.len(), 3, "{:?}", e.outlines.len());
+    let ring = e.profile_at(v(5.0, 30.0)).expect("großer Ring");
+    assert_eq!(e.profiles[ring].holes.len(), 2);
+    assert_eq!(s.text_of_profile(&e.refs[ring]), None);
+    let small_ring = e.profile_at(v(15.5, 14.0)).expect("kleiner Ring");
+    assert_eq!(s.text_of_profile(&e.refs[small_ring]), Some(small));
+    assert!(
+        e.profile_at(v(17.0, 14.0)).is_some(),
+        "Inneres in der Tinte"
+    );
+    assert_eq!(e.profile_at(v(20.0, 30.0)), None, "Inneres des großen „o“");
+    assert_ne!(big, small);
 }

@@ -3,10 +3,11 @@
 //! Schriften füllen nach der Regel „nicht null“ (TrueType wie CFF): Ein Punkt ist Tinte, wenn ihn
 //! die Konturen mit einer Umlaufzahl ungleich null umlaufen. Eine Fläche der Anordnung, deren
 //! Ränder (außen und alle Löcher) Kurven desselben Textes sind und in deren Innerem die Umlaufzahl
-//! der Textkurven null ist, ist eine leere Innenfläche, etwa das Innere von „o“, „a“ oder „B“. Sie
-//! ist kein Profil (**Annahme**: so zeigt Fusion einen Text als Profil, siehe
-//! `docs/superpowers/offene-punkte.md`). Die Teilflächen überlappender Glyphen haben die
-//! Umlaufzahl 2 und bleiben Profile. Grenzt eine Fläche auch an andere Kurven (ein Kreis im
+//! jedes lebenden Textes null ist, ist eine leere Innenfläche, etwa das Innere von „o“, „a“ oder
+//! „B“. Sie ist kein Profil (**Festlegung**, wie Fusion einen Text als Profil zeigt, siehe
+//! `docs/superpowers/offene-punkte.md`). Liegt das Innere eines kleinen Textes in der Tinte eines
+//! großen, ist es dessen Tinte und bleibt ein Profil. Die Teilflächen überlappender Glyphen haben
+//! die Umlaufzahl 2 und bleiben Profile. Grenzt eine Fläche auch an andere Kurven (ein Kreis im
 //! Inneren des „o“, ein Rechteck um den Text), bleibt alles wie bisher.
 //!
 //! Die Umlaufzahl wird am Linienzug der Stücke gezählt, aus dem auch die Fläche stammt (64
@@ -27,6 +28,20 @@ struct PieceLine {
     lo: DVec2,
     hi: DVec2,
     points: Vec<DVec2>,
+}
+
+/// Alle Stücke eines Textes mit dem Hüllrechteck des ganzen Textes.
+struct TextLines {
+    lo: DVec2,
+    hi: DVec2,
+    pieces: Vec<PieceLine>,
+}
+
+impl TextLines {
+    /// Ist `p` Tinte dieses Textes (Umlaufzahl ungleich null)?
+    fn ink(&self, p: DVec2) -> bool {
+        p.cmpge(self.lo).all() && p.cmple(self.hi).all() && winding(&self.pieces, p) != 0
+    }
 }
 
 impl Sketch {
@@ -65,18 +80,19 @@ impl Sketch {
             }
             text
         };
-        let candidates: Vec<(usize, TextId)> = faces
+        let candidates: Vec<usize> = faces
             .iter()
-            .filter_map(|&f| face_text(f).map(|t| (f, t)))
+            .copied()
+            .filter(|&f| face_text(f).is_some())
             .collect();
         if candidates.is_empty() {
             return out;
         }
-        let wanted: HashSet<TextId> = candidates.iter().map(|&(_, t)| t).collect();
-        // Alle Stücke der Texte, auch doppelte: Die Schrift zählt jede Kontur.
-        let mut lines: HashMap<TextId, Vec<PieceLine>> = HashMap::new();
+        // Alle Stücke aller Texte der Anordnung, auch doppelte: Die Schrift zählt jede Kontur, und
+        // das Innere eines Textes kann in der Tinte eines anderen liegen.
+        let mut lines: HashMap<TextId, TextLines> = HashMap::new();
         for (k, p) in arr.pieces.iter().enumerate() {
-            let Some(t) = text_of[p.input].filter(|t| wanted.contains(t)) else {
+            let Some(t) = text_of[p.input] else {
                 continue;
             };
             let points = arr.geom_of(k).polyline(p.t0, p.t1, STEPS_PER_TURN);
@@ -85,16 +101,20 @@ impl Sketch {
                 .fold((DVec2::INFINITY, DVec2::NEG_INFINITY), |(lo, hi), q| {
                     (lo.min(*q), hi.max(*q))
                 });
-            lines
-                .entry(t)
-                .or_default()
-                .push(PieceLine { lo, hi, points });
+            let text = lines.entry(t).or_insert_with(|| TextLines {
+                lo: DVec2::INFINITY,
+                hi: DVec2::NEG_INFINITY,
+                pieces: Vec::new(),
+            });
+            text.lo = text.lo.min(lo);
+            text.hi = text.hi.max(hi);
+            text.pieces.push(PieceLine { lo, hi, points });
         }
-        for (f, t) in candidates {
+        for f in candidates {
             let Some(p) = interior_point(arr, f, &holes[f]) else {
                 continue;
             };
-            if lines.get(&t).is_some_and(|l| winding(l, p) == 0) {
+            if !lines.values().any(|l| l.ink(p)) {
                 out.insert(f);
             }
         }

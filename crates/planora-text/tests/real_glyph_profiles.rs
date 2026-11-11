@@ -144,6 +144,33 @@ fn overlapping_contours_give_pieces_without_error() {
 }
 
 #[test]
+fn ring_reference_survives_explode() {
+    let lib = FontLibrary::bundled_only();
+    let mut s = sketch();
+    let t = box_text(&mut s, &lib, "o", v(0.0, 0.0), v(20.0, 10.0));
+    let live = s.profiles();
+    assert_eq!(
+        live.profiles.len(),
+        1,
+        "nur der Ring, solange der Text lebt"
+    );
+    // Verweis, wie ihn eine Extrusion beim Anlegen speichert.
+    let ring = live.refs[0].clone();
+    assert!(!ring.outer.is_empty() && !ring.holes.is_empty());
+    s.explode_texts(&[t]).unwrap();
+    let after = s.profiles();
+    assert!(after.rejected.is_empty(), "{:?}", after.rejected);
+    // Nach dem Auflösen ist das Innere ein gewöhnliches Profil; der Verweis findet den Ring.
+    assert_eq!(after.profiles.len(), 2);
+    let i = after.find(&ring).expect("Ring wiedergefunden");
+    assert_eq!(after.refs[i], ring);
+    assert_eq!(after.profiles[i].holes.len(), 1);
+    let inner = 1 - i;
+    assert!(after.profiles[inner].holes.is_empty());
+    assert_eq!(after.resolve(std::slice::from_ref(&ring)), Ok(vec![i]));
+}
+
+#[test]
 fn text_of_profile_finds_text() {
     let lib = FontLibrary::bundled_only();
     let mut s = sketch();
