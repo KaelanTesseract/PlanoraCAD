@@ -741,6 +741,7 @@ create-profile-label-holes = Profil { $n }: { $area } { $unit }, { $holes ->
     [one] 1 Loch
    *[other] { $holes } Löcher
 }
+create-profile-text = Text „{ $content }“
 create-rejected = Nicht verwendbar: { $reason }
 create-no-axis = Die Skizze enthält keine Linie, die als Drehachse dienen kann.
 create-create = Erzeugen

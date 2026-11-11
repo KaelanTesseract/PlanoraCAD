@@ -781,10 +781,20 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
         let at = response
             .hover_pos()
             .and_then(|p| profile_under(state, rect, p));
+        // Strg beim Klick wählt ein einzelnes Profil eines Textes (Spec D2); sie zählt auch, wenn
+        // sie nur beim Klick selbst gedrückt war (Ereignis und Loslassen im selben Bild).
+        let modifiers = ui.input(|i| {
+            i.events.iter().fold(i.modifiers, |m, e| match e {
+                egui::Event::PointerButton { modifiers, .. } => m | *modifiers,
+                _ => m,
+            })
+        });
         if let Some(pick) = state.profile_pick.as_mut() {
             pick.hover = at;
-            if response.clicked() && at.is_some() {
-                pick.clicked = at;
+            if response.clicked()
+                && let Some(i) = at
+            {
+                pick.clicked = Some((i, modifiers));
             }
         }
     } else if !sketching && state.pending_pick.is_some() {

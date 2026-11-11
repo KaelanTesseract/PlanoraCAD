@@ -749,6 +749,7 @@ create-profile-label-holes = Profile { $n }: { $area } { $unit }, { $holes ->
     [one] 1 hole
    *[other] { $holes } holes
 }
+create-profile-text = Text "{ $content }"
 create-rejected = Not usable: { $reason }
 create-no-axis = The sketch has no line that can serve as the axis of revolution.
 create-create = Create

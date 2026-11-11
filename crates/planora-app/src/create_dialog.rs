@@ -197,7 +197,8 @@ impl CreateDialog {
             return;
         };
         // Zwischengespeichert je Stand der Skizze: neu berechnet nur nach einer Änderung.
-        profile_pick::list(ui, &state.profile_cache.get(sk), sel);
+        let groups = state.profile_cache.groups(sk);
+        profile_pick::list(ui, &state.profile_cache.get(sk), &groups, sk, sel);
     }
 
     /// Auswahl der Drehachse (Linien der Skizze, Konstruktionslinien zuerst).

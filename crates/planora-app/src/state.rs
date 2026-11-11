@@ -292,14 +292,15 @@ pub struct AppState {
 
 /// Profilwahl eines offenen Dialogs „Extrudieren“/„Drehen“ (wie in Fusion: Klick in die Ansicht
 /// schaltet ein Profil um). Der Dialog legt Skizze und Wahl in jedem Bild ab; die 3D-Ansicht
-/// trägt das Profil unter dem Mauszeiger (`hover`) und ein angeklicktes (`clicked`) ein, das der
-/// Dialog im selben Bild umschaltet und löscht. Indizes in `profiles()` der berechneten Skizze.
+/// trägt das Profil unter dem Mauszeiger (`hover`) und ein angeklicktes (`clicked`, mit den beim
+/// Klick gedrückten Tasten) ein, das der Dialog im selben Bild umschaltet und löscht
+/// ([`crate::profile_pick::take_click`]). Indizes in `profiles()` der berechneten Skizze.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProfilePick {
     pub sketch: FeatureId,
     pub selected: Vec<usize>,
     pub hover: Option<usize>,
-    pub clicked: Option<usize>,
+    pub clicked: Option<(usize, egui::Modifiers)>,
 }
 
 /// Merkt sich die Profile der zuletzt gefragten Skizze zu ihrem Stand
@@ -309,6 +310,8 @@ pub struct ProfilePick {
 pub struct ProfileCache {
     entry: RefCell<Option<(u64, Arc<ExtractedProfiles>)>>,
     computed: Cell<usize>,
+    /// Gruppen der Profilwahl ([`crate::profile_pick::groups`]) zum selben Stand.
+    groups: RefCell<Option<(u64, Arc<Vec<crate::profile_pick::ProfileGroup>>)>>,
     /// Zahl der Profile nach dem alten Algorithmus ([`Sketch::legacy_profiles`]) zum Stand.
     legacy: Cell<Option<(u64, usize)>>,
     legacy_computed: Cell<usize>,
@@ -327,6 +330,20 @@ impl ProfileCache {
         self.computed.set(self.computed.get() + 1);
         *entry = Some((sk.revision(), Arc::clone(&p)));
         p
+    }
+
+    /// Die Gruppen der Profile von `sk` (je Text eine, sonst je Profil eine, Spec D2), aus dem
+    /// Speicher, wenn sich die Skizze seither nicht geändert hat. So läuft die Zuordnung der
+    /// Profile zu Texten einmal je Stand und nicht in jedem Bild.
+    pub fn groups(&self, sk: &Sketch) -> Arc<Vec<crate::profile_pick::ProfileGroup>> {
+        if let Some((rev, g)) = self.groups.borrow().as_ref()
+            && *rev == sk.revision()
+        {
+            return Arc::clone(g);
+        }
+        let g = Arc::new(crate::profile_pick::groups(&self.get(sk), sk));
+        *self.groups.borrow_mut() = Some((sk.revision(), Arc::clone(&g)));
+        g
     }
 
     /// Wie oft bisher tatsächlich berechnet wurde (für Tests).
