@@ -739,7 +739,7 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
         if let Some(pick) = state.profile_pick.as_ref().filter(|p| p.sketch == id) {
             let extracted = state.profile_cache.get(sk);
             out.extend(profile_fill_shape(&map, &extracted, |i| {
-                Some(if pick.hover == Some(i) {
+                Some(if pick.hover.contains(&i) {
                     col.profile_fill_hover
                 } else if pick.selected.contains(&i) {
                     col.profile_fill_selected

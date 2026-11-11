@@ -789,8 +789,14 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
                 _ => m,
             })
         });
+        // Hervorgehoben wird, was ein Klick jetzt umschalten würde (mit der gehaltenen Strg).
+        let held = ui.input(|i| i.modifiers);
+        let hover = match (at, state.profile_pick.as_ref()) {
+            (Some(i), Some(pick)) => crate::profile_pick::targets(state, pick.sketch, i, held),
+            _ => Vec::new(),
+        };
         if let Some(pick) = state.profile_pick.as_mut() {
-            pick.hover = at;
+            pick.hover = hover;
             if response.clicked()
                 && let Some(i) = at
             {

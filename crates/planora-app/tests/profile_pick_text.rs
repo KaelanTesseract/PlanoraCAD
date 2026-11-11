@@ -533,3 +533,170 @@ fn edit_dialog_uses_groups_too() {
     }
     assert_eq!(d.picked_profiles(), sorted(vec![i.o, i.l, i.x, i.rect]));
 }
+
+// ---- Korrekturrunde 1 ---------------------------------------------------------------------------
+
+/// Zahl der Dreiecke in Netzen mit der Farbe `color`.
+fn filled_triangles(shapes: &[Shape], color: egui::Color32) -> usize {
+    shapes
+        .iter()
+        .map(|s| match s {
+            Shape::Mesh(m) => m
+                .indices
+                .chunks(3)
+                .filter(|t| m.vertices[t[0] as usize].color == color)
+                .count(),
+            Shape::Vec(v) => filled_triangles(v, color),
+            _ => 0,
+        })
+        .sum()
+}
+
+#[test]
+fn hover_over_text_highlights_all_of_text_and_with_ctrl_only_one() {
+    let (ctx, mut s, id, mut d, i) = extrude_ready();
+    let p = screen(&s, id, ring_of(T1, 0));
+    let hover_fill = |s: &AppState| {
+        let col = planora_app::theme::sketch_colors(s.dark);
+        filled_triangles(
+            &sketch_view::finished_sketch_shapes(s, SCREEN),
+            col.profile_fill_hover,
+        )
+    };
+    frame(
+        &ctx,
+        &mut s,
+        &mut d,
+        vec![egui::Event::PointerMoved(p)],
+        NONE,
+    );
+    assert_eq!(
+        s.profile_pick.as_ref().map(|p| p.hover.clone()),
+        Some(sorted(vec![i.o, i.l])),
+        "ohne Strg: der ganze Text"
+    );
+    let all = hover_fill(&s);
+    frame(&ctx, &mut s, &mut d, vec![], CTRL);
+    assert_eq!(
+        s.profile_pick.as_ref().map(|p| p.hover.clone()),
+        Some(vec![i.o]),
+        "mit Strg: nur „o“"
+    );
+    let one = hover_fill(&s);
+    assert!(0 < one && one < all, "{one} < {all}");
+    frame(&ctx, &mut s, &mut d, vec![], NONE);
+    assert_eq!(
+        s.profile_pick.as_ref().map(|p| p.hover.clone()),
+        Some(sorted(vec![i.o, i.l])),
+        "Strg los: wieder der ganze Text"
+    );
+    // Ein einfaches Profil ist allein hervorgehoben.
+    let r = screen(&s, id, RECT);
+    frame(
+        &ctx,
+        &mut s,
+        &mut d,
+        vec![egui::Event::PointerMoved(r)],
+        NONE,
+    );
+    assert_eq!(
+        s.profile_pick.as_ref().map(|p| p.hover.clone()),
+        Some(vec![i.rect])
+    );
+}
+
+#[test]
+fn command_without_ctrl_toggles_single() {
+    let (ctx, mut s, id, mut d, i) = extrude_ready();
+    let command = egui::Modifiers {
+        command: true,
+        ..egui::Modifiers::NONE
+    };
+    click_at(&ctx, &mut s, id, &mut d, ring_of(T1, 0), command);
+    assert_eq!(picked(&d), vec![i.o], "nur Befehl");
+    let mac = egui::Modifiers {
+        mac_cmd: true,
+        command: true,
+        ..egui::Modifiers::NONE
+    };
+    click_at(&ctx, &mut s, id, &mut d, glyph_of(T1, 1), mac);
+    assert_eq!(picked(&d), sorted(vec![i.o, i.l]), "Befehl unter macOS");
+    let mac_only = egui::Modifiers {
+        mac_cmd: true,
+        ..egui::Modifiers::NONE
+    };
+    click_at(&ctx, &mut s, id, &mut d, ring_of(T1, 0), mac_only);
+    assert_eq!(picked(&d), vec![i.l], "nur mac_cmd");
+}
+
+#[test]
+fn long_text_row_is_one_shortened_line_with_full_tooltip() {
+    let content = "Größenänderung über dreißig Zeichen hinaus\nzweite Zeile";
+    let mut s = AppState::new();
+    let id = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    s.open_sketch(id).unwrap();
+    {
+        let sk = s.session_sketch_mut().unwrap().1;
+        let params = TextParams {
+            content: content.into(),
+            style: TextStyle {
+                font: "Test".into(),
+                bold: false,
+                italic: false,
+                spacing: 0.0,
+            },
+            height: 5.0,
+            flip_h: false,
+            flip_v: false,
+        };
+        sk.add_text_box(
+            T1,
+            T1 + v(30.0, 8.0),
+            params,
+            HAlign::Left,
+            VAlign::Bottom,
+            shape("ab"),
+        )
+        .unwrap();
+        sk.add_rectangle(v(-40.0, 0.0), v(-30.0, 10.0)).unwrap();
+        sk.solve();
+    }
+    s.observe_sketch(false);
+    s.close_sketch();
+    aim(&mut s);
+    let ctx = context();
+    ctx.all_styles_mut(|st| st.interaction.tooltip_delay = 0.0);
+    let mut d = CreateDialog::extrude_sketch(&s, id);
+    frame(&ctx, &mut s, &mut d, vec![], NONE);
+    let shapes = frame(&ctx, &mut s, &mut d, vec![], NONE);
+
+    let one_line = content.replace('\n', " ");
+    let short: String = one_line.chars().take(30).collect();
+    let want = format!("Text „{short}…“");
+    let texts = text_positions(&shapes);
+    let row = texts
+        .iter()
+        .find(|(t, _)| t.starts_with("Text „"))
+        .unwrap_or_else(|| panic!("{texts:?}"));
+    assert_eq!(row.0, want);
+    assert!(!row.0.contains('\n'));
+    let inner = row.0.trim_start_matches("Text „").trim_end_matches('“');
+    assert_eq!(inner.chars().count(), 31, "30 Zeichen und „…“");
+
+    // Darüberfahren zeigt den ganzen Inhalt in einer Zeile.
+    let at = row.1.center();
+    let mut tooltip = false;
+    for _ in 0..4 {
+        let shapes = frame(
+            &ctx,
+            &mut s,
+            &mut d,
+            vec![egui::Event::PointerMoved(at)],
+            NONE,
+        );
+        tooltip |= text_positions(&shapes).iter().any(|(t, _)| *t == one_line);
+    }
+    assert!(tooltip, "Tooltip mit „{one_line}“");
+}

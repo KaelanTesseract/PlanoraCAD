@@ -125,11 +125,42 @@ pub fn toggle(sel: &mut Vec<usize>, i: usize) {
     }
 }
 
+/// Die Profile, die ein Klick auf Profil `i` mit den Tasten `modifiers` umschaltet: ohne Strg
+/// bei einem Textprofil alle Profile dieses Textes, mit Strg (unter macOS Befehl) und bei allen
+/// anderen Profilen nur `i`.
+pub fn click_set(groups: &[ProfileGroup], i: usize, modifiers: egui::Modifiers) -> Vec<usize> {
+    let single = modifiers.ctrl || modifiers.command || modifiers.mac_cmd;
+    if !single {
+        let text = groups.iter().find_map(|g| match g {
+            ProfileGroup::Text { members, .. } if members.contains(&i) => Some(members),
+            _ => None,
+        });
+        if let Some(members) = text {
+            return members.clone();
+        }
+    }
+    vec![i]
+}
+
+/// [`click_set`] für Profil `i` der berechneten Skizze `sketch` (Gruppen aus dem Speicher); ohne
+/// berechnete Skizze nur `i`.
+pub fn targets(
+    state: &AppState,
+    sketch: FeatureId,
+    i: usize,
+    modifiers: egui::Modifiers,
+) -> Vec<usize> {
+    match state.document.sketch_of(sketch) {
+        Some(sk) => click_set(&state.profile_cache.groups(sk), i, modifiers),
+        None => vec![i],
+    }
+}
+
 /// Übernimmt einen Klick der 3D-Ansicht auf ein Profil der Skizze `sketch` in die Wahl `sel`;
 /// `true`, wenn sich die Wahl geändert hat. Ein Klick auf eine andere Skizze verfällt. Die beim
-/// Klick gedrückten Tasten entscheiden: Ohne Strg schaltet ein Klick auf ein Textprofil alle
-/// Profile dieses Textes um ([`toggle_group`]), mit Strg nur das eine; andere Profile schalten
-/// immer einzeln um.
+/// Klick gedrückten Tasten entscheiden ([`click_set`]): Ohne Strg schaltet ein Klick auf ein
+/// Textprofil alle Profile dieses Textes um ([`toggle_group`]), mit Strg nur das eine; andere
+/// Profile schalten immer einzeln um.
 pub fn take_click(state: &mut AppState, sketch: FeatureId, sel: &mut Vec<usize>) -> bool {
     let Some(pick) = state.profile_pick.as_mut() else {
         return false;
@@ -140,31 +171,19 @@ pub fn take_click(state: &mut AppState, sketch: FeatureId, sel: &mut Vec<usize>)
     if pick.sketch != sketch {
         return false;
     }
-    // Strg (unter macOS Befehl) wählt einzeln.
-    let single = modifiers.ctrl || modifiers.command;
-    if !single && let Some(sk) = state.document.sketch_of(sketch) {
-        let groups = state.profile_cache.groups(sk);
-        let text = groups.iter().find_map(|g| match g {
-            ProfileGroup::Text { members, .. } if members.contains(&i) => Some(members),
-            _ => None,
-        });
-        if let Some(members) = text {
-            toggle_group(sel, members);
-            return true;
-        }
-    }
-    toggle(sel, i);
+    toggle_group(sel, &targets(state, sketch, i, modifiers));
     true
 }
 
-/// Legt die Wahl `sel` der Skizze `sketch` für die 3D-Ansicht ab; das Profil unter dem
-/// Mauszeiger bleibt, solange die Skizze dieselbe ist.
+/// Legt die Wahl `sel` der Skizze `sketch` für die 3D-Ansicht ab; die hervorgehobenen Profile
+/// unter dem Mauszeiger bleiben, solange die Skizze dieselbe ist.
 pub fn publish(state: &mut AppState, sketch: FeatureId, sel: &[usize]) {
     let hover = state
         .profile_pick
         .as_ref()
         .filter(|p| p.sketch == sketch)
-        .and_then(|p| p.hover);
+        .map(|p| p.hover.clone())
+        .unwrap_or_default();
     state.profile_pick = Some(ProfilePick {
         sketch,
         selected: sel.to_vec(),
@@ -195,13 +214,29 @@ pub fn label(extracted: &ExtractedProfiles, i: usize) -> String {
     }
 }
 
-/// Bezeichnung der Zeile des Textes `t` in der Liste („Text „Hallo““); Zeilenumbrüche des
-/// Inhalts werden Leerzeichen, damit die Zeile eine Zeile bleibt.
-pub fn text_label(sketch: &Sketch, t: TextId) -> String {
-    let content = sketch
+/// Höchstzahl der Zeichen des Inhalts in der Zeile eines Textes; längere enden mit „…“.
+pub const TEXT_LABEL_CHARS: usize = 30;
+
+/// Inhalt des Textes `t` in einer Zeile (Zeilenumbrüche werden Leerzeichen).
+pub fn text_content(sketch: &Sketch, t: TextId) -> String {
+    sketch
         .text(t)
         .map(|d| d.content.lines().collect::<Vec<_>>().join(" "))
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+/// Bezeichnung der Zeile des Textes `t` in der Liste („Text „Hallo““), in einer Zeile; ein
+/// Inhalt über [`TEXT_LABEL_CHARS`] Zeichen wird gekürzt und endet mit „…“ (der ganze Inhalt
+/// steht im Tooltip der Zeile).
+pub fn text_label(sketch: &Sketch, t: TextId) -> String {
+    let content = text_content(sketch, t);
+    let content = if content.chars().count() > TEXT_LABEL_CHARS {
+        let mut short: String = content.chars().take(TEXT_LABEL_CHARS).collect();
+        short.push('…');
+        short
+    } else {
+        content
+    };
     tr!("create-profile-text", content = content)
 }
 
@@ -235,7 +270,9 @@ pub fn list(
                 let mut on = state == CheckState::All;
                 let check = egui::Checkbox::new(&mut on, text_label(sketch, *text))
                     .indeterminate(state == CheckState::Partial);
-                if ui.add(check).changed() {
+                // Der ganze Inhalt (die Zeile ist gekürzt) beim Darüberfahren.
+                let response = ui.add(check).on_hover_text(text_content(sketch, *text));
+                if response.changed() {
                     toggle_group(sel, members);
                     changed = true;
                 }

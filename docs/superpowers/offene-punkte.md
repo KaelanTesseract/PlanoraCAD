@@ -2570,6 +2570,6 @@ In Arbeit auf dem Zweig `feature/skizzen-text` (Spec `specs/2026-11-10-skizzen-t
 - **Festlegung (Korrekturrunde 1):** Die Hinweiszeilen (Ersatzschrift, nachgebildeter Schnitt, fehlende Zeichen) stehen unter „Schrift“. Solange der Abschnitt „Text“ offen ist, steht die Meldung der Sitzung direkt unter OK und Abbrechen statt unten im Skizzenfeld; dort bleibt sie bei 1920×1080 im Bild, auch mit allen drei Hinweisen.
 
 ### Ganzer Text als Profil (Task 14)
-- **Annahme (Spec D2):** Das Hervorheben unter dem Mauszeiger bleibt beim einzelnen Profil, auch bei einem Profil eines Textes; ein einfacher Klick wählt trotzdem den ganzen Text. Ob Fusion beim Darüberfahren schon den ganzen Text hervorhebt, ist nicht geprüft.
+- **Festlegung (Entscheidung nach Task 14):** Unter dem Mauszeiger wird hervorgehoben, was ein Klick jetzt umschalten würde: über einem Profil eines Textes ohne Strg alle Profile dieses Textes, mit gehaltener Strg (unter macOS Befehl) nur das eine Profil; andere Profile allein.
 - **Festlegung:** Strg+Klick zählt mit Strg oder (unter macOS) Befehl, auch wenn die Taste nur beim Klick selbst gedrückt war. In der Liste schaltet ein Klick auf die Textzeile alle Profile des Textes um: im Zwischenzustand werden alle gewählt.
-- **Festlegung:** In der Zeile „Text „…““ werden Zeilenumbrüche des Inhalts zu Leerzeichen. Lange Inhalte (bis 500 Zeichen) werden nicht gekürzt.
+- **Festlegung (Entscheidung nach Task 14):** Die Zeile „Text „…““ bleibt eine Zeile: Zeilenumbrüche des Inhalts werden Leerzeichen, ein Inhalt über 30 Zeichen (gezählt in Zeichen, nicht Bytes) wird auf 30 Zeichen gekürzt und endet mit „…“. Der ganze Inhalt (in einer Zeile) steht im Tooltip des Häkchens.
