@@ -65,6 +65,20 @@ pub enum TextPlacement {
     },
 }
 
+/// Die neue Art und Lage beim Ändern eines Textes ([`Sketch::edit_text`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextKindEdit {
+    /// Im Rahmen: der vorhandene, oder beim Wechsel vom Pfad ein neuer um die aktuelle Lage.
+    Box { h: HAlign, v: VAlign },
+    /// Auf der Kurve `path`, wie bei [`TextPlacement::Path`].
+    Path {
+        path: CurveId,
+        above: bool,
+        fit: bool,
+        h: HAlign,
+    },
+}
+
 /// Das zuletzt gesetzte [`TextShape`], nur zur Laufzeit (nicht in der Datei).
 ///
 /// Der Vergleich liefert immer `true` (**Review Focus 1**): Rückgängig-Bilder und „geändert“
@@ -461,19 +475,7 @@ impl Sketch {
             return Err(out_of_range());
         }
         self.atomically(|s| {
-            let mut points = [Id::from_index(0); 4];
-            for (slot, c) in points.iter_mut().zip(corners) {
-                *slot = s.add_point(c.x, c.y)?;
-            }
-            let mut lines = [Id::from_index(0); 4];
-            for (i, slot) in lines.iter_mut().enumerate() {
-                *slot = s.add_line(points[i], points[(i + 1) % 4])?;
-                s.curves[*slot].construction = true;
-            }
-            s.push_internal(ConstraintKind::Perpendicular(lines[0], lines[1]));
-            s.push_internal(ConstraintKind::Parallel(lines[0], lines[2]));
-            s.push_internal(ConstraintKind::Parallel(lines[1], lines[3]));
-            s.push_internal(ConstraintKind::Horizontal(LineOrPoints::Line(lines[0])));
+            let (points, lines) = s.push_frame(corners)?;
             let t = s.texts.push(TextData {
                 content: params.content,
                 style: params.style,
@@ -514,20 +516,10 @@ impl Sketch {
         h: HAlign,
         shape: Arc<TextShape>,
     ) -> Result<TextId, SketchError> {
-        if self.curve(path).is_none() {
-            return Err(SketchError::UnknownObject);
-        }
-        if self.text_of_curve(path).is_some()
-            || self.text_of_frame(path).is_some()
-            || self.is_handle_curve(path)
-        {
-            return Err(SketchError::InvalidInput(tr!("sketch-text-bad-path")));
-        }
+        self.refuse_bad_path(path)?;
         check_params(&params)?;
         check_new_shape(&shape)?;
-        if self.text_path_geom(path).is_none() {
-            return Err(SketchError::Degenerate(tr!("sketch-text-path-degenerate")));
-        }
+        self.refuse_degenerate_path(path)?;
         let placement = TextPlacement::Path {
             path,
             above,
@@ -604,6 +596,280 @@ impl Sketch {
         Ok(())
     }
 
+    /// Ändert einen Text (Spec C8): Werte, Art und Lage. `shape` ist der mit `params` gesetzte
+    /// Text, für einen Pfad mit verbundenen Zeilen ([`path_content`]). Die Kurven werden der Reihe
+    /// nach wiederverwendet (Spec B3), auch beim Wechsel der Art.
+    ///
+    /// - Rahmen → Rahmen wie [`Sketch::edit_text_box`].
+    /// - Rahmen → Pfad löscht den Rahmen und die Abhängigkeiten daran. Eine Ecke, die noch eine
+    ///   andere lebende Kurve benutzt, bleibt als gewöhnlicher Punkt (wie bei
+    ///   [`Sketch::remove_text`]).
+    /// - Pfad → Rahmen legt einen Rahmen um die aktuelle Lage an, mit Winkel 0 und dem internen
+    ///   `Horizontal` wie ein neuer Rahmen: das achsenparallele Rechteck um die erzeugten Punkte
+    ///   (die Kontrollpunkte umschließen die Kurven). Der Pfad bleibt.
+    /// - Pfad → Pfad, auch auf eine andere Kurve, mit denselben Prüfungen wie
+    ///   [`Sketch::add_text_path`].
+    ///
+    /// Als Ganzes atomar: Bei einem Fehler bleibt die Skizze unverändert, auch ihr Stand.
+    pub fn edit_text(
+        &mut self,
+        t: TextId,
+        params: TextParams,
+        kind: TextKindEdit,
+        shape: Arc<TextShape>,
+    ) -> Result<(), SketchError> {
+        let d = self.text(t).ok_or(SketchError::UnknownObject)?;
+        let is_box = matches!(d.placement, TextPlacement::Box { .. });
+        match kind {
+            TextKindEdit::Box { h, v } if is_box => self.edit_text_box(t, params, h, v, shape),
+            TextKindEdit::Box { h, v } => self.edit_path_to_box(t, params, h, v, shape),
+            TextKindEdit::Path {
+                path,
+                above,
+                fit,
+                h,
+            } => {
+                let placement = TextPlacement::Path {
+                    path,
+                    above,
+                    fit,
+                    h,
+                };
+                self.edit_text_to_path(t, params, path, placement, shape)
+            }
+        }
+    }
+
+    /// Rahmen → Pfad oder Pfad → Pfad (siehe [`Sketch::edit_text`]); `placement` ist die neue
+    /// Lage auf dem Pfad `path`.
+    fn edit_text_to_path(
+        &mut self,
+        t: TextId,
+        params: TextParams,
+        path: CurveId,
+        placement: TextPlacement,
+        shape: Arc<TextShape>,
+    ) -> Result<(), SketchError> {
+        self.refuse_bad_path(path)?;
+        check_params(&params)?;
+        check_new_shape(&shape)?;
+        self.refuse_degenerate_path(path)?;
+        self.atomically(|s| {
+            let before = s.texts[t].clone();
+            if let TextPlacement::Box { lines, corners, .. } = before.placement {
+                s.drop_text_parts(&lines.into_iter().collect(), corners.to_vec());
+                s.touch_structure();
+            }
+            let placed = s
+                .place_text(
+                    placement,
+                    params.height,
+                    params.flip_h,
+                    params.flip_v,
+                    &shape,
+                )
+                .ok_or_else(out_of_range)?;
+            s.set_text_values(t, params, placement, shape);
+            if s.texts[t] != before {
+                s.touch_structure();
+            }
+            s.sync_text(t, &placed);
+            Ok(())
+        })
+    }
+
+    /// Pfad → Rahmen (siehe [`Sketch::edit_text`]).
+    fn edit_path_to_box(
+        &mut self,
+        t: TextId,
+        params: TextParams,
+        h: HAlign,
+        v: VAlign,
+        shape: Arc<TextShape>,
+    ) -> Result<(), SketchError> {
+        check_params(&params)?;
+        check_new_shape(&shape)?;
+        let (min, max) = self.texts[t]
+            .points
+            .iter()
+            .filter(|&&p| self.points[p].alive)
+            .map(|&p| self.pos(p))
+            .fold(
+                (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)),
+                |(lo, hi), p| (lo.min(p), hi.max(p)),
+            );
+        let size = max - min;
+        if !(size.x > self.tol.linear && size.y > self.tol.linear) {
+            return Err(SketchError::Degenerate(tr!("sketch-err-rect-size")));
+        }
+        let corners = [min, DVec2::new(max.x, min.y), max, DVec2::new(min.x, max.y)];
+        let placed = place_box(
+            &shape,
+            params.height,
+            corners,
+            h,
+            v,
+            params.flip_h,
+            params.flip_v,
+        );
+        if !placed_ok(&placed) {
+            return Err(out_of_range());
+        }
+        self.atomically(|s| {
+            let (points, lines) = s.push_frame(corners)?;
+            let placement = TextPlacement::Box {
+                lines,
+                corners: points,
+                h,
+                v,
+            };
+            s.set_text_values(t, params, placement, shape);
+            s.touch_structure();
+            s.sync_text(t, &placed);
+            Ok(())
+        })
+    }
+
+    /// Schreibt Werte, Lage und gesetzte Form in den Text `t`; Kurven und Punkte bleiben.
+    fn set_text_values(
+        &mut self,
+        t: TextId,
+        params: TextParams,
+        placement: TextPlacement,
+        shape: Arc<TextShape>,
+    ) {
+        let d = &mut self.texts[t];
+        d.content = params.content;
+        d.style = params.style;
+        d.height = params.height;
+        d.flip_h = params.flip_h;
+        d.flip_v = params.flip_v;
+        d.placement = placement;
+        d.shaped = ShapedCache(Some(shape));
+    }
+
+    /// Der Winkel eines Textes im Rahmen (Spec C5): die Richtung der Grundlinie von Ecke 0 nach
+    /// Ecke 1 im Bogenmaß, in `[−π, π]`. `None` für Text auf Pfad, einen unbekannten Text und
+    /// solange die Grundlinie keine Länge hat.
+    pub fn text_angle(&self, t: TextId) -> Option<f64> {
+        let TextPlacement::Box { corners, .. } = self.text(t)?.placement else {
+            return None;
+        };
+        if corners[..2].iter().any(|&p| !self.points[p].alive) {
+            return None;
+        }
+        let d = self.pos(corners[1]) - self.pos(corners[0]);
+        (d.is_finite() && d.length() > self.tol.linear).then(|| d.y.atan2(d.x))
+    }
+
+    /// Dreht den Rahmen des Textes `t` um Ecke 0 auf den Winkel `rad` (Spec C5). Das interne
+    /// `Horizontal` auf der Grundlinie fällt dabei weg. Die übrige Geometrie wird bei fest
+    /// stehenden Ecken nachgelöst; geht das nicht, hält eine Abhängigkeit des Benutzers den Winkel
+    /// (etwa ein `Horizontal`, zwei feste Ecken oder ein Winkelmaß zu fester Geometrie), und die
+    /// Drehung wird mit `sketch-text-angle-held` abgelehnt. Ein gleicher Winkel ändert nichts.
+    /// Bei einem Fehler bleibt die Skizze unverändert.
+    pub fn set_text_angle(&mut self, t: TextId, rad: f64) -> Result<(), SketchError> {
+        let d = self.text(t).ok_or(SketchError::UnknownObject)?;
+        let TextPlacement::Box { lines, corners, .. } = d.placement else {
+            return Err(SketchError::WrongType(tr!("sketch-text-not-box")));
+        };
+        if !rad.is_finite() {
+            return Err(SketchError::InvalidInput(tr!(
+                "sketch-err-not-finite",
+                what = tr!("sketch-text-what-angle")
+            )));
+        }
+        let now = self
+            .text_angle(t)
+            .ok_or_else(|| SketchError::Degenerate(tr!("sketch-err-rect-size")))?;
+        // Der Unterschied in (−π, π]: Ein Winkel ist eine Richtung.
+        let delta = (rad - now).sin().atan2((rad - now).cos());
+        if delta.abs() <= self.tol.angular {
+            return Ok(());
+        }
+        let c0 = self.pos(corners[0]);
+        let (sin, cos) = delta.sin_cos();
+        let targets = corners.map(|p| {
+            let r = self.pos(p) - c0;
+            c0 + DVec2::new(r.x * cos - r.y * sin, r.x * sin + r.y * cos)
+        });
+        if !targets.iter().all(|&p| within_coord_range(p)) {
+            return Err(out_of_range());
+        }
+        let level: Vec<_> = self
+            .constraints
+            .iter()
+            .filter(|(_, k)| {
+                k.alive
+                    && k.internal
+                    && matches!(k.kind, ConstraintKind::Horizontal(LineOrPoints::Line(l)) if l == lines[0])
+            })
+            .map(|(i, _)| i)
+            .collect();
+        let mut trial = self.clone();
+        for k in level {
+            trial.constraints[k].alive = false;
+        }
+        trial.touch_structure();
+        // Ecke 0 steht schon; die anderen genau auf die gedrehte Lage.
+        for (&p, at) in corners.iter().zip(targets).skip(1) {
+            trial.set_point_xy(p, at.x, at.y)?;
+        }
+        if !trial.solve_holding(&corners) {
+            return Err(SketchError::InvalidInput(tr!("sketch-text-angle-held")));
+        }
+        trial.refresh_texts();
+        *self = trial;
+        Ok(())
+    }
+
+    /// Legt den Rahmen mit den Ecken `corners` an (Spec B4): vier Konstruktionslinien, Linie `i`
+    /// von Ecke `i` nach Ecke `i + 1`, mit den internen Abhängigkeiten eines Rechtecks über drei
+    /// Punkte (1 × `Perpendicular`, 2 × `Parallel`) und `Horizontal` auf der Grundlinie. Nur
+    /// innerhalb von `atomically`: Ein Fehler hinterließe sonst einen halben Rahmen.
+    fn push_frame(
+        &mut self,
+        corners: [DVec2; 4],
+    ) -> Result<([PointId; 4], [CurveId; 4]), SketchError> {
+        let mut points = [Id::from_index(0); 4];
+        for (slot, c) in points.iter_mut().zip(corners) {
+            *slot = self.add_point(c.x, c.y)?;
+        }
+        let mut lines = [Id::from_index(0); 4];
+        for (i, slot) in lines.iter_mut().enumerate() {
+            *slot = self.add_line(points[i], points[(i + 1) % 4])?;
+            self.curves[*slot].construction = true;
+        }
+        self.push_internal(ConstraintKind::Perpendicular(lines[0], lines[1]));
+        self.push_internal(ConstraintKind::Parallel(lines[0], lines[2]));
+        self.push_internal(ConstraintKind::Parallel(lines[1], lines[3]));
+        self.push_internal(ConstraintKind::Horizontal(LineOrPoints::Line(lines[0])));
+        Ok((points, lines))
+    }
+
+    /// Unbekannte Kurve, oder eine, die keinen Text trägt (Spec B7): erzeugte Kurven, Rahmenlinien
+    /// eines Textes und Griffe.
+    fn refuse_bad_path(&self, path: CurveId) -> Result<(), SketchError> {
+        if self.curve(path).is_none() {
+            return Err(SketchError::UnknownObject);
+        }
+        if self.text_of_curve(path).is_some()
+            || self.text_of_frame(path).is_some()
+            || self.is_handle_curve(path)
+        {
+            return Err(SketchError::InvalidInput(tr!("sketch-text-bad-path")));
+        }
+        Ok(())
+    }
+
+    /// Ein Pfad ohne Länge trägt keinen Text.
+    fn refuse_degenerate_path(&self, path: CurveId) -> Result<(), SketchError> {
+        if self.text_path_geom(path).is_none() {
+            return Err(SketchError::Degenerate(tr!("sketch-text-path-degenerate")));
+        }
+        Ok(())
+    }
+
     /// Löscht den Text als Ganzes (Spec B8): Rahmen, erzeugte Kurven, die Abhängigkeiten daran
     /// (auch die des Benutzers) und die Punkte des Textes. Ein Punkt des Textes, den noch eine
     /// andere lebende Kurve benutzt (etwa eine Linie, gezeichnet mit Fang an einer Ecke), bleibt
@@ -619,15 +885,27 @@ impl Sketch {
             curves.extend(lines);
             points.extend(corners);
         }
-        let used = self.points_used_outside(&curves);
+        self.drop_text_parts(&curves, points);
+        self.texts[t].alive = false;
+        self.touch_structure();
+        Ok(())
+    }
+
+    /// Löscht die Kurven `curves` und die Punkte `points` eines Textes samt allen Abhängigkeiten
+    /// daran (auch internen und denen des Benutzers). Ein Punkt, den noch eine andere lebende
+    /// Kurve benutzt, bleibt als gewöhnlicher Punkt, ebenso Abhängigkeiten zwischen ihm und
+    /// anderer Geometrie, sofern sie keine der Kurven benutzen. Muster an den gelöschten Teilen
+    /// werden aufgelöst.
+    fn drop_text_parts(&mut self, curves: &HashSet<CurveId>, points: Vec<PointId>) {
+        let used = self.points_used_outside(curves);
         let points: HashSet<PointId> = points.into_iter().filter(|p| !used.contains(p)).collect();
-        for &c in &curves {
+        for &c in curves {
             self.dissolve_patterns_of_curve(c);
         }
         for &p in &points {
             self.dissolve_patterns_of_point(p);
         }
-        for &c in &curves {
+        for &c in curves {
             self.curves[c].alive = false;
         }
         for &p in &points {
@@ -646,9 +924,6 @@ impl Sketch {
         for k in dead {
             self.constraints[k].alive = false;
         }
-        self.texts[t].alive = false;
-        self.touch_structure();
-        Ok(())
     }
 
     /// Die Punkte aller lebenden Kurven außer `own`: Solche Punkte eines Textes bleiben beim

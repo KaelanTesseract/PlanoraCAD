@@ -1938,6 +1938,8 @@ sketch-text-spacing = Der Zeichenabstand muss zwischen 0 % und { $max } % liegen
 sketch-text-out-of-range = Der Text läge außerhalb des Rechenbereichs.
 sketch-text-bad-path = Diese Kurve geht nicht als Pfad: Buchstaben, Textrahmen und Griffe tragen keinen Text.
 sketch-text-path-degenerate = Der Pfad hat keine Länge.
+sketch-text-angle-held = Eine Abhängigkeit hält den Winkel des Textes. Lösche sie zuerst, um den Text zu drehen.
+sketch-text-what-angle = Der Winkel des Textes
 state-patterns-dissolved-on-load = { $n ->
     [one] Beim Öffnen wurde ein Muster aufgelöst, weil es seine Vorlage mit einem eigenen Exemplar verband. Die Geometrie bleibt.
    *[other] Beim Öffnen wurden { $n } Muster aufgelöst, weil sie ihre Vorlage mit einem eigenen Exemplar verbanden. Die Geometrie bleibt.

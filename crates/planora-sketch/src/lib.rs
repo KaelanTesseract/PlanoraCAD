@@ -66,6 +66,7 @@ pub use solid::{extrude_profile, revolve_profile};
 pub use solver::{Drag, SolveReport, SolveStatus};
 pub use spline_handles::{NodeCurvature, NodeHandle, Nodes, hermite_nodes};
 pub use text::{
-    HAlign, ReshapeReport, ShapedCache, TextData, TextId, TextParams, TextPlacement, VAlign,
+    HAlign, ReshapeReport, ShapedCache, TextData, TextId, TextKindEdit, TextParams, TextPlacement,
+    VAlign,
 };
 pub use transform::{CopyMap, Similarity, TransformBlock, TransformReport, TransformSet};
