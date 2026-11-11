@@ -286,6 +286,19 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                 se.choose_tool(sk, tool);
             }
         }
+        Action::SketchTextEdit => {
+            if let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut() {
+                se.edit_selected_text(sk);
+            }
+        }
+        Action::SketchTextExplode => {
+            // Fehler und Grund (Schriftliste, kein Text gewählt) stehen in der Meldung.
+            let state = &mut ws.active_tab_mut().state;
+            let fonts = state.fonts().cloned();
+            if let Some((se, sk)) = state.session_sketch_mut() {
+                let _ = se.explode_selected_texts(sk, fonts.as_deref());
+            }
+        }
         Action::SketchLookAt => ws.active_tab_mut().state.look_at_sketch(),
         Action::SketchToggleGrid | Action::SketchToggleSnap => {
             let state = &mut ws.active_tab_mut().state;

@@ -198,6 +198,12 @@ action_table! {
     /// Fusion „Text“ (Skizzen 8): im Menü „Erzeugen“, nicht in der Leiste; ohne Vorgabetaste
     /// (**Annahme**: Fusion hat keine), belegbar.
     SketchText, "skizze.text", "action-sketch-text", Sketch, [];
+    /// Öffnet den gewählten Text zum Ändern wie der Doppelklick (Skizzen 8, Spec C8); ohne
+    /// Vorgabetaste (**Annahme**), belegbar.
+    SketchTextEdit, "skizze.text_bearbeiten", "action-sketch-text-edit", Sketch, [];
+    /// Fusion „Text auflösen“ (Skizzen 8, Spec C9): alle gewählten Texte in einem Schritt; ohne
+    /// Vorgabetaste (**Annahme**), belegbar.
+    SketchTextExplode, "skizze.text_aufloesen", "action-sketch-text-explode", Sketch, [];
     /// Fusion „Blick auf“ (Look At): wie der Knopf in der Skizzenpalette; ohne Vorgabetaste.
     SketchLookAt, "skizze.blick_auf", "action-sketch-look-at", Sketch, [];
     /// Schalter „Skizzenraster“ der Skizzenpalette; ohne Vorgabetaste.

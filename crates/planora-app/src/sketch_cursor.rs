@@ -385,10 +385,17 @@ impl SketchSession {
         // Skizzen 7: Griffpunkte fangen nur, solange sie zu sehen sind.
         let shown = self.visible_handle_points(sk);
         // Buchstaben eines Textes bieten keinen Fang (Spec B9): Über einem Buchstaben ist der
-        // Zeiger frei, wie neben jeder Geometrie. Im Fang-Index bleiben sie nur für die Wahl.
-        let hit = index
-            .find_avoiding(raw, radius, &self.own_open_spots(sk), tol, &shown)
-            .filter(|hit| !on_glyph(sk, hit.snap));
+        // Zeiger frei, wie neben jeder Geometrie; liegt im Radius ein anderes Ziel (etwa die
+        // Rahmenlinie neben dem Buchstaben), fängt dieses. Im Fang-Index bleiben sie nur für die
+        // Wahl.
+        let hit = index.find_avoiding_where(
+            raw,
+            radius,
+            &self.own_open_spots(sk),
+            tol,
+            &shown,
+            &|snap| !on_glyph(sk, snap),
+        );
         if let Some(hit) = hit {
             cur.at = hit.at;
             cur.snap = hit.snap;

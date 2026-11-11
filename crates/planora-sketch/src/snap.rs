@@ -250,6 +250,21 @@ impl SnapIndex {
         tol: f64,
         visible: &[PointId],
     ) -> Option<SnapHit> {
+        self.find_avoiding_where(at, radius, avoid, tol, visible, &|_| true)
+    }
+
+    /// Wie [`find_avoiding`](Self::find_avoiding), aber nur Ziele, die `accept` annimmt. Ein
+    /// abgelehntes Ziel macht dem nächsten im Radius Platz, auch dem einer späteren Klasse
+    /// (Skizzen 8: Ein Buchstabe fängt nicht, die Rahmenlinie daneben schon).
+    pub fn find_avoiding_where(
+        &self,
+        at: DVec2,
+        radius: f64,
+        avoid: &[DVec2],
+        tol: f64,
+        visible: &[PointId],
+        accept: &dyn Fn(Snap) -> bool,
+    ) -> Option<SnapHit> {
         if !at.is_finite() {
             return None;
         }
@@ -259,8 +274,8 @@ impl SnapIndex {
             0.0
         };
         let mut best: Option<(f64, SnapHit)> = None;
-        let take = |best: &mut Option<(f64, SnapHit)>, radius, d, snap, p: DVec2| {
-            if !avoid.iter().any(|a| a.distance(p) <= tol) {
+        let take = |best: &mut Option<(f64, SnapHit)>, radius: f64, d: f64, snap, p: DVec2| {
+            if d <= radius && !avoid.iter().any(|a| a.distance(p) <= tol) && accept(snap) {
                 take(best, radius, d, snap, p);
             }
         };

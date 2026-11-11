@@ -627,6 +627,21 @@ pub(crate) fn err(e: impl std::fmt::Display) -> Msg {
     Msg::Raw(e.to_string())
 }
 
+/// Die Ablehnung der Skizze beim Löschen eines Teils eines Textes (Spec B8) als Meldung mit dem
+/// wörtlichen Schlüssel; andere Fehler beim Löschen bleiben still wie bisher.
+fn text_refusal(e: &SketchError) -> Option<Msg> {
+    let SketchError::InvalidInput(m) = e else {
+        return None;
+    };
+    if *m == tr!("sketch-text-part") {
+        Some(crate::msg!("sketch-text-part"))
+    } else if *m == tr!("sketch-text-on-path") {
+        Some(crate::msg!("sketch-text-on-path"))
+    } else {
+        None
+    }
+}
+
 fn status_ok(r: &SolveReport) -> bool {
     r.status == SolveStatus::Solved
 }
@@ -830,8 +845,12 @@ impl SketchSession {
         self.grip_drag = None;
         self.pattern.reset_after_jump();
         // Text (Review Focus 5): Der offene Abschnitt gehört zum alten Stand und bricht ab; das
-        // Werkzeug wartet wieder auf den Rahmen.
-        if self.tool == Tool::Text {
+        // Werkzeug wartet wieder auf den Rahmen. Beim Ändern gibt es den Text vielleicht nicht
+        // mehr: zurück zur Auswahl.
+        if self.text.as_ref().is_some_and(|t| t.editing.is_some()) {
+            self.text = None;
+            self.tool = Tool::Select;
+        } else if self.tool == Tool::Text {
             self.begin_text();
         }
         self.edit_label = None;
@@ -1337,6 +1356,11 @@ impl SketchSession {
             Snap::Curve(c) => Some(Item::Curve(c)),
             _ => None,
         };
+        // Ein Buchstabe (oder einer seiner Punkte) wählt den ganzen Text (Spec B9).
+        if let Some(t) = item.and_then(|i| crate::sketch_text::text_of_item(sk, i)) {
+            self.select_text(sk, t, extend);
+            return;
+        }
         match (item, extend) {
             (Some(i), true) => {
                 if let Some(k) = self.selection.iter().position(|&s| s == i) {
@@ -1868,8 +1892,39 @@ impl SketchSession {
                 found.push(Item::Point(p));
             }
         }
+        // Ist ein Buchstabe dabei, nimmt der Rahmen den ganzen Text (Spec B9).
+        let hit: std::collections::HashSet<Item> = found.iter().copied().collect();
+        for (t, d) in sk.texts() {
+            if d.curves.iter().any(|&c| hit.contains(&Item::Curve(c))) {
+                found.extend(
+                    crate::sketch_text::text_items(sk, t)
+                        .into_iter()
+                        .filter(|i| !hit.contains(i)),
+                );
+            }
+        }
         self.take_selection(found, extend);
         self.sync_picked(sk);
+    }
+
+    /// Wählt den ganzen Text `t`, also alle seine Buchstaben (Spec B9). Mit `extend` schaltet es
+    /// um: Ist der Text schon ganz gewählt, wird er ganz abgewählt, sonst ergänzt.
+    pub fn select_text(&mut self, sk: &Sketch, t: planora_sketch::text::TextId, extend: bool) {
+        let items = crate::sketch_text::text_items(sk, t);
+        self.message = None;
+        self.drop_curve_picks();
+        if !extend {
+            self.selection = items;
+        } else if items.iter().all(|i| self.selection.contains(i)) {
+            self.selection.retain(|i| !items.contains(i));
+        } else {
+            for i in items {
+                if !self.selection.contains(&i) {
+                    self.selection.push(i);
+                }
+            }
+        }
+        self.sync_picks();
     }
 
     /// Wählt die zusammenhängende Kette um `c` ([`Sketch::connected_chain`]); `extend` ergänzt.
@@ -2797,6 +2852,11 @@ impl SketchSession {
         // Meldung nennt den Grund. `atomic` meldet aufgelöste Muster.
         let _ = self.atomic(sk, |se, sk, _| {
             let mut orphans: Vec<PointId> = Vec::new();
+            // Ein gewählter Buchstabe löscht seinen ganzen Text samt Rahmen (Spec B8), vor allem
+            // anderen: Danach geht auch ein gewählter Pfad des Textes.
+            for t in se.selected_texts(sk) {
+                sk.remove_text(t).map_err(err)?;
+            }
             se.drop_curve_picks();
             // Abhängigkeiten, die mit abgewählten Exemplaren entfallen.
             let mut dropped = 0;
@@ -2829,20 +2889,34 @@ impl SketchSession {
                         }
                     }
                     Item::Curve(c) => {
-                        if let Some(d) = sk.curve(c) {
-                            orphans.extend(d.kind.points());
+                        let Some(d) = sk.curve(c) else {
+                            continue;
+                        };
+                        orphans.extend(d.kind.points());
+                        // Rahmenlinie allein, Pfad mit Text: abgelehnt mit dem Grund (Spec B8).
+                        if let Err(e) = sk.remove_curve(c)
+                            && let Some(m) = text_refusal(&e)
+                        {
+                            return Err(m);
                         }
-                        let _ = sk.remove_curve(c);
                     }
                     Item::Point(p) => {
                         // Andere Punkte der mitgelöschten Kurven werden ebenso geprüft.
+                        if sk.point_xy(p).is_err() {
+                            continue;
+                        }
                         orphans.extend(
                             sk.curves()
                                 .map(|(_, c)| c.kind.points())
                                 .filter(|pts| pts.contains(&p))
                                 .flatten(),
                         );
-                        let _ = sk.remove_point(p);
+                        // Ecke des Rahmens, Punkt eines Pfads mit Text: abgelehnt (Spec B8).
+                        if let Err(e) = sk.remove_point(p)
+                            && let Some(m) = text_refusal(&e)
+                        {
+                            return Err(m);
+                        }
                     }
                 }
             }
@@ -2887,12 +2961,20 @@ impl SketchSession {
             .collect()
     }
 
-    /// Schaltet bei den ausgewählten Kurven die Konstruktionseigenschaft um.
+    /// Schaltet bei den ausgewählten Kurven die Konstruktionseigenschaft um. Ein Text schaltet
+    /// als Ganzes, einmal (Spec B10): Die Skizze schaltet mit einem Buchstaben alle um.
     pub fn toggle_construction(&mut self, sk: &mut Sketch) {
+        let mut texts = Vec::new();
         for item in &self.selection {
             if let Item::Curve(c) = *item
                 && let Some(construction) = sk.curve(c).map(|d| d.construction)
             {
+                if let Some(t) = sk.text_of_curve(c) {
+                    if texts.contains(&t) {
+                        continue;
+                    }
+                    texts.push(t);
+                }
                 let _ = sk.set_construction(c, !construction);
             }
         }

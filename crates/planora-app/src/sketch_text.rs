@@ -13,25 +13,39 @@
 //! als **einen** Rückgängig-Schritt an ([`SketchSession::confirm_text`]); Esc, Rechtsklick,
 //! Werkzeugwechsel und Abbrechen hinterlassen nichts. Gesetzt wird nur über
 //! [`crate::fonts_library::Guarded`].
+//!
+//! **Ändern** (Spec C8): Doppelklick auf einen Buchstaben, der Knopf „Text bearbeiten“ und die
+//! Aktion öffnen denselben Abschnitt mit den Werten des Textes ([`SketchSession::begin_text_edit`]).
+//! Die Vorschau ist das Ergebnis von OK auf einer Kopie der Skizze; an ihrer Stelle zeichnet die
+//! Ansicht die Buchstaben des Textes nicht ([`SketchSession::text_hidden`]). OK ändert den Text in
+//! **einem** Schritt „Text ändern“ ([`Sketch::edit_text`], dazu [`Sketch::set_text_angle`]),
+//! Abbrechen hinterlässt nichts. Die gemerkten Werte für neue Texte bleiben dabei, wie sie sind
+//! (**Annahme**). **Text auflösen** (Spec C9) wirkt auf alle gewählten Texte in einem Schritt
+//! ([`SketchSession::explode_selected_texts`]).
 
 use crate::fonts_library::Guarded;
 use crate::formula_field::{FormulaField, number_field_text, resolve, value_field_text};
 use crate::msg::Msg;
 use crate::sketch_cursor::DrawCursor;
-use crate::sketch_state::{SketchSession, Tool, err};
+use crate::sketch_state::{Item, SketchSession, Tool, err};
 use crate::theme;
 use egui::{Key, Modifiers, RichText};
 use planora_feature::{ParamScope, ParamUnit, SketchFeature};
 use planora_i18n::{DisplayUnit, current_unit, tr};
 use planora_math::DVec2;
-use planora_sketch::model::{CurveId, Sketch};
+use planora_sketch::SketchError;
+use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch};
 use planora_sketch::snap::SnapHit;
-use planora_sketch::text::{HAlign, TextId, TextParams, TextPlacement, VAlign, path_content};
+use planora_sketch::text::{
+    HAlign, TextId, TextKindEdit, TextParams, TextPlacement, VAlign, path_content,
+};
 use planora_sketch::text_layout::place_box;
 use planora_sketch::text_shape::{
     Contour, MAX_TEXT_CHARS, MAX_TEXT_CURVES, Seg, TextShape, TextShapeError, TextShaper, TextStyle,
 };
 use planora_text::{FALLBACK_FAMILY, FontLibrary};
+use std::collections::HashSet;
+use std::f64::consts::TAU;
 use std::sync::{Arc, Mutex};
 
 /// Vorgabeschrift, wenn sie installiert ist (Spec C4, **Annahme**); sonst [`FALLBACK_FAMILY`].
@@ -50,6 +64,13 @@ const CONTENT_ROWS: usize = 3;
 const FONT_LIST_H: f32 = 240.0;
 /// Abschnitte je Bézierstück in der Vorschau.
 const PREVIEW_STEPS: usize = 8;
+/// Abschnitte je Umlauf für Kurven der Vorschau beim Ändern, die weder Strecke noch Bézierstück
+/// sind (Buchstaben sind es immer; nur zur Sicherheit).
+const PREVIEW_STEPS_PER_TURN: usize = 64;
+/// Nachkommastellen eines vorbelegten Winkelfelds beim Ändern.
+const FIELD_DIGITS: i32 = 9;
+/// Ab dieser Abweichung im Bogenmaß gilt der Winkel beim Ändern als geändert.
+const ANGLE_EPS: f64 = 1e-12;
 /// Feste Kennungen der Felder: Sie bleiben, wenn aus einer Zahl eine Formel wird.
 const CONTENT_ID: &str = "planora-sketch-text-content";
 const HEIGHT_ID: &str = "planora-sketch-text-height";
@@ -135,6 +156,12 @@ struct PlaceKey {
     fit: bool,
     height: f64,
     flips: (bool, bool),
+    /// Winkel (beim Ändern legt er auch den neuen Rahmen eines Textes auf Pfad).
+    angle: f64,
+    /// Beim Ändern: Stand der Skizze, denn die Vorschau ist das Ergebnis auf einer Kopie.
+    revision: Option<u64>,
+    /// Beim Ändern: Inhalt und Stil (die Kopie braucht die Werte, nicht nur die Form).
+    params: Option<TextParams>,
 }
 
 /// Ein Eintrag der Klappliste „Schriftart“: Familie und Beschriftung (eine fehlende mit
@@ -190,6 +217,9 @@ pub struct TextTool {
     pub angle: f64,
     /// Der bearbeitete Text (Ändern, Spec C8).
     pub editing: Option<TextId>,
+    /// Beim Ändern eines Textes im Rahmen: seine Ecken und sein Winkel beim Öffnen. Der Rahmen
+    /// der Vorschau dreht daraus um Ecke 0 wie [`Sketch::set_text_angle`].
+    edit_frame: Option<([DVec2; 4], f64)>,
     /// Was zuletzt gesetzt wurde (Vorschau); passt zu `shaped_for`.
     preview: Option<Arc<TextShape>>,
     /// Die zuletzt gelegte Vorschau (`None`: nichts zu zeigen) und wofür.
@@ -263,6 +293,7 @@ impl TextTool {
             fit: m.fit,
             angle: 0.0,
             editing: None,
+            edit_frame: None,
             preview: None,
             placed: None,
             shapings: 0,
@@ -278,6 +309,59 @@ impl TextTool {
             font_search: String::new(),
             font_open: false,
         }
+    }
+
+    /// Das Werkzeug zum Ändern des Textes `t` (Spec C8): Art, Inhalt, Schrift, Höhe, Abstand,
+    /// Umkehren, Ausrichtung, Pfad und Winkel wie im Text. Werte, die der Text nicht hat (bei
+    /// Text auf Pfad die senkrechte Ausrichtung, im Rahmen Platzierung und „An Pfad anpassen“),
+    /// kommen aus `memory` bzw. den Vorgaben. `None` für einen unbekannten Text.
+    pub fn for_edit(
+        sk: &Sketch,
+        t: TextId,
+        memory: Option<&TextMemory>,
+        unit: DisplayUnit,
+    ) -> Option<TextTool> {
+        let d = sk.text(t)?;
+        let mut tool = TextTool::new(memory, unit);
+        tool.editing = Some(t);
+        tool.font_pending = false;
+        // Wie nach dem Rahmen: Das Textfeld hat gleich die Tastatur.
+        tool.focus_content = true;
+        tool.params = TextParams {
+            content: d.content.clone(),
+            style: d.style.clone(),
+            height: d.height,
+            flip_h: d.flip_h,
+            flip_v: d.flip_v,
+        };
+        tool.height_text = value_field_text(d.height, ParamUnit::Length);
+        tool.spacing_text = number_field_text(d.style.spacing);
+        match d.placement {
+            TextPlacement::Box { corners, h, v, .. } => {
+                tool.kind = TextToolKind::Box;
+                tool.h = h;
+                tool.v = v;
+                tool.angle = sk.text_angle(t).unwrap_or(0.0);
+                let at = corners.map(|p| sk.point_xy(p).unwrap_or(DVec2::ZERO));
+                tool.edit_frame = Some((at, tool.angle));
+            }
+            TextPlacement::Path {
+                path,
+                above,
+                fit,
+                h,
+            } => {
+                tool.kind = TextToolKind::Path;
+                tool.path = Some(path);
+                tool.above = above;
+                tool.fit = fit;
+                tool.h = h;
+            }
+        }
+        // Im Feld gerundet (20° statt 19,999999999999996°); der Winkel selbst bleibt genau und
+        // ändert sich erst, wenn jemand das Feld ändert.
+        tool.angle_text = number_field_text(round_digits(tool.angle.to_degrees()));
+        Some(tool)
     }
 
     /// Wird gerade der Rahmen aufgezogen (Art „Text“, noch keine zwei Ecken)?
@@ -326,12 +410,21 @@ impl TextTool {
             fit: self.fit,
             height: self.params.height,
             flips: (self.params.flip_h, self.params.flip_v),
+            angle: self.angle,
+            revision: self.editing.map(|_| sk.revision()),
+            params: self.editing.map(|_| self.params.clone()),
         })
     }
 
     /// Legt die Vorschau in den Rahmen bzw. auf den Pfad (siehe [`SketchSession::text_preview`]).
     fn place(&self, sk: &Sketch) -> Option<Vec<Contour>> {
         let shape = self.preview.as_ref()?;
+        if let Some(t) = self.editing {
+            // Ändern: genau das Ergebnis von OK, auf einer Kopie.
+            let mut copy = sk.clone();
+            self.apply_edit(&mut copy, t, shape.clone()).ok()?;
+            return text_contours(&copy, t);
+        }
         let p = &self.params;
         match self.kind {
             TextToolKind::Box => {
@@ -352,6 +445,15 @@ impl TextTool {
     /// Die Ecken des Rahmens wie beim Anlegen: achsenparallel, Ecke 0 unten links, Linie 0 → 1 die
     /// Grundlinie, gedreht um Ecke 0 um den Winkel. `None` vor dem zweiten Klick.
     pub fn frame_corners(&self) -> Option<[DVec2; 4]> {
+        // Ändern: der Rahmen des Textes, um Ecke 0 auf den Winkel gedreht.
+        if let Some((frame, start)) = self.edit_frame {
+            let (sin, cos) = (self.angle - start).sin_cos();
+            let o = frame[0];
+            return Some(frame.map(|p| {
+                let r = p - o;
+                o + DVec2::new(r.x * cos - r.y * sin, r.x * sin + r.y * cos)
+            }));
+        }
         let [a, b] = self.corners.as_slice() else {
             return None;
         };
@@ -375,6 +477,39 @@ impl TextTool {
             TextToolKind::Box => self.params.content.clone(),
             TextToolKind::Path => path_content(&self.params.content),
         }
+    }
+
+    /// Ändert den Text `t` in `sk` nach den Werten des Werkzeugs (Spec C8): Werte, Art und Lage
+    /// über [`Sketch::edit_text`], im Rahmen danach der Winkel, wenn er abweicht. Bei einem Fehler
+    /// kann `sk` halb geändert sein; der Aufrufer arbeitet atomar oder auf einer Kopie.
+    fn apply_edit(
+        &self,
+        sk: &mut Sketch,
+        t: TextId,
+        shape: Arc<TextShape>,
+    ) -> Result<(), SketchError> {
+        let kind = match self.kind {
+            TextToolKind::Box => TextKindEdit::Box {
+                h: self.h,
+                v: self.v,
+            },
+            TextToolKind::Path => TextKindEdit::Path {
+                path: self.path.ok_or(SketchError::UnknownObject)?,
+                above: self.above,
+                fit: self.fit,
+                h: self.h,
+            },
+        };
+        sk.edit_text(t, self.params.clone(), kind, shape)?;
+        if self.kind == TextToolKind::Box
+            && let Some(now) = sk.text_angle(t)
+        {
+            let diff = (self.angle - now).rem_euclid(TAU);
+            if diff > ANGLE_EPS && TAU - diff > ANGLE_EPS {
+                sk.set_text_angle(t, self.angle)?;
+            }
+        }
+        Ok(())
     }
 
     /// Wählt die Vorgabeschrift, sobald die Schriftliste da ist (Spec C4).
@@ -440,6 +575,13 @@ impl TextTool {
     }
 }
 
+/// Rundet auf [`FIELD_DIGITS`] Nachkommastellen (für vorbelegte Felder).
+fn round_digits(v: f64) -> f64 {
+    let scale = 10f64.powi(FIELD_DIGITS);
+    let r = (v * scale).round() / scale;
+    if r.is_finite() { r } else { v }
+}
+
 /// Meldung zu einem Fehler beim Setzen.
 fn shape_error_msg(e: TextShapeError) -> Msg {
     match e {
@@ -494,6 +636,44 @@ pub fn contour_polylines(contours: &[Contour]) -> Vec<Vec<DVec2>> {
         .collect()
 }
 
+/// Die Buchstaben des Textes `t` als Konturen aus je einem Stück für die Vorschau: Strecke,
+/// Kegelschnitt als quadratische, Spline mit vier Kontrollpunkten als kubische Bézierkurve.
+fn text_contours(sk: &Sketch, t: TextId) -> Option<Vec<Contour>> {
+    let d = sk.text(t)?;
+    let at = |p: PointId| sk.point_xy(p).ok();
+    let mut out = Vec::with_capacity(d.curves.len());
+    for &c in &d.curves {
+        let Some(data) = sk.curve(c) else {
+            continue;
+        };
+        let piece = match &data.kind {
+            CurveKind::Line { a, b } => Some((at(*a)?, vec![Seg::Line(at(*b)?)])),
+            CurveKind::Conic {
+                start, end, apex, ..
+            } => Some((at(*start)?, vec![Seg::Quad(at(*apex)?, at(*end)?)])),
+            CurveKind::ControlSpline { points, degree, .. }
+                if *degree == 3 && points.len() == 4 =>
+            {
+                Some((
+                    at(points[0])?,
+                    vec![Seg::Cubic(at(points[1])?, at(points[2])?, at(points[3])?)],
+                ))
+            }
+            _ => None,
+        };
+        let (start, segs) = match piece {
+            Some(p) => p,
+            None => {
+                let line = sk.curve_polyline(c, PREVIEW_STEPS_PER_TURN)?;
+                let (&start, rest) = line.split_first()?;
+                (start, rest.iter().map(|&p| Seg::Line(p)).collect())
+            }
+        };
+        out.push(Contour { start, segs });
+    }
+    Some(out)
+}
+
 impl SketchSession {
     /// Läuft das Werkzeug „Text“?
     pub fn runs_text(&self) -> bool {
@@ -518,10 +698,11 @@ impl SketchSession {
     /// Gesetzt wird nur neu, wenn sich Inhalt oder Stil geändert haben, gelegt nur, wenn sich dazu
     /// Lage, Werte oder der Stand der Skizze geändert haben; ruhige Bilder tun nichts. Ein
     /// gelöschter Pfad gilt als nicht gewählt. Ohne Schriftliste (sie wird noch gelesen) wird
-    /// nichts gesetzt.
-    pub fn update_text_preview(&mut self, sk: &Sketch, fonts: Option<&FontLibrary>) {
+    /// nichts gesetzt. `true`, wenn sich die gelegte Vorschau geändert hat: Die Ansicht hat dieses
+    /// Bild schon gezeichnet und braucht ein weiteres.
+    pub fn update_text_preview(&mut self, sk: &Sketch, fonts: Option<&FontLibrary>) -> bool {
         let Some(t) = self.text.as_mut() else {
-            return;
+            return false;
         };
         if t.path.is_some_and(|p| sk.curve(p).is_none()) {
             t.path = None;
@@ -538,15 +719,118 @@ impl SketchSession {
             }
         }
         let Some(key) = t.place_key(sk) else {
+            let shown = t.placed.as_ref().is_some_and(|(_, p)| p.is_some());
             t.placed = None;
-            return;
+            return shown;
         };
         if t.placed.as_ref().is_some_and(|(k, _)| *k == key) {
-            return;
+            return false;
         }
         let placed = t.place(sk).map(Arc::new);
         t.placements += 1;
+        let changed = t
+            .placed
+            .as_ref()
+            .is_none_or(|(_, old)| old.is_some() || placed.is_some());
         t.placed = Some((key, placed));
+        changed
+    }
+
+    /// Öffnet den Text `t` zum Ändern (Spec C8: Doppelklick, Knopf „Text bearbeiten“, Aktion):
+    /// das Werkzeug „Text“ mit den Werten des Textes. Ein laufendes Werkzeug bricht ab, die
+    /// Auswahl bleibt. `false` für einen unbekannten Text.
+    pub fn begin_text_edit(&mut self, sk: &mut Sketch, t: TextId) -> bool {
+        let memory = self.text_memory.get();
+        let Some(tool) = TextTool::for_edit(sk, t, memory.as_ref(), current_unit()) else {
+            return false;
+        };
+        self.set_tool(sk, Tool::Text);
+        self.message = None;
+        self.text = Some(tool);
+        true
+    }
+
+    /// Die gewählten Texte (Spec B9, C9): jeder Text, von dem ein Buchstabe gewählt ist, einmal,
+    /// in der Reihenfolge der Auswahl. Rahmenlinien und Ecken allein zählen nicht.
+    pub fn selected_texts(&self, sk: &Sketch) -> Vec<TextId> {
+        let mut out = Vec::new();
+        if sk.texts().next().is_none() {
+            return out;
+        }
+        for item in &self.selection {
+            if let Some(t) = text_of_item(sk, *item)
+                && !out.contains(&t)
+            {
+                out.push(t);
+            }
+        }
+        out
+    }
+
+    /// „Text bearbeiten“ (Knopf und Aktion): öffnet den ersten gewählten Text; ohne gewählten
+    /// Text eine Meldung.
+    pub fn edit_selected_text(&mut self, sk: &mut Sketch) {
+        match self.selected_texts(sk).first() {
+            Some(&t) => {
+                self.begin_text_edit(sk, t);
+            }
+            None => self.message = Some(crate::msg!("sketch-text-select-first")),
+        }
+    }
+
+    /// „Text auflösen“ (Spec C9, F): alle gewählten Texte als **ein** Rückgängig-Schritt („Text
+    /// auflösen“). Die Kurven bleiben gewählt. Solange die Schriftliste gelesen wird, wartet der
+    /// Befehl mit Meldung (Spec G4); ohne gewählten Text ebenso eine Meldung.
+    pub fn explode_selected_texts(
+        &mut self,
+        sk: &mut Sketch,
+        fonts: Option<&FontLibrary>,
+    ) -> Result<(), String> {
+        let refuse = |se: &mut SketchSession, m: Msg| {
+            let text = m.text();
+            se.message = Some(m);
+            Err(text)
+        };
+        if fonts.is_none() {
+            return refuse(self, crate::msg!("sketch-text-fonts-loading"));
+        }
+        let texts = self.selected_texts(sk);
+        if texts.is_empty() {
+            return refuse(self, crate::msg!("sketch-text-select-first"));
+        }
+        if self.runs_text() {
+            self.set_tool(sk, Tool::Select);
+        }
+        self.atomic(sk, |se, sk, prior| {
+            sk.explode_texts(&texts).map_err(err)?;
+            se.solve_checked(sk, prior)?;
+            se.edit_label = Some(crate::msg!("undo-sketch-text-explode"));
+            Ok(())
+        })?;
+        // Rahmenlinien und Ecken sind fort.
+        self.forget_removed(sk);
+        Ok(())
+    }
+
+    /// Kurven und Punkte, die die Ansicht beim Ändern nicht zeichnet (an ihrer Stelle steht die
+    /// Vorschau): die Buchstaben des Textes, auf dem Pfad dazu sein Rahmen, den OK löscht.
+    pub fn text_hidden(&self, sk: &Sketch) -> (HashSet<CurveId>, HashSet<PointId>) {
+        let Some((tool, d)) = self
+            .text
+            .as_ref()
+            .filter(|_| self.runs_text())
+            .and_then(|tool| Some((tool, sk.text(tool.editing?)?)))
+        else {
+            return Default::default();
+        };
+        let mut curves: HashSet<CurveId> = d.curves.iter().copied().collect();
+        let points: HashSet<PointId> = d.points.iter().copied().collect();
+        if tool.kind == TextToolKind::Path
+            && let TextPlacement::Box { lines, .. } = d.placement
+        {
+            curves.extend(lines);
+        }
+        (curves, points)
     }
 
     /// Die zuletzt gelegte Vorschau, ohne neu zu rechnen (zum Zeichnen in jedem Bild).
@@ -650,7 +934,7 @@ impl SketchSession {
             TextToolKind::Path if t.path.is_none_or(|p| sf.sketch.curve(p).is_none()) => {
                 return refuse(self, crate::msg!("sketch-text-need-path"));
             }
-            TextToolKind::Box if t.corners.len() < 2 => {
+            TextToolKind::Box if t.editing.is_none() && t.corners.len() < 2 => {
                 return refuse(self, crate::msg!("sketch-text-need-frame"));
             }
             _ => {}
@@ -669,6 +953,9 @@ impl SketchSession {
         // Ein Text nur aus Zeichen ohne Umriss gilt wie ein leerer (Ledger Task 2).
         if shape.segment_count() == 0 {
             return refuse(self, crate::msg!("sketch-text-empty"));
+        }
+        if let Some(id) = t.editing {
+            return self.confirm_text_edit(sf, &t, id, shape);
         }
         let tool = t.clone();
         self.atomic(&mut sf.sketch, |se, sk, prior| {
@@ -719,6 +1006,70 @@ impl SketchSession {
         self.message = note;
         Ok(())
     }
+
+    /// OK beim Ändern (Spec C8): ändert den Text `id` nach `tool` als **ein** Rückgängig-Schritt
+    /// („Text ändern“); ein OK ohne Änderung ist keiner. Abgelehnt bleibt alles, wie es war, und
+    /// der Abschnitt offen. Die gemerkten Werte für neue Texte bleiben (**Annahme**).
+    fn confirm_text_edit(
+        &mut self,
+        sf: &mut SketchFeature,
+        tool: &TextTool,
+        id: TextId,
+        shape: Arc<TextShape>,
+    ) -> Result<(), String> {
+        let untouched = sf.sketch.to_data();
+        self.atomic(&mut sf.sketch, |se, sk, prior| {
+            tool.apply_edit(sk, id, shape).map_err(err)?;
+            se.solve_checked(sk, prior)?;
+            se.edit_label = Some(crate::msg!("undo-sketch-text-edit"));
+            Ok(())
+        })?;
+        if sf.sketch.to_data() == untouched {
+            self.edit_label = None;
+        }
+        let note = self.message.take();
+        self.selection.clear();
+        self.drop_curve_picks();
+        self.set_tool(&mut sf.sketch, Tool::Select);
+        self.message = note;
+        Ok(())
+    }
+}
+
+/// Der Text, zu dem `item` gehört: ein Buchstabe oder ein Punkt eines Buchstabens. Rahmenlinien
+/// und Ecken gehören nicht dazu (sie sind einzeln wählbar, Spec B9).
+pub(crate) fn text_of_item(sk: &Sketch, item: Item) -> Option<TextId> {
+    match item {
+        Item::Curve(c) => sk.text_of_curve(c),
+        Item::Point(p) => sk
+            .texts()
+            .find(|(_, d)| d.points.contains(&p))
+            .map(|(t, _)| t),
+        Item::Constraint(_) => None,
+    }
+}
+
+/// Die Buchstaben des Textes `t` als Auswahl (Spec B9: ein Klick wählt den ganzen Text).
+pub(crate) fn text_items(sk: &Sketch, t: TextId) -> Vec<Item> {
+    sk.text(t)
+        .map(|d| d.curves.iter().map(|&c| Item::Curve(c)).collect())
+        .unwrap_or_default()
+}
+
+/// Die Hinweise zur gesetzten Form (Spec C10): Ersatzschrift, nachgebildetes Fett oder Kursiv,
+/// fehlende Zeichen, je eine Zeile.
+pub fn shape_hints(shape: &TextShape) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(font) = &shape.substituted {
+        out.push(tr!("sketch-text-hint-substituted", font = font.clone()));
+    }
+    if shape.synthetic {
+        out.push(tr!("sketch-text-hint-synthetic"));
+    }
+    if shape.missing_chars {
+        out.push(tr!("sketch-text-hint-missing-chars"));
+    }
+    out
 }
 
 /// Was der Abschnitt in diesem Bild ausgelöst hat.
@@ -818,6 +1169,10 @@ pub(crate) fn text_options(
         ui.toggle_value(&mut t.params.style.bold, tr!("sketch-text-bold"));
         ui.toggle_value(&mut t.params.style.italic, tr!("sketch-text-italic"));
     });
+    // Hinweise zur Schrift (Spec C10): aus der letzten Vorschau, je eine Zeile.
+    for hint in t.preview.as_deref().map(shape_hints).unwrap_or_default() {
+        ui.label(RichText::new(hint).small().weak());
+    }
     // Höhe, Zeichenabstand, Winkel
     let locked = t.align_locked();
     number_row(ui, &mut out, t, NumberField::Height, true, scope);

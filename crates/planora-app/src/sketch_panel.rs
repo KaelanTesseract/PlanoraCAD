@@ -645,8 +645,11 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     };
     side_field(ctx, rects.right, dark, se, sf, side);
     // Text: die Vorschau nach den Eingaben dieses Bilds setzen und legen, höchstens einmal je Bild
-    // und nur nach einer Änderung (Spec C6).
-    se.update_text_preview(&sf.sketch, fonts.as_deref());
+    // und nur nach einer Änderung (Spec C6). Die Ansicht hat dieses Bild schon gezeichnet: Hat
+    // sich die Vorschau geändert, kommt gleich ein weiteres.
+    if se.update_text_preview(&sf.sketch, fonts.as_deref()) {
+        ctx.request_repaint();
+    }
     let close = foot_field(ctx, rects.bottom, dark, se, &mut sf.sketch);
     state.show_sketch_profiles = show_profiles;
     state.sketch_show_grid = palette.grid;
@@ -1391,6 +1394,8 @@ fn side_contents(
     }
     // „Verknüpfung aufheben“ gibt es nur, wenn eine gewählte Kurve eine Projektion ist.
     let can_break_link = !se.selected_projections(sf).is_empty();
+    // „Text bearbeiten“ und „Text auflösen“ nur, wenn ein Text gewählt ist (Spec C8, C9).
+    let has_text = !se.selected_texts(&sf.sketch).is_empty();
     let sk = &mut sf.sketch;
     ui.separator();
 
@@ -1457,6 +1462,41 @@ fn side_contents(
         {
             palette.break_link = true;
         }
+        if has_text {
+            let mouse = crate::keymap::mouse::current(ui.ctx());
+            if tool_button(
+                ui,
+                IconSource::Hand(HandIcon::Text),
+                &Action::SketchTextEdit.label(),
+                true,
+            )
+            .on_hover_text(with_hint(
+                &mouse,
+                Action::SketchTextEdit,
+                &tr!("sketch-text-edit-hint"),
+            ))
+            .clicked()
+            {
+                se.edit_selected_text(sk);
+            }
+            // Auflösen wartet auf die Schriftliste (Spec G4).
+            if tool_button(
+                ui,
+                IconSource::Hand(HandIcon::ExplodeText),
+                &Action::SketchTextExplode.label(),
+                fonts.is_some(),
+            )
+            .on_hover_text(with_hint(
+                &mouse,
+                Action::SketchTextExplode,
+                &tr!("sketch-text-explode-hint"),
+            ))
+            .on_disabled_hover_text(tr!("sketch-text-fonts-loading"))
+            .clicked()
+            {
+                let _ = se.explode_selected_texts(sk, fonts);
+            }
+        }
         if tool_button(
             ui,
             IconSource::Font(Icon::Mirror),
@@ -1483,11 +1523,14 @@ fn side_contents(
             ui,
             IconSource::Font(Icon::Delete),
             &tr!("action-delete"),
-            // In der Anordnung gehört die Auswahl der Vorlage (wie Entf in der Ansicht).
-            !se.selection.is_empty() && !se.runs_pattern(),
+            // In der Anordnung gehört die Auswahl der Vorlage (wie Entf in der Ansicht), ebenso
+            // bei offenem Abschnitt „Text“.
+            !se.selection.is_empty() && !se.runs_pattern() && !se.runs_text(),
         )
         .on_disabled_hover_text(if se.runs_pattern() {
             tr!("sketch-delete-in-pattern")
+        } else if se.runs_text() {
+            tr!("sketch-delete-in-text")
         } else {
             tr!("sketch-delete-disabled")
         })
@@ -1903,8 +1946,9 @@ fn constraint_list(
                         let delete_row = tr!("sketch-delete-row");
                         // In der Anordnung gehört die Auswahl der Vorlage: gesperrt wie der Knopf
                         // „Löschen“ im Skizzenfeld.
+                        let blocked = se.runs_pattern() || se.runs_text();
                         delete = ui
-                            .add_enabled(!se.runs_pattern(), |ui: &mut egui::Ui| {
+                            .add_enabled(!blocked, |ui: &mut egui::Ui| {
                                 icons::source_icon_button(
                                     ui,
                                     IconSource::Font(Icon::Delete),
@@ -1913,7 +1957,11 @@ fn constraint_list(
                                 )
                             })
                             .on_hover_text(&delete_row)
-                            .on_disabled_hover_text(tr!("sketch-delete-in-pattern"))
+                            .on_disabled_hover_text(if se.runs_text() {
+                                tr!("sketch-delete-in-text")
+                            } else {
+                                tr!("sketch-delete-in-pattern")
+                            })
                             .clicked();
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                             name = Some(ui.selectable_label(selected, text));
@@ -1978,7 +2026,7 @@ fn constraint_list(
                         let _ = se.toggle_radius_diameter(sf, id);
                     }
                 }
-                if delete && !se.runs_pattern() {
+                if delete && !se.runs_pattern() && !se.runs_text() {
                     se.selection = vec![item];
                     se.delete_selection(&mut sf.sketch);
                 }

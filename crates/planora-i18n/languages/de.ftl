@@ -127,6 +127,8 @@ action-sketch-dimension = Skizzenbemaßung
 action-sketch-pattern-rect = Rechteckige Anordnung
 action-sketch-pattern-circular = Kreisförmige Anordnung
 action-sketch-text = Text
+action-sketch-text-edit = Text bearbeiten
+action-sketch-text-explode = Text auflösen
 action-sketch-show-shortcuts = Tastenkürzel in der Skizze anzeigen
 action-drawing-dimension = Maß
 action-drawing-balloon = Position
@@ -521,6 +523,8 @@ undo-pattern-rect = Rechteckige Anordnung
 undo-pattern-circular = Kreisförmige Anordnung
 undo-pattern-edit = Muster bearbeiten
 undo-sketch-text-create = Text erstellen
+undo-sketch-text-edit = Text ändern
+undo-sketch-text-explode = Text auflösen
 
 ## Projekte-Fenster
 projects-title = Projekte
@@ -1987,6 +1991,13 @@ sketch-text-ok-hint = Legt den Text an (Strg+Eingabe im Textfeld)
 sketch-text-fonts-loading = Schriften werden gelesen …
 sketch-text-need-path = Wähle zuerst den Pfad: Klicke auf eine Kurve.
 sketch-text-need-frame = Ziehe zuerst den Rahmen mit zwei Klicks auf.
+sketch-text-hint-substituted = Schrift „{ $font }“ fehlt auf diesem Rechner, ersetzt durch Montserrat.
+sketch-text-hint-synthetic = Fett oder Kursiv ist nachgebildet.
+sketch-text-hint-missing-chars = Zeichen fehlen, ihr Platz bleibt leer.
+sketch-text-edit-hint = Öffnet den gewählten Text zum Ändern (auch Doppelklick auf den Text)
+sketch-text-explode-hint = Macht aus den gewählten Texten feste einzelne Kurven. Zurück geht es nur mit Rückgängig.
+sketch-text-select-first = Wähle zuerst einen Text.
+sketch-delete-in-text = Solange der Abschnitt „Text“ offen ist, löscht Entf nichts.
 state-patterns-dissolved-on-load = { $n ->
     [one] Beim Öffnen wurde ein Muster aufgelöst, weil es seine Vorlage mit einem eigenen Exemplar verband. Die Geometrie bleibt.
    *[other] Beim Öffnen wurden { $n } Muster aufgelöst, weil sie ihre Vorlage mit einem eigenen Exemplar verbanden. Die Geometrie bleibt.

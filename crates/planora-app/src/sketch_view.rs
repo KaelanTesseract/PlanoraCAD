@@ -1482,9 +1482,19 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
                     Snap::Curve(c) => Some(Item::Curve(c)),
                     _ => None,
                 };
-                let edited = item.is_some_and(|i| se.begin_pattern_edit_item(&mut sf.sketch, i));
-                if !edited && let Snap::Curve(c) = snap {
-                    se.select_chain(&sf.sketch, c, shift);
+                // Ein Buchstabe öffnet seinen Text zum Ändern (Skizzen 8, Spec C8), sonst wählt
+                // er den ganzen Text statt einer Kette.
+                let text = item.and_then(|i| crate::sketch_text::text_of_item(&sf.sketch, i));
+                if let Some(t) = text {
+                    if se.tool != Tool::Select || !se.begin_text_edit(&mut sf.sketch, t) {
+                        se.select_text(&sf.sketch, t, shift);
+                    }
+                } else {
+                    let edited =
+                        item.is_some_and(|i| se.begin_pattern_edit_item(&mut sf.sketch, i));
+                    if !edited && let Snap::Curve(c) = snap {
+                        se.select_chain(&sf.sketch, c, shift);
+                    }
                 }
             }
         } else if matches!(se.tool, Tool::Constraint(_)) {
@@ -1574,8 +1584,9 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
                 _ => se.finish_tool(&mut sf.sketch),
             };
         }
-        // In der Anordnung gehört die Auswahl der Vorlage; Entf löscht dort nichts.
-        if delete && !gesture && !se.runs_pattern() {
+        // In der Anordnung gehört die Auswahl der Vorlage; Entf löscht dort nichts. Ebenso bei
+        // offenem Abschnitt „Text“: Beim Ändern ist der Text selbst gewählt.
+        if delete && !gesture && !se.runs_pattern() && !se.runs_text() {
             se.delete_selection(&mut sf.sketch);
         }
     }
@@ -1714,6 +1725,18 @@ fn curve_ink(
     }
 }
 
+/// Die Rahmenlinien der gewählten Texte (Spec B9: Der Rahmen erscheint hervorgehoben).
+fn selected_frames(se: &SketchSession, sk: &Sketch) -> HashSet<CurveId> {
+    se.selected_texts(sk)
+        .into_iter()
+        .filter_map(|t| match sk.text(t)?.placement {
+            planora_sketch::text::TextPlacement::Box { lines, .. } => Some(lines),
+            planora_sketch::text::TextPlacement::Path { .. } => None,
+        })
+        .flatten()
+        .collect()
+}
+
 /// Farbe eines Punkts der offenen Skizze (ohne Aufhellung): gewählt oder gezogen > Punkt einer
 /// projizierten Kurve (lila wie Fusion) > bestimmt > frei.
 fn point_ink(
@@ -1826,6 +1849,12 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     let handles_hidden = se.hidden_handles(sk);
     hidden.extend(handles_hidden.curves);
     hidden_points.extend(handles_hidden.points);
+    // Beim Ändern eines Textes steht die Vorschau an der Stelle seiner Buchstaben.
+    let (text_curves, text_points) = se.text_hidden(sk);
+    hidden.extend(text_curves);
+    hidden_points.extend(text_points);
+    // Der Rahmen eines gewählten Textes erscheint hervorgehoben (Spec B9).
+    let frames = selected_frames(se, sk);
     for (c, data) in sk.curves() {
         if hidden.contains(&c) {
             continue;
@@ -1833,7 +1862,11 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         let Some(pl) = sk.curve_polyline(c, STEPS_PER_TURN) else {
             continue;
         };
-        let mut color = curve_ink(&col, se, sk, &projected, c);
+        let mut color = if frames.contains(&c) {
+            col.selected
+        } else {
+            curve_ink(&col, se, sk, &projected, c)
+        };
         if hovered == Some(Item::Curve(c)) {
             color = lighter(color);
         }

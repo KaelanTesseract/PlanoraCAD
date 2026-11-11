@@ -127,6 +127,8 @@ action-sketch-dimension = Sketch Dimension
 action-sketch-pattern-rect = Rectangular Pattern
 action-sketch-pattern-circular = Circular Pattern
 action-sketch-text = Text
+action-sketch-text-edit = Edit Text
+action-sketch-text-explode = Explode Text
 action-sketch-show-shortcuts = Show keyboard shortcuts in sketch
 action-drawing-dimension = Dimension
 action-drawing-balloon = Balloon
@@ -529,6 +531,8 @@ undo-pattern-rect = Rectangular pattern
 undo-pattern-circular = Circular pattern
 undo-pattern-edit = Edit pattern
 undo-sketch-text-create = Create text
+undo-sketch-text-edit = Edit text
+undo-sketch-text-explode = Explode text
 
 ## Projects window
 projects-title = Projects
@@ -2004,6 +2008,13 @@ sketch-text-ok-hint = Creates the text (Ctrl+Enter in the text field)
 sketch-text-fonts-loading = Reading fonts …
 sketch-text-need-path = Pick the path first: click a curve.
 sketch-text-need-frame = Draw the frame with two clicks first.
+sketch-text-hint-substituted = Font "{ $font }" is missing on this computer, replaced by Montserrat.
+sketch-text-hint-synthetic = Bold or italic is simulated.
+sketch-text-hint-missing-chars = Characters are missing, left blank.
+sketch-text-edit-hint = Opens the selected text for editing (also double-click the text)
+sketch-text-explode-hint = Turns the selected texts into separate fixed curves. Only undo brings the text back.
+sketch-text-select-first = Select a text first.
+sketch-delete-in-text = While the Text section is open, Delete removes nothing.
 state-patterns-dissolved-on-load = { $n ->
     [one] On opening, a pattern was dissolved because it linked its original to one of its own instances. The geometry stays.
    *[other] On opening, { $n } patterns were dissolved because they linked their original to one of their own instances. The geometry stays.

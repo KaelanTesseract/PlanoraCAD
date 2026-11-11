@@ -2460,6 +2460,35 @@ fn sketch_modify_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
                 ui.close();
             }
         }
+        // Fusion „Text auflösen“ (Skizzen 8, Spec C9): alle gewählten Texte in einem Schritt;
+        // wartet auf die Schriftliste (Spec G4).
+        let state = &ws.active_tab().state;
+        let loading = state.fonts().is_none();
+        let has_text = state
+            .sketch_session
+            .as_ref()
+            .zip(state.session_sketch())
+            .is_some_and(|(se, sk)| !se.selected_texts(sk).is_empty());
+        let action = Action::SketchTextExplode;
+        let keys = keymap::shortcut_hint(&ws.keymap, action);
+        if icons::source_entry_keys(
+            ui,
+            icons::IconSource::Hand(icons::HandIcon::ExplodeText),
+            &action.label(),
+            &keys,
+            has_text && !loading,
+        )
+        .on_hover_text(tr!("sketch-text-explode-hint"))
+        .on_disabled_hover_text(if loading {
+            tr!("sketch-text-fonts-loading")
+        } else {
+            tr!("sketch-text-select-first")
+        })
+        .clicked()
+        {
+            commands::run_action(ws, action);
+            ui.close();
+        }
     });
 }
 
