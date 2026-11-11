@@ -5,7 +5,8 @@
 
 use planora_i18n::tr;
 use planora_math::{DVec2, Frame, Tolerance};
-use planora_sketch::model::{CurveId, Sketch};
+use planora_sketch::model::{CurveId, CurveKind, Sketch};
+use planora_sketch::pattern::{CircularMode, PatternDir, PatternKind, PatternPlan};
 use planora_sketch::text::{HAlign, TextParams, TextPlacement, VAlign};
 use planora_sketch::text_shape::{
     Contour, Glyph, MAX_TEXT_CHARS, MAX_TEXT_CURVES, Seg, ShapedLine, TextShape, TextStyle,
@@ -296,4 +297,159 @@ fn deleted_text_is_checked_only_for_values_and_indices() {
     let n = bad.curves.len();
     bad.texts[0].curves.push(CurveId::from_index(n));
     assert!(Sketch::from_data(bad).is_err());
+}
+
+/// Wie [`data`], dazu eine freie Linie mit rechteckigem Muster entlang einer freien
+/// Richtungslinie, ein kreisförmiges Muster um einen freien Punkt und ein Spline mit Griff.
+/// Liefert die Rohdaten und die Kurve des Griffs.
+fn data_with_parts() -> (SketchData, CurveId) {
+    let (d, _) = data();
+    let mut s = Sketch::from_data(d).unwrap();
+    let a = s.add_point(60.0, 0.0).unwrap();
+    let b = s.add_point(70.0, 0.0).unwrap();
+    let free = s.add_line(a, b).unwrap();
+    let c = s.add_point(60.0, 10.0).unwrap();
+    let e = s.add_point(70.0, 15.0).unwrap();
+    let dir = s.add_line(c, e).unwrap();
+    s.add_pattern(&PatternPlan {
+        kind: PatternKind::Rect {
+            dirs: [PatternDir::Line(dir), PatternDir::SketchY],
+            extent: [false, false],
+            symmetric: [false, false],
+        },
+        sources: vec![free],
+        counts: [2, 1],
+        values: [20.0, 10.0],
+        suppressed: Vec::new(),
+    })
+    .unwrap();
+    let f = s.add_point(100.0, 0.0).unwrap();
+    let g = s.add_point(110.0, 0.0).unwrap();
+    let other = s.add_line(f, g).unwrap();
+    let center = s.add_point(100.0, -10.0).unwrap();
+    s.add_pattern(&PatternPlan {
+        kind: PatternKind::Circular {
+            center,
+            mode: CircularMode::Full,
+        },
+        sources: vec![other],
+        counts: [3, 1],
+        values: [0.0, 0.0],
+        suppressed: Vec::new(),
+    })
+    .unwrap();
+    let p: Vec<_> = [(0.0, 50.0), (10.0, 55.0), (20.0, 50.0)]
+        .iter()
+        .map(|&(x, y)| s.add_point(x, y).unwrap())
+        .collect();
+    let spline = s.add_spline(&p).unwrap();
+    let handle = s.activate_tangent_handle(spline, p[1]).unwrap();
+    (s.to_data(), handle)
+}
+
+/// Wie [`refused`] auf den Rohdaten aus [`data_with_parts`].
+fn refused_with_parts(what: &str, key: &str, f: impl FnOnce(&mut SketchData, CurveId)) {
+    let (mut d, handle) = data_with_parts();
+    f(&mut d, handle);
+    let e = Sketch::from_data(d).expect_err(what).to_string();
+    assert!(e.contains(&reason(key)), "{what}: {e}");
+}
+
+/// Die erste erzeugte Kurve des Textes `t` mit `pick`.
+fn glyph_where(d: &SketchData, t: usize, pick: impl Fn(&CurveKind) -> bool) -> CurveId {
+    *d.texts[t]
+        .curves
+        .iter()
+        .find(|c| pick(&d.curves[c.index()].kind))
+        .expect("Kurve dieser Art")
+}
+
+#[test]
+fn from_data_rejects_foreign_glyph_parts() {
+    // Ohne Eingriff laden die Rohdaten.
+    let (d, _) = data_with_parts();
+    let s = Sketch::from_data(d.clone()).unwrap();
+    assert_eq!(s.to_data(), d);
+
+    let kind = "sketch-err-text-data-kind";
+    refused("Kegelschnitt mit Rho 0,7", kind, |d| {
+        let c = glyph_where(d, 0, |k| matches!(k, CurveKind::Conic { .. }));
+        let CurveKind::Conic { rho, .. } = &mut d.curves[c.index()].kind else {
+            unreachable!()
+        };
+        *rho = 0.7;
+    });
+    refused("Spline vom Grad 2", kind, |d| {
+        let c = glyph_where(d, 0, |k| matches!(k, CurveKind::ControlSpline { .. }));
+        let CurveKind::ControlSpline { degree, knots, .. } = &mut d.curves[c.index()].kind else {
+            unreachable!()
+        };
+        *degree = 2;
+        *knots = vec![0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0];
+    });
+    refused("Kreis statt Strecke", kind, |d| {
+        let c = glyph_where(d, 0, |k| matches!(k, CurveKind::Line { .. }));
+        let CurveKind::Line { a, .. } = d.curves[c.index()].kind else {
+            unreachable!()
+        };
+        d.vars.push(1.0);
+        d.curves[c.index()].kind = CurveKind::Circle {
+            center: a,
+            radius: d.vars.len() - 1,
+        };
+    });
+
+    let pattern = "sketch-err-text-data-pattern";
+    refused_with_parts("Richtungslinie eines Musters", pattern, |d, _| {
+        let glyph = glyph_where(d, 0, |k| matches!(k, CurveKind::Line { .. }));
+        let m = d
+            .patterns
+            .iter_mut()
+            .find(|m| matches!(m.kind, PatternKind::Rect { .. }))
+            .unwrap();
+        let PatternKind::Rect { dirs, .. } = &mut m.kind else {
+            unreachable!()
+        };
+        dirs[0] = PatternDir::Line(glyph);
+    });
+    refused_with_parts("Mitte eines Musters", pattern, |d, _| {
+        let p = d.texts[0].points[0];
+        let m = d
+            .patterns
+            .iter_mut()
+            .find(|m| matches!(m.kind, PatternKind::Circular { .. }))
+            .unwrap();
+        let PatternKind::Circular { center, .. } = &mut m.kind else {
+            unreachable!()
+        };
+        *center = p;
+    });
+    refused_with_parts("Vorlage eines Musters", pattern, |d, _| {
+        let m = &d.patterns[0];
+        let (source, points) = (m.sources[0], m.source_points.clone());
+        d.texts[0].curves.push(source);
+        d.texts[0].points.extend(points);
+    });
+    refused_with_parts("Exemplar eines Musters", pattern, |d, _| {
+        let inst = d.patterns[0].instances[0].clone();
+        d.texts[0].curves.extend(inst.curves);
+        d.texts[0].points.extend(inst.points);
+    });
+
+    refused_with_parts(
+        "Griff eines Splines",
+        "sketch-err-text-data-handle",
+        |d, handle| {
+            d.texts[0].curves.push(handle);
+        },
+    );
+
+    refused(
+        "Rahmenlinie ohne Konstruktion",
+        "sketch-err-text-data-construction",
+        |d| {
+            let (lines, _) = frame(&d.texts[1]);
+            d.curves[lines[2].index()].construction = false;
+        },
+    );
 }

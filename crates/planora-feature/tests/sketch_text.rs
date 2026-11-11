@@ -444,3 +444,70 @@ fn font_and_projection_warnings_both_show() {
     );
     assert!(w.contains(&font_warning(MISSING, 1)), "{w}");
 }
+
+/// Der Setzer lehnt ab, weil die Ersatzschrift zu viele Kurven ergäbe (wie `planora-text`).
+struct TooManyCurves;
+
+impl TextShaper for TooManyCurves {
+    fn shape(&self, _content: &str, _style: &TextStyle) -> Result<TextShape, TextShapeError> {
+        Err(TextShapeError::TooManyCurves)
+    }
+}
+
+fn unset_warning(count: usize) -> String {
+    planora_i18n::tr!("feature-sketch-text-unset", count = count)
+}
+
+#[test]
+fn text_that_cannot_be_set_keeps_curves_and_warns() {
+    // Gespeichert mit einer Schrift, die hier fehlt; weder Montserrat noch Roboto haben die
+    // Zeichen. Die Ersatzschrift ergäbe keine einzige Kurve: Der Text darf nicht verschwinden
+    // (Anti-Ziel), er behält seine Kurven, die Extrusion bleibt, und die Skizze warnt.
+    let lib = FontLibrary::bundled_only();
+    let content = "漢字";
+    let probe = lib.shape(content, &style(MISSING)).unwrap();
+    assert_eq!(probe.segment_count(), 0, "Voraussetzung: nichts zu setzen");
+    let refusing: [(&str, &dyn TextShaper); 2] = [
+        ("Ersatzschrift ohne die Zeichen", &lib),
+        ("zu viele Kurven", &TooManyCurves),
+    ];
+    for (what, shaper) in refusing {
+        let mut sk = Sketch::new(Frame::WORLD, "Skizze", Tolerance::default());
+        let t = add_text(&mut sk, content, MISSING, &SquareShaper);
+        let refs: Vec<_> = sk.profiles().refs;
+        assert_eq!(refs.len(), 2, "zwei Quadrate");
+        let mut d = Document::new();
+        let s = d.add_feature("Skizze 1", sketch_kind(loaded(&sk))).unwrap();
+        let e = d
+            .add_feature(
+                "Extrusion 1",
+                FeatureKind::Extrude {
+                    sketch: s,
+                    profiles: ProfileSel::Refs(refs),
+                    height: 2.0,
+                },
+            )
+            .unwrap();
+        let data = sketch_def(&d, s).sketch.to_data();
+        let vol = total_volume(&d);
+        assert!(vol > 1.0, "{what}: {vol}");
+        let edits = d.edit_count();
+
+        assert!(!d.reshape_texts(shaper), "{what}: die Kurven bleiben");
+        assert_eq!(d.edit_count(), edits, "{what}: nicht „geändert“");
+        assert!(sketch_def(&d, s).sketch.to_data() == data, "{what}");
+        assert!(sketch_def(&d, s).sketch.text(t).unwrap().is_unset());
+        let f = d.feature(s).unwrap();
+        assert_eq!(f.status, FeatureStatus::Ok, "{what}: {:?}", f.status);
+        assert_eq!(f.warning(), Some(unset_warning(1).as_str()), "{what}");
+        assert_eq!(d.feature(e).unwrap().status, FeatureStatus::Ok, "{what}");
+        assert!((total_volume(&d) - vol).abs() < 1e-9, "{what}");
+        let result = d.sketch_of(s).unwrap();
+        assert_eq!(result.text(t).unwrap().curves.len(), 8, "{what}");
+
+        // Mit einer Schrift, die setzt, fällt die Warnung wieder weg.
+        assert!(!d.reshape_texts(&SquareShaper), "{what}: gleiche Form");
+        assert_eq!(d.feature(s).unwrap().warning(), None, "{what}");
+        d.check_invariants().unwrap();
+    }
+}

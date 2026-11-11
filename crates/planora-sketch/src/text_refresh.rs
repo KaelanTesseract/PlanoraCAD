@@ -18,6 +18,9 @@ use std::sync::Arc;
 const QUAD_RHO: f64 = 0.5;
 /// Knoten der kubischen Bézierkurve als Spline mit Kontrollpunkten (Grad 3, 4 Punkte).
 const CUBIC_KNOTS: [f64; 8] = [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+/// Bis zu diesem Anteil der Höhe gilt ein Punkt beim Nachführen als unverändert: Eine Datei von
+/// einem anderen Rechner (andere Rundung in `sin`, `cos` …) bekommt nach dem Laden so kein „●“.
+const SAME_POINT_REL: f64 = 1e-12;
 
 /// Ein Stück mit den Indizes seiner Punkte in der Punktfolge des Textes.
 #[derive(Clone, Copy, Debug)]
@@ -125,8 +128,10 @@ impl Piece {
 impl Sketch {
     /// Bringt Punkte und Kurven des Textes `t` auf die Konturen `placed` (Skizzenkoordinaten,
     /// geprüft). Neue Kurven bekommen den Stil der vorhandenen. Liefert, ob sich etwas geändert
-    /// hat; nur dann gibt es einen neuen Stand.
+    /// hat; nur dann gibt es einen neuen Stand. Ein Punkt, der höchstens um
+    /// [`SAME_POINT_REL`] × Höhe abweicht, bleibt, wie er ist.
     pub(crate) fn sync_text(&mut self, t: TextId, placed: &[Contour]) -> bool {
+        let same = SAME_POINT_REL * self.texts[t].height;
         let (want_points, pieces) = layout(placed);
         let old_points = std::mem::take(&mut self.texts[t].points);
         let old_curves = std::mem::take(&mut self.texts[t].curves);
@@ -145,7 +150,9 @@ impl Sketch {
                 Some(&p) if self.points[p].alive => {
                     let (xi, yi) = (self.points[p].x, self.points[p].y);
                     for (i, v) in [(xi, at.x), (yi, at.y)] {
-                        if self.vars[i].to_bits() != v.to_bits() {
+                        // Ein ungültiger alter Wert (NaN) wird immer neu geschrieben.
+                        let old = self.vars[i];
+                        if old.is_nan() || (old - v).abs() > same {
                             self.vars[i] = v;
                             values = true;
                         }
@@ -266,7 +273,7 @@ impl Sketch {
         }
         let shaped: Vec<(TextId, Arc<_>)> = self
             .texts()
-            .filter_map(|(t, d)| d.shaped.0.clone().map(|s| (t, s)))
+            .filter_map(|(t, d)| d.shaped.shape.clone().map(|s| (t, s)))
             .collect();
         let mut changed = false;
         for (t, shape) in shaped {

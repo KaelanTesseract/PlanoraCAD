@@ -1,7 +1,7 @@
 //! Änderungsoperationen am Dokument: Parameter ändern, umbenennen, löschen (mit Folgen) und
 //! die Prüfung der Dokument-Invarianten für Tests.
 
-use crate::compute::missing_fonts;
+use crate::compute::text_warning_lines;
 use crate::error::FeatureError;
 use crate::formulas::{
     Formulas, check_keys, drop_overwritten_dims, evaluate, field_keys, prune_sketch, same_fields,
@@ -144,8 +144,9 @@ impl Document {
     /// Speichern schreibt, was zu sehen ist, und kein Zwischenspeicher ein altes Ergebnis zeigt).
     /// Ein Rückgängig-Schritt ist das nicht: Der Aufrufer nimmt den neuen Zählerstand ohne Schritt
     /// hin, wie nach dem Zurückladen. Liefert das Setzen dieselben Kurven, bleiben Daten und
-    /// Zähler gleich. Ändert sich dabei nur die Warnung zu fehlenden Schriften (Spec C10), bekommt
-    /// die Skizze eine neue Version und wird neu berechnet, damit die Warnung erscheint.
+    /// Zähler gleich. Ändert sich dabei nur die Warnung zu fehlenden Schriften oder zu Texten, die
+    /// sich nicht setzen lassen (Spec C10), bekommt die Skizze eine neue Version und wird neu
+    /// berechnet, damit die Warnung erscheint.
     pub fn reshape_texts(&mut self, shaper: &dyn TextShaper) -> bool {
         let mut changed = false;
         let mut stale = false;
@@ -156,9 +157,9 @@ impl Document {
             if sf.sketch.texts().next().is_none() {
                 continue;
             }
-            let before = missing_fonts(&sf.sketch);
+            let before = text_warning_lines(&sf.sketch);
             let report = sf.sketch.reshape_texts(shaper);
-            let warning_changed = missing_fonts(&sf.sketch) != before;
+            let warning_changed = text_warning_lines(&sf.sketch) != before;
             if report.changed || warning_changed {
                 // Neuer Stand: Die Skizze und alles Abhängige rechnen neu.
                 let version = self.bump();

@@ -419,7 +419,7 @@ fn curve_starts_at(kind: &CurveKind, p: PointId) -> bool {
 }
 
 /// Die Kurven eines Griffs: seine Linie und ein Krümmungsbogen.
-fn handle_parts(h: &SplineHandle) -> impl Iterator<Item = CurveId> + use<> {
+pub(crate) fn handle_parts(h: &SplineHandle) -> impl Iterator<Item = CurveId> + use<> {
     let arc = match h.curvature {
         HandleCurvature::Arc { arc, .. } => Some(arc),
         _ => None,

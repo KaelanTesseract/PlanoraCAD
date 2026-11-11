@@ -80,13 +80,30 @@ pub enum TextKindEdit {
     },
 }
 
-/// Das zuletzt gesetzte [`TextShape`], nur zur Laufzeit (nicht in der Datei).
+/// Das zuletzt gesetzte [`TextShape`], nur zur Laufzeit (nicht in der Datei), und ob das letzte
+/// Neusetzen ([`Sketch::reshape_texts`]) scheiterte.
 ///
 /// Der Vergleich liefert immer `true` (**Review Focus 1**): Rückgängig-Bilder und „geändert“
 /// sehen den Zwischenspeicher nie. Ein bloßes Neusetzen nach dem Laden, das dieselben Kurven
 /// liefert, ist so keine Änderung.
 #[derive(Clone, Debug, Default)]
-pub struct ShapedCache(pub(crate) Option<Arc<TextShape>>);
+pub struct ShapedCache {
+    pub(crate) shape: Option<Arc<TextShape>>,
+    /// Das letzte Neusetzen lieferte keine Form, zu viele Kurven oder keine Kurve, wo der Text
+    /// welche hat. Die Form davor (oder keine) und die gespeicherten Kurven bleiben (Anti-Ziel:
+    /// eine fehlende Schrift lässt den Text nicht verschwinden), die Skizze warnt.
+    pub(crate) unset: bool,
+}
+
+impl ShapedCache {
+    /// Eine neu gesetzte Form; ein früheres Scheitern gilt nicht mehr.
+    pub(crate) fn set(shape: Arc<TextShape>) -> ShapedCache {
+        ShapedCache {
+            shape: Some(shape),
+            unset: false,
+        }
+    }
+}
 
 impl PartialEq for ShapedCache {
     fn eq(&self, _other: &Self) -> bool {
@@ -132,7 +149,15 @@ impl TextData {
     /// ist (nach dem Laden bis [`Sketch::reshape_texts`]). Die Feature-Berechnung liest daraus
     /// etwa die ersetzte Schrift (Spec C10).
     pub fn shape(&self) -> Option<&TextShape> {
-        self.shaped.0.as_deref()
+        self.shaped.shape.as_deref()
+    }
+
+    /// Ließ sich der Text beim letzten Neusetzen mit der Schriftquelle nicht setzen (keine Kurven
+    /// oder zu viele, etwa mit der Ersatzschrift)? Dann stehen seine Kurven unverändert da, und die
+    /// Skizze warnt (`feature-sketch-text-unset`). Nur zur Laufzeit; ein neu gesetzter Text ist es
+    /// nicht mehr.
+    pub fn is_unset(&self) -> bool {
+        self.shaped.unset
     }
 }
 
@@ -158,6 +183,10 @@ pub struct ReshapeReport {
     pub synthetic: Vec<TextId>,
     /// Texte, in denen Zeichen fehlen.
     pub missing_chars: Vec<TextId>,
+    /// Texte, die sich nicht setzen ließen: Der Setzer lieferte einen Fehler, zu viele Kurven oder
+    /// keine Kurve, wo der Text welche hat. Ihre Kurven und ihre Form bleiben, wie sie waren
+    /// ([`TextData::is_unset`]).
+    pub unset: Vec<TextId>,
 }
 
 /// Warum ein Teil eines Textes nicht allein gelöscht werden darf (Spec B8).
@@ -180,8 +209,8 @@ impl TextRemoval {
     }
 }
 
-/// Größter erlaubter Zeichenabstand in Prozent (Spec A7).
-pub(crate) const MAX_SPACING: f64 = 1000.0;
+/// Größter erlaubter Zeichenabstand in Prozent (Spec A7); auch die Oberfläche prüft damit.
+pub const MAX_SPACING: f64 = 1000.0;
 
 impl From<TextShapeError> for SketchError {
     fn from(e: TextShapeError) -> SketchError {
@@ -339,7 +368,7 @@ impl Sketch {
     /// Ist der Text gesetzt? Nach dem Laden ist er es erst nach [`Sketch::reshape_texts`]; bis
     /// dahin bleiben die gespeicherten Kurven, wie sie sind.
     pub fn is_text_shaped(&self, t: TextId) -> bool {
-        self.text(t).is_some_and(|d| d.shaped.0.is_some())
+        self.text(t).is_some_and(|d| d.shaped.shape.is_some())
     }
 
     /// Die Variablen aller erzeugten Punkte lebender Texte: für den Löser Konstanten, auch bei
@@ -719,7 +748,7 @@ impl Sketch {
                 curves: Vec::new(),
                 points: Vec::new(),
                 alive: true,
-                shaped: ShapedCache(Some(shape)),
+                shaped: ShapedCache::set(shape),
                 walk: WalkCache::default(),
             });
             s.touch_structure();
@@ -774,7 +803,7 @@ impl Sketch {
             curves: Vec::new(),
             points: Vec::new(),
             alive: true,
-            shaped: ShapedCache(Some(shape)),
+            shaped: ShapedCache::set(shape),
             walk: WalkCache::default(),
         });
         self.touch_structure();
@@ -813,7 +842,7 @@ impl Sketch {
             h,
             v,
         };
-        next.shaped = ShapedCache(Some(shape.clone()));
+        next.shaped = ShapedCache::set(shape.clone());
         self.texts[t] = next;
         let Some(placed) = self.placed_contours(t, &shape) else {
             self.texts[t] = before;
@@ -1008,7 +1037,7 @@ impl Sketch {
         d.flip_h = params.flip_h;
         d.flip_v = params.flip_v;
         d.placement = placement;
-        d.shaped = ShapedCache(Some(shape));
+        d.shaped = ShapedCache::set(shape);
     }
 
     /// Der Winkel eines Textes im Rahmen (Spec C5): die Richtung der Grundlinie von Ecke 0 nach
@@ -1198,7 +1227,7 @@ impl Sketch {
                 // Zuerst tot: Danach sind Kurven und Punkte keine Textteile mehr, und `Fixed`
                 // wird nicht als Abhängigkeit an Buchstaben abgelehnt.
                 s.texts[t].alive = false;
-                s.texts[t].shaped = ShapedCache(None);
+                s.texts[t].shaped = ShapedCache::default();
                 if let Some((lines, corners)) = frame {
                     s.drop_text_parts(&lines.into_iter().collect(), corners.to_vec());
                 }
@@ -1283,19 +1312,29 @@ impl Sketch {
     /// Setzt alle Texte mit `shaper` neu (beim Laden, wenn die Schriftliste da ist, und wenn sich
     /// Schriften ändern). Die Kurven werden nach Spec B3 wiederverwendet. Liefert dieselbe Form
     /// dieselben Kurven und Punkte, ändert sich nichts, auch nicht der Stand der Skizze (Review
-    /// Focus 1). Ein Text, den `shaper` nicht setzen kann, bleibt unverändert und ungesetzt. Auf
-    /// einem Pfad wird mit verbundenen Zeilen gesetzt ([`path_content`]).
+    /// Focus 1). Auf einem Pfad wird mit verbundenen Zeilen gesetzt ([`path_content`]).
+    ///
+    /// Ein Text, den `shaper` nicht setzen kann (Fehler, mehr als [`MAX_TEXT_CURVES`] Kurven oder
+    /// keine Kurve, obwohl der Text Kurven hat, etwa mit der Ersatzschrift), behält Kurven und Form
+    /// und steht in [`ReshapeReport::unset`] (Anti-Ziel: eine fehlende Schrift lässt den Text nicht
+    /// verschwinden).
     pub fn reshape_texts(&mut self, shaper: &dyn TextShaper) -> ReshapeReport {
         let mut report = ReshapeReport::default();
         let ids: Vec<TextId> = self.texts().map(|(t, _)| t).collect();
         for t in ids {
             let d = &self.texts[t];
-            let Ok(shape) = shaper.shape(&shaping_content(d), &d.style) else {
+            let shape = shaper
+                .shape(&shaping_content(d), &d.style)
+                .ok()
+                .filter(|s| check_curve_limit(s).is_ok())
+                .filter(|s| s.segment_count() > 0 || d.curves.is_empty());
+            let Some(shape) = shape else {
+                self.texts[t].shaped.unset = true;
+                report.unset.push(t);
                 continue;
             };
-            if check_curve_limit(&shape).is_err() {
-                continue;
-            }
+            self.texts[t].shaped.unset = false;
+            let d = &self.texts[t];
             if let Some(name) = &shape.substituted {
                 report.substituted.push((t, name.clone()));
             }
@@ -1305,12 +1344,12 @@ impl Sketch {
             if shape.missing_chars {
                 report.missing_chars.push(t);
             }
-            if d.shaped.0.as_deref() == Some(&shape) {
+            if d.shaped.shape.as_deref() == Some(&shape) {
                 continue;
             }
             let shape = Arc::new(shape);
             let placed = self.placed_contours(t, &shape);
-            self.texts[t].shaped = ShapedCache(Some(shape));
+            self.texts[t].shaped = ShapedCache::set(shape);
             if let Some(placed) = placed {
                 report.changed |= self.sync_text(t, &placed);
             }

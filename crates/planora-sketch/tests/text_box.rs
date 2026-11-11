@@ -1069,3 +1069,165 @@ fn frame_lines_stay_construction() {
     s.set_construction(lines[0], true).unwrap();
     assert!(s.curve(lines[0]).unwrap().construction);
 }
+
+// ---- Neusetzen, das nichts setzt (Anti-Ziel: kein Text verschwindet) -------------------------
+
+/// Wie eine Ersatzschrift ohne die Zeichen des Textes: jede Glyphe ohne Umriss.
+struct EmptyShaper;
+
+impl TextShaper for EmptyShaper {
+    fn shape(&self, content: &str, style: &TextStyle) -> Result<TextShape, TextShapeError> {
+        let mut shape = BoxShaper.shape(content, style)?;
+        for line in &mut shape.lines {
+            for g in &mut line.glyphs {
+                g.contours.clear();
+            }
+        }
+        shape.substituted = Some(style.font.clone());
+        shape.missing_chars = true;
+        Ok(shape)
+    }
+}
+
+/// Der Setzer meldet selbst zu viele Kurven (wie `planora-text`).
+struct TooManyError;
+
+impl TextShaper for TooManyError {
+    fn shape(&self, _content: &str, _style: &TextStyle) -> Result<TextShape, TextShapeError> {
+        Err(TextShapeError::TooManyCurves)
+    }
+}
+
+/// Eine Form mit mehr als [`MAX_TEXT_CURVES`] Kurven, ohne Fehler des Setzers: Die Skizze prüft
+/// die Grenze selbst.
+struct Huge;
+
+impl TextShaper for Huge {
+    fn shape(&self, content: &str, style: &TextStyle) -> Result<TextShape, TextShapeError> {
+        let mut shape = BoxShaper.shape(content, style)?;
+        for line in &mut shape.lines {
+            for g in &mut line.glyphs {
+                g.contours = (0..=MAX_TEXT_CURVES / 8)
+                    .flat_map(|_| box_glyph())
+                    .collect();
+            }
+        }
+        assert!(shape.segment_count() > MAX_TEXT_CURVES);
+        Ok(shape)
+    }
+}
+
+#[test]
+fn reshape_that_sets_nothing_keeps_curves_and_profiles() {
+    let shapers: [(&str, &dyn TextShaper); 3] = [
+        ("keine Kurven", &EmptyShaper),
+        ("Fehler: zu viele Kurven", &TooManyError),
+        ("mehr als 4000 Kurven", &Huge),
+    ];
+    let mut s = sketch();
+    let t = text(&mut s, "ab");
+    solved(&mut s);
+    for (what, shaper) in shapers {
+        // Gesetzt im Speicher und frisch geladen (noch nicht gesetzt).
+        for loaded in [false, true] {
+            let mut sk = if loaded {
+                Sketch::from_data(s.to_data()).unwrap()
+            } else {
+                s.clone()
+            };
+            let what = format!("{what}, geladen: {loaded}");
+            let (curves, points) = (glyph_curves(&sk, t), glyph_points(&sk, t));
+            let (kinds_before, at_before) = (kinds(&sk, t), positions(&sk, t));
+            let profiles = sk.profiles().refs;
+            assert!(!profiles.is_empty());
+            let rev = sk.revision();
+            let report = sk.reshape_texts(shaper);
+            assert_eq!(report.unset, vec![t], "{what}");
+            assert!(!report.changed, "{what}");
+            assert!(
+                report.substituted.is_empty(),
+                "{what}: Form nicht übernommen"
+            );
+            assert!(sk.text(t).unwrap().is_unset(), "{what}");
+            assert_eq!(sk.revision(), rev, "{what}: kein neuer Stand");
+            assert_eq!(glyph_curves(&sk, t), curves, "{what}");
+            assert_eq!(glyph_points(&sk, t), points, "{what}");
+            assert_eq!(kinds(&sk, t), kinds_before, "{what}");
+            assert_eq!(positions(&sk, t), at_before, "{what}");
+            assert_eq!(sk.profiles().refs, profiles, "{what}: Profile bleiben");
+            assert_eq!(sk.is_text_shaped(t), !loaded, "{what}: alte Form bleibt");
+            assert_eq!(
+                sk.to_data(),
+                s.to_data(),
+                "{what}: der Merker steht nicht in der Datei"
+            );
+            // Gesetzt bleibt gesetzt: Der Text folgt seinem Rahmen weiter.
+            if !loaded {
+                let (_, corners) = frame(&sk, t);
+                sk.drag(&[Drag {
+                    point: corners[0],
+                    target: v(-5.0, -3.0),
+                }])
+                .unwrap();
+                solved(&mut sk);
+                assert_ne!(positions(&sk, t), at_before, "{what}: folgt dem Rahmen");
+                assert_eq!(glyph_curves(&sk, t), curves, "{what}");
+            }
+            // Eine Schrift, die setzt: Der Merker fällt.
+            let report = sk.reshape_texts(&BoxShaper);
+            assert!(report.unset.is_empty(), "{what}");
+            assert!(!sk.text(t).unwrap().is_unset(), "{what}");
+            assert_eq!(glyph_curves(&sk, t), curves, "{what}");
+        }
+    }
+}
+
+#[test]
+fn editing_an_unset_text_clears_the_mark() {
+    let mut s = sketch();
+    let t = text(&mut s, "ab");
+    s.reshape_texts(&EmptyShaper);
+    assert!(s.text(t).unwrap().is_unset());
+    let p = params("abc");
+    let shape = shape_of(&p);
+    s.edit_text_box(t, p, HAlign::Left, VAlign::Bottom, shape)
+        .unwrap();
+    assert!(!s.text(t).unwrap().is_unset(), "neu gesetzt");
+    assert_eq!(glyph_curves(&s, t).len(), 24);
+}
+
+#[test]
+fn reshape_after_load_ignores_rounding_noise() {
+    // Ein anderer Rechner rundet `sin`, `cos` … etwas anders: Weichen die gespeicherten Punkte
+    // höchstens um 1e-12 × Höhe ab, ist das Neusetzen keine Änderung (kein „●“), und die Werte aus
+    // der Datei bleiben. Eine echte Abweichung wird weiter nachgeführt.
+    let mut s = sketch();
+    let t = text(&mut s, "ab");
+    solved(&mut s);
+    let h = s.text(t).unwrap().height;
+    for (eps, changed) in [(0.9e-12 * h, false), (1e-9 * h, true)] {
+        let mut d = s.to_data();
+        let text = &d.texts[0];
+        for &p in &text.points {
+            let r = &d.points[p.index()];
+            d.vars[r.x] += eps;
+            d.vars[r.y] -= eps;
+        }
+        let mut loaded = Sketch::from_data(d.clone()).unwrap();
+        let rev = loaded.revision();
+        let report = loaded.reshape_texts(&BoxShaper);
+        assert_eq!(report.changed, changed, "Abweichung {eps:e}");
+        assert!(loaded.is_text_shaped(t));
+        if changed {
+            assert_ne!(loaded.revision(), rev);
+            for (a, b) in positions(&loaded, t).iter().zip(positions(&s, t)) {
+                assert!(close(*a, b));
+            }
+        } else {
+            assert_eq!(loaded.revision(), rev, "kein neuer Stand");
+            assert_eq!(loaded.to_data(), d, "die Werte aus der Datei bleiben");
+            solved(&mut loaded);
+            assert_eq!(loaded.revision(), rev, "auch Lösen ändert nichts");
+        }
+    }
+}

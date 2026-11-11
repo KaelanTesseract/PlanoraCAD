@@ -12,6 +12,7 @@ use crate::pattern::{
     PatternSlot,
 };
 use crate::solver::SolveCache;
+use crate::spline_handles::handle_parts;
 use crate::text::{MAX_SPACING, ShapedCache, TextData, TextPlacement, WalkCache};
 use crate::text_shape::{MAX_TEXT_CHARS, MAX_TEXT_CURVES, TextStyle};
 use planora_i18n::tr;
@@ -390,7 +391,7 @@ impl Sketch {
                 points: t.points,
                 alive: t.alive,
                 // Noch nicht gesetzt: Die gespeicherten Kurven bleiben (Spec G4).
-                shaped: ShapedCache(None),
+                shaped: ShapedCache::default(),
                 walk: WalkCache::default(),
             });
         }
@@ -691,11 +692,14 @@ fn bad_text(reason: &str) -> SketchError {
 /// endlich und größer als null, Zeichenabstand in `0 ≤ p ≤ 1000`, Inhalt nicht leer und
 /// höchstens [`MAX_TEXT_CHARS`] Zeichen, höchstens [`MAX_TEXT_CURVES`] erzeugte Kurven.
 ///
-/// Jeder lebende Text dazu: alle Teile leben; der Rahmen besteht aus vier verschiedenen Ecken und
-/// vier Linien, Linie `i` zwischen Ecke `i` und Ecke `i + 1`; der Pfad ist weder erzeugte Kurve
-/// noch Rahmenlinie eines lebenden Textes; keine Kurve (erzeugt oder Rahmen) und kein Punkt
-/// (erzeugt oder Ecke) gehört zweimal zu lebenden Texten. Ein gelöschter Text darf auf gelöschte
-/// Teile zeigen und seine Kurven abgegeben haben (Text auflösen, Spec F).
+/// Jeder lebende Text dazu: alle Teile leben; die erzeugten Kurven sind Strecken, Kegelschnitte
+/// mit ρ = 0,5 oder kubische Splines mit vier Kontrollpunkten (Spec B2), weder Teil eines Musters
+/// (Vorlage, Exemplar, Richtung; ebenso die erzeugten Punkte samt Mitte) noch Griff eines
+/// Splines; der Rahmen besteht aus vier verschiedenen Ecken und vier Konstruktionslinien, Linie
+/// `i` zwischen Ecke `i` und Ecke `i + 1`; der Pfad ist weder erzeugte Kurve noch Rahmenlinie
+/// eines lebenden Textes (auch nicht eines anderen); keine Kurve (erzeugt oder Rahmen) und kein
+/// Punkt (erzeugt oder Ecke) gehört zweimal zu lebenden Texten. Ein gelöschter Text darf auf
+/// gelöschte Teile zeigen und seine Kurven abgegeben haben (Text auflösen, Spec F).
 fn check_texts(d: &SketchData) -> Result<(), SketchError> {
     let (np, nc) = (d.points.len(), d.curves.len());
     for t in &d.texts {
@@ -738,6 +742,18 @@ fn check_texts(d: &SketchData) -> Result<(), SketchError> {
             t.curves.iter().copied().chain(frame)
         })
         .collect();
+    // Teile lebender Muster und Griffe lebender Splines: Die hält das Muster bzw. der Spline,
+    // erzeugte Kurven und Punkte hält der Text.
+    let (pattern_curves, pattern_points) = pattern_parts(d);
+    let handles: HashSet<CurveId> = d
+        .curves
+        .iter()
+        .filter(|c| c.alive)
+        .flat_map(|c| match &c.kind {
+            CurveKind::Spline { handles, .. } => handles.iter().flat_map(handle_parts).collect(),
+            _ => Vec::new(),
+        })
+        .collect();
     let mut curves: HashSet<CurveId> = HashSet::new();
     let mut points: HashSet<PointId> = HashSet::new();
     for t in live {
@@ -752,6 +768,23 @@ fn check_texts(d: &SketchData) -> Result<(), SketchError> {
         if !alive {
             return Err(bad_text("sketch-err-text-data-deleted"));
         }
+        let glyph_kinds = t.curves.iter().all(|c| match &d.curves[c.index()].kind {
+            CurveKind::Line { .. } => true,
+            CurveKind::Conic { rho, .. } => *rho == 0.5,
+            CurveKind::ControlSpline { points, degree, .. } => *degree == 3 && points.len() == 4,
+            _ => false,
+        });
+        if !glyph_kinds {
+            return Err(bad_text("sketch-err-text-data-kind"));
+        }
+        if t.curves.iter().any(|c| pattern_curves.contains(c))
+            || t.points.iter().any(|p| pattern_points.contains(p))
+        {
+            return Err(bad_text("sketch-err-text-data-pattern"));
+        }
+        if t.curves.iter().any(|c| handles.contains(c)) {
+            return Err(bad_text("sketch-err-text-data-handle"));
+        }
         let (own_curves, own_points): (Vec<CurveId>, Vec<PointId>) = match t.placement {
             TextPlacement::Box { lines, corners, .. } => {
                 let quad = (0..4).all(|i| {
@@ -763,6 +796,9 @@ fn check_texts(d: &SketchData) -> Result<(), SketchError> {
                     && lines.iter().collect::<HashSet<_>>().len() == 4;
                 if !(quad && distinct) {
                     return Err(bad_text("sketch-err-text-data-frame"));
+                }
+                if !lines.iter().all(|c| d.curves[c.index()].construction) {
+                    return Err(bad_text("sketch-err-text-data-construction"));
                 }
                 (lines.to_vec(), corners.to_vec())
             }
@@ -787,6 +823,32 @@ fn check_texts(d: &SketchData) -> Result<(), SketchError> {
         }
     }
     Ok(())
+}
+
+/// Kurven und Punkte lebender Muster: Vorlagen, Exemplare, Richtungslinien und Mitten.
+fn pattern_parts(d: &SketchData) -> (HashSet<CurveId>, HashSet<PointId>) {
+    let mut curves: HashSet<CurveId> = HashSet::new();
+    let mut points: HashSet<PointId> = HashSet::new();
+    for m in d.patterns.iter().filter(|m| m.alive) {
+        curves.extend(&m.sources);
+        points.extend(&m.source_points);
+        for inst in &m.instances {
+            curves.extend(&inst.curves);
+            points.extend(&inst.points);
+        }
+        match m.kind {
+            PatternKind::Rect { dirs, .. } => {
+                curves.extend(dirs.iter().filter_map(|dir| match dir {
+                    PatternDir::Line(l) => Some(*l),
+                    _ => None,
+                }));
+            }
+            PatternKind::Circular { center, .. } => {
+                points.insert(center);
+            }
+        }
+    }
+    (curves, points)
 }
 
 /// Alle Zahlen einer Abhängigkeit endlich und im Bereich (Winkel und Maße).

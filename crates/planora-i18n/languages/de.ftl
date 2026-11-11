@@ -1808,6 +1808,10 @@ sketch-err-text-data-curves = Er hat mehr als 4000 Kurven.
 sketch-err-text-data-frame = Der Rahmen ist kein Viereck aus vier Linien.
 sketch-err-text-data-path = Der Pfad ist eine Kurve eines Textes.
 sketch-err-text-data-shared = Eine Kurve oder ein Punkt gehört zu zwei Texten.
+sketch-err-text-data-kind = Eine erzeugte Kurve ist weder Strecke noch Kegelschnitt mit Rho 0,5 noch kubischer Spline mit vier Kontrollpunkten.
+sketch-err-text-data-pattern = Eine erzeugte Kurve oder ein erzeugter Punkt gehört zu einem Muster.
+sketch-err-text-data-handle = Eine erzeugte Kurve ist ein Griff eines Splines.
+sketch-err-text-data-construction = Eine Rahmenlinie ist keine Konstruktionslinie.
 sketch-err-data-pattern-direction = Ein Muster hat eine ungültige Richtung („senkrecht zu Richtung 1“ als erste Richtung)
 sketch-err-data-pattern-deleted = Ein Muster verweist auf ein gelöschtes Objekt
 sketch-err-data-pattern-instance = Ein Exemplar eines Musters passt nicht zu seiner Vorlage
@@ -1995,6 +1999,7 @@ sketch-text-need-frame = Ziehe zuerst den Rahmen mit zwei Klicks auf.
 sketch-text-hint-substituted = Schrift „{ $font }“ fehlt auf diesem Rechner, ersetzt durch Montserrat.
 sketch-text-hint-synthetic = Fett oder Kursiv ist nachgebildet: Die Schrift hat diesen Schnitt nicht.
 sketch-text-hint-missing-chars = Zeichen fehlen: Weder die Schrift noch Roboto hat sie, ihr Platz bleibt leer.
+sketch-text-hint-unset = Der Text lässt sich mit den Schriften dieses Rechners nicht setzen. Er behält seine gespeicherten Kurven.
 sketch-text-edit-hint = Öffnet den gewählten Text zum Ändern (auch Doppelklick auf den Text)
 sketch-text-explode-hint = Macht aus den gewählten Texten feste einzelne Kurven. Zurück geht es nur mit Rückgängig.
 sketch-text-select-first = Wähle zuerst einen Text.
@@ -2124,6 +2129,10 @@ feature-sketch-projection-lost = { $count ->
 feature-sketch-font-missing = { $count ->
     [one] Schrift „{ $font }“ fehlt auf diesem Rechner, ersetzt durch Montserrat.
    *[other] Schrift „{ $font }“ fehlt auf diesem Rechner, in { $count } Texten ersetzt durch Montserrat.
+}
+feature-sketch-text-unset = { $count ->
+    [one] Ein Text lässt sich mit den Schriften dieses Rechners nicht setzen und behält seine gespeicherten Kurven.
+   *[other] { $count } Texte lassen sich mit den Schriften dieses Rechners nicht setzen und behalten ihre gespeicherten Kurven.
 }
 feature-kind-fixed = Die Art des Features lässt sich nicht ändern
 feature-name-empty = Der Name darf nicht leer sein

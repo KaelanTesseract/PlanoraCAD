@@ -788,27 +788,36 @@ fn compute_sketch(
     })
 }
 
-/// Die Warnung einer Skizze: verlorene Bezüge von Projektionen und fehlende Schriften, je eine
-/// Zeile; `None` ohne beides.
+/// Die Warnung einer Skizze: verlorene Bezüge von Projektionen, fehlende Schriften und Texte, die
+/// sich nicht setzen ließen, je eine Zeile; `None` ohne all das.
 fn sketch_warning(lost: usize, sketch: &Sketch) -> Option<String> {
     let mut lines = Vec::new();
     if lost > 0 {
         lines.push(tr!("feature-sketch-projection-lost", count = lost));
     }
-    for (font, count) in missing_fonts(sketch) {
-        lines.push(tr!(
-            "feature-sketch-font-missing",
-            font = font,
-            count = count
-        ));
-    }
+    lines.extend(text_warning_lines(sketch));
     (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+/// Die Zeilen der Warnung zu den Texten einer Skizze (Spec C10): je fehlende Schrift eine, dazu
+/// eine für Texte, die sich nicht setzen ließen und darum ihre gespeicherten Kurven behalten
+/// ([`planora_sketch::text::TextData::is_unset`]). Ein noch nicht gesetzter Text zählt nicht.
+pub(crate) fn text_warning_lines(sketch: &Sketch) -> Vec<String> {
+    let mut lines: Vec<String> = missing_fonts(sketch)
+        .into_iter()
+        .map(|(font, count)| tr!("feature-sketch-font-missing", font = font, count = count))
+        .collect();
+    let unset = sketch.texts().filter(|(_, d)| d.is_unset()).count();
+    if unset > 0 {
+        lines.push(tr!("feature-sketch-text-unset", count = unset));
+    }
+    lines
 }
 
 /// Die fehlenden Schriften der gesetzten Texte (Spec C10) mit der Anzahl der Texte je Familie, in
 /// der Reihenfolge der Texte. Ein noch nicht gesetzter Text zählt nicht (Spec G4: nach dem Laden
 /// noch kein Hinweis und keine Warnung).
-pub(crate) fn missing_fonts(sketch: &Sketch) -> Vec<(String, usize)> {
+fn missing_fonts(sketch: &Sketch) -> Vec<(String, usize)> {
     let mut out: Vec<(String, usize)> = Vec::new();
     for (_, d) in sketch.texts() {
         let Some(name) = d.shape().and_then(|s| s.substituted.as_deref()) else {

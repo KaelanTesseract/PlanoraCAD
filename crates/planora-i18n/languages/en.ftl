@@ -1825,6 +1825,10 @@ sketch-err-text-data-curves = It has more than 4000 curves.
 sketch-err-text-data-frame = The frame is not a quadrilateral of four lines.
 sketch-err-text-data-path = The path is a curve of a text.
 sketch-err-text-data-shared = A curve or point belongs to two texts.
+sketch-err-text-data-kind = A generated curve is neither a line nor a conic with rho 0.5 nor a cubic spline with four control points.
+sketch-err-text-data-pattern = A generated curve or point belongs to a pattern.
+sketch-err-text-data-handle = A generated curve is a handle of a spline.
+sketch-err-text-data-construction = A frame line is not a construction line.
 sketch-err-data-pattern-direction = A pattern has an invalid direction ("perpendicular to direction 1" as the first direction)
 sketch-err-data-pattern-deleted = A pattern refers to a deleted object
 sketch-err-data-pattern-instance = An instance of a pattern does not match its objects
@@ -2012,6 +2016,7 @@ sketch-text-need-frame = Draw the frame with two clicks first.
 sketch-text-hint-substituted = Font "{ $font }" is missing on this computer, replaced by Montserrat.
 sketch-text-hint-synthetic = Bold or italic is simulated: the font has no such style.
 sketch-text-hint-missing-chars = Characters are missing: neither the font nor Roboto has them, their space stays empty.
+sketch-text-hint-unset = The text cannot be set with the fonts on this computer. It keeps its saved curves.
 sketch-text-edit-hint = Opens the selected text for editing (also double-click the text)
 sketch-text-explode-hint = Turns the selected texts into separate fixed curves. Only undo brings the text back.
 sketch-text-select-first = Select a text first.
@@ -2141,6 +2146,10 @@ feature-sketch-projection-lost = { $count ->
 feature-sketch-font-missing = { $count ->
     [one] Font "{ $font }" is missing on this computer, replaced by Montserrat.
    *[other] Font "{ $font }" is missing on this computer, replaced by Montserrat in { $count } texts.
+}
+feature-sketch-text-unset = { $count ->
+    [one] A text cannot be set with the fonts on this computer and keeps its saved curves.
+   *[other] { $count } texts cannot be set with the fonts on this computer and keep their saved curves.
 }
 feature-kind-fixed = The type of a feature cannot be changed
 feature-name-empty = The name must not be empty
