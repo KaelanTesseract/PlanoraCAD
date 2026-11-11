@@ -154,6 +154,18 @@ impl<T> History<T> {
         self.undo.back().map(|e| e.label.as_str())
     }
 
+    /// Ersetzt das aktuelle Bild, ohne einen Schritt anzulegen (Rückgängig- und
+    /// Wiederholen-Liste bleiben). Das neue Bild bekommt eine neue Nummer: Es ist ein anderer
+    /// Stand als der gespeicherte, auch wenn das alte Bild gespeichert war (Skizzen 8, Spec G4:
+    /// Texte nach dem Laden mit anderer Form neu gesetzt).
+    pub fn replace_current(&mut self, state: T, bytes: usize) {
+        self.current = state;
+        self.current_bytes = bytes;
+        self.current_id = self.next_id;
+        self.next_id += 1;
+        self.enforce_limits();
+    }
+
     /// Verwirft nur den obersten Rückgängig-Schritt (Zurückladen fehlgeschlagen).
     pub fn discard_undo(&mut self) {
         self.undo.pop_back();

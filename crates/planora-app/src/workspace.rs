@@ -118,6 +118,10 @@ pub struct DocTab {
     /// gelöscht ([`DocTab::drop_stale_autosave`]).
     autosave_written: bool,
     last_autosave: Instant,
+    /// Die Texte des Dokuments sind mit der Schriftliste neu zu setzen (Skizzen 8, Spec G4):
+    /// nach dem Laden und nach jedem Zurückladen, denn geladene Texte sind nicht gesetzt.
+    /// Erledigt [`DocTab::apply_fonts`], sobald die Liste da ist.
+    reshape_due: bool,
 }
 
 impl DocTab {
@@ -150,7 +154,40 @@ impl DocTab {
             autosaved_edits: edits,
             autosave_written: false,
             last_autosave: Instant::now(),
+            reshape_due: true,
         }
+    }
+
+    /// Gibt dem Tab die Schriftliste und setzt, wenn fällig, seine Texte neu (Spec G4). Am Ende
+    /// eines Bildes nach [`DocTab::observe_history`]. Das Neusetzen ist nie ein
+    /// Rückgängig-Schritt: Bleibt die Form gleich, ändert sich nichts (kein „●“); ändert sie sich
+    /// (fehlende oder andere Schrift), nimmt der Verlauf den neuen Stand ohne Schritt als
+    /// aktuelles Bild, und der Tab gilt als geändert, weil Speichern sonst etwas anderes schriebe,
+    /// als zu sehen ist.
+    ///
+    /// Es wartet, solange eine Skizze offen ist (ihr Entwurf ist eine Kopie, die beim Beenden
+    /// zurückgeschrieben wird) und solange eine Änderung noch kein Schritt ist (Geste läuft).
+    pub(crate) fn apply_fonts(&mut self, fonts: &std::sync::Arc<planora_text::FontLibrary>) {
+        if self.state.fonts().is_none() {
+            self.state.set_fonts(fonts.clone());
+        }
+        if !self.reshape_due
+            || self.state.sketch_session.is_some()
+            || self.tracker.is_pending(self.state.document.edit_count())
+        {
+            return;
+        }
+        self.reshape_due = false;
+        if !self.state.reshape_texts() {
+            return;
+        }
+        // Neuer Zählerstand ohne Schritt, wie nach dem Zurückladen; das Bild des Verlaufs ist ab
+        // jetzt der neu gesetzte Stand (Rückgängig kehrt dorthin zurück, nicht zur alten Form).
+        self.tracker.reset(self.state.document.edit_count());
+        let snapshot = self.state.snapshot();
+        let bytes = snapshot_bytes(&snapshot);
+        self.history.replace_current(snapshot, bytes);
+        crate::diag::info("Texts reshaped with the fonts of this computer");
     }
 
     /// Ungespeicherte Änderungen (R7): eine Skizze ist offen, eine Änderung ist noch kein
@@ -408,6 +445,8 @@ impl DocTab {
     /// halten Kennungen des alten Stands und schließen.
     fn after_jump(&mut self) {
         self.tracker.reset(self.state.document.edit_count());
+        // Das zurückgeladene Bild kann ungesetzte Texte halten (Schritt vor der Schriftliste).
+        self.reshape_due = true;
         self.close_dialogs();
         self.reload_parameter_dialog();
     }
@@ -551,6 +590,7 @@ impl DocTab {
     pub fn replace_state(&mut self, state: AppState) {
         self.state = state;
         (self.history, self.tracker) = fresh_history(&self.state);
+        self.reshape_due = true;
         self.close_dialogs();
         self.reload_parameter_dialog();
     }
@@ -1388,6 +1428,14 @@ impl Workspace {
     /// Ist ein Tab mit einem gespeicherten Dokument offen? Dann bleibt die Wurzel, wie sie ist.
     pub fn has_saved_documents(&self) -> bool {
         self.tabs.iter().any(|t| t.path.is_some())
+    }
+
+    /// Am Ende jedes Bildes, sobald die Schriftliste da ist: Jeder Tab bekommt sie und setzt
+    /// seine Texte neu, wenn das fällig ist ([`DocTab::apply_fonts`], Spec G4).
+    pub fn apply_fonts(&mut self, fonts: &std::sync::Arc<planora_text::FontLibrary>) {
+        for t in &mut self.tabs {
+            t.apply_fonts(fonts);
+        }
     }
 
     /// Am Ende jedes Bildes: Änderungen aller Tabs werden Schritte ihres Verlaufs (R3, R4);

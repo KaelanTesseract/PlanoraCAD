@@ -26,6 +26,7 @@ use planora_sketch::{ExtractedProfiles, ProfileRef, plane_of_face};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::mpsc::Receiver;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BodyKind {
@@ -41,6 +42,38 @@ pub enum BodyKind {
     Mesh,
     /// Aus einer STEP-Datei übernommener exakter Körper (STEP-Körper); verschoben bleibt er es.
     Step,
+}
+
+/// Stand der Schriftliste für Skizzentext (Skizzen 8, Spec A1, G4). Die Liste entsteht einmal je
+/// Programmlauf im Hintergrund ([`crate::fonts_library::start`]); bis sie da ist, wartet nichts
+/// auf sie. Die App fragt den Kanal in jedem Bild ab ([`FontState::poll`]).
+pub enum FontState {
+    /// Die Schriftordner werden noch durchsucht; die Liste kommt über den Kanal.
+    Loading(Receiver<planora_text::FontLibrary>),
+    /// Die Liste ist da.
+    Ready(Arc<planora_text::FontLibrary>),
+}
+
+impl FontState {
+    /// Fragt den Kanal ab, ohne zu warten, und liefert die Liste, sobald sie da ist. Bricht das
+    /// Durchsuchen ohne Liste ab (Kanal geschlossen), gelten die mitgelieferten Schriften, mit
+    /// einer Zeile im Protokoll: Text bleibt so immer setzbar.
+    pub fn poll(&mut self) -> Option<&Arc<planora_text::FontLibrary>> {
+        if let FontState::Loading(rx) = self {
+            match rx.try_recv() {
+                Ok(lib) => *self = FontState::Ready(Arc::new(lib)),
+                Err(std::sync::mpsc::TryRecvError::Empty) => return None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    crate::diag::warn("Font scan ended without a font list; using bundled fonts");
+                    *self = FontState::Ready(Arc::new(planora_text::FontLibrary::bundled_only()));
+                }
+            }
+        }
+        match self {
+            FontState::Ready(lib) => Some(lib),
+            FontState::Loading(_) => None,
+        }
+    }
 }
 
 /// Grundebenen für neue Skizzen (gemeinsame Definition mit dem Feature-Modell).
@@ -248,6 +281,9 @@ pub struct AppState {
     /// Kennung dieses Zustands (jedes Tab hat einen eigenen; eindeutig im Programm). Trennt die
     /// programmweiten Zwischenspeicher der Zeichnungsansicht nach Dokumenten.
     pub instance: u64,
+    /// Die Schriftliste des Programms, sobald sie da ist ([`AppState::fonts`]); die App gibt sie
+    /// jedem Tab ([`crate::workspace::Workspace::apply_fonts`]).
+    fonts: Option<Arc<planora_text::FontLibrary>>,
 }
 
 /// Profilwahl eines offenen Dialogs „Extrudieren“/„Drehen“ (wie in Fusion: Klick in die Ansicht
@@ -559,9 +595,38 @@ impl AppState {
             pending_delete_dimension: None,
             document_name: tr!("state-unnamed"),
             instance: NEXT_INSTANCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            fonts: None,
         };
         state.rebuild_scene();
         state
+    }
+
+    /// Die Schriftliste; `None`, solange die Schriftordner noch durchsucht werden (Spec G4).
+    pub fn fonts(&self) -> Option<&Arc<planora_text::FontLibrary>> {
+        self.fonts.as_ref()
+    }
+
+    /// Gibt dem Zustand die Schriftliste (einmal, sobald sie da ist).
+    pub(crate) fn set_fonts(&mut self, fonts: Arc<planora_text::FontLibrary>) {
+        self.fonts = Some(fonts);
+    }
+
+    /// Setzt alle Texte des Dokuments mit der Schriftliste neu (Spec G4: nach dem Laden und nach
+    /// jedem Zurückladen). `true`, wenn sich die Form geändert hat; dann ist das Dokument neu
+    /// berechnet und die Körper sind neu aufgebaut, ohne die Ansicht neu einzupassen. Ohne Liste
+    /// geschieht nichts. Ob das ein Schritt wird, entscheidet der Aufrufer (nie: siehe
+    /// [`crate::workspace::DocTab`]).
+    pub(crate) fn reshape_texts(&mut self) -> bool {
+        let Some(lib) = self.fonts.clone() else {
+            return false;
+        };
+        let changed = self
+            .document
+            .reshape_texts(&crate::fonts_library::Guarded(&lib));
+        if changed {
+            self.refresh_with(None, false);
+        }
+        changed
     }
 
     /// Farben der 3D-Szene im aktuellen Thema (Raster, Achsen, Auswahl aus dem Graphit-Theme).

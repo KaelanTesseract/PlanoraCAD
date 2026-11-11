@@ -21,7 +21,7 @@ use crate::projects_window::{ProjectsEvent, ProjectsWindow};
 use crate::settings_window::{CheckHint, SettingsEvent, SettingsWindow};
 use crate::shell::ShellState;
 use crate::sketch_state::Tool;
-use crate::state::{AppState, BodyKind, SketchRequest, StandardPlane};
+use crate::state::{AppState, BodyKind, FontState, SketchRequest, StandardPlane};
 use crate::step_import_dialog::{self, StepImportDialog};
 use crate::update_check::{self, CheckRequest, CheckResult, NoNetwork, UpdateChecker};
 use crate::update_dialog::{self, InstallView, UpdateAction, UpdateDialog};
@@ -99,6 +99,16 @@ pub enum MenuRequest {
     Settings,
     Shortcuts,
     Feedback,
+}
+
+/// Die mitgelieferten Schriften, einmal je Prozess gelesen: Vorgabe der Apps in Tests, die
+/// sonst je App die Schriftdateien läsen.
+fn bundled_fonts() -> Arc<planora_text::FontLibrary> {
+    static BUNDLED: std::sync::OnceLock<Arc<planora_text::FontLibrary>> =
+        std::sync::OnceLock::new();
+    BUNDLED
+        .get_or_init(|| Arc::new(planora_text::FontLibrary::bundled_only()))
+        .clone()
 }
 
 /// Öffnet keinen Ordner (Tests ohne eigene Nachbildung; im Programm [`ExplorerOpen`]).
@@ -181,6 +191,10 @@ pub struct PlanoraApp {
     /// Laufmarker dieser Instanz ([`crate::crash::start_run`]); [`eframe::App::on_exit`] löscht
     /// ihn.
     run_marker: Option<RunMarker>,
+    /// Schriftliste für Skizzentext (Skizzen 8, Spec G4): im Programm ab dem Start im
+    /// Hintergrund aufgebaut ([`crate::fonts_library::start`]), in Tests die mitgelieferten
+    /// Schriften ([`PlanoraApp::set_font_state`]). Jedes Bild fragt sie ab.
+    fonts: FontState,
 }
 
 /// Schritt des Neustarts nach einem fertig geladenen und geprüften Update.
@@ -227,6 +241,8 @@ impl PlanoraApp {
             .expect("PlanoraCAD needs the wgpu renderer");
         cc.egui_ctx.set_fonts(fonts::definitions());
         Self::setup_context(&cc.egui_ctx);
+        // Gleich zu Beginn, damit die Liste möglichst früh da ist; der Start wartet nicht darauf.
+        let font_state = crate::fonts_library::start(&cc.egui_ctx);
         GpuScene::install(render_state);
         crate::build_info::set_gpu(crate::build_info::gpu_from_adapter(
             &render_state.adapter.get_info(),
@@ -258,6 +274,7 @@ impl PlanoraApp {
         // Nachbildungen.
         let source = Arc::new(HttpSource::new(&running));
         let mut app = Self::with_workspace(ws, source);
+        app.fonts = font_state;
         app.downloader = Arc::new(HttpDownloader::new(&running));
         app.launcher = Arc::new(ShellLauncher);
         app.install_mode = install_mode;
@@ -404,7 +421,24 @@ impl PlanoraApp {
             first_frame: None,
             crash_notice: None,
             run_marker: None,
+            // Tests hängen nie an Systemschriften (Spec G7); das Programm setzt in `new` den
+            // Hintergrund-Start.
+            fonts: FontState::Ready(bundled_fonts()),
         }
+    }
+
+    /// Setzt den Stand der Schriftliste (für Tests: Laden-Zustand mit eigenem Kanal oder eine
+    /// fertige Liste).
+    #[doc(hidden)]
+    pub fn set_font_state(&mut self, fonts: FontState) {
+        self.fonts = fonts;
+    }
+
+    /// Die App mit der fertigen Schriftliste `lib` (für Tests).
+    #[doc(hidden)]
+    pub fn with_fonts(mut self, lib: planora_text::FontLibrary) -> Self {
+        self.fonts = FontState::Ready(Arc::new(lib));
+        self
     }
 
     /// Wie [`PlanoraApp::for_tests_with_updates`] mit Nachbildungen für Download und Start des
@@ -2798,6 +2832,12 @@ impl eframe::App for PlanoraApp {
             || viewport::typing_for_history(&ctx)
             || crate::history_bar::is_playing(&ctx);
         self.ws.observe_history(gesture);
+        // Nach den Schritten: Sobald die Schriftliste da ist, setzen die Tabs ihre Texte neu
+        // (Spec G4), ohne Rückgängig-Schritt.
+        if let Some(lib) = self.fonts.poll() {
+            let lib = lib.clone();
+            self.ws.apply_fonts(&lib);
+        }
         viewport::remember_keyboard_focus(&ctx);
         if self.ws.quit && !self.close_sent {
             // Beenden ist freigegeben (Menü oder letzte Rückfrage): `logic` des nächsten Bildes

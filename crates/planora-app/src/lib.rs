@@ -31,6 +31,7 @@ pub mod feedback_dialog;
 pub mod feedback_shot;
 pub mod file_chooser;
 pub mod fonts;
+pub mod fonts_library;
 pub mod formula_field;
 pub mod history;
 pub mod history_bar;

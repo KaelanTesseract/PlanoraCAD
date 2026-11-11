@@ -2662,6 +2662,7 @@ dependencies = [
  "planora-render",
  "planora-sketch",
  "planora-step",
+ "planora-text",
  "planora-update",
  "png",
  "serde_json",
