@@ -348,6 +348,41 @@ impl Sketch {
         true
     }
 
+    /// Wie [`solve_holding`](Self::solve_holding), aber nur für die Zusammenhangsgruppen, zu denen
+    /// die Punkte `hold` gehören: Alle anderen Gruppen bleiben, wie sie sind, und ihr Scheitern
+    /// zählt nicht (etwa ein Widerspruch an ganz anderer Stelle der Skizze). `false`, wenn eine
+    /// der eigenen Gruppen sich bei festen `hold` nicht lösen lässt; dann bleibt die Skizze, wie
+    /// sie ist.
+    pub(crate) fn solve_holding_connected(&mut self, hold: &[PointId]) -> bool {
+        let own: HashSet<usize> = hold
+            .iter()
+            .flat_map(|&p| [self.points[p].x, self.points[p].y])
+            .collect();
+        let (groups, _) = self.build_groups();
+        let keep: HashSet<ConstraintId> = groups
+            .iter()
+            .filter(|g| g.vars.iter().any(|v| own.contains(v)))
+            .flat_map(|g| g.constraints.iter().copied())
+            .collect();
+        let other: Vec<ConstraintId> = self
+            .constraints
+            .iter()
+            .filter(|(id, c)| c.alive && c.enabled && !c.driven && !keep.contains(id))
+            .map(|(id, _)| id)
+            .collect();
+        let mut trial = self.clone();
+        for id in other {
+            trial.constraints[id].enabled = false;
+        }
+        trial.touch_structure();
+        if !trial.solve_holding(hold) {
+            return false;
+        }
+        self.vars = trial.vars;
+        self.touch_values();
+        true
+    }
+
     /// Wie [`solve_holding`](Self::solve_holding) für das Maß `dim`, das schon den neuen Wert `to`
     /// trägt und vorher `from` hatte: Ein großer Sprung lässt den Löser nah an der Grenze scheitern,
     /// in kleineren Schritten bleibt die Lage. Halbiert höchstens [`HOLD_HALVINGS`]-mal.

@@ -408,10 +408,18 @@ fn box_to_path_removes_frame() {
     ));
 }
 
+/// Mitte des Hüllquaders der Punkte.
+fn center(points: &[DVec2]) -> DVec2 {
+    let (min, max) = bbox(points);
+    0.5 * (min + max)
+}
+
 #[test]
 fn path_to_box_wraps_current_place() {
+    // Waagerechter Pfad: Der Rahmen umfasst den Text nach den Maßen der Schrift (Breite der
+    // Zeile, Ober- und Unterlänge), der Text bleibt bei jeder Ausrichtung genau an seiner Stelle.
     let mut s = sketch();
-    let path = line(&mut s, v(0.0, 0.0), v(50.0, 20.0));
+    let path = line(&mut s, v(0.0, 50.0), v(100.0, 50.0));
     let p = params("ab");
     let t = s
         .add_text_path(
@@ -423,56 +431,94 @@ fn path_to_box_wraps_current_place() {
             path_shape_of(&p),
         )
         .unwrap();
-    let curves = glyph_curves(&s, t);
-    let (min, max) = bbox(&positions(&s, t));
-    let kind = TextKindEdit::Box {
-        h: HAlign::Left,
-        v: VAlign::Bottom,
-    };
-    s.edit_text(t, p.clone(), kind, shape_of(&p)).unwrap();
-    let (lines, corners) = frame(&s, t);
-    let want = [min, v(max.x, min.y), max, v(min.x, max.y)];
-    for (k, &c) in corners.iter().enumerate() {
-        assert!(
-            close(at(&s, c), want[k]),
-            "Ecke {k}: {:?} ≠ {:?}",
-            at(&s, c),
-            want[k]
+    let (curves, before) = (glyph_curves(&s, t), positions(&s, t));
+    // Breite 2 × 0,8 × 5 = 8, Grundlinie auf dem Pfad, Unterlänge −0,2 × 5, Oberlänge 0,9 × 5.
+    let want = [v(0.0, 49.0), v(8.0, 49.0), v(8.0, 54.5), v(0.0, 54.5)];
+    for (h, va) in [
+        (HAlign::Left, VAlign::Bottom),
+        (HAlign::Right, VAlign::Top),
+        (HAlign::Center, VAlign::Middle),
+    ] {
+        let mut s = s.clone();
+        let kind = TextKindEdit::Box { h, v: va };
+        s.edit_text(t, p.clone(), kind, shape_of(&p)).unwrap();
+        let (lines, corners) = frame(&s, t);
+        for (k, &c) in corners.iter().enumerate() {
+            assert!(
+                close(at(&s, c), want[k]),
+                "{h:?}/{va:?} Ecke {k}: {:?} ≠ {:?}",
+                at(&s, c),
+                want[k]
+            );
+        }
+        for (a, b) in before.iter().zip(positions(&s, t)) {
+            assert!(close(*a, b), "{h:?}/{va:?}: {a:?} ≠ {b:?}");
+        }
+        for (k, &l) in lines.iter().enumerate() {
+            let d = s.curve(l).unwrap();
+            assert!(d.construction, "Rahmenlinie {k} ist Konstruktion");
+            assert_eq!(s.text_of_frame(l), Some(t));
+        }
+        assert!(s.text_angle(t).unwrap().abs() <= 1e-12, "Winkel 0");
+        assert!(has_internal_horizontal(&s, lines[0]));
+        assert_eq!(
+            s.internal_constraints().count(),
+            4,
+            "Rechteck und Waagerecht"
         );
+        assert_eq!(glyph_curves(&s, t), curves, "gleiche Ids");
+        assert!(s.curve(path).is_some(), "der Pfad bleibt");
+        // Der Pfad ist jetzt frei: Er lässt sich löschen, der Text bleibt an seiner Stelle.
+        assert_eq!(s.solve().status, SolveStatus::Solved);
+        s.remove_curve(path).unwrap();
+        assert!(s.text(t).is_some());
+        for (a, b) in before.iter().zip(positions(&s, t)) {
+            assert!(close(*a, b), "nach dem Lösen {h:?}/{va:?}: {a:?} ≠ {b:?}");
+        }
     }
-    for (k, &l) in lines.iter().enumerate() {
-        let d = s.curve(l).unwrap();
-        assert!(d.construction, "Rahmenlinie {k} ist Konstruktion");
-        assert_eq!(s.text_of_frame(l), Some(t));
+
+    // Schräger Pfad, auch mit zwei Zeilen: Der Rahmen steht mit Winkel 0, nach den Maßen der
+    // Schrift groß, um die Mitte des Textes an seiner bisherigen Stelle.
+    for (content, size) in [("ab", v(8.0, 5.5)), ("a\nb", v(4.0, 11.5))] {
+        let mut s = sketch();
+        let path = line(&mut s, v(0.0, 0.0), v(50.0, 20.0));
+        let p = params(content);
+        let t = s
+            .add_text_path(
+                path,
+                p.clone(),
+                true,
+                false,
+                HAlign::Left,
+                path_shape_of(&p),
+            )
+            .unwrap();
+        let mid = center(&positions(&s, t));
+        for va in [VAlign::Bottom, VAlign::Top] {
+            let mut s = s.clone();
+            let kind = TextKindEdit::Box {
+                h: HAlign::Left,
+                v: va,
+            };
+            s.edit_text(t, p.clone(), kind, shape_of(&p)).unwrap();
+            let (_, corners) = frame(&s, t);
+            let c: Vec<DVec2> = corners.iter().map(|&k| at(&s, k)).collect();
+            assert!(s.text_angle(t).unwrap().abs() <= 1e-12, "Winkel 0");
+            assert!(
+                (c[1] - c[0] - v(size.x, 0.0)).length() <= 1e-9,
+                "{content:?}: {c:?}"
+            );
+            assert!(
+                (c[3] - c[0] - v(0.0, size.y)).length() <= 1e-9,
+                "{content:?}: {c:?}"
+            );
+            assert!(
+                close(center(&positions(&s, t)), mid),
+                "{content:?}/{va:?}: Mitte {:?} ≠ {mid:?}",
+                center(&positions(&s, t))
+            );
+        }
     }
-    assert!(s.text_angle(t).unwrap().abs() <= 1e-12, "Winkel 0");
-    assert!(has_internal_horizontal(&s, lines[0]));
-    assert_eq!(
-        s.internal_constraints().count(),
-        4,
-        "Rechteck und Waagerecht"
-    );
-    assert_eq!(glyph_curves(&s, t), curves, "gleiche Ids");
-    assert!(s.curve(path).is_some(), "der Pfad bleibt");
-    // Die Lage wie bei einem neuen Text in diesem Rahmen.
-    let mut u = sketch();
-    let w = u
-        .add_text_box(
-            min,
-            max,
-            p.clone(),
-            HAlign::Left,
-            VAlign::Bottom,
-            shape_of(&p),
-        )
-        .unwrap();
-    for (a, b) in positions(&s, t).iter().zip(positions(&u, w)) {
-        assert!(close(*a, b), "{a:?} ≠ {b:?}");
-    }
-    // Der Pfad ist jetzt frei: Er lässt sich löschen, der Text bleibt.
-    assert_eq!(s.solve().status, SolveStatus::Solved);
-    s.remove_curve(path).unwrap();
-    assert!(s.text(t).is_some());
 }
 
 #[test]
@@ -555,7 +601,7 @@ fn angle_held_by_user_constraint_rejected_unchanged() {
     // Waagerecht des Benutzers auf der Grundlinie, nachdem das interne gefallen ist.
     let mut s = sketch();
     let t = text(&mut s, "ab");
-    let (lines, corners) = frame(&s, t);
+    let (lines, _) = frame(&s, t);
     s.set_text_angle(t, 0.3).unwrap();
     s.add_constraint(K::Horizontal(LineOrPoints::Line(lines[0])))
         .unwrap();
@@ -571,6 +617,7 @@ fn angle_held_by_user_constraint_rejected_unchanged() {
     // Zwei feste Ecken.
     let mut s = sketch();
     let t = text(&mut s, "ab");
+    let (_, corners) = frame(&s, t);
     s.add_constraint(K::Fixed(corners[0], 0.0, 0.0)).unwrap();
     s.add_constraint(K::Fixed(corners[1], 40.0, 0.0)).unwrap();
     let (before, rev) = (s.to_data(), s.revision());
@@ -584,6 +631,7 @@ fn angle_held_by_user_constraint_rejected_unchanged() {
     // Senkrecht auf der Seitenlinie.
     let mut s = sketch();
     let t = text(&mut s, "ab");
+    let (lines, _) = frame(&s, t);
     s.set_text_angle(t, 0.4).unwrap();
     s.add_constraint(K::Vertical(LineOrPoints::Line(lines[1])))
         .unwrap();
@@ -691,4 +739,57 @@ fn edit_failure_leaves_sketch_unchanged() {
         "leer",
     );
     unchanged(&s, &before, rev, "leer");
+}
+
+/// Zwei sich widersprechende Maße an einer Linie anderswo: Diese Gruppe ist unlösbar.
+fn unrelated_conflict(s: &mut Sketch) {
+    let a = s.add_point(100.0, 100.0).unwrap();
+    let b = s.add_point(105.0, 100.0).unwrap();
+    s.add_line(a, b).unwrap();
+    s.add_constraint(K::Distance(a, b, 10.0)).unwrap();
+    s.add_constraint(K::Distance(a, b, 20.0)).unwrap();
+    assert_eq!(s.solve().status, SolveStatus::Conflicting);
+}
+
+#[test]
+fn unrelated_conflict_does_not_hold_angle() {
+    let mut s = sketch();
+    let t = text(&mut s, "ab");
+    let (lines, corners) = frame(&s, t);
+    unrelated_conflict(&mut s);
+    let c0 = at(&s, corners[0]);
+    s.set_text_angle(t, 0.5).unwrap();
+    assert!((s.text_angle(t).unwrap() - 0.5).abs() <= 1e-12);
+    assert_eq!(at(&s, corners[0]), c0);
+    // Hält der Benutzer den Winkel, bleibt es bei der Ablehnung, auch neben dem Widerspruch.
+    s.add_constraint(K::Vertical(LineOrPoints::Line(lines[1])))
+        .unwrap();
+    s.solve();
+    let (before, rev) = (s.to_data(), s.revision());
+    says(
+        s.set_text_angle(t, 1.0),
+        tr!("sketch-text-angle-held"),
+        "Senkrecht neben Widerspruch",
+    );
+    unchanged(&s, &before, rev, "Senkrecht neben Widerspruch");
+}
+
+#[test]
+fn angle_with_length_and_outside_distance_follows() {
+    let mut s = sketch();
+    let t = text(&mut s, "ab");
+    let (_, corners) = frame(&s, t);
+    s.add_constraint(K::Distance(corners[0], corners[1], 40.0))
+        .unwrap();
+    let q = s.add_point(60.0, 10.0).unwrap();
+    let gap = at(&s, corners[2]).distance(v(60.0, 10.0));
+    s.add_constraint(K::Distance(corners[2], q, gap)).unwrap();
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+    s.set_text_angle(t, 0.5).unwrap();
+    assert!((s.text_angle(t).unwrap() - 0.5).abs() <= 1e-12);
+    assert_ne!(at(&s, q), v(60.0, 10.0), "der freie Punkt folgt");
+    assert!((at(&s, corners[2]).distance(at(&s, q)) - gap).abs() <= 1e-9);
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+    assert!((s.text_angle(t).unwrap() - 0.5).abs() <= 1e-9);
+    assert!((at(&s, corners[0]).distance(at(&s, corners[1])) - 40.0).abs() <= 1e-9);
 }

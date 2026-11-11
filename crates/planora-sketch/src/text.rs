@@ -214,6 +214,28 @@ fn out_of_range() -> SketchError {
     SketchError::InvalidInput(tr!("sketch-text-out-of-range"))
 }
 
+/// Mitte des Hüllquaders der Punkte; `None` ohne Punkte oder bei nicht endlichen Werten.
+fn mid_of(points: impl Iterator<Item = DVec2>) -> Option<DVec2> {
+    let (lo, hi) = points.fold(
+        (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)),
+        |(lo, hi), p| (lo.min(p), hi.max(p)),
+    );
+    let mid = 0.5 * (lo + hi);
+    mid.is_finite().then_some(mid)
+}
+
+/// Die Punkte der Konturen, wie `sync_text` sie anlegt: Konturen mit weniger als zwei Stücken
+/// entfallen.
+fn contour_points(contours: &[Contour]) -> impl Iterator<Item = DVec2> + '_ {
+    contours.iter().filter(|c| c.segs.len() >= 2).flat_map(|c| {
+        std::iter::once(c.start).chain(c.segs.iter().flat_map(|s| match *s {
+            Seg::Line(p) => vec![p],
+            Seg::Quad(a, p) => vec![a, p],
+            Seg::Cubic(a, b, p) => vec![a, b, p],
+        }))
+    })
+}
+
 /// Was für einen Text auf Pfad gesetzt wird: Die Zeilen werden mit einem Leerzeichen verbunden
 /// (Spec B7, **Annahme**); Zeilenumbrüche wie beim Setzen (`\r\n`, `\r`, `\n`). Gespeichert bleibt
 /// der Inhalt, wie er ist, damit ein Wechsel in den Rahmen die Zeilen zurückbringt.
@@ -604,9 +626,13 @@ impl Sketch {
     /// - Rahmen → Pfad löscht den Rahmen und die Abhängigkeiten daran. Eine Ecke, die noch eine
     ///   andere lebende Kurve benutzt, bleibt als gewöhnlicher Punkt (wie bei
     ///   [`Sketch::remove_text`]).
-    /// - Pfad → Rahmen legt einen Rahmen um die aktuelle Lage an, mit Winkel 0 und dem internen
-    ///   `Horizontal` wie ein neuer Rahmen: das achsenparallele Rechteck um die erzeugten Punkte
-    ///   (die Kontrollpunkte umschließen die Kurven). Der Pfad bleibt.
+    /// - Pfad → Rahmen legt einen Rahmen an, der den Text an seiner Stelle umfasst (Spec C8),
+    ///   mit Winkel 0 und dem internen `Horizontal` wie ein neuer Rahmen. Groß ist er nach den
+    ///   Maßen der Schrift: so breit wie die breiteste Zeile, so hoch wie von der Oberlänge der
+    ///   ersten bis zur Unterlänge der letzten Zeile. Damit setzt jede Ausrichtung den Textblock
+    ///   gleich. Er steht so, dass die Mitte des neu gesetzten Textes auf der Mitte des Textes an
+    ///   seiner bisherigen Lage liegt; auf einem waagerechten geraden Pfad bleibt jeder Punkt, wo
+    ///   er war. Der Pfad bleibt.
     /// - Pfad → Pfad, auch auf eine andere Kurve, mit denselben Prüfungen wie
     ///   [`Sketch::add_text_path`].
     ///
@@ -689,20 +715,49 @@ impl Sketch {
     ) -> Result<(), SketchError> {
         check_params(&params)?;
         check_new_shape(&shape)?;
-        let (min, max) = self.texts[t]
-            .points
-            .iter()
-            .filter(|&&p| self.points[p].alive)
-            .map(|&p| self.pos(p))
-            .fold(
-                (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)),
-                |(lo, hi), p| (lo.min(p), hi.max(p)),
-            );
-        let size = max - min;
-        if !(size.x > self.tol.linear && size.y > self.tol.linear) {
-            return Err(SketchError::Degenerate(tr!("sketch-err-rect-size")));
+        let rect_size = || SketchError::Degenerate(tr!("sketch-err-rect-size"));
+        // Die Mitte des Textes an seiner aktuellen Lage.
+        let d = &self.texts[t];
+        let now = mid_of(
+            d.points
+                .iter()
+                .filter(|&&p| self.points[p].alive)
+                .map(|&p| self.pos(p)),
+        )
+        .ok_or_else(rect_size)?;
+        // Der Rahmen nach den Maßen der Schrift: Er umfasst den Textblock genau.
+        let height = params.height;
+        let width = shape.lines.iter().map(|l| l.width).fold(0.0, f64::max) * height;
+        let below = shape.lines.len().saturating_sub(1) as f64 * shape.line_height;
+        let tall = (shape.ascender - shape.descender + below) * height;
+        if !within_coord_range(DVec2::new(width, tall)) {
+            return Err(out_of_range());
         }
-        let corners = [min, DVec2::new(max.x, min.y), max, DVec2::new(min.x, max.y)];
+        if width <= self.tol.linear || tall <= self.tol.linear {
+            return Err(rect_size());
+        }
+        let frame_at = |o: DVec2| {
+            [
+                o,
+                o + DVec2::new(width, 0.0),
+                o + DVec2::new(width, tall),
+                o + DVec2::new(0.0, tall),
+            ]
+        };
+        let probe = place_box(
+            &shape,
+            height,
+            frame_at(DVec2::ZERO),
+            h,
+            v,
+            params.flip_h,
+            params.flip_v,
+        );
+        let mid = mid_of(contour_points(&probe)).ok_or_else(out_of_range)?;
+        let corners = frame_at(now - mid);
+        if !corners.iter().all(|&c| within_coord_range(c)) {
+            return Err(out_of_range());
+        }
         let placed = place_box(
             &shape,
             params.height,
@@ -749,7 +804,7 @@ impl Sketch {
     }
 
     /// Der Winkel eines Textes im Rahmen (Spec C5): die Richtung der Grundlinie von Ecke 0 nach
-    /// Ecke 1 im Bogenmaß, in `[−π, π]`. `None` für Text auf Pfad, einen unbekannten Text und
+    /// Ecke 1 im Bogenmaß, in `(−π, π]`. `None` für Text auf Pfad, einen unbekannten Text und
     /// solange die Grundlinie keine Länge hat.
     pub fn text_angle(&self, t: TextId) -> Option<f64> {
         let TextPlacement::Box { corners, .. } = self.text(t)?.placement else {
@@ -763,10 +818,11 @@ impl Sketch {
     }
 
     /// Dreht den Rahmen des Textes `t` um Ecke 0 auf den Winkel `rad` (Spec C5). Das interne
-    /// `Horizontal` auf der Grundlinie fällt dabei weg. Die übrige Geometrie wird bei fest
-    /// stehenden Ecken nachgelöst; geht das nicht, hält eine Abhängigkeit des Benutzers den Winkel
-    /// (etwa ein `Horizontal`, zwei feste Ecken oder ein Winkelmaß zu fester Geometrie), und die
-    /// Drehung wird mit `sketch-text-angle-held` abgelehnt. Ein gleicher Winkel ändert nichts.
+    /// `Horizontal` auf der Grundlinie fällt dabei weg. Die übrige Geometrie der Gruppe des
+    /// Rahmens wird bei fest stehenden Ecken nachgelöst; geht das nicht, hält eine Abhängigkeit des
+    /// Benutzers den Winkel (etwa ein `Horizontal`, zwei feste Ecken oder ein Winkelmaß zu fester
+    /// Geometrie), und die Drehung wird mit `sketch-text-angle-held` abgelehnt. Andere Gruppen der
+    /// Skizze zählen nicht, auch wenn sie unlösbar sind. Ein gleicher Winkel ändert nichts.
     /// Bei einem Fehler bleibt die Skizze unverändert.
     pub fn set_text_angle(&mut self, t: TextId, rad: f64) -> Result<(), SketchError> {
         let d = self.text(t).ok_or(SketchError::UnknownObject)?;
@@ -815,7 +871,7 @@ impl Sketch {
         for (&p, at) in corners.iter().zip(targets).skip(1) {
             trial.set_point_xy(p, at.x, at.y)?;
         }
-        if !trial.solve_holding(&corners) {
+        if !trial.solve_holding_connected(&corners) {
             return Err(SketchError::InvalidInput(tr!("sketch-text-angle-held")));
         }
         trial.refresh_texts();
