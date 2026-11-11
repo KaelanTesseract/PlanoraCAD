@@ -1382,10 +1382,12 @@ fn side_contents(
     // schon unter dem Feld steht); sonst bei einer Skizze mit Formeln, die sich nicht lösen
     // lässt, ihr Fehler (Plan P12).
     let problem = formula_problem(sf, se.last_report.as_ref());
+    // Bei offenem Abschnitt „Text“ steht die Meldung der Sitzung dort unter OK und Abbrechen.
+    let session = se.message.as_ref().filter(|_| !se.text_section_open());
     if let Some(m) = panel
         .error
         .as_ref()
-        .or(se.message.as_ref())
+        .or(session)
         .map(Msg::text)
         .filter(|m| live.as_deref() != Some(m.as_str()))
         .or(problem.map(|p| p.text()))

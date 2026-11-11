@@ -160,6 +160,26 @@ pub struct ReshapeReport {
     pub missing_chars: Vec<TextId>,
 }
 
+/// Warum ein Teil eines Textes nicht allein gelöscht werden darf (Spec B8).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextRemoval {
+    /// Rahmenlinie, Ecke oder erzeugte Kurve: nur mit dem ganzen Text
+    /// („sketch-text-part“).
+    Part,
+    /// Pfad (oder Punkt eines Pfades), an dem Text hängt („sketch-text-on-path“).
+    OnPath,
+}
+
+impl TextRemoval {
+    /// Die Ablehnung als Fehler der Skizze.
+    pub fn error(self) -> SketchError {
+        SketchError::InvalidInput(match self {
+            TextRemoval::Part => tr!("sketch-text-part"),
+            TextRemoval::OnPath => tr!("sketch-text-on-path"),
+        })
+    }
+}
+
 /// Größter erlaubter Zeichenabstand in Prozent (Spec A7).
 pub(crate) const MAX_SPACING: f64 = 1000.0;
 
@@ -354,36 +374,47 @@ impl Sketch {
             .any(|(_, d)| matches!(d.placement, TextPlacement::Path { path, .. } if path == c))
     }
 
-    /// Vor dem Löschen der Kurve `c`: Rahmenlinien und erzeugte Kurven gehen nur mit dem ganzen
-    /// Text (Spec B8), ein Pfad mit Text gar nicht.
-    pub(crate) fn refuse_text_curve_removal(&self, c: CurveId) -> Result<(), SketchError> {
+    /// Warum die Kurve `c` nicht allein gelöscht werden darf (Spec B8): Rahmenlinien und erzeugte
+    /// Kurven gehen nur mit dem ganzen Text, ein Pfad mit Text gar nicht. `None`: kein Hindernis
+    /// durch einen Text.
+    pub fn text_curve_removal(&self, c: CurveId) -> Option<TextRemoval> {
         if self.texts.is_empty() {
-            return Ok(());
+            return None;
         }
         if self.text_of_curve(c).is_some() || self.text_of_frame(c).is_some() {
-            return Err(SketchError::InvalidInput(tr!("sketch-text-part")));
+            return Some(TextRemoval::Part);
         }
-        if self.is_text_path(c) {
-            return Err(SketchError::InvalidInput(tr!("sketch-text-on-path")));
-        }
-        Ok(())
+        self.is_text_path(c).then_some(TextRemoval::OnPath)
     }
 
-    /// Vor dem Löschen des Punktes `p`: Ecken und erzeugte Punkte gehen nur mit dem ganzen Text;
-    /// ein Punkt, dessen Kurve ein Pfad mit Text ist, nicht.
-    pub(crate) fn refuse_text_point_removal(&self, p: PointId) -> Result<(), SketchError> {
+    /// Wie [`Sketch::text_curve_removal`] für den Punkt `p`: Ecken und erzeugte Punkte gehen nur
+    /// mit dem ganzen Text, ein Punkt, dessen Kurve ein Pfad mit Text ist, gar nicht.
+    pub fn text_point_removal(&self, p: PointId) -> Option<TextRemoval> {
         if self.texts.is_empty() {
-            return Ok(());
+            return None;
         }
         if self.is_text_point(p) || self.is_text_corner(p) {
-            return Err(SketchError::InvalidInput(tr!("sketch-text-part")));
+            return Some(TextRemoval::Part);
         }
-        for (c, d) in self.curves() {
-            if d.kind.points().contains(&p) {
-                self.refuse_text_curve_removal(c)?;
-            }
+        self.curves()
+            .filter(|(_, d)| d.kind.points().contains(&p))
+            .find_map(|(c, _)| self.text_curve_removal(c))
+    }
+
+    /// Vor dem Löschen der Kurve `c` ([`Sketch::text_curve_removal`]).
+    pub(crate) fn refuse_text_curve_removal(&self, c: CurveId) -> Result<(), SketchError> {
+        match self.text_curve_removal(c) {
+            Some(r) => Err(r.error()),
+            None => Ok(()),
         }
-        Ok(())
+    }
+
+    /// Vor dem Löschen des Punktes `p` ([`Sketch::text_point_removal`]).
+    pub(crate) fn refuse_text_point_removal(&self, p: PointId) -> Result<(), SketchError> {
+        match self.text_point_removal(p) {
+            Some(r) => Err(r.error()),
+            None => Ok(()),
+        }
     }
 
     /// Maße und Abhängigkeiten gehen an den Rahmen oder den Pfad, nicht an die Buchstaben

@@ -87,6 +87,8 @@ fn pointer(p: Pos2, b: PointerButton, pressed: bool, modifiers: Modifiers) -> Ev
 #[derive(Default)]
 struct Shot {
     texts: Vec<(String, Rect)>,
+    /// Mitten und Radien der gezeichneten Kreise (Punkte der Skizze).
+    circles: Vec<(Pos2, f32)>,
     /// Wann das Bild ein nächstes anfordert.
     repaint: Duration,
 }
@@ -98,6 +100,7 @@ fn walk(shape: &Shape, s: &mut Shot) {
             t.galley.text().to_string(),
             Rect::from_min_size(t.pos, t.galley.size()),
         )),
+        Shape::Circle(c) => s.circles.push((c.center, c.radius)),
         _ => {}
     }
 }
@@ -313,6 +316,22 @@ impl Rig {
 
     /// Der Bildschirmpunkt über der Lage `q` der Skizze: über drei Proben und zwei Schritte
     /// Nachbessern (die Abbildung ist für die Draufsicht affin).
+    /// Die Abbildung Skizze → Bildschirm aus drei Proben (für die Draufsicht affin), für viele
+    /// Punkte auf einmal.
+    fn mapping(&mut self) -> impl Fn(DVec2) -> Pos2 + use<> {
+        let p0 = pos2(960.0, 540.0);
+        let s0 = self.sketch_at(p0);
+        let sx = self.sketch_at(p0 + vec2(100.0, 0.0)) - s0;
+        let sy = self.sketch_at(p0 + vec2(0.0, 100.0)) - s0;
+        let det = sx.x * sy.y - sy.x * sx.y;
+        move |q: DVec2| {
+            let d = q - s0;
+            let a = (d.x * sy.y - sy.x * d.y) / det;
+            let b = (sx.x * d.y - d.x * sx.y) / det;
+            p0 + vec2((a * 100.0) as f32, (b * 100.0) as f32)
+        }
+    }
+
     fn screen(&mut self, q: DVec2) -> Pos2 {
         let p0 = pos2(960.0, 540.0);
         let s0 = self.sketch_at(p0);
@@ -1137,4 +1156,207 @@ fn snap_skips_glyph_for_frame_line_next_to_it() {
     let cur = se.draw_cursor.as_ref().expect("Zeiger");
     assert_eq!(cur.snap, Snap::Curve(lines[0]), "die Grundlinie fängt");
     assert!(cur.at.y.abs() < 1e-9, "auf der Grundlinie: {:?}", cur.at);
+}
+
+// ---- Korrekturrunde 1 -----------------------------------------------------------------------
+
+/// Text „A“ auf der Linie `path` (über die Skizze, ein Schritt).
+fn api_path_text(rig: &mut Rig, path: CurveId) -> TextId {
+    let shape = Arc::new(
+        FontLibrary::bundled_only()
+            .shape("A", &style("Montserrat"))
+            .unwrap(),
+    );
+    let t = {
+        let (_, sk) = rig.st().session_sketch_mut().unwrap();
+        let t = sk
+            .add_text_path(
+                path,
+                TextParams {
+                    content: "A".into(),
+                    style: style("Montserrat"),
+                    height: 20.0,
+                    flip_h: false,
+                    flip_v: false,
+                },
+                true,
+                false,
+                HAlign::Center,
+                shape,
+            )
+            .unwrap();
+        sk.solve();
+        t
+    };
+    rig.st().observe_sketch(false);
+    rig.settle();
+    t
+}
+
+/// Ist bei `at` ein Punkt gezeichnet (ein Kreis höchstens 1,5 px daneben)?
+fn painted(shot: &Shot, at: Pos2) -> bool {
+    shot.circles.iter().any(|(c, _)| c.distance(at) <= 1.5)
+}
+
+#[test]
+fn glyph_points_are_not_painted() {
+    let mut rig = Rig::new();
+    let t = rig.api_text("IH", FRAME_A, FRAME_B);
+    let to_screen = rig.mapping();
+    let d = rig.sk().text(t).unwrap().clone();
+    let TextPlacement::Box { corners, .. } = d.placement else {
+        panic!("Rahmen erwartet");
+    };
+    let glyph_spots: Vec<Pos2> = d
+        .points
+        .iter()
+        .map(|&p| to_screen(rig.sk().point_xy(p).unwrap()))
+        .collect();
+    let corner_spots: Vec<Pos2> = corners
+        .iter()
+        .map(|&p| to_screen(rig.sk().point_xy(p).unwrap()))
+        .collect();
+    let shot = rig.frame(vec![Event::PointerMoved(AWAY)]);
+    for (i, s) in corner_spots.iter().enumerate() {
+        assert!(painted(&shot, *s), "Ecke {i} ist ein Punkt wie andere");
+    }
+    for s in &glyph_spots {
+        assert!(!painted(&shot, *s), "kein Punkt am Buchstaben bei {s:?}");
+    }
+    // Über einem Punkt des Buchstabens: nichts hervorgehoben, ein Klick wählt den Text.
+    let spot = glyph_spots[0];
+    let shot = rig.frame(vec![Event::PointerMoved(spot)]);
+    assert!(!painted(&shot, spot), "kein hervorgehobener Punkt");
+    rig.click(spot);
+    let glyphs = rig.glyph_items(t);
+    assert_eq!(rig.selection(), glyphs, "der ganze Text");
+    let shot = rig.settle();
+    for s in &glyph_spots {
+        assert!(!painted(&shot, *s), "auch gewählt kein Punkt bei {s:?}");
+    }
+}
+
+#[test]
+fn refusal_message_stays_on_screen_with_hints() {
+    // 1920 × 1080, Abschnitt offen mit allen drei Hinweisen (Ersatzschrift, nachgebildet,
+    // Zeichen fehlen) und einem OK, das abgelehnt wird: Die Meldung steht ganz im Bild, direkt
+    // unter OK und Abbrechen.
+    let mut rig = Rig::new();
+    rig.action(Action::SketchText);
+    rig.click(FRAME_A);
+    rig.click(FRAME_B);
+    rig.tool().params.style.font = MISSING.into();
+    rig.tool().params.style.italic = true;
+    rig.tool().params.content = "\u{1F600}".into();
+    let shot = rig.settle();
+    for hint in [
+        tr!("sketch-text-hint-substituted", font = MISSING.to_string()),
+        tr!("sketch-text-hint-synthetic"),
+        tr!("sketch-text-hint-missing-chars"),
+    ] {
+        assert!(shot.has(&hint), "Hinweis „{hint}“");
+    }
+    let shot = rig.click_label(&tr!("common-ok"));
+    assert_eq!(rig.se().tool, Tool::Text, "abgelehnt, der Abschnitt bleibt");
+    let empty = tr!("sketch-text-empty");
+    let (_, rect) = shot
+        .texts
+        .iter()
+        .find(|(t, _)| *t == empty)
+        .unwrap_or_else(|| panic!("„{empty}“ fehlt im Bild"));
+    let screen = Rect::from_min_size(Pos2::ZERO, SIZE);
+    assert!(screen.contains_rect(*rect), "ganz im Bild: {rect:?}");
+    let ok = shot.find(&tr!("common-ok"));
+    assert!(
+        rect.top() > ok.y && rect.top() - ok.y < 60.0,
+        "direkt unter OK: {rect:?}, OK bei {ok:?}"
+    );
+    assert_eq!(
+        shot.texts.iter().filter(|(t, _)| *t == empty).count(),
+        1,
+        "nur einmal"
+    );
+    // Die Hinweise haben ihren vollen Wortlaut.
+    assert_eq!(
+        tr!("sketch-text-hint-missing-chars"),
+        "Zeichen fehlen: Weder die Schrift noch Roboto hat sie, ihr Platz bleibt leer."
+    );
+}
+
+#[test]
+fn edit_box_to_path_and_path_to_box() {
+    let mut rig = Rig::new();
+    let t = rig.api_text("HI", FRAME_A, FRAME_B);
+    let path = rig.api_line();
+    let steps = rig.undo_len();
+    let TextPlacement::Box { lines, .. } = rig.sk().text(t).unwrap().placement else {
+        panic!("Rahmen erwartet");
+    };
+    // Rahmen → Pfad: Der Rahmen ist fort, ein Schritt.
+    let spot = rig.glyph_spot(t);
+    rig.double_click(spot);
+    rig.click_label(&tr!("sketch-text-kind-path"));
+    let mid = (rig.sketch_at(LINE_A) + rig.sketch_at(LINE_B)) * 0.5;
+    let line_spot = rig.screen(mid);
+    rig.click(line_spot);
+    assert_eq!(rig.tool().path, Some(path));
+    rig.click_label(&tr!("common-ok"));
+    assert_eq!(rig.se().tool, Tool::Select);
+    let d = rig.sk().text(t).expect("derselbe Text").clone();
+    assert!(
+        matches!(d.placement, TextPlacement::Path { path: p, .. } if p == path),
+        "auf dem Pfad: {:?}",
+        d.placement
+    );
+    for c in lines {
+        assert!(rig.sk().curve(c).is_none(), "Rahmenlinie {c:?} fort");
+    }
+    assert_eq!(rig.undo_len(), steps + 1);
+    assert_eq!(
+        rig.st().sketch_undo_label(),
+        Some(tr!("undo-sketch-text-edit"))
+    );
+
+    // Pfad → Rahmen: ein neuer Rahmen mit 0°, ein Schritt.
+    let spot = rig.glyph_spot(t);
+    rig.double_click(spot);
+    assert_eq!(rig.tool().editing, Some(t));
+    assert_eq!(rig.tool().kind, TextToolKind::Path);
+    // „Text“ steht mehrfach im Abschnitt (Überschrift, Art, Feld): die Art direkt.
+    rig.se().set_text_kind(TextToolKind::Box);
+    rig.settle();
+    rig.click_label(&tr!("common-ok"));
+    assert_eq!(rig.se().tool, Tool::Select);
+    let d = rig.sk().text(t).unwrap().clone();
+    assert!(
+        matches!(d.placement, TextPlacement::Box { .. }),
+        "im Rahmen"
+    );
+    let angle = rig.sk().text_angle(t).expect("Winkel");
+    assert!(angle.abs() < 1e-9, "0°: {}", angle.to_degrees());
+    assert!(rig.sk().curve(path).is_some(), "der Pfad bleibt");
+    assert_eq!(rig.undo_len(), steps + 2);
+}
+
+#[test]
+fn cancel_restores_selection_from_before_the_edit() {
+    let mut rig = Rig::new();
+    let t = rig.api_text("HI", FRAME_A, FRAME_B);
+    let path = rig.api_line();
+    let t2 = api_path_text(&mut rig, path);
+    let spot = rig.glyph_spot(t);
+    let near_end = pos2(LINE_B.x - 20.0, LINE_B.y);
+    // Text und Linie gewählt, dann „Text bearbeiten“.
+    rig.click(spot);
+    rig.shift_click(near_end);
+    let mut before = rig.glyph_items(t);
+    before.insert(Item::Curve(path));
+    assert_eq!(rig.selection(), before);
+    rig.click_label(&tr!("action-sketch-text-edit"));
+    assert_eq!(rig.tool().editing, Some(t));
+    // Während des Änderns ändert sich die Auswahl (etwa durch einen anderen Weg).
+    rig.se().selection = rig.glyph_items(t2).into_iter().collect();
+    rig.click_label(&tr!("common-cancel"));
+    assert_eq!(rig.se().tool, Tool::Select);
+    assert_eq!(rig.selection(), before, "die Auswahl von vorher");
 }

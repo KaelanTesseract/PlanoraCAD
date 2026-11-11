@@ -220,6 +220,8 @@ pub struct TextTool {
     /// Beim Ändern eines Textes im Rahmen: seine Ecken und sein Winkel beim Öffnen. Der Rahmen
     /// der Vorschau dreht daraus um Ecke 0 wie [`Sketch::set_text_angle`].
     edit_frame: Option<([DVec2; 4], f64)>,
+    /// Beim Ändern: die Auswahl vor dem Öffnen; Abbrechen stellt sie wieder her.
+    pub(crate) selection_before: Option<Vec<Item>>,
     /// Was zuletzt gesetzt wurde (Vorschau); passt zu `shaped_for`.
     preview: Option<Arc<TextShape>>,
     /// Die zuletzt gelegte Vorschau (`None`: nichts zu zeigen) und wofür.
@@ -294,6 +296,7 @@ impl TextTool {
             angle: 0.0,
             editing: None,
             edit_frame: None,
+            selection_before: None,
             preview: None,
             placed: None,
             shapings: 0,
@@ -680,6 +683,12 @@ impl SketchSession {
         self.tool == Tool::Text && self.text.is_some()
     }
 
+    /// Ist der Abschnitt „Text“ im Skizzenfeld offen? Dann steht die Meldung der Sitzung direkt
+    /// unter OK und Abbrechen statt unten im Skizzenfeld (bei 1920 × 1080 sonst außer Sicht).
+    pub fn text_section_open(&self) -> bool {
+        self.runs_text() && self.text.as_ref().is_some_and(TextTool::section_open)
+    }
+
     /// Beginnt das Werkzeug neu, mit den gemerkten Werten.
     pub(crate) fn begin_text(&mut self) {
         let memory = self.text_memory.get();
@@ -741,9 +750,10 @@ impl SketchSession {
     /// Auswahl bleibt. `false` für einen unbekannten Text.
     pub fn begin_text_edit(&mut self, sk: &mut Sketch, t: TextId) -> bool {
         let memory = self.text_memory.get();
-        let Some(tool) = TextTool::for_edit(sk, t, memory.as_ref(), current_unit()) else {
+        let Some(mut tool) = TextTool::for_edit(sk, t, memory.as_ref(), current_unit()) else {
             return false;
         };
+        tool.selection_before = Some(self.selection.clone());
         self.set_tool(sk, Tool::Text);
         self.message = None;
         self.text = Some(tool);
@@ -812,9 +822,10 @@ impl SketchSession {
         Ok(())
     }
 
-    /// Kurven und Punkte, die die Ansicht beim Ändern nicht zeichnet (an ihrer Stelle steht die
-    /// Vorschau): die Buchstaben des Textes, auf dem Pfad dazu sein Rahmen, den OK löscht.
-    pub fn text_hidden(&self, sk: &Sketch) -> (HashSet<CurveId>, HashSet<PointId>) {
+    /// Kurven, die die Ansicht beim Ändern nicht zeichnet (an ihrer Stelle steht die Vorschau):
+    /// die Buchstaben des Textes, auf dem Pfad dazu sein Rahmen, den OK löscht. Punkte von
+    /// Buchstaben zeichnet die Ansicht ohnehin nie.
+    pub fn text_hidden(&self, sk: &Sketch) -> HashSet<CurveId> {
         let Some((tool, d)) = self
             .text
             .as_ref()
@@ -824,13 +835,12 @@ impl SketchSession {
             return Default::default();
         };
         let mut curves: HashSet<CurveId> = d.curves.iter().copied().collect();
-        let points: HashSet<PointId> = d.points.iter().copied().collect();
         if tool.kind == TextToolKind::Path
             && let TextPlacement::Box { lines, .. } = d.placement
         {
             curves.extend(lines);
         }
-        (curves, points)
+        curves
     }
 
     /// Die zuletzt gelegte Vorschau, ohne neu zu rechnen (zum Zeichnen in jedem Bild).
@@ -1232,11 +1242,17 @@ pub(crate) fn text_options(
             out.cancel = true;
         }
     });
+    // Die Meldung der Sitzung direkt unter OK und Abbrechen (nicht unten im Skizzenfeld).
+    if let Some(m) = se.message.as_ref() {
+        ui.colored_label(error, m.text());
+    }
     if out.cancel {
         se.cancel(&mut sf.sketch);
+        ui.ctx().request_repaint();
     } else if out.ok {
-        // Fehler stehen in der Meldung der Sitzung.
+        // Fehler stehen in der Meldung der Sitzung; das nächste Bild zeigt sie.
         let _ = se.confirm_text(sf, fonts);
+        ui.ctx().request_repaint();
     }
 }
 

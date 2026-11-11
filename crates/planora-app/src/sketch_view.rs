@@ -1850,9 +1850,10 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     hidden.extend(handles_hidden.curves);
     hidden_points.extend(handles_hidden.points);
     // Beim Ändern eines Textes steht die Vorschau an der Stelle seiner Buchstaben.
-    let (text_curves, text_points) = se.text_hidden(sk);
-    hidden.extend(text_curves);
-    hidden_points.extend(text_points);
+    hidden.extend(se.text_hidden(sk));
+    // Buchstaben haben keine sichtbaren Punkte (Spec B9, wie Fusion): Sie fangen nicht und
+    // lassen sich nicht einzeln wählen.
+    hidden_points.extend(sk.glyph_points());
     // Der Rahmen eines gewählten Textes erscheint hervorgehoben (Spec B9).
     let frames = selected_frames(se, sk);
     for (c, data) in sk.curves() {

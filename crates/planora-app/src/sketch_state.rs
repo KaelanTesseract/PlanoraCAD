@@ -20,6 +20,7 @@ use planora_sketch::offset::{OffsetPlan, OffsetProblem};
 use planora_sketch::shapes::{folded_over, sweep_crossed_half_turn};
 use planora_sketch::snap::{SnapHit, SnapIndex};
 use planora_sketch::solver::{Drag, SolveReport, SolveStatus};
+use planora_sketch::text::TextRemoval;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -627,18 +628,12 @@ pub(crate) fn err(e: impl std::fmt::Display) -> Msg {
     Msg::Raw(e.to_string())
 }
 
-/// Die Ablehnung der Skizze beim Löschen eines Teils eines Textes (Spec B8) als Meldung mit dem
-/// wörtlichen Schlüssel; andere Fehler beim Löschen bleiben still wie bisher.
-fn text_refusal(e: &SketchError) -> Option<Msg> {
-    let SketchError::InvalidInput(m) = e else {
-        return None;
-    };
-    if *m == tr!("sketch-text-part") {
-        Some(crate::msg!("sketch-text-part"))
-    } else if *m == tr!("sketch-text-on-path") {
-        Some(crate::msg!("sketch-text-on-path"))
-    } else {
-        None
+/// Warum ein Teil eines Textes nicht allein gelöscht werden darf (Spec B8), als Meldung mit dem
+/// wörtlichen Schlüssel.
+fn text_refusal(r: TextRemoval) -> Msg {
+    match r {
+        TextRemoval::Part => crate::msg!("sketch-text-part"),
+        TextRemoval::OnPath => crate::msg!("sketch-text-on-path"),
     }
 }
 
@@ -1752,8 +1747,14 @@ impl SketchSession {
             return;
         }
         // Text: Esc, Rechtsklick und Abbrechen lassen nichts zurück, auch keinen Rahmen (Spec C7).
+        // Beim Ändern kommt die Auswahl von vor dem Öffnen zurück.
         if self.tool == Tool::Text {
+            let before = self.text.as_ref().and_then(|t| t.selection_before.clone());
             self.set_tool(sk, Tool::Select);
+            if let Some(before) = before {
+                self.selection = before;
+                self.forget_removed(sk);
+            }
             return;
         }
         // Muster: Esc und Rechtsklick lassen nichts zurück, auch keine Auswahl.
@@ -1915,13 +1916,14 @@ impl SketchSession {
         self.drop_curve_picks();
         if !extend {
             self.selection = items;
-        } else if items.iter().all(|i| self.selection.contains(i)) {
-            self.selection.retain(|i| !items.contains(i));
         } else {
-            for i in items {
-                if !self.selection.contains(&i) {
-                    self.selection.push(i);
-                }
+            let own: std::collections::HashSet<Item> = items.iter().copied().collect();
+            let chosen: std::collections::HashSet<Item> = self.selection.iter().copied().collect();
+            if own.is_subset(&chosen) {
+                self.selection.retain(|i| !own.contains(i));
+            } else {
+                self.selection
+                    .extend(items.into_iter().filter(|i| !chosen.contains(i)));
             }
         }
         self.sync_picks();
@@ -2892,13 +2894,12 @@ impl SketchSession {
                         let Some(d) = sk.curve(c) else {
                             continue;
                         };
-                        orphans.extend(d.kind.points());
                         // Rahmenlinie allein, Pfad mit Text: abgelehnt mit dem Grund (Spec B8).
-                        if let Err(e) = sk.remove_curve(c)
-                            && let Some(m) = text_refusal(&e)
-                        {
-                            return Err(m);
+                        if let Some(r) = sk.text_curve_removal(c) {
+                            return Err(text_refusal(r));
                         }
+                        orphans.extend(d.kind.points());
+                        let _ = sk.remove_curve(c);
                     }
                     Item::Point(p) => {
                         // Andere Punkte der mitgelöschten Kurven werden ebenso geprüft.
@@ -2912,11 +2913,10 @@ impl SketchSession {
                                 .flatten(),
                         );
                         // Ecke des Rahmens, Punkt eines Pfads mit Text: abgelehnt (Spec B8).
-                        if let Err(e) = sk.remove_point(p)
-                            && let Some(m) = text_refusal(&e)
-                        {
-                            return Err(m);
+                        if let Some(r) = sk.text_point_removal(p) {
+                            return Err(text_refusal(r));
                         }
+                        let _ = sk.remove_point(p);
                     }
                 }
             }
