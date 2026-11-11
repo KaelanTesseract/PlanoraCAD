@@ -12,7 +12,7 @@ use crate::pattern::{
     PatternSlot,
 };
 use crate::solver::SolveCache;
-use crate::text::{MAX_SPACING, ShapedCache, TextData, TextPlacement};
+use crate::text::{MAX_SPACING, ShapedCache, TextData, TextPlacement, WalkCache};
 use crate::text_shape::{MAX_TEXT_CHARS, MAX_TEXT_CURVES, TextStyle};
 use planora_i18n::tr;
 use planora_kernel::Arena;
@@ -391,6 +391,7 @@ impl Sketch {
                 alive: t.alive,
                 // Noch nicht gesetzt: Die gespeicherten Kurven bleiben (Spec G4).
                 shaped: ShapedCache(None),
+                walk: WalkCache::default(),
             });
         }
         let mut s = Sketch::new(d.frame, d.name, d.tolerance);

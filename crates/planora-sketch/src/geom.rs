@@ -37,7 +37,7 @@ const LENGTH_STEPS_PER_TURN: f64 = 128.0;
 const LENGTH_STEPS_PER_SEGMENT: f64 = 32.0;
 
 /// Eine Skizzenkurve als reine Geometrie (siehe Modulbeschreibung für die Parameter).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Geom {
     Line {
         a: DVec2,

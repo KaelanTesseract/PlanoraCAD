@@ -32,6 +32,7 @@ pub mod spline_handles;
 pub mod tangent_circles;
 pub mod text;
 pub mod text_layout;
+pub(crate) mod text_profile;
 pub(crate) mod text_refresh;
 pub mod text_shape;
 pub mod transform;

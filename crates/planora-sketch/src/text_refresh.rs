@@ -8,7 +8,7 @@
 
 use crate::constraint::ConstraintId;
 use crate::model::{CurveData, CurveId, CurveKind, PointData, PointId, Sketch};
-use crate::text::TextId;
+use crate::text::{TextId, WalkCache};
 use crate::text_shape::{Contour, Seg};
 use planora_math::DVec2;
 use std::collections::HashSet;
@@ -270,7 +270,13 @@ impl Sketch {
             .collect();
         let mut changed = false;
         for (t, shape) in shaped {
-            if let Some(placed) = self.placed_contours(t, &shape) {
+            let (placed, walk) = self.placed_contours_walk(t, &shape);
+            // Die Längentabelle des Pfades merken: Beim nächsten Lösen mit gleichem Pfad wird sie
+            // nicht neu gebaut.
+            if walk.is_some() {
+                self.texts[t].walk = WalkCache(walk);
+            }
+            if let Some(placed) = placed {
                 changed |= self.sync_text(t, &placed);
             }
         }

@@ -18,6 +18,14 @@ const TABLE_STEPS_PER_TURN: usize = 64;
 const INVERT_STEPS: usize = 60;
 /// Ein Vorschub unter diesem Wert (Einheiten der Höhe) gilt als null: ein Akzent.
 const ZERO_ADVANCE: f64 = 1e-9;
+/// Gauß-Legendre mit fünf Stellen auf `[−1, 1]`: Stelle und Gewicht (exakt bis Grad 9).
+const GAUSS_5: [(f64, f64); 5] = [
+    (-0.906_179_845_938_664, 0.236_926_885_056_189_08),
+    (-0.538_469_310_105_683_1, 0.478_628_670_499_366_47),
+    (0.0, 0.568_888_888_888_888_9),
+    (0.538_469_310_105_683_1, 0.478_628_670_499_366_47),
+    (0.906_179_845_938_664, 0.236_926_885_056_189_08),
+];
 
 /// Bildet jeden Punkt einer Kontur mit `f` ab.
 pub(crate) fn map_contour(c: &Contour, f: impl Fn(DVec2) -> DVec2) -> Contour {
@@ -115,8 +123,15 @@ pub fn place_box(
 
 /// Ein Pfad in Leserichtung, nach der Bogenlänge `s` ab dem Anfang der Leserichtung (bei
 /// geschlossenen Pfaden dem Bezugspunkt).
-struct Walk<'a> {
-    geom: &'a Geom,
+///
+/// Eine reine Funktion aus Geometrie, `closed` und `clockwise`: Der Text merkt sie sich zur
+/// Laufzeit ([`Walk::fits`]) und baut die Längentabelle nur neu, wenn sich der Pfad ändert.
+/// Sonst kostete jedes Lösen zwei Tabellen, bei einer projizierten Freiformkurve mit vielen
+/// Knoten zigtausend Auswertungen.
+#[derive(Clone)]
+pub(crate) struct Walk {
+    geom: Geom,
+    clockwise: bool,
     /// Parameter am Anfang der Leserichtung; `dir` ist +1 mit dem Parameter, −1 dagegen.
     t0: f64,
     dir: f64,
@@ -129,9 +144,21 @@ struct Walk<'a> {
     table: Vec<(f64, f64)>,
 }
 
-impl<'a> Walk<'a> {
+impl std::fmt::Debug for Walk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Ohne Tabelle: Sie hat bis zu 65537 Einträge.
+        f.debug_struct("Walk")
+            .field("length", &self.length)
+            .field("closed", &self.closed)
+            .field("clockwise", &self.clockwise)
+            .field("table", &self.table.len())
+            .finish()
+    }
+}
+
+impl Walk {
     /// `None`, wenn der Pfad keine endliche, positive Länge hat.
-    fn new(geom: &'a Geom, closed: bool, clockwise: bool) -> Option<Walk<'a>> {
+    pub(crate) fn new(geom: Geom, closed: bool, clockwise: bool) -> Option<Walk> {
         let (lo, hi) = geom.domain();
         let span = hi - lo;
         if !(span.is_finite() && span > 0.0) {
@@ -141,7 +168,7 @@ impl<'a> Walk<'a> {
         // Bezugspunkt geschlossener Pfade: bei Kreis und Ellipse ganz oben (Spec B7, Ruling 5b
         // für die Ellipse), sonst der Anfang der Leserichtung. Kreis und Ellipse sind periodisch,
         // ihr Parameter darf also über den Bereich hinaus laufen.
-        let t0 = match geom {
+        let t0 = match &geom {
             Geom::Circle { .. } if closed => FRAC_PI_2,
             // y = c.y + a.y·cos t + b.y·sin t ist am größten bei t = atan2(b.y, a.y).
             Geom::Ellipse { a, b, .. } if closed => b.y.atan2(a.y),
@@ -150,6 +177,7 @@ impl<'a> Walk<'a> {
         };
         let mut walk = Walk {
             geom,
+            clockwise,
             t0,
             dir,
             span,
@@ -158,14 +186,16 @@ impl<'a> Walk<'a> {
             table: Vec::new(),
         };
         if matches!(
-            geom,
+            walk.geom,
             Geom::Line { .. } | Geom::Circle { .. } | Geom::Arc { .. }
         ) {
-            walk.length = geom.arc_length(lo, hi);
+            walk.length = walk.geom.arc_length(lo, hi);
         } else {
             // Abgetastet wird von `t0` in Leserichtung über die ganze Spanne, auch über die Naht
             // einer Ellipse hinweg (Bezugspunkt oben); so passen Tabelle und `t(τ)` zusammen.
-            let ts = geom.polyline_params(walk.t(0.0), walk.t(span), TABLE_STEPS_PER_TURN);
+            let ts = walk
+                .geom
+                .polyline_params(walk.t(0.0), walk.t(span), TABLE_STEPS_PER_TURN);
             let taus: Vec<f64> = ts
                 .iter()
                 .map(|t| ((t - t0) * dir).clamp(0.0, span))
@@ -174,7 +204,7 @@ impl<'a> Walk<'a> {
             let mut sum = 0.0;
             table.push((0.0, 0.0));
             for w in taus.windows(2) {
-                sum += geom.arc_length(walk.t(w[0]), walk.t(w[1]));
+                sum += walk.length_between(w[0], w[1]);
                 table.push((w[1], sum));
             }
             walk.length = sum;
@@ -183,8 +213,35 @@ impl<'a> Walk<'a> {
         (walk.length.is_finite() && walk.length > 0.0).then_some(walk)
     }
 
+    /// Gilt dieser Weg für den Pfad `geom` mit `closed` und `clockwise`? Dann ist er derselbe,
+    /// den [`Walk::new`] bauen würde.
+    pub(crate) fn fits(&self, geom: &Geom, closed: bool, clockwise: bool) -> bool {
+        self.closed == closed && self.clockwise == clockwise && self.geom == *geom
+    }
+
     fn t(&self, tau: f64) -> f64 {
         self.t0 + self.dir * tau
+    }
+
+    /// Bogenlänge zwischen `τ = a` und `τ = b`, die in einem Abschnitt der Längentabelle liegen.
+    /// Bei Freiformkurven liegt jeder Abschnitt in einem Bézier-Stück (die Tabelle enthält alle
+    /// Knoten), dort ist die Geschwindigkeit glatt: Gauß-Legendre mit fünf Stellen genügt. Die
+    /// allgemeine Länge rechnete je Abschnitt 33 Auswertungen, bei einem Pfad mit vielen Knoten
+    /// in jedem Bild zigtausendfach. Andere Kurven wie [`Geom::arc_length`].
+    fn length_between(&self, a: f64, b: f64) -> f64 {
+        if !matches!(self.geom, Geom::Nurbs { .. }) {
+            return self.geom.arc_length(self.t(a), self.t(b));
+        }
+        let (ta, tb) = (self.t(a), self.t(b));
+        let (mid, half) = (0.5 * (ta + tb), 0.5 * (tb - ta).abs());
+        if !(half.is_finite() && half > 0.0) {
+            return 0.0;
+        }
+        GAUSS_5
+            .iter()
+            .map(|&(x, w)| w * self.geom.eval(mid + half * x).1.length())
+            .sum::<f64>()
+            * half
     }
 
     /// Der Parameterabstand `τ` zur Bogenlänge `s ∈ [0, length]`.
@@ -203,7 +260,7 @@ impl<'a> Walk<'a> {
         let mut tau = a + (b - a) * (want / (cb - ca)).clamp(0.0, 1.0);
         let eps = 1e-13 * self.length;
         for _ in 0..INVERT_STEPS {
-            let f = self.geom.arc_length(self.t(a), self.t(tau)) - want;
+            let f = self.length_between(a, tau) - want;
             if f.abs() <= eps {
                 break;
             }
@@ -359,8 +416,8 @@ fn units(row: &[(DVec2, &Glyph)]) -> (Vec<Unit>, Vec<Option<usize>>) {
     (units, of)
 }
 
-/// Die Konturen des Textes auf dem Pfad `path_geom` in Skizzenkoordinaten, in der Reihenfolge
-/// Glyphe, Kontur wie im `TextShape` (Spec B7).
+/// Die Konturen des Textes auf dem Pfad `walk` (siehe [`Walk::new`]) in Skizzenkoordinaten, in
+/// der Reihenfolge Glyphe, Kontur wie im `TextShape` (Spec B7).
 ///
 /// - Leserichtung: mit dem Parameter, bei Kreis, Bogen, Ellipse und Ellipsenbogen (`clockwise`,
 ///   Ruling 5b) im Uhrzeigersinn. Oberhalb (`above`) heißt links der Leserichtung mit der
@@ -397,9 +454,7 @@ fn units(row: &[(DVec2, &Glyph)]) -> (Vec<Unit>, Vec<Option<usize>>) {
 pub(crate) fn place_path(
     shape: &TextShape,
     height: f64,
-    path_geom: &Geom,
-    closed: bool,
-    clockwise: bool,
+    walk: &Walk,
     above: bool,
     fit: bool,
     h: HAlign,
@@ -410,8 +465,7 @@ pub(crate) fn place_path(
         shape.lines.len() <= 1,
         "Text auf Pfad mit `path_content` setzen (Zeilen verbunden)"
     );
-    let walk = Walk::new(path_geom, closed, clockwise)?;
-    let length = walk.length;
+    let (length, closed) = (walk.length, walk.closed);
     let (row, width) = glyph_row(shape);
     let (units, of) = units(&row);
     // Bogenlänge der Mitte jeder Einheit in Leserichtung.
@@ -518,12 +572,11 @@ mod tests {
     }
 
     fn place(g: &Geom, closed: bool, round: bool) -> Option<Vec<Contour>> {
+        let walk = Walk::new(g.clone(), closed, round)?;
         place_path(
             &square(),
             5.0,
-            g,
-            closed,
-            round,
+            &walk,
             true,
             false,
             HAlign::Center,

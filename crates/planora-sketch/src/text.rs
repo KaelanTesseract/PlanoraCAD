@@ -15,7 +15,8 @@ use crate::constraint::{ConstraintKind, LineOrPoints, curve_ends};
 use crate::error::SketchError;
 use crate::geom::Geom;
 use crate::model::{CurveId, CurveKind, PointId, Sketch, within_coord_range};
-use crate::text_layout::{place_box, place_path};
+use crate::profile::ProfileRef;
+use crate::text_layout::{Walk, place_box, place_path};
 use crate::text_shape::{
     Contour, MAX_TEXT_CHARS, MAX_TEXT_CURVES, Seg, TextShape, TextShapeError, TextShaper, TextStyle,
 };
@@ -93,6 +94,18 @@ impl PartialEq for ShapedCache {
     }
 }
 
+/// Die zuletzt benutzte Längentabelle des Pfades eines Textes auf Pfad, nur zur Laufzeit. Sie ist
+/// eine reine Funktion der Pfadgeometrie ([`Walk::fits`]) und gilt nur, solange der Pfad gleich
+/// bleibt. Der Vergleich liefert wie bei [`ShapedCache`] immer `true`.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct WalkCache(pub(crate) Option<Arc<Walk>>);
+
+impl PartialEq for WalkCache {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
 /// Ein Text in der Skizze.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextData {
@@ -111,6 +124,7 @@ pub struct TextData {
     pub points: Vec<PointId>,
     pub(crate) alive: bool,
     pub(crate) shaped: ShapedCache,
+    pub(crate) walk: WalkCache,
 }
 
 /// Was ein Text werden soll, ohne die Lage.
@@ -268,6 +282,22 @@ impl Sketch {
         self.texts()
             .find(|(_, d)| d.curves.contains(&c))
             .map(|(t, _)| t)
+    }
+
+    /// Der Text, aus dem das Profil `p` stammt (Spec D2): `Some`, wenn alle Kanten des äußeren
+    /// Rands und der Löcher erzeugte Kurven desselben lebenden Textes sind, auch bei Teilflächen
+    /// überlappender Glyphen. Rahmenlinien zählen nicht zum Text.
+    pub fn text_of_profile(&self, p: &ProfileRef) -> Option<TextId> {
+        let mut want: HashSet<CurveId> = p.outer.iter().chain(&p.holes).map(|r| r.curve).collect();
+        let &first = want.iter().next()?;
+        let t = self.text_of_curve(first)?;
+        // Ein Durchgang über die Kurven des Textes statt einer Suche je Kante.
+        for c in &self.texts[t].curves {
+            if want.remove(c) && want.is_empty() {
+                break;
+            }
+        }
+        want.is_empty().then_some(t)
     }
 
     /// Der Text, dessen Rahmenlinie `c` ist.
@@ -453,8 +483,25 @@ impl Sketch {
     /// der Länge null, Pfad ohne Länge oder Richtung, Punkte außerhalb des Rechenbereichs): Dann
     /// bleibt die letzte gute Lage (Review Focus 3).
     pub(crate) fn placed_contours(&self, t: TextId, shape: &TextShape) -> Option<Vec<Contour>> {
+        self.placed_contours_walk(t, shape).0
+    }
+
+    /// Wie [`Sketch::placed_contours`], mit der gemerkten Längentabelle des Pfades, wenn sie
+    /// zum Pfad passt. Liefert dazu die benutzte Tabelle, damit der Aufrufer sie merkt (`None`
+    /// im Rahmen und wenn der Pfad gerade keine Länge hat).
+    pub(crate) fn placed_contours_walk(
+        &self,
+        t: TextId,
+        shape: &TextShape,
+    ) -> (Option<Vec<Contour>>, Option<Arc<Walk>>) {
         let d = &self.texts[t];
-        self.place_text(d.placement, d.height, d.flip_h, d.flip_v, shape)
+        self.place_text_walk(
+            d.placement,
+            d.height,
+            (d.flip_h, d.flip_v),
+            shape,
+            d.walk.0.as_ref(),
+        )
     }
 
     /// Die Konturen eines Textes mit `placement`, Höhe und Umkehren (siehe
@@ -467,20 +514,35 @@ impl Sketch {
         flip_v: bool,
         shape: &TextShape,
     ) -> Option<Vec<Contour>> {
+        self.place_text_walk(placement, height, (flip_h, flip_v), shape, None)
+            .0
+    }
+
+    /// [`Sketch::place_text`] mit einer gemerkten Längentabelle `walk` des Pfades: Passt sie zum
+    /// Pfad, wird sie benutzt, sonst neu gebaut. Liefert die benutzte Tabelle mit.
+    fn place_text_walk(
+        &self,
+        placement: TextPlacement,
+        height: f64,
+        (flip_h, flip_v): (bool, bool),
+        shape: &TextShape,
+        walk: Option<&Arc<Walk>>,
+    ) -> (Option<Vec<Contour>>, Option<Arc<Walk>>) {
+        let mut used = None;
         let placed = match placement {
             TextPlacement::Box {
                 corners, h, v: va, ..
             } => {
                 if corners.iter().any(|&p| !self.points[p].alive) {
-                    return None;
+                    return (None, None);
                 }
                 let at = corners.map(|p| self.pos(p));
                 if !at.iter().all(|&p| within_coord_range(p))
                     || at[0].distance(at[1]) <= self.tol.linear
                 {
-                    return None;
+                    return (None, None);
                 }
-                place_box(shape, height, at, h, va, flip_h, flip_v)
+                Some(place_box(shape, height, at, h, va, flip_h, flip_v))
             }
             TextPlacement::Path {
                 path,
@@ -488,13 +550,22 @@ impl Sketch {
                 fit,
                 h,
             } => {
-                let (geom, closed, clockwise) = self.text_path_geom(path)?;
-                place_path(
-                    shape, height, &geom, closed, clockwise, above, fit, h, flip_h, flip_v,
-                )?
+                let Some((geom, closed, clockwise)) = self.text_path_geom(path) else {
+                    return (None, None);
+                };
+                let walk = match walk {
+                    Some(w) if w.fits(&geom, closed, clockwise) => Some(w.clone()),
+                    _ => Walk::new(geom, closed, clockwise).map(Arc::new),
+                };
+                let Some(walk) = walk else {
+                    return (None, None);
+                };
+                let placed = place_path(shape, height, &walk, above, fit, h, flip_h, flip_v);
+                used = Some(walk);
+                placed
             }
         };
-        placed_ok(&placed).then_some(placed)
+        (placed.filter(|p| placed_ok(p)), used)
     }
 
     /// Der Pfad `path` als Geometrie, ob er geschlossen ist (Kreis, Ellipse, Kurve mit gleichen
@@ -579,6 +650,7 @@ impl Sketch {
                 points: Vec::new(),
                 alive: true,
                 shaped: ShapedCache(Some(shape)),
+                walk: WalkCache::default(),
             });
             s.touch_structure();
             s.sync_text(t, &placed);
@@ -633,6 +705,7 @@ impl Sketch {
             points: Vec::new(),
             alive: true,
             shaped: ShapedCache(Some(shape)),
+            walk: WalkCache::default(),
         });
         self.touch_structure();
         self.sync_text(t, &placed);

@@ -6,7 +6,8 @@
 //! offene Ketten und doppelte Stücke fallen still weg. Jede beschränkte Fläche der Anordnung ist
 //! ein Profil; eine Fläche innerhalb einer anderen (Kreis im Rechteck) ergibt zwei Profile, den
 //! Ring (mit Loch) und die innere Fläche. Kreuzungen, T-Stöße und offene Ketten werden nicht
-//! gemeldet.
+//! gemeldet. Ausnahme Text (Skizzen 8): Eine Fläche nur aus Kurven eines Textes, die nach der
+//! Füllregel der Schrift leer ist (das Innere von „o“), ist kein Profil (`text_profile.rs`).
 //!
 //! Abgelehnt werden entartete Kurven (Bogen ohne Winkel oder mit Ende neben seinem Kreis,
 //! Ellipsenbogen mit Ende neben seiner Ellipse, zu kleine Ellipse, Spline mit zusammengefallenen
@@ -239,7 +240,14 @@ impl Sketch {
             arr: &arr,
             splines: &splines,
         };
-        let mut done: Vec<Face> = faces.iter().map(|&f| builder.face(f, &holes[f])).collect();
+        // Leere Innenflächen der Glyphen eines Textes (das Innere von „o“) sind keine Profile
+        // (`text_profile.rs`). Erst hier, damit sie oben noch Löcher aufnehmen.
+        let counters = self.text_counters(&arr, &faces, &holes);
+        let mut done: Vec<Face> = faces
+            .iter()
+            .filter(|f| !counters.contains(f))
+            .map(|&f| builder.face(f, &holes[f]))
+            .collect();
         done.sort_by(|x, y| {
             x.key
                 .0
