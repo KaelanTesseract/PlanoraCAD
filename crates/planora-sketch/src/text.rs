@@ -368,33 +368,43 @@ impl Sketch {
     }
 
     /// Die erzeugten Kurven aller lebenden Texte, einmal gesammelt für Schleifen über viele
-    /// Kurven (Fang, Stutzen); `text_of_curve` sucht dagegen jedes Mal alle Texte ab.
-    pub(crate) fn glyph_curves(&self) -> HashSet<CurveId> {
+    /// Kurven (Fang, Richtungen beim Zeichnen); `text_of_curve` sucht dagegen jedes Mal alle Texte
+    /// ab.
+    pub fn glyph_curves(&self) -> HashSet<CurveId> {
         self.texts()
             .flat_map(|(_, d)| d.curves.iter().copied())
             .collect()
     }
 
     /// Die erzeugten Punkte aller lebenden Texte (siehe [`Sketch::glyph_curves`]).
-    pub(crate) fn glyph_points(&self) -> HashSet<PointId> {
+    pub fn glyph_points(&self) -> HashSet<PointId> {
         self.texts()
             .flat_map(|(_, d)| d.points.iter().copied())
             .collect()
     }
 
-    /// Gemeinsame Prüfung der Befehle aus Spec E: abgelehnt mit der Meldung `key`, wenn eine der
-    /// Kurven `curves` eine erzeugte Kurve eines Textes ist. Rahmenlinien und Pfade gehen wie
-    /// andere Linien und Kurven. Die Skizze bleibt unberührt.
+    /// Ist eine der Kurven `curves` eine erzeugte Kurve eines lebenden Textes?
+    pub(crate) fn has_glyph(&self, curves: &[CurveId]) -> bool {
+        !self.texts.is_empty() && curves.iter().any(|&c| self.text_of_curve(c).is_some())
+    }
+
+    /// Ist eine der Kurven `curves` ein Buchstabe oder eine Rahmenlinie eines lebenden Textes?
+    pub fn has_text_part(&self, curves: &[CurveId]) -> bool {
+        self.has_glyph(curves)
+            || (!self.texts.is_empty() && curves.iter().any(|&c| self.text_of_frame(c).is_some()))
+    }
+
+    /// Gemeinsame Prüfung der Befehle aus Spec E: abgelehnt mit der Meldung von `message` (ein
+    /// `tr!`, damit der Schlüssel im Code steht), wenn eine der Kurven `curves` eine erzeugte Kurve
+    /// eines Textes ist. Rahmenlinien und Pfade gehen wie andere Linien und Kurven. Die Skizze
+    /// bleibt unberührt.
     pub fn refuse_text_curves(
         &self,
         curves: &[CurveId],
-        key: &'static str,
+        message: impl FnOnce() -> String,
     ) -> Result<(), SketchError> {
-        if self.texts.is_empty() {
-            return Ok(());
-        }
-        if curves.iter().any(|&c| self.text_of_curve(c).is_some()) {
-            return Err(SketchError::InvalidInput(planora_i18n::t(key)));
+        if self.has_glyph(curves) {
+            return Err(SketchError::InvalidInput(message()));
         }
         Ok(())
     }
@@ -406,11 +416,18 @@ impl Sketch {
     pub(crate) fn refuse_text_parts(
         &self,
         curves: &[CurveId],
-        key: &'static str,
+        message: impl FnOnce() -> String,
     ) -> Result<(), SketchError> {
-        self.refuse_text_curves(curves, key)?;
-        if !self.texts.is_empty() && curves.iter().any(|&c| self.text_of_frame(c).is_some()) {
-            return Err(SketchError::InvalidInput(planora_i18n::t(key)));
+        if self.has_text_part(curves) {
+            return Err(SketchError::InvalidInput(message()));
+        }
+        Ok(())
+    }
+
+    /// Lehnt das Ändern eines erzeugten Punktes ab (Lage setzen): Ihn hält der Text.
+    pub(crate) fn refuse_glyph_point(&self, p: PointId) -> Result<(), SketchError> {
+        if !self.texts.is_empty() && self.is_text_point(p) {
+            return Err(SketchError::InvalidInput(tr!("sketch-text-no-edit")));
         }
         Ok(())
     }

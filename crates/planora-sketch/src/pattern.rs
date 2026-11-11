@@ -643,8 +643,9 @@ impl Sketch {
         Some((source, inverse_apply(&t, target)))
     }
 
-    /// Vorlagen vorhanden, lebend, ohne Doppelte, keine erzeugte Kurve eines Textes (Spec E); kein
-    /// Exemplar als Vorlage, Richtungslinie oder Mitte.
+    /// Vorlagen vorhanden, lebend, ohne Doppelte; keine erzeugte Kurve eines Textes als Vorlage oder
+    /// Richtungslinie (Spec E, wie die Spiegelachse); kein Exemplar als Vorlage, Richtungslinie oder
+    /// Mitte.
     fn check_pattern_refs(&self, plan: &PatternPlan) -> Result<(), PatternProblem> {
         if plan.sources.is_empty() {
             return Err(PatternProblem::Empty);
@@ -657,10 +658,13 @@ impl Sketch {
                 return Err(PatternProblem::FixedSpline);
             }
         }
-        if self
-            .refuse_text_curves(&plan.sources, "sketch-text-no-pattern")
-            .is_err()
-        {
+        let glyph_dir = match plan.kind {
+            PatternKind::Rect { dirs, .. } => dirs
+                .iter()
+                .any(|d| matches!(d, PatternDir::Line(l) if self.has_glyph(&[*l]))),
+            PatternKind::Circular { .. } => false,
+        };
+        if self.has_glyph(&plan.sources) || glyph_dir {
             return Err(PatternProblem::Text);
         }
         let mut curves: HashSet<CurveId> = HashSet::new();

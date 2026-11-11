@@ -1376,14 +1376,14 @@ impl Sketch {
         // Erzeugte Punkte eines Textes folgen nie dem Zug; sie hält der Text (Skizzen 8).
         let mut unread: Option<Vec<bool>> = None;
         for d in drags {
-            let free = self.point_unconstrained(d.point) || {
-                let read = unread.get_or_insert_with(|| self.build_groups().1);
-                let (xv, yv) = (self.points[d.point].x, self.points[d.point].y);
-                self.instance_drag_target(d.point, DVec2::ZERO).is_none()
-                    && !self.is_text_point(d.point)
-                    && !read[xv]
-                    && !read[yv]
-            };
+            let free = !self.is_text_point(d.point)
+                && (self.point_unconstrained(d.point) || {
+                    let read = unread.get_or_insert_with(|| self.build_groups().1);
+                    let (xv, yv) = (self.points[d.point].x, self.points[d.point].y);
+                    self.instance_drag_target(d.point, DVec2::ZERO).is_none()
+                        && !read[xv]
+                        && !read[yv]
+                });
             if free {
                 self.set_point_xy(d.point, d.target.x, d.target.y)?;
             }

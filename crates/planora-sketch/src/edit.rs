@@ -113,7 +113,7 @@ impl Sketch {
         if matches!(self.curve(c)?.kind, CurveKind::FixedSpline { .. }) {
             return None;
         }
-        if self.refuse_text_parts(&[c], "sketch-text-no-trim").is_err() {
+        if self.has_text_part(&[c]) {
             return None;
         }
         let (g, b) = self.locate_trim(c, at)?;
@@ -137,7 +137,7 @@ impl Sketch {
     pub fn trim(&mut self, c: CurveId, at: DVec2) -> Result<Vec<CurveId>, SketchError> {
         self.check_curve(c)?;
         self.refuse_fixed_spline(c)?;
-        self.refuse_text_parts(&[c], "sketch-text-no-trim")?;
+        self.refuse_text_parts(&[c], || tr!("sketch-text-no-trim"))?;
         if !at.is_finite() {
             return Err(SketchError::InvalidInput(tr!("sketch-err-target-finite")));
         }
@@ -156,10 +156,7 @@ impl Sketch {
     /// Der Weg, den [`Sketch::extend`] an derselben Stelle das Ende verlängern würde, vom alten
     /// zum neuen Ende (Vorschau beim Überfahren). `None`, wenn nichts zu dehnen ist.
     pub fn extend_preview(&self, c: CurveId, at: DVec2) -> Option<Vec<DVec2>> {
-        if self
-            .refuse_text_parts(&[c], "sketch-text-no-extend")
-            .is_err()
-        {
+        if self.has_text_part(&[c]) {
             return None;
         }
         self.locate_extend(c, at).map(|x| x.path)
@@ -182,7 +179,7 @@ impl Sketch {
     pub fn extend(&mut self, c: CurveId, at: DVec2) -> Result<bool, SketchError> {
         self.check_curve(c)?;
         self.refuse_fixed_spline(c)?;
-        self.refuse_text_parts(&[c], "sketch-text-no-extend")?;
+        self.refuse_text_parts(&[c], || tr!("sketch-text-no-extend"))?;
         if !at.is_finite() {
             return Err(SketchError::InvalidInput(tr!("sketch-err-target-finite")));
         }
@@ -215,7 +212,7 @@ impl Sketch {
     pub fn break_curve(&mut self, c: CurveId, at: DVec2) -> Result<Vec<CurveId>, SketchError> {
         self.check_curve(c)?;
         self.refuse_fixed_spline(c)?;
-        self.refuse_text_parts(&[c], "sketch-text-no-break")?;
+        self.refuse_text_parts(&[c], || tr!("sketch-text-no-break"))?;
         if !at.is_finite() {
             return Err(SketchError::InvalidInput(tr!("sketch-err-target-finite")));
         }
@@ -1298,13 +1295,15 @@ impl Sketch {
     /// Quadraten mit festen Enden, die Form ändert sich; die Punktzahl sinkt um die Gradstufen
     /// (mindestens Grad + 1 bleiben). Die vorhandenen Punkte behalten ihre Ids der Reihe nach, der
     /// letzte bleibt letzter; neue Punkte kommen davor hinzu, überzählige entfallen. Rückgabe: Zahl
-    /// der entfallenen Abhängigkeiten.
+    /// der entfallenen Abhängigkeiten. Ein Buchstabe eines Textes wird abgelehnt
+    /// (`sketch-text-no-edit`).
     pub fn set_control_spline_degree(
         &mut self,
         c: CurveId,
         degree: u8,
     ) -> Result<SettleReport, SketchError> {
         self.check_curve(c)?;
+        self.refuse_text_curves(&[c], || tr!("sketch-text-no-edit"))?;
         let CurveKind::ControlSpline { points, .. } = self.curves[c].kind.clone() else {
             return Err(SketchError::WrongType(tr!("sketch-err-control-kind")));
         };
@@ -1354,13 +1353,15 @@ impl Sketch {
     /// Kontrollpunkt. Außerhalb dieser `p` Stellen bewegt sich nichts. Liegt die Kurvenstelle auf einem
     /// schon vorhandenen inneren Knoten, ändern sich weniger als `p` Lagen; dann kann in diesen Stellen
     /// auch ein Punkt mit unveränderter Lage auf die Lage seines Nachbarn rücken. Die Form bleibt.
-    /// Rückgabe: der neue Punkt und die Zahl der entfallenen Abhängigkeiten.
+    /// Rückgabe: der neue Punkt und die Zahl der entfallenen Abhängigkeiten. Ein Buchstabe eines
+    /// Textes wird abgelehnt (`sketch-text-no-edit`).
     pub fn insert_control_point(
         &mut self,
         c: CurveId,
         at: DVec2,
     ) -> Result<(PointId, SettleReport), SketchError> {
         self.check_curve(c)?;
+        self.refuse_text_curves(&[c], || tr!("sketch-text-no-edit"))?;
         let CurveKind::ControlSpline { points, .. } = self.curves[c].kind.clone() else {
             return Err(SketchError::WrongType(tr!("sketch-err-control-kind")));
         };

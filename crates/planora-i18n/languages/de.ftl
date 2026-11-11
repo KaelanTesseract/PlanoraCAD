@@ -1949,6 +1949,7 @@ sketch-text-no-break = Text lässt sich nicht brechen. Löse ihn zuerst auf.
 sketch-text-no-fillet = Text lässt sich nicht abrunden. Löse ihn zuerst auf.
 sketch-text-no-chamfer = Text bekommt keine Fase. Löse ihn zuerst auf.
 sketch-text-path-follows = Text auf Pfad folgt seinem Pfad.
+sketch-text-no-edit = Buchstaben eines Textes lassen sich nicht einzeln ändern. Löse den Text zuerst auf.
 state-patterns-dissolved-on-load = { $n ->
     [one] Beim Öffnen wurde ein Muster aufgelöst, weil es seine Vorlage mit einem eigenen Exemplar verband. Die Geometrie bleibt.
    *[other] Beim Öffnen wurden { $n } Muster aufgelöst, weil sie ihre Vorlage mit einem eigenen Exemplar verbanden. Die Geometrie bleibt.

@@ -1966,6 +1966,7 @@ sketch-text-no-break = Text cannot be broken. Explode it first.
 sketch-text-no-fillet = Text cannot be filleted. Explode it first.
 sketch-text-no-chamfer = Text cannot be chamfered. Explode it first.
 sketch-text-path-follows = Text on a path follows its path.
+sketch-text-no-edit = The letters of a text cannot be changed one by one. Explode the text first.
 state-patterns-dissolved-on-load = { $n ->
     [one] On opening, a pattern was dissolved because it linked its original to one of its own instances. The geometry stays.
    *[other] On opening, { $n } patterns were dissolved because they linked their original to one of their own instances. The geometry stays.

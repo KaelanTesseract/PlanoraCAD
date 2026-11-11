@@ -1061,6 +1061,9 @@ impl SketchSession {
             let Snap::Curve(c) = cur.snap else {
                 return Ok(());
             };
+            if sk.text_of_curve(c).is_some() {
+                return Err(crate::msg!("sketch-text-no-offset"));
+            }
             self.pending_curves = if self.offset_chain {
                 offset_chain_of(sk, c)?
             } else {

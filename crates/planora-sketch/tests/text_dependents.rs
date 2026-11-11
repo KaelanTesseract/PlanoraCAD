@@ -896,3 +896,99 @@ fn copy_rotated_keeps_angle() {
     assert_eq!(s.text_angle(t), Some(0.0));
     all_close(&positions(&s, copy), &want, "gedrehte Kopie");
 }
+
+// ---- Buchstaben selbst ändern (Korrekturrunde 1) -----------------------------------------------
+
+fn glyph_of(s: &Sketch, t: TextId, want: fn(&CurveKind) -> bool) -> CurveId {
+    glyphs(s, t)
+        .into_iter()
+        .find(|&c| want(&s.curve(c).unwrap().kind))
+        .unwrap()
+}
+
+#[test]
+fn conic_rho_on_glyph_rejected() {
+    let mut s = sketch();
+    let t = box_text(&mut s);
+    let conic = glyph_of(&s, t, |k| matches!(k, CurveKind::Conic { .. }));
+    let before = s.clone();
+    says(
+        s.set_conic_rho(conic, 0.7),
+        tr!("sketch-text-no-edit"),
+        "Rho am Buchstaben",
+    );
+    unchanged(&s, &before, "Rho am Buchstaben");
+}
+
+#[test]
+fn spline_degree_on_glyph_rejected() {
+    let mut s = sketch();
+    let t = box_text(&mut s);
+    let spline = glyph_of(&s, t, |k| matches!(k, CurveKind::ControlSpline { .. }));
+    let before = s.clone();
+    says(
+        s.set_control_spline_degree(spline, 5),
+        tr!("sketch-text-no-edit"),
+        "Grad am Buchstaben",
+    );
+    unchanged(&s, &before, "Grad am Buchstaben");
+}
+
+#[test]
+fn insert_control_point_on_glyph_rejected() {
+    let mut s = sketch();
+    let t = box_text(&mut s);
+    let spline = glyph_of(&s, t, |k| matches!(k, CurveKind::ControlSpline { .. }));
+    let CurveKind::ControlSpline { ref points, .. } = s.curve(spline).unwrap().kind else {
+        unreachable!()
+    };
+    let near = (at(&s, points[0]) + at(&s, points[3])) * 0.5;
+    let before = s.clone();
+    says(
+        s.insert_control_point(spline, near),
+        tr!("sketch-text-no-edit"),
+        "Kontrollpunkt am Buchstaben",
+    );
+    unchanged(&s, &before, "Kontrollpunkt am Buchstaben");
+}
+
+#[test]
+fn set_glyph_point_rejected() {
+    let mut s = sketch();
+    let t = box_text(&mut s);
+    let p = s.text(t).unwrap().points[0];
+    let before = s.clone();
+    says(
+        s.set_point_xy(p, 1.0, 1.0),
+        tr!("sketch-text-no-edit"),
+        "Lage eines Buchstabenpunkts",
+    );
+    unchanged(&s, &before, "Lage eines Buchstabenpunkts");
+    // Ecken des Rahmens sind gewöhnliche Punkte.
+    let (_, corners) = frame(&s, t);
+    s.set_point_xy(corners[2], 41.0, 11.0).unwrap();
+}
+
+#[test]
+fn pattern_direction_on_glyph_rejected() {
+    let mut s = sketch();
+    let t = box_text(&mut s);
+    let other = line(&mut s, v(-30.0, 0.0), v(-20.0, 0.0));
+    let mut plan = rect_plan(vec![other]);
+    plan.kind = PatternKind::Rect {
+        dirs: [PatternDir::Line(glyph_line(&s, t)), PatternDir::SketchY],
+        extent: [false, false],
+        symmetric: [false, false],
+    };
+    let before = s.clone();
+    assert_eq!(
+        s.pattern_transforms(&plan).err(),
+        Some(PatternProblem::Text)
+    );
+    says(
+        s.add_pattern(&plan),
+        tr!("sketch-text-no-pattern"),
+        "Richtung am Buchstaben",
+    );
+    unchanged(&s, &before, "Richtung am Buchstaben");
+}

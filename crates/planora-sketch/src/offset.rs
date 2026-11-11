@@ -41,6 +41,7 @@ use crate::geom::Geom;
 use crate::intersect::{Prepared, boxes_touch, intersect, intersect_prepared, self_intersect};
 use crate::model::{CurveId, CurveKind, MAX_COORD, PointId, Sketch};
 use crate::shapes::ArcPlan;
+use planora_i18n::tr;
 use planora_math::nurbs::NurbsCurve;
 use planora_math::{DVec2, PI, TAU, Tolerance};
 use std::collections::{HashMap, HashSet};
@@ -1564,10 +1565,7 @@ impl Sketch {
         let handle_curves = self.handle_curves();
         ids.retain(|c| !handle_curves.contains(c));
         // Versatz geht nicht am Text (Spec E); Rahmenlinien sind Linien.
-        if self
-            .refuse_text_curves(&ids, "sketch-text-no-offset")
-            .is_err()
-        {
+        if self.has_glyph(&ids) {
             return Err(OffsetProblem::Text);
         }
         let mut nodes = Nodes::new(tol);
@@ -1728,10 +1726,7 @@ impl Sketch {
                 return Err(OffsetProblem::Degenerate);
             }
             let sources: Vec<CurveId> = chain.items.iter().map(|&(c, _)| c).collect();
-            if self
-                .refuse_text_curves(&sources, "sketch-text-no-offset")
-                .is_err()
-            {
+            if self.has_glyph(&sources) {
                 return Err(OffsetProblem::Text);
             }
             if let [(c, against)] = chain.items[..]
@@ -2115,7 +2110,7 @@ impl Sketch {
             for l in &plan.loops {
                 for piece in &l.pieces {
                     s.check_curve(piece.source)?;
-                    s.refuse_text_curves(&[piece.source], "sketch-text-no-offset")?;
+                    s.refuse_text_curves(&[piece.source], || tr!("sketch-text-no-offset"))?;
                 }
                 if tied {
                     s.seed_bridge_joints(l, plan.distance.abs(), &mut joints)?;

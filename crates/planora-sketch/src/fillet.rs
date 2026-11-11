@@ -426,10 +426,7 @@ impl Sketch {
         }
         // Buchstaben und Rahmen eines Textes werden weder gerundet noch gefast (Spec E): kein
         // Plan, also auch keine Vorschau.
-        if self
-            .refuse_text_parts(&[pick.curve], "sketch-text-no-fillet")
-            .is_err()
-        {
+        if self.has_text_part(&[pick.curve]) {
             return None;
         }
         let ends = match &self.curve(pick.curve)?.kind {
@@ -983,7 +980,7 @@ impl Sketch {
             for c in curves {
                 s.check_curve(c)?;
             }
-            s.refuse_text_parts(&curves, "sketch-text-no-fillet")?;
+            s.refuse_text_parts(&curves, || tr!("sketch-text-no-fillet"))?;
             s.dissolve_patterns_at(&curves);
             if let Some(f0) = equal_to
                 && s.radius(f0)
@@ -1109,7 +1106,7 @@ impl Sketch {
             for c in curves {
                 s.check_curve(c)?;
             }
-            s.refuse_text_parts(&curves, "sketch-text-no-chamfer")?;
+            s.refuse_text_parts(&curves, || tr!("sketch-text-no-chamfer"))?;
             s.dissolve_patterns_at(&curves);
             let touch = [
                 s.add_point(plan.touch[0].x, plan.touch[0].y)?,

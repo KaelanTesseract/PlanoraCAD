@@ -396,6 +396,10 @@ impl ToolKinds {
 
 /// Taugt die Kurve für diese Art? Sonst die Meldung dazu.
 fn check_pick(sk: &Sketch, kind: ToolKind, c: CurveId) -> Result<(), Msg> {
+    // Tangential an Buchstaben bände an sie (Spec E).
+    if sk.text_of_curve(c).is_some() {
+        return Err(crate::msg!("sketch-text-no-dimension"));
+    }
     let is_line = sk
         .curve(c)
         .is_some_and(|d| matches!(d.kind, CurveKind::Line { .. }));
@@ -410,6 +414,14 @@ fn check_pick(sk: &Sketch, kind: ToolKind, c: CurveId) -> Result<(), Msg> {
 
 /// Taugt die Kurve für Rundung oder Fase? Die Fase nimmt nur Linien; die Rundung jede Kurve.
 fn check_fillet_pick(sk: &Sketch, kind: ToolKind, c: CurveId) -> Result<(), Msg> {
+    // Buchstaben und Rahmen eines Textes werden weder gerundet noch gefast (Spec E).
+    if sk.has_text_part(&[c]) {
+        return Err(if kind == ToolKind::Fillet {
+            crate::msg!("sketch-text-no-fillet")
+        } else {
+            crate::msg!("sketch-text-no-chamfer")
+        });
+    }
     let is_line = sk
         .curve(c)
         .is_some_and(|d| matches!(d.kind, CurveKind::Line { .. }));
@@ -1252,7 +1264,8 @@ impl SketchSession {
     /// Stufe seines Mittelbogens diesen Bogen.
     pub fn kind_plan(&self, sk: &Sketch, at: DVec2) -> Option<ShapePlan> {
         let third = self.draw_cursor.as_ref().and_then(|c| match c.snap {
-            Snap::Curve(curve) => Some(curve),
+            // Ein Buchstabe ist keine dritte Kurve (der Klick meldet das).
+            Snap::Curve(curve) if sk.text_of_curve(curve).is_none() => Some(curve),
             _ => None,
         });
         self.plan_with(sk, self.planned_kind()?, at, third)

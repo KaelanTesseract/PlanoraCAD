@@ -359,8 +359,11 @@ impl Sketch {
         Ok(self.pos(p))
     }
 
+    /// Setzt die Lage des Punktes `p`. Einen erzeugten Punkt eines Textes hält der Text; er wird
+    /// abgelehnt (`sketch-text-no-edit`).
     pub fn set_point_xy(&mut self, p: PointId, x: f64, y: f64) -> Result<(), SketchError> {
         self.check_point(p)?;
+        self.refuse_glyph_point(p)?;
         finite(x, || tr!("sketch-err-what-x"))?;
         finite(y, || tr!("sketch-err-what-y"))?;
         let (xi, yi) = (self.points[p].x, self.points[p].y);
@@ -660,9 +663,11 @@ impl Sketch {
     }
 
     /// Setzt das Rho eines Kegelschnitts. Die Punkte bleiben; Abhängigkeiten an der Kurve folgen
-    /// beim nächsten Lösen. Ist `c` Vorlage oder Exemplar eines Musters, wird es aufgelöst.
+    /// beim nächsten Lösen. Ist `c` Vorlage oder Exemplar eines Musters, wird es aufgelöst. Ein
+    /// Buchstabe eines Textes wird abgelehnt (`sketch-text-no-edit`).
     pub fn set_conic_rho(&mut self, c: CurveId, rho: f64) -> Result<(), SketchError> {
         self.check_curve(c)?;
+        self.refuse_text_curves(&[c], || tr!("sketch-text-no-edit"))?;
         let mut kind = self.curves[c].kind.clone();
         let CurveKind::Conic { rho: slot, .. } = &mut kind else {
             return Err(SketchError::WrongType(tr!("sketch-err-conic-kind")));
