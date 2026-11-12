@@ -864,9 +864,10 @@ impl<'a> Reader<'a> {
                 pts.pop();
             }
         }
-        // Ein geschlossener Zug aus nur zwei Punkten ohne Bulge im Schlusssegment hätte eine
-        // zweite Linie genau über der ersten: Er gilt als offen.
-        let closed = closed && !(pts.len() == 2 && pts[1].1.abs() < 1e-12);
+        // Ein geschlossener Zug aus zwei Punkten, dessen beide Segmente gerade sind, hätte eine
+        // zweite Linie genau über der ersten: Dann nur eine Linie. Mit Bulge an einem Punkt
+        // bleiben beide Segmente (Bogen plus Sehne, bei zwei Bulges eine Linse).
+        let closed = closed && !(pts.len() == 2 && pts.iter().all(|p| p.1.abs() < 1e-12));
         if pts.len() < 2 {
             self.skipped.degenerate += 1;
             return;
@@ -1084,7 +1085,9 @@ fn strip_mtext(s: &str) -> (String, Option<String>) {
                 let k = chars[i + 1];
                 i += 2;
                 match k {
-                    'P' | 'p' => out.push('\n'),
+                    // Absatz- und Spaltenumbruch; `\p...;` ist nur ein Absatzformat.
+                    'P' | 'N' => out.push('\n'),
+                    'p' => i = until_semicolon(i).1,
                     '~' => out.push(' '),
                     '\\' | '{' | '}' => out.push(k),
                     'f' | 'F' => {

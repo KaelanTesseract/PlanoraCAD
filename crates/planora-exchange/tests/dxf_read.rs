@@ -820,14 +820,28 @@ fn lwpolyline_bulge_mirrored_under_extrusion() {
 }
 
 #[test]
-fn closed_polyline_of_two_points_is_open() {
-    // Zwei Punkte, geschlossen: nur eine Linie, nicht zwei übereinander.
+fn closed_two_point_polyline_drops_only_duplicate_segments() {
+    // Zwei Punkte, geschlossen, beide Segmente gerade: nur eine Linie, nicht zwei übereinander.
     let two = "0 LWPOLYLINE\n90 2\n70 1\n10 0\n20 0\n10 10\n20 0";
     assert_eq!(read("", two).element_count(), 1);
     // Ebenso, wenn der Zug auf zwei Punkte schrumpft, weil der erste am Ende wiederkehrt.
     let back = "0 LWPOLYLINE\n90 3\n70 1\n10 0\n20 0\n10 10\n20 0\n10 0\n20 0";
     assert_eq!(read("", back).element_count(), 1);
-    // Mit Bulge im Schlusssegment sind es zwei Bögen (Linse); die bleiben erhalten.
+    // Bulge nur am ersten Punkt: Bogen plus schließende Sehne (Halbscheibe).
+    let half = "0 LWPOLYLINE\n90 2\n70 1\n10 0\n20 0\n42 1\n10 10\n20 0";
+    let imp = read("", half);
+    assert_eq!(imp.element_count(), 2, "{imp:?}");
+    assert!(matches!(imp.layers[0].elements[0], Element2d::Arc { .. }));
+    let (a, b) = line_ends(&imp.layers[0].elements[1]);
+    assert!(
+        near(a, DVec2::new(10.0, 0.0)) && near(b, DVec2::ZERO),
+        "{a:?} {b:?}"
+    );
+    // Bulge nur am zweiten Punkt: Sehne plus Bogen zurück.
+    let half2 = "0 LWPOLYLINE\n90 2\n70 1\n10 0\n20 0\n10 10\n20 0\n42 1";
+    let imp = read("", half2);
+    assert_eq!(imp.element_count(), 2, "{imp:?}");
+    // Mit Bulge an beiden Punkten sind es zwei Bögen (Linse).
     let lens = "0 LWPOLYLINE\n90 2\n70 1\n10 0\n20 0\n42 1\n10 10\n20 0\n42 1";
     let imp = read("", lens);
     assert_eq!(imp.element_count(), 2);
@@ -879,5 +893,15 @@ fn tilted_spline_and_point_are_three_d() {
             assert_eq!(p, &[DVec2::new(-1.0, 0.0), DVec2::new(-2.0, 1.0)])
         }
         e => panic!("kein Spline: {e:?}"),
+    }
+}
+
+#[test]
+fn mtext_paragraph_format_is_stripped_and_column_break_is_a_newline() {
+    // `\pxi...;` ist ein Absatzformat und fällt weg; `\N` trennt Spalten und wird zum Umbruch.
+    let ent = "0 MTEXT\n10 0\n20 0\n30 0\n40 2\n1 \\pxi-3,l3;Eins\\NZwei\\PDrei";
+    match only(&read("", ent)) {
+        Element2d::Text(t) => assert_eq!(t.text, "Eins\nZwei\nDrei"),
+        e => panic!("kein Text: {e:?}"),
     }
 }
