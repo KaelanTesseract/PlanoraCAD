@@ -1,6 +1,7 @@
 // Leinwände (Skizzen 9): texturiertes Rechteck, Alpha des Bildes mal Deckkraft.
-// Gemischt wird mit nicht vormultipliziertem Alpha (BlendState::ALPHA_BLENDING); die Textur ist
-// Rgba8Unorm und wird wie die Flächenfarben unverändert ins (nicht-sRGB-)Ziel geschrieben.
+// Die Textur ist beim Hochladen vormultipliziert, gemischt wird mit
+// BlendState::PREMULTIPLIED_ALPHA_BLENDING; die Deckkraft wirkt darum auf alle vier Kanäle.
+// Rgba8Unorm, wie die Flächenfarben unverändert ins (nicht-sRGB-)Ziel geschrieben.
 
 struct Uniforms {
     view_proj: mat4x4<f32>,
@@ -33,10 +34,10 @@ fn vs_canvas(
 @fragment
 fn fs_canvas(input: CanvasOut) -> @location(0) vec4<f32> {
     let texel = textureSample(image, image_sampler, input.uv);
-    let alpha = texel.a * input.opacity;
+    let color = texel * input.opacity;
     // Ganz durchsichtige Stellen auch nicht in die Tiefe oder die Mischung geben.
-    if alpha <= 0.0 {
+    if color.a <= 0.0 {
         discard;
     }
-    return vec4<f32>(texel.rgb, alpha);
+    return color;
 }

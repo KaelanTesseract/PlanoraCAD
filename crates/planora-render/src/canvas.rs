@@ -6,7 +6,7 @@ use bytemuck::{Pod, Zeroable};
 use egui_wgpu::wgpu;
 use egui_wgpu::wgpu::util::DeviceExt as _;
 use planora_math::DVec3;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -25,8 +25,9 @@ pub struct CanvasDraw {
     pub display_through: bool,
 }
 
-/// Ein neues Bild für die GPU (RGBA8, nicht vormultipliziert, vom Aufrufer schon auf höchstens
-/// 4096 px Kante verkleinert).
+/// Bild einer gezeichneten Leinwand für die GPU (RGBA8, nicht vormultipliziert, vom Aufrufer
+/// schon auf höchstens 4096 px Kante verkleinert). Der Aufrufer schickt es in jedem Bild für jede
+/// gezeichnete Leinwand mit (billig, `Arc`); die GPU legt es nur an, wenn sie `key` noch nicht hat.
 #[derive(Clone, Debug)]
 pub struct CanvasTexture {
     pub key: u64,
@@ -57,8 +58,10 @@ pub fn quad_vertices(corners: [[f32; 3]; 4], opacity: f32) -> [CanvasVertex; 6] 
 
 /// Trifft der Strahl die Leinwand mit den Ecken `corners` (Reihenfolge wie
 /// [`CanvasDraw::corners`])? Liefert die Strahllänge bis zum Treffer. `alpha_at(u, v)` gibt das
-/// Alpha des Bildes an der Stelle (u nach rechts, v nach unten, je 0..=1); Pixel mit Alpha 0
-/// zählen nicht. Beidseitig; parallel, hinter dem Ursprung oder außerhalb `None`.
+/// Alpha des Bildes an der Stelle (u nach rechts, v nach unten). u und v liegen im
+/// **geschlossenen** Bereich 0..=1: Am rechten bzw. unteren Rand ist der Wert genau 1, der
+/// Aufrufer muss den Pixelindex also begrenzen (`((u * w as f64) as u32).min(w - 1)`). Pixel mit
+/// Alpha 0 zählen nicht. Beidseitig; parallel, hinter dem Ursprung oder außerhalb `None`.
 pub fn canvas_hit(corners: [DVec3; 4], ray: Ray, alpha_at: impl Fn(f64, f64) -> u8) -> Option<f64> {
     let origin = corners[0];
     // Kanten des Parallelogramms: nach rechts (u) und nach unten (v) im Bild.
@@ -131,11 +134,62 @@ pub(crate) fn canvas_batches(
 }
 
 /// Zwischenspeicher der Texturen: Behalten wird genau, was `draws` in diesem Bild benutzt. Was
-/// nicht mehr gezeichnet wird (Leinwand gelöscht, ausgeblendet, anderes Bild), fällt sofort weg;
-/// der Aufrufer schickt die Textur beim nächsten Zeichnen wieder mit. So können App und GPU den
-/// Stand ohne Rückmeldung gleich führen.
+/// nicht mehr gezeichnet wird (Leinwand gelöscht, ausgeblendet, anderes Bild), fällt sofort weg.
+/// Weil der Aufrufer die Bilder aller gezeichneten Leinwände in jedem Bild mitschickt, kommt eine
+/// wieder gezeigte Leinwand von selbst zurück; ein verworfener egui-Durchlauf (ohne `prepare`)
+/// schadet nicht.
 pub(crate) fn prune_unreferenced<V>(cache: &mut HashMap<u64, V>, draws: &[CanvasDraw]) {
     cache.retain(|key, _| draws.iter().any(|d| d.key == *key));
+}
+
+/// Wie [`prune_unreferenced`] für die Menge der abgelehnten Bilder: Verschwindet ein `key`, darf
+/// er beim nächsten Auftauchen wieder gemeldet werden.
+pub(crate) fn prune_failed(failed: &mut HashSet<u64>, draws: &[CanvasDraw]) {
+    failed.retain(|key| draws.iter().any(|d| d.key == *key));
+}
+
+/// Was mit einem mitgeschickten Bild geschieht.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UploadStep {
+    /// Schon im Zwischenspeicher: nichts neu anlegen.
+    Skip,
+    /// Neu und passend: Textur anlegen.
+    Upload,
+    /// Passt nicht zur GPU; `log` nur beim ersten Mal, solange der `key` gezeichnet wird.
+    Reject { log: bool },
+}
+
+/// Entscheidet für ein mitgeschicktes Bild; merkt sich abgelehnte Schlüssel in `failed`.
+pub(crate) fn upload_step(
+    tex: &CanvasTexture,
+    cached: bool,
+    failed: &mut HashSet<u64>,
+    max_edge: u32,
+) -> UploadStep {
+    if cached {
+        UploadStep::Skip
+    } else if failed.contains(&tex.key) {
+        UploadStep::Reject { log: false }
+    } else if !texture_fits(tex, max_edge) {
+        failed.insert(tex.key);
+        UploadStep::Reject { log: true }
+    } else {
+        UploadStep::Upload
+    }
+}
+
+/// RGBA mit vormultipliziertem Alpha (gerundet), passend zu `PREMULTIPLIED_ALPHA_BLENDING`;
+/// verhindert dunkle Säume beim Filtern an durchsichtigen Rändern.
+pub(crate) fn premultiply(rgba: &[u8]) -> Vec<u8> {
+    let mut out = rgba.to_vec();
+    for px in out.as_chunks_mut::<4>().0 {
+        let a = u16::from(px[3]);
+        for c in &mut px[..3] {
+            // (c·a + 127) / 255 ≤ 255, passt also immer in u8.
+            *c = u8::try_from((u16::from(*c) * a + 127) / 255).unwrap_or(u8::MAX);
+        }
+    }
+    out
 }
 
 /// Passt die Textur zur GPU? Kanten 1..=`max_edge` und genau `width × height × 4` Bytes.
@@ -161,6 +215,8 @@ pub(crate) struct CanvasGpu {
     texture_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     textures: HashMap<u64, CachedTexture>,
+    /// Abgelehnte Bilder (passen nicht zur GPU), damit die Warnung nicht jedes Bild kommt.
+    failed: HashSet<u64>,
     vertex_buffer: Option<wgpu::Buffer>,
     vertex_capacity: u32,
     depth: Vec<CanvasBatch>,
@@ -227,7 +283,7 @@ impl CanvasGpu {
                     entry_point: Some("fs_canvas"),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: target_format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
@@ -270,6 +326,7 @@ impl CanvasGpu {
             texture_layout,
             sampler,
             textures: HashMap::new(),
+            failed: HashSet::new(),
             vertex_buffer: None,
             vertex_capacity: 0,
             depth: Vec::new(),
@@ -277,23 +334,29 @@ impl CanvasGpu {
         }
     }
 
-    /// Lädt neue Texturen, wirft nicht mehr benutzte weg ([`prune_unreferenced`]) und schreibt
-    /// die Eckpunkte dieses Bildes.
+    /// Legt Texturen für noch unbekannte Schlüssel an ([`upload_step`]), wirft nicht mehr benutzte
+    /// weg ([`prune_unreferenced`]) und schreibt die Eckpunkte dieses Bildes. `textures` sind die
+    /// Bilder aller gezeichneten Leinwände; bekannte werden übersprungen.
     pub(crate) fn update(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         draws: &[CanvasDraw],
-        new_textures: &[CanvasTexture],
+        textures: &[CanvasTexture],
     ) {
         let max_edge = device.limits().max_texture_dimension_2d;
-        for tex in new_textures {
-            if !texture_fits(tex, max_edge) {
-                eprintln!(
-                    "Warning: canvas image {}x{} does not fit the graphics card (max. {max_edge} px), not drawn",
-                    tex.width, tex.height
-                );
-                continue;
+        for tex in textures {
+            let cached = self.textures.contains_key(&tex.key);
+            match upload_step(tex, cached, &mut self.failed, max_edge) {
+                UploadStep::Skip | UploadStep::Reject { log: false } => continue,
+                UploadStep::Reject { log: true } => {
+                    eprintln!(
+                        "Warning: canvas image {}x{} does not fit the graphics card (max. {max_edge} px), not drawn",
+                        tex.width, tex.height
+                    );
+                    continue;
+                }
+                UploadStep::Upload => {}
             }
             let texture = device.create_texture_with_data(
                 queue,
@@ -314,7 +377,7 @@ impl CanvasGpu {
                     view_formats: &[],
                 },
                 wgpu::util::TextureDataOrder::LayerMajor,
-                &tex.rgba,
+                &premultiply(&tex.rgba),
             );
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -334,6 +397,7 @@ impl CanvasGpu {
             self.textures.insert(tex.key, CachedTexture { bind_group });
         }
         prune_unreferenced(&mut self.textures, draws);
+        prune_failed(&mut self.failed, draws);
 
         let (vertices, depth, through) = canvas_batches(draws, |k| self.textures.contains_key(&k));
         self.depth.clear();
@@ -583,5 +647,67 @@ mod tests {
             .map(|e| e.name.as_str())
             .collect();
         assert!(entries.contains(&"vs_canvas") && entries.contains(&"fs_canvas"));
+        // Vormultipliziert: Die Deckkraft wirkt auf alle vier Kanäle.
+        let src = include_str!("canvas.wgsl");
+        assert!(
+            src.contains("texel * input.opacity"),
+            "Deckkraft muss rgba multiplizieren"
+        );
+    }
+
+    fn tex(key: u64, w: u32, h: u32) -> CanvasTexture {
+        CanvasTexture {
+            key,
+            width: w,
+            height: h,
+            rgba: vec![0u8; (w * h * 4) as usize].into(),
+        }
+    }
+
+    #[test]
+    fn resend_of_cached_key_does_not_recreate() {
+        let mut failed = HashSet::new();
+        assert_eq!(
+            upload_step(&tex(1, 2, 2), false, &mut failed, 4096),
+            UploadStep::Upload
+        );
+        // Dasselbe Bild im nächsten Bild noch einmal: schon da, nichts neu anlegen.
+        assert_eq!(
+            upload_step(&tex(1, 2, 2), true, &mut failed, 4096),
+            UploadStep::Skip
+        );
+        assert!(failed.is_empty());
+    }
+
+    #[test]
+    fn failed_key_is_logged_once() {
+        let mut failed = HashSet::new();
+        let big = tex(7, 8, 1);
+        assert_eq!(
+            upload_step(&big, false, &mut failed, 4),
+            UploadStep::Reject { log: true }
+        );
+        for _ in 0..3 {
+            assert_eq!(
+                upload_step(&big, false, &mut failed, 4),
+                UploadStep::Reject { log: false }
+            );
+        }
+        // Solange die Leinwand gezeichnet wird, bleibt es gemerkt ...
+        prune_failed(&mut failed, &[draw(7, 0.5, false)]);
+        assert!(failed.contains(&7));
+        // ... verschwindet sie, darf sie beim Wiederkommen erneut gemeldet werden.
+        prune_failed(&mut failed, &[]);
+        assert!(failed.is_empty());
+        assert_eq!(
+            upload_step(&big, false, &mut failed, 4),
+            UploadStep::Reject { log: true }
+        );
+    }
+
+    #[test]
+    fn upload_premultiplies_alpha() {
+        let out = premultiply(&[255, 128, 0, 128, 10, 20, 30, 0, 200, 100, 50, 255]);
+        assert_eq!(out, vec![128, 64, 0, 128, 0, 0, 0, 0, 200, 100, 50, 255]);
     }
 }

@@ -358,9 +358,9 @@ pub struct ViewportCallback {
     pub grid: Vec<LineVertex>,
     /// Leinwände dieses Bildes (Skizzen 9).
     pub canvases: Vec<CanvasDraw>,
-    /// Nur Bilder, die die GPU noch nicht hat. Sie behält genau die Texturen, deren `key` in
-    /// `canvases` dieses Bildes vorkommt; alle anderen wirft sie sofort weg. Wer eine Leinwand
-    /// wieder zeichnet, die im letzten Bild fehlte, schickt ihr Bild also erneut mit.
+    /// Die Bilder **aller** gezeichneten Leinwände, in jedem Bild (`Arc`, billig). Die GPU legt nur
+    /// Texturen für noch unbekannte `key` an und behält genau die, deren `key` in `canvases`
+    /// dieses Bildes vorkommt. So schadet auch ein verworfener egui-Durchlauf nicht.
     pub canvas_textures: Vec<CanvasTexture>,
 }
 
