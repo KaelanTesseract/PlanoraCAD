@@ -255,6 +255,10 @@ impl Document {
         self.rollbacks.retain(|r| !removed.contains(r));
         self.prune_meshes();
         self.prune_step_shapes();
+        self.prune_images();
+        // Verweise auf gelöschte Features und der Ordner „Leinwände“ ohne Leinwand fallen weg.
+        let v = std::mem::take(&mut self.visibility);
+        self.visibility = self.pruned_visibility(v);
         self.edits += 1;
         self.recompute();
         Ok(removed)

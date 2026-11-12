@@ -366,4 +366,100 @@ fn hidden_folder_canvases() {
     let s = d.snapshot();
     assert!(s.visibility.folders.canvases);
     assert!(s.visibility.features.contains(&id));
+    // Mit der letzten Leinwand verschwindet der Ordner (wie in Fusion), samt ihrem Bild.
+    d.delete(id).unwrap();
+    assert!(d.visibility().is_default(), "{:?}", d.visibility());
+    assert!(d.image(img).is_none());
+    assert!(d.snapshot().visibility.is_default());
+    // Auch ein Bild mit ausgeblendetem Ordner, aber ohne Leinwand, kommt ohne ihn an.
+    let mut v = d.visibility().clone();
+    v.folders.canvases = true;
+    d.set_visibility(v);
+    assert!(d.visibility().is_default());
+}
+
+#[test]
+fn lost_face_survives_undo_and_load() {
+    let mut d = Document::new();
+    let e = extruded_block(&mut d, 10.0);
+    let top = face_with_normal(solid(&d, e), DVec3::Z);
+    let img = d.add_image(image(20, 10, b"bild", 1));
+    let id = add_canvas(&mut d, canvas(img, CanvasBase::Face(top)));
+    let before = d.canvas_frame(id).unwrap();
+    let FeatureKind::Canvas(c) = &d.feature(id).unwrap().kind else {
+        panic!()
+    };
+    assert!(c.last_base.is_some(), "letzte Lage steht in der Definition");
+    d.set_suppressed(e, true).unwrap();
+    let lost = d.snapshot();
+    // Eine andere Änderung, dann zurück: der volle Weg verwirft die Ergebnisse.
+    d.add_feature(
+        "Quader1",
+        FeatureKind::Box {
+            size: DVec3::ONE,
+            origin: DVec3::new(100.0, 0.0, 0.0),
+        },
+    )
+    .unwrap();
+    assert_eq!(d.restore(lost.clone()).unwrap(), RestoreKind::Full);
+    let lost_text = planora_i18n::tr!("feature-canvas-face-lost");
+    let f = d.feature(id).unwrap();
+    assert_eq!(f.status, FeatureStatus::Ok, "{:?}", f.status);
+    assert_eq!(f.warning(), Some(lost_text.as_str()));
+    assert_eq!(d.canvas_frame(id), Some(before));
+    // Geladen (ohne jedes frühere Ergebnis): ebenso Warnung statt Fehler.
+    let loaded = Document::from_snapshot(lost, 0.05).unwrap();
+    let f = loaded.feature(id).unwrap();
+    assert_eq!(f.status, FeatureStatus::Ok, "{:?}", f.status);
+    assert_eq!(f.warning(), Some(lost_text.as_str()));
+    assert_eq!(loaded.canvas_frame(id), Some(before));
+}
+
+#[test]
+fn curved_face_keeps_last_frame_with_not_flat_warning() {
+    let mut d = Document::new();
+    let cyl = d
+        .add_feature(
+            "Zylinder1",
+            FeatureKind::Cylinder {
+                radius: 5.0,
+                height: 10.0,
+                origin: DVec3::ZERO,
+            },
+        )
+        .unwrap();
+    let s = solid(&d, cyl);
+    let (curved, _) = s
+        .faces
+        .iter()
+        .find(|(f, _)| planora_sketch::plane_of_face(s, *f).is_none())
+        .expect("Mantelfläche fehlt");
+    let face = FaceRef::from_face(s, curved, &Tolerance::default()).unwrap();
+    let img = d.add_image(image(20, 10, b"bild", 1));
+    // Ohne letzte Lage ist eine gekrümmte Fläche ein Fehler.
+    let fresh = d
+        .add_feature(
+            "Leinwand1",
+            FeatureKind::Canvas(canvas(img, CanvasBase::Face(face.clone()))),
+        )
+        .unwrap();
+    assert!(matches!(
+        d.feature(fresh).unwrap().status,
+        FeatureStatus::Error(_)
+    ));
+    d.delete(fresh).unwrap();
+    // Mit letzter Lage (etwa aus der Datei): Warnung „nicht eben“, nicht „verloren“.
+    let img = d.add_image(image(20, 10, b"bild", 1));
+    let mut c = canvas(img, CanvasBase::Face(face));
+    let last = Frame {
+        origin: DVec3::new(1.0, 2.0, 3.0),
+        ..Frame::WORLD
+    };
+    c.last_base = Some(last);
+    let id = add_canvas(&mut d, c);
+    assert_eq!(
+        d.feature(id).unwrap().warning(),
+        Some(planora_i18n::tr!("feature-canvas-face-not-flat").as_str())
+    );
+    assert_near(d.canvas_frame(id).unwrap().origin, last.origin);
 }

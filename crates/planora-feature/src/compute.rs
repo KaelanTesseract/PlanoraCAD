@@ -382,7 +382,11 @@ fn compute_unchecked(
             })
         }
         FeatureKind::Canvas(cf) => {
-            let previous = feature.result.as_ref().and_then(|r| r.canvas);
+            // Die zuletzt aufgelöste Lage: aus der Definition (übersteht Rückgängig und Laden),
+            // sonst aus dem letzten Ergebnis.
+            let previous = cf
+                .last_base
+                .or_else(|| feature.result.as_ref().and_then(|r| r.canvas));
             compute_canvas(doc, cf, visible, previous)
         }
     }
@@ -428,8 +432,9 @@ pub(crate) fn resolve_base_frame(
 }
 
 /// Leinwand: Bild prüfen, Träger auflösen, Ausdehnung prüfen. Lässt sich die Trägerfläche nicht
-/// mehr finden, bleibt die Leinwand an ihrer letzten Lage `previous` und bekommt eine Warnung
-/// (wie eine Projektion); ohne letzte Lage (etwa gleich nach dem Laden) ist das ein Fehler.
+/// mehr finden oder ist sie nicht mehr eben, bleibt die Leinwand an ihrer letzten Lage
+/// `previous` und bekommt eine Warnung (wie eine Projektion), je nach Grund „verloren“ oder
+/// „nicht eben“; ohne letzte Lage ist das ein Fehler.
 fn compute_canvas(
     doc: &Document,
     cf: &crate::canvas::CanvasFeature,
@@ -450,12 +455,16 @@ fn compute_canvas(
         }
         CanvasBase::Plane(id) => BaseRef::Plane(*id),
     };
-    let not_flat = || tr!("feature-canvas-face-not-flat");
+    let not_flat = || tr!("feature-canvas-face-curved");
     let (frame, canvas_face, warning) = match resolve_base_frame(doc, base, &solids, not_flat) {
         Ok((frame, face)) => (frame, face, None),
         Err(e) => match (&cf.base, previous) {
             (CanvasBase::Face(_), Some(last)) => {
-                (last, None, Some(tr!("feature-canvas-face-lost")))
+                let why = match e {
+                    FeatureError::FaceNotFound { .. } => tr!("feature-canvas-face-lost"),
+                    _ => tr!("feature-canvas-face-not-flat"),
+                };
+                (last, None, Some(why))
             }
             _ => return Err(e),
         },

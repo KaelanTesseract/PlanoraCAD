@@ -82,6 +82,14 @@ impl Document {
                 )
             })
         });
+        // Der Ordner „Leinwände“ verschwindet mit der letzten Leinwand (wie in Fusion).
+        if !self
+            .features
+            .iter()
+            .any(|f| matches!(f.kind, FeatureKind::Canvas(_)))
+        {
+            v.folders.canvases = false;
+        }
         v
     }
 }

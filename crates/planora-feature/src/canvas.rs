@@ -58,6 +58,11 @@ pub struct CanvasFeature {
     pub display_through: bool,
     /// Auswählbar in der Ansicht.
     pub selectable: bool,
+    /// Zuletzt aufgelöstes Koordinatensystem des Trägers (ohne Versatz, Winkel und Maßstab).
+    /// Wird nach jeder Berechnung ohne Versionsänderung zurückgeschrieben (wie der Hinweispunkt
+    /// der Fläche), steht deshalb im Snapshot und in der Datei. Geht die Trägerfläche verloren,
+    /// bleibt die Leinwand hier, auch nach Rückgängig oder Laden.
+    pub last_base: Option<Frame>,
 }
 
 impl CanvasFeature {
@@ -75,6 +80,7 @@ impl CanvasFeature {
             opacity: 50,
             display_through: true,
             selectable: true,
+            last_base: None,
         }
     }
 
@@ -148,6 +154,12 @@ impl Document {
     /// Berechnete Lage der Leinwand `id` (siehe [`CanvasFeature::placed_frame`]); `None`, wenn
     /// das Feature keine berechnete Leinwand ist (unterdrückt, Fehler, zurückgestellt). Bei
     /// verlorener Fläche ist es die letzte Lage.
+    ///
+    /// **Achtung: Das Ergebnis ist kein orthonormales System.** `x` und `y` sind die Schritte
+    /// eines Bildpixels samt Maßstab und Spiegelung: Sie sind nicht normiert, und mit genau
+    /// einer Spiegelung ist das System linkshändig (`x × y = −z`). `origin` ist die Bildmitte,
+    /// `z` die Normale des Trägers. Für Ecken [`CanvasFeature::corners`] benutzen; wer eine
+    /// echte Ebene braucht, nimmt `z` und `origin`.
     pub fn canvas_frame(&self, id: FeatureId) -> Option<Frame> {
         let f = self.feature(id)?;
         let FeatureKind::Canvas(c) = &f.kind else {
@@ -158,6 +170,12 @@ impl Document {
         }
         let base = f.result.as_ref()?.canvas?;
         Some(c.placed_frame(&base))
+    }
+
+    /// Entfernt Bilder, auf die keine Leinwand mehr verweist (wie bei Netzen).
+    pub(crate) fn prune_images(&mut self) {
+        let used = self.used_images();
+        self.images.retain(|id, _| used.contains(id));
     }
 
     /// Bilder, auf die eine Leinwand verweist.

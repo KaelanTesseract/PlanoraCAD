@@ -428,8 +428,12 @@ impl Document {
             sf.plane = h.plane;
             sf.copies = h.copies;
         }
-        if let (Some(face), FeatureKind::Canvas(cf)) = (canvas_face, &mut f.kind) {
-            cf.base = crate::canvas::CanvasBase::Face(face);
+        if let FeatureKind::Canvas(cf) = &mut f.kind {
+            if let Some(face) = canvas_face {
+                cf.base = crate::canvas::CanvasBase::Face(face);
+            }
+            // Letzte Lage des Trägers für verlorene Flächen (auch nach Rückgängig und Laden).
+            cf.last_base = f.result.as_ref().and_then(|r| r.canvas).or(cf.last_base);
         }
     }
 }
