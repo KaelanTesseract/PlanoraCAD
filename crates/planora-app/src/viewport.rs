@@ -885,6 +885,9 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
                 scene_version: state.scene_version,
                 // Raster und Achsen folgen der Kamera: je Bild neu, ohne die Szene anzufassen.
                 grid: scene_lines(state),
+                // Leinwände füllt Task 13 aus dem Dokument.
+                canvases: Vec::new(),
+                canvas_textures: Vec::new(),
             },
         ),
     );
