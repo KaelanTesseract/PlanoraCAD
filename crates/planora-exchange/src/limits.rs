@@ -18,3 +18,12 @@ pub const RESERVE_STEP: usize = 65_536;
 pub const CHECK_EVERY: u64 = 4096;
 /// Puffergröße beim Lesen von Dateien.
 pub const READ_BUFFER: usize = 64 * 1024;
+
+/// Höchstzahl der Elemente, die ein DXF- oder SVG-Import liefern darf (Skizzen 9).
+pub const MAX_IMPORT_ELEMENTS: usize = 100_000;
+/// Tiefste Verschachtelung von Blöcken (DXF) und Gruppen (SVG).
+pub const MAX_BLOCK_DEPTH: usize = 16;
+/// Größte lesbare Bilddatei einer Leinwand: 64 MiB.
+pub const MAX_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
+/// Längste Bildkante in Pixeln, die gelesen wird.
+pub const MAX_IMAGE_EDGE_PX: u32 = 16_384;
