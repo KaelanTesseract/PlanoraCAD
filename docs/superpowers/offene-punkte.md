@@ -2474,6 +2474,8 @@ Alles, was über Fusion gesagt wird und nicht geprüft ist, steht hier als **Ann
 
 ## Teilprojekt Skizzen 8
 
+
+Abgeschlossen 2026-11-12, gemergt in fbe3926. Zwei Handtests bei 1920×1080; die Funde aus dem ersten (OK beim Bearbeiten, alter Text während des Änderns sichtbar, zu breites Skizzenfeld bei „Text auf Pfad“ ohne Pfad, Wolke aus „fix“-Schildern nach dem Auflösen, Autosicherung nach „Verwerfen“) sind behoben und im zweiten Handtest bestätigt. Dazu ist das Lösen nach dem Auflösen schneller (200 Zeichen: 4,1 ms statt bis zu 22 ms). Läufe auf 3d6d008 (danach nur die englische Prüfmeldung f3965bc): Windows 6715 bestanden, fehlgeschlagen `real_step_text_limit` (auch auf `master`); WSL 6704 bestanden, dazu `a_locked_old_json_never_ends_up_next_to_a_new_png` (nur unter root); fmt, clippy und deny in Ordnung.
 In Arbeit auf dem Zweig `feature/skizzen-text` (Spec `specs/2026-11-10-skizzen-text-design.md`, Plan `plans/2026-11-10-skizzen-text.md`). Stand 2026-11-11: Tasks 1 bis 14 fertig und geprüft (Commits 6206002 bis c082e93), Doku mit Task 15, Gesamtprüfung des Zweigs mit ihrer Korrekturwelle („Schlusskorrektur“). Noch offen: der volle Lauf unter Windows und WSL (fmt, clippy, alle Tests, deny, Messtests im Release) und der Handtest nach Dennis' Go (Handliste unten). Nicht gemergt.
 
 ### Stand und Geliefertes
@@ -2624,6 +2626,9 @@ In Arbeit auf dem Zweig `feature/skizzen-text` (Spec `specs/2026-11-10-skizzen-t
 - **B5 (Dennis):** „Verwerfen“ in „Änderungen speichern?“ löscht die Autosicherung dieses Tabs, beim Beenden wie beim Schließen eines Tabs; beim nächsten Öffnen wird nichts angeboten. Nach einem Absturz (Tab ohne Rückfrage zu) bleibt sie wie bisher. Fremde oder unlesbare Sicherungen bleiben unberührt.
 
 ### Grenzen
+- Feste und voll bestimmte Geometrie haben dieselbe grüne Farbe (Fusion: fest grün, voll bestimmt schwarz). Entscheidung Dennis offen.
+- Ist die Skizze gerade nicht lösbar, ist feste Geometrie nur in der Liste „Abhängigkeiten der Skizze“ erkennbar: Die Farbe braucht eine gelöste Skizze, das Schild erscheint nur bei Wahl oder Fehler.
+- In der Liste „Abhängigkeiten der Skizze“ lässt sich nur das Wort anklicken, nicht die ganze Zeile (zweiter Handtest).
 - **Umkehren waagerecht und senkrecht zugleich auf einem Pfad:** ergibt spiegelverkehrte Schrift (Leserichtung umgekehrt und an der Kurve gespiegelt). Wer lesbaren Text auf der anderen Seite will, nimmt nur eines von beiden oder „unterhalb“.
 - **Platte mit Text (Innenflächen keine Profile):** Solange der Text lebt, sind die Innenflächen der Buchstaben (o, a, B …) keine Profile. Steht ein lebender Text in einem Rechteck des Benutzers, hat die Fläche des Rechtecks die Umrisse der Buchstaben als Löcher, und das Innere von „o“ usw. ist weiterhin kein Profil, auch wenn man die Platte samt Innenflächen extrudieren will. Erst nach dem Auflösen lassen sich die Innenflächen einzeln wählen.
 - **Kleiner Text in der Tinte eines großen:** Das Innere eines Buchstabens des kleinen Textes zählt dann beim Klick als Profil des kleinen Textes und wird mitgewählt (Randfall).
