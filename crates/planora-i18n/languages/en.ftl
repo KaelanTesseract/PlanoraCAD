@@ -2820,6 +2820,7 @@ exchange-too-large-for-format = The mesh is too large for the { $format } format
 exchange-corrupt = The mesh data is damaged: { $msg }
 exchange-unknown-format = The file extension "{ $ext }" is not supported; possible are .stl and .obj
 exchange-cancelled = Cancelled
+exchange-dxf-broken = The DXF file is damaged or cannot be read: { $msg }
 exchange-obj-three-corners = A face needs at least three corners
 exchange-obj-bad-index = A corner has no valid point number
 exchange-stl-facet-overlap = A triangle starts before the previous one ends

@@ -2803,6 +2803,7 @@ exchange-too-large-for-format = Das Netz ist für das Format { $format } zu gro�
 exchange-corrupt = Die Netzdaten sind beschädigt: { $msg }
 exchange-unknown-format = Die Dateiendung „{ $ext }“ wird nicht unterstützt; möglich sind .stl und .obj
 exchange-cancelled = Abgebrochen
+exchange-dxf-broken = Die DXF-Datei ist beschädigt oder lässt sich nicht lesen: { $msg }
 exchange-obj-three-corners = Eine Fläche braucht mindestens drei Ecken
 exchange-obj-bad-index = Eine Ecke hat keine gültige Punktnummer
 exchange-stl-facet-overlap = Ein Dreieck beginnt, bevor das vorige endet

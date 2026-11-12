@@ -3,6 +3,7 @@
 //! ZIP und CRC-32 sind selbst geschrieben, Vielecke zerlegt das schon vorhandene `earcutr`.
 
 mod check;
+mod dxf;
 pub mod error;
 mod file;
 mod gltf;
@@ -19,6 +20,7 @@ mod threemf;
 mod zip;
 
 pub use check::{MeshReport, check_mesh, weld_exact};
+pub use dxf::read_dxf;
 pub use error::ExchangeError;
 pub use file::{Format, export_file, import_file, temp_path};
 pub use gltf::{GLTF_SCALE, write_glb};

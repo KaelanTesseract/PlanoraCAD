@@ -8,20 +8,42 @@ const BYTES_PER_GB: f64 = 1e9;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExchangeError {
-    Io { msg: String },
-    FileTooLarge { bytes: u64 },
+    Io {
+        msg: String,
+    },
+    FileTooLarge {
+        bytes: u64,
+    },
     TooManyTriangles,
     TooManyVertices,
     Truncated,
-    CountTooLarge { claimed: u64, possible: u64 },
-    NotFinite { line: Option<usize> },
-    BadNumber { line: usize },
-    IndexOutOfRange { line: usize },
-    Syntax { line: usize, msg: String },
-    Polygon { line: usize },
+    CountTooLarge {
+        claimed: u64,
+        possible: u64,
+    },
+    NotFinite {
+        line: Option<usize>,
+    },
+    BadNumber {
+        line: usize,
+    },
+    IndexOutOfRange {
+        line: usize,
+    },
+    Syntax {
+        line: usize,
+        msg: String,
+    },
+    Polygon {
+        line: usize,
+    },
     Empty,
-    TooLargeForFormat { format: &'static str },
+    TooLargeForFormat {
+        format: &'static str,
+    },
     Corrupt(String),
+    /// Die DXF-Datei ist kaputt oder lässt sich nicht lesen.
+    DxfBroken(String),
     UnknownFormat(String),
     Cancelled,
 }
@@ -57,6 +79,7 @@ impl fmt::Display for ExchangeError {
                 tr!("exchange-too-large-for-format", format = *format)
             }
             ExchangeError::Corrupt(m) => tr!("exchange-corrupt", msg = m),
+            ExchangeError::DxfBroken(m) => tr!("exchange-dxf-broken", msg = m),
             ExchangeError::UnknownFormat(ext) => tr!("exchange-unknown-format", ext = ext),
             ExchangeError::Cancelled => tr!("exchange-cancelled"),
         };
