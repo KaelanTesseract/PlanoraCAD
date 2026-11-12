@@ -2848,6 +2848,7 @@ version = "0.0.2-dev.1"
 dependencies = [
  "dxf",
  "earcutr",
+ "flate2",
  "image",
  "planora-i18n",
  "planora-kernel",

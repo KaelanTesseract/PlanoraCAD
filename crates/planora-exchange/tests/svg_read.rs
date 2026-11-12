@@ -1,7 +1,7 @@
 //! Tests des SVG-Lesers (Skizzen 9, Task 4).
 
 use planora_exchange::import2d::{Element2d, Import2d, Unit2d};
-use planora_exchange::{ExchangeError, MAX_IMPORT_ELEMENTS, read_svg};
+use planora_exchange::{CHECK_EVERY, ExchangeError, MAX_IMPORT_ELEMENTS, read_svg};
 use planora_math::DVec2;
 use std::path::PathBuf;
 
@@ -161,6 +161,75 @@ fn element_limit() {
 fn cancel_gives_no_partial_result() {
     let err = read_svg(&data("mixed.svg"), &|| true).unwrap_err();
     assert_eq!(err, ExchangeError::Cancelled);
+}
+
+#[test]
+fn periodic_cancel_check_stops_a_long_read() {
+    // Die erste Frage am Anfang liefert false; erst später (aus der Schleife) true.
+    let calls = std::cell::Cell::new(0u64);
+    let cancel = || {
+        calls.set(calls.get() + 1);
+        calls.get() > 1
+    };
+    let err = read_svg(&many_paths(3 * CHECK_EVERY as usize), &cancel).unwrap_err();
+    assert_eq!(err, ExchangeError::Cancelled);
+    assert_eq!(calls.get(), 2, "bricht beim ersten regelmäßigen Check ab");
+}
+
+/// Kette von `levels` Gruppen, jede fügt die vorige `fanout`-mal per `<use>` ein.
+fn use_bomb(levels: usize, fanout: usize) -> Vec<u8> {
+    let mut s = String::from(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="10" height="10"><defs><path id="l0" d="M0 0 L1 1"/>"#,
+    );
+    for k in 1..=levels {
+        s.push_str(&format!(r#"<g id="l{k}">"#));
+        for _ in 0..fanout {
+            s.push_str(&format!(r##"<use xlink:href="#l{}"/>"##, k - 1));
+        }
+        s.push_str("</g>");
+    }
+    s.push_str(&format!(r##"</defs><use xlink:href="#l{levels}"/></svg>"##));
+    s.into_bytes()
+}
+
+#[test]
+fn use_chain_bomb_is_rejected_quickly() {
+    let t = std::time::Instant::now();
+    let err = read_svg(&use_bomb(20, 10), NEVER).unwrap_err();
+    assert_eq!(err, ExchangeError::TooManyElements);
+    assert!(t.elapsed().as_secs_f64() < 2.0, "{:?}", t.elapsed());
+}
+
+#[test]
+fn modest_use_reuse_is_fine() {
+    let imp = read_svg(&use_bomb(3, 4), NEVER).unwrap();
+    assert_eq!(imp.element_count(), 64);
+}
+
+#[test]
+fn xml_entity_bomb_is_rejected_quickly() {
+    let svg = r#"<?xml version="1.0"?>
+<!DOCTYPE svg [
+ <!ENTITY a "aaaaaaaaaa">
+ <!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">
+ <!ENTITY c "&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;">
+ <!ENTITY d "&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;">
+ <!ENTITY e "&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;">
+ <!ENTITY f "&e;&e;&e;&e;&e;&e;&e;&e;&e;&e;">
+]>
+<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><desc>&f;&f;&f;&f;&f;&f;&f;&f;&f;&f;</desc></svg>"#;
+    let t = std::time::Instant::now();
+    let err = read_svg(svg.as_bytes(), NEVER).unwrap_err();
+    assert!(matches!(err, ExchangeError::SvgBroken(_)), "{err:?}");
+    assert!(t.elapsed().as_secs_f64() < 2.0, "{:?}", t.elapsed());
+}
+
+#[test]
+fn plain_doctype_without_subset_is_allowed() {
+    let svg = r#"<?xml version="1.0"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><path d="M0 0 L1 1" fill="none" stroke="black"/></svg>"#;
+    assert_eq!(read_svg(svg.as_bytes(), NEVER).unwrap().element_count(), 1);
 }
 
 /// Einfacher Zufallszahlengenerator (xorshift) mit festem Startwert.

@@ -66,6 +66,8 @@ harfrust = "0.12"
 # image (MIT OR Apache-2.0) liest Rasterbilder; nur PNG, JPEG und TIFF.
 dxf = "0.6.2"
 usvg = { version = "0.50", default-features = false, features = ["svgz"] }
+# flate2 (MIT OR Apache-2.0) entpackt SVGZ mit Größengrenze; schon über usvg und png im Baum.
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff"] }
 
 [workspace.lints.clippy]

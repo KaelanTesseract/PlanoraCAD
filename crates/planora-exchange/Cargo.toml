@@ -13,6 +13,7 @@ earcutr.workspace = true
 planora-i18n.workspace = true
 dxf.workspace = true
 usvg.workspace = true
+flate2.workspace = true
 image.workspace = true
 
 [dev-dependencies]
