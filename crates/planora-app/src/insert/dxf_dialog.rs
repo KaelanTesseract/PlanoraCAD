@@ -548,7 +548,7 @@ impl DxfDialog {
 /// Hinweis nach dem Einfügen: Übersprungenes (alle Skizzen zusammen) und ersetzte Schriften.
 /// `file` ist das, was die Datei selbst übersprang; jeder Bericht enthält es, dazu das beim
 /// Einfügen Entartete.
-fn hint(file: &Skipped, reports: &[InsertReport]) -> Option<String> {
+pub(super) fn hint(file: &Skipped, reports: &[InsertReport]) -> Option<String> {
     let mut skipped = *file;
     let mut fonts: Vec<String> = Vec::new();
     for r in reports {

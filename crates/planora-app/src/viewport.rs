@@ -691,12 +691,15 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
     // Mausgesten aus der Tastenbelegung (Schwenken, Drehen, Zoomen).
     let km = keymap::mouse::current(ui.ctx());
     const NAV: &[Action] = &[Action::ViewPan, Action::ViewOrbit];
+    // Griffe eines Einfügen-Fensters (SVG) im Modell; in der Skizze nimmt sie das Overlay.
+    let grips_busy =
+        !sketching && sketch_view::insert_grips_input(ui, rect, state, response.hover_pos());
     if sketching {
         // Das Overlay rechnet im ganzen Bereich (Auswahl und Fangen mit der vollen Größe) und
         // ruft selbst `set_viewport`; danach das freie Rechteck erneut setzen.
         over_view |= sketch_view::show_overlay(ui, rect, state);
         fit_camera(state, rect, free);
-    } else {
+    } else if !grips_busy {
         // Navigation
         let d = response.drag_motion();
         match keymap::mouse::drag_action(&km, ui, &response, NAV) {
@@ -825,6 +828,9 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
         {
             state.cancel_pending_pick();
         }
+    } else if !sketching && grips_busy {
+        // Ein Griff des Einfügen-Fensters unter dem Zeiger oder im Zug: kein Klick in die Ansicht.
+        hover_plane_click(state, None);
     } else if !sketching && let Some(filter) = state.plane_pick.map(|p| p.filter) {
         // Fenster einer Konstruktionsebene (Skizzen 6): Ein Klick füllt dessen aktives
         // Auswahlfeld (mit dem Filter des Felds) statt zu wählen.
@@ -896,6 +902,8 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
     overlay.extend(sketch_view::finished_sketch_shapes(state, rect));
     overlay.extend(sketch_view::insert_preview_shapes(state, rect));
     painter.set(sketches_slot, Shape::Vec(overlay));
+    // Griffe eines Einfügen-Fensters über allem (Modell und Skizze).
+    sketch_view::paint_insert_grips(&painter, rect, state);
 
     // Würfel mit der endgültigen Kamera zeichnen (nach einem Klick schon in der neuen Ansicht).
     paint_cube(

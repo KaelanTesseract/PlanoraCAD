@@ -218,8 +218,9 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                 || crate::keymap::dispatch::current_area(&ws.active_tab().state)
                     == Area::Drawing => {}
         Action::InsertDxf => app::open_insert_dxf(ws),
-        // SVG und Leinwand bekommen ihre Fenster in den nächsten Schritten (Tasks 12 und 13).
-        Action::InsertSvg | Action::InsertCanvas => {
+        Action::InsertSvg => app::open_insert_svg(ws),
+        // Die Leinwand bekommt ihr Fenster im nächsten Schritt (Task 13).
+        Action::InsertCanvas => {
             hint(&mut ws.active_tab_mut().state, &tr!("menu-insert-later"));
         }
         Action::ToggleVisibility => toggle_visibility(&mut ws.active_tab_mut().state),

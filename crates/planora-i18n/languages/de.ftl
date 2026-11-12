@@ -3403,3 +3403,13 @@ insert-skipped-degenerate = { $n ->
    *[other] { $n } entartete Elemente
 }
 insert-list-and = { $first } und { $last }
+insert-svg-title = SVG einfügen
+insert-svg-choose = SVG-Datei wählen
+insert-svg-undo = SVG einfügen
+insert-svg-text-hint = Text vorher in Pfade umwandeln.
+insert-svg-grips-hint = Die Griffe in der Ansicht verschieben, drehen und skalieren die Vorschau.
+insert-angle-z = Z-Winkel
+insert-scale = Skalierung
+insert-scale-positive = Die Skalierung muss größer als null sein.
+insert-flip-h = Horizontal spiegeln
+insert-flip-v = Vertikal spiegeln

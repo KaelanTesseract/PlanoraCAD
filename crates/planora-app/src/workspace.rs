@@ -10,6 +10,7 @@ use crate::feature_dialog::FeatureDialog;
 use crate::history::{History, Tracker, snapshot_bytes};
 use crate::import_dialog::ImportDialog;
 use crate::insert::dxf_dialog::DxfDialog;
+use crate::insert::svg_dialog::SvgDialog;
 use crate::keymap::Keymap;
 use crate::parameter_dialog::ParameterDialog;
 use crate::places::{FavoriteChange, Places};
@@ -95,6 +96,8 @@ pub struct DocTab {
     pub step_import_dialog: Option<StepImportDialog>,
     /// Fenster „DXF einfügen“ (Skizzen 9, Menü „Einfügen“); bleibt bei offener Skizze offen.
     pub dxf_dialog: Option<DxfDialog>,
+    /// Fenster „SVG einfügen“ (Skizzen 9); bleibt bei offener Skizze offen.
+    pub svg_dialog: Option<SvgDialog>,
     /// Fenster „Neue Zeichnung“.
     pub drawing_dialog: Option<NewDrawingDialog>,
     /// Fenster „Parameter“. Es sperrt Rückgängig nicht (Plan P8): nicht in
@@ -148,6 +151,7 @@ impl DocTab {
             import_dialog: None,
             step_import_dialog: None,
             dxf_dialog: None,
+            svg_dialog: None,
             drawing_dialog: None,
             parameter_dialog: None,
             name,
@@ -584,6 +588,7 @@ impl DocTab {
             || self.import_dialog.is_some()
             || self.step_import_dialog.is_some()
             || self.dxf_dialog.is_some()
+            || self.svg_dialog.is_some()
             || self.drawing_dialog.is_some()
             || s.dimension_dialog.is_some()
             || s.sheet_dialog.is_some()
@@ -615,6 +620,9 @@ impl DocTab {
         self.step_import_dialog = None;
         if self.dxf_dialog.take().is_some() {
             DxfDialog::finish(&mut self.state);
+        }
+        if self.svg_dialog.take().is_some() {
+            SvgDialog::finish(&mut self.state);
         }
         self.drawing_dialog = None;
         let s = &mut self.state;

@@ -3420,3 +3420,13 @@ insert-skipped-degenerate = { $n ->
    *[other] { $n } degenerate elements
 }
 insert-list-and = { $first } and { $last }
+insert-svg-title = Insert SVG
+insert-svg-choose = Choose an SVG file
+insert-svg-undo = Insert SVG
+insert-svg-text-hint = Convert text to paths first.
+insert-svg-grips-hint = The grips in the view move, rotate and scale the preview.
+insert-angle-z = Z Angle
+insert-scale = Scale
+insert-scale-positive = The scale must be greater than zero.
+insert-flip-h = Flip Horizontal
+insert-flip-v = Flip Vertical

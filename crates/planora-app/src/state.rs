@@ -83,6 +83,32 @@ pub struct InsertPreview {
     pub lines: Vec<Vec<DVec2>>,
 }
 
+/// Griffe auf der Vorschau eines Einfügen-Fensters ([`crate::sketch_grips`] ohne Werkzeug):
+/// Lage in Skizzenkoordinaten der Ebene `frame`, intern (Y nach oben, Winkel gegen den
+/// Uhrzeigersinn). Die Mitte der Griffe ist `offset`, dort liegt die Mitte der Vorschau.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InsertGrips {
+    pub frame: Frame,
+    pub offset: DVec2,
+    /// Winkel in Radiant, gegen den Uhrzeigersinn.
+    pub angle: f64,
+    /// Maßstab als Faktor.
+    pub factor: f64,
+    /// Griff unter dem Zeiger.
+    pub hot: Option<crate::sketch_grips::Grip>,
+    /// Laufender Zug.
+    pub drag: Option<crate::sketch_grips::GripDrag>,
+    /// Der Zug hat die Lage geändert; das Fenster übernimmt sie in seine Felder.
+    pub moved: bool,
+}
+
+impl InsertGrips {
+    /// Nimmt die Ansicht den Zeiger (Griff unter dem Zeiger oder laufender Zug)?
+    pub fn busy(&self) -> bool {
+        self.hot.is_some() || self.drag.is_some()
+    }
+}
+
 /// Grundebenen für neue Skizzen (gemeinsame Definition mit dem Feature-Modell).
 pub use planora_feature::StandardPlane;
 
@@ -263,6 +289,9 @@ pub struct AppState {
     /// Vorschau eines offenen Einfügen-Fensters (Skizzen 9, „DXF einfügen“): Linienzüge in
     /// Skizzenkoordinaten auf der gewählten Ebene, als Linien über der Ansicht gezeichnet.
     pub insert_preview: Option<InsertPreview>,
+    /// Griffe auf der Vorschau eines Einfügen-Fensters (Skizzen 9, „SVG einfügen“): das Fenster
+    /// schreibt die Lage in jedem Bild, die Ansicht den Zug am Griff ([`InsertGrips::moved`]).
+    pub insert_grips: Option<InsertGrips>,
     /// Verschieben, das der laufende Zug im Eigenschaftenfenster angelegt hat.
     drag_move: Option<FeatureId>,
     /// Prüfberichte der Netze, einmal je Netz berechnet (Plan P13).
@@ -616,6 +645,7 @@ impl AppState {
             plane_pick: None,
             pending_pick: None,
             insert_preview: None,
+            insert_grips: None,
             drag_move: None,
             mesh_reports: BTreeMap::new(),
             display_triangles: crate::mesh_body::DISPLAY_TRIANGLES,

@@ -172,8 +172,14 @@ fn insert_menu_has_three_entries_after_create() {
         dxf.top() < svg.top() && svg.top() < canvas.top(),
         "Reihenfolge"
     );
-    // SVG und Leinwand öffnen noch nichts (Tasks 12 und 13).
+    // SVG öffnet sein Fenster (Task 12), die Leinwand noch nichts (Task 13).
     screen.click(svg.center(), &mut insert_menu_frame(&mut ws));
+    assert!(ws.active_tab().dxf_dialog.is_none());
+    assert!(
+        ws.active_tab().svg_dialog.is_some(),
+        "SVG öffnet das Fenster"
+    );
+    screen.click(canvas.center(), &mut insert_menu_frame(&mut ws));
     assert!(ws.active_tab().dxf_dialog.is_none());
     screen.click(dxf.center(), &mut insert_menu_frame(&mut ws));
     assert!(

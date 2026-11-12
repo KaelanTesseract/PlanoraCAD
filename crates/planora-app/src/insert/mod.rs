@@ -4,11 +4,14 @@
 
 pub mod dxf_dialog;
 pub mod pick;
+pub mod svg_dialog;
 
 use crate::jobs::{Job, Poll};
 use crate::msg::{Msg, MsgArg};
 use planora_exchange::import2d::{Import2d, Skipped, Unit2d};
-use planora_exchange::{ExchangeError, MAX_DXF_BYTES, Progress, READ_BUFFER, read_dxf};
+use planora_exchange::{
+    ExchangeError, MAX_DXF_BYTES, MAX_SVG_BYTES, Progress, READ_BUFFER, read_dxf, read_svg,
+};
 use planora_i18n::{DisplayUnit, tr};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -43,6 +46,15 @@ pub fn dxf_spec() -> ReadSpec<Import2d> {
         max_bytes: MAX_DXF_BYTES,
         too_large: ExchangeError::DxfTooLarge,
         read: read_dxf,
+    }
+}
+
+/// Der SVG-Leser mit [`MAX_SVG_BYTES`].
+pub fn svg_spec() -> ReadSpec<Import2d> {
+    ReadSpec {
+        max_bytes: MAX_SVG_BYTES,
+        too_large: ExchangeError::SvgTooLarge,
+        read: read_svg,
     }
 }
 
