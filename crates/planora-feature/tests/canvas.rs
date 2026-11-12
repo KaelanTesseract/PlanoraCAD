@@ -463,3 +463,11 @@ fn curved_face_keeps_last_frame_with_not_flat_warning() {
     );
     assert_near(d.canvas_frame(id).unwrap().origin, last.origin);
 }
+
+#[test]
+fn image_hash_is_fnv1a_64() {
+    // Feste Werte: Einfügen und Laden müssen dieselbe Prüfsumme ergeben.
+    assert_eq!(image_hash(b""), 0xcbf2_9ce4_8422_2325);
+    assert_eq!(image_hash(b"a"), 0xaf63_dc4c_8601_ec8c);
+    assert_ne!(image_hash(b"ab"), image_hash(b"ba"));
+}

@@ -879,3 +879,36 @@ fn preview_polylines_follow_placement_and_layers() {
     assert!(preview_polylines(&mixed(), &place, &[false], 1e-3).is_empty());
     let _ = DVec3::ZERO;
 }
+
+#[test]
+fn show_frame_survives_data_roundtrip_and_is_checked() {
+    let mut s = sketch();
+    let opt = InsertOptions {
+        show_frame: true,
+        ..Default::default()
+    };
+    insert(&mut s, &mixed(), &opt);
+    let data = s.to_data();
+    let back = Sketch::from_data(data.clone()).expect("laden");
+    let flags = |s: &Sketch| s.curves().map(|(_, c)| c.show_frame).collect::<Vec<_>>();
+    assert_eq!(flags(&back), flags(&s));
+    assert!(back.has_frame_entry());
+    // Ein Rahmen an einer Linie (ohne Kontrollpolygon) ist kein gültiger Stand.
+    let mut bad = data;
+    let line = bad
+        .curves
+        .iter_mut()
+        .find(|c| matches!(c.kind, CurveKind::Line { .. }))
+        .expect("Linie");
+    line.show_frame = true;
+    let e = Sketch::from_data(bad).unwrap_err();
+    assert!(
+        e.to_string()
+            .contains(&planora_i18n::tr!("sketch-err-data-show-frame")),
+        "{e}"
+    );
+    // Ohne Rahmen: kein Eintrag.
+    let mut s = sketch();
+    insert(&mut s, &mixed(), &free());
+    assert!(!s.has_frame_entry());
+}

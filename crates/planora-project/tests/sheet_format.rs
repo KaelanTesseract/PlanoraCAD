@@ -68,7 +68,7 @@ fn plain_doc() -> Document {
 
 #[test]
 fn format_6_only_with_sheet_data() {
-    assert_eq!(FORMAT_VERSION, 18); // seit Skizzen 8 (Text)
+    assert_eq!(FORMAT_VERSION, 19); // seit Skizzen 9 (Leinwand)
     let d = plain_doc();
     assert_eq!(required_format(&d.snapshot()), 4);
 
@@ -308,9 +308,9 @@ fn rejects_bad_sheet_data() {
     let t = edited(|v| v["zeichnungen"][0]["blattangaben"]["nummer"] = "a\u{1}b".into());
     assert!(msg(bad(&t)).contains("Zeichnung „Blatt A“"));
 
-    // Format 19 ist zu neu (gültig ist bis Format 18, seit Text in Skizzen)
-    let t = edited(|v| v["format"] = 19.into());
-    assert!(matches!(bad(&t), ProjectError::TooNew { found: 19, .. }));
+    // Format 20 ist zu neu (gültig ist bis Format 19, seit Leinwänden)
+    let t = edited(|v| v["format"] = 20.into());
+    assert!(matches!(bad(&t), ProjectError::TooNew { found: 20, .. }));
 }
 
 #[test]

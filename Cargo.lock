@@ -2919,6 +2919,7 @@ dependencies = [
 name = "planora-project"
 version = "0.0.2-dev.1"
 dependencies = [
+ "image",
  "planora-drawing",
  "planora-exchange",
  "planora-feature",

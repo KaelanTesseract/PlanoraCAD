@@ -34,6 +34,8 @@ pub struct CurveRecord {
     pub kind: CurveKind,
     pub construction: bool,
     pub centerline: bool,
+    /// Kontrollpunktrahmen (ab Format 19, Skizzen 9): nur an Kurven mit Kontrollpolygon.
+    pub show_frame: bool,
     pub alive: bool,
 }
 
@@ -140,6 +142,7 @@ impl Sketch {
                     kind: c.kind.clone(),
                     construction: c.construction,
                     centerline: c.centerline,
+                    show_frame: c.show_frame,
                     alive: c.alive,
                 })
                 .collect(),
@@ -238,6 +241,17 @@ impl Sketch {
             }
             if c.centerline && !(c.construction && matches!(c.kind, CurveKind::Line { .. })) {
                 return Err(bad(tr!("sketch-err-data-centerline")));
+            }
+            // Der Rahmen zeigt ein Kontrollpolygon; andere Kurven haben keins.
+            if c.show_frame
+                && !matches!(
+                    c.kind,
+                    CurveKind::ControlSpline { .. }
+                        | CurveKind::Conic { .. }
+                        | CurveKind::FixedSpline { .. }
+                )
+            {
+                return Err(bad(tr!("sketch-err-data-show-frame")));
             }
             match &c.kind {
                 CurveKind::Circle { radius, .. } if !var_ok(*radius) => {
@@ -350,8 +364,7 @@ impl Sketch {
                 kind: c.kind,
                 construction: c.construction,
                 centerline: c.centerline,
-                // Kommt mit Format 19 (Task 9) in die Datei.
-                show_frame: false,
+                show_frame: c.show_frame,
                 alive: c.alive,
             });
         }

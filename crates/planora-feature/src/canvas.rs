@@ -31,6 +31,17 @@ pub struct CanvasImage {
     pub hash: u64,
 }
 
+/// Prüfsumme der Bytes eines Bildes (FNV-1a, 64 Bit) für [`CanvasImage::hash`]. Fest
+/// festgelegt, damit Einfügen und Laden dieselbe Zahl ergeben; nur zum schnellen Vergleich,
+/// gleiche Bilder erkennt [`Document::add_image`] erst an gleichen Bytes.
+pub fn image_hash(bytes: &[u8]) -> u64 {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    bytes
+        .iter()
+        .fold(OFFSET, |h, b| (h ^ u64::from(*b)).wrapping_mul(PRIME))
+}
+
 /// Träger einer Leinwand: Grundebene, ebene Fläche eines früheren Features oder eine frühere
 /// Konstruktionsebene (wie bei Skizzen).
 #[derive(Clone, Debug, PartialEq)]

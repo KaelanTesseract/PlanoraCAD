@@ -889,6 +889,12 @@ impl Sketch {
         self.curves.iter().any(|(_, c)| c.centerline)
     }
 
+    /// Gibt es einen Kurveneintrag mit Kontrollpunktrahmen, auch einen gelöschten? Dann braucht
+    /// die Datei Format 19 (Skizzen 9).
+    pub fn has_frame_entry(&self) -> bool {
+        self.curves.iter().any(|(_, c)| c.show_frame)
+    }
+
     /// Gibt es einen Mustereintrag oder einen Abhängigkeitseintrag, der Format 15 braucht, auch
     /// einen gelöschten (ein aufgelöstes Muster, ein Musterwert)? Dann braucht die Datei Format
     /// 15.
