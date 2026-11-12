@@ -698,6 +698,47 @@ pub fn plane_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
     out
 }
 
+/// Strichstärke der Vorschau eines Einfügen-Fensters.
+const INSERT_PREVIEW_WIDTH: f32 = 1.5;
+
+/// Vorschau eines offenen Einfügen-Fensters ([`AppState::insert_preview`]) als Linien in der
+/// Hervorhebungsfarbe über der Ansicht in `rect` (wie die fertigen Skizzen ohne Verdeckung).
+/// Abschnitte mit einem Punkt hinter der Kamera fehlen.
+pub fn insert_preview_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
+    let mut out = Vec::new();
+    let Some(preview) = &state.insert_preview else {
+        return out;
+    };
+    if rect.width() < 2.0 || rect.height() < 2.0 {
+        return out;
+    }
+    let col = colors(state.dark);
+    let map = Mapper {
+        camera: state.camera,
+        frame: preview.frame,
+        rect,
+    };
+    let stroke = Stroke::new(INSERT_PREVIEW_WIDTH, col.plane_edge_active);
+    for line in &preview.lines {
+        let mut run: Vec<Pos2> = Vec::new();
+        for p in line {
+            match map.to_screen(*p) {
+                Some(q) => run.push(q),
+                None => {
+                    if run.len() >= 2 {
+                        out.push(Shape::line(std::mem::take(&mut run), stroke));
+                    }
+                    run.clear();
+                }
+            }
+        }
+        if run.len() >= 2 {
+            out.push(Shape::line(run, stroke));
+        }
+    }
+    out
+}
+
 /// Strichstärke fertiger Skizzen in der 3D-Ansicht (dünner als im Skizzen-Modus).
 const FINISHED_WIDTH: f32 = 1.2;
 /// Strichstärke der Konstruktionsgeometrie fertiger Skizzen.

@@ -3341,3 +3341,64 @@ undo-plane-tangent = Tangentialebene anlegen
 undo-plane-edit = Ebene ändern
 undo-sketch-redefine-plane = Skizzenebene neu festlegen
 plane-later-geometry = Diese Geometrie entsteht erst nach der Ebene im Verlauf.
+menu-insert = Einfügen
+menu-insert-dxf = DXF einfügen …
+menu-insert-svg = SVG einfügen …
+menu-insert-canvas = Leinwand …
+menu-insert-later = Kommt in einem der nächsten Schritte.
+action-insert-dxf = DXF einfügen
+action-insert-svg = SVG einfügen
+action-insert-canvas = Leinwand
+insert-dxf-title = DXF einfügen
+insert-dxf-choose = DXF-Datei wählen
+insert-dxf-undo = DXF einfügen
+insert-dxf-no-unit = Die Datei nennt keine Einheit.
+insert-file = Datei
+insert-units = Einheiten
+insert-unit-ft = Fuß
+insert-mode = Einfügemodus
+insert-mode-single = Eine Skizze
+insert-mode-per-layer = Eine Skizze pro Layer
+insert-mode-open-sketch = In eine offene Skizze wird alles als eine Skizze eingefügt.
+insert-target = Ebene
+insert-target-pick = Ebene oder ebene Fläche wählen
+insert-target-open-sketch = In die offene Skizze „{ $name }“
+insert-target-empty = Bitte zuerst eine Ebene oder ebene Fläche wählen.
+insert-target-hint = Ein Klick in der Ansicht oder im Ordner „Ursprung“ wählt die Ebene.
+insert-offset-x = X-Abstand
+insert-offset-y = Y-Abstand
+insert-layers = DXF-Layer
+insert-frame = Kontrollpunktrahmen
+insert-no-layer = Bitte mindestens einen Layer anhaken.
+insert-other-file = Andere Datei wählen …
+insert-read-lost = Das Lesen der Datei wurde unerwartet beendet.
+insert-skipped-summary = { $items } übersprungen.
+insert-skipped-unknown = { $n ->
+    [one] 1 unbekanntes Element
+   *[other] { $n } unbekannte Elemente
+}
+insert-skipped-three-d = { $n ->
+    [one] 1 räumliches Element
+   *[other] { $n } räumliche Elemente
+}
+insert-skipped-dimensions = { $n ->
+    [one] 1 Bemaßung
+   *[other] { $n } Bemaßungen
+}
+insert-skipped-hatches = { $n ->
+    [one] 1 Schraffur
+   *[other] { $n } Schraffuren
+}
+insert-skipped-images = { $n ->
+    [one] 1 Bild
+   *[other] { $n } Bilder
+}
+insert-skipped-texts = { $n ->
+    [one] 1 Text
+   *[other] { $n } Texte
+}
+insert-skipped-degenerate = { $n ->
+    [one] 1 entartetes Element
+   *[other] { $n } entartete Elemente
+}
+insert-list-and = { $first } und { $last }

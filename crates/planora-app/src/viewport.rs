@@ -894,6 +894,7 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
     // Konstruktionsebenen (Skizzen 6) unter den Linien der Skizzen.
     let mut overlay = sketch_view::plane_shapes(state, rect);
     overlay.extend(sketch_view::finished_sketch_shapes(state, rect));
+    overlay.extend(sketch_view::insert_preview_shapes(state, rect));
     painter.set(sketches_slot, Shape::Vec(overlay));
 
     // Würfel mit der endgültigen Kamera zeichnen (nach einem Klick schon in der neuen Ansicht).

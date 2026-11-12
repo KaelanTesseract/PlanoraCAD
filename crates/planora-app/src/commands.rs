@@ -212,6 +212,11 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                 None => hint(state, &tr!("cmd-need-any-sketch")),
             }
         }
+        Action::InsertDxf => app::open_insert_dxf(ws),
+        // SVG und Leinwand bekommen ihre Fenster in den nächsten Schritten (Tasks 12 und 13).
+        Action::InsertSvg | Action::InsertCanvas => {
+            hint(&mut ws.active_tab_mut().state, &tr!("menu-insert-later"));
+        }
         Action::ToggleVisibility => toggle_visibility(&mut ws.active_tab_mut().state),
         Action::DeleteSelection => delete_selection(&mut ws.active_tab_mut().state),
         Action::RepeatLast => {

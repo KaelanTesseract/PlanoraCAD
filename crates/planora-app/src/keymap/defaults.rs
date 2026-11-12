@@ -111,6 +111,13 @@ action_table! {
     /// Fusion „Skizzenebene neu festlegen“ für die gewählte Skizze (sonst ein Hinweis); ohne
     /// Vorgabetaste wie in Fusion, belegbar.
     SketchRedefinePlane, "skizze.ebene_neu", "action-sketch-redefine-plane", Model, [];
+    // Menü „Einfügen“ (Skizzen 9): ohne Vorgabetaste wie in Fusion, belegbar.
+    /// Fusion „DXF einfügen“.
+    InsertDxf, "einfuegen.dxf", "action-insert-dxf", Model, [];
+    /// Fusion „SVG einfügen“.
+    InsertSvg, "einfuegen.svg", "action-insert-svg", Model, [];
+    /// Fusion „Leinwand“.
+    InsertCanvas, "einfuegen.leinwand", "action-insert-canvas", Model, [];
     // Skizze: nur Werkzeuge, die es gibt (wie der Klick auf den Knopf der Leiste). Die
     // Esc, Enter und Entf der Skizze sind fest (`sketch_view`), nicht in der Tabelle.
     SketchLine, "skizze.linie", "action-sketch-line", Sketch, [key(Key::L)];

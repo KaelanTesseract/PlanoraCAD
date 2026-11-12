@@ -3358,3 +3358,64 @@ undo-plane-tangent = Create tangent plane
 undo-plane-edit = Change plane
 undo-sketch-redefine-plane = Redefine Sketch Plane
 plane-later-geometry = This geometry is only created after the plane in the timeline.
+menu-insert = Insert
+menu-insert-dxf = Insert DXF …
+menu-insert-svg = Insert SVG …
+menu-insert-canvas = Canvas …
+menu-insert-later = Coming in one of the next steps.
+action-insert-dxf = Insert DXF
+action-insert-svg = Insert SVG
+action-insert-canvas = Canvas
+insert-dxf-title = Insert DXF
+insert-dxf-choose = Choose a DXF file
+insert-dxf-undo = Insert DXF
+insert-dxf-no-unit = The file does not state a unit.
+insert-file = File
+insert-units = Units
+insert-unit-ft = Feet
+insert-mode = Insert Mode
+insert-mode-single = Single Sketch
+insert-mode-per-layer = One Sketch per Layer
+insert-mode-open-sketch = Into an open sketch everything is inserted as a single sketch.
+insert-target = Plane
+insert-target-pick = Choose a plane or planar face
+insert-target-open-sketch = Into the open sketch “{ $name }”
+insert-target-empty = Please choose a plane or planar face first.
+insert-target-hint = A click in the view or in the “Origin” folder chooses the plane.
+insert-offset-x = X Offset
+insert-offset-y = Y Offset
+insert-layers = DXF Layers
+insert-frame = Control Point Frame
+insert-no-layer = Please tick at least one layer.
+insert-other-file = Choose another file …
+insert-read-lost = Reading the file ended unexpectedly.
+insert-skipped-summary = Skipped { $items }.
+insert-skipped-unknown = { $n ->
+    [one] 1 unknown element
+   *[other] { $n } unknown elements
+}
+insert-skipped-three-d = { $n ->
+    [one] 1 3D element
+   *[other] { $n } 3D elements
+}
+insert-skipped-dimensions = { $n ->
+    [one] 1 dimension
+   *[other] { $n } dimensions
+}
+insert-skipped-hatches = { $n ->
+    [one] 1 hatch
+   *[other] { $n } hatches
+}
+insert-skipped-images = { $n ->
+    [one] 1 image
+   *[other] { $n } images
+}
+insert-skipped-texts = { $n ->
+    [one] 1 text
+   *[other] { $n } texts
+}
+insert-skipped-degenerate = { $n ->
+    [one] 1 degenerate element
+   *[other] { $n } degenerate elements
+}
+insert-list-and = { $first } and { $last }

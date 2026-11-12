@@ -76,6 +76,13 @@ impl FontState {
     }
 }
 
+/// Vorschau eines Einfügen-Fensters: Lage der Ebene und Linienzüge darin (Skizzenkoordinaten).
+#[derive(Clone, Debug, PartialEq)]
+pub struct InsertPreview {
+    pub frame: Frame,
+    pub lines: Vec<Vec<DVec2>>,
+}
+
 /// Grundebenen für neue Skizzen (gemeinsame Definition mit dem Feature-Modell).
 pub use planora_feature::StandardPlane;
 
@@ -253,6 +260,9 @@ pub struct AppState {
     /// Laufender Wahlmodus ohne Fenster ([`PendingPick`]); schließt sich mit `plane_pick` und
     /// dem Fenster „Verrunden“/„Fase“ gegenseitig aus.
     pub pending_pick: Option<PendingPick>,
+    /// Vorschau eines offenen Einfügen-Fensters (Skizzen 9, „DXF einfügen“): Linienzüge in
+    /// Skizzenkoordinaten auf der gewählten Ebene, als Linien über der Ansicht gezeichnet.
+    pub insert_preview: Option<InsertPreview>,
     /// Verschieben, das der laufende Zug im Eigenschaftenfenster angelegt hat.
     drag_move: Option<FeatureId>,
     /// Prüfberichte der Netze, einmal je Netz berechnet (Plan P13).
@@ -605,6 +615,7 @@ impl AppState {
             chain_marking: true,
             plane_pick: None,
             pending_pick: None,
+            insert_preview: None,
             drag_move: None,
             mesh_reports: BTreeMap::new(),
             display_triangles: crate::mesh_body::DISPLAY_TRIANGLES,
@@ -2495,6 +2506,42 @@ impl AppState {
         self.add_checked(&label, kind)
     }
 
+    /// Legt ein Skizzen-Feature auf `plane` (Lage `frame`) an, dessen Skizze `fill` vorher füllt
+    /// (Einfügen, Skizzen 9). Ohne `name` heißt sie „Skizze N“. Scheitert `fill` oder lässt
+    /// sich die Skizze nicht berechnen, bleibt das Dokument unverändert.
+    pub(crate) fn add_filled_sketch<R>(
+        &mut self,
+        plane: SketchPlane,
+        frame: Frame,
+        name: Option<&str>,
+        fill: impl FnOnce(&mut Sketch) -> Result<R, String>,
+    ) -> Result<(FeatureId, R), String> {
+        let label = sketch_label();
+        let given = name.map(str::trim).filter(|n| !n.is_empty());
+        let name = given.map_or_else(|| self.next_name(&label), str::to_string);
+        let mut sketch = Sketch::new(frame, name.clone(), self.kernel.tolerance);
+        let out = fill(&mut sketch)?;
+        let kind = FeatureKind::Sketch(SketchFeature {
+            sketch,
+            plane,
+            copies: Vec::new(),
+            formulas: Default::default(),
+        });
+        let id = self.add_checked_named(name, kind, Formulas::new())?;
+        // Nur ein Name aus dem Zähler zählt ihn weiter (ein Layername nicht).
+        if given.is_none() {
+            self.count_name(&label);
+        }
+        Ok((id, out))
+    }
+
+    /// Nimmt Features zurück, die ein Befehl im selben Bild angelegt hat (alles oder nichts).
+    pub(crate) fn remove_features(&mut self, ids: &[FeatureId]) {
+        for &id in ids.iter().rev() {
+            let _ = self.document.delete_with_dependents(id);
+        }
+    }
+
     /// Legt ein Skizzen-Feature auf der ebenen Fläche `face` des sichtbaren Körpers `body` an.
     /// Die Skizze verweist über Marke und Hinweispunkt auf die Fläche und wandert mit ihr.
     pub fn new_sketch_on_face(&mut self, body: usize, face: Id<Face>) -> Result<FeatureId, String> {
@@ -2657,7 +2704,7 @@ impl AppState {
 
     /// Verweis auf die ebene Fläche `face` des sichtbaren Körpers `body` für eine Skizze; sonst
     /// der Grund.
-    fn face_ref_for_sketch(
+    pub(crate) fn face_ref_for_sketch(
         &self,
         body: usize,
         face: Id<Face>,
