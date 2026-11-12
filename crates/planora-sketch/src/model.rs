@@ -169,6 +169,9 @@ pub struct CurveData {
     pub construction: bool,
     /// Mittellinie: nur an Linien, setzt `construction` voraus.
     pub centerline: bool,
+    /// Kontrollpunktrahmen (Skizzen 9): Die Ansicht zeichnet das Kontrollpolygon dieser Kurve
+    /// immer. Vorgabe `false`; gesetzt beim Einfügen mit „Kontrollpunktrahmen“.
+    pub show_frame: bool,
     pub(crate) alive: bool,
 }
 
@@ -379,6 +382,7 @@ impl Sketch {
             kind,
             construction: false,
             centerline: false,
+            show_frame: false,
             alive: true,
         })
     }

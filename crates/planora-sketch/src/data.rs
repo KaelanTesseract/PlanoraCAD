@@ -350,6 +350,8 @@ impl Sketch {
                 kind: c.kind,
                 construction: c.construction,
                 centerline: c.centerline,
+                // Kommt mit Format 19 (Task 9) in die Datei.
+                show_frame: false,
                 alive: c.alive,
             });
         }

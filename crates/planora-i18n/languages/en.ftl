@@ -1963,6 +1963,7 @@ sketch-text-empty = The text has no visible characters.
 sketch-text-too-long = The text is too long: at most { $max } characters.
 sketch-text-too-many-curves = The text makes too many curves: at most { $max } per text.
 sketch-text-height = The text height must be greater than zero.
+sketch-import-placement = The placement of the inserted geometry is invalid (zero scale or not a finite number).
 sketch-text-spacing = The character spacing must be between 0 % and { $max } %.
 sketch-text-out-of-range = The text would lie outside the working range.
 sketch-text-bad-path = This curve cannot be a path: letters, text frames and handles cannot carry text.

@@ -15,9 +15,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 /// Kegelschnitt mit diesem Rho ist die quadratische Bézierkurve (Gewicht 1).
-const QUAD_RHO: f64 = 0.5;
+pub(crate) const QUAD_RHO: f64 = 0.5;
 /// Knoten der kubischen Bézierkurve als Spline mit Kontrollpunkten (Grad 3, 4 Punkte).
-const CUBIC_KNOTS: [f64; 8] = [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+pub(crate) const CUBIC_KNOTS: [f64; 8] = [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
 /// Bis zu diesem Anteil der Höhe gilt ein Punkt beim Nachführen als unverändert: Eine Datei von
 /// einem anderen Rechner (andere Rundung in `sin`, `cos` …) bekommt nach dem Laden so kein „●“.
 const SAME_POINT_REL: f64 = 1e-12;
@@ -186,6 +186,7 @@ impl Sketch {
                         kind: piece.kind(&points),
                         construction,
                         centerline: false,
+                        show_frame: false,
                         alive: true,
                     });
                     curves.push(c);

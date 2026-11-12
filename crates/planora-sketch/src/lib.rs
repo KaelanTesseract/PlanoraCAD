@@ -13,6 +13,7 @@ pub mod error;
 pub mod fillet;
 pub(crate) mod geom;
 pub mod helpers;
+pub mod import;
 pub(crate) mod intersect;
 /// Interne lineare Algebra des Solvers; nur für die Tests öffentlich.
 #[doc(hidden)]
@@ -51,6 +52,7 @@ pub use fillet::{
     FilletPlan,
 };
 pub use helpers::{RectIds, plane_of_face};
+pub use import::{InsertOptions, InsertReport, Placement, preview_polylines};
 pub use model::{
     CurveData, CurveId, CurveKind, HandleCurvature, LineStyle, PointData, PointId, Sketch,
     SplineHandle,
