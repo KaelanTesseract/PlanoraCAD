@@ -105,8 +105,9 @@ impl Sketch {
     /// [`Sketch::add_constraint`] an (Schlusskorrektur I1).
     ///
     /// Der Wert ist der gemessene; `None`, wenn er null wäre, die Auswahl nicht passt, ein
-    /// Objekt nicht lebt oder [`Sketch::add_constraint`] das Maß als Schleife zwischen Vorlage
-    /// und eigenem Exemplar eines Musters ablehnen würde. Die Skizze bleibt unberührt.
+    /// Objekt nicht lebt, ein Objekt eine erzeugte Kurve oder ein erzeugter Punkt eines Textes ist
+    /// (Spec E) oder [`Sketch::add_constraint`] das Maß als Schleife zwischen Vorlage und eigenem
+    /// Exemplar eines Musters ablehnen würde. Die Skizze bleibt unberührt.
     pub fn dimension_plan(&self, picks: &[DimPick], pointer: DVec2) -> Option<DimPlan> {
         if !pointer.is_finite() {
             return None;
@@ -119,6 +120,10 @@ impl Sketch {
             }
             _ => return None,
         };
+        // Maße an Buchstaben lehnt `add_constraint` ab (Spec E): Dann gibt es keinen Plan.
+        if self.refuse_text_glyphs(&kind).is_err() {
+            return None;
+        }
         let measured = self.measure(&kind)?;
         let small = if matches!(kind, ConstraintKind::Angle(..)) {
             self.tol.angular

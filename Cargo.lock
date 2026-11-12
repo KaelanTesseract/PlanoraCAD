@@ -2662,6 +2662,7 @@ dependencies = [
  "planora-render",
  "planora-sketch",
  "planora-step",
+ "planora-text",
  "planora-update",
  "png",
  "serde_json",
@@ -2706,6 +2707,7 @@ dependencies = [
  "planora-mesh",
  "planora-sketch",
  "planora-step",
+ "planora-text",
  "proptest",
  "thiserror 2.0.21",
 ]
@@ -2805,6 +2807,16 @@ dependencies = [
  "planora-kernel",
  "planora-math",
  "planora-mesh",
+]
+
+[[package]]
+name = "planora-text"
+version = "0.0.2-dev.1"
+dependencies = [
+ "harfrust",
+ "planora-math",
+ "planora-sketch",
+ "skrifa",
 ]
 
 [[package]]

@@ -20,6 +20,7 @@ use planora_sketch::offset::{OffsetPlan, OffsetProblem};
 use planora_sketch::shapes::{folded_over, sweep_crossed_half_turn};
 use planora_sketch::snap::{SnapHit, SnapIndex};
 use planora_sketch::solver::{Drag, SolveReport, SolveStatus};
+use planora_sketch::text::TextRemoval;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -72,6 +73,10 @@ pub enum Tool {
     /// „Kontrollpunkt einfügen“ (Skizzen 7, D3): Jeder Klick auf einen Spline mit Kontrollpunkten fügt
     /// dort einen ein ([`crate::sketch_handles`]). Esc beendet ihn.
     InsertControlPoint,
+    /// Fusion „Text“ (Skizzen 8): zwei Klicks für den Rahmen oder ein Klick auf den Pfad, dann der
+    /// Abschnitt „Text“ im Skizzenfeld; Zustand in [`SketchSession::text`], Ablauf in
+    /// [`crate::sketch_text`].
+    Text,
 }
 
 impl Tool {
@@ -553,6 +558,12 @@ pub struct SketchSession {
     /// Abhängigkeitsbefehl: der Bezug, den der letzte Klick gewählt oder abgewählt hat (für einen
     /// schnellen zweiten Klick, [`constraint_second_click_counts`](Self::constraint_second_click_counts)).
     pub constraint_last: Option<Item>,
+    /// Das Werkzeug „Text“, solange es läuft (Skizzen 8, [`crate::sketch_text`]).
+    pub text: Option<crate::sketch_text::TextTool>,
+    /// Die zuletzt benutzten Werte des Werkzeugs „Text“ außer dem Text (Spec C4), geteilt mit
+    /// dem Arbeitsbereich ([`crate::state::AppState::share_text_memory`]): Sie gelten für den
+    /// Programmlauf, über das Ende der Sitzung und über alle Tabs hinweg.
+    pub text_memory: crate::sketch_text::TextMemoryShare,
 }
 
 /// Die Skizze vor dem ersten Klick eines laufenden Befehls und ihr Stand nach seinem letzten
@@ -586,6 +597,7 @@ struct Backup {
     grip_drag: Option<GripDrag>,
     dim: DimToolState,
     pattern: crate::sketch_pattern::PatternToolState,
+    text: Option<crate::sketch_text::TextTool>,
 }
 
 /// Klicklagen der Kurven, die das Auswählen per Klick gewählt hat, und die Auswahl gleich nach
@@ -614,6 +626,15 @@ struct Sorted {
 /// sind).
 pub(crate) fn err(e: impl std::fmt::Display) -> Msg {
     Msg::Raw(e.to_string())
+}
+
+/// Warum ein Teil eines Textes nicht allein gelöscht werden darf (Spec B8), als Meldung mit dem
+/// wörtlichen Schlüssel.
+fn text_refusal(r: TextRemoval) -> Msg {
+    match r {
+        TextRemoval::Part => crate::msg!("sketch-text-part"),
+        TextRemoval::OnPath => crate::msg!("sketch-text-on-path"),
+    }
 }
 
 fn status_ok(r: &SolveReport) -> bool {
@@ -683,6 +704,8 @@ impl SketchSession {
             pattern: Default::default(),
             project: ProjectState::default(),
             constraint_last: None,
+            text: None,
+            text_memory: Default::default(),
         }
     }
 
@@ -705,6 +728,8 @@ impl SketchSession {
         self.grip_drag = None;
         // Muster: Plan, Abwahl und Griff gehören zum Werkzeug, nichts bleibt.
         self.pattern = Default::default();
+        // Text: Rahmen, Pfad und Felder gehören zum Werkzeug, nichts bleibt (Spec C7).
+        self.text = None;
         // Die halbe Auswahl eines Abhängigkeitsbefehls gehört ihm; ein anderes Werkzeug nimmt sie
         // nicht mit (ein anderer Abhängigkeitsknopf entscheidet selbst, `constraint_button`).
         if matches!(self.tool, Tool::Constraint(_)) && !matches!(tool, Tool::Constraint(_)) {
@@ -738,6 +763,10 @@ impl SketchSession {
         if tool == Tool::Pattern {
             self.pattern.selection_before = self.selection.clone();
             self.begin_pattern(sk);
+        }
+        // Text: beginnt mit der Art „Text“ und den gemerkten Werten (Spec C2, C4).
+        if tool == Tool::Text {
+            self.begin_text();
         }
     }
 
@@ -810,6 +839,15 @@ impl SketchSession {
         self.transform = TransformState::default();
         self.grip_drag = None;
         self.pattern.reset_after_jump();
+        // Text (Review Focus 5): Der offene Abschnitt gehört zum alten Stand und bricht ab; das
+        // Werkzeug wartet wieder auf den Rahmen. Beim Ändern gibt es den Text vielleicht nicht
+        // mehr: zurück zur Auswahl.
+        if self.text.as_ref().is_some_and(|t| t.editing.is_some()) {
+            self.text = None;
+            self.tool = Tool::Select;
+        } else if self.tool == Tool::Text {
+            self.begin_text();
+        }
         self.edit_label = None;
         self.message = None;
         self.last_report = Some(sk.clone().solve());
@@ -854,6 +892,7 @@ impl SketchSession {
             grip_drag: self.grip_drag,
             dim: self.dim.clone(),
             pattern: self.pattern.clone(),
+            text: self.text.clone(),
         }
     }
 
@@ -879,6 +918,7 @@ impl SketchSession {
         self.grip_drag = b.grip_drag;
         self.dim = b.dim;
         self.pattern = b.pattern;
+        self.text = b.text;
     }
 
     /// Führt `f` atomar aus: Bei einem Fehler wird alles zurückgesetzt und die Meldung in
@@ -1043,6 +1083,7 @@ impl SketchSession {
                 }
                 Tool::Constraint(action) => se.click_constraint(sk, action, at, radius),
                 Tool::InsertControlPoint => se.click_insert_control_point(sk, at, radius, prior),
+                Tool::Text => se.click_text(sk, cur, at, radius),
             }
         })
     }
@@ -1061,6 +1102,9 @@ impl SketchSession {
             let Snap::Curve(c) = cur.snap else {
                 return Ok(());
             };
+            if sk.text_of_curve(c).is_some() {
+                return Err(crate::msg!("sketch-text-no-offset"));
+            }
             self.pending_curves = if self.offset_chain {
                 offset_chain_of(sk, c)?
             } else {
@@ -1307,6 +1351,11 @@ impl SketchSession {
             Snap::Curve(c) => Some(Item::Curve(c)),
             _ => None,
         };
+        // Ein Buchstabe (oder einer seiner Punkte) wählt den ganzen Text (Spec B9).
+        if let Some(t) = item.and_then(|i| crate::sketch_text::text_of_item(sk, i)) {
+            self.select_text(sk, t, extend);
+            return;
+        }
         match (item, extend) {
             (Some(i), true) => {
                 if let Some(k) = self.selection.iter().position(|&s| s == i) {
@@ -1697,6 +1746,17 @@ impl SketchSession {
         if self.box_select.take().is_some() || self.line_arc.take().is_some() {
             return;
         }
+        // Text: Esc, Rechtsklick und Abbrechen lassen nichts zurück, auch keinen Rahmen (Spec C7).
+        // Beim Ändern kommt die Auswahl von vor dem Öffnen zurück.
+        if self.tool == Tool::Text {
+            let before = self.text.as_ref().and_then(|t| t.selection_before.clone());
+            self.set_tool(sk, Tool::Select);
+            if let Some(before) = before {
+                self.selection = before;
+                self.forget_removed(sk);
+            }
+            return;
+        }
         // Muster: Esc und Rechtsklick lassen nichts zurück, auch keine Auswahl.
         if self.tool == Tool::Pattern {
             self.selection = std::mem::take(&mut self.pattern.selection_before);
@@ -1833,8 +1893,40 @@ impl SketchSession {
                 found.push(Item::Point(p));
             }
         }
+        // Ist ein Buchstabe dabei, nimmt der Rahmen den ganzen Text (Spec B9).
+        let hit: std::collections::HashSet<Item> = found.iter().copied().collect();
+        for (t, d) in sk.texts() {
+            if d.curves.iter().any(|&c| hit.contains(&Item::Curve(c))) {
+                found.extend(
+                    crate::sketch_text::text_items(sk, t)
+                        .into_iter()
+                        .filter(|i| !hit.contains(i)),
+                );
+            }
+        }
         self.take_selection(found, extend);
         self.sync_picked(sk);
+    }
+
+    /// Wählt den ganzen Text `t`, also alle seine Buchstaben (Spec B9). Mit `extend` schaltet es
+    /// um: Ist der Text schon ganz gewählt, wird er ganz abgewählt, sonst ergänzt.
+    pub fn select_text(&mut self, sk: &Sketch, t: planora_sketch::text::TextId, extend: bool) {
+        let items = crate::sketch_text::text_items(sk, t);
+        self.message = None;
+        self.drop_curve_picks();
+        if !extend {
+            self.selection = items;
+        } else {
+            let own: std::collections::HashSet<Item> = items.iter().copied().collect();
+            let chosen: std::collections::HashSet<Item> = self.selection.iter().copied().collect();
+            if own.is_subset(&chosen) {
+                self.selection.retain(|i| !own.contains(i));
+            } else {
+                self.selection
+                    .extend(items.into_iter().filter(|i| !chosen.contains(i)));
+            }
+        }
+        self.sync_picks();
     }
 
     /// Wählt die zusammenhängende Kette um `c` ([`Sketch::connected_chain`]); `extend` ergänzt.
@@ -2762,6 +2854,11 @@ impl SketchSession {
         // Meldung nennt den Grund. `atomic` meldet aufgelöste Muster.
         let _ = self.atomic(sk, |se, sk, _| {
             let mut orphans: Vec<PointId> = Vec::new();
+            // Ein gewählter Buchstabe löscht seinen ganzen Text samt Rahmen (Spec B8), vor allem
+            // anderen: Danach geht auch ein gewählter Pfad des Textes.
+            for t in se.selected_texts(sk) {
+                sk.remove_text(t).map_err(err)?;
+            }
             se.drop_curve_picks();
             // Abhängigkeiten, die mit abgewählten Exemplaren entfallen.
             let mut dropped = 0;
@@ -2794,19 +2891,31 @@ impl SketchSession {
                         }
                     }
                     Item::Curve(c) => {
-                        if let Some(d) = sk.curve(c) {
-                            orphans.extend(d.kind.points());
+                        let Some(d) = sk.curve(c) else {
+                            continue;
+                        };
+                        // Rahmenlinie allein, Pfad mit Text: abgelehnt mit dem Grund (Spec B8).
+                        if let Some(r) = sk.text_curve_removal(c) {
+                            return Err(text_refusal(r));
                         }
+                        orphans.extend(d.kind.points());
                         let _ = sk.remove_curve(c);
                     }
                     Item::Point(p) => {
                         // Andere Punkte der mitgelöschten Kurven werden ebenso geprüft.
+                        if sk.point_xy(p).is_err() {
+                            continue;
+                        }
                         orphans.extend(
                             sk.curves()
                                 .map(|(_, c)| c.kind.points())
                                 .filter(|pts| pts.contains(&p))
                                 .flatten(),
                         );
+                        // Ecke des Rahmens, Punkt eines Pfads mit Text: abgelehnt (Spec B8).
+                        if let Some(r) = sk.text_point_removal(p) {
+                            return Err(text_refusal(r));
+                        }
                         let _ = sk.remove_point(p);
                     }
                 }
@@ -2852,12 +2961,20 @@ impl SketchSession {
             .collect()
     }
 
-    /// Schaltet bei den ausgewählten Kurven die Konstruktionseigenschaft um.
+    /// Schaltet bei den ausgewählten Kurven die Konstruktionseigenschaft um. Ein Text schaltet
+    /// als Ganzes, einmal (Spec B10): Die Skizze schaltet mit einem Buchstaben alle um.
     pub fn toggle_construction(&mut self, sk: &mut Sketch) {
+        let mut texts = Vec::new();
         for item in &self.selection {
             if let Item::Curve(c) = *item
                 && let Some(construction) = sk.curve(c).map(|d| d.construction)
             {
+                if let Some(t) = sk.text_of_curve(c) {
+                    if texts.contains(&t) {
+                        continue;
+                    }
+                    texts.push(t);
+                }
                 let _ = sk.set_construction(c, !construction);
             }
         }
@@ -3044,6 +3161,7 @@ fn offset_problem_message(problem: OffsetProblem) -> Msg {
         OffsetProblem::SelfCrossing => crate::msg!("sketch-offset-crossing"),
         OffsetProblem::Cusp => crate::msg!("sketch-offset-cusp"),
         OffsetProblem::ClosedKink => crate::msg!("sketch-offset-closed-kink"),
+        OffsetProblem::Text => crate::msg!("sketch-text-no-offset"),
         OffsetProblem::Degenerate => crate::msg!("sketch-field-rejected"),
     }
 }

@@ -12,6 +12,9 @@ use crate::pattern::{
     PatternSlot,
 };
 use crate::solver::SolveCache;
+use crate::spline_handles::handle_parts;
+use crate::text::{MAX_SPACING, ShapedCache, TextData, TextPlacement, WalkCache};
+use crate::text_shape::{MAX_TEXT_CHARS, MAX_TEXT_CURVES, TextStyle};
 use planora_i18n::tr;
 use planora_kernel::Arena;
 use planora_math::nurbs::NurbsCurve;
@@ -58,6 +61,22 @@ pub struct PatternRecord {
     pub alive: bool,
 }
 
+/// Ein Text wie [`TextData`], mit `alive` und ohne das gesetzte `TextShape` (Skizzen 8): Nach dem
+/// Laden ist ein Text „noch nicht gesetzt“, seine gespeicherten Kurven bleiben, bis
+/// [`Sketch::reshape_texts`] ihn neu setzt.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextRecord {
+    pub content: String,
+    pub style: TextStyle,
+    pub height: f64,
+    pub flip_h: bool,
+    pub flip_v: bool,
+    pub placement: TextPlacement,
+    pub curves: Vec<CurveId>,
+    pub points: Vec<PointId>,
+    pub alive: bool,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SketchData {
     pub name: String,
@@ -69,6 +88,8 @@ pub struct SketchData {
     pub constraints: Vec<ConstraintRecord>,
     /// Muster, auch aufgelöste (Skizzen 5); leer in Skizzen ohne Muster.
     pub patterns: Vec<PatternRecord>,
+    /// Texte, auch gelöschte (Skizzen 8); leer in Skizzen ohne Text.
+    pub texts: Vec<TextRecord>,
 }
 
 /// Größter Grad eines Splines mit Kontrollpunkten in einer Datei (im Skizzenfeld wählbar: 3, 5).
@@ -83,6 +104,12 @@ impl Sketch {
     /// [`Sketch::to_data`]).
     pub fn curve_entries(&self) -> impl Iterator<Item = &CurveKind> {
         self.curves.iter().map(|(_, c)| &c.kind)
+    }
+
+    /// Gibt es einen Texteintrag, auch einen gelöschten? Dann braucht die Datei Format 18
+    /// (Skizzen 8): Er steht in der Datei.
+    pub fn has_text_entry(&self) -> bool {
+        !self.texts.is_empty()
     }
 
     /// Arten aller Abhängigkeitseinträge in Arena-Reihenfolge, auch gelöschter und interner.
@@ -140,6 +167,21 @@ impl Sketch {
                     instances: m.instances.clone(),
                     suppressed: m.suppressed.clone(),
                     alive: m.alive,
+                })
+                .collect(),
+            texts: self
+                .texts
+                .iter()
+                .map(|(_, t)| TextRecord {
+                    content: t.content.clone(),
+                    style: t.style.clone(),
+                    height: t.height,
+                    flip_h: t.flip_h,
+                    flip_v: t.flip_v,
+                    placement: t.placement,
+                    curves: t.curves.clone(),
+                    points: t.points.clone(),
+                    alive: t.alive,
                 })
                 .collect(),
         }
@@ -291,6 +333,7 @@ impl Sketch {
             }
         }
         check_patterns(&d)?;
+        check_texts(&d)?;
 
         let mut points = Arena::new();
         for p in d.points {
@@ -335,12 +378,30 @@ impl Sketch {
                 alive: m.alive,
             });
         }
+        let mut texts = Arena::new();
+        for t in d.texts {
+            texts.push(TextData {
+                content: t.content,
+                style: t.style,
+                height: t.height,
+                flip_h: t.flip_h,
+                flip_v: t.flip_v,
+                placement: t.placement,
+                curves: t.curves,
+                points: t.points,
+                alive: t.alive,
+                // Noch nicht gesetzt: Die gespeicherten Kurven bleiben (Spec G4).
+                shaped: ShapedCache::default(),
+                walk: WalkCache::default(),
+            });
+        }
         let mut s = Sketch::new(d.frame, d.name, d.tolerance);
         s.vars = d.vars;
         s.points = points;
         s.curves = curves;
         s.constraints = constraints;
         s.patterns = patterns;
+        s.texts = texts;
         s.solve_cache = SolveCache::default();
         s.touch_structure();
         // Typen und Entartungen aller Abhängigkeiten (auch gelöschter) wie bei add_constraint
@@ -615,6 +676,179 @@ fn check_patterns(d: &SketchData) -> Result<(), SketchError> {
         }
     }
     Ok(())
+}
+
+/// Fehler eines Textes in den Rohdaten mit dem Grund `reason` (Schlüssel).
+fn bad_text(reason: &str) -> SketchError {
+    bad(tr!(
+        "sketch-err-text-data",
+        reason = planora_i18n::t(reason)
+    ))
+}
+
+/// Prüft die Texte streng (Spec G5); eine kaputte Skizze wird abgelehnt, nicht repariert.
+///
+/// Jeder Text, auch ein gelöschter: nur vorhandene Kurven und Punkte (so stürzt nichts ab), Höhe
+/// endlich und größer als null, Zeichenabstand in `0 ≤ p ≤ 1000`, Inhalt nicht leer und
+/// höchstens [`MAX_TEXT_CHARS`] Zeichen, höchstens [`MAX_TEXT_CURVES`] erzeugte Kurven.
+///
+/// Jeder lebende Text dazu: alle Teile leben; die erzeugten Kurven sind Strecken, Kegelschnitte
+/// mit ρ = 0,5 oder kubische Splines mit vier Kontrollpunkten (Spec B2), weder Teil eines Musters
+/// (Vorlage, Exemplar, Richtung; ebenso die erzeugten Punkte samt Mitte) noch Griff eines
+/// Splines; der Rahmen besteht aus vier verschiedenen Ecken und vier Konstruktionslinien, Linie
+/// `i` zwischen Ecke `i` und Ecke `i + 1`; der Pfad ist weder erzeugte Kurve noch Rahmenlinie
+/// eines lebenden Textes (auch nicht eines anderen); keine Kurve (erzeugt oder Rahmen) und kein
+/// Punkt (erzeugt oder Ecke) gehört zweimal zu lebenden Texten. Ein gelöschter Text darf auf
+/// gelöschte Teile zeigen und seine Kurven abgegeben haben (Text auflösen, Spec F).
+fn check_texts(d: &SketchData) -> Result<(), SketchError> {
+    let (np, nc) = (d.points.len(), d.curves.len());
+    for t in &d.texts {
+        let placement_ok = match t.placement {
+            TextPlacement::Box { lines, corners, .. } => {
+                lines.iter().all(|c| c.index() < nc) && corners.iter().all(|p| p.index() < np)
+            }
+            TextPlacement::Path { path, .. } => path.index() < nc,
+        };
+        let parts_ok =
+            t.curves.iter().all(|c| c.index() < nc) && t.points.iter().all(|p| p.index() < np);
+        if !(placement_ok && parts_ok) {
+            return Err(bad_text("sketch-err-text-data-object"));
+        }
+        if !(t.height.is_finite() && t.height > 0.0) {
+            return Err(bad_text("sketch-err-text-data-height"));
+        }
+        if !(0.0..=MAX_SPACING).contains(&t.style.spacing) {
+            return Err(bad_text("sketch-err-text-data-spacing"));
+        }
+        if t.content.chars().count() > MAX_TEXT_CHARS || t.content.trim().is_empty() {
+            return Err(bad_text("sketch-err-text-data-content"));
+        }
+        if t.curves.len() > MAX_TEXT_CURVES {
+            return Err(bad_text("sketch-err-text-data-curves"));
+        }
+    }
+    let live: Vec<&TextRecord> = d.texts.iter().filter(|t| t.alive).collect();
+    let point_alive = |p: PointId| d.points[p.index()].alive;
+    let curve_alive = |c: CurveId| d.curves[c.index()].alive;
+    // Alle erzeugten Kurven und Rahmenlinien lebender Texte: Keine davon ist ein Pfad (Ruling 5c:
+    // ein Rahmen ginge mit seinem Text verloren, der Text auf ihm hinge dann an nichts).
+    let not_paths: HashSet<CurveId> = live
+        .iter()
+        .flat_map(|t| {
+            let frame = match t.placement {
+                TextPlacement::Box { lines, .. } => lines.to_vec(),
+                TextPlacement::Path { .. } => Vec::new(),
+            };
+            t.curves.iter().copied().chain(frame)
+        })
+        .collect();
+    // Teile lebender Muster und Griffe lebender Splines: Die hält das Muster bzw. der Spline,
+    // erzeugte Kurven und Punkte hält der Text.
+    let (pattern_curves, pattern_points) = pattern_parts(d);
+    let handles: HashSet<CurveId> = d
+        .curves
+        .iter()
+        .filter(|c| c.alive)
+        .flat_map(|c| match &c.kind {
+            CurveKind::Spline { handles, .. } => handles.iter().flat_map(handle_parts).collect(),
+            _ => Vec::new(),
+        })
+        .collect();
+    let mut curves: HashSet<CurveId> = HashSet::new();
+    let mut points: HashSet<PointId> = HashSet::new();
+    for t in live {
+        let alive = t.curves.iter().all(|&c| curve_alive(c))
+            && t.points.iter().all(|&p| point_alive(p))
+            && match t.placement {
+                TextPlacement::Box { lines, corners, .. } => {
+                    lines.iter().all(|&c| curve_alive(c)) && corners.iter().all(|&p| point_alive(p))
+                }
+                TextPlacement::Path { path, .. } => curve_alive(path),
+            };
+        if !alive {
+            return Err(bad_text("sketch-err-text-data-deleted"));
+        }
+        let glyph_kinds = t.curves.iter().all(|c| match &d.curves[c.index()].kind {
+            CurveKind::Line { .. } => true,
+            CurveKind::Conic { rho, .. } => *rho == 0.5,
+            CurveKind::ControlSpline { points, degree, .. } => *degree == 3 && points.len() == 4,
+            _ => false,
+        });
+        if !glyph_kinds {
+            return Err(bad_text("sketch-err-text-data-kind"));
+        }
+        if t.curves.iter().any(|c| pattern_curves.contains(c))
+            || t.points.iter().any(|p| pattern_points.contains(p))
+        {
+            return Err(bad_text("sketch-err-text-data-pattern"));
+        }
+        if t.curves.iter().any(|c| handles.contains(c)) {
+            return Err(bad_text("sketch-err-text-data-handle"));
+        }
+        let (own_curves, own_points): (Vec<CurveId>, Vec<PointId>) = match t.placement {
+            TextPlacement::Box { lines, corners, .. } => {
+                let quad = (0..4).all(|i| {
+                    let (p, q) = (corners[i], corners[(i + 1) % 4]);
+                    matches!(d.curves[lines[i].index()].kind,
+                        CurveKind::Line { a, b } if (a, b) == (p, q) || (a, b) == (q, p))
+                });
+                let distinct = corners.iter().collect::<HashSet<_>>().len() == 4
+                    && lines.iter().collect::<HashSet<_>>().len() == 4;
+                if !(quad && distinct) {
+                    return Err(bad_text("sketch-err-text-data-frame"));
+                }
+                if !lines.iter().all(|c| d.curves[c.index()].construction) {
+                    return Err(bad_text("sketch-err-text-data-construction"));
+                }
+                (lines.to_vec(), corners.to_vec())
+            }
+            TextPlacement::Path { path, .. } => {
+                if not_paths.contains(&path) {
+                    return Err(bad_text("sketch-err-text-data-path"));
+                }
+                (Vec::new(), Vec::new())
+            }
+        };
+        let exclusive = t
+            .curves
+            .iter()
+            .chain(&own_curves)
+            .all(|&c| curves.insert(c))
+            && t.points
+                .iter()
+                .chain(&own_points)
+                .all(|&p| points.insert(p));
+        if !exclusive {
+            return Err(bad_text("sketch-err-text-data-shared"));
+        }
+    }
+    Ok(())
+}
+
+/// Kurven und Punkte lebender Muster: Vorlagen, Exemplare, Richtungslinien und Mitten.
+fn pattern_parts(d: &SketchData) -> (HashSet<CurveId>, HashSet<PointId>) {
+    let mut curves: HashSet<CurveId> = HashSet::new();
+    let mut points: HashSet<PointId> = HashSet::new();
+    for m in d.patterns.iter().filter(|m| m.alive) {
+        curves.extend(&m.sources);
+        points.extend(&m.source_points);
+        for inst in &m.instances {
+            curves.extend(&inst.curves);
+            points.extend(&inst.points);
+        }
+        match m.kind {
+            PatternKind::Rect { dirs, .. } => {
+                curves.extend(dirs.iter().filter_map(|dir| match dir {
+                    PatternDir::Line(l) => Some(*l),
+                    _ => None,
+                }));
+            }
+            PatternKind::Circular { center, .. } => {
+                points.insert(center);
+            }
+        }
+    }
+    (curves, points)
 }
 
 /// Alle Zahlen einer Abhängigkeit endlich und im Bereich (Winkel und Maße).

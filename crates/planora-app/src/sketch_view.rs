@@ -739,7 +739,7 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
         if let Some(pick) = state.profile_pick.as_ref().filter(|p| p.sketch == id) {
             let extracted = state.profile_cache.get(sk);
             out.extend(profile_fill_shape(&map, &extracted, |i| {
-                Some(if pick.hover == Some(i) {
+                Some(if pick.hover.contains(&i) {
                     col.profile_fill_hover
                 } else if pick.selected.contains(&i) {
                     col.profile_fill_selected
@@ -1301,6 +1301,8 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             .as_ref()
             .is_some_and(SketchSession::is_drawing_tool))
     .then(|| state.document.param_scope());
+    // Text: OK über Eingabe setzt mit der Schriftliste.
+    let fonts = state.fonts().cloned();
     let Some((se, sf)) = state.session_draft_mut() else {
         return;
     };
@@ -1480,9 +1482,19 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
                     Snap::Curve(c) => Some(Item::Curve(c)),
                     _ => None,
                 };
-                let edited = item.is_some_and(|i| se.begin_pattern_edit_item(&mut sf.sketch, i));
-                if !edited && let Snap::Curve(c) = snap {
-                    se.select_chain(&sf.sketch, c, shift);
+                // Ein Buchstabe öffnet seinen Text zum Ändern (Skizzen 8, Spec C8), sonst wählt
+                // er den ganzen Text statt einer Kette.
+                let text = item.and_then(|i| crate::sketch_text::text_of_item(&sf.sketch, i));
+                if let Some(t) = text {
+                    if se.tool != Tool::Select || !se.begin_text_edit(&mut sf.sketch, t) {
+                        se.select_text(&sf.sketch, t, shift);
+                    }
+                } else {
+                    let edited =
+                        item.is_some_and(|i| se.begin_pattern_edit_item(&mut sf.sketch, i));
+                    if !edited && let Snap::Curve(c) = snap {
+                        se.select_chain(&sf.sketch, c, shift);
+                    }
                 }
             }
         } else if matches!(se.tool, Tool::Constraint(_)) {
@@ -1568,11 +1580,13 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
                 }
                 _ if se.runs_transform() => se.confirm_transform(sf),
                 _ if se.runs_pattern() => se.confirm_pattern(sf),
+                _ if se.runs_text() => se.confirm_text(sf, fonts.as_deref()),
                 _ => se.finish_tool(&mut sf.sketch),
             };
         }
-        // In der Anordnung gehört die Auswahl der Vorlage; Entf löscht dort nichts.
-        if delete && !gesture && !se.runs_pattern() {
+        // In der Anordnung gehört die Auswahl der Vorlage; Entf löscht dort nichts. Ebenso bei
+        // offenem Abschnitt „Text“: Beim Ändern ist der Text selbst gewählt.
+        if delete && !gesture && !se.runs_pattern() && !se.runs_text() {
             se.delete_selection(&mut sf.sketch);
         }
     }
@@ -1711,6 +1725,18 @@ fn curve_ink(
     }
 }
 
+/// Die Rahmenlinien der gewählten Texte (Spec B9: Der Rahmen erscheint hervorgehoben).
+fn selected_frames(se: &SketchSession, sk: &Sketch) -> HashSet<CurveId> {
+    se.selected_texts(sk)
+        .into_iter()
+        .filter_map(|t| match sk.text(t)?.placement {
+            planora_sketch::text::TextPlacement::Box { lines, .. } => Some(lines),
+            planora_sketch::text::TextPlacement::Path { .. } => None,
+        })
+        .flatten()
+        .collect()
+}
+
 /// Farbe eines Punkts der offenen Skizze (ohne Aufhellung): gewählt oder gezogen > Punkt einer
 /// projizierten Kurve (lila wie Fusion) > bestimmt > frei.
 fn point_ink(
@@ -1776,8 +1802,21 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     // wieder (sonst würden sie in jedem Frame neu bestimmt).
     if state.show_sketch_profiles && !se.is_dragging() {
         let extracted = state.profile_cache.get(sk);
-        painter.extend(profile_fill_shape(&map, &extracted, |_| {
-            Some(col.profile_fill)
+        // Beim Ändern eines Textes ohne seine Buchstaben (Handtest B2): An ihrer Stelle steht
+        // nur die Vorschau. Ein Profil des Textes hat nur Buchstaben am äußeren Rand; die
+        // Buchstaben einmal je Bild als Menge statt einer Suche je Profil.
+        let glyphs: HashSet<CurveId> = se
+            .edited_text()
+            .and_then(|t| sk.text(t))
+            .map(|d| d.curves.iter().copied().collect())
+            .unwrap_or_default();
+        painter.extend(profile_fill_shape(&map, &extracted, |i| {
+            let own = !glyphs.is_empty()
+                && extracted
+                    .refs
+                    .get(i)
+                    .is_some_and(|r| r.outer.first().is_some_and(|e| glyphs.contains(&e.curve)));
+            (!own).then_some(col.profile_fill)
         }));
     }
 
@@ -1823,6 +1862,15 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     let handles_hidden = se.hidden_handles(sk);
     hidden.extend(handles_hidden.curves);
     hidden_points.extend(handles_hidden.points);
+    // Beim Ändern eines Textes steht die Vorschau an der Stelle seiner Buchstaben und seines
+    // Rahmens.
+    hidden.extend(se.text_hidden(sk));
+    hidden_points.extend(se.text_hidden_points(sk));
+    // Buchstaben haben keine sichtbaren Punkte (Spec B9, wie Fusion): Sie fangen nicht und
+    // lassen sich nicht einzeln wählen.
+    hidden_points.extend(sk.glyph_points());
+    // Der Rahmen eines gewählten Textes erscheint hervorgehoben (Spec B9).
+    let frames = selected_frames(se, sk);
     for (c, data) in sk.curves() {
         if hidden.contains(&c) {
             continue;
@@ -1830,7 +1878,11 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         let Some(pl) = sk.curve_polyline(c, STEPS_PER_TURN) else {
             continue;
         };
-        let mut color = curve_ink(&col, se, sk, &projected, c);
+        let mut color = if frames.contains(&c) {
+            col.selected
+        } else {
+            curve_ink(&col, se, sk, &projected, c)
+        };
         if hovered == Some(Item::Curve(c)) {
             color = lighter(color);
         }
@@ -1938,6 +1990,15 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
             None => overlay_text(ui.ctx(), sk, &c.kind, c.driven),
         };
         if text.is_empty() {
+            continue;
+        }
+        // Fest (Handtest B4, wie Fusion): Fixierte Geometrie erkennt man an ihrer Farbe, nicht an
+        // einem Schild je Punkt (ein aufgelöster Text hätte sonst Hunderte). Ihr Schild zeigt
+        // nur eine in der Liste gewählte oder fehlerhafte Fixierung.
+        if matches!(c.kind, ConstraintKind::Fixed(..))
+            && !bad.contains(&id)
+            && !se.selection.contains(&Item::Constraint(id))
+        {
             continue;
         }
         // „auf“ an einer Hilfskurve (z. B. dem Hilfskreis des Vielecks) wäre nur Lärm.
@@ -2241,14 +2302,20 @@ fn place_label(mut r: Rect, placed: &mut Vec<Rect>) -> Rect {
 }
 
 /// Hilfslinien der gewählten Kurven als Linienzüge (Skizzen 7): beim Spline mit Kontrollpunkten das
-/// Kontrollpolygon, beim Kegelschnitt Start–Scheitel–Ende. Sie sind keine Kurven.
+/// Kontrollpolygon, beim Kegelschnitt Start–Scheitel–Ende. Sie sind keine Kurven. Die Buchstaben
+/// eines Textes, der gerade geändert wird, haben keine (Handtest B2: Die Ansicht zeichnet sie
+/// nicht, [`SketchSession::text_hidden`]).
 pub fn curve_guides(se: &SketchSession, sk: &Sketch) -> Vec<Vec<DVec2>> {
+    let hidden = se.text_hidden(sk);
     se.selection
         .iter()
         .filter_map(|item| {
             let Item::Curve(c) = item else {
                 return None;
             };
+            if hidden.contains(c) {
+                return None;
+            }
             let ids = match &sk.curve(*c)?.kind {
                 CurveKind::ControlSpline { points, .. } => points.clone(),
                 CurveKind::Conic {
@@ -2259,6 +2326,48 @@ pub fn curve_guides(se: &SketchSession, sk: &Sketch) -> Vec<Vec<DVec2>> {
             ids.iter().map(|&p| pos(sk, p)).collect()
         })
         .collect()
+}
+
+/// Vorschau des Werkzeugs „Text“ ([`crate::sketch_text`]): nichts davon steht in der Skizze.
+fn draw_text_preview(
+    painter: &egui::Painter,
+    map: &Mapper,
+    sk: &Sketch,
+    se: &SketchSession,
+    color: Color32,
+) {
+    use crate::sketch_text::TextToolKind;
+    let Some(t) = se.text.as_ref() else {
+        return;
+    };
+    let cursor = se.draw_cursor.as_ref().map(|c| c.at).or(se.cursor);
+    if t.kind == TextToolKind::Box {
+        let frame: Option<Vec<DVec2>> = match (t.frame_corners(), t.corners.as_slice(), cursor) {
+            (Some(c), ..) => Some(vec![c[0], c[1], c[2], c[3], c[0]]),
+            (None, [a], Some(b)) => {
+                Some(vec![*a, DVec2::new(b.x, a.y), b, DVec2::new(a.x, b.y), *a])
+            }
+            _ => None,
+        };
+        for path in frame.iter().flat_map(|f| map.paths(f)) {
+            draw_path(painter, path, Stroke::new(1.5, color), true);
+        }
+    }
+    if t.kind == TextToolKind::Path
+        && let Some(pl) = t.path.and_then(|p| sk.curve_polyline(p, STEPS_PER_TURN))
+    {
+        for path in map.paths(&pl) {
+            draw_path(painter, path, Stroke::new(CURVE_WIDTH + 1.0, color), false);
+        }
+    }
+    let stroke = Stroke::new(CURVE_WIDTH, color);
+    // Die gemerkte Lage: Gelegt wird nur nach einer Änderung (`update_text_preview`).
+    let placed = se.placed_text_preview().unwrap_or_default();
+    for line in crate::sketch_text::contour_polylines(&placed) {
+        for path in map.paths(&line) {
+            draw_path(painter, path, stroke, false);
+        }
+    }
 }
 
 /// Vorschau des laufenden Werkzeugs vom zuletzt gesetzten Punkt zum Mauszeiger.
@@ -2298,6 +2407,12 @@ fn draw_preview(
         if let Some(at) = se.pattern.new_center.and_then(|hit| map.to_screen(hit.at)) {
             painter.circle_filled(at, 3.0, color);
         }
+        return;
+    }
+    // Text: Rahmen gestrichelt (beim Aufziehen bis zum Zeiger), der Pfad kräftig, der Text, wie
+    // OK ihn anlegt.
+    if se.runs_text() {
+        draw_text_preview(painter, map, sk, se, color);
         return;
     }
     // Ohne Zeiger über der Skizze bleibt die Vorschau an der letzten Stelle stehen.

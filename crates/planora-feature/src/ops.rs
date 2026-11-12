@@ -1,6 +1,7 @@
 //! Änderungsoperationen am Dokument: Parameter ändern, umbenennen, löschen (mit Folgen) und
 //! die Prüfung der Dokument-Invarianten für Tests.
 
+use crate::compute::text_warning_lines;
 use crate::error::FeatureError;
 use crate::formulas::{
     Formulas, check_keys, drop_overwritten_dims, evaluate, field_keys, prune_sketch, same_fields,
@@ -10,6 +11,7 @@ use crate::model::{Document, FeatureId, FeatureKind, FeatureStatus, SketchPlane}
 use crate::recompute::RecomputeReport;
 use planora_i18n::tr;
 use planora_kernel::Kernel;
+use planora_sketch::text_shape::TextShaper;
 
 impl Document {
     /// Ändert die Parameter eines Features und berechnet neu; liefert den Bericht des Laufs.
@@ -131,6 +133,48 @@ impl Document {
         // Die Formeln der Skizzenmaße stehen in der Art; Feldformeln bleiben wie sie sind.
         let formulas = self.features[idx].formulas.clone();
         self.commit_update(idx, kind, formulas).map(|_| ())
+    }
+
+    /// Setzt alle Texte aller Skizzen mit `shaper` neu (Spec G4): nach dem Laden, sobald die
+    /// Schriftliste da ist, und wenn sich die Schriften ändern. Die Kurven behalten nach Spec B3
+    /// ihre Ids, Extrusionen bleiben an ihren Profilen.
+    ///
+    /// `true` nur, wenn sich die Form einer Skizze wirklich geändert hat (fehlende oder andere
+    /// Schrift). Dann gilt das Dokument als geändert ([`Document::edit_count`] steigt, damit
+    /// Speichern schreibt, was zu sehen ist, und kein Zwischenspeicher ein altes Ergebnis zeigt).
+    /// Ein Rückgängig-Schritt ist das nicht: Der Aufrufer nimmt den neuen Zählerstand ohne Schritt
+    /// hin, wie nach dem Zurückladen. Liefert das Setzen dieselben Kurven, bleiben Daten und
+    /// Zähler gleich. Ändert sich dabei nur die Warnung zu fehlenden Schriften oder zu Texten, die
+    /// sich nicht setzen lassen (Spec C10), bekommt die Skizze eine neue Version und wird neu
+    /// berechnet, damit die Warnung erscheint.
+    pub fn reshape_texts(&mut self, shaper: &dyn TextShaper) -> bool {
+        let mut changed = false;
+        let mut stale = false;
+        for idx in 0..self.features.len() {
+            let FeatureKind::Sketch(sf) = &mut self.features[idx].kind else {
+                continue;
+            };
+            if sf.sketch.texts().next().is_none() {
+                continue;
+            }
+            let before = text_warning_lines(&sf.sketch);
+            let report = sf.sketch.reshape_texts(shaper);
+            let warning_changed = text_warning_lines(&sf.sketch) != before;
+            if report.changed || warning_changed {
+                // Neuer Stand: Die Skizze und alles Abhängige rechnen neu.
+                let version = self.bump();
+                self.features[idx].version = version;
+                stale = true;
+            }
+            changed |= report.changed;
+        }
+        if changed {
+            self.edits += 1;
+        }
+        if stale {
+            self.recompute();
+        }
+        changed
     }
 
     /// Wie [`Document::update_with_report`], ohne den Bericht.

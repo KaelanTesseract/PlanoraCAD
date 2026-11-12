@@ -145,7 +145,7 @@ pub(crate) fn nurbs_breaks(curve: &NurbsCurve, t0: f64, t1: f64) -> Vec<f64> {
 }
 
 /// Eine Ellipse, ein Spline oder eine NURBS-Kurve in Gleitkommazahlen (zum Abtasten).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Sampled {
     Ellipse {
         c: DVec2,

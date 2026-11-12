@@ -26,6 +26,7 @@ use planora_sketch::{ExtractedProfiles, ProfileRef, plane_of_face};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::mpsc::Receiver;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BodyKind {
@@ -41,6 +42,38 @@ pub enum BodyKind {
     Mesh,
     /// Aus einer STEP-Datei übernommener exakter Körper (STEP-Körper); verschoben bleibt er es.
     Step,
+}
+
+/// Stand der Schriftliste für Skizzentext (Skizzen 8, Spec A1, G4). Die Liste entsteht einmal je
+/// Programmlauf im Hintergrund ([`crate::fonts_library::start`]); bis sie da ist, wartet nichts
+/// auf sie. Die App fragt den Kanal in jedem Bild ab ([`FontState::poll`]).
+pub enum FontState {
+    /// Die Schriftordner werden noch durchsucht; die Liste kommt über den Kanal.
+    Loading(Receiver<planora_text::FontLibrary>),
+    /// Die Liste ist da.
+    Ready(Arc<planora_text::FontLibrary>),
+}
+
+impl FontState {
+    /// Fragt den Kanal ab, ohne zu warten, und liefert die Liste, sobald sie da ist. Bricht das
+    /// Durchsuchen ohne Liste ab (Kanal geschlossen), gelten die mitgelieferten Schriften, mit
+    /// einer Zeile im Protokoll: Text bleibt so immer setzbar.
+    pub fn poll(&mut self) -> Option<&Arc<planora_text::FontLibrary>> {
+        if let FontState::Loading(rx) = self {
+            match rx.try_recv() {
+                Ok(lib) => *self = FontState::Ready(Arc::new(lib)),
+                Err(std::sync::mpsc::TryRecvError::Empty) => return None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    crate::diag::warn("Font scan ended without a font list; using bundled fonts");
+                    *self = FontState::Ready(Arc::new(planora_text::FontLibrary::bundled_only()));
+                }
+            }
+        }
+        match self {
+            FontState::Ready(lib) => Some(lib),
+            FontState::Loading(_) => None,
+        }
+    }
 }
 
 /// Grundebenen für neue Skizzen (gemeinsame Definition mit dem Feature-Modell).
@@ -248,18 +281,28 @@ pub struct AppState {
     /// Kennung dieses Zustands (jedes Tab hat einen eigenen; eindeutig im Programm). Trennt die
     /// programmweiten Zwischenspeicher der Zeichnungsansicht nach Dokumenten.
     pub instance: u64,
+    /// Die Schriftliste des Programms, sobald sie da ist ([`AppState::fonts`]); die App gibt sie
+    /// jedem Tab ([`crate::workspace::Workspace::apply_fonts`]).
+    fonts: Option<Arc<planora_text::FontLibrary>>,
+    /// Die zuletzt benutzten Werte des Werkzeugs „Text“ (Spec C4): geteilt mit dem
+    /// Arbeitsbereich und allen seinen Tabs, so gelten sie für den Programmlauf
+    /// ([`AppState::share_text_memory`]). Jede Skizzensitzung bekommt denselben Speicher.
+    text_memory: crate::sketch_text::TextMemoryShare,
 }
 
 /// Profilwahl eines offenen Dialogs „Extrudieren“/„Drehen“ (wie in Fusion: Klick in die Ansicht
 /// schaltet ein Profil um). Der Dialog legt Skizze und Wahl in jedem Bild ab; die 3D-Ansicht
-/// trägt das Profil unter dem Mauszeiger (`hover`) und ein angeklicktes (`clicked`) ein, das der
-/// Dialog im selben Bild umschaltet und löscht. Indizes in `profiles()` der berechneten Skizze.
+/// trägt die Profile unter dem Mauszeiger ein (`hover`: die ein Klick jetzt umschalten würde, bei
+/// einem Textprofil ohne Strg also alle Profile des Textes, [`crate::profile_pick::click_set`])
+/// und ein angeklicktes (`clicked`, mit den beim Klick gedrückten Tasten), das der Dialog im
+/// selben Bild umschaltet und löscht ([`crate::profile_pick::take_click`]). Indizes in
+/// `profiles()` der berechneten Skizze.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProfilePick {
     pub sketch: FeatureId,
     pub selected: Vec<usize>,
-    pub hover: Option<usize>,
-    pub clicked: Option<usize>,
+    pub hover: Vec<usize>,
+    pub clicked: Option<(usize, egui::Modifiers)>,
 }
 
 /// Merkt sich die Profile der zuletzt gefragten Skizze zu ihrem Stand
@@ -269,6 +312,8 @@ pub struct ProfilePick {
 pub struct ProfileCache {
     entry: RefCell<Option<(u64, Arc<ExtractedProfiles>)>>,
     computed: Cell<usize>,
+    /// Gruppen der Profilwahl ([`crate::profile_pick::groups`]) zum selben Stand.
+    groups: RefCell<Option<(u64, Arc<Vec<crate::profile_pick::ProfileGroup>>)>>,
     /// Zahl der Profile nach dem alten Algorithmus ([`Sketch::legacy_profiles`]) zum Stand.
     legacy: Cell<Option<(u64, usize)>>,
     legacy_computed: Cell<usize>,
@@ -287,6 +332,20 @@ impl ProfileCache {
         self.computed.set(self.computed.get() + 1);
         *entry = Some((sk.revision(), Arc::clone(&p)));
         p
+    }
+
+    /// Die Gruppen der Profile von `sk` (je Text eine, sonst je Profil eine, Spec D2), aus dem
+    /// Speicher, wenn sich die Skizze seither nicht geändert hat. So läuft die Zuordnung der
+    /// Profile zu Texten einmal je Stand und nicht in jedem Bild.
+    pub fn groups(&self, sk: &Sketch) -> Arc<Vec<crate::profile_pick::ProfileGroup>> {
+        if let Some((rev, g)) = self.groups.borrow().as_ref()
+            && *rev == sk.revision()
+        {
+            return Arc::clone(g);
+        }
+        let g = Arc::new(crate::profile_pick::groups(&self.get(sk), sk));
+        *self.groups.borrow_mut() = Some((sk.revision(), Arc::clone(&g)));
+        g
     }
 
     /// Wie oft bisher tatsächlich berechnet wurde (für Tests).
@@ -559,9 +618,54 @@ impl AppState {
             pending_delete_dimension: None,
             document_name: tr!("state-unnamed"),
             instance: NEXT_INSTANCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            fonts: None,
+            text_memory: Default::default(),
         };
         state.rebuild_scene();
         state
+    }
+
+    /// Teilt die gemerkten Werte des Werkzeugs „Text“ mit `share` (dem Speicher des
+    /// Arbeitsbereichs, Spec C4: für den Programmlauf, über alle Tabs); eine offene Sitzung
+    /// bekommt ihn auch.
+    pub fn share_text_memory(&mut self, share: &crate::sketch_text::TextMemoryShare) {
+        self.text_memory = share.clone();
+        if let Some(se) = self.sketch_session.as_mut() {
+            se.text_memory = share.clone();
+        }
+    }
+
+    /// Der Speicher der gemerkten Werte des Werkzeugs „Text“.
+    pub fn text_memory_share(&self) -> &crate::sketch_text::TextMemoryShare {
+        &self.text_memory
+    }
+
+    /// Die Schriftliste; `None`, solange die Schriftordner noch durchsucht werden (Spec G4).
+    pub fn fonts(&self) -> Option<&Arc<planora_text::FontLibrary>> {
+        self.fonts.as_ref()
+    }
+
+    /// Gibt dem Zustand die Schriftliste (einmal, sobald sie da ist).
+    pub(crate) fn set_fonts(&mut self, fonts: Arc<planora_text::FontLibrary>) {
+        self.fonts = Some(fonts);
+    }
+
+    /// Setzt alle Texte des Dokuments mit der Schriftliste neu (Spec G4: nach dem Laden und nach
+    /// jedem Zurückladen). `true`, wenn sich die Form geändert hat; dann ist das Dokument neu
+    /// berechnet und die Körper sind neu aufgebaut, ohne die Ansicht neu einzupassen. Ohne Liste
+    /// geschieht nichts. Ob das ein Schritt wird, entscheidet der Aufrufer (nie: siehe
+    /// [`crate::workspace::DocTab`]).
+    pub(crate) fn reshape_texts(&mut self) -> bool {
+        let Some(lib) = self.fonts.clone() else {
+            return false;
+        };
+        let changed = self
+            .document
+            .reshape_texts(&crate::fonts_library::Guarded(&lib));
+        if changed {
+            self.refresh_with(None, false);
+        }
+        changed
     }
 
     /// Farben der 3D-Szene im aktuellen Thema (Raster, Achsen, Auswahl aus dem Graphit-Theme).
@@ -2642,6 +2746,7 @@ impl AppState {
         let view_points = self.sketch_view_points(&draft.plane, &frame, draft.sketch.extent());
         let mut session = SketchSession::new(id);
         session.last_report = Some(draft.sketch.clone().solve());
+        session.text_memory = self.text_memory.clone();
         if !switching {
             self.saved_camera = Some(self.camera);
         }

@@ -1028,6 +1028,70 @@ pub struct SketchDto {
     /// Muster (ab Format 15), auch aufgelöste; fehlt in Skizzen ohne Muster.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub muster: Vec<PatternDto>,
+    /// Texte (ab Format 18), auch gelöschte; fehlt in Skizzen ohne Text.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub texte: Vec<TextDto>,
+}
+
+/// Waagerechte Ausrichtung eines Textes (ab Format 18).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WaagerechtDto {
+    Links,
+    Mitte,
+    Rechts,
+}
+
+/// Senkrechte Ausrichtung eines Textes im Rahmen (ab Format 18).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SenkrechtDto {
+    Oben,
+    Mitte,
+    Unten,
+}
+
+/// Wo ein Text steht (ab Format 18): im Rahmen aus vier Linien zwischen vier Ecken (Linie `i`
+/// von Ecke `i` nach Ecke `i + 1`, Linie 0 ist die Grundlinie) oder auf einer Kurve.
+///
+/// Bewusst extern getaggt (`"lage": {"rahmen": {…}}`), anders als die übrigen Arten mit
+/// `tag = "typ"`: So stehen in der Datei genau die Schlüssel, die Spec G2 nennt (`rahmen` oder
+/// `pfad` mit ihren Feldern), ohne zusätzlichen `typ`. Ändern hieße ein neues Format.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TextLageDto {
+    Rahmen {
+        linien: [usize; 4],
+        ecken: [usize; 4],
+        waagerecht: WaagerechtDto,
+        senkrecht: SenkrechtDto,
+    },
+    Pfad {
+        kurve: usize,
+        oberhalb: bool,
+        anpassen: bool,
+        waagerecht: WaagerechtDto,
+    },
+}
+
+/// Ein Text einer Skizze (ab Format 18, Skizzen 8). Nur der Familienname, Fett und Kursiv, nie
+/// Schriftdaten; die erzeugten Kurven und Punkte stehen als normale Einträge in der Skizze.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct TextDto {
+    pub inhalt: String,
+    pub schrift: String,
+    pub fett: bool,
+    pub kursiv: bool,
+    /// Höhe in mm (Geviert der Schrift).
+    pub hoehe: f64,
+    /// Zeichenabstand in Prozent.
+    pub abstand: f64,
+    pub umkehren_waagerecht: bool,
+    pub umkehren_senkrecht: bool,
+    pub lage: TextLageDto,
+    pub kurven: Vec<usize>,
+    pub punkte: Vec<usize>,
+    pub lebt: bool,
 }
 
 /// Richtung eines Rechteckmusters (ab Format 15).

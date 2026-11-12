@@ -30,6 +30,11 @@ pub mod solid;
 pub mod solver;
 pub mod spline_handles;
 pub mod tangent_circles;
+pub mod text;
+pub mod text_layout;
+pub(crate) mod text_profile;
+pub(crate) mod text_refresh;
+pub mod text_shape;
 pub mod transform;
 pub mod triangulate;
 
@@ -37,7 +42,7 @@ pub use constraint::{ConstraintData, ConstraintId, ConstraintKind, Evaluation, L
 pub use curves::{
     conic_apex_ok, conic_nurbs, conic_rho_at, conic_rho_ok, conic_shoulder, control_spline_nurbs,
 };
-pub use data::{ConstraintRecord, CurveRecord, PatternRecord, PointRecord, SketchData};
+pub use data::{ConstraintRecord, CurveRecord, PatternRecord, PointRecord, SketchData, TextRecord};
 pub use dimension::{DimMode, DimPick, DimPlan};
 pub use edit::TrimPiece;
 pub use error::SketchError;
@@ -61,4 +66,8 @@ pub use snap::{AlignHit, Snap, SnapHit, SnapIndex};
 pub use solid::{extrude_profile, revolve_profile};
 pub use solver::{Drag, SolveReport, SolveStatus};
 pub use spline_handles::{NodeCurvature, NodeHandle, Nodes, hermite_nodes};
+pub use text::{
+    HAlign, ReshapeReport, ShapedCache, TextData, TextId, TextKindEdit, TextParams, TextPlacement,
+    VAlign,
+};
 pub use transform::{CopyMap, Similarity, TransformBlock, TransformReport, TransformSet};

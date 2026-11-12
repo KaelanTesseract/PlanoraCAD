@@ -34,23 +34,26 @@ use planora_kernel::BoolOp;
 use planora_math::nurbs::NurbsCurve;
 use planora_math::{DQuat, DVec3, Frame, Tolerance};
 use planora_sketch::pattern::{CircularMode, PatternDir, PatternInstance, PatternKind};
+use planora_sketch::text::{HAlign, TextPlacement, VAlign};
+use planora_sketch::text_shape::TextStyle;
 use planora_sketch::{
     ConstraintId, ConstraintKind, ConstraintRecord, CurveId, CurveKind, CurveRecord,
     HandleCurvature, LegacyMigration, LineOrPoints, PatternId, PatternRecord, PatternSlot,
-    PieceRef, PointId, PointRecord, ProfileRef, Sketch, SketchData, SplineHandle,
+    PieceRef, PointId, PointRecord, ProfileRef, Sketch, SketchData, SplineHandle, TextRecord,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Höchste lesbare Formatnummer der Versionsdateien (P7, P12, F7).
-pub const FORMAT_VERSION: u32 = 17;
+pub const FORMAT_VERSION: u32 = 18;
 /// Formatnummer der Rahmendateien `dokument.json` und `.autosave.json`; ihre Struktur ist seit
 /// Format 1 unverändert, ältere Programme öffnen das Projekt deshalb weiter (P7).
 pub const CONTAINER_FORMAT: u32 = 1;
 /// Größte Summe der dekodierten Netzdaten eines Dokuments (wie die Dateigrenze beim Import).
 const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 
-/// Kleinste Formatnummer, die den Stand darstellt (die Regeln in dieser Reihenfolge geprüft): 17
+/// Kleinste Formatnummer, die den Stand darstellt (die Regeln in dieser Reihenfolge geprüft): 18
+/// mit einem Text in einer Skizze ([`needs_format_18`], auch einem gelöschten Texteintrag), 17
 /// mit einer der neuen Kurvenarten aus Skizzen 7 ([`needs_format_17`], auch einem gelöschten
 /// Kurveneintrag), 16 mit einer Konstruktionsebene, einer Skizze auf einer Konstruktionsebene,
 /// einer Schnitt- oder Silhouettenprojektion ([`needs_format_16`]) oder einer vom Grundzustand abweichenden
@@ -66,7 +69,7 @@ const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 /// Stückliste auf einem Blatt), 6 mit Blatt- oder Projektangaben, 5 mit Maßen oder
 /// eingeschalteten Mittellinien, 4 mit Zeichnungen, 3 mit Netz-Körpern, 2 mit Rundungen oder
 /// Fasen, sonst 1 (P7, P12, F7, Teilprojekt 12 P11, Teilprojekt STEP-Import, Verlaufsleiste,
-/// Teilprojekt Zoll, Teilprojekte Skizzen 1, 3, 5 und 6).
+/// Teilprojekt Zoll, Teilprojekte Skizzen 1, 3, 5, 6, 7 und 8).
 pub fn required_format(s: &Snapshot) -> u32 {
     format_with(s, &profile_fields(s))
 }
@@ -74,7 +77,9 @@ pub fn required_format(s: &Snapshot) -> u32 {
 /// [`required_format`] mit den schon bestimmten Profilfeldern `fields` (eins je Feature).
 fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
     let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
-    if has(needs_format_17) {
+    if has(needs_format_18) {
+        18
+    } else if has(needs_format_17) {
         17
     } else if has(needs_format_16) || !s.visibility.is_default() {
         16
@@ -118,6 +123,11 @@ fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
     } else {
         1
     }
+}
+/// Braucht die Art Format 18 (Skizzen 8)? Eine Skizze mit einem Text, auch einem gelöschten
+/// Eintrag: Er steht in der Datei.
+fn needs_format_18(k: &FeatureKind) -> bool {
+    matches!(k, FeatureKind::Sketch(sf) if sf.sketch.has_text_entry())
 }
 /// Braucht die Art Format 17 (Skizzen 7)? Eine Skizze mit einem Spline mit Kontrollpunkten, einem
 /// Kegelschnitt, einem festen Spline oder einem Griff, auch einem gelöschten Eintrag: Er steht in der Datei.
@@ -841,6 +851,162 @@ fn patterns_from(origin: &str, feature: &str, d: &SketchDto) -> Result<Vec<Patte
     Ok(out)
 }
 
+fn h_align_to(h: HAlign) -> WaagerechtDto {
+    match h {
+        HAlign::Left => WaagerechtDto::Links,
+        HAlign::Center => WaagerechtDto::Mitte,
+        HAlign::Right => WaagerechtDto::Rechts,
+    }
+}
+
+fn h_align_from(h: WaagerechtDto) -> HAlign {
+    match h {
+        WaagerechtDto::Links => HAlign::Left,
+        WaagerechtDto::Mitte => HAlign::Center,
+        WaagerechtDto::Rechts => HAlign::Right,
+    }
+}
+
+fn text_to(t: &TextRecord) -> TextDto {
+    TextDto {
+        inhalt: t.content.clone(),
+        schrift: t.style.font.clone(),
+        fett: t.style.bold,
+        kursiv: t.style.italic,
+        hoehe: t.height,
+        abstand: t.style.spacing,
+        umkehren_waagerecht: t.flip_h,
+        umkehren_senkrecht: t.flip_v,
+        lage: match t.placement {
+            TextPlacement::Box {
+                lines,
+                corners,
+                h,
+                v,
+            } => TextLageDto::Rahmen {
+                linien: lines.map(|c| c.index()),
+                ecken: corners.map(|p| p.index()),
+                waagerecht: h_align_to(h),
+                senkrecht: match v {
+                    VAlign::Top => SenkrechtDto::Oben,
+                    VAlign::Middle => SenkrechtDto::Mitte,
+                    VAlign::Bottom => SenkrechtDto::Unten,
+                },
+            },
+            TextPlacement::Path {
+                path,
+                above,
+                fit,
+                h,
+            } => TextLageDto::Pfad {
+                kurve: path.index(),
+                oberhalb: above,
+                anpassen: fit,
+                waagerecht: h_align_to(h),
+            },
+        },
+        kurven: t.curves.iter().map(|c| c.index()).collect(),
+        punkte: t.points.iter().map(|p| p.index()).collect(),
+        lebt: t.alive,
+    }
+}
+
+/// Texte einer Skizze aus der Datei (Skizzen 8). Indizes werden hier gegen die Listen der Skizze
+/// geprüft (`from_index` schnitte große Zahlen sonst ab); Werte, Rahmen, Pfad und Zuordnung prüft
+/// `Sketch::from_data` (Spec G5). Das gesetzte `TextShape` fehlt: Geladene Texte sind „noch nicht
+/// gesetzt“ (Spec G4).
+fn texts_from(origin: &str, feature: &str, d: &SketchDto) -> Result<Vec<TextRecord>> {
+    let missing = || {
+        ProjectError::corrupt(
+            origin,
+            tr!(
+                "proj-ctx-sketch",
+                name = feature,
+                msg = tr!(
+                    "sketch-err-text-data",
+                    reason = tr!("sketch-err-text-data-object")
+                )
+            ),
+        )
+    };
+    let (np, nc) = (d.punkte.len(), d.kurven.len());
+    let point = |i: usize| {
+        if i < np {
+            Ok(PointId::from_index(i))
+        } else {
+            Err(missing())
+        }
+    };
+    let curve = |i: usize| {
+        if i < nc {
+            Ok(CurveId::from_index(i))
+        } else {
+            Err(missing())
+        }
+    };
+    check_len(origin, &|| tr!("proj-l-texts"), d.texte.len())?;
+    let mut out = Vec::with_capacity(d.texte.len());
+    for t in &d.texte {
+        check_len(origin, &|| tr!("proj-l-curves"), t.kurven.len())?;
+        check_len(origin, &|| tr!("proj-l-points"), t.punkte.len())?;
+        let placement = match t.lage {
+            TextLageDto::Rahmen {
+                linien,
+                ecken,
+                waagerecht,
+                senkrecht,
+            } => TextPlacement::Box {
+                lines: [
+                    curve(linien[0])?,
+                    curve(linien[1])?,
+                    curve(linien[2])?,
+                    curve(linien[3])?,
+                ],
+                corners: [
+                    point(ecken[0])?,
+                    point(ecken[1])?,
+                    point(ecken[2])?,
+                    point(ecken[3])?,
+                ],
+                h: h_align_from(waagerecht),
+                v: match senkrecht {
+                    SenkrechtDto::Oben => VAlign::Top,
+                    SenkrechtDto::Mitte => VAlign::Middle,
+                    SenkrechtDto::Unten => VAlign::Bottom,
+                },
+            },
+            TextLageDto::Pfad {
+                kurve,
+                oberhalb,
+                anpassen,
+                waagerecht,
+            } => TextPlacement::Path {
+                path: curve(kurve)?,
+                above: oberhalb,
+                fit: anpassen,
+                h: h_align_from(waagerecht),
+            },
+        };
+        out.push(TextRecord {
+            content: t.inhalt.clone(),
+            style: TextStyle {
+                font: t.schrift.clone(),
+                bold: t.fett,
+                italic: t.kursiv,
+                spacing: t.abstand,
+            },
+            height: t.hoehe,
+            flip_h: t.umkehren_waagerecht,
+            flip_v: t.umkehren_senkrecht,
+            placement,
+            curves: t.kurven.iter().map(|&i| curve(i)).collect::<Result<_>>()?,
+            points: t.punkte.iter().map(|&i| point(i)).collect::<Result<_>>()?,
+            alive: t.lebt,
+        });
+    }
+    Ok(out)
+}
+
 fn sketch_to(s: &Sketch) -> SketchDto {
     let d = s.to_data();
     SketchDto {
@@ -883,6 +1049,7 @@ fn sketch_to(s: &Sketch) -> SketchDto {
             })
             .collect(),
         muster: d.patterns.iter().map(pattern_to).collect(),
+        texte: d.texts.iter().map(text_to).collect(),
     }
 }
 
@@ -964,6 +1131,7 @@ fn sketch_from(origin: &str, feature: &str, d: &SketchDto) -> Result<(Sketch, us
             })
             .collect(),
         patterns: patterns_from(origin, feature, d)?,
+        texts: texts_from(origin, feature, d)?,
     };
     Sketch::from_data_counted(data).map_err(|e| ctx(e.to_string()))
 }
@@ -3035,6 +3203,11 @@ fn has_format_17_data(k: &KindDto) -> bool {
         .any(|c| matches!(c.art, ConstraintKindDto::KruemmungsGriff { .. })))
 }
 
+/// Inhalt aus Format 18 in einer Feature-Art der Datei (Gegenstück zu [`needs_format_18`]).
+fn has_format_18_data(k: &KindDto) -> bool {
+    matches!(k, KindDto::Skizze(s) if !s.skizze.texte.is_empty())
+}
+
 /// Liest eine Versionsdatei. `origin` ist der Dateiname für Meldungen.
 pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
     // Erst nur das Format lesen, damit eine neuere Datei auch bei geänderter Struktur die
@@ -3186,6 +3359,16 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
                 "proj-since-format",
                 what = tr!("proj-feat-control-spline"),
                 format = "17"
+            ),
+        ));
+    }
+    if file.format < 18 && file.features.iter().any(|f| has_format_18_data(&f.art)) {
+        return Err(ProjectError::corrupt(
+            origin,
+            tr!(
+                "proj-since-format",
+                what = tr!("proj-feat-text"),
+                format = "18"
             ),
         ));
     }

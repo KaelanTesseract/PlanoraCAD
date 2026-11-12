@@ -243,7 +243,10 @@ fn the_profile_under_the_pointer_is_highlighted_and_picked_ones_are_stronger() {
         &mut dialog,
         vec![egui::Event::PointerMoved(b)],
     );
-    assert_eq!(s.profile_pick.as_ref().and_then(|p| p.hover), Some(1));
+    assert_eq!(
+        s.profile_pick.as_ref().map(|p| p.hover.clone()),
+        Some(vec![1])
+    );
     let col = theme::sketch_colors(s.dark);
     let shapes = sketch_view::finished_sketch_shapes(&s, SCREEN);
     assert!(
@@ -476,7 +479,7 @@ fn editing_a_feature_with_a_lost_profile_explains_it_and_allows_a_new_pick() {
         Some(ProfilePick {
             sketch: id,
             selected: vec![],
-            hover: None,
+            hover: vec![],
             clicked: None,
         }),
         "der Dialog bietet die Profile zum Anklicken an"
@@ -581,7 +584,7 @@ fn without_a_profile_dialog_the_app_forgets_the_pick() {
     tab.state.profile_pick = Some(ProfilePick {
         sketch: id,
         selected: vec![0],
-        hover: None,
+        hover: vec![],
         clicked: None,
     });
     planora_app::app::clear_profile_pick_without_dialog(tab);

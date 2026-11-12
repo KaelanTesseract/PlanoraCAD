@@ -298,6 +298,7 @@ fn block_message(block: TransformBlock) -> Msg {
         TransformBlock::NothingToDo => crate::msg!("sketch-move-nothing"),
         TransformBlock::Degenerate => crate::msg!("sketch-move-degenerate"),
         TransformBlock::PatternInstance => crate::msg!("sketch-move-pattern-instance"),
+        TransformBlock::TextOnPath => crate::msg!("sketch-text-path-follows"),
     }
 }
 

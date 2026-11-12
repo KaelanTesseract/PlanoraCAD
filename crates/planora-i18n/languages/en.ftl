@@ -126,6 +126,9 @@ action-sketch-smooth = Curvature
 action-sketch-dimension = Sketch Dimension
 action-sketch-pattern-rect = Rectangular Pattern
 action-sketch-pattern-circular = Circular Pattern
+action-sketch-text = Text
+action-sketch-text-edit = Edit Text
+action-sketch-text-explode = Explode Text
 action-sketch-show-shortcuts = Show keyboard shortcuts in sketch
 action-drawing-dimension = Dimension
 action-drawing-balloon = Balloon
@@ -527,6 +530,9 @@ undo-scale = Sketch scale
 undo-pattern-rect = Rectangular pattern
 undo-pattern-circular = Circular pattern
 undo-pattern-edit = Edit pattern
+undo-sketch-text-create = Create text
+undo-sketch-text-edit = Edit text
+undo-sketch-text-explode = Explode text
 
 ## Projects window
 projects-title = Projects
@@ -743,6 +749,7 @@ create-profile-label-holes = Profile { $n }: { $area } { $unit }, { $holes ->
     [one] 1 hole
    *[other] { $holes } holes
 }
+create-profile-text = Text "{ $content }"
 create-rejected = Not usable: { $reason }
 create-no-axis = The sketch has no line that can serve as the axis of revolution.
 create-create = Create
@@ -1183,6 +1190,7 @@ sketch-tool-dimension-hint = Choose one or two objects; the pointer picks the ty
 sketch-tool-pattern = Pattern
 sketch-tool-project-include = Project/Include
 sketch-tool-pattern-hint = Choose curves, Enter; then quantity and distance (rectangular) or center, quantity and angle (circular). Right-click or hold shows both types. Enter creates, Esc cancels.
+sketch-tool-text-hint = Two clicks draw the frame, then type the text in the sketch palette. For text on path, switch the type and click a curve. OK or Ctrl+Enter creates, Esc cancels.
 sketch-command-coincident-hint = Coincident: select two points. Esc ends.
 sketch-command-horizontal-hint = Horizontal: select a line or two points. Esc ends.
 sketch-command-vertical-hint = Vertical: select a line or two points. Esc ends.
@@ -1807,6 +1815,20 @@ sketch-err-data-constraint-deleted = A constraint refers to a deleted object
 sketch-err-data-constraint-extra = A constraint is missing its extra variable
 sketch-err-data-centerline = A centerline is not a construction line or not a line
 sketch-err-data-pattern-object = A pattern refers to a missing object
+sketch-err-text-data = A text is invalid: { $reason }
+sketch-err-text-data-object = It refers to a missing object.
+sketch-err-text-data-deleted = It refers to a deleted object.
+sketch-err-text-data-height = The height is not greater than zero.
+sketch-err-text-data-spacing = The character spacing is not between 0 % and 1000 %.
+sketch-err-text-data-content = The content is empty or longer than 500 characters.
+sketch-err-text-data-curves = It has more than 4000 curves.
+sketch-err-text-data-frame = The frame is not a quadrilateral of four lines.
+sketch-err-text-data-path = The path is a curve of a text.
+sketch-err-text-data-shared = A curve or point belongs to two texts.
+sketch-err-text-data-kind = A generated curve is neither a line nor a conic with rho 0.5 nor a cubic spline with four control points.
+sketch-err-text-data-pattern = A generated curve or point belongs to a pattern.
+sketch-err-text-data-handle = A generated curve is a handle of a spline.
+sketch-err-text-data-construction = A frame line is not a construction line.
 sketch-err-data-pattern-direction = A pattern has an invalid direction ("perpendicular to direction 1" as the first direction)
 sketch-err-data-pattern-deleted = A pattern refers to a deleted object
 sketch-err-data-pattern-instance = An instance of a pattern does not match its objects
@@ -1932,6 +1954,73 @@ sketch-pattern-dissolved = { $n ->
 sketch-pattern-dropped = Constraints removed with the dropped instances: { $n }.
 sketch-pattern-instance-dropped = Constraints on the pattern instance removed: { $n }.
 sketch-pattern-direction-line = Please click a line for the direction
+sketch-text-part = Belongs to the text. Select the whole text to delete it.
+sketch-text-on-path = Text is attached to this path. Explode or delete the text first.
+sketch-text-no-dimension = Dimensions and constraints go on the frame or the path, not on the letters.
+sketch-text-no-centerline = Text cannot be a centerline.
+sketch-text-not-box = This only works for text in a frame.
+sketch-text-empty = The text has no visible characters.
+sketch-text-too-long = The text is too long: at most { $max } characters.
+sketch-text-too-many-curves = The text makes too many curves: at most { $max } per text.
+sketch-text-height = The text height must be greater than zero.
+sketch-text-spacing = The character spacing must be between 0 % and { $max } %.
+sketch-text-out-of-range = The text would lie outside the working range.
+sketch-text-bad-path = This curve cannot be a path: letters, text frames and handles cannot carry text.
+sketch-text-path-degenerate = The path has no length.
+sketch-text-angle-held = A constraint holds the angle of the text. Delete it first to rotate the text.
+sketch-text-what-angle = The angle of the text
+sketch-text-no-mirror = Text cannot be mirrored. Use Flip or explode it.
+sketch-text-no-pattern = Text cannot be patterned. Explode it first.
+sketch-text-no-offset = Offset does not work on text. Explode it first.
+sketch-text-no-trim = Text cannot be trimmed. Explode it first.
+sketch-text-no-extend = Text cannot be extended. Explode it first.
+sketch-text-no-break = Text cannot be broken. Explode it first.
+sketch-text-no-fillet = Text cannot be filleted. Explode it first.
+sketch-text-no-chamfer = Text cannot be chamfered. Explode it first.
+sketch-text-path-follows = Text on a path follows its path.
+sketch-text-no-edit = The letters of a text cannot be changed one by one. Explode the text first.
+sketch-text-section = Text
+sketch-text-kind-box = Text
+sketch-text-kind-path = Text On Path
+sketch-text-content = Text
+sketch-text-path = Path
+sketch-text-path-chosen = Curve selected
+sketch-text-path-none = No path selected. Click a curve.
+sketch-text-font = Font
+sketch-text-font-search = Search …
+sketch-text-font-missing = { $font } (missing)
+sketch-text-style = Style
+sketch-text-bold = Bold
+sketch-text-italic = Italic
+sketch-text-height-label = Height
+sketch-text-spacing-label = Character Spacing
+sketch-text-angle-label = Angle
+sketch-text-placement = Placement
+sketch-text-above = Above
+sketch-text-below = Below
+sketch-text-fit = Fit to Path
+sketch-text-flip = Flip
+sketch-text-flip-h = Horizontal
+sketch-text-flip-v = Vertical
+sketch-text-align = Alignment
+sketch-text-align-left = Left
+sketch-text-align-center = Center
+sketch-text-align-right = Right
+sketch-text-align-top = Top
+sketch-text-align-middle = Middle
+sketch-text-align-bottom = Bottom
+sketch-text-ok-hint = Creates the text (Ctrl+Enter in the text field)
+sketch-text-fonts-loading = Reading fonts …
+sketch-text-need-path = Pick the path first: click a curve.
+sketch-text-need-frame = Draw the frame with two clicks first.
+sketch-text-hint-substituted = Font "{ $font }" is missing on this computer, replaced by Montserrat.
+sketch-text-hint-synthetic = Bold or italic is simulated: the font has no such style.
+sketch-text-hint-missing-chars = Characters are missing: neither the font nor Roboto has them, their space stays empty.
+sketch-text-hint-unset = The text cannot be set with the fonts on this computer. It keeps its saved curves.
+sketch-text-edit-hint = Opens the selected text for editing (also double-click the text)
+sketch-text-explode-hint = Turns the selected texts into separate fixed curves. Only undo brings the text back.
+sketch-text-select-first = Select a text first.
+sketch-delete-in-text = While the Text section is open, Delete removes nothing.
 state-patterns-dissolved-on-load = { $n ->
     [one] On opening, a pattern was dissolved because it linked its original to one of its own instances. The geometry stays.
    *[other] On opening, { $n } patterns were dissolved because they linked their original to one of their own instances. The geometry stays.
@@ -2053,6 +2142,14 @@ feature-face-not-flat = The face for the sketch is not flat
 feature-sketch-projection-lost = { $count ->
     [one] A projected curve lost its reference and stays where it was.
    *[other] { $count } projected curves lost their reference and stay where they were.
+}
+feature-sketch-font-missing = { $count ->
+    [one] Font "{ $font }" is missing on this computer, replaced by Montserrat.
+   *[other] Font "{ $font }" is missing on this computer, replaced by Montserrat in { $count } texts.
+}
+feature-sketch-text-unset = { $count ->
+    [one] A text cannot be set with the fonts on this computer and keeps its saved curves.
+   *[other] { $count } texts cannot be set with the fonts on this computer and keep their saved curves.
 }
 feature-kind-fixed = The type of a feature cannot be changed
 feature-name-empty = The name must not be empty
@@ -2890,6 +2987,7 @@ proj-l-constraints = Constraints
 proj-l-radius-points = Radius points
 proj-l-edge-copies = Edge copies
 proj-l-patterns = Patterns
+proj-l-texts = Texts
 proj-l-instances = Instances
 proj-l-edges = Edges
 proj-l-step-shapes = STEP shapes
@@ -2968,6 +3066,7 @@ proj-profile-curve-unknown = Profile reference: the curve { $curve } does not ex
 proj-l-profile-pieces = Pieces of the profile references
 proj-feat-profile-refs = Profile references
 proj-feat-control-spline = Control point splines
+proj-feat-text = Sketch texts
 proj-write-failed = The document cannot be written: { $msg }
 proj-invalid-values = The document contains invalid values and is not saved: { $msg }
 proj-expect-formula-map = a table of field → formula

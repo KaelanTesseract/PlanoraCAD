@@ -577,3 +577,57 @@ fn save_as_refuses_names_ending_in_the_document_suffix() {
     w.save_as(&p, "x.pcad-Kopie", "").unwrap();
     w.save_as(&p, "pcad", "").unwrap();
 }
+
+// ---- Handtest Skizzen 8, B5 ----------------------------------------------------------------
+
+/// Handtest Skizzen 8, B5 (Dennis): „Verwerfen“ im Dialog „Änderungen speichern?“ löscht die
+/// Autosicherung dieses Tabs, beim Beenden wie beim Schließen eines einzelnen Tabs. Beim nächsten
+/// Start wird nichts angeboten.
+#[test]
+fn discard_removes_the_autosave_of_the_tab() {
+    let r = root();
+    let mut w = Workspace::new(Some(Library::open(&r).unwrap()), Config::default());
+    let path = saved_document(&mut w, "Teil", 1);
+    let dir = w.library.as_ref().unwrap().document_dir(&path).unwrap();
+    let autosave = dir.join(".autosave.json");
+    w.autosave_interval = Duration::ZERO;
+    add_box(&mut w);
+    w.autosave_tick(Instant::now());
+    assert!(autosave.exists(), "Autosicherung geschrieben");
+    // Beenden mit „Verwerfen“.
+    assert!(!w.request_quit());
+    w.discard_and_continue();
+    assert!(w.quit && w.prompt.is_none());
+    assert!(!autosave.exists(), "Verwerfen löscht die Autosicherung");
+    drop(w);
+    // Nächster Start: kein Angebot.
+    let mut w = Workspace::new(Some(Library::open(&r).unwrap()), Config::default());
+    let o = w.open_document(&path, LockMode::Acquire).unwrap();
+    assert!(!o.autosave_offered, "nichts angeboten");
+    assert_eq!(
+        w.tabs[o.tab].state.bodies.len(),
+        1,
+        "der gespeicherte Stand"
+    );
+    // Einen einzelnen Tab mit „Verwerfen“ schließen.
+    w.activate(o.tab);
+    w.autosave_interval = Duration::ZERO;
+    add_box(&mut w);
+    w.autosave_tick(Instant::now());
+    assert!(autosave.exists());
+    w.new_tab();
+    let i = w.tab_for_path(&path).unwrap();
+    assert!(!w.request_close(i));
+    w.discard_and_continue();
+    assert!(w.tab_for_path(&path).is_none(), "geschlossen");
+    assert!(!autosave.exists(), "auch beim Schließen eines Tabs");
+    let o = w.open_document(&path, LockMode::Acquire).unwrap();
+    assert!(!o.autosave_offered);
+    // Ein Absturz (Tab ohne Rückfrage geschlossen) lässt sie weiter liegen.
+    w.activate(o.tab);
+    add_box(&mut w);
+    w.autosave_tick(Instant::now());
+    w.close_tab(w.tab_for_path(&path).unwrap());
+    assert!(autosave.exists(), "nach einem Absturz bleibt sie");
+    let _ = std::fs::remove_dir_all(&r);
+}

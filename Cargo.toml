@@ -24,6 +24,7 @@ planora-step = { path = "crates/planora-step" }
 planora-drawing = { path = "crates/planora-drawing" }
 planora-update = { path = "crates/planora-update" }
 planora-i18n = { path = "crates/planora-i18n" }
+planora-text = { path = "crates/planora-text" }
 
 # externe Crates (Lizenzen am 2026-10-09 geprüft: alle MIT und/oder Apache-2.0, earcutr ISC, spade MIT OR Apache-2.0, Roboto-Schrift Apache-2.0)
 glam = "0.34"
@@ -57,6 +58,10 @@ fluent-bundle = "=0.16.0"
 unic-langid = "=0.9.6"
 # fluent-syntax (Platzhalter-Prüfung der Sprachdateien) MIT OR Apache-2.0, schon über fluent-bundle im Baum.
 fluent-syntax = "=0.12.0"
+# Schriften lesen und setzen (planora-text, Skizzen 8). Am 2026-11-10 geprüft: skrifa MIT OR Apache-2.0,
+# harfrust MIT; beide schon über egui/epaint im Baum, darum genau dieselben Versionen (keine zweite Version).
+skrifa = "0.44"
+harfrust = "0.12"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

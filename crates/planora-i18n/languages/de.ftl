@@ -126,6 +126,9 @@ action-sketch-smooth = Glatt
 action-sketch-dimension = Skizzenbemaßung
 action-sketch-pattern-rect = Rechteckige Anordnung
 action-sketch-pattern-circular = Kreisförmige Anordnung
+action-sketch-text = Text
+action-sketch-text-edit = Text bearbeiten
+action-sketch-text-explode = Text auflösen
 action-sketch-show-shortcuts = Tastenkürzel in der Skizze anzeigen
 action-drawing-dimension = Maß
 action-drawing-balloon = Position
@@ -519,6 +522,9 @@ undo-scale = Skizzenmaßstab
 undo-pattern-rect = Rechteckige Anordnung
 undo-pattern-circular = Kreisförmige Anordnung
 undo-pattern-edit = Muster bearbeiten
+undo-sketch-text-create = Text erstellen
+undo-sketch-text-edit = Text ändern
+undo-sketch-text-explode = Text auflösen
 
 ## Projekte-Fenster
 projects-title = Projekte
@@ -735,6 +741,7 @@ create-profile-label-holes = Profil { $n }: { $area } { $unit }, { $holes ->
     [one] 1 Loch
    *[other] { $holes } Löcher
 }
+create-profile-text = Text „{ $content }“
 create-rejected = Nicht verwendbar: { $reason }
 create-no-axis = Die Skizze enthält keine Linie, die als Drehachse dienen kann.
 create-create = Erzeugen
@@ -1166,6 +1173,7 @@ sketch-tool-dimension-hint = Ein oder zwei Objekte wählen; der Zeiger wählt di
 sketch-tool-pattern = Muster
 sketch-tool-project-include = Projizieren/Einschließen
 sketch-tool-pattern-hint = Kurven wählen, Eingabe; dann Anzahl und Abstand (rechteckig) oder Mitte, Anzahl und Winkel (kreisförmig). Rechtsklick oder Halten zeigt beide Arten. Eingabe legt an, Esc bricht ab.
+sketch-tool-text-hint = Zwei Klicks ziehen den Rahmen auf, dann Text im Skizzenfeld eingeben. Für Text auf Pfad die Art umstellen und auf eine Kurve klicken. OK oder Strg+Eingabe legt an, Esc bricht ab.
 sketch-command-coincident-hint = Deckungsgleich: zwei Punkte wählen. Esc beendet.
 sketch-command-horizontal-hint = Waagerecht: eine Linie oder zwei Punkte wählen. Esc beendet.
 sketch-command-vertical-hint = Senkrecht: eine Linie oder zwei Punkte wählen. Esc beendet.
@@ -1790,6 +1798,20 @@ sketch-err-data-constraint-deleted = Eine Abhängigkeit verweist auf ein gelösc
 sketch-err-data-constraint-extra = Einer Abhängigkeit fehlt ihre Zusatzvariable
 sketch-err-data-centerline = Eine Mittellinie ist keine Konstruktionslinie oder keine Linie
 sketch-err-data-pattern-object = Ein Muster verweist auf ein fehlendes Objekt
+sketch-err-text-data = Ein Text ist ungültig: { $reason }
+sketch-err-text-data-object = Er verweist auf ein fehlendes Objekt.
+sketch-err-text-data-deleted = Er verweist auf ein gelöschtes Objekt.
+sketch-err-text-data-height = Die Höhe ist nicht größer als null.
+sketch-err-text-data-spacing = Der Zeichenabstand liegt nicht zwischen 0 % und 1000 %.
+sketch-err-text-data-content = Der Inhalt ist leer oder länger als 500 Zeichen.
+sketch-err-text-data-curves = Er hat mehr als 4000 Kurven.
+sketch-err-text-data-frame = Der Rahmen ist kein Viereck aus vier Linien.
+sketch-err-text-data-path = Der Pfad ist eine Kurve eines Textes.
+sketch-err-text-data-shared = Eine Kurve oder ein Punkt gehört zu zwei Texten.
+sketch-err-text-data-kind = Eine erzeugte Kurve ist weder Strecke noch Kegelschnitt mit Rho 0,5 noch kubischer Spline mit vier Kontrollpunkten.
+sketch-err-text-data-pattern = Eine erzeugte Kurve oder ein erzeugter Punkt gehört zu einem Muster.
+sketch-err-text-data-handle = Eine erzeugte Kurve ist ein Griff eines Splines.
+sketch-err-text-data-construction = Eine Rahmenlinie ist keine Konstruktionslinie.
 sketch-err-data-pattern-direction = Ein Muster hat eine ungültige Richtung („senkrecht zu Richtung 1“ als erste Richtung)
 sketch-err-data-pattern-deleted = Ein Muster verweist auf ein gelöschtes Objekt
 sketch-err-data-pattern-instance = Ein Exemplar eines Musters passt nicht zu seiner Vorlage
@@ -1915,6 +1937,73 @@ sketch-pattern-dissolved = { $n ->
 sketch-pattern-dropped = Mit den weggefallenen Exemplaren entfallen Abhängigkeiten: { $n }.
 sketch-pattern-instance-dropped = Abhängigkeiten am Muster-Exemplar entfallen: { $n }.
 sketch-pattern-direction-line = Für die Richtung bitte eine Linie anklicken
+sketch-text-part = Gehört zum Text. Wähle den ganzen Text, um ihn zu löschen.
+sketch-text-on-path = Text hängt an diesem Pfad. Löse den Text auf oder lösche ihn zuerst.
+sketch-text-no-dimension = Maße und Abhängigkeiten gehen an den Rahmen oder den Pfad, nicht an die Buchstaben.
+sketch-text-no-centerline = Text kann keine Mittellinie sein.
+sketch-text-not-box = Das geht nur bei Text im Rahmen.
+sketch-text-empty = Der Text enthält keine sichtbaren Zeichen.
+sketch-text-too-long = Der Text ist zu lang: höchstens { $max } Zeichen.
+sketch-text-too-many-curves = Der Text ergibt zu viele Kurven: höchstens { $max } je Text.
+sketch-text-height = Die Höhe des Textes muss größer als null sein.
+sketch-text-spacing = Der Zeichenabstand muss zwischen 0 % und { $max } % liegen.
+sketch-text-out-of-range = Der Text läge außerhalb des Rechenbereichs.
+sketch-text-bad-path = Diese Kurve geht nicht als Pfad: Buchstaben, Textrahmen und Griffe tragen keinen Text.
+sketch-text-path-degenerate = Der Pfad hat keine Länge.
+sketch-text-angle-held = Eine Abhängigkeit hält den Winkel des Textes. Lösche sie zuerst, um den Text zu drehen.
+sketch-text-what-angle = Der Winkel des Textes
+sketch-text-no-mirror = Text lässt sich nicht spiegeln. Nutze Umkehren oder löse ihn auf.
+sketch-text-no-pattern = Text lässt sich nicht als Muster vervielfältigen. Löse ihn zuerst auf.
+sketch-text-no-offset = Versatz geht nicht am Text. Löse ihn zuerst auf.
+sketch-text-no-trim = Text lässt sich nicht stutzen. Löse ihn zuerst auf.
+sketch-text-no-extend = Text lässt sich nicht dehnen. Löse ihn zuerst auf.
+sketch-text-no-break = Text lässt sich nicht brechen. Löse ihn zuerst auf.
+sketch-text-no-fillet = Text lässt sich nicht abrunden. Löse ihn zuerst auf.
+sketch-text-no-chamfer = Text bekommt keine Fase. Löse ihn zuerst auf.
+sketch-text-path-follows = Text auf Pfad folgt seinem Pfad.
+sketch-text-no-edit = Buchstaben eines Textes lassen sich nicht einzeln ändern. Löse den Text zuerst auf.
+sketch-text-section = Text
+sketch-text-kind-box = Text
+sketch-text-kind-path = Text auf Pfad
+sketch-text-content = Text
+sketch-text-path = Pfad
+sketch-text-path-chosen = Kurve gewählt
+sketch-text-path-none = Kein Pfad gewählt. Klicke auf eine Kurve.
+sketch-text-font = Schriftart
+sketch-text-font-search = Suchen …
+sketch-text-font-missing = { $font } (fehlt)
+sketch-text-style = Schrift
+sketch-text-bold = Fett
+sketch-text-italic = Kursiv
+sketch-text-height-label = Höhe
+sketch-text-spacing-label = Zeichenabstand
+sketch-text-angle-label = Winkel
+sketch-text-placement = Platzierung
+sketch-text-above = oberhalb
+sketch-text-below = unterhalb
+sketch-text-fit = An Pfad anpassen
+sketch-text-flip = Umkehren
+sketch-text-flip-h = waagerecht
+sketch-text-flip-v = senkrecht
+sketch-text-align = Ausrichtung
+sketch-text-align-left = links
+sketch-text-align-center = zentriert
+sketch-text-align-right = rechts
+sketch-text-align-top = oben
+sketch-text-align-middle = Mitte
+sketch-text-align-bottom = unten
+sketch-text-ok-hint = Legt den Text an (Strg+Eingabe im Textfeld)
+sketch-text-fonts-loading = Schriften werden gelesen …
+sketch-text-need-path = Wähle zuerst den Pfad: Klicke auf eine Kurve.
+sketch-text-need-frame = Ziehe zuerst den Rahmen mit zwei Klicks auf.
+sketch-text-hint-substituted = Schrift „{ $font }“ fehlt auf diesem Rechner, ersetzt durch Montserrat.
+sketch-text-hint-synthetic = Fett oder Kursiv ist nachgebildet: Die Schrift hat diesen Schnitt nicht.
+sketch-text-hint-missing-chars = Zeichen fehlen: Weder die Schrift noch Roboto hat sie, ihr Platz bleibt leer.
+sketch-text-hint-unset = Der Text lässt sich mit den Schriften dieses Rechners nicht setzen. Er behält seine gespeicherten Kurven.
+sketch-text-edit-hint = Öffnet den gewählten Text zum Ändern (auch Doppelklick auf den Text)
+sketch-text-explode-hint = Macht aus den gewählten Texten feste einzelne Kurven. Zurück geht es nur mit Rückgängig.
+sketch-text-select-first = Wähle zuerst einen Text.
+sketch-delete-in-text = Solange der Abschnitt „Text“ offen ist, löscht Entf nichts.
 state-patterns-dissolved-on-load = { $n ->
     [one] Beim Öffnen wurde ein Muster aufgelöst, weil es seine Vorlage mit einem eigenen Exemplar verband. Die Geometrie bleibt.
    *[other] Beim Öffnen wurden { $n } Muster aufgelöst, weil sie ihre Vorlage mit einem eigenen Exemplar verbanden. Die Geometrie bleibt.
@@ -2036,6 +2125,14 @@ feature-face-not-flat = Die Fläche für die Skizze ist nicht eben
 feature-sketch-projection-lost = { $count ->
     [one] Eine projizierte Kurve hat ihren Bezug verloren und bleibt an ihrer letzten Stelle.
    *[other] { $count } projizierte Kurven haben ihren Bezug verloren und bleiben an ihrer letzten Stelle.
+}
+feature-sketch-font-missing = { $count ->
+    [one] Schrift „{ $font }“ fehlt auf diesem Rechner, ersetzt durch Montserrat.
+   *[other] Schrift „{ $font }“ fehlt auf diesem Rechner, in { $count } Texten ersetzt durch Montserrat.
+}
+feature-sketch-text-unset = { $count ->
+    [one] Ein Text lässt sich mit den Schriften dieses Rechners nicht setzen und behält seine gespeicherten Kurven.
+   *[other] { $count } Texte lassen sich mit den Schriften dieses Rechners nicht setzen und behalten ihre gespeicherten Kurven.
 }
 feature-kind-fixed = Die Art des Features lässt sich nicht ändern
 feature-name-empty = Der Name darf nicht leer sein
@@ -2871,6 +2968,7 @@ proj-l-points = Punkte
 proj-l-curves = Kurven
 proj-l-constraints = Abhängigkeiten
 proj-l-patterns = Muster
+proj-l-texts = Texte
 proj-l-instances = Exemplare
 proj-l-radius-points = Radienpunkte
 proj-l-edge-copies = Kantenkopien
@@ -2951,6 +3049,7 @@ proj-profile-curve-unknown = Profil-Verweis: Die Kurve { $curve } gibt es in der
 proj-l-profile-pieces = Stücke der Profil-Verweise
 proj-feat-profile-refs = Profil-Verweise
 proj-feat-control-spline = Splines mit Kontrollpunkten
+proj-feat-text = Texte in Skizzen
 proj-write-failed = Das Dokument lässt sich nicht schreiben: { $msg }
 proj-invalid-values = Das Dokument enthält ungültige Werte und wird nicht gespeichert: { $msg }
 proj-expect-formula-map = eine Tabelle Feld → Formel

@@ -424,6 +424,11 @@ impl Sketch {
         if self.is_handle_curve(pick.curve) {
             return None;
         }
+        // Buchstaben und Rahmen eines Textes werden weder gerundet noch gefast (Spec E): kein
+        // Plan, also auch keine Vorschau.
+        if self.has_text_part(&[pick.curve]) {
+            return None;
+        }
         let ends = match &self.curve(pick.curve)?.kind {
             CurveKind::Line { a, b } => Some([*a, *b]),
             CurveKind::Arc { start, end, .. } | CurveKind::EllipticArc { start, end, .. } => {
@@ -963,7 +968,7 @@ impl Sketch {
     /// und eigenen Berührpunkten, Abhängigkeiten je nach Kurve und das Radiusmaß. Mit `equal_to`
     /// statt des Maßes `Equal` zu diesem Bogen; `plan` muss dann mit dessen Radius gerechnet
     /// sein, sonst bewegt das nächste Lösen die Skizze. Bei einem Fehler bleibt die Skizze
-    /// unverändert.
+    /// unverändert. Buchstaben und Rahmenlinien eines Textes werden abgelehnt (Spec E).
     /// Muster an den beiden Kurven werden vorher aufgelöst.
     pub fn add_fillet(
         &mut self,
@@ -975,6 +980,7 @@ impl Sketch {
             for c in curves {
                 s.check_curve(c)?;
             }
+            s.refuse_text_parts(&curves, || tr!("sketch-text-no-fillet"))?;
             s.dissolve_patterns_at(&curves);
             if let Some(f0) = equal_to
                 && s.radius(f0)
@@ -1091,7 +1097,8 @@ impl Sketch {
     /// Ecke bleibt immer als Konstruktionspunkt auf beiden Linien, weil die Maße von ihr aus
     /// zählen. Den Winkel misst sie aus der Lage; Richtung der Fase und Reihenfolge im Maß sind so
     /// gewählt, dass sein Wert der Winkel `θ` des Plans ist, positiv wie das getippte Feld. Bei
-    /// einem Fehler bleibt die Skizze unverändert.
+    /// einem Fehler bleibt die Skizze unverändert. Buchstaben und Rahmenlinien eines Textes werden
+    /// abgelehnt (Spec E).
     /// Muster an den beiden Kurven werden vorher aufgelöst.
     pub fn add_chamfer(&mut self, plan: &ChamferPlan) -> Result<ChamferIds, SketchError> {
         self.atomically(|s| {
@@ -1099,6 +1106,7 @@ impl Sketch {
             for c in curves {
                 s.check_curve(c)?;
             }
+            s.refuse_text_parts(&curves, || tr!("sketch-text-no-chamfer"))?;
             s.dissolve_patterns_at(&curves);
             let touch = [
                 s.add_point(plan.touch[0].x, plan.touch[0].y)?,

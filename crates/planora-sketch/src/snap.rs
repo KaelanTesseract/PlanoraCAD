@@ -109,6 +109,10 @@ impl SnapIndex {
         let mut mids = Vec::new();
         let handle_curves = sk.handle_curves();
         let handle_points = only_handle_points(sk, &handle_curves);
+        // Buchstaben eines Textes bieten keine Fangpunkte (Spec B9): weder ihre Punkte noch Mitten
+        // oder Schnitte. Als Kurve bleiben sie fangbar, sonst ließe sich der Text nicht wählen.
+        let glyph_curves = sk.glyph_curves();
+        let glyph_points = sk.glyph_points();
         for (id, data) in sk.curves() {
             match &data.kind {
                 CurveKind::Line { a, b } => {
@@ -146,7 +150,8 @@ impl SnapIndex {
                 continue;
             }
             let Some(geom) = sk.geom(id) else { continue };
-            if matches!(geom, Geom::Line { .. } | Geom::Arc { .. }) {
+            let glyph = glyph_curves.contains(&id);
+            if !glyph && matches!(geom, Geom::Line { .. } | Geom::Arc { .. }) {
                 // Die Domäne ist absolut (Bögen laufen von a0 bis a0 + sweep).
                 let (lo, hi) = geom.domain();
                 let m = geom.eval(0.5 * (lo + hi)).0;
@@ -171,7 +176,7 @@ impl SnapIndex {
         let mut origin_free = true;
         for (id, _) in sk.points() {
             let p = sk.pos(id);
-            if !p.is_finite() {
+            if !p.is_finite() || glyph_points.contains(&id) {
                 continue;
             }
             // Ein Griffpunkt, der gerade nicht fängt, belegt auch den Ursprung nicht.
@@ -185,14 +190,19 @@ impl SnapIndex {
             };
             points.push((snap, p));
         }
-        let prepared: Vec<Prepared> = curves.iter().map(|c| Prepared::new(&c.geom)).collect();
+        // Schnitte ohne Buchstaben: Das spart bei großen Texten auch die Rechnung über alle Paare.
+        let crossing: Vec<&IndexedCurve> = curves
+            .iter()
+            .filter(|c| !glyph_curves.contains(&c.id))
+            .collect();
+        let prepared: Vec<Prepared> = crossing.iter().map(|c| Prepared::new(&c.geom)).collect();
         let mut crossings = Vec::new();
-        for i in 0..curves.len() {
-            for j in (i + 1)..curves.len() {
+        for i in 0..crossing.len() {
+            for j in (i + 1)..crossing.len() {
                 for (t1, _) in intersect_prepared(&prepared[i], &prepared[j], tol) {
-                    let p = curves[i].geom.eval(t1).0;
+                    let p = crossing[i].geom.eval(t1).0;
                     if p.is_finite() {
-                        crossings.push((curves[i].id, curves[j].id, p));
+                        crossings.push((crossing[i].id, crossing[j].id, p));
                     }
                 }
             }
@@ -240,6 +250,21 @@ impl SnapIndex {
         tol: f64,
         visible: &[PointId],
     ) -> Option<SnapHit> {
+        self.find_avoiding_where(at, radius, avoid, tol, visible, &|_| true)
+    }
+
+    /// Wie [`find_avoiding`](Self::find_avoiding), aber nur Ziele, die `accept` annimmt. Ein
+    /// abgelehntes Ziel macht dem nächsten im Radius Platz, auch dem einer späteren Klasse
+    /// (Skizzen 8: Ein Buchstabe fängt nicht, die Rahmenlinie daneben schon).
+    pub fn find_avoiding_where(
+        &self,
+        at: DVec2,
+        radius: f64,
+        avoid: &[DVec2],
+        tol: f64,
+        visible: &[PointId],
+        accept: &dyn Fn(Snap) -> bool,
+    ) -> Option<SnapHit> {
         if !at.is_finite() {
             return None;
         }
@@ -249,8 +274,8 @@ impl SnapIndex {
             0.0
         };
         let mut best: Option<(f64, SnapHit)> = None;
-        let take = |best: &mut Option<(f64, SnapHit)>, radius, d, snap, p: DVec2| {
-            if !avoid.iter().any(|a| a.distance(p) <= tol) {
+        let take = |best: &mut Option<(f64, SnapHit)>, radius: f64, d: f64, snap, p: DVec2| {
+            if d <= radius && !avoid.iter().any(|a| a.distance(p) <= tol) && accept(snap) {
                 take(best, radius, d, snap, p);
             }
         };

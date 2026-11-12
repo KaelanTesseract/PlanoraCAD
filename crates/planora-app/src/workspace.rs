@@ -61,6 +61,11 @@ pub fn root_locked() -> String {
     tr!("settings-root-locked")
 }
 
+/// Die Versionen aller Features: Ändert sich eine, ist neu gerechnet worden.
+fn feature_versions(doc: &planora_feature::Document) -> Vec<u64> {
+    doc.features().iter().map(|f| f.version()).collect()
+}
+
 /// Grund, warum Rückgängig nicht geht: kein Schritt da.
 pub fn nothing_to_undo() -> String {
     tr!("project-nothing-to-undo")
@@ -118,6 +123,10 @@ pub struct DocTab {
     /// gelöscht ([`DocTab::drop_stale_autosave`]).
     autosave_written: bool,
     last_autosave: Instant,
+    /// Die Texte des Dokuments sind mit der Schriftliste neu zu setzen (Skizzen 8, Spec G4):
+    /// nach dem Laden und nach jedem Zurückladen, denn geladene Texte sind nicht gesetzt.
+    /// Erledigt [`DocTab::apply_fonts`], sobald die Liste da ist.
+    reshape_due: bool,
 }
 
 impl DocTab {
@@ -150,7 +159,55 @@ impl DocTab {
             autosaved_edits: edits,
             autosave_written: false,
             last_autosave: Instant::now(),
+            reshape_due: true,
         }
+    }
+
+    /// Gibt dem Tab die Schriftliste und setzt, wenn fällig, seine Texte neu (Spec G4). Am Ende
+    /// eines Bildes nach [`DocTab::observe_history`]. Das Neusetzen ist nie ein
+    /// Rückgängig-Schritt: Bleibt die Form gleich, ändert sich nichts (kein „●“); ändert sie sich
+    /// (fehlende oder andere Schrift), nimmt der Verlauf den neuen Stand ohne Schritt als
+    /// aktuelles Bild, und der Tab gilt als geändert, weil Speichern sonst etwas anderes schriebe,
+    /// als zu sehen ist.
+    ///
+    /// Es wartet, solange eine Skizze offen ist (ihr Entwurf ist eine Kopie, die beim Beenden
+    /// zurückgeschrieben wird) und solange eine Änderung noch kein Schritt ist (Geste läuft).
+    ///
+    /// `true`, wenn das Bild dieses Durchgangs veraltet ist, weil es danach läuft: Der Tab hat die
+    /// Liste gerade bekommen (der Abschnitt „Text“ wartet nicht mehr), seine Texte sind neu gesetzt
+    /// oder eine Warnung hat sich geändert (fehlende Schrift, Text ließ sich nicht setzen).
+    pub(crate) fn apply_fonts(
+        &mut self,
+        fonts: &std::sync::Arc<planora_text::FontLibrary>,
+    ) -> bool {
+        let mut stale = false;
+        if self.state.fonts().is_none() {
+            self.state.set_fonts(fonts.clone());
+            stale = true;
+        }
+        if !self.reshape_due
+            || self.state.sketch_session.is_some()
+            || self.tracker.is_pending(self.state.document.edit_count())
+        {
+            return stale;
+        }
+        self.reshape_due = false;
+        // Eine neue Version einer Skizze heißt: neu gesetzt oder neue Warnung (`reshape_texts` im
+        // Dokument).
+        let versions = feature_versions(&self.state.document);
+        let reshaped = self.state.reshape_texts();
+        stale |= feature_versions(&self.state.document) != versions;
+        if !reshaped {
+            return stale;
+        }
+        // Neuer Zählerstand ohne Schritt, wie nach dem Zurückladen; das Bild des Verlaufs ist ab
+        // jetzt der neu gesetzte Stand (Rückgängig kehrt dorthin zurück, nicht zur alten Form).
+        self.tracker.reset(self.state.document.edit_count());
+        let snapshot = self.state.snapshot();
+        let bytes = snapshot_bytes(&snapshot);
+        self.history.replace_current(snapshot, bytes);
+        crate::diag::info("Texts reshaped with the fonts of this computer");
+        true
     }
 
     /// Ungespeicherte Änderungen (R7): eine Skizze ist offen, eine Änderung ist noch kein
@@ -206,6 +263,20 @@ impl DocTab {
         }
         self.autosave_written = false;
         self.autosaved_edits = self.state.document.edit_count();
+    }
+
+    /// „Verwerfen“ im Dialog „Änderungen speichern?“ (Handtest Skizzen 8, B5, Dennis): Die
+    /// Autosicherung dieses Tabs wird mit verworfen, sonst böte der nächste Start den verworfenen
+    /// Stand wieder an. Fremde oder unlesbare Sicherungen (Angebot offen, `keep_autosave`) und
+    /// schreibgeschützte Ansichten bleiben unberührt.
+    fn discard_own_autosave(&mut self) {
+        if self.read_only || !self.owns_autosave() {
+            return;
+        }
+        if let Some(store) = &self.store {
+            store.discard_autosave();
+        }
+        self.autosave_written = false;
     }
 
     // ---- Rückgängig und Wiederholen --------------------------------------------------
@@ -408,6 +479,8 @@ impl DocTab {
     /// halten Kennungen des alten Stands und schließen.
     fn after_jump(&mut self) {
         self.tracker.reset(self.state.document.edit_count());
+        // Das zurückgeladene Bild kann ungesetzte Texte halten (Schritt vor der Schriftliste).
+        self.reshape_due = true;
         self.close_dialogs();
         self.reload_parameter_dialog();
     }
@@ -549,8 +622,12 @@ impl DocTab {
     /// Ersetzt den ganzen Zustand des Tabs (Autosicherung übernommen, Version wiederhergestellt):
     /// ein neuer Verlauf beginnt, die Fenster des alten Stands schließen.
     pub fn replace_state(&mut self, state: AppState) {
+        // Die gemerkten Werte des Werkzeugs „Text“ gehören zum Programmlauf, nicht zum Stand.
+        let memory = self.state.text_memory_share().clone();
         self.state = state;
+        self.state.share_text_memory(&memory);
         (self.history, self.tracker) = fresh_history(&self.state);
+        self.reshape_due = true;
         self.close_dialogs();
         self.reload_parameter_dialog();
     }
@@ -699,6 +776,9 @@ pub struct Workspace {
     pub exchange_dir: Option<PathBuf>,
     next_tab_id: u64,
     untitled: usize,
+    /// Die zuletzt benutzten Werte des Werkzeugs „Text“ (Skizzen 8, Spec C4): einer für den
+    /// Programmlauf, alle Tabs teilen ihn.
+    text_memory: crate::sketch_text::TextMemoryShare,
 }
 
 fn err(e: impl std::fmt::Display) -> String {
@@ -743,6 +823,7 @@ impl Workspace {
             exchange_dir: None,
             next_tab_id: 1,
             untitled: 0,
+            text_memory: Default::default(),
         };
         w.new_tab();
         if !w.config.dark() {
@@ -766,6 +847,7 @@ impl Workspace {
             .map(|t| t.state.dark)
             .unwrap_or(true);
         let mut state = AppState::new();
+        state.share_text_memory(&self.text_memory);
         state.dark = dark;
         state.rebuild_scene();
         state.frame_all();
@@ -818,9 +900,10 @@ impl Workspace {
     }
 
     /// Schließt einen Tab ohne Rückfrage; nach dem letzten entsteht ein frischer leerer Tab.
-    /// Eine vorhandene `.autosave.json` des Dokuments bleibt liegen (auch beim Verwerfen) und
+    /// Eine vorhandene `.autosave.json` des Dokuments bleibt liegen (wie nach einem Absturz) und
     /// wird beim nächsten Öffnen wieder angeboten – außer der Tab ist sauber und hat sie selbst
-    /// geschrieben (dann ist sie überholt und wird gelöscht).
+    /// geschrieben (dann ist sie überholt und wird gelöscht). „Verwerfen“ löscht sie vorher
+    /// ([`Workspace::discard_and_continue`]).
     pub fn close_tab(&mut self, i: usize) {
         if i >= self.tabs.len() {
             return;
@@ -892,9 +975,13 @@ impl Workspace {
         }
     }
 
-    /// „Verwerfen“ im Prompt `SaveChanges`.
+    /// „Verwerfen“ im Prompt `SaveChanges`: verwirft die Änderungen samt der Autosicherung des
+    /// Tabs (Handtest Skizzen 8, B5) und schließt ihn bzw. macht beim Beenden weiter.
     pub fn discard_and_continue(&mut self) {
         if let Some(Prompt::SaveChanges { tab, then }) = self.prompt.take() {
+            if let Some(i) = self.tab_index(tab) {
+                self.tabs[i].discard_own_autosave();
+            }
             self.finish_after(tab, Some(then));
         }
     }
@@ -1066,7 +1153,8 @@ impl Workspace {
             && self.tabs[0].state.document.features().is_empty()
     }
 
-    fn push_tab(&mut self, tab: DocTab) -> usize {
+    fn push_tab(&mut self, mut tab: DocTab) -> usize {
+        tab.state.share_text_memory(&self.text_memory);
         if self.replace_empty_start_tab() {
             self.tabs[0] = tab;
             self.active = 0;
@@ -1239,6 +1327,7 @@ impl Workspace {
         tab.source_dir = Some(dir);
         tab.based_on = Some(n);
         tab.read_only = true;
+        tab.state.share_text_memory(&self.text_memory);
         self.tabs.push(tab);
         self.active = self.tabs.len() - 1;
         Ok(self.active)
@@ -1388,6 +1477,17 @@ impl Workspace {
     /// Ist ein Tab mit einem gespeicherten Dokument offen? Dann bleibt die Wurzel, wie sie ist.
     pub fn has_saved_documents(&self) -> bool {
         self.tabs.iter().any(|t| t.path.is_some())
+    }
+
+    /// Am Ende jedes Bildes, sobald die Schriftliste da ist: Jeder Tab bekommt sie und setzt
+    /// seine Texte neu, wenn das fällig ist ([`DocTab::apply_fonts`], Spec G4). `true`, wenn das
+    /// gerade gezeichnete Bild dadurch veraltet ist (dann braucht es ein weiteres).
+    pub fn apply_fonts(&mut self, fonts: &std::sync::Arc<planora_text::FontLibrary>) -> bool {
+        let mut stale = false;
+        for t in &mut self.tabs {
+            stale |= t.apply_fonts(fonts);
+        }
+        stale
     }
 
     /// Am Ende jedes Bildes: Änderungen aller Tabs werden Schritte ihres Verlaufs (R3, R4);

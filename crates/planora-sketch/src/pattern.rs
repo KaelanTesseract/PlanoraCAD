@@ -196,6 +196,8 @@ pub enum PatternProblem {
     InstanceOnly,
     /// Ein fester Spline soll Vorlage sein: Er hat keine Kopie (Skizzen 7).
     FixedSpline,
+    /// Eine erzeugte Kurve eines Textes soll Vorlage sein (Spec E).
+    Text,
 }
 
 impl PatternProblem {
@@ -214,6 +216,7 @@ impl PatternProblem {
             PatternProblem::Cycle => tr!("sketch-pattern-cycle"),
             PatternProblem::InstanceOnly => tr!("sketch-pattern-instance-only"),
             PatternProblem::FixedSpline => tr!("sketch-fixed-spline-no-copy"),
+            PatternProblem::Text => tr!("sketch-text-no-pattern"),
         }
     }
 
@@ -640,7 +643,8 @@ impl Sketch {
         Some((source, inverse_apply(&t, target)))
     }
 
-    /// Vorlagen vorhanden, lebend, ohne Doppelte; kein Exemplar als Vorlage, Richtungslinie oder
+    /// Vorlagen vorhanden, lebend, ohne Doppelte; keine erzeugte Kurve eines Textes als Vorlage oder
+    /// Richtungslinie (Spec E, wie die Spiegelachse); kein Exemplar als Vorlage, Richtungslinie oder
     /// Mitte.
     fn check_pattern_refs(&self, plan: &PatternPlan) -> Result<(), PatternProblem> {
         if plan.sources.is_empty() {
@@ -653,6 +657,16 @@ impl Sketch {
             if self.refuse_fixed_spline(c).is_err() {
                 return Err(PatternProblem::FixedSpline);
             }
+        }
+        // Richtungslinie oder Mitte an einem Buchstaben: Sie hält der Text, nicht das Muster.
+        let glyph_ref = match plan.kind {
+            PatternKind::Rect { dirs, .. } => dirs
+                .iter()
+                .any(|d| matches!(d, PatternDir::Line(l) if self.has_glyph(&[*l]))),
+            PatternKind::Circular { center, .. } => self.is_text_point(center),
+        };
+        if self.has_glyph(&plan.sources) || glyph_ref {
+            return Err(PatternProblem::Text);
         }
         let mut curves: HashSet<CurveId> = HashSet::new();
         let mut points: HashSet<PointId> = HashSet::new();

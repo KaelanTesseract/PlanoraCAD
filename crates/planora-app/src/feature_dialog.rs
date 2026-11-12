@@ -317,7 +317,8 @@ impl FeatureDialog {
         &self.profiles.picked
     }
 
-    /// Schaltet Profil `i` um (wie ein Häkchen in der Liste).
+    /// Schaltet Profil `i` einzeln um (wie ein Häkchen in der Liste oder, bei einem Profil eines
+    /// Textes, Strg+Klick).
     pub fn toggle_profile(&mut self, i: usize) {
         crate::profile_pick::toggle(&mut self.profiles.picked, i);
         self.profiles.changed = true;
@@ -996,7 +997,8 @@ fn profile_choice(ui: &mut egui::Ui, state: &AppState, sketch: FeatureId, c: &mu
         ui.weak(tr!("edit-sketch-not-computed"));
         return;
     };
-    if crate::profile_pick::list(ui, &state.profile_cache.get(sk), &mut c.picked) {
+    let groups = state.profile_cache.groups(sk);
+    if crate::profile_pick::list(ui, &state.profile_cache.get(sk), &groups, sk, &mut c.picked) {
         c.changed = true;
     }
     if let Some(hint) = c.hint() {

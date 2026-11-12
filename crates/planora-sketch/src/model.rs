@@ -197,6 +197,8 @@ pub struct Sketch {
     pub(crate) constraints: Arena<crate::constraint::ConstraintData>,
     /// Muster (auch gelöschte), siehe `pattern.rs`.
     pub(crate) patterns: Arena<crate::pattern::PatternData>,
+    /// Texte (auch gelöschte), siehe `text.rs` (Skizzen 8).
+    pub(crate) texts: Arena<crate::text::TextData>,
     /// Stand der Skizze, siehe [`Sketch::revision`].
     revision: u64,
     /// Ergebnisse der letzten Solver-Läufe je Gruppe (siehe `solver.rs`). Jede Änderung an
@@ -264,6 +266,7 @@ impl Sketch {
             curves: Arena::new(),
             constraints: Arena::new(),
             patterns: Arena::new(),
+            texts: Arena::new(),
             revision: next_revision(),
             solve_cache: SolveCache::default(),
         }
@@ -356,8 +359,11 @@ impl Sketch {
         Ok(self.pos(p))
     }
 
+    /// Setzt die Lage des Punktes `p`. Einen erzeugten Punkt eines Textes hält der Text; er wird
+    /// abgelehnt (`sketch-text-no-edit`).
     pub fn set_point_xy(&mut self, p: PointId, x: f64, y: f64) -> Result<(), SketchError> {
         self.check_point(p)?;
+        self.refuse_glyph_point(p)?;
         finite(x, || tr!("sketch-err-what-x"))?;
         finite(y, || tr!("sketch-err-what-y"))?;
         let (xi, yi) = (self.points[p].x, self.points[p].y);
@@ -657,9 +663,11 @@ impl Sketch {
     }
 
     /// Setzt das Rho eines Kegelschnitts. Die Punkte bleiben; Abhängigkeiten an der Kurve folgen
-    /// beim nächsten Lösen. Ist `c` Vorlage oder Exemplar eines Musters, wird es aufgelöst.
+    /// beim nächsten Lösen. Ist `c` Vorlage oder Exemplar eines Musters, wird es aufgelöst. Ein
+    /// Buchstabe eines Textes wird abgelehnt (`sketch-text-no-edit`).
     pub fn set_conic_rho(&mut self, c: CurveId, rho: f64) -> Result<(), SketchError> {
         self.check_curve(c)?;
+        self.refuse_text_curves(&[c], || tr!("sketch-text-no-edit"))?;
         let mut kind = self.curves[c].kind.clone();
         let CurveKind::Conic { rho: slot, .. } = &mut kind else {
             return Err(SketchError::WrongType(tr!("sketch-err-conic-kind")));
@@ -820,7 +828,9 @@ impl Sketch {
     }
 
     /// Gehört die Kurve zu einem Muster, gilt der Stil für die Vorlage und alle ihre Exemplare
-    /// (Stil wie die Vorlage, auch nach späterem Umschalten). Griffe bleiben Konstruktion.
+    /// (Stil wie die Vorlage, auch nach späterem Umschalten). Griffe bleiben Konstruktion. Eine
+    /// erzeugte Kurve eines Textes schaltet den ganzen Text um (Skizzen 8, B10), eine Rahmenlinie
+    /// bleibt Konstruktion, auch als Vorlage eines Musters, dessen Exemplar umgeschaltet wird.
     pub fn set_construction(&mut self, c: CurveId, construction: bool) -> Result<(), SketchError> {
         self.check_curve(c)?;
         if !construction && self.is_handle_curve(c) {
@@ -828,7 +838,13 @@ impl Sketch {
                 "sketch-err-handle-construction"
             )));
         }
-        for x in self.pattern_style_group(c) {
+        let group = self
+            .text_style_group(c)
+            .unwrap_or_else(|| self.pattern_style_group(c));
+        if !construction {
+            self.refuse_frame_styles(&group)?;
+        }
+        for x in group {
             self.curves[x].construction = construction;
             self.curves[x].centerline = false;
         }
@@ -848,7 +864,14 @@ impl Sketch {
                 "sketch-err-handle-construction"
             )));
         }
-        for x in self.pattern_style_group(c) {
+        // Text wird nie Mittellinie (Skizzen 8, B10), eine Rahmenlinie bleibt Konstruktion, auch
+        // als Vorlage eines Musters, dessen Exemplar umgeschaltet wird.
+        if self.text_of_curve(c).is_some() {
+            return Err(SketchError::WrongType(tr!("sketch-text-no-centerline")));
+        }
+        let group = self.pattern_style_group(c);
+        self.refuse_frame_styles(&group)?;
+        for x in group {
             self.curves[x].construction = on;
             self.curves[x].centerline = on;
         }

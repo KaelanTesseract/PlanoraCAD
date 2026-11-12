@@ -120,6 +120,11 @@ impl DrawCursor {
     }
 }
 
+/// Ist `snap` der Fang auf einem Buchstaben eines Textes? Er bindet beim Zeichnen nicht (Spec B9).
+fn on_glyph(sk: &Sketch, snap: Snap) -> bool {
+    matches!(snap, Snap::Curve(c) if sk.text_of_curve(c).is_some())
+}
+
 /// Richtung, in der die Kurve `c` den Punkt `p` an ihrem Ende verlässt (Fortsetzung über das Ende
 /// hinaus, normiert); `None`, wenn `p` kein Ende von `c` ist.
 pub(crate) fn leaving_direction(sk: &Sketch, c: CurveId, p: PointId) -> Option<DVec2> {
@@ -241,9 +246,11 @@ pub fn plan_direction(
         return tangent;
     }
     let skip = chain.map_or_else(Vec::new, |c| connected_lines(sk, c));
+    // Buchstaben tragen keine Abhängigkeiten, also auch keine Parallele (Spec E).
+    let glyphs = sk.glyph_curves();
     best_within(
         sk.curves()
-            .filter(|(c, _)| !skip.contains(c))
+            .filter(|(c, _)| !skip.contains(c) && !glyphs.contains(c))
             .filter_map(|(c, data)| {
                 let CurveKind::Line { a, b } = data.kind else {
                     return None;
@@ -295,6 +302,13 @@ impl SketchSession {
     /// Zeichnet das aktive Werkzeug neue Geometrie (Fang, Anbindung, Hilfslinien)? Auswahl und
     /// Kantenkopie nicht; Stutzen, Dehnen und Brechen haben ihre eigene Vorschau.
     pub fn is_drawing_tool(&self) -> bool {
+        // Text: nur beim Aufziehen des Rahmens; auf dem Pfad wählt ein Klick eine Kurve.
+        if self.tool == Tool::Text {
+            return self
+                .text
+                .as_ref()
+                .is_some_and(crate::sketch_text::TextTool::placing_frame);
+        }
         !matches!(
             self.tool,
             Tool::Select
@@ -370,7 +384,19 @@ impl SketchSession {
         let tol = sk.tolerance().linear;
         // Skizzen 7: Griffpunkte fangen nur, solange sie zu sehen sind.
         let shown = self.visible_handle_points(sk);
-        if let Some(hit) = index.find_avoiding(raw, radius, &self.own_open_spots(sk), tol, &shown) {
+        // Buchstaben eines Textes bieten keinen Fang (Spec B9): Über einem Buchstaben ist der
+        // Zeiger frei, wie neben jeder Geometrie; liegt im Radius ein anderes Ziel (etwa die
+        // Rahmenlinie neben dem Buchstaben), fängt dieses. Im Fang-Index bleiben sie nur für die
+        // Wahl.
+        let hit = index.find_avoiding_where(
+            raw,
+            radius,
+            &self.own_open_spots(sk),
+            tol,
+            &shown,
+            &|snap| !on_glyph(sk, snap),
+        );
+        if let Some(hit) = hit {
             cur.at = hit.at;
             cur.snap = hit.snap;
             cur.snap_at = Some(hit.at);
@@ -651,6 +677,8 @@ pub(crate) fn attach_point(
         None => sk.add_point(cur.at.x, cur.at.y).map_err(err)?,
     };
     let kinds = match snap {
+        // Ein gemerkter Fang auf einem Buchstaben bindet nicht (Spec B9).
+        Snap::Curve(c) if sk.text_of_curve(c).is_some() => Vec::new(),
         Snap::Curve(c) => vec![K::PointOnCurve(own, c)],
         Snap::Midpoint(c) => match sk.curve(c).map(|d| &d.kind) {
             Some(CurveKind::Line { .. }) => vec![K::Midpoint(own, c)],

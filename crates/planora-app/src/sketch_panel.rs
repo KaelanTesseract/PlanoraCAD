@@ -84,6 +84,7 @@ pub fn tool_label(tool: Tool) -> String {
         Tool::Pattern => tr!("sketch-tool-pattern"),
         Tool::Constraint(action) => action.label(),
         Tool::InsertControlPoint => tr!("action-sketch-insert-control-point"),
+        Tool::Text => tr!("action-sketch-text"),
     }
 }
 
@@ -112,6 +113,7 @@ pub fn tool_hint(tool: Tool) -> String {
         Tool::Pattern => tr!("sketch-tool-pattern-hint"),
         Tool::Constraint(action) => command_hint(action),
         Tool::InsertControlPoint => tr!("sketch-tool-insert-control-point-hint"),
+        Tool::Text => tr!("sketch-tool-text-hint"),
     }
 }
 
@@ -606,6 +608,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     let mut panel = load_panel(ctx, index);
     // Formeln der Maße nennen Parameter nur lesend (das Fenster „Parameter“ ist gesperrt).
     let scope = state.document.param_scope();
+    let fonts = state.fonts().cloned();
     let mut show_profiles = state.show_sketch_profiles;
     let mut palette = SketchPalette {
         grid: state.sketch_show_grid,
@@ -638,8 +641,15 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         scope: &scope,
         show_profiles: &mut show_profiles,
         palette: &mut palette,
+        fonts: fonts.as_deref(),
     };
     side_field(ctx, rects.right, dark, se, sf, side);
+    // Text: die Vorschau nach den Eingaben dieses Bilds setzen und legen, höchstens einmal je Bild
+    // und nur nach einer Änderung (Spec C6). Die Ansicht hat dieses Bild schon gezeichnet: Hat
+    // sich die Vorschau geändert, kommt gleich ein weiteres.
+    if se.update_text_preview(&sf.sketch, fonts.as_deref()) {
+        ctx.request_repaint();
+    }
     let close = foot_field(ctx, rects.bottom, dark, se, &mut sf.sketch);
     state.show_sketch_profiles = show_profiles;
     state.sketch_show_grid = palette.grid;
@@ -913,6 +923,8 @@ struct SideInput<'a> {
     /// Schalter „Profil anzeigen“ ([`AppState::show_sketch_profiles`]).
     show_profiles: &'a mut bool,
     palette: &'a mut SketchPalette,
+    /// Die Schriftliste für den Abschnitt „Text“; `None`, solange sie gelesen wird.
+    fonts: Option<&'a planora_text::FontLibrary>,
 }
 
 /// Skizzenfeld rechts (Spaltenbreite 250): Inhalt in einer senkrechten ScrollArea, höchstens so
@@ -940,8 +952,14 @@ fn side_field(
 }
 
 /// Einstellungen des aktiven Werkzeugs: beim Versatz der Haken „Kette“, beim Verschieben der Haken
-/// „Kopie erstellen“, „Bezugspunkt setzen“, OK und Abbrechen.
-fn tool_options(ui: &mut egui::Ui, se: &mut SketchSession, sf: &mut SketchFeature) {
+/// „Kopie erstellen“, „Bezugspunkt setzen“, OK und Abbrechen; bei Text der Abschnitt „Text“.
+fn tool_options(
+    ui: &mut egui::Ui,
+    se: &mut SketchSession,
+    sf: &mut SketchFeature,
+    fonts: Option<&planora_text::FontLibrary>,
+    scope: &ParamScope,
+) {
     if se.tool == Tool::Spline && se.kinds.spline == ToolKind::SplineControl {
         spline_options(ui, se);
     } else {
@@ -955,6 +973,9 @@ fn tool_options(ui: &mut egui::Ui, se: &mut SketchSession, sf: &mut SketchFeatur
     }
     if se.runs_pattern() {
         pattern_options(ui, se, sf);
+    }
+    if se.runs_text() {
+        crate::sketch_text::text_options(ui, se, sf, fonts, scope);
     }
     if se.runs_transform() {
         if se.tool == Tool::Scale {
@@ -1278,6 +1299,7 @@ fn side_contents(
         scope,
         show_profiles,
         palette,
+        fonts,
     } = side;
     // Name, rechts daneben der Schalter „Profil anzeigen“ (wie Fusions Skizzenpalette
     // „Profil“: geschlossene Flächen hell eingefärbt); in einer Zeile, damit die Liste darunter
@@ -1309,7 +1331,7 @@ fn side_contents(
         ui.data_mut(|d| d.insert_temp(look_at_key(), look.rect));
         palette.look_at |= look.clicked();
     });
-    tool_options(ui, se, sf);
+    tool_options(ui, se, sf, fonts, scope);
     ui.add_space(2.0);
 
     // Abhängigkeiten
@@ -1360,10 +1382,12 @@ fn side_contents(
     // schon unter dem Feld steht); sonst bei einer Skizze mit Formeln, die sich nicht lösen
     // lässt, ihr Fehler (Plan P12).
     let problem = formula_problem(sf, se.last_report.as_ref());
+    // Bei offenem Abschnitt „Text“ steht die Meldung der Sitzung dort unter OK und Abbrechen.
+    let session = se.message.as_ref().filter(|_| !se.text_section_open());
     if let Some(m) = panel
         .error
         .as_ref()
-        .or(se.message.as_ref())
+        .or(session)
         .map(Msg::text)
         .filter(|m| live.as_deref() != Some(m.as_str()))
         .or(problem.map(|p| p.text()))
@@ -1372,6 +1396,8 @@ fn side_contents(
     }
     // „Verknüpfung aufheben“ gibt es nur, wenn eine gewählte Kurve eine Projektion ist.
     let can_break_link = !se.selected_projections(sf).is_empty();
+    // „Text bearbeiten“ und „Text auflösen“ nur, wenn ein Text gewählt ist (Spec C8, C9).
+    let has_text = !se.selected_texts(&sf.sketch).is_empty();
     let sk = &mut sf.sketch;
     ui.separator();
 
@@ -1438,6 +1464,41 @@ fn side_contents(
         {
             palette.break_link = true;
         }
+        if has_text {
+            let mouse = crate::keymap::mouse::current(ui.ctx());
+            if tool_button(
+                ui,
+                IconSource::Hand(HandIcon::Text),
+                &Action::SketchTextEdit.label(),
+                true,
+            )
+            .on_hover_text(with_hint(
+                &mouse,
+                Action::SketchTextEdit,
+                &tr!("sketch-text-edit-hint"),
+            ))
+            .clicked()
+            {
+                se.edit_selected_text(sk);
+            }
+            // Auflösen wartet auf die Schriftliste (Spec G4).
+            if tool_button(
+                ui,
+                IconSource::Hand(HandIcon::ExplodeText),
+                &Action::SketchTextExplode.label(),
+                fonts.is_some(),
+            )
+            .on_hover_text(with_hint(
+                &mouse,
+                Action::SketchTextExplode,
+                &tr!("sketch-text-explode-hint"),
+            ))
+            .on_disabled_hover_text(tr!("sketch-text-fonts-loading"))
+            .clicked()
+            {
+                let _ = se.explode_selected_texts(sk, fonts);
+            }
+        }
         if tool_button(
             ui,
             IconSource::Font(Icon::Mirror),
@@ -1464,11 +1525,14 @@ fn side_contents(
             ui,
             IconSource::Font(Icon::Delete),
             &tr!("action-delete"),
-            // In der Anordnung gehört die Auswahl der Vorlage (wie Entf in der Ansicht).
-            !se.selection.is_empty() && !se.runs_pattern(),
+            // In der Anordnung gehört die Auswahl der Vorlage (wie Entf in der Ansicht), ebenso
+            // bei offenem Abschnitt „Text“.
+            !se.selection.is_empty() && !se.runs_pattern() && !se.runs_text(),
         )
         .on_disabled_hover_text(if se.runs_pattern() {
             tr!("sketch-delete-in-pattern")
+        } else if se.runs_text() {
+            tr!("sketch-delete-in-text")
         } else {
             tr!("sketch-delete-disabled")
         })
@@ -1884,8 +1948,9 @@ fn constraint_list(
                         let delete_row = tr!("sketch-delete-row");
                         // In der Anordnung gehört die Auswahl der Vorlage: gesperrt wie der Knopf
                         // „Löschen“ im Skizzenfeld.
+                        let blocked = se.runs_pattern() || se.runs_text();
                         delete = ui
-                            .add_enabled(!se.runs_pattern(), |ui: &mut egui::Ui| {
+                            .add_enabled(!blocked, |ui: &mut egui::Ui| {
                                 icons::source_icon_button(
                                     ui,
                                     IconSource::Font(Icon::Delete),
@@ -1894,7 +1959,11 @@ fn constraint_list(
                                 )
                             })
                             .on_hover_text(&delete_row)
-                            .on_disabled_hover_text(tr!("sketch-delete-in-pattern"))
+                            .on_disabled_hover_text(if se.runs_text() {
+                                tr!("sketch-delete-in-text")
+                            } else {
+                                tr!("sketch-delete-in-pattern")
+                            })
                             .clicked();
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                             name = Some(ui.selectable_label(selected, text));
@@ -1959,7 +2028,7 @@ fn constraint_list(
                         let _ = se.toggle_radius_diameter(sf, id);
                     }
                 }
-                if delete && !se.runs_pattern() {
+                if delete && !se.runs_pattern() && !se.runs_text() {
                     se.selection = vec![item];
                     se.delete_selection(&mut sf.sketch);
                 }
