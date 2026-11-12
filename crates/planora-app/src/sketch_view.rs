@@ -1196,6 +1196,22 @@ pub fn insert_grips_input(
         )
     });
     if let Some(d) = g.drag {
+        // Wie bei den Griffen von Verschieben/Kopieren: Rechtsklick oder Esc nimmt nur den Zug
+        // zurück, das Fenster bleibt offen (hat ein Feld die Tastatur, gilt Esc dort).
+        let (secondary, esc) = ui.input(|i| {
+            (
+                i.pointer.button_pressed(PointerButton::Secondary),
+                i.key_pressed(egui::Key::Escape),
+            )
+        });
+        let esc = esc && !viewport::typing(ui.ctx());
+        if secondary || esc {
+            (g.offset, g.angle, g.factor) = (d.start_offset, d.start_angle, d.start_factor);
+            g.moved = true;
+            g.drag = None;
+            g.esc_taken = esc;
+            return true;
+        }
         if let Some(now) = latest.and_then(|p| map.to_sketch(p)) {
             let (offset, raw, factor) = sketch_grips::grip_motion(&d, d.start_offset, now);
             let angle = sketch_grips::unwrapped_angle(g.angle, raw);

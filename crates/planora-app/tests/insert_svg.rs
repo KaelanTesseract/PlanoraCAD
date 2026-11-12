@@ -605,3 +605,81 @@ fn show_frame_curves_draw_polygon() {
     }
     let _ = fs::remove_dir_all(&dir);
 }
+
+// ---- Abbruch des Zugs ---------------------------------------------------------------------------
+
+fn esc() -> Event {
+    Event::Key {
+        key: Key::Escape,
+        physical_key: Some(Key::Escape),
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    }
+}
+
+#[test]
+fn esc_or_right_click_aborts_only_the_grip_drag() {
+    let dir = temp_dir("zugabbruch");
+    let path = write(&dir, "r.svg", &rect_svg());
+    let mut s = AppState::new();
+    open_xy(&mut s);
+    let mut d = loaded(&dir, path, &s);
+    let mut last = DialogAction::Open;
+    let mut screen = Screen::new(W, H);
+    screen.settle(3, &mut show_on(&mut d, &mut s, &mut last));
+    let ctx = context();
+    overlay(&ctx, &mut s, vec![]);
+    for abort in ["esc", "rechts"] {
+        let (main, _) = sketch_view::insert_grip_layout(&s, SCREEN).expect("Griffe");
+        let from = main.center;
+        let to = from + egui::vec2(150.0, 60.0);
+        overlay(&ctx, &mut s, vec![Event::PointerMoved(from)]);
+        overlay(&ctx, &mut s, vec![left(from, true)]);
+        for i in 1..=5 {
+            let t = i as f32 / 5.0;
+            overlay(
+                &ctx,
+                &mut s,
+                vec![Event::PointerMoved(from + (to - from) * t)],
+            );
+        }
+        // Die Felder folgen dem Zug.
+        screen.settle(1, &mut show_on(&mut d, &mut s, &mut last));
+        assert!(
+            d.offset.x > 1.0 && d.offset.y > 1.0,
+            "{abort}: {:?}",
+            d.offset
+        );
+        // Abbruch: Ansicht und Fenster sehen dasselbe Ereignis im selben Bild.
+        let event = if abort == "esc" {
+            esc()
+        } else {
+            Event::PointerButton {
+                pos: to,
+                button: PointerButton::Secondary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            }
+        };
+        overlay(&ctx, &mut s, vec![event.clone()]);
+        assert!(s.insert_grips.as_ref().unwrap().drag.is_none(), "{abort}");
+        screen.frame(vec![event], &mut show_on(&mut d, &mut s, &mut last));
+        assert_eq!(last, DialogAction::Open, "{abort}: Fenster bleibt offen");
+        assert_eq!(d.offset, DVec2::ZERO, "{abort}: zurück am Anfang");
+        assert_eq!((d.angle_deg, d.scale), (0.0, 1.0));
+        assert_eq!(d.texts[0], "0");
+        // Loslassen danach ändert nichts mehr.
+        overlay(&ctx, &mut s, vec![left(to, false)]);
+        overlay(&ctx, &mut s, vec![]);
+        screen.settle(1, &mut show_on(&mut d, &mut s, &mut last));
+        assert_eq!(d.offset, DVec2::ZERO, "{abort}");
+        assert_eq!(s.session_sketch().unwrap().curves().count(), 0);
+    }
+    // Esc ohne Zug schließt das Fenster wie bisher.
+    overlay(&ctx, &mut s, vec![esc()]);
+    screen.frame(vec![esc()], &mut show_on(&mut d, &mut s, &mut last));
+    assert_eq!(last, DialogAction::Closed);
+    assert!(s.insert_grips.is_none());
+    let _ = fs::remove_dir_all(&dir);
+}

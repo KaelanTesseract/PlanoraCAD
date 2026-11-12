@@ -692,8 +692,12 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
     let km = keymap::mouse::current(ui.ctx());
     const NAV: &[Action] = &[Action::ViewPan, Action::ViewOrbit];
     // Griffe eines Einfügen-Fensters (SVG) im Modell; in der Skizze nimmt sie das Overlay.
-    let grips_busy =
-        !sketching && sketch_view::insert_grips_input(ui, rect, state, response.hover_pos());
+    // Würfel und Home-Knopf gehen vor: über ihnen gibt es keinen Griff.
+    let home = home_rect(cube);
+    let grip_hover = response
+        .hover_pos()
+        .filter(|p| !cube.contains(*p) && !home.contains(*p));
+    let grips_busy = !sketching && sketch_view::insert_grips_input(ui, rect, state, grip_hover);
     if sketching {
         // Das Overlay rechnet im ganzen Bereich (Auswahl und Fangen mit der vollen Größe) und
         // ruft selbst `set_viewport`; danach das freie Rechteck erneut setzen.

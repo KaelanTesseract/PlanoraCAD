@@ -100,6 +100,8 @@ pub struct InsertGrips {
     pub drag: Option<crate::sketch_grips::GripDrag>,
     /// Der Zug hat die Lage geändert; das Fenster übernimmt sie in seine Felder.
     pub moved: bool,
+    /// Esc hat in diesem Bild nur den Zug abgebrochen: Das Fenster schließt darauf nicht.
+    pub esc_taken: bool,
 }
 
 impl InsertGrips {

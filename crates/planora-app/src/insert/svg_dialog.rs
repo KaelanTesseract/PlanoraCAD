@@ -377,6 +377,7 @@ impl SvgDialog {
             hot,
             drag,
             moved: false,
+            esc_taken: false,
         });
         let key = (self.loaded_run, place, frame);
         if self.preview_key.as_ref() == Some(&key) && state.insert_preview.is_some() {
@@ -415,6 +416,8 @@ impl SvgDialog {
         }
         self.tick(false);
         self.target.sync(state);
+        // Hat Esc in diesem Bild nur den Griffzug abgebrochen? (Die Ansicht läuft vorher.)
+        let esc_taken = state.insert_grips.as_ref().is_some_and(|g| g.esc_taken);
         // Griff → Feld: ein Zug in der Ansicht seit dem letzten Bild.
         if let Some(g) = state.insert_grips.as_mut()
             && g.moved
@@ -580,8 +583,12 @@ impl SvgDialog {
             *last_dir = p.parent().map(Path::to_path_buf);
             self.load(p);
         }
-        // Esc schließt (wie „Abbrechen“), solange kein Feld tippt.
-        if !crate::viewport::typing(ctx) && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        // Esc schließt (wie „Abbrechen“), solange kein Feld tippt und Esc nicht eben nur einen
+        // Griffzug abgebrochen hat.
+        if !esc_taken
+            && !crate::viewport::typing(ctx)
+            && ctx.input(|i| i.key_pressed(egui::Key::Escape))
+        {
             close = true;
         }
         if ok && field_errors.is_empty() && self.insert(state).is_ok() {
