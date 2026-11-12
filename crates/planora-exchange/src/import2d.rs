@@ -183,8 +183,8 @@ fn element_bounds(e: &Element2d, f: &mut dyn FnMut(DVec2)) {
             f(at(*start));
             f(at(*end));
             // Extrema der Parameterform: x'(t) = 0 bzw. y'(t) = 0.
-            let tx = (-minor.x).atan2(major.x);
-            let ty = (-minor.y).atan2(major.y);
+            let tx = minor.x.atan2(major.x);
+            let ty = minor.y.atan2(major.y);
             for base in [tx, ty] {
                 for t in [base, base + PI] {
                     if angle_in_range(t, *start, *end) {
@@ -198,6 +198,7 @@ fn element_bounds(e: &Element2d, f: &mut dyn FnMut(DVec2)) {
         Element2d::Cubic(p) => p.iter().for_each(|q| f(*q)),
         Element2d::Nurbs { points, .. } => points.iter().for_each(|q| f(*q)),
         Element2d::FitSpline(p) => p.iter().for_each(|q| f(*q)),
+        // Bei Text zählt für die Hülle nur die Lage `pos`, nicht die Ausdehnung.
         Element2d::Text(t) => f(t.pos),
     }
 }
@@ -241,6 +242,37 @@ mod tests {
         });
         let (lo, hi) = imp.bounds().unwrap();
         assert!((hi.x - 3.0).abs() < 1e-12 && (lo.y + 1.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn bounds_cover_rotated_ellipse_extremes() {
+        let imp = one(Element2d::Ellipse {
+            c: DVec2::ZERO,
+            major: DVec2::new(1.0, 1.0),
+            ratio: 1.0,
+            start: 0.0,
+            end: TAU,
+        });
+        let (lo, hi) = imp.bounds().unwrap();
+        let r = 2f64.sqrt();
+        assert!((hi.x - r).abs() < 1e-12 && (lo.x + r).abs() < 1e-12);
+        assert!((hi.y - r).abs() < 1e-12 && (lo.y + r).abs() < 1e-12);
+    }
+
+    #[test]
+    fn bounds_cover_rotated_partial_ellipse() {
+        // x = cos t - sin t, y = cos t + sin t; t in 0..PI/2: x von 1 bis -1, y bis sqrt(2) bei PI/4.
+        let imp = one(Element2d::Ellipse {
+            c: DVec2::ZERO,
+            major: DVec2::new(1.0, 1.0),
+            ratio: 1.0,
+            start: 0.0,
+            end: PI / 2.0,
+        });
+        let (lo, hi) = imp.bounds().unwrap();
+        assert!((hi.y - 2f64.sqrt()).abs() < 1e-12, "hi.y = {}", hi.y);
+        assert!((hi.x - 1.0).abs() < 1e-12 && (lo.x + 1.0).abs() < 1e-12);
+        assert!((lo.y - 1.0).abs() < 1e-12, "lo.y = {}", lo.y);
     }
 
     #[test]

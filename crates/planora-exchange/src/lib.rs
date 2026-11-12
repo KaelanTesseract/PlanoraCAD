@@ -1,6 +1,6 @@
 //! Austausch von Dreiecksnetzen (Teilprojekt 9): STL, OBJ, 3MF und glTF schreiben, STL und OBJ
-//! lesen, Netze prüfen. Keine neue Abhängigkeit: ZIP und CRC-32 sind selbst geschrieben,
-//! Vielecke zerlegt das schon vorhandene `earcutr`.
+//! lesen, Netze prüfen. Dazu 2D-Import (Skizzen 9) mit den Abhängigkeiten `dxf`, `usvg` und `image`.
+//! ZIP und CRC-32 sind selbst geschrieben, Vielecke zerlegt das schon vorhandene `earcutr`.
 
 mod check;
 pub mod error;
