@@ -46,6 +46,11 @@ fn all_errors() -> Vec<ExchangeError> {
         ExchangeError::UnknownFormat("xyz".into()),
         ExchangeError::DxfBroken("x".into()),
         ExchangeError::TooManyElements,
+        ExchangeError::ImageTooLarge,
+        ExchangeError::ImageTooBig,
+        ExchangeError::ImageWrongExtension,
+        ExchangeError::ImageUnsupported,
+        ExchangeError::ImageBroken("x".into()),
         ExchangeError::Cancelled,
     ]
 }

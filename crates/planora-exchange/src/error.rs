@@ -50,6 +50,17 @@ pub enum ExchangeError {
     SvgTooLarge,
     /// Mehr als [`crate::limits::MAX_IMPORT_ELEMENTS`] Elemente (DXF, SVG).
     TooManyElements,
+    /// Die Bilddatei ist größer als [`crate::limits::MAX_IMAGE_BYTES`].
+    ImageTooLarge,
+    /// Das Bild hat eine Kante über [`crate::limits::MAX_IMAGE_EDGE_PX`] oder braucht zu viel
+    /// Speicher.
+    ImageTooBig,
+    /// Die Dateiendung passt nicht zum Inhalt des Bildes.
+    ImageWrongExtension,
+    /// Kein Leinwandformat (nur PNG, JPG und TIFF).
+    ImageUnsupported,
+    /// Das Bild ist kaputt oder lässt sich nicht lesen.
+    ImageBroken(String),
     UnknownFormat(String),
     Cancelled,
 }
@@ -95,6 +106,17 @@ impl fmt::Display for ExchangeError {
                 "exchange-too-many-elements",
                 max = crate::limits::MAX_IMPORT_ELEMENTS
             ),
+            ExchangeError::ImageTooLarge => tr!(
+                "exchange-image-too-large",
+                max = crate::limits::MAX_IMAGE_BYTES / (1024 * 1024)
+            ),
+            ExchangeError::ImageTooBig => tr!(
+                "exchange-image-too-big",
+                max = crate::limits::MAX_IMAGE_EDGE_PX
+            ),
+            ExchangeError::ImageWrongExtension => tr!("exchange-image-wrong-extension"),
+            ExchangeError::ImageUnsupported => tr!("exchange-image-unsupported"),
+            ExchangeError::ImageBroken(m) => tr!("exchange-image-broken", msg = m),
             ExchangeError::UnknownFormat(ext) => tr!("exchange-unknown-format", ext = ext),
             ExchangeError::Cancelled => tr!("exchange-cancelled"),
         };

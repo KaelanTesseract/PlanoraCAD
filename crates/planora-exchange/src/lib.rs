@@ -7,6 +7,7 @@ mod dxf;
 pub mod error;
 mod file;
 mod gltf;
+mod image;
 pub mod import2d;
 pub mod limits;
 mod mesh;
@@ -25,6 +26,7 @@ pub use dxf::read_dxf;
 pub use error::ExchangeError;
 pub use file::{Format, export_file, import_file, temp_path};
 pub use gltf::{GLTF_SCALE, write_glb};
+pub use image::{ImageFormat, ImageInfo, decode_rgba, probe_image};
 pub use limits::{
     CHECK_EVERY, MAX_BLOCK_DEPTH, MAX_FILE_BYTES, MAX_IMAGE_BYTES, MAX_IMAGE_EDGE_PX,
     MAX_IMPORT_ELEMENTS, MAX_LINE_BYTES, MAX_SVG_BYTES, MAX_TRIANGLES, MAX_VERTICES, READ_BUFFER,
