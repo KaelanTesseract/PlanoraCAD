@@ -27,5 +27,8 @@ pub const MAX_BLOCK_DEPTH: usize = 16;
 pub const MAX_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
 /// Längste Bildkante in Pixeln, die gelesen wird.
 pub const MAX_IMAGE_EDGE_PX: u32 = 16_384;
+/// Größte lesbare DXF-Datei: 256 MiB (der Leser hält die ganze Datei im Speicher und lässt
+/// sich beim Zerlegen nicht abbrechen).
+pub const MAX_DXF_BYTES: u64 = 256 * 1024 * 1024;
 /// Größte lesbare SVG-Datei, auch entpackt (SVGZ): 256 MiB.
 pub const MAX_SVG_BYTES: u64 = 256 * 1024 * 1024;

@@ -212,6 +212,11 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                 None => hint(state, &tr!("cmd-need-any-sketch")),
             }
         }
+        // „Überall“ heißt Modell und Skizze; in einer Zeichnung und in alten Versionen nicht.
+        Action::InsertDxf | Action::InsertSvg
+            if ws.active_tab().read_only
+                || crate::keymap::dispatch::current_area(&ws.active_tab().state)
+                    == Area::Drawing => {}
         Action::InsertDxf => app::open_insert_dxf(ws),
         // SVG und Leinwand bekommen ihre Fenster in den nächsten Schritten (Tasks 12 und 13).
         Action::InsertSvg | Action::InsertCanvas => {

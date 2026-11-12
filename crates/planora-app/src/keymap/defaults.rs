@@ -111,11 +111,12 @@ action_table! {
     /// Fusion „Skizzenebene neu festlegen“ für die gewählte Skizze (sonst ein Hinweis); ohne
     /// Vorgabetaste wie in Fusion, belegbar.
     SketchRedefinePlane, "skizze.ebene_neu", "action-sketch-redefine-plane", Model, [];
-    // Menü „Einfügen“ (Skizzen 9): ohne Vorgabetaste wie in Fusion, belegbar.
+    // Menü „Einfügen“ (Skizzen 9): ohne Vorgabetaste wie in Fusion, belegbar. DXF und SVG
+    // gelten überall (auch in der offenen Skizze, Spec C), die Leinwand nur im Modell.
     /// Fusion „DXF einfügen“.
-    InsertDxf, "einfuegen.dxf", "action-insert-dxf", Model, [];
+    InsertDxf, "einfuegen.dxf", "action-insert-dxf", All, [];
     /// Fusion „SVG einfügen“.
-    InsertSvg, "einfuegen.svg", "action-insert-svg", Model, [];
+    InsertSvg, "einfuegen.svg", "action-insert-svg", All, [];
     /// Fusion „Leinwand“.
     InsertCanvas, "einfuegen.leinwand", "action-insert-canvas", Model, [];
     // Skizze: nur Werkzeuge, die es gibt (wie der Klick auf den Knopf der Leiste). Die

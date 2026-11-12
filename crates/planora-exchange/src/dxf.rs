@@ -9,7 +9,7 @@
 
 use crate::error::ExchangeError;
 use crate::import2d::{Element2d, HAlign2d, Import2d, Layer2d, Skipped, Text2d, Unit2d, VAlign2d};
-use crate::limits::{CHECK_EVERY, MAX_BLOCK_DEPTH, MAX_IMPORT_ELEMENTS};
+use crate::limits::{CHECK_EVERY, MAX_BLOCK_DEPTH, MAX_DXF_BYTES, MAX_IMPORT_ELEMENTS};
 use dxf::entities::{Entity, EntityType, Insert, Polyline, Spline};
 use dxf::enums::{AttachmentPoint, HorizontalTextJustification, Units, VerticalTextJustification};
 use dxf::{Block, Drawing, Vector};
@@ -28,7 +28,20 @@ const MAX_BLOCK_VISITS: usize = 10 * MAX_IMPORT_ELEMENTS;
 
 /// Liest eine DXF-Datei (Text oder binär) und liefert die Elemente des Modellbereichs.
 /// `cancel` wird regelmäßig gefragt; `true` bricht mit [`ExchangeError::Cancelled`] ab.
+/// Größer als [`MAX_DXF_BYTES`] darf die Datei nicht sein.
 pub fn read_dxf(bytes: &[u8], cancel: &dyn Fn() -> bool) -> Result<Import2d, ExchangeError> {
+    read_dxf_limited(bytes, cancel, MAX_DXF_BYTES)
+}
+
+/// Wie [`read_dxf`] mit eigener Größengrenze (Tests ohne riesige Dateien).
+fn read_dxf_limited(
+    bytes: &[u8],
+    cancel: &dyn Fn() -> bool,
+    max_bytes: u64,
+) -> Result<Import2d, ExchangeError> {
+    if bytes.len() as u64 > max_bytes {
+        return Err(ExchangeError::DxfTooLarge);
+    }
     if cancel() {
         return Err(ExchangeError::Cancelled);
     }
@@ -1130,4 +1143,25 @@ fn strip_mtext(s: &str) -> (String, Option<String>) {
         }
     }
     (clean_text_codes(&out), font)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_file_over_the_limit_is_refused_before_parsing() {
+        let never: &dyn Fn() -> bool = &|| false;
+        // Kein gültiges DXF: Würde gelesen, käme `DxfBroken`.
+        let bytes = vec![b'x'; 65];
+        assert_eq!(
+            read_dxf_limited(&bytes, never, 64).unwrap_err(),
+            ExchangeError::DxfTooLarge
+        );
+        assert!(matches!(
+            read_dxf_limited(&bytes, never, 65).unwrap_err(),
+            ExchangeError::DxfBroken(_)
+        ));
+        assert!(!ExchangeError::DxfTooLarge.to_string().is_empty());
+    }
 }

@@ -5,7 +5,9 @@
 //! Skizze („DXF einfügen“). Abbrechen, Esc und ✕ hinterlassen nichts.
 
 use super::pick::{InsertTarget, TargetPick};
-use super::{BackgroundRead, DialogAction, UNITS, display_unit, skipped_summary, unit_label};
+use super::{
+    BackgroundRead, DialogAction, UNITS, display_unit, dxf_spec, skipped_summary, unit_label,
+};
 use crate::browser::error_color;
 use crate::cards::card_row;
 use crate::dialog::{Dialog, DialogSize};
@@ -18,7 +20,6 @@ use crate::places::Places;
 use crate::state::{AppState, InsertPreview};
 use crate::theme;
 use planora_exchange::import2d::{Import2d, Skipped, Unit2d};
-use planora_exchange::read_dxf;
 use planora_feature::{FeatureId, ParamUnit};
 use planora_i18n::tr;
 use planora_math::{DVec2, Frame};
@@ -114,7 +115,7 @@ impl DxfDialog {
             r.cancel();
         }
         self.error = None;
-        self.reading = Some(BackgroundRead::start(path, read_dxf));
+        self.reading = Some(BackgroundRead::start(path, dxf_spec()));
     }
 
     pub fn is_loading(&self) -> bool {

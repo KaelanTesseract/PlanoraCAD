@@ -1735,9 +1735,18 @@ fn open_step_import(ws: &mut Workspace) {
 pub(crate) fn open_insert_dxf(ws: &mut Workspace) {
     let dir = ws.exchange_dir.clone().unwrap_or_else(default_dir);
     let tab = ws.active_tab_mut();
-    if tab.read_only {
+    // Schon offen (etwa die Taste noch einmal): das Fenster bleibt, wie es ist.
+    if tab.read_only || tab.dxf_dialog.is_some() {
         return;
     }
+    if let Some(why) = tab.state.chosen_lock() {
+        tab.state.message = Some(why);
+        return;
+    }
+    // Wie beim Ebenen-Fenster: andere Befehlsfenster schließen.
+    tab.feature_dialog = None;
+    tab.dialog = None;
+    tab.boolean_dialog = None;
     if tab.plane_dialog.take().is_some() {
         PlaneDialog::finish(&mut tab.state);
     }

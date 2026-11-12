@@ -2820,6 +2820,7 @@ exchange-unknown-format = Die Dateiendung „{ $ext }“ wird nicht unterstützt
 exchange-cancelled = Abgebrochen
 exchange-dxf-broken = Die DXF-Datei ist beschädigt oder lässt sich nicht lesen: { $msg }
 exchange-svg-broken = Die SVG-Datei ist beschädigt oder lässt sich nicht lesen: { $msg }
+exchange-dxf-too-large = Die DXF-Datei ist zu groß (mehr als { $max } MiB).
 exchange-svg-too-large = Die SVG-Datei ist zu groß (mehr als { $max } MiB, auch entpackt).
 exchange-too-many-elements = Die Zeichnung hat zu viele Elemente (mehr als { $max }).
 exchange-image-too-large = Die Bilddatei ist zu groß (mehr als { $max } MiB).

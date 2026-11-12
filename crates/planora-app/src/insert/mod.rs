@@ -7,16 +7,12 @@ pub mod pick;
 
 use crate::jobs::{Job, Poll};
 use crate::msg::{Msg, MsgArg};
-use planora_exchange::import2d::{Skipped, Unit2d};
-use planora_exchange::{ExchangeError, Progress, READ_BUFFER};
+use planora_exchange::import2d::{Import2d, Skipped, Unit2d};
+use planora_exchange::{ExchangeError, MAX_DXF_BYTES, Progress, READ_BUFFER, read_dxf};
 use planora_i18n::{DisplayUnit, tr};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-
-/// Größte Datei, die ein Einfügen-Fenster liest (DXF und SVG liegen ganz im Speicher; die
-/// Leser begrenzen danach die Zahl der Elemente).
-pub const MAX_INSERT_BYTES: u64 = 1024 * 1024 * 1024;
 
 /// Antwort eines Einfügen-Fensters nach einem Bild.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,12 +28,34 @@ pub enum DialogAction {
 /// Leser einer Datei für [`BackgroundRead`]: Inhalt und Abbruchfrage.
 pub type Reader<T> = fn(&[u8], &dyn Fn() -> bool) -> Result<T, ExchangeError>;
 
+/// Ein Leser mit seiner Größengrenze: Eine größere Datei wird gar nicht erst gelesen, der Fehler
+/// ist dann `too_large`. Die Grenze gehört zum Leser (DXF und SVG je 256 MiB, Bilder 64 MiB).
+#[derive(Clone, Debug)]
+pub struct ReadSpec<T> {
+    pub max_bytes: u64,
+    pub too_large: ExchangeError,
+    pub read: Reader<T>,
+}
+
+/// Der DXF-Leser mit [`MAX_DXF_BYTES`].
+pub fn dxf_spec() -> ReadSpec<Import2d> {
+    ReadSpec {
+        max_bytes: MAX_DXF_BYTES,
+        too_large: ExchangeError::DxfTooLarge,
+        read: read_dxf,
+    }
+}
+
 /// Nummer des letzten gestarteten Laufs (über alle Fenster).
 static RUNS: AtomicU64 = AtomicU64::new(0);
 
 /// Lesen einer Datei im Arbeitsthread mit Fortschritt und Abbrechen. Jeder Lauf hat eine eigene
 /// Nummer; ein Ergebnis mit fremder Nummer wird verworfen (ein abgebrochener oder ersetzter Lauf
 /// erreicht nie ein Fenster).
+///
+/// Die Nummer ist eine Absicherung: Jeder `BackgroundRead` hat ohnehin seinen eigenen Kanal,
+/// fremde Ergebnisse kommen dort heute gar nicht an. Sie bleibt, falls ein Lauf je einen Kanal
+/// mit einem anderen teilt.
 pub struct BackgroundRead<T> {
     run: u64,
     path: PathBuf,
@@ -45,11 +63,11 @@ pub struct BackgroundRead<T> {
 }
 
 impl<T: Send + 'static> BackgroundRead<T> {
-    /// Startet das Lesen von `path` mit dem Leser `f`.
-    pub fn start(path: PathBuf, f: Reader<T>) -> Self {
+    /// Startet das Lesen von `path` mit dem Leser `spec`.
+    pub fn start(path: PathBuf, spec: ReadSpec<T>) -> Self {
         let run = RUNS.fetch_add(1, Ordering::Relaxed) + 1;
         let source = path.clone();
-        let job = Job::spawn(move |progress| (run, read_with(&source, progress, f)));
+        let job = Job::spawn(move |progress| (run, read_with(&source, progress, &spec)));
         BackgroundRead {
             run,
             path,
@@ -117,13 +135,13 @@ impl<T> BackgroundRead<T> {
 }
 
 /// Liest die Datei stückweise (erste Hälfte des Fortschritts) und gibt sie dem Leser (zweite
-/// Hälfte).
-fn read_with<T>(path: &Path, progress: &Progress, f: Reader<T>) -> Result<T, ExchangeError> {
+/// Hälfte). Eine Datei über der Grenze des Lesers wird vorher abgelehnt.
+fn read_with<T>(path: &Path, progress: &Progress, spec: &ReadSpec<T>) -> Result<T, ExchangeError> {
     let io = |e: std::io::Error| ExchangeError::Io { msg: e.to_string() };
     let mut file = std::fs::File::open(path).map_err(io)?;
     let len = file.metadata().map_err(io)?.len();
-    if len > MAX_INSERT_BYTES {
-        return Err(ExchangeError::FileTooLarge { bytes: len });
+    if len > spec.max_bytes {
+        return Err(spec.too_large.clone());
     }
     progress.set_total(len.saturating_mul(2).max(1));
     let mut bytes = Vec::with_capacity(len as usize);
@@ -136,14 +154,12 @@ fn read_with<T>(path: &Path, progress: &Progress, f: Reader<T>) -> Result<T, Exc
         }
         bytes.extend_from_slice(&buf[..n]);
         // Wächst die Datei beim Lesen, gilt die Grenze trotzdem.
-        if bytes.len() as u64 > MAX_INSERT_BYTES {
-            return Err(ExchangeError::FileTooLarge {
-                bytes: bytes.len() as u64,
-            });
+        if bytes.len() as u64 > spec.max_bytes {
+            return Err(spec.too_large.clone());
         }
         progress.advance(n as u64);
     }
-    let result = f(&bytes, &|| progress.is_cancelled())?;
+    let result = (spec.read)(&bytes, &|| progress.is_cancelled())?;
     progress.check()?;
     progress.advance(len.max(1));
     Ok(result)

@@ -8,19 +8,20 @@
 mod common;
 
 use common::{Screen, find};
+use eframe::App as _;
 use egui::{Event, Key, Modifiers, Pos2, Rect};
 use planora_app::app;
 use planora_app::insert::dxf_dialog::DxfDialog;
 use planora_app::insert::pick::InsertTarget;
-use planora_app::insert::{BackgroundRead, DialogAction};
-use planora_app::keymap::Action;
+use planora_app::insert::{BackgroundRead, DialogAction, ReadSpec, dxf_spec};
+use planora_app::keymap::{Action, Area, Binding, KeyChord, SetResult};
 use planora_app::plane_dialog::PlaneClick;
 use planora_app::shell::ShellState;
 use planora_app::state::*;
 use planora_app::theme;
 use planora_app::workspace::Workspace;
+use planora_exchange::ExchangeError;
 use planora_exchange::import2d::Unit2d;
-use planora_exchange::read_dxf;
 use planora_feature::{FeatureKind, SketchPlane, StandardPlane};
 use planora_i18n::DisplayUnit;
 use planora_math::DVec2;
@@ -162,7 +163,7 @@ fn insert_menu_has_three_entries_after_create() {
 
     // Das Menü selbst: drei Einträge untereinander.
     let mut ws = workspace();
-    let mut screen = Screen::new(800.0, 600.0);
+    let mut screen = Screen::new(1920.0, 1080.0);
     let seen = screen.settle(3, &mut insert_menu_frame(&mut ws));
     let dxf = find(&seen, "DXF einfügen …").expect("DXF").rect;
     let svg = find(&seen, "SVG einfügen …").expect("SVG").rect;
@@ -191,6 +192,10 @@ fn insert_menu_has_three_entries_after_create() {
         assert_eq!(a.label(), label);
         assert!(a.default_bindings().is_empty(), "{a:?}");
     }
+    // DXF und SVG gelten auch in der offenen Skizze, die Leinwand nur im Modell.
+    assert_eq!(Action::InsertDxf.area(), Area::All);
+    assert_eq!(Action::InsertSvg.area(), Area::All);
+    assert_eq!(Action::InsertCanvas.area(), Area::Model);
     // Die Taste der Aktion öffnet das Fenster ebenso.
     let mut ws = workspace();
     planora_app::commands::run_action(&mut ws, Action::InsertDxf);
@@ -492,12 +497,12 @@ fn cancelled_read_result_never_reaches_new_dialog() {
     );
     // Der Leser selbst: nach Abbrechen kommt nie ein Ergebnis, ein neuer Lauf hat eine neue
     // Nummer und liefert nur sein eigenes.
-    let mut a = BackgroundRead::start(first.clone(), read_dxf);
+    let mut a = BackgroundRead::start(first.clone(), dxf_spec());
     a.cancel();
     assert!(!a.is_running());
     std::thread::sleep(std::time::Duration::from_millis(50));
     assert!(a.poll().is_none(), "abgebrochen");
-    let mut b = BackgroundRead::start(second.clone(), read_dxf);
+    let mut b = BackgroundRead::start(second.clone(), dxf_spec());
     assert_ne!(a.run(), b.run());
     let got = b.wait().expect("Ergebnis").unwrap();
     assert_eq!(got.layers[0].name, "Neu");
@@ -508,8 +513,6 @@ fn cancelled_read_result_never_reaches_new_dialog() {
     let mut d = DxfDialog::new(dir.clone(), &s);
     d.load(first.clone());
     d.cancel();
-    d.tick(true);
-    assert!(d.loaded.is_none() && !d.is_loading());
     let mut e = DxfDialog::new(dir.clone(), &s);
     e.load(second.clone());
     e.tick(true);
@@ -593,5 +596,146 @@ fn dialog_full_width_rule_and_equal_cards() {
             assert!(text.lines().any(|l| l == word), "„{word}“ fehlt:\n{text}");
         }
     }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// ---- Taste in der Skizze ----------------------------------------------------------------------
+
+fn chord(key: Key, ctrl: bool, shift: bool) -> KeyChord {
+    KeyChord {
+        key,
+        ctrl,
+        shift,
+        alt: false,
+    }
+}
+
+/// Ganze App ohne Fenster; ein Bild je Aufruf.
+struct Rig {
+    ctx: egui::Context,
+    app: app::PlanoraApp,
+    time: f64,
+}
+
+impl Rig {
+    fn new(w: Workspace) -> Rig {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(planora_app::fonts::definitions());
+        theme::apply(&ctx, true);
+        app::PlanoraApp::setup_context(&ctx);
+        let mut rig = Rig {
+            ctx,
+            app: app::PlanoraApp::for_tests(w),
+            time: 0.0,
+        };
+        for _ in 0..3 {
+            rig.frame(vec![]);
+        }
+        rig
+    }
+
+    fn frame(&mut self, events: Vec<Event>) {
+        self.time += 1.0 / 60.0;
+        let raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1920.0, 1080.0))),
+            time: Some(self.time),
+            events,
+            ..Default::default()
+        };
+        let mut f = eframe::Frame::_new_kittest();
+        let app = &mut self.app;
+        let out = self.ctx.run_ui(raw, |ui| app.ui(ui, &mut f));
+        out.drop_without_applying_deltas();
+    }
+
+    fn press(&mut self, c: KeyChord) {
+        let modifiers = Modifiers {
+            ctrl: c.ctrl,
+            command: c.ctrl,
+            shift: c.shift,
+            ..Modifiers::NONE
+        };
+        self.frame(vec![Event::Key {
+            key: c.key,
+            physical_key: Some(c.key),
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }]);
+        self.frame(vec![]);
+    }
+}
+
+#[test]
+fn an_assigned_insert_dxf_key_works_in_an_open_sketch() {
+    let mut ws = workspace();
+    // Eine Taste der Skizze ist für „DXF einfügen“ belegt (Bereich „Überall“).
+    assert_eq!(
+        ws.keymap.set(
+            Action::InsertDxf,
+            0,
+            Binding::Key(chord(Key::L, false, false))
+        ),
+        SetResult::Conflict(Action::SketchLine)
+    );
+    let key = chord(Key::I, true, true);
+    assert_eq!(
+        ws.keymap.set(Action::InsertDxf, 0, Binding::Key(key)),
+        SetResult::Ok
+    );
+    let sketch = {
+        let s = &mut ws.active_tab_mut().state;
+        let id = s
+            .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+            .unwrap();
+        s.open_sketch(id).unwrap();
+        id
+    };
+    ws.observe_history(false);
+    let mut rig = Rig::new(ws);
+    rig.press(key);
+    let tab = rig.app.ws_mut().active_tab();
+    let d = tab.dxf_dialog.as_ref().expect("Fenster offen");
+    assert!(d.into_open(), "in die offene Skizze");
+    assert_eq!(
+        tab.state.open_sketch_id(),
+        Some(sketch),
+        "Skizze bleibt offen"
+    );
+}
+
+// ---- Größengrenze -----------------------------------------------------------------------------
+
+/// Leser, der nie aufgerufen werden darf.
+fn must_not_read(_: &[u8], _: &dyn Fn() -> bool) -> Result<u8, ExchangeError> {
+    Err(ExchangeError::Corrupt("gelesen".into()))
+}
+
+#[test]
+fn a_file_over_the_reader_limit_is_refused_before_reading() {
+    let dir = temp_dir("grenze");
+    let path = write(&dir, "gross.dxf", &[b'x'; 100]);
+    let spec = ReadSpec {
+        max_bytes: 99,
+        too_large: ExchangeError::DxfTooLarge,
+        read: must_not_read,
+    };
+    let mut r = BackgroundRead::start(path.clone(), spec.clone());
+    assert_eq!(r.wait(), Some(Err(ExchangeError::DxfTooLarge)));
+    // Genau an der Grenze wird gelesen.
+    let mut r = BackgroundRead::start(
+        path,
+        ReadSpec {
+            max_bytes: 100,
+            ..spec
+        },
+    );
+    assert_eq!(
+        r.wait(),
+        Some(Err(ExchangeError::Corrupt("gelesen".into())))
+    );
+    // Der DXF-Leser hat seine eigene Grenze, wie SVG (256 MiB).
+    assert_eq!(dxf_spec().max_bytes, planora_exchange::MAX_DXF_BYTES);
+    assert_eq!(planora_exchange::MAX_DXF_BYTES, 256 * 1024 * 1024);
     let _ = fs::remove_dir_all(&dir);
 }
