@@ -117,10 +117,13 @@ pub fn field_keys(kind: &FeatureKind) -> Vec<FieldKey> {
             PlaneDef::Angle { .. } | PlaneDef::Tangent { .. } => vec![Winkel],
             PlaneDef::Mid { .. } | PlaneDef::ThreePoints(_) => Vec::new(),
         },
+        // Die Leinwand hat noch keine formelfähigen Felder (Lage über das Fenster und
+        // Kalibrieren).
         FeatureKind::Sketch(_)
         | FeatureKind::Revolve { .. }
         | FeatureKind::Boolean { .. }
-        | FeatureKind::StepBody { .. } => Vec::new(),
+        | FeatureKind::StepBody { .. }
+        | FeatureKind::Canvas(_) => Vec::new(),
     }
 }
 

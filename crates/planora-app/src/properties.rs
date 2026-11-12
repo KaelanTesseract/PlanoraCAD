@@ -445,6 +445,22 @@ pub fn parameter_rows(state: &AppState, kind: &FeatureKind) -> Vec<(String, Stri
             .step_shape(*shape)
             .map_or_else(Vec::new, |s| step_rows(state, s, tr!("props-faces"))),
         FeatureKind::Plane(pf) => crate::plane_dialog::property_rows(state, &pf.def),
+        // Vorläufig nur der Träger; die übrigen Zeilen kommen mit der Oberfläche (Task 13).
+        FeatureKind::Canvas(c) => {
+            use planora_feature::CanvasBase;
+            let plane = match &c.base {
+                CanvasBase::Standard(StandardPlane::XY) => tr!("tree-plane-xy"),
+                CanvasBase::Standard(StandardPlane::XZ) => tr!("tree-plane-xz"),
+                CanvasBase::Standard(StandardPlane::YZ) => tr!("tree-plane-yz"),
+                CanvasBase::Face(r) => tr!(
+                    "props-on-face",
+                    role = planora_kernel::blend::topo::role_label(&r.role),
+                    name = feature_name(FeatureId(r.origin))
+                ),
+                CanvasBase::Plane(id) => feature_name(*id),
+            };
+            vec![(tr!("props-plane"), plane)]
+        }
     }
 }
 

@@ -48,6 +48,10 @@ pub(crate) struct Computed {
     pub(crate) warning: Option<String>,
     /// Koordinatensystem einer Konstruktionsebene.
     pub(crate) plane: Option<planora_math::Frame>,
+    /// Koordinatensystem des Trägers einer Leinwand.
+    pub(crate) canvas: Option<planora_math::Frame>,
+    /// Nachgeführter Hinweispunkt der Trägerfläche einer Leinwand.
+    pub(crate) canvas_face: Option<FaceRef>,
 }
 
 impl Computed {
@@ -175,6 +179,27 @@ pub(crate) fn check_parameters(kind: &FeatureKind) -> Result<(), FeatureError> {
             }
             if !(rotation.is_finite() && (rotation.length() - 1.0).abs() <= ROTATION_NORM_TOL) {
                 return Err(FeatureError::InvalidInput(tr!("feature-mesh-rotation")));
+            }
+        }
+        FeatureKind::Canvas(c) => {
+            if !c.offset.to_array().iter().all(|v| in_range(*v)) {
+                return out(tr!("feature-what-canvas-position"));
+            }
+            if !c.angle.is_finite() {
+                return Err(FeatureError::InvalidInput(tr!("feature-canvas-angle")));
+            }
+            let scale_ok = |v: f64| {
+                v.is_finite()
+                    && (crate::canvas::MIN_CANVAS_SCALE..=crate::canvas::MAX_CANVAS_SCALE)
+                        .contains(&v)
+            };
+            if !(scale_ok(c.scale.x) && scale_ok(c.scale.y)) {
+                return Err(FeatureError::InvalidInput(tr!(
+                    "feature-canvas-scale-range"
+                )));
+            }
+            if c.opacity > crate::canvas::MAX_CANVAS_OPACITY {
+                return Err(FeatureError::InvalidInput(tr!("feature-canvas-opacity")));
             }
         }
         FeatureKind::Sketch(_)
@@ -356,7 +381,99 @@ fn compute_unchecked(
                 ..Computed::default()
             })
         }
+        FeatureKind::Canvas(cf) => {
+            let previous = feature.result.as_ref().and_then(|r| r.canvas);
+            compute_canvas(doc, cf, visible, previous)
+        }
     }
+}
+
+/// Träger einer Skizze oder Leinwand (Grundebene, ebene Fläche oder Konstruktionsebene).
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum BaseRef<'a> {
+    Standard(crate::model::StandardPlane),
+    Face(&'a FaceRef),
+    Plane(FeatureId),
+}
+
+/// Löst den Träger einer Skizze oder Leinwand zu seinem Koordinatensystem auf. Bei einer Fläche
+/// kommt der nachgeführte Verweis (neuer Hinweispunkt) mit; `not_flat` ist die Meldung für eine
+/// gekrümmte Fläche.
+pub(crate) fn resolve_base_frame(
+    doc: &Document,
+    base: BaseRef<'_>,
+    solids: &[&Solid],
+    not_flat: impl FnOnce() -> String,
+) -> Result<(planora_math::Frame, Option<FaceRef>), FeatureError> {
+    match base {
+        BaseRef::Standard(p) => Ok((p.frame(), None)),
+        BaseRef::Face(r) => {
+            let found = resolve_face(solids, r, &doc.kernel.tolerance)?;
+            let frame = plane_of_face(solids[found.body], found.face)
+                .ok_or_else(|| FeatureError::InvalidInput(not_flat()))?;
+            let updated = FaceRef {
+                hint: found.hint,
+                ..r.clone()
+            };
+            Ok((frame, Some(updated)))
+        }
+        BaseRef::Plane(id) => {
+            let frame = doc.plane_frame(id).ok_or_else(|| {
+                let name = doc.feature(id).map_or_else(String::new, |f| f.name.clone());
+                FeatureError::InvalidInput(tr!("feature-plane-not-plane", name = name))
+            })?;
+            Ok((frame, None))
+        }
+    }
+}
+
+/// Leinwand: Bild prüfen, Träger auflösen, Ausdehnung prüfen. Lässt sich die Trägerfläche nicht
+/// mehr finden, bleibt die Leinwand an ihrer letzten Lage `previous` und bekommt eine Warnung
+/// (wie eine Projektion); ohne letzte Lage (etwa gleich nach dem Laden) ist das ein Fehler.
+fn compute_canvas(
+    doc: &Document,
+    cf: &crate::canvas::CanvasFeature,
+    visible: &[BodyRef],
+    previous: Option<planora_math::Frame>,
+) -> Result<Computed, FeatureError> {
+    use crate::canvas::CanvasBase;
+    let img = doc
+        .images
+        .get(&cf.image)
+        .ok_or_else(|| crate::canvas::image_missing(cf.image))?;
+    let solids: Vec<&Solid> = visible.iter().filter_map(|r| doc.body(*r)).collect();
+    let base = match &cf.base {
+        CanvasBase::Standard(p) => BaseRef::Standard(*p),
+        CanvasBase::Face(r) => {
+            ensure_not_mesh(doc, FeatureId(r.origin))?;
+            BaseRef::Face(r)
+        }
+        CanvasBase::Plane(id) => BaseRef::Plane(*id),
+    };
+    let not_flat = || tr!("feature-canvas-face-not-flat");
+    let (frame, canvas_face, warning) = match resolve_base_frame(doc, base, &solids, not_flat) {
+        Ok((frame, face)) => (frame, face, None),
+        Err(e) => match (&cf.base, previous) {
+            (CanvasBase::Face(_), Some(last)) => {
+                (last, None, Some(tr!("feature-canvas-face-lost")))
+            }
+            _ => return Err(e),
+        },
+    };
+    let placed = cf.placed_frame(&frame);
+    if !cf
+        .corners(&placed, img)
+        .iter()
+        .all(|c| c.to_array().iter().all(|v| in_range(*v)))
+    {
+        return Err(FeatureError::OutOfRange(tr!("feature-what-canvas")));
+    }
+    Ok(Computed {
+        canvas: Some(frame),
+        canvas_face,
+        warning,
+        ..Computed::default()
+    })
 }
 
 /// Fehlermeldung einer gescheiterten Booleschen Operation. Ist ein Eingangskörper mit
@@ -719,28 +836,13 @@ fn compute_sketch(
         }
     }
     let mut sketch = sf.sketch.clone();
-    let (frame, plane) = match &sf.plane {
-        SketchPlane::Standard(p) => (p.frame(), sf.plane.clone()),
-        SketchPlane::OnFace(r) => {
-            let found = resolve_face(&solids, r, &tol)?;
-            let frame = plane_of_face(solids[found.body], found.face)
-                .ok_or_else(|| FeatureError::InvalidInput(tr!("feature-face-not-flat")))?;
-            let updated = FaceRef {
-                hint: found.hint,
-                ..r.clone()
-            };
-            (frame, SketchPlane::OnFace(updated))
-        }
-        SketchPlane::OnPlane(id) => {
-            let frame = doc.plane_frame(*id).ok_or_else(|| {
-                let name = doc
-                    .feature(*id)
-                    .map_or_else(String::new, |f| f.name.clone());
-                FeatureError::InvalidInput(tr!("feature-plane-not-plane", name = name))
-            })?;
-            (frame, sf.plane.clone())
-        }
+    let base = match &sf.plane {
+        SketchPlane::Standard(p) => BaseRef::Standard(*p),
+        SketchPlane::OnFace(r) => BaseRef::Face(r),
+        SketchPlane::OnPlane(id) => BaseRef::Plane(*id),
     };
+    let (frame, face) = resolve_base_frame(doc, base, &solids, || tr!("feature-face-not-flat"))?;
+    let plane = face.map_or_else(|| sf.plane.clone(), SketchPlane::OnFace);
     sketch.set_frame(frame).map_err(sketch_error)?;
     let mut copies = Vec::with_capacity(sf.copies.len());
     let mut lost = 0usize;
@@ -784,7 +886,7 @@ fn compute_sketch(
         sketch: Some(sketch),
         hints: Some(SketchHints { plane, copies }),
         warning,
-        plane: None,
+        ..Computed::default()
     })
 }
 

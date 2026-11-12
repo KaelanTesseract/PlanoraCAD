@@ -283,6 +283,11 @@ impl Document {
         {
             return Err(FeatureError::StepShapeMissing(shape.0));
         }
+        if let FeatureKind::Canvas(c) = kind
+            && !self.images.contains_key(&c.image)
+        {
+            return Err(crate::canvas::image_missing(c.image));
+        }
         Ok(())
     }
 

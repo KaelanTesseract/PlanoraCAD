@@ -682,6 +682,9 @@ impl FeatureIcon {
             K::MeshBody { .. } => FeatureIcon::Body(BodyKind::Mesh),
             K::StepBody { .. } => FeatureIcon::Body(BodyKind::Step),
             K::Plane(_) => FeatureIcon::Plane,
+            // Vorläufig das Ebenen-Symbol; ein eigenes Leinwand-Symbol kommt mit der Oberfläche
+            // (Skizzen 9, Task 13).
+            K::Canvas(_) => FeatureIcon::Plane,
         }
     }
 }

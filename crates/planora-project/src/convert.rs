@@ -1454,6 +1454,11 @@ fn kind_to(
             form: forms.get(shape).copied().unwrap_or(shape.0),
         },
         FeatureKind::Plane(p) => KindDto::Konstruktionsebene(Box::new(plane_to(p))),
+        // Leinwände schreibt erst Format 19 (Skizzen 9, Task 9); bis dahin klar abweisen statt
+        // still weglassen.
+        FeatureKind::Canvas(_) => {
+            return Err(ProjectError::Invalid(tr!("proj-canvas-unsupported")));
+        }
     })
 }
 
@@ -3442,6 +3447,8 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
         parameters,
         next_param,
         rollbacks,
+        // Bilder der Leinwände liest erst Format 19 (Task 9).
+        images: BTreeMap::new(),
         dissolved_patterns,
     })
 }

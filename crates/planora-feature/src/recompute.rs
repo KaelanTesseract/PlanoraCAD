@@ -315,6 +315,7 @@ impl Document {
                 matches!(s.plane, SketchPlane::OnFace(_)) || !s.copies.is_empty()
             }
             FeatureKind::Plane(p) => p.reads_bodies(),
+            FeatureKind::Canvas(c) => matches!(c.base, crate::canvas::CanvasBase::Face(_)),
             _ => false,
         }
     }
@@ -353,6 +354,11 @@ impl Document {
                 SketchPlane::OnFace(r) => FeatureId(r.origin) == dep,
                 SketchPlane::OnPlane(id) => *id == dep,
             },
+            // Eine verlorene Trägerfläche ist eine Warnung (die Leinwand bleibt an ihrer letzten
+            // Lage), kein Stillstand; eine Konstruktionsebene hält sie an wie eine Skizze.
+            FeatureKind::Canvas(c) => {
+                matches!(c.base, crate::canvas::CanvasBase::Plane(id) if id == dep)
+            }
             _ => true,
         }
     }
@@ -405,6 +411,8 @@ impl Document {
             hints,
             warning,
             plane,
+            canvas,
+            canvas_face,
         } = computed;
         let f = &mut self.features[idx];
         f.result = Some(FeatureResult {
@@ -414,10 +422,14 @@ impl Document {
             key,
             warning,
             plane,
+            canvas,
         });
         if let (Some(h), FeatureKind::Sketch(sf)) = (hints, &mut f.kind) {
             sf.plane = h.plane;
             sf.copies = h.copies;
+        }
+        if let (Some(face), FeatureKind::Canvas(cf)) = (canvas_face, &mut f.kind) {
+            cf.base = crate::canvas::CanvasBase::Face(face);
         }
     }
 }

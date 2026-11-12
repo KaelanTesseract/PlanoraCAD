@@ -13,6 +13,8 @@ pub struct HiddenFolders {
     pub bodies: bool,
     pub sketches: bool,
     pub planes: bool,
+    /// Ordner „Leinwände“ (Skizzen 9).
+    pub canvases: bool,
 }
 
 /// Was im Browser ausgeblendet ist. Der Grundzustand zeigt alle Körper, Skizzen und
@@ -21,7 +23,7 @@ pub struct HiddenFolders {
 pub struct Visibility {
     /// Selbst ausgeblendete Körper.
     pub bodies: BTreeSet<BodyKey>,
-    /// Selbst ausgeblendete Skizzen und Konstruktionsebenen.
+    /// Selbst ausgeblendete Skizzen, Konstruktionsebenen und Leinwände.
     pub features: BTreeSet<FeatureId>,
     /// Eingeblendete Grundebenen (XY, XZ, YZ).
     pub origin_planes: [bool; 3],
@@ -73,8 +75,12 @@ impl Document {
         v.bodies
             .retain(|k| self.feature(FeatureId(k.feature)).is_some());
         v.features.retain(|id| {
-            self.feature(*id)
-                .is_some_and(|f| matches!(f.kind, FeatureKind::Sketch(_) | FeatureKind::Plane(_)))
+            self.feature(*id).is_some_and(|f| {
+                matches!(
+                    f.kind,
+                    FeatureKind::Sketch(_) | FeatureKind::Plane(_) | FeatureKind::Canvas(_)
+                )
+            })
         });
         v
     }
