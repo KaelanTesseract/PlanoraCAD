@@ -58,11 +58,12 @@ fn read_svg_limited(
     // aber nie abstürzen lassen. Sie wird hier abgefangen und wie ein Lesefehler gemeldet.
     let parsed = catch_unwind(AssertUnwindSafe(|| parse(bytes, max_bytes)))
         .map_err(|_| ExchangeError::SvgBroken("internal error".into()))??;
-    let (tree, texts, images) = parsed;
+    let (tree, texts, images, markers) = parsed;
 
     let mut skipped = Skipped {
         texts,
         images,
+        unknown: markers,
         ..Skipped::default()
     };
     let mut elements: Vec<Element2d> = Vec::new();
@@ -107,7 +108,7 @@ fn read_svg_limited(
 
 /// Entpackt (SVGZ) mit Größengrenze, prüft das Dokument auf Verstärkungsangriffe, parst mit usvg
 /// und zählt `<text>` und `<image>`.
-fn parse(bytes: &[u8], max_bytes: u64) -> Result<(Tree, usize, usize), ExchangeError> {
+fn parse(bytes: &[u8], max_bytes: u64) -> Result<(Tree, usize, usize, usize), ExchangeError> {
     let unpacked;
     let raw = if bytes.starts_with(&[0x1f, 0x8b]) {
         // Nur bis zur Grenze (plus ein Byte) entpacken: Eine „Zip-Bombe“ füllt so nicht den Speicher.
@@ -126,18 +127,19 @@ fn parse(bytes: &[u8], max_bytes: u64) -> Result<(Tree, usize, usize), ExchangeE
     }
     let text = std::str::from_utf8(raw).map_err(|e| ExchangeError::SvgBroken(e.to_string()))?;
     reject_entities(text)?;
-    let doc = roxmltree::Document::parse_with_options(
-        text,
-        roxmltree::ParsingOptions {
-            allow_dtd: true,
-            nodes_limit: MAX_XML_NODES,
-            ..Default::default()
-        },
-    )
-    .map_err(|e| match e {
-        roxmltree::Error::NodesLimitReached => ExchangeError::TooManyElements,
-        e => ExchangeError::SvgBroken(e.to_string()),
-    })?;
+    let mut doc = parse_xml(text)?;
+    // Markierungen (`<marker>`) setzt usvg an jeden Pfadpunkt neu ein; das ließe sich nicht
+    // vorab begrenzen. Sie werden darum samt Inhalt aus dem Text geschnitten: Jeder Verweis
+    // darauf (Attribut, `style`, CSS) läuft ins Leere. Pfeilspitzen u. ä. werden nicht gelesen.
+    let ranges = marker_ranges(&doc);
+    let markers = ranges.len();
+    let cleaned;
+    let mut text = text;
+    if markers > 0 {
+        cleaned = cut_ranges(text, &ranges);
+        text = &cleaned;
+        doc = parse_xml(text)?;
+    }
     check_use_expansion(&doc)?;
     let (texts, images) = count_texts_and_images(&doc);
     let opt = Options {
@@ -149,7 +151,72 @@ fn parse(bytes: &[u8], max_bytes: u64) -> Result<(Tree, usize, usize), ExchangeE
         ..Options::default()
     };
     let tree = Tree::from_str(text, &opt).map_err(|e| ExchangeError::SvgBroken(e.to_string()))?;
-    Ok((tree, texts, images))
+    Ok((tree, texts, images, markers))
+}
+
+/// Parst den XML-Text mit Knotengrenze (gleiche Einstellungen wie usvg, aber begrenzt).
+fn parse_xml(text: &str) -> Result<roxmltree::Document<'_>, ExchangeError> {
+    roxmltree::Document::parse_with_options(
+        text,
+        roxmltree::ParsingOptions {
+            allow_dtd: true,
+            nodes_limit: MAX_XML_NODES,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| match e {
+        roxmltree::Error::NodesLimitReached => ExchangeError::TooManyElements,
+        e => ExchangeError::SvgBroken(e.to_string()),
+    })
+}
+
+/// Textbereiche aller äußersten `<marker>`-Elemente, in Dokumentreihenfolge.
+fn marker_ranges(doc: &roxmltree::Document) -> Vec<std::ops::Range<usize>> {
+    let mut out: Vec<std::ops::Range<usize>> = Vec::new();
+    for n in doc.descendants() {
+        if n.is_element()
+            && n.tag_name().namespace() == Some(SVG_NS)
+            && n.tag_name().name() == "marker"
+        {
+            let r = n.range();
+            // Verschachtelte Markierungen liegen schon im Bereich der äußeren.
+            if out.last().is_none_or(|l| r.start >= l.end) {
+                out.push(r);
+            }
+        }
+    }
+    out
+}
+
+/// Der Text ohne die angegebenen (geordneten, getrennten) Bereiche.
+fn cut_ranges(text: &str, ranges: &[std::ops::Range<usize>]) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    for r in ranges {
+        out.push_str(&text[at..r.start]);
+        at = r.end;
+    }
+    out.push_str(&text[at..]);
+    out
+}
+
+/// Das Ziel eines Verweises wie in usvg (`parse.rs`, `resolve_href`): ein `href` ohne
+/// Namensraum geht vor `xlink:href`; der Wert ist wie bei `svgtypes::IRI` aufgebaut (führende
+/// Leerzeichen, dann `#`, die Kennung bis zum nächsten Leerzeichen, dahinter nur Leerzeichen).
+fn href_target<'a>(node: roxmltree::Node<'a, 'a>) -> Option<&'a str> {
+    let value = node
+        .attributes()
+        .find(|a| a.name() == "href" && a.namespace().is_none())
+        .or_else(|| {
+            node.attributes()
+                .find(|a| a.name() == "href" && a.namespace() == Some(XLINK_NS))
+        })?
+        .value();
+    let is_space = |c: char| matches!(c, ' ' | '\t' | '\n' | '\r');
+    let rest = value.trim_start_matches(is_space).strip_prefix('#')?;
+    let end = rest.find(' ').unwrap_or(rest.len());
+    let (id, tail) = rest.split_at(end);
+    (!id.is_empty() && tail.trim_start_matches(is_space).is_empty()).then_some(id)
 }
 
 /// Weist Dokumente mit eigenen Entitäten oder einem inneren DTD-Teil ab („Billion laughs“).
@@ -237,12 +304,7 @@ impl<'a> Cost<'a> {
             if let Some(c) = shape_cost(node) {
                 cost = c;
             } else if node.tag_name().name() == "use" {
-                let href = node
-                    .attribute((XLINK_NS, "href"))
-                    .or_else(|| node.attribute("href"));
-                let target = href
-                    .and_then(|h| h.strip_prefix('#'))
-                    .and_then(|id| self.ids.get(id).copied());
+                let target = href_target(node).and_then(|id| self.ids.get(id).copied());
                 if let Some(t) = target {
                     cost = self.of(t, depth + 1)?;
                 }

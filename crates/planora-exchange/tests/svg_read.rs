@@ -271,3 +271,101 @@ fn truncated_and_flipped_svg_never_panic() {
         let _ = read_svg(&bytes, NEVER);
     }
 }
+
+/// Wie `use_bomb`, aber jedes `use` hat zwei Verweise: usvg nimmt `href` vor `xlink:href`.
+/// `big` ist der Verweis, den usvg wirklich nimmt; `tiny` ist der Köder.
+fn decoy_bomb(big_first: bool, href: impl Fn(usize) -> String) -> Vec<u8> {
+    let mut s = String::from(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="10" height="10"><defs><path id="l0" d="M0 0 L1 1"/>"#,
+    );
+    for k in 1..=20 {
+        s.push_str(&format!(r#"<g id="l{k}">"#));
+        for _ in 0..10 {
+            let big = href(k - 1);
+            if big_first {
+                s.push_str(&format!(r##"<use href="{big}" xlink:href="#l0"/>"##));
+            } else {
+                s.push_str(&format!(r##"<use xlink:href="#l0" href="{big}"/>"##));
+            }
+        }
+        s.push_str("</g>");
+    }
+    s.push_str(&format!(r#"</defs><use href="{}"/></svg>"#, href(20)));
+    s.into_bytes()
+}
+
+#[test]
+fn use_href_takes_precedence_over_xlink_href() {
+    for first in [true, false] {
+        let t = std::time::Instant::now();
+        let err = read_svg(&decoy_bomb(first, |k| format!("#l{k}")), NEVER).unwrap_err();
+        assert_eq!(err, ExchangeError::TooManyElements);
+        assert!(t.elapsed().as_secs_f64() < 2.0, "{:?}", t.elapsed());
+    }
+}
+
+#[test]
+fn use_href_with_spaces_resolves_like_usvg() {
+    for form in [" #l{}", "#l{} ", "  #l{}  ", "\t#l{}"] {
+        let t = std::time::Instant::now();
+        let err = read_svg(
+            &decoy_bomb(true, |k| form.replace("{}", &k.to_string())),
+            NEVER,
+        )
+        .unwrap_err();
+        assert_eq!(err, ExchangeError::TooManyElements, "Form {form:?}");
+        assert!(t.elapsed().as_secs_f64() < 2.0, "{:?}", t.elapsed());
+    }
+}
+
+#[test]
+fn use_href_with_spaces_imports_the_right_geometry() {
+    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+        <defs><path id="a" d="M 0 0 L 10 0" fill="none" stroke="black"/></defs>
+        <use href=" #a "/><use href="#a" transform="translate(0,20)"/></svg>"##;
+    let imp = read_svg(svg, NEVER).unwrap();
+    let el = elements(&imp);
+    assert_eq!(el.len(), 2, "{el:?}");
+    let Element2d::Line(a, b) = &el[0] else {
+        panic!("keine Linie");
+    };
+    assert!(near(*a, 0.0, 0.0) && near(*b, 10.0 * MM, 0.0));
+    let Element2d::Line(a, _) = &el[1] else {
+        panic!("keine Linie");
+    };
+    assert!(near(*a, 0.0, -20.0 * MM), "{a:?}");
+}
+
+#[test]
+fn marker_bomb_finishes_quickly_and_marker_is_skipped() {
+    // Ein Pfad mit 90 000 Punkten, jeder Punkt bekäme eine Markierung mit 100 Formen.
+    let mut d = String::from("M 0 0");
+    for i in 1..=90_000 {
+        d.push_str(&format!(" L {i} 1"));
+    }
+    let mut marker = String::new();
+    for _ in 0..100 {
+        marker.push_str(r#"<rect x="0" y="0" width="1" height="1"/>"#);
+    }
+    let svg = format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><defs><marker id="m" markerWidth="2" markerHeight="2">{marker}</marker></defs><path d="{d}" fill="none" stroke="black" marker-mid="url(#m)"/></svg>"##
+    );
+    let t = std::time::Instant::now();
+    let imp = read_svg(svg.as_bytes(), NEVER).unwrap();
+    assert!(t.elapsed().as_secs_f64() < 5.0, "{:?}", t.elapsed());
+    assert_eq!(imp.element_count(), 90_000);
+    assert_eq!(imp.skipped.unknown, 1);
+}
+
+#[test]
+fn arrow_marker_imports_only_the_path() {
+    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+        <defs><marker id="arrow" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
+            <path d="M 0 0 L 6 3 L 0 6 Z"/></marker></defs>
+        <path d="M 10 10 L 50 10" fill="none" stroke="black" marker-end="url(#arrow)"/>
+        <path d="M 10 20 L 50 20" fill="none" stroke="black" style="marker-end:url(#arrow)"/>
+        </svg>"##;
+    let imp = read_svg(svg, NEVER).unwrap();
+    assert_eq!(imp.element_count(), 2, "{:?}", elements(&imp));
+    assert_eq!(imp.skipped.unknown, 1);
+}
