@@ -4082,6 +4082,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bdb896f04730b97805bbc3191fc57e4bf03face0f14577dd42e783c4d8c98802"
 dependencies = [
  "data-url",
+ "flate2",
  "imagesize",
  "kurbo",
  "log",

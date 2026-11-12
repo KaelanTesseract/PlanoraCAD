@@ -2821,6 +2821,7 @@ exchange-corrupt = The mesh data is damaged: { $msg }
 exchange-unknown-format = The file extension "{ $ext }" is not supported; possible are .stl and .obj
 exchange-cancelled = Cancelled
 exchange-dxf-broken = The DXF file is damaged or cannot be read: { $msg }
+exchange-svg-broken = The SVG file is damaged or cannot be read: { $msg }
 exchange-too-many-elements = The drawing has too many elements (more than { $max }).
 exchange-obj-three-corners = A face needs at least three corners
 exchange-obj-bad-index = A corner has no valid point number

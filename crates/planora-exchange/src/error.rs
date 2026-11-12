@@ -44,6 +44,8 @@ pub enum ExchangeError {
     Corrupt(String),
     /// Die DXF-Datei ist kaputt oder lässt sich nicht lesen.
     DxfBroken(String),
+    /// Die SVG-Datei ist kaputt oder lässt sich nicht lesen.
+    SvgBroken(String),
     /// Mehr als [`crate::limits::MAX_IMPORT_ELEMENTS`] Elemente (DXF, SVG).
     TooManyElements,
     UnknownFormat(String),
@@ -82,6 +84,7 @@ impl fmt::Display for ExchangeError {
             }
             ExchangeError::Corrupt(m) => tr!("exchange-corrupt", msg = m),
             ExchangeError::DxfBroken(m) => tr!("exchange-dxf-broken", msg = m),
+            ExchangeError::SvgBroken(m) => tr!("exchange-svg-broken", msg = m),
             ExchangeError::TooManyElements => tr!(
                 "exchange-too-many-elements",
                 max = crate::limits::MAX_IMPORT_ELEMENTS

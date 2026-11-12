@@ -65,7 +65,7 @@ harfrust = "0.12"
 # DXF/SVG/Leinwand (Skizzen 9): dxf (MIT) liest DXF, usvg (MIT OR Apache-2.0) liest SVG,
 # image (MIT OR Apache-2.0) liest Rasterbilder; nur PNG, JPEG und TIFF.
 dxf = "0.6.2"
-usvg = { version = "0.50", default-features = false }
+usvg = { version = "0.50", default-features = false, features = ["svgz"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff"] }
 
 [workspace.lints.clippy]
