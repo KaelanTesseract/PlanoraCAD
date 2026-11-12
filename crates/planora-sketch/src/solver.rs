@@ -821,7 +821,7 @@ impl Sketch {
             && (x[vy] - fy).abs() <= tol_r;
         debug_assert!(
             !ready || self.assemble(g, x, &[], Rows::All).hard_inf() <= tol_r,
-            "Kurzweg für einen festen Punkt weicht ab"
+            "fixed-point shortcut differs from the full path"
         );
         ready
     }
@@ -1316,7 +1316,7 @@ impl Sketch {
                         };
                         debug_assert!(
                             analysis.same_as(&self.analyze(&g, x)),
-                            "Kurzweg für einen festen Punkt weicht ab"
+                            "fixed-point shortcut differs from the full path"
                         );
                         analysis
                     }
