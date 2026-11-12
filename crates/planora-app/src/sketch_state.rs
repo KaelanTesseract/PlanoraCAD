@@ -13,7 +13,7 @@ use planora_feature::{FeatureId, ParamScope, ParamUnit, SketchFeature, constrain
 use planora_i18n::tr;
 use planora_math::DVec2;
 use planora_sketch::SketchError;
-use planora_sketch::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
+use planora_sketch::constraint::{ConstraintId, ConstraintKind, FixToggle, LineOrPoints};
 use planora_sketch::dimension::{DimPick, DimPlan};
 use planora_sketch::model::{CurveId, CurveKind, MAX_SPLINE_POINTS, PointId, Sketch};
 use planora_sketch::offset::{OffsetPlan, OffsetProblem};
@@ -2356,10 +2356,8 @@ impl SketchSession {
                     .ok_or_else(|| crate::msg!("sketch-err-smooth-end"))?;
                 K::Smooth(c[0], pa, c[1], pb)
             }
-            A::Fixed => {
-                let xy = sk.point_xy(p[0]).map_err(err)?;
-                K::Fixed(p[0], xy.x, xy.y)
-            }
+            // „Fest“ ist ein Schalter über mehrere Punkte und läuft über `apply_fixed`.
+            A::Fixed => return Err(crate::msg!("sketch-selection-invalid")),
             A::Coincident => K::Coincident(p[0], p[1]),
             A::Horizontal | A::Vertical => {
                 let lp = if p.len() == 2 {
@@ -2409,6 +2407,9 @@ impl SketchSession {
     ) -> Result<ConstraintId, String> {
         // Sicherheitsnetz: Klicklagen aus einer anders geänderten Auswahl zählen nicht.
         self.forget_stale_picks();
+        if action == ConstraintAction::Fixed {
+            return self.apply_fixed(sk);
+        }
         self.atomic(sk, |se, sk, prior| {
             let mut kind = se.build(sk, action)?;
             if action.is_dimension() {
@@ -2467,6 +2468,60 @@ impl SketchSession {
                 se.edit_label = Some(action.label_msg());
             }
             Ok(id)
+        })
+    }
+
+    /// „Fest“ als Schalter (wie Fixieren/Lösen in Fusion, Skizzen 9): Haben alle Punkte der Auswahl
+    /// (gewählte Punkte und die Punkte gewählter Kurven) schon ein `Fixed`, werden diese gelöst,
+    /// sonst bekommen die übrigen eins. Ein Schritt; der Name des Lösens ist „Fixierung aufheben“.
+    /// Gibt die Nummer einer angelegten oder gelösten Abhängigkeit zurück.
+    fn apply_fixed(&mut self, sk: &mut Sketch) -> Result<ConstraintId, String> {
+        self.atomic(sk, |se, sk, prior| {
+            if se.selection.is_empty() {
+                return Err(crate::msg!("sketch-nothing-selected"));
+            }
+            let s = se
+                .sorted(sk)
+                .ok_or_else(|| crate::msg!("sketch-selection-invalid"))?;
+            let mut pts = s.points.clone();
+            for &c in &s.curves {
+                if let Some(d) = sk.curve(c) {
+                    pts.extend(d.kind.points());
+                }
+            }
+            let fixed_ids = |sk: &Sketch| -> Vec<ConstraintId> {
+                sk.constraints()
+                    .filter(|(_, c)| matches!(c.kind, ConstraintKind::Fixed(..)))
+                    .map(|(i, _)| i)
+                    .collect()
+            };
+            let before = fixed_ids(sk);
+            match sk.toggle_fixed(&pts) {
+                FixToggle::Released(0) => Err(crate::msg!("sketch-fixed-spline-keep-fixed")),
+                FixToggle::Fixed(0) => Err(crate::msg!("sketch-selection-invalid")),
+                FixToggle::Released(_) => {
+                    let after = fixed_ids(sk);
+                    let gone = before.iter().rev().find(|i| !after.contains(i)).copied();
+                    se.last_report = Some(sk.solve());
+                    se.warn_if_unsolved();
+                    se.edit_label = Some(crate::msg!("undo-sketch-unfix"));
+                    gone.ok_or_else(|| crate::msg!("sketch-selection-invalid"))
+                }
+                FixToggle::Fixed(_) => {
+                    let report = se.solve_checked(sk, prior)?;
+                    let new: Vec<ConstraintId> = fixed_ids(sk)
+                        .into_iter()
+                        .filter(|i| !before.contains(i))
+                        .collect();
+                    if new.iter().any(|i| report.redundant.contains(i)) {
+                        se.message = Some(crate::msg!("sketch-redundant"));
+                    }
+                    se.edit_label = Some(ConstraintAction::Fixed.label_msg());
+                    new.last()
+                        .copied()
+                        .ok_or_else(|| crate::msg!("sketch-selection-invalid"))
+                }
+            }
         })
     }
 
@@ -3229,6 +3284,10 @@ fn actions_for(sk: &Sketch, items: &[Item]) -> Vec<ConstraintAction> {
         (2, 1, 0, 0) => vec![Symmetric],
         _ => Vec::new(),
     };
+    // Fest gilt für jede Auswahl aus Punkten und Kurven (Fixieren/Lösen, Skizzen 9).
+    if !found.contains(&Fixed) && !(s.points.is_empty() && s.curves.is_empty()) {
+        found.push(Fixed);
+    }
     if let [a, b] = s.curves[..]
         && s.points.is_empty()
     {

@@ -48,6 +48,13 @@ pub enum LineOrPoints {
     Points(PointId, PointId),
 }
 
+/// Ergebnis von [`Sketch::toggle_fixed`]: so viele `Fixed` wurden angelegt oder gelöst.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FixToggle {
+    Fixed(usize),
+    Released(usize),
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ConstraintKind {
     Coincident(PointId, PointId),
@@ -1996,6 +2003,51 @@ impl Sketch {
             }
             _ => None,
         }
+    }
+
+    /// „Fest“ als Schalter (wie Fixieren/Lösen in Fusion): Hat jeder Punkt in `points` schon ein
+    /// `Fixed`, werden diese gelöst, sonst bekommen die übrigen eins an ihrer jetzigen Lage.
+    /// Doppelte Punkte zählen einmal. Das `Fixed` am Ende eines festen Splines bleibt und zählt
+    /// nicht mit; was die Skizze sonst ablehnt, wird übersprungen. Die Zahl nennt, wie viele
+    /// Abhängigkeiten angelegt oder entfernt wurden. Gelöst wird hier nicht.
+    pub fn toggle_fixed(&mut self, points: &[PointId]) -> FixToggle {
+        let mut pts: Vec<PointId> = Vec::new();
+        for &p in points {
+            if self.point_xy(p).is_ok() && !pts.contains(&p) {
+                pts.push(p);
+            }
+        }
+        let fixed_of = |s: &Sketch, p: PointId| -> Vec<ConstraintId> {
+            s.constraints()
+                .filter(|(_, c)| matches!(c.kind, ConstraintKind::Fixed(q, ..) if q == p))
+                .map(|(i, _)| i)
+                .collect()
+        };
+        if !pts.is_empty() && pts.iter().all(|&p| !fixed_of(self, p).is_empty()) {
+            let mut n = 0;
+            for &p in &pts {
+                for id in fixed_of(self, p) {
+                    if self.remove_constraint(id).is_ok() {
+                        n += 1;
+                    }
+                }
+            }
+            return FixToggle::Released(n);
+        }
+        let mut n = 0;
+        for &p in &pts {
+            if !fixed_of(self, p).is_empty() {
+                continue;
+            }
+            let Ok(xy) = self.point_xy(p) else { continue };
+            if self
+                .add_constraint(ConstraintKind::Fixed(p, xy.x, xy.y))
+                .is_ok()
+            {
+                n += 1;
+            }
+        }
+        FixToggle::Fixed(n)
     }
 
     /// Legt eine Abhängigkeit an. Bei einem Fehler bleibt die Skizze unverändert.

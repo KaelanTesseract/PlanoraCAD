@@ -513,6 +513,7 @@ undo-centerline = Mittellinie umschalten
 undo-formula = Formel ändern
 undo-sketch-change = Skizze ändern
 undo-sketch-move = Kurven verschieben
+undo-sketch-unfix = Fixierung aufheben
 undo-trim = Stutzen
 undo-extend = Dehnen
 undo-break = Brechen

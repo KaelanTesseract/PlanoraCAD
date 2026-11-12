@@ -39,7 +39,9 @@ pub mod text_shape;
 pub mod transform;
 pub mod triangulate;
 
-pub use constraint::{ConstraintData, ConstraintId, ConstraintKind, Evaluation, LineOrPoints};
+pub use constraint::{
+    ConstraintData, ConstraintId, ConstraintKind, Evaluation, FixToggle, LineOrPoints,
+};
 pub use curves::{
     conic_apex_ok, conic_nurbs, conic_rho_at, conic_rho_ok, conic_shoulder, control_spline_nurbs,
 };

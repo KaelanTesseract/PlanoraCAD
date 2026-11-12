@@ -521,6 +521,7 @@ undo-centerline = Toggle centerline
 undo-formula = Change formula
 undo-sketch-change = Change sketch
 undo-sketch-move = Move curves
+undo-sketch-unfix = Unfix
 undo-trim = Trim
 undo-extend = Extend
 undo-break = Break
