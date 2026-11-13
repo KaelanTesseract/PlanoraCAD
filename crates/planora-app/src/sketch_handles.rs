@@ -121,7 +121,8 @@ pub(crate) fn carry_frame(
     let mut trial = sk.clone();
     let probe = trial.drag(&[Drag {
         point: fit,
-        target: from + delta,
+        target: (from + delta).extend(0.0),
+        plane: None,
     }])?;
     if probe.drag_failed {
         return Ok(probe);
@@ -138,7 +139,8 @@ pub(crate) fn carry_frame(
         .iter()
         .map(|&(point, at)| Drag {
             point,
-            target: at + made,
+            target: (at + made).extend(0.0),
+            plane: None,
         })
         .collect();
     sk.drag(&drags)

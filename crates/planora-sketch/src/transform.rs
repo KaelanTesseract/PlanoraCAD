@@ -141,11 +141,13 @@ fn map_ids(
         PointOnCurve(a, x) => PointOnCurve(p(*a), c(*x)),
         Horizontal(l) => Horizontal(lp(l)),
         Vertical(l) => Vertical(lp(l)),
+        AlongZ(l) => AlongZ(lp(l)),
         Parallel(a, b) => Parallel(c(*a), c(*b)),
         Perpendicular(a, b) => Perpendicular(c(*a), c(*b)),
         Tangent(a, b) => Tangent(c(*a), c(*b)),
         Equal(a, b) => Equal(c(*a), c(*b)),
         Fixed(a, x, y) => Fixed(p(*a), *x, *y),
+        Fixed3(a, x, y, z) => Fixed3(p(*a), *x, *y, *z),
         Symmetric(a, b, x) => Symmetric(p(*a), p(*b), c(*x)),
         Midpoint(a, x) => Midpoint(p(*a), c(*x)),
         Distance(a, b, v) => Distance(p(*a), p(*b), *v),
@@ -442,7 +444,7 @@ impl Sketch {
             .map(|(p, _)| p)
             .collect();
         for d in &active {
-            if let ConstraintKind::Fixed(p, ..) = d.kind {
+            if let ConstraintKind::Fixed(p, ..) | ConstraintKind::Fixed3(p, ..) = d.kind {
                 points.remove(&p);
             }
         }
@@ -1066,7 +1068,9 @@ impl Sketch {
                 // Musterwerte gehören zum Muster, nicht zur Geometrie: Kopien sind lose.
                 !matches!(
                     d.kind,
-                    ConstraintKind::Fixed(..) | ConstraintKind::PatternValue(..)
+                    ConstraintKind::Fixed(..)
+                        | ConstraintKind::Fixed3(..)
+                        | ConstraintKind::PatternValue(..)
                 ) && d.kind.points().iter().all(|p| points.contains_key(p))
                     && d.kind.curves().iter().all(|c| curves.contains_key(c))
             })
@@ -1451,7 +1455,7 @@ impl Sketch {
         self.constraints()
             .filter(|(_, d)| is_active(d))
             .filter_map(|(_, d)| match d.kind {
-                ConstraintKind::Fixed(p, ..) => Some(p),
+                ConstraintKind::Fixed(p, ..) | ConstraintKind::Fixed3(p, ..) => Some(p),
                 _ => None,
             })
             .collect()

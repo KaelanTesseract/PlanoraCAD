@@ -551,7 +551,8 @@ fn straight_handle_stays_at_zero_when_tip_is_dragged() {
         let r = s
             .drag(&[Drag {
                 point: tip,
-                target: DVec2::new(x, y),
+                target: DVec2::new(x, y).extend(0.0),
+                plane: None,
             }])
             .unwrap();
         assert_eq!(r.status, SolveStatus::Solved, "Zug {x} {y}: {r:?}");
@@ -997,7 +998,8 @@ fn g2_holds_while_dragging_and_through_big_radii() {
         let r = s
             .drag(&[Drag {
                 point: p,
-                target: DVec2::new(x, y),
+                target: DVec2::new(x, y).extend(0.0),
+                plane: None,
             }])
             .unwrap();
         assert_eq!(r.status, SolveStatus::Solved, "Zug {x} {y}: {r:?}");

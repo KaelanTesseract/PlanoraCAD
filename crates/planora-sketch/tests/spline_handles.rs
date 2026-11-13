@@ -545,7 +545,13 @@ fn dragging_tip_keeps_other_fit_points_fixed() {
     let tip = tip_of(&s, c, pts[2]);
     let before: Vec<DVec2> = pts.iter().map(|&p| s.point_xy(p).unwrap()).collect();
     let target = DVec2::new(30.0, 20.0);
-    let report = s.drag(&[Drag { point: tip, target }]).unwrap();
+    let report = s
+        .drag(&[Drag {
+            point: tip,
+            target: target.extend(0.0),
+            plane: None,
+        }])
+        .unwrap();
     assert!(!report.drag_failed);
     assert!(s.point_xy(tip).unwrap().distance(target) < 1e-6);
     for (&p, b) in pts.iter().zip(&before) {
@@ -562,7 +568,12 @@ fn dragging_tip_keeps_other_fit_points_fixed() {
     s.solve();
     let others = [0, 1, 3, 4, 5].map(|i| s.point_xy(pts[i]).unwrap());
     let target = DVec2::new(40.0, 3.0);
-    s.drag(&[Drag { point: tip, target }]).unwrap();
+    s.drag(&[Drag {
+        point: tip,
+        target: target.extend(0.0),
+        plane: None,
+    }])
+    .unwrap();
     for (i, q) in [0, 1, 3, 4, 5].iter().zip(others) {
         assert!(s.point_xy(pts[*i]).unwrap().distance(q) < 1e-9);
     }
@@ -585,7 +596,8 @@ fn point_on_handled_spline_solves_and_follows_the_tip() {
     let tip = tip_of(&s, c, pts[2]);
     s.drag(&[Drag {
         point: tip,
-        target: DVec2::new(26.0, 12.0),
+        target: DVec2::new(26.0, 12.0).extend(0.0),
+        plane: None,
     }])
     .unwrap();
     assert_eq!(s.solve().status, SolveStatus::Solved);
@@ -634,7 +646,13 @@ fn tangent_line_on_a_handled_spline_solves_and_follows_the_tip() {
     // Griff weiter ziehen: Die Linie bleibt tangential und die Spitze folgt dem Zug.
     let before = s.point_xy(a).unwrap();
     let target = DVec2::new(27.0, 11.0);
-    let report = s.drag(&[Drag { point: tip, target }]).unwrap();
+    let report = s
+        .drag(&[Drag {
+            point: tip,
+            target: target.extend(0.0),
+            plane: None,
+        }])
+        .unwrap();
     assert!(!report.drag_failed);
     assert_eq!(s.solve().status, SolveStatus::Solved);
     let (gap, angle) = tangency(&s, c, a, b, parameter(&s, k));

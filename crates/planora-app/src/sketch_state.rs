@@ -2031,7 +2031,11 @@ impl SketchSession {
             return;
         };
         self.cursor = Some(at);
-        match sk.drag(&[Drag { point, target: at }]) {
+        match sk.drag(&[Drag {
+            point,
+            target: at.extend(0.0),
+            plane: None,
+        }]) {
             Ok(report) => {
                 self.message = (!status_ok(&report)).then(|| crate::msg!("sketch-drag-blocked"));
                 self.last_report = Some(report);
@@ -2068,7 +2072,8 @@ impl SketchSession {
                     .iter()
                     .map(|&(point, from)| Drag {
                         point,
-                        target: from + delta,
+                        target: (from + delta).extend(0.0),
+                        plane: None,
                     })
                     .collect();
                 // Zug am freien Ende eines Krümmungsbogens mit freiem Radius: erst den Radius suchen,
@@ -2076,7 +2081,7 @@ impl SketchSession {
                 // Lösen allein nicht hin (zweiter Handtest Skizzen 7).
                 if let (Some((c, at)), [only]) = (drag.aim, drags.as_slice()) {
                     // Scheitert die Suche, zieht der Zug wie sonst.
-                    let _ = sk.aim_curvature_arc(c, at, only.target);
+                    let _ = sk.aim_curvature_arc(c, at, only.target.truncate());
                 }
                 sk.drag_holding(&drags, &drag.anchors)
             }

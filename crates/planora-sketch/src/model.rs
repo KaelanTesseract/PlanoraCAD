@@ -492,7 +492,8 @@ impl Sketch {
     pub fn add_line(&mut self, a: PointId, b: PointId) -> Result<CurveId, SketchError> {
         self.check_point(a)?;
         self.check_point(b)?;
-        if a == b || self.pos(a).distance(self.pos(b)) <= self.tol.linear {
+        // Länge im Raum (Skizzen 10): Eine 3D-Linie darf in der Draufsicht ein Punkt sein.
+        if a == b || self.pos3(a).distance(self.pos3(b)) <= self.tol.linear {
             return Err(SketchError::Degenerate(tr!("sketch-err-line-zero")));
         }
         Ok(self.push_curve(CurveKind::Line { a, b }))
@@ -946,8 +947,9 @@ impl Sketch {
     pub fn radius(&self, c: CurveId) -> Option<f64> {
         match self.curve(c)?.kind {
             CurveKind::Circle { radius, .. } => Some(self.vars[radius]),
+            // Im Raum (Skizzen 10); in der Skizzenebene dieselbe Zahl wie bisher.
             CurveKind::Arc { center, start, .. } => {
-                Some(self.pos(start).distance(self.pos(center)))
+                Some(self.pos3(start).distance(self.pos3(center)))
             }
             _ => None,
         }
@@ -1126,7 +1128,7 @@ impl Sketch {
 
     /// Prüft, dass die (lebenden) Punkte 3D werden dürfen: Ein erzeugter Punkt eines Textes hält
     /// der Text (`sketch-text-no-edit`).
-    fn check_liftable(&self, points: &[PointId]) -> Result<(), SketchError> {
+    pub(crate) fn check_liftable(&self, points: &[PointId]) -> Result<(), SketchError> {
         for &p in points {
             if self.points[p].z.is_none() {
                 self.refuse_glyph_point(p)?;

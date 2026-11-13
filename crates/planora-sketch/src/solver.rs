@@ -219,11 +219,31 @@ impl SolveReport {
 /// 10 mm Abstand: 1e-2, deutlich über der Stillstandsschwelle).
 const DRAG_WEIGHT: f64 = 1e-2;
 
-/// Zug eines Punktes zu einer Zielposition.
+/// Zug eines Punktes zu einer Zielposition (Skizzen 10: im Raum).
+///
+/// - `plane: None` heißt Skizzenebene, wie bisher: Es ziehen nur x und y des Ziels, z des Ziels
+///   zählt nicht, und ein 3D-Punkt behält seine Höhe frei (er wandert parallel zur Skizzenebene).
+/// - `plane: Some((punkt, normale))` ist die Zugebene (aktive Triadenebene oder die Ebene parallel
+///   zum Bildschirm durch den gefassten Punkt): Das Ziel wird auf diese Ebene geworfen, und ein
+///   3D-Punkt zieht in allen drei Koordinaten dorthin. Ein 2D-Punkt zieht nur in x und y.
 #[derive(Clone, Copy, Debug)]
 pub struct Drag {
     pub point: PointId,
-    pub target: DVec2,
+    pub target: DVec3,
+    pub plane: Option<(DVec3, DVec3)>,
+}
+
+impl Drag {
+    /// Das Ziel, auf die Zugebene geworfen (ohne Ebene unverändert).
+    fn aim(&self) -> DVec3 {
+        match self.plane {
+            Some((o, n)) => {
+                let n = n.normalize();
+                self.target - n * (self.target - o).dot(n)
+            }
+            None => self.target,
+        }
+    }
 }
 
 /// Zusammenhangskomponente aus Variablen und Abhängigkeiten.
@@ -380,10 +400,16 @@ impl Sketch {
         let mut trial = self.clone();
         let mut pins = Vec::with_capacity(hold.len());
         for &p in hold {
-            let Ok(at) = self.point_xy(p) else {
+            let Ok(at) = self.point_xyz(p) else {
                 return false;
             };
-            match trial.add_constraint(ConstraintKind::Fixed(p, at.x, at.y)) {
+            // Ein 3D-Punkt steht auch in z fest (Skizzen 10).
+            let pin = if self.is_3d_point(p) {
+                ConstraintKind::Fixed3(p, at.x, at.y, at.z)
+            } else {
+                ConstraintKind::Fixed(p, at.x, at.y)
+            };
+            match trial.add_constraint(pin) {
                 Ok(id) => pins.push(id),
                 Err(_) => return false,
             }
@@ -415,7 +441,11 @@ impl Sketch {
     pub(crate) fn solve_holding_connected(&mut self, hold: &[PointId]) -> bool {
         let own: HashSet<usize> = hold
             .iter()
-            .flat_map(|&p| [self.points[p].x, self.points[p].y])
+            .flat_map(|&p| {
+                [self.points[p].x, self.points[p].y]
+                    .into_iter()
+                    .chain(self.points[p].z)
+            })
             .collect();
         let (groups, _) = self.build_groups();
         let keep: HashSet<ConstraintId> = groups
@@ -530,6 +560,7 @@ impl Sketch {
         let mut vars: Vec<usize> = Vec::with_capacity(hold.len() * 2);
         for &p in hold {
             vars.extend([self.points[p].x, self.points[p].y]);
+            vars.extend(self.points[p].z);
         }
         for (_, d) in self.constraints().filter(|(_, d)| d.enabled) {
             if let ConstraintKind::PointOnCurve(p, c) = d.kind
@@ -1494,33 +1525,62 @@ impl Sketch {
             }
             crate::model::finite(d.target.x, || tr!("sketch-err-what-target-x"))?;
             crate::model::finite(d.target.y, || tr!("sketch-err-what-target-y"))?;
+            if let Some((o, n)) = d.plane {
+                // Eine Zugebene braucht einen endlichen Punkt und eine normierbare Normale.
+                if !(o.is_finite() && n.is_finite() && n.length() > 0.0) {
+                    return Err(SketchError::InvalidInput(tr!("sketch-err-drag-plane")));
+                }
+                crate::model::finite(d.target.z, || tr!("sketch-err-what-target-z"))?;
+                let aim = d.aim();
+                for v in [aim.x, aim.y, aim.z] {
+                    crate::model::finite(v, || tr!("sketch-err-what-target-z"))?;
+                }
+            }
         }
         let mapped: Vec<Drag>;
         let drags = if self.patterns().next().is_some() {
             mapped = drags
                 .iter()
-                .map(|d| match self.instance_drag_target(d.point, d.target) {
-                    Some((point, target)) if target.is_finite() => Drag { point, target },
-                    _ => *d,
-                })
+                .map(
+                    |d| match self.instance_drag_target(d.point, d.target.truncate()) {
+                        Some((point, target)) if target.is_finite() => Drag {
+                            point,
+                            target: target.extend(d.target.z),
+                            plane: d.plane,
+                        },
+                        _ => *d,
+                    },
+                )
                 .collect();
             &mapped[..]
         } else {
             drags
         };
+        // Zieht auch z: ein 3D-Punkt mit Zugebene.
+        let with_z = |s: &Sketch, d: &Drag| d.plane.is_some() && s.points[d.point].z.is_some();
         let mut soft = Vec::with_capacity(2 * drags.len());
         for d in drags {
             let (xv, yv) = (self.points[d.point].x, self.points[d.point].y);
+            let aim = d.aim();
             soft.push(Soft {
                 var: xv,
-                target: d.target.x,
+                target: aim.x,
                 weight: DRAG_WEIGHT,
             });
             soft.push(Soft {
                 var: yv,
-                target: d.target.y,
+                target: aim.y,
                 weight: DRAG_WEIGHT,
             });
+            if with_z(self, d)
+                && let Some(zv) = self.points[d.point].z
+            {
+                soft.push(Soft {
+                    var: zv,
+                    target: aim.z,
+                    weight: DRAG_WEIGHT,
+                });
+            }
         }
         // Punkte ohne jede Abhängigkeit folgen dem Zug direkt. Ebenso Punkte, die keine aktive Zeile
         // liest, obwohl eine Abhängigkeit an ihrer Kurve hängt: Der Löser sähe sie in keiner Gruppe,
@@ -1536,9 +1596,15 @@ impl Sketch {
                     self.instance_drag_target(d.point, DVec2::ZERO).is_none()
                         && !read[xv]
                         && !read[yv]
+                        && self.points[d.point].z.is_none_or(|zv| !read[zv])
                 });
             if free {
-                self.set_point_xy(d.point, d.target.x, d.target.y)?;
+                let aim = d.aim();
+                if with_z(self, d) {
+                    self.set_point_xyz(d.point, aim)?;
+                } else {
+                    self.set_point_xy(d.point, aim.x, aim.y)?;
+                }
             }
         }
         let mut held = HashSet::new();
@@ -1548,6 +1614,7 @@ impl Sketch {
                 .instance_drag_target(p, self.pos(p))
                 .map_or(p, |(source, _)| source);
             held.extend([self.points[p].x, self.points[p].y]);
+            held.extend(self.points[p].z);
         }
         Ok(self.solve_with_soft_holding(&soft, &held))
     }

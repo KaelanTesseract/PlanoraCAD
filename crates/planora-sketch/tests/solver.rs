@@ -201,7 +201,8 @@ fn a_tangent_at_a_shared_end_is_no_redundancy_and_holds_the_direction() {
         let r = s
             .drag(&[planora_sketch::solver::Drag {
                 point: m,
-                target: DVec2::new(14.0, 9.0),
+                target: DVec2::new(14.0, 9.0).extend(0.0),
+                plane: None,
             }])
             .unwrap();
         assert_eq!(r.status, SolveStatus::Solved, "{r:?}");
@@ -228,7 +229,8 @@ fn a_tangent_between_two_arcs_at_a_shared_end_keeps_the_centres_in_line() {
     let d = s
         .drag(&[planora_sketch::solver::Drag {
             point: m2,
-            target: DVec2::new(3.0, 5.0),
+            target: DVec2::new(3.0, 5.0).extend(0.0),
+            plane: None,
         }])
         .unwrap();
     assert_eq!(d.status, SolveStatus::Solved, "{d:?}");
@@ -264,7 +266,8 @@ fn a_drifted_tangent_at_a_shared_end_of_an_old_sketch_stays_solved() {
         let d = s
             .drag(&[planora_sketch::solver::Drag {
                 point: other,
-                target: DVec2::new(10.0, 9.0),
+                target: DVec2::new(10.0, 9.0).extend(0.0),
+                plane: None,
             }])
             .unwrap();
         assert_eq!(d.status, SolveStatus::Solved, "{off}: {d:?}");
@@ -358,7 +361,8 @@ fn free_geometry_in_a_tangent_chain_stays_draggable_beside_a_drifted_tangent() {
             let d = moved
                 .drag(&[planora_sketch::solver::Drag {
                     point: p,
-                    target: DVec2::new(t.0, t.1),
+                    target: DVec2::new(t.0, t.1).extend(0.0),
+                    plane: None,
                 }])
                 .unwrap();
             assert_eq!(d.status, SolveStatus::Solved, "{off} {t:?}: {d:?}");

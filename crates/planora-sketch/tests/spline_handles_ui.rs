@@ -171,7 +171,8 @@ fn a_held_drag_leaves_no_numbers_for_the_next_solve() {
         .drag_holding(
             &[Drag {
                 point: t,
-                target: to,
+                target: to.extend(0.0),
+                plane: None,
             }],
             &[pts[2]],
         )

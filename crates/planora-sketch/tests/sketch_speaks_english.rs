@@ -124,7 +124,8 @@ fn real_failures() -> Vec<SketchError> {
     note(
         s.drag(&[Drag {
             point: a,
-            target: DVec2::new(nan, 0.0),
+            target: DVec2::new(nan, 0.0).extend(0.0),
+            plane: None,
         }])
         .map(|_| ()),
     );

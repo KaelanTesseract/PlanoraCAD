@@ -32,7 +32,8 @@ fn rectangle_stays_axis_parallel_after_solving_and_dragging_a_corner() {
     let rep = s
         .drag(&[planora_sketch::solver::Drag {
             point: r.points[2],
-            target: DVec2::new(9.0, 10.0),
+            target: DVec2::new(9.0, 10.0).extend(0.0),
+            plane: None,
         }])
         .unwrap();
     assert_eq!(rep.status, SolveStatus::Solved);
@@ -366,7 +367,8 @@ fn a_patterned_rectangle_has_no_redundant_constraints() {
         let dragged = s
             .drag(&[Drag {
                 point: r.points[2],
-                target: DVec2::new(12.0, 7.0),
+                target: DVec2::new(12.0, 7.0).extend(0.0),
+                plane: None,
             }])
             .unwrap();
         assert_eq!(dragged.status, SolveStatus::Solved, "{dragged:?}");

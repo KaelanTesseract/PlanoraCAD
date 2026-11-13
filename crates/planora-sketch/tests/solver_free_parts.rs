@@ -151,7 +151,8 @@ fn a_free_arc_stays_bit_exact_under_drag_hold_and_patterns() {
     let r = s
         .drag(&[Drag {
             point: b,
-            target: v(-5.0, 40.0),
+            target: v(-5.0, 40.0).extend(0.0),
+            plane: None,
         }])
         .unwrap();
     assert_eq!(r.status, SolveStatus::Solved, "{r:?}");

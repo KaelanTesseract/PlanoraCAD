@@ -15,7 +15,8 @@ fn dragging_a_free_point_moves_it_exactly() {
     let r = s
         .drag(&[Drag {
             point: a,
-            target: DVec2::new(3.0, -4.0),
+            target: DVec2::new(3.0, -4.0).extend(0.0),
+            plane: None,
         }])
         .unwrap();
     assert_eq!(r.status, SolveStatus::Solved);
@@ -38,7 +39,8 @@ fn dragging_respects_hard_constraints() {
     let r = s
         .drag(&[Drag {
             point: b,
-            target: DVec2::new(7.0, 7.0),
+            target: DVec2::new(7.0, 7.0).extend(0.0),
+            plane: None,
         }])
         .unwrap();
     assert_eq!(r.status, SolveStatus::Solved, "{r:?}");
@@ -66,7 +68,13 @@ fn dragging_a_hinge_never_flips_to_the_mirror_solution() {
         DVec2::new(4.5, 2.0),
         DVec2::new(3.5, 3.5),
     ] {
-        let r = s.drag(&[Drag { point: m, target }]).unwrap();
+        let r = s
+            .drag(&[Drag {
+                point: m,
+                target: target.extend(0.0),
+                plane: None,
+            }])
+            .unwrap();
         assert_eq!(r.status, SolveStatus::Solved, "{r:?}");
         let pm = s.point_xy(m).unwrap();
         assert!(pm.y > 0.0, "ist nach unten umgeklappt: {pm:?}");
@@ -90,7 +98,8 @@ fn dragging_in_a_degenerate_direction_keeps_the_state_valid() {
     let r = s
         .drag(&[Drag {
             point: b,
-            target: DVec2::ZERO,
+            target: DVec2::ZERO.extend(0.0),
+            plane: None,
         }])
         .unwrap();
     assert!(s.variables().iter().all(|v| v.is_finite()));
@@ -106,7 +115,8 @@ fn drag_rejects_bad_input() {
     assert!(matches!(
         s.drag(&[Drag {
             point: a,
-            target: DVec2::new(f64::NAN, 0.0)
+            target: DVec2::new(f64::NAN, 0.0).extend(0.0),
+            plane: None
         }]),
         Err(SketchError::InvalidInput(_))
     ));
@@ -114,7 +124,8 @@ fn drag_rejects_bad_input() {
     assert_eq!(
         s.drag(&[Drag {
             point: bogus,
-            target: DVec2::ZERO
+            target: DVec2::ZERO.extend(0.0),
+            plane: None
         }])
         .unwrap_err(),
         SketchError::UnknownObject
@@ -162,7 +173,8 @@ fn dragging_a_free_point_solves_other_groups_like_a_plain_solve() {
     let r = s
         .drag(&[Drag {
             point: free,
-            target: DVec2::new(1.0, 2.0),
+            target: DVec2::new(1.0, 2.0).extend(0.0),
+            plane: None,
         }])
         .unwrap();
     assert_eq!(r.status, SolveStatus::Conflicting, "{r:?}");
@@ -192,7 +204,8 @@ fn dragging_one_group_does_not_touch_an_unrelated_conflicting_group() {
     let r = s
         .drag(&[Drag {
             point: b,
-            target: DVec2::new(0.0, 10.0),
+            target: DVec2::new(0.0, 10.0).extend(0.0),
+            plane: None,
         }])
         .unwrap();
     assert_eq!(r.status, SolveStatus::Conflicting, "{r:?}");
@@ -232,7 +245,8 @@ fn an_untouched_group_is_not_solved_again() {
     let r = s
         .drag(&[Drag {
             point: b,
-            target: DVec2::new(0.0, 10.0),
+            target: DVec2::new(0.0, 10.0).extend(0.0),
+            plane: None,
         }])
         .unwrap();
     assert_eq!(r.group_solves, 1, "{r:?}");
@@ -337,7 +351,8 @@ fn moving_a_free_end_of_a_line_into_a_group_is_seen_by_the_cache() {
     let r = s
         .drag(&[Drag {
             point: c,
-            target: DVec2::new(1.0, 7.0),
+            target: DVec2::new(1.0, 7.0).extend(0.0),
+            plane: None,
         }])
         .unwrap();
     assert_eq!(r.status, SolveStatus::Solved, "{r:?}");
@@ -371,7 +386,8 @@ fn a_line_between_two_groups_is_seen_by_the_cache() {
     // Start (b auf a) geprüft, das volle Lösen danach muss die neue Lage von b sehen.
     s.drag(&[Drag {
         point: b,
-        target: DVec2::new(8.0, 8.0),
+        target: DVec2::new(8.0, 8.0).extend(0.0),
+        plane: None,
     }])
     .unwrap();
     let pb = s.point_xy(b).unwrap();
@@ -392,7 +408,11 @@ fn drag_rejects_targets_beyond_max_coord() {
     s.add_constraint(K::Distance(a, b, 4.0)).unwrap();
     for target in [DVec2::new(2e9, 0.0), DVec2::new(0.0, -2e9)] {
         assert!(matches!(
-            s.drag(&[Drag { point: b, target }]),
+            s.drag(&[Drag {
+                point: b,
+                target: target.extend(0.0),
+                plane: None
+            }]),
             Err(SketchError::InvalidInput(_))
         ));
     }
@@ -503,7 +523,8 @@ fn drag_failed_names_only_the_groups_that_use_the_dragged_values() {
     let r = s
         .drag(&[Drag {
             point: free,
-            target: DVec2::new(1.0, 2.0),
+            target: DVec2::new(1.0, 2.0).extend(0.0),
+            plane: None,
         }])
         .unwrap();
     assert_eq!(r.status, SolveStatus::Conflicting);
@@ -511,7 +532,8 @@ fn drag_failed_names_only_the_groups_that_use_the_dragged_values() {
     let r = s
         .drag(&[Drag {
             point: unrelated[0],
-            target: DVec2::new(21.0, 0.0),
+            target: DVec2::new(21.0, 0.0).extend(0.0),
+            plane: None,
         }])
         .unwrap();
     assert!(r.drag_failed, "{r:?}");
@@ -529,7 +551,8 @@ fn drag_failed_sees_a_free_point_that_collapses_a_line_of_a_group() {
     let r = s
         .drag(&[Drag {
             point: c,
-            target: DVec2::ZERO,
+            target: DVec2::ZERO.extend(0.0),
+            plane: None,
         }])
         .unwrap();
     assert!(r.drag_failed, "{r:?}");

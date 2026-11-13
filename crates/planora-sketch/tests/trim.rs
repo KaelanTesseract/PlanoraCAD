@@ -131,7 +131,8 @@ fn the_middle_piece_leaves_two_horizontal_collinear_lines() {
     // kollinear: nach dem Ziehen des freien Endes bleibt die zweite Linie auf der Geraden
     s.drag(&[Drag {
         point: hb,
-        target: DVec2::new(12.0, 3.0),
+        target: DVec2::new(12.0, 3.0).extend(0.0),
+        plane: None,
     }])
     .unwrap();
     let (a, d) = (xy(&s, ha), xy(&s, p0) - xy(&s, ha));

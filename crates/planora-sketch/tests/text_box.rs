@@ -309,7 +309,8 @@ fn moving_frame_moves_glyphs_keeps_ids() {
     let c0 = at(&s, corners[0]);
     s.drag(&[Drag {
         point: corners[0],
-        target: v(-5.0, -3.0),
+        target: v(-5.0, -3.0).extend(0.0),
+        plane: None,
     }])
     .unwrap();
     solved(&mut s);
@@ -718,7 +719,8 @@ fn unshaped_text_keeps_curves() {
     loaded
         .drag(&[Drag {
             point: corners[0],
-            target: v(-5.0, -3.0),
+            target: v(-5.0, -3.0).extend(0.0),
+            plane: None,
         }])
         .unwrap();
     let r = solved(&mut loaded);
@@ -1166,7 +1168,8 @@ fn reshape_that_sets_nothing_keeps_curves_and_profiles() {
                 let (_, corners) = frame(&sk, t);
                 sk.drag(&[Drag {
                     point: corners[0],
-                    target: v(-5.0, -3.0),
+                    target: v(-5.0, -3.0).extend(0.0),
+                    plane: None,
                 }])
                 .unwrap();
                 solved(&mut sk);

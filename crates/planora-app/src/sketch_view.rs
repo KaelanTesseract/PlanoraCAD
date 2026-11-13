@@ -201,11 +201,12 @@ pub fn kind_msg(kind: &ConstraintKind) -> crate::msg::Msg {
         K::PointOnCurve(..) => crate::msg!("sketch-constraint-point-on-curve"),
         K::Horizontal(..) => crate::msg!("sketch-constraint-horizontal"),
         K::Vertical(..) => crate::msg!("sketch-constraint-vertical"),
+        K::AlongZ(..) => crate::msg!("sketch-constraint-along-z"),
         K::Parallel(..) => crate::msg!("sketch-constraint-parallel"),
         K::Perpendicular(..) => crate::msg!("sketch-constraint-perpendicular"),
         K::Tangent(..) => crate::msg!("sketch-constraint-tangent"),
         K::Equal(..) => crate::msg!("sketch-constraint-equal"),
-        K::Fixed(..) => crate::msg!("sketch-constraint-fixed"),
+        K::Fixed(..) | K::Fixed3(..) => crate::msg!("sketch-constraint-fixed"),
         K::Symmetric(..) => crate::msg!("sketch-constraint-symmetric"),
         K::Midpoint(..) => crate::msg!("sketch-constraint-midpoint"),
         K::Distance(..) => crate::msg!("sketch-constraint-distance"),
@@ -364,13 +365,14 @@ pub fn overlay_text(
         | K::SplineCurvatureHandle(..) => return String::new(),
         K::Horizontal(..) => "H".to_string(),
         K::Vertical(..) => "V".to_string(),
+        K::AlongZ(..) => "Z".to_string(),
         K::Parallel(..) => parallel_symbol(ctx).to_string(),
         K::Perpendicular(..) => perpendicular_symbol(ctx),
         K::Equal(..) => "=".to_string(),
         K::Tangent(..) => "T".to_string(),
         // Der Punkt im Ursprung ist „deckungsgleich mit dem Ursprung“, kein Festsetzen von Hand.
         K::Fixed(_, x, y) if *x == 0.0 && *y == 0.0 => return String::new(),
-        K::Fixed(..) => "fix".to_string(),
+        K::Fixed(..) | K::Fixed3(..) => "fix".to_string(),
         K::Midpoint(..) => tr!("sketch-overlay-midpoint"),
         K::Symmetric(..) => tr!("sketch-overlay-symmetric"),
         K::PointOnCurve(..) => tr!("sketch-overlay-on-curve"),
@@ -471,11 +473,14 @@ fn anchors(sk: &Sketch, kind: &ConstraintKind) -> Vec<DVec2> {
     use ConstraintKind as K;
     let mid = |a: Option<DVec2>, b: Option<DVec2>| a.zip(b).map(|(a, b)| (a + b) * 0.5);
     let found = match kind {
-        K::Horizontal(LineOrPoints::Line(c)) | K::Vertical(LineOrPoints::Line(c)) => {
+        K::Horizontal(LineOrPoints::Line(c))
+        | K::Vertical(LineOrPoints::Line(c))
+        | K::AlongZ(LineOrPoints::Line(c)) => {
             vec![curve_anchor(sk, *c)]
         }
         K::Horizontal(LineOrPoints::Points(a, b))
         | K::Vertical(LineOrPoints::Points(a, b))
+        | K::AlongZ(LineOrPoints::Points(a, b))
         | K::Distance(a, b, _)
         | K::DistanceX(a, b, _)
         | K::DistanceY(a, b, _)
@@ -496,7 +501,11 @@ fn anchors(sk: &Sketch, kind: &ConstraintKind) -> Vec<DVec2> {
             }
         }
         K::Angle(a, b, _) => vec![mid(curve_anchor(sk, *a), curve_anchor(sk, *b))],
-        K::Fixed(p, ..) | K::Midpoint(p, _) | K::PointOnCurve(p, _) | K::Coincident(p, _) => {
+        K::Fixed(p, ..)
+        | K::Fixed3(p, ..)
+        | K::Midpoint(p, _)
+        | K::PointOnCurve(p, _)
+        | K::Coincident(p, _) => {
             vec![pos(sk, *p)]
         }
         K::Symmetric(a, b, _) => vec![pos(sk, *a), pos(sk, *b)],

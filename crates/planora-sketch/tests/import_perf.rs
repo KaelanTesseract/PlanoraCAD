@@ -214,7 +214,8 @@ fn chained_bulge_arcs_insert_and_drag() {
         let t = Instant::now();
         let rep = s.drag(&[planora_sketch::solver::Drag {
             point: last,
-            target: at + DVec2::new(0.1, 0.1),
+            target: (at + DVec2::new(0.1, 0.1)).extend(0.0),
+            plane: None,
         }]);
         let drag = t.elapsed().as_secs_f64();
         println!(

@@ -35,7 +35,8 @@ fn dragging_a_tangent_circle_through_its_line_never_gives_a_negative_radius() {
         let r = s
             .drag(&[Drag {
                 point: m,
-                target: DVec2::new(5.0, y),
+                target: DVec2::new(5.0, y).extend(0.0),
+                plane: None,
             }])
             .unwrap();
         let radius = s.radius(c).unwrap();
@@ -90,7 +91,8 @@ fn dragging_an_arc_start_onto_its_fixed_centre_keeps_a_positive_radius() {
     assert_eq!(s.solve().status, SolveStatus::Solved);
     s.drag(&[Drag {
         point: a,
-        target: DVec2::ZERO,
+        target: DVec2::ZERO.extend(0.0),
+        plane: None,
     }])
     .unwrap();
     let r = s.radius(arc).unwrap();
@@ -109,7 +111,8 @@ fn a_collapsing_horizontal_line_is_not_accepted_while_dragging() {
         .unwrap();
     s.drag(&[Drag {
         point: b,
-        target: DVec2::ZERO,
+        target: DVec2::ZERO.extend(0.0),
+        plane: None,
     }])
     .unwrap();
     assert!(s.line_length(l).unwrap() > s.tolerance().linear);

@@ -129,7 +129,8 @@ fn a_fixed_point_does_not_follow_a_drag() {
     let r = s
         .drag(&[Drag {
             point: p,
-            target: DVec2::new(20.0, 20.0),
+            target: DVec2::new(20.0, 20.0).extend(0.0),
+            plane: None,
         }])
         .unwrap();
     assert_eq!(r.status, SolveStatus::Solved, "{r:?}");

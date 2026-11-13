@@ -740,7 +740,8 @@ fn path_change_moves_text_keeps_ids() {
     let before = positions(&s, t);
     s.drag(&[Drag {
         point: b,
-        target: v(80.0, 40.0),
+        target: v(80.0, 40.0).extend(0.0),
+        plane: None,
     }])
     .unwrap();
     assert_eq!(s.solve().status, SolveStatus::Solved);

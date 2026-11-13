@@ -230,7 +230,8 @@ fn radius_sets_the_curvature() {
         let rep = s
             .drag(&[Drag {
                 point: h.center,
-                target,
+                target: target.extend(0.0),
+                plane: None,
             }])
             .unwrap();
         assert!(!rep.drag_failed);
@@ -354,7 +355,8 @@ fn the_switch_also_holds_when_the_handle_moves() {
         let rep = s
             .drag(&[Drag {
                 point: h.tip,
-                target,
+                target: target.extend(0.0),
+                plane: None,
             }])
             .unwrap();
         assert!(!rep.drag_failed, "L = {l}: Ziehen gescheitert");
@@ -379,7 +381,8 @@ fn the_switch_also_holds_when_the_handle_moves() {
         let rep = s
             .drag(&[Drag {
                 point: h.other,
-                target,
+                target: target.extend(0.0),
+                plane: None,
             }])
             .unwrap();
         assert!(!rep.drag_failed, "Schritt {k}: Ziehen gescheitert");
@@ -409,7 +412,8 @@ fn the_center_cannot_change_sides() {
             let target = a - (pos(&s, h.center) - a).normalize() * far;
             s.drag(&[Drag {
                 point: h.center,
-                target,
+                target: target.extend(0.0),
+                plane: None,
             }])
             .unwrap();
             assert_eq!(is_left(&s), left, "Zug über {far}");
@@ -428,7 +432,8 @@ fn the_center_cannot_change_sides() {
             let rep = s
                 .drag(&[Drag {
                     point: h.tip,
-                    target,
+                    target: target.extend(0.0),
+                    plane: None,
                 }])
                 .unwrap();
             assert!(!rep.drag_failed, "Spitze, Schritt {k}");
@@ -488,7 +493,8 @@ fn drag_through_the_switch(scale: f64) {
         let rep = s
             .drag(&[Drag {
                 point: h.other,
-                target: end_at(r),
+                target: end_at(r).extend(0.0),
+                plane: None,
             }])
             .unwrap();
         assert!(!rep.drag_failed, "r = {r}: Ziehen gescheitert");
@@ -506,7 +512,8 @@ fn drag_through_the_switch(scale: f64) {
         let rep = s
             .drag(&[Drag {
                 point: h.other,
-                target,
+                target: target.extend(0.0),
+                plane: None,
             }])
             .unwrap();
         assert!(!rep.drag_failed, "Richtung {k}: Ziehen gescheitert");
@@ -628,7 +635,8 @@ fn handle_leaves_one_dof_for_the_radius() {
     assert!(
         !s.drag(&[Drag {
             point: h.other,
-            target
+            target: target.extend(0.0),
+            plane: None
         }])
         .unwrap()
         .drag_failed
@@ -778,7 +786,8 @@ fn curve_stays_g2_while_dragging() {
         assert!(
             !s.drag(&[Drag {
                 point: h.tip,
-                target
+                target: target.extend(0.0),
+                plane: None
             }])
             .unwrap()
             .drag_failed
@@ -793,7 +802,8 @@ fn curve_stays_g2_while_dragging() {
         assert!(
             !s.drag(&[Drag {
                 point: h.other,
-                target
+                target: target.extend(0.0),
+                plane: None
             }])
             .unwrap()
             .drag_failed
@@ -809,7 +819,8 @@ fn curve_stays_g2_while_dragging() {
         assert!(
             !s.drag(&[Drag {
                 point: h.center,
-                target
+                target: target.extend(0.0),
+                plane: None
             }])
             .unwrap()
             .drag_failed
@@ -1085,7 +1096,8 @@ fn inner_handle_tip_and_fit_point_follow_a_drag_beside_a_curvature_handle() {
                 .drag_holding(
                     &[Drag {
                         point: tip,
-                        target: to,
+                        target: to.extend(0.0),
+                        plane: None,
                     }],
                     &[pts[k]],
                 )
@@ -1106,7 +1118,8 @@ fn inner_handle_tip_and_fit_point_follow_a_drag_beside_a_curvature_handle() {
             let to = DVec2::new(xy[k].0, xy[k].1) + pull;
             s.drag(&[Drag {
                 point: pts[k],
-                target: to,
+                target: to.extend(0.0),
+                plane: None,
             }])
             .unwrap();
             assert!(
@@ -1155,7 +1168,8 @@ fn aiming_the_curvature_arc_reaches_the_nearest_end_from_a_flat_start() {
             s.drag_holding(
                 &[Drag {
                     point: h.other,
-                    target,
+                    target: target.extend(0.0),
+                    plane: None,
                 }],
                 &[pts[end], h.tip],
             )
@@ -1218,7 +1232,8 @@ fn aiming_does_not_flip_between_two_branches_when_the_target_wobbles() {
         s.drag_holding(
             &[Drag {
                 point: h.other,
-                target: q,
+                target: q.extend(0.0),
+                plane: None,
             }],
             &[pts[3], h.tip],
         )

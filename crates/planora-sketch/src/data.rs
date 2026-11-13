@@ -923,6 +923,7 @@ fn constraint_numbers_ok(k: &ConstraintKind) -> bool {
     let ok = |v: f64| v.is_finite() && v.abs() <= MAX_COORD;
     match k {
         Fixed(_, x, y) => ok(*x) && ok(*y),
+        Fixed3(_, x, y, z) => ok(*x) && ok(*y) && ok(*z),
         Distance(_, _, v)
         | DistancePointLine(_, _, v)
         | Radius(_, v)
