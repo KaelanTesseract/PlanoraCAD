@@ -710,7 +710,7 @@ fn constraint_to(k: &ConstraintKind) -> ConstraintKindDto {
             z: *z,
         },
         K::InPlane(k) => D::InEbene { kurve: c(k) },
-        K::EllipseAxes3(k, x, y, z, m) => D::EllipsenAchsen3 {
+        K::EllipseAxes3(k, x, y, z, m) => D::Ellipsenachsen3 {
             kurve: c(k),
             x: *x,
             y: *y,
@@ -777,7 +777,7 @@ fn constraint_from(d: &ConstraintKindDto) -> ConstraintKind {
         D::EntlangZ { ziel } => K::AlongZ(lop_from(ziel)),
         D::Fest3 { punkt, x, y, z } => K::Fixed3(p(*punkt), *x, *y, *z),
         D::InEbene { kurve } => K::InPlane(c(*kurve)),
-        D::EllipsenAchsen3 {
+        D::Ellipsenachsen3 {
             kurve,
             x,
             y,
@@ -3511,7 +3511,7 @@ fn has_format_20_data(k: &KindDto) -> bool {
                 ConstraintKindDto::EntlangZ { .. }
                     | ConstraintKindDto::Fest3 { .. }
                     | ConstraintKindDto::InEbene { .. }
-                    | ConstraintKindDto::EllipsenAchsen3 { .. }
+                    | ConstraintKindDto::Ellipsenachsen3 { .. }
             )
         })
 }

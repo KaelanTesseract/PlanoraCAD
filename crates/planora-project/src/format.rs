@@ -1048,7 +1048,6 @@ pub enum ConstraintKindDto {
         wert: f64,
     },
     /// Ab Format 20: Linie oder zwei Punkte parallel zur z-Achse der Skizze.
-    #[serde(rename = "entlangZ")]
     EntlangZ {
         ziel: LineOrPointsDto,
     },
@@ -1066,8 +1065,7 @@ pub enum ConstraintKindDto {
     },
     /// Ab Format 20, intern: große Halbachse (x, y, z) und kleine Halbachse einer einbezogenen
     /// Ellipse im Raum.
-    #[serde(rename = "ellipsenachsen3")]
-    EllipsenAchsen3 {
+    Ellipsenachsen3 {
         kurve: usize,
         x: f64,
         y: f64,
@@ -1116,7 +1114,7 @@ pub struct SketchDto {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub texte: Vec<TextDto>,
     /// Haken „3D-Skizze“ (ab Format 20); fehlt, wenn aus.
-    #[serde(rename = "dreiD", default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub drei_d: bool,
 }
 

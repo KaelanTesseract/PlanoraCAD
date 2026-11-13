@@ -240,7 +240,7 @@ Nicht im Umfang: Isoparametrische Kurve und Gedrehtes Profil. Sie stehen in der 
 ### 9. Datei, Baum, Texte
 
 - **Format 20:** Nur wenn eine Skizze einen 3D-Punkt, eine Kurve mit Normale, eine 3D-FixedSpline, eine der neuen `CopySource`-Arten oder `three_d = true` enthält (`needs_format_20`).
-  - Neue Felder: `PointDto.z` und `CurveDto.normale`, beide weggelassen, wenn leer, dazu `SketchDto.dreiD` (nur wenn wahr).
+  - Neue Felder: `PointDto.z` und `CurveDto.normale`, beide weggelassen, wenn leer, dazu `SketchDto.drei_d` (nur wenn wahr).
   - Alte Dateien bleiben bytegleich. Eine Datei mit Format 20 lehnen ältere Programme wie gewohnt ab.
 - **Baum:** Eine Skizze mit 3D-Geometrie bekommt kein eigenes Symbol. *(Fusion unterscheidet laut Hilfe nicht.)*
 - **Texte:** alle über `tr!`, de und en, Namen wie in der deutschen und englischen Fusion. Die genauen deutschen Begriffe aus Fusions deutscher Oberfläche sind Annahmen: „3D-Skizze“, „3D-Geometrie einbeziehen“, „Auf Fläche projizieren“, „Schnittkurve“, „Nächster Punkt“, „Entlang Vektor“, „Triadenausrichtung zurücksetzen“, „Drehgriffe anzeigen“, „Ebenen anzeigen“.
@@ -266,7 +266,7 @@ Nicht im Umfang: Isoparametrische Kurve und Gedrehtes Profil. Sie stehen in der 
     - Y wird `Vertical`.
     - Z wird die neue Art `AlongZ(LineOrPoints)`.
   - `Horizontal` und `Vertical` behalten ihre Bedeutung, sie rechnen an 3D-Geometrie nur in der 3D-Fassung, also parallel zur X- bzw. Y-Achse, mit z-Anteil 0.
-  - Die Datei bekommt nur `AlongZ` neu (Format 20). Das Symbol für Z ist ein senkrechter Strich mit „Z“.
+  - In die Datei kommen neu `entlang_z`, `fest3` sowie die internen `in_ebene` und `ellipsenachsen3` (Format 20). Das Symbol für Z ist ein senkrechter Strich mit „Z“.
 
 ## Etappen (ein Zweig `feature/skizzen-3d`, je Etappe Handtest nach Dennis' Go)
 

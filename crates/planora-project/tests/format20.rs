@@ -105,11 +105,11 @@ fn old_file_bytes_unchanged() {
             assert_eq!(format_of(&back), format_of(text), "{name}");
             assert!(format_of(&back) < 20, "{name}");
             for field in [
-                "\"dreiD\"",
+                "\"drei_d\"",
                 "\"normale\"",
                 "\"az\"",
                 "\"hoehen\"",
-                "entlangZ",
+                "entlang_z",
                 "fest3",
                 "in_ebene",
                 "ellipsenachsen3",
@@ -132,7 +132,7 @@ fn plain_sketch_stays_below_20() {
     let snap = document(sk).snapshot();
     assert!(required_format(&snap) < 20);
     let text = encode_version(&snap).unwrap();
-    assert!(!text.contains("\"dreiD\""));
+    assert!(!text.contains("\"drei_d\""));
     let v: serde_json::Value = serde_json::from_str(&text).unwrap();
     let p = &v["features"][0]["art"]["skizze"]["punkte"][0];
     assert!(p.get("z").is_none(), "{p}");
@@ -155,7 +155,7 @@ fn sketch_with_3d_point_writes_20_and_roundtrips() {
     assert!(sk["punkte"][0]["z"].is_u64(), "{}", sk["punkte"][0]);
     assert!(sk["punkte"][1].get("z").is_none());
     assert!(text.contains("\"fest3\""), "{text}");
-    assert!(sk.get("dreiD").is_none());
+    assert!(sk.get("drei_d").is_none());
 }
 
 /// Gelöscht zählt mit: Der Eintrag steht samt z in der Datei.
@@ -198,7 +198,7 @@ fn normal_and_along_z_roundtrip() {
         s.constraint(dist)
             .is_some_and(|d| d.kind == K::Distance(p, q, 4.0))
     );
-    for name in ["\"normale\"", "\"az\"", "entlangZ", "in_ebene"] {
+    for name in ["\"normale\"", "\"az\"", "entlang_z", "in_ebene"] {
         assert!(text.contains(name), "{name} fehlt");
     }
 }
@@ -247,13 +247,13 @@ fn three_d_flag_alone_needs_20() {
     assert!(sketch_of(&back).to_data().three_d);
     let v: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(
-        v["features"][0]["art"]["skizze"]["dreiD"],
+        v["features"][0]["art"]["skizze"]["drei_d"],
         serde_json::json!(true)
     );
 }
 
 #[test]
-fn format_20_rejected_by_19_reader_message() {
+fn format_21_is_too_new() {
     let mut sk = new_sketch();
     sk.set_three_d(true);
     let text = encode_version(&document(sk).snapshot()).unwrap().replacen(
@@ -319,7 +319,7 @@ fn along_z_on_2d_line_rejected_on_load() {
             .as_array_mut()
             .unwrap()
             .push(serde_json::json!({
-                "art": {"typ": "entlangZ", "ziel": {"typ": "linie", "kurve": l.index()}},
+                "art": {"typ": "entlang_z", "ziel": {"typ": "linie", "kurve": l.index()}},
                 "zweig": 0, "gesteuert": false, "aktiv": true, "intern": false,
                 "extra": null, "lebt": true
             }));
