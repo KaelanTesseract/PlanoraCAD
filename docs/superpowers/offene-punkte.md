@@ -2684,3 +2684,88 @@ Release-Build, Fenster 1920 × 1080, mit `tools/gui-drive.ps1`, APPDATA und USER
 - [ ] 9. **Abbruchwege:** Beim Anlegen nach dem Rahmen, mit offenem Abschnitt und beim Ändern jeweils Esc, Rechtsklick, Werkzeugwechsel und „Abbrechen“: Es bleibt nichts zurück, kein Rahmen, kein Rückgängig-Schritt; beim Ändern steht der alte Text wieder da.
 - [ ] 10. **Rahmen eines gewählten Textes:** Text anklicken. Der Rahmen erscheint in der Auswahlfarbe, ohne selbst gewählt zu sein. Bildentscheidung prüfen: Ist das gut zu sehen und nicht verwirrend?
 - [ ] 11. **Mehrere Warnungen an einer Skizze:** Skizze mit einer verlorenen Projektion und einem Text in einer fehlenden Schrift. Über dem Warnzeichen im Baum stehen beide Zeilen, lesbar und nicht abgeschnitten.
+
+## Teilprojekt Skizzen 9
+
+Stand 2026-11-13 auf dem Zweig `feature/skizzen-dxf-svg` (Spec `specs/2026-11-12-skizzen-dxf-svg-design.md`, Plan `plans/2026-11-12-skizzen-dxf-svg.md`). Tasks 1 bis 14 fertig und einzeln geprüft (Commits 3a7f23e bis 0379891), Doku mit Task 15. Die Gesamtprüfung des Zweigs mit ihrer Korrekturwelle und der volle Lauf unter Windows und WSL stehen noch aus. Der Handtest ist noch nicht gemacht.
+
+### Stand und Geliefertes
+- **Leser in `planora-exchange`** (Tasks 1 bis 5): DXF (Text und binär), SVG (auch SVGZ) und Bild (PNG, JPG, TIFF) werden zu einer neutralen 2D-Geometrie `Import2d`; Zählung dessen, was übersprungen wird; Grenzen `MAX_IMPORT_ELEMENTS` 100 000, Blocktiefe 16, `MAX_IMAGE_BYTES` 64 MiB, Bildkante 16 384 px; Fuzz-artige Tests mit kaputten Dateien.
+- **Einfügen in die Skizze** (Tasks 6 und 7): `Sketch::insert_geometry`, alles oder nichts, ein Rückgängig-Schritt, Zusammenführen der Endpunkte mit 1e-6 × Hüllquaderdiagonale; DXF frei, SVG fest; Abhängigkeit „Fest“ im Abhängigkeitsbefehl.
+- **Leinwand im Modell** (Tasks 8 und 9): `CanvasFeature` im Verlauf, Bilder einmal je Dokument (nach Prüfsumme), Ordner „Leinwände“ in der Sichtbarkeit, Dateiformat 19 nur mit Leinwand.
+- **Zeichnen** (Task 10): neue Pipeline für Bilder mit Deckkraft, mit oder ohne Tiefentest, Bilder über 4096 px werden für die GPU verkleinert.
+- **Oberfläche** (Tasks 11 bis 14): Menü „Einfügen“, DXF-, SVG- und Leinwand-Dialog mit Vorschau und Griffen, Ordner „Leinwände“ im Baum, Auswahl in der Ansicht, Kalibrieren, Dekodieren der Bilder im Hintergrund.
+- **Doku** (Task 15): `docs/funktionen.md` (Abschnitt „DXF, SVG und Leinwand (Skizzen 9)“), `CHANGELOG.md`, dieser Abschnitt.
+
+### Festlegungen mit Abweichungen
+
+**Abweichungen von Fusion**
+- **Esc beim Ziehen eines Griffs:** In den Dialogen DXF, SVG und Leinwand bricht Esc (und Rechtsklick) beim Ziehen nur das Ziehen ab, nicht den Dialog (wie die Griffe aus Skizzen 4). Fusion bricht mit Esc den ganzen Befehl ab.
+- **„Fest“ im Abhängigkeitsbefehl wirkt je Klick:** Schon der erste gewählte Punkt oder die erste Kurve wird fest (wie Fusions Fix/Unfix je Klick). Im Handtest prüfen.
+- **Achspfeile bleiben an den Skizzenachsen:** Die Felder X- und Y-Abstand sind Versätze entlang der Skizzenachsen; die Pfeile der Griffe zeigen genau diese Achsen. Gegen Fusion prüfen.
+- **Skalierung der Leinwand:** Ein Häkchen „Seitenverhältnis beibehalten“ schaltet zwischen einem Feld „Skalierung XY“ und den getrennten Feldern X und Y um; Fusion zeigt drei Felder (X, Y, XY) zugleich.
+- **Bild einer Leinwand tauschen:** Beim Bearbeiten lässt sich das Bild nicht wechseln (Fusion auch nicht); neu anlegen.
+- **Leinwand und offene Skizze:** Eine Leinwand lässt sich nicht einfügen, solange eine Skizze offen ist („Erst die Skizze beenden“). DXF und SVG gehen dagegen in die offene Skizze.
+- **Tasten:** „DXF einfügen“ und „SVG einfügen“ gelten überall im Programm, „Leinwand“ nur im Modell. Alle drei haben ab Werk keine Taste, sind aber belegbar; die Tasten wirken auch in einer offenen Skizze.
+- **SVG-Pfeilspitzen (Marker)** werden beim Einfügen ignoriert und als „unbekannt“ gezählt (vor dem Lesen aus dem Text geschnitten, damit sie nicht vervielfältigt werden können). Pfeilspitzen aus SVGs fehlen deshalb.
+- **SVG mit DTD oder `<!ENTITY`** wird abgelehnt (Schutz vor „Bomben“). Alte Dateien aus Illustrator mit Entities lassen sich nicht einfügen. Auch eine `<!ENTITY`-Zeile in einem Kommentar führt zur Ablehnung.
+- **SVG-Wiederholungen (`<use>`)** werden vorab gezählt und gegen `MAX_IMPORT_ELEMENTS` geprüft. Größte Dateien: SVG roh und entpackt 256 MiB (`MAX_SVG_BYTES`), DXF 256 MiB (`MAX_DXF_BYTES`), Bild 64 MiB.
+- **Gesamtgrenze der Bilder in einer Datei:** 1 GiB (nicht 8 GiB wie bei Netzen); wird in der Gesamtprüfung umgesetzt. Projekte mit mehr als 1 GiB Bildern lassen sich dann nicht speichern.
+- **Geschlossene 2-Punkt-Polylinie:** Sind beide Segmente gerade, wird es eine Linie; sonst bleiben alle Segmente erhalten (Halbscheibe = Bogen und Sehne, Linse = zwei Bögen), das Profil bleibt geschlossen.
+- **Splines aus DXF:** Stützpunkt-Splines werden zu `Spline`, nur geschlossene oder über die Punktgrenze hinaus zu festen Splines. NURBS mit mehr als 64 Punkten oder geschlossen werden exakt in mehrere Splines mit Kontrollpunkten zerlegt. Grad 2 und 4 werden auf 3 und 5 erhöht, Grad über 5 in Stücke zerlegt, zusammengefallene Stücke gelten als entartet. Einzelne Kurven werden dadurch fest statt bearbeitbar.
+- **BMP:** Das Programm kann BMP lesen (kommt mit dem DXF-Leser), lässt es aber als Leinwand nicht zu, weil Fusion nur PNG, JPG und TIFF nennt.
+- **Leinwand erscheint beim Laden verzögert:** Bilder werden im Hintergrund entschlüsselt; nach dem Öffnen einer Datei oder nach Rückgängig erscheint die Leinwand kurz später.
+- **Verlorene Fläche:** Ist die Fläche einer Leinwand weg, gibt es eine Warnung am Feature, die Leinwand bleibt an der letzten Stelle sichtbar (wie bei Projektionen).
+- **Layout-Tests und Auflösung:** Sechs Layout-Tests sind an die breitere Menüleiste angepasst, der Test bei 800×600 entfällt; 800×600 ist kein Ziel, getestet wird bei 1920×1080.
+
+**Annahmen der Spec** (aus dem Gedächtnis oder aus Foren, nicht belegt)
+- **Annahme (Forum):** Fusion fügt SVG-Geometrie wegen der Leistung fest ein.
+- **Annahme (Forum):** Im Rechtsklickmenü der Leinwand steht „Leinwand bearbeiten“.
+- **Annahme:** Eine Leinwand auf einer Körperfläche steht als eigener Eintrag im Verlauf und folgt der Fläche (Fusion nennt sie „Angehängte Leinwand“).
+- **Annahme:** Fusion zeigt in der Layerliste alle Layer angehakt, auch ausgeschaltete oder eingefrorene.
+- **Annahme:** Fusion überspringt bei SVG Text, Bilder, Masken und Clip-Pfade ähnlich; Clip-Pfade schneiden bei uns nicht.
+- **Annahme:** Fusion verbindet nahe Endpunkte ohne zusätzliche Koinzidenz-Abhängigkeiten.
+- **Annahme:** Der Kontrollpunktrahmen schaltet das Kontrollpolygon der eingefügten Splines dauerhaft an.
+- **Annahme:** Ist eine Skizze offen, wird dort eingefügt, das Wählfeld für die Ebene entfällt und „Eine Skizze pro Layer“ ist gesperrt.
+- **Annahme:** Der Y-Abstand im SVG-Dialog ist positiv nach unten, der Z-Winkel positiv im Uhrzeigersinn (gegen die Fusion-Hilfe prüfen; gilt auch für die Felder der Leinwand).
+- **Annahme:** Die Startgröße der Leinwand ist 1 px = 1 mm, damit das Kalibrieren einfach bleibt.
+- **Annahme:** Beim Anklicken einer auswählbaren Leinwand zählt das Rechteck des Bildes, Pixel mit Alpha 0 aber nicht.
+
+### Grenzen
+- **Keine Mipmaps:** Stark verkleinerte große Bilder können beim Drehen der Ansicht flimmern. Im Handtest prüfen.
+- **Überlappende Leinwände** werden nicht sortiert; ihre Reihenfolge ist nicht festgelegt.
+- **Ausgeblendete Leinwand** lässt sich nicht kalibrieren.
+- **Bilder in der Datei:** Sie stehen als Base64 in jeder gespeicherten Version erneut; große Bilder machen Projekte groß. Bewusst einfach gewählt.
+- **Kaputte Bildpunkte** werden erst beim Zeichnen bemerkt, beim Einfügen wird nur der Kopf der Datei geprüft.
+- **Kleine DXF-Zeichnung mit 2-Punkt-Fit-Spline:** Ein solcher Spline kann das Einfügen abbrechen.
+- **DXF-Blöcke:** Bemaßungen und Schraffuren in Blöcken werden nicht mitgezählt; Spiegeltext behält nur die Lage; mehr als eine Million Blockbesuche melden „zu viele Elemente“. Ein MTEXT-Formatcode ohne Semikolon verschluckt den Rest des Textes.
+- **SVG:** Null lange Linien werden still verworfen; Text in `defs`, der per `use` benutzt wird, wird nicht gezählt. Muster, Masken, Clip-Pfade und Filter könnten, je Verweis vervielfältigt, die Zählung umgehen; sie sollen wie die Marker vorab ausgeschnitten werden (Gesamtprüfung).
+- **Abbrechen beim DXF-Lesen:** Der DXF-Leser selbst lässt sich mitten in der Datei nicht abbrechen; Abbrechen wirkt davor und danach. Bei einem Fehler im Leser druckt der Panic-Hook auf stderr.
+- **Dekodieren** eines Bildes im Hintergrund läuft nach dem Abbrechen zu Ende.
+- **Datei mit Ordnerkennzeichen ohne Leinwand** (nur durch Handarbeit möglich) lässt sich nicht speichern; wird robuster gemacht (Gesamtprüfung).
+- **Taste für DXF oder SVG** in einer Zeichnung oder in einer älteren Version zeigt keinen Hinweis, sie tut still nichts.
+
+### Zahlen
+Release-Build, Messtests (Task 6):
+- 10 000 Linien einfügen: 0,015 s (Ziel unter 2 s).
+- Profile aus 2500 Profilen: 0,259 s.
+- Voller Lauf unter Windows und WSL: steht noch aus (nach der Gesamtprüfung).
+
+### Handliste für den Nutzer (Prüfung von Hand im echten Fenster, noch offen)
+Release-Build, Fenster 1920 × 1080, mit `tools/gui-drive.ps1`, APPDATA und USERPROFILE auf einen Testordner umgeleitet. Nur nach Dennis’ Go. Testdateien selbst gemacht oder aus einem Programm, das nicht von Autodesk ist. Jeweils prüfen: Texte lesbar, nichts ragt heraus, Meldung nennt den Grund. Abhaken:
+- [ ] 1. **DXF aus einem fremden Programm in richtiger Größe:** Eine DXF-Datei mit bekanntem Maß (etwa ein 100-mm-Quadrat, aus LibreCAD oder FreeCAD) über „Einfügen → DXF einfügen …“ einfügen. Die Einheit steht richtig, die Vorschau passt, nach OK misst die Kante 100 mm. Ohne Einheit in der Datei: Hinweis, und die Anzeigeeinheit ist vorgewählt. Ein Rückgängig-Schritt nimmt alles zurück.
+- [ ] 2. **DXF pro Layer:** Datei mit drei Layern, „Eine Skizze pro Layer“: drei Skizzen mit den Layernamen im Baum, abgewählte Layer fehlen. Ein Rückgängig nimmt alle drei zurück. In einer offenen Skizze ist „pro Layer“ gesperrt.
+- [ ] 3. **SVG-Logo mit Griffen, Spiegeln und Extrudieren:** Logo einfügen, mit den Griffen verschieben, drehen und skalieren; Felder und Griffe zeigen dasselbe. Horizontal spiegeln. OK, dann ein Profil extrudieren: Es entsteht ein Körper, Löcher bleiben Löcher.
+- [ ] 4. **Logo mit „Fest“ lösen:** Das eingefügte Logo ist fest (grün). Fixierung aufheben (oder im Abhängigkeitsbefehl „Fest“): Es lässt sich ziehen und bemaßen.
+- [ ] 5. **Foto als Leinwand:** „Einfügen → Leinwand …“, ein Foto auf die Grundebene legen, Deckkraft 50. „Kalibrieren“ im Rechtsklickmenü im Baum: zwei Punkte, bekannten Abstand tippen, Enter; das Maß stimmt. Deckkraft ändern. „Durch Objekte anzeigen“ aus: Ein Körper davor verdeckt das Bild. „Auswählbar“ aus: Der Klick geht durch. Das Auge im Baum blendet Leinwand und Ordner aus und ein.
+- [ ] 6. **Leinwand auf einer Körperfläche nach Höhenänderung:** Leinwand auf die obere Fläche eines Quaders legen, den Quader höher machen. Die Leinwand folgt. Die Fläche entfernen: Warnung am Feature, die Leinwand bleibt stehen.
+- [ ] 7. **Speichern und Laden:** Datei mit Leinwand speichern, schließen, öffnen: Leinwand, Deckkraft und Lage stimmen, das Bild erscheint (kurz verzögert), das Dokument gilt nicht als geändert. Rückgängig und Wiederholen mit Leinwand. Eine Datei ohne Leinwand bleibt im alten Format.
+- [ ] 8. **Kaputte Datei:** Abgeschnittene DXF- und SVG-Datei sowie eine Textdatei mit der Endung .png einfügen: verständliche Meldung im Dialog, der Dialog bleibt offen, nichts wird angelegt.
+- [ ] 9. **Abbrechen beim Lesen einer großen Datei:** Sehr große DXF- oder SVG-Datei wählen, im Fortschrittsbalken „Abbrechen“: Es bleibt nichts zurück, kein Rückgängig-Schritt, das Programm antwortet weiter.
+- [ ] 10. **Y-Richtung im SVG-Dialog gegen die Fusion-Hilfe prüfen:** Positiver Y-Abstand schiebt das Bild nach unten, positiver Z-Winkel dreht im Uhrzeigersinn. Mit der Fusion-Hilfe vergleichen; dasselbe in den Feldern der Leinwand.
+- [ ] 11. **Esc beim Griffziehen:** Beim Ziehen eines Griffs im SVG- oder Leinwand-Dialog Esc oder Rechtsklick: Nur das Ziehen wird abgebrochen, der Dialog bleibt offen. Ein zweites Esc schließt ihn und hinterlässt nichts. Auch mit offener Skizze ausprobieren (ein Esc darf nicht zugleich Skizzenwerkzeug und Dialog schließen).
+- [ ] 12. **XY oder X/Y bei der Leinwand:** Häkchen „Seitenverhältnis beibehalten“ an und aus; Skalierung XY und getrennt X und Y. Ist das gegenüber Fusions drei Feldern verständlich?
+- [ ] 13. **Verkleinerte große Leinwand:** Ein Foto mit mehr als 4096 px stark verkleinert ansehen und die Ansicht drehen: Flimmert es (keine Mipmaps)? Ist das tragbar?
+- [ ] 14. **„Fest“ im Abhängigkeitsbefehl:** Befehl „Fest“ wählen und einen Punkt anklicken: Er wird sofort fest; wie bei Fusions Fix/Unfix je Klick prüfen, ob sich ein fester Punkt auch wieder lösen lässt. Rückgängig je Klick.
+- [ ] 15. **Tasten in der offenen Skizze:** In den Einstellungen „DXF einfügen“ und „SVG einfügen“ auf Tasten legen. Taste in einer offenen Skizze: Der Dialog öffnet sich und fügt in diese Skizze ein. „Leinwand“ in der offenen Skizze: Meldung „Erst die Skizze beenden“.
+- [ ] 16. **1920×1080:** Menü „Einfügen“, alle drei Dialoge und der Ordner „Leinwände“ passen auf den Bildschirm, nichts ist abgeschnitten, die Menüleiste ist nicht zu breit.
