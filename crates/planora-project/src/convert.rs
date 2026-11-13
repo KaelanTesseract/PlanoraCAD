@@ -19,7 +19,8 @@ use planora_drawing::{
     Projection, RowOverride, Scale, SectionSpec, Sheet, ViewId, ViewKind, ViewSpec,
 };
 use planora_exchange::{
-    ExchangeError, ExchangeMesh, ImageFormat, MAX_FILE_BYTES, MAX_IMAGE_BYTES, probe_image,
+    ExchangeError, ExchangeMesh, ImageFormat, MAX_FILE_BYTES, MAX_IMAGE_BYTES,
+    MAX_IMAGES_TOTAL_BYTES, probe_image,
 };
 use planora_feature::planes::{AxisRef, PlaneBase, PlaneDef, PlaneFeature, PointRef, StdAxis};
 use planora_feature::{
@@ -53,9 +54,10 @@ pub const FORMAT_VERSION: u32 = 19;
 pub const CONTAINER_FORMAT: u32 = 1;
 /// Größte Summe der dekodierten Netzdaten eines Dokuments (wie die Dateigrenze beim Import).
 const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
-/// Größte Summe der Bildbytes eines Dokuments (Leinwände, Format 19): wie bei Netzen (Spec F).
-/// Ein einzelnes Bild ist zusätzlich auf `MAX_IMAGE_BYTES` begrenzt.
-const MAX_IMAGES_BYTES: u64 = MAX_FILE_BYTES;
+/// Größte Summe der Bildbytes eines Dokuments (Leinwände, Format 19): 1 GiB
+/// ([`MAX_IMAGES_TOTAL_BYTES`], Festlegung Task 9; dieselbe Grenze prüft die App schon beim
+/// Einfügen). Ein einzelnes Bild ist zusätzlich auf `MAX_IMAGE_BYTES` begrenzt.
+const MAX_IMAGES_BYTES: u64 = MAX_IMAGES_TOTAL_BYTES;
 
 /// Kleinste Formatnummer, die den Stand darstellt (die Regeln in dieser Reihenfolge geprüft): 19
 /// mit einer Leinwand (auch unterdrückt: ihr Bild muss in der Datei stehen) oder einem
@@ -1554,16 +1556,21 @@ fn image_format_name(f: ImageFormat) -> &'static str {
 /// Bilder für die Datei, aufsteigend nach Kennung. Vorher die Gesamtgrenze, damit ein zu großes
 /// Dokument eine klare Meldung bekommt und nicht erst riesige Texte entstehen.
 fn images_to(s: &Snapshot) -> Result<Vec<ImageDto>> {
+    images_to_limited(s, MAX_IMAGES_BYTES)
+}
+
+/// Wie [`images_to`] mit eigener Gesamtgrenze (Tests ohne riesige Bilder).
+fn images_to_limited(s: &Snapshot, max: u64) -> Result<Vec<ImageDto>> {
     let total = s
         .images
         .values()
         .fold(0u64, |sum, i| sum.saturating_add(i.bytes.len() as u64));
-    if total > MAX_IMAGES_BYTES {
+    if total > max {
         let mb = |b: u64| (b / (1024 * 1024)).to_string();
         return Err(ProjectError::Invalid(tr!(
             "proj-images-too-large-to-save",
             size = mb(total),
-            max = mb(MAX_IMAGES_BYTES)
+            max = mb(max)
         )));
     }
     Ok(s.images
@@ -1580,6 +1587,15 @@ fn images_to(s: &Snapshot) -> Result<Vec<ImageDto>> {
 /// gegen die Grenzen geprüft; danach prüft `probe_image` Format, Inhalt und Kantenlänge. Maße
 /// und Prüfsumme kommen aus den Bytes, nicht aus der Datei.
 fn images_from(origin: &str, list: &[ImageDto]) -> Result<BTreeMap<ImageId, Arc<CanvasImage>>> {
+    images_from_limited(origin, list, MAX_IMAGES_BYTES)
+}
+
+/// Wie [`images_from`] mit eigener Gesamtgrenze (Tests ohne riesige Bilder).
+fn images_from_limited(
+    origin: &str,
+    list: &[ImageDto],
+    max: u64,
+) -> Result<BTreeMap<ImageId, Arc<CanvasImage>>> {
     let mut total: u64 = 0;
     let mut out = BTreeMap::new();
     for d in list {
@@ -1608,7 +1624,7 @@ fn images_from(origin: &str, list: &[ImageDto]) -> Result<BTreeMap<ImageId, Arc<
             return Err(bad(&tr!("proj-image-too-big")));
         }
         total = total.saturating_add(len);
-        if total > MAX_IMAGES_BYTES {
+        if total > max {
             return Err(bad(&tr!("proj-images-too-big")));
         }
         let bytes = base64::decode(&d.daten).map_err(|e| bad(&e.to_string()))?;
@@ -3713,4 +3729,55 @@ fn rollbacks_from(origin: &str, file: &VersionFile) -> Result<Vec<FeatureId>> {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod image_limit_tests {
+    //! Gesamtgrenze der Bildbytes (Gesamtprüfung I5) mit kleiner Grenze statt 1 GiB.
+    use super::*;
+    use planora_feature::Document;
+
+    fn image(n: usize, fill: u8) -> Arc<CanvasImage> {
+        let bytes: Arc<[u8]> = vec![fill; n].into();
+        Arc::new(CanvasImage {
+            hash: image_hash(&bytes),
+            bytes,
+            format: ImageFormat::Png,
+            width: 1,
+            height: 1,
+        })
+    }
+
+    #[test]
+    fn the_constant_is_one_gib() {
+        assert_eq!(MAX_IMAGES_BYTES, 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn saving_refuses_images_over_the_total_limit() {
+        let mut s = Document::new().snapshot();
+        s.images.insert(ImageId(1), image(60, 1));
+        s.images.insert(ImageId(2), image(60, 2));
+        assert!(images_to_limited(&s, 120).is_ok());
+        let e = images_to_limited(&s, 119).unwrap_err();
+        assert!(e.to_string().contains("MB"), "{e}");
+    }
+
+    #[test]
+    fn loading_refuses_images_over_the_total_limit_before_decoding() {
+        let dto = |id: u64| ImageDto {
+            id,
+            format: "png".into(),
+            daten: base64::encode(&[7u8; 60]),
+        };
+        let list = [dto(1), dto(2)];
+        // Geprüft wird je Bild vor dem Entschlüsseln: schon das erste liegt über 59 Bytes.
+        let over = images_from_limited("t", &list, 59).unwrap_err().to_string();
+        assert!(over.contains(&tr!("proj-images-too-big")), "{over}");
+        // Innerhalb der Grenze kommt der Inhalt dran (hier kein echtes PNG).
+        let inside = images_from_limited("t", &list, 120)
+            .unwrap_err()
+            .to_string();
+        assert!(!inside.contains(&tr!("proj-images-too-big")), "{inside}");
+    }
 }

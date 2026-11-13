@@ -215,6 +215,8 @@ impl DocTab {
         // Neuer Zählerstand ohne Schritt, wie nach dem Zurückladen; das Bild des Verlaufs ist ab
         // jetzt der neu gesetzte Stand (Rückgängig kehrt dorthin zurück, nicht zur alten Form).
         self.tracker.reset(self.state.document.edit_count());
+        // Kein Schritt: Ein gemerkter Name gälte sonst für den nächsten, fremden Schritt.
+        self.state.undo_label_hint = None;
         let snapshot = self.state.snapshot();
         let bytes = snapshot_bytes(&snapshot);
         self.history.replace_current(snapshot, bytes);
@@ -498,6 +500,8 @@ impl DocTab {
     /// halten Kennungen des alten Stands und schließen.
     fn after_jump(&mut self) {
         self.tracker.reset(self.state.document.edit_count());
+        // Ein gemerkter Name (etwa „Kalibrieren“) gälte sonst für den nächsten, fremden Schritt.
+        self.state.undo_label_hint = None;
         // Das zurückgeladene Bild kann ungesetzte Texte halten (Schritt vor der Schriftliste).
         self.reshape_due = true;
         self.close_dialogs();

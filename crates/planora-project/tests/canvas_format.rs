@@ -447,12 +447,14 @@ fn image_too_big_in_file_is_error() {
 
 #[test]
 fn image_total_limit_is_error() {
+    // Gesamtgrenze 1 GiB (Gesamtprüfung I5), nicht mehr 8 GiB wie bei Netzen.
+    assert_eq!(planora_exchange::MAX_IMAGES_TOTAL_BYTES, 1024 * 1024 * 1024);
     // Mehr Bilder, als die Gesamtgrenze erlaubt; alle teilen sich dieselben Bytes (je so groß
     // wie ein Bild höchstens sein darf), darum braucht der Test nur einmal den Speicher.
     let (d, _) = canvas_doc();
     let mut s = d.snapshot();
     let big: Arc<[u8]> = vec![0u8; MAX_IMAGE_BYTES as usize].into();
-    let n = (planora_exchange::MAX_FILE_BYTES / MAX_IMAGE_BYTES) + 1;
+    let n = (planora_exchange::MAX_IMAGES_TOTAL_BYTES / MAX_IMAGE_BYTES) + 1;
     for i in 0..n {
         s.images.insert(
             ImageId(100 + i),
@@ -471,7 +473,7 @@ fn image_total_limit_is_error() {
     let want = tr!(
         "proj-images-too-large-to-save",
         size = (n * MAX_IMAGE_BYTES / mib).to_string(),
-        max = (planora_exchange::MAX_FILE_BYTES / mib).to_string()
+        max = (planora_exchange::MAX_IMAGES_TOTAL_BYTES / mib).to_string()
     );
     assert!(matches!(e, ProjectError::Invalid(_)), "{e:?}");
     assert_eq!(e.to_string(), want);

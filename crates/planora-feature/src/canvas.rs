@@ -189,6 +189,26 @@ impl Document {
         self.images.retain(|id, _| used.contains(id));
     }
 
+    /// Summe der Bildbytes aller benutzten Bilder, dazu `extra`, wenn es nicht schon (mit
+    /// gleichen Bytes) benutzt wird: Grundlage der Gesamtgrenze von 1 GiB beim Einfügen.
+    pub fn image_bytes_with(&self, extra: Option<&CanvasImage>) -> u64 {
+        let used = self.used_images();
+        let mut shared = false;
+        let mut total = used
+            .iter()
+            .filter_map(|id| self.images.get(id))
+            .fold(0u64, |sum, i| {
+                if extra.is_some_and(|e| e.hash == i.hash && e.bytes == i.bytes) {
+                    shared = true;
+                }
+                sum.saturating_add(i.bytes.len() as u64)
+            });
+        if let (Some(e), false) = (extra, shared) {
+            total = total.saturating_add(e.bytes.len() as u64);
+        }
+        total
+    }
+
     /// Bilder, auf die eine Leinwand verweist.
     pub(crate) fn used_images(&self) -> BTreeSet<ImageId> {
         self.features

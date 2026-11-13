@@ -775,3 +775,45 @@ fn wrong_extension_message() {
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Gesamtprüfung I5: Die Gesamtgrenze der Bildbytes (1 GiB) gilt schon beim Einfügen. Hier mit
+/// kleiner Grenze: ein gleiches Bild zählt nicht doppelt, ein neues schon.
+#[test]
+fn image_total_limit_is_checked_at_insert() {
+    assert_eq!(planora_exchange::MAX_IMAGES_TOTAL_BYTES, 1024 * 1024 * 1024);
+    let dir = temp_dir("gesamtgrenze");
+    let mut s = AppState::new();
+    insert(&mut s, &dir, 8, 4, false);
+    let img = |bytes: Vec<u8>| planora_feature::CanvasImage {
+        hash: planora_feature::image_hash(&bytes),
+        bytes: std::sync::Arc::from(bytes),
+        format: planora_exchange::ImageFormat::Png,
+        width: 8,
+        height: 4,
+    };
+    let same = img(png(8, 4, false));
+    let used = same.bytes.len() as u64;
+    assert_eq!(s.canvas_images_over(&same, used), None, "gleiche Bytes");
+    let other = img(png(8, 4, true));
+    let total = used + other.bytes.len() as u64;
+    assert_eq!(s.canvas_images_over(&other, total), None);
+    let msg = s
+        .canvas_images_over(&other, total - 1)
+        .expect("über der Grenze");
+    assert!(msg.contains("MB"), "{msg}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Gesamtprüfung M4: Ein gemerkter Name des nächsten Schritts verfällt beim Zurückladen
+/// (Rückgängig), sonst trüge der nächste fremde Schritt ihn.
+#[test]
+fn undo_label_hint_is_cleared_on_restore() {
+    let mut ws = workspace();
+    let tab = ws.active_tab_mut();
+    tab.state.create_box(DVec3::splat(10.0)).unwrap();
+    ws.observe_history(false);
+    let tab = ws.active_tab_mut();
+    tab.state.undo_label_hint = Some(|| "Kalibrieren".to_string());
+    tab.undo().unwrap();
+    assert!(ws.active_tab().state.undo_label_hint.is_none());
+}

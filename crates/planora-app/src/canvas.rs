@@ -223,11 +223,29 @@ impl AppState {
         if let Some(why) = self.canvas_lock() {
             return self.fail(why);
         }
+        if let Some(why) = self.canvas_images_over(&img, planora_exchange::MAX_IMAGES_TOTAL_BYTES) {
+            return self.fail(why);
+        }
         f.image = self.document.add_image(img);
         f.last_base = None;
         let id = self.add_feature(None, FeatureKind::Canvas(f))?;
         self.select_canvas(id);
         Ok(id)
+    }
+
+    /// Meldung, wenn die Bilder aller Leinwände mit `img` zusammen über `max` Bytes kämen
+    /// (Gesamtgrenze 1 GiB, Gesamtprüfung I5): Die Ablehnung kommt beim Einfügen, nicht erst beim
+    /// Speichern. Ein Bild mit gleichen Bytes wie ein vorhandenes zählt nicht doppelt.
+    pub fn canvas_images_over(&self, img: &CanvasImage, max: u64) -> Option<String> {
+        let total = self.document.image_bytes_with(Some(img));
+        let mb = |b: u64| (b / (1024 * 1024)).to_string();
+        (total > max).then(|| {
+            tr!(
+                "insert-canvas-images-too-large",
+                size = mb(total),
+                max = mb(max)
+            )
+        })
     }
 
     /// Ändert die Leinwand `id` auf `f` (Fenster „Leinwand bearbeiten“): ein Schritt. Bild und
