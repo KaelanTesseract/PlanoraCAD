@@ -25,6 +25,8 @@ use std::collections::HashSet;
 pub struct PointRecord {
     pub x: usize,
     pub y: usize,
+    /// Index der z-Variable eines 3D-Punkts (Skizzen 10), `None` bei einem 2D-Punkt.
+    pub z: Option<usize>,
     pub construction: bool,
     pub alive: bool,
 }
@@ -92,6 +94,8 @@ pub struct SketchData {
     pub patterns: Vec<PatternRecord>,
     /// Texte, auch gelöschte (Skizzen 8); leer in Skizzen ohne Text.
     pub texts: Vec<TextRecord>,
+    /// Haken „3D-Skizze“ (Skizzen 10).
+    pub three_d: bool,
 }
 
 /// Größter Grad eines Splines mit Kontrollpunkten in einer Datei (im Skizzenfeld wählbar: 3, 5).
@@ -131,6 +135,7 @@ impl Sketch {
                 .map(|(_, p)| PointRecord {
                     x: p.x,
                     y: p.y,
+                    z: p.z,
                     construction: p.construction,
                     alive: p.alive,
                 })
@@ -187,6 +192,7 @@ impl Sketch {
                     alive: t.alive,
                 })
                 .collect(),
+            three_d: self.three_d,
         }
     }
 
@@ -230,7 +236,7 @@ impl Sketch {
         let curve_alive = |c: CurveId| d.curves[c.index()].alive;
 
         for p in &d.points {
-            if !var_ok(p.x) || !var_ok(p.y) {
+            if !var_ok(p.x) || !var_ok(p.y) || p.z.is_some_and(|z| !var_ok(z)) {
                 return Err(bad(tr!("sketch-err-data-point-value")));
             }
         }
@@ -354,6 +360,7 @@ impl Sketch {
             points.push(PointData {
                 x: p.x,
                 y: p.y,
+                z: p.z,
                 construction: p.construction,
                 alive: p.alive,
             });
@@ -417,6 +424,7 @@ impl Sketch {
         s.constraints = constraints;
         s.patterns = patterns;
         s.texts = texts;
+        s.three_d = d.three_d;
         s.solve_cache = SolveCache::default();
         s.touch_structure();
         // Typen und Entartungen aller Abhängigkeiten (auch gelöschter) wie bei add_constraint

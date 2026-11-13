@@ -402,13 +402,17 @@ impl Sketch {
         Ok(id)
     }
 
-    /// Neuer Punkt an `xy` mit der Konstruktionseigenschaft von `like`.
+    /// Neuer Punkt an `xy` mit der Konstruktionseigenschaft von `like`. Ist `like` ein
+    /// 3D-Punkt, wird auch der neue einer, mit dem z von `like` (Kopieren, Muster, Spiegeln).
     pub(crate) fn add_point_like(
         &mut self,
         like: PointId,
         xy: DVec2,
     ) -> Result<PointId, SketchError> {
-        let p = self.add_point(xy.x, xy.y)?;
+        let p = match self.points[like].z {
+            Some(zi) => self.add_point3(xy.extend(self.vars[zi]))?,
+            None => self.add_point(xy.x, xy.y)?,
+        };
         self.points[p].construction = self.points[like].construction;
         Ok(p)
     }

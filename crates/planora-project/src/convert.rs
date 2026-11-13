@@ -1125,6 +1125,8 @@ fn sketch_from(origin: &str, feature: &str, d: &SketchDto) -> Result<(Sketch, us
             .map(|p| PointRecord {
                 x: p.x,
                 y: p.y,
+                // 3D-Punkte kommen erst mit Format 20 in die Datei (Skizzen 10).
+                z: None,
                 construction: p.konstruktion,
                 alive: p.aktiv,
             })
@@ -1157,6 +1159,8 @@ fn sketch_from(origin: &str, feature: &str, d: &SketchDto) -> Result<(Sketch, us
             .collect(),
         patterns: patterns_from(origin, feature, d)?,
         texts: texts_from(origin, feature, d)?,
+        // Der Haken „3D-Skizze“ kommt erst mit Format 20 in die Datei (Skizzen 10).
+        three_d: false,
     };
     Sketch::from_data_counted(data).map_err(|e| ctx(e.to_string()))
 }

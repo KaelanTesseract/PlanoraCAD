@@ -238,6 +238,7 @@ impl Sketch {
         self.points.push(PointData {
             x,
             y,
+            z: None,
             construction: false,
             alive: true,
         })

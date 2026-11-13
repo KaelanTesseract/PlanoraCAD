@@ -10,11 +10,14 @@ use planora_math::{DVec2, DVec3, Frame, Tolerance};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Punkt: zwei Einträge im Variablenvektor.
+/// Punkt: zwei Einträge im Variablenvektor, ein 3D-Punkt drei (Skizzen 10).
 #[derive(Clone, Debug)]
 pub struct PointData {
     pub x: usize,
     pub y: usize,
+    /// `None`: Der Punkt liegt in der Skizzenebene (z = 0). `Some(i)`: 3D-Punkt mit z in
+    /// `vars[i]`; er bleibt 3D, auch wenn z zufällig 0 wird.
+    pub z: Option<usize>,
     pub construction: bool,
     pub(crate) alive: bool,
 }
@@ -207,6 +210,9 @@ pub struct Sketch {
     /// Ergebnisse der letzten Solver-Läufe je Gruppe (siehe `solver.rs`). Jede Änderung an
     /// Objekten oder Abhängigkeiten leert ihn; reine Wertänderungen erkennt der Solver selbst.
     pub(crate) solve_cache: SolveCache,
+    /// Haken „3D-Skizze“ (Skizzen 10): schaltet die 3D-Werkzeuge frei. Bereits gezeichnete
+    /// 3D-Geometrie bleibt, wenn der Haken fällt.
+    pub three_d: bool,
 }
 
 /// Quelle eindeutiger Stände: Jede Änderung irgendeiner Skizze bekommt eine neue Nummer, so
@@ -272,6 +278,15 @@ impl Sketch {
             texts: Arena::new(),
             revision: next_revision(),
             solve_cache: SolveCache::default(),
+            three_d: false,
+        }
+    }
+
+    /// Setzt den Haken „3D-Skizze“; die Geometrie bleibt unverändert.
+    pub fn set_three_d(&mut self, on: bool) {
+        if self.three_d != on {
+            self.three_d = on;
+            self.touch_values();
         }
     }
 
@@ -339,10 +354,17 @@ impl Sketch {
         }
     }
 
-    /// Position eines (geprüften) Punktes.
+    /// Position eines (geprüften) Punktes; bei einem 3D-Punkt die Lage in der Draufsicht.
     pub(crate) fn pos(&self, p: PointId) -> DVec2 {
         let d = &self.points[p];
         DVec2::new(self.vars[d.x], self.vars[d.y])
+    }
+
+    /// Lage eines (geprüften) Punktes im Raum der Skizze; ein 2D-Punkt hat z = 0.
+    pub(crate) fn pos3(&self, p: PointId) -> DVec3 {
+        let d = &self.points[p];
+        let z = d.z.map_or(0.0, |i| self.vars[i]);
+        DVec3::new(self.vars[d.x], self.vars[d.y], z)
     }
 
     pub fn add_point(&mut self, x: f64, y: f64) -> Result<PointId, SketchError> {
@@ -352,14 +374,53 @@ impl Sketch {
         Ok(self.points.push(PointData {
             x: xi,
             y: yi,
+            z: None,
             construction: false,
             alive: true,
         }))
     }
 
+    /// Neuer 3D-Punkt (Skizzen 10). Er bekommt immer eine z-Variable, auch bei z = 0.
+    pub fn add_point3(&mut self, p: DVec3) -> Result<PointId, SketchError> {
+        finite(p.x, || tr!("sketch-err-what-x"))?;
+        finite(p.y, || tr!("sketch-err-what-y"))?;
+        finite(p.z, || tr!("sketch-err-what-z"))?;
+        let (xi, yi, zi) = (self.new_var(p.x), self.new_var(p.y), self.new_var(p.z));
+        Ok(self.points.push(PointData {
+            x: xi,
+            y: yi,
+            z: Some(zi),
+            construction: false,
+            alive: true,
+        }))
+    }
+
+    /// Lage in der Draufsicht; bei einem 3D-Punkt (x, y).
     pub fn point_xy(&self, p: PointId) -> Result<DVec2, SketchError> {
         self.check_point(p)?;
         Ok(self.pos(p))
+    }
+
+    /// Lage im Raum der Skizze; ein 2D-Punkt hat z = 0.
+    pub fn point_xyz(&self, p: PointId) -> Result<DVec3, SketchError> {
+        self.check_point(p)?;
+        Ok(self.pos3(p))
+    }
+
+    /// Ist `p` ein 3D-Punkt (mit eigener z-Variable)? Ein unbekannter Punkt ist es nicht.
+    pub fn is_3d_point(&self, p: PointId) -> bool {
+        self.check_point(p).is_ok() && self.points[p].z.is_some()
+    }
+
+    /// Macht den (geprüften) Punkt `p` zum 3D-Punkt: neue z-Variable mit 0. Hat er schon eine,
+    /// passiert nichts. Der Solver-Zwischenspeicher ist danach leer (über `new_var`).
+    // Aufrufer kommen mit den 3D-Abhängigkeiten und dem Einbeziehen (Skizzen 10, Spec 10).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn promote_to_3d(&mut self, p: PointId) {
+        if self.points[p].z.is_none() {
+            let zi = self.new_var(0.0);
+            self.points[p].z = Some(zi);
+        }
     }
 
     /// Setzt die Lage des Punktes `p`. Einen erzeugten Punkt eines Textes hält der Text; er wird
@@ -372,6 +433,29 @@ impl Sketch {
         let (xi, yi) = (self.points[p].x, self.points[p].y);
         self.vars[xi] = x;
         self.vars[yi] = y;
+        self.touch_values();
+        Ok(())
+    }
+
+    /// Setzt die Lage des Punktes `p` im Raum. Ein 2D-Punkt nimmt nur z = 0 an, sonst
+    /// `InvalidInput` (er wird dabei nicht zum 3D-Punkt). Sonst wie [`Self::set_point_xy`].
+    pub fn set_point_xyz(&mut self, p: PointId, v: DVec3) -> Result<(), SketchError> {
+        self.check_point(p)?;
+        self.refuse_glyph_point(p)?;
+        finite(v.x, || tr!("sketch-err-what-x"))?;
+        finite(v.y, || tr!("sketch-err-what-y"))?;
+        finite(v.z, || tr!("sketch-err-what-z"))?;
+        let d = &self.points[p];
+        let (xi, yi, zi) = (d.x, d.y, d.z);
+        match zi {
+            Some(zi) => self.vars[zi] = v.z,
+            None if v.z != 0.0 => {
+                return Err(SketchError::InvalidInput(tr!("sketch-err-z-on-2d-point")));
+            }
+            None => {}
+        }
+        self.vars[xi] = v.x;
+        self.vars[yi] = v.y;
         self.touch_values();
         Ok(())
     }
@@ -914,5 +998,35 @@ impl Sketch {
     /// Alle lebenden Kurven.
     pub fn curves(&self) -> impl Iterator<Item = (CurveId, &CurveData)> {
         self.curves.iter().filter(|(_, c)| c.alive)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::constraint::ConstraintKind;
+
+    #[test]
+    fn promote_adds_one_var_and_keeps_xy() {
+        let mut s = Sketch::new(Frame::WORLD, "S", Tolerance::default());
+        let p = s.add_point(1.0, 2.0).unwrap();
+        let q = s.add_point(5.0, 2.0).unwrap();
+        s.add_constraint(ConstraintKind::Fixed(p, 1.0, 2.0))
+            .unwrap();
+        s.solve();
+        assert!(
+            !s.solve_cache.is_empty(),
+            "Vorbedingung: der Löser hat sich etwas gemerkt"
+        );
+        let n = s.variable_count();
+        s.promote_to_3d(p);
+        assert!(s.is_3d_point(p));
+        assert!(!s.is_3d_point(q));
+        assert_eq!(s.variable_count(), n + 1);
+        assert_eq!(s.point_xyz(p).unwrap(), DVec3::new(1.0, 2.0, 0.0));
+        assert!(s.solve_cache.is_empty());
+        // Ein zweites Mal passiert nichts.
+        s.promote_to_3d(p);
+        assert_eq!(s.variable_count(), n + 1);
     }
 }

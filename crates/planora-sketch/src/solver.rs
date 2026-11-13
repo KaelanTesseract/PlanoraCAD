@@ -146,6 +146,12 @@ enum Outcome {
 }
 
 impl SolveCache {
+    /// Ist nichts gemerkt? Nur für Tests.
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.groups.is_empty()
+    }
+
     /// Leerer Speicher mit Platz für `n` Gruppen.
     fn with_capacity(n: usize) -> Self {
         Self {
