@@ -601,10 +601,12 @@ impl Sketch {
     /// eigener Normale (oder einem 3D-Punkt)? Dann rechnet sie in der 3D-Fassung. Unbekannte Ids
     /// zählen nicht.
     pub fn constraint_is_3d(&self, kind: &ConstraintKind) -> bool {
-        kind.points()
-            .iter()
-            .any(|&p| self.points.get(p).is_some_and(|d| d.z.is_some()))
-            || kind.curves().iter().any(|&c| self.curve_is_3d_raw(c))
+        // Heißer Pfad (jede Auswertung): ohne Vec-Zuweisungen, damit reine 2D-Skizzen nicht
+        // langsamer werden.
+        let is3 = |p: &PointId| self.points.get(*p).is_some_and(|d| d.z.is_some());
+        let (pts, np) = kind.points_array();
+        let (crv, nc) = kind.curves_array();
+        pts[..np].iter().any(is3) || crv[..nc].iter().any(|&c| self.curve_is_3d_raw(c))
     }
 
     /// Wie [`Sketch::is_3d_curve`], ohne auf Leben zu prüfen (für den Löser und gelöschte
@@ -613,13 +615,21 @@ impl Sketch {
         let Some(d) = self.curves.get(c) else {
             return false;
         };
-        d.normal.is_some()
-            || d.kind
-                .points()
-                .iter()
-                .any(|&p| self.points.get(p).is_some_and(|q| q.z.is_some()))
-            || matches!(&d.kind, CurveKind::FixedSpline { curve, .. }
-                if curve.control_points().iter().any(|q| q.z != 0.0))
+        if d.normal.is_some() {
+            return true;
+        }
+        let is3 = |p: &PointId| self.points.get(*p).is_some_and(|q| q.z.is_some());
+        match &d.kind {
+            // Häufige Arten ohne Vec.
+            CurveKind::Line { a, b } => [a, b].into_iter().any(is3),
+            CurveKind::Circle { center, .. } | CurveKind::Ellipse { center, .. } => is3(center),
+            CurveKind::Arc { center, start, end } => [center, start, end].into_iter().any(is3),
+            k => {
+                k.points().iter().any(is3)
+                    || matches!(k, CurveKind::FixedSpline { curve, .. }
+                        if curve.control_points().iter().any(|q| q.z != 0.0))
+            }
+        }
     }
 
     /// Die Skizzenachse, der die Linie `line` im Raum am nächsten liegt (Annahme A3): X wird

@@ -234,14 +234,15 @@ pub struct Drag {
 }
 
 impl Drag {
-    /// Das Ziel, auf die Zugebene geworfen (ohne Ebene unverändert).
-    fn aim(&self) -> DVec3 {
+    /// Das Ziel, auf die Zugebene geworfen (ohne Ebene unverändert). Ein 2D-Punkt (`is_3d` falsch)
+    /// bleibt in der Skizzenebene und nimmt x und y des Ziels, eine Zugebene gilt für ihn nicht.
+    fn aim(&self, is_3d: bool) -> DVec3 {
         match self.plane {
-            Some((o, n)) => {
+            Some((o, n)) if is_3d => {
                 let n = n.normalize();
                 self.target - n * (self.target - o).dot(n)
             }
-            None => self.target,
+            _ => self.target,
         }
     }
 }
@@ -1531,7 +1532,7 @@ impl Sketch {
                     return Err(SketchError::InvalidInput(tr!("sketch-err-drag-plane")));
                 }
                 crate::model::finite(d.target.z, || tr!("sketch-err-what-target-z"))?;
-                let aim = d.aim();
+                let aim = d.aim(true);
                 for v in [aim.x, aim.y, aim.z] {
                     crate::model::finite(v, || tr!("sketch-err-what-target-z"))?;
                 }
@@ -1561,7 +1562,7 @@ impl Sketch {
         let mut soft = Vec::with_capacity(2 * drags.len());
         for d in drags {
             let (xv, yv) = (self.points[d.point].x, self.points[d.point].y);
-            let aim = d.aim();
+            let aim = d.aim(self.points[d.point].z.is_some());
             soft.push(Soft {
                 var: xv,
                 target: aim.x,
@@ -1599,7 +1600,7 @@ impl Sketch {
                         && self.points[d.point].z.is_none_or(|zv| !read[zv])
                 });
             if free {
-                let aim = d.aim();
+                let aim = d.aim(self.points[d.point].z.is_some());
                 if with_z(self, d) {
                     self.set_point_xyz(d.point, aim)?;
                 } else {

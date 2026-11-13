@@ -278,7 +278,14 @@ impl ConstraintKind {
 
     /// Die direkt beteiligten Punkte.
     pub fn points(&self) -> Vec<PointId> {
+        let (a, n) = self.points_array();
+        a[..n].to_vec()
+    }
+
+    /// Wie [`points`](Self::points), ohne Zuweisung: höchstens zwei Punkte, `n` sind belegt.
+    pub(crate) fn points_array(&self) -> ([PointId; 2], usize) {
         use ConstraintKind::*;
+        let z = PointId::from_index(0);
         match self {
             Coincident(a, b)
             | Distance(a, b, _)
@@ -286,26 +293,31 @@ impl ConstraintKind {
             | DistanceX(a, b, _)
             | DistanceY(a, b, _)
             | SlotOverall(a, b, ..)
-            | Smooth(_, a, _, b) => vec![*a, *b],
+            | Smooth(_, a, _, b) => ([*a, *b], 2),
             Horizontal(LineOrPoints::Points(a, b))
             | Vertical(LineOrPoints::Points(a, b))
-            | AlongZ(LineOrPoints::Points(a, b)) => {
-                vec![*a, *b]
-            }
+            | AlongZ(LineOrPoints::Points(a, b)) => ([*a, *b], 2),
             PointOnCurve(p, _)
             | Fixed(p, ..)
             | Fixed3(p, ..)
             | Midpoint(p, _)
             | DistancePointLine(p, ..)
             | CenterlineDiameter(p, ..)
-            | SplineCurvatureHandle(_, p) => vec![*p],
-            _ => vec![],
+            | SplineCurvatureHandle(_, p) => ([*p, z], 1),
+            _ => ([z, z], 0),
         }
     }
 
     /// Die direkt beteiligten Kurven.
     pub fn curves(&self) -> Vec<CurveId> {
+        let (a, n) = self.curves_array();
+        a[..n].to_vec()
+    }
+
+    /// Wie [`curves`](Self::curves), ohne Zuweisung: höchstens zwei Kurven, `n` sind belegt.
+    pub(crate) fn curves_array(&self) -> ([CurveId; 2], usize) {
         use ConstraintKind::*;
+        let z = CurveId::from_index(0);
         match self {
             PointOnCurve(_, c)
             | Midpoint(_, c)
@@ -324,15 +336,15 @@ impl ConstraintKind {
             | AlongZ(LineOrPoints::Line(c))
             | CenterlineDiameter(_, c, _)
             | SlotOverall(_, _, c, _)
-            | SplineCurvatureHandle(c, _) => vec![*c],
+            | SplineCurvatureHandle(c, _) => ([*c, z], 1),
             Parallel(a, b)
             | Perpendicular(a, b)
             | Tangent(a, b)
             | Equal(a, b)
             | Angle(a, b, _)
             | Collinear(a, b)
-            | Smooth(a, _, b, _) => vec![*a, *b],
-            _ => vec![],
+            | Smooth(a, _, b, _) => ([*a, *b], 2),
+            _ => ([z, z], 0),
         }
     }
 }

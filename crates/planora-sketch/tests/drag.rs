@@ -557,3 +557,57 @@ fn drag_failed_sees_a_free_point_that_collapses_a_line_of_a_group() {
         .unwrap();
     assert!(r.drag_failed, "{r:?}");
 }
+
+// ---- Skizzen 10, Task 4: Ziehen im Raum -------------------------------------------------------
+
+#[test]
+fn drag_3d_point_in_given_plane() {
+    use planora_math::DVec3;
+    let mut s = sketch();
+    let p = s.add_point3(DVec3::new(1.0, 2.0, 3.0)).unwrap();
+    // Ebene durch (0,0,5) mit Normale (0,1,0): y wird 0, x und z folgen dem Ziel.
+    s.drag(&[Drag {
+        point: p,
+        target: DVec3::new(4.0, 1.0, 9.0),
+        plane: Some((DVec3::new(0.0, 0.0, 5.0), DVec3::Y)),
+    }])
+    .unwrap();
+    assert!(s.point_xyz(p).unwrap().distance(DVec3::new(4.0, 0.0, 9.0)) < 1e-12);
+    // Eine schräge Ebene: Das Ziel wird senkrecht auf sie geworfen und liegt danach in ihr.
+    let (o, n) = (DVec3::new(0.0, 0.0, 5.0), DVec3::new(0.0, 1.0, 1.0));
+    s.drag(&[Drag {
+        point: p,
+        target: DVec3::new(2.0, 4.0, 8.0),
+        plane: Some((o, n)),
+    }])
+    .unwrap();
+    let got = s.point_xyz(p).unwrap();
+    assert!((got - o).dot(n.normalize()).abs() < 1e-12, "{got:?}");
+    assert!(got.distance(DVec3::new(2.0, 0.5, 4.5)) < 1e-12, "{got:?}");
+}
+
+#[test]
+fn drag_2d_point_ignores_z() {
+    use planora_math::DVec3;
+    let mut s = sketch();
+    let p = s.add_point(1.0, 2.0).unwrap();
+    // Ohne Ebene zählt z des Ziels nicht.
+    s.drag(&[Drag {
+        point: p,
+        target: DVec3::new(3.0, 4.0, 99.0),
+        plane: None,
+    }])
+    .unwrap();
+    assert_eq!(s.point_xy(p).unwrap(), DVec2::new(3.0, 4.0));
+    assert!(!s.is_3d_point(p));
+    // Auch mit (schräger) Zugebene bleibt ein 2D-Punkt in der Skizzenebene: x und y des Ziels,
+    // keine Projektion auf die Ebene.
+    s.drag(&[Drag {
+        point: p,
+        target: DVec3::new(5.0, 6.0, 7.0),
+        plane: Some((DVec3::new(0.0, 0.0, 5.0), DVec3::new(0.0, 1.0, 1.0))),
+    }])
+    .unwrap();
+    assert_eq!(s.point_xy(p).unwrap(), DVec2::new(5.0, 6.0));
+    assert!(!s.is_3d_point(p));
+}
