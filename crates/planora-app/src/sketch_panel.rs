@@ -613,6 +613,8 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     let mut palette = SketchPalette {
         grid: state.sketch_show_grid,
         snap: state.sketch_snap_grid,
+        three_d: false,
+        three_d_changed: false,
         changed: false,
         look_at: false,
         break_link: false,
@@ -635,6 +637,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         panel.pattern_dy = "0".into();
         panel.pattern_unit = current_unit();
     }
+    palette.three_d = sf.sketch.three_d;
     strip_field(ctx, strip, dark, se, &mut sf.sketch);
     let side = SideInput {
         panel: &mut panel,
@@ -649,6 +652,10 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     // sich die Vorschau geändert, kommt gleich ein weiteres.
     if se.update_text_preview(&sf.sketch, fonts.as_deref()) {
         ctx.request_repaint();
+    }
+    if palette.three_d_changed {
+        // Ein Schritt „3D-Skizze umschalten“.
+        se.set_three_d(&mut sf.sketch, palette.three_d);
     }
     let close = foot_field(ctx, rects.bottom, dark, se, &mut sf.sketch);
     state.show_sketch_profiles = show_profiles;
@@ -909,6 +916,9 @@ fn strip_button(
 struct SketchPalette {
     grid: bool,
     snap: bool,
+    /// Haken „3D-Skizze“ (Skizzen 10): der Stand und ob er in diesem Bild umgeschaltet wurde.
+    three_d: bool,
+    three_d_changed: bool,
     changed: bool,
     /// Der Knopf „Blick auf“ wurde gedrückt.
     look_at: bool,
@@ -1310,7 +1320,8 @@ fn side_contents(
             ui.checkbox(show_profiles, tr!("sketch-show-profile"));
         });
     });
-    // Skizzenraster und Fang in einer eigenen Zeile unter dem Namen.
+    // Skizzenraster, Fang und Blick auf in einer eigenen Zeile unter dem Namen; der Haken
+    // „3D-Skizze“ gehört dazu und steht in der Zeile darunter (die Spalte ist schmal).
     ui.horizontal(|ui| {
         let grid = ui
             .checkbox(&mut palette.grid, tr!("sketch-palette-grid"))
@@ -1330,6 +1341,12 @@ fn side_contents(
         .on_hover_text(format!("{label}\n{}", tr!("sketch-look-at-hint")));
         ui.data_mut(|d| d.insert_temp(look_at_key(), look.rect));
         palette.look_at |= look.clicked();
+    });
+    ui.horizontal(|ui| {
+        let three_d = ui
+            .checkbox(&mut palette.three_d, tr!("sketch-palette-three-d"))
+            .on_hover_text(tr!("sketch-palette-three-d-hint"));
+        palette.three_d_changed |= three_d.changed();
     });
     tool_options(ui, se, sf, fonts, scope);
     ui.add_space(2.0);

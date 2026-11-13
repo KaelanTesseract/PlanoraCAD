@@ -5,7 +5,7 @@
 //! Bereich, Voreinstellung. Daraus entstehen [`Action`], [`Action::ALL`] und die
 //! Voreinstellung von [`super::Keymap::defaults`].
 
-use super::{Area, Binding, Gesture, KeyChord, MouseButton};
+use super::{Area, Binding, Gesture, KeyChord, ModKey, MouseButton};
 use egui::Key;
 
 /// Erzeugt [`Action`] samt Id, Anzeigename, Bereich und Voreinstellung aus einer Tabelle.
@@ -243,6 +243,18 @@ action_table! {
     /// Wie [`Action::ShowShortcuts`], in der offenen Skizze (eine Aktion hat nur einen Bereich).
     SketchShowShortcuts, "skizze.tastenkuerzel", "action-sketch-show-shortcuts", Sketch,
         [key(Key::S)];
+    // Skizzen 10 (3D-Skizze): Tasten der Triade wie Fusion. Die Triade zeichnet Task 10; bis
+    // dahin ändern die Aktionen nur den Zustand der Sitzung (Ebene, Griff, Sperre).
+    /// Fusion: Alt allein gedrückt und losgelassen schaltet die aktive Triadenebene reihum.
+    SketchTriadCyclePlane, "skizze.triade_ebene", "action-sketch-triad-plane", Sketch,
+        [Binding::Modifier(ModKey::Alt)];
+    /// Fusion: Tab macht reihum einen Drehgriff der Triade aktiv.
+    SketchTriadCycleHandle, "skizze.triade_griff", "action-sketch-triad-handle", Sketch,
+        [key(Key::Tab)];
+    /// Fusion: Pfeil hoch (gehalten) sperrt die Lage in der aktiven Ebene; der Zeiger bewegt
+    /// dann nur entlang der Ebenennormale. Wirkt nur, solange die Taste gehalten wird
+    /// ([`super::dispatch::held`]); `run_action` tut nichts.
+    SketchLockZ, "skizze.z_sperren", "action-sketch-lock-z", Sketch, [key(Key::ArrowUp)];
     // Zeichnung: die vorhandenen Werkzeuge (wie ihr Schalter). Mittelpunktmarke C, Verschieben
     // M, Projizierte Ansicht P und Text T kommen erst mit ihrer Funktion; Entf (Nummernkreis
     // löschen) ist fest (`drawing_view`).

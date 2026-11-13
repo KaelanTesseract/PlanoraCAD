@@ -13,7 +13,7 @@ use planora_app::app::PlanoraApp;
 use planora_app::keymap::settings_ui::*;
 use planora_app::keymap::text::binding_text;
 use planora_app::keymap::{
-    Action, Area, Binding, Gesture, KeyChord, Keymap, MouseButton, SetResult, search,
+    Action, Area, Binding, Gesture, KeyChord, Keymap, ModKey, MouseButton, SetResult, search,
 };
 use planora_app::settings_window::{Note, RootMessage};
 use planora_app::workspace::Workspace;
@@ -336,6 +336,28 @@ fn search_filters_by_name_area_and_key_text() {
     assert!(!r.sees(&Action::Save.label()));
     r.filter("gibt es nicht");
     assert!(r.sees(&nothing_found()));
+}
+
+#[test]
+fn capturing_alt_alone_binds_the_alt_tap() {
+    let mut r = rig();
+    r.filter(&Action::SketchTriadCyclePlane.label());
+    // Die Voreinstellung zeigt „Alt allein“.
+    assert!(r.sees("Alt allein"), "{:?}", r.texts());
+    r.click(&change(), 0);
+    assert_eq!(
+        r.state().capturing,
+        Some((Action::SketchTriadCyclePlane, 0))
+    );
+    // Eine Taste mit Alt wäre eine andere Belegung; Alt allein gedrückt und losgelassen.
+    r.frame_with(vec![], Modifiers::ALT);
+    r.frame_with(vec![], NONE);
+    r.settle();
+    assert_eq!(r.state().capturing, None);
+    assert_eq!(
+        r.km().bindings(Action::SketchTriadCyclePlane),
+        &[Binding::Modifier(ModKey::Alt)]
+    );
 }
 
 #[test]

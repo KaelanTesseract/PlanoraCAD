@@ -452,6 +452,46 @@ pub struct LineArcDrag {
     pub prev: CurveId,
 }
 
+/// Ebene der Triade der 3D-Skizze (Skizzen 10). Die Reihenfolge von Alt ist XY, YZ, ZX.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum TriadPlane {
+    /// Die Skizzenebene.
+    #[default]
+    Xy,
+    Yz,
+    Zx,
+}
+
+impl TriadPlane {
+    /// Die nächste Ebene reihum.
+    pub fn next(self) -> TriadPlane {
+        match self {
+            TriadPlane::Xy => TriadPlane::Yz,
+            TriadPlane::Yz => TriadPlane::Zx,
+            TriadPlane::Zx => TriadPlane::Xy,
+        }
+    }
+}
+
+/// Achse eines Drehgriffs der Triade (Skizzen 10).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TriadAxis {
+    X,
+    Y,
+    Z,
+}
+
+impl TriadAxis {
+    /// Der nächste Griff reihum (`None`: noch keiner aktiv, dann X).
+    pub fn next(current: Option<TriadAxis>) -> TriadAxis {
+        match current {
+            None | Some(TriadAxis::Z) => TriadAxis::X,
+            Some(TriadAxis::X) => TriadAxis::Y,
+            Some(TriadAxis::Y) => TriadAxis::Z,
+        }
+    }
+}
+
 /// Zustand des geöffneten Skizzen-Modus.
 #[derive(Clone, Debug)]
 pub struct SketchSession {
@@ -527,6 +567,14 @@ pub struct SketchSession {
     /// Name des nächsten Schritts für Rückgängig, wenn ein Werkzeug ihn besser kennt als der
     /// Vergleich der Stände (Stutzen, Dehnen, Brechen); der Verlauf nimmt und leert ihn.
     pub edit_label: Option<Msg>,
+    /// Aktive Ebene der Triade der 3D-Skizze (Skizzen 10; gehört nicht zum Dokument und nicht
+    /// zum Rückgängig). Die Triade zeichnet Task 10.
+    triad_plane: TriadPlane,
+    /// Aktiver Drehgriff der Triade (Tab schaltet reihum); `None`: keiner.
+    triad_handle: Option<TriadAxis>,
+    /// „Z sperren“ (Pfeil hoch gehalten): Der Zeiger bewegt nur noch entlang der Ebenennormale.
+    /// Setzt die Oberfläche je Bild aus der gehaltenen Taste ([`crate::keymap::dispatch::held`]).
+    pub z_lock: bool,
     /// Letzte Stelle beim Stutzen durch Ziehen (`None`: kein Zug läuft).
     pub trim_drag: Option<DVec2>,
     /// Zählt die gelungenen Änderungen durch Stutzen, Dehnen und Brechen, mit dem Werkzeug der
@@ -691,6 +739,9 @@ impl SketchSession {
             history_jumps: 0,
             hover_preview: None,
             edit_label: None,
+            triad_plane: TriadPlane::Xy,
+            triad_handle: None,
+            z_lock: false,
             trim_drag: None,
             modify_edits: (0, None),
             fillet_run: None,
@@ -809,6 +860,51 @@ impl SketchSession {
         }
         self.last_report = Some(sk.clone().solve());
         self.forget_removed(sk);
+    }
+
+    /// Setzt den Haken „3D-Skizze“ ([`Sketch::three_d`]) als ein Rückgängig-Schritt (Name
+    /// „3D-Skizze umschalten“). Ist der Stand schon so, geschieht nichts. Beim Ausschalten bleibt
+    /// die gezeichnete 3D-Geometrie; die Triade verliert Griff und Sperre.
+    pub fn set_three_d(&mut self, sk: &mut Sketch, on: bool) {
+        if sk.three_d == on {
+            return;
+        }
+        sk.set_three_d(on);
+        self.edit_label = Some(crate::msg!("sketch-edit-three-d"));
+        if !on {
+            self.triad_handle = None;
+            self.z_lock = false;
+        }
+    }
+
+    /// Die aktive Ebene der Triade (Skizzen 10).
+    pub fn triad_plane(&self) -> TriadPlane {
+        self.triad_plane
+    }
+
+    /// Der aktive Drehgriff der Triade; `None`: keiner.
+    pub fn triad_handle(&self) -> Option<TriadAxis> {
+        self.triad_handle
+    }
+
+    /// Alt allein (Aktion „Triadenebene wechseln“): schaltet die aktive Ebene reihum. Nur in
+    /// einer 3D-Skizze; `false`, wenn nichts geschah. Gehört nicht zum Rückgängig.
+    pub fn cycle_triad_plane(&mut self, sk: &Sketch) -> bool {
+        if !sk.three_d {
+            return false;
+        }
+        self.triad_plane = self.triad_plane.next();
+        true
+    }
+
+    /// Tab (Aktion „Triadengriff wechseln“): macht reihum einen Drehgriff aktiv. Nur in einer
+    /// 3D-Skizze; `false`, wenn nichts geschah.
+    pub fn cycle_triad_handle(&mut self, sk: &Sketch) -> bool {
+        if !sk.three_d {
+            return false;
+        }
+        self.triad_handle = Some(TriadAxis::next(self.triad_handle));
+        true
     }
 
     /// Wählt `tool` wie der Klick auf seinen Knopf in der Leiste (und sein Tastenkürzel): ist

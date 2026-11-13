@@ -2,7 +2,7 @@
 //! verbraucht die passenden und meldet die Aktionen; ausführen und sperren (Tippen, Rückfrage,
 //! offene Fenster, zweiter Durchgang) bleibt Sache des Aufrufers (`PlanoraApp::shortcuts`).
 
-use super::{Action, Area, Binding, KeyChord, Keymap};
+use super::{Action, Area, Binding, KeyChord, Keymap, ModKey};
 use crate::drawing_state::WorkArea;
 use crate::state::AppState;
 
@@ -48,7 +48,7 @@ pub fn pressed_if(
         .flat_map(|a| {
             km.bindings(a).iter().filter_map(move |b| match b {
                 Binding::Key(c) => Some((a, *c)),
-                Binding::Mouse(_) => None,
+                Binding::Mouse(_) | Binding::Modifier(_) => None,
             })
         })
         .filter(|(_, c)| !(focus && c.key == egui::Key::Space))
@@ -65,6 +65,108 @@ pub fn pressed_if(
         }
     });
     out
+}
+
+/// Erkennt „Umschalttaste allein gedrückt und losgelassen“ über die Bilder. Ein Tipp gilt nur,
+/// wenn genau eine Umschalttaste gedrückt wurde, während kein anderes Ereignis kam: keine Taste
+/// (außer Umschalttasten selbst), keine Maustaste (auch nicht schon vorher gedrückt: Alt plus
+/// Ziehen dreht die Kamera) und kein Rad, und keine zweite Umschalttaste dazukam. Gemeldet wird
+/// er beim Loslassen. Je Bild genau einmal [`ModTap::step`] aufrufen.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ModTap {
+    prev: [bool; 3],
+    armed: Option<ModKey>,
+}
+
+impl ModTap {
+    /// Wertet ein Bild aus; `Some`, wenn in diesem Bild eine Umschalttaste nach einem reinen Tipp
+    /// losgelassen wurde.
+    pub fn step(&mut self, i: &egui::InputState) -> Option<ModKey> {
+        let m = i.modifiers;
+        let now = [m.ctrl || m.command, m.shift, m.alt];
+        let other = i.pointer.any_down()
+            || i.events.iter().any(|e| match e {
+                egui::Event::Key { key, pressed, .. } => {
+                    *pressed && !super::text::is_modifier_key(*key)
+                }
+                egui::Event::PointerButton { pressed, .. } => *pressed,
+                egui::Event::MouseWheel { .. } | egui::Event::Text(_) => true,
+                _ => false,
+            });
+        if other {
+            self.armed = None;
+        }
+        let count = now.iter().filter(|b| **b).count();
+        let mut fired = None;
+        if count == 0 {
+            fired = self.armed.take();
+        } else if count == 1 {
+            let held = if now[0] {
+                ModKey::Ctrl
+            } else if now[1] {
+                ModKey::Shift
+            } else {
+                ModKey::Alt
+            };
+            if self.prev == [false; 3] && !other {
+                self.armed = Some(held);
+            } else if self.armed != Some(held) {
+                self.armed = None;
+            }
+        } else {
+            self.armed = None;
+        }
+        self.prev = now;
+        fired
+    }
+}
+
+fn mod_tap_id() -> egui::Id {
+    egui::Id::new("planora-keymap-mod-tap")
+}
+
+/// Der Tipp einer Umschalttaste in diesem Bild (siehe [`ModTap`]); der Verfolger liegt im
+/// Kontext. Genau einmal je Bild aufrufen, auch wenn die Tasten gesperrt sind (der Verfolger muss
+/// jedes Bild sehen).
+pub fn tapped(ctx: &egui::Context) -> Option<ModKey> {
+    let mut tap = ctx
+        .data(|d| d.get_temp::<ModTap>(mod_tap_id()))
+        .unwrap_or_default();
+    let out = ctx.input(|i| tap.step(i));
+    ctx.data_mut(|d| d.insert_temp(mod_tap_id(), tap));
+    out
+}
+
+/// Die Aktionen im Bereich `area` (und „Überall“), die den Tipp `m` belegt haben, in der
+/// Reihenfolge der Tabelle.
+pub fn tap_actions(km: &Keymap, area: Area, m: ModKey) -> Vec<Action> {
+    Action::ALL
+        .iter()
+        .copied()
+        .filter(|&a| Keymap::areas_overlap(area, a.area()))
+        .filter(|&a| km.bindings(a).contains(&Binding::Modifier(m)))
+        .collect()
+}
+
+/// Wird eine Taste von `a` gerade gehalten (z. B. Pfeil hoch für „Z sperren“)? Die Umschalttasten
+/// müssen genau stimmen, wie bei [`pressed`]. Verbraucht nichts. Wirkt für Tasten (nicht für
+/// Mausgesten und Tipps) von Aktionen im Bereich `area` oder „Überall“.
+pub fn held(ctx: &egui::Context, km: &Keymap, area: Area, a: Action) -> bool {
+    if !Keymap::areas_overlap(area, a.area()) {
+        return false;
+    }
+    ctx.input(|i| {
+        let m = i.modifiers;
+        km.bindings(a).iter().any(|b| match b {
+            Binding::Key(c) => {
+                i.key_down(c.key)
+                    && (m.ctrl || m.command) == c.ctrl
+                    && m.shift == c.shift
+                    && m.alt == c.alt
+            }
+            _ => false,
+        })
+    })
 }
 
 fn modifier_count(c: &KeyChord) -> usize {

@@ -195,6 +195,8 @@ pub struct CaptureState {
     held_key: Option<egui::Key>,
     /// Durchgang, dessen Ereignisse [`capture_input`] schon gelesen hat (nur einmal je Durchgang).
     read_pass: Option<u64>,
+    /// Erkennt „Umschalttaste allein“ beim Erfassen (Fusions Alt für die Triade).
+    mod_tap: super::dispatch::ModTap,
 }
 
 impl CaptureState {
@@ -278,8 +280,18 @@ pub fn capture_input(
         state.capturing = None;
         state.drag_start = None;
     }
+    // Jedes Bild beobachten, damit ein Tipp beim Loslassen erkannt wird.
+    let tap = ctx.input(|i| state.mod_tap.step(i));
     if let Some((a, index)) = state.capturing {
-        let caught = ctx.input_mut(|i| catch(i, a, &mut state.drag_start));
+        let mut caught = ctx.input_mut(|i| catch(i, a, &mut state.drag_start));
+        if caught.is_none()
+            && !is_mouse_action(a)
+            // Erfasst wird nur Alt allein (Fusion); ein Tipp auf Strg oder Umschalt bleibt wie
+            // bisher ohne Wirkung (die Belegung und die Konfiguration kennen alle drei).
+            && let Some(m @ super::ModKey::Alt) = tap
+        {
+            caught = Some(Caught::Bound(Binding::Modifier(m)));
+        }
         match caught {
             Some(Caught::Cancel) => {
                 state.capturing = None;
@@ -290,7 +302,7 @@ pub fn capture_input(
                 match b {
                     Binding::Mouse(Gesture::Drag { .. }) => state.hold_until_release = true,
                     Binding::Key(c) => state.held_key = Some(c.key),
-                    Binding::Mouse(Gesture::Wheel { .. }) => {}
+                    Binding::Mouse(Gesture::Wheel { .. }) | Binding::Modifier(_) => {}
                 }
                 state.drag_start = None;
                 take(ws, state, a, index, b);

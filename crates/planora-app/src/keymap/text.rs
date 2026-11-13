@@ -4,13 +4,15 @@
 //! (dazu die englischen Tastennamen von egui und Leerzeichen um die Pluszeichen). Auf Deutsch
 //! sind beide Texte gleich.
 
-use super::{Binding, Gesture, KeyChord, MouseButton};
+use super::{Binding, Gesture, KeyChord, ModKey, MouseButton};
 use egui::Key;
 
 const CTRL: &str = "Strg";
 const SHIFT: &str = "Umschalt";
 const ALT: &str = "Alt";
 const WHEEL: &str = "Mausrad";
+/// Endung der gespeicherten Umschalttaste allein („Alt allein“); ohne „+“.
+const ALONE: &str = " allein";
 
 /// Gespeicherte (deutsche) Namen der Tasten, deren egui-Name englisch ist, und die Id ihres
 /// Anzeigenamens in den Sprachdateien; alle übrigen behalten den egui-Namen („E“, „F5“, „1“).
@@ -190,9 +192,30 @@ pub fn gesture_text(g: &Gesture) -> String {
     gesture(g, false)
 }
 
+/// „Alt allein“ (englisch „Alt alone“): die Umschalttaste als eigene Belegung.
+pub fn modifier_tap_text(m: ModKey) -> String {
+    let name = match m {
+        ModKey::Ctrl => planora_i18n::tr!("key-ctrl"),
+        ModKey::Shift => planora_i18n::tr!("key-shift"),
+        ModKey::Alt => planora_i18n::tr!("key-alt"),
+    };
+    planora_i18n::tr!("key-modifier-alone", key = name)
+}
+
+/// Gespeicherter (deutscher) Text von [`Binding::Modifier`]: „Strg allein“ usw.
+fn stored_modifier_tap(m: ModKey) -> String {
+    let name = match m {
+        ModKey::Ctrl => CTRL,
+        ModKey::Shift => SHIFT,
+        ModKey::Alt => ALT,
+    };
+    format!("{name}{ALONE}")
+}
+
 /// Die Belegung in der Sprache der Oberfläche (Menü, Einstellungen, Übersicht).
 pub fn binding_text(b: &Binding) -> String {
     match b {
+        Binding::Modifier(m) => modifier_tap_text(*m),
         Binding::Key(c) => chord_text(c),
         Binding::Mouse(g) => gesture_text(g),
     }
@@ -203,6 +226,7 @@ pub fn stored_text(b: &Binding) -> String {
     match b {
         Binding::Key(c) => chord(c, true),
         Binding::Mouse(g) => gesture(g, true),
+        Binding::Modifier(m) => stored_modifier_tap(*m),
     }
 }
 
@@ -210,6 +234,11 @@ pub fn stored_text(b: &Binding) -> String {
 /// Taste oder Geste, mit „+“ getrennt. Alles andere ergibt `None`, auch eine Umschalttaste
 /// allein als Taste ([`is_modifier_key`]).
 pub fn parse_binding(text: &str) -> Option<Binding> {
+    for m in [ModKey::Ctrl, ModKey::Shift, ModKey::Alt] {
+        if text.trim() == stored_modifier_tap(m) {
+            return Some(Binding::Modifier(m));
+        }
+    }
     let parts: Vec<&str> = text.split('+').map(str::trim).collect();
     let (last, mods) = parts.split_last()?;
     let (mut ctrl, mut shift, mut alt) = (false, false, false);

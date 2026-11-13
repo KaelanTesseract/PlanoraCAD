@@ -322,6 +322,19 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
             }
         }
         Action::SketchLookAt => ws.active_tab_mut().state.look_at_sketch(),
+        // Skizzen 10: Ebene und Griff der Triade wechseln nur den Zustand der Sitzung; die Triade
+        // selbst zeichnet und nutzt Task 10. „Z sperren“ gilt nur gehalten (siehe
+        // `keymap::dispatch::held`) und tut hier nichts.
+        Action::SketchTriadCyclePlane | Action::SketchTriadCycleHandle => {
+            if let Some((se, sk)) = ws.active_tab_mut().state.session_sketch_mut() {
+                if a == Action::SketchTriadCyclePlane {
+                    se.cycle_triad_plane(sk);
+                } else {
+                    se.cycle_triad_handle(sk);
+                }
+            }
+        }
+        Action::SketchLockZ => {}
         Action::SketchToggleGrid | Action::SketchToggleSnap => {
             let state = &mut ws.active_tab_mut().state;
             if state.open_sketch_id().is_some() {

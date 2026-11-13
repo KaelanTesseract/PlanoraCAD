@@ -1838,6 +1838,20 @@ impl Workspace {
         written
     }
 
+    /// Stellt „Ebenen anzeigen“ und „Drehgriffe anzeigen“ der Triade der 3D-Skizze ein und
+    /// speichert beide gleich in [`Workspace::config_path`] (Felder `show_triad_planes`,
+    /// `show_triad_handles`); `true`, wenn geschrieben wurde. Sonst gilt die Wahl für die
+    /// Sitzung. Die Triade selbst (Task 10) liest [`Workspace::config`].
+    pub fn set_triad_view(&mut self, planes: bool, handles: bool) -> bool {
+        self.config.show_triad_planes = planes;
+        self.config.show_triad_handles = handles;
+        Config::update_at(&self.config_path, |c| {
+            c.show_triad_planes = planes;
+            c.show_triad_handles = handles;
+        })
+        .is_ok()
+    }
+
     /// Die Schalter von Skizzenraster und Fang, wenn sie zum Schreiben vorgemerkt sind.
     fn pending_sketch_grid(&self) -> Option<(bool, bool)> {
         self.sketch_grid_pending

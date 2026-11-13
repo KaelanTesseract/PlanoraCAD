@@ -1209,7 +1209,13 @@ impl PlanoraApp {
     /// Wiederholen zuletzt; sie sind zusätzlich gesperrt, solange eine Maustaste gedrückt ist
     /// ([`PlanoraApp::undo_keys`]).
     fn shortcuts(&mut self, ctx: &egui::Context) {
-        if self.ws.prompt.is_some() || ctx.current_pass_index() != 0 {
+        if ctx.current_pass_index() != 0 {
+            return;
+        }
+        // Skizzen 10: Alt allein und Pfeil hoch gehalten (die Triade der 3D-Skizze); der Verfolger
+        // muss jedes Bild sehen, auch wenn sonst gesperrt ist.
+        self.triad_keys(ctx);
+        if self.ws.prompt.is_some() {
             return;
         }
         if viewport::typing(ctx) {
@@ -1244,8 +1250,14 @@ impl PlanoraApp {
         }
         let area = keymap::dispatch::current_area(&self.ws.active_tab().state);
         let pressed = keymap::dispatch::pressed_if(ctx, &self.ws.keymap, area, |a| {
-            !is_history_key(a) && !(windows && a.area() != keymap::Area::All)
+            !is_history_key(a)
+                && a != Action::SketchLockZ
+                && !(windows && a.area() != keymap::Area::All)
         });
+        if pressed.contains(&Action::SketchTriadCycleHandle) {
+            // Tab gehört der Triade, nicht dem Wechsel des Fokus (wie bei der Skizzenbemaßung).
+            ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+        }
         for &a in Action::ALL.iter().filter(|a| pressed.contains(a)) {
             let request = commands::run_key(&mut self.ws, a);
             if matches!(request, MenuRequest::Shortcuts | MenuRequest::Feedback) {
@@ -1255,6 +1267,33 @@ impl PlanoraApp {
             self.apply_menu_request(ctx, request);
         }
         self.undo_keys(ctx);
+    }
+
+    /// Die Tasten der Triade der 3D-Skizze (Skizzen 10): Alt allein (oder was belegt ist) löst
+    /// beim Loslassen seine Aktion aus ([`keymap::dispatch::tapped`]; Alt mit Ziehen, Rad oder
+    /// Taste nicht), und „Z sperren“ gilt, solange seine Taste gehalten wird
+    /// ([`keymap::dispatch::held`]). Beides nur bei offener Skizze und ohne Rückfrage, Fenster
+    /// oder Eingabefeld; sonst fällt die Sperre.
+    fn triad_keys(&mut self, ctx: &egui::Context) {
+        let tap = keymap::dispatch::tapped(ctx);
+        let free = self.ws.prompt.is_none()
+            && !viewport::typing(ctx)
+            && !self.windows_open()
+            && !self.projects.is_open();
+        let km = &self.ws.keymap;
+        let held =
+            free && keymap::dispatch::held(ctx, km, keymap::Area::Sketch, Action::SketchLockZ);
+        let actions = match tap {
+            Some(m) if free => keymap::dispatch::tap_actions(km, keymap::Area::Sketch, m),
+            _ => Vec::new(),
+        };
+        let Some(se) = self.ws.active_tab_mut().state.sketch_session.as_mut() else {
+            return;
+        };
+        se.z_lock = held && actions.is_empty();
+        for a in actions {
+            commands::run_action(&mut self.ws, a);
+        }
     }
 
     /// Ist ein Fenster offen, das Rückgängig und die Befehle von Modell, Skizze und Zeichnung
