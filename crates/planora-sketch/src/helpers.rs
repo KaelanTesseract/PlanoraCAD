@@ -349,6 +349,7 @@ impl Sketch {
                 minor,
                 start,
                 end,
+                ..
             } => {
                 let a = DVec2::new(self.vars[ax], self.vars[ay]);
                 // Spiegeln kehrt den Umlaufsinn um; die gespiegelte Ellipse ist dieselbe Menge
@@ -365,6 +366,7 @@ impl Sketch {
                 ax,
                 ay,
                 minor,
+                ..
             } if matches!(how, CopyHow::Pattern(_)) => {
                 let CopyHow::Pattern(t) = how else {
                     unreachable!()
@@ -673,6 +675,7 @@ impl Sketch {
                         center: m,
                         ax,
                         ay,
+                        az: None,
                         minor: mi,
                         start: a,
                         end: b,
@@ -782,6 +785,7 @@ impl Sketch {
                 ax,
                 ay,
                 minor,
+                ..
             } => Projected::Ellipse {
                 center: from.pos(center),
                 axis: DVec2::new(from.vars[ax], from.vars[ay]),
@@ -794,6 +798,7 @@ impl Sketch {
                 minor,
                 start,
                 end,
+                ..
             } => Projected::EllipticArc {
                 center: from.pos(center),
                 axis: DVec2::new(from.vars[ax], from.vars[ay]),
@@ -858,6 +863,7 @@ impl Sketch {
                         ax,
                         ay,
                         minor: mi,
+                        ..
                     },
                 ) => {
                     ellipse_values = Some(s.set_ellipse_axes((ax, ay, mi), axis, minor)?);
@@ -878,6 +884,7 @@ impl Sketch {
                         minor: mi,
                         start: a,
                         end: b,
+                        ..
                     },
                 ) => {
                     ellipse_values = Some(s.set_ellipse_axes((ax, ay, mi), axis, minor)?);

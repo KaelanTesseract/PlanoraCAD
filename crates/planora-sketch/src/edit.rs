@@ -790,6 +790,7 @@ impl Sketch {
                 center,
                 ax,
                 ay,
+                az,
                 minor,
             } => {
                 let start = self.cut_point(g, b.t1, b.cutter1, &mut ends)?;
@@ -800,6 +801,7 @@ impl Sketch {
                         center,
                         ax,
                         ay,
+                        az,
                         minor,
                         start,
                         end,
@@ -813,6 +815,7 @@ impl Sketch {
                         center,
                         ax,
                         ay,
+                        az,
                         minor,
                         start: s,
                         end: e,
@@ -875,12 +878,14 @@ impl Sketch {
                             center,
                             ax,
                             ay,
+                            az,
                             minor,
                             ..
                         } => CurveKind::EllipticArc {
                             center,
                             ax,
                             ay,
+                            az,
                             minor,
                             start: s,
                             end: e,
@@ -1101,11 +1106,12 @@ impl Sketch {
                 center,
                 ax,
                 ay,
+                az,
                 minor,
                 start,
                 end,
             } => Ok(self
-                .add_elliptic_arc_vars(center, ax, ay, minor, start, end)
+                .add_elliptic_arc_vars(center, (ax, ay, az), minor, start, end)
                 .0),
             CurveKind::Spline { points, handles } => {
                 let n = self.add_spline(&points)?;

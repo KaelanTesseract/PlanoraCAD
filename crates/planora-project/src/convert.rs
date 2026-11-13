@@ -366,11 +366,13 @@ fn curve_to(k: &CurveKind) -> CurveKindDto {
             start: start.index(),
             ende: end.index(),
         },
+        // `az` (3D-Ellipse) kommt erst mit Format 20 in die Datei (Skizzen 10).
         CurveKind::Ellipse {
             center,
             ax,
             ay,
             minor,
+            ..
         } => CurveKindDto::Ellipse {
             mitte: center.index(),
             ax: *ax,
@@ -388,6 +390,7 @@ fn curve_to(k: &CurveKind) -> CurveKindDto {
             minor,
             start,
             end,
+            ..
         } => CurveKindDto::Ellipsenbogen {
             mitte: center.index(),
             ax: *ax,
@@ -488,6 +491,7 @@ fn curve_from(d: &CurveKindDto) -> std::result::Result<CurveKind, String> {
             center: p(*mitte),
             ax: *ax,
             ay: *ay,
+            az: None,
             minor: *klein,
         },
         CurveKindDto::Spline { punkte, griffe } => CurveKind::Spline {
@@ -505,6 +509,7 @@ fn curve_from(d: &CurveKindDto) -> std::result::Result<CurveKind, String> {
             center: p(*mitte),
             ax: *ax,
             ay: *ay,
+            az: None,
             minor: *klein,
             start: p(*start),
             end: p(*ende),
@@ -552,11 +557,13 @@ fn curve_from(d: &CurveKindDto) -> std::result::Result<CurveKind, String> {
     })
 }
 
-fn constraint_to(k: &ConstraintKind) -> ConstraintKindDto {
+/// Eintrag einer Abhängigkeit in der Datei; `None` für `InPlane` (Skizzen 10), das nicht als
+/// eigener Eintrag in die Datei kommt.
+fn constraint_to(k: &ConstraintKind) -> Option<ConstraintKindDto> {
     use ConstraintKind as K;
     use ConstraintKindDto as D;
     let (p, c) = (|x: &PointId| x.index(), |x: &CurveId| x.index());
-    match k {
+    Some(match k {
         K::Coincident(a, b) => D::Deckungsgleich { a: p(a), b: p(b) },
         K::PointOnCurve(a, k) => D::PunktAufKurve {
             punkt: p(a),
@@ -663,7 +670,8 @@ fn constraint_to(k: &ConstraintKind) -> ConstraintKindDto {
             },
             wert: *v,
         },
-    }
+        K::InPlane(_) => return None,
+    })
 }
 
 fn constraint_from(d: &ConstraintKindDto) -> ConstraintKind {
@@ -1059,17 +1067,20 @@ fn sketch_to(s: &Sketch) -> SketchDto {
                 rahmen: c.show_frame,
             })
             .collect(),
+        // `InPlane` steht nicht in der Datei (Skizzen 10; Format 20 regelt Task 7).
         abhaengigkeiten: d
             .constraints
             .iter()
-            .map(|c| ConstraintDto {
-                art: constraint_to(&c.kind),
-                zweig: c.branch,
-                gesteuert: c.driven,
-                aktiv: c.enabled,
-                intern: c.internal,
-                extra: c.extra,
-                lebt: c.alive,
+            .filter_map(|c| {
+                Some(ConstraintDto {
+                    art: constraint_to(&c.kind)?,
+                    zweig: c.branch,
+                    gesteuert: c.driven,
+                    aktiv: c.enabled,
+                    intern: c.internal,
+                    extra: c.extra,
+                    lebt: c.alive,
+                })
             })
             .collect(),
         muster: d.patterns.iter().map(pattern_to).collect(),
@@ -1140,6 +1151,8 @@ fn sketch_from(origin: &str, feature: &str, d: &SketchDto) -> Result<(Sketch, us
                     construction: c.konstruktion,
                     centerline: c.mittellinie,
                     show_frame: c.rahmen,
+                    // Normalen kommen erst mit Format 20 in die Datei (Skizzen 10).
+                    normal: None,
                     alive: c.aktiv,
                 })
             })

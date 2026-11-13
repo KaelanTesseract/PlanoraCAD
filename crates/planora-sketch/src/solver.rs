@@ -28,7 +28,7 @@ use crate::linalg::{Matrix, analyze_rows, cholesky_solve};
 use crate::model::{CurveId, CurveKind, PointId, Sketch};
 use crate::pattern::{PATTERN_ROUNDS, PatternId};
 use planora_i18n::tr;
-use planora_math::DVec2;
+use planora_math::{DVec2, DVec3};
 use std::collections::{HashMap, HashSet};
 
 /// Höchstzahl nutzererzeugter Abhängigkeiten einer Gruppe, für die die Widerspruchsdiagnose
@@ -789,7 +789,11 @@ impl Sketch {
     /// Tangente durch die Linie hindurch) ist ebenfalls entartet.
     fn degenerate(&self, curves: &[CurveId], x: &[f64]) -> bool {
         let tol = self.tolerance().linear;
-        let at = |p: PointId| DVec2::new(x[self.points[p].x], x[self.points[p].y]);
+        // Im Raum (Skizzen 10); ein 2D-Punkt hat z = 0, also dieselben Abstände wie bisher.
+        let at = |p: PointId| {
+            let d = &self.points[p];
+            DVec3::new(x[d.x], x[d.y], d.z.map_or(0.0, |i| x[i]))
+        };
         let ok = |v: f64| v > tol;
         curves.iter().any(|&c| match &self.curves[c].kind {
             CurveKind::Line { a, b } => !ok(at(*a).distance(at(*b))),
@@ -798,9 +802,14 @@ impl Sketch {
                 let m = at(*center);
                 !(ok(at(*start).distance(m)) && ok(at(*end).distance(m)))
             }
-            CurveKind::Ellipse { ax, ay, minor, .. }
-            | CurveKind::EllipticArc { ax, ay, minor, .. } => {
-                !(ok(DVec2::new(x[*ax], x[*ay]).length()) && ok(x[*minor]))
+            CurveKind::Ellipse {
+                ax, ay, az, minor, ..
+            }
+            | CurveKind::EllipticArc {
+                ax, ay, az, minor, ..
+            } => {
+                let z = az.map_or(0.0, |i| x[i]);
+                !(ok(DVec3::new(x[*ax], x[*ay], z).length()) && ok(x[*minor]))
             }
             CurveKind::Spline { .. }
             | CurveKind::ControlSpline { .. }
@@ -977,7 +986,10 @@ impl Sketch {
                 .kind
                 .points()
                 .iter()
-                .flat_map(|&p| [self.points[p].x, self.points[p].y])
+                .flat_map(|&p| {
+                    let d = &self.points[p];
+                    [d.x, d.y].into_iter().chain(d.z)
+                })
                 .collect();
             vars.extend(own_vars(&c.kind));
             let mut seen: Vec<usize> = Vec::new();
@@ -1589,7 +1601,10 @@ impl Sketch {
 
     /// Alle Variablen lebender Punkte und Kurven (ohne Doppelte).
     fn live_variables(&self) -> Vec<usize> {
-        let mut v: Vec<usize> = self.points().flat_map(|(_, p)| [p.x, p.y]).collect();
+        let mut v: Vec<usize> = self
+            .points()
+            .flat_map(|(_, p)| [p.x, p.y].into_iter().chain(p.z))
+            .collect();
         for (_, c) in self.curves() {
             v.extend(own_vars(&c.kind));
         }
@@ -1603,9 +1618,12 @@ impl Sketch {
 pub(crate) fn own_vars(kind: &CurveKind) -> Vec<usize> {
     match kind {
         CurveKind::Circle { radius, .. } => vec![*radius],
-        CurveKind::Ellipse { ax, ay, minor, .. } | CurveKind::EllipticArc { ax, ay, minor, .. } => {
-            vec![*ax, *ay, *minor]
+        CurveKind::Ellipse {
+            ax, ay, az, minor, ..
         }
+        | CurveKind::EllipticArc {
+            ax, ay, az, minor, ..
+        } => [*ax, *ay, *minor].into_iter().chain(*az).collect(),
         _ => Vec::new(),
     }
 }

@@ -8,11 +8,11 @@
 //! derselben Form; Spline `t ∈ [0, n − 1]` (Stützpunkt `i` bei `t = i`); Freiformkurve der
 //! NURBS-Parameter.
 
-use crate::curves::{Sampled, nurbs_breaks, nurbs_samples};
-use crate::model::{CurveId, CurveKind, Sketch};
+use crate::curves::{CONIC_KNOTS, Sampled, conic_weight, nurbs_breaks, nurbs_samples};
+use crate::model::{CurveId, CurveKind, Sketch, plane_basis};
 use planora_kernel::nurbs_divisions;
 use planora_math::nurbs::NurbsCurve;
-use planora_math::{DVec2, TAU};
+use planora_math::{DVec2, DVec3, TAU};
 use std::sync::Arc;
 
 /// Abtastschritte je Vollkreis bei der Suche nach dem nächsten Punkt (Ellipsen).
@@ -544,6 +544,10 @@ fn golden_min(mut a: f64, mut b: f64, f: impl Fn(f64) -> f64) -> f64 {
     0.5 * (a + b)
 }
 
+/// Kreis oder Bogen im Raum: Mitte, Radius, Ebenenbasis `(u, v)` und die Winkel von Start und
+/// Ende in dieser Basis (beim Kreis `(0, 0)`).
+type Round3 = (DVec3, f64, (DVec3, DVec3), (f64, f64));
+
 impl Sketch {
     /// Geometrie einer lebenden Kurve; `None` für unbekannte Kurven sowie Kreise und Bögen
     /// ohne Radius und Ellipsen ohne Halbachsen. Bögen und Ellipsenbögen, deren Ende in
@@ -636,6 +640,191 @@ impl Sketch {
     /// Kreis und Ellipse `(0, 2π)`.
     pub fn curve_domain(&self, c: CurveId) -> Option<(f64, f64)> {
         Some(self.geom(c)?.domain())
+    }
+
+    /// Punkt der lebenden Kurve `c` im Raum der Skizze beim Parameter `t`, zum Abtasten aller
+    /// Arten (Skizzen 10). Eine Kurve, die keine 3D-Kurve ist ([`Sketch::is_3d_curve`]), liefert
+    /// genau [`Sketch::curve_eval`] mit z = 0. Bei 3D-Kurven gilt der Bereich von
+    /// [`Sketch::curve_domain3`]: Kreis und Bogen sowie Ellipse und Ellipsenbogen laufen gegen
+    /// den Uhrzeigersinn um ihre Normale, Kreis und Bogen ab der ersten Achse von
+    /// [`plane_basis`](crate::model::plane_basis), Ellipsen ab der großen Halbachse; Linie,
+    /// Splines und Freiformkurven haben dieselben Parameter wie in 2D. `None` für unbekannte oder
+    /// entartete Kurven und nicht endliches `t`.
+    ///
+    /// Grenze: Bei einem Spline mit Griffen folgt z dem natürlichen Spline durch die z-Werte der
+    /// Stützpunkte; Griffe sind an 3D-Geometrie nicht vorgesehen.
+    pub fn curve_point3(&self, c: CurveId, t: f64) -> Option<DVec3> {
+        if !t.is_finite() {
+            return None;
+        }
+        if !self.is_3d_curve(c) {
+            return self.curve_eval(c, t).map(|p| p.extend(0.0));
+        }
+        let p = match &self.curves[c].kind {
+            CurveKind::Line { a, b } => {
+                let (a, b) = (self.pos3(*a), self.pos3(*b));
+                a + (b - a) * t
+            }
+            CurveKind::Circle { .. } | CurveKind::Arc { .. } => {
+                let (m, r, (u, v), _) = self.round3(c)?;
+                let (s, co) = t.sin_cos();
+                m + (u * co + v * s) * r
+            }
+            CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. } => {
+                let (m, a, b) = self.ellipse3(c)?;
+                let (s, co) = t.sin_cos();
+                m + a * co + b * s
+            }
+            CurveKind::Spline { points, handles } => {
+                let xy = self.spline_sampled(points, handles).eval(t).0;
+                // z als eigener natürlicher Spline (je Koordinate unabhängig), außerhalb
+                // fortgesetzt wie in 2D.
+                let z: Vec<DVec2> = points
+                    .iter()
+                    .map(|&p| DVec2::new(self.pos3(p).z, 0.0))
+                    .collect();
+                xy.extend(Sampled::spline(&z).eval(t).0.x)
+            }
+            CurveKind::ControlSpline { .. }
+            | CurveKind::Conic { .. }
+            | CurveKind::FixedSpline { .. } => self.nurbs3_of(c)?.derivs_unclamped(t, 1)[0],
+        };
+        p.is_finite().then_some(p)
+    }
+
+    /// Parameterbereich `(lo, hi)` der lebenden Kurve `c` für [`Sketch::curve_point3`]; bei einer
+    /// Kurve, die keine 3D-Kurve ist, genau [`Sketch::curve_domain`].
+    pub fn curve_domain3(&self, c: CurveId) -> Option<(f64, f64)> {
+        if !self.is_3d_curve(c) {
+            return self.curve_domain(c);
+        }
+        let angular = self.tolerance().angular;
+        let sweep_of = |t0: f64, t1: f64| {
+            let s = (t1 - t0).rem_euclid(TAU);
+            if s <= angular || s >= TAU { TAU } else { s }
+        };
+        Some(match &self.curves[c].kind {
+            CurveKind::Line { .. } => (0.0, 1.0),
+            CurveKind::Circle { .. } | CurveKind::Ellipse { .. } => {
+                // Entartete Kurven haben keinen Bereich, wie in 2D.
+                if matches!(self.curves[c].kind, CurveKind::Circle { .. }) {
+                    self.round3(c)?;
+                } else {
+                    self.ellipse3(c)?;
+                }
+                (0.0, TAU)
+            }
+            CurveKind::Arc { .. } => {
+                let (_, _, _, (a0, a1)) = self.round3(c)?;
+                (a0, a0 + sweep_of(a0, a1))
+            }
+            CurveKind::EllipticArc { start, end, .. } => {
+                let t0 = self.ellipse_param3(c, self.pos3(*start))?;
+                let t1 = self.ellipse_param3(c, self.pos3(*end))?;
+                (t0, t0 + sweep_of(t0, t1))
+            }
+            CurveKind::Spline { points, .. } => (0.0, (points.len() - 1) as f64),
+            CurveKind::ControlSpline { .. }
+            | CurveKind::Conic { .. }
+            | CurveKind::FixedSpline { .. } => self.nurbs3_of(c)?.domain(),
+        })
+    }
+
+    /// Mitte, Radius, Ebenenbasis `(u, v)` und bei einem Bogen die Winkel von Start und Ende in
+    /// dieser Basis (beim Kreis `(0, 0)`) eines (lebenden) Kreises oder Bogens im Raum. Der
+    /// Radius des Bogens ist `|start − center|` im Raum. `None` bei Radius ≤ 0 oder NaN.
+    fn round3(&self, c: CurveId) -> Option<Round3> {
+        let basis = plane_basis(self.curve_normal(c));
+        let (u, v) = basis;
+        let angle = |d: DVec3| d.dot(v).atan2(d.dot(u));
+        let (m, r, ends) = match self.curves[c].kind {
+            CurveKind::Circle { center, radius } => {
+                (self.pos3(center), self.vars[radius], (0.0, 0.0))
+            }
+            CurveKind::Arc { center, start, end } => {
+                let m = self.pos3(center);
+                let (s, e) = (self.pos3(start) - m, self.pos3(end) - m);
+                (m, s.length(), (angle(s), angle(e)))
+            }
+            _ => return None,
+        };
+        (r.is_finite() && r > 0.0).then_some((m, r, basis, ends))
+    }
+
+    /// Mitte, große Halbachse `a` und `b = (n × â)·minor` einer (lebenden) Ellipse oder eines
+    /// Ellipsenbogens im Raum; `None` bei entarteten Halbachsen.
+    fn ellipse3(&self, c: CurveId) -> Option<(DVec3, DVec3, DVec3)> {
+        let (CurveKind::Ellipse {
+            center,
+            ax,
+            ay,
+            az,
+            minor,
+        }
+        | CurveKind::EllipticArc {
+            center,
+            ax,
+            ay,
+            az,
+            minor,
+            ..
+        }) = self.curves[c].kind
+        else {
+            return None;
+        };
+        let a = DVec3::new(
+            self.vars[ax],
+            self.vars[ay],
+            az.map_or(0.0, |i| self.vars[i]),
+        );
+        let (len, minor) = (a.length(), self.vars[minor]);
+        if !(len.is_finite() && len > 0.0 && minor.is_finite() && minor > 0.0) {
+            return None;
+        }
+        let b = self.curve_normal(c).cross(a) / len * minor;
+        Some((self.pos3(center), a, b))
+    }
+
+    /// Parameter des Punktes `p` auf der (lebenden) Ellipse oder dem Ellipsenbogen `c` im Raum,
+    /// wie [`Sketch::ellipse_param_of`] in der Ebene der Kurve.
+    fn ellipse_param3(&self, c: CurveId, p: DVec3) -> Option<f64> {
+        let (m, a, b) = self.ellipse3(c)?;
+        let d = p - m;
+        let (x, y) = (d.dot(a) / a.length_squared(), d.dot(b) / b.length_squared());
+        (x != 0.0 || y != 0.0).then(|| y.atan2(x))
+    }
+
+    /// Die Freiformkurve `c` (Spline mit Kontrollpunkten, Kegelschnitt, projizierte Kurve) im
+    /// Raum der Skizze, mit den z-Werten ihrer Punkte.
+    fn nurbs3_of(&self, c: CurveId) -> Option<Arc<NurbsCurve>> {
+        match &self.curves[c].kind {
+            CurveKind::ControlSpline {
+                points,
+                degree,
+                knots,
+            } => {
+                let control: Vec<DVec3> = points.iter().map(|&p| self.pos3(p)).collect();
+                let weights = vec![1.0; control.len()];
+                NurbsCurve::new(usize::from(*degree), knots.clone(), control, weights)
+                    .ok()
+                    .map(Arc::new)
+            }
+            CurveKind::Conic {
+                start,
+                end,
+                apex,
+                rho,
+            } => NurbsCurve::new(
+                2,
+                CONIC_KNOTS.to_vec(),
+                vec![self.pos3(*start), self.pos3(*apex), self.pos3(*end)],
+                vec![1.0, conic_weight(*rho), 1.0],
+            )
+            .ok()
+            .map(Arc::new),
+            CurveKind::FixedSpline { curve, .. } => Some(curve.clone()),
+            _ => None,
+        }
     }
 }
 

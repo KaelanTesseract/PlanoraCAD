@@ -38,6 +38,9 @@ pub struct CurveRecord {
     pub centerline: bool,
     /// Kontrollpunktrahmen (ab Format 19, Skizzen 9): nur an Kurven mit Kontrollpolygon.
     pub show_frame: bool,
+    /// Normale einer ebenen Kurve außerhalb der Skizzenebene (Skizzen 10), normiert; `None` in
+    /// der Skizzenebene.
+    pub normal: Option<DVec3>,
     pub alive: bool,
 }
 
@@ -148,6 +151,7 @@ impl Sketch {
                     construction: c.construction,
                     centerline: c.centerline,
                     show_frame: c.show_frame,
+                    normal: c.normal,
                     alive: c.alive,
                 })
                 .collect(),
@@ -259,14 +263,17 @@ impl Sketch {
             {
                 return Err(bad(tr!("sketch-err-data-show-frame")));
             }
+            check_curve_normal(c)?;
             match &c.kind {
                 CurveKind::Circle { radius, .. } if !var_ok(*radius) => {
                     return Err(bad(tr!("sketch-err-data-circle-value")));
                 }
-                CurveKind::Ellipse { ax, ay, minor, .. }
-                | CurveKind::EllipticArc { ax, ay, minor, .. }
-                    if !(var_ok(*ax) && var_ok(*ay) && var_ok(*minor)) =>
-                {
+                CurveKind::Ellipse {
+                    ax, ay, az, minor, ..
+                }
+                | CurveKind::EllipticArc {
+                    ax, ay, az, minor, ..
+                } if !(var_ok(*ax) && var_ok(*ay) && var_ok(*minor) && az.is_none_or(var_ok)) => {
                     return Err(bad(tr!("sketch-err-data-ellipse-value")));
                 }
                 CurveKind::Spline { points, .. }
@@ -372,6 +379,7 @@ impl Sketch {
                 construction: c.construction,
                 centerline: c.centerline,
                 show_frame: c.show_frame,
+                normal: c.normal,
                 alive: c.alive,
             });
         }
@@ -454,6 +462,41 @@ impl Sketch {
         Ok((s, dissolved))
     }
 }
+
+/// Prüft die Normale einer Kurve (Skizzen 10): nur an Kreis, Bogen, Ellipse und Ellipsenbogen,
+/// endlich und normiert. Eine Ellipse hat `az` genau dann, wenn sie eine Normale hat.
+fn check_curve_normal(c: &CurveRecord) -> Result<(), SketchError> {
+    let wrong = || bad(tr!("sketch-err-data-curve-normal"));
+    let az = match c.kind {
+        CurveKind::Ellipse { az, .. } | CurveKind::EllipticArc { az, .. } => az,
+        _ => None,
+    };
+    let Some(n) = c.normal else {
+        return if az.is_some() { Err(wrong()) } else { Ok(()) };
+    };
+    let planar = matches!(
+        c.kind,
+        CurveKind::Circle { .. }
+            | CurveKind::Arc { .. }
+            | CurveKind::Ellipse { .. }
+            | CurveKind::EllipticArc { .. }
+    );
+    let ellipse = matches!(
+        c.kind,
+        CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. }
+    );
+    if !planar
+        || !n.is_finite()
+        || (n.length() - 1.0).abs() > NORMAL_UNIT_TOL
+        || ellipse != az.is_some()
+    {
+        return Err(wrong());
+    }
+    Ok(())
+}
+
+/// Spielraum für `|n| = 1` einer gespeicherten Normale (Rundung beim Normieren und Laden).
+const NORMAL_UNIT_TOL: f64 = 1e-9;
 
 /// Prüft die Griffe aller Splines, auch gelöschter Einträge: am Stützpunkt, je Stützpunkt einer, die
 /// Spitze kein Stützpunkt, die Griff-Linie eine Konstruktionslinie von `at` nach `tip`, die nur diesem

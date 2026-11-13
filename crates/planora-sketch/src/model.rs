@@ -64,11 +64,14 @@ pub enum CurveKind {
         start: PointId,
         end: PointId,
     },
-    /// Große Halbachse als Vektor (ax, ay), kleine Halbachse `minor`.
+    /// Große Halbachse als Vektor (ax, ay), kleine Halbachse `minor`. Eine Ellipse mit eigener
+    /// Normale (Skizzen 10) hat dazu `az`, die z-Komponente der großen Halbachse; die interne
+    /// Abhängigkeit `InPlane` hält die Halbachse senkrecht zur Normale. Ohne Normale `None`.
     Ellipse {
         center: PointId,
         ax: usize,
         ay: usize,
+        az: Option<usize>,
         minor: usize,
     },
     /// Kubischer Spline durch die Stützpunkte; natürlich, solange `handles` leer ist (dann derselbe
@@ -80,11 +83,12 @@ pub enum CurveKind {
     /// Gegen den Uhrzeigersinn von `start` nach `end` auf der Ellipse
     /// `center + a·cos t + b̂·minor·sin t` (große Halbachse `a = (ax, ay)`, siehe
     /// [`Sketch::ellipse_point`]). Die interne Abhängigkeit `EllipticArcEnds` hält beide Enden
-    /// auf der Ellipse.
+    /// auf der Ellipse. `az` wie bei [`CurveKind::Ellipse`].
     EllipticArc {
         center: PointId,
         ax: usize,
         ay: usize,
+        az: Option<usize>,
         minor: usize,
         start: PointId,
         end: PointId,
@@ -175,6 +179,10 @@ pub struct CurveData {
     /// Kontrollpunktrahmen (Skizzen 9): Die Ansicht zeichnet das Kontrollpolygon dieser Kurve
     /// immer. Vorgabe `false`; gesetzt beim Einfügen mit „Kontrollpunktrahmen“.
     pub show_frame: bool,
+    /// Normale der Ebene einer ebenen Kurve (Kreis, Bogen, Ellipse, Ellipsenbogen), normiert, in
+    /// Skizzenkoordinaten (Skizzen 10). `None`: Die Kurve liegt in der Skizzenebene, alles wie
+    /// bisher. Eine Zahl in der Kurve wie `rho` beim Kegelschnitt, keine Löservariable.
+    pub normal: Option<DVec3>,
     pub(crate) alive: bool,
 }
 
@@ -414,8 +422,7 @@ impl Sketch {
 
     /// Macht den (geprüften) Punkt `p` zum 3D-Punkt: neue z-Variable mit 0. Hat er schon eine,
     /// passiert nichts. Der Solver-Zwischenspeicher ist danach leer (über `new_var`).
-    // Aufrufer kommen mit den 3D-Abhängigkeiten und dem Einbeziehen (Skizzen 10, Spec 10).
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// Prüft weder Text noch Leben: Das tun die Aufrufer (etwa `check_liftable`).
     pub(crate) fn promote_to_3d(&mut self, p: PointId) {
         if self.points[p].z.is_none() {
             let zi = self.new_var(0.0);
@@ -467,6 +474,7 @@ impl Sketch {
             construction: false,
             centerline: false,
             show_frame: false,
+            normal: None,
             alive: true,
         })
     }
@@ -520,7 +528,7 @@ impl Sketch {
         self.with_internal_checked(|s| {
             let id = s.push_curve(CurveKind::Arc { center, start, end });
             let k = s.push_internal(crate::constraint::ConstraintKind::ArcRadius(id));
-            (id, k)
+            (id, vec![k])
         })
     }
 
@@ -531,14 +539,14 @@ impl Sketch {
     /// zusammen. Dann bleibt die Skizze unverändert.
     fn with_internal_checked(
         &mut self,
-        make: impl FnOnce(&mut Sketch) -> (CurveId, crate::constraint::ConstraintId),
+        make: impl FnOnce(&mut Sketch) -> (CurveId, Vec<crate::constraint::ConstraintId>),
     ) -> Result<CurveId, SketchError> {
         if self.patterns().next().is_none() {
             return Ok(make(self).0);
         }
         self.atomically(|s| {
-            let (id, k) = make(s);
-            if s.check_activation_cycle(k).is_err() {
+            let (id, ks) = make(s);
+            if ks.iter().any(|&k| s.check_activation_cycle(k).is_err()) {
                 return Err(SketchError::InvalidInput(tr!("sketch-pattern-cycle-arc")));
             }
             Ok(id)
@@ -564,6 +572,7 @@ impl Sketch {
             center,
             ax,
             ay,
+            az: None,
             minor: mi,
         }))
     }
@@ -599,7 +608,8 @@ impl Sketch {
         self.check_elliptic_arc(center, major, minor, start, end)?;
         self.with_internal_checked(|s| {
             let (ax, ay, mi) = (s.new_var(major.x), s.new_var(major.y), s.new_var(minor));
-            s.add_elliptic_arc_vars(center, ax, ay, mi, start, end)
+            let (id, k) = s.add_elliptic_arc_vars(center, (ax, ay, None), mi, start, end);
+            (id, vec![k])
         })
     }
 
@@ -631,8 +641,7 @@ impl Sketch {
     pub(crate) fn add_elliptic_arc_vars(
         &mut self,
         center: PointId,
-        ax: usize,
-        ay: usize,
+        (ax, ay, az): (usize, usize, Option<usize>),
         minor: usize,
         start: PointId,
         end: PointId,
@@ -641,6 +650,7 @@ impl Sketch {
             center,
             ax,
             ay,
+            az,
             minor,
             start,
             end,
@@ -863,6 +873,7 @@ impl Sketch {
             ax,
             ay,
             minor,
+            ..
         }
         | CurveKind::EllipticArc {
             center,
@@ -998,6 +1009,353 @@ impl Sketch {
     /// Alle lebenden Kurven.
     pub fn curves(&self) -> impl Iterator<Item = (CurveId, &CurveData)> {
         self.curves.iter().filter(|(_, c)| c.alive)
+    }
+}
+
+// ---- Ebene Kurven mit eigener Normale (Skizzen 10) ---------------------------------------------
+
+/// Unter dieser Länge gilt eine Normale als null (sie lässt sich nicht normieren).
+const NORMAL_MIN_LEN: f64 = 1e-12;
+/// Ist die Projektion der Skizzen-X-Achse auf eine Ebene kürzer, steht die Achse (fast)
+/// senkrecht auf der Ebene, und die Basis nimmt die Skizzen-Y-Achse.
+const BASIS_MIN_PROJECTION: f64 = 1e-6;
+
+/// Normiert eine Normale; null, nicht endlich oder nicht normierbar ergibt `InvalidInput`.
+pub(crate) fn unit_normal(n: DVec3) -> Result<DVec3, SketchError> {
+    let len = n.length();
+    if !n.is_finite() || !len.is_finite() || len <= NORMAL_MIN_LEN {
+        return Err(SketchError::InvalidInput(tr!("sketch-err-normal")));
+    }
+    Ok(n / len)
+}
+
+/// Stabile Basis `(u, v)` der Ebene mit der normierten Normale `n`: `u` ist die Projektion der
+/// Skizzen-X-Achse auf die Ebene, bei Parallelität die der Skizzen-Y-Achse, und `v = n × u`.
+/// Mit `n = (0, 0, 1)` ist das `(X, Y)`, also dieselbe Lage wie in 2D.
+pub fn plane_basis(n: DVec3) -> (DVec3, DVec3) {
+    let project = |a: DVec3| a - n * a.dot(n);
+    let x = project(DVec3::X);
+    let u = if x.length() > BASIS_MIN_PROJECTION {
+        x.normalize()
+    } else {
+        project(DVec3::Y).normalize()
+    };
+    (u, n.cross(u))
+}
+
+impl Sketch {
+    /// Normale der Ebene, in der die Kurve `c` liegt: die eigene Normale, bei `None` die
+    /// Skizzennormale `(0, 0, 1)`; ebenso für Kurven ohne Ebene und unbekannte Kurven.
+    pub fn curve_normal(&self, c: CurveId) -> DVec3 {
+        self.curve(c).and_then(|d| d.normal).unwrap_or(DVec3::Z)
+    }
+
+    /// Ist die lebende Kurve `c` eine 3D-Kurve: mit eigener Normale, an einem 3D-Punkt oder eine
+    /// Freiformkurve mit Kontrollpunkten außerhalb der Skizzenebene?
+    pub fn is_3d_curve(&self, c: CurveId) -> bool {
+        let Some(d) = self.curve(c) else {
+            return false;
+        };
+        d.normal.is_some()
+            || d.kind.points().iter().any(|&p| self.points[p].z.is_some())
+            || matches!(&d.kind, CurveKind::FixedSpline { curve, .. }
+                if curve.control_points().iter().any(|q| q.z != 0.0))
+    }
+
+    /// Wie [`Sketch::is_3d_curve`] für einen (geprüften) Bogen oder Ellipsenbogen, ohne
+    /// anzulegen: für die internen Abhängigkeiten im Löser, die den 2D-Weg nicht verlangsamen
+    /// dürfen.
+    pub(crate) fn arc_is_3d(&self, c: CurveId) -> bool {
+        let d = &self.curves[c];
+        let z = |p: PointId| self.points[p].z.is_some();
+        d.normal.is_some()
+            || match d.kind {
+                CurveKind::Arc { center, start, end }
+                | CurveKind::EllipticArc {
+                    center, start, end, ..
+                } => z(center) || z(start) || z(end),
+                _ => false,
+            }
+    }
+
+    /// Normale für eine neue ebene Kurve an den Punkten `points`: normiert; `None`, wenn sie die
+    /// Skizzennormale ist und alle Punkte 2D sind (dann ist es eine gewöhnliche Kurve).
+    fn plane_normal_for(&self, n: DVec3, points: &[PointId]) -> Result<Option<DVec3>, SketchError> {
+        let n = unit_normal(n)?;
+        let ang = self.tol.angular;
+        let sketch_plane = n.z > 0.0 && n.x.abs() <= ang && n.y.abs() <= ang;
+        if sketch_plane && points.iter().all(|&p| self.points[p].z.is_none()) {
+            return Ok(None);
+        }
+        Ok(Some(if sketch_plane { DVec3::Z } else { n }))
+    }
+
+    /// Prüft, dass die (lebenden) Punkte 3D werden dürfen: Ein erzeugter Punkt eines Textes hält
+    /// der Text (`sketch-text-no-edit`).
+    fn check_liftable(&self, points: &[PointId]) -> Result<(), SketchError> {
+        for &p in points {
+            if self.points[p].z.is_none() {
+                self.refuse_glyph_point(p)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Kreis um `center` mit dem Radius `radius` in der Ebene durch `center` mit der Normale
+    /// `normal` (Skizzen 10). Ist die Normale die Skizzennormale und `center` ein 2D-Punkt, ist es
+    /// ein gewöhnlicher Kreis ohne Normale; sonst wird `center` zum 3D-Punkt. Die Normale muss
+    /// endlich und normierbar sein, sonst `InvalidInput`. Bei einem Fehler bleibt die Skizze
+    /// unverändert.
+    pub fn add_circle3(
+        &mut self,
+        center: PointId,
+        radius: f64,
+        normal: DVec3,
+    ) -> Result<CurveId, SketchError> {
+        self.check_point(center)?;
+        finite(radius, || tr!("sketch-err-what-radius"))?;
+        if radius <= self.tol.linear {
+            return Err(SketchError::Degenerate(tr!("sketch-radius-positive")));
+        }
+        let normal = self.plane_normal_for(normal, &[center])?;
+        let Some(n) = normal else {
+            return self.add_circle(center, radius);
+        };
+        self.check_liftable(&[center])?;
+        self.promote_to_3d(center);
+        let c = self.add_circle(center, radius)?;
+        self.curves[c].normal = Some(n);
+        Ok(c)
+    }
+
+    /// Bogen um `center` von `start` nach `end`, gegen den Uhrzeigersinn um die Normale `normal`
+    /// (Skizzen 10). Wie [`Sketch::add_arc`]; mit einer Normale außer der Skizzennormale (oder an
+    /// einem 3D-Punkt) werden alle drei Punkte 3D, und die interne Abhängigkeit `InPlane` hält
+    /// Start und Ende in der Ebene durch `center`. Bei einem Fehler bleibt die Skizze unverändert.
+    pub fn add_arc3(
+        &mut self,
+        center: PointId,
+        start: PointId,
+        end: PointId,
+        normal: DVec3,
+    ) -> Result<CurveId, SketchError> {
+        let pts = [center, start, end];
+        for p in pts {
+            self.check_point(p)?;
+        }
+        let normal = self.plane_normal_for(normal, &pts)?;
+        let Some(n) = normal else {
+            return self.add_arc(center, start, end);
+        };
+        let c = self.pos3(center);
+        if self.pos3(start).distance(c) <= self.tol.linear
+            || self.pos3(end).distance(c) <= self.tol.linear
+        {
+            return Err(SketchError::Degenerate(tr!("sketch-err-arc-center")));
+        }
+        self.check_liftable(&pts)?;
+        self.with_internal_checked(|s| {
+            for p in pts {
+                s.promote_to_3d(p);
+            }
+            let id = s.push_curve(CurveKind::Arc { center, start, end });
+            s.curves[id].normal = Some(n);
+            let k = s.push_internal(crate::constraint::ConstraintKind::ArcRadius(id));
+            let plane = s.push_internal(crate::constraint::ConstraintKind::InPlane(id));
+            (id, vec![k, plane])
+        })
+    }
+
+    /// Große Halbachse `major` in die Ebene mit der normierten Normale `n` gelegt und mit
+    /// `minor` geprüft wie bei [`Sketch::add_ellipse`].
+    fn ellipse_axis_in_plane(
+        &self,
+        major: DVec3,
+        minor: f64,
+        n: DVec3,
+    ) -> Result<DVec3, SketchError> {
+        for v in [major.x, major.y, major.z] {
+            finite(v, || tr!("sketch-err-what-major"))?;
+        }
+        finite(minor, || tr!("sketch-err-what-minor"))?;
+        let a = major - n * major.dot(n);
+        let len = a.length();
+        if len <= self.tol.linear {
+            return Err(SketchError::Degenerate(tr!("sketch-major-axis-positive")));
+        }
+        if minor <= self.tol.linear || minor > len {
+            return Err(SketchError::Degenerate(tr!("sketch-err-minor-range")));
+        }
+        Ok(a)
+    }
+
+    /// Ellipse um `center` in der Ebene mit der Normale `normal` (Skizzen 10). Die große Halbachse
+    /// `major` wird in die Ebene gelegt (ihr Anteil längs der Normale fällt weg); die kleine liegt
+    /// links davon um die Normale (`n × â`). Ohne eigene Normale (Skizzennormale an einem
+    /// 2D-Punkt) eine gewöhnliche Ellipse; sonst wird `center` 3D, die große Halbachse bekommt
+    /// `az`, und `InPlane` hält sie senkrecht zur Normale. Bei einem Fehler bleibt die Skizze
+    /// unverändert.
+    pub fn add_ellipse3(
+        &mut self,
+        center: PointId,
+        major: DVec3,
+        minor: f64,
+        normal: DVec3,
+    ) -> Result<CurveId, SketchError> {
+        self.check_point(center)?;
+        let unit = unit_normal(normal)?;
+        let a = self.ellipse_axis_in_plane(major, minor, unit)?;
+        let Some(n) = self.plane_normal_for(unit, &[center])? else {
+            return self.add_ellipse(center, a.truncate(), minor);
+        };
+        self.check_liftable(&[center])?;
+        self.with_internal_checked(|s| {
+            s.promote_to_3d(center);
+            let (ax, ay, az, mi) = (
+                s.new_var(a.x),
+                s.new_var(a.y),
+                s.new_var(a.z),
+                s.new_var(minor),
+            );
+            let id = s.push_curve(CurveKind::Ellipse {
+                center,
+                ax,
+                ay,
+                az: Some(az),
+                minor: mi,
+            });
+            s.curves[id].normal = Some(n);
+            let plane = s.push_internal(crate::constraint::ConstraintKind::InPlane(id));
+            (id, vec![plane])
+        })
+    }
+
+    /// Ellipsenbogen wie [`Sketch::add_elliptic_arc`] in der Ebene mit der Normale `normal`
+    /// (Skizzen 10), große Halbachse wie bei [`Sketch::add_ellipse3`]. Mit eigener Normale werden
+    /// alle drei Punkte 3D, und `InPlane` hält die große Halbachse sowie Start und Ende in der
+    /// Ebene. Bei einem Fehler bleibt die Skizze unverändert.
+    pub fn add_elliptic_arc3(
+        &mut self,
+        center: PointId,
+        major: DVec3,
+        minor: f64,
+        start: PointId,
+        end: PointId,
+        normal: DVec3,
+    ) -> Result<CurveId, SketchError> {
+        let pts = [center, start, end];
+        for p in pts {
+            self.check_point(p)?;
+        }
+        let unit = unit_normal(normal)?;
+        let a = self.ellipse_axis_in_plane(major, minor, unit)?;
+        let Some(n) = self.plane_normal_for(unit, &pts)? else {
+            return self.add_elliptic_arc(center, a.truncate(), minor, start, end);
+        };
+        let c = self.pos3(center);
+        if self.pos3(start).distance(c) <= self.tol.linear
+            || self.pos3(end).distance(c) <= self.tol.linear
+        {
+            return Err(SketchError::Degenerate(tr!("sketch-err-arc-center")));
+        }
+        self.check_liftable(&pts)?;
+        self.with_internal_checked(|s| {
+            for p in pts {
+                s.promote_to_3d(p);
+            }
+            let (ax, ay, az, mi) = (
+                s.new_var(a.x),
+                s.new_var(a.y),
+                s.new_var(a.z),
+                s.new_var(minor),
+            );
+            let (id, k) = s.add_elliptic_arc_vars(center, (ax, ay, Some(az)), mi, start, end);
+            s.curves[id].normal = Some(n);
+            let plane = s.push_internal(crate::constraint::ConstraintKind::InPlane(id));
+            (id, vec![k, plane])
+        })
+    }
+
+    /// Setzt die Normale der Ebene von Kreis, Bogen, Ellipse oder Ellipsenbogen `c` (Skizzen 10),
+    /// etwa beim Drehen aus der Ebene; andere Arten ergeben `WrongType`. Die Normale wird
+    /// normiert (null oder nicht endlich: `InvalidInput`). Ist sie die Skizzennormale und sind
+    /// alle Punkte 2D, hat die Kurve danach keine eigene Normale mehr. Sonst werden ihre Punkte
+    /// 3D, eine Ellipse bekommt `az`, ihre große Halbachse wird mit gleicher Länge in die neue
+    /// Ebene gelegt, und `InPlane` hält Start, Ende und Halbachse in der Ebene; die Punkte folgen
+    /// beim nächsten Lösen. Ein Buchstabe eines Textes wird abgelehnt (`sketch-text-no-edit`), ein
+    /// Muster an `c` aufgelöst. Bei einem Fehler bleibt die Skizze unverändert.
+    pub fn set_curve_normal(&mut self, c: CurveId, n: DVec3) -> Result<(), SketchError> {
+        use crate::constraint::ConstraintKind;
+        self.check_curve(c)?;
+        let kind = self.curves[c].kind.clone();
+        if !matches!(
+            kind,
+            CurveKind::Circle { .. }
+                | CurveKind::Arc { .. }
+                | CurveKind::Ellipse { .. }
+                | CurveKind::EllipticArc { .. }
+        ) {
+            return Err(SketchError::WrongType(tr!("sketch-err-normal-kind")));
+        }
+        self.refuse_text_curves(&[c], || tr!("sketch-text-no-edit"))?;
+        let pts = kind.points();
+        let normal = self.plane_normal_for(n, &pts)?;
+        if normal == self.curves[c].normal {
+            return Ok(());
+        }
+        if normal.is_some() {
+            self.check_liftable(&pts)?;
+        }
+        self.dissolve_patterns_at(&[c]);
+        self.touch_structure();
+        let in_plane: Vec<_> = self
+            .constraints()
+            .filter(|(_, d)| d.kind == ConstraintKind::InPlane(c))
+            .map(|(id, _)| id)
+            .collect();
+        let mut new_kind = kind.clone();
+        let target = normal.unwrap_or(DVec3::Z);
+        if let CurveKind::Ellipse { ax, ay, az, .. } | CurveKind::EllipticArc { ax, ay, az, .. } =
+            &mut new_kind
+        {
+            // Große Halbachse mit gleicher Länge in die neue Ebene legen.
+            let old = DVec3::new(
+                self.vars[*ax],
+                self.vars[*ay],
+                az.map_or(0.0, |i| self.vars[i]),
+            );
+            let flat = old - target * old.dot(target);
+            let a = if flat.length() > self.tol.linear {
+                flat.normalize() * old.length()
+            } else {
+                plane_basis(target).0 * old.length()
+            };
+            match (normal, *az) {
+                (Some(_), Some(i)) => self.vars[i] = a.z,
+                (Some(_), None) => *az = Some(self.new_var(a.z)),
+                (None, _) => *az = None,
+            }
+            self.vars[*ax] = a.x;
+            self.vars[*ay] = a.y;
+        }
+        if normal.is_some() {
+            for &p in &pts {
+                self.promote_to_3d(p);
+            }
+        }
+        self.curves[c].kind = new_kind;
+        self.curves[c].normal = normal;
+        let wants_plane = normal.is_some() && !matches!(kind, CurveKind::Circle { .. });
+        if wants_plane && in_plane.is_empty() {
+            self.push_internal(ConstraintKind::InPlane(c));
+        }
+        if !wants_plane {
+            for id in in_plane {
+                self.constraints[id].alive = false;
+            }
+        }
+        self.refresh_shared_signs(Some(c));
+        Ok(())
     }
 }
 

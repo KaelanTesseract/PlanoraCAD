@@ -159,6 +159,7 @@ fn map_ids(
         EllipseMinor(x, v) => EllipseMinor(c(*x), *v),
         EllipseAngle(x, v) => EllipseAngle(c(*x), *v),
         EllipticArcEnds(x) => EllipticArcEnds(c(*x)),
+        InPlane(x) => InPlane(c(*x)),
         Collinear(a, b) => Collinear(c(*a), c(*b)),
         Smooth(a, pa, b, pb) => Smooth(c(*a), p(*pa), c(*b), p(*pb)),
         DistanceX(a, b, v) => DistanceX(p(*a), p(*b), *v),
@@ -243,9 +244,12 @@ fn is_active(d: &ConstraintData) -> bool {
 fn size_vars(kind: &CurveKind) -> Vec<usize> {
     match *kind {
         CurveKind::Circle { radius, .. } => vec![radius],
-        CurveKind::Ellipse { ax, ay, minor, .. } | CurveKind::EllipticArc { ax, ay, minor, .. } => {
-            vec![ax, ay, minor]
+        CurveKind::Ellipse {
+            ax, ay, az, minor, ..
         }
+        | CurveKind::EllipticArc {
+            ax, ay, az, minor, ..
+        } => [ax, ay, minor].into_iter().chain(az).collect(),
         _ => vec![],
     }
 }
@@ -271,11 +275,13 @@ pub(crate) fn map_curve(
             center,
             ax,
             ay,
+            az,
             minor,
         } => CurveKind::Ellipse {
             center: p(*center),
             ax: v(*ax),
             ay: v(*ay),
+            az: az.map(&v),
             minor: v(*minor),
         },
         CurveKind::Spline { points, handles } => CurveKind::Spline {
@@ -326,6 +332,7 @@ pub(crate) fn map_curve(
             center,
             ax,
             ay,
+            az,
             minor,
             start,
             end,
@@ -333,6 +340,7 @@ pub(crate) fn map_curve(
             center: p(*center),
             ax: v(*ax),
             ay: v(*ay),
+            az: az.map(&v),
             minor: v(*minor),
             start: p(*start),
             end: p(*end),
@@ -901,17 +909,24 @@ impl Sketch {
                     sizes.insert(ay, self.new_var(major.y));
                     sizes.insert(minor, self.new_var(small));
                 }
-                let mapped = map_curve(kind, |p| points[&p], |v| sizes[&v]);
+                // Die Kopie entsteht in der Skizzenebene (ohne Normale), also ohne `az`.
+                let mut flat = kind.clone();
+                if let CurveKind::Ellipse { az, .. } | CurveKind::EllipticArc { az, .. } = &mut flat
+                {
+                    *az = None;
+                }
+                let mapped = map_curve(&flat, |p| points[&p], |v| sizes[&v]);
                 match mapped {
                     CurveKind::EllipticArc {
                         center,
                         ax,
                         ay,
+                        az,
                         minor,
                         start,
                         end,
                     } => {
-                        self.add_elliptic_arc_vars(center, ax, ay, minor, start, end)
+                        self.add_elliptic_arc_vars(center, (ax, ay, az), minor, start, end)
                             .0
                     }
                     other => self.push_curve(other),
@@ -1489,6 +1504,7 @@ impl Sketch {
                 minor,
                 start,
                 end,
+                ..
             } => self.axes_collapsed(ax, ay, minor) || close(center, start) || close(center, end),
             CurveKind::Spline { ref points, .. } => points.windows(2).any(|w| close(w[0], w[1])),
             // Kontrollpunkte dürfen zusammenfallen; entartet ist erst die ganze Kurve in einem Punkt.

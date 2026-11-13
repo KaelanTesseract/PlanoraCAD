@@ -12,7 +12,7 @@ use crate::pattern::{PATTERN_MAX_INSTANCES, PatternId, PatternProblem, PatternSl
 use crate::spline_handles::{HANDLE_MAX_OPENING, handle_kappa, hermite_eval_dual, nodes_of};
 use planora_i18n::tr;
 use planora_kernel::Id;
-use planora_math::DVec2;
+use planora_math::{DVec2, DVec3};
 use std::cell::RefCell;
 
 /// Mindestlänge für Richtungsvektoren beim Normieren (verhindert Division durch null).
@@ -114,6 +114,11 @@ pub enum ConstraintKind {
     /// Griff-Bogens liegt auf der Normalen des Tangentengriffs, und die Öffnung des Bogens ist
     /// `min(L / r, 2,5 rad)`. Es bleibt der Radius als einziger Freiheitsgrad.
     SplineCurvatureHandle(CurveId, PointId),
+    /// Intern (Skizzen 10): Eine ebene Kurve mit eigener Normale bleibt in ihrer Ebene durch den
+    /// Mittelpunkt. Beim Bogen liegen Start und Ende darin, bei der Ellipse steht die große
+    /// Halbachse senkrecht zur Normale, beim Ellipsenbogen gilt beides. Der Kreis braucht sie
+    /// nicht: Sein Umfang liegt über die Normale ohnehin in der Ebene.
+    InPlane(CurveId),
 }
 
 impl ConstraintKind {
@@ -257,6 +262,7 @@ impl ConstraintKind {
             | Diameter(c, _)
             | ArcRadius(c)
             | EllipticArcEnds(c)
+            | InPlane(c)
             | EllipseMajor(c, _)
             | EllipseMinor(c, _)
             | EllipseAngle(c, _)
@@ -361,6 +367,88 @@ impl<'a> Ctx<'a> {
         let d = &self.sk.points[p];
         (self.var(d.x), self.var(d.y))
     }
+
+    /// Lage eines Punktes im Raum (Skizzen 10); ein 2D-Punkt hat z als Konstante 0 ohne
+    /// Gradient.
+    fn pt3(&self, p: PointId) -> V3 {
+        let d = &self.sk.points[p];
+        let z = d.z.map_or_else(|| Dual::constant(0.0), |i| self.var(i));
+        (self.var(d.x), self.var(d.y), z)
+    }
+}
+
+type V3 = (Dual, Dual, Dual);
+
+fn sub3(a: &V3, b: &V3) -> V3 {
+    (&a.0 - &b.0, &a.1 - &b.1, &a.2 - &b.2)
+}
+fn dot3(a: &V3, b: &V3) -> Dual {
+    &a.0 * &b.0 + &a.1 * &b.1 + &a.2 * &b.2
+}
+/// Skalarprodukt mit einer festen Richtung (etwa der Normale einer Kurve).
+fn dot3c(a: &V3, n: DVec3) -> Dual {
+    &a.0 * n.x + &a.1 * n.y + &a.2 * n.z
+}
+/// Kreuzprodukt `n × a` einer festen Richtung mit einem Vektor.
+fn cross3c(n: DVec3, a: &V3) -> V3 {
+    (
+        &a.2 * n.y - &a.1 * n.z,
+        &a.0 * n.z - &a.2 * n.x,
+        &a.1 * n.x - &a.0 * n.y,
+    )
+}
+fn length3(a: &V3) -> Dual {
+    dot3(a, a).sqrt()
+}
+
+/// Große Halbachse einer Ellipse oder eines Ellipsenbogens im Raum; ohne `az` mit z als
+/// Konstante 0.
+fn ellipse_axis3(ctx: &Ctx, ax: usize, ay: usize, az: Option<usize>) -> V3 {
+    let z = az.map_or_else(|| Dual::constant(0.0), |i| ctx.var(i));
+    (ctx.var(ax), ctx.var(ay), z)
+}
+
+/// Wie [`ellipse_residual`] im Raum (Skizzen 10): Achskoordinaten über die große Halbachse und
+/// `n × a` in der Ebene der Kurve. In der Skizzenebene ist `n × a = (−ay, ax, 0)`, also dieselbe
+/// Rechnung.
+fn ellipse_residual3(ctx: &Ctx, c: CurveId, p: &V3) -> Dual {
+    let (CurveKind::Ellipse {
+        center,
+        ax,
+        ay,
+        az,
+        minor,
+    }
+    | CurveKind::EllipticArc {
+        center,
+        ax,
+        ay,
+        az,
+        minor,
+        ..
+    }) = ctx.sk.curves[c].kind
+    else {
+        unreachable!("type was checked")
+    };
+    let n = ctx.sk.curve_normal(c);
+    let a = ellipse_axis3(ctx, ax, ay, az);
+    let l = length3(&a);
+    let len = if l.v < MIN_LEN {
+        Dual::constant(MIN_LEN)
+    } else {
+        l
+    };
+    let minor = ctx.var(minor);
+    let minor = if minor.v < MIN_LEN {
+        Dual::constant(MIN_LEN)
+    } else {
+        minor
+    };
+    let v = sub3(p, &ctx.pt3(center));
+    let x = dot3(&v, &a) / &len / &len;
+    let y = dot3(&v, &cross3c(n, &a)) / &len / &minor;
+    let r = (&x * &x + &y * &y).sqrt();
+    (r - 1.0) * (&len + &minor) * 0.5
 }
 
 fn sub2(a: &V2, b: &V2) -> V2 {
@@ -416,6 +504,7 @@ fn ellipse_of(ctx: &Ctx, c: CurveId) -> (V2, V2, Dual, Dual) {
         ax,
         ay,
         minor,
+        ..
     }
     | CurveKind::EllipticArc {
         center,
@@ -853,6 +942,13 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
             let CurveKind::Arc { center, start, end } = sk.curves[*c].kind else {
                 unreachable!("type was checked")
             };
+            if sk.arc_is_3d(*c) {
+                // 3D-Bogen (Skizzen 10): Abstände im Raum.
+                let pc = ctx.pt3(center);
+                return vec![
+                    length3(&sub3(&ctx.pt3(end), &pc)) - length3(&sub3(&ctx.pt3(start), &pc)),
+                ];
+            }
             let pc = ctx.pt(center);
             vec![length(&sub2(&ctx.pt(end), &pc)) - length(&sub2(&ctx.pt(start), &pc))]
         }
@@ -860,10 +956,40 @@ fn eval_kind(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
             let CurveKind::EllipticArc { start, end, .. } = sk.curves[*c].kind else {
                 unreachable!("type was checked")
             };
+            if sk.arc_is_3d(*c) {
+                return vec![
+                    ellipse_residual3(ctx, *c, &ctx.pt3(start)),
+                    ellipse_residual3(ctx, *c, &ctx.pt3(end)),
+                ];
+            }
             vec![
                 ellipse_residual(ctx, *c, &ctx.pt(start)),
                 ellipse_residual(ctx, *c, &ctx.pt(end)),
             ]
+        }
+        InPlane(c) => {
+            let n = sk.curve_normal(*c);
+            let off = |m: PointId, p: PointId| dot3c(&sub3(&ctx.pt3(p), &ctx.pt3(m)), n);
+            match sk.curves[*c].kind {
+                CurveKind::Arc { center, start, end } => vec![off(center, start), off(center, end)],
+                CurveKind::Ellipse { ax, ay, az, .. } => {
+                    vec![dot3c(&ellipse_axis3(ctx, ax, ay, az), n)]
+                }
+                CurveKind::EllipticArc {
+                    center,
+                    ax,
+                    ay,
+                    az,
+                    start,
+                    end,
+                    ..
+                } => vec![
+                    dot3c(&ellipse_axis3(ctx, ax, ay, az), n),
+                    off(center, start),
+                    off(center, end),
+                ],
+                _ => unreachable!("type was checked"),
+            }
         }
         EllipseMajor(c, v) => {
             let (_, a, _, _) = ellipse_of(ctx, *c);
@@ -1560,6 +1686,18 @@ impl Sketch {
             {
                 wrong(tr!("sketch-err-only-elliptic-arcs"))
             }
+            // Die Normale selbst prüft das Laden (`check_curve_normal`); ein gelöschter Eintrag
+            // darf an einer Kurve stehen, die wieder in der Skizzenebene liegt.
+            InPlane(c)
+                if !matches!(
+                    self.curves[*c].kind,
+                    CurveKind::Arc { .. }
+                        | CurveKind::Ellipse { .. }
+                        | CurveKind::EllipticArc { .. }
+                ) =>
+            {
+                wrong(tr!("sketch-err-normal-kind"))
+            }
             EllipseMajor(c, _) | EllipseMinor(c, _) | EllipseAngle(c, _)
                 if !is_ellipse_kind(&self.curves[*c].kind) =>
             {
@@ -1905,6 +2043,7 @@ impl Sketch {
                 ax,
                 ay,
                 minor,
+                ..
             }
             | CurveKind::EllipticArc {
                 center,
@@ -2056,6 +2195,7 @@ impl Sketch {
             kind,
             ConstraintKind::ArcRadius(_)
                 | ConstraintKind::EllipticArcEnds(_)
+                | ConstraintKind::InPlane(_)
                 | ConstraintKind::PatternValue(..)
                 | ConstraintKind::SplineCurvatureHandle(..)
         ) {

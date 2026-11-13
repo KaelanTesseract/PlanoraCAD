@@ -187,6 +187,7 @@ impl Sketch {
                         construction,
                         centerline: false,
                         show_frame: false,
+                        normal: None,
                         alive: true,
                     });
                     curves.push(c);

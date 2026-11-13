@@ -220,6 +220,7 @@ fn an_ellipse_becomes_an_elliptic_arc_keeping_its_major_axis() {
         minor: mi2,
         start,
         end,
+        ..
     } = s.curve(e).unwrap().kind
     else {
         panic!("kein Ellipsenbogen")
