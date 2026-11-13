@@ -327,7 +327,8 @@ pub fn open_step(ws: &mut Workspace, id: FeatureId) {
     }
     crate::browser::edit(&mut tab.state, id);
     if let Some(id) = tab.state.edit_request.take() {
-        tab.open_edit(id);
+        let dir = ws.exchange_dir.clone();
+        ws.active_tab_mut().open_edit_in(id, dir);
     }
 }
 

@@ -779,8 +779,9 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
     }
     home_response.on_hover_text(planora_i18n::tr!("view-home-hint"));
 
-    // Grundebene unter dem Zeiger gilt nur für dieses Bild.
+    // Grundebene und Leinwand unter dem Zeiger gelten nur für dieses Bild.
     state.origin_hover = None;
+    state.canvas_hover = None;
     if !sketching && state.profile_pick.is_some() {
         // Profilwahl eines Dialogs: Klick ohne Ziehen schaltet das Profil unter dem Zeiger um
         // (wie Fusion); Körper werden dabei nicht gewählt.
@@ -860,12 +861,16 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
                 let cursor = Vec2::new(p.x - rect.left(), p.y - rect.top());
                 let viewport = Vec2::new(rect.width(), rect.height());
                 let hit = state.view_click_at(cursor, viewport);
-                hover_plane_click(state, hit);
-                // Eine auswählbare Leinwand vorn gewinnt (nicht beim Markieren von Kanten).
-                let canvas = response.clicked()
-                    && !state.edge_picking
-                    && state.click_canvas(cursor, viewport);
-                if response.clicked() && !canvas {
+                // Eine auswählbare Leinwand vorn gewinnt beim Zeigen und beim Klick (nicht beim
+                // Markieren von Kanten).
+                let canvas = !state.edge_picking && state.hover_canvas(cursor, viewport);
+                hover_plane_click(state, if canvas { None } else { hit });
+                if response.clicked()
+                    && canvas
+                    && let Some(id) = state.canvas_hover
+                {
+                    state.select_canvas(id);
+                } else if response.clicked() {
                     use crate::plane_dialog::PlaneClick;
                     match hit {
                         Some(PlaneClick::View(Pick::Edge(e))) if state.edge_picking => {
@@ -888,6 +893,11 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
 
     // 3D-Szene mit den Leinwänden (je gezeichneter Leinwand ihr Bild, Vertrag mit der GPU).
     let (canvases, canvas_textures) = state.canvas_frame_data();
+    // Ein Bild wird noch entschlüsselt: bald neu zeichnen, dann erscheint es.
+    if state.canvas_textures.pending() {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(50));
+    }
     let cam = state.camera;
     painter.set(
         scene_slot,
@@ -908,7 +918,7 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
     // Konstruktionsebenen (Skizzen 6) unter den Linien der Skizzen.
     let mut overlay = sketch_view::plane_shapes(state, rect);
     // Rahmen der gewählten Leinwand (Hervorhebung wie die Zeile im Baum).
-    overlay.extend(crate::canvas::selected_outline(state, rect));
+    overlay.extend(crate::canvas::canvas_outlines(state, rect));
     overlay.extend(sketch_view::finished_sketch_shapes(state, rect));
     overlay.extend(sketch_view::insert_preview_shapes(state, rect));
     painter.set(sketches_slot, Shape::Vec(overlay));

@@ -2906,9 +2906,10 @@ impl eframe::App for PlanoraApp {
             // „Extrudieren …“ im Kontextmenü des Baums zählt wie der Menüeintrag.
             commands::track(&mut self.ws, Action::ExtrudeSketch);
         }
+        let dir = self.ws.exchange_dir.clone();
         let tab = self.ws.active_tab_mut();
         if let Some(id) = tab.state.edit_request.take() {
-            tab.open_edit(id);
+            tab.open_edit_in(id, dir);
         }
         // Ein eben begonnener Wahlmodus (Browser, Verlaufsleiste) schließt im selben Bild, bevor
         // sie sich zeigen, die Fenster, die in der Ansicht wählen: Profilwahl von Extrudieren/

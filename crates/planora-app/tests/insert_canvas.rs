@@ -8,6 +8,7 @@ use common::{Screen, find};
 use egui::{Event, Modifiers, PointerButton, Pos2, Rect, pos2};
 use glam::{Vec2, Vec3};
 use planora_app::browser::{self, Folder};
+use planora_app::icons::{self, Icon};
 use planora_app::insert::DialogAction;
 use planora_app::insert::canvas_dialog::CanvasDialog;
 use planora_app::keymap::Action;
@@ -84,6 +85,13 @@ fn insert(state: &mut AppState, dir: &Path, w: u32, h: u32, clear_left: bool) ->
     );
     let mut d = loaded(dir, path, state);
     d.insert(state).unwrap()
+}
+
+/// Ein Bild der Ansicht (startet das Entschlüsseln im Hintergrund) und warten, bis alle Bilder
+/// entschlüsselt sind.
+fn ready(s: &mut AppState) {
+    s.canvas_frame_data();
+    s.canvas_textures.wait_all();
 }
 
 fn canvas(state: &AppState, id: FeatureId) -> CanvasFeature {
@@ -248,8 +256,24 @@ fn canvas_menu_disabled_while_sketch_open_with_tooltip() {
 
     // Der Menüeintrag ist gesperrt: ein Klick öffnet nichts.
     let mut screen = Screen::new(W, H);
+    screen
+        .ctx
+        .all_styles_mut(|st| st.interaction.tooltip_delay = 0.0);
     let seen = screen.settle(3, &mut insert_menu_frame(&mut ws));
     let entry = find(&seen, "Leinwand …").expect("Leinwand").rect;
+    // Über dem gesperrten Eintrag steht der Grund im Tooltip.
+    let mut seen = Vec::new();
+    for _ in 0..5 {
+        seen = screen.frame(
+            vec![Event::PointerMoved(entry.center())],
+            &mut insert_menu_frame(&mut ws),
+        );
+    }
+    assert!(
+        find(&seen, "Erst die Skizze beenden").is_some(),
+        "Tooltip fehlt: {:?}",
+        seen.iter().map(|t| t.text.as_str()).collect::<Vec<_>>()
+    );
     screen.click(entry.center(), &mut insert_menu_frame(&mut ws));
     assert!(ws.active_tab().canvas_dialog.is_none());
     // Die Taste ebenso, mit dem Grund in der Statuszeile; die Skizze bleibt offen.
@@ -419,6 +443,7 @@ fn canvas_eye_hides_and_is_saved() {
     let dir = temp_dir("auge");
     let mut s = AppState::new();
     let id = insert(&mut s, &dir, 8, 4, false);
+    ready(&mut s);
     assert_eq!(s.canvas_frame_data().0.len(), 1, "gezeichnet");
     let plain = planora_project::encode_version(&s.snapshot()).unwrap();
     let mut t = Tree::new();
@@ -501,6 +526,10 @@ fn not_selectable_canvas_is_clicked_through() {
     // Linke Hälfte durchsichtig.
     let id = insert(&mut s, &dir, 64, 32, true);
     look_down(&mut s, 40.0);
+    // Noch nicht entschlüsselt: nicht gezeichnet, also auch nicht getroffen.
+    let center = screen_of(&s, at(corners(&s, id), 0.75, 0.5));
+    assert_eq!(s.canvas_at(center, VIEW), None, "ohne Bild kein Treffer");
+    ready(&mut s);
     let k = corners(&s, id);
     let right = screen_of(&s, at(k, 0.75, 0.5));
     let left = screen_of(&s, at(k, 0.25, 0.5));
@@ -511,6 +540,16 @@ fn not_selectable_canvas_is_clicked_through() {
         "auswählbar: Treffer"
     );
     assert_eq!(s.canvas_click_at(left, VIEW), None, "Alpha 0 zählt nicht");
+    // Überfahren hebt die Leinwand hervor (Rahmen), wie der Klick.
+    let rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(W, H));
+    assert!(planora_app::canvas::canvas_outlines(&s, rect).is_empty());
+    assert!(s.hover_canvas(right, VIEW));
+    assert_eq!(s.canvas_hover, Some(id));
+    assert_eq!(planora_app::canvas::canvas_outlines(&s, rect).len(), 1);
+    assert!(
+        !s.hover_canvas(left, VIEW),
+        "durchsichtig: keine Hervorhebung"
+    );
     assert!(s.click_canvas(right, VIEW));
     assert_eq!(s.selected_feature, Some(id), "gewählt wie im Baum");
     // Nicht auswählbar: durchklickt.
@@ -519,6 +558,10 @@ fn not_selectable_canvas_is_clicked_through() {
     s.update_canvas(id, f).unwrap();
     s.selected_feature = None;
     assert_eq!(s.canvas_click_at(right, VIEW), None);
+    assert!(
+        !s.hover_canvas(right, VIEW),
+        "nicht auswählbar: keine Hervorhebung"
+    );
     assert!(!s.click_canvas(right, VIEW));
     assert_eq!(s.selected_feature, None);
     // Ein Körper vor der Leinwand gewinnt.
@@ -527,6 +570,7 @@ fn not_selectable_canvas_is_clicked_through() {
     s.update_canvas(id, f).unwrap();
     s.create_box(DVec3::splat(100.0)).unwrap();
     look_down(&mut s, 60.0);
+    ready(&mut s);
     let k = corners(&s, id);
     let right = screen_of(&s, at(k, 0.9, 0.25));
     assert!(
@@ -538,11 +582,15 @@ fn not_selectable_canvas_is_clicked_through() {
         None,
         "der Körper liegt davor"
     );
+    assert!(
+        !s.hover_canvas(right, VIEW),
+        "der Körper wird hervorgehoben"
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
-fn texture_decoded_once_and_sent_every_frame() {
+fn texture_decoded_once_in_background_and_sent_every_frame() {
     let dir = temp_dir("textur");
     let mut s = AppState::new();
     let a = insert(&mut s, &dir, 8, 4, false);
@@ -550,7 +598,15 @@ fn texture_decoded_once_and_sent_every_frame() {
     let b = insert(&mut s, &dir, 8, 4, false);
     assert_ne!(a, b);
     assert_eq!(s.snapshot().images.len(), 1);
+    // Wie nach dem Laden einer Datei: Das Bild ist noch nicht im Zwischenspeicher.
     let before = s.canvas_textures.decodes;
+    let (draws, textures) = s.canvas_frame_data();
+    assert!(draws.is_empty() && textures.is_empty(), "nichts gezeichnet");
+    assert_eq!(s.canvas_textures.decodes, before + 1, "ein Auftrag je Bild");
+    assert_eq!(s.canvas_textures.running(), 1);
+    assert!(s.canvas_textures.pending(), "die Ansicht zeichnet bald neu");
+    s.canvas_textures.wait_all();
+    assert!(!s.canvas_textures.pending());
     for _ in 0..3 {
         let (draws, textures) = s.canvas_frame_data();
         assert_eq!(draws.len(), 2);
@@ -559,8 +615,139 @@ fn texture_decoded_once_and_sent_every_frame() {
         assert!((draws[0].opacity - 0.5).abs() < 1e-6);
         assert!(draws[0].display_through);
     }
-    // Einmal entschlüsselt, nicht in jedem Bild neu.
-    assert_eq!(s.canvas_textures.decodes, before + 1);
+    assert_eq!(
+        s.canvas_textures.decodes,
+        before + 1,
+        "nicht erneut entschlüsselt"
+    );
+    // Ein kaputtes Bild wird gemerkt und nicht in jedem Bild neu versucht.
+    let id = s.canvas_ids()[0];
+    let c = canvas(&s, id);
+    let broken = planora_feature::CanvasImage {
+        bytes: std::sync::Arc::from(&b"kein Bild"[..]),
+        format: planora_exchange::ImageFormat::Png,
+        width: 8,
+        height: 4,
+        hash: planora_feature::image_hash(b"kein Bild"),
+    };
+    s.insert_canvas(broken, c).unwrap();
+    let n = s.canvas_textures.decodes;
+    ready(&mut s);
+    for _ in 0..3 {
+        assert_eq!(s.canvas_frame_data().0.len(), 2, "das kaputte fehlt");
+    }
+    assert_eq!(s.canvas_textures.decodes, n + 1);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Zeigt das Fenster `d` in einem Bild auf `screen`.
+fn show(
+    screen: &mut Screen,
+    d: &mut CanvasDialog,
+    s: &mut AppState,
+    last: &mut DialogAction,
+    events: Vec<Event>,
+) -> Vec<common::Seen> {
+    screen.frame(events, &mut |ctx| {
+        if *last == DialogAction::Open {
+            *last = d.show(
+                ctx,
+                s,
+                &mut None,
+                &mut planora_app::places::Places::default(),
+            );
+        }
+    })
+}
+
+#[test]
+fn esc_cancel_and_close_leave_nothing() {
+    let dir = temp_dir("abbruch");
+    let path = write(&dir, "b.png", &png(8, 4, false));
+    let mut s = AppState::new();
+    s.create_box(DVec3::splat(10.0)).unwrap();
+    let before = s.snapshot();
+    let mut screen = Screen::new(W, H);
+    let left = |p: Pos2, pressed| Event::PointerButton {
+        pos: p,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    for way in ["Esc", "Abbrechen", "✕"] {
+        let mut d = loaded(&dir, path.clone(), &s);
+        let mut last = DialogAction::Open;
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            seen = show(&mut screen, &mut d, &mut s, &mut last, vec![]);
+        }
+        assert!(
+            s.canvas_preview.is_some() && s.insert_grips.is_some(),
+            "{way}: Vorschau"
+        );
+        for label in [
+            "Deckkraft",
+            "Durch Objekte anzeigen",
+            "Auswählbar",
+            "X-Abstand",
+            "Y-Abstand",
+            "Z-Winkel",
+            "Skalierung XY",
+            "Horizontal spiegeln",
+            "Vertikal spiegeln",
+        ] {
+            assert!(find(&seen, label).is_some(), "„{label}“ fehlt");
+        }
+        assert!(find(&seen, "Renderfähig").is_none());
+        let events = match way {
+            "Esc" => vec![Event::Key {
+                key: egui::Key::Escape,
+                physical_key: Some(egui::Key::Escape),
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            }],
+            "Abbrechen" => {
+                let p = find(&seen, "Abbrechen").expect("Abbrechen").rect.center();
+                show(
+                    &mut screen,
+                    &mut d,
+                    &mut s,
+                    &mut last,
+                    vec![Event::PointerMoved(p)],
+                );
+                vec![left(p, true), left(p, false)]
+            }
+            _ => {
+                let glyph = icons::glyph(Icon::Close).to_string();
+                let frame = d.last_rect.expect("Fenster");
+                let p = seen
+                    .iter()
+                    .filter(|t| t.text == glyph && frame.contains(t.rect.center()))
+                    .min_by(|a, b| a.rect.top().total_cmp(&b.rect.top()))
+                    .expect("✕ im Fenster")
+                    .rect
+                    .center();
+                show(
+                    &mut screen,
+                    &mut d,
+                    &mut s,
+                    &mut last,
+                    vec![Event::PointerMoved(p)],
+                );
+                vec![left(p, true), left(p, false)]
+            }
+        };
+        show(&mut screen, &mut d, &mut s, &mut last, events);
+        show(&mut screen, &mut d, &mut s, &mut last, vec![]);
+        assert_eq!(last, DialogAction::Closed, "{way} schließt");
+        assert!(s.snapshot().same_content(&before), "{way}: nichts geändert");
+        assert!(!s.has_canvases());
+        assert!(
+            s.canvas_preview.is_none() && s.insert_grips.is_none() && s.plane_pick.is_none(),
+            "{way}: aufgeräumt"
+        );
+    }
     let _ = fs::remove_dir_all(&dir);
 }
 

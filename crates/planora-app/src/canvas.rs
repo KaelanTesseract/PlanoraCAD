@@ -3,6 +3,7 @@
 //! in der Ansicht ([`CanvasDraw`] und [`CanvasTexture`] je Bild) mit einem Zwischenspeicher der
 //! entschlüsselten Bilder und die Auswahl über [`canvas_hit`].
 
+use crate::jobs::{Job, Poll};
 use crate::state::AppState;
 use egui::{Pos2, Rect, Shape, Stroke};
 use glam::Vec2;
@@ -28,20 +29,29 @@ pub struct CanvasPreview {
     pub edit: Option<FeatureId>,
 }
 
-/// Entschlüsselte Bilder je Prüfsumme (einmal je Bild, nicht in jedem Bild neu). Ein Bild, das
-/// sich nicht entschlüsseln lässt, wird gemerkt und nicht in jedem Bild erneut versucht.
-#[derive(Clone, Debug, Default)]
+/// Ergebnis eines Entschlüsselns im Hintergrund: Breite, Höhe, RGBA oder der Fehlertext.
+type Decoded = Result<(u32, u32, Vec<u8>), String>;
+
+/// Entschlüsselte Bilder je Prüfsumme (einmal je Bild, nicht in jedem Bild neu). Fehlt ein Bild,
+/// wird es im Hintergrund entschlüsselt (ein Auftrag je Prüfsumme, nie im Bildaufbau: große
+/// Bilder brauchen sonst Sekunden); bis dahin wird die Leinwand nicht gezeichnet und nicht
+/// getroffen. Ein Bild, das sich nicht entschlüsseln lässt, wird gemerkt und nicht erneut
+/// versucht.
+#[derive(Default)]
 pub struct TextureCache {
     map: HashMap<u64, CanvasTexture>,
     failed: HashSet<u64>,
-    /// So oft wurde entschlüsselt (Tests: einmal je Bild).
+    jobs: HashMap<u64, Job<Decoded>>,
+    /// So viele Aufträge wurden gestartet (Tests: einmal je Bild).
     pub decodes: usize,
 }
 
 impl TextureCache {
-    /// Legt ein schon entschlüsseltes Bild ab (etwa aus dem Lesen im Hintergrund).
+    /// Legt ein schon entschlüsseltes Bild ab (etwa aus dem Lesen im Hintergrund beim
+    /// Einfügen); ein laufender Auftrag für dasselbe Bild entfällt.
     pub fn insert(&mut self, t: CanvasTexture) {
         self.failed.remove(&t.key);
+        self.jobs.remove(&t.key);
         self.map.insert(t.key, t);
     }
 
@@ -61,16 +71,44 @@ impl TextureCache {
         self.map.is_empty()
     }
 
-    /// Das Bild für `img`; fehlt es, wird es jetzt (einmal) entschlüsselt.
-    pub fn get_or_decode(&mut self, img: &CanvasImage) -> Option<&CanvasTexture> {
-        if !self.map.contains_key(&img.hash) && !self.failed.contains(&img.hash) {
-            self.decodes += 1;
-            match planora_exchange::decode_rgba(&img.bytes, GPU_MAX_EDGE) {
+    /// Läuft noch ein Entschlüsseln (dann soll die Ansicht bald neu zeichnen)?
+    pub fn pending(&self) -> bool {
+        !self.jobs.is_empty()
+    }
+
+    /// Anzahl laufender Aufträge.
+    pub fn running(&self) -> usize {
+        self.jobs.len()
+    }
+
+    /// Übernimmt fertige Aufträge (ohne zu warten).
+    pub fn poll(&mut self) {
+        self.collect(false);
+    }
+
+    /// Wartet auf alle laufenden Aufträge (Tests und Abläufe ohne Fenster).
+    pub fn wait_all(&mut self) {
+        self.collect(true);
+    }
+
+    fn collect(&mut self, block: bool) {
+        let keys: Vec<u64> = self.jobs.keys().copied().collect();
+        for key in keys {
+            let Some(job) = self.jobs.get(&key) else {
+                continue;
+            };
+            let result = match job.fetch(block) {
+                Poll::Pending => continue,
+                Poll::Ready(r) => r,
+                Poll::Lost => Err("decoder thread lost".to_string()),
+            };
+            self.jobs.remove(&key);
+            match result {
                 Ok((width, height, rgba)) => {
                     self.map.insert(
-                        img.hash,
+                        key,
                         CanvasTexture {
-                            key: img.hash,
+                            key,
                             width,
                             height,
                             rgba: Arc::from(rgba),
@@ -79,17 +117,35 @@ impl TextureCache {
                 }
                 Err(e) => {
                     crate::diag::warn(&format!("Canvas: image could not be decoded: {e}"));
-                    self.failed.insert(img.hash);
+                    self.failed.insert(key);
                 }
             }
         }
-        self.map.get(&img.hash)
     }
 
-    /// Behält nur die Bilder mit diesen Prüfsummen.
+    /// Das Bild für `img`, wenn es schon entschlüsselt ist; sonst startet (einmal) das
+    /// Entschlüsseln im Hintergrund und es kommt `None`.
+    pub fn get_or_start(&mut self, img: &CanvasImage) -> Option<&CanvasTexture> {
+        let key = img.hash;
+        if !self.map.contains_key(&key)
+            && !self.failed.contains(&key)
+            && !self.jobs.contains_key(&key)
+        {
+            self.decodes += 1;
+            let bytes = img.bytes.clone();
+            let job = Job::spawn(move |_| {
+                planora_exchange::decode_rgba(&bytes, GPU_MAX_EDGE).map_err(|e| e.to_string())
+            });
+            self.jobs.insert(key, job);
+        }
+        self.map.get(&key)
+    }
+
+    /// Behält nur die Bilder mit diesen Prüfsummen (Aufträge für andere brechen ab).
     pub fn retain(&mut self, keys: &HashSet<u64>) {
         self.map.retain(|k, _| keys.contains(k));
         self.failed.retain(|k| keys.contains(k));
+        self.jobs.retain(|k, _| keys.contains(k));
     }
 }
 
@@ -271,10 +327,11 @@ impl AppState {
             keep.insert(p.image.hash);
         }
         self.canvas_textures.retain(&keep);
+        self.canvas_textures.poll();
         let mut draws = Vec::new();
         let mut textures: Vec<CanvasTexture> = Vec::new();
         for d in drawn {
-            let Some(t) = self.canvas_textures.get_or_decode(&d.image) else {
+            let Some(t) = self.canvas_textures.get_or_start(&d.image) else {
                 continue;
             };
             if !textures.iter().any(|x| x.key == t.key) {
@@ -310,7 +367,8 @@ impl AppState {
             let Some(id) = d.id.filter(|_| d.selectable) else {
                 continue;
             };
-            let Some(t) = self.canvas_textures.get_or_decode(&d.image) else {
+            // Noch nicht entschlüsselt: nicht gezeichnet, also auch nicht getroffen.
+            let Some(t) = self.canvas_textures.get(d.image.hash) else {
                 continue;
             };
             if let Some(dist) = canvas_hit(d.corners, ray, |u, v| alpha_at(t, u, v))
@@ -345,25 +403,44 @@ impl AppState {
             None => false,
         }
     }
+
+    /// Zeiger über der Ansicht bei der normalen Auswahl: Liegt eine auswählbare Leinwand vorn,
+    /// wird sie hervorgehoben (Rahmen) statt des Körpers oder der Ebene dahinter, wie beim
+    /// Klick. `true`, wenn es eine Leinwand ist.
+    pub fn hover_canvas(&mut self, cursor: Vec2, viewport: Vec2) -> bool {
+        self.canvas_hover = self.canvas_click_at(cursor, viewport);
+        self.canvas_hover.is_some()
+    }
 }
 
-/// Rahmen der gewählten Leinwand in der Ansicht (die Hervorhebung zur Zeile im Baum).
-pub fn selected_outline(state: &AppState, rect: Rect) -> Vec<Shape> {
-    let Some(id) = state.selected_feature.filter(|id| state.is_canvas(*id)) else {
-        return Vec::new();
-    };
+/// Rahmen der gewählten Leinwand (die Hervorhebung zur Zeile im Baum) und der Leinwand unter
+/// dem Zeiger in der Ansicht.
+pub fn canvas_outlines(state: &AppState, rect: Rect) -> Vec<Shape> {
+    let selected = state.selected_feature.filter(|id| state.is_canvas(*id));
+    let mut ids: Vec<FeatureId> = selected.into_iter().collect();
+    if let Some(h) = state.canvas_hover
+        && Some(h) != selected
+    {
+        ids.push(h);
+    }
+    ids.into_iter()
+        .flat_map(|id| outline(state, rect, id))
+        .collect()
+}
+
+fn outline(state: &AppState, rect: Rect, id: FeatureId) -> Option<Shape> {
     if state.is_feature_hidden(id) || state.canvas_preview.as_ref().and_then(|p| p.edit) == Some(id)
     {
-        return Vec::new();
+        return None;
     }
     let Some(FeatureKind::Canvas(c)) = state.document.feature(id).map(|f| &f.kind) else {
-        return Vec::new();
+        return None;
     };
     let (Some(frame), Some(img)) = (
         state.document.canvas_frame(id),
         state.document.image(c.image),
     ) else {
-        return Vec::new();
+        return None;
     };
     let viewport = Vec2::new(rect.width(), rect.height());
     let points: Option<Vec<Pos2>> = c
@@ -377,12 +454,9 @@ pub fn selected_outline(state: &AppState, rect: Rect) -> Vec<Shape> {
                 .map(|v| egui::pos2(rect.left() + v.x, rect.top() + v.y))
         })
         .collect();
-    let Some(points) = points else {
-        return Vec::new();
-    };
     let color = crate::theme::sketch_colors(state.dark).selected;
-    vec![Shape::closed_line(
-        points,
+    Some(Shape::closed_line(
+        points?,
         Stroke::new(OUTLINE_WIDTH, color),
-    )]
+    ))
 }

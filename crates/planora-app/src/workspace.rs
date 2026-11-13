@@ -568,13 +568,19 @@ impl DocTab {
     /// Öffnet das Fenster „Bearbeiten“ für das Feature `id`: bei einer Konstruktionsebene das
     /// Fenster der Ebene mit ihren Werten, sonst [`FeatureDialog`].
     pub fn open_edit(&mut self, id: FeatureId) {
+        self.open_edit_in(id, None);
+    }
+
+    /// Wie [`Self::open_edit`]; `dir` ist der zuletzt benutzte Ordner der Austauschfenster
+    /// (wie beim Einfügen), sonst der Standardordner.
+    pub fn open_edit_in(&mut self, id: FeatureId, dir: Option<std::path::PathBuf>) {
         if self.state.is_canvas(id) {
             // „Leinwand bearbeiten“: gesperrt, solange eine Skizze offen ist.
             if let Some(why) = self.state.canvas_lock() {
                 self.state.message = Some(why);
                 return;
             }
-            let dir = crate::file_chooser::default_dir();
+            let dir = dir.unwrap_or_else(crate::file_chooser::default_dir);
             if let Some(d) = CanvasDialog::edit(dir, &self.state, id) {
                 self.feature_dialog = None;
                 self.close_blend_dialog();

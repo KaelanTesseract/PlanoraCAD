@@ -298,6 +298,8 @@ pub struct AppState {
     pub canvas_preview: Option<crate::canvas::CanvasPreview>,
     /// Entschlüsselte Bilder der Leinwände, einmal je Bild ([`crate::canvas::TextureCache`]).
     pub canvas_textures: crate::canvas::TextureCache,
+    /// Auswählbare Leinwand unter dem Zeiger (nur für dieses Bild, Rahmen in der Ansicht).
+    pub canvas_hover: Option<FeatureId>,
     /// Verschieben, das der laufende Zug im Eigenschaftenfenster angelegt hat.
     drag_move: Option<FeatureId>,
     /// Prüfberichte der Netze, einmal je Netz berechnet (Plan P13).
@@ -654,6 +656,7 @@ impl AppState {
             insert_grips: None,
             canvas_preview: None,
             canvas_textures: crate::canvas::TextureCache::default(),
+            canvas_hover: None,
             drag_move: None,
             mesh_reports: BTreeMap::new(),
             display_triangles: crate::mesh_body::DISPLAY_TRIANGLES,
