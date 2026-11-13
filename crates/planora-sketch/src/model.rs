@@ -423,10 +423,27 @@ impl Sketch {
     /// Macht den (geprüften) Punkt `p` zum 3D-Punkt: neue z-Variable mit 0. Hat er schon eine,
     /// passiert nichts. Der Solver-Zwischenspeicher ist danach leer (über `new_var`).
     /// Prüft weder Text noch Leben: Das tun die Aufrufer (etwa `check_liftable`).
+    ///
+    /// Ein lebendes `Fixed(p, x, y)` hält den Punkt danach weiter in der Skizzenebene: Es wird
+    /// `Fixed3(p, x, y, 0)` (Ruling R2, gilt für jedes Anheben).
     pub(crate) fn promote_to_3d(&mut self, p: PointId) {
+        use crate::constraint::ConstraintKind;
         if self.points[p].z.is_none() {
             let zi = self.new_var(0.0);
             self.points[p].z = Some(zi);
+            let pins: Vec<_> = self
+                .constraints
+                .iter()
+                .filter_map(|(id, d)| match d.kind {
+                    ConstraintKind::Fixed(q, x, y) if d.alive && q == p => {
+                        Some((id, ConstraintKind::Fixed3(p, x, y, 0.0)))
+                    }
+                    _ => None,
+                })
+                .collect();
+            for (id, kind) in pins {
+                self.constraints[id].kind = kind;
+            }
         }
     }
 

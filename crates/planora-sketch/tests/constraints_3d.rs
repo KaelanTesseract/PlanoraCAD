@@ -700,3 +700,25 @@ fn fixed_corner_keeps_z_when_lifted() {
     let id = s.add_constraint(K::Fixed(q, 5.0, 5.0)).unwrap();
     assert_eq!(s.constraint(id).unwrap().kind, K::Fixed3(q, 5.0, 5.0, 7.0));
 }
+
+#[test]
+fn fixed_center_of_tilted_circle3_keeps_z() {
+    let mut s = sketch();
+    let c = s.add_point(1.0, 2.0).unwrap();
+    s.add_constraint(K::Fixed(c, 1.0, 2.0)).unwrap();
+    // Gekippter Kreis an der fixierten Mitte: Sie wird 3D, „fest“ hält auch z.
+    let circle = s.add_circle3(c, 2.0, DVec3::X).unwrap();
+    assert!(s.is_3d_point(c));
+    assert!(
+        s.constraints()
+            .any(|(_, k)| k.kind == K::Fixed3(c, 1.0, 2.0, 0.0))
+    );
+    let p = p3(&mut s, 1.0, 3.0, 5.0);
+    s.add_constraint(K::PointOnCurve(p, circle)).unwrap();
+    s.add_constraint(K::Radius(circle, 2.0)).unwrap();
+    solved(&mut s);
+    assert!(
+        at(&s, c).distance(DVec3::new(1.0, 2.0, 0.0)) < EPS,
+        "die Mitte bleibt"
+    );
+}

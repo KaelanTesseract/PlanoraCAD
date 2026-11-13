@@ -896,21 +896,6 @@ impl Sketch {
         for &p in lifted {
             self.promote_to_3d(p);
         }
-        // Ein `Fixed` an einem angehobenen Punkt hält ihn weiter in der Skizzenebene (Ruling R2):
-        // Es wird `Fixed3` mit z = 0.
-        let pins: Vec<_> = self
-            .constraints
-            .iter()
-            .filter_map(|(id, d)| match d.kind {
-                ConstraintKind::Fixed(p, x, y) if d.alive && lifted.contains(&p) => {
-                    Some((id, ConstraintKind::Fixed3(p, x, y, 0.0)))
-                }
-                _ => None,
-            })
-            .collect();
-        for (id, kind) in pins {
-            self.constraints[id].kind = kind;
-        }
         let planar: Vec<CurveId> = self
             .curves()
             .filter(|(_, d)| {
