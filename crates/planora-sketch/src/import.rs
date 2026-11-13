@@ -12,12 +12,15 @@
 //!    ersetzt die Kopie die Skizze (alles oder nichts).
 //!
 //! Entartetes (etwa eine Linie, deren Enden zusammenfallen) wird übersprungen und unter
-//! `skipped.degenerate` gezählt. Echte Fehler (Texthöhe 0, Werte außerhalb des Rechenbereichs)
-//! ergeben `Err`.
+//! `skipped.degenerate` gezählt; ebenso jedes andere Element, das die Skizze ablehnt (etwa ein
+//! Spline, dessen Nachbarpunkte zu nah liegen). Ein Text, der nicht geht (zu lang, ohne Umriss,
+//! zu viele Kurven, Höhe 0), zählt unter `skipped.texts`. Ein solches Element wird vollständig
+//! zurückgenommen, der Rest kommt trotzdem. `Err` gibt es nur für das Ganze: ungültige Lage oder
+//! Werte außerhalb des Rechenbereichs.
 
 use crate::constraint::ConstraintKind;
 use crate::error::SketchError;
-use crate::model::{CurveId, CurveKind, MAX_SPLINE_POINTS, PointId, Sketch};
+use crate::model::{CurveId, CurveKind, MAX_SPLINE_POINTS, PointId, Sketch, within_coord_range};
 use crate::text::{HAlign, TextParams, VAlign};
 use crate::text_refresh::{CUBIC_KNOTS, QUAD_RHO};
 use crate::text_shape::{TextShaper, TextStyle};
@@ -641,10 +644,56 @@ struct Builder<'a> {
     merge: f64,
     degenerate: usize,
     texts: usize,
+    /// Texte, die die Skizze ablehnte (zählen zu `skipped.texts`).
+    skipped_texts: usize,
     missing_fonts: Vec<String>,
+    /// Gemeinsame Punkte, die das laufende Element angelegt hat (für [`Builder::rollback`]).
+    fresh_shared: Vec<usize>,
+}
+
+/// Stand der Skizze und des Bauens vor einem Element: Alles danach Angehängte lässt sich exakt
+/// zurücknehmen (die Skizze hängt beim Anlegen nur an).
+struct Mark {
+    vars: usize,
+    points: usize,
+    curves: usize,
+    constraints: usize,
+    texts: usize,
+    new_points: usize,
+    new_curves: usize,
 }
 
 impl Builder<'_> {
+    fn mark(&mut self) -> Mark {
+        self.fresh_shared.clear();
+        Mark {
+            vars: self.s.vars.len(),
+            points: self.s.points.len(),
+            curves: self.s.curves.len(),
+            constraints: self.s.constraints.len(),
+            texts: self.s.texts.len(),
+            new_points: self.points.len(),
+            new_curves: self.curves.len(),
+        }
+    }
+
+    /// Nimmt alles zurück, was seit `m` angelegt wurde (ein abgelehntes Element).
+    fn rollback(&mut self, m: &Mark) {
+        self.s.vars.truncate(m.vars);
+        self.s.points.truncate(m.points);
+        self.s.curves.truncate(m.curves);
+        self.s.constraints.truncate(m.constraints);
+        self.s.texts.truncate(m.texts);
+        self.s.touch_structure();
+        self.points.truncate(m.new_points);
+        self.curves.truncate(m.new_curves);
+        for i in self.fresh_shared.drain(..) {
+            self.shared[i] = None;
+        }
+        let alive = m.points;
+        self.must_fix.retain(|p| p.index() < alive);
+    }
+
     fn point(&mut self, p: DVec2) -> Result<PointId, SketchError> {
         let id = self.s.add_point(p.x, p.y)?;
         self.points.push(id);
@@ -657,6 +706,7 @@ impl Builder<'_> {
         }
         let p = self.point(self.reps[i])?;
         self.shared[i] = Some(p);
+        self.fresh_shared.push(i);
         Ok(p)
     }
 
@@ -856,6 +906,12 @@ impl Builder<'_> {
         if fit.len() < 2 || (closed && fit.len() < 3) {
             return Ok(false);
         }
+        // Der Spline verlangt Nachbarn weiter als `tol.linear` auseinander; zwei fast gleiche
+        // Enden (kürzer als die Toleranz, aber nicht zusammengeführt) sind entartet.
+        let lin = self.s.tol.linear;
+        if fit.windows(2).any(|w| w[0].distance(w[1]) <= lin) {
+            return Ok(false);
+        }
         if !closed && fit.len() <= MAX_SPLINE_POINTS {
             let a = self.shared(ends[0])?;
             let mut ids = vec![a];
@@ -907,11 +963,7 @@ impl Builder<'_> {
         };
         let dir = DVec2::from_angle(t.angle);
         let c0 = t.pos + dir.rotate(DVec2::new(x0, y0));
-        if let Some(name) = &shape.substituted
-            && !self.missing_fonts.contains(name)
-        {
-            self.missing_fonts.push(name.clone());
-        }
+        let substituted = shape.substituted.clone();
         let params = TextParams {
             content: t.text.clone(),
             style,
@@ -928,9 +980,23 @@ impl Builder<'_> {
             Arc::new(shape),
         )?;
         self.s.set_text_angle(id, t.angle)?;
+        if let Some(name) = substituted
+            && !self.missing_fonts.contains(&name)
+        {
+            self.missing_fonts.push(name);
+        }
         self.texts += 1;
         Ok(())
     }
+}
+
+/// Liegen alle Bausteine im Rechenbereich der Skizze (sonst bricht das ganze Einfügen ab)?
+fn in_range(prims: &[Prim]) -> bool {
+    prims.iter().all(|p| {
+        let mut ok = true;
+        p.bounds(&mut |q| ok &= within_coord_range(q));
+        ok
+    })
 }
 
 /// Diagonale des Hüllquaders der Bausteine (0 ohne Bausteine).
@@ -990,6 +1056,9 @@ impl Sketch {
         }
         let mut degenerate = 0;
         let prims = place_all(src, place, &opt.layers, &mut degenerate);
+        if !in_range(&prims) {
+            return Err(SketchError::InvalidInput(tr!("sketch-import-out-of-range")));
+        }
         let diag = diagonal(&prims);
         let prims = expand_high(prims, (SPLIT_REL * diag).max(1e-12), &mut degenerate);
 
@@ -1011,12 +1080,21 @@ impl Sketch {
             merge: merger.tol,
             degenerate,
             texts: 0,
+            skipped_texts: 0,
             missing_fonts: Vec::new(),
+            fresh_shared: Vec::new(),
         };
+        // Ein Element, das die Skizze ablehnt, wird zurückgenommen und gezählt; die anderen
+        // kommen trotzdem (ein einzelner zu langer Text bricht nicht das ganze Einfügen ab).
         for (prim, e) in prims.iter().zip(&ends) {
+            let mark = b.mark();
             if let Prim::Text(t) = prim {
-                b.text(t, shaper)?;
-            } else if !b.prim(prim, *e)? {
+                if b.text(t, shaper).is_err() {
+                    b.rollback(&mark);
+                    b.skipped_texts += 1;
+                }
+            } else if !matches!(b.prim(prim, *e), Ok(true)) {
+                b.rollback(&mark);
                 b.degenerate += 1;
             }
         }
@@ -1036,6 +1114,7 @@ impl Sketch {
         b.s.solve();
         let mut skipped = src.skipped;
         skipped.degenerate += b.degenerate;
+        skipped.texts += b.skipped_texts;
         let report = InsertReport {
             curves: b.curves.len(),
             points: b.points.len(),

@@ -737,7 +737,8 @@ fn failure_leaves_sketch_unchanged() {
     s.add_line(a, b).unwrap();
     let before = s.clone();
     let mut els = square();
-    els.insert(2, text("X", "Da", 0.0));
+    // Außerhalb des Rechenbereichs (über 1000 km): Das ganze Einfügen bricht ab.
+    els.insert(2, Element2d::Line(v(0.0, 0.0), v(2e9, 0.0)));
     let res = s.insert_geometry(
         &one_layer(els),
         &Placement::default(),
@@ -911,4 +912,60 @@ fn show_frame_survives_data_roundtrip_and_is_checked() {
     let mut s = sketch();
     insert(&mut s, &mixed(), &free());
     assert!(!s.has_frame_entry());
+}
+
+// ---- Gesamtprüfung I2: ein abgelehntes Element bricht nicht das ganze Einfügen ab -----------
+
+#[test]
+fn unusable_texts_are_skipped_and_the_rest_is_inserted() {
+    let mut s = sketch();
+    let mut els = square();
+    // Zu lang (über 500 Zeichen), ohne Umriss (nur Leerzeichen), Höhe 0.
+    els.insert(1, text(&"A".repeat(600), "Da", 2.0));
+    els.push(text("   ", "Da", 2.0));
+    els.push(text("X", "Fehlt", 0.0));
+    els.push(text("OK", "Da", 2.0));
+    let r = insert(&mut s, &one_layer(els), &free());
+    assert_eq!(r.skipped.texts, 3, "{r:?}");
+    assert_eq!(r.texts, 1);
+    assert_eq!(r.curves, 4);
+    // Der abgelehnte Text mit der Ersatzschrift steht nicht in den fehlenden Schriften.
+    assert!(r.missing_fonts.is_empty(), "{:?}", r.missing_fonts);
+    assert_eq!(
+        s.profiles().profiles.len(),
+        1 + 2,
+        "Quadrat und zwei Buchstaben"
+    );
+}
+
+#[test]
+fn a_two_point_fit_spline_shorter_than_the_tolerance_is_degenerate() {
+    // Diagonale 0,5: Zusammenführtoleranz 5e-7 < 8e-7 ≤ `tol.linear` (1e-6). Die Enden werden
+    // nicht zusammengeführt, der Spline nähme sie aber nicht: entartet, nicht fatal.
+    let mut s = sketch();
+    let els = vec![
+        Element2d::Line(v(0.0, 0.0), v(0.5, 0.0)),
+        Element2d::FitSpline(vec![v(0.2, 0.3), v(0.2 + 8e-7, 0.3)]),
+    ];
+    let before_points = s.points().count();
+    let r = insert(&mut s, &one_layer(els), &free());
+    assert_eq!(r.skipped.degenerate, 1, "{r:?}");
+    assert_eq!(r.curves, 1);
+    assert_eq!(
+        s.points().count(),
+        before_points + 2,
+        "keine verwaisten Punkte"
+    );
+}
+
+#[test]
+fn a_rejected_element_leaves_no_trace() {
+    // Ein abgelehnter Text in der Mitte: Ergebnis wie ohne ihn (gleiche Daten).
+    let mut with = sketch();
+    let mut els = square();
+    els.insert(2, text(&"B".repeat(501), "Da", 1.0));
+    insert(&mut with, &one_layer(els), &free());
+    let mut without = sketch();
+    insert(&mut without, &one_layer(square()), &free());
+    assert_eq!(with.to_data(), without.to_data());
 }
