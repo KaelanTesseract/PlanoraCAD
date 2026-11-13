@@ -248,6 +248,25 @@ pub fn triad_visible(se: &SketchSession, sk: &Sketch) -> bool {
         }
 }
 
+/// Zeichnet die Art `kind` in 3D (Spec Abschnitt 4)? Bei Bogen, Rechteck, Kreis und Spline nur
+/// „3 Punkte“, „2 Punkte“, „2 Punkte“, beide Splines und der Kegelschnitt; die Arten der übrigen
+/// Werkzeuge zählen nicht (deren Werkzeug zeigt die Triade gar nicht erst). Die anderen sind in der
+/// Liste der Arten gedämpft, solange die Triade zu sehen ist.
+pub fn kind_draws_3d(kind: ToolKind) -> bool {
+    match kind.tool() {
+        Tool::Arc | Tool::Rectangle | Tool::Circle | Tool::Spline => matches!(
+            kind,
+            ToolKind::Arc3P
+                | ToolKind::Rect2P
+                | ToolKind::Circle2P
+                | ToolKind::SplineFit
+                | ToolKind::SplineControl
+                | ToolKind::Conic
+        ),
+        _ => true,
+    }
+}
+
 /// Winkelfang am Drehbogen: nahe an einer Stufe von 15° (bis 3°) die Stufe, sonst ganze Grad;
 /// `free` (Strg) lässt den Winkel, wie er ist.
 pub fn snap_angle(raw: f64, free: bool) -> f64 {
@@ -632,6 +651,22 @@ impl TriadUi {
         self.press = None;
         self.hot = None;
     }
+
+    /// Beendet einen laufenden Zug von außen (Sprung im Verlauf): Die Drehung von davor kommt
+    /// zurück, und bis alle Tasten los sind, gehört nichts der Skizze (das Loslassen ist kein
+    /// Klick). Ohne Zug geschieht nichts.
+    pub fn end_drag(&mut self, t: &mut Triad) {
+        if let Some(d) = self.drag.take() {
+            t.rot = d.start_rot;
+            self.press = Some(TriadPress::Swallow);
+        }
+    }
+}
+
+/// Beginnt das Ereignis eine Zahl (Ziffer, Vorzeichen, Komma)?
+fn starts_number(e: &egui::Event) -> bool {
+    matches!(e, egui::Event::Text(t)
+        if t.chars().next().is_some_and(|c| c.is_ascii_digit() || "+-.,−".contains(c)))
 }
 
 fn menu_id() -> egui::Id {
@@ -696,10 +731,10 @@ pub(crate) fn input(ui: &egui::Ui, rect: Rect, state: &mut AppState, hover: Opti
             i.modifiers.ctrl,
         )
     });
-    let esc = ui.input(|i| i.key_pressed(egui::Key::Escape)) && !viewport::typing(&ctx);
-
-    // Zug am Drehbogen.
+    // Zug am Drehbogen. Esc gehört ihm auch, wenn noch ein Feld die Tastatur hält (Korrektur
+    // Task 10): Der Zug nimmt die Maus, getippt wird währenddessen nicht.
     if let Some(mut d) = se.triad_ui.drag {
+        let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
         if sec_pressed || esc || !show_handles {
             se.triad.rot = d.start_rot;
             se.triad_ui.drag = None;
@@ -764,16 +799,23 @@ pub(crate) fn input(ui: &egui::Ui, rect: Rect, state: &mut AppState, hover: Opti
                 return true;
             }
             Some(TriadPart::Handle(axis)) => {
-                if let Some(from) = on_rotation_plane(&se.triad, se.triad.rot, axis, &map, at) {
-                    se.triad_ui.drag = Some(TriadDrag {
-                        axis,
-                        start_rot: se.triad.rot,
-                        from,
-                        raw: 0.0,
-                        angle: 0.0,
-                    });
-                    return true;
+                match on_rotation_plane(&se.triad, se.triad.rot, axis, &map, at) {
+                    Some(from) => {
+                        se.triad_ui.drag = Some(TriadDrag {
+                            axis,
+                            start_rot: se.triad.rot,
+                            from,
+                            raw: 0.0,
+                            angle: 0.0,
+                        });
+                        // Der Zug nimmt die Tastatur aus dem Winkelfeld: Esc bricht ihn ab.
+                        ctx.memory_mut(|m| m.surrender_focus(field_id().with("edit")));
+                    }
+                    // Die Ebene des Bogens steht auf der Kante: Drehen geht nicht, der Klick
+                    // gehört trotzdem der Triade und setzt keinen Punkt (Korrektur Task 10).
+                    None => se.triad_ui.press = Some(TriadPress::Swallow),
                 }
+                return true;
             }
             _ => {}
         }
@@ -887,9 +929,10 @@ fn menu(ui: &egui::Ui, state: &mut AppState) {
     }
 }
 
-/// Winkelfeld am aktiven Drehgriff (Tab, Spec Abschnitt 4): Es erscheint mit „0“ und nimmt die
-/// Tastatur; Eingabe dreht die Triade um den getippten Winkel (Grad) um die Achse des Griffs, Esc
-/// schließt das Feld, Tab im Feld wechselt zum nächsten Griff.
+/// Winkelfeld am aktiven Drehgriff (Tab, Spec Abschnitt 4): Es erscheint mit „0“, nimmt die
+/// Tastatur aber erst, wenn eine Zahl getippt wird (sonst ruhten bis dahin alle Kürzel, auch Alt
+/// und Pfeil hoch; Korrektur Task 10). Eingabe dreht die Triade um den getippten Winkel (Grad) um
+/// die Achse des Griffs, Esc schließt das Feld, Tab im Feld wechselt zum nächsten Griff.
 fn angle_field(ui: &egui::Ui, state: &mut AppState) {
     let ctx = ui.ctx().clone();
     let show_handles = state.triad_handles;
@@ -915,7 +958,17 @@ fn angle_field(ui: &egui::Ui, state: &mut AppState) {
         .unwrap_or(l.center);
     let at = knob + vec2(LABEL_GAP, LABEL_GAP);
     let mut text = std::mem::take(&mut se.triad_ui.field);
-    let has_focus = ctx.memory(|m| m.has_focus(edit_id));
+    let mut has_focus = ctx.memory(|m| m.has_focus(edit_id));
+    // Eine getippte Zahl öffnet das Feld, solange kein anderes Feld die Tastatur hat; das erste
+    // Zeichen ersetzt den Vorschlag.
+    let starts = !has_focus
+        && !viewport::keyboard_taken(&ctx)
+        && ctx.input(|i| i.events.iter().any(starts_number));
+    if starts {
+        text.clear();
+        ctx.memory_mut(|m| m.request_focus(edit_id));
+        has_focus = true;
+    }
     // Tab im Feld: der nächste Drehgriff (die Tastenkürzel ruhen, solange das Feld tippt).
     if has_focus && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab)) {
         se.triad.cycle_handle();
@@ -948,9 +1001,6 @@ fn angle_field(ui: &egui::Ui, state: &mut AppState) {
                 .inner
         })
         .inner;
-    if fresh {
-        ctx.memory_mut(|m| m.request_focus(edit_id));
-    }
     if response.lost_focus() {
         let (enter, esc) = ctx.input(|i| {
             (

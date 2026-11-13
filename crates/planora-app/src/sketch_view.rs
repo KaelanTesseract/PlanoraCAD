@@ -1313,6 +1313,7 @@ fn cursor_after_fields(rect: Rect, state: &mut AppState, pointer: Option<Pos2>) 
     }
     let raw = cursor_raw(se, at);
     se.update_cursor(sk, raw, radius);
+    se.update_cursor3(sk, &map, pointer);
 }
 
 /// Bildschirmlage als Doppelvektor, wie ihn der Auswahlrahmen führt.
@@ -1733,6 +1734,9 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     }
     se.cursor_opts.suppressed = ctrl;
     se.cursor_opts.grid_step = grid_step;
+    // Zeichnen in 3D (Skizzen 10): Der Klick setzt dort, wo der Zeiger jetzt steht.
+    se.update_cursor3(&sf.sketch, &map, pointer);
+    let draws3 = se.draw3;
 
     // Rahmen auf freier Fläche; alles andere greift (Punkt vor Kurve vor Rahmen).
     if starts_box {
@@ -1755,7 +1759,10 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         if let Some(start) = origin.and_then(|p| map.to_sketch(p)) {
             let r = origin.and_then(|p| map.radius_at(p)).unwrap_or(radius);
             se.begin_drag(&mut sf.sketch, start, r);
-            se.begin_line_arc(&sf.sketch, start, r);
+            // Der Bogen aus dem Linienzug zeichnet nur in der Ebene.
+            if !draws3 {
+                se.begin_line_arc(&sf.sketch, start, r);
+            }
         }
     }
     // Ein offenes Einfügen-Fenster (DXF, SVG) nimmt Esc selbst; die Skizze sieht sie nicht.
@@ -1965,6 +1972,13 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         // 3D-Punkt oder 3D-Kurve über den Bildschirmabstand (Skizzen 10); auch dort, wo der
         // Sehstrahl die Skizzenebene nicht trifft.
         se.select_clicked(&sf.sketch, item, shift);
+    } else if draws3 && response.clicked_by(PointerButton::Primary) && !click_on_grip {
+        // Zeichnen in 3D: Punkt in der Ebene der Triade (auch wo die Skizzenebene nicht zu
+        // treffen ist); getippte Werte werden zu Maßen.
+        let _ = match &commit_scope {
+            Some(scope) => se.commit_input3(sf, scope),
+            None => se.click3(&mut sf.sketch),
+        };
     } else if response.clicked_by(PointerButton::Primary)
         && !click_on_grip
         && let Some(at) = at
@@ -2040,6 +2054,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     // Aufgelöster Zeiger für Zeichen und Vorschau (nach den Änderungen dieses Bilds).
     let raw = cursor_raw(se, at);
     se.update_cursor(&sf.sketch, raw, radius);
+    se.update_cursor3(&sf.sketch, &map, pointer);
     se.update_transform_block(&sf.sketch);
     se.update_pattern_note(&sf.sketch);
     let tool = se.tool;
@@ -2853,6 +2868,41 @@ fn draw_text_preview(
     }
 }
 
+/// Vorschau beim Zeichnen in 3D: Linie vom Anfang, Linienzug durch die Punkte des Splines (bei
+/// Kontrollpunkten das Kontrollpolygon) bis zum Zeiger, gestrichelt; dazu ein Fangzeichen am
+/// gefangenen Punkt oder Ursprung.
+fn draw_preview3(
+    painter: &egui::Painter,
+    map: &Mapper,
+    sk: &Sketch,
+    se: &SketchSession,
+    color: Color32,
+) {
+    let Some(cur) = se.cursor3 else {
+        return;
+    };
+    let pending: Vec<DVec3> = se
+        .pending
+        .iter()
+        .filter_map(|&p| sk.point_xyz(p).ok())
+        .collect();
+    let shape: Vec<DVec3> = match (se.tool, pending.as_slice()) {
+        (Tool::Line, [.., last]) => vec![*last, cur.at],
+        (Tool::Spline, [_, ..]) => pending.iter().copied().chain([cur.at]).collect(),
+        _ => Vec::new(),
+    };
+    for path in map.paths3(&shape) {
+        draw_path(painter, path, Stroke::new(1.5, color), true);
+    }
+    if let Some(s) = map.to_screen3(cur.at) {
+        if cur.snap.is_some() || cur.origin {
+            painter.circle_stroke(s, POINT_PX + 4.0, Stroke::new(1.5, color));
+        } else {
+            painter.circle_filled(s, 2.5, color);
+        }
+    }
+}
+
 /// Vorschau des laufenden Werkzeugs vom zuletzt gesetzten Punkt zum Mauszeiger.
 fn draw_preview(
     painter: &egui::Painter,
@@ -2896,6 +2946,11 @@ fn draw_preview(
     // OK ihn anlegt.
     if se.runs_text() {
         draw_text_preview(painter, map, sk, se, color);
+        return;
+    }
+    // Zeichnen in 3D (Skizzen 10): vom gesetzten Punkt zum Zeiger in der Ebene der Triade.
+    if se.draw3 {
+        draw_preview3(painter, map, sk, se, color);
         return;
     }
     // Ohne Zeiger über der Skizze bleibt die Vorschau an der letzten Stelle stehen.

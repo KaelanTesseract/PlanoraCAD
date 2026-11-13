@@ -1281,11 +1281,12 @@ impl PlanoraApp {
     /// beim Loslassen seine Aktion aus ([`keymap::dispatch::tapped`]; Alt mit Ziehen, Rad oder
     /// Taste nicht), und „Z sperren“ gilt, solange seine Taste gehalten wird
     /// ([`keymap::dispatch::held`]). Beides nur bei offener Skizze und ohne Rückfrage, Fenster
-    /// oder Eingabefeld; sonst fällt die Sperre.
+    /// oder Eingabefeld; sonst fällt die Sperre. Die Felder am Zeiger (Länge, Winkel, Z-Abstand)
+    /// sperren die Triade nicht: Sie haben beim Zeichnen fast immer die Tastatur (Task 11).
     fn triad_keys(&mut self, ctx: &egui::Context) {
         let tap = keymap::dispatch::tapped(ctx);
         let free = self.ws.prompt.is_none()
-            && !viewport::typing(ctx)
+            && (!viewport::typing(ctx) || viewport::draw_field_has_keyboard(ctx))
             && !self.windows_open()
             && !self.projects.is_open();
         let km = &self.ws.keymap;

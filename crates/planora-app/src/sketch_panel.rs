@@ -562,6 +562,18 @@ pub fn flyout_entries(ctx: &egui::Context) -> Vec<(String, egui::Rect)> {
         .unwrap_or_default()
 }
 
+fn flyout_dimmed_key() -> egui::Id {
+    shell_panels::sketch_strip_id().with("flyout-dimmed")
+}
+
+/// Namen der gedämpften Einträge der offenen Liste im letzten Bild (für Tests): bei sichtbarer
+/// Triade die Arten, die nur in 2D zeichnen (Skizzen 10).
+#[doc(hidden)]
+pub fn flyout_dimmed(ctx: &egui::Context) -> Vec<String> {
+    ctx.data(|d| d.get_temp::<Vec<String>>(flyout_dimmed_key()))
+        .unwrap_or_default()
+}
+
 /// Titel im Hinweistext der Leiste: Bei Formen mit Arten Name und Taste der zuletzt benutzten Art,
 /// sonst Name und, falls belegt, Taste des Werkzeugs.
 pub fn strip_title(km: &Keymap, se: &SketchSession, tool: Tool) -> String {
@@ -696,6 +708,10 @@ fn strip_field(
     let inner = shell_panels::inner_size(&frame, rect.size());
     let mut seen: Vec<(String, egui::Rect)> = Vec::new();
     let mut entries: Vec<(String, egui::Rect)> = Vec::new();
+    let mut dimmed: Vec<String> = Vec::new();
+    // Bei sichtbarer Triade sind die Arten gedämpft, die nur in 2D zeichnen (Spec Abschnitt 4);
+    // wählbar bleiben sie.
+    let triad = crate::sketch_triad::triad_visible(se, sk);
     // Die Tastenbelegung dieses Bilds (für die Taste im Hinweistext).
     let km = crate::keymap::mouse::current(ctx);
     // Eine Taste hat Werkzeug oder Art gewechselt: Die Liste gehört zum alten Stand.
@@ -752,7 +768,12 @@ fn strip_field(
                             se.choose_tool(sk, tool);
                             egui::Popup::close_id(ctx, flyout_id(tool));
                         }
-                        if flyout && let Some(kind) = flyout_list(&r, tool, &km, &mut entries) {
+                        let list = FlyoutList {
+                            triad,
+                            entries: &mut entries,
+                            dimmed: &mut dimmed,
+                        };
+                        if flyout && let Some(kind) = flyout_list(&r, tool, &km, list) {
                             se.choose_kind(sk, kind);
                         }
                         seen.push((label, r.rect));
@@ -766,6 +787,7 @@ fn strip_field(
     ctx.data_mut(|d| {
         d.insert_temp(strip_buttons_key(), seen);
         d.insert_temp(flyout_entries_key(), entries);
+        d.insert_temp(flyout_dimmed_key(), dimmed);
     });
 }
 
@@ -802,13 +824,19 @@ fn flyout_gesture(
 /// Zeigt die Liste des Knopfs `r`, wenn sie offen ist: alle Arten mit Namen und Kürzel, rechts
 /// neben dem Knopf. Sie schließt bei einem Eintrag, bei Esc (macht `Popup` selbst) und bei einem
 /// Drücken außerhalb von Liste und Knopf; `CloseOnClick` taugt nicht, das Loslassen nach dem Halten
-/// schlösse sie sofort. Liefert die gewählte Art.
+/// schlösse sie sofort. Liefert die gewählte Art. Bei sichtbarer Triade (`list.triad`) sind die
+/// Arten gedämpft, die nur in 2D zeichnen.
 fn flyout_list(
     r: &egui::Response,
     tool: Tool,
     km: &Keymap,
-    entries: &mut Vec<(String, egui::Rect)>,
+    list: FlyoutList<'_>,
 ) -> Option<ToolKind> {
+    let FlyoutList {
+        triad,
+        entries,
+        dimmed,
+    } = list;
     let id = flyout_id(tool);
     let mut picked = None;
     let shown = egui::Popup::menu(r)
@@ -822,8 +850,20 @@ fn flyout_list(
                 let keys = shortcut_hint(km, kind.action());
                 let source = icons::sketch_kind_icon(*kind);
                 let label = kind.label();
-                let entry = icons::source_entry_keys(ui, source, &label, &keys, true)
+                let dim = triad && !crate::sketch_triad::kind_draws_3d(*kind);
+                let entry = ui
+                    .scope(|ui| {
+                        if dim {
+                            let weak = ui.visuals().weak_text_color();
+                            ui.visuals_mut().override_text_color = Some(weak);
+                        }
+                        icons::source_entry_keys(ui, source, &label, &keys, true)
+                    })
+                    .inner
                     .on_hover_text(kind.hint());
+                if dim {
+                    dimmed.push(label.clone());
+                }
                 if entry.clicked() {
                     picked = Some(*kind);
                     ui.close();
@@ -841,6 +881,14 @@ fn flyout_list(
         egui::Popup::close_id(&r.ctx, id);
     }
     picked
+}
+
+/// Was die Liste der Arten außer dem Knopf braucht: ob die Triade zu sehen ist, und wohin Lage
+/// und Dämpfung der Einträge für die Tests gehen.
+struct FlyoutList<'a> {
+    triad: bool,
+    entries: &'a mut Vec<(String, egui::Rect)>,
+    dimmed: &'a mut Vec<String>,
 }
 
 /// Trennlinie der Leiste: [`shell::STRIP_SEPARATOR_H`] hoch (zusätzlich zum Abstand der

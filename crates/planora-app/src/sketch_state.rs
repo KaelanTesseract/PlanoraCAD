@@ -536,6 +536,15 @@ pub struct SketchSession {
     pub triad: crate::sketch_triad::Triad,
     /// Bedienzustand der Triade in der Ansicht (Bild, Zug, Menü, Winkelfeld).
     pub triad_ui: crate::sketch_triad::TriadUi,
+    /// Zeiger beim Zeichnen in 3D (Skizzen 10, [`crate::sketch_draw3`]); `None` außerhalb des
+    /// 3D-Wegs und bei streifendem Blick auf die Ebene der Triade.
+    pub cursor3: Option<crate::sketch_draw3::Cursor3>,
+    /// Zeichnet das Werkzeug in diesem Bild in 3D ([`SketchSession::draws_in_3d`], je Bild
+    /// gesetzt)? Danach richten sich die Felder am Zeiger.
+    pub draw3: bool,
+    /// Z-Sperre: die Stelle beim Drücken von Pfeil hoch, von der aus der Punkt entlang der Normale
+    /// der Ebene läuft.
+    pub lock_from: Option<DVec3>,
     /// Letzte Stelle beim Stutzen durch Ziehen (`None`: kein Zug läuft).
     pub trim_drag: Option<DVec2>,
     /// Zählt die gelungenen Änderungen durch Stutzen, Dehnen und Brechen, mit dem Werkzeug der
@@ -702,6 +711,9 @@ impl SketchSession {
             edit_label: None,
             triad: Default::default(),
             triad_ui: Default::default(),
+            cursor3: None,
+            draw3: false,
+            lock_from: None,
             trim_drag: None,
             modify_edits: (0, None),
             fillet_run: None,
@@ -905,6 +917,10 @@ impl SketchSession {
         } else if self.tool == Tool::Text {
             self.begin_text();
         }
+        // Ein laufender Zug an der Triade gehört zum alten Stand: Die Drehung kommt zurück, und das
+        // Loslassen danach ist kein Klick (Korrektur Task 10).
+        self.triad_ui.end_drag(&mut self.triad);
+        self.lock_from = None;
         self.edit_label = None;
         self.message = None;
         self.last_report = Some(sk.clone().solve());
@@ -1068,12 +1084,21 @@ impl SketchSession {
         self.created = None;
         self.pick_radius = radius;
         let cur = self.resolve_cursor(sk, at, radius);
-        // Stand vor dem ersten Klick eines Befehls (siehe `open_start`): beim ersten offenen Punkt
-        // der vor diesem Klick, danach der gemerkte.
+        self.with_open_start(sk, |se, sk| se.click_tool(sk, at, radius, extend, &cur))
+    }
+
+    /// Führt den Klick `f` des aktiven Werkzeugs aus und führt dabei den Stand vor dem ersten Klick
+    /// eines Befehls (siehe `open_start`): beim ersten offenen Punkt der vor diesem Klick, danach
+    /// der gemerkte. Gemeinsam für den Klick in der Ebene und in 3D ([`crate::sketch_draw3`]).
+    pub(crate) fn with_open_start<T>(
+        &mut self,
+        sk: &mut Sketch,
+        f: impl FnOnce(&mut Self, &mut Sketch) -> Result<T, String>,
+    ) -> Result<T, String> {
         let open = self.open_start.take();
         let fresh = (open.is_none() && self.pending.is_empty() && self.is_drawing_tool())
             .then(|| sk.clone());
-        let result = self.click_tool(sk, at, radius, extend, &cur);
+        let result = f(self, sk);
         if result.is_err() {
             self.open_start = open;
             return result;
@@ -1501,9 +1526,20 @@ impl SketchSession {
         if cur.point(sk.tolerance().linear).is_some() {
             return Ok(());
         }
-        self.attach(sk, None, cur)?;
+        let p = self.attach(sk, None, cur)?;
         self.solve_checked(sk, prior)?;
+        self.follow_triad(sk, p);
         Ok(())
+    }
+
+    /// Die Triade einer 3D-Skizze springt auf den eben gesetzten Punkt `p` (Spec Abschnitt 4); in
+    /// einer 2D-Skizze geschieht nichts.
+    pub(crate) fn follow_triad(&mut self, sk: &Sketch, p: PointId) {
+        if sk.three_d
+            && let Ok(at) = sk.point_xyz(p)
+        {
+            self.triad.moved_to(at);
+        }
     }
 
     fn click_line(&mut self, sk: &mut Sketch, cur: &DrawCursor, prior: &Sketch) -> Result<(), Msg> {
@@ -1511,6 +1547,7 @@ impl SketchSession {
         let Some(&start) = self.pending.first() else {
             self.pending = vec![p];
             self.solve_checked(sk, prior)?;
+            self.follow_triad(sk, p);
             return Ok(());
         };
         let line = sk.add_line(start, p).map_err(err)?;
@@ -1522,6 +1559,7 @@ impl SketchSession {
         self.line_after_arc = None;
         self.pending = vec![p];
         self.created = Some(Created::Line(line));
+        self.follow_triad(sk, p);
         Ok(())
     }
 
@@ -1538,9 +1576,10 @@ impl SketchSession {
         };
         let report = attempt.solve();
         let limit = 10.0 * sk.tolerance().linear;
+        // Im Raum gemessen: Ein 2D-Punkt hat z = 0, für ihn ist das dasselbe wie in der Ebene.
         let moved = sk
             .points()
-            .any(|(p, _)| match (sk.point_xy(p), attempt.point_xy(p)) {
+            .any(|(p, _)| match (sk.point_xyz(p), attempt.point_xyz(p)) {
                 (Ok(a), Ok(b)) => a.distance(b) > limit,
                 _ => true,
             });
@@ -1730,6 +1769,7 @@ impl SketchSession {
         }
         self.pending.push(p);
         self.solve_checked(sk, prior)?;
+        self.follow_triad(sk, p);
         Ok(())
     }
 
