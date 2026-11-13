@@ -20,7 +20,7 @@ use planora_render::{EdgeRef, FaceRef, OrbitCamera, Pick, exact_step, grid_radiu
 use planora_sketch::ExtractedProfiles;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind, LineOrPoints};
 use planora_sketch::dimension::{DimPick, DimPlan};
-use planora_sketch::model::{CurveId, CurveKind, LineStyle, PointId, Sketch};
+use planora_sketch::model::{CurveId, CurveKind, LineStyle, MAX_COORD, PointId, Sketch};
 use planora_sketch::pattern::PatternSlot;
 use planora_sketch::solver::{SolveReport, SolveStatus};
 use std::collections::HashSet;
@@ -126,6 +126,186 @@ pub fn pick_radius_units(
     let a = screen_to_sketch(camera, frame, viewport, pixel)?;
     let b = screen_to_sketch(camera, frame, viewport, pixel + Vec2::X)?;
     Some(a.distance(b) * f64::from(pixel_radius))
+}
+
+// ---- 3D-Abbildung (Skizzen 10) ------------------------------------------------------------------
+
+/// Kleinster Winkel zwischen Sehstrahl und Ebene, unter dem [`screen_to_plane`] keinen Punkt
+/// liefert (5°): Bei fast streifendem Blick läge der Punkt sonst beinahe im Unendlichen.
+pub const MIN_PICK_ANGLE: f64 = 5.0 * std::f64::consts::PI / 180.0;
+
+/// Bildschirmposition (Pixel, Ursprung oben links) eines Punkts in Skizzenkoordinaten mit z;
+/// `None` hinter der Kamera.
+pub fn sketch3_to_screen(
+    camera: &OrbitCamera,
+    frame: &Frame,
+    viewport: Vec2,
+    p: DVec3,
+) -> Option<Vec2> {
+    camera.project(to_vec3(frame.point(p.x, p.y, p.z)), viewport)
+}
+
+/// Schneidet den Sehstrahl durch `pixel` (Ursprung oben links im Viewport der Größe `viewport`)
+/// mit der Ebene durch `origin` mit der Normale `normal`, beide in Skizzenkoordinaten, und liefert
+/// den Punkt in Skizzenkoordinaten. `None`, wenn der Winkel zwischen Strahl und Ebene unter
+/// [`MIN_PICK_ANGLE`] liegt, die Ebene hinter der Kamera liegt, die Normale nicht normierbar ist
+/// oder eine Koordinate des Ergebnisses über `MAX_COORD` geht.
+pub fn screen_to_plane(
+    camera: &OrbitCamera,
+    frame: &Frame,
+    viewport: Vec2,
+    pixel: Vec2,
+    origin: DVec3,
+    normal: DVec3,
+) -> Option<DVec3> {
+    if viewport.x < 1.0 || viewport.y < 1.0 || !origin.is_finite() {
+        return None;
+    }
+    let n = normal.try_normalize()?;
+    let ndc = Vec2::new(
+        pixel.x / viewport.x * 2.0 - 1.0,
+        1.0 - pixel.y / viewport.y * 2.0,
+    );
+    let (eye, dir) = camera.ray(ndc);
+    let (eye, dir) = (to_dvec3(eye), to_dvec3(dir));
+    // Strahl in Skizzenkoordinaten (der Rahmen ist orthonormal, die Länge bleibt).
+    let o = frame.to_local(eye);
+    let d = (frame.to_local(eye + dir) - o).try_normalize()?;
+    let denom = d.dot(n);
+    if !denom.is_finite() || denom.abs() < MIN_PICK_ANGLE.sin() {
+        return None;
+    }
+    let t = (origin - o).dot(n) / denom;
+    if !t.is_finite() || t < 0.0 {
+        return None;
+    }
+    let p = o + d * t;
+    (p.is_finite() && p.abs().max_element() <= MAX_COORD).then_some(p)
+}
+
+/// Abschnitte für die Bahn einer 3D-Kurve: je Spline-Segment so viele wie in
+/// [`Sketch::curve_polyline`].
+const SPLINE_STEPS_PER_SEGMENT: usize = 16;
+
+/// Punkte entlang der Kurve `c` in Skizzenkoordinaten mit z, abgetastet über
+/// [`Sketch::curve_point3`] (alle Arten). Kreis und Ellipse sind geschlossen (letzter Punkt =
+/// erster). `None` bei unbekannter oder entarteter Kurve.
+pub fn curve_points3(sk: &Sketch, c: CurveId) -> Option<Vec<DVec3>> {
+    let (lo, hi) = sk.curve_domain3(c)?;
+    let span = hi - lo;
+    if !span.is_finite() || span < 0.0 {
+        return None;
+    }
+    let kind = &sk.curve(c)?.kind;
+    let steps = match kind {
+        CurveKind::Line { .. } => 1,
+        CurveKind::Circle { .. }
+        | CurveKind::Arc { .. }
+        | CurveKind::Ellipse { .. }
+        | CurveKind::EllipticArc { .. } => {
+            ((span / TAU * STEPS_PER_TURN as f64).ceil() as usize).clamp(1, STEPS_PER_TURN)
+        }
+        CurveKind::Spline { .. } => ((span.round() as usize) * SPLINE_STEPS_PER_SEGMENT).max(1),
+        _ => STEPS_PER_TURN,
+    };
+    let mut out: Vec<DVec3> = (0..=steps)
+        .map(|k| sk.curve_point3(c, lo + span * k as f64 / steps as f64))
+        .collect::<Option<_>>()?;
+    if matches!(kind, CurveKind::Circle { .. } | CurveKind::Ellipse { .. }) {
+        out[steps] = out[0];
+    }
+    Some(out)
+}
+
+/// Linienzug der Kurve `c` auf dem Bildschirm (alle Arten über [`Sketch::curve_point3`]). Stellen
+/// hinter der Kamera fehlen; wer den Zug dort getrennt braucht, nimmt [`curve_screen_paths`].
+pub fn curve_screen_path(sk: &Sketch, c: CurveId, map: &Mapper) -> Vec<Pos2> {
+    curve_points3(sk, c)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|p| map.to_screen3(p))
+        .collect()
+}
+
+/// Wie [`curve_screen_path`], an Stellen hinter der Kamera in Teilstücke zerlegt.
+pub fn curve_screen_paths(sk: &Sketch, c: CurveId, map: &Mapper) -> Vec<Vec<Pos2>> {
+    curve_points3(sk, c).map_or_else(Vec::new, |pts| map.paths3(&pts))
+}
+
+/// Abstand von `p` zur Strecke `a`–`b` auf dem Bildschirm.
+fn segment_distance(p: Pos2, a: Pos2, b: Pos2) -> f32 {
+    let ab = b - a;
+    let len2 = ab.length_sq();
+    let t = if len2 > 0.0 {
+        ((p - a).dot(ab) / len2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    p.distance(a + ab * t)
+}
+
+/// 3D-Punkt oder 3D-Kurve unter dem Zeiger `pointer`, über den Bildschirmabstand zur projizierten
+/// Lage (höchstens [`PICK_RADIUS_PX`]): Punkte vor Kurven, jeweils der nächste. Unsichtbare Griffe
+/// zählen nicht; 2D-Geometrie trifft weiter [`SketchSession::snap`].
+pub(crate) fn pick_3d(
+    se: &SketchSession,
+    sk: &Sketch,
+    map: &Mapper,
+    pointer: Pos2,
+) -> Option<Item> {
+    let hidden = se.hidden_handles(sk);
+    let nearest_point = sk
+        .points()
+        .map(|(p, _)| p)
+        .filter(|&p| sk.is_3d_point(p) && !hidden.points.contains(&p))
+        .filter_map(|p| {
+            let s = map.to_screen3(sk.point_xyz(p).ok()?)?;
+            Some((p, s.distance(pointer)))
+        })
+        .filter(|&(_, d)| d <= PICK_RADIUS_PX)
+        .min_by(|a, b| a.1.total_cmp(&b.1));
+    if let Some((p, _)) = nearest_point {
+        return Some(Item::Point(p));
+    }
+    sk.curves()
+        .map(|(c, _)| c)
+        .filter(|&c| sk.is_3d_curve(c) && !hidden.curves.contains(&c))
+        .filter_map(|c| {
+            let d = curve_screen_paths(sk, c, map)
+                .iter()
+                .flat_map(|path| path.windows(2))
+                .map(|w| segment_distance(pointer, w[0], w[1]))
+                .min_by(f32::total_cmp)?;
+            Some((c, d))
+        })
+        .filter(|&(_, d)| d <= PICK_RADIUS_PX)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(c, _)| Item::Curve(c))
+}
+
+/// Was ein Klick im Auswahlwerkzeug am Zeiger `pointer` trifft: ein 2D-Punkt (Fang in der
+/// Draufsicht) vor 3D-Punkten und 3D-Kurven ([`pick_3d`]), diese vor 2D-Kurven.
+fn select_hit(se: &SketchSession, sk: &Sketch, map: &Mapper, pointer: Pos2) -> Option<Item> {
+    let flat = map
+        .to_sketch(pointer)
+        .zip(map.radius_at(pointer))
+        .map_or(Snap::None, |(at, r)| se.snap(sk, at, r));
+    match flat {
+        Snap::Point(p) => Some(Item::Point(p)),
+        other => pick_3d(se, sk, map, pointer).or(match other {
+            Snap::Curve(c) => Some(Item::Curve(c)),
+            _ => None,
+        }),
+    }
+}
+
+/// Ist `item` ein 3D-Punkt oder eine 3D-Kurve?
+fn is_3d_item(sk: &Sketch, item: Item) -> bool {
+    match item {
+        Item::Point(p) => sk.is_3d_point(p),
+        Item::Curve(c) => sk.is_3d_curve(c),
+        _ => false,
+    }
 }
 
 // ---- Zahlen und Namen ---------------------------------------------------------------------
@@ -535,13 +715,40 @@ fn anchors(sk: &Sketch, kind: &ConstraintKind) -> Vec<DVec2> {
 // ---- Overlay ----------------------------------------------------------------------------------
 
 /// Abbildung Skizze → Bildschirm für ein Bild (Kamera, Ebene und Viewport festgehalten).
-struct Mapper {
-    camera: OrbitCamera,
-    frame: Frame,
-    rect: Rect,
+pub struct Mapper {
+    pub camera: OrbitCamera,
+    /// Lage der Skizzenebene in der Welt.
+    pub frame: Frame,
+    /// Rechteck der Ansicht auf dem Bildschirm.
+    pub rect: Rect,
 }
 
 impl Mapper {
+    /// Bildschirmlage eines Punkts in Skizzenkoordinaten mit z (Skizzen 10); `None` hinter der
+    /// Kamera.
+    pub fn to_screen3(&self, p: DVec3) -> Option<Pos2> {
+        let v = sketch3_to_screen(&self.camera, &self.frame, self.viewport(), p)?;
+        v.is_finite()
+            .then(|| pos2(self.rect.left() + v.x, self.rect.top() + v.y))
+    }
+
+    /// Wie [`paths`](Self::paths) für Punkte mit z.
+    fn paths3(&self, points: &[DVec3]) -> Vec<Vec<Pos2>> {
+        let mut out: Vec<Vec<Pos2>> = vec![Vec::new()];
+        for &p in points {
+            match self.to_screen3(p) {
+                Some(s) => {
+                    if let Some(v) = out.last_mut() {
+                        v.push(s);
+                    }
+                }
+                None => out.push(Vec::new()),
+            }
+        }
+        out.retain(|v| v.len() >= 2);
+        out
+    }
+
     fn viewport(&self) -> Vec2 {
         Vec2::new(self.rect.width(), self.rect.height())
     }
@@ -610,6 +817,25 @@ pub fn style_shapes(path: Vec<Pos2>, stroke: Stroke, style: LineStyle) -> Vec<Sh
         LineStyle::Centerline => {
             Shape::dashed_line_with_offset(&path, stroke, &[12.0, 2.0], &[3.0, 3.0], 0.0)
         }
+    }
+}
+
+/// Linienzüge der Kurve `c` auf dem Bildschirm: 3D-Kurven über [`curve_screen_paths`] mit z,
+/// alle anderen wie bisher über die Draufsicht. `None`, wenn eine 2D-Kurve keinen Linienzug hat.
+fn curve_paths(sk: &Sketch, c: CurveId, map: &Mapper) -> Option<Vec<Vec<Pos2>>> {
+    if sk.is_3d_curve(c) {
+        Some(curve_screen_paths(sk, c, map))
+    } else {
+        Some(map.paths(&sk.curve_polyline(c, STEPS_PER_TURN)?))
+    }
+}
+
+/// Bildschirmlage des Punkts `p`: ein 3D-Punkt mit z, alle anderen über die Draufsicht.
+fn point_screen(sk: &Sketch, p: PointId, map: &Mapper) -> Option<Pos2> {
+    if sk.is_3d_point(p) {
+        map.to_screen3(sk.point_xyz(p).ok()?)
+    } else {
+        map.to_screen(pos(sk, p)?)
     }
 }
 
@@ -816,7 +1042,7 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
             if handles_hidden.curves.contains(&c) {
                 continue;
             }
-            let Some(pl) = sk.curve_polyline(c, STEPS_PER_TURN) else {
+            let Some(paths) = curve_paths(sk, c, &map) else {
                 continue;
             };
             let width = if data.construction {
@@ -832,7 +1058,7 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
                 col.finished
             };
             let stroke = Stroke::new(width, color);
-            for path in map.paths(&pl) {
+            for path in paths {
                 out.extend(style_shapes(path, stroke, data.style()));
             }
         }
@@ -1122,10 +1348,12 @@ fn box_can_start(
         return false;
     }
     ui.input(|i| i.pointer.press_origin()).is_some_and(|p| {
-        match (map.to_sketch(p), map.radius_at(p)) {
-            (Some(at), Some(radius)) => se.is_free_at(sk, at, radius),
-            _ => true,
-        }
+        // 3D-Geometrie unter dem Zeiger (Bildschirmabstand) ist nicht frei.
+        pick_3d(se, sk, &map, p).is_none()
+            && match (map.to_sketch(p), map.radius_at(p)) {
+                (Some(at), Some(radius)) => se.is_free_at(sk, at, radius),
+                _ => true,
+            }
     })
 }
 
@@ -1562,7 +1790,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
                 se.box_to(dvec(p));
             }
             if response.drag_stopped() || !response.dragged() {
-                se.end_box(&sf.sketch, &|q| map.to_screen(q).map(dvec));
+                se.end_box3(&sf.sketch, &|q| map.to_screen3(q).map(dvec));
             }
         }
     }
@@ -1669,7 +1897,14 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             // Wie beim einfachen Klick: Punkt vor Kurve. Ein Exemplar oder eine Vorlage eines
             // Musters öffnet im Auswahlwerkzeug das Muster zum Bearbeiten (Skizzen 5).
             if let Some(at) = at {
-                let snap = se.snap(&sf.sketch, at, radius);
+                let mut snap = se.snap(&sf.sketch, at, radius);
+                // 3D-Kurven trifft nur der Bildschirmabstand (Skizzen 10).
+                if matches!(snap, Snap::None)
+                    && let Some(Item::Curve(c)) =
+                        pointer.and_then(|p| pick_3d(se, &sf.sketch, &map, p))
+                {
+                    snap = Snap::Curve(c);
+                }
                 let item = match snap {
                     Snap::Point(p) => Some(Item::Point(p)),
                     Snap::Curve(c) => Some(Item::Curve(c)),
@@ -1715,6 +1950,17 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             // und ergäbe eine hauchdünne Kopie. Verschieben schließt nur Eingabe oder OK ab.
             let _ = se.finish_tool(&mut sf.sketch);
         }
+    } else if response.clicked_by(PointerButton::Primary)
+        && !click_on_grip
+        && se.tool == Tool::Select
+        && let Some(item) = pointer
+            .filter(|_| at.is_none_or(|at| se.handle_grip_at(&sf.sketch, at, radius).is_none()))
+            .and_then(|p| select_hit(se, &sf.sketch, &map, p))
+            .filter(|&i| is_3d_item(&sf.sketch, i))
+    {
+        // 3D-Punkt oder 3D-Kurve über den Bildschirmabstand (Skizzen 10); auch dort, wo der
+        // Sehstrahl die Skizzenebene nicht trifft.
+        se.select_clicked(&sf.sketch, item, shift);
     } else if response.clicked_by(PointerButton::Primary)
         && !click_on_grip
         && let Some(at) = at
@@ -2041,12 +2287,7 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     } else {
         pointer
             .filter(|_| !se.is_dragging())
-            .and_then(|p| Some((map.to_sketch(p)?, map.radius_at(p)?)))
-            .and_then(|(at, r)| match se.snap(sk, at, r) {
-                Snap::Point(p) => Some(Item::Point(p)),
-                Snap::Curve(c) => Some(Item::Curve(c)),
-                _ => None,
-            })
+            .and_then(|p| select_hit(se, sk, &map, p))
     };
 
     // Kurven (beim Bearbeiten eines Musters ohne seine Exemplare: An ihrer Stelle steht die
@@ -2068,7 +2309,7 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         if hidden.contains(&c) {
             continue;
         }
-        let Some(pl) = sk.curve_polyline(c, STEPS_PER_TURN) else {
+        let Some(paths) = curve_paths(sk, c, &map) else {
             continue;
         };
         let mut color = if frames.contains(&c) {
@@ -2080,7 +2321,7 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
             color = lighter(color);
         }
         let width = if data.construction { 1.2 } else { CURVE_WIDTH };
-        for path in map.paths(&pl) {
+        for path in paths {
             painter.extend(style_shapes(path, Stroke::new(width, color), data.style()));
         }
     }
@@ -2097,7 +2338,7 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         if hidden_points.contains(&p) {
             continue;
         }
-        let Some(s) = pos(sk, p).and_then(|q| map.to_screen(q)) else {
+        let Some(s) = point_screen(sk, p, &map) else {
             continue;
         };
         let determined = point_determined(report, p);
@@ -2264,7 +2505,7 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     if se.tool != Tool::Select
         && !se.is_drawing_tool()
         && let Some(Item::Point(p)) = hovered
-        && let Some(s) = pos(sk, p).and_then(|q| map.to_screen(q))
+        && let Some(s) = point_screen(sk, p, &map)
     {
         painter.circle_stroke(s, POINT_PX + 5.0, Stroke::new(1.5, col.selected));
     }

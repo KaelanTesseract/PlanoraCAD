@@ -11,7 +11,7 @@ use crate::sketch_input::{Created, DrawInput, FieldKind};
 use crate::sketch_kinds::{PREVIEW_STEPS_PER_TURN, ToolKind, ToolKinds};
 use planora_feature::{FeatureId, ParamScope, ParamUnit, SketchFeature, constraint_unit};
 use planora_i18n::tr;
-use planora_math::DVec2;
+use planora_math::{DVec2, DVec3};
 use planora_sketch::SketchError;
 use planora_sketch::constraint::{ConstraintId, ConstraintKind, FixToggle, LineOrPoints};
 use planora_sketch::dimension::{DimPick, DimPlan};
@@ -1345,12 +1345,25 @@ impl SketchSession {
         if self.handle_grip_at(sk, at, radius).is_some() {
             return;
         }
-        self.forget_stale_picks();
         let item = match self.snap(sk, at, radius) {
             Snap::Point(p) => Some(Item::Point(p)),
             Snap::Curve(c) => Some(Item::Curve(c)),
             _ => None,
         };
+        self.select_item(sk, item, Some(at), extend);
+    }
+
+    /// Klick im Auswahlwerkzeug auf `item`, das die Ansicht über den Bildschirmabstand getroffen
+    /// hat (3D-Punkte und 3D-Kurven, Skizzen 10): wählt wie ein Klick an seiner Stelle, ohne
+    /// Klicklage. `extend` schaltet um.
+    pub fn select_clicked(&mut self, sk: &Sketch, item: Item, extend: bool) {
+        self.message = None;
+        self.select_item(sk, Some(item), None, extend);
+    }
+
+    /// Auswahl nach einem Klick auf `item` (`None`: ins Leere) an der Stelle `at`.
+    fn select_item(&mut self, sk: &Sketch, item: Option<Item>, at: Option<DVec2>, extend: bool) {
+        self.forget_stale_picks();
         // Ein Buchstabe (oder einer seiner Punkte) wählt den ganzen Text (Spec B9).
         if let Some(t) = item.and_then(|i| crate::sketch_text::text_of_item(sk, i)) {
             self.select_text(sk, t, extend);
@@ -1368,8 +1381,8 @@ impl SketchSession {
             (None, true) => {}
             (None, false) => self.selection.clear(),
         }
-        match item {
-            Some(Item::Curve(c)) => self.note_curve_pick(c, at),
+        match (item, at) {
+            (Some(Item::Curve(c)), Some(at)) => self.note_curve_pick(c, at),
             _ => self.sync_picks(),
         }
     }
@@ -1838,6 +1851,14 @@ impl SketchSession {
         }
     }
 
+    /// Wie [`end_box`](Self::end_box) mit einer Abbildung von Skizzenkoordinaten mit z
+    /// ([`select_rect3`](Self::select_rect3)).
+    pub fn end_box3(&mut self, sk: &Sketch, project: &dyn Fn(DVec3) -> Option<DVec2>) {
+        if let Some(b) = self.box_select.take() {
+            self.select_rect3(sk, b.start, b.current, b.extend, project);
+        }
+    }
+
     /// Bricht den Rahmen oder den Zug auf dem letzten Punkt mit der rechten Taste ab, siehe
     /// [`box_aborted`](Self::box_aborted).
     pub fn abort_box(&mut self) {
@@ -1860,13 +1881,33 @@ impl SketchSession {
         extend: bool,
         project: &dyn Fn(DVec2) -> Option<DVec2>,
     ) {
+        self.select_rect3(sk, a, b, extend, &|p: DVec3| project(p.truncate()));
+    }
+
+    /// Wie [`select_rect`](Self::select_rect), aber `project` bildet Skizzenkoordinaten mit z ab
+    /// (Skizzen 10): 3D-Kurven und 3D-Punkte zählen mit ihrer projizierten Raumlage
+    /// ([`curve_points3`](crate::sketch_view::curve_points3)), alles andere mit z = 0.
+    pub fn select_rect3(
+        &mut self,
+        sk: &Sketch,
+        a: DVec2,
+        b: DVec2,
+        extend: bool,
+        project: &dyn Fn(DVec3) -> Option<DVec2>,
+    ) {
         let window = a.x <= b.x;
         let (lo, hi) = (a.min(b), a.max(b));
-        let on_screen = |p: DVec2| project(p).filter(|q| q.is_finite());
+        let on_screen = |p: DVec3| project(p).filter(|q| q.is_finite());
         let mut found = Vec::new();
         let hidden = self.hidden_handles(sk);
         for (c, _) in sk.curves().filter(|(c, _)| !hidden.curves.contains(c)) {
-            let Some(line) = sk.curve_polyline(c, BOX_STEPS_PER_TURN) else {
+            let line = if sk.is_3d_curve(c) {
+                crate::sketch_view::curve_points3(sk, c)
+            } else {
+                sk.curve_polyline(c, BOX_STEPS_PER_TURN)
+                    .map(|pl| pl.into_iter().map(|p| p.extend(0.0)).collect())
+            };
+            let Some(line) = line else {
                 continue;
             };
             let line: Vec<Option<DVec2>> = line.into_iter().map(on_screen).collect();
@@ -1885,7 +1926,7 @@ impl SketchSession {
         let on_curves: BTreeSet<PointId> = sk.curves().flat_map(|(_, c)| c.kind.points()).collect();
         for (p, _) in sk.points().filter(|(p, _)| !on_curves.contains(p)) {
             if sk
-                .point_xy(p)
+                .point_xyz(p)
                 .ok()
                 .and_then(on_screen)
                 .is_some_and(|q| in_rect(q, lo, hi))
