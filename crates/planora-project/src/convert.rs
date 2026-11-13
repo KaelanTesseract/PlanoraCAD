@@ -672,7 +672,7 @@ fn constraint_to(k: &ConstraintKind) -> Option<ConstraintKindDto> {
         },
         K::InPlane(_) => return None,
         // Noch nicht in der Datei (Skizzen 10): Format 20 bringt sie mit Task 7.
-        K::AlongZ(_) | K::Fixed3(..) => return None,
+        K::AlongZ(_) | K::Fixed3(..) | K::EllipseAxes3(..) => return None,
     })
 }
 

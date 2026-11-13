@@ -1363,7 +1363,7 @@ impl Sketch {
         self.dissolve_patterns_at(&[c]);
         self.touch_structure();
         let in_plane: Vec<_> = self
-            .constraints()
+            .internal_constraints()
             .filter(|(_, d)| d.kind == ConstraintKind::InPlane(c))
             .map(|(id, _)| id)
             .collect();

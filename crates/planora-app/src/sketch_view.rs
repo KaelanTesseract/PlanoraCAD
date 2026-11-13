@@ -218,6 +218,7 @@ pub fn kind_msg(kind: &ConstraintKind) -> crate::msg::Msg {
         K::SplineCurvatureHandle(..) => crate::msg!("sketch-constraint-curvature-handle"),
         K::EllipticArcEnds(..) => crate::msg!("sketch-constraint-elliptic-arc-ends"),
         K::InPlane(..) => crate::msg!("sketch-constraint-in-plane"),
+        K::EllipseAxes3(..) => crate::msg!("sketch-constraint-ellipse-axes"),
         K::EllipseMajor(..) => crate::msg!("sketch-constraint-ellipse-major"),
         K::EllipseMinor(..) => crate::msg!("sketch-constraint-ellipse-minor"),
         K::EllipseAngle(..) => crate::msg!("sketch-constraint-ellipse-angle"),
@@ -362,6 +363,7 @@ pub fn overlay_text(
         | K::ArcRadius(..)
         | K::EllipticArcEnds(..)
         | K::InPlane(..)
+        | K::EllipseAxes3(..)
         | K::SplineCurvatureHandle(..) => return String::new(),
         K::Horizontal(..) => "H".to_string(),
         K::Vertical(..) => "V".to_string(),
@@ -520,6 +522,7 @@ fn anchors(sk: &Sketch, kind: &ConstraintKind) -> Vec<DVec2> {
         | K::SplineCurvatureHandle(c, _)
         | K::EllipticArcEnds(c)
         | K::InPlane(c)
+        | K::EllipseAxes3(c, ..)
         | K::EllipseMajor(c, _)
         | K::EllipseMinor(c, _)
         | K::EllipseAngle(c, _) => vec![curve_anchor(sk, *c)],

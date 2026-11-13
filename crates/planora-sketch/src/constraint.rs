@@ -128,6 +128,11 @@ pub enum ConstraintKind {
     /// Fester Punkt im Raum (Skizzen 10): x, y und z. `Fixed` bleibt die 2D-Fassung; an einem
     /// 3D-Punkt legt das Fixieren `Fixed3` an (ab Format 20).
     Fixed3(PointId, f64, f64, f64),
+    /// Intern (Skizzen 10): große Halbachse `(x, y, z)` und kleine Halbachse einer einbezogenen
+    /// Ellipse oder eines einbezogenen Ellipsenbogens im Raum fest. Nur `add_included` legt sie
+    /// an, damit eingezogene Ellipsen ganz bestimmt sind; die Maße `Ellipse…` bleiben an
+    /// 3D-Geometrie für den Benutzer gesperrt.
+    EllipseAxes3(CurveId, f64, f64, f64, f64),
 }
 
 impl ConstraintKind {
@@ -194,6 +199,7 @@ impl ConstraintKind {
                 | ArcRadius(..)
                 | EllipticArcEnds(..)
                 | InPlane(..)
+                | EllipseAxes3(..)
         )
     }
 
@@ -327,6 +333,7 @@ impl ConstraintKind {
             | ArcRadius(c)
             | EllipticArcEnds(c)
             | InPlane(c)
+            | EllipseAxes3(c, ..)
             | EllipseMajor(c, _)
             | EllipseMinor(c, _)
             | EllipseAngle(c, _)
@@ -1016,6 +1023,19 @@ fn eval_kind_2d(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
             vec![length(&a) - *v]
         }
         EllipseMinor(c, v) => vec![ellipse_of(ctx, *c).3 - *v],
+        EllipseAxes3(c, x, y, z, m) => {
+            let (CurveKind::Ellipse {
+                ax, ay, az, minor, ..
+            }
+            | CurveKind::EllipticArc {
+                ax, ay, az, minor, ..
+            }) = sk.curves[*c].kind
+            else {
+                unreachable!("type was checked")
+            };
+            let a = crate::constraint3d::ellipse_axis3(ctx, ax, ay, az);
+            vec![a.0 - *x, a.1 - *y, a.2 - *z, ctx.var(minor) - *m]
+        }
         EllipseAngle(c, v) => {
             let (_, a, len, _) = ellipse_of(ctx, *c);
             let dir = (Dual::constant(v.cos()), Dual::constant(v.sin()));
@@ -1729,7 +1749,7 @@ impl Sketch {
             {
                 wrong(tr!("sketch-err-normal-kind"))
             }
-            EllipseMajor(c, _) | EllipseMinor(c, _) | EllipseAngle(c, _)
+            EllipseMajor(c, _) | EllipseMinor(c, _) | EllipseAngle(c, _) | EllipseAxes3(c, ..)
                 if !is_ellipse_kind(&self.curves[*c].kind) =>
             {
                 wrong(tr!("sketch-err-only-ellipses"))
@@ -2264,6 +2284,7 @@ impl Sketch {
             ConstraintKind::ArcRadius(_)
                 | ConstraintKind::EllipticArcEnds(_)
                 | ConstraintKind::InPlane(_)
+                | ConstraintKind::EllipseAxes3(..)
                 | ConstraintKind::PatternValue(..)
                 | ConstraintKind::SplineCurvatureHandle(..)
         ) {

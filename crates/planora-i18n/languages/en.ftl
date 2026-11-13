@@ -1055,6 +1055,7 @@ sketch-constraint-arc-radius = Arc radius
 sketch-constraint-curvature-handle = Curvature handle
 sketch-constraint-elliptic-arc-ends = Elliptical arc ends
 sketch-constraint-in-plane = In plane
+sketch-constraint-ellipse-axes = Fixed semi-axes
 sketch-constraint-ellipse-major = Major semi-axis
 sketch-constraint-ellipse-minor = Minor semi-axis
 sketch-constraint-ellipse-angle = Ellipse angle

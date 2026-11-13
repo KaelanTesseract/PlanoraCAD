@@ -1045,8 +1045,8 @@ fn fixed_spline_3d_keeps_z_control_points() {
             assert!(a.distance(*b) < 1e-12, "{a} ≠ {b}");
         }
         let ids = s.add_included(&g).unwrap();
-        assert_eq!(ids.len(), 1);
-        let c = ids[0];
+        assert_eq!(ids.curves.len(), 1);
+        let c = ids.curves[0];
         let (a, b, kept) = fixed_ends(&s, c);
         assert_ne!(a, b);
         assert!(kept.control_points().iter().any(|q| q.z.abs() > 0.5));
@@ -1075,7 +1075,7 @@ fn fixed_spline_3d_keeps_z_control_points() {
     // Geschlossen im Raum: ein Punkt für beide Enden.
     let mut s = sketch();
     let g = include_curve(&Frame::WORLD, &free(circle(4.0, 2.0)), 0.0, 1.0).unwrap();
-    let c = s.add_included(&g).unwrap()[0];
+    let c = s.add_included(&g).unwrap().curves[0];
     let (a, b, _) = fixed_ends(&s, c);
     assert_eq!(a, b);
     assert!((s.point_xyz(a).unwrap().z - 2.0).abs() < 1e-12);

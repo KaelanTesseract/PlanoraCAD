@@ -1038,6 +1038,7 @@ sketch-constraint-arc-radius = Bogenradius
 sketch-constraint-curvature-handle = Krümmungsgriff
 sketch-constraint-elliptic-arc-ends = Ellipsenbogen-Enden
 sketch-constraint-in-plane = In Ebene
+sketch-constraint-ellipse-axes = Halbachsen fest
 sketch-constraint-ellipse-major = Große Halbachse
 sketch-constraint-ellipse-minor = Kleine Halbachse
 sketch-constraint-ellipse-angle = Ellipsenwinkel

@@ -162,6 +162,7 @@ fn map_ids(
         EllipseAngle(x, v) => EllipseAngle(c(*x), *v),
         EllipticArcEnds(x) => EllipticArcEnds(c(*x)),
         InPlane(x) => InPlane(c(*x)),
+        EllipseAxes3(x, ax, ay, az, m) => EllipseAxes3(c(*x), *ax, *ay, *az, *m),
         Collinear(a, b) => Collinear(c(*a), c(*b)),
         Smooth(a, pa, b, pb) => Smooth(c(*a), p(*pa), c(*b), p(*pb)),
         DistanceX(a, b, v) => DistanceX(p(*a), p(*b), *v),

@@ -444,11 +444,11 @@ fn include_line_off_plane_gives_3d_line() {
     assert_eq!(g, Included::Line(p0, p1));
     let mut s = sketch();
     let ids = s.add_included(&g).unwrap();
-    assert_eq!(ids.len(), 1);
-    let (a, b) = line_points(&s, ids[0]);
+    assert_eq!(ids.curves.len(), 1);
+    let (a, b) = line_points(&s, ids.curves[0]);
     fixed3_at(&s, a, p0);
     fixed3_at(&s, b, p1);
-    assert!(s.is_3d_curve(ids[0]));
+    assert!(s.is_3d_curve(ids.curves[0]));
     assert_solved_rigid(&mut s);
     // Senkrecht zur Skizzenebene ist im Raum eine echte Linie (die Projektion lehnt sie ab).
     let up = Curve::Line {
@@ -457,7 +457,8 @@ fn include_line_off_plane_gives_3d_line() {
     };
     let c = s
         .add_included(&include_curve(&Frame::WORLD, &up, 0.0, 4.0).unwrap())
-        .unwrap()[0];
+        .unwrap()
+        .curves[0];
     let (a, b) = line_points(&s, c);
     fixed3_at(&s, a, DVec3::new(2.0, 0.0, 0.0));
     fixed3_at(&s, b, DVec3::new(2.0, 0.0, 4.0));
@@ -466,7 +467,7 @@ fn include_line_off_plane_gives_3d_line() {
     let mut t = Sketch::new(frame, "S", Tolerance::default());
     let g = include_curve(&frame, &curve, 0.0, 5.0).unwrap();
     assert_eq!(g, Included::Line(frame.to_local(p0), frame.to_local(p1)));
-    let c = t.add_included(&g).unwrap()[0];
+    let c = t.add_included(&g).unwrap().curves[0];
     let (a, _) = line_points(&t, c);
     fixed3_at(&t, a, frame.to_local(p0));
 }
@@ -494,7 +495,7 @@ fn include_circle_in_yz_gets_normal_x() {
         }
     );
     let mut s = sketch();
-    let c = s.add_included(&g).unwrap()[0];
+    let c = s.add_included(&g).unwrap().curves[0];
     let CurveKind::Circle { center, .. } = s.curve(c).unwrap().kind else {
         panic!("Kreis erwartet")
     };
@@ -513,7 +514,7 @@ fn include_circle_in_yz_gets_normal_x() {
         assert!(start.distance(curve.point(0.0)) < 1e-12);
         assert!(end.distance(curve.point(FRAC_PI_2)) < 1e-12);
         let mut s = sketch();
-        let arc = s.add_included(&g).unwrap()[0];
+        let arc = s.add_included(&g).unwrap().curves[0];
         let CurveKind::Arc {
             center,
             start: a,
@@ -564,14 +565,14 @@ fn include_circle_in_yz_gets_normal_x() {
         }
     );
     let mut s = sketch();
-    let e = s.add_included(&g).unwrap()[0];
+    let e = s.add_included(&g).unwrap().curves[0];
     assert_eq!(s.curve_normal(e), DVec3::X);
     assert!(s.curve_point3(e, 0.0).unwrap().distance(ell.point(0.0)) < 1e-9);
     assert_eq!(s.solve().status, SolveStatus::Solved);
     let g = include_curve(&Frame::WORLD, &ell, 0.5, 2.0).unwrap();
     assert!(matches!(g, Included::EllipticArc { n, .. } if n == DVec3::X));
     let mut s = sketch();
-    let e = s.add_included(&g).unwrap()[0];
+    let e = s.add_included(&g).unwrap().curves[0];
     let CurveKind::EllipticArc { start, end, .. } = s.curve(e).unwrap().kind else {
         panic!("Ellipsenbogen erwartet")
     };
@@ -690,8 +691,8 @@ fn include_in_plane_is_plain_2d() {
             let mut included = Sketch::new(frame, "S", Tolerance::default());
             let g = include_curve(&frame, &curve, t0, t1).unwrap();
             let ids = included.add_included(&g).unwrap();
-            assert_eq!(ids.len(), 1);
-            assert!(!included.is_3d_curve(ids[0]), "{curve:?}");
+            assert_eq!(ids.curves.len(), 1);
+            assert!(!included.is_3d_curve(ids.curves[0]), "{curve:?}");
             assert_eq!(
                 included.to_data(),
                 projected.to_data(),
@@ -710,7 +711,7 @@ fn update_included_moves_points() {
     let include = |c: &Curve, t0: f64, t1: f64| include_curve(&Frame::WORLD, c, t0, t1).unwrap();
     let mut s = sketch();
     let first = line(DVec3::new(0.0, 0.0, 1.0), DVec3::new(1.0, 1.0, 0.0));
-    let c = s.add_included(&include(&first, 0.0, 3.0)).unwrap()[0];
+    let c = s.add_included(&include(&first, 0.0, 3.0)).unwrap().curves[0];
     let (a, b) = line_points(&s, c);
     let next = line(DVec3::new(1.0, -1.0, 4.0), DVec3::new(0.0, 1.0, 1.0));
     s.update_included(c, &include(&next, 0.0, 2.0)).unwrap();
@@ -721,7 +722,7 @@ fn update_included_moves_points() {
     // Eine 2D-Linie, deren Quelle die Ebene verlässt, wird 3D.
     let mut s = sketch();
     let flat = line(DVec3::ZERO, DVec3::X);
-    let c = s.add_included(&include(&flat, 0.0, 2.0)).unwrap()[0];
+    let c = s.add_included(&include(&flat, 0.0, 2.0)).unwrap().curves[0];
     assert!(!s.is_3d_curve(c));
     let (a, b) = line_points(&s, c);
     s.update_included(c, &include(&first, 0.0, 3.0)).unwrap();
@@ -730,7 +731,7 @@ fn update_included_moves_points() {
     assert_solved_rigid(&mut s);
     // In der Ebene geblieben: wie das Nachführen einer Projektion.
     let mut s = sketch();
-    let c = s.add_included(&include(&flat, 0.0, 2.0)).unwrap()[0];
+    let c = s.add_included(&include(&flat, 0.0, 2.0)).unwrap().curves[0];
     let mut p = sketch();
     let pc = p.add_projected_curve(&flat, 0.0, 2.0, LINKED).unwrap();
     let moved = line(DVec3::new(1.0, 1.0, 0.0), DVec3::Y);
@@ -745,7 +746,8 @@ fn update_included_moves_points() {
     };
     let c = s
         .add_included(&include(&circ(DVec3::Z, DVec3::X, 2.0), 0.0, TAU))
-        .unwrap()[0];
+        .unwrap()
+        .curves[0];
     let CurveKind::Circle { center, .. } = s.curve(c).unwrap().kind else {
         panic!("Kreis erwartet")
     };
@@ -774,7 +776,10 @@ fn update_included_moves_points() {
             .unwrap(),
         ))
     };
-    let f = s.add_included(&include(&bend(1.0), 0.0, 1.0)).unwrap()[0];
+    let f = s
+        .add_included(&include(&bend(1.0), 0.0, 1.0))
+        .unwrap()
+        .curves[0];
     let CurveKind::FixedSpline { start, end, .. } = s.curve(f).unwrap().kind.clone() else {
         panic!("fester Spline erwartet")
     };
@@ -790,6 +795,148 @@ fn update_included_moves_points() {
     assert!(
         matches!(err, Err(SketchError::UnsupportedProjection(_))),
         "{err:?}"
+    );
+    assert_eq!(s.to_data(), before);
+}
+
+/// Eingezogene Ellipsen und Ellipsenbögen im Raum sind ganz bestimmt (Entscheidung Controller).
+#[test]
+fn include_ellipse3_and_elliptic_arc3_have_no_dof() {
+    // Senkrechte Ebene (Draufsichtwinkel wäre hier unbrauchbar) und eine schräge Ebene.
+    let frames = [
+        Frame {
+            origin: DVec3::new(0.0, 1.0, 2.0),
+            x: DVec3::Z,
+            y: -DVec3::Y,
+            z: DVec3::X,
+        },
+        Frame::from_origin_normal(
+            DVec3::new(1.0, -2.0, 3.0),
+            DVec3::new(1.0, 2.0, 2.0).normalize(),
+        ),
+    ];
+    for cf in frames {
+        let ell = Curve::Ellipse {
+            frame: cf,
+            major: 4.0,
+            minor: 2.0,
+        };
+        // Ganz, ein allgemeiner Bogen und ein Halbbogen von Scheitel zu Scheitel.
+        for (t0, t1) in [(0.0, TAU), (0.5, 2.0), (0.0, PI)] {
+            let mut s = sketch();
+            let g = include_curve(&Frame::WORLD, &ell, t0, t1).unwrap();
+            let e = s.add_included(&g).unwrap().curves[0];
+            assert!(s.is_3d_curve(e));
+            assert!(
+                s.internal_constraints()
+                    .any(|(_, d)| matches!(d.kind, K::EllipseAxes3(c, ..) if c == e)),
+                "keine interne EllipseAxes3"
+            );
+            assert_solved_rigid(&mut s);
+            // Ziehen an einem Punkt der Kurve bewegt nichts.
+            let before: Vec<DVec3> = (0..8)
+                .map(|k| s.curve_point3(e, t0 + (t1 - t0) * k as f64 / 8.0).unwrap())
+                .collect();
+            let (CurveKind::Ellipse { center, .. } | CurveKind::EllipticArc { center, .. }) =
+                s.curve(e).unwrap().kind
+            else {
+                panic!("Ellipse erwartet")
+            };
+            let at = s.point_xyz(center).unwrap();
+            let _ = s.drag(&[planora_sketch::solver::Drag {
+                point: center,
+                target: at + DVec3::new(1.0, 1.0, 1.0),
+                plane: None,
+            }]);
+            for (k, p) in before.iter().enumerate() {
+                let q = s.curve_point3(e, t0 + (t1 - t0) * k as f64 / 8.0).unwrap();
+                assert!(p.distance(q) < 1e-9, "{t0}…{t1}: {p} → {q}");
+            }
+            // Die Benutzer-Maße bleiben an 3D-Ellipsen gesperrt, die interne Art ist nicht wählbar.
+            assert!(s.add_constraint(K::EllipseMajor(e, 4.0)).is_err());
+            assert!(
+                s.add_constraint(K::EllipseAxes3(e, 0.0, 0.0, 4.0, 2.0))
+                    .is_err()
+            );
+        }
+    }
+    // Nachführen: Die festen Halbachsen folgen der neuen Lage, weiter ohne Freiheitsgrad.
+    let mut s = sketch();
+    let first = Curve::Ellipse {
+        frame: frames[0],
+        major: 4.0,
+        minor: 2.0,
+    };
+    let e = s
+        .add_included(&include_curve(&Frame::WORLD, &first, 0.5, 2.0).unwrap())
+        .unwrap()
+        .curves[0];
+    let next = Curve::Ellipse {
+        frame: frames[1],
+        major: 5.0,
+        minor: 1.0,
+    };
+    s.update_included(e, &include_curve(&Frame::WORLD, &next, 0.5, 2.0).unwrap())
+        .unwrap();
+    assert_solved_rigid(&mut s);
+    assert!(
+        s.curve_point3(e, s.curve_domain3(e).unwrap().0)
+            .unwrap()
+            .distance(next.point(0.5))
+            < 1e-9
+    );
+    let axes: Vec<_> = s
+        .internal_constraints()
+        .filter(|(_, d)| matches!(d.kind, K::EllipseAxes3(c, ..) if c == e))
+        .collect();
+    assert_eq!(axes.len(), 1);
+}
+
+#[test]
+fn update_included_point_moves_fixed3() {
+    let mut s = sketch();
+    // Hochliegender Punkt: 3D mit Fixed3.
+    let ids = s
+        .add_included(&Included::Point(DVec3::new(1.0, 2.0, 3.0)))
+        .unwrap();
+    assert!(ids.curves.is_empty());
+    assert_eq!(ids.points.len(), 1);
+    let p = ids.points[0];
+    fixed3_at(&s, p, DVec3::new(1.0, 2.0, 3.0));
+    s.update_included_point(p, DVec3::new(-1.0, 0.5, 7.0))
+        .unwrap();
+    fixed3_at(&s, p, DVec3::new(-1.0, 0.5, 7.0));
+    assert_solved_rigid(&mut s);
+    // In die Skizzenebene: bleibt 3D (z = 0).
+    s.update_included_point(p, DVec3::new(2.0, 2.0, 0.0))
+        .unwrap();
+    fixed3_at(&s, p, DVec3::new(2.0, 2.0, 0.0));
+    // Punkt in der Skizzenebene: 2D mit Fixed, wird beim Verlassen der Ebene 3D.
+    let q = s
+        .add_included(&Included::Point(DVec3::new(4.0, 5.0, 0.0)))
+        .unwrap()
+        .points[0];
+    assert!(!s.is_3d_point(q));
+    assert!(
+        s.constraints()
+            .any(|(_, d)| d.kind == K::Fixed(q, 4.0, 5.0))
+    );
+    s.update_included_point(q, DVec3::new(6.0, 5.0, 0.0))
+        .unwrap();
+    assert!(!s.is_3d_point(q));
+    assert!(
+        s.constraints()
+            .any(|(_, d)| d.kind == K::Fixed(q, 6.0, 5.0))
+    );
+    s.update_included_point(q, DVec3::new(6.0, 5.0, -2.0))
+        .unwrap();
+    fixed3_at(&s, q, DVec3::new(6.0, 5.0, -2.0));
+    assert_solved_rigid(&mut s);
+    // Fehler lassen die Skizze unverändert.
+    let before = s.to_data();
+    assert!(
+        s.update_included_point(q, DVec3::new(f64::NAN, 0.0, 1.0))
+            .is_err()
     );
     assert_eq!(s.to_data(), before);
 }

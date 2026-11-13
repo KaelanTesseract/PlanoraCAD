@@ -927,6 +927,7 @@ fn constraint_numbers_ok(k: &ConstraintKind) -> bool {
     match k {
         Fixed(_, x, y) => ok(*x) && ok(*y),
         Fixed3(_, x, y, z) => ok(*x) && ok(*y) && ok(*z),
+        EllipseAxes3(_, x, y, z, m) => ok(*x) && ok(*y) && ok(*z) && ok(*m),
         Distance(_, _, v)
         | DistancePointLine(_, _, v)
         | Radius(_, v)
