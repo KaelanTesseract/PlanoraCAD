@@ -445,3 +445,63 @@ fn in_plane_is_internal_and_survives_data_roundtrip() {
     bad.curves[0].normal = Some(DVec3::X);
     assert!(Sketch::from_data(bad).is_err());
 }
+
+// ---- Fix-Runde 1: Bögen an 3D-Punkten haben immer eine Ebene ------------------------------------
+
+#[test]
+fn arc_on_3d_points_gets_normal_and_inplane() {
+    let mut s = sketch();
+    let m = s.add_point3(DVec3::new(0.0, 0.0, 2.0)).unwrap();
+    let a = s.add_point3(DVec3::new(2.0, 0.0, 2.0)).unwrap();
+    // Das Ende ist ein 2D-Punkt (z = 0); es wird 3D und in die Ebene z = 2 gezogen.
+    let b = s.add_point(0.0, 2.0).unwrap();
+    let arc = s.add_arc(m, a, b).unwrap();
+    assert_eq!(s.curve(arc).unwrap().normal, Some(DVec3::Z));
+    assert!(s.is_3d_point(b));
+    assert!(
+        s.constraint_entries()
+            .any(|k| *k == ConstraintKind::InPlane(arc))
+    );
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+    let (pm, pa, pb) = (
+        s.point_xyz(m).unwrap(),
+        s.point_xyz(a).unwrap(),
+        s.point_xyz(b).unwrap(),
+    );
+    assert!((pb.z - pm.z).abs() < EPS && (pa.z - pm.z).abs() < EPS);
+    assert!(((pb - pm).length() - (pa - pm).length()).abs() < EPS);
+    let (lo, hi) = s.curve_domain3(arc).unwrap();
+    assert!(s.curve_point3(arc, lo).unwrap().distance(pa) < EPS);
+    assert!(s.curve_point3(arc, hi).unwrap().distance(pb) < EPS);
+}
+
+#[test]
+fn elliptic_arc_on_3d_points_gets_normal_and_inplane() {
+    let mut s = sketch();
+    let m = s.add_point3(DVec3::new(0.0, 0.0, 3.0)).unwrap();
+    let a = s.add_point(4.0, 0.0).unwrap();
+    let b = s.add_point3(DVec3::new(0.0, 2.0, 3.5)).unwrap();
+    let arc = s
+        .add_elliptic_arc(m, DVec2::new(4.0, 0.0), 2.0, a, b)
+        .unwrap();
+    assert_eq!(s.curve(arc).unwrap().normal, Some(DVec3::Z));
+    assert!(s.is_3d_point(a));
+    let Some(CurveKind::EllipticArc { az, .. }) = s.curve(arc).map(|d| d.kind.clone()) else {
+        panic!("Ellipsenbogen erwartet");
+    };
+    assert!(az.is_some());
+    assert!(
+        s.constraint_entries()
+            .any(|k| *k == ConstraintKind::InPlane(arc))
+    );
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+    let pm = s.point_xyz(m).unwrap();
+    let (pa, pb) = (s.point_xyz(a).unwrap(), s.point_xyz(b).unwrap());
+    assert!((pa.z - pm.z).abs() < EPS && (pb.z - pm.z).abs() < EPS);
+    let (lo, hi) = s.curve_domain3(arc).unwrap();
+    assert!(s.curve_point3(arc, lo).unwrap().distance(pa) < 1e-7);
+    assert!(s.curve_point3(arc, hi).unwrap().distance(pb) < 1e-7);
+    // Die Daten sind gültig (Normale und `az` passen zusammen).
+    let d = s.to_data();
+    assert_eq!(Sketch::from_data(d.clone()).unwrap().to_data(), d);
+}

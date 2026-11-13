@@ -509,7 +509,9 @@ impl Sketch {
     }
 
     /// Bogen gegen den Uhrzeigersinn von `start` nach `end` um `center`. Der Radius ist
-    /// `|start − center|`; liegt `end` nicht auf diesem Kreis, zieht der Solver ihn dorthin.
+    /// `|start − center|`; liegt `end` nicht auf diesem Kreis, zieht der Solver ihn dorthin. Ist
+    /// einer der Punkte ein 3D-Punkt, entsteht der Bogen wie mit [`Sketch::add_arc3`] und der
+    /// Skizzennormale: mit Normale und `InPlane`, damit er eine Ebene hat (Skizzen 10).
     pub fn add_arc(
         &mut self,
         center: PointId,
@@ -519,6 +521,9 @@ impl Sketch {
         self.check_point(center)?;
         self.check_point(start)?;
         self.check_point(end)?;
+        if self.any_3d(&[center, start, end]) {
+            return self.add_arc3(center, start, end, DVec3::Z);
+        }
         let c = self.pos(center);
         if self.pos(start).distance(c) <= self.tol.linear
             || self.pos(end).distance(c) <= self.tol.linear
@@ -596,7 +601,8 @@ impl Sketch {
     /// Ellipsenbogen um `center` mit großer Halbachse `major` (Vektor) und kleiner Halbachse
     /// `minor` (Prüfungen wie [`Sketch::add_ellipse`]), gegen den Uhrzeigersinn von `start` nach
     /// `end`. Liegen die Enden nicht auf der Ellipse, zieht der Solver sie dorthin (interne
-    /// Abhängigkeit `EllipticArcEnds`).
+    /// Abhängigkeit `EllipticArcEnds`). Ist einer der Punkte ein 3D-Punkt, entsteht er wie mit
+    /// [`Sketch::add_elliptic_arc3`] und der Skizzennormale (Skizzen 10).
     pub fn add_elliptic_arc(
         &mut self,
         center: PointId,
@@ -605,6 +611,12 @@ impl Sketch {
         start: PointId,
         end: PointId,
     ) -> Result<CurveId, SketchError> {
+        for p in [center, start, end] {
+            self.check_point(p)?;
+        }
+        if self.any_3d(&[center, start, end]) {
+            return self.add_elliptic_arc3(center, major.extend(0.0), minor, start, end, DVec3::Z);
+        }
         self.check_elliptic_arc(center, major, minor, start, end)?;
         self.with_internal_checked(|s| {
             let (ax, ay, mi) = (s.new_var(major.x), s.new_var(major.y), s.new_var(minor));
@@ -638,6 +650,9 @@ impl Sketch {
 
     /// Ellipsenbogen auf vorhandenen Variablen (etwa geteilt mit der Ellipse, aus der er
     /// entsteht); legt die interne Abhängigkeit `EllipticArcEnds` an und liefert beide Ids. Prüft nichts.
+    /// Ohne `az`, aber an einem 3D-Punkt (Teilstück, Kopie) bekommt er wie
+    /// [`Sketch::add_elliptic_arc3`] mit der Skizzennormale eine Ebene: Alle Punkte werden 3D,
+    /// `az` wird neu (0), dazu Normale `(0, 0, 1)` und `InPlane` (Skizzen 10).
     pub(crate) fn add_elliptic_arc_vars(
         &mut self,
         center: PointId,
@@ -646,6 +661,16 @@ impl Sketch {
         start: PointId,
         end: PointId,
     ) -> (CurveId, crate::constraint::ConstraintId) {
+        let pts = [center, start, end];
+        let lift = az.is_none() && self.any_3d(&pts);
+        let az = if lift {
+            for p in pts {
+                self.promote_to_3d(p);
+            }
+            Some(self.new_var(0.0))
+        } else {
+            az
+        };
         let id = self.push_curve(CurveKind::EllipticArc {
             center,
             ax,
@@ -656,7 +681,16 @@ impl Sketch {
             end,
         });
         let k = self.push_internal(crate::constraint::ConstraintKind::EllipticArcEnds(id));
+        if lift {
+            self.curves[id].normal = Some(DVec3::Z);
+            self.push_internal(crate::constraint::ConstraintKind::InPlane(id));
+        }
         (id, k)
+    }
+
+    /// Ist einer der (geprüften) Punkte ein 3D-Punkt?
+    pub(crate) fn any_3d(&self, points: &[PointId]) -> bool {
+        points.iter().any(|&p| self.points[p].z.is_some())
     }
 
     /// Natürlicher kubischer Spline durch 2 bis [`MAX_SPLINE_POINTS`] verschiedene Punkte;
