@@ -940,3 +940,167 @@ fn update_included_point_moves_fixed3() {
     );
     assert_eq!(s.to_data(), before);
 }
+
+/// Fix-Runde Task 5: Hebt das Nachführen einbezogene 2D-Geometrie an, ersetzt die 3D-Fassung
+/// die 2D-Festlegungen, und gesperrte Benutzer-Abhängigkeiten entfallen (Zahl als Rückgabe).
+#[test]
+fn update_included_lifts_flat_circle_arc_and_ellipse() {
+    let include = |c: &Curve, t0: f64, t1: f64| include_curve(&Frame::WORLD, c, t0, t1).unwrap();
+    let flat = |o: DVec3| Frame {
+        origin: o,
+        ..Frame::WORLD
+    };
+    // Gekippte Quelle in der yz-Ebene.
+    let tilted = |o: DVec3| Frame {
+        origin: o,
+        x: DVec3::Y,
+        y: DVec3::Z,
+        z: DVec3::X,
+    };
+    let at = DVec3::new(1.0, 2.0, 0.0);
+    let up = DVec3::new(1.0, 2.0, 3.0);
+    let cases: Vec<(Curve, Curve, f64, f64)> = vec![
+        (
+            Curve::Circle {
+                frame: flat(at),
+                radius: 2.0,
+            },
+            Curve::Circle {
+                frame: tilted(up),
+                radius: 2.5,
+            },
+            0.0,
+            TAU,
+        ),
+        (
+            Curve::Circle {
+                frame: flat(at),
+                radius: 2.0,
+            },
+            Curve::Circle {
+                frame: tilted(up),
+                radius: 2.5,
+            },
+            0.3,
+            2.0,
+        ),
+        (
+            Curve::Ellipse {
+                frame: flat(at),
+                major: 4.0,
+                minor: 2.0,
+            },
+            Curve::Ellipse {
+                frame: tilted(up),
+                major: 5.0,
+                minor: 1.5,
+            },
+            0.0,
+            TAU,
+        ),
+        (
+            Curve::Ellipse {
+                frame: flat(at),
+                major: 4.0,
+                minor: 2.0,
+            },
+            Curve::Ellipse {
+                frame: tilted(up),
+                major: 5.0,
+                minor: 1.5,
+            },
+            0.5,
+            2.0,
+        ),
+    ];
+    for (before, after, t0, t1) in cases {
+        let mut s = sketch();
+        let c = s.add_included(&include(&before, t0, t1)).unwrap().curves[0];
+        assert!(!s.is_3d_curve(c));
+        let center = match s.curve(c).unwrap().kind {
+            CurveKind::Circle { center, .. }
+            | CurveKind::Arc { center, .. }
+            | CurveKind::Ellipse { center, .. }
+            | CurveKind::EllipticArc { center, .. } => center,
+            ref k => panic!("ebene Kurve erwartet: {k:?}"),
+        };
+        // Eine Benutzer-Abhängigkeit, die an 3D-Geometrie gesperrt ist: DistanceX an der Mitte.
+        let o = s.add_point(0.0, 0.0).unwrap();
+        s.add_constraint(K::Fixed(o, 0.0, 0.0)).unwrap();
+        s.add_constraint(K::DistanceX(o, center, 1.0)).unwrap();
+        let removed = s.update_included(c, &include(&after, t0, t1)).unwrap();
+        assert_eq!(removed, 1, "{before:?}");
+        assert!(s.is_3d_curve(c));
+        assert!((s.curve_normal(c) - DVec3::X).length() < 1e-12);
+        fixed3_at(&s, center, up);
+        // Keine an 3D gesperrte Abhängigkeit mehr an der Kurve oder ihren Punkten.
+        let pts = s.curve(c).unwrap().kind.points();
+        for (_, d) in s.constraints().chain(s.internal_constraints()) {
+            let touches =
+                d.kind.curves().contains(&c) || d.kind.points().iter().any(|p| pts.contains(p));
+            assert!(
+                !touches || d.kind.allowed_in_3d(),
+                "{before:?}: gesperrt an 3D: {:?}",
+                d.kind
+            );
+        }
+        assert!(!s.constraints().any(|(_, d)| matches!(
+            d.kind,
+            K::EllipseMajor(..) | K::EllipseMinor(..) | K::EllipseAngle(..) | K::DistanceX(..)
+        )));
+        if matches!(
+            s.curve(c).unwrap().kind,
+            CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. }
+        ) {
+            let axes = s
+                .internal_constraints()
+                .filter(|(_, d)| matches!(d.kind, K::EllipseAxes3(e, ..) if e == c))
+                .count();
+            assert_eq!(axes, 1);
+        }
+        if let CurveKind::Circle { .. } = s.curve(c).unwrap().kind {
+            assert!(s.constraints().any(|(_, d)| d.kind == K::Radius(c, 2.5)));
+        }
+        assert!(
+            s.curve_point3(c, s.curve_domain3(c).unwrap().0)
+                .unwrap()
+                .distance(after.point(t0))
+                < 1e-9,
+            "{before:?}"
+        );
+        assert_solved_rigid(&mut s);
+    }
+    // Ohne gesperrte Benutzer-Abhängigkeit: 0, auch wenn die Projektions-Maße der Ellipse
+    // ersetzt werden.
+    let mut s = sketch();
+    let ell = Curve::Ellipse {
+        frame: flat(at),
+        major: 4.0,
+        minor: 2.0,
+    };
+    let c = s.add_included(&include(&ell, 0.0, TAU)).unwrap().curves[0];
+    assert!(
+        s.constraints()
+            .any(|(_, d)| matches!(d.kind, K::EllipseMajor(..)))
+    );
+    let next = Curve::Ellipse {
+        frame: tilted(up),
+        major: 4.0,
+        minor: 2.0,
+    };
+    assert_eq!(s.update_included(c, &include(&next, 0.0, TAU)).unwrap(), 0);
+    assert_solved_rigid(&mut s);
+    // Ein einbezogener Punkt verliert beim Anheben ebenso sein DistanceY.
+    let mut s = sketch();
+    let p = s.add_included(&Included::Point(at)).unwrap().points[0];
+    let o = s.add_point(0.0, 0.0).unwrap();
+    s.add_constraint(K::Fixed(o, 0.0, 0.0)).unwrap();
+    s.add_constraint(K::DistanceY(o, p, 2.0)).unwrap();
+    assert_eq!(s.update_included_point(p, up).unwrap(), 1);
+    fixed3_at(&s, p, up);
+    assert!(
+        !s.constraints()
+            .any(|(_, d)| matches!(d.kind, K::DistanceY(..)))
+    );
+    assert_solved_rigid(&mut s);
+}

@@ -1168,15 +1168,17 @@ impl Sketch {
     /// Führt den einbezogenen Punkt `p` (siehe [`Sketch::add_included`]) an die Lage `at`
     /// (Skizzenkoordinaten) nach: Ein 2D-Punkt bleibt 2D, solange `at` in der Skizzenebene liegt,
     /// sonst wird er 3D (`Fixed` wird `Fixed3`); ein 3D-Punkt bleibt 3D. Seine `Fixed`-/`Fixed3`-
-    /// Werte folgen. Ein Punkt, den ein Text hält, wird abgelehnt. Bei einem Fehler bleibt die
-    /// Skizze unverändert.
-    pub fn update_included_point(&mut self, p: PointId, at: DVec3) -> Result<(), SketchError> {
+    /// Werte folgen. Beim Anheben entfallen an 3D-Geometrie gesperrte Abhängigkeiten am Punkt
+    /// und an seinen Kurven; geliefert wird ihre Zahl (für eine Warnung, siehe
+    /// [`Sketch::update_included`]). Ein Punkt, den ein Text hält, wird abgelehnt. Bei einem
+    /// Fehler bleibt die Skizze unverändert.
+    pub fn update_included_point(&mut self, p: PointId, at: DVec3) -> Result<usize, SketchError> {
         self.check_point(p)?;
         let linear = self.tolerance().linear;
         self.atomically(|s| {
+            let mut removed = 0;
             if s.is_3d_point(p) || at.z.abs() > linear {
-                s.check_liftable(&[p])?;
-                s.promote_to_3d(p);
+                removed = s.lift_for_include(&[p], None)?;
                 s.set_point_xyz(p, at)?;
             } else {
                 s.set_point_xy(p, at.x, at.y)?;
@@ -1200,7 +1202,7 @@ impl Sketch {
                 };
             }
             s.touch_structure();
-            Ok(())
+            Ok(removed)
         })
     }
 
@@ -1241,21 +1243,26 @@ impl Sketch {
     /// Normale und Maße von `g`, behält ihre Id, ihren Stil und alle Abhängigkeiten; die
     /// `Fixed3`-/`Fixed`- und `Radius`-Werte werden mitgeführt. Eine 2D-Kurve, deren Quelle in
     /// der Skizzenebene bleibt, wird wie bei [`Sketch::reproject_curve`] nachgeführt; verlässt
-    /// die Quelle die Ebene, werden ihre Punkte 3D. Eine 3D-Kurve bleibt 3D. Ändert sich die
-    /// Art (auch offen ↔ geschlossen), gibt es `sketch-err-edge-type-changed`; bei jedem Fehler
-    /// bleibt die Skizze unverändert.
-    pub fn update_included(&mut self, curve: CurveId, g: &Included) -> Result<(), SketchError> {
+    /// die Quelle die Ebene, werden ihre Punkte 3D (samt den Punkten ebener Kurven an ihnen).
+    /// Dabei ersetzt `EllipseAxes3` die `Ellipse…`-Maße aus der Projektion, Muster an den Punkten
+    /// werden aufgelöst, und vom Benutzer gesetzte Abhängigkeiten, die an 3D-Geometrie gesperrt
+    /// sind, entfallen (Ruling Fix-Runde Task 5); geliefert wird deren Zahl, damit die
+    /// Neuberechnung warnen kann (sonst 0). Eine 3D-Kurve bleibt 3D. Ändert sich die Art (auch
+    /// offen ↔ geschlossen), gibt es `sketch-err-edge-type-changed`; bei jedem Fehler bleibt die
+    /// Skizze unverändert.
+    pub fn update_included(&mut self, curve: CurveId, g: &Included) -> Result<usize, SketchError> {
         self.check_curve(curve)?;
         if !self.is_3d_curve(curve)
             && let Some(projected) = self.included_flat(g)?
         {
-            return self.reproject(curve, projected);
+            self.reproject(curve, projected)?;
+            return Ok(0);
         }
         self.atomically(|s| s.update_included_3d(curve, g))
     }
 
     /// Der Hauptteil von [`Sketch::update_included`] für Geometrie im Raum.
-    fn update_included_3d(&mut self, curve: CurveId, g: &Included) -> Result<(), SketchError> {
+    fn update_included_3d(&mut self, curve: CurveId, g: &Included) -> Result<usize, SketchError> {
         let kind = self.curves[curve].kind.clone();
         let linear = self.tolerance().linear;
         let fits = match (g, &kind) {
@@ -1274,13 +1281,8 @@ impl Sketch {
         if !fits {
             return Err(unsupported(tr!("sketch-err-edge-type-changed")));
         }
-        let pts = kind.points();
-        self.check_liftable(&pts)?;
-        for &p in &pts {
-            self.promote_to_3d(p);
-        }
+        let removed = self.lift_for_include(&kind.points(), Some(curve))?;
         let mut radius_value = None;
-        let mut ellipse_values = None;
         let mut new_shape = false;
         match (g, kind) {
             (Included::Line(p0, p1), CurveKind::Line { a, b }) => {
@@ -1354,10 +1356,7 @@ impl Sketch {
                     self.set_point_xyz(p, *start)?;
                     self.set_point_xyz(q, *end)?;
                 }
-                // Maße aus der Zeit als 2D-Ellipse rechnen im Raum weiter (Winkel in der
-                // Draufsicht, wie in `constraint3d`).
-                ellipse_values = Some((a.length(), *minor, a.y.atan2(a.x)));
-                // Eine angehobene 2D-Ellipse wird dabei ganz bestimmt wie eine eingezogene.
+                // Eine angehobene 2D-Ellipse wird ganz bestimmt wie eine eingezogene.
                 self.pin_axes3(curve);
             }
             (Included::Spline { curve: new }, CurveKind::FixedSpline { start, end, .. }) => {
@@ -1375,8 +1374,8 @@ impl Sketch {
             }
             _ => return Err(unsupported(tr!("sketch-err-edge-type-changed"))),
         }
-        self.refresh_copy_values(curve, radius_value, ellipse_values, new_shape);
-        Ok(())
+        self.refresh_copy_values(curve, radius_value, None, new_shape);
+        Ok(removed)
     }
 
     /// Das einbezogene Stück `g` als projizierte 2D-Kurve, wenn es ganz in der Skizzenebene

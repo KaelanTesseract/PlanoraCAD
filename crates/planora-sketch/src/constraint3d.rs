@@ -900,6 +900,72 @@ impl Sketch {
         Ok(())
     }
 
+    /// Hebt beim Nachführen einbezogener Geometrie (Skizzen 10, Ruling Fix-Runde Task 5) die
+    /// 2D-Punkte unter `seeds` an, samt den Punkten ebener Kurven an ihnen (wie
+    /// [`Sketch::check_3d`]). Anders als beim Setzen einer Abhängigkeit wird nicht gesperrt:
+    /// Muster an den Punkten werden aufgelöst, und Abhängigkeiten, die an 3D-Geometrie gesperrt
+    /// sind und die Punkte oder ihre Kurven lesen, entfallen. Die `Ellipse…`-Maße der
+    /// einbezogenen Kurve `own` stammen aus der Projektion; sie ersetzt `EllipseAxes3` und sie
+    /// zählen nicht mit, ebenso interne Einträge. Liefert die Zahl der entfernten
+    /// Benutzer-Abhängigkeiten. Ein Text oder ein Spline mit Griffen an den Punkten ergibt einen
+    /// Fehler; die Aufrufer laufen atomar.
+    pub(crate) fn lift_for_include(
+        &mut self,
+        seeds: &[PointId],
+        own: Option<CurveId>,
+    ) -> Result<usize, SketchError> {
+        use ConstraintKind::*;
+        let flat: Vec<PointId> = seeds
+            .iter()
+            .copied()
+            .filter(|&p| self.points[p].z.is_none())
+            .collect();
+        if flat.is_empty() {
+            return Ok(0);
+        }
+        let lifted = self.lift_closure(&flat);
+        self.check_liftable(&lifted)?;
+        let curves: Vec<CurveId> = self
+            .curves()
+            .filter(|(_, d)| d.kind.points().iter().any(|q| lifted.contains(q)))
+            .map(|(id, _)| id)
+            .collect();
+        for &c in &curves {
+            let handled = matches!(&self.curves[c].kind,
+                CurveKind::Spline { handles, .. } if !handles.is_empty());
+            if handled || self.is_handle_curve(c) {
+                return Err(SketchError::InvalidInput(tr!("sketch-err-point-bound-2d")));
+            }
+        }
+        self.dissolve_patterns_at(&curves);
+        for &p in &lifted {
+            self.dissolve_patterns_of_point(p);
+        }
+        let reads = |k: &ConstraintKind| {
+            k.points().iter().any(|q| lifted.contains(q))
+                || k.curves().iter().any(|c| curves.contains(c))
+        };
+        let gone: Vec<_> = self
+            .constraints
+            .iter()
+            .filter(|(_, d)| d.alive && reads(&d.kind) && !d.kind.allowed_in_3d())
+            .map(|(id, _)| id)
+            .collect();
+        let mut removed = 0;
+        for id in gone {
+            let d = &self.constraints[id];
+            let from_projection = matches!(d.kind,
+                EllipseMajor(c, _) | EllipseMinor(c, _) | EllipseAngle(c, _) if Some(c) == own);
+            if !d.internal && !from_projection {
+                removed += 1;
+            }
+            self.constraints[id].alive = false;
+        }
+        self.touch_structure();
+        self.apply_lift(&lifted);
+        Ok(removed)
+    }
+
     /// Hebt die (geprüften) Punkte aus [`Sketch::check_3d`] an: Sie werden 3D-Punkte, ebene
     /// Kurven an ihnen bekommen die Skizzennormale als eigene Normale samt `InPlane`.
     pub(crate) fn apply_lift(&mut self, lifted: &[PointId]) {
