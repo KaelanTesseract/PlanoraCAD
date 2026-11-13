@@ -130,6 +130,7 @@ pub fn default_rect(content: Rect) -> Rect {
         0.0,
         0.0,
         false,
+        crate::shell::Undocked::default(),
     )
     .history
     .unwrap_or(Rect::NOTHING)

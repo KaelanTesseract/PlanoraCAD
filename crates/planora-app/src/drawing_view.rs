@@ -1171,6 +1171,7 @@ fn drawing_rects(ctx: &egui::Context, editable: bool) -> ShellRects {
         f32::INFINITY,
         0.0,
         !editable,
+        crate::shell::Undocked::default(),
     )
 }
 
@@ -1713,6 +1714,10 @@ fn view_field(
     drawing: &Drawing,
     editable: bool,
 ) -> Option<Action> {
+    // Leeres Rechteck: der Platz liegt in einem eigenen Fenster, hier wird nichts gezeichnet.
+    if rect.width() <= 0.0 {
+        return None;
+    }
     let frame = theme::panel_frame(state.dark);
     let inner = shell_panels::inner_size(&frame, rect.size());
     let margin = f32::from(frame.inner_margin.left);

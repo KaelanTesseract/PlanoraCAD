@@ -99,6 +99,12 @@ pub fn on_screen(_rect_px: egui::Rect) -> Option<bool> {
     None
 }
 
+/// Liegt der Platz `p` im eigenen Fenster? Nur wenn echte Fenster möglich sind (nicht
+/// eingebettet) und sein gespeicherter Platz auf einem Bildschirm liegt.
+pub fn is_undocked(ctx: &egui::Context, state: &DetachState, p: Place) -> bool {
+    !ctx.embed_viewports() && should_detach(state.get(p), on_screen).is_some()
+}
+
 /// Das gespeicherte Fenster, falls es abgedockt starten soll: `None`, wenn nichts gespeichert
 /// ist oder der Monitor fehlt (dann bleibt der Platz angedockt).
 pub fn should_detach(

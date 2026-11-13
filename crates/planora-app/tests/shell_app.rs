@@ -186,6 +186,7 @@ fn rects(app: &mut PlanoraApp, size: Vec2) -> ShellRects {
         0.0,
         0.0,
         read_only,
+        shell::Undocked::default(),
     )
 }
 

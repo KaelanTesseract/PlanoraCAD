@@ -445,6 +445,16 @@ pub(crate) fn field<R>(
         .inner
 }
 
+/// Welche Plätze gerade im eigenen Fenster liegen.
+pub fn undocked_places(ctx: &egui::Context, app: &PlanoraApp) -> shell::Undocked {
+    use crate::detach::{Place, is_undocked};
+    shell::Undocked {
+        tree: is_undocked(ctx, &app.ws.detach, Place::Tree),
+        right: is_undocked(ctx, &app.ws.detach, Place::Right),
+        sketch_side: is_undocked(ctx, &app.ws.detach, Place::SketchSide),
+    }
+}
+
 /// Zeichnet alle Felder (Area-basiert) und liefert die freie Fläche; Reihenfolge: Felder vor dem
 /// Viewport-Aufruf des Aufrufers.
 pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
@@ -485,6 +495,7 @@ pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
             None => 0.0,
         };
         let top_min = stored(ctx, top_min_key()).unwrap_or(0.0);
+        let undocked = undocked_places(ctx, app);
         let rects = shell::layout_in_mode(
             content,
             mode,
@@ -493,6 +504,7 @@ pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
             bottom_w,
             status_w,
             tab.read_only,
+            undocked,
         );
         let mut rects = rects;
         // Das Werkzeugfeld der Zeichnung ist so breit wie sein Inhalt (mittig, höchstens so breit
@@ -507,11 +519,14 @@ pub fn show_fields(ctx: &egui::Context, app: &mut PlanoraApp) -> egui::Rect {
     top_field(ctx, &rects, app);
     // Im Skizzenmodus zeichnet `sketch_panel::show` Leiste, Skizzenfeld und Fuß an `rects`, im
     // Zeichnungsmodus `drawing_view::show_with` Werkzeug-, Ansichts- und Hinweisfeld.
-    if rects.strip.is_none() {
+    let undocked = undocked_places(ctx, app);
+    if rects.strip.is_none() && !undocked.tree {
         left_field(ctx, &rects, app);
     }
     if rects.strip.is_none() && rects.tool.is_none() {
-        right_field(ctx, &rects, app);
+        if !undocked.right {
+            right_field(ctx, &rects, app);
+        }
         bottom_field(ctx, &rects, app);
         history_field(ctx, &rects, app);
     } else {

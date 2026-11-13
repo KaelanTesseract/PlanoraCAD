@@ -592,6 +592,7 @@ fn sketch_rects(ctx: &egui::Context) -> ShellRects {
         foot,
         0.0,
         false,
+        crate::shell::Undocked::default(),
     )
 }
 
@@ -937,6 +938,10 @@ fn side_field(
     sf: &mut SketchFeature,
     side: SideInput,
 ) {
+    // Leeres Rechteck: der Platz liegt in einem eigenen Fenster, hier wird nichts gezeichnet.
+    if rect.width() <= 0.0 {
+        return;
+    }
     let frame = theme::panel_frame(dark);
     let inner = shell_panels::inner_size(&frame, rect.size());
     let margin = f32::from(frame.inner_margin.left);
