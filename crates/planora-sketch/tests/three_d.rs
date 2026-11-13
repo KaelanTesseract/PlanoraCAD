@@ -505,3 +505,227 @@ fn elliptic_arc_on_3d_points_gets_normal_and_inplane() {
     let d = s.to_data();
     assert_eq!(Sketch::from_data(d.clone()).unwrap().to_data(), d);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Task 6: Profile und Ändern-Werkzeuge lassen 3D aus
+// ---------------------------------------------------------------------------------------------
+
+mod tools_leave_3d_out {
+    use planora_math::{DVec2, DVec3, Frame, Tolerance};
+    use planora_sketch::SketchError;
+    use planora_sketch::fillet::{ChamferKind, CurvePick};
+    use planora_sketch::model::{CurveId, Sketch};
+    use planora_sketch::pattern::{PatternDir, PatternKind, PatternPlan};
+    use planora_sketch::transform::{Similarity, TransformBlock};
+
+    fn sketch() -> Sketch {
+        Sketch::new(Frame::WORLD, "S", Tolerance::default())
+    }
+
+    fn line3(s: &mut Sketch, a: DVec3, b: DVec3) -> CurveId {
+        let (pa, pb) = (s.add_point3(a).unwrap(), s.add_point3(b).unwrap());
+        s.add_line(pa, pb).unwrap()
+    }
+
+    fn line2(s: &mut Sketch, a: (f64, f64), b: (f64, f64)) -> CurveId {
+        let pa = s.add_point(a.0, a.1).unwrap();
+        let pb = s.add_point(b.0, b.1).unwrap();
+        s.add_line(pa, pb).unwrap()
+    }
+
+    fn circle3(s: &mut Sketch) -> CurveId {
+        let m = s.add_point3(DVec3::new(0.0, 0.0, 5.0)).unwrap();
+        s.add_circle3(m, 2.0, DVec3::X).unwrap()
+    }
+
+    fn rejected(e: SketchError) -> bool {
+        matches!(e, SketchError::InvalidInput(m) if m == planora_i18n::tr!("sketch-err-tool-not-in-3d"))
+    }
+
+    #[test]
+    fn trim_rejects_3d_curve() {
+        let mut s = sketch();
+        let l = line3(&mut s, DVec3::new(0.0, 0.0, 1.0), DVec3::new(4.0, 0.0, 2.0));
+        let before = s.to_data();
+        assert!(rejected(s.trim(l, DVec2::new(1.0, 0.0)).unwrap_err()));
+        assert!(s.trim_piece(l, DVec2::new(1.0, 0.0)).is_none());
+        assert_eq!(s.to_data(), before);
+    }
+
+    #[test]
+    fn extend_rejects_3d() {
+        let mut s = sketch();
+        let l = line3(&mut s, DVec3::new(0.0, 0.0, 1.0), DVec3::new(4.0, 0.0, 2.0));
+        line2(&mut s, (6.0, -3.0), (6.0, 3.0));
+        let before = s.to_data();
+        assert!(rejected(s.extend(l, DVec2::new(4.0, 0.0)).unwrap_err()));
+        assert!(s.extend_preview(l, DVec2::new(4.0, 0.0)).is_none());
+        assert_eq!(s.to_data(), before);
+    }
+
+    #[test]
+    fn break_rejects_3d_ellipse() {
+        let mut s = sketch();
+        let m = s.add_point3(DVec3::new(0.0, 0.0, 1.0)).unwrap();
+        let e = s
+            .add_ellipse3(m, DVec3::new(0.0, 4.0, 0.0), 2.0, DVec3::X)
+            .unwrap();
+        let c = circle3(&mut s);
+        let before = s.to_data();
+        assert!(rejected(
+            s.break_curve(e, DVec2::new(0.0, 4.0)).unwrap_err()
+        ));
+        assert!(rejected(
+            s.break_curve(c, DVec2::new(0.0, 2.0)).unwrap_err()
+        ));
+        assert!(rejected(s.trim(e, DVec2::new(0.0, 4.0)).unwrap_err()));
+        assert_eq!(s.to_data(), before);
+    }
+
+    #[test]
+    fn trim_2d_ignores_3d_crossing() {
+        let mut s = sketch();
+        // Die 2D-Linie wird in der Draufsicht von einer 3D-Linie gekreuzt.
+        let flat = line2(&mut s, (-4.0, 0.0), (4.0, 0.0));
+        line3(
+            &mut s,
+            DVec3::new(0.0, -3.0, 2.0),
+            DVec3::new(0.0, 3.0, 2.0),
+        );
+        assert!(s.split_params(flat, true).is_empty());
+        let piece = s.trim_piece(flat, DVec2::new(-2.0, 0.0)).unwrap();
+        assert!(piece.whole, "ohne Schnitt fällt die ganze Linie weg");
+        let kept = s.break_curve(flat, DVec2::new(-2.0, 0.0)).unwrap();
+        assert_eq!(kept, vec![flat], "Brechen teilt nichts");
+        // Auch das Dehnen findet die 3D-Linie nicht als Ziel.
+        let mut t = sketch();
+        let l = line2(&mut t, (-4.0, 0.0), (-1.0, 0.0));
+        line3(
+            &mut t,
+            DVec3::new(2.0, -3.0, 2.0),
+            DVec3::new(2.0, 3.0, 2.0),
+        );
+        assert!(!t.extend(l, DVec2::new(-1.0, 0.0)).unwrap());
+    }
+
+    #[test]
+    fn fillet_rejects_3d() {
+        let mut s = sketch();
+        let a = line3(&mut s, DVec3::new(0.0, 0.0, 1.0), DVec3::new(4.0, 0.0, 1.0));
+        let b = line3(&mut s, DVec3::new(0.0, 0.0, 1.0), DVec3::new(0.0, 4.0, 1.0));
+        let pa = CurvePick {
+            curve: a,
+            at: DVec2::new(2.0, 0.0),
+        };
+        let pb = CurvePick {
+            curve: b,
+            at: DVec2::new(0.0, 2.0),
+        };
+        assert!(s.fillet_plan(pa, pb, 1.0).is_none());
+        assert!(s.chamfer_plan(pa, pb, ChamferKind::Equal(1.0)).is_none());
+        // Ein fertiger Plan (hier aus 2D-Linien) geht nicht durch add_fillet/add_chamfer.
+        let a2 = line2(&mut s, (10.0, 0.0), (14.0, 0.0));
+        let b2 = line2(&mut s, (10.0, 0.0), (10.0, 4.0));
+        let q = |c, x, y| CurvePick {
+            curve: c,
+            at: DVec2::new(x, y),
+        };
+        let mut fillet = s
+            .fillet_plan(q(a2, 12.0, 0.0), q(b2, 10.0, 2.0), 1.0)
+            .unwrap();
+        let mut chamfer = s
+            .chamfer_plan(q(a2, 12.0, 0.0), q(b2, 10.0, 2.0), ChamferKind::Equal(1.0))
+            .unwrap();
+        fillet.picks = [pa, pb];
+        chamfer.picks = [pa, pb];
+        let before = s.to_data();
+        assert!(rejected(s.add_fillet(&fillet, None).unwrap_err()));
+        assert!(rejected(s.add_chamfer(&chamfer).unwrap_err()));
+        assert_eq!(s.to_data(), before);
+    }
+
+    #[test]
+    fn offset_rejects_3d() {
+        let mut s = sketch();
+        let c = circle3(&mut s);
+        assert!(s.ordered_chains(&[c]).is_err());
+        let l = line2(&mut s, (0.0, 0.0), (4.0, 0.0));
+        let chains = s.ordered_chains(&[l]).unwrap();
+        let mut plan = s.offset_plan(&chains, 1.0).unwrap();
+        // Zeigt der Plan auf eine 3D-Kurve, lehnt add_offset ab und die Skizze bleibt.
+        plan.loops[0].pieces[0].source = c;
+        let before = s.to_data();
+        assert!(rejected(s.add_offset(&plan).unwrap_err()));
+        assert_eq!(s.to_data(), before);
+        // Eine Kette aus einer 3D-Kurve ergibt auch keinen Plan.
+        let mut chains3 = chains.clone();
+        chains3[0].items[0].0 = c;
+        assert!(s.offset_plan(&chains3, 1.0).is_err());
+    }
+
+    #[test]
+    fn pattern_rejects_3d() {
+        let mut s = sketch();
+        let l = line3(&mut s, DVec3::new(0.0, 0.0, 1.0), DVec3::new(4.0, 0.0, 2.0));
+        let plan = PatternPlan {
+            kind: PatternKind::Rect {
+                dirs: [PatternDir::SketchX, PatternDir::SketchY],
+                extent: [false, false],
+                symmetric: [false, false],
+            },
+            sources: vec![l],
+            counts: [3, 1],
+            values: [2.0, 0.0],
+            suppressed: Vec::new(),
+        };
+        let before = s.to_data();
+        assert!(rejected(s.add_pattern(&plan).unwrap_err()));
+        assert_eq!(s.to_data(), before);
+        // Eine 3D-Linie als Richtung geht ebenso wenig.
+        let flat = line2(&mut s, (0.0, 5.0), (1.0, 5.0));
+        let mut dir = plan.clone();
+        dir.sources = vec![flat];
+        if let PatternKind::Rect { dirs, .. } = &mut dir.kind {
+            dirs[0] = PatternDir::Line(l);
+        }
+        assert!(rejected(s.add_pattern(&dir).unwrap_err()));
+    }
+
+    #[test]
+    fn mirror_rejects_3d() {
+        let mut s = sketch();
+        let l = line3(&mut s, DVec3::new(1.0, 1.0, 1.0), DVec3::new(4.0, 1.0, 2.0));
+        let axis = line2(&mut s, (0.0, -5.0), (0.0, 5.0));
+        let before = s.to_data();
+        assert!(rejected(s.add_mirrored(&[l], axis).unwrap_err()));
+        assert_eq!(s.to_data(), before);
+        // Eine 3D-Achse ebenso.
+        let flat = line2(&mut s, (1.0, 3.0), (2.0, 3.0));
+        let axis3 = line3(
+            &mut s,
+            DVec3::new(0.0, -5.0, 1.0),
+            DVec3::new(0.0, 5.0, 1.0),
+        );
+        assert!(rejected(s.add_mirrored(&[flat], axis3).unwrap_err()));
+    }
+
+    #[test]
+    fn scale_rejects_3d() {
+        let mut s = sketch();
+        let l = line3(&mut s, DVec3::new(1.0, 1.0, 1.0), DVec3::new(4.0, 1.0, 2.0));
+        let set = s.transform_set(&[l], &[]);
+        let scale = Similarity {
+            base: DVec2::ZERO,
+            offset: DVec2::ZERO,
+            angle: 0.0,
+            factor: 2.0,
+        };
+        let before = s.to_data();
+        assert_eq!(
+            s.apply_transform(&set, &scale).unwrap_err(),
+            TransformBlock::NotIn3d
+        );
+        assert!(rejected(s.copy_transformed(&set, &scale).unwrap_err()));
+        assert_eq!(s.to_data(), before);
+    }
+}

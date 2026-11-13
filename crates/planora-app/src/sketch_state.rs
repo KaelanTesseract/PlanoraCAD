@@ -3221,6 +3221,7 @@ fn offset_problem_message(problem: OffsetProblem) -> Msg {
         OffsetProblem::Cusp => crate::msg!("sketch-offset-cusp"),
         OffsetProblem::ClosedKink => crate::msg!("sketch-offset-closed-kink"),
         OffsetProblem::Text => crate::msg!("sketch-text-no-offset"),
+        OffsetProblem::NotIn3d => crate::msg!("sketch-err-tool-not-in-3d"),
         OffsetProblem::Degenerate => crate::msg!("sketch-field-rejected"),
     }
 }

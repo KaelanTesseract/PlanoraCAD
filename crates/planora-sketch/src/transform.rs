@@ -101,6 +101,9 @@ pub enum TransformBlock {
     /// In der Menge ist Text auf einem Pfad, der Pfad aber nicht: Der Text folgt seinem Pfad
     /// (Spec E, Meldung `sketch-text-path-follows`).
     TextOnPath,
+    /// Skalieren geht nicht mit 3D-Kurven oder 3D-Punkten in der Menge (Skizzen 10, Meldung
+    /// `sketch-err-tool-not-in-3d`); Verschieben und Drehen bleiben, wie sie sind.
+    NotIn3d,
 }
 
 /// Was eine Bewegung an den Abhängigkeiten geändert hat.
@@ -775,6 +778,13 @@ impl Sketch {
         self.transform_set(&curves, &points)
     }
 
+    /// Würde die Ähnlichkeit eine 3D-Kurve oder einen 3D-Punkt der Menge skalieren?
+    fn scales_3d(&self, set: &TransformSet, s: &Similarity) -> bool {
+        (s.factor - 1.0).abs() > self.tol.linear
+            && (set.curves.iter().any(|&c| self.is_3d_curve(c))
+                || set.points.iter().any(|&p| self.is_3d_point(p)))
+    }
+
     /// Geht die Bewegung? Dieselbe Rechnung wie [`Sketch::apply_transform`].
     pub fn check_transform(
         &self,
@@ -835,6 +845,9 @@ impl Sketch {
         let set = self.transform_set(&set.curves, &set.points);
         if set.points.is_empty() {
             return Err(SketchError::InvalidInput(tr!("sketch-nothing-selected")));
+        }
+        if self.scales_3d(&set, s) {
+            return Err(SketchError::InvalidInput(tr!("sketch-err-tool-not-in-3d")));
         }
         let texts = self.texts_in_set(&set);
         if self.text_off_its_path(&set, &texts) {
@@ -1149,6 +1162,9 @@ impl Sketch {
             || set.points.iter().any(|p| instance_points.contains(p))
         {
             return Err(TransformBlock::PatternInstance);
+        }
+        if self.scales_3d(&set, s) {
+            return Err(TransformBlock::NotIn3d);
         }
         let texts = self.texts_in_set(&set);
         if self.text_off_its_path(&set, &texts) {

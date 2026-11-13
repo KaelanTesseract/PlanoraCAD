@@ -416,7 +416,7 @@ struct Cand {
 
 impl Sketch {
     fn fillet_side(&self, pick: CurvePick) -> Option<Side> {
-        if !pick.at.is_finite() {
+        if !pick.at.is_finite() || self.is_3d_curve(pick.curve) {
             return None;
         }
         let g = self.geom(pick.curve)?;
@@ -981,6 +981,7 @@ impl Sketch {
                 s.check_curve(c)?;
             }
             s.refuse_text_parts(&curves, || tr!("sketch-text-no-fillet"))?;
+            s.refuse_3d(&curves)?;
             s.dissolve_patterns_at(&curves);
             if let Some(f0) = equal_to
                 && s.radius(f0)
@@ -1107,6 +1108,7 @@ impl Sketch {
                 s.check_curve(c)?;
             }
             s.refuse_text_parts(&curves, || tr!("sketch-text-no-chamfer"))?;
+            s.refuse_3d(&curves)?;
             s.dissolve_patterns_at(&curves);
             let touch = [
                 s.add_point(plan.touch[0].x, plan.touch[0].y)?,

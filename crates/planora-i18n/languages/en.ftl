@@ -1847,6 +1847,7 @@ sketch-err-corners-finite = The corners must be finite numbers
 sketch-err-rect-size = Width and height of the rectangle must be greater than zero
 sketch-err-polygon-sides = A polygon has 3 to 64 sides
 sketch-err-mirror-line = The mirror axis must be a line
+sketch-err-tool-not-in-3d = This tool only works on curves in the sketch plane, not on 3D curves
 sketch-err-mirror-self = The mirror axis cannot be mirrored itself
 sketch-err-mirror-zero = The mirror axis has zero length
 sketch-err-copies-range = The number of copies must be between 1 and { $max }

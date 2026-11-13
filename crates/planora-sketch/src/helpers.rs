@@ -355,6 +355,15 @@ impl Sketch {
     }
 
     /// Ein fester Spline ändert sich nicht und hat keine Kopie (Spec E); alle anderen Kurven gehen.
+    /// Lehnt ab, wenn eine der Kurven eine 3D-Kurve ist: Stutzen, Dehnen, Brechen, Runden, Fasen,
+    /// Versatz, Muster, Skalieren und Spiegeln kennen nur die Ebene (Skizzen 10, Spec 3).
+    pub(crate) fn refuse_3d(&self, curves: &[CurveId]) -> Result<(), SketchError> {
+        if curves.iter().any(|&c| self.is_3d_curve(c)) {
+            return Err(SketchError::InvalidInput(tr!("sketch-err-tool-not-in-3d")));
+        }
+        Ok(())
+    }
+
     pub(crate) fn refuse_fixed_spline(&self, c: CurveId) -> Result<(), SketchError> {
         if matches!(self.curves[c].kind, CurveKind::FixedSpline { .. }) {
             return Err(SketchError::WrongType(tr!("sketch-fixed-spline-no-copy")));
@@ -521,6 +530,8 @@ impl Sketch {
             return Err(SketchError::WrongType(tr!("sketch-err-mirror-line")));
         };
         self.check_copy_sources(curves, || tr!("sketch-text-no-mirror"))?;
+        self.refuse_3d(curves)?;
+        self.refuse_3d(&[axis])?;
         // Auch an einer Buchstabenkurve spiegelt nichts: Die Spiegelung bände an sie.
         self.refuse_text_curves(&[axis], || tr!("sketch-text-no-mirror"))?;
         let all = self.with_handle_family(curves);

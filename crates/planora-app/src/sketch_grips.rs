@@ -299,6 +299,7 @@ fn block_message(block: TransformBlock) -> Msg {
         TransformBlock::Degenerate => crate::msg!("sketch-move-degenerate"),
         TransformBlock::PatternInstance => crate::msg!("sketch-move-pattern-instance"),
         TransformBlock::TextOnPath => crate::msg!("sketch-text-path-follows"),
+        TransformBlock::NotIn3d => crate::msg!("sketch-err-tool-not-in-3d"),
     }
 }
 

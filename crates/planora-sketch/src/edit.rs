@@ -113,7 +113,7 @@ impl Sketch {
         if matches!(self.curve(c)?.kind, CurveKind::FixedSpline { .. }) {
             return None;
         }
-        if self.has_text_part(&[c]) {
+        if self.has_text_part(&[c]) || self.is_3d_curve(c) {
             return None;
         }
         let (g, b) = self.locate_trim(c, at)?;
@@ -138,6 +138,7 @@ impl Sketch {
         self.check_curve(c)?;
         self.refuse_fixed_spline(c)?;
         self.refuse_text_parts(&[c], || tr!("sketch-text-no-trim"))?;
+        self.refuse_3d(&[c])?;
         if !at.is_finite() {
             return Err(SketchError::InvalidInput(tr!("sketch-err-target-finite")));
         }
@@ -156,7 +157,7 @@ impl Sketch {
     /// Der Weg, den [`Sketch::extend`] an derselben Stelle das Ende verlängern würde, vom alten
     /// zum neuen Ende (Vorschau beim Überfahren). `None`, wenn nichts zu dehnen ist.
     pub fn extend_preview(&self, c: CurveId, at: DVec2) -> Option<Vec<DVec2>> {
-        if self.has_text_part(&[c]) {
+        if self.has_text_part(&[c]) || self.is_3d_curve(c) {
             return None;
         }
         self.locate_extend(c, at).map(|x| x.path)
@@ -180,6 +181,7 @@ impl Sketch {
         self.check_curve(c)?;
         self.refuse_fixed_spline(c)?;
         self.refuse_text_parts(&[c], || tr!("sketch-text-no-extend"))?;
+        self.refuse_3d(&[c])?;
         if !at.is_finite() {
             return Err(SketchError::InvalidInput(tr!("sketch-err-target-finite")));
         }
@@ -213,6 +215,7 @@ impl Sketch {
         self.check_curve(c)?;
         self.refuse_fixed_spline(c)?;
         self.refuse_text_parts(&[c], || tr!("sketch-text-no-break"))?;
+        self.refuse_3d(&[c])?;
         if !at.is_finite() {
             return Err(SketchError::InvalidInput(tr!("sketch-err-target-finite")));
         }
@@ -337,7 +340,7 @@ impl Sketch {
         let mut hits: Vec<(f64, f64, CurveId)> = Vec::new();
         let handle_curves = self.handle_curves();
         for (id, _) in self.curves() {
-            if id == c || handle_curves.contains(&id) {
+            if id == c || handle_curves.contains(&id) || self.is_3d_curve(id) {
                 continue;
             }
             let Some(h) = self.geom(id) else { continue };
