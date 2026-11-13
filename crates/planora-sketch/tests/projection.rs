@@ -404,3 +404,392 @@ fn edge_on_circle_line_reprojects_when_radius_changes() {
     assert!(s.reproject_curve(c, &tilted, 0.0, TAU).is_err());
     assert!((s.line_length(c).unwrap() - 6.0).abs() < 1e-9);
 }
+
+// ---- Skizzen 10, Task 5: 3D-Geometrie einbeziehen -------------------------------------------
+
+use planora_sketch::helpers::{Included, include_curve};
+use planora_sketch::model::PointId;
+
+/// Der Punkt `p` trägt `Fixed3` an seiner Lage (und kein `Fixed`).
+fn fixed3_at(s: &Sketch, p: PointId, at: DVec3) {
+    assert!(s.is_3d_point(p), "{p:?} ist kein 3D-Punkt");
+    let here = s.point_xyz(p).unwrap();
+    assert!(here.distance(at) < 1e-9, "{p:?} bei {here}, nicht bei {at}");
+    assert!(
+        s.constraints()
+            .any(|(_, d)| d.kind == K::Fixed3(p, here.x, here.y, here.z)),
+        "kein Fixed3 an {p:?}"
+    );
+    assert!(
+        !s.constraints()
+            .any(|(_, d)| matches!(d.kind, K::Fixed(q, ..) if q == p))
+    );
+}
+
+fn line_points(s: &Sketch, c: CurveId) -> (PointId, PointId) {
+    let CurveKind::Line { a, b } = s.curve(c).unwrap().kind else {
+        panic!("Linie erwartet: {:?}", s.curve(c).unwrap().kind)
+    };
+    (a, b)
+}
+
+#[test]
+fn include_line_off_plane_gives_3d_line() {
+    let curve = Curve::Line {
+        origin: DVec3::new(1.0, 2.0, 3.0),
+        dir: DVec3::new(1.0, 0.0, 1.0).normalize(),
+    };
+    let g = include_curve(&Frame::WORLD, &curve, 0.0, 5.0).unwrap();
+    let (p0, p1) = (curve.point(0.0), curve.point(5.0));
+    assert_eq!(g, Included::Line(p0, p1));
+    let mut s = sketch();
+    let ids = s.add_included(&g).unwrap();
+    assert_eq!(ids.len(), 1);
+    let (a, b) = line_points(&s, ids[0]);
+    fixed3_at(&s, a, p0);
+    fixed3_at(&s, b, p1);
+    assert!(s.is_3d_curve(ids[0]));
+    assert_solved_rigid(&mut s);
+    // Senkrecht zur Skizzenebene ist im Raum eine echte Linie (die Projektion lehnt sie ab).
+    let up = Curve::Line {
+        origin: DVec3::new(2.0, 0.0, 0.0),
+        dir: DVec3::Z,
+    };
+    let c = s
+        .add_included(&include_curve(&Frame::WORLD, &up, 0.0, 4.0).unwrap())
+        .unwrap()[0];
+    let (a, b) = line_points(&s, c);
+    fixed3_at(&s, a, DVec3::new(2.0, 0.0, 0.0));
+    fixed3_at(&s, b, DVec3::new(2.0, 0.0, 4.0));
+    // In einer gekippten Skizze in Skizzenkoordinaten.
+    let frame = tilted_45();
+    let mut t = Sketch::new(frame, "S", Tolerance::default());
+    let g = include_curve(&frame, &curve, 0.0, 5.0).unwrap();
+    assert_eq!(g, Included::Line(frame.to_local(p0), frame.to_local(p1)));
+    let c = t.add_included(&g).unwrap()[0];
+    let (a, _) = line_points(&t, c);
+    fixed3_at(&t, a, frame.to_local(p0));
+}
+
+#[test]
+fn include_circle_in_yz_gets_normal_x() {
+    // Kreis in der yz-Ebene durch (0, 1, 2): x der Kreisebene ist y, y ist z, Normale x.
+    let cf = Frame {
+        origin: DVec3::new(0.0, 1.0, 2.0),
+        x: DVec3::Y,
+        y: DVec3::Z,
+        z: DVec3::X,
+    };
+    let curve = Curve::Circle {
+        frame: cf,
+        radius: 3.0,
+    };
+    let g = include_curve(&Frame::WORLD, &curve, 0.0, TAU).unwrap();
+    assert_eq!(
+        g,
+        Included::Circle {
+            c: cf.origin,
+            r: 3.0,
+            n: DVec3::X
+        }
+    );
+    let mut s = sketch();
+    let c = s.add_included(&g).unwrap()[0];
+    let CurveKind::Circle { center, .. } = s.curve(c).unwrap().kind else {
+        panic!("Kreis erwartet")
+    };
+    assert_eq!(s.curve_normal(c), DVec3::X);
+    fixed3_at(&s, center, cf.origin);
+    assert!(s.constraints().any(|(_, d)| d.kind == K::Radius(c, 3.0)));
+    assert_solved_rigid(&mut s);
+    // Viertelbogen, vorwärts und rückwärts: derselbe Bogen gegen den Uhrzeigersinn um x.
+    for (t0, t1) in [(0.0, FRAC_PI_2), (FRAC_PI_2, 0.0)] {
+        let g = include_curve(&Frame::WORLD, &curve, t0, t1).unwrap();
+        let Included::Arc { c, start, end, n } = g else {
+            panic!("Bogen erwartet: {g:?}")
+        };
+        assert_eq!(c, cf.origin);
+        assert_eq!(n, DVec3::X);
+        assert!(start.distance(curve.point(0.0)) < 1e-12);
+        assert!(end.distance(curve.point(FRAC_PI_2)) < 1e-12);
+        let mut s = sketch();
+        let arc = s.add_included(&g).unwrap()[0];
+        let CurveKind::Arc {
+            center,
+            start: a,
+            end: b,
+        } = s.curve(arc).unwrap().kind
+        else {
+            panic!("Bogen erwartet")
+        };
+        assert_eq!(s.curve_normal(arc), DVec3::X);
+        fixed3_at(&s, center, cf.origin);
+        fixed3_at(&s, a, curve.point(0.0));
+        fixed3_at(&s, b, curve.point(FRAC_PI_2));
+        let rep = s.solve();
+        assert_eq!(rep.status, SolveStatus::Solved, "{rep:?}");
+        assert_eq!(rep.dof, 0, "{rep:?}");
+    }
+    // Eine Normale gegen die Skizzennormale wird umgedreht, der Bogen bleibt derselbe.
+    let down = Curve::Circle {
+        frame: Frame {
+            origin: DVec3::new(0.0, 0.0, 5.0),
+            x: DVec3::X,
+            y: -DVec3::Y,
+            z: -DVec3::Z,
+        },
+        radius: 2.0,
+    };
+    let g = include_curve(&Frame::WORLD, &down, 0.0, FRAC_PI_2).unwrap();
+    let Included::Arc { start, end, n, .. } = g else {
+        panic!("Bogen erwartet: {g:?}")
+    };
+    assert_eq!(n, DVec3::Z);
+    assert!(start.distance(down.point(FRAC_PI_2)) < 1e-12);
+    assert!(end.distance(down.point(0.0)) < 1e-12);
+    // Ellipse und Ellipsenbogen in der yz-Ebene.
+    let ell = Curve::Ellipse {
+        frame: cf,
+        major: 4.0,
+        minor: 2.0,
+    };
+    let g = include_curve(&Frame::WORLD, &ell, 0.0, TAU).unwrap();
+    assert_eq!(
+        g,
+        Included::Ellipse {
+            c: cf.origin,
+            major: DVec3::new(0.0, 4.0, 0.0),
+            minor: 2.0,
+            n: DVec3::X
+        }
+    );
+    let mut s = sketch();
+    let e = s.add_included(&g).unwrap()[0];
+    assert_eq!(s.curve_normal(e), DVec3::X);
+    assert!(s.curve_point3(e, 0.0).unwrap().distance(ell.point(0.0)) < 1e-9);
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+    let g = include_curve(&Frame::WORLD, &ell, 0.5, 2.0).unwrap();
+    assert!(matches!(g, Included::EllipticArc { n, .. } if n == DVec3::X));
+    let mut s = sketch();
+    let e = s.add_included(&g).unwrap()[0];
+    let CurveKind::EllipticArc { start, end, .. } = s.curve(e).unwrap().kind else {
+        panic!("Ellipsenbogen erwartet")
+    };
+    assert_eq!(s.curve_normal(e), DVec3::X);
+    fixed3_at(&s, start, ell.point(0.5));
+    fixed3_at(&s, end, ell.point(2.0));
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+}
+
+/// Projektion und Einbeziehen ergeben für Geometrie in der Skizzenebene dieselbe Skizze.
+#[test]
+fn include_in_plane_is_plain_2d() {
+    // Skizzenebenen, in denen die Rechnung genau aufgeht: Weltebene, verschoben, die xz-Ebene.
+    let frames = [
+        Frame::WORLD,
+        Frame {
+            origin: DVec3::new(3.0, -2.0, 1.5),
+            ..Frame::WORLD
+        },
+        Frame {
+            origin: DVec3::new(0.0, 4.0, 0.0),
+            x: DVec3::X,
+            y: DVec3::Z,
+            z: -DVec3::Y,
+        },
+    ];
+    for frame in frames {
+        let at = |x: f64, y: f64| frame.point(x, y, 0.0);
+        let plane = |o: DVec3, x: DVec3, y: DVec3| Frame {
+            origin: o,
+            x,
+            y,
+            z: x.cross(y),
+        };
+        let (fx, fy) = (frame.x, frame.y);
+        let w = std::f64::consts::FRAC_1_SQRT_2;
+        let nurbs = |degree: usize, knots: Vec<f64>, pts: Vec<DVec3>, weights: Vec<f64>| {
+            Curve::Nurbs(std::sync::Arc::new(
+                planora_math::nurbs::NurbsCurve::new(degree, knots, pts, weights).unwrap(),
+            ))
+        };
+        let spline = nurbs(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 2.0, 2.0, 2.0],
+            vec![
+                at(0.0, 0.0),
+                at(2.0, 4.0),
+                at(5.0, -1.0),
+                at(7.0, 3.0),
+                at(9.0, 0.0),
+            ],
+            vec![1.0; 5],
+        );
+        let ring = nurbs(
+            2,
+            vec![
+                0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+            ],
+            [
+                (1.0, 0.0),
+                (1.0, 1.0),
+                (0.0, 1.0),
+                (-1.0, 1.0),
+                (-1.0, 0.0),
+                (-1.0, -1.0),
+                (0.0, -1.0),
+                (1.0, -1.0),
+                (1.0, 0.0),
+            ]
+            .iter()
+            .map(|&(x, y)| at(2.0 * x, 2.0 * y))
+            .collect(),
+            vec![1.0, w, 1.0, w, 1.0, w, 1.0, w, 1.0],
+        );
+        let straight = nurbs(
+            1,
+            vec![0.0, 0.0, 1.0, 2.0, 2.0],
+            vec![at(0.0, 0.0), at(1.0, 1.0), at(3.0, 3.0)],
+            vec![1.0; 3],
+        );
+        let round = |o: DVec3, y: DVec3, r: f64| Curve::Circle {
+            frame: plane(o, fx, y),
+            radius: r,
+        };
+        let oval = |x: DVec3, y: DVec3| Curve::Ellipse {
+            frame: plane(at(2.0, 0.0), x, y),
+            major: 3.0,
+            minor: 1.0,
+        };
+        let cases: Vec<(Curve, f64, f64)> = vec![
+            (
+                Curve::Line {
+                    origin: at(1.0, 2.0),
+                    dir: (fx * 3.0 + fy * 4.0) / 5.0,
+                },
+                0.0,
+                5.0,
+            ),
+            (round(at(1.0, 1.0), fy, 2.0), 0.0, TAU),
+            (round(at(1.0, 1.0), fy, 2.0), 0.3, 2.0),
+            (round(at(1.0, 1.0), fy, 2.0), 2.0, 0.3),
+            (round(at(-1.0, 2.0), -fy, 1.5), 0.3, 2.0),
+            (oval(fy, -fx), 0.0, TAU),
+            (oval(fx, fy), 0.5, 2.5),
+            (oval(fx, -fy), 2.5, 0.5),
+            (spline.clone(), 0.0, 2.0),
+            (spline, 1.5, 0.5),
+            (ring, 0.0, 1.0),
+            (straight, 0.0, 2.0),
+        ];
+        for (curve, t0, t1) in cases {
+            let mut projected = Sketch::new(frame, "S", Tolerance::default());
+            projected
+                .add_projected_curve(&curve, t0, t1, LINKED)
+                .unwrap();
+            let mut included = Sketch::new(frame, "S", Tolerance::default());
+            let g = include_curve(&frame, &curve, t0, t1).unwrap();
+            let ids = included.add_included(&g).unwrap();
+            assert_eq!(ids.len(), 1);
+            assert!(!included.is_3d_curve(ids[0]), "{curve:?}");
+            assert_eq!(
+                included.to_data(),
+                projected.to_data(),
+                "{curve:?} {t0}…{t1} in {frame:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn update_included_moves_points() {
+    let line = |o: DVec3, d: DVec3| Curve::Line {
+        origin: o,
+        dir: d.normalize(),
+    };
+    let include = |c: &Curve, t0: f64, t1: f64| include_curve(&Frame::WORLD, c, t0, t1).unwrap();
+    let mut s = sketch();
+    let first = line(DVec3::new(0.0, 0.0, 1.0), DVec3::new(1.0, 1.0, 0.0));
+    let c = s.add_included(&include(&first, 0.0, 3.0)).unwrap()[0];
+    let (a, b) = line_points(&s, c);
+    let next = line(DVec3::new(1.0, -1.0, 4.0), DVec3::new(0.0, 1.0, 1.0));
+    s.update_included(c, &include(&next, 0.0, 2.0)).unwrap();
+    assert_eq!(line_points(&s, c), (a, b));
+    fixed3_at(&s, a, next.point(0.0));
+    fixed3_at(&s, b, next.point(2.0));
+    assert_solved_rigid(&mut s);
+    // Eine 2D-Linie, deren Quelle die Ebene verlässt, wird 3D.
+    let mut s = sketch();
+    let flat = line(DVec3::ZERO, DVec3::X);
+    let c = s.add_included(&include(&flat, 0.0, 2.0)).unwrap()[0];
+    assert!(!s.is_3d_curve(c));
+    let (a, b) = line_points(&s, c);
+    s.update_included(c, &include(&first, 0.0, 3.0)).unwrap();
+    fixed3_at(&s, a, first.point(0.0));
+    fixed3_at(&s, b, first.point(3.0));
+    assert_solved_rigid(&mut s);
+    // In der Ebene geblieben: wie das Nachführen einer Projektion.
+    let mut s = sketch();
+    let c = s.add_included(&include(&flat, 0.0, 2.0)).unwrap()[0];
+    let mut p = sketch();
+    let pc = p.add_projected_curve(&flat, 0.0, 2.0, LINKED).unwrap();
+    let moved = line(DVec3::new(1.0, 1.0, 0.0), DVec3::Y);
+    s.update_included(c, &include(&moved, 0.0, 4.0)).unwrap();
+    p.reproject_curve(pc, &moved, 0.0, 4.0).unwrap();
+    assert_eq!(s.to_data(), p.to_data());
+    // Kreis bekommt neue Mitte, Radius und Normale.
+    let mut s = sketch();
+    let circ = |o: DVec3, n: DVec3, r: f64| Curve::Circle {
+        frame: Frame::from_origin_normal(o, n),
+        radius: r,
+    };
+    let c = s
+        .add_included(&include(&circ(DVec3::Z, DVec3::X, 2.0), 0.0, TAU))
+        .unwrap()[0];
+    let CurveKind::Circle { center, .. } = s.curve(c).unwrap().kind else {
+        panic!("Kreis erwartet")
+    };
+    let to = DVec3::new(1.0, 2.0, 3.0);
+    s.update_included(c, &include(&circ(to, DVec3::Y, 5.0), 0.0, TAU))
+        .unwrap();
+    fixed3_at(&s, center, to);
+    assert!((s.curve_normal(c) - DVec3::Y).length() < 1e-12);
+    assert!(s.constraints().any(|(_, d)| d.kind == K::Radius(c, 5.0)));
+    assert!(!s.constraints().any(|(_, d)| d.kind == K::Radius(c, 2.0)));
+    assert_solved_rigid(&mut s);
+    // Freiformkurve im Raum: neue Kurve, dieselben Endpunkte.
+    let mut s = sketch();
+    let bend = |z: f64| {
+        Curve::Nurbs(std::sync::Arc::new(
+            planora_math::nurbs::NurbsCurve::new(
+                2,
+                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                vec![
+                    DVec3::new(0.0, 0.0, z),
+                    DVec3::new(2.0, 3.0, 2.0 * z),
+                    DVec3::new(4.0, 0.0, z),
+                ],
+                vec![1.0; 3],
+            )
+            .unwrap(),
+        ))
+    };
+    let f = s.add_included(&include(&bend(1.0), 0.0, 1.0)).unwrap()[0];
+    let CurveKind::FixedSpline { start, end, .. } = s.curve(f).unwrap().kind.clone() else {
+        panic!("fester Spline erwartet")
+    };
+    s.update_included(f, &include(&bend(3.0), 0.0, 1.0))
+        .unwrap();
+    fixed3_at(&s, start, DVec3::new(0.0, 0.0, 3.0));
+    fixed3_at(&s, end, DVec3::new(4.0, 0.0, 3.0));
+    assert!((s.curve_point3(f, 0.5).unwrap().z - 4.5).abs() < 1e-9);
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+    // Artwechsel: Fehler, die Skizze bleibt unverändert.
+    let before = s.to_data();
+    let err = s.update_included(f, &include(&first, 0.0, 3.0));
+    assert!(
+        matches!(err, Err(SketchError::UnsupportedProjection(_))),
+        "{err:?}"
+    );
+    assert_eq!(s.to_data(), before);
+}

@@ -18,7 +18,7 @@ use crate::text_shape::{MAX_TEXT_CHARS, MAX_TEXT_CURVES, TextStyle};
 use planora_i18n::tr;
 use planora_kernel::Arena;
 use planora_math::nurbs::NurbsCurve;
-use planora_math::{DVec2, DVec3, Frame, Tolerance};
+use planora_math::{DVec3, Frame, Tolerance};
 use std::collections::HashSet;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -299,8 +299,10 @@ impl Sketch {
                 }
                 // Knoten, Gewichte und Zahlen hat `NurbsCurve::new` schon geprüft.
                 CurveKind::FixedSpline { start, end, curve } => {
+                    // Höhe nur mit 3D-Enden (Skizzen 10: einbezogene Freiformkurven).
                     let flat = curve.control_points().iter().all(|q| q.z == 0.0);
-                    if !flat || (start == end && !curve.is_closed(d.tolerance.linear)) {
+                    let raised = [start, end].iter().all(|p| d.points[p.index()].z.is_some());
+                    if !(flat || raised) || (start == end && !curve.is_closed(d.tolerance.linear)) {
                         return Err(bad(tr!("sketch-err-data-fixed-spline")));
                     }
                     // Eine lebende Kurve: Die Enden liegen auf ihr und sind fest (A3).
@@ -308,8 +310,9 @@ impl Sketch {
                         let (lo, hi) = curve.domain();
                         let holds = |p: PointId, t: f64| {
                             let r = &d.points[p.index()];
-                            let at = DVec2::new(d.vars[r.x], d.vars[r.y]);
-                            at.distance(curve.point(t).truncate()) <= d.tolerance.linear
+                            let z = r.z.map_or(0.0, |i| d.vars[i]);
+                            let at = DVec3::new(d.vars[r.x], d.vars[r.y], z);
+                            at.distance(curve.point(t)) <= d.tolerance.linear
                                 && d.constraints.iter().any(|k| {
                                     k.alive
                                         && k.enabled

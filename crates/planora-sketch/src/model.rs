@@ -114,7 +114,8 @@ pub enum CurveKind {
     },
     /// Projizierte Freiformkurve (Spec A3, F): unveränderlich in Skizzenkoordinaten (`z = 0`), auch
     /// rational; `start` und `end` tragen `Fixed`. Nur die Projektion legt sie an. Bei einer
-    /// geschlossenen Kante ist `start == end`.
+    /// geschlossenen Kante ist `start == end`. Im Raum (Skizzen 10, Einbeziehen) dürfen die
+    /// Kontrollpunkte z ≠ 0 haben, dann sind `start` und `end` 3D-Punkte mit `Fixed3`.
     FixedSpline {
         start: PointId,
         end: PointId,
@@ -1221,7 +1222,7 @@ impl Sketch {
 
     /// Große Halbachse `major` in die Ebene mit der normierten Normale `n` gelegt und mit
     /// `minor` geprüft wie bei [`Sketch::add_ellipse`].
-    fn ellipse_axis_in_plane(
+    pub(crate) fn ellipse_axis_in_plane(
         &self,
         major: DVec3,
         minor: f64,
