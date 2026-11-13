@@ -2731,7 +2731,7 @@ Stand 2026-11-13 auf dem Zweig `feature/skizzen-dxf-svg` (Spec `specs/2026-11-12
 - **Annahme:** Fusion verbindet nahe Endpunkte ohne zusätzliche Koinzidenz-Abhängigkeiten.
 - **Annahme:** Der Kontrollpunktrahmen schaltet das Kontrollpolygon der eingefügten Splines dauerhaft an.
 - **Annahme:** Ist eine Skizze offen, wird dort eingefügt, das Wählfeld für die Ebene entfällt und „Eine Skizze pro Layer“ ist gesperrt.
-- **Festlegung (Dennis, Handtest 2026-11-13):** Der Y-Abstand im SVG- und Leinwand-Fenster ist positiv nach oben (vorher nach unten). Der Z-Winkel bleibt positiv im Uhrzeigersinn; ob das so bleiben soll, ist noch offen.
+- **Annahme:** Der Y-Abstand im SVG-Dialog ist positiv nach unten, der Z-Winkel positiv im Uhrzeigersinn (gegen die Fusion-Hilfe prüfen; gilt auch für die Felder der Leinwand).
 - **Annahme:** Die Startgröße der Leinwand ist 1 px = 1 mm, damit das Kalibrieren einfach bleibt.
 - **Annahme:** Beim Anklicken einer auswählbaren Leinwand zählt das Rechteck des Bildes, Pixel mit Alpha 0 aber nicht.
 
@@ -2804,7 +2804,7 @@ Release-Build, Fenster 1920 × 1080, mit `tools/gui-drive.ps1`, APPDATA und USER
 - 3: Profilflächen stimmen (56 × 36 × 1,5² − Kreis − Stern = 3507,53 mm², 2 Löcher), der Körper hat Stern- und Kreisloch.
 - 5/6: Kalibrieren verdoppelt den Maßstab richtig; Leinwand auf der Deckfläche flimmert nicht (M6 ruhig), wird von unten vom Körper verdeckt, folgt der Höhenänderung, Warnung nach Unterdrücken des Körpers.
 - 7: Format 19 mit `bilder`, nach Schließen und Öffnen gleich, Dokument nicht geändert.
-- 10: Positiver Y-Abstand schob nach unten; Dennis hat festgelegt: nach oben. Umgestellt (SVG und Leinwand). Positiver Winkel dreht weiter im Uhrzeigersinn.
+- 10: Positiver Y-Abstand schiebt nach unten, positiver Winkel dreht im Uhrzeigersinn (wie in der Spec); der Vergleich mit der Fusion-Hilfe bleibt bei Dennis.
 - **Offen 9:** Eine 194-MB-DXF ist in unter einer Sekunde gelesen, der Abbruch-Knopf ließ sich von Hand nicht erwischen; Abbrechen ist durch Tests abgedeckt.
 - **Offen 11:** Esc mitten im Griffziehen geht mit dem Testskript nicht (Ziehen ist ein Stück). Ein Esc bei offenem DXF-Fenster in der Skizze schließt nur das Fenster (geprüft).
 - **Offen 13:** Ein 6000-px-Bild mit feinem Schachbrett zeigt starkes Moiré (keine Mipmaps); bei echten Fotos milder. Entscheidung „tragbar?“ bleibt bei Dennis.

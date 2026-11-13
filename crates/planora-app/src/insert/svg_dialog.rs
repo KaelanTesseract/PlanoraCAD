@@ -1,7 +1,7 @@
 //! Fenster „SVG einfügen“ (Skizzen 9, Spec C): Datei wählen, im Hintergrund lesen, dann Ebene,
 //! X- und Y-Abstand, Z-Winkel, Horizontal und Vertikal spiegeln, Skalierung und
-//! Kontrollpunktrahmen. Y-Abstand positiv nach oben (Dennis' Festlegung im Handtest, wie die
-//! Skizzenachsen), Z-Winkel positiv im Uhrzeigersinn. Die Vorschau liegt als Linien in der Ansicht, am Anfang mit der
+//! Kontrollpunktrahmen. Die Felder folgen Fusion: Y-Abstand positiv nach unten, Z-Winkel positiv
+//! im Uhrzeigersinn. Die Vorschau liegt als Linien in der Ansicht, am Anfang mit der
 //! Hüllquader-Mitte auf dem Ursprung; Griffe darauf ([`crate::sketch_grips`]) verschieben, drehen
 //! und skalieren, Feld und Griff bleiben in beiden Richtungen gleich. „OK“ fügt fest ein (alle
 //! Punkte `Fixed`, wie Fusion), in einem Rückgängig-Schritt: in die offene Skizze oder in eine
@@ -53,7 +53,7 @@ pub struct SvgDialog {
     /// Nummer des Laufs, aus dem `loaded` stammt.
     loaded_run: u64,
     pub loaded: Option<SvgLoaded>,
-    /// X- und Y-Abstand in mm; Y positiv nach oben, wie die Skizzenachse.
+    /// X- und Y-Abstand in mm; Y positiv nach unten, wie Fusion.
     pub offset: DVec2,
     /// Z-Winkel in Grad, positiv im Uhrzeigersinn, wie Fusion.
     pub angle_deg: f64,
@@ -172,8 +172,8 @@ impl SvgDialog {
     }
 
     /// Lage der Geometrie mit dem Hüllquader `bounds` der Datei: Mitte auf den Ursprung, dann
-    /// spiegeln, skalieren, drehen und verschieben. Der Winkel der Felder (im Uhrzeigersinn)
-    /// wird hier in die Skizze (gegen den Uhrzeigersinn) gedreht; Y zeigt in beiden nach oben.
+    /// spiegeln, skalieren, drehen und verschieben. Die Felder (Y nach unten, Winkel im
+    /// Uhrzeigersinn) werden hier in die Skizze (Y nach oben, gegen den Uhrzeigersinn) gedreht.
     pub fn placement(&self, bounds: (DVec2, DVec2)) -> Placement {
         let sign = |flip: bool| if flip { -1.0 } else { 1.0 };
         Placement {
@@ -196,7 +196,7 @@ impl SvgDialog {
 
     /// Mitte der Vorschau in der Skizze (Y nach oben).
     fn grip_offset(&self) -> DVec2 {
-        self.offset
+        DVec2::new(self.offset.x, -self.offset.y)
     }
 
     /// Winkel in der Skizze (Radiant, gegen den Uhrzeigersinn).
@@ -207,7 +207,7 @@ impl SvgDialog {
     /// Übernimmt die Lage eines Griffzugs (Skizze: Y nach oben, gegen den Uhrzeigersinn) in die
     /// Felder.
     pub fn set_from_grips(&mut self, offset: DVec2, angle: f64, factor: f64) {
-        self.offset = offset;
+        self.offset = DVec2::new(offset.x, -offset.y);
         self.angle_deg = -angle.to_degrees();
         self.scale = factor;
         self.refresh_texts();
