@@ -163,9 +163,9 @@ Eine öffentliche Funktion `Sketch::insert_geometry(&Import2d-Auswahl, Similarit
 
 ### F. Speichern und Laden (`planora-project`)
 
-- **Format 19**, nur wenn eine Leinwand im Dokument ist. Alte Dateien werden weiter bytegleich geschrieben.
+- **Format 19**, nur wenn eine Leinwand im Dokument ist. Alte Dateien werden weiter bytegleich geschrieben. *Nachtrag Gesamtprüfung (I6):* Auch eine Kurve mit eingeschaltetem Kontrollpunktrahmen braucht Format 19, weil der Rahmen dauerhaft gespeichert wird (siehe offene-punkte.md, „Festlegungen mit Abweichungen“).
 - **Bilder** stehen als Base64 in der Versions-JSON (Abschnitt `bilder`, wie `netze`) und in jeder Version erneut. **Bewusst einfach.** Wenn Projekte damit zu groß werden, kommt das in `offene-punkte.md`. Gesamtgrenze wie bei Netzen.
-- **DXF und SVG** ergeben normale Skizzenkurven und brauchen kein neues Format. FixedSpline außerhalb der Projektion ist in Format 17 schon speicherbar (`FesterSpline`); die Prüfung, dass die Kurve ohne Projektion geladen wird, gehört in die Tests.
+- **DXF und SVG** ergeben normale Skizzenkurven und brauchen kein neues Format (außer mit Kontrollpunktrahmen, siehe oben). FixedSpline außerhalb der Projektion ist in Format 17 schon speicherbar (`FesterSpline`); die Prüfung, dass die Kurve ohne Projektion geladen wird, gehört in die Tests.
 - **Rundreise-Tests:** Speichern, Laden und Rückgängig mit Leinwand.
 
 ## Nicht-Ziele

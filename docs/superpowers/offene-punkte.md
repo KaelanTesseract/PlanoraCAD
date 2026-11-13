@@ -2687,7 +2687,7 @@ Release-Build, Fenster 1920 × 1080, mit `tools/gui-drive.ps1`, APPDATA und USER
 
 ## Teilprojekt Skizzen 9
 
-Stand 2026-11-13 auf dem Zweig `feature/skizzen-dxf-svg` (Spec `specs/2026-11-12-skizzen-dxf-svg-design.md`, Plan `plans/2026-11-12-skizzen-dxf-svg.md`). Tasks 1 bis 14 fertig und einzeln geprüft (Commits 3a7f23e bis 0379891), Doku mit Task 15. Die Gesamtprüfung des Zweigs mit ihrer Korrekturwelle und der volle Lauf unter Windows und WSL stehen noch aus. Der Handtest ist noch nicht gemacht.
+Stand 2026-11-13 auf dem Zweig `feature/skizzen-dxf-svg` (Spec `specs/2026-11-12-skizzen-dxf-svg-design.md`, Plan `plans/2026-11-12-skizzen-dxf-svg.md`). Tasks 1 bis 14 fertig und einzeln geprüft (Commits 3a7f23e bis 0379891), Doku mit Task 15. Gesamtprüfung des Zweigs am 2026-11-13 (0 kritisch, 7 wichtig, 16 klein) mit einer Korrekturwelle: alle wichtigen Punkte und die als „vor dem Merge“ markierten kleinen sind behoben, der Rest steht unten unter „Nach der Gesamtprüfung offen“. Der volle Lauf unter WSL und der Handtest stehen noch aus.
 
 ### Stand und Geliefertes
 - **Leser in `planora-exchange`** (Tasks 1 bis 5): DXF (Text und binär), SVG (auch SVGZ) und Bild (PNG, JPG, TIFF) werden zu einer neutralen 2D-Geometrie `Import2d`; Zählung dessen, was übersprungen wird; Grenzen `MAX_IMPORT_ELEMENTS` 100 000, Blocktiefe 16, `MAX_IMAGE_BYTES` 64 MiB, Bildkante 16 384 px; Fuzz-artige Tests mit kaputten Dateien.
@@ -2701,16 +2701,20 @@ Stand 2026-11-13 auf dem Zweig `feature/skizzen-dxf-svg` (Spec `specs/2026-11-12
 
 **Abweichungen von Fusion**
 - **Esc beim Ziehen eines Griffs:** In den Dialogen DXF, SVG und Leinwand bricht Esc (und Rechtsklick) beim Ziehen nur das Ziehen ab, nicht den Dialog (wie die Griffe aus Skizzen 4). Fusion bricht mit Esc den ganzen Befehl ab.
-- **„Fest“ im Abhängigkeitsbefehl wirkt je Klick:** Schon der erste gewählte Punkt oder die erste Kurve wird fest (wie Fusions Fix/Unfix je Klick). Im Handtest prüfen.
+- **„Fest“ im Abhängigkeitsbefehl wirkt je Klick:** Schon der erste gewählte Punkt oder die erste Kurve wird fest, ein weiterer Klick auf etwas Festes löst es wieder (wie Fusions Fix/Unfix je Klick; umgesetzt und getestet). Im Handtest nur noch das Gefühl prüfen.
 - **Achspfeile bleiben an den Skizzenachsen:** Die Felder X- und Y-Abstand sind Versätze entlang der Skizzenachsen; die Pfeile der Griffe zeigen genau diese Achsen. Gegen Fusion prüfen.
 - **Skalierung der Leinwand:** Ein Häkchen „Seitenverhältnis beibehalten“ schaltet zwischen einem Feld „Skalierung XY“ und den getrennten Feldern X und Y um; Fusion zeigt drei Felder (X, Y, XY) zugleich.
 - **Bild einer Leinwand tauschen:** Beim Bearbeiten lässt sich das Bild nicht wechseln (Fusion auch nicht); neu anlegen.
 - **Leinwand und offene Skizze:** Eine Leinwand lässt sich nicht einfügen, solange eine Skizze offen ist („Erst die Skizze beenden“). DXF und SVG gehen dagegen in die offene Skizze.
 - **Tasten:** „DXF einfügen“ und „SVG einfügen“ gelten überall im Programm, „Leinwand“ nur im Modell. Alle drei haben ab Werk keine Taste, sind aber belegbar; die Tasten wirken auch in einer offenen Skizze.
-- **SVG-Pfeilspitzen (Marker)** werden beim Einfügen ignoriert und als „unbekannt“ gezählt (vor dem Lesen aus dem Text geschnitten, damit sie nicht vervielfältigt werden können). Pfeilspitzen aus SVGs fehlen deshalb.
+- **SVG-Pfeilspitzen (Marker), Muster, Clip-Pfade, Masken und Filter** werden beim Einfügen ignoriert und als „unbekannt“ gezählt (vor dem Lesen aus dem Text geschnitten, damit sie nicht vervielfältigt werden können; Gesamtprüfung I4). Pfeilspitzen und Geometrie in Mustern oder Clip-Pfaden fehlen deshalb. Formen, die ein Muster oder einen Filter nutzen, behalten ihren Umriss: An die Stelle des Musters tritt eine einfarbige Füllung, an die Stelle des Filters ein wirkungsloser Filter mit derselben Kennung.
 - **SVG mit DTD oder `<!ENTITY`** wird abgelehnt (Schutz vor „Bomben“). Alte Dateien aus Illustrator mit Entities lassen sich nicht einfügen. Auch eine `<!ENTITY`-Zeile in einem Kommentar führt zur Ablehnung.
 - **SVG-Wiederholungen (`<use>`)** werden vorab gezählt und gegen `MAX_IMPORT_ELEMENTS` geprüft. Größte Dateien: SVG roh und entpackt 256 MiB (`MAX_SVG_BYTES`), DXF 256 MiB (`MAX_DXF_BYTES`), Bild 64 MiB.
-- **Gesamtgrenze der Bilder in einer Datei:** 1 GiB (nicht 8 GiB wie bei Netzen); wird in der Gesamtprüfung umgesetzt. Projekte mit mehr als 1 GiB Bildern lassen sich dann nicht speichern.
+- **Gesamtgrenze der Bilder in einer Datei:** 1 GiB (`MAX_IMAGES_TOTAL_BYTES`, nicht 8 GiB wie bei Netzen), umgesetzt in der Gesamtprüfung (I5). Geprüft wird beim Einfügen einer Leinwand (Meldung im Dialog), beim Speichern und beim Laden. Beim Speichern braucht das Programm kurz ein Mehrfaches der Bildbytes an Speicher (Base64-Text, Selbstprüfung durch Rücklesen, Hülle der Sicherung).
+- **Kontrollpunktrahmen braucht Format 19:** Spec F sagt „Format 19 nur mit Leinwand“. Der Rahmen eines eingefügten Splines wird aber dauerhaft gespeichert (`rahmen` an der Kurve), darum schreibt auch eine Datei mit einer solchen Kurve Format 19; ältere Versionen öffnen sie nicht. Bewusst so gelassen (Gesamtprüfung I6), denn die Spec nimmt den Rahmen als dauerhaft an. Ohne Rahmen bleiben DXF und SVG im alten Format.
+- **DXF-Einheiten außerhalb der Liste:** Jede Längeneinheit aus `$INSUNITS` (auch Meile, Mil, Yard, Dezimeter, Mikrometer, Ångström, US-Vermessungsfuß usw.) wird mit ihrem Faktor übernommen und steht dann als eigener Eintrag „… (aus der Datei)“ in der Liste (Gesamtprüfung I3). „Ohne Einheit“ (0) gilt als keine Angabe. Sehr große Einheiten (Lichtjahr, Parsec) ergeben fast immer „außerhalb des Rechenbereichs“.
+- **Ein unbrauchbares Element bricht nicht ab:** Lehnt die Skizze ein einzelnes Element ab (Text zu lang, ohne Umriss, mit zu vielen Kurven oder Höhe 0; ein Spline mit zu nahen Punkten), wird es ganz zurückgenommen und gezählt (Texte unter „Texte“, sonst unter „entartet“); der Rest wird eingefügt (Gesamtprüfung I2). Ganz abgebrochen wird nur bei ungültiger Lage oder Geometrie außerhalb des Rechenbereichs (über 1000 km).
+- **Esc mit offener Skizze:** Ist der Dialog „DXF einfügen“ oder „SVG einfügen“ offen, gehört Esc dem Dialog; die Skizze bricht damit nicht auch ihr Werkzeug ab (Gesamtprüfung M1).
 - **Geschlossene 2-Punkt-Polylinie:** Sind beide Segmente gerade, wird es eine Linie; sonst bleiben alle Segmente erhalten (Halbscheibe = Bogen und Sehne, Linse = zwei Bögen), das Profil bleibt geschlossen.
 - **Splines aus DXF:** Stützpunkt-Splines werden zu `Spline`, nur geschlossene oder über die Punktgrenze hinaus zu festen Splines. NURBS mit mehr als 64 Punkten oder geschlossen werden exakt in mehrere Splines mit Kontrollpunkten zerlegt. Grad 2 und 4 werden auf 3 und 5 erhöht, Grad über 5 in Stücke zerlegt, zusammengefallene Stücke gelten als entartet. Einzelne Kurven werden dadurch fest statt bearbeitbar.
 - **BMP:** Das Programm kann BMP lesen (kommt mit dem DXF-Leser), lässt es aber als Leinwand nicht zu, weil Fusion nur PNG, JPG und TIFF nennt.
@@ -2736,20 +2740,40 @@ Stand 2026-11-13 auf dem Zweig `feature/skizzen-dxf-svg` (Spec `specs/2026-11-12
 - **Überlappende Leinwände** werden nicht sortiert; ihre Reihenfolge ist nicht festgelegt.
 - **Ausgeblendete Leinwand** lässt sich nicht kalibrieren.
 - **Bilder in der Datei:** Sie stehen als Base64 in jeder gespeicherten Version erneut; große Bilder machen Projekte groß. Bewusst einfach gewählt.
-- **Kaputte Bildpunkte** werden erst beim Zeichnen bemerkt, beim Einfügen wird nur der Kopf der Datei geprüft.
-- **Kleine DXF-Zeichnung mit 2-Punkt-Fit-Spline:** Ein solcher Spline kann das Einfügen abbrechen.
+- **Kaputte Bildpunkte:** Beim Einfügen über den Dialog wird das Bild ganz entschlüsselt, ein kaputtes Bild fällt also gleich auf. Beim Laden aus einer Projektdatei wird nur der Kopf geprüft; kaputte Bildpunkte fallen dort erst beim Zeichnen auf (die Leinwand bleibt dann leer, Hinweis im Protokoll).
 - **DXF-Blöcke:** Bemaßungen und Schraffuren in Blöcken werden nicht mitgezählt; Spiegeltext behält nur die Lage; mehr als eine Million Blockbesuche melden „zu viele Elemente“. Ein MTEXT-Formatcode ohne Semikolon verschluckt den Rest des Textes.
-- **SVG:** Null lange Linien werden still verworfen; Text in `defs`, der per `use` benutzt wird, wird nicht gezählt. Muster, Masken, Clip-Pfade und Filter könnten, je Verweis vervielfältigt, die Zählung umgehen; sie sollen wie die Marker vorab ausgeschnitten werden (Gesamtprüfung).
-- **Abbrechen beim DXF-Lesen:** Der DXF-Leser selbst lässt sich mitten in der Datei nicht abbrechen; Abbrechen wirkt davor und danach. Bei einem Fehler im Leser druckt der Panic-Hook auf stderr.
+- **SVG:** Null lange Linien werden still verworfen; Text in `defs`, der per `use` benutzt wird, wird nicht gezählt. Muster, Masken, Clip-Pfade und Filter werden seit der Gesamtprüfung vorab ausgeschnitten (siehe oben).
+- **Abbrechen beim DXF-Lesen:** Der DXF-Leser selbst lässt sich mitten in der Datei nicht abbrechen; Abbrechen wirkt davor und danach. Gerät ein fremder Leser (DXF, SVG, Bild) in Panik, meldet der Dialog „Datei kaputt“; seit der Gesamtprüfung (I1) entsteht dabei kein Absturzbericht mehr und der nächste Start fragt nicht nach einem Absturz (nur eine Zeile im Protokoll).
 - **Dekodieren** eines Bildes im Hintergrund läuft nach dem Abbrechen zu Ende.
-- **Datei mit Ordnerkennzeichen ohne Leinwand** (nur durch Handarbeit möglich) lässt sich nicht speichern; wird robuster gemacht (Gesamtprüfung).
+- **Datei mit Ordnerkennzeichen ohne Leinwand** (nur durch Handarbeit möglich, über das Programm nicht erreichbar, weil `snapshot()` und `restore()` aufräumen) ließe sich nicht speichern. Bleibt so (Gesamtprüfung M14: eine Zeile Absicherung in `encode_version` wäre möglich).
 - **Taste für DXF oder SVG** in einer Zeichnung oder in einer älteren Version zeigt keinen Hinweis, sie tut still nichts.
 
 ### Zahlen
 Release-Build, Messtests (Task 6):
 - 10 000 Linien einfügen: 0,015 s (Ziel unter 2 s).
 - Profile aus 2500 Profilen: 0,259 s.
-- Voller Lauf unter Windows und WSL: steht noch aus (nach der Gesamtprüfung).
+
+Release-Build, Messtests an der Grenze (Gesamtprüfung I7, `cargo test -p planora-sketch --release --test import_perf -- --ignored --nocapture`, 2026-11-13, Windows):
+- 100 000 Linien (25 000 Quadrate) einfügen: 0,070 s; Vorschau (`preview_polylines`): 0,007 s; Profile daraus (25 000): 22,8 s. Die Profilsuche ist der langsame Teil (läuft nach dem Einfügen im UI-Faden; das Fenster steht so lange).
+- Vorschau von 100 000 kubischen Kurven (SVG-artig): 0,935 s, und zwar bei jeder Änderung der Lage, beim Ziehen eines SVG-Griffs also je Bild. Bei solchen Dateien ruckelt das Ziehen stark.
+- Verkettete Bögen (Polylinie mit Rundungen, eine einzige Lösergruppe), einfügen / ein Zugschritt: 100 Bögen 0,06 s / 0,20 s; 250 Bögen 0,99 s / 1,64 s; 500 Bögen 10,9 s / 16,9 s; 1000 Bögen 76 s / 129 s. Die Zeit wächst etwa mit der dritten Potenz (dichte Matrizen im Löser); 2500 Bögen wurden nicht mehr gemessen (geschätzt über 15 Minuten). Eine DXF mit einer langen gerundeten Polylinie lässt das Programm also minutenlang stehen, obwohl sie weit unter der Grenze von 100 000 Elementen liegt.
+- Festlegung (Ruling I7): keine Sperre, nur dokumentiert. Abhilfe für später: Bogenketten beim Einfügen ohne inneren Löseschritt anlegen oder fest einfügen, eine Grenze für die Größe einer Lösergruppe beim Einfügen, Profilsuche und Vorschau aus dem UI-Faden nehmen.
+
+- Voller Lauf unter WSL: steht noch aus.
+
+### Nach der Gesamtprüfung offen (klein, bewusst zurückgestellt)
+- **Rückgängig-Name im Modell:** DXF und SVG im Modell (neue Skizze) heißen im Verlauf „Skizze erstellt“, in einer offenen Skizze „DXF einfügen“ und „SVG einfügen“. Der Name ließe sich über `undo_label_hint` angleichen (M3).
+- **Speicher beim Entschlüsseln:** Die Grenze von 1 GiB je Entschlüsselung reicht genau für ein RGBA-Bild mit 16 384 × 16 384 Bildpunkten; RGB-Bilder brauchen dazu die Kopie, 16-Bit-Bilder werden als „Kante zu lang“ gemeldet. Eine Datei mit mehreren großen Fotos entschlüsselt alle gleichzeitig (ein Faden je Bild). Besser wäre eine Grenze in Megapixeln mit eigener Meldung und höchstens ein Entschlüsseln zur Zeit (M5).
+- **Leinwand auf einer Körperfläche:** Gegen Flimmern hat die Leinwand mit Tiefentest jetzt einen kleinen Schub nach vorn (M6). Im Handtest (Punkte 5 und 6) prüfen, ob es ruhig ist.
+- **Schwache Grafikkarten:** Die GPU-Kante ist fest 4096 px. Kann die Karte weniger, bleibt die Leinwand unsichtbar, und die Meldung geht nur an stderr, nicht ins Protokoll (M7).
+- **Vormultiplizieren beim ersten Hochladen** (bis 64 MB) läuft im Zeichenfaden, auch nach Aus- und Einblenden; besser im Entschlüsseln (M8).
+- **Spline-Grad unbegrenzt:** Ein DXF-Spline darf jeden Grad haben, die Auswertung wächst quadratisch mit dem Grad (Vorschau und Einfügen im UI-Faden). Nur eine absichtlich gebaute Datei erreicht das; Grade über etwa 32 als entartet zählen (M9).
+- **Andere Fenster** (Exportieren, Importieren, STEP, Erzeugen, Boolesche) schließen offene Einfügen-Fenster nicht; zwei Befehlsfenster können zugleich offen sein. Harmlos, wie beim Ebenenfenster (M10).
+- **Leerer Rückgängig-Schritt:** Scheitert „Eine Skizze pro Layer“ mittendrin (nur mit einer Skizze, die sich nicht rechnen lässt), werden die schon angelegten Skizzen wieder gelöscht, der Zähler der Kennungen ist aber weiter: Es entsteht ein Schritt ohne sichtbare Änderung (M11).
+- **Kontrollpunktrahmen nachträglich:** Es gibt keinen Schalter, den Rahmen nach dem Einfügen aus- oder einzuschalten; Stücke nach Stutzen oder Brechen verlieren ihn; `set_curve_kind` behält den Merker auch für Arten ohne Kontrollpolygon (heute ruft das niemand so auf) (M12).
+- **Sicherung mit Leinwänden:** Die automatische Sicherung (alle 120 s bei Änderungen) schreibt alle Bilder als Base64 samt Selbstprüfung im UI-Faden; mit einem 50-MB-Foto ist das ein spürbarer Ruck (M16, wie bei Netzen).
+- **Testlücken:** Kein Test über den ganzen Weg Datei → Einfügen → Profil → Extrudieren (M15).
+- **Kleinkram der Einzelprüfungen** (Tasks 2 bis 14, siehe Ledger): schwache NaN- und Bombentests (nur `is_err`), zweites XML-Parsen, Pfadkosten `len/16`, Zählung der Marker-Definitionen statt der Nutzungen, Lösestatus nach dem Einfügen ungenutzt, toter Eintrag `constraint_forms` für „Fest“, doppelte Basisbeschriftung in `properties.rs`, `add_image` linear, „nicht eben“ für jeden anderen Flächenfehler, Skizzenkopie je Einfügen, Entschlüsseln ignoriert Abbrechen, Zeigerstrahl beim Überfahren doppelt gerechnet, `calibrated` rechnet `factor` zweimal. Alles ohne Wirkung für den Nutzer.
 
 ### Handliste für den Nutzer (Prüfung von Hand im echten Fenster, noch offen)
 Release-Build, Fenster 1920 × 1080, mit `tools/gui-drive.ps1`, APPDATA und USERPROFILE auf einen Testordner umgeleitet. Nur nach Dennis’ Go. Testdateien selbst gemacht oder aus einem Programm, das nicht von Autodesk ist. Jeweils prüfen: Texte lesbar, nichts ragt heraus, Meldung nennt den Grund. Abhaken:
@@ -2766,6 +2790,6 @@ Release-Build, Fenster 1920 × 1080, mit `tools/gui-drive.ps1`, APPDATA und USER
 - [ ] 11. **Esc beim Griffziehen:** Beim Ziehen eines Griffs im SVG- oder Leinwand-Dialog Esc oder Rechtsklick: Nur das Ziehen wird abgebrochen, der Dialog bleibt offen. Ein zweites Esc schließt ihn und hinterlässt nichts. Auch mit offener Skizze ausprobieren (ein Esc darf nicht zugleich Skizzenwerkzeug und Dialog schließen).
 - [ ] 12. **XY oder X/Y bei der Leinwand:** Häkchen „Seitenverhältnis beibehalten“ an und aus; Skalierung XY und getrennt X und Y. Ist das gegenüber Fusions drei Feldern verständlich?
 - [ ] 13. **Verkleinerte große Leinwand:** Ein Foto mit mehr als 4096 px stark verkleinert ansehen und die Ansicht drehen: Flimmert es (keine Mipmaps)? Ist das tragbar?
-- [ ] 14. **„Fest“ im Abhängigkeitsbefehl:** Befehl „Fest“ wählen und einen Punkt anklicken: Er wird sofort fest; wie bei Fusions Fix/Unfix je Klick prüfen, ob sich ein fester Punkt auch wieder lösen lässt. Rückgängig je Klick.
+- [ ] 14. **„Fest“ im Abhängigkeitsbefehl:** Befehl „Fest“ wählen und einen Punkt anklicken: Er wird sofort fest. Ein zweiter Klick auf den festen Punkt löst ihn wieder (umgesetzt und getestet, Task 7); hier nur prüfen, ob es sich wie Fusions Fix/Unfix anfühlt. Rückgängig je Klick.
 - [ ] 15. **Tasten in der offenen Skizze:** In den Einstellungen „DXF einfügen“ und „SVG einfügen“ auf Tasten legen. Taste in einer offenen Skizze: Der Dialog öffnet sich und fügt in diese Skizze ein. „Leinwand“ in der offenen Skizze: Meldung „Erst die Skizze beenden“.
 - [ ] 16. **1920×1080:** Menü „Einfügen“, alle drei Dialoge und der Ordner „Leinwände“ passen auf den Bildschirm, nichts ist abgeschnitten, die Menüleiste ist nicht zu breit.
