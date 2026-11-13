@@ -48,6 +48,8 @@ fn read_dxf_limited(
     // Die Bibliothek `dxf` ist nicht gegen kaputte Dateien gehärtet und kann bei zerstörten
     // Eingaben in Panik geraten (Überlauf, Indexfehler). Eine Datei darf das Programm aber nie
     // abstürzen lassen: Die Panik wird darum hier abgefangen und wie ein Lesefehler gemeldet.
+    // Die App ruft den Leser im Merker `crash::expected_panics` auf (`insert::guarded`), damit
+    // der Absturz-Hook dafür keinen Bericht schreibt.
     let drawing = catch_unwind(AssertUnwindSafe(|| Drawing::load(&mut Cursor::new(bytes))))
         .map_err(|_| ExchangeError::DxfBroken("internal error".into()))?
         .map_err(|e| ExchangeError::DxfBroken(e.to_string()))?;

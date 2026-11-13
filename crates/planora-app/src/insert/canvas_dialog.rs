@@ -66,6 +66,7 @@ pub fn image_spec() -> ReadSpec<ImageBytes> {
         max_bytes: MAX_IMAGE_BYTES,
         too_large: ExchangeError::ImageTooLarge,
         read: read_image,
+        broken: ExchangeError::ImageBroken,
     }
 }
 
@@ -300,7 +301,12 @@ impl CanvasDialog {
             .and_then(|e| e.to_str())
             .unwrap_or_default()
             .to_string();
-        match result.map(|res| res.and_then(|b| probe_image(&ext, &b.bytes).map(|i| (b, i)))) {
+        match result.map(|res| {
+            res.and_then(|b| {
+                super::guarded(ExchangeError::ImageBroken, || probe_image(&ext, &b.bytes))
+                    .map(|i| (b, i))
+            })
+        }) {
             Some(Ok((b, info))) => {
                 let image = Arc::new(CanvasImage {
                     bytes: b.bytes,

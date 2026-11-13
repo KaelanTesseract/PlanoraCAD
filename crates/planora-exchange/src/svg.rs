@@ -56,6 +56,8 @@ fn read_svg_limited(
     }
     // usvg und roxmltree sind nicht für feindliche Dateien gedacht; eine Panik darf das Programm
     // aber nie abstürzen lassen. Sie wird hier abgefangen und wie ein Lesefehler gemeldet.
+    // Die App ruft den Leser im Merker `crash::expected_panics` auf (`insert::guarded`), damit
+    // der Absturz-Hook dafür keinen Bericht schreibt.
     let parsed = catch_unwind(AssertUnwindSafe(|| parse(bytes, max_bytes)))
         .map_err(|_| ExchangeError::SvgBroken("internal error".into()))??;
     let (tree, texts, images, markers) = parsed;

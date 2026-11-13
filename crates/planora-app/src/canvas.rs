@@ -133,8 +133,12 @@ impl TextureCache {
         {
             self.decodes += 1;
             let bytes = img.bytes.clone();
+            // Eine Panik im Entschlüsseler wird ein normaler Fehler, ohne Absturzbericht.
             let job = Job::spawn(move |_| {
-                planora_exchange::decode_rgba(&bytes, GPU_MAX_EDGE).map_err(|e| e.to_string())
+                crate::insert::guarded(planora_exchange::ExchangeError::ImageBroken, || {
+                    planora_exchange::decode_rgba(&bytes, GPU_MAX_EDGE)
+                })
+                .map_err(|e| e.to_string())
             });
             self.jobs.insert(key, job);
         }

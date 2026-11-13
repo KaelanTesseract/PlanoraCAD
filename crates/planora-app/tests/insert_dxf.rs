@@ -734,6 +734,7 @@ fn a_file_over_the_reader_limit_is_refused_before_reading() {
         max_bytes: 99,
         too_large: ExchangeError::DxfTooLarge,
         read: must_not_read,
+        broken: ExchangeError::DxfBroken,
     };
     let mut r = BackgroundRead::start(path.clone(), spec.clone());
     assert_eq!(r.wait(), Some(Err(ExchangeError::DxfTooLarge)));

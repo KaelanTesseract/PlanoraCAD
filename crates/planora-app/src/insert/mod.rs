@@ -40,6 +40,22 @@ pub struct ReadSpec<T> {
     pub max_bytes: u64,
     pub too_large: ExchangeError,
     pub read: Reader<T>,
+    /// Fehler „Datei kaputt“ dieses Lesers; auch für eine abgefangene Panik im Leser.
+    pub broken: fn(String) -> ExchangeError,
+}
+
+/// Führt einen fremden Leser oder Entschlüsseler `f` aus: Eine Panik darin wird abgefangen und
+/// als `broken` gemeldet. Der Merker [`crate::crash::expected_panics`] sorgt dafür, dass der
+/// Absturz-Hook dafür keinen Bericht schreibt (Rust ruft den Hook vor dem Abwickeln); sonst
+/// fragte der nächste Start nach einem Absturz, den es nie gab.
+pub fn guarded<R>(
+    broken: fn(String) -> ExchangeError,
+    f: impl FnOnce() -> Result<R, ExchangeError>,
+) -> Result<R, ExchangeError> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::crash::expected_panics(f)
+    }))
+    .unwrap_or_else(|_| Err(broken("internal error".into())))
 }
 
 /// Der DXF-Leser mit [`MAX_DXF_BYTES`].
@@ -48,6 +64,7 @@ pub fn dxf_spec() -> ReadSpec<Import2d> {
         max_bytes: MAX_DXF_BYTES,
         too_large: ExchangeError::DxfTooLarge,
         read: read_dxf,
+        broken: ExchangeError::DxfBroken,
     }
 }
 
@@ -57,6 +74,7 @@ pub fn svg_spec() -> ReadSpec<Import2d> {
         max_bytes: MAX_SVG_BYTES,
         too_large: ExchangeError::SvgTooLarge,
         read: read_svg,
+        broken: ExchangeError::SvgBroken,
     }
 }
 
@@ -173,7 +191,9 @@ fn read_with<T>(path: &Path, progress: &Progress, spec: &ReadSpec<T>) -> Result<
         }
         progress.advance(n as u64);
     }
-    let result = (spec.read)(&bytes, &|| progress.is_cancelled())?;
+    let result = guarded(spec.broken, || {
+        (spec.read)(&bytes, &|| progress.is_cancelled())
+    })?;
     progress.check()?;
     progress.advance(len.max(1));
     Ok(result)
