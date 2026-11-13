@@ -203,8 +203,8 @@ impl SketchSession {
 
     /// Setzt mit dem aktiven Werkzeug (Linie, Spline, Punkt) einen Punkt an `p` (Skizzen-
     /// koordinaten), ohne Fang; `axis`: die Triadenachse, auf der `p` vom vorigen Punkt aus
-    /// liegt. Liegt `p` in der Skizzenebene und ist die Triade die Skizzenebene, entsteht ein
-    /// 2D-Punkt, sonst ein 3D-Punkt (Spec 1). Der Achsfang ergibt an einer Linie `Horizontal`,
+    /// liegt. Liegt `p` in der Skizzenebene (|z| ≤ Toleranz), entsteht ein 2D-Punkt, gleich wie
+    /// die Triade steht, sonst ein 3D-Punkt (Spec 1). Der Achsfang ergibt an einer Linie `Horizontal`,
     /// `Vertical` oder `AlongZ`, wenn die Triadenachse eine Achse der Skizze ist. Atomar wie ein
     /// Klick.
     pub fn place_point_3d(
@@ -274,14 +274,15 @@ impl SketchSession {
         }
     }
 
-    /// Der Punkt für den Klick: der gefangene oder ein neuer (2D nur auf der Skizzenebene bei
-    /// unverdrehter Triade). Fang auf den Ursprung hält ihn dort fest: `Fixed` an einem 2D-,
+    /// Der Punkt für den Klick: der gefangene oder ein neuer (2D, wenn er in der Skizzenebene
+    /// liegt, |z| ≤ Toleranz, gleich wie die Triade steht). Fang auf den Ursprung hält ihn dort fest: `Fixed` an einem 2D-,
     /// `Fixed3(0, 0, 0)` an einem 3D-Punkt.
     fn point3_at(&mut self, sk: &mut Sketch, cur: &Cursor3) -> Result<PointId, Msg> {
         if let Some(q) = cur.snap {
             return Ok(q);
         }
-        let flat = cur.at.z.abs() <= sk.tolerance().linear && self.triad.is_sketch_plane();
+        // Punkte freier Kurven: nur die Lage zählt, nicht die Triade (Spec 1, Ruling Fix-Runde 1).
+        let flat = cur.at.z.abs() <= sk.tolerance().linear;
         let p = if flat {
             sk.add_point(cur.at.x, cur.at.y)
         } else {

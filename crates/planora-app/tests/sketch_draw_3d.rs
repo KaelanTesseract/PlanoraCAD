@@ -281,11 +281,77 @@ fn line_on_sketch_plane_stays_2d() {
         .place_point_3d(sk, DVec3::new(-7.0, 9.0, 4.0), None)
         .unwrap();
     assert!(sk.is_3d_point(q));
+    // Punkte freier Kurven: nur die Lage zählt, nicht die Triade (Fix-Runde 1).
     se.triad.active = TriadPlane::Yz;
     let r = se
         .place_point_3d(sk, DVec3::new(0.0, 12.0, 0.0), None)
         .unwrap();
-    assert!(sk.is_3d_point(r));
+    assert!(!sk.is_3d_point(r));
+}
+
+/// Fix-Runde 1: Bei gedrehter Triade bleiben Linien mit beiden Enden auf z = 0 2D und ergeben ein
+/// Profil.
+#[test]
+fn rotated_triad_lines_on_sketch_plane_stay_2d_and_make_a_profile() {
+    let mut v = View::new(Tool::Line);
+    {
+        let (se, _) = v.se_sk();
+        se.triad.rotate(TriadAxis::Z, 0.4);
+        assert!(!se.triad.is_sketch_plane());
+    }
+    v.frame(vec![]);
+    for p in [
+        DVec3::new(40.0, 10.0, 0.0),
+        DVec3::new(75.0, 25.0, 0.0),
+        DVec3::new(50.0, 50.0, 0.0),
+    ] {
+        v.click3(p);
+        assert!(v.s.sketch_session.as_ref().unwrap().draw3, "3D-Weg");
+    }
+    // Zurück auf den ersten Punkt: der Fang schließt das Dreieck.
+    let first = v.xyz(v.points()[0]);
+    v.click3(first);
+    v.key(Key::Escape);
+    assert_eq!(v.lines().len(), 3);
+    assert_eq!(v.points().len(), 3);
+    for p in v.points() {
+        assert!(!v.sk().is_3d_point(p), "2D-Punkt");
+    }
+    assert_eq!(
+        v.sk().profiles().outlines.len(),
+        1,
+        "das Dreieck ist ein Profil"
+    );
+}
+
+/// Fix-Runde 1: Wechselt die Linie zwischen Ebene und 3D, gilt ein gesperrter Winkel nicht weiter.
+#[test]
+fn switching_between_2d_and_3d_clears_locked_fields() {
+    use planora_app::sketch_input::FieldKind;
+    let mut v = View::new(Tool::Line);
+    v.click3(DVec3::new(40.0, 10.0, 0.0));
+    let aim = v.at3(DVec3::new(60.0, 25.0, 0.0));
+    v.hover(aim);
+    v.frame(vec![key_down(Key::Tab, Modifiers::NONE)]);
+    v.frame(vec![key_up(Key::Tab)]);
+    v.frame(vec![Event::Text("30".into())]);
+    v.hover(aim);
+    let angle = |v: &View| {
+        v.s.sketch_session
+            .as_ref()
+            .unwrap()
+            .input
+            .fields
+            .iter()
+            .find(|f| f.kind == FieldKind::Angle)
+            .and_then(|f| f.locked)
+    };
+    assert!(angle(&v).is_some(), "in der Ebene gesperrt");
+    assert!(!v.s.sketch_session.as_ref().unwrap().draw3);
+    v.set_plane(TriadPlane::Yz);
+    v.hover(aim);
+    assert!(v.s.sketch_session.as_ref().unwrap().draw3);
+    assert_eq!(angle(&v), None, "in 3D nicht mehr gesperrt");
 }
 
 #[test]

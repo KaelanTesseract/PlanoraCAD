@@ -149,7 +149,8 @@ pub struct DrawField {
 }
 
 /// Werkzeug, Art und Stand, zu dem die Felder gehören (siehe [`DrawInput`]): offene Punkte,
-/// Lagen, Kurven, Bogenzug, Stufe von Verschieben/Kopieren oder Muster und die Felder der Stufe.
+/// Lagen, Kurven, Bogenzug, Stufe von Verschieben/Kopieren oder Muster, die Felder der Stufe und
+/// ob in 3D gezeichnet wird.
 type InputKey = (
     Option<Tool>,
     Option<ToolKind>,
@@ -159,6 +160,7 @@ type InputKey = (
     bool,
     TransformStage,
     &'static [FieldKind],
+    bool,
 );
 
 /// Felder der Stufe des laufenden Werkzeugs.
@@ -432,6 +434,9 @@ impl SketchSession {
             },
             // Muster: Die Felder wechseln mit der Art des Kreismusters (Voll ohne Winkel).
             self.stage_fields(),
+            // Zeichnen in 3D oder in der Ebene: Ein gesperrter Winkel hieße im anderen Weg etwas
+            // anderes, darum sind die Felder beim Wechsel leer (Fix-Runde 1 Task 11).
+            self.draw3,
         );
         if self.input.key == key {
             return;
