@@ -295,6 +295,10 @@ pub struct AppState {
     /// erkennt (etwa „Kalibrieren“, das sonst wie „Leinwand bearbeiten“ aussähe). Gilt nur für
     /// genau den nächsten Schritt.
     pub undo_label_hint: Option<fn() -> String>,
+    /// Ist ein Fenster „DXF einfügen“ oder „SVG einfügen“ offen (Stand des letzten Bildes)? Dann
+    /// gehört Esc dem Fenster: Die offene Skizze bricht damit nicht auch ihr Werkzeug ab
+    /// (Gesamtprüfung M1).
+    pub insert_dialog_open: bool,
     /// Vorschau eines offenen Einfügen-Fensters (Skizzen 9, „DXF einfügen“): Linienzüge in
     /// Skizzenkoordinaten auf der gewählten Ebene, als Linien über der Ansicht gezeichnet.
     pub insert_preview: Option<InsertPreview>,
@@ -661,6 +665,7 @@ impl AppState {
             pending_pick: None,
             calibrate: None,
             undo_label_hint: None,
+            insert_dialog_open: false,
             insert_preview: None,
             insert_grips: None,
             canvas_preview: None,

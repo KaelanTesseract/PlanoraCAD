@@ -1454,6 +1454,7 @@ pub fn show_file_dialogs(ctx: &egui::Context, ws: &mut Workspace) {
     {
         tab.canvas_dialog = Some(dialog);
     }
+    tab.state.insert_dialog_open = tab.dxf_dialog.is_some() || tab.svg_dialog.is_some();
     ws.exchange_dir = exchange_dir;
     ws.save_places(places);
 }

@@ -905,3 +905,42 @@ fn mtext_paragraph_format_is_stripped_and_column_break_is_a_newline() {
         e => panic!("kein Text: {e:?}"),
     }
 }
+
+/// Gesamtprüfung I3: Jede Längeneinheit aus `$INSUNITS` kommt mit ihrem mm-Faktor an; nur 0
+/// („ohne Einheit“) ergibt `None`.
+#[test]
+fn every_insunits_length_unit_has_its_factor() {
+    let cases: [(u32, Unit2d, f64); 24] = [
+        (1, Unit2d::Inch, 25.4),
+        (2, Unit2d::Foot, 304.8),
+        (3, Unit2d::Mile, 1_609_344.0),
+        (4, Unit2d::Millimeter, 1.0),
+        (5, Unit2d::Centimeter, 10.0),
+        (6, Unit2d::Meter, 1000.0),
+        (7, Unit2d::Kilometer, 1e6),
+        (8, Unit2d::Microinch, 2.54e-5),
+        (9, Unit2d::Mil, 0.0254),
+        (10, Unit2d::Yard, 914.4),
+        (11, Unit2d::Angstrom, 1e-7),
+        (12, Unit2d::Nanometer, 1e-6),
+        (13, Unit2d::Micron, 1e-3),
+        (14, Unit2d::Decimeter, 100.0),
+        (15, Unit2d::Decameter, 1e4),
+        (16, Unit2d::Hectometer, 1e5),
+        (17, Unit2d::Gigameter, 1e12),
+        (18, Unit2d::AstronomicalUnit, 1.495_978_707e14),
+        (19, Unit2d::LightYear, 9.460_730_472_580_8e18),
+        (20, Unit2d::Parsec, 3.085_677_581_491_367e19),
+        (21, Unit2d::UsSurveyFoot, 304.800_609_6),
+        (22, Unit2d::UsSurveyInch, 25.400_050_8),
+        (23, Unit2d::UsSurveyYard, 914.401_828_8),
+        (24, Unit2d::UsSurveyMile, 1_609_347.218_694),
+    ];
+    for (code, unit, mm) in cases {
+        let imp = read(&format!("9 $INSUNITS\n70 {code}"), "0 POINT\n10 1\n20 2");
+        assert_eq!(imp.units, Some(unit), "$INSUNITS {code}");
+        let f = unit.mm();
+        assert!((f - mm).abs() <= mm * 1e-9, "{code}: {f} statt {mm}");
+    }
+    assert_eq!(read("9 $INSUNITS\n70 0", "0 POINT\n10 1\n20 2").units, None);
+}

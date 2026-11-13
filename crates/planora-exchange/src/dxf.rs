@@ -116,15 +116,35 @@ fn font_of_style(s: &dxf::tables::Style) -> String {
     }
 }
 
-/// Einheit aus `$INSUNITS`; ohne Angabe oder bei Einheiten, die es hier nicht gibt, `None`.
+/// Einheit aus `$INSUNITS`: jede Längeneinheit mit ihrem Faktor; nur „ohne Einheit“ ergibt
+/// `None` (Gesamtprüfung I3: nie „nennt keine Einheit“, wenn die Datei eine nennt).
 fn unit_of(u: Units) -> Option<Unit2d> {
     match u {
+        Units::Unitless => None,
         Units::Millimeters => Some(Unit2d::Millimeter),
         Units::Centimeters => Some(Unit2d::Centimeter),
         Units::Meters => Some(Unit2d::Meter),
         Units::Inches => Some(Unit2d::Inch),
         Units::Feet => Some(Unit2d::Foot),
-        _ => None,
+        Units::Miles => Some(Unit2d::Mile),
+        Units::Kilometers => Some(Unit2d::Kilometer),
+        Units::Microinches => Some(Unit2d::Microinch),
+        Units::Mils => Some(Unit2d::Mil),
+        Units::Yards => Some(Unit2d::Yard),
+        Units::Angstroms => Some(Unit2d::Angstrom),
+        Units::Nanometers => Some(Unit2d::Nanometer),
+        Units::Microns => Some(Unit2d::Micron),
+        Units::Decimeters => Some(Unit2d::Decimeter),
+        Units::Decameters => Some(Unit2d::Decameter),
+        Units::Hectometers => Some(Unit2d::Hectometer),
+        Units::Gigameters => Some(Unit2d::Gigameter),
+        Units::AstronomicalUnits => Some(Unit2d::AstronomicalUnit),
+        Units::LightYears => Some(Unit2d::LightYear),
+        Units::Parsecs => Some(Unit2d::Parsec),
+        Units::USSurveyFeet => Some(Unit2d::UsSurveyFoot),
+        Units::USSurveyInch => Some(Unit2d::UsSurveyInch),
+        Units::USSurveyYard => Some(Unit2d::UsSurveyYard),
+        Units::USSurveyMile => Some(Unit2d::UsSurveyMile),
     }
 }
 

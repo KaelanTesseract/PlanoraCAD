@@ -4,7 +4,8 @@
 use planora_math::DVec2;
 use std::f64::consts::{PI, TAU};
 
-/// Zeicheneinheit einer Datei.
+/// Zeicheneinheit einer Datei: alle Längeneinheiten, die `$INSUNITS` in DXF nennen kann (die
+/// ersten fünf stehen im Dialog immer zur Wahl, die anderen nur, wenn die Datei sie nennt).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unit2d {
     Millimeter,
@@ -12,6 +13,25 @@ pub enum Unit2d {
     Meter,
     Inch,
     Foot,
+    Mile,
+    Kilometer,
+    Microinch,
+    Mil,
+    Yard,
+    Angstrom,
+    Nanometer,
+    Micron,
+    Decimeter,
+    Decameter,
+    Hectometer,
+    Gigameter,
+    AstronomicalUnit,
+    LightYear,
+    Parsec,
+    UsSurveyFoot,
+    UsSurveyInch,
+    UsSurveyYard,
+    UsSurveyMile,
 }
 
 impl Unit2d {
@@ -23,6 +43,25 @@ impl Unit2d {
             Unit2d::Meter => 1000.0,
             Unit2d::Inch => 25.4,
             Unit2d::Foot => 304.8,
+            Unit2d::Mile => 1_609_344.0,
+            Unit2d::Kilometer => 1e6,
+            Unit2d::Microinch => 2.54e-5,
+            Unit2d::Mil => 0.0254,
+            Unit2d::Yard => 914.4,
+            Unit2d::Angstrom => 1e-7,
+            Unit2d::Nanometer => 1e-6,
+            Unit2d::Micron => 1e-3,
+            Unit2d::Decimeter => 100.0,
+            Unit2d::Decameter => 1e4,
+            Unit2d::Hectometer => 1e5,
+            Unit2d::Gigameter => 1e12,
+            Unit2d::AstronomicalUnit => 1.495_978_707e14,
+            Unit2d::LightYear => 9.460_730_472_580_8e18,
+            Unit2d::Parsec => 3.085_677_581_491_367e19,
+            Unit2d::UsSurveyFoot => 1_200_000.0 / 3937.0,
+            Unit2d::UsSurveyInch => 100_000.0 / 3937.0,
+            Unit2d::UsSurveyYard => 3_600_000.0 / 3937.0,
+            Unit2d::UsSurveyMile => 6_336_000_000.0 / 3937.0,
         }
     }
 }

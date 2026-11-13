@@ -352,7 +352,14 @@ impl DxfDialog {
         let into_open = self.into_open();
         let has_loaded = self.loaded.is_some();
         let scope = state.document.param_scope();
-        let ready = has_loaded && self.target.target().is_some() && self.layers.iter().any(|c| *c);
+        let empty = self
+            .loaded
+            .as_ref()
+            .and_then(|l| super::nothing_usable(&l.import));
+        let ready = has_loaded
+            && empty.is_none()
+            && self.target.target().is_some()
+            && self.layers.iter().any(|c| *c);
         let chooser = RefCell::new(&mut self.chooser);
         let (mut body_action, mut footer_action) = (ChooserAction::None, ChooserAction::None);
         let (mut units, mut single, mut frame) = (self.units, self.single, self.frame);
@@ -403,9 +410,18 @@ impl DxfDialog {
                             for u in UNITS {
                                 ui.radio_value(&mut units, u, unit_label(u));
                             }
+                            // Eine Einheit der Datei außerhalb der Liste steht als eigener
+                            // Eintrag dabei (Gesamtprüfung I3).
+                            if let Some(u) = l.import.units.filter(|u| !UNITS.contains(u)) {
+                                let name = tr!("insert-unit-from-file", unit = unit_label(u));
+                                ui.radio_value(&mut units, u, name);
+                            }
                         });
                         if l.import.units.is_none() {
                             ui.colored_label(warning_color(dark), tr!("insert-dxf-no-unit"));
+                        }
+                        if let Some(why) = &empty {
+                            ui.colored_label(error_color(dark), why);
                         }
                         ui.add_space(theme::SPACE_2);
                         ui.strong(tr!("insert-mode"));
@@ -530,6 +546,8 @@ impl DxfDialog {
         }
         // Esc schließt (wie „Abbrechen“), solange kein Feld tippt.
         if !crate::viewport::typing(ctx) && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            // Verbraucht: Esc wirkt nur hier, nicht auch noch anderswo.
+            ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
             close = true;
         }
         if ok && field_errors.is_empty() && self.insert(state).is_ok() {

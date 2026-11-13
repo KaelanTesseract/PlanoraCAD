@@ -216,6 +216,25 @@ pub fn unit_label(u: Unit2d) -> String {
         Unit2d::Meter => tr!("import-unit-m"),
         Unit2d::Inch => tr!("import-unit-inch"),
         Unit2d::Foot => tr!("insert-unit-ft"),
+        Unit2d::Mile => tr!("insert-unit-mile"),
+        Unit2d::Kilometer => tr!("insert-unit-km"),
+        Unit2d::Microinch => tr!("insert-unit-microinch"),
+        Unit2d::Mil => tr!("insert-unit-mil"),
+        Unit2d::Yard => tr!("insert-unit-yard"),
+        Unit2d::Angstrom => tr!("insert-unit-angstrom"),
+        Unit2d::Nanometer => tr!("insert-unit-nm"),
+        Unit2d::Micron => tr!("insert-unit-micron"),
+        Unit2d::Decimeter => tr!("insert-unit-dm"),
+        Unit2d::Decameter => tr!("insert-unit-dam"),
+        Unit2d::Hectometer => tr!("insert-unit-hm"),
+        Unit2d::Gigameter => tr!("insert-unit-gm"),
+        Unit2d::AstronomicalUnit => tr!("insert-unit-au"),
+        Unit2d::LightYear => tr!("insert-unit-ly"),
+        Unit2d::Parsec => tr!("insert-unit-parsec"),
+        Unit2d::UsSurveyFoot => tr!("insert-unit-us-ft"),
+        Unit2d::UsSurveyInch => tr!("insert-unit-us-in"),
+        Unit2d::UsSurveyYard => tr!("insert-unit-us-yd"),
+        Unit2d::UsSurveyMile => tr!("insert-unit-us-mi"),
     }
 }
 
@@ -247,6 +266,21 @@ pub fn skipped_summary(s: &Skipped) -> Option<Msg> {
         .collect();
     let items = join_and(items)?;
     Some(crate::msg!("insert-skipped-summary", items = items))
+}
+
+/// Grund, warum eine gelesene Datei nichts zum Einfügen hat (kein einziges Element), mit dem
+/// Übersprungenen; `None`, wenn es etwas gibt. Das Fenster zeigt ihn statt eines stumm
+/// gesperrten OK (Gesamtprüfung M2).
+pub fn nothing_usable(import: &Import2d) -> Option<String> {
+    if import.element_count() > 0 {
+        return None;
+    }
+    let mut text = tr!("insert-nothing-usable");
+    if let Some(s) = skipped_summary(&import.skipped) {
+        text.push(' ');
+        text.push_str(&s.text());
+    }
+    Some(text)
 }
 
 /// „a, b und c“: alle bis auf das letzte mit Komma, das letzte mit „und“.

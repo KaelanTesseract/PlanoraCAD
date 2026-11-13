@@ -437,7 +437,11 @@ impl SvgDialog {
         let pick_error = self.target.error.as_ref().map(Msg::text);
         let has_loaded = self.loaded.is_some();
         let scope = state.document.param_scope();
-        let ready = has_loaded && self.target.target().is_some();
+        let empty = self
+            .loaded
+            .as_ref()
+            .and_then(|l| super::nothing_usable(&l.import));
+        let ready = has_loaded && empty.is_none() && self.target.target().is_some();
         let chooser = RefCell::new(&mut self.chooser);
         let (mut body_action, mut footer_action) = (ChooserAction::None, ChooserAction::None);
         let (mut flip_h, mut flip_v, mut frame) = (self.flip_h, self.flip_v, self.frame);
@@ -484,6 +488,9 @@ impl SvgDialog {
                         target.show(ui, state);
                         ui.add_space(theme::SPACE_2);
                         ui.weak(tr!("insert-svg-grips-hint"));
+                        if let Some(why) = &empty {
+                            ui.colored_label(error_color(dark), why);
+                        }
                     };
                     let mut place_card = |ui: &mut egui::Ui| {
                         egui::Grid::new("insert-svg-fields")
@@ -589,6 +596,8 @@ impl SvgDialog {
             && !crate::viewport::typing(ctx)
             && ctx.input(|i| i.key_pressed(egui::Key::Escape))
         {
+            // Verbraucht: Esc wirkt nur hier, nicht auch noch anderswo.
+            ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
             close = true;
         }
         if ok && field_errors.is_empty() && self.insert(state).is_ok() {

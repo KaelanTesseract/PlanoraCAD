@@ -130,15 +130,20 @@ fn parse(bytes: &[u8], max_bytes: u64) -> Result<(Tree, usize, usize, usize), Ex
     let text = std::str::from_utf8(raw).map_err(|e| ExchangeError::SvgBroken(e.to_string()))?;
     reject_entities(text)?;
     let mut doc = parse_xml(text)?;
-    // Markierungen (`<marker>`) setzt usvg an jeden Pfadpunkt neu ein; das ließe sich nicht
-    // vorab begrenzen. Sie werden darum samt Inhalt aus dem Text geschnitten: Jeder Verweis
-    // darauf (Attribut, `style`, CSS) läuft ins Leere. Pfeilspitzen u. ä. werden nicht gelesen.
-    let ranges = marker_ranges(&doc);
-    let markers = ranges.len();
+    // Markierungen (`<marker>`) setzt usvg an jeden Pfadpunkt neu ein, Muster (`<pattern>`),
+    // Clip-Pfade und Masken (Einheit `objectBoundingBox`) für jedes Element, das sie nutzt, und
+    // `feImage` in Filtern je Filter. Das ließe sich nicht vorab begrenzen (ein kleines SVG
+    // ergäbe Hunderte Millionen Kopien). Sie werden darum samt Inhalt aus dem Text geschnitten
+    // (Gesamtprüfung I4; die Spec liest sie ohnehin nicht). Muster und Filter bleiben als leere
+    // Stellvertreter mit derselben Kennung stehen, damit Formen, die sie nutzen, ihren Umriss
+    // behalten (usvg ließe sonst ein Element mit verlorenem Filter ganz weg und eine Fläche mit
+    // verlorenem Muster unsichtbar).
+    let cuts = resource_cuts(&doc);
+    let markers = cuts.len();
     let cleaned;
     let mut text = text;
     if markers > 0 {
-        cleaned = cut_ranges(text, &ranges);
+        cleaned = cut_ranges(text, &cuts);
         text = &cleaned;
         doc = parse_xml(text)?;
     }
@@ -172,31 +177,83 @@ fn parse_xml(text: &str) -> Result<roxmltree::Document<'_>, ExchangeError> {
     })
 }
 
-/// Textbereiche aller äußersten `<marker>`-Elemente, in Dokumentreihenfolge.
-fn marker_ranges(doc: &roxmltree::Document) -> Vec<std::ops::Range<usize>> {
-    let mut out: Vec<std::ops::Range<usize>> = Vec::new();
-    for n in doc.descendants() {
-        if n.is_element()
+/// Elemente, die vor usvg ausgeschnitten werden (siehe `parse`).
+const CUT_ELEMENTS: [&str; 5] = ["marker", "pattern", "clipPath", "mask", "filter"];
+
+/// Ein ausgeschnittener Bereich und was an seiner Stelle steht.
+struct Cut {
+    range: std::ops::Range<usize>,
+    replacement: String,
+}
+
+/// Bereiche aller äußersten auszuschneidenden Elemente in Dokumentreihenfolge. An ihrer Stelle
+/// stehen Stellvertreter für jedes Muster und jeden Filter darin (auch verschachtelte), mit
+/// derselben Kennung: ein Verlauf mit einer Farbe für ein Muster (usvg macht daraus eine
+/// Farbe), ein wirkungsloser Filter in Nutzerkoordinaten (einmal umgesetzt, für alle Nutzer).
+fn resource_cuts(doc: &roxmltree::Document) -> Vec<Cut> {
+    let is_cut = |n: &roxmltree::Node| {
+        n.is_element()
             && n.tag_name().namespace() == Some(SVG_NS)
-            && n.tag_name().name() == "marker"
-        {
-            let r = n.range();
-            // Verschachtelte Markierungen liegen schon im Bereich der äußeren.
-            if out.last().is_none_or(|l| r.start >= l.end) {
-                out.push(r);
+            && CUT_ELEMENTS.contains(&n.tag_name().name())
+    };
+    let mut out: Vec<Cut> = Vec::new();
+    for n in doc.descendants() {
+        if !is_cut(&n) {
+            continue;
+        }
+        let r = n.range();
+        // Verschachtelte liegen schon im Bereich des äußeren.
+        if out.last().is_some_and(|l| r.start < l.range.end) {
+            continue;
+        }
+        let mut replacement = String::new();
+        for d in n.descendants().filter(|d| is_cut(d)) {
+            let Some(id) = d.attribute("id") else {
+                continue;
+            };
+            let id = xml_escape(id);
+            match d.tag_name().name() {
+                "pattern" => replacement.push_str(&format!(
+                    r#"<linearGradient id="{id}"><stop offset="0" stop-color="black"/></linearGradient>"#
+                )),
+                "filter" => replacement.push_str(&format!(
+                    r#"<filter id="{id}" filterUnits="userSpaceOnUse" x="0" y="0" width="1" height="1"><feOffset/></filter>"#
+                )),
+                _ => {}
             }
+        }
+        out.push(Cut {
+            range: r,
+            replacement,
+        });
+    }
+    out
+}
+
+/// Text für einen Attributwert in doppelten Anführungszeichen.
+fn xml_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            c => out.push(c),
         }
     }
     out
 }
 
-/// Der Text ohne die angegebenen (geordneten, getrennten) Bereiche.
-fn cut_ranges(text: &str, ranges: &[std::ops::Range<usize>]) -> String {
+/// Der Text mit den (geordneten, getrennten) Bereichen durch ihren Ersatz ersetzt.
+fn cut_ranges(text: &str, cuts: &[Cut]) -> String {
     let mut out = String::with_capacity(text.len());
     let mut at = 0;
-    for r in ranges {
-        out.push_str(&text[at..r.start]);
-        at = r.end;
+    for c in cuts {
+        out.push_str(&text[at..c.range.start]);
+        out.push_str(&c.replacement);
+        at = c.range.end;
     }
     out.push_str(&text[at..]);
     out

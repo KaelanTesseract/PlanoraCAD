@@ -755,3 +755,64 @@ fn a_file_over_the_reader_limit_is_refused_before_reading() {
     assert_eq!(planora_exchange::MAX_DXF_BYTES, 256 * 1024 * 1024);
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Gesamtprüfung M1: In einer offenen Skizze schließt ein Esc das Fenster „DXF einfügen“, das
+/// Skizzenwerkzeug bleibt (ein Esc wirkt nicht zweimal). Ein zweites Esc gilt wieder der Skizze:
+/// Es beendet das leere Bemaßen (wie in Fusion).
+#[test]
+fn one_esc_closes_the_dialog_but_not_the_sketch_tool() {
+    let mut ws = workspace();
+    let key = chord(Key::I, true, true);
+    assert_eq!(
+        ws.keymap.set(Action::InsertDxf, 0, Binding::Key(key)),
+        SetResult::Ok
+    );
+    {
+        let s = &mut ws.active_tab_mut().state;
+        let id = s
+            .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+            .unwrap();
+        s.open_sketch(id).unwrap();
+        let (se, sk) = s.session_sketch_mut().unwrap();
+        se.set_tool(sk, planora_app::sketch_state::Tool::Dimension);
+    }
+    ws.observe_history(false);
+    let mut rig = Rig::new(ws);
+    rig.press(key);
+    assert!(rig.app.ws_mut().active_tab().dxf_dialog.is_some());
+    let esc = KeyChord {
+        key: Key::Escape,
+        ctrl: false,
+        shift: false,
+        alt: false,
+    };
+    rig.press(esc);
+    let tab = rig.app.ws_mut().active_tab();
+    assert!(tab.dxf_dialog.is_none(), "Fenster zu");
+    let tool = tab.state.sketch_session.as_ref().map(|se| se.tool);
+    assert_eq!(
+        tool,
+        Some(planora_app::sketch_state::Tool::Dimension),
+        "Werkzeug bleibt"
+    );
+    rig.press(esc);
+    let tab = rig.app.ws_mut().active_tab();
+    let tool = tab.state.sketch_session.as_ref().map(|se| se.tool);
+    assert_ne!(
+        tool,
+        Some(planora_app::sketch_state::Tool::Dimension),
+        "zweites Esc beendet das leere Bemaßen"
+    );
+}
+
+/// Gesamtprüfung M2: Eine DXF ohne ein einziges brauchbares Element (nur Schraffur) nennt den
+/// Grund samt Übersprungenem, statt nur OK zu sperren.
+#[test]
+fn a_dxf_without_usable_elements_names_the_reason() {
+    let dxf = "0\nSECTION\n2\nENTITIES\n0\nHATCH\n8\n0\n0\nENDSEC\n0\nEOF\n";
+    let imp = planora_exchange::read_dxf(dxf.as_bytes(), &|| false).unwrap();
+    assert_eq!(imp.element_count(), 0);
+    let why = planora_app::insert::nothing_usable(&imp).expect("Grund");
+    assert!(why.contains("nichts"), "{why}");
+    assert!(why.contains("Schraffur"), "{why}");
+}

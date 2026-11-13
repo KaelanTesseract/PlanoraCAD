@@ -1476,6 +1476,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     .then(|| state.document.param_scope());
     // Text: OK über Eingabe setzt mit der Schriftliste.
     let fonts = state.fonts().cloned();
+    let dialog_takes_esc = state.insert_dialog_open;
     let Some((se, sf)) = state.session_draft_mut() else {
         return;
     };
@@ -1509,8 +1510,11 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             se.begin_line_arc(&sf.sketch, start, r);
         }
     }
-    let esc =
-        !flyout && !viewport::typing(ui.ctx()) && ui.input(|i| i.key_pressed(egui::Key::Escape));
+    // Ein offenes Einfügen-Fenster (DXF, SVG) nimmt Esc selbst; die Skizze sieht sie nicht.
+    let esc = !flyout
+        && !dialog_takes_esc
+        && !viewport::typing(ui.ctx())
+        && ui.input(|i| i.key_pressed(egui::Key::Escape));
     // Griffzug: Die rechte Taste und Esc nehmen ihn ganz zurück. Das steht vor dem Ende des Zugs, denn
     // Esc beendet schon hier den Zug von egui, und das hieße Annehmen. Die Taste gilt damit als
     // verbraucht: Sie leert nicht auch noch die Auswahl.

@@ -369,3 +369,84 @@ fn arrow_marker_imports_only_the_path() {
     assert_eq!(imp.element_count(), 2, "{:?}", elements(&imp));
     assert_eq!(imp.skipped.unknown, 1);
 }
+
+// ---- Gesamtprüfung I4: Muster, Clip-Pfade, Masken und Filter werden ausgeschnitten ----------
+
+/// Elemente eines einzelnen gefüllten Rechtecks (Vergleichswert).
+fn per_rect() -> usize {
+    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect x="0" y="0" width="1" height="1" fill="black"/></svg>"##;
+    read_svg(svg, NEVER).unwrap().element_count()
+}
+
+/// `n` Rechtecke mit den Attributen `attrs`, nebeneinander.
+fn rects(n: usize, attrs: &str) -> String {
+    let mut out = String::new();
+    for i in 0..n {
+        out.push_str(&format!(
+            r#"<rect x="{}" y="0" width="1" height="1" {attrs}/>"#,
+            i * 2
+        ));
+    }
+    out
+}
+
+#[test]
+fn pattern_bomb_finishes_quickly_and_shapes_keep_their_outline() {
+    // 5 000 Flächen nutzen ein Muster mit 5 000 Formen: usvg kopierte das Muster je Fläche
+    // (25 Millionen Formen). Ausgeschnitten bleibt jede Fläche mit ihrem Umriss.
+    let n = 5_000;
+    let svg = format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><defs><pattern id="p" width="1" height="1">{}</pattern></defs>{}</svg>"##,
+        rects(n, r#"fill="black""#),
+        rects(n, r##"fill="url(#p)""##)
+    );
+    let t = std::time::Instant::now();
+    let imp = read_svg(svg.as_bytes(), NEVER).unwrap();
+    assert!(t.elapsed().as_secs_f64() < 5.0, "{:?}", t.elapsed());
+    assert_eq!(imp.element_count(), n * per_rect());
+    assert_eq!(imp.skipped.unknown, 1);
+}
+
+#[test]
+fn clip_path_and_fe_image_bomb_finishes_quickly() {
+    // Clip-Pfad in `objectBoundingBox` (je Nutzer neu umgesetzt) und ein Filter mit `feImage`
+    // auf eine große Gruppe (je Filter neu umgesetzt), beide von 5 000 Formen genutzt.
+    let n = 5_000;
+    let svg = format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="10" height="10"><defs>
+        <clipPath id="c" clipPathUnits="objectBoundingBox">{big}</clipPath>
+        <g id="big">{big}</g>
+        <filter id="f" filterUnits="objectBoundingBox"><feImage xlink:href="#big"/></filter>
+        </defs>{clipped}{filtered}</svg>"##,
+        big = rects(n, r#"fill="black""#),
+        clipped = rects(n, r##"fill="black" clip-path="url(#c)""##),
+        filtered = rects(n, r##"fill="black" filter="url(#f)""##),
+    );
+    let t = std::time::Instant::now();
+    let imp = read_svg(svg.as_bytes(), NEVER).unwrap();
+    assert!(t.elapsed().as_secs_f64() < 5.0, "{:?}", t.elapsed());
+    // Beide Gruppen behalten ihre Umrisse (ein Filter mit verlorenem Ziel ließe usvg das
+    // Element ganz weg).
+    assert_eq!(imp.element_count(), 2 * n * per_rect());
+    assert_eq!(imp.skipped.unknown, 2);
+}
+
+#[test]
+fn shapes_with_mask_filter_or_pattern_in_style_keep_their_outline() {
+    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+        <defs>
+          <mask id="m"><rect width="100" height="100" fill="white"/></mask>
+          <filter id="f"><feGaussianBlur stdDeviation="2"/></filter>
+          <pattern id="p" width="4" height="4"><circle r="1"/></pattern>
+          <style>.q { fill: url(#p) }</style>
+        </defs>
+        <rect x="0" y="0" width="10" height="10" style="mask:url(#m)" fill="black"/>
+        <rect x="20" y="0" width="10" height="10" style="filter:url(#f)" fill="black"/>
+        <rect x="40" y="0" width="10" height="10" style="fill:url(#p)"/>
+        <rect x="60" y="0" width="10" height="10" class="q"/>
+        <rect x="80" y="0" width="10" height="10" stroke="url(#p)" fill="none"/>
+        </svg>"##;
+    let imp = read_svg(svg, NEVER).unwrap();
+    assert_eq!(imp.element_count(), 5 * per_rect(), "{:?}", elements(&imp));
+    assert_eq!(imp.skipped.unknown, 3);
+}
