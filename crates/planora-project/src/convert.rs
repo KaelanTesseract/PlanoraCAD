@@ -48,7 +48,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Höchste lesbare Formatnummer der Versionsdateien (P7, P12, F7).
-pub const FORMAT_VERSION: u32 = 19;
+pub const FORMAT_VERSION: u32 = 20;
 /// Formatnummer der Rahmendateien `dokument.json` und `.autosave.json`; ihre Struktur ist seit
 /// Format 1 unverändert, ältere Programme öffnen das Projekt deshalb weiter (P7).
 pub const CONTAINER_FORMAT: u32 = 1;
@@ -59,7 +59,8 @@ const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 /// Einfügen). Ein einzelnes Bild ist zusätzlich auf `MAX_IMAGE_BYTES` begrenzt.
 const MAX_IMAGES_BYTES: u64 = MAX_IMAGES_TOTAL_BYTES;
 
-/// Kleinste Formatnummer, die den Stand darstellt (die Regeln in dieser Reihenfolge geprüft): 19
+/// Kleinste Formatnummer, die den Stand darstellt (die Regeln in dieser Reihenfolge geprüft): 20
+/// mit 3D-Geometrie oder dem Haken „3D-Skizze“ in einer Skizze ([`needs_format_20`]), 19
 /// mit einer Leinwand (auch unterdrückt: ihr Bild muss in der Datei stehen) oder einem
 /// Kontrollpunktrahmen an einer Skizzenkurve ([`needs_format_19`], auch an einem gelöschten
 /// Kurveneintrag), 18
@@ -79,7 +80,7 @@ const MAX_IMAGES_BYTES: u64 = MAX_IMAGES_TOTAL_BYTES;
 /// Stückliste auf einem Blatt), 6 mit Blatt- oder Projektangaben, 5 mit Maßen oder
 /// eingeschalteten Mittellinien, 4 mit Zeichnungen, 3 mit Netz-Körpern, 2 mit Rundungen oder
 /// Fasen, sonst 1 (P7, P12, F7, Teilprojekt 12 P11, Teilprojekt STEP-Import, Verlaufsleiste,
-/// Teilprojekt Zoll, Teilprojekte Skizzen 1, 3, 5, 6, 7, 8 und 9).
+/// Teilprojekt Zoll, Teilprojekte Skizzen 1, 3, 5, 6, 7, 8, 9 und 10).
 pub fn required_format(s: &Snapshot) -> u32 {
     format_with(s, &profile_fields(s))
 }
@@ -89,7 +90,9 @@ fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
     let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
     // Der Ordner „Leinwände“ kann nur mit einer Leinwand ausgeblendet sein (das Dokument räumt
     // ihn mit der letzten Leinwand weg); er braucht darum keine eigene Regel.
-    if has(needs_format_19) {
+    if has(needs_format_20) {
+        20
+    } else if has(needs_format_19) {
         19
     } else if has(needs_format_18) {
         18
@@ -137,6 +140,13 @@ fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
     } else {
         1
     }
+}
+/// Braucht die Art Format 20 (Skizzen 10)? Eine Skizze mit 3D-Geometrie (3D-Punkt, Kurve mit
+/// Normale, Freiformkurve im Raum, `AlongZ`, `Fixed3`, die internen `InPlane`/`EllipseAxes3`)
+/// oder dem Haken „3D-Skizze“, auch in einem gelöschten Eintrag: Er steht in der Datei
+/// ([`Sketch::has_3d_entry`]). Die neuen Herkunftsarten kommen mit Task 15 dazu (Ruling R3).
+fn needs_format_20(k: &FeatureKind) -> bool {
+    matches!(k, FeatureKind::Sketch(sf) if sf.sketch.has_3d_entry())
 }
 /// Braucht die Art Format 19 (Skizzen 9)? Eine Leinwand oder eine Skizze mit einem
 /// Kontrollpunktrahmen, auch an einem gelöschten Kurveneintrag: Er steht in der Datei.
@@ -366,17 +376,17 @@ fn curve_to(k: &CurveKind) -> CurveKindDto {
             start: start.index(),
             ende: end.index(),
         },
-        // `az` (3D-Ellipse) kommt erst mit Format 20 in die Datei (Skizzen 10).
         CurveKind::Ellipse {
             center,
             ax,
             ay,
+            az,
             minor,
-            ..
         } => CurveKindDto::Ellipse {
             mitte: center.index(),
             ax: *ax,
             ay: *ay,
+            az: *az,
             klein: *minor,
         },
         CurveKind::Spline { points, handles } => CurveKindDto::Spline {
@@ -387,14 +397,15 @@ fn curve_to(k: &CurveKind) -> CurveKindDto {
             center,
             ax,
             ay,
+            az,
             minor,
             start,
             end,
-            ..
         } => CurveKindDto::Ellipsenbogen {
             mitte: center.index(),
             ax: *ax,
             ay: *ay,
+            az: *az,
             klein: *minor,
             start: start.index(),
             ende: end.index(),
@@ -426,6 +437,12 @@ fn curve_to(k: &CurveKind) -> CurveKindDto {
             knoten: curve.knots().knots().to_vec(),
             punkte: curve.control_points().iter().map(|q| [q.x, q.y]).collect(),
             gewichte: curve.weights().to_vec(),
+            // Höhen nur bei einer Freiformkurve im Raum (Format 20, Skizzen 10).
+            hoehen: if curve.control_points().iter().any(|q| q.z != 0.0) {
+                curve.control_points().iter().map(|q| q.z).collect()
+            } else {
+                Vec::new()
+            },
         },
     }
 }
@@ -486,12 +503,13 @@ fn curve_from(d: &CurveKindDto) -> std::result::Result<CurveKind, String> {
             mitte,
             ax,
             ay,
+            az,
             klein,
         } => CurveKind::Ellipse {
             center: p(*mitte),
             ax: *ax,
             ay: *ay,
-            az: None,
+            az: *az,
             minor: *klein,
         },
         CurveKindDto::Spline { punkte, griffe } => CurveKind::Spline {
@@ -502,6 +520,7 @@ fn curve_from(d: &CurveKindDto) -> std::result::Result<CurveKind, String> {
             mitte,
             ax,
             ay,
+            az,
             klein,
             start,
             ende,
@@ -509,7 +528,7 @@ fn curve_from(d: &CurveKindDto) -> std::result::Result<CurveKind, String> {
             center: p(*mitte),
             ax: *ax,
             ay: *ay,
-            az: None,
+            az: *az,
             minor: *klein,
             start: p(*start),
             end: p(*ende),
@@ -541,29 +560,42 @@ fn curve_from(d: &CurveKindDto) -> std::result::Result<CurveKind, String> {
             knoten,
             punkte,
             gewichte,
-        } => CurveKind::FixedSpline {
-            start: p(*start),
-            end: p(*ende),
-            curve: Arc::new(
-                NurbsCurve::new(
-                    *grad,
-                    knoten.clone(),
-                    punkte.iter().map(|q| DVec3::new(q[0], q[1], 0.0)).collect(),
-                    gewichte.clone(),
-                )
-                .map_err(|e| e.to_string())?,
-            ),
-        },
+            hoehen,
+        } => {
+            // Ohne Höhen liegt die Kurve in der Skizzenebene; sonst je Kontrollpunkt eine.
+            if !hoehen.is_empty() && hoehen.len() != punkte.len() {
+                return Err(tr!("sketch-err-data-fixed-spline"));
+            }
+            let z = |i: usize| hoehen.get(i).copied().unwrap_or(0.0);
+            CurveKind::FixedSpline {
+                start: p(*start),
+                end: p(*ende),
+                curve: Arc::new(
+                    NurbsCurve::new(
+                        *grad,
+                        knoten.clone(),
+                        punkte
+                            .iter()
+                            .enumerate()
+                            .map(|(i, q)| DVec3::new(q[0], q[1], z(i)))
+                            .collect(),
+                        gewichte.clone(),
+                    )
+                    .map_err(|e| e.to_string())?,
+                ),
+            }
+        }
     })
 }
 
-/// Eintrag einer Abhängigkeit in der Datei; `None` für `InPlane` (Skizzen 10), das nicht als
-/// eigener Eintrag in die Datei kommt.
-fn constraint_to(k: &ConstraintKind) -> Option<ConstraintKindDto> {
+/// Eintrag einer Abhängigkeit in der Datei. Alle Einträge kommen hinein, auch die internen
+/// (`InPlane` und `EllipseAxes3` wie `ArcRadius`, ab Format 20): So behalten alle Abhängigkeiten
+/// beim Laden ihre Ids.
+fn constraint_to(k: &ConstraintKind) -> ConstraintKindDto {
     use ConstraintKind as K;
     use ConstraintKindDto as D;
     let (p, c) = (|x: &PointId| x.index(), |x: &CurveId| x.index());
-    Some(match k {
+    match k {
         K::Coincident(a, b) => D::Deckungsgleich { a: p(a), b: p(b) },
         K::PointOnCurve(a, k) => D::PunktAufKurve {
             punkt: p(a),
@@ -670,10 +702,22 @@ fn constraint_to(k: &ConstraintKind) -> Option<ConstraintKindDto> {
             },
             wert: *v,
         },
-        K::InPlane(_) => return None,
-        // Noch nicht in der Datei (Skizzen 10): Format 20 bringt sie mit Task 7.
-        K::AlongZ(_) | K::Fixed3(..) | K::EllipseAxes3(..) => return None,
-    })
+        K::AlongZ(l) => D::EntlangZ { ziel: lop_to(l) },
+        K::Fixed3(a, x, y, z) => D::Fest3 {
+            punkt: p(a),
+            x: *x,
+            y: *y,
+            z: *z,
+        },
+        K::InPlane(k) => D::InEbene { kurve: c(k) },
+        K::EllipseAxes3(k, x, y, z, m) => D::EllipsenAchsen3 {
+            kurve: c(k),
+            x: *x,
+            y: *y,
+            z: *z,
+            klein: *m,
+        },
+    }
 }
 
 fn constraint_from(d: &ConstraintKindDto) -> ConstraintKind {
@@ -730,6 +774,16 @@ fn constraint_from(d: &ConstraintKindDto) -> ConstraintKind {
             },
             *wert,
         ),
+        D::EntlangZ { ziel } => K::AlongZ(lop_from(ziel)),
+        D::Fest3 { punkt, x, y, z } => K::Fixed3(p(*punkt), *x, *y, *z),
+        D::InEbene { kurve } => K::InPlane(c(*kurve)),
+        D::EllipsenAchsen3 {
+            kurve,
+            x,
+            y,
+            z,
+            klein,
+        } => K::EllipseAxes3(c(*kurve), *x, *y, *z, *klein),
     }
 }
 
@@ -1054,6 +1108,7 @@ fn sketch_to(s: &Sketch) -> SketchDto {
             .map(|p| PointDto {
                 x: p.x,
                 y: p.y,
+                z: p.z,
                 konstruktion: p.construction,
                 aktiv: p.alive,
             })
@@ -1067,26 +1122,25 @@ fn sketch_to(s: &Sketch) -> SketchDto {
                 mittellinie: c.centerline,
                 aktiv: c.alive,
                 rahmen: c.show_frame,
+                normale: c.normal.map(v3),
             })
             .collect(),
-        // `InPlane` steht nicht in der Datei (Skizzen 10; Format 20 regelt Task 7).
         abhaengigkeiten: d
             .constraints
             .iter()
-            .filter_map(|c| {
-                Some(ConstraintDto {
-                    art: constraint_to(&c.kind)?,
-                    zweig: c.branch,
-                    gesteuert: c.driven,
-                    aktiv: c.enabled,
-                    intern: c.internal,
-                    extra: c.extra,
-                    lebt: c.alive,
-                })
+            .map(|c| ConstraintDto {
+                art: constraint_to(&c.kind),
+                zweig: c.branch,
+                gesteuert: c.driven,
+                aktiv: c.enabled,
+                intern: c.internal,
+                extra: c.extra,
+                lebt: c.alive,
             })
             .collect(),
         muster: d.patterns.iter().map(pattern_to).collect(),
         texte: d.texts.iter().map(text_to).collect(),
+        drei_d: d.three_d,
     }
 }
 
@@ -1138,8 +1192,7 @@ fn sketch_from(origin: &str, feature: &str, d: &SketchDto) -> Result<(Sketch, us
             .map(|p| PointRecord {
                 x: p.x,
                 y: p.y,
-                // 3D-Punkte kommen erst mit Format 20 in die Datei (Skizzen 10).
-                z: None,
+                z: p.z,
                 construction: p.konstruktion,
                 alive: p.aktiv,
             })
@@ -1153,8 +1206,11 @@ fn sketch_from(origin: &str, feature: &str, d: &SketchDto) -> Result<(Sketch, us
                     construction: c.konstruktion,
                     centerline: c.mittellinie,
                     show_frame: c.rahmen,
-                    // Normalen kommen erst mit Format 20 in die Datei (Skizzen 10).
-                    normal: None,
+                    // Normiert prüft `Sketch::from_data`.
+                    normal: c
+                        .normale
+                        .map(|n| dv3(origin, &|| sketch_label(feature, tr!("proj-l-normal")), n))
+                        .transpose()?,
                     alive: c.aktiv,
                 })
             })
@@ -1174,8 +1230,7 @@ fn sketch_from(origin: &str, feature: &str, d: &SketchDto) -> Result<(Sketch, us
             .collect(),
         patterns: patterns_from(origin, feature, d)?,
         texts: texts_from(origin, feature, d)?,
-        // Der Haken „3D-Skizze“ kommt erst mit Format 20 in die Datei (Skizzen 10).
-        three_d: false,
+        three_d: d.drei_d,
     };
     Sketch::from_data_counted(data).map_err(|e| ctx(e.to_string()))
 }
@@ -3432,6 +3487,35 @@ fn has_control_frame(k: &KindDto) -> bool {
     matches!(k, KindDto::Skizze(s) if s.skizze.kurven.iter().any(|c| c.rahmen))
 }
 
+/// 3D-Geometrie in einer Skizze der Datei (Gegenstück zu [`needs_format_20`]).
+fn has_format_20_data(k: &KindDto) -> bool {
+    let KindDto::Skizze(s) = k else {
+        return false;
+    };
+    let s = &s.skizze;
+    s.drei_d
+        || s.punkte.iter().any(|p| p.z.is_some())
+        || s.kurven.iter().any(|c| {
+            c.normale.is_some()
+                || match &c.art {
+                    CurveKindDto::Ellipse { az, .. } | CurveKindDto::Ellipsenbogen { az, .. } => {
+                        az.is_some()
+                    }
+                    CurveKindDto::FesterSpline { hoehen, .. } => !hoehen.is_empty(),
+                    _ => false,
+                }
+        })
+        || s.abhaengigkeiten.iter().any(|c| {
+            matches!(
+                c.art,
+                ConstraintKindDto::EntlangZ { .. }
+                    | ConstraintKindDto::Fest3 { .. }
+                    | ConstraintKindDto::InEbene { .. }
+                    | ConstraintKindDto::EllipsenAchsen3 { .. }
+            )
+        })
+}
+
 /// Liest eine Versionsdatei. `origin` ist der Dateiname für Meldungen.
 pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
     // Erst nur das Format lesen, damit eine neuere Datei auch bei geänderter Struktur die
@@ -3621,6 +3705,16 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
                 "proj-since-format",
                 what = tr!("proj-feat-control-frame"),
                 format = "19"
+            ),
+        ));
+    }
+    if file.format < 20 && file.features.iter().any(|f| has_format_20_data(&f.art)) {
+        return Err(ProjectError::corrupt(
+            origin,
+            tr!(
+                "proj-since-format",
+                what = tr!("proj-feat-3d-sketch"),
+                format = "20"
             ),
         ));
     }

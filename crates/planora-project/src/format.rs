@@ -776,6 +776,9 @@ pub struct FrameDto {
 pub struct PointDto {
     pub x: usize,
     pub y: usize,
+    /// Ab Format 20: Index der z-Variable eines 3D-Punkts; fehlt bei einem 2D-Punkt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub z: Option<usize>,
     pub konstruktion: bool,
     pub aktiv: bool,
 }
@@ -800,6 +803,9 @@ pub enum CurveKindDto {
         mitte: usize,
         ax: usize,
         ay: usize,
+        /// Ab Format 20: z-Anteil der großen Halbachse einer Ellipse mit Normale.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        az: Option<usize>,
         klein: usize,
     },
     Spline {
@@ -813,6 +819,9 @@ pub enum CurveKindDto {
         mitte: usize,
         ax: usize,
         ay: usize,
+        /// Ab Format 20: wie bei [`CurveKindDto::Ellipse`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        az: Option<usize>,
         klein: usize,
         start: usize,
         ende: usize,
@@ -839,6 +848,10 @@ pub enum CurveKindDto {
         knoten: Vec<f64>,
         punkte: Vec<[f64; 2]>,
         gewichte: Vec<f64>,
+        /// Ab Format 20: z der Kontrollpunkte einer Freiformkurve im Raum; fehlt, wenn alle
+        /// null sind.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        hoehen: Vec<f64>,
     },
 }
 
@@ -883,6 +896,10 @@ pub struct CurveDto {
     /// Kontrollpunktrahmen (ab Format 19); fehlt, wenn aus.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub rahmen: bool,
+    /// Ab Format 20: Normale einer ebenen Kurve außerhalb der Skizzenebene; fehlt in der
+    /// Skizzenebene.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normale: Option<V3>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -1030,6 +1047,33 @@ pub enum ConstraintKindDto {
         feld: MusterFeldDto,
         wert: f64,
     },
+    /// Ab Format 20: Linie oder zwei Punkte parallel zur z-Achse der Skizze.
+    #[serde(rename = "entlangZ")]
+    EntlangZ {
+        ziel: LineOrPointsDto,
+    },
+    /// Ab Format 20: fester Punkt im Raum.
+    #[serde(rename = "fest3")]
+    Fest3 {
+        punkt: usize,
+        x: f64,
+        y: f64,
+        z: f64,
+    },
+    /// Ab Format 20, intern: Eine Kurve mit Normale bleibt in ihrer Ebene.
+    InEbene {
+        kurve: usize,
+    },
+    /// Ab Format 20, intern: große Halbachse (x, y, z) und kleine Halbachse einer einbezogenen
+    /// Ellipse im Raum.
+    #[serde(rename = "ellipsenachsen3")]
+    EllipsenAchsen3 {
+        kurve: usize,
+        x: f64,
+        y: f64,
+        z: f64,
+        klein: f64,
+    },
 }
 
 /// Feld eines Musterwerts.
@@ -1071,6 +1115,9 @@ pub struct SketchDto {
     /// Texte (ab Format 18), auch gelöschte; fehlt in Skizzen ohne Text.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub texte: Vec<TextDto>,
+    /// Haken „3D-Skizze“ (ab Format 20); fehlt, wenn aus.
+    #[serde(rename = "dreiD", default, skip_serializing_if = "std::ops::Not::not")]
+    pub drei_d: bool,
 }
 
 /// Waagerechte Ausrichtung eines Textes (ab Format 18).

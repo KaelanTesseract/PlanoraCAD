@@ -126,6 +126,36 @@ impl Sketch {
         self.constraints.iter().map(|(_, c)| &c.kind)
     }
 
+    /// Steht 3D-Geometrie in der Skizze (Skizzen 10), auch in einem gelöschten Eintrag: ein
+    /// 3D-Punkt, eine Kurve mit Normale (Ellipsen dazu mit `az`), eine Freiformkurve im Raum,
+    /// eine der Abhängigkeiten `AlongZ`, `Fixed3`, `InPlane`, `EllipseAxes3` oder der Haken
+    /// „3D-Skizze“? Dann braucht die Datei Format 20.
+    pub fn has_3d_entry(&self) -> bool {
+        self.three_d
+            || self.points.iter().any(|(_, p)| p.z.is_some())
+            || self.curves.iter().any(|(_, c)| {
+                c.normal.is_some()
+                    || match &c.kind {
+                        CurveKind::Ellipse { az, .. } | CurveKind::EllipticArc { az, .. } => {
+                            az.is_some()
+                        }
+                        CurveKind::FixedSpline { curve, .. } => {
+                            curve.control_points().iter().any(|q| q.z != 0.0)
+                        }
+                        _ => false,
+                    }
+            })
+            || self.constraint_entries().any(|k| {
+                matches!(
+                    k,
+                    ConstraintKind::AlongZ(_)
+                        | ConstraintKind::Fixed3(..)
+                        | ConstraintKind::InPlane(_)
+                        | ConstraintKind::EllipseAxes3(..)
+                )
+            })
+    }
+
     pub fn to_data(&self) -> SketchData {
         SketchData {
             name: self.name.clone(),
@@ -264,6 +294,12 @@ impl Sketch {
                 return Err(bad(tr!("sketch-err-data-show-frame")));
             }
             check_curve_normal(c)?;
+            // Eine lebende Kurve mit eigener Ebene liegt ganz im Raum: Ein 2D-Punkt (z = 0) und
+            // die gekippte Ebene überbestimmten sie (Skizzen 10).
+            if c.alive && c.normal.is_some() && pts.iter().any(|p| d.points[p.index()].z.is_none())
+            {
+                return Err(bad(tr!("sketch-err-data-curve-normal")));
+            }
             match &c.kind {
                 CurveKind::Circle { radius, .. } if !var_ok(*radius) => {
                     return Err(bad(tr!("sketch-err-data-circle-value")));
@@ -362,6 +398,7 @@ impl Sketch {
                 return Err(bad(tr!("sketch-err-data-constraint-deleted")));
             }
         }
+        check_planes(&d)?;
         check_patterns(&d)?;
         check_texts(&d)?;
 
@@ -449,6 +486,7 @@ impl Sketch {
             }
             s.check_types(&c.kind)?;
             if c.alive {
+                check_3d_kind(&s, &c.kind)?;
                 if c.extra.is_none() && s.needs_extra(&c.kind) {
                     return Err(bad(tr!("sketch-err-data-constraint-extra")));
                 }
@@ -464,6 +502,55 @@ impl Sketch {
         s.refresh_shared_signs(None);
         Ok((s, dissolved))
     }
+}
+
+/// Eine lebende Abhängigkeit an 3D-Geometrie (Skizzen 10) wie beim Setzen: `AlongZ` nur an
+/// 3D-Geometrie, `Fixed3` an einem 2D-Punkt nur mit z = 0, sonst nur die Arten aus der
+/// Fusion-Liste ([`ConstraintKind::allowed_in_3d`]).
+fn check_3d_kind(s: &Sketch, kind: &ConstraintKind) -> Result<(), SketchError> {
+    let is_3d = s.constraint_is_3d(kind);
+    match kind {
+        ConstraintKind::AlongZ(_) if !is_3d => Err(bad(tr!("sketch-err-along-z-flat"))),
+        ConstraintKind::Fixed3(p, _, _, z) if !s.is_3d_point(*p) && *z != 0.0 => {
+            Err(bad(tr!("sketch-err-z-on-2d-point")))
+        }
+        _ if is_3d && !kind.allowed_in_3d() => Err(bad(tr!("sketch-err-not-in-3d"))),
+        _ => Ok(()),
+    }
+}
+
+/// Prüft die internen `InPlane`-Einträge (Skizzen 10): Jeder lebende ist intern, wirksam und
+/// steht an einem Bogen, einer Ellipse oder einem Ellipsenbogen mit Normale; jede lebende solche
+/// Kurve hat genau einen. Ein lebender Eintrag ohne Normale gäbe leere Zeilen, ein fehlender
+/// ließe die Kurve aus ihrer Ebene. Indizes und Leben der Kurven hat die Prüfung der
+/// Abhängigkeiten schon gesehen.
+fn check_planes(d: &SketchData) -> Result<(), SketchError> {
+    let wrong = || bad(tr!("sketch-err-data-in-plane"));
+    let wants_plane = |c: &CurveRecord| {
+        c.normal.is_some()
+            && matches!(
+                c.kind,
+                CurveKind::Arc { .. } | CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. }
+            )
+    };
+    let mut rows: HashSet<CurveId> = HashSet::new();
+    for k in d.constraints.iter().filter(|k| k.alive) {
+        if let ConstraintKind::InPlane(c) = k.kind
+            && (!k.internal
+                || !k.enabled
+                || k.driven
+                || !wants_plane(&d.curves[c.index()])
+                || !rows.insert(c))
+        {
+            return Err(wrong());
+        }
+    }
+    for (i, c) in d.curves.iter().enumerate() {
+        if c.alive && wants_plane(c) && !rows.contains(&CurveId::from_index(i)) {
+            return Err(wrong());
+        }
+    }
+    Ok(())
 }
 
 /// Prüft die Normale einer Kurve (Skizzen 10): nur an Kreis, Bogen, Ellipse und Ellipsenbogen,
@@ -836,6 +923,10 @@ fn check_texts(d: &SketchData) -> Result<(), SketchError> {
             };
         if !alive {
             return Err(bad_text("sketch-err-text-data-deleted"));
+        }
+        // Erzeugte Punkte bleiben in der Skizzenebene (Skizzen 10): Der Text setzt sie dort.
+        if t.points.iter().any(|p| d.points[p.index()].z.is_some()) {
+            return Err(bad_text("sketch-err-text-data-3d"));
         }
         let glyph_kinds = t.curves.iter().all(|c| match &d.curves[c.index()].kind {
             CurveKind::Line { .. } => true,
