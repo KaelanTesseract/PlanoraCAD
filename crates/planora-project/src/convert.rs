@@ -18,21 +18,24 @@ use planora_drawing::{
     Balloon, BalloonId, BodyKey, Drawing, DrawingId, DrawingKind, HatchSpec, Paper, Placement,
     Projection, RowOverride, Scale, SectionSpec, Sheet, ViewId, ViewKind, ViewSpec,
 };
-use planora_exchange::{ExchangeMesh, MAX_FILE_BYTES};
+use planora_exchange::{
+    ExchangeError, ExchangeMesh, ImageFormat, MAX_FILE_BYTES, MAX_IMAGE_BYTES,
+    MAX_IMAGES_TOTAL_BYTES, probe_image,
+};
 use planora_feature::planes::{AxisRef, PlaneBase, PlaneDef, PlaneFeature, PointRef, StdAxis};
 use planora_feature::{
-    BlendArt, BodyRef, CopySource, EdgeCopy, EdgeRef, FaceRef, FeatureId, FeatureKind, FieldKey,
-    Formulas, MAX_COMMENT_CHARS, MAX_COORD_MM, MAX_DECIMALS, MAX_DIM_TEXT_CHARS, MAX_DRAWINGS,
-    MAX_FIT_CHARS, MAX_FORMULA_CHARS, MAX_PARAM_NAME_CHARS, MAX_PARAMETERS, MAX_POS_MM,
-    MAX_ROLE_CHARS, MAX_TOL_MM, MAX_VIEWS, MeshId, ParamId, ParamUnit, Parameter, ProfileSel,
-    SketchFeature, SketchFormulas, SketchPlane, Snapshot, SnapshotFeature, StandardPlane,
-    StepShape, StepShapeId, Visibility, field_keys, step_text_megabytes, step_text_sum_limit,
-    validate_drawing,
+    BlendArt, BodyRef, CanvasBase, CanvasFeature, CanvasImage, CopySource, EdgeCopy, EdgeRef,
+    FaceRef, FeatureId, FeatureKind, FieldKey, Formulas, ImageId, MAX_COMMENT_CHARS, MAX_COORD_MM,
+    MAX_DECIMALS, MAX_DIM_TEXT_CHARS, MAX_DRAWINGS, MAX_FIT_CHARS, MAX_FORMULA_CHARS,
+    MAX_PARAM_NAME_CHARS, MAX_PARAMETERS, MAX_POS_MM, MAX_ROLE_CHARS, MAX_TOL_MM, MAX_VIEWS,
+    MeshId, ParamId, ParamUnit, Parameter, ProfileSel, SketchFeature, SketchFormulas, SketchPlane,
+    Snapshot, SnapshotFeature, StandardPlane, StepShape, StepShapeId, Visibility, field_keys,
+    image_hash, step_text_megabytes, step_text_sum_limit, validate_drawing,
 };
 use planora_i18n::{DisplayUnit, tr};
 use planora_kernel::BoolOp;
 use planora_math::nurbs::NurbsCurve;
-use planora_math::{DQuat, DVec3, Frame, Tolerance};
+use planora_math::{DQuat, DVec2, DVec3, Frame, Tolerance};
 use planora_sketch::pattern::{CircularMode, PatternDir, PatternInstance, PatternKind};
 use planora_sketch::text::{HAlign, TextPlacement, VAlign};
 use planora_sketch::text_shape::TextStyle;
@@ -45,14 +48,21 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Höchste lesbare Formatnummer der Versionsdateien (P7, P12, F7).
-pub const FORMAT_VERSION: u32 = 18;
+pub const FORMAT_VERSION: u32 = 19;
 /// Formatnummer der Rahmendateien `dokument.json` und `.autosave.json`; ihre Struktur ist seit
 /// Format 1 unverändert, ältere Programme öffnen das Projekt deshalb weiter (P7).
 pub const CONTAINER_FORMAT: u32 = 1;
 /// Größte Summe der dekodierten Netzdaten eines Dokuments (wie die Dateigrenze beim Import).
 const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
+/// Größte Summe der Bildbytes eines Dokuments (Leinwände, Format 19): 1 GiB
+/// ([`MAX_IMAGES_TOTAL_BYTES`], Festlegung Task 9; dieselbe Grenze prüft die App schon beim
+/// Einfügen). Ein einzelnes Bild ist zusätzlich auf `MAX_IMAGE_BYTES` begrenzt.
+const MAX_IMAGES_BYTES: u64 = MAX_IMAGES_TOTAL_BYTES;
 
-/// Kleinste Formatnummer, die den Stand darstellt (die Regeln in dieser Reihenfolge geprüft): 18
+/// Kleinste Formatnummer, die den Stand darstellt (die Regeln in dieser Reihenfolge geprüft): 19
+/// mit einer Leinwand (auch unterdrückt: ihr Bild muss in der Datei stehen) oder einem
+/// Kontrollpunktrahmen an einer Skizzenkurve ([`needs_format_19`], auch an einem gelöschten
+/// Kurveneintrag), 18
 /// mit einem Text in einer Skizze ([`needs_format_18`], auch einem gelöschten Texteintrag), 17
 /// mit einer der neuen Kurvenarten aus Skizzen 7 ([`needs_format_17`], auch einem gelöschten
 /// Kurveneintrag), 16 mit einer Konstruktionsebene, einer Skizze auf einer Konstruktionsebene,
@@ -69,7 +79,7 @@ const MAX_MESH_BYTES: u64 = MAX_FILE_BYTES;
 /// Stückliste auf einem Blatt), 6 mit Blatt- oder Projektangaben, 5 mit Maßen oder
 /// eingeschalteten Mittellinien, 4 mit Zeichnungen, 3 mit Netz-Körpern, 2 mit Rundungen oder
 /// Fasen, sonst 1 (P7, P12, F7, Teilprojekt 12 P11, Teilprojekt STEP-Import, Verlaufsleiste,
-/// Teilprojekt Zoll, Teilprojekte Skizzen 1, 3, 5, 6, 7 und 8).
+/// Teilprojekt Zoll, Teilprojekte Skizzen 1, 3, 5, 6, 7, 8 und 9).
 pub fn required_format(s: &Snapshot) -> u32 {
     format_with(s, &profile_fields(s))
 }
@@ -77,7 +87,11 @@ pub fn required_format(s: &Snapshot) -> u32 {
 /// [`required_format`] mit den schon bestimmten Profilfeldern `fields` (eins je Feature).
 fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
     let has = |f: fn(&FeatureKind) -> bool| s.features.iter().any(|x| f(&x.kind));
-    if has(needs_format_18) {
+    // Der Ordner „Leinwände“ kann nur mit einer Leinwand ausgeblendet sein (das Dokument räumt
+    // ihn mit der letzten Leinwand weg); er braucht darum keine eigene Regel.
+    if has(needs_format_19) {
+        19
+    } else if has(needs_format_18) {
         18
     } else if has(needs_format_17) {
         17
@@ -122,6 +136,15 @@ fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
         2
     } else {
         1
+    }
+}
+/// Braucht die Art Format 19 (Skizzen 9)? Eine Leinwand oder eine Skizze mit einem
+/// Kontrollpunktrahmen, auch an einem gelöschten Kurveneintrag: Er steht in der Datei.
+fn needs_format_19(k: &FeatureKind) -> bool {
+    match k {
+        FeatureKind::Canvas(_) => true,
+        FeatureKind::Sketch(sf) => sf.sketch.has_frame_entry(),
+        _ => false,
     }
 }
 /// Braucht die Art Format 18 (Skizzen 8)? Eine Skizze mit einem Text, auch einem gelöschten
@@ -1033,6 +1056,7 @@ fn sketch_to(s: &Sketch) -> SketchDto {
                 konstruktion: c.construction,
                 mittellinie: c.centerline,
                 aktiv: c.alive,
+                rahmen: c.show_frame,
             })
             .collect(),
         abhaengigkeiten: d
@@ -1113,6 +1137,7 @@ fn sketch_from(origin: &str, feature: &str, d: &SketchDto) -> Result<(Sketch, us
                     kind: curve_from(&c.art).map_err(ctx)?,
                     construction: c.konstruktion,
                     centerline: c.mittellinie,
+                    show_frame: c.rahmen,
                     alive: c.aktiv,
                 })
             })
@@ -1454,7 +1479,176 @@ fn kind_to(
             form: forms.get(shape).copied().unwrap_or(shape.0),
         },
         FeatureKind::Plane(p) => KindDto::Konstruktionsebene(Box::new(plane_to(p))),
+        FeatureKind::Canvas(c) => KindDto::Leinwand(Box::new(canvas_to(c))),
     })
+}
+
+// ---- Leinwände und Bilder (Format 19) ---------------------------------------------------
+
+fn canvas_to(c: &CanvasFeature) -> LeinwandDto {
+    LeinwandDto {
+        bild: c.image.0,
+        lage: base_to(&match &c.base {
+            CanvasBase::Standard(p) => PlaneBase::Standard(*p),
+            CanvasBase::Face(r) => PlaneBase::Face(r.clone()),
+            CanvasBase::Plane(id) => PlaneBase::Plane(*id),
+        }),
+        versatz: c.offset.to_array(),
+        winkel: c.angle,
+        massstab: c.scale.to_array(),
+        spiegeln_waagerecht: c.flip_h,
+        spiegeln_senkrecht: c.flip_v,
+        deckkraft: c.opacity,
+        durch_objekte: c.display_through,
+        auswaehlbar: c.selectable,
+        letzte_lage: c.last_base.as_ref().map(frame_to),
+    }
+}
+
+/// Liest eine Leinwand. Zahlen werden wie überall geprüft (endlich, im Rechenbereich); ob
+/// Maßstab, Winkel und Deckkraft passen, prüft das Dokument beim Rechnen (wie bei Netz-Körpern:
+/// Die Leinwand bekommt dann den Fehlerstatus).
+fn canvas_from(origin: &str, name: &str, d: &LeinwandDto) -> Result<CanvasFeature> {
+    let n = |label: Label, x: f64| num(origin, &|| field_label(name, label()), x);
+    let v = |label: Label, x: V3| dv3(origin, &|| field_label(name, label()), x);
+    let last_base = match &d.letzte_lage {
+        Some(f) => Some(Frame {
+            origin: v(|| tr!("proj-l-origin"), f.ursprung)?,
+            x: v(|| tr!("proj-l-x-axis"), f.x)?,
+            y: v(|| tr!("proj-l-y-axis"), f.y)?,
+            z: v(|| tr!("proj-l-z-axis"), f.z)?,
+        }),
+        None => None,
+    };
+    Ok(CanvasFeature {
+        image: ImageId(d.bild),
+        base: match base_from(origin, name, &d.lage)? {
+            PlaneBase::Standard(p) => CanvasBase::Standard(p),
+            PlaneBase::Face(r) => CanvasBase::Face(r),
+            PlaneBase::Plane(id) => CanvasBase::Plane(id),
+        },
+        offset: DVec2::new(
+            n(|| tr!("proj-l-position"), d.versatz[0])?,
+            n(|| tr!("proj-l-position"), d.versatz[1])?,
+        ),
+        angle: n(|| tr!("proj-l-rotation"), d.winkel)?,
+        scale: DVec2::new(
+            n(|| tr!("proj-l-scale"), d.massstab[0])?,
+            n(|| tr!("proj-l-scale"), d.massstab[1])?,
+        ),
+        flip_h: d.spiegeln_waagerecht,
+        flip_v: d.spiegeln_senkrecht,
+        opacity: d.deckkraft,
+        display_through: d.durch_objekte,
+        selectable: d.auswaehlbar,
+        last_base,
+    })
+}
+
+fn image_format_name(f: ImageFormat) -> &'static str {
+    match f {
+        ImageFormat::Png => "png",
+        ImageFormat::Jpeg => "jpeg",
+        ImageFormat::Tiff => "tiff",
+    }
+}
+
+/// Bilder für die Datei, aufsteigend nach Kennung. Vorher die Gesamtgrenze, damit ein zu großes
+/// Dokument eine klare Meldung bekommt und nicht erst riesige Texte entstehen.
+fn images_to(s: &Snapshot) -> Result<Vec<ImageDto>> {
+    images_to_limited(s, MAX_IMAGES_BYTES)
+}
+
+/// Wie [`images_to`] mit eigener Gesamtgrenze (Tests ohne riesige Bilder).
+fn images_to_limited(s: &Snapshot, max: u64) -> Result<Vec<ImageDto>> {
+    let total = s
+        .images
+        .values()
+        .fold(0u64, |sum, i| sum.saturating_add(i.bytes.len() as u64));
+    if total > max {
+        let mb = |b: u64| (b / (1024 * 1024)).to_string();
+        return Err(ProjectError::Invalid(tr!(
+            "proj-images-too-large-to-save",
+            size = mb(total),
+            max = mb(max)
+        )));
+    }
+    Ok(s.images
+        .iter()
+        .map(|(id, i)| ImageDto {
+            id: id.0,
+            format: image_format_name(i.format).into(),
+            daten: base64::encode(&i.bytes),
+        })
+        .collect())
+}
+
+/// Liest die Bilder einer Datei. Vor dem Dekodieren wird die Länge (einzeln und in Summe)
+/// gegen die Grenzen geprüft; danach prüft `probe_image` Format, Inhalt und Kantenlänge. Maße
+/// und Prüfsumme kommen aus den Bytes, nicht aus der Datei.
+fn images_from(origin: &str, list: &[ImageDto]) -> Result<BTreeMap<ImageId, Arc<CanvasImage>>> {
+    images_from_limited(origin, list, MAX_IMAGES_BYTES)
+}
+
+/// Wie [`images_from`] mit eigener Gesamtgrenze (Tests ohne riesige Bilder).
+fn images_from_limited(
+    origin: &str,
+    list: &[ImageDto],
+    max: u64,
+) -> Result<BTreeMap<ImageId, Arc<CanvasImage>>> {
+    let mut total: u64 = 0;
+    let mut out = BTreeMap::new();
+    for d in list {
+        let bad = |m: &str| {
+            ProjectError::corrupt(
+                origin,
+                tr!("proj-ctx-image", id = d.id.to_string(), msg = m),
+            )
+        };
+        if d.id == 0 {
+            return Err(bad(&tr!("proj-bad-id")));
+        }
+        let format = match d.format.as_str() {
+            "png" => ImageFormat::Png,
+            "jpeg" => ImageFormat::Jpeg,
+            "tiff" => ImageFormat::Tiff,
+            other => {
+                return Err(bad(&tr!(
+                    "proj-unknown-image-format",
+                    value = quoted(other)
+                )));
+            }
+        };
+        let len = base64::decoded_len(&d.daten).map_err(|e| bad(&e.to_string()))? as u64;
+        if len > MAX_IMAGE_BYTES {
+            return Err(bad(&tr!("proj-image-too-big")));
+        }
+        total = total.saturating_add(len);
+        if total > max {
+            return Err(bad(&tr!("proj-images-too-big")));
+        }
+        let bytes = base64::decode(&d.daten).map_err(|e| bad(&e.to_string()))?;
+        // Die Endung zum Format in der Datei: `probe_image` lehnt ab, wenn der Inhalt ein
+        // anderes Format ist.
+        let info = probe_image(image_format_name(format), &bytes).map_err(|e| match e {
+            ExchangeError::ImageWrongExtension => bad(&tr!(
+                "proj-image-format-mismatch",
+                format = image_format_name(format)
+            )),
+            other => bad(&other.to_string()),
+        })?;
+        let img = CanvasImage {
+            hash: image_hash(&bytes),
+            bytes: Arc::from(bytes),
+            format: info.format,
+            width: info.width,
+            height: info.height,
+        };
+        if out.insert(ImageId(d.id), Arc::new(img)).is_some() {
+            return Err(bad(&tr!("proj-duplicate-id")));
+        }
+    }
+    Ok(out)
 }
 
 // ---- Ebenen und Projektionen (Format 16) ------------------------------------------------
@@ -1868,6 +2062,7 @@ fn kind_from(origin: &str, name: &str, d: &KindDto, dissolved: &mut usize) -> Re
             shape: StepShapeId(*form),
         },
         KindDto::Konstruktionsebene(p) => FeatureKind::Plane(plane_from(origin, name, p)?),
+        KindDto::Leinwand(c) => FeatureKind::Canvas(canvas_from(origin, name, c)?),
     })
 }
 
@@ -2693,6 +2888,8 @@ fn visibility_to(v: &Visibility) -> Option<SichtbarkeitDto> {
         (v.folders.bodies, OrdnerDto::Koerper),
         (v.folders.sketches, OrdnerDto::Skizzen),
         (v.folders.planes, OrdnerDto::Konstruktion),
+        // Nur mit einer Leinwand gesetzt (Format 19 kommt dann von der Leinwand).
+        (v.folders.canvases, OrdnerDto::Leinwaende),
     ];
     Some(SichtbarkeitDto {
         koerper: v
@@ -2748,6 +2945,7 @@ fn visibility_from(d: Option<&SichtbarkeitDto>) -> Visibility {
             OrdnerDto::Koerper => v.folders.bodies = true,
             OrdnerDto::Skizzen => v.folders.sketches = true,
             OrdnerDto::Konstruktion => v.folders.planes = true,
+            OrdnerDto::Leinwaende => v.folders.canvases = true,
         }
     }
     v
@@ -3106,6 +3304,7 @@ pub fn encode_version(s: &Snapshot) -> Result<String> {
             max = mb_text(limit)
         )));
     }
+    let bilder = images_to(s)?;
     let file = VersionFile {
         format,
         marker: s.marker,
@@ -3159,6 +3358,7 @@ pub fn encode_version(s: &Snapshot) -> Result<String> {
         },
         rueckrollstellen: s.rollbacks.iter().map(|r| r.0).collect(),
         sichtbarkeit: visibility_to(&s.visibility),
+        bilder,
         step_formen,
     };
     let text = serde_json::to_string_pretty(&file)
@@ -3206,6 +3406,11 @@ fn has_format_17_data(k: &KindDto) -> bool {
 /// Inhalt aus Format 18 in einer Feature-Art der Datei (Gegenstück zu [`needs_format_18`]).
 fn has_format_18_data(k: &KindDto) -> bool {
     matches!(k, KindDto::Skizze(s) if !s.skizze.texte.is_empty())
+}
+
+/// Kontrollpunktrahmen an einer Skizzenkurve der Datei (Gegenstück zu [`needs_format_19`]).
+fn has_control_frame(k: &KindDto) -> bool {
+    matches!(k, KindDto::Skizze(s) if s.skizze.kurven.iter().any(|c| c.rahmen))
 }
 
 /// Liest eine Versionsdatei. `origin` ist der Dateiname für Meldungen.
@@ -3372,6 +3577,34 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
             ),
         ));
     }
+    let has_canvas = file
+        .features
+        .iter()
+        .any(|f| matches!(f.art, KindDto::Leinwand(_)));
+    let canvas_folder = file
+        .sichtbarkeit
+        .as_ref()
+        .is_some_and(|v| v.ordner.contains(&OrdnerDto::Leinwaende));
+    if file.format < 19 && (has_canvas || !file.bilder.is_empty() || canvas_folder) {
+        return Err(ProjectError::corrupt(
+            origin,
+            tr!(
+                "proj-since-format",
+                what = tr!("proj-feat-canvas"),
+                format = "19"
+            ),
+        ));
+    }
+    if file.format < 19 && file.features.iter().any(|f| has_control_frame(&f.art)) {
+        return Err(ProjectError::corrupt(
+            origin,
+            tr!(
+                "proj-since-format",
+                what = tr!("proj-feat-control-frame"),
+                format = "19"
+            ),
+        ));
+    }
     let visibility = visibility_from(file.sichtbarkeit.as_ref());
     let rollbacks = rollbacks_from(origin, &file)?;
     let (parameters, next_param) = parameters_from(origin, &file)?;
@@ -3413,6 +3646,22 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
             ));
         }
     }
+    check_len(origin, &|| tr!("proj-l-images"), file.bilder.len())?;
+    let images = images_from(origin, &std::mem::take(&mut file.bilder))?;
+    for f in &file.features {
+        if let KindDto::Leinwand(c) = &f.art
+            && !images.contains_key(&ImageId(c.bild))
+        {
+            return Err(ProjectError::corrupt(
+                origin,
+                tr!(
+                    "proj-ctx-feature",
+                    name = f.name.as_str(),
+                    msg = tr!("proj-image-missing", id = c.bild.to_string())
+                ),
+            ));
+        }
+    }
     check_len(origin, &|| tr!("proj-l-features"), file.features.len())?;
     let mut features = Vec::with_capacity(file.features.len());
     let mut dissolved_patterns = 0;
@@ -3442,6 +3691,7 @@ pub fn decode_version(text: &str, origin: &str) -> Result<Snapshot> {
         parameters,
         next_param,
         rollbacks,
+        images,
         dissolved_patterns,
     })
 }
@@ -3479,4 +3729,55 @@ fn rollbacks_from(origin: &str, file: &VersionFile) -> Result<Vec<FeatureId>> {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod image_limit_tests {
+    //! Gesamtgrenze der Bildbytes (Gesamtprüfung I5) mit kleiner Grenze statt 1 GiB.
+    use super::*;
+    use planora_feature::Document;
+
+    fn image(n: usize, fill: u8) -> Arc<CanvasImage> {
+        let bytes: Arc<[u8]> = vec![fill; n].into();
+        Arc::new(CanvasImage {
+            hash: image_hash(&bytes),
+            bytes,
+            format: ImageFormat::Png,
+            width: 1,
+            height: 1,
+        })
+    }
+
+    #[test]
+    fn the_constant_is_one_gib() {
+        assert_eq!(MAX_IMAGES_BYTES, 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn saving_refuses_images_over_the_total_limit() {
+        let mut s = Document::new().snapshot();
+        s.images.insert(ImageId(1), image(60, 1));
+        s.images.insert(ImageId(2), image(60, 2));
+        assert!(images_to_limited(&s, 120).is_ok());
+        let e = images_to_limited(&s, 119).unwrap_err();
+        assert!(e.to_string().contains("MB"), "{e}");
+    }
+
+    #[test]
+    fn loading_refuses_images_over_the_total_limit_before_decoding() {
+        let dto = |id: u64| ImageDto {
+            id,
+            format: "png".into(),
+            daten: base64::encode(&[7u8; 60]),
+        };
+        let list = [dto(1), dto(2)];
+        // Geprüft wird je Bild vor dem Entschlüsseln: schon das erste liegt über 59 Bytes.
+        let over = images_from_limited("t", &list, 59).unwrap_err().to_string();
+        assert!(over.contains(&tr!("proj-images-too-big")), "{over}");
+        // Innerhalb der Grenze kommt der Inhalt dran (hier kein echtes PNG).
+        let inside = images_from_limited("t", &list, 120)
+            .unwrap_err()
+            .to_string();
+        assert!(!inside.contains(&tr!("proj-images-too-big")), "{inside}");
+    }
 }

@@ -8,20 +8,61 @@ const BYTES_PER_GB: f64 = 1e9;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExchangeError {
-    Io { msg: String },
-    FileTooLarge { bytes: u64 },
+    Io {
+        msg: String,
+    },
+    FileTooLarge {
+        bytes: u64,
+    },
     TooManyTriangles,
     TooManyVertices,
     Truncated,
-    CountTooLarge { claimed: u64, possible: u64 },
-    NotFinite { line: Option<usize> },
-    BadNumber { line: usize },
-    IndexOutOfRange { line: usize },
-    Syntax { line: usize, msg: String },
-    Polygon { line: usize },
+    CountTooLarge {
+        claimed: u64,
+        possible: u64,
+    },
+    NotFinite {
+        line: Option<usize>,
+    },
+    BadNumber {
+        line: usize,
+    },
+    IndexOutOfRange {
+        line: usize,
+    },
+    Syntax {
+        line: usize,
+        msg: String,
+    },
+    Polygon {
+        line: usize,
+    },
     Empty,
-    TooLargeForFormat { format: &'static str },
+    TooLargeForFormat {
+        format: &'static str,
+    },
     Corrupt(String),
+    /// Die DXF-Datei ist kaputt oder lässt sich nicht lesen.
+    DxfBroken(String),
+    /// Die DXF-Datei ist größer als [`crate::limits::MAX_DXF_BYTES`].
+    DxfTooLarge,
+    /// Die SVG-Datei ist kaputt oder lässt sich nicht lesen.
+    SvgBroken(String),
+    /// Die SVG-Datei ist (entpackt) größer als [`crate::limits::MAX_SVG_BYTES`].
+    SvgTooLarge,
+    /// Mehr als [`crate::limits::MAX_IMPORT_ELEMENTS`] Elemente (DXF, SVG).
+    TooManyElements,
+    /// Die Bilddatei ist größer als [`crate::limits::MAX_IMAGE_BYTES`].
+    ImageTooLarge,
+    /// Das Bild hat eine Kante über [`crate::limits::MAX_IMAGE_EDGE_PX`] oder braucht zu viel
+    /// Speicher.
+    ImageTooBig,
+    /// Die Dateiendung passt nicht zum Inhalt des Bildes.
+    ImageWrongExtension,
+    /// Kein Leinwandformat (nur PNG, JPG und TIFF).
+    ImageUnsupported,
+    /// Das Bild ist kaputt oder lässt sich nicht lesen.
+    ImageBroken(String),
     UnknownFormat(String),
     Cancelled,
 }
@@ -57,6 +98,31 @@ impl fmt::Display for ExchangeError {
                 tr!("exchange-too-large-for-format", format = *format)
             }
             ExchangeError::Corrupt(m) => tr!("exchange-corrupt", msg = m),
+            ExchangeError::DxfBroken(m) => tr!("exchange-dxf-broken", msg = m),
+            ExchangeError::DxfTooLarge => tr!(
+                "exchange-dxf-too-large",
+                max = crate::limits::MAX_DXF_BYTES / (1024 * 1024)
+            ),
+            ExchangeError::SvgBroken(m) => tr!("exchange-svg-broken", msg = m),
+            ExchangeError::SvgTooLarge => tr!(
+                "exchange-svg-too-large",
+                max = crate::limits::MAX_SVG_BYTES / (1024 * 1024)
+            ),
+            ExchangeError::TooManyElements => tr!(
+                "exchange-too-many-elements",
+                max = crate::limits::MAX_IMPORT_ELEMENTS
+            ),
+            ExchangeError::ImageTooLarge => tr!(
+                "exchange-image-too-large",
+                max = crate::limits::MAX_IMAGE_BYTES / (1024 * 1024)
+            ),
+            ExchangeError::ImageTooBig => tr!(
+                "exchange-image-too-big",
+                max = crate::limits::MAX_IMAGE_EDGE_PX
+            ),
+            ExchangeError::ImageWrongExtension => tr!("exchange-image-wrong-extension"),
+            ExchangeError::ImageUnsupported => tr!("exchange-image-unsupported"),
+            ExchangeError::ImageBroken(m) => tr!("exchange-image-broken", msg = m),
             ExchangeError::UnknownFormat(ext) => tr!("exchange-unknown-format", ext = ext),
             ExchangeError::Cancelled => tr!("exchange-cancelled"),
         };

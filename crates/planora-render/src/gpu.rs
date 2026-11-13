@@ -1,3 +1,4 @@
+use crate::canvas::{CanvasDraw, CanvasGpu, CanvasTexture};
 use crate::scene::{FaceVertex, LineVertex, SceneData};
 use bytemuck::{Pod, Zeroable};
 use egui_wgpu::wgpu::util::DeviceExt as _;
@@ -32,6 +33,8 @@ pub struct GpuScene {
     grid_capacity: u32,
     grid_vertex_count: u32,
     uploaded_version: Option<u64>,
+    /// Leinwände (Skizzen 9): vierte Pipeline samt Texturen.
+    canvases: CanvasGpu,
 }
 
 impl GpuScene {
@@ -84,6 +87,8 @@ impl GpuScene {
                 resource: uniform_buffer.as_entire_binding(),
             }],
         });
+
+        let canvases = CanvasGpu::new(device, target_format, &bind_group_layout);
 
         let multisample = wgpu::MultisampleState {
             count: MSAA_SAMPLES,
@@ -195,6 +200,7 @@ impl GpuScene {
             grid_capacity: 0,
             grid_vertex_count: 0,
             uploaded_version: None,
+            canvases,
         }
     }
 
@@ -279,6 +285,8 @@ impl GpuScene {
             self.uploaded_version = Some(cb.scene_version);
         }
         self.upload_grid(device, queue, &cb.grid);
+        self.canvases
+            .update(device, queue, &cb.canvases, &cb.canvas_textures);
     }
 
     /// Schreibt Raster und Achsen dieses Bildes; der Puffer wächst bei Bedarf (Zweierpotenz).
@@ -329,6 +337,8 @@ impl GpuScene {
             render_pass.set_vertex_buffer(0, lvb.slice(..));
             render_pass.draw(0..self.line_vertex_count, 0..1);
         }
+        // Leinwände nach Flächen und Linien; die Skizzen zeichnet egui ohnehin darüber.
+        self.canvases.paint(render_pass);
     }
 }
 
@@ -346,6 +356,12 @@ pub struct ViewportCallback {
     pub scene_version: u64,
     /// Raster und Achsen (Linienliste) für dieses Bild, aus der Kamera berechnet.
     pub grid: Vec<LineVertex>,
+    /// Leinwände dieses Bildes (Skizzen 9).
+    pub canvases: Vec<CanvasDraw>,
+    /// Die Bilder **aller** gezeichneten Leinwände, in jedem Bild (`Arc`, billig). Die GPU legt nur
+    /// Texturen für noch unbekannte `key` an und behält genau die, deren `key` in `canvases`
+    /// dieses Bildes vorkommt. So schadet auch ein verworfener egui-Durchlauf nicht.
+    pub canvas_textures: Vec<CanvasTexture>,
 }
 
 impl egui_wgpu::CallbackTrait for ViewportCallback {

@@ -9,6 +9,9 @@ use crate::export_dialog::ExportDialog;
 use crate::feature_dialog::FeatureDialog;
 use crate::history::{History, Tracker, snapshot_bytes};
 use crate::import_dialog::ImportDialog;
+use crate::insert::canvas_dialog::CanvasDialog;
+use crate::insert::dxf_dialog::DxfDialog;
+use crate::insert::svg_dialog::SvgDialog;
 use crate::keymap::Keymap;
 use crate::parameter_dialog::ParameterDialog;
 use crate::places::{FavoriteChange, Places};
@@ -92,6 +95,12 @@ pub struct DocTab {
     pub import_dialog: Option<ImportDialog>,
     /// Fenster „STEP importieren“.
     pub step_import_dialog: Option<StepImportDialog>,
+    /// Fenster „DXF einfügen“ (Skizzen 9, Menü „Einfügen“); bleibt bei offener Skizze offen.
+    pub dxf_dialog: Option<DxfDialog>,
+    /// Fenster „SVG einfügen“ (Skizzen 9); bleibt bei offener Skizze offen.
+    pub svg_dialog: Option<SvgDialog>,
+    /// Fenster „Leinwand“ und „Leinwand bearbeiten“ (Skizzen 9); nur ohne offene Skizze.
+    pub canvas_dialog: Option<CanvasDialog>,
     /// Fenster „Neue Zeichnung“.
     pub drawing_dialog: Option<NewDrawingDialog>,
     /// Fenster „Parameter“. Es sperrt Rückgängig nicht (Plan P8): nicht in
@@ -144,6 +153,9 @@ impl DocTab {
             export_dialog: None,
             import_dialog: None,
             step_import_dialog: None,
+            dxf_dialog: None,
+            svg_dialog: None,
+            canvas_dialog: None,
             drawing_dialog: None,
             parameter_dialog: None,
             name,
@@ -203,6 +215,8 @@ impl DocTab {
         // Neuer Zählerstand ohne Schritt, wie nach dem Zurückladen; das Bild des Verlaufs ist ab
         // jetzt der neu gesetzte Stand (Rückgängig kehrt dorthin zurück, nicht zur alten Form).
         self.tracker.reset(self.state.document.edit_count());
+        // Kein Schritt: Ein gemerkter Name gälte sonst für den nächsten, fremden Schritt.
+        self.state.undo_label_hint = None;
         let snapshot = self.state.snapshot();
         let bytes = snapshot_bytes(&snapshot);
         self.history.replace_current(snapshot, bytes);
@@ -318,14 +332,18 @@ impl DocTab {
         {
             return;
         }
+        // Ein Name vom Befehl selbst (etwa „Kalibrieren“) gilt genau für diesen Schritt.
+        let hint = self.state.undo_label_hint.take();
         let after = self.state.snapshot();
         if after.same_content(self.history.current()) {
             return;
         }
-        let label = describe_change(self.history.current(), &after);
-        crate::diag::step(&crate::diag::in_english(|| {
-            describe_change(self.history.current(), &after)
-        }));
+        let name = |s: &Self| match hint {
+            Some(h) => h(),
+            None => describe_change(s.history.current(), &after),
+        };
+        let label = name(self);
+        crate::diag::step(&crate::diag::in_english(|| name(self)));
         let bytes = snapshot_bytes(&after);
         self.history.record(after, bytes, label);
     }
@@ -393,7 +411,10 @@ impl DocTab {
             return self.state.sketch_undo_label();
         }
         match self.pending_change() {
-            Some(now) => Some(describe_change(self.history.current(), &now)),
+            Some(now) => Some(match self.state.undo_label_hint {
+                Some(h) => h(),
+                None => describe_change(self.history.current(), &now),
+            }),
             None => self.history.undo_label().map(str::to_string),
         }
     }
@@ -479,6 +500,8 @@ impl DocTab {
     /// halten Kennungen des alten Stands und schließen.
     fn after_jump(&mut self) {
         self.tracker.reset(self.state.document.edit_count());
+        // Ein gemerkter Name (etwa „Kalibrieren“) gälte sonst für den nächsten, fremden Schritt.
+        self.state.undo_label_hint = None;
         // Das zurückgeladene Bild kann ungesetzte Texte halten (Schritt vor der Schriftliste).
         self.reshape_due = true;
         self.close_dialogs();
@@ -527,7 +550,19 @@ impl DocTab {
     /// beim Bearbeiten): Sie wählen sonst in derselben Ansicht. Wer eines dieser Fenster öffnet,
     /// beendet umgekehrt den Wahlmodus.
     pub fn exclude_pick_modes(&mut self) {
-        if self.state.pending_pick.is_none() {
+        if self.state.calibrate.is_some() {
+            // „Kalibrieren“ klickt auf die Leinwand selbst: Fenster mit Vorschau und Griffen in
+            // der Ansicht schließen ebenso.
+            if self.dxf_dialog.take().is_some() {
+                DxfDialog::finish(&mut self.state);
+            }
+            if self.svg_dialog.take().is_some() {
+                SvgDialog::finish(&mut self.state);
+            }
+            if self.canvas_dialog.take().is_some() {
+                CanvasDialog::finish(&mut self.state);
+            }
+        } else if self.state.pending_pick.is_none() {
             return;
         }
         if self.plane_dialog.take().is_some() {
@@ -556,6 +591,39 @@ impl DocTab {
     /// Öffnet das Fenster „Bearbeiten“ für das Feature `id`: bei einer Konstruktionsebene das
     /// Fenster der Ebene mit ihren Werten, sonst [`FeatureDialog`].
     pub fn open_edit(&mut self, id: FeatureId) {
+        self.open_edit_in(id, None);
+    }
+
+    /// Wie [`Self::open_edit`]; `dir` ist der zuletzt benutzte Ordner der Austauschfenster
+    /// (wie beim Einfügen), sonst der Standardordner.
+    pub fn open_edit_in(&mut self, id: FeatureId, dir: Option<std::path::PathBuf>) {
+        if self.state.is_canvas(id) {
+            // „Leinwand bearbeiten“: gesperrt, solange eine Skizze offen ist.
+            if let Some(why) = self.state.canvas_lock() {
+                self.state.message = Some(why);
+                return;
+            }
+            let dir = dir.unwrap_or_else(crate::file_chooser::default_dir);
+            if let Some(d) = CanvasDialog::edit(dir, &self.state, id) {
+                self.feature_dialog = None;
+                self.close_blend_dialog();
+                self.state.cancel_pending_pick();
+                if self.plane_dialog.take().is_some() {
+                    PlaneDialog::finish(&mut self.state);
+                }
+                if self.dxf_dialog.take().is_some() {
+                    DxfDialog::finish(&mut self.state);
+                }
+                if self.svg_dialog.take().is_some() {
+                    SvgDialog::finish(&mut self.state);
+                }
+                if self.canvas_dialog.take().is_some() {
+                    CanvasDialog::finish(&mut self.state);
+                }
+                self.canvas_dialog = Some(d);
+            }
+            return;
+        }
         if let Some(d) = PlaneDialog::edit(&self.state, id) {
             self.feature_dialog = None;
             self.close_blend_dialog();
@@ -579,6 +647,9 @@ impl DocTab {
             || self.export_dialog.is_some()
             || self.import_dialog.is_some()
             || self.step_import_dialog.is_some()
+            || self.dxf_dialog.is_some()
+            || self.svg_dialog.is_some()
+            || self.canvas_dialog.is_some()
             || self.drawing_dialog.is_some()
             || s.dimension_dialog.is_some()
             || s.sheet_dialog.is_some()
@@ -608,6 +679,15 @@ impl DocTab {
         }
         self.import_dialog = None;
         self.step_import_dialog = None;
+        if self.dxf_dialog.take().is_some() {
+            DxfDialog::finish(&mut self.state);
+        }
+        if self.svg_dialog.take().is_some() {
+            SvgDialog::finish(&mut self.state);
+        }
+        if self.canvas_dialog.take().is_some() {
+            CanvasDialog::finish(&mut self.state);
+        }
         self.drawing_dialog = None;
         let s = &mut self.state;
         s.dimension_dialog = None;

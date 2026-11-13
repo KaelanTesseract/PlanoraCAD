@@ -698,6 +698,47 @@ pub fn plane_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
     out
 }
 
+/// Strichstärke der Vorschau eines Einfügen-Fensters.
+const INSERT_PREVIEW_WIDTH: f32 = 1.5;
+
+/// Vorschau eines offenen Einfügen-Fensters ([`AppState::insert_preview`]) als Linien in der
+/// Hervorhebungsfarbe über der Ansicht in `rect` (wie die fertigen Skizzen ohne Verdeckung).
+/// Abschnitte mit einem Punkt hinter der Kamera fehlen.
+pub fn insert_preview_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
+    let mut out = Vec::new();
+    let Some(preview) = &state.insert_preview else {
+        return out;
+    };
+    if rect.width() < 2.0 || rect.height() < 2.0 {
+        return out;
+    }
+    let col = colors(state.dark);
+    let map = Mapper {
+        camera: state.camera,
+        frame: preview.frame,
+        rect,
+    };
+    let stroke = Stroke::new(INSERT_PREVIEW_WIDTH, col.plane_edge_active);
+    for line in &preview.lines {
+        let mut run: Vec<Pos2> = Vec::new();
+        for p in line {
+            match map.to_screen(*p) {
+                Some(q) => run.push(q),
+                None => {
+                    if run.len() >= 2 {
+                        out.push(Shape::line(std::mem::take(&mut run), stroke));
+                    }
+                    run.clear();
+                }
+            }
+        }
+        if run.len() >= 2 {
+            out.push(Shape::line(run, stroke));
+        }
+    }
+    out
+}
+
 /// Strichstärke fertiger Skizzen in der 3D-Ansicht (dünner als im Skizzen-Modus).
 const FINISHED_WIDTH: f32 = 1.2;
 /// Strichstärke der Konstruktionsgeometrie fertiger Skizzen.
@@ -777,6 +818,13 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
             let stroke = Stroke::new(width, color);
             for path in map.paths(&pl) {
                 out.extend(style_shapes(path, stroke, data.style()));
+            }
+        }
+        // Kontrollpunktrahmen (Skizzen 9) dünn und gestrichelt.
+        let frame_stroke = Stroke::new(FINISHED_CONSTRUCTION_WIDTH, col.construction);
+        for line in frame_polygons(sk) {
+            for path in map.paths(&line) {
+                out.extend(path_shapes(path, frame_stroke, true));
             }
         }
     }
@@ -967,7 +1015,10 @@ pub fn show_overlay(ui: &mut egui::Ui, rect: Rect, state: &mut AppState) -> bool
     // sperrt Esc, Entf und Eingabe der Skizze nicht.
     viewport::focus_is_not_typing(ui.ctx(), response.id);
     state.camera.set_viewport(rect.width(), rect.height());
-    handle_input(ui, &response, rect, state);
+    // Griffe eines Einfügen-Fensters nehmen den Zeiger vor den Werkzeugen.
+    if !insert_grips_input(ui, rect, state, response.hover_pos()) {
+        handle_input(ui, &response, rect, state);
+    }
     let pointer = response.hover_pos().or(response.interact_pointer_pos());
     if crate::sketch_inline::show(ui, rect, state, pointer) {
         cursor_after_fields(rect, state, pointer);
@@ -1086,6 +1137,128 @@ pub fn grip_layout(state: &AppState, rect: Rect) -> Option<GripLayout> {
         dir(DVec2::Y)?,
         se.tool == Tool::Scale,
     ))
+}
+
+/// Lage der Griffe eines Einfügen-Fensters ([`AppState::insert_grips`]) in diesem Bild: die
+/// Griffe zum Verschieben und Drehen und die Handhabe des Maßstabs schräg unten rechts zwischen
+/// den Pfeilen. `None`, wenn das Fenster keine Griffe hat oder die Ansicht ihre Mitte nicht zeigt.
+pub fn insert_grip_layout(state: &AppState, rect: Rect) -> Option<(GripLayout, GripLayout)> {
+    let g = state.insert_grips.as_ref()?;
+    let map = Mapper {
+        camera: state.camera,
+        frame: g.frame,
+        rect,
+    };
+    insert_layout(&map, g.offset)
+}
+
+fn insert_layout(map: &Mapper, at: DVec2) -> Option<(GripLayout, GripLayout)> {
+    let center = map.to_screen(at)?;
+    let step = map.radius_at(center).filter(|r| *r > 0.0)?;
+    let dir = |axis: DVec2| {
+        map.to_screen(at + axis * step)
+            .map(|q| (q - center).normalized())
+            .filter(|v| v.length() > 0.5)
+    };
+    let (x, y) = (dir(DVec2::X)?, dir(DVec2::Y)?);
+    let diagonal = (x - y).normalized();
+    Some((
+        sketch_grips::layout(center, x, y, false),
+        sketch_grips::layout(center, diagonal, y, true),
+    ))
+}
+
+/// Eingaben an den Griffen eines Einfügen-Fensters (Modell und Skizze): Griff unter dem Zeiger
+/// (`hover`, nur über der Ansicht), Drücken beginnt einen Zug, Ziehen schreibt Verschiebung,
+/// Winkel und Faktor in [`AppState::insert_grips`] (das Fenster übernimmt sie), Loslassen endet.
+/// `true`, wenn die Griffe den Zeiger in diesem Bild nehmen; dann wählt die Ansicht nichts.
+pub fn insert_grips_input(
+    ui: &egui::Ui,
+    rect: Rect,
+    state: &mut AppState,
+    hover: Option<Pos2>,
+) -> bool {
+    let camera = state.camera;
+    let Some(g) = state.insert_grips.as_mut() else {
+        return false;
+    };
+    let map = Mapper {
+        camera,
+        frame: g.frame,
+        rect,
+    };
+    let (down, pressed, latest, origin) = ui.input(|i| {
+        (
+            i.pointer.primary_down(),
+            i.pointer.primary_pressed(),
+            i.pointer.latest_pos(),
+            i.pointer.press_origin(),
+        )
+    });
+    if let Some(d) = g.drag {
+        // Wie bei den Griffen von Verschieben/Kopieren: Rechtsklick oder Esc nimmt nur den Zug
+        // zurück, das Fenster bleibt offen (hat ein Feld die Tastatur, gilt Esc dort).
+        let (secondary, esc) = ui.input(|i| {
+            (
+                i.pointer.button_pressed(PointerButton::Secondary),
+                i.key_pressed(egui::Key::Escape),
+            )
+        });
+        let esc = esc && !viewport::typing(ui.ctx());
+        if secondary || esc {
+            (g.offset, g.angle, g.factor) = (d.start_offset, d.start_angle, d.start_factor);
+            g.moved = true;
+            g.drag = None;
+            g.esc_taken = esc;
+            return true;
+        }
+        if let Some(now) = latest.and_then(|p| map.to_sketch(p)) {
+            let (offset, raw, factor) = sketch_grips::grip_motion(&d, d.start_offset, now);
+            let angle = sketch_grips::unwrapped_angle(g.angle, raw);
+            if (offset, angle, factor) != (g.offset, g.angle, g.factor) {
+                (g.offset, g.angle, g.factor) = (offset, angle, factor);
+                g.moved = true;
+            }
+        }
+        if !down {
+            g.drag = None;
+        }
+        return true;
+    }
+    let Some((main, scale)) = insert_layout(&map, g.offset) else {
+        g.hot = None;
+        return false;
+    };
+    let hot =
+        hover.and_then(|p| sketch_grips::hit(&scale, p).or_else(|| sketch_grips::hit(&main, p)));
+    g.hot = hot;
+    if pressed
+        && let Some(grip) = hot
+        && let Some(press) = origin.or(hover).and_then(|p| map.to_sketch(p))
+    {
+        g.drag = Some(sketch_grips::GripDrag {
+            grip,
+            press,
+            start_offset: g.offset,
+            start_angle: g.angle,
+            start_factor: g.factor,
+        });
+    }
+    hot.is_some()
+}
+
+/// Zeichnet die Griffe eines Einfügen-Fensters über der Ansicht.
+pub fn paint_insert_grips(painter: &egui::Painter, rect: Rect, state: &AppState) {
+    let (Some(g), Some((main, scale))) =
+        (state.insert_grips.as_ref(), insert_grip_layout(state, rect))
+    else {
+        return;
+    };
+    let col = colors(state.dark);
+    let hot = g.drag.map(|d| d.grip).or(g.hot);
+    let (color, hot_color) = (col.selected, lighter(col.selected));
+    sketch_grips::paint(painter, &main, hot, color, hot_color);
+    sketch_grips::paint(painter, &scale, hot, color, hot_color);
 }
 
 /// Lage der Griffe der Anordnung in diesem Bild (Pfeil je Richtung am letzten Exemplar, beim
@@ -1303,6 +1476,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     .then(|| state.document.param_scope());
     // Text: OK über Eingabe setzt mit der Schriftliste.
     let fonts = state.fonts().cloned();
+    let dialog_takes_esc = state.insert_dialog_open;
     let Some((se, sf)) = state.session_draft_mut() else {
         return;
     };
@@ -1336,8 +1510,11 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             se.begin_line_arc(&sf.sketch, start, r);
         }
     }
-    let esc =
-        !flyout && !viewport::typing(ui.ctx()) && ui.input(|i| i.key_pressed(egui::Key::Escape));
+    // Ein offenes Einfügen-Fenster (DXF, SVG) nimmt Esc selbst; die Skizze sieht sie nicht.
+    let esc = !flyout
+        && !dialog_takes_esc
+        && !viewport::typing(ui.ctx())
+        && ui.input(|i| i.key_pressed(egui::Key::Escape));
     // Griffzug: Die rechte Taste und Esc nehmen ihn ganz zurück. Das steht vor dem Ende des Zugs, denn
     // Esc beendet schon hier den Zug von egui, und das hieße Annehmen. Die Taste gilt damit als
     // verbraucht: Sie leert nicht auch noch die Auswahl.
@@ -2305,15 +2482,20 @@ fn place_label(mut r: Rect, placed: &mut Vec<Rect>) -> Rect {
 /// Kontrollpolygon, beim Kegelschnitt Start–Scheitel–Ende. Sie sind keine Kurven. Die Buchstaben
 /// eines Textes, der gerade geändert wird, haben keine (Handtest B2: Die Ansicht zeichnet sie
 /// nicht, [`SketchSession::text_hidden`]).
+///
+/// Dazu kommt immer das Kontrollpolygon der Kurven mit Kontrollpunktrahmen
+/// ([`frame_polygons`], Skizzen 9), gewählt oder nicht.
 pub fn curve_guides(se: &SketchSession, sk: &Sketch) -> Vec<Vec<DVec2>> {
     let hidden = se.text_hidden(sk);
-    se.selection
+    let framed = |c: &CurveId| sk.curve(*c).is_some_and(|d| d.show_frame);
+    let mut out: Vec<Vec<DVec2>> = se
+        .selection
         .iter()
         .filter_map(|item| {
             let Item::Curve(c) = item else {
                 return None;
             };
-            if hidden.contains(c) {
+            if hidden.contains(c) || framed(c) {
                 return None;
             }
             let ids = match &sk.curve(*c)?.kind {
@@ -2325,7 +2507,44 @@ pub fn curve_guides(se: &SketchSession, sk: &Sketch) -> Vec<Vec<DVec2>> {
             };
             ids.iter().map(|&p| pos(sk, p)).collect()
         })
+        .collect();
+    out.extend(
+        sk.curves()
+            .filter(|(c, d)| d.show_frame && !hidden.contains(c))
+            .filter_map(|(c, _)| frame_polygon(sk, c)),
+    );
+    out
+}
+
+/// Kontrollpolygone aller Kurven mit Kontrollpunktrahmen
+/// ([`planora_sketch::model::CurveData::show_frame`]): beim Spline mit Kontrollpunkten die
+/// Kontrollpunkte, beim Kegelschnitt Start–Scheitel–Ende, beim festen Spline seine
+/// Kontrollpunkte. Die Ansicht zeichnet sie immer, offen oder fertig.
+pub fn frame_polygons(sk: &Sketch) -> Vec<Vec<DVec2>> {
+    sk.curves()
+        .filter(|(_, d)| d.show_frame)
+        .filter_map(|(c, _)| frame_polygon(sk, c))
         .collect()
+}
+
+fn frame_polygon(sk: &Sketch, c: CurveId) -> Option<Vec<DVec2>> {
+    let ids = match &sk.curve(c)?.kind {
+        CurveKind::ControlSpline { points, .. } => points.clone(),
+        CurveKind::Conic {
+            start, end, apex, ..
+        } => vec![*start, *apex, *end],
+        CurveKind::FixedSpline { curve, .. } => {
+            return Some(
+                curve
+                    .control_points()
+                    .iter()
+                    .map(|q| q.truncate())
+                    .collect(),
+            );
+        }
+        _ => return None,
+    };
+    ids.iter().map(|&p| pos(sk, p)).collect()
 }
 
 /// Vorschau des Werkzeugs „Text“ ([`crate::sketch_text`]): nichts davon steht in der Skizze.

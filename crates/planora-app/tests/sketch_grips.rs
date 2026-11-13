@@ -1348,13 +1348,15 @@ fn the_panel_has_copy_base_point_ok_and_cancel() {
         rig.st().sketch_session.as_ref().unwrap().transform.stage,
         TransformStage::SetBase
     );
-    let spot = rig.pixel_of(v(30.0, 30.0));
+    // Nicht ganz oben in der Ansicht: dort liegt das obere Feld, das seit dem Menü „Einfügen“
+    // breiter ist.
+    let spot = rig.pixel_of(v(30.0, 20.0));
     rig.click_at(spot);
     {
         let t = &rig.st().sketch_session.as_ref().unwrap().transform;
         assert_eq!(t.stage, TransformStage::Active);
         assert!(
-            t.base.unwrap().distance(v(30.0, 30.0)) < 1.0,
+            t.base.unwrap().distance(v(30.0, 20.0)) < 1.0,
             "{:?}",
             t.base
         );

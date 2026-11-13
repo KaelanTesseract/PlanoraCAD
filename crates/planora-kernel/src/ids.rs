@@ -92,6 +92,12 @@ impl<T> Arena<T> {
         self.items.is_empty()
     }
 
+    /// Kürzt auf die ersten `len` Elemente (Zurücknehmen frisch angehängter Elemente; Ids ab
+    /// `len` gelten danach nicht mehr).
+    pub fn truncate(&mut self, len: usize) {
+        self.items.truncate(len);
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (Id<T>, &T)> {
         self.items
             .iter()

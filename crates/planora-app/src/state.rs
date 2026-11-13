@@ -76,6 +76,41 @@ impl FontState {
     }
 }
 
+/// Vorschau eines Einfügen-Fensters: Lage der Ebene und Linienzüge darin (Skizzenkoordinaten).
+#[derive(Clone, Debug, PartialEq)]
+pub struct InsertPreview {
+    pub frame: Frame,
+    pub lines: Vec<Vec<DVec2>>,
+}
+
+/// Griffe auf der Vorschau eines Einfügen-Fensters ([`crate::sketch_grips`] ohne Werkzeug):
+/// Lage in Skizzenkoordinaten der Ebene `frame`, intern (Y nach oben, Winkel gegen den
+/// Uhrzeigersinn). Die Mitte der Griffe ist `offset`, dort liegt die Mitte der Vorschau.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InsertGrips {
+    pub frame: Frame,
+    pub offset: DVec2,
+    /// Winkel in Radiant, gegen den Uhrzeigersinn.
+    pub angle: f64,
+    /// Maßstab als Faktor.
+    pub factor: f64,
+    /// Griff unter dem Zeiger.
+    pub hot: Option<crate::sketch_grips::Grip>,
+    /// Laufender Zug.
+    pub drag: Option<crate::sketch_grips::GripDrag>,
+    /// Der Zug hat die Lage geändert; das Fenster übernimmt sie in seine Felder.
+    pub moved: bool,
+    /// Esc hat in diesem Bild nur den Zug abgebrochen: Das Fenster schließt darauf nicht.
+    pub esc_taken: bool,
+}
+
+impl InsertGrips {
+    /// Nimmt die Ansicht den Zeiger (Griff unter dem Zeiger oder laufender Zug)?
+    pub fn busy(&self) -> bool {
+        self.hot.is_some() || self.drag.is_some()
+    }
+}
+
 /// Grundebenen für neue Skizzen (gemeinsame Definition mit dem Feature-Modell).
 pub use planora_feature::StandardPlane;
 
@@ -253,6 +288,29 @@ pub struct AppState {
     /// Laufender Wahlmodus ohne Fenster ([`PendingPick`]); schließt sich mit `plane_pick` und
     /// dem Fenster „Verrunden“/„Fase“ gegenseitig aus.
     pub pending_pick: Option<PendingPick>,
+    /// Laufendes „Kalibrieren“ einer Leinwand (Skizzen 9): ein Klickmodus in der Ansicht
+    /// außerhalb der Skizze ([`crate::insert::calibrate::Calibrate`]).
+    pub calibrate: Option<crate::insert::calibrate::Calibrate>,
+    /// Name des nächsten Rückgängig-Schritts, wenn der Vergleich der Bilder ihn nicht
+    /// erkennt (etwa „Kalibrieren“, das sonst wie „Leinwand bearbeiten“ aussähe). Gilt nur für
+    /// genau den nächsten Schritt.
+    pub undo_label_hint: Option<fn() -> String>,
+    /// Ist ein Fenster „DXF einfügen“ oder „SVG einfügen“ offen (Stand des letzten Bildes)? Dann
+    /// gehört Esc dem Fenster: Die offene Skizze bricht damit nicht auch ihr Werkzeug ab
+    /// (Gesamtprüfung M1).
+    pub insert_dialog_open: bool,
+    /// Vorschau eines offenen Einfügen-Fensters (Skizzen 9, „DXF einfügen“): Linienzüge in
+    /// Skizzenkoordinaten auf der gewählten Ebene, als Linien über der Ansicht gezeichnet.
+    pub insert_preview: Option<InsertPreview>,
+    /// Griffe auf der Vorschau eines Einfügen-Fensters (Skizzen 9, „SVG einfügen“): das Fenster
+    /// schreibt die Lage in jedem Bild, die Ansicht den Zug am Griff ([`InsertGrips::moved`]).
+    pub insert_grips: Option<InsertGrips>,
+    /// Vorschau des Fensters „Leinwand“ (Skizzen 9): das Bild mit der Lage aus den Feldern.
+    pub canvas_preview: Option<crate::canvas::CanvasPreview>,
+    /// Entschlüsselte Bilder der Leinwände, einmal je Bild ([`crate::canvas::TextureCache`]).
+    pub canvas_textures: crate::canvas::TextureCache,
+    /// Auswählbare Leinwand unter dem Zeiger (nur für dieses Bild, Rahmen in der Ansicht).
+    pub canvas_hover: Option<FeatureId>,
     /// Verschieben, das der laufende Zug im Eigenschaftenfenster angelegt hat.
     drag_move: Option<FeatureId>,
     /// Prüfberichte der Netze, einmal je Netz berechnet (Plan P13).
@@ -605,6 +663,14 @@ impl AppState {
             chain_marking: true,
             plane_pick: None,
             pending_pick: None,
+            calibrate: None,
+            undo_label_hint: None,
+            insert_dialog_open: false,
+            insert_preview: None,
+            insert_grips: None,
+            canvas_preview: None,
+            canvas_textures: crate::canvas::TextureCache::default(),
+            canvas_hover: None,
             drag_move: None,
             mesh_reports: BTreeMap::new(),
             display_triangles: crate::mesh_body::DISPLAY_TRIANGLES,
@@ -870,6 +936,7 @@ impl AppState {
         let folder = match self.document.feature(id).map(|f| &f.kind) {
             Some(FeatureKind::Sketch(_)) => v.folders.sketches,
             Some(FeatureKind::Plane(_)) => v.folders.planes,
+            Some(FeatureKind::Canvas(_)) => v.folders.canvases,
             _ => false,
         };
         folder || v.features.contains(&id)
@@ -885,10 +952,12 @@ impl AppState {
     /// auf ihr entfallen; eine ausgeblendete Skizze wird in 3D nicht gezeichnet. Andere Features
     /// und das Ausblenden der geöffneten Skizze (sie bleibt sichtbar) ändern nichts.
     pub fn set_feature_hidden(&mut self, id: FeatureId, hidden: bool) {
-        let hideable = self
-            .document
-            .feature(id)
-            .is_some_and(|f| matches!(f.kind, FeatureKind::Sketch(_) | FeatureKind::Plane(_)));
+        let hideable = self.document.feature(id).is_some_and(|f| {
+            matches!(
+                f.kind,
+                FeatureKind::Sketch(_) | FeatureKind::Plane(_) | FeatureKind::Canvas(_)
+            )
+        });
         if !hideable || (hidden && self.open_sketch_id() == Some(id)) {
             return;
         }
@@ -922,6 +991,7 @@ impl AppState {
             Folder::Bodies => v.folders.bodies,
             Folder::Sketches => v.folders.sketches,
             Folder::Construction => v.folders.planes,
+            Folder::Canvases => v.folders.canvases,
             Folder::Origin => v.origin_planes == [false; 3],
             Folder::Drawings => false,
         }
@@ -937,6 +1007,7 @@ impl AppState {
             Folder::Bodies => v.folders.bodies = !v.folders.bodies,
             Folder::Sketches => v.folders.sketches = !v.folders.sketches,
             Folder::Construction => v.folders.planes = !v.folders.planes,
+            Folder::Canvases => v.folders.canvases = !v.folders.canvases,
             Folder::Origin => v.origin_planes = [v.origin_planes == [false; 3]; 3],
             Folder::Drawings => return,
         }
@@ -999,9 +1070,12 @@ impl AppState {
     /// sonst der gewählte Körper. `false`, wenn nichts davon gewählt ist.
     pub fn toggle_selected_visibility(&mut self) -> bool {
         let feature = self.selected_feature.filter(|id| {
-            self.document
-                .feature(*id)
-                .is_some_and(|f| matches!(f.kind, FeatureKind::Sketch(_) | FeatureKind::Plane(_)))
+            self.document.feature(*id).is_some_and(|f| {
+                matches!(
+                    f.kind,
+                    FeatureKind::Sketch(_) | FeatureKind::Plane(_) | FeatureKind::Canvas(_)
+                )
+            })
         });
         if let Some(id) = feature {
             let hidden = self.own_feature_hidden(id);
@@ -1105,6 +1179,7 @@ impl AppState {
         self.edge_picking = false;
         self.plane_pick = None;
         self.pending_pick = None;
+        self.calibrate = None;
         self.drag_move = None;
         self.pending_delete = None;
         self.pending_delete_drawing = None;
@@ -2241,6 +2316,27 @@ impl AppState {
         }
     }
 
+    /// Strahllänge bis zum Treffer `click` unter dem Zeiger (wie in [`Self::plane_click_at`]):
+    /// Ecken und Kanten liegen ganz vorn (`-∞`), ohne Treffer `None`.
+    pub(crate) fn click_distance(
+        &self,
+        cursor: Vec2,
+        viewport: Vec2,
+        click: Option<crate::plane_dialog::PlaneClick>,
+    ) -> Option<f64> {
+        use crate::plane_dialog::PlaneClick;
+        match click? {
+            PlaneClick::Standard(_) => self.nearest_origin_hit(cursor, viewport).map(|(_, t)| t),
+            PlaneClick::View(Pick::Face(_)) => self
+                .nearest_face_hit(cursor, viewport)
+                .map(|(_, f)| f64::from(f.distance)),
+            PlaneClick::View(Pick::Plane(_)) => {
+                self.nearest_plane_hit(cursor, viewport).map(|(_, d)| d)
+            }
+            PlaneClick::View(_) => Some(f64::NEG_INFINITY),
+        }
+    }
+
     /// Rechteck, als das die Konstruktionsebene `id` gezeichnet und angeklickt wird (Skizzen 6);
     /// `None` für unterdrückte, fehlerhafte und zurückgerollte Ebenen und andere Features.
     /// Halbe Kante: das Größere aus 25 mm und 0,6 × Diagonale der Hüllquader aller sichtbaren
@@ -2495,6 +2591,42 @@ impl AppState {
         self.add_checked(&label, kind)
     }
 
+    /// Legt ein Skizzen-Feature auf `plane` (Lage `frame`) an, dessen Skizze `fill` vorher füllt
+    /// (Einfügen, Skizzen 9). Ohne `name` heißt sie „Skizze N“. Scheitert `fill` oder lässt
+    /// sich die Skizze nicht berechnen, bleibt das Dokument unverändert.
+    pub(crate) fn add_filled_sketch<R>(
+        &mut self,
+        plane: SketchPlane,
+        frame: Frame,
+        name: Option<&str>,
+        fill: impl FnOnce(&mut Sketch) -> Result<R, String>,
+    ) -> Result<(FeatureId, R), String> {
+        let label = sketch_label();
+        let given = name.map(str::trim).filter(|n| !n.is_empty());
+        let name = given.map_or_else(|| self.next_name(&label), str::to_string);
+        let mut sketch = Sketch::new(frame, name.clone(), self.kernel.tolerance);
+        let out = fill(&mut sketch)?;
+        let kind = FeatureKind::Sketch(SketchFeature {
+            sketch,
+            plane,
+            copies: Vec::new(),
+            formulas: Default::default(),
+        });
+        let id = self.add_checked_named(name, kind, Formulas::new())?;
+        // Nur ein Name aus dem Zähler zählt ihn weiter (ein Layername nicht).
+        if given.is_none() {
+            self.count_name(&label);
+        }
+        Ok((id, out))
+    }
+
+    /// Nimmt Features zurück, die ein Befehl im selben Bild angelegt hat (alles oder nichts).
+    pub(crate) fn remove_features(&mut self, ids: &[FeatureId]) {
+        for &id in ids.iter().rev() {
+            let _ = self.document.delete_with_dependents(id);
+        }
+    }
+
     /// Legt ein Skizzen-Feature auf der ebenen Fläche `face` des sichtbaren Körpers `body` an.
     /// Die Skizze verweist über Marke und Hinweispunkt auf die Fläche und wandert mit ihr.
     pub fn new_sketch_on_face(&mut self, body: usize, face: Id<Face>) -> Result<FeatureId, String> {
@@ -2623,9 +2755,11 @@ impl AppState {
         Ok(())
     }
 
-    /// Beendet einen Wahlmodus ohne Änderung (Esc, Rechtsklick).
+    /// Beendet einen Wahlmodus ohne Änderung (Esc, Rechtsklick), auch „Kalibrieren“: Wer ein
+    /// Fenster öffnet, das in der Ansicht wählt, beendet damit jeden Klickmodus.
     pub fn cancel_pending_pick(&mut self) {
         self.pending_pick = None;
+        self.calibrate = None;
         self.set_hover(None);
     }
 
@@ -2657,7 +2791,7 @@ impl AppState {
 
     /// Verweis auf die ebene Fläche `face` des sichtbaren Körpers `body` für eine Skizze; sonst
     /// der Grund.
-    fn face_ref_for_sketch(
+    pub(crate) fn face_ref_for_sketch(
         &self,
         body: usize,
         face: Id<Face>,
@@ -2724,6 +2858,7 @@ impl AppState {
         }
         // Im Skizzen-Modus wählt die Ansicht nichts für einen anderen Befehl.
         self.pending_pick = None;
+        self.calibrate = None;
         let switching = self.sketch_session.is_some();
         if switching {
             // Bleibt die alte Skizze offen (Entwurf abgelehnt), wird nicht gewechselt.

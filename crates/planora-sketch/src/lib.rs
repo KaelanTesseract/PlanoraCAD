@@ -13,6 +13,7 @@ pub mod error;
 pub mod fillet;
 pub(crate) mod geom;
 pub mod helpers;
+pub mod import;
 pub(crate) mod intersect;
 /// Interne lineare Algebra des Solvers; nur für die Tests öffentlich.
 #[doc(hidden)]
@@ -38,7 +39,9 @@ pub mod text_shape;
 pub mod transform;
 pub mod triangulate;
 
-pub use constraint::{ConstraintData, ConstraintId, ConstraintKind, Evaluation, LineOrPoints};
+pub use constraint::{
+    ConstraintData, ConstraintId, ConstraintKind, Evaluation, FixToggle, LineOrPoints,
+};
 pub use curves::{
     conic_apex_ok, conic_nurbs, conic_rho_at, conic_rho_ok, conic_shoulder, control_spline_nurbs,
 };
@@ -51,6 +54,7 @@ pub use fillet::{
     FilletPlan,
 };
 pub use helpers::{RectIds, plane_of_face};
+pub use import::{InsertOptions, InsertReport, Placement, preview_polylines};
 pub use model::{
     CurveData, CurveId, CurveKind, HandleCurvature, LineStyle, PointData, PointId, Sketch,
     SplineHandle,

@@ -119,6 +119,7 @@ fn features(before: &Snapshot, after: &Snapshot) -> Option<String> {
                 FeatureKind::Move { .. } | FeatureKind::MeshBody { .. } => tr!("undo-move"),
                 FeatureKind::Sketch(_) => tr!("undo-sketch-edit"),
                 FeatureKind::Plane(_) => tr!("undo-plane-edit"),
+                FeatureKind::Canvas(_) => tr!("undo-canvas-edit"),
                 _ => tr!("undo-feature-change"),
             },
         });
@@ -150,6 +151,7 @@ fn created_label(kind: &FeatureKind) -> String {
         }
         FeatureKind::MeshBody { .. } => tr!("undo-mesh-import"),
         FeatureKind::StepBody { .. } => tr!("undo-step-import"),
+        FeatureKind::Canvas(_) => tr!("undo-canvas"),
         // Skizzen 6: nach dem Befehl des Menüs „Konstruieren“.
         FeatureKind::Plane(pf) => {
             use planora_feature::planes::PlaneDef;

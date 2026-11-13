@@ -169,6 +169,9 @@ pub struct CurveData {
     pub construction: bool,
     /// Mittellinie: nur an Linien, setzt `construction` voraus.
     pub centerline: bool,
+    /// Kontrollpunktrahmen (Skizzen 9): Die Ansicht zeichnet das Kontrollpolygon dieser Kurve
+    /// immer. Vorgabe `false`; gesetzt beim Einfügen mit „Kontrollpunktrahmen“.
+    pub show_frame: bool,
     pub(crate) alive: bool,
 }
 
@@ -379,6 +382,7 @@ impl Sketch {
             kind,
             construction: false,
             centerline: false,
+            show_frame: false,
             alive: true,
         })
     }
@@ -883,6 +887,12 @@ impl Sketch {
     /// Datei Format 14.
     pub fn has_centerline_entry(&self) -> bool {
         self.curves.iter().any(|(_, c)| c.centerline)
+    }
+
+    /// Gibt es einen Kurveneintrag mit Kontrollpunktrahmen, auch einen gelöschten? Dann braucht
+    /// die Datei Format 19 (Skizzen 9).
+    pub fn has_frame_entry(&self) -> bool {
+        self.curves.iter().any(|(_, c)| c.show_frame)
     }
 
     /// Gibt es einen Mustereintrag oder einen Abhängigkeitseintrag, der Format 15 braucht, auch

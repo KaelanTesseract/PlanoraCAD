@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200" viewBox="0 0 300 200">
+  <defs><clipPath id="c"><rect x="0" y="0" width="50" height="50"/></clipPath></defs>
+  <g transform="translate(20,20) rotate(15)">
+    <circle cx="50" cy="50" r="30"/>
+    <ellipse cx="120" cy="60" rx="40" ry="20"/>
+    <path d="M 10 100 A 30 20 0 0 1 70 100 S 100 140 130 100 T 190 100 Z" fill="none" stroke="red"/>
+    <polygon points="200,10 250,10 225,50"/>
+    <g clip-path="url(#c)"><line x1="0" y1="0" x2="100" y2="100" stroke="black"/></g>
+  </g>
+  <text x="5" y="190">Text</text>
+</svg>

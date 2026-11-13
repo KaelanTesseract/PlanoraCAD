@@ -402,7 +402,13 @@ pub fn hook_with(dir: PathBuf, mask: UserMask, diag: &'static Mutex<Diag>, previ
                     Err(TryLockError::WouldBlock) => None,
                 };
                 if let Some(mut d) = d {
-                    d.log(diag::Level::Warn, CAUGHT_LINE);
+                    // Nur die Stelle im Quelltext, nicht die Meldung: Die könnte Dateiinhalt
+                    // oder Pfade enthalten. Die Stelle genügt, um einen eigenen Fehler zu finden.
+                    let line = match info.location() {
+                        Some(l) => format!("{CAUGHT_LINE} ({}:{})", l.file(), l.line()),
+                        None => CAUGHT_LINE.to_string(),
+                    };
+                    d.log(diag::Level::Warn, &line);
                 }
             }));
         } else {
@@ -711,7 +717,7 @@ pub fn report_document(text: &str) -> Option<PathBuf> {
 }
 
 /// Protokollzeile statt eines Berichts bei einer abgefangenen Panik ([`expected_panics`]).
-pub const CAUGHT_LINE: &str = "Caught an error while building a preview";
+pub const CAUGHT_LINE: &str = "Caught an error while reading a file or building a preview";
 
 thread_local! {
     /// Wie tief dieser Faden gerade in [`expected_panics`] steckt.

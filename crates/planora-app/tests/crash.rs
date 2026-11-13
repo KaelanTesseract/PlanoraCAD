@@ -490,3 +490,62 @@ fn backtrace_starts_at_own_frames_and_is_cut_to_40_lines() {
     assert!(!r.contains("egui::context::run_59"), "{r}");
     assert!(r.contains("planora_app::app::PlanoraApp::logic"));
 }
+
+// ---- Skizzen 9: Panik in einem fremden Leser ----------------------------------------------
+
+/// Leser, der wie eine kaputte Bibliothek in Panik gerät.
+fn panicking_reader(_: &[u8], _: &dyn Fn() -> bool) -> Result<u8, planora_exchange::ExchangeError> {
+    panic!("Leserpanik im Test")
+}
+
+/// Gerät ein DXF-, SVG- oder Bildleser in Panik, meldet das Fenster „Datei kaputt“, und es
+/// entsteht kein Absturzbericht (sonst fragte der nächste Start nach einem Absturz).
+#[test]
+fn a_panicking_reader_gives_an_error_and_no_report() {
+    use planora_app::insert::{BackgroundRead, ReadSpec, guarded};
+    use planora_exchange::ExchangeError;
+    let dir = temp_dir("leserpanik");
+    // Die Datei liegt außerhalb des Berichtsordners, der leer bleiben muss.
+    let src = temp_dir("leserpanik-datei");
+    std::fs::create_dir_all(&src).expect("Ordner");
+    let file = src.join("kaputt.dxf");
+    std::fs::write(&file, b"0\nEOF\n").expect("schreibbar");
+    let diag = leaked_diag();
+    let mut result = None;
+    let mut decoded = None;
+    with_hook(&dir, diag, || {
+        let mut r = BackgroundRead::start(
+            file.clone(),
+            ReadSpec {
+                max_bytes: 1024,
+                too_large: ExchangeError::DxfTooLarge,
+                read: panicking_reader,
+                broken: ExchangeError::DxfBroken,
+            },
+        );
+        result = r.wait();
+        // Derselbe Schutz für das Entschlüsseln der Leinwandbilder.
+        decoded = Some(
+            std::thread::spawn(|| {
+                guarded::<u8>(ExchangeError::ImageBroken, || panic!("Bildpanik im Test"))
+            })
+            .join()
+            .expect("kein Fadenende durch die Panik"),
+        );
+    });
+    assert_eq!(
+        result,
+        Some(Err(ExchangeError::DxfBroken("internal error".into())))
+    );
+    assert_eq!(
+        decoded,
+        Some(Err(ExchangeError::ImageBroken("internal error".into())))
+    );
+    assert!(
+        reports(&dir).is_empty(),
+        "kein Bericht: {:?}",
+        reports(&dir)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&src);
+}

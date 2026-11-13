@@ -345,6 +345,8 @@ pub enum FeatureKind {
     },
     /// Konstruktionsebene (Skizzen 6): erzeugt keinen Körper, nur ein Koordinatensystem.
     Plane(crate::planes::PlaneFeature),
+    /// Leinwand (Skizzen 9): Bild als Zeichenhilfe auf einem Träger; erzeugt keinen Körper.
+    Canvas(crate::canvas::CanvasFeature),
 }
 
 impl FeatureKind {
@@ -364,6 +366,7 @@ impl FeatureKind {
             FeatureKind::MeshBody { .. } => tr!("feature-label-mesh"),
             FeatureKind::StepBody { .. } => tr!("feature-label-step"),
             FeatureKind::Plane(_) => tr!("feature-label-plane"),
+            FeatureKind::Canvas(_) => tr!("feature-label-canvas"),
         }
     }
 
@@ -402,6 +405,7 @@ impl FeatureKind {
                 d
             }
             FeatureKind::Plane(p) => p.dependencies(),
+            FeatureKind::Canvas(c) => c.dependencies(),
         };
         deps.sort();
         deps.dedup();
@@ -424,7 +428,8 @@ impl FeatureKind {
             | FeatureKind::Revolve { .. }
             | FeatureKind::MeshBody { .. }
             | FeatureKind::StepBody { .. }
-            | FeatureKind::Plane(_) => Vec::new(),
+            | FeatureKind::Plane(_)
+            | FeatureKind::Canvas(_) => Vec::new(),
         }
     }
 
@@ -469,6 +474,9 @@ pub(crate) struct FeatureResult {
     pub(crate) warning: Option<String>,
     /// Koordinatensystem einer Konstruktionsebene (siehe [`Document::plane_frame`]).
     pub(crate) plane: Option<Frame>,
+    /// Koordinatensystem des Trägers einer Leinwand (siehe [`Document::canvas_frame`]); bei
+    /// verlorener Fläche die letzte Lage.
+    pub(crate) canvas: Option<Frame>,
 }
 
 #[derive(Clone, Debug)]
@@ -541,6 +549,10 @@ pub struct Document {
     pub(crate) step_shapes: BTreeMap<StepShapeId, Arc<StepShape>>,
     /// Nächste zu vergebende Form-Kennung (beginnt bei 1).
     pub(crate) next_step_shape: u64,
+    /// Bilder der Leinwände (Skizzen 9); mehrere Leinwände können dasselbe Bild benutzen.
+    pub(crate) images: BTreeMap<crate::canvas::ImageId, Arc<crate::canvas::CanvasImage>>,
+    /// Nächste zu vergebende Bildkennung (beginnt bei 1).
+    pub(crate) next_image: u64,
     /// Zeichnungen des Dokuments (Teilprojekt 11).
     pub(crate) drawings: Vec<planora_drawing::Drawing>,
     /// Nächste zu vergebende Zeichnungskennung (beginnt bei 1).
@@ -600,6 +612,8 @@ impl Document {
             next_mesh: 1,
             step_shapes: BTreeMap::new(),
             next_step_shape: 1,
+            images: BTreeMap::new(),
+            next_image: 1,
             drawings: Vec::new(),
             next_drawing: 1,
             drawing_edits: 0,

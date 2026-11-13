@@ -345,12 +345,14 @@ fn tab_while_picking_toggles_the_preview_too() {
         rig.press(Key::D);
         let px = rig.pixels();
         rig.click(px(v(15.0, 0.0)));
-        let shot = rig.hover(px(v(30.0, 30.0)));
+        // Nicht ganz oben in der Ansicht: dort liegt das obere Feld, das seit dem Menü
+        // „Einfügen“ breiter ist.
+        let shot = rig.hover(px(v(30.0, 20.0)));
         assert!(shot.has("Ø 30,00 mm"), "{:?}", shot.texts);
         let shot = rig.press(Key::Tab);
         assert_eq!(rig.preview().unwrap().kind, K::Radius(c, 15.0));
         assert!(shot.has("R 15,00 mm"), "{:?}", shot.texts);
-        rig.click(px(v(30.0, 30.0)));
+        rig.click(px(v(30.0, 20.0)));
         rig.press(Key::Enter);
         assert_eq!(rig.live(), vec![K::Radius(c, 15.0)]);
     });

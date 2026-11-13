@@ -1,5 +1,6 @@
 //! Reine Daten eines Dokuments zum Speichern und Laden (ohne Ergebnisse und Zwischenspeicher).
 
+use crate::canvas::{CanvasImage, ImageId};
 use crate::error::FeatureError;
 use crate::formulas::{Formulas, check_keys};
 use crate::model::{Document, Feature, FeatureId, FeatureKind, FeatureStatus, MeshId};
@@ -55,6 +56,9 @@ pub struct Snapshot {
     pub meshes: BTreeMap<MeshId, Arc<ExchangeMesh>>,
     /// Formen der STEP-Körper; nur die, auf die ein Feature verweist (wie bei Netzen).
     pub step_shapes: BTreeMap<StepShapeId, Arc<StepShape>>,
+    /// Bilder der Leinwände; nur die, auf die eine Leinwand verweist (wie bei Netzen).
+    /// Rückgängig-Bilder teilen sich die `Arc`, die Bytes liegen nur einmal im Speicher.
+    pub images: BTreeMap<ImageId, Arc<CanvasImage>>,
     /// Zeichnungen des Dokuments.
     pub drawings: Vec<Drawing>,
     /// Nächste Zeichnungskennung (mindestens 1).
@@ -102,6 +106,17 @@ fn same_step_shapes(
             .all(|((ka, sa), (kb, sb))| ka == kb && Arc::ptr_eq(sa, sb))
 }
 
+/// Gleiche Bildtabellen: gleiche Kennungen mit jeweils demselben `Arc` (wie bei Netzen).
+fn same_images(
+    a: &BTreeMap<ImageId, Arc<CanvasImage>>,
+    b: &BTreeMap<ImageId, Arc<CanvasImage>>,
+) -> bool {
+    a.len() == b.len()
+        && a.iter()
+            .zip(b)
+            .all(|((ka, ia), (kb, ib))| ka == kb && Arc::ptr_eq(ia, ib))
+}
+
 impl Snapshot {
     /// Gleicher Inhalt in allen Feldern. Netze gelten nur als gleich, wenn es dieselben `Arc`
     /// sind; Skizzen nach ihrem Stand (siehe [`crate::SketchFeature`]).
@@ -115,7 +130,7 @@ impl Snapshot {
     }
 
     /// Gleiches Modell: Features (samt Formeltexten), Marker, Rückrollstellen, Kennungszähler,
-    /// Netze, STEP-Formen (beide als derselbe `Arc`) und Parametertabelle (samt
+    /// Netze, STEP-Formen, Bilder (alle als derselbe `Arc`) und Parametertabelle (samt
     /// Parameterzähler) gleich; Zeichnungen, Projektangaben, Stücklistentexte und Sichtbarkeit
     /// zählen nicht.
     /// Eine Änderung nur an Parametern oder Formeln nimmt deshalb in [`Document::restore`] den
@@ -127,6 +142,7 @@ impl Snapshot {
             && self.next_id == other.next_id
             && same_meshes(&self.meshes, &other.meshes)
             && same_step_shapes(&self.step_shapes, &other.step_shapes)
+            && same_images(&self.images, &other.images)
             && self.parameters == other.parameters
             && self.next_param == other.next_param
     }
@@ -136,6 +152,7 @@ impl Document {
     pub fn snapshot(&self) -> Snapshot {
         let used = self.used_meshes();
         let used_shapes = self.used_step_shapes();
+        let used_images = self.used_images();
         Snapshot {
             features: self
                 .features
@@ -161,6 +178,12 @@ impl Document {
                 .iter()
                 .filter(|(id, _)| used_shapes.contains(id))
                 .map(|(id, s)| (*id, Arc::clone(s)))
+                .collect(),
+            images: self
+                .images
+                .iter()
+                .filter(|(id, _)| used_images.contains(id))
+                .map(|(id, i)| (*id, Arc::clone(i)))
                 .collect(),
             drawings: self.drawings.clone(),
             next_drawing: self.next_drawing,
@@ -226,6 +249,7 @@ impl Document {
         doc.drawing_edits = self.drawing_edits + 1;
         doc.next_mesh = doc.next_mesh.max(self.next_mesh);
         doc.next_step_shape = doc.next_step_shape.max(self.next_step_shape);
+        doc.next_image = doc.next_image.max(self.next_image);
         *self = doc;
         Ok(RestoreKind::Full)
     }
@@ -320,6 +344,19 @@ impl Document {
             None => 1,
         };
         doc.step_shapes = s.step_shapes;
+        // Bilder werden übernommen, nicht entschlüsselt (das macht die Ansicht); Maße und Bytes
+        // prüft schon der Leser der Datei. Hier nur die Kennungen.
+        if s.images.contains_key(&ImageId(0)) {
+            return Err(bad(tr!("feature-snap-image-id")));
+        }
+        doc.next_image = match s.images.last_key_value() {
+            Some((id, _)) => {
+                id.0.checked_add(1)
+                    .ok_or_else(|| bad(tr!("feature-snap-image-id")))?
+            }
+            None => 1,
+        };
+        doc.images = s.images;
         for mut f in s.features {
             // Skizzenformeln an Abhängigkeiten, die keine haben können (gelöscht, anzeigend,
             // kein Maß), entfallen beim Laden still (milder Ladeweg wie bei P3).

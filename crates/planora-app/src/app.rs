@@ -12,6 +12,9 @@ use crate::feedback_dialog::{self, FeedbackAction, FeedbackContext, FeedbackDial
 use crate::file_chooser::default_dir;
 use crate::icons::{self, Icon};
 use crate::import_dialog::ImportDialog;
+use crate::insert::canvas_dialog::CanvasDialog;
+use crate::insert::dxf_dialog::DxfDialog;
+use crate::insert::svg_dialog::SvgDialog;
 use crate::install_mode::{self, InstallMode};
 use crate::keymap::overview::{OverviewEvent, OverviewState};
 use crate::keymap::{self, Action};
@@ -1433,6 +1436,25 @@ pub fn show_file_dialogs(ctx: &egui::Context, ws: &mut Workspace) {
     {
         tab.step_import_dialog = Some(dialog);
     }
+    if let Some(mut dialog) = tab.dxf_dialog.take()
+        && dialog.show(ctx, &mut tab.state, &mut exchange_dir, &mut places)
+            == crate::insert::DialogAction::Open
+    {
+        tab.dxf_dialog = Some(dialog);
+    }
+    if let Some(mut dialog) = tab.svg_dialog.take()
+        && dialog.show(ctx, &mut tab.state, &mut exchange_dir, &mut places)
+            == crate::insert::DialogAction::Open
+    {
+        tab.svg_dialog = Some(dialog);
+    }
+    if let Some(mut dialog) = tab.canvas_dialog.take()
+        && dialog.show(ctx, &mut tab.state, &mut exchange_dir, &mut places)
+            == crate::insert::DialogAction::Open
+    {
+        tab.canvas_dialog = Some(dialog);
+    }
+    tab.state.insert_dialog_open = tab.dxf_dialog.is_some() || tab.svg_dialog.is_some();
     ws.exchange_dir = exchange_dir;
     ws.save_places(places);
 }
@@ -1440,7 +1462,12 @@ pub fn show_file_dialogs(ctx: &egui::Context, ws: &mut Workspace) {
 /// Ist ein Dateifenster (Exportieren, Netz importieren, STEP importieren) des aktiven Tabs offen?
 fn file_window_open(ws: &Workspace) -> bool {
     let tab = ws.active_tab();
-    tab.export_dialog.is_some() || tab.import_dialog.is_some() || tab.step_import_dialog.is_some()
+    tab.export_dialog.is_some()
+        || tab.import_dialog.is_some()
+        || tab.step_import_dialog.is_some()
+        || tab.dxf_dialog.is_some()
+        || tab.svg_dialog.is_some()
+        || tab.canvas_dialog.is_some()
 }
 
 /// P10: schließt die Dateifenster des aktiven Tabs für Projekte oder Einstellungen. Ein
@@ -1460,6 +1487,15 @@ fn close_file_windows(ws: &mut Workspace) -> bool {
     tab.export_dialog = None;
     tab.import_dialog = None;
     tab.step_import_dialog = None;
+    if tab.dxf_dialog.take().is_some() {
+        DxfDialog::finish(&mut tab.state);
+    }
+    if tab.svg_dialog.take().is_some() {
+        SvgDialog::finish(&mut tab.state);
+    }
+    if tab.canvas_dialog.take().is_some() {
+        CanvasDialog::finish(&mut tab.state);
+    }
     true
 }
 
@@ -1715,6 +1751,143 @@ fn open_step_import(ws: &mut Workspace) {
     tab.step_import_dialog = Some(StepImportDialog::new(dir));
 }
 
+/// Einfügen → DXF einfügen … (auch über sein Kürzel): öffnet das Fenster im zuletzt benutzten
+/// Ordner. Eine offene Skizze bleibt offen, dann wird in sie eingefügt. Nur ein Fenster wählt in
+/// der Ansicht: ein Ebenen-Fenster, „Verrunden“ und der Wahlmodus „Skizzenebene neu festlegen“
+/// schließen. Nicht in schreibgeschützten Ansichten.
+pub(crate) fn open_insert_dxf(ws: &mut Workspace) {
+    let dir = ws.exchange_dir.clone().unwrap_or_else(default_dir);
+    let tab = ws.active_tab_mut();
+    // Schon offen (etwa die Taste noch einmal): das Fenster bleibt, wie es ist.
+    if tab.read_only || tab.dxf_dialog.is_some() {
+        return;
+    }
+    if let Some(why) = tab.state.chosen_lock() {
+        tab.state.message = Some(why);
+        return;
+    }
+    // Wie beim Ebenen-Fenster: andere Befehlsfenster schließen.
+    tab.feature_dialog = None;
+    tab.dialog = None;
+    tab.boolean_dialog = None;
+    if tab.plane_dialog.take().is_some() {
+        PlaneDialog::finish(&mut tab.state);
+    }
+    tab.close_blend_dialog();
+    tab.state.cancel_pending_pick();
+    tab.import_dialog = None;
+    tab.step_import_dialog = None;
+    if tab.svg_dialog.take().is_some() {
+        SvgDialog::finish(&mut tab.state);
+    }
+    if tab.canvas_dialog.take().is_some() {
+        CanvasDialog::finish(&mut tab.state);
+    }
+    tab.dxf_dialog = Some(DxfDialog::new(dir, &tab.state));
+}
+
+/// Öffnet das Fenster „SVG einfügen“ (Menü „Einfügen“, Taste), wie „DXF einfügen“: Eine offene
+/// Skizze bleibt offen, dann wird in sie eingefügt; andere Befehlsfenster, die in der Ansicht
+/// wählen, schließen. Nicht in schreibgeschützten Ansichten.
+pub(crate) fn open_insert_svg(ws: &mut Workspace) {
+    let dir = ws.exchange_dir.clone().unwrap_or_else(default_dir);
+    let tab = ws.active_tab_mut();
+    if tab.read_only || tab.svg_dialog.is_some() {
+        return;
+    }
+    if let Some(why) = tab.state.chosen_lock() {
+        tab.state.message = Some(why);
+        return;
+    }
+    tab.feature_dialog = None;
+    tab.dialog = None;
+    tab.boolean_dialog = None;
+    if tab.plane_dialog.take().is_some() {
+        PlaneDialog::finish(&mut tab.state);
+    }
+    tab.close_blend_dialog();
+    tab.state.cancel_pending_pick();
+    tab.import_dialog = None;
+    tab.step_import_dialog = None;
+    if tab.dxf_dialog.take().is_some() {
+        DxfDialog::finish(&mut tab.state);
+    }
+    if tab.canvas_dialog.take().is_some() {
+        CanvasDialog::finish(&mut tab.state);
+    }
+    tab.svg_dialog = Some(SvgDialog::new(dir, &tab.state));
+}
+
+/// Öffnet das Fenster „Leinwand“ (Menü „Einfügen“, Taste). Gesperrt, solange eine Skizze offen
+/// ist (Meldung „Erst die Skizze beenden“); andere Befehlsfenster, die in der Ansicht wählen,
+/// schließen. Nicht in schreibgeschützten Ansichten.
+pub(crate) fn open_insert_canvas(ws: &mut Workspace) {
+    let dir = ws.exchange_dir.clone().unwrap_or_else(default_dir);
+    let tab = ws.active_tab_mut();
+    if tab.read_only || tab.canvas_dialog.as_ref().is_some_and(|d| d.edit.is_none()) {
+        return;
+    }
+    if let Some(why) = tab.state.canvas_lock() {
+        tab.state.message = Some(why);
+        return;
+    }
+    tab.feature_dialog = None;
+    tab.dialog = None;
+    tab.boolean_dialog = None;
+    if tab.plane_dialog.take().is_some() {
+        PlaneDialog::finish(&mut tab.state);
+    }
+    tab.close_blend_dialog();
+    tab.state.cancel_pending_pick();
+    tab.import_dialog = None;
+    tab.step_import_dialog = None;
+    if tab.dxf_dialog.take().is_some() {
+        DxfDialog::finish(&mut tab.state);
+    }
+    if tab.svg_dialog.take().is_some() {
+        SvgDialog::finish(&mut tab.state);
+    }
+    if tab.canvas_dialog.take().is_some() {
+        CanvasDialog::finish(&mut tab.state);
+    }
+    tab.canvas_dialog = Some(CanvasDialog::new(dir, &tab.state));
+}
+
+/// Menü „Einfügen“ (Skizzen 9): „DXF einfügen …“, „SVG einfügen …“ und „Leinwand …“, je mit der
+/// Taste aus der Belegung. „Leinwand …“ ist gesperrt, solange eine Skizze offen ist (Hinweis
+/// „Erst die Skizze beenden“).
+#[doc(hidden)]
+pub fn insert_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
+    let hint = |ws: &Workspace, a| keymap::shortcut_hint(&ws.keymap, a);
+    let (dxf_keys, svg_keys, canvas_keys) = (
+        hint(ws, Action::InsertDxf),
+        hint(ws, Action::InsertSvg),
+        hint(ws, Action::InsertCanvas),
+    );
+    if shortcut_button(ui, true, Icon::Import, &tr!("menu-insert-dxf"), dxf_keys).clicked() {
+        commands::run_action(ws, Action::InsertDxf);
+        ui.close();
+    }
+    if shortcut_button(ui, true, Icon::Import, &tr!("menu-insert-svg"), svg_keys).clicked() {
+        commands::run_action(ws, Action::InsertSvg);
+        ui.close();
+    }
+    let lock = ws.active_tab().state.canvas_lock();
+    if shortcut_button(
+        ui,
+        lock.is_none(),
+        Icon::Import,
+        &tr!("menu-insert-canvas"),
+        canvas_keys,
+    )
+    .on_disabled_hover_text(lock.unwrap_or_default())
+    .clicked()
+    {
+        commands::run_action(ws, Action::InsertCanvas);
+        ui.close();
+    }
+}
+
 /// Menüeintrag (gesperrt, wenn nicht `enabled`) mit sichtbarem Tastaturfokus: die Einträge haben
 /// keinen Rand, der Fokus zeigt sich als 2-px-Ring in Akzentfarbe.
 fn entry(ui: &mut egui::Ui, enabled: bool, widget: impl egui::Widget) -> egui::Response {
@@ -1878,6 +2051,9 @@ pub(crate) fn menu_bar_measured(
             ui.menu_button(tr!("menu-file"), |ui| request = file_menu(ui, ws));
             ui.add_enabled_ui(!read_only, |ui| {
                 ui.menu_button(tr!("menu-create"), |ui| create_menu(ui, ws));
+            });
+            ui.add_enabled_ui(!read_only, |ui| {
+                ui.menu_button(tr!("menu-insert"), |ui| insert_menu(ui, ws));
             });
             // Zeichnungen lassen sich auch in alten Versionen öffnen, aber nicht anlegen.
             ui.menu_button(tr!("menu-drawing"), |ui| {
@@ -2087,7 +2263,13 @@ pub fn open_blend(ws: &mut Workspace, chamfer: bool) {
         // Nur ein Fenster wählt in der Ansicht: ein offenes Ebenen-Fenster schließt, ebenso
         // der Wahlmodus „Skizzenebene neu festlegen“.
         tab.plane_dialog = None;
+        tab.dxf_dialog = None;
+        tab.svg_dialog = None;
+        tab.canvas_dialog = None;
         tab.state.plane_pick = None;
+        tab.state.insert_preview = None;
+        tab.state.insert_grips = None;
+        tab.state.canvas_preview = None;
         tab.state.cancel_pending_pick();
         tab.blend_dialog = Some(if chamfer {
             BlendDialog::chamfer()
@@ -2105,6 +2287,15 @@ pub fn open_plane(ws: &mut Workspace, command: PlaneCommand) {
         tab.feature_dialog = None;
         tab.close_blend_dialog();
         tab.state.cancel_pending_pick();
+        if tab.dxf_dialog.take().is_some() {
+            DxfDialog::finish(&mut tab.state);
+        }
+        if tab.svg_dialog.take().is_some() {
+            SvgDialog::finish(&mut tab.state);
+        }
+        if tab.canvas_dialog.take().is_some() {
+            CanvasDialog::finish(&mut tab.state);
+        }
         tab.plane_dialog = Some(PlaneDialog::new(command));
     }
 }
@@ -2716,9 +2907,10 @@ impl eframe::App for PlanoraApp {
             // „Extrudieren …“ im Kontextmenü des Baums zählt wie der Menüeintrag.
             commands::track(&mut self.ws, Action::ExtrudeSketch);
         }
+        let dir = self.ws.exchange_dir.clone();
         let tab = self.ws.active_tab_mut();
         if let Some(id) = tab.state.edit_request.take() {
-            tab.open_edit(id);
+            tab.open_edit_in(id, dir);
         }
         // Ein eben begonnener Wahlmodus (Browser, Verlaufsleiste) schließt im selben Bild, bevor
         // sie sich zeigen, die Fenster, die in der Ansicht wählen: Profilwahl von Extrudieren/
@@ -2797,7 +2989,14 @@ impl eframe::App for PlanoraApp {
         {
             tab.plane_dialog = Some(dialog);
         }
-        if tab.plane_dialog.is_none() && tab.state.plane_pick.is_some() {
+        // Die Fenster „DXF einfügen“ und „SVG einfügen“ nutzen denselben Wahlmodus (sie zeichnen
+        // erst danach).
+        if tab.plane_dialog.is_none()
+            && tab.dxf_dialog.is_none()
+            && tab.svg_dialog.is_none()
+            && tab.canvas_dialog.is_none()
+            && tab.state.plane_pick.is_some()
+        {
             PlaneDialog::finish(&mut tab.state);
         }
         if tab.blend_dialog.is_none() && tab.state.edge_picking {

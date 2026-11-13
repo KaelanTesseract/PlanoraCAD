@@ -691,12 +691,19 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
     // Mausgesten aus der Tastenbelegung (Schwenken, Drehen, Zoomen).
     let km = keymap::mouse::current(ui.ctx());
     const NAV: &[Action] = &[Action::ViewPan, Action::ViewOrbit];
+    // Griffe eines Einfügen-Fensters (SVG) im Modell; in der Skizze nimmt sie das Overlay.
+    // Würfel und Home-Knopf gehen vor: über ihnen gibt es keinen Griff.
+    let home = home_rect(cube);
+    let grip_hover = response
+        .hover_pos()
+        .filter(|p| !cube.contains(*p) && !home.contains(*p));
+    let grips_busy = !sketching && sketch_view::insert_grips_input(ui, rect, state, grip_hover);
     if sketching {
         // Das Overlay rechnet im ganzen Bereich (Auswahl und Fangen mit der vollen Größe) und
         // ruft selbst `set_viewport`; danach das freie Rechteck erneut setzen.
         over_view |= sketch_view::show_overlay(ui, rect, state);
         fit_camera(state, rect, free);
-    } else {
+    } else if !grips_busy {
         // Navigation
         let d = response.drag_motion();
         match keymap::mouse::drag_action(&km, ui, &response, NAV) {
@@ -772,9 +779,15 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
     }
     home_response.on_hover_text(planora_i18n::tr!("view-home-hint"));
 
-    // Grundebene unter dem Zeiger gilt nur für dieses Bild.
+    // Grundebene und Leinwand unter dem Zeiger gelten nur für dieses Bild.
     state.origin_hover = None;
-    if !sketching && state.profile_pick.is_some() {
+    state.canvas_hover = None;
+    if !sketching && state.calibrate.is_some() {
+        // „Kalibrieren“ (Skizzen 9): zwei Punkte auf der Leinwand, dann der Abstand im Feld;
+        // nichts wird gewählt oder hervorgehoben.
+        state.set_hover(None);
+        crate::insert::calibrate::view_input(ui, rect, state, &response);
+    } else if !sketching && state.profile_pick.is_some() {
         // Profilwahl eines Dialogs: Klick ohne Ziehen schaltet das Profil unter dem Zeiger um
         // (wie Fusion); Körper werden dabei nicht gewählt.
         state.set_hover(None);
@@ -825,6 +838,9 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
         {
             state.cancel_pending_pick();
         }
+    } else if !sketching && grips_busy {
+        // Ein Griff des Einfügen-Fensters unter dem Zeiger oder im Zug: kein Klick in die Ansicht.
+        hover_plane_click(state, None);
     } else if !sketching && let Some(filter) = state.plane_pick.map(|p| p.filter) {
         // Fenster einer Konstruktionsebene (Skizzen 6): Ein Klick füllt dessen aktives
         // Auswahlfeld (mit dem Filter des Felds) statt zu wählen.
@@ -850,8 +866,16 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
                 let cursor = Vec2::new(p.x - rect.left(), p.y - rect.top());
                 let viewport = Vec2::new(rect.width(), rect.height());
                 let hit = state.view_click_at(cursor, viewport);
-                hover_plane_click(state, hit);
-                if response.clicked() {
+                // Eine auswählbare Leinwand vorn gewinnt beim Zeigen und beim Klick (nicht beim
+                // Markieren von Kanten).
+                let canvas = !state.edge_picking && state.hover_canvas(cursor, viewport);
+                hover_plane_click(state, if canvas { None } else { hit });
+                if response.clicked()
+                    && canvas
+                    && let Some(id) = state.canvas_hover
+                {
+                    state.select_canvas(id);
+                } else if response.clicked() {
                     use crate::plane_dialog::PlaneClick;
                     match hit {
                         Some(PlaneClick::View(Pick::Edge(e))) if state.edge_picking => {
@@ -872,7 +896,13 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
         }
     }
 
-    // 3D-Szene
+    // 3D-Szene mit den Leinwänden (je gezeichneter Leinwand ihr Bild, Vertrag mit der GPU).
+    let (canvases, canvas_textures) = state.canvas_frame_data();
+    // Ein Bild wird noch entschlüsselt: bald neu zeichnen, dann erscheint es.
+    if state.canvas_textures.pending() {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(50));
+    }
     let cam = state.camera;
     painter.set(
         scene_slot,
@@ -885,13 +915,22 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
                 scene_version: state.scene_version,
                 // Raster und Achsen folgen der Kamera: je Bild neu, ohne die Szene anzufassen.
                 grid: scene_lines(state),
+                canvases,
+                canvas_textures,
             },
         ),
     );
     // Konstruktionsebenen (Skizzen 6) unter den Linien der Skizzen.
     let mut overlay = sketch_view::plane_shapes(state, rect);
+    // Rahmen der gewählten Leinwand (Hervorhebung wie die Zeile im Baum).
+    overlay.extend(crate::canvas::canvas_outlines(state, rect));
     overlay.extend(sketch_view::finished_sketch_shapes(state, rect));
+    overlay.extend(sketch_view::insert_preview_shapes(state, rect));
+    // Punkte und Linie des Kalibrierens über allem anderen der Szene.
+    overlay.extend(crate::insert::calibrate::shapes(state, rect));
     painter.set(sketches_slot, Shape::Vec(overlay));
+    // Griffe eines Einfügen-Fensters über allem (Modell und Skizze).
+    sketch_view::paint_insert_grips(&painter, rect, state);
 
     // Würfel mit der endgültigen Kamera zeichnen (nach einem Klick schon in der neuen Ansicht).
     paint_cube(

@@ -653,6 +653,8 @@ pub enum FeatureIcon {
     Chamfer,
     /// Konstruktionsebene (Skizzen 6).
     Plane,
+    /// Leinwand (Skizzen 9): ein Bild im Rahmen.
+    Canvas,
 }
 
 impl FeatureIcon {
@@ -682,6 +684,7 @@ impl FeatureIcon {
             K::MeshBody { .. } => FeatureIcon::Body(BodyKind::Mesh),
             K::StepBody { .. } => FeatureIcon::Body(BodyKind::Step),
             K::Plane(_) => FeatureIcon::Plane,
+            K::Canvas(_) => FeatureIcon::Canvas,
         }
     }
 }
@@ -710,7 +713,33 @@ pub fn paint_feature_icon(painter: &Painter, rect: Rect, icon: FeatureIcon, colo
         FeatureIcon::Blend => paint_blend_icon(painter, rect, color),
         FeatureIcon::Chamfer => paint_chamfer_icon(painter, rect, color),
         FeatureIcon::Plane => paint_plane_icon(painter, rect, None, color),
+        FeatureIcon::Canvas => paint_canvas_icon(painter, rect, color),
     }
+}
+
+/// Leinwand: ein Bilderrahmen mit Berg und Sonne (selbst gezeichnet).
+fn paint_canvas_icon(painter: &Painter, rect: Rect, color: Color32) {
+    let stroke = Stroke::new(STROKE_WIDTH, color);
+    let c = rect.center();
+    let r = rect.width().min(rect.height()) * 0.42;
+    let frame = Rect::from_center_size(c, vec2(2.0 * r, 1.6 * r));
+    painter.rect_stroke(frame, 1.0, stroke, egui::StrokeKind::Middle);
+    let base = frame.bottom() - r * 0.2;
+    painter.add(egui::Shape::line(
+        vec![
+            egui::pos2(frame.left() + r * 0.2, base),
+            egui::pos2(c.x - r * 0.25, c.y - r * 0.2),
+            egui::pos2(c.x + r * 0.2, base - r * 0.35),
+            egui::pos2(c.x + r * 0.45, base - r * 0.55),
+            egui::pos2(frame.right() - r * 0.2, base),
+        ],
+        stroke,
+    ));
+    painter.circle_filled(
+        egui::pos2(frame.right() - r * 0.5, frame.top() + r * 0.45),
+        STROKE_WIDTH * 1.2,
+        color,
+    );
 }
 
 /// Parallelogramm einer Ebene in Schrägsicht um `c` mit halber Breite `r`, um `dy` verschoben.

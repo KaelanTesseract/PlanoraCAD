@@ -1,6 +1,7 @@
 //! Feature-Baum von PlanoraCAD: Datenmodell, stabile Verweise auf Flächen und Kanten,
 //! Berechnung und Neuberechnung mit Zwischenspeicher, Änderungsoperationen, Netz-Körper und STEP-Körper.
 
+pub mod canvas;
 mod compute;
 mod dimensions;
 mod drawings;
@@ -22,6 +23,10 @@ mod snapshot;
 mod step_bodies;
 mod visibility;
 
+pub use canvas::{
+    CanvasBase, CanvasFeature, CanvasImage, ImageId, MAX_CANVAS_OPACITY, MAX_CANVAS_SCALE,
+    MIN_CANVAS_SCALE, image_hash,
+};
 pub use compute::MAX_COORD_MM;
 pub use dimensions::{
     MAX_DECIMALS, MAX_DIM_TEXT_CHARS, MAX_FIT_CHARS, MAX_HINT_MM, MAX_ROLE_CHARS, MAX_TOL_MM,

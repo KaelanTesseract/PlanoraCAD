@@ -1093,6 +1093,11 @@ fn status_line(state: &AppState, dark: bool) -> (String, egui::Color32) {
         return (tr!("state-pick-sketch-plane"), p.text_secondary);
     }
     if state.message.is_none()
+        && let Some(c) = &state.calibrate
+    {
+        return (crate::insert::calibrate::status_hint(c), p.text_secondary);
+    }
+    if state.message.is_none()
         && let Some(info) = &state.info
     {
         return match state.session_sketch() {
@@ -1174,5 +1179,25 @@ mod tests {
         s.message = None;
         s.cancel_pending_pick();
         assert_eq!(status_line(&s, true).0, "Hinweis");
+    }
+
+    /// Skizzen 9, Task 14: Beim Kalibrieren sagt die Statuszeile die Stufe.
+    #[test]
+    fn calibrate_shows_its_stage() {
+        let mut s = AppState::new();
+        let mut c = crate::insert::calibrate::Calibrate::new(planora_feature::FeatureId(1));
+        s.calibrate = Some(c.clone());
+        assert_eq!(status_line(&s, true).0, tr!("calibrate-first"));
+        c.first = Some(planora_math::DVec2::ZERO);
+        s.calibrate = Some(c.clone());
+        assert_eq!(status_line(&s, true).0, tr!("calibrate-second"));
+        c.second = Some(planora_math::DVec2::X);
+        s.calibrate = Some(c);
+        assert_eq!(status_line(&s, true).0, tr!("calibrate-distance"));
+        s.cancel_pending_pick();
+        assert!(
+            s.calibrate.is_none(),
+            "ein neuer Wahlmodus beendet das Kalibrieren"
+        );
     }
 }

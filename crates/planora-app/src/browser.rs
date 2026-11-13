@@ -313,6 +313,8 @@ pub enum Folder {
     Bodies,
     /// Die Skizzen.
     Sketches,
+    /// Die Leinwände (Skizzen 9); nur, wenn es eine gibt (wie Fusion).
+    Canvases,
     /// Die Konstruktionsebenen (Skizzen 6); nur, wenn es eine gibt (wie Fusion).
     Construction,
     /// Die Zeichnungen mit ihren Ansichten.
@@ -323,9 +325,10 @@ pub enum Folder {
 
 impl Folder {
     /// Alle Ordner in der Reihenfolge des Baums.
-    pub const ALL: [Folder; 5] = [
+    pub const ALL: [Folder; 6] = [
         Folder::Bodies,
         Folder::Sketches,
+        Folder::Canvases,
         Folder::Construction,
         Folder::Drawings,
         Folder::Origin,
@@ -336,6 +339,7 @@ impl Folder {
         match self {
             Folder::Bodies => tr!("tree-folder-bodies"),
             Folder::Sketches => tr!("tree-folder-sketches"),
+            Folder::Canvases => tr!("tree-folder-canvases"),
             Folder::Construction => tr!("tree-folder-construction"),
             Folder::Drawings => tr!("tree-folder-drawings"),
             Folder::Origin => tr!("tree-folder-origin"),
@@ -351,13 +355,13 @@ impl Folder {
 /// eigenen). Anfangs ist alles offen außer „Ursprung“.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FolderState {
-    open: [bool; 5],
+    open: [bool; 6],
 }
 
 impl Default for FolderState {
     fn default() -> Self {
         FolderState {
-            open: [true, true, true, true, false],
+            open: [true, true, true, true, true, false],
         }
     }
 }
@@ -487,6 +491,8 @@ enum Action {
     PickStandard(StandardPlane),
     /// „Skizzenebene neu festlegen“ für diese Skizze (Wahlmodus).
     RedefinePlane(FeatureId),
+    /// „Kalibrieren“ dieser Leinwand (Klickmodus in der Ansicht).
+    Calibrate(FeatureId),
 }
 
 /// Angaben einer Skizzenzeile (aus dem Dokument kopiert, damit danach geändert werden darf).
@@ -969,7 +975,9 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
     let mut action = None;
     indented(ui, |ui| {
         for folder in Folder::ALL {
-            if folder == Folder::Construction && !has_planes(state) {
+            if (folder == Folder::Construction && !has_planes(state))
+                || (folder == Folder::Canvases && !state.has_canvases())
+            {
                 continue;
             }
             let open = state.tree_folders.is_open(folder);
@@ -993,6 +1001,9 @@ pub fn show_with(ui: &mut egui::Ui, state: &mut AppState, read_only: bool) {
                 }
                 Folder::Sketches => {
                     ui.add_enabled_ui(!read_only, |ui| sketches(ui, state, &mut action));
+                }
+                Folder::Canvases => {
+                    ui.add_enabled_ui(!read_only, |ui| canvases(ui, state, &mut action));
                 }
                 Folder::Construction => {
                     ui.add_enabled_ui(!read_only, |ui| construction(ui, state, &mut action));
@@ -1449,6 +1460,93 @@ fn construction(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>
     }
 }
 
+/// Ordner „Leinwände“ (Skizzen 9): je Leinwand eine Zeile mit Auge, Status und Kontextmenü
+/// („Leinwand bearbeiten“, „Kalibrieren“, „Umbenennen“, „Löschen“). Doppelklick bearbeitet.
+fn canvases(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
+    let weak = ui.visuals().weak_text_color();
+    prime_status_words(ui);
+    let rows: Vec<(FeatureId, String, FeatureStatus)> = state
+        .document
+        .features()
+        .iter()
+        .filter(|f| matches!(f.kind, FeatureKind::Canvas(_)))
+        .map(|f| (f.id, f.name.clone(), f.status.clone()))
+        .collect();
+    let lock = state.canvas_lock();
+    for (id, name, status) in rows {
+        let selected = state.selected_feature == Some(id);
+        let hidden = state.is_feature_hidden(id);
+        let (status, mut color, reason) = status_view(&status, weak, row_error(ui));
+        if hidden && color.is_none() {
+            color = Some(weak);
+        }
+        let resp = row_lead(
+            ui,
+            0.0,
+            EYE_W,
+            selected,
+            &name,
+            color,
+            status.as_deref().zip(color),
+            None,
+            |p, rect, c| paint_feature_icon(p, rect, FeatureIcon::Canvas, c),
+        )
+        .on_hover_text(
+            reason
+                .or_else(|| sketch_row_warning(state, id))
+                .unwrap_or_else(|| tr!("tree-canvas-hint")),
+        );
+        let texts = (tr!("tree-show-item"), tr!("tree-hide-item"));
+        let eye = (state.own_feature_hidden(id), hidden);
+        if eye_button(ui, resp.rect, ("eye-canvas", id), &name, eye, texts) {
+            *action = Some(Action::ToggleFeatureHidden(id));
+        }
+        if resp.double_clicked() {
+            *action = Some(Action::Edit(id));
+        } else if resp.clicked() {
+            *action = Some(Action::Select(id));
+        }
+        resp.context_menu(|ui| canvas_menu(ui, action, id, lock.clone()));
+    }
+}
+
+/// Kontextmenü einer Leinwand. `lock`: warum Bearbeiten und Kalibrieren gerade gesperrt sind
+/// (offene Skizze).
+fn canvas_menu(
+    ui: &mut egui::Ui,
+    action: &mut Option<Action>,
+    id: FeatureId,
+    lock: Option<String>,
+) {
+    if ui
+        .add_enabled(lock.is_none(), egui::Button::new(tr!("tree-canvas-edit")))
+        .on_disabled_hover_text(lock.clone().unwrap_or_default())
+        .clicked()
+    {
+        *action = Some(Action::Edit(id));
+        ui.close();
+    }
+    let km = crate::keymap::mouse::current(ui.ctx());
+    let keys = crate::keymap::shortcut_hint(&km, crate::keymap::Action::CanvasCalibrate);
+    let mut calibrate = egui::Button::new(tr!("tree-canvas-calibrate"));
+    if !keys.is_empty() {
+        calibrate = calibrate.shortcut_text(egui::RichText::new(keys).font(theme::kbd_font()));
+    }
+    if ui
+        .add_enabled(lock.is_none(), calibrate)
+        .on_disabled_hover_text(lock.unwrap_or_default())
+        .clicked()
+    {
+        *action = Some(Action::Calibrate(id));
+        ui.close();
+    }
+    if ui.button(tr!("tree-rename")).clicked() {
+        *action = Some(Action::Rename(id));
+        ui.close();
+    }
+    delete_entry(ui, action, id);
+}
+
 /// Kontextmenü einer Konstruktionsebene.
 fn plane_menu(
     ui: &mut egui::Ui,
@@ -1510,6 +1608,10 @@ fn run(state: &mut AppState, action: Action) {
         Action::RedefinePlane(id) => {
             let _ = state.start_redefine_sketch_plane(id);
         }
+        // Fehler (offene Skizze, ausgeblendet) stehen in der Meldung.
+        Action::Calibrate(id) => {
+            let _ = state.start_calibrate(id);
+        }
         // Offenes Ebenen-Fenster: Eine Ebene des Baums füllt sein aktives Feld.
         Action::Select(id)
             if state.plane_pick.is_some()
@@ -1570,7 +1672,7 @@ fn run(state: &mut AppState, action: Action) {
 /// „Bearbeiten“ (Doppelklick im Baum oder in der Verlaufsleiste): wählt das Feature `id`; eine
 /// Skizze wird zum Bearbeiten geöffnet, sonst wird der Dialog angefordert (`edit_request`, eine
 /// offene Skizze wird vorher beendet). Nicht gesperrt, auch nicht bei zurückgesetzten Körpern.
-pub(crate) fn edit(state: &mut AppState, id: FeatureId) {
+pub fn edit(state: &mut AppState, id: FeatureId) {
     state.selected_feature = Some(id);
     state.selected_body = None;
     state.drawing_ui.selected_drawing = None;
@@ -1582,6 +1684,12 @@ pub(crate) fn edit(state: &mut AppState, id: FeatureId) {
     if sketch {
         if state.open_sketch_id() != Some(id) {
             let _ = state.open_sketch(id);
+        }
+    } else if state.is_canvas(id) {
+        // Leinwand bearbeiten ist gesperrt, solange eine Skizze offen ist (sie bleibt offen).
+        match state.canvas_lock() {
+            Some(why) => state.message = Some(why),
+            None => state.edit_request = Some(id),
         }
     } else if state.try_close_sketch().is_ok() {
         // Bearbeiten ändert das Dokument: eine offene Skizze wird vorher beendet.

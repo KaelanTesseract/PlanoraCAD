@@ -1,6 +1,7 @@
 //! Darstellung und Auswahl: Kamera, Picking, Szenendaten. GPU-Anbindung in `gpu`.
 
 mod camera;
+mod canvas;
 pub mod gpu;
 mod grid;
 mod pick;
@@ -8,6 +9,7 @@ mod scene;
 mod viewcube;
 
 pub use camera::OrbitCamera;
+pub use canvas::{CanvasDraw, CanvasTexture, CanvasVertex, canvas_hit, quad_vertices};
 pub use grid::{axis_lines, exact_step, grid_lines, grid_radius, grid_step, line_weight};
 pub use pick::{EdgeHit, FaceHit, PlaneRect, Ray, pick_edge, pick_face, pick_plane, pick_vertex};
 pub use scene::{

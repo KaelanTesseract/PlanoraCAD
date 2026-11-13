@@ -212,6 +212,28 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
                 None => hint(state, &tr!("cmd-need-any-sketch")),
             }
         }
+        // „Überall“ heißt Modell und Skizze; in einer Zeichnung und in alten Versionen nicht.
+        Action::InsertDxf | Action::InsertSvg | Action::InsertCanvas
+            if ws.active_tab().read_only
+                || crate::keymap::dispatch::current_area(&ws.active_tab().state)
+                    == Area::Drawing => {}
+        Action::InsertDxf => app::open_insert_dxf(ws),
+        Action::InsertSvg => app::open_insert_svg(ws),
+        Action::InsertCanvas => app::open_insert_canvas(ws),
+        // Wie „Kalibrieren“ im Kontextmenü der gewählten Leinwand; die Sperre bei offener
+        // Skizze und andere Gründe meldet `start_calibrate`.
+        Action::CanvasCalibrate => {
+            let state = &mut ws.active_tab_mut().state;
+            match state.selected_feature.filter(|id| state.is_canvas(*id)) {
+                Some(id) => {
+                    let _ = state.start_calibrate(id);
+                }
+                None => match state.canvas_lock() {
+                    Some(why) => hint(state, &why),
+                    None => hint(state, &tr!("cmd-need-canvas")),
+                },
+            }
+        }
         Action::ToggleVisibility => toggle_visibility(&mut ws.active_tab_mut().state),
         Action::DeleteSelection => delete_selection(&mut ws.active_tab_mut().state),
         Action::RepeatLast => {

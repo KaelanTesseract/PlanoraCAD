@@ -62,6 +62,11 @@ pub struct VersionFile {
     /// Byte für Byte bleiben.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sichtbarkeit: Option<SichtbarkeitDto>,
+    /// Bilder der Leinwände (ab Format 19, Skizzen 9): Kennung, Format und Base64 der Datei-Bytes,
+    /// in jeder Version erneut (wie `netze`). Leer heißt: fehlt, damit alte Dateien Byte für Byte
+    /// bleiben. Steht hinten, weil die Daten lang sind.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bilder: Vec<ImageDto>,
     /// Formen der STEP-Körper (ab Format 10, Teilprojekt STEP-Import): je benutzte Form der
     /// normalisierte STEP-Text, in jeder Version erneut. Leer heißt: fehlt, damit alte Dateien
     /// Byte für Byte bleiben. Steht am Ende, weil die Texte lang sind.
@@ -100,6 +105,8 @@ pub enum OrdnerDto {
     Koerper,
     Skizzen,
     Konstruktion,
+    /// Ordner „Leinwände“ (ab Format 19); nur mit einer Leinwand im Dokument.
+    Leinwaende,
 }
 
 /// Form eines STEP-Körpers (ab Format 10): Kennung (ab 1), Genauigkeit der Ursprungsdatei in mm
@@ -626,6 +633,36 @@ pub struct BodyRefDto {
     pub index: usize,
 }
 
+/// Ein Bild einer Leinwand (ab Format 19): Kennung (ab 1), Format (`"png"`, `"jpeg"`, `"tiff"`) und
+/// Base64 der unveränderten Datei-Bytes. Maße und Prüfsumme stehen nicht in der Datei, sie werden
+/// beim Laden aus den Bytes gerechnet.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ImageDto {
+    pub id: u64,
+    pub format: String,
+    pub daten: String,
+}
+
+/// Leinwand (ab Format 19, Skizzen 9): Bild aus `bilder` auf einer Grundebene, ebenen Fläche oder
+/// Konstruktionsebene. `versatz` in mm in der Trägerebene, `winkel` im Bogenmaß gegen den
+/// Uhrzeigersinn, `massstab` je Achse, `deckkraft` in Prozent. `letzte_lage` ist das zuletzt
+/// berechnete Koordinatensystem des Trägers; fehlt, wenn die Leinwand nie berechnet wurde.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct LeinwandDto {
+    pub bild: u64,
+    pub lage: PlaneDto,
+    pub versatz: [f64; 2],
+    pub winkel: f64,
+    pub massstab: [f64; 2],
+    pub spiegeln_waagerecht: bool,
+    pub spiegeln_senkrecht: bool,
+    pub deckkraft: u8,
+    pub durch_objekte: bool,
+    pub auswaehlbar: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub letzte_lage: Option<FrameDto>,
+}
+
 /// Ein Netz: Kennung und Base64 der Bytes aus `ExchangeMesh::to_bytes`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct MeshDto {
@@ -843,6 +880,9 @@ pub struct CurveDto {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub mittellinie: bool,
     pub aktiv: bool,
+    /// Kontrollpunktrahmen (ab Format 19); fehlt, wenn aus.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rahmen: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -1250,6 +1290,8 @@ pub enum KindDto {
     },
     /// Konstruktionsebene (ab Format 16, Skizzen 6).
     Konstruktionsebene(Box<PlaneFeatureDto>),
+    /// Leinwand (ab Format 19, Skizzen 9).
+    Leinwand(Box<LeinwandDto>),
 }
 
 /// Ein Profil-Verweis: Stücke des äußeren Rands in Umlaufreihenfolge, danach die Stücke aller

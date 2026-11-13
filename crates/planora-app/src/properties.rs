@@ -445,6 +445,53 @@ pub fn parameter_rows(state: &AppState, kind: &FeatureKind) -> Vec<(String, Stri
             .step_shape(*shape)
             .map_or_else(Vec::new, |s| step_rows(state, s, tr!("props-faces"))),
         FeatureKind::Plane(pf) => crate::plane_dialog::property_rows(state, &pf.def),
+        // Träger, Bild und die Werte des Fensters.
+        FeatureKind::Canvas(c) => {
+            use planora_feature::CanvasBase;
+            let plane = match &c.base {
+                CanvasBase::Standard(StandardPlane::XY) => tr!("tree-plane-xy"),
+                CanvasBase::Standard(StandardPlane::XZ) => tr!("tree-plane-xz"),
+                CanvasBase::Standard(StandardPlane::YZ) => tr!("tree-plane-yz"),
+                CanvasBase::Face(r) => tr!(
+                    "props-on-face",
+                    role = planora_kernel::blend::topo::role_label(&r.role),
+                    name = feature_name(FeatureId(r.origin))
+                ),
+                CanvasBase::Plane(id) => feature_name(*id),
+            };
+            let on_off = |b: bool| if b { tr!("props-on") } else { tr!("props-off") };
+            let (w, h) = doc.image(c.image).map_or((0, 0), |i| (i.width, i.height));
+            // Felder wie im Fenster: Y nach unten, Winkel im Uhrzeigersinn.
+            vec![
+                (tr!("props-plane"), plane),
+                (
+                    tr!("insert-canvas-image"),
+                    tr!("insert-canvas-size", w = w, h = h),
+                ),
+                (tr!("insert-canvas-opacity"), format!("{} %", c.opacity)),
+                (
+                    tr!("insert-canvas-display-through"),
+                    on_off(c.display_through),
+                ),
+                (tr!("insert-canvas-selectable"), on_off(c.selectable)),
+                (tr!("insert-offset-x"), mm(c.offset.x)),
+                (tr!("insert-offset-y"), mm(-c.offset.y)),
+                (
+                    tr!("insert-angle-z"),
+                    format!("{} °", format_number(-c.angle.to_degrees(), 2)),
+                ),
+                (
+                    tr!("props-scale"),
+                    format!(
+                        "{} / {}",
+                        format_number(c.scale.x, 4),
+                        format_number(c.scale.y, 4)
+                    ),
+                ),
+                (tr!("insert-flip-h"), on_off(c.flip_h)),
+                (tr!("insert-flip-v"), on_off(c.flip_v)),
+            ]
+        }
     }
 }
 

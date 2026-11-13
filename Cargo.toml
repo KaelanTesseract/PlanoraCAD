@@ -62,6 +62,13 @@ fluent-syntax = "=0.12.0"
 # harfrust MIT; beide schon über egui/epaint im Baum, darum genau dieselben Versionen (keine zweite Version).
 skrifa = "0.44"
 harfrust = "0.12"
+# DXF/SVG/Leinwand (Skizzen 9): dxf (MIT) liest DXF, usvg (MIT OR Apache-2.0) liest SVG,
+# image (MIT OR Apache-2.0) liest Rasterbilder; nur PNG, JPEG und TIFF.
+dxf = "0.6.2"
+usvg = { version = "0.50", default-features = false, features = ["svgz"] }
+# flate2 (MIT OR Apache-2.0) entpackt SVGZ mit Größengrenze; schon über usvg und png im Baum.
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff"] }
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

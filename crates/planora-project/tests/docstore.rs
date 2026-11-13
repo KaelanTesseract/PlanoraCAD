@@ -280,28 +280,28 @@ fn mutate_doc(p: &std::path::Path, f: impl FnOnce(&mut serde_json::Value)) {
 
 #[test]
 fn newer_files_with_changed_structure_report_too_new() {
-    // Seit der Zeichnungseinheit (Zoll) ist Format 12 gültig; „zu neu“ war 13, seit Skizzen 8 ist es 19.
+    // Seit der Zeichnungseinheit (Zoll) ist Format 12 gültig; „zu neu“ war 13, seit Skizzen 9 ist es 20.
     let p = dir();
     let st = DocStore::create(&p, &snap(1), "").unwrap();
     st.write_autosave(Some(1), &snap(2)).unwrap();
     std::fs::write(
         p.join(".autosave.json"),
-        r#"{"format":19,"basiert_auf":{"neu":1}}"#,
+        r#"{"format":20,"basiert_auf":{"neu":1}}"#,
     )
     .unwrap();
     assert!(matches!(
         st.read_autosave(),
-        Err(ProjectError::TooNew { found: 19, .. })
+        Err(ProjectError::TooNew { found: 20, .. })
     ));
     drop(st);
     std::fs::write(
         p.join("dokument.json"),
-        r#"{"format":19,"versionen":{"neu":true}}"#,
+        r#"{"format":20,"versionen":{"neu":true}}"#,
     )
     .unwrap();
     assert!(matches!(
         peek(&p),
-        Err(ProjectError::TooNew { found: 19, .. })
+        Err(ProjectError::TooNew { found: 20, .. })
     ));
     assert!(matches!(
         DocStore::open(&p, LockMode::Acquire),

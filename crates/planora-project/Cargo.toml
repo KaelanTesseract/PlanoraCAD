@@ -20,6 +20,8 @@ planora-i18n.workspace = true
 [dev-dependencies]
 proptest.workspace = true
 planora-mesh.workspace = true
+# Testbilder (PNG, JPG, TIFF) für Format 19; schon Abhängigkeit von planora-exchange.
+image.workspace = true
 
 [lints]
 workspace = true
