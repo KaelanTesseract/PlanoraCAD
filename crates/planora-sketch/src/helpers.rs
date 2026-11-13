@@ -1097,7 +1097,7 @@ impl Sketch {
         let linear = self.tolerance().linear;
         self.atomically(|s| {
             let c = match g {
-                Included::Point(_) => unreachable!("oben behandelt"),
+                Included::Point(_) => unreachable!("handled above"),
                 Included::Line(p0, p1) => {
                     let a = s.add_fixed_point3(*p0)?;
                     let b = s.add_fixed_point3(*p1)?;
@@ -1305,7 +1305,7 @@ impl Sketch {
                     end: b,
                 } = self.curves[curve].kind
                 else {
-                    unreachable!("Art oben geprüft")
+                    unreachable!("type was checked")
                 };
                 self.set_point_xyz(center, *c)?;
                 self.set_point_xyz(a, *start)?;
@@ -1338,7 +1338,7 @@ impl Sketch {
                     ..
                 }) = self.curves[curve].kind
                 else {
-                    unreachable!("Ellipse im Raum hat az")
+                    unreachable!("a 3D ellipse has az")
                 };
                 (self.vars[ax], self.vars[ay], self.vars[az], self.vars[mi]) =
                     (a.x, a.y, a.z, *minor);
