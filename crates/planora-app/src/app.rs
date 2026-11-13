@@ -1249,9 +1249,17 @@ impl PlanoraApp {
             se.toggle_dimension_preview(sk);
         }
         let area = keymap::dispatch::current_area(&self.ws.active_tab().state);
+        // Tab gehört der Triade nur in einer 3D-Skizze; sonst bleibt er, wie er war.
+        let three_d_sketch = self
+            .ws
+            .active_tab()
+            .state
+            .session_sketch()
+            .is_some_and(|sk| sk.three_d);
         let pressed = keymap::dispatch::pressed_if(ctx, &self.ws.keymap, area, |a| {
             !is_history_key(a)
                 && a != Action::SketchLockZ
+                && (a != Action::SketchTriadCycleHandle || three_d_sketch)
                 && !(windows && a.area() != keymap::Area::All)
         });
         if pressed.contains(&Action::SketchTriadCycleHandle) {

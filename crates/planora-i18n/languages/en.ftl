@@ -143,6 +143,7 @@ keymap-unbound-dash = –
 keymap-note-unknown-action = Unknown action "{ $id }" skipped.
 keymap-note-fixed = "{ $binding }" for "{ $action }" skipped: { $reason }
 keymap-note-invalid = Invalid binding "{ $binding }" for "{ $action }" skipped.
+keymap-modifier-unsupported = "{ $binding }" only works for the triad keys, not for "{ $action }".
 keymap-note-taken = "{ $binding }" for "{ $action }" skipped: already used by "{ $other }".
 keymap-note-default-lost = "{ $binding }" no longer applies to "{ $action }": used by "{ $other }" in the file.
 keymap-fixed-sketch = in the sketch

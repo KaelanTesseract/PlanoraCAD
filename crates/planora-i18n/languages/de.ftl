@@ -143,6 +143,7 @@ keymap-unbound-dash = –
 keymap-note-unknown-action = Unbekannte Aktion „{ $id }“ übergangen.
 keymap-note-fixed = „{ $binding }“ bei „{ $action }“ übergangen: { $reason }
 keymap-note-invalid = Ungültige Belegung „{ $binding }“ bei „{ $action }“ übergangen.
+keymap-modifier-unsupported = „{ $binding }“ gibt es nur bei den Tasten der Triade; bei „{ $action }“ nicht.
 keymap-note-taken = „{ $binding }“ bei „{ $action }“ übergangen: schon für „{ $other }“ belegt.
 keymap-note-default-lost = „{ $binding }“ gilt nicht mehr für „{ $action }“: in der Datei für „{ $other }“ belegt.
 keymap-fixed-sketch = in der Skizze

@@ -21,7 +21,7 @@ use planora_project::library::Library;
 use planora_sketch::constraint::ConstraintKind as K;
 use planora_sketch::model::CurveId;
 
-const SIZE: Vec2 = vec2(1920.0, 1080.0);
+const SIZE: Vec2 = vec2(1400.0, 900.0);
 const SMALL: Vec2 = vec2(800.0, 600.0);
 
 fn context() -> egui::Context {
@@ -610,8 +610,7 @@ fn pointer_on_sketch_fields_does_not_reach_the_sketch() {
         let foot = field(&c, "Fuß");
         for (name, p) in [
             ("Leiste", punkt.center()),
-            // Oben im Feld, im Rand über dem Namen (die Mitte läge je nach Inhalt auf einem Knopf).
-            ("Skizze", field(&c, "Skizze").center_top() + vec2(0.0, 3.0)),
+            ("Skizze", field(&c, "Skizze").center()),
             ("Fuß", foot.left_center() + vec2(6.0, 0.0)),
             ("oben", field(&c, "oben").left_center() + vec2(6.0, 0.0)),
             ("Status", field(&c, "Status").center()),

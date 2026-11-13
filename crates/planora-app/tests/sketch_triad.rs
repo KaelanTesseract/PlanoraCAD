@@ -430,3 +430,273 @@ fn triad_view_settings_default_on_and_persist() {
     let text = std::fs::read_to_string(&w.config_path).unwrap();
     assert!(!text.contains("show_triad"), "{text}");
 }
+
+// ---- Fix-Runde 1: Belegungen wirken wirklich ----------------------------------------------------
+
+/// Die ganze App mit offener Skizze, Bild für Bild.
+struct Rig {
+    ctx: egui::Context,
+    app: PlanoraApp,
+    time: f64,
+    /// Blieb im letzten Bild ein Tab-Druck unverbraucht?
+    tab_left: bool,
+}
+
+impl Rig {
+    fn new(three_d: bool) -> Rig {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(fonts::definitions());
+        theme::apply(&ctx, true);
+        let mut app = PlanoraApp::for_tests(ws());
+        open_sketch(app.ws_mut());
+        if three_d {
+            let (se, sk) = st(app.ws_mut()).session_sketch_mut().unwrap();
+            se.set_three_d(sk, true);
+        }
+        let mut rig = Rig {
+            ctx,
+            app,
+            time: 0.0,
+            tab_left: false,
+        };
+        for _ in 0..3 {
+            rig.frame(Modifiers::NONE, vec![]);
+        }
+        rig
+    }
+
+    fn frame(&mut self, mods: Modifiers, mut events: Vec<Event>) {
+        self.time += 1.0 / 60.0;
+        events.insert(0, Event::ModifiersChanged(mods));
+        let raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, SIZE)),
+            time: Some(self.time),
+            events,
+            ..Default::default()
+        };
+        let mut f = eframe::Frame::_new_kittest();
+        let app = &mut self.app;
+        let mut left = false;
+        self.ctx
+            .run_ui(raw, |ui| {
+                app.ui(ui, &mut f);
+                left = ui.input(|i| {
+                    i.events.iter().any(|e| {
+                        matches!(
+                            e,
+                            Event::Key {
+                                key: Key::Tab,
+                                pressed: true,
+                                ..
+                            }
+                        )
+                    })
+                });
+            })
+            .drop_without_applying_deltas();
+        self.tab_left = left;
+    }
+
+    fn plane(&mut self) -> TriadPlane {
+        st(self.app.ws_mut())
+            .sketch_session
+            .as_ref()
+            .unwrap()
+            .triad_plane()
+    }
+
+    fn handle(&mut self) -> Option<TriadAxis> {
+        st(self.app.ws_mut())
+            .sketch_session
+            .as_ref()
+            .unwrap()
+            .triad_handle()
+    }
+
+    fn z_lock(&mut self) -> bool {
+        st(self.app.ws_mut())
+            .sketch_session
+            .as_ref()
+            .unwrap()
+            .z_lock
+    }
+
+    fn bind(&mut self, a: Action, b: Binding) {
+        let mut km = self.app.ws_mut().keymap.clone();
+        km.swap(a, 0, b);
+        self.app.ws_mut().keymap = km;
+    }
+}
+
+fn key_down(k: Key, mods: Modifiers) -> Event {
+    Event::Key {
+        key: k,
+        physical_key: Some(k),
+        pressed: true,
+        repeat: false,
+        modifiers: mods,
+    }
+}
+
+fn key_up(k: Key) -> Event {
+    Event::Key {
+        key: k,
+        physical_key: Some(k),
+        pressed: false,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    }
+}
+
+#[test]
+fn rebound_triad_keys_really_work() {
+    let mut r = Rig::new(true);
+    // Ebene auf F9: die Taste wirkt, Alt allein nicht mehr.
+    r.bind(Action::SketchTriadCyclePlane, Binding::Key(chord(Key::F9)));
+    r.frame(Modifiers::NONE, vec![key_down(Key::F9, Modifiers::NONE)]);
+    r.frame(Modifiers::NONE, vec![key_up(Key::F9)]);
+    assert_eq!(r.plane(), TriadPlane::Yz);
+    r.frame(Modifiers::ALT, vec![]);
+    r.frame(Modifiers::NONE, vec![]);
+    assert_eq!(
+        r.plane(),
+        TriadPlane::Yz,
+        "Alt allein ist nicht mehr belegt"
+    );
+    // Griff auf Umschalt allein: der Tipp wirkt (und Tab nicht mehr).
+    r.bind(
+        Action::SketchTriadCycleHandle,
+        Binding::Modifier(ModKey::Shift),
+    );
+    r.frame(Modifiers::SHIFT, vec![]);
+    r.frame(Modifiers::NONE, vec![]);
+    assert_eq!(r.handle(), Some(TriadAxis::X));
+    // „Z sperren“ auf Strg allein: gehalten wirkt, losgelassen nicht; mit Umschalt dazu nicht.
+    r.bind(Action::SketchLockZ, Binding::Modifier(ModKey::Ctrl));
+    assert!(!r.z_lock());
+    r.frame(Modifiers::CTRL, vec![]);
+    assert!(r.z_lock(), "Strg gehalten sperrt Z");
+    r.frame(Modifiers::CTRL, vec![]);
+    assert!(r.z_lock());
+    r.frame(Modifiers::NONE, vec![]);
+    assert!(!r.z_lock(), "losgelassen: frei");
+    r.frame(Modifiers::CTRL | Modifiers::SHIFT, vec![]);
+    assert!(!r.z_lock(), "mit Umschalt dazu ist es nicht Strg allein");
+    r.frame(Modifiers::NONE, vec![]);
+    // Und der Standard: Pfeil hoch gehalten.
+    r.bind(Action::SketchLockZ, Binding::Key(chord(Key::ArrowUp)));
+    r.frame(
+        Modifiers::NONE,
+        vec![key_down(Key::ArrowUp, Modifiers::NONE)],
+    );
+    assert!(r.z_lock());
+    r.frame(Modifiers::NONE, vec![key_up(Key::ArrowUp)]);
+    assert!(!r.z_lock());
+    // Tab ist frei geworden (zuletzt: ein unverbrauchtes Tab springt im Fokus weiter).
+    r.frame(Modifiers::NONE, vec![key_down(Key::Tab, Modifiers::NONE)]);
+    assert_eq!(r.handle(), Some(TriadAxis::X), "Tab ist frei geworden");
+}
+
+#[test]
+fn modifier_alone_is_refused_where_nothing_reads_it() {
+    for a in Action::ALL {
+        let ok = matches!(
+            a,
+            Action::SketchTriadCyclePlane | Action::SketchTriadCycleHandle | Action::SketchLockZ
+        );
+        assert_eq!(a.accepts_modifier(), ok, "{a:?}");
+    }
+    let b = Binding::Modifier(ModKey::Alt);
+    assert!(Keymap::unsupported_text(Action::Save, &b).is_some());
+    assert!(Keymap::unsupported_text(Action::SketchLockZ, &b).is_none());
+    // Aus der Konfiguration: übergangen, die Voreinstellung bleibt.
+    let map = std::collections::BTreeMap::from([(
+        "datei.speichern".to_string(),
+        vec!["Alt allein".to_string()],
+    )]);
+    let (km, notes) = Keymap::from_overrides(&map);
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(km.is_default(Action::Save));
+}
+
+#[test]
+fn a_focus_change_cancels_the_modifier_tap() {
+    let ctx = egui::Context::default();
+    // Alt+Tab: Alt drücken, Fokus weg (Umschalttasten werden zurückgesetzt), kein Tipp.
+    let mut tap = ModTap::default();
+    tap_frame(&ctx, &mut tap, Modifiers::ALT, vec![]);
+    assert_eq!(
+        tap_frame(
+            &ctx,
+            &mut tap,
+            Modifiers::NONE,
+            vec![Event::WindowFocused(false)]
+        ),
+        None
+    );
+    // Zurück ins Fenster mit noch gehaltenem Alt, dann loslassen: auch kein Tipp.
+    tap_frame(
+        &ctx,
+        &mut tap,
+        Modifiers::NONE,
+        vec![Event::WindowFocused(true)],
+    );
+    tap_frame(&ctx, &mut tap, Modifiers::ALT, vec![]);
+    tap_frame(&ctx, &mut tap, Modifiers::ALT, vec![]);
+    assert_eq!(tap_frame(&ctx, &mut tap, Modifiers::NONE, vec![]), None);
+    // Danach funktioniert ein reiner Tipp wieder.
+    tap_frame(&ctx, &mut tap, Modifiers::ALT, vec![]);
+    assert_eq!(
+        tap_frame(&ctx, &mut tap, Modifiers::NONE, vec![]),
+        Some(ModKey::Alt)
+    );
+}
+
+#[test]
+fn alt_wheel_and_alt_after_a_held_button_are_no_taps() {
+    let ctx = egui::Context::default();
+    let mut tap = ModTap::default();
+    tap_frame(&ctx, &mut tap, Modifiers::ALT, vec![]);
+    tap_frame(
+        &ctx,
+        &mut tap,
+        Modifiers::ALT,
+        vec![Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, 1.0),
+            modifiers: Modifiers::ALT,
+            phase: egui::TouchPhase::Move,
+        }],
+    );
+    assert_eq!(tap_frame(&ctx, &mut tap, Modifiers::NONE, vec![]), None);
+    // Maustaste schon gedrückt, dann erst Alt: kein Tipp.
+    let mut tap = ModTap::default();
+    tap_frame(
+        &ctx,
+        &mut tap,
+        Modifiers::NONE,
+        vec![press(PointerButton::Primary, true, Modifiers::NONE)],
+    );
+    tap_frame(&ctx, &mut tap, Modifiers::ALT, vec![]);
+    tap_frame(
+        &ctx,
+        &mut tap,
+        Modifiers::ALT,
+        vec![press(PointerButton::Primary, false, Modifiers::ALT)],
+    );
+    assert_eq!(tap_frame(&ctx, &mut tap, Modifiers::NONE, vec![]), None);
+}
+
+#[test]
+fn tab_belongs_to_the_triad_only_in_a_3d_sketch() {
+    // 2D-Skizze: Tab bleibt unverbraucht und wechselt nichts.
+    let mut r = Rig::new(false);
+    r.frame(Modifiers::NONE, vec![key_down(Key::Tab, Modifiers::NONE)]);
+    assert!(r.tab_left, "Tab bleibt in einer 2D-Skizze liegen");
+    assert_eq!(r.handle(), None);
+    // 3D-Skizze: ein echtes Tab-Ereignis wechselt den Griff und wird verbraucht.
+    let mut r = Rig::new(true);
+    r.frame(Modifiers::NONE, vec![key_down(Key::Tab, Modifiers::NONE)]);
+    assert!(!r.tab_left);
+    assert_eq!(r.handle(), Some(TriadAxis::X));
+}

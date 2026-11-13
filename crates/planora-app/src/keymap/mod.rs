@@ -265,6 +265,9 @@ impl Keymap {
             let mut list = Vec::new();
             for t in texts {
                 match text::parse_binding(t) {
+                    Some(b) if Keymap::unsupported_text(a, &b).is_some() => {
+                        notes.push(Keymap::unsupported_text(a, &b).unwrap_or_default())
+                    }
                     Some(b) if Keymap::fixed_key_text(a, &b).is_some() => {
                         notes.push(planora_i18n::tr!(
                             "keymap-note-fixed",
@@ -327,6 +330,19 @@ impl Keymap {
         }
         cap_notes(&mut notes);
         (km, notes)
+    }
+
+    /// Hinweistext, wenn `b` für `a` nicht auswertbar ist: „Umschalttaste allein“ gibt es nur bei
+    /// den Aktionen, die sie auswerten ([`Action::accepts_modifier`]). `None`: in Ordnung.
+    pub fn unsupported_text(a: Action, b: &Binding) -> Option<String> {
+        match b {
+            Binding::Modifier(_) if !a.accepts_modifier() => Some(planora_i18n::tr!(
+                "keymap-modifier-unsupported",
+                binding = text::binding_text(b),
+                action = a.label()
+            )),
+            _ => None,
+        }
     }
 
     /// Ist `b` für `a` eine Taste, die eine Ansicht fest braucht (Eingabe und Entf in der Skizze,

@@ -361,6 +361,20 @@ fn capturing_alt_alone_binds_the_alt_tap() {
 }
 
 #[test]
+fn capturing_alt_alone_is_refused_for_actions_that_ignore_it() {
+    let mut r = rig();
+    r.filter(&Action::Save.label());
+    r.click(&change(), 0);
+    assert_eq!(r.state().capturing, Some((Action::Save, 0)));
+    r.frame_with(vec![], Modifiers::ALT);
+    r.frame_with(vec![], NONE);
+    r.settle();
+    assert_eq!(r.state().capturing, None);
+    assert!(r.state().info.is_some(), "Hinweis fehlt");
+    assert!(r.km().is_default(Action::Save), "Belegung bleibt");
+}
+
+#[test]
 fn capturing_a_key_sets_it_and_frees_the_old_one() {
     let mut r = rig();
     r.filter(&Action::Save.label());

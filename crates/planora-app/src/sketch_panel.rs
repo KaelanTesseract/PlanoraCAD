@@ -1311,17 +1311,24 @@ fn side_contents(
         palette,
         fonts,
     } = side;
-    // Name, rechts daneben der Schalter „Profil anzeigen“ (wie Fusions Skizzenpalette
-    // „Profil“: geschlossene Flächen hell eingefärbt); in einer Zeile, damit die Liste darunter
-    // nicht nach unten rutscht.
+    // Name, rechts daneben die Schalter „3D-Skizze“ (Skizzen 10) und „Profil anzeigen“ (wie
+    // Fusions Skizzenpalette „Profil“: geschlossene Flächen hell eingefärbt); alles in einer
+    // Zeile, damit die Liste darunter nicht nach unten rutscht. Die Spalte ist schmal: Die
+    // Schalter bekommen ihren Platz zuerst, der Name nimmt den Rest und kürzt sich bei Bedarf.
     ui.horizontal(|ui| {
-        ui.strong(&sf.sketch.name);
+        ui.spacing_mut().item_spacing.x = 4.0;
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.checkbox(show_profiles, tr!("sketch-show-profile"));
+            let three_d = ui
+                .checkbox(&mut palette.three_d, tr!("sketch-palette-three-d"))
+                .on_hover_text(tr!("sketch-palette-three-d-hint"));
+            palette.three_d_changed |= three_d.changed();
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(&sf.sketch.name).strong()).truncate());
+            });
         });
     });
-    // Skizzenraster, Fang und Blick auf in einer eigenen Zeile unter dem Namen; der Haken
-    // „3D-Skizze“ gehört dazu und steht in der Zeile darunter (die Spalte ist schmal).
+    // Skizzenraster, Fang und Blick auf in einer eigenen Zeile unter dem Namen.
     ui.horizontal(|ui| {
         let grid = ui
             .checkbox(&mut palette.grid, tr!("sketch-palette-grid"))
@@ -1341,12 +1348,6 @@ fn side_contents(
         .on_hover_text(format!("{label}\n{}", tr!("sketch-look-at-hint")));
         ui.data_mut(|d| d.insert_temp(look_at_key(), look.rect));
         palette.look_at |= look.clicked();
-    });
-    ui.horizontal(|ui| {
-        let three_d = ui
-            .checkbox(&mut palette.three_d, tr!("sketch-palette-three-d"))
-            .on_hover_text(tr!("sketch-palette-three-d-hint"));
-        palette.three_d_changed |= three_d.changed();
     });
     tool_options(ui, se, sf, fonts, scope);
     ui.add_space(2.0);

@@ -70,12 +70,16 @@ pub fn pressed_if(
 /// Erkennt „Umschalttaste allein gedrückt und losgelassen“ über die Bilder. Ein Tipp gilt nur,
 /// wenn genau eine Umschalttaste gedrückt wurde, während kein anderes Ereignis kam: keine Taste
 /// (außer Umschalttasten selbst), keine Maustaste (auch nicht schon vorher gedrückt: Alt plus
-/// Ziehen dreht die Kamera) und kein Rad, und keine zweite Umschalttaste dazukam. Gemeldet wird
-/// er beim Loslassen. Je Bild genau einmal [`ModTap::step`] aufrufen.
+/// Ziehen dreht die Kamera) und kein Rad, und keine zweite Umschalttaste dazukam. Ein Wechsel des
+/// Fensterfokus (Alt+Tab) bricht ihn ab und sperrt, bis alle Umschalttasten los sind: Beim
+/// Zurückkommen mit noch gehaltenem Alt gilt das Loslassen nicht als Tipp. Gemeldet wird er beim
+/// Loslassen. Je Bild genau einmal [`ModTap::step`] aufrufen.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ModTap {
     prev: [bool; 3],
     armed: Option<ModKey>,
+    /// Fokus gewechselt: bis zum Loslassen aller Umschalttasten kein neuer Tipp.
+    blocked: bool,
 }
 
 impl ModTap {
@@ -84,7 +88,12 @@ impl ModTap {
     pub fn step(&mut self, i: &egui::InputState) -> Option<ModKey> {
         let m = i.modifiers;
         let now = [m.ctrl || m.command, m.shift, m.alt];
-        let other = i.pointer.any_down()
+        let focus_changed = !i.focused
+            || i.events
+                .iter()
+                .any(|e| matches!(e, egui::Event::WindowFocused(_)));
+        let other = focus_changed
+            || i.pointer.any_down()
             || i.events.iter().any(|e| match e {
                 egui::Event::Key { key, pressed, .. } => {
                     *pressed && !super::text::is_modifier_key(*key)
@@ -96,10 +105,14 @@ impl ModTap {
         if other {
             self.armed = None;
         }
+        if focus_changed {
+            self.blocked = true;
+        }
         let count = now.iter().filter(|b| **b).count();
         let mut fired = None;
         if count == 0 {
             fired = self.armed.take();
+            self.blocked = focus_changed;
         } else if count == 1 {
             let held = if now[0] {
                 ModKey::Ctrl
@@ -108,7 +121,7 @@ impl ModTap {
             } else {
                 ModKey::Alt
             };
-            if self.prev == [false; 3] && !other {
+            if self.prev == [false; 3] && !other && !self.blocked {
                 self.armed = Some(held);
             } else if self.armed != Some(held) {
                 self.armed = None;
@@ -149,8 +162,9 @@ pub fn tap_actions(km: &Keymap, area: Area, m: ModKey) -> Vec<Action> {
 }
 
 /// Wird eine Taste von `a` gerade gehalten (z. B. Pfeil hoch für „Z sperren“)? Die Umschalttasten
-/// müssen genau stimmen, wie bei [`pressed`]. Verbraucht nichts. Wirkt für Tasten (nicht für
-/// Mausgesten und Tipps) von Aktionen im Bereich `area` oder „Überall“.
+/// müssen genau stimmen, wie bei [`pressed`]; eine Belegung „Umschalttaste allein“ gilt, solange
+/// genau diese gehalten wird. Verbraucht nichts. Wirkt für Tasten (nicht für Mausgesten) von
+/// Aktionen im Bereich `area` oder „Überall“.
 pub fn held(ctx: &egui::Context, km: &Keymap, area: Area, a: Action) -> bool {
     if !Keymap::areas_overlap(area, a.area()) {
         return false;
@@ -164,7 +178,17 @@ pub fn held(ctx: &egui::Context, km: &Keymap, area: Area, a: Action) -> bool {
                     && m.shift == c.shift
                     && m.alt == c.alt
             }
-            _ => false,
+            // Eine Umschalttaste allein gehalten: genau sie und keine weitere.
+            Binding::Modifier(k) => {
+                let now = [m.ctrl || m.command, m.shift, m.alt];
+                let want = match k {
+                    ModKey::Ctrl => [true, false, false],
+                    ModKey::Shift => [false, true, false],
+                    ModKey::Alt => [false, false, true],
+                };
+                now == want && i.focused
+            }
+            Binding::Mouse(_) => false,
         })
     })
 }

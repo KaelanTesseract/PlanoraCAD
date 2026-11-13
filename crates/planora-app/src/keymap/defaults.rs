@@ -316,6 +316,17 @@ impl Action {
             .find(|a| a.sketch_tool() == Some(tool))
     }
 
+    /// Wertet diese Aktion eine Belegung „Umschalttaste allein“ ([`Binding::Modifier`]) aus? Nur
+    /// die Tasten der Triade (Skizzen 10): Ebene und Griff über den Tipp
+    /// ([`super::dispatch::tap_actions`]), „Z sperren“ über das Halten ([`super::dispatch::held`]).
+    /// Für alle anderen lehnen Erfassung und Konfiguration so eine Belegung ab.
+    pub fn accepts_modifier(self) -> bool {
+        matches!(
+            self,
+            Action::SketchTriadCyclePlane | Action::SketchTriadCycleHandle | Action::SketchLockZ
+        )
+    }
+
     /// Stelle in [`Action::ALL`] (die Varianten stehen dort in Tabellenreihenfolge).
     pub(super) fn index(self) -> usize {
         self as usize

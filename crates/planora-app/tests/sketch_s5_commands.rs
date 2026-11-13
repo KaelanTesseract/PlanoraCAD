@@ -22,9 +22,7 @@ use planora_project::library::Library;
 use planora_sketch::model::{CurveId, Sketch};
 use planora_sketch::pattern::{PatternDir, PatternKind};
 
-// Etwas höher als 1080: Mit dem Haken „3D-Skizze“ (Skizzen 10) hat das Skizzenfeld eine Zeile
-// mehr, und die Zeilen der Liste rückten mit einem laufenden Muster an den unteren Rand.
-const SIZE: Vec2 = vec2(1920.0, 1200.0);
+const SIZE: Vec2 = vec2(1920.0, 1080.0);
 
 struct Shot {
     texts: Vec<(String, Rect)>,

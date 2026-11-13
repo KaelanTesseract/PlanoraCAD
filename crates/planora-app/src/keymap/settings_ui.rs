@@ -417,7 +417,7 @@ fn take(ws: &mut Workspace, state: &mut CaptureState, a: Action, index: usize, b
     if ws.keymap.bindings(a).get(index) == Some(&b) {
         return;
     }
-    if let Some(text) = Keymap::fixed_key_text(a, &b) {
+    if let Some(text) = Keymap::unsupported_text(a, &b).or_else(|| Keymap::fixed_key_text(a, &b)) {
         state.info = Some(text);
         return;
     }
