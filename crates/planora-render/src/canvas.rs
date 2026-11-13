@@ -300,7 +300,15 @@ impl CanvasGpu {
                     depth_write_enabled: Some(false),
                     depth_compare: Some(depth_compare),
                     stencil: wgpu::StencilState::default(),
-                    bias: wgpu::DepthBiasState::default(),
+                    // Eine Leinwand auf einer Körperfläche liegt in derselben Ebene wie die
+                    // Fläche: ein kleiner Schub nach vorn gegen Flimmern (z-fighting). Die Flächen
+                    // selbst sind schon nach hinten geschoben (`gpu.rs`); ohne Tiefentest
+                    // (`Always`) wirkt der Schub nicht.
+                    bias: wgpu::DepthBiasState {
+                        constant: -1,
+                        slope_scale: -1.0,
+                        clamp: 0.0,
+                    },
                 }),
                 multisample: wgpu::MultisampleState {
                     count: MSAA_SAMPLES,
