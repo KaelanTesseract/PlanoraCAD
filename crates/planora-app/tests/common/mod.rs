@@ -1,7 +1,9 @@
 //! Gemeinsame Hilfen der Oberflächentests.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 /// Löscht den Bibliotheksordner eines Tests, wenn der Test (genauer: sein Thread) endet.
 struct TempRoots(Vec<PathBuf>);
@@ -142,6 +144,29 @@ pub struct Screen {
     /// Gewünschter Abstand bis zum nächsten Bild nach dem letzten Bild (`Duration::MAX` = keins).
     pub repaint_delay: std::time::Duration,
     time: f64,
+    /// Kindfenster (nur bei [`Screen::with_viewports`]), geteilt mit dem Renderer.
+    children: Option<Rc<RefCell<Children>>>,
+}
+
+/// Zustand der Kindfenster im Harness: was ins nächste Bild eines Kindfensters geht und was es
+/// zuletzt gezeichnet bzw. befohlen hat.
+#[allow(dead_code)]
+#[derive(Default)]
+pub struct Children {
+    /// Ereignisse je Kindfenster für dessen nächstes Bild (danach geleert).
+    pub child_events: HashMap<egui::ViewportId, Vec<egui::Event>>,
+    /// Fensterangaben je Kindfenster (Lage, Faktor, `events` wie `Close`); `events` werden nach
+    /// dem Bild geleert, der Rest bleibt.
+    pub info: HashMap<egui::ViewportId, egui::ViewportInfo>,
+    /// Texte des letzten Bilds je Kindfenster.
+    pub seen: HashMap<egui::ViewportId, Vec<Seen>>,
+    /// Alle Befehle an das Kindfenster seit dem Anlegen des Harness.
+    pub commands: HashMap<egui::ViewportId, Vec<egui::ViewportCommand>>,
+    /// Builder des letzten Aufrufs je Kindfenster.
+    pub builders: HashMap<egui::ViewportId, egui::ViewportBuilder>,
+    /// Wie oft der Renderer je Kindfenster lief.
+    pub runs: HashMap<egui::ViewportId, usize>,
+    time: f64,
 }
 
 #[allow(dead_code)]
@@ -154,7 +179,150 @@ impl Screen {
             size: egui::vec2(w, h),
             repaint_delay: std::time::Duration::MAX,
             time: 0.0,
+            children: None,
         }
+    }
+
+    /// Wie [`Screen::new`], aber mit echten Kindfenstern: `embed_viewports` aus und ein eigener
+    /// Renderer für immediate-Viewports, der jedes Kindfenster mit **eigener** `RawInput` (aus
+    /// [`Children::child_events`] und [`Children::info`]) ausführt und seine Texte sammelt.
+    /// Der Renderer gilt je Thread (jeder Test läuft in einem eigenen).
+    pub fn with_viewports(w: f32, h: f32) -> Screen {
+        let mut s = Screen::new(w, h);
+        s.ctx.set_embed_viewports(false);
+        let children = Rc::new(RefCell::new(Children::default()));
+        let shared = Rc::clone(&children);
+        egui::Context::set_immediate_viewport_renderer(move |ctx, viewport| {
+            let egui::ImmediateViewport {
+                ids,
+                builder,
+                mut viewport_ui_cb,
+            } = viewport;
+            let id = ids.this;
+            // Die Leihe endet vor `run_ui`: Kindfenster können selbst Kindfenster öffnen.
+            let raw = {
+                let mut c = shared.borrow_mut();
+                let events = c.child_events.remove(&id).unwrap_or_default();
+                let time = c.time;
+                let info = c.info.entry(id).or_default();
+                info.parent = Some(ids.parent);
+                let size = info
+                    .inner_rect
+                    .map(|r| r.size())
+                    .or(builder.inner_size)
+                    .unwrap_or(egui::vec2(400.0, 300.0));
+                let mut viewports = egui::ViewportIdMap::default();
+                viewports.insert(id, info.clone());
+                info.events.clear();
+                *c.runs.entry(id).or_default() += 1;
+                c.builders.insert(id, builder);
+                egui::RawInput {
+                    viewport_id: id,
+                    viewports,
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events,
+                    time: Some(time),
+                    ..Default::default()
+                }
+            };
+            let mut out = ctx.run_ui(raw, |ui| viewport_ui_cb(ui));
+            let mut seen = Vec::new();
+            for c in &out.shapes {
+                walk_shape(&c.shape, c.clip_rect, &mut seen);
+            }
+            out.shapes.clear();
+            out.drop_without_applying_deltas();
+            shared.borrow_mut().seen.insert(id, seen);
+        });
+        s.children = Some(children);
+        s
+    }
+
+    fn children(&self) -> std::cell::RefMut<'_, Children> {
+        self.children
+            .as_ref()
+            .expect("Screen::with_viewports")
+            .borrow_mut()
+    }
+
+    /// Legt `events` ins nächste Bild des Kindfensters `id`, führt ein Bild aus und liefert die
+    /// Texte des Kindfensters.
+    pub fn frame_child(
+        &mut self,
+        id: egui::ViewportId,
+        events: Vec<egui::Event>,
+        f: &mut dyn FnMut(&egui::Context),
+    ) -> Vec<Seen> {
+        self.children()
+            .child_events
+            .entry(id)
+            .or_default()
+            .extend(events);
+        self.frame(vec![], f);
+        self.child_seen(id)
+    }
+
+    /// Linksklick im Kindfenster `id` an der Stelle `at` (Punkte des Kindfensters).
+    pub fn click_child(
+        &mut self,
+        id: egui::ViewportId,
+        at: egui::Pos2,
+        f: &mut dyn FnMut(&egui::Context),
+    ) {
+        let button = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        self.frame_child(id, vec![egui::Event::PointerMoved(at)], f);
+        self.frame_child(id, vec![button(true)], f);
+        self.frame_child(id, vec![button(false)], f);
+    }
+
+    /// Ändert die Fensterangaben des Kindfensters `id` für die nächsten Bilder.
+    pub fn child_info(
+        &mut self,
+        id: egui::ViewportId,
+        change: impl FnOnce(&mut egui::ViewportInfo),
+    ) {
+        change(self.children().info.entry(id).or_default());
+    }
+
+    /// Texte des letzten Bilds im Kindfenster `id` (leer, wenn es nie lief).
+    pub fn child_seen(&self, id: egui::ViewportId) -> Vec<Seen> {
+        self.children()
+            .seen
+            .get(&id)
+            .map(|v| {
+                v.iter()
+                    .map(|s| Seen {
+                        text: s.text.clone(),
+                        rect: s.rect,
+                        clip: s.clip,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Alle Befehle an das Kindfenster `id` bisher.
+    pub fn child_commands(&self, id: egui::ViewportId) -> Vec<egui::ViewportCommand> {
+        self.children()
+            .commands
+            .get(&id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Builder des letzten Aufrufs für das Kindfenster `id`.
+    pub fn child_builder(&self, id: egui::ViewportId) -> Option<egui::ViewportBuilder> {
+        self.children().builders.get(&id).cloned()
+    }
+
+    /// Wie oft das Kindfenster `id` gezeichnet wurde.
+    pub fn child_runs(&self, id: egui::ViewportId) -> usize {
+        self.children().runs.get(&id).copied().unwrap_or(0)
     }
 
     /// Ein Bild mit den Ereignissen; liefert alle gezeichneten Texte.
@@ -173,6 +341,9 @@ impl Screen {
         f: &mut dyn FnMut(&egui::Context),
     ) -> (Vec<Seen>, Vec<egui::epaint::ClippedShape>) {
         self.time += 0.05;
+        if let Some(c) = &self.children {
+            c.borrow_mut().time = self.time;
+        }
         let raw = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, self.size)),
             events,
@@ -189,6 +360,15 @@ impl Screen {
             .viewport_output
             .get(&egui::ViewportId::ROOT)
             .map_or(std::time::Duration::MAX, |v| v.repaint_delay);
+        // Befehle an Kindfenster gibt egui erst mit dem Bild des Hauptfensters aus.
+        if let Some(c) = &self.children {
+            let mut c = c.borrow_mut();
+            for (id, v) in &mut out.viewport_output {
+                if *id != egui::ViewportId::ROOT && !v.commands.is_empty() {
+                    c.commands.entry(*id).or_default().append(&mut v.commands);
+                }
+            }
+        }
         out.drop_without_applying_deltas();
         (seen, shapes)
     }

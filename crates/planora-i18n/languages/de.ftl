@@ -227,6 +227,8 @@ shortcuts-to-settings = In den Einstellungen ändern
 
 ## Fenster und Dialoge
 dialog-close = Schließen
+dialog-dock = Andocken
+dialog-undock = Abdocken
 
 ## Tabs
 tab-close = Schließen

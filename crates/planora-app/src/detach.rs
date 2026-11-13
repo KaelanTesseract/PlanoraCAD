@@ -1,6 +1,7 @@
 //! Abgedockte Fenster: Plätze, Zustand je Platz, Monitorprüfung und Umrechnung zwischen
 //! Punkten (egui) und physischen Pixeln (config.json).
 
+use crate::theme;
 use planora_project::config::{Config, DetachedWindow};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -68,6 +69,20 @@ impl DetachState {
         std::mem::take(&mut self.dirty)
     }
 
+    /// Merkt wieder „geändert“, etwa wenn das Speichern nach [`DetachState::take_dirty`]
+    /// scheiterte; der nächste Versuch schreibt den Stand dann erneut.
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    /// Schreibt den Stand, falls er sich geändert hat. Scheitert das Schreiben, bleibt die
+    /// Änderung vorgemerkt (der nächste Aufruf versucht es erneut) statt verloren zu gehen.
+    pub fn save_if_dirty(&mut self, config_path: &Path) {
+        if self.take_dirty() && !self.save(config_path) {
+            self.mark_dirty();
+        }
+    }
+
     /// Schreibt nur das Feld `detached` in die Konfigurationsdatei; `true`, wenn geschrieben
     /// wurde. Ein Fehler lässt die Datei unangetastet und bricht nichts ab.
     pub fn save(&self, config_path: &Path) -> bool {
@@ -132,6 +147,263 @@ pub fn to_points(w: DetachedWindow, pixels_per_point: f32) -> egui::Rect {
         egui::pos2(w.x / pixels_per_point, w.y / pixels_per_point),
         egui::vec2(w.width / pixels_per_point, w.height / pixels_per_point),
     )
+}
+
+// ---------------------------------------------------------------------------------------------
+// Eigenes Fenster
+// ---------------------------------------------------------------------------------------------
+
+/// Wie ein abgedocktes Fenster aussieht und sich verhält.
+#[derive(Clone, Copy, Debug)]
+pub struct WindowSpec<'a> {
+    pub place: Place,
+    /// Titel in der Kopfzeile (das Betriebssystem bekommt „PlanoraCAD – {title}“).
+    pub title: &'a str,
+    /// Innere Größe in Punkten.
+    pub inner_size: egui::Vec2,
+    /// Ränder zum Ändern der Größe (Felder ja, Dialoge nein).
+    pub resizable: bool,
+    /// Beim Öffnen den Fokus nehmen (Dialoge ja, beim Start erscheinende Felder nein).
+    pub focus_on_open: bool,
+}
+
+/// Was im abgedockten Fenster in diesem Bild geschah.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum WindowEvent {
+    None,
+    /// Symbol „Andocken“ oder Doppelklick auf die Kopfzeile.
+    DockClicked,
+    /// Das Betriebssystem will das Fenster schließen (Alt+F4); das Schließen ist schon
+    /// abgebrochen, der Aufrufer entscheidet (Feld andocken, Dialog abbrechen).
+    CloseRequested,
+}
+
+/// Kann diese Oberfläche eigene Fenster öffnen? Nicht bei eingebetteten Viewports (Tests,
+/// Plattformen ohne mehrere Fenster); dann gibt es kein Symbol „Abdocken“.
+pub fn can_detach(ctx: &egui::Context) -> bool {
+    !ctx.embed_viewports()
+}
+
+/// Kennung des Betriebssystemfensters für den Platz `place` (fest, sprachunabhängig).
+pub fn viewport_id(place: Place) -> egui::ViewportId {
+    egui::ViewportId::from_hash_of(place.key())
+}
+
+/// Breite der Randstreifen zum Ändern der Größe (Punkte).
+const RESIZE_EDGE: f32 = 6.0;
+/// Größte Abweichung der Lage (physische Pixel), die ohne Korrektur bleibt.
+const POSITION_TOLERANCE_PX: f32 = 2.0;
+
+/// Gedächtnis eines offenen Fensters zwischen den Bildern.
+#[derive(Clone, Copy, Debug)]
+struct Opened {
+    /// Bild des Aufrufers, in dem das Fenster zuletzt gezeigt wurde. Fehlt ein Bild, war das
+    /// Fenster zu (egui entfernt ein Kindfenster, das in einem Bild nicht gezeigt wird).
+    parent_frame: u64,
+    /// Lage im Builder (Punkte des Aufrufers). Bleibt fest, solange das Fenster offen ist:
+    /// egui schickt bei jeder Änderung des Builders die Lage erneut, winit rechnete sie mit dem
+    /// Faktor des Fensters um und das Fenster spränge.
+    position: Option<egui::Pos2>,
+    /// Gewollte physische Lage beim Öffnen (für die Korrektur im zweiten Bild).
+    wanted: Option<egui::Pos2>,
+    /// Äußeres Rechteck (Punkte des Fensters) beim Beginn eines Zieh- oder Größenvorgangs.
+    moving: Option<egui::Rect>,
+}
+
+/// Zeigt `add_contents` als eigenes Betriebssystemfenster für den Platz `spec.place`: ohne
+/// Rahmen des Betriebssystems und ohne Taskleisten-Eintrag, mit der Graphit-Kopfzeile (Titel,
+/// Symbol „Andocken“), Ziehen an der Kopfzeile und, falls `resizable`, Rändern zum Ändern der
+/// Größe. Lage aus `state`; nach dem Ende eines Zieh- oder Größenvorgangs wird die neue Lage
+/// (physische Pixel) in `state` gemerkt.
+///
+/// Der einzige Ort, der ein abgedocktes Fenster erzeugt. `add_contents` ist `FnMut`, weil egui
+/// den Inhalt eines Kindfensters in einem Bild mehrmals ausführen kann (verworfene Durchgänge,
+/// `request_discard`); geliefert wird das Ergebnis des letzten Durchgangs.
+///
+/// Bei eingebetteten Viewports ([`can_detach`] ist `false`) öffnet die Funktion nie ein
+/// Fenster und liefert `(None, WindowEvent::None)`; Aufrufer prüfen das vorher.
+pub fn show_window<R>(
+    ctx: &egui::Context,
+    state: &mut DetachState,
+    spec: WindowSpec,
+    mut add_contents: impl FnMut(&mut egui::Ui) -> R,
+) -> (Option<R>, WindowEvent) {
+    if !can_detach(ctx) {
+        debug_assert!(
+            false,
+            "show_window ohne eigene Fenster ({:?}); vorher can_detach prüfen",
+            spec.place
+        );
+        return (None, WindowEvent::None);
+    }
+    let id = viewport_id(spec.place);
+    let memory = egui::Id::new(("detach_fenster", spec.place.key()));
+    let frame = ctx.cumulative_frame_nr();
+    // Punkte des Aufrufers: der Builder gibt die Lage logisch an winit weiter.
+    let ppp = ctx.pixels_per_point();
+    let mut opened = ctx
+        .data(|d| d.get_temp::<Opened>(memory))
+        .filter(|o| o.parent_frame + 1 >= frame)
+        .unwrap_or_else(|| {
+            let saved = state.get(spec.place);
+            Opened {
+                parent_frame: frame,
+                position: saved.map(|w| to_points(w, ppp).min),
+                wanted: saved.map(|w| egui::pos2(w.x, w.y)),
+                moving: None,
+            }
+        });
+    opened.parent_frame = frame;
+
+    let mut builder = egui::ViewportBuilder::default()
+        .with_title(format!("PlanoraCAD – {}", spec.title))
+        .with_decorations(false)
+        .with_taskbar(false)
+        .with_inner_size(spec.inner_size)
+        .with_resizable(spec.resizable)
+        .with_active(spec.focus_on_open);
+    if let Some(p) = opened.position {
+        builder = builder.with_position(p);
+    }
+    let out = ctx.show_viewport_immediate(id, builder, |ui, _class| {
+        window_contents(ui, state, &mut opened, &spec, &mut add_contents)
+    });
+    ctx.data_mut(|d| d.insert_temp(memory, opened));
+    (Some(out.0), out.1)
+}
+
+/// Inhalt des Kindfensters (läuft mit dessen Eingabe und Faktor).
+fn window_contents<R>(
+    ui: &mut egui::Ui,
+    state: &mut DetachState,
+    opened: &mut Opened,
+    spec: &WindowSpec,
+    add_contents: &mut impl FnMut(&mut egui::Ui) -> R,
+) -> (R, WindowEvent) {
+    let ctx = ui.ctx().clone();
+    let ppp = ctx.pixels_per_point();
+    let outer = ctx.input(|i| i.viewport().outer_rect);
+    let mut event = WindowEvent::None;
+
+    // Lage-Korrektur: winit rechnet die logische Lage des Builders mit dem Faktor um, den das
+    // neue Fenster gerade hat, nicht mit dem des Zielmonitors. Im zweiten Bild steht fest, wo
+    // das Fenster gelandet ist; weicht es ab, einmal physisch genau hinsetzen (egui-winit
+    // rechnet `OuterPosition` mit dem aktuellen Faktor des Fensters in Pixel um).
+    if ctx.cumulative_frame_nr() == 1
+        && let Some(wanted) = opened.wanted.take()
+        && let Some(outer) = outer
+        && (outer.min.to_vec2() * ppp - wanted.to_vec2())
+            .abs()
+            .max_elem()
+            > POSITION_TOLERANCE_PX
+    {
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(wanted / ppp));
+    }
+
+    if ctx.input(|i| i.viewport().close_requested()) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        event = WindowEvent::CloseRequested;
+    }
+
+    let dark = ui.visuals().dark_mode;
+    // Rahmen der Felder, aber eckig: das Fenster selbst ist rechteckig, gerundete Ecken
+    // zeigten dahinter die leere Fensterfläche.
+    let frame = theme::panel_frame(dark).corner_radius(egui::CornerRadius::ZERO);
+    let r = egui::CentralPanel::default()
+        .frame(frame)
+        .show(ui, |ui| {
+            // Fläche der Kopfzeile vor deren Symbolen: die Symbole liegen darüber und behalten
+            // ihre Klicks, der Rest der Zeile zieht das Fenster bzw. dockt per Doppelklick an.
+            let head = egui::Rect::from_min_size(
+                ui.cursor().min,
+                egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
+            );
+            let drag = ui.interact(
+                head,
+                ui.id().with("detach_kopfzeile"),
+                egui::Sense::click_and_drag(),
+            );
+            let clicks =
+                crate::dialog::header(ui, spec.title, false, Some(crate::dialog::DockButton::Dock));
+            if clicks.dock || drag.double_clicked() {
+                event = WindowEvent::DockClicked;
+            } else if drag.drag_started_by(egui::PointerButton::Primary) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                opened.moving = outer;
+            }
+            add_contents(ui)
+        })
+        .inner;
+
+    if spec.resizable {
+        resize_edges(ui, opened, outer);
+    }
+
+    // Ende eines Zieh- oder Größenvorgangs: Maus losgelassen und Lage oder Größe geändert.
+    if let Some(start) = opened.moving
+        && !ctx.input(|i| i.pointer.any_down())
+    {
+        opened.moving = None;
+        if let Some(now) = outer
+            && now != start
+        {
+            state.set(spec.place, to_physical(now, ppp));
+        }
+    }
+    (r, event)
+}
+
+/// Randstreifen ([`RESIZE_EDGE`]) zum Ändern der Größe über das Betriebssystem. Nach dem
+/// Inhalt angelegt, damit sie über ihm liegen.
+fn resize_edges(ui: &mut egui::Ui, opened: &mut Opened, outer: Option<egui::Rect>) {
+    use egui::viewport::ResizeDirection as D;
+    let r = ui.max_rect();
+    let e = RESIZE_EDGE;
+    let (x0, x1, y0, y1) = (r.left(), r.right(), r.top(), r.bottom());
+    let rect = |a: egui::Pos2, b: egui::Pos2| egui::Rect::from_two_pos(a, b);
+    // Ecken zuletzt: sie liegen über den Kanten.
+    let strips = [
+        (D::North, rect(egui::pos2(x0, y0), egui::pos2(x1, y0 + e))),
+        (D::South, rect(egui::pos2(x0, y1 - e), egui::pos2(x1, y1))),
+        (D::West, rect(egui::pos2(x0, y0), egui::pos2(x0 + e, y1))),
+        (D::East, rect(egui::pos2(x1 - e, y0), egui::pos2(x1, y1))),
+        (
+            D::NorthWest,
+            rect(egui::pos2(x0, y0), egui::pos2(x0 + e, y0 + e)),
+        ),
+        (
+            D::NorthEast,
+            rect(egui::pos2(x1 - e, y0), egui::pos2(x1, y0 + e)),
+        ),
+        (
+            D::SouthWest,
+            rect(egui::pos2(x0, y1 - e), egui::pos2(x0 + e, y1)),
+        ),
+        (
+            D::SouthEast,
+            rect(egui::pos2(x1 - e, y1 - e), egui::pos2(x1, y1)),
+        ),
+    ];
+    for (dir, strip) in strips {
+        let response = ui.interact(
+            strip,
+            egui::Id::new(("detach_rand", format!("{dir:?}"))),
+            egui::Sense::drag(),
+        );
+        if response.hovered() || response.dragged() {
+            ui.ctx().set_cursor_icon(match dir {
+                D::North | D::South => egui::CursorIcon::ResizeVertical,
+                D::West | D::East => egui::CursorIcon::ResizeHorizontal,
+                D::NorthWest | D::SouthEast => egui::CursorIcon::ResizeNwSe,
+                D::NorthEast | D::SouthWest => egui::CursorIcon::ResizeNeSw,
+            });
+        }
+        if response.drag_started_by(egui::PointerButton::Primary) {
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
+            opened.moving = outer;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -202,6 +474,27 @@ mod tests {
         assert!(s.save(&path));
         let c = Config::load_from(&path);
         assert_eq!(DetachState::from_config(&c).get(Place::Right), Some(win()));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn failed_save_keeps_change_pending() {
+        let dir = std::env::temp_dir().join(format!("planora-detach-dirty-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Elternpfad ist eine Datei: Schreiben muss scheitern.
+        let blocker = dir.join("datei");
+        std::fs::write(&blocker, b"x").unwrap();
+        let bad = blocker.join("config.json");
+        let mut s = DetachState::default();
+        s.set(Place::Tree, win());
+        s.save_if_dirty(&bad);
+        assert!(s.take_dirty(), "gescheitertes Speichern bleibt vorgemerkt");
+        s.mark_dirty();
+        let good = dir.join("config.json");
+        s.save_if_dirty(&good);
+        assert!(!s.take_dirty(), "gespeichert");
+        let c = Config::load_from(&good);
+        assert_eq!(DetachState::from_config(&c).get(Place::Tree), Some(win()));
         std::fs::remove_dir_all(&dir).ok();
     }
 }

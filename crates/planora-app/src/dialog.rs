@@ -14,8 +14,45 @@ pub fn close_label() -> String {
     tr!("dialog-close")
 }
 
-/// Größe des Schließen-Symbols in der Kopfzeile.
-const CLOSE_ICON_SIZE: f32 = 16.0;
+/// Größe der Symbole (Schließen, An-/Abdocken) in der Kopfzeile.
+const HEADER_ICON_SIZE: f32 = 16.0;
+
+/// Symbol „Andocken“ bzw. „Abdocken“ in der Kopfzeile (links neben dem Schließen-Symbol).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum DockButton {
+    /// Abgedocktes Fenster: zurück ins Hauptfenster.
+    Dock,
+    /// Angedockt: als eigenes Fenster herauslösen.
+    #[expect(
+        dead_code,
+        reason = "das Symbol Abdocken bekommen die Dialoge und Felder in den nächsten Aufgaben"
+    )]
+    Undock,
+}
+
+impl DockButton {
+    fn icon(self) -> Icon {
+        match self {
+            DockButton::Dock => Icon::Dock,
+            DockButton::Undock => Icon::Undock,
+        }
+    }
+
+    /// Name des Symbols (Tooltip und Bedienhilfe).
+    pub(crate) fn label(self) -> String {
+        match self {
+            DockButton::Dock => tr!("dialog-dock"),
+            DockButton::Undock => tr!("dialog-undock"),
+        }
+    }
+}
+
+/// Welche Symbole der Kopfzeile angeklickt wurden.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub(crate) struct HeaderClicks {
+    pub close: bool,
+    pub dock: bool,
+}
 
 /// Breitenklassen der Dialoge (Außenbreite in Punkten).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -224,7 +261,7 @@ impl<'a> Dialog<'a> {
                 ui.ctx().request_discard("Dialog: first sizing pass");
             }
             let top = ui.min_rect().top();
-            let close = header(ui, &title, open.is_some());
+            let close = header(ui, &title, open.is_some(), None).close;
             let used = ui.cursor().top() - top;
             // Höhe der Fußzeile aus dem vorigen Bild (ändert sie sich, wird das Bild unten
             // verworfen und wiederholt).
@@ -274,33 +311,30 @@ impl<'a> Dialog<'a> {
     }
 }
 
-/// Kopfzeile: Titel links, rechts (falls `closable`) das Schließen-Symbol; liefert, ob es
-/// angeklickt wurde. Darunter `SPACE_2` Abstand, kein Trennstrich.
-fn header(ui: &mut egui::Ui, title: &str, closable: bool) -> bool {
+/// Kopfzeile: Titel links, rechts (falls `closable`) das Schließen-Symbol und links daneben
+/// (falls `dock`) das Symbol „Andocken“/„Abdocken“; liefert, was angeklickt wurde. Darunter
+/// `SPACE_2` Abstand, kein Trennstrich.
+pub(crate) fn header(
+    ui: &mut egui::Ui,
+    title: &str,
+    closable: bool,
+    dock: Option<DockButton>,
+) -> HeaderClicks {
     let dark = ui.visuals().dark_mode;
-    let mut close = false;
+    let mut clicks = HeaderClicks::default();
     ui.horizontal(|ui| {
         // Feste Zeilenhöhe: egui gibt der Reihe im ersten, messenden Durchgang sonst nur die
         // Texthöhe; der Dialog stünde dann im ersten Bild um diese Differenz versetzt.
         ui.set_min_height(ui.spacing().interact_size.y);
-        if closable {
+        if closable || dock.is_some() {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 theme::frameless(ui.style_mut());
-                let response = ui
-                    .add(egui::Button::new(icons::text(
-                        Icon::Close,
-                        CLOSE_ICON_SIZE,
-                        egui::Color32::PLACEHOLDER,
-                    )))
-                    .on_hover_text(close_label());
-                // Der Knopf trägt nur ein Symbol aus der Symbolschrift; sein eigener Name wäre ein
-                // unlesbares Zeichen. Diese zweite Angabe ersetzt ihn durch „Schließen“ für
-                // Bildschirmleser.
-                response.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::WidgetType::Button, true, close_label())
-                });
-                theme::focus_ring(ui, &response);
-                close = response.clicked();
+                if closable {
+                    clicks.close = header_icon(ui, Icon::Close, close_label());
+                }
+                if let Some(dock) = dock {
+                    clicks.dock = header_icon(ui, dock.icon(), dock.label());
+                }
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     title_label(ui, title, dark)
                 });
@@ -310,7 +344,24 @@ fn header(ui: &mut egui::Ui, title: &str, closable: bool) -> bool {
         }
     });
     ui.add_space(SPACE_2);
-    close
+    clicks
+}
+
+/// Ein Symbolknopf der Kopfzeile mit Tooltip `label`; `true`, wenn angeklickt.
+fn header_icon(ui: &mut egui::Ui, icon: Icon, label: String) -> bool {
+    let response = ui
+        .add(egui::Button::new(icons::text(
+            icon,
+            HEADER_ICON_SIZE,
+            egui::Color32::PLACEHOLDER,
+        )))
+        .on_hover_text(&label);
+    // Der Knopf trägt nur ein Symbol aus der Symbolschrift; sein eigener Name wäre ein
+    // unlesbares Zeichen. Diese zweite Angabe ersetzt ihn durch den Namen (etwa „Schließen“)
+    // für Bildschirmleser.
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+    theme::focus_ring(ui, &response);
+    response.clicked()
 }
 
 fn title_label(ui: &mut egui::Ui, title: &str, dark: bool) {
