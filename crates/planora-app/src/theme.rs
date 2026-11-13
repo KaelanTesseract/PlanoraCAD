@@ -937,6 +937,8 @@ pub struct SketchColors {
     pub axis_x: Color32,
     /// Y-Achse der Skizze.
     pub axis_y: Color32,
+    /// Z-Achse (Triade der 3D-Skizze).
+    pub axis_z: Color32,
     /// Fangzeichen am Zeiger.
     pub snap: Color32,
     /// Gestrichelte Ausrichtungslinien beim Zeichnen.
@@ -976,6 +978,7 @@ pub fn sketch_colors(dark: bool) -> SketchColors {
             box_fill: with_alpha(p.selection, 0x20),
             axis_x: p.axis_x,
             axis_y: p.axis_y,
+            axis_z: p.axis_z,
             snap: p.selection,
             guide: p.text_secondary,
             plane_fill: with_alpha(rgb(0xe8963c), 0x38),
@@ -1002,6 +1005,7 @@ pub fn sketch_colors(dark: bool) -> SketchColors {
             box_fill: with_alpha(rgb(0xa86a00), 0x20),
             axis_x: p.axis_x,
             axis_y: p.axis_y,
+            axis_z: p.axis_z,
             snap: rgb(0xa86a00),
             guide: p.text_tertiary,
             plane_fill: with_alpha(rgb(0xe07b10), 0x30),
@@ -1079,7 +1083,8 @@ pub fn cube_hover_fill(dark: bool, fill: Color32) -> Color32 {
 }
 
 /// Dieselbe Farbe mit anderem Alpha (nicht vormultipliziert).
-fn with_alpha(c: Color32, alpha: u8) -> Color32 {
+/// Dieselbe Farbe mit der Deckkraft `alpha`.
+pub fn with_alpha(c: Color32, alpha: u8) -> Color32 {
     Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), alpha)
 }
 

@@ -1257,8 +1257,11 @@ pub fn show_overlay(ui: &mut egui::Ui, rect: Rect, state: &mut AppState) -> bool
     // sperrt Esc, Entf und Eingabe der Skizze nicht.
     viewport::focus_is_not_typing(ui.ctx(), response.id);
     state.camera.set_viewport(rect.width(), rect.height());
-    // Griffe eines Einfügen-Fensters nehmen den Zeiger vor den Werkzeugen.
-    if !insert_grips_input(ui, rect, state, response.hover_pos()) {
+    // Griffe eines Einfügen-Fensters nehmen den Zeiger vor den Werkzeugen, danach die Triade der
+    // 3D-Skizze (Skizzen 10).
+    if !insert_grips_input(ui, rect, state, response.hover_pos())
+        && !crate::sketch_triad::input(ui, rect, state, response.hover_pos())
+    {
         handle_input(ui, &response, rect, state);
     }
     let pointer = response.hover_pos().or(response.interact_pointer_pos());
@@ -1266,11 +1269,12 @@ pub fn show_overlay(ui: &mut egui::Ui, rect: Rect, state: &mut AppState) -> bool
         cursor_after_fields(rect, state, pointer);
     }
     draw(ui, rect, state, response.hover_pos());
+    crate::sketch_triad::show(ui, state);
     response.hovered()
 }
 
 /// Die Abbildung auf die Skizze im Rechteck `rect` für dieses Bild.
-fn mapper(rect: Rect, state: &AppState) -> Option<Mapper> {
+pub(crate) fn mapper(rect: Rect, state: &AppState) -> Option<Mapper> {
     Some(Mapper {
         camera: state.camera,
         frame: *state.session_sketch()?.frame(),
@@ -2509,6 +2513,9 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     {
         painter.circle_stroke(s, POINT_PX + 5.0, Stroke::new(1.5, col.selected));
     }
+
+    // Triade der 3D-Skizze über der Skizze (Skizzen 10).
+    crate::sketch_triad::paint(&painter, rect, state, pointer);
 
     painter.extend(box_select_shapes(state));
 }

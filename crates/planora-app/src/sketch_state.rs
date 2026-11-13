@@ -452,45 +452,8 @@ pub struct LineArcDrag {
     pub prev: CurveId,
 }
 
-/// Ebene der Triade der 3D-Skizze (Skizzen 10). Die Reihenfolge von Alt ist XY, YZ, ZX.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum TriadPlane {
-    /// Die Skizzenebene.
-    #[default]
-    Xy,
-    Yz,
-    Zx,
-}
-
-impl TriadPlane {
-    /// Die nächste Ebene reihum.
-    pub fn next(self) -> TriadPlane {
-        match self {
-            TriadPlane::Xy => TriadPlane::Yz,
-            TriadPlane::Yz => TriadPlane::Zx,
-            TriadPlane::Zx => TriadPlane::Xy,
-        }
-    }
-}
-
-/// Achse eines Drehgriffs der Triade (Skizzen 10).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TriadAxis {
-    X,
-    Y,
-    Z,
-}
-
-impl TriadAxis {
-    /// Der nächste Griff reihum (`None`: noch keiner aktiv, dann X).
-    pub fn next(current: Option<TriadAxis>) -> TriadAxis {
-        match current {
-            None | Some(TriadAxis::Z) => TriadAxis::X,
-            Some(TriadAxis::X) => TriadAxis::Y,
-            Some(TriadAxis::Y) => TriadAxis::Z,
-        }
-    }
-}
+// Ebene und Achse der Triade (Skizzen 10) liegen mit der Triade in `sketch_triad`.
+pub use crate::sketch_triad::{TriadAxis, TriadPlane};
 
 /// Zustand des geöffneten Skizzen-Modus.
 #[derive(Clone, Debug)]
@@ -567,14 +530,12 @@ pub struct SketchSession {
     /// Name des nächsten Schritts für Rückgängig, wenn ein Werkzeug ihn besser kennt als der
     /// Vergleich der Stände (Stutzen, Dehnen, Brechen); der Verlauf nimmt und leert ihn.
     pub edit_label: Option<Msg>,
-    /// Aktive Ebene der Triade der 3D-Skizze (Skizzen 10; gehört nicht zum Dokument und nicht
-    /// zum Rückgängig). Die Triade zeichnet Task 10.
-    triad_plane: TriadPlane,
-    /// Aktiver Drehgriff der Triade (Tab schaltet reihum); `None`: keiner.
-    triad_handle: Option<TriadAxis>,
-    /// „Z sperren“ (Pfeil hoch gehalten): Der Zeiger bewegt nur noch entlang der Ebenennormale.
-    /// Setzt die Oberfläche je Bild aus der gehaltenen Taste ([`crate::keymap::dispatch::held`]).
-    pub z_lock: bool,
+    /// Triade der 3D-Skizze (Skizzen 10; gehört nicht zum Dokument und nicht zum Rückgängig):
+    /// Lage, Drehung, aktive Ebene, aktiver Drehgriff (Tab) und „Z sperren“ (Pfeil hoch gehalten,
+    /// setzt die Oberfläche je Bild aus der Taste, [`crate::keymap::dispatch::held`]).
+    pub triad: crate::sketch_triad::Triad,
+    /// Bedienzustand der Triade in der Ansicht (Bild, Zug, Menü, Winkelfeld).
+    pub triad_ui: crate::sketch_triad::TriadUi,
     /// Letzte Stelle beim Stutzen durch Ziehen (`None`: kein Zug läuft).
     pub trim_drag: Option<DVec2>,
     /// Zählt die gelungenen Änderungen durch Stutzen, Dehnen und Brechen, mit dem Werkzeug der
@@ -739,9 +700,8 @@ impl SketchSession {
             history_jumps: 0,
             hover_preview: None,
             edit_label: None,
-            triad_plane: TriadPlane::Xy,
-            triad_handle: None,
-            z_lock: false,
+            triad: Default::default(),
+            triad_ui: Default::default(),
             trim_drag: None,
             modify_edits: (0, None),
             fillet_run: None,
@@ -872,19 +832,20 @@ impl SketchSession {
         sk.set_three_d(on);
         self.edit_label = Some(crate::msg!("sketch-edit-three-d"));
         if !on {
-            self.triad_handle = None;
-            self.z_lock = false;
+            self.triad_ui.abort(&mut self.triad);
+            self.triad.handle = None;
+            self.triad.lock_z = false;
         }
     }
 
     /// Die aktive Ebene der Triade (Skizzen 10).
     pub fn triad_plane(&self) -> TriadPlane {
-        self.triad_plane
+        self.triad.active
     }
 
     /// Der aktive Drehgriff der Triade; `None`: keiner.
     pub fn triad_handle(&self) -> Option<TriadAxis> {
-        self.triad_handle
+        self.triad.handle
     }
 
     /// Alt allein (Aktion „Triadenebene wechseln“): schaltet die aktive Ebene reihum. Nur in
@@ -893,7 +854,7 @@ impl SketchSession {
         if !sk.three_d {
             return false;
         }
-        self.triad_plane = self.triad_plane.next();
+        self.triad.cycle_plane();
         true
     }
 
@@ -903,7 +864,7 @@ impl SketchSession {
         if !sk.three_d {
             return false;
         }
-        self.triad_handle = Some(TriadAxis::next(self.triad_handle));
+        self.triad.cycle_handle();
         true
     }
 

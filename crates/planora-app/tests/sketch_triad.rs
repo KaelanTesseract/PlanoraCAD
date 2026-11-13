@@ -1,7 +1,7 @@
 //! Haken „3D-Skizze“ und die Tastenaktionen der Triade (Skizzen 10, Task 9): der Haken ist ein
 //! Rückgängig-Schritt, Alt allein, Tab und Pfeil hoch (gehalten) sind belegbar, Alt mit
-//! Mausziehen (Kamera) löst nichts aus. Die Triade selbst zeichnet erst Task 10; hier prüfen
-//! wir Zustand, Aktionen und Einstellungen.
+//! Mausziehen (Kamera) löst nichts aus. Ab Task 10 auch die Triade selbst: Lage, Drehung, Treffer,
+//! Achsfang, Z-Sperre, Ziehen am Drehgriff, Rechtsklickmenü und das Winkelfeld.
 
 mod common;
 
@@ -518,7 +518,8 @@ impl Rig {
             .sketch_session
             .as_ref()
             .unwrap()
-            .z_lock
+            .triad
+            .lock_z
     }
 
     fn bind(&mut self, a: Action, b: Binding) {
@@ -699,4 +700,589 @@ fn tab_belongs_to_the_triad_only_in_a_3d_sketch() {
     r.frame(Modifiers::NONE, vec![key_down(Key::Tab, Modifiers::NONE)]);
     assert!(!r.tab_left);
     assert_eq!(r.handle(), Some(TriadAxis::X));
+}
+
+// ---- Task 10: die Triade selbst -----------------------------------------------------------------
+
+use glam::Vec3;
+use planora_app::sketch_kinds::ToolKind;
+use planora_app::sketch_state::Tool;
+use planora_app::sketch_triad::{
+    ARC_FRAC, Triad, TriadLayout, TriadPart, snap_angle, triad_hit, triad_point,
+};
+use planora_app::sketch_view::sketch3_to_screen;
+use planora_math::{DQuat, DVec3, Frame};
+use planora_render::OrbitCamera;
+use planora_sketch::model::MAX_COORD;
+use std::f64::consts::{FRAC_PI_2, PI};
+
+const W: f32 = 1920.0;
+const H: f32 = 1080.0;
+
+fn camera(target: Vec3, distance: f32, to_camera: Vec3, up: Vec3) -> OrbitCamera {
+    let mut cam = OrbitCamera {
+        target,
+        distance,
+        ..Default::default()
+    };
+    cam.look_along(to_camera, up);
+    cam.set_viewport(W, H);
+    cam
+}
+
+fn view() -> glam::Vec2 {
+    glam::Vec2::new(W, H)
+}
+
+fn near(a: DVec3, b: DVec3, tol: f64) -> bool {
+    (a - b).length() < tol
+}
+
+#[test]
+fn default_triad_is_sketch_plane() {
+    let t = Triad::default();
+    assert!(t.is_sketch_plane());
+    assert_eq!(t.origin, DVec3::ZERO);
+    assert_eq!(t.rot, DQuat::IDENTITY);
+    assert_eq!(t.active, TriadPlane::Xy);
+    assert_eq!(t.handle, None);
+    assert!(!t.lock_z);
+    assert_eq!(t.plane(), (DVec3::ZERO, DVec3::Z));
+    assert_eq!(t.axes(), [DVec3::X, DVec3::Y, DVec3::Z]);
+    // Hochgeschoben ist es nicht mehr die Skizzenebene, in der Ebene verschoben schon.
+    let mut u = t;
+    u.moved_to(DVec3::new(1.0, 2.0, 3.0));
+    assert!(!u.is_sketch_plane());
+    assert_eq!(u.plane().0, DVec3::new(1.0, 2.0, 3.0));
+    u.moved_to(DVec3::new(1.0, 2.0, 1e-12));
+    assert!(u.is_sketch_plane());
+    u.cycle_plane();
+    assert!(!u.is_sketch_plane(), "YZ ist nicht die Skizzenebene");
+}
+
+#[test]
+fn cycle_plane_xy_yz_zx_xy() {
+    let mut t = Triad::default();
+    let mut seen = vec![(t.active, t.plane().1)];
+    for _ in 0..3 {
+        t.cycle_plane();
+        seen.push((t.active, t.plane().1));
+    }
+    assert_eq!(
+        seen,
+        vec![
+            (TriadPlane::Xy, DVec3::Z),
+            (TriadPlane::Yz, DVec3::X),
+            (TriadPlane::Zx, DVec3::Y),
+            (TriadPlane::Xy, DVec3::Z),
+        ]
+    );
+    let mut handles = Vec::new();
+    for _ in 0..4 {
+        t.cycle_handle();
+        handles.push(t.handle);
+    }
+    assert_eq!(
+        handles,
+        vec![
+            Some(TriadAxis::X),
+            Some(TriadAxis::Y),
+            Some(TriadAxis::Z),
+            Some(TriadAxis::X)
+        ]
+    );
+}
+
+#[test]
+fn rotate_x_90_turns_xy_into_xz() {
+    let mut t = Triad::default();
+    t.moved_to(DVec3::new(2.0, 0.0, 0.0));
+    t.rotate(TriadAxis::X, FRAC_PI_2);
+    let (p, n) = t.plane();
+    assert_eq!(p, DVec3::new(2.0, 0.0, 0.0));
+    // Die XY-Ebene der Triade steht jetzt in der XZ-Ebene der Skizze.
+    assert!(near(n.abs(), DVec3::Y, 1e-12), "{n:?}");
+    let [x, y, z] = t.axes();
+    assert!(near(x, DVec3::X, 1e-12));
+    assert!(near(y, DVec3::Z, 1e-12), "{y:?}");
+    assert!(near(z, -DVec3::Y, 1e-12), "{z:?}");
+    assert!(!t.is_sketch_plane());
+    // Zurückgedreht ist sie wieder die Skizzenebene (z = 0 vorausgesetzt).
+    t.moved_to(DVec3::new(2.0, 0.0, 0.0));
+    t.rotate(TriadAxis::X, -FRAC_PI_2);
+    assert!(t.is_sketch_plane());
+    // Gedreht wird um die eigene (schon gedrehte) Achse der Triade.
+    let mut t = Triad::default();
+    t.rotate(TriadAxis::Z, FRAC_PI_2);
+    t.rotate(TriadAxis::X, FRAC_PI_2);
+    assert!(near(t.axes()[0], DVec3::Y, 1e-12));
+    assert!(near(t.plane().1, DVec3::X, 1e-12), "{:?}", t.plane().1);
+}
+
+#[test]
+fn reset_keeps_origin_drops_rotation() {
+    let mut t = Triad::default();
+    t.moved_to(DVec3::new(4.0, -1.0, 6.0));
+    t.rotate(TriadAxis::Y, PI / 6.0);
+    t.cycle_plane();
+    t.cycle_handle();
+    t.reset_orientation();
+    assert_eq!(t.origin, DVec3::new(4.0, -1.0, 6.0));
+    assert_eq!(t.rot, DQuat::IDENTITY);
+    assert_eq!(t.axes(), [DVec3::X, DVec3::Y, DVec3::Z]);
+    assert_eq!(t.active, TriadPlane::Yz, "die aktive Ebene bleibt");
+    assert_eq!(t.handle, Some(TriadAxis::X));
+}
+
+#[test]
+fn axis_snap_within_8px_returns_axis() {
+    // Von oben auf die Skizzenebene.
+    let cam = camera(Vec3::ZERO, 100.0, Vec3::Z, Vec3::Y);
+    let f = Frame::WORLD;
+    let screen = |p: DVec3| sketch3_to_screen(&cam, &f, view(), p).unwrap();
+    let t = Triad::default();
+    // 5 Bildpunkte neben der X-Achse: rastet ein, der Punkt liegt genau auf der Achse.
+    let px = screen(DVec3::new(10.0, 0.0, 0.0)) + glam::Vec2::new(0.0, 5.0);
+    let (p, axis) = triad_point(&t, &cam, &f, view(), px, None).unwrap();
+    assert_eq!(axis, Some(TriadAxis::X));
+    assert!(near(p, DVec3::new(10.0, 0.0, 0.0), 1e-3), "{p:?}");
+    assert_eq!((p.y, p.z), (0.0, 0.0));
+    // 12 Bildpunkte daneben: frei auf der Ebene.
+    let px = screen(DVec3::new(10.0, 0.0, 0.0)) + glam::Vec2::new(0.0, 12.0);
+    let (p, axis) = triad_point(&t, &cam, &f, view(), px, None).unwrap();
+    assert_eq!(axis, None);
+    assert!(p.y < -0.1 && p.z.abs() < 1e-9, "{p:?}");
+    // Y-Achse ebenso; die Triade woanders.
+    let mut t = Triad::default();
+    t.moved_to(DVec3::new(5.0, 5.0, 0.0));
+    let px = screen(DVec3::new(5.0, 20.0, 0.0)) + glam::Vec2::new(-7.0, 0.0);
+    let (p, axis) = triad_point(&t, &cam, &f, view(), px, None).unwrap();
+    assert_eq!(axis, Some(TriadAxis::Y));
+    assert!(near(p, DVec3::new(5.0, 20.0, 0.0), 1e-3), "{p:?}");
+    // Auf der Ebene YZ (von vorn gesehen) rastet die Z-Achse ein.
+    let cam = camera(Vec3::ZERO, 100.0, Vec3::X, Vec3::Z);
+    let screen = |p: DVec3| sketch3_to_screen(&cam, &f, view(), p).unwrap();
+    let mut t = Triad::default();
+    t.cycle_plane();
+    let px = screen(DVec3::new(0.0, 0.0, 15.0)) + glam::Vec2::new(4.0, 0.0);
+    let (p, axis) = triad_point(&t, &cam, &f, view(), px, None).unwrap();
+    assert_eq!(axis, Some(TriadAxis::Z));
+    assert!(near(p, DVec3::new(0.0, 0.0, 15.0), 1e-3), "{p:?}");
+}
+
+#[test]
+fn lock_z_moves_only_along_normal() {
+    // Von der Seite (Blick entlang +Y): die Höhe ist gut zu sehen.
+    let cam = camera(Vec3::ZERO, 100.0, -Vec3::Y, Vec3::Z);
+    let f = Frame::WORLD;
+    let screen = |p: DVec3| sketch3_to_screen(&cam, &f, view(), p).unwrap();
+    let t = Triad::default();
+    let base = DVec3::new(3.0, 4.0, 0.0);
+    let px = screen(DVec3::new(3.0, 4.0, 7.0));
+    let (p, axis) = triad_point(&t, &cam, &f, view(), px, Some(base)).unwrap();
+    assert!(near(p, DVec3::new(3.0, 4.0, 7.0), 1e-3), "{p:?}");
+    assert_eq!(axis, None);
+    // Seitlich daneben: x und y bleiben genau, nur die Höhe folgt.
+    let (p, _) = triad_point(
+        &t,
+        &cam,
+        &f,
+        view(),
+        px + glam::Vec2::new(40.0, 0.0),
+        Some(base),
+    )
+    .unwrap();
+    assert_eq!((p.x, p.y), (3.0, 4.0));
+    // In der Perspektive liegt die nächste Stelle zum Strahl daneben etwas anders.
+    assert!((p.z - 7.0).abs() < 0.05, "{p:?}");
+    // Ohne Sperre ist diese Ebene streifend gesehen: kein Punkt (Review Focus 3).
+    assert!(triad_point(&t, &cam, &f, view(), px, None).is_none());
+    // Mit Sperre, aber Blick entlang der Normale (von oben): keine Höhe ablesbar.
+    let top = camera(Vec3::ZERO, 100.0, Vec3::Z, Vec3::Y);
+    let px = sketch3_to_screen(&top, &f, view(), base).unwrap();
+    assert!(triad_point(&t, &top, &f, view(), px, Some(base)).is_none());
+    // Fast streifend (6° über der Ebene): nie ein Punkt über MAX_COORD.
+    let flat = camera(
+        Vec3::ZERO,
+        100.0,
+        Vec3::new(0.0, -1.0, (6.0f32).to_radians().tan()),
+        Vec3::Z,
+    );
+    for i in 0..=24 {
+        for j in 0..=24 {
+            let px = glam::Vec2::new(W * i as f32 / 24.0, H * j as f32 / 24.0);
+            for lock in [None, Some(base)] {
+                if let Some((p, _)) = triad_point(&t, &flat, &f, view(), px, lock) {
+                    assert!(p.is_finite() && p.abs().max_element() <= MAX_COORD, "{p:?}");
+                }
+            }
+        }
+    }
+}
+
+fn hand_layout() -> TriadLayout {
+    let c = Pos2::new(100.0, 100.0);
+    TriadLayout {
+        center: c,
+        tips: [
+            Some(Pos2::new(180.0, 100.0)),
+            Some(Pos2::new(100.0, 20.0)),
+            Some(Pos2::new(40.0, 140.0)),
+        ],
+        // Das Quadrat der XY-Ebene liegt hier dicht an der X-Achse.
+        squares: [
+            Some([
+                Pos2::new(105.0, 99.0),
+                Pos2::new(130.0, 99.0),
+                Pos2::new(130.0, 72.0),
+                Pos2::new(105.0, 72.0),
+            ]),
+            None,
+            None,
+        ],
+        arcs: [
+            vec![Pos2::new(100.0, 36.0), Pos2::new(70.0, 50.0)],
+            Vec::new(),
+            vec![Pos2::new(164.0, 100.0), Pos2::new(145.0, 55.0)],
+        ],
+        show_planes: true,
+        show_handles: true,
+    }
+}
+
+#[test]
+fn hit_plane_square_before_axis() {
+    let mut l = hand_layout();
+    // Im Quadrat und zugleich 2 Bildpunkte neben der X-Achse: die Ebene gewinnt.
+    let p = Pos2::new(115.0, 98.0);
+    assert_eq!(triad_hit(&l, p), Some(TriadPart::Plane(TriadPlane::Xy)));
+    assert_eq!(
+        triad_hit(&l, Pos2::new(120.0, 80.0)),
+        Some(TriadPart::Plane(TriadPlane::Xy))
+    );
+    assert_eq!(
+        triad_hit(&l, Pos2::new(175.0, 103.0)),
+        Some(TriadPart::Axis(TriadAxis::X))
+    );
+    assert_eq!(
+        triad_hit(&l, Pos2::new(155.0, 76.0)),
+        Some(TriadPart::Handle(TriadAxis::Z))
+    );
+    assert_eq!(triad_hit(&l, Pos2::new(400.0, 400.0)), None);
+    // Ohne Ebenen und Drehgriffe zählen nur die Achsen.
+    l.show_planes = false;
+    l.show_handles = false;
+    assert_eq!(triad_hit(&l, p), Some(TriadPart::Axis(TriadAxis::X)));
+    assert_eq!(triad_hit(&l, Pos2::new(155.0, 76.0)), None);
+}
+
+#[test]
+fn angle_snap_catches_15_degree_steps() {
+    let d = |x: f64| x.to_radians();
+    assert!((snap_angle(d(44.0), false) - d(45.0)).abs() < 1e-12);
+    assert!((snap_angle(d(-91.5), false) - d(-90.0)).abs() < 1e-12);
+    // Zwischen den Stufen ganze Grad.
+    assert!((snap_angle(d(37.4), false) - d(37.0)).abs() < 1e-12);
+    // Mit Strg frei.
+    assert_eq!(snap_angle(d(44.0), true), d(44.0));
+}
+
+// ---- Task 10: in der App ------------------------------------------------------------------------
+
+impl Rig {
+    fn tool(&mut self, tool: Tool) {
+        let (se, sk) = st(self.app.ws_mut()).session_sketch_mut().unwrap();
+        se.choose_tool(sk, tool);
+    }
+
+    fn kind(&mut self, kind: ToolKind) {
+        let (se, sk) = st(self.app.ws_mut()).session_sketch_mut().unwrap();
+        se.choose_kind(sk, kind);
+    }
+
+    fn triad(&mut self) -> Triad {
+        st(self.app.ws_mut()).sketch_session.as_ref().unwrap().triad
+    }
+
+    fn layout(&mut self) -> Option<TriadLayout> {
+        st(self.app.ws_mut())
+            .sketch_session
+            .as_ref()
+            .unwrap()
+            .triad_ui
+            .layout
+            .clone()
+    }
+
+    /// Ein Bild wie [`Rig::frame`], liefert die gezeichneten Texte mit ihrer Mitte.
+    fn texts(&mut self, events: Vec<Event>) -> Vec<(String, Pos2)> {
+        self.time += 1.0 / 60.0;
+        let raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, SIZE)),
+            time: Some(self.time),
+            events,
+            ..Default::default()
+        };
+        let mut f = eframe::Frame::_new_kittest();
+        let app = &mut self.app;
+        let out = self.ctx.run_ui(raw, |ui| app.ui(ui, &mut f));
+        let mut found = Vec::new();
+        for s in &out.shapes {
+            collect_text(&s.shape, &mut found);
+        }
+        out.drop_without_applying_deltas();
+        found
+    }
+
+    fn click(&mut self, at: Pos2, button: PointerButton) {
+        let ev = |pressed| Event::PointerButton {
+            pos: at,
+            button,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        self.frame(Modifiers::NONE, vec![Event::PointerMoved(at)]);
+        self.frame(Modifiers::NONE, vec![Event::PointerMoved(at), ev(true)]);
+        self.frame(Modifiers::NONE, vec![ev(false)]);
+        self.frame(Modifiers::NONE, vec![]);
+    }
+
+    fn points(&mut self) -> usize {
+        st(self.app.ws_mut())
+            .session_sketch()
+            .unwrap()
+            .points()
+            .count()
+    }
+}
+
+fn centroid(q: [Pos2; 4]) -> Pos2 {
+    let s = q.iter().fold(Vec2::ZERO, |a, p| a + p.to_vec2());
+    (s / 4.0).to_pos2()
+}
+
+fn button(at: Pos2, button: PointerButton, pressed: bool) -> Event {
+    Event::PointerButton {
+        pos: at,
+        button,
+        pressed,
+        modifiers: Modifiers::NONE,
+    }
+}
+
+#[test]
+fn triad_shows_only_with_a_3d_tool_in_a_3d_sketch() {
+    let mut r = Rig::new(true);
+    assert!(r.layout().is_none(), "Auswahlwerkzeug: keine Triade");
+    for tool in [
+        Tool::Line,
+        Tool::Point,
+        Tool::Ellipse,
+        Tool::Text,
+        Tool::Spline,
+    ] {
+        r.tool(tool);
+        r.frame(Modifiers::NONE, vec![]);
+        assert!(r.layout().is_some(), "{tool:?}");
+    }
+    for (kind, shown) in [
+        (ToolKind::Arc3P, true),
+        (ToolKind::ArcCenter, false),
+        (ToolKind::Rect2P, true),
+        (ToolKind::Rect3P, false),
+        (ToolKind::Circle2P, true),
+        (ToolKind::CircleCenter, false),
+        (ToolKind::Conic, true),
+        (ToolKind::SplineControl, true),
+    ] {
+        r.kind(kind);
+        r.frame(Modifiers::NONE, vec![]);
+        assert_eq!(r.layout().is_some(), shown, "{kind:?}");
+    }
+    for tool in [Tool::Trim, Tool::Dimension, Tool::Select] {
+        r.tool(tool);
+        r.frame(Modifiers::NONE, vec![]);
+        assert!(r.layout().is_none(), "{tool:?}");
+    }
+    // Ohne den Haken nie.
+    let mut r = Rig::new(false);
+    r.tool(Tool::Line);
+    r.frame(Modifiers::NONE, vec![]);
+    assert!(r.layout().is_none());
+}
+
+#[test]
+fn click_on_a_plane_square_activates_it_and_sets_no_point() {
+    let mut r = Rig::new(true);
+    r.tool(Tool::Line);
+    // Von oben stehen YZ und ZX auf der Kante; schräg gesehen sind alle drei Quadrate offen.
+    st(r.app.ws_mut()).camera.orbit(60.0, 40.0);
+    r.frame(Modifiers::NONE, vec![]);
+    let l = r.layout().unwrap();
+    let n = r.points();
+    let at = centroid(l.squares[1].expect("Quadrat YZ"));
+    assert_eq!(triad_hit(&l, at), Some(TriadPart::Plane(TriadPlane::Yz)));
+    r.click(at, PointerButton::Primary);
+    assert_eq!(r.triad().active, TriadPlane::Yz);
+    assert_eq!(r.points(), n, "der Klick auf die Triade setzt keinen Punkt");
+    // Ohne „Ebenen anzeigen“ ist da keine Ebene zu treffen.
+    assert!(r.app.ws_mut().set_triad_view(false, true));
+    // Der Tab übernimmt den Stand am Ende eines Bilds, das nächste zeichnet danach.
+    r.frame(Modifiers::NONE, vec![]);
+    r.frame(Modifiers::NONE, vec![]);
+    let l = r.layout().unwrap();
+    assert!(!l.show_planes);
+    assert!(triad_hit(&l, at).is_none_or(|p| !matches!(p, TriadPart::Plane(_))));
+}
+
+#[test]
+fn dragging_a_handle_rotates_with_angle_snap() {
+    let mut r = Rig::new(true);
+    r.tool(Tool::Line);
+    r.frame(Modifiers::NONE, vec![]);
+    let l = r.layout().unwrap();
+    // Die Skizze ist von oben zu sehen: Punkte der Ebene XY um die Mitte über die Achsspitzen.
+    let (ex, ey) = (l.tips[0].unwrap() - l.center, l.tips[1].unwrap() - l.center);
+    let on = |deg: f32, rho: f32| {
+        let a = deg.to_radians();
+        l.center + (ex * a.cos() + ey * a.sin()) * rho
+    };
+    let press = on(45.0, ARC_FRAC);
+    assert_eq!(triad_hit(&l, press), Some(TriadPart::Handle(TriadAxis::Z)));
+    let to = on(89.0, ARC_FRAC);
+    let drag = |r: &mut Rig| {
+        r.frame(Modifiers::NONE, vec![Event::PointerMoved(press)]);
+        r.frame(
+            Modifiers::NONE,
+            vec![
+                Event::PointerMoved(press),
+                button(press, PointerButton::Primary, true),
+            ],
+        );
+        for k in 1..=6 {
+            let p = press + (to - press) * (k as f32 / 6.0);
+            r.frame(Modifiers::NONE, vec![Event::PointerMoved(p)]);
+        }
+    };
+    // Vom Griff (45°) um 44° weiter: gefangen auf 45°.
+    drag(&mut r);
+    let texts = r.texts(vec![Event::PointerMoved(to)]);
+    assert!(
+        texts.iter().any(|(s, _)| s.contains("45")),
+        "ein Feld zeigt den Winkel: {:?}",
+        texts.iter().map(|t| &t.0).collect::<Vec<_>>()
+    );
+    let half = 0.5f64.sqrt();
+    let x = r.triad().axes()[0];
+    assert!(near(x, DVec3::new(half, half, 0.0), 1e-9), "{x:?}");
+    // Rechtsklick bricht den Zug ab: die Drehung ist zurück, das Werkzeug bleibt.
+    r.frame(
+        Modifiers::NONE,
+        vec![button(to, PointerButton::Secondary, true)],
+    );
+    assert_eq!(r.triad().rot, DQuat::IDENTITY);
+    r.frame(
+        Modifiers::NONE,
+        vec![
+            button(to, PointerButton::Primary, false),
+            button(to, PointerButton::Secondary, false),
+        ],
+    );
+    r.frame(Modifiers::NONE, vec![]);
+    // Noch einmal, diesmal losgelassen: bleibt gedreht.
+    drag(&mut r);
+    r.frame(
+        Modifiers::NONE,
+        vec![button(to, PointerButton::Primary, false)],
+    );
+    r.frame(Modifiers::NONE, vec![]);
+    let x = r.triad().axes()[0];
+    assert!(near(x, DVec3::new(half, half, 0.0), 1e-9), "{x:?}");
+    assert_eq!(r.points(), 0, "der Zug setzt keinen Punkt");
+    let se = st(r.app.ws_mut()).sketch_session.as_ref().unwrap();
+    assert_eq!(se.tool, Tool::Line);
+    assert!(se.triad_ui.drag.is_none());
+}
+
+#[test]
+fn right_click_on_the_triad_opens_its_menu() {
+    // Im Text-Werkzeug beendet ein Rechtsklick in die Ansicht das Werkzeug; auf der Triade nicht.
+    let mut r = Rig::new(true);
+    r.tool(Tool::Text);
+    r.frame(Modifiers::NONE, vec![]);
+    // Erst etwas drehen, damit „zurücksetzen“ etwas tut.
+    st(r.app.ws_mut())
+        .sketch_session
+        .as_mut()
+        .unwrap()
+        .triad
+        .rotate(TriadAxis::Y, 0.3);
+    r.frame(Modifiers::NONE, vec![]);
+    let l2 = r.layout().unwrap();
+    let at = l2.center + (l2.tips[0].unwrap() - l2.center) * 0.9;
+    let open = |r: &mut Rig| {
+        r.click(at, PointerButton::Secondary);
+        r.texts(vec![])
+    };
+    let find = |texts: &[(String, Pos2)], s: &str| {
+        texts
+            .iter()
+            .find(|(t, _)| t == s)
+            .map(|t| t.1)
+            .unwrap_or_else(|| panic!("„{s}“ fehlt"))
+    };
+    let texts = open(&mut r);
+    for s in [
+        "Triadenausrichtung zurücksetzen",
+        "Drehgriffe anzeigen",
+        "Ebenen anzeigen",
+    ] {
+        find(&texts, s);
+    }
+    assert_eq!(
+        st(r.app.ws_mut()).sketch_session.as_ref().unwrap().tool,
+        Tool::Text,
+        "der Rechtsklick auf die Triade bricht das Werkzeug nicht ab"
+    );
+    r.click(find(&texts, "Ebenen anzeigen"), PointerButton::Primary);
+    assert!(!r.app.ws_mut().config.show_triad_planes);
+    let path = r.app.ws_mut().config_path.clone();
+    assert!(!Config::read_from(&path).unwrap().show_triad_planes);
+    assert!(!r.layout().unwrap().show_planes);
+    // Wieder öffnen, zurücksetzen.
+    let texts = open(&mut r);
+    r.click(
+        find(&texts, "Triadenausrichtung zurücksetzen"),
+        PointerButton::Primary,
+    );
+    assert_eq!(r.triad().rot, DQuat::IDENTITY);
+    // Drehgriffe aus.
+    let texts = open(&mut r);
+    r.click(find(&texts, "Drehgriffe anzeigen"), PointerButton::Primary);
+    assert!(!r.app.ws_mut().config.show_triad_handles);
+    assert!(!r.layout().unwrap().show_handles);
+    assert_eq!(r.points(), 0);
+    // Gegenprobe: neben der Triade ist der Rechtsklick wie sonst ein Abbruch.
+    r.click(l2.center + vec2(400.0, 0.0), PointerButton::Secondary);
+    assert_eq!(
+        st(r.app.ws_mut()).sketch_session.as_ref().unwrap().tool,
+        Tool::Select
+    );
+}
+
+#[test]
+fn tab_handle_takes_a_typed_angle() {
+    let mut r = Rig::new(true);
+    r.tool(Tool::Line);
+    r.frame(Modifiers::NONE, vec![]);
+    r.frame(Modifiers::NONE, vec![key_down(Key::Tab, Modifiers::NONE)]);
+    assert_eq!(r.handle(), Some(TriadAxis::X));
+    let texts = r.texts(vec![]);
+    assert!(texts.iter().any(|(s, _)| s == "X-Winkel"), "Feld fehlt");
+    r.frame(Modifiers::NONE, vec![Event::Text("90".into())]);
+    r.frame(Modifiers::NONE, vec![key_down(Key::Enter, Modifiers::NONE)]);
+    r.frame(Modifiers::NONE, vec![key_up(Key::Enter)]);
+    let t = r.triad();
+    assert!(near(t.axes()[1], DVec3::Z, 1e-9), "{:?}", t.axes());
+    assert_eq!(r.points(), 0);
 }

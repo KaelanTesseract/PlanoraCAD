@@ -263,6 +263,13 @@ pub struct AppState {
     pub sketch_snap_grid: bool,
     /// Ein Schalter wurde betätigt: Der Arbeitsbereich speichert den Stand und gibt ihn allen Tabs.
     pub sketch_grid_changed: bool,
+    /// „Ebenen anzeigen“ der Triade der 3D-Skizze (Rechtsklickmenü, Skizzen 10); Vorgabe an. Den
+    /// Stand führt [`crate::workspace::Workspace::sync_triad_view`].
+    pub triad_planes: bool,
+    /// „Drehgriffe anzeigen“ der Triade; Vorgabe an.
+    pub triad_handles: bool,
+    /// Ein Haken des Menüs wurde betätigt: Der Arbeitsbereich speichert und gibt ihn allen Tabs.
+    pub triad_view_changed: bool,
     /// Offene Profilwahl eines Dialogs „Extrudieren“/„Drehen“: Die 3D-Ansicht zeigt die Profile
     /// der Skizze und schaltet sie per Klick um (siehe [`ProfilePick`]).
     pub profile_pick: Option<ProfilePick>,
@@ -655,6 +662,9 @@ impl AppState {
             sketch_show_grid: true,
             sketch_snap_grid: true,
             sketch_grid_changed: false,
+            triad_planes: true,
+            triad_handles: true,
+            triad_view_changed: false,
             profile_pick: None,
             pending_delete: None,
             rename_draft: None,

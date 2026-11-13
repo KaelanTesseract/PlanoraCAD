@@ -1298,7 +1298,7 @@ impl PlanoraApp {
         let Some(se) = self.ws.active_tab_mut().state.sketch_session.as_mut() else {
             return;
         };
-        se.z_lock = held && actions.is_empty();
+        se.triad.lock_z = held && actions.is_empty();
         for a in actions {
             commands::run_action(&mut self.ws, a);
         }

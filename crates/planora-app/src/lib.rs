@@ -73,6 +73,7 @@ pub mod sketch_pattern;
 pub mod sketch_project;
 pub mod sketch_state;
 pub mod sketch_text;
+pub mod sketch_triad;
 pub mod sketch_view;
 pub mod state;
 pub mod step_import_dialog;
