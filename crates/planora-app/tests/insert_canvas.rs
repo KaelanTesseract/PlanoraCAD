@@ -193,7 +193,7 @@ fn edit_canvas_changes_feature_one_step() {
     assert_eq!(d.edit, Some(id));
     assert_eq!(d.opacity, 50);
     assert!(d.target.target().is_some(), "Träger eingetragen");
-    // Felder wie im SVG-Fenster: Y nach unten, Winkel im Uhrzeigersinn.
+    // Felder wie im SVG-Fenster: Y nach oben, Winkel im Uhrzeigersinn.
     d.opacity = 20;
     d.selectable = false;
     d.offset = DVec2::new(5.0, 3.0);
@@ -205,7 +205,7 @@ fn edit_canvas_changes_feature_one_step() {
     assert_eq!(s.canvas_ids(), [id], "keine neue Leinwand");
     let c = canvas(s, id);
     assert_eq!((c.opacity, c.selectable, c.flip_h), (20, false, true));
-    assert_eq!(c.offset, DVec2::new(5.0, -3.0));
+    assert_eq!(c.offset, DVec2::new(5.0, 3.0));
     assert!((c.angle + std::f64::consts::FRAC_PI_2).abs() < 1e-12);
     assert_eq!(s.snapshot().images.len(), 1, "dasselbe Bild");
     // Ein zweites Öffnen zeigt die neuen Werte.

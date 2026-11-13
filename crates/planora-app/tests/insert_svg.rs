@@ -158,20 +158,20 @@ fn svg_starts_centered_on_origin() {
 }
 
 #[test]
-fn field_y_positive_moves_down() {
+fn field_y_positive_moves_up() {
     let dir = temp_dir("y");
     let path = write(&dir, "r.svg", &rect_svg());
     let s = AppState::new();
     let mut d = loaded(&dir, path, &s);
     d.offset = DVec2::new(5.0, 10.0);
     let place = d.placement(rect_bounds());
-    // X nach rechts, Y positiv nach unten (wie Fusion).
+    // X nach rechts, Y positiv nach oben (Dennis' Festlegung, wie die Skizzenachse).
     assert!(near(
         place.apply(DVec2::new(20.0, -15.0)),
-        DVec2::new(5.0, -10.0)
+        DVec2::new(5.0, 10.0)
     ));
 
-    // Über das Feld: „10“ im Y-Feld schiebt die Vorschau nach unten.
+    // Über das Feld: „10“ im Y-Feld schiebt die Vorschau nach oben.
     let mut s = AppState::new();
     let mut d = loaded(&dir, dir.join("r.svg"), &s);
     d.target
@@ -183,10 +183,10 @@ fn field_y_positive_moves_down() {
     screen.settle(2, &mut show_on(&mut d, &mut s, &mut last));
     assert_eq!(d.offset, DVec2::new(0.0, 10.0));
     let g = s.insert_grips.as_ref().expect("Griffe");
-    assert!(near(g.offset, DVec2::new(0.0, -10.0)), "{:?}", g.offset);
+    assert!(near(g.offset, DVec2::new(0.0, 10.0)), "{:?}", g.offset);
     let lines = &s.insert_preview.as_ref().expect("Vorschau").lines;
     let max_y = lines.iter().flatten().map(|p| p.y).fold(f64::MIN, f64::max);
-    assert!((max_y - -5.0).abs() < 1e-5, "{max_y}");
+    assert!((max_y - 15.0).abs() < 1e-5, "{max_y}");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -208,7 +208,7 @@ fn angle_positive_is_clockwise() {
     // Drehen um die Mitte, dann verschieben.
     d.offset = DVec2::new(1.0, 2.0);
     let place = d.placement(rect_bounds());
-    assert!(near(place.apply(right), DVec2::new(1.0, -12.0)));
+    assert!(near(place.apply(right), DVec2::new(1.0, -8.0)));
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -345,7 +345,7 @@ fn grip_drag_updates_fields_and_back() {
     );
     screen.settle(1, &mut show_on(&mut d, &mut s, &mut last));
     assert!((d.offset.x - 20.0).abs() < 1e-9, "{:?}", d.offset);
-    assert!((d.offset.y - -7.0).abs() < 0.05, "{:?}", d.offset);
+    assert!((d.offset.y - 7.0).abs() < 0.05, "{:?}", d.offset);
     assert_eq!(s.session_sketch().unwrap().curves().count(), curves);
     assert_eq!(last, DialogAction::Open);
 
@@ -647,7 +647,7 @@ fn esc_or_right_click_aborts_only_the_grip_drag() {
         // Die Felder folgen dem Zug.
         screen.settle(1, &mut show_on(&mut d, &mut s, &mut last));
         assert!(
-            d.offset.x > 1.0 && d.offset.y > 1.0,
+            d.offset.x > 1.0 && d.offset.y < -1.0,
             "{abort}: {:?}",
             d.offset
         );

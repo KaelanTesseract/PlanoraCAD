@@ -2,7 +2,7 @@
 //! Inhalt passen), im Hintergrund lesen, dann Ebene oder ebene Fläche, Deckkraft (Vorgabe 50),
 //! Durch Objekte anzeigen und Auswählbar (Vorgabe an), X- und Y-Abstand, Z-Winkel, Skalierung XY
 //! oder getrennt X/Y, Horizontal und Vertikal spiegeln. Die Felder folgen dem SVG-Fenster: Y
-//! positiv nach unten, Z-Winkel positiv im Uhrzeigersinn. Startgröße 1 px = 1 mm. Griffe
+//! positiv nach oben, Z-Winkel positiv im Uhrzeigersinn. Startgröße 1 px = 1 mm. Griffe
 //! ([`crate::sketch_grips`]) verschieben, drehen und skalieren die Vorschau.
 //!
 //! „OK“ legt die Leinwand an der Verlaufsmarke an (ein Rückgängig-Schritt); beim Bearbeiten
@@ -114,7 +114,7 @@ pub struct CanvasDialog {
     pub opacity: u8,
     pub display_through: bool,
     pub selectable: bool,
-    /// X- und Y-Abstand in mm; Y positiv nach unten, wie im SVG-Fenster.
+    /// X- und Y-Abstand in mm; Y positiv nach oben, wie im SVG-Fenster.
     pub offset: DVec2,
     /// Z-Winkel in Grad, positiv im Uhrzeigersinn.
     pub angle_deg: f64,
@@ -243,7 +243,7 @@ impl CanvasDialog {
         d.opacity = c.opacity;
         d.display_through = c.display_through;
         d.selectable = c.selectable;
-        d.offset = DVec2::new(c.offset.x, -c.offset.y);
+        d.offset = c.offset;
         d.angle_deg = -c.angle.to_degrees();
         d.scale = c.scale;
         d.scale_xy = (c.scale.x == c.scale.y).then_some(c.scale.x);
@@ -335,7 +335,7 @@ impl CanvasDialog {
 
     /// Versatz in der Ebene (Y nach oben).
     fn grip_offset(&self) -> DVec2 {
-        DVec2::new(self.offset.x, -self.offset.y)
+        self.offset
     }
 
     /// Winkel in der Ebene (Radiant, gegen den Uhrzeigersinn).
@@ -360,7 +360,7 @@ impl CanvasDialog {
     /// Übernimmt die Lage eines Griffzugs (Ebene: Y nach oben, gegen den Uhrzeigersinn) in die
     /// Felder. Der Faktor gilt für X; Y folgt im selben Verhältnis (das Seitenverhältnis bleibt).
     pub fn set_from_grips(&mut self, offset: DVec2, angle: f64, factor: f64) {
-        self.offset = DVec2::new(offset.x, -offset.y);
+        self.offset = offset;
         self.angle_deg = -angle.to_degrees();
         if factor.is_finite() && factor > 0.0 && self.scale.x > 0.0 {
             self.scale *= factor / self.scale.x;
