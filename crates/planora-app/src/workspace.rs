@@ -791,6 +791,8 @@ pub struct Workspace {
     pub active: usize,
     pub library: Option<Library>,
     pub config: Config,
+    /// Abgedockte Fenster je Platz (aus `config.detached`).
+    pub detach: crate::detach::DetachState,
     /// Ort der Konfigurationsdatei (Vorgabe [`Config::config_path`]; Tests setzen einen
     /// Temp-Ordner, damit nie die echte Datei geschrieben wird).
     pub config_path: PathBuf,
@@ -875,11 +877,13 @@ fn display_name(path: &NodePath) -> String {
 impl Workspace {
     pub fn new(library: Option<Library>, config: Config) -> Workspace {
         let (keymap, key_notes) = Keymap::from_overrides(&config.keys);
+        let detach = crate::detach::DetachState::from_config(&config);
         let mut w = Workspace {
             tabs: Vec::new(),
             active: 0,
             library,
             config,
+            detach,
             config_path: Config::config_path(),
             favorites_pending: Vec::new(),
             favorites_notice: None,

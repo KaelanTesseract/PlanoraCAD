@@ -3073,5 +3073,9 @@ impl eframe::App for PlanoraApp {
         if self.first_frame.is_none() {
             self.first_frame = Some(ctx.cumulative_frame_nr());
         }
+        // Abdock-Zustand nur bei Änderung schreiben; ein Fehler bricht nichts ab.
+        if self.ws.detach.take_dirty() {
+            self.ws.detach.save(&self.ws.config_path);
+        }
     }
 }
