@@ -782,7 +782,12 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
     // Grundebene und Leinwand unter dem Zeiger gelten nur für dieses Bild.
     state.origin_hover = None;
     state.canvas_hover = None;
-    if !sketching && state.profile_pick.is_some() {
+    if !sketching && state.calibrate.is_some() {
+        // „Kalibrieren“ (Skizzen 9): zwei Punkte auf der Leinwand, dann der Abstand im Feld;
+        // nichts wird gewählt oder hervorgehoben.
+        state.set_hover(None);
+        crate::insert::calibrate::view_input(ui, rect, state, &response);
+    } else if !sketching && state.profile_pick.is_some() {
         // Profilwahl eines Dialogs: Klick ohne Ziehen schaltet das Profil unter dem Zeiger um
         // (wie Fusion); Körper werden dabei nicht gewählt.
         state.set_hover(None);
@@ -921,6 +926,8 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
     overlay.extend(crate::canvas::canvas_outlines(state, rect));
     overlay.extend(sketch_view::finished_sketch_shapes(state, rect));
     overlay.extend(sketch_view::insert_preview_shapes(state, rect));
+    // Punkte und Linie des Kalibrierens über allem anderen der Szene.
+    overlay.extend(crate::insert::calibrate::shapes(state, rect));
     painter.set(sketches_slot, Shape::Vec(overlay));
     // Griffe eines Einfügen-Fensters über allem (Modell und Skizze).
     sketch_view::paint_insert_grips(&painter, rect, state);

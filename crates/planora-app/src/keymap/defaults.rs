@@ -119,6 +119,9 @@ action_table! {
     InsertSvg, "einfuegen.svg", "action-insert-svg", All, [];
     /// Fusion „Leinwand“.
     InsertCanvas, "einfuegen.leinwand", "action-insert-canvas", Model, [];
+    /// Fusion „Kalibrieren“ für die gewählte Leinwand (sonst ein Hinweis); ohne Vorgabetaste,
+    /// belegbar. Gesperrt, solange eine Skizze offen ist.
+    CanvasCalibrate, "einfuegen.kalibrieren", "action-canvas-calibrate", Model, [];
     // Skizze: nur Werkzeuge, die es gibt (wie der Klick auf den Knopf der Leiste). Die
     // Esc, Enter und Entf der Skizze sind fest (`sketch_view`), nicht in der Tabelle.
     SketchLine, "skizze.linie", "action-sketch-line", Sketch, [key(Key::L)];

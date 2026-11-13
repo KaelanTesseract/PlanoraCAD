@@ -288,6 +288,13 @@ pub struct AppState {
     /// Laufender Wahlmodus ohne Fenster ([`PendingPick`]); schließt sich mit `plane_pick` und
     /// dem Fenster „Verrunden“/„Fase“ gegenseitig aus.
     pub pending_pick: Option<PendingPick>,
+    /// Laufendes „Kalibrieren“ einer Leinwand (Skizzen 9): ein Klickmodus in der Ansicht
+    /// außerhalb der Skizze ([`crate::insert::calibrate::Calibrate`]).
+    pub calibrate: Option<crate::insert::calibrate::Calibrate>,
+    /// Name des nächsten Rückgängig-Schritts, wenn der Vergleich der Bilder ihn nicht
+    /// erkennt (etwa „Kalibrieren“, das sonst wie „Leinwand bearbeiten“ aussähe). Gilt nur für
+    /// genau den nächsten Schritt.
+    pub undo_label_hint: Option<fn() -> String>,
     /// Vorschau eines offenen Einfügen-Fensters (Skizzen 9, „DXF einfügen“): Linienzüge in
     /// Skizzenkoordinaten auf der gewählten Ebene, als Linien über der Ansicht gezeichnet.
     pub insert_preview: Option<InsertPreview>,
@@ -652,6 +659,8 @@ impl AppState {
             chain_marking: true,
             plane_pick: None,
             pending_pick: None,
+            calibrate: None,
+            undo_label_hint: None,
             insert_preview: None,
             insert_grips: None,
             canvas_preview: None,
@@ -1165,6 +1174,7 @@ impl AppState {
         self.edge_picking = false;
         self.plane_pick = None;
         self.pending_pick = None;
+        self.calibrate = None;
         self.drag_move = None;
         self.pending_delete = None;
         self.pending_delete_drawing = None;
@@ -2740,9 +2750,11 @@ impl AppState {
         Ok(())
     }
 
-    /// Beendet einen Wahlmodus ohne Änderung (Esc, Rechtsklick).
+    /// Beendet einen Wahlmodus ohne Änderung (Esc, Rechtsklick), auch „Kalibrieren“: Wer ein
+    /// Fenster öffnet, das in der Ansicht wählt, beendet damit jeden Klickmodus.
     pub fn cancel_pending_pick(&mut self) {
         self.pending_pick = None;
+        self.calibrate = None;
         self.set_hover(None);
     }
 
@@ -2841,6 +2853,7 @@ impl AppState {
         }
         // Im Skizzen-Modus wählt die Ansicht nichts für einen anderen Befehl.
         self.pending_pick = None;
+        self.calibrate = None;
         let switching = self.sketch_session.is_some();
         if switching {
             // Bleibt die alte Skizze offen (Entwurf abgelehnt), wird nicht gewechselt.

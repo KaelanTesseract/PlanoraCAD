@@ -491,6 +491,8 @@ enum Action {
     PickStandard(StandardPlane),
     /// „Skizzenebene neu festlegen“ für diese Skizze (Wahlmodus).
     RedefinePlane(FeatureId),
+    /// „Kalibrieren“ dieser Leinwand (Klickmodus in der Ansicht).
+    Calibrate(FeatureId),
 }
 
 /// Angaben einer Skizzenzeile (aus dem Dokument kopiert, damit danach geändert werden darf).
@@ -1509,7 +1511,7 @@ fn canvases(ui: &mut egui::Ui, state: &AppState, action: &mut Option<Action>) {
 }
 
 /// Kontextmenü einer Leinwand. `lock`: warum Bearbeiten und Kalibrieren gerade gesperrt sind
-/// (offene Skizze). „Kalibrieren“ verdrahtet Task 14; bis dahin gesperrt mit Hinweis.
+/// (offene Skizze).
 fn canvas_menu(
     ui: &mut egui::Ui,
     action: &mut Option<Action>,
@@ -1524,9 +1526,20 @@ fn canvas_menu(
         *action = Some(Action::Edit(id));
         ui.close();
     }
-    let calibrate_hint = lock.unwrap_or_else(|| tr!("tree-canvas-calibrate-later"));
-    ui.add_enabled(false, egui::Button::new(tr!("tree-canvas-calibrate")))
-        .on_disabled_hover_text(calibrate_hint);
+    let km = crate::keymap::mouse::current(ui.ctx());
+    let keys = crate::keymap::shortcut_hint(&km, crate::keymap::Action::CanvasCalibrate);
+    let mut calibrate = egui::Button::new(tr!("tree-canvas-calibrate"));
+    if !keys.is_empty() {
+        calibrate = calibrate.shortcut_text(egui::RichText::new(keys).font(theme::kbd_font()));
+    }
+    if ui
+        .add_enabled(lock.is_none(), calibrate)
+        .on_disabled_hover_text(lock.unwrap_or_default())
+        .clicked()
+    {
+        *action = Some(Action::Calibrate(id));
+        ui.close();
+    }
     if ui.button(tr!("tree-rename")).clicked() {
         *action = Some(Action::Rename(id));
         ui.close();
@@ -1594,6 +1607,10 @@ fn run(state: &mut AppState, action: Action) {
         }
         Action::RedefinePlane(id) => {
             let _ = state.start_redefine_sketch_plane(id);
+        }
+        // Fehler (offene Skizze, ausgeblendet) stehen in der Meldung.
+        Action::Calibrate(id) => {
+            let _ = state.start_calibrate(id);
         }
         // Offenes Ebenen-Fenster: Eine Ebene des Baums füllt sein aktives Feld.
         Action::Select(id)

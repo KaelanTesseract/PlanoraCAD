@@ -347,9 +347,9 @@ impl AppState {
         (draws, textures)
     }
 
-    /// Die vorderste auswählbare Leinwand unter dem Zeiger und die Strahllänge bis zu ihr.
-    /// Nicht auswählbare werden durchklickt, Pixel mit Alpha 0 zählen nicht.
-    pub fn canvas_at(&mut self, cursor: Vec2, viewport: Vec2) -> Option<(FeatureId, f64)> {
+    /// Sehstrahl durch den Zeiger `cursor` (Punkte ab der linken oberen Ecke der Ansicht der
+    /// Größe `viewport`); bei einer leeren Ansicht `None`.
+    pub(crate) fn view_ray(&self, cursor: Vec2, viewport: Vec2) -> Option<Ray> {
         if viewport.x < 1.0 || viewport.y < 1.0 {
             return None;
         }
@@ -358,10 +358,16 @@ impl AppState {
             1.0 - 2.0 * cursor.y / viewport.y,
         );
         let (origin, dir) = self.camera.ray(ndc);
-        let ray = Ray {
+        Some(Ray {
             origin: origin.as_dvec3(),
             dir: dir.as_dvec3(),
-        };
+        })
+    }
+
+    /// Die vorderste auswählbare Leinwand unter dem Zeiger und die Strahllänge bis zu ihr.
+    /// Nicht auswählbare werden durchklickt, Pixel mit Alpha 0 zählen nicht.
+    pub fn canvas_at(&mut self, cursor: Vec2, viewport: Vec2) -> Option<(FeatureId, f64)> {
+        let ray = self.view_ray(cursor, viewport)?;
         let mut best: Option<(FeatureId, f64)> = None;
         for d in self.drawn_canvases() {
             let Some(id) = d.id.filter(|_| d.selectable) else {

@@ -330,14 +330,18 @@ impl DocTab {
         {
             return;
         }
+        // Ein Name vom Befehl selbst (etwa „Kalibrieren“) gilt genau für diesen Schritt.
+        let hint = self.state.undo_label_hint.take();
         let after = self.state.snapshot();
         if after.same_content(self.history.current()) {
             return;
         }
-        let label = describe_change(self.history.current(), &after);
-        crate::diag::step(&crate::diag::in_english(|| {
-            describe_change(self.history.current(), &after)
-        }));
+        let name = |s: &Self| match hint {
+            Some(h) => h(),
+            None => describe_change(s.history.current(), &after),
+        };
+        let label = name(self);
+        crate::diag::step(&crate::diag::in_english(|| name(self)));
         let bytes = snapshot_bytes(&after);
         self.history.record(after, bytes, label);
     }
@@ -405,7 +409,10 @@ impl DocTab {
             return self.state.sketch_undo_label();
         }
         match self.pending_change() {
-            Some(now) => Some(describe_change(self.history.current(), &now)),
+            Some(now) => Some(match self.state.undo_label_hint {
+                Some(h) => h(),
+                None => describe_change(self.history.current(), &now),
+            }),
             None => self.history.undo_label().map(str::to_string),
         }
     }
@@ -539,7 +546,19 @@ impl DocTab {
     /// beim Bearbeiten): Sie wählen sonst in derselben Ansicht. Wer eines dieser Fenster öffnet,
     /// beendet umgekehrt den Wahlmodus.
     pub fn exclude_pick_modes(&mut self) {
-        if self.state.pending_pick.is_none() {
+        if self.state.calibrate.is_some() {
+            // „Kalibrieren“ klickt auf die Leinwand selbst: Fenster mit Vorschau und Griffen in
+            // der Ansicht schließen ebenso.
+            if self.dxf_dialog.take().is_some() {
+                DxfDialog::finish(&mut self.state);
+            }
+            if self.svg_dialog.take().is_some() {
+                SvgDialog::finish(&mut self.state);
+            }
+            if self.canvas_dialog.take().is_some() {
+                CanvasDialog::finish(&mut self.state);
+            }
+        } else if self.state.pending_pick.is_none() {
             return;
         }
         if self.plane_dialog.take().is_some() {
