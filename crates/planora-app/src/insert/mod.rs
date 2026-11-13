@@ -2,6 +2,7 @@
 //! Fenster: Lesen im Hintergrund mit Laufnummer ([`BackgroundRead`]), die Antwort der Fenster
 //! ([`DialogAction`]), die Einheiten der Datei und der Hinweis zum Übersprungenen.
 
+pub mod canvas_dialog;
 pub mod dxf_dialog;
 pub mod pick;
 pub mod svg_dialog;

@@ -82,6 +82,28 @@ impl TargetPick {
         pick
     }
 
+    /// Feld mit einer schon bekannten Ebene `plane` in der Lage `frame` (Fenster „Leinwand
+    /// bearbeiten“: der Träger der Leinwand); ohne offene Skizze.
+    pub fn with_plane(state: &AppState, plane: SketchPlane, frame: Frame) -> TargetPick {
+        let label = match &plane {
+            SketchPlane::Standard(p) => standard_label(*p),
+            SketchPlane::OnPlane(id) => feature_name(state, *id),
+            SketchPlane::OnFace(r) => tr!(
+                "plane-value-face",
+                name = feature_name(state, FeatureId(r.origin))
+            ),
+        };
+        TargetPick {
+            open: None,
+            chosen: Some(Chosen {
+                plane,
+                frame,
+                label,
+            }),
+            error: None,
+        }
+    }
+
     /// Fügt das Fenster in die offene Skizze ein?
     pub fn into_open(&self) -> bool {
         self.open.is_some()

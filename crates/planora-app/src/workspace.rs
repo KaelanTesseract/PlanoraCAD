@@ -9,6 +9,7 @@ use crate::export_dialog::ExportDialog;
 use crate::feature_dialog::FeatureDialog;
 use crate::history::{History, Tracker, snapshot_bytes};
 use crate::import_dialog::ImportDialog;
+use crate::insert::canvas_dialog::CanvasDialog;
 use crate::insert::dxf_dialog::DxfDialog;
 use crate::insert::svg_dialog::SvgDialog;
 use crate::keymap::Keymap;
@@ -98,6 +99,8 @@ pub struct DocTab {
     pub dxf_dialog: Option<DxfDialog>,
     /// Fenster „SVG einfügen“ (Skizzen 9); bleibt bei offener Skizze offen.
     pub svg_dialog: Option<SvgDialog>,
+    /// Fenster „Leinwand“ und „Leinwand bearbeiten“ (Skizzen 9); nur ohne offene Skizze.
+    pub canvas_dialog: Option<CanvasDialog>,
     /// Fenster „Neue Zeichnung“.
     pub drawing_dialog: Option<NewDrawingDialog>,
     /// Fenster „Parameter“. Es sperrt Rückgängig nicht (Plan P8): nicht in
@@ -152,6 +155,7 @@ impl DocTab {
             step_import_dialog: None,
             dxf_dialog: None,
             svg_dialog: None,
+            canvas_dialog: None,
             drawing_dialog: None,
             parameter_dialog: None,
             name,
@@ -564,6 +568,33 @@ impl DocTab {
     /// Öffnet das Fenster „Bearbeiten“ für das Feature `id`: bei einer Konstruktionsebene das
     /// Fenster der Ebene mit ihren Werten, sonst [`FeatureDialog`].
     pub fn open_edit(&mut self, id: FeatureId) {
+        if self.state.is_canvas(id) {
+            // „Leinwand bearbeiten“: gesperrt, solange eine Skizze offen ist.
+            if let Some(why) = self.state.canvas_lock() {
+                self.state.message = Some(why);
+                return;
+            }
+            let dir = crate::file_chooser::default_dir();
+            if let Some(d) = CanvasDialog::edit(dir, &self.state, id) {
+                self.feature_dialog = None;
+                self.close_blend_dialog();
+                self.state.cancel_pending_pick();
+                if self.plane_dialog.take().is_some() {
+                    PlaneDialog::finish(&mut self.state);
+                }
+                if self.dxf_dialog.take().is_some() {
+                    DxfDialog::finish(&mut self.state);
+                }
+                if self.svg_dialog.take().is_some() {
+                    SvgDialog::finish(&mut self.state);
+                }
+                if self.canvas_dialog.take().is_some() {
+                    CanvasDialog::finish(&mut self.state);
+                }
+                self.canvas_dialog = Some(d);
+            }
+            return;
+        }
         if let Some(d) = PlaneDialog::edit(&self.state, id) {
             self.feature_dialog = None;
             self.close_blend_dialog();
@@ -589,6 +620,7 @@ impl DocTab {
             || self.step_import_dialog.is_some()
             || self.dxf_dialog.is_some()
             || self.svg_dialog.is_some()
+            || self.canvas_dialog.is_some()
             || self.drawing_dialog.is_some()
             || s.dimension_dialog.is_some()
             || s.sheet_dialog.is_some()
@@ -623,6 +655,9 @@ impl DocTab {
         }
         if self.svg_dialog.take().is_some() {
             SvgDialog::finish(&mut self.state);
+        }
+        if self.canvas_dialog.take().is_some() {
+            CanvasDialog::finish(&mut self.state);
         }
         self.drawing_dialog = None;
         let s = &mut self.state;

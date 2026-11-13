@@ -119,6 +119,7 @@ fn features(before: &Snapshot, after: &Snapshot) -> Option<String> {
                 FeatureKind::Move { .. } | FeatureKind::MeshBody { .. } => tr!("undo-move"),
                 FeatureKind::Sketch(_) => tr!("undo-sketch-edit"),
                 FeatureKind::Plane(_) => tr!("undo-plane-edit"),
+                FeatureKind::Canvas(_) => tr!("undo-canvas-edit"),
                 _ => tr!("undo-feature-change"),
             },
         });

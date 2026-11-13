@@ -12,6 +12,7 @@ use crate::feedback_dialog::{self, FeedbackAction, FeedbackContext, FeedbackDial
 use crate::file_chooser::default_dir;
 use crate::icons::{self, Icon};
 use crate::import_dialog::ImportDialog;
+use crate::insert::canvas_dialog::CanvasDialog;
 use crate::insert::dxf_dialog::DxfDialog;
 use crate::insert::svg_dialog::SvgDialog;
 use crate::install_mode::{self, InstallMode};
@@ -1447,6 +1448,12 @@ pub fn show_file_dialogs(ctx: &egui::Context, ws: &mut Workspace) {
     {
         tab.svg_dialog = Some(dialog);
     }
+    if let Some(mut dialog) = tab.canvas_dialog.take()
+        && dialog.show(ctx, &mut tab.state, &mut exchange_dir, &mut places)
+            == crate::insert::DialogAction::Open
+    {
+        tab.canvas_dialog = Some(dialog);
+    }
     ws.exchange_dir = exchange_dir;
     ws.save_places(places);
 }
@@ -1459,6 +1466,7 @@ fn file_window_open(ws: &Workspace) -> bool {
         || tab.step_import_dialog.is_some()
         || tab.dxf_dialog.is_some()
         || tab.svg_dialog.is_some()
+        || tab.canvas_dialog.is_some()
 }
 
 /// P10: schließt die Dateifenster des aktiven Tabs für Projekte oder Einstellungen. Ein
@@ -1483,6 +1491,9 @@ fn close_file_windows(ws: &mut Workspace) -> bool {
     }
     if tab.svg_dialog.take().is_some() {
         SvgDialog::finish(&mut tab.state);
+    }
+    if tab.canvas_dialog.take().is_some() {
+        CanvasDialog::finish(&mut tab.state);
     }
     true
 }
@@ -1768,6 +1779,9 @@ pub(crate) fn open_insert_dxf(ws: &mut Workspace) {
     if tab.svg_dialog.take().is_some() {
         SvgDialog::finish(&mut tab.state);
     }
+    if tab.canvas_dialog.take().is_some() {
+        CanvasDialog::finish(&mut tab.state);
+    }
     tab.dxf_dialog = Some(DxfDialog::new(dir, &tab.state));
 }
 
@@ -1797,11 +1811,50 @@ pub(crate) fn open_insert_svg(ws: &mut Workspace) {
     if tab.dxf_dialog.take().is_some() {
         DxfDialog::finish(&mut tab.state);
     }
+    if tab.canvas_dialog.take().is_some() {
+        CanvasDialog::finish(&mut tab.state);
+    }
     tab.svg_dialog = Some(SvgDialog::new(dir, &tab.state));
 }
 
+/// Öffnet das Fenster „Leinwand“ (Menü „Einfügen“, Taste). Gesperrt, solange eine Skizze offen
+/// ist (Meldung „Erst die Skizze beenden“); andere Befehlsfenster, die in der Ansicht wählen,
+/// schließen. Nicht in schreibgeschützten Ansichten.
+pub(crate) fn open_insert_canvas(ws: &mut Workspace) {
+    let dir = ws.exchange_dir.clone().unwrap_or_else(default_dir);
+    let tab = ws.active_tab_mut();
+    if tab.read_only || tab.canvas_dialog.as_ref().is_some_and(|d| d.edit.is_none()) {
+        return;
+    }
+    if let Some(why) = tab.state.canvas_lock() {
+        tab.state.message = Some(why);
+        return;
+    }
+    tab.feature_dialog = None;
+    tab.dialog = None;
+    tab.boolean_dialog = None;
+    if tab.plane_dialog.take().is_some() {
+        PlaneDialog::finish(&mut tab.state);
+    }
+    tab.close_blend_dialog();
+    tab.state.cancel_pending_pick();
+    tab.import_dialog = None;
+    tab.step_import_dialog = None;
+    if tab.dxf_dialog.take().is_some() {
+        DxfDialog::finish(&mut tab.state);
+    }
+    if tab.svg_dialog.take().is_some() {
+        SvgDialog::finish(&mut tab.state);
+    }
+    if tab.canvas_dialog.take().is_some() {
+        CanvasDialog::finish(&mut tab.state);
+    }
+    tab.canvas_dialog = Some(CanvasDialog::new(dir, &tab.state));
+}
+
 /// Menü „Einfügen“ (Skizzen 9): „DXF einfügen …“, „SVG einfügen …“ und „Leinwand …“, je mit der
-/// Taste aus der Belegung. Die Leinwand folgt im nächsten Schritt (gesperrt, mit Hinweis).
+/// Taste aus der Belegung. „Leinwand …“ ist gesperrt, solange eine Skizze offen ist (Hinweis
+/// „Erst die Skizze beenden“).
 #[doc(hidden)]
 pub fn insert_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
     let hint = |ws: &Workspace, a| keymap::shortcut_hint(&ws.keymap, a);
@@ -1818,15 +1871,20 @@ pub fn insert_menu(ui: &mut egui::Ui, ws: &mut Workspace) {
         commands::run_action(ws, Action::InsertSvg);
         ui.close();
     }
-    let later = tr!("menu-insert-later");
-    shortcut_button(
+    let lock = ws.active_tab().state.canvas_lock();
+    if shortcut_button(
         ui,
-        false,
+        lock.is_none(),
         Icon::Import,
         &tr!("menu-insert-canvas"),
         canvas_keys,
     )
-    .on_disabled_hover_text(later.as_str());
+    .on_disabled_hover_text(lock.unwrap_or_default())
+    .clicked()
+    {
+        commands::run_action(ws, Action::InsertCanvas);
+        ui.close();
+    }
 }
 
 /// Menüeintrag (gesperrt, wenn nicht `enabled`) mit sichtbarem Tastaturfokus: die Einträge haben
@@ -2206,9 +2264,11 @@ pub fn open_blend(ws: &mut Workspace, chamfer: bool) {
         tab.plane_dialog = None;
         tab.dxf_dialog = None;
         tab.svg_dialog = None;
+        tab.canvas_dialog = None;
         tab.state.plane_pick = None;
         tab.state.insert_preview = None;
         tab.state.insert_grips = None;
+        tab.state.canvas_preview = None;
         tab.state.cancel_pending_pick();
         tab.blend_dialog = Some(if chamfer {
             BlendDialog::chamfer()
@@ -2231,6 +2291,9 @@ pub fn open_plane(ws: &mut Workspace, command: PlaneCommand) {
         }
         if tab.svg_dialog.take().is_some() {
             SvgDialog::finish(&mut tab.state);
+        }
+        if tab.canvas_dialog.take().is_some() {
+            CanvasDialog::finish(&mut tab.state);
         }
         tab.plane_dialog = Some(PlaneDialog::new(command));
     }
@@ -2929,6 +2992,7 @@ impl eframe::App for PlanoraApp {
         if tab.plane_dialog.is_none()
             && tab.dxf_dialog.is_none()
             && tab.svg_dialog.is_none()
+            && tab.canvas_dialog.is_none()
             && tab.state.plane_pick.is_some()
         {
             PlaneDialog::finish(&mut tab.state);

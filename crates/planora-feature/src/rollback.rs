@@ -10,7 +10,11 @@ use std::collections::HashSet;
 
 /// Erzeugt die Art einen Körper (Skizzen und Konstruktionsebenen nicht)?
 fn produces_body(kind: &FeatureKind) -> bool {
-    !matches!(kind, FeatureKind::Sketch(_) | FeatureKind::Plane(_))
+    // Leinwände (Skizzen 9) sind nur Zeichenhilfe und erzeugen keinen Körper.
+    !matches!(
+        kind,
+        FeatureKind::Sketch(_) | FeatureKind::Plane(_) | FeatureKind::Canvas(_)
+    )
 }
 
 impl Document {

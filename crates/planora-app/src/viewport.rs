@@ -861,7 +861,11 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
                 let viewport = Vec2::new(rect.width(), rect.height());
                 let hit = state.view_click_at(cursor, viewport);
                 hover_plane_click(state, hit);
-                if response.clicked() {
+                // Eine auswählbare Leinwand vorn gewinnt (nicht beim Markieren von Kanten).
+                let canvas = response.clicked()
+                    && !state.edge_picking
+                    && state.click_canvas(cursor, viewport);
+                if response.clicked() && !canvas {
                     use crate::plane_dialog::PlaneClick;
                     match hit {
                         Some(PlaneClick::View(Pick::Edge(e))) if state.edge_picking => {
@@ -882,7 +886,8 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
         }
     }
 
-    // 3D-Szene
+    // 3D-Szene mit den Leinwänden (je gezeichneter Leinwand ihr Bild, Vertrag mit der GPU).
+    let (canvases, canvas_textures) = state.canvas_frame_data();
     let cam = state.camera;
     painter.set(
         scene_slot,
@@ -895,14 +900,15 @@ pub fn show_in(ui: &mut egui::Ui, state: &mut AppState, free: Option<Rect>) {
                 scene_version: state.scene_version,
                 // Raster und Achsen folgen der Kamera: je Bild neu, ohne die Szene anzufassen.
                 grid: scene_lines(state),
-                // Leinwände füllt Task 13 aus dem Dokument.
-                canvases: Vec::new(),
-                canvas_textures: Vec::new(),
+                canvases,
+                canvas_textures,
             },
         ),
     );
     // Konstruktionsebenen (Skizzen 6) unter den Linien der Skizzen.
     let mut overlay = sketch_view::plane_shapes(state, rect);
+    // Rahmen der gewählten Leinwand (Hervorhebung wie die Zeile im Baum).
+    overlay.extend(crate::canvas::selected_outline(state, rect));
     overlay.extend(sketch_view::finished_sketch_shapes(state, rect));
     overlay.extend(sketch_view::insert_preview_shapes(state, rect));
     painter.set(sketches_slot, Shape::Vec(overlay));

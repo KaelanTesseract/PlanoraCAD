@@ -213,16 +213,13 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
             }
         }
         // „Überall“ heißt Modell und Skizze; in einer Zeichnung und in alten Versionen nicht.
-        Action::InsertDxf | Action::InsertSvg
+        Action::InsertDxf | Action::InsertSvg | Action::InsertCanvas
             if ws.active_tab().read_only
                 || crate::keymap::dispatch::current_area(&ws.active_tab().state)
                     == Area::Drawing => {}
         Action::InsertDxf => app::open_insert_dxf(ws),
         Action::InsertSvg => app::open_insert_svg(ws),
-        // Die Leinwand bekommt ihr Fenster im nächsten Schritt (Task 13).
-        Action::InsertCanvas => {
-            hint(&mut ws.active_tab_mut().state, &tr!("menu-insert-later"));
-        }
+        Action::InsertCanvas => app::open_insert_canvas(ws),
         Action::ToggleVisibility => toggle_visibility(&mut ws.active_tab_mut().state),
         Action::DeleteSelection => delete_selection(&mut ws.active_tab_mut().state),
         Action::RepeatLast => {

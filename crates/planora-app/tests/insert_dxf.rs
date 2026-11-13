@@ -179,15 +179,16 @@ fn insert_menu_has_three_entries_after_create() {
         ws.active_tab().svg_dialog.is_some(),
         "SVG öffnet das Fenster"
     );
-    // „Leinwand …“ ist gesperrt: in einem frischen Arbeitsbereich öffnet ein Klick nichts.
+    // „Leinwand …“ öffnet ohne offene Skizze sein Fenster (Task 13).
     let mut fresh = workspace();
     screen.settle(2, &mut insert_menu_frame(&mut fresh));
     screen.click(canvas.center(), &mut insert_menu_frame(&mut fresh));
     let tab = fresh.active_tab();
     assert!(
         tab.dxf_dialog.is_none() && tab.svg_dialog.is_none(),
-        "Leinwand öffnet nichts"
+        "nur das Leinwand-Fenster"
     );
+    assert!(tab.canvas_dialog.is_some(), "Leinwand öffnet das Fenster");
     assert!(tab.state.message.is_none() && tab.state.info.is_none());
     screen.click(dxf.center(), &mut insert_menu_frame(&mut ws));
     assert!(

@@ -294,6 +294,10 @@ pub struct AppState {
     /// Griffe auf der Vorschau eines Einfügen-Fensters (Skizzen 9, „SVG einfügen“): das Fenster
     /// schreibt die Lage in jedem Bild, die Ansicht den Zug am Griff ([`InsertGrips::moved`]).
     pub insert_grips: Option<InsertGrips>,
+    /// Vorschau des Fensters „Leinwand“ (Skizzen 9): das Bild mit der Lage aus den Feldern.
+    pub canvas_preview: Option<crate::canvas::CanvasPreview>,
+    /// Entschlüsselte Bilder der Leinwände, einmal je Bild ([`crate::canvas::TextureCache`]).
+    pub canvas_textures: crate::canvas::TextureCache,
     /// Verschieben, das der laufende Zug im Eigenschaftenfenster angelegt hat.
     drag_move: Option<FeatureId>,
     /// Prüfberichte der Netze, einmal je Netz berechnet (Plan P13).
@@ -648,6 +652,8 @@ impl AppState {
             pending_pick: None,
             insert_preview: None,
             insert_grips: None,
+            canvas_preview: None,
+            canvas_textures: crate::canvas::TextureCache::default(),
             drag_move: None,
             mesh_reports: BTreeMap::new(),
             display_triangles: crate::mesh_body::DISPLAY_TRIANGLES,
@@ -913,6 +919,7 @@ impl AppState {
         let folder = match self.document.feature(id).map(|f| &f.kind) {
             Some(FeatureKind::Sketch(_)) => v.folders.sketches,
             Some(FeatureKind::Plane(_)) => v.folders.planes,
+            Some(FeatureKind::Canvas(_)) => v.folders.canvases,
             _ => false,
         };
         folder || v.features.contains(&id)
@@ -928,10 +935,12 @@ impl AppState {
     /// auf ihr entfallen; eine ausgeblendete Skizze wird in 3D nicht gezeichnet. Andere Features
     /// und das Ausblenden der geöffneten Skizze (sie bleibt sichtbar) ändern nichts.
     pub fn set_feature_hidden(&mut self, id: FeatureId, hidden: bool) {
-        let hideable = self
-            .document
-            .feature(id)
-            .is_some_and(|f| matches!(f.kind, FeatureKind::Sketch(_) | FeatureKind::Plane(_)));
+        let hideable = self.document.feature(id).is_some_and(|f| {
+            matches!(
+                f.kind,
+                FeatureKind::Sketch(_) | FeatureKind::Plane(_) | FeatureKind::Canvas(_)
+            )
+        });
         if !hideable || (hidden && self.open_sketch_id() == Some(id)) {
             return;
         }
@@ -965,6 +974,7 @@ impl AppState {
             Folder::Bodies => v.folders.bodies,
             Folder::Sketches => v.folders.sketches,
             Folder::Construction => v.folders.planes,
+            Folder::Canvases => v.folders.canvases,
             Folder::Origin => v.origin_planes == [false; 3],
             Folder::Drawings => false,
         }
@@ -980,6 +990,7 @@ impl AppState {
             Folder::Bodies => v.folders.bodies = !v.folders.bodies,
             Folder::Sketches => v.folders.sketches = !v.folders.sketches,
             Folder::Construction => v.folders.planes = !v.folders.planes,
+            Folder::Canvases => v.folders.canvases = !v.folders.canvases,
             Folder::Origin => v.origin_planes = [v.origin_planes == [false; 3]; 3],
             Folder::Drawings => return,
         }
@@ -1042,9 +1053,12 @@ impl AppState {
     /// sonst der gewählte Körper. `false`, wenn nichts davon gewählt ist.
     pub fn toggle_selected_visibility(&mut self) -> bool {
         let feature = self.selected_feature.filter(|id| {
-            self.document
-                .feature(*id)
-                .is_some_and(|f| matches!(f.kind, FeatureKind::Sketch(_) | FeatureKind::Plane(_)))
+            self.document.feature(*id).is_some_and(|f| {
+                matches!(
+                    f.kind,
+                    FeatureKind::Sketch(_) | FeatureKind::Plane(_) | FeatureKind::Canvas(_)
+                )
+            })
         });
         if let Some(id) = feature {
             let hidden = self.own_feature_hidden(id);
@@ -2281,6 +2295,27 @@ impl AppState {
         match (hit, front) {
             (Some(h), Some(d)) if d <= t => Some(PlaneClick::View(h)),
             _ => Some(PlaneClick::Standard(plane)),
+        }
+    }
+
+    /// Strahllänge bis zum Treffer `click` unter dem Zeiger (wie in [`Self::plane_click_at`]):
+    /// Ecken und Kanten liegen ganz vorn (`-∞`), ohne Treffer `None`.
+    pub(crate) fn click_distance(
+        &self,
+        cursor: Vec2,
+        viewport: Vec2,
+        click: Option<crate::plane_dialog::PlaneClick>,
+    ) -> Option<f64> {
+        use crate::plane_dialog::PlaneClick;
+        match click? {
+            PlaneClick::Standard(_) => self.nearest_origin_hit(cursor, viewport).map(|(_, t)| t),
+            PlaneClick::View(Pick::Face(_)) => self
+                .nearest_face_hit(cursor, viewport)
+                .map(|(_, f)| f64::from(f.distance)),
+            PlaneClick::View(Pick::Plane(_)) => {
+                self.nearest_plane_hit(cursor, viewport).map(|(_, d)| d)
+            }
+            PlaneClick::View(_) => Some(f64::NEG_INFINITY),
         }
     }
 

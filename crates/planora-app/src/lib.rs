@@ -8,6 +8,7 @@ pub mod blend_dialog;
 pub mod boolean_dialog;
 pub mod browser;
 pub mod build_info;
+pub mod canvas;
 pub mod cards;
 pub mod commands;
 pub mod crash;
