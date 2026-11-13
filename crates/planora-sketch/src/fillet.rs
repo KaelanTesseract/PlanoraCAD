@@ -444,11 +444,9 @@ impl Sketch {
         let pinned = matches!(self.curve(pick.curve)?.kind, CurveKind::FixedSpline { .. });
         let is_fixed = |p: PointId| {
             pinned
-                || self.constraints().any(|(_, d)| {
-                    d.enabled
-                        && !d.driven
-                        && matches!(d.kind, ConstraintKind::Fixed(q, ..) if q == p)
-                })
+                || self
+                    .constraints()
+                    .any(|(_, d)| d.enabled && !d.driven && d.kind.fixed_point() == Some(p))
         };
         let fixed = ends.map_or([false; 2], |e| [is_fixed(e[0]), is_fixed(e[1])]);
         let exact = matches!(

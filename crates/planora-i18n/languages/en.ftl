@@ -1869,6 +1869,7 @@ sketch-err-what-y = The y coordinate
 sketch-err-what-z = The z coordinate
 sketch-err-z-on-2d-point = A point on the sketch plane cannot have a z coordinate other than 0
 sketch-err-not-in-3d = This constraint cannot be applied to 3D geometry
+sketch-err-tangent-planes = Two circles or arcs in different planes cannot touch this way
 sketch-err-point-bound-2d = The point cannot become 3D: it has constraints, patterns or handles that only exist on the sketch plane
 sketch-err-along-z-flat = Parallel to the z axis only works on 3D geometry
 sketch-err-drag-plane = The drag plane needs a finite point and a normal with a length above zero

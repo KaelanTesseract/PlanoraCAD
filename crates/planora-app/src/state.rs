@@ -476,6 +476,9 @@ fn deferred_by_tool(se: &SketchSession, before: &SketchFeature, after: &SketchFe
             ConstraintKind::PointOnCurve(..) => true,
             ConstraintKind::Midpoint(p, _) => new_open(p),
             ConstraintKind::Fixed(p, x, y) => new_open(p) && *x == 0.0 && *y == 0.0,
+            ConstraintKind::Fixed3(p, x, y, z) => {
+                new_open(p) && *x == 0.0 && *y == 0.0 && *z == 0.0
+            }
             _ => false,
         });
     same_curves && points_kept && values_kept && constraints_kept && only_snaps

@@ -1852,6 +1852,7 @@ sketch-err-what-y = Die y-Koordinate
 sketch-err-what-z = Die z-Koordinate
 sketch-err-z-on-2d-point = Ein Punkt in der Skizzenebene kann keine z-Koordinate außer 0 haben
 sketch-err-not-in-3d = Diese Abhängigkeit lässt sich an 3D-Geometrie nicht setzen
+sketch-err-tangent-planes = Zwei Kreise oder Bögen in verschiedenen Ebenen können sich so nicht berühren
 sketch-err-point-bound-2d = Der Punkt kann nicht 3D werden: An ihm hängen Abhängigkeiten, Muster oder Griffe, die es nur in der Skizzenebene gibt
 sketch-err-along-z-flat = Parallel zur z-Achse geht nur an 3D-Geometrie
 sketch-err-drag-plane = Die Zugebene braucht einen endlichen Punkt und eine Normale mit einer Länge über null

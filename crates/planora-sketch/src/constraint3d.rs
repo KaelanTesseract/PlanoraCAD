@@ -290,7 +290,12 @@ fn parallel_rows(d1: &V3, d2: &V3) -> [Dual; 2] {
 /// `shared_end_parts`: Der erste Sinusanteil ist null, wenn die Richtung senkrecht zum Radius
 /// steht, der zweite, wenn sie in der Bogenebene liegt; der Kosinusanteil sagt, in welcher Lage.
 /// In 2D-Lage sind erster Sinus- und Kosinusanteil genau die Werte der 2D-Fassung.
-fn shared_end_parts3(ctx: &Ctx, c1: CurveId, c2: CurveId, p: PointId) -> (Dual, Dual, Dual) {
+fn shared_end_parts3(
+    ctx: &Ctx,
+    c1: CurveId,
+    c2: CurveId,
+    p: PointId,
+) -> (Dual, Option<Dual>, Dual) {
     let sk = ctx.sk;
     let at = ctx.pt3(p);
     let line_arc = |line: CurveId, arc: CurveId| {
@@ -305,7 +310,7 @@ fn shared_end_parts3(ctx: &Ctx, c1: CurveId, c2: CurveId, p: PointId) -> (Dual, 
             &r.0 * n.y - &r.1 * n.x,
         );
         let cos = dot3(&d, &rxn);
-        (dot3(&d, &r), dot3c(&d, n) * &rl, cos)
+        (dot3(&d, &r), Some(dot3c(&d, n) * &rl), cos)
     };
     match (&sk.curves[c1].kind, &sk.curves[c2].kind) {
         (CurveKind::Line { .. }, _) => line_arc(c1, c2),
@@ -315,14 +320,59 @@ fn shared_end_parts3(ctx: &Ctx, c1: CurveId, c2: CurveId, p: PointId) -> (Dual, 
             let (u, v) = (sub3(&m1, &at), sub3(&m2, &at));
             let (t1, t2) = (cross3c(n1, &u), cross3c(n2, &v));
             // `t2` parallel zu `t1` heißt: `t2 ⟂ u` und `t2 ⟂ n1`. In 2D ist
-            // `−t2·u = cross(u, v)` und `t1·t2 = u·v`.
-            (
-                -dot3(&t2, &u),
-                dot3c(&t2, n1) * norm_len3(&u),
-                dot3(&t1, &t2),
-            )
+            // `−t2·u = cross(u, v)` und `t1·t2 = u·v`. Bei parallelen Normalen liegt `t2` von
+            // selbst senkrecht zu `n1`; die zweite Zeile wäre immer null und fällt weg.
+            let off = (!parallel_normals(sk, n1, n2)).then(|| dot3c(&t2, n1) * norm_len3(&u));
+            (-dot3(&t2, &u), off, dot3(&t1, &t2))
         }
     }
+}
+
+/// Liegen die (normierten) Normalen parallel oder gegenläufig (innerhalb von `tol.angular`)?
+fn parallel_normals(sk: &Sketch, n1: DVec3, n2: DVec3) -> bool {
+    n1.cross(n2).length() <= sk.tolerance().angular
+}
+
+/// Zeilen „die Punkte `pts` liegen in der Ebene durch `m` mit der Normale `n`“, ohne Zeilen, die
+/// nur eine Zahl ohne Variable wären oder eine andere wiederholten: Bei der Normale ±z ist die
+/// Zeile eines 2D-Punkts `−m.z`; sie zählt nur einmal und nur, wenn `m` ein 3D-Punkt ist.
+fn plane_rows(ctx: &Ctx, pts: &[PointId], m: PointId, n: DVec3) -> Vec<Dual> {
+    let has_z = |p: PointId| ctx.sk.points[p].z.is_some();
+    let mm = ctx.pt3(m);
+    let row = |p: PointId| dot3c(&sub3(&ctx.pt3(p), &mm), n);
+    if n.x != 0.0 || n.y != 0.0 {
+        return pts.iter().map(|&p| row(p)).collect();
+    }
+    let mut rows = Vec::new();
+    let mut flat_done = false;
+    for &p in pts {
+        if has_z(p) {
+            rows.push(row(p));
+        } else if has_z(m) && !flat_done {
+            rows.push(row(p));
+            flat_done = true;
+        }
+    }
+    rows
+}
+
+/// Mitte einer (geprüften) runden Kurve oder Ellipse.
+fn center_of(sk: &Sketch, c: CurveId) -> PointId {
+    match sk.curves[c].kind {
+        CurveKind::Circle { center, .. }
+        | CurveKind::Arc { center, .. }
+        | CurveKind::Ellipse { center, .. }
+        | CurveKind::EllipticArc { center, .. } => center,
+        _ => unreachable!("type was checked"),
+    }
+}
+
+/// Die Punkte einer (geprüften) Linie.
+fn line_points(sk: &Sketch, c: CurveId) -> [PointId; 2] {
+    let CurveKind::Line { a, b } = sk.curves[c].kind else {
+        unreachable!("type was checked")
+    };
+    [a, b]
 }
 
 /// Mit Vorzeichen: Abstand der Mitte `m` von der Geraden durch `a` mit Richtung `d`, gemessen in
@@ -446,8 +496,30 @@ pub(crate) fn eval(ctx: &Ctx, data: &ConstraintData) -> Option<Vec<Dual>> {
             let t = extra_var(ctx, data);
             let (q, dq) = param_curve3(ctx, curve, &t);
             let (a, d) = line_dir3(ctx, line);
-            let mut rows = on_line_rows(&a, &d, &q).to_vec();
-            rows.extend(parallel_rows(&d, &dq));
+            if matches!(
+                sk.curves[curve].kind,
+                CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. }
+            ) {
+                // Ellipse: eben. Die Linie liegt in ihrer Ebene und berührt in der Ebene (wie in
+                // 2D); `q` und `dq` liegen über `InPlane` von selbst darin. Zeilen im Raum hingen
+                // sonst von `az` ab und wiederholten `InPlane`.
+                let n = sk.curve_normal(curve);
+                let den = norm_len3(&dq) * norm_len3(&d);
+                let mut rows = vec![
+                    dot3c(&cross3(&d, &dq), n) / den,
+                    signed_distance3(&a, &d, &q, n),
+                ];
+                rows.extend(plane_rows(
+                    ctx,
+                    &line_points(sk, line),
+                    center_of(sk, curve),
+                    n,
+                ));
+                return Some(rows);
+            }
+            // Raumkurve: Richtung parallel (2 Winkelzeilen), Berührpunkt auf der Linie (2 Zeilen).
+            let mut rows = parallel_rows(&d, &dq).to_vec();
+            rows.extend(on_line_rows(&a, &d, &q));
             rows
         }
         Tangent(c1, c2) if shared_end(sk, *c1, *c2).is_some() => {
@@ -457,19 +529,23 @@ pub(crate) fn eval(ctx: &Ctx, data: &ConstraintData) -> Option<Vec<Dual>> {
             let (sin, off, cos) = shared_end_parts3(ctx, *c1, *c2, p);
             let s = if data.shared_sign < 0 { -1.0 } else { 1.0 };
             let cos = cos * s;
-            vec![sin.atan2(&cos), off.atan2(&cos)]
+            let mut rows = vec![sin.atan2(&cos)];
+            rows.extend(off.map(|o| o.atan2(&cos)));
+            rows
         }
         Tangent(c1, c2) => {
             let s = f64::from(data.branch);
             let line_round = |line: CurveId, round: CurveId| {
                 let (m, r, n) = circle_of3(ctx, round);
                 let (a, d) = line_dir3(ctx, line);
-                let b = add3(&a, &d);
-                vec![
-                    s * signed_distance3(&a, &d, &m, n) - r,
-                    dot3c(&sub3(&a, &m), n),
-                    dot3c(&sub3(&b, &m), n),
-                ]
+                let mut rows = vec![s * signed_distance3(&a, &d, &m, n) - r];
+                rows.extend(plane_rows(
+                    ctx,
+                    &line_points(sk, line),
+                    center_of(sk, round),
+                    n,
+                ));
+                rows
             };
             match (&sk.curves[*c1].kind, &sk.curves[*c2].kind) {
                 (CurveKind::Line { .. }, _) => line_round(*c1, *c2),
@@ -504,7 +580,18 @@ pub(crate) fn angular_row(sk: &Sketch, kind: &ConstraintKind, row: usize) -> boo
     match kind {
         Parallel(..) | Perpendicular(..) | Angle(..) | EllipseAngle(..) => true,
         Collinear(..) => row < 2,
-        Tangent(a, b) => row >= 2 && line_and_param(sk, *a, *b).is_some(),
+        Tangent(a, b) => match line_and_param(sk, *a, *b) {
+            Some((_, c))
+                if matches!(
+                    sk.curves[c].kind,
+                    CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. }
+                ) =>
+            {
+                row == 0
+            }
+            Some(_) => row < 2,
+            None => false,
+        },
         _ => false,
     }
 }
@@ -708,6 +795,17 @@ impl Sketch {
         if !kind.allowed_in_3d() {
             return Err(SketchError::InvalidInput(tr!("sketch-err-not-in-3d")));
         }
+        // Zwei runde Kurven ohne gemeinsames Ende berühren sich hier nur in einer gemeinsamen
+        // Ebene (Ruling Review Task 3).
+        if let Tangent(a, b) = *kind
+            && shared_end(self, a, b).is_none()
+            && line_and_param(self, a, b).is_none()
+            && !is_line_kind(&self.curves[a].kind)
+            && !is_line_kind(&self.curves[b].kind)
+            && !parallel_normals(self, self.curve_normal(a), self.curve_normal(b))
+        {
+            return Err(SketchError::InvalidInput(tr!("sketch-err-tangent-planes")));
+        }
         let flat = |p: PointId| self.points[p].z.is_none();
         let seeds: Vec<PointId> = match *kind {
             Coincident(a, b) => [a, b].into_iter().filter(|&p| flat(p)).collect(),
@@ -797,6 +895,21 @@ impl Sketch {
     pub(crate) fn apply_lift(&mut self, lifted: &[PointId]) {
         for &p in lifted {
             self.promote_to_3d(p);
+        }
+        // Ein `Fixed` an einem angehobenen Punkt hält ihn weiter in der Skizzenebene (Ruling R2):
+        // Es wird `Fixed3` mit z = 0.
+        let pins: Vec<_> = self
+            .constraints
+            .iter()
+            .filter_map(|(id, d)| match d.kind {
+                ConstraintKind::Fixed(p, x, y) if d.alive && lifted.contains(&p) => {
+                    Some((id, ConstraintKind::Fixed3(p, x, y, 0.0)))
+                }
+                _ => None,
+            })
+            .collect();
+        for (id, kind) in pins {
+            self.constraints[id].kind = kind;
         }
         let planar: Vec<CurveId> = self
             .curves()

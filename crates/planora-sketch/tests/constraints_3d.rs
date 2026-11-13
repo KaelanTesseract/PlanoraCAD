@@ -590,3 +590,113 @@ fn pure_2d_results_unchanged() {
         ]
     );
 }
+
+/// Gelöst und ohne überzählige Abhängigkeit: Jede Zeile ist eine eigene Bedingung.
+fn solved_without_redundant(s: &mut Sketch) {
+    let r = s.solve();
+    assert_eq!(r.status, SolveStatus::Solved, "{r:?}");
+    assert!(r.redundant.is_empty(), "überzählig: {r:?}");
+}
+
+#[test]
+fn tangent_3d_arcs_at_shared_end_are_not_redundant() {
+    let mut s = sketch();
+    // Zwei Bögen mit Normale z (an 3D-Punkten), gemeinsames Ende: ein S-Stück.
+    let m1 = p3(&mut s, 0.0, 0.0, 2.0);
+    let a0 = p3(&mut s, 3.0, 0.0, 2.0);
+    let j = p3(&mut s, 0.0, 3.0, 2.0);
+    let arc1 = s.add_arc3(m1, a0, j, DVec3::Z).unwrap();
+    let m2 = p3(&mut s, 0.5, 6.0, 2.0);
+    let e = p3(&mut s, -2.5, 6.0, 2.0);
+    let arc2 = s.add_arc3(m2, e, j, DVec3::Z).unwrap();
+    s.add_constraint(K::Tangent(arc1, arc2)).unwrap();
+    solved_without_redundant(&mut s);
+    let (u, v) = (at(&s, m1) - at(&s, j), at(&s, m2) - at(&s, j));
+    assert!(u.normalize().cross(v.normalize()).length() < EPS);
+    // Linie–Bogen am gemeinsamen Ende, Linie mit einem 2D-Ende.
+    let q = s.add_point(4.0, -2.0).unwrap();
+    let l = s.add_line(a0, q).unwrap();
+    s.add_constraint(K::Tangent(l, arc1)).unwrap();
+    solved_without_redundant(&mut s);
+}
+
+#[test]
+fn tangent_2d_line_to_3d_round_and_ellipse_is_not_redundant() {
+    let mut s = sketch();
+    let c = p3(&mut s, 0.0, 0.0, 0.5);
+    let circle = s.add_circle3(c, 2.0, DVec3::Z).unwrap();
+    let (a, b) = (
+        s.add_point(-5.0, 2.5).unwrap(),
+        s.add_point(5.0, 2.2).unwrap(),
+    );
+    let l = s.add_line(a, b).unwrap();
+    s.add_constraint(K::Tangent(l, circle)).unwrap();
+    solved_without_redundant(&mut s);
+    assert!(
+        at(&s, c).z.abs() < EPS,
+        "die 2D-Linie zieht den Kreis in die Ebene"
+    );
+    let ce = p3(&mut s, 20.0, 0.0, 0.5);
+    let e = s
+        .add_ellipse3(ce, DVec3::new(4.0, 0.0, 0.0), 2.0, DVec3::Z)
+        .unwrap();
+    let (a, b) = (
+        s.add_point(14.0, 2.5).unwrap(),
+        s.add_point(26.0, 2.2).unwrap(),
+    );
+    let l2 = s.add_line(a, b).unwrap();
+    s.add_constraint(K::Tangent(l2, e)).unwrap();
+    solved_without_redundant(&mut s);
+    assert!(at(&s, ce).z.abs() < EPS);
+    assert!(
+        nearest_on(&s, e, at(&s, a)) > 1e-3,
+        "Vorbedingung: Linie nicht auf der Ellipse"
+    );
+}
+
+#[test]
+fn tangent_round_curves_in_tilted_planes_is_rejected() {
+    let mut s = sketch();
+    let c1 = p3(&mut s, 0.0, 0.0, 0.0);
+    let k1 = s.add_circle3(c1, 1.0, DVec3::Z).unwrap();
+    let c2 = p3(&mut s, 2.0, 0.0, 0.0);
+    let k2 = s.add_circle3(c2, 1.0, DVec3::X).unwrap();
+    let n = s.constraints().count();
+    not_in_3d(s.add_constraint(K::Tangent(k1, k2)));
+    assert_eq!(s.constraints().count(), n);
+    // In parallelen Ebenen geht es.
+    let c3 = p3(&mut s, 3.0, 0.5, 1.0);
+    let k3 = s.add_circle3(c3, 1.0, DVec3::Z).unwrap();
+    s.add_constraint(K::Tangent(k1, k3)).unwrap();
+    solved_without_redundant(&mut s);
+    let gap = at(&s, c3) - at(&s, c1);
+    assert!(gap.z.abs() < EPS);
+    let (r1, r3) = (s.radius(k1).unwrap(), s.radius(k3).unwrap());
+    assert!((gap.length() - (r1 + r3)).abs() < EPS);
+}
+
+#[test]
+fn fixed_corner_keeps_z_when_lifted() {
+    let mut s = sketch();
+    let (p, _) = quad(&mut s);
+    s.add_constraint(K::Fixed(p[0], 0.0, 0.0)).unwrap();
+    let high = p3(&mut s, 0.0, 0.0, 3.0);
+    s.add_constraint(K::Coincident(p[0], high)).unwrap();
+    assert!(s.is_3d_point(p[0]));
+    // Das `Fixed` an der angehobenen Ecke hält jetzt auch z = 0.
+    assert!(
+        s.constraints()
+            .any(|(_, c)| c.kind == K::Fixed3(p[0], 0.0, 0.0, 0.0))
+    );
+    assert!(!s.constraints().any(|(_, c)| matches!(c.kind, K::Fixed(..))));
+    solved(&mut s);
+    assert!(at(&s, p[0]).distance(DVec3::ZERO) < EPS, "die Ecke bleibt");
+    assert!(
+        at(&s, high).distance(DVec3::ZERO) < EPS,
+        "der hohe Punkt kommt herunter"
+    );
+    // `Fixed` direkt an einem 3D-Punkt wird `Fixed3` mit der jetzigen Höhe.
+    let q = p3(&mut s, 5.0, 5.0, 7.0);
+    let id = s.add_constraint(K::Fixed(q, 5.0, 5.0)).unwrap();
+    assert_eq!(s.constraint(id).unwrap().kind, K::Fixed3(q, 5.0, 5.0, 7.0));
+}

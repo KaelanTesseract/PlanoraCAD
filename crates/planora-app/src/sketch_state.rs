@@ -2496,7 +2496,7 @@ impl SketchSession {
             }
             let fixed_ids = |sk: &Sketch| -> Vec<ConstraintId> {
                 sk.constraints()
-                    .filter(|(_, c)| matches!(c.kind, ConstraintKind::Fixed(..)))
+                    .filter(|(_, c)| c.kind.fixed_point().is_some())
                     .map(|(i, _)| i)
                     .collect()
             };
@@ -2925,10 +2925,9 @@ impl SketchSession {
             // Ein Fest-Wert zuletzt: Ist sein fester Spline mit gewählt, ist der dann fort und er geht mit.
             let mut items = std::mem::take(&mut se.selection);
             items.sort_by_key(|item| {
-                matches!(item, Item::Constraint(c) if matches!(
-                    sk.constraint(*c).map(|d| &d.kind),
-                    Some(ConstraintKind::Fixed(..))
-                ))
+                matches!(item, Item::Constraint(c) if sk
+                    .constraint(*c)
+                    .is_some_and(|d| d.kind.fixed_point().is_some()))
             });
             for item in items {
                 // Ein Exemplar eines Musters wird abgewählt, das Muster bleibt (Entscheidung 6 des
@@ -2942,10 +2941,10 @@ impl SketchSession {
                 match item {
                     Item::Constraint(c) => {
                         if let Err(e) = sk.remove_constraint(c)
-                            && matches!(
-                                sk.constraint(c).map(|d| &d.kind),
-                                Some(ConstraintKind::PatternValue(..) | ConstraintKind::Fixed(..))
-                            )
+                            && sk.constraint(c).is_some_and(|d| {
+                                matches!(d.kind, ConstraintKind::PatternValue(..))
+                                    || d.kind.fixed_point().is_some()
+                            })
                         {
                             return Err(err(e));
                         }

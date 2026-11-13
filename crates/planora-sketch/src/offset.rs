@@ -1981,7 +1981,7 @@ impl Sketch {
     fn curve_has_fixed_point(&self, c: CurveId) -> bool {
         let points = self.curves[c].kind.points();
         self.constraints()
-            .any(|(_, d)| matches!(d.kind, ConstraintKind::Fixed(p, ..) if points.contains(&p)))
+            .any(|(_, d)| d.kind.fixed_point().is_some_and(|p| points.contains(&p)))
     }
 
     /// Der Punkt der Vorlage `source`, um den der Rollkreis läuft. Am Kreis ein neuer

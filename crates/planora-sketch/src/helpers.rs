@@ -931,6 +931,10 @@ impl Sketch {
                         let xy = s.pos(p);
                         Some(ConstraintKind::Fixed(p, xy.x, xy.y))
                     }
+                    ConstraintKind::Fixed3(p, ..) if points.contains(&p) => {
+                        let at = s.pos3(p);
+                        Some(ConstraintKind::Fixed3(p, at.x, at.y, at.z))
+                    }
                     ConstraintKind::Radius(c, _) if c == curve => {
                         radius_value.map(|r| ConstraintKind::Radius(c, r))
                     }

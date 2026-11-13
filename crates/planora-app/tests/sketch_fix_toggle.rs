@@ -116,3 +116,36 @@ fn fixed_tool_on_mixed_selection_fixes_the_rest() {
         assert_eq!(fixed_count(&s), 4);
     });
 }
+
+#[test]
+fn fixed_tool_on_3d_point_sets_and_releases_fixed3() {
+    use planora_app::sketch_state::Item;
+    use planora_math::DVec3;
+    with_lang(&german(), || {
+        let mut s = AppState::new();
+        let i = s
+            .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+            .unwrap();
+        s.open_sketch(i).unwrap();
+        let p = {
+            let sk: &mut Sketch = s.session_sketch_mut().unwrap().1;
+            sk.add_point3(DVec3::new(1.0, 2.0, 3.0)).unwrap()
+        };
+        s.observe_sketch(false);
+        let fixed3 = |s: &AppState| {
+            s.session_sketch()
+                .unwrap()
+                .constraints()
+                .filter(|(_, c)| c.kind == K::Fixed3(p, 1.0, 2.0, 3.0))
+                .count()
+        };
+        s.session_sketch_mut().unwrap().0.selection = vec![Item::Point(p)];
+        press_fixed(&mut s);
+        assert_eq!(fixed3(&s), 1, "Fixieren am 3D-Punkt hält auch z");
+        s.session_sketch_mut().unwrap().0.selection = vec![Item::Point(p)];
+        press_fixed(&mut s);
+        assert_eq!(fixed3(&s), 0, "Lösen entfernt Fixed3");
+        assert!(s.undo_sketch());
+        assert_eq!(fixed3(&s), 1);
+    });
+}

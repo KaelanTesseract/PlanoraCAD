@@ -197,6 +197,14 @@ impl ConstraintKind {
         )
     }
 
+    /// Der feste Punkt von `Fixed` oder `Fixed3`, sonst `None`.
+    pub fn fixed_point(&self) -> Option<PointId> {
+        match *self {
+            ConstraintKind::Fixed(p, ..) | ConstraintKind::Fixed3(p, ..) => Some(p),
+            _ => None,
+        }
+    }
+
     /// Ist das ein Radius oder Durchmesser?
     pub fn is_radius(&self) -> bool {
         matches!(
@@ -896,7 +904,7 @@ fn eval_kind_2d(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
             let pp = ctx.pt(*p);
             vec![&pp.0 - *x, &pp.1 - *y]
         }
-        // An reiner 2D-Geometrie (nur aus der Datei denkbar): Die Linie fällt zu einem Punkt.
+        // An reiner 2D-Geometrie (`check_3d` lässt das nicht zu): Die Linie fiele zu einem Punkt.
         AlongZ(l) => {
             let (a, b) = match l {
                 LineOrPoints::Line(c) => {
@@ -2251,6 +2259,13 @@ impl Sketch {
                 "sketch-err-internal-constraint"
             )));
         }
+        // Am 3D-Punkt hält „fest“ auch z (Ruling R2): `Fixed` wird `Fixed3` mit der jetzigen Höhe.
+        let kind = match kind {
+            ConstraintKind::Fixed(p, x, y) if self.is_3d_point(p) => {
+                ConstraintKind::Fixed3(p, x, y, self.pos3(p).z)
+            }
+            k => k,
+        };
         self.check_refs(&kind)?;
         self.check_centerline(&kind)?;
         self.refuse_text_glyphs(&kind)?;
@@ -2429,7 +2444,7 @@ impl Sketch {
     /// Das `Fixed` am Ende eines lebenden festen Splines bleibt (A3): Ohne es verließe der Punkt die
     /// unveränderliche Kurve. Mit der Kurve geht es.
     fn check_not_fixed_spline_end(&self, id: ConstraintId) -> Result<(), SketchError> {
-        let ConstraintKind::Fixed(p, ..) = self.constraints[id].kind else {
+        let Some(p) = self.constraints[id].kind.fixed_point() else {
             return Ok(());
         };
         let holds = |d: &crate::model::CurveData| matches!(d.kind, CurveKind::FixedSpline { start, end, .. } if p == start || p == end);

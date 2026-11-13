@@ -372,6 +372,7 @@ pub fn overlay_text(
         K::Tangent(..) => "T".to_string(),
         // Der Punkt im Ursprung ist „deckungsgleich mit dem Ursprung“, kein Festsetzen von Hand.
         K::Fixed(_, x, y) if *x == 0.0 && *y == 0.0 => return String::new(),
+        K::Fixed3(_, x, y, z) if *x == 0.0 && *y == 0.0 && *z == 0.0 => return String::new(),
         K::Fixed(..) | K::Fixed3(..) => "fix".to_string(),
         K::Midpoint(..) => tr!("sketch-overlay-midpoint"),
         K::Symmetric(..) => tr!("sketch-overlay-symmetric"),
@@ -2184,7 +2185,7 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         // Fest (Handtest B4, wie Fusion): Fixierte Geometrie erkennt man an ihrer Farbe, nicht an
         // einem Schild je Punkt (ein aufgelöster Text hätte sonst Hunderte). Ihr Schild zeigt
         // nur eine in der Liste gewählte oder fehlerhafte Fixierung.
-        if matches!(c.kind, ConstraintKind::Fixed(..))
+        if c.kind.fixed_point().is_some()
             && !bad.contains(&id)
             && !se.selection.contains(&Item::Constraint(id))
         {

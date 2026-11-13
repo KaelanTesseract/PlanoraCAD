@@ -314,7 +314,7 @@ impl Sketch {
                                     k.alive
                                         && k.enabled
                                         && !k.driven
-                                        && matches!(k.kind, ConstraintKind::Fixed(q, ..) if q == p)
+                                        && k.kind.fixed_point() == Some(p)
                                 })
                         };
                         if !(holds(*start, lo) && holds(*end, hi)) {
