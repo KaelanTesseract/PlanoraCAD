@@ -127,7 +127,7 @@ Eine öffentliche Funktion `Sketch::insert_geometry(&Import2d-Auswahl, Similarit
   - War vorher eine passende Fläche ausgewählt, ist sie schon eingetragen.
 - **DXF-Dialog:** Datei, Ebene, Einheiten (mm, cm, m, in, ft; vorgewählt nach Datei bzw. Entwurf), Einfügemodus, X- und Y-Abstand, Layerliste mit Häkchen und Kontrollpunktrahmen. Eine Vorschau zeigt die Geometrie in der Ansicht. Bei OK entsteht eine neue Skizze, bei „pro Layer“ eine je angehaktem Layer mit dem Layernamen als Skizzenname. Alles ist ein Rückgängig-Schritt.
 - **SVG-Dialog:**
-  - Felder: Datei, Ebene, X- und Y-Abstand (Y wie bei Fusion positiv nach unten; **Annahme**, prüfen wir im Handtest gegen die Hilfe), Z-Winkel (positiv im Uhrzeigersinn), Horizontal spiegeln, Vertikal spiegeln, Skalierung und Kontrollpunktrahmen.
+  - Felder: Datei, Ebene, X- und Y-Abstand (Y wie bei Fusion positiv nach unten; *Nachtrag 2026-11-13:* bestätigt durch die Fusion-Hilfe „Add an SVG image“, dort auch Z-Winkel positiv im Uhrzeigersinn. Bei DXF zählt Y in Fusion nach oben, so ist es auch hier), Z-Winkel (positiv im Uhrzeigersinn), Horizontal spiegeln, Vertikal spiegeln, Skalierung und Kontrollpunktrahmen.
   - Griffe in der Ansicht nutzen `sketch_grips` wieder: Freies Ziehen, X- und Y-Pfeil, Drehen und Skalieren auf der Vorschau. Feld und Griff bleiben dabei in beiden Richtungen gleich.
   - Ohne offene Skizze entsteht eine neue Skizze.
   - Die Vorschau sitzt am Anfang mit der Hüllquader-Mitte auf dem Ursprung.
