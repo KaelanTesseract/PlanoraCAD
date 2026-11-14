@@ -21,6 +21,7 @@ pub struct Progress {
 pub fn parse(text: &str) -> Option<Progress> {
     let mut percent = None;
     let mut step = None;
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     for line in text.lines() {
         let Some((key, value)) = line.split_once('=') else {
             continue;
@@ -103,6 +104,12 @@ mod tests {
                 step: Step::Done
             }
         );
+    }
+
+    #[test]
+    fn parse_strips_utf8_bom() {
+        let p = parse("\u{feff}percent=7\r\nstep=prepare\r\n").unwrap();
+        assert_eq!(p.percent, 7);
     }
 
     #[test]

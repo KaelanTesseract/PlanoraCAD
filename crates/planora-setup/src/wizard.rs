@@ -81,14 +81,15 @@ impl Wizard {
         }
     }
 
-    /// Eine Seite zurück (Lizenz → Willkommen, Ordner → Lizenz, Fehlerseite → Ordner).
+    /// Eine Seite zurück (Lizenz → Willkommen, Ordner → Lizenz). Auf den übrigen Seiten, auch auf
+    /// der Fehlerseite (nur „Protokoll öffnen“ und „Schließen“), geschieht nichts.
     pub fn back(&mut self) {
-        self.hint = Hint::None;
         match self.page {
             Page::License => self.page = Page::Welcome,
-            Page::Folder | Page::Failed { .. } => self.page = Page::License,
-            _ => {}
+            Page::Folder => self.page = Page::License,
+            _ => return,
         }
+        self.hint = Hint::None;
     }
 
     /// Darf „Weiter“ gedrückt werden? Lizenz nur mit Zustimmung, Ordner nur mit gültigem Pfad.
@@ -113,9 +114,32 @@ impl Wizard {
         self.all_users = v;
     }
 
+    /// Setzt den Ordner aus dem Eingabefeld; gesperrt: keine Wirkung. Löscht den Hinweis auf einen
+    /// ungültigen Ordner.
+    pub fn set_dir(&mut self, dir: String) {
+        if self.locked {
+            return;
+        }
+        self.dir = dir;
+        if self.hint == Hint::InvalidFolder {
+            self.hint = Hint::None;
+        }
+    }
+
+    /// Neue Prüfung, ob die App noch läuft: auf der Ordner-Seite nimmt sie den Hinweis
+    /// `AppRunning` zurück, sobald sie beendet ist. Startet nie die Installation.
+    pub fn recheck_running(&mut self, app_running: bool) {
+        if self.page == Page::Folder && self.hint == Hint::AppRunning && !app_running {
+            self.hint = Hint::None;
+        }
+    }
+
     /// Absoluter Pfad (`C:\…` oder `\\Server\…`), nicht leer, ohne `<>|"*?`.
     pub fn folder_valid(&self) -> bool {
-        let dir = self.dir.trim();
+        let dir = self.dir.as_str();
+        if dir.trim() != dir {
+            return false;
+        }
         let b = dir.as_bytes();
         let absolute = (b.len() >= 3
             && b[0].is_ascii_alphabetic()
@@ -129,6 +153,9 @@ impl Wizard {
     /// die App im Zielordner → `Hint::AppRunning`; jeweils bleibt es auf `Folder` und das Ergebnis
     /// ist `false`. Sonst geht es auf `Installing` (`true`).
     pub fn start_install(&mut self, app_running: bool) -> bool {
+        if self.page != Page::Folder {
+            return false;
+        }
         if !self.folder_valid() {
             self.hint = Hint::InvalidFolder;
             return false;
@@ -230,7 +257,8 @@ mod tests {
     #[test]
     fn invalid_folder_blocks_install() {
         for bad in [
-            "", "relativ", "C:\\a<b", "C:\\a|b", "C:\\a\"b", "C:\\a*b", "C:\\a?b",
+            "", "relativ", "C:\\a<b", "C:\\a|b", "C:\\a\"b", "C:\\a*b", "C:\\a?b", " C:\\x",
+            "C:\\x ",
         ] {
             let mut w = at_folder();
             w.dir = bad.to_string();
@@ -274,6 +302,60 @@ mod tests {
         assert!(w.all_users);
         assert_eq!(w.dir, r"E:\Apps\PlanoraCAD");
         assert!(w.desktop_icon && w.start_app);
+    }
+
+    #[test]
+    fn start_install_only_from_folder() {
+        for page in [Page::Welcome, Page::License, Page::Installing, Page::Done] {
+            let mut w = at_folder();
+            w.page = page.clone();
+            assert!(!w.start_install(false));
+            assert_eq!(w.page, page);
+        }
+    }
+
+    #[test]
+    fn back_is_noop_on_failed_and_later_pages() {
+        let mut w = at_folder();
+        w.start_install(false);
+        w.engine_finished(Ok(2), PathBuf::from("l"));
+        let failed = w.page.clone();
+        w.back();
+        assert_eq!(w.page, failed);
+        w.page = Page::Done;
+        w.back();
+        assert_eq!(w.page, Page::Done);
+    }
+
+    #[test]
+    fn set_dir_respects_lock_and_clears_invalid_hint() {
+        let mut w = at_folder();
+        w.dir = String::new();
+        assert!(!w.start_install(false));
+        assert_eq!(w.hint, Hint::InvalidFolder);
+        w.set_dir(r"D:\X".to_string());
+        assert_eq!(w.dir, r"D:\X");
+        assert_eq!(w.hint, Hint::None);
+        let mut l = Wizard::new(Some(Existing {
+            all_users: false,
+            dir: PathBuf::from(r"E:\A"),
+        }));
+        l.set_dir(r"D:\Y".to_string());
+        assert_eq!(l.dir, r"E:\A");
+    }
+
+    #[test]
+    fn recheck_running_clears_only_app_running_hint() {
+        let mut w = at_folder();
+        assert!(!w.start_install(true));
+        w.recheck_running(true);
+        assert_eq!(w.hint, Hint::AppRunning);
+        w.recheck_running(false);
+        assert_eq!(w.hint, Hint::None);
+        assert_eq!(w.page, Page::Folder);
+        w.hint = Hint::UacDeclined;
+        w.recheck_running(false);
+        assert_eq!(w.hint, Hint::UacDeclined);
     }
 
     #[test]
