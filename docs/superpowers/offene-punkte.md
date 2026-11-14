@@ -2856,3 +2856,9 @@ Release-Build, Hauptmonitor 1920 × 1080, zweiter Monitor, mit `tools/gui-drive.
 - [ ] 15. **Hell und dunkel:** abgedockte Fenster folgen dem Aussehen.
 - [ ] 16. **WSLg (X11), Kurzprüfung:** Abdocken, Ziehen, Andocken.
 - [ ] 17. **Nach dem Ziehen sofort Strg+Z im abgedockten Baum** (prüft, dass kein hängender Mauszustand Kürzel sperrt), dann Neustart.
+
+#### Ergebnis Handtest 2026-11-14 (Claude, Release-Build f94c8a4, Testordner umgeleitet)
+Aufbau: Hauptmonitor 5120 × 1440 (Hauptfenster 1920 × 1080), Monitor 2 mit 2560 × 720 darunter, beide 100 %. Auf Monitor 2 liegt ein immer-obenauf-Dashboard; darum dort nur Lage über die Fensterdaten geprüft, sichtbar im freien Teil des Hauptmonitors.
+- **Bestanden:** 3 (Entf, Strg+Z genau einmal, S; 3D-Ansicht zieht sofort nach), 4, 5, 6 (simuliert über eine Lage außerhalb aller Monitore: Baum angedockt, Eintrag bleibt), 8 (Lage auf Monitor 2 nach Loslassen gemerkt), 10 (Umbenennen erscheint mittig über dem Baumfenster, Enter übernimmt), 12 (L, Entf im abgedockten Skizzenfeld), 14, 17 (Strg+Z direkt nach dem Ziehen). Dazu: Verschiebung durch das System wird gemerkt; Alt+F4 dockt ein Feld an bzw. schließt einen Dialog, das Programm läuft weiter; ein abgedockt geschlossener Dialog öffnet wieder abgedockt; Auswahl im abgedockten Baum zeigt Eigenschaften in der abgedockten rechten Spalte.
+- **Nicht geprüft:** 1 (Vorschau mit Griffen, keine Extrusion angelegt), 7 (125 % bräuchte eine Änderung der Windows-Anzeigeeinstellung), 9, 11, 13, 15, 16.
+- **Kein Fehler des Abdockens, aber schon auf master so (Abweichung von Fusion prüfen):** Quader-Dialog reagiert weder angedockt noch abgedockt auf Esc oder Enter; Esc ohne gesetzten Punkt beendet das Linienwerkzeug nicht; das Namensfeld beim Umbenennen bekommt beim Öffnen keinen Tastaturfokus.
