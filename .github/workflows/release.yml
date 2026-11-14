@@ -77,18 +77,46 @@ jobs:
       - name: Programm bauen
         run: cargo build --release --locked -p planora-app
 
-      # Der Installer wird mit Inno Setup 6 gebaut. Auf dem Runner ist es meist schon da; sonst wird
-      # genau die Version 6.7.3 per Chocolatey installiert (keine ungepinnte Version).
+      # Der Installer-Motor wird mit Inno Setup 6.7 oder neuer gebaut (die Graphit-Hülle bettet ihn
+      # ein). Auf dem Runner ist es meist schon da; fehlt es oder ist es älter als 6.7, wird genau die
+      # Version 6.7.3 per Chocolatey installiert (keine ungepinnte Version).
       - name: Inno Setup bereitstellen
         shell: pwsh
         run: |
-          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
-          if (-not (Test-Path $iscc)) {
-            choco install innosetup --version 6.7.3 -y --no-progress
-            if ($LASTEXITCODE -ne 0) { throw 'Inno Setup 6.7.3 konnte nicht installiert werden.' }
+          function Find-Iscc {
+            foreach ($d in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
+              if (-not $d) { continue }
+              $p = Join-Path $d 'Inno Setup 6\ISCC.exe'
+              if (Test-Path $p) { return $p }
+            }
+            return $null
           }
-          if (-not (Test-Path $iscc)) { throw 'ISCC.exe (Inno Setup 6) nicht gefunden.' }
-          Write-Output "Inno Setup: $iscc"
+          # ISCC.exe hat oft keine Versionsangabe (0.0.0.0); dann sagt ein Probelauf die Version.
+          function Get-InnoVersion([string]$path) {
+            $raw = [string](Get-Item $path).VersionInfo.ProductVersion
+            $mm = [regex]::Match($raw, '^\s*(\d+)\.(\d+)')
+            if ($mm.Success -and ([version]"$($mm.Groups[1].Value).$($mm.Groups[2].Value)") -gt [version]'0.0') { return $raw }
+            $probe = Join-Path $env:RUNNER_TEMP 'probe.iss'
+            Set-Content -Path $probe -Value "[Setup]`nAppName=Probe`nAppVersion=1`nDefaultDirName=Probe`n"
+            $out = & $path /O- $probe 2>&1 | Out-String
+            $global:LASTEXITCODE = 0
+            $vm = [regex]::Match($out, 'Compiler engine version:\s*Inno Setup\s+(\d+\.\d+(\.\d+)?)')
+            if ($vm.Success) { return $vm.Groups[1].Value }
+            return $raw
+          }
+          function Test-Inno67([string]$path) {
+            if (-not $path) { return $false }
+            $m = [regex]::Match((Get-InnoVersion $path), '^\s*(\d+)\.(\d+)')
+            return ($m.Success -and ([version]"$($m.Groups[1].Value).$($m.Groups[2].Value)") -ge [version]'6.7')
+          }
+          $iscc = Find-Iscc
+          if (-not (Test-Inno67 $iscc)) {
+            choco install innosetup --version 6.7.3 -y --no-progress --allow-downgrade
+            if ($LASTEXITCODE -ne 0) { throw 'Inno Setup 6.7.3 konnte nicht installiert werden.' }
+            $iscc = Find-Iscc
+          }
+          if (-not (Test-Inno67 $iscc)) { throw 'ISCC.exe (Inno Setup 6.7 oder neuer) nicht gefunden.' }
+          Write-Output "Inno Setup: $iscc ($(Get-InnoVersion $iscc))"
 
       - name: Dateien zusammenstellen
         shell: pwsh
