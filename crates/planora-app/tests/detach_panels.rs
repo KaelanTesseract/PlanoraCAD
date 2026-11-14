@@ -673,3 +673,36 @@ fn rename_from_tree_window_survives_a_tab_switch() {
         join(&main)
     );
 }
+
+#[cfg(windows)]
+#[test]
+fn undocked_tree_stays_out_when_it_lands_off_screen() {
+    // Review M3: Der Monitor wird nicht laufend geprüft. Landet das abgedockte Baumfenster
+    // außerhalb aller Monitore (gezogen; Ende des Ziehens merkt die Lage), bleibt es abgedockt.
+    // Erst beim nächsten Erscheinen des Platzes (nach der Skizze) steht es angedockt, und der
+    // Eintrag bleibt.
+    let mut rig = Rig::new(&[(Place::Tree, window_at(100.0, 100.0))]);
+    let tree = detach::viewport_id(Place::Tree);
+    assert!(rig.screen.child_runs(tree) > 0, "abgedockt");
+    let far = DetachedWindow {
+        x: -100000.0,
+        y: -100000.0,
+        ..window_at(0.0, 0.0)
+    };
+    rig.app.ws_mut().detach.set(Place::Tree, far);
+    let runs = rig.screen.child_runs(tree);
+    rig.settle(3);
+    assert!(rig.screen.child_runs(tree) > runs, "bleibt abgedockt");
+    assert_eq!(rig.layout().left.width(), 0.0, "Spalte bleibt frei");
+
+    open_sketch(&mut rig);
+    rig.settle(2);
+    rig.state().close_sketch();
+    rig.settle(3);
+    assert!(rig.layout().left.width() > 0.0, "jetzt angedockt");
+    assert_eq!(
+        rig.app.ws_mut().detach.get(Place::Tree),
+        Some(far),
+        "Eintrag bleibt"
+    );
+}

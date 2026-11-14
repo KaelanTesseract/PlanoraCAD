@@ -448,13 +448,17 @@ pub(crate) fn field<R>(
 }
 
 /// Welche Plätze gerade im eigenen Fenster liegen. Während eines Bilds liegt der Zustand in
-/// `ctx.data` ([`crate::detach::install`]), sonst (Tests) in `app.ws.detach`.
+/// `ctx.data` ([`crate::detach::install`]), sonst (Tests) in `app.ws.detach`. Gefragt wird nur
+/// nach den Plätzen, die der Modus zeigt (Skizze: Skizzenfeld, sonst Baum und rechte Spalte):
+/// So prüft [`crate::detach::is_undocked`] den Monitor beim Wechsel in den Modus neu, nicht
+/// laufend.
 pub fn undocked_places(ctx: &egui::Context, app: &PlanoraApp) -> shell::Undocked {
     use crate::detach::{DetachState, Place, is_undocked, with_state};
+    let sketch = mode_of(&app.ws.active_tab().state) == ShellMode::Sketch;
     let of = |s: &DetachState| shell::Undocked {
-        tree: is_undocked(ctx, s, Place::Tree),
-        right: is_undocked(ctx, s, Place::Right),
-        sketch_side: is_undocked(ctx, s, Place::SketchSide),
+        tree: !sketch && is_undocked(ctx, s, Place::Tree),
+        right: !sketch && is_undocked(ctx, s, Place::Right),
+        sketch_side: sketch && is_undocked(ctx, s, Place::SketchSide),
     };
     with_state(ctx, |s| of(s)).unwrap_or_else(|| of(&app.ws.detach))
 }

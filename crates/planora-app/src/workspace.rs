@@ -1650,7 +1650,13 @@ impl Workspace {
             }
             Err(_) => {
                 // Ersatz der unlesbaren Datei mit dem ganzen Stand im Speicher (samt allem
-                // Vorgemerkten).
+                // Vorgemerkten). Die abgedockten Fenster mit ihrem aktuellen Stand, nicht dem vom
+                // Programmstart; liegt der während eines Bilds im egui-Kontext, schreibt das Ende
+                // des Bilds ihn nach (`PlanoraApp::ui`, `save_if_dirty`).
+                match self.detach.windows() {
+                    Some(w) => self.config.detached = w.clone(),
+                    None => self.detach.mark_dirty(),
+                }
                 let saved = self.config.save_to(&self.config_path).is_ok();
                 if saved {
                     self.panel_transparency_pending = false;

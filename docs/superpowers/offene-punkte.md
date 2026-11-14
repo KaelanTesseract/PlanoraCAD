@@ -2827,6 +2827,7 @@ Stand 2026-11-14 auf dem Zweig `feature/fenster-abdocken` (Spec `specs/2026-11-1
 - **Kleiner Rest in `ctx.data`** je geschlossenem abgedocktem Tab (Messwerte der Fensterhöhe); wächst nur mit der Zahl der je geöffneten Tabs.
 - **`top_icon_fits`** rechnet ohne die abgedockten Spalten; das Programmzeichen oben links wird dadurch zu früh ausgeblendet, wenn Spalten abgedockt sind.
 - **Schlüssel `edit_feature`** steht in der Liste `DIALOG_KEYS`, wird aber nicht benutzt.
+- **Rückfragen des Fensters Projekte** (Neues Projekt, Umbenennen, Löschen …) erscheinen auch bei abgedocktem Fenster Projekte im Hauptfenster, nicht über ihm.
 
 ### Festlegungen beim Umsetzen
 - **Erzeugen und Bearbeiten getrennt:** Das Erzeugen- und das Bearbeiten-Fenster derselben Art haben getrennte Plätze (`extrude` und `edit_extrude`, ebenso bei den anderen Arten), weil beide gleichzeitig offen sein können.
@@ -2850,3 +2851,4 @@ Release-Build, Hauptmonitor 1920 × 1080, zweiter Monitor, mit `tools/gui-drive.
 - [ ] 14. **Beenden mit ungespeicherter Änderung:** Rückfrage, danach schließen alle abgedockten Fenster mit.
 - [ ] 15. **Hell und dunkel:** abgedockte Fenster folgen dem Aussehen.
 - [ ] 16. **WSLg (X11), Kurzprüfung:** Abdocken, Ziehen, Andocken.
+- [ ] 17. **Nach dem Ziehen sofort Strg+Z im abgedockten Baum** (prüft, dass kein hängender Mauszustand Kürzel sperrt), dann Neustart.

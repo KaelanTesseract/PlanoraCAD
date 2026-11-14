@@ -751,3 +751,107 @@ fn undocked_dialog_size_is_stable_on_a_monitor_with_other_scale() {
         );
     }
 }
+
+#[test]
+fn system_move_without_drag_is_stored() {
+    // Review M2: Verschiebt das Betriebssystem das Fenster ohne Ziehen an Kopfzeile oder Rand
+    // (Win+Umschalt+Pfeil, Einrasten, DPI-Wechsel), wird die neue Lage gemerkt.
+    let mut s = Screen::with_viewports(1920.0, 1080.0);
+    let start = egui::Rect::from_min_size(pos2(100.0, 100.0), vec2(320.0, 480.0));
+    let state = RefCell::new(DetachState::default());
+    state
+        .borrow_mut()
+        .set(Place::Tree, detach::to_physical(start, 1.0));
+    state.borrow_mut().take_dirty();
+    let events = RefCell::new(Vec::new());
+    let id = detach::viewport_id(Place::Tree);
+    s.child_info(id, |i| {
+        i.native_pixels_per_point = Some(1.0);
+        i.outer_rect = Some(start);
+        i.inner_rect = Some(start);
+    });
+    let mut f = tree_window(&state, &events);
+    s.settle(3, &mut f);
+    assert!(!state.borrow_mut().take_dirty(), "Öffnen ändert nichts");
+    let moved = egui::Rect::from_min_size(pos2(400.0, 150.0), vec2(360.0, 500.0));
+    s.child_info(id, |i| {
+        i.outer_rect = Some(moved);
+        i.inner_rect = Some(moved);
+    });
+    s.settle(2, &mut f);
+    assert_eq!(
+        state.borrow().get(Place::Tree),
+        Some(detach::to_physical(moved, 1.0))
+    );
+    assert!(state.borrow_mut().take_dirty());
+}
+
+#[cfg(windows)]
+#[test]
+fn system_move_keeps_entry_when_its_monitor_is_missing() {
+    // Review M2 / Spec Ziel 3: Fehlt der Monitor der gemerkten Lage (Windows hat das Fenster
+    // verschoben), bleibt der Eintrag.
+    let mut s = Screen::with_viewports(1920.0, 1080.0);
+    let far = egui::Rect::from_min_size(pos2(-100000.0, -100000.0), vec2(320.0, 480.0));
+    let state = RefCell::new(DetachState::default());
+    let saved = detach::to_physical(far, 1.0);
+    state.borrow_mut().set(Place::Tree, saved);
+    state.borrow_mut().take_dirty();
+    let events = RefCell::new(Vec::new());
+    let id = detach::viewport_id(Place::Tree);
+    s.child_info(id, |i| {
+        i.native_pixels_per_point = Some(1.0);
+        i.outer_rect = Some(far);
+        i.inner_rect = Some(far);
+    });
+    let mut f = tree_window(&state, &events);
+    s.settle(3, &mut f);
+    let moved = egui::Rect::from_min_size(pos2(100.0, 100.0), vec2(320.0, 480.0));
+    s.child_info(id, |i| {
+        i.outer_rect = Some(moved);
+        i.inner_rect = Some(moved);
+    });
+    s.settle(3, &mut f);
+    assert_eq!(state.borrow().get(Place::Tree), Some(saved));
+    assert!(!state.borrow_mut().take_dirty());
+}
+
+#[test]
+fn alt_f4_on_fixed_prompt_over_field_reports_cancel() {
+    // Review M4: Feste Rückfragen (ohne Schließen-Symbol, etwa der Versionsspalte) über einem
+    // abgedockten Feld: Alt+F4 auf ihrem Fenster meldet `close_request` (der Aufrufer bricht ab)
+    // und schließt nicht das Programm.
+    let mut s = Screen::with_viewports(1920.0, 1080.0);
+    let state = RefCell::new(DetachState::default());
+    let closed = RefCell::new(false);
+    let mut f = |ctx: &egui::Context| {
+        let (r, _) = detach::show_window(ctx, &mut state.borrow_mut(), spec(), |ui| {
+            let mut c = false;
+            Dialog::new("Frage", DialogSize::Prompt)
+                .fixed()
+                .close_request(&mut c)
+                .show(ui.ctx(), |ui| {
+                    ui.label("Wirklich löschen?");
+                });
+            c
+        });
+        if r == Some(true) {
+            *closed.borrow_mut() = true;
+        }
+    };
+    s.settle(3, &mut f);
+    let sub = detach::sub_viewport_id(Place::Tree, egui::Id::new("Frage"));
+    assert!(s.child_runs(sub) > 0, "Unterdialog im eigenen Fenster");
+    assert!(
+        find(&s.child_seen(sub), &glyph(Icon::Close)).is_none(),
+        "kein Schließen-Symbol"
+    );
+    assert!(!*closed.borrow());
+    s.child_info(sub, |i| i.events = vec![ViewportEvent::Close]);
+    s.frame(vec![], &mut f);
+    assert!(*closed.borrow(), "Alt+F4 gemeldet");
+    assert!(
+        s.child_commands(sub)
+            .contains(&ViewportCommand::CancelClose)
+    );
+}

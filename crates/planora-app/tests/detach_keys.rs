@@ -587,3 +587,137 @@ fn keys_from_undocked_field_reach_view_when_main_field_had_focus() {
         "nichts ins Feld getippt"
     );
 }
+
+#[test]
+fn delete_key_in_undocked_tree_opens_prompt_over_tree_window() {
+    // Review I1: Entf im abgedockten Baum auf eine Skizze, an der eine Extrusion hängt, öffnet
+    // die Rückfrage „Löschen mit Folgen“ als Unterdialog über dem Baumfenster, nicht im
+    // Hauptfenster.
+    let mut rig = Rig::new(&[(Place::Tree, window_at(100.0, 100.0))]);
+    let s = rig.state();
+    let sk = s
+        .add_sketch(SketchPlane::Standard(StandardPlane::XY))
+        .unwrap();
+    s.open_sketch(sk).unwrap();
+    s.session_sketch_mut()
+        .unwrap()
+        .1
+        .add_rectangle(
+            planora_math::DVec2::ZERO,
+            planora_math::DVec2::new(5.0, 10.0),
+        )
+        .unwrap();
+    s.close_sketch();
+    s.extrude_sketch(sk, 0, 2.0).unwrap();
+    s.selected_feature = Some(sk);
+    rig.ws().observe_history(false);
+    rig.settle(2);
+    let tree = detach::viewport_id(Place::Tree);
+    rig.press_in(tree, vec![key(Key::Delete, Modifiers::NONE)]);
+    assert!(rig.state().pending_delete.is_some(), "Rückfrage offen");
+    assert!(
+        rig.state().document.feature(sk).is_some(),
+        "noch nichts gelöscht"
+    );
+    let main = rig.settle(3);
+    let title = planora_i18n::tr!("tree-confirm-title");
+    let sub = detach::sub_viewport_id(Place::Tree, egui::Id::new(title.as_str()));
+    assert!(
+        rig.screen.child_runs(sub) > 0,
+        "Unterdialog über dem Baumfenster"
+    );
+    let seen = rig.screen.child_seen(sub);
+    assert!(find(&seen, &title).is_some(), "{}", join(&seen));
+    assert!(
+        find(&main, &title).is_none(),
+        "nicht im Hauptfenster: {}",
+        join(&main)
+    );
+    assert!(
+        detach::sub_dialog_open(&rig.screen.ctx, Place::Tree),
+        "Baumfenster gesperrt"
+    );
+}
+
+#[test]
+fn switching_blend_kind_keeps_undocked_window() {
+    // Review M1: Wechsel Rundung → Fase im abgedockten Fenster „Verrunden“ lässt es, wo es ist
+    // (gleicher Platz, gleiches Fenster), statt ins Hauptfenster zu springen.
+    use planora_app::blend_dialog::ArtChoice;
+    let fillet = Place::Dialog("fillet");
+    let mut rig = Rig::new(&[(fillet, window_at(200.0, 100.0))]);
+    let last = rig.state().document.features().last().unwrap().id;
+    rig.state().selected_feature = Some(last);
+    app::open_blend(rig.ws(), false);
+    rig.settle(3);
+    let child = detach::viewport_id(fillet);
+    let chamfer = detach::viewport_id(Place::Dialog("chamfer"));
+    let dialog = rig.ws().active_tab_mut().blend_dialog.as_mut().unwrap();
+    let (key, id) = (dialog.dock_key(), dialog.window_id());
+    dialog.set_art(ArtChoice::FaseGleich);
+    assert_eq!(dialog.dock_key(), key, "Platz bleibt");
+    assert_eq!(dialog.window_id(), id, "Kennung bleibt");
+    let runs = rig.screen.child_runs(child);
+    rig.settle(3);
+    assert!(
+        rig.screen.child_runs(child) > runs,
+        "weiter im eigenen Fenster"
+    );
+    assert_eq!(rig.screen.child_runs(chamfer), 0, "kein Fenster der Fase");
+    let seen = rig.screen.child_seen(child);
+    let title = planora_i18n::tr!("blend-chamfer-title");
+    assert!(
+        find(&seen, &title).is_some(),
+        "Titel folgt der Art: {}",
+        join(&seen)
+    );
+}
+
+#[test]
+fn exit_saves_last_detach_state() {
+    // Review M2 / Spec „Speichern“: beim Beenden einmal den letzten Stand.
+    let mut rig = Rig::new(&[]);
+    let path = rig.ws().config_path.clone();
+    rig.ws().detach.set(Place::Tree, window_at(100.0, 100.0));
+    eframe::App::on_exit(&mut rig.app);
+    let c = Config::load_from(&path);
+    assert_eq!(
+        c.detached.get("tree").copied(),
+        Some(window_at(100.0, 100.0))
+    );
+}
+
+#[test]
+fn replacing_unreadable_config_keeps_current_detach_state() {
+    // Review M5: Ist config.json unlesbar, ersetzt `try_persist_config` sie mit dem Stand im
+    // Speicher; die abgedockten Fenster dabei mit dem aktuellen Stand, nicht dem vom Start.
+    let root = common::temp_root("planora-detach-config");
+    let mut ws = Workspace::new(Some(Library::open(&root).unwrap()), Config::default());
+    ws.config_path = root.join("config.json");
+    std::fs::write(&ws.config_path, b"{ kaputt").unwrap();
+    ws.detach.set(Place::Tree, window_at(100.0, 100.0));
+    assert!(ws.try_persist_config());
+    let c = Config::load_from(&ws.config_path);
+    assert_eq!(
+        c.detached.get("tree").copied(),
+        Some(window_at(100.0, 100.0)),
+        "außerhalb eines Bilds"
+    );
+
+    // Während eines Bilds (Zustand im egui-Kontext): das Ende des Bilds schreibt ihn nach.
+    std::fs::write(&ws.config_path, b"{ kaputt").unwrap();
+    ws.detach.set(Place::Right, window_at(1500.0, 100.0));
+    ws.detach.save_if_dirty(&root.join("anderswo.json"));
+    let ctx = egui::Context::default();
+    detach::install(&ctx, &mut ws.detach);
+    assert!(ws.try_persist_config());
+    detach::uninstall(&ctx, &mut ws.detach);
+    ws.detach.save_if_dirty(&ws.config_path);
+    let c = Config::load_from(&ws.config_path);
+    assert_eq!(
+        c.detached.get("right").copied(),
+        Some(window_at(1500.0, 100.0)),
+        "im Bild"
+    );
+    assert_eq!(c.detached.len(), 2);
+}

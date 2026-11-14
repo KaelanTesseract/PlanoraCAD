@@ -192,6 +192,12 @@ pub struct PlanoraApp {
     /// Entf der Ansichten): Sie gehen im nächsten Bild in die Eingabe des Hauptfensters, als
     /// hätte es den Fokus gehabt ([`PlanoraApp::shortcuts_from_children`]).
     keys_for_main: Vec<egui::Event>,
+    /// Ein Teil von `keys_for_main` kam aus dem abgedockten Baum.
+    keys_for_main_from_tree: bool,
+    /// Stand der Rückfragen des Baums, als Tasten aus dem Baumfenster in die Eingabe des
+    /// Hauptfensters gingen ([`PlanoraApp::feed_child_keys`]); was bis zum Ende des Bilds
+    /// aufgeht, erscheint über dem Baumfenster ([`crate::browser::mark_tree_hosted`]).
+    tree_keys_fed: Option<crate::browser::OpenTreePrompts>,
     /// Rückfrage nach einem Absturz oder unerwarteten Ende beim letzten Lauf
     /// ([`crash_dialog`]); wartet, bis nichts anderes ansteht ([`PlanoraApp::crash_notice_tick`]).
     crash_notice: Option<CrashNotice>,
@@ -427,6 +433,8 @@ impl PlanoraApp {
             last_window: None,
             first_frame: None,
             keys_for_main: Vec::new(),
+            keys_for_main_from_tree: false,
+            tree_keys_fed: None,
             crash_notice: None,
             run_marker: None,
             // Tests hängen nie an Systemschriften (Spec G7); das Programm setzt in `new` den
@@ -1280,6 +1288,7 @@ impl PlanoraApp {
     /// Neustarts nach einem Update verfällt alles (nichts wirkt später veraltet nach).
     fn feed_child_keys(&mut self, ctx: &egui::Context) {
         let keys = std::mem::take(&mut self.keys_for_main);
+        let from_tree = std::mem::take(&mut self.keys_for_main_from_tree);
         let touched = crate::detach::take_child_touched(ctx);
         if self.restart_locked() {
             return;
@@ -1289,6 +1298,11 @@ impl PlanoraApp {
         }
         if keys.is_empty() || self.ws.prompt.is_some() || viewport::typing(ctx) {
             return;
+        }
+        if from_tree {
+            self.tree_keys_fed = Some(crate::browser::open_tree_prompts(
+                &self.ws.active_tab().state,
+            ));
         }
         ctx.input_mut(|i| i.events.extend(keys));
     }
@@ -1309,11 +1323,16 @@ impl PlanoraApp {
         if list.is_empty() || self.restart_locked() {
             return;
         }
+        let tree = crate::detach::viewport_id(crate::detach::Place::Tree);
         for mut keys in list {
             // Je Fenster neu: ein Kürzel des vorigen kann eine Rückfrage geöffnet haben.
             if self.ws.prompt.is_some() || keys.typing {
                 continue;
             }
+            // Rückfragen des Baums, die ein Kürzel aus dem Baumfenster öffnet (Entf), gehören
+            // über das Baumfenster wie die aus seinen Zeilen.
+            let from_tree = keys.viewport == tree;
+            let before = crate::browser::open_tree_prompts(&self.ws.active_tab().state);
             let only_all = keys.dialog || self.windows_open() || self.projects.is_open();
             let area = keymap::dispatch::current_area(&self.ws.active_tab().state);
             let pressed = keymap::dispatch::pressed_in(
@@ -1344,7 +1363,11 @@ impl PlanoraApp {
             // Hauptfenster. Dialoge verwerfen ihn (Esc und Enter haben sie selbst gelesen).
             // Rückgängig und Wiederholen bleiben nur liegen, wenn sie gesperrt waren; dann
             // wirken sie dort ebensowenig.
+            if from_tree {
+                crate::browser::mark_tree_hosted(ctx, &self.ws.active_tab().state, before);
+            }
             if !keys.dialog {
+                self.keys_for_main_from_tree |= from_tree && !keys.events.is_empty();
                 self.keys_for_main.append(&mut keys.events);
             }
             // Das Bild ist schon gezeichnet: das Ergebnis zeigt das nächste.
@@ -2928,6 +2951,8 @@ impl eframe::App for PlanoraApp {
     /// (Ohne diesen Aufruf, etwa bei bloßem Fallenlassen, wartet der Arbeiter nur
     /// [`crate::thumbnail_worker::DROP_WAIT`].)
     fn on_exit(&mut self) {
+        // Spec „Speichern“: beim Beenden einmal den letzten Stand der abgedockten Fenster.
+        self.ws.detach.save_if_dirty(&self.ws.config_path);
         self.projects.shutdown(EXIT_WAIT);
         // Sauberes Ende: der Laufmarker geht (ein Absturz lässt ihn liegen).
         if let Some(marker) = self.run_marker.take() {
@@ -3144,6 +3169,11 @@ impl eframe::App for PlanoraApp {
         // Nach allen Feldern und Dialogen (auch abgedockten): deren unverbrauchte Tasten; vor den
         // Schritten für Rückgängig, damit eine Änderung im selben Bild ein Schritt wird.
         self.shortcuts_from_children(&ctx);
+        // Weitergereichte Tasten aus dem Baumfenster (dieses Bild): eine dadurch geöffnete
+        // Rückfrage des Baums erscheint über dem Baumfenster.
+        if let Some(before) = self.tree_keys_fed.take() {
+            crate::browser::mark_tree_hosted(&ctx, &self.ws.active_tab().state, before);
+        }
         if self.restart_locked() {
             // Über allem: sperrt die Bedienung, bis der Installer gestartet ist und sich das Programm
             // beendet (oder der Start scheitert und das Programm weiterläuft).

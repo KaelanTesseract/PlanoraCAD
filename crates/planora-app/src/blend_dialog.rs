@@ -257,6 +257,10 @@ pub struct BlendDialog {
     /// Die beim Öffnen angeklickte Kante ist schon in die Markierung übernommen.
     seeded: bool,
     error: Option<Msg>,
+    /// Als Verrunden geöffnet (sonst als Fase): Platz und Kennung des Fensters bleiben beim
+    /// Wechsel der Art fest, sonst spränge ein abgedockter Dialog ins Hauptfenster oder an den
+    /// gemerkten Platz der anderen Art.
+    opened_as_fillet: bool,
 }
 
 /// Zulässiges Maß: größer als null, höchstens `MAX_COORD_MM`.
@@ -341,6 +345,7 @@ impl BlendDialog {
             first_face: None,
             seeded: false,
             error: None,
+            opened_as_fillet: true,
         }
     }
 
@@ -354,6 +359,7 @@ impl BlendDialog {
             first_face: None,
             seeded: false,
             error: None,
+            opened_as_fillet: false,
         }
     }
 
@@ -432,9 +438,10 @@ impl BlendDialog {
         }
     }
 
-    /// Platz zum Abdocken: Verrunden und Fase stehen getrennt (je Befehl, wie Fusion).
+    /// Platz zum Abdocken: Verrunden und Fase stehen getrennt (je Befehl, wie Fusion). Fest
+    /// nach dem Befehl, mit dem das Fenster geöffnet wurde, auch wenn die Art danach wechselt.
     pub fn dock_key(&self) -> &'static str {
-        if matches!(self.art, ArtChoice::Rundung | ArtChoice::RundungVariabel) {
+        if self.opened_as_fillet {
             "fillet"
         } else {
             "chamfer"
@@ -442,12 +449,10 @@ impl BlendDialog {
     }
 
     /// Feste Kennung des Fensters (hängt nicht vom übersetzten Titel ab, damit es beim
-    /// Sprachwechsel nicht springt).
+    /// Sprachwechsel nicht springt, und nicht von der gewählten Art, damit es beim Wechsel
+    /// zwischen Rundung und Fase stehen bleibt).
     pub fn window_id(&self) -> egui::Id {
-        egui::Id::new((
-            "blend_dialog",
-            matches!(self.art, ArtChoice::Rundung | ArtChoice::RundungVariabel),
-        ))
+        egui::Id::new(("blend_dialog", self.opened_as_fillet))
     }
 
     /// Die Meldung im Fenster in der aktuellen Sprache.

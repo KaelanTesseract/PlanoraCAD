@@ -137,6 +137,9 @@ pub struct Dialog<'a> {
     id: egui::Id,
     size: DialogSize,
     open: Option<&'a mut bool>,
+    /// Ohne Schließen-Symbol: meldet das Schließen des eigenen Fensters durch das
+    /// Betriebssystem ([`Dialog::close_request`]).
+    close_request: Option<&'a mut bool>,
     fixed: bool,
     center_on_open: bool,
     /// Fest unten rechts in diesem Bereich statt mittig ([`Dialog::bottom_right_in`]).
@@ -171,6 +174,7 @@ impl<'a> Dialog<'a> {
             title,
             size,
             open: None,
+            close_request: None,
             fixed: false,
             center_on_open: false,
             dock: None,
@@ -220,6 +224,15 @@ impl<'a> Dialog<'a> {
         self
     }
 
+    /// Für Dialoge ohne Schließen-Symbol (feste Rückfragen): Will das Betriebssystem das eigene
+    /// Fenster des Dialogs schließen (Alt+F4 auf einem Unterdialog über einem abgedockten Feld),
+    /// wird `*requested = true`; der Aufrufer behandelt das wie „Abbrechen“. Im Hauptfenster
+    /// ändert sich nichts (kein Symbol).
+    pub fn close_request(mut self, requested: &'a mut bool) -> Self {
+        self.close_request = Some(requested);
+        self
+    }
+
     /// Fest in der Mitte verankert, nicht verschiebbar (Rückfragen).
     pub fn fixed(mut self) -> Self {
         self.fixed = true;
@@ -260,6 +273,7 @@ impl<'a> Dialog<'a> {
             id,
             size,
             open,
+            close_request,
             fixed,
             center_on_open,
             dock,
@@ -291,7 +305,7 @@ impl<'a> Dialog<'a> {
                     width,
                     max_height,
                 },
-                open,
+                (open, close_request),
                 add_contents,
                 footer,
             );
@@ -328,7 +342,7 @@ impl<'a> Dialog<'a> {
                         width,
                         max_height,
                     },
-                    open,
+                    (open, close_request),
                     add_contents,
                     footer,
                 );
@@ -515,7 +529,7 @@ const SUB_FIRST_HEIGHT: f32 = 160.0;
 fn show_own_window<R>(
     ctx: &egui::Context,
     d: OwnDialog,
-    open: Option<&mut bool>,
+    (open, close_request): (Option<&mut bool>, Option<&mut bool>),
     mut add_contents: impl FnMut(&mut egui::Ui) -> R,
     mut footer: Option<impl FnMut(&mut egui::Ui)>,
 ) -> Option<egui::InnerResponse<Option<R>>> {
@@ -646,6 +660,8 @@ fn show_own_window<R>(
         (WindowEvent::CloseRequested, _) => {
             if let Some(open) = open {
                 *open = false;
+            } else if let Some(requested) = close_request {
+                *requested = true;
             }
         }
     }

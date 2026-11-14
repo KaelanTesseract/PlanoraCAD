@@ -102,6 +102,9 @@ impl Place {
 pub struct DetachState {
     windows: BTreeMap<String, DetachedWindow>,
     dirty: bool,
+    /// Der Zustand ist gerade an den egui-Kontext verliehen ([`install`]); dies ist nur der leere
+    /// Platzhalter.
+    lent: bool,
 }
 
 impl DetachState {
@@ -109,6 +112,7 @@ impl DetachState {
         DetachState {
             windows: c.detached.clone(),
             dirty: false,
+            lent: false,
         }
     }
 
@@ -133,6 +137,12 @@ impl DetachState {
     /// `true`, wenn seit dem letzten Aufruf etwas geändert wurde (setzt zurück).
     pub fn take_dirty(&mut self) -> bool {
         std::mem::take(&mut self.dirty)
+    }
+
+    /// Die abgedockten Fenster für `config.json`; `None`, solange der Zustand an den
+    /// egui-Kontext verliehen ist ([`install`], während eines Bilds).
+    pub fn windows(&self) -> Option<&BTreeMap<String, DetachedWindow>> {
+        (!self.lent).then_some(&self.windows)
     }
 
     /// Merkt wieder „geändert“, etwa wenn das Speichern nach [`DetachState::take_dirty`]
@@ -171,15 +181,20 @@ fn state_id() -> egui::Id {
 /// zurückholt (am Ende von `PlanoraApp::ui`).
 pub fn install(ctx: &egui::Context, state: &mut DetachState) {
     let s = std::mem::take(state);
+    state.lent = true;
     ctx.data_mut(|d| d.insert_temp(state_id(), s));
 }
 
-/// Holt den mit [`install`] abgelegten Zustand nach `state` zurück.
+/// Holt den mit [`install`] abgelegten Zustand nach `state` zurück. Wurde der Platzhalter
+/// inzwischen als geändert markiert ([`DetachState::mark_dirty`], etwa nach dem Ersatz einer
+/// unlesbaren `config.json`), bleibt das erhalten: der Stand wird dann neu geschrieben.
 pub fn uninstall(ctx: &egui::Context, state: &mut DetachState) {
     let back = ctx.data_mut(|d| d.remove_temp::<DetachState>(state_id()));
     debug_assert!(back.is_some(), "uninstall without install");
     if let Some(back) = back {
+        let resave = state.dirty;
         *state = back;
+        state.dirty |= resave;
     }
 }
 
@@ -223,8 +238,69 @@ pub fn on_screen(_rect_px: egui::Rect) -> Option<bool> {
 
 /// Liegt der Platz `p` im eigenen Fenster? Nur wenn echte Fenster möglich sind (nicht
 /// eingebettet) und sein gespeicherter Platz auf einem Bildschirm liegt.
+///
+/// Bei Feldern wird der Monitor nicht laufend geprüft (Spec „Monitor fehlt“), sondern nur, wenn
+/// der Platz erscheint: beim Start und beim Wechsel in einen Modus, der ihn zeigt (die Aufrufer
+/// fragen nur nach Plätzen, die der Modus zeigt; wer im vorigen Bild nicht gefragt wurde, wird
+/// neu geprüft), und beim Abdocken. Ein Fenster, das danach außerhalb aller Monitore landet
+/// (gezogen, Monitor abgezogen und von Windows verschoben), bleibt abgedockt.
 pub fn is_undocked(ctx: &egui::Context, state: &DetachState, p: Place) -> bool {
-    !ctx.embed_viewports() && should_detach(state.get(p), on_screen).is_some()
+    if ctx.embed_viewports() {
+        return false;
+    }
+    let saved = state.get(p);
+    if !p.is_field() {
+        return should_detach(saved, on_screen).is_some();
+    }
+    let frame = ctx.cumulative_frame_nr_for(egui::ViewportId::ROOT);
+    let id = field_memo_id(p);
+    let memo = ctx
+        .data(|d| d.get_temp::<FieldMemo>(id))
+        .filter(|m| m.frame + 1 >= frame);
+    let detached = field_detached(memo.map(|m| (m.saved, m.detached)), saved, on_screen);
+    ctx.data_mut(|d| {
+        d.insert_temp(
+            id,
+            FieldMemo {
+                frame,
+                saved,
+                detached,
+            },
+        )
+    });
+    detached
+}
+
+/// Gedächtnis von [`is_undocked`] je Feld: Bild der letzten Frage (Hauptfenster), gemerkte Lage
+/// und Antwort.
+#[derive(Clone, Copy, Debug)]
+struct FieldMemo {
+    frame: u64,
+    saved: Option<DetachedWindow>,
+    detached: bool,
+}
+
+fn field_memo_id(p: Place) -> egui::Id {
+    egui::Id::new(("detach_feld_entschieden", p.key()))
+}
+
+/// Entscheidung für ein Feld. `memo`: gemerkte Lage und Antwort, falls der Platz im vorigen Bild
+/// schon erschien. Ohne Eintrag angedockt. Stand es abgedockt, bleibt es das (auch wenn sich die
+/// Lage ändert). Stand es trotz Eintrag angedockt (Monitor fehlt), bleibt es angedockt, bis sich
+/// der Eintrag ändert (Klick auf „Abdocken“). Sonst entscheidet der Monitor.
+pub fn field_detached(
+    memo: Option<(Option<DetachedWindow>, bool)>,
+    saved: Option<DetachedWindow>,
+    on_screen: impl Fn(egui::Rect) -> Option<bool>,
+) -> bool {
+    let Some(w) = saved else {
+        return false;
+    };
+    match memo {
+        Some((_, true)) => true,
+        Some((s, false)) if s == Some(w) => false,
+        _ => should_detach(Some(w), on_screen).is_some(),
+    }
 }
 
 /// Das gespeicherte Fenster, falls es abgedockt starten soll: `None`, wenn nichts gespeichert
@@ -236,6 +312,15 @@ pub fn should_detach(
     let w = saved?;
     let rect = egui::Rect::from_min_size(egui::pos2(w.x, w.y), egui::vec2(w.width, w.height));
     (on_screen(rect) != Some(false)).then_some(w)
+}
+
+/// Weicht die gemeldete Lage (bei `with_size` auch die Größe) um mehr als
+/// [`POSITION_TOLERANCE_PX`] von der gemerkten ab (physische Pixel)?
+pub fn moved_by_system(saved: DetachedWindow, now: DetachedWindow, with_size: bool) -> bool {
+    let far = |a: f32, b: f32| (a - b).abs() > POSITION_TOLERANCE_PX;
+    far(saved.x, now.x)
+        || far(saved.y, now.y)
+        || (with_size && (far(saved.width, now.width) || far(saved.height, now.height)))
 }
 
 /// Rechteck in Punkten nach physischen Pixeln.
@@ -342,6 +427,11 @@ struct Opened {
     wanted_size: Option<egui::Vec2>,
     /// Gewollte physische Lage beim Öffnen (für die Korrektur im zweiten Bild).
     wanted: Option<egui::Pos2>,
+    /// Eine Korrektur der Lage bzw. Größe ist unterwegs (gewollte physische Werte): Bis das
+    /// Fenster dort gemeldet wird, übernimmt [`window_contents`] seine Lage nicht in den Zustand
+    /// (sie wäre die falsche vor der Korrektur).
+    correcting: Option<egui::Pos2>,
+    correcting_size: Option<egui::Vec2>,
     /// Äußeres Rechteck (Punkte des Fensters) beim Beginn eines Zieh- oder Größenvorgangs.
     moving: Option<egui::Rect>,
     /// Bild des Aufrufers, in dem das Schließen zuletzt abgebrochen bzw. ein Zieh- oder
@@ -435,6 +525,8 @@ fn show_core<R>(
                     }
                     _ => None,
                 },
+                correcting: None,
+                correcting_size: None,
                 moving: None,
                 close_frame: None,
                 drag_frame: None,
@@ -573,7 +665,7 @@ pub fn host_viewport_rect(ctx: &egui::Context) -> Option<egui::Rect> {
 /// Inhalt des Kindfensters (läuft mit dessen Eingabe und Faktor).
 fn window_contents<R>(
     ui: &mut egui::Ui,
-    state: Option<&mut DetachState>,
+    mut state: Option<&mut DetachState>,
     opened: &mut Opened,
     spec: &WindowSpec,
     add_contents: &mut impl FnMut(&mut egui::Ui) -> R,
@@ -596,6 +688,7 @@ fn window_contents<R>(
             > POSITION_TOLERANCE_PX
     {
         ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(wanted / ppp));
+        opened.correcting = Some(wanted);
     }
     // Ebenso die Größe eines Felds: der Builder gibt sie in Punkten des Aufrufers an, winit
     // nimmt sie mit dem Faktor des Kindfensters. Einmal physisch genau setzen.
@@ -605,6 +698,23 @@ fn window_contents<R>(
         && (outer.size() * ppp - wanted).abs().max_elem() > POSITION_TOLERANCE_PX
     {
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(wanted / ppp));
+        opened.correcting_size = Some(wanted);
+    }
+    // Angekommen: die Korrektur ist erledigt.
+    if let Some(outer) = outer {
+        let near = |a: egui::Vec2, b: egui::Vec2| (a - b).abs().max_elem() <= POSITION_TOLERANCE_PX;
+        if opened
+            .correcting
+            .is_some_and(|w| near(outer.min.to_vec2() * ppp, w.to_vec2()))
+        {
+            opened.correcting = None;
+        }
+        if opened
+            .correcting_size
+            .is_some_and(|w| near(outer.size() * ppp, w))
+        {
+            opened.correcting_size = None;
+        }
     }
 
     let parent_frame = opened.parent_frame;
@@ -706,9 +816,30 @@ fn window_contents<R>(
         opened.moving = None;
         if let Some(now) = outer
             && now != start
-            && let Some(state) = state
+            && let Some(state) = state.as_deref_mut()
         {
             state.set(spec.place, to_physical(now, ppp));
+        }
+    }
+    // Lage oder Größe ohne Ziehen an Kopfzeile oder Rand geändert (Win+Umschalt+Pfeil,
+    // Einrasten, anderer DPI-Faktor): ab dem dritten Bild des Fensters, ohne gedrückte Maustaste
+    // und ohne unterwegs befindliche Korrektur übernehmen, was das Betriebssystem meldet. Nicht,
+    // wenn der Monitor der gemerkten Lage fehlt (Windows hat das Fenster dann verschoben; der
+    // Eintrag bleibt, Spec Ziel 3). Bei Dialogen zählt nur die Lage (die Höhe folgt dem Inhalt).
+    if opened.moving.is_none()
+        && opened.correcting.is_none()
+        && opened.correcting_size.is_none()
+        && ctx.cumulative_frame_nr() >= 2
+        && !ctx.input(|i| i.pointer.any_down())
+        && let Some(now) = outer
+        && let Some(state) = state
+        && let Some(saved) = state.get(spec.place)
+    {
+        let now_px = to_physical(now, ppp);
+        if moved_by_system(saved, now_px, spec.resizable)
+            && should_detach(Some(saved), on_screen).is_some()
+        {
+            state.set(spec.place, now_px);
         }
     }
     // Tastenkürzel: was der Inhalt nicht verbraucht hat, führt die App am Ende des Bilds aus
@@ -727,6 +858,9 @@ fn window_contents<R>(
 pub struct ChildKeys {
     /// Bild des Hauptfensters, in dem die Tasten kamen (ältere verfallen).
     pub frame: u64,
+    /// Fenster, das die Tasten empfing (etwa das Baumfenster: dessen Rückfragen erscheinen
+    /// über ihm).
+    pub viewport: egui::ViewportId,
     /// Ein Dialog oder Unterdialog (nur Kürzel mit Bereich „Überall“), kein Feld.
     pub dialog: bool,
     /// Ein Eingabefeld im Fenster hat die Tastatur (dann gehören ihm alle Tasten).
@@ -782,6 +916,7 @@ fn collect_keys(ctx: &egui::Context, dialog: bool) {
     }
     let keys = ChildKeys {
         frame: ctx.cumulative_frame_nr_for(egui::ViewportId::ROOT),
+        viewport: ctx.viewport_id(),
         dialog,
         typing: crate::viewport::typing(ctx),
         focus: crate::viewport::keyboard_taken(ctx),
@@ -933,6 +1068,57 @@ mod tests {
     fn should_detach_unknown_platform_trusts_saved() {
         assert_eq!(should_detach(Some(win()), |_| None), Some(win()));
         assert_eq!(should_detach(Some(win()), |_| Some(true)), Some(win()));
+    }
+
+    #[test]
+    fn field_decision_checks_monitor_only_when_place_appears() {
+        let off = |_| Some(false);
+        let on = |_| Some(true);
+        // Kein Eintrag: angedockt.
+        assert!(!field_detached(Some((None, true)), None, on));
+        // Erscheint (kein Gedächtnis): der Monitor entscheidet.
+        assert!(field_detached(None, Some(win()), on));
+        assert!(!field_detached(None, Some(win()), off));
+        // Stand abgedockt: bleibt es, auch wenn die neue Lage außerhalb liegt.
+        let moved = DetachedWindow { x: -9e4, ..win() };
+        assert!(field_detached(Some((Some(win()), true)), Some(moved), off));
+        // Stand angedockt trotz Eintrag (Monitor fehlt): bleibt, bis sich der Eintrag ändert.
+        assert!(!field_detached(Some((Some(win()), false)), Some(win()), on));
+        assert!(field_detached(Some((Some(win()), false)), Some(moved), on));
+        assert!(field_detached(Some((None, false)), Some(win()), on));
+    }
+
+    #[test]
+    fn moved_by_system_tolerance() {
+        let w = win();
+        assert!(!moved_by_system(
+            w,
+            DetachedWindow { x: w.x + 1.5, ..w },
+            true
+        ));
+        assert!(moved_by_system(
+            w,
+            DetachedWindow { x: w.x + 3.0, ..w },
+            false
+        ));
+        let taller = DetachedWindow {
+            height: w.height + 40.0,
+            ..w
+        };
+        assert!(!moved_by_system(w, taller, false), "Dialoge: nur die Lage");
+        assert!(moved_by_system(w, taller, true));
+    }
+
+    #[test]
+    fn uninstall_keeps_dirty_mark_of_placeholder() {
+        let ctx = egui::Context::default();
+        let mut s = DetachState::default();
+        install(&ctx, &mut s);
+        assert!(s.windows().is_none(), "verliehen");
+        s.mark_dirty();
+        uninstall(&ctx, &mut s);
+        assert!(s.windows().is_some());
+        assert!(s.take_dirty(), "neu schreiben");
     }
 
     #[test]

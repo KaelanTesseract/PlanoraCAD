@@ -1115,6 +1115,37 @@ fn tree_prompts(ctx: &egui::Context, state: &mut AppState, before: PromptSet) {
     store_tree_hosted(ctx, state, hosted);
 }
 
+/// Stand der Rückfragen des Baums zu einem Zeitpunkt (für [`mark_tree_hosted`]), je Tab.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct OpenTreePrompts {
+    instance: u64,
+    open: PromptSet,
+}
+
+/// Merkt, welche Rückfragen des Baums gerade offen sind.
+pub fn open_tree_prompts(state: &AppState) -> OpenTreePrompts {
+    OpenTreePrompts {
+        instance: state.instance,
+        open: open_prompts(state),
+    }
+}
+
+/// Rückfragen, die seit `before` aufgingen, kamen aus dem abgedockten Baum, ohne dass seine
+/// Zeilen sie öffneten: Tastenkürzel aus dem Baumfenster wirken erst am Ende des Bilds
+/// (`PlanoraApp::shortcuts_from_children`), weitergereichte Tasten (fest gelesenes Entf) erst
+/// im nächsten Bild im Hauptfenster. Sie erscheinen wie die aus den Zeilen als Unterdialog über
+/// dem Baumfenster. Gilt nur im selben Tab wie `before`.
+pub fn mark_tree_hosted(ctx: &egui::Context, state: &AppState, before: OpenTreePrompts) {
+    if before.instance != state.instance {
+        return;
+    }
+    let mut hosted = tree_hosted(ctx, state);
+    for ((h, was), now) in hosted.iter_mut().zip(before.open).zip(open_prompts(state)) {
+        *h |= now && !was;
+    }
+    store_tree_hosted(ctx, state, hosted);
+}
+
 /// Bei abgedocktem Baum: die Rückfragen des Baums, die nicht aus dem Baumfenster kamen, im
 /// Hauptfenster (Aufruf dort, wo sonst der Baum gezeichnet wird).
 pub fn main_window_prompts(ctx: &egui::Context, state: &mut AppState) {

@@ -412,8 +412,11 @@ fn dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut VersionsUi) {
     if let Some(mut p) = st.comment_edit.take() {
         let mut keep = true;
         let mut apply = false;
+        // Alt+F4 auf dem Unterdialog über der abgedockten rechten Spalte: wie Abbrechen.
+        let mut closed = false;
         Dialog::new(tr!("versions-comment-title"), DialogSize::Prompt)
             .fixed()
+            .close_request(&mut closed)
             .show(ctx, |ui| {
                 ui.label(tr!("versions-comment-for", n = p.what.0));
                 let r = theme::text_field(ui, egui::TextEdit::singleline(&mut p.what.1));
@@ -428,6 +431,9 @@ fn dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut VersionsUi) {
                     }
                 });
             });
+        if closed {
+            keep = false;
+        }
         if apply {
             let (n, text) = p.what.clone();
             set_comment(ws, n, &text);
@@ -444,8 +450,10 @@ fn dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut VersionsUi) {
             }
         };
         let mut answer = None;
+        let mut closed = false;
         Dialog::new(tr!("versions-delete-title"), DialogSize::Prompt)
             .fixed()
+            .close_request(&mut closed)
             .show(ctx, |ui| {
                 ui.label(question.as_str());
                 ui.horizontal(|ui| {
@@ -457,6 +465,9 @@ fn dialogs(ctx: &egui::Context, ws: &mut Workspace, st: &mut VersionsUi) {
                     }
                 });
             });
+        if closed && answer.is_none() {
+            answer = Some(false);
+        }
         match answer {
             Some(true) => {
                 st.confirm_delete = Some(p);
