@@ -76,6 +76,12 @@ pub enum ToolKind {
     /// Konstruktionsgeometrie und Kurven früherer Skizzen als verknüpfte 3D-Geometrie, über
     /// [`crate::state::AppState::include_into_sketch`].
     Include3d,
+    /// Fusion „Auf Fläche projizieren“ (Skizzen 10, Spec 6): Dialog
+    /// [`crate::surface_project_dialog::SurfaceProjectDialog`]; Klicks füllen seine Felder.
+    ProjectToSurface,
+    /// Fusion „Schnittkurve“ (Skizzen 10, Spec 7): Dialog
+    /// [`crate::surface_project_dialog::IntersectionCurveDialog`].
+    IntersectionCurve,
     /// Fusion „Spline durch Stützpunkte“ (Skizzen 7): der bisherige Spline, über `click_spline`.
     SplineFit,
     /// Fusion „Spline mit Kontrollpunkten“ (Skizzen 7): dieselben Klicks, Grad aus
@@ -117,6 +123,8 @@ impl ToolKind {
         ToolKind::Intersect,
         ToolKind::Silhouette,
         ToolKind::Include3d,
+        ToolKind::ProjectToSurface,
+        ToolKind::IntersectionCurve,
         ToolKind::SplineFit,
         ToolKind::SplineControl,
         ToolKind::Conic,
@@ -134,7 +142,9 @@ impl ToolKind {
             | SlotCenterPointArc => Tool::Slot,
             Fillet | ChamferEqual | ChamferDistanceAngle | ChamferTwoDistances => Tool::Fillet,
             PatternRect | PatternCircular => Tool::Pattern,
-            Project | Intersect | Silhouette | Include3d => Tool::ProjectEdge,
+            Project | Intersect | Silhouette | Include3d | ProjectToSurface | IntersectionCurve => {
+                Tool::ProjectEdge
+            }
             SplineFit | SplineControl | Conic => Tool::Spline,
         }
     }
@@ -150,8 +160,8 @@ impl ToolKind {
             Tool::Slot => &all[14..19],
             Tool::Fillet => &all[19..23],
             Tool::Pattern => &all[23..25],
-            Tool::ProjectEdge => &all[25..29],
-            Tool::Spline => &all[29..32],
+            Tool::ProjectEdge => &all[25..31],
+            Tool::Spline => &all[31..34],
             _ => &[],
         }
     }
@@ -180,6 +190,21 @@ impl ToolKind {
         self.tool() == Tool::ProjectEdge
     }
 
+    /// Eine Art mit eigenem Dialog („Auf Fläche projizieren“, „Schnittkurve“, Skizzen 10)? Ihre
+    /// Klicks füllen die Felder des Dialogs ([`crate::surface_project_dialog`]), erst OK legt an.
+    pub fn has_dialog(self) -> bool {
+        matches!(
+            self,
+            ToolKind::ProjectToSurface | ToolKind::IntersectionCurve
+        )
+    }
+
+    /// Wählt die Art in der 3D-Szene wie „3D-Geometrie einbeziehen“ (Ecken, Kanten, Flächen,
+    /// Ebenen, Achsen und Kurven früherer Skizzen)?
+    pub fn picks_like_include(self) -> bool {
+        self == ToolKind::Include3d || self.has_dialog()
+    }
+
     /// Felder je Stufe (Index = Stufe, die letzte Stufe schließt ab, Stufe 0 hat nie welche).
     pub fn stages(self) -> &'static [&'static [FieldKind]] {
         use FieldKind as F;
@@ -204,7 +229,9 @@ impl ToolKind {
             ChamferTwoDistances => &[&[], &[], &[F::Distance, F::Distance2]],
             // Die Muster haben ihren eigenen Ablauf (`sketch_pattern::pattern_fields`).
             PatternRect | PatternCircular => &[&[]],
-            Project | Intersect | Silhouette | Include3d => &[&[]],
+            Project | Intersect | Silhouette | Include3d | ProjectToSurface | IntersectionCurve => {
+                &[&[]]
+            }
             // Die Klicks sammelt `click_spline`, Eingabe oder Doppelklick schließt ab.
             SplineFit | SplineControl => &[&[]],
             Conic => &[&[], &[], &[], &[F::Rho]],
@@ -249,6 +276,8 @@ impl ToolKind {
             Intersect => tr!("sketch-kind-intersect-hint"),
             Silhouette => tr!("sketch-kind-silhouette-hint"),
             Include3d => tr!("sketch-kind-include-3d-hint"),
+            ProjectToSurface => tr!("sketch-kind-project-to-surface-hint"),
+            IntersectionCurve => tr!("sketch-kind-intersection-curve-hint"),
             SplineFit => tr!("sketch-kind-spline-fit-hint"),
             SplineControl => tr!("sketch-kind-spline-control-hint"),
             Conic => tr!("sketch-kind-conic-hint"),
@@ -288,6 +317,8 @@ impl ToolKind {
             Intersect => Action::SketchIntersect,
             Silhouette => Action::SketchSilhouette,
             Include3d => Action::SketchInclude3d,
+            ProjectToSurface => Action::SketchProjectToSurface,
+            IntersectionCurve => Action::SketchIntersectionCurve,
             SplineFit => Action::SketchSplineFit,
             SplineControl => Action::SketchSplineControl,
             Conic => Action::SketchConic,
@@ -324,6 +355,8 @@ impl ToolKind {
             Intersect => crate::msg!("sketch-pick-intersect"),
             Silhouette => crate::msg!("sketch-pick-silhouette"),
             Include3d => crate::msg!("sketch-pick-include-3d"),
+            ProjectToSurface => crate::msg!("sketch-pick-project-to-surface"),
+            IntersectionCurve => crate::msg!("sketch-pick-intersection-curve"),
             SplineFit | SplineControl => crate::msg!("sketch-spline-min"),
             Conic => crate::msg!("sketch-err-conic-apex"),
         }

@@ -328,11 +328,14 @@ fn one_include_click_one_undo_step() {
 fn include_kind_in_flyout_without_key() {
     assert_eq!(
         ToolKind::of(Tool::ProjectEdge),
+        // Task 19 bewusst angepasst: dahinter „Auf Fläche projizieren“ und „Schnittkurve“.
         &[
             ToolKind::Project,
             ToolKind::Intersect,
             ToolKind::Silhouette,
-            ToolKind::Include3d
+            ToolKind::Include3d,
+            ToolKind::ProjectToSurface,
+            ToolKind::IntersectionCurve,
         ]
     );
     assert_eq!(ToolKind::Include3d.tool(), Tool::ProjectEdge);

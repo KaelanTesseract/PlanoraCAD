@@ -1088,7 +1088,11 @@ fn sketch_warning(counts: &CopyCounts, sketch: &Sketch) -> Option<String> {
         ));
     }
     if counts.too_slow > 0 {
-        lines.push(tr!("feature-sketch-too-slow", count = counts.too_slow));
+        lines.push(tr!(
+            "feature-sketch-too-slow",
+            count = counts.too_slow,
+            seconds = crate::SURFACE_PROJECT_BUDGET.as_secs()
+        ));
     }
     lines.extend(text_warning_lines(sketch));
     (!lines.is_empty()).then(|| lines.join("\n"))

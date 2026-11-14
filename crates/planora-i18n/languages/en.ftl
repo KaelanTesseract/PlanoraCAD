@@ -112,6 +112,8 @@ action-sketch-project-edge = Project
 action-sketch-intersect = Intersect
 action-sketch-silhouette = Silhouette
 action-sketch-include-3d = Include 3D Geometry
+action-sketch-project-to-surface = Project To Surface
+action-sketch-intersection-curve = Intersection Curve
 action-sketch-spline-fit = Fit Point Spline
 action-sketch-spline-control = Control Point Spline
 action-sketch-conic = Conic Curve
@@ -502,6 +504,8 @@ undo-edge-project = Project
 undo-sketch-intersect = Intersect
 undo-silhouette = Silhouette
 undo-include-3d = Include 3D Geometry
+undo-project-to-surface = Project To Surface
+undo-intersection-curve = Intersection Curve
 undo-delete = Delete
 undo-line = Draw line
 undo-circle = Draw circle
@@ -1157,6 +1161,8 @@ sketch-pick-project = Please click an edge or face of a body (filter "Bodies": a
 sketch-pick-intersect = Please click a face of a body (filter "Bodies": anywhere on the body)
 sketch-pick-silhouette = Please click a face of a body
 sketch-pick-include-3d = Please click an edge, face, vertex, plane, axis, the origin or a curve of an earlier sketch
+sketch-pick-project-to-surface = Please select faces and curves in the Project To Surface dialog
+sketch-pick-intersection-curve = Please select a curve and curves or faces in the Intersection Curve dialog
 sketch-status-solved = Fully constrained
 sketch-status-dof-one = 1 degree of freedom
 sketch-status-dof = { $n } degrees of freedom
@@ -1195,6 +1201,8 @@ sketch-spline-degree-hint = Degree of the next control point spline. With few po
 sketch-tool-project-edge-hint = Click an edge or face, with the filter "Bodies" a whole body; the edges are projected into the sketch as fixed curves.
 sketch-kind-intersect-hint = Click a face, with the filter "Bodies" a whole body; where the sketch plane cuts it, fixed curves are created that follow the body.
 sketch-kind-silhouette-hint = Click a curved face; its outline as seen along the sketch normal becomes fixed curves that follow the body.
+sketch-kind-project-to-surface-hint = Select faces or planes, then curves of earlier sketches, edges or vertices; they are placed onto the faces and enter the sketch as linked 3D curves.
+sketch-kind-intersection-curve-hint = Select a curve of an earlier 2D sketch, then faces, planes or curves of other sketches; the intersection enters the sketch as a linked 3D curve.
 sketch-kind-include-3d-hint = Click an edge, face, vertex, construction geometry or a curve of an earlier sketch; it enters the sketch at its position in space as fixed 3D geometry and follows its source.
 sketch-tool-trim-hint = Click the piece between the nearest intersections, or drag across several pieces with the button held; it is deleted. Esc ends.
 sketch-tool-extend-hint = Click near an open end; the curve is extended to the next curve. Esc ends.
@@ -2211,8 +2219,8 @@ feature-sketch-reference-mismatch = { $count ->
    *[other] Reference no longer matches: the source of { $count } curves gives a different number of pieces; the curves stay where they were.
 }
 feature-sketch-too-slow = { $count ->
-    [one] Recomputing a projected curve takes too long (over 2 s); the curve stays where it was.
-   *[other] Recomputing { $count } projected curves takes too long (over 2 s); the curves stay where they were.
+    [one] Recomputing a curve on faces or an intersection curve takes too long (over { $seconds } s); the curve stays where it was.
+   *[other] Recomputing { $count } curves on faces or intersection curves takes too long (over { $seconds } s); the curves stay where they were.
 }
 feature-sketch-include-constraints-removed = { $count ->
     [one] A constraint on included geometry does not apply in 3D and was removed.
@@ -2279,7 +2287,29 @@ feature-err-edge-not-found = The edge between faces "{ $a }" and "{ $b }" no lon
 feature-err-untagged-face = The face is not assigned to a feature and cannot be used
 feature-err-untagged-edge = The edge is not assigned to a feature and cannot be used
 feature-surface-no-hit = The curves do not hit the faces
-feature-surface-too-slow = Projecting onto the faces takes too long (over 2 s) and was cancelled
+feature-surface-too-slow = The computation takes too long (over { $seconds } s) and was cancelled; nothing is created.
+surface-field-faces = Faces
+surface-field-curves = Curves
+surface-field-project-type = Project Type
+surface-kind-closest = Closest Point
+surface-kind-along = Along Vector
+surface-field-direction = Direction
+surface-field-curve = Curve
+surface-field-targets = Curves/Faces
+surface-select = Select
+surface-selected = { $count ->
+    [one] 1 selected
+   *[other] { $count } selected
+}
+surface-clear = Clear
+surface-value-sketch-curve = Curve in { $name }
+surface-pick-faces = Faces: please select a body face or a plane.
+surface-pick-curves = Curves: please select a curve of an earlier sketch, a body edge or a body vertex.
+surface-pick-direction = Direction: please select a straight line or edge, an axis or a plane.
+surface-curve-active-sketch = Curves of the active sketch cannot be selected; please start a new sketch.
+surface-pick-curve = Curve: please select a curve of an earlier sketch.
+surface-pick-targets = Curves/Faces: please select a body face, a plane or a curve of another sketch.
+surface-curve-not-2d = Only 2D sketch curves can be selected; this curve does not lie in its sketch plane.
 feature-surface-lost = A curve or face of the projection no longer exists
 feature-err-body-not-found = Body { $index } of feature { $feature } does not exist
 feature-err-kernel = The kernel rejected the operation: { $detail }

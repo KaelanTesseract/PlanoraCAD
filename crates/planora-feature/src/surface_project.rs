@@ -277,7 +277,10 @@ impl ProjectError {
     pub fn message(&self) -> String {
         match self {
             ProjectError::NoHit => tr!("feature-surface-no-hit"),
-            ProjectError::TooSlow => tr!("feature-surface-too-slow"),
+            ProjectError::TooSlow => tr!(
+                "feature-surface-too-slow",
+                seconds = SURFACE_PROJECT_BUDGET.as_secs()
+            ),
             ProjectError::Lost => tr!("feature-surface-lost"),
         }
     }
@@ -1287,16 +1290,22 @@ thread_local! {
     static RECOMPUTE_BUDGET: Cell<Option<Duration>> = const { Cell::new(None) };
 }
 
-/// Zeitgrenze für die Neuberechnung (Spec 10): [`SURFACE_PROJECT_BUDGET`], außer ein Test hat sie
-/// im laufenden Thread geändert.
-pub(crate) fn recompute_budget() -> Duration {
+/// Zeitgrenze für die Anlage im Dialog (Spec 6) und die Neuberechnung (Spec 10):
+/// [`SURFACE_PROJECT_BUDGET`], außer ein Test hat sie im laufenden Thread geändert.
+pub fn surface_budget() -> Duration {
     RECOMPUTE_BUDGET
         .with(Cell::get)
         .unwrap_or(SURFACE_PROJECT_BUDGET)
 }
 
-/// Setzt im aufrufenden Thread die Zeitgrenze der Neuberechnung auf `budget`, bis der Wächter
-/// fällt (nur für Tests: belegt, dass eine zu lange Neuberechnung die Lage stehen lässt).
+/// Zeitgrenze für die Neuberechnung (Spec 10), siehe [`surface_budget`].
+pub(crate) fn recompute_budget() -> Duration {
+    surface_budget()
+}
+
+/// Setzt im aufrufenden Thread die Zeitgrenze von Anlage und Neuberechnung auf `budget`, bis der
+/// Wächter fällt (nur für Tests: belegt, dass eine zu lange Rechnung nichts anlegt bzw. die Lage
+/// stehen lässt).
 #[doc(hidden)]
 #[must_use]
 pub fn recompute_budget_for_tests(budget: Duration) -> RecomputeBudgetGuard {

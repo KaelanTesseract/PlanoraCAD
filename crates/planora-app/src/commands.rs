@@ -272,6 +272,8 @@ fn run_action_inner(ws: &mut Workspace, a: Action) -> MenuRequest {
         | Action::SketchIntersect
         | Action::SketchSilhouette
         | Action::SketchInclude3d
+        | Action::SketchProjectToSurface
+        | Action::SketchIntersectionCurve
         | Action::SketchSplineFit
         | Action::SketchSplineControl
         | Action::SketchConic => {

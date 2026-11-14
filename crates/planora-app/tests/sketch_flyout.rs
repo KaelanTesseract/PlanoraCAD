@@ -695,12 +695,24 @@ fn the_create_menu_lists_all_kinds_while_a_sketch_is_open() {
         let shot = rig.click(at);
         assert_eq!(rig.se().tool, tool);
         assert_eq!(rig.se().kind_of(tool), Some(*last), "wie in der Liste");
-        assert!(!shot.has(&last.label()), "Menü zu");
+        if last.has_dialog() {
+            // Skizzen 10, Task 19 bewusst angepasst: „Schnittkurve“ öffnet ihren Dialog, dessen
+            // Titel den Namen trägt; das Menü ist trotzdem zu (nur noch der Titel).
+            assert!(rig.st().surface_dialog.is_some(), "Dialog offen");
+            assert_eq!(
+                shot.texts.iter().filter(|t| t.text == last.label()).count(),
+                1,
+                "Menü zu"
+            );
+        } else {
+            assert!(!shot.has(&last.label()), "Menü zu");
+        }
     }
     // Skizzen 6: „Projizieren/Einschließen“ mit „Projizieren“ (19 → 20); Task 10 bewusst
     // angepasst: dazu „Schneiden“ und „Silhouette“ (→ 22). Skizzen 7: die beiden Splines (→ 24).
-    // Skizzen 10, Task 16 bewusst angepasst: „3D-Geometrie einbeziehen“ (→ 25).
-    assert_eq!(count, 25);
+    // Skizzen 10, Task 16 bewusst angepasst: „3D-Geometrie einbeziehen“ (→ 25). Task 19 bewusst
+    // angepasst: „Auf Fläche projizieren“ und „Schnittkurve“ (→ 27).
+    assert_eq!(count, 27);
 }
 
 /// Hat die Schrift in ihrer Zeichentabelle einen Eintrag für `c`? (Wie in tests/icons.rs.)

@@ -1186,8 +1186,11 @@ fn rho_field_row(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch, c: 
 fn project_options(ui: &mut egui::Ui, se: &mut SketchSession) {
     use crate::sketch_kinds::ToolKind;
     use crate::sketch_state::ProjectFilter;
-    // Silhouette und Einbeziehen haben keine Einstellungen (Einbeziehen ist immer verknüpft).
-    if matches!(se.kinds.project, ToolKind::Silhouette | ToolKind::Include3d) {
+    // Silhouette und Einbeziehen haben keine Einstellungen (Einbeziehen ist immer verknüpft);
+    // „Auf Fläche projizieren“ und „Schnittkurve“ haben ihre Felder im eigenen Dialog.
+    if matches!(se.kinds.project, ToolKind::Silhouette | ToolKind::Include3d)
+        || se.kinds.project.has_dialog()
+    {
         return;
     }
     ui.label(tr!("sketch-project-filter"));

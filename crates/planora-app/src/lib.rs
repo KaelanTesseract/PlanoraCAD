@@ -79,6 +79,7 @@ pub mod sketch_triad;
 pub mod sketch_view;
 pub mod state;
 pub mod step_import_dialog;
+pub mod surface_project_dialog;
 pub mod system_language;
 pub mod tabs;
 pub mod theme;

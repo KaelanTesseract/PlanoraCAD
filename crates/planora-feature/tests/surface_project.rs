@@ -882,7 +882,11 @@ fn recompute_tooslow_keeps_position_and_warns() {
     }
     let w = warning_of(&d, t);
     assert!(
-        w.contains(&planora_i18n::tr!("feature-sketch-too-slow", count = 2)),
+        w.contains(&planora_i18n::tr!(
+            "feature-sketch-too-slow",
+            count = 2,
+            seconds = 2
+        )),
         "{w}"
     );
     for (k, &c) in curves.iter().enumerate() {

@@ -339,6 +339,9 @@ pub struct AppState {
     pub dimension_dialog: Option<crate::dimension_dialog::DimensionDialog>,
     /// Offenes Fenster „Blattangaben“.
     pub sheet_dialog: Option<crate::sheet_dialog::SheetInfoDialog>,
+    /// Offener Dialog „Auf Fläche projizieren“ oder „Schnittkurve“ der offenen Skizze
+    /// (Skizzen 10); er folgt der gewählten Art ([`crate::surface_project_dialog::sync`]).
+    pub surface_dialog: Option<crate::surface_project_dialog::SurfaceDialog>,
     /// Offene Rückfrage „Maß löschen“ (Kettenglieder) aus dem Abschnitt „Maße“.
     pub pending_delete_dimension: Option<crate::dimension_browser::DimDeletePlan>,
     /// Name des Dokuments für die Zeichnungsnummer im Schriftfeld („Werkstück-01“); die App setzt
@@ -741,6 +744,7 @@ impl AppState {
             section_tool: crate::section_tool::SectionTool::default(),
             dimension_dialog: None,
             sheet_dialog: None,
+            surface_dialog: None,
             pending_delete_dimension: None,
             document_name: tr!("state-unnamed"),
             instance: NEXT_INSTANCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
@@ -1250,6 +1254,7 @@ impl AppState {
         self.sketch_request = None;
         self.dimension_dialog = None;
         self.sheet_dialog = None;
+        self.surface_dialog = None;
         self.dimension_tool = crate::dimension_tool::DimensionTool::default();
         self.balloon_tool = crate::balloon_tool::BalloonTool::default();
         self.section_tool = crate::section_tool::SectionTool::default();
@@ -3833,7 +3838,7 @@ impl AppState {
     }
 
     /// Steht die Skizze `sketch` im Verlauf vor der offenen (Spec 10)? Sonst die Meldung.
-    fn check_source_sketch(&self, sketch: FeatureId) -> Result<(), Msg> {
+    pub(crate) fn check_source_sketch(&self, sketch: FeatureId) -> Result<(), Msg> {
         let id = self
             .open_sketch_id()
             .ok_or_else(|| crate::msg!("state-no-open-sketch"))?;
@@ -3900,7 +3905,10 @@ impl AppState {
 
     /// Der dauerhafte Verweis zur Wahl `pick` (Körper vor der offenen Skizze, Ebenen und Skizzen
     /// davor).
-    fn include_ref(&self, pick: IncludePick) -> Result<planora_feature::IncludeRef, Msg> {
+    pub(crate) fn include_ref(
+        &self,
+        pick: IncludePick,
+    ) -> Result<planora_feature::IncludeRef, Msg> {
         use planora_feature::{EdgeRef, FaceRef, IncludeRef, PlaneId, VertexRef};
         let (idx, _) = self.open_sketch_place()?;
         let tol = self.kernel.tolerance;
@@ -3943,6 +3951,46 @@ impl AppState {
                 IncludeRef::SketchCurve { sketch, curve }
             }
         })
+    }
+
+    /// Fusion „Auf Fläche projizieren“ (Skizzen 10, Spec 6) bzw. „Schnittkurve“ (Spec 7) mit der
+    /// Herkunft `source` ([`CopySource::OnSurface`] oder [`CopySource::Intersection`]): rechnet
+    /// genau wie die Neuberechnung (Toleranz des Dokuments, Zeitgrenze
+    /// [`planora_feature::surface_project::surface_budget`]) und legt die Stücke als verknüpfte
+    /// 3D-Geometrie in die offene Skizze, als eine Gruppe. Ein Rückgängig-Schritt; trifft nichts
+    /// oder dauert es zu lange, bleibt die Skizze unverändert, und die Meldung steht auch in der
+    /// Sitzung. Liefert die Zahl der Stücke.
+    pub fn surface_curves_into_sketch(&mut self, source: CopySource) -> Result<usize, String> {
+        let r = self.try_surface_curves(source);
+        self.report_to_session(r)
+    }
+
+    fn try_surface_curves(&mut self, source: CopySource) -> Result<usize, Msg> {
+        use planora_feature::surface_project::{ProjectError, surface_budget};
+        use planora_feature::{DocView, SURFACE_PROJECT_BUDGET, intersection_curve};
+        let (idx, frame) = self.open_sketch_place()?;
+        let view = DocView::new(&self.document, idx, frame);
+        let tol = self.document.kernel().tolerance;
+        let (pieces, label) = match &source {
+            CopySource::OnSurface(p) => (
+                planora_feature::project_to_surface(&view, p, &tol, surface_budget()),
+                crate::msg!("undo-project-to-surface"),
+            ),
+            CopySource::Intersection(p) => (
+                intersection_curve(&view, p, &tol, surface_budget()),
+                crate::msg!("undo-intersection-curve"),
+            ),
+            _ => return Err(crate::msg!("sketch-include-failed")),
+        };
+        let pieces = pieces.map_err(|e| match e {
+            ProjectError::NoHit => crate::msg!("feature-surface-no-hit"),
+            ProjectError::TooSlow => crate::msg!(
+                "feature-surface-too-slow",
+                seconds = i64::try_from(SURFACE_PROJECT_BUDGET.as_secs()).unwrap_or(i64::MAX)
+            ),
+            ProjectError::Lost => crate::msg!("feature-surface-lost"),
+        })?;
+        self.place_included(&pieces, source, label)
     }
 
     /// Legt die Stücke `pieces` einer Quelle als feste Geometrie in die Skizze

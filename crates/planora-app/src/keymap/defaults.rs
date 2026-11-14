@@ -160,6 +160,11 @@ action_table! {
     SketchSilhouette, "skizze.silhouette", "action-sketch-silhouette", Sketch, [];
     /// Fusion „3D-Geometrie einbeziehen“ (Skizzen 10): ohne Vorgabetaste wie in Fusion, belegbar.
     SketchInclude3d, "skizze.3d_einbeziehen", "action-sketch-include-3d", Sketch, [];
+    /// Fusion „Auf Fläche projizieren“ (Skizzen 10): ohne Vorgabetaste wie in Fusion, belegbar.
+    SketchProjectToSurface, "skizze.auf_flaeche_projizieren", "action-sketch-project-to-surface",
+        Sketch, [];
+    /// Fusion „Schnittkurve“ (Skizzen 10): ohne Vorgabetaste wie in Fusion, belegbar.
+    SketchIntersectionCurve, "skizze.schnittkurve", "action-sketch-intersection-curve", Sketch, [];
     // Skizzen 7: die Arten am Spline-Knopf, ohne Vorgabetaste wie in Fusion (Annahme), belegbar.
     /// Fusion „Spline durch Stützpunkte“.
     SketchSplineFit, "skizze.spline_stuetzpunkte", "action-sketch-spline-fit", Sketch, [];

@@ -208,8 +208,9 @@ fn kinds_cover_their_tools_without_gaps() {
     // Skizzen 4: Rundung und die drei Fasen kamen dazu (19 → 23). Skizzen 5: die beiden
     // Anordnungen (23 → 25). Skizzen 6: Projizieren (25 → 26); Task 10 bewusst angepasst:
     // Schneiden und Silhouette (26 → 28). Skizzen 7: die drei Arten am Spline-Knopf (28 → 31).
-    // Skizzen 10, Task 16 bewusst angepasst: 3D-Geometrie einbeziehen (31 → 32).
-    assert_eq!(ToolKind::ALL.len(), 32);
+    // Skizzen 10, Task 16 bewusst angepasst: 3D-Geometrie einbeziehen (31 → 32). Task 19 bewusst
+    // angepasst: Auf Fläche projizieren und Schnittkurve (32 → 34).
+    assert_eq!(ToolKind::ALL.len(), 34);
     let mut seen = Vec::new();
     for tool in [
         Tool::Rectangle,
@@ -229,7 +230,7 @@ fn kinds_cover_their_tools_without_gaps() {
             seen.push(k);
         }
     }
-    assert_eq!(seen.len(), 32);
+    assert_eq!(seen.len(), 34);
     for tool in [
         Tool::Select,
         Tool::Point,
@@ -432,8 +433,9 @@ fn default_keys_stay_and_twenty_actions_have_none() {
     // Anordnungen haben wie in Fusion keine Taste (20 → 22). Skizzen 6, Task 10 bewusst
     // angepasst: Schneiden und Silhouette ebenso (22 → 24). Skizzen 7: die drei Arten am
     // Spline-Knopf ebenso (24 → 27). Skizzen 10, Task 16 bewusst angepasst: 3D-Geometrie
-    // einbeziehen ebenso (27 → 28).
-    assert_eq!(free, 28);
+    // einbeziehen ebenso (27 → 28). Task 19 bewusst angepasst: Auf Fläche projizieren und
+    // Schnittkurve ebenso (28 → 30).
+    assert_eq!(free, 30);
     assert!(km.to_overrides().is_empty(), "Konfiguration bleibt leer");
 }
 

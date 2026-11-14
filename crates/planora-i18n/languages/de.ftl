@@ -112,6 +112,8 @@ action-sketch-project-edge = Projizieren
 action-sketch-intersect = Schneiden
 action-sketch-silhouette = Silhouette
 action-sketch-include-3d = 3D-Geometrie einbeziehen
+action-sketch-project-to-surface = Auf Fläche projizieren
+action-sketch-intersection-curve = Schnittkurve
 action-sketch-spline-fit = Spline durch Stützpunkte
 action-sketch-spline-control = Spline mit Kontrollpunkten
 action-sketch-conic = Kegelschnitt
@@ -494,6 +496,8 @@ undo-edge-project = Projizieren
 undo-sketch-intersect = Schneiden
 undo-silhouette = Silhouette
 undo-include-3d = 3D-Geometrie einbeziehen
+undo-project-to-surface = Auf Fläche projizieren
+undo-intersection-curve = Schnittkurve
 undo-delete = Löschen
 undo-line = Linie zeichnen
 undo-circle = Kreis zeichnen
@@ -1140,6 +1144,8 @@ sketch-pick-project = Bitte eine Kante oder Fläche eines Körpers anklicken (Fi
 sketch-pick-intersect = Bitte eine Fläche eines Körpers anklicken (Filter „Körper“: irgendwo auf den Körper)
 sketch-pick-silhouette = Bitte eine Fläche eines Körpers anklicken
 sketch-pick-include-3d = Bitte eine Kante, Fläche, Ecke, Ebene, Achse, den Ursprung oder eine Kurve einer früheren Skizze anklicken
+sketch-pick-project-to-surface = Bitte im Dialog „Auf Fläche projizieren“ Flächen und Kurven wählen
+sketch-pick-intersection-curve = Bitte im Dialog „Schnittkurve“ eine Kurve und Kurven oder Flächen wählen
 sketch-status-solved = Vollständig bestimmt
 sketch-status-dof-one = 1 Freiheitsgrad
 sketch-status-dof = { $n } Freiheitsgrade
@@ -1178,6 +1184,8 @@ sketch-spline-degree-hint = Grad des nächsten Splines mit Kontrollpunkten. Mit 
 sketch-tool-project-edge-hint = Eine Kante oder Fläche anklicken, mit dem Filter „Körper“ einen ganzen Körper; die Kanten werden als feste Kurven in die Skizze projiziert.
 sketch-kind-intersect-hint = Eine Fläche anklicken, mit dem Filter „Körper“ einen ganzen Körper; wo die Skizzenebene ihn schneidet, entstehen feste Kurven, die dem Körper folgen.
 sketch-kind-silhouette-hint = Eine gekrümmte Fläche anklicken; ihr Umriss in Blickrichtung der Skizze wird als feste Kurven übernommen, die dem Körper folgen.
+sketch-kind-project-to-surface-hint = Flächen oder Ebenen und dann Kurven früherer Skizzen, Kanten oder Ecken wählen; sie werden auf die Flächen gelegt und kommen als verknüpfte 3D-Kurven in die Skizze.
+sketch-kind-intersection-curve-hint = Eine Kurve einer früheren 2D-Skizze und dann Flächen, Ebenen oder Kurven anderer Skizzen wählen; der Schnitt kommt als verknüpfte 3D-Kurve in die Skizze.
 sketch-kind-include-3d-hint = Kante, Fläche, Ecke, Konstruktionsgeometrie oder eine Kurve einer früheren Skizze anklicken; sie kommt in ihrer Raumlage als feste 3D-Geometrie in die Skizze und folgt ihrer Herkunft.
 sketch-tool-trim-hint = Stück zwischen den nächsten Schnittpunkten anklicken oder mit gedrückter Taste über mehrere Stücke ziehen; es wird gelöscht. Esc beendet.
 sketch-tool-extend-hint = Nahe einem offenen Ende anklicken; die Kurve wird bis zur nächsten Kurve verlängert. Esc beendet.
@@ -2194,8 +2202,8 @@ feature-sketch-reference-mismatch = { $count ->
    *[other] Bezug passt nicht mehr: Die Quelle von { $count } Kurven ergibt eine andere Zahl von Stücken; die Kurven bleiben an ihrer letzten Stelle.
 }
 feature-sketch-too-slow = { $count ->
-    [one] Die Neuberechnung einer projizierten Kurve dauert zu lange (über 2 s); die Kurve bleibt an ihrer letzten Stelle.
-   *[other] Die Neuberechnung von { $count } projizierten Kurven dauert zu lange (über 2 s); die Kurven bleiben an ihrer letzten Stelle.
+    [one] Die Neuberechnung einer Kurve auf Flächen oder einer Schnittkurve dauert zu lange (über { $seconds } s); die Kurve bleibt an ihrer letzten Stelle.
+   *[other] Die Neuberechnung von { $count } Kurven auf Flächen oder Schnittkurven dauert zu lange (über { $seconds } s); die Kurven bleiben an ihrer letzten Stelle.
 }
 feature-sketch-include-constraints-removed = { $count ->
     [one] Eine Abhängigkeit an einbezogener Geometrie gilt im Raum nicht und ist entfallen.
@@ -2262,7 +2270,29 @@ feature-err-edge-not-found = Die Kante zwischen den Flächen „{ $a }“ und �
 feature-err-untagged-face = Die Fläche ist keinem Feature zugeordnet und kann nicht verwendet werden
 feature-err-untagged-edge = Die Kante ist keinem Feature zugeordnet und kann nicht verwendet werden
 feature-surface-no-hit = Die Kurven treffen die Flächen nicht
-feature-surface-too-slow = Die Projektion auf die Flächen dauert zu lange (über 2 s) und wurde abgebrochen
+feature-surface-too-slow = Die Rechnung dauert zu lange (über { $seconds } s) und wurde abgebrochen; es entsteht nichts.
+surface-field-faces = Flächen
+surface-field-curves = Kurven
+surface-field-project-type = Projektionsart
+surface-kind-closest = Nächster Punkt
+surface-kind-along = Entlang Vektor
+surface-field-direction = Richtung
+surface-field-curve = Kurve
+surface-field-targets = Kurven/Flächen
+surface-select = Auswählen
+surface-selected = { $count ->
+    [one] 1 ausgewählt
+   *[other] { $count } ausgewählt
+}
+surface-clear = Leeren
+surface-value-sketch-curve = Kurve in { $name }
+surface-pick-faces = Flächen: bitte eine Körperfläche oder Ebene wählen.
+surface-pick-curves = Kurven: bitte eine Kurve einer früheren Skizze, eine Körperkante oder eine Körperecke wählen.
+surface-pick-direction = Richtung: bitte eine gerade Linie oder Kante, eine Achse oder eine Ebene wählen.
+surface-curve-active-sketch = Kurven der aktiven Skizze sind nicht wählbar; bitte eine neue Skizze beginnen.
+surface-pick-curve = Kurve: bitte eine Kurve einer früheren Skizze wählen.
+surface-pick-targets = Kurven/Flächen: bitte eine Körperfläche, eine Ebene oder eine Kurve einer anderen Skizze wählen.
+surface-curve-not-2d = Nur 2D-Skizzenkurven sind wählbar; diese Kurve liegt nicht in ihrer Skizzenebene.
 feature-surface-lost = Eine Kurve oder Fläche der Projektion ist nicht mehr vorhanden
 feature-err-body-not-found = Körper { $index } von Feature { $feature } ist nicht vorhanden
 feature-err-kernel = Der Kernel hat die Operation abgelehnt: { $detail }

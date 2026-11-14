@@ -3037,6 +3037,8 @@ impl eframe::App for PlanoraApp {
         {
             tab.plane_dialog = Some(dialog);
         }
+        // Skizzen 10: „Auf Fläche projizieren“ und „Schnittkurve“ der offenen Skizze.
+        crate::surface_project_dialog::show_open(&ctx, &mut tab.state);
         // Die Fenster „DXF einfügen“ und „SVG einfügen“ nutzen denselben Wahlmodus (sie zeichnen
         // erst danach).
         if tab.plane_dialog.is_none()

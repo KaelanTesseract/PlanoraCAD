@@ -2159,7 +2159,9 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         }
         // Mitten in einem Griff oder Rahmen gelten Eingabe und Entf nicht.
         let gesture = se.in_gesture();
-        if enter && !flyout && !gesture {
+        // Bei „Auf Fläche projizieren“ und „Schnittkurve“ gehört die Eingabe dem Dialog (OK).
+        let dialog = se.tool == Tool::ProjectEdge && se.kinds.project.has_dialog();
+        if enter && !flyout && !gesture && !dialog {
             let _ = match &commit_scope {
                 // Gesetztes Maß, dessen Feld die Tastatur nicht mehr hat (etwa nach einem
                 // abgelehnten Klick daneben): Eingabe legt es an wie dieser Klick; geht das nicht,
@@ -2207,7 +2209,7 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     // (Skizzen 10) wählt dazu Ecken und Ebenen.
     let faces_only = matches!(kind, ToolKind::Intersect | ToolKind::Silhouette);
     let pick_at = |state: &AppState, p: Pos2| {
-        if kind == ToolKind::Include3d {
+        if kind.picks_like_include() {
             state.pick_with(map.local(p), map.viewport(), PickFilter::INCLUDE)
         } else if faces_only {
             state
@@ -2230,6 +2232,22 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         // Fehler (etwa ein Körper, der erst nach der Skizze entsteht) stehen in der Meldung der
         // Sitzung.
         let picked = pick_at(state, p);
+        // „Auf Fläche projizieren“ und „Schnittkurve“ (Skizzen 10): Der Klick füllt das aktive
+        // Feld des Dialogs; erst dessen OK legt an.
+        if kind.has_dialog() {
+            match include_pick(state, &map, p, picked) {
+                Some(pick) => {
+                    // Passt der Klick nicht, steht der Grund im Dialog.
+                    crate::surface_project_dialog::deliver(state, pick);
+                }
+                None => {
+                    if let Some(se) = state.sketch_session.as_mut() {
+                        se.message = Some(kind.refusal());
+                    }
+                }
+            }
+            return;
+        }
         if kind == ToolKind::Include3d {
             match include_pick(state, &map, p, picked) {
                 Some(pick) => {
