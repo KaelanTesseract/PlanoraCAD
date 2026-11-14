@@ -639,7 +639,7 @@ impl Sketch {
         self.check_elliptic_arc(center, major, minor, start, end)?;
         self.with_internal_checked(|s| {
             let (ax, ay, mi) = (s.new_var(major.x), s.new_var(major.y), s.new_var(minor));
-            let (id, k) = s.add_elliptic_arc_vars(center, (ax, ay, None), mi, start, end);
+            let (id, k) = s.push_elliptic_arc(center, (ax, ay, None), mi, start, end);
             (id, vec![k])
         })
     }
@@ -668,10 +668,13 @@ impl Sketch {
     }
 
     /// Ellipsenbogen auf vorhandenen Variablen (etwa geteilt mit der Ellipse, aus der er
-    /// entsteht); legt die interne Abhängigkeit `EllipticArcEnds` an und liefert beide Ids. Prüft nichts.
+    /// entsteht); legt die interne Abhängigkeit `EllipticArcEnds` an und liefert beide Ids. Prüft
+    /// die Punkte nicht.
     /// Ohne `az`, aber an einem 3D-Punkt (Teilstück, Kopie) bekommt er wie
     /// [`Sketch::add_elliptic_arc3`] mit der Skizzennormale eine Ebene: Alle Punkte werden 3D,
-    /// `az` wird neu (0), dazu Normale `(0, 0, 1)` und `InPlane` (Skizzen 10).
+    /// `az` wird neu (0), dazu Normale `(0, 0, 1)` und `InPlane` (Skizzen 10). Das Anheben prüft er
+    /// vorher wie „Deckungsgleich“ ([`Sketch::check_lift_for_curve`], Gesamtprüfung C1); bei einem
+    /// Fehler bleibt die Skizze unverändert.
     pub(crate) fn add_elliptic_arc_vars(
         &mut self,
         center: PointId,
@@ -679,17 +682,29 @@ impl Sketch {
         minor: usize,
         start: PointId,
         end: PointId,
-    ) -> (CurveId, crate::constraint::ConstraintId) {
+    ) -> Result<(CurveId, crate::constraint::ConstraintId), SketchError> {
         let pts = [center, start, end];
-        let lift = az.is_none() && self.any_3d(&pts);
-        let az = if lift {
-            for p in pts {
-                self.promote_to_3d(p);
-            }
-            Some(self.new_var(0.0))
-        } else {
-            az
-        };
+        if az.is_some() || !self.any_3d(&pts) {
+            return Ok(self.push_elliptic_arc(center, (ax, ay, az), minor, start, end));
+        }
+        let lifted = self.check_lift_for_curve(&pts)?;
+        self.apply_lift(&lifted);
+        let az = Some(self.new_var(0.0));
+        let (id, k) = self.push_elliptic_arc(center, (ax, ay, az), minor, start, end);
+        self.curves[id].normal = Some(DVec3::Z);
+        self.push_internal(crate::constraint::ConstraintKind::InPlane(id));
+        Ok((id, k))
+    }
+
+    /// Legt den Ellipsenbogen auf den Variablen an, samt `EllipticArcEnds`; prüft und hebt nichts.
+    fn push_elliptic_arc(
+        &mut self,
+        center: PointId,
+        (ax, ay, az): (usize, usize, Option<usize>),
+        minor: usize,
+        start: PointId,
+        end: PointId,
+    ) -> (CurveId, crate::constraint::ConstraintId) {
         let id = self.push_curve(CurveKind::EllipticArc {
             center,
             ax,
@@ -700,10 +715,6 @@ impl Sketch {
             end,
         });
         let k = self.push_internal(crate::constraint::ConstraintKind::EllipticArcEnds(id));
-        if lift {
-            self.curves[id].normal = Some(DVec3::Z);
-            self.push_internal(crate::constraint::ConstraintKind::InPlane(id));
-        }
         (id, k)
     }
 
@@ -1185,8 +1196,9 @@ impl Sketch {
         let Some(n) = normal else {
             return self.add_circle(center, radius);
         };
-        self.check_liftable(&[center])?;
-        self.promote_to_3d(center);
+        // Vorhandene 2D-Punkte heben wie „Deckungsgleich“ an (Gesamtprüfung C1/I1).
+        let lifted = self.check_lift_for_curve(&[center])?;
+        self.apply_lift(&lifted);
         let c = self.add_circle(center, radius)?;
         self.curves[c].normal = Some(n);
         Ok(c)
@@ -1217,11 +1229,9 @@ impl Sketch {
         {
             return Err(SketchError::Degenerate(tr!("sketch-err-arc-center")));
         }
-        self.check_liftable(&pts)?;
+        let lifted = self.check_lift_for_curve(&pts)?;
         self.with_internal_checked(|s| {
-            for p in pts {
-                s.promote_to_3d(p);
-            }
+            s.apply_lift(&lifted);
             let id = s.push_curve(CurveKind::Arc { center, start, end });
             s.curves[id].normal = Some(n);
             let k = s.push_internal(crate::constraint::ConstraintKind::ArcRadius(id));
@@ -1272,9 +1282,9 @@ impl Sketch {
         let Some(n) = self.plane_normal_for(unit, &[center])? else {
             return self.add_ellipse(center, a.truncate(), minor);
         };
-        self.check_liftable(&[center])?;
+        let lifted = self.check_lift_for_curve(&[center])?;
         self.with_internal_checked(|s| {
-            s.promote_to_3d(center);
+            s.apply_lift(&lifted);
             let (ax, ay, az, mi) = (
                 s.new_var(a.x),
                 s.new_var(a.y),
@@ -1322,18 +1332,16 @@ impl Sketch {
         {
             return Err(SketchError::Degenerate(tr!("sketch-err-arc-center")));
         }
-        self.check_liftable(&pts)?;
+        let lifted = self.check_lift_for_curve(&pts)?;
         self.with_internal_checked(|s| {
-            for p in pts {
-                s.promote_to_3d(p);
-            }
+            s.apply_lift(&lifted);
             let (ax, ay, az, mi) = (
                 s.new_var(a.x),
                 s.new_var(a.y),
                 s.new_var(a.z),
                 s.new_var(minor),
             );
-            let (id, k) = s.add_elliptic_arc_vars(center, (ax, ay, Some(az)), mi, start, end);
+            let (id, k) = s.push_elliptic_arc(center, (ax, ay, Some(az)), mi, start, end);
             s.curves[id].normal = Some(n);
             let plane = s.push_internal(crate::constraint::ConstraintKind::InPlane(id));
             (id, vec![k, plane])

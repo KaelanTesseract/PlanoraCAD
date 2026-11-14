@@ -1114,7 +1114,7 @@ impl Sketch {
                 start,
                 end,
             } => Ok(self
-                .add_elliptic_arc_vars(center, (ax, ay, az), minor, start, end)
+                .add_elliptic_arc_vars(center, (ax, ay, az), minor, start, end)?
                 .0),
             CurveKind::Spline { points, handles } => {
                 let n = self.add_spline(&points)?;

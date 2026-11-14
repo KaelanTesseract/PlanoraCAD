@@ -840,6 +840,30 @@ impl Sketch {
             && !parallel_normals(self, self.curve_normal(a), self.curve_normal(b))
     }
 
+    /// Prüft, welche Punkte eine neue Kurve mit eigener Ebene an den Punkten `points` anhebt
+    /// (Gesamtprüfung C1/I1): ihre 2D-Punkte samt den Punkten ebener Kurven an ihnen, wie
+    /// „Deckungsgleich“ ([`Sketch::check_3d`]). Gesperrt mit `sketch-err-point-bound-2d`, wenn an
+    /// einem davon 2D-only-Abhängigkeiten, ein Muster oder Griffe hängen; ein Buchstabenpunkt ergibt
+    /// `sketch-text-no-edit`. Ändert nichts; [`Sketch::apply_lift`] hebt danach an.
+    pub(crate) fn check_lift_for_curve(
+        &self,
+        points: &[PointId],
+    ) -> Result<Vec<PointId>, SketchError> {
+        let seeds: Vec<PointId> = points
+            .iter()
+            .copied()
+            .filter(|&p| self.points[p].z.is_none())
+            .collect();
+        if seeds.is_empty() {
+            return Ok(seeds);
+        }
+        let lifted = self.lift_closure(&seeds);
+        for &p in &lifted {
+            self.check_point_liftable(p)?;
+        }
+        Ok(lifted)
+    }
+
     /// Die Punkte `seeds` und alle Punkte ebener Kurven ohne Normale, die an ihnen hängen
     /// (Kreis, Bogen, Ellipse, Ellipsenbogen): Ein solcher Bogen bekommt mit einem 3D-Punkt seine
     /// Ebene, und dann sind all seine Punkte 3D (Task 2). Nur 2D-Punkte, ohne Doppelte.
@@ -974,7 +998,8 @@ impl Sketch {
         Ok(removed)
     }
 
-    /// Hebt die (geprüften) Punkte aus [`Sketch::check_3d`] an: Sie werden 3D-Punkte, ebene
+    /// Hebt die (geprüften) Punkte aus [`Sketch::check_3d`] oder
+    /// [`Sketch::check_lift_for_curve`] an: Sie werden 3D-Punkte, ebene
     /// Kurven an ihnen bekommen die Skizzennormale als eigene Normale samt `InPlane`.
     pub(crate) fn apply_lift(&mut self, lifted: &[PointId]) {
         for &p in lifted {

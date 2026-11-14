@@ -1124,6 +1124,17 @@ impl Sketch {
                 targets.push((p, to));
             }
         }
+        // Die Buchstabenpunkte gehen starr mit (Gesamtprüfung I2): Das Neusetzen schreibt sie
+        // danach an dieselbe Stelle; ein Text ohne gesetzte Form (Schrift fehlt) oder ohne Lage
+        // bleibt so trotzdem ganz in seiner Ebene.
+        let mut glyph_targets = Vec::with_capacity(glyph_points.len());
+        for &p in &glyph_points {
+            let to = m.apply(self.pos3(p));
+            if !to.is_finite() || to.abs().max_element() > MAX_COORD {
+                return Err(far());
+            }
+            glyph_targets.push((p, to));
+        }
         if targets.is_empty() && !(rotating && !(planar.is_empty() && texts.is_empty())) {
             return Err(block_error(TransformBlock::NothingToDo));
         }
@@ -1153,7 +1164,7 @@ impl Sketch {
             ..MoveReport::default()
         };
         // Anheben: die bewegten Punkte, beim Drehen auch die Punkte der ebenen Kurven (sie
-        // bekommen eine eigene Ebene). Die Punkte der Buchstaben hebt das Neusetzen an.
+        // bekommen eine eigene Ebene). Die Punkte der Buchstaben folgen unten starr.
         let mut seeds: Vec<PointId> = targets.iter().map(|t| t.0).collect();
         if rotating {
             for &c in &planar {
@@ -1168,6 +1179,14 @@ impl Sketch {
         seeds.retain(|p| !glyph_points.contains(p));
         report.removed_constraints += self.lift_for_include(&seeds, None)?;
         for &(p, to) in &targets {
+            let d = &self.points[p];
+            let (x, y, z) = (d.x, d.y, d.z.ok_or_else(far)?);
+            self.vars[x] = to.x;
+            self.vars[y] = to.y;
+            self.vars[z] = to.z;
+        }
+        for &(p, to) in &glyph_targets {
+            self.promote_to_3d(p);
             let d = &self.points[p];
             let (x, y, z) = (d.x, d.y, d.z.ok_or_else(far)?);
             self.vars[x] = to.x;
@@ -1395,7 +1414,7 @@ impl Sketch {
                         start,
                         end,
                     } => {
-                        self.add_elliptic_arc_vars(center, (ax, ay, az), minor, start, end)
+                        self.add_elliptic_arc_vars(center, (ax, ay, az), minor, start, end)?
                             .0
                     }
                     other => self.push_curve(other),

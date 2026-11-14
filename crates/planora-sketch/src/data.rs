@@ -304,6 +304,20 @@ impl Sketch {
             {
                 return Err(bad(tr!("sketch-err-data-curve-normal")));
             }
+            // Umgekehrt hat ein lebender Bogen oder Ellipsenbogen an einem 3D-Punkt eine eigene
+            // Ebene; ohne sie löste er sich vom Punkt (Gesamtprüfung I1). Kreis und Ellipse hängen
+            // nur an ihrer Mitte und liegen ohne Normale parallel zur Skizzenebene durch sie.
+            let arc = matches!(
+                c.kind,
+                CurveKind::Arc { .. } | CurveKind::EllipticArc { .. }
+            );
+            if c.alive
+                && arc
+                && c.normal.is_none()
+                && pts.iter().any(|p| d.points[p.index()].z.is_some())
+            {
+                return Err(bad(tr!("sketch-err-data-curve-normal")));
+            }
             match &c.kind {
                 CurveKind::Circle { radius, .. } if !var_ok(*radius) => {
                     return Err(bad(tr!("sketch-err-data-circle-value")));
