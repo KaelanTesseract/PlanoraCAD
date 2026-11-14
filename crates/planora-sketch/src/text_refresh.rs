@@ -133,6 +133,12 @@ impl Sketch {
     /// höchstens um [`SAME_POINT_REL`] × Höhe abweicht, bleibt, wie er ist. Ein Text in 3D mit
     /// entartetem Rahmen bleibt unverändert (die Aufrufer legen ihn dann ohnehin nicht).
     pub(crate) fn sync_text(&mut self, t: TextId, placed: &[Contour]) -> bool {
+        // Ein Text in 3D: Die Konturen sind in der Basis seiner Ebene gesetzt und werden in den
+        // Raum gelegt (Skizzen 10). Ist der Rahmen gerade entartet, bleibt alles, wie es ist.
+        let lift = self.text_lift(t);
+        if lift.is_none() && self.texts[t].normal.is_some() {
+            return false;
+        }
         let same = SAME_POINT_REL * self.texts[t].height;
         let (want_points, pieces) = layout(placed);
         let old_points = std::mem::take(&mut self.texts[t].points);
@@ -145,13 +151,6 @@ impl Sketch {
         let mut values = false;
         let mut dead_points: HashSet<PointId> = HashSet::new();
         let mut dead_curves: HashSet<CurveId> = HashSet::new();
-
-        // Ein Text in 3D: Die Konturen sind in der Basis seiner Ebene gesetzt und werden in den
-        // Raum gelegt (Skizzen 10).
-        let lift = self.text_lift(t);
-        if lift.is_none() && self.texts[t].normal.is_some() {
-            return false;
-        }
 
         let mut points: Vec<PointId> = Vec::with_capacity(want_points.len());
         for (j, &at) in want_points.iter().enumerate() {
@@ -337,5 +336,78 @@ impl Sketch {
             }
         }
         changed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::model::Sketch;
+    use crate::text::{HAlign, TextParams, TextPlacement, VAlign};
+    use crate::text_shape::{Contour, Glyph, Seg, ShapedLine, TextShape, TextStyle};
+    use planora_math::{DVec2, DVec3, Frame, Tolerance};
+    use std::sync::Arc;
+
+    /// Ein entarteter Rahmen eines Textes in 3D: `sync_text` lässt Kurven und Punkte stehen und
+    /// beim Text (Review I1, Task 13).
+    #[test]
+    fn sync_keeps_parts_of_degenerate_3d_frame() {
+        let v = DVec2::new;
+        let contours = vec![Contour {
+            start: v(0.0, 0.0),
+            segs: vec![
+                Seg::Line(v(0.6, 0.0)),
+                Seg::Line(v(0.6, 0.7)),
+                Seg::Line(v(0.0, 0.0)),
+            ],
+        }];
+        let shape = Arc::new(TextShape {
+            lines: vec![ShapedLine {
+                glyphs: vec![Glyph {
+                    origin: v(0.0, 0.0),
+                    advance: 0.8,
+                    contours: contours.clone(),
+                }],
+                width: 0.8,
+            }],
+            ascender: 0.9,
+            descender: -0.2,
+            line_height: 1.2,
+            substituted: None,
+            synthetic: false,
+            missing_chars: false,
+        });
+        let mut s = Sketch::new(Frame::WORLD, "S", Tolerance::default());
+        let params = TextParams {
+            content: "A".into(),
+            style: TextStyle {
+                font: "Test".into(),
+                bold: false,
+                italic: false,
+                spacing: 0.0,
+            },
+            height: 5.0,
+            flip_h: false,
+            flip_v: false,
+        };
+        let t = s
+            .add_text_box3(
+                [DVec3::new(10.0, 0.0, 0.0), DVec3::new(10.0, 40.0, 10.0)],
+                DVec3::X,
+                params,
+                HAlign::Left,
+                VAlign::Bottom,
+                shape,
+            )
+            .unwrap();
+        let before = s.texts[t].clone();
+        let TextPlacement::Box { corners, .. } = before.placement else {
+            panic!("kein Rahmen");
+        };
+        let c0 = s.pos3(corners[0]);
+        s.set_point_xyz(corners[1], c0).unwrap();
+        assert!(s.text_lift(t).is_none(), "Grundlinie ohne Länge");
+        assert!(!s.sync_text(t, &contours));
+        assert_eq!(s.texts[t].curves, before.curves);
+        assert_eq!(s.texts[t].points, before.points);
     }
 }

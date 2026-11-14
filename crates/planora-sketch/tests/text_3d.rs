@@ -464,3 +464,41 @@ fn text3_turns_with_its_frame_on_rotate() {
         assert!(off_plane(&s, t) <= 1e-9);
     }
 }
+
+#[test]
+fn text3_frame_has_no_redundant_rows() {
+    use planora_sketch::constraint::ConstraintKind;
+    use planora_sketch::solver::Drag;
+    // Achsenparallel (YZ, mit Achsbindung der Grundlinie: 5 Freiheitsgrade) und schräg (6).
+    for (n, dof) in [(DVec3::X, 5), (DVec3::new(1.0, 1.0, 1.0).normalize(), 6)] {
+        let mut s = sketch();
+        let t = text3(
+            &mut s,
+            DVec3::new(10.0, 0.0, 0.0),
+            DVec3::new(10.0, 40.0, 10.0),
+            n,
+            "A",
+        );
+        let r = s.solve();
+        assert_eq!(r.status, SolveStatus::Solved);
+        assert!(r.redundant.is_empty(), "{:?}", r.redundant);
+        assert_eq!(r.dof, dof, "Freiheitsgrade des Rahmens");
+        let c = corners(&s, t);
+        let target = xyz(&s, c[2]) + DVec3::new(2.0, 3.0, -4.0);
+        let r = s
+            .drag(&[Drag {
+                point: c[2],
+                target,
+                plane: None,
+            }])
+            .unwrap();
+        assert!(r.redundant.is_empty(), "nach dem Ziehen: {:?}", r.redundant);
+        // Ein Maß des Benutzers an der Grundlinie ist nicht überzählig.
+        let len = (xyz(&s, c[1]) - xyz(&s, c[0])).length();
+        s.add_constraint(ConstraintKind::Distance(c[0], c[1], len))
+            .unwrap();
+        let r = s.solve();
+        assert!(r.redundant.is_empty(), "Maß: {:?}", r.redundant);
+        assert_eq!(r.dof, dof - 1);
+    }
+}
