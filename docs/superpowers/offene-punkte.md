@@ -2894,7 +2894,7 @@ Stand 2026-11-14 auf dem Zweig `feature/skizzen-3d` (Spec `specs/2026-11-13-skiz
 - **3D-Rechteck** besteht aus freien Linien ohne Ebenenbindung und kann beim Ziehen kippen.
 - **Bogen „Mittelpunkt“ in 3D** folgt der Zugrichtung wie in Fusion.
 - **Ziehen eines 2D-Punkts** bleibt immer in der Skizzenebene, auch wenn eine Zugebene mitkommt.
-- **Tasten der Triade:** Alt (allein), Tab und Pfeil hoch sind belegbar. „Modifier allein“ (etwa nur Alt) lässt sich nur für die Triadenaktionen erfassen, andere Aktionen lehnen das ab. Tab wird nur in einer 3D-Skizze abgefangen.
+- **Tasten der Triade:** Alt (allein), Tab und Pfeil hoch sind belegbar. „Modifier allein“ (etwa nur Alt) lässt sich nur für die Triadenaktionen erfassen, andere Aktionen lehnen das ab. Tab und Alt gehören der Triade nur, wenn sie zu sehen ist (3D-Skizze und Zeichenwerkzeug); sonst wirken sie wie in 2D und stehen nicht in „Letzte Schritte“.
 - **Konstruktionsebenen als Ziel** von „Auf Fläche projizieren“ und „Schnittkurve“ gelten als unbegrenzt.
 - **Schnittkurve:** Quelle und Ziele sind nur 2D-Skizzenkurven (Fusion: „2D sketch curves“); 3D-Kurven lehnt der Dialog ab.
 - **Annäherungstoleranz** der abgeleiteten 3D-Kurven wurde nicht gelockert; die Beschleunigung reichte.
@@ -2925,12 +2925,20 @@ Release-Build:
 - Voller Lauf unter Windows und WSL: steht noch aus.
 
 ### In den Einzelprüfungen zurückgestellt (klein)
-- **Löser und Abhängigkeiten:** Winkel-Gradient bei 0° und 180°; Zeilenwahl in `perp2` kann springen; fast parallele Normalen knapp über der Winkeltoleranz ergeben eine fast leere Tangentenzeile; Ladeprüfung erzwingt „Normale ⇒ Punkte 3D“ nicht überall; Normale (0,0,−1) an 2D-Punkten hebt den Mittelpunkt auf 3D.
-- **Zeichnen und Fang:** Achsverlängerung erscheint auch bei Punkt- und Ursprungsfang; Klick auf die Triadenachse nahe der Mitte; Fang an einem 3D-Punkt mit z ≈ 0 hebt einen Bogen an; `snap3` filtert unsichtbare Griffpunkte und Musterkopien nicht; beim 3D-Zug fehlen Anker, Rücksetzen und Griffe; Maßvorschau nur beim Abstand; Doppelklick wählt 3D nur ohne 2D-Treffer.
+- **Löser und Abhängigkeiten:** Winkel-Gradient bei 0° und 180°; Zeilenwahl in `perp2` kann springen; fast parallele Normalen knapp über der Winkeltoleranz ergeben eine fast leere Tangentenzeile; Normale (0,0,−1) an 2D-Punkten hebt den Mittelpunkt auf 3D.
+- **Zeichnen und Fang:** Achsverlängerung erscheint auch bei Punkt- und Ursprungsfang; Klick auf die Triadenachse nahe der Mitte; Fang an einem 3D-Punkt mit z ≈ 0 hebt einen Bogen an (seit der Gesamtprüfung nur noch, wenn die anderen Punkte angehoben werden dürfen); beim 3D-Zug fehlen Anker, Rücksetzen und Griffe; Maßvorschau nur beim Abstand; Doppelklick wählt 3D nur ohne 2D-Treffer.
 - **Einbeziehen:** Eckzuordnung per Heuristik; Achsen und Skizzenkurven ohne Verdeckung vor Flächen; keine Vorab-Markierung; doppeltes Einbeziehen ohne Meldung; zwei getrennte Einbeziehungen derselben Quelle werden eine Gruppe; Netz je Aufruf neu (Leistung bei großen Körpern); entfallene Abhängigkeiten beim Wiederherstellen nicht gezählt.
-- **Auf Fläche und Schnittkurve:** über 2000 Abtastpunkte möglich durch Verfeinern; Naht geschlossener Kurven ohne Prüfung; schmale Rippen können verloren gehen; viele Ausreißer machen die Rechnung wieder quadratisch; Testhilfe `slow_fit_for_tests` ist im Release mitkompiliert; Richtung aus Kante oder Fläche liest den aktuellen Körper.
+- **Auf Fläche und Schnittkurve:** über 2000 Abtastpunkte möglich durch Verfeinern; schmale Rippen können verloren gehen; viele Ausreißer machen die Rechnung wieder quadratisch; Testhilfe `slow_fit_for_tests` ist im Release mitkompiliert; Richtung aus Kante oder Fläche liest den aktuellen Körper.
 - **Verschieben aus der Ebene:** vier Skizzenkopien je Bild; eine angehobene Mustervorlage löst das Muster ohne Meldung auf; der 2D-Pfeilzug rechnet auf z = 0.
 - **Code und Tests:** `sketch_draw3.rs` und `surface_project.rs` sind groß (aufteilen); mehrere Testlücken (Kegelschnitt und feste Splines in 3D, flacher Fall −Z, zusammengesetzte Drehung, Rundlauf Text in ZX) und veraltete Doc-Kommentare.
+
+### Nach der Gesamtprüfung (Festlegungen und bewusst so gelassen)
+- **Ebene Kurve an einem vorhandenen 2D-Punkt** (Kreis, Bogen, Ellipse, Ellipsenbogen in einer eigenen Ebene, auch der 2D-Bogen an einem gefangenen 3D-Punkt): Der Punkt wird angehoben wie über „Deckungsgleich“, samt den ebenen 2D-Kurven an ihm (sie bekommen die Skizzennormale und `InPlane`). Hängen am Punkt 2D-only-Abhängigkeiten (etwa ein waagerechtes Maß), ein Muster oder Griffe, wird abgelehnt („Der Punkt kann nicht 3D werden …“), nichts entsteht. Ein Kreis in der Ebene YZ um eine waagerecht bemaßte Rechteckecke geht also nicht; das Werkzeug bleibt im Zustand vor dem Klick, der Hinweis steht am Zeiger. Beim Laden gilt umgekehrt: Ein Bogen oder Ellipsenbogen an einem 3D-Punkt hat eine Normale.
+- **Nachbar-Startwert beim Projizieren:** Auf Freiformflächen und Auszügen nimmt „Auf Fläche projizieren“ den Treffer, den Newton vom Nachbarpunkt aus findet, und sucht nicht weiter. Das Ergebnis folgt damit einem Blatt; „der nächste Treffer“ (Spec 6) gilt also nicht wörtlich, wenn ein anderes Blatt näher läge. Dialog und Neuberechnung rechnen gleich. Die Naht einer geschlossenen Quelle wird nur verbunden, wenn die Treffer dort zusammenhängen.
+- **Verlorener Bezug einer 3D-Kopie (`restore_copy`):** Die Kurve behält ihre Skizzenkoordinaten und wandert mit der Skizzenebene, wie `restore_projected_curve` bei den ebenen Arten seit Skizzen 6. Die Raumlage zu halten wäre eine zweite Regel für denselben Fall.
+- **Eingezogene Konstruktionsebene, Kante oder Fläche** steht in `dependencies()`: Löschen der Ebene löscht die Skizze, die sie einbezieht, mit (wie bei projizierten Kanten). Fusion würde warnen und die Geometrie stehen lassen; gleicher Folgepunkt wie bei Skizzen 6.
+- **Quellskizze hinter einer Rückrollstelle:** `source_sketch` prüft den Status nicht; eine zurückgerollte Quellskizze würde mit ihrem alten Stand gelesen. Ob das vorkommen kann, hängt an der Rückroll-Logik (Bestand); nicht verfolgt.
+- **Projektion mit Kanten und Ecken als Quelle** rechnet beim Neuberechnen einmal (eine Gruppe); nur eine Skizzenkurve als Herkunft trennt nach Projizieren und Schneiden.
 
 ### Handliste für den Nutzer (Prüfung von Hand im echten Fenster, noch offen)
 Release-Build, Fenster 1920 × 1080, mit `tools/gui-drive.ps1`, APPDATA und USERPROFILE auf einen Testordner umgeleitet. Nur nach Dennis’ Go. Etappe 2 und 3 sind zum größten Teil geprüft (siehe Ledger); offen:
