@@ -94,6 +94,8 @@ end;
 
 var
   CurrentStep: String;
+  LastPercent: Integer;
+  LastStep: String;
 
 // Schreibt die Fortschrittsdatei (nur wenn /PROGRESSFILE=<Pfad> uebergeben wurde).
 // Die Datei wird jedes Mal ganz neu geschrieben: Zeile 1 percent, Zeile 2 step.
@@ -101,10 +103,14 @@ procedure WriteProgress(Percent: Integer; Step: String);
 var
   Path: String;
 begin
-  Path := ExpandConstant('{param:PROGRESSFILE|}');
-  if Path = '' then Exit;
   if Percent < 0 then Percent := 0;
   if Percent > 100 then Percent := 100;
+  // Nur schreiben, wenn sich Prozent oder Schritt geaendert haben (weniger Dateizugriffe).
+  if (Percent = LastPercent) and (Step = LastStep) then Exit;
+  Path := ExpandConstant('{param:PROGRESSFILE|}');
+  if Path = '' then Exit;
+  LastPercent := Percent;
+  LastStep := Step;
   SaveStringToFile(Path, 'percent=' + IntToStr(Percent) + #13#10 + 'step=' + Step, False);
 end;
 
@@ -113,7 +119,9 @@ var
   Percent: Integer;
 begin
   if MaxProgress > 0 then
-    Percent := CurProgress * 100 div MaxProgress
+    // Gleitkomma statt Integer-Multiplikation: CurProgress ist bei grossen Setups in Bytes,
+    // CurProgress * 100 wuerde den 32-Bit-Integer ueberlaufen lassen.
+    Percent := Trunc(CurProgress * 100.0 / MaxProgress)
   else
     Percent := 0;
   WriteProgress(Percent, CurrentStep);
@@ -142,6 +150,8 @@ end;
 
 procedure InitializeWizard;
 begin
+  LastPercent := -1;
+  LastStep := '';
   CurrentStep := 'prepare';
   WriteProgress(0, CurrentStep);
 end;

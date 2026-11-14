@@ -74,6 +74,13 @@ fn progress_file_is_written_only_with_param() {
             code[i]
         );
     }
+    // Kein Integer-Multiplizieren vor dem Teilen (Ueberlauf bei Byte-Fortschritt).
+    let compact: String = joined.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        !compact.contains("CurProgress * 100 div"),
+        "Prozent darf nicht mit Integer-Multiplikation vor div berechnet werden"
+    );
+    assert!(joined.contains("Trunc(CurProgress * 100.0 / MaxProgress)"));
     assert!(joined.contains("percent="));
     assert!(joined.contains("step="));
     for step in ["prepare", "install", "postinstall", "done"] {
