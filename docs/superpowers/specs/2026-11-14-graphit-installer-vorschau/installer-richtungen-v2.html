@@ -1,0 +1,165 @@
+<style>
+@font-face{font-family:Mont;src:url('Montserrat-Regular.ttf');font-weight:400}
+@font-face{font-family:Mont;src:url('Montserrat-Medium.ttf');font-weight:500}
+@font-face{font-family:Mont;src:url('Montserrat-SemiBold.ttf');font-weight:600}
+.gx{--vp:#0e0e0e;--panel:#181818;--sec:#1a1a1a;--field:#262626;--act:#333;--bd:#383838;--t1:#fff;--t2:#939393;--t3:#7d7d7d;--acc:#006dfd;--accs:#172231;
+  font-family:Mont,sans-serif;color:var(--t1);}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin:6px 0 4px}
+.cap{font-size:13px;color:#888;margin:6px 0 0}
+.win{position:relative;aspect-ratio:10/7;background:var(--vp);border-radius:8px;overflow:hidden;border:1px solid #2a2a2a;box-shadow:0 8px 30px rgba(0,0,0,.35)}
+.tb{position:absolute;left:0;right:0;top:0;height:26px;display:flex;align-items:center;gap:7px;padding:0 10px;font-size:11px;color:#ddd;background:#0b0b0b;z-index:5}
+.tb img{width:13px}
+.tb .x{margin-left:auto;letter-spacing:14px;color:#aaa}
+.bgshot{position:absolute;inset:26px 0 0 0;background-size:cover;background-position:center}
+.dim{position:absolute;inset:26px 0 0 0;background:linear-gradient(180deg,rgba(14,14,14,.55),rgba(14,14,14,.85))}
+.pn{position:absolute;background:var(--panel);border:1px solid var(--bd);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.5)}
+.h1{font-size:19px;font-weight:600;margin:0 0 6px}
+.p{font-size:11.5px;line-height:1.55;color:var(--t2);margin:0}
+.btns{display:flex;gap:8px;justify-content:flex-end}
+.b{font-size:11px;font-weight:500;padding:6px 14px;border-radius:6px;background:var(--field);color:var(--t1);border:1px solid var(--bd)}
+.b.pr{background:var(--acc);border-color:var(--acc)}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{font-size:10px;padding:3px 9px;border-radius:12px;background:var(--sec);color:var(--t3);border:1px solid var(--bd)}
+.chip.on{background:var(--accs);color:#7fb2ff;border-color:#24426b}
+.chip.ok{color:#6ecd62}
+.bar{height:5px;border-radius:3px;background:var(--field);overflow:hidden}
+.bar i{display:block;height:100%;width:62%;background:var(--acc)}
+.small{font-size:10px;color:var(--t3)}
+.logo{height:26px}
+.tag{position:absolute;font-size:10.5px;padding:4px 10px;border-radius:12px;background:rgba(24,24,24,.9);border:1px solid var(--bd);color:#ddd}
+.dots{display:flex;gap:5px}.dots i{width:6px;height:6px;border-radius:3px;background:#444}.dots i.on{background:var(--acc)}
+.tree{font-size:11px;line-height:2.1}
+.tree div{padding:0 8px;border-radius:5px;color:var(--t2);display:flex;gap:8px;align-items:center}
+.tree div.on{background:var(--act);color:var(--t1)}
+.tree div.done{color:#6ecd62}
+.tree b{font-weight:400;width:12px;text-align:center}
+.shot{border-radius:7px;overflow:hidden;border:1px solid var(--bd);background-size:cover;background-position:center}
+.brand{display:inline-flex;align-items:center;gap:8px;font-size:15px;font-weight:600;align-self:flex-start}.brand img{height:26px}
+</style>
+
+<h2>Drei Richtungen für den Installer im Graphit-Stil</h2>
+<p class="subtitle">Je zwei Seiten: links „Willkommen“, rechts „Wird installiert“ mit Screenshots als Vorschau. Klicke die Richtung an, die dir am besten gefällt, und schreib im Chat, was dich stört.</p>
+
+<div class="options gx" style="display:block">
+
+<!-- ================= A ================= -->
+<div class="option" data-choice="a" onclick="toggleSelect(this)" style="display:block">
+ <div class="letter">A</div>
+ <div class="content">
+  <h3>Schwebende Karte über der App</h3>
+  <p>Ein echter Screenshot füllt das Fenster, abgedunkelt. Darüber schwebt eine Karte wie die Felder in PlanoraCAD. Beim Installieren wechselt der Screenshot im Hintergrund alle paar Sekunden.</p>
+  <div class="row">
+   <div class="win">
+    <div class="tb"><img src="planoracad-icon.svg">PlanoraCAD installieren<span class="x">–▢✕</span></div>
+    <div class="bgshot" style="background-image:url('startseite-uebersicht.webp')"></div><div class="dim"></div>
+    <div class="pn" style="left:22%;right:22%;top:16%;padding:20px 22px">
+      <span class="brand" style=""><img src="planoracad-icon.svg">PlanoraCAD</span>
+      <div style="height:12px"></div>
+      <div class="h1">Willkommen</div>
+      <p class="p">Dieses Programm installiert PlanoraCAD 0.0.3 auf deinem Computer. Schließe vorher andere Programme.</p>
+      <div style="height:16px"></div>
+      <div class="btns"><span class="b">Abbrechen</span><span class="b pr">Weiter</span></div>
+    </div>
+    <div class="chips" style="position:absolute;left:0;right:0;bottom:14px;justify-content:center"><span class="chip on">Willkommen</span><span class="chip">Lizenz</span><span class="chip">Ordner</span><span class="chip">Installieren</span><span class="chip">Fertig</span></div>
+   </div>
+   <div class="win">
+    <div class="tb"><img src="planoracad-icon.svg">PlanoraCAD installieren<span class="x">–▢✕</span></div>
+    <div class="bgshot" style="background-image:url('zeichnung-uebersicht.webp')"></div>
+    <div class="tag" style="left:16px;top:42px">Aus dem Modell wird mit einem Klick eine Zeichnung</div>
+    <div class="pn" style="left:20%;right:20%;bottom:44px;padding:14px 18px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-size:12px;font-weight:600">Wird installiert …</span><span class="small">62 %</span></div>
+      <div class="bar"><i></i></div>
+      <div style="display:flex;justify-content:space-between;margin-top:8px"><span class="small">Kopiere PlanoraCAD.exe</span><span class="dots"><i></i><i class="on"></i><i></i><i></i></span></div>
+    </div>
+    <div class="chips" style="position:absolute;left:0;right:0;bottom:14px;justify-content:center"><span class="chip ok">✓ Willkommen</span><span class="chip ok">✓ Lizenz</span><span class="chip ok">✓ Ordner</span><span class="chip on">Installieren</span><span class="chip">Fertig</span></div>
+   </div>
+  </div>
+ </div>
+</div>
+
+<!-- ================= B ================= -->
+<div class="option" data-choice="b" onclick="toggleSelect(this)" style="display:block">
+ <div class="letter">B</div>
+ <div class="content">
+  <h3>Zweigeteilt: Bild links, Inhalt rechts</h3>
+  <p>Links eine große Vorschau aus PlanoraCAD mit kurzer Bildunterschrift, rechts ein ruhiges Feld mit den Schritten. Klassischer Aufbau, aber ganz in Graphit.</p>
+  <div class="row">
+   <div class="win">
+    <div class="tb"><img src="planoracad-icon.svg">PlanoraCAD installieren<span class="x">–▢✕</span></div>
+    <div class="shot" style="position:absolute;left:12px;top:38px;bottom:12px;width:54%;background-image:url('startseite-uebersicht.webp')"></div>
+    <div class="tag" style="left:22px;bottom:22px">Modelle bauen, Schritt für Schritt</div>
+    <div class="pn" style="right:12px;top:38px;bottom:12px;width:calc(46% - 36px);padding:18px;display:flex;flex-direction:column">
+      <span class="brand" style="height:22px;align-self:flex-start"><img src="planoracad-icon.svg">PlanoraCAD</span>
+      <div style="height:14px"></div>
+      <div class="h1" style="font-size:17px">Willkommen</div>
+      <p class="p">Dieses Programm installiert PlanoraCAD 0.0.3 auf deinem Computer.</p>
+      <div style="flex:1"></div>
+      <div class="chips" style="margin-bottom:12px"><span class="chip on">1 Willkommen</span><span class="chip">2 Lizenz</span><span class="chip">3 Ordner</span></div>
+      <div class="btns"><span class="b">Abbrechen</span><span class="b pr">Weiter</span></div>
+    </div>
+   </div>
+   <div class="win">
+    <div class="tb"><img src="planoracad-icon.svg">PlanoraCAD installieren<span class="x">–▢✕</span></div>
+    <div class="shot" style="position:absolute;left:12px;top:38px;bottom:12px;width:54%;background-image:url('skizze-zeichnen.webp')"></div>
+    <div class="tag" style="left:22px;bottom:22px">Skizzen zeichnen und hochziehen</div>
+    <div class="dots" style="position:absolute;left:calc(27% - 10px);bottom:50px"><i></i><i class="on"></i><i></i><i></i></div>
+    <div class="pn" style="right:12px;top:38px;bottom:12px;width:calc(46% - 36px);padding:18px;display:flex;flex-direction:column">
+      <div class="h1" style="font-size:17px">Wird installiert …</div>
+      <p class="p">Das dauert meist unter einer Minute.</p>
+      <div style="flex:1"></div>
+      <div class="bar"><i></i></div>
+      <div class="small" style="margin-top:8px">Kopiere PlanoraCAD.exe · 62 %</div>
+      <div style="height:14px"></div>
+      <div class="btns"><span class="b">Abbrechen</span></div>
+    </div>
+   </div>
+  </div>
+ </div>
+</div>
+
+<!-- ================= C ================= -->
+<div class="option" data-choice="c" onclick="toggleSelect(this)" style="display:block">
+ <div class="letter">C</div>
+ <div class="content">
+  <h3>Schrittleiste wie der Feature-Baum</h3>
+  <p>Links ein schmales Feld mit allen Schritten, aufgebaut wie der Feature-Baum in PlanoraCAD. Rechts der Inhalt. Beim Installieren zeigt eine Reihe aus drei Karten, was das Programm kann.</p>
+  <div class="row">
+   <div class="win">
+    <div class="tb"><img src="planoracad-icon.svg">PlanoraCAD installieren<span class="x">–▢✕</span></div>
+    <div class="pn" style="left:12px;top:38px;bottom:12px;width:26%;padding:14px 10px">
+      <div style="font-size:11.5px;font-weight:600;padding:0 8px 8px">Installation</div>
+      <div class="tree"><div class="on"><b>●</b>Willkommen</div><div><b>○</b>Lizenz</div><div><b>○</b>Ordner</div><div><b>○</b>Installieren</div><div><b>○</b>Fertig</div></div>
+    </div>
+    <div class="pn" style="left:calc(26% + 24px);right:12px;top:38px;bottom:12px;padding:20px 22px;display:flex;flex-direction:column">
+      <span class="brand" style="align-self:flex-start"><img src="planoracad-icon.svg">PlanoraCAD</span>
+      <div style="height:12px"></div>
+      <div class="h1">Willkommen</div>
+      <p class="p">Dieses Programm installiert PlanoraCAD 0.0.3 auf deinem Computer.</p>
+      <div class="shot" style="flex:1;margin:14px 0;background-image:url('startseite-uebersicht.webp')"></div>
+      <div class="btns"><span class="b">Abbrechen</span><span class="b pr">Weiter</span></div>
+    </div>
+   </div>
+   <div class="win">
+    <div class="tb"><img src="planoracad-icon.svg">PlanoraCAD installieren<span class="x">–▢✕</span></div>
+    <div class="pn" style="left:12px;top:38px;bottom:12px;width:26%;padding:14px 10px">
+      <div style="font-size:11.5px;font-weight:600;padding:0 8px 8px">Installation</div>
+      <div class="tree"><div class="done"><b>✓</b>Willkommen</div><div class="done"><b>✓</b>Lizenz</div><div class="done"><b>✓</b>Ordner</div><div class="on"><b>●</b>Installieren</div><div><b>○</b>Fertig</div></div>
+    </div>
+    <div class="pn" style="left:calc(26% + 24px);right:12px;top:38px;bottom:12px;padding:20px 22px;display:flex;flex-direction:column">
+      <div class="h1">Wird installiert …</div>
+      <div class="bar" style="margin:6px 0 6px"><i></i></div>
+      <div class="small">Kopiere PlanoraCAD.exe · 62 %</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin:16px 0 0;flex:1">
+        <div style="display:flex;flex-direction:column;gap:5px"><div class="shot" style="flex:1;background-image:url('skizze-zeichnen.webp')"></div><span class="small">Skizzen zeichnen</span></div>
+        <div style="display:flex;flex-direction:column;gap:5px"><div class="shot" style="flex:1;background-image:url('zeichnung-uebersicht.webp')"></div><span class="small">Zeichnungen ableiten</span></div>
+        <div style="display:flex;flex-direction:column;gap:5px"><div class="shot" style="flex:1;background-image:url('schnittansicht.webp')"></div><span class="small">Schnitte zeigen</span></div>
+      </div>
+      <div style="height:12px"></div>
+      <div class="btns"><span class="b">Abbrechen</span></div>
+    </div>
+   </div>
+  </div>
+ </div>
+</div>
+
+</div>
