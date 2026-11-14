@@ -405,7 +405,7 @@ fn dimension_tool_on_3d_line_gives_distance() {
         se.apply_planned_value(sf, kind, 50.0).unwrap();
     }
     v.frame(vec![]);
-    assert!((v.xyz(b) - v.xyz(a)).length() - 50.0 < 1e-6);
+    assert!(((v.xyz(b) - v.xyz(a)).length() - 50.0).abs() < 1e-6);
     assert!(has(v.sk(), |k| matches!(k, ConstraintKind::Distance(..))));
     // Das Maß steht im Raum an der Linie: Sein Text liegt nahe am Bild der Linienmitte.
     let m = v.at3((v.xyz(a) + v.xyz(b)) * 0.5);
@@ -648,6 +648,141 @@ fn text_3d_corner_snaps_bind_and_glyph_points_are_not_picked() {
             "Buchstabenpunkt getroffen: {hit:?}"
         );
     }
+}
+
+/// Review I1: Im Zeichenweg in der Ebene (Triade auf der Skizzenebene) fängt ein hoher 3D-Punkt
+/// nicht an seiner Lage in der Draufsicht, wo auf dem Bildschirm nichts ist. Die Linie bleibt 2D,
+/// das Profil bleibt. Sein sichtbares Bild fängt dagegen.
+#[test]
+fn flat_drawing_ignores_the_top_view_of_3d_points() {
+    let mut v = View::new(Tool::Line);
+    assert!(!v.se().draws_in_3d(v.sk()), "Zeichnen in der Ebene");
+    let high = DVec3::new(30.0, 30.0, 80.0);
+    let h = v.point3(high);
+    let below = DVec3::new(30.0, 30.0, 0.0);
+    assert!(
+        v.at3(below).distance(v.at3(high)) > 100.0,
+        "auf dem Bildschirm weit weg"
+    );
+    v.hover(v.at3(below));
+    let cur = v.se().draw_cursor.clone().expect("Zeiger");
+    assert_ne!(cur.snap, Snap::Point(h), "kein Fang in der Draufsicht");
+    for p in [
+        below,
+        DVec3::new(70.0, 30.0, 0.0),
+        DVec3::new(50.0, 60.0, 0.0),
+        below,
+    ] {
+        v.click3(p);
+    }
+    let sk = v.sk();
+    let lines: Vec<(PointId, PointId)> = sk
+        .curves()
+        .filter_map(|(_, d)| match d.kind {
+            CurveKind::Line { a, b } => Some((a, b)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert!(
+        lines
+            .iter()
+            .all(|&(a, b)| !sk.is_3d_point(a) && !sk.is_3d_point(b) && a != h && b != h),
+        "die Linien bleiben 2D"
+    );
+    assert_eq!(sk.profiles().profiles.len(), 1, "das Profil bleibt");
+
+    // Das sichtbare Bild des 3D-Punkts fängt.
+    let at = v.at3(high);
+    v.hover(at);
+    let cur = v.se().draw_cursor.clone().expect("Zeiger");
+    assert_eq!(cur.snap, Snap::Point(h), "Fang am sichtbaren 3D-Punkt");
+}
+
+/// Review M1: Trifft der Sehstrahl die Skizzenebene nicht, wählt der Klick die 3D-Geometrie allein,
+/// ohne eine Lage (0, 0) anzunehmen; ein 2D-Punkt im Ursprung schlägt sie nicht.
+#[test]
+fn a_click_off_the_sketch_plane_picks_only_3d_geometry() {
+    let mut v = View::new(Tool::Dimension);
+    {
+        let (_, sk) = v.se_sk();
+        sk.add_point(0.0, 0.0).unwrap();
+    }
+    let (a3, b3) = (DVec3::new(-20.0, 0.0, 70.0), DVec3::new(20.0, 0.0, 90.0));
+    let (l, ..) = v.line3(a3, b3);
+    // Waagerechter Blick entlang +Y von unterhalb der Linie: Über dem Horizont trifft kein
+    // Sehstrahl die Ebene z = 0.
+    let mut cam = OrbitCamera {
+        target: Vec3::new(0.0, 0.0, 50.0),
+        distance: 200.0,
+        ..Default::default()
+    };
+    cam.look_along(Vec3::Y, Vec3::Z);
+    cam.set_viewport(W, H);
+    v.s.camera = cam;
+    v.frame(vec![]);
+    let mid = v.at3((a3 + b3) * 0.5);
+    let map = v.map();
+    assert!(
+        sketch_view::screen_to_sketch(&map.camera, &map.frame, egui_vec(SIZE), glam_vec(mid))
+            .is_none(),
+        "die Linie liegt über dem Horizont"
+    );
+    v.click(mid);
+    assert_eq!(v.se().dim.picks.len(), 1, "{:?}", v.se().dim.picks);
+    assert!(
+        matches!(v.se().dim.picks[0], DimPick::Curve(c, _) if c == l),
+        "die 3D-Linie, nicht der Punkt im Ursprung: {:?}",
+        v.se().dim.picks
+    );
+    // Ein zweiter Klick über dem Horizont neben der Linie setzt das Maß im Raum.
+    v.click(mid + vec2(0.0, -80.0));
+    let plan = v.se().dim.plan.clone();
+    assert!(
+        plan.is_none(),
+        "ohne Treffer setzt der Klick ohne Ebene nichts: {plan:?}"
+    );
+    // Auf der Ebene (unter dem Horizont) setzt er es.
+    v.click(pos2(W / 2.0, H - 40.0));
+    let plan = v.se().dim.plan.clone().expect("gesetztes Maß");
+    assert!(
+        matches!(plan.kind, ConstraintKind::Distance(..)),
+        "{plan:?}"
+    );
+
+    // Abhängigkeitsbefehl ebenso: H an der Linie über dem Horizont.
+    let mut v2 = View::new(Tool::Select);
+    {
+        let (_, sk) = v2.se_sk();
+        sk.add_point(0.0, 0.0).unwrap();
+    }
+    let (l2, ..) = v2.line3(a3, b3);
+    v2.s.camera = cam;
+    {
+        let (se, sk) = v2.se_sk();
+        se.constraint_button(sk, ConstraintAction::Horizontal)
+            .unwrap();
+    }
+    v2.frame(vec![]);
+    let mid = v2.at3((a3 + b3) * 0.5);
+    v2.click(mid);
+    assert!(
+        has(v2.sk(), |k| *k
+            == ConstraintKind::Horizontal(LineOrPoints::Line(l2))),
+        "{:?}",
+        v2.sk()
+            .constraints()
+            .map(|(_, c)| c.kind.clone())
+            .collect::<Vec<_>>()
+    );
+}
+
+fn egui_vec(v: egui::Vec2) -> glam::Vec2 {
+    glam::Vec2::new(v.x, v.y)
+}
+
+fn glam_vec(p: Pos2) -> glam::Vec2 {
+    glam::Vec2::new(p.x, p.y)
 }
 
 // ---- Zeichen im Raum ---------------------------------------------------------------------------

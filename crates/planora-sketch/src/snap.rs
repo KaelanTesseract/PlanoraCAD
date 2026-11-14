@@ -145,8 +145,10 @@ impl SnapIndex {
                     other_role.insert(end.index());
                 }
             }
-            // Griff-Kurven sind keine Fangziele, nur ihre Punkte, wenn sie sichtbar sind.
-            if handle_curves.contains(&id) {
+            // Griff-Kurven sind keine Fangziele, nur ihre Punkte, wenn sie sichtbar sind. 3D-Kurven
+            // (Skizzen 10) stehen nicht in der Draufsicht: Sie fängt die Ansicht über den
+            // Bildschirmabstand, hier weder als Kurve noch mit Mitte oder Schnitt.
+            if handle_curves.contains(&id) || sk.is_3d_curve(id) {
                 continue;
             }
             let Some(geom) = sk.geom(id) else { continue };
@@ -176,7 +178,9 @@ impl SnapIndex {
         let mut origin_free = true;
         for (id, _) in sk.points() {
             let p = sk.pos(id);
-            if !p.is_finite() || glyph_points.contains(&id) {
+            // 3D-Punkte (Skizzen 10) ebenso nur über den Bildschirmabstand; sie belegen auch den
+            // Ursprung der Draufsicht nicht.
+            if !p.is_finite() || glyph_points.contains(&id) || sk.is_3d_point(id) {
                 continue;
             }
             // Ein Griffpunkt, der gerade nicht fängt, belegt auch den Ursprung nicht.
@@ -191,10 +195,9 @@ impl SnapIndex {
             points.push((snap, p));
         }
         // Schnitte ohne Buchstaben: Das spart bei großen Texten auch die Rechnung über alle Paare.
-        // Ohne 3D-Kurven (Skizzen 10): Ihr Schnitt in der Draufsicht ist im Raum keiner.
         let crossing: Vec<&IndexedCurve> = curves
             .iter()
-            .filter(|c| !glyph_curves.contains(&c.id) && !sk.is_3d_curve(c.id))
+            .filter(|c| !glyph_curves.contains(&c.id))
             .collect();
         let prepared: Vec<Prepared> = crossing.iter().map(|c| Prepared::new(&c.geom)).collect();
         let mut crossings = Vec::new();

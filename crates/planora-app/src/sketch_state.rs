@@ -1142,6 +1142,27 @@ impl SketchSession {
         result
     }
 
+    /// Klick, bei dem der Sehstrahl die Skizzenebene nicht trifft (Skizzen 10): In der Bemaßung
+    /// und im Abhängigkeitsbefehl wählt er die 3D-Geometrie unter dem Zeiger (`pick3`) allein, ohne
+    /// eine Lage in der Ebene anzunehmen. Sonst und ohne 3D-Treffer tut er nichts. Atomar wie
+    /// [`click`](Self::click).
+    pub fn click_off_plane(&mut self, sk: &mut Sketch) -> Result<(), String> {
+        if self.pick3.is_none() {
+            return Ok(());
+        }
+        self.created = None;
+        match self.tool {
+            Tool::Dimension => self.atomic(sk, |se, sk, _| {
+                se.click_dimension_at(sk, None, 0.0);
+                Ok(())
+            }),
+            Tool::Constraint(action) => {
+                self.atomic(sk, |se, sk, _| se.click_constraint(sk, action, None, 0.0))
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// Der Klick mit dem aktiven Werkzeug selbst ([`click`](Self::click)).
     fn click_tool(
         &mut self,
@@ -1186,7 +1207,7 @@ impl SketchSession {
                     se.click_pattern(sk, cur);
                     Ok(())
                 }
-                Tool::Constraint(action) => se.click_constraint(sk, action, at, radius),
+                Tool::Constraint(action) => se.click_constraint(sk, action, Some(at), radius),
                 Tool::InsertControlPoint => se.click_insert_control_point(sk, at, radius, prior),
                 Tool::Text => se.click_text(sk, cur, at, radius),
             }
@@ -2376,20 +2397,23 @@ impl SketchSession {
     /// Was ein Klick im Abhängigkeitsbefehl an der Stelle `at` wählen würde: `Ok(None)`, wenn dort
     /// nichts liegt; `Err` mit der Meldung, wenn dort nichts passt. Punkt vor Kurve; passt der
     /// Punkt nicht, aber die Kurve, die Kurve. Ein schon gewählter Bezug zählt (er wird abgewählt).
+    /// Ohne Lage in der Ebene (`None`) zählt nur die 3D-Geometrie unter dem Zeiger (`pick3`).
     fn constraint_target(
         &self,
         sk: &Sketch,
         action: ConstraintAction,
-        at: DVec2,
+        at: Option<DVec2>,
         radius: f64,
     ) -> Result<Option<Item>, Msg> {
         let selection = geometry_of(sk, &self.selection);
         // 3D-Geometrie unter dem Zeiger (Bildschirmabstand, von der Ansicht gesetzt) nach den
         // 2D-Punkten und vor den 2D-Kurven, wie beim Wählen.
         let candidates: Vec<Item> = [
-            self.shown_point(sk, at, radius).map(Item::Point),
+            at.and_then(|a| self.shown_point(sk, a, radius))
+                .map(Item::Point),
             self.pick3.filter(|&i| geometry_of(sk, &[i]).len() == 1),
-            self.shown_curve(sk, at, radius).map(Item::Curve),
+            at.and_then(|a| self.shown_curve(sk, a, radius))
+                .map(Item::Curve),
         ]
         .into_iter()
         .flatten()
@@ -2433,7 +2457,7 @@ impl SketchSession {
         let Tool::Constraint(action) = self.tool else {
             return None;
         };
-        self.constraint_target(sk, action, at, radius)
+        self.constraint_target(sk, action, Some(at), radius)
             .ok()
             .flatten()
     }
@@ -2446,7 +2470,7 @@ impl SketchSession {
         let Tool::Constraint(action) = self.tool else {
             return false;
         };
-        match self.constraint_target(sk, action, at, radius) {
+        match self.constraint_target(sk, action, Some(at), radius) {
             Ok(Some(item)) => self.constraint_last != Some(item),
             Ok(None) => false,
             Err(_) => true,
@@ -2464,7 +2488,7 @@ impl SketchSession {
         &mut self,
         sk: &mut Sketch,
         action: ConstraintAction,
-        at: DVec2,
+        at: Option<DVec2>,
         radius: f64,
     ) -> Result<(), Msg> {
         self.forget_stale_picks();
@@ -2484,8 +2508,8 @@ impl SketchSession {
             return Ok(());
         }
         self.selection.push(item);
-        match item {
-            Item::Curve(c) => self.note_curve_pick(c, at),
+        match (item, at) {
+            (Item::Curve(c), Some(at)) => self.note_curve_pick(c, at),
             _ => self.sync_picks(),
         }
         if constraint_fit(sk, action, &self.selection) == Fit::Complete {

@@ -75,19 +75,32 @@ impl SketchSession {
     /// (`commit_input`) hat [`accept_planned`](Self::accept_planned) ein gesetztes Maß schon
     /// angelegt; ist hier noch eins gesetzt, verwirft der Klick es und beginnt neu.
     pub fn click_dimension(&mut self, sk: &Sketch, at: DVec2, radius: f64) {
-        if self.tool != Tool::Dimension || !at.is_finite() {
+        if at.is_finite() {
+            self.click_dimension_at(sk, Some(at), radius);
+        }
+    }
+
+    /// Wie [`click_dimension`](Self::click_dimension); ohne Lage in der Ebene (`at: None`, der
+    /// Sehstrahl trifft die Skizzenebene nicht) zählt nur die 3D-Geometrie unter dem Zeiger
+    /// (`pick3`), und gesetzt wird nur ein Maß an 3D-Geometrie: Dessen Art hängt nicht von der
+    /// Zeigerlage ab (waagerecht/senkrecht gibt es dort nicht, Skizzen 10).
+    pub(crate) fn click_dimension_at(&mut self, sk: &Sketch, at: Option<DVec2>, radius: f64) {
+        if self.tool != Tool::Dimension {
             return;
         }
         if self.dim.plan.take().is_some() {
             self.dim = Default::default();
         }
+        // Die Klickstelle einer Kurve nutzt die Regel nicht; ohne Ebene steht dort der Ursprung.
+        let spot = at.unwrap_or(DVec2::ZERO);
+        let flat = at.map_or(Snap::None, |a| self.snap(sk, a, radius));
         // 3D-Geometrie unter dem Zeiger (Bildschirmabstand, von der Ansicht gesetzt) nach den
         // 2D-Punkten und vor den 2D-Kurven (Skizzen 10).
-        let pick = match (self.snap(sk, at, radius), self.pick3) {
+        let pick = match (flat, self.pick3) {
             (Snap::Point(p), _) => Some(DimPick::Point(p)),
             (_, Some(Item::Point(p))) => Some(DimPick::Point(p)),
-            (_, Some(Item::Curve(c))) => Some(DimPick::Curve(c, at)),
-            (Snap::Curve(c), _) => Some(DimPick::Curve(c, at)),
+            (_, Some(Item::Curve(c))) => Some(DimPick::Curve(c, spot)),
+            (Snap::Curve(c), _) => Some(DimPick::Curve(c, spot)),
             _ => None,
         };
         let again = pick.is_some_and(|p| self.dim.picks.iter().any(|q| same_object(q, &p)));
@@ -97,7 +110,17 @@ impl SketchSession {
             _ => true,
         };
         if place {
-            let blocked = sk.dimension_axis_blocked(&self.dim.picks, at);
+            let spatial = self.dim.picks.iter().any(|p| match *p {
+                DimPick::Point(q) => sk.is_3d_point(q),
+                DimPick::Curve(c, _) => sk.is_3d_curve(c),
+            });
+            // Ohne Lage in der Ebene nur an 3D-Geometrie (dort ist die Lage ohne Bedeutung, und es
+            // gibt keinen Hinweis auf die Zeigerregel).
+            let given = at.is_some();
+            let Some(at) = at.or(spatial.then_some(spot)) else {
+                return;
+            };
+            let blocked = given && sk.dimension_axis_blocked(&self.dim.picks, at);
             match self.planned_at(sk, at) {
                 Some(plan) => {
                     if self.message == Some(crate::msg!("sketch-dimension-none"))
@@ -123,7 +146,7 @@ impl SketchSession {
         };
         self.dim.picks.push(pick);
         // Passt das zweite Objekt zu keinem Maß, zählt es nicht.
-        if self.dim.picks.len() == 2 && sk.dimension_plan(&self.dim.picks, at).is_none() {
+        if self.dim.picks.len() == 2 && sk.dimension_plan(&self.dim.picks, spot).is_none() {
             self.dim.picks.pop();
             self.message = Some(crate::msg!("sketch-dimension-none"));
         } else if self.message == Some(crate::msg!("sketch-dimension-none")) {

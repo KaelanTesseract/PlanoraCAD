@@ -1839,14 +1839,18 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     // Zeichnen in 3D (Skizzen 10): Der Klick setzt dort, wo der Zeiger jetzt steht.
     se.update_cursor3(&sf.sketch, &map, pointer);
     let draws3 = se.draw3;
-    // 3D-Geometrie unter dem Zeiger für Bemaßung und Abhängigkeitsbefehl (Skizzen 10): nur, wo
-    // kein 2D-Punkt fängt, Punkte vor Kurven.
-    se.pick3 = if matches!(se.tool, Tool::Dimension | Tool::Constraint(_)) {
+    // 3D-Geometrie unter dem Zeiger über den Bildschirmabstand (Skizzen 10), nur wo kein
+    // 2D-Punkt fängt: für Bemaßung und Abhängigkeitsbefehl Punkte vor Kurven, für das Zeichnen in
+    // der Ebene nur Punkte (der Fang-Index kennt keine 3D-Geometrie).
+    let picks_3d = matches!(se.tool, Tool::Dimension | Tool::Constraint(_));
+    let draws_flat = se.is_drawing_tool() && !draws3;
+    se.pick3 = if picks_3d || draws_flat {
         let flat_point =
             at.is_some_and(|a| matches!(se.snap(&sf.sketch, a, radius), Snap::Point(_)));
         pointer
             .filter(|_| !flat_point)
             .and_then(|p| pick_3d(se, &sf.sketch, &map, p))
+            .filter(|&i| picks_3d || matches!(i, Item::Point(_)))
     } else {
         None
     };
@@ -2108,9 +2112,16 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         };
     } else if response.clicked_by(PointerButton::Primary)
         && !click_on_grip
-        // Trifft der Sehstrahl die Skizzenebene nicht, wählt der Klick 3D-Geometrie allein über
-        // den Bildschirmabstand (`pick3`, nur Bemaßung und Abhängigkeitsbefehl).
-        && let Some(at) = at.or(se.pick3.map(|_| DVec2::ZERO))
+        && at.is_none()
+        && picks_3d
+        && se.pick3.is_some()
+    {
+        // Der Sehstrahl trifft die Skizzenebene nicht: Der Klick wählt 3D-Geometrie allein über
+        // den Bildschirmabstand, ohne eine Lage in der Ebene anzunehmen.
+        let _ = se.click_off_plane(&mut sf.sketch);
+    } else if response.clicked_by(PointerButton::Primary)
+        && !click_on_grip
+        && let Some(at) = at
     {
         if se.tool == Tool::ProjectEdge {
             project_at = pointer;
@@ -2663,7 +2674,12 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
                 draw_path(&painter, path, Stroke::new(1.0, col.guide), true);
             }
         }
-        if let Some(s) = cur.snap_at.and_then(|q| map.to_screen(q)) {
+        // Ein gefangener 3D-Punkt (Skizzen 10) zeigt sein Zeichen an seiner Lage im Raum.
+        let mark_at = match cur.snap {
+            Snap::Point(p) if sk.is_3d_point(p) => pos3(sk, p).and_then(|q| map.to_screen3(q)),
+            _ => cur.snap_at.and_then(|q| map.to_screen(q)),
+        };
+        if let Some(s) = mark_at {
             paint_snap_mark(&painter, s, cur.snap, col.snap);
         }
     }
