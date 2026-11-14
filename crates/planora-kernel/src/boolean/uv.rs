@@ -312,7 +312,7 @@ fn on_face_boundary(f: &FaceGeom, p: DVec3, tol: &Tolerance) -> bool {
 }
 
 /// Randschleifen der Fläche als Polygone im Parameterraum (wie in [`point_in_face`]).
-pub(crate) fn face_polys(f: &FaceGeom) -> Vec<Vec<DVec2>> {
+pub fn face_polys(f: &FaceGeom) -> Vec<Vec<DVec2>> {
     f.loops
         .iter()
         .map(|lp| points_to_uv(&f.surface, f.same_sense, &loop_points(lp)))
@@ -321,7 +321,7 @@ pub(crate) fn face_polys(f: &FaceGeom) -> Vec<Vec<DVec2>> {
 
 /// Wie [`point_in_face`] für einen Punkt `p` mit bekannten Parametern `uv` (etwa einem
 /// Strahltreffer) und vorab berechneten Polygonen [`face_polys`].
-pub(crate) fn point_in_face_at(
+pub fn point_in_face_at(
     f: &FaceGeom,
     polys: &[Vec<DVec2>],
     p: DVec3,

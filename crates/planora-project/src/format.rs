@@ -729,7 +729,7 @@ pub struct EdgeCopyDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skizzenkurve: Option<SkizzenkurveDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub auf_flaeche: Option<QuellenZieleDto>,
+    pub auf_flaeche: Option<AufFlaecheDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schnittkurve: Option<QuellenZieleDto>,
 }
@@ -769,8 +769,46 @@ pub enum EinbezugDto {
     Skizzenkurve { skizze: u64, kurve: usize },
 }
 
-/// Quellen und Ziele von „Auf Fläche projizieren“ und „Schnittkurve“ (ab Format 20; vorläufig,
-/// die genauen Felder legen Task 17 und 18 fest).
+/// „Auf Fläche projizieren“ (ab Format 20): Quellkurven, Zielflächen und Projektionsart.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct AufFlaecheDto {
+    #[serde(default)]
+    pub quellen: Vec<KurvenquelleDto>,
+    #[serde(default)]
+    pub flaechen: Vec<FlaechenzielDto>,
+    pub art: ProjektionsartDto,
+}
+
+/// Quelle von „Auf Fläche projizieren“ (ab Format 20): Kurve einer anderen Skizze, Körperkante,
+/// Ecke (Anfang oder Ende einer Kante) oder Konstruktionspunkt (Feature).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "typ", rename_all = "snake_case")]
+pub enum KurvenquelleDto {
+    Skizzenkurve { skizze: u64, kurve: usize },
+    Kante { kante: EdgeRefDto },
+    Ecke { kante: EdgeRefDto, ende: bool },
+    Konstruktionspunkt { feature: u64 },
+}
+
+/// Zielfläche von „Auf Fläche projizieren“ (ab Format 20): Körperfläche oder Grund- bzw.
+/// Konstruktionsebene.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "typ", rename_all = "snake_case")]
+pub enum FlaechenzielDto {
+    Flaeche { flaeche: FaceRefDto },
+    Ebene { ebene: PlaneDto },
+}
+
+/// Projektionsart (ab Format 20): nächster Punkt oder entlang einer Richtung (Weltkoordinaten).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "typ", rename_all = "snake_case")]
+pub enum ProjektionsartDto {
+    NaechsterPunkt,
+    EntlangVektor { richtung: V3 },
+}
+
+/// Quellen und Ziele der „Schnittkurve“ (ab Format 20; vorläufig, die genauen Felder legt
+/// Task 18 fest).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct QuellenZieleDto {
     #[serde(default)]

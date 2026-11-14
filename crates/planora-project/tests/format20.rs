@@ -719,8 +719,29 @@ fn format20_piece_and_new_sources_roundtrip() {
             curve: src,
         },
         CopySource::OnSurface(SurfaceProjection {
-            sources: vec![sketch_curve.clone()],
-            targets: vec![IncludeRef::FaceBoundary(top.clone())],
+            sources: vec![
+                CurveSource::SketchCurve {
+                    sketch: s1,
+                    curve: src,
+                },
+                CurveSource::Edge(edge.clone()),
+                CurveSource::Vertex(VertexRef {
+                    edge: edge.clone(),
+                    end: false,
+                }),
+                CurveSource::ConstructionPoint(FeatureId(98)),
+            ],
+            faces: vec![
+                FaceTarget::Face(top.clone()),
+                FaceTarget::Plane(PlaneId::Feature(plane)),
+                FaceTarget::Plane(PlaneId::Standard(StandardPlane::YZ)),
+            ],
+            kind: ProjectType::ClosestPoint,
+        }),
+        CopySource::OnSurface(SurfaceProjection {
+            sources: vec![CurveSource::Edge(edge.clone())],
+            faces: vec![FaceTarget::Face(top.clone())],
+            kind: ProjectType::AlongVector(DVec3::new(0.0, -0.6, 0.8)),
         }),
         CopySource::Intersection(IntersectionSpec {
             sources: vec![sketch_curve.clone()],
@@ -786,7 +807,7 @@ fn format20_piece_and_new_sources_roundtrip() {
     }
     let back = decode_version(&text, "x.json").unwrap_or_else(|e| panic!("{e}\n{text}"));
     assert_eq!(copies_in(&back, s2), copies_in(&snap, s2));
-    assert_eq!(copies_in(&back, s2).len(), 13);
+    assert_eq!(copies_in(&back, s2).len(), 14);
     // Die gespeicherte Stückzahl läuft mit (über 1 geschrieben, sonst weggelassen).
     assert!(copies_in(&back, s2).iter().any(|c| c.of == 4));
     assert!(copies_in(&back, s2).iter().all(|c| c.of > 1));

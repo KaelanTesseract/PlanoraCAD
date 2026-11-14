@@ -2,6 +2,7 @@
 
 use crate::refs::{EdgeRef, FaceRef};
 use crate::step_bodies::{StepShape, StepShapeId};
+use crate::surface_project::SurfaceProjection;
 use planora_exchange::{ExchangeMesh, MeshTransform};
 use planora_i18n::tr;
 use planora_kernel::{AnalyticKernel, BlendKind, BoolOp, Solid};
@@ -104,7 +105,7 @@ pub enum CopySource {
         sketch: FeatureId,
         curve: CurveId,
     },
-    /// Auf Fläche projizieren (Skizzen 10, Spec 6; Rechnung in Task 17).
+    /// Auf Fläche projizieren (Skizzen 10, Spec 6; Rechnung in [`crate::project_to_surface`]).
     OnSurface(SurfaceProjection),
     /// Schnittkurve (Skizzen 10, Spec 7; Rechnung in Task 18).
     Intersection(IntersectionSpec),
@@ -168,13 +169,6 @@ pub fn include_plane_half(solids: &[&Solid]) -> f64 {
     )
 }
 
-/// Platzhalter „Auf Fläche projizieren“ (Task 17 legt die Felder fest): Quellen und Ziele.
-#[derive(Clone, Debug, PartialEq, Default)]
-pub struct SurfaceProjection {
-    pub sources: Vec<IncludeRef>,
-    pub targets: Vec<IncludeRef>,
-}
-
 /// Platzhalter „Schnittkurve“ (Task 18 legt die Felder fest): Quellen und Ziele.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct IntersectionSpec {
@@ -229,8 +223,12 @@ impl CopySource {
                 out
             }
             CopySource::SketchCurve { .. } => Vec::new(),
-            CopySource::OnSurface(SurfaceProjection { sources, targets })
-            | CopySource::Intersection(IntersectionSpec { sources, targets }) => {
+            CopySource::OnSurface(p) => {
+                let mut out = Vec::new();
+                p.origins(&mut out);
+                out
+            }
+            CopySource::Intersection(IntersectionSpec { sources, targets }) => {
                 let mut out = Vec::new();
                 for r in sources.iter().chain(targets) {
                     r.origins(&mut out);
@@ -249,8 +247,8 @@ impl CopySource {
             }
             CopySource::Include(r) => r.loose_origin().into_iter().collect(),
             CopySource::SketchCurve { sketch, .. } => vec![*sketch],
-            CopySource::OnSurface(SurfaceProjection { sources, targets })
-            | CopySource::Intersection(IntersectionSpec { sources, targets }) => sources
+            CopySource::OnSurface(p) => p.loose_origins(),
+            CopySource::Intersection(IntersectionSpec { sources, targets }) => sources
                 .iter()
                 .chain(targets)
                 .filter_map(IncludeRef::loose_origin)

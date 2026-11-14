@@ -24,14 +24,14 @@ use planora_exchange::{
 };
 use planora_feature::planes::{AxisRef, PlaneBase, PlaneDef, PlaneFeature, PointRef, StdAxis};
 use planora_feature::{
-    BlendArt, BodyRef, CanvasBase, CanvasFeature, CanvasImage, CopySource, CopyTarget, EdgeCopy,
-    EdgeRef, FaceRef, FeatureId, FeatureKind, FieldKey, Formulas, ImageId, IncludeRef,
-    IntersectionSpec, MAX_COMMENT_CHARS, MAX_COORD_MM, MAX_DECIMALS, MAX_DIM_TEXT_CHARS,
-    MAX_DRAWINGS, MAX_FIT_CHARS, MAX_FORMULA_CHARS, MAX_PARAM_NAME_CHARS, MAX_PARAMETERS,
-    MAX_POS_MM, MAX_ROLE_CHARS, MAX_TOL_MM, MAX_VIEWS, MeshId, ParamId, ParamUnit, Parameter,
-    PlaneId, ProfileSel, SketchFeature, SketchFormulas, SketchPlane, Snapshot, SnapshotFeature,
-    StandardPlane, StepShape, StepShapeId, SurfaceProjection, VertexRef, Visibility, field_keys,
-    image_hash, step_text_megabytes, step_text_sum_limit, validate_drawing,
+    BlendArt, BodyRef, CanvasBase, CanvasFeature, CanvasImage, CopySource, CopyTarget, CurveSource,
+    EdgeCopy, EdgeRef, FaceRef, FaceTarget, FeatureId, FeatureKind, FieldKey, Formulas, ImageId,
+    IncludeRef, IntersectionSpec, MAX_COMMENT_CHARS, MAX_COORD_MM, MAX_DECIMALS,
+    MAX_DIM_TEXT_CHARS, MAX_DRAWINGS, MAX_FIT_CHARS, MAX_FORMULA_CHARS, MAX_PARAM_NAME_CHARS,
+    MAX_PARAMETERS, MAX_POS_MM, MAX_ROLE_CHARS, MAX_TOL_MM, MAX_VIEWS, MeshId, ParamId, ParamUnit,
+    Parameter, PlaneId, ProfileSel, ProjectType, SketchFeature, SketchFormulas, SketchPlane,
+    Snapshot, SnapshotFeature, StandardPlane, StepShape, StepShapeId, SurfaceProjection, VertexRef,
+    Visibility, field_keys, image_hash, step_text_megabytes, step_text_sum_limit, validate_drawing,
 };
 use planora_i18n::{DisplayUnit, tr};
 use planora_kernel::BoolOp;
@@ -1809,12 +1809,7 @@ fn copy_to(c: &EdgeCopy) -> EdgeCopyDto {
                 kurve: curve.index(),
             });
         }
-        CopySource::OnSurface(p) => {
-            d.auf_flaeche = Some(QuellenZieleDto {
-                quellen: p.sources.iter().map(include_to).collect(),
-                ziele: p.targets.iter().map(include_to).collect(),
-            });
-        }
+        CopySource::OnSurface(p) => d.auf_flaeche = Some(on_surface_to(p)),
         CopySource::Intersection(p) => {
             d.schnittkurve = Some(QuellenZieleDto {
                 quellen: p.sources.iter().map(include_to).collect(),
@@ -1902,8 +1897,109 @@ fn include_from(origin: &str, name: &str, d: &EinbezugDto) -> Result<IncludeRef>
     })
 }
 
-/// Quellen und Ziele eines Platzhalters (Auf Fläche projizieren, Schnittkurve) mit der
-/// Längengrenze der Listen.
+fn on_surface_to(p: &SurfaceProjection) -> AufFlaecheDto {
+    AufFlaecheDto {
+        quellen: p
+            .sources
+            .iter()
+            .map(|s| match s {
+                CurveSource::SketchCurve { sketch, curve } => KurvenquelleDto::Skizzenkurve {
+                    skizze: sketch.0,
+                    kurve: curve.index(),
+                },
+                CurveSource::Edge(e) => KurvenquelleDto::Kante { kante: edge_to(e) },
+                CurveSource::Vertex(v) => KurvenquelleDto::Ecke {
+                    kante: edge_to(&v.edge),
+                    ende: v.end,
+                },
+                CurveSource::ConstructionPoint(id) => {
+                    KurvenquelleDto::Konstruktionspunkt { feature: id.0 }
+                }
+            })
+            .collect(),
+        flaechen: p
+            .faces
+            .iter()
+            .map(|f| match f {
+                FaceTarget::Face(r) => FlaechenzielDto::Flaeche {
+                    flaeche: face_to(r),
+                },
+                FaceTarget::Plane(PlaneId::Standard(s)) => FlaechenzielDto::Ebene {
+                    ebene: base_to(&PlaneBase::Standard(*s)),
+                },
+                FaceTarget::Plane(PlaneId::Feature(id)) => FlaechenzielDto::Ebene {
+                    ebene: base_to(&PlaneBase::Plane(*id)),
+                },
+            })
+            .collect(),
+        art: match p.kind {
+            ProjectType::ClosestPoint => ProjektionsartDto::NaechsterPunkt,
+            ProjectType::AlongVector(d) => ProjektionsartDto::EntlangVektor { richtung: v3(d) },
+        },
+    }
+}
+
+/// Liest „Auf Fläche projizieren“ mit der Längengrenze der Listen.
+fn on_surface_from(origin: &str, name: &str, d: &AufFlaecheDto) -> Result<SurfaceProjection> {
+    check_len(origin, &|| tr!("proj-l-edge-copies"), d.quellen.len())?;
+    check_len(origin, &|| tr!("proj-l-edge-copies"), d.flaechen.len())?;
+    let sources = d
+        .quellen
+        .iter()
+        .map(|s| {
+            Ok(match s {
+                KurvenquelleDto::Skizzenkurve { skizze, kurve } => CurveSource::SketchCurve {
+                    sketch: FeatureId(*skizze),
+                    curve: CurveId::from_index(sketch_index(origin, name, *kurve)?),
+                },
+                KurvenquelleDto::Kante { kante } => {
+                    CurveSource::Edge(edge_from(origin, name, kante)?)
+                }
+                KurvenquelleDto::Ecke { kante, ende } => CurveSource::Vertex(VertexRef {
+                    edge: edge_from(origin, name, kante)?,
+                    end: *ende,
+                }),
+                KurvenquelleDto::Konstruktionspunkt { feature } => {
+                    CurveSource::ConstructionPoint(FeatureId(*feature))
+                }
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let faces = d
+        .flaechen
+        .iter()
+        .map(|f| {
+            Ok(match f {
+                FlaechenzielDto::Flaeche { flaeche } => {
+                    FaceTarget::Face(face_from(origin, name, flaeche)?)
+                }
+                FlaechenzielDto::Ebene { ebene } => match base_from(origin, name, ebene)? {
+                    PlaneBase::Standard(s) => FaceTarget::Plane(PlaneId::Standard(s)),
+                    PlaneBase::Plane(id) => FaceTarget::Plane(PlaneId::Feature(id)),
+                    // Eine Körperfläche steht als `flaeche`, nicht als Ebene.
+                    PlaneBase::Face(_) => {
+                        return Err(feature_corrupt(origin, name, tr!("proj-copy-source-count")));
+                    }
+                },
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let kind = match &d.art {
+        ProjektionsartDto::NaechsterPunkt => ProjectType::ClosestPoint,
+        ProjektionsartDto::EntlangVektor { richtung } => ProjectType::AlongVector(dv3(
+            origin,
+            &|| field_label(name, tr!("proj-l-direction")),
+            *richtung,
+        )?),
+    };
+    Ok(SurfaceProjection {
+        sources,
+        faces,
+        kind,
+    })
+}
+
+/// Quellen und Ziele eines Platzhalters (Schnittkurve) mit der Längengrenze der Listen.
 fn include_list(origin: &str, name: &str, list: &[EinbezugDto]) -> Result<Vec<IncludeRef>> {
     check_len(origin, &|| tr!("proj-l-edge-copies"), list.len())?;
     list.iter().map(|r| include_from(origin, name, r)).collect()
@@ -1945,10 +2041,7 @@ fn copy_from(origin: &str, name: &str, d: &EdgeCopyDto) -> Result<EdgeCopy> {
             curve: CurveId::from_index(sketch_index(origin, name, k.kurve)?),
         }
     } else if let Some(p) = &d.auf_flaeche {
-        CopySource::OnSurface(SurfaceProjection {
-            sources: include_list(origin, name, &p.quellen)?,
-            targets: include_list(origin, name, &p.ziele)?,
-        })
+        CopySource::OnSurface(on_surface_from(origin, name, p)?)
     } else if let Some(p) = &d.schnittkurve {
         CopySource::Intersection(IntersectionSpec {
             sources: include_list(origin, name, &p.quellen)?,

@@ -23,6 +23,7 @@ pub mod refs;
 mod rollback;
 mod snapshot;
 mod step_bodies;
+pub mod surface_project;
 mod visibility;
 
 pub use canvas::{
@@ -56,8 +57,8 @@ pub use model::{
     AxisId, BlendArt, BodyRef, CopySource, CopyTarget, Document, EdgeCopy, Feature, FeatureId,
     FeatureKind, FeatureStatus, IncludeRef, IntersectionSpec, MAX_CHAMFER_ANGLE_DEG,
     MAX_MESH_SCALE, MIN_CHAMFER_ANGLE_DEG, MIN_MESH_SCALE, MeshId, PlaneId, PointRefId, ProfileSel,
-    ROTATION_NORM_TOL, SketchFeature, SketchFormulas, SketchPlane, StandardPlane,
-    SurfaceProjection, VertexRef, include_plane_half, mesh_locked, sketch_source_allowed,
+    ROTATION_NORM_TOL, SketchFeature, SketchFormulas, SketchPlane, StandardPlane, VertexRef,
+    include_plane_half, mesh_locked, sketch_source_allowed,
 };
 pub use params::{ParamEdit, ParamId, ParamScope, Parameter};
 pub use parts_sheets::{
@@ -74,5 +75,11 @@ pub use step_bodies::{
     MAX_STEP_TEXT_SUM_BYTES, NewStepBody, StepShape, StepShapeId, StepTextSumLimitGuard,
     limit_step_text_sum_for_tests, step_builds, step_text_megabytes, step_text_sum,
     step_text_sum_limit,
+};
+// `ProjectError` bleibt im Modul (`surface_project::ProjectError`), damit es nicht mit
+// `planora_project::ProjectError` in Glob-Imports zusammenstößt.
+pub use surface_project::{
+    CurveSource, DocView, FaceTarget, MAX_SURFACE_SAMPLES, ProjectType, SURFACE_PROJECT_BUDGET,
+    SurfaceProjection, project_to_surface,
 };
 pub use visibility::{HiddenFolders, Visibility};
