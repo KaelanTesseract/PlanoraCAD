@@ -1080,18 +1080,21 @@ fn triad_shows_only_with_a_3d_tool_in_a_3d_sketch() {
         Tool::Ellipse,
         Tool::Text,
         Tool::Spline,
+        Tool::Polygon,
+        Tool::Slot,
     ] {
         r.tool(tool);
         r.frame(Modifiers::NONE, vec![]);
         assert!(r.layout().is_some(), "{tool:?}");
     }
+    // Alle Arten zeichnen in 3D (Task H).
     for (kind, shown) in [
         (ToolKind::Arc3P, true),
-        (ToolKind::ArcCenter, false),
+        (ToolKind::ArcCenter, true),
         (ToolKind::Rect2P, true),
-        (ToolKind::Rect3P, false),
+        (ToolKind::Rect3P, true),
         (ToolKind::Circle2P, true),
-        (ToolKind::CircleCenter, false),
+        (ToolKind::CircleCenter, true),
         (ToolKind::Conic, true),
         (ToolKind::SplineControl, true),
     ] {

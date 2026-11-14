@@ -1112,6 +1112,7 @@ sketch-field-rho = Rho
 sketch-field-rho-range = Rho must be a number from 0.000001 to 0.999999
 sketch-field-z-distance = Z Distance
 sketch-3d-grazing = The triad plane is almost parallel to the view direction. Rotate the view or choose another plane.
+sketch-3d-tangent-plane = The curve does not lie in the triad plane. In 3D, tangent works only with curves in that plane.
 sketch-field-radius-or-sweep = Radius or sweep angle
 sketch-field-positive = The value must be greater than zero
 sketch-field-angle-range = The angle must be between 0° and 180°

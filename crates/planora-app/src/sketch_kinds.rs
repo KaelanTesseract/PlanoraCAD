@@ -293,7 +293,7 @@ impl ToolKind {
     }
 
     /// Die Meldung, wenn aus den Lagen keine Form wird.
-    fn refusal(self) -> Msg {
+    pub(crate) fn refusal(self) -> Msg {
         use ToolKind::*;
         match self {
             Rect2P | Rect3P | RectCenter => crate::msg!("sketch-err-rect-size"),
@@ -327,7 +327,7 @@ impl ToolKind {
     }
 
     /// Ein gerades Langloch?
-    fn is_straight_slot(self) -> bool {
+    pub(crate) fn is_straight_slot(self) -> bool {
         matches!(
             self,
             ToolKind::SlotCenterToCenter | ToolKind::SlotOverall | ToolKind::SlotCenterPoint
@@ -335,7 +335,7 @@ impl ToolKind {
     }
 
     /// Ein Bogenlangloch?
-    fn is_arc_slot(self) -> bool {
+    pub(crate) fn is_arc_slot(self) -> bool {
         matches!(
             self,
             ToolKind::SlotThreePointArc | ToolKind::SlotCenterPointArc
@@ -395,7 +395,7 @@ impl ToolKinds {
 }
 
 /// Taugt die Kurve für diese Art? Sonst die Meldung dazu.
-fn check_pick(sk: &Sketch, kind: ToolKind, c: CurveId) -> Result<(), Msg> {
+pub(crate) fn check_pick(sk: &Sketch, kind: ToolKind, c: CurveId) -> Result<(), Msg> {
     // Tangential an Buchstaben bände an sie (Spec E).
     if sk.text_of_curve(c).is_some() {
         return Err(crate::msg!("sketch-text-no-dimension"));
@@ -554,7 +554,7 @@ fn through_at_sweep(start: DVec2, end: DVec2, sweep: f64, pointer: DVec2) -> Opt
 /// Mittelbogen eines Bogenlanglochs aus den ersten beiden Lagen und der dritten: `SlotThreePointArc`
 /// Start, Ende, Durchgang; `SlotCenterPointArc` Mitte, Start, Richtung des Endes (gegen den
 /// Uhrzeigersinn).
-fn slot_axis(kind: ToolKind, a: DVec2, b: DVec2, c: DVec2, tol: f64) -> Option<ArcPlan> {
+pub(crate) fn slot_axis(kind: ToolKind, a: DVec2, b: DVec2, c: DVec2, tol: f64) -> Option<ArcPlan> {
     if kind == ToolKind::SlotThreePointArc {
         return shapes::arc_through(a, b, c, tol);
     }

@@ -16,10 +16,17 @@
 //!
 //! Text (Task 13): Der Rahmen des Werkzeugs „Text“ entsteht ebenso in der Ebene der Triade
 //! ([`crate::sketch_text::text_plane`]); OK legt ihn mit [`Sketch::add_text_box3`] an.
+//!
+//! Alle Arten (Task H, Handtest Etappe 2): Auch die übrigen Arten von Kreis, Bogen, Rechteck,
+//! Polygon und Langloch zeichnen in der Ebene der Triade ([`Planar3::Kind`]). Ihre Lagen werden in
+//! der 2D-Basis der Ebene gerechnet wie in 2D; Rechteck „3 Punkte“ und „Mittelpunkt“, Polygon und
+//! Langloch entstehen dazu erst in einer Hilfsskizze mit den 2D-Formen und werden dann Punkt für
+//! Punkt in die Ebene gelegt ([`transplant`]). Tangentenkreise und der tangentiale Bogen nehmen nur
+//! Kurven, die in der Ebene liegen ([`curve_in_plane`]).
 
 use crate::msg::Msg;
 use crate::sketch_input::Created;
-use crate::sketch_kinds::{PREVIEW_STEPS_PER_TURN, ToolKind};
+use crate::sketch_kinds::{PREVIEW_STEPS_PER_TURN, ToolKind, slot_axis};
 use crate::sketch_state::{SketchSession, Tool, err};
 use crate::sketch_triad::{AXIS_SNAP_PX, TriadAxis, triad_point};
 use crate::sketch_view::{Mapper, PICK_RADIUS_PX};
@@ -29,8 +36,11 @@ use planora_math::{DVec2, DVec3};
 use planora_sketch::constraint::{ConstraintKind, LineOrPoints};
 use planora_sketch::helpers::RectIds;
 use planora_sketch::model::{CurveId, CurveKind, MAX_SPLINE_POINTS, PointId, Sketch};
-use planora_sketch::shapes::{self, ShapePlan};
-use planora_sketch::{conic_apex_ok, conic_nurbs};
+use planora_sketch::shapes::{
+    self, ArcPlan, ArcSlotIds, PolygonIds, ShapePlan, SlotIds, SlotStyle,
+};
+use planora_sketch::{conic_apex_ok, conic_nurbs, tangent_circles};
+use std::collections::HashMap;
 
 /// Toleranz, unter der eine Achse der Triade als Achse der Skizze gilt (Triade unverdreht oder um
 /// Vielfache von 90° gedreht).
@@ -53,6 +63,9 @@ pub struct Cursor3 {
     /// Fang auf die Mitte einer Linie oder eines Bogens (Skizzen 10, A7): Der neue Punkt bekommt
     /// dort `Midpoint` (Linie) bzw. `PointOnCurve` (Bogen), wie in 2D.
     pub mid: Option<CurveId>,
+    /// Kurve unter dem Zeiger, solange die Art Kurven wählt (Kreis „2 Tangenten“, „3 Tangenten“,
+    /// Task H).
+    pub curve: Option<CurveId>,
     /// Bildpunkt im Viewport, aus dem die Lage stammt (ohne Zeiger bleibt die Vorschau dort).
     pub pixel: Vec2,
 }
@@ -67,6 +80,7 @@ impl Cursor3 {
             snap: None,
             origin: false,
             mid: None,
+            curve: None,
             pixel: Vec2::ZERO,
         }
     }
@@ -85,9 +99,11 @@ impl SketchSession {
             return self.text_draws_in_3d(sk);
         }
         if sk.three_d && self.line_arc.is_none() && self.planar3().is_some() {
-            return !self.pending3.is_empty()
+            // Eine in 3D begonnene Form hat ihre Ebene schon (auch nach gewählten Kurven).
+            return self.plane3.is_some()
                 || (self.pending.is_empty()
                     && self.pending_pos.is_empty()
+                    && self.pending_curves.is_empty()
                     && (!self.triad.is_sketch_plane() || self.triad.lock_z));
         }
         sk.three_d
@@ -159,11 +175,15 @@ impl SketchSession {
             snap: None,
             origin: false,
             mid: None,
+            curve: None,
             pixel,
         };
+        let at = Pos2::new(pixel.x + map.rect.left(), pixel.y + map.rect.top());
         if !self.triad.lock_z && !self.cursor_opts.suppressed {
-            let at = Pos2::new(pixel.x + map.rect.left(), pixel.y + map.rect.top());
             self.snap3(sk, map, at, &mut cur);
+        }
+        if !self.triad.lock_z && self.picks_curve3() {
+            cur.curve = curve_under3(sk, map, at);
         }
         self.sync_input(sk);
         if let Some(locked) = self.locked_position3(sk, &cur) {
@@ -252,6 +272,11 @@ impl SketchSession {
                 let text = e.text();
                 self.message = Some(e);
                 text
+            });
+        }
+        if let Some(Planar3::Kind(kind)) = self.planar3() {
+            return self.with_open_start(sk, |se, sk| {
+                se.atomic(sk, |se, sk, prior| se.click_kind3(sk, prior, kind, &cur))
             });
         }
         if let Some(kind) = self.planar3() {
@@ -377,8 +402,8 @@ impl SketchSession {
 
 // ---- Ebene Formen in 3D (Task 12) ---------------------------------------------------------------
 
-/// Eine ebene Form, die in 3D zeichnet (Spec 4): nur diese Arten, die übrigen sind bei sichtbarer
-/// Triade gedämpft ([`crate::sketch_triad::kind_draws_3d`]).
+/// Eine ebene Form, die in 3D zeichnet (Spec 4): alle Arten von Kreis, Bogen, Rechteck, Polygon
+/// und Langloch, dazu Ellipse und Kegelschnitt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Planar3 {
     /// Kreis „2 Punkte“: die Enden eines Durchmessers.
@@ -391,6 +416,9 @@ pub enum Planar3 {
     Ellipse,
     /// Kegelschnitt: Start, Ende, Scheitel, dann bestätigt ein Klick das Rho.
     Conic,
+    /// Die übrigen Arten von Kreis, Bogen, Rechteck, Polygon und Langloch (Task H): Klicks wie in
+    /// 2D, gerechnet in der Ebene ([`SketchSession::click_kind3`]).
+    Kind(ToolKind),
 }
 
 impl Planar3 {
@@ -400,6 +428,7 @@ impl Planar3 {
             Planar3::Circle2P | Planar3::Rect2P => 2,
             Planar3::Arc3P | Planar3::Ellipse => 3,
             Planar3::Conic => 4,
+            Planar3::Kind(k) => kind_picks(k) + kind_positions(k),
         }
     }
 }
@@ -506,6 +535,9 @@ impl SketchSession {
             Tool::Rectangle if kind == Some(ToolKind::Rect2P) => Some(Planar3::Rect2P),
             Tool::Spline if kind == Some(ToolKind::Conic) => Some(Planar3::Conic),
             Tool::Ellipse => Some(Planar3::Ellipse),
+            Tool::Circle | Tool::Arc | Tool::Rectangle | Tool::Polygon | Tool::Slot => {
+                kind.map(Planar3::Kind)
+            }
             _ => None,
         }
     }
@@ -527,15 +559,8 @@ impl SketchSession {
     ) -> Result<(), Msg> {
         let tol = sk.tolerance().linear;
         let plane = self.plane3_at(sk, cur.at);
-        let at = plane.project(cur.at);
-        let hit = Hit3 {
-            at,
-            snap: cur
-                .snap
-                .filter(|&q| sk.point_xyz(q).is_ok_and(|p| p.distance(at) <= tol)),
-            origin: cur.origin && at.length() <= tol,
-            mid: cur.mid.filter(|_| cur.at.distance(at) <= tol),
-        };
+        let hit = plane_hit(sk, &plane, cur);
+        let at = hit.at;
         let stage = self.pending3.len();
         // Der Klick des Kegelschnitts nach dem Scheitel bestätigt nur das Rho.
         let confirms = kind == Planar3::Conic && stage == 3;
@@ -707,6 +732,9 @@ impl SketchSession {
         let Some(kind) = self.planar3() else {
             return Vec::new();
         };
+        if let Planar3::Kind(k) = kind {
+            return self.kind_preview3(sk, k, at);
+        }
         let tol = sk.tolerance().linear;
         let plane = self.plane3_at(sk, at);
         let mut q: Vec<DVec2> = self.pending3.iter().map(|h| plane.to2(h.at)).collect();
@@ -777,6 +805,21 @@ impl SketchSession {
     }
 }
 
+/// Die Lage des Zeigers `cur` in die Ebene `plane` gelegt, mit seinem Fang, soweit er dort noch
+/// zutrifft.
+fn plane_hit(sk: &Sketch, plane: &Plane3, cur: &Cursor3) -> Hit3 {
+    let tol = sk.tolerance().linear;
+    let at = plane.project(cur.at);
+    Hit3 {
+        at,
+        snap: cur
+            .snap
+            .filter(|&q| sk.point_xyz(q).is_ok_and(|p| p.distance(at) <= tol)),
+        origin: cur.origin && at.length() <= tol,
+        mid: cur.mid.filter(|_| cur.at.distance(at) <= tol),
+    }
+}
+
 /// Die Meldung, wenn aus den Lagen keine ebene Form wird.
 fn planar3_refusal(kind: Planar3) -> Msg {
     match kind {
@@ -785,6 +828,7 @@ fn planar3_refusal(kind: Planar3) -> Msg {
         Planar3::Rect2P => crate::msg!("sketch-err-rect-size"),
         Planar3::Ellipse => crate::msg!("sketch-major-axis-positive"),
         Planar3::Conic => crate::msg!("sketch-err-conic-apex"),
+        Planar3::Kind(k) => k.refusal(),
     }
 }
 
@@ -875,4 +919,736 @@ fn curve_mid3(sk: &Sketch, c: CurveId) -> Option<DVec3> {
         _ => None,
     }
     .filter(|m| m.is_finite())
+}
+
+// ---- Alle Arten in 3D (Task H) -------------------------------------------------------------------
+
+/// Toleranz, unter der zwei Normalen als gleich (oder gegenläufig) gelten.
+const NORMAL_TOL: f64 = 1e-6;
+
+/// Wie viele Kurven die Art zuerst wählt (Kreis „2 Tangenten“, „3 Tangenten“).
+fn kind_picks(kind: ToolKind) -> usize {
+    match kind {
+        ToolKind::Circle2T => 2,
+        ToolKind::Circle3T => 3,
+        _ => 0,
+    }
+}
+
+/// Wie viele Lagen die Art nach den gewählten Kurven setzt (der letzte Klick schließt ab).
+fn kind_positions(kind: ToolKind) -> usize {
+    use ToolKind::*;
+    match kind {
+        Circle3T => 0,
+        Circle2T => 1,
+        CircleCenter | Circle2P | ArcTangent | Rect2P | RectCenter | PolygonInscribed
+        | PolygonCircumscribed => 2,
+        Circle3P | Arc3P | ArcCenter | Rect3P | PolygonEdge | SlotCenterToCenter | SlotOverall
+        | SlotCenterPoint => 3,
+        SlotThreePointArc | SlotCenterPointArc => 4,
+        _ => 0,
+    }
+}
+
+/// Bogen „Mittelpunkt“ aus Mitte `m`, Start `s` und der Richtung des Endes `e`: gegen den
+/// Uhrzeigersinn, das Ende auf dem Radius.
+fn arc_center_plan(m: DVec2, s: DVec2, e: DVec2, tol: f64) -> Option<ArcPlan> {
+    let r = m.distance(s);
+    let end = m + (e - m).try_normalize()? * r;
+    (r > tol && end.distance(s) > tol).then_some(ArcPlan {
+        center: m,
+        start: s,
+        end,
+    })
+}
+
+/// Der Plan der Lagen `q` (in der 2D-Basis der Ebene, die letzte ist der Zeiger) für die Arten, die
+/// nur Lagen setzen; dieselben Formen wie in 2D. Ein Bogenlangloch zeigt mit drei Lagen seinen
+/// Mittelbogen.
+fn shape_plan3(kind: ToolKind, q: &[DVec2], sides: usize, tol: f64) -> Option<ShapePlan> {
+    use ToolKind::*;
+    match (kind, q) {
+        (CircleCenter, &[m, p]) => {
+            let r = m.distance(p);
+            (r > tol && r.is_finite()).then_some(ShapePlan::Circle(m, r))
+        }
+        (Circle3P, &[a, b, c]) => {
+            shapes::circle_through(a, b, c, tol).map(|(m, r)| ShapePlan::Circle(m, r))
+        }
+        (ArcCenter, &[m, s, e]) => arc_center_plan(m, s, e, tol).map(ShapePlan::Arc),
+        (Rect3P, &[a, b, c]) => shapes::rect_three_point(a, b, c, tol).map(ShapePlan::Quad),
+        (RectCenter, &[m, c]) => shapes::rect_center(m, c, tol).map(ShapePlan::Quad),
+        (PolygonInscribed, &[m, p]) => {
+            shapes::polygon_inscribed(m, p, sides, tol).map(ShapePlan::Polygon)
+        }
+        (PolygonCircumscribed, &[m, p]) => {
+            shapes::polygon_circumscribed(m, p, sides, tol).map(ShapePlan::Polygon)
+        }
+        (PolygonEdge, &[a, b, c]) => {
+            shapes::polygon_edge(a, b, c, sides, tol).map(ShapePlan::Polygon)
+        }
+        (SlotCenterToCenter, &[a, b, c]) => {
+            shapes::slot_center_to_center(a, b, c, tol).map(ShapePlan::Slot)
+        }
+        (SlotOverall, &[a, b, c]) => shapes::slot_overall(a, b, c, tol).map(ShapePlan::Slot),
+        (SlotCenterPoint, &[a, b, c]) => {
+            shapes::slot_center_point(a, b, c, tol).map(ShapePlan::Slot)
+        }
+        (k, &[a, b, c]) if k.is_arc_slot() => slot_axis(k, a, b, c, tol).map(ShapePlan::Arc),
+        (k, &[a, b, c, d]) if k.is_arc_slot() => {
+            shapes::arc_slot(slot_axis(k, a, b, c, tol)?, d, tol).map(ShapePlan::ArcSlot)
+        }
+        _ => None,
+    }
+}
+
+/// Die Meldung, wenn der letzte Klick keine Form ergibt (wie `finish_refusal` in 2D).
+fn finish_refusal3(kind: ToolKind) -> Msg {
+    match kind {
+        k if k.is_straight_slot() || k.is_arc_slot() => crate::msg!("sketch-slot-too-wide"),
+        ToolKind::PolygonEdge => crate::msg!("sketch-polygon-edge-side"),
+        ToolKind::Circle3P => crate::msg!("sketch-circle-collinear"),
+        ToolKind::ArcTangent => crate::msg!("sketch-arc-tangent-straight"),
+        k => k.refusal(),
+    }
+}
+
+impl SketchSession {
+    /// Wählt die laufende Art in 3D gerade eine Kurve (Kreis „2 Tangenten“, „3 Tangenten“)?
+    pub fn picks_curve3(&self) -> bool {
+        matches!(self.planar3(), Some(Planar3::Kind(k)) if self.pending_curves.len() < kind_picks(k))
+    }
+
+    /// Klick einer der übrigen Arten in 3D: erst die Kurven (Tangentenkreise), dann die Lagen in der
+    /// Ebene. Vor dem letzten Klick bleibt die Skizze unverändert, der letzte legt die Form an.
+    fn click_kind3(
+        &mut self,
+        sk: &mut Sketch,
+        prior: &Sketch,
+        kind: ToolKind,
+        cur: &Cursor3,
+    ) -> Result<(), Msg> {
+        if self.pending_curves.len() < kind_picks(kind) {
+            return self.pick_curve3(sk, prior, kind, cur);
+        }
+        let tol = sk.tolerance().linear;
+        let plane = self.plane3_at(sk, cur.at);
+        let hit = plane_hit(sk, &plane, cur);
+        let at = hit.at;
+        if self.pending3.iter().any(|h| h.at.distance(at) <= tol) {
+            return Err(kind.refusal());
+        }
+        if self.pending3.len() + 1 < kind_positions(kind) {
+            self.check_kind3_stage(sk, kind, &plane, &hit)?;
+            self.pending3.push(hit);
+            self.plane3 = Some(plane);
+            self.triad.moved_to(at);
+            return Ok(());
+        }
+        let mut hits = self.pending3.clone();
+        hits.push(hit);
+        let curves = self.pending_curves.clone();
+        let created = self.create_kind3(sk, prior, kind, &plane, &hits, &curves, plane.to2(at))?;
+        self.finish_kind3(created, Some(at));
+        Ok(())
+    }
+
+    /// Wählt die Kurve unter dem Zeiger: ohne Kurve nichts, eine Kurve außerhalb der Ebene der
+    /// Triade ergibt einen Hinweis. Die dritte Kurve von „3 Tangenten“ schließt ab; die Lage des
+    /// Zeigers wählt dann unter den Lösungen.
+    fn pick_curve3(
+        &mut self,
+        sk: &mut Sketch,
+        prior: &Sketch,
+        kind: ToolKind,
+        cur: &Cursor3,
+    ) -> Result<(), Msg> {
+        let Some(c) = cur.curve else {
+            return Ok(());
+        };
+        crate::sketch_kinds::check_pick(sk, kind, c)?;
+        let tol = sk.tolerance().linear;
+        let plane = self
+            .plane3
+            .unwrap_or_else(|| Plane3::from_triad(&self.triad, cur.raw, tol));
+        if !curve_in_plane(sk, &plane, c) {
+            return Err(crate::msg!("sketch-3d-tangent-plane"));
+        }
+        if self.pending_curves.contains(&c) {
+            return Ok(());
+        }
+        let last = kind == ToolKind::Circle3T && self.pending_curves.len() + 1 == kind_picks(kind);
+        if !last {
+            self.pending_curves.push(c);
+            self.plane3 = Some(plane);
+            return Ok(());
+        }
+        let mut curves = self.pending_curves.clone();
+        curves.push(c);
+        let at = plane.to2(cur.raw);
+        let created = self.create_kind3(sk, prior, kind, &plane, &[], &curves, at)?;
+        self.finish_kind3(created, None);
+        Ok(())
+    }
+
+    /// Prüft eine Zwischenstufe: Der tangentiale Bogen beginnt an einem Punkt, an dem eine Linie
+    /// oder ein Bogen in der Ebene endet; der Mittelbogen eines Bogenlanglochs muss entstehen.
+    fn check_kind3_stage(
+        &mut self,
+        sk: &Sketch,
+        kind: ToolKind,
+        plane: &Plane3,
+        hit: &Hit3,
+    ) -> Result<(), Msg> {
+        let tol = sk.tolerance().linear;
+        if kind == ToolKind::ArcTangent && self.pending3.is_empty() {
+            let prev = hit
+                .snap
+                .and_then(|p| tangent_start3(sk, p))
+                .ok_or_else(|| kind.refusal())?;
+            if !curve_in_plane(sk, plane, prev) {
+                return Err(crate::msg!("sketch-3d-tangent-plane"));
+            }
+            self.auto_tangent = Some(prev);
+        }
+        if kind.is_arc_slot()
+            && let [a, b] = self.pending3.as_slice()
+            && slot_axis(
+                kind,
+                plane.to2(a.at),
+                plane.to2(b.at),
+                plane.to2(hit.at),
+                tol,
+            )
+            .is_none()
+        {
+            return Err(if kind == ToolKind::SlotThreePointArc {
+                crate::msg!("sketch-circle-collinear")
+            } else {
+                kind.refusal()
+            });
+        }
+        Ok(())
+    }
+
+    /// Nach der fertigen Form: Polygon merkt sich die Seitenzahl, die Triade springt auf den
+    /// letzten gesetzten Punkt, ein Rückgängig-Schritt mit dem Namen der Form.
+    fn finish_kind3(&mut self, created: Created, at: Option<DVec3>) {
+        if matches!(created, Created::Polygon { .. }) {
+            self.polygon_sides = self.current_sides();
+        }
+        if let Some(at) = at {
+            self.triad.moved_to(at);
+        }
+        self.edit_label = Some(created.undo_label());
+        self.created = Some(created);
+        self.clear_pending();
+    }
+
+    /// Legt die Form der Art `kind` aus den Lagen `hits` und den gewählten Kurven `curves` in der
+    /// Ebene `plane` an und löst; `at`: der Zeiger in der 2D-Basis der Ebene.
+    #[allow(clippy::too_many_arguments)]
+    fn create_kind3(
+        &mut self,
+        sk: &mut Sketch,
+        prior: &Sketch,
+        kind: ToolKind,
+        plane: &Plane3,
+        hits: &[Hit3],
+        curves: &[CurveId],
+        at: DVec2,
+    ) -> Result<Created, Msg> {
+        let tol = sk.tolerance().linear;
+        let n = plane.normal();
+        let q: Vec<DVec2> = hits.iter().map(|h| plane.to2(h.at)).collect();
+        let created = match (kind, q.as_slice()) {
+            (ToolKind::CircleCenter, &[m, rim]) => {
+                let r = m.distance(rim);
+                if r <= tol || !r.is_finite() {
+                    return Err(kind.refusal());
+                }
+                let center = own_point(sk, plane, &hits[0])?;
+                let circle = sk.add_circle3(center, r, n).map_err(err)?;
+                bind_rim3(sk, plane, circle, &hits[1], |p| (p.distance(m) - r).abs())?;
+                Created::Circle(circle)
+            }
+            (ToolKind::Circle3P, &[a, b, c]) => {
+                let (m, r) = shapes::circle_through(a, b, c, tol)
+                    .ok_or_else(|| crate::msg!("sketch-circle-collinear"))?;
+                let center = new_point(sk, plane, plane.to3(m))?;
+                let circle = sk.add_circle3(center, r, n).map_err(err)?;
+                for h in hits {
+                    bind_rim3(sk, plane, circle, h, |p| (p.distance(m) - r).abs())?;
+                }
+                Created::Circle(circle)
+            }
+            (ToolKind::Circle2T | ToolKind::Circle3T, _) => {
+                let refused = || ToolKind::Circle3T.refusal();
+                let (m, r) = self
+                    .tangent_plan3(sk, kind, plane, curves, at)
+                    .ok_or_else(refused)?;
+                let m3 = plane.to3(m);
+                let center = new_point(sk, plane, m3)?;
+                let circle = sk.add_circle3(center, r, n).map_err(err)?;
+                for &c in curves {
+                    sk.add_constraint(ConstraintKind::Tangent(c, circle))
+                        .map_err(err)?;
+                }
+                self.solve_checked(sk, prior).map_err(|_| refused())?;
+                // Wandert die Mitte beim Lösen, wäre es eine andere Lösung als die Vorschau.
+                if sk.point_xyz(center).map_err(err)?.distance(m3) > 10.0 * tol {
+                    return Err(refused());
+                }
+                return Ok(Created::Circle(circle));
+            }
+            (ToolKind::ArcCenter, &[m, s, e]) => {
+                let plan = arc_center_plan(m, s, e, tol).ok_or_else(|| kind.refusal())?;
+                let center = own_point(sk, plane, &hits[0])?;
+                let start = own_point(sk, plane, &hits[1])?;
+                // Das Ende liegt auf dem Radius; es bindet nur, wenn der Klick genau dort lag.
+                let end = if e.distance(plan.end) <= tol {
+                    own_point(sk, plane, &hits[2])?
+                } else {
+                    new_point(sk, plane, plane.to3(plan.end))?
+                };
+                Created::Arc(sk.add_arc3(center, start, end, n).map_err(err)?)
+            }
+            (ToolKind::ArcTangent, &[_, _]) => {
+                let straight = || crate::msg!("sketch-arc-tangent-straight");
+                let prev = self.auto_tangent.ok_or_else(|| kind.refusal())?;
+                let start = hits[0].snap.ok_or_else(|| kind.refusal())?;
+                let plan = self.tangent_arc_plan3(sk, plane, at).ok_or_else(straight)?;
+                let from = plane.to2(sk.point_xyz(start).map_err(err)?);
+                let center = new_point(sk, plane, plane.to3(plan.center))?;
+                let end = own_point(sk, plane, &hits[1])?;
+                let arc = if plan.start == from {
+                    sk.add_arc3(center, start, end, n)
+                } else {
+                    sk.add_arc3(center, end, start, n)
+                }
+                .map_err(err)?;
+                sk.add_constraint(ConstraintKind::Tangent(arc, prev))
+                    .map_err(err)?;
+                Created::Arc(arc)
+            }
+            _ => {
+                let plan = shape_plan3(kind, &q, self.current_sides(), tol)
+                    .ok_or_else(|| finish_refusal3(kind))?;
+                transplanted(sk, kind, plane, &plan, &q, hits)?
+            }
+        };
+        self.solve_checked(sk, prior)?;
+        Ok(created)
+    }
+
+    /// Mitte und Radius des Tangentenkreises an die Kurven `curves` (in der Ebene), der Zeiger
+    /// `at` wählt unter den Lösungen: gerechnet wie in 2D an ihren Abbildern in der Ebene.
+    fn tangent_plan3(
+        &self,
+        sk: &Sketch,
+        kind: ToolKind,
+        plane: &Plane3,
+        curves: &[CurveId],
+        at: DVec2,
+    ) -> Option<(DVec2, f64)> {
+        let (flat, ids) = flat_refs(sk, plane, curves)?;
+        match (kind, ids.as_slice()) {
+            (ToolKind::Circle2T, &[a, b]) => {
+                tangent_circles::tangent_circle_two_lines(&flat, a, b, at, None)
+            }
+            (ToolKind::Circle3T, &[a, b, c]) => {
+                tangent_circles::tangent_circle_three(&flat, [a, b, c], at)
+            }
+            _ => None,
+        }
+    }
+
+    /// Der tangentiale Bogen vom gesetzten Anfang bis `at` (2D-Basis der Ebene).
+    fn tangent_arc_plan3(&self, sk: &Sketch, plane: &Plane3, at: DVec2) -> Option<ArcPlan> {
+        let prev = self.auto_tangent?;
+        let start = self.pending3.first()?.snap?;
+        let from = plane.to2(sk.point_xyz(start).ok()?);
+        let d = leaving3(sk, prev, start)?;
+        let leaving = DVec2::new(d.dot(plane.u), d.dot(plane.v)).try_normalize()?;
+        shapes::tangent_arc(from, leaving, at, sk.tolerance().linear)
+    }
+
+    /// Vorschau der übrigen Arten in 3D mit dem Zeiger an `at`: vor dem Plan die Linie zum Zeiger
+    /// (wie in 2D), dann die Form, wie der Klick sie anlegte.
+    fn kind_preview3(&self, sk: &Sketch, kind: ToolKind, at: DVec3) -> Vec<Vec<DVec3>> {
+        let tol = sk.tolerance().linear;
+        let plane = self.plane3_at(sk, at);
+        let mut q: Vec<DVec2> = self.pending3.iter().map(|h| plane.to2(h.at)).collect();
+        let p = plane.to2(at);
+        let steps = PREVIEW_STEPS_PER_TURN;
+        let flat: Vec<Vec<DVec2>> = match kind {
+            ToolKind::Circle2T | ToolKind::Circle3T => {
+                let mut curves = self.pending_curves.clone();
+                if kind == ToolKind::Circle3T
+                    && let Some(c) = self.cursor3.and_then(|c| c.curve)
+                    && !curves.contains(&c)
+                {
+                    curves.push(c);
+                }
+                if curves.len() < kind_picks(kind) {
+                    return Vec::new();
+                }
+                self.tangent_plan3(sk, kind, &plane, &curves, p)
+                    .map(|(m, r)| ShapePlan::Circle(m, r).outline(steps))
+                    .unwrap_or_default()
+            }
+            ToolKind::ArcTangent if q.len() == 1 => self
+                .tangent_arc_plan3(sk, &plane, p)
+                .map(|a| ShapePlan::Arc(a).outline(steps))
+                .unwrap_or_default(),
+            ToolKind::ArcTangent => Vec::new(),
+            _ => {
+                let shows_line = kind.is_straight_slot()
+                    || kind.is_arc_slot()
+                    || matches!(
+                        kind,
+                        ToolKind::Rect3P
+                            | ToolKind::Circle3P
+                            | ToolKind::PolygonEdge
+                            | ToolKind::ArcCenter
+                    );
+                match q.as_slice() {
+                    &[from] if shows_line => {
+                        if from.distance(p) > tol {
+                            vec![vec![from, p]]
+                        } else {
+                            Vec::new()
+                        }
+                    }
+                    _ => {
+                        q.push(p);
+                        shape_plan3(kind, &q, self.current_sides(), tol)
+                            .map(|plan| plan.outline(steps))
+                            .unwrap_or_default()
+                    }
+                }
+            }
+        };
+        flat.into_iter()
+            .map(|line| line.into_iter().map(|p| plane.to3(p)).collect())
+            .collect()
+    }
+}
+
+/// Liegt die Kurve `c` in der Ebene `plane`? Eine Linie mit beiden Enden, Kreis und Bogen mit der
+/// Mitte und gleicher (oder gegenläufiger) Normale. Andere Arten nimmt keine Tangente in 3D.
+pub(crate) fn curve_in_plane(sk: &Sketch, plane: &Plane3, c: CurveId) -> bool {
+    let tol = sk.tolerance().linear;
+    let n = plane.normal();
+    let on = |p: PointId| {
+        sk.point_xyz(p)
+            .is_ok_and(|q| (q - plane.origin).dot(n).abs() <= tol)
+    };
+    match sk.curve(c).map(|d| &d.kind) {
+        Some(&CurveKind::Line { a, b }) => on(a) && on(b),
+        Some(&CurveKind::Circle { center, .. } | &CurveKind::Arc { center, .. }) => {
+            on(center) && sk.curve_normal(c).dot(n).abs() >= 1.0 - NORMAL_TOL
+        }
+        _ => false,
+    }
+}
+
+/// Ein Punkt der Hilfsskizze an der Lage von `p` in der 2D-Basis der Ebene.
+fn flat_point(f: &mut Sketch, sk: &Sketch, plane: &Plane3, p: PointId) -> Option<PointId> {
+    let q = plane.to2(sk.point_xyz(p).ok()?);
+    f.add_point(q.x, q.y).ok()
+}
+
+/// Die Kurven `curves` (in der Ebene) als 2D-Kurven einer Hilfsskizze in der Basis der Ebene, in
+/// derselben Reihenfolge: für die Rechnung der Tangentenkreise wie in 2D. Ein Bogen mit
+/// gegenläufiger Normale läuft dort umgekehrt.
+fn flat_refs(sk: &Sketch, plane: &Plane3, curves: &[CurveId]) -> Option<(Sketch, Vec<CurveId>)> {
+    let mut f = Sketch::new(*sk.frame(), "", *sk.tolerance());
+    let mut ids = Vec::new();
+    for &c in curves {
+        let id = match sk.curve(c)?.kind {
+            CurveKind::Line { a, b } => {
+                let pa = flat_point(&mut f, sk, plane, a)?;
+                let pb = flat_point(&mut f, sk, plane, b)?;
+                f.add_line(pa, pb).ok()?
+            }
+            CurveKind::Circle { center, .. } => {
+                let m = flat_point(&mut f, sk, plane, center)?;
+                f.add_circle(m, sk.radius(c)?).ok()?
+            }
+            CurveKind::Arc { center, start, end } => {
+                let along = sk.curve_normal(c).dot(plane.normal()) > 0.0;
+                let (s, e) = if along { (start, end) } else { (end, start) };
+                let m = flat_point(&mut f, sk, plane, center)?;
+                let ps = flat_point(&mut f, sk, plane, s)?;
+                let pe = flat_point(&mut f, sk, plane, e)?;
+                f.add_arc(m, ps, pe).ok()?
+            }
+            _ => return None,
+        };
+        ids.push(id);
+    }
+    Some((f, ids))
+}
+
+/// Richtung, in der die Linie oder der Bogen `c` im Punkt `p` endet (im Raum; wie
+/// `leaving_direction` in 2D). `None`, wenn `c` dort nicht endet.
+fn leaving3(sk: &Sketch, c: CurveId, p: PointId) -> Option<DVec3> {
+    let at = sk.point_xyz(p).ok()?;
+    let xyz = |q: PointId| sk.point_xyz(q).ok();
+    let n = sk.curve_normal(c);
+    let d = match sk.curve(c)?.kind {
+        CurveKind::Line { a, b } if a == p => at - xyz(b)?,
+        CurveKind::Line { a, b } if b == p => at - xyz(a)?,
+        CurveKind::Arc { center, end, .. } if end == p => n.cross(at - xyz(center)?),
+        CurveKind::Arc { center, start, .. } if start == p => -n.cross(at - xyz(center)?),
+        _ => return None,
+    };
+    d.try_normalize()
+}
+
+/// Die Kurve, an der ein tangentialer Bogen in `p` anläuft: die jüngste Linie oder der jüngste
+/// Bogen, die dort enden; Konstruktionslinien nur, wenn sonst nichts dort endet (wie in 2D).
+fn tangent_start3(sk: &Sketch, p: PointId) -> Option<CurveId> {
+    sk.curves()
+        .filter(|&(c, _)| leaving3(sk, c, p).is_some())
+        .max_by_key(|(_, d)| !d.construction)
+        .map(|(c, _)| c)
+}
+
+/// Die Kurve unter dem Zeiger `at` im Raum (Bildschirmabstand, ohne Buchstaben und Griffe).
+fn curve_under3(sk: &Sketch, map: &Mapper, at: Pos2) -> Option<CurveId> {
+    let glyphs = sk.glyph_curves();
+    sk.curves()
+        .filter(|(c, _)| !glyphs.contains(c) && !sk.is_handle_curve(*c))
+        .filter_map(|(c, _)| {
+            let path = crate::sketch_view::curve_screen_path(sk, c, map);
+            let d = path
+                .windows(2)
+                .map(|w| crate::sketch_view::segment_distance(at, w[0], w[1]))
+                .fold(f32::MAX, f32::min);
+            (d <= PICK_RADIUS_PX).then_some((d, c))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, c)| c)
+}
+
+/// Punkte und Kurven der Hilfsskizze und ihre Gegenstücke in der Skizze.
+struct Moved {
+    points: HashMap<PointId, PointId>,
+    curves: HashMap<CurveId, CurveId>,
+}
+
+impl Moved {
+    fn p(&self, p: PointId) -> PointId {
+        self.points[&p]
+    }
+    fn c(&self, c: CurveId) -> CurveId {
+        self.curves[&c]
+    }
+}
+
+/// Legt die Form aus dem Plan `plan` an: erst mit den 2D-Formen in einer Hilfsskizze in der Basis
+/// der Ebene, dann in die Ebene gelegt ([`transplant`]). Gebunden werden wie in 2D die eigenen
+/// Punkte an den Klicks; die Breite eines Langlochs bindet nie, der Seitenmittelpunkt des
+/// umbeschriebenen Polygons und die Enden von „Gesamtlänge“ liegen auf ihrer Kurve.
+fn transplanted(
+    sk: &mut Sketch,
+    kind: ToolKind,
+    plane: &Plane3,
+    plan: &ShapePlan,
+    q: &[DVec2],
+    hits: &[Hit3],
+) -> Result<Created, Msg> {
+    let mut tmp = Sketch::new(*sk.frame(), "", *sk.tolerance());
+    let made = match (kind, plan) {
+        (ToolKind::Rect3P, ShapePlan::Quad(c)) => {
+            Created::Rectangle(tmp.add_rect_three_point(*c).map_err(err)?)
+        }
+        (ToolKind::RectCenter, ShapePlan::Quad(_)) => {
+            Created::Rectangle(tmp.add_rect_center(q[0], q[1]).map_err(err)?.rect)
+        }
+        (_, ShapePlan::Polygon(p)) => Created::Polygon {
+            ids: tmp.add_polygon(p).map_err(err)?,
+            inscribed: kind == ToolKind::PolygonInscribed,
+        },
+        (_, ShapePlan::Slot(p)) => {
+            let style = if kind == ToolKind::SlotCenterPoint {
+                SlotStyle::CenterPoint
+            } else {
+                SlotStyle::CenterToCenter
+            };
+            Created::Slot(tmp.add_slot(p, style).map_err(err)?)
+        }
+        (_, ShapePlan::ArcSlot(p)) => Created::ArcSlot(tmp.add_arc_slot(p).map_err(err)?),
+        _ => return Err(kind.refusal()),
+    };
+    let slot = kind.is_straight_slot() || kind.is_arc_slot();
+    let binds = if slot {
+        &hits[..hits.len().saturating_sub(1)]
+    } else {
+        hits
+    };
+    let rim = matches!(kind, ToolKind::PolygonCircumscribed | ToolKind::SlotOverall);
+    let m = transplant(sk, plane, &tmp, binds, rim)?;
+    Ok(match made {
+        Created::Rectangle(r) => Created::Rectangle(RectIds {
+            points: r.points.map(|p| m.p(p)),
+            lines: r.lines.map(|c| m.c(c)),
+        }),
+        Created::Polygon { ids, inscribed } => Created::Polygon {
+            ids: PolygonIds {
+                center: m.p(ids.center),
+                circle: m.c(ids.circle),
+                points: ids.points.iter().map(|&p| m.p(p)).collect(),
+                lines: ids.lines.iter().map(|&c| m.c(c)).collect(),
+            },
+            inscribed,
+        },
+        Created::Slot(ids) => Created::Slot(SlotIds {
+            centers: ids.centers.map(|p| m.p(p)),
+            sides: ids.sides.map(|c| m.c(c)),
+            caps: ids.caps.map(|c| m.c(c)),
+            axis: m.c(ids.axis),
+            mid: ids.mid.map(|p| m.p(p)),
+        }),
+        Created::ArcSlot(ids) => Created::ArcSlot(ArcSlotIds {
+            center: m.p(ids.center),
+            ends: ids.ends.map(|p| m.p(p)),
+            axis: m.c(ids.axis),
+            outer: m.c(ids.outer),
+            inner: m.c(ids.inner),
+            caps: ids.caps.map(|c| m.c(c)),
+        }),
+        other => other,
+    })
+}
+
+/// Legt Punkte, Kurven und Abhängigkeiten der Hilfsskizze `tmp` (2D-Basis der Ebene) in die Ebene
+/// `plane` der Skizze. Ein eigener Punkt an einem Klick aus `binds` mit gefangenem Punkt wird
+/// dieser Punkt; ein neuer Punkt dort bekommt Ursprung oder Mitte ([`bind_new3`]). Mit `rim`
+/// liegt ein gefangener Punkt ohne eigenen Punkt auf der Kurve der Form, an der er liegt (eine
+/// Seitenmitte mit `Midpoint`). „Waagerecht“ und „Vertikal“ der Ebene werden zur Achse der Skizze,
+/// auf der die Achse der Ebene liegt; sonst hält `Senkrecht` die beiden Kanten.
+fn transplant(
+    sk: &mut Sketch,
+    plane: &Plane3,
+    tmp: &Sketch,
+    binds: &[Hit3],
+    rim: bool,
+) -> Result<Moved, Msg> {
+    let tol = sk.tolerance().linear;
+    let n = plane.normal();
+    let mut used = vec![false; binds.len()];
+    let mut m = Moved {
+        points: HashMap::new(),
+        curves: HashMap::new(),
+    };
+    for (p, _) in tmp.points() {
+        let q = tmp.point_xy(p).map_err(err)?;
+        let hit = binds
+            .iter()
+            .position(|h| plane.to2(h.at).distance(q) <= tol);
+        let id = match hit.and_then(|i| binds[i].snap.map(|s| (i, s))) {
+            Some((i, s)) => {
+                used[i] = true;
+                s
+            }
+            None => {
+                let id = new_point(sk, plane, plane.to3(q))?;
+                if let Some(i) = hit {
+                    used[i] = true;
+                    bind_new3(sk, id, binds[i].origin, binds[i].mid)?;
+                }
+                id
+            }
+        };
+        m.points.insert(p, id);
+    }
+    for (c, d) in tmp.curves() {
+        let id = match d.kind {
+            CurveKind::Line { a, b } => sk.add_line(m.p(a), m.p(b)),
+            CurveKind::Circle { center, .. } => {
+                let r = tmp
+                    .radius(c)
+                    .ok_or_else(|| crate::msg!("sketch-radius-positive"))?;
+                sk.add_circle3(m.p(center), r, n)
+            }
+            CurveKind::Arc { center, start, end } => {
+                sk.add_arc3(m.p(center), m.p(start), m.p(end), n)
+            }
+            _ => return Err(crate::msg!("sketch-invalid-position")),
+        }
+        .map_err(err)?;
+        if d.construction {
+            sk.set_construction(id, true).map_err(err)?;
+        }
+        m.curves.insert(c, id);
+    }
+    let mut level = Vec::new();
+    let mut upright = Vec::new();
+    for (_, d) in tmp.constraints() {
+        use ConstraintKind::*;
+        let kind = match d.kind {
+            Horizontal(LineOrPoints::Line(l)) => {
+                level.push(m.c(l));
+                continue;
+            }
+            Vertical(LineOrPoints::Line(l)) => {
+                upright.push(m.c(l));
+                continue;
+            }
+            Coincident(a, b) => Coincident(m.p(a), m.p(b)),
+            PointOnCurve(a, c) => PointOnCurve(m.p(a), m.c(c)),
+            Midpoint(a, c) => Midpoint(m.p(a), m.c(c)),
+            Parallel(a, b) => Parallel(m.c(a), m.c(b)),
+            Perpendicular(a, b) => Perpendicular(m.c(a), m.c(b)),
+            Tangent(a, b) => Tangent(m.c(a), m.c(b)),
+            Equal(a, b) => Equal(m.c(a), m.c(b)),
+            _ => return Err(crate::msg!("sketch-invalid-position")),
+        };
+        sk.add_constraint(kind).map_err(err)?;
+    }
+    let along: Option<Vec<ConstraintKind>> = level
+        .iter()
+        .map(|&l| Plane3::axis_kind(plane.u, l))
+        .chain(upright.iter().map(|&l| Plane3::axis_kind(plane.v, l)))
+        .collect();
+    match (along, level.first(), upright.first()) {
+        (Some(kinds), ..) => {
+            for k in kinds {
+                sk.add_constraint(k).map_err(err)?;
+            }
+        }
+        (None, Some(&a), Some(&b)) => {
+            sk.add_constraint(ConstraintKind::Perpendicular(a, b))
+                .map_err(err)?;
+        }
+        _ => {}
+    }
+    if rim {
+        for (h, _) in binds.iter().zip(&used).filter(|(_, u)| !**u) {
+            let Some(s) = h.snap else {
+                continue;
+            };
+            let at = plane.to2(h.at);
+            let on = tmp.curves().find_map(|(c, d)| {
+                if d.construction {
+                    return None;
+                }
+                if let CurveKind::Line { a, b } = d.kind {
+                    let mid = (tmp.point_xy(a).ok()? + tmp.point_xy(b).ok()?) / 2.0;
+                    if mid.distance(at) <= tol {
+                        return Some(ConstraintKind::Midpoint(s, m.c(c)));
+                    }
+                }
+                let near = tmp.nearest_on_curve(c, at)?;
+                (near.distance(at) <= tol).then(|| ConstraintKind::PointOnCurve(s, m.c(c)))
+            });
+            if let Some(k) = on {
+                sk.add_constraint(k).map_err(err)?;
+            }
+        }
+    }
+    Ok(m)
 }

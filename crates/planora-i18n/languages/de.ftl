@@ -1095,6 +1095,7 @@ sketch-field-rho = Rho
 sketch-field-rho-range = Rho muss eine Zahl von 0,000001 bis 0,999999 sein
 sketch-field-z-distance = Z-Abstand
 sketch-3d-grazing = Die Ebene der Triade liegt fast parallel zur Blickrichtung. Ansicht drehen oder eine andere Ebene wählen.
+sketch-3d-tangent-plane = Die Kurve liegt nicht in der Ebene der Triade. Tangential geht in 3D nur an Kurven in dieser Ebene.
 sketch-field-radius-or-sweep = Radius oder Öffnungswinkel
 sketch-field-positive = Der Wert muss größer als null sein
 sketch-field-angle-range = Der Winkel muss zwischen 0° und 180° liegen

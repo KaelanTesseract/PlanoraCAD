@@ -6,7 +6,6 @@
 //!
 //! Die Triade gehört zur Sitzung, nicht zum Dokument und nicht zum Rückgängig (Spec Abschnitt 4).
 
-use crate::sketch_kinds::ToolKind;
 use crate::sketch_state::{SketchSession, Tool};
 use crate::sketch_view::{Mapper, format_angle, parse_number, sketch3_to_screen};
 use crate::state::AppState;
@@ -234,37 +233,24 @@ impl Triad {
     }
 }
 
-/// Ist die Triade zu sehen? Nur in einer 3D-Skizze und mit einem der 3D-Werkzeuge: Linie, Bogen
-/// „3 Punkte“, Spline (beide Arten und Kegelschnitt), Rechteck „2 Punkte“, Kreis „2 Punkte“,
-/// Ellipse, Punkt und Text (Spec Abschnitt 4).
+/// Ist die Triade zu sehen? Nur in einer 3D-Skizze und mit einem der 3D-Werkzeuge, jeweils in
+/// allen Arten: Linie, Bogen, Spline (beide Arten und Kegelschnitt), Rechteck, Kreis, Ellipse,
+/// Punkt, Text, Polygon und Langloch (Spec Abschnitt 4, Task H).
 pub fn triad_visible(se: &SketchSession, sk: &Sketch) -> bool {
     sk.three_d
-        && match se.tool {
-            Tool::Line | Tool::Point | Tool::Ellipse | Tool::Text | Tool::Spline => true,
-            Tool::Arc => se.kind_of(Tool::Arc) == Some(ToolKind::Arc3P),
-            Tool::Rectangle => se.kind_of(Tool::Rectangle) == Some(ToolKind::Rect2P),
-            Tool::Circle => se.kind_of(Tool::Circle) == Some(ToolKind::Circle2P),
-            _ => false,
-        }
-}
-
-/// Zeichnet die Art `kind` in 3D (Spec Abschnitt 4)? Bei Bogen, Rechteck, Kreis und Spline nur
-/// „3 Punkte“, „2 Punkte“, „2 Punkte“, beide Splines und der Kegelschnitt; die Arten der übrigen
-/// Werkzeuge zählen nicht (deren Werkzeug zeigt die Triade gar nicht erst). Die anderen sind in der
-/// Liste der Arten gedämpft, solange die Triade zu sehen ist.
-pub fn kind_draws_3d(kind: ToolKind) -> bool {
-    match kind.tool() {
-        Tool::Arc | Tool::Rectangle | Tool::Circle | Tool::Spline => matches!(
-            kind,
-            ToolKind::Arc3P
-                | ToolKind::Rect2P
-                | ToolKind::Circle2P
-                | ToolKind::SplineFit
-                | ToolKind::SplineControl
-                | ToolKind::Conic
-        ),
-        _ => true,
-    }
+        && matches!(
+            se.tool,
+            Tool::Line
+                | Tool::Point
+                | Tool::Ellipse
+                | Tool::Text
+                | Tool::Spline
+                | Tool::Arc
+                | Tool::Rectangle
+                | Tool::Circle
+                | Tool::Polygon
+                | Tool::Slot
+        )
 }
 
 /// Winkelfang am Drehbogen: nahe an einer Stufe von 15° (bis 3°) die Stufe, sonst ganze Grad;

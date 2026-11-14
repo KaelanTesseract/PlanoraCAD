@@ -460,6 +460,20 @@ pub fn look_at_button(ctx: &egui::Context) -> Option<egui::Rect> {
     ctx.data(|d| d.get_temp::<egui::Rect>(look_at_key()))
 }
 
+/// Schriftgröße der Schalter in der Namenszeile der Palette (Task H1).
+const SWITCH_TEXT_PX: f32 = 10.0;
+
+fn sketch_name_key() -> egui::Id {
+    shell_panels::sketch_side_id().with("sketch-name")
+}
+
+/// Der Skizzenname in der Namenszeile der Palette im letzten Bild: gekürzt? und seine Lage (für
+/// Tests).
+#[doc(hidden)]
+pub fn sketch_name_label(ctx: &egui::Context) -> Option<(bool, egui::Rect)> {
+    ctx.data(|d| d.get_temp::<(bool, egui::Rect)>(sketch_name_key()))
+}
+
 fn degree_buttons_key() -> egui::Id {
     shell_panels::sketch_side_id().with("spline-degree")
 }
@@ -559,18 +573,6 @@ fn flyout_held_key() -> egui::Id {
 #[doc(hidden)]
 pub fn flyout_entries(ctx: &egui::Context) -> Vec<(String, egui::Rect)> {
     ctx.data(|d| d.get_temp::<Vec<(String, egui::Rect)>>(flyout_entries_key()))
-        .unwrap_or_default()
-}
-
-fn flyout_dimmed_key() -> egui::Id {
-    shell_panels::sketch_strip_id().with("flyout-dimmed")
-}
-
-/// Namen der gedämpften Einträge der offenen Liste im letzten Bild (für Tests): bei sichtbarer
-/// Triade die Arten, die nur in 2D zeichnen (Skizzen 10).
-#[doc(hidden)]
-pub fn flyout_dimmed(ctx: &egui::Context) -> Vec<String> {
-    ctx.data(|d| d.get_temp::<Vec<String>>(flyout_dimmed_key()))
         .unwrap_or_default()
 }
 
@@ -708,10 +710,6 @@ fn strip_field(
     let inner = shell_panels::inner_size(&frame, rect.size());
     let mut seen: Vec<(String, egui::Rect)> = Vec::new();
     let mut entries: Vec<(String, egui::Rect)> = Vec::new();
-    let mut dimmed: Vec<String> = Vec::new();
-    // Bei sichtbarer Triade sind die Arten gedämpft, die nur in 2D zeichnen (Spec Abschnitt 4);
-    // wählbar bleiben sie.
-    let triad = crate::sketch_triad::triad_visible(se, sk);
     // Die Tastenbelegung dieses Bilds (für die Taste im Hinweistext).
     let km = crate::keymap::mouse::current(ctx);
     // Eine Taste hat Werkzeug oder Art gewechselt: Die Liste gehört zum alten Stand.
@@ -768,12 +766,7 @@ fn strip_field(
                             se.choose_tool(sk, tool);
                             egui::Popup::close_id(ctx, flyout_id(tool));
                         }
-                        let list = FlyoutList {
-                            triad,
-                            entries: &mut entries,
-                            dimmed: &mut dimmed,
-                        };
-                        if flyout && let Some(kind) = flyout_list(&r, tool, &km, list) {
+                        if flyout && let Some(kind) = flyout_list(&r, tool, &km, &mut entries) {
                             se.choose_kind(sk, kind);
                         }
                         seen.push((label, r.rect));
@@ -787,7 +780,6 @@ fn strip_field(
     ctx.data_mut(|d| {
         d.insert_temp(strip_buttons_key(), seen);
         d.insert_temp(flyout_entries_key(), entries);
-        d.insert_temp(flyout_dimmed_key(), dimmed);
     });
 }
 
@@ -824,19 +816,14 @@ fn flyout_gesture(
 /// Zeigt die Liste des Knopfs `r`, wenn sie offen ist: alle Arten mit Namen und Kürzel, rechts
 /// neben dem Knopf. Sie schließt bei einem Eintrag, bei Esc (macht `Popup` selbst) und bei einem
 /// Drücken außerhalb von Liste und Knopf; `CloseOnClick` taugt nicht, das Loslassen nach dem Halten
-/// schlösse sie sofort. Liefert die gewählte Art. Bei sichtbarer Triade (`list.triad`) sind die
-/// Arten gedämpft, die nur in 2D zeichnen.
+/// schlösse sie sofort. Liefert die gewählte Art; Name und Lage der Einträge gehen nach `entries`
+/// (für die Tests). Alle Arten zeichnen auch in 3D, keine ist gedämpft (Task H).
 fn flyout_list(
     r: &egui::Response,
     tool: Tool,
     km: &Keymap,
-    list: FlyoutList<'_>,
+    entries: &mut Vec<(String, egui::Rect)>,
 ) -> Option<ToolKind> {
-    let FlyoutList {
-        triad,
-        entries,
-        dimmed,
-    } = list;
     let id = flyout_id(tool);
     let mut picked = None;
     let shown = egui::Popup::menu(r)
@@ -850,20 +837,8 @@ fn flyout_list(
                 let keys = shortcut_hint(km, kind.action());
                 let source = icons::sketch_kind_icon(*kind);
                 let label = kind.label();
-                let dim = triad && !crate::sketch_triad::kind_draws_3d(*kind);
-                let entry = ui
-                    .scope(|ui| {
-                        if dim {
-                            let weak = ui.visuals().weak_text_color();
-                            ui.visuals_mut().override_text_color = Some(weak);
-                        }
-                        icons::source_entry_keys(ui, source, &label, &keys, true)
-                    })
-                    .inner
+                let entry = icons::source_entry_keys(ui, source, &label, &keys, true)
                     .on_hover_text(kind.hint());
-                if dim {
-                    dimmed.push(label.clone());
-                }
                 if entry.clicked() {
                     picked = Some(*kind);
                     ui.close();
@@ -881,14 +856,6 @@ fn flyout_list(
         egui::Popup::close_id(&r.ctx, id);
     }
     picked
-}
-
-/// Was die Liste der Arten außer dem Knopf braucht: ob die Triade zu sehen ist, und wohin Lage
-/// und Dämpfung der Einträge für die Tests gehen.
-struct FlyoutList<'a> {
-    triad: bool,
-    entries: &'a mut Vec<(String, egui::Rect)>,
-    dimmed: &'a mut Vec<String>,
 }
 
 /// Trennlinie der Leiste: [`shell::STRIP_SEPARATOR_H`] hoch (zusätzlich zum Abstand der
@@ -1363,16 +1330,32 @@ fn side_contents(
     // Fusions Skizzenpalette „Profil“: geschlossene Flächen hell eingefärbt); alles in einer
     // Zeile, damit die Liste darunter nicht nach unten rutscht. Die Spalte ist schmal: Die
     // Schalter bekommen ihren Platz zuerst, der Name nimmt den Rest und kürzt sich bei Bedarf.
+    // Damit ein Name wie „Skizze 12“ ganz zu lesen ist, stehen die Schalter hier eng und mit
+    // kleiner Schrift (Task H1; der volle Name steht beim Kürzen im Hinweis).
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.spacing_mut().item_spacing.x = 2.0;
+        ui.spacing_mut().icon_spacing = 2.0;
+        let small = |t: String| egui::RichText::new(t).size(SWITCH_TEXT_PX);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.checkbox(show_profiles, tr!("sketch-show-profile"));
+            ui.checkbox(show_profiles, small(tr!("sketch-show-profile")));
             let three_d = ui
-                .checkbox(&mut palette.three_d, tr!("sketch-palette-three-d"))
+                .checkbox(&mut palette.three_d, small(tr!("sketch-palette-three-d")))
                 .on_hover_text(tr!("sketch-palette-three-d-hint"));
             palette.three_d_changed |= three_d.changed();
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.add(egui::Label::new(egui::RichText::new(&sf.sketch.name).strong()).truncate());
+                let name = egui::RichText::new(&sf.sketch.name).strong();
+                let shown = ui.add(egui::Label::new(name.clone()).truncate());
+                let full = egui::WidgetText::from(name)
+                    .into_galley(
+                        ui,
+                        Some(egui::TextWrapMode::Extend),
+                        f32::INFINITY,
+                        egui::TextStyle::Body,
+                    )
+                    .size()
+                    .x;
+                let cut = full > shown.rect.width() + 0.5;
+                ui.data_mut(|d| d.insert_temp(sketch_name_key(), (cut, shown.rect)));
             });
         });
     });

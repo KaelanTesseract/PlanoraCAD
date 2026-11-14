@@ -154,9 +154,9 @@ Nicht im Umfang: Isoparametrische Kurve und Gedrehtes Profil. Sie stehen in der 
 
 ### 4. Triade und Zeichnen in 3D (`planora-app`)
 
-- **Haken:** „3D-Skizze“ steht in der Skizzenpalette in der Zeile mit Raster, Fang und Blick auf. Das Umschalten ist ein Rückgängig-Schritt.
+- **Haken:** „3D-Skizze“ steht in der Skizzenpalette in der Namenszeile (Name | 3D-Skizze | Profil anzeigen; Korrektur Task 9). Die beiden Schalter dort stehen eng und in kleiner Schrift, damit ein Name wie „Skizze 12“ ganz zu lesen ist (Task H1). Das Umschalten ist ein Rückgängig-Schritt.
 - **3D-Abbildung:** `Mapper` bekommt `to_screen3(DVec3)` (Skizzenkoordinaten in 3D). `screen_to_plane(pixel, plane)` schneidet den Blickstrahl mit einer beliebigen Ebene in Skizzenkoordinaten. Fertige Skizzen und die aktive Skizze zeichnen 3D-Kurven mit z.
-- **Triade:** Sie erscheint, wenn der Haken gesetzt ist und eines der neun 3D-Werkzeuge aktiv ist (Linie, Bogen nur „3 Punkte“, Spline beider Arten, Rechteck „2 Punkte“, Kreis „2 Punkte“, Ellipse, Punkt, Text, Kegelschnitt). Die anderen Arten dieser Werkzeuge zeichnen nur 2D. Ihre Einträge sind bei aktiver Triade gedämpft. *(Wie die Hilfe-Liste.)*
+- **Triade:** Sie erscheint, wenn der Haken gesetzt ist und eines der neun 3D-Werkzeuge aktiv ist (Linie, Bogen, Spline, Rechteck, Kreis, Ellipse, Punkt, Text, Kegelschnitt), und zwar mit **allen Arten** dieser Werkzeuge; ebenso bei Polygon und Langloch (Task H). Kein Eintrag in den Listen der Arten ist gedämpft. *(Dennis 2026-11-14 nach dem Handtest: „Ja, alle Arten“; die Hilfe-Liste zeigt nur je ein Symbol.)*
   - **Aussehen:** Sie wird als egui-Formen gezeichnet: drei halbtransparente Ebenenquadrate in den Achsfarben (rot/grün/blau wie die Ursprungsachsen), drei Achsen und drei Drehbögen. Die aktive Ebene ist kräftiger. Die Größe ist in Bildschirmpunkten fest.
   - **Lage:** Sie beginnt am Skizzenursprung mit den Achsen der Skizze und der aktiven Ebene XY (= Skizzenebene). Nach jedem gesetzten Punkt springt sie auf diesen Punkt.
   - **Bedienung:**
@@ -173,7 +173,9 @@ Nicht im Umfang: Isoparametrische Kurve und Gedrehtes Profil. Sie stehen in der 
   - **Felder am Zeiger:** Linie und Spline zeigen „Länge“ und „Winkel“ in der aktiven Ebene. Das ist Fusions „Drehung und Abstand“, und es entstehen dieselben Maße wie in 2D, in 3D-Fassung.
   - Steht die Blickrichtung fast parallel zur aktiven Ebene (Winkel unter 5°), setzt ein Klick nichts, und ein Hinweis bittet, die Ansicht zu drehen oder die Ebene zu wechseln. *(Claudes Festlegung gegen Punkte im Unendlichen.)*
 - **Ebene Kurven:**
-  - **Kreis, Bogen, Ellipse, Rechteck, Text:** Sie entstehen in der aktiven Triadenebene. Ist die aktive Ebene die Skizzenebene (Triade unverdreht, XY, Ursprung z = 0), entsteht normale 2D-Geometrie.
+  - **Kreis, Bogen, Ellipse, Rechteck, Polygon, Langloch, Text:** Sie entstehen in allen Arten in der aktiven Triadenebene; gerechnet wird in der 2D-Basis der Ebene mit denselben Formen wie in 2D. Ist die aktive Ebene die Skizzenebene (Normale ±Z durch z = 0, auch um Z gedreht), entsteht normale 2D-Geometrie.
+  - **Tangential (Kreis „2 Tangenten“, „3 Tangenten“, Bogen „tangential“):** nur an Linien, Kreisen und Bögen, die in der Triadenebene liegen; sonst ein Hinweis, und nichts entsteht.
+  - **Felder:** Die ebenen Formen in 3D zeigen keine Felder am Zeiger (außer Rho beim Kegelschnitt); Maße setzt man danach.
   - **Text in 3D:** Rahmen und Schrift liegen in der Triadenebene. Der Text-Abschnitt im Skizzenfeld bleibt derselbe. „Text auf Pfad“ gibt es nur in 2D.
 - **Fang (A7):** Skizzenpunkte und Mitten aller Kurven (in 3D über den Bildschirmabstand), Ursprung, Körperecken. Fang an einer Körperecke legt einen eingebezogenen Punkt an (wie Abschnitt 5) und verbindet ihn mit „Deckungsgleich“.
 - **Auswahl:** Ein Klick wählt 3D-Kurven über den Bildschirmabstand zur projizierten Kurve. Die Rahmenauswahl wirkt auf die projizierte Lage.

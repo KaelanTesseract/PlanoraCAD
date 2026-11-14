@@ -233,7 +233,7 @@ pub fn curve_screen_paths(sk: &Sketch, c: CurveId, map: &Mapper) -> Vec<Vec<Pos2
 }
 
 /// Abstand von `p` zur Strecke `a`–`b` auf dem Bildschirm.
-fn segment_distance(p: Pos2, a: Pos2, b: Pos2) -> f32 {
+pub(crate) fn segment_distance(p: Pos2, a: Pos2, b: Pos2) -> f32 {
     let ab = b - a;
     let len2 = ab.length_sq();
     let t = if len2 > 0.0 {
@@ -3079,6 +3079,12 @@ fn draw_preview3(
         .iter()
         .filter_map(|&p| sk.point_xyz(p).ok())
         .collect();
+    // Tangentenkreise in 3D (Task H): gewählte Kurven und die Kurve unter dem Zeiger hervorgehoben.
+    for &c in se.pending_curves.iter().chain(cur.curve.iter()) {
+        for path in curve_screen_paths(sk, c, map) {
+            draw_path(painter, path, Stroke::new(3.0, color), false);
+        }
+    }
     // Ebene Formen (Task 12): die Form in ihrer Ebene, wie der Klick sie anlegte.
     if se.planar3().is_some() {
         for line in se.planar3_preview(sk, cur.at) {

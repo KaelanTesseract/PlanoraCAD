@@ -698,24 +698,76 @@ impl Rig {
     }
 }
 
-#[test]
-fn non_3d_kinds_dimmed_when_triad_visible() {
-    for three_d in [true, false] {
-        let mut r = Rig::new(three_d, Tool::Line);
-        for (tool, flat, spatial) in [
-            (Tool::Arc, ToolKind::ArcCenter, ToolKind::Arc3P),
-            (Tool::Rectangle, ToolKind::Rect3P, ToolKind::Rect2P),
-        ] {
-            let at = r.strip(&sketch_panel::tool_label(tool));
-            r.click(at, PointerButton::Secondary);
-            assert!(sketch_panel::flyout_open(&r.ctx), "{tool:?}");
-            let dimmed = sketch_panel::flyout_dimmed(&r.ctx);
-            assert_eq!(dimmed.contains(&flat.label()), three_d, "{flat:?}");
-            assert!(!dimmed.contains(&spatial.label()), "{spatial:?}");
-            r.frame(vec![key_down(Key::Escape, Modifiers::NONE)]);
-            r.frame(vec![key_up(Key::Escape)]);
-            r.frame(vec![]);
+/// Alle Texte des letzten Bilds mit ihren Farben (Galley-Abschnitte und Ersatzfarbe).
+fn texts_with_colors(shapes: &[egui::epaint::ClippedShape]) -> Vec<(String, Vec<egui::Color32>)> {
+    fn walk(shape: &egui::epaint::Shape, out: &mut Vec<(String, Vec<egui::Color32>)>) {
+        match shape {
+            egui::epaint::Shape::Vec(v) => v.iter().for_each(|x| walk(x, out)),
+            egui::epaint::Shape::Text(t) => {
+                let mut colors: Vec<egui::Color32> = t
+                    .galley
+                    .job
+                    .sections
+                    .iter()
+                    .map(|s| s.format.color)
+                    .collect();
+                colors.push(t.fallback_color);
+                colors.extend(t.override_text_color);
+                out.push((t.galley.text().to_string(), colors));
+            }
+            _ => {}
         }
+    }
+    let mut out = Vec::new();
+    for s in shapes {
+        walk(&s.shape, &mut out);
+    }
+    out
+}
+
+/// Bei sichtbarer Triade ist kein Eintrag in den Listen der Arten gedämpft: Alle Arten zeichnen
+/// in der Ebene der Triade (Task H2).
+#[test]
+fn no_kind_dimmed_when_triad_visible() {
+    let mut r = Rig::new(true, Tool::Line);
+    for tool in [
+        Tool::Arc,
+        Tool::Rectangle,
+        Tool::Circle,
+        Tool::Polygon,
+        Tool::Slot,
+        Tool::Spline,
+    ] {
+        let at = r.strip(&sketch_panel::tool_label(tool));
+        r.click(at, PointerButton::Secondary);
+        assert!(sketch_panel::flyout_open(&r.ctx), "{tool:?}");
+        r.time += 1.0 / 60.0;
+        let raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, SIZE)),
+            time: Some(r.time),
+            ..Default::default()
+        };
+        let mut f = eframe::Frame::_new_kittest();
+        let app = &mut r.app;
+        let out = r.ctx.run_ui(raw, |ui| app.ui(ui, &mut f));
+        let texts = texts_with_colors(&out.shapes);
+        out.drop_without_applying_deltas();
+        let weak = r.ctx.global_style().visuals.weak_text_color();
+        for kind in ToolKind::of(tool) {
+            let label = kind.label();
+            let found: Vec<&Vec<egui::Color32>> = texts
+                .iter()
+                .filter(|(t, _)| *t == label)
+                .map(|(_, c)| c)
+                .collect();
+            assert!(!found.is_empty(), "{kind:?}: Eintrag fehlt");
+            for colors in found {
+                assert!(!colors.contains(&weak), "{kind:?} gedämpft");
+            }
+        }
+        r.frame(vec![key_down(Key::Escape, Modifiers::NONE)]);
+        r.frame(vec![key_up(Key::Escape)]);
+        r.frame(vec![]);
     }
 }
 
@@ -1316,4 +1368,564 @@ fn text_frame_in_yz_plane() {
     assert!(d.normal.is_none());
     assert!(text_corners(sk).iter().all(|q| q.z == 0.0));
     assert!(d.points.iter().all(|&p| !sk.is_3d_point(p)));
+}
+
+// ---- Namenszeile der Palette (Task H1) -----------------------------------------------------------
+
+/// Der Skizzenname „Skizze 12“ steht in der Zeile „Name | 3D-Skizze | Profil anzeigen“
+/// ungekürzt (bei 1920 × 1080).
+#[test]
+fn sketch_name_is_not_cut_in_the_palette() {
+    // Ein sehr langer Name kürzt sich weiter (die Zeile bleibt eine Zeile).
+    for (name, want_cut) in [("Skizze 12", false), ("Eine sehr lange Skizze 12", true)] {
+        let mut r = Rig::new(true, Tool::Line);
+        r.st().session_sketch_mut().unwrap().1.name = name.to_string();
+        r.frame(vec![]);
+        r.frame(vec![]);
+        let (cut, rect) = sketch_panel::sketch_name_label(&r.ctx).expect("Namenszeile");
+        assert_eq!(cut, want_cut, "„{name}“, {} px breit", rect.width());
+    }
+}
+
+// ---- Alle Arten in der Ebene der Triade (Task H2) -----------------------------------------------
+
+/// Zeichnet die Art `kind` in der Ebene `plane` mit den Klicks `clicks`: Vor dem letzten Klick
+/// bleibt die Skizze, wie sie war (kein Rückgängig-Schritt, keine neue Kurve), der letzte legt die
+/// Form als einen Rückgängig-Schritt an.
+fn draw_kind(v: &mut View, kind: ToolKind, plane: TriadPlane, clicks: &[DVec3]) {
+    {
+        let (se, sk) = v.se_sk();
+        se.choose_kind(sk, kind);
+    }
+    v.frame(vec![]);
+    v.set_plane(plane);
+    let n = v.s.sketch_history().unwrap().undo_len();
+    let curves = v.curves().len();
+    let points = v.points().len();
+    let (last, first) = clicks.split_last().unwrap();
+    for &p in first {
+        v.click3(p);
+        let msg = v.s.sketch_session.as_ref().unwrap().message.clone();
+        assert_eq!(v.curves().len(), curves, "{kind:?}: noch keine Kurve");
+        assert_eq!(v.points().len(), points, "{kind:?}: noch kein Punkt");
+        assert_eq!(v.s.sketch_history().unwrap().undo_len(), n, "{kind:?}");
+        assert!(msg.is_none(), "{kind:?}: {msg:?}");
+    }
+    v.click3(*last);
+    let msg = v.s.sketch_session.as_ref().unwrap().message.clone();
+    assert!(v.curves().len() > curves, "{kind:?}: keine Form ({msg:?})");
+    assert_eq!(
+        v.s.sketch_history().unwrap().undo_len(),
+        n + 1,
+        "{kind:?}: ein Rückgängig-Schritt"
+    );
+}
+
+/// Neue normale Kurven seit `before`.
+fn new_curves(v: &View, before: &[(CurveId, CurveKind)]) -> Vec<(CurveId, CurveKind)> {
+    v.curves()
+        .into_iter()
+        .filter(|(c, _)| before.iter().all(|(b, _)| b != c))
+        .collect()
+}
+
+/// Alle Punkte der Skizze liegen in der Ebene x = 0 und sind 3D.
+fn assert_points_in_yz(v: &View) {
+    for p in v.points() {
+        assert!(v.sk().is_3d_point(p), "3D-Punkt");
+        assert!(v.xyz(p).x.abs() < 1e-6, "in YZ: {:?}", v.xyz(p));
+    }
+}
+
+/// Jede Kurve der Form liegt in YZ; Kreise und Bögen haben die Normale X.
+fn assert_shape_in_yz(v: &View, curves: &[(CurveId, CurveKind)]) {
+    for (c, k) in curves {
+        v.assert_in_plane(*c, DVec3::ZERO, DVec3::X);
+        if matches!(k, CurveKind::Circle { .. } | CurveKind::Arc { .. }) {
+            assert!(v.sk().is_3d_curve(*c));
+            assert!(same_axis(v.sk().curve_normal(*c), DVec3::X), "Normale X");
+        }
+    }
+}
+
+/// Ein 3D-Linienstück von `a` nach `b`, direkt in der Skizze angelegt.
+fn add_line3(v: &mut View, a: DVec3, b: DVec3) -> CurveId {
+    let (_, sk) = v.se_sk();
+    let pa = sk.add_point3(a).unwrap();
+    let pb = sk.add_point3(b).unwrap();
+    let l = sk.add_line(pa, pb).unwrap();
+    v.frame(vec![]);
+    l
+}
+
+/// Abstand von `p` zur Geraden durch `a` und `b`.
+fn line_distance(p: DVec3, a: DVec3, b: DVec3) -> f64 {
+    (p - a).cross((b - a).normalize()).length()
+}
+
+#[test]
+fn center_circle_in_yz_plane() {
+    let mut v = View::new(Tool::Circle);
+    // Mittelpunkt-Radius ist die Vorgabe des Kreises.
+    assert_eq!(
+        v.s.sketch_session.as_ref().unwrap().kind_of(Tool::Circle),
+        Some(ToolKind::CircleCenter)
+    );
+    let m = DVec3::new(0.0, 20.0, 20.0);
+    draw_kind(
+        &mut v,
+        ToolKind::CircleCenter,
+        TriadPlane::Yz,
+        &[m, DVec3::new(0.0, 35.0, 20.0)],
+    );
+    let curves = v.curves();
+    let (c, CurveKind::Circle { center, .. }) = curves[0].clone() else {
+        panic!("kein Kreis: {curves:?}");
+    };
+    assert_eq!(curves.len(), 1);
+    assert!(near(v.xyz(center), m, 0.1));
+    assert!((v.sk().radius(c).unwrap() - 15.0).abs() < 0.1);
+    assert_shape_in_yz(&v, &curves);
+    assert_points_in_yz(&v);
+}
+
+#[test]
+fn circle_3p_in_yz() {
+    let mut v = View::new(Tool::Circle);
+    draw_kind(
+        &mut v,
+        ToolKind::Circle3P,
+        TriadPlane::Yz,
+        &[
+            DVec3::new(0.0, 10.0, 10.0),
+            DVec3::new(0.0, 30.0, 10.0),
+            DVec3::new(0.0, 20.0, 20.0),
+        ],
+    );
+    let curves = v.curves();
+    let (c, CurveKind::Circle { center, .. }) = curves[0].clone() else {
+        panic!("kein Kreis: {curves:?}");
+    };
+    assert!(near(v.xyz(center), DVec3::new(0.0, 20.0, 10.0), 0.1));
+    assert!((v.sk().radius(c).unwrap() - 10.0).abs() < 0.1);
+    assert_shape_in_yz(&v, &curves);
+}
+
+#[test]
+fn circle_2t_and_3t_in_yz() {
+    let (a, b, c) = (
+        DVec3::new(0.0, 10.0, 10.0),
+        DVec3::new(0.0, 70.0, 10.0),
+        DVec3::new(0.0, 10.0, 70.0),
+    );
+    // Zwei Tangenten: zwei Linien wählen, dann die Lage.
+    let mut v = View::new(Tool::Circle);
+    let l0 = add_line3(&mut v, a, b);
+    let l1 = add_line3(&mut v, a, c);
+    let before = v.curves();
+    draw_kind(
+        &mut v,
+        ToolKind::Circle2T,
+        TriadPlane::Yz,
+        &[(a + b) * 0.5, (a + c) * 0.5, DVec3::new(0.0, 25.0, 25.0)],
+    );
+    let made = new_curves(&v, &before);
+    assert_eq!(made.len(), 1, "{made:?}");
+    let (circle, CurveKind::Circle { center, .. }) = made[0].clone() else {
+        panic!("kein Kreis: {made:?}");
+    };
+    let (m, r) = (v.xyz(center), v.sk().radius(circle).unwrap());
+    assert!((line_distance(m, a, b) - r).abs() < 0.01);
+    assert!((line_distance(m, a, c) - r).abs() < 0.01);
+    assert_shape_in_yz(&v, &made);
+    for l in [l0, l1] {
+        assert!(has(v.sk(), |k| matches!(k, ConstraintKind::Tangent(x, y)
+            if *x == l && *y == circle)));
+    }
+
+    // Drei Tangenten: die drei Seiten eines Dreiecks.
+    let mut v = View::new(Tool::Circle);
+    add_line3(&mut v, a, b);
+    add_line3(&mut v, a, c);
+    add_line3(&mut v, b, c);
+    let before = v.curves();
+    draw_kind(
+        &mut v,
+        ToolKind::Circle3T,
+        TriadPlane::Yz,
+        &[(a + b) * 0.5, (a + c) * 0.5, (b + c) * 0.5],
+    );
+    let made = new_curves(&v, &before);
+    let (circle, CurveKind::Circle { center, .. }) = made[0].clone() else {
+        panic!("kein Kreis: {made:?}");
+    };
+    let (m, r) = (v.xyz(center), v.sk().radius(circle).unwrap());
+    for (p, q) in [(a, b), (a, c), (b, c)] {
+        assert!((line_distance(m, p, q) - r).abs() < 0.01, "tangential");
+    }
+    assert_shape_in_yz(&v, &made);
+}
+
+/// Tangentenkreise nur an Kurven in der Ebene der Triade: sonst eine Meldung, und nichts entsteht.
+#[test]
+fn tangent_circle_refuses_curves_outside_the_plane() {
+    let mut v = View::new(Tool::Circle);
+    // In XY, nicht in YZ.
+    add_line3(
+        &mut v,
+        DVec3::new(10.0, 10.0, 0.0),
+        DVec3::new(60.0, 10.0, 0.0),
+    );
+    {
+        let (se, sk) = v.se_sk();
+        se.choose_kind(sk, ToolKind::Circle2T);
+    }
+    v.set_plane(TriadPlane::Yz);
+    let n = v.s.sketch_history().unwrap().undo_len();
+    v.click3(DVec3::new(35.0, 10.0, 0.0));
+    let se = v.s.sketch_session.as_ref().unwrap();
+    assert!(se.pending_curves.is_empty(), "nicht gewählt");
+    let text = se.message.as_ref().map(|m| m.text()).unwrap_or_default();
+    assert!(text.contains("Triade"), "Hinweis: {text}");
+    assert_eq!(v.s.sketch_history().unwrap().undo_len(), n);
+}
+
+#[test]
+fn arc_center_and_tangent_in_yz() {
+    // Mittelpunkt: Mitte, Start, Richtung des Endes.
+    let mut v = View::new(Tool::Arc);
+    let m = DVec3::new(0.0, 20.0, 20.0);
+    draw_kind(
+        &mut v,
+        ToolKind::ArcCenter,
+        TriadPlane::Yz,
+        &[m, DVec3::new(0.0, 35.0, 20.0), DVec3::new(0.0, 20.0, 40.0)],
+    );
+    let curves = v.curves();
+    let (arc, CurveKind::Arc { center, start, end }) = curves[0].clone() else {
+        panic!("kein Bogen: {curves:?}");
+    };
+    assert!(near(v.xyz(center), m, 0.1));
+    assert!((v.sk().radius(arc).unwrap() - 15.0).abs() < 0.1);
+    let ends = [v.xyz(start), v.xyz(end)];
+    for want in [DVec3::new(0.0, 35.0, 20.0), DVec3::new(0.0, 20.0, 35.0)] {
+        assert!(ends.iter().any(|&q| near(q, want, 0.1)), "{ends:?}");
+    }
+    assert_shape_in_yz(&v, &curves);
+    assert_points_in_yz(&v);
+
+    // Tangential: an einer Linie in YZ, vom Ende der Linie aus.
+    let mut v = View::new(Tool::Arc);
+    let (a, b) = (DVec3::new(0.0, 10.0, 10.0), DVec3::new(0.0, 40.0, 10.0));
+    let line = add_line3(&mut v, a, b);
+    let before = v.curves();
+    draw_kind(
+        &mut v,
+        ToolKind::ArcTangent,
+        TriadPlane::Yz,
+        &[b, DVec3::new(0.0, 40.0, 40.0)],
+    );
+    let made = new_curves(&v, &before);
+    let (arc, CurveKind::Arc { center, .. }) = made[0].clone() else {
+        panic!("kein Bogen: {made:?}");
+    };
+    assert!(near(v.xyz(center), DVec3::new(0.0, 40.0, 25.0), 0.1));
+    assert!((v.sk().radius(arc).unwrap() - 15.0).abs() < 0.1);
+    assert!(has(v.sk(), |k| matches!(k, ConstraintKind::Tangent(x, y)
+        if *x == arc && *y == line)));
+    assert_shape_in_yz(&v, &made);
+}
+
+/// Tangential nur an Kurven in der Ebene der Triade.
+#[test]
+fn tangent_arc_refuses_a_line_outside_the_plane() {
+    let mut v = View::new(Tool::Arc);
+    let b = DVec3::new(0.0, 40.0, 10.0);
+    add_line3(&mut v, DVec3::new(20.0, 40.0, 10.0), b);
+    {
+        let (se, sk) = v.se_sk();
+        se.choose_kind(sk, ToolKind::ArcTangent);
+    }
+    v.set_plane(TriadPlane::Yz);
+    v.click3(b);
+    let se = v.s.sketch_session.as_ref().unwrap();
+    assert!(se.pending3.is_empty(), "kein Anfang");
+    let text = se.message.as_ref().map(|m| m.text()).unwrap_or_default();
+    assert!(text.contains("Triade"), "Hinweis: {text}");
+}
+
+#[test]
+fn rect_3p_and_center_in_yz() {
+    let mut v = View::new(Tool::Rectangle);
+    draw_kind(
+        &mut v,
+        ToolKind::Rect3P,
+        TriadPlane::Yz,
+        &[
+            DVec3::new(0.0, 10.0, 10.0),
+            DVec3::new(0.0, 40.0, 10.0),
+            DVec3::new(0.0, 25.0, 30.0),
+        ],
+    );
+    assert_eq!(v.lines().len(), 4);
+    assert_points_in_yz(&v);
+    let corners: Vec<DVec3> = v.points().iter().map(|&p| v.xyz(p)).collect();
+    for (y, z) in [(10.0, 10.0), (40.0, 10.0), (40.0, 30.0), (10.0, 30.0)] {
+        let want = DVec3::new(0.0, y, z);
+        assert!(corners.iter().any(|&q| near(q, want, 0.1)), "{corners:?}");
+    }
+    assert!(has(v.sk(), |k| matches!(
+        k,
+        ConstraintKind::Perpendicular(..)
+    )));
+
+    // Mittelpunkt: Die Achsen von YZ sind Y und Z, also Vertikal und Entlang Z wie in 2D.
+    let mut v = View::new(Tool::Rectangle);
+    draw_kind(
+        &mut v,
+        ToolKind::RectCenter,
+        TriadPlane::Yz,
+        &[DVec3::new(0.0, 30.0, 30.0), DVec3::new(0.0, 40.0, 45.0)],
+    );
+    assert_eq!(v.lines().len(), 4);
+    assert_eq!(v.points().len(), 5, "vier Ecken und die Mitte");
+    assert_points_in_yz(&v);
+    let corners: Vec<DVec3> = v.points().iter().map(|&p| v.xyz(p)).collect();
+    for (y, z) in [(20.0, 15.0), (40.0, 15.0), (40.0, 45.0), (20.0, 45.0)] {
+        let want = DVec3::new(0.0, y, z);
+        assert!(corners.iter().any(|&q| near(q, want, 0.1)), "{corners:?}");
+    }
+    assert!(has(v.sk(), |k| matches!(k, ConstraintKind::Vertical(_))));
+    assert!(has(v.sk(), |k| matches!(k, ConstraintKind::AlongZ(_))));
+    assert!(!has(v.sk(), |k| matches!(k, ConstraintKind::Horizontal(_))));
+    assert_eq!(
+        v.sk().clone().solve().status,
+        planora_sketch::solver::SolveStatus::Solved
+    );
+}
+
+/// Gedreht um die Normale liegen die Achsen der Ebene nicht auf Achsen der Skizze: Senkrecht statt
+/// Vertikal und Entlang Z.
+#[test]
+fn rect_center_in_a_rotated_plane_uses_perpendicular() {
+    let mut v = View::new(Tool::Rectangle);
+    {
+        let (se, _) = v.se_sk();
+        se.triad.rotate(TriadAxis::X, 0.4);
+    }
+    v.frame(vec![]);
+    let t = v.triad();
+    let (u, w) = (t.axis(TriadAxis::Y), t.axis(TriadAxis::Z));
+    draw_kind(
+        &mut v,
+        ToolKind::RectCenter,
+        TriadPlane::Yz,
+        &[u * 30.0 + w * 30.0, u * 40.0 + w * 45.0],
+    );
+    assert_eq!(v.lines().len(), 4);
+    assert!(has(v.sk(), |k| matches!(
+        k,
+        ConstraintKind::Perpendicular(..)
+    )));
+    assert!(!has(v.sk(), |k| matches!(
+        k,
+        ConstraintKind::Horizontal(_) | ConstraintKind::Vertical(_) | ConstraintKind::AlongZ(_)
+    )));
+    assert_points_in_yz(&v);
+}
+
+#[test]
+fn polygons_in_yz() {
+    let m = DVec3::new(0.0, 30.0, 30.0);
+    for (kind, clicks) in [
+        (
+            ToolKind::PolygonCircumscribed,
+            vec![m, DVec3::new(0.0, 30.0, 45.0)],
+        ),
+        (
+            ToolKind::PolygonInscribed,
+            vec![m, DVec3::new(0.0, 30.0, 45.0)],
+        ),
+        (
+            ToolKind::PolygonEdge,
+            vec![
+                DVec3::new(0.0, 20.0, 20.0),
+                DVec3::new(0.0, 40.0, 20.0),
+                DVec3::new(0.0, 30.0, 40.0),
+            ],
+        ),
+    ] {
+        let mut v = View::new(Tool::Polygon);
+        draw_kind(&mut v, kind, TriadPlane::Yz, &clicks);
+        assert_eq!(v.lines().len(), 6, "{kind:?}: sechs Seiten");
+        assert_points_in_yz(&v);
+        let lens: Vec<f64> = v
+            .lines()
+            .iter()
+            .map(|(_, a, b)| (v.xyz(*a) - v.xyz(*b)).length())
+            .collect();
+        for l in &lens {
+            assert!((l - lens[0]).abs() < 0.01, "{kind:?}: gleich lang {lens:?}");
+        }
+        let all = v.curves();
+        assert_shape_in_yz(&v, &all);
+        if kind == ToolKind::PolygonInscribed {
+            // Der Zeiger liegt auf einer Ecke: Umkreis 15, beim Sechseck auch die Seite.
+            assert!((lens[0] - 15.0).abs() < 0.01, "{lens:?}");
+        }
+        assert_eq!(
+            v.sk().clone().solve().status,
+            planora_sketch::solver::SolveStatus::Solved,
+            "{kind:?}"
+        );
+    }
+}
+
+fn kind_is_arc_slot(kind: ToolKind) -> bool {
+    matches!(
+        kind,
+        ToolKind::SlotThreePointArc | ToolKind::SlotCenterPointArc
+    )
+}
+
+#[test]
+fn slots_in_yz() {
+    let straight = [
+        DVec3::new(0.0, 10.0, 20.0),
+        DVec3::new(0.0, 50.0, 20.0),
+        DVec3::new(0.0, 30.0, 28.0),
+    ];
+    for (kind, clicks) in [
+        (ToolKind::SlotCenterToCenter, straight.to_vec()),
+        (ToolKind::SlotOverall, straight.to_vec()),
+        (
+            ToolKind::SlotCenterPoint,
+            vec![
+                DVec3::new(0.0, 30.0, 20.0),
+                DVec3::new(0.0, 50.0, 20.0),
+                DVec3::new(0.0, 30.0, 28.0),
+            ],
+        ),
+        (
+            ToolKind::SlotThreePointArc,
+            vec![
+                DVec3::new(0.0, 10.0, 20.0),
+                DVec3::new(0.0, 50.0, 20.0),
+                DVec3::new(0.0, 30.0, 32.0),
+                DVec3::new(0.0, 30.0, 36.0),
+            ],
+        ),
+        (
+            ToolKind::SlotCenterPointArc,
+            vec![
+                DVec3::new(0.0, 30.0, 20.0),
+                DVec3::new(0.0, 50.0, 20.0),
+                DVec3::new(0.0, 30.0, 40.0),
+                DVec3::new(0.0, 54.0, 20.0),
+            ],
+        ),
+    ] {
+        let mut v = View::new(Tool::Slot);
+        draw_kind(&mut v, kind, TriadPlane::Yz, &clicks);
+        let all = v.curves();
+        assert_eq!(all.len(), 4, "{kind:?}: vier Kurven {all:?}");
+        assert_shape_in_yz(&v, &all);
+        assert_points_in_yz(&v);
+        // Die Enden: beim geraden Langloch die beiden Bögen, beim Bogenlangloch die kleinen.
+        let caps: Vec<f64> = all
+            .iter()
+            .filter(|(_, k)| matches!(k, CurveKind::Arc { .. }))
+            .map(|(c, _)| v.sk().radius(*c).unwrap())
+            .filter(|&r| !kind_is_arc_slot(kind) || r < 5.0)
+            .collect();
+        assert_eq!(caps.len(), 2, "{kind:?}: zwei Enden {caps:?}");
+        let want = if kind_is_arc_slot(kind) { 4.0 } else { 8.0 };
+        for r in caps {
+            assert!((r - want).abs() < 0.05, "{kind:?}: halbe Breite {r}");
+        }
+        assert_eq!(
+            v.sk().clone().solve().status,
+            planora_sketch::solver::SolveStatus::Solved,
+            "{kind:?}"
+        );
+    }
+}
+
+/// Esc mitten in einer Form (auch nach gewählten Kurven) hinterlässt nichts.
+#[test]
+fn esc_in_the_new_kinds_leaves_nothing() {
+    let mut v = View::new(Tool::Rectangle);
+    {
+        let (se, sk) = v.se_sk();
+        se.choose_kind(sk, ToolKind::Rect3P);
+    }
+    v.set_plane(TriadPlane::Yz);
+    let n = v.s.sketch_history().unwrap().undo_len();
+    v.click3(DVec3::new(0.0, 10.0, 10.0));
+    v.click3(DVec3::new(0.0, 40.0, 10.0));
+    v.key(Key::Escape);
+    assert!(v.points().is_empty() && v.curves().is_empty());
+    assert_eq!(v.s.sketch_history().unwrap().undo_len(), n);
+    let se = v.s.sketch_session.as_ref().unwrap();
+    assert!(se.pending3.is_empty() && se.plane3.is_none());
+
+    let mut v = View::new(Tool::Circle);
+    let (a, b) = (DVec3::new(0.0, 10.0, 10.0), DVec3::new(0.0, 70.0, 10.0));
+    add_line3(&mut v, a, b);
+    {
+        let (se, sk) = v.se_sk();
+        se.choose_kind(sk, ToolKind::Circle2T);
+    }
+    v.set_plane(TriadPlane::Yz);
+    let n = v.s.sketch_history().unwrap().undo_len();
+    v.click3((a + b) * 0.5);
+    assert_eq!(
+        v.s.sketch_session.as_ref().unwrap().pending_curves.len(),
+        1,
+        "gewählt"
+    );
+    v.key(Key::Escape);
+    let se = v.s.sketch_session.as_ref().unwrap();
+    assert!(se.pending_curves.is_empty() && se.plane3.is_none());
+    assert_eq!(v.curves().len(), 1);
+    assert_eq!(v.s.sketch_history().unwrap().undo_len(), n);
+}
+
+/// Liegt die Ebene der Triade in der Skizzenebene (auch um Z gedreht), entsteht 2D-Geometrie.
+#[test]
+fn new_kinds_on_the_sketch_plane_stay_2d() {
+    let mut v = View::new(Tool::Polygon);
+    {
+        let (se, _) = v.se_sk();
+        se.triad.rotate(TriadAxis::Z, 0.4);
+    }
+    v.frame(vec![]);
+    draw_kind(
+        &mut v,
+        ToolKind::PolygonInscribed,
+        TriadPlane::Xy,
+        &[DVec3::new(30.0, 30.0, 0.0), DVec3::new(45.0, 30.0, 0.0)],
+    );
+    assert_eq!(v.lines().len(), 6);
+    for p in v.points() {
+        assert!(!v.sk().is_3d_point(p), "2D-Punkt");
+    }
+    for (c, _) in v.curves() {
+        assert!(!v.sk().is_3d_curve(c), "2D-Kurve");
+    }
+    assert_eq!(v.sk().profiles().outlines.len(), 1, "ein Profil");
+}
+
+/// Mit dem Haken zeigt jedes Werkzeug mit Arten die Triade, auch Polygon und Langloch.
+#[test]
+fn triad_is_visible_for_every_kind() {
+    for kind in ToolKind::ALL.iter().filter(|k| {
+        matches!(
+            k.tool(),
+            Tool::Circle | Tool::Arc | Tool::Rectangle | Tool::Polygon | Tool::Slot | Tool::Spline
+        )
+    }) {
+        let v = View::with_kind(*kind);
+        assert!(v.layout().is_some(), "{kind:?}: Triade fehlt");
+    }
 }
