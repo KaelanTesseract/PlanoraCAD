@@ -807,11 +807,12 @@ impl PlaneDialog {
                         cancel = true;
                     }
                 });
+                // Esc bricht ab (wie „Abbrechen“), solange kein Feld tippt; im Fenster des
+                // Dialogs gelesen (abgedockt auch Esc im Hauptfenster).
+                if crate::dialog::escape_pressed(ui, false) {
+                    cancel = true;
+                }
             });
-        // Esc bricht ab (wie „Abbrechen“), solange kein Feld tippt.
-        if !crate::viewport::typing(ctx) && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            cancel = true;
-        }
         let keep = if ok {
             self.ok(state).is_err()
         } else {

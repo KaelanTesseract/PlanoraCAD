@@ -502,8 +502,9 @@ fn fit_camera(state: &mut AppState, rect: Rect, free: Option<Rect>) {
     }
 }
 
-fn keyboard_focus_id() -> egui::Id {
-    egui::Id::new("planora-keyboard-focus-last-frame")
+/// Je Fenster (Hauptfenster, abgedocktes Fenster): Fokus und Eingabe hat jedes für sich.
+fn keyboard_focus_id(viewport: egui::ViewportId) -> egui::Id {
+    egui::Id::new(("planora-keyboard-focus-last-frame", viewport))
 }
 
 fn not_typing_ids_key() -> egui::Id {
@@ -538,8 +539,8 @@ fn draw_field_ids_key() -> egui::Id {
     egui::Id::new("planora-draw-field-ids")
 }
 
-fn history_focus_id() -> egui::Id {
-    egui::Id::new("planora-history-focus-last-frame")
+fn history_focus_id(viewport: egui::ViewportId) -> egui::Id {
+    egui::Id::new(("planora-history-focus-last-frame", viewport))
 }
 
 /// Meldet ein Feld am Zeiger beim Zeichnen ([`crate::sketch_inline`]): Es liest Tasten wie jedes
@@ -569,15 +570,28 @@ fn other_field_has_keyboard(ctx: &egui::Context) -> bool {
     keyboard_taken(ctx) && !draw_field_has_keyboard(ctx)
 }
 
-/// Merkt sich am Ende eines Frames, ob ein Eingabefeld die Tastatur hatte. Wird von der App nach
-/// dem Aufbau aller Bereiche aufgerufen.
+/// Merkt sich am Ende eines Frames, ob ein Eingabefeld die Tastatur hatte, je Fenster. Wird von
+/// der App nach dem Aufbau aller Bereiche aufgerufen und von jedem abgedockten Fenster nach
+/// seinem Inhalt ([`crate::detach`]).
 pub fn remember_keyboard_focus(ctx: &egui::Context) {
     let focused = keyboard_taken(ctx);
     let other = other_field_has_keyboard(ctx);
+    let viewport = ctx.viewport_id();
     ctx.data_mut(|d| {
-        d.insert_temp(keyboard_focus_id(), focused);
-        d.insert_temp(history_focus_id(), other);
+        d.insert_temp(keyboard_focus_id(viewport), focused);
+        d.insert_temp(history_focus_id(viewport), other);
     });
+}
+
+/// Hatte im Hauptfenster im vorigen Bild ein Eingabefeld die Tastatur (oder erfassen die
+/// Einstellungen gerade eine Belegung)? Für abgedockte Fenster, die Tasten des Hauptfensters
+/// mitlesen (Esc bricht einen abgedockten Befehl ab): Den Fokus des Hauptfensters sehen sie
+/// nicht, nur diese Merkung.
+pub fn root_typing(ctx: &egui::Context) -> bool {
+    crate::keymap::settings_ui::is_capturing(ctx)
+        || ctx
+            .data(|d| d.get_temp::<bool>(keyboard_focus_id(egui::ViewportId::ROOT)))
+            .unwrap_or(false)
 }
 
 /// Hat ein Eingabefeld die Tastatur (in diesem oder im vorigen Frame)? Dann sind Tastenkürzel
@@ -605,7 +619,7 @@ pub fn typing(ctx: &egui::Context) -> bool {
         || crate::keymap::settings_ui::is_capturing(ctx)
         || (ctx.memory(|m| m.focused()).is_none()
             && ctx
-                .data(|d| d.get_temp::<bool>(keyboard_focus_id()))
+                .data(|d| d.get_temp::<bool>(keyboard_focus_id(ctx.viewport_id())))
                 .unwrap_or(false))
 }
 
@@ -615,7 +629,7 @@ pub fn typing_for_history(ctx: &egui::Context) -> bool {
     other_field_has_keyboard(ctx)
         || crate::keymap::settings_ui::is_capturing(ctx)
         || ctx
-            .data(|d| d.get_temp::<bool>(history_focus_id()))
+            .data(|d| d.get_temp::<bool>(history_focus_id(ctx.viewport_id())))
             .unwrap_or(false)
 }
 

@@ -15,6 +15,38 @@ pub fn close_label() -> String {
     tr!("dialog-close")
 }
 
+/// Steht der Dialog, in dessen Inhalt `ui` zeichnet, in einem eigenen Fenster (abgedockt oder
+/// als Unterdialog über einem abgedockten Feld)?
+pub fn in_own_window(ui: &egui::Ui) -> bool {
+    ui.ctx().viewport_id() != egui::ViewportId::ROOT
+}
+
+/// Esc für einen Befehlsdialog (wie „Abbrechen“), im Inhalt des Dialogs aufgerufen, damit es die
+/// Eingabe des Fensters liest, in dem der Dialog steht: Esc dort, solange dort kein Feld tippt.
+/// Steht der Dialog in einem eigenen Fenster, zählt auch Esc im Hauptfenster, das dort niemand
+/// verbraucht hat und während dort kein Feld tippt (wie Esc in Fusions Zeichenfläche den Befehl
+/// abbricht); Enter des Hauptfensters zählt nie. `consume`: das Esc verbrauchen (es wirkt dann
+/// nur hier).
+pub fn escape_pressed(ui: &egui::Ui, consume: bool) -> bool {
+    let ctx = ui.ctx();
+    let esc = |i: &egui::InputState| i.key_pressed(egui::Key::Escape);
+    let take = |i: &mut egui::InputState| {
+        if consume {
+            i.consume_key(egui::Modifiers::NONE, egui::Key::Escape);
+        }
+    };
+    if !crate::viewport::typing(ctx) && ctx.input(esc) {
+        ctx.input_mut(take);
+        return true;
+    }
+    let root = egui::ViewportId::ROOT;
+    if in_own_window(ui) && !crate::viewport::root_typing(ctx) && ctx.input_for(root, esc) {
+        ctx.input_mut_for(root, take);
+        return true;
+    }
+    false
+}
+
 /// Größe der Symbole (Schließen, An-/Abdocken) in der Kopfzeile.
 const HEADER_ICON_SIZE: f32 = 16.0;
 
@@ -119,6 +151,15 @@ pub struct Dialog<'a> {
 struct DetachMemo {
     frame: u64,
     detached: bool,
+}
+
+/// Stand der Dialog mit der Id `id` im vorigen (oder diesem) Bild abgedockt im eigenen Fenster?
+/// Für Tasten, die außerhalb des Dialogs vor den Feldern gelesen werden (Esc der Übersicht):
+/// abgedockt gehören sie dem Fenster des Dialogs, nicht dem Hauptfenster.
+pub fn shown_detached(ctx: &egui::Context, id: egui::Id) -> bool {
+    let frame = ctx.cumulative_frame_nr();
+    ctx.data(|d| d.get_temp::<DetachMemo>(id.with("dialog_abgedockt")))
+        .is_some_and(|m| m.detached && m.frame + 1 >= frame)
 }
 
 impl<'a> Dialog<'a> {

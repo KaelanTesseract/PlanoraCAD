@@ -96,16 +96,24 @@ pub enum OverviewEvent {
 /// Esc schließt die offene Übersicht und wird verbraucht (vor den Ansichten aufrufen: weder
 /// Auswahl noch Skizze sehen es). Nicht bei offener Rückfrage (`prompt_open`) und nicht, solange
 /// ein anderes Textfeld als das Suchfeld die Tastatur hat (dort gehört Esc dem Feld).
+/// Abgedockt liest die Übersicht Esc im eigenen Fenster ([`show`]); Esc im Hauptfenster bleibt
+/// dann dem Hauptfenster.
 pub fn take_escape(ctx: &egui::Context, state: &mut OverviewState, prompt_open: bool) {
-    if !state.open || prompt_open {
+    if !state.open || prompt_open || crate::dialog::shown_detached(ctx, egui::Id::new(WINDOW_ID)) {
         return;
     }
-    if crate::viewport::typing(ctx) && !state.search_had_focus {
-        return;
-    }
-    if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+    if escape_in(ctx, state) {
         state.close();
     }
+}
+
+/// Esc im Fenster von `ctx` (verbraucht), außer ein anderes Textfeld als das Suchfeld hat die
+/// Tastatur.
+fn escape_in(ctx: &egui::Context, state: &OverviewState) -> bool {
+    if crate::viewport::typing(ctx) && !state.search_had_focus {
+        return false;
+    }
+    ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
 }
 
 /// Die Aktionen, die zu `filter` passen, sortiert nach Bereich (innerhalb in der Reihenfolge
@@ -133,6 +141,8 @@ pub fn show(ctx: &egui::Context, ws: &Workspace, state: &mut OverviewState) -> O
         return OverviewEvent::None;
     }
     let (mut open, mut close, mut to_settings) = (true, false, false);
+    let mut esc = false;
+    let prompt_open = ws.prompt.is_some();
     let km = &ws.keymap;
     Dialog::new(title(), DialogSize::Wide)
         .dock_key("shortcuts")
@@ -142,6 +152,11 @@ pub fn show(ctx: &egui::Context, ws: &Workspace, state: &mut OverviewState) -> O
         .show_with_footer(
             ctx,
             |ui| {
+                // Abgedockt: Esc im eigenen Fenster (vor dem Suchfeld, das seinen Fokus im
+                // vorigen Bild meldet).
+                if crate::dialog::in_own_window(ui) && !prompt_open && escape_in(ui.ctx(), state) {
+                    esc = true;
+                }
                 let r = theme::text_field(
                     ui,
                     egui::TextEdit::singleline(&mut state.filter)
@@ -187,7 +202,7 @@ pub fn show(ctx: &egui::Context, ws: &Workspace, state: &mut OverviewState) -> O
                 });
             },
         );
-    if !open || close || to_settings {
+    if !open || close || to_settings || esc {
         state.close();
     }
     if to_settings {

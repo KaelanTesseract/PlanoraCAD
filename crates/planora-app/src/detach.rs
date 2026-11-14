@@ -711,7 +711,77 @@ fn window_contents<R>(
             state.set(spec.place, to_physical(now, ppp));
         }
     }
+    // Tastenkürzel: was der Inhalt nicht verbraucht hat, führt die App am Ende des Bilds aus
+    // ([`take_child_keys`]); danach merkt sich das Fenster seinen Tastaturfokus für das nächste
+    // Bild (Esc nimmt egui den Fokus schon zu Beginn des Bilds).
+    let dialog = !spec.place.is_field() || spec.head == Head::TitleOnly;
+    collect_keys(&ctx, dialog);
+    crate::viewport::remember_keyboard_focus(&ctx);
     (r, event)
+}
+
+/// Unverbrauchte Tastenereignisse eines abgedockten Fensters aus einem Bild, für die
+/// Tastenkürzel der App (`PlanoraApp::shortcuts_from_children`). Jedes Ereignis gehört nur dem
+/// Fenster, das es empfangen hat: Es wird dort herausgenommen und genau einmal ausgeführt.
+#[derive(Clone, Debug)]
+pub struct ChildKeys {
+    /// Bild des Hauptfensters, in dem die Tasten kamen (ältere verfallen).
+    pub frame: u64,
+    /// Ein Dialog oder Unterdialog (nur Kürzel mit Bereich „Überall“), kein Feld.
+    pub dialog: bool,
+    /// Ein Eingabefeld im Fenster hat die Tastatur (dann gehören ihm alle Tasten).
+    pub typing: bool,
+    /// Ein Bedienelement, das Tasten liest, hat dort den Fokus (die Leertaste bleibt ihm).
+    pub focus: bool,
+    /// Eine Maustaste ist im Fenster gedrückt (Rückgängig wartet wie im Hauptfenster).
+    pub pointer_down: bool,
+    /// Die gedrückten Tasten (`Event::Key` mit `pressed`).
+    pub events: Vec<egui::Event>,
+}
+
+fn child_keys_id() -> egui::Id {
+    egui::Id::new("detach_kind_tasten")
+}
+
+/// Nimmt die unverbrauchten gedrückten Tasten aus der Eingabe des Fensters, in dem gerade
+/// gezeichnet wird, und legt sie für [`take_child_keys`] ab. Ereignisse kommen nur im ersten
+/// Durchgang eines Bilds; herausgenommen zählt jedes höchstens einmal, auch wenn der Inhalt in
+/// einem Bild mehrmals läuft.
+fn collect_keys(ctx: &egui::Context, dialog: bool) {
+    let events: Vec<egui::Event> = ctx.input_mut(|i| {
+        let (keys, rest) = std::mem::take(&mut i.events)
+            .into_iter()
+            .partition(|e| matches!(e, egui::Event::Key { pressed: true, .. }));
+        i.events = rest;
+        keys
+    });
+    if events.is_empty() {
+        return;
+    }
+    let keys = ChildKeys {
+        frame: ctx.cumulative_frame_nr_for(egui::ViewportId::ROOT),
+        dialog,
+        typing: crate::viewport::typing(ctx),
+        focus: crate::viewport::keyboard_taken(ctx),
+        pointer_down: ctx.input(|i| i.pointer.any_down()),
+        events,
+    };
+    ctx.data_mut(|d| {
+        d.get_temp_mut_or_default::<Vec<ChildKeys>>(child_keys_id())
+            .push(keys);
+    });
+}
+
+/// Holt die in diesem Bild abgelegten Tasten der abgedockten Fenster (in der Reihenfolge der
+/// Fenster) und leert die Ablage; ältere Einträge (aus einem Bild, das sie nicht abholte)
+/// verfallen.
+pub fn take_child_keys(ctx: &egui::Context) -> Vec<ChildKeys> {
+    let frame = ctx.cumulative_frame_nr_for(egui::ViewportId::ROOT);
+    let mut list = ctx
+        .data_mut(|d| d.remove_temp::<Vec<ChildKeys>>(child_keys_id()))
+        .unwrap_or_default();
+    list.retain(|k| k.frame == frame);
+    list
 }
 
 /// Randstreifen ([`RESIZE_EDGE`]) zum Ändern der Größe über das Betriebssystem. Nach dem

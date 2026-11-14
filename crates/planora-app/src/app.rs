@@ -1246,15 +1246,73 @@ impl PlanoraApp {
         let pressed = keymap::dispatch::pressed_if(ctx, &self.ws.keymap, area, |a| {
             !is_history_key(a) && !(windows && a.area() != keymap::Area::All)
         });
+        self.run_pressed(ctx, &pressed, true);
+        self.undo_keys(ctx);
+    }
+
+    /// Führt die gedrückten Aktionen in der Reihenfolge der Tabelle aus. `strip_text`: Öffnet
+    /// eine davon ein Fenster mit Textfeld, wird der Text der Taste aus der Eingabe des
+    /// Hauptfensters genommen (er soll nicht im neuen Feld landen).
+    fn run_pressed(&mut self, ctx: &egui::Context, pressed: &[Action], strip_text: bool) {
         for &a in Action::ALL.iter().filter(|a| pressed.contains(a)) {
             let request = commands::run_key(&mut self.ws, a);
-            if matches!(request, MenuRequest::Shortcuts | MenuRequest::Feedback) {
+            if strip_text && matches!(request, MenuRequest::Shortcuts | MenuRequest::Feedback) {
                 // Sicherheitshalber: der Text der Taste soll nicht im neuen Textfeld landen.
                 ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Text(_))));
             }
             self.apply_menu_request(ctx, request);
         }
-        self.undo_keys(ctx);
+    }
+
+    /// Tastenkürzel aus abgedockten Fenstern (Spec „Tastenkürzel aus abgedockten Fenstern“):
+    /// Jedes abgedockte Fenster legt nach seinem Inhalt ab, was der nicht verbraucht hat
+    /// ([`crate::detach::take_child_keys`]); hier, am Ende des Bilds, nachdem alle Fenster
+    /// gezeichnet sind, wirken diese Tasten genau einmal mit denselben Sperren wie im
+    /// Hauptfenster ([`PlanoraApp::shortcuts`]): nichts bei offener Rückfrage oder während ein
+    /// Eingabefeld des Fensters die Tastatur hat; bei offenem Fenster (und in jedem abgedockten
+    /// Dialog) nur die Kürzel mit Bereich „Überall“; Rückgängig und Wiederholen nur ohne offenes
+    /// Fenster und ohne gedrückte Maustaste. Die Tabulatortaste der Skizzenbemaßung gilt nur im
+    /// Hauptfenster (im abgedockten Fenster wandert der Fokus wie gewohnt). Ein Weg je Fenster:
+    /// Das Hauptfenster liest seine eigene Eingabe in [`PlanoraApp::shortcuts`], die abgedockten
+    /// Fenster kommen nur hierher.
+    fn shortcuts_from_children(&mut self, ctx: &egui::Context) {
+        let list = crate::detach::take_child_keys(ctx);
+        if list.is_empty() || self.restart_locked() {
+            return;
+        }
+        for mut keys in list {
+            // Je Fenster neu: ein Kürzel des vorigen kann eine Rückfrage geöffnet haben.
+            if self.ws.prompt.is_some() || keys.typing {
+                continue;
+            }
+            let only_all = keys.dialog || self.windows_open() || self.projects.is_open();
+            let area = keymap::dispatch::current_area(&self.ws.active_tab().state);
+            let pressed = keymap::dispatch::pressed_in(
+                &mut keys.events,
+                keys.focus,
+                &self.ws.keymap,
+                area,
+                |a| !is_history_key(a) && !(only_all && a.area() != keymap::Area::All),
+            );
+            self.run_pressed(ctx, &pressed, false);
+            if !self.windows_open() && !keys.pointer_down {
+                let area = keymap::dispatch::current_area(&self.ws.active_tab().state);
+                let pressed = keymap::dispatch::pressed_in(
+                    &mut keys.events,
+                    keys.focus,
+                    &self.ws.keymap,
+                    area,
+                    is_history_key,
+                );
+                for a in [Action::Undo, Action::Redo] {
+                    if pressed.contains(&a) {
+                        commands::run_action(&mut self.ws, a);
+                    }
+                }
+            }
+            // Das Bild ist schon gezeichnet: das Ergebnis zeigt das nächste.
+            ctx.request_repaint();
+        }
     }
 
     /// Ist ein Fenster offen, das Rückgängig und die Befehle von Modell, Skizze und Zeichnung
@@ -3043,6 +3101,9 @@ impl eframe::App for PlanoraApp {
         self.crash_notice_tick(&ctx, dark);
         about_dialog::show(&ctx, &mut self.ws.about_open);
         prompts::show(&ctx, &mut self.ws);
+        // Nach allen Feldern und Dialogen (auch abgedockten): deren unverbrauchte Tasten; vor den
+        // Schritten für Rückgängig, damit eine Änderung im selben Bild ein Schritt wird.
+        self.shortcuts_from_children(&ctx);
         if self.restart_locked() {
             // Über allem: sperrt die Bedienung, bis der Installer gestartet ist und sich das Programm
             // beendet (oder der Start scheitert und das Programm weiterläuft).
