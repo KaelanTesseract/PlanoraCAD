@@ -533,6 +533,14 @@ fn text_3d_roundtrips_and_needs_20() {
     let v: serde_json::Value = serde_json::from_str(&text).unwrap();
     let texte = &v["features"][0]["art"]["skizze"]["texte"];
     assert_eq!(texte[0]["normale"], serde_json::json!([1.0, 0.0, 0.0]));
+    // Die Ecken hält je ein internes InPlane an den Rahmenlinien 0 bis 2, mit gleichen Ids.
+    let skizze = &v["features"][0]["art"]["skizze"];
+    let rows = in_plane_rows(skizze);
+    assert_eq!(rows.len(), 3);
+    let linien = &texte[0]["lage"]["rahmen"]["linien"];
+    for (k, &row) in rows.iter().enumerate() {
+        assert_eq!(skizze["abhaengigkeiten"][row]["art"]["kurve"], linien[k]);
+    }
     let d = sketch_of(&back).text(t).unwrap();
     assert_eq!(d.normal, Some(DVec3::X));
     assert!(d.points.iter().all(|&p| sketch_of(&back).is_3d_point(p)));
@@ -544,13 +552,26 @@ fn text_3d_out_of_plane_or_without_normal_rejected() {
     let glyph = sk.text(t).unwrap().points[1];
     let reason = |key: &str| tr!("sketch-err-text-data", reason = planora_i18n::t(key));
 
-    // Ohne Normale ist es ein Text in der Skizzenebene: z an den Buchstaben ist falsch.
+    // Ohne Normale ist es ein Text in der Skizzenebene: Die Ebenenbindungen am Rahmen gehören
+    // zu nichts, und z an den Buchstaben wäre falsch.
     let text = edited(sk.clone(), |s| {
         s["texte"][0]
             .as_object_mut()
             .unwrap()
             .remove("normale")
             .unwrap();
+    });
+    let e = err_text(&text);
+    assert!(e.contains(&tr!("sketch-err-data-in-plane")), "{e}");
+    let text = edited(sk.clone(), |s| {
+        s["texte"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("normale")
+            .unwrap();
+        for row in in_plane_rows(s) {
+            s["abhaengigkeiten"][row]["lebt"] = serde_json::json!(false);
+        }
     });
     let e = err_text(&text);
     assert!(e.contains(&reason("sketch-err-text-data-3d")), "{e}");
@@ -569,4 +590,24 @@ fn text_3d_out_of_plane_or_without_normal_rejected() {
     });
     let e = err_text(&text);
     assert!(e.contains(&reason("sketch-err-text-data-plane")), "{e}");
+}
+
+#[test]
+fn text_3d_frame_without_in_plane_rejected() {
+    let (sk, _) = text_3d_sketch();
+    // Ein fehlendes InPlane an einer Rahmenlinie ließe die Ecken aus der Textebene.
+    let text = edited(sk.clone(), |s| {
+        let rows = in_plane_rows(s);
+        s["abhaengigkeiten"][rows[1]]["lebt"] = serde_json::json!(false);
+    });
+    let e = err_text(&text);
+    assert!(e.contains(&tr!("sketch-err-data-in-plane")), "{e}");
+    // An Linie 3 ist es keins der Rahmenlinien 0 bis 2.
+    let text = edited(sk, |s| {
+        let rows = in_plane_rows(s);
+        let linie3 = s["texte"][0]["lage"]["rahmen"]["linien"][3].clone();
+        s["abhaengigkeiten"][rows[2]]["art"]["kurve"] = linie3;
+    });
+    let e = err_text(&text);
+    assert!(e.contains(&tr!("sketch-err-data-in-plane")), "{e}");
 }

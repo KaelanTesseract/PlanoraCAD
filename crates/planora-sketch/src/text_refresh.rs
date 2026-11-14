@@ -21,9 +21,6 @@ pub(crate) const CUBIC_KNOTS: [f64; 8] = [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0
 /// Bis zu diesem Anteil der Höhe gilt ein Punkt beim Nachführen als unverändert: Eine Datei von
 /// einem anderen Rechner (andere Rundung in `sin`, `cos` …) bekommt nach dem Laden so kein „●“.
 const SAME_POINT_REL: f64 = 1e-12;
-/// Bis zu dieser Abweichung bleibt die gespeicherte Normale eines Textes in 3D beim Nachführen,
-/// wie sie ist (aus demselben Grund wie [`SAME_POINT_REL`]).
-const SAME_NORMAL: f64 = 1e-12;
 
 /// Ein Stück mit den Indizes seiner Punkte in der Punktfolge des Textes.
 #[derive(Clone, Copy, Debug)]
@@ -131,7 +128,7 @@ impl Piece {
 impl Sketch {
     /// Bringt Punkte und Kurven des Textes `t` auf die Konturen `placed` (Skizzenkoordinaten,
     /// geprüft; bei einem Text in 3D in der Basis seiner Ebene, siehe `Sketch::text_lift`, dann
-    /// mit 3D-Punkten und der Normale des Rahmens). Neue Kurven bekommen den Stil der vorhandenen.
+    /// mit 3D-Punkten in der Ebene seiner Normale). Neue Kurven bekommen den Stil der vorhandenen.
     /// Liefert, ob sich etwas geändert hat; nur dann gibt es einen neuen Stand. Ein Punkt, der
     /// höchstens um [`SAME_POINT_REL`] × Höhe abweicht, bleibt, wie er ist. Ein Text in 3D mit
     /// entartetem Rahmen bleibt unverändert (die Aufrufer legen ihn dann ohnehin nicht).
@@ -150,18 +147,10 @@ impl Sketch {
         let mut dead_curves: HashSet<CurveId> = HashSet::new();
 
         // Ein Text in 3D: Die Konturen sind in der Basis seiner Ebene gesetzt und werden in den
-        // Raum gelegt (Skizzen 10); die Normale folgt dem Rahmen.
+        // Raum gelegt (Skizzen 10).
         let lift = self.text_lift(t);
         if lift.is_none() && self.texts[t].normal.is_some() {
             return false;
-        }
-        if let Some(l) = lift
-            && self.texts[t]
-                .normal
-                .is_none_or(|n| (n - l.n).length() > SAME_NORMAL)
-        {
-            self.texts[t].normal = Some(l.n);
-            values = true;
         }
 
         let mut points: Vec<PointId> = Vec::with_capacity(want_points.len());

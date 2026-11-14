@@ -25,7 +25,7 @@ use crate::model::{CurveId, CurveKind, HandleCurvature, MAX_COORD, PointId, Sket
 use crate::offset::ends_of;
 use crate::text::{TextData, TextId, TextPlacement};
 use planora_i18n::tr;
-use planora_math::DVec2;
+use planora_math::{DVec2, DVec3};
 use std::collections::{HashMap, HashSet};
 
 /// Ähnlichkeit: um `base` drehen und strecken, dann um `offset` verschieben.
@@ -59,6 +59,13 @@ impl Similarity {
         self.offset.length() <= tol
             && wrap_pi(self.angle).abs() <= tol
             && (self.factor - 1.0).abs() <= tol
+    }
+
+    /// Eine Richtung im Raum (etwa die Normale eines Textes in 3D) um die z-Achse gedreht, ohne
+    /// Maßstab (Skizzen 10).
+    pub(crate) fn turn(&self, n: DVec3) -> DVec3 {
+        let (sin, cos) = self.angle.sin_cos();
+        DVec3::new(n.x * cos - n.y * sin, n.x * sin + n.y * cos, n.z)
     }
 
     /// Der Anteil ohne Verschiebung, für Vektoren wie die große Halbachse.
@@ -1034,6 +1041,7 @@ impl Sketch {
             let copy = TextData {
                 height,
                 placement,
+                normal: d.normal.map(|n| s.turn(n)),
                 curves: d.curves.iter().map(curve).collect::<Result<_, _>>()?,
                 points: d.points.iter().map(point).collect::<Result<_, _>>()?,
                 ..d
@@ -1281,6 +1289,10 @@ impl Sketch {
                 return Err(TransformBlock::Degenerate);
             }
             self.texts[t].height = height;
+            // Ein Text in 3D: Die Ebene dreht mit (die internen `InPlane` lesen die Normale).
+            if let Some(n) = self.texts[t].normal {
+                self.texts[t].normal = Some(s.turn(n));
+            }
             let TextPlacement::Box { lines, .. } = self.texts[t].placement else {
                 continue;
             };
@@ -1290,7 +1302,8 @@ impl Sketch {
             let level: Vec<ConstraintId> = self
                 .internal_constraints()
                 .filter(|(_, k)| {
-                    matches!(k.kind, ConstraintKind::Horizontal(LineOrPoints::Line(l)) if l == lines[0])
+                    matches!(k.kind, ConstraintKind::Horizontal(LineOrPoints::Line(l))
+                        | ConstraintKind::Vertical(LineOrPoints::Line(l)) if l == lines[0])
                 })
                 .map(|(id, _)| id)
                 .collect();
@@ -1512,7 +1525,8 @@ impl Sketch {
     /// Ist die Kurve unter die Toleranz geschrumpft?
     fn collapsed(&self, c: CurveId) -> bool {
         let tol = self.tol.linear;
-        let close = |a: PointId, b: PointId| self.pos(a).distance(self.pos(b)) <= tol;
+        // Im Raum gemessen: Eine Linie entlang Z ist in der Draufsicht kurz, aber nicht entartet.
+        let close = |a: PointId, b: PointId| self.pos3(a).distance(self.pos3(b)) <= tol;
         match self.curves[c].kind {
             CurveKind::Line { a, b } => close(a, b),
             CurveKind::Circle { radius, .. } => self.vars[radius] <= tol,

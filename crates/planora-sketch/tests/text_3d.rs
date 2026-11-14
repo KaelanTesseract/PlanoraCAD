@@ -368,3 +368,99 @@ fn text_path_on_3d_curve_rejected() {
     assert_eq!(s.to_data(), before3);
     assert_ne!(before, before3);
 }
+
+/// Abstand aller Ecken und Buchstabenpunkte von der Ebene durch Ecke 0 mit der gespeicherten
+/// Normale.
+fn off_plane(s: &Sketch, t: TextId) -> f64 {
+    let n = s.text(t).unwrap().normal.unwrap();
+    let c = corners(s, t);
+    let o = xyz(s, c[0]);
+    c.iter()
+        .chain(&s.text(t).unwrap().points)
+        .map(|&p| (xyz(s, p) - o).dot(n).abs())
+        .fold(0.0, f64::max)
+}
+
+#[test]
+fn text3_frame_stays_in_plane_when_dragged() {
+    use planora_sketch::constraint::ConstraintKind;
+    use planora_sketch::solver::Drag;
+    let tol = Tolerance::default().linear;
+    for n in [DVec3::X, DVec3::new(1.0, 1.0, 1.0).normalize()] {
+        let mut s = sketch();
+        let t = text3(
+            &mut s,
+            DVec3::new(10.0, 0.0, 0.0),
+            DVec3::new(10.0, 40.0, 10.0),
+            n,
+            "AB",
+        );
+        let stored = s.text(t).unwrap().normal.unwrap();
+        // Intern: InPlane an den Rahmenlinien 0 bis 2.
+        let TextPlacement::Box { lines, .. } = s.text(t).unwrap().placement else {
+            panic!()
+        };
+        for (i, &l) in lines.iter().enumerate() {
+            let rows = s
+                .to_data()
+                .constraints
+                .iter()
+                .filter(|k| k.alive && k.internal && k.kind == ConstraintKind::InPlane(l))
+                .count();
+            assert_eq!(rows, usize::from(i < 3), "Linie {i}");
+        }
+        assert_eq!(s.solve().status, SolveStatus::Solved);
+        // Ecke 2 schräg aus der Ebene ziehen (ohne Zugebene): Die Ebene dreht nicht.
+        let c = corners(&s, t);
+        let target = xyz(&s, c[2]) + DVec3::new(7.0, -3.0, 9.0);
+        s.drag(&[Drag {
+            point: c[2],
+            target,
+            plane: None,
+        }])
+        .unwrap();
+        assert_eq!(s.text(t).unwrap().normal.unwrap(), stored, "Normale fest");
+        let off = off_plane(&s, t);
+        assert!(off <= tol, "aus der Ebene um {off}");
+        assert_eq!(s.solve().status, SolveStatus::Solved);
+        assert!(off_plane(&s, t) <= tol);
+        // Rundlauf, auch nach dem Löschen (die Ebenenbindungen bleiben tot in der Datei).
+        let back = Sketch::from_data(s.to_data()).unwrap();
+        assert_eq!(back.to_data(), s.to_data());
+        s.remove_text(t).unwrap();
+        let back = Sketch::from_data(s.to_data()).unwrap();
+        assert_eq!(back.to_data(), s.to_data());
+    }
+}
+
+#[test]
+fn text3_turns_with_its_frame_on_rotate() {
+    use planora_sketch::transform::Similarity;
+    let mut s = sketch();
+    let t = text3(
+        &mut s,
+        DVec3::new(10.0, 0.0, 0.0),
+        DVec3::new(10.0, 40.0, 10.0),
+        DVec3::X,
+        "A",
+    );
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+    let set = s.whole_sketch_set();
+    let turn = Similarity {
+        base: v(0.0, 0.0),
+        offset: v(0.0, 0.0),
+        angle: std::f64::consts::FRAC_PI_2,
+        factor: 1.0,
+    };
+    s.apply_transform(&set, &turn).unwrap();
+    let set = s.whole_sketch_set();
+    let map = s.copy_transformed(&set, &turn).unwrap();
+    let copy = map.texts[&t];
+    assert_eq!(s.solve().status, SolveStatus::Solved);
+    // Das Original um 90° gedreht, die Kopie davon noch einmal um 90°.
+    for (t, want) in [(t, DVec3::Y), (copy, -DVec3::X)] {
+        let n = s.text(t).unwrap().normal.unwrap();
+        assert!((n - want).length() < 1e-12, "{n:?}");
+        assert!(off_plane(&s, t) <= 1e-9);
+    }
+}

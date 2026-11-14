@@ -121,6 +121,10 @@ pub enum ConstraintKind {
     /// Mittelpunkt. Beim Bogen liegen Start und Ende darin, bei der Ellipse steht die große
     /// Halbachse senkrecht zur Normale, beim Ellipsenbogen gilt beides. Der Kreis braucht sie
     /// nicht: Sein Umfang liegt über die Normale ohnehin in der Ebene.
+    ///
+    /// An den Rahmenlinien 0, 1 und 2 eines Textes in 3D (Task 13) mit der Normale des Textes:
+    /// Beide Enden liegen in der Ebene, so bleiben alle vier Ecken in der Textebene; der Löser
+    /// verschiebt sie höchstens längs der Normale und dreht sie nie.
     InPlane(CurveId),
     /// Linie oder zwei Punkte parallel zur z-Achse der Skizze (Skizzen 10): die dritte Art neben
     /// waagerecht (x) und senkrecht (y), nur an 3D-Geometrie (ab Format 20).
@@ -995,9 +999,13 @@ fn eval_kind_2d(ctx: &Ctx, data: &ConstraintData) -> Vec<Dual> {
             ]
         }
         InPlane(c) => {
-            let n = sk.curve_normal(*c);
+            // Rahmenlinie eines Textes in 3D: die Normale des Textes (Task 13).
+            let n = sk
+                .text_frame_normal(*c)
+                .unwrap_or_else(|| sk.curve_normal(*c));
             let off = |m: PointId, p: PointId| dot3c(&sub3(&ctx.pt3(p), &ctx.pt3(m)), n);
             match sk.curves[*c].kind {
+                CurveKind::Line { a, b } => vec![off(a, b)],
                 CurveKind::Arc { center, start, end } => vec![off(center, start), off(center, end)],
                 CurveKind::Ellipse { ax, ay, az, .. } => {
                     vec![dot3c(&ellipse_axis3(ctx, ax, ay, az), n)]
@@ -1745,7 +1753,8 @@ impl Sketch {
                     CurveKind::Arc { .. }
                         | CurveKind::Ellipse { .. }
                         | CurveKind::EllipticArc { .. }
-                ) =>
+                ) && !(matches!(self.curves[*c].kind, CurveKind::Line { .. })
+                    && self.text_frame_normal(*c).is_some()) =>
             {
                 wrong(tr!("sketch-err-normal-kind"))
             }

@@ -525,33 +525,47 @@ fn check_3d_kind(s: &Sketch, kind: &ConstraintKind) -> Result<(), SketchError> {
 }
 
 /// Prüft die internen `InPlane`-Einträge (Skizzen 10): Jeder lebende ist intern, wirksam und
-/// steht an einem Bogen, einer Ellipse oder einem Ellipsenbogen mit Normale; jede lebende solche
-/// Kurve hat genau einen. Ein lebender Eintrag ohne Normale gäbe leere Zeilen, ein fehlender
+/// steht an einem Bogen, einer Ellipse oder einem Ellipsenbogen mit Normale oder an den
+/// Rahmenlinien 0 bis 2 eines lebenden Textes in 3D (Task 13); jede lebende solche Kurve hat
+/// genau einen. Ein lebender Eintrag ohne Normale gäbe leere Zeilen, ein fehlender
 /// ließe die Kurve aus ihrer Ebene. Indizes und Leben der Kurven hat die Prüfung der
 /// Abhängigkeiten schon gesehen.
 fn check_planes(d: &SketchData) -> Result<(), SketchError> {
     let wrong = || bad(tr!("sketch-err-data-in-plane"));
-    let wants_plane = |c: &CurveRecord| {
-        c.normal.is_some()
-            && matches!(
-                c.kind,
-                CurveKind::Arc { .. } | CurveKind::Ellipse { .. } | CurveKind::EllipticArc { .. }
-            )
+    // Rahmenlinien 0 bis 2 lebender Texte in 3D (Task 13): Sie halten die Ecken in der Textebene.
+    let frame_rows: HashSet<CurveId> = d
+        .texts
+        .iter()
+        .filter(|t| t.alive && t.normal.is_some())
+        .filter_map(|t| match t.placement {
+            TextPlacement::Box { lines, .. } => Some(lines),
+            TextPlacement::Path { .. } => None,
+        })
+        .flat_map(|lines| lines[..3].to_vec())
+        .filter(|c| c.index() < d.curves.len())
+        .collect();
+    let wants_plane = |i: CurveId| {
+        let c = &d.curves[i.index()];
+        frame_rows.contains(&i)
+            || (c.normal.is_some()
+                && matches!(
+                    c.kind,
+                    CurveKind::Arc { .. }
+                        | CurveKind::Ellipse { .. }
+                        | CurveKind::EllipticArc { .. }
+                ))
     };
     let mut rows: HashSet<CurveId> = HashSet::new();
     for k in d.constraints.iter().filter(|k| k.alive) {
         if let ConstraintKind::InPlane(c) = k.kind
-            && (!k.internal
-                || !k.enabled
-                || k.driven
-                || !wants_plane(&d.curves[c.index()])
-                || !rows.insert(c))
+            && (!k.internal || !k.enabled || k.driven || !wants_plane(c) || !rows.insert(c))
         {
             return Err(wrong());
         }
     }
     for (i, c) in d.curves.iter().enumerate() {
-        if c.alive && wants_plane(c) && !rows.contains(&CurveId::from_index(i)) {
+        let id = CurveId::from_index(i);
+        if c.alive && wants_plane(id) && !rows.contains(&id) {
             return Err(wrong());
         }
     }
