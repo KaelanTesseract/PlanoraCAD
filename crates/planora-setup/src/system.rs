@@ -5,6 +5,10 @@
 use std::path::{Path, PathBuf};
 
 /// Dateiname der App.
+#[cfg_attr(
+    not(any(windows, test)),
+    expect(dead_code, reason = "nur unter Windows gebraucht")
+)]
 const APP_EXE: &str = "PlanoraCAD.exe";
 
 /// `"de"`, wenn die erste Sprache der Liste deutsch ist (`de`, `de-AT`, …), sonst `"en"`.
@@ -44,6 +48,10 @@ pub fn default_dir(all_users: bool) -> PathBuf {
 
 /// Ist `proc` die `PlanoraCAD.exe` in `dir`? Ohne Groß/Klein, `/` und `\` gleich, ein
 /// abschließender Trenner in `dir` zählt nicht.
+#[cfg_attr(
+    not(any(windows, test)),
+    expect(dead_code, reason = "nur unter Windows gebraucht")
+)]
 pub fn exe_matches(proc: &Path, dir: &Path) -> bool {
     let norm = |p: &Path| p.to_string_lossy().replace('/', "\\").to_lowercase();
     let dir = norm(dir);

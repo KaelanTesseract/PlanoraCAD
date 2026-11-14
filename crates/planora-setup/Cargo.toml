@@ -13,15 +13,30 @@ path = "src/main.rs"
 [lints]
 workspace = true
 
+[dependencies]
+# Texte (tr!), Farben und Schriften wie in der App; eigene Crates, keine neue Fremd-Abhängigkeit.
+planora-i18n.workspace = true
+planora-style.workspace = true
+# Fenster und Oberfläche (dieselben Versionen und Funktionen wie in der App).
+eframe.workspace = true
+egui.workspace = true
+# Standardfunktionen von winit, wie in der App (siehe Workspace-Cargo.toml).
+winit.workspace = true
+# Screenshots und Fenstersymbol aus PNG lesen (png ist über egui und die App ohnehin im Baum).
+png = "0.18"
+
 # Roh-Kommandozeile (GetCommandLineW, Environment), Start des Motors mit Prozessgriff
 # (ShellExecuteExW, Shell), Warten und Exit-Code (WaitForSingleObject/GetExitCodeProcess,
 # Threading), Griffe und Fehlercodes (Foundation), Fensterart beim Start (SW_SHOWNORMAL,
 # WindowsAndMessaging) und HKEY im Feld hkeyClass von SHELLEXECUTEINFOW (Registry; ohne das
 # Feature fehlt die Struktur), bevorzugte Oberflächensprache (Globalization), Prozessliste
-# (Diagnostics_ToolHelp) und Pfad laufender Prozesse (Threading). Gleiche Version wie in
+# (Diagnostics_ToolHelp) und Pfad laufender Prozesse (Threading). Für „Durchsuchen“ der
+# Windows-Ordnerdialog (IFileOpenDialog): COM einrichten, Objekt anlegen und Text freigeben
+# (System_Com, schaltet in Shell auch SHCreateItemFromParsingName frei) und das eigene Fenster als
+# Besitzer des Dialogs (GetActiveWindow, UI_Input_KeyboardAndMouse). Gleiche Version wie in
 # planora-app; windows-sys ist ohnehin im Baum.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Environment", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Environment", "Win32_System_Com", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [build-dependencies]
 # Programmsymbol und Manifest in die .exe einbetten (nur Windows, siehe build.rs).

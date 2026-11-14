@@ -9,24 +9,22 @@
 
 mod args;
 mod engine;
-#[expect(dead_code, reason = "die Oberfläche (Task 6) nutzt das")]
 mod existing;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "die Oberfläche (Task 6) nutzt das")
-)]
 mod progress;
-#[expect(dead_code, reason = "die Oberfläche (Task 6) nutzt das")]
 mod system;
-#[expect(dead_code, reason = "die Oberfläche (Task 6) nutzt das")]
+mod ui;
 mod wizard;
 
-fn main() {
+fn main() -> eframe::Result<()> {
     let args = args::raw_args();
     if args::is_passthrough(&args) {
         std::process::exit(passthrough(&args) as i32);
     }
-    // Das Fenster kommt in einem späteren Schritt; bis dahin endet die Hülle ohne Arbeit.
+    // Sprache der Oberfläche nach Windows: Deutsch, sonst Englisch.
+    planora_i18n::set_global(
+        planora_i18n::find(system::ui_lang()).unwrap_or_else(planora_i18n::english),
+    );
+    ui::run(wizard::Wizard::new(existing::detect()))
 }
 
 /// Stille Weitergabe an den Motor; Exit-Code des Motors, oder 1, wenn er gar nicht lief

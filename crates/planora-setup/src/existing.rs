@@ -12,6 +12,10 @@ pub struct Existing {
 }
 
 /// Wählt aus den beiden Registry-Werten; die Installation des aktuellen Benutzers (HKCU) gewinnt.
+#[cfg_attr(
+    not(any(windows, test)),
+    expect(dead_code, reason = "nur unter Windows gebraucht")
+)]
 pub fn pick(hkcu: Option<PathBuf>, hklm: Option<PathBuf>) -> Option<Existing> {
     if let Some(dir) = hkcu {
         Some(Existing {

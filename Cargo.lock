@@ -2954,8 +2954,14 @@ dependencies = [
 name = "planora-setup"
 version = "0.0.2-dev.1"
 dependencies = [
+ "eframe",
+ "egui",
  "embed-resource",
+ "planora-i18n",
+ "planora-style",
+ "png",
  "windows-sys 0.61.2",
+ "winit",
 ]
 
 [[package]]

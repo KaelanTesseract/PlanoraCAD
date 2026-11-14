@@ -73,10 +73,6 @@ pub fn is_passthrough(args: &[String]) -> bool {
 }
 
 /// Auswahl aus der Oberfläche, die der Motor als Parameter bekommt.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "die Oberfläche (Task 6) füllt die Auswahl")
-)]
 pub struct EngineChoice {
     pub all_users: bool,
     pub dir: PathBuf,
@@ -88,10 +84,6 @@ pub struct EngineChoice {
 
 /// Parameter für den stillen Lauf des Motors mit der Auswahl `c`; Pfade stehen immer in
 /// Anführungszeichen.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "die Oberfläche (Task 6) startet damit den Motor")
-)]
 pub fn engine_args(c: &EngineChoice) -> Vec<String> {
     let quoted = |key: &str, path: &PathBuf| format!("/{key}=\"{}\"", path.display());
     vec![

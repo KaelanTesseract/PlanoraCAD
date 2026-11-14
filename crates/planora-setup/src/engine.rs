@@ -69,7 +69,13 @@ pub enum RunError {
     )]
     Declined,
     /// Sonstiger Fehler beim Start.
-    Io(#[expect(dead_code, reason = "die Oberfläche (Task 6) zeigt den Fehler an")] io::Error),
+    Io(
+        #[expect(
+            dead_code,
+            reason = "nur zur Fehlersuche (Debug); die Seite zeigt das Protokoll"
+        )]
+        io::Error,
+    ),
 }
 
 /// Startet `exe` mit `args` (Rohtext je Argument, durch einzelne Leerzeichen verbunden).
@@ -139,7 +145,10 @@ pub struct ProcessHandle {
 #[cfg(windows)]
 impl ProcessHandle {
     /// Exit-Code, falls der Motor schon fertig ist (ohne Warten).
-    #[expect(dead_code, reason = "die Oberfläche (Task 6) fragt den Lauf ab")]
+    #[expect(
+        dead_code,
+        reason = "die Seite wartet im eigenen Faden mit wait; Abfrage ohne Warten bleibt bereit"
+    )]
     pub fn try_wait(&self) -> Option<u32> {
         self.wait_ms(0)
     }
@@ -199,7 +208,10 @@ pub struct ProcessHandle {
 #[cfg(not(windows))]
 impl ProcessHandle {
     /// Exit-Code, falls der Motor schon fertig ist (ohne Warten).
-    #[expect(dead_code, reason = "die Oberfläche (Task 6) fragt den Lauf ab")]
+    #[expect(
+        dead_code,
+        reason = "die Seite wartet im eigenen Faden mit wait; Abfrage ohne Warten bleibt bereit"
+    )]
     pub fn try_wait(&self) -> Option<u32> {
         match self.child.borrow_mut().try_wait() {
             Ok(Some(status)) => Some(status.code().unwrap_or(1) as u32),
