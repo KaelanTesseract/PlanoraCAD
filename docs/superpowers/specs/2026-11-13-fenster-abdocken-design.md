@@ -55,6 +55,7 @@ Dennis arbeitet mit zwei Monitoren. Er will (1) die 3D-Ansicht frei haben, währ
 - **Abdocken:** Das Fenster erscheint als eigenes Fenster an der gemerkten Lage; gibt es keine (erstes Mal), an der Stelle, wo es im Hauptfenster stand (Bildschirmkoordinaten), sodass es optisch „herausspringt“ und dann gezogen werden kann.
 - **Ziehen:** an der eigenen Kopfzeile wie heute (`ViewportCommand::StartDrag`). Felder lassen sich außerdem an den Rändern in der Größe ändern (`BeginResize`); Dialoge nicht (Breite fest wie heute, Höhe folgt dem Inhalt).
 - **Andocken:** Symbol oder Doppelklick auf die Kopfzeile. Das Fenster kehrt an seinen gewohnten Platz im Hauptfenster zurück; die gemerkte abgedockte Lage wird gelöscht.
+  - *Nachtrag beim Umsetzen:* Felder docken nur über das Symbol an, nicht per Doppelklick (der würde Klicks auf Eigenschaften/Versionen schlucken). Bei Dialogen gilt der Doppelklick wie beschrieben.
 - **Schließen** eines abgedockten Dialogs (Schließen-Symbol, Abbrechen, OK, Esc) schließt ihn wie heute; beim nächsten Öffnen kommt er wieder abgedockt. Abgedockte Felder haben kein Schließen-Symbol (wie heute angedockt).
 - **Festlegung:** Abgedockte Fenster ohne Rahmen des Betriebssystems (`with_decorations(false)`), mit der Graphit-Kopfzeile wie im Hauptfenster, ohne eigenen Taskleisten-Eintrag (`with_taskbar(false)`), normale Fensterebene (nicht „immer oben“). Begründung: einheitliches Aussehen; auf dem zweiten Monitor überdecken sich die Fenster nicht, darum stört das fehlende Besitzerfenster dort nicht.
 - **Festlegung:** Fokus: Ein frisch abgedockter oder abgedockt geöffneter Dialog bekommt den Fokus (Esc/Enter wirken sofort). Ein beim Start erscheinendes abgedocktes Feld nimmt dem Hauptfenster den Fokus nicht.
@@ -75,6 +76,8 @@ Dennis arbeitet mit zwei Monitoren. Er will (1) die 3D-Ansicht frei haben, währ
 ### Stabile Schlüssel
 
 Jeder abdockbare Dialog bekommt einen festen, sprachunabhängigen Schlüssel (z. B. `extrude`, `blend`, `export`, `parameters`), angegeben am Aufruf (`Dialog::new(...).dock_key("blend")` o. Ä.). Ohne Schlüssel ist ein Dialog nicht abdockbar (kein Symbol). Ein Test stellt sicher, dass alle nicht festen `Dialog`-Aufrufe einen Schlüssel haben und keine zwei gleich sind. Dialoge mit wechselndem Titel (etwa Feature-Dialoge je Art) bekommen je Art einen Schlüssel – **Festlegung:** je Feature-Art ein eigener Platz (Extrudieren und Verrunden stehen also getrennt), wie Fusion die Lage je Befehl führt (**Annahme**).
+
+*Nachtrag beim Umsetzen:* Erzeugen- und Bearbeiten-Fenster derselben Art haben getrennte Plätze (`extrude` und `edit_extrude`), weil beide gleichzeitig offen sein können.
 
 ### Speichern
 
