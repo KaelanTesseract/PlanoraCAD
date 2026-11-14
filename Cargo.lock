@@ -2821,6 +2821,7 @@ dependencies = [
  "planora-render",
  "planora-sketch",
  "planora-step",
+ "planora-style",
  "planora-text",
  "planora-update",
  "png",
@@ -2950,6 +2951,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "planora-setup"
+version = "0.0.2-dev.1"
+dependencies = [
+ "eframe",
+ "egui",
+ "embed-resource",
+ "planora-i18n",
+ "planora-style",
+ "png",
+ "windows-sys 0.61.2",
+ "winit",
+]
+
+[[package]]
 name = "planora-sketch"
 version = "0.0.2-dev.1"
 dependencies = [
@@ -2972,6 +2987,13 @@ dependencies = [
  "planora-kernel",
  "planora-math",
  "planora-mesh",
+]
+
+[[package]]
+name = "planora-style"
+version = "0.0.2-dev.1"
+dependencies = [
+ "egui",
 ]
 
 [[package]]

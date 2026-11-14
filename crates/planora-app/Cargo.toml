@@ -37,6 +37,7 @@ planora-update.workspace = true
 planora-i18n.workspace = true
 # Schriftliste und Setzen von Skizzentext (Skizzen 8); eigenes Crate, keine neue Fremd-Abhängigkeit.
 planora-text.workspace = true
+planora-style.workspace = true
 glam.workspace = true
 eframe.workspace = true
 egui.workspace = true

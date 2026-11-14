@@ -1,0 +1,120 @@
+//! Eingebettete Bilder: Programmsymbol, die Startseite (1280 × 720) und drei Karten der
+//! Installieren-Seite (960 × 540, aus den Wiki-Bildern auf das Modell zugeschnitten). Die Texturen werden beim Start einmal geladen; ein unlesbares Bild fehlt nur.
+
+use std::sync::Arc;
+
+/// Programmsymbol 256 × 256 (Fenstersymbol und Logo neben dem Schriftzug).
+pub const ICON_256: &[u8] = include_bytes!("../../../../assets/logo/planoracad-icon-256.png");
+/// Startseite der App (Willkommen).
+const STARTSEITE: &[u8] = include_bytes!("../../assets/startseite.png");
+/// Skizze zeichnen (Karte auf der Installieren-Seite).
+const SKIZZE: &[u8] = include_bytes!("../../assets/skizze.png");
+/// Aus einer Skizze hochgezogene Platte (Karte auf der Installieren-Seite).
+const PLATTE: &[u8] = include_bytes!("../../assets/platte.png");
+/// Winkel mit verrundeten Kanten (Karte auf der Installieren-Seite).
+const VERRUNDEN: &[u8] = include_bytes!("../../assets/verrunden.png");
+
+/// Lineare Filterung mit Mipmaps: Logo und Screenshots werden stark verkleinert gezeigt und
+/// flimmern so nicht.
+const TEXTURE_OPTIONS: egui::TextureOptions =
+    egui::TextureOptions::LINEAR.with_mipmap_mode(Some(egui::TextureFilter::Linear));
+
+/// Liest ein PNG als RGBA-Bild (8 Bit je Kanal, nicht vormultipliziert); `None`, wenn die Daten
+/// kein lesbares PNG sind. Wie `logo::decode` der App.
+pub fn decode(bytes: &[u8]) -> Option<egui::IconData> {
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+    let mut reader = decoder.read_info().ok()?;
+    let mut buf = vec![0; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut buf).ok()?;
+    buf.truncate(info.buffer_size());
+    let rgba: Vec<u8> = match info.color_type {
+        png::ColorType::Rgba => buf,
+        png::ColorType::Rgb => buf
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .flat_map(|p| [p[0], p[1], p[2], 255])
+            .collect(),
+        png::ColorType::GrayscaleAlpha => buf
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .flat_map(|p| [p[0], p[0], p[0], p[1]])
+            .collect(),
+        png::ColorType::Grayscale => buf.iter().flat_map(|&g| [g, g, g, 255]).collect(),
+        png::ColorType::Indexed => return None,
+    };
+    if info.width == 0 || info.height == 0 || rgba.len() != (info.width * info.height * 4) as usize
+    {
+        return None;
+    }
+    Some(egui::IconData {
+        rgba,
+        width: info.width,
+        height: info.height,
+    })
+}
+
+/// Fenstersymbol (Taskleiste, Titelleiste); `None` bei unlesbarem Bild.
+pub fn window_icon() -> Option<Arc<egui::IconData>> {
+    decode(ICON_256).map(Arc::new)
+}
+
+/// Eine geladene Textur mit Seitenverhältnis (Breite / Höhe).
+pub struct Picture {
+    pub texture: egui::TextureHandle,
+    pub aspect: f32,
+}
+
+/// Alle Bilder der Oberfläche.
+pub struct Assets {
+    pub logo: Option<Picture>,
+    pub welcome: Option<Picture>,
+    /// Wechselbild der Installieren-Seite: Skizze, Platte, Verrunden.
+    pub teasers: [Option<Picture>; 3],
+}
+
+impl Assets {
+    /// Lädt alle Bilder einmal als Texturen.
+    pub fn load(ctx: &egui::Context) -> Assets {
+        let load = |name: &str, bytes: &[u8]| {
+            let icon = decode(bytes)?;
+            let image = egui::ColorImage::from_rgba_unmultiplied(
+                [icon.width as usize, icon.height as usize],
+                &icon.rgba,
+            );
+            Some(Picture {
+                texture: ctx.load_texture(name, image, TEXTURE_OPTIONS),
+                aspect: icon.width as f32 / icon.height as f32,
+            })
+        };
+        Assets {
+            logo: load("setup-logo", ICON_256),
+            welcome: load("setup-startseite", STARTSEITE),
+            teasers: [
+                load("setup-skizze", SKIZZE),
+                load("setup-platte", PLATTE),
+                load("setup-verrunden", VERRUNDEN),
+            ],
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedded_images_decode() {
+        let icon = decode(ICON_256).expect("Symbol lesbar");
+        assert_eq!((icon.width, icon.height), (256, 256));
+        let start = decode(STARTSEITE).expect("Startseite lesbar");
+        assert_eq!((start.width, start.height), (1280, 720));
+        for bytes in [SKIZZE, PLATTE, VERRUNDEN] {
+            let shot = decode(bytes).expect("Karte lesbar");
+            assert_eq!((shot.width, shot.height), (960, 540));
+        }
+        assert!(decode(b"kein png").is_none());
+    }
+}
