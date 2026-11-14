@@ -25,6 +25,7 @@ planora-drawing = { path = "crates/planora-drawing" }
 planora-update = { path = "crates/planora-update" }
 planora-i18n = { path = "crates/planora-i18n" }
 planora-text = { path = "crates/planora-text" }
+planora-style = { path = "crates/planora-style" }
 
 # externe Crates (Lizenzen am 2026-10-09 geprüft: alle MIT und/oder Apache-2.0, earcutr ISC, spade MIT OR Apache-2.0, Roboto-Schrift Apache-2.0)
 glam = "0.34"

@@ -2821,6 +2821,7 @@ dependencies = [
  "planora-render",
  "planora-sketch",
  "planora-step",
+ "planora-style",
  "planora-text",
  "planora-update",
  "png",
@@ -2972,6 +2973,13 @@ dependencies = [
  "planora-kernel",
  "planora-math",
  "planora-mesh",
+]
+
+[[package]]
+name = "planora-style"
+version = "0.0.2-dev.1"
+dependencies = [
+ "egui",
 ]
 
 [[package]]
