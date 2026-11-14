@@ -515,17 +515,14 @@ fn footer(ui: &mut egui::Ui, error: Option<String>, ready: bool) -> (bool, bool)
     (ok, cancel)
 }
 
-/// Eingabe (übernehmen, wenn `ready`) und Esc (abbrechen), solange kein Feld tippt.
-fn keys(ctx: &egui::Context, ready: bool) -> (bool, bool) {
-    if crate::viewport::typing(ctx) {
-        return (false, false);
-    }
-    ctx.input(|i| {
-        (
-            ready && i.key_pressed(egui::Key::Enter),
-            i.key_pressed(egui::Key::Escape),
-        )
-    })
+/// Eingabe (übernehmen, wenn `ready`) und Esc (abbrechen), im Inhalt des Dialogs gelesen: im
+/// Fenster, in dem der Dialog steht, solange dort kein Feld tippt. Abgedockt zählt auch Esc im
+/// Hauptfenster ([`crate::dialog::escape_pressed`]), Enter des Hauptfensters nie.
+fn keys(ui: &egui::Ui, ready: bool) -> (bool, bool) {
+    let ctx = ui.ctx();
+    let enter =
+        ready && !crate::viewport::typing(ctx) && ctx.input(|i| i.key_pressed(egui::Key::Enter));
+    (enter, crate::dialog::escape_pressed(ui, false))
 }
 
 /// Fehlermeldung nach einem abgelehnten OK: die Meldung der Sitzung, sonst der Text.
@@ -685,6 +682,7 @@ impl SurfaceProjectDialog {
             .map(|d| direction_label(state, &d.source));
         let ready = self.ok_enabled();
         Dialog::new(tr!("action-sketch-project-to-surface"), DialogSize::Normal)
+            .dock_key("sketch_project_to_surface")
             .id(egui::Id::new("surface_project_dialog"))
             .open(&mut open)
             .show(ctx, |ui| {
@@ -740,15 +738,16 @@ impl SurfaceProjectDialog {
                             }
                         }
                     });
-                (ok, cancel) = footer(ui, self.error(), ready);
+                // Abgedockt läuft der Inhalt evtl. mehrmals je Bild: nichts überschreiben.
+                let (o, c) = footer(ui, self.error(), ready);
+                let (enter, esc) = keys(ui, ready);
+                ok |= o || enter;
+                cancel |= c || esc;
             });
         if kind != self.kind {
             self.set_kind(kind);
         }
-        let (enter, esc) = keys(ctx, ready);
-        outcome(state, ok || enter, cancel || esc, open, |state| {
-            self.ok(state).is_ok()
-        })
+        outcome(state, ok, cancel, open, |state| self.ok(state).is_ok())
     }
 }
 
@@ -887,6 +886,7 @@ impl IntersectionCurveDialog {
             .collect();
         let ready = self.ok_enabled();
         Dialog::new(tr!("action-sketch-intersection-curve"), DialogSize::Normal)
+            .dock_key("sketch_intersection_curve")
             .id(egui::Id::new("intersection_curve_dialog"))
             .open(&mut open)
             .show(ctx, |ui| {
@@ -918,11 +918,12 @@ impl IntersectionCurveDialog {
                             self.targets.clear();
                         }
                     });
-                (ok, cancel) = footer(ui, self.error(), ready);
+                // Abgedockt läuft der Inhalt evtl. mehrmals je Bild: nichts überschreiben.
+                let (o, c) = footer(ui, self.error(), ready);
+                let (enter, esc) = keys(ui, ready);
+                ok |= o || enter;
+                cancel |= c || esc;
             });
-        let (enter, esc) = keys(ctx, ready);
-        outcome(state, ok || enter, cancel || esc, open, |state| {
-            self.ok(state).is_ok()
-        })
+        outcome(state, ok, cancel, open, |state| self.ok(state).is_ok())
     }
 }

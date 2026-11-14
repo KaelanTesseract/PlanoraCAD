@@ -54,6 +54,9 @@ pub const DIALOG_KEYS: &[&str] = &[
     "insert_dxf",
     "insert_svg",
     "canvas",
+    // Auf Fläche projizieren und Schnittkurve (Skizzen 10)
+    "sketch_project_to_surface",
+    "sketch_intersection_curve",
     // Baum und Zeichnung
     "tree_rename",
     "tree_delete",
