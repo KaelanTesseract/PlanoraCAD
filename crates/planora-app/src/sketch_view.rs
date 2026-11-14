@@ -987,7 +987,11 @@ pub fn plane_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
     let col = colors(state.dark);
     // Eingeblendete Grundebenen (Ordner „Ursprung“) zuerst, darüber die Konstruktionsebenen.
     let origins = state.origin_plane_rects().into_iter().map(|(p, r)| {
-        let lit = state.origin_hover == Some(p) || state.selected_origin_plane() == Some(p);
+        let lit = state.origin_hover == Some(p)
+            || state.selected_origin_plane() == Some(p)
+            || state.dialog_marked(&crate::state::IncludePick::Plane(
+                planora_feature::PlaneId::Standard(p),
+            ));
         (r, lit)
     });
     let features = state
@@ -1037,6 +1041,67 @@ pub fn plane_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
                 col.plane_fill_active,
                 Stroke::new(PLANE_EDGE_WIDTH, col.plane_edge_active),
             ));
+        }
+    }
+    out
+}
+
+/// Halbmesser eines gewählten Eckpunkts in der Ansicht.
+const MARK_VERTEX_RADIUS: f32 = 4.0;
+/// Strichstärke einer gewählten Achse des Ursprungs.
+const MARK_AXIS_WIDTH: f32 = 2.0;
+
+/// Eckpunkte und Achsen des Ursprungs, die ein offener Dialog gewählt hat
+/// ([`AppState::dialog_marks`], Task H3), in der Auswahlfarbe über der Ansicht in `rect`;
+/// Flächen, Kanten, Ebenen und Skizzenkurven hebt ihre eigene Zeichnung hervor.
+pub fn dialog_mark_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
+    use crate::state::IncludePick;
+    use planora_feature::AxisId;
+    let mut out = Vec::new();
+    if state.dialog_marks.is_empty() || rect.width() < 2.0 || rect.height() < 2.0 {
+        return out;
+    }
+    let col = colors(state.dark);
+    let map = Mapper {
+        camera: state.camera,
+        frame: Frame::WORLD,
+        rect,
+    };
+    let world = |q: DVec3| map.to_screen3(map.frame.to_local(q));
+    // Die Achsen so lang, wie das Einbeziehen sie anlegt.
+    let h =
+        planora_feature::plane_rect::plane_half_for_bounds(state.bodies.iter().map(|b| b.bounds));
+    for m in &state.dialog_marks {
+        match *m {
+            IncludePick::Vertex { body, edge, end } => {
+                let Some(solid) = state.bodies.get(body).map(|b| &b.solid) else {
+                    continue;
+                };
+                let Some(v) = solid
+                    .edges
+                    .get(edge)
+                    .and_then(|e| solid.vertices.get(if end { e.end } else { e.start }))
+                else {
+                    continue;
+                };
+                if let Some(s) = world(v.point) {
+                    out.push(Shape::circle_filled(s, MARK_VERTEX_RADIUS, col.selected));
+                }
+            }
+            IncludePick::Axis(axis) => {
+                let dir = match axis {
+                    AxisId::X => DVec3::X,
+                    AxisId::Y => DVec3::Y,
+                    AxisId::Z => DVec3::Z,
+                };
+                if let (Some(a), Some(b)) = (world(-dir * h), world(dir * h)) {
+                    out.push(Shape::line_segment(
+                        [a, b],
+                        Stroke::new(MARK_AXIS_WIDTH, col.selected),
+                    ));
+                }
+            }
+            _ => {}
         }
     }
     out
@@ -1152,7 +1217,14 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
             } else {
                 FINISHED_WIDTH
             };
-            let color = if projected.contains(&c) {
+            // Von einem offenen Dialog gewählt (Task H3): in der Auswahlfarbe.
+            let marked = state.dialog_marked(&crate::state::IncludePick::SketchCurve {
+                sketch: id,
+                curve: c,
+            });
+            let color = if marked {
+                col.selected
+            } else if projected.contains(&c) {
                 col.projected
             } else if data.construction {
                 col.construction
@@ -2240,11 +2312,8 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
                     // Passt der Klick nicht, steht der Grund im Dialog.
                     crate::surface_project_dialog::deliver(state, pick);
                 }
-                None => {
-                    if let Some(se) = state.sketch_session.as_mut() {
-                        se.message = Some(kind.refusal());
-                    }
-                }
+                // Der Hinweis steht nur im Dialog (Task H3).
+                None => crate::surface_project_dialog::refuse(state),
             }
             return;
         }

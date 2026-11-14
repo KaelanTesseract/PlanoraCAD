@@ -547,3 +547,147 @@ fn surface_kinds_in_flyout_without_key() {
         assert_eq!(e, en);
     }
 }
+
+// ---- Hervorhebung der Wahl und Meldungen nur im Dialog (Task H3) ----------------------------------
+
+/// Ist eine Fläche der Szene in der Auswahlfarbe getönt?
+fn face_tinted(s: &AppState) -> bool {
+    let selected = s.palette().dimmed().face_selected;
+    s.scene.face_vertices.iter().any(|v| v.color == selected)
+}
+
+/// Zeichnet die Ansicht die Kurven fertiger Skizzen in der Auswahlfarbe?
+fn curve_lit(s: &AppState) -> bool {
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(W, H));
+    let selected = planora_app::theme::sketch_colors(s.dark).selected;
+    fn lit(shape: &egui::Shape, c: egui::Color32) -> bool {
+        match shape {
+            egui::Shape::Vec(v) => v.iter().any(|s| lit(s, c)),
+            egui::Shape::Path(p) => p.stroke.color == egui::epaint::ColorMode::Solid(c),
+            egui::Shape::LineSegment { stroke, .. } => stroke.color == c,
+            _ => false,
+        }
+    }
+    planora_app::sketch_view::finished_sketch_shapes(s, rect)
+        .iter()
+        .any(|shape| lit(shape, selected))
+}
+
+#[test]
+fn picked_items_are_highlighted_in_the_view() {
+    let (mut s, first, line) = box_line_and_sketch(false);
+    assert!(
+        !face_tinted(&s) && !curve_lit(&s),
+        "vorher nichts hervorgehoben"
+    );
+    filled_project(&mut s, first, line);
+    let face = IncludePick::Face(0, top_face(&s));
+    let curve = IncludePick::SketchCurve {
+        sketch: first,
+        curve: line,
+    };
+    assert!(s.dialog_marks.contains(&face), "{:?}", s.dialog_marks);
+    assert!(s.dialog_marks.contains(&curve), "{:?}", s.dialog_marks);
+    assert!(face_tinted(&s), "Fläche getönt");
+    assert!(curve_lit(&s), "Kurve in der Auswahlfarbe");
+    // Ein zweiter Klick nimmt die Kurve wieder heraus.
+    assert!(spd::deliver(&mut s, curve.clone()));
+    assert!(!s.dialog_marks.contains(&curve));
+    assert!(!curve_lit(&s));
+    // Die Richtung von „Entlang Vektor“ steht ebenso in der Liste.
+    project_dialog(&mut s).set_kind(ProjectKind::AlongVector);
+    let axis = IncludePick::Axis(AxisId::Z);
+    assert!(spd::deliver(&mut s, axis.clone()));
+    assert!(s.dialog_marks.contains(&axis));
+    let view = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(W, H));
+    assert_eq!(
+        planora_app::sketch_view::dialog_mark_shapes(&s, view).len(),
+        1,
+        "Achse in der Auswahlfarbe"
+    );
+    // Eine Körperecke im Feld „Kurven“ steht als Punkt in der Ansicht.
+    let edge = s.bodies[0].solid.edges.iter().next().unwrap().0;
+    let vertex = IncludePick::Vertex {
+        body: 0,
+        edge,
+        end: false,
+    };
+    project_dialog(&mut s).focus = Field::Curves;
+    assert!(spd::deliver(&mut s, vertex.clone()));
+    assert!(s.dialog_marks.contains(&vertex));
+    assert_eq!(
+        planora_app::sketch_view::dialog_mark_shapes(&s, view).len(),
+        2,
+        "Achse und Ecke"
+    );
+    // „Leeren“ und Abbrechen nehmen die Hervorhebung weg.
+    let mut screen = Screen::new(W, H);
+    screen.settle(2, &mut |ctx| {
+        spd::show_open(ctx, &mut s);
+    });
+    project_dialog(&mut s).set_kind(ProjectKind::ClosestPoint);
+    frame(&mut screen, &mut s, vec![]);
+    assert!(
+        !s.dialog_marks.contains(&axis),
+        "Richtung nur bei Entlang Vektor"
+    );
+    let out = frame(&mut screen, &mut s, vec![key(egui::Key::Escape)]);
+    assert_eq!(out, Some(DialogOutcome::Cancelled));
+    assert!(s.dialog_marks.is_empty(), "{:?}", s.dialog_marks);
+    assert!(!face_tinted(&s));
+    // Ein Werkzeugwechsel ebenso.
+    filled_project(&mut s, first, line);
+    assert!(face_tinted(&s));
+    let (se, sk) = s.session_sketch_mut().unwrap();
+    se.choose_tool(sk, Tool::Line);
+    spd::sync(&mut s);
+    assert!(s.dialog_marks.is_empty());
+    assert!(!face_tinted(&s));
+}
+
+#[test]
+fn intersection_picks_are_highlighted_in_the_view() {
+    let mut s = AppState::new();
+    s.create_box(DVec3::new(10.0, 20.0, 5.0)).unwrap();
+    let (first, line) = finished_line(&mut s, StandardPlane::XZ, (2.0, -2.0), (8.0, 9.0));
+    open_new(&mut s, StandardPlane::XY);
+    choose(&mut s, ToolKind::IntersectionCurve);
+    let curve = IncludePick::SketchCurve {
+        sketch: first,
+        curve: line,
+    };
+    assert!(spd::deliver(&mut s, curve.clone()));
+    let face = IncludePick::Face(0, top_face(&s));
+    assert!(spd::deliver(&mut s, face.clone()));
+    assert!(s.dialog_marks.contains(&curve), "{:?}", s.dialog_marks);
+    assert!(s.dialog_marks.contains(&face), "{:?}", s.dialog_marks);
+    assert!(face_tinted(&s) && curve_lit(&s));
+}
+
+/// Meldungen der Dialoge (abgelehnter Klick, Klick ins Leere, „Die Kurven treffen die Flächen
+/// nicht“) stehen nur im Dialog, nicht zusätzlich in der Skizzenpalette.
+#[test]
+fn dialog_messages_stay_out_of_the_palette() {
+    let palette_message = |s: &AppState| s.sketch_session.as_ref().unwrap().message.clone();
+    let (mut s, first, line) = box_line_and_sketch(true);
+    filled_project(&mut s, first, line);
+    let mut screen = Screen::new(W, H);
+    screen.settle(2, &mut |ctx| {
+        spd::show_open(ctx, &mut s);
+    });
+    frame(&mut screen, &mut s, vec![key(egui::Key::Enter)]);
+    let text = "Die Kurven treffen die Flächen nicht";
+    assert_eq!(project_dialog(&mut s).error().as_deref(), Some(text));
+    assert_eq!(palette_message(&s), None);
+    // Ein unpassender Klick: Grund im Dialog.
+    project_dialog(&mut s).focus = Field::Faces;
+    assert!(!spd::deliver(&mut s, IncludePick::Axis(AxisId::X)));
+    assert!(project_dialog(&mut s).error().is_some());
+    assert_eq!(palette_message(&s), None);
+    // Ein Klick ins Leere: Hinweis im Dialog.
+    project_dialog(&mut s).focus = Field::Curves;
+    spd::refuse(&mut s);
+    let hint = planora_i18n::tr!("sketch-pick-project-to-surface");
+    assert_eq!(project_dialog(&mut s).error(), Some(hint));
+    assert_eq!(palette_message(&s), None);
+}

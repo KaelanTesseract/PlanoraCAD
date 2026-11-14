@@ -1372,7 +1372,7 @@ fn text_frame_in_yz_plane() {
 
 // ---- Namenszeile der Palette (Task H1) -----------------------------------------------------------
 
-/// Der Skizzenname „Skizze 12“ steht in der Zeile „Name | 3D-Skizze | Profil anzeigen“
+/// Der Skizzenname „Skizze 12“ steht in der Zeile „Name | 3D-Skizze | Blick auf“ (seit Task H3)
 /// ungekürzt (bei 1920 × 1080).
 #[test]
 fn sketch_name_is_not_cut_in_the_palette() {

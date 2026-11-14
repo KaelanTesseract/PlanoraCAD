@@ -454,13 +454,13 @@ fn look_at_key() -> egui::Id {
     shell_panels::sketch_side_id().with("look-at")
 }
 
-/// Lage des Knopfs „Blick auf“ in der Palettenzeile im letzten Bild (für Tests).
+/// Lage des Knopfs „Blick auf“ in der Namenszeile der Palette im letzten Bild (für Tests).
 #[doc(hidden)]
 pub fn look_at_button(ctx: &egui::Context) -> Option<egui::Rect> {
     ctx.data(|d| d.get_temp::<egui::Rect>(look_at_key()))
 }
 
-/// Schriftgröße der Schalter in der Namenszeile der Palette (Task H1).
+/// Schriftgröße der Anzeigeschalter unter der Namenszeile der Palette (Tasks H1, H3).
 const SWITCH_TEXT_PX: f32 = 10.0;
 
 fn sketch_name_key() -> egui::Id {
@@ -1367,24 +1367,33 @@ fn side_contents(
         palette,
         fonts,
     } = side;
-    // Name, rechts daneben die Schalter „3D-Skizze“ (Skizzen 10) und „Profil anzeigen“ (wie
-    // Fusions Skizzenpalette „Profil“: geschlossene Flächen hell eingefärbt); alles in einer
-    // Zeile, damit die Liste darunter nicht nach unten rutscht. Die Spalte ist schmal: Die
-    // Schalter bekommen ihren Platz zuerst, der Name nimmt den Rest und kürzt sich bei Bedarf.
-    // Damit ein Name wie „Skizze 12“ ganz zu lesen ist, stehen die Schalter hier eng und mit
-    // kleiner Schrift (Task H1; der volle Name steht beim Kürzen im Hinweis).
+    // Zwei Zeilen, damit die Liste darunter nicht nach unten rutscht. Oben der Name, rechts
+    // daneben der Schalter „3D-Skizze“ (Skizzen 10, er gehört zur Skizze) und das Symbol „Blick
+    // auf“; ganz rechts liegt (mit eigenen Fenstern) das Symbol „Abdocken“/„Andocken“ über der
+    // Zeile. Der Name nimmt den Rest und kürzt sich erst bei sehr langen Namen (Tasks H1, H3; der
+    // volle Name steht dann im Hinweis). Darunter die Anzeigeschalter „Skizzenraster“, „Fang“ und
+    // „Profil anzeigen“ (wie Fusions Skizzenpalette „Profil“: geschlossene Flächen hell
+    // eingefärbt); drei Haken passen in die schmale Spalte nur eng und mit kleiner Schrift.
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         ui.spacing_mut().icon_spacing = 2.0;
-        let small = |t: String| egui::RichText::new(t).size(SWITCH_TEXT_PX);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // Ganz rechts steht (mit eigenen Fenstern) das Symbol „Abdocken“/„Andocken“.
             if crate::detach::can_detach(ui.ctx()) {
                 ui.add_space(crate::dialog::corner_dock_width(ui));
             }
-            ui.checkbox(show_profiles, small(tr!("sketch-show-profile")));
+            // Nur das Symbol (die Spalte ist schmal); Name und Hinweis im Hinweistext.
+            let label = tr!("sketch-look-at");
+            let look = icons::source_icon_button(
+                ui,
+                IconSource::Hand(HandIcon::LookAt),
+                &label,
+                ui.visuals().dark_mode,
+            )
+            .on_hover_text(format!("{label}\n{}", tr!("sketch-look-at-hint")));
+            ui.data_mut(|d| d.insert_temp(look_at_key(), look.rect));
+            palette.look_at |= look.clicked();
             let three_d = ui
-                .checkbox(&mut palette.three_d, small(tr!("sketch-palette-three-d")))
+                .checkbox(&mut palette.three_d, tr!("sketch-palette-three-d"))
                 .on_hover_text(tr!("sketch-palette-three-d-hint"));
             palette.three_d_changed |= three_d.changed();
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -1404,26 +1413,18 @@ fn side_contents(
             });
         });
     });
-    // Skizzenraster, Fang und Blick auf in einer eigenen Zeile unter dem Namen.
     ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        ui.spacing_mut().icon_spacing = 2.0;
+        let small = |t: String| egui::RichText::new(t).size(SWITCH_TEXT_PX);
         let grid = ui
-            .checkbox(&mut palette.grid, tr!("sketch-palette-grid"))
+            .checkbox(&mut palette.grid, small(tr!("sketch-palette-grid")))
             .on_hover_text(tr!("sketch-palette-grid-hint"));
         let snap = ui
-            .checkbox(&mut palette.snap, tr!("sketch-palette-snap"))
+            .checkbox(&mut palette.snap, small(tr!("sketch-palette-snap")))
             .on_hover_text(tr!("sketch-palette-snap-hint"));
         palette.changed |= grid.changed() || snap.changed();
-        // Nur das Symbol (die Spalte ist schmal); Name und Hinweis im Hinweistext.
-        let label = tr!("sketch-look-at");
-        let look = icons::source_icon_button(
-            ui,
-            IconSource::Hand(HandIcon::LookAt),
-            &label,
-            ui.visuals().dark_mode,
-        )
-        .on_hover_text(format!("{label}\n{}", tr!("sketch-look-at-hint")));
-        ui.data_mut(|d| d.insert_temp(look_at_key(), look.rect));
-        palette.look_at |= look.clicked();
+        ui.checkbox(show_profiles, small(tr!("sketch-show-profile")));
     });
     tool_options(ui, se, sf, fonts, scope);
     ui.add_space(2.0);

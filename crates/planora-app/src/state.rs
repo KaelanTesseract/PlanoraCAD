@@ -342,6 +342,11 @@ pub struct AppState {
     /// Offener Dialog „Auf Fläche projizieren“ oder „Schnittkurve“ der offenen Skizze
     /// (Skizzen 10); er folgt der gewählten Art ([`crate::surface_project_dialog::sync`]).
     pub surface_dialog: Option<crate::surface_project_dialog::SurfaceDialog>,
+    /// Hervorhebungsliste der Ansicht (Task H3): was die Felder des offenen Dialogs
+    /// [`AppState::surface_dialog`] gewählt haben. Flächen sind getönt, Kanten, Ecken, Achsen,
+    /// Ebenen und Kurven fertiger Skizzen stehen in der Auswahlfarbe. Setzen nur über
+    /// [`AppState::set_dialog_marks`] (baut die Szene neu).
+    pub dialog_marks: Vec<IncludePick>,
     /// Offene Rückfrage „Maß löschen“ (Kettenglieder) aus dem Abschnitt „Maße“.
     pub pending_delete_dimension: Option<crate::dimension_browser::DimDeletePlan>,
     /// Name des Dokuments für die Zeichnungsnummer im Schriftfeld („Werkstück-01“); die App setzt
@@ -745,6 +750,7 @@ impl AppState {
             dimension_dialog: None,
             sheet_dialog: None,
             surface_dialog: None,
+            dialog_marks: Vec::new(),
             pending_delete_dimension: None,
             document_name: tr!("state-unnamed"),
             instance: NEXT_INSTANCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
@@ -1238,7 +1244,7 @@ impl AppState {
         self.sketch_draft = None;
         self.sketch_history = None;
         let left_sketch = self.sketch_session.take().is_some();
-        let had_marks = !self.marked_edges.is_empty();
+        let had_marks = !self.marked_edges.is_empty() || !self.dialog_marks.is_empty();
         self.marked_edges.clear();
         self.edge_picking = false;
         self.plane_pick = None;
@@ -1255,6 +1261,7 @@ impl AppState {
         self.dimension_dialog = None;
         self.sheet_dialog = None;
         self.surface_dialog = None;
+        self.dialog_marks.clear();
         self.dimension_tool = crate::dimension_tool::DimensionTool::default();
         self.balloon_tool = crate::balloon_tool::BalloonTool::default();
         self.section_tool = crate::section_tool::SectionTool::default();
@@ -2026,7 +2033,13 @@ impl AppState {
             hover: self.hover,
             selected: self.selection,
         };
-        let marked: Vec<Pick> = self.marked_edges.iter().map(|e| Pick::Edge(*e)).collect();
+        let mut marked: Vec<Pick> = self.marked_edges.iter().map(|e| Pick::Edge(*e)).collect();
+        // Flächen und Kanten, die ein offener Dialog gewählt hat (Task H3).
+        marked.extend(self.dialog_marks.iter().filter_map(|m| match *m {
+            IncludePick::Face(body, face) => Some(Pick::Face(FaceRef { body, face })),
+            IncludePick::Edge(body, edge) => Some(Pick::Edge(EdgeRef { body, edge })),
+            _ => None,
+        }));
         self.scene = Arc::new(build_scene_marked(
             &meshes,
             &highlight,
@@ -2190,7 +2203,24 @@ impl AppState {
     /// (`selected_feature`) oder unter dem Mauszeiger.
     pub fn plane_highlighted(&self, id: FeatureId) -> bool {
         let this = Some(Pick::Plane(id));
-        self.selection == this || self.hover == this || self.selected_feature == Some(id)
+        self.selection == this
+            || self.hover == this
+            || self.selected_feature == Some(id)
+            || self.dialog_marked(&IncludePick::Plane(planora_feature::PlaneId::Feature(id)))
+    }
+
+    /// Hat ein Feld des offenen Dialogs `pick` gewählt ([`AppState::dialog_marks`])?
+    pub fn dialog_marked(&self, pick: &IncludePick) -> bool {
+        self.dialog_marks.contains(pick)
+    }
+
+    /// Setzt die Hervorhebungsliste der Ansicht ([`AppState::dialog_marks`]); baut die Szene nur
+    /// neu, wenn sich etwas geändert hat.
+    pub fn set_dialog_marks(&mut self, marks: Vec<IncludePick>) {
+        if self.dialog_marks != marks {
+            self.dialog_marks = marks;
+            self.rebuild_scene();
+        }
     }
 
     /// Wie [`AppState::pick`], mit Wahl, was zählt ([`PickFilter`]). Reihenfolge: Eckpunkt

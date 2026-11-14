@@ -102,6 +102,8 @@ pub struct SurfaceProjectDialog {
     /// Das Feld, das den nächsten Klick bekommt.
     pub focus: Field,
     error: Option<Msg>,
+    /// Die Klicks hinter den Feldern, für die Hervorhebung in der Ansicht (Task H3).
+    picks: Picks,
 }
 
 /// Dialog „Schnittkurve“ (Spec 7).
@@ -114,6 +116,42 @@ pub struct IntersectionCurveDialog {
     /// Das Feld, das den nächsten Klick bekommt.
     pub focus: Field,
     error: Option<Msg>,
+    /// Die Klicks hinter den Feldern, für die Hervorhebung in der Ansicht (Task H3).
+    picks: Picks,
+}
+
+/// Die Klicks, die die Felder eines Dialogs gefüllt haben, je mit ihrem Feld: Daraus entsteht die
+/// Hervorhebungsliste der Ansicht ([`AppState::dialog_marks`]). Die Felder selbst speichern
+/// Verweise, die Ansicht braucht die Körperindizes.
+#[derive(Clone, Debug, Default)]
+struct Picks(Vec<(Field, IncludePick)>);
+
+impl Picks {
+    /// Nimmt `pick` ins Mehrfachfeld `field` auf oder, wenn er schon darin steht, heraus (wie
+    /// [`toggle`] für die Werte).
+    fn toggle(&mut self, field: Field, pick: IncludePick) {
+        toggle(&mut self.0, (field, pick));
+    }
+
+    /// Ersetzt den Klick des Einzelfelds `field`.
+    fn set(&mut self, field: Field, pick: IncludePick) {
+        self.clear(field);
+        self.0.push((field, pick));
+    }
+
+    /// Leert das Feld `field`.
+    fn clear(&mut self, field: Field) {
+        self.0.retain(|(f, _)| *f != field);
+    }
+
+    /// Die Klicks der Felder, für die `shown` gilt.
+    fn marks(&self, shown: impl Fn(Field) -> bool) -> Vec<IncludePick> {
+        self.0
+            .iter()
+            .filter(|(f, _)| shown(*f))
+            .map(|(_, p)| p.clone())
+            .collect()
+    }
 }
 
 /// Der offene Dialog der Skizzensitzung ([`AppState::surface_dialog`]).
@@ -148,6 +186,18 @@ pub fn sync(state: &mut AppState) {
             _ => SurfaceDialog::Project(SurfaceProjectDialog::new()),
         });
     }
+    refresh_marks(state);
+}
+
+/// Hält die Hervorhebungsliste der Ansicht passend zu den Feldern des offenen Dialogs (ohne
+/// Dialog leer).
+fn refresh_marks(state: &mut AppState) {
+    let marks = state
+        .surface_dialog
+        .as_ref()
+        .map(SurfaceDialog::marks)
+        .unwrap_or_default();
+    state.set_dialog_marks(marks);
 }
 
 /// Gibt einen Klick in der Ansicht an das aktive Feld des offenen Dialogs; `true`, wenn er passte.
@@ -158,7 +208,23 @@ pub fn deliver(state: &mut AppState, pick: IncludePick) -> bool {
     };
     let taken = d.take_pick(state, pick);
     state.surface_dialog = Some(d);
+    refresh_marks(state);
     taken
+}
+
+/// Ein Klick in der Ansicht traf nichts Wählbares: Der Hinweis, was zu wählen ist, steht im
+/// offenen Dialog (nicht in der Skizzenpalette).
+pub fn refuse(state: &mut AppState) {
+    sync(state);
+    match state.surface_dialog.as_mut() {
+        Some(SurfaceDialog::Project(d)) => {
+            d.error = Some(crate::msg!("sketch-pick-project-to-surface"));
+        }
+        Some(SurfaceDialog::Intersection(d)) => {
+            d.error = Some(crate::msg!("sketch-pick-intersection-curve"));
+        }
+        None => {}
+    }
 }
 
 /// Zeigt den offenen Dialog (nach [`sync`]); `None`, wenn keiner offen ist.
@@ -169,12 +235,14 @@ pub fn show_open(ctx: &egui::Context, state: &mut AppState) -> Option<DialogOutc
     if out == DialogOutcome::Open && state.surface_dialog.is_none() {
         state.surface_dialog = Some(d);
     }
+    refresh_marks(state);
     Some(out)
 }
 
 /// Beendet den Befehl: zurück zum Auswahlwerkzeug (wie Fusion nach OK oder Abbrechen).
 fn finish(state: &mut AppState) {
     state.surface_dialog = None;
+    state.set_dialog_marks(Vec::new());
     if let Some((se, sk)) = state.session_sketch_mut() {
         se.choose_tool(sk, Tool::Select);
     }
@@ -203,6 +271,14 @@ impl SurfaceDialog {
         match self {
             SurfaceDialog::Project(d) => d.show(ctx, state),
             SurfaceDialog::Intersection(d) => d.show(ctx, state),
+        }
+    }
+
+    /// Was die Felder gewählt haben, für die Hervorhebung in der Ansicht.
+    pub fn marks(&self) -> Vec<IncludePick> {
+        match self {
+            SurfaceDialog::Project(d) => d.marks(),
+            SurfaceDialog::Intersection(d) => d.marks(),
         }
     }
 }
@@ -525,12 +601,13 @@ fn keys(ui: &egui::Ui, ready: bool) -> (bool, bool) {
     (enter, crate::dialog::escape_pressed(ui, false))
 }
 
-/// Fehlermeldung nach einem abgelehnten OK: die Meldung der Sitzung, sonst der Text.
-fn session_error(state: &AppState, text: String) -> Msg {
+/// Fehlermeldung nach einem abgelehnten OK: die Meldung der Sitzung, sonst der Text. Sie steht
+/// danach nur im Dialog, nicht zusätzlich in der Skizzenpalette (Task H3).
+fn session_error(state: &mut AppState, text: String) -> Msg {
     state
         .sketch_session
-        .as_ref()
-        .and_then(|se| se.message.clone())
+        .as_mut()
+        .and_then(|se| se.message.take())
         .unwrap_or(Msg::Raw(text))
 }
 
@@ -571,6 +648,7 @@ impl SurfaceProjectDialog {
             direction: None,
             focus: Field::Faces,
             error: None,
+            picks: Picks::default(),
         }
     }
 
@@ -594,11 +672,19 @@ impl SurfaceProjectDialog {
     /// Nimmt einen Klick für das aktive Feld; ein unpassender lässt die Felder, wie sie sind, und
     /// hinterlässt eine Meldung. `true`, wenn er passte.
     pub fn take_pick(&mut self, state: &AppState, pick: IncludePick) -> bool {
-        let r = match self.focus {
-            Field::Faces => face_target(state, pick).map(|f| toggle(&mut self.faces, f)),
-            Field::Curves => curve_source(state, pick).map(|c| toggle(&mut self.curves, c)),
-            Field::Direction => direction(state, pick).map(|d| {
+        let focus = self.focus;
+        let r = match focus {
+            Field::Faces => face_target(state, pick.clone()).map(|f| {
+                toggle(&mut self.faces, f);
+                self.picks.toggle(focus, pick);
+            }),
+            Field::Curves => curve_source(state, pick.clone()).map(|c| {
+                toggle(&mut self.curves, c);
+                self.picks.toggle(focus, pick);
+            }),
+            Field::Direction => direction(state, pick.clone()).map(|d| {
                 self.direction = Some(d);
+                self.picks.set(focus, pick);
                 if self.faces.is_empty() {
                     self.focus = Field::Faces;
                 } else if self.curves.is_empty() {
@@ -617,6 +703,13 @@ impl SurfaceProjectDialog {
                 false
             }
         }
+    }
+
+    /// Was die Felder gewählt haben (die Richtung nur bei „Entlang Vektor“), für die
+    /// Hervorhebung in der Ansicht.
+    pub fn marks(&self) -> Vec<IncludePick> {
+        let along = self.kind == ProjectKind::AlongVector;
+        self.picks.marks(|f| f != Field::Direction || along)
     }
 
     /// Sind alle nötigen Felder gefüllt (Flächen, Kurven und bei „Entlang Vektor“ die Richtung)?
@@ -698,6 +791,7 @@ impl SurfaceProjectDialog {
                             &faces,
                         ) {
                             self.faces.clear();
+                            self.picks.clear(Field::Faces);
                         }
                         if pick_row(
                             ui,
@@ -708,6 +802,7 @@ impl SurfaceProjectDialog {
                             &curves,
                         ) {
                             self.curves.clear();
+                            self.picks.clear(Field::Curves);
                         }
                         ui.label(tr!("surface-field-project-type"));
                         ui.horizontal_wrapped(|ui| {
@@ -735,6 +830,7 @@ impl SurfaceProjectDialog {
                                 &items,
                             ) {
                                 self.direction = None;
+                                self.picks.clear(Field::Direction);
                             }
                         }
                     });
@@ -767,6 +863,7 @@ impl IntersectionCurveDialog {
             targets: Vec::new(),
             focus: Field::Curve,
             error: None,
+            picks: Picks::default(),
         }
     }
 
@@ -778,6 +875,7 @@ impl IntersectionCurveDialog {
     /// Nimmt einen Klick für das aktive Feld; `true`, wenn er passte. Eine gewählte Kurve macht
     /// „Kurven/Flächen“ aktiv.
     pub fn take_pick(&mut self, state: &AppState, pick: IncludePick) -> bool {
+        let clicked = pick.clone();
         let r = match self.focus {
             Field::Curve => sketch_curve_2d(state, pick, crate::msg!("surface-pick-curve"))
                 .and_then(|(sketch, curve)| {
@@ -789,12 +887,14 @@ impl IntersectionCurveDialog {
                         return Err(crate::msg!("surface-intersect-same-sketch"));
                     }
                     self.curve = Some(CurveSource::SketchCurve { sketch, curve });
+                    self.picks.set(Field::Curve, clicked);
                     self.focus = Field::Targets;
                     Ok(())
                 }),
-            Field::Targets => self
-                .target(state, pick)
-                .map(|t| toggle(&mut self.targets, t)),
+            Field::Targets => self.target(state, pick).map(|t| {
+                toggle(&mut self.targets, t);
+                self.picks.toggle(Field::Targets, clicked);
+            }),
             _ => Err(crate::msg!("sketch-pick-intersection-curve")),
         };
         match r {
@@ -830,6 +930,11 @@ impl IntersectionCurveDialog {
             },
             _ => Err(wrong()),
         }
+    }
+
+    /// Was die Felder gewählt haben, für die Hervorhebung in der Ansicht.
+    pub fn marks(&self) -> Vec<IncludePick> {
+        self.picks.marks(|_| true)
     }
 
     /// Sind „Kurve“ und „Kurven/Flächen“ gefüllt?
@@ -906,6 +1011,7 @@ impl IntersectionCurveDialog {
                             &curve,
                         ) {
                             self.curve = None;
+                            self.picks.clear(Field::Curve);
                         }
                         if pick_row(
                             ui,
@@ -916,6 +1022,7 @@ impl IntersectionCurveDialog {
                             &targets,
                         ) {
                             self.targets.clear();
+                            self.picks.clear(Field::Targets);
                         }
                     });
                 // Abgedockt läuft der Inhalt evtl. mehrmals je Bild: nichts überschreiben.
