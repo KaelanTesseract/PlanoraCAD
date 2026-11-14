@@ -13,7 +13,7 @@ use planora_feature::{FeatureId, ParamScope, ParamUnit, SketchFeature, constrain
 use planora_i18n::tr;
 use planora_math::{DVec2, DVec3};
 use planora_sketch::SketchError;
-use planora_sketch::constraint::{ConstraintId, ConstraintKind, FixToggle, LineOrPoints};
+use planora_sketch::constraint::{Axis3, ConstraintId, ConstraintKind, FixToggle, LineOrPoints};
 use planora_sketch::dimension::{DimPick, DimPlan};
 use planora_sketch::model::{CurveId, CurveKind, MAX_SPLINE_POINTS, PointId, Sketch};
 use planora_sketch::offset::{OffsetPlan, OffsetProblem};
@@ -512,6 +512,13 @@ pub struct SketchSession {
     pub dragging: Option<PointId>,
     /// Laufender Zug an einer Kurve; gegriffene Punkte stehen in [`dragging`](Self::dragging).
     pub curve_drag: Option<CurveDrag>,
+    /// Laufender Zug an 3D-Geometrie in der Ebene parallel zum Bildschirm (Skizzen 10,
+    /// [`crate::sketch_drag3`]).
+    pub drag3: Option<crate::sketch_drag3::Drag3>,
+    /// 3D-Punkt oder 3D-Kurve unter dem Zeiger über den Bildschirmabstand, je Bild von der Ansicht
+    /// gesetzt (nur, wenn dort kein 2D-Punkt fängt): Bemaßung und Abhängigkeitsbefehl wählen
+    /// damit 3D-Geometrie (Skizzen 10).
+    pub pick3: Option<Item>,
     /// Laufender Auswahlrahmen.
     pub box_select: Option<BoxSelect>,
     /// Die rechte Taste hat den Rahmen abgebrochen: Bis alle Maustasten los sind, ist kein Klick
@@ -661,7 +668,7 @@ fn text_refusal(r: TextRemoval) -> Msg {
     }
 }
 
-fn status_ok(r: &SolveReport) -> bool {
+pub(crate) fn status_ok(r: &SolveReport) -> bool {
     r.status == SolveStatus::Solved
 }
 
@@ -709,6 +716,8 @@ impl SketchSession {
             message: None,
             dragging: None,
             curve_drag: None,
+            drag3: None,
+            pick3: None,
             box_select: None,
             box_aborted: false,
             click_after_flyout: false,
@@ -914,6 +923,7 @@ impl SketchSession {
         self.drop_curve_picks();
         self.dragging = None;
         self.curve_drag = None;
+        self.drag3 = None;
         self.box_select = None;
         self.trim_drag = None;
         self.hover_preview = None;
@@ -2106,7 +2116,7 @@ impl SketchSession {
 
     /// Läuft ein Zug an einem Punkt oder einer Kurve?
     pub fn is_dragging(&self) -> bool {
-        self.dragging.is_some() || self.curve_drag.is_some()
+        self.dragging.is_some() || self.curve_drag.is_some() || self.drag3.is_some()
     }
 
     /// Beginnt im Auswahlwerkzeug den Zug an dem, was unter `at` liegt: Punkt vor Kurve
@@ -2118,6 +2128,7 @@ impl SketchSession {
         }
         self.dragging = None;
         self.curve_drag = None;
+        self.drag3 = None;
         // Griffe gehen über die Kurve, auf der sie liegen; den Punkt prüft der Griff selbst.
         if self.begin_grip_drag(sk, at, radius) {
             return self.is_dragging();
@@ -2284,6 +2295,7 @@ impl SketchSession {
         if self.dragging.take().is_some() {
             self.last_report = Some(sk.solve());
         }
+        self.end_drag3(sk);
     }
 
     // ---- Abhängigkeiten -----------------------------------------------------------------
@@ -2295,6 +2307,12 @@ impl SketchSession {
     /// Abhängigkeiten, die zur aktuellen Auswahl passen.
     pub fn available_actions(&self, sk: &Sketch) -> Vec<ConstraintAction> {
         actions_for(sk, &self.selection)
+    }
+
+    /// Ist `action` für die aktuelle Auswahl gesperrt, weil 3D-Geometrie dabei ist (Spec
+    /// Entwurf 2)? Dann ist ihr Knopf gedämpft, und der Hinweis nennt den Grund.
+    pub fn blocked_in_3d(&self, sk: &Sketch, action: ConstraintAction) -> bool {
+        !action_allowed_in_3d(action) && has_3d(sk, &self.selection)
     }
 
     /// Knopf (oder Taste) einer Abhängigkeit im Skizzenfeld. Passt die Auswahl, entsteht sie
@@ -2366,8 +2384,11 @@ impl SketchSession {
         radius: f64,
     ) -> Result<Option<Item>, Msg> {
         let selection = geometry_of(sk, &self.selection);
+        // 3D-Geometrie unter dem Zeiger (Bildschirmabstand, von der Ansicht gesetzt) nach den
+        // 2D-Punkten und vor den 2D-Kurven, wie beim Wählen.
         let candidates: Vec<Item> = [
             self.shown_point(sk, at, radius).map(Item::Point),
+            self.pick3.filter(|&i| geometry_of(sk, &[i]).len() == 1),
             self.shown_curve(sk, at, radius).map(Item::Curve),
         ]
         .into_iter()
@@ -2521,6 +2542,10 @@ impl SketchSession {
                 } else {
                     LineOrPoints::Line(c[0])
                 };
+                // An 3D-Geometrie wählt H wie V die nächstgelegene Skizzenachse (Spec 10).
+                if has_3d(sk, &self.selection) {
+                    return Ok(along_nearest_axis(sk, lp));
+                }
                 if action == A::Horizontal {
                     K::Horizontal(lp)
                 } else {
@@ -3140,6 +3165,7 @@ impl SketchSession {
                 se.dragging = None;
             }
             se.curve_drag = None;
+            se.drag3 = None;
             se.last_report = Some(sk.solve());
             if dropped > 0 {
                 se.add_note(crate::msg!("sketch-pattern-instance-dropped", n = dropped));
@@ -3440,6 +3466,11 @@ fn actions_for(sk: &Sketch, items: &[Item]) -> Vec<ConstraintAction> {
         (2, 1, 0, 0) => vec![Symmetric],
         _ => Vec::new(),
     };
+    // An 3D-Geometrie nur die Arten mit 3D-Fassung (Spec Entwurf 2).
+    let three_d = has_3d(sk, items);
+    if three_d {
+        found.retain(|&a| action_allowed_in_3d(a));
+    }
     // Fest gilt für jede Auswahl aus Punkten und Kurven (Fixieren/Lösen, Skizzen 9).
     if !found.contains(&Fixed) && !(s.points.is_empty() && s.curves.is_empty()) {
         found.push(Fixed);
@@ -3450,7 +3481,7 @@ fn actions_for(sk: &Sketch, items: &[Item]) -> Vec<ConstraintAction> {
         if round_center(sk, a).is_some() && round_center(sk, b).is_some() {
             found.push(Concentric);
         }
-        if sk.smooth_kinds_fit(a, b) {
+        if !three_d && sk.smooth_kinds_fit(a, b) {
             found.push(Smooth);
         }
     }
@@ -3491,7 +3522,7 @@ fn constraint_forms(action: ConstraintAction) -> &'static [[usize; 4]] {
 /// haben keinen Befehl).
 fn constraint_fit(sk: &Sketch, action: ConstraintAction, items: &[Item]) -> Fit {
     use ConstraintAction::*;
-    if action.is_dimension() {
+    if action.is_dimension() || (!action_allowed_in_3d(action) && has_3d(sk, items)) {
         return Fit::No;
     }
     if actions_for(sk, items).contains(&action) {
@@ -3533,8 +3564,12 @@ fn constraint_mismatch(sk: &Sketch, action: ConstraintAction, items: &[Item]) ->
         .unwrap_or_else(|| crate::msg!("sketch-action-mismatch", action = action.label_msg()))
 }
 
-/// Bei Konzentrisch und Glatt mit Kurven der falschen Art die Meldung, welche gehen.
+/// Bei Konzentrisch und Glatt mit Kurven der falschen Art die Meldung, welche gehen; an
+/// 3D-Geometrie für eine Art ohne 3D-Fassung der Hinweis darauf (Spec Entwurf 2).
 fn kinds_refusal(sk: &Sketch, action: ConstraintAction, items: &[Item]) -> Option<Msg> {
+    if !action_allowed_in_3d(action) && has_3d(sk, items) {
+        return Some(crate::msg!("sketch-not-in-3d-hint"));
+    }
     let curves_only = sort_items(sk, items).filter(|s| s.points.is_empty() && !s.curves.is_empty());
     let wrong_kind = |ok: &dyn Fn(CurveId) -> bool| {
         curves_only
@@ -3576,6 +3611,46 @@ fn need_msg(action: ConstraintAction) -> Msg {
         Collinear => crate::msg!("sketch-command-collinear-need"),
         Smooth => crate::msg!("sketch-command-smooth-need"),
         Distance | DistancePointLine | Radius | Diameter | Angle => action.label_msg(),
+    }
+}
+
+/// Gibt es die Abhängigkeit oder das Maß `action` an 3D-Geometrie (Spec Entwurf 2, wie
+/// [`ConstraintKind::allowed_in_3d`])? Symmetrisch, Glatt und der Abstand Punkt–Linie nicht.
+pub fn action_allowed_in_3d(action: ConstraintAction) -> bool {
+    use ConstraintAction::*;
+    !matches!(action, Symmetric | Smooth | DistancePointLine)
+}
+
+/// Gehört zu `items` 3D-Geometrie: ein 3D-Punkt oder eine 3D-Kurve (Skizzen 10)?
+pub(crate) fn has_3d(sk: &Sketch, items: &[Item]) -> bool {
+    items.iter().any(|&i| match i {
+        Item::Point(p) => sk.is_3d_point(p),
+        Item::Curve(c) => sk.is_3d_curve(c),
+        Item::Constraint(_) => false,
+    })
+}
+
+/// H/V an 3D-Geometrie (Spec 10, Annahme A3): parallel zur nächstgelegenen Skizzenachse; X wird
+/// `Horizontal`, Y `Vertical`, Z `AlongZ`.
+fn along_nearest_axis(sk: &Sketch, lp: LineOrPoints) -> ConstraintKind {
+    let axis = match lp {
+        LineOrPoints::Line(c) => sk.nearest_axis(c),
+        LineOrPoints::Points(a, b) => {
+            let at = |p| sk.point_xyz(p).unwrap_or(DVec3::ZERO);
+            let d = (at(b) - at(a)).abs();
+            if d.x >= d.y && d.x >= d.z {
+                Axis3::X
+            } else if d.y >= d.z {
+                Axis3::Y
+            } else {
+                Axis3::Z
+            }
+        }
+    };
+    match axis {
+        Axis3::X => ConstraintKind::Horizontal(lp),
+        Axis3::Y => ConstraintKind::Vertical(lp),
+        Axis3::Z => ConstraintKind::AlongZ(lp),
     }
 }
 

@@ -63,6 +63,7 @@ pub mod shell;
 pub mod shell_panels;
 pub mod sketch_cursor;
 pub mod sketch_dimension;
+pub mod sketch_drag3;
 pub mod sketch_draw3;
 pub mod sketch_grips;
 pub mod sketch_handles;

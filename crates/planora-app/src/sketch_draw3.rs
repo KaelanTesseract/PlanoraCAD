@@ -28,10 +28,9 @@ use glam::Vec2;
 use planora_math::{DVec2, DVec3};
 use planora_sketch::constraint::{ConstraintKind, LineOrPoints};
 use planora_sketch::helpers::RectIds;
-use planora_sketch::model::{CurveId, MAX_SPLINE_POINTS, PointId, Sketch};
+use planora_sketch::model::{CurveId, CurveKind, MAX_SPLINE_POINTS, PointId, Sketch};
 use planora_sketch::shapes::{self, ShapePlan};
 use planora_sketch::{conic_apex_ok, conic_nurbs};
-use std::collections::HashSet;
 
 /// Toleranz, unter der eine Achse der Triade als Achse der Skizze gilt (Triade unverdreht oder um
 /// Vielfache von 90° gedreht).
@@ -51,6 +50,9 @@ pub struct Cursor3 {
     pub snap: Option<PointId>,
     /// Fang auf den Skizzenursprung (ohne Punkt dort): Der neue Punkt wird dort fest.
     pub origin: bool,
+    /// Fang auf die Mitte einer Linie oder eines Bogens (Skizzen 10, A7): Der neue Punkt bekommt
+    /// dort `Midpoint` (Linie) bzw. `PointOnCurve` (Bogen), wie in 2D.
+    pub mid: Option<CurveId>,
     /// Bildpunkt im Viewport, aus dem die Lage stammt (ohne Zeiger bleibt die Vorschau dort).
     pub pixel: Vec2,
 }
@@ -64,6 +66,7 @@ impl Cursor3 {
             axis,
             snap: None,
             origin: false,
+            mid: None,
             pixel: Vec2::ZERO,
         }
     }
@@ -155,6 +158,7 @@ impl SketchSession {
             axis,
             snap: None,
             origin: false,
+            mid: None,
             pixel,
         };
         if !self.triad.lock_z && !self.cursor_opts.suppressed {
@@ -167,6 +171,7 @@ impl SketchSession {
             if locked.distance(cur.at) > tol {
                 cur.snap = None;
                 cur.origin = false;
+                cur.mid = None;
             }
             cur.at = locked;
             if self
@@ -180,17 +185,18 @@ impl SketchSession {
         self.cursor3 = Some(cur);
     }
 
-    /// Fang beim Zeichnen in 3D über den Bildschirmabstand: zuerst der nächste vorhandene Punkt
-    /// (ohne die Punkte der Buchstaben eines Textes), dann der Skizzenursprung.
+    /// Fang beim Zeichnen in 3D über den Bildschirmabstand (Spec 4, A7): zuerst der nächste
+    /// vorhandene Punkt (ohne die Punkte der Buchstaben eines Textes) und der Skizzenursprung, dann
+    /// die nächste Mitte einer Linie oder eines Bogens (2D wie 3D, ohne Buchstaben und Griffe),
+    /// jeweils an ihrer Lage im Raum. Körperecken fangen erst mit dem Einbeziehen (Task 16).
     fn snap3(&self, sk: &Sketch, map: &Mapper, at: Pos2, cur: &mut Cursor3) {
-        let glyphs: HashSet<PointId> = sk
-            .curves()
-            .filter(|(c, _)| sk.text_of_curve(*c).is_some())
-            .flat_map(|(_, d)| d.kind.points())
-            .collect();
+        // TODO(Skizzen 10, Task 16): Fang an Körperecken legt einen eingezogenen Punkt an
+        // (`add_included` mit der Herkunft `CopySource::Include`) und bindet ihn mit
+        // „Deckungsgleich“ (A7); die Herkunft im Dokument kommt erst mit Task 15.
+        let glyph_points = sk.glyph_points();
         let near = sk
             .points()
-            .filter(|(p, _)| !glyphs.contains(p))
+            .filter(|(p, _)| !glyph_points.contains(p))
             .filter_map(|(p, _)| {
                 let q = sk.point_xyz(p).ok()?;
                 let d = map.to_screen3(q)?.distance(at);
@@ -201,12 +207,30 @@ impl SketchSession {
             cur.at = q;
             cur.snap = Some(p);
             cur.axis = None;
-        } else if map
+            return;
+        }
+        if map
             .to_screen3(DVec3::ZERO)
             .is_some_and(|s| s.distance(at) <= PICK_RADIUS_PX)
         {
             cur.at = DVec3::ZERO;
             cur.origin = true;
+            cur.axis = None;
+            return;
+        }
+        let glyph_curves = sk.glyph_curves();
+        let mid = sk
+            .curves()
+            .filter(|(c, _)| !glyph_curves.contains(c) && !sk.is_handle_curve(*c))
+            .filter_map(|(c, _)| {
+                let m = curve_mid3(sk, c)?;
+                let d = map.to_screen3(m)?.distance(at);
+                (d <= PICK_RADIUS_PX).then_some((d, c, m))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        if let Some((_, c, m)) = mid {
+            cur.at = m;
+            cur.mid = Some(c);
             cur.axis = None;
         }
     }
@@ -329,14 +353,7 @@ impl SketchSession {
             sk.add_point3(cur.at)
         }
         .map_err(err)?;
-        if cur.origin {
-            let pin = if flat {
-                ConstraintKind::Fixed(p, 0.0, 0.0)
-            } else {
-                ConstraintKind::Fixed3(p, 0.0, 0.0, 0.0)
-            };
-            sk.add_constraint(pin).map_err(err)?;
-        }
+        bind_new3(sk, p, cur.origin, cur.mid)?;
         Ok(p)
     }
 
@@ -397,6 +414,9 @@ pub struct Hit3 {
     pub snap: Option<PointId>,
     /// Fang auf den Skizzenursprung: Ein neuer eigener Punkt wird dort fest.
     pub origin: bool,
+    /// Fang auf die Mitte einer Linie oder eines Bogens: Ein neuer eigener Punkt wird dort
+    /// gebunden.
+    pub mid: Option<CurveId>,
 }
 
 /// Die Ebene einer ebenen Form als 2D-Basis in Skizzenkoordinaten: Ursprung und zwei Achsen,
@@ -514,6 +534,7 @@ impl SketchSession {
                 .snap
                 .filter(|&q| sk.point_xyz(q).is_ok_and(|p| p.distance(at) <= tol)),
             origin: cur.origin && at.length() <= tol,
+            mid: cur.mid.filter(|_| cur.at.distance(at) <= tol),
         };
         let stage = self.pending3.len();
         // Der Klick des Kegelschnitts nach dem Scheitel bestätigt nur das Rho.
@@ -582,8 +603,14 @@ impl SketchSession {
                 if r <= tol || !r.is_finite() {
                     return Err(planar3_refusal(kind));
                 }
-                let center = new_point(sk, plane, plane.to3((a + b) / 2.0))?;
-                Ok(Created::Circle(sk.add_circle3(center, r, n).map_err(err)?))
+                let m = (a + b) / 2.0;
+                let center = new_point(sk, plane, plane.to3(m))?;
+                let circle = sk.add_circle3(center, r, n).map_err(err)?;
+                // Ein gefangener Punkt auf dem Rand liegt auf dem Kreis (wie `bind_rim` in 2D).
+                for h in hits {
+                    bind_rim3(sk, plane, circle, h, |q| (q.distance(m) - r).abs())?;
+                }
+                Ok(Created::Circle(circle))
             }
             (Planar3::Arc3P, &[h0, h1, _], &[s, e, through]) => {
                 let arc = shapes::arc_through(s, e, through, tol)
@@ -648,6 +675,17 @@ impl SketchSession {
                 let center = own_point(sk, plane, &h0)?;
                 let major3 = plane.u * major.x + plane.v * major.y;
                 let ellipse = sk.add_ellipse3(center, major3, minor, n).map_err(err)?;
+                // Gefangene Punkte am Ende der großen Halbachse und bei der kleinen liegen auf der
+                // Ellipse, wenn sie wirklich darauf liegen (bei der kleinen meist nicht).
+                let dir = major / len;
+                let gap = |q: DVec2| {
+                    let d = q - m;
+                    let (u, v) = (d.dot(dir) / len, dir.perp_dot(d) / minor);
+                    ((u * u + v * v).sqrt() - 1.0).abs() * minor
+                };
+                for h in &hits[1..] {
+                    bind_rim3(sk, plane, ellipse, h, gap)?;
+                }
                 Ok(Created::Ellipse(ellipse))
             }
             (Planar3::Conic, &[h0, h1, h2, _], _) => {
@@ -761,19 +799,80 @@ fn new_point(sk: &mut Sketch, plane: &Plane3, p: DVec3) -> Result<PointId, Msg> 
 }
 
 /// Ein eigener Punkt der Form an einer gesetzten Lage: der gefangene vorhandene Punkt, sonst ein
-/// neuer; der Fang auf den Ursprung hält den neuen dort fest (`Fixed` bzw. `Fixed3`).
+/// neuer; der Fang auf den Ursprung hält den neuen dort fest (`Fixed` bzw. `Fixed3`), der Fang auf
+/// eine Mitte bindet ihn dort ([`bind_new3`]).
 fn own_point(sk: &mut Sketch, plane: &Plane3, hit: &Hit3) -> Result<PointId, Msg> {
     if let Some(q) = hit.snap {
         return Ok(q);
     }
     let p = new_point(sk, plane, hit.at)?;
-    if hit.origin {
-        let pin = if plane.flat {
-            ConstraintKind::Fixed(p, 0.0, 0.0)
-        } else {
+    bind_new3(sk, p, hit.origin, hit.mid)?;
+    Ok(p)
+}
+
+/// Bindet den neuen Punkt `p` an seinen Fang in 3D: am Ursprung `Fixed` (2D-Punkt) bzw.
+/// `Fixed3` (3D-Punkt), an der Mitte einer Linie `Midpoint`, eines Bogens `PointOnCurve` (es gibt
+/// `Midpoint` nur für Linien, wie beim 2D-Fang).
+pub(crate) fn bind_new3(
+    sk: &mut Sketch,
+    p: PointId,
+    origin: bool,
+    mid: Option<CurveId>,
+) -> Result<(), Msg> {
+    if origin {
+        let pin = if sk.is_3d_point(p) {
             ConstraintKind::Fixed3(p, 0.0, 0.0, 0.0)
+        } else {
+            ConstraintKind::Fixed(p, 0.0, 0.0)
         };
         sk.add_constraint(pin).map_err(err)?;
     }
-    Ok(p)
+    if let Some(c) = mid {
+        let kind = match sk.curve(c).map(|d| &d.kind) {
+            Some(CurveKind::Line { .. }) => ConstraintKind::Midpoint(p, c),
+            Some(_) => ConstraintKind::PointOnCurve(p, c),
+            None => return Ok(()),
+        };
+        sk.add_constraint(kind).map_err(err)?;
+    }
+    Ok(())
+}
+
+/// Bindet einen gefangenen Punkt der Lage `hit` mit `PointOnCurve` an die neue ebene Kurve
+/// `curve`, wenn er wirklich auf ihr liegt: in der Ebene und mit `gap` (Abstand zur Kurve in der
+/// 2D-Basis der Ebene) höchstens die Toleranz (wie `bind_rim` in 2D). Ohne gefangenen Punkt nichts.
+fn bind_rim3(
+    sk: &mut Sketch,
+    plane: &Plane3,
+    curve: CurveId,
+    hit: &Hit3,
+    gap: impl Fn(DVec2) -> f64,
+) -> Result<(), Msg> {
+    let tol = sk.tolerance().linear;
+    let Some(q) = hit.snap else {
+        return Ok(());
+    };
+    let Ok(at) = sk.point_xyz(q) else {
+        return Ok(());
+    };
+    let off_plane = (at - plane.origin).dot(plane.normal()).abs();
+    if off_plane <= tol && gap(plane.to2(at)) <= tol {
+        sk.add_constraint(ConstraintKind::PointOnCurve(q, curve))
+            .map_err(err)?;
+    }
+    Ok(())
+}
+
+/// Mitte einer Linie oder eines Bogens im Raum (Fangziel „Mittelpunkt“ in 3D); andere Arten haben
+/// keine.
+fn curve_mid3(sk: &Sketch, c: CurveId) -> Option<DVec3> {
+    match sk.curve(c)?.kind {
+        CurveKind::Line { a, b } => Some((sk.point_xyz(a).ok()? + sk.point_xyz(b).ok()?) * 0.5),
+        CurveKind::Arc { .. } => {
+            let (lo, hi) = sk.curve_domain3(c)?;
+            sk.curve_point3(c, 0.5 * (lo + hi))
+        }
+        _ => None,
+    }
+    .filter(|m| m.is_finite())
 }

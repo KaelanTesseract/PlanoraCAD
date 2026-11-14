@@ -7,7 +7,7 @@
 
 use crate::sketch_grips::{is_plain, is_wrapped, short_factor, split_factor};
 use crate::sketch_state::{
-    SketchSession, Snap, Tool, angle_value_ok, checked_value, dimension_input, err,
+    Item, SketchSession, Snap, Tool, angle_value_ok, checked_value, dimension_input, err,
 };
 use planora_feature::{ParamScope, SketchFeature, constraint_unit};
 use planora_math::DVec2;
@@ -81,9 +81,13 @@ impl SketchSession {
         if self.dim.plan.take().is_some() {
             self.dim = Default::default();
         }
-        let pick = match self.snap(sk, at, radius) {
-            Snap::Point(p) => Some(DimPick::Point(p)),
-            Snap::Curve(c) => Some(DimPick::Curve(c, at)),
+        // 3D-Geometrie unter dem Zeiger (Bildschirmabstand, von der Ansicht gesetzt) nach den
+        // 2D-Punkten und vor den 2D-Kurven (Skizzen 10).
+        let pick = match (self.snap(sk, at, radius), self.pick3) {
+            (Snap::Point(p), _) => Some(DimPick::Point(p)),
+            (_, Some(Item::Point(p))) => Some(DimPick::Point(p)),
+            (_, Some(Item::Curve(c))) => Some(DimPick::Curve(c, at)),
+            (Snap::Curve(c), _) => Some(DimPick::Curve(c, at)),
             _ => None,
         };
         let again = pick.is_some_and(|p| self.dim.picks.iter().any(|q| same_object(q, &p)));
@@ -93,10 +97,18 @@ impl SketchSession {
             _ => true,
         };
         if place {
+            let blocked = sk.dimension_axis_blocked(&self.dim.picks, at);
             match self.planned_at(sk, at) {
                 Some(plan) => {
-                    if self.message == Some(crate::msg!("sketch-dimension-none")) {
+                    if self.message == Some(crate::msg!("sketch-dimension-none"))
+                        || self.message == Some(crate::msg!("sketch-dimension-3d-aligned"))
+                    {
                         self.message = None;
+                    }
+                    // Waagerecht/senkrecht gibt es an 3D-Geometrie nicht (Spec Entwurf 2): Es wird
+                    // ausgerichtet bemaßt, und der Hinweis sagt es.
+                    if blocked {
+                        self.message = Some(crate::msg!("sketch-dimension-3d-aligned"));
                     }
                     self.dim.plan = Some(plan);
                     self.dim.picks.clear();

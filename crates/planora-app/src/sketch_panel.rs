@@ -1410,7 +1410,10 @@ fn side_contents(
             // Geometrische Abhängigkeiten gehen immer: Ohne passende Auswahl startet der Knopf den
             // Befehl (Fusion „erst Befehl, dann Auswahl“) und erscheint dann aktiv. Maße brauchen
             // die Auswahl wie bisher.
-            let enabled = !action.is_dimension() || available.contains(&action);
+            // An 3D-Geometrie sind die Arten ohne 3D-Fassung gedämpft (Spec Entwurf 2); der
+            // Hinweis nennt den Grund.
+            let blocked = se.blocked_in_3d(sk, action);
+            let enabled = !blocked && (!action.is_dimension() || available.contains(&action));
             let active = se.tool == Tool::Constraint(action);
             let label = if action.is_dimension() {
                 format!("{} …", action.label())
@@ -1430,10 +1433,12 @@ fn side_contents(
             {
                 button = button.on_hover_text(with_hint(&km, bound, &label));
             }
-            if button
-                .on_disabled_hover_text(tr!("sketch-not-fitting"))
-                .clicked()
-            {
+            let why = if blocked {
+                tr!("sketch-not-in-3d-hint")
+            } else {
+                tr!("sketch-not-fitting")
+            };
+            if button.on_disabled_hover_text(why).clicked() {
                 panel.error = None;
                 if action.is_dimension() {
                     panel.editor = Some(new_editor(se, sk, action));

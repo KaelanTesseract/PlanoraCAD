@@ -28,7 +28,7 @@ use crate::fonts_library::Guarded;
 use crate::formula_field::{FormulaField, number_field_text, resolve, value_field_text};
 use crate::msg::Msg;
 use crate::sketch_cursor::DrawCursor;
-use crate::sketch_draw3::{Cursor3, Plane3};
+use crate::sketch_draw3::{Cursor3, Hit3, Plane3, bind_new3};
 use crate::sketch_state::{Item, SketchSession, Tool, err};
 use crate::sketch_triad::Triad;
 use crate::theme;
@@ -37,6 +37,7 @@ use planora_feature::{ParamScope, ParamUnit, SketchFeature};
 use planora_i18n::{DisplayUnit, current_unit, tr};
 use planora_math::{DVec2, DVec3};
 use planora_sketch::SketchError;
+use planora_sketch::constraint::ConstraintKind;
 use planora_sketch::model::{CurveId, CurveKind, PointId, Sketch, plane_basis};
 use planora_sketch::snap::SnapHit;
 use planora_sketch::text::{
@@ -241,6 +242,8 @@ pub struct TextTool {
     pub angle_text: String,
     /// Fang der geklickten Ecken: OK bindet sie an.
     snaps: Vec<SnapHit>,
+    /// Fang der geklickten Ecken eines Rahmens in 3D (Skizzen 10): OK bindet sie an wie in 2D.
+    snaps3: Vec<Hit3>,
     /// Inhalt (wie gesetzt) und Stil der letzten Vorschau.
     shaped_for: Option<(String, TextStyle)>,
     /// Warum die letzte Vorschau nicht gesetzt werden konnte.
@@ -309,6 +312,7 @@ impl TextTool {
             shapings: 0,
             placements: 0,
             snaps: Vec::new(),
+            snaps3: Vec::new(),
             shaped_for: None,
             shape_error: None,
             height_error: None,
@@ -1032,6 +1036,15 @@ impl SketchSession {
         }
         t.corners.push(q);
         t.plane3 = Some(plane);
+        // Der Fang zählt nur, wenn die Ecke in der Ebene genau auf ihm liegt.
+        let at = plane.to3(q);
+        let on = cur.at.distance(at) <= tol;
+        t.snaps3.push(Hit3 {
+            at,
+            snap: cur.snap.filter(|_| on),
+            origin: cur.origin && on,
+            mid: cur.mid.filter(|_| on),
+        });
         if t.corners.len() == 2 {
             t.focus_content = true;
         }
@@ -1099,13 +1112,19 @@ impl SketchSession {
         self.atomic(&mut sf.sketch, |se, sk, prior| {
             let params = tool.params.clone();
             match tool.kind {
-                // Ein Rahmen in 3D (Skizzen 10): in seiner Ebene, ohne Fangbindungen.
+                // Ein Rahmen in 3D (Skizzen 10): in seiner Ebene; gefangene Ecken binden wie
+                // in 2D.
                 TextToolKind::Box if tool.plane3.is_some() => {
                     if let Some(plane) = tool.plane3 {
                         let corners = [plane.to3(tool.corners[0]), plane.to3(tool.corners[1])];
                         let id = sk
                             .add_text_box3(corners, plane.normal(), params, tool.h, tool.v, shape)
                             .map_err(err)?;
+                        let own = match sk.text(id).map(|d| d.placement) {
+                            Some(TextPlacement::Box { corners, .. }) => corners.to_vec(),
+                            _ => Vec::new(),
+                        };
+                        bind_corners3(sk, &own, &tool.snaps3)?;
                         if tool.angle != 0.0 {
                             sk.set_text_angle(id, tool.angle).map_err(err)?;
                         }
@@ -1184,6 +1203,31 @@ impl SketchSession {
         self.message = note;
         Ok(())
     }
+}
+
+/// Bindet die Ecken `own` eines neuen Rahmens in 3D an den Fang der geklickten Ecken `hits`
+/// (Skizzen 10): an einen gefangenen Punkt mit `Coincident`, sonst wie ein neuer Punkt
+/// ([`bind_new3`]: Ursprung, Mitte). Eine Ecke, die nicht an der Lage des Klicks liegt, bindet nicht.
+fn bind_corners3(sk: &mut Sketch, own: &[PointId], hits: &[Hit3]) -> Result<(), Msg> {
+    let tol = sk.tolerance().linear;
+    for hit in hits {
+        let Some(p) = own
+            .iter()
+            .copied()
+            .find(|&p| sk.point_xyz(p).is_ok_and(|q| q.distance(hit.at) <= tol))
+        else {
+            continue;
+        };
+        match hit.snap {
+            Some(q) if q != p => {
+                sk.add_constraint(ConstraintKind::Coincident(p, q))
+                    .map_err(err)?;
+            }
+            Some(_) => {}
+            None => bind_new3(sk, p, hit.origin, hit.mid)?,
+        }
+    }
+    Ok(())
 }
 
 /// Der Text, zu dem `item` gehört: ein Buchstabe oder ein Punkt eines Buchstabens. Rahmenlinien

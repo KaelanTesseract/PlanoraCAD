@@ -245,15 +245,29 @@ fn segment_distance(p: Pos2, a: Pos2, b: Pos2) -> f32 {
 }
 
 /// 3D-Punkt oder 3D-Kurve unter dem Zeiger `pointer`, über den Bildschirmabstand zur projizierten
-/// Lage (höchstens [`PICK_RADIUS_PX`]): Punkte vor Kurven, jeweils der nächste. Unsichtbare Griffe
-/// zählen nicht; 2D-Geometrie trifft weiter [`SketchSession::snap`].
-pub(crate) fn pick_3d(
-    se: &SketchSession,
-    sk: &Sketch,
-    map: &Mapper,
-    pointer: Pos2,
-) -> Option<Item> {
-    let hidden = se.hidden_handles(sk);
+/// Lage (höchstens [`PICK_RADIUS_PX`]): Punkte vor Kurven, jeweils der nächste. Was die Ansicht
+/// nicht zeichnet, zählt nicht (wie beim 2D-Fang): unsichtbare Griffe, Exemplare eines Musters in
+/// Bearbeitung, Buchstaben und Rahmen eines Textes beim Ändern sowie die Punkte der Buchstaben.
+/// 2D-Geometrie trifft weiter [`SketchSession::snap`].
+#[doc(hidden)]
+pub fn pick_3d(se: &SketchSession, sk: &Sketch, map: &Mapper, pointer: Pos2) -> Option<Item> {
+    // Reine 2D-Skizze: nichts zu treffen, ohne die Mengen des Verborgenen zu bauen (eine 3D-Kurve
+    // hat einen 3D-Punkt oder eine eigene Normale).
+    if !sk.points().any(|(p, _)| sk.is_3d_point(p)) && !sk.curves().any(|(_, d)| d.normal.is_some())
+    {
+        return None;
+    }
+    let handles = se.hidden_handles(sk);
+    let (mut hidden_curves, mut hidden_points) = se.pattern_hidden(sk);
+    hidden_curves.extend(handles.curves);
+    hidden_curves.extend(se.text_hidden(sk));
+    hidden_points.extend(handles.points);
+    hidden_points.extend(se.text_hidden_points(sk));
+    hidden_points.extend(sk.glyph_points());
+    let hidden = crate::sketch_handles::HiddenHandles {
+        points: hidden_points,
+        curves: hidden_curves,
+    };
     let nearest_point = sk
         .points()
         .map(|(p, _)| p)
@@ -281,6 +295,44 @@ pub(crate) fn pick_3d(
         .filter(|&(_, d)| d <= PICK_RADIUS_PX)
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(c, _)| Item::Curve(c))
+}
+
+/// Was ein Zug im Auswahlwerkzeug bei `pointer` an 3D-Geometrie greift, mit der gefassten Stelle
+/// in Skizzenkoordinaten: ein 3D-Punkt an seiner Lage, eine 3D-Kurve an der Stelle ihrer Bahn, die
+/// dem Zeiger auf dem Bildschirm am nächsten liegt. `None`, wo ein 2D-Punkt fängt (er geht vor,
+/// wie beim Klick) oder keine 3D-Geometrie liegt.
+fn grab_3d(se: &SketchSession, sk: &Sketch, map: &Mapper, pointer: Pos2) -> Option<(Item, DVec3)> {
+    let flat = map
+        .to_sketch(pointer)
+        .zip(map.radius_at(pointer))
+        .map(|(at, r)| se.snap(sk, at, r));
+    if matches!(flat, Some(Snap::Point(_))) {
+        return None;
+    }
+    let item = pick_3d(se, sk, map, pointer)?;
+    let grab = match item {
+        Item::Point(p) => sk.point_xyz(p).ok()?,
+        Item::Curve(c) => {
+            let pts = curve_points3(sk, c)?;
+            pts.windows(2)
+                .filter_map(|w| {
+                    let (a, b) = (map.to_screen3(w[0])?, map.to_screen3(w[1])?);
+                    let ab = b - a;
+                    let len2 = ab.length_sq();
+                    let t = if len2 > 0.0 {
+                        ((pointer - a).dot(ab) / len2).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let d = pointer.distance(a + ab * t);
+                    Some((d, w[0] + (w[1] - w[0]) * f64::from(t)))
+                })
+                .min_by(|x, y| x.0.total_cmp(&y.0))?
+                .1
+        }
+        Item::Constraint(_) => return None,
+    };
+    Some((item, grab))
 }
 
 /// Was ein Klick im Auswahlwerkzeug am Zeiger `pointer` trifft: ein 2D-Punkt (Fang in der
@@ -651,15 +703,42 @@ fn marked_curves(kind: &ConstraintKind) -> Option<Vec<CurveId>> {
     }
 }
 
-/// Stellen (Skizzenkoordinaten), an denen die Beschriftung einer Abhängigkeit erscheint.
-fn anchors(sk: &Sketch, kind: &ConstraintKind) -> Vec<DVec2> {
+fn pos3(sk: &Sketch, p: PointId) -> Option<DVec3> {
+    sk.point_xyz(p).ok()
+}
+
+/// Wie [`curve_anchor`] im Raum: An einer 3D-Kurve liegt die Stelle auf ihrer Bahn (Skizzen 10),
+/// sonst in der Skizzenebene.
+fn curve_anchor3(sk: &Sketch, c: CurveId) -> Option<DVec3> {
+    if !sk.is_3d_curve(c) {
+        return curve_anchor(sk, c).map(|a| a.extend(0.0));
+    }
+    match &sk.curve(c)?.kind {
+        CurveKind::Line { a, b } => Some((pos3(sk, *a)? + pos3(sk, *b)?) * 0.5),
+        kind => {
+            let pts = curve_points3(sk, c)?;
+            // Am Kreis ein Achtel der Bahn weit, wie die 45° in der Ebene.
+            let k = if matches!(kind, CurveKind::Circle { .. }) {
+                pts.len() / 8
+            } else {
+                pts.len() / 2
+            };
+            pts.get(k).copied()
+        }
+    }
+}
+
+/// Stellen (Skizzenkoordinaten mit z), an denen die Beschriftung einer Abhängigkeit erscheint: an
+/// 3D-Geometrie an ihrer Lage im Raum (Skizzen 10), sonst in der Skizzenebene.
+#[doc(hidden)]
+pub fn constraint_anchors(sk: &Sketch, kind: &ConstraintKind) -> Vec<DVec3> {
     use ConstraintKind as K;
-    let mid = |a: Option<DVec2>, b: Option<DVec2>| a.zip(b).map(|(a, b)| (a + b) * 0.5);
+    let mid = |a: Option<DVec3>, b: Option<DVec3>| a.zip(b).map(|(a, b)| (a + b) * 0.5);
     let found = match kind {
         K::Horizontal(LineOrPoints::Line(c))
         | K::Vertical(LineOrPoints::Line(c))
         | K::AlongZ(LineOrPoints::Line(c)) => {
-            vec![curve_anchor(sk, *c)]
+            vec![curve_anchor3(sk, *c)]
         }
         K::Horizontal(LineOrPoints::Points(a, b))
         | K::Vertical(LineOrPoints::Points(a, b))
@@ -667,34 +746,36 @@ fn anchors(sk: &Sketch, kind: &ConstraintKind) -> Vec<DVec2> {
         | K::Distance(a, b, _)
         | K::DistanceX(a, b, _)
         | K::DistanceY(a, b, _)
-        | K::SlotOverall(a, b, ..) => vec![mid(pos(sk, *a), pos(sk, *b))],
+        | K::SlotOverall(a, b, ..) => vec![mid(pos3(sk, *a), pos3(sk, *b))],
         K::Parallel(a, b)
         | K::Perpendicular(a, b)
         | K::Equal(a, b)
         | K::Tangent(a, b)
         | K::Collinear(a, b) => {
-            vec![curve_anchor(sk, *a), curve_anchor(sk, *b)]
+            vec![curve_anchor3(sk, *a), curve_anchor3(sk, *b)]
         }
         // Am gemeinsamen (oder zusammengelegten) Ende ein Zeichen, nicht zwei übereinander.
         K::Smooth(_, a, _, b) => {
-            let (pa, pb) = (pos(sk, *a), pos(sk, *b));
+            let (pa, pb) = (pos3(sk, *a), pos3(sk, *b));
             match pa.zip(pb) {
                 Some((x, y)) if x.distance(y) <= sk.tolerance().linear => vec![pa],
                 _ => vec![pa, pb],
             }
         }
-        K::Angle(a, b, _) => vec![mid(curve_anchor(sk, *a), curve_anchor(sk, *b))],
+        K::Angle(a, b, _) => vec![mid(curve_anchor3(sk, *a), curve_anchor3(sk, *b))],
         K::Fixed(p, ..)
         | K::Fixed3(p, ..)
         | K::Midpoint(p, _)
         | K::PointOnCurve(p, _)
         | K::Coincident(p, _) => {
-            vec![pos(sk, *p)]
+            vec![pos3(sk, *p)]
         }
-        K::Symmetric(a, b, _) => vec![pos(sk, *a), pos(sk, *b)],
+        K::Symmetric(a, b, _) => vec![pos3(sk, *a), pos3(sk, *b)],
+        // Nur in der Skizzenebene (ohne 3D-Fassung).
         K::DistancePointLine(p, c, _) | K::CenterlineDiameter(p, c, _) => {
             let at = pos(sk, *p);
-            vec![mid(at, at.and_then(|q| sk.nearest_on_curve(*c, q)))]
+            let foot = at.and_then(|q| sk.nearest_on_curve(*c, q));
+            vec![at.zip(foot).map(|(a, b)| ((a + b) * 0.5).extend(0.0))]
         }
         K::Radius(c, _)
         | K::Diameter(c, _)
@@ -705,7 +786,7 @@ fn anchors(sk: &Sketch, kind: &ConstraintKind) -> Vec<DVec2> {
         | K::EllipseAxes3(c, ..)
         | K::EllipseMajor(c, _)
         | K::EllipseMinor(c, _)
-        | K::EllipseAngle(c, _) => vec![curve_anchor(sk, *c)],
+        | K::EllipseAngle(c, _) => vec![curve_anchor3(sk, *c)],
         // Musterwerte stehen in der Liste; in der Ansicht zeigt sie erst das Musterwerkzeug.
         K::PatternValue(..) => Vec::new(),
     };
@@ -730,6 +811,27 @@ impl Mapper {
         let v = sketch3_to_screen(&self.camera, &self.frame, self.viewport(), p)?;
         v.is_finite()
             .then(|| pos2(self.rect.left() + v.x, self.rect.top() + v.y))
+    }
+
+    /// Blickrichtung in Skizzenkoordinaten (normiert): die Normale der Ebene parallel zum
+    /// Bildschirm (Ziehen ohne Triade, Spec 10). `None` bei entarteter Kamera.
+    pub fn view_normal(&self) -> Option<DVec3> {
+        let (eye, dir) = self.camera.ray(Vec2::ZERO);
+        let (eye, dir) = (to_dvec3(eye), to_dvec3(dir));
+        (self.frame.to_local(eye + dir) - self.frame.to_local(eye)).try_normalize()
+    }
+
+    /// Der Bildschirmpunkt `p` auf der Ebene durch `origin` mit der Normale `normal`
+    /// (Skizzenkoordinaten), siehe [`screen_to_plane`].
+    pub fn screen_to_plane(&self, p: Pos2, origin: DVec3, normal: DVec3) -> Option<DVec3> {
+        screen_to_plane(
+            &self.camera,
+            &self.frame,
+            self.viewport(),
+            self.local(p),
+            origin,
+            normal,
+        )
     }
 
     /// Wie [`paths`](Self::paths) für Punkte mit z.
@@ -1064,8 +1166,8 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
         }
         // Kontrollpunktrahmen (Skizzen 9) dünn und gestrichelt.
         let frame_stroke = Stroke::new(FINISHED_CONSTRUCTION_WIDTH, col.construction);
-        for line in frame_polygons(sk) {
-            for path in map.paths(&line) {
+        for line in frame_polygons3(sk) {
+            for path in map.paths3(&line) {
                 out.extend(path_shapes(path, frame_stroke, true));
             }
         }
@@ -1737,6 +1839,17 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     // Zeichnen in 3D (Skizzen 10): Der Klick setzt dort, wo der Zeiger jetzt steht.
     se.update_cursor3(&sf.sketch, &map, pointer);
     let draws3 = se.draw3;
+    // 3D-Geometrie unter dem Zeiger für Bemaßung und Abhängigkeitsbefehl (Skizzen 10): nur, wo
+    // kein 2D-Punkt fängt, Punkte vor Kurven.
+    se.pick3 = if matches!(se.tool, Tool::Dimension | Tool::Constraint(_)) {
+        let flat_point =
+            at.is_some_and(|a| matches!(se.snap(&sf.sketch, a, radius), Snap::Point(_)));
+        pointer
+            .filter(|_| !flat_point)
+            .and_then(|p| pick_3d(se, &sf.sketch, &map, p))
+    } else {
+        None
+    };
 
     // Rahmen auf freier Fläche; alles andere greift (Punkt vor Kurve vor Rahmen).
     if starts_box {
@@ -1756,7 +1869,16 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
     } else if response.drag_started_by(PointerButton::Primary) && !shift && !panning && !aborted {
         // Punkt oder Kurve ziehen (Auswahlwerkzeug), tangentialer Bogen (Linienwerkzeug)
         let origin = ui.input(|i| i.pointer.press_origin());
-        if let Some(start) = origin.and_then(|p| map.to_sketch(p)) {
+        // 3D-Geometrie zieht in der Ebene parallel zum Bildschirm durch den gefassten Punkt
+        // (Skizzen 10, auch wo der Sehstrahl die Skizzenebene nicht trifft).
+        let grab3 = origin
+            .filter(|_| se.tool == Tool::Select)
+            .and_then(|p| grab_3d(se, &sf.sketch, &map, p));
+        if let Some((item, grab)) = grab3
+            && let Some(normal) = map.view_normal()
+        {
+            se.begin_drag3(&sf.sketch, item, grab, normal);
+        } else if let Some(start) = origin.and_then(|p| map.to_sketch(p)) {
             let r = origin.and_then(|p| map.radius_at(p)).unwrap_or(radius);
             se.begin_drag(&mut sf.sketch, start, r);
             // Der Bogen aus dem Linienzug zeichnet nur in der Ebene.
@@ -1781,10 +1903,15 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
     }
     if se.is_dragging() {
-        if response.dragged_by(PointerButton::Primary)
-            && let Some(at) = at
-        {
-            se.drag_to(&mut sf.sketch, at);
+        if response.dragged_by(PointerButton::Primary) {
+            if let Some(d) = &se.drag3 {
+                let (grab, normal) = (d.grab, d.normal);
+                if let Some(target) = pointer.and_then(|p| map.screen_to_plane(p, grab, normal)) {
+                    se.drag_to3(&mut sf.sketch, target);
+                }
+            } else if let Some(at) = at {
+                se.drag_to(&mut sf.sketch, at);
+            }
         }
         if response.drag_stopped() || !response.dragged() {
             se.end_drag(&mut sf.sketch);
@@ -1981,7 +2108,9 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         };
     } else if response.clicked_by(PointerButton::Primary)
         && !click_on_grip
-        && let Some(at) = at
+        // Trifft der Sehstrahl die Skizzenebene nicht, wählt der Klick 3D-Geometrie allein über
+        // den Bildschirmabstand (`pick3`, nur Bemaßung und Abhängigkeitsbefehl).
+        && let Some(at) = at.or(se.pick3.map(|_| DVec2::ZERO))
     {
         if se.tool == Tool::ProjectEdge {
             project_at = pointer;
@@ -2346,8 +2475,8 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     }
 
     // Hilfslinien der gewählten Kurve (Kontrollpolygon, Kegelschnitt), gestrichelt unter den Punkten.
-    for line in curve_guides(se, sk) {
-        for path in map.paths(&line) {
+    for line in curve_guides3(se, sk) {
+        for path in map.paths3(&line) {
             draw_path(&painter, path, Stroke::new(1.0, col.preview), true);
         }
     }
@@ -2380,12 +2509,31 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
     // Skizzenbemaßung: Hilfsstriche und der Wert am Anker (dem Zeiger bzw. der gesetzten Stelle).
     if let Some(plan) = se.dimension_preview(sk) {
         let stroke = Stroke::new(1.0, col.preview);
-        for line in dimension_helpers(sk, &plan) {
-            for path in map.paths(&line) {
-                draw_path(&painter, path, stroke, true);
+        // An 3D-Geometrie (Skizzen 10) stehen Hilfsstrich und Wert im Raum an der Geometrie.
+        let spatial = sk.constraint_is_3d(&plan.kind);
+        if spatial {
+            if let ConstraintKind::Distance(a, b, _) = plan.kind
+                && let (Some(a), Some(b)) = (pos3(sk, a), pos3(sk, b))
+            {
+                for path in map.paths3(&[a, b]) {
+                    draw_path(&painter, path, stroke, true);
+                }
+            }
+        } else {
+            for line in dimension_helpers(sk, &plan) {
+                for path in map.paths(&line) {
+                    draw_path(&painter, path, stroke, true);
+                }
             }
         }
-        if let Some(s) = map.to_screen(plan.anchor) {
+        let anchor = if spatial {
+            constraint_anchors(sk, &plan.kind)
+                .first()
+                .and_then(|&a| map.to_screen3(a))
+        } else {
+            map.to_screen(plan.anchor)
+        };
+        if let Some(s) = anchor {
             let text = dimension_text(ui.ctx(), sk, &plan);
             label(
                 &painter,
@@ -2469,16 +2617,16 @@ fn draw(ui: &egui::Ui, rect: Rect, state: &AppState, pointer: Option<Pos2>) {
         } else {
             col.text
         };
-        let places: Vec<DVec2> = match marked_curves(&c.kind) {
+        let places: Vec<DVec3> = match marked_curves(&c.kind) {
             Some(curves) => curves
                 .into_iter()
                 .filter(|&curve| shown.insert((curve, text.clone())))
-                .filter_map(|curve| curve_anchor(sk, curve))
+                .filter_map(|curve| curve_anchor3(sk, curve))
                 .collect(),
-            None => anchors(sk, &c.kind),
+            None => constraint_anchors(sk, &c.kind),
         };
         for a in places {
-            if let Some(s) = map.to_screen(a) {
+            if let Some(s) = map.to_screen3(a) {
                 let at = s + vec2(6.0, -18.0);
                 match mark {
                     Some(m) => mark_label(&painter, at, m, color, col.label_bg, &mut placed),
@@ -2765,9 +2913,14 @@ fn place_label(mut r: Rect, placed: &mut Vec<Rect>) -> Rect {
 /// Dazu kommt immer das Kontrollpolygon der Kurven mit Kontrollpunktrahmen
 /// ([`frame_polygons`], Skizzen 9), gewählt oder nicht.
 pub fn curve_guides(se: &SketchSession, sk: &Sketch) -> Vec<Vec<DVec2>> {
+    flat(curve_guides3(se, sk))
+}
+
+/// Wie [`curve_guides`] mit z: An 3D-Geometrie liegen die Hilfslinien im Raum (Skizzen 10).
+pub fn curve_guides3(se: &SketchSession, sk: &Sketch) -> Vec<Vec<DVec3>> {
     let hidden = se.text_hidden(sk);
     let framed = |c: &CurveId| sk.curve(*c).is_some_and(|d| d.show_frame);
-    let mut out: Vec<Vec<DVec2>> = se
+    let mut out: Vec<Vec<DVec3>> = se
         .selection
         .iter()
         .filter_map(|item| {
@@ -2784,7 +2937,7 @@ pub fn curve_guides(se: &SketchSession, sk: &Sketch) -> Vec<Vec<DVec2>> {
                 } => vec![*start, *apex, *end],
                 _ => return None,
             };
-            ids.iter().map(|&p| pos(sk, p)).collect()
+            ids.iter().map(|&p| pos3(sk, p)).collect()
         })
         .collect();
     out.extend(
@@ -2800,30 +2953,37 @@ pub fn curve_guides(se: &SketchSession, sk: &Sketch) -> Vec<Vec<DVec2>> {
 /// Kontrollpunkte, beim Kegelschnitt Start–Scheitel–Ende, beim festen Spline seine
 /// Kontrollpunkte. Die Ansicht zeichnet sie immer, offen oder fertig.
 pub fn frame_polygons(sk: &Sketch) -> Vec<Vec<DVec2>> {
+    flat(frame_polygons3(sk))
+}
+
+/// Wie [`frame_polygons`] mit z: Rahmen von 3D-Geometrie liegen im Raum (Skizzen 10).
+pub fn frame_polygons3(sk: &Sketch) -> Vec<Vec<DVec3>> {
     sk.curves()
         .filter(|(_, d)| d.show_frame)
         .filter_map(|(c, _)| frame_polygon(sk, c))
         .collect()
 }
 
-fn frame_polygon(sk: &Sketch, c: CurveId) -> Option<Vec<DVec2>> {
+/// Linienzüge in der Draufsicht (ohne z).
+fn flat(lines: Vec<Vec<DVec3>>) -> Vec<Vec<DVec2>> {
+    lines
+        .into_iter()
+        .map(|l| l.into_iter().map(|p| p.truncate()).collect())
+        .collect()
+}
+
+fn frame_polygon(sk: &Sketch, c: CurveId) -> Option<Vec<DVec3>> {
     let ids = match &sk.curve(c)?.kind {
         CurveKind::ControlSpline { points, .. } => points.clone(),
         CurveKind::Conic {
             start, end, apex, ..
         } => vec![*start, *apex, *end],
         CurveKind::FixedSpline { curve, .. } => {
-            return Some(
-                curve
-                    .control_points()
-                    .iter()
-                    .map(|q| q.truncate())
-                    .collect(),
-            );
+            return Some(curve.control_points().to_vec());
         }
         _ => return None,
     };
-    ids.iter().map(|&p| pos(sk, p)).collect()
+    ids.iter().map(|&p| pos3(sk, p)).collect()
 }
 
 /// Vorschau des Werkzeugs „Text“ ([`crate::sketch_text`]): nichts davon steht in der Skizze.
@@ -2922,6 +3082,9 @@ fn draw_preview3(
     if let Some(s) = map.to_screen3(cur.at) {
         if cur.snap.is_some() || cur.origin {
             painter.circle_stroke(s, POINT_PX + 4.0, Stroke::new(1.5, color));
+        } else if let Some(c) = cur.mid {
+            // Fang auf eine Mitte (Skizzen 10): das Dreieck wie beim 2D-Fang.
+            paint_snap_mark(painter, s, Snap::Midpoint(c), color);
         } else {
             painter.circle_filled(s, 2.5, color);
         }

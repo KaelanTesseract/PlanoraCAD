@@ -191,9 +191,10 @@ impl SnapIndex {
             points.push((snap, p));
         }
         // Schnitte ohne Buchstaben: Das spart bei großen Texten auch die Rechnung über alle Paare.
+        // Ohne 3D-Kurven (Skizzen 10): Ihr Schnitt in der Draufsicht ist im Raum keiner.
         let crossing: Vec<&IndexedCurve> = curves
             .iter()
-            .filter(|c| !glyph_curves.contains(&c.id))
+            .filter(|c| !glyph_curves.contains(&c.id) && !sk.is_3d_curve(c.id))
             .collect();
         let prepared: Vec<Prepared> = crossing.iter().map(|c| Prepared::new(&c.geom)).collect();
         let mut crossings = Vec::new();
