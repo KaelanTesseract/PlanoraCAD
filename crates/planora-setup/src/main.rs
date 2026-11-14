@@ -9,6 +9,17 @@
 
 mod args;
 mod engine;
+#[expect(dead_code, reason = "die Oberfläche (Task 6) nutzt das")]
+mod existing;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "die Oberfläche (Task 6) nutzt das")
+)]
+mod progress;
+#[expect(dead_code, reason = "die Oberfläche (Task 6) nutzt das")]
+mod system;
+#[expect(dead_code, reason = "die Oberfläche (Task 6) nutzt das")]
+mod wizard;
 
 fn main() {
     let args = args::raw_args();

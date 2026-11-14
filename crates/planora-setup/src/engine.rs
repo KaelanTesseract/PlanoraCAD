@@ -64,7 +64,7 @@ impl Unpacked {
 pub enum RunError {
     /// Die Admin-Abfrage wurde abgelehnt (`ERROR_CANCELLED`).
     #[cfg_attr(
-        not(windows),
+        not(any(windows, test)),
         expect(dead_code, reason = "Admin-Abfrage gibt es nur unter Windows")
     )]
     Declined,
