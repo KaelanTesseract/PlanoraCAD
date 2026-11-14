@@ -2828,6 +2828,10 @@ Stand 2026-11-14 auf dem Zweig `feature/fenster-abdocken` (Spec `specs/2026-11-1
 - **`top_icon_fits`** rechnet ohne die abgedockten Spalten; das Programmzeichen oben links wird dadurch zu früh ausgeblendet, wenn Spalten abgedockt sind.
 - **Schlüssel `edit_feature`** steht in der Liste `DIALOG_KEYS`, wird aber nicht benutzt.
 - **Rückfragen des Fensters Projekte** (Neues Projekt, Umbenennen, Löschen …) erscheinen auch bei abgedocktem Fenster Projekte im Hauptfenster, nicht über ihm.
+- **Übernahme fremder Verschiebungen kann aussetzen:** Kommt die Lage-Korrektur nach dem Öffnen nie genau an (der Nutzer zieht schon, Windows begrenzt die Lage oder Größe), übernimmt das Programm bis zum Schließen keine Verschiebung per Win+Pfeil oder Einrasten mehr. Ziehen an der Kopfzeile wird weiter gemerkt.
+- **Viele Schreibvorgänge bei Systembewegung:** Bewegt das System ein abgedocktes Fenster ohne Maustaste (Alt+Leertaste → Verschieben, Einrast-Animation), wird `config.json` in jedem solchen Bild geschrieben, solange die Bewegung dauert.
+- **Sperre des Baums setzt ein Bild später ein:** Im ersten Bild einer Rückfrage aus dem abgedockten Baum sind die Zeilen noch bedienbar.
+- **Testlücken:** Rückfrage über weitergereichte feste Tasten aus dem abgedockten Baum (z. B. Entf auf ein Maß in der Zeichnung) und Alt+F4 auf den Rückfragen der echten Versionsspalte sind nur indirekt getestet; die Monitor-Tests laufen nur unter Windows.
 
 ### Festlegungen beim Umsetzen
 - **Erzeugen und Bearbeiten getrennt:** Das Erzeugen- und das Bearbeiten-Fenster derselben Art haben getrennte Plätze (`extrude` und `edit_extrude`, ebenso bei den anderen Arten), weil beide gleichzeitig offen sein können.
