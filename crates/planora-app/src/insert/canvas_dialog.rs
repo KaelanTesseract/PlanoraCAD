@@ -616,6 +616,8 @@ impl CanvasDialog {
             .show_with_footer(
                 ctx,
                 |ui| {
+                    // Abgedockt läuft der Inhalt mehrmals je Aufruf (Durchgänge des Kindfensters): neu sammeln.
+                    field_errors.clear();
                     let dark = ui.visuals().dark_mode;
                     if choosing {
                         ui.strong(tr!("insert-canvas-choose"));

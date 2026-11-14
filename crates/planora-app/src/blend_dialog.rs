@@ -674,6 +674,8 @@ impl BlendDialog {
             .id(self.window_id())
             .open(&mut open)
             .show(ctx, |ui| {
+                // Abgedockt läuft der Inhalt mehrmals je Aufruf (Durchgänge des Kindfensters): neu sammeln.
+                errors.clear();
                 match self.chosen_edges(state) {
                     Some((_, edges)) => ui.label(tr!("blend-chosen-edges", n = edges.len())),
                     None => ui.weak(tr!("blend-click-edge")),
