@@ -611,6 +611,21 @@ fn child_typing(ctx: &egui::Context) -> bool {
     })
 }
 
+/// Gibt den Tastaturfokus des Fensters von `ctx` ab und vergisst die Merkung „Feld hatte die
+/// Tastatur“ (etwa wenn der Benutzer in ein anderes Fenster geklickt hat).
+pub fn release_keyboard(ctx: &egui::Context) {
+    ctx.memory_mut(|m| {
+        if let Some(id) = m.focused() {
+            m.surrender_focus(id);
+        }
+    });
+    let viewport = ctx.viewport_id();
+    ctx.data_mut(|d| {
+        d.insert_temp(keyboard_focus_id(viewport), false);
+        d.insert_temp(history_focus_id(viewport), false);
+    });
+}
+
 /// Hatte im Hauptfenster im vorigen Bild ein Eingabefeld die Tastatur (oder erfassen die
 /// Einstellungen gerade eine Belegung)? Für abgedockte Fenster, die Tasten des Hauptfensters
 /// mitlesen (Esc bricht einen abgedockten Befehl ab): Den Fokus des Hauptfensters sehen sie

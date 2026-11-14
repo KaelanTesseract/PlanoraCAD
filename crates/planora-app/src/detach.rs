@@ -748,6 +748,21 @@ fn child_keys_id() -> egui::Id {
 /// Durchgang eines Bilds; herausgenommen zählt jedes höchstens einmal, auch wenn der Inhalt in
 /// einem Bild mehrmals läuft.
 fn collect_keys(ctx: &egui::Context, dialog: bool) {
+    // Klick oder Taste im Fenster: Das Hauptfenster gibt seinen Tastaturfokus ab, wie es
+    // angedockt ein Klick daneben täte (egui zählt einen Klick in einem anderen Fenster nicht
+    // als „daneben“); sonst behielte ein Feld dort alle weitergereichten Tasten.
+    let touched = ctx.input(|i| {
+        i.events.iter().any(|e| {
+            matches!(
+                e,
+                egui::Event::Key { pressed: true, .. }
+                    | egui::Event::PointerButton { pressed: true, .. }
+            )
+        })
+    });
+    if touched {
+        ctx.data_mut(|d| d.insert_temp(child_touched_id(), true));
+    }
     let events: Vec<egui::Event> = ctx.input_mut(|i| {
         let (keys, rest) = std::mem::take(&mut i.events)
             .into_iter()
@@ -770,6 +785,17 @@ fn collect_keys(ctx: &egui::Context, dialog: bool) {
         d.get_temp_mut_or_default::<Vec<ChildKeys>>(child_keys_id())
             .push(keys);
     });
+}
+
+fn child_touched_id() -> egui::Id {
+    egui::Id::new("detach_kind_beruehrt")
+}
+
+/// Wurde seit dem letzten Aufruf in einem abgedockten Fenster geklickt oder eine Taste gedrückt?
+/// Setzt zurück.
+pub fn take_child_touched(ctx: &egui::Context) -> bool {
+    ctx.data_mut(|d| d.remove_temp::<bool>(child_touched_id()))
+        .unwrap_or(false)
 }
 
 /// Holt die in diesem Bild abgelegten Tasten der abgedockten Fenster (in der Reihenfolge der

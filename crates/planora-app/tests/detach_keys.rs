@@ -49,6 +49,13 @@ fn key(k: Key, modifiers: Modifiers) -> Event {
 struct Rig {
     screen: Screen,
     app: PlanoraApp,
+    /// Ein Textfeld im Hauptfenster (vor der App gezeichnet), etwa für den Fokus dort.
+    main_field: Option<String>,
+}
+
+/// Kennung des Textfelds [`Rig::main_field`].
+fn main_field_id() -> egui::Id {
+    egui::Id::new("detach_keys_hauptfeld")
 }
 
 impl Rig {
@@ -78,6 +85,7 @@ impl Rig {
         let mut rig = Rig {
             screen,
             app: PlanoraApp::for_tests(ws),
+            main_field: None,
         };
         rig.settle(4);
         rig
@@ -101,7 +109,15 @@ impl Rig {
 
     fn frame(&mut self, events: Vec<Event>) -> Vec<Seen> {
         let app = &mut self.app;
+        let field = &mut self.main_field;
         self.screen.frame_ui(events, &mut |ui| {
+            if let Some(text) = field.as_mut() {
+                egui::Area::new(egui::Id::new("detach_keys_hauptfeld_flaeche"))
+                    .fixed_pos(pos2(900.0, 500.0))
+                    .show(ui.ctx(), |ui| {
+                        ui.add(egui::TextEdit::singleline(text).id(main_field_id()));
+                    });
+            }
             let mut f = eframe::Frame::_new_kittest();
             eframe::App::ui(app, ui, &mut f);
         })
@@ -493,6 +509,11 @@ fn typing_in_undocked_sketch_value_field_triggers_nothing() {
         curves,
         "Entf im Wertfeld löscht nichts"
     );
+    assert_eq!(
+        rig.state().sketch_session.as_ref().unwrap().selection,
+        vec![Item::Curve(curve)],
+        "Esc im Wertfeld lässt die Auswahl"
+    );
     assert!(rig.state().sketch_session.is_some());
 }
 
@@ -529,4 +550,40 @@ fn typing_in_undocked_field_counts_for_history() {
     rig.state().rename_draft = None;
     rig.settle(3);
     assert!(!viewport::typing_for_history(&rig.screen.ctx), "Fenster zu");
+}
+
+#[test]
+fn keys_from_undocked_field_reach_view_when_main_field_had_focus() {
+    let mut rig = Rig::new(&[(Place::SketchSide, window_at(1500.0, 100.0))]);
+    let side = open_sketch(&mut rig);
+    // Ein Feld im Hauptfenster hat die Tastatur (etwa das Feld am Zeiger beim Zeichnen).
+    rig.main_field = Some(String::new());
+    rig.settle(1);
+    rig.screen
+        .ctx
+        .memory_mut(|m| m.request_focus(main_field_id()));
+    rig.settle(2);
+    assert_eq!(
+        rig.screen.ctx.memory(|m| m.focused()),
+        Some(main_field_id()),
+        "Feld im Hauptfenster hat den Fokus"
+    );
+    {
+        let (se, sk) = rig.state().session_sketch_mut().unwrap();
+        se.set_tool(sk, Tool::Dimension);
+    }
+    rig.settle(2);
+    // Esc im abgedockten Skizzenfeld: das Hauptfenster gibt den Fokus ab, die Skizze sieht Esc.
+    rig.press_in(side, vec![key(Key::Escape, Modifiers::NONE)]);
+    assert_eq!(tool(&mut rig), Tool::Select, "Esc kommt in der Skizze an");
+    assert_ne!(
+        rig.screen.ctx.memory(|m| m.focused()),
+        Some(main_field_id()),
+        "Fokus des Hauptfensters abgegeben"
+    );
+    assert_eq!(
+        rig.main_field.as_deref(),
+        Some(""),
+        "nichts ins Feld getippt"
+    );
 }

@@ -1274,8 +1274,19 @@ impl PlanoraApp {
     /// Feld, nichts wirkt doppelt), vor den Fenstern und Ansichten, die Esc, Enter und Entf fest
     /// lesen. Nicht, solange im Hauptfenster ein Eingabefeld die Tastatur hat (die Tasten gehörten
     /// sonst ihm) oder eine Rückfrage offen ist; dann verfallen sie.
+    ///
+    /// Wurde im vorigen Bild in einem abgedockten Fenster geklickt oder getippt, gibt das
+    /// Hauptfenster zuerst seinen Tastaturfokus ab ([`viewport::release_keyboard`]). Während des
+    /// Neustarts nach einem Update verfällt alles (nichts wirkt später veraltet nach).
     fn feed_child_keys(&mut self, ctx: &egui::Context) {
         let keys = std::mem::take(&mut self.keys_for_main);
+        let touched = crate::detach::take_child_touched(ctx);
+        if self.restart_locked() {
+            return;
+        }
+        if touched {
+            viewport::release_keyboard(ctx);
+        }
         if keys.is_empty() || self.ws.prompt.is_some() || viewport::typing(ctx) {
             return;
         }
@@ -2942,8 +2953,8 @@ impl eframe::App for PlanoraApp {
         self.auto_open_update_notice();
         if !self.restart_locked() {
             self.shortcuts(&ctx);
-            self.feed_child_keys(&ctx);
         }
+        self.feed_child_keys(&ctx);
         // Esc der Übersicht vor den Ansichten (weder Auswahl noch Skizze sollen es sehen).
         keymap::overview::take_escape(&ctx, &mut self.overview, self.ws.prompt.is_some());
         feedback_dialog::take_escape(&ctx, &mut self.feedback, self.ws.prompt.is_some());
