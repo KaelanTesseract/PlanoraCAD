@@ -1196,7 +1196,13 @@ impl Projector {
                 .last()
                 .and_then(|p| p.last())
                 .is_some_and(|l| l.t == s[s.len() - 1].t);
-            if first_at_start && last_at_end {
+            // Verbunden wird nur, was an der Naht zusammenhängt: Liegen die Treffer von Anfang
+            // und Ende auf verschiedenen Blättern, bleiben es zwei Stücke (Gesamtprüfung).
+            let seam_linked = match (pieces[0].first(), pieces.last().and_then(|p| p.last())) {
+                (Some(head), Some(tail)) => self.linked(tail, head),
+                _ => false,
+            };
+            if first_at_start && last_at_end && seam_linked {
                 let mut joined = pieces.pop().unwrap_or_default();
                 let head = std::mem::take(&mut pieces[0]);
                 // Der erste Punkt des Kopfstücks ist derselbe wie der letzte des Schwanzes.
@@ -1358,8 +1364,9 @@ const NEAR_LOOKBACK: usize = 2;
 /// werden (die Mittelpunkte der Abtastung). Ein Raster der Kurve wird einmal gerechnet; je Punkt
 /// läuft die Suche vom letzten Treffer aus vorwärts, solange sie näher kommt, dann folgt Newton
 /// (eine obere Schranke des wahren Abstands). Nur wenn das die Schranke überschreitet, sucht
-/// [`NurbsCurve::distance_to`] über die ganze Kurve. Die Entscheidung ist also dieselbe wie mit
-/// `distance_to` allein, der Aufwand aber etwa linear statt quadratisch in der Punktzahl.
+/// [`NurbsCurve::distance_to`] über die ganze Kurve. Die Schranke wird dadurch nie lockerer: Als
+/// nah genug gilt ein Punkt nur, wenn ein echter Kurvenpunkt so nah liegt; der Aufwand ist aber
+/// etwa linear statt quadratisch in der Punktzahl.
 struct Near<'a> {
     curve: &'a NurbsCurve,
     us: Vec<f64>,
@@ -1419,6 +1426,56 @@ fn fit(pts: &[DVec3], lin: f64) -> Option<NurbsCurve> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn projector() -> Projector {
+        Projector {
+            targets: vec![Target::Plane(Frame::WORLD)],
+            dir: None,
+            tol: Tolerance::default(),
+            start: Instant::now(),
+            budget: Duration::from_secs(60),
+            frame: Frame::WORLD,
+            cache: RefCell::new(HashMap::new()),
+            used: Cell::new(0),
+        }
+    }
+
+    /// Gesamtprüfung (Naht): Erstes und letztes Stück einer geschlossenen Quelle werden nur
+    /// verbunden, wenn ihre Treffer an der Naht zusammenhängen. Liegen sie auf verschiedenen
+    /// Blättern, bleiben es zwei Stücke (sonst spränge der Spline quer von Blatt zu Blatt).
+    #[test]
+    fn seam_joins_only_linked_pieces() {
+        let pts = vec![DVec3::ZERO, DVec3::X, DVec3::Y];
+        let c = Curve::nurbs(
+            NurbsCurve::new(1, vec![0.0, 0.0, 0.5, 1.0, 1.0], pts, vec![1.0; 3]).unwrap(),
+        );
+        // Alle Quellpunkte an derselben Stelle: Das Eingrenzen der Enden rechnet dann nichts.
+        let at = |t: f64, p: Option<DVec3>| Sample {
+            t,
+            q: DVec3::ZERO,
+            h: p.map(|p| Hit {
+                p,
+                target: 0,
+                uv: (0.0, 0.0),
+            }),
+        };
+        let (a, b) = (DVec3::new(0.0, 0.0, 1.0), DVec3::new(0.0, 0.0, -1.0));
+        let pr = projector();
+        let apart = [
+            at(0.0, Some(a)),
+            at(0.25, None),
+            at(0.5, Some(b)),
+            at(1.0, Some(b)),
+        ];
+        assert_eq!(pr.pieces(&c, &apart, true).unwrap().len(), 2);
+        let together = [
+            at(0.0, Some(a)),
+            at(0.25, None),
+            at(0.5, Some(a)),
+            at(1.0, Some(a)),
+        ];
+        assert_eq!(pr.pieces(&c, &together, true).unwrap().len(), 1);
+    }
 
     /// Fix-Runde 1: Eine Quelle mit Knick (Polygonzug Grad 1) wird nicht mit gelockerter
     /// Schranke angenähert, sondern dichter geteilt; jede Abweichung bleibt ≤ Toleranz.

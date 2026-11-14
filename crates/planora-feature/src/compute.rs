@@ -949,14 +949,17 @@ fn follow_copies(
             }
             continue;
         }
-        // Eine Gruppe: gleiche Herkunft und gleiche Art des Ziels (eine Skizzenkurve kann in
-        // derselben Skizze projiziert und geschnitten sein).
+        // Eine Gruppe: gleiche Herkunft. Nur eine Skizzenkurve teilt sie nach der Art des Ziels
+        // (sie kann in derselben Skizze projiziert und geschnitten sein); Projektion und
+        // Schnittkurve liefern Kurven und Punkte aus Ecken in einer Rechnung, die nur einmal
+        // laufen soll (Gesamtprüfung).
+        let by_target = matches!(c.source, CopySource::SketchCurve { .. });
         let group: Vec<usize> = (i..n)
             .filter(|&j| {
                 let other = &sf.copies[j];
                 !done[j]
                     && other.source == c.source
-                    && other.point().is_some() == c.point().is_some()
+                    && (!by_target || other.point().is_some() == c.point().is_some())
             })
             .collect();
         for &j in &group {

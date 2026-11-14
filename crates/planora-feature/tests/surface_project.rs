@@ -970,3 +970,141 @@ fn simple_cases_fit_budget_with_document_tolerance() {
         }
     }
 }
+
+/// Gesamtprüfung: Eine Projektion mit einer Kurve und einer Ecke als Quellen ist eine Gruppe
+/// (eine Rechnung); Kurve und Punkt folgen dem Körper, ohne Warnung.
+#[test]
+fn recompute_curve_and_vertex_projection_follows_as_one_group() {
+    let mut d = Document::new();
+    let bx = d
+        .add_feature(
+            "Quader",
+            FeatureKind::Box {
+                size: DVec3::new(20.0, 20.0, 5.0),
+                origin: DVec3::ZERO,
+            },
+        )
+        .unwrap();
+    let small = d
+        .add_feature(
+            "Klotz",
+            FeatureKind::Box {
+                size: DVec3::new(2.0, 2.0, 2.0),
+                origin: DVec3::new(5.0, 5.0, -10.0),
+            },
+        )
+        .unwrap();
+    let (s, c) = line_sketch(&mut d, (1.0, 10.0), (19.0, 10.0));
+    let face = top_face(&body(&d, bx));
+    let klotz = body(&d, small);
+    let (edge, e) = klotz
+        .edges
+        .iter()
+        .find(|(_, e)| klotz.vertices[e.end].point.z < -9.0)
+        .unwrap();
+    let corner = klotz.vertices[e.end].point;
+    let source = CopySource::OnSurface(SurfaceProjection {
+        sources: vec![
+            CurveSource::SketchCurve {
+                sketch: s,
+                curve: c,
+            },
+            CurveSource::Vertex(VertexRef {
+                edge: EdgeRef::from_edge(&klotz, edge, &Tolerance::default()).unwrap(),
+                end: true,
+            }),
+        ],
+        faces: vec![FaceTarget::Face(face)],
+        kind: ProjectType::AlongVector(DVec3::Z),
+    });
+    let CopySource::OnSurface(spec) = &source else {
+        unreachable!()
+    };
+    let view = DocView::new(&d, d.features().len(), Frame::WORLD);
+    let pieces =
+        project_to_surface(&view, spec, &d.kernel().tolerance, SURFACE_PROJECT_BUDGET).unwrap();
+    assert_eq!(pieces.len(), 2, "{pieces:?}");
+    let mut sk = Sketch::new(Frame::WORLD, "Ziel", Tolerance::default());
+    let mut copies = Vec::new();
+    let (mut curve, mut point) = (None, None);
+    for (k, g) in pieces.iter().enumerate() {
+        let ids = sk.add_included(g).unwrap();
+        let target = match g {
+            Included::Point(_) => {
+                point = Some(ids.points[0]);
+                CopyTarget::Point(ids.points[0])
+            }
+            _ => {
+                curve = Some(ids.curves[0]);
+                CopyTarget::Curve(ids.curves[0])
+            }
+        };
+        copies.push(EdgeCopy {
+            target,
+            source: source.clone(),
+            piece: k as u32,
+            of: pieces.len() as u32,
+        });
+    }
+    let (curve, point) = (curve.unwrap(), point.unwrap());
+    let t = d
+        .add_feature(
+            "Ziel",
+            FeatureKind::Sketch(SketchFeature {
+                sketch: sk,
+                plane: SketchPlane::Standard(StandardPlane::XY),
+                copies,
+                formulas: Default::default(),
+            }),
+        )
+        .unwrap();
+    assert_eq!(warning_of(&d, t), "");
+    set_box_height(&mut d, bx, 8.0);
+    assert_eq!(warning_of(&d, t), "");
+    let h = heights(&d, t, curve);
+    assert!(h.iter().all(|z| (z - 8.0).abs() < 1e-6), "{h:?}");
+    let p = d.sketch_of(t).unwrap().point_xyz(point).unwrap();
+    assert!(
+        p.distance(DVec3::new(corner.x, corner.y, 8.0)) < 1e-6,
+        "{p:?}"
+    );
+    d.check_invariants().unwrap();
+}
+
+/// Gesamtprüfung: Quelle in der Symmetrieebene des Ziels (Kugel im Ursprung, Linie auf XY durch
+/// die Mitte): Die beiden Treffer je Punkt sind gleich weit; das Ergebnis ist trotzdem genau ein
+/// zusammenhängendes Stück auf einer Seite.
+#[test]
+fn source_in_symmetry_plane_gives_one_piece() {
+    let mut d = Document::new();
+    let sph = d
+        .add_feature(
+            "Kugel",
+            FeatureKind::Sphere {
+                radius: 10.0,
+                origin: DVec3::ZERO,
+            },
+        )
+        .unwrap();
+    let (s, c) = line_sketch(&mut d, (-5.0, 0.0), (5.0, 0.0));
+    let spec = SurfaceProjection {
+        sources: vec![CurveSource::SketchCurve {
+            sketch: s,
+            curve: c,
+        }],
+        faces: faces_of(&body(&d, sph), SurfaceKind::Sphere),
+        kind: ProjectType::AlongVector(DVec3::Z),
+    };
+    let got = run(&d, &spec).unwrap();
+    assert_eq!(got.len(), 1, "{got:?}");
+    let pts = samples(&got[0]);
+    let side = pts[pts.len() / 2].z.signum();
+    for p in pts {
+        assert!(
+            (p.length() - 10.0).abs() <= tol().linear,
+            "nicht auf der Kugel: {p:?}"
+        );
+        assert_eq!(p.z.signum(), side, "Seitenwechsel bei {p:?}");
+        assert!(p.y.abs() <= tol().linear, "{p:?}");
+    }
+}
