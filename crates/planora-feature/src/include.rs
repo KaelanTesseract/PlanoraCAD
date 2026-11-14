@@ -240,8 +240,13 @@ fn include_ref_pieces(ctx: &IncludeCtx<'_>, r: &IncludeRef) -> Option<(IncludeRe
                 }
             };
             let h = include_plane_half(ctx.solids);
-            // Mitte: der Ursprung senkrecht in die Ebene gelegt (wie die App die Ebene zeichnet).
-            let c = pf.z * pf.origin.dot(pf.z);
+            // Mitte nach derselben Regel wie die Anzeige: auf einer Fläche deren Mitte, sonst der
+            // Fußpunkt des Ursprungs.
+            let anchor = match id {
+                PlaneId::Feature(f) => plane_anchor(ctx, *f),
+                PlaneId::Standard(_) => None,
+            };
+            let c = crate::plane_rect::plane_rect_center(&pf, anchor);
             let corner = |sx: f64, sy: f64| local(c + pf.x * (sx * h) + pf.y * (sy * h));
             let ring = [
                 corner(-1.0, -1.0),
@@ -276,6 +281,19 @@ fn include_ref_pieces(ctx: &IncludeCtx<'_>, r: &IncludeRef) -> Option<(IncludeRe
             Some((r.clone(), vec![g]))
         }
     }
+}
+
+/// Anker des Rechtecks der Konstruktionsebene `f` (siehe [`crate::plane_rect`]): die Mitte ihrer
+/// Basisfläche unter den Körpern vor der Skizze; `None` ohne Basisfläche oder wenn sie sich nicht
+/// auflösen lässt.
+fn plane_anchor(ctx: &IncludeCtx<'_>, f: crate::FeatureId) -> Option<DVec3> {
+    let FeatureKind::Plane(pf) = &ctx.doc.feature(f)?.kind else {
+        return None;
+    };
+    let r = crate::plane_rect::plane_base_face(&pf.def)?;
+    let found = resolve_face(ctx.solids, r, ctx.tol).ok()?;
+    let pts = crate::plane_rect::solid_face_points(ctx.solids[found.body], found.face)?;
+    crate::plane_rect::outline_anchor(&pts)
 }
 
 /// Löst die Kante `e` auf: Verweis mit neuem Hinweispunkt, Körper und Kante.

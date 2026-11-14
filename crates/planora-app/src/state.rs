@@ -570,10 +570,6 @@ fn sketch_label() -> String {
 const PICK_EDGE_PX: f32 = 6.0;
 /// Fangweite für Eckpunkte bei der Punktwahl (Skizzen 6, „Ebene durch drei Punkte“).
 const PICK_VERTEX_PX: f32 = 8.0;
-/// Kleinste halbe Kantenlänge einer gezeichneten Konstruktionsebene (Skizzen 6).
-const PLANE_MIN_HALF_MM: f64 = 25.0;
-/// Halbe Kantenlänge einer Konstruktionsebene als Anteil der Diagonale aller sichtbaren Körper.
-const PLANE_HALF_PER_DIAGONAL: f64 = 0.6;
 
 /// Was [`AppState::pick_with`] finden darf (Skizzen 6). Ausgeschaltete Flächen verdecken
 /// trotzdem, was hinter ihnen liegt.
@@ -2420,35 +2416,19 @@ impl AppState {
     /// Rechteck einer Ebene mit der Definition `def` und der Lage `frame` (wie
     /// [`AppState::plane_rect`]; auch für die Vorschau des Fensters, die noch kein Feature ist).
     pub fn plane_rect_for(&self, def: &PlaneDef, frame: Frame) -> Option<PlaneRect> {
-        let base_face = match def {
-            PlaneDef::Offset {
-                base: PlaneBase::Face(r),
-                ..
-            }
-            | PlaneDef::Tangent { face: r, .. } => Some(r),
-            _ => None,
-        };
-        let anchor = base_face
+        use planora_feature::plane_rect;
+        // Dieselbe Regel wie „3D-Geometrie einbeziehen“ (Skizzen 10, `plane_rect`).
+        let anchor = plane_rect::plane_base_face(def)
             .and_then(|r| self.face_outline(r))
-            .and_then(|pts| {
-                let first = *pts.first()?;
-                let (lo, hi) = pts
-                    .iter()
-                    .fold((first, first), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
-                Some((lo + hi) * 0.5)
-            })
-            .unwrap_or(DVec3::ZERO);
-        // `anchor` senkrecht in die Ebene legen.
-        let center = anchor - frame.z * (anchor - frame.origin).dot(frame.z);
-        let diagonal = self
-            .bodies
-            .iter()
-            .enumerate()
-            .filter(|(j, _)| !self.is_body_hidden(*j))
-            .map(|(_, b)| b.bounds)
-            .reduce(|(lo, hi), (a, b)| (lo.min(a), hi.max(b)))
-            .map_or(0.0, |(lo, hi)| (hi - lo).length());
-        let half = (PLANE_HALF_PER_DIAGONAL * diagonal).max(PLANE_MIN_HALF_MM);
+            .and_then(|pts| plane_rect::outline_anchor(&pts));
+        let center = plane_rect::plane_rect_center(&frame, anchor);
+        let half = plane_rect::plane_half_for_bounds(
+            self.bodies
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| !self.is_body_hidden(*j))
+                .map(|(_, b)| b.bounds),
+        );
         (center.is_finite() && half.is_finite()).then_some(PlaneRect {
             frame: Frame {
                 origin: center,
@@ -3100,16 +3080,7 @@ impl AppState {
         let solids: Vec<&Solid> = self.bodies.iter().map(|b| &b.solid).collect();
         let found = planora_feature::resolve_face(&solids, r, &self.kernel.tolerance).ok()?;
         let mesh = &self.bodies.get(found.body)?.mesh;
-        let range = mesh.face_ranges.iter().find(|fr| fr.face == found.face)?;
-        let first = range.first_index as usize;
-        let indices = mesh
-            .indices
-            .get(first..first + range.index_count as usize)?;
-        let pts: Vec<DVec3> = indices
-            .iter()
-            .filter_map(|&i| mesh.positions.get(i as usize).copied())
-            .collect();
-        (!pts.is_empty()).then_some(pts)
+        planora_feature::plane_rect::mesh_face_points(mesh, found.face)
     }
 
     /// Holt das Einpassen beim Öffnen einer Skizze mit dem freien Rechteck nach, das die

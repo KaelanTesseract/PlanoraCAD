@@ -156,23 +156,16 @@ pub enum IncludeRef {
 }
 
 /// Halbe Kantenlänge des Rechtecks einer einbezogenen Ebene und halbe Länge einer einbezogenen
-/// Achse: wie die gezeichnete Konstruktionsebene der App 0,6 × Diagonale der sichtbaren Körper
-/// (hier nach ihren Ecken), mindestens 25 mm. *(Annahme: die Randlinien des angezeigten
-/// Rechtecks, Spec 5.)*
+/// Achse: dieselbe Regel wie die gezeichnete Konstruktionsebene der App
+/// ([`crate::plane_rect::plane_half_for_bounds`]), gemessen an den Netzen der Körper `solids`
+/// (feste Sehnentoleranz, damit auch Zylinder und Kugeln passen). *(Annahme: die Randlinien des
+/// angezeigten Rechtecks, Spec 5.)*
 pub fn include_plane_half(solids: &[&Solid]) -> f64 {
-    const MIN_HALF_MM: f64 = 25.0;
-    const HALF_PER_DIAGONAL: f64 = 0.6;
-    let diagonal = solids
-        .iter()
-        .flat_map(|s| s.vertices.iter().map(|(_, v)| v.point))
-        .filter(|p| p.is_finite())
-        .fold(None, |acc: Option<(DVec3, DVec3)>, p| match acc {
-            None => Some((p, p)),
-            Some((lo, hi)) => Some((lo.min(p), hi.max(p))),
-        })
-        .map_or(0.0, |(lo, hi)| (hi - lo).length());
-    let half = (HALF_PER_DIAGONAL * diagonal).max(MIN_HALF_MM);
-    if half.is_finite() { half } else { MIN_HALF_MM }
+    crate::plane_rect::plane_half_for_bounds(
+        solids
+            .iter()
+            .filter_map(|s| crate::plane_rect::solid_bounds(s)),
+    )
 }
 
 /// Platzhalter „Auf Fläche projizieren“ (Task 17 legt die Felder fest): Quellen und Ziele.

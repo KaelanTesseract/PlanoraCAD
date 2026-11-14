@@ -2306,8 +2306,8 @@ fn include_pick(
         return Some(IncludePick::Origin);
     }
     // Die Achsen so lang, wie das Einbeziehen sie anlegt.
-    let solids: Vec<&planora_kernel::Solid> = state.bodies.iter().map(|b| &b.solid).collect();
-    let h = planora_feature::include_plane_half(&solids);
+    let h =
+        planora_feature::plane_rect::plane_half_for_bounds(state.bodies.iter().map(|b| b.bounds));
     for (axis, dir) in [
         (AxisId::X, DVec3::X),
         (AxisId::Y, DVec3::Y),

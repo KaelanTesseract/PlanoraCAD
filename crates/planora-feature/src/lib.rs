@@ -16,6 +16,7 @@ mod ops;
 pub mod params;
 mod parts;
 mod parts_sheets;
+pub mod plane_rect;
 pub mod planes;
 pub mod recompute;
 pub mod refs;

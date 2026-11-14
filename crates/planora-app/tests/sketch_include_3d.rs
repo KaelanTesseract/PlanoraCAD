@@ -680,3 +680,102 @@ fn include_click_in_view_takes_edge_and_earlier_sketch_curve() {
         })
     );
 }
+
+// ---- Fix-Runde 1: Ebene wie das angezeigte Rechteck ---------------------------------------------
+
+/// Die Ecken der vier eingezogenen Randlinien in Weltlage (Skizze `sk`).
+fn ring_world(sk: &Sketch) -> Vec<DVec3> {
+    let frame = *sk.frame();
+    lines(sk)
+        .iter()
+        .flat_map(|&(_, a, b)| [a, b])
+        .map(|p| {
+            let q = sk.point_xyz(p).unwrap();
+            frame.point(q.x, q.y, q.z)
+        })
+        .collect()
+}
+
+#[test]
+fn include_plane_on_cylinder_face_matches_shown_rectangle() {
+    use planora_feature::FaceRef;
+    use planora_feature::planes::{PlaneBase, PlaneDef};
+    let mut s = AppState::new();
+    s.create_cylinder(40.0, 10.0).unwrap();
+    let solid = s.bodies[0].solid.clone();
+    let (fid, _) = solid
+        .faces
+        .iter()
+        .find(|(_, f)| matches!(f.surface, planora_kernel::Surface::Cylinder { .. }))
+        .unwrap();
+    let face = FaceRef::from_face(&solid, fid, &planora_math::Tolerance::default()).unwrap();
+    let plane = s
+        .add_plane(PlaneDef::Tangent {
+            face,
+            base: PlaneBase::Standard(StandardPlane::XZ),
+            angle: 0.0,
+        })
+        .unwrap();
+    let rect = s.plane_rect(plane).expect("gezeichnete Ebene");
+    let id = open_new(&mut s, StandardPlane::XY);
+    s.include_into_sketch(IncludePick::Plane(PlaneId::Feature(plane)))
+        .unwrap();
+    s.observe_sketch(false);
+    let ring = ring_world(sk(&s));
+    assert_eq!(ring.len(), 8);
+    let center = ring.iter().copied().sum::<DVec3>() / 8.0;
+    // Mitte wie die Anzeige (Mitte der Zylinderfläche in die Ebene gelegt), nicht der Fußpunkt
+    // des Ursprungs.
+    assert!(
+        center.distance(rect.frame.origin) < 0.05,
+        "{center} gegen {}",
+        rect.frame.origin
+    );
+    // Größe aus den Netzgrenzen: Die Randlinien umschließen den Zylinder.
+    let half = ring
+        .iter()
+        .map(|p| (*p - center).dot(rect.frame.x).abs())
+        .fold(0.0, f64::max);
+    assert!(
+        (half - rect.half.x).abs() < 0.05,
+        "{half} gegen {}",
+        rect.half.x
+    );
+    let along = |p: DVec3, d: DVec3| (p - center).dot(d).abs();
+    for p in &s.bodies[0].mesh.positions {
+        assert!(along(*p, rect.frame.x) <= half && along(*p, rect.frame.y) <= half);
+    }
+    // Neuberechnung: dieselbe Lage, keine Warnung.
+    s.close_sketch();
+    let f = s.document.feature(id).unwrap();
+    assert_eq!(
+        f.status,
+        planora_feature::FeatureStatus::Ok,
+        "{:?}",
+        f.status
+    );
+    let again = ring_world(s.document.sketch_of(id).unwrap());
+    for (a, b) in ring.iter().zip(&again) {
+        assert!(a.distance(*b) < 1e-9, "{a} gegen {b}");
+    }
+}
+
+#[test]
+fn include_plane_size_counts_a_sphere() {
+    let mut s = AppState::new();
+    s.create_sphere(40.0).unwrap();
+    open_new(&mut s, StandardPlane::XY);
+    s.include_into_sketch(IncludePick::Plane(PlaneId::Standard(StandardPlane::XY)))
+        .unwrap();
+    let expected =
+        planora_feature::plane_rect::plane_half_for_bounds(s.bodies.iter().map(|b| b.bounds));
+    let ring = ring_world(sk(&s));
+    let center = ring.iter().copied().sum::<DVec3>() / 8.0;
+    let half = ring
+        .iter()
+        .map(|p| (*p - center).x.abs())
+        .fold(0.0, f64::max);
+    // Die Kugel zählt (0,6 × Diagonale ihres Hüllquaders), nicht nur ihre Ecken.
+    assert!((half - expected).abs() < 0.05, "{half} gegen {expected}");
+    assert!(half > 80.0);
+}
