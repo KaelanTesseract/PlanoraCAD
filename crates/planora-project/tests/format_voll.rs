@@ -225,6 +225,7 @@ fn rich_document() -> Document {
             copy = Some(EdgeCopy {
                 target: planora_feature::CopyTarget::Curve(c),
                 piece: 0,
+                of: 1,
                 source: planora_feature::CopySource::Edge(e),
             });
             break;

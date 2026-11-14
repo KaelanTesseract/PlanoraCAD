@@ -620,8 +620,9 @@ fn text_3d_frame_without_in_plane_rejected() {
 // --- Task 15: Herkunft mit Stücken und neue Herkunftsarten ---
 
 /// Schlüssel der Kopien, die erst Format 20 kennt.
-const COPY_KEYS_20: [&str; 6] = [
+const COPY_KEYS_20: [&str; 7] = [
     "\"stueck\"",
+    "\"stuecke\"",
     "\"punkt\"",
     "\"einbezug\"",
     "\"skizzenkurve\"",
@@ -749,6 +750,7 @@ fn format20_piece_and_new_sources_roundtrip() {
             source,
             // Stückindizes über 0 (auch einer, der nicht passt: die Warnung zählt nicht zur Datei).
             piece: (k % 3) as u32,
+            of: 3,
         });
     }
     for (k, source) in point_sources.into_iter().enumerate() {
@@ -761,6 +763,7 @@ fn format20_piece_and_new_sources_roundtrip() {
             target: CopyTarget::Point(ids.points[0]),
             source,
             piece: k as u32,
+            of: 4,
         });
     }
     let s2 = d
@@ -784,6 +787,9 @@ fn format20_piece_and_new_sources_roundtrip() {
     let back = decode_version(&text, "x.json").unwrap_or_else(|e| panic!("{e}\n{text}"));
     assert_eq!(copies_in(&back, s2), copies_in(&snap, s2));
     assert_eq!(copies_in(&back, s2).len(), 13);
+    // Die gespeicherte Stückzahl läuft mit (über 1 geschrieben, sonst weggelassen).
+    assert!(copies_in(&back, s2).iter().any(|c| c.of == 4));
+    assert!(copies_in(&back, s2).iter().all(|c| c.of > 1));
     assert_eq!(encode_version(&back).unwrap(), text);
     // Laden rechnet, ohne zu scheitern: Verlorene Bezüge sind Warnungen.
     let doc = Document::from_snapshot(back, 0.05).unwrap();
@@ -869,6 +875,7 @@ fn new_copy_fields_need_format_20_and_one_target() {
                 target: CopyTarget::Point(ids.points[0]),
                 source: CopySource::Include(IncludeRef::Origin),
                 piece: 0,
+                of: 1,
             }],
             formulas: Default::default(),
         }),

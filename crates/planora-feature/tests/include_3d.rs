@@ -128,6 +128,7 @@ fn include_into(d: &Document, sk: &mut Sketch, r: IncludeRef) -> Vec<EdgeCopy> {
                 target,
                 source: CopySource::Include(r.clone()),
                 piece: k as u32,
+                of: pieces.len() as u32,
             }
         })
         .collect()
@@ -449,6 +450,7 @@ fn sketch_curve_projection_and_section_points_follow() {
             target: CopyTarget::Point(ids.points[0]),
             source: section.clone(),
             piece: k as u32,
+            of: 2,
         });
     }
     let s2 = d
@@ -566,6 +568,7 @@ fn construction_point_placeholder_is_a_lost_reference() {
         target: CopyTarget::Point(ids.points[0]),
         source: CopySource::Include(IncludeRef::ConstructionPoint(FeatureId(77))),
         piece: 0,
+        of: 1,
     };
     let s = d
         .add_feature("Skizze", sketch_kind(sk, StandardPlane::XY, vec![copy]))
@@ -574,4 +577,65 @@ fn construction_point_placeholder_is_a_lost_reference() {
     assert!(warning(&d, s).contains(&tr!("feature-sketch-projection-lost", count = 1)));
     let p = d.sketch_of(s).unwrap().point_xyz(ids.points[0]).unwrap();
     assert!(close3(p, DVec3::new(1.0, 2.0, 3.0)));
+}
+
+#[test]
+fn deleting_highest_piece_gives_no_mismatch() {
+    let mut d = Document::new();
+    let b = add_box(&mut d, "Quader", DVec3::new(10.0, 20.0, 5.0), DVec3::ZERO);
+    let face = top_face(&body(&d, b));
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze", tol());
+    let copies = include_into(&d, &mut sk, IncludeRef::FaceBoundary(face));
+    assert_eq!(copies.len(), 4);
+    assert!(copies.iter().all(|c| c.of == 4));
+    let lines: Vec<CurveId> = copies.iter().map(curve_of).collect();
+    let s = d
+        .add_feature("Skizze", sketch_kind(sk, StandardPlane::XY, copies))
+        .unwrap();
+    ok(&d, s);
+    // Der Benutzer löscht das Stück mit dem höchsten Index.
+    d.update(s, |k| {
+        if let FeatureKind::Sketch(sf) = k {
+            sf.sketch.remove_curve(lines[3]).unwrap();
+            assert!(sf.prune_copies());
+        }
+    })
+    .unwrap();
+    ok(&d, s);
+    assert!(
+        d.feature(s).unwrap().warning().is_none(),
+        "{}",
+        warning(&d, s)
+    );
+    assert_eq!(sketch_def(&d, s).copies.len(), 3);
+
+    set_box_x(&mut d, b, 30.0);
+    ok(&d, s);
+    assert!(
+        d.feature(s).unwrap().warning().is_none(),
+        "{}",
+        warning(&d, s)
+    );
+    // Stücke 0 bis 2 folgen nach ihrem Index; das gelöschte bleibt gelöscht.
+    let sk = d.sketch_of(s).unwrap();
+    assert!(sk.curve(lines[3]).is_none());
+    let expected = included_pieces(
+        &d,
+        d.index_of(s).unwrap(),
+        &Frame::WORLD,
+        &IncludeRef::FaceBoundary(top_face(&body(&d, b))),
+    )
+    .unwrap();
+    for (k, &c) in lines[..3].iter().enumerate() {
+        let Included::Line(e0, e1) = expected[k] else {
+            panic!("keine Linie");
+        };
+        let (p0, p1) = line_ends3(&d, s, c);
+        assert!(
+            close3(p0, e0) && close3(p1, e1),
+            "{k}: {p0} {p1} / {e0} {e1}"
+        );
+    }
+    assert_eq!(sketch_def(&d, s).copies.len(), 3);
+    d.check_invariants().unwrap();
 }

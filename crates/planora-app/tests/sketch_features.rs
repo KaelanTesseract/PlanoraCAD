@@ -347,6 +347,7 @@ fn a_rejected_draft_keeps_the_sketch_open() {
         .push(planora_feature::EdgeCopy {
             target: planora_feature::CopyTarget::Curve(curve),
             piece: 0,
+            of: 1,
             source: planora_feature::CopySource::Edge(edge),
         });
     let e = s.try_close_sketch().unwrap_err();

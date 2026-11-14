@@ -911,8 +911,9 @@ struct Followed {
 
 /// Führt alle Kopien der Skizze nach. Die alten Arten (Kante, Schnitt, Silhouette) einzeln wie
 /// bisher; die Arten aus Skizzen 10 als Gruppen gleicher Herkunft: Die Stücke einer Quelle
-/// werden zusammen neu gerechnet und folgen der Reihe nach ([`EdgeCopy::piece`]). Ergibt die
-/// Quelle eine andere Stückzahl, bleiben alle Kopien der Gruppe stehen (Abhängigkeiten und Maße
+/// werden zusammen neu gerechnet und folgen der Reihe nach ([`EdgeCopy::piece`]); vom Benutzer
+/// gelöschte Stücke bleiben gelöscht. Ergibt die Quelle eine andere Stückzahl als gespeichert
+/// ([`EdgeCopy::of`]), bleiben alle Kopien der Gruppe stehen (Abhängigkeiten und Maße
 /// bleiben erhalten) und zählen zu „Bezug passt nicht mehr“ (Spec 10). Eine Kopie mit verlorenem
 /// Bezug behält die Lage aus `previous`; ihr Verweis bleibt wie gespeichert.
 fn follow_copies(
@@ -958,9 +959,11 @@ fn follow_copies(
             done[j] = true;
         }
         let points = c.point().is_some();
+        // Gespeicherte Stückzahl der Gruppe (gelöschte Stücke zählen mit); ein Stückindex
+        // darüber (beschädigt) hebt sie an, damit jedes Stück einen Platz hat.
         let expected = group
             .iter()
-            .map(|&j| sf.copies[j].piece as usize + 1)
+            .map(|&j| (sf.copies[j].piece as usize + 1).max(sf.copies[j].of as usize))
             .max()
             .unwrap_or(0);
         match crate::include::source_pieces(ctx, &c.source, points) {

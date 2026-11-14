@@ -1087,6 +1087,7 @@ fn rejected_commit_keeps_the_sketch_history() {
         .push(planora_feature::EdgeCopy {
             target: planora_feature::CopyTarget::Curve(curve),
             piece: 0,
+            of: 1,
             source: planora_feature::CopySource::Edge(edge),
         });
     assert!(st(&mut w).try_close_sketch().is_err());

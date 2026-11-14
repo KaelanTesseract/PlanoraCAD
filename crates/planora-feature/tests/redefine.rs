@@ -218,6 +218,7 @@ fn redefine_reprojects_copies() {
                 copies: vec![EdgeCopy {
                     target: planora_feature::CopyTarget::Curve(curve),
                     piece: 0,
+                    of: 1,
                     source: CopySource::Edge(edge),
                 }],
                 formulas: Default::default(),

@@ -150,7 +150,7 @@ fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
 fn needs_format_20(k: &FeatureKind) -> bool {
     matches!(k, FeatureKind::Sketch(sf) if sf.sketch.has_3d_entry()
     || sf.copies.iter().any(|c| {
-        c.source.is_3d_kind() || c.piece != 0 || c.point().is_some()
+        c.source.is_3d_kind() || c.piece != 0 || c.of > 1 || c.point().is_some()
     }))
 }
 /// Braucht die Art Format 19 (Skizzen 9)? Eine Leinwand oder eine Skizze mit einem
@@ -1779,6 +1779,7 @@ fn copy_to(c: &EdgeCopy) -> EdgeCopyDto {
         kurve: c.curve().map(|id| id.index()),
         punkt: c.point().map(|id| id.index()),
         stueck: c.piece,
+        stuecke: c.of,
         kante: None,
         schnitt: None,
         silhouette: None,
@@ -1965,6 +1966,8 @@ fn copy_from(origin: &str, name: &str, d: &EdgeCopyDto) -> Result<EdgeCopy> {
         target,
         source,
         piece: d.stueck,
+        // 0 ist keine Stückzahl; sie wird wie eine fehlende (1) gelesen.
+        of: d.stuecke.max(1),
     })
 }
 
@@ -3655,6 +3658,7 @@ fn has_format_20_data(k: &KindDto) -> bool {
     let copies_20 = s.kopien.iter().any(|c| {
         c.punkt.is_some()
             || c.stueck != 0
+            || c.stuecke > 1
             || c.einbezug.is_some()
             || c.skizzenkurve.is_some()
             || c.auf_flaeche.is_some()

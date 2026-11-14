@@ -350,6 +350,7 @@ fn edge_copy_with_linked_curve_stays_15() {
     let copy = EdgeCopy {
         target: planora_feature::CopyTarget::Curve(curve),
         piece: 0,
+        of: 1,
         source: CopySource::Edge(EdgeRef::from_edge(s, edge_id, &Tolerance::default()).unwrap()),
     };
     d.add_feature(

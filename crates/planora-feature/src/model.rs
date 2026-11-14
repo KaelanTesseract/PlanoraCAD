@@ -294,12 +294,16 @@ pub enum CopyTarget {
 /// Projizierte oder einbezogene Skizzengeometrie mit ihrer Herkunft; sie folgt ihr bei jeder
 /// Neuberechnung. Geht der Bezug verloren, bleibt sie wie gespeichert, und das Skizzen-Feature
 /// bekommt eine Warnung (Skizzen 6, wie Fusion). `piece` ist der Stückindex in einer Gruppe mit
-/// derselben Herkunft (0 bei allen alten Arten, in der Datei dann weggelassen).
+/// derselben Herkunft (0 bei allen alten Arten, in der Datei dann weggelassen), `of` die beim
+/// Anlegen gespeicherte Stückzahl der Gruppe (1 bei Einzelstücken und allen alten Arten, in der
+/// Datei dann weggelassen). Vom Benutzer gelöschte Stücke fehlen in der Gruppe, zählen aber zu
+/// `of`: Nur eine andere neue Stückzahl ergibt „Bezug passt nicht mehr“.
 #[derive(Clone, Debug, PartialEq)]
 pub struct EdgeCopy {
     pub target: CopyTarget,
     pub source: CopySource,
     pub piece: u32,
+    pub of: u32,
 }
 
 impl EdgeCopy {
@@ -309,6 +313,7 @@ impl EdgeCopy {
             target: CopyTarget::Curve(curve),
             source,
             piece: 0,
+            of: 1,
         }
     }
 

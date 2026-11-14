@@ -545,6 +545,7 @@ fn sketch_equality_by_revision() {
             a.sketch.curves().next().map(|(id, _)| id).unwrap(),
         ),
         piece: 0,
+        of: 1,
         source: planora_feature::CopySource::Edge(EdgeRef {
             a: FaceRef {
                 origin: 1,

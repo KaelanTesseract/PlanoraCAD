@@ -292,6 +292,7 @@ fn copied_body_edges_follow_a_resized_body() {
                 copies: vec![EdgeCopy {
                     target: planora_feature::CopyTarget::Curve(curve),
                     piece: 0,
+                    of: 1,
                     source: planora_feature::CopySource::Edge(edge),
                 }],
                 formulas: Default::default(),

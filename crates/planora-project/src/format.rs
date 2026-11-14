@@ -704,7 +704,8 @@ pub struct FaceIndexDto {
 /// Projizierte oder einbezogene Skizzengeometrie mit genau einem Ziel (`kurve` oder, ab Format
 /// 20, `punkt`) und genau einer Herkunft: Kante (alle Formate), Schnitt oder Silhouette (ab
 /// Format 16), dazu ab Format 20 `einbezug`, `skizzenkurve`, `auf_flaeche` und `schnittkurve`.
-/// `stueck` ist der Stückindex in einer Gruppe gleicher Herkunft (weggelassen, wenn 0). Alte
+/// `stueck` ist der Stückindex in einer Gruppe gleicher Herkunft (weggelassen, wenn 0), `stuecke`
+/// deren gespeicherte Stückzahl (weggelassen, wenn höchstens 1). Alte
 /// Dateien haben nur `kurve` und `kante` (oder `schnitt`/`silhouette`) und schreiben sich gleich.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct EdgeCopyDto {
@@ -714,6 +715,9 @@ pub struct EdgeCopyDto {
     pub punkt: Option<usize>,
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub stueck: u32,
+    /// Stückzahl der Gruppe; fehlt sie, ist sie 1 (weggelassen, wenn höchstens 1).
+    #[serde(default = "one_u32", skip_serializing_if = "at_most_one")]
+    pub stuecke: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kante: Option<EdgeRefDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -732,6 +736,14 @@ pub struct EdgeCopyDto {
 
 fn is_zero_u32(v: &u32) -> bool {
     *v == 0
+}
+
+fn one_u32() -> u32 {
+    1
+}
+
+fn at_most_one(v: &u32) -> bool {
+    *v <= 1
 }
 
 /// Kurve (Kurvennummer) einer anderen Skizze (ab Format 20).

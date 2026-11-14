@@ -78,6 +78,7 @@ fn edge_copy(curve: CurveId, edge: EdgeRef) -> EdgeCopy {
     EdgeCopy {
         target: planora_feature::CopyTarget::Curve(curve),
         piece: 0,
+        of: 1,
         source: CopySource::Edge(edge),
     }
 }
@@ -356,6 +357,7 @@ fn section_copy_follows_body() {
                 vec![EdgeCopy {
                     target: planora_feature::CopyTarget::Curve(curve),
                     piece: 0,
+                    of: 1,
                     source: CopySource::Section { face, index: 0 },
                 }],
             ),
@@ -418,6 +420,7 @@ fn silhouette_copy_follows_radius() {
                 vec![EdgeCopy {
                     target: planora_feature::CopyTarget::Curve(curve),
                     piece: 0,
+                    of: 1,
                     source: CopySource::Silhouette {
                         face: face_ref,
                         index: 0,
@@ -472,6 +475,7 @@ fn hints_do_not_bump_edits() {
         EdgeCopy {
             target: planora_feature::CopyTarget::Curve(curve),
             piece: 0,
+            of: 1,
             source: CopySource::Section { face, index: 0 },
         },
         edge_copy(edge_curve, edge),
@@ -986,6 +990,7 @@ fn cone_section_sketch(
                 copies: vec![EdgeCopy {
                     target: planora_feature::CopyTarget::Curve(curve),
                     piece: 0,
+                    of: 1,
                     source: CopySource::Section { face, index: 0 },
                 }],
                 formulas: Default::default(),
