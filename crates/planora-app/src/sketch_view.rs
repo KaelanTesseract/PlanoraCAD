@@ -2886,6 +2886,14 @@ fn draw_preview3(
         .iter()
         .filter_map(|&p| sk.point_xyz(p).ok())
         .collect();
+    // Ebene Formen (Task 12): die Form in ihrer Ebene, wie der Klick sie anlegte.
+    if se.planar3().is_some() {
+        for line in se.planar3_preview(sk, cur.at) {
+            for path in map.paths3(&line) {
+                draw_path(painter, path, Stroke::new(1.5, color), true);
+            }
+        }
+    }
     let shape: Vec<DVec3> = match (se.tool, pending.as_slice()) {
         (Tool::Line, [.., last]) => vec![*last, cur.at],
         (Tool::Spline, [_, ..]) => pending.iter().copied().chain([cur.at]).collect(),

@@ -1204,7 +1204,7 @@ impl SketchSession {
     }
 
     /// Rho des laufenden Kegelschnitts: das getippte, sonst das vorgeschlagene.
-    fn current_rho(&self) -> f64 {
+    pub(crate) fn current_rho(&self) -> f64 {
         self.input.locked(FieldKind::Rho).unwrap_or(self.conic_rho)
     }
 

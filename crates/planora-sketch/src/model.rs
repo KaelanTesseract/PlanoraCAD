@@ -771,8 +771,18 @@ impl Sketch {
         rho: f64,
     ) -> Result<CurveId, SketchError> {
         self.check_conic(start, end, apex, rho)?;
-        let (p0, a, p2) = (self.pos(start), self.pos(apex), self.pos(end));
-        if !conic_apex_ok(p0, a, p2, self.tol.linear) {
+        let ok = if self.any_3d(&[start, end, apex]) {
+            // 3D (Skizzen 10): Die drei Punkte spannen die Ebene auf; der Scheitel muss neben der
+            // Sehne liegen, im Raum gemessen.
+            let (p0, a, p2) = (self.pos3(start), self.pos3(apex), self.pos3(end));
+            let chord = p2 - p0;
+            let len = chord.length();
+            len > self.tol.linear && chord.cross(a - p0).length() / len > self.tol.linear
+        } else {
+            let (p0, a, p2) = (self.pos(start), self.pos(apex), self.pos(end));
+            conic_apex_ok(p0, a, p2, self.tol.linear)
+        };
+        if !ok {
             return Err(SketchError::Degenerate(tr!("sketch-err-conic-apex")));
         }
         self.add_conic_as(start, end, apex, rho)

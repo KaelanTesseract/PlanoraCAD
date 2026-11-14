@@ -545,6 +545,12 @@ pub struct SketchSession {
     /// Z-Sperre: die Stelle beim Drücken von Pfeil hoch, von der aus der Punkt entlang der Normale
     /// der Ebene läuft.
     pub lock_from: Option<DVec3>,
+    /// Gesetzte Lagen einer ebenen Form in 3D (Kreis „2 Punkte“, Bogen „3 Punkte“, Rechteck
+    /// „2 Punkte“, Ellipse, Kegelschnitt; Skizzen 10, [`crate::sketch_draw3`]). Bis zum letzten
+    /// Klick bleibt die Skizze unverändert.
+    pub pending3: Vec<crate::sketch_draw3::Hit3>,
+    /// Ebene der laufenden ebenen Form in 3D, beim ersten Klick aus der Triade genommen.
+    pub plane3: Option<crate::sketch_draw3::Plane3>,
     /// Letzte Stelle beim Stutzen durch Ziehen (`None`: kein Zug läuft).
     pub trim_drag: Option<DVec2>,
     /// Zählt die gelungenen Änderungen durch Stutzen, Dehnen und Brechen, mit dem Werkzeug der
@@ -714,6 +720,8 @@ impl SketchSession {
             cursor3: None,
             draw3: false,
             lock_from: None,
+            pending3: Vec::new(),
+            plane3: None,
             trim_drag: None,
             modify_edits: (0, None),
             fillet_run: None,
@@ -805,6 +813,8 @@ impl SketchSession {
         self.line_chain = None;
         self.auto_tangent = None;
         self.pick_points.clear();
+        self.pending3.clear();
+        self.plane3 = None;
         self.input = DrawInput::default();
         // Bemaßen: Wahl und gesetztes Maß (sein Feld schließt) entfallen, nichts bleibt.
         self.dim = DimToolState::default();
@@ -847,6 +857,9 @@ impl SketchSession {
             self.triad_ui.abort(&mut self.triad);
             self.triad.handle = None;
             self.triad.lock_z = false;
+            // Eine ebene Form in 3D hat die Skizze noch nicht geändert; ihre Lagen verfallen.
+            self.pending3.clear();
+            self.plane3 = None;
         }
     }
 

@@ -849,3 +849,348 @@ fn esc_and_undo_end_an_arc_drag() {
         }
     }
 }
+
+// ---- Ebene Kurven (Task 12) ----------------------------------------------------------------------
+
+impl View {
+    /// Ansicht mit dem Werkzeug der Art `kind` in dieser Art.
+    fn with_kind(kind: ToolKind) -> View {
+        let mut v = View::new(kind.tool());
+        let (se, sk) = v.se_sk();
+        se.choose_kind(sk, kind);
+        v.frame(vec![]);
+        v
+    }
+
+    /// Die normalen Kurven (ohne Hilfslinien).
+    fn curves(&self) -> Vec<(CurveId, CurveKind)> {
+        self.sk()
+            .curves()
+            .filter(|(_, d)| !d.construction)
+            .map(|(c, d)| (c, d.kind.clone()))
+            .collect()
+    }
+
+    /// Abgetastete Punkte der Kurve `c` im Raum der Skizze.
+    fn samples(&self, c: CurveId) -> Vec<DVec3> {
+        let sk = self.sk();
+        let (lo, hi) = sk.curve_domain3(c).expect("Bereich");
+        (0..=32)
+            .map(|k| {
+                sk.curve_point3(c, lo + (hi - lo) * f64::from(k) / 32.0)
+                    .expect("Punkt")
+            })
+            .collect()
+    }
+
+    /// Prüft, dass die Kurve `c` ganz in der Ebene durch `o` mit der Normale `n` liegt.
+    fn assert_in_plane(&self, c: CurveId, o: DVec3, n: DVec3) {
+        for p in self.samples(c) {
+            assert!((p - o).dot(n).abs() < 1e-6, "{p:?} nicht in der Ebene");
+        }
+    }
+
+    fn triad(&self) -> planora_app::sketch_triad::Triad {
+        self.s.sketch_session.as_ref().unwrap().triad
+    }
+}
+
+/// Liegen die Richtungen `a` und `b` auf einer Geraden?
+fn same_axis(a: DVec3, b: DVec3) -> bool {
+    a.normalize().dot(b.normalize()).abs() > 1.0 - 1e-6
+}
+
+#[test]
+fn circle_2p_in_triad_plane_gets_normal() {
+    let mut v = View::with_kind(ToolKind::Circle2P);
+    v.set_plane(TriadPlane::Yz);
+    v.click3(DVec3::new(0.0, 10.0, 20.0));
+    assert!(v.curves().is_empty(), "der erste Klick legt nichts an");
+    v.click3(DVec3::new(0.0, 40.0, 20.0));
+    let curves = v.curves();
+    assert_eq!(curves.len(), 1, "ein Kreis");
+    let (c, CurveKind::Circle { center, .. }) = curves[0].clone() else {
+        panic!("kein Kreis: {curves:?}");
+    };
+    assert!(v.sk().is_3d_curve(c));
+    assert!(same_axis(v.sk().curve_normal(c), DVec3::X), "Normale X");
+    assert!(v.sk().is_3d_point(center));
+    assert!(near(v.xyz(center), DVec3::new(0.0, 25.0, 20.0), 0.1));
+    assert!((v.sk().radius(c).unwrap() - 15.0).abs() < 0.1);
+    v.assert_in_plane(c, DVec3::ZERO, DVec3::X);
+    // Nur der Mittelpunkt, keine weiteren Punkte.
+    assert_eq!(v.points().len(), 1);
+}
+
+#[test]
+fn arc_3p_in_rotated_triad() {
+    let mut v = View::with_kind(ToolKind::Arc3P);
+    {
+        let (se, _) = v.se_sk();
+        se.triad.rotate(TriadAxis::X, 0.5);
+    }
+    v.frame(vec![]);
+    let t = v.triad();
+    let (u, w) = (t.axis(TriadAxis::X), t.axis(TriadAxis::Y));
+    let n = t.axis(TriadAxis::Z);
+    let at = |a: f64, b: f64| u * a + w * b;
+    let (start, end, through) = (at(20.0, 10.0), at(60.0, 10.0), at(40.0, 25.0));
+    v.click3(start);
+    v.click3(end);
+    assert!(v.curves().is_empty());
+    v.click3(through);
+    let curves = v.curves();
+    assert_eq!(curves.len(), 1, "ein Bogen: {curves:?}");
+    let (
+        c,
+        CurveKind::Arc {
+            center,
+            start: s,
+            end: e,
+        },
+    ) = curves[0].clone()
+    else {
+        panic!("kein Bogen: {curves:?}");
+    };
+    assert!(
+        same_axis(v.sk().curve_normal(c), n),
+        "Normale der Triadenebene"
+    );
+    for p in [center, s, e] {
+        assert!(v.sk().is_3d_point(p), "3D-Punkt");
+    }
+    let ends = [v.xyz(s), v.xyz(e)];
+    for want in [start, end] {
+        assert!(
+            ends.iter().any(|&q| near(q, want, 0.1)),
+            "{want:?} fehlt: {ends:?}"
+        );
+    }
+    v.assert_in_plane(c, DVec3::ZERO, n);
+    // Der Bogen läuft durch den dritten Klick.
+    let m = v.xyz(center);
+    let r = v.sk().radius(c).unwrap();
+    assert!(((through - m).length() - r).abs() < 0.1);
+    assert!(
+        v.samples(c).iter().any(|&p| near(p, through, 1.5)),
+        "durch den dritten Punkt"
+    );
+}
+
+#[test]
+fn rect_2p_in_zx_is_four_3d_lines_with_perpendicular() {
+    // Gedreht um die Normale der Ebene ZX: Die Achsen sind keine Achsen der Skizze.
+    let mut v = View::with_kind(ToolKind::Rect2P);
+    v.set_plane(TriadPlane::Zx);
+    {
+        let (se, _) = v.se_sk();
+        se.triad.rotate(TriadAxis::Y, 0.3);
+    }
+    v.frame(vec![]);
+    let t = v.triad();
+    let (a, b) = (t.axis(TriadAxis::Z), t.axis(TriadAxis::X));
+    let (c0, c2) = (a * 20.0 + b * 25.0, a * 50.0 + b * 60.0);
+    v.click3(c0);
+    assert!(v.lines().is_empty());
+    v.click3(c2);
+    let lines = v.lines();
+    assert_eq!(lines.len(), 4, "vier Linien");
+    assert_eq!(v.points().len(), 4, "vier Ecken");
+    for p in v.points() {
+        assert!(v.sk().is_3d_point(p), "3D-Ecke");
+        assert!(v.xyz(p).y.abs() < 1e-6, "in der Ebene ZX: {:?}", v.xyz(p));
+    }
+    let corners: Vec<DVec3> = v.points().iter().map(|&p| v.xyz(p)).collect();
+    for want in [c0, c2, a * 20.0 + b * 60.0, a * 50.0 + b * 25.0] {
+        assert!(
+            corners.iter().any(|&q| near(q, want, 0.1)),
+            "Ecke {want:?} fehlt: {corners:?}"
+        );
+    }
+    assert!(has(v.sk(), |k| matches!(
+        k,
+        ConstraintKind::Perpendicular(..)
+    )));
+    assert!(has(v.sk(), |k| matches!(k, ConstraintKind::Parallel(..))));
+    assert!(!has(v.sk(), |k| matches!(
+        k,
+        ConstraintKind::Horizontal(_) | ConstraintKind::Vertical(_) | ConstraintKind::AlongZ(_)
+    )));
+    for (_, pa, pb) in &lines {
+        let d = v.xyz(*pb) - v.xyz(*pa);
+        assert!(
+            same_axis(d, a) || same_axis(d, b),
+            "Kante entlang der Triade: {d:?}"
+        );
+    }
+
+    // Unverdreht liegen die Achsen auf Z und X: dann Horizontal und Entlang Z wie in 2D.
+    let mut v = View::with_kind(ToolKind::Rect2P);
+    v.set_plane(TriadPlane::Zx);
+    v.click3(DVec3::new(50.0, 0.0, 10.0));
+    v.click3(DVec3::new(80.0, 0.0, 40.0));
+    assert_eq!(v.lines().len(), 4);
+    let count = |v: &View, f: fn(&ConstraintKind) -> bool| {
+        v.sk().constraints().filter(|(_, c)| f(&c.kind)).count()
+    };
+    assert_eq!(count(&v, |k| matches!(k, ConstraintKind::Horizontal(_))), 2);
+    assert_eq!(count(&v, |k| matches!(k, ConstraintKind::AlongZ(_))), 2);
+    assert_eq!(
+        count(&v, |k| matches!(k, ConstraintKind::Perpendicular(..))),
+        0
+    );
+    for p in v.points() {
+        assert!(v.sk().is_3d_point(p));
+        assert!(v.xyz(p).y.abs() < 1e-6);
+    }
+}
+
+#[test]
+fn ellipse_in_yz() {
+    let mut v = View::new(Tool::Ellipse);
+    v.set_plane(TriadPlane::Yz);
+    let m = DVec3::new(0.0, 20.0, 20.0);
+    v.click3(m);
+    v.click3(DVec3::new(0.0, 50.0, 20.0));
+    assert!(v.curves().is_empty());
+    v.click3(DVec3::new(0.0, 25.0, 32.0));
+    let curves = v.curves();
+    assert_eq!(curves.len(), 1, "eine Ellipse: {curves:?}");
+    let (c, CurveKind::Ellipse { center, .. }) = curves[0].clone() else {
+        panic!("keine Ellipse: {curves:?}");
+    };
+    assert!(same_axis(v.sk().curve_normal(c), DVec3::X), "Normale X");
+    assert!(v.sk().is_3d_point(center));
+    assert!(near(v.xyz(center), m, 0.1));
+    v.assert_in_plane(c, DVec3::ZERO, DVec3::X);
+    // Große Halbachse 30 entlang Y, kleine 12.
+    let dist: Vec<f64> = v.samples(c).iter().map(|p| (*p - m).length()).collect();
+    let far = dist.iter().copied().fold(0.0, f64::max);
+    let close = dist.iter().copied().fold(f64::MAX, f64::min);
+    assert!((far - 30.0).abs() < 0.2, "große Halbachse {far}");
+    assert!((close - 12.0).abs() < 0.3, "kleine Halbachse {close}");
+}
+
+#[test]
+fn conic_in_triad_plane() {
+    let mut v = View::with_kind(ToolKind::Conic);
+    v.set_plane(TriadPlane::Yz);
+    let (start, end, apex) = (
+        DVec3::new(0.0, 10.0, 10.0),
+        DVec3::new(0.0, 50.0, 10.0),
+        DVec3::new(0.0, 30.0, 40.0),
+    );
+    v.click3(start);
+    v.click3(end);
+    v.click3(apex);
+    assert!(v.curves().is_empty(), "das Rho fehlt noch");
+    // Der vierte Klick bestätigt das Rho.
+    v.click3(DVec3::new(0.0, -30.0, 60.0));
+    let curves = v.curves();
+    assert_eq!(curves.len(), 1, "ein Kegelschnitt: {curves:?}");
+    let (
+        c,
+        CurveKind::Conic {
+            start: s,
+            end: e,
+            apex: a,
+            ..
+        },
+    ) = curves[0].clone()
+    else {
+        panic!("kein Kegelschnitt: {curves:?}");
+    };
+    for (p, want) in [(s, start), (e, end), (a, apex)] {
+        assert!(v.sk().is_3d_point(p), "3D-Punkt");
+        assert!(near(v.xyz(p), want, 0.1), "{:?} statt {want:?}", v.xyz(p));
+    }
+    v.assert_in_plane(c, DVec3::ZERO, DVec3::X);
+}
+
+#[test]
+fn circle_on_sketch_plane_is_2d() {
+    for turn in [0.0, 0.4] {
+        let mut v = View::with_kind(ToolKind::Circle2P);
+        {
+            let (se, _) = v.se_sk();
+            se.triad.rotate(TriadAxis::Z, turn);
+        }
+        v.frame(vec![]);
+        v.click3(DVec3::new(30.0, 10.0, 0.0));
+        v.click3(DVec3::new(60.0, 30.0, 0.0));
+        let curves = v.curves();
+        assert_eq!(curves.len(), 1, "ein Kreis ({turn})");
+        let (c, CurveKind::Circle { center, .. }) = curves[0].clone() else {
+            panic!("kein Kreis");
+        };
+        assert!(!v.sk().is_3d_curve(c), "2D-Kreis ({turn})");
+        assert!(!v.sk().is_3d_point(center), "2D-Mitte ({turn})");
+        assert!(near(v.xyz(center), DVec3::new(45.0, 20.0, 0.0), 0.1));
+        assert_eq!(v.sk().profiles().outlines.len(), 1, "ein Profil ({turn})");
+    }
+}
+
+/// Esc nach den ersten Klicks lässt nichts, eine fertige Form ist ein Rückgängig-Schritt.
+#[test]
+fn planar_3d_shapes_esc_and_undo() {
+    let mut v = View::with_kind(ToolKind::Arc3P);
+    v.set_plane(TriadPlane::Yz);
+    let n = v.s.sketch_history().unwrap().undo_len();
+    v.click3(DVec3::new(0.0, 10.0, 20.0));
+    v.click3(DVec3::new(0.0, 40.0, 20.0));
+    v.key(Key::Escape);
+    assert!(v.points().is_empty() && v.curves().is_empty());
+    assert_eq!(v.s.sketch_history().unwrap().undo_len(), n);
+    v.click3(DVec3::new(0.0, 10.0, 20.0));
+    v.click3(DVec3::new(0.0, 40.0, 20.0));
+    v.click3(DVec3::new(0.0, 25.0, 35.0));
+    assert_eq!(v.curves().len(), 1);
+    assert_eq!(v.s.sketch_history().unwrap().undo_len(), n + 1);
+    v.key(Key::Escape);
+    assert!(v.s.undo_sketch());
+    assert!(v.points().is_empty() && v.curves().is_empty());
+}
+
+/// Nach dem Scheitel zeigt der Kegelschnitt in 3D das Feld Rho; ein getipptes Rho gilt mit
+/// Eingabe.
+#[test]
+fn conic_in_3d_takes_a_typed_rho() {
+    use planora_app::sketch_input::FieldKind;
+    let mut v = View::with_kind(ToolKind::Conic);
+    v.set_plane(TriadPlane::Yz);
+    v.click3(DVec3::new(0.0, 10.0, 10.0));
+    v.click3(DVec3::new(0.0, 50.0, 10.0));
+    v.click3(DVec3::new(0.0, 30.0, 40.0));
+    let aim = v.at3(DVec3::new(0.0, -30.0, 60.0));
+    v.hover(aim);
+    let fields: Vec<FieldKind> =
+        v.s.sketch_session
+            .as_ref()
+            .unwrap()
+            .input
+            .fields
+            .iter()
+            .map(|f| f.kind)
+            .collect();
+    assert_eq!(fields, vec![FieldKind::Rho]);
+    v.frame(vec![Event::Text("0.7".into())]);
+    v.hover(aim);
+    v.frame(vec![key_down(Key::Enter, Modifiers::NONE)]);
+    v.frame(vec![key_up(Key::Enter)]);
+    v.frame(vec![]);
+    let rho: Vec<f64> = v
+        .curves()
+        .iter()
+        .filter_map(|(_, k)| match k {
+            CurveKind::Conic { rho, .. } => Some(*rho),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        rho.len(),
+        1,
+        "{:?}",
+        v.s.sketch_session.as_ref().unwrap().message
+    );
+    assert!((rho[0] - 0.7).abs() < 1e-9, "{rho:?}");
+}

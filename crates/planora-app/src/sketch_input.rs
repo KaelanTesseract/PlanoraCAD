@@ -424,7 +424,8 @@ impl SketchSession {
             Some(self.tool),
             self.planned_kind(),
             self.pending.clone(),
-            self.pending_pos.len(),
+            // Ebene Formen in 3D zählen ihre Lagen wie die Stufen in der Ebene.
+            self.pending_pos.len() + self.pending3.len(),
             self.pending_curves.len(),
             self.line_arc.is_some(),
             if self.tool == Tool::Pattern {
@@ -478,6 +479,13 @@ impl SketchSession {
         use FieldKind as F;
         if self.line_arc.is_some() {
             return &[];
+        }
+        // Ebene Formen in 3D (Skizzen 10): nur das Rho des Kegelschnitts nach dem Scheitel.
+        if self.draw3
+            && let Some(kind) = self.planar3()
+        {
+            let rho = kind == crate::sketch_draw3::Planar3::Conic && self.pending3.len() == 3;
+            return if rho { &[F::Rho] } else { &[] };
         }
         if let Some(kind) = self.planned_kind() {
             return kind.stages().get(self.kind_stage()).copied().unwrap_or(&[]);
