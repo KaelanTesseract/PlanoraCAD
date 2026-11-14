@@ -14,6 +14,11 @@ const ZEICHNUNG: &[u8] = include_bytes!("../../assets/zeichnung.png");
 /// Schnittansicht (Karte auf der Installieren-Seite).
 const SCHNITT: &[u8] = include_bytes!("../../assets/schnitt.png");
 
+/// Lineare Filterung mit Mipmaps: Logo und Screenshots werden stark verkleinert gezeigt und
+/// flimmern so nicht.
+const TEXTURE_OPTIONS: egui::TextureOptions =
+    egui::TextureOptions::LINEAR.with_mipmap_mode(Some(egui::TextureFilter::Linear));
+
 /// Liest ein PNG als RGBA-Bild (8 Bit je Kanal, nicht vormultipliziert); `None`, wenn die Daten
 /// kein lesbares PNG sind. Wie `logo::decode` der App.
 pub fn decode(bytes: &[u8]) -> Option<egui::IconData> {
@@ -80,7 +85,7 @@ impl Assets {
                 &icon.rgba,
             );
             Some(Picture {
-                texture: ctx.load_texture(name, image, egui::TextureOptions::LINEAR),
+                texture: ctx.load_texture(name, image, TEXTURE_OPTIONS),
                 aspect: icon.width as f32 / icon.height as f32,
             })
         };

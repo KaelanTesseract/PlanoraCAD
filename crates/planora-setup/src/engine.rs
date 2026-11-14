@@ -20,6 +20,17 @@ pub fn engine_bytes() -> Option<&'static [u8]> {
     None
 }
 
+/// Neuer, eigener Ordner für den Motor: `%TEMP%\planoracad-setup-<pid>-<ms>` (nur der Pfad; angelegt
+/// wird er erst beim Auspacken). So kennt die Oberfläche Fortschritts- und Protokolldatei schon,
+/// bevor der Motor-Faden auspackt.
+pub fn fresh_dir() -> PathBuf {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    std::env::temp_dir().join(format!("planoracad-setup-{}-{millis}", std::process::id()))
+}
+
 /// Der ausgepackte Motor in seinem eigenen Ordner.
 pub struct Unpacked {
     pub dir: PathBuf,
@@ -30,14 +41,14 @@ impl Unpacked {
     /// Packt den Motor in einen eigenen Ordner `%TEMP%\planoracad-setup-<pid>-<ms>` aus.
     /// Ohne eingebetteten Motor: Fehler `NotFound`.
     pub fn unpack() -> io::Result<Unpacked> {
+        Unpacked::unpack_into(fresh_dir())
+    }
+
+    /// Packt den Motor in den Ordner `dir` aus (wird angelegt). Ohne eingebetteten Motor: Fehler
+    /// `NotFound`; scheitert das Schreiben, wird der Ordner wieder entfernt.
+    pub fn unpack_into(dir: PathBuf) -> io::Result<Unpacked> {
         let bytes = engine_bytes()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "kein Motor eingebettet"))?;
-        let millis = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        let dir =
-            std::env::temp_dir().join(format!("planoracad-setup-{}-{millis}", std::process::id()));
         std::fs::create_dir_all(&dir)?;
         let exe = dir.join(ENGINE_FILE);
         if let Err(err) = std::fs::write(&exe, bytes) {

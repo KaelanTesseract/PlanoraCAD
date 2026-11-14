@@ -1,6 +1,7 @@
 //! Das Fenster der Hülle im Graphit-Stil (Entwurf C): links das Feld „Installation“ mit den fünf
-//! Schritten, rechts der Inhalt der Seite. Hier laufen auch die Wirkungen nach außen: Motor
-//! auspacken und in eigenem Faden starten, Fortschrittsdatei lesen, Ordnerdialog, App starten.
+//! Schritten, rechts der Inhalt der Seite. Hier laufen auch die Wirkungen nach außen: Motor im
+//! eigenen Faden auspacken, starten und aufräumen, Fortschrittsdatei lesen, Ordnerdialog, App
+//! starten.
 
 mod assets;
 mod folder_dialog;
@@ -17,6 +18,7 @@ use egui::{Margin, Rect, StrokeKind, UiBuilder, pos2, vec2};
 use pages::{Action, View};
 use planora_i18n::tr;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -35,6 +37,10 @@ const POLL: Duration = Duration::from_millis(100);
 /// Dateiname der App im Installationsordner.
 const APP_EXE: &str = "PlanoraCAD.exe";
 
+/// Aufräumen des behaltenen Ordners nach „Schließen“; läuft im eigenen Faden, `run` wartet
+/// darauf erst, wenn das Fenster schon zu ist.
+type PendingCleanup = Arc<Mutex<Option<JoinHandle<()>>>>;
+
 /// Öffnet das Fenster und läuft, bis es geschlossen wird.
 pub fn run(wizard: Wizard) -> eframe::Result<()> {
     let mut viewport = egui::ViewportBuilder::default()
@@ -52,11 +58,19 @@ pub fn run(wizard: Wizard) -> eframe::Result<()> {
         centered: true,
         ..Default::default()
     };
-    eframe::run_native(
+    let pending: PendingCleanup = Arc::default();
+    let app_pending = Arc::clone(&pending);
+    let result = eframe::run_native(
         "planoracad-setup",
         options,
-        Box::new(move |cc| Ok(Box::new(SetupApp::new(&cc.egui_ctx, wizard)))),
-    )
+        Box::new(move |cc| Ok(Box::new(SetupApp::new(&cc.egui_ctx, wizard, app_pending)))),
+    );
+    // Das Fenster ist zu; jetzt darf das Löschen des Temp-Ordners noch kurz dauern.
+    let handle = pending.lock().ok().and_then(|mut slot| slot.take());
+    if let Some(handle) = handle {
+        let _ = handle.join();
+    }
+    result
 }
 
 /// Linkes und rechtes Feld im Fenster `screen`: Abstand `GAP` zum Rand und zueinander, links
@@ -69,14 +83,44 @@ pub fn panel_rects(screen: Rect) -> (Rect, Rect) {
     (left, right)
 }
 
+/// Ergebnis des Motor-Fadens: Lauf und, nur nach einem Fehler, der behaltene Ordner mit dem
+/// Protokoll.
+type Finished = (Result<u32, RunError>, Option<Unpacked>);
+
 /// Ein laufender Motor.
 struct EngineRun {
-    unpacked: Unpacked,
     progress_file: PathBuf,
     log_file: PathBuf,
-    /// Start und Warten im eigenen Faden, damit das Fenster während der Admin-Abfrage und der
-    /// Installation weiterzeichnet.
-    thread: JoinHandle<Result<u32, RunError>>,
+    /// Auspacken, Start, Warten und Aufräumen im eigenen Faden, damit das Fenster während der
+    /// Admin-Abfrage und der Installation weiterzeichnet und nie blockiert.
+    thread: JoinHandle<Finished>,
+}
+
+/// Bleibt der ausgepackte Ordner nach diesem Lauf (für das Protokoll bis „Schließen“)? Genau
+/// dann, wenn die Fehlerseite folgt (wie `Wizard::engine_finished`).
+fn keeps_folder(result: &Result<u32, RunError>) -> bool {
+    match result {
+        Ok(code) => *code != 0,
+        Err(RunError::Declined) => false,
+        Err(RunError::Io(_)) => true,
+    }
+}
+
+/// Im Motor-Faden: auspacken nach `dir`, starten, warten; nach Erfolg oder abgelehnter
+/// Admin-Abfrage gleich aufräumen. Scheitert das Auspacken, gibt es keinen Ordner (und kein
+/// Protokoll).
+fn run_engine(dir: PathBuf, args: &[String], elevate: bool) -> Finished {
+    let unpacked = match Unpacked::unpack_into(dir) {
+        Ok(u) => u,
+        Err(err) => return (Err(RunError::Io(err)), None),
+    };
+    let result = engine::spawn(&unpacked.exe, args, elevate).map(|process| process.wait());
+    if keeps_folder(&result) {
+        (result, Some(unpacked))
+    } else {
+        unpacked.cleanup();
+        (result, None)
+    }
 }
 
 struct SetupApp {
@@ -88,11 +132,13 @@ struct SetupApp {
     run: Option<EngineRun>,
     /// Nach einem Fehler bleibt der ausgepackte Ordner mit dem Protokoll bis „Schließen“.
     kept: Option<Unpacked>,
+    /// Faden, der den behaltenen Ordner löscht (siehe `run`).
+    pending: PendingCleanup,
     lang: &'static str,
 }
 
 impl SetupApp {
-    fn new(ctx: &egui::Context, wizard: Wizard) -> SetupApp {
+    fn new(ctx: &egui::Context, wizard: Wizard, pending: PendingCleanup) -> SetupApp {
         style::install(ctx);
         SetupApp {
             wizard,
@@ -101,6 +147,7 @@ impl SetupApp {
             tracker: Tracker::new(),
             run: None,
             kept: None,
+            pending,
             lang: system::ui_lang(),
         }
     }
@@ -115,24 +162,17 @@ impl SetupApp {
         dark
     }
 
-    /// „Installieren“: prüfen, auspacken, Motor im eigenen Faden starten.
+    /// „Installieren“: prüfen, dann Motor im eigenen Faden auspacken und starten. Die Seite
+    /// „Installieren“ erscheint sofort, auch während noch ausgepackt wird.
     fn start_install(&mut self, ctx: &egui::Context) {
         let running = system::running_in(Path::new(&self.wizard.dir));
         if !self.wizard.start_install(running) {
             return;
         }
         self.tracker = Tracker::new();
-        let unpacked = match Unpacked::unpack() {
-            Ok(u) => u,
-            Err(err) => {
-                // Ohne ausgepackten Motor gibt es kein Protokoll.
-                let log = std::env::temp_dir().join("planoracad-setup.log");
-                self.wizard.engine_finished(Err(RunError::Io(err)), log);
-                return;
-            }
-        };
-        let progress_file = unpacked.dir.join("progress.txt");
-        let log_file = unpacked.dir.join("setup.log");
+        let dir = engine::fresh_dir();
+        let progress_file = dir.join("progress.txt");
+        let log_file = dir.join("setup.log");
         let choice = EngineChoice {
             all_users: self.wizard.all_users,
             dir: PathBuf::from(&self.wizard.dir),
@@ -142,16 +182,14 @@ impl SetupApp {
             log_file: log_file.clone(),
         };
         let args = engine_args(&choice);
-        let exe = unpacked.exe.clone();
         let elevate = self.wizard.all_users;
         let repaint = ctx.clone();
         let thread = std::thread::spawn(move || {
-            let result = engine::spawn(&exe, &args, elevate).map(|process| process.wait());
+            let finished = run_engine(dir, &args, elevate);
             repaint.request_repaint();
-            result
+            finished
         });
         self.run = Some(EngineRun {
-            unpacked,
             progress_file,
             log_file,
             thread,
@@ -177,16 +215,28 @@ impl SetupApp {
         let Some(run) = self.run.take() else {
             return;
         };
-        let result = run.thread.join().unwrap_or_else(|_| {
-            Err(RunError::Io(std::io::Error::other(
-                "engine thread panicked",
-            )))
+        let (result, kept) = run.thread.join().unwrap_or_else(|_| {
+            (
+                Err(RunError::Io(std::io::Error::other(
+                    "engine thread panicked",
+                ))),
+                None,
+            )
         });
+        // Ohne ausgepackten Ordner (Auspacken gescheitert) fehlt die Protokolldatei; die
+        // Fehlerseite zeigt dann keinen Knopf „Protokoll öffnen“.
         self.wizard.engine_finished(result, run.log_file);
-        if matches!(self.wizard.page, Page::Failed { .. }) {
-            self.kept = Some(run.unpacked);
-        } else {
-            run.unpacked.cleanup();
+        self.kept = kept;
+    }
+
+    /// Löscht den behaltenen Ordner im eigenen Faden (das Fenster wartet nie darauf).
+    fn cleanup_kept(&mut self) {
+        let Some(kept) = self.kept.take() else {
+            return;
+        };
+        let handle = std::thread::spawn(move || kept.cleanup());
+        if let Ok(mut slot) = self.pending.lock() {
+            *slot = Some(handle);
         }
     }
 
@@ -221,9 +271,7 @@ impl SetupApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
             Action::Close => {
-                if let Some(kept) = self.kept.take() {
-                    kept.cleanup();
-                }
+                self.cleanup_kept();
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         }
@@ -285,9 +333,7 @@ impl eframe::App for SetupApp {
     }
 
     fn on_exit(&mut self) {
-        if let Some(kept) = self.kept.take() {
-            kept.cleanup();
-        }
+        self.cleanup_kept();
     }
 }
 
@@ -324,5 +370,13 @@ mod tests {
         assert_eq!(right.left() - left.right(), 12.0);
         assert_eq!(right.max, pos2(948.0, 628.0));
         assert_eq!(left.height(), right.height());
+    }
+
+    #[test]
+    fn folder_stays_only_after_a_failure() {
+        assert!(!keeps_folder(&Ok(0)));
+        assert!(!keeps_folder(&Err(RunError::Declined)));
+        assert!(keeps_folder(&Ok(1)));
+        assert!(keeps_folder(&Err(RunError::Io(std::io::Error::other("x")))));
     }
 }

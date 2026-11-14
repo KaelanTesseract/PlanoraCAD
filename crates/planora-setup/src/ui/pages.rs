@@ -150,6 +150,13 @@ pub fn teaser_columns(width: f32, gap: f32) -> f32 {
     ((width - 2.0 * gap) / 3.0).max(0.0)
 }
 
+/// Bildhöhe der Karten auf der Installieren-Seite: Das Bild füllt die Fläche der Höhe `area`
+/// bis auf die Unterschrift (`caption`) und den Abstand darüber (`gap`), wie `flex: 1` in
+/// Entwurf C; das Bild wird mittig beschnitten (`cover_uv`).
+pub fn teaser_shot_height(area: f32, caption: f32, gap: f32) -> f32 {
+    (area - caption - gap).max(0.0)
+}
+
 /// Daten, die die Seiten zum Zeichnen brauchen, aber nicht ändern.
 pub struct View<'a> {
     pub p: &'a Palette,
@@ -512,10 +519,9 @@ fn installing(ui: &mut egui::Ui, view: &View) {
         tr!("setup-teaser-drawing"),
         tr!("setup-teaser-section"),
     ];
-    // Bildhöhe: Seitenverhältnis 4 : 3 (die Vorschau lässt die Karten wachsen und beschneidet
-    // die Bilder; ganz hohe Karten zeigten aber nur noch einen schmalen Streifen der App),
-    // höchstens so hoch, wie Platz ist. Alle drei Karten sind gleich hoch.
-    let shot_h = (col * 3.0 / 4.0).min(area.height() - caption_h - SPACE_1);
+    // Die Karten wachsen bis zum unteren Rand (Entwurf C), das Bild wird mittig beschnitten;
+    // alle drei Karten sind gleich hoch, die Unterschrift steht darunter.
+    let shot_h = teaser_shot_height(area.height(), caption_h, SPACE_1);
     for (i, caption) in captions.into_iter().enumerate() {
         let x = area.left() + i as f32 * (col + gap);
         let shot = Rect::from_min_size(pos2(x, area.top()), vec2(col, shot_h));
@@ -683,5 +689,12 @@ mod tests {
         let col = teaser_columns(616.0, 8.0);
         assert!((3.0 * col + 2.0 * 8.0 - 616.0).abs() < 1e-3);
         assert_eq!(teaser_columns(4.0, 8.0), 0.0);
+    }
+
+    #[test]
+    fn teaser_shots_fill_remaining_height() {
+        // Bild füllt die Fläche bis auf Unterschrift und Abstand.
+        assert_eq!(teaser_shot_height(300.0, 18.0, 4.0), 278.0);
+        assert_eq!(teaser_shot_height(10.0, 18.0, 4.0), 0.0);
     }
 }
