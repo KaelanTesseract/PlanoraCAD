@@ -21,6 +21,7 @@ use planora_render::{
     build_scene_marked, pick_edge, pick_face, pick_plane, pick_vertex,
 };
 use planora_sketch::constraint::ConstraintKind;
+use planora_sketch::helpers::Included;
 use planora_sketch::model::{CurveId, PointId, Sketch};
 use planora_sketch::{ExtractedProfiles, ProfileRef, plane_of_face};
 use std::cell::{Cell, RefCell};
@@ -476,11 +477,18 @@ fn deferred_by_tool(se: &SketchSession, before: &SketchFeature, after: &SketchFe
     // Fangbindungen des offenen Punktes gehören zum Element: auf der Kurve, in der Linienmitte,
     // im Ursprung.
     let new_open = |p: &PointId| se.pending.contains(p) && b.point_xy(*p).is_err();
+    // Ein beim Fang an einer Körperecke eingezogener Punkt (A7) gehört ebenso zum Element.
+    let included =
+        |p: &PointId| se.included_vertices.iter().any(|(q, _)| q == p) && b.point_xy(*p).is_err();
     let only_snaps = a
         .constraints()
         .filter(|(id, _)| b.constraint(*id).is_none())
         .all(|(_, c)| match &c.kind {
             ConstraintKind::PointOnCurve(..) => true,
+            ConstraintKind::Fixed(p, ..) | ConstraintKind::Fixed3(p, ..) if included(p) => true,
+            ConstraintKind::Coincident(p, q) => {
+                (new_open(p) && included(q)) || (new_open(q) && included(p))
+            }
             ConstraintKind::Midpoint(p, _) => new_open(p),
             ConstraintKind::Fixed(p, x, y) => new_open(p) && *x == 0.0 && *y == 0.0,
             ConstraintKind::Fixed3(p, x, y, z) => {
@@ -489,6 +497,42 @@ fn deferred_by_tool(se: &SketchSession, before: &SketchFeature, after: &SketchFe
             _ => false,
         });
     same_curves && points_kept && values_kept && constraints_kept && only_snaps
+}
+
+/// Verknüpft die eingezogenen Eckpunkte der Sitzung `se` (A7) im Entwurf `draft` mit ihren
+/// Körperecken; tote Punkte und Ecken ohne Verweis entfallen (der Punkt bleibt dann fest stehen).
+fn link_vertices(state: &AppState, se: &mut SketchSession, draft: &mut SketchFeature) {
+    let tol = state.kernel.tolerance;
+    let visible = state.document.visible_bodies_before(se.sketch);
+    for (q, i) in std::mem::take(&mut se.included_vertices) {
+        let target = planora_feature::CopyTarget::Point(q);
+        if draft.sketch.point_xy(q).is_err() || draft.copies.iter().any(|c| c.target == target) {
+            continue;
+        }
+        let Some(v) = se.body_vertices.get(i).copied() else {
+            continue;
+        };
+        let source = state.bodies.get(v.body).map(|b| b.source);
+        let Some(solid) = visible
+            .iter()
+            .find(|b| Some(b.body) == source)
+            .map(|b| b.solid)
+        else {
+            continue;
+        };
+        let Ok(edge) = planora_feature::EdgeRef::from_edge(solid, v.edge, &tol) else {
+            continue;
+        };
+        let source = CopySource::Include(planora_feature::IncludeRef::Vertex(
+            planora_feature::VertexRef { edge, end: v.end },
+        ));
+        draft.copies.push(EdgeCopy {
+            target,
+            source,
+            piece: 0,
+            of: 1,
+        });
+    }
 }
 
 /// Länge des Geometrieschlüssels einer Kante (Anfangs- und Endpunkt, Parameterbereich).
@@ -564,6 +608,13 @@ impl PickFilter {
     /// und verdecken keine Ecken (die Punkte liegen oft hinter einer schon gezeichneten Ebene).
     pub const POINTS: PickFilter = PickFilter {
         planes: false,
+        vertices: true,
+        edges: true,
+        faces: true,
+    };
+    /// „3D-Geometrie einbeziehen“ (Skizzen 10): Ecken, Kanten, Flächen und Ebenen.
+    pub const INCLUDE: PickFilter = PickFilter {
+        planes: true,
         vertices: true,
         edges: true,
         faces: true,
@@ -2447,12 +2498,41 @@ impl AppState {
 }
 
 /// Was „Projizieren“ in die Skizze legt: eine Kante, eine Fläche (ihre Schleifen) oder einen
-/// ganzen Körper; je mit dem Index des Körpers in [`AppState::bodies`].
+/// ganzen Körper; je mit dem Index des Körpers in [`AppState::bodies`]. Dazu (Skizzen 10,
+/// Spec 3) eine Kurve einer fertigen Skizze, die im Verlauf vor der offenen steht: Projizieren
+/// wirft sie in die Ebene, Schneiden liefert ihre Schnittpunkte mit der Ebene.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProjectTarget {
     Edge(usize, Id<Edge>),
     Face(usize, Id<Face>),
     Body(usize),
+    SketchCurve(FeatureId, CurveId),
+}
+
+/// Was „3D-Geometrie einbeziehen“ (Skizzen 10, Spec 5) in die Skizze holt; Körper je mit ihrem
+/// Index in [`AppState::bodies`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum IncludePick {
+    /// Eine Körperkante.
+    Edge(usize, Id<Edge>),
+    /// Alle Randkanten einer Fläche.
+    Face(usize, Id<Face>),
+    /// Eine Körperecke: Anfang (`end == false`) oder Ende der Kante `edge`.
+    Vertex {
+        body: usize,
+        edge: Id<Edge>,
+        end: bool,
+    },
+    /// Grund- oder Konstruktionsebene (vier Randlinien ihres Rechtecks).
+    Plane(planora_feature::PlaneId),
+    /// Eine Achse des Ursprungs.
+    Axis(planora_feature::AxisId),
+    /// Ein Konstruktionspunkt (gibt es noch nicht: Meldung).
+    ConstructionPoint(FeatureId),
+    /// Der Ursprung.
+    Origin,
+    /// Eine Kurve einer Skizze, die im Verlauf vor der offenen steht.
+    SketchCurve { sketch: FeatureId, curve: CurveId },
 }
 
 /// Meldung zu einem Fehler des Ebenenschnitts (`section`) oder der Silhouette, mit dem Text des
@@ -2893,6 +2973,7 @@ impl AppState {
         let frame = *draft.sketch.frame();
         let view_points = self.sketch_view_points(&draft.plane, &frame, draft.sketch.extent());
         let mut session = SketchSession::new(id);
+        session.body_vertices = self.body_vertices(id, &frame);
         session.last_report = Some(draft.sketch.clone().solve());
         session.text_memory = self.text_memory.clone();
         if !switching {
@@ -3119,6 +3200,8 @@ impl AppState {
         // Ein Befehl ohne fertige Form hinterlässt nichts, auch beim Beenden der Skizze.
         se.drop_open_points(&mut draft.sketch);
         se.clear_pending();
+        // Eingezogene Eckpunkte fertiger Elemente behalten ihre Verknüpfung (A7).
+        link_vertices(self, &mut se, &mut draft);
         // Projektionen gelöschter Kurven werden nicht gespeichert (Skizzen 6; beim Laden ebenso).
         draft.prune_copies();
         let id = se.sketch;
@@ -3223,6 +3306,52 @@ impl AppState {
         self.break_projection_links(&[curve]).map(|_| ())
     }
 
+    /// Hängt für jeden beim Fang an einer Körperecke eingezogenen Punkt der offenen Skizze, der
+    /// noch lebt, seine Verknüpfung mit der Ecke an (`CopySource::Include(Vertex)`, A7) und leert
+    /// die Liste der Sitzung.
+    fn link_included_vertices(&mut self) {
+        let (Some(mut se), Some(mut draft)) =
+            (self.sketch_session.take(), self.sketch_draft.take())
+        else {
+            return;
+        };
+        link_vertices(self, &mut se, &mut draft);
+        self.sketch_session = Some(se);
+        self.sketch_draft = Some(draft);
+    }
+
+    /// Die Körperecken vor der Skizze `id` in Skizzenkoordinaten von `frame`, je Ecke einmal
+    /// (Fang beim Zeichnen in 3D, A7). Ausgeblendete Körper fangen nicht.
+    fn body_vertices(&self, id: FeatureId, frame: &Frame) -> Vec<crate::sketch_draw3::BodyVertex> {
+        let visible = self.document.visible_bodies_before(id);
+        let mut out = Vec::new();
+        for (j, b) in self.bodies.iter().enumerate() {
+            if self.is_body_hidden(j) {
+                continue;
+            }
+            let Some(v) = visible.iter().find(|v| v.body == b.source) else {
+                continue;
+            };
+            let solid = v.solid;
+            let mut seen = std::collections::HashSet::new();
+            for (e, edge) in solid.edges.iter() {
+                for (vid, end) in [(edge.start, false), (edge.end, true)] {
+                    if seen.insert(vid)
+                        && let Some(vx) = solid.vertices.get(vid)
+                    {
+                        out.push(crate::sketch_draw3::BodyVertex {
+                            at: frame.to_local(vx.point),
+                            body: j,
+                            edge: e,
+                            end,
+                        });
+                    }
+                }
+            }
+        }
+        out
+    }
+
     // ---- Rückgängig in der offenen Skizze (R10) ------------------------------------------
 
     /// Verlauf der offenen Skizze (lesen); `None` ohne offene Skizze (er lebt genau so lange
@@ -3258,13 +3387,19 @@ impl AppState {
         if gesture {
             return;
         }
-        let Some((h, draft, false)) = self.sketch_open_change() else {
+        let Some((_, _, false)) = self.sketch_open_change() else {
             // Kein Schritt: ein Schrittname eines Werkzeugs gehört zu keiner Änderung mehr.
             if self.sketch_open_change().is_none()
                 && let Some(se) = self.sketch_session.as_mut()
             {
                 se.edit_label = None;
+                se.included_vertices.clear();
             }
+            return;
+        };
+        // Die Verknüpfungen eingezogener Eckpunkte (A7) kommen mit dem Schritt dazu.
+        self.link_included_vertices();
+        let Some((h, draft, _)) = self.sketch_open_change() else {
             return;
         };
         let label = self.sketch_label(h.current(), draft);
@@ -3523,6 +3658,20 @@ impl AppState {
     fn try_project(&mut self, target: ProjectTarget, link: bool) -> Result<usize, Msg> {
         let body = match target {
             ProjectTarget::Edge(b, _) | ProjectTarget::Face(b, _) | ProjectTarget::Body(b) => b,
+            ProjectTarget::SketchCurve(sketch, curve) => {
+                // Skizzen 10, Spec 3: dieselbe Rechnung wie die Neuberechnung
+                // (`CopySource::SketchCurve`, Kurve in Raumlage, wie eine Kante projiziert).
+                let piece = self.source_sketch_curve(sketch, curve)?;
+                let source = link.then_some(CopySource::SketchCurve { sketch, curve });
+                return self.place_projection(
+                    &[piece],
+                    &[source],
+                    true,
+                    0,
+                    crate::msg!("sketch-project-nothing-new"),
+                    crate::msg!("undo-edge-project"),
+                );
+            }
         };
         let solid = self.solid_before_sketch(body)?;
         let tol = self.kernel.tolerance;
@@ -3533,6 +3682,8 @@ impl AppState {
                 face_edges(&solid, f).ok_or_else(|| crate::msg!("state-face-not-found"))?
             }
             ProjectTarget::Body(_) => body_edges(&solid),
+            // Oben schon abgeschlossen.
+            ProjectTarget::SketchCurve(..) => Vec::new(),
         };
         // Je Kante Kurvenstück und (mit Verknüpfung) Verweis; eine Kante ohne Verweis wird
         // übersprungen, bei einer einzelnen Kante ist das ein Fehler wie früher.
@@ -3578,6 +3729,9 @@ impl AppState {
     fn try_intersect(&mut self, target: ProjectTarget) -> Result<usize, Msg> {
         let (body, faces) = match target {
             ProjectTarget::Edge(..) => return Err(crate::msg!("sketch-pick-intersect")),
+            ProjectTarget::SketchCurve(sketch, curve) => {
+                return self.try_intersect_curve(sketch, curve);
+            }
             ProjectTarget::Face(b, f) => (b, Some(f)),
             ProjectTarget::Body(b) => (b, None),
         };
@@ -3691,6 +3845,164 @@ impl AppState {
             )
         };
         self.place_projection(&pieces, &sources, false, skipped_other, nothing, label)
+    }
+
+    /// Die Kurve `curve` der Skizze `sketch` in Raumlage als Quelle für die offene Skizze: Die
+    /// Quelle muss im Verlauf davor stehen (Spec 10) und berechnet sein.
+    fn source_sketch_curve(
+        &self,
+        sketch: FeatureId,
+        curve: CurveId,
+    ) -> Result<(planora_kernel::Curve, f64, f64), Msg> {
+        self.check_source_sketch(sketch)?;
+        self.document
+            .sketch_of(sketch)
+            .and_then(|sk| sk.curve_world(curve))
+            .ok_or_else(|| crate::msg!("sketch-include-failed"))
+    }
+
+    /// Steht die Skizze `sketch` im Verlauf vor der offenen (Spec 10)? Sonst die Meldung.
+    fn check_source_sketch(&self, sketch: FeatureId) -> Result<(), Msg> {
+        let id = self
+            .open_sketch_id()
+            .ok_or_else(|| crate::msg!("state-no-open-sketch"))?;
+        if planora_feature::sketch_source_allowed(&self.document, id, sketch) {
+            Ok(())
+        } else {
+            Err(crate::msg!("sketch-source-sketch-later"))
+        }
+    }
+
+    /// Stelle der offenen Skizze im Verlauf und ihre Ebene (Skizzenkoordinaten).
+    fn open_sketch_place(&self) -> Result<(usize, Frame), Msg> {
+        let no = || crate::msg!("state-no-open-sketch");
+        let id = self.open_sketch_id().ok_or_else(no)?;
+        let idx = self.document.index_of(id).ok_or_else(no)?;
+        let frame = *self.sketch_draft.as_ref().ok_or_else(no)?.sketch.frame();
+        Ok((idx, frame))
+    }
+
+    /// Schneiden mit einer Skizzenkurve (Skizzen 10, Spec 3): je Schnittpunkt mit der Ebene ein
+    /// fester Punkt, alle in einer Gruppe mit der Herkunft `CopySource::SketchCurve` (dieselbe
+    /// Rechnung wie die Neuberechnung). Ein Rückgängig-Schritt.
+    fn try_intersect_curve(&mut self, sketch: FeatureId, curve: CurveId) -> Result<usize, Msg> {
+        self.source_sketch_curve(sketch, curve)?;
+        let (idx, frame) = self.open_sketch_place()?;
+        let points =
+            planora_feature::sketch_curve_points(&self.document, idx, &frame, sketch, curve)
+                .ok_or_else(|| crate::msg!("sketch-intersect-curve-in-plane"))?;
+        if points.is_empty() {
+            return Err(crate::msg!("sketch-intersect-nothing"));
+        }
+        let pieces: Vec<Included> = points.into_iter().map(Included::Point).collect();
+        self.place_included(
+            &pieces,
+            CopySource::SketchCurve { sketch, curve },
+            crate::msg!("undo-sketch-intersect"),
+        )
+    }
+
+    /// Fusion „3D-Geometrie einbeziehen“ (Skizzen 10, Spec 5, A4): holt Kante, Flächenrand,
+    /// Ecke, Ebene, Achse, Ursprung oder eine Kurve einer früheren Skizze als feste 3D-Geometrie
+    /// in Raumlage in die geöffnete Skizze, verknüpft (lila) mit ihrer Herkunft
+    /// (`CopySource::Include`); mehrere Stücke bilden eine Gruppe. Gerechnet wird mit
+    /// [`planora_feature::included_pieces`], also genau wie bei der Neuberechnung. Geht auch ohne
+    /// den Haken „3D-Skizze“. Ein Rückgängig-Schritt; Fehler stehen auch in der Meldung der
+    /// Sitzung, und die Skizze bleibt dann unverändert.
+    pub fn include_into_sketch(&mut self, pick: IncludePick) -> Result<(), String> {
+        let r = self.try_include(pick);
+        self.report_to_session(r).map(|_| ())
+    }
+
+    fn try_include(&mut self, pick: IncludePick) -> Result<usize, Msg> {
+        let r = self.include_ref(pick)?;
+        let (idx, frame) = self.open_sketch_place()?;
+        let pieces = planora_feature::included_pieces(&self.document, idx, &frame, &r)
+            .filter(|p| !p.is_empty())
+            .ok_or_else(|| crate::msg!("sketch-include-failed"))?;
+        self.place_included(
+            &pieces,
+            CopySource::Include(r),
+            crate::msg!("undo-include-3d"),
+        )
+    }
+
+    /// Der dauerhafte Verweis zur Wahl `pick` (Körper vor der offenen Skizze, Ebenen und Skizzen
+    /// davor).
+    fn include_ref(&self, pick: IncludePick) -> Result<planora_feature::IncludeRef, Msg> {
+        use planora_feature::{EdgeRef, FaceRef, IncludeRef, PlaneId, VertexRef};
+        let (idx, _) = self.open_sketch_place()?;
+        let tol = self.kernel.tolerance;
+        let edge_ref = |solid: &Solid, e: Id<Edge>| {
+            EdgeRef::from_edge(solid, e, &tol)
+                .map_err(|err| crate::msg!("state-edge-copy-failed", error = err.to_string()))
+        };
+        Ok(match pick {
+            IncludePick::Edge(b, e) => {
+                IncludeRef::Edge(edge_ref(&self.solid_before_sketch(b)?, e)?)
+            }
+            IncludePick::Face(b, f) => {
+                let solid = self.solid_before_sketch(b)?;
+                IncludeRef::FaceBoundary(
+                    FaceRef::from_face(&solid, f, &tol).map_err(|e| {
+                        crate::msg!("state-face-link-failed", error = e.to_string())
+                    })?,
+                )
+            }
+            IncludePick::Vertex { body, edge, end } => IncludeRef::Vertex(VertexRef {
+                edge: edge_ref(&self.solid_before_sketch(body)?, edge)?,
+                end,
+            }),
+            IncludePick::Plane(p) => {
+                if let PlaneId::Feature(f) = p
+                    && !self.document.index_of(f).is_some_and(|i| i < idx)
+                {
+                    return Err(crate::msg!("sketch-include-plane-later"));
+                }
+                IncludeRef::Plane(p)
+            }
+            IncludePick::Axis(a) => IncludeRef::Axis(a),
+            // Konstruktionspunkte als Features gibt es noch nicht (Platzhalter aus Task 15).
+            IncludePick::ConstructionPoint(_) => {
+                return Err(crate::msg!("sketch-include-construction-point"));
+            }
+            IncludePick::Origin => IncludeRef::Origin,
+            IncludePick::SketchCurve { sketch, curve } => {
+                self.check_source_sketch(sketch)?;
+                IncludeRef::SketchCurve { sketch, curve }
+            }
+        })
+    }
+
+    /// Legt die Stücke `pieces` einer Quelle als feste Geometrie in die Skizze
+    /// ([`SketchSession::include_pieces`]) und hängt je Stück seine Kopie an: dieselbe Herkunft
+    /// `source`, Stückindex in der Reihenfolge der Stücke, Stückzahl der Gruppe. Benennt den
+    /// Schritt mit `label`; liefert die Zahl der Stücke.
+    fn place_included(
+        &mut self,
+        pieces: &[Included],
+        source: CopySource,
+        label: Msg,
+    ) -> Result<usize, Msg> {
+        let (Some(se), Some(draft)) = (self.sketch_session.as_mut(), self.sketch_draft.as_mut())
+        else {
+            return Err(crate::msg!("state-no-open-sketch"));
+        };
+        let targets = match se.include_pieces(&mut draft.sketch, pieces) {
+            Ok(t) => t,
+            Err(e) => return Err(se.message.clone().unwrap_or(Msg::Raw(e))),
+        };
+        let of = u32::try_from(targets.len()).unwrap_or(u32::MAX);
+        for (k, target) in targets.iter().enumerate() {
+            draft.copies.push(EdgeCopy {
+                target: *target,
+                source: source.clone(),
+                piece: u32::try_from(k).unwrap_or(u32::MAX),
+                of,
+            });
+        }
+        se.edit_label = Some(label);
+        Ok(targets.len())
     }
 
     /// Gemeinsamer Abschluss von Projizieren, Schneiden und Silhouette: legt die Kurvenstücke

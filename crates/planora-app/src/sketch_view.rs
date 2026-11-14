@@ -2203,10 +2203,13 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
 
     // Projizieren: Kante oder Fläche in der 3D-Szene wählen; mit dem Filter „Körper“ zählt der
     // Körper unter dem Zeiger (die Markierung zeigt, was der Zeiger trifft). Schneiden und
-    // Silhouette wählen nur Flächen (Schneiden mit „Körper“ den ganzen Körper).
+    // Silhouette wählen nur Flächen (Schneiden mit „Körper“ den ganzen Körper). Einbeziehen
+    // (Skizzen 10) wählt dazu Ecken und Ebenen.
     let faces_only = matches!(kind, ToolKind::Intersect | ToolKind::Silhouette);
     let pick_at = |state: &AppState, p: Pos2| {
-        if faces_only {
+        if kind == ToolKind::Include3d {
+            state.pick_with(map.local(p), map.viewport(), PickFilter::INCLUDE)
+        } else if faces_only {
             state
                 .pick_face_under(map.local(p), map.viewport())
                 .map(Pick::Face)
@@ -2227,7 +2230,31 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
         // Fehler (etwa ein Körper, der erst nach der Skizze entsteht) stehen in der Meldung der
         // Sitzung.
         let picked = pick_at(state, p);
-        let target = picked.and_then(|pick| project_target(pick, settings.filter));
+        if kind == ToolKind::Include3d {
+            match include_pick(state, &map, p, picked) {
+                Some(pick) => {
+                    let _ = state.include_into_sketch(pick);
+                }
+                None => {
+                    if let Some(se) = state.sketch_session.as_mut() {
+                        se.message = Some(crate::msg!("sketch-pick-include-3d"));
+                    }
+                }
+            }
+            return;
+        }
+        // Projizieren und Schneiden nehmen auch Kurven fertiger Skizzen (Skizzen 10, Spec 3);
+        // Kanten und Ecken eines Körpers gehen vor.
+        let curve = match (kind, picked) {
+            (ToolKind::Project | ToolKind::Intersect, None | Some(Pick::Face(_))) => {
+                sketch_curve_under(state, &map, p)
+            }
+            _ => None,
+        };
+        let target = match curve {
+            Some((sketch, c)) => Some(ProjectTarget::SketchCurve(sketch, c)),
+            None => picked.and_then(|pick| project_target(pick, settings.filter)),
+        };
         match (kind, picked, target) {
             (ToolKind::Intersect, _, Some(t)) => {
                 let _ = state.intersect_into_sketch(t);
@@ -2250,6 +2277,119 @@ fn handle_input(ui: &egui::Ui, response: &egui::Response, rect: Rect, state: &mu
             }
         }
     }
+}
+
+/// Was ein Klick mit „3D-Geometrie einbeziehen“ (Skizzen 10, Spec 5) holt: zuerst Ecke oder Kante
+/// eines Körpers (`picked`), dann eine Kurve einer fertigen Skizze davor, der Ursprung und die
+/// Achsen des Ursprungs (über den Bildschirmabstand), dann Fläche oder Konstruktionsebene, zuletzt
+/// eine eingeblendete Grundebene.
+fn include_pick(
+    state: &AppState,
+    map: &Mapper,
+    p: Pos2,
+    picked: Option<Pick>,
+) -> Option<crate::state::IncludePick> {
+    use crate::state::IncludePick;
+    use planora_feature::{AxisId, PlaneId};
+    match picked {
+        Some(Pick::Vertex { body, edge, end }) => {
+            return Some(IncludePick::Vertex { body, edge, end });
+        }
+        Some(Pick::Edge(EdgeRef { body, edge })) => return Some(IncludePick::Edge(body, edge)),
+        _ => {}
+    }
+    if let Some((sketch, curve)) = sketch_curve_under(state, map, p) {
+        return Some(IncludePick::SketchCurve { sketch, curve });
+    }
+    let world = |q: DVec3| map.to_screen3(map.frame.to_local(q));
+    if world(DVec3::ZERO).is_some_and(|s| s.distance(p) <= PICK_RADIUS_PX) {
+        return Some(IncludePick::Origin);
+    }
+    // Die Achsen so lang, wie das Einbeziehen sie anlegt.
+    let solids: Vec<&planora_kernel::Solid> = state.bodies.iter().map(|b| &b.solid).collect();
+    let h = planora_feature::include_plane_half(&solids);
+    for (axis, dir) in [
+        (AxisId::X, DVec3::X),
+        (AxisId::Y, DVec3::Y),
+        (AxisId::Z, DVec3::Z),
+    ] {
+        if let (Some(a), Some(b)) = (world(-dir * h), world(dir * h))
+            && dist_to_segment(p, a, b) <= PICK_RADIUS_PX / 2.0
+        {
+            return Some(IncludePick::Axis(axis));
+        }
+    }
+    match picked {
+        Some(Pick::Face(FaceRef { body, face })) => return Some(IncludePick::Face(body, face)),
+        Some(Pick::Plane(id)) => return Some(IncludePick::Plane(PlaneId::Feature(id))),
+        _ => {}
+    }
+    let (l, vp) = (map.local(p), map.viewport());
+    let ndc = Vec2::new(2.0 * l.x / vp.x - 1.0, 1.0 - 2.0 * l.y / vp.y);
+    let (origin, dir) = map.camera.ray(ndc);
+    let ray = planora_render::Ray {
+        origin: to_dvec3(origin),
+        dir: to_dvec3(dir),
+    };
+    state
+        .origin_plane_rects()
+        .into_iter()
+        .filter_map(|(plane, rect)| planora_render::pick_plane(&ray, &rect).map(|t| (plane, t)))
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(plane, _)| IncludePick::Plane(PlaneId::Standard(plane)))
+}
+
+/// Die Kurve einer fertigen, eingeblendeten Skizze vor der offenen (Spec 10) unter dem Zeiger
+/// `p`, über den Bildschirmabstand zur Kurve in Raumlage; die nächste gewinnt.
+pub fn sketch_curve_under(state: &AppState, map: &Mapper, p: Pos2) -> Option<(FeatureId, CurveId)> {
+    /// Stützstellen je Kurve für den Abstand.
+    const SAMPLES: usize = 48;
+    let open = state.open_sketch_id()?;
+    let mut best: Option<(f32, FeatureId, CurveId)> = None;
+    for f in state.document.features() {
+        if !planora_feature::sketch_source_allowed(&state.document, open, f.id)
+            || state.is_feature_hidden(f.id)
+        {
+            continue;
+        }
+        let Some(sk) = state.document.sketch_of(f.id) else {
+            continue;
+        };
+        for (c, _) in sk.curves() {
+            if sk.is_handle_curve(c) {
+                continue;
+            }
+            let Some((curve, t0, t1)) = sk.curve_world(c) else {
+                continue;
+            };
+            let screen: Vec<Pos2> = (0..=SAMPLES)
+                .filter_map(|i| {
+                    let t = t0 + (t1 - t0) * i as f64 / SAMPLES as f64;
+                    map.to_screen3(map.frame.to_local(curve.point(t)))
+                })
+                .collect();
+            let d = screen
+                .windows(2)
+                .map(|w| dist_to_segment(p, w[0], w[1]))
+                .fold(f32::INFINITY, f32::min);
+            if d <= PICK_RADIUS_PX && best.is_none_or(|(e, ..)| d < e) {
+                best = Some((d, f.id, c));
+            }
+        }
+    }
+    best.map(|(_, s, c)| (s, c))
+}
+
+/// Bildschirmabstand des Punkts `p` von der Strecke `a`–`b`.
+fn dist_to_segment(p: Pos2, a: Pos2, b: Pos2) -> f32 {
+    let ab = b - a;
+    let len2 = ab.length_sq();
+    let t = if len2 > 0.0 {
+        ((p - a).dot(ab) / len2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    p.distance(a + ab * t)
 }
 
 /// Was ein Klick mit „Projizieren“ auf `pick` projiziert: mit „Angegebene Elemente“ die Kante
@@ -2288,10 +2428,12 @@ struct Projected {
 impl Projected {
     fn of(draft: &SketchFeature) -> Projected {
         let curves: HashSet<CurveId> = draft.copies.iter().filter_map(|c| c.curve()).collect();
+        // Dazu eingezogene Punkte (Ecken, Ursprung, Schnittpunkte; Skizzen 10).
         let points = curves
             .iter()
             .filter_map(|c| draft.sketch.curve(*c))
             .flat_map(|d| d.kind.points())
+            .chain(draft.copies.iter().filter_map(|c| c.point()))
             .collect();
         Projected { curves, points }
     }

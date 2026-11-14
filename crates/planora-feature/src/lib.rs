@@ -49,7 +49,7 @@ pub use georef::{
     from_edge_ref, from_face_ref, geo_ref_for_edge, geo_ref_for_edge_cached, geo_ref_for_face,
     geo_ref_for_face_cached, resolve_geo, resolve_geo_cached, to_edge_ref, to_face_ref,
 };
-pub use include::included_pieces;
+pub use include::{included_pieces, sketch_curve_points};
 pub use meshes::VisibleMesh;
 pub use model::{
     AxisId, BlendArt, BodyRef, CopySource, CopyTarget, Document, EdgeCopy, Feature, FeatureId,

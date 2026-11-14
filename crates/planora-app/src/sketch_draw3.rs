@@ -34,13 +34,24 @@ use egui::Pos2;
 use glam::Vec2;
 use planora_math::{DVec2, DVec3};
 use planora_sketch::constraint::{ConstraintKind, LineOrPoints};
-use planora_sketch::helpers::RectIds;
+use planora_sketch::helpers::{Included, RectIds};
 use planora_sketch::model::{CurveId, CurveKind, MAX_SPLINE_POINTS, PointId, Sketch};
 use planora_sketch::shapes::{
     self, ArcPlan, ArcSlotIds, PolygonIds, ShapePlan, SlotIds, SlotStyle,
 };
 use planora_sketch::{conic_apex_ok, conic_nurbs, tangent_circles};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+/// Eine Körperecke, an der das Zeichnen in 3D fängt (A7, Task 16): Lage in Skizzenkoordinaten,
+/// Körper (Index in [`crate::state::AppState::bodies`]) und die Kante, deren Anfang (`end ==
+/// false`) oder Ende sie ist. Die App setzt die Liste beim Öffnen der Skizze.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BodyVertex {
+    pub at: DVec3,
+    pub body: usize,
+    pub edge: planora_kernel::Id<planora_kernel::Edge>,
+    pub end: bool,
+}
 
 /// Toleranz, unter der eine Achse der Triade als Achse der Skizze gilt (Triade unverdreht oder um
 /// Vielfache von 90° gedreht).
@@ -66,6 +77,9 @@ pub struct Cursor3 {
     /// Kurve unter dem Zeiger, solange die Art Kurven wählt (Kreis „2 Tangenten“, „3 Tangenten“,
     /// Task H).
     pub curve: Option<CurveId>,
+    /// Fang an einer Körperecke (A7, Task 16; Index in [`SketchSession::body_vertices`]): Ein neuer
+    /// Punkt dort bekommt einen eingezogenen, verknüpften Punkt mit „Deckungsgleich“.
+    pub vertex: Option<usize>,
     /// Bildpunkt im Viewport, aus dem die Lage stammt (ohne Zeiger bleibt die Vorschau dort).
     pub pixel: Vec2,
 }
@@ -81,6 +95,7 @@ impl Cursor3 {
             origin: false,
             mid: None,
             curve: None,
+            vertex: None,
             pixel: Vec2::ZERO,
         }
     }
@@ -176,6 +191,7 @@ impl SketchSession {
             origin: false,
             mid: None,
             curve: None,
+            vertex: None,
             pixel,
         };
         let at = Pos2::new(pixel.x + map.rect.left(), pixel.y + map.rect.top());
@@ -192,6 +208,7 @@ impl SketchSession {
                 cur.snap = None;
                 cur.origin = false;
                 cur.mid = None;
+                cur.vertex = None;
             }
             cur.at = locked;
             if self
@@ -209,11 +226,9 @@ impl SketchSession {
     /// Fang beim Zeichnen in 3D über den Bildschirmabstand (Spec 4, A7): zuerst der nächste
     /// vorhandene Punkt (ohne die Punkte der Buchstaben eines Textes) und der Skizzenursprung, dann
     /// die nächste Mitte einer Linie oder eines Bogens (2D wie 3D, ohne Buchstaben und Griffe),
-    /// jeweils an ihrer Lage im Raum. Körperecken fangen erst mit dem Einbeziehen (Task 16).
+    /// jeweils an ihrer Lage im Raum. Nach dem Ursprung fangen Körperecken (A7, Task 16): Ein
+    /// neuer Punkt dort bekommt einen eingezogenen, verknüpften Punkt ([`bind_new3`]).
     fn snap3(&self, sk: &Sketch, map: &Mapper, at: Pos2, cur: &mut Cursor3) {
-        // TODO(Skizzen 10, Task 16): Fang an Körperecken legt einen eingezogenen Punkt an
-        // (`add_included` mit der Herkunft `CopySource::Include`) und bindet ihn mit
-        // „Deckungsgleich“ (A7); die Herkunft im Dokument kommt erst mit Task 15.
         let glyph_points = sk.glyph_points();
         let near = sk
             .points()
@@ -239,6 +254,21 @@ impl SketchSession {
             cur.axis = None;
             return;
         }
+        let corner = self
+            .body_vertices
+            .iter()
+            .enumerate()
+            .filter_map(|(i, v)| {
+                let d = map.to_screen3(v.at)?.distance(at);
+                (d <= PICK_RADIUS_PX).then_some((d, i, v.at))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        if let Some((_, i, q)) = corner {
+            cur.at = q;
+            cur.vertex = Some(i);
+            cur.axis = None;
+            return;
+        }
         let glyph_curves = sk.glyph_curves();
         let mid = sk
             .curves()
@@ -260,6 +290,55 @@ impl SketchSession {
     /// Blick setzt er nichts, und die Meldung bittet, die Ansicht zu drehen oder die Ebene zu
     /// wechseln. Atomar; ein Befehl ohne fertige Form hinterlässt bei Esc nichts.
     pub fn click3(&mut self, sk: &mut Sketch) -> Result<(), String> {
+        // Nur mit Körperecken zum Fangen lohnt der Blick auf die neuen Punkte.
+        let before: Option<HashSet<PointId>> =
+            (!self.body_vertices.is_empty()).then(|| sk.points().map(|(p, _)| p).collect());
+        let r = self.click3_inner(sk);
+        if r.is_ok()
+            && let Some(before) = before
+        {
+            self.note_vertex_includes(sk, &before);
+        }
+        r
+    }
+
+    /// Merkt sich die eingezogenen Eckpunkte, die der letzte Klick angelegt hat (A7): neue feste
+    /// Punkte ohne Kurve, „Deckungsgleich“ mit einem anderen Punkt, an einer Körperecke. Die
+    /// Verknüpfung im Dokument hängt [`crate::state::AppState::observe_sketch`] an, sobald der
+    /// Befehl ein Schritt wird.
+    pub(crate) fn note_vertex_includes(&mut self, sk: &Sketch, before: &HashSet<PointId>) {
+        let tol = sk.tolerance().linear;
+        let fresh: Vec<PointId> = sk
+            .points()
+            .map(|(p, _)| p)
+            .filter(|p| !before.contains(p) && !self.included_vertices.iter().any(|(q, _)| q == p))
+            .collect();
+        for q in fresh {
+            let pinned = sk
+                .constraints()
+                .any(|(_, c)| c.kind.fixed_point() == Some(q));
+            let bound = sk.constraints().any(
+                |(_, c)| matches!(c.kind, ConstraintKind::Coincident(a, b) if a == q || b == q),
+            );
+            let on_curve = sk.curves().any(|(_, c)| c.kind.points().contains(&q));
+            if !pinned || !bound || on_curve {
+                continue;
+            }
+            let Ok(at) = sk.point_xyz(q) else {
+                continue;
+            };
+            if let Some(i) = self
+                .body_vertices
+                .iter()
+                .position(|v| v.at.distance(at) <= tol)
+            {
+                self.included_vertices.push((q, i));
+            }
+        }
+    }
+
+    /// Der Klick in 3D ohne das Merken der Eckpunkte ([`click3`](Self::click3)).
+    fn click3_inner(&mut self, sk: &mut Sketch) -> Result<(), String> {
         self.created = None;
         let Some(cur) = self.cursor3 else {
             let e = crate::msg!("sketch-3d-grazing");
@@ -379,7 +458,7 @@ impl SketchSession {
             sk.add_point3(cur.at)
         }
         .map_err(err)?;
-        bind_new3(sk, p, cur.origin, cur.mid)?;
+        bind_new3(sk, p, cur.origin, cur.mid, cur.vertex.is_some())?;
         Ok(p)
     }
 
@@ -447,6 +526,9 @@ pub struct Hit3 {
     /// Fang auf die Mitte einer Linie oder eines Bogens: Ein neuer eigener Punkt wird dort
     /// gebunden.
     pub mid: Option<CurveId>,
+    /// Fang an einer Körperecke (A7): Ein neuer eigener Punkt bekommt dort einen eingezogenen
+    /// Punkt mit „Deckungsgleich“.
+    pub vertex: bool,
 }
 
 /// Die Ebene einer ebenen Form als 2D-Basis in Skizzenkoordinaten: Ursprung und zwei Achsen,
@@ -818,6 +900,7 @@ fn plane_hit(sk: &Sketch, plane: &Plane3, cur: &Cursor3) -> Hit3 {
             .filter(|&q| sk.point_xyz(q).is_ok_and(|p| p.distance(at) <= tol)),
         origin: cur.origin && at.length() <= tol,
         mid: cur.mid.filter(|_| cur.at.distance(at) <= tol),
+        vertex: cur.vertex.is_some() && cur.at.distance(at) <= tol,
     }
 }
 
@@ -851,19 +934,31 @@ fn own_point(sk: &mut Sketch, plane: &Plane3, hit: &Hit3) -> Result<PointId, Msg
         return Ok(q);
     }
     let p = new_point(sk, plane, hit.at)?;
-    bind_new3(sk, p, hit.origin, hit.mid)?;
+    bind_new3(sk, p, hit.origin, hit.mid, hit.vertex)?;
     Ok(p)
 }
 
 /// Bindet den neuen Punkt `p` an seinen Fang in 3D: am Ursprung `Fixed` (2D-Punkt) bzw.
 /// `Fixed3` (3D-Punkt), an der Mitte einer Linie `Midpoint`, eines Bogens `PointOnCurve` (es gibt
-/// `Midpoint` nur für Linien, wie beim 2D-Fang).
+/// `Midpoint` nur für Linien, wie beim 2D-Fang). An einer Körperecke (`vertex`, A7) entsteht dort
+/// ein eingezogener fester Punkt ([`Sketch::add_included`]) mit „Deckungsgleich“ zu `p`; seine
+/// Verknüpfung merkt sich die Sitzung nach dem Klick
+/// ([`SketchSession::note_vertex_includes`]).
 pub(crate) fn bind_new3(
     sk: &mut Sketch,
     p: PointId,
     origin: bool,
     mid: Option<CurveId>,
+    vertex: bool,
 ) -> Result<(), Msg> {
+    if vertex {
+        let at = sk.point_xyz(p).map_err(err)?;
+        let ids = sk.add_included(&Included::Point(at)).map_err(err)?;
+        if let Some(&q) = ids.points.first() {
+            sk.add_constraint(ConstraintKind::Coincident(p, q))
+                .map_err(err)?;
+        }
+    }
     if origin {
         let pin = if sk.is_3d_point(p) {
             ConstraintKind::Fixed3(p, 0.0, 0.0, 0.0)
@@ -1601,7 +1696,7 @@ fn transplant(
                 let id = new_point(sk, plane, plane.to3(q))?;
                 if let Some(i) = hit {
                     used[i] = true;
-                    bind_new3(sk, id, binds[i].origin, binds[i].mid)?;
+                    bind_new3(sk, id, binds[i].origin, binds[i].mid, binds[i].vertex)?;
                 }
                 id
             }

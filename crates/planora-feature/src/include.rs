@@ -65,6 +65,37 @@ pub fn included_pieces(
     include_ref_pieces(&ctx, r).map(|(_, g)| g)
 }
 
+/// Die Schnittpunkte der Kurve `curve` der Skizze `sketch` mit der Ebene `frame` einer Skizze an
+/// der Stelle `at` des Verlaufs, als Punkte in Skizzenkoordinaten und in der Reihenfolge der
+/// Stücke: Grundlage für „Schneiden“ mit einer Skizzenkurve (Task 16), dieselbe Rechnung wie die
+/// Neuberechnung (`CopySource::SketchCurve` mit Punkten als Zielen). `None`, wenn die Quelle
+/// nicht vor `at` steht, die Kurve fehlt oder in der Ebene liegt.
+pub fn sketch_curve_points(
+    doc: &Document,
+    at: usize,
+    frame: &Frame,
+    sketch: crate::FeatureId,
+    curve: planora_sketch::model::CurveId,
+) -> Option<Vec<DVec3>> {
+    let at = at.min(doc.features.len());
+    let tol = doc.kernel.tolerance;
+    let ctx = IncludeCtx {
+        doc,
+        idx: at,
+        solids: &[],
+        frame,
+        tol: &tol,
+    };
+    let (_, pieces) = source_pieces(&ctx, &CopySource::SketchCurve { sketch, curve }, true)?;
+    pieces
+        .into_iter()
+        .map(|p| match p {
+            Piece::Include(Included::Point(q)) => Some(q),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Rechnet die Stücke der Herkunft `source` neu (nur die Arten aus Skizzen 10) und liefert die
 /// Herkunft mit nachgeführten Hinweispunkten. `points` heißt: Die Ziele der Gruppe sind Punkte
 /// (bei einer Skizzenkurve als Quelle: Schneiden statt Projizieren). `None` bei verlorenem

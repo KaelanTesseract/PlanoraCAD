@@ -699,7 +699,8 @@ fn the_create_menu_lists_all_kinds_while_a_sketch_is_open() {
     }
     // Skizzen 6: „Projizieren/Einschließen“ mit „Projizieren“ (19 → 20); Task 10 bewusst
     // angepasst: dazu „Schneiden“ und „Silhouette“ (→ 22). Skizzen 7: die beiden Splines (→ 24).
-    assert_eq!(count, 24);
+    // Skizzen 10, Task 16 bewusst angepasst: „3D-Geometrie einbeziehen“ (→ 25).
+    assert_eq!(count, 25);
 }
 
 /// Hat die Schrift in ihrer Zeichentabelle einen Eintrag für `c`? (Wie in tests/icons.rs.)

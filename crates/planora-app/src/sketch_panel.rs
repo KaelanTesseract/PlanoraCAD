@@ -1186,7 +1186,8 @@ fn rho_field_row(ui: &mut egui::Ui, se: &mut SketchSession, sk: &mut Sketch, c: 
 fn project_options(ui: &mut egui::Ui, se: &mut SketchSession) {
     use crate::sketch_kinds::ToolKind;
     use crate::sketch_state::ProjectFilter;
-    if se.kinds.project == ToolKind::Silhouette {
+    // Silhouette und Einbeziehen haben keine Einstellungen (Einbeziehen ist immer verknüpft).
+    if matches!(se.kinds.project, ToolKind::Silhouette | ToolKind::Include3d) {
         return;
     }
     ui.label(tr!("sketch-project-filter"));

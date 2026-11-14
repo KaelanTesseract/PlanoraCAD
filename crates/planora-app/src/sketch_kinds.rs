@@ -72,6 +72,10 @@ pub enum ToolKind {
     /// Fusion „Silhouette“ (Skizzen 6): Umriss einer Fläche in Blickrichtung der Skizzenebene,
     /// über [`crate::state::AppState::silhouette_into_sketch`].
     Silhouette,
+    /// Fusion „3D-Geometrie einbeziehen“ (Skizzen 10, Spec 5): Kanten, Flächen, Ecken,
+    /// Konstruktionsgeometrie und Kurven früherer Skizzen als verknüpfte 3D-Geometrie, über
+    /// [`crate::state::AppState::include_into_sketch`].
+    Include3d,
     /// Fusion „Spline durch Stützpunkte“ (Skizzen 7): der bisherige Spline, über `click_spline`.
     SplineFit,
     /// Fusion „Spline mit Kontrollpunkten“ (Skizzen 7): dieselben Klicks, Grad aus
@@ -112,6 +116,7 @@ impl ToolKind {
         ToolKind::Project,
         ToolKind::Intersect,
         ToolKind::Silhouette,
+        ToolKind::Include3d,
         ToolKind::SplineFit,
         ToolKind::SplineControl,
         ToolKind::Conic,
@@ -129,7 +134,7 @@ impl ToolKind {
             | SlotCenterPointArc => Tool::Slot,
             Fillet | ChamferEqual | ChamferDistanceAngle | ChamferTwoDistances => Tool::Fillet,
             PatternRect | PatternCircular => Tool::Pattern,
-            Project | Intersect | Silhouette => Tool::ProjectEdge,
+            Project | Intersect | Silhouette | Include3d => Tool::ProjectEdge,
             SplineFit | SplineControl | Conic => Tool::Spline,
         }
     }
@@ -145,8 +150,8 @@ impl ToolKind {
             Tool::Slot => &all[14..19],
             Tool::Fillet => &all[19..23],
             Tool::Pattern => &all[23..25],
-            Tool::ProjectEdge => &all[25..28],
-            Tool::Spline => &all[28..31],
+            Tool::ProjectEdge => &all[25..29],
+            Tool::Spline => &all[29..32],
             _ => &[],
         }
     }
@@ -199,7 +204,7 @@ impl ToolKind {
             ChamferTwoDistances => &[&[], &[], &[F::Distance, F::Distance2]],
             // Die Muster haben ihren eigenen Ablauf (`sketch_pattern::pattern_fields`).
             PatternRect | PatternCircular => &[&[]],
-            Project | Intersect | Silhouette => &[&[]],
+            Project | Intersect | Silhouette | Include3d => &[&[]],
             // Die Klicks sammelt `click_spline`, Eingabe oder Doppelklick schließt ab.
             SplineFit | SplineControl => &[&[]],
             Conic => &[&[], &[], &[], &[F::Rho]],
@@ -243,6 +248,7 @@ impl ToolKind {
             Project => tr!("sketch-tool-project-edge-hint"),
             Intersect => tr!("sketch-kind-intersect-hint"),
             Silhouette => tr!("sketch-kind-silhouette-hint"),
+            Include3d => tr!("sketch-kind-include-3d-hint"),
             SplineFit => tr!("sketch-kind-spline-fit-hint"),
             SplineControl => tr!("sketch-kind-spline-control-hint"),
             Conic => tr!("sketch-kind-conic-hint"),
@@ -281,6 +287,7 @@ impl ToolKind {
             Project => Action::SketchProjectEdge,
             Intersect => Action::SketchIntersect,
             Silhouette => Action::SketchSilhouette,
+            Include3d => Action::SketchInclude3d,
             SplineFit => Action::SketchSplineFit,
             SplineControl => Action::SketchSplineControl,
             Conic => Action::SketchConic,
@@ -316,6 +323,7 @@ impl ToolKind {
             Project => crate::msg!("sketch-pick-project"),
             Intersect => crate::msg!("sketch-pick-intersect"),
             Silhouette => crate::msg!("sketch-pick-silhouette"),
+            Include3d => crate::msg!("sketch-pick-include-3d"),
             SplineFit | SplineControl => crate::msg!("sketch-spline-min"),
             Conic => crate::msg!("sketch-err-conic-apex"),
         }
@@ -354,7 +362,7 @@ pub struct ToolKinds {
     pub fillet: ToolKind,
     /// Rechteckige oder Kreisförmige Anordnung (Skizzen 5).
     pub pattern: ToolKind,
-    /// Projizieren, Schneiden oder Silhouette (Skizzen 6).
+    /// Projizieren, Schneiden, Silhouette (Skizzen 6) oder 3D-Geometrie einbeziehen (Skizzen 10).
     pub project: ToolKind,
     /// Art am Spline-Knopf: durch Stützpunkte, mit Kontrollpunkten oder Kegelschnitt (Skizzen 7).
     pub spline: ToolKind,

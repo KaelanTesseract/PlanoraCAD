@@ -651,7 +651,12 @@ fn esc_leaves_nothing() {
 #[test]
 fn esc_ends_project_intersect_and_silhouette() {
     let mut s = box_with_sketch_on_top();
-    for kind in [ToolKind::Project, ToolKind::Intersect, ToolKind::Silhouette] {
+    for kind in [
+        ToolKind::Project,
+        ToolKind::Intersect,
+        ToolKind::Silhouette,
+        ToolKind::Include3d,
+    ] {
         let steps = undo_len(&s);
         {
             let (se, sk) = s.session_sketch_mut().unwrap();
@@ -780,7 +785,13 @@ fn strip_still_fits_1080() {
     assert!(sketch_panel::has_flyout(Tool::ProjectEdge));
     assert_eq!(
         ToolKind::of(Tool::ProjectEdge),
-        &[ToolKind::Project, ToolKind::Intersect, ToolKind::Silhouette]
+        // Skizzen 10, Task 16: bewusst angepasst, „3D-Geometrie einbeziehen“ steht dahinter.
+        &[
+            ToolKind::Project,
+            ToolKind::Intersect,
+            ToolKind::Silhouette,
+            ToolKind::Include3d
+        ]
     );
     assert_eq!(
         sketch_panel::tool_label(Tool::ProjectEdge),

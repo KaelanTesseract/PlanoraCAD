@@ -546,6 +546,14 @@ pub struct SketchSession {
     /// Zeiger beim Zeichnen in 3D (Skizzen 10, [`crate::sketch_draw3`]); `None` außerhalb des
     /// 3D-Wegs und bei streifendem Blick auf die Ebene der Triade.
     pub cursor3: Option<crate::sketch_draw3::Cursor3>,
+    /// Körperecken vor der Skizze, an denen das Zeichnen in 3D fängt (A7, Task 16); setzt die App
+    /// beim Öffnen der Skizze.
+    pub body_vertices: Vec<crate::sketch_draw3::BodyVertex>,
+    /// Beim Fang an einer Körperecke eingezogene Punkte (Punkt, Index in
+    /// [`body_vertices`](Self::body_vertices)), deren Verknüpfung noch nicht im Entwurf steht: Sie
+    /// kommt dazu, sobald der Befehl ein Rückgängig-Schritt wird
+    /// ([`crate::state::AppState::observe_sketch`]).
+    pub included_vertices: Vec<(PointId, usize)>,
     /// Zeichnet das Werkzeug in diesem Bild in 3D ([`SketchSession::draws_in_3d`], je Bild
     /// gesetzt)? Danach richten sich die Felder am Zeiger.
     pub draw3: bool,
@@ -731,6 +739,8 @@ impl SketchSession {
             triad: Default::default(),
             triad_ui: Default::default(),
             cursor3: None,
+            body_vertices: Vec::new(),
+            included_vertices: Vec::new(),
             draw3: false,
             lock_from: None,
             pending3: Vec::new(),
@@ -854,7 +864,19 @@ impl SketchSession {
                     let _ = sk.remove_point(p);
                 }
             }
+            // Ein eingezogener Eckpunkt (A7), dessen offener Punkt eben wegfiel, fällt mit.
+            for &(q, _) in &self.included_vertices {
+                let new = open.before.point_xy(q).is_err() && sk.point_xy(q).is_ok();
+                let held = sk
+                    .constraints()
+                    .any(|(_, c)| c.kind.fixed_point() != Some(q) && c.kind.points().contains(&q));
+                if new && !held && !sk.curves().any(|(_, c)| c.kind.points().contains(&q)) {
+                    let _ = sk.remove_point(q);
+                }
+            }
         }
+        self.included_vertices
+            .retain(|&(q, _)| sk.point_xy(q).is_ok());
         self.last_report = Some(sk.clone().solve());
         self.forget_removed(sk);
     }
@@ -925,6 +947,7 @@ impl SketchSession {
     /// selbst (und sein Stand) unverändert bleibt. Werkzeug und Mauszeiger bleiben.
     pub fn after_history_jump(&mut self, sk: &Sketch) {
         self.clear_pending();
+        self.included_vertices.clear();
         self.draw_cursor = None;
         self.selection.clear();
         self.drop_curve_picks();

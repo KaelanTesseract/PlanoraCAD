@@ -342,7 +342,13 @@ fn intersect_is_one_undo_step() {
 fn flyout_has_intersect_and_silhouette_without_keys() {
     assert_eq!(
         ToolKind::of(Tool::ProjectEdge),
-        &[ToolKind::Project, ToolKind::Intersect, ToolKind::Silhouette]
+        // Skizzen 10, Task 16: bewusst angepasst, „3D-Geometrie einbeziehen“ steht dahinter.
+        &[
+            ToolKind::Project,
+            ToolKind::Intersect,
+            ToolKind::Silhouette,
+            ToolKind::Include3d
+        ]
     );
     assert_eq!(STRIP_TOOLS, 20);
     assert_eq!(sketch_panel::TOOL_ORDER.len(), 20);

@@ -1067,6 +1067,9 @@ pub enum HandIcon {
     SketchIntersect,
     /// Silhouette (Skizzen 6): eine Kugel mit dünnem Äquator, ihr Umriss kräftig.
     SketchSilhouette,
+    /// 3D-Geometrie einbeziehen (Skizzen 10): ein Würfel dünn, eine Kante kräftig mit ihren
+    /// Enden als Punkte (sie kommt in die Skizze).
+    SketchInclude3d,
     /// Spline mit Kontrollpunkten (Skizzen 7): die Kurve kräftig, ihr Kontrollpolygon dünn, die
     /// Kontrollpunkte als Punkte.
     SketchSplineControl,
@@ -1110,6 +1113,7 @@ pub const HAND_DRAWN: &[HandIcon] = &[
     HandIcon::SketchDimension,
     HandIcon::SketchIntersect,
     HandIcon::SketchSilhouette,
+    HandIcon::SketchInclude3d,
     HandIcon::SketchSplineControl,
     HandIcon::SketchConic,
     HandIcon::Text,
@@ -1433,6 +1437,28 @@ pub fn paint_hand_icon(painter: &Painter, rect: Rect, icon: HandIcon, color: Col
             ));
             painter.circle_stroke(c, r, stroke);
         }
+        HandIcon::SketchInclude3d => {
+            // Würfel schräg: Vorder- und Rückseite dünn, verbunden; die obere Vorderkante kräftig.
+            let thin = Stroke::new(1.0, color);
+            let (s, o) = (r * 0.65, vec2(r * 0.35, -r * 0.35));
+            let front = [
+                c + vec2(-s, -s) - o * 0.5,
+                c + vec2(s, -s) - o * 0.5,
+                c + vec2(s, s) - o * 0.5,
+                c + vec2(-s, s) - o * 0.5,
+            ];
+            for k in 0..4 {
+                let (a, b) = (front[k], front[(k + 1) % 4]);
+                seg(painter, [a + o, b + o], thin);
+                seg(painter, [a, a + o], thin);
+                if k != 0 {
+                    seg(painter, [a, b], thin);
+                }
+            }
+            seg(painter, [front[0], front[1]], stroke);
+            painter.circle_filled(front[0], 1.6, color);
+            painter.circle_filled(front[1], 1.6, color);
+        }
         HandIcon::SketchSplineControl => {
             // Bézier-Stück über vier Kontrollpunkte, dünn verbunden.
             let thin = Stroke::new(1.0, color);
@@ -1653,6 +1679,7 @@ pub fn sketch_kind_icon(kind: crate::sketch_kinds::ToolKind) -> IconSource {
         K::PatternCircular => IconSource::Hand(HandIcon::PatternCircular),
         K::Intersect => IconSource::Hand(HandIcon::SketchIntersect),
         K::Silhouette => IconSource::Hand(HandIcon::SketchSilhouette),
+        K::Include3d => IconSource::Hand(HandIcon::SketchInclude3d),
         K::SplineControl => IconSource::Hand(HandIcon::SketchSplineControl),
         K::Conic => IconSource::Hand(HandIcon::SketchConic),
         _ => sketch_tool_icon(kind.tool()),

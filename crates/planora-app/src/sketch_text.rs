@@ -1044,6 +1044,8 @@ impl SketchSession {
             snap: cur.snap.filter(|_| on),
             origin: cur.origin && on,
             mid: cur.mid.filter(|_| on),
+            // Der Rahmen entsteht erst mit OK; an einer Körperecke fängt er nur die Lage.
+            vertex: false,
         });
         if t.corners.len() == 2 {
             t.focus_content = true;
@@ -1224,7 +1226,7 @@ fn bind_corners3(sk: &mut Sketch, own: &[PointId], hits: &[Hit3]) -> Result<(), 
                     .map_err(err)?;
             }
             Some(_) => {}
-            None => bind_new3(sk, p, hit.origin, hit.mid)?,
+            None => bind_new3(sk, p, hit.origin, hit.mid, hit.vertex)?,
         }
     }
     Ok(())
