@@ -2953,6 +2953,10 @@ dependencies = [
 [[package]]
 name = "planora-setup"
 version = "0.0.2-dev.1"
+dependencies = [
+ "embed-resource",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "planora-sketch"

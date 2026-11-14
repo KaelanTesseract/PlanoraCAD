@@ -12,3 +12,15 @@ path = "src/main.rs"
 
 [lints]
 workspace = true
+
+# Roh-Kommandozeile (GetCommandLineW, Environment), Start des Motors mit Prozessgriff
+# (ShellExecuteExW, Shell), Warten und Exit-Code (WaitForSingleObject/GetExitCodeProcess,
+# Threading), Griffe und Fehlercodes (Foundation), Fensterart beim Start (SW_SHOWNORMAL,
+# WindowsAndMessaging) und HKEY im Feld hkeyClass von SHELLEXECUTEINFOW (Registry; ohne das
+# Feature fehlt die Struktur). Gleiche Version wie in planora-app; windows-sys ist ohnehin im Baum.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_System_Environment", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+
+[build-dependencies]
+# Programmsymbol und Manifest in die .exe einbetten (nur Windows, siehe build.rs).
+embed-resource = "3"
