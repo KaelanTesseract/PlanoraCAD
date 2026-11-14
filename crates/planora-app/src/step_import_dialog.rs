@@ -952,11 +952,14 @@ impl StepImportDialog {
         let chooser = RefCell::new(&mut self.chooser);
         let (mut body_action, mut footer_action) = (ChooserAction::None, ChooserAction::None);
         let response = Dialog::new(title(), DialogSize::File)
+            .dock_key("step_import")
             .center_on_open()
             .open(&mut open)
             .show_with_footer(
                 ctx,
                 |ui| {
+                    // Abgedockt läuft der Inhalt mehrmals je Aufruf (Durchgänge des Kindfensters): neu sammeln.
+                    cards.clear();
                     let dark = ui.visuals().dark_mode;
                     if choosing {
                         ui.strong(tr!("stepimport-choose"));

@@ -2810,3 +2810,55 @@ Release-Build, Fenster 1920 × 1080, mit `tools/gui-drive.ps1`, APPDATA und USER
 - **Offen 13:** Ein 6000-px-Bild mit feinem Schachbrett zeigt starkes Moiré (keine Mipmaps); bei echten Fotos milder. Entscheidung „tragbar?“ bleibt bei Dennis.
 - **Beobachtungen:** (a) Die Felder zeigen nach Griffziehen und Kalibrieren alle Nachkommastellen („7,032955513211689“), wie die übrigen Felder im Programm (gemeinsamer Zahlentext); Fusion rundet in der Anzeige. (b) Der DXF-Dialog öffnet mittig und verdeckt die Vorschau am Ursprung, man muss ihn wegziehen. (c) Die Fehlerangabe aus der DXF/SVG-Bibliothek bleibt englisch („the input unexpectedly ended …“). (d) Rückgängig-Name nach „pro Layer“ ist „Ändern“ (zu M3). (e) Rechtsklick in der Skizze öffnet kein Kontextmenü (nicht Teil von Skizzen 9).
 
+
+## Teilprojekt Fenster abdocken
+
+Stand 2026-11-14 auf dem Zweig `feature/fenster-abdocken` (Spec `specs/2026-11-13-fenster-abdocken-design.md`). Dialoge (je Art ein eigener Platz) und die Felder `tree`, `right` und `sketch_side` lassen sich über ein Symbol in der Kopfzeile in ein eigenes Fenster abdocken, zum Beispiel auf einen zweiten Monitor, und wieder andocken. Die Lage wird in `config.json` gemerkt, fehlt der Monitor, erscheint das Fenster wieder im Hauptfenster. Der volle Lauf unter WSL und der Handtest stehen noch aus.
+
+### Grenzen
+- **Wayland:** Das Programm darf die Lage eines Fensters weder setzen noch lesen. Abdocken geht, die Lage bestimmt der Compositor. Gemerkt wird nur „abgedockt“; auch die Größe wird nicht gemerkt, weil dort `outer_rect` fehlt.
+- **Kein Besitzerfenster:** Ein abgedocktes Fenster auf demselben Monitor wie das Hauptfenster rutscht beim Klick ins Hauptfenster dahinter. Wieder holen: Andocken oder Alt+Tab. Auf einem zweiten Monitor tritt das nicht auf.
+- **Linux ohne Monitorprüfung:** Unter X11 wird die gemerkte Lage ungeprüft übernommen (`on_screen` liefert `None`); ein Fenster außerhalb der Fläche holt üblicherweise der Fenstermanager zurück (Annahme, unter WSLg zu prüfen).
+- **Namen „Abdocken“ und „Andocken“** für die Symbole sind eine Annahme; die Namen in Fusion sind ungeprüft.
+- **Tab-Umschalter der Skizzenbemaßung** wirkt nur im Hauptfenster, nicht aus einem abgedockten Fenster.
+- **Kürzel und feste Tasten aus abgedockten Fenstern** wirken ein Bild später als im Hauptfenster.
+- **Erste Berührung per Taste:** Wechselt der Fokus per Taste (statt per Klick) in ein abgedocktes Fenster, kann ein Feld im Hauptfenster ein Enter oder Esc noch mitsehen. Selten.
+- **Speichern-Retry:** Nach einem Schreibfehler bei `config.json` versucht das Programm das Speichern der Lage in jedem Bild neu.
+- **Kleiner Rest in `ctx.data`** je geschlossenem abgedocktem Tab (Messwerte der Fensterhöhe); wächst nur mit der Zahl der je geöffneten Tabs.
+- **`top_icon_fits`** rechnet ohne die abgedockten Spalten; das Programmzeichen oben links wird dadurch zu früh ausgeblendet, wenn Spalten abgedockt sind.
+- **Schlüssel `edit_feature`** steht in der Liste `DIALOG_KEYS`, wird aber nicht benutzt.
+- **Rückfragen des Fensters Projekte** (Neues Projekt, Umbenennen, Löschen …) erscheinen auch bei abgedocktem Fenster Projekte im Hauptfenster, nicht über ihm.
+- **Übernahme fremder Verschiebungen kann aussetzen:** Kommt die Lage-Korrektur nach dem Öffnen nie genau an (der Nutzer zieht schon, Windows begrenzt die Lage oder Größe), übernimmt das Programm bis zum Schließen keine Verschiebung per Win+Pfeil oder Einrasten mehr. Ziehen an der Kopfzeile wird weiter gemerkt.
+- **Viele Schreibvorgänge bei Systembewegung:** Bewegt das System ein abgedocktes Fenster ohne Maustaste (Alt+Leertaste → Verschieben, Einrast-Animation), wird `config.json` in jedem solchen Bild geschrieben, solange die Bewegung dauert.
+- **Sperre des Baums setzt ein Bild später ein:** Im ersten Bild einer Rückfrage aus dem abgedockten Baum sind die Zeilen noch bedienbar.
+- **Testlücken:** Rückfrage über weitergereichte feste Tasten aus dem abgedockten Baum (z. B. Entf auf ein Maß in der Zeichnung) und Alt+F4 auf den Rückfragen der echten Versionsspalte sind nur indirekt getestet; die Monitor-Tests laufen nur unter Windows.
+
+### Festlegungen beim Umsetzen
+- **Erzeugen und Bearbeiten getrennt:** Das Erzeugen- und das Bearbeiten-Fenster derselben Art haben getrennte Plätze (`extrude` und `edit_extrude`, ebenso bei den anderen Arten), weil beide gleichzeitig offen sein können.
+- **Felder docken nur über das Symbol an,** nicht per Doppelklick auf die Kopfzeile. Ein Doppelklick würde Klicks auf „Eigenschaften“ und „Versionen“ schlucken. (Bei Dialogen bleibt der Doppelklick auf die Kopfzeile wie in der Spec.)
+
+### Handliste für den Nutzer (Prüfung von Hand im echten Fenster)
+Release-Build, Hauptmonitor 1920 × 1080, zweiter Monitor, mit `tools/gui-drive.ps1` wo es geht, APPDATA und USERPROFILE auf einen Testordner umgeleitet. Nur nach Dennis’ Go. Abhaken:
+- [ ] 1. **Extrudieren abdocken:** Dialog abdocken, auf Monitor 2 ziehen, Werte ändern: Vorschau und Griffe im Hauptfenster ziehen ohne Mausbewegung nach.
+- [ ] 2. **Esc und Enter im abgedockten Dialog:** Esc bricht ab, Enter bestätigt, sofort nach dem Abdocken.
+- [ ] 3. **Baum abdocken:** Entf, Strg+Z und S im abgedockten Baum wirken genau einmal.
+- [ ] 4. **Skizze mit abgedocktem Skizzenfeld betreten:** Das Feld erscheint beim Betreten, verschwindet beim Verlassen.
+- [ ] 5. **Neustart:** Alles steht wieder an seiner Stelle.
+- [ ] 6. **Neustart ohne zweiten Monitor:** Fenster erscheinen angedockt; mit Monitor wieder draußen.
+- [ ] 7. **Monitor mit 125 % Skalierung:** Lage stimmt nach dem Abdocken (Lage-Korrektur) und die Größe bleibt gleich.
+- [ ] 8. **Loslassen nach dem Ziehen unter Windows:** Die Lage wird erkannt und gemerkt (Neustart zeigt die neue Stelle).
+- [ ] 9. **Alt+Tab:** Abgedockte Fenster ohne Taskleisteneintrag sind per Alt+Tab auffindbar.
+- [ ] 10. **Rückfrage aus abgedocktem Baum** (Umbenennen, Löschen): erscheint über dem Feld, der Baum ist währenddessen gesperrt.
+- [ ] 11. **Verschachtelte Unterfenster:** Dialog aus abgedocktem Dialog oder Feld öffnen und schließen, nichts hängt, nichts bleibt zurück.
+- [ ] 12. **Esc, Enter und Entf im abgedockten Skizzenfeld:** wirken dort, ohne das Hauptfenster zu stören.
+- [ ] 13. **Tab der Skizzenbemaßung** im Hauptfenster (aus dem abgedockten Fenster wirkt er nicht, siehe Grenzen).
+- [ ] 14. **Beenden mit ungespeicherter Änderung:** Rückfrage, danach schließen alle abgedockten Fenster mit.
+- [ ] 15. **Hell und dunkel:** abgedockte Fenster folgen dem Aussehen.
+- [ ] 16. **WSLg (X11), Kurzprüfung:** Abdocken, Ziehen, Andocken.
+- [ ] 17. **Nach dem Ziehen sofort Strg+Z im abgedockten Baum** (prüft, dass kein hängender Mauszustand Kürzel sperrt), dann Neustart.
+
+#### Ergebnis Handtest 2026-11-14 (Claude, Release-Build f94c8a4, Testordner umgeleitet)
+Aufbau: Hauptmonitor 5120 × 1440 (Hauptfenster 1920 × 1080), Monitor 2 mit 2560 × 720 darunter, beide 100 %. Auf Monitor 2 liegt ein immer-obenauf-Dashboard; darum dort nur Lage über die Fensterdaten geprüft, sichtbar im freien Teil des Hauptmonitors.
+- **Bestanden:** 3 (Entf, Strg+Z genau einmal, S; 3D-Ansicht zieht sofort nach), 4, 5, 6 (simuliert über eine Lage außerhalb aller Monitore: Baum angedockt, Eintrag bleibt), 8 (Lage auf Monitor 2 nach Loslassen gemerkt), 10 (Umbenennen erscheint mittig über dem Baumfenster, Enter übernimmt), 12 (L, Entf im abgedockten Skizzenfeld), 14, 17 (Strg+Z direkt nach dem Ziehen). Dazu: Verschiebung durch das System wird gemerkt; Alt+F4 dockt ein Feld an bzw. schließt einen Dialog, das Programm läuft weiter; ein abgedockt geschlossener Dialog öffnet wieder abgedockt; Auswahl im abgedockten Baum zeigt Eigenschaften in der abgedockten rechten Spalte.
+- **Nicht geprüft:** 1 (Vorschau mit Griffen, keine Extrusion angelegt), 7 (125 % bräuchte eine Änderung der Windows-Anzeigeeinstellung), 9, 11, 13, 15, 16.
+- **Kein Fehler des Abdockens, aber schon auf master so (Abweichung von Fusion prüfen):** Quader-Dialog reagiert weder angedockt noch abgedockt auf Esc oder Enter; Esc ohne gesetzten Punkt beendet das Linienwerkzeug nicht; das Namensfeld beim Umbenennen bekommt beim Öffnen keinen Tastaturfokus.

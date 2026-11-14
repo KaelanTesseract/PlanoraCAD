@@ -846,15 +846,24 @@ fn read_report(path: &Path) -> Option<String> {
 /// Esc schließt das offene Fenster und wird verbraucht (vor den Ansichten aufrufen). Nicht bei
 /// offener Rückfrage und nicht, solange ein Textfeld die Tastatur hat (dann gibt das Feld sie
 /// mit Esc ab; das nächste Esc schließt).
+///
+/// Abgedockt liest das Fenster Esc selbst ([`show`]); Esc im Hauptfenster bleibt dann dem
+/// Hauptfenster.
 pub fn take_escape(ctx: &egui::Context, state: &mut FeedbackDialog, prompt_open: bool) -> bool {
-    if !state.open || prompt_open || crate::viewport::typing(ctx) {
+    if !state.open || prompt_open || crate::dialog::shown_detached(ctx, window_id()) {
         return false;
     }
-    let esc = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+    let esc = escape_in(ctx);
     if esc {
         state.close();
     }
     esc
+}
+
+/// Esc im Fenster von `ctx` (verbraucht), solange dort kein Feld tippt.
+fn escape_in(ctx: &egui::Context) -> bool {
+    !crate::viewport::typing(ctx)
+        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
 }
 
 /// Klick in der Fußzeile.
@@ -867,7 +876,15 @@ enum FooterClick {
 
 /// Zeichnet das Fenster, solange `state.open` gilt, und liefert, was die App ausführen soll
 /// (je Bild eine Aktion; „Im Browser öffnen“ liefert Ordner und Adresse nacheinander).
-pub fn show(ctx: &egui::Context, state: &mut FeedbackDialog, dark: bool) -> Option<FeedbackAction> {
+///
+/// `prompt_open`: eine Rückfrage ist offen; dann schließt Esc im abgedockten Fenster nicht (wie
+/// [`take_escape`]).
+pub fn show(
+    ctx: &egui::Context,
+    state: &mut FeedbackDialog,
+    dark: bool,
+    prompt_open: bool,
+) -> Option<FeedbackAction> {
     if !state.open {
         return state.pending.pop_front();
     }
@@ -877,6 +894,7 @@ pub fn show(ctx: &egui::Context, state: &mut FeedbackDialog, dark: bool) -> Opti
     let sent = state.sent.is_some();
     let enough = Cell::new(state.long_enough());
     Dialog::new(title(), DialogSize::Wide)
+        .dock_key("feedback")
         .id(window_id())
         .center_on_open()
         .open(&mut open)
@@ -890,7 +908,13 @@ pub fn show(ctx: &egui::Context, state: &mut FeedbackDialog, dark: bool) -> Opti
                     enough.set(state.long_enough());
                 }
             },
-            |ui| footer(ui, sent, enough.get(), dark, &mut click),
+            |ui| {
+                // Abgedockt: Esc im eigenen Fenster schließt wie „Abbrechen“.
+                if crate::dialog::in_own_window(ui) && !prompt_open && escape_in(ui.ctx()) {
+                    click = Some(FooterClick::Cancel);
+                }
+                footer(ui, sent, enough.get(), dark, &mut click);
+            },
         );
     match click {
         Some(FooterClick::Send) if !sent && state.long_enough() => state.send(false),

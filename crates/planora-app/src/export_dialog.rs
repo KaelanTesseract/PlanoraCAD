@@ -2819,6 +2819,7 @@ impl ExportDialog {
         let chooser = RefCell::new(&mut self.chooser);
         let (mut body_action, mut footer_action) = (ChooserAction::None, ChooserAction::None);
         let response = Dialog::new(tr!("export-title"), DialogSize::File)
+            .dock_key("export")
             .center_on_open()
             .open(&mut open)
             .show_with_footer(

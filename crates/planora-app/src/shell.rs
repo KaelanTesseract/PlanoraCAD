@@ -1,6 +1,6 @@
 //! Zustand und Geometrie der schwebenden Felder (reine Funktionen, kein egui-Zeichnen).
 
-use egui::{Rect, pos2, vec2};
+use egui::{Rect, Vec2, pos2, vec2};
 
 use crate::theme;
 
@@ -103,6 +103,15 @@ impl ShellState {
     }
 }
 
+/// Welche Plätze im eigenen Fenster liegen und deshalb im Hauptfenster keine Spalte belegen.
+/// `tree` und `right` wirken in Modell und Zeichnung, `sketch_side` nur in der Skizze.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct Undocked {
+    pub tree: bool,
+    pub right: bool,
+    pub sketch_side: bool,
+}
+
 /// Rechtecke aller Felder für ein Fenster (`content`): oben und unten mittig mit den
 /// gewünschten Breiten, links und rechts je eine Spalte, Status links unten, Hinweis
 /// unter dem oberen Feld (nur schreibgeschützt) und die freie Fläche für Modell/Blatt.
@@ -161,6 +170,7 @@ pub fn top_icon_fits(content_width: f32, base_wanted: f32, lead: f32) -> bool {
 /// sie), die freie Fläche beginnt links schon nach Leiste und Abstand. Rechte Spalte (Skizzenfeld),
 /// unteres Feld (Fußfeld), Status und Hinweis liegen wie im Modell. `left` ist dann ein leeres
 /// Rechteck an der Ecke der Leiste.
+#[allow(clippy::too_many_arguments)]
 pub fn layout_in_mode(
     content: Rect,
     mode: ShellMode,
@@ -169,8 +179,26 @@ pub fn layout_in_mode(
     bottom_width: f32,
     status_width: f32,
     read_only: bool,
+    undocked: Undocked,
 ) -> ShellRects {
-    let mut r = layout_with_top_min(content, state, top, bottom_width, status_width, read_only);
+    // Im Skizzenmodus ersetzt die Leiste die linke Spalte; rechts steht das Skizzenfeld.
+    let cols = match mode {
+        ShellMode::Sketch => Undocked {
+            tree: false,
+            right: undocked.sketch_side,
+            sketch_side: false,
+        },
+        _ => undocked,
+    };
+    let mut r = layout_with_top_min(
+        content,
+        state,
+        top,
+        bottom_width,
+        status_width,
+        read_only,
+        cols,
+    );
     match mode {
         ShellMode::Model => {
             // So breit wie die freie Fläche, GAP über dem Befehlsfeld; die freie Fläche endet
@@ -189,7 +217,8 @@ pub fn layout_in_mode(
         ShellMode::Drawing => {
             let above = r.banner.map_or(r.top.bottom(), |b| b.bottom());
             // So breit wie zwischen den Spalten Platz ist (wie der Hinweis), mindestens 120.
-            let avail = content.width() - 2.0 * (r.left.width() + SHELL_INSET + GAP);
+            let side = r.left.width().max(r.right.width());
+            let avail = content.width() - 2.0 * (side + SHELL_INSET + GAP);
             let w = avail
                 .max(MIN_FIELD_W)
                 .min(content.width() - 2.0 * SHELL_INSET);
@@ -253,6 +282,7 @@ pub fn layout(
         bottom_width,
         status_width,
         read_only,
+        Undocked::default(),
     )
 }
 
@@ -267,6 +297,7 @@ pub fn layout_with_top_min(
     bottom_width: f32,
     status_width: f32,
     read_only: bool,
+    undocked: Undocked,
 ) -> ShellRects {
     // Die Seitenspalten sind immer vorhanden (Baum links, Eigenschaften rechts); der
     // Umschalter für Versionen ändert nur ihren Inhalt, nicht die Geometrie.
@@ -274,17 +305,24 @@ pub fn layout_with_top_min(
     let normal_free_h =
         content.height() - (2.0 * SHELL_INSET + TOP_H + BOTTOM_H + 2.0 * GAP + banner_extra);
     // Zu kleines Fenster: Seitenspalten schmaler, damit die freie Fläche 200 breit bleibt.
-    let normal_free_w = content.width() - 2.0 * (SHELL_INSET + theme::PANEL_WIDTH + GAP);
     let side_w = side_width(content.width());
+    // Abgedockte Plätze: Spalte der Breite 0 (der Außenrand bleibt).
+    let left_w = if undocked.tree { 0.0 } else { side_w };
+    let right_w = if undocked.right { 0.0 } else { side_w };
+    let normal_free_w = if undocked == Undocked::default() {
+        content.width() - 2.0 * (SHELL_INSET + theme::PANEL_WIDTH + GAP)
+    } else {
+        content.width() - (2.0 * (SHELL_INSET + GAP) + left_w + right_w)
+    };
 
     // Freie Fläche aus den Rändern; unter 200 wird sie mittig im Fenster auf 200 gesetzt.
     let mut free = Rect::from_min_max(
         pos2(
-            content.left() + SHELL_INSET + side_w + GAP,
+            content.left() + SHELL_INSET + left_w + GAP,
             content.top() + SHELL_INSET + TOP_H + GAP + banner_extra,
         ),
         pos2(
-            content.right() - (SHELL_INSET + side_w + GAP),
+            content.right() - (SHELL_INSET + right_w + GAP),
             content.bottom() - (SHELL_INSET + BOTTOM_H + GAP),
         ),
     );
@@ -303,7 +341,8 @@ pub fn layout_with_top_min(
 
     // Mittlere Felder: höchstens so breit, wie zwischen den Spalten Platz ist (mindestens 120,
     // aber nie breiter als das Fenster abzüglich der Außenränder).
-    let avail = between_columns(content.width());
+    let widest = left_w.max(right_w);
+    let avail = content.width() - 2.0 * (widest + SHELL_INSET + GAP);
     let max_w = content.width() - 2.0 * SHELL_INSET;
     let mid_w = |wanted: f32| wanted.min(avail.max(MIN_FIELD_W)).min(max_w);
 
@@ -347,14 +386,22 @@ pub fn layout_with_top_min(
     // Das linke Feld endet mit der freien Fläche, auf jeden Fall um GAP über dem Status.
     let left_bottom = free.bottom().min(status.top() - GAP).max(col_top);
     let right_bottom = free.bottom().max(col_top);
-    let left = Rect::from_min_max(
-        pos2(content.left() + SHELL_INSET, col_top),
-        pos2(content.left() + SHELL_INSET + side_w, left_bottom),
-    );
-    let right = Rect::from_min_max(
-        pos2(content.right() - SHELL_INSET - side_w, col_top),
-        pos2(content.right() - SHELL_INSET, right_bottom),
-    );
+    let left = if undocked.tree {
+        Rect::from_min_size(pos2(content.left() + SHELL_INSET, col_top), Vec2::ZERO)
+    } else {
+        Rect::from_min_max(
+            pos2(content.left() + SHELL_INSET, col_top),
+            pos2(content.left() + SHELL_INSET + side_w, left_bottom),
+        )
+    };
+    let right = if undocked.right {
+        Rect::from_min_size(pos2(content.right() - SHELL_INSET, col_top), Vec2::ZERO)
+    } else {
+        Rect::from_min_max(
+            pos2(content.right() - SHELL_INSET - side_w, col_top),
+            pos2(content.right() - SHELL_INSET, right_bottom),
+        )
+    };
 
     // Hinweis: die ganze Breite zwischen den Spalten (mittig wie das obere Feld), damit der Text
     // möglichst in eine Zeile passt; er berührt die Spalten nie.

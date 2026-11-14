@@ -41,6 +41,19 @@ pub fn pressed_if(
     want: impl Fn(Action) -> bool,
 ) -> Vec<Action> {
     let focus = crate::viewport::keyboard_taken(ctx);
+    ctx.input_mut(|i| pressed_in(&mut i.events, focus, km, area, want))
+}
+
+/// Wie [`pressed_if`] über eine Liste von Ereignissen (etwa die eines abgedockten Fensters,
+/// [`crate::detach::ChildKeys`]); `focus`: ein Bedienelement, das Tasten liest, hat dort den
+/// Tastaturfokus (die Leertaste bleibt ihm).
+pub fn pressed_in(
+    events: &mut Vec<egui::Event>,
+    focus: bool,
+    km: &Keymap,
+    area: Area,
+    want: impl Fn(Action) -> bool,
+) -> Vec<Action> {
     let mut chords: Vec<(Action, KeyChord)> = Action::ALL
         .iter()
         .copied()
@@ -55,15 +68,13 @@ pub fn pressed_if(
         .collect();
     chords.sort_by_key(|(_, c)| std::cmp::Reverse(modifier_count(c)));
     let mut out = Vec::new();
-    ctx.input_mut(|i| {
-        for (a, c) in chords {
-            let before = i.events.len();
-            i.events.retain(|e| !is_press_of(e, &c));
-            if i.events.len() != before && !out.contains(&a) {
-                out.push(a);
-            }
+    for (a, c) in chords {
+        let before = events.len();
+        events.retain(|e| !is_press_of(e, &c));
+        if events.len() != before && !out.contains(&a) {
+            out.push(a);
         }
-    });
+    }
     out
 }
 

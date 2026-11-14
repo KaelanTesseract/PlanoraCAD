@@ -59,6 +59,17 @@ impl PlaneCommand {
         }
     }
 
+    /// Platz zum Abdocken des Fensters (je Befehl, auch beim Bearbeiten).
+    pub fn dock_key(self) -> &'static str {
+        match self {
+            PlaneCommand::Offset => "plane_offset",
+            PlaneCommand::Angle => "plane_angle",
+            PlaneCommand::Mid => "plane_mid",
+            PlaneCommand::ThreePoints => "plane_three_points",
+            PlaneCommand::Tangent => "plane_tangent",
+        }
+    }
+
     /// Aktion der Tastenbelegung (ohne Vorgabetaste, belegbar).
     pub fn action(self) -> Action {
         match self {
@@ -725,6 +736,7 @@ impl PlaneDialog {
         let mut field_error = None;
         let id = egui::Id::new(("plane_dialog", self.editing()));
         Dialog::new(self.title(), DialogSize::Normal)
+            .dock_key(self.command.dock_key())
             .id(id)
             .open(&mut open)
             .show(ctx, |ui| {
@@ -795,11 +807,12 @@ impl PlaneDialog {
                         cancel = true;
                     }
                 });
+                // Esc bricht ab (wie „Abbrechen“), solange kein Feld tippt; im Fenster des
+                // Dialogs gelesen (abgedockt auch Esc im Hauptfenster).
+                if crate::dialog::escape_pressed(ui, false) {
+                    cancel = true;
+                }
             });
-        // Esc bricht ab (wie „Abbrechen“), solange kein Feld tippt.
-        if !crate::viewport::typing(ctx) && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            cancel = true;
-        }
         let keep = if ok {
             self.ok(state).is_err()
         } else {

@@ -3,7 +3,7 @@
 use egui::{Rect, pos2, vec2};
 use planora_app::shell::{
     BANNER_H, BOTTOM_H, GAP, RightTab, SHELL_INSET, STRIP_H, STRIP_W, ShellMode, ShellRects,
-    ShellState, TOOL_H, TOP_H, layout, layout_in_mode, layout_with_top_min,
+    ShellState, TOOL_H, TOP_H, Undocked, layout, layout_in_mode, layout_with_top_min,
 };
 use planora_app::viewport::cube_rect;
 
@@ -225,6 +225,7 @@ fn rects_with_top_min(w: f32, h: f32, read_only: bool) -> ShellRects {
         520.0,
         200.0,
         read_only,
+        Undocked::default(),
     )
 }
 
@@ -302,6 +303,7 @@ fn sketch_rects(w: f32, h: f32, read_only: bool) -> ShellRects {
         360.0,
         200.0,
         read_only,
+        Undocked::default(),
     )
 }
 
@@ -397,6 +399,7 @@ fn sketch_free_rect_margins() {
         360.0,
         200.0,
         false,
+        Undocked::default(),
     );
     assert_eq!(r.bottom, model.bottom);
     assert_eq!(r.status, model.status);
@@ -460,6 +463,7 @@ fn drawing_rects(w: f32, h: f32, read_only: bool) -> ShellRects {
         f32::INFINITY,
         200.0,
         read_only,
+        Undocked::default(),
     )
 }
 
@@ -553,6 +557,7 @@ fn drawing_free_rect_margins() {
         f32::INFINITY,
         200.0,
         false,
+        Undocked::default(),
     );
     assert_eq!(r.left, model.left);
     assert_eq!(r.right, model.right);
@@ -583,4 +588,137 @@ fn fit_tool_is_centred_and_capped() {
     let c = planora_app::shell::fit_tool(tool, 50.0);
     assert_eq!(c.width(), planora_app::shell::MIN_FIELD_W);
     assert_eq!(c.center(), tool.center());
+}
+
+// ---- Abgedockte Spalten (Fenster abdocken, Aufgabe 3) -----------------------------------------
+
+fn in_mode(w: f32, h: f32, mode: ShellMode, undocked: Undocked) -> ShellRects {
+    layout_in_mode(
+        window(w, h),
+        mode,
+        &ShellState::default(),
+        (600.0, 0.0),
+        360.0,
+        200.0,
+        false,
+        undocked,
+    )
+}
+
+#[test]
+fn undocked_default_is_unchanged() {
+    for (w, h) in [(1920.0, 1080.0), (1280.0, 800.0)] {
+        for mode in [ShellMode::Model, ShellMode::Drawing, ShellMode::Sketch] {
+            let r = in_mode(w, h, mode, Undocked::default());
+            let base = layout_with_top_min(
+                window(w, h),
+                &ShellState::default(),
+                (600.0, 0.0),
+                360.0,
+                200.0,
+                false,
+                Undocked::default(),
+            );
+            // Beide Spalten sind da und die freie Fläche liegt zwischen ihnen.
+            if mode != ShellMode::Sketch {
+                assert!(r.left.width() > 0.0 && r.right.width() > 0.0, "{mode:?}");
+                assert_eq!(r.free.left(), base.free.left());
+                assert_eq!(r.free.right(), base.free.right());
+                assert_eq!(r.free.left(), r.left.right() + GAP);
+                assert_eq!(r.free.right(), r.right.left() - GAP);
+            } else {
+                assert_eq!(r.free.right(), r.right.left() - GAP);
+                assert!(r.strip.is_some());
+            }
+        }
+    }
+}
+
+#[test]
+fn tree_undocked_widens_free_area_model() {
+    for (w, h) in [(1920.0, 1080.0), (1280.0, 800.0)] {
+        let content = window(w, h);
+        let docked = in_mode(w, h, ShellMode::Model, Undocked::default());
+        let r = in_mode(
+            w,
+            h,
+            ShellMode::Model,
+            Undocked {
+                tree: true,
+                ..Undocked::default()
+            },
+        );
+        assert_eq!(r.left.size(), vec2(0.0, 0.0));
+        assert_eq!(r.free.left(), content.left() + SHELL_INSET + GAP);
+        assert_eq!(r.free.right(), docked.free.right());
+        assert!(r.free.width() > docked.free.width());
+        assert_eq!(r.right, docked.right);
+    }
+}
+
+#[test]
+fn right_undocked_widens_free_area_drawing() {
+    let content = window(1920.0, 1080.0);
+    let docked = in_mode(1920.0, 1080.0, ShellMode::Drawing, Undocked::default());
+    let r = in_mode(
+        1920.0,
+        1080.0,
+        ShellMode::Drawing,
+        Undocked {
+            right: true,
+            ..Undocked::default()
+        },
+    );
+    assert_eq!(r.right.size(), vec2(0.0, 0.0));
+    assert_eq!(r.free.right(), content.right() - SHELL_INSET - GAP);
+    assert_eq!(r.free.left(), docked.free.left());
+    let tool = r.tool.expect("Werkzeugfeld");
+    assert!(tool.width() >= docked.tool.unwrap().width());
+    assert!(tool.right() <= content.right() - SHELL_INSET);
+}
+
+#[test]
+fn sketch_side_undocked_widens_free_area_sketch() {
+    let content = window(1920.0, 1080.0);
+    let docked = in_mode(1920.0, 1080.0, ShellMode::Sketch, Undocked::default());
+    let r = in_mode(
+        1920.0,
+        1080.0,
+        ShellMode::Sketch,
+        Undocked {
+            sketch_side: true,
+            ..Undocked::default()
+        },
+    );
+    assert_eq!(r.right.size(), vec2(0.0, 0.0));
+    assert_eq!(r.free.right(), content.right() - SHELL_INSET - GAP);
+    assert_eq!(r.free.left(), docked.free.left());
+    // `tree` und `right` ändern in der Skizze nichts.
+    let other = in_mode(
+        1920.0,
+        1080.0,
+        ShellMode::Sketch,
+        Undocked {
+            tree: true,
+            right: true,
+            sketch_side: false,
+        },
+    );
+    assert_eq!(other.free, docked.free);
+}
+
+#[test]
+fn history_bar_follows_free_area_when_tree_undocked() {
+    let r = in_mode(
+        1920.0,
+        1080.0,
+        ShellMode::Model,
+        Undocked {
+            tree: true,
+            ..Undocked::default()
+        },
+    );
+    let h = r.history.expect("Verlaufsleiste");
+    assert_eq!(h.left(), r.free.left());
+    assert_eq!(h.right(), r.free.right());
 }

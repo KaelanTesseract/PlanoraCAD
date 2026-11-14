@@ -290,6 +290,7 @@ fn bare_rects(size: Vec2, read_only: bool) -> shell::ShellRects {
         f32::INFINITY,
         0.0,
         read_only,
+        shell::Undocked::default(),
     )
 }
 

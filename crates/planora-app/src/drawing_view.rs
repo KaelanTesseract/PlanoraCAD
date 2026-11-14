@@ -1171,6 +1171,7 @@ fn drawing_rects(ctx: &egui::Context, editable: bool) -> ShellRects {
         f32::INFINITY,
         0.0,
         !editable,
+        crate::shell::Undocked::default(),
     )
 }
 
@@ -1713,6 +1714,12 @@ fn view_field(
     drawing: &Drawing,
     editable: bool,
 ) -> Option<Action> {
+    // Der Platz `right` liegt im eigenen Fenster: dort statt im Hauptfenster (das Layout lässt
+    // die Spalte dann frei).
+    let undocked = crate::detach::with_state(ctx, |s| {
+        crate::detach::is_undocked(ctx, s, crate::detach::Place::Right)
+    })
+    .unwrap_or(false);
     let frame = theme::panel_frame(state.dark);
     let inner = shell_panels::inner_size(&frame, rect.size());
     let margin = f32::from(frame.inner_margin.left);
@@ -1723,99 +1730,113 @@ fn view_field(
         .cloned();
     let names = view_names(drawing);
     let mut action = None;
-    shell_panels::field(
-        ctx,
-        shell_panels::drawing_view_id(),
-        rect.min,
-        frame,
-        |ui| {
-            shell_panels::side_column(ui, inner, margin, |ui| {
-                let area = egui::ScrollArea::vertical()
-                    .id_salt("planora-field-drawing-view-scroll")
-                    .max_height(inner.y)
-                    .auto_shrink([false, true]);
-                theme::scroll_area(ui, area, |ui| {
-                    let Some(v) = &selected else {
-                        theme::section_header(ui, &tr!("drawing-view-header"), theme::HEADER_H);
-                        ui.add_space(theme::SPACE_1);
-                        ui.weak(no_view_selected());
-                        return;
-                    };
-                    let name = names.get(&v.id).cloned().unwrap_or_default();
-                    // Eine Schnittansicht heißt im Kopf wie auf dem Blatt („Schnitt A–A“).
-                    let title = if v.section.is_some() {
-                        name.clone()
-                    } else {
-                        tr!("drawing-view-title", name = name.as_str())
-                    };
-                    theme::section_header(ui, &title, theme::HEADER_H);
-                    ui.add_space(theme::SPACE_1);
-                    // Der Maßstab einer Schnittansicht folgt ihrer Ausgangsansicht.
-                    let scale_free = editable && v.section.is_none();
-                    ui.horizontal(|ui| {
-                        ui.add_enabled(scale_free, egui::Label::new(tr!("drawing-scale")))
-                            .on_disabled_hover_text(section_tool::scale_locked_tip());
-                        ui.add_enabled(scale_free, |ui: &mut egui::Ui| {
-                            egui::ComboBox::from_id_salt("planora-drawing-scale")
-                                .selected_text(v.scale.label())
-                                .show_ui(ui, |ui| {
-                                    for s in Scale::SERIES {
-                                        if ui.selectable_label(s == v.scale, s.label()).clicked() {
-                                            action = Some(Action::Scale(s));
-                                        }
-                                    }
-                                })
-                                .response
+    // Inhalt (in einer senkrechten ScrollArea höchstens `max_h` hoch), angedockt im Feld und
+    // abgedockt im eigenen Fenster derselbe.
+    let mut contents = |ui: &mut egui::Ui, max_h: f32| {
+        let area = egui::ScrollArea::vertical()
+            .id_salt("planora-field-drawing-view-scroll")
+            .max_height(max_h)
+            .auto_shrink([false, true]);
+        theme::scroll_area(ui, area, |ui| {
+            let Some(v) = &selected else {
+                theme::section_header(ui, &tr!("drawing-view-header"), theme::HEADER_H);
+                ui.add_space(theme::SPACE_1);
+                ui.weak(no_view_selected());
+                return;
+            };
+            let name = names.get(&v.id).cloned().unwrap_or_default();
+            // Eine Schnittansicht heißt im Kopf wie auf dem Blatt („Schnitt A–A“).
+            let title = if v.section.is_some() {
+                name.clone()
+            } else {
+                tr!("drawing-view-title", name = name.as_str())
+            };
+            theme::section_header(ui, &title, theme::HEADER_H);
+            ui.add_space(theme::SPACE_1);
+            // Der Maßstab einer Schnittansicht folgt ihrer Ausgangsansicht.
+            let scale_free = editable && v.section.is_none();
+            ui.horizontal(|ui| {
+                ui.add_enabled(scale_free, egui::Label::new(tr!("drawing-scale")))
+                    .on_disabled_hover_text(section_tool::scale_locked_tip());
+                ui.add_enabled(scale_free, |ui: &mut egui::Ui| {
+                    egui::ComboBox::from_id_salt("planora-drawing-scale")
+                        .selected_text(v.scale.label())
+                        .show_ui(ui, |ui| {
+                            for s in Scale::SERIES {
+                                if ui.selectable_label(s == v.scale, s.label()).clicked() {
+                                    action = Some(Action::Scale(s));
+                                }
+                            }
                         })
-                        .on_disabled_hover_text(section_tool::scale_locked_tip());
-                    });
-                    if let Some(sec) = &v.section {
-                        let model = state.document.model_edit_count();
-                        let nudged = state
-                            .drawing_ui
-                            .section_of(v, model)
-                            .is_some_and(|d| d.nudged);
-                        if let Some(edit) = section_fields(ui, v, sec, editable, nudged) {
-                            action = Some(Action::Section(edit));
-                        }
-                    }
-                    let mut hidden = v.show_hidden;
-                    if ui
-                        .add_enabled(
-                            editable,
-                            theme::Toggle::new(&mut hidden, tr!("drawing-show-hidden")),
-                        )
-                        .changed()
-                    {
-                        action = Some(Action::Hidden(hidden));
-                    }
-                    // Mittellinien gibt es nur in Normansichten (Blick entlang einer Weltachse); in
-                    // der Isometrie bleibt der Schalter gesperrt.
-                    let mut centerlines = v.centerlines;
-                    if ui
-                        .add_enabled(
-                            editable && v.kind.is_normal(),
-                            theme::Toggle::new(&mut centerlines, centerlines_label()),
-                        )
-                        .on_disabled_hover_text(no_iso_centerlines())
-                        .changed()
-                    {
-                        action = Some(Action::Centerlines(centerlines));
-                    }
-                    ui.add_space(theme::SPACE_1);
-                    if ui
-                        .add_enabled(
-                            editable,
-                            flat(icons::button(Icon::Delete, tr!("drawing-view-delete"))),
-                        )
-                        .clicked()
-                    {
-                        action = Some(Action::Delete);
-                    }
-                });
+                        .response
+                })
+                .on_disabled_hover_text(section_tool::scale_locked_tip());
             });
-        },
-    );
+            if let Some(sec) = &v.section {
+                let model = state.document.model_edit_count();
+                let nudged = state
+                    .drawing_ui
+                    .section_of(v, model)
+                    .is_some_and(|d| d.nudged);
+                if let Some(edit) = section_fields(ui, v, sec, editable, nudged) {
+                    action = Some(Action::Section(edit));
+                }
+            }
+            let mut hidden = v.show_hidden;
+            if ui
+                .add_enabled(
+                    editable,
+                    theme::Toggle::new(&mut hidden, tr!("drawing-show-hidden")),
+                )
+                .changed()
+            {
+                action = Some(Action::Hidden(hidden));
+            }
+            // Mittellinien gibt es nur in Normansichten (Blick entlang einer Weltachse); in
+            // der Isometrie bleibt der Schalter gesperrt.
+            let mut centerlines = v.centerlines;
+            if ui
+                .add_enabled(
+                    editable && v.kind.is_normal(),
+                    theme::Toggle::new(&mut centerlines, centerlines_label()),
+                )
+                .on_disabled_hover_text(no_iso_centerlines())
+                .changed()
+            {
+                action = Some(Action::Centerlines(centerlines));
+            }
+            ui.add_space(theme::SPACE_1);
+            if ui
+                .add_enabled(
+                    editable,
+                    flat(icons::button(Icon::Delete, tr!("drawing-view-delete"))),
+                )
+                .clicked()
+            {
+                action = Some(Action::Delete);
+            }
+        });
+    };
+    if undocked {
+        let title = tr!("drawing-view-header");
+        shell_panels::panel_window(ctx, crate::detach::Place::Right, &title, rect, |ui| {
+            let max_h = ui.available_height();
+            contents(ui, max_h);
+        });
+    } else if rect.width() > 0.0 {
+        shell_panels::field(
+            ctx,
+            shell_panels::drawing_view_id(),
+            rect.min,
+            frame,
+            |ui| {
+                shell_panels::side_column(ui, inner, margin, |ui| contents(ui, inner.y));
+                crate::detach::with_state(ctx, |s| {
+                    shell_panels::panel_dock_button(ui, crate::detach::Place::Right, s, rect);
+                });
+            },
+        );
+    }
     action
 }
 

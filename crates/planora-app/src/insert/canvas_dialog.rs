@@ -610,11 +610,14 @@ impl CanvasDialog {
             tr!("insert-canvas-title")
         };
         let response = Dialog::new(title, DialogSize::File)
+            .dock_key("canvas")
             .center_on_open()
             .open(&mut open)
             .show_with_footer(
                 ctx,
                 |ui| {
+                    // Abgedockt läuft der Inhalt mehrmals je Aufruf (Durchgänge des Kindfensters): neu sammeln.
+                    field_errors.clear();
                     let dark = ui.visuals().dark_mode;
                     if choosing {
                         ui.strong(tr!("insert-canvas-choose"));
@@ -695,6 +698,12 @@ impl CanvasDialog {
                     }
                 },
                 |ui| {
+                    // Esc schließt (wie „Abbrechen“), solange kein Feld tippt und Esc nicht eben
+                    // nur einen Griffzug abgebrochen hat; im Fenster des Dialogs gelesen
+                    // (abgedockt auch Esc im Hauptfenster).
+                    if !esc_taken && crate::dialog::escape_pressed(ui, false) {
+                        close = true;
+                    }
                     if choosing {
                         footer_action = chooser.borrow_mut().show_footer(ui);
                         return;
@@ -757,12 +766,6 @@ impl CanvasDialog {
         if let Some(p) = chosen {
             *last_dir = p.parent().map(Path::to_path_buf);
             self.load(p);
-        }
-        if !esc_taken
-            && !crate::viewport::typing(ctx)
-            && ctx.input(|i| i.key_pressed(egui::Key::Escape))
-        {
-            close = true;
         }
         if ok && field_errors.is_empty() && self.insert(state).is_ok() {
             CanvasDialog::finish(state);

@@ -1599,3 +1599,44 @@ fn shift_tab_in_create_window_skips_fx() {
         formulas(&[(FieldKey::Hoehe, "Breite/4")])
     );
 }
+
+#[test]
+fn undocked_blend_window_shows_a_field_error_once() {
+    // Abgedockt läuft der Inhalt in einem Aufruf so oft, wie das Kindfenster Durchgänge braucht
+    // (im ersten Bild verwirft es den messenden Durchgang); die Fehlerzeile steht trotzdem genau
+    // einmal da.
+    use planora_app::detach::{self, DetachState, Place};
+    use planora_project::config::DetachedWindow;
+    let (mut s, _) = with_width();
+    param(&mut s, "w", "30", ParamUnit::Angle);
+    s.create_box(DVec3::splat(20.0)).unwrap();
+    let e = edge_between(&s.bodies[0].solid, "Deckel", "Wand 1");
+    s.set_selection(Some(Pick::Edge(EdgeRef { body: 0, edge: e })));
+    let mut d = BlendDialog::fillet();
+    d.first = "w".into();
+    let place = Place::Dialog(d.dock_key());
+    let mut state = DetachState::default();
+    state.set(
+        place,
+        DetachedWindow {
+            x: 200.0,
+            y: 150.0,
+            width: 480.0,
+            height: 300.0,
+        },
+    );
+    let mut screen = common::Screen::with_viewports(1920.0, 1080.0);
+    let id = detach::viewport_id(place);
+    let mut f = |ctx: &egui::Context| {
+        detach::install(ctx, &mut state);
+        d.show(ctx, &mut s);
+        detach::uninstall(ctx, &mut state);
+    };
+    let msg = "Radius: Hier wird eine Länge erwartet, die Formel ergibt einen Winkel.";
+    for n in 0..4 {
+        screen.frame(vec![], &mut f);
+        let child = screen.child_seen(id);
+        let count = child.iter().filter(|x| x.text == msg).count();
+        assert_eq!(count, 1, "Bild {n}: {}", common::join(&child));
+    }
+}

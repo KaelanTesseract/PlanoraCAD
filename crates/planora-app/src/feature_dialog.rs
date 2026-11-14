@@ -268,6 +268,31 @@ fn op_label(op: BoolOp) -> String {
     }
 }
 
+/// Platz zum Abdocken des Fensters „Bearbeiten“ je Feature-Art (getrennt vom Erzeugen-Fenster
+/// derselben Art, das daneben offen sein kann). Arten ohne dieses Fenster teilen sich einen.
+pub fn dock_key_of(kind: &FeatureKind) -> &'static str {
+    match kind {
+        FeatureKind::Box { .. } => "edit_box",
+        FeatureKind::Cylinder { .. } => "edit_cylinder",
+        FeatureKind::Sphere { .. } => "edit_sphere",
+        FeatureKind::Cone { .. } => "edit_cone",
+        FeatureKind::Extrude { .. } => "edit_extrude",
+        FeatureKind::Revolve { .. } => "edit_revolve",
+        FeatureKind::Boolean { .. } => "edit_boolean",
+        FeatureKind::Move { .. } => "edit_move",
+        FeatureKind::Verrunden {
+            art: BlendArt::Rundung { .. } | BlendArt::RundungVariabel { .. },
+            ..
+        } => "edit_fillet",
+        FeatureKind::Verrunden { .. } => "edit_chamfer",
+        FeatureKind::Sketch(_)
+        | FeatureKind::MeshBody { .. }
+        | FeatureKind::StepBody { .. }
+        | FeatureKind::Plane(_)
+        | FeatureKind::Canvas(_) => "edit_feature",
+    }
+}
+
 impl FeatureDialog {
     /// Dialog für das Feature `id`; `None` für Skizzen, Netz-Körper (Lage im Eigenschaftenfenster),
     /// STEP-Körper (keine Felder; verschoben wird über das Verschieben-Feature, P6) und unbekannte
@@ -701,6 +726,7 @@ impl FeatureDialog {
             self.profiles.changed = true;
         }
         Dialog::new(tr!("edit-title", name = &self.name), DialogSize::Normal)
+            .dock_key(dock_key_of(&self.kind))
             .id(egui::Id::new(("feature_dialog", self.id)))
             .open(&mut open)
             .show(ctx, |ui| {

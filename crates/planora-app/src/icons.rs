@@ -186,6 +186,10 @@ pub enum Icon {
     Feedback,
     /// Phosphor `question` (Menüeintrag „Häufige Probleme“).
     Help,
+    /// Phosphor `arrow-square-in` (abgedocktes Fenster wieder andocken).
+    Dock,
+    /// Phosphor `arrow-square-out` (Fenster abdocken).
+    Undock,
 }
 
 /// Alle Einträge von [`Icon`].
@@ -277,6 +281,8 @@ pub const ALL: &[Icon] = &[
     Icon::Keyboard,
     Icon::Feedback,
     Icon::Help,
+    Icon::Dock,
+    Icon::Undock,
 ];
 
 /// Symbol, Codepunkt in Phosphor-Light.ttf und Phosphor-Name (Quelle: Phosphor-Light-style.css).
@@ -368,6 +374,8 @@ const TABLE: &[(Icon, char, &str)] = &[
     (Icon::Keyboard, '\u{e2d8}', "keyboard"),
     (Icon::Feedback, '\u{e16e}', "chat-circle-text"),
     (Icon::Help, '\u{e3e8}', "question"),
+    (Icon::Dock, '\u{e5dc}', "arrow-square-in"),
+    (Icon::Undock, '\u{e5de}', "arrow-square-out"),
 ];
 
 fn entry(icon: Icon) -> &'static (Icon, char, &'static str) {
