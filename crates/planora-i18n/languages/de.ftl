@@ -2292,6 +2292,7 @@ surface-pick-direction = Richtung: bitte eine gerade Linie oder Kante, eine Achs
 surface-curve-active-sketch = Kurven der aktiven Skizze sind nicht wählbar; bitte eine neue Skizze beginnen.
 surface-pick-curve = Kurve: bitte eine Kurve einer früheren Skizze wählen.
 surface-pick-targets = Kurven/Flächen: bitte eine Körperfläche, eine Ebene oder eine Kurve einer anderen Skizze wählen.
+surface-intersect-same-sketch = Kurve und Kurven/Flächen müssen aus verschiedenen Skizzen stammen.
 surface-curve-not-2d = Nur 2D-Skizzenkurven sind wählbar; diese Kurve liegt nicht in ihrer Skizzenebene.
 feature-surface-lost = Eine Kurve oder Fläche der Projektion ist nicht mehr vorhanden
 feature-err-body-not-found = Körper { $index } von Feature { $feature } ist nicht vorhanden

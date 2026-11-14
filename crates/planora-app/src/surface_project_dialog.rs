@@ -780,12 +780,19 @@ impl IntersectionCurveDialog {
     /// „Kurven/Flächen“ aktiv.
     pub fn take_pick(&mut self, state: &AppState, pick: IncludePick) -> bool {
         let r = match self.focus {
-            Field::Curve => sketch_curve_2d(state, pick, crate::msg!("surface-pick-curve")).map(
-                |(sketch, curve)| {
+            Field::Curve => sketch_curve_2d(state, pick, crate::msg!("surface-pick-curve"))
+                .and_then(|(sketch, curve)| {
+                    // Spec 7: Die Ziele sind Kurven *anderer* Skizzen.
+                    let clash = self.targets.iter().any(
+                        |t| matches!(t, IntersectTarget::SketchCurve { sketch: s, .. } if *s == sketch),
+                    );
+                    if clash {
+                        return Err(crate::msg!("surface-intersect-same-sketch"));
+                    }
                     self.curve = Some(CurveSource::SketchCurve { sketch, curve });
                     self.focus = Field::Targets;
-                },
-            ),
+                    Ok(())
+                }),
             Field::Targets => self
                 .target(state, pick)
                 .map(|t| toggle(&mut self.targets, t)),
@@ -809,6 +816,12 @@ impl IntersectionCurveDialog {
         match pick {
             IncludePick::SketchCurve { .. } => {
                 let (sketch, curve) = sketch_curve_2d(state, pick, wrong())?;
+                // Spec 7: nur Kurven einer anderen Skizze als die „Kurve“ (deren Auszüge laufen
+                // sonst parallel und schneiden sich nie).
+                if matches!(&self.curve, Some(CurveSource::SketchCurve { sketch: s, .. }) if *s == sketch)
+                {
+                    return Err(crate::msg!("surface-intersect-same-sketch"));
+                }
                 Ok(IntersectTarget::SketchCurve { sketch, curve })
             }
             IncludePick::Face(..) | IncludePick::Plane(_) => match state.include_ref(pick)? {

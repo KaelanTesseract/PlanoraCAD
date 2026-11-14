@@ -263,7 +263,7 @@ fn along_vector_needs_direction_ok_disabled() {
     s.observe_sketch(false);
     assert_eq!(undo_len(&s), n);
     assert_eq!(sk(&s).curves().count(), 0);
-    // Eine Fläche ist keine Richtung, die Z-Achse schon.
+    // Eine ebene Fläche gilt als Richtung (ihre Normale), der Ursprung nicht, die Z-Achse schon.
     let face = top_face(&s);
     assert!(
         spd::deliver(&mut s, IncludePick::Face(0, face)),
@@ -327,6 +327,10 @@ fn active_sketch_curve_not_pickable() {
         }
     ));
     assert!(d.curve.is_none());
+    assert_eq!(
+        d.error().as_deref(),
+        Some("Kurven der aktiven Skizze sind nicht wählbar; bitte eine neue Skizze beginnen.")
+    );
     s.close_sketch();
     let three_d = open_new(&mut s, StandardPlane::XY);
     let c3 = {
@@ -363,10 +367,13 @@ fn intersection_dialog_two_sketches() {
     let mut s = AppState::new();
     // Kreis r = 10 oben, Linie z = x von vorn.
     let top = open_new(&mut s, StandardPlane::XY);
-    let circle = {
+    let (circle, beside) = {
         let (_, sk) = s.session_sketch_mut().unwrap();
         let m = sk.add_point(0.0, 0.0).unwrap();
-        sk.add_circle(m, 10.0).unwrap()
+        let circle = sk.add_circle(m, 10.0).unwrap();
+        let a = sk.add_point(20.0, -5.0).unwrap();
+        let b = sk.add_point(20.0, 5.0).unwrap();
+        (circle, sk.add_line(a, b).unwrap())
     };
     s.observe_sketch(false);
     s.close_sketch();
@@ -394,6 +401,22 @@ fn intersection_dialog_two_sketches() {
     assert!(d.curve.is_some());
     assert_eq!(d.focus, Field::Targets, "weiter zu „Kurven/Flächen“");
     assert!(!d.ok_enabled());
+    // Ein Ziel aus derselben Skizze wie die „Kurve“ wird abgelehnt (Spec 7: andere Skizzen).
+    assert!(!spd::deliver(
+        &mut s,
+        IncludePick::SketchCurve {
+            sketch: top,
+            curve: beside,
+        }
+    ));
+    let Some(SurfaceDialog::Intersection(d)) = s.surface_dialog.as_ref() else {
+        panic!("Dialog „Schnittkurve“ erwartet");
+    };
+    assert!(d.targets.is_empty());
+    assert_eq!(
+        d.error().as_deref(),
+        Some("Kurve und Kurven/Flächen müssen aus verschiedenen Skizzen stammen.")
+    );
     assert!(spd::deliver(
         &mut s,
         IncludePick::SketchCurve {
@@ -401,9 +424,7 @@ fn intersection_dialog_two_sketches() {
             curve: line,
         }
     ));
-    // Kurve gegen Kurve mit der Toleranz des Dokuments braucht im Debug-Bau weit über 2 s; die
-    // Zeitgrenze prüft `tooslow_shows_message_leaves_nothing`.
-    let _budget = recompute_budget_for_tests(Duration::from_secs(300));
+    // Mit der normalen Zeitgrenze (`SURFACE_PROJECT_BUDGET`).
     let out = frame(&mut screen, &mut s, vec![key(egui::Key::Enter)]);
     let why = match s.surface_dialog.as_ref() {
         Some(SurfaceDialog::Intersection(d)) => d.error(),

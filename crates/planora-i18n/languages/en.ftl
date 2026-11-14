@@ -2309,6 +2309,7 @@ surface-pick-direction = Direction: please select a straight line or edge, an ax
 surface-curve-active-sketch = Curves of the active sketch cannot be selected; please start a new sketch.
 surface-pick-curve = Curve: please select a curve of an earlier sketch.
 surface-pick-targets = Curves/Faces: please select a body face, a plane or a curve of another sketch.
+surface-intersect-same-sketch = Curve and Curves/Faces must come from different sketches.
 surface-curve-not-2d = Only 2D sketch curves can be selected; this curve does not lie in its sketch plane.
 feature-surface-lost = A curve or face of the projection no longer exists
 feature-err-body-not-found = Body { $index } of feature { $feature } does not exist

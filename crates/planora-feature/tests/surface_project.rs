@@ -901,3 +901,72 @@ fn recompute_tooslow_keeps_position_and_warns() {
             .all(|z| (z - 9.0).abs() < 1e-6)
     );
 }
+
+/// Task 19, Fix-Runde 1: Mit der Toleranz des Dokuments (1e-6) und der echten Zeitgrenze
+/// `SURFACE_PROJECT_BUDGET` gelingen die einfachen Fälle: Kreis oben gegen Linie vorn
+/// (Schnittkurve) und eine Linie auf einen Zylinder (beide Projektionsarten). Vorher kostete die
+/// Prüfung der Annäherung (globaler Abstand je Mittelpunkt) allein über 3 s im Release.
+#[test]
+fn simple_cases_fit_budget_with_document_tolerance() {
+    let doc_tol = Tolerance::default();
+    let mut d = Document::new();
+    let mut top = Sketch::new(Frame::WORLD, "Oben", Tolerance::default());
+    let m = top.add_point(0.0, 0.0).unwrap();
+    let circle = top.add_circle(m, 10.0).unwrap();
+    let s_top = add_sketch_on(&mut d, top, StandardPlane::XY);
+    let mut front = Sketch::new(StandardPlane::XZ.frame(), "Vorn", Tolerance::default());
+    let a = front.add_point(-15.0, -15.0).unwrap();
+    let b = front.add_point(15.0, 15.0).unwrap();
+    let line = front.add_line(a, b).unwrap();
+    let s_front = add_sketch_on(&mut d, front, StandardPlane::XZ);
+    let spec = IntersectionSpec {
+        curves: vec![CurveSource::SketchCurve {
+            sketch: s_top,
+            curve: circle,
+        }],
+        targets: vec![IntersectTarget::SketchCurve {
+            sketch: s_front,
+            curve: line,
+        }],
+    };
+    let view = DocView::new(&d, d.features().len(), Frame::WORLD);
+    let got = intersection_curve(&view, &spec, &doc_tol, SURFACE_PROJECT_BUDGET).unwrap();
+    for p in samples(&got[0]) {
+        assert!((p.x.hypot(p.y) - 10.0).abs() <= doc_tol.linear, "{p:?}");
+        assert!((p.z - p.x).abs() <= doc_tol.linear, "{p:?}");
+    }
+    let mut d = Document::new();
+    let cyl = d
+        .add_feature(
+            "Zylinder",
+            FeatureKind::Cylinder {
+                radius: 5.0,
+                height: 20.0,
+                origin: DVec3::new(0.0, 0.0, -10.0),
+            },
+        )
+        .unwrap();
+    let (s, c) = line_sketch(&mut d, (-3.0, 8.0), (3.0, 8.0));
+    for kind in [
+        ProjectType::ClosestPoint,
+        ProjectType::AlongVector(DVec3::Y),
+    ] {
+        let spec = SurfaceProjection {
+            sources: vec![CurveSource::SketchCurve {
+                sketch: s,
+                curve: c,
+            }],
+            faces: faces_of(&body(&d, cyl), SurfaceKind::Cylinder),
+            kind: kind.clone(),
+        };
+        let view = DocView::new(&d, d.features().len(), Frame::WORLD);
+        let got = project_to_surface(&view, &spec, &doc_tol, SURFACE_PROJECT_BUDGET)
+            .unwrap_or_else(|e| panic!("{kind:?}: {e:?}"));
+        for p in samples(&got[0]) {
+            assert!(
+                (p.x.hypot(p.y) - 5.0).abs() <= doc_tol.linear,
+                "{kind:?} {p:?}"
+            );
+        }
+    }
+}

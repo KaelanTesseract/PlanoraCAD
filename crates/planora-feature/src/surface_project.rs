@@ -1248,6 +1248,7 @@ impl Projector {
             let Some(curve) = fitted else {
                 return Ok(Fitted::Split(p));
             };
+            let mut near = Near::new(&curve, pts.len());
             let mut np = vec![p[0]];
             let (mut bad, mut added) = (false, false);
             for w in p.windows(2) {
@@ -1257,7 +1258,7 @@ impl Projector {
                     if self.linked(&a, &m)
                         && self.linked(&m, &b)
                         && m.hp()
-                            .is_some_and(|h| curve.distance_to(self.frame.to_local(h)) > lin)
+                            .is_some_and(|h| near.exceeds(self.frame.to_local(h), lin))
                     {
                         bad = true;
                         if round < MAX_REFINE && self.used.get() < MAX_SURFACE_SAMPLES {
@@ -1343,6 +1344,66 @@ pub struct SlowFitGuard {
 impl Drop for SlowFitGuard {
     fn drop(&mut self) {
         FIT_DELAY.with(|c| c.set(self.previous));
+    }
+}
+
+/// Dichte des Rasters von [`Near`]: Rasterpunkte je angenähertem Punkt.
+const NEAR_GRID_PER_POINT: usize = 8;
+/// [`Near`] sucht so viele Rasterpunkte ohne Besserung weiter, bevor es aufhört.
+const NEAR_LOOKAHEAD: usize = 32;
+/// [`Near`] beginnt so viele Rasterpunkte vor dem letzten Treffer.
+const NEAR_LOOKBACK: usize = 2;
+
+/// Abstand zu einer angenäherten Kurve für Punkte, die in ihrer Laufrichtung nacheinander geprüft
+/// werden (die Mittelpunkte der Abtastung). Ein Raster der Kurve wird einmal gerechnet; je Punkt
+/// läuft die Suche vom letzten Treffer aus vorwärts, solange sie näher kommt, dann folgt Newton
+/// (eine obere Schranke des wahren Abstands). Nur wenn das die Schranke überschreitet, sucht
+/// [`NurbsCurve::distance_to`] über die ganze Kurve. Die Entscheidung ist also dieselbe wie mit
+/// `distance_to` allein, der Aufwand aber etwa linear statt quadratisch in der Punktzahl.
+struct Near<'a> {
+    curve: &'a NurbsCurve,
+    us: Vec<f64>,
+    pts: Vec<DVec3>,
+    cursor: usize,
+}
+
+impl<'a> Near<'a> {
+    fn new(curve: &'a NurbsCurve, points: usize) -> Self {
+        let (a, b) = curve.domain();
+        let m = (NEAR_GRID_PER_POINT * points).max(16);
+        let us: Vec<f64> = (0..=m).map(|i| a + (b - a) * i as f64 / m as f64).collect();
+        let pts = us.iter().map(|&u| curve.point(u)).collect();
+        Self {
+            curve,
+            us,
+            pts,
+            cursor: 0,
+        }
+    }
+
+    /// Liegt `p` weiter als `lin` von der Kurve entfernt?
+    fn exceeds(&mut self, p: DVec3, lin: f64) -> bool {
+        let n = self.pts.len();
+        let start = self.cursor.saturating_sub(NEAR_LOOKBACK);
+        let (mut best, mut bd) = (start, self.pts[start].distance_squared(p));
+        let (mut i, mut since) = (start, 0);
+        while i + 1 < n && since < NEAR_LOOKAHEAD {
+            i += 1;
+            let d = self.pts[i].distance_squared(p);
+            if d < bd {
+                (best, bd, since) = (i, d, 0);
+            } else {
+                since += 1;
+            }
+        }
+        self.cursor = best;
+        let local = [best.saturating_sub(1), best, (best + 1).min(n - 1)]
+            .into_iter()
+            .map(|k| self.curve.distance_near(p, self.us[k]))
+            .fold(f64::INFINITY, f64::min);
+        // Liegt die obere Schranke innerhalb, ist der Punkt sicher nah genug; sonst entscheidet
+        // die globale Suche wie bisher (auch bei NaN).
+        local > lin && self.curve.distance_to(p) > lin
     }
 }
 
