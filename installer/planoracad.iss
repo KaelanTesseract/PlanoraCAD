@@ -42,7 +42,9 @@ OutputDir=..\dist
 OutputBaseFilename=planoracad-setup-x64
 Compression=lzma2
 SolidCompression=yes
-WizardStyle=modern
+WizardStyle=modern dynamic
+WizardBackColor=#ffffff
+WizardBackColorDynamicDark=#181818
 CloseApplications=yes
 ; Kein Neustart ueber den Neustart-Manager: Beim Update beendet sich die App selbst und
 ; startet ueber [Run] mit /NACHUPDATE=1 neu (sonst liefe sie zweimal).
@@ -88,4 +90,58 @@ Filename: "{win}\explorer.exe"; Parameters: """{app}\PlanoraCAD.exe"""; Flags: n
 function IsUpdateRun: Boolean;
 begin
   Result := ExpandConstant('{param:NACHUPDATE|0}') = '1';
+end;
+
+var
+  CurrentStep: String;
+
+// Schreibt die Fortschrittsdatei (nur wenn /PROGRESSFILE=<Pfad> uebergeben wurde).
+// Die Datei wird jedes Mal ganz neu geschrieben: Zeile 1 percent, Zeile 2 step.
+procedure WriteProgress(Percent: Integer; Step: String);
+var
+  Path: String;
+begin
+  Path := ExpandConstant('{param:PROGRESSFILE|}');
+  if Path = '' then Exit;
+  if Percent < 0 then Percent := 0;
+  if Percent > 100 then Percent := 100;
+  SaveStringToFile(Path, 'percent=' + IntToStr(Percent) + #13#10 + 'step=' + Step, False);
+end;
+
+procedure CurInstallProgressChanged(CurProgress, MaxProgress: Integer);
+var
+  Percent: Integer;
+begin
+  if MaxProgress > 0 then
+    Percent := CurProgress * 100 div MaxProgress
+  else
+    Percent := 0;
+  WriteProgress(Percent, CurrentStep);
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  case CurStep of
+    ssInstall:
+      begin
+        CurrentStep := 'install';
+        WriteProgress(0, CurrentStep);
+      end;
+    ssPostInstall:
+      begin
+        CurrentStep := 'postinstall';
+        WriteProgress(100, CurrentStep);
+      end;
+    ssDone:
+      begin
+        CurrentStep := 'done';
+        WriteProgress(100, CurrentStep);
+      end;
+  end;
+end;
+
+procedure InitializeWizard;
+begin
+  CurrentStep := 'prepare';
+  WriteProgress(0, CurrentStep);
 end;
