@@ -2197,6 +2197,14 @@ feature-sketch-projection-lost = { $count ->
     [one] A projected curve lost its reference and stays where it was.
    *[other] { $count } projected curves lost their reference and stay where they were.
 }
+feature-sketch-reference-mismatch = { $count ->
+    [one] Reference no longer matches: the source of a curve gives a different number of pieces; the curve stays where it was.
+   *[other] Reference no longer matches: the source of { $count } curves gives a different number of pieces; the curves stay where they were.
+}
+feature-sketch-include-constraints-removed = { $count ->
+    [one] A constraint on included geometry does not apply in 3D and was removed.
+   *[other] { $count } constraints on included geometry do not apply in 3D and were removed.
+}
 feature-sketch-font-missing = { $count ->
     [one] Font "{ $font }" is missing on this computer, replaced by Montserrat.
    *[other] Font "{ $font }" is missing on this computer, replaced by Montserrat in { $count } texts.

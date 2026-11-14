@@ -3712,7 +3712,7 @@ impl AppState {
         else {
             return Err(crate::msg!("state-no-open-sketch"));
         };
-        let known: Vec<CurveId> = draft.copies.iter().map(|c| c.curve).collect();
+        let known: Vec<CurveId> = draft.copies.iter().filter_map(|c| c.curve()).collect();
         // Fehler der Sitzung stehen schon als Grund in ihrer Meldung.
         let outcome = match se.project_pieces(&mut draft.sketch, pieces, &known, single) {
             Ok(o) => o,
@@ -3742,7 +3742,7 @@ impl AppState {
         }
         for &(i, curve) in &outcome.added {
             if let Some(source) = sources[i].clone() {
-                draft.copies.push(EdgeCopy { curve, source });
+                draft.copies.push(EdgeCopy::new(curve, source));
             }
         }
         for note in notes {

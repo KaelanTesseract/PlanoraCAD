@@ -1258,7 +1258,7 @@ fn edge_copies_are_named_first() {
     assert_eq!(describe_change(&before, &after), "Skizze bearbeiten");
     // Auch zusammen mit Löschen gewinnt „Projizieren“.
     let mut a2 = a.clone();
-    let curve = a2.copies[0].curve;
+    let curve = a2.copies[0].curve().unwrap();
     a2.sketch.remove_curve(curve).unwrap();
     assert!(a2.copies.len() > b.copies.len());
     assert_eq!(describe_sketch_change(&b, &a2), "Projizieren");

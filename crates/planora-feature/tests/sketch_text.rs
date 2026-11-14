@@ -419,7 +419,8 @@ fn font_and_projection_warnings_both_show() {
                 sketch: sk,
                 plane: SketchPlane::Standard(StandardPlane::XY),
                 copies: vec![EdgeCopy {
-                    curve,
+                    target: planora_feature::CopyTarget::Curve(curve),
+                    piece: 0,
                     source: CopySource::Edge(edge),
                 }],
                 formulas: Default::default(),

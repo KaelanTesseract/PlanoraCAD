@@ -113,6 +113,11 @@ fn old_file_bytes_unchanged() {
                 "fest3",
                 "in_ebene",
                 "ellipsenachsen3",
+                "\"stueck\"",
+                "\"einbezug\"",
+                "\"skizzenkurve\"",
+                "\"auf_flaeche\"",
+                "\"schnittkurve\"",
             ] {
                 assert!(!back.contains(field), "{name}: {field}");
             }
@@ -610,4 +615,279 @@ fn text_3d_frame_without_in_plane_rejected() {
     });
     let e = err_text(&text);
     assert!(e.contains(&tr!("sketch-err-data-in-plane")), "{e}");
+}
+
+// --- Task 15: Herkunft mit Stücken und neue Herkunftsarten ---
+
+/// Schlüssel der Kopien, die erst Format 20 kennt.
+const COPY_KEYS_20: [&str; 6] = [
+    "\"stueck\"",
+    "\"punkt\"",
+    "\"einbezug\"",
+    "\"skizzenkurve\"",
+    "\"auf_flaeche\"",
+    "\"schnittkurve\"",
+];
+
+fn box_document() -> (Document, FeatureId) {
+    let mut d = Document::new();
+    let q = d
+        .add_feature(
+            "Quader",
+            FeatureKind::Box {
+                size: DVec3::new(10.0, 20.0, 5.0),
+                origin: DVec3::ZERO,
+            },
+        )
+        .unwrap();
+    (d, q)
+}
+
+fn box_solid(d: &Document, q: FeatureId) -> planora_kernel::Solid {
+    d.body(BodyRef {
+        feature: q,
+        index: 0,
+    })
+    .unwrap()
+    .clone()
+}
+
+fn face_up(solid: &planora_kernel::Solid) -> FaceRef {
+    let (id, _) = solid
+        .faces
+        .iter()
+        .find(|(f, _)| planora_sketch::plane_of_face(solid, *f).is_some_and(|fr| fr.z.z > 0.5))
+        .unwrap();
+    FaceRef::from_face(solid, id, &Tolerance::default()).unwrap()
+}
+
+fn copies_in(s: &Snapshot, id: FeatureId) -> Vec<EdgeCopy> {
+    let f = s.features.iter().find(|f| f.id == id).unwrap();
+    let FeatureKind::Sketch(sf) = &f.kind else {
+        panic!("keine Skizze");
+    };
+    sf.copies.clone()
+}
+
+#[test]
+fn format20_piece_and_new_sources_roundtrip() {
+    let (mut d, q) = box_document();
+    let solid = box_solid(&d, q);
+    let (edge_id, _) = solid.edges.iter().next().unwrap();
+    let edge = EdgeRef::from_edge(&solid, edge_id, &Tolerance::default()).unwrap();
+    let top = face_up(&solid);
+    let plane = d
+        .add_feature(
+            "Ebene1",
+            FeatureKind::Plane(planes::PlaneFeature {
+                def: planes::PlaneDef::Offset {
+                    base: planes::PlaneBase::Standard(StandardPlane::XY),
+                    distance: 5.0,
+                },
+            }),
+        )
+        .unwrap();
+    let mut sk1 = Sketch::new(StandardPlane::XZ.frame(), "Skizze1", Tolerance::default());
+    let a = sk1.add_point(0.0, 0.0).unwrap();
+    let b = sk1.add_point(10.0, 10.0).unwrap();
+    let src = sk1.add_line(a, b).unwrap();
+    let s1 = d
+        .add_feature(
+            "Skizze1",
+            FeatureKind::Sketch(SketchFeature {
+                sketch: sk1,
+                plane: SketchPlane::Standard(StandardPlane::XZ),
+                copies: vec![],
+                formulas: Default::default(),
+            }),
+        )
+        .unwrap();
+    let sketch_curve = IncludeRef::SketchCurve {
+        sketch: s1,
+        curve: src,
+    };
+    let curve_sources = vec![
+        CopySource::Include(IncludeRef::Edge(edge.clone())),
+        CopySource::Include(IncludeRef::FaceBoundary(top.clone())),
+        CopySource::Include(IncludeRef::Plane(PlaneId::Feature(plane))),
+        CopySource::Include(IncludeRef::Plane(PlaneId::Standard(StandardPlane::YZ))),
+        CopySource::Include(IncludeRef::Axis(planes::StdAxis::Y)),
+        CopySource::Include(sketch_curve.clone()),
+        CopySource::SketchCurve {
+            sketch: s1,
+            curve: src,
+        },
+        CopySource::OnSurface(SurfaceProjection {
+            sources: vec![sketch_curve.clone()],
+            targets: vec![IncludeRef::FaceBoundary(top.clone())],
+        }),
+        CopySource::Intersection(IntersectionSpec {
+            sources: vec![sketch_curve.clone()],
+            targets: vec![IncludeRef::Plane(PlaneId::Standard(StandardPlane::XY))],
+        }),
+    ];
+    let point_sources = vec![
+        CopySource::Include(IncludeRef::Vertex(VertexRef {
+            edge: edge.clone(),
+            end: true,
+        })),
+        CopySource::Include(IncludeRef::ConstructionPoint(FeatureId(99))),
+        CopySource::Include(IncludeRef::Origin),
+        CopySource::SketchCurve {
+            sketch: s1,
+            curve: src,
+        },
+    ];
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze2", Tolerance::default());
+    let mut copies = Vec::new();
+    for (k, source) in curve_sources.into_iter().enumerate() {
+        let p = sk.add_point(k as f64, 40.0).unwrap();
+        let q = sk.add_point(k as f64, 50.0).unwrap();
+        let c = sk.add_line(p, q).unwrap();
+        copies.push(EdgeCopy {
+            target: CopyTarget::Curve(c),
+            source,
+            // Stückindizes über 0 (auch einer, der nicht passt: die Warnung zählt nicht zur Datei).
+            piece: (k % 3) as u32,
+        });
+    }
+    for (k, source) in point_sources.into_iter().enumerate() {
+        let ids = sk
+            .add_included(&planora_sketch::helpers::Included::Point(DVec3::new(
+                k as f64, 60.0, 0.0,
+            )))
+            .unwrap();
+        copies.push(EdgeCopy {
+            target: CopyTarget::Point(ids.points[0]),
+            source,
+            piece: k as u32,
+        });
+    }
+    let s2 = d
+        .add_feature(
+            "Skizze2",
+            FeatureKind::Sketch(SketchFeature {
+                sketch: sk,
+                plane: SketchPlane::Standard(StandardPlane::XY),
+                copies,
+                formulas: Default::default(),
+            }),
+        )
+        .unwrap();
+    let snap = d.snapshot();
+    assert_eq!(required_format(&snap), 20);
+    let text = encode_version(&snap).unwrap();
+    assert_eq!(format_of(&text), 20);
+    for key in COPY_KEYS_20 {
+        assert!(text.contains(key), "{key}");
+    }
+    let back = decode_version(&text, "x.json").unwrap_or_else(|e| panic!("{e}\n{text}"));
+    assert_eq!(copies_in(&back, s2), copies_in(&snap, s2));
+    assert_eq!(copies_in(&back, s2).len(), 13);
+    assert_eq!(encode_version(&back).unwrap(), text);
+    // Laden rechnet, ohne zu scheitern: Verlorene Bezüge sind Warnungen.
+    let doc = Document::from_snapshot(back, 0.05).unwrap();
+    assert_eq!(doc.feature(s2).unwrap().status, FeatureStatus::Ok);
+}
+
+/// Alte Arten (Kante, Schnitt, Silhouette) mit Stück 0 bleiben unter 20 und bytegleich, ohne die
+/// neuen Schlüssel.
+#[test]
+fn old_copy_sources_bytes_unchanged() {
+    let (d0, q) = box_document();
+    let solid = box_solid(&d0, q);
+    let top = face_up(&solid);
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze1", Tolerance::default());
+    let (edge_id, edge_curve) = solid
+        .edges
+        .iter()
+        .find_map(|(id, _)| sk.add_projected_edge(&solid, id).ok().map(|c| (id, c)))
+        .unwrap();
+    let mut copies = vec![EdgeCopy::new(
+        edge_curve,
+        CopySource::Edge(EdgeRef::from_edge(&solid, edge_id, &Tolerance::default()).unwrap()),
+    )];
+    for (k, source) in [
+        CopySource::Section {
+            face: top.clone(),
+            index: 0,
+        },
+        CopySource::Silhouette {
+            face: top.clone(),
+            index: 0,
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let p = sk.add_point(k as f64, 40.0).unwrap();
+        let q = sk.add_point(k as f64, 50.0).unwrap();
+        copies.push(EdgeCopy::new(sk.add_line(p, q).unwrap(), source));
+    }
+    for n in 1..=copies.len() {
+        let mut d = d0.clone();
+        d.add_feature(
+            "Skizze1",
+            FeatureKind::Sketch(SketchFeature {
+                sketch: sk.clone(),
+                plane: SketchPlane::Standard(StandardPlane::XY),
+                copies: copies[..n].to_vec(),
+                formulas: Default::default(),
+            }),
+        )
+        .unwrap();
+        let snap = d.snapshot();
+        assert!(required_format(&snap) < 20, "{n}");
+        let text = encode_version(&snap).unwrap();
+        assert!(format_of(&text) < 20);
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let kopien = v["features"][1]["art"]["kopien"].to_string();
+        assert!(kopien.contains("\"kurve\""), "{kopien}");
+        for key in COPY_KEYS_20 {
+            assert!(!kopien.contains(key), "{n}: {key}");
+        }
+        let back = decode_version(&text, "x.json").unwrap();
+        assert_eq!(encode_version(&back).unwrap(), text, "{n}");
+    }
+}
+
+/// Eine Datei mit kleinerer Formatnummer darf die neuen Herkunftsarten nicht enthalten; eine
+/// Kopie braucht genau ein Ziel.
+#[test]
+fn new_copy_fields_need_format_20_and_one_target() {
+    let (mut d, _) = box_document();
+    let mut sk = Sketch::new(Frame::WORLD, "Skizze1", Tolerance::default());
+    let ids = sk
+        .add_included(&planora_sketch::helpers::Included::Point(DVec3::ZERO))
+        .unwrap();
+    d.add_feature(
+        "Skizze1",
+        FeatureKind::Sketch(SketchFeature {
+            sketch: sk,
+            plane: SketchPlane::Standard(StandardPlane::XY),
+            copies: vec![EdgeCopy {
+                target: CopyTarget::Point(ids.points[0]),
+                source: CopySource::Include(IncludeRef::Origin),
+                piece: 0,
+            }],
+            formulas: Default::default(),
+        }),
+    )
+    .unwrap();
+    let text = encode_version(&d.snapshot()).unwrap();
+    assert_eq!(format_of(&text), 20);
+    let old = text.replacen("\"format\": 20", "\"format\": 19", 1);
+    let want = tr!(
+        "proj-since-format",
+        what = tr!("proj-feat-3d-sketch"),
+        format = "20"
+    );
+    let e = err_text(&old);
+    assert!(e.contains(&want), "{e}");
+
+    let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    v["features"][1]["art"]["kopien"][0]["kurve"] = serde_json::json!(0);
+    let both = serde_json::to_string_pretty(&v).unwrap();
+    let e = err_text(&both);
+    assert!(e.contains(&tr!("proj-copy-source-count")), "{e}");
 }

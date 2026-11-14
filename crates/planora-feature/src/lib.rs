@@ -9,6 +9,7 @@ pub mod error;
 pub mod expr;
 pub mod formulas;
 pub mod georef;
+mod include;
 mod meshes;
 pub mod model;
 mod ops;
@@ -48,12 +49,14 @@ pub use georef::{
     from_edge_ref, from_face_ref, geo_ref_for_edge, geo_ref_for_edge_cached, geo_ref_for_face,
     geo_ref_for_face_cached, resolve_geo, resolve_geo_cached, to_edge_ref, to_face_ref,
 };
+pub use include::included_pieces;
 pub use meshes::VisibleMesh;
 pub use model::{
-    BlendArt, BodyRef, CopySource, Document, EdgeCopy, Feature, FeatureId, FeatureKind,
-    FeatureStatus, MAX_CHAMFER_ANGLE_DEG, MAX_MESH_SCALE, MIN_CHAMFER_ANGLE_DEG, MIN_MESH_SCALE,
-    MeshId, ProfileSel, ROTATION_NORM_TOL, SketchFeature, SketchFormulas, SketchPlane,
-    StandardPlane, mesh_locked,
+    AxisId, BlendArt, BodyRef, CopySource, CopyTarget, Document, EdgeCopy, Feature, FeatureId,
+    FeatureKind, FeatureStatus, IncludeRef, IntersectionSpec, MAX_CHAMFER_ANGLE_DEG,
+    MAX_MESH_SCALE, MIN_CHAMFER_ANGLE_DEG, MIN_MESH_SCALE, MeshId, PlaneId, PointRefId, ProfileSel,
+    ROTATION_NORM_TOL, SketchFeature, SketchFormulas, SketchPlane, StandardPlane,
+    SurfaceProjection, VertexRef, include_plane_half, mesh_locked, sketch_source_allowed,
 };
 pub use params::{ParamEdit, ParamId, ParamScope, Parameter};
 pub use parts_sheets::{

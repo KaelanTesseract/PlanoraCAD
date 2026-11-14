@@ -409,7 +409,8 @@ fn snapshot_bytes_grows_with_sketch_content() {
 
     let curve = sf.sketch.curves().next().unwrap().0;
     sf.copies.push(EdgeCopy {
-        curve,
+        target: planora_feature::CopyTarget::Curve(curve),
+        piece: 0,
         source: planora_feature::CopySource::Edge(EdgeRef {
             a: FaceRef {
                 origin: 1,

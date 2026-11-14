@@ -1135,7 +1135,7 @@ pub fn finished_sketch_shapes(state: &AppState, rect: Rect) -> Vec<Shape> {
         }
         // Projektionen lila wie in Fusion (Skizzen 6), Konstruktion weiter gestrichelt.
         let projected: HashSet<CurveId> = match state.document.feature(id).map(|f| &f.kind) {
-            Some(FeatureKind::Sketch(def)) => def.copies.iter().map(|c| c.curve).collect(),
+            Some(FeatureKind::Sketch(def)) => def.copies.iter().filter_map(|c| c.curve()).collect(),
             _ => HashSet::new(),
         };
         // Eine fertige Skizze hat keine Auswahl: Griffe ohne Abhängigkeit sind nicht zu sehen (B6).
@@ -2287,7 +2287,7 @@ struct Projected {
 
 impl Projected {
     fn of(draft: &SketchFeature) -> Projected {
-        let curves: HashSet<CurveId> = draft.copies.iter().map(|c| c.curve).collect();
+        let curves: HashSet<CurveId> = draft.copies.iter().filter_map(|c| c.curve()).collect();
         let points = curves
             .iter()
             .filter_map(|c| draft.sketch.curve(*c))

@@ -3224,7 +3224,7 @@ impl SketchSession {
     pub fn selected_projections(&self, sf: &SketchFeature) -> Vec<CurveId> {
         self.selected_curves()
             .into_iter()
-            .filter(|c| sf.copies.iter().any(|copy| copy.curve == *c))
+            .filter(|c| sf.copies.iter().any(|copy| copy.curve() == Some(*c)))
             .collect()
     }
 

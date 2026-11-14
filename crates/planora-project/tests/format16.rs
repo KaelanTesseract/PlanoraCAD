@@ -297,7 +297,7 @@ fn copy_document(source: impl FnOnce(&Solid) -> CopySource) -> (Document, Featur
             sketch_kind(
                 sk,
                 SketchPlane::Standard(StandardPlane::XZ),
-                vec![EdgeCopy { curve, source: src }],
+                vec![EdgeCopy::new(curve, src)],
             ),
         )
         .unwrap();
@@ -348,7 +348,8 @@ fn edge_copy_with_linked_curve_stays_15() {
     // Verknüpfte Projektion: normale Geometrie statt Konstruktion.
     sk.set_construction(curve, false).unwrap();
     let copy = EdgeCopy {
-        curve,
+        target: planora_feature::CopyTarget::Curve(curve),
+        piece: 0,
         source: CopySource::Edge(EdgeRef::from_edge(s, edge_id, &Tolerance::default()).unwrap()),
     };
     d.add_feature(

@@ -262,7 +262,7 @@ fn compute_unchecked(
     match &feature.kind {
         FeatureKind::Sketch(sf) => {
             let previous = feature.result.as_ref().and_then(|r| r.sketch.as_ref());
-            compute_sketch(doc, sf, visible, previous)
+            compute_sketch(doc, idx, sf, visible, previous)
         }
         FeatureKind::Box { size, origin } => primitive(doc, kernel.make_box(*size), *origin, id.0),
         FeatureKind::Cylinder {
@@ -830,6 +830,7 @@ fn refit_formula_arcs(sketch: &mut Sketch, sf: &SketchFeature) {
 /// `previous` (dem letzten berechneten Stand dieses Features), sonst die der Definition.
 fn compute_sketch(
     doc: &Document,
+    idx: usize,
     sf: &SketchFeature,
     visible: &[BodyRef],
     previous: Option<&Sketch>,
@@ -853,23 +854,15 @@ fn compute_sketch(
     let (frame, face) = resolve_base_frame(doc, base, &solids, || tr!("feature-face-not-flat"))?;
     let plane = face.map_or_else(|| sf.plane.clone(), SketchPlane::OnFace);
     sketch.set_frame(frame).map_err(sketch_error)?;
-    let mut copies = Vec::with_capacity(sf.copies.len());
-    let mut lost = 0usize;
-    for c in &sf.copies {
-        match follow_copy(&mut sketch, c, &solids, &frame, &tol) {
-            Some(updated) => copies.push(updated),
-            None => {
-                // Bezug verloren: Die Kurve bleibt an ihrer zuletzt nachgeführten Lage (gibt es
-                // die Kurve im letzten Stand nicht in derselben Art, an der Lage der
-                // Definition); der Verweis bleibt wie gespeichert.
-                if let Some(prev) = previous {
-                    let _ = sketch.restore_projected_curve(c.curve, prev);
-                }
-                lost += 1;
-                copies.push(c.clone());
-            }
-        }
-    }
+    let ctx = crate::include::IncludeCtx {
+        doc,
+        idx,
+        solids: &solids,
+        frame: &frame,
+        tol: &tol,
+    };
+    let followed = follow_copies(&mut sketch, sf, &ctx, previous);
+    let copies = followed.copies;
     if sf.formulas.is_empty() {
         // Ohne Formeln wird der Lösungsstatus bewusst nicht ausgewertet (wie bisher): eine
         // unterbestimmte oder vom Nutzer ungelöst gelassene Skizze ist gültig.
@@ -889,7 +882,7 @@ fn compute_sketch(
             }
         }
     }
-    let warning = sketch_warning(lost, &sketch);
+    let warning = sketch_warning(&followed.counts, &sketch);
     Ok(Computed {
         bodies: Vec::new(),
         sketch: Some(sketch),
@@ -899,12 +892,190 @@ fn compute_sketch(
     })
 }
 
-/// Die Warnung einer Skizze: verlorene Bezüge von Projektionen, fehlende Schriften und Texte, die
-/// sich nicht setzen ließen, je eine Zeile; `None` ohne all das.
-fn sketch_warning(lost: usize, sketch: &Sketch) -> Option<String> {
+/// Zählstände der Nachführung für die Warnung (siehe [`follow_copies`]).
+#[derive(Clone, Copy, Debug, Default)]
+struct CopyCounts {
+    /// Kopien mit verlorenem Bezug.
+    lost: usize,
+    /// Kopien einer Quelle, die eine andere Stückzahl ergab („Bezug passt nicht mehr“).
+    mismatch: usize,
+    /// Beim Nachführen einbezogener Geometrie entfallene Abhängigkeiten des Benutzers.
+    removed: usize,
+}
+
+/// Nachgeführte Kopien (in der Reihenfolge der Definition) und die Zählstände.
+struct Followed {
+    copies: Vec<EdgeCopy>,
+    counts: CopyCounts,
+}
+
+/// Führt alle Kopien der Skizze nach. Die alten Arten (Kante, Schnitt, Silhouette) einzeln wie
+/// bisher; die Arten aus Skizzen 10 als Gruppen gleicher Herkunft: Die Stücke einer Quelle
+/// werden zusammen neu gerechnet und folgen der Reihe nach ([`EdgeCopy::piece`]). Ergibt die
+/// Quelle eine andere Stückzahl, bleiben alle Kopien der Gruppe stehen (Abhängigkeiten und Maße
+/// bleiben erhalten) und zählen zu „Bezug passt nicht mehr“ (Spec 10). Eine Kopie mit verlorenem
+/// Bezug behält die Lage aus `previous`; ihr Verweis bleibt wie gespeichert.
+fn follow_copies(
+    sketch: &mut Sketch,
+    sf: &SketchFeature,
+    ctx: &crate::include::IncludeCtx<'_>,
+    previous: Option<&Sketch>,
+) -> Followed {
+    let n = sf.copies.len();
+    let mut out: Vec<EdgeCopy> = sf.copies.clone();
+    let mut done = vec![false; n];
+    let mut counts = CopyCounts::default();
+    for i in 0..n {
+        if done[i] {
+            continue;
+        }
+        let c = &sf.copies[i];
+        if !c.source.is_3d_kind() {
+            done[i] = true;
+            match follow_copy(sketch, c, ctx.solids, ctx.frame, ctx.tol) {
+                Some(updated) => out[i] = updated,
+                None => {
+                    // Bezug verloren: Die Kurve bleibt an ihrer zuletzt nachgeführten Lage (gibt
+                    // es die Kurve im letzten Stand nicht in derselben Art, an der Lage der
+                    // Definition).
+                    restore_copy(sketch, c, previous);
+                    counts.lost += 1;
+                }
+            }
+            continue;
+        }
+        // Eine Gruppe: gleiche Herkunft und gleiche Art des Ziels (eine Skizzenkurve kann in
+        // derselben Skizze projiziert und geschnitten sein).
+        let group: Vec<usize> = (i..n)
+            .filter(|&j| {
+                let other = &sf.copies[j];
+                !done[j]
+                    && other.source == c.source
+                    && other.point().is_some() == c.point().is_some()
+            })
+            .collect();
+        for &j in &group {
+            done[j] = true;
+        }
+        let points = c.point().is_some();
+        let expected = group
+            .iter()
+            .map(|&j| sf.copies[j].piece as usize + 1)
+            .max()
+            .unwrap_or(0);
+        match crate::include::source_pieces(ctx, &c.source, points) {
+            None => {
+                for &j in &group {
+                    restore_copy(sketch, &sf.copies[j], previous);
+                }
+                counts.lost += group.len();
+            }
+            Some((_, pieces)) if pieces.len() != expected => {
+                for &j in &group {
+                    restore_copy(sketch, &sf.copies[j], previous);
+                }
+                counts.mismatch += group.len();
+            }
+            Some((source, pieces)) => {
+                for &j in &group {
+                    let copy = &sf.copies[j];
+                    match apply_piece(sketch, copy, &pieces[copy.piece as usize]) {
+                        Some(removed) => {
+                            counts.removed += removed;
+                            out[j] = EdgeCopy {
+                                source: source.clone(),
+                                ..copy.clone()
+                            };
+                        }
+                        None => {
+                            restore_copy(sketch, copy, previous);
+                            counts.lost += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Followed {
+        copies: out,
+        counts,
+    }
+}
+
+/// Gibt der Kopie ihr neu gerechnetes Stück; geliefert wird die Zahl der dabei entfallenen
+/// Abhängigkeiten des Benutzers, `None`, wenn Ziel und Stück nicht zusammenpassen (Art
+/// geändert) oder die Skizze das Stück ablehnt (dann bleibt sie unverändert).
+fn apply_piece(
+    sketch: &mut Sketch,
+    copy: &EdgeCopy,
+    piece: &crate::include::Piece,
+) -> Option<usize> {
+    use crate::include::Piece;
+    use crate::model::CopyTarget;
+    use planora_sketch::helpers::Included;
+    match (copy.target, piece) {
+        (CopyTarget::Point(p), Piece::Include(Included::Point(at))) => {
+            sketch.update_included_point(p, *at).ok()
+        }
+        (CopyTarget::Curve(c), Piece::Include(g)) if !matches!(g, Included::Point(_)) => {
+            sketch.update_included(c, g).ok()
+        }
+        (CopyTarget::Curve(c), Piece::Project(curve, t0, t1)) => {
+            sketch.reproject_curve(c, curve, *t0, *t1).ok().map(|()| 0)
+        }
+        _ => None,
+    }
+}
+
+/// Bezug verloren oder Stückzahl abweichend: Das Ziel bekommt die Lage aus `previous` (dem
+/// letzten berechneten Stand), sonst bleibt die der Definition. 3D-Kurven gehen über die
+/// einbezogene Geometrie ihres letzten Stands, ebene Kurven über
+/// [`Sketch::restore_projected_curve`], Punkte über [`Sketch::update_included_point`].
+fn restore_copy(sketch: &mut Sketch, copy: &EdgeCopy, previous: Option<&Sketch>) {
+    use crate::model::CopyTarget;
+    let Some(prev) = previous else {
+        return;
+    };
+    match copy.target {
+        CopyTarget::Curve(c) => {
+            if prev.is_3d_curve(c) || sketch.is_3d_curve(c) {
+                let restored = prev.curve_world(c).and_then(|(curve, t0, t1)| {
+                    planora_sketch::helpers::include_curve(prev.frame(), &curve, t0, t1).ok()
+                });
+                if let Some(g) = restored {
+                    let _ = sketch.update_included(c, &g);
+                }
+            } else {
+                let _ = sketch.restore_projected_curve(c, prev);
+            }
+        }
+        CopyTarget::Point(p) => {
+            if let Ok(at) = prev.point_xyz(p) {
+                let _ = sketch.update_included_point(p, at);
+            }
+        }
+    }
+}
+
+/// Die Warnung einer Skizze: verlorene Bezüge von Projektionen, Quellen mit anderer Stückzahl,
+/// beim Nachführen entfallene Abhängigkeiten, fehlende Schriften und Texte, die sich nicht setzen
+/// ließen, je eine Zeile; `None` ohne all das.
+fn sketch_warning(counts: &CopyCounts, sketch: &Sketch) -> Option<String> {
     let mut lines = Vec::new();
-    if lost > 0 {
-        lines.push(tr!("feature-sketch-projection-lost", count = lost));
+    if counts.lost > 0 {
+        lines.push(tr!("feature-sketch-projection-lost", count = counts.lost));
+    }
+    if counts.mismatch > 0 {
+        lines.push(tr!(
+            "feature-sketch-reference-mismatch",
+            count = counts.mismatch
+        ));
+    }
+    if counts.removed > 0 {
+        lines.push(tr!(
+            "feature-sketch-include-constraints-removed",
+            count = counts.removed
+        ));
     }
     lines.extend(text_warning_lines(sketch));
     (!lines.is_empty()).then(|| lines.join("\n"))
@@ -952,6 +1123,7 @@ fn follow_copy(
     frame: &planora_math::Frame,
     tol: &planora_math::Tolerance,
 ) -> Option<EdgeCopy> {
+    let curve = c.curve()?;
     let source = match &c.source {
         CopySource::Edge(e) => {
             let found = resolve_edge(solids, e, tol).ok()?;
@@ -960,7 +1132,7 @@ fn follow_copy(
             // sie ist das Ergebnis dasselbe wie mit `reproject_edge`.
             let edge = solids[found.body].edges.get(found.edge)?;
             sketch
-                .reproject_curve(c.curve, &edge.curve, edge.t0, edge.t1)
+                .reproject_curve(curve, &edge.curve, edge.t0, edge.t1)
                 .ok()?;
             CopySource::Edge(crate::refs::EdgeRef {
                 hint: found.hint,
@@ -979,7 +1151,7 @@ fn follow_copy(
             .ok()?;
             let piece = pieces.get(*index)?;
             sketch
-                .reproject_curve(c.curve, &piece.curve, piece.t0, piece.t1)
+                .reproject_curve(curve, &piece.curve, piece.t0, piece.t1)
                 .ok()?;
             let face = FaceRef {
                 hint: found.hint,
@@ -992,10 +1164,12 @@ fn follow_copy(
                 CopySource::Silhouette { face, index }
             }
         }
+        // Die Arten aus Skizzen 10 laufen über `follow_copies` in Gruppen.
+        _ => return None,
     };
     Some(EdgeCopy {
-        curve: c.curve,
         source,
+        ..c.clone()
     })
 }
 

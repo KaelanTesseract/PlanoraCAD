@@ -24,12 +24,13 @@ use planora_exchange::{
 };
 use planora_feature::planes::{AxisRef, PlaneBase, PlaneDef, PlaneFeature, PointRef, StdAxis};
 use planora_feature::{
-    BlendArt, BodyRef, CanvasBase, CanvasFeature, CanvasImage, CopySource, EdgeCopy, EdgeRef,
-    FaceRef, FeatureId, FeatureKind, FieldKey, Formulas, ImageId, MAX_COMMENT_CHARS, MAX_COORD_MM,
-    MAX_DECIMALS, MAX_DIM_TEXT_CHARS, MAX_DRAWINGS, MAX_FIT_CHARS, MAX_FORMULA_CHARS,
-    MAX_PARAM_NAME_CHARS, MAX_PARAMETERS, MAX_POS_MM, MAX_ROLE_CHARS, MAX_TOL_MM, MAX_VIEWS,
-    MeshId, ParamId, ParamUnit, Parameter, ProfileSel, SketchFeature, SketchFormulas, SketchPlane,
-    Snapshot, SnapshotFeature, StandardPlane, StepShape, StepShapeId, Visibility, field_keys,
+    BlendArt, BodyRef, CanvasBase, CanvasFeature, CanvasImage, CopySource, CopyTarget, EdgeCopy,
+    EdgeRef, FaceRef, FeatureId, FeatureKind, FieldKey, Formulas, ImageId, IncludeRef,
+    IntersectionSpec, MAX_COMMENT_CHARS, MAX_COORD_MM, MAX_DECIMALS, MAX_DIM_TEXT_CHARS,
+    MAX_DRAWINGS, MAX_FIT_CHARS, MAX_FORMULA_CHARS, MAX_PARAM_NAME_CHARS, MAX_PARAMETERS,
+    MAX_POS_MM, MAX_ROLE_CHARS, MAX_TOL_MM, MAX_VIEWS, MeshId, ParamId, ParamUnit, Parameter,
+    PlaneId, ProfileSel, SketchFeature, SketchFormulas, SketchPlane, Snapshot, SnapshotFeature,
+    StandardPlane, StepShape, StepShapeId, SurfaceProjection, VertexRef, Visibility, field_keys,
     image_hash, step_text_megabytes, step_text_sum_limit, validate_drawing,
 };
 use planora_i18n::{DisplayUnit, tr};
@@ -144,9 +145,13 @@ fn format_with(s: &Snapshot, fields: &[ProfileField]) -> u32 {
 /// Braucht die Art Format 20 (Skizzen 10)? Eine Skizze mit 3D-Geometrie (3D-Punkt, Kurve mit
 /// Normale, Freiformkurve im Raum, `AlongZ`, `Fixed3`, die internen `InPlane`/`EllipseAxes3`)
 /// oder dem Haken „3D-Skizze“, auch in einem gelöschten Eintrag: Er steht in der Datei
-/// ([`Sketch::has_3d_entry`]). Die neuen Herkunftsarten kommen mit Task 15 dazu (Ruling R3).
+/// ([`Sketch::has_3d_entry`]); dazu eine Kopie mit einer der neuen Herkunftsarten, einem
+/// Stückindex oder einem Punkt als Ziel (Ruling R3).
 fn needs_format_20(k: &FeatureKind) -> bool {
-    matches!(k, FeatureKind::Sketch(sf) if sf.sketch.has_3d_entry())
+    matches!(k, FeatureKind::Sketch(sf) if sf.sketch.has_3d_entry()
+    || sf.copies.iter().any(|c| {
+        c.source.is_3d_kind() || c.piece != 0 || c.point().is_some()
+    }))
 }
 /// Braucht die Art Format 19 (Skizzen 9)? Eine Leinwand oder eine Skizze mit einem
 /// Kontrollpunktrahmen, auch an einem gelöschten Kurveneintrag: Er steht in der Datei.
@@ -1771,10 +1776,16 @@ fn base_from(origin: &str, name: &str, d: &PlaneDto) -> Result<PlaneBase> {
 
 fn copy_to(c: &EdgeCopy) -> EdgeCopyDto {
     let mut d = EdgeCopyDto {
-        kurve: c.curve.index(),
+        kurve: c.curve().map(|id| id.index()),
+        punkt: c.point().map(|id| id.index()),
+        stueck: c.piece,
         kante: None,
         schnitt: None,
         silhouette: None,
+        einbezug: None,
+        skizzenkurve: None,
+        auf_flaeche: None,
+        schnittkurve: None,
     };
     match &c.source {
         CopySource::Edge(e) => d.kante = Some(edge_to(e)),
@@ -1790,27 +1801,170 @@ fn copy_to(c: &EdgeCopy) -> EdgeCopyDto {
                 index: *index,
             });
         }
+        CopySource::Include(r) => d.einbezug = Some(include_to(r)),
+        CopySource::SketchCurve { sketch, curve } => {
+            d.skizzenkurve = Some(SkizzenkurveDto {
+                skizze: sketch.0,
+                kurve: curve.index(),
+            });
+        }
+        CopySource::OnSurface(p) => {
+            d.auf_flaeche = Some(QuellenZieleDto {
+                quellen: p.sources.iter().map(include_to).collect(),
+                ziele: p.targets.iter().map(include_to).collect(),
+            });
+        }
+        CopySource::Intersection(p) => {
+            d.schnittkurve = Some(QuellenZieleDto {
+                quellen: p.sources.iter().map(include_to).collect(),
+                ziele: p.targets.iter().map(include_to).collect(),
+            });
+        }
     }
     d
 }
 
-/// Liest eine Projektion; genau eins von `kante`, `schnitt` und `silhouette` muss stehen.
+fn axis_name(a: StdAxis) -> &'static str {
+    match a {
+        StdAxis::X => "x",
+        StdAxis::Y => "y",
+        StdAxis::Z => "z",
+    }
+}
+
+fn include_to(r: &IncludeRef) -> EinbezugDto {
+    match r {
+        IncludeRef::Edge(e) => EinbezugDto::Kante { kante: edge_to(e) },
+        IncludeRef::FaceBoundary(f) => EinbezugDto::Flaechenrand {
+            flaeche: face_to(f),
+        },
+        IncludeRef::Vertex(v) => EinbezugDto::Ecke {
+            kante: edge_to(&v.edge),
+            ende: v.end,
+        },
+        IncludeRef::Plane(p) => EinbezugDto::Ebene {
+            ebene: match p {
+                PlaneId::Standard(s) => base_to(&PlaneBase::Standard(*s)),
+                PlaneId::Feature(id) => base_to(&PlaneBase::Plane(*id)),
+            },
+        },
+        IncludeRef::Axis(a) => EinbezugDto::Achse {
+            achse: axis_name(*a).into(),
+        },
+        IncludeRef::ConstructionPoint(id) => EinbezugDto::Konstruktionspunkt { feature: id.0 },
+        IncludeRef::Origin => EinbezugDto::Ursprung,
+        IncludeRef::SketchCurve { sketch, curve } => EinbezugDto::Skizzenkurve {
+            skizze: sketch.0,
+            kurve: curve.index(),
+        },
+    }
+}
+
+fn include_from(origin: &str, name: &str, d: &EinbezugDto) -> Result<IncludeRef> {
+    Ok(match d {
+        EinbezugDto::Kante { kante } => IncludeRef::Edge(edge_from(origin, name, kante)?),
+        EinbezugDto::Flaechenrand { flaeche } => {
+            IncludeRef::FaceBoundary(face_from(origin, name, flaeche)?)
+        }
+        EinbezugDto::Ecke { kante, ende } => IncludeRef::Vertex(VertexRef {
+            edge: edge_from(origin, name, kante)?,
+            end: *ende,
+        }),
+        EinbezugDto::Ebene { ebene } => IncludeRef::Plane(match base_from(origin, name, ebene)? {
+            PlaneBase::Standard(s) => PlaneId::Standard(s),
+            PlaneBase::Plane(id) => PlaneId::Feature(id),
+            // Eine Fläche ist keine Ebene zum Einbeziehen (dafür gibt es den Flächenrand).
+            PlaneBase::Face(_) => {
+                return Err(feature_corrupt(origin, name, tr!("proj-copy-source-count")));
+            }
+        }),
+        EinbezugDto::Achse { achse } => IncludeRef::Axis(match achse.as_str() {
+            "x" => StdAxis::X,
+            "y" => StdAxis::Y,
+            "z" => StdAxis::Z,
+            other => {
+                return Err(feature_corrupt(
+                    origin,
+                    name,
+                    tr!("proj-unknown-axis", value = other),
+                ));
+            }
+        }),
+        EinbezugDto::Konstruktionspunkt { feature } => {
+            IncludeRef::ConstructionPoint(FeatureId(*feature))
+        }
+        EinbezugDto::Ursprung => IncludeRef::Origin,
+        EinbezugDto::Skizzenkurve { skizze, kurve } => IncludeRef::SketchCurve {
+            sketch: FeatureId(*skizze),
+            curve: CurveId::from_index(sketch_index(origin, name, *kurve)?),
+        },
+    })
+}
+
+/// Quellen und Ziele eines Platzhalters (Auf Fläche projizieren, Schnittkurve) mit der
+/// Längengrenze der Listen.
+fn include_list(origin: &str, name: &str, list: &[EinbezugDto]) -> Result<Vec<IncludeRef>> {
+    check_len(origin, &|| tr!("proj-l-edge-copies"), list.len())?;
+    list.iter().map(|r| include_from(origin, name, r)).collect()
+}
+
+/// Liest eine Projektion; genau ein Ziel (`kurve` oder `punkt`) und genau eine Herkunft müssen
+/// stehen.
 fn copy_from(origin: &str, name: &str, d: &EdgeCopyDto) -> Result<EdgeCopy> {
-    let source = match (&d.kante, &d.schnitt, &d.silhouette) {
-        (Some(e), None, None) => CopySource::Edge(edge_from(origin, name, e)?),
-        (None, Some(f), None) => CopySource::Section {
+    let corrupt = || feature_corrupt(origin, name, tr!("proj-copy-source-count"));
+    let sources = [
+        d.kante.is_some(),
+        d.schnitt.is_some(),
+        d.silhouette.is_some(),
+        d.einbezug.is_some(),
+        d.skizzenkurve.is_some(),
+        d.auf_flaeche.is_some(),
+        d.schnittkurve.is_some(),
+    ];
+    if sources.iter().filter(|s| **s).count() != 1 {
+        return Err(corrupt());
+    }
+    let source = if let Some(e) = &d.kante {
+        CopySource::Edge(edge_from(origin, name, e)?)
+    } else if let Some(f) = &d.schnitt {
+        CopySource::Section {
             face: face_from(origin, name, &f.flaeche)?,
             index: f.index,
-        },
-        (None, None, Some(f)) => CopySource::Silhouette {
+        }
+    } else if let Some(f) = &d.silhouette {
+        CopySource::Silhouette {
             face: face_from(origin, name, &f.flaeche)?,
             index: f.index,
-        },
-        _ => return Err(feature_corrupt(origin, name, tr!("proj-copy-source-count"))),
+        }
+    } else if let Some(r) = &d.einbezug {
+        CopySource::Include(include_from(origin, name, r)?)
+    } else if let Some(k) = &d.skizzenkurve {
+        CopySource::SketchCurve {
+            sketch: FeatureId(k.skizze),
+            curve: CurveId::from_index(sketch_index(origin, name, k.kurve)?),
+        }
+    } else if let Some(p) = &d.auf_flaeche {
+        CopySource::OnSurface(SurfaceProjection {
+            sources: include_list(origin, name, &p.quellen)?,
+            targets: include_list(origin, name, &p.ziele)?,
+        })
+    } else if let Some(p) = &d.schnittkurve {
+        CopySource::Intersection(IntersectionSpec {
+            sources: include_list(origin, name, &p.quellen)?,
+            targets: include_list(origin, name, &p.ziele)?,
+        })
+    } else {
+        return Err(corrupt());
+    };
+    let target = match (d.kurve, d.punkt) {
+        (Some(k), None) => CopyTarget::Curve(CurveId::from_index(k)),
+        (None, Some(p)) => CopyTarget::Point(PointId::from_index(p)),
+        _ => return Err(corrupt()),
     };
     Ok(EdgeCopy {
-        curve: CurveId::from_index(d.kurve),
+        target,
         source,
+        piece: d.stueck,
     })
 }
 
@@ -3498,8 +3652,17 @@ fn has_format_20_data(k: &KindDto) -> bool {
     let KindDto::Skizze(s) = k else {
         return false;
     };
+    let copies_20 = s.kopien.iter().any(|c| {
+        c.punkt.is_some()
+            || c.stueck != 0
+            || c.einbezug.is_some()
+            || c.skizzenkurve.is_some()
+            || c.auf_flaeche.is_some()
+            || c.schnittkurve.is_some()
+    });
     let s = &s.skizze;
-    s.drei_d
+    copies_20
+        || s.drei_d
         || s.punkte.iter().any(|p| p.z.is_some())
         || s.texte.iter().any(|t| t.normale.is_some())
         || s.kurven.iter().any(|c| {

@@ -701,17 +701,70 @@ pub struct FaceIndexDto {
     pub index: usize,
 }
 
-/// Projizierte Skizzenkurve mit genau einer Herkunft: Kante (alle Formate), Schnitt oder
-/// Silhouette (ab Format 16). Alte Dateien haben nur `kante` und schreiben sich gleich.
+/// Projizierte oder einbezogene Skizzengeometrie mit genau einem Ziel (`kurve` oder, ab Format
+/// 20, `punkt`) und genau einer Herkunft: Kante (alle Formate), Schnitt oder Silhouette (ab
+/// Format 16), dazu ab Format 20 `einbezug`, `skizzenkurve`, `auf_flaeche` und `schnittkurve`.
+/// `stueck` ist der Stückindex in einer Gruppe gleicher Herkunft (weggelassen, wenn 0). Alte
+/// Dateien haben nur `kurve` und `kante` (oder `schnitt`/`silhouette`) und schreiben sich gleich.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct EdgeCopyDto {
-    pub kurve: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kurve: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub punkt: Option<usize>,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub stueck: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kante: Option<EdgeRefDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schnitt: Option<FaceIndexDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub silhouette: Option<FaceIndexDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub einbezug: Option<EinbezugDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skizzenkurve: Option<SkizzenkurveDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auf_flaeche: Option<QuellenZieleDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schnittkurve: Option<QuellenZieleDto>,
+}
+
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
+
+/// Kurve (Kurvennummer) einer anderen Skizze (ab Format 20).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct SkizzenkurveDto {
+    pub skizze: u64,
+    pub kurve: usize,
+}
+
+/// Was „3D-Geometrie einbeziehen“ einzieht (ab Format 20): Kante, Rand einer Fläche, Ecke
+/// (Anfang oder Ende einer Kante), Grund- oder Konstruktionsebene, Ursprungsachse (`x`, `y`,
+/// `z`), Konstruktionspunkt (Feature), Ursprung oder Kurve einer anderen Skizze.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "typ", rename_all = "snake_case")]
+pub enum EinbezugDto {
+    Kante { kante: EdgeRefDto },
+    Flaechenrand { flaeche: FaceRefDto },
+    Ecke { kante: EdgeRefDto, ende: bool },
+    Ebene { ebene: PlaneDto },
+    Achse { achse: String },
+    Konstruktionspunkt { feature: u64 },
+    Ursprung,
+    Skizzenkurve { skizze: u64, kurve: usize },
+}
+
+/// Quellen und Ziele von „Auf Fläche projizieren“ und „Schnittkurve“ (ab Format 20; vorläufig,
+/// die genauen Felder legen Task 17 und 18 fest).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct QuellenZieleDto {
+    #[serde(default)]
+    pub quellen: Vec<EinbezugDto>,
+    #[serde(default)]
+    pub ziele: Vec<EinbezugDto>,
 }
 
 /// Drehachse einer Ebene unter Winkel (ab Format 16): Ursprungsachse (`x`, `y`, `z`), gerade

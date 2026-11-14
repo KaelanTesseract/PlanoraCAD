@@ -126,7 +126,7 @@ fn intersect_cylinder_gives_ellipse_on_tilted_plane() {
     // Verknüpft mit dem Mantel, erstes Stück dieser Fläche.
     let copies = &draft(&s).copies;
     assert_eq!(copies.len(), 1);
-    assert_eq!(copies[0].curve, c);
+    assert_eq!(copies[0].curve().unwrap(), c);
     assert!(matches!(
         copies[0].source,
         CopySource::Section { index: 0, .. }
